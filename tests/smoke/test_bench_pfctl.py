@@ -614,7 +614,11 @@ _TCP_PROBE_SCRIPT = r"""
 # TCP RST probe for ADR-40 reject-loop bench.
 # Fires asyncio TCP connects to IPs in in_table_ips and out_table_ips,
 # rotating through both sets.  Time-to-ECONNREFUSED = RST RTT.
-# Prints one JSON line per connection: {"t": epoch, "rtt_ms": float, "ip": str}
+# Prints one JSON line per connection:
+#   {"start_t": epoch, "t": recv_epoch, "rtt_ms": float, "ip": str}
+# start_t = wall-clock time when the connect was submitted (used for op-window
+# slicing by START time rather than completion time, so stalled connections
+# that started during the op but complete after it are still captured).
 from __future__ import annotations
 import asyncio
 import json
@@ -623,12 +627,18 @@ import time
 
 PORT = 9  # discard port — destination port for probes (RST regardless of state)
 
-async def probe_once(ip: str) -> tuple[float, float]:
-    # Return (recv_epoch, rtt_ms); rtt_ms=-1 on asyncio.TimeoutError.
+# Probe timeout: 5.0s gives headroom for real stalls (replace lock ≤~700ms at
+# 1M; dropped SYN can retransmit at ~1s).  Only genuine ≥5s failures count as
+# timeouts (should be ~none with reject rules returning RST).
+_TIMEOUT = 5.0
+
+async def probe_once(ip: str) -> tuple[float, float, float]:
+    # Return (start_epoch, recv_epoch, rtt_ms); rtt_ms=-1 on asyncio.TimeoutError.
+    start_epoch = time.time()
     t0 = time.monotonic()
     try:
         _, writer = await asyncio.wait_for(
-            asyncio.open_connection(ip, PORT), timeout=0.5
+            asyncio.open_connection(ip, PORT), timeout=_TIMEOUT
         )
         writer.close()
         await writer.wait_closed()
@@ -636,24 +646,32 @@ async def probe_once(ip: str) -> tuple[float, float]:
     except (ConnectionRefusedError, OSError):
         rtt_ms = (time.monotonic() - t0) * 1000.0  # RST → ECONNREFUSED; time is RTT
     except asyncio.TimeoutError:
-        rtt_ms = -1.0  # timeout — no RST received
-    return time.time(), rtt_ms
+        rtt_ms = -1.0  # genuine ≥5s timeout — no RST received
+    return start_epoch, time.time(), rtt_ms
 
 async def run(in_ips: list[str], out_ips: list[str], duration: float) -> None:
     all_ips = in_ips + out_ips  # rotate through both sets
     idx = 0
     deadline = time.monotonic() + duration
-    # Concurrency: 64 simultaneous connects (RSTs return instantly so throughput
-    # is limited by connect setup, not wait; 64 parallel keeps CPU busy).
-    sem = asyncio.Semaphore(64)
+    # High concurrency pool so even a short op window (e.g. replace@50k = ~52ms)
+    # captures a healthy sample count.  With timeout=5.0s and a lock-hold stall,
+    # 400 slots keep the pipeline full without starving submission.
+    # ponytail: 400 chosen so 500 conn/s × 5s ≤ 2500 but we cap at 400; if
+    # stall < 400ms * (400/500) the pipeline cycles through.
+    sem = asyncio.Semaphore(400)
 
     async def one(ip: str) -> None:
         async with sem:
-            recv_epoch, rtt_ms = await probe_once(ip)
+            start_epoch, recv_epoch, rtt_ms = await probe_once(ip)
             if rtt_ms >= 0:
                 # Print to stdout — one JSON per line.
-                print(json.dumps({"t": recv_epoch, "rtt_ms": round(rtt_ms, 3), "ip": ip}),
-                      flush=True)
+                # start_t is used for op-aligned windowing by start time.
+                print(json.dumps({
+                    "start_t": round(start_epoch, 4),
+                    "t": round(recv_epoch, 4),
+                    "rtt_ms": round(rtt_ms, 3),
+                    "ip": ip,
+                }), flush=True)
 
     tasks: list[asyncio.Task[None]] = []
     while time.monotonic() < deadline:
@@ -663,7 +681,7 @@ async def run(in_ips: list[str], out_ips: list[str], duration: float) -> None:
         # Throttle submission: aim for ~500 conn/s (2ms between submissions).
         await asyncio.sleep(0.002)
         # Reap completed tasks periodically.
-        if len(tasks) > 200:
+        if len(tasks) > 800:
             done = [t for t in tasks if t.done()]
             for t in done:
                 tasks.remove(t)
@@ -735,6 +753,7 @@ class TcpRstSample:
     recv_epoch: float
     rtt_ms: float
     ip: str
+    start_epoch: float = 0.0  # wall-clock time when connect was submitted
 
 
 @dataclass
@@ -762,6 +781,7 @@ def _parse_tcp_probe_output(text: str) -> list[TcpRstSample]:
                         recv_epoch=float(obj.get("t", 0)),
                         rtt_ms=float(obj["rtt_ms"]),
                         ip=str(obj.get("ip", "")),
+                        start_epoch=float(obj.get("start_t", 0)),
                     )
                 )
         except Exception:
@@ -806,10 +826,18 @@ class _LiveTcpProbe:
                 self._samples.extend(samples)
 
     def slice_window(self, t0: float, t1: float) -> TcpRstWindow:
-        """Return samples in [t0, t1] (op-aligned)."""
+        """Return samples whose connection was STARTED during [t0, t1] (op-aligned).
+
+        Filtering by start_epoch rather than recv_epoch (completion time) is
+        critical for short op windows (e.g. replace@50k = ~52ms): connections
+        that start during the op but stall for 100-700ms complete after t1 and
+        would be missed if filtered by completion time.  start_epoch captures
+        exactly "connections that were in-flight when the op ran".
+        Falls back to recv_epoch when start_epoch is 0 (old probe format).
+        """
         with self._lock:
             w = TcpRstWindow()
-            w.samples = [s for s in self._samples if t0 <= s.recv_epoch <= t1]
+            w.samples = [s for s in self._samples if t0 <= (s.start_epoch if s.start_epoch > 0 else s.recv_epoch) <= t1]
             w.total_attempts = len(w.samples)
             return w
 
@@ -1997,3 +2025,400 @@ def test_pfctl_replace_disruption_baseline(
     assert any(size_stats[sz].n > 0 for sz in _REPLACE_DISRUPT_SIZES), (
         "expected non-empty pooled samples for at least one size"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Uncensored disruption magnitudes (ADR-40 follow-up 02c)
+# --------------------------------------------------------------------------- #
+
+# Replace sweep sizes for the uncensored run (same as 02b but now uncensored).
+_UNCENSORED_REPLACE_SIZES = [10_000, 50_000, 100_000, 200_000, 462_000, 750_000, 1_000_000]
+
+# Delta comparison cells (table_size, churn_pct_label, churn, batch).
+# Production-relevant: 1% and 5% churn at 100k and 462k, batch=512 (shipped default).
+_UNCENSORED_DELTA_CELLS = [
+    (100_000, "1pct", 1_000, 512),
+    (462_000, "1pct", 4_620, 512),
+    (100_000, "5pct", 5_000, 512),
+    (462_000, "5pct", 23_100, 512),
+]
+
+# Disruption buckets: the uncensored run adds >1s and >2s buckets.
+_UNCENSORED_BUCKETS_MS = [50, 100, 250, 500, 1_000, 2_000]
+
+# Reps per cell.
+_UNCENSORED_REPS = 20
+
+
+def _compute_disrupt_buckets_full(rtts: list[float]) -> dict[int, tuple[int, float]]:
+    """Return {threshold_ms: (count, pct)} for _UNCENSORED_BUCKETS_MS."""
+    n = len(rtts)
+    result: dict[int, tuple[int, float]] = {}
+    for thresh in _UNCENSORED_BUCKETS_MS:
+        cnt = sum(1 for r in rtts if r > thresh)
+        result[thresh] = (cnt, 100.0 * cnt / n if n > 0 else 0.0)
+    return result
+
+
+@pytest.mark.pfctl_bench
+def test_pfctl_disruption_uncensored(
+    smoke_vm: SmokeVM,
+    lan_interface: SmokeVM,
+    client_vm: SmokeVM,
+) -> None:
+    """ADR-40 02c: uncensored disruption magnitudes — replace vs delta.
+
+    Scenario:
+      Given pfSense with floating reject rules (LAN block-return + WAN block-return-out)
+      And a civm TCP-RST probe at ~500 conn/s with 5s timeout (uncensored) and 400
+        concurrent in-flight connections (no probe starvation at short op windows)
+      And connections sliced by START time so stalled connections are captured even
+        if they complete after the op window ends
+      When pfctl -T replace runs at 7 sizes (10k–1M) for 20 reps each
+      And pfctl delta runs at 4 production cells (100k/1%, 462k/1%, 100k/5%, 462k/5%)
+        at batch=512 (shipped default) for 20 reps each
+      Then per-cell pooled distribution is reported: n, mean, stddev, min, p50, p95,
+        p99, p99.9, max, AND disruption buckets (>50ms, >100ms, >250ms, >500ms,
+        >1s, >2s count + %) with quiescent baseline for reference
+
+    Fixes two issues in 02b (test_pfctl_replace_disruption_baseline):
+      1. PROBE CENSORING: prior timeout=0.5s clamped every stall ≥500ms to ~500ms.
+         True replace disruption was invisible (100k→1M all flat ~500ms, 100%).
+         Now timeout=5.0s records the REAL stall duration; only genuine ≥5s losses
+         are dropped (should be ~none with RST reject rules).
+      2. PROBE STARVATION (50k n=4): prior sem=64 with 0.5s timeout starved short
+         op windows.  Now sem=400 with start-time slicing: connections STARTED during
+         the op are captured regardless of when they complete (a 200ms stall on a
+         52ms op window is still recorded).
+
+    This run SUPERSEDES 02b's censored disruption numbers and directly ANSWERS:
+      - TRUE replace stall vs table size (does it grow? floor at TCP RTO ~1s?).
+      - How much does delta reduce disruption at 1% and 5% churn?
+      - Does the picture support the shipped defaults (5% threshold, batch 512)?
+
+    Results: .ADRs/ADR_40_Content_Addressed_Alias_Updates/RESULTS/02c_Disruption_Magnitude_Uncensored.txt
+    Always passes — measurement harness.
+    """
+    print("\n=== ADR-40 02c: uncensored disruption magnitudes ===")
+    print("  SUPERSEDES 02b (censored at 500ms); complements 02_Results.")
+    print("  Probe: 5s timeout, 400 concurrent, start-time slice (no starvation).")
+    print(f"  Replace sizes: {[f'{s:,}' for s in _UNCENSORED_REPLACE_SIZES]}")
+    print(f"  Delta cells: {[(s, lbl, c, b) for s, lbl, c, b in _UNCENSORED_DELTA_CELLS]}")
+    print(f"  {_UNCENSORED_REPS} reps per cell | op-aligned (start-time slice)")
+    print(f"  Disruption buckets: >{_UNCENSORED_BUCKETS_MS}ms")
+
+    # Upload TCP probe script (refreshed version with 5s timeout + start_t).
+    # Force re-upload so the updated script replaces any cached version.
+    global _TCP_PROBE_UPLOADED  # noqa: PLW0603
+    _TCP_PROBE_UPLOADED = False
+    _upload_tcp_probe(client_vm)
+
+    # Route probe IPs through pfSense LAN on civm.
+    client_vm.ssh(
+        "ip route replace 11.0.0.0/8 via 192.168.1.1 dev ens5"
+        " && ip route replace 13.0.0.0/8 via 192.168.1.1 dev ens5"
+        " && echo routes_ok",
+        timeout=10.0,
+    )
+
+    kv = _bench(smoke_vm, "system_info")
+    print(f"  Guest: {kv.get('hostname')} RAM={kv.get('ram_mib')}MiB CPUs={kv.get('ncpu')}")
+
+    kv = _bench(smoke_vm, "raise_limits", "10000000")
+    print(f"  pf table limit: {kv.get('pf_table_limit')}")
+
+    # Generate all needed tables.
+    all_sizes = sorted(set(_UNCENSORED_REPLACE_SIZES) | {s for s, _, _, _ in _UNCENSORED_DELTA_CELLS})
+    for sz in all_sizes:
+        kv = _bench(smoke_vm, "gen", str(sz), timeout=300.0)
+        print(f"  gen {sz:,}: {kv.get('generated', kv.get('cached', '?'))}")
+
+    # Load largest table and set up floating reject rules.
+    kv = _bench(smoke_vm, "replace", "1000000", timeout=120.0)
+    print(f"  Loaded 1M table: wall_ms={kv.get('wall_ms')}")
+
+    print("\n--- Setting up floating reject rules ---")
+    kv = _bench(smoke_vm, "setup_rules", "floating", timeout=30.0)
+    if "error" in kv:
+        pytest.skip(f"Cannot set up reject rules: {kv.get('error')} — STOP")
+
+    # Verify RST loop with 5s timeout.
+    in_arg = ",".join(_PROBE_IN_TABLE_IPS[:3])
+    out_arg = ",".join(_PROBE_OUT_TABLE_IPS[:3])
+    verify_result = client_vm.ssh(f"python3 /tmp/tcp_rst_probe.py {in_arg} {out_arg} 3.0", timeout=15.0)
+    verify_samples_unc = _parse_tcp_probe_output(verify_result.stdout)
+    if not verify_samples_unc:
+        _bench(smoke_vm, "teardown_rules", timeout=30.0)
+        pytest.skip("TCP RST probe returned no samples — reject loop not working. STOP.")
+    v_rtts = sorted(s.rtt_ms for s in verify_samples_unc)
+    v_p99 = v_rtts[min(int(len(v_rtts) * 0.99), len(v_rtts) - 1)]
+    print(f"  verify probe: n={len(verify_samples_unc)} p50={v_rtts[len(v_rtts) // 2]:.2f}ms p99={v_p99:.2f}ms")
+    if v_p99 > 200.0:
+        _bench(smoke_vm, "teardown_rules", timeout=30.0)
+        pytest.skip(f"RST p99={v_p99:.1f}ms > 200ms quiescent — loop too slow. STOP.")
+    print(f"  VERIFY PASSED: RST p99={v_p99:.2f}ms ✓")
+
+    try:
+        smoke_vm.ssh("echo ssh_ok", timeout=10.0)
+    except Exception as exc:
+        _bench(smoke_vm, "teardown_rules", timeout=30.0)
+        pytest.skip(f"SSH to pfSense lost after reject rules: {exc} — STOP.")
+
+    # ------------------------------------------------------------------ #
+    # Helper: run one uncensored probe cell (replace or delta)
+    # ------------------------------------------------------------------ #
+    def _run_uncensored_cell(
+        label: str,
+        bench_args: tuple[str, ...],
+        reps: int,
+    ) -> tuple[PooledStats, dict[int, tuple[int, float]], float, list[int]]:
+        """Run reps measurements; return (PooledStats, buckets, spike_thresh, wall_ms_list).
+
+        buckets uses _UNCENSORED_BUCKETS_MS (adds >1s, >2s vs the older 4-bucket set).
+        """
+        bl_wins: list[TcpRstWindow] = []
+        dur_wins: list[TcpRstWindow] = []
+        wall_ms_list: list[int] = []
+
+        for rep in range(reps):
+            print(f"  {label} rep={rep + 1}/{reps}", flush=True)
+            row, bl_w, dur_w = _measure_with_rst_probe(
+                smoke_vm,
+                client_vm,
+                bench_args,
+                op_timeout_s=600.0,
+                batch_dur_s=5.0,
+            )
+            bl_wins.append(bl_w)
+            dur_wins.append(dur_w)
+            wall_ms_list.append(row.wall_ms)
+            print(f"    wall_ms={row.wall_ms} n_during={len(dur_w.samples)}")
+
+        # Compute pooled stats + extended bucket set.
+        all_rtts: list[float] = [s.rtt_ms for w in dur_wins for s in w.samples]
+        baseline_rtts: list[float] = [s.rtt_ms for w in bl_wins for s in w.samples]
+        baseline_p95 = 0.0
+        if baseline_rtts:
+            sbl = sorted(baseline_rtts)
+            idx_bl = min(int(math.floor(len(sbl) * 0.95)), len(sbl) - 1)
+            baseline_p95 = sbl[idx_bl]
+        spike_thresh = baseline_p95 * _DISRUPT_SPIKE_FACTOR
+
+        ps_base, _, _ = _compute_pooled_tcp_full(dur_wins, bl_wins)
+        buckets = _compute_disrupt_buckets_full(all_rtts)
+
+        med_wall = statistics.median(wall_ms_list)
+        print(
+            f"  [{label}] wall_ms(med)={med_wall:.0f} n={ps_base.n}"
+            f" p50={ps_base.p50_ms:.2f}ms p95={ps_base.p95_ms:.2f}ms"
+            f" p99={ps_base.p99_ms:.2f}ms p99.9={ps_base.p999_ms:.2f}ms max={ps_base.max_ms:.2f}ms"
+        )
+        for thresh in _UNCENSORED_BUCKETS_MS:
+            cnt, pct = buckets[thresh]
+            print(f"    >{thresh}ms: {cnt} ({pct:.2f}%)")
+        return ps_base, buckets, spike_thresh, wall_ms_list
+
+    # ------------------------------------------------------------------ #
+    # A: Replace size sweep (uncensored disruption curve)
+    # ------------------------------------------------------------------ #
+    print(f"\n--- A: replace size sweep ({_UNCENSORED_REPS} reps, uncensored) ---")
+    replace_ps: dict[int, PooledStats] = {}
+    replace_buckets: dict[int, dict[int, tuple[int, float]]] = {}
+    replace_spike_thresh: dict[int, float] = {}
+    replace_wall_ms: dict[int, list[int]] = {}
+
+    for sz in _UNCENSORED_REPLACE_SIZES:
+        print(f"\n  == replace size={sz:,} ==")
+        ps, bkts, st, walls = _run_uncensored_cell(f"replace {sz:,}", ("replace", str(sz)), _UNCENSORED_REPS)
+        replace_ps[sz] = ps
+        replace_buckets[sz] = bkts
+        replace_spike_thresh[sz] = st
+        replace_wall_ms[sz] = walls
+
+    # ------------------------------------------------------------------ #
+    # B: Delta comparison (replace vs delta at 1% and 5% churn)
+    # ------------------------------------------------------------------ #
+    print(f"\n--- B: delta comparison ({_UNCENSORED_REPS} reps per cell, batch=512) ---")
+    delta_ps: dict[tuple[int, str, int, int], PooledStats] = {}
+    delta_buckets: dict[tuple[int, str, int, int], dict[int, tuple[int, float]]] = {}
+    delta_spike_thresh: dict[tuple[int, str, int, int], float] = {}
+    delta_wall_ms: dict[tuple[int, str, int, int], list[int]] = {}
+
+    for sz, lbl, churn, batch in _UNCENSORED_DELTA_CELLS:
+        print(f"\n  == delta size={sz:,} churn={churn:,} ({lbl}) batch={batch} ==")
+        key = (sz, lbl, churn, batch)
+        ps, bkts, st, walls = _run_uncensored_cell(
+            f"delta {sz:,}/{churn:,}({lbl})/b{batch}",
+            ("delta", str(sz), str(churn), str(batch)),
+            _UNCENSORED_REPS,
+        )
+        delta_ps[key] = ps
+        delta_buckets[key] = bkts
+        delta_spike_thresh[key] = st
+        delta_wall_ms[key] = walls
+
+    # ------------------------------------------------------------------ #
+    # Quiescent baseline per replace size
+    # ------------------------------------------------------------------ #
+    print("\n--- Quiescent baseline (no pfctl op, rules active) ---")
+    quiet_ps_unc: dict[int, PooledStats] = {}
+    for sz in _UNCENSORED_REPLACE_SIZES:
+        _bench(smoke_vm, "replace", str(sz), timeout=120.0)
+        smoke_vm.ssh("/sbin/pfctl -k 192.168.1.10 2>/dev/null || true", timeout=10.0)
+        in_arg2 = ",".join(_PROBE_IN_TABLE_IPS)
+        out_arg2 = ",".join(_PROBE_OUT_TABLE_IPS)
+        qresult = client_vm.ssh(
+            f"python3 /tmp/tcp_rst_probe.py {in_arg2} {out_arg2} 5.0 2>/dev/null",
+            timeout=30.0,
+        )
+        q_samples = _parse_tcp_probe_output(qresult.stdout)
+        if q_samples:
+            q_rtts = sorted(s.rtt_ms for s in q_samples)
+            qn = len(q_rtts)
+
+            def _qpct(p: float) -> float:
+                return q_rtts[min(int(math.floor(qn * p)), qn - 1)]
+
+            quiet_ps_unc[sz] = PooledStats(
+                n=qn,
+                mean_ms=statistics.mean(q_rtts),
+                stddev_ms=statistics.pstdev(q_rtts),
+                min_ms=q_rtts[0],
+                p50_ms=_qpct(0.50),
+                p95_ms=_qpct(0.95),
+                p99_ms=_qpct(0.99),
+                p999_ms=_qpct(0.999),
+                max_ms=q_rtts[-1],
+                total_sent=qn,
+            )
+        else:
+            quiet_ps_unc[sz] = PooledStats()
+        qp = quiet_ps_unc[sz]
+        print(
+            f"  quiescent size={sz:,}: n={qp.n}"
+            f" p50={qp.p50_ms:.2f}ms p95={qp.p95_ms:.2f}ms"
+            f" p99={qp.p99_ms:.2f}ms max={qp.max_ms:.2f}ms"
+        )
+
+    _bench(smoke_vm, "teardown_rules", timeout=30.0)
+
+    # ------------------------------------------------------------------ #
+    # Summary table
+    # ------------------------------------------------------------------ #
+    _hdr_unc = (
+        f"{'op':<8} {'size':>9} {'churn':>7} {'batch':>6} "
+        f"{'wall_ms':>9} {'n':>6} "
+        f"{'mean':>7} {'std':>7} {'p50':>8} {'p95':>8} {'p99':>8} "
+        f"{'p99.9':>9} {'max':>8} "
+        f"{'spk_thr':>8} {'spikes':>7} "
+        f"{'|>50ms':>10} {'|>100ms':>10} {'|>250ms':>10} {'|>500ms':>10} {'|>1s':>9} {'|>2s':>9}"
+    )
+
+    def _print_unc_row(
+        op: str,
+        sz: int,
+        churn: int | str,
+        batch: int | str,
+        ps: PooledStats,
+        bkts: dict[int, tuple[int, float]],
+        st: float,
+        med_wall: float,
+    ) -> None:
+        churn_s = f"{churn:,}" if isinstance(churn, int) else str(churn)
+        batch_s = str(batch)
+        b50_cnt, b50_pct = bkts.get(50, (0, 0.0))
+        b100_cnt, b100_pct = bkts.get(100, (0, 0.0))
+        b250_cnt, b250_pct = bkts.get(250, (0, 0.0))
+        b500_cnt, b500_pct = bkts.get(500, (0, 0.0))
+        b1k_cnt, b1k_pct = bkts.get(1_000, (0, 0.0))
+        b2k_cnt, b2k_pct = bkts.get(2_000, (0, 0.0))
+        print(
+            f"{op:<8} {sz:>9,} {churn_s:>7} {batch_s:>6} "
+            f"{med_wall:>9.0f} {ps.n:>6} "
+            f"{ps.mean_ms:>7.2f} {ps.stddev_ms:>7.2f} {ps.p50_ms:>8.2f} {ps.p95_ms:>8.2f} "
+            f"{ps.p99_ms:>8.2f} {ps.p999_ms:>9.2f} {ps.max_ms:>8.2f} "
+            f"{st:>8.1f} {ps.spikes:>7} "
+            f"{b50_cnt:>5}({b50_pct:>4.1f}%) "
+            f"{b100_cnt:>5}({b100_pct:>4.1f}%) "
+            f"{b250_cnt:>5}({b250_pct:>4.1f}%) "
+            f"{b500_cnt:>5}({b500_pct:>4.1f}%) "
+            f"{b1k_cnt:>4}({b1k_pct:>4.1f}%) "
+            f"{b2k_cnt:>4}({b2k_pct:>4.1f}%)"
+        )
+
+    print("\n\n=== UNCENSORED DISRUPTION MAGNITUDE SUMMARY (02c) ===")
+    print("Probe: 5s timeout, 400 concurrent, start-time slice (CR#12 + starvation fix).")
+    print("SUPERSEDES 02b (censored at 500ms via 0.5s timeout).")
+    print("Spike threshold = quiescent baseline p95 × 3.0.")
+    print()
+    print(_hdr_unc)
+    print("-" * len(_hdr_unc))
+
+    print("\n-- A: replace size sweep --")
+    for sz in _UNCENSORED_REPLACE_SIZES:
+        ps = replace_ps[sz]
+        _print_unc_row(
+            "replace",
+            sz,
+            "—",
+            "—",
+            ps,
+            replace_buckets[sz],
+            replace_spike_thresh[sz],
+            statistics.median(replace_wall_ms[sz]),
+        )
+
+    print("\n-- B: delta vs replace comparison (batch=512) --")
+    for sz, lbl, churn, batch in _UNCENSORED_DELTA_CELLS:
+        key = (sz, lbl, churn, batch)
+        # Also print the matching replace row for direct comparison.
+        if sz in replace_ps:
+            _print_unc_row(
+                "replace",
+                sz,
+                "—",
+                "—",
+                replace_ps[sz],
+                replace_buckets[sz],
+                replace_spike_thresh[sz],
+                statistics.median(replace_wall_ms[sz]),
+            )
+        ps = delta_ps[key]
+        _print_unc_row(
+            "delta",
+            sz,
+            f"{churn:,}({lbl})",
+            batch,
+            ps,
+            delta_buckets[key],
+            delta_spike_thresh[key],
+            statistics.median(delta_wall_ms[key]),
+        )
+        # Compute reduction factor.
+        rps = replace_ps.get(sz)
+        if rps and rps.p99_ms > 0 and ps.p99_ms > 0:
+            factor = rps.p99_ms / ps.p99_ms
+            print(f"    → delta p99 vs replace: {factor:.1f}× (replace={rps.p99_ms:.1f}ms delta={ps.p99_ms:.1f}ms)")
+        print()
+
+    print("\nQuiescent baseline (no pfctl op, rules active):")
+    qhdr = f"{'size':>9} {'n':>6} {'p50':>8} {'p95':>8} {'p99':>8} {'p99.9':>9} {'max':>8}"
+    print(qhdr)
+    print("-" * len(qhdr))
+    for sz in _UNCENSORED_REPLACE_SIZES:
+        qp = quiet_ps_unc[sz]
+        print(
+            f"{sz:>9,} {qp.n:>6} {qp.p50_ms:>8.2f} {qp.p95_ms:>8.2f}"
+            f" {qp.p99_ms:>8.2f} {qp.p999_ms:>9.2f} {qp.max_ms:>8.2f}"
+        )
+
+    print(
+        "\nProbe: in-table 11.x + out-table 13.x; both paths RST."
+        "\nTimeout: 5.0s (loss = genuine ≥5s failures only)."
+        "\nWindow: connections STARTED in [t0, t1] (start-time slice)."
+        f"\n{_UNCENSORED_REPS} reps per cell | op-aligned."
+    )
+
+    _bench(smoke_vm, "cleanup", timeout=30.0)
+
+    assert any(replace_ps[sz].n > 0 for sz in _UNCENSORED_REPLACE_SIZES), "expected non-empty pooled replace samples"
