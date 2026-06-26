@@ -35,10 +35,11 @@ gate (constant `PFB_FILTER_FILE_MIME`, 17), known ZIP variant strings from
   ```
 
 - [ ] TC-5: Download a feed that returns a genuine HTML error page (or simulate
-  with a test URL whose body is HTML). Confirm it is still rejected by the MIME
-  gate (`text/html` is allow-listed but the downstream parse yields no valid
-  entries; an `application/octet-stream` or other non-archive body is rejected and
-  never promoted).
+  with a test URL whose body is HTML). `text/html` is allow-listed, so the MIME
+  gate accepts it; confirm the downstream parser still rejects it because no valid
+  entries are extracted.
+- [ ] TC-5b: Download a non-archive body (e.g. `application/octet-stream`). Confirm
+  it is rejected at the MIME gate and never promoted through normalisation.
 
 ## Reject criteria (if any occur, do NOT mark ADR-44 Accepted)
 
