@@ -1611,9 +1611,13 @@ def test_cron_304_skips_unchanged_remote_feed(
         ans_before = h.dns_probe_client_until(client_vm, dom, h.is_vip)
         assert h.is_vip(ans_before), f"BEFORE: {dom} must be VIP-blocked after initial ingest, got {ans_before}"
 
-        # Feed unchanged; ETag still matches.
+        # Feed unchanged; ETag still matches. The "( 304 not modified )" verdict line is
+        # logged WITHOUT the "[ header ]" prefix (pfblockerng.php:553, pfb_logger writes it
+        # verbatim), so it is not header-scopable — count it globally over the cron window.
+        # This test is the only feed set up with a matching ETag, so the before/after delta
+        # isolates its conditional GET.
         _pin_cron_due(deployed_vm)
-        not_mod_before = _feed_log_count(deployed_vm, header, "304 not modified")
+        not_mod_before = h.count_log_marker(deployed_vm, h.PFB_LOG, "304 not modified")
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
         hdr_before = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
 
@@ -1626,7 +1630,7 @@ def test_cron_304_skips_unchanged_remote_feed(
         got_304 = False
         for _pass in range(4):
             h.reload(deployed_vm, "cron")
-            if _feed_log_count(deployed_vm, header, "304 not modified") > not_mod_before:
+            if h.count_log_marker(deployed_vm, h.PFB_LOG, "304 not modified") > not_mod_before:
                 got_304 = True
                 break
 
@@ -1638,10 +1642,10 @@ def test_cron_304_skips_unchanged_remote_feed(
         )
 
         # THEN — "304 not modified" appeared within the cap (Phase-3 code-path proof).
-        not_mod_after = _feed_log_count(deployed_vm, header, "304 not modified")
+        not_mod_after = h.count_log_marker(deployed_vm, h.PFB_LOG, "304 not modified")
         assert got_304 and not_mod_after > not_mod_before, (
-            f"Expected '[ {header} ] ... 304 not modified' (Phase-3 conditional GET proof) within "
-            f"4 cron passes (before={not_mod_before}, after={not_mod_after}) — 304 path not taken"
+            f"Expected '( 304 not modified )' (Phase-3 conditional GET proof) within 4 cron "
+            f"passes (before={not_mod_before}, after={not_mod_after}) — 304 path not taken"
         )
 
         # THEN — no re-ingest.
