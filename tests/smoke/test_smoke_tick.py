@@ -232,7 +232,7 @@ def test_tick_reboot_persists_ledger(deployed_vm: SmokeVM):
 
 @pytest.mark.smoke
 @pytest.mark.tick
-@pytest.mark.timeout(120)  # the cron pass is backgrounded + serialised behind sibling ticks'
+@pytest.mark.timeout(220)  # the cron pass is backgrounded + serialised behind sibling ticks'
 #                            crons; its CRON PROCESS marker can land past the 30s body cap.
 def test_tick_feed_cron_routes_through_sync_cron(deployed_vm: SmokeVM):
     """The tick's due feed-cron dispatches the ``cron`` verb (-> pfblockerng_sync_cron),
@@ -259,6 +259,18 @@ def test_tick_feed_cron_routes_through_sync_cron(deployed_vm: SmokeVM):
     marker = "CRON  PROCESS  START"
 
     now_ts = int(vm.ssh("date +%s").stdout.strip())
+
+    # Drain any in-flight backgrounded cron from a prior tick test first: a sync pass holds
+    # a lock, so a second cron launched while one is running exits early WITHOUT its own
+    # CRON PROCESS pass — which would leave our marker count flat even though the tick
+    # dispatched correctly. Wait until no `pfblockerng.php cron` process remains.
+    assert h.wait_until(
+        lambda: (
+            vm.ssh("pgrep -f 'pfblockerng[.]php cron' >/dev/null && echo BUSY || echo CLEAR").stdout.strip() == "CLEAR"
+        ),
+        timeout=90,
+        interval=3,
+    ), "a prior backgrounded cron never finished; cannot isolate this tick's sync_cron pass"
 
     # Given: cron due, and the sync_cron marker count BEFORE this tick.
     _write_ledger_entry(vm, "cron", now_ts - 90000, now_ts - 1)
