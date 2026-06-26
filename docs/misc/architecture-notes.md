@@ -134,7 +134,7 @@ firewall *rule* changes.
 **Forward-delta apply (ADR-40 Phase 4).** For a changed alias table, pfBlockerNG applies the
 diff as `pfctl -t <t> -T add -f <adds>` then `-T delete -f <dels>` (lock-hold O(churn) rather
 than O(table)), falling back to atomic `pfctl -T replace` when the churn ratio ≥
-`PFB_DELTA_CHURN_THRESHOLD` (0.20), when `pfb_alias_delta_mode='replace'` is forced, or on the
+`PFB_DELTA_CHURN_THRESHOLD` (0.05), when `pfb_alias_delta_mode='replace'` is forced, or on the
 boot/enable-disable path. In all cases the **end-state invariant** holds: `pfctl -t <t> -T show`
 membership is the canonical desired set — identical to what a full replace would load.
 
@@ -143,7 +143,7 @@ membership is the canonical desired set — identical to what a full replace wou
 | Key | Type | Default | Notes |
 | --- | ---- | ------- | ----- |
 | `pfb_alias_delta_mode` | `alias_delta_mode` | `'auto'` | `PfbAliasDeltaMode` enum: `auto`/`delta`/`replace` |
-| `pfb_alias_delta_batch` | `plain` | `'256'` | Chunk size for `-T add`/`-T delete`; clamped to \[64, 4096\] |
+| `pfb_alias_delta_batch` | `plain` | `'512'` | Chunk size for `-T add`/`-T delete`; clamped to \[64, 4096\] |
 
 **Cross-list correctness.** When dedup (`enable_dup`) or reputation is active, a feed-A change
 that shifts sibling table B's effective membership (through the shared `masterfile` dedup path)
