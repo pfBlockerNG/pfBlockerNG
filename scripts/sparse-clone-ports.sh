@@ -1,5 +1,6 @@
 #!/bin/sh
-# sparse-clone-ports.sh — blobless + sparse clone of the FreeBSD-ports tree.
+# sparse-clone-ports.sh — prepare the FreeBSD-ports tree at REF (blobless + sparse):
+# a fresh clone when DEST is absent, or an idempotent reuse of an existing clone.
 #
 # A full --depth 1 clone is ~1.3 GB; the portable builder reads only the port dir
 # plus a handful of dep Makefiles.  A blobless+sparse clone of those directories
@@ -57,8 +58,9 @@ PORT_DIR="$(python3 "$BUILDER" --print-port-origin --channel "$CHANNEL")" || exi
 # 1. Acquire the tree at REF — fresh blobless clone if DEST is absent, else fetch REF
 #    into an EXISTING git work-tree and check it out (idempotent reuse). Either way the
 #    tree ends on REF; no blobs are fetched yet, git knows all tree paths.
-if [ -d "${DEST}/.git" ]; then
-	# Reuse: point origin at the canonical URL (the clone's origin may differ) and fetch REF
+if [ -e "${DEST}/.git" ]; then
+	# Reuse an existing git work-tree (-e, not -d: a linked worktree's .git is a FILE). Point
+	# origin at the canonical URL (the clone's origin may differ) and fetch REF
 	# blobless FROM the named remote, so git registers it as the partial-clone promisor and the
 	# sparse checkout below lazy-fetches only the needed blobs — exactly like the fresh clone.
 	# Checking out REF corrects a tree left on the wrong branch instead of building from it.
