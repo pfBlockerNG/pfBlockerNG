@@ -117,8 +117,11 @@ GUEST_TO_HOST_ALIAS = "10.10.0.2"
 STUB_DNS_A = stub_responses.STUB_DNS_A  # RFC 5737 documentation range
 STUB_DNS_AAAA = stub_responses.STUB_DNS_AAAA  # RFC 3849 documentation range
 
-# Hard readiness ceiling; wait_ready.sh polls (no fixed sleep) up to this.
-DEFAULT_BOOT_TIMEOUT = int(os.environ.get("SMOKE_BOOT_TIMEOUT", "300"))
+# Hard readiness ceiling for wait_ready.sh's poll (8s grace -> 1s, then 5s past
+# 30s). Both VMs reach ready in well under a minute, and a dead qemu fails the poll
+# IMMEDIATELY via its PID watch (not by burning this ceiling), so ~1 min is ample;
+# raise SMOKE_BOOT_TIMEOUT for an unusually slow runner.
+DEFAULT_BOOT_TIMEOUT = int(os.environ.get("SMOKE_BOOT_TIMEOUT", "60"))
 
 # civm client VM ssh host-forward port (host -> civm:22). Honour the same
 # SMOKE_CLIENT_SSH_HOSTPORT override boot_vm.sh reads (default 2223), so a custom
@@ -293,9 +296,10 @@ def boot_and_probe(
     REUSES the shell helpers over subprocess:
       * ``boot_vm.sh`` creates the ephemeral copy-on-write overlay (the base is
         read-only and never mutated — run-level immutability) and execs qemu;
-      * ``wait_ready.sh`` polls SSH + WebUI readiness with bounded backoff and a
-        hard timeout (NO fixed sleep), and bails immediately if the qemu PID
-        dies (bad image / KVM abort).
+      * ``wait_ready.sh`` polls WebUI readiness (the pfSense gate; nginx+PHP up
+        implies sshd is too) on an 8s-grace -> 1s -> 5s cadence with a hard
+        timeout (NO fixed sleep), and bails immediately if the qemu PID dies
+        (bad image / KVM abort).
 
     On readiness, returns a :class:`BootHandle`. On timeout or a dead qemu it
     raises, after killing qemu. Designed to be callable outside pytest (a CE
@@ -327,7 +331,8 @@ def boot_and_probe(
 
     try:
         # wait_ready.sh <ssh-key> [host] [port] [timeout] [vm-pid] [web-port].
-        # Passing web_port makes readiness require nginx+PHP, not just sshd.
+        # Passing web_port selects the pfSense gate: readiness = the webConfigurator
+        # answering (nginx+PHP), which comes up after sshd.
         result = subprocess.run(
             [
                 "sh",
