@@ -65,14 +65,17 @@ CFG_GENERAL = "installedpackages/pfblockerng/config/0"
 def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:  # noqa: ARG001
     """Deploy the branch .pkg once for this module and set up the base state.
 
-    Log rotation does not require DNSBL to be active — it runs purely from the
-    cron tick (``pfblockerng.php cron`` → ``pfblockerng_sync_cron()``), driven
-    via ``helpers.reload(vm, 'cron')``.  The scheduled reset (``pfb_log_reset()``)
-    lives in ``pfblockerng_sync_cron()`` and runs ONLY on the ``cron`` verb; the
-    ``update`` (Force-Update) verb calls ``sync_package_pfblockerng('cron')``
-    directly and bypasses it, so these cases must drive ``cron``.  We still need
-    pfBlockerNG installed and ``enable_cb=on`` so the cron function body executes.
-    The DNSBL VIP and feed infrastructure are NOT needed for these cases.
+    Log rotation does not require DNSBL to be active — it runs from
+    ``pfblockerng_sync_cron()``, driven here directly via ``helpers.reload(vm, 'cron')``.
+    The scheduled reset (``pfb_log_reset()``) and the line-cap trim (``pfb_log_mgmt()``)
+    live in ``pfblockerng_sync_cron()``.  On a live appliance that function is reached by
+    the scheduled tick, which dispatches the ``cron`` verb (issue #570: the tick routes
+    through ``pflblockerng_sync_cron`` — a bare ``pfb_trigger`` would skip both); the
+    end-to-end tick path is pinned by ``test_smoke_tick.test_tick_feed_cron_routes_through_sync_cron``.
+    These cases drive the ``cron`` verb directly to exercise the reset LOGIC without
+    waiting on the tick cadence.  We still need pfBlockerNG installed and ``enable_cb=on``
+    so the cron function body executes.  The DNSBL VIP and feed infrastructure are NOT
+    needed for these cases.
     """
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
