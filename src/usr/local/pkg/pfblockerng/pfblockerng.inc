@@ -8002,7 +8002,11 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				// Only applied to the probe ('md5') mode: the sync ingest callers pass
 				// $type == '' and must always receive the full body.
 				if ($type === 'md5') {
-					$validators = pfb_validator_read("{$orig_download}");
+					// Read the validators the detector persisted at {header}.orig, NOT the
+					// probe's infixed {file_dwn}.orig (= {header}.md5.orig) — see
+					// pfb_conditional_get_validator_base().  Otherwise If-None-Match is never
+					// sent and the server can never answer 304 (ADR-42 §3 fast-path).
+					$validators = pfb_validator_read(pfb_conditional_get_validator_base($file_dwn));
 					if (is_string($validators['etag']) && $validators['etag'] !== '') {
 						curl_setopt($ch, CURLOPT_HTTPHEADER, array("If-None-Match: {$validators['etag']}"));
 					} elseif (is_int($validators['lastmod']) && $validators['lastmod'] > 0) {
@@ -9909,6 +9913,21 @@ function pfb_hash_write($base, $path) {
 		unlink_if_exists("{$base}.md5");
 	}
 	return $ok;
+}
+
+// ADR-42 Phase 3: map a probe ('md5' mode) download path to the feed's persisted
+// conditional-GET validator baseline.  The detector (pfb_update_check) persists the
+// ETag/Last-Modified sidecars at {header}.orig (pfb_validator_write on its $local_file),
+// but the probe is handed file_dwn = {header}.md5 so the probe body ({file_dwn}.raw =
+// {header}.md5.raw) stays separate from the ingest body.  That `.md5` probe-infix must
+// NOT leak into the validator base, or the read targets a non-existent {header}.md5.orig
+// and the conditional GET never sends If-None-Match (the 304 fast-path stays dead).
+// Strip a single trailing `.md5` before appending the `.orig` baseline suffix.
+function pfb_conditional_get_validator_base($file_dwn) {
+	if (str_ends_with((string) $file_dwn, '.md5')) {
+		$file_dwn = substr((string) $file_dwn, 0, -4);
+	}
+	return "{$file_dwn}.orig";
 }
 
 // ADR-42 Phase 3: read the per-feed HTTP validators (ETag + Last-Modified epoch)

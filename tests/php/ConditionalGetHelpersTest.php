@@ -21,6 +21,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_validator_read')]
 #[CoversFunction('pfb_validator_write')]
 #[CoversFunction('pfb_conditional_get_decision')]
+#[CoversFunction('pfb_conditional_get_validator_base')]
 final class ConditionalGetHelpersTest extends TestCase
 {
 	/** @var string Writable temp directory for this test class. */
@@ -456,6 +457,58 @@ final class ConditionalGetHelpersTest extends TestCase
 			$fills_on_fixed,
 			'Post-fix array() init: the fill guard evaluates to TRUE → fill fires → '
 			. '$probe_meta is populated → change detection works correctly'
+		);
+	}
+
+	/**
+	 * ADR-42 §3 — the probe must read validators from the detector's {header}.orig
+	 * baseline, NOT the infixed {header}.md5.orig.  The detector hands pfb_download
+	 * file_dwn = {header}.md5 (so the probe body {file_dwn}.raw stays separate from the
+	 * ingest body); pfb_conditional_get_validator_base() strips that `.md5` probe-infix
+	 * before appending `.orig`.  Resolving the wrong (infixed) base is exactly the bug
+	 * that left the 304 fast-path dead — every unchanged remote feed re-downloaded its
+	 * full body each cron.
+	 *
+	 * The curl wiring that consumes this base (sending If-None-Match and receiving the
+	 * real 304) is exercised by the Phase-5 live-VM smoke cases — not reachable off-box.
+	 */
+	public function test_probe_validator_base_strips_the_md5_infix(): void
+	{
+		// A real probe path: the detector persists validators at {header}.orig but hands
+		// the probe file_dwn = {header}.md5.
+		$file_dwn = '/var/db/pfblockerng/orig/pfb_DNSBL_test.md5';
+
+		$base = pfb_conditional_get_validator_base($file_dwn);
+
+		$this->assertSame(
+			'/var/db/pfblockerng/orig/pfb_DNSBL_test.orig',
+			$base,
+			'probe validators must resolve to the detector-persisted {header}.orig baseline'
+		);
+		$this->assertNotSame(
+			'/var/db/pfblockerng/orig/pfb_DNSBL_test.md5.orig',
+			$base,
+			'the `.md5` probe-infix must NOT leak into the validator base, or If-None-Match '
+			. 'is never sent and the 304 fast-path stays dead (ADR-42 §3)'
+		);
+	}
+
+	/**
+	 * Branch coverage for pfb_conditional_get_validator_base(): a path WITHOUT the trailing
+	 * `.md5` probe-infix gets `.orig` appended unchanged, and a mid-string `.md5` (not a
+	 * trailing suffix) is preserved — only the trailing probe-infix is stripped.
+	 */
+	public function test_validator_base_without_md5_infix_just_appends_orig(): void
+	{
+		$this->assertSame(
+			'/x/feedA.orig',
+			pfb_conditional_get_validator_base('/x/feedA'),
+			'a base without the probe-infix appends .orig unchanged'
+		);
+		$this->assertSame(
+			'/x/a.md5b.orig',
+			pfb_conditional_get_validator_base('/x/a.md5b'),
+			'only a trailing `.md5` is the probe-infix; a mid-string .md5 is preserved'
 		);
 	}
 }
