@@ -1,0 +1,10 @@
+# Snyk (https://snyk.io) policy file
+version: v1
+
+exclude:
+  global:
+    - scripts/**
+    - tools/**
+    - build/**
+    - ci/**
+    - .github/**
