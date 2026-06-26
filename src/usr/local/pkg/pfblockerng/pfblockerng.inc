@@ -633,6 +633,14 @@ function pfb_sync_filter_password(string $value): string {
 	return $value;
 }
 
+// Pure allow-list membership test for a MIME-type string.
+// Encapsulates the isset($pfb['mime_types'][...]) lookup used by the
+// PFB_FILTER_FILE_MIME (17) and PFB_FILTER_FILE_MIME_COMPRESSED (18) branches
+// so that Phase 2 normalisation has a clean, single insertion point.
+function pfb_mime_in_allowlist(string $mime, array $allowlist): bool {
+	return isset($allowlist[$mime]);
+}
+
 // Function to filter/sanitize user input
 function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FALSE) {
 	global $pfb;
@@ -1006,7 +1014,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 				return FALSE;
 			}
 			exec("/usr/bin/file -b --mime-type " . escapeshellarg($input[1]) . " 2>&1", $output, $retval);
-			if ($retval != 0 || empty($output[0]) || !isset($pfb['mime_types'][$output[0]])) {
+			if ($retval != 0 || empty($output[0]) || !pfb_mime_in_allowlist($output[0], $pfb['mime_types'])) {
 
 				// Exceptions
 				$hostname = parse_url($input[2], PHP_URL_HOST);
@@ -1041,7 +1049,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 				return FALSE;
 			}
 			exec("/usr/bin/file -bZ --mime-type " . escapeshellarg($input[1]) . " 2>&1", $output, $retval);
-			if ($retval != 0 || empty($output[0]) || !isset($pfb['mime_types'][$output[0]])) {
+			if ($retval != 0 || empty($output[0]) || !pfb_mime_in_allowlist($output[0], $pfb['mime_types'])) {
 				pfb_logger("{$header} Failed or invalid Mime Type Compressed: [" .  htmlspecialchars($output[0]) . "|" . htmlspecialchars($retval) . "]", 2);
 				unlink_if_exists($input[1]);
 				return FALSE;
