@@ -1,58 +1,48 @@
-# ADR-44 Manual Smoke Checklist
+# ADR-44 — Coverage and acceptance
 
-Owner: maintainer (requires a live pfSense box with pfBlockerNG installed).
-Branch: `adr/44-mime-normalisation`.
+ADR-44 adds `pfb_mime_in_allowlist()` and `pfb_mime_normalise()` and wires the
+normaliser into the `PFB_FILTER_FILE_MIME` (constant 17) gate in `pfb_filter()`.
+The reproducible behaviour is covered by automated tests; the variant-string
+normalisation cannot be exercised on FreeBSD and is documented below as defensive.
 
-ADR-44 adds `pfb_mime_normalise()` in `pfb_filter()`: before the MIME allow-list
-gate (constant `PFB_FILTER_FILE_MIME`, 17), known ZIP variant strings from
-`file(1)` (`application/x-zip-compressed`, `application/x-zip`, and other
-`zip`-bearing variants) are canonicalised to `application/zip`, and
-`application/x-gzip` to `application/gzip`. `application/gzip`, `application/x-bzip2`,
-`application/octet-stream`, and any non-archive string pass through unchanged.
+## Automated coverage
 
-## Pre-conditions
+### Unit (`vendor/bin/phpunit`, in-CI)
 
-- [ ] Branch `adr/44-mime-normalisation` is installed on the test box.
-- [ ] pfBlockerNG is enabled with at least one IP or DNSBL feed configured.
+- `tests/php/PfbMimeAllowlistTest.php` — the shipped allow-list membership oracle.
+- `tests/php/PfbMimeNormaliseTest.php` — `pfb_mime_normalise()` for every variant,
+  including the `gzip`/`bzip2` guard (`x-bzip2`, `gzip`, `x-gzip` pass through
+  unchanged) and the `x-zip-compressed` → `application/zip` rewrite, plus a
+  before→after integration assertion.
 
-## Test cases
+### Live-VM smoke (`tests/smoke/test_smoke_feeds.py`, ADR-04, CE + Plus fan-out)
 
-- [ ] TC-1: Download a blocklist feed served as a ZIP created by Python `zipfile`
-  (or 7-Zip / Windows Explorer). Confirm it passes the MIME gate and the feed is
-  processed normally (entries imported, no MIME-rejection line in the pfBlockerNG
-  log).
-- [ ] TC-2: If a feed previously triggered an `application/x-zip-compressed`
-  rejection, re-run it. Confirm it now succeeds.
-- [ ] TC-3: Download a feed served as `application/gzip` (and, if available, one
-  served as `application/x-bzip2`). Confirm both still pass and are processed —
-  no regression from normalisation (these must NOT be rewritten to
-  `application/zip`).
-- [ ] TC-4: Inspect the debug sink `/tmp/pfb_debug` after TC-1/TC-2. Confirm a
-  normalisation event is logged when a variant string is encountered, e.g.:
+- `test_zip_feed_imports` — an `application/zip` feed downloads, `bsdtar`-extracts,
+  and its entries land in the pf alias table. Confirms ADR-44's wiring into the
+  constant-17 gate did not break the normal ZIP path (`pfb_mime_normalise()` leaves
+  `application/zip` unchanged).
+- `test_gzip_feed_imports` — an `application/gzip` feed `gunzip`s and imports.
+  **Regression guard:** if `pfb_mime_normalise()` rewrote `application/gzip` to
+  `application/zip`, the gzip bytes would be routed to `bsdtar`, zero entries would
+  load, and the membership assertion fails.
+- `test_bzip2_feed_imports` — an `application/x-bzip2` feed `bzip2 -dkc`s and
+  imports. **Regression guard** for the `bzip` exclusion in the normaliser.
 
-  ```text
-  MIME normalised: raw="application/x-zip-compressed" -> canonical="application/zip"
-  ```
+## Not reproducible on FreeBSD (defensive code)
 
-- [ ] TC-5: Download a feed that returns a genuine HTML error page (or simulate
-  with a test URL whose body is HTML). `text/html` is allow-listed, so the MIME
-  gate accepts it; confirm the downstream parser still rejects it because no valid
-  entries are extracted.
-- [ ] TC-5b: Download a non-archive body (e.g. `application/octet-stream`). Confirm
-  it is rejected at the MIME gate and never promoted through normalisation.
+`pfb_mime_normalise()` also maps `application/x-zip-compressed` / `application/x-zip`
+→ `application/zip`. On a stock pfSense box these inputs **cannot occur**: pfBlockerNG
+detects the type with `/usr/bin/file -b --mime-type` on the downloaded **bytes** (not
+the HTTP `Content-Type`), and FreeBSD libmagic returns `application/zip` for ordinary
+ZIPs. `application/x-zip-compressed` is absent from libmagic's magic database (a
+Windows / HTTP-header MIME); `application/x-zip` maps only to Mozilla `omni.ja`. So
+the variant→canonical rewrite is **defensive** — it protects the gate should a future
+libmagic, a custom magic file, or a third-party `file` build ever emit those strings.
+It is covered at the unit level only; there is no live path that can exercise it.
+This is a documented out-of-CI limitation, not an acceptance blocker.
 
-## Reject criteria (if any occur, do NOT mark ADR-44 Accepted)
+## Acceptance
 
-- Any feed that previously succeeded now fails after this change.
-- `application/octet-stream` (or any non-archive string) is ever promoted through
-  the normalisation path.
-- `application/x-bzip2` or `application/gzip` is rewritten to `application/zip`
-  (misrouted into the ZIP handler).
-- `PFB_FILTER_FILE_MIME_COMPARE` (constant 16) behaviour changes in any way.
-
-## Sign-off
-
-- Tester: _______________
-- Date: _______________
-- Result: PASS / FAIL
-- Notes: _______________
+Per CLAUDE.md "ADR acceptance — automated tests, not a manual sign-off", ADR-44 flips
+to **Accepted** on a green CE + Plus live-VM fan-out of the three smoke cases above
+(plus the green unit suite) — no manual maintainer step required.
