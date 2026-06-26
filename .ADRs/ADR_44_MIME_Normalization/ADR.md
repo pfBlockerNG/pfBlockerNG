@@ -1,6 +1,6 @@
 # ADR-44: Normalise MIME-type strings before the allow-list gate in pfb_filter()
 
-- **Status:** **Implemented (pending live-box smoke)** (2026-06-26; PR #589 merged to `devel`) — all four phases landed (`pfb_mime_in_allowlist()` + `pfb_mime_normalise()` wired into the `PFB_FILTER_FILE_MIME` gate, oracle + red→green PHPUnit coverage incl. the gzip/bzip2 guard). The §7 manual live-box smoke (`RESULTS/SMOKE_CHECKLIST.md`) is the out-of-CI acceptance item — flip to **Accepted** after it passes.
+- **Status:** **Implemented (pending live-VM smoke fan-out)** (2026-06-26; PR #589 merged to `devel`) — all four phases landed (`pfb_mime_in_allowlist()` + `pfb_mime_normalise()` wired into the `PFB_FILTER_FILE_MIME` gate, oracle + red→green PHPUnit coverage incl. the gzip/bzip2 guard). A follow-up adds automated live-VM smoke for the reproducible behaviour (`tests/smoke/test_smoke_feeds.py`: zip/gzip/bzip2 feed decompression); the `x-zip-compressed` variant path is non-reproducible defensive code (see §1 + `RESULTS/SMOKE_CHECKLIST.md`). Flips to **Accepted** on a green CE + Plus smoke fan-out — no manual step.
 - **Date:** 2026-06-25
 - **Branch:** `adr/44-mime-normalisation` (off `devel`) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfblockerng.inc`
 - **Target runtime:** PHP 8.3, FreeBSD / pfSense; shell via `exec()` to `/usr/bin/file`
@@ -36,16 +36,28 @@ Constants involved:
 - `PFB_FILTER_FILE_MIME_COMPRESSED` (18) — inner MIME via `file -bZ --mime-type`
 - `PFB_FILTER_FILE_MIME_COMPARE` (16) — strict exact-match variant
 
-**The problem:** Different archive creators (Info-ZIP, 7-Zip, Windows Explorer,
-Python `zipfile`, .NET, Go, Rust) and ZIP options (extra fields, ZIP64 on small
-files, Unicode filename flags, store vs. deflate) cause `file(1)` to return
-`application/x-zip-compressed`, `application/x-zip`, or occasionally
-`application/octet-stream` for structurally valid ZIPs. Only `application/zip`
-is in the allow-list, so valid blocklist ZIPs from some maintainers are rejected
-before the ZIP dispatch branch is reached. Similar (lower-frequency) variant
-strings exist for gzip variants. This is the direct cause of the existing TODO
-comment and the commented-out `PFB_FILTER_FILE_MIME_COMPRESSED` call in the ZIP
-branch.
+**The problem (premise revised after implementation — empirical note below):** The
+allow-list contains only `application/zip` for ZIP archives. The concern was that
+ZIPs packaged by non-canonical tools, or served with a non-standard MIME, could be
+reported as `application/x-zip-compressed` / `application/x-zip` and rejected before
+the ZIP dispatch branch.
+
+**Empirical finding (2026-06-26).** pfBlockerNG detects the type by running
+`/usr/bin/file -b --mime-type` on the downloaded **bytes** — never the HTTP
+`Content-Type` — and FreeBSD libmagic returns `application/zip` for every ordinary
+ZIP (deflate, stored, ZIP64, multi-file, Unicode-flag, empty — verified on
+libmagic 5.41/5.46 + the compiled magic database). `application/x-zip-compressed`
+is **absent from libmagic's magic database entirely** (it is a Windows / HTTP-header
+MIME); `application/x-zip` is bound only to Mozilla `omni.ja`. So on a stock pfSense
+box the variant strings do not arise from `file(1)`, and a normal ZIP already passes
+the gate. The variant→`application/zip` normalisation is therefore **defensive** — it
+guards the allow-list gate *should* a future libmagic, a custom magic file, or a
+third-party `file` build ever emit those strings. The change's real, reproducible
+value is the clean refactor of the MIME gate (`pfb_mime_in_allowlist()`) and the
+guard that stops the new substring rule from mis-rewriting `application/gzip` /
+`application/x-bzip2` (which *are* genuine libmagic outputs) to `application/zip`.
+The pre-existing TODO/commented-out `PFB_FILTER_FILE_MIME_COMPRESSED` call in the ZIP
+branch is unrelated (inner-content validation, out of scope) and is left untouched.
 
 **Semantics that MUST be preserved (the contract — pin with tests before swapping):**
 
@@ -59,10 +71,10 @@ branch.
 
 **Explicitly kept out of scope:**
 
-- Structural integrity tests for archives (ADR-43).
-- ZIP path-traversal hardening (ADR-44).
-- Logging format standardisation (ADR-45).
-- Plain-text heuristic scanning (ADR-46).
+- Structural integrity tests for archives (deferred to a future ADR).
+- ZIP path-traversal / inner-content hardening (deferred to a future ADR).
+- Logging format standardisation (deferred to a future ADR).
+- Plain-text heuristic scanning (deferred to a future ADR).
 
 ---
 
