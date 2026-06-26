@@ -6,7 +6,7 @@
 #   tests/smoke/wait_ready.sh <ssh-key> [host] [port] [timeout-seconds] \
 #       [vm-pid] [web-port]
 #
-# Defaults: host 127.0.0.1, port 2222, timeout 600s, vm-pid (none),
+# Defaults: host 127.0.0.1, port 2222, timeout 60s, vm-pid (none),
 # web-port (none → SSH-only readiness).
 #
 # On success: prints "boot-to-ready: <N> seconds", then exits 0. On timeout:
@@ -16,13 +16,18 @@
 # comes up (e.g. the image failed to open, KVM aborted), we exit 1 IMMEDIATELY
 # rather than burning the whole timeout polling a guest that will never answer.
 #
-# Readiness requires BOTH:
-#   - a working SSH command (`true`) over the host-forwarded port with the baked
-#     test key — sshd is up and the WAN pass rule lets the runner in; and
-#   - if <web-port> is given, the webConfigurator answering an HTTP request
-#     (nginx + PHP are fully started, not just sshd) — so callers that install
-#     packages / restart nginx don't race a still-starting web stack.
-# Backoff grows 2s..15s.
+# Readiness, by role:
+#   - <web-port> GIVEN (pfSense): the webConfigurator answering an HTTP request.
+#     nginx + PHP come up AFTER sshd, so a live admin panel implies SSH is already
+#     usable — the web server is the meaningful "appliance ready" signal, gated on
+#     alone (no separate SSH wait).
+#   - <web-port> OMITTED (civm): a working SSH command (`true`) over the
+#     host-forwarded management NIC with the baked test key.
+#
+# Poll cadence: no VM answers in under ~8s, so wait out an initial grace, then
+# poll every 1s while readiness is imminent (< 30s elapsed) and every 5s after
+# that, up to the hard timeout (~1 min). A local-loopback connect that cannot
+# complete in 1s is dead, so the per-probe connect timeout is 1s.
 #
 # POSIX sh; quoted expansions; absolute binary paths.
 
@@ -41,7 +46,7 @@ usage() {
 SSH_KEY="$1"
 HOST="${2:-127.0.0.1}"
 PORT="${3:-2222}"
-TIMEOUT="${4:-600}"
+TIMEOUT="${4:-60}"
 VM_PID="${5:-}"
 WEB_PORT="${6:-}"
 
@@ -65,14 +70,17 @@ if [ -n "$WEB_PORT" ]; then
 fi
 
 # Throwaway VM: skip host-key verification, but keep the private key private.
-SSH_OPTS="-i ${SSH_KEY} -p ${PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o BatchMode=yes -o LogLevel=ERROR"
+SSH_OPTS="-i ${SSH_KEY} -p ${PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=1 -o BatchMode=yes -o LogLevel=ERROR"
+
+# Neither VM becomes reachable in under ~8s, so probing before then is pure waste
+# (the old exponential backoff's early probes). Wait out this grace — still watching
+# the qemu PID so a dead boot fails immediately — then start polling.
+INITIAL_GRACE=8
 
 START="$(date +%s)"
-BACKOFF=2
 ATTEMPT=0
 
 while :; do
-    ATTEMPT=$((ATTEMPT + 1))
     NOW="$(date +%s)"
     ELAPSED=$((NOW - START))
 
@@ -81,48 +89,49 @@ while :; do
         exit 1
     fi
 
-    # If we're watching a VM PID and it has exited, the boot died — don't keep
-    # polling for the full timeout against a guest that will never come up.
+    # A dead qemu (bad image / KVM abort) will never answer — fail fast, even while
+    # still inside the initial grace.
     if [ -n "$VM_PID" ] && ! kill -0 "$VM_PID" 2>/dev/null; then
         echo "wait_ready: VM process ${VM_PID} exited after ${ELAPSED}s — boot failed, not waiting" >&2
         exit 1
     fi
 
-    SSH_READY=0
-    # The probe is a bare `true` ON PURPOSE: pfSense root's login shell is tcsh, which
-    # sshd uses to parse the remote command, and tcsh mangles POSIX-sh syntax. `true` has
-    # no metacharacters so it is tcsh-safe; if this ever needs a richer command, wrap it in
-    # `/bin/sh -c '<single-quoted blob>'` (see scripts/install-pkg.sh / tests/smoke/roundtrip.sh).
-    # shellcheck disable=SC2086
-    if "$SSH" $SSH_OPTS "root@${HOST}" true 2>/dev/null; then
-        SSH_READY=1
+    if [ "$ELAPSED" -lt "$INITIAL_GRACE" ]; then
+        sleep 1
+        continue
     fi
 
-    # Web readiness is optional; when no web port is given it's a no-op so the
-    # gate reduces to SSH-only.
-    WEB_READY=1
+    ATTEMPT=$((ATTEMPT + 1))
+
     if [ -n "$WEB_PORT" ]; then
-        WEB_READY=0
-        if "$CURL" -fsSL --max-time 5 -o /dev/null "http://${HOST}:${WEB_PORT}/" 2>/dev/null; then
-            WEB_READY=1
+        # pfSense: readiness = the webConfigurator answering. nginx + PHP come up
+        # AFTER sshd, so a live admin panel implies SSH is already usable — gate on
+        # the web server alone (the meaningful "appliance ready" signal).
+        if "$CURL" -fsSL --max-time 1 -o /dev/null "http://${HOST}:${WEB_PORT}/" 2>/dev/null; then
+            echo "boot-to-ready: ${ELAPSED} seconds"
+            exit 0
         fi
+        PENDING=web
+    else
+        # civm: no web server — gate on SSH over the host-forwarded management NIC.
+        # The probe is a bare `true` ON PURPOSE: a remote command is parsed by the
+        # guest login shell; `true` has no metacharacters so it stays safe even under
+        # tcsh (pfSense). A richer command must be wrapped in `/bin/sh -c '<blob>'`
+        # (see scripts/install-pkg.sh / tests/smoke/roundtrip.sh).
+        # shellcheck disable=SC2086
+        if "$SSH" $SSH_OPTS "root@${HOST}" true 2>/dev/null; then
+            echo "boot-to-ready: ${ELAPSED} seconds"
+            exit 0
+        fi
+        PENDING=ssh
     fi
 
-    if [ "$SSH_READY" -eq 1 ] && [ "$WEB_READY" -eq 1 ]; then
-        NOW="$(date +%s)"
-        ELAPSED=$((NOW - START))
-        echo "boot-to-ready: ${ELAPSED} seconds"
-        exit 0
+    # Tight 1s cadence while readiness is imminent; relax to 5s past the 30s mark.
+    if [ "$ELAPSED" -lt 30 ]; then
+        INTERVAL=1
+    else
+        INTERVAL=5
     fi
-
-    PENDING=""
-    [ "$SSH_READY" -eq 1 ] || PENDING="${PENDING}ssh "
-    [ "$WEB_READY" -eq 1 ] || PENDING="${PENDING}web "
-    echo "wait_ready: attempt ${ATTEMPT} waiting for: ${PENDING}(${ELAPSED}s elapsed), retry in ${BACKOFF}s" >&2
-    sleep "$BACKOFF"
-
-    BACKOFF=$((BACKOFF * 2))
-    if [ "$BACKOFF" -gt 15 ]; then
-        BACKOFF=15
-    fi
+    echo "wait_ready: attempt ${ATTEMPT} waiting for: ${PENDING} (${ELAPSED}s elapsed), retry in ${INTERVAL}s" >&2
+    sleep "$INTERVAL"
 done
