@@ -67,9 +67,39 @@ FIXTURES_DIR = SMOKE_DIR / "fixtures"
 
 # Host<->guest exposure baked into boot_vm.sh's hostfwd map (see RESULTS/01).
 DEFAULT_HOST = "127.0.0.1"
-DEFAULT_SSH_PORT = 2222  # host -> guest 22
-DEFAULT_WEB_PORT = 8080  # host -> guest 80
-DEFAULT_DNS_PORT = 5353  # host -> guest 53 (tcp+udp)
+
+# Per-lane port offset — each parallel smoke lane boots its own VM on disjoint host-forward
+# ports so multiple pytest-xdist workers can run isolated on the same host.
+_LANE = int(os.environ.get("SMOKE_LANE", "0"))
+
+
+def _lane_port(base: int, lane: int, *, stride: int = 10) -> int:
+    """Give each parallel lane a disjoint 127.0.0.1 host-forward port.
+
+    Stride 10 leaves headroom between adjacent lanes (e.g. lane 0→2222, lane 1→2232).
+    """
+    return base + lane * stride
+
+
+def _validate_lane(lane: int) -> None:
+    """Reject a SMOKE_LANE that would break port isolation — fail fast, not silently.
+
+    A negative lane derives lower-numbered ports (reusing another lane's range), and a lane
+    large enough to push the highest-based host-forward port (web, 8080) past 65535 yields an
+    invalid port that fails the boot confusingly. Upper bound: 8080 + lane*10 <= 65535 → 5745.
+    """
+    if lane < 0 or _lane_port(8080, lane) > 65535:
+        raise ValueError(f"SMOKE_LANE out of range: {lane} (must be 0..5745)")
+
+
+_validate_lane(_LANE)
+
+
+# INVARIANT: at _LANE == 0 with no SMOKE_*_HOSTPORT overrides all four equal the
+# historical defaults (2222 / 8080 / 5353 / 2223) — behaviour-preserving at lane 0.
+DEFAULT_SSH_PORT = _lane_port(int(os.environ.get("SMOKE_SSH_HOSTPORT", "2222")), _LANE)  # host -> guest 22
+DEFAULT_WEB_PORT = _lane_port(int(os.environ.get("SMOKE_WEB_HOSTPORT", "8080")), _LANE)  # host -> guest 80
+DEFAULT_DNS_PORT = _lane_port(5353, _LANE)  # host -> guest 53 (tcp+udp); no env consumer in boot_vm.sh
 
 # The WAN SLIRP host alias the guest uses to reach the runner (mock feed server,
 # stub DNS, webhook sink). Corresponds to boot_vm.sh net0: net=10.10.0.0/24,
@@ -93,7 +123,12 @@ DEFAULT_BOOT_TIMEOUT = int(os.environ.get("SMOKE_BOOT_TIMEOUT", "300"))
 # civm client VM ssh host-forward port (host -> civm:22). Honour the same
 # SMOKE_CLIENT_SSH_HOSTPORT override boot_vm.sh reads (default 2223), so a custom
 # host port reaches the client instead of a hardcoded 2223.
-DEFAULT_CLIENT_SSH_PORT = int(os.environ.get("SMOKE_CLIENT_SSH_HOSTPORT", "2223"))  # host -> civm 22
+DEFAULT_CLIENT_SSH_PORT = _lane_port(int(os.environ.get("SMOKE_CLIENT_SSH_HOSTPORT", "2223")), _LANE)  # host -> civm 22
+
+# Write the lane-resolved ports back so boot_vm.sh's hostfwd reads the same values SmokeVM uses.
+os.environ["SMOKE_SSH_HOSTPORT"] = str(DEFAULT_SSH_PORT)
+os.environ["SMOKE_WEB_HOSTPORT"] = str(DEFAULT_WEB_PORT)
+os.environ["SMOKE_CLIENT_SSH_HOSTPORT"] = str(DEFAULT_CLIENT_SSH_PORT)
 
 # The address civm uses to reach pfSense (pfSense LAN side of the socket crossover).
 PFSENSE_LAN_IP = "192.168.1.1"  # pfSense LAN IP baked in the two-VM image
@@ -1317,6 +1352,30 @@ def expected_control_answer(env: Mapping[str, str] = os.environ) -> tuple[str, s
 # On-failure diagnostics — dump live VM state (the session VM is torn down at
 # end of run, so a failed case must capture it here, in-run)
 # --------------------------------------------------------------------------- #
+
+
+def _needs_two_vm(fixturenames: list[str] | set[str]) -> bool:
+    """Return True iff this test boots the civm LAN client (two-VM topology).
+
+    Ground truth for "does this test need civm?" computed from the fixture dependency:
+    pytest's ``item.fixturenames`` is the full transitive closure, so membership of
+    ``client_vm`` or ``lan_interface`` is exact. When a test gains or loses ``client_vm``
+    the tag flips automatically — no list, no drift.
+    """
+    return bool({"client_vm", "lan_interface"} & set(fixturenames))
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Auto-apply the ``two_vm`` marker from the fixture closure — never hand-apply it.
+
+    The tag is COMPUTED: if a test (transitively) requests ``client_vm`` or
+    ``lan_interface`` it boots the civm client and therefore belongs to the two-VM
+    topology. The lane orchestrator partitions civm-needing vs civm-less lanes via
+    ``-m two_vm`` / ``-m 'not two_vm'`` without a hardcoded list.
+    """
+    for item in items:
+        if _needs_two_vm(item.fixturenames):
+            item.add_marker("two_vm")
 
 
 @pytest.hookimpl(hookwrapper=True)

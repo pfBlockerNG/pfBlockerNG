@@ -21,6 +21,7 @@ markers = [
     "pfctl_bench: ADR-40 Phase 2 pfctl table benchmark; two-VM topology required; dispatch-only, NEVER PR-gating",
     "tick: live-VM due-ledger trigger-tick (ADR-43); ALSO marked smoke; focused dispatch via -m tick",
     "apply_on_change: live-VM apply-on-change + quiet-hours window (ADR-43 P5); ALSO marked smoke; focused dispatch via -m apply_on_change",
+    "two_vm: live-VM test that boots the civm LAN client (two-VM topology); AUTO-applied at collection from the client_vm/lan_interface fixture dependency — never hand-applied. The lane orchestrator partitions civm-needing vs civm-less lanes via -m two_vm / -m 'not two_vm'.",
 ]
 
 # coverage.py (issue #38). BRANCH coverage is the point of the sweep -- line
