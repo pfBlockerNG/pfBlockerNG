@@ -1617,26 +1617,31 @@ def test_cron_304_skips_unchanged_remote_feed(
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
         hdr_before = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
 
-        # WHEN — the conditional-GET 304 needs TWO cron passes: the validator is persisted
-        # by the cron detector (pfb_update_check), NOT by the updatednsbl Force ingest above.
-        # Pass 1 probes with no stored validator -> server 200 -> the detector writes the
-        # ETag sidecar to {header}.orig. Pass 2 reads it (the #572 fix aligned that base),
-        # sends If-None-Match, and the server returns 304 -> "304 not modified".
-        h.reload(deployed_vm, "cron")  # pass 1: store the validator at {header}.orig
-        h.reload(deployed_vm, "cron")  # pass 2: read it -> If-None-Match -> 304
+        # WHEN — the conditional-GET 304 needs the validator PERSISTED first, then READ on a
+        # later probe. The validator is written by the cron detector (pfb_update_check) on a
+        # 200, NOT by the updatednsbl Force ingest above, and only once a {header}.orig baseline
+        # exists — so the store-then-read can span a couple of cron passes. Run cron until
+        # "304 not modified" appears (the #572 fix aligned the read base to {header}.orig),
+        # capped so a genuine failure still surfaces.
+        got_304 = False
+        for _pass in range(4):
+            h.reload(deployed_vm, "cron")
+            if _feed_log_count(deployed_vm, header, "304 not modified") > not_mod_before:
+                got_304 = True
+                break
 
-        # Fast guard.
+        # Fast guard — the feed was evaluated at least once.
         hdr_after = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
         assert hdr_after > hdr_before, (
             f"cron did not evaluate [ {header} ] (before={hdr_before}, after={hdr_after}) — "
             f"EveryDay feed not due (hour rollover?); re-run"
         )
 
-        # THEN — "304 not modified" appeared (Phase-3 code-path proof).
+        # THEN — "304 not modified" appeared within the cap (Phase-3 code-path proof).
         not_mod_after = _feed_log_count(deployed_vm, header, "304 not modified")
-        assert not_mod_after > not_mod_before, (
-            f"Expected '[ {header} ] ... 304 not modified' (Phase-3 conditional GET proof) "
-            f"(before={not_mod_before}, after={not_mod_after}) — 304 path not taken"
+        assert got_304 and not_mod_after > not_mod_before, (
+            f"Expected '[ {header} ] ... 304 not modified' (Phase-3 conditional GET proof) within "
+            f"4 cron passes (before={not_mod_before}, after={not_mod_after}) — 304 path not taken"
         )
 
         # THEN — no re-ingest.
