@@ -11,11 +11,11 @@ normalisation cannot be exercised on FreeBSD and is documented below as defensiv
 
 - `tests/php/PfbMimeAllowlistTest.php` — the shipped allow-list membership oracle.
 - `tests/php/PfbMimeNormaliseTest.php` — `pfb_mime_normalise()` for every variant,
-  including the `gzip`/`bzip2` guard (`x-bzip2`, `gzip`, `x-gzip` pass through
-  unchanged) and the `x-zip-compressed` → `application/zip` rewrite, plus a
-  before→after integration assertion.
+  including the `gzip`/`bzip2` guard (`x-bzip2` and `gzip` pass through unchanged;
+  `x-gzip` canonicalises to `application/gzip`) and the `x-zip-compressed` →
+  `application/zip` rewrite, plus a before→after integration assertion.
 
-### Live-VM smoke (`tests/smoke/test_smoke_feeds.py`, ADR-04, CE + Plus fan-out)
+### Live-VM smoke (`tests/smoke/test_smoke_feeds.py` — the ADR-04 live-VM harness; CE + Plus fan-out)
 
 - `test_zip_feed_imports` — an `application/zip` feed downloads, `bsdtar`-extracts,
   and its entries land in the pf alias table. Confirms ADR-44's wiring into the
