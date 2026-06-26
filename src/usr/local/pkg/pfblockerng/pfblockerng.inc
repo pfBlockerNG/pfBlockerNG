@@ -12013,6 +12013,17 @@ function sync_package_pfblockerng($cron='') {
 	if ($pfb_is_noups) {
 		// Cron pass with no feed changes: save the configuration; nothing to reload.
 		$pfb['save'] = TRUE;
+	} elseif ($pfb_req['scope'] === 'both' && $pfb_req['force']) {
+		// Force Reload BOTH (Update page Run-now with force on, and the wizard reload):
+		// apply IP tables AND DNSBL from cached lists, no re-download — the union of the
+		// scope=ip and scope=dnsbl force branches. Without this, scope=both + force fell
+		// through with no adjustment (identical to force=false), so the most prominent
+		// "Force" control did nothing beyond a plain detector-respecting pass.
+		$pfb['reuse']        = 'on';
+		$pfb['reuse_dnsbl']  = 'on';
+		$pfb['updatednsbl']  = TRUE;
+		unlink_if_exists("{$pfb['dbdir']}/masterfile");
+		unlink_if_exists("{$pfb['dbdir']}/mastercat");
 	} elseif ($pfb_req['scope'] === 'ip' && $pfb_req['force']) {
 		// updateip: Force Reload IP — apply IP tables from cached lists, no re-download.
 		$pfb['reuse']       = 'on';

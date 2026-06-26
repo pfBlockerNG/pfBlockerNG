@@ -854,11 +854,18 @@ function pfblockerng_tick(): void
 
 	// --- Dispatch due (or pending) jobs; defer when outside the apply window ---
 
-	// Feed cron: apply via ADR-40 (IP) + ADR-10 (DNSBL) inside sync_package_pfblockerng().
+	// Feed cron: dispatch the `cron` verb (-> pflblockerng_sync_cron), NOT pfb_trigger
+	// directly.  pflblockerng_sync_cron applies each feed's per-list Update Frequency
+	// ($list['cron']: EveryDay/Weekly/NNhour) before its final sync_package_pfblockerng('cron'),
+	// and runs the scheduled log trim + reset (pfb_log_mgmt/pfb_log_reset) and the ADR-19
+	// software-update check at the end -- all of which a bare `pfb_trigger scope=both` skips
+	// (it would poll every feed every tick and never rotate the report logs).  Apply-on-change
+	// still happens via ADR-40 (IP) + ADR-10 (DNSBL) inside that final sync.  Backgrounded so
+	// the tick stays fast.
 	if (!$cron_disabled && ($due['cron'] || pfb_due_ledger_is_pending('cron', $dbdir))) {
 		if ($in_win) {
 			logger(LOG_NOTICE, localize_text('Tick: dispatching feed cron.'), LOG_PREFIX_PKG_PFBLOCKERNG);
-			exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php pfb_trigger scope=both force=false trigger=cron >> {$pfb['log']} 2>&1 &");
+			exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron >> {$pfb['log']} 2>&1 &");
 			pfb_due_ledger_mark_ran('cron', $cron_secs, $now, $seed, 0, $dbdir);
 		} else {
 			logger(LOG_INFO, localize_text('Tick: feed cron deferred (outside apply window).'), LOG_PREFIX_PKG_PFBLOCKERNG);
