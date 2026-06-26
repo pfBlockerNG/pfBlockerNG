@@ -3610,12 +3610,21 @@ def rule_references(vm: SmokeVM, alias: str, *, timeout: float = 30.0, attempts:
     update CLI returns, so poll rather than read once (the rule was observed
     present in on-failure diagnostics dumped moments after a single-shot read
     returned False — a pure timing race).
+
+    CONTRACT: ``alias`` SHOULD be a pfBlockerNG-owned table name (``pfB_<header>_v{4,6}``,
+    ``pfB_DNSBLIP_v4``, ``pfB_*_Aggregated_v4`` …) — every in-tree caller passes one. The
+    exact ``<alias>`` pf table-reference is always matched; the looser bare-substring
+    fallback (a rule that names the table without the ``<>`` syntax) is gated behind the
+    ``pfB_`` prefix so a generic token can NEVER coincidentally match a FOREIGN rule — e.g.
+    a baked ``CI HARNESS RULE`` or the floating ``REJECT ALL OUT MGT1``. A non-``pfB_``
+    alias is still honoured, via the exact table-reference match alone.
     """
+    pfb_owned = alias.startswith("pfB_")
     for attempt in range(attempts):
         result = vm.ssh(PFCTL, "-sr", timeout=timeout)
         if result.returncode != 0:
             raise RuntimeError(f"pfctl -sr failed: rc={result.returncode} stderr={result.stderr!r}")
-        if any(f"<{alias}>" in line or alias in line for line in result.stdout.splitlines()):
+        if any(f"<{alias}>" in line or (pfb_owned and alias in line) for line in result.stdout.splitlines()):
             return True
         if attempt < attempts - 1:
             time.sleep(delay)
