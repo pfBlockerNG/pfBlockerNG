@@ -47,9 +47,13 @@ These need the booted ``smoke_vm`` fixture, the branch ``.pkg`` (``SMOKE_PKG``),
 
 from __future__ import annotations
 
+import bz2
+import gzip
+import io
 import ipaddress
 import os
 import shlex
+import zipfile
 from collections.abc import Iterator
 
 import pytest
@@ -1909,3 +1913,137 @@ def test_cron_spurious_200_same_bytes_no_reingest(
             reset_exc = exc
         if reset_exc is not None:
             raise reset_exc
+
+
+# --------------------------------------------------------------------------- #
+# ADR-44 — MIME normalisation: compressed feed decompression end-to-end.
+#
+# pfb_download() runs `/usr/bin/file -b --mime-type` on the downloaded bytes and
+# routes them to the matching decompressor:
+#   application/zip      → bsdtar -xOf
+#   application/gzip     → gunzip -c
+#   application/x-bzip2  → bzip2 -dkc
+#
+# ADR-44's pfb_mime_normalise() leaves these three MIME types unchanged (the
+# gzip/bzip guard).  The gzip and bzip2 cases are REGRESSION GUARDS: if the
+# guard were removed and normalise() rewrote application/gzip or
+# application/x-bzip2 to application/zip, bsdtar would be called on an
+# incompatible byte-stream and load zero entries — the member_present assertion
+# below would fail, catching the regression.
+#
+# Archives are built in-memory (stdlib) and served via mock_feeds.register()
+# (bytes pass through verbatim, Content-Type text/plain, no Content-Encoding —
+# so pfBlockerNG's curl receives raw archive bytes and must detect them itself).
+# --------------------------------------------------------------------------- #
+
+_ADR44_BODY = "203.0.113.7\n198.51.100.23\n"
+_ADR44_MEMBER = "203.0.113.7"
+
+
+def test_zip_feed_imports(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-44: a zip-compressed IP feed downloads, decompresses, and loads (application/zip path).
+
+    Scenario: the mock serves raw zip bytes (no Content-Encoding, Content-Type text/plain).
+    pfb_download() must detect application/zip via ``/usr/bin/file -b --mime-type`` and
+    route to ``bsdtar -xOf``, producing the plain IP list.
+
+    Given the alias table does not exist (before-state: the feed is not yet configured).
+    When the case injects + Force-Updates over the HTTP zip feed,
+    Then 203.0.113.7 (a member of the inner plain-text list) is present in the pf table
+      and a rule references the alias — proving the zip archive was fetched, file-detected,
+      and correctly decompressed end-to-end.
+    """
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("list.txt", _ADR44_BODY)
+    zp = buf.getvalue()
+    feed_url = mock_feeds.register("adr44_zip.zip", zp)
+    spec = h.IpCase(aliasname="adr44zip", feed_url=feed_url, header="adr44zip", family="v4")
+
+    # Given — the alias does not exist yet (assert BEFORE-state).
+    assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the zip feed was ever loaded"
+
+    with h.CaseContext(deployed_vm, spec):
+        # When — Force Update downloads + file-detects application/zip + bsdtar decompresses.
+        members = h.wait_pfctl_table(deployed_vm, spec.alias)
+        # Then — the member IP loaded (fails if zip bytes were misrouted to the wrong decompressor).
+        assert h.member_present(members, _ADR44_MEMBER), (
+            f"expected {_ADR44_MEMBER!r} in {spec.alias} after zip decompression, got: {members}"
+        )
+        assert h.rule_references(deployed_vm, spec.alias), (
+            f"no loaded pf rule references {spec.alias} after zip feed import"
+        )
+
+
+def test_gzip_feed_imports(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-44 REGRESSION GUARD: a gzip-compressed IP feed downloads, decompresses, and loads.
+
+    Scenario: the mock serves raw gzip bytes.  pfb_download() must detect application/gzip
+    via ``/usr/bin/file -b --mime-type`` and route to ``gunzip -c``.
+
+    REGRESSION: if pfb_mime_normalise() ever rewrites application/gzip → application/zip,
+    bsdtar would be called on a gzip byte-stream and load zero entries — the member_present
+    assertion below catches that regression.
+
+    Given the alias table does not exist (before-state: the feed is not yet configured).
+    When the case injects + Force-Updates over the HTTP gzip feed,
+    Then 203.0.113.7 is present in the pf table and a rule references the alias —
+      proving the gzip normalise() guard left application/gzip unchanged.
+    """
+    gz = gzip.compress(_ADR44_BODY.encode(), mtime=0)
+    feed_url = mock_feeds.register("adr44_gz.gz", gz)
+    spec = h.IpCase(aliasname="adr44gz", feed_url=feed_url, header="adr44gz", family="v4")
+
+    # Given — the alias does not exist yet (assert BEFORE-state).
+    assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the gzip feed was ever loaded"
+
+    with h.CaseContext(deployed_vm, spec):
+        # When — Force Update downloads + file-detects application/gzip + gunzip decompresses.
+        members = h.wait_pfctl_table(deployed_vm, spec.alias)
+        # Then — the member IP loaded (fails if gzip was mis-normalised to application/zip).
+        assert h.member_present(members, _ADR44_MEMBER), (
+            f"expected {_ADR44_MEMBER!r} in {spec.alias} after gzip decompression, "
+            f"got: {members} — "
+            f"(regression: pfb_mime_normalise() may have rewritten application/gzip → application/zip, "
+            f"routing gzip bytes to bsdtar and loading zero entries)"
+        )
+        assert h.rule_references(deployed_vm, spec.alias), (
+            f"no loaded pf rule references {spec.alias} after gzip feed import"
+        )
+
+
+def test_bzip2_feed_imports(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-44 REGRESSION GUARD: a bzip2-compressed IP feed downloads, decompresses, and loads.
+
+    Scenario: the mock serves raw bzip2 bytes.  pfb_download() must detect application/x-bzip2
+    via ``/usr/bin/file -b --mime-type`` and route to ``bzip2 -dkc``.
+
+    REGRESSION: if pfb_mime_normalise() ever rewrites application/x-bzip2 → application/zip,
+    bsdtar would be called on a bzip2 byte-stream and load zero entries — the member_present
+    assertion below catches that regression.
+
+    Given the alias table does not exist (before-state: the feed is not yet configured).
+    When the case injects + Force-Updates over the HTTP bzip2 feed,
+    Then 203.0.113.7 is present in the pf table and a rule references the alias —
+      proving the bzip2 normalise() guard left application/x-bzip2 unchanged.
+    """
+    bz = bz2.compress(_ADR44_BODY.encode())
+    feed_url = mock_feeds.register("adr44_bz.bz2", bz)
+    spec = h.IpCase(aliasname="adr44bz", feed_url=feed_url, header="adr44bz", family="v4")
+
+    # Given — the alias does not exist yet (assert BEFORE-state).
+    assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the bzip2 feed was ever loaded"
+
+    with h.CaseContext(deployed_vm, spec):
+        # When — Force Update downloads + file-detects application/x-bzip2 + bzip2 decompresses.
+        members = h.wait_pfctl_table(deployed_vm, spec.alias)
+        # Then — the member IP loaded (fails if bzip2 was mis-normalised to application/zip).
+        assert h.member_present(members, _ADR44_MEMBER), (
+            f"expected {_ADR44_MEMBER!r} in {spec.alias} after bzip2 decompression, "
+            f"got: {members} — "
+            f"(regression: pfb_mime_normalise() may have rewritten application/x-bzip2 → application/zip, "
+            f"routing bzip2 bytes to bsdtar and loading zero entries)"
+        )
+        assert h.rule_references(deployed_vm, spec.alias), (
+            f"no loaded pf rule references {spec.alias} after bzip2 feed import"
+        )
