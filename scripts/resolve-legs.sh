@@ -225,7 +225,7 @@ _rl_vm_identity() {
                 [ -n "$_m" ] && printf '::add-mask::%s\n' "$_m"
             done
             printf '::add-mask::%s\n' "$PLUS_UUID"
-            [ -n "${PLUS_NDI:-}" ] && printf '::add-mask::%s\n' "$PLUS_NDI" || true
+            if [ -n "${PLUS_NDI:-}" ]; then printf '::add-mask::%s\n' "$PLUS_NDI"; fi
             {
                 printf 'RESOLVED_VM_MAC<<__MAC_EOF__\n%s\n__MAC_EOF__\n' "$PLUS_MAC"
                 printf 'RESOLVED_VM_SMBIOS_UUID=%s\n' "$PLUS_UUID"
@@ -299,7 +299,7 @@ _rl_scrub() {
                     */"${_keep}"/*|*/"${_keep}") continue ;;
                 esac
             fi
-            LC_ALL=C grep -Iq . "$_f" 2>/dev/null && sed -i -f redact.sed "$_f" 2>/dev/null || true
+            if LC_ALL=C grep -Iq . "$_f" 2>/dev/null; then sed -i -f redact.sed "$_f" 2>/dev/null || true; fi
         done
     done
     rm -f redact.sed
