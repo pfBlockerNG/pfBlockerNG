@@ -151,6 +151,12 @@ The design was stress-tested by independent adversarial lenses (collision / fail
 3. **Test-path scrub was a "must-remember"** — only a per-spec `BeforeEach unset` guarded the corruption class. Fixed by the shared `git-env-scrub.sh` + a parity-guard assertion (§5.3).
 4. **Build parity mis-specified** — the smoke `.pkg` can never be byte-equal to the released one (`--pkgversion`/non-deterministic `--annotate`). Re-specified as same-script-same-defaulting + a closed legitimate-divergence parameter set, with the parity-guard also forbidding inline arg-derivation (§5.3).
 
+A second adversarial pass (Map→Design→Verify over the real build files) hardened the **P3** design before implementation; its findings are folded into the P3 phase prompt (`03_P3_Shared_Build_Script.txt`):
+
+1. **build-leg stdout leak** — `sparse-clone-ports.sh` runs `git checkout`, which writes branch-tracking chatter to **stdout**; unredirected it corrupts `build-leg.sh`'s `.pkg`-path stdout contract (breaks `dirname`/`mv`/`cmp`/`SMOKE_NIGHTLY_PKG` at every caller). Fixed by muzzling the tree-prep step to stderr; only the builder's path reaches stdout.
+2. **release stamp from the wrong ref** — hoisting `created=`/`commit=` into `read-matrix` (which checks out the dispatch HEAD) mis-stamps the `.pkg` when a release-notes commit advances the tagged tip. Fixed by a dedicated `resolve-stamp` job checking out the build job's exact ref (`tag` on a real release, `github.ref` on dry-run).
+3. **ports pin that doesn't pin + parity-guard self-contradiction** — the parity gate must pin FreeBSD-ports drift-free (sparse-clone always re-fetches the moving branch; `clone -b` rejects a raw SHA) via a local `file://` clone at a fixed ref for both legs; and the parity-guard must discriminate by flag *target* (forbid `--pkgversion`/`--annotate`/ports literals only on direct `build-pkg-portable.py`/`sparse-clone-ports.sh` calls, allow them on `build-leg.sh`) with build-leg arg-values deny-by-default (literal/input/`needs` only). Plus: extract the release manifest via `zstd -dc | tar` (not tar zstd auto-detect) and slug the colon-bearing `LEG` token before it becomes a path component.
+
 ---
 
 ## 8. Acceptance

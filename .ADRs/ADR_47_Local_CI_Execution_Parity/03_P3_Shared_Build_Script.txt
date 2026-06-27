@@ -1,0 +1,241 @@
+ADR-47 Phase 3 — Shared BUILD script + converge the build sites
+
+FIRST LINE FOR THE IMPLEMENTER: Run /ponytail:ponytail full
+
+OBJECTIVE
+Add scripts/build-leg.sh — the missing "build ONE leg" wrapper over sparse-clone-ports.sh +
+build-pkg-portable.py with a SINGLE unified arg set — plus its shellspec, then rewire the THREE
+build sites to call it and DELETE their step divergences. Today each site hand-rolls the same two
+commands with different args (build-pkg-linux.yml: neither --pkgversion nor --annotate;
+release.yml: both, with a hard-coded ports ref + inline portversion/created/commit derivation;
+smoke-single.yml: a hard-coded --pkgversion + a hard-coded ports clone). After P3 there is ONE
+build path; the per-site difference is ONLY parameter VALUES. A parity-guard lint makes CI fail if
+any per-leg job body re-grows build step logic (including inline arg-derivation one line above the
+call). Build parity is "same script + same defaulting", NOT byte-equal artifacts across sites.
+
+This phase was adversarially pre-verified (a Map→Design→Verify pass over the real files). The
+seven AMENDMENTS below are findings from that pass — they are mandatory, not optional polish; two
+are blocking correctness bugs in the naive design.
+
+READ FIRST
+- .ADRs/ADR_47_Local_CI_Execution_Parity/ADR.md — §5.3 (the build-leg.sh / parity-guard contract,
+  AUTHORITATIVE), §6 (P3 bullet + gate), §7 (adversarial gaps), §2 (scope: orchestration vs leg
+  logic). §5.3: build parity = same-script-same-defaulting, NOT byte-equal across sites.
+- 02_Results.txt (this dir) — the lib/run-id.sh API (pfb_mint_run_id_local/_ci) and the
+  select-box.sh contract (RUN_ID / PFB_BOX / PFB_RUN_DIR / PFB_OUT_DIR keying, --print-id mode).
+  build-leg keys its DEST/OUT off the SAME run-id chokepoint; do not invent a second one.
+- scripts/build-pkg-portable.py — the argparse/CLI surface. CONFIRM the exact flag names + defaults
+  yourself (the wrapper must forward only flags the builder actually accepts). Relevant: --ports,
+  --channel, --local-src, --abi, --py-flavor, --php, --pkgversion (validate rejects any '-'),
+  --annotate K=V (repeatable; parse_annotations requires K=V), --out. The builder prints the
+  resolved .pkg path on stdout (around line ~1589) and sends ALL progress to stderr — its stdout is
+  clean. Builder args NOT used by any site (--arch/--freebsd-version/--repo-catalogue/--gh-tagname/
+  --compression/--port-dir) stay at builder defaults; do NOT expose them (grounded minimalism).
+- scripts/sparse-clone-ports.sh — the P1 tree-prep. Its 6 strict positional args:
+  URL REF DEST CHANNEL PHP PYFLAVOR. CRITICAL (AMENDMENT 1): it runs `git checkout`, which writes
+  branch-tracking chatter ("Your branch is up to date with origin/<REF>.") to STDOUT. That leak
+  must never reach build-leg's stdout.
+- tests/shell/sparse_clone_ports_spec.sh — the EXEMPLAR shellspec. Mirror it: a fake-bin stub on
+  PATH, the MANDATORY `unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_OBJECT_DIRECTORY
+  GIT_COMMON_DIR` in setup(), before/after assertions, expected-vs-actual failure output.
+- The three build sites, read in full before editing (line numbers are approximate — re-locate):
+  .github/workflows/build-pkg-linux.yml (clone ~117-132, build ~134-148, upload ~150-157,
+  keep checkout/setup-python/ensure-zstd); .github/workflows/release.yml (build-pkgs-portable job
+  step ~798-887: portversion eval ~813-816, created/commit ~818-824, sparse-clone ~849-856, builder
+  ~858-870, matrix def ~826-845, rename+upload ~875-896; read-matrix job ~397; build job checkout
+  ref ~788; prepare-release tagging ~106-113/142-147); .github/workflows/smoke-single.yml (step
+  ~445-466: gate ~446, sparse-clone ~453-459, builder ~461-465, SMOKE_NIGHTLY_PKG ~466).
+
+DELIVERABLES
+
+--- scripts/build-leg.sh (NEW) ---
+A POSIX-sh wrapper. USAGE:
+  build-leg.sh [--ports-repo OWNER/NAME] [--ports-ref REF] [--channel devel|stable|nightly]
+               [--abi ABI] [--py-flavor PYxx] [--php X.Y] [--local-src DIR]
+               [--pkgversion V] [--annotate K=V]... [--ports-dir DEST] [--out-dir OUT]
+Behaviour: prepare the ports tree at REF, build ONE .pkg into the run-keyed OUT dir, print the
+resolved absolute .pkg path (and NOTHING else) on stdout. Mirrors build-pkg-portable.py's
+path-on-stdout contract so callers do `PKG="$(build-leg.sh ...)"`.
+
+Params + defaults (every param defaults; sites differ ONLY in values + whether
+--pkgversion/--annotate are supplied):
+  --ports-repo  default 'pfBlockerNG/FreeBSD-ports'  -> wrapped to https://github.com/<repo> (URL,
+                sparse-clone arg1). Also accept a file:// URL (the parity gate needs it).
+  --ports-ref   default 'pfblockerng/use-github'     -> sparse-clone arg2. (Makes release.yml's and
+                smoke-single.yml's hard-coded ref a parameter.)
+  --channel     default 'devel'   -> sparse-clone arg4 AND builder --channel (one source, kills the
+                YAML's duplicate channel passing).
+  --abi         default 'FreeBSD:15:amd64'  -> builder --abi (TARGET fact, never read from the tree).
+  --py-flavor   default 'py311'   -> sparse-clone arg6 AND builder --py-flavor.
+  --php         default '8.3'      -> sparse-clone arg5 AND builder --php.
+  --local-src   default '.'        -> builder --local-src.
+  --pkgversion  default '' => OMIT the flag (builder derives PORTVERSION from the ports Makefile/
+                channel). A non-empty value => forward --pkgversion V. THIS single param is the
+                build-pkg-linux(omit)/release($portversion)/smoke(literal) divergence.
+  --annotate    repeatable; default none => no --annotate flags. Each value => one builder
+                --annotate K=V.
+  --ports-dir   explicit sparse-clone DEST; default = ${PFB_PORTS_DIR:-$PFB_RUN_DIR/ports}.
+  --out-dir     explicit builder --out; default = ${PFB_OUT_DIR:-$PFB_RUN_DIR/out}.
+
+Keying (source scripts/lib/run-id.sh — the SAME chokepoint select-box.sh uses; do NOT duplicate id
+logic): RUN_ID = $RUN_ID if already exported, else mint via the lib (CI: GITHUB_RUN_ID set ->
+pfb_mint_run_id_ci; local -> pfb_mint_run_id_local "${PFB_BOX:-$(hostname)}").
+PFB_RUN_DIR := ${PFB_RUN_DIR:-${PFB_RUN_ROOT:-/var/tmp/pfb-runs}/$RUN_ID}. OUT and DEST default as
+above (run-keyed => two concurrent runs never collide on the builder's deterministic {pkgname}.pkg
+filename — ADR §5.1). `mkdir -p` DEST and OUT idempotently. Resolve SCRIPT_DIR via
+`cd "$(dirname "$0")" && pwd` so the helpers are found regardless of caller CWD (exactly like
+sparse-clone-ports.sh). Scrub GIT_* at the top (reuse the shared scrub helper if P5 has landed it;
+else `unset` inline as sparse-clone does).
+
+Call sequence:
+  Step 1 (tree):  sh "$SCRIPT_DIR/sparse-clone-ports.sh" "https://github.com/$PORTS_REPO" "$PORTS_REF" \
+                     "$DEST" "$CHANNEL" "$PHP" "$PYFLAVOR" 1>&2      <-- AMENDMENT 1: redirect Step 1
+                  stdout to STDERR so git-checkout chatter never pollutes build-leg's stdout.
+  Step 2 (build): PKG="$(python3 "$SCRIPT_DIR/build-pkg-portable.py" --ports "$DEST" --channel \
+                     "$CHANNEL" --local-src "$LOCAL_SRC" --abi "$ABI" --py-flavor "$PYFLAVOR" --php \
+                     "$PHP" [--pkgversion "$PKGVERSION" iff non-empty] [--annotate "K=V" per item] \
+                     --out "$OUT")"
+                  printf '%s\n' "$PKG"    <-- the ONLY thing on build-leg stdout.
+Optional flags are appended to the argv ONLY when set, so an unset --pkgversion/--annotate is
+byte-identical to today's omission. `set -eu`; quote every expansion; absolute paths only for
+privileged binaries per CLAUDE.md shell rules (python3/git/sh are base — bare is fine).
+
+--- tests/shell/build_leg_spec.sh (NEW) ---
+Two layers. Mirror the exemplar (fake-bin stubs on PATH, GIT_* unset in setup, expected-vs-actual).
+
+(a) ARGV-ASSEMBLY parity (the PR-gate, fast, no real build): stub sparse-clone-ports.sh and
+    build-pkg-portable.py with fakes that RECORD their argv to a file and (the builder fake) print a
+    fake .pkg path. For EACH of the three sites, assert build-leg assembles EXACTLY the builder argv
+    + sparse-clone argv that site's OLD direct calls used:
+      - build-pkg-linux leg: NO --pkgversion, NO --annotate in the recorded builder argv (the ADR
+        "neither" — assert ABSENCE, not just presence of the others). [before/after: also assert the
+        OPPOSITE site does include them, so the test proves it's a real branch, not always-absent.]
+      - release leg: --pkgversion <v> AND --annotate created=<c> AND --annotate commit=<x> present;
+        ports URL/ref = the defaults (proving the hard-coded ref became the default).
+      - smoke leg: --pkgversion 3.2.16.20260606.2 AND --annotate commit=<sha>; channel nightly.
+    Assert (AMENDMENT 1) build-leg STDOUT is exactly ONE line and equals the builder fake's printed
+    path — feed the sparse-clone fake a `git checkout`-style stdout line and prove it does NOT leak
+    to build-leg stdout (this is the red->green for amendment 1: against a build-leg that does not
+    redirect Step 1, stdout is multi-line and the assertion FAILS; with `1>&2` it passes).
+    Assert run-keying: with RUN_ID/PFB_RUN_DIR unset, DEST and OUT land under
+    ${PFB_RUN_ROOT}/${RUN_ID}; two invocations with different RUN_ID get different OUT.
+
+(b) REAL-BUILD byte/manifest parity (the deeper gate; may be a tagged/dispatch-heavier example if
+    too slow for the PR gate — mark it, do NOT silently drop it). AMENDMENT 3: pin the ports tree
+    drift-free — create a LOCAL FreeBSD-ports clone at a FIXED commit exposed under a fixed local
+    branch/tag, and pass it as --ports-repo file://<path> + --ports-ref <fixed-branch-or-tag> to
+    BOTH legs (sharing --ports-dir alone CANNOT stop sparse-clone's mandatory re-fetch, and
+    `git clone -b` rejects a raw SHA). Then:
+      SMOKE leg (no created= => reproducible): build OLD way (verbatim pre-rewire smoke commands)
+        => PKG_OLD; build NEW way (build-leg.sh, same inputs) => PKG_NEW; assert `cmp -s PKG_OLD
+        PKG_NEW` (byte-for-byte). On failure print both paths + sizes (CLAUDE.md expected-vs-actual).
+      RELEASE leg (created= is the one nondeterministic field): compare MANIFEST FIELDS modulo
+        created=. AMENDMENT 6: extract explicitly — `zstd -dc "$PKG" | tar -xO +MANIFEST` (and
+        +COMPACT_MANIFEST); assert non-empty before diffing. Normalize with jq `del(.annotations
+        .created)` AND strip the `created=<epoch>` token folded into the manifest `comment` string;
+        the normalized manifests (name, version==portversion, arch, ABI, RUN_DEPENDS, files list,
+        commit= annotation) MUST be identical, and the sorted payload file list + per-file digests
+        MUST match.
+
+--- parity-guard lint (NEW: tests/shell/<name>_spec.sh scanning .github/workflows/*.yml) ---
+FAIL CI if any per-leg job body carries BUILD step logic. AMENDMENT 4 + 5 (the guard must
+discriminate by TARGET and deny-by-default, or it both false-positives the blessed call and misses
+hidden derivations):
+  FLAG (fail):
+    - any direct invocation of build-pkg-portable.py OR sparse-clone-ports.sh in a workflow (every
+      build MUST go through build-leg.sh);
+    - --pkgversion / --annotate / a ports github.com URL / a ports ref literal ONLY when they are
+      arguments to build-pkg-portable.py or sparse-clone-ports.sh (a direct builder/clone call) —
+      NOT when on a build-leg.sh call;
+    - a build-leg.sh argument VALUE that is NOT a literal, a workflow ${{ inputs.* }}, a
+      ${{ matrix.* }}, or a ${{ needs.*.outputs.* }} expression — i.e. a command-substitution or a
+      locally-derived env feeding the build leg is denied by default (this is the teeth: inline
+      derivation one line above the call is caught because the VALUE is non-conforming, not because
+      we enumerated the bad command).
+  ALLOW (orchestration, not flagged): the single build-leg.sh invocation with conforming arg
+    values; the matrix DEFINITION + the fan-out jq that selects per-entry coords; select-box.sh
+    --print-id / RUN_ID mint / LEG assignment; checkout/setup-python/ensure-zstd/upload-artifact;
+    the post-build rename for artifact naming.
+  Pin the guard with fixtures (a passing workflow snippet + each failing class), exemplar-style.
+  Scope = the build sites for P3; P5 generalizes to test/smoke legs.
+
+REWIRE PLAN (delete divergence; keep orchestration)
+- build-pkg-linux.yml: delete the clone step body and the build step body; replace with ONE step
+  (id: build) that exports RUN_ID via `select-box.sh --print-id` and runs
+  `PKG="$(sh scripts/build-leg.sh --ports-repo '${{ inputs.ports_repo }}' --ports-ref
+  '${{ inputs.ports_ref }}' --channel '${{ inputs.channel }}' --abi '${{ inputs.abi }}'
+  --py-flavor '${{ inputs.py_flavor }}' --php '${{ inputs.php_version }}')"` — NO --pkgversion, NO
+  --annotate. Set env PFB_RUN_ROOT: ${{ github.workspace }}/out so PFB_RUN_DIR/out stays under the
+  workspace; emit pkg_dir=$(dirname "$PKG") to $GITHUB_OUTPUT and change the upload glob to
+  ${{ steps.build.outputs.pkg_dir }}/*.pkg. AMENDMENT 7: pass a SLUGGED LEG (e.g. freebsd-15-amd64),
+  not the raw ABI 'FreeBSD:15:amd64' (colons become path components otherwise; run-id.sh sanitizes
+  the box token but NOT LEG — either slug LEG here or add LEG sanitization to run-id.sh/build-leg).
+- release.yml: AMENDMENT 2 — do NOT compute created/commit in read-matrix (it checks out the
+  dispatch HEAD ~397, but the .pkg must be stamped from the TAGGED commit the build job checks out
+  ~788; a release-notes commit can make them differ). Add a dedicated resolve-stamp orchestration
+  job that checks out the SAME ref expression as the build job
+  (`${{ github.event.inputs.dry_run != 'true' && github.event.inputs.tag || github.ref }}`,
+  fetch-depth: 0) and emits created (`git show -s --format=%ct`) + commit (`git rev-parse HEAD`) as
+  outputs. portversion (derived from the tag STRING via release-version.sh, ref-independent) may
+  stay in read-matrix. In the build step, delete the inline portversion/created/commit derivation,
+  the inline sparse-clone, and the inline builder call; each matrix-loop iteration becomes:
+  LEG="${VARSLUG}-${MAJOR}-${ARCH}"; RUN_ID via --print-id; `PKG="$(sh scripts/build-leg.sh
+  --channel "$PKG_CHANNEL" --abi "FreeBSD:${MAJOR}:${ARCH}" --py-flavor "$PY" --php "$PHP"
+  --pkgversion "$PORTVERSION" --annotate "created=${CREATED}" --annotate "commit=${COMMIT}")"`
+  (PORTVERSION/CREATED/COMMIT from needs.*.outputs), then the existing rename. Drop --ports-repo/
+  --ports-ref entirely (defaults reproduce the deleted hard-coded pfBlockerNG/FreeBSD-ports @
+  pfblockerng/use-github). Keep the matrix fan-out + rename + upload; set PFB_RUN_ROOT under the
+  workspace so out/**/*.pkg still resolves.
+- smoke-single.yml: delete the inline sparse-clone + mkdir + builder; the step becomes RUN_ID via
+  --print-id then `PKG="$(sh scripts/build-leg.sh --channel nightly --abi "$ABI" --py-flavor
+  "$PY_FLAVOR" --php "$PHP_VERSION" --pkgversion 3.2.16.20260606.2 --annotate "commit=${{ github.sha
+  }}")"` and `echo "SMOKE_NIGHTLY_PKG=$PKG" >> "$GITHUB_ENV"`. Keep the `if` gate. The hard-coded
+  --pkgversion/--channel are PRESERVED as explicit build-leg flags (the legitimate smoke
+  divergence, now a parameter, allowed by the guard because it is on build-leg.sh). LEG slug
+  nightly-<slugged-abi>.
+
+CONSTRAINTS
+- Behaviour-preserving for the artifacts: each rewired site must build the SAME .pkg it built
+  before (same inputs => same output; the parity gate proves it). This is the test-coverage
+  "behaviour-preserving oracle" case (ADR prep), not red->green — EXCEPT amendment 1's stdout
+  assertion, which IS a real red->green (fails on a non-redirecting build-leg, passes after).
+- POSIX sh only; shellcheck clean; quote all expansions. Match sparse-clone-ports.sh idiom.
+- Do NOT expose builder flags no site uses. Do NOT add a second run-id definition. Do NOT claim
+  byte-equality for the release leg (forbidden by §5.3 — manifest-modulo-created is the gate).
+- Honour the open risks in the design pass: run-keyed DEST default re-clones each run; the
+  PFB_PORTS_DIR/--ports-dir override restores the box-persistent cache (document this in the
+  build-leg header so the local clone-reuse win is not lost).
+
+GATES (all must pass before the handoff)
+- shellcheck scripts/build-leg.sh tests/shell/build_leg_spec.sh <parity-guard spec>  -> clean.
+- shellspec tests/shell/build_leg_spec.sh  -> argv-assembly layer green; the stdout red->green for
+  amendment 1 demonstrated (record the RED result in the handoff).
+- shellspec <parity-guard spec>  -> green (passing + each failing class pinned).
+- shellspec (full suite)  -> green (no regressions; pre-existing skips unchanged).
+- Actionlint / YAML sanity on the three rewired workflows if available; otherwise a careful manual
+  diff that the only changes are the delete-and-replace described above (orchestration preserved).
+- The real-build parity (layer b) is the deeper proof — run it where the toolchain exists (it needs
+  python3 + zstd + a ports tree). If gated heavier than the PR suite, say so explicitly in the
+  handoff (no silent drop).
+
+EXPECTED RESULT
+One shared build path. The three workflows each invoke build-leg.sh once; all inline
+sparse-clone/builder calls and the inline portversion/created/commit derivation are gone; the
+parity-guard would fail CI if any of them returned. build-leg stdout is exactly the .pkg path.
+The argv-assembly spec proves each site's old args are reproduced (incl. the "neither" absence for
+build-pkg-linux), and the real-build parity proves the smoke leg is byte-identical old-vs-new and
+the release leg manifest-identical modulo created=.
+
+COMMIT
+adr-47: add build-leg.sh + converge the three build sites (P3)
+(single commit: scripts/build-leg.sh + tests/shell/build_leg_spec.sh + the parity-guard spec + the
+three workflow rewires + 03_Results.txt handoff.)
+
+HANDOFF (write 03_Results.txt)
+Record: the deliverables; gate results (incl. the amendment-1 red->green evidence and whether the
+real-build parity ran in-suite or heavier); the build-leg.sh CLI contract as shipped; the resolve-
+stamp job shape; the parity-guard's flag/allow rules as implemented; any open risk left for P4/P5
+(esp. the DEST clone-reuse default decision and the artifact-path PFB_RUN_ROOT coupling). End with:
+  RESUME: branch=adr/47-local-ci-execution-parity, next-phase=4
+P4 leases via select-box.sh + calls run-smoke.sh; P5 lifts leg-resolution into resolve-legs.sh and
+generalizes the parity-guard + git-env-scrub chokepoint.
