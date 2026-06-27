@@ -79,22 +79,21 @@ done
 
 # ── Phase 2: scan passthrough for the -m guard and bare-path guard ─────────── #
 # -m guard: if the passthrough already has -m, do NOT inject our default marker.
-# bare-path: only the FIRST non-option token is treated as a positional path
-#   (a later non-'-' token like the '1' in --maxfail 1 is an option value).
+# bare-path: a caller-supplied pytest TARGET (path/file/node-id) replaces the
+#   default tests/smoke. Detect it by SHAPE, not position: a real target contains
+#   '/', ends in '.py', or carries a '::' node-id. This catches a leading path
+#   (`tests/smoke/ui`) AND a path after an option (`--lf tests/smoke/ui`), while a
+#   bare word/number that is an option VALUE (the '1' in `--maxfail 1`) is NOT a
+#   path — so neither position nor option-arity needs to be tracked.
 _CALLER_GAVE_M=0
 _CALLER_GAVE_PATH=0
-_pt_first=1
 for _a in "$@"; do
     case "$_a" in
         -m) _CALLER_GAVE_M=1 ;;
         -*) : ;;
-        *)
-            if [ "$_pt_first" -eq 1 ]; then
-                _CALLER_GAVE_PATH=1
-            fi
-            ;;
+        */*|*.py|*::*) _CALLER_GAVE_PATH=1 ;;
+        *) : ;;
     esac
-    _pt_first=0
 done
 
 # ── Phase 3: PYTHON resolution ─────────────────────────────────────────────── #

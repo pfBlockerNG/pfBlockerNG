@@ -220,28 +220,31 @@ PY3EOF
   # executed. If the arg were eval'd, the file /tmp/pfb_pwn_test would be created.
   # RED→GREEN: old eval-based passthrough → subshell fires → file created → FAILS.
   # After: successive set -- prepends → file never created → PASSES.
+  # Per-test marker under ${WORK} (not a shared /tmp path) so leftovers / a parallel
+  # run cannot taint this assertion. The arg uses "\$(...)" — a LITERAL $( in the spec
+  # shell (never command-substituted here), with ${WORK} expanded — so run-smoke.sh
+  # receives the literal string; only an eval inside run-smoke.sh could fire it.
   run_injection_guard() {
     PYTHON="${FAKE_BIN}/python"
     export PYTHON
-    sh "$SCRIPT" '$(touch /tmp/pfb_pwn_test)'
-    # Remove any accidental file so the test is self-cleaning.
+    rm -f "${WORK}/pfb_pwn_test"
+    sh "$SCRIPT" "\$(touch ${WORK}/pfb_pwn_test)"
     argv_joined
   }
 
   Describe 'argv injection guard: passthrough metachar is never evaluated'
     It 'passes $(touch ...) as a literal string, never executes it'
       When call run_injection_guard
-      The output should include '$(touch /tmp/pfb_pwn_test)'
-      The path '/tmp/pfb_pwn_test' should not be exist
+      The output should include "\$(touch ${WORK}/pfb_pwn_test)"
+      The path "${WORK}/pfb_pwn_test" should not be exist
     End
   End
 
-  # ── bare-path fix: --maxfail 1 does NOT suppress the default path ─────────── #
-  # '--maxfail 1' passes --maxfail as an option flag and '1' as its value.
-  # The '1' is a non-'-' token, but it is NOT the first positional arg — it is an
-  # option value. The bare-path guard must NOT mistake it for a caller-supplied path.
+  # ── bare-path fix: a caller PATH is detected by SHAPE (has /, .py, or ::) ──── #
+  # '--maxfail 1' passes --maxfail as a flag and '1' as its value. '1' has no path
+  # shape, so it is NOT a caller path and the default tests/smoke is still injected.
   # RED→GREEN: old code (any non-'-' token → _CALLER_GAVE_PATH=1) suppressed
-  # tests/smoke → FAILS. After: only the FIRST non-option token counts → PASSES.
+  # tests/smoke → FAILS. After (shape match): '1' is not a path → PASSES.
   run_maxfail_not_a_path() {
     PYTHON="${FAKE_BIN}/python"
     export PYTHON
@@ -254,6 +257,30 @@ PY3EOF
       When call run_maxfail_not_a_path
       The output should include "tests/smoke"
       The output should include "--maxfail|1"
+    End
+  End
+
+  # ── bare-path fix: a path AFTER a leading option still replaces the default ── #
+  # 'run-smoke.sh --lf tests/smoke/ui' — the path comes after an option. The
+  # shape match (tests/smoke/ui has '/') catches it regardless of position, so the
+  # default tests/smoke is NOT injected. RED→GREEN: the old position-based
+  # (_pt_first reset every token) logic left _pt_first=0 by the path → default
+  # wrongly injected → FAILS. After (shape match): path replaces default → PASSES.
+  run_path_after_option() {
+    PYTHON="${FAKE_BIN}/python"
+    export PYTHON
+    sh "$SCRIPT" --lf tests/smoke/ui
+    argv_joined
+  }
+
+  Describe '--lf tests/smoke/ui: a path after a leading option replaces the default'
+    It 'uses the caller path (no default tests/smoke injected)'
+      When call run_path_after_option
+      The output should include "tests/smoke/ui"
+      # The default 'tests/smoke' (injected leftmost when no caller path) would join as
+      # 'tests/smoke|' — absent here. 'tests/smoke/ui' joins as 'tests/smoke/ui|', which
+      # does NOT contain 'tests/smoke|', so this catches a wrongly-injected default.
+      The output should not include "tests/smoke|"
     End
   End
 
@@ -275,7 +302,7 @@ PY3EOF
     cat > "${WORK_ROOT}/.venv/bin/python" << VENVEOF
 #!/bin/sh
 touch "$VENV_MARKER"
-printf '%s\n' \$@ > "\$ARGV_FILE"
+printf '%s\n' "\$@" > "\$ARGV_FILE"
 VENVEOF
     chmod +x "${WORK_ROOT}/.venv/bin/python"
     ln -s "$SCRIPT" "${WORK_ROOT}/scripts/run-smoke.sh"
