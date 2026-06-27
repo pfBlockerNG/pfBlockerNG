@@ -85,9 +85,21 @@ def test_pfsense_web_role_has_ssh_liveness_floor() -> None:
     The floor only logs; the web 200 still owns the readiness exit (per-role gate unchanged).
     """
     text = _wait_ready_text()
-    assert "WEB_SSH_SEEN" in text  # the floor-observed flag (logged once)
-    assert '"root@${HOST}" true' in text  # the real ssh liveness probe
-    assert "warming" in text  # the "alive — web warming" diagnostic that makes the state clear
+    ssh_guard = 'if [ -z "$WEB_SSH_SEEN" ] &&'  # the one-shot floor guard
+    ssh_probe = '"root@${HOST}" true'  # the real ssh liveness probe
+    web_probe = (
+        'if "$CURL" -fsSL --connect-timeout 1 --max-time 2 -o /dev/null "http://${HOST}:${WEB_PORT}/" 2>/dev/null; then'
+    )
+    warming_log = "ssh alive — system up, webConfigurator warming"
+
+    assert ssh_guard in text
+    assert ssh_probe in text
+    assert warming_log in text
+    # Staggered order: the floor (guard + ssh probe) must precede the web-200 readiness probe.
+    assert text.index(ssh_guard) < text.index(web_probe)
+    assert text.index(ssh_probe) < text.index(web_probe)
+    # One-shot: the warming diagnostic is emitted once (guarded by WEB_SSH_SEEN), never per poll.
+    assert text.count(warming_log) == 1
 
 
 def test_default_timeout_has_headroom_over_slow_boot() -> None:
