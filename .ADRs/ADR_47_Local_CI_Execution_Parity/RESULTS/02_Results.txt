@@ -1,0 +1,115 @@
+ADR-47 Phase 2 — Results
+
+DELIVERABLES LANDED
+- scripts/lib/run-id.sh          — source-able run-id minter (two functions, no side effects)
+- scripts/select-box.sh          — box-lease orchestrator (acquire / retry / reclaim / release)
+- tests/shell/select_box_spec.sh — shellspec suite (11 examples, 0 failures)
+
+GATE RESULTS
+  shellcheck scripts/lib/run-id.sh scripts/select-box.sh tests/shell/select_box_spec.sh
+    → clean (0 issues)
+  shellspec tests/shell/select_box_spec.sh
+    → 11 examples, 0 failures
+  shellspec tests/shell/select_box_spec.sh (under exported GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE)
+    → 11 examples, 0 failures (the unset GIT_* scrub in setup() neutralizes the hook env)
+  shellspec (full suite)
+    → 134 examples, 0 failures, 2 pre-existing skips (ADR-26 GNU-only paths)
+
+RED→GREEN EVIDENCE — reclaim-side double-grant (§7)
+  two-concurrent-reclaimers (bad rmdir+mkdir):   winners=2  ← RED  (double grant proven)
+  two-concurrent-reclaimers (rename-capture):    winners=1  ← GREEN (exactly one wins)
+  Both assertions are reliable, not flaky:
+    - bad: rm-rf idempotent + ignored mkdir status → both callers always return 0
+    - good: rename(2) on the same source is atomic → at most one caller returns 0
+
+RED→GREEN EVIDENCE — acquire-side double-grant (gate-review fix, second race)
+  Defect: a lease was created in three separate ssh calls (mkdir → .created →
+  owner). Between mkdir and .created the lock existed with neither file, and the
+  reclaim rule treated a no-owner + no-.created lock as IMMEDIATELY reclaimable —
+  so a concurrent reclaimer landing in that window stole a freshly-acquired,
+  still-in-flight lease (two runs on one box).
+  Fix part 1: _sb_claim_lock creates lock + .created + owner in ONE ssh call
+              (mkdir && .created && owner.tmp && mv owner). Used by BOTH the
+              acquire path and the reclaim "take fresh lock" tail. A lock is now
+              never observable without its .created and owner.
+  Fix part 2: reclaim rule — a no-owner lock is reclaimable ONLY when .created
+              exists AND now-created >= grace. A missing .created (torn-acquire
+              window) is NOT immediately reclaimable.
+  New test cases:
+    acquire-window (no .created):  RED  refused=no  (pre-fix stole the lock, rc=0)
+                                   GREEN refused=yes (post-fix refuses, lock intact)
+    acquire-window (young .created): GREEN refused=yes (guard; already correct pre-fix)
+  The (no .created) case is the load-bearing red→green; verified RED against the
+  pre-fix "no .created → immediate reclaim" code and GREEN after both fix parts.
+
+RESIDUAL LIMITATION (documented, not a blocker)
+  A true torn acquire — remote sh -c killed BETWEEN mkdir and the .created write
+  inside the single ssh call — leaves a no-.created lock that is now never
+  auto-reclaimed (needs manual `rm -rf` of the lock dir). The window is a few
+  microseconds on the box (no network gap), so this is astronomically unlikely; a
+  conservative TTL sweep for it is deferred per the gate review ("NEVER
+  immediate-reclaim; no fixed sleep as a coordination primitive").
+
+scripts/lib/run-id.sh API
+  pfb_mint_run_id_local <box>   → local-<boxtok>-<epoch>-<rand8hex>
+  pfb_mint_run_id_ci            → ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${LEG:-default}
+  No-alias: "local-" vs "ci-" is a hard prefix split; GITHUB_RUN_ID cannot equal "local".
+
+scripts/select-box.sh CONTRACT
+  Acquire (default mode):
+    - Requires PFB_BOXES (space-separated ssh targets)
+    - Iterates pool in random order (avoids thundering herd); tries all once per retry
+    - Atomic claim in ONE ssh call: mkdir (exclusive) && .created && owner.tmp && mv owner
+      — a lock is never observable without its .created + owner; mkdir EEXIST short-circuits
+      the chain → fall through to reclaim
+    - Stale/crashed locks reclaimed via atomic rename-capture; the fresh lock is re-taken
+      with the same atomic _sb_claim_lock call
+    - owner file = "runid host epoch"; .created = epoch (drives the missing-owner grace check)
+    - EXIT/INT/TERM trap releases the lease on exit
+    - Emits eval-able KEY=value to stdout:
+        RUN_ID=local-<boxtok>-<epoch>-<rand8hex>
+        PFB_BOX=<ssh-target>
+        PFB_RUN_DIR=<PFB_RUN_ROOT>/<RUN_ID>
+        PFB_OUT_DIR=<PFB_RUN_DIR>/out
+        PFB_DIAG_DIR=<PFB_RUN_DIR>/smoke-diag
+        SMOKE_LANE=0
+  --print-id:
+    - Mints ci-<GITHUB_RUN_ID>-<GITHUB_RUN_ATTEMPT>-<LEG> to stdout; no lease, no ssh
+  --release <RUN_ID>:
+    - Finds box holding lease, verifies owner rid matches, removes lock dir; idempotent
+
+SSH STUB SHAPE (for P4 reuse)
+  PFB_SSH variable (default: "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+    -o BatchMode=yes -o ConnectTimeout=10 -o LogLevel=ERROR") is word-split; the command is
+  the whole string and the target + single-string command are appended as two positional args:
+    ${PFB_SSH} <target> <cmd-string>
+  The fake ssh in select_box_spec.sh:
+    - Strips -o val, -i val, -p val, bare -flag pairs
+    - Skips the target (first non-option arg)
+    - exec sh -c "$remaining_arg"
+  The lease dir (PFB_LEASE_DIR) is a local temp dir in tests; all remote commands
+  reference paths that resolve locally, so no network is needed.
+
+TOKEN NOTE
+  box_tok("root@10.0.0.23") → strip user@ → 10.0.0.23 → tr -cd '[:alnum:]' → 100023
+  (six digits: dots are non-alnum). Any test fixture that pre-creates lock dirs MUST use
+  this computed token, not a hardcoded five-digit approximation. Spec uses box_tok() helper.
+
+ENV KNOBS (all have defaults; PFB_BOXES has no default and is required)
+  PFB_LEASE_DIR=/var/lib/pfb/leases   PFB_LEASE_TTL=7200   PFB_OWNER_GRACE=30
+  PFB_RUN_ROOT=/var/tmp/pfb-runs      PFB_MAX_RETRIES=5     PFB_SSH=ssh -o ...
+
+TEST HOOK
+  _PFB_TEST_RECLAIM=badrmdir  — activates the broken rmdir+mkdir reclaim path in
+  select-box.sh for the red-before test only. Never set in production.
+
+DEVIATIONS FROM §5.2
+  None. All §5.2 requirements implemented: acquire/retry/reclaim/release, atomic mkdir,
+  rename-capture reclaim, .created grace period, TOCTOU confirm, GIT_* scrub, jitter
+  backoff (real sleep, not a concurrency primitive), eval-able output, trap on exit.
+
+HANDOFF TO P3
+  RESUME: branch=adr/47-local-ci-execution-parity, next-phase=3
+  P3 takes the select-box.sh output (RUN_ID, PFB_BOX, PFB_RUN_DIR, SMOKE_LANE) and
+  integrates with local-smoke.sh (boot_vm.sh, conftest.py). P2 does NOT modify those
+  files — the API is fully defined here.
