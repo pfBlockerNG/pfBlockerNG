@@ -85,18 +85,19 @@ def _validate_lane(lane: int) -> None:
     """Reject a SMOKE_LANE that would break port isolation — fail fast, not silently.
 
     A negative lane derives lower-numbered ports (reusing another lane's range), and a lane
-    large enough to push the highest-based host-forward port (web, 8080) past 65535 yields an
-    invalid port that fails the boot confusingly. Upper bound: 8080 + lane*10 <= 65535 → 5745.
+    large enough to push the highest-based host-forward port (LAN socket, 12340) past 65535
+    yields an invalid port that fails the boot confusingly.
+    Upper bound: 12340 + lane*10 <= 65535 → 5319.
     """
-    if lane < 0 or _lane_port(8080, lane) > 65535:
-        raise ValueError(f"SMOKE_LANE out of range: {lane} (must be 0..5745)")
+    if lane < 0 or _lane_port(12340, lane) > 65535:
+        raise ValueError(f"SMOKE_LANE out of range: {lane} (must be 0..5319)")
 
 
 _validate_lane(_LANE)
 
 
-# INVARIANT: at _LANE == 0 with no SMOKE_*_HOSTPORT overrides all four equal the
-# historical defaults (2222 / 8080 / 5353 / 2223) — behaviour-preserving at lane 0.
+# INVARIANT: at _LANE == 0 with no SMOKE_*_HOSTPORT overrides all five equal the
+# historical defaults (2222 / 8080 / 5353 / 2223 / 12340) — behaviour-preserving at lane 0.
 DEFAULT_SSH_PORT = _lane_port(int(os.environ.get("SMOKE_SSH_HOSTPORT", "2222")), _LANE)  # host -> guest 22
 DEFAULT_WEB_PORT = _lane_port(int(os.environ.get("SMOKE_WEB_HOSTPORT", "8080")), _LANE)  # host -> guest 80
 DEFAULT_DNS_PORT = _lane_port(5353, _LANE)  # host -> guest 53 (tcp+udp); no env consumer in boot_vm.sh
@@ -129,10 +130,17 @@ DEFAULT_BOOT_TIMEOUT = int(os.environ.get("SMOKE_BOOT_TIMEOUT", "180"))
 # host port reaches the client instead of a hardcoded 2223.
 DEFAULT_CLIENT_SSH_PORT = _lane_port(int(os.environ.get("SMOKE_CLIENT_SSH_HOSTPORT", "2223")), _LANE)  # host -> civm 22
 
+# LAN socket crossover port (pfSense LISTENER <-> civm CONNECTOR). Lane-strided from
+# boot_vm.sh's historical default 12340, eliminating the bind(:0) TOCTOU race — the
+# port is now DETERMINISTIC per lane (lane 0 → 12340, lane 1 → 12350, …).
+# The pkill + lane stride on the leased box frees the port before boot.
+DEFAULT_LAN_SOCKET_PORT = _lane_port(int(os.environ.get("SMOKE_LAN_SOCKET_HOSTPORT", "12340")), _LANE)
+
 # Write the lane-resolved ports back so boot_vm.sh's hostfwd reads the same values SmokeVM uses.
 os.environ["SMOKE_SSH_HOSTPORT"] = str(DEFAULT_SSH_PORT)
 os.environ["SMOKE_WEB_HOSTPORT"] = str(DEFAULT_WEB_PORT)
 os.environ["SMOKE_CLIENT_SSH_HOSTPORT"] = str(DEFAULT_CLIENT_SSH_PORT)
+os.environ["SMOKE_LAN_SOCKET_PORT"] = str(DEFAULT_LAN_SOCKET_PORT)
 
 # The address civm uses to reach pfSense (pfSense LAN side of the socket crossover).
 PFSENSE_LAN_IP = "192.168.1.1"  # pfSense LAN IP baked in the two-VM image
@@ -415,7 +423,9 @@ def _tail(path: Path, lines: int = 40) -> str:
 # errors before any test runs, so the on-failure ``_dump_vm_on_failure`` hook
 # (which needs SSH) never fires, and the boot log otherwise lives under pytest's
 # tmp dir (outside the artifact globs).
-DIAG_DIR = Path("smoke-diag")
+# ponytail: `or "smoke-diag"` guards an exported-empty PFB_DIAG_DIR (Path("") == cwd,
+# which escapes the CI upload globs); the `or` treats both None and "" as absent.
+DIAG_DIR = Path(os.environ.get("PFB_DIAG_DIR") or "smoke-diag")
 
 
 def _qmp_sock_path(tag: str) -> str:
@@ -459,42 +469,25 @@ def _capture_boot_failure(tag: str, qmp_sock: str | None, log_path: Path, proces
 
 
 # --------------------------------------------------------------------------- #
-# LAN socket port allocation — shared by pfSense (LISTENER) and civm (CONNECTOR)
+# LAN socket port — shared by pfSense (LISTENER) and civm (CONNECTOR)
 # --------------------------------------------------------------------------- #
-
-
-def _alloc_free_tcp_port() -> int:
-    """Allocate one free TCP port on 127.0.0.1 and release it.
-
-    Binds a TCP socket to port 0 (OS picks a free ephemeral port), reads the
-    assigned port, closes the socket, and returns the port number. The caller
-    is responsible for using the port quickly before something else claims it;
-    for the boot_vm.sh socket crossover this window is fine because the port is
-    consumed moments later by QEMU's socket LISTENER.
-    """
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
-    finally:
-        sock.close()
 
 
 @pytest.fixture(scope="session")
 def lan_socket_port() -> Iterator[int]:
-    """Allocate the shared TCP port for the pfSense<->civm LAN socket crossover.
+    """Yield the deterministic LAN-socket port for the pfSense<->civm crossover.
 
-    Picks one free port, sets ``SMOKE_LAN_SOCKET_PORT`` so BOTH boot_vm.sh
-    invocations (pfSense LISTENER, civm CONNECTOR) inherit the same value, yields
-    the port, and removes the env var on teardown. Must be acquired BEFORE pfSense
-    boots (so the LISTENER uses it) — ``smoke_vm`` depends on this fixture.
+    The port is lane-strided off boot_vm.sh's historical default 12340
+    (``DEFAULT_LAN_SOCKET_PORT``) and written to ``SMOKE_LAN_SOCKET_PORT`` at
+    import time, so BOTH boot_vm.sh invocations (pfSense LISTENER, civm CONNECTOR)
+    see the same value. The lane/pkill contract on the leased box frees the port
+    before boot — no bind(:0) race.
+
+    Must be depended on BEFORE pfSense boots (``smoke_vm`` depends on this fixture).
     """
-    port = _alloc_free_tcp_port()
-    os.environ["SMOKE_LAN_SOCKET_PORT"] = str(port)
-    try:
-        yield port
-    finally:
-        os.environ.pop("SMOKE_LAN_SOCKET_PORT", None)
+    # SMOKE_LAN_SOCKET_PORT was already written to os.environ at import time
+    # (alongside SSH/WEB/CLIENT_SSH writebacks); just yield the value.
+    yield DEFAULT_LAN_SOCKET_PORT
 
 
 # --------------------------------------------------------------------------- #
