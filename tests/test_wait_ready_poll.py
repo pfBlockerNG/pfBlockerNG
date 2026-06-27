@@ -8,8 +8,12 @@ not learned ready until a much later poll, and the suite "waited for nothing".
 The new shape:
 
 * an **8s initial grace** (no VM answers sooner) before the first probe;
-* a **1s** poll while readiness is imminent (< 30s), relaxing to **5s** after;
-* a **1s** connect timeout (local loopback — slower than that is dead);
+* a **1s** poll while readiness is plausible (< 75s), relaxing to **5s** after;
+* SSH connect timeout **1s** (a real handshake that slow is dead); the **web** probe bounded
+  by a **generous total cap** (``WEB_MAX_TIME``), never a 1s cap — over SLIRP the TCP connect
+  is a false-green, so only the full HTTP response is a real signal;
+* a **staggered liveness chain** for pfSense: a real ``ssh true`` floor (alive) then a full
+  web 200 (ready), so a slow-but-alive cold box is never misread as dead;
 * a **per-role gate**: pfSense gates on the **web** server (admin panel; nginx+PHP
   come up after sshd, so a live panel implies SSH), civm on **SSH** (no web server).
 
@@ -56,14 +60,37 @@ def test_poll_cadence_is_one_then_five_seconds_not_exponential() -> None:
     assert "BACKOFF" not in text
 
 
-def test_connect_timeouts_are_one_second() -> None:
-    """SSH and web probes time out after 1s — a local-loopback connect that slow is dead."""
+def test_ssh_connect_is_one_second_web_total_is_generous() -> None:
+    """SSH connect stays 1s; the web probe is bounded by a GENEROUS total cap, NOT a 1s cap.
+
+    The old ``curl --max-time 1`` capped TOTAL time (connect + response): a cold nested-KVM
+    webConfigurator accepts instantly but renders in >1s, so every poll was killed while the
+    box was alive. The fix raises the web bound to ``WEB_MAX_TIME`` (default 15s). Over SLIRP
+    the TCP connect is a false-green, so there is deliberately NO web connect-timeout — only
+    the full response, within the generous cap, is a real signal. SSH keeps ConnectTimeout=1
+    (a real handshake that slow is dead).
+    """
     text = _wait_ready_text()
-    assert "ConnectTimeout=1" in text  # ssh
-    assert "--max-time 1" in text  # curl
-    # The old 5s connect timeouts must be gone.
+    assert "ConnectTimeout=1" in text  # ssh handshake — the real liveness probe
+    assert 'WEB_MAX_TIME="${SMOKE_WEB_MAX_TIME:-15}"' in text
+    assert '--max-time "$WEB_MAX_TIME"' in text  # curl bound by the generous total cap
+    # The 1s TOTAL cap that starved a slow-but-alive webConfigurator must be gone.
+    assert "--max-time 1" not in text
+    # The old 5s connect timeout must be gone.
     assert "ConnectTimeout=5" not in text
-    assert "--max-time 5" not in text
+
+
+def test_pfsense_web_role_has_ssh_liveness_floor() -> None:
+    """The pfSense/web role exercises a real ``ssh true`` liveness FLOOR, logged once.
+
+    This is the staggered chain: a slow-but-alive box (web warming) is distinguishable from a
+    dead one because the SSH floor is observed and logged before the web 200. A bare TCP/ping
+    rung would be a false-green over SLIRP, so the floor is a real ssh command — not a connect.
+    """
+    text = _wait_ready_text()
+    assert "WEB_SSH_SEEN" in text  # the floor-observed flag (logged once)
+    assert '"root@${HOST}" true' in text  # the real ssh liveness probe
+    assert "warming" in text  # the "alive, web warming" diagnostic that makes the state clear
 
 
 def test_default_timeout_has_headroom_over_slow_boot() -> None:
