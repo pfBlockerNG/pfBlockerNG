@@ -1,5 +1,8 @@
 {
   "effortLevel": "xhigh",
+  "env": {
+    "SHELL": "bash"
+  },
   "hooks": {
     "SessionStart": [
       {
