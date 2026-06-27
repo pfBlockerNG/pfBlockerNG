@@ -240,5 +240,5 @@ printf 'smoke-on-box: running smoke (marker=%s%s)\n' \
     "$_MARKER" "${_K:+ k=$_K}" >&2
 
 set -- --paths tests/smoke --marker "$_MARKER" --timeout 30
-[ -n "$_K" ] && set -- "$@" --k "$_K"
+[ -n "$_K" ] && set -- "$@" -k "$_K"
 exec sh scripts/run-smoke.sh "$@"
