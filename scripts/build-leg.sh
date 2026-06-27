@@ -45,11 +45,13 @@
 
 set -eu
 
-# ── Scrub inherited git context (pre-commit hook exports GIT_DIR etc.) ──────
-unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_OBJECT_DIRECTORY GIT_COMMON_DIR
-
 # ── Locate helpers relative to this script (CWD-independent) ────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# ── Scrub inherited git context (pre-commit hook exports GIT_DIR etc.) ──────
+# shellcheck source=scripts/lib/git-env-scrub.sh
+. "${SCRIPT_DIR}/lib/git-env-scrub.sh"
+pfb_scrub_git_env
 
 # ── Source the run-id library ────────────────────────────────────────────────
 # shellcheck source=scripts/lib/run-id.sh

@@ -321,6 +321,24 @@ Plus images publish with the same scripts, with these deltas:
   so an upgrade-and-publish produces a **byte-identical** artifact to `image-publish.sh
   --type plus <tag>` run by hand.
 
+## CI / local-smoke shared scripts (ADR-47)
+
+Workflows are thin dispatch wrappers — all step logic lives in shared scripts that run
+identically locally and in CI.
+
+| Script | Use |
+| --- | --- |
+| [`resolve-legs.sh`](resolve-legs.sh) | Six subcommands: `legs` (scope ladder + THREE-WAY jq + `-k` derivation), `image-ref`, `digest`, `exact-image-name`, `vm-identity`, `scrub`. Called from `smoke.yml`, `smoke-single.yml`, `ui-tests.yml`. |
+| [`parity-guard.sh`](parity-guard.sh) | Lint workflows for build-parity (Rules 1-3: build-leg.sh) and test-parity (Rules 4-5: run-smoke.sh) violations. Run via the pre-commit hook and CI. |
+| [`git-env-scrub-guard.sh`](git-env-scrub-guard.sh) | Meta-assertion: no raw `unset GIT_DIR` outside the lib; every git-using spec calls `scrub_git_env`. |
+| [`lib/git-env-scrub.sh`](lib/git-env-scrub.sh) | Sourceable lib exporting `pfb_scrub_git_env()` — unsets the six GIT_\* vars the pre-commit hook exports. |
+| [`impacted-tests.sh`](impacted-tests.sh) | Derive a pytest `-k` expression from the test modules changed vs a base ref. |
+| [`select-box.sh`](select-box.sh) | Lease an LXC smoke box; `--print-id` mints a deterministic RUN_ID without a real lease. |
+| [`smoke-on-box.sh`](smoke-on-box.sh) | On-box smoke entrypoint: checkout, ports update, image pull, build, run. |
+| [`run-smoke.sh`](run-smoke.sh) | Canonical pytest argv emitter for the smoke suite (same script CI and local use). |
+| [`build-leg.sh`](build-leg.sh) | Build a `.pkg` for a specific leg (ABI, channel, version). |
+| [`sparse-clone-ports.sh`](sparse-clone-ports.sh) | Blobless sparse clone of FreeBSD-ports to the needed port dirs only. |
+
 ## Two install paths: CI/local vs release
 
 | | `install-from-repo.sh` (rsync + hook) | Real `.pkg` (`pkg add`) |

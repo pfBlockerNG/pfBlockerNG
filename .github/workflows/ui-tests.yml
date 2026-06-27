@@ -228,20 +228,6 @@ jobs:
         run: |
           set -eu
 
-          # SCOPE: schedule is always full; otherwise honour an explicit input;
-          # otherwise default by trigger — a call (test.yml/release.yml) preserves
-          # the old full behaviour, a bare dispatch is the new lean `impacted`.
-          if [ "${EVENT_NAME}" = "schedule" ]; then
-            SCOPE="full"
-          elif [ -n "${SCOPE_INPUT:-}" ]; then
-            SCOPE="$SCOPE_INPUT"
-          elif [ "${EVENT_NAME}" = "workflow_call" ]; then
-            SCOPE="full"
-          else
-            SCOPE="impacted"
-          fi
-          case "$SCOPE" in impacted|full) ;; *) echo "::error::unknown scope '$SCOPE' (impacted|full)"; exit 1 ;; esac
-
           # Tier set the daily schedule runs (Tier B). DROP `browser` here to
           # disable the nightly browser leg (§7 demote/drop one-liner).
           DEFAULT_SCHEDULE_TIERS="functional browser"
@@ -271,50 +257,12 @@ jobs:
           fi
           echo "run=${RUN}" >> "$GITHUB_OUTPUT"
 
-          # The legs: an explicit `version` always wins (exact match). Else `full`
-          # keeps every ci:true leg (CE + Plus); `impacted` narrows to the
-          # minimum-version CE leg (numeric component sort, so 2.8 < 2.10). jq
-          # emits one {pfsense_version,image_name,channel,...} object per leg.
-          PROJECT='{pfsense_version, image_name, channel, freebsd_major, php_version, py_flavor}'
-          if [ -n "${VERSION_INPUT:-}" ]; then
-            LEGS="$(printf '%s\n' "$CI_MATRIX" | jq -c --arg v "$VERSION_INPUT" \
-              "[ .[] | select(.pfsense_version == \$v) | ${PROJECT} ]")"
-          elif [ "$SCOPE" = "full" ]; then
-            LEGS="$(printf '%s\n' "$CI_MATRIX" | jq -c "[ .[] | ${PROJECT} ]")"
-          else
-            LEGS="$(printf '%s\n' "$CI_MATRIX" | jq -c \
-              "[ .[] | select(.channel == \"CE\") ] | sort_by(.pfsense_version | split(\".\") | map(tonumber)) | .[0:1] | map(${PROJECT})")"
-          fi
-          LEG_COUNT="$(printf '%s\n' "$LEGS" | jq 'length')"
-          if [ "${VERSION_INPUT:-}" != "" ] && [ "$LEG_COUNT" -eq 0 ]; then
-            echo "::error::version filter '${VERSION_INPUT}' matched no ci:true leg"; exit 1
-          fi
-          if [ "$SCOPE" = "impacted" ] && [ -z "${VERSION_INPUT:-}" ] && [ "$LEG_COUNT" -eq 0 ]; then
-            echo "::error::impacted scope found no CE leg in the CI matrix"; exit 1
-          fi
-
-          # EFFECTIVE -k: an explicit -k overrides. In `impacted` scope with no -k,
-          # auto-derive from the UI test modules changed vs origin/devel (empty ->
-          # whole tier, a safe over-approximation). `full` never auto-derives.
-          K=""
-          if [ -n "${PYTEST_K_INPUT:-}" ]; then
-            K="$PYTEST_K_INPUT"
-          elif [ "$SCOPE" = "impacted" ]; then
-            git fetch --no-tags --depth=200 origin devel:refs/remotes/origin/devel 2>/dev/null || true
-            K="$(sh scripts/impacted-tests.sh origin/devel tests/smoke/ui || true)"
-            if [ -n "$K" ]; then
-              echo "impacted: auto-derived -k from changed UI test modules: ${K}"
-            else
-              echo "impacted: no changed UI test modules vs origin/devel — running the whole tier on the min CE leg. Pass -f pytest_k=... to narrow."
-            fi
-          fi
-          { printf 'pytest_k<<__EOF__\n%s\n__EOF__\n' "$K"; } >> "$GITHUB_OUTPUT"
-          echo "scope=${SCOPE}  legs=${LEG_COUNT}  -k=[${K}]"
+          # ADR-47 P5: scope + legs + -k resolved by the shared script.
+          # Writes scope=, ci_matrix=, pytest_k= to $GITHUB_OUTPUT; prints filtered legs JSON to stdout.
+          LEGS="$(sh scripts/resolve-legs.sh legs --test-dir tests/smoke/ui --label tier)"
 
           # Build matrix: ONE .pkg per distinct leg (version/ABI), independent of
           # the tier axis — the tiers for a version all install the SAME package.
-          # Each carries the build target (freebsd_major -> ABI, php_version,
-          # py_flavor) and `version` (= pfsense_version) for the artifact name.
           BUILD_INCLUDE="$(printf '%s\n' "$LEGS" | jq -c \
             '[ .[] | {version: .pfsense_version, image_name, freebsd_major, php_version, py_flavor} ]')"
           printf 'build_matrix={"include":%s}\n' "$BUILD_INCLUDE" >> "$GITHUB_OUTPUT"
@@ -329,7 +277,7 @@ jobs:
                  | {tier: $t, version: .pfsense_version, variant: (.image_name | ltrimstr("pfsense-")),
                     image_name: .image_name, channel: .channel} ]')"
           printf 'matrix={"include":%s}\n' "$INCLUDE" >> "$GITHUB_OUTPUT"
-          echo "tiers=[${TIERS}] legs=${LEGS} run=${RUN}"
+          echo "tiers=[${TIERS}] legs=$(printf '%s' "$LEGS" | jq 'length') run=${RUN}"
 
   ui:
     name: ${{ matrix.tier }} / ${{ matrix.variant }}-${{ matrix.version }} (live pfSense VM)
@@ -391,27 +339,16 @@ jobs:
           # (pfsense-ce / pfsense-plus) overrides the NAME var and matrix.version
           # (= pfsense_version) overrides the TAG. Same resolution as smoke-single.yml.
           INPUT_REF: ${{ inputs.image_ref }}
-          MATRIX_VERSION: ${{ matrix.version }}
-          MATRIX_IMAGE_NAME: ${{ matrix.image_name }}
+          INPUT_VERSION: ${{ matrix.version }}
+          INPUT_IMAGE_NAME: ${{ matrix.image_name }}
           SMOKE_IMAGE_REPO: ${{ vars.SMOKE_IMAGE_REPO }}
           SMOKE_IMAGE_NAME: ${{ vars.SMOKE_IMAGE_NAME }}
           SMOKE_IMAGE_TAG: ${{ vars.SMOKE_IMAGE_TAG }}
         run: |
           set -eu
-          if [ -n "$INPUT_REF" ]; then
-            REF="$INPUT_REF"
-          else
-            # Fallback for REPO: lowercased owner (GHCR refs MUST be lowercase).
-            REPO="${SMOKE_IMAGE_REPO:-ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')}"
-            # NAME: the per-leg matrix.image_name wins over the repo variable; both
-            # default to pfsense-ce, so a CE leg is unchanged. TAG: the per-leg
-            # matrix.version wins over the repo variable.
-            NAME="${MATRIX_IMAGE_NAME:-${SMOKE_IMAGE_NAME:-pfsense-ce}}"
-            TAG="${MATRIX_VERSION:-${SMOKE_IMAGE_TAG:-2.8}}"
-            REF="${REPO%/}/${NAME}:${TAG}"
-          fi
-          echo "ref=${REF}" >> "$GITHUB_OUTPUT"
-          echo "resolved image ref: ${REF}"
+          # ADR-47 P5: image ref composed by the shared script (writes ref= to $GITHUB_OUTPUT).
+          # MATRIX_VERSION/MATRIX_IMAGE_NAME remapped to INPUT_VERSION/INPUT_IMAGE_NAME above.
+          sh scripts/resolve-legs.sh image-ref
 
       # ADR-24 §2.2.4: the VM identity (NIC MAC + SMBIOS uuid) is per-image. CE
       # uses the public pin (the CE source-VM MAC + uuid). A non-CE (Plus) image is
@@ -430,34 +367,9 @@ jobs:
           PLUS_NDI: ${{ secrets.SMOKE_PLUS_NDI }}
         run: |
           set -eu
-          # Resolve the EXACT image name (strip ghcr path, @digest, :tag) — a substring
-          # match could misclassify a non-CE image as CE and skip the secret + redaction.
-          IMG_NAME="${INPUT_IMAGE_NAME:-pfsense-ce}"
-          if [ -n "${IMAGE_REF:-}" ]; then
-            REF_NO_DIGEST="${IMAGE_REF%@*}"; IMG_NAME="${REF_NO_DIGEST##*/}"; IMG_NAME="${IMG_NAME%%:*}"
-          fi
-          case "$IMG_NAME" in
-            pfsense-ce)
-              # CE identity is don't-care: empty MAC -> QEMU assigns each NIC a default.
-              echo "RESOLVED_VM_MAC=" >> "$GITHUB_ENV"
-              echo "RESOLVED_VM_SMBIOS_UUID=58fd7964-c40c-4f47-bf02-3fdad18f8b00" >> "$GITHUB_ENV"
-              echo "RESOLVED_REDACT=" >> "$GITHUB_ENV" ;;
-            *)  # non-CE (Plus): license/NDI-keyed identity comes from secrets, never the matrix.
-                # SMOKE_PLUS_MAC is the NEWLINE-separated 8-MAC list (one per NIC, in order).
-              if [ -z "${PLUS_MAC:-}" ] || [ -z "${PLUS_UUID:-}" ]; then
-                echo "::error::non-CE image '$IMG_NAME' requires the SMOKE_PLUS_MAC and SMOKE_PLUS_SMBIOS_UUID secrets (the Plus source-VM identity); one or both are empty."; exit 1
-              fi
-              # Mask each MAC line individually — a multiline mask value would not
-              # match a single MAC in the logs/screenshots. NDI optional.
-              printf '%s\n' "$PLUS_MAC" | while IFS= read -r _m; do [ -n "$_m" ] && printf '::add-mask::%s\n' "$_m"; done
-              printf '::add-mask::%s\n' "$PLUS_UUID"; [ -n "${PLUS_NDI:-}" ] && printf '::add-mask::%s\n' "$PLUS_NDI" || true
-              # RESOLVED_VM_MAC carries the full newline-separated list (heredoc env);
-              # boot_vm.sh splits it per NIC.
-              { printf 'RESOLVED_VM_MAC<<__MAC_EOF__\n%s\n__MAC_EOF__\n' "$PLUS_MAC"; } >> "$GITHUB_ENV"
-              echo "RESOLVED_VM_SMBIOS_UUID=$PLUS_UUID" >> "$GITHUB_ENV"
-              # newline-joined redaction set for the diagnostics scrub (MACs + uuid [+ NDI])
-              { printf 'RESOLVED_REDACT<<__EOF__\n%s\n%s\n' "$PLUS_MAC" "$PLUS_UUID"; [ -n "${PLUS_NDI:-}" ] && printf '%s\n' "$PLUS_NDI"; printf '__EOF__\n'; } >> "$GITHUB_ENV" ;;
-          esac
+          # ADR-47 P5: VM identity resolved by the shared script (writes RESOLVED_* to $GITHUB_ENV).
+          # UI job has no civm data-NIC MAC — no --civm-mac flag (deny-by-default: empty).
+          sh scripts/resolve-legs.sh vm-identity
 
       - name: Install oras
         uses: oras-project/setup-oras@v2
@@ -473,21 +385,8 @@ jobs:
           SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -eu
-          echo "$SMOKE_GHCR_TOKEN" | oras login ghcr.io \
-            --username "$SMOKE_GHCR_USER" --password-stdin
-          DIGEST="$(oras resolve "$IMAGE_REF" 2>/dev/null || true)"
-          if [ -z "$DIGEST" ]; then
-            DIGEST="$(oras manifest fetch "$IMAGE_REF" --descriptor | jq -r '.digest')"
-          fi
-          case "$DIGEST" in
-            sha256:*) ;;
-            *) echo "::error::could not resolve a sha256 digest for ${IMAGE_REF} (got '${DIGEST}')"; exit 1 ;;
-          esac
-          {
-            echo "digest=${DIGEST}"
-            echo "k=${DIGEST#sha256:}"   # cache-key-safe hex
-          } >> "$GITHUB_OUTPUT"
-          echo "resolved ${IMAGE_REF} -> ${DIGEST}"
+          # ADR-47 P5: digest resolved by the shared script (writes digest= k= to $GITHUB_OUTPUT).
+          sh scripts/resolve-legs.sh digest "$IMAGE_REF"
 
       - name: Restore cached pfSense image
         id: pfcache
@@ -622,6 +521,10 @@ jobs:
       # dropped, no redaction (the artifact is byte-identical to today). The literal
       # escape mirrors smoke-single.yml's esc() (one -e per BRE metachar, NOT a bracket-class)
       # so a regex-special value is matched literally; the `I` flag is case-insensitive.
+      # ADR-24 / ADR-47 P5: runner-side scrub delegated to the shared script.
+      # resolve-legs.sh scrub --root "smoke-diag test-results" --keep ui-screenshots:
+      # non-CE QEMU screenshot deletion; literal redaction of RESOLVED_REDACT; CE no-op.
+      # test-results/ui-screenshots/ is KEPT (DOM-masked at Playwright capture time).
       - name: Scrub Plus secret identity from diagnostics (runner side)
         if: always()
         env:
@@ -630,43 +533,8 @@ jobs:
           SMOKE_REDACT_VALUES: ${{ env.RESOLVED_REDACT }}
         run: |
           set -eu
-          # Exact image-name match (strip ghcr path, @digest, :tag), not a substring.
-          IMG_NAME="${INPUT_IMAGE_NAME:-pfsense-ce}"
-          if [ -n "${IMAGE_REF:-}" ]; then
-            REF_NO_DIGEST="${IMAGE_REF%@*}"; IMG_NAME="${REF_NO_DIGEST##*/}"; IMG_NAME="${IMG_NAME%%:*}"
-          fi
-          # Non-CE: drop the QEMU console screenshots (banner pixels can leak the
-          # NDI/serial). KEEP test-results/ui-screenshots/ (the Playwright UI shots,
-          # DOM-masked at capture).
-          case "$IMG_NAME" in
-            pfsense-ce) : ;;
-            *) find . -type f \( -name 'screen-*.png' -o -name 'screen-*.ppm' \) -delete 2>/dev/null || true ;;
-          esac
-          # Value-redaction is a strict no-op when RESOLVED_REDACT is empty (CE).
-          [ -n "${SMOKE_REDACT_VALUES:-}" ] || { echo "no redaction values (CE leg) — runner-side scrub is a no-op"; exit 0; }
-          # Build a redact.sed of literal s###REDACTED### per value. BRE-escape each
-          # value with one -e per metachar (\ first, then . * [ ] ^ $ #).
-          esc() {
-            printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/\./\\./g' -e 's/\*/\\*/g' \
-              -e 's/\[/\\[/g' -e 's/\]/\\]/g' -e 's/\^/\\^/g' -e 's/\$/\\$/g' -e 's/#/\\#/g'
-          }
-          : > redact.sed
-          # `I` flag = case-insensitive (GNU + FreeBSD sed) so an upper-case secret
-          # scrubs the lower-case MAC/uuid that logs/ifconfig emit.
-          printf '%s\n' "$SMOKE_REDACT_VALUES" | while IFS= read -r v; do
-            [ -n "$v" ] || continue
-            printf 's#%s#REDACTED#gI;\n' "$(esc "$v")" >> redact.sed
-          done
-          # GNU sed on the runner: -i with no backup-suffix arg. Redact every vm*.log
-          # and every TEXT file under the diag dirs (smoke-diag/ + test-results/, the
-          # latter where the UI tier writes logs alongside the kept screenshots).
-          find . -type f -name 'vm*.log' 2>/dev/null | while IFS= read -r f; do
-            sed -i -f redact.sed "$f" 2>/dev/null || true
-          done
-          find smoke-diag test-results -type f 2>/dev/null | while IFS= read -r f; do
-            LC_ALL=C grep -Iq . "$f" 2>/dev/null && sed -i -f redact.sed "$f" 2>/dev/null || true
-          done
-          rm -f redact.sed
+          # ADR-47 P5: scrub delegated to the shared script.
+          sh scripts/resolve-legs.sh scrub --root "smoke-diag test-results" --keep ui-screenshots
 
       - name: Upload UI diagnostics
         if: always()

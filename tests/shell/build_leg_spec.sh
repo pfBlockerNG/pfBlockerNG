@@ -21,7 +21,7 @@ Describe 'build-leg.sh'
   # own "${SCRIPT_DIR}/..." calls hit the stubs.
   setup() {
     # Scrub inherited git context (same guard as in the script itself and the exemplar).
-    unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_OBJECT_DIRECTORY GIT_COMMON_DIR
+    scrub_git_env
     # Ensure CI vars are absent so run-id minting is local (deterministic for tests).
     unset GITHUB_RUN_ID GITHUB_RUN_ATTEMPT LEG RUN_ID PFB_RUN_DIR
 
@@ -58,10 +58,11 @@ printf 'Your branch is up to date with origin/pfblockerng/use-github.\n'
 SHEOF
     chmod +x "${FAKE_SCRIPTS}/sparse-clone-ports.sh"
 
-    # Symlink the real build-leg.sh and lib/run-id.sh into FAKE_SCRIPTS so SCRIPT_DIR
-    # resolves to FAKE_SCRIPTS and the helper includes resolve correctly.
+    # Symlink the real build-leg.sh and its libs into FAKE_SCRIPTS so SCRIPT_DIR
+    # resolves to FAKE_SCRIPTS and all sourced libs resolve correctly.
     ln -s "${SCRIPT}" "${FAKE_SCRIPTS}/build-leg.sh"
     ln -s "${PFB_ROOT}/scripts/lib/run-id.sh" "${FAKE_LIB}/run-id.sh"
+    ln -s "${PFB_ROOT}/scripts/lib/git-env-scrub.sh" "${FAKE_LIB}/git-env-scrub.sh"
 
     # Export paths/vars consumed by the fake stubs and by build-leg.sh.
     export BUILDER_ARGV_FILE="${BUILDER_ARGV}"

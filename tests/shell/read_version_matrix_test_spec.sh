@@ -26,8 +26,7 @@ Describe 'read-version-matrix.sh derived test matrices'
       # REAL repo; those override `cd`, so the fixture identity below and the
       # `commit -qm fixture` would otherwise land on the live branch (resetting
       # user.* + polluting history). Mirrors tests/test_read_version_matrix.py.
-      unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX \
-        GIT_OBJECT_DIRECTORY GIT_COMMON_DIR
+      scrub_git_env
       git init -q
       git config user.email ci@example.invalid
       git config user.name CI
@@ -48,8 +47,7 @@ Describe 'read-version-matrix.sh derived test matrices'
       # Same scrub as make_matrix_repo: the reader shells out to git
       # (`git show <ref>:<file>`, `git fetch origin`) and must address the
       # fixture repo, not an inherited GIT_DIR pointing at the real repo.
-      unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX \
-        GIT_OBJECT_DIRECTORY GIT_COMMON_DIR
+      scrub_git_env
       sh "$READER" --ref HEAD --file supported-versions.json --print-test
     )
     _rt_status=$?

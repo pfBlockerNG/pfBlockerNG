@@ -1,27 +1,27 @@
 #!/bin/sh
-# scripts/parity-guard.sh — lint GitHub Actions workflows for build-parity violations.
+# scripts/parity-guard.sh — lint GitHub Actions workflows for build/test-parity violations.
 #
-# After ADR-47 P3, workflow YAML must call build-leg.sh for all .pkg builds, and must
-# NOT smuggle CI-only step logic into the build-leg.sh call itself (an inline-derived
-# arg one line above the call survives the "use build-leg.sh" rule but breaks parity).
+# After ADR-47 P3 (build path) and P5 (test path), workflow YAML must route
+# through the shared scripts. Violations are caught by five rules.
 #
-# Violations (each on a non-comment workflow line):
-#   1. build-pkg-portable.py called directly (bypasses the shared build path).
-#   2. sparse-clone-ports.sh called directly (bypasses the shared build path).
-#   3. An inline-derived argument fed to build-leg.sh — a command substitution $(...)
-#      or backtick positioned AFTER the build-leg.sh token on the same line.
-#      The legit capture wrapper  PKG="$(sh scripts/build-leg.sh ...)"  has its $(
-#      BEFORE the token, so it is NOT flagged; an evasion like
-#      build-leg.sh --pkgversion "$(release-version.sh ...)"  has $( AFTER → flagged.
+# BUILD RULES (P3):
+#   1. build-pkg-portable.py called directly (bypasses build-leg.sh).
+#   2. sparse-clone-ports.sh called directly (bypasses build-leg.sh).
+#   3. An inline-derived arg to build-leg.sh — $(...) or backtick AFTER the
+#      build-leg.sh token on the same line.
+#      Legit: PKG="$(sh scripts/build-leg.sh ...)" has $( BEFORE → not flagged.
 #
-# Allowed: scripts/build-leg.sh calls whose args are GitHub ${{ ... }} expressions or
-#   env-sourced $VAR/${VAR} (the documented residual — see RESIDUAL below).
+# TEST RULES (P5):
+#   4. A direct  python[3] -m pytest tests/smoke  call (bypasses run-smoke.sh).
+#      False-positive guard: bare `python -m pytest` with NO tests/smoke path
+#      on the same line (e.g. the unit runner in test.yml) is NOT flagged.
+#   5. An inline-derived arg to run-smoke.sh — $(...) or backtick AFTER the
+#      run-smoke.sh token on the same line (same pattern as Rule 3).
+#
 # Allowed: YAML comment lines (first non-whitespace char is #).
-#
-# RESIDUAL (Verify floor — amendment 5): Rule 3 is LINE-scoped. A value derived on a
-#   PRIOR step/line or via an `env:` block and passed in as a bare $VAR is NOT
-#   provenance-tracked — full deny-by-default would need real shell/YAML parsing.
-#   Generalizing this is a P5 item.
+# Allowed: build-leg.sh / run-smoke.sh calls whose args are GitHub ${{ ... }}
+#   expressions or env-sourced $VAR / prior-step captures. Rule 3/5 are
+#   LINE-scoped — a $( on a PRIOR line is not tracked.
 #
 # Usage:  sh scripts/parity-guard.sh [DIR]
 #   DIR defaults to .github/workflows
@@ -43,8 +43,9 @@ fi
 TMPF="$(mktemp)"
 trap 'rm -f "$TMPF"' EXIT INT TERM
 
-# grep pre-filter: any line naming one of the three scripts enters the per-line checks.
-PATTERN='build-pkg-portable\.py\|sparse-clone-ports\.sh\|build-leg\.sh'
+# grep pre-filter: any line naming one of the scripts/patterns enters the per-line checks.
+# python3\{0,1\} matches 'python' or 'python3' (BRE: 3 repeated 0 or 1 times).
+PATTERN='build-pkg-portable\.py\|sparse-clone-ports\.sh\|build-leg\.sh\|python3\{0,1\} -m pytest\|run-smoke\.sh'
 
 # Scan every YAML file in DIR (sorted for deterministic output).
 find "$WORKFLOWS" \( -name '*.yml' -o -name '*.yaml' \) -print | LC_ALL=C sort \
@@ -84,6 +85,35 @@ find "$WORKFLOWS" \( -name '*.yml' -o -name '*.yaml' \) -print | LC_ALL=C sort \
                 esac
                 ;;
         esac
+        # Rule 4: direct smoke-pytest bypass — python[3] -m pytest ... tests/smoke.
+        # False-positive guard: the path check ensures bare `python -m pytest` (the
+        # unit runner, no path) is NOT flagged; pytest_marker:/PYTEST_MARKER vars don't
+        # match because they don't contain the literal `python` + `-m pytest` prefix.
+        case "$STRIPPED" in
+            *'python -m pytest '*|*'python3 -m pytest '*)
+                # Check that tests/smoke appears AFTER the `-m pytest` token.
+                AFTER_PYTEST="${STRIPPED#*-m pytest }"
+                case "$AFTER_PYTEST" in
+                    *tests/smoke*)
+                        printf '%s:%s: direct smoke pytest call; use run-smoke.sh instead\n  > %s\n' \
+                            "$YAML_FILE" "$LINENUM" "$STRIPPED" >> "$TMPF"
+                        ;;
+                esac
+                ;;
+        esac
+        # Rule 5: inline-derived arg to run-smoke.sh — mirrors Rule 3.
+        case "$STRIPPED" in
+            *run-smoke.sh*)
+                AFTER="${STRIPPED#*run-smoke.sh}"
+                # shellcheck disable=SC2016
+                case "$AFTER" in
+                    *'$('*|*'`'*)
+                        printf '%s:%s: inline-derived arg to run-smoke.sh; derive it in a prior step/env, not in the call\n  > %s\n' \
+                            "$YAML_FILE" "$LINENUM" "$STRIPPED" >> "$TMPF"
+                        ;;
+                esac
+                ;;
+        esac
     done
 done
 
@@ -92,7 +122,7 @@ if [ -s "$TMPF" ]; then
     # Count violations: each prints a message line + a "  > " context line; count
     # the message lines (everything that is NOT a context line).
     _vcount="$(grep -vc '^  > ' "$TMPF" 2>/dev/null || printf '0')"
-    printf 'parity-guard: %s violation(s) — build-parity issue(s) in workflow YAML\n' \
+    printf 'parity-guard: %s violation(s) — build/test-parity issue(s) in workflow YAML\n' \
         "$_vcount" >&2
     exit 1
 fi

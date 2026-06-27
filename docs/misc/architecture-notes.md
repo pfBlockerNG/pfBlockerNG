@@ -219,6 +219,26 @@ can't map automatically. `-f scope=full` restores the every-ci:true-leg whole-ti
 only a bare `workflow_dispatch` is lean. Local runs are pytest-native: pass `-k`/`-m` straight
 through (`scripts/local-smoke.sh` forwards them and treats `-m smoke` as a default).
 
+**CI as parallel dispatch (ADR-47 P5).** Workflows are thin dispatch wrappers; all step logic
+lives in shared scripts that run identically locally and in CI:
+
+- `scripts/resolve-legs.sh` — six subcommands covering the inline blocks previously
+  repeated across `smoke.yml`, `smoke-single.yml`, and `ui-tests.yml`:
+  `legs` (scope ladder + THREE-WAY jq + `-k` derivation), `image-ref`, `digest`,
+  `exact-image-name`, `vm-identity`, `scrub`. `legs` prints the resolved JSON to
+  stdout for same-step capture and also writes `scope=`, `ci_matrix=`, `pytest_k=`
+  to `$GITHUB_OUTPUT` for cross-step consumption.
+- `scripts/lib/git-env-scrub.sh` — sourceable POSIX-sh lib exporting `pfb_scrub_git_env()`,
+  which unsets the six GIT_\* vars that the pre-commit hook exports and that corrupt
+  git operations in child processes. Sourced at entry by every production script and
+  aliased as `scrub_git_env()` in `tests/shell/spec_helper.sh` for the spec suite.
+- `scripts/git-env-scrub-guard.sh` — meta-assertion guard enforcing the discipline:
+  (1) no raw `unset GIT_DIR` outside the lib; (2) every spec that calls `git` must
+  call `scrub_git_env`. Run as part of `scripts/parity-guard.sh`'s sibling checks.
+- `scripts/parity-guard.sh` — extended with Rule 4 (direct `python[3] -m pytest
+  tests/smoke` bypass) and Rule 5 (inline-derived arg to `run-smoke.sh`). Runs clean
+  on the actual `.github/workflows/` directory (`sh scripts/parity-guard.sh .github/workflows`).
+
 ---
 
 ## HTTP mock-feed load smoke (ADR-16 Part C) — `tests/smoke/test_smoke_feeds.py`
