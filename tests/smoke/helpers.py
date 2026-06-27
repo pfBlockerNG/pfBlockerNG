@@ -2391,7 +2391,9 @@ def reset_pfb_baseline(vm: SmokeVM, *, timeout: float = 300.0) -> None:
         for verb in ("clearip", "cleardnsbl"):
             cleared = vm.ssh(PHP_BIN, PFB_CLI, verb, timeout=120.0)
             if cleared.returncode != 0:
-                raise RuntimeError(f"reset_pfb_baseline {verb} failed: rc={cleared.returncode} stderr={cleared.stderr!r}")
+                raise RuntimeError(
+                    f"reset_pfb_baseline {verb} failed: rc={cleared.returncode} stderr={cleared.stderr!r}"
+                )
     apply_filter_sync(vm)
 
 
