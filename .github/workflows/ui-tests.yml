@@ -602,19 +602,14 @@ jobs:
           MARKER: ${{ steps.tier.outputs.marker }}
         run: |
           set -eu
-          # The smoke package is --ignore'd by the default addopts; re-enable it
-          # with --override-ini and select the tier's marker (tests/smoke/conftest).
-          # timeout_func_only=true scopes the per-test ceiling to the TEST BODY
-          # (not the slow module fixtures: deploy ~1-2 min, the General save's
-          # sync pass up to 300s) — so a wedged check fails fast without aborting
-          # a legitimately slow fixture. No assertion auto-retry (C1).
-          # Build the argv so an optional -k selector rides as a SINGLE arg (a
-          # bare-var splice would word-split a multi-token "a and not b").
-          set -- tests/smoke/ui -m "${MARKER}" \
-            --override-ini="addopts=" --override-ini="timeout_func_only=true" \
-            --timeout=300 --timeout-method=signal -v
-          [ -n "${PYTEST_K:-}" ] && set -- "$@" -k "${PYTEST_K}"
-          python3 -m pytest "$@"
+          # Delegate to the canonical argv emitter (ADR-47 P4 — drift-kill).
+          # RUN_ID minted here (CI is the degenerate lease: runner IS the box).
+          RUN_ID="$(sh scripts/select-box.sh --print-id)"
+          export RUN_ID
+          # Build argv via set -- so -k rides as ONE quoted arg.
+          set -- --paths tests/smoke/ui -m "${MARKER}" --timeout 300
+          [ -n "${PYTEST_K:-}" ] && set -- "$@" --k "${PYTEST_K}"
+          sh scripts/run-smoke.sh "$@"
 
       # ADR-24: runner-side scrub of the Plus secret identity from the diagnostics
       # BEFORE upload. For a non-CE (Plus) image: drop ONLY the QEMU CONSOLE

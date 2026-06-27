@@ -1,123 +1,127 @@
 #!/bin/sh
-# local-smoke.sh — run the ADR-04 live-VM smoke suite locally on a Debian/KVM box.
+# local-smoke.sh — run the ADR-04 live-VM smoke suite locally via a leased LXC box.
 #
-# Wraps the environment setup that the GitHub Actions smoke workflow does inline, so a
-# local two-VM run "just works": the stub-DNS-on-:53 relay, the civm client image, and
-# the standard SMOKE_* variables. Full background + rationale: docs/misc/local-smoke-debian.md.
+# Leases one box from the PFB_BOXES pool (scripts/select-box.sh), bootstraps it
+# to the requested git ref, and runs the ENTIRE smoke suite ON the box — images,
+# build, pytest all run there. The orchestrator only provides the bootstrap command.
+# The EXIT trap in select-box.sh releases the lease automatically.
+#
+# Full background + rationale: docs/misc/local-smoke-debian.md
 #
 # Usage:
-#   scripts/local-smoke.sh [pytest args...]
+#   scripts/local-smoke.sh [--ref REF] [--abi ABI] [--marker M] [--k K]
+#                          [--no-two-vm]
 #
-# Required (env or flags):
-#   SMOKE_SSH_KEY        guest SSH private key (baked into the image)
-#   SMOKE_PKG            built branch .pkg (scripts/build-pkg-portable.py)
-#   SMOKE_IMAGE_DIR      dir holding exactly one pfSense *.qcow2
+# Required (env):
+#   PFB_BOXES   space-separated ssh targets, e.g. "root@10.0.0.23 root@10.0.0.24"
 #
-# Optional:
-#   SMOKE_CLIENT_IMAGE_DIR   dir holding the civm *.qcow2 (enables the two-VM cases).
-#                            Defaults to ./.smoke-civm; pulled via oras if absent.
-#   CIVM_REF                 civm image ref (default ghcr.io/pfblockerng/civm:v1)
-#   PYTHON                   python to use (default: ./.venv/bin/python, else python3)
-#   SMOKE_PYTEST_TARGET      default test path (default tests/smoke)
-#   NO_TWO_VM=1              skip the civm setup (pfSense-only suites)
+# Optional (env or flags):
+#   PFB_REF     git ref (commit/branch) to test (default: current HEAD)
+#   --ref REF   same; flag takes precedence over PFB_REF
+#   --abi ABI   build ABI (default: FreeBSD:15:amd64)
+#   --marker M  pytest -m marker (default: smoke); see also --k
+#   --k K       pytest -k filter expression (optional)
+#   --no-two-vm skip civm image pull and LAN-client tests
 #
-# POSIX sh; quoted expansions.
+# The leased box runs scripts/smoke-on-box.sh, which:
+#   - checks out the requested ref
+#   - updates FreeBSD-ports (pfblockerng/use-github)
+#   - refreshes or pulls pfSense + civm images via oras
+#   - lowers ip_unprivileged_port_start + kills stale qemu
+#   - builds the .pkg via build-leg.sh
+#   - runs scripts/run-smoke.sh (the canonical pytest argv)
+#
+# POSIX sh; quoted expansions; shellcheck clean.
 
 set -eu
 
 usage() {
-	sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
-	exit "${1:-0}"
+    sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+    exit "${1:-0}"
 }
 
 case "${1:-}" in
-	-h|--help) usage 0 ;;
+    -h|--help) usage 0 ;;
 esac
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-# --- required inputs ------------------------------------------------------- #
-missing=
-for var in SMOKE_SSH_KEY SMOKE_PKG SMOKE_IMAGE_DIR; do
-	eval "val=\${$var:-}"
-	[ -n "$val" ] || missing="$missing $var"
+# ── Required env ──────────────────────────────────────────────────────────── #
+if [ -z "${PFB_BOXES:-}" ]; then
+    printf 'local-smoke: PFB_BOXES is required (space-separated ssh targets)\n' >&2
+    printf '             e.g. export PFB_BOXES="root@10.0.0.23 root@10.0.0.24"\n' >&2
+    exit 2
+fi
+export PFB_BOXES
+
+# ── Parse flags ───────────────────────────────────────────────────────────── #
+_REF="${PFB_REF:-}"
+_ABI="FreeBSD:15:amd64"
+_MARKER="smoke"
+_K=""
+_NO_TWO_VM=0
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --ref)      shift; _REF="$1";    shift ;;
+        --abi)      shift; _ABI="$1";    shift ;;
+        --marker|-m) shift; _MARKER="$1"; shift ;;
+        --k|-k)     shift; _K="$1";      shift ;;
+        --no-two-vm) _NO_TWO_VM=1;       shift ;;
+        --) shift; break ;;
+        -*) printf 'local-smoke: unknown flag: %s\n' "$1" >&2; exit 2 ;;
+        *)  break ;;  # extra positionals not supported in new model
+    esac
 done
-if [ -n "$missing" ]; then
-	echo "local-smoke: missing required env:$missing" >&2
-	echo "             see docs/misc/local-smoke-debian.md" >&2
-	exit 2
-fi
-[ -f "$SMOKE_SSH_KEY" ] || { echo "local-smoke: SMOKE_SSH_KEY not a file: $SMOKE_SSH_KEY" >&2; exit 2; }
-[ -f "$SMOKE_PKG" ] || { echo "local-smoke: SMOKE_PKG not a file: $SMOKE_PKG" >&2; exit 2; }
-[ -d "$SMOKE_IMAGE_DIR" ] || { echo "local-smoke: SMOKE_IMAGE_DIR not a directory: $SMOKE_IMAGE_DIR" >&2; exit 2; }
-# Fail early if the image dir doesn't hold exactly one *.qcow2 (the harness requires it).
-# Count via a loop, NOT `set --`, so we never clobber "$@" (the pass-through pytest args).
-_qcow_n=0
-for _qcow in "$SMOKE_IMAGE_DIR"/*.qcow2; do [ -e "$_qcow" ] && _qcow_n=$((_qcow_n + 1)); done
-[ "$_qcow_n" -eq 1 ] || { echo "local-smoke: SMOKE_IMAGE_DIR must contain exactly one *.qcow2 (found $_qcow_n)" >&2; exit 2; }
-[ -e /dev/kvm ] || { echo "local-smoke: /dev/kvm absent — KVM is required" >&2; exit 2; }
-
-# --- stub-DNS-on-:53 relay ------------------------------------------------- #
-# The mock DNS binds 127.0.0.1:53 so libslirp NATs the guest's 192.168.89.2:53 to it
-# (port-preserving). Lower the unprivileged-port floor so the non-root process can bind :53.
-SMOKE_STUB_DNS_ADDR="${SMOKE_STUB_DNS_ADDR:-127.0.0.1}"
-SMOKE_STUB_DNS_PORT="${SMOKE_STUB_DNS_PORT:-53}"
-export SMOKE_STUB_DNS_ADDR SMOKE_STUB_DNS_PORT
-if [ "$SMOKE_STUB_DNS_PORT" -lt 1024 ]; then
-	floor="$(cat /proc/sys/net/ipv4/ip_unprivileged_port_start 2>/dev/null || echo 1024)"
-	if [ "$floor" -gt "$SMOKE_STUB_DNS_PORT" ]; then
-		echo "local-smoke: lowering net.ipv4.ip_unprivileged_port_start to $SMOKE_STUB_DNS_PORT (was $floor)" >&2
-		sysctl -w "net.ipv4.ip_unprivileged_port_start=$SMOKE_STUB_DNS_PORT" >/dev/null 2>&1 \
-			|| sudo sysctl -w "net.ipv4.ip_unprivileged_port_start=$SMOKE_STUB_DNS_PORT" >/dev/null
-	fi
-fi
-
-# --- civm client image (two-VM topology) ----------------------------------- #
-if [ "${NO_TWO_VM:-}" != "1" ]; then
-	if [ -z "${SMOKE_CLIENT_IMAGE_DIR:-}" ]; then
-		SMOKE_CLIENT_IMAGE_DIR="$REPO_ROOT/.smoke-civm"
-	fi
-	if [ ! -d "$SMOKE_CLIENT_IMAGE_DIR" ] || [ -z "$(ls "$SMOKE_CLIENT_IMAGE_DIR"/*.qcow2 2>/dev/null)" ]; then
-		CIVM_REF="${CIVM_REF:-ghcr.io/pfblockerng/civm:v1}"
-		echo "local-smoke: pulling civm image $CIVM_REF -> $SMOKE_CLIENT_IMAGE_DIR" >&2
-		command -v oras >/dev/null 2>&1 || { echo "local-smoke: oras not on PATH (needed to pull civm)" >&2; exit 2; }
-		mkdir -p "$SMOKE_CLIENT_IMAGE_DIR"
-		( cd "$SMOKE_CLIENT_IMAGE_DIR" && oras pull "$CIVM_REF" )
-	fi
-	export SMOKE_CLIENT_IMAGE_DIR
-fi
-
-# --- python ---------------------------------------------------------------- #
-if [ -z "${PYTHON:-}" ]; then
-	if [ -x "$REPO_ROOT/.venv/bin/python" ]; then
-		PYTHON="$REPO_ROOT/.venv/bin/python"
-	else
-		PYTHON=python3
-	fi
-fi
-
-# --- free stale host forwards --------------------------------------------- #
-pkill -9 -f qemu-system-x86_64 2>/dev/null || true
-
-target="${SMOKE_PYTEST_TARGET:-tests/smoke}"
-
-# Inject `-m smoke` only as a DEFAULT — if the caller passed their own `-m`
-# (e.g. `-m ui_render` for a Tier-A run, `-m repo`), respect it instead of
-# silently appending a second, winning `-m smoke`. A `-k` selector and every
-# other pytest arg always pass straight through.
-# ponytail: bare `-m` token detection; refine only if someone needs the `-m=foo` form.
-marker_args="-m smoke"
-for a in "$@"; do
-	[ "$a" = "-m" ] && { marker_args=""; break; }
-done
-
-# Explicit pytest args (if any) override the default target; quote everything (repo
-# shell rule) and branch instead of relying on word-splitting an unquoted $target.
 if [ "$#" -gt 0 ]; then
-	echo "local-smoke: running smoke suite ($*${marker_args:+ $marker_args})" >&2
-	# shellcheck disable=SC2086  # marker_args is a deliberate 0-or-2-word default
-	exec "$PYTHON" -m pytest "$@" $marker_args --override-ini="addopts="
+    printf 'local-smoke: unexpected positional args (use --marker/--k): %s\n' "$*" >&2
+    exit 2
 fi
-echo "local-smoke: running smoke suite ($target)" >&2
-exec "$PYTHON" -m pytest "$target" -m smoke --override-ini="addopts="
+
+# ── Resolve REF (default: current HEAD) ───────────────────────────────────── #
+if [ -z "$_REF" ]; then
+    _REF="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+fi
+
+# ── Build the on-box bootstrap command string ─────────────────────────────── #
+# The bootstrap runs on the box via ssh; it must be a single shell command string.
+# Use single-quote encoding for values that may contain shell metacharacters.
+# ponytail: _sq encodes ONE value for embedding in a single-quoted sh literal.
+_sq() { printf '%s' "$1" | sed "s/'/'\\\\''/g"; }
+
+_REF_Q="$(_sq "$_REF")"
+_ABI_Q="$(_sq "$_ABI")"
+_MARKER_Q="$(_sq "$_MARKER")"
+
+# Build the smoke-on-box.sh flags string (structured, no word-split risk after encoding).
+_ob_flags="--ref '$_REF_Q' --abi '$_ABI_Q' --marker '$_MARKER_Q'"
+if [ -n "$_K" ]; then
+    _ob_flags="$_ob_flags --k '$(_sq "$_K")'"
+fi
+if [ "$_NO_TWO_VM" -eq 1 ]; then
+    _ob_flags="$_ob_flags --no-two-vm"
+fi
+
+# The bootstrap string:
+#   1. cd to the repo on the box
+#   2. git fetch + checkout the requested ref (the repo's scripts/smoke-on-box.sh
+#      may be at a different ref — smoke-on-box.sh re-execs itself at the right ref)
+#   3. exec smoke-on-box.sh (which re-execs at the checked-out ref's version)
+# This is the ref-stable bootstrap: the one-liner is the only part that has to work
+# across refs; smoke-on-box.sh handles everything else.
+# shellcheck disable=SC2089  # quoting: _ob_flags is pre-encoded for remote sh
+_bootstrap="cd /root/pfBlockerNG \
+ && git fetch --quiet \
+ && git checkout --quiet '$_REF_Q' \
+ && exec sh scripts/smoke-on-box.sh $_ob_flags"
+
+printf 'local-smoke: leasing box (REF=%s marker=%s%s)\n' \
+    "$_REF" "$_MARKER" "${_K:+ k=$_K}" >&2
+
+# ── Lease a box and run the bootstrap on it ────────────────────────────────── #
+# select-box.sh -- <cmd>: acquires a lease, runs <cmd> on the box over ssh,
+# releases the lease on EXIT/INT/TERM (automatic EXIT trap). The KEY=value
+# output goes to stdout (ignored here; we don't eval it).
+# shellcheck disable=SC2090  # expansion is intentional: _bootstrap is the remote command
+sh scripts/select-box.sh -- "$_bootstrap"

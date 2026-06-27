@@ -607,20 +607,16 @@ jobs:
           # :53 — the runner's /etc/resolv.conf is left untouched (host DNS keeps working
           # throughout; nothing to restore, and immune to how the runner does resolution).
           sudo sysctl -w net.ipv4.ip_unprivileged_port_start=53
-          # The smoke package is --ignore'd by the default addopts; re-enable it
-          # with --override-ini and select the marker (see tests/smoke/conftest).
-          # --timeout=30 + timeout_func_only=true: 30s applies to the TEST BODY only
-          # (inject->reload->probe; slowest observed ~6s), NOT the slow module fixtures
-          # (deploy ~1-2 min) — so a per-case stall fails fast (vs the old 300s -> job-
-          # timeout wipe) while leaving comfortable margin over the real per-case time.
-          # Build the argv so an optional -k selector rides as a SINGLE arg (a
-          # bare-var splice would word-split a multi-token expression like
-          # "a and not b"). Blank PYTEST_K -> no -k, identical to before.
-          set -- tests/smoke -m "${PYTEST_MARKER}" \
-            --override-ini="addopts=" --override-ini="timeout_func_only=true" \
-            --timeout=30 --timeout-method=signal -v
-          [ -n "${PYTEST_K:-}" ] && set -- "$@" -k "${PYTEST_K}"
-          python3 -m pytest "$@"
+          # Delegate to the canonical argv emitter (ADR-47 P4 — drift-kill).
+          # RUN_ID minted here (CI is the degenerate lease: runner IS the box,
+          # --print-id emits the id without acquiring a real lease).
+          RUN_ID="$(sh scripts/select-box.sh --print-id)"
+          export RUN_ID
+          # Build argv via set -- so -k rides as ONE quoted arg (word-split on a
+          # multi-token expression like "a and not b" would break pytest matching).
+          set -- --paths tests/smoke -m "${PYTEST_MARKER}" --timeout 30
+          [ -n "${PYTEST_K:-}" ] && set -- "$@" --k "${PYTEST_K}"
+          sh scripts/run-smoke.sh "$@"
 
       # ADR-24: runner-side scrub of the Plus secret identity from the diagnostics
       # BEFORE upload. For a non-CE (Plus) image: drop the console screenshots

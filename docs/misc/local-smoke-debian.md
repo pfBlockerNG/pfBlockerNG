@@ -1,89 +1,107 @@
 # Running the live-VM smoke suite locally on Debian
 
-Dev-only notes for running `tests/smoke/` (ADR-04) on a plain Debian/KVM box, outside
+Dev-only notes for running `tests/smoke/` (ADR-04) on a Debian/KVM LXC box, outside
 GitHub Actions. These are the things that cost real time to (re)learn; the CI workflow
 (`.github/workflows/smoke-single.yml`) is the source of truth for the canonical invocation.
 
 ## Prerequisites
 
+### On the orchestrator (your laptop/workstation)
+
+- `ssh` reachability to the LXC pool (`PFB_BOXES`).
+- A git worktree of the branch under test checked out locally (the orchestrator reads
+  HEAD to derive the default `--ref`).
+
+### On each LXC box (pre-provisioned once)
+
 - `/dev/kvm` present and writable (hardware virtualisation). Everything needs KVM.
-- `qemu-system-x86_64`, `qemu-img`, `ssh`, `oras`, `python3` (3.11+), `python3-venv`.
-- The guest SSH key (the smoke image bakes a fixed key); export it as `SMOKE_SSH_KEY`.
-- A pfSense CE qcow2 (`SMOKE_IMAGE_DIR` — a directory holding exactly one `*.qcow2`).
-- A built branch `.pkg` (`SMOKE_PKG`) — see "Building the .pkg".
+- `qemu-system-x86_64`, `qemu-img`, `ssh`, `oras`, `python3` (3.11+), `python3-venv`, `git`.
+- The guest SSH key (baked into the smoke images) at `/root/smoke-ssh-key`.
+- A pfSense CE qcow2 under `/root/images/pfsense/` (auto-pulled by `smoke-on-box.sh` if absent
+  or stale vs the GHCR digest; set `SMOKE_GHCR_TOKEN` to authenticate the pull).
+- A FreeBSD-ports checkout under `/root/FreeBSD-ports` (auto-cloned/updated by `smoke-on-box.sh`).
+
+## Running (new: via lease + on-box execution)
+
+The orchestrator leases a box and runs EVERYTHING on it — images, build, pytest:
 
 ```sh
-python3 -m venv .venv
-.venv/bin/pip install -r tests/smoke/requirements.txt
-# ruff is NOT in requirements (it is a lint tool, not a harness dep):
-.venv/bin/pip install ruff   # only if you want to lint here
+export PFB_BOXES="root@10.0.0.23 root@10.0.0.24"   # space-separated SSH targets
+
+# Full smoke (marker=smoke, current HEAD):
+scripts/local-smoke.sh
+
+# Specific -k filter (expression rides as one quoted arg, no word-split):
+scripts/local-smoke.sh --k "test_dns_redirect or test_killstates"
+
+# Different marker:
+scripts/local-smoke.sh --marker ui_render
+
+# Skip civm (two-VM LAN-client tests will SKIP):
+scripts/local-smoke.sh --no-two-vm
+
+# Explicit ref:
+scripts/local-smoke.sh --ref origin/devel
 ```
 
-## The two-VM topology (required for the DNS-redirect / LAN-client cases)
+The EXIT trap in `scripts/select-box.sh` releases the lease automatically (Ctrl-C included).
+All images, ports, build, sysctl, and pytest run ON the box — the orchestrator only provides
+the bootstrap command string.
 
-Many cases (`test_dns_redirect.py`, anything depending on `lan_interface`) need the
-**civm** Debian client connected to the pfSense LAN, or they SKIP. Two extra pieces:
+### How it works
 
-### 1. The civm client image
-
-```sh
-mkdir -p /path/to/civm
-cd /path/to/civm && oras pull ghcr.io/pfblockerng/civm:v1   # ~600 MB
-# Point the harness at the DIRECTORY (it globs for exactly one *.qcow2):
-export SMOKE_CLIENT_IMAGE_DIR=/path/to/civm
-```
-
-- The qcow2 is named `pfSense-CE-v1.qcow2` and its OCI annotation says "pfSense CE" —
-  **that label is a templated lie**; the image is the Debian client, not pfSense.
-- `SMOKE_CLIENT_IMAGE_DIR` must hold **exactly one** `*.qcow2`, so do **not** drop it
-  next to the pfSense qcow2 in `SMOKE_IMAGE_DIR` — use a separate directory.
-
-### 2. The stub-DNS-on-:53 relay
-
-The harness mock DNS must bind the runner's `127.0.0.1:53` so libslirp can NAT the guest's
-`192.168.89.2:53` (WAN host alias) to it, port-preserving:
-
-```sh
-# Let a non-root process bind :53 (systemd-resolved sits on .53/.54, so :53 on 127.0.0.1 is free):
-sudo sysctl -w net.ipv4.ip_unprivileged_port_start=53
-export SMOKE_STUB_DNS_ADDR=127.0.0.1
-export SMOKE_STUB_DNS_PORT=53
-```
-
-Without these the DNSBL-upstream self-check (`use_system_dns_upstream`) times out and the
-`deployed_vm` fixture errors during setup (the symptom is a `drill @127.0.0.1` SSH timeout).
-
-## Running
-
-```sh
-SMOKE_SSH_KEY=/path/to/key \
-SMOKE_PKG=/path/to/pfSense-pkg-pfBlockerNG-devel-X.Y.Z.pkg \
-SMOKE_IMAGE_DIR=/path/to/images \
-SMOKE_CLIENT_IMAGE_DIR=/path/to/civm \
-SMOKE_STUB_DNS_ADDR=127.0.0.1 SMOKE_STUB_DNS_PORT=53 \
-.venv/bin/python -m pytest tests/smoke/test_dns_redirect.py \
-  -m smoke --override-ini="addopts=" -rA
-```
-
-`-m smoke --override-ini="addopts="` is mandatory: the default `addopts` has
-`--ignore=tests/smoke`, so a plain `pytest` collects nothing here.
-
-`scripts/local-smoke.sh` wraps the env setup (sysctl, civm pull, defaults) — see its
-`--help`. It **forwards any pytest args**, so selecting tests locally is pytest-native — no
-workflow involved:
-
-```sh
-# only specific tests (pytest -k is a boolean expr: `a or b`, `x and not y`)
-scripts/local-smoke.sh -k "test_dns_redirect or test_killstates"
-# a different marker — `-m smoke` is only a DEFAULT; your own -m is respected
-scripts/local-smoke.sh tests/smoke/ui -m ui_render -k test_dnsbl
-```
+1. `local-smoke.sh` leases one box from `PFB_BOXES` via `select-box.sh -- <bootstrap>`.
+2. On the box, `smoke-on-box.sh` (invoked by the bootstrap) runs in order:
+   - `git fetch` + `git checkout <REF>` (ref-stable bootstrap; re-execs itself at the new ref).
+   - `sparse-clone-ports.sh` to bring `/root/FreeBSD-ports` to `pfblockerng/use-github`.
+   - `oras` digest-compare → pull pfSense + civm images to `/root/images/{pfsense,civm}` if stale.
+   - `sysctl net.ipv4.ip_unprivileged_port_start=53` + `pkill -9 -f qemu-system-x86_64`.
+   - `build-leg.sh` → `SMOKE_PKG`.
+   - `run-smoke.sh --paths tests/smoke --marker <M> --timeout 30 [--k <K>]`.
+3. `run-smoke.sh` is the ONE canonical pytest argv — same script CI uses.
 
 The CI `scope=impacted` / min-CE / auto-derived-`-k` defaulting (see
 [architecture-notes.md](architecture-notes.md) "Selective dispatch") is **CI-only** — locally
 you pick the target and `-k` yourself.
 
-## Building the `.pkg` off-FreeBSD
+## Manual run (advanced: on-box directly, no orchestrator)
+
+If you are already on the box or want to iterate without the lease overhead:
+
+```sh
+# On the box:
+cd /root/pfBlockerNG
+git fetch && git checkout <REF>
+
+# Set required env (normally provided by smoke-on-box.sh):
+export SMOKE_SSH_KEY=/root/smoke-ssh-key
+export SMOKE_PKG="$(sh scripts/build-leg.sh --ports-dir /root/FreeBSD-ports)"
+export SMOKE_IMAGE_DIR=/root/images/pfsense
+export SMOKE_CLIENT_IMAGE_DIR=/root/images/civm
+export SMOKE_STUB_DNS_ADDR=127.0.0.1
+export SMOKE_STUB_DNS_PORT=53
+
+sudo sysctl -w net.ipv4.ip_unprivileged_port_start=53
+pkill -9 -f qemu-system-x86_64 2>/dev/null || true
+
+# Run (same argv as CI):
+sh scripts/run-smoke.sh --paths tests/smoke -m smoke --timeout 30 --k "test_dns_redirect"
+```
+
+## The two-VM topology
+
+Many cases (`test_dns_redirect.py`, anything depending on `lan_interface`) need the
+**civm** Debian client connected to the pfSense LAN, or they SKIP. `smoke-on-box.sh` pulls the
+civm image automatically (unless `--no-two-vm` is passed).
+
+The civm OCI image is at `ghcr.io/pfblockerng/civm:v1` (~600 MB). The qcow2 is named
+`pfSense-CE-v1.qcow2` and its OCI annotation says "pfSense CE" — **that label is a templated
+lie**; the image is the Debian client, not pfSense.
+
+`SMOKE_CLIENT_IMAGE_DIR` must hold **exactly one** `*.qcow2`, so keep it in its own directory
+separate from `SMOKE_IMAGE_DIR`.
+
+## Building the `.pkg` off-FreeBSD (CI reference)
 
 The portable Linux builder reproduces `make package` for this `NO_BUILD` port. For CE 2.8
 (FreeBSD 15):
@@ -97,6 +115,9 @@ python3 scripts/build-pkg-portable.py \
 `--ports` is a FreeBSD-ports checkout containing `net/pfSense-pkg-pfBlockerNG-devel`.
 `pkg add` checks a dep is PRESENT, not its version, so this `.pkg` installs on the
 baked-deps image.
+
+`scripts/build-leg.sh` wraps the above with run-keyed defaults (ports-dir, out-dir, channel).
+On the box, `smoke-on-box.sh` calls it automatically.
 
 ## Driving the pfSense guest — tcsh vs `/bin/sh`
 
