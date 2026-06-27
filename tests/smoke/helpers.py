@@ -2381,10 +2381,17 @@ def reset_pfb_baseline(vm: SmokeVM, *, timeout: float = 300.0) -> None:
     if result.returncode != 0 or "OK" not in result.stdout:
         raise RuntimeError(f"reset_pfb_baseline failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
     # Drop the derived state: tables/sqlite (clearip/cleardnsbl) + pf rules (blocking sync).
-    for verb in ("clearip", "cleardnsbl"):
-        cleared = vm.ssh(PHP_BIN, PFB_CLI, verb, timeout=120.0)
-        if cleared.returncode != 0:
-            raise RuntimeError(f"reset_pfb_baseline {verb} failed: rc={cleared.returncode} stderr={cleared.stderr!r}")
+    # Skip the CLI-driven clears when the package is uninstalled — a prior test's `pkg delete`
+    # (e.g. test_dot_doq_block's uninstall case) removes PFB_CLI, so shelling it here fails with
+    # "Could not open input file". The uninstall already dropped the tables/rules, so there is no
+    # pfBlockerNG derived state left to clear; the config-section wipe above ran via pfSsh.php
+    # (core, no package needed). Without this guard the module-scoped teardown ERRORs after any
+    # uninstall test that happens to be last in its module.
+    if pkg_installed(vm):
+        for verb in ("clearip", "cleardnsbl"):
+            cleared = vm.ssh(PHP_BIN, PFB_CLI, verb, timeout=120.0)
+            if cleared.returncode != 0:
+                raise RuntimeError(f"reset_pfb_baseline {verb} failed: rc={cleared.returncode} stderr={cleared.stderr!r}")
     apply_filter_sync(vm)
 
 
