@@ -443,27 +443,29 @@ jobs:
       # nightly, off the SAME ports ref build-pkg-linux uses; export its path.
       # Only for the `repo` marker (the default `smoke` flow doesn't read it).
       - name: Build a nightly .pkg (repo-flow nightly smoke)
+        # build-leg.sh: shared build path; prints the resolved .pkg path on stdout.
         if: ${{ (inputs.pytest_marker || 'smoke') == 'repo' }}
         env:
-          PHP_VERSION: ${{ inputs.php_version }}
-          PY_FLAVOR: ${{ inputs.py_flavor }}
-          ABI: ${{ inputs.abi }}
+          PHP_VERSION:  ${{ inputs.php_version }}
+          PY_FLAVOR:    ${{ inputs.py_flavor }}
+          ABI:          ${{ inputs.abi }}
+          PFB_RUN_ROOT: ${{ runner.temp }}/pfb-runs
         run: |
           set -eu
-          sh scripts/sparse-clone-ports.sh \
-            https://github.com/pfBlockerNG/FreeBSD-ports \
-            pfblockerng/use-github \
-            "${{ runner.temp }}/ports-nightly" \
-            nightly \
-            "$PHP_VERSION" \
-            "$PY_FLAVOR"
-          mkdir -p out-nightly
-          python3 scripts/build-pkg-portable.py \
-            --ports "${{ runner.temp }}/ports-nightly" --channel nightly \
-            --local-src . --abi "$ABI" --py-flavor "$PY_FLAVOR" --php "$PHP_VERSION" \
-            --pkgversion 3.2.16.20260606.2 --annotate commit=${{ github.sha }} \
-            --out out-nightly
-          echo "SMOKE_NIGHTLY_PKG=$(find "$PWD/out-nightly" -name '*.pkg' | head -1)" >> "$GITHUB_ENV"
+          # AMENDMENT 7: slug a nightly-specific LEG for the run-id so CI artifacts
+          # land in a distinct nightly-tagged dir (no collision with the smoke .pkg).
+          LEG="nightly-$(printf '%s' "$ABI" | tr '[:upper:]' '[:lower:]' | tr ':' '-')"
+          export LEG
+          RUN_ID="$(sh scripts/select-box.sh --print-id)"
+          export RUN_ID
+          PKG="$(sh scripts/build-leg.sh \
+            --channel    nightly \
+            --abi        "$ABI" \
+            --py-flavor  "$PY_FLAVOR" \
+            --php        "$PHP_VERSION" \
+            --pkgversion 3.2.16.20260606.2 \
+            --annotate   "commit=${{ github.sha }}")"
+          echo "SMOKE_NIGHTLY_PKG=$PKG" >> "$GITHUB_ENV"
 
       # ADR-24 §2.2.4: the VM identity (NIC MAC + SMBIOS uuid) is per-image. CE
       # uses the public pin (the `mac` input + the CE source-VM uuid). A non-CE

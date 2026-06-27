@@ -392,7 +392,8 @@ jobs:
     if: ${{ always() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') }}
     outputs:
       build_matrix: ${{ steps.matrix.outputs.build_matrix }}
-      pkg_channel: ${{ steps.channel.outputs.pkg_channel }}
+      pkg_channel:  ${{ steps.channel.outputs.pkg_channel }}
+      portversion:  ${{ steps.channel.outputs.portversion }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -409,7 +410,8 @@ jobs:
           OUT=$(sh scripts/release-version.sh "$TAG") || { echo "$OUT"; exit 1; }
           eval "$OUT"
           echo "pkg_channel=${channel}" >> "$GITHUB_OUTPUT"
-          echo "Tag: ${TAG}  →  pkg channel: ${channel}"
+          echo "portversion=${portversion}" >> "$GITHUB_OUTPUT"
+          echo "Tag: ${TAG}  →  pkg channel: ${channel}  portversion: ${portversion}"
 
       - name: Read matrix from ci-metadata
         id: matrices
@@ -435,6 +437,31 @@ jobs:
             echo "__MATRIX__"
           } >> "$GITHUB_OUTPUT"
           echo "Full build matrix: $FULL_MATRIX"
+
+  # ── 1d. Resolve build stamp ──────────────────────────────────────────────
+  # Checks out the SAME ref as build-pkgs-portable so that `created` (epoch of the
+  # tagged commit) and `commit` (the tagged SHA) are stamped from the right tree.
+  # AMENDMENT 2: must NOT compute these in read-matrix (different checkout ref) or
+  # inline in build-pkgs-portable (the loop already calls build-leg.sh, can't also
+  # run git commands in a clean way per-entry). One job, one checkout, two outputs.
+  resolve-stamp:
+    name: Resolve build stamp (created + commit)
+    runs-on: ubuntu-latest
+    needs: [prepare-release]
+    if: ${{ always() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') }}
+    outputs:
+      created: ${{ steps.stamp.outputs.created }}
+      commit:  ${{ steps.stamp.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.dry_run != 'true' && github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+      - name: Resolve stamp
+        id: stamp
+        run: |
+          echo "created=$(git show -s --format=%ct HEAD)" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   # ── 2. Release ───────────────────────────────────────────────────────────
   release:
@@ -773,9 +800,9 @@ jobs:
   build-pkgs-portable:
     name: build .pkg artifacts (portable Linux)
     runs-on: ubuntu-latest
-    needs: [prepare-release, read-matrix]
+    needs: [prepare-release, read-matrix, resolve-stamp]
     # Same gate as release: run in both dry-run (skipped) and real (succeeded) modes.
-    if: ${{ always() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' }}
+    if: ${{ always() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' && needs.resolve-stamp.result == 'success' }}
     timeout-minutes: 30
 
     steps:
@@ -795,33 +822,22 @@ jobs:
       - name: Ensure zstd encoder is present
         run: command -v zstd >/dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y zstd; }
 
-      - name: Build one .pkg per FreeBSD major (portable)
+      - name: Build one .pkg per matrix entry via build-leg.sh
+        # build-leg.sh is the shared build path (local/CI/release parity — ADR-47 P3).
+        # portversion pinned from read-matrix (ref-independent, tag-string-derived).
+        # created + commit from resolve-stamp (same checkout ref as this job's tree).
         env:
           BUILD_MATRIX: ${{ needs.read-matrix.outputs.build_matrix }}
           PKG_CHANNEL:  ${{ needs.read-matrix.outputs.pkg_channel }}
-          INPUT_TAG:    ${{ github.event.inputs.tag }}
-          DRY_RUN:      ${{ github.event.inputs.dry_run }}
+          PORTVERSION:  ${{ needs.read-matrix.outputs.portversion }}
+          CREATED:      ${{ needs.resolve-stamp.outputs.created }}
+          COMMIT:       ${{ needs.resolve-stamp.outputs.commit }}
+          # Place run-keyed out dirs under $GITHUB_WORKSPACE/out so the upload
+          # glob out/**/*.pkg finds all artifacts without any path remapping.
+          PFB_RUN_ROOT: ${{ github.workspace }}/out
         run: |
           set -eu
-          mkdir -p out
-
-          # Pin the .pkg version to the RELEASE tag, not the use-github Makefile's
-          # current PORTVERSION. sync-ports-fork bumps that Makefile only AFTER (and in
-          # parallel with) this build, so without an explicit --pkgversion the
-          # Release-attached .pkg would carry the PREVIOUS version. release-version.sh
-          # is the single source of truth for the pkg-safe portversion.
-          TAG="$INPUT_TAG"
-          OUT=$(sh scripts/release-version.sh "$TAG") || { echo "$OUT"; exit 1; }
-          eval "$OUT"   # sets portversion (+ version / channel / prerelease / prekind)
-          echo "Pinning .pkg version to ${portversion} (tag ${TAG})"
-
-          # The artifact's creation time = the tagged commit's committer date (epoch).
-          # Baked into each .pkg as the `created` annotation so the landing page shows
-          # when the code was created, not when the catalog was last republished.
-          CREATED="$(git show -s --format=%ct HEAD)"
-          # The source commit the artifact was built from — surfaced as a linked
-          # short SHA in the landing page's Commit column.
-          COMMIT="$(git rev-parse HEAD)"
+          echo "Pinning .pkg version to ${PORTVERSION}"
 
           printf '%s\n' "$BUILD_MATRIX" \
             | jq -c '.[]' \
@@ -846,41 +862,33 @@ jobs:
 
                 echo "--- Building .pkg for ${VARSLUG} FreeBSD ${MAJOR}/${ARCH} (${FREEBSD_VERSION}), PHP ${PHP}, ${PY} ---"
 
-                PORTS_DIR="${RUNNER_TEMP}/ports-${VARSLUG}-${MAJOR}-${ARCH}"
-                sh scripts/sparse-clone-ports.sh \
-                  "https://github.com/pfBlockerNG/FreeBSD-ports" \
-                  pfblockerng/use-github \
-                  "$PORTS_DIR" \
-                  "$PKG_CHANNEL" \
-                  "$PHP" \
-                  "$PY"
+                # AMENDMENT 7: slug a per-entry LEG from VARSLUG + major + arch so
+                # each matrix entry lands in a distinct RUN_ID-keyed out dir.
+                # Colons in ABI are path-unsafe; the slug uses only safe chars.
+                LEG="${VARSLUG}-${MAJOR}-${ARCH}"
+                export LEG
+                RUN_ID="$(sh scripts/select-box.sh --print-id)"
+                export RUN_ID
 
-                PKG_OUT="out/${VARSLUG}-major-${MAJOR}-${ARCH}"
-                mkdir -p "$PKG_OUT"
-                python3 scripts/build-pkg-portable.py \
-                  --ports "$PORTS_DIR" \
-                  --channel "$PKG_CHANNEL" \
-                  --local-src . \
-                  --pkgversion "$portversion" \
-                  --abi "$ABI" \
-                  --py-flavor "$PY" \
-                  --php "$PHP" \
-                  --annotate "created=${CREATED}" \
-                  --annotate "commit=${COMMIT}" \
-                  --out "$PKG_OUT"
+                PKG="$(sh scripts/build-leg.sh \
+                  --channel    "$PKG_CHANNEL" \
+                  --abi        "$ABI" \
+                  --py-flavor  "$PY" \
+                  --php        "$PHP" \
+                  --pkgversion "$PORTVERSION" \
+                  --annotate   "created=${CREATED}" \
+                  --annotate   "commit=${COMMIT}")"
 
+                PKG_DIR="$(dirname "$PKG")"
                 echo "Built for ${VARSLUG} FreeBSD ${MAJOR}/${ARCH}:"
-                ls -l "${PKG_OUT}"/*.pkg
+                ls -l "${PKG_DIR}"
 
                 # Rename to embed variant + pfSense version + FreeBSD major + arch before
                 # upload, so every matrix entry yields a uniquely-named artifact (two
                 # variants on one major × arch, or two arches of one major, never collide).
-                for f in "${PKG_OUT}"/*.pkg; do
-                  [ -f "$f" ] || continue
-                  BASE=$(basename "$f" .pkg)
-                  mv "$f" "${PKG_OUT}/${BASE}-${VARSLUG}-FreeBSD-${MAJOR}-${ARCH}.pkg"
-                  echo "Renamed: $(basename "$f") -> ${BASE}-${VARSLUG}-FreeBSD-${MAJOR}-${ARCH}.pkg"
-                done
+                BASE="$(basename "$PKG" .pkg)"
+                mv "$PKG" "${PKG_DIR}/${BASE}-${VARSLUG}-FreeBSD-${MAJOR}-${ARCH}.pkg"
+                echo "Renamed: ${BASE}.pkg -> ${BASE}-${VARSLUG}-FreeBSD-${MAJOR}-${ARCH}.pkg"
               done
 
           echo "All .pkg artifacts:"

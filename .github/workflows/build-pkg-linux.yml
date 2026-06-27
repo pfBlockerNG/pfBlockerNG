@@ -114,44 +114,42 @@ jobs:
         # builder also accepts the `zstandard` module, or --compression xz (stdlib).
         run: command -v zstd >/dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y zstd; }
 
-      - name: Clone the FreeBSD-ports tree (blobless + sparse, ~12x faster)
+      - name: Build .pkg via build-leg.sh
+        # build-leg.sh is the shared path for all build sites (CI, release, smoke).
+        # Prints the resolved .pkg path on stdout; all other output (including the
+        # ports-prep step) goes to stderr — so PKG captures exactly one line.
+        id: build
         env:
-          PORTS_REPO: ${{ inputs.ports_repo }}
-          PORTS_REF: ${{ inputs.ports_ref }}
-          CHANNEL: ${{ inputs.channel }}
-          PHP_VERSION: ${{ inputs.php_version }}
-          PY_FLAVOR: ${{ inputs.py_flavor }}
+          PORTS_REPO:   ${{ inputs.ports_repo }}
+          PORTS_REF:    ${{ inputs.ports_ref }}
+          CHANNEL:      ${{ inputs.channel }}
+          ABI:          ${{ inputs.abi }}
+          PY_FLAVOR:    ${{ inputs.py_flavor }}
+          PHP_VERSION:  ${{ inputs.php_version }}
+          PFB_RUN_ROOT: ${{ github.workspace }}/out
         run: |
           set -eu
-          sh scripts/sparse-clone-ports.sh \
-            "https://github.com/${PORTS_REPO}" \
-            "$PORTS_REF" \
-            "${{ runner.temp }}/ports" \
-            "$CHANNEL" \
-            "$PHP_VERSION" \
-            "$PY_FLAVOR"
-
-      - name: Build the .pkg (portable, from the local tree)
-        run: |
-          set -eu
-          mkdir -p out
-          # The variant guard deps (versioned php*/py*) are injected automatically
-          # from --php / --py-flavor (ADR-20); the builder stamps no variant itself.
-          python3 scripts/build-pkg-portable.py \
-            --ports "${{ runner.temp }}/ports" \
-            --channel '${{ inputs.channel }}' \
-            --local-src . \
-            --abi '${{ inputs.abi }}' \
-            --py-flavor '${{ inputs.py_flavor }}' \
-            --php '${{ inputs.php_version }}' \
-            --out out
-          ls -l out
+          # AMENDMENT 7: slug ABI into a path-safe LEG token (FreeBSD:15:amd64 →
+          # freebsd-15-amd64) so the RUN_ID never carries raw colon path components.
+          LEG="$(printf '%s' "$ABI" | tr '[:upper:]' '[:lower:]' | tr ':' '-')"
+          export LEG
+          RUN_ID="$(sh scripts/select-box.sh --print-id)"
+          export RUN_ID
+          PKG="$(sh scripts/build-leg.sh \
+            --ports-repo "$PORTS_REPO" \
+            --ports-ref  "$PORTS_REF" \
+            --channel    "$CHANNEL" \
+            --abi        "$ABI" \
+            --py-flavor  "$PY_FLAVOR" \
+            --php        "$PHP_VERSION")"
+          echo "pkg_dir=$(dirname "$PKG")" >> "$GITHUB_OUTPUT"
+          ls -l "$(dirname "$PKG")"
 
       - name: Upload package
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.artifact_name }}
-          path: out/*.pkg
+          path: ${{ steps.build.outputs.pkg_dir }}/*.pkg
           if-no-files-found: error
           retention-days: 7
