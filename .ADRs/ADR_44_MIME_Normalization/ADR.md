@@ -118,11 +118,14 @@ Rules:
 
 ### Positive
 
-- Eliminates false rejections of valid ZIP feeds packaged by non-canonical tools.
-- Normalisation is isolated to a single named helper — easy to audit and extend.
+- Isolates the MIME allow-list lookup in a named helper (`pfb_mime_in_allowlist()`)
+  — easy to audit, test, and extend.
+- The `stripos('zip')` catch-all handles live `…+zip` archive types (e.g.
+  `application/epub+zip`) that libmagic does emit, in addition to the defensive
+  exact-match rewrites for variant strings a non-stock magic database could produce.
+- The gzip/bzip2 guards prevent the catch-all from mis-rewriting those valid,
+  already-allowed types to `application/zip`.
 - No new external tool dependencies; no allow-list changes.
-- Unblocks ADR-44 (ZIP inner-content validation), which was deferred because ZIPs
-  were being rejected before reaching the validation branch.
 
 ### Negative / Risks
 
