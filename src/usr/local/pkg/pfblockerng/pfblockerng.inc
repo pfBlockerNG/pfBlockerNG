@@ -641,9 +641,10 @@ function pfb_mime_in_allowlist(string $mime, array $allowlist): bool {
 	return isset($allowlist[$mime]);
 }
 
-// ADR-44: canonicalise known archive MIME variants so valid feeds packaged by
-// non-canonical tools pass the allow-list gate. Pure: string in -> string out,
-// never promotes a non-archive string.
+// ADR-44: canonicalise known archive MIME variant strings before the allow-list
+// gate. Pure: string in -> string out. The stripos('zip') catch-all rewrites any
+// non-gzip/bzip string containing "zip" (e.g. application/epub+zip) to
+// application/zip; it does not promote unrelated types like application/octet-stream.
 function pfb_mime_normalise(string $raw): string {
 	// Exact-match canonicalisations first (so x-gzip maps to gzip, NOT zip).
 	switch ($raw) {
@@ -8360,11 +8361,12 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 
 			pfb_logger('.', 1);
 
-			/* ZIP MIME variant strings (e.g. application/x-zip-compressed) are now
-			   canonicalised to application/zip in pfb_filter() via pfb_mime_normalise()
-			   (ADR-44), so the outer ZIP MIME gate no longer false-rejects valid feeds.
-			   The post-extraction inner-content MIME check below stays disabled —
-			   ZIP inner-content validation is deferred to a future ADR.
+			/* pfb_mime_normalise() (ADR-44) canonicalises ZIP-bearing MIME variants before
+			   the allow-list gate. On a stock pfSense box, /usr/bin/file already returns
+			   application/zip for real ZIP bytes (no false rejections occur without it);
+			   normalisation is defensive — it handles custom magic databases and live
+			   epub+zip-style archive types. The post-extraction inner-content MIME check
+			   below stays disabled — ZIP inner-content validation is deferred to a future ADR.
 			if (!pfb_filter(array("{$file_dwn_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download')) {
 				return FALSE;
 			}

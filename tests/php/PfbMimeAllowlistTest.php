@@ -9,14 +9,15 @@ use PHPUnit\Framework\TestCase;
  * Oracle tests for pfb_mime_in_allowlist() — extracted pure helper that
  * encapsulates the $pfb['mime_types'] membership lookup.
  *
- * These tests pin the CURRENT shipped allow-list behaviour before Phase 2
- * normalisation is introduced. They use $GLOBALS['pfb']['mime_types'] as
- * populated by bootstrap (the real shipped array_flip list) so they are
- * genuine oracles of the shipped allow-list, not a private copy.
+ * These tests pin the shipped allow-list behaviour. setUp() repopulates
+ * $pfb['mime_types'] from the canonical list on every run so sibling-test
+ * tearDown() calls that unset the global do not affect these oracles.
  *
- * Entries (b) and (c) record known RED baselines — types file(1) can return
- * for a valid ZIP that the current allow-list rejects. Phase 2 will flip
- * these to true via normalisation before the lookup.
+ * Entries (b) and (c) pin defensive baseline strings — types NOT emitted by
+ * stock FreeBSD libmagic for real ZIPs, but canonicalised by pfb_mime_normalise()
+ * (ADR-44) in case a non-stock magic database emits them. The raw strings remain
+ * absent from the allow-list; pfb_mime_normalise() maps them to application/zip
+ * before the lookup — wiring proven by PfbFileMimeNormaliseWiringTest.
  */
 #[CoversFunction('pfb_mime_in_allowlist')]
 final class PfbMimeAllowlistTest extends TestCase
@@ -25,13 +26,10 @@ final class PfbMimeAllowlistTest extends TestCase
 
 	protected function setUp(): void
 	{
-		// Prefer the real shipped allow-list as populated by bootstrap (the
-		// array_flip of pfblockerng.inc:274-287). Fall back to constructing it
-		// directly when a sibling test's tearDown() has unset the global
-		// (PfbFileMimeSinkEscapeTest does this), so these oracles stay
-		// isolated and always test against the canonical shipped list.
-		$global = $GLOBALS['pfb']['mime_types'] ?? [];
-		$this->allowlist = !empty($global) ? $global : array_flip([
+		// Always repopulate from the canonical shipped list (pfblockerng.inc:274-287)
+		// so sibling-test tearDown() calls that unset $pfb['mime_types'] cannot
+		// affect these oracles. If the shipped list changes, update this mirror.
+		$GLOBALS['pfb']['mime_types'] = array_flip([
 			'inode/x-empty', 'text/x-file',
 			'text/plain', 'text/html', 'text/xml', 'text/csv',
 			'application/csv', 'application/json', 'application/x-ndjson',
@@ -40,6 +38,12 @@ final class PfbMimeAllowlistTest extends TestCase
 			'application/x-bzip2',
 			'application/zip',
 		]);
+		$this->allowlist = $GLOBALS['pfb']['mime_types'];
+	}
+
+	protected function tearDown(): void
+	{
+		unset($GLOBALS['pfb']['mime_types']);
 	}
 
 	public function test_pfb_mime_allowlist_accepts_canonical_zip(): void
@@ -50,17 +54,17 @@ final class PfbMimeAllowlistTest extends TestCase
 
 	public function test_pfb_mime_allowlist_rejects_x_zip_compressed(): void
 	{
-		// RED BASELINE (Phase 2 will fix via normalisation):
-		// file(1) returns 'application/x-zip-compressed' for many valid ZIPs.
-		// Current allow-list does NOT include it → currently rejected.
+		// application/x-zip-compressed is NOT emitted by stock FreeBSD libmagic for
+		// real ZIPs (it is a Windows / HTTP-header MIME). The allow-list does not
+		// include it; pfb_mime_normalise() maps it to application/zip before lookup.
 		$this->assertFalse(pfb_mime_in_allowlist('application/x-zip-compressed', $this->allowlist));
 	}
 
 	public function test_pfb_mime_allowlist_rejects_x_zip(): void
 	{
-		// RED BASELINE (Phase 2 will fix via normalisation):
-		// file(1) may return 'application/x-zip' for some ZIP creators.
-		// Current allow-list does NOT include it → currently rejected.
+		// application/x-zip is bound only to Mozilla omni.ja in libmagic — not
+		// emitted for ordinary ZIPs. The allow-list does not include it;
+		// pfb_mime_normalise() maps it to application/zip before lookup.
 		$this->assertFalse(pfb_mime_in_allowlist('application/x-zip', $this->allowlist));
 	}
 

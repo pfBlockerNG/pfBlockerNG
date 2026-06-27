@@ -8,9 +8,11 @@ use PHPUnit\Framework\TestCase;
 /**
  * Unit tests for pfb_mime_normalise() — ADR-44 Phase 2.
  *
- * pfb_mime_normalise() canonicalises variant MIME strings returned by file(1)
- * so valid feeds packaged by non-canonical tools pass the allow-list gate.
- * It is a pure function: string in, string out, never promotes a non-archive.
+ * pfb_mime_normalise() canonicalises known ZIP-variant strings and any other
+ * non-gzip/bzip "zip"-bearing string (via a stripos catch-all) to application/zip.
+ * It is a pure function: string in, string out. Non-archive strings (e.g.
+ * application/octet-stream) pass through unchanged; the catch-all is bounded by
+ * the gzip/bzip guards, not by an explicit whitelist of archive MIME types.
  *
  * Critical correctness: the substring "zip" also appears inside "gzip" and
  * "bzip2". Those are distinct, valid archive types that MUST pass through
@@ -22,15 +24,18 @@ final class PfbMimeNormaliseTest extends TestCase
 {
 	public function test_normalise_x_zip_compressed_to_zip(): void
 	{
-		// file(1) returns this for ZIPs made by Info-ZIP / Windows Explorer etc.
-		// Must be canonicalised to application/zip to pass the allow-list gate.
+		// application/x-zip-compressed is absent from stock FreeBSD libmagic (it
+		// is a Windows / HTTP-header MIME). This normalisation is defensive — it
+		// canonicalises the string should a custom magic file or future libmagic
+		// build ever emit it, ensuring it passes the allow-list gate.
 		$this->assertSame('application/zip', pfb_mime_normalise('application/x-zip-compressed'));
 	}
 
 	public function test_normalise_x_zip_to_zip(): void
 	{
-		// file(1) returns application/x-zip for some ZIP creators.
-		// Must be canonicalised to application/zip.
+		// application/x-zip is bound only to Mozilla omni.ja in libmagic — not
+		// emitted for ordinary ZIPs. Defensive: canonicalised to application/zip
+		// in case a non-stock magic database emits it for a feed archive.
 		$this->assertSame('application/zip', pfb_mime_normalise('application/x-zip'));
 	}
 
@@ -89,12 +94,12 @@ final class PfbMimeNormaliseTest extends TestCase
 		$this->assertSame('application/zip', pfb_mime_normalise('application/zip'));
 	}
 
-	public function test_pfb_filter_mime_accepts_x_zip_compressed_after_normalise(): void
+	public function test_normalise_then_allowlist_composes_for_x_zip_compressed(): void
 	{
-		// Integration: before normalisation, application/x-zip-compressed is rejected
-		// by pfb_mime_in_allowlist() (Phase 1 RED baseline).
-		// After normalisation it resolves to application/zip → accepted.
-		// Asserting the before-state first proves normalisation caused the change.
+		// Composes the two pure helpers (pfb_mime_normalise + pfb_mime_in_allowlist)
+		// to show their intended contract: raw x-zip-compressed is rejected by the
+		// allow-list alone, but passes after normalisation maps it to application/zip.
+		// Does NOT call pfb_filter() — see PfbFileMimeNormaliseWiringTest for the gate.
 		$global = $GLOBALS['pfb']['mime_types'] ?? [];
 		$allowlist = !empty($global) ? $global : array_flip([
 			'inode/x-empty', 'text/x-file',
