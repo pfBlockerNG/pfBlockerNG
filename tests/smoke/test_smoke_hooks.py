@@ -567,7 +567,9 @@ def test_hooks_changed_aliases_ip_and_dnsbl(deployed_vm: SmokeVM, mock_feeds: _M
     # $pfctlck read (slow/contended box), the no-op pass sees an empty table, self-heals, and reports
     # the alias — a non-deterministic false failure of the "empty changed-list" assertion below.
     # Polling the table non-empty here removes that race (it stays loaded between the two passes).
-    h.wait_pfctl_table(deployed_vm, ip_spec.alias)
+    assert h.wait_pfctl_table(deployed_vm, ip_spec.alias), (
+        f"IP kernel table {ip_spec.alias} did not populate after the settle update"
+    )
 
     # BEFORE: a second update over the UNCHANGED feeds reuse-caches both ⇒ both lists empty.
     h.clear_hook_markers(deployed_vm, token)
@@ -668,7 +670,9 @@ def test_hooks_webhook_fires_on_ip_change(
     # Settle the IP kernel table before the no-op pass — see the race note in
     # test_hooks_changed_aliases_ip_and_dnsbl: an unloaded table makes the no-op pass self-heal
     # (#468) and populate PFB_CHANGED_IP_ALIASES, firing the guard and producing a flaky callback.
-    h.wait_pfctl_table(deployed_vm, ip_spec.alias)
+    assert h.wait_pfctl_table(deployed_vm, ip_spec.alias), (
+        f"IP kernel table {ip_spec.alias} did not populate after the settle update"
+    )
 
     # BEFORE (guard off): a second update over the UNCHANGED feed hits the reuse cache ⇒
     # PFB_CHANGED_IP_ALIASES empty ⇒ the guard short-circuits ⇒ curl never runs ⇒ no callback.
@@ -767,7 +771,9 @@ def test_hooks_webhook_dnsbl_guard_branch(
     # Settle the IP kernel table before the DNSBL-only pass — see the race note in
     # test_hooks_changed_aliases_ip_and_dnsbl: an unloaded IP table makes the no-op pass self-heal
     # (#468) and populate PFB_CHANGED_IP_ALIASES, firing the IP guard on a DNSBL-only change.
-    h.wait_pfctl_table(deployed_vm, ip_spec.alias)
+    assert h.wait_pfctl_table(deployed_vm, ip_spec.alias), (
+        f"IP kernel table {ip_spec.alias} did not populate after the settle update"
+    )
     webhook_sink.clear()
 
     # DNSBL-only change: rewrite ONLY the DNSBL feed, leave the IP feed untouched, and
