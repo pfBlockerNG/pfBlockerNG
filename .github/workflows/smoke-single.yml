@@ -257,19 +257,8 @@ jobs:
           SMOKE_IMAGE_TAG: ${{ vars.SMOKE_IMAGE_TAG }}
         run: |
           set -eu
-          if [ -n "$INPUT_REF" ]; then
-            REF="$INPUT_REF"
-          else
-            # Fallback for REPO: lowercased owner (GHCR refs MUST be lowercase).
-            REPO="${SMOKE_IMAGE_REPO:-ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')}"
-            # NAME: the per-leg image_name input wins over the repo variable; both
-            # default to pfsense-ce, so a bare dispatch is unchanged.
-            NAME="${INPUT_IMAGE_NAME:-${SMOKE_IMAGE_NAME:-pfsense-ce}}"
-            TAG="${INPUT_VERSION:-${SMOKE_IMAGE_TAG:-2.8}}"
-            REF="${REPO%/}/${NAME}:${TAG}"
-          fi
-          echo "ref=${REF}" >> "$GITHUB_OUTPUT"
-          echo "resolved image ref: ${REF}"
+          # ADR-47 P5: image ref composed by the shared script (writes ref= to $GITHUB_OUTPUT).
+          sh scripts/resolve-legs.sh image-ref
 
       - name: Install oras
         uses: oras-project/setup-oras@v2
@@ -288,22 +277,8 @@ jobs:
           SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -eu
-          echo "$SMOKE_GHCR_TOKEN" | oras login ghcr.io \
-            --username "$SMOKE_GHCR_USER" --password-stdin
-          DIGEST="$(oras resolve "$IMAGE_REF" 2>/dev/null || true)"
-          if [ -z "$DIGEST" ]; then
-            # Fallback for oras builds without `resolve`: read the descriptor.
-            DIGEST="$(oras manifest fetch "$IMAGE_REF" --descriptor | jq -r '.digest')"
-          fi
-          case "$DIGEST" in
-            sha256:*) ;;
-            *) echo "::error::could not resolve a sha256 digest for ${IMAGE_REF} (got '${DIGEST}')"; exit 1 ;;
-          esac
-          {
-            echo "digest=${DIGEST}"
-            echo "k=${DIGEST#sha256:}"   # cache-key-safe hex
-          } >> "$GITHUB_OUTPUT"
-          echo "resolved ${IMAGE_REF} -> ${DIGEST}"
+          # ADR-47 P5: digest resolved by the shared script (writes digest= k= to $GITHUB_OUTPUT).
+          sh scripts/resolve-legs.sh digest "$IMAGE_REF"
 
       - name: Restore cached pfSense image
         id: pfcache
@@ -347,25 +322,14 @@ jobs:
           CLIENT_TAG: ${{ vars.SMOKE_CLIENT_IMAGE_TAG }}
         run: |
           set -eu
-          REPO="${SMOKE_IMAGE_REPO:-ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')}"
+          # ADR-47 P5: compose the civm ref from env vars (map CLIENT_* -> INPUT_*),
+          # then resolve its digest — both via the shared script.
+          # The civm uses CLIENT_NAME/TAG rather than INPUT_IMAGE_NAME/VERSION; map them.
+          # image-ref writes ref= to $GITHUB_OUTPUT and prints the ref to stdout.
           NAME="${CLIENT_NAME:-civm}"
           TAG="${CLIENT_TAG:-v1}"
-          REF="${REPO%/}/${NAME}:${TAG}"
-          DIGEST="$(oras resolve "$REF" 2>/dev/null || true)"
-          if [ -z "$DIGEST" ]; then
-            # Fallback for oras builds without `resolve`: read the descriptor.
-            DIGEST="$(oras manifest fetch "$REF" --descriptor | jq -r '.digest')"
-          fi
-          case "$DIGEST" in
-            sha256:*) ;;
-            *) echo "::error::could not resolve a sha256 digest for ${REF} (got '${DIGEST}')"; exit 1 ;;
-          esac
-          {
-            echo "ref=${REF}"
-            echo "digest=${DIGEST}"
-            echo "k=${DIGEST#sha256:}"   # cache-key-safe hex
-          } >> "$GITHUB_OUTPUT"
-          echo "resolved ${REF} -> ${DIGEST}"
+          REF="$(INPUT_IMAGE_NAME="$NAME" INPUT_VERSION="$TAG" sh scripts/resolve-legs.sh image-ref)"
+          sh scripts/resolve-legs.sh digest "$REF"
 
       - name: Restore cached civm image
         id: civmcache
@@ -488,42 +452,9 @@ jobs:
           CLIENT_MAC: ${{ secrets.SMOKE_CLIENT_MAC_ADDRESS }}
         run: |
           set -eu
-          # Resolve the EXACT image name (strip ghcr path, @digest, :tag) — a substring
-          # match could misclassify a non-CE image as CE and skip the secret + redaction.
-          IMG_NAME="${INPUT_IMAGE_NAME:-pfsense-ce}"
-          if [ -n "${IMAGE_REF:-}" ]; then
-            REF_NO_DIGEST="${IMAGE_REF%@*}"; IMG_NAME="${REF_NO_DIGEST##*/}"; IMG_NAME="${IMG_NAME%%:*}"
-          fi
-          # The civm data MAC is secret in every edition — mask it now and seed the
-          # diagnostics redaction set (REDACT_EXTRA, folded into both branches below).
-          REDACT_EXTRA=""
-          if [ -n "${CLIENT_MAC:-}" ]; then
-            printf '::add-mask::%s\n' "$CLIENT_MAC"
-            REDACT_EXTRA="$CLIENT_MAC"
-          fi
-          case "$IMG_NAME" in
-            pfsense-ce)
-              # CE identity is don't-care: empty MAC -> QEMU assigns each NIC a
-              # default. Only the (secret) civm MAC needs redacting.
-              echo "RESOLVED_VM_MAC=" >> "$GITHUB_ENV"
-              echo "RESOLVED_VM_SMBIOS_UUID=58fd7964-c40c-4f47-bf02-3fdad18f8b00" >> "$GITHUB_ENV"
-              { printf 'RESOLVED_REDACT<<__EOF__\n'; [ -n "$REDACT_EXTRA" ] && printf '%s\n' "$REDACT_EXTRA"; printf '__EOF__\n'; } >> "$GITHUB_ENV" ;;
-            *)  # non-CE (Plus): license/NDI-keyed identity comes from secrets, never the matrix.
-                # SMOKE_PLUS_MAC is the NEWLINE-separated 8-MAC list (one per NIC, in order).
-              if [ -z "${PLUS_MAC:-}" ] || [ -z "${PLUS_UUID:-}" ]; then
-                echo "::error::non-CE image '$IMG_NAME' requires the SMOKE_PLUS_MAC and SMOKE_PLUS_SMBIOS_UUID secrets (the Plus source-VM identity); one or both are empty."; exit 1
-              fi
-              # Mask each MAC line individually — a multiline mask value would not
-              # match a single MAC in the logs. NDI optional.
-              printf '%s\n' "$PLUS_MAC" | while IFS= read -r _m; do [ -n "$_m" ] && printf '::add-mask::%s\n' "$_m"; done
-              printf '::add-mask::%s\n' "$PLUS_UUID"; [ -n "${PLUS_NDI:-}" ] && printf '::add-mask::%s\n' "$PLUS_NDI" || true
-              # RESOLVED_VM_MAC carries the full newline-separated list (heredoc env);
-              # boot_vm.sh splits it per NIC.
-              { printf 'RESOLVED_VM_MAC<<__MAC_EOF__\n%s\n__MAC_EOF__\n' "$PLUS_MAC"; } >> "$GITHUB_ENV"
-              echo "RESOLVED_VM_SMBIOS_UUID=$PLUS_UUID" >> "$GITHUB_ENV"
-              # newline-joined redaction set for the scrub (MACs + uuid [+ NDI] [+ civm MAC])
-              { printf 'RESOLVED_REDACT<<__EOF__\n%s\n%s\n' "$PLUS_MAC" "$PLUS_UUID"; [ -n "${PLUS_NDI:-}" ] && printf '%s\n' "$PLUS_NDI"; [ -n "$REDACT_EXTRA" ] && printf '%s\n' "$REDACT_EXTRA"; printf '__EOF__\n'; } >> "$GITHUB_ENV" ;;
-          esac
+          # ADR-47 P5: VM identity resolved by the shared script (writes RESOLVED_* to $GITHUB_ENV).
+          # --civm-mac passes the civm data-NIC MAC for masking + redaction (deny-by-default: empty).
+          sh scripts/resolve-legs.sh vm-identity --civm-mac "${CLIENT_MAC:-}"
 
       # HERMETICITY (ADR §2/§4): the egress block is done INSIDE pytest, by the
       # matrix's `deployed_vm` fixture, after deploy() and before the per-case
@@ -618,15 +549,9 @@ jobs:
           [ -n "${PYTEST_K:-}" ] && set -- "$@" --k "${PYTEST_K}"
           sh scripts/run-smoke.sh "$@"
 
-      # ADR-24: runner-side scrub of the Plus secret identity from the diagnostics
-      # BEFORE upload. For a non-CE (Plus) image: drop the console screenshots
-      # (screen-*.png/.ppm) — a banner screenshot shows the NDI/serial as PIXELS
-      # that no text redaction can reach — and literal-redact each secret value
-      # (MAC + uuid [+ NDI], from RESOLVED_REDACT) across every vm*.log and text
-      # file under the diag dir. CE: RESOLVED_REDACT is empty -> no-op (the artifact
-      # is byte-identical to today). The literal escape mirrors helpers.py's
-      # _sed_escape_literal (one -e per BRE metachar, NOT a bracket-class) so a
-      # regex-special value is matched literally.
+      # ADR-24 / ADR-47 P5: runner-side scrub delegated to the shared script.
+      # resolve-legs.sh scrub --root smoke-diag handles: non-CE screenshot deletion,
+      # literal-redaction of RESOLVED_REDACT values, and CE no-op (empty RESOLVED_REDACT).
       - name: Scrub Plus secret identity from diagnostics (runner side)
         if: always()
         env:
@@ -635,40 +560,8 @@ jobs:
           SMOKE_REDACT_VALUES: ${{ env.RESOLVED_REDACT }}
         run: |
           set -eu
-          # Exact image-name match (strip ghcr path, @digest, :tag), not a substring.
-          IMG_NAME="${INPUT_IMAGE_NAME:-pfsense-ce}"
-          if [ -n "${IMAGE_REF:-}" ]; then
-            REF_NO_DIGEST="${IMAGE_REF%@*}"; IMG_NAME="${REF_NO_DIGEST##*/}"; IMG_NAME="${IMG_NAME%%:*}"
-          fi
-          # Non-CE: drop console screenshots (pixels can leak NDI/serial).
-          case "$IMG_NAME" in
-            pfsense-ce) : ;;
-            *) find . -type f \( -name 'screen-*.png' -o -name 'screen-*.ppm' \) -delete 2>/dev/null || true ;;
-          esac
-          # Value-redaction is a strict no-op when RESOLVED_REDACT is empty (CE).
-          [ -n "${SMOKE_REDACT_VALUES:-}" ] || { echo "no redaction values (CE leg) — runner-side scrub is a no-op"; exit 0; }
-          # Build a redact.sed of literal s###REDACTED### per value. BRE-escape each
-          # value with one -e per metachar (\ first, then . * [ ] ^ $ #).
-          esc() {
-            printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/\./\\./g' -e 's/\*/\\*/g' \
-              -e 's/\[/\\[/g' -e 's/\]/\\]/g' -e 's/\^/\\^/g' -e 's/\$/\\$/g' -e 's/#/\\#/g'
-          }
-          : > redact.sed
-          # `I` flag = case-insensitive (GNU + FreeBSD sed) so an upper-case secret
-          # scrubs the lower-case MAC/uuid that logs/ifconfig emit.
-          printf '%s\n' "$SMOKE_REDACT_VALUES" | while IFS= read -r v; do
-            [ -n "$v" ] || continue
-            printf 's#%s#REDACTED#gI;\n' "$(esc "$v")" >> redact.sed
-          done
-          # GNU sed on the runner: -i with no backup-suffix arg. Redact every vm*.log
-          # and every TEXT file under the diag dirs.
-          find . -type f -name 'vm*.log' 2>/dev/null | while IFS= read -r f; do
-            sed -i -f redact.sed "$f" 2>/dev/null || true
-          done
-          find smoke-diag -type f 2>/dev/null | while IFS= read -r f; do
-            LC_ALL=C grep -Iq . "$f" 2>/dev/null && sed -i -f redact.sed "$f" 2>/dev/null || true
-          done
-          rm -f redact.sed
+          # ADR-47 P5: scrub delegated to the shared script.
+          sh scripts/resolve-legs.sh scrub --root smoke-diag
 
       - name: Upload smoke diagnostics
         if: always()

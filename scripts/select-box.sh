@@ -38,15 +38,17 @@
 #   every box at the same path (PFB_LEASE_DIR), so mkdir/rename on that path
 #   is a single shared object visible to the whole pool.
 
-# ── GIT_* scrub ───────────────────────────────────────────────────────────────
+# ── Locate sibling lib/ (same directory as this script) ──────────────────────
+_SB_SELF="$(cd "$(dirname "$0")" && pwd)"
+
+# ── Scrub inherited GIT_* context (via shared lib — ADR-47 P5 chokepoint) ────
 # The pre-commit hook exports GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE / ...
 # pointing at the real repo. Any child process that runs git would operate on
 # the real repo instead of its own fixture. Scrub them once here for the whole
 # pipeline — all subsequent ssh commands and sourced scripts inherit clean env.
-unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_OBJECT_DIRECTORY GIT_COMMON_DIR
-
-# ── Locate sibling lib/ (same directory as this script) ──────────────────────
-_SB_SELF="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=scripts/lib/git-env-scrub.sh
+. "${_SB_SELF}/lib/git-env-scrub.sh"
+pfb_scrub_git_env
 
 # shellcheck disable=SC1091
 . "${_SB_SELF}/lib/run-id.sh"

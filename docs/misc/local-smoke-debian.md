@@ -64,6 +64,12 @@ The CI `scope=impacted` / min-CE / auto-derived-`-k` defaulting (see
 [architecture-notes.md](architecture-notes.md) "Selective dispatch") is **CI-only** — locally
 you pick the target and `-k` yourself.
 
+All step logic (`select-box.sh`, `smoke-on-box.sh`, `build-leg.sh`, `run-smoke.sh`) lives in
+`scripts/` and runs identically on the local box and in CI — the workflows are thin dispatch
+wrappers. The shared `scripts/lib/git-env-scrub.sh` scrubs the six GIT_\* vars that the
+pre-commit hook exports; every script sources it at entry so git fixture repos are never
+corrupted by an inherited GIT_DIR.
+
 ## Manual run (advanced: on-box directly, no orchestrator)
 
 If you are already on the box or want to iterate without the lease overhead:

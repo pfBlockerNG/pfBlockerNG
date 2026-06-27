@@ -42,7 +42,7 @@ Describe 'select-box.sh'
     # GIT_PREFIX / GIT_OBJECT_DIRECTORY / GIT_COMMON_DIR pointing at the REAL
     # repo. Without this scrub, any git op inside setup() or the script under
     # test would operate on the real shared checkout. Mandatory in every spec.
-    unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_OBJECT_DIRECTORY GIT_COMMON_DIR
+    scrub_git_env
 
     WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/selectbox.XXXXXX")"
 

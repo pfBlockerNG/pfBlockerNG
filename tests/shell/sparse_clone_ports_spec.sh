@@ -33,7 +33,7 @@ Describe 'sparse-clone-ports.sh'
     # GIT_INDEX_FILE / GIT_WORK_TREE / ... pointing at the REAL repo; without this the
     # fixture's git init/clone AND the script-under-test's `git -C` would hit it, not the
     # file:// fixture. (BeforeEach runs in-context, so the unset reaches the When too.)
-    unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_OBJECT_DIRECTORY GIT_COMMON_DIR
+    scrub_git_env
     WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/sparseclone.XXXXXX")"
     REMOTE="${WORK}/remote"
     DEST="${WORK}/dest"

@@ -21,7 +21,7 @@ Describe 'run-smoke.sh'
 
   setup() {
     # Scrub inherited git context (shared-bare-repo rule).
-    unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_OBJECT_DIRECTORY GIT_COMMON_DIR
+    scrub_git_env
     unset PYTHON GITHUB_ACTIONS
     WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/runsmokespec.XXXXXX")"
     ARGV_FILE="${WORK}/argv"

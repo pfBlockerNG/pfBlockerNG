@@ -10,6 +10,13 @@ PFB_PKGDIR="${PFB_ROOT}/src/usr/local/pkg/pfblockerng"
 PFB_FIXTURES="${PFB_ROOT}/tests/shell/fixtures"
 PFB_SHIMS="${PFB_ROOT}/tests/shell/bin"
 
+# ── GIT_* scrub (ADR-47 P5) — sourced once, aliased as scrub_git_env ─────────
+# All git-touching specs call scrub_git_env in their setup() / subshells.
+# The alias keeps spec code readable; the underlying function is in the shared lib.
+# shellcheck source=scripts/lib/git-env-scrub.sh
+. "${PFB_ROOT}/scripts/lib/git-env-scrub.sh"
+scrub_git_env() { pfb_scrub_git_env; }
+
 # Put the iprange shim ahead of the real PATH so the AWS pre-scripts (which call
 # `iprange` by bare name) pick up the deterministic stand-in. jq stays the real
 # system binary.
