@@ -28,9 +28,9 @@ from pathlib import Path
 # license-keyed as the MAC and comes from the SMOKE_PLUS_SMBIOS_UUID secret).
 CE_DEFAULT_SMBIOS_UUID = "58fd7964-c40c-4f47-bf02-3fdad18f8b00"
 
-# The static management IP baked into every pfSense image — the host->guest
-# ssh/web forwards target it, so a drift here silently breaks the control path.
-PFSENSE_MGMT_IP = "10.0.0.20"
+# The mgmt NIC's DHCP address on net1 (a /24 — qemu hands the lone client .15) — the
+# host->guest ssh/web forwards target it, so a drift here silently breaks the control path.
+PFSENSE_MGMT_IP = "192.168.43.15"
 
 _BOOT_VM_SH = Path(__file__).resolve().parent.parent / "tests" / "smoke" / "boot_vm.sh"
 
@@ -119,18 +119,19 @@ def test_client_smbios_uuid_default_with_env_override() -> None:
 def test_pfsense_management_path_targets_static_ip() -> None:
     """The host->guest ssh/web forwards target an overridable mgmt address, default = static IP.
 
-    The forwards live on net1 (management, 10.0.0.0/16) and point at
-    PFSENSE_MGT_TARGET, which defaults to the baked static IP 10.0.0.20 — the
-    harness control path. The target is overridable via SMOKE_PFSENSE_MGT_TARGET
-    using the SINGLE-DASH form, so an explicit empty value is honored (forward-compat
-    for a future DHCP MGT1 with no fixed IP: SLIRP then forwards to its own
-    DHCP-assigned guest address). A drift in the subnet, the default IP, or the
-    target indirection would break SSH/Web reachability.
+    The forwards live on net1 (management, 192.168.43.0/24 — a /24 so qemu's SLIRP
+    DHCP is predictable; a /16 leased an unexpected address the forwards missed) and
+    point at PFSENSE_MGT_TARGET, which defaults to the mgmt NIC's DHCP address
+    192.168.43.15 — the harness control path. The target is overridable via
+    SMOKE_PFSENSE_MGT_TARGET using the SINGLE-DASH form, so an explicit empty value is
+    honored (DHCP MGT1: SLIRP then forwards to its own DHCP-assigned guest address).
+    A drift in the subnet, the default IP, or the target indirection would break
+    SSH/Web reachability.
     """
     text = _boot_vm_text()
-    # Default branch: the target falls back to the baked static management IP.
+    # Default branch: the target falls back to the mgmt NIC's DHCP address.
     assert f'PFSENSE_MGMT_IP="{PFSENSE_MGMT_IP}"' in text
-    assert "net=10.0.0.0/16" in text
+    assert "net=192.168.43.0/24" in text
     # Override branch: single-dash (not :-) so an explicit empty SMOKE_PFSENSE_MGT_TARGET
     # is honored, defaulting to the static IP when unset.
     assert 'PFSENSE_MGT_TARGET="${SMOKE_PFSENSE_MGT_TARGET-$PFSENSE_MGMT_IP}"' in text
@@ -140,14 +141,14 @@ def test_pfsense_management_path_targets_static_ip() -> None:
 
 
 def test_pfsense_wan_and_lan_topology() -> None:
-    """WAN is the 10.10.0.0/24 runner-services net; LAN is the socket crossover.
+    """WAN is the 192.168.89.0/24 runner-services net; LAN is the socket crossover.
 
     The guest reaches the runner-side mock servers via the WAN host alias
-    10.10.0.2; the LAN (net2) is a QEMU socket LISTENER that the civm data NIC
+    192.168.89.2; the LAN (net2) is a QEMU socket LISTENER that the civm data NIC
     connects to. Pins both addressing facts the rest of the harness assumes.
     """
     text = _boot_vm_text()
-    assert "net=10.10.0.0/24,host=10.10.0.2" in text
+    assert "net=192.168.89.0/24,host=192.168.89.2" in text
     assert "socket,id=net2,listen=127.0.0.1:${LAN_SOCKET_PORT}" in text
     assert "socket,id=net1,connect=127.0.0.1:${LAN_SOCKET_PORT}" in text
 

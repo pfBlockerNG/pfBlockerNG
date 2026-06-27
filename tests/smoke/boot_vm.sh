@@ -7,12 +7,14 @@
 #       MIRROR the source VM so pfSense does not re-detect hardware and drop to
 #       the interface-reassignment console prompt. Only the first three are
 #       assigned in the image:
-#         net0 WAN  — SLIRP user-net, 10.10.0.0/24, host alias 10.10.0.2 (the
+#         net0 WAN  — SLIRP user-net, 192.168.89.0/24, host alias 192.168.89.2 (the
 #                     guest reaches the runner-side mock feed / stub-DNS /
 #                     sinkhole servers here); DHCP; egress for `pkg add`.
-#         net1 MGMT — SLIRP user-net, 10.0.0.0/16; the host->guest forwards
-#                     (ssh, web) target the image's static management IP
-#                     10.0.0.20. This is the harness control path.
+#         net1 MGMT — SLIRP user-net, 192.168.43.0/24 (a /24 like net0, NOT a /16:
+#                     a /16 made qemu's SLIRP DHCP hand the guest an unexpected
+#                     address the forwards never reached); the host->guest forwards
+#                     (ssh, web) target the mgmt NIC's DHCP address 192.168.43.15.
+#                     This is the harness control path.
 #         net2 LAN  — a QEMU `socket` LISTENER (point-to-point L2 "crossover"
 #                     to the civm data NIC); pfSense LAN is 192.168.1.1/24.
 #         net3..7   — unassigned; present only so the 8-NIC image sees no
@@ -103,11 +105,13 @@ CLIENT_SMBIOS_UUID="${SMOKE_CLIENT_SMBIOS_UUID:-7dc13783-e65c-4f62-8fd8-45eeae4c
 SSH_HOSTPORT="${SMOKE_SSH_HOSTPORT:-2222}"
 WEB_HOSTPORT="${SMOKE_WEB_HOSTPORT:-8080}"
 CLIENT_SSH_HOSTPORT="${SMOKE_CLIENT_SSH_HOSTPORT:-2223}"
-PFSENSE_MGMT_IP="10.0.0.20"   # static management IP baked into the pfSense image
-# Forward-compat for a future DHCP management interface: the hostfwd TARGET defaults to
-# the baked static IP above.  When the image makes MGT1 DHCP (no fixed IP), the caller
-# exports SMOKE_PFSENSE_MGT_TARGET="" so SLIRP forwards to its own DHCP-assigned guest
-# address (mirroring civm net0 — see hostfwd=tcp::${CLIENT_SSH_HOSTPORT}-:22 below).
+PFSENSE_MGMT_IP="192.168.43.15"   # mgmt NIC's DHCP lease on net1 (a /24 — qemu hands the
+                                  # lone client .15, exactly as net0/WAN gets 192.168.89.15)
+# The hostfwd TARGET defaults to that address. The mgmt net is a /24 (NOT a /16): a /16
+# made qemu's SLIRP DHCP hand the MGT1 NIC an unexpected address (10.0.2.x) that the
+# forwards never reached; a /24 is predictable (net|.15), mirroring net0. The image makes
+# MGT1 DHCP, so the caller MAY still export SMOKE_PFSENSE_MGT_TARGET="" to forward to
+# whatever the guest DHCPs (qemu fills in the lease) instead of the explicit IP.
 # Single-dash form: an explicit empty override IS honored (vs :- which ignores empty).
 PFSENSE_MGT_TARGET="${SMOKE_PFSENSE_MGT_TARGET-$PFSENSE_MGMT_IP}"
 
@@ -223,9 +227,13 @@ if [ "$ROLE" = pfsense ]; then
             # net0 WAN: a /24 (NOT a /16). It must NOT contain the DNSBL sinkhole
             # VIP (10.10.10.1) or the auto-VIP (10.10.10.53) — pfBlockerNG refuses
             # a VIP that overlaps an interface subnet and disables DNSBL wholesale.
-            # 10.10.0.0/24 keeps the host alias 10.10.0.2 while leaving 10.10.10.x free.
-            0) netdev="user,id=net0,net=10.10.0.0/24,host=10.10.0.2" ;;
-            1) netdev="user,id=net1,net=10.0.0.0/16,host=10.0.0.2,hostfwd=tcp::${SSH_HOSTPORT}-${PFSENSE_MGT_TARGET}:22,hostfwd=tcp::${WEB_HOSTPORT}-${PFSENSE_MGT_TARGET}:80" ;;
+            # 192.168.89.0/24 keeps the host alias 192.168.89.2 while leaving 10.10.10.x free.
+            0) netdev="user,id=net0,net=192.168.89.0/24,host=192.168.89.2" ;;
+            # net1 MGMT: a /24 (NOT a /16). A /16 made qemu's SLIRP DHCP lease the
+            # guest an unexpected address (10.0.2.x) the forwards never reached; a
+            # /24 is predictable (net|.15), mirroring net0. 192.168.43.0/24 avoids
+            # the DNSBL VIP ranges and the LAN (192.168.1.0/24).
+            1) netdev="user,id=net1,net=192.168.43.0/24,host=192.168.43.2,hostfwd=tcp::${SSH_HOSTPORT}-${PFSENSE_MGT_TARGET}:22,hostfwd=tcp::${WEB_HOSTPORT}-${PFSENSE_MGT_TARGET}:80" ;;
             2) netdev="socket,id=net2,listen=127.0.0.1:${LAN_SOCKET_PORT}" ;;
             # net3..7: present so the 8-NIC image sees no hardware change, but
             # isolated (restrict=on) with distinct dummy subnets — pfSense leaves

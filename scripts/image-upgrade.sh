@@ -357,16 +357,18 @@ px "test -s '$REMOTE_DIR/work.qcow2'" || die "streamed image is empty on the KVM
 # Mirror the smoke 8-NIC topology (tests/smoke/boot_vm.sh) so the image boots
 # without pfSense re-detecting hardware and dropping to the interface-reassignment
 # console prompt. Only the first three are assigned in the image:
-#   net0 WAN  — SLIRP 10.10.0.0/24, NATs to the internet (the upgrade download).
-#   net1 MGMT — SLIRP 10.0.0.0/16; the ssh host-forward targets the static
-#               management IP 10.0.0.20 (the upgrade's control path). WAN uses
-#               10.10.0.0/24 so it overlaps neither mgmt 10.0/16 nor the DNSBL
-#               sinkhole VIP 10.10.10.1 (matches tests/smoke/boot_vm.sh).
+#   net0 WAN  — SLIRP 192.168.89.0/24, NATs to the internet (the upgrade download).
+#   net1 MGMT — SLIRP 192.168.43.0/24 (a /24 so qemu's SLIRP DHCP is predictable;
+#               a /16 leased an unexpected address the forward missed); the ssh
+#               host-forward targets the mgmt NIC's DHCP address 192.168.43.15 (the
+#               upgrade's control path). The mgmt /24 overlaps neither WAN
+#               (192.168.89.0/24), the LAN (192.168.1.0/24), nor the DNSBL sinkhole
+#               VIP 10.10.10.1 (matches tests/smoke/boot_vm.sh).
 #   net2 LAN  — present but isolated (no civm peer during an upgrade).
 #   net3..7   — unassigned; present only so the 8-NIC image sees no change.
 # EVERY NIC carries its source-VM MAC (net${i} = the i-th line of $MAC), exactly
 # as boot_vm.sh does: pfSense assigns interfaces by MAC, so the mgmt path (net1 ->
-# 10.0.0.20, the upgrade's SSH control channel) and — for Plus — the whole
+# 192.168.43.15, the upgrade's SSH control channel) and — for Plus — the whole
 # license/NDI-keyed set must match the image, or pfSense re-detects hardware and
 # drops to the interface-reassignment prompt (and Plus would register a wrong NDI).
 M0=$(nth_mac 0); M1=$(nth_mac 1); M2=$(nth_mac 2); M3=$(nth_mac 3)
@@ -379,9 +381,9 @@ QEMU_CMD="$QEMU_BIN \
     -device virtio-scsi-pci,id=virtioscsi0 \
     -drive file=$REMOTE_DIR/work.qcow2,if=none,id=drive-scsi0,format=qcow2,discard=unmap,detect-zeroes=unmap \
     -device scsi-hd,bus=virtioscsi0.0,drive=drive-scsi0,bootindex=100,rotation_rate=1 \
-    -netdev user,id=net0,net=10.10.0.0/24,host=10.10.0.2 \
+    -netdev user,id=net0,net=192.168.89.0/24,host=192.168.89.2 \
     -device virtio-net-pci,mac=$M0,netdev=net0,id=nic0 \
-    -netdev user,id=net1,net=10.0.0.0/16,host=10.0.0.2,hostfwd=tcp:127.0.0.1:$GUEST_PORT-10.0.0.20:22 \
+    -netdev user,id=net1,net=192.168.43.0/24,host=192.168.43.2,hostfwd=tcp:127.0.0.1:$GUEST_PORT-192.168.43.15:22 \
     -device virtio-net-pci,mac=$M1,netdev=net1,id=nic1 \
     -netdev user,id=net2,net=10.20.0.0/24,restrict=on \
     -device virtio-net-pci,mac=$M2,netdev=net2,id=nic2 \

@@ -621,7 +621,7 @@ def assert_hsts_loaded(vm: SmokeVM, name: str, *, timeout: float = 30.0) -> None
 # SLIRP NAT — so blocking the runner's egress before the package is installed
 # hangs the install. Guarded by SMOKE_BLOCK_EGRESS (CI sets it) so a local
 # `pytest -m smoke` never touches the dev machine's firewall. Loopback stays up
-# (the mock feed server is reached via SLIRP 10.10.0.2 -> runner 127.0.0.1) and
+# (the mock feed server is reached via SLIRP 192.168.89.2 -> runner 127.0.0.1) and
 # established flows (the live SSH session) are kept.
 
 
@@ -864,7 +864,7 @@ def ensure_dnsbl_vip(vm: SmokeVM, *, ip4: str = DEFAULT_DNSBL_VIP4, timeout: flo
 # first candidate address pfb_pick_free_dnsbl_vip() returns. Mirror the PHP
 # constants (PFB_AUTO_VIP_DESCR_V4) / fixed candidate list in pfblockerng.inc
 # (issue #473): Class B 172.16.53.53, then Class C 192.168.53.53, then Class A
-# 10.53.53.53. This two-VM topology uses 10.10.0.0/24 (WAN) + 192.168.1.0/24
+# 10.53.53.53. This two-VM topology uses 192.168.89.0/24 (WAN) + 192.168.1.0/24
 # (LAN) and no 172.16/12, so the first candidate 172.16.53.53 is free and is the
 # one auto-create picks — distinct from the matrix's MANUAL VIP at 10.10.10.1
 # (DEFAULT_DNSBL_VIP4), so the two coexist and the auto-VIP case runs on the same
@@ -1163,8 +1163,8 @@ def set_feed_internal_allowlist(vm: SmokeVM, value: str, *, timeout: float = 60.
     whose host resolves to an internal/private address — but EXEMPTS any IP covered by this
     allowlist (IPs/CIDRs, whitespace/comma-separated, stored base64-encoded; ``pfb_feed_internal_allowlist()``
     parses it, ``pfb_ip_in_allowlist()`` matches by CIDR). The smoke mock feed server is the WAN
-    SLIRP host alias ``10.10.0.2`` (RFC1918, and NOT the box's own IP, so the self-exemption does
-    not apply), so the HTTP-feed smoke allowlists the WAN SLIRP test network ``10.10.0.0/16`` —
+    SLIRP host alias ``192.168.89.2`` (RFC1918, and NOT the box's own IP, so the self-exemption does
+    not apply), so the HTTP-feed smoke allowlists the WAN SLIRP test network ``192.168.89.0/16`` —
     keeping the filter ON while letting the mock fetch through.
 
     The field is stored base64-encoded (the pfBlockerNG textarea convention; the reader
@@ -1186,22 +1186,22 @@ def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     """Point pfSense at the runner-side mock via its REAL System-DNS path (no custom zone).
 
     The realistic wiring: pfSense forwards (forwarding mode) to its System DNS server
-    ``10.10.0.2`` — QEMU/libslirp's WAN host alias — which NATs ``guest->10.10.0.2:53``
+    ``192.168.89.2`` — QEMU/libslirp's WAN host alias — which NATs ``guest->192.168.89.2:53``
     straight to the mock on the runner's loopback (``127.0.0.1:53``), port-preserving.
     This is the SAME WAN host-alias path the in-runner mock-feed HTTP server already rides
-    (``http://10.10.0.2:<port>/...``), so the chain is:
+    (``http://192.168.89.2:<port>/...``), so the chain is:
 
-        guest Unbound --(forward)--> 10.10.0.2:53 (WAN SLIRP alias) --(NAT)--> 127.0.0.1:53 (mock)
+        guest Unbound --(forward)--> 192.168.89.2:53 (WAN SLIRP alias) --(NAT)--> 127.0.0.1:53 (mock)
 
     Crucially this needs NO ``/etc/resolv.conf`` override on the runner (the SLIRP virtual
-    DNS at 10.10.0.3 would read resolv.conf; the 10.10.0.2 host alias does not) — the runner's
+    DNS at 192.168.89.3 would read resolv.conf; the 192.168.89.2 host alias does not) — the runner's
     own resolver is left fully intact, so nothing on the host loses DNS during the run and
     there is no teardown to restore. No custom ``forward-zone`` and no guestfwd either. The
     mock records every query (``stub.received(...)``), so blocking is read off the upstream.
     Loopback survives the per-case egress block (``-o lo ACCEPT``), so it stays hermetic.
 
     Config set (idempotent; written + ``services_unbound_configure``):
-      * ``system/dnsserver = [10.10.0.2]`` and DHCP-override OFF — so ``10.10.0.2`` is the
+      * ``system/dnsserver = [192.168.89.2]`` and DHCP-override OFF — so ``192.168.89.2`` is the
         SOLE forwarder (drops the baked image's dead 1.1.1.1/1.0.0.1, which egress-block
         makes unreachable and would only add forward timeouts).
       * ``unbound/forwarding = on`` — forward to the System DNS server.
@@ -1212,7 +1212,7 @@ def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     snippet = (
         "$s = config_get_path('system', array());\n"
         f"$s['dnsserver'] = array({_php_str(GUEST_TO_HOST_ALIAS)});\n"
-        # Disable 'Allow DNS server list to be overridden by DHCP' so only 10.10.0.2 is used.
+        # Disable 'Allow DNS server list to be overridden by DHCP' so only 192.168.89.2 is used.
         "unset($s['dnsallowoverride']);\n"
         "config_set_path('system', $s);\n"
         "$u = config_get_path('unbound', array());\n"
@@ -1233,7 +1233,7 @@ def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     wait_unbound_ready(vm)
     # READINESS + RELAY SELF-CHECK (fail fast, don't let the matrix hang): resolve one
     # throwaway name on-box. With the mock as upstream it MUST come back as the sentinel
-    # (pfSense -> 10.10.0.2 WAN SLIRP alias -> runner 127.0.0.1:53 mock). The FIRST response
+    # (pfSense -> 192.168.89.2 WAN SLIRP alias -> runner 127.0.0.1:53 mock). The FIRST response
     # is authoritative; if it isn't the sentinel, the relay isn't wired — raise NOW with
     # the answer, rather than letting every per-case forward time out (~300s each).
     probe = unique_domain("sysdnsselfcheck")
@@ -1241,7 +1241,7 @@ def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     if not resolves_to(ans, STUB_DNS_A):
         raise RuntimeError(
             f"System-DNS relay self-check FAILED: {probe} -> {ans} (expected the mock sentinel "
-            f"{STUB_DNS_A}). pfSense's 10.10.0.2 WAN alias -> runner 127.0.0.1:53 mock path is not "
+            f"{STUB_DNS_A}). pfSense's 192.168.89.2 WAN alias -> runner 127.0.0.1:53 mock path is not "
             f"working (libslirp not NATing the WAN host alias to the mock, or unbound not forwarding)."
         )
 
@@ -1298,14 +1298,14 @@ def use_stub_for_safesearch(vm: SmokeVM, forwarding_on: bool, *, timeout: float 
     the stub wiring:
 
     ``forwarding_on=True`` (FORWARDING mode): delegates to the same config as
-    :func:`use_system_dns_upstream` — sets ``system/dnsserver = [10.10.0.2]``,
+    :func:`use_system_dns_upstream` — sets ``system/dnsserver = [192.168.89.2]``,
     ``unbound/forwarding = on``, clears ``dnssec`` and ``custom_options``.
-    Queries forward to ``10.10.0.2`` (the WAN SLIRP host alias), which NATs
-    ``guest->10.10.0.2:53`` to the stub on the runner's loopback.
+    Queries forward to ``192.168.89.2`` (the WAN SLIRP host alias), which NATs
+    ``guest->192.168.89.2:53`` to the stub on the runner's loopback.
 
     ``forwarding_on=False`` (RECURSIVE mode): keeps ``unbound/forwarding`` UNSET
     (Unbound recurses normally) but injects a catch-all ``forward-zone`` in
-    ``unbound/custom_options`` pointing every query at ``10.10.0.2``, so the stub
+    ``unbound/custom_options`` pointing every query at ``192.168.89.2``, so the stub
     still answers all queries while Unbound operates in recursive mode.
     ``custom_options`` is stored base64-encoded in ``config.xml`` (the pfBlockerNG
     textarea convention: the GUI base64-encodes on save, the renderer decodes on
@@ -1363,7 +1363,7 @@ def use_stub_for_safesearch(vm: SmokeVM, forwarding_on: bool, *, timeout: float 
         raise RuntimeError(
             f"SafeSearch stub relay self-check FAILED (recursive mode): "
             f"{probe} -> {ans} (expected sentinel {STUB_DNS_A}). "
-            f"The catch-all forward-zone -> 10.10.0.2 -> runner 127.0.0.1:53 path is not working."
+            f"The catch-all forward-zone -> 192.168.89.2 -> runner 127.0.0.1:53 path is not working."
         )
 
 
@@ -2669,7 +2669,7 @@ def unbound_access_control(vm: SmokeVM, *, timeout: float = 30.0) -> set[str]:
 
     This is the authoritative source (includes resolved, live state) — not a
     grep of one generated file. Returns the normalised set of access-control
-    entries (e.g. ``{"10.10.0.0/24 allow", ...}``).
+    entries (e.g. ``{"192.168.89.0/24 allow", ...}``).
     """
     result = vm.ssh(
         "/usr/local/sbin/unbound-control",

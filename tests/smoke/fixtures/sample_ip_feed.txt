@@ -1,7 +1,7 @@
 # Sample IP feed fixture (ADR-04 smoke harness).
 # One CIDR/host per line; '#' comments and blank lines are ignored by
 # pfBlockerNG. The mock feed server (tests/smoke/conftest.py :: mock_feeds)
-# serves this at http://10.10.0.2:<port>/sample_ip_feed.txt for the guest.
+# serves this at http://192.168.89.2:<port>/sample_ip_feed.txt for the guest.
 # Documentation/test ranges only (RFC 5737 / RFC 3849); never real targets.
 # Phase 5 adds the real per-case feeds + assertions; this is a placeholder so
 # the fixtures/ directory is tracked and the server has something to serve.

@@ -31,7 +31,7 @@ Helper signatures + return contracts
 ------------------------------------
 1) function pfb_dnsbl_vip_candidates(int $family): array
    Pure (no side effects). Ordered, preferred-first candidate addresses:
-     - AF_INET  -> ['10.10.10.53', '10.10.0.53', '10.10.1.53', ... '10.10.15.53']
+     - AF_INET  -> ['10.10.10.53', '192.168.89.53', '10.10.1.53', ... '10.10.15.53']
                    (16 unique; preferred 10.10.10.53 first, then the 0..15 sweep
                    skipping the preferred octet; all keep the '.53' DNS homage)
      - AF_INET6 -> ['fd00::53', 'fd00:1::53', 'fd00:2::53', ... 'fd00:15::53']

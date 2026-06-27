@@ -83,7 +83,7 @@ def deployed_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer)
     the forwarder, and a control/whitelist name answers from its injected host
     override — so the probe never needs the real internet. A not-blocked,
     no-control name resolves via the runner-side mock (``use_system_dns_upstream``:
-    pfSense forwards to the SLIRP host alias 10.10.0.2, which libslirp NATs to the mock) — a known
+    pfSense forwards to the SLIRP host alias 192.168.89.2, which libslirp NATs to the mock) — a known
     answer, AND recorded, so "was it blocked?" is read off the upstream, not inferred
     from a SERVFAIL. deploy() needs no egress for dependencies either — the pre-baked
     image ships pfBlockerNG's RUN_DEPENDS, so ``pkg add`` resolves them from the local

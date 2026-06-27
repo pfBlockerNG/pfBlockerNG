@@ -79,7 +79,7 @@ def deployed_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer)
     Egress is managed per-case by ``CaseContext``; the DNSBL VIP is injected once
     (DNSBL force-disables itself without one). pfSense forwards to the runner-side mock
     via its real System-DNS path (``use_system_dns_upstream``: System DNS = the SLIRP
-    host alias 10.10.0.2, which libslirp NATs to the runner-loopback mock) so a not-blocked name resolves to
+    host alias 192.168.89.2, which libslirp NATs to the runner-loopback mock) so a not-blocked name resolves to
     a known answer AND is recorded on the mock. A full guest snapshot is collected on
     teardown for the workflow to upload.
     """
@@ -448,7 +448,7 @@ def test_cname_validation_on_off(
     Unbound ``local-data`` CNAME does NOT work either: Unbound returns the bare CNAME
     without chasing it (a single rrset, so ``an_numrrsets`` stays 1 and the walk never
     runs). So the mock — pfSense's upstream via its System-DNS path
-    (``use_system_dns_upstream``: forward to 10.10.0.2 → libslirp host-alias NAT → mock) — crafts
+    (``use_system_dns_upstream``: forward to 192.168.89.2 → libslirp host-alias NAT → mock) — crafts
     the 2-rrset chain: ``stub_dns.register_cname(A, B)`` answers a forwarded query for A
     with ``A CNAME B`` + ``B A <addr>``, which Unbound forwards whole.
 

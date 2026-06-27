@@ -25,7 +25,7 @@ What this module provides:
 * ``mock_feeds`` — a FUNCTION-scoped fixture serving files from
   ``tests/smoke/fixtures/`` (plus per-test registered content) over stdlib
   ``http.server`` on the runner, reachable by the guest at
-  ``http://10.10.0.2:<port>/<name>`` via the QEMU WAN user-net (SLIRP) host alias.
+  ``http://192.168.89.2:<port>/<name>`` via the QEMU WAN user-net (SLIRP) host alias.
 
 The boot+probe core lives in :func:`boot_and_probe`, separate from the pytest
 fixtures, so it can double as a reusable health/sanity gate (ADR-09 fans the
@@ -102,12 +102,12 @@ DEFAULT_WEB_PORT = _lane_port(int(os.environ.get("SMOKE_WEB_HOSTPORT", "8080")),
 DEFAULT_DNS_PORT = _lane_port(5353, _LANE)  # host -> guest 53 (tcp+udp); no env consumer in boot_vm.sh
 
 # The WAN SLIRP host alias the guest uses to reach the runner (mock feed server,
-# stub DNS, webhook sink). Corresponds to boot_vm.sh net0: net=10.10.0.0/24,
-# host=10.10.0.2. The old 10.0.2.2 was the classic libslirp default; the two-VM
-# topology uses 10.10.0.0/24 — it avoids the management net (10.0.0.0/16) AND
+# stub DNS, webhook sink). Corresponds to boot_vm.sh net0: net=192.168.89.0/24,
+# host=192.168.89.2. The old 10.0.2.2 was the classic libslirp default; the two-VM
+# topology uses 192.168.89.0/24 — it avoids the management net (192.168.43.0/24) AND
 # leaves the DNSBL sinkhole VIP 10.10.10.1 outside the WAN subnet (an overlap
 # makes pfBlockerNG disable DNSBL).
-GUEST_TO_HOST_ALIAS = "10.10.0.2"
+GUEST_TO_HOST_ALIAS = "192.168.89.2"
 
 # Sentinel answers the runner-side stub upstream returns for any forwarded query
 # (see _StubDnsServer / helpers.configure_upstream). Distinct from every DNSBL
@@ -164,7 +164,7 @@ class SmokeVM:
     # once mock_feeds is up (it allocates the port); None until then.
     feed_base_url: str | None = None
     # Runner-side port of the stub DNS upstream (reached by the guest at
-    # 10.10.0.2:<port> via the WAN SLIRP alias). Set once the stub_dns fixture is
+    # 192.168.89.2:<port> via the WAN SLIRP alias). Set once the stub_dns fixture is
     # up; None otherwise. Unbound is pointed here so it never recurses into dark egress.
     upstream_dns_port: int | None = None
     # qemu PID + overlay are bookkeeping for teardown.
@@ -730,7 +730,7 @@ class _MockFeedServer:
 
     Files under ``tests/smoke/fixtures/`` are served by name; a test may also
     register ad-hoc content in memory via :meth:`register`. The guest fetches
-    them at ``feed_url(name)`` (``http://10.10.0.2:<port>/<name>``).
+    them at ``feed_url(name)`` (``http://192.168.89.2:<port>/<name>``).
 
     ADR-42 Phase 3: registered feeds emit ``ETag`` and ``Last-Modified`` response
     headers on 200 replies, and answer ``304 Not Modified`` to a matching
@@ -783,7 +783,7 @@ class _MockFeedServer:
                 # Stay quiet in pytest output; failures surface via assertions.
                 return
 
-        # Bind to all interfaces so the WAN SLIRP alias 10.10.0.2 (which maps to
+        # Bind to all interfaces so the WAN SLIRP alias 192.168.89.2 (which maps to
         # the runner) can reach it; port 0 lets the OS pick a free port.
         handler = partial(Handler, directory=str(root))
         self._httpd = ThreadingHTTPServer(("0.0.0.0", 0), handler)
@@ -866,7 +866,7 @@ class _MockCallbackSink:
     url-encoded changed-alias env vars. The sink is OBSERVE-ONLY — it parses the
     body/query into a thread-safe :class:`CallbackRecord` list and answers ``200``,
     nothing more (no side effect on the guest). Bound to ``0.0.0.0`` so the WAN
-    SLIRP host alias ``10.10.0.2`` reaches it, exactly like :class:`_MockFeedServer`;
+    SLIRP host alias ``192.168.89.2`` reaches it, exactly like :class:`_MockFeedServer`;
     the guest hits :meth:`guest_url`.
     """
 
@@ -953,8 +953,8 @@ class _StubDnsServer:
     """A controlled, OBSERVABLE DNS upstream for the guest's Unbound (over SLIRP).
 
     This is the smoke matrix's upstream: pfSense forwards every non-local query to its
-    System DNS server ``10.10.0.2`` (QEMU/libslirp's WAN host alias — see
-    ``helpers.use_system_dns_upstream``), and libslirp NATs guest->10.10.0.2:53 straight
+    System DNS server ``192.168.89.2`` (QEMU/libslirp's WAN host alias — see
+    ``helpers.use_system_dns_upstream``), and libslirp NATs guest->192.168.89.2:53 straight
     to this server on the RUNNER's loopback (``127.0.0.1:53``), port-preserving — the
     same WAN host-alias path the mock-feed HTTP server already rides, and the runner's
     own ``/etc/resolv.conf`` is never touched. So what reaches this server is EXACTLY
@@ -1026,8 +1026,8 @@ class _StubDnsServer:
     def __init__(self, *, port: int | None = None) -> None:
         # Bind address/port are env-overridable so the smoke workflow can put the session
         # mock on the runner's loopback :53 — the System-DNS host-alias path: pfSense
-        # forwards to 10.10.0.2 (libslirp's WAN host alias), which NATs
-        # guest->10.10.0.2:53 to the runner's 127.0.0.1:53 (this mock), port-preserving.
+        # forwards to 192.168.89.2 (libslirp's WAN host alias), which NATs
+        # guest->192.168.89.2:53 to the runner's 127.0.0.1:53 (this mock), port-preserving.
         # The runner's own /etc/resolv.conf is NEVER touched.
         # ``net.ipv4.ip_unprivileged_port_start`` is lowered by the workflow so this
         # non-root process can bind :53; binding 127.0.0.1 (not 0.0.0.0) avoids clashing
@@ -1248,7 +1248,7 @@ def lan_interface(smoke_vm: SmokeVM, client_vm: SmokeVM) -> Iterator[SmokeVM]:
 def stub_dns(smoke_vm: SmokeVM) -> Iterator[_StubDnsServer]:
     """Run the stub DNS upstream and record its port on the VM object.
 
-    Reachable by the guest at 10.10.0.2:<port> via the WAN SLIRP alias (survives
+    Reachable by the guest at 192.168.89.2:<port> via the WAN SLIRP alias (survives
     the egress block, same as mock_feeds). helpers.configure_upstream() points
     Unbound here.
     """
@@ -1268,7 +1268,7 @@ def mock_feeds(smoke_vm: SmokeVM) -> Iterator[_MockFeedServer]:
 
     Hermeticity note (ADR §2): the egress block is sequenced pull -> block ->
     run and is wired by Phase 6 (the workflow blocks the runner's outbound
-    after the GHCR pull). WAN SLIRP-internal ``10.10.0.2`` feeds survive the
+    after the GHCR pull). WAN SLIRP-internal ``192.168.89.2`` feeds survive the
     block, so this server stays reachable; do NOT assume real internet egress.
     """
     FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
@@ -1288,7 +1288,7 @@ def webhook_sink(smoke_vm: SmokeVM) -> Iterator[_MockCallbackSink]:
 
     FUNCTION-scoped for per-test isolation: each case gets a fresh sink (empty
     callback list, its own ephemeral port). Reachable from the guest at
-    ``sink.guest_url(path)`` (``http://10.10.0.2:<port><path>``) via the WAN SLIRP
+    ``sink.guest_url(path)`` (``http://192.168.89.2:<port><path>``) via the WAN SLIRP
     host alias — the same path the mock-feed server rides, so it survives the egress
     block. Shut down on teardown.
     """

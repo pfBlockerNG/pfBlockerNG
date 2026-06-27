@@ -57,7 +57,7 @@ def deployed_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer)
     """Deploy the branch .pkg once with DNSBL/python active and forwarding to the stub.
 
     ``use_system_dns_upstream`` wires forwarding:
-      guest Unbound → 10.10.0.2:53 (SLIRP NAT) → runner 127.0.0.1:53 (stub).
+      guest Unbound → 192.168.89.2:53 (SLIRP NAT) → runner 127.0.0.1:53 (stub).
 
     pfBlockerNG force-disables DNSBL — and so never injects the Unbound ``python:``
     module, meaning ``inplace_cb_query_response`` is never registered — unless at least

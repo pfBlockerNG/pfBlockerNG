@@ -41,7 +41,7 @@ export SMOKE_CLIENT_IMAGE_DIR=/path/to/civm
 ### 2. The stub-DNS-on-:53 relay
 
 The harness mock DNS must bind the runner's `127.0.0.1:53` so libslirp can NAT the guest's
-`10.10.0.2:53` (WAN host alias) to it, port-preserving:
+`192.168.89.2:53` (WAN host alias) to it, port-preserving:
 
 ```sh
 # Let a non-root process bind :53 (systemd-resolved sits on .53/.54, so :53 on 127.0.0.1 is free):

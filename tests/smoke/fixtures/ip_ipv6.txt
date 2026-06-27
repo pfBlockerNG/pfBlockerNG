@@ -4,7 +4,7 @@
 # table; an inline '#' truncates the line, and a full-line '#'/blank is skipped.
 # RFC 3849 documentation prefix (2001:db8::/32) ONLY; never a real host.
 #
-# Served by mock_feeds at http://10.10.0.2:<port>/ip_ipv6.txt
+# Served by mock_feeds at http://192.168.89.2:<port>/ip_ipv6.txt
 #
 # Phase 5 asserts (pfctl_table_members(pfB_<alias>_v6), compare by value, ::==::0):
 #   MEMBER (single host):              2001:db8::1

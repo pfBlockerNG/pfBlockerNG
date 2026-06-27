@@ -57,13 +57,21 @@ def test_poll_cadence_is_one_then_five_seconds_not_exponential() -> None:
 
 
 def test_connect_timeouts_are_one_second() -> None:
-    """SSH and web probes time out after 1s — a local-loopback connect that slow is dead."""
+    """Probes CONNECT-time out after 1s — a local-loopback connect that slow is dead.
+
+    The web probe additionally allows up to 2s TOTAL: a cold nested-KVM
+    webConfigurator (CI) can take a couple of seconds to render its first response
+    even though the connect succeeds immediately, so a 1s total cap would starve
+    a live-but-slow server and time out the whole gate. Split connect (1s) from
+    total (2s) so the dead-port fail-fast intent survives without that starvation.
+    """
     text = _wait_ready_text()
-    assert "ConnectTimeout=1" in text  # ssh
-    assert "--max-time 1" in text  # curl
-    # The old 5s connect timeouts must be gone.
+    assert "ConnectTimeout=1" in text  # ssh connect
+    assert "--connect-timeout 1" in text  # curl connect
+    assert "--max-time 2" in text  # curl total: headroom for a cold nested-KVM response
+    # The old 5s SSH connect timeout, and the too-tight 1s curl total, must be gone.
     assert "ConnectTimeout=5" not in text
-    assert "--max-time 5" not in text
+    assert "--max-time 1" not in text
 
 
 def test_default_timeout_has_headroom_over_slow_boot() -> None:

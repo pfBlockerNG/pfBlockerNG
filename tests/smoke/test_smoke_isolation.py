@@ -88,7 +88,7 @@ def test_reset_pfb_baseline_clears_injected_config(deployed_vm: SmokeVM) -> None
     """
     vm = deployed_vm
     # The feed_url is never fetched — inject() only WRITES config; we assert config, no reload.
-    spec = h.IpCase(aliasname="smokeisoip4", feed_url="http://10.10.0.2/ip_plain_cidr.txt", header="smokeisoip4")
+    spec = h.IpCase(aliasname="smokeisoip4", feed_url="http://192.168.89.2/ip_plain_cidr.txt", header="smokeisoip4")
     control_name = h.unique_domain()
     enable_cb_key = h.CFG_GLOBAL + "/enable_cb"
 
@@ -132,7 +132,7 @@ def test_dnsbl_inject_replaces_leaked_toggle(deployed_vm: SmokeVM) -> None:
     hsts_key = h.CFG_DNSBL_SETTINGS + "/pfb_hsts"
     vip_key = h.CFG_DNSBL_SETTINGS + "/pfb_dnsvip4"
     # The feed_url is never fetched here — inject() only WRITES config; we read it back, no reload.
-    feed = "http://10.10.0.2/dnsbl_plain.txt"
+    feed = "http://192.168.89.2/dnsbl_plain.txt"
 
     # GIVEN the VIP infrastructure is in place. Establish it HERE (idempotent), not via the
     # module fixture alone: a sibling test's reset_pfb_baseline wipes CFG_DNSBL_SETTINGS (incl.
