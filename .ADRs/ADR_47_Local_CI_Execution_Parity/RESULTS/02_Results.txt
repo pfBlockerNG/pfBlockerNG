@@ -113,3 +113,25 @@ HANDOFF TO P3
   P3 takes the select-box.sh output (RUN_ID, PFB_BOX, PFB_RUN_DIR, SMOKE_LANE) and
   integrates with local-smoke.sh (boot_vm.sh, conftest.py). P2 does NOT modify those
   files — the API is fully defined here.
+
+LIVE VALIDATION — real LXC pool (2026-06-27, §8 acceptance discharged)
+  Pool: PFB_BOXES="root@10.0.0.23 root@10.0.0.24" (pfb-box-1/pfb-box-2, Proxmox
+  7.0.2 LXC). Lease dir /var/lib/pfb/leases = a ZFS dataset bind-mounted into both
+  containers at the same path (findmnt: rpool/ROOT/pve-1[/var/lib/pfb/leases]) —
+  one host VFS, so mkdir/rename atomicity holds (not NFS/9p; §5.2 requirement met).
+
+  1. SHARED MOUNT: marker written in box-1's lease dir is read back on box-2 → the
+     lock is a single shared object across the pool.
+  2. TWO CONCURRENT (the §8 item): two select-box.sh -- <cmd> at once leased DISTINCT
+     boxes (box-2 + box-1) with DISTINCT run-ids; both rc=0; both trap-released; lease
+     dir empty afterwards. No collision.
+  3. THREE CONTENDERS / TWO BOXES: two leased immediately (epoch T), the third backed
+     off and acquired the freed box only at epoch T+9 — AFTER the 8s holder released —
+     i.e. it never double-occupied; 3 distinct run-ids; all rc=0; all released. Wall
+     ~19s = first 8s hold + backoff + the 3rd's own 8s hold, confirming the wait.
+
+  Note: select-box.sh -- <cmd> joins the cmd argv with spaces over ssh, so a hold
+  command must be a single token sequence (`-- sleep 8`), not `sh -c 'sleep 8'`
+  (the latter becomes `sh -c sleep 8` remotely → sleep loses its operand). Harness
+  detail only; no select-box.sh change. The hermetic select_box_spec.sh remains the
+  CI gate; this live run is the documented out-of-CI §8 acceptance evidence.
