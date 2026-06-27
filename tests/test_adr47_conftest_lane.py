@@ -74,8 +74,9 @@ def _load_conftest(lane: int = 0, diag_dir: str | None = None) -> types.ModuleTy
     try:
         mod = importlib.import_module("tests.smoke.conftest")
         # Capture the env state written by the import BEFORE restoration.
-        # Stored on the module so callers can assert it without relying on leakage.
-        mod._import_env = {k: os.environ.get(k) for k in _CONFTEST_ENV_KEYS}
+        # Stashed on the module (setattr — modules carry no static attr) so callers can
+        # assert it without relying on leaked post-cleanup env.
+        setattr(mod, "_import_env", {k: os.environ.get(k) for k in _CONFTEST_ENV_KEYS})
         return mod
     finally:
         for k, v in saved.items():
@@ -203,7 +204,7 @@ class TestDefaultLanSocketPort:
         """
         mod = _load_conftest(lane=0)
         # _import_env captures the env state AFTER import, BEFORE _load_conftest restores it.
-        val = mod._import_env.get("SMOKE_LAN_SOCKET_PORT")
+        val = getattr(mod, "_import_env").get("SMOKE_LAN_SOCKET_PORT")
         assert val == "12340", f"expected SMOKE_LAN_SOCKET_PORT='12340' written at import; got {val!r}"
 
 
