@@ -10,6 +10,8 @@ The new shape:
 * an **8s initial grace** (no VM answers sooner) before the first probe;
 * a **1s** poll while readiness is imminent (< 30s), relaxing to **5s** after;
 * a **1s** connect timeout (local loopback — slower than that is dead);
+* a **staggered liveness chain** for pfSense: a real ``ssh true`` floor (alive) logged once,
+  then the web 200 (ready), so a slow-but-alive cold box is never misread as dead;
 * a **per-role gate**: pfSense gates on the **web** server (admin panel; nginx+PHP
   come up after sshd, so a live panel implies SSH), civm on **SSH** (no web server).
 
@@ -72,6 +74,20 @@ def test_connect_timeouts_are_one_second() -> None:
     # The old 5s SSH connect timeout, and the too-tight 1s curl total, must be gone.
     assert "ConnectTimeout=5" not in text
     assert "--max-time 1" not in text
+
+
+def test_pfsense_web_role_has_ssh_liveness_floor() -> None:
+    """The pfSense/web role exercises a real ``ssh true`` liveness FLOOR, logged once.
+
+    The staggered chain: a slow-but-alive box (web warming) is distinguishable from a dead
+    one because the SSH floor is observed and logged before the web 200. A TCP/ping rung
+    would be a false-green over SLIRP, so the floor is a real ssh command, not a connect.
+    The floor only logs; the web 200 still owns the readiness exit (per-role gate unchanged).
+    """
+    text = _wait_ready_text()
+    assert "WEB_SSH_SEEN" in text  # the floor-observed flag (logged once)
+    assert '"root@${HOST}" true' in text  # the real ssh liveness probe
+    assert "warming" in text  # the "alive — web warming" diagnostic that makes the state clear
 
 
 def test_default_timeout_has_headroom_over_slow_boot() -> None:
