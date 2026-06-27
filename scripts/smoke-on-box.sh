@@ -73,14 +73,18 @@ done
 # Guard: PFB_ONBOX_REEXEC=1 skips re-exec (we are already at the right ref).
 if [ "${PFB_ONBOX_REEXEC:-}" != "1" ]; then
     cd "$REPO_ROOT"
-    printf 'smoke-on-box: fetching latest refs...\n' >&2
-    git fetch --quiet
     if [ -z "$_REF" ]; then
         # No explicit ref — stay on whatever HEAD the bootstrap checked out.
         _REF="$(git rev-parse HEAD)"
+        printf 'smoke-on-box: no --ref; staying on current HEAD %s\n' "$_REF" >&2
+    else
+        printf 'smoke-on-box: fetching + checking out ref %s\n' "$_REF" >&2
+        # Check out the FETCHED TIP, not a bare `git checkout <ref>` — the latter
+        # lands the box's possibly-stale LOCAL branch (git fetch only moves the
+        # remote-tracking ref), which can predate files added upstream.
+        git fetch --quiet origin "$_REF"
+        git checkout --quiet --force FETCH_HEAD
     fi
-    printf 'smoke-on-box: checking out ref %s\n' "$_REF" >&2
-    git checkout --quiet "$_REF"
 
     # Re-exec the now-checked-out version with properly quoted args.
     # Build via set -- so each arg is a distinct word (no word-split on _K spaces).

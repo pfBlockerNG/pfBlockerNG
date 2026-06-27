@@ -111,15 +111,17 @@ fi
 
 # The bootstrap string:
 #   1. cd to the repo on the box
-#   2. git fetch + checkout the requested ref (the repo's scripts/smoke-on-box.sh
-#      may be at a different ref — smoke-on-box.sh re-execs itself at the right ref)
-#   3. exec smoke-on-box.sh (which re-execs at the checked-out ref's version)
-# This is the ref-stable bootstrap: the one-liner is the only part that has to work
-# across refs; smoke-on-box.sh handles everything else.
+#   2. fetch the requested ref and check out its FETCHED TIP (FETCH_HEAD) — NOT a
+#      bare `git checkout <ref>`, which lands the box's possibly-stale LOCAL branch
+#      (a clone whose local devel predates an upstream commit would miss files added
+#      since, e.g. scripts/smoke-on-box.sh itself → "cannot open" + no run).
+#   3. exec smoke-on-box.sh (which re-fetches + re-execs at that ref's version)
+# Ref-stable: the one-liner is the only part that has to work across refs;
+# smoke-on-box.sh handles everything else.
 # shellcheck disable=SC2089  # quoting: _ob_flags is pre-encoded for remote sh
 _bootstrap="cd /root/pfBlockerNG \
- && git fetch --quiet \
- && git checkout --quiet '$_REF_Q' \
+ && git fetch --quiet origin '$_REF_Q' \
+ && git checkout --quiet --force FETCH_HEAD \
  && exec sh scripts/smoke-on-box.sh $_ob_flags"
 
 printf 'local-smoke: leasing box (REF=%s marker=%s%s)\n' \
