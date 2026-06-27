@@ -1,0 +1,217 @@
+ADR-47 Phase 5 (FINAL) — CI collapse to dispatch + parity-guard generalization + git-env-scrub + docs
+
+FIRST LINE FOR THE IMPLEMENTER: Run /ponytail:ponytail full
+
+OBJECTIVE
+Finish the parity model: lift the duplicated leg-resolution + the per-leg helper shell out of the
+workflows into scripts/resolve-legs.sh so every per-leg job body becomes {mint RUN_ID; call shared
+scripts}; generalize scripts/parity-guard.sh to the TEST path; add the scripts/lib/git-env-scrub.sh
+chokepoint + a meta-assertion so the shared-bare-repo corruption class can never silently re-open;
+document the whole model. Behaviour-preserving (CI selects the SAME legs + produces byte-identical
+diagnostics for the same inputs) — this is an oracle phase, not red→green (except the new guard
+rules + the meta-assertion, which ARE red→green).
+
+This phase was design-pre-verified (Map→Design→Verify over the real workflows). The AMENDMENTS
+below are mandatory — one is a BLOCKING CI false-positive, one a BLOCKING secret-leak guard.
+
+READ FIRST
+- ADR.md §2 (orchestration-vs-step-logic scope), §5.3 (resolve-legs.sh + parity-guard + the
+  git-env-scrub chokepoint — AUTHORITATIVE), §6 (P5), §7.
+- RESULTS/03_Results.txt + 04_Results.txt — the existing parity-guard rules (build Rule 1-2 direct
+  calls + Rule 3 inline-`$()`-after-build-leg-token) and the run-smoke.sh/build-leg.sh contracts.
+- scripts/parity-guard.sh (today ~98 lines, build-only: PATTERN ~:47; Rule 1/2 ~:63-68; Rule 3
+  AFTER="${STRIPPED#*build-leg.sh}" ~:69-86; comment exemption ~:59-61; _vcount ~:90-98) and
+  tests/shell/parity_guard_spec.sh (fixture idiom: write YAML into $WFDIR, run the guard, assert).
+- scripts/impacted-tests.sh (already owns the changed-module→`-k` engine + the
+  PFB_IMPACTED_CHANGED_FILES test seam) — resolve-legs.sh REUSES it, never re-derives `git diff`.
+- scripts/lib/run-id.sh (the model for a sourceable lib: no top-level side effects, no set -e/traps).
+- The workflows IN FULL (line numbers approximate — re-locate): smoke.yml (the prepare job
+  "Resolve scope, legs, and -k" ~:123-188; the "Count legs + CI GUARD" ~:197-224; the AND-gate
+  ~:286-334; it DELEGATES the per-leg body to smoke-single.yml via `uses:` ~:252 — it has NO
+  image-ref/digest/scrub of its own); ui-tests.yml (prepare "Build the matrix include + the
+  nightly guard" ~:212-332 — scope ladder ~:234-243, leg jq ~:279-294, -k ~:299-311, PROJECT
+  ~:278, build_matrix ~:314-320, tier×leg cross ~:322-331, nightly guard ~:262-272; the self-
+  contained `ui` job body); smoke-single.yml (the smoke per-leg HELPERS: image-ref ~:243-272,
+  digest ~:283-306 + civm digest ~:342-368, vm-identity+redaction ~:478-526, scrub ~:630-671);
+  test.yml (the UNIT suite: `python -m pytest` ~:111 and ~:125 — this is NOT a smoke bypass, it
+  MUST stay green; see AMENDMENT A).
+- The git-touching specs: build_leg_spec.sh, parity_guard_spec.sh, run_smoke_spec.sh,
+  select_box_spec.sh, sparse_clone_ports_spec.sh (each has the inline 6-var unset in setup),
+  read_version_matrix_test_spec.sh (the OUTLIER — the unset runs INSIDE each `( )` subshell after
+  cd, ~:29-30 and ~:51-52); tests/shell/spec_helper.sh (--require'd by .shellspec → every spec).
+- CLAUDE.md — shell standards; the test-coverage mandate; the shared-bare-repo GIT_* rule.
+
+FILE-TARGET CORRECTION (design Verify): the per-leg image-ref/digest/vm-identity/scrub helpers
+live in smoke-single.yml + the ui-tests.yml `ui` job — NOT smoke.yml. smoke.yml is the orchestrator
+that delegates via `uses:`. Edit smoke-single.yml for the smoke-side body collapse.
+
+DELIVERABLES (single commit)
+
+--- scripts/resolve-legs.sh (NEW) — two families of subcommands; REUSE, never re-derive ---
+A. `resolve-legs.sh legs --test-dir <DIR> [--label marker|tier] [--base-ref origin/devel]`
+   The leg-filter shared by both prepare jobs. Reads env CI_MATRIX/EVENT_NAME/SCOPE_INPUT/
+   VERSION_INPUT/PYTEST_K_INPUT. Owns EXACTLY the three identical blocks, verbatim semantics:
+   1. SCOPE ladder: schedule→full; explicit SCOPE_INPUT; workflow_call→full; else impacted; then
+      `case impacted|full` validate. (The workflow_call→full vs bare-dispatch→impacted split is
+      LOAD-BEARING for test.yml/release.yml callers — get it wrong and they silently narrow to
+      impacted, a green coverage regression. Preserve exactly.)
+   2. THREE-WAY leg jq: version-exact `[.[]|select(.pfsense_version==$v)]` + zero-match `::error::`
+      guard; full keep-all; impacted min-CE `[.[]|select(.channel=="CE")] |
+      sort_by(.pfsense_version|split(".")|map(tonumber)) | .[0:1]` (NUMERIC sort — 2.8 < 2.10, not
+      lexical) + empty `::error::` guard. Emit the WHOLE matched entry as RAW JSON — do NOT project
+      (smoke forwards mac/freebsd_major/php_version/py_flavor/abi/image_name to smoke-single.yml;
+      ui projects itself).
+   3. -k DERIVATION: PYTEST_K_INPUT overrides; else impacted → `git fetch --no-tags --depth=200
+      origin devel:refs/remotes/origin/devel 2>/dev/null || true` then `K="$(sh
+      scripts/impacted-tests.sh "$BASE_REF" "$TEST_DIR" || true)"`; empty K → log whole-marker
+      fallback. The only deltas are `--test-dir` (tests/smoke vs tests/smoke/ui) and `--label`
+      (log noun only).
+   AMENDMENT (major — output contract): PRINT the resolved legs JSON to STDOUT ALWAYS (so ui can
+   capture `LEGS="$(resolve-legs.sh legs ...)"` and PROJECT/build_matrix/tier-cross in the SAME
+   step — you cannot read a value back out of $GITHUB_OUTPUT within the step that wrote it). Append
+   ONLY scope= and pytest_k to $GITHUB_OUTPUT (smoke consumes ci_matrix cross-step; emit it there
+   too for smoke, but the legs MUST also be on stdout). Document this in the script header.
+B. Per-leg helper subcommands (the smoke-single.yml<->ui-tests.yml duplication). Each
+   parameterizes the genuine per-workflow delta, DENY-BY-DEFAULT (secret-safe):
+   - `image-ref`: env INPUT_REF/IMAGE_NAME/VERSION(TAG)/SMOKE_IMAGE_REPO/GITHUB_REPOSITORY_OWNER →
+     REF (smoke-single.yml:258-272 == ui-tests.yml:399-413; differ only in the feeding env var).
+   - `digest <ref>`: oras login + `oras resolve` with `oras manifest fetch --descriptor|jq -r
+     .digest` fallback + `sha256:*` guard + `k=${DIGEST#sha256:}` (identical; reused for civm).
+   - `exact-image-name <ref>`: the 4×-repeated `%@*`/`##*/`/`%%:*` strip.
+   - `vm-identity [--civm-mac <MAC>]`: emit RESOLVED_VM_MAC/RESOLVED_VM_SMBIOS_UUID/RESOLVED_REDACT
+     + the per-MAC `::add-mask::` loop. AMENDMENT (BLOCKING secret-leak): the civm CLIENT_MAC fold
+     is smoke-ONLY (smoke-single.yml:498-525); ui has no civm. `--civm-mac` defaults EMPTY → ui can
+     NEVER resolve/redact a civm MAC and smoke can NEVER drop civm redaction. Deny-by-default.
+   - `scrub --root "<dirs>" [--keep <pat>]`: the `esc()` one-`-e`-per-BRE-metachar escaper +
+     `redact.sed` (`s#…#REDACTED#gI`) + `sed -i -f` over vm*.log/text. AMENDMENT (BLOCKING
+     data-loss): smoke scrubs `smoke-diag`; ui scrubs `smoke-diag test-results` AND keeps
+     test-results/ui-screenshots (drops only console screen-*.png/.ppm for non-CE). Parameterize
+     --root + --keep so the UI Playwright shots are NEVER deleted and test-results IS scrubbed.
+     The esc() copy MUST stay in lock-step with helpers.py `_sed_escape_literal` (note the mirror).
+   RESOLVED_REDACT empty (CE leg) → scrub is a strict no-op → CE diagnostics byte-identical.
+
+--- scripts/parity-guard.sh (EXTEND to the test path; reuse the Rule-3 machinery) ---
+Add two rules next to Rules 1-3 (same mktemp accumulator, comment exemption, _vcount):
+- Rule 4 (direct smoke-pytest bypass): AMENDMENT (BLOCKING false-positive) — flag a `python -m
+  pytest` / `python3 -m pytest` line ONLY when it ALSO carries a `tests/smoke` (or
+  `tests/smoke/ui`) path token on the same line. The UNIT suite (test.yml `python -m pytest` with
+  NO path — it relies on pyproject testpaths) MUST stay green; the smoke runner is run-smoke.sh.
+  NEVER match the bare substring `pytest` (the workflows are full of `pytest_marker:`/`pytest_k:`
+  inputs + `-m "${PYTEST_MARKER}"`). Message: `direct smoke pytest call; use run-smoke.sh instead`.
+- Rule 5 (inline-derived run-smoke.sh arg — mirrors Rule 3): on a `run-smoke.sh` line,
+  `AFTER="${STRIPPED#*run-smoke.sh}"`; flag `*'$('*|*'`'*`. Message: `inline-derived arg to
+  run-smoke.sh; derive it in a prior step/env, not in the call`.
+ALLOWED (must stay green): the P4 blessed form — `RUN_ID="$(sh scripts/select-box.sh --print-id)"`
+on a PRIOR line; `set -- --paths tests/smoke -m "${PYTEST_MARKER}" --timeout 30; [ -n "$PYTEST_K" ]
+&& set -- "$@" -k "$PYTEST_K"; sh scripts/run-smoke.sh "$@"` (the `$(` is on the select-box line,
+no run-smoke token; the run-smoke line has no `$(` after the token); resolve-legs.sh calls.
+PATTERN: add `python3\{0,1\} -m pytest` (path-qualified in the case arm) + `run-smoke\.sh`.
+RESIDUAL (extend the header note): Rule 3/5 are LINE-scoped — a value derived on a prior step / via
+`env:` and passed as a bare $VAR is not provenance-tracked; and Rule 4 catches the canonical
+`python[3] -m pytest …tests/smoke…` shape only — a bare `pytest tests/smoke` / `python3.X -m
+pytest` bypass is not tracked (same line-scope limitation). Document, don't pretend closed.
+
+--- scripts/lib/git-env-scrub.sh (NEW) + the chokepoint ---
+A sourceable POSIX-sh lib (model: lib/run-id.sh; no side effects/set -e/traps). ONE function:
+  pfb_scrub_git_env() { unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_OBJECT_DIRECTORY GIT_COMMON_DIR; }
+A FUNCTION (not a bare unset at source time) is mandatory — it must run IN-CONTEXT in the caller's
+shell; a subprocess can't unset the parent's vars. Production rewire (source then call, placed
+BELOW each script's self-dir computation — AMENDMENT: the pinned `unset` lines are pre-self-dir, so
+move the source+call next to where the script resolves its own dir / sources lib/run-id.sh, still
+before any git use): build-leg.sh, smoke-on-box.sh, select-box.sh, and resolve-legs.sh all
+`. "${DIR}/lib/git-env-scrub.sh"; pfb_scrub_git_env`.
+Shellspec chokepoint: in tests/shell/spec_helper.sh source the lib once and expose
+`scrub_git_env() { pfb_scrub_git_env; }`; replace the inline `unset GIT_*` at every current site
+with a `scrub_git_env` call — in setup() for the 5 standard specs, and INSIDE each `( )` subshell
+after its cd for read_version_matrix_test_spec.sh (the outlier — a top-level BeforeEach would not
+reach the forks; the sourced function does).
+META-ASSERTION (the "stops being a must-remember" gate — home it as a dedicated check, e.g.
+scripts/git-env-scrub-guard.sh + spec, wired into the same lint slot; keep parity-guard.sh's scope
+workflow-YAML-only): two mechanical clauses — (1) NO raw inline `unset GIT_DIR` anywhere under
+tests/shell/ or scripts/ EXCEPT scripts/lib/git-env-scrub.sh (this is the clause that kills the
+must-remember; `grep 'unset GIT_DIR'` catches both single-line and continuation forms); (2)
+AMENDMENT — make a bare `git ` command the PRIMARY trigger: any spec whose text runs `git ` must
+call `scrub_git_env` (the script-name allowlist — sparse-clone-ports.sh/build-leg.sh/… — is a
+best-effort SECONDARY; note that invoked production scripts self-scrub, so the allowlist gap is
+non-load-bearing).
+
+--- docs (part of THIS code PR — P5 touches scripts/+CI → full worktree + /pr-merge-flow) ---
+- docs/misc/architecture-notes.md — extend "Selective dispatch": resolution is now ONE shared
+  scripts/resolve-legs.sh (called by both prepare jobs, still delegating -k to impacted-tests.sh).
+  Add "CI as parallel dispatch (ADR-47)": workflows are thin matrix/dispatch wrappers; each per-leg
+  body is {mint RUN_ID via select-box.sh --print-id; call resolve-legs image-ref/digest/vm-identity/
+  scrub + build-leg.sh + run-smoke.sh}; the one legitimate divergence is GitHub-only orchestration.
+  Document the parity-guard (build Rules 1-3 + test Rules 4-5) + the line-scope residual, and the
+  git-env-scrub chokepoint + meta-assertion. Cross-link the ADR.
+- docs/misc/local-smoke-debian.md — short note: the leg-resolution/`-k` (resolve-legs.sh +
+  impacted-tests.sh) and the canonical pytest argv (run-smoke.sh) are the SAME scripts CI runs.
+- README.md — add resolve-legs.sh / parity-guard.sh / lib/git-env-scrub.sh to the scripts
+  inventory; note the workflows are dispatch wrappers + the parity-guard is a gate; fix any wording
+  implying inline jq leg-selection lives in the workflows.
+
+REWIRE (delete duplication; keep orchestration)
+- smoke.yml prepare: replace the inline "Resolve scope, legs, and -k" body with `sh
+  scripts/resolve-legs.sh legs --test-dir tests/smoke --label marker`. KEEP the
+  `pytest_marker=${MARKER_INPUT:-smoke}` emit, the "Count legs + ci==true CI GUARD" step, the
+  AND-gate (they read the emitted ci_matrix).
+- ui-tests.yml prepare: capture `LEGS="$(sh scripts/resolve-legs.sh legs --test-dir tests/smoke/ui
+  --label tier)"`; KEEP the tier-set/DEFAULT_SCHEDULE_TIERS, the nightly no-commit guard, the
+  PROJECT projection, build_matrix, and the tier×leg cross (they consume LEGS in-step). Append
+  scope/pytest_k from the script's GITHUB_OUTPUT.
+- smoke-single.yml body: image-ref→`resolve-legs.sh image-ref`; digest (+civm digest)→`resolve-legs
+  .sh digest "$REF"`; vm-identity→`resolve-legs.sh vm-identity --civm-mac "$CLIENT_MAC"`; scrub→
+  `resolve-legs.sh scrub --root smoke-diag`.
+- ui-tests.yml `ui` body: image-ref→image-ref; digest→digest; vm-identity→`vm-identity` (no
+  --civm-mac); scrub→`resolve-legs.sh scrub --root "smoke-diag test-results" --keep ui-screenshots`.
+- Delete the inline compose/jq/oras/sed/esc() blocks. What survives in YAML = checkout, host-tool
+  install, oras setup, cache, artifact up/down, the if:/matrix wiring, and the already-collapsed
+  RUN step (P4).
+
+CONSTRAINTS
+- POSIX sh; shellcheck clean; quote all expansions. Behaviour-preserving (oracle phase) EXCEPT the
+  new guard rules + meta-assertion (red→green). Secret-handling is deny-by-default (civm redaction
+  never dropped; UI screenshots never deleted) — these are trust-boundary, do NOT simplify away.
+- Do NOT regress the scope-default ladder or the leg selection (the behaviour gate proves it).
+- Every git-touching spec routes through scrub_git_env; no raw inline unset survives (clause 1).
+
+GATES (all green before the handoff)
+- tests/shell/resolve_legs_spec.sh (PR gate, the behaviour oracle): feed a fixed CI_MATRIX + every
+  input combo, assert the emitted legs EQUAL the current inline jq's pick — schedule→full, explicit
+  scope, workflow_call→full, bare-dispatch→impacted, version-exact (match + zero-match `::error::`),
+  full keep-all, impacted min-CE numeric (a 2.8/2.10 matrix picks 2.8, NOT lexical 2.10), -k
+  override, -k impacted auto (drive via the PFB_IMPACTED_CHANGED_FILES seam — no git fixture),
+  -k empty→whole-marker. Plus per-leg helper specs: image-ref string, digest+k, RESOLVED_* lines,
+  redact.sed content byte-identical to the inline output; a CE leg scrub is a strict no-op.
+- parity_guard_spec.sh extended: Rule 4 (a `python -m pytest … tests/smoke` workflow → FAIL) AND
+  the false-positive guards (test.yml's bare `python -m pytest` with NO path → PASS; a
+  `pytest_marker:` input + `-m "${PYTEST_MARKER}"` + blessed `run-smoke.sh "$@"` → PASS); Rule 5
+  (`run-smoke.sh -k "$(...)"` → FAIL; blessed form → PASS). Each new fixture RED on the current
+  3-token guard, GREEN after.
+- the git-env-scrub lib spec (set all 6 vars → call → all unset) + the meta-assertion red→green (a
+  fixture spec running `git ` without scrub_git_env → guard non-zero; with it → pass).
+- shellcheck on every new/changed shell; shellspec (full suite) green, no regressions; ruff +
+  markdownlint clean; actionlint on the rewired workflows (only the pre-existing SC2129×2 + `if:
+  false` remain — do NOT conflate with P5); parity-guard scan → 0 violations on ALL workflows
+  (incl. test.yml staying clean — the blocking amendment).
+- LIVE (boxes up, if provisioned): a dispatch of smoke.yml/ui-tests.yml `scope=impacted` should
+  select the same min-CE leg as before; if a token/key isn't available, this rides the P4 live item.
+
+EXPECTED RESULT
+No leg-resolution or per-leg helper shell remains inline in the workflows; both prepare jobs call
+resolve-legs.sh; each per-leg body is {mint RUN_ID; call shared scripts}; the parity-guard fails CI
+if build OR test step logic (incl. inline arg derivation) creeps back, while test.yml's unit runner
+stays green; no spec can re-open the shared-ref corruption (no raw unset survives + the
+meta-assertion). The model is documented. ADR-47 is fully implemented.
+
+COMMIT
+adr-47: collapse CI to dispatch — resolve-legs.sh, test-path parity-guard, git-env-scrub (P5)
+
+HANDOFF (write 05_Results.txt)
+Deliverables; gate results (the behaviour-oracle leg-selection equivalences; both red→green for the
+new guard rules + the meta-assertion; the secret-leak parameterization proven — civm redaction
+preserved, UI screenshots kept); the resolve-legs.sh subcommand contracts as shipped (incl. the
+stdout-legs output contract); the parity-guard Rule 4/5 scoping + the documented residual; the
+git-env-scrub chokepoint + meta-assertion home; any out-of-CI live item left (the P4 2-box smoke
+provisioning). State that ADR-47 is fully implemented and ready to land as ONE PR (P1 already on
+devel via #591; P2-P5 on this branch). End with: `RESUME: branch=adr/47-local-ci-execution-parity,
+next-phase=done`.
