@@ -487,7 +487,7 @@ jobs:
           # identity" step — the CE pin for a CE image (byte-identical to a bare
           # dispatch), the SMOKE_PLUS_* secrets for a Plus image. SMOKE_REDACT_VALUES
           # is the (masked) Plus identity the diagnostics scrub value-redacts; EMPTY
-          # for CE -> the scrub is a strict no-op (CE bundle unchanged).
+          # for CE when no civm MAC secret is set (the civm MAC is redacted on CE too).
           SMOKE_VM_MAC: ${{ env.RESOLVED_VM_MAC }}
           SMOKE_VM_SMBIOS_UUID: ${{ env.RESOLVED_VM_SMBIOS_UUID }}
           SMOKE_REDACT_VALUES: ${{ env.RESOLVED_REDACT }}
@@ -520,7 +520,7 @@ jobs:
           # (same pass as the diagnostics bundle) before diffing, so the job log
           # carries no secrets. SMOKE_REDACT_VALUES mirrors the diagnostics-bundle
           # value-redaction (Plus MAC/uuid) — SMOKE_REDACT_VALUES is already exported
-          # above for this step; CE legs: empty -> strict no-op.
+          # above for this step; CE legs: empty only when no civm MAC secret is set.
           SMOKE_STATE_DIFF: "1"
           # Match the baked image (RESULTS/02); harmless if unset.
           SMOKE_DNSBL_VIP4: ${{ secrets.SMOKE_DNSBL_VIP4 || vars.SMOKE_DNSBL_VIP4 }}

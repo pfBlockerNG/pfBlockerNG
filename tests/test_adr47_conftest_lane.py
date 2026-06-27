@@ -4,7 +4,8 @@ Pins the TOCTOU-fix changes made to tests/smoke/conftest.py:
   1. _validate_lane ceiling: 12340 (LAN socket, new highest base) → max lane 5319.
   2. DEFAULT_LAN_SOCKET_PORT: deterministic, lane-strided from 12340.
   3. DIAG_DIR: empty PFB_DIAG_DIR falls back to "smoke-diag" (not Path("")).
-  4. _validate_lane reads SMOKE_LAN_SOCKET_HOSTPORT: ceiling shifts with the base.
+  4. _validate_lane reads SMOKE_LAN_SOCKET_PORT: ceiling shifts with the base.
+  5. Cross-port disjointness: the five port series share no host port across 33 lanes.
 
 RED→GREEN evidence:
   - Before the ceiling change (old 8080-based ceiling 5745): asserting lane 5320 raises
@@ -13,8 +14,10 @@ RED→GREEN evidence:
   - Before DEFAULT_LAN_SOCKET_PORT was added: the module has no such name → test FAILS
     (AttributeError). After: name exists and equals 12340 at lane 0 → PASSES.
   - Before DIAG_DIR fix: Path("") (cwd) when PFB_DIAG_DIR="". After: Path("smoke-diag").
-  - Before _validate_lane used hardcoded 12340: overriding SMOKE_LAN_SOCKET_HOSTPORT had
+  - Before _validate_lane used hardcoded 12340: overriding SMOKE_LAN_SOCKET_PORT had
     no effect on the ceiling → test FAILS. After: ceiling tracks the override → PASSES.
+  - Cross-port: adding a colliding base (e.g. 2222+1) drops set size below 5*33 → FAILS.
+    All five real bases are disjoint → PASSES.
 
 Run: python -m pytest tests/test_adr47_conftest_lane.py -v
 """
@@ -138,18 +141,18 @@ class TestValidateLaneCeiling:
 
 
 class TestValidateLaneOverriddenBase:
-    """_validate_lane reads SMOKE_LAN_SOCKET_HOSTPORT — overriding it shifts the ceiling.
+    """_validate_lane reads SMOKE_LAN_SOCKET_PORT — overriding it shifts the ceiling.
 
     RED→GREEN: before the fix, _validate_lane had 12340 hardcoded.  Overriding
-    SMOKE_LAN_SOCKET_HOSTPORT had no effect → lane 4554 would pass (wrong).
+    SMOKE_LAN_SOCKET_PORT had no effect → lane 4554 would pass (wrong).
     After: the ceiling re-derives from the overridden base (20000), so 4554 → ValueError.
     """
 
     def test_higher_base_lowers_ceiling(self) -> None:
-        """With SMOKE_LAN_SOCKET_HOSTPORT=20000 the ceiling drops to 4553."""
+        """With SMOKE_LAN_SOCKET_PORT=20000 the ceiling drops to 4553."""
         mod = _load_conftest(lane=0)
-        old = os.environ.get("SMOKE_LAN_SOCKET_HOSTPORT")
-        os.environ["SMOKE_LAN_SOCKET_HOSTPORT"] = "20000"
+        old = os.environ.get("SMOKE_LAN_SOCKET_PORT")
+        os.environ["SMOKE_LAN_SOCKET_PORT"] = "20000"
         try:
             # (65535 - 20000) // 10 = 4553 — highest valid lane at base 20000.
             mod._validate_lane(4553)  # must not raise
@@ -157,9 +160,9 @@ class TestValidateLaneOverriddenBase:
                 mod._validate_lane(4554)
         finally:
             if old is None:
-                os.environ.pop("SMOKE_LAN_SOCKET_HOSTPORT", None)
+                os.environ.pop("SMOKE_LAN_SOCKET_PORT", None)
             else:
-                os.environ["SMOKE_LAN_SOCKET_HOSTPORT"] = old
+                os.environ["SMOKE_LAN_SOCKET_PORT"] = old
 
 
 # ---------------------------------------------------------------------------
@@ -240,3 +243,37 @@ class TestDiagDir:
         """PFB_DIAG_DIR=/some/path → Path('/some/path')."""
         mod = _load_conftest(diag_dir="/some/diags")
         assert str(mod.DIAG_DIR) == "/some/diags", f"expected '/some/diags'; got {mod.DIAG_DIR!r}"
+
+
+# ---------------------------------------------------------------------------
+# 4 — Cross-port disjointness across all five bases
+# ---------------------------------------------------------------------------
+
+
+class TestCrossPortDisjointness:
+    """Union of {SSH, WEB, DNS, CLIENT_SSH, LAN} port series over lanes 0..32
+    has exactly 5*33 = 165 distinct values — no cross-base collision, incl. the
+    new LAN base 12340.
+    """
+
+    def test_no_collision_32_lanes(self) -> None:
+        """All five port series are disjoint across 33 lanes (0..32).
+
+        Proves no cross-base collision exists for the new LAN base 12340 alongside
+        the historical bases 2222 / 8080 / 5353 / 2223.
+        RED→GREEN evidence: replacing a base with one that collides (e.g. 2222+1=2223
+        already in the set) drops the unique count below 5*33; the assertion catches it.
+        All five real bases are confirmed disjoint → PASSES.
+        """
+        mod = _load_conftest(lane=0)
+        bases = (2222, 8080, 5353, 2223, 12340)  # SSH, WEB, DNS, CLIENT_SSH, LAN
+        n_lanes = 33
+        all_ports: set[int] = set()
+        for base in bases:
+            for lane in range(n_lanes):
+                all_ports.add(mod._lane_port(base, lane))
+        expected = len(bases) * n_lanes
+        assert len(all_ports) == expected, (
+            f"expected {expected} distinct ports across {len(bases)} bases × {n_lanes} lanes;"
+            f" got {len(all_ports)} — cross-base port collision detected"
+        )

@@ -474,4 +474,65 @@ EOF
       The stderr should equal ''
     End
   End
+
+  # ── Rule 3 branch: multi-line backslash-continuation (PG-2 scope fix) ───────
+  # write_inline_derived_continuation: build-leg.sh token on line N (ending with \)
+  # and the $(...) arg on line N+1 — only caught after the awk pre-join fix (PG-2).
+
+  write_inline_derived_continuation() {
+    cat > "${WFDIR}/inline-derived-cont.yml" << 'EOF'
+name: Inline Derived Continuation
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build with continuation-line inline derivation (violation)
+        run: |
+          PKG="$(sh scripts/build-leg.sh \
+            --pkgversion "$(sh scripts/release-version.sh devel)")"
+          echo "$PKG"
+EOF
+  }
+
+  Describe 'Rule 3 continuation: $(...) on a continuation line of build-leg.sh is flagged'
+    inline_cont_run() {
+      write_inline_derived_continuation
+      sh "$GUARD" "$WFDIR" 2>&1
+    }
+
+    It 'exits 1 — continuation-line inline derivation is a Rule 3 violation'
+      # Scenario: build-leg.sh token is on line N ending with \; the $(...) arg on N+1.
+      # Given: scripts/build-leg.sh \ on one line, --pkgversion "$(...)" on the next.
+      # When: parity-guard scans it (with awk pre-join active).
+      # Then: exit 1 — the joined logical command exposes the $( after build-leg.sh.
+      #   RED on a guard with line-scoped Rules 3/5; GREEN after the awk pre-join fix.
+      When run inline_cont_run
+      The status should be failure
+      The output should include 'inline-derived-cont.yml'
+      The output should include 'inline-derived arg'
+    End
+  End
+
+  # ── Real-tree integration (PFB_ROOT sanity gate) ───────────────────────────
+  # Precedent: git_env_scrub_spec.sh runs sh "$GUARD" "$PFB_ROOT" against the
+  # actual repo tree — same pattern here for parity-guard.
+
+  Describe 'real .github/workflows (PFB_ROOT integration sanity)'
+    real_tree_run() {
+      scrub_git_env
+      sh "$GUARD" "${PFB_ROOT}/.github/workflows"
+    }
+
+    It 'exits 0 — the real .github/workflows contains no parity violations'
+      # Scenario: parity-guard is run against the actual committed workflow YAML.
+      # Given: $PFB_ROOT/.github/workflows as the scan directory.
+      # When: parity-guard scans every *.yml file.
+      # Then: exit 0 — no build/test-parity violations in the live workflows.
+      When run real_tree_run
+      The status should be success
+      The stderr should equal ''
+    End
+  End
 End

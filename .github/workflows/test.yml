@@ -233,6 +233,10 @@ jobs:
         # Config in .shellspec (--shell sh). Functional gate for the shell scripts.
         run: shellspec
 
+      - name: Run parity-guard on .github/workflows
+        # PG-1: gate that no workflow bypasses the shared build/smoke scripts.
+        run: sh scripts/parity-guard.sh .github/workflows
+
       - name: Restore cached kcov binary
         # kcov was removed from ubuntu-latest's apt repos; build from source and
         # cache the install dir so subsequent runs skip the compile step.

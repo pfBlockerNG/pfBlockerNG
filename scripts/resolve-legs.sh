@@ -34,7 +34,7 @@
 #               --root: space-separated dirs to scrub (default: smoke-diag).
 #               --keep: path glob pattern to preserve from text-scrub (e.g. ui-screenshots).
 #
-# All subcommands: no top-level set -e; each function sets -eu internally.
+# Top-level set -eu; subcommands run as functions under it.
 # POSIX sh; shellcheck clean; no bash-isms.
 
 set -eu
@@ -259,10 +259,6 @@ _rl_scrub() {
     case "$IMG_NAME" in
         pfsense-ce) : ;;
         *)
-            _find_screen_args=". -type f ( -name screen-*.png -o -name screen-*.ppm )"
-            if [ -n "${_keep:-}" ]; then
-                _find_screen_args="${_find_screen_args} -not -path */${_keep}/*"
-            fi
             # shellcheck disable=SC2086
             find . -type f \( -name 'screen-*.png' -o -name 'screen-*.ppm' \) \
                 ${_keep:+-not -path "*/${_keep}/*"} -delete 2>/dev/null || true

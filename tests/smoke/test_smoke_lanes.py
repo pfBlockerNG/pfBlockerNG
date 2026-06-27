@@ -91,9 +91,9 @@ def test_lane_port_adjacent_bases_no_collision_across_lanes() -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize("lane", [0, 1, 7, 5745])
+@pytest.mark.parametrize("lane", [0, 1, 7, 5319])
 def test_validate_lane_accepts_in_range(lane: int) -> None:
-    # 0 (default), a couple of real lanes, and the max that keeps web 8080 <= 65535.
+    # 0 (default), a couple of real lanes, and the max that keeps LAN socket 12340 <= 65535.
     _validate_lane(lane)  # must not raise
 
 
@@ -104,8 +104,8 @@ def test_validate_lane_rejects_negative(lane: int) -> None:
         _validate_lane(lane)
 
 
-@pytest.mark.parametrize("lane", [5746, 99999])
+@pytest.mark.parametrize("lane", [5320, 99999])
 def test_validate_lane_rejects_port_overflow(lane: int) -> None:
-    # A lane that pushes web 8080 past 65535 yields an invalid host-forward port — reject it.
+    # A lane that pushes LAN socket 12340 past 65535 yields an invalid host-forward port — reject it.
     with pytest.raises(ValueError, match="SMOKE_LANE"):
         _validate_lane(lane)

@@ -5,9 +5,11 @@
 #   select-box.sh [--release <RUN_ID>] [--print-id] [-- <cmd ...>]
 #
 # MODES:
-#   default        Acquire a lease, mint RUN_ID, emit eval-able KEY=value to stdout.
-#                  If -- <cmd> is given, run the command on the leased box over ssh,
-#                  then trap-release on EXIT/INT/TERM.
+#   default        Acquire a lease, mint RUN_ID, emit eval-able KEY=value to stdout,
+#                  then release on EXIT/INT/TERM/HUP.  Without `-- <cmd>`, the lease
+#                  is released when the script itself exits — so eval "$(select-box.sh)"
+#                  captures vars for an already-released lease.  Only meaningful with
+#                  `-- <cmd>`, which holds the lease for the duration of the command.
 #   --print-id     Emit ci-<GITHUB_RUN_ID>-<GITHUB_RUN_ATTEMPT>-<LEG> and exit.
 #                  No lease, no ssh. (CI: the ephemeral runner IS the isolated box.)
 #   --release RID  Find the box holding lease RID, verify owner, release. Idempotent.
@@ -305,7 +307,7 @@ _sb_print_holders() {
 }
 
 # _sb_release_trap
-# EXIT/INT/TERM trap: release the lease if we hold one.
+# EXIT/INT/TERM/HUP trap: release the lease if we hold one.
 _sb_release_trap() {
     [ -z "${_SB_LEASED_BOX}" ] && return 0
     _sb_release "${RUN_ID}"
@@ -367,9 +369,9 @@ if [ -z "${PFB_BOXES:-}" ]; then
     exit 1
 fi
 
-# Arm the EXIT/INT/TERM trap now. _SB_LEASED_BOX is empty until we successfully
+# Arm the EXIT/INT/TERM/HUP trap now. _SB_LEASED_BOX is empty until we successfully
 # lease, so the trap is a no-op until then.
-trap '_sb_release_trap' EXIT INT TERM
+trap '_sb_release_trap' EXIT INT TERM HUP
 
 # Pre-mint a session ID for reclaim-dir uniqueness (box-agnostic, unique per run).
 _SB_SID="$(od -An -tx1 -N4 /dev/urandom | tr -d ' \t\n')"
@@ -379,6 +381,10 @@ _SB_SID="$(od -An -tx1 -N4 /dev/urandom | tr -d ' \t\n')"
 # shellcheck disable=SC2086
 set -- ${PFB_BOXES}
 _SB_POOL_SIZE="$#"
+if [ "$_SB_POOL_SIZE" -eq 0 ]; then
+    printf 'select-box: PFB_BOXES contained no ssh targets\n' >&2
+    exit 1
+fi
 
 _SB_RETRY=0
 while [ "$_SB_RETRY" -le "$PFB_MAX_RETRIES" ]; do
