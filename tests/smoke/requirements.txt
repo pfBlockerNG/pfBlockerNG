@@ -25,7 +25,8 @@ pytest-timeout==2.3.1
 # (tests/smoke/ui/webui.py) drives the CSRF form login + page GETs over HTTP.
 # Imported lazily (inside WebUI), so default collection -- which --ignore's
 # tests/smoke -- never needs it.
-requests==2.32.3
+# >=2.33.0 fixes CVE-2026-25645 (predictable tmp filenames in extract_zipped_paths).
+requests==2.34.2
 # ADR-14 Tier-B (browser): headless Chromium drives the JS-only UX
 # (tests/smoke/ui/test_browser.py) + captures per-page screenshot artifacts.
 # Imported lazily via pytest.importorskip (conftest + the test module), so a host
