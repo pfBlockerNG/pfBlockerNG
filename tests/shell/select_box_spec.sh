@@ -198,6 +198,10 @@ SSHEOF
     mkdir -p "${LEASE_DIR}/${_t23}.lock"
     printf 'run-stale-expired host1 %s\n' "$_old" \
       > "${LEASE_DIR}/${_t23}.lock/owner"
+    # Narrow to single-box pool: forces select-box.sh to reclaim box 23 rather than
+    # bypassing it by leasing the free box 24 from the 2-box BeforeEach pool.
+    PFB_BOXES="root@10.0.0.23"
+    export PFB_BOXES
     _out="$(sh "$SCRIPT" 2>/dev/null)"; _rc=$?
     _rid="$(printf '%s' "$_out" | grep '^RUN_ID=' | cut -d= -f2)"
     printf 'rc=%d\n' "$_rc"
@@ -226,8 +230,10 @@ SSHEOF
     mkdir -p "${LEASE_DIR}/${_t23}.lock"
     printf '%s\n' "$_old" > "${LEASE_DIR}/${_t23}.lock/.created"
     # Deliberately no owner file (simulates crash between mkdir and publish).
+    # Narrow to single-box pool: forces reclaim of box 23 rather than leasing box 24.
+    PFB_BOXES="root@10.0.0.23"
     PFB_OWNER_GRACE=60
-    export PFB_OWNER_GRACE
+    export PFB_BOXES PFB_OWNER_GRACE
     _out="$(sh "$SCRIPT" 2>/dev/null)"; _rc=$?
     printf 'rc=%d\n' "$_rc"
     printf 'got-box=%s\n' "$(printf '%s' "$_out" | grep -c '^PFB_BOX=')"

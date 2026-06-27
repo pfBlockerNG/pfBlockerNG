@@ -20,8 +20,9 @@
 #
 # Allowed: YAML comment lines (first non-whitespace char is #).
 # Allowed: build-leg.sh / run-smoke.sh calls whose args are GitHub ${{ ... }}
-#   expressions or env-sourced $VAR / prior-step captures. Rule 3/5 are
-#   LINE-scoped — a $( on a PRIOR line is not tracked.
+#   expressions or env-sourced $VAR / prior-step captures.
+# Rule 3/5 are LOGICAL-COMMAND-scoped: backslash-continuation lines are joined
+#   before checking, so a $( on a continuation line is detected.
 #
 # Usage:  sh scripts/parity-guard.sh [DIR]
 #   DIR defaults to .github/workflows
@@ -50,8 +51,11 @@ PATTERN='build-pkg-portable\.py\|sparse-clone-ports\.sh\|build-leg\.sh\|python3\
 # Scan every YAML file in DIR (sorted for deterministic output).
 find "$WORKFLOWS" \( -name '*.yml' -o -name '*.yaml' \) -print | LC_ALL=C sort \
 | while IFS= read -r YAML_FILE; do
-    # grep -n: "LINENUM:content" for each match; || true so a no-match file doesn't abort.
-    grep -n "$PATTERN" "$YAML_FILE" 2>/dev/null | while IFS= read -r MATCH; do
+    # Pre-join backslash-continuation lines so a $(...) on a continuation line
+    # of build-leg.sh / run-smoke.sh is detected (Rules 3/5 logical-command-scoped).
+    # awk outputs STARTLINE:joined_content; the existing LINENUM/CONTENT parsing is unchanged.
+    awk 'BEGIN{buf="";start=0}{sub(/\r$/,"");if(start==0)start=NR;if(/\\$/){sub(/\\$/," ");buf=buf $0}else{print start":"buf $0;buf="";start=0}}END{if(buf!="")print start":"buf}' "$YAML_FILE" \
+        | grep "$PATTERN" 2>/dev/null | while IFS= read -r MATCH; do
         LINENUM="${MATCH%%:*}"
         CONTENT="${MATCH#*:}"
         # Strip leading whitespace to detect YAML comment lines.

@@ -87,10 +87,10 @@ def _validate_lane(lane: int) -> None:
     A negative lane derives lower-numbered ports (reusing another lane's range), and a lane
     large enough to push the highest-based host-forward port past 65535 yields an invalid
     port that fails the boot confusingly.  The effective base is read from
-    SMOKE_LAN_SOCKET_HOSTPORT (default 12340) so the ceiling tracks the overridden base.
+    SMOKE_LAN_SOCKET_PORT (default 12340) so the ceiling tracks the overridden base.
     Upper bound: base + lane*10 <= 65535.
     """
-    base = int(os.environ.get("SMOKE_LAN_SOCKET_HOSTPORT", "12340"))
+    base = int(os.environ.get("SMOKE_LAN_SOCKET_PORT", "12340"))
     max_lane = (65535 - base) // 10
     if lane < 0 or _lane_port(base, lane) > 65535:
         raise ValueError(f"SMOKE_LANE out of range: {lane} (must be 0..{max_lane})")
@@ -137,7 +137,7 @@ DEFAULT_CLIENT_SSH_PORT = _lane_port(int(os.environ.get("SMOKE_CLIENT_SSH_HOSTPO
 # boot_vm.sh's historical default 12340, eliminating the bind(:0) TOCTOU race — the
 # port is now DETERMINISTIC per lane (lane 0 → 12340, lane 1 → 12350, …).
 # The pkill + lane stride on the leased box frees the port before boot.
-DEFAULT_LAN_SOCKET_PORT = _lane_port(int(os.environ.get("SMOKE_LAN_SOCKET_HOSTPORT", "12340")), _LANE)
+DEFAULT_LAN_SOCKET_PORT = _lane_port(int(os.environ.get("SMOKE_LAN_SOCKET_PORT", "12340")), _LANE)
 
 # Write the lane-resolved ports back so boot_vm.sh's hostfwd reads the same values SmokeVM uses.
 os.environ["SMOKE_SSH_HOSTPORT"] = str(DEFAULT_SSH_PORT)
