@@ -3,10 +3,12 @@
 #
 # Two mechanical clauses — both must pass:
 #
-#   1. No raw `unset GIT_DIR` outside the lib.
-#      Any bare `unset GIT_DIR` in scripts/ or tests/shell/ that is NOT in the
-#      canonical lib (scripts/lib/git-env-scrub.sh) is a violation: the class
-#      must be suppressed at the lib chokepoint, not scattered.
+#   1. No raw `unset GIT_*` outside the lib.
+#      Any bare `unset` of the six scrubbed vars (GIT_DIR, GIT_INDEX_FILE,
+#      GIT_WORK_TREE, GIT_PREFIX, GIT_OBJECT_DIRECTORY, GIT_COMMON_DIR) in
+#      scripts/ or tests/shell/ that is NOT in the canonical lib
+#      (scripts/lib/git-env-scrub.sh) is a violation: the class must be
+#      suppressed at the lib chokepoint, not scattered.
 #
 #   2. Any spec that shells out to `git` must call scrub_git_env.
 #      A spec file (*_spec.sh) that contains the token `git ` (bare git command)
@@ -36,16 +38,18 @@ trap 'rm -f "$TMPF"' EXIT INT TERM
 
 LIB="${ROOT}/scripts/lib/git-env-scrub.sh"
 
-# ── Clause 1: no raw `unset GIT_DIR` outside the lib ────────────────────── #
-# PRIMARY trigger: look for bare `unset GIT_DIR` anywhere in scripts/ and
-# tests/shell/ (the two zones that need this discipline), then exclude:
+# ── Clause 1: no raw `unset GIT_*` outside the lib ──────────────────────── #
+# PRIMARY trigger: look for any bare `unset <VAR>` of the six scrubbed vars
+# anywhere in scripts/ and tests/shell/ (the two zones that need this discipline),
+# then exclude:
 #   - the canonical lib itself (pfb_scrub_git_env lives there — that is the point)
-#   - this guard script (its grep pattern + comments necessarily contain the string)
-#   - the git_env_scrub_spec.sh (it writes the string into TEMP files to test the guard;
-#     the in-file mentions are string literals, not production unset calls)
+#   - this guard script (its grep pattern + comments necessarily contain the strings)
+#   - the git_env_scrub_spec.sh (it writes the strings into TEMP files to test the
+#     guard; the in-file mentions are string literals, not production unset calls)
 GUARD_SELF="${ROOT}/scripts/git-env-scrub-guard.sh"
 SCRUB_SPEC="${ROOT}/tests/shell/git_env_scrub_spec.sh"
-grep -rn --include='*.sh' 'unset GIT_DIR' \
+grep -Ern --include='*.sh' \
+    'unset (GIT_DIR|GIT_INDEX_FILE|GIT_WORK_TREE|GIT_PREFIX|GIT_OBJECT_DIRECTORY|GIT_COMMON_DIR)' \
     "${ROOT}/tests/shell" "${ROOT}/scripts" 2>/dev/null \
     | grep -v "${LIB}" \
     | grep -v "${GUARD_SELF}" \

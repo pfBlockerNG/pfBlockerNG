@@ -85,12 +85,15 @@ def _validate_lane(lane: int) -> None:
     """Reject a SMOKE_LANE that would break port isolation — fail fast, not silently.
 
     A negative lane derives lower-numbered ports (reusing another lane's range), and a lane
-    large enough to push the highest-based host-forward port (LAN socket, 12340) past 65535
-    yields an invalid port that fails the boot confusingly.
-    Upper bound: 12340 + lane*10 <= 65535 → 5319.
+    large enough to push the highest-based host-forward port past 65535 yields an invalid
+    port that fails the boot confusingly.  The effective base is read from
+    SMOKE_LAN_SOCKET_HOSTPORT (default 12340) so the ceiling tracks the overridden base.
+    Upper bound: base + lane*10 <= 65535.
     """
-    if lane < 0 or _lane_port(12340, lane) > 65535:
-        raise ValueError(f"SMOKE_LANE out of range: {lane} (must be 0..5319)")
+    base = int(os.environ.get("SMOKE_LAN_SOCKET_HOSTPORT", "12340"))
+    max_lane = (65535 - base) // 10
+    if lane < 0 or _lane_port(base, lane) > 65535:
+        raise ValueError(f"SMOKE_LANE out of range: {lane} (must be 0..{max_lane})")
 
 
 _validate_lane(_LANE)

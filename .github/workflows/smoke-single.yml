@@ -320,6 +320,8 @@ jobs:
           SMOKE_IMAGE_REPO: ${{ vars.SMOKE_IMAGE_REPO }}
           CLIENT_NAME: ${{ vars.SMOKE_CLIENT_IMAGE_NAME }}
           CLIENT_TAG: ${{ vars.SMOKE_CLIENT_IMAGE_TAG }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -eu
           # ADR-47 P5: compose the civm ref from env vars (map CLIENT_* -> INPUT_*),

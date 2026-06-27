@@ -34,6 +34,7 @@ Describe 'resolve-legs.sh legs — scope + leg selection'
         # Given: schedule trigger (always full regardless of other inputs).
         # When: legs subcommand runs.
         # Then: stdout is the full 3-leg array (order preserved from matrix).
+        #       stderr carries the informational banner (scope=... legs=... -k=[...]).
         When run env \
             CI_MATRIX="$FIXTURE_MATRIX" \
             EVENT_NAME="schedule" \
@@ -42,6 +43,7 @@ Describe 'resolve-legs.sh legs — scope + leg selection'
         The output should include '"pfsense_version":"2.10"'
         The output should include '"pfsense_version":"2.8"'
         The output should include '"pfsense_version":"26.03"'
+        The error should include 'scope='
     End
 
     It 'SCOPE_INPUT=full → all 3 legs'
@@ -53,6 +55,7 @@ Describe 'resolve-legs.sh legs — scope + leg selection'
         The status should be success
         The output should include '"pfsense_version":"2.8"'
         The output should include '"pfsense_version":"26.03"'
+        The error should include 'scope='
     End
 
     It 'workflow_call → full scope → all 3 legs'
@@ -63,6 +66,7 @@ Describe 'resolve-legs.sh legs — scope + leg selection'
         The status should be success
         The output should include '"pfsense_version":"2.8"'
         The output should include '"pfsense_version":"26.03"'
+        The error should include 'scope='
     End
 
     # ── impacted scope ──────────────────────────────────────────────────────
@@ -71,6 +75,7 @@ Describe 'resolve-legs.sh legs — scope + leg selection'
         # Given: workflow_dispatch with no SCOPE_INPUT (impacted default).
         # When: legs runs the numeric-sort min-CE jq.
         # Then: only 2.8 in stdout (numeric sort: 2.8 < 2.10; lexical would give 2.10).
+        #       stderr carries the informational banner and the impacted message.
         When run env \
             CI_MATRIX="$FIXTURE_MATRIX" \
             EVENT_NAME="workflow_dispatch" \
@@ -80,6 +85,7 @@ Describe 'resolve-legs.sh legs — scope + leg selection'
         The output should include '"pfsense_version":"2.8"'
         The output should not include '"pfsense_version":"2.10"'
         The output should not include '"pfsense_version":"26.03"'
+        The error should include 'scope='
     End
 
     It 'numeric sort: 2.8 < 2.10 (not lexical 2.10 < 2.8)'
@@ -95,6 +101,7 @@ Describe 'resolve-legs.sh legs — scope + leg selection'
         The status should be success
         The output should include '"pfsense_version":"2.8"'
         The output should not include '"pfsense_version":"2.10"'
+        The error should include 'scope='
     End
 
     # ── version-exact ───────────────────────────────────────────────────────
@@ -109,6 +116,7 @@ Describe 'resolve-legs.sh legs — scope + leg selection'
         The output should include '"pfsense_version":"2.8"'
         The output should not include '"pfsense_version":"2.10"'
         The output should not include '"pfsense_version":"26.03"'
+        The error should include 'scope='
     End
 
     It 'VERSION_INPUT for a non-existent version → exit 1 with ::error::'
@@ -155,6 +163,7 @@ Describe 'resolve-legs.sh legs — -k derivation'
     BeforeEach 'setup'
 
     It 'explicit PYTEST_K_INPUT → used verbatim as -k'
+        # stdout = legs JSON; stderr = -k value + scope banner (informational).
         When run env \
             CI_MATRIX="$FIXTURE_MATRIX" \
             EVENT_NAME="workflow_dispatch" \
@@ -162,20 +171,22 @@ Describe 'resolve-legs.sh legs — -k derivation'
             PYTEST_K_INPUT="test_foo or test_bar" \
             sh "$SCRIPT" legs --test-dir tests/smoke --label marker
         The status should be success
-        The output should include '-k=[test_foo or test_bar]'
+        The output should include '"pfsense_version"'
+        The error should include '-k=[test_foo or test_bar]'
     End
 
     It 'impacted scope with PFB_IMPACTED_CHANGED_FILES seam → auto-derives -k'
         # Given: a changed test module visible via the PFB_IMPACTED_CHANGED_FILES seam.
         # When: impacted scope with no explicit PYTEST_K_INPUT.
-        # Then: the -k expression includes the module stem from the seam.
+        # Then: stdout = legs JSON; stderr = auto-derived -k expression.
         When run env \
             CI_MATRIX="$FIXTURE_MATRIX" \
             EVENT_NAME="workflow_dispatch" \
             PFB_IMPACTED_CHANGED_FILES="tests/smoke/test_dns_redirect.py" \
             sh "$SCRIPT" legs --test-dir tests/smoke --label marker
         The status should be success
-        The output should include 'test_dns_redirect'
+        The output should include '"pfsense_version"'
+        The error should include 'test_dns_redirect'
     End
 
     It 'full scope → no -k auto-derivation (whole marker runs)'
@@ -186,7 +197,8 @@ Describe 'resolve-legs.sh legs — -k derivation'
             PFB_IMPACTED_CHANGED_FILES="tests/smoke/test_dns_redirect.py" \
             sh "$SCRIPT" legs --test-dir tests/smoke --label marker
         The status should be success
-        The output should include '-k=[]'
+        The output should include '"pfsense_version"'
+        The error should include '-k=[]'
     End
 
     It 'impacted scope with no changed smoke tests → empty -k (whole marker)'
@@ -196,20 +208,22 @@ Describe 'resolve-legs.sh legs — -k derivation'
             PFB_IMPACTED_CHANGED_FILES="src/usr/local/pkg/pfblockerng/pfb_unbound.py" \
             sh "$SCRIPT" legs --test-dir tests/smoke --label marker
         The status should be success
-        The output should include '-k=[]'
+        The output should include '"pfsense_version"'
+        The error should include '-k=[]'
     End
 
     It '--test-dir filter: tests/smoke/ui does not pick up tests/smoke/test_*.py'
         # Given: a changed tests/smoke/test_foo.py (NOT in tests/smoke/ui/).
         # When: legs with --test-dir tests/smoke/ui.
-        # Then: -k is empty (the smoke test module is not a UI module).
+        # Then: stdout = legs JSON; stderr = empty -k (the smoke test is not a UI module).
         When run env \
             CI_MATRIX="$FIXTURE_MATRIX" \
             EVENT_NAME="workflow_dispatch" \
             PFB_IMPACTED_CHANGED_FILES="tests/smoke/test_dns_redirect.py" \
             sh "$SCRIPT" legs --test-dir tests/smoke/ui --label tier
         The status should be success
-        The output should include '-k=[]'
+        The output should include '"pfsense_version"'
+        The error should include '-k=[]'
     End
 
 End
