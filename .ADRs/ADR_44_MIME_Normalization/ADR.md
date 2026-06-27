@@ -1,6 +1,6 @@
 # ADR-44: Normalise MIME-type strings before the allow-list gate in pfb_filter()
 
-- **Status:** **Implemented (pending live-VM smoke fan-out)** (2026-06-26; PR #589 merged to `devel`) — all four phases landed (`pfb_mime_in_allowlist()` + `pfb_mime_normalise()` wired into the `PFB_FILTER_FILE_MIME` gate, oracle + red→green PHPUnit coverage incl. the gzip/bzip2 guard). A follow-up adds automated live-VM smoke for the reproducible behaviour (`tests/smoke/test_smoke_feeds.py`: zip/gzip/bzip2 feed decompression); the `x-zip-compressed` variant path is non-reproducible defensive code (see §1 + `RESULTS/SMOKE_CHECKLIST.md`). Flips to **Accepted** on a green CE + Plus smoke fan-out — no manual step.
+- **Status:** **Accepted** (2026-06-27) — all four phases landed (`pfb_mime_in_allowlist()` + `pfb_mime_normalise()` wired into the `PFB_FILTER_FILE_MIME` gate, oracle + red→green PHPUnit coverage incl. the gzip/bzip2 guard; PR #589 + smoke/premise-correction #590). Acceptance gate met: live-VM smoke fan-out **green on CE 2.8 and Plus 26.03** — `tests/smoke/test_smoke_feeds.py::test_{zip,gzip,bzip2}_feed_imports` ran and passed on both editions (runs 28286171043 CE / 28288562854 Plus), no manual step. The `x-zip-compressed` variant path remains non-reproducible defensive code (see §1 + `RESULTS/SMOKE_CHECKLIST.md`).
 - **Date:** 2026-06-25
 - **Branch:** `adr/44-mime-normalisation` (off `devel`) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfblockerng.inc`
 - **Target runtime:** PHP 8.3, FreeBSD / pfSense; shell via `exec()` to `/usr/bin/file`
