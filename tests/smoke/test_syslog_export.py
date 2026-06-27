@@ -66,13 +66,13 @@ IP_BLOCK_LOG = f"{PFB_LOGDIR}/ip_block.log"
 CFG_GENERAL = "installedpackages/pfblockerng/config/0"
 
 # The IP the pfBlockerNG floating Deny_Outbound rule blocks, exercised by civm.
-# It MUST sit in the pfSense WAN subnet (10.10.0.0/24, the QEMU SLIRP net) so the
+# It MUST sit in the pfSense WAN subnet (192.168.89.0/24, the QEMU SLIRP net) so the
 # forwarded SYN is routed straight out the directly-connected WAN — a non-WAN
 # TEST-NET dst depends on the SLIRP default gateway (flaky/down in CI) and never
 # traverses the WAN-out path, so the rule never matches. .9 is unused: NOT the
 # SLIRP gateway (.1), the runner/stub-DNS/mock-feed host alias (.2), or DNS (.3).
-TEST_IP_BLOCK_RANGE = "10.10.0.9/32"
-TEST_IP_BLOCK_DST = "10.10.0.9"
+TEST_IP_BLOCK_RANGE = "192.168.89.9/32"
+TEST_IP_BLOCK_DST = "192.168.89.9"
 
 # Settle budget for the tail_pfb → daemon → syslogd → file path.
 FILTERLOG_SETTLE_SECS = 5.0

@@ -27,7 +27,11 @@
 # Poll cadence: no VM answers in under ~8s, so wait out an initial grace, then
 # poll every 1s while readiness is plausible (< 75s elapsed) and every 5s after
 # that, up to the hard timeout (~3 min). A local-loopback connect that cannot
-# complete in 1s is dead, so the per-probe connect timeout is 1s.
+# complete in 1s is dead, so the per-probe CONNECT timeout is 1s — but a live
+# webConfigurator's first response can take a couple of seconds to render on a cold,
+# nested-KVM guest (where the bare-metal box answers in <1s), so the web probe
+# allows up to 2s total (--connect-timeout 1 --max-time 2). Capping total time at
+# 1s instead starves a slow-but-alive server and times out the whole gate on CI.
 #
 # The windows fit MEASURED boots, not the rule of thumb: pfSense reaches
 # web-ready in ~15s on a fast bare-metal host but ~55-60s on a nested-KVM /
@@ -114,7 +118,7 @@ while :; do
         # pfSense: readiness = the webConfigurator answering. nginx + PHP come up
         # AFTER sshd, so a live admin panel implies SSH is already usable — gate on
         # the web server alone (the meaningful "appliance ready" signal).
-        if "$CURL" -fsSL --max-time 1 -o /dev/null "http://${HOST}:${WEB_PORT}/" 2>/dev/null; then
+        if "$CURL" -fsSL --connect-timeout 1 --max-time 2 -o /dev/null "http://${HOST}:${WEB_PORT}/" 2>/dev/null; then
             echo "boot-to-ready: ${ELAPSED} seconds"
             exit 0
         fi

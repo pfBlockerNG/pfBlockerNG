@@ -4,7 +4,7 @@
 # (sanitize_ipaddr + validate_ipv4) into the pfB_<alias>_v4 table.
 # RFC 5737 documentation ranges ONLY (TEST-NET-2/3); never a real/abusable host.
 #
-# Served by mock_feeds at http://10.10.0.2:<port>/ip_plain_cidr.txt
+# Served by mock_feeds at http://192.168.89.2:<port>/ip_plain_cidr.txt
 #
 # Phase 5 asserts (pfctl_table_members(pfB_<alias>_v4)):
 #   MEMBER (must be in the table):     203.0.113.5      (the plain host)

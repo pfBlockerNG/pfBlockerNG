@@ -16,7 +16,7 @@ Both resolver modes are covered (the fixture is parametrized):
 
 * **recursive** — Unbound recurses; a catch-all ``forward-zone`` in
   ``custom_options`` redirects all queries to the stub.
-* **forwarding** — Unbound forwards to ``10.10.0.2`` (SLIRP host alias → stub).
+* **forwarding** — Unbound forwards to ``192.168.89.2`` (SLIRP host alias → stub).
 
 All heavy setup (Unbound reconfigure + pfBlockerNG reloads) lives in the fixture
 so the 30 s per-test-body cap (``smoke-single.yml: timeout_func_only``) does not bite.
@@ -72,7 +72,7 @@ def safesearch_vm(
     """Wire Unbound to the stub, inject fabricated SafeSearch CNAME rows, yield fixture.
 
     Parametrized on ``forwarding_on``.  Egress is BLOCKED for the duration so the
-    test is hermetic; the stub is reachable via the SLIRP ``10.10.0.2`` loopback path
+    test is hermetic; the stub is reachable via the SLIRP ``192.168.89.2`` loopback path
     regardless.
 
     Sequence:

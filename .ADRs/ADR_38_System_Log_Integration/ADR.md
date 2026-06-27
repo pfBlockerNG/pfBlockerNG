@@ -486,7 +486,7 @@ smoke. Findings (live, on the local two-VM box) that shaped the working recipe:
   forwarded traffic **leaving** via WAN. `enable_float` flips it to a floating `block out quick`
   (`direction=out`, `inc:8148`), which does. Floating-on-WAN also leaves the LAN allow intact (it matches
   only `dst=<alias>`).
-- The victim must sit in the **WAN subnet** (`10.10.0.0/24`, directly connected) so the SYN routes out
+- The victim must sit in the **WAN subnet** (`192.168.89.0/24`, directly connected) so the SYN routes out
   WAN with no dependency on the flaky SLIRP default gateway; an off-subnet TEST-NET target never
   traverses the WAN-out path. `.9` is unused (not the SLIRP gateway `.1`, the runner/stub-DNS `.2`, or
   DNS `.3`).

@@ -59,7 +59,7 @@ for _qcow in "$SMOKE_IMAGE_DIR"/*.qcow2; do [ -e "$_qcow" ] && _qcow_n=$((_qcow_
 [ -e /dev/kvm ] || { echo "local-smoke: /dev/kvm absent — KVM is required" >&2; exit 2; }
 
 # --- stub-DNS-on-:53 relay ------------------------------------------------- #
-# The mock DNS binds 127.0.0.1:53 so libslirp NATs the guest's 10.10.0.2:53 to it
+# The mock DNS binds 127.0.0.1:53 so libslirp NATs the guest's 192.168.89.2:53 to it
 # (port-preserving). Lower the unprivileged-port floor so the non-root process can bind :53.
 SMOKE_STUB_DNS_ADDR="${SMOKE_STUB_DNS_ADDR:-127.0.0.1}"
 SMOKE_STUB_DNS_PORT="${SMOKE_STUB_DNS_PORT:-53}"

@@ -198,7 +198,7 @@ bounded sweep *and* the interim #487 disjoint-fallback pool.
 **Motivation.** The original preferred address `10.10.10.53` (and its `10.10.X.53`
 sweep) sits inside `10/8` — the RFC1918 range almost every install routes via a
 `/8`, so it conflicts on a large share of deployments (issue #473; the two-VM smoke
-topology, WAN `10.10.0.0/24`, exposed it). #487 widened the pool with documentation
+topology, WAN `192.168.89.0/24`, exposed it). #487 widened the pool with documentation
 (RFC 5737) and CGNAT fallbacks, but those are awkward sinkhole homes and over-built
 for the need.
 

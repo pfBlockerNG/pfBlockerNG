@@ -1348,7 +1348,7 @@ def test_pfctl_reject_loop(
       - Both paths return RST immediately: measurement is continuous across ops.
 
     Control path protection: port 22 PASS rule fires before any block; SSH to
-    pfSense mgmt (10.0.0.20 via MGMT/net1 SLIRP) is on a separate interface not
+    pfSense mgmt (192.168.43.15 via MGMT/net1 SLIRP) is on a separate interface not
     covered by the LAN rule, so it is doubly protected.
 
     Verification before measurement:

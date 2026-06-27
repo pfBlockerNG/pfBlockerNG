@@ -343,8 +343,9 @@ jobs:
               -daemonize
           else
             # Plus: 8-NIC topology matching image-upgrade.sh + boot_vm.sh.
-            # net0 WAN  10.10.0.0/24 (internet egress for pfSense-upgrade downloads)
-            # net1 MGMT 10.0.0.0/16  (SSH hostfwd → static MGMT IP 10.0.0.20)
+            # net0 WAN  192.168.89.0/24 (internet egress for pfSense-upgrade downloads)
+            # net1 MGMT 192.168.43.0/24  (SSH hostfwd → mgmt NIC's DHCP IP 192.168.43.15;
+            #            a /24 so qemu's SLIRP DHCP is predictable — a /16 leased a wrong addr)
             # net2..net7 isolated stub NICs (must be present; unassigned in image)
             SMBIOS_UUID="${SMOKE_PLUS_SMBIOS_UUID}"
             _mac0="$(printf '%s\n' "$SMOKE_PLUS_MAC" | sed -n '1p')"
@@ -362,9 +363,9 @@ jobs:
               -device virtio-scsi-pci,id=virtioscsi0 \
               -drive "file=${OVERLAY},if=none,id=drive-scsi0,format=qcow2,discard=unmap,detect-zeroes=unmap" \
               -device scsi-hd,bus=virtioscsi0.0,drive=drive-scsi0,bootindex=100,rotation_rate=1 \
-              -netdev "user,id=net0,net=10.10.0.0/24,host=10.10.0.2" \
+              -netdev "user,id=net0,net=192.168.89.0/24,host=192.168.89.2" \
               -device "virtio-net-pci,mac=${_mac0},netdev=net0,id=nic0" \
-              -netdev "user,id=net1,net=10.0.0.0/16,host=10.0.0.2,hostfwd=tcp:127.0.0.1:${GUEST_PORT}-10.0.0.20:22" \
+              -netdev "user,id=net1,net=192.168.43.0/24,host=192.168.43.2,hostfwd=tcp:127.0.0.1:${GUEST_PORT}-192.168.43.15:22" \
               -device "virtio-net-pci,mac=${_mac1},netdev=net1,id=nic1" \
               -netdev "user,id=net2,net=10.20.0.0/24,restrict=on" \
               -device "virtio-net-pci,mac=${_mac2},netdev=net2,id=nic2" \
