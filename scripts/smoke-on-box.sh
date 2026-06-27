@@ -93,13 +93,32 @@ fi
 # ── From here: running at the correct ref (PFB_ONBOX_REEXEC=1) ─────────────── #
 cd "$REPO_ROOT"
 
+# ── Derive build params from the ABI ─────────────────────────────────────── #
+# Extract FreeBSD major to pick the matching PHP version.
+# FreeBSD 15 = CE 2.8 (php 8.3); FreeBSD 16 = Plus 26.03 (php 8.5).
+# py_flavor is py311 for all current legs.
+_freebsd_major="${_ABI#FreeBSD:}"
+_freebsd_major="${_freebsd_major%%:*}"
+case "$_freebsd_major" in
+    15) _php_ver="8.3" ;;
+    16) _php_ver="8.5" ;;
+    *)
+        printf 'smoke-on-box: unknown FreeBSD major %s in ABI %s; defaulting to 8.3\n' \
+            "$_freebsd_major" "$_ABI" >&2
+        _php_ver="8.3"
+        ;;
+esac
+# ponytail: all current legs use py311; extend the case above when this changes.
+_py_flavor="py311"
+
 # ── Step 2: ports tree — bring to pfblockerng/use-github ───────────────────── #
-printf 'smoke-on-box: updating FreeBSD-ports at %s\n' "$PORTS_DIR" >&2
+printf 'smoke-on-box: updating FreeBSD-ports at %s (php=%s %s)\n' \
+    "$PORTS_DIR" "$_php_ver" "$_py_flavor" >&2
 sh scripts/sparse-clone-ports.sh \
     "https://github.com/pfBlockerNG/FreeBSD-ports" \
     "pfblockerng/use-github" \
     "$PORTS_DIR" \
-    "devel" "8.3" "py311" >&2
+    "devel" "$_php_ver" "$_py_flavor" >&2
 
 # ── Step 3: oras images (refresh when stale; pull when absent) ─────────────── #
 _oras_login_done=0
@@ -184,6 +203,8 @@ printf 'smoke-on-box: building .pkg (abi=%s)...\n' "$_ABI" >&2
 SMOKE_PKG="$(sh scripts/build-leg.sh \
     --ports-dir  "$PORTS_DIR" \
     --abi        "$_ABI" \
+    --php        "$_php_ver" \
+    --py-flavor  "$_py_flavor" \
     --local-src  "$REPO_ROOT")"
 export SMOKE_PKG
 printf 'smoke-on-box: pkg built: %s\n' "$SMOKE_PKG" >&2

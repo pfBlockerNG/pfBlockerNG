@@ -4,6 +4,7 @@ Pins the TOCTOU-fix changes made to tests/smoke/conftest.py:
   1. _validate_lane ceiling: 12340 (LAN socket, new highest base) → max lane 5319.
   2. DEFAULT_LAN_SOCKET_PORT: deterministic, lane-strided from 12340.
   3. DIAG_DIR: empty PFB_DIAG_DIR falls back to "smoke-diag" (not Path("")).
+  4. _validate_lane reads SMOKE_LAN_SOCKET_HOSTPORT: ceiling shifts with the base.
 
 RED→GREEN evidence:
   - Before the ceiling change (old 8080-based ceiling 5745): asserting lane 5320 raises
@@ -12,6 +13,8 @@ RED→GREEN evidence:
   - Before DEFAULT_LAN_SOCKET_PORT was added: the module has no such name → test FAILS
     (AttributeError). After: name exists and equals 12340 at lane 0 → PASSES.
   - Before DIAG_DIR fix: Path("") (cwd) when PFB_DIAG_DIR="". After: Path("smoke-diag").
+  - Before _validate_lane used hardcoded 12340: overriding SMOKE_LAN_SOCKET_HOSTPORT had
+    no effect on the ceiling → test FAILS. After: ceiling tracks the override → PASSES.
 
 Run: python -m pytest tests/test_adr47_conftest_lane.py -v
 """
@@ -30,6 +33,17 @@ import pytest
 # and PFB_DIAG_DIR so we can vary them per test without cross-contamination.
 # ---------------------------------------------------------------------------
 
+# All env vars that conftest reads or writes at import time.
+# We save/restore them all to prevent inter-test leakage.
+_CONFTEST_ENV_KEYS: tuple[str, ...] = (
+    "SMOKE_LANE",
+    "SMOKE_SSH_HOSTPORT",
+    "SMOKE_WEB_HOSTPORT",
+    "SMOKE_CLIENT_SSH_HOSTPORT",
+    "SMOKE_LAN_SOCKET_PORT",
+    "PFB_DIAG_DIR",
+)
+
 
 def _load_conftest(lane: int = 0, diag_dir: str | None = None) -> types.ModuleType:
     """Import tests.smoke.conftest with SMOKE_LANE=lane.
@@ -37,9 +51,13 @@ def _load_conftest(lane: int = 0, diag_dir: str | None = None) -> types.ModuleTy
     Uses importlib.import_module after patching os.environ so the module's
     top-level assignments (DEFAULT_* ports, DIAG_DIR) pick up the right values.
     The module is freshly loaded each call via sys.modules manipulation.
+
+    Saves and restores all conftest-side-effected env vars (_CONFTEST_ENV_KEYS) in
+    the finally block so tests are isolated from one another.  The env state written
+    by the import (before restoration) is captured in mod._import_env for assertions
+    that need to verify what the import wrote — without relying on post-cleanup leakage.
     """
-    old_lane = os.environ.get("SMOKE_LANE")
-    old_diag = os.environ.get("PFB_DIAG_DIR")
+    saved = {k: os.environ.get(k) for k in _CONFTEST_ENV_KEYS}
 
     os.environ["SMOKE_LANE"] = str(lane)
     if diag_dir is None:
@@ -55,17 +73,16 @@ def _load_conftest(lane: int = 0, diag_dir: str | None = None) -> types.ModuleTy
 
     try:
         mod = importlib.import_module("tests.smoke.conftest")
+        # Capture the env state written by the import BEFORE restoration.
+        # Stored on the module so callers can assert it without relying on leakage.
+        mod._import_env = {k: os.environ.get(k) for k in _CONFTEST_ENV_KEYS}
         return mod
     finally:
-        # Restore env
-        if old_lane is None:
-            os.environ.pop("SMOKE_LANE", None)
-        else:
-            os.environ["SMOKE_LANE"] = old_lane
-        if old_diag is None:
-            os.environ.pop("PFB_DIAG_DIR", None)
-        else:
-            os.environ["PFB_DIAG_DIR"] = old_diag
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 
 # ---------------------------------------------------------------------------
@@ -100,9 +117,9 @@ class TestValidateLaneCeiling:
             mod._validate_lane(-1)
 
     def test_error_message_names_12340_base(self) -> None:
-        """Error message must reference 12340 (the new highest base) + the ceiling 5319.
+        """Error message must reference the ceiling 5319.
 
-        Before the change the message said '8080' and '5745'. After: '12340' and '5319'.
+        Before the change the message said '8080' and '5745'. After: '5319'.
         This assertion is the red→green diff: old code → old message → FAILS here.
         """
         mod = _load_conftest(lane=0)
@@ -112,6 +129,36 @@ class TestValidateLaneCeiling:
         assert "5319" in msg, f"expected '5319' in error message; got: {msg!r}"
         # Verify the OLD ceiling (5745) is NOT mentioned — that would mean the old code.
         assert "5745" not in msg, f"old ceiling 5745 still in message: {msg!r}"
+
+
+# ---------------------------------------------------------------------------
+# 1b — _validate_lane ceiling when SMOKE_LAN_SOCKET_HOSTPORT is overridden
+# ---------------------------------------------------------------------------
+
+
+class TestValidateLaneOverriddenBase:
+    """_validate_lane reads SMOKE_LAN_SOCKET_HOSTPORT — overriding it shifts the ceiling.
+
+    RED→GREEN: before the fix, _validate_lane had 12340 hardcoded.  Overriding
+    SMOKE_LAN_SOCKET_HOSTPORT had no effect → lane 4554 would pass (wrong).
+    After: the ceiling re-derives from the overridden base (20000), so 4554 → ValueError.
+    """
+
+    def test_higher_base_lowers_ceiling(self) -> None:
+        """With SMOKE_LAN_SOCKET_HOSTPORT=20000 the ceiling drops to 4553."""
+        mod = _load_conftest(lane=0)
+        old = os.environ.get("SMOKE_LAN_SOCKET_HOSTPORT")
+        os.environ["SMOKE_LAN_SOCKET_HOSTPORT"] = "20000"
+        try:
+            # (65535 - 20000) // 10 = 4553 — highest valid lane at base 20000.
+            mod._validate_lane(4553)  # must not raise
+            with pytest.raises(ValueError, match="4553"):
+                mod._validate_lane(4554)
+        finally:
+            if old is None:
+                os.environ.pop("SMOKE_LAN_SOCKET_HOSTPORT", None)
+            else:
+                os.environ["SMOKE_LAN_SOCKET_HOSTPORT"] = old
 
 
 # ---------------------------------------------------------------------------
@@ -150,11 +197,14 @@ class TestDefaultLanSocketPort:
         This ensures boot_vm.sh inherits the same value the harness uses — the point of
         the TOCTOU fix. Before the change, the env var was only set inside the fixture
         (too late for some import-time callers). After: set at module level.
+
+        Asserts the value from the import-time env snapshot (mod._import_env), not from
+        post-cleanup os.environ — correct even with full env save/restore in _load_conftest.
         """
-        # Load with lane=0 and verify the env var was set.
-        _load_conftest(lane=0)
-        val = os.environ.get("SMOKE_LAN_SOCKET_PORT")
-        assert val == "12340", f"expected SMOKE_LAN_SOCKET_PORT='12340'; got {val!r}"
+        mod = _load_conftest(lane=0)
+        # _import_env captures the env state AFTER import, BEFORE _load_conftest restores it.
+        val = mod._import_env.get("SMOKE_LAN_SOCKET_PORT")
+        assert val == "12340", f"expected SMOKE_LAN_SOCKET_PORT='12340' written at import; got {val!r}"
 
 
 # ---------------------------------------------------------------------------

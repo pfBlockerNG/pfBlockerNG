@@ -66,11 +66,11 @@ A. `resolve-legs.sh legs --test-dir <DIR> [--label marker|tier] [--base-ref orig
       scripts/impacted-tests.sh "$BASE_REF" "$TEST_DIR" || true)"`; empty K → log whole-marker
       fallback. The only deltas are `--test-dir` (tests/smoke vs tests/smoke/ui) and `--label`
       (log noun only).
-   AMENDMENT (major — output contract): PRINT the resolved legs JSON to STDOUT ALWAYS (so ui can
-   capture `LEGS="$(resolve-legs.sh legs ...)"` and PROJECT/build_matrix/tier-cross in the SAME
-   step — you cannot read a value back out of $GITHUB_OUTPUT within the step that wrote it). Append
-   ONLY scope= and pytest_k to $GITHUB_OUTPUT (smoke consumes ci_matrix cross-step; emit it there
-   too for smoke, but the legs MUST also be on stdout). Document this in the script header.
+   AMENDMENT (major — output contract): The `legs` subcommand prints the resolved legs JSON to
+   STDOUT (so ui can capture `LEGS="$(resolve-legs.sh legs ...)"` and project/build_matrix/tier-cross
+   in the SAME step — $GITHUB_OUTPUT is write-only within the step that wrote it). All diagnostic/
+   informational messages go to STDERR. $GITHUB_OUTPUT receives: scope=, pytest_k=, and ci_matrix=
+   (smoke consumes ci_matrix cross-step; emit it there). Document this in the script header.
 B. Per-leg helper subcommands (the smoke-single.yml<->ui-tests.yml duplication). Each
    parameterizes the genuine per-workflow delta, DENY-BY-DEFAULT (secret-safe):
    - `image-ref`: env INPUT_REF/IMAGE_NAME/VERSION(TAG)/SMOKE_IMAGE_REPO/GITHUB_REPOSITORY_OWNER →

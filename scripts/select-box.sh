@@ -275,11 +275,11 @@ _sb_release() {
     for _sbrb in ${PFB_BOXES}; do
         _sbrtok="$(_sb_box_tok "$_sbrb")"
         _sbrlock="${PFB_LEASE_DIR}/${_sbrtok}.lock"
-        _sbrowner="$(_sb_ssh "$_sbrb" \
-            "cat '${_sbrlock}/owner' 2>/dev/null" 2>/dev/null)" || continue
-        _sbrorid="$(printf '%s' "$_sbrowner" | cut -d' ' -f1)"
-        if [ "$_sbrorid" = "$_sbrrid" ]; then
-            _sb_ssh "$_sbrb" "rm -rf '${_sbrlock}'" 2>/dev/null || true
+        # Atomic: read the owner and remove the lock in ONE ssh call to close the
+        # TOCTOU window between owner-check and rm-rf.
+        if _sb_ssh "$_sbrb" \
+            "[ \"\$(cut -d' ' -f1 '${_sbrlock}/owner' 2>/dev/null)\" = '${_sbrrid}' ] \
+             && rm -rf '${_sbrlock}'" 2>/dev/null; then
             printf 'select-box: released %s on %s\n' "$_sbrrid" "$_sbrb" >&2
             return 0
         fi
@@ -421,8 +421,12 @@ fi
 
 # Create the per-run directory tree on the leased box.
 _SB_RUN_DIR="${PFB_RUN_ROOT}/${RUN_ID}"
-_sb_ssh "$_SB_LEASED_BOX" \
-    "mkdir -p '${_SB_RUN_DIR}/out' '${_SB_RUN_DIR}/smoke-diag'" 2>/dev/null || true
+if ! _sb_ssh "$_SB_LEASED_BOX" \
+    "mkdir -p '${_SB_RUN_DIR}/out' '${_SB_RUN_DIR}/smoke-diag'" 2>/dev/null; then
+    printf 'select-box: failed to create run directories on %s: %s\n' \
+        "$_SB_LEASED_BOX" "$_SB_RUN_DIR" >&2
+    exit 1
+fi
 
 # Emit eval-able KEY=value to stdout.
 printf 'RUN_ID=%s\n'       "$RUN_ID"

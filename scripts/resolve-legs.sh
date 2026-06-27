@@ -106,15 +106,15 @@ _rl_legs() {
         git fetch --no-tags --depth=200 origin "${_l_base#origin/}:refs/remotes/${_l_base}" 2>/dev/null || true
         K="$(sh "${_RL_DIR}/impacted-tests.sh" "$_l_base" "$_l_test_dir" 2>/dev/null || true)"
         if [ -n "$K" ]; then
-            printf 'impacted: auto-derived -k from changed %s modules: %s\n' "$_l_label" "$K"
+            printf 'impacted: auto-derived -k from changed %s modules: %s\n' "$_l_label" "$K" >&2
         else
             printf 'impacted: no changed %s modules vs %s — running the whole %s on the min CE leg. Pass -f pytest_k=... to narrow.\n' \
-                "$_l_label" "$_l_base" "$_l_label"
+                "$_l_label" "$_l_base" "$_l_label" >&2
         fi
     fi
 
     printf 'scope=%s  legs=%s  -k=[%s]\n' "$SCOPE" \
-        "$(printf '%s' "$FILTERED" | jq 'length')" "$K"
+        "$(printf '%s' "$FILTERED" | jq 'length')" "$K" >&2
 
     # ── $GITHUB_OUTPUT writes ─────────────────────────────────────────────── #
     if [ -n "${GITHUB_OUTPUT:-}" ]; then

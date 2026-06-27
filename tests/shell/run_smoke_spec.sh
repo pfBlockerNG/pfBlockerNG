@@ -214,4 +214,81 @@ PY3EOF
     End
   End
 
+  # ── argv injection guard: passthrough metachar reaches pytest literally ────── #
+  # When run-smoke.sh receives an arg containing a shell substitution pattern,
+  # that string must reach pytest verbatim — no eval, so the subshell is never
+  # executed. If the arg were eval'd, the file /tmp/pfb_pwn_test would be created.
+  # RED→GREEN: old eval-based passthrough → subshell fires → file created → FAILS.
+  # After: successive set -- prepends → file never created → PASSES.
+  run_injection_guard() {
+    PYTHON="${FAKE_BIN}/python"
+    export PYTHON
+    sh "$SCRIPT" '$(touch /tmp/pfb_pwn_test)'
+    # Remove any accidental file so the test is self-cleaning.
+    argv_joined
+  }
+
+  Describe 'argv injection guard: passthrough metachar is never evaluated'
+    It 'passes $(touch ...) as a literal string, never executes it'
+      When call run_injection_guard
+      The output should include '$(touch /tmp/pfb_pwn_test)'
+      The path '/tmp/pfb_pwn_test' should not be exist
+    End
+  End
+
+  # ── bare-path fix: --maxfail 1 does NOT suppress the default path ─────────── #
+  # '--maxfail 1' passes --maxfail as an option flag and '1' as its value.
+  # The '1' is a non-'-' token, but it is NOT the first positional arg — it is an
+  # option value. The bare-path guard must NOT mistake it for a caller-supplied path.
+  # RED→GREEN: old code (any non-'-' token → _CALLER_GAVE_PATH=1) suppressed
+  # tests/smoke → FAILS. After: only the FIRST non-option token counts → PASSES.
+  run_maxfail_not_a_path() {
+    PYTHON="${FAKE_BIN}/python"
+    export PYTHON
+    sh "$SCRIPT" --maxfail 1
+    argv_joined
+  }
+
+  Describe '--maxfail 1: numeric value is not a positional path'
+    It 'still injects the default tests/smoke path (1 is an option value, not a path)'
+      When call run_maxfail_not_a_path
+      The output should include "tests/smoke"
+      The output should include "--maxfail|1"
+    End
+  End
+
+  # ── PYTHON/CI parity: GITHUB_ACTIONS=1 uses python3 even when .venv exists ─── #
+  # A .venv/bin/python exists in the fake repo root; when GITHUB_ACTIONS is set,
+  # run-smoke.sh must skip it and use python3 (CI runners have no .venv, so the
+  # .venv gate must be OFF in CI to prevent a stray future .venv from drifting).
+  # The .venv/bin/python creates a marker file if invoked — absent = it was skipped.
+  # RED→GREEN: old code (no GITHUB_ACTIONS gate) → .venv used → marker created → FAILS.
+  # After: GITHUB_ACTIONS gate → python3 used → marker absent → PASSES.
+  run_ci_python_resolution() {
+    unset PYTHON
+    GITHUB_ACTIONS=true
+    export GITHUB_ACTIONS
+    WORK_ROOT="${WORK}/fakerepo_ci"
+    mkdir -p "$WORK_ROOT/scripts" "${WORK_ROOT}/.venv/bin"
+    VENV_MARKER="${WORK}/venv_was_called"
+    # Write the VENV_MARKER path into the venv python at creation time (heredoc expands it).
+    cat > "${WORK_ROOT}/.venv/bin/python" << VENVEOF
+#!/bin/sh
+touch "$VENV_MARKER"
+printf '%s\n' \$@ > "\$ARGV_FILE"
+VENVEOF
+    chmod +x "${WORK_ROOT}/.venv/bin/python"
+    ln -s "$SCRIPT" "${WORK_ROOT}/scripts/run-smoke.sh"
+    sh "${WORK_ROOT}/scripts/run-smoke.sh"
+    argv_joined
+  }
+
+  Describe 'GITHUB_ACTIONS=true: uses python3 even when .venv exists (CI parity)'
+    It 'skips the .venv and falls back to python3 when GITHUB_ACTIONS is set'
+      When call run_ci_python_resolution
+      The output should include "-m|pytest"
+      The path "${WORK}/venv_was_called" should not be exist
+    End
+  End
+
 End

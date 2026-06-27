@@ -79,9 +79,15 @@ if [ "$#" -gt 0 ]; then
     exit 2
 fi
 
-# ── Resolve REF (default: current HEAD) ───────────────────────────────────── #
+# ── Resolve REF (default: current branch name, falls back to SHA) ─────────── #
+# A branch name is fetchable; a bare SHA is not (unless already pushed).
 if [ -z "$_REF" ]; then
-    _REF="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+    _REF="$(git -C "$REPO_ROOT" symbolic-ref --short HEAD 2>/dev/null)" || true
+    if [ -z "$_REF" ]; then
+        _REF="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+        printf 'local-smoke: WARNING: detached HEAD; using SHA %s (may not be pushed to remote)\n' \
+            "$_REF" >&2
+    fi
 fi
 
 # ── Build the on-box bootstrap command string ─────────────────────────────── #

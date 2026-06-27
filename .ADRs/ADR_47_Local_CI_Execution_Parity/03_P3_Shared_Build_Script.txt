@@ -168,8 +168,8 @@ REWIRE PLAN (delete divergence; keep orchestration)
   --annotate. Set env PFB_RUN_ROOT: ${{ github.workspace }}/out so PFB_RUN_DIR/out stays under the
   workspace; emit pkg_dir=$(dirname "$PKG") to $GITHUB_OUTPUT and change the upload glob to
   ${{ steps.build.outputs.pkg_dir }}/*.pkg. AMENDMENT 7: pass a SLUGGED LEG (e.g. freebsd-15-amd64),
-  not the raw ABI 'FreeBSD:15:amd64' (colons become path components otherwise; run-id.sh sanitizes
-  the box token but NOT LEG — either slug LEG here or add LEG sanitization to run-id.sh/build-leg).
+  not the raw ABI 'FreeBSD:15:amd64' (GitHub artifact names and run-dir/path tokens split on ':'; run-id.sh
+  sanitizes the box token but NOT LEG — slug LEG here or in run-id.sh/build-leg).
 - release.yml: AMENDMENT 2 — do NOT compute created/commit in read-matrix (it checks out the
   dispatch HEAD ~397, but the .pkg must be stamped from the TAGGED commit the build job checks out
   ~788; a release-notes commit can make them differ). Add a dedicated resolve-stamp orchestration
