@@ -90,6 +90,10 @@ if [ -z "$_REF" ]; then
     fi
 fi
 
+# Normalize a remote-qualified ref (origin/devel) to its bare name: the on-box
+# `git fetch origin <ref>` wants the REMOTE ref name (devel), not `origin/devel`.
+_REF="${_REF#origin/}"
+
 # ── Build the on-box bootstrap command string ─────────────────────────────── #
 # The bootstrap runs on the box via ssh; it must be a single shell command string.
 # Use single-quote encoding for values that may contain shell metacharacters.

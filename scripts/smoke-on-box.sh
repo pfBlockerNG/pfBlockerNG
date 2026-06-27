@@ -78,6 +78,9 @@ if [ "${PFB_ONBOX_REEXEC:-}" != "1" ]; then
         _REF="$(git rev-parse HEAD)"
         printf 'smoke-on-box: no --ref; staying on current HEAD %s\n' "$_REF" >&2
     else
+        # Normalize a remote-qualified ref (origin/devel → devel): git fetch origin
+        # wants the REMOTE ref name, not the origin/-prefixed tracking name.
+        _REF="${_REF#origin/}"
         printf 'smoke-on-box: fetching + checking out ref %s\n' "$_REF" >&2
         # Check out the FETCHED TIP, not a bare `git checkout <ref>` — the latter
         # lands the box's possibly-stale LOCAL branch (git fetch only moves the
