@@ -80,24 +80,24 @@ while :; do
       gh api "repos/$OWNER_REPO/pulls/$PR/comments" --paginate \
         -q '.[]|select((.user.login|ascii_downcase)|test("coderabbit"))|.id'
     } 2>/dev/null)
-  # A CodeRabbit message that is a usage/rate-limit notice is an ACK with NO review — detect it so
-  # we don't waste Step 1b waiting on a review that will never come (a nudge can't restore credits).
-  bodies=$(gh api "repos/$OWNER_REPO/issues/$PR/comments" --paginate \
-    -q '.[]|select((.user.login|ascii_downcase)|test("coderabbit"))|.body' 2>/dev/null)
-  printf '%s' "$bodies" | grep -Eqi 'run out of usage credits|review limit reached|rate limited by coderabbit|reached your .*review rate limit' \
-    && { echo QUOTA > "$RESULT"; exit 0; }
+  # ANY CodeRabbit message = ACK — including a usage/rate-limit notice. Do NOT short-circuit a
+  # quota phrase to "won't review" here: CodeRabbit routinely posts a transient rate-limit (or a
+  # stale notice from an earlier push) and then completes the review, so the QUOTA verdict belongs
+  # to Step 1b's CONTENT-FIRST wait (which reports FINISHED the moment real review content appears,
+  # and QUOTA only if none appears for the whole window). 1a just detects engagement.
   [ -n "$hits" ] && { echo ACK > "$RESULT"; exit 0; }
   [ "$(date -u +%s)" -ge "$deadline" ] && { echo NOACK > "$RESULT"; exit 0; }
   sleep 30
 done
 ```
 
-- **`ACK`** (a CodeRabbit message appeared) → **Step 1b**.
+- **`ACK`** (any CodeRabbit message appeared — including a quota/rate-limit notice) → **Step 1b**.
+  Step 1b's content-first wait decides FINISHED vs QUOTA; a quota notice alone is NOT treated as
+  "won't review" here, because CR often posts one transiently and then reviews.
 - **`NOACK`** (silent for the full window) → **Step 1c** (nudge before giving up).
-- **`QUOTA`** (CodeRabbit replied only with a usage/rate-limit notice — "Review limit
-  reached" / "run out of usage credits" / "rate limited by coderabbit.ai") → it will **not**
-  review; skip the nudge (credits won't return in-window) and go straight to **Step 1d**
-  (Sonnet substitute). **Surface** that CodeRabbit was skipped for quota in the final report.
+- **`QUOTA`** is no longer emitted by 1a (it is decided in 1b). When Step 1b's wait returns
+  `QUOTA` — a genuine usage/rate-limit with **no** review content for the whole window — go to
+  **Step 1d** (Sonnet substitute) and **surface** that CodeRabbit was skipped for quota.
 
 ### Step 1b — CodeRabbit acknowledged → wait on + handle its review
 

@@ -93,7 +93,7 @@ true gives you a single wake — do not use a foreground `sleep`), then read
 #            bot, raise/disable for a human who may start late)  RESULT(tmpfile)
 # First wait: MODE=full, SINCE=head commit time → `gh pr view "$PR" --json commits -q '.commits[-1].committedDate'`,
 #             SHA=`gh pr view "$PR" --json headRefOid -q .headRefOid` (anchors on the current code).
-i=0; seen=0
+i=0; seen=0; cr_quota=""
 while [ "$i" -lt 60 ]; do                       # ~30 min at 30s/poll
   inline=$(gh api "repos/$OWNER_REPO/pulls/$PR/comments" --paginate \
     -q ".[] | select((.user.login|ascii_downcase)==\"$HANDLE\" or (.user.login|ascii_downcase)==\"${HANDLE}[bot]\") | select(.created_at > \"$SINCE\") | .id" 2>/dev/null)
@@ -118,25 +118,26 @@ $(gh api "repos/$OWNER_REPO/commits/$SHA/check-runs" --paginate \
     printf '%s' "$sinfo" | grep -Eqi '^(success|failure|neutral|completed)' && scheck=1
   fi
   [ -n "$inline$review$issuec" ] && seen=1
-  # QUOTA = the reviewer hit a usage/rate limit and did NOT actually review — CodeRabbit's
-  # "Review limit reached" / "run out of usage credits" / "rate limited by coderabbit.ai" comment,
-  # or a Snyk status in `error` ("Code test limit reached"). It is an ACK with NO findings and must
-  # NOT be read as a clean pass — Snyk especially, where a limit/error status is an infra error, not
-  # "no vulns". Checked BEFORE FINISHED so a Snyk error-status never slips through as a verdict.
-  quota=""
-  printf '%s' "$issuec" | grep -Eqi 'run out of usage credits|review limit reached|rate limited by coderabbit|reached your .*review rate limit' && quota=1
-  printf '%s' "$sinfo" | grep -Eqi 'limit reached|^(error|action_required|timed_out|cancelled|stale)' && quota=1
-  if [ -n "$quota" ]; then
-    { echo QUOTA; printf '%s\n' "$issuec$sinfo"; } > "$RESULT"; exit 0
+  # Snyk's status is TERMINAL + authoritative (Snyk has no separate review content): an `error`
+  # state ("Code test limit reached") means it did NOT run → QUOTA now, never a clean pass.
+  if printf '%s' "$sinfo" | grep -Eqi 'limit reached|^(error|action_required|timed_out|cancelled|stale)'; then
+    { echo QUOTA; printf '%s\n' "$sinfo"; } > "$RESULT"; exit 0
   fi
-  # FINISHED = a TERMINAL result: an inline comment, a submitted review, a terminal Snyk verdict, the
-  # "Actionable comments posted: N" header, OR a clean pass ("No actionable comments were
-  # generated"). A clean pass IS success — nothing to apply. A non-quota error matches none of these
-  # → falls through → eventually TIMEOUT (surfaced), never success.
+  # FINISHED WINS over any CodeRabbit quota phrase. Real review content — an inline thread, a
+  # submitted review, a terminal Snyk verdict, the "Actionable comments posted: N" header, or a
+  # clean "No actionable comments were generated" pass — means it REVIEWED, so report FINISHED even
+  # if a usage/rate-limit phrase is ALSO present. (This is the bug this fixes: a transient
+  # rate-limit / a stale notice from an earlier push must never short-circuit to QUOTA before — or
+  # alongside — CodeRabbit's actual inline comments. Checking content FIRST is what guarantees it.)
   if [ -n "$inline" ] || [ -n "$review" ] || [ -n "$scheck" ] \
        || printf '%s' "$issuec" | grep -qiE 'actionable comments posted|no actionable comments'; then
     { echo FINISHED; printf '%s\n' "$issuec"; } > "$RESULT"; exit 0
   fi
+  # A CodeRabbit usage/rate-limit notice with NO review content yet is NON-TERMINAL — it is often
+  # transient (CR retries) or stale. RECORD it (sticky) but do NOT exit; only conclude QUOTA at the
+  # END of the window if review content never appears. So a transient/stale notice that later
+  # resolves to a real review is reported FINISHED above; only a genuine no-content quota → QUOTA.
+  printf '%s' "$issuec" | grep -Eqi 'run out of usage credits|review limit reached|rate limited by coderabbit|reached your .*review rate limit' && cr_quota=1
   # DECLINE (MODE=full) = "Review skipped" because the base isn't the default branch.
   if [ "$MODE" = full ] && printf '%s' "$issuec" | grep -qi 'review skipped' \
        && printf '%s' "$issuec" | grep -Eqi 'base branch|base branches|default branch'; then
@@ -152,7 +153,9 @@ $(gh api "repos/$OWNER_REPO/commits/$SHA/check-runs" --paginate \
   [ "$seen" -eq 0 ] && [ "$i" -ge "$PRESENCE" ] && { echo NOTPRESENT > "$RESULT"; exit 0; }
   i=$((i + 1)); sleep 30
 done
-echo TIMEOUT > "$RESULT"
+# Window exhausted with no review content. A recorded CodeRabbit usage-limit notice (and still no
+# content) is a genuine QUOTA (did-not-review); otherwise it is a real TIMEOUT.
+if [ -n "$cr_quota" ]; then echo QUOTA > "$RESULT"; else echo TIMEOUT > "$RESULT"; fi
 ```
 
 CodeRabbit's exact wording drifts — if the markers above don't fire when you can
@@ -164,16 +167,23 @@ comment body and adjust the `grep` patterns rather than waiting out the timeout.
 - **`FINISHED`** → the reviewer has posted a terminal result. Fall through to Step 3.
   This includes a **clean pass** ("No actionable comments were generated", or a Snyk
   `success` status) — a success with nothing to apply; Steps 4–5 will simply find no
-  actionable items and Step 9 reports it clean. (A usage/rate-limit message is `QUOTA`,
-  not `FINISHED`; a non-quota service error matches nothing and falls to `TIMEOUT`.)
-- **`QUOTA`** → the reviewer hit a usage/rate limit and did **not** actually review:
-  CodeRabbit posted "Review limit reached" / "run out of usage credits" / "rate limited
-  by coderabbit.ai", or Snyk's `code/snyk` status is in `error` ("Code test limit
-  reached"). Treat it as **did-not-review, NOT a clean pass** — never conclude the PR is
-  clean from a quota message (a Snyk limit-reached status is an infra error, not "no
-  vulns"). In a multi-handle wait, **drop this handle and continue** with the others. For
-  a lone-CodeRabbit wait, fall through and let the caller (`/pr-merge-flow`) stand up the
-  Sonnet substitute reviewer. **Do not retry-loop** — the limit won't clear in this
+  actionable items and Step 9 reports it clean. **FINISHED takes precedence over a quota
+  phrase:** if CodeRabbit posted actual review content (inline comments / a submitted
+  review / the "actionable comments" header), that is `FINISHED` even if a usage/rate-limit
+  notice is also present — a CodeRabbit quota notice is `QUOTA` **only** when no review
+  content appears for the whole window (the loop is content-first for exactly this reason).
+- **`QUOTA`** → the reviewer **did not actually review**: a Snyk `code/snyk` status in
+  `error` ("Code test limit reached"), OR a CodeRabbit usage/rate-limit notice ("Review
+  limit reached" / "run out of usage credits" / "rate limited by coderabbit.ai") that
+  persisted for the **whole window with NO inline comments or submitted review**. Treat it
+  as **did-not-review, NOT a clean pass**. **Crucial:** a quota phrase alone is NOT QUOTA —
+  CodeRabbit routinely posts a transient rate-limit notice (or a stale one from an earlier
+  push) and then completes the review, so a verdict of QUOTA requires the absence of any
+  posted review content (this bit us: a premature QUOTA when CR had in fact left 13
+  comments — **always also eyeball the PR for posted comments before acting on QUOTA**). In
+  a multi-handle wait, **drop this handle and continue** with the others. For a
+  lone-CodeRabbit wait, fall through and let the caller (`/pr-merge-flow`) stand up the
+  Sonnet substitute reviewer. **Do not retry-loop** — a genuine limit won't clear in this
   window. Always **surface** the skipped reviewer to the user.
 - **`NOTPRESENT`** → no engagement within the presence window — this handle isn't
   reviewing the PR. **Skip it** (in a multi-handle wait, drop this handle and continue
