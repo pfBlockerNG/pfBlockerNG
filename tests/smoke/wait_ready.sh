@@ -90,6 +90,8 @@ INITIAL_GRACE=8
 
 START="$(date +%s)"
 ATTEMPT=0
+# SSH liveness floor observed (web/pfSense role only); logged once.
+WEB_SSH_SEEN=""
 
 while :; do
     NOW="$(date +%s)"
@@ -115,14 +117,23 @@ while :; do
     ATTEMPT=$((ATTEMPT + 1))
 
     if [ -n "$WEB_PORT" ]; then
-        # pfSense: readiness = the webConfigurator answering. nginx + PHP come up
-        # AFTER sshd, so a live admin panel implies SSH is already usable — gate on
-        # the web server alone (the meaningful "appliance ready" signal).
+        # Staggered liveness chain: an SSH FLOOR (sshd is up before nginx/PHP) then the
+        # web 200 (readiness). Logging the floor once means a slow-but-alive cold box reads
+        # as "alive — web warming" instead of looking dead while the webConfigurator renders.
+        # (No TCP/ping rung: over SLIRP both are false-green before the guest is up, so the
+        # floor must be a real `ssh true`, not a connect.)
+        # shellcheck disable=SC2086
+        if [ -z "$WEB_SSH_SEEN" ] && \
+           "$SSH" -i "$SSH_KEY" $SSH_OPTS "root@${HOST}" true 2>/dev/null; then
+            WEB_SSH_SEEN=1
+            echo "wait_ready: [${ELAPSED}s] ssh alive — system up, webConfigurator warming" >&2
+        fi
+        # Readiness = the webConfigurator answering. A live admin panel implies SSH is up.
         if "$CURL" -fsSL --connect-timeout 1 --max-time 2 -o /dev/null "http://${HOST}:${WEB_PORT}/" 2>/dev/null; then
             echo "boot-to-ready: ${ELAPSED} seconds"
             exit 0
         fi
-        PENDING=web
+        if [ -n "$WEB_SSH_SEEN" ]; then PENDING="web (ssh alive — warming)"; else PENDING="web (ssh not yet up)"; fi
     else
         # civm: no web server — gate on SSH over the host-forwarded management NIC.
         # The probe is a bare `true` ON PURPOSE: a remote command is parsed by the
