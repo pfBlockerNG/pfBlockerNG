@@ -4271,15 +4271,15 @@ class CaseContext:
             answer = dns_probe(vm, "blocked.test")
             assert is_nxdomain(answer)
 
-    On enter: inject(spec) then a Force Update (``update``) FOLLOWED BY the
-    targeted Force Reload (``updatednsbl``/``updateip``). The full ``update``
-    re-reads the source (incl. our local feed file) and drives
-    ``filter_configure`` — which is what loads the pf table AND creates the
-    Deny rule for an IP case; the targeted reload alone (``reuse='on'``) does
-    not settle those synchronously. On exit: reset(vm) so the next case starts
-    from the baseline (Phase-3 session-isolation). ``scope`` is auto-chosen
-    (``updatednsbl`` for a DnsblCase, ``updateip`` for an IpCase); override via
-    ``scope=``.
+    On enter: inject(spec) then a SINGLE targeted Force Reload
+    (``updatednsbl`` for a DnsblCase, ``updateip`` for an IpCase). For an IP
+    case the targeted ``updateip`` re-parses the IP feed + loads the pf table,
+    and ``apply_filter_sync()`` then does the BLOCKING ``filter_configure`` that
+    lands the table + Deny rule synchronously — so the old preceding full
+    ``update`` (and its unbound-readiness wait, which an IP case never needs —
+    it asserts pf state, not DNS) is pure wasted reload (issue #611). On exit:
+    reset(vm) so the next case starts from the baseline (Phase-3 session-
+    isolation). ``scope`` is auto-chosen as above; override via ``scope=``.
     """
 
     def __init__(self, vm: SmokeVM, spec: DnsblCase | IpCase, *, scope: str | None = None) -> None:
@@ -4300,19 +4300,19 @@ class CaseContext:
         snap_state(self.vm, f"{self.spec.aliasname}_pre")
         inject(self.vm, self.spec)
         snap_state(self.vm, f"{self.spec.aliasname}_injected")
-        # IP needs the full Force Update first (filter_configure loads the table +
-        # rule; a lone targeted reload left "Table does not exist"), THEN the
-        # targeted updateip. DNSBL only needs the single targeted updatednsbl —
-        # the extra full update was just doubling the heavy python-chroot reload.
+        # One targeted force-reload per case (issue #611). For an IP case the
+        # targeted updateip re-parses the IP feed + loads the pf table, then
+        # apply_filter_sync() does the BLOCKING filter_configure that lands the
+        # table + Deny rule — the reason the old code ran a preceding full
+        # `update`, now superseded by PR #557's synchronous apply. IP cases assert
+        # pf state and never probe DNS, so the reload also skips the unbound-
+        # readiness wait. DNSBL cases need the single targeted updatednsbl WITH
+        # the resolver-readiness wait (reload's default), since they probe DNS.
         if isinstance(self.spec, IpCase):
-            reload(self.vm, "update")
-        reload(self.vm, self.scope)
-        if isinstance(self.spec, IpCase):
-            # filter_configure() is async (send_event); the pf table + Deny rule land a few
-            # seconds AFTER reload() returns. Force a blocking apply so the case's FIRST
-            # pfctl read is authoritative, not racing the apply. DNSBL cases probe DNS (gated
-            # by reload's wait_unbound_ready), so they need no pf gate.
+            reload(self.vm, self.scope, wait_unbound=False)
             apply_filter_sync(self.vm)
+        else:
+            reload(self.vm, self.scope)
         snap_state(self.vm, f"{self.spec.aliasname}_reloaded")
         # NOW block egress: the per-case probe must prove the block/pass with no
         # upstream (a non-blocked name would hang, not silently resolve upstream).
