@@ -270,6 +270,17 @@ off-pattern name is a smell even when it works.
 - Type-hint new functions; leave existing untyped code alone unless touching it.
 - No bare `except:` — `except Exception` minimum.
 - `pfb_unbound.py` runs in Unbound's Python loader — **stdlib only, no external deps**.
+- **No Python interpreter ON the pfSense appliance — use PHP or POSIX sh (HARD CONSTRAINT).** The
+  appliance ships `python3.11` with **no `python3` symlink**, so any `/usr/local/bin/python*`
+  invocation is `rc=127` "not found" — and SILENT under `SmokeVM.ssh`'s `check=False`, so the
+  command no-ops and the caller proceeds on stale/empty state (this bit the `apply_on_change` +
+  `tick` smoke modules — their ledger writes did nothing). Drive the box via **PHP** (`php` /
+  `pfSsh.php` / `h.php_eval` — it owns the package's data structures, e.g. the `pfb_due_ledger_*`
+  API) or **POSIX sh**. `pfb_unbound.py` is the **sole** exception: it runs in Unbound's *embedded*
+  Python loader (`python-script:`), never spawned through the appliance interpreter. Enforced by
+  `scripts/check_appliance_python.py` (pre-commit + CI; forbids `/usr/local/bin/python*` across
+  `src/` + `tests/`; unit-tested in `tests/test_appliance_python_check.py`). Bare `python3` in
+  dev/CI-host tooling under `scripts/` is fine — it names the developer's interpreter, not the box's.
 - **Content hashing = `md5` on the Python side (ADR-42 policy).** `hashlib` has no xxhash and the
   module is stdlib-only + chrooted, so Python uses `hashlib.md5` for its own self-comparisons only
   — never a cross-language digest (PHP/shell use `xxh128`). No Python hashing code lands in ADR-42;
@@ -454,6 +465,15 @@ of it:
   `i=true`, **then** assert `a→y` — never just the final state. Extends to any lifecycle (a
   "blocked after listing" test first asserts the domain *resolved* before listing, and again
   after unblock — see the `tests/smoke` DNSBL lock/unlock cases).
+- **Self-encapsulated — never order-dependent.** Tests may SHARE setup/teardown (fixtures), but no
+  test may depend on another running before or after it. Each test establishes everything it needs
+  from a known baseline (minus what is baked into the test *image*); the shared setup/teardown must
+  be **idempotent** and provide that baseline. A test that passes only because a sibling ran first
+  is a defect, not coverage — it masks the real behaviour. It bit the `tick` smoke module: one
+  test's `mark_ran` left a future `next_due` that a later "skip" test silently relied on, so the
+  skip never tested its own setup. Reset per-test state explicitly (e.g. an autouse fixture that
+  wipes the artifact and **fails loudly** if the wipe doesn't take) rather than leaning on
+  collection order; a module-scoped baseline reset does NOT give per-test isolation.
 - **Specify complex behaviour BDD-style; keep trivial tests trivial.** A util / small rule /
   simple mapping needs only a plain, intent-named assertion. Non-trivial behaviour (state
   transitions, precedence, multi-step flows — DNSBL/ABP decision logic, the decision cache,
