@@ -2429,8 +2429,11 @@ def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT) -> None:
          the reboot has even happened. This replaces the previous ``kern.boottime``-change poll,
          which was fragile and consumed the readiness budget (timing out even when the box came
          back fine).
-      3. Run ``wait_ready.sh`` (watching the QEMU pid + web port: nginx + PHP up) with the FULL
-         budget, then ``wait_unbound_ready`` -- the exact gate the initial boot uses.
+      3. Run the SAME readiness gate the initial boot uses (conftest ``boot_vm``): ``wait_ready.sh``
+         (QEMU pid + web port: nginx + PHP up) with the FULL budget, then ``wait_boot_complete``
+         (``is_platform_booting()`` cleared, so a post-reboot pfBlockerNG sync cannot race boot --
+         the #559 guard). THEN ``wait_unbound_ready`` so DNS assertions are safe immediately (the
+         reboot tests probe DNS, which a bare boot does not).
     """
     # Issue the reboot; it drops our SSH connection, so a non-zero/dropped result is EXPECTED.
     vm.ssh("/sbin/reboot", timeout=30.0)
@@ -2464,6 +2467,10 @@ def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT) -> None:
         raise RuntimeError(
             f"reboot_vm: VM not ready after reboot (wait_ready exit {result.returncode}); stderr={result.stderr!r}"
         )
+    # Mirror the initial boot's post-wait_ready gate (conftest boot_vm): block until
+    # is_platform_booting() clears so a post-reboot pfBlockerNG sync cannot race boot (#559).
+    wait_boot_complete(vm)
+    # Extra over a bare boot: the reboot tests probe DNS, so wait for Unbound to answer.
     wait_unbound_ready(vm)
 
 
