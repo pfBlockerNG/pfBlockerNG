@@ -16,7 +16,6 @@ Tests:
 
 import json
 import os
-import time
 from collections.abc import Iterator
 
 import pytest
@@ -55,6 +54,9 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
 LEDGER_PATH = "/var/db/pfblockerng/pfb_due_ledger.json"
 _PHP = "/usr/local/bin/php"
 _PFB_PHP = "/usr/local/www/pfblockerng/pfblockerng.php"
+# The ledger lives at $pfb['dbdir']/pfb_due_ledger.json (dbdir = /var/db/pfblockerng).
+_LEDGER_DIR = "/var/db/pfblockerng"
+_PFB_EXTRA = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
 
 
 # ---------------------------------------------------------------------------
@@ -72,16 +74,21 @@ def _read_ledger(vm) -> dict:
 
 
 def _write_ledger_entry(vm, job_key: str, last_run: int, next_due: int, jitter: int = 0) -> None:
-    """Write a single ledger entry on the box via Python3."""
-    entry_json = json.dumps({"last_run": last_run, "next_due": next_due, "jitter": jitter})
-    script = (
-        "import json, os; "
-        f"p='{LEDGER_PATH}'; "
-        "d=json.load(open(p)) if os.path.exists(p) else {}; "
-        f"d['{job_key}']={entry_json}; "
-        "open(p,'w').write(json.dumps(d))"
+    """Write a single ledger entry via the package's own PHP ledger writer.
+
+    pfSense ships no ``python3``, and the product already owns the ledger format, so
+    ``pfb_due_ledger_write_entry()`` (PHP) is the right tool — not a here-doc Python snippet.
+    """
+    snippet = (
+        f"require_once('{_PFB_EXTRA}');"
+        f"pfb_due_ledger_write_entry('{job_key}', array("
+        f"'last_run' => {int(last_run)}, 'next_due' => {int(next_due)}, 'jitter' => {int(jitter)}"
+        f"), '{_LEDGER_DIR}');"
+        "echo 'OK';"
     )
-    vm.ssh(f"/usr/local/bin/python3 -c {json.dumps(script)}")
+    result = h.php_eval(vm, snippet)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_write_ledger_entry failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
 def _set_quiet_hours(vm, window: str) -> None:
@@ -148,10 +155,9 @@ def test_apply_no_window_dispatches_immediately(deployed_vm: SmokeVM):
     preserved after Phase 5.
     """
     vm = deployed_vm
-    now = int(time.time())
 
     _clear_quiet_hours(vm)
-    _force_cron_due(vm)
+    _force_cron_due(vm)  # seeds last_run = 0 — a fired tick advances it past 0
 
     # Before: pending not set.
     assert not _is_pending(vm), "before tick: pending_apply must not be set"
@@ -161,8 +167,13 @@ def test_apply_no_window_dispatches_immediately(deployed_vm: SmokeVM):
     # After: last_run updated (dispatched) and not pending.
     entry = _cron_ledger(vm)
     assert entry is not None, f"after tick: ledger entry for 'cron' must exist; ledger={_read_ledger(vm)}"
-    assert entry.get("last_run", 0) >= now, (
-        f"after tick: expected last_run >= {now}, got last_run={entry.get('last_run')}; ledger={entry}"
+    # Dispatch evidence is a CHANGE in the guest-stamped ledger, not a host-clock
+    # comparison: _force_cron_due seeded last_run=0, so a fired tick advances it
+    # past 0. Comparing the guest last_run against the host's time.time() raced the
+    # ~1s host/guest clock skew — an off-by-one flake.
+    assert entry.get("last_run", 0) > 0, (
+        f"after tick: expected last_run to advance past the forced 0 (job dispatched), "
+        f"got last_run={entry.get('last_run')}; ledger={entry}"
     )
     assert not _is_pending(vm), f"after tick (no window): pending_apply must NOT be set; ledger={entry}"
 
@@ -181,10 +192,9 @@ def test_apply_inside_window_dispatches(deployed_vm: SmokeVM):
       And pending_apply is NOT set (was inside window).
     """
     vm = deployed_vm
-    now = int(time.time())
 
     _set_quiet_hours(vm, "00:00-23:59")  # always-open window covers any real clock
-    _force_cron_due(vm)
+    _force_cron_due(vm)  # seeds last_run = 0 — a fired tick advances it past 0
 
     assert not _is_pending(vm), "before tick: pending_apply must not be set"
 
@@ -192,8 +202,11 @@ def test_apply_inside_window_dispatches(deployed_vm: SmokeVM):
 
     entry = _cron_ledger(vm)
     assert entry is not None, f"after tick: 'cron' entry must exist; ledger={_read_ledger(vm)}"
-    assert entry.get("last_run", 0) >= now, (
-        f"after tick (inside window): expected last_run >= {now}, got {entry.get('last_run')}; ledger={entry}"
+    # Advanced past the forced-due 0 ⇒ dispatched (single-clock change check; see
+    # test_apply_no_window_dispatches_immediately for why not host time.time()).
+    assert entry.get("last_run", 0) > 0, (
+        f"after tick (inside window): expected last_run to advance past the forced 0, "
+        f"got {entry.get('last_run')}; ledger={entry}"
     )
     assert not _is_pending(vm), f"after tick (inside window): pending_apply must NOT be set; ledger={entry}"
 
@@ -227,11 +240,12 @@ def test_apply_outside_window_defers(deployed_vm: SmokeVM):
     if now_local.hour == 0 and now_local.minute == 0:
         pytest.skip("Test clock is inside the 1-minute exclusion window; re-run after 00:01")
 
-    prev_entry = _cron_ledger(vm)
-    prev_last_run = (prev_entry or {}).get("last_run", 0)
-
     _set_quiet_hours(vm, "00:00-00:01")  # 1-min window in the dead of night
     _force_cron_due(vm)
+    # Baseline AFTER forcing due: _force_cron_due resets last_run to 0, so a DEFERRED tick
+    # must leave it at this forced baseline. Capturing before the reset would compare against
+    # a prior test's dispatched last_run and false-fail under module collection order.
+    prev_last_run = (_cron_ledger(vm) or {}).get("last_run", 0)
 
     assert not _is_pending(vm), "before tick: pending_apply must not be set"
 
@@ -272,21 +286,19 @@ def test_apply_pending_cleared_by_window_open(deployed_vm: SmokeVM):
     "pending" entry written manually would be silently ignored.
     """
     vm = deployed_vm
-    now = int(time.time())
 
-    # Arrange: force due + set pending manually (simulates a prior deferred tick).
+    # Arrange: force due + mark pending via the product's own setter (simulates a prior
+    # deferred tick). pfb_due_ledger_set_pending() adds pending_apply=TRUE to the entry.
     _force_cron_due(vm)
-    # Write pending_apply=True into the ledger directly.
-    script = (
-        "import json, os; "
-        f"p='{LEDGER_PATH}'; "
-        "d=json.load(open(p)) if os.path.exists(p) else {}; "
-        "d.setdefault('cron', {})['pending_apply'] = True; "
-        "open(p,'w').write(json.dumps(d))"
+    pend = h.php_eval(
+        vm,
+        f"require_once('{_PFB_EXTRA}');pfb_due_ledger_set_pending('cron', '{_LEDGER_DIR}');echo 'OK';",
     )
-    vm.ssh(f"/usr/local/bin/python3 -c {json.dumps(script)}")
+    assert pend.returncode == 0 and "OK" in pend.stdout, (
+        f"set_pending failed: rc={pend.returncode} {pend.stderr!r} {pend.stdout!r}"
+    )
 
-    assert _is_pending(vm), "precondition: pending_apply must be TRUE before tick"
+    assert _is_pending(vm), f"precondition: pending_apply must be TRUE before tick; ledger={_read_ledger(vm)}"
 
     _set_quiet_hours(vm, "00:00-23:59")
 
@@ -294,8 +306,10 @@ def test_apply_pending_cleared_by_window_open(deployed_vm: SmokeVM):
 
     entry = _cron_ledger(vm)
     assert entry is not None, f"after tick: 'cron' entry must exist; ledger={_read_ledger(vm)}"
-    assert entry.get("last_run", 0) >= now, (
-        f"after tick (pending + window open): expected last_run >= {now}, got {entry.get('last_run')}; ledger={entry}"
+    # Advanced past the forced-due 0 ⇒ dispatched (single-clock change check).
+    assert entry.get("last_run", 0) > 0, (
+        f"after tick (pending + window open): expected last_run to advance past the forced 0, "
+        f"got {entry.get('last_run')}; ledger={entry}"
     )
     assert not _is_pending(vm), (
         f"after tick (pending + window open): pending_apply must be FALSE (cleared by dispatch); ledger={entry}"
