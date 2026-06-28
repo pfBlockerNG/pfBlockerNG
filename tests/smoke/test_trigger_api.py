@@ -41,6 +41,13 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
+    # The DNSBL tests below fetch their feed over HTTP from the SLIRP mock host
+    # 192.168.89.2 (RFC1918). The default-ON feed-host SSRF guard
+    # (pfb_feed_internal_filter) rejects an internal-resolving feed host, so the
+    # download is terminated ("Invalid URL") and 0 entries load — the name never
+    # blocks. Allowlist the WAN SLIRP test network so the filter stays ON yet the
+    # mock fetch is exempt (same fix test_smoke_feeds applies).
+    h.set_feed_internal_allowlist(smoke_vm, "192.168.89.0/24")
     h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
     try:
@@ -66,7 +73,9 @@ def test_pfb_trigger_verb_reloads_dnsbl(deployed_vm: SmokeVM, mock_feeds: _MockF
     This pins the pfb_trigger-via-helpers.reload() path: if the verb is not wired, the
     PHP CLI returns rc!=0 and reload() raises RuntimeError before any DNS assertion.
     """
-    domain = h.unique_domain()
+    # dnsbl_plain.txt lists this exact member (see the fixture + test_smoke_feeds);
+    # probe IT, not a random unique_domain() the static feed can never contain.
+    domain = "uuid-a344db4286a4.com"
     feed_url = mock_feeds.feed_url("dnsbl_plain.txt")
     spec = h.DnsblCase(
         aliasname="pfb_trigger_dnsbl",
@@ -121,7 +130,9 @@ def test_deprecated_update_verb_still_reloads_dnsbl(deployed_vm: SmokeVM, mock_f
     This is the adapter coverage test: reload_deprecated_verb() exercises the
     deprecated string path directly (bypassing the pfb_trigger abstraction in reload()).
     """
-    domain = h.unique_domain()
+    # dnsbl_plain.txt lists this exact member (see the fixture + test_smoke_feeds);
+    # probe IT, not a random unique_domain() the static feed can never contain.
+    domain = "uuid-a344db4286a4.com"
     feed_url = mock_feeds.feed_url("dnsbl_plain.txt")
     spec = h.DnsblCase(
         aliasname="pfb_dep_update_dnsbl",
