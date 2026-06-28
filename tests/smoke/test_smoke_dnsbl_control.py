@@ -200,7 +200,8 @@ def test_dnsbl_control_off_makes_cli_channel_inert(control_vm: tuple[SmokeVM, st
     h.assert_control_ini(vm, control=False, legacy=False)
 
     # AND: issue a disable. The CLI writer still validates + publishes it (returns a seq),
-    # but with no reader thread nothing consumes it.
+    # but with no reader thread nothing consumes it — the writer waits up to 5s for the
+    # (absent) reader to confirm, logs "not confirmed applied", then returns the seq.
     applied_before = h.read_control_applied(vm)
     seq = h.dnsbl_control_cli(vm, "disable")
     h.flush_unbound_cache(vm)
