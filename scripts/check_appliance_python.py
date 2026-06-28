@@ -42,22 +42,23 @@ Exit status: 0 = clean, 1 = one or more violations (printed with file:line).
 
 from __future__ import annotations
 
-import re
 import subprocess
 import sys
 from pathlib import Path
 
 # The appliance interpreter path. pfSense has no python3 symlink here, so any
-# invocation of it is a runtime rc=127 footgun. (Built so this file does not
-# match its own check — though scripts/ is not scanned anyway.)
-_FORBIDDEN = re.compile(r"/usr/local/bin/" + r"python")
+# invocation of it is a runtime rc=127 footgun. A plain substring beats a regex
+# for this per-line scan (ADR-28). This file lives under scripts/, which is not
+# scanned, so the literal here is harmless.
+_FORBIDDEN = "/usr/local/bin/python"
 
 # Tracked-tree roots that run ON the appliance.
 _SCAN_ROOTS = ("src", "tests")
 
 
 def _tracked_files(roots: tuple[str, ...]) -> list[Path]:
-    """Return the git-tracked files under the given roots (text files only)."""
+    """Return every git-tracked file under the given roots (binary files are
+    handled gracefully by :func:`find_violations`)."""
     out = subprocess.run(
         ["git", "ls-files", "-z", *roots],
         capture_output=True,
@@ -76,7 +77,7 @@ def find_violations(paths: list[Path]) -> list[tuple[Path, int, str]]:
         except (OSError, UnicodeError):
             continue
         for lineno, line in enumerate(text.splitlines(), start=1):
-            if _FORBIDDEN.search(line):
+            if _FORBIDDEN in line:
                 violations.append((path, lineno, line.strip()))
     return violations
 
