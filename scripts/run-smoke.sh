@@ -16,7 +16,7 @@
 #   --paths P      default tests/smoke   (UI: tests/smoke/ui)
 #   -m/--marker M  default smoke         (CI smoke: smoke|repo; UI: ui_render|...)
 #   --timeout N    default 30            (UI: 300)
-#   -k EXPR        optional; ONE arg, no word-split (passes as -k "expr" to pytest)
+#   --filter EXPR  optional; ONE arg, no word-split (passed to pytest as -k "expr")
 #   trailing passthrough → forwarded to pytest verbatim
 #
 # AMENDMENTS:
@@ -45,7 +45,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 _PATHS="tests/smoke"
 _MARKER="smoke"
 _TIMEOUT=30
-_K=""
+_FILTER=""
 _MARKER_EXPLICIT=0  # set to 1 when -m/--marker was given as a structured flag
 
 # ── Phase 1: parse structured flags; remaining "$@" = passthrough ─────────── #
@@ -68,9 +68,9 @@ while [ "$#" -gt 0 ]; do
             _TIMEOUT="${1:?run-smoke: --timeout requires an argument}"
             shift
             ;;
-        -k)
+        --filter)
             shift
-            _K="${1:?run-smoke: -k requires an argument}"
+            _FILTER="${1:?run-smoke: --filter requires an argument}"
             shift
             ;;
         *)
@@ -121,8 +121,8 @@ fi
 # Final order: [PATH?] [-m MARKER?] [fixed...] [-k K?] [passthrough...]
 
 # 4a. Prepend -k K so it lands between the fixed flags and the passthrough.
-if [ -n "$_K" ]; then
-    set -- -k "$_K" "$@"
+if [ -n "$_FILTER" ]; then
+    set -- -k "$_FILTER" "$@"
 fi
 
 # 4b. Prepend the fixed canonical flags (the drift-kill; see ADR §5.3).

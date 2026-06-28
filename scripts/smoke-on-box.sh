@@ -5,13 +5,13 @@
 # Single-writer per lease; no other smoke runs share this box concurrently.
 #
 # USAGE (always via select-box.sh -- "... sh /root/pfBlockerNG/scripts/smoke-on-box.sh <flags>"):
-#   smoke-on-box.sh [--ref REF] [--abi ABI] [--marker M] [--k K] [--no-two-vm]
+#   smoke-on-box.sh [--ref REF] [--abi ABI] [--marker M] [--filter EXPR] [--no-two-vm]
 #
 # FLAGS:
 #   --ref REF      git ref to check out (default: current HEAD)
 #   --abi ABI      build ABI string (default: FreeBSD:15:amd64)
 #   --marker M     pytest -m marker (default: smoke)
-#   --k K          pytest -k filter expr (default: none)
+#   --filter EXPR  pytest -k filter expr (default: none)
 #   --no-two-vm    skip civm image pull and set NO_TWO_VM=1
 #
 # ENV (set by the select-box.sh lease or inherited):
@@ -38,7 +38,7 @@ set -eu
 _REF=""        # resolved below (HEAD) if not given
 _ABI="FreeBSD:15:amd64"
 _MARKER="smoke"
-_K=""
+_FILTER=""
 _NO_TWO_VM=0
 
 REPO_ROOT="/root/pfBlockerNG"
@@ -61,7 +61,7 @@ while [ "$#" -gt 0 ]; do
         --ref)      shift; _REF="$1";    shift ;;
         --abi)      shift; _ABI="$1";    shift ;;
         --marker)   shift; _MARKER="$1"; shift ;;
-        --k)        shift; _K="$1";      shift ;;
+        --filter)   shift; _FILTER="$1";      shift ;;
         --no-two-vm) _NO_TWO_VM=1;       shift ;;
         *) printf 'smoke-on-box: unknown argument: %s\n' "$1" >&2; exit 1 ;;
     esac
@@ -90,9 +90,9 @@ if [ "${PFB_ONBOX_REEXEC:-}" != "1" ]; then
     fi
 
     # Re-exec the now-checked-out version with properly quoted args.
-    # Build via set -- so each arg is a distinct word (no word-split on _K spaces).
+    # Build via set -- so each arg is a distinct word (no word-split on _FILTER spaces).
     set -- --ref "$_REF" --abi "$_ABI" --marker "$_MARKER"
-    [ -n "$_K" ] && set -- "$@" --k "$_K"
+    [ -n "$_FILTER" ] && set -- "$@" --filter "$_FILTER"
     [ "$_NO_TWO_VM" -eq 1 ] && set -- "$@" --no-two-vm
     PFB_ONBOX_REEXEC=1 exec sh "$REPO_ROOT/scripts/smoke-on-box.sh" "$@"
 fi
@@ -237,8 +237,8 @@ printf 'smoke-on-box: provisioning test venv (.venv)...\n' >&2
 
 # ── Step 6: run smoke ─────────────────────────────────────────────────────── #
 printf 'smoke-on-box: running smoke (marker=%s%s)\n' \
-    "$_MARKER" "${_K:+ k=$_K}" >&2
+    "$_MARKER" "${_FILTER:+ filter=$_FILTER}" >&2
 
 set -- --paths tests/smoke --marker "$_MARKER" --timeout 30
-[ -n "$_K" ] && set -- "$@" -k "$_K"
+[ -n "$_FILTER" ] && set -- "$@" --filter "$_FILTER"
 exec sh scripts/run-smoke.sh "$@"

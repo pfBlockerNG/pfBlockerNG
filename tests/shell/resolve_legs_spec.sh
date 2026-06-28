@@ -24,7 +24,7 @@ Describe 'resolve-legs.sh legs — scope + leg selection'
 
     setup() {
         scrub_git_env
-        unset SCOPE_INPUT VERSION_INPUT PYTEST_K_INPUT GITHUB_OUTPUT GITHUB_ENV PFB_BASE_REF
+        unset SCOPE_INPUT VERSION_INPUT PYTEST_FILTER_INPUT GITHUB_OUTPUT GITHUB_ENV PFB_BASE_REF
     }
     BeforeEach 'setup'
 
@@ -158,17 +158,17 @@ Describe 'resolve-legs.sh legs — -k derivation'
 
     setup() {
         scrub_git_env
-        unset SCOPE_INPUT VERSION_INPUT PYTEST_K_INPUT GITHUB_OUTPUT GITHUB_ENV PFB_BASE_REF
+        unset SCOPE_INPUT VERSION_INPUT PYTEST_FILTER_INPUT GITHUB_OUTPUT GITHUB_ENV PFB_BASE_REF
     }
     BeforeEach 'setup'
 
-    It 'explicit PYTEST_K_INPUT → used verbatim as -k'
+    It 'explicit PYTEST_FILTER_INPUT → used verbatim as -k'
         # stdout = legs JSON; stderr = -k value + scope banner (informational).
         When run env \
             CI_MATRIX="$FIXTURE_MATRIX" \
             EVENT_NAME="workflow_dispatch" \
             SCOPE_INPUT="full" \
-            PYTEST_K_INPUT="test_foo or test_bar" \
+            PYTEST_FILTER_INPUT="test_foo or test_bar" \
             sh "$SCRIPT" legs --test-dir tests/smoke --label marker
         The status should be success
         The output should include '"pfsense_version"'
@@ -177,7 +177,7 @@ Describe 'resolve-legs.sh legs — -k derivation'
 
     It 'impacted scope with PFB_IMPACTED_CHANGED_FILES seam → auto-derives -k'
         # Given: a changed test module visible via the PFB_IMPACTED_CHANGED_FILES seam.
-        # When: impacted scope with no explicit PYTEST_K_INPUT.
+        # When: impacted scope with no explicit PYTEST_FILTER_INPUT.
         # Then: stdout = legs JSON; stderr = auto-derived -k expression.
         When run env \
             CI_MATRIX="$FIXTURE_MATRIX" \

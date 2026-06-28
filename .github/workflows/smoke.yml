@@ -54,7 +54,7 @@ on:
         description: "pytest marker to select (default 'smoke'; 'repo' = the ADR-17 repository-install flow)."
         required: false
         default: "smoke"
-      pytest_k:
+      pytest_filter:
         description: "pytest -k selector — OVERRIDES the impacted auto-derivation. Blank in impacted scope = the tests changed vs origin/devel (whole marker if none). e.g. 'test_dns_redirect' or 'redirect and not browser'."
         required: false
         default: ""
@@ -78,7 +78,7 @@ on:
         required: false
         type: string
         default: "smoke"
-      pytest_k:
+      pytest_filter:
         description: "pytest -k selector (overrides impacted auto-derivation). Blank = scope decides."
         required: false
         type: string
@@ -105,7 +105,7 @@ jobs:
       ci_matrix: ${{ steps.filter.outputs.ci_matrix }}
       leg_count: ${{ steps.count.outputs.leg_count }}
       pytest_marker: ${{ steps.filter.outputs.pytest_marker }}
-      pytest_k: ${{ steps.filter.outputs.pytest_k }}
+      pytest_filter: ${{ steps.filter.outputs.pytest_filter }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -127,12 +127,12 @@ jobs:
           VERSION_INPUT: ${{ inputs.version }}
           SCOPE_INPUT: ${{ inputs.scope }}
           MARKER_INPUT: ${{ inputs.pytest_marker }}
-          PYTEST_K_INPUT: ${{ inputs.pytest_k }}
+          PYTEST_FILTER_INPUT: ${{ inputs.pytest_filter }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -eu
           # ADR-47 P5: scope + legs + -k resolved by the shared script.
-          # Writes scope=, ci_matrix=, pytest_k= to $GITHUB_OUTPUT.
+          # Writes scope=, ci_matrix=, pytest_filter= to $GITHUB_OUTPUT.
           sh scripts/resolve-legs.sh legs --test-dir tests/smoke --label marker
           printf 'pytest_marker=%s\n' "${MARKER_INPUT:-smoke}" >> "$GITHUB_OUTPUT"
 
@@ -215,7 +215,7 @@ jobs:
       # Resolved by the prepare step: the marker, and the effective -k (an explicit
       # input, else the impacted auto-derivation, else blank = whole marker).
       pytest_marker: ${{ needs.prepare.outputs.pytest_marker || 'smoke' }}
-      pytest_k: ${{ needs.prepare.outputs.pytest_k }}
+      pytest_filter: ${{ needs.prepare.outputs.pytest_filter }}
     secrets: inherit
 
   # ── 3. AND-gate: green only if ALL legs passed ───────────────────────────────

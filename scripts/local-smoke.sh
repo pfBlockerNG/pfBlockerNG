@@ -9,7 +9,7 @@
 # Full background + rationale: docs/misc/local-smoke-debian.md
 #
 # Usage:
-#   scripts/local-smoke.sh [--ref REF] [--abi ABI] [--marker M] [--k K]
+#   scripts/local-smoke.sh [--ref REF] [--abi ABI] [--marker M] [--filter EXPR]
 #                          [--no-two-vm]
 #
 # Required (env):
@@ -19,8 +19,8 @@
 #   PFB_REF     git ref (commit/branch) to test (default: current HEAD)
 #   --ref REF   same; flag takes precedence over PFB_REF
 #   --abi ABI   build ABI (default: FreeBSD:15:amd64)
-#   --marker M  pytest -m marker (default: smoke); see also --k
-#   --k K       pytest -k filter expression (optional)
+#   --marker M  pytest -m marker (default: smoke); see also --filter
+#   --filter EXPR  pytest -k filter expression (optional)
 #   --no-two-vm skip civm image pull and LAN-client tests
 #
 # The leased box runs scripts/smoke-on-box.sh, which:
@@ -59,7 +59,7 @@ export PFB_BOXES
 _REF="${PFB_REF:-}"
 _ABI="FreeBSD:15:amd64"
 _MARKER="smoke"
-_K=""
+_FILTER=""
 _NO_TWO_VM=0
 
 while [ "$#" -gt 0 ]; do
@@ -67,7 +67,7 @@ while [ "$#" -gt 0 ]; do
         --ref)      shift; _REF="$1";    shift ;;
         --abi)      shift; _ABI="$1";    shift ;;
         --marker|-m) shift; _MARKER="$1"; shift ;;
-        --k|-k)     shift; _K="$1";      shift ;;
+        --filter)   shift; _FILTER="$1";      shift ;;
         --no-two-vm) _NO_TWO_VM=1;       shift ;;
         --) shift; break ;;
         -*) printf 'local-smoke: unknown flag: %s\n' "$1" >&2; exit 2 ;;
@@ -75,7 +75,7 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 if [ "$#" -gt 0 ]; then
-    printf 'local-smoke: unexpected positional args (use --marker/--k): %s\n' "$*" >&2
+    printf 'local-smoke: unexpected positional args (use --marker/--filter): %s\n' "$*" >&2
     exit 2
 fi
 
@@ -106,8 +106,8 @@ _MARKER_Q="$(_sq "$_MARKER")"
 
 # Build the smoke-on-box.sh flags string (structured, no word-split risk after encoding).
 _ob_flags="--ref '$_REF_Q' --abi '$_ABI_Q' --marker '$_MARKER_Q'"
-if [ -n "$_K" ]; then
-    _ob_flags="$_ob_flags --k '$(_sq "$_K")'"
+if [ -n "$_FILTER" ]; then
+    _ob_flags="$_ob_flags --filter '$(_sq "$_FILTER")'"
 fi
 if [ "$_NO_TWO_VM" -eq 1 ]; then
     _ob_flags="$_ob_flags --no-two-vm"
@@ -129,7 +129,7 @@ _bootstrap="cd /root/pfBlockerNG \
  && exec sh scripts/smoke-on-box.sh $_ob_flags"
 
 printf 'local-smoke: leasing box (REF=%s marker=%s%s)\n' \
-    "$_REF" "$_MARKER" "${_K:+ k=$_K}" >&2
+    "$_REF" "$_MARKER" "${_FILTER:+ filter=$_FILTER}" >&2
 
 # ── Lease a box and run the bootstrap on it ────────────────────────────────── #
 # select-box.sh -- <cmd>: acquires a lease, runs <cmd> on the box over ssh,

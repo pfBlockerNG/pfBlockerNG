@@ -831,7 +831,7 @@ mechanics, CI wiring (`ui-tests.yml`), gate status — are documented in
   SKIP, never fail).
 - **Selective dispatch (validate your own change cheaply).** A bare `gh workflow run
   smoke.yml`/`ui-tests.yml` defaults to **`scope=impacted`**: the **min CE leg** + only the test
-  modules **changed vs `origin/devel`** (auto-derived). Pass **`-f pytest_k="a or b"`** to add the
+  modules **changed vs `origin/devel`** (auto-derived). Pass **`-f pytest_filter="a or b"`** to add the
   tests covering changed *non-test* code (a live-VM suite can't map src→test for you);
   `-f version=` / `-f pytest_marker=` (smoke) / `-f tier=` (UI) narrow further; **`-f scope=full`**
   is the every-leg whole-marker run. The nightly `schedule`, `version-tracker`'s post-bump
