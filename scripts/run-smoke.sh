@@ -5,8 +5,12 @@
 # Emits and executes:
 #   $PYTHON -m pytest $PATHS -m $MARKER
 #     --override-ini="addopts=" --override-ini="timeout_func_only=true"
-#     --timeout=$TIMEOUT --timeout-method=signal -v
+#     --timeout=$TIMEOUT --timeout-method=signal --durations=0 --capture=tee-sys -v
 #     [-k $K] [passthrough...]
+#
+# --durations=0 reports every test's setup/call/teardown phase timing (issue #605
+#   Layer A); --capture=tee-sys streams stdout live so the per-step PFB_TIMING lines
+#   (Layer B, tests/timing.py) show on a PASSING run, not only on failure.
 #
 # Params + defaults (structured flags must precede passthrough):
 #   --paths P      default tests/smoke   (UI: tests/smoke/ui)
@@ -127,6 +131,8 @@ set -- \
     --override-ini="timeout_func_only=true" \
     --timeout="$_TIMEOUT" \
     --timeout-method=signal \
+    --durations=0 \
+    --capture=tee-sys \
     -v \
     "$@"
 
@@ -140,5 +146,13 @@ fi
 if [ "$_CALLER_GAVE_PATH" -eq 0 ]; then
     set -- "$_PATHS" "$@"
 fi
+
+# issue #605: export the diagnostics dir so the pytest process (and tests/timing.py's
+# per-step timing.log) sees it — resolved here in the LAUNCHER, never mutated in-program.
+# Mirrors tests/smoke/conftest.py's DIAG_DIR default; the on-box pytest otherwise has it
+# unset (the orchestrator's value doesn't cross the ssh boundary), so timing.log would
+# never join the uploaded smoke-diag/. The unit suite runs plain pytest (not this script),
+# so PFB_DIAG_DIR stays unset there — timing is terminal-only, no stray file.
+export PFB_DIAG_DIR="${PFB_DIAG_DIR:-smoke-diag}"
 
 exec "$PYTHON" -m pytest "$@"

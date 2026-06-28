@@ -54,6 +54,7 @@ from enum import Enum
 from pathlib import Path
 from typing import NamedTuple
 
+from ..timing import timed, timed_step  # issue #605 — per-step timing (PFB_TIMING)
 from .conftest import (
     DEFAULT_BOOT_TIMEOUT,
     GUEST_TO_HOST_ALIAS,
@@ -360,6 +361,7 @@ class SafeSearchEntry(NamedTuple):
 # --------------------------------------------------------------------------- #
 
 
+@timed_step("deploy")
 def deploy(vm: SmokeVM, pkg_path: str | None = None, *, timeout: float = 300.0) -> None:
     """Install the branch's built .pkg onto the guest via install-pkg.sh.
 
@@ -674,14 +676,17 @@ def php_eval(vm: SmokeVM, snippet: str, *, timeout: float = 60.0) -> subprocess.
     writers just emit an 'OK' sentinel the caller greps for.
     """
     program = snippet + "\nexec\nexit\n"
-    return subprocess.run(
-        vm.ssh_argv(PFSSH_BIN),
-        input=program,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-    )
+    # issue #605: php_eval runs its OWN subprocess (not SmokeVM.ssh), so time it here —
+    # threshold-gated like ssh so the many fast config writes don't flood the log.
+    with timed("php_eval", min_seconds=1.0):
+        return subprocess.run(
+            vm.ssh_argv(PFSSH_BIN),
+            input=program,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
 
 
 _CFG_VAL_OPEN = "<<<CFGVAL>>>"
@@ -1851,6 +1856,7 @@ def _dnsbl_list_logging(mode: DnsblMode) -> str:
     }[mode]
 
 
+@timed_step(lambda vm, spec, **_k: f"inject:{spec.aliasname}")
 def inject(vm: SmokeVM, spec: DnsblCase | IpCase, *, timeout: float = 90.0) -> None:
     """Apply a case's pfBlockerNG config AND control records, then write_config.
 
@@ -2201,6 +2207,7 @@ _SCOPE_TO_PFBTRIGGER: dict[str, tuple[str, str, str]] = {
 }
 
 
+@timed_step(lambda vm, scope="update", **_k: f"reload:{scope}")
 def reload(
     vm: SmokeVM, scope: str = "update", *, data_path: bool = False, wait_unbound: bool = True, timeout: float = 600.0
 ) -> None:
@@ -3591,6 +3598,7 @@ def pfctl_tables(vm: SmokeVM, *, timeout: float = 30.0) -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
+@timed_step(lambda vm, name, **_k: f"wait_pfctl_table:{name}")
 def wait_pfctl_table(vm: SmokeVM, name: str, *, timeout: float = 30.0, interval: float = 2.0) -> list[str]:
     """Poll ``pfctl -t <name> -T show`` until the table EXISTS and is NON-EMPTY.
 

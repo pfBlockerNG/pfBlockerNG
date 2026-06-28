@@ -8,7 +8,9 @@ testpaths = ["tests"]
 # cleanly and runs the exact same unit set. The smoke workflow re-enables it
 # with `pytest -m smoke --override-ini="addopts=" tests/smoke` (or
 # `-p no:cacheprovider tests/smoke -m smoke`); see tests/smoke/conftest.py.
-addopts   = "-v --ignore=tests/smoke"
+# --durations=25 surfaces the 25 slowest setup/call/teardown phases each run (issue
+# #605 Layer A) — cheap signal on which unit tests/fixtures dominate, no plugin.
+addopts   = "-v --ignore=tests/smoke --durations=25"
 markers = [
     "smoke: live-VM end-to-end smoke test (ADR-04); needs KVM + the GHCR pfSense image; deselected from the default run",
     "ui_render: live-VM Web-UI render-smoke (ADR-14 Tier A); authenticated HTTP; deselected from the default run",

@@ -54,6 +54,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+from ..timing import timed  # issue #605 — per-step timing (PFB_TIMING)
 from . import stub_responses
 
 # --------------------------------------------------------------------------- #
@@ -156,6 +157,33 @@ CLIENT_LAN_IP = "192.168.1.10"  # civm's static lease on the pfSense LAN
 # Connection object yielded by the VM fixture
 # --------------------------------------------------------------------------- #
 
+# issue #605: a leading interpreter is noise in an ssh timing label ("ssh:php" tells you
+# nothing) — drop it so the script + verb surface ("ssh:pfblockerng.php pfb_trigger").
+_SSH_INTERPRETERS = frozenset({"php", "php83", "php-cgi", "python", "python3", "python3.11", "sh", "bash"})
+
+
+def _ssh_timing_label(remote: tuple[str, ...]) -> str:
+    """Build a descriptive PFB_TIMING label for an ssh command (issue #605).
+
+    Shows the meaningful command, not just the interpreter: the first few non-flag tokens
+    (basename'd), with a leading php/python/sh dropped, capped for the log.
+    """
+    cmd = " ".join(str(part) for part in remote).strip()
+    if not cmd:
+        return "ssh"
+    parts: list[str] = []
+    for token in cmd.split():
+        if token.startswith("-"):  # skip flags/options
+            continue
+        base = os.path.basename(token)
+        if not parts and base in _SSH_INTERPRETERS:
+            continue  # drop the leading interpreter; surface the script/verb instead
+        parts.append(base)
+        if len(parts) >= 3:
+            break
+    label = " ".join(parts) if parts else os.path.basename(cmd.split()[0])
+    return f"ssh:{label}"[:60]
+
 
 @dataclass
 class SmokeVM:
@@ -239,13 +267,16 @@ class SmokeVM:
 
     def ssh(self, *remote: str, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
         """Run a command on the guest over SSH and capture its output."""
-        return subprocess.run(
-            self.ssh_argv(*remote),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
+        # issue #605: time each guest command, but emit only the heavy ones (>=1s) so the
+        # tight poll loops (wait_*, snap_state) don't flood the log with sub-second lines.
+        with timed(_ssh_timing_label(remote), min_seconds=1.0):
+            return subprocess.run(
+                self.ssh_argv(*remote),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
 
 
 # --------------------------------------------------------------------------- #
