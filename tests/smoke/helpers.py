@@ -54,7 +54,7 @@ from enum import Enum
 from pathlib import Path
 from typing import NamedTuple
 
-from ..timing import timed, timed_step  # issue #605 — per-step timing (PFB_TIMING)
+from ..timing import step_min_seconds, timed, timed_step  # issue #605 — per-step timing (PFB_TIMING)
 from .conftest import (
     DEFAULT_BOOT_TIMEOUT,
     GUEST_TO_HOST_ALIAS,
@@ -637,6 +637,7 @@ def assert_hsts_loaded(vm: SmokeVM, name: str, *, timeout: float = 30.0) -> None
 # established flows (the live SSH session) are kept.
 
 
+@timed_step("block_egress")
 def block_egress() -> None:
     """Drop the runner's new outbound traffic (loopback + established kept)."""
     if not os.environ.get("SMOKE_BLOCK_EGRESS"):
@@ -649,6 +650,7 @@ def block_egress() -> None:
         subprocess.run(argv, check=True, timeout=30)
 
 
+@timed_step("unblock_egress")
 def unblock_egress() -> None:
     """Restore egress (teardown counterpart of :func:`block_egress`)."""
     if not os.environ.get("SMOKE_BLOCK_EGRESS"):
@@ -678,7 +680,7 @@ def php_eval(vm: SmokeVM, snippet: str, *, timeout: float = 60.0) -> subprocess.
     program = snippet + "\nexec\nexit\n"
     # issue #605: php_eval runs its OWN subprocess (not SmokeVM.ssh), so time it here —
     # threshold-gated like ssh so the many fast config writes don't flood the log.
-    with timed("php_eval", min_seconds=1.0):
+    with timed("php_eval", min_seconds=step_min_seconds()):
         return subprocess.run(
             vm.ssh_argv(PFSSH_BIN),
             input=program,
@@ -819,6 +821,7 @@ def set_control_records(
         raise RuntimeError(f"set_control_records failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
+@timed_step("ensure_dnsbl_vip")
 def ensure_dnsbl_vip(vm: SmokeVM, *, ip4: str = DEFAULT_DNSBL_VIP4, timeout: float = 120.0) -> None:
     """Inject the lo0 IP-Alias VIP DNSBL requires and point pfb_dnsvip4 at it.
 
@@ -1197,6 +1200,7 @@ def set_feed_internal_allowlist(vm: SmokeVM, value: str, *, timeout: float = 60.
         )
 
 
+@timed_step("use_system_dns_upstream")
 def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     """Point pfSense at the runner-side mock via its REAL System-DNS path (no custom zone).
 
@@ -2287,6 +2291,7 @@ def reload_deprecated_verb(vm: SmokeVM, verb: str, *, timeout: float = 600.0) ->
     wait_unbound_ready(vm)
 
 
+@timed_step("apply_filter_sync")
 def apply_filter_sync(vm: SmokeVM, *, timeout: float = 60.0) -> None:
     """Force a BLOCKING pf filter reload via ``/etc/rc.filter_configure_sync``.
 
@@ -2311,6 +2316,7 @@ def apply_filter_sync(vm: SmokeVM, *, timeout: float = 60.0) -> None:
         )
 
 
+@timed_step("reset")
 def reset(vm: SmokeVM, *, timeout: float = 600.0) -> None:
     """Return the VM to the per-case baseline (Phase-3 isolation strategy).
 
@@ -2590,6 +2596,7 @@ def snapshot_unbound_conf(vm: SmokeVM, *, timeout: float = 30.0) -> None:
 PFB_LOGDIR = "/var/log/pfblockerng"
 
 
+@timed_step(lambda vm, tag, **_k: f"snap_state:{tag}")
 def snap_state(vm: SmokeVM, tag: str, *, timeout: float = 30.0) -> None:
     """Snapshot full state into SNAP_DIR/<NN>_<tag>/ (best-effort), SECRET-SCRUBBED.
 
@@ -2758,6 +2765,7 @@ def assert_unbound_adds_only_python_config(vm: SmokeVM, *, timeout: float = 30.0
     )
 
 
+@timed_step("wait_unbound_ready")
 def wait_unbound_ready(vm: SmokeVM, *, attempts: int = 30, delay: float = 2.0) -> None:
     """Poll ``unbound-control status`` until ready (mirrors install-pkg.sh)."""
     cmd = "/usr/local/sbin/unbound-control -c /var/unbound/unbound.conf status"
@@ -2887,6 +2895,7 @@ def count_log_marker(vm: SmokeVM, path: str, marker: str, *, timeout: float = 30
         return 0
 
 
+@timed_step("wait_zero_downtime_swap")
 def wait_zero_downtime_swap(vm: SmokeVM, *, since: int, timeout: float = 60.0, interval: float = 2.0) -> None:
     """Block until a NEW fast-path swap line appears in the pfBlockerNG log (no restart).
 
@@ -3298,6 +3307,7 @@ def dns_probe_client_until(
     )
 
 
+@timed_step("assert_link_health")
 def assert_link_health(
     client_vm: SmokeVM,
     vm: SmokeVM,
@@ -3950,6 +3960,7 @@ def parse_redact_values(raw: str | None) -> list[str]:
     return values
 
 
+@timed_step("collect_host_diagnostics")
 def collect_host_diagnostics(vm: SmokeVM, dest_dir: str = "smoke-diag", *, timeout: float = 240.0) -> None:
     """Tar a COMPREHENSIVE pfSense-GUEST snapshot and pull it to ``dest_dir/`` on
     the runner, for the workflow to upload as an artifact.
@@ -4281,6 +4292,7 @@ class CaseContext:
         else:
             self.scope = "updateip"
 
+    @timed_step(lambda self: f"casecontext_enter:{self.spec.aliasname}")
     def __enter__(self) -> CaseContext:
         # Egress stays OPEN across inject + reload: the DNSBL update path needs a
         # working resolver/network and deadlocks the guest if egress is dark.
@@ -4310,6 +4322,7 @@ class CaseContext:
             block_egress()
         return self
 
+    @timed_step(lambda self, *exc: f"casecontext_exit:{self.spec.aliasname}")
     def __exit__(self, *exc: object) -> None:
         # Restore egress before reset() — its forced update reloads pfBlockerNG.
         unblock_egress()

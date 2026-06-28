@@ -32,9 +32,28 @@ from typing import IO, ParamSpec, TypeVar
 _PREFIX = "PFB_TIMING"
 _DIAG_DIR_ENV = "PFB_DIAG_DIR"
 _LOG_NAME = "timing.log"
+_STEP_MIN_ENV = "PFB_TIMING_MIN"
+_STEP_MIN_DEFAULT = 1.0
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
+
+
+def step_min_seconds() -> float:
+    """Emit threshold (seconds) for high-frequency chokepoints (``ssh`` / ``php_eval``).
+
+    Env-tunable via ``PFB_TIMING_MIN`` (default 1.0) so the tight poll loops don't flood the
+    log — set ``PFB_TIMING_MIN=0`` to emit EVERY command. Read per call so a test (or a run)
+    can change it without reimporting. A non-numeric value falls back to the default.
+    """
+    raw = os.environ.get(_STEP_MIN_ENV, "")
+    if not raw:
+        return _STEP_MIN_DEFAULT
+    try:
+        return float(raw)
+    except ValueError:
+        return _STEP_MIN_DEFAULT
+
 
 # The per-session timing log handle, opened once by open_log() and closed by close_log().
 # None means "no file sink" (terminal-only) — the unit suite, where PFB_DIAG_DIR is unset.

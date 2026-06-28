@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.timing import close_log, open_log, timed, timed_step
+from tests.timing import close_log, open_log, step_min_seconds, timed, timed_step
 
 # PFB_TIMING <label> <float>s — the one parseable shape the diagnostics consumer greps.
 _LINE = re.compile(r"^PFB_TIMING (?P<label>\S+) (?P<secs>\d+\.\d{2})s$")
@@ -164,3 +164,17 @@ def test_no_log_when_env_unset(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     with timed("nofile"):
         pass
     assert not (tmp_path / "timing.log").exists()
+
+
+def test_step_min_seconds_default_and_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Default threshold (env unset) is 1.0 — the poll-flood guard for ssh/php_eval.
+    monkeypatch.delenv("PFB_TIMING_MIN", raising=False)
+    assert step_min_seconds() == 1.0
+    # PFB_TIMING_MIN overrides it — 0 means "emit every command" (full detail).
+    monkeypatch.setenv("PFB_TIMING_MIN", "0")
+    assert step_min_seconds() == 0.0
+    monkeypatch.setenv("PFB_TIMING_MIN", "2.5")
+    assert step_min_seconds() == 2.5
+    # A non-numeric value falls back to the default rather than raising.
+    monkeypatch.setenv("PFB_TIMING_MIN", "nonsense")
+    assert step_min_seconds() == 1.0
