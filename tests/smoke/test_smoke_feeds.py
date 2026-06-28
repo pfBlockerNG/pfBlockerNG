@@ -1867,6 +1867,10 @@ def test_cron_spurious_200_same_bytes_no_reingest(
         feed_url = mock_feeds.feed_url(feed_name)
 
         spec = h.IpCase(aliasname="smokep3spur200", feed_url=feed_url, header=header, family="v4")
+        # pfBlockerNG logs IP-feed activity under the family-suffixed alias name
+        # ([ <aliasname>_<family> ]), NOT the row header — so the per-feed log marker
+        # is aliasname_family, not the bare header.
+        feed_marker = f"{spec.aliasname}_{spec.family}"
         with h.CaseContext(deployed_vm, spec):
             members_before = h.wait_pfctl_table(deployed_vm, spec.alias)
             assert h.member_present(members_before, member_ip), (
@@ -1876,14 +1880,14 @@ def test_cron_spurious_200_same_bytes_no_reingest(
             # Pin cron due (inside CaseContext so config is active).
             _pin_cron_due(deployed_vm)
             not_unch_before = h.count_log_marker(deployed_vm, h.PFB_LOG, "content unchanged")
-            dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
-            hdr_before = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
+            dl_before = _feed_log_count(deployed_vm, feed_marker, "Downloading update")
+            hdr_before = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {feed_marker} ]")
 
             # WHEN — cron; server returns 200 (no ETag → no If-None-Match → plain 200).
             h.reload(deployed_vm, "cron")
 
-            hdr_after = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
-            assert hdr_after > hdr_before, f"cron did not evaluate [ {header} ] — EveryDay feed not due; re-run"
+            hdr_after = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {feed_marker} ]")
+            assert hdr_after > hdr_before, f"cron did not evaluate [ {feed_marker} ] — EveryDay feed not due; re-run"
 
             # THEN — "content unchanged" appeared (spurious 200 detected by hash).
             not_unch_after = h.count_log_marker(deployed_vm, h.PFB_LOG, "content unchanged")
@@ -1893,9 +1897,9 @@ def test_cron_spurious_200_same_bytes_no_reingest(
             )
 
             # THEN — no re-ingest.
-            dl_after = _feed_log_count(deployed_vm, header, "Downloading update")
+            dl_after = _feed_log_count(deployed_vm, feed_marker, "Downloading update")
             assert dl_after == dl_before, (
-                f"Expected NO '[ {header} ] ... Downloading update' (identical bytes) "
+                f"Expected NO '[ {feed_marker} ] ... Downloading update' (identical bytes) "
                 f"(before={dl_before}, after={dl_after}) — spurious 200 triggered wrong re-ingest"
             )
 
@@ -1940,6 +1944,7 @@ _ADR44_BODY = "203.0.113.7\n198.51.100.23\n"
 _ADR44_MEMBER = "203.0.113.7"
 
 
+@pytest.mark.timeout(120)  # full update + targeted reload + file-detect/decompress/re-validate > the 30s cap on slow CI
 def test_zip_feed_imports(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """ADR-44: a zip-compressed IP feed downloads, decompresses, and loads (application/zip path).
 
@@ -1975,6 +1980,7 @@ def test_zip_feed_imports(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> 
         )
 
 
+@pytest.mark.timeout(120)  # full update + targeted reload + file-detect/decompress/re-validate > the 30s cap on slow CI
 def test_gzip_feed_imports(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """ADR-44 REGRESSION GUARD: a gzip-compressed IP feed downloads, decompresses, and loads.
 
@@ -2012,6 +2018,7 @@ def test_gzip_feed_imports(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) ->
         )
 
 
+@pytest.mark.timeout(120)  # full update + targeted reload + file-detect/decompress/re-validate > the 30s cap on slow CI
 def test_bzip2_feed_imports(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """ADR-44 REGRESSION GUARD: a bzip2-compressed IP feed downloads, decompresses, and loads.
 
