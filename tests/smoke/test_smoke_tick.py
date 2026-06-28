@@ -60,7 +60,13 @@ def _reset_ledger(deployed_vm: SmokeVM) -> None:
     ``test_tick_skips_non_due_feed`` pass only because an earlier test had run. Wipe the ledger
     before every test so each one establishes its own state from a known-empty baseline.
     """
-    deployed_vm.ssh(f"rm -f {LEDGER_PATH}")
+    # SmokeVM.ssh() is check=False, so verify the wipe took — a silently-failed rm would leave
+    # the prior test's ledger in place and defeat the isolation this fixture exists to provide.
+    result = deployed_vm.ssh("rm", "-f", LEDGER_PATH)
+    if result.returncode != 0:
+        raise AssertionError(
+            f"_reset_ledger failed to wipe {LEDGER_PATH}: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
