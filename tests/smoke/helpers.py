@@ -366,7 +366,9 @@ def deploy(vm: SmokeVM, pkg_path: str | None = None, *, timeout: float = 300.0) 
     """Install the branch's built .pkg onto the guest via install-pkg.sh.
 
     ``pkg add`` registers the package in pkg's DB, resolves RUN_DEPENDS from the
-    repos, and runs POST-INSTALL (menus, services, Unbound wiring) — fidelity
+    LOCAL pkg db (the smoke image bakes them — scripts/misc/install_deps_CE_2.8.sh
+    — so this is OFFLINE, no repo round-trip), and runs POST-INSTALL (menus,
+    services, Unbound wiring) — fidelity
     the rsync overlay (``deploy.sh``) does not give. The .pkg is produced by the
     portable Linux build job (build-pkg-linux.yml); its path is ``pkg_path`` or ``SMOKE_PKG``.
     install-pkg.sh polls ``unbound-control status`` after POST-INSTALL, so on
@@ -628,13 +630,16 @@ def assert_hsts_loaded(vm: SmokeVM, name: str, *, timeout: float = 30.0) -> None
 # --------------------------------------------------------------------------- #
 # Hermetic gate — block the runner's egress for the test phase (ADR §4 req 4)
 # --------------------------------------------------------------------------- #
-# MUST run only AFTER deploy(): `pkg add` pulls pfBlockerNG's RUN_DEPENDS from
-# the pfSense repo, and the guest reaches the internet THROUGH the runner's
-# SLIRP NAT — so blocking the runner's egress before the package is installed
-# hangs the install. Guarded by SMOKE_BLOCK_EGRESS (CI sets it) so a local
-# `pytest -m smoke` never touches the dev machine's firewall. Loopback stays up
-# (the mock feed server is reached via SLIRP 192.168.89.2 -> runner 127.0.0.1) and
-# established flows (the live SSH session) are kept.
+# This is the per-case HERMETIC PROBE gate: dropped around the probe so a "blocked"
+# name cannot secretly resolve upstream. Egress stays OPEN through deploy + the
+# reload/DNSBL-update phase instead — that path needs a working resolver (see
+# CaseContext.__enter__) — and is restored for teardown. NOTE: `pkg add` (deploy)
+# is OFFLINE: pfBlockerNG's RUN_DEPENDS are baked into the smoke image
+# (scripts/misc/install_deps_CE_2.8.sh), so the install never needs egress.
+# Guarded by SMOKE_BLOCK_EGRESS (CI sets it) so a local `pytest -m smoke` never
+# touches the dev machine's firewall. Loopback stays up (the mock feed server is
+# reached via SLIRP 192.168.89.2 -> runner 127.0.0.1) and established flows (the
+# live SSH session) are kept.
 
 
 @timed_step("block_egress")

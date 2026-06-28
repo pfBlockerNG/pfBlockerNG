@@ -9,7 +9,8 @@
 #       assigned in the image:
 #         net0 WAN  — SLIRP user-net, 192.168.89.0/24, host alias 192.168.89.2 (the
 #                     guest reaches the runner-side mock feed / stub-DNS /
-#                     sinkhole servers here); DHCP; egress for `pkg add`.
+#                     sinkhole servers here); DHCP; egress for the resolver +
+#                     feed-update path (`pkg add` is offline — RUN_DEPENDS baked).
 #         net1 MGMT — SLIRP user-net, 192.168.43.0/24 (a /24 like net0, NOT a /16:
 #                     a /16 made qemu's SLIRP DHCP hand the guest an unexpected
 #                     address the forwards never reached); the host->guest forwards

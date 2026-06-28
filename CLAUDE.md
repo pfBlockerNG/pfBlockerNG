@@ -125,8 +125,11 @@ effective live state**; never infer presence/absence from one generated artifact
   under `/var/db/pkg/repos/<repo>/db`); `curl -v` for raw HTTP. Gotcha: pfSense pkg uses the
   **`pkg+https`** scheme (mirror indirection) — `pkg.pfsense.org` doesn't resolve directly (a
   plain `dig` looks "broken") but pkg resolves it to a Netgate mirror (e.g.
-  `pkg00-atx.netgate.com`). Hence the smoke harness keeps egress OPEN during `deploy()`/reload
-  — `pkg add` pulls RUN_DEPENDS from that mirror.
+  `pkg00-atx.netgate.com`). The smoke harness keeps egress OPEN during the `deploy()`/reload
+  phase for the **resolver + feed-update path** (the DNSBL update needs a working resolver);
+  `pkg add` itself is **OFFLINE** — pfBlockerNG's RUN_DEPENDS are baked into the smoke image
+  (`scripts/misc/install_deps_CE_2.8.sh`), so it resolves them from the local pkg db with no
+  mirror round-trip.
 - **Confirm what's installed with `pkg`.** `pkg info` / `pkg info <pkg>` / `pkg info -l <pkg>`
   (files) / `pkg which <path>` (owner); available: `pkg search` / `pkg rquery`. The smoke
   image ships `ldns` (→ `drill`), `bind-tools` (→ `dig`/`host`/`nslookup`), `python311`,
