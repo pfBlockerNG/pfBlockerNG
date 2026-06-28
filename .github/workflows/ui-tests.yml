@@ -450,6 +450,14 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "pkg=${PKGFILE}  img=${IMG}"
 
+      # ubuntu-26.04's default python3 is 3.14, for which the pinned greenlet
+      # (a Playwright dep) ships no wheel and won't compile. Pin the host
+      # interpreter to 3.12 so the existing requirement pins install from wheels.
+      - name: Pin the harness host Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
       - name: Install the smoke + UI harness Python deps
         run: |
           set -eu
