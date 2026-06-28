@@ -54,7 +54,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from ..timing import timed  # issue #605 — per-step timing (PFB_TIMING)
+from ..timing import step_min_seconds, timed, timed_step  # issue #605 — per-step timing (PFB_TIMING)
 from . import stub_responses
 
 # --------------------------------------------------------------------------- #
@@ -269,7 +269,7 @@ class SmokeVM:
         """Run a command on the guest over SSH and capture its output."""
         # issue #605: time each guest command, but emit only the heavy ones (>=1s) so the
         # tight poll loops (wait_*, snap_state) don't flood the log with sub-second lines.
-        with timed(_ssh_timing_label(remote), min_seconds=1.0):
+        with timed(_ssh_timing_label(remote), min_seconds=step_min_seconds()):
             return subprocess.run(
                 self.ssh_argv(*remote),
                 capture_output=True,
@@ -322,6 +322,7 @@ class BootHandle:
     log_file: object = field(repr=False)
 
 
+@timed_step("boot_and_probe")
 def boot_and_probe(
     base_image: Path,
     ssh_key_path: str,
