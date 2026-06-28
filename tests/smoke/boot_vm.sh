@@ -207,11 +207,17 @@ else
     SMP="$VM_SMP"; MEM="$VM_MEM"
 fi
 
+# Perf tuning (mirrors a Proxmox prod pfSense VM):
+#   - +kvm_pv_eoi,+kvm_pv_unhalt: paravirt interrupt/spinlock hints -> fewer VM exits.
+#   - iothread + virtio-scsi: disk I/O runs on its own thread, off QEMU's main loop.
+#   - aio=io_uring: modern async I/O backend (lower syscall overhead than aio=threads).
+#   cache=unsafe stays (throwaway overlay; host page cache, skips all flushes = fastest).
 set -- \
-    -enable-kvm -machine pc -cpu host \
+    -enable-kvm -machine pc -cpu host,+kvm_pv_eoi,+kvm_pv_unhalt \
     -smp "$SMP" -m "$MEM" \
-    -device virtio-scsi-pci,id=virtioscsi0 \
-    -drive "file=${OVERLAY},if=none,id=drive-scsi0,format=qcow2,cache=unsafe,discard=unmap,detect-zeroes=unmap" \
+    -object iothread,id=iothread0 \
+    -device virtio-scsi-pci,id=virtioscsi0,iothread=iothread0 \
+    -drive "file=${OVERLAY},if=none,id=drive-scsi0,format=qcow2,aio=io_uring,cache=unsafe,discard=unmap,detect-zeroes=unmap" \
     -device scsi-hd,bus=virtioscsi0.0,drive=drive-scsi0,bootindex=100,rotation_rate=1
 
 if [ "$ROLE" = pfsense ]; then
