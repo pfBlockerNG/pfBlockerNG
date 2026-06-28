@@ -17,7 +17,7 @@ permissions:
 jobs:
   dispatch:
     name: Dispatch pfBlockerNG/pkg publish.yml
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     steps:
       - name: Generate GitHub App token
         id: app-token

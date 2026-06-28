@@ -14,7 +14,7 @@ permissions:
 jobs:
   test-reader:
     name: Read + print supported-version matrices
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Checkout (for scripts/read-version-matrix.sh)

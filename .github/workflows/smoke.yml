@@ -100,7 +100,7 @@ jobs:
   # carrying its resolved image_name + mac; ci:false entries are NEVER present.
   prepare:
     name: Read CI matrix
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     outputs:
       ci_matrix: ${{ steps.filter.outputs.ci_matrix }}
       leg_count: ${{ steps.count.outputs.leg_count }}
@@ -234,7 +234,7 @@ jobs:
   # no partial-pass escape hatch.
   all-smoke-passed:
     name: All smoke legs passed (AND gate)
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     needs: [prepare, smoke]
     if: always()   # run even if smoke failed/skipped/cancelled
     steps:

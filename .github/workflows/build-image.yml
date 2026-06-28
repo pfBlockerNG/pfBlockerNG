@@ -99,7 +99,7 @@ jobs:
   # Runs first and is cheap (no KVM), so an unknown version fails in seconds.
   resolve-version:
     name: Resolve FreeBSD/PHP for CE ${{ inputs.pfsense_ce_version }}
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       freebsd_major: ${{ steps.lookup.outputs.freebsd_major }}
@@ -150,7 +150,7 @@ jobs:
   publish-image:
     name: Publish pfSense CE ${{ inputs.pfsense_ce_version }} to GHCR
     needs: resolve-version
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     timeout-minutes: 90
     outputs:
       version: ${{ inputs.pfsense_ce_version }}
@@ -282,7 +282,7 @@ jobs:
   verify-image:
     name: Round-trip the freshly published image
     needs: [publish-image, build-pkg]
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - name: Checkout

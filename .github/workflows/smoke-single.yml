@@ -191,7 +191,7 @@ jobs:
   smoke:
     name: pytest -m smoke (live pfSense VM)
     needs: build-pkg
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     timeout-minutes: 45
 
     steps:

@@ -63,7 +63,7 @@ jobs:
   # version on ci-metadata changes these legs automatically — no YAML edit here.
   read-matrix:
     name: Read supported-version matrix
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       python_versions: ${{ steps.matrix.outputs.python_versions }}
@@ -83,7 +83,7 @@ jobs:
   test:
     name: pytest / Python ${{ matrix.python-version }}
     needs: read-matrix
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
@@ -126,7 +126,7 @@ jobs:
 
   test-typing:
     name: Test type checking (mypy)
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -148,7 +148,7 @@ jobs:
 
   ruff:
     name: Ruff (lint + format)
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -171,7 +171,7 @@ jobs:
 
   shellcheck:
     name: ShellCheck
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -220,7 +220,7 @@ jobs:
 
   shell-tests:
     name: shellspec (POSIX sh)
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -307,7 +307,7 @@ jobs:
   php-syntax:
     name: PHP syntax check (php -l) / PHP ${{ matrix.php-version }}
     needs: read-matrix
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
@@ -332,7 +332,7 @@ jobs:
   php-static-analysis:
     name: PHPStan static analysis / PHP ${{ matrix.php-version }}
     needs: read-matrix
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
@@ -362,7 +362,7 @@ jobs:
   php-codesniffer:
     name: PHPCS custom sniffs / PHP ${{ matrix.php-version }}
     needs: read-matrix
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
@@ -391,7 +391,7 @@ jobs:
   php-unit:
     name: PHPUnit unit tests / PHP ${{ matrix.php-version }}
     needs: read-matrix
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
@@ -426,7 +426,7 @@ jobs:
 
   markdownlint:
     name: markdownlint
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -443,7 +443,7 @@ jobs:
 
   widget-js-tests:
     name: Widget JS unit tests (node --test)
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -471,7 +471,7 @@ jobs:
     # start→finish + unbound RSS, baked synthetic fixture) — tracked in #76. The
     # ReDoS gate stays a useful offline check here. Never in `all-tests-passed.needs`.
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_benchmarks }}
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     # Job-specific timeout: the 1M-entry build spike is the slow step; bound it here
     # rather than touching any shared/default timeout.
     timeout-minutes: 15
@@ -535,7 +535,7 @@ jobs:
     # unlabeled PR / push, and only a `ui-tests`-labeled PR whose UI suite FAILS
     # blocks here — that is how the opt-in label gates a merge.
     needs: [read-matrix, test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, ui-suite]
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     steps:
       - name: Check matrix results
         run: |
