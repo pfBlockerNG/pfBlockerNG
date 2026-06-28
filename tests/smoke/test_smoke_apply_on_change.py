@@ -95,7 +95,7 @@ def _set_quiet_hours(vm, window: str) -> None:
     """Set pfb_quiet_hours in config.xml via pfSsh.php."""
     # Use the config gateway rather than direct xml munging.
     snippet = (
-        "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');"
+        f"require_once('{_PFB_EXTRA}');"
         f"PfbConfig::write('pfb_quiet_hours', {json.dumps(window)});"
         "write_config('ADR-43 smoke: set quiet-hours');"
         "echo 'OK';"
@@ -231,21 +231,17 @@ def test_apply_outside_window_defers(deployed_vm: SmokeVM):
     clock is not in the window before proceeding; if the VM clock is in that
     1-minute window the test is skipped (not failed) to avoid false positives.
     """
-    import datetime
-
     vm = deployed_vm
 
-    # Assert we are not inside the 1-minute test window before proceeding.
-    now_local = datetime.datetime.now()
-    if now_local.hour == 0 and now_local.minute == 0:
-        pytest.skip("Test clock is inside the 1-minute exclusion window; re-run after 00:01")
+    # Skip only if the GUEST clock is actually inside the 1-minute exclusion window — the
+    # quiet-hours window is evaluated against the VM's local time, not the host's, so probe
+    # the VM (single-clock; a host datetime.now() would race the host/guest skew).
+    vm_hm = vm.ssh("date +%H:%M").stdout.strip()
+    if vm_hm in ("00:00", "00:01"):
+        pytest.skip(f"VM clock {vm_hm} is inside the 1-minute exclusion window; re-run after 00:01")
 
     _set_quiet_hours(vm, "00:00-00:01")  # 1-min window in the dead of night
-    _force_cron_due(vm)
-    # Baseline AFTER forcing due: _force_cron_due resets last_run to 0, so a DEFERRED tick
-    # must leave it at this forced baseline. Capturing before the reset would compare against
-    # a prior test's dispatched last_run and false-fail under module collection order.
-    prev_last_run = (_cron_ledger(vm) or {}).get("last_run", 0)
+    _force_cron_due(vm)  # writes last_run=0; a DEFERRED tick must leave it there
 
     assert not _is_pending(vm), "before tick: pending_apply must not be set"
 
@@ -258,11 +254,10 @@ def test_apply_outside_window_defers(deployed_vm: SmokeVM):
         f"  ledger={entry}\n"
         f"  (if this failed, verify the VM clock is outside 00:00-00:01 local time)"
     )
-    # last_run must NOT have advanced (job did not execute).
-    assert entry.get("last_run", 0) == prev_last_run, (
-        f"after tick (outside window): last_run must be unchanged "
-        f"(expected {prev_last_run}, got {entry.get('last_run')}); "
-        f"ledger={entry}"
+    # last_run must NOT have advanced past the forced 0 (job deferred, did not execute).
+    assert entry.get("last_run", 0) == 0, (
+        f"after tick (outside window): last_run must stay at the forced 0 (deferred, not dispatched), "
+        f"got {entry.get('last_run')}; ledger={entry}"
     )
 
     _clear_quiet_hours(vm)
