@@ -55,8 +55,10 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
 # ---------------------------------------------------------------------------
 
 LEDGER_PATH = "/var/db/pfblockerng/pfb_due_ledger.json"
+_LEDGER_DIR = "/var/db/pfblockerng"
 _PHP = "/usr/local/bin/php"
 _PFB_PHP = "/usr/local/www/pfblockerng/pfblockerng.php"
+_PFB_EXTRA = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
 
 
 # ---------------------------------------------------------------------------
@@ -74,17 +76,22 @@ def _read_ledger(vm) -> dict:
 
 
 def _write_ledger_entry(vm, job_key: str, last_run: int, next_due: int, jitter: int = 0) -> None:
-    """Merge one entry into the on-box ledger via a small Python snippet."""
-    # Build the JSON snippet inline (no shell escaping needed beyond basic quoting).
-    entry_json = json.dumps({"last_run": last_run, "next_due": next_due, "jitter": jitter})
-    script = (
-        "import json, os; "
-        f"p='{LEDGER_PATH}'; "
-        "d=json.load(open(p)) if os.path.exists(p) else {}; "
-        f"d['{job_key}']={entry_json}; "
-        "open(p,'w').write(json.dumps(d))"
+    """Merge one entry into the on-box ledger via the package's own PHP ledger writer.
+
+    pfSense ships no ``python3`` (python3.11 only, no symlink), and the product already owns the
+    ledger format, so ``pfb_due_ledger_write_entry()`` (PHP) is the right tool — not a here-doc
+    Python snippet, which silently no-op'd at rc=127 and left these writes ineffective.
+    """
+    snippet = (
+        f"require_once('{_PFB_EXTRA}');"
+        f"pfb_due_ledger_write_entry('{job_key}', array("
+        f"'last_run' => {int(last_run)}, 'next_due' => {int(next_due)}, 'jitter' => {int(jitter)}"
+        f"), '{_LEDGER_DIR}');"
+        "echo 'OK';"
     )
-    vm.ssh(f"/usr/local/bin/python3 -c {json.dumps(script)}")
+    result = h.php_eval(vm, snippet)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_write_ledger_entry failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
 def _run_tick(vm) -> str:
