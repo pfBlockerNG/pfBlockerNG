@@ -50,6 +50,19 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
         h.collect_host_diagnostics(smoke_vm)
 
 
+@pytest.fixture(autouse=True)
+def _reset_ledger(deployed_vm: SmokeVM) -> None:
+    """Per-test isolation for the due-ledger.
+
+    The module baseline reset (``_pfb_module_baseline``) is module-scoped and does NOT touch
+    ``pfb_due_ledger.json``, so without this each test would inherit the previous test's ledger —
+    e.g. a dispatch's ``mark_ran`` leaving a future ``next_due``. That coupling is what let
+    ``test_tick_skips_non_due_feed`` pass only because an earlier test had run. Wipe the ledger
+    before every test so each one establishes its own state from a known-empty baseline.
+    """
+    deployed_vm.ssh(f"rm -f {LEDGER_PATH}")
+
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
