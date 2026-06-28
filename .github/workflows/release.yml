@@ -57,7 +57,7 @@ jobs:
   # so this same run continues to build + publish — no recursion.
   prepare-release:
     name: Commit changelog + create the release tag
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: ${{ github.event.inputs.dry_run != 'true' }}
     permissions:
       contents: write
@@ -385,7 +385,7 @@ jobs:
   # build-pkgs-portable needs both.
   read-matrix:
     name: Read version matrix
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [prepare-release]
     # Run in both modes: dry-run (prepare-release skipped) AND real (prepare-release succeeded).
     # If prepare-release failed for any reason, do NOT build or publish.
@@ -446,7 +446,7 @@ jobs:
   # run git commands in a clean way per-entry). One job, one checkout, two outputs.
   resolve-stamp:
     name: Resolve build stamp (created + commit)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [prepare-release]
     if: ${{ always() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') }}
     outputs:
@@ -466,7 +466,7 @@ jobs:
   # ── 2. Release ───────────────────────────────────────────────────────────
   release:
     name: Create draft GitHub Release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Gate on prepare-release (real: must succeed; dry-run: skipped is fine) AND
     # the matrix read. The live-VM UI suite (ui-suite) is TEMPORARILY un-gated
     # (see its `if: false` above) while the ADR-14 harness is stabilized;
@@ -799,7 +799,7 @@ jobs:
   # attach-pkgs absorbs the failure with `if: always() && ...` (below).
   build-pkgs-portable:
     name: build .pkg artifacts (portable Linux)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [prepare-release, read-matrix, resolve-stamp]
     # Same gate as release: run in both dry-run (skipped) and real (succeeded) modes.
     if: ${{ always() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' && needs.resolve-stamp.result == 'success' }}
@@ -918,7 +918,7 @@ jobs:
   # succeeds, in parallel with attach-pkgs.
   attach-pkgs:
     name: Attach .pkg artifacts to Release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [prepare-release, release, build-pkgs-portable, read-matrix]
     # Run whenever release succeeded AND it was a real publish (not a dry-run);
     # regardless of the build outcome. A build-pkgs-portable failure surfaces as a
@@ -979,7 +979,7 @@ jobs:
   # half-published immutable release; re-running the flow then resumes that same draft.
   publish-release:
     name: Health-check + publish the draft Release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [prepare-release, release, attach-pkgs, read-matrix]
     if: always() && needs.release.result == 'success' && needs.attach-pkgs.result == 'success' && needs.read-matrix.result == 'success' && needs.release.outputs.dry_run != 'true'
     permissions:
@@ -1062,7 +1062,7 @@ jobs:
   # the `if` still requires the release itself to have published.
   repo-publish:
     name: Trigger pkg repository publish
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [prepare-release, release, attach-pkgs, publish-release, sync-ports-fork]
     if: always() && needs.release.result == 'success' && needs.publish-release.result == 'success' && needs.release.outputs.dry_run != 'true'
     permissions:
@@ -1097,7 +1097,7 @@ jobs:
   # published (healthcheck passed) — never for a draft that failed to complete.
   sync-ports-fork:
     name: Sync port on FreeBSD-ports fork
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [prepare-release, release, publish-release]
     if: always() && needs.publish-release.result == 'success' && needs.release.outputs.dry_run != 'true'
     permissions:

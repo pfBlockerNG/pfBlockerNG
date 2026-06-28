@@ -60,7 +60,7 @@ jobs:
   # ── 1. Read the curated matrix ───────────────────────────────────────────────
   read-matrix:
     name: Read supported-version matrix
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       build_matrix: ${{ steps.read.outputs.build_matrix }}
       ci_matrix: ${{ steps.read.outputs.ci_matrix }}
@@ -112,7 +112,7 @@ jobs:
   # branches appears in this job.
   react:
     name: React to matrix entries
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: read-matrix
     # 'actions: write' is required to dispatch downstream workflows via
     # `gh workflow run`.  It is NOT used to push or commit to any branch.
@@ -263,7 +263,7 @@ jobs:
   # 'tracker-probe-disabled' to this repo, or remove this job entirely.
   probe:
     name: Best-effort version probe (nudge only)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: read-matrix
     # Probe runs in parallel with react; failures here NEVER block react.
     if: github.event.inputs.skip_probe != 'true'

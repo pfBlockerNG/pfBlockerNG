@@ -190,7 +190,7 @@ jobs:
   # JSON `include` list so each leg is a distinct, independently-re-runnable job.
   prepare:
     name: Resolve the (tier x version) matrix
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       matrix: ${{ steps.gen.outputs.matrix }}
       build_matrix: ${{ steps.gen.outputs.build_matrix }}
@@ -284,7 +284,7 @@ jobs:
     needs: [build-pkg, prepare]
     # Skip the whole leg set when the nightly guard says there's nothing to run.
     if: needs.prepare.outputs.run == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
 
     strategy:

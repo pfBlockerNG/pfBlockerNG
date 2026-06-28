@@ -44,7 +44,7 @@ jobs:
   # failed/missed nightly's commits stay in scope next time. A manual dispatch always runs.
   gate:
     name: Gate (skip nightly if devel unchanged)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       run: ${{ steps.check.outputs.run }}
     steps:
@@ -99,7 +99,7 @@ jobs:
     name: Read CI matrix
     needs: gate
     if: needs.gate.outputs.run == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       ci_matrix: ${{ steps.read.outputs.ci_matrix }}
       leg_count: ${{ steps.count.outputs.leg_count }}
@@ -174,7 +174,7 @@ jobs:
   # gate intentionally skipped the run (devel unchanged), which is a legitimate PASS.
   all-repo-install-passed:
     name: All repo-install legs passed (AND gate)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [gate, prepare, repo-install]
     if: always()   # run even if repo-install failed/skipped/cancelled
     steps:
