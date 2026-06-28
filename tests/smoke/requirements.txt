@@ -17,10 +17,10 @@
 # `python -m pytest` ignores (pyproject.toml addopts: --ignore=tests/smoke), so
 # a default run on a host WITHOUT these installed still collects cleanly.
 
-dnspython==2.7.0
+dnspython==2.8.0
 # Per-test wall-clock ceiling so a wedged VM op (SSH/pkg/dig) fails that test
 # fast instead of hanging the job to its timeout-minutes cap.
-pytest-timeout==2.3.1
+pytest-timeout==2.4.0
 # ADR-14 Web-UI tier: the authenticated webConfigurator session client
 # (tests/smoke/ui/webui.py) drives the CSRF form login + page GETs over HTTP.
 # Imported lazily (inside WebUI), so default collection -- which --ignore's
@@ -34,4 +34,7 @@ requests==2.34.2
 # NOTE: the pip install gives the Python bindings only -- the Chromium BROWSER
 # BINARY is a separate download (`python -m playwright install chromium`), wired
 # as a CI setup step in Phase 5; do NOT assume it is present from this line alone.
-playwright==1.49.1
+# >=1.60.0 loosens its greenlet dep to a range (greenlet>=3.1.1,<4) so it
+# resolves a greenlet with cp313/cp314 wheels (3.1.1 had none and broke the
+# 26.04 runner's newer-CPython build).
+playwright==1.60.0
