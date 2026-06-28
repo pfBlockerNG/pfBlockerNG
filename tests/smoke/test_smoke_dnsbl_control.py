@@ -61,11 +61,14 @@ def control_vm(smoke_vm: SmokeVM, client_vm: SmokeVM) -> Iterator[tuple[SmokeVM,
     feed = h.write_local_feed(smoke_vm, "smoke_ctl_feed.txt", f"{blocked}\n")
     spec = h.DnsblCase(aliasname="smokectl", feed_url=feed, header="smokectl", mode=h.DnsblMode.VIP)
 
-    # DNSBL Control on (reader thread runs), legacy DNS-TXT off (default) — set BEFORE
-    # the reload so the ini is generated with the right flags.
+    # Inject FIRST: inject()'s DNSBL-settings replace keeps only the infra keys + the
+    # case's behaviour toggles (not pfb_control), so setting DNSBL Control before inject
+    # would be wiped. Set the control toggles AFTER inject, BEFORE the reload, so the ini
+    # is generated with python_control on (reader thread runs) and the legacy DNS-TXT path
+    # off (its default).
+    h.inject(smoke_vm, spec)
     h.set_dnsbl_control(smoke_vm, True)
     h.set_dnsbl_control_legacy(smoke_vm, False)
-    h.inject(smoke_vm, spec)
     h.reload(smoke_vm, "update")
 
     # Guard the gate: the reader thread is enabled and the DNS-TXT path is inert by default.
