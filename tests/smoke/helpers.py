@@ -2412,63 +2412,38 @@ def reset_pfb_baseline(vm: SmokeVM, *, timeout: float = 300.0) -> None:
 # it must run in its own dispatch, not interleaved with the per-case smoke matrix.
 
 
-def kern_boottime(vm: SmokeVM, *, timeout: float = 15.0) -> str:
-    """The guest's ``kern.boottime`` sysctl -- a token unique to each boot.
-
-    It changes on every real reboot, so comparing it before/after PROVES the box
-    actually went down and came back, rather than the harness reconnecting to a
-    still-alive pre-reboot sshd. Returns '' when unreadable (SSH down mid-reboot)."""
-    result = vm.ssh("/sbin/sysctl", "-n", "kern.boottime", timeout=timeout)
-    return result.stdout.strip() if result.returncode == 0 else ""
+# Fixed settle after issuing /sbin/reboot, before probing readiness: long enough that the box
+# is actually shutting down (so we never read the still-up pre-reboot sshd as "ready"), short
+# relative to the boot it precedes. A deliberate shutdown wait -- not concurrency coordination.
+_REBOOT_SETTLE_SECS = 30
 
 
-def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT, poll: float = 5.0) -> None:
-    """Reboot the guest OS and block until it is usable again (SSH + web + Unbound).
+def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT) -> None:
+    """Reboot the guest OS and block until it is ready again, reusing the SAME readiness gate
+    as the initial boot.
 
-    Each step guards against a FALSE "ready":
-
-      1. Capture ``kern.boottime`` BEFORE the reboot.
-      2. Issue ``/sbin/reboot`` -- best-effort: the command tears down our SSH
-         session, so a non-zero / dropped result is EXPECTED, not an error.
-      3. Poll ``kern.boottime`` until it is readable AND differs from the captured
-         value. This proves the OS rebooted and cleanly steps over the brief window
-         where the OLD sshd still answers (same boottime) before it dies.
-      4. Run ``wait_ready.sh`` (watching the QEMU pid + the web port) so the
-         webConfigurator (nginx + PHP) is up, then ``wait_unbound_ready`` -- the
-         same full-readiness gate the initial boot uses.
+      1. Issue ``/sbin/reboot`` -- best-effort: the command tears down our SSH session, so a
+         non-zero / dropped result is EXPECTED, not an error.
+      2. Sleep a fixed SETTLE so the box is actually DOWN before we probe; otherwise the
+         still-up pre-reboot sshd answers and ``wait_ready.sh`` false-positives "ready" before
+         the reboot has even happened. This replaces the previous ``kern.boottime``-change poll,
+         which was fragile and consumed the readiness budget (timing out even when the box came
+         back fine).
+      3. Run ``wait_ready.sh`` (watching the QEMU pid + web port: nginx + PHP up) with the FULL
+         budget, then ``wait_unbound_ready`` -- the exact gate the initial boot uses.
     """
-    # Capture a NON-EMPTY boottime baseline first: an empty '' baseline (SSH transiently
-    # unreadable) would let the first readable post-reboot boottime compare unequal and
-    # falsely report a reboot that never happened. The box is known-ready here, so a short
-    # retry is enough.
-    before = ""
-    baseline_deadline = time.monotonic() + 30.0
-    while time.monotonic() < baseline_deadline:
-        before = kern_boottime(vm)
-        if before:
-            break
-        time.sleep(poll)
-    if not before:
-        raise RuntimeError("reboot_vm: could not read a kern.boottime baseline before rebooting")
-    # The reboot drops the SSH connection; ignore the result (best-effort).
+    # Issue the reboot; it drops our SSH connection, so a non-zero/dropped result is EXPECTED.
     vm.ssh("/sbin/reboot", timeout=30.0)
 
-    deadline = time.monotonic() + timeout
-    rebooted = False
-    while time.monotonic() < deadline:
-        now = kern_boottime(vm)
-        if now and now != before:
-            rebooted = True
-            break
-        time.sleep(poll)
-    if not rebooted:
-        raise RuntimeError(f"reboot_vm: guest did not reboot within {timeout}s (kern.boottime stayed {before!r})")
+    # Settle: let the box shut down before we probe, so we never read the still-up pre-reboot
+    # sshd as "ready".
+    time.sleep(_REBOOT_SETTLE_SECS)
 
-    # Full readiness via the same shell gate the initial boot uses. wait_ready.sh's
-    # positional args are <ssh-key> [host] [port] [timeout] [vm-pid] [web-port]; pass
-    # the vm-pid + web-port pair only when the pid is known (so a dead boot fails fast
-    # AND web readiness requires nginx+PHP, not just sshd).
-    wait_budget = int(max(1.0, deadline - time.monotonic()))
+    # Full readiness via the SAME shell gate the initial boot uses. wait_ready.sh's positional
+    # args are <ssh-key> [host] [port] [timeout] [vm-pid] [web-port]; pass the vm-pid + web-port
+    # pair when the pid is known (so a dead boot fails fast AND web readiness requires nginx+PHP,
+    # not just sshd).
+    wait_budget = int(timeout)
     argv = [
         "sh",
         str(WAIT_READY_SH),
