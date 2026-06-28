@@ -85,7 +85,7 @@ on:
         required: false
         type: string
         default: ""
-      pytest_k:
+      pytest_filter:
         description: "pytest -k selector — overrides the impacted auto-derivation. Blank = scope decides."
         required: false
         type: string
@@ -128,7 +128,7 @@ on:
         options:
           - impacted
           - full
-      pytest_k:
+      pytest_filter:
         description: "pytest -k selector — OVERRIDES the impacted auto-derivation. Blank in impacted scope = the UI tests changed vs origin/devel (whole tier if none). e.g. 'test_dnsbl' or 'feeds and not browser'."
         required: false
         default: ""
@@ -195,7 +195,7 @@ jobs:
       matrix: ${{ steps.gen.outputs.matrix }}
       build_matrix: ${{ steps.gen.outputs.build_matrix }}
       run: ${{ steps.gen.outputs.run }}
-      pytest_k: ${{ steps.gen.outputs.pytest_k }}
+      pytest_filter: ${{ steps.gen.outputs.pytest_filter }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -222,7 +222,7 @@ jobs:
           # Run scope: impacted (default for a bare dispatch) | full.
           SCOPE_INPUT: ${{ inputs.scope }}
           # -k override for the auto-derivation.
-          PYTEST_K_INPUT: ${{ inputs.pytest_k }}
+          PYTEST_FILTER_INPUT: ${{ inputs.pytest_filter }}
           # The ci:true legs (CE + Plus) read from ci-metadata.
           CI_MATRIX: ${{ steps.matrix.outputs.ci_matrix }}
         run: |
@@ -258,7 +258,7 @@ jobs:
           echo "run=${RUN}" >> "$GITHUB_OUTPUT"
 
           # ADR-47 P5: scope + legs + -k resolved by the shared script.
-          # Writes scope=, ci_matrix=, pytest_k= to $GITHUB_OUTPUT; prints filtered legs JSON to stdout.
+          # Writes scope=, ci_matrix=, pytest_filter= to $GITHUB_OUTPUT; prints filtered legs JSON to stdout.
           LEGS="$(sh scripts/resolve-legs.sh legs --test-dir tests/smoke/ui --label tier)"
 
           # Build matrix: ONE .pkg per distinct leg (version/ABI), independent of
@@ -497,7 +497,7 @@ jobs:
           SMOKE_DNSBL_VIP4: ${{ secrets.SMOKE_DNSBL_VIP4 || vars.SMOKE_DNSBL_VIP4 }}
           # Resolved by the prepare step: an explicit -k input, else the impacted
           # auto-derivation (UI tests changed vs origin/devel), else blank = whole tier.
-          PYTEST_K: ${{ needs.prepare.outputs.pytest_k }}
+          PYTEST_FILTER: ${{ needs.prepare.outputs.pytest_filter }}
           MARKER: ${{ steps.tier.outputs.marker }}
         run: |
           set -eu
@@ -505,9 +505,9 @@ jobs:
           # RUN_ID minted here (CI is the degenerate lease: runner IS the box).
           RUN_ID="$(sh scripts/select-box.sh --print-id)"
           export RUN_ID
-          # Build argv via set -- so -k rides as ONE quoted arg.
+          # Build argv via set -- so --filter rides as ONE quoted arg.
           set -- --paths tests/smoke/ui -m "${MARKER}" --timeout 300
-          [ -n "${PYTEST_K:-}" ] && set -- "$@" --k "${PYTEST_K}"
+          [ -n "${PYTEST_FILTER:-}" ] && set -- "$@" --filter "${PYTEST_FILTER}"
           sh scripts/run-smoke.sh "$@"
 
       # ADR-24: runner-side scrub of the Plus secret identity from the diagnostics

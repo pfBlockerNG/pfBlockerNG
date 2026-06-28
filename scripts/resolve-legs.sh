@@ -7,7 +7,7 @@
 #   legs        [--test-dir DIR] [--label LABEL]
 #                 Resolve scope ladder + THREE-WAY jq + -k derivation.
 #                 Prints the filtered legs JSON to stdout.
-#                 Writes scope= / ci_matrix= / pytest_k= to $GITHUB_OUTPUT.
+#                 Writes scope= / ci_matrix= / pytest_filter= to $GITHUB_OUTPUT.
 #
 #   image-ref   Compose the pfSense/civm image ref from env vars.
 #               Reads: INPUT_REF, INPUT_VERSION, INPUT_IMAGE_NAME,
@@ -95,11 +95,11 @@ _rl_legs() {
     fi
 
     # ── -k derivation ─────────────────────────────────────────────────────── #
-    # Explicit PYTEST_K_INPUT always wins. In impacted scope without a -k,
+    # Explicit PYTEST_FILTER_INPUT always wins. In impacted scope without a -k,
     # auto-derive from changed test modules. full never auto-derives.
     K=""
-    if [ -n "${PYTEST_K_INPUT:-}" ]; then
-        K="$PYTEST_K_INPUT"
+    if [ -n "${PYTEST_FILTER_INPUT:-}" ]; then
+        K="$PYTEST_FILTER_INPUT"
     elif [ "$SCOPE" = "impacted" ]; then
         # BASE_REF is origin/devel (the merge-base branch); allow override.
         _l_base="${PFB_BASE_REF:-origin/devel}"
@@ -108,7 +108,7 @@ _rl_legs() {
         if [ -n "$K" ]; then
             printf 'impacted: auto-derived -k from changed %s modules: %s\n' "$_l_label" "$K" >&2
         else
-            printf 'impacted: no changed %s modules vs %s — running the whole %s on the min CE leg. Pass -f pytest_k=... to narrow.\n' \
+            printf 'impacted: no changed %s modules vs %s — running the whole %s on the min CE leg. Pass -f pytest_filter=... to narrow.\n' \
                 "$_l_label" "$_l_base" "$_l_label" >&2
         fi
     fi
@@ -121,7 +121,7 @@ _rl_legs() {
         {
             printf 'scope=%s\n' "$SCOPE"
             printf 'ci_matrix<<__EOF__\n%s\n__EOF__\n' "$FILTERED"
-            printf 'pytest_k<<__EOF__\n%s\n__EOF__\n' "$K"
+            printf 'pytest_filter<<__EOF__\n%s\n__EOF__\n' "$K"
         } >> "$GITHUB_OUTPUT"
     fi
 

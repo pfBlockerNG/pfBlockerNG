@@ -31,8 +31,8 @@ export PFB_BOXES="root@10.0.0.23 root@10.0.0.24"   # space-separated SSH targets
 # Full smoke (marker=smoke, current HEAD):
 scripts/local-smoke.sh
 
-# Specific -k filter (expression rides as one quoted arg, no word-split):
-scripts/local-smoke.sh --k "test_dns_redirect or test_killstates"
+# Specific --filter (pytest -k expression rides as one quoted arg, no word-split):
+scripts/local-smoke.sh --filter "test_dns_redirect or test_killstates"
 
 # Different marker:
 scripts/local-smoke.sh --marker ui_render
@@ -57,7 +57,7 @@ the bootstrap command string.
    - `oras` digest-compare → pull pfSense + civm images to `/root/images/{pfsense,civm}` if stale.
    - `sysctl net.ipv4.ip_unprivileged_port_start=53` + `pkill -9 -f qemu-system-x86_64`.
    - `build-leg.sh` → `SMOKE_PKG`.
-   - `run-smoke.sh --paths tests/smoke --marker <M> --timeout 30 [--k <K>]`.
+   - `run-smoke.sh --paths tests/smoke --marker <M> --timeout 30 [--filter <K>]`.
 3. `run-smoke.sh` is the ONE canonical pytest argv — same script CI uses.
 
 The CI `scope=impacted` / min-CE / auto-derived-`-k` defaulting (see
@@ -91,7 +91,7 @@ sudo sysctl -w net.ipv4.ip_unprivileged_port_start=53
 pkill -9 -f qemu-system-x86_64 2>/dev/null || true
 
 # Run (same argv as CI):
-sh scripts/run-smoke.sh --paths tests/smoke -m smoke --timeout 30 --k "test_dns_redirect"
+sh scripts/run-smoke.sh --paths tests/smoke -m smoke --timeout 30 --filter "test_dns_redirect"
 ```
 
 ## The two-VM topology

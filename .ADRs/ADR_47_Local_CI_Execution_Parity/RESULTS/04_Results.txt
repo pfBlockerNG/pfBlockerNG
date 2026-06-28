@@ -58,7 +58,7 @@ All seven file deliverables + two test deliverables + doc + handoff in a single 
    ```sh
    RUN_ID="$(sh scripts/select-box.sh --print-id)"; export RUN_ID
    set -- --paths tests/smoke -m "${PYTEST_MARKER}" --timeout 30
-   [ -n "${PYTEST_K:-}" ] && set -- "$@" --k "${PYTEST_K}"
+   [ -n "${PYTEST_K:-}" ] && set -- "$@" --filter "${PYTEST_K}"
    sh scripts/run-smoke.sh "$@"
    ```
 

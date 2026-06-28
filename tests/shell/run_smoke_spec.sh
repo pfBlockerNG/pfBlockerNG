@@ -2,7 +2,7 @@
 # run_smoke_spec.sh — shellspec suite for scripts/run-smoke.sh
 #
 # Verifies the canonical pytest argv emitted by run-smoke.sh across all three
-# caller shapes (local default, UI, CI smoke 'repo'), the single-arg -k, the
+# caller shapes (local default, UI, CI smoke 'repo'), the single-arg --filter, the
 # -m passthrough guard (default -m NOT added when caller's passthrough has one),
 # the bare-path REPLACE amendment (positional path in passthrough replaces the
 # default tests/smoke), and PYTHON resolution.
@@ -114,19 +114,20 @@ PY3EOF
     End
   End
 
-  # ── -k as a single arg (no word-split) ───────────────────────────────────── #
-  # The expression "a and not b" must ride as one arg; if word-split, it becomes
-  # three separate args and the assertion "-k|a and not b" would NOT match.
-  run_k_expr() {
+  # ── --filter as a single arg → pytest -k (no word-split) ─────────────────── #
+  # The caller flag is --filter (translated to pytest's -k); the expression
+  # "a and not b" must ride as one arg. If word-split, it becomes three separate
+  # args and the assertion "-k|a and not b" would NOT match.
+  run_filter_expr() {
     PYTHON="${FAKE_BIN}/python"
     export PYTHON
-    sh "$SCRIPT" -k "a and not b"
+    sh "$SCRIPT" --filter "a and not b"
     argv_joined
   }
 
-  Describe '-k "a and not b" rides as ONE arg'
-    It 'passes the expression as a single -k argument (no word-split)'
-      When call run_k_expr
+  Describe '--filter "a and not b" → pytest -k as ONE arg'
+    It 'passes the expression to pytest as a single -k argument (no word-split)'
+      When call run_filter_expr
       The output should include "-k|a and not b"
     End
   End

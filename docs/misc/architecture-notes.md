@@ -210,23 +210,23 @@ run release `ui-suite` as `tier: functional`). Full design: `.ADRs/ADR_14_UI_UX_
 
 **Selective dispatch (ADR-14 + smoke).** A bare `gh workflow run ui-tests.yml` (and
 `smoke.yml`) defaults to **`scope=impacted`**: the **min CE leg only** plus, with no `-f
-pytest_k`, the test modules **changed vs `origin/devel`** (auto-derived by
-`scripts/impacted-tests.sh` from the `prepare`/`gen` step). `-f pytest_k="..."` **overrides** the
+pytest_filter`, the test modules **changed vs `origin/devel`** (auto-derived by
+`scripts/impacted-tests.sh` from the `prepare`/`gen` step). `-f pytest_filter="..."` **overrides** the
 auto-derivation — pass it for the tests covering changed *non-test* code, which a live-VM suite
 can't map automatically. `-f scope=full` restores the every-ci:true-leg whole-tier run.
 `schedule`, `workflow_call` (`test.yml` Tier-A gate, `release.yml` `tier: all`), and
 `version-tracker.yml`'s post-bump dispatch (which now passes `scope=full`) all stay **full** —
-only a bare `workflow_dispatch` is lean. Local runs are pytest-native: pass `-k`/`-m` straight
-through (`scripts/local-smoke.sh` forwards them and treats `-m smoke` as a default).
+only a bare `workflow_dispatch` is lean. Local runs are pytest-native: pass `--filter`/`-m`
+through (`scripts/local-smoke.sh` forwards them — `--filter` becomes pytest `-k` — and treats `-m smoke` as a default).
 
 **CI as parallel dispatch (ADR-47 P5).** Workflows are thin dispatch wrappers; all step logic
 lives in shared scripts that run identically locally and in CI:
 
 - `scripts/resolve-legs.sh` — six subcommands covering the inline blocks previously
   repeated across `smoke.yml`, `smoke-single.yml`, and `ui-tests.yml`:
-  `legs` (scope ladder + THREE-WAY jq + `-k` derivation), `image-ref`, `digest`,
+  `legs` (scope ladder + THREE-WAY jq + filter derivation), `image-ref`, `digest`,
   `exact-image-name`, `vm-identity`, `scrub`. `legs` prints the resolved JSON to
-  stdout for same-step capture and also writes `scope=`, `ci_matrix=`, `pytest_k=`
+  stdout for same-step capture and also writes `scope=`, `ci_matrix=`, `pytest_filter=`
   to `$GITHUB_OUTPUT` for cross-step consumption.
 - `scripts/lib/git-env-scrub.sh` — sourceable POSIX-sh lib exporting `pfb_scrub_git_env()`,
   which unsets the six GIT_\* vars that the pre-commit hook exports and that corrupt

@@ -72,7 +72,7 @@ on:
         description: "pytest marker to select (default 'smoke'; 'repo' = the ADR-17 repository-install flow)."
         required: false
         default: "smoke"
-      pytest_k:
+      pytest_filter:
         description: "pytest -k selector to run only a subset of the marker's tests (e.g. 'test_dns_redirect' or 'redirect and not browser'). Blank = the whole marker."
         required: false
         default: ""
@@ -130,7 +130,7 @@ on:
         required: false
         type: string
         default: "smoke"
-      pytest_k:
+      pytest_filter:
         description: "pytest -k selector to run only a subset of the marker's tests. Blank = the whole marker."
         required: false
         type: string
@@ -477,7 +477,7 @@ jobs:
           PYTEST_MARKER: ${{ inputs.pytest_marker || 'smoke' }}
           # Optional -k selector to run only a subset of the marker's tests
           # (blank = the whole marker). Lets a dispatcher fire a specific set.
-          PYTEST_K: ${{ inputs.pytest_k }}
+          PYTEST_FILTER: ${{ inputs.pytest_filter }}
           # SMOKE_IMAGE_DIR points the fixture at the ALREADY-PULLED qcow2 so the
           # boot needs no network. SMOKE_IMAGE_REF is kept for provenance/logs.
           SMOKE_IMAGE_DIR: ${{ github.workspace }}/image
@@ -545,10 +545,10 @@ jobs:
           # --print-id emits the id without acquiring a real lease).
           RUN_ID="$(sh scripts/select-box.sh --print-id)"
           export RUN_ID
-          # Build argv via set -- so -k rides as ONE quoted arg (word-split on a
+          # Build argv via set -- so --filter rides as ONE quoted arg (word-split on a
           # multi-token expression like "a and not b" would break pytest matching).
           set -- --paths tests/smoke -m "${PYTEST_MARKER}" --timeout 30
-          [ -n "${PYTEST_K:-}" ] && set -- "$@" --k "${PYTEST_K}"
+          [ -n "${PYTEST_FILTER:-}" ] && set -- "$@" --filter "${PYTEST_FILTER}"
           sh scripts/run-smoke.sh "$@"
 
       # ADR-24 / ADR-47 P5: runner-side scrub delegated to the shared script.
