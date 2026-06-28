@@ -2,6 +2,7 @@ import builtins
 import os
 import sys
 from collections import defaultdict
+from collections.abc import Iterator
 
 # pfb_unbound.py is designed to run inside Unbound's Python plugin loader, which
 # injects Unbound-specific functions and integer constants as module-level
@@ -28,6 +29,29 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 import pytest  # noqa: E402
 
 import pfb_unbound  # noqa: E402
+from tests.timing import close_log, open_log  # noqa: E402
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _pfb_timing_log() -> Iterator[None]:
+    """Open the per-step timing log once for the whole session, close it once at the end.
+
+    issue #605: this is the single setup/teardown for the PFB_TIMING file sink —
+    ``tests.timing._emit`` only writes to the already-open handle, never sets up per call.
+    ``open_log`` is a no-op when ``PFB_DIAG_DIR`` is unset (the unit suite — terminal-only),
+    so nothing is written there. At teardown, surface where the log landed and how many
+    steps it captured.
+    """
+    open_log()
+    yield
+    path = close_log()
+    if path:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                count = sum(1 for _ in handle)
+            print(f"\nPFB_TIMING_SUMMARY {path} ({count} steps)", flush=True)
+        except OSError:
+            pass
 
 
 @pytest.fixture(autouse=True)
