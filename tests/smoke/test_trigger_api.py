@@ -85,7 +85,11 @@ def test_pfb_trigger_verb_reloads_dnsbl(deployed_vm: SmokeVM, mock_feeds: _MockF
     )
     with h.CaseContext(deployed_vm, spec):
         # CaseContext.__enter__ already called reload("update") via pfb_trigger.
-        # Assert the block is live.
+        # The probe name is a FIXED member shared with test_smoke_feeds, so an earlier
+        # module may have cached a resolved answer (a feed/cron allow->block is
+        # TTL-bounded by design and does NOT flush Unbound's C-cache). Flush that one
+        # name so the block assertion is not order-dependent.
+        h.flush_unbound_name(deployed_vm, domain)
         answer = h.dns_probe(deployed_vm, domain)
         assert h.is_vip(answer), (
             f"domain {domain!r} must be VIP-blocked after pfb_trigger reload\ngot answer: {answer!r}"
@@ -143,6 +147,8 @@ def test_deprecated_update_verb_still_reloads_dnsbl(deployed_vm: SmokeVM, mock_f
     # Inject manually (no CaseContext — we control the reload verb ourselves)
     h.inject(deployed_vm, spec)
     h.reload_deprecated_verb(deployed_vm, "update")
+    # Flush the shared fixed name (an earlier module may have cached it) before probing.
+    h.flush_unbound_name(deployed_vm, domain)
     answer = h.dns_probe(deployed_vm, domain)
     assert h.is_vip(answer), (
         f"domain {domain!r} must be VIP-blocked after deprecated 'update' reload\ngot answer: {answer!r}"
