@@ -292,6 +292,16 @@ class DnsblCase:
     idn_mode: str | None = None
     idn_block_malicious: bool | None = None
     idn_escalate_suspicious: bool | None = None
+    # control -> "DNSBL Control" (CFG_DNSBL_SETTINGS/pfb_control -> ini python_control). On:
+    # the next reload starts the pfb_control_watcher reader thread so CLI commands take
+    # effect. Carried on the case so inject()'s settings replace writes it with the other
+    # toggles (#588) — nothing relies on a pre-inject write surviving. None (default) emits
+    # nothing -> the existing matrix is unchanged.
+    control: bool | None = None
+    # control_legacy -> the deprecated DNS-TXT control sub-path (pfb_control_legacy -> ini
+    # python_control_legacy, emitted `on` only when BOTH pfb_control and pfb_control_legacy
+    # are on, inc:4744). None (default) emits nothing.
+    control_legacy: bool | None = None
 
     @property
     def alias(self) -> str:
@@ -2089,6 +2099,14 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
         settings["pfb_idn_block_malicious"] = "on" if spec.idn_block_malicious else ""
     if spec.idn_escalate_suspicious is not None:
         settings["pfb_idn_escalate_suspicious"] = "on" if spec.idn_escalate_suspicious else ""
+    if spec.control is not None:
+        # "DNSBL Control" (CFG_DNSBL_SETTINGS/pfb_control -> ini python_control). Folded into
+        # the replace so the control state rides the same write as every other toggle — see
+        # set_dnsbl_control for the reader-thread semantics.
+        settings["pfb_control"] = "on" if spec.control else ""
+    if spec.control_legacy is not None:
+        # The deprecated DNS-TXT sub-path (pfb_control_legacy -> ini python_control_legacy).
+        settings["pfb_control_legacy"] = "on" if spec.control_legacy else ""
     # The primary feed row + any ABP extra rows, all in ONE DNSBL list group. Each
     # row is downloaded + header-sniffed independently (inc:7934), so an ABP body
     # per row yields one ABP feed per row whose rules the Python build merges.
