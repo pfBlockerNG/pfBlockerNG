@@ -2328,6 +2328,10 @@ _BASELINE_GLOBAL_KEYS = (
     "pfb_agg_types",
     "pfb_quiet_hours",
     "pfb_tick_interval",
+    # Feed-host SSRF-guard allowlist: a module that allowlists the SLIRP mock net
+    # (test_trigger_api / test_smoke_feeds) must not leak the exemption forward, or a
+    # later module runs with the default-ON guard effectively disabled (false-green).
+    "pfb_feed_internal_allowlist",
 )
 
 
