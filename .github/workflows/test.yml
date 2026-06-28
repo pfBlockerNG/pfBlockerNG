@@ -211,6 +211,13 @@ jobs:
         # fences (the checker's defaults). ubuntu-latest ships python3.
         run: python3 scripts/check_url_encoding.py
 
+      - name: Forbid Python on the pfSense appliance
+        # The appliance ships python3.11 with no `python3` symlink, so a
+        # `/usr/local/bin/python*` invocation is rc=127 (and silent under check=False
+        # ssh). Use PHP/pfSsh.php or POSIX sh on the box; only pfb_unbound.py is Python
+        # (Unbound's embedded loader). Scans tracked src/ + tests/ (the checker's defaults).
+        run: python3 scripts/check_appliance_python.py
+
   shell-tests:
     name: shellspec (POSIX sh)
     runs-on: ubuntu-latest

@@ -161,6 +161,18 @@ if [ "$staged_sh" = 1 ] || [ "$staged_md" = 1 ]; then
 	fi
 fi
 
+# --- Forbid invoking a Python interpreter ON the pfSense appliance (no python3
+#     symlink there -> rc=127 silent no-op). Relevant to appliance code: smoke
+#     tests (*.py) and the package's PHP/shell (*.php/*.inc/*.sh). ---
+if [ "$staged_py" = 1 ] || [ "$staged_php" = 1 ] || [ "$staged_sh" = 1 ]; then
+	if [ -n "$py_bin" ]; then
+		step 'no-appliance-python (use PHP/sh on the box)'
+		"$py_bin" scripts/check_appliance_python.py || failed 'no-appliance-python'
+	else
+		skip no-appliance-python
+	fi
+fi
+
 # =============================== PHP (*.php, *.inc) ========================== #
 if [ "$staged_php" = 1 ]; then
 	# php -l syntax check (output shown only for files that fail).
