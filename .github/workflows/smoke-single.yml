@@ -397,15 +397,6 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "pkg=${PKGFILE}  img=${IMG}"
 
-      # Pin the harness host interpreter to 3.13 (what our Debian smoke boxes
-      # run) for parity. The requirement pins are kept current enough to also
-      # install on 26.04's default 3.14, but pinning avoids depending on the
-      # runner image's default tracking a CPython the wheels haven't caught up to.
-      - name: Pin the harness host Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.13'
-
       - name: Install the smoke harness Python deps
         run: |
           set -eu
