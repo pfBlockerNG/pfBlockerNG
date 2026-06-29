@@ -689,7 +689,7 @@ print ($section);
 				"+" icon(s) on the right will only import the individual feed.<br />
 
 				&#8226; Feeds with 'Alternative' URL(s) can be configured via the Radio button options.<br />
-				&#8226; Unknown user-defined Feeds are listed in a table below pre-defined Feeds<br />
+				&#8226; Custom Feeds (user-defined Feeds not in the pre-defined list) are listed in a table below pre-defined Feeds<br />
 				&#8226; Permit Type feeds are listed with a green background.<br />
 			</p>
 
@@ -788,10 +788,10 @@ print ($section);
 <input type="hidden" name="alt_selected" id="alt_selected" value="<?=$alt_selected;?>">
 </form>
 
-<!-- Print table of Unknown User defined Feeds -->
+<!-- Print table of Custom Feeds (user-defined, not in the predefined catalog) -->
 <div class="panel panel-default">
 	<div class="panel-heading">
-		<h2 class="panel-title"><?=gettext("Unknown user defined Feeds")?></h2>
+		<h2 class="panel-title"><?=gettext("Custom Feeds")?></h2>
 	</div>
 	<div id="pfb_table2" class="panel-body">
 		<div class="table-responsive">
@@ -808,7 +808,7 @@ print ($section);
 
 				<?php
 				$p_aliasname = '';
-				// Only the active type's unknown user-defined feeds (type-scoped body).
+				// Only the active type's custom (unmatched user-defined) feeds (type-scoped body).
 				if (!empty($ex_feeds)):
 					foreach (array($gtype => $type_label[$gtype]) as $feedtype => $type):
 

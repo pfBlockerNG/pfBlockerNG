@@ -491,6 +491,28 @@ def test_dnsbl_lenient_parsing_field_renders(webui: WebUI, php_error_log_guard: 
         assert needle in body, f"DNSBL page is missing the lenient-parsing marker {needle!r}"
 
 
+def test_feeds_custom_panel_heading_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """The second Feeds panel — the one listing user-configured feeds that don't match the
+    predefined catalog — is headed "Custom Feeds", not the former "Unknown user defined Feeds".
+
+    The heading is the shared panel title (renders on every ?type sub-tab, outside the
+    row-rendering guard), so it is a stable render marker. This is a dedicated assertion rather
+    than an entry in PAGE_TABLE because the render oracle matches markers with ``any()``: adding
+    "Custom Feeds" to a tuple that already carries a present marker would pass on the old heading
+    too (coverage theater). Asserting the new string present AND the old string absent gives an
+    unambiguous fail-before / pass-after for the rename.
+    """
+    path = "/pfblockerng/pfblockerng_feeds.php?type=ipv4"
+    resp = webui.get(path)
+    result = evaluate_render(path, resp.status_code, resp.text, ("Pre-defined Alias/Group/Feeds",))
+    assert result.ok, f"Feeds render oracle failed: {result.detail}"
+    body = resp.text
+    assert "Custom Feeds" in body, "Feeds page is missing the 'Custom Feeds' panel heading"
+    assert "Unknown user defined Feeds" not in body, (
+        "Feeds page still shows the old 'Unknown user defined Feeds' heading"
+    )
+
+
 # ADR-23: the setup wizard's DNSBL step now surfaces ADR-13's pfb_dnsvip_auto auto-VIP
 # toggle. Core wizard.php renders ONE step per GET, indexed by a 0-based `stepid` (verified
 # against pfSense upstream wizard.php: `$stepid` defaults to "0" and indexes $pkg['step']
