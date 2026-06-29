@@ -1126,7 +1126,17 @@ jobs:
           repository: pfBlockerNG/FreeBSD-ports
           ref: pfblockerng/use-github
           token: ${{ steps.ports-token.outputs.token }}
-          fetch-depth: 0
+          # Minimal clone: the bump only edits the port Makefile(s), then commits + pushes.
+          # Shallow (depth-1) + blobless + sparse to the bumped port dirs avoids cloning the
+          # full ~1.3 GB ports tree. The commit is a fast-forward the remote accepts; the
+          # push-reject rebase retry below reaches the racing tip via an on-demand fetch.
+          fetch-depth: 1
+          filter: blob:none
+          sparse-checkout: |
+            net/pfSense-pkg-pfBlockerNG
+            net/pfSense-pkg-pfBlockerNG-devel
+            net/pfSense-pkg-pfBlockerNG-nightly
+          sparse-checkout-cone-mode: true
 
       - name: Checkout pfBlockerNG (scripts only — sparse)
         uses: actions/checkout@v6
