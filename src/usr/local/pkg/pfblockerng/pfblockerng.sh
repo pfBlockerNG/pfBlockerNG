@@ -34,7 +34,7 @@ pfb_make_tmpdir() {
 # any of this; the executable path runs it because PFB_SOURCED is unset. The
 # function definitions further down are always defined on source.
 if [ -z "${PFB_SOURCED:-}" ]; then
-	now=$(/bin/date +%m/%d/%y' '%T)
+	now=$(/bin/date +%Y-%m-%d' '%T)	# ISO-8601 (unambiguous; matches the PHP pfb_logger timestamps)
 
 	# Application Locations
 	pathgrepcidr="/usr/local/bin/grepcidr"
@@ -175,10 +175,10 @@ pfb_anchor_octet_pattern() {
 }
 
 # List the '*.orig' files in directory $1 oldest-first, one line per file:
-# "<Mon> <Day><TAB><HH:MM><TAB><name>" (path stripped, '.orig' removed) — the same
-# columns the old `ls -lahtr | sed | awk` produced, but locale- and ls-layout-
-# independent. mtime comes from stat(1) and is formatted by date(1); both flag-differ
-# between BSD and GNU, so detect once via `stat --version` (GNU-only) and branch.
+# "<YYYY-MM-DD> <HH:MM><TAB><name>" (path stripped, '.orig' removed). ISO-8601 date
+# (unambiguous, sorts lexically) replacing the old locale-dependent "<Mon> <Day>" form.
+# mtime comes from stat(1) and is formatted by date(1); both flag-differ between BSD and
+# GNU, so detect once via `stat --version` (GNU-only) and branch.
 pfb_list_orig_by_mtime() {
 	if stat --version >/dev/null 2>&1; then _gnu=1; else _gnu=0; fi
 	for _f in "${1}"*.orig; do
@@ -193,9 +193,9 @@ pfb_list_orig_by_mtime() {
 	done | LC_ALL=C sort -n | while IFS="$(printf '\t')" read -r _m _f; do
 		_name="$(printf '%s' "${_f}" | sed -e 's#.*/##' -e 's/\.orig$//')"
 		if [ "${_gnu:-0}" -eq 1 ]; then
-			_ts="$(LC_ALL=C date -d "@${_m}" '+%b %e%t%H:%M' 2>/dev/null)"
+			_ts="$(LC_ALL=C date -d "@${_m}" '+%Y-%m-%d %H:%M' 2>/dev/null)"
 		else
-			_ts="$(LC_ALL=C date -r "${_m}" '+%b %e%t%H:%M' 2>/dev/null)"
+			_ts="$(LC_ALL=C date -r "${_m}" '+%Y-%m-%d %H:%M' 2>/dev/null)"
 		fi
 		printf '%s\t%s\n' "${_ts}" "${_name}"
 	done
