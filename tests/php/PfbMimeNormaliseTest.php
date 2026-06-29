@@ -109,6 +109,7 @@ final class PfbMimeNormaliseTest extends TestCase
 			'application/gzip', 'application/x-gzip',
 			'application/x-bzip2',
 			'application/zip',
+			'application/x-7z-compressed',
 		]);
 
 		// Before-state: raw string is rejected.

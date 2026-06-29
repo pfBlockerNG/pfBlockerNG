@@ -107,7 +107,7 @@ and an **`octet-stream` structural-recovery** path.
 | `pfb_validate_archive()` | New helper: run the probe; called at the top of each `pfb_download()` archive branch |
 | `pfb_download()` zip/gzip/bzip2/7z branches | Add the structural probe before extraction; reject on failure |
 | MIME gate (`pfb_filter()` const-17) | Add `octet-stream` → structural-recovery (only on a positive archive probe) |
-| `$pfb['mime_types']` allow-list | **No change** — recovery is gated on a structural probe, not an allow-list entry |
+| `$pfb['mime_types']` allow-list | Add **`application/x-7z-compressed`** (maintainer direction) so a 7-Zip feed `file(1)` reports as 7z passes the gate as a first-class type — its `pfb_download()` 7z branch is now structural-probe guarded, so a box without the 7-Zip binary cleanly rejects rather than failing mid-extract. The `octet-stream` recovery remains gated on a positive structural probe, **not** an allow-list relax. |
 | `PFB_FILTER_FILE_MIME_COMPRESSED` (18) inner check | **No change** (re-enable is ADR-46) |
 | Healthy-feed happy path | Unchanged — probe only adds a pass-through check |
 
