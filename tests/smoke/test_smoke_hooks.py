@@ -4,7 +4,11 @@ pfBlockerNG runs admin-configured commands once per update pass: a ``pre`` hook 
 the TOP of ``sync_package_pfblockerng`` (``pfblockerng.inc:7388``) and a ``post``
 hook at the closing tail (``:11227``), via ``pfb_run_hooks($when, $ctx)``. Each
 enabled hook runs AS ROOT in the HOST context (NOT chrooted) under
-``PFB_<K>=<v> … /usr/bin/timeout -s TERM -k 5 <timeout> <script> 2>&1``.
+``PFB_<K>=<v> … /usr/bin/timeout --foreground -s TERM -k 5 <timeout> <script> > <tmp> 2>&1 < /dev/null``.
+``--foreground`` stops timeout(1) (a FreeBSD process reaper in its default mode) from
+waiting for descendants the hook spawns, and the temp-FILE capture (not exec()'s pipe)
+stops such a daemon from holding the capture open — together a daemon the hook restarts
+can't stall the pass or be killed by it (see the bg-daemon test).
 A non-zero exit OR a timeout (rc 124) is logged and the update CONTINUES — a hook
 can never abort or stall the pass; with no enabled hooks the pass is byte-identical.
 
@@ -504,6 +508,126 @@ def test_hooks_timeout_killed_update_continues(deployed_vm: SmokeVM) -> None:
         print(f"[smoke] note: no 'TIMED OUT' line found in the pfBlockerNG log (non-fatal): {log_grep.stdout!r}")
 
     h.clear_update_hooks(deployed_vm)
+
+
+# --------------------------------------------------------------------------- #
+# 7b) Capture model — a hook that restarts a daemon does NOT stall the pass
+# --------------------------------------------------------------------------- #
+
+
+def test_hooks_spawned_daemon_does_not_stall_pass(deployed_vm: SmokeVM) -> None:
+    """A hook that backgrounds a long-lived child must NOT stall the update pass.
+
+    THE BUG (the HAProxy graceful-reload recipe in the field): the hook restarts a
+    daemon that inherits the hook's stdout/stderr. When those were exec()'s capture
+    PIPE, the read never reached EOF while the daemon lived, so exec()/timeout(1) could
+    not observe the hook PROCESS exiting — the WHOLE pass stalled for the timeout budget
+    (then falsely logged ``TIMED OUT``) though the hook's own work finished in
+    milliseconds. The fix captures to a temp FILE (held harmlessly by any daemon), so
+    completion depends only on the hook process exiting.
+
+    DETACHED launch on purpose. The pass is started with ``nohup … >> log 2>&1 </dev/null
+    &`` and we then poll the LOG, rather than driving it through ``h.reload`` (a synchronous
+    SSH command). The production hook runs under cron/GUI, not SSH; an SSH-driven reload
+    would ALSO hang here for an unrelated reason (sshd waits for the channel pipes to close,
+    which the backgrounded child holds), conflating the SSH-channel wait with the exec()
+    stall we are actually testing. Detaching removes that confound: this SSH call returns at
+    once and we observe the pass purely through its on-disk log/markers.
+
+    Red→green WITHOUT a wall-clock assertion on the pass itself. The pre hook (fires at the
+    TOP of the pass) backgrounds a child that inherits its stdout/stderr and sleeps 60s
+    before writing ``CHILD_FINISHED``; its own ``timeout`` is 120s so a genuine overrun is
+    impossible. The post env-dump hook fires only at the closing tail, i.e. only if the pass
+    got PAST the pre hook:
+
+    * FIXED runner — the pre hook returns at once, the pass runs to its post hook within
+      seconds, so the post marker appears well inside the poll window while the orphaned
+      child is still sleeping (``CHILD_FINISHED`` absent).
+    * BROKEN (pipe-capture) runner — the pre hook's exec() blocks until the child exits
+      (~60s), so the pass never reaches the post hook inside the window: the post marker is
+      ABSENT — the failing discriminator.
+
+    Also asserts the hook logged ``completed`` and NOT ``TIMED OUT`` (the killpg/124 variant).
+    """
+    token = "bgdaemon"
+    sentinel = f"pfb_bg_{token}"  # unique argv tag so the finally can pkill the orphan
+    pre_marker = h.hook_marker_path(token, "pre")
+    child_marker = h.hook_marker_path(token, "child")
+    post_marker = h.hook_marker_path(token, "post")
+    pre_hook = {
+        # Background a child that INHERITS the hook's stdout/stderr (no redirect on it) and
+        # outlives the hook (sleep 60), only THEN writing CHILD_FINISHED. The hook finishes
+        # its own work (HOOK_DONE) and exits immediately. The child runs under
+        # ``sh -c '…' <sentinel>`` so <sentinel> rides its argv ($0) — pkill-able in the
+        # finally (the bare `sleep`'s argv would not carry the marker path).
+        "script": f"hook_pre_{token}_bg.sh",
+        "_body": (
+            "#!/bin/sh\n"
+            f"/bin/echo START > {pre_marker}\n"
+            f"/bin/sh -c '/bin/sleep 60; /bin/echo CHILD_FINISHED > {child_marker}' {sentinel} &\n"
+            f"/bin/echo HOOK_DONE >> {pre_marker}\n"
+        ),
+        "when": "pre",
+        "enabled": "on",
+        "description": f"smoke {token} pre bgdaemon",
+        "timeout": "120",
+    }
+    h.set_update_hooks(deployed_vm, [pre_hook, h.env_dump_hook(token, "post")])
+    h.clear_hook_markers(deployed_vm, token)
+    # Belt-and-braces: remove the child marker too (token clear covers pre/post/child).
+    deployed_vm.ssh("/bin/rm", "-f", child_marker)
+    h.wait_no_active_pfb_task(deployed_vm)  # a clean baseline — no prior pass in flight
+    assert not h.hook_marker_exists(deployed_vm, pre_marker), "pre marker present before launch (stale state?)"
+    assert not h.hook_marker_exists(deployed_vm, post_marker), "post marker present before launch (stale state?)"
+    assert not h.hook_marker_exists(deployed_vm, child_marker), "child marker present before launch (stale state?)"
+
+    try:
+        # Launch the pass DETACHED (mirrors the GUI's mwexec_bg): this SSH call returns at
+        # once because the pass's stdout/stderr go to the log, not the SSH channel.
+        deployed_vm.ssh(
+            f"nohup {h.PHP_BIN} {h.PFB_CLI} pfb_trigger scope=both force=false trigger=cron "
+            f">> {h.PFB_LOG} 2>&1 </dev/null &"
+        )
+
+        # The post hook fires only at the closing tail — i.e. only if the pass got past the
+        # stalling pre hook. On the fixed runner it appears within seconds; on the broken
+        # runner the pass is stuck on the child for ~60s, so it stays absent for the window.
+        # Window assumption: an unchanged-feed force=false pass completes well under 22s
+        # (ADR-42 keeps it fast; observed ~3s on CE 2.8) — comfortably below the child's 60s
+        # stall. If a heavily loaded runner ever flakes here, raise this window AND the
+        # per-test pytest-timeout AND the child's sleep together (keep child >> window).
+        reached_post = h.wait_until(
+            lambda: h.hook_marker_exists(deployed_vm, post_marker),
+            timeout=22.0,
+            interval=1.0,
+        )
+        assert reached_post, (
+            "the pass never reached its post hook within 22s: the pre hook STALLED the pass on "
+            "its backgrounded child (exec() is still capturing via the inherited pipe, not a file)"
+        )
+
+        # The pre hook ran fully and exited (its own work is instant) — NOT killed mid-run.
+        pre_body = deployed_vm.ssh("cat", pre_marker).stdout
+        assert "START" in pre_body and "HOOK_DONE" in pre_body, (
+            f"the bg-daemon pre hook did not run to its own completion: {pre_body!r}"
+        )
+        # The pass did NOT wait for the orphaned child (still sleeping ~60s): proof it
+        # returned rather than blocking on the inherited capture.
+        assert not h.hook_marker_exists(deployed_vm, child_marker), (
+            "the pass blocked until the hook's backgrounded child finished (CHILD_FINISHED present)"
+        )
+        # The hook was logged completed, NOT TIMED OUT (catches the timeout/killpg variant).
+        log_grep = deployed_vm.ssh(f"/usr/bin/grep '{token}' {h.PFB_LOG} 2>/dev/null | tail -5 || true")
+        assert "TIMED OUT" not in log_grep.stdout, (
+            f"the bg-daemon hook FALSELY timed out though its own work finished instantly: {log_grep.stdout!r}"
+        )
+    finally:
+        # Kill the orphaned child first (by its argv sentinel) — that also unblocks a pass
+        # still stalled on it (broken-runner path) — then let any pass settle before clearing.
+        deployed_vm.ssh("/bin/sh", "-c", f"/bin/pkill -f {sentinel} 2>/dev/null; /bin/rm -f {child_marker}")
+        h.wait_no_active_pfb_task(deployed_vm, timeout=30.0)
+        h.clear_update_hooks(deployed_vm)
+        h.clear_hook_markers(deployed_vm, token)
 
 
 # --------------------------------------------------------------------------- #

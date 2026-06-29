@@ -3367,17 +3367,42 @@ function pfb_run_hooks($when, $ctx = array()) {
 		// Run the vetted script as root under timeout(1): SIGTERM at $timeout,
 		// SIGKILL after the grace period. The PFB_* context rides the env prefix
 		// (the script reads it from the environment). The script runs via its own
-		// shebang + execute bit (the list_scripts convention); 2>&1 folds stderr
-		// into the captured stdout for the log.
-		$cmd = "{$envprefix} /usr/bin/timeout -s TERM -k " . PFB_HOOK_KILL_GRACE .
-			" {$timeout} " . escapeshellarg($path) . " 2>&1";
+		// shebang + execute bit (the list_scripts convention).
+		//
+		// Two independent reasons a hook that (re)starts a daemon -- e.g. the documented
+		// HAProxy graceful-reload recipe -- would otherwise hang the WHOLE pass for the
+		// timeout budget and then falsely report TIMED OUT, though the hook's own work
+		// finished in milliseconds:
+		//
+		//   1. timeout(1) (FreeBSD, default mode) acquires a process REAPER
+		//      (procctl PROC_REAP_ACQUIRE) and does NOT exit when its direct child exits
+		//      -- it waits until EVERY descendant is gone (reap rs_children == 0), then on
+		//      the alarm signals the whole reaped tree. A daemon the hook spawned keeps it
+		//      waiting, so the budget elapses and the SIGTERM would even kill the
+		//      just-reloaded daemon. --foreground disables the reaper: timeout exits as
+		//      soon as the DIRECT hook process exits (a genuine overrun is still SIGTERM'd,
+		//      kill(child)), leaving any daemon reparented to init.
+		//   2. A spawned daemon inherits the hook's stdout/stderr. If those are exec()'s
+		//      capture pipe, exec() never reads EOF while the daemon lives. Capturing to a
+		//      temp FILE (held harmlessly by the daemon) + stdin from /dev/null decouples
+		//      exec() from the daemon.
+		//
+		// Together, completion depends ONLY on the hook process exiting.
+		$hooklog = tempnam('/tmp', 'pfb_hook_');
+		$sink    = ($hooklog !== FALSE) ? escapeshellarg($hooklog) : '/dev/null';
+		$cmd = "{$envprefix} /usr/bin/timeout --foreground -s TERM -k " . PFB_HOOK_KILL_GRACE .
+			" {$timeout} " . escapeshellarg($path) . " > {$sink} 2>&1 < /dev/null";
 
-		$output = array();
-		$retval = 0;
-		exec($cmd, $output, $retval);
+		$discard = array();
+		$retval  = 0;
+		exec($cmd, $discard, $retval);
 
-		if (!empty($output)) {
-			pfb_logger(implode("\n", $output) . "\n", 1);
+		$output = ($hooklog !== FALSE) ? (string) @file_get_contents($hooklog) : '';
+		if ($hooklog !== FALSE) {
+			@unlink($hooklog);
+		}
+		if ($output !== '') {
+			pfb_logger(rtrim($output, "\n") . "\n", 1);
 		}
 
 		if ($retval === 124) {
@@ -11489,10 +11514,48 @@ function pfb_dnsbl_lastevent($p_group, $p_entry, $p_details) {
 }
 
 
-// Function to collect and update the Unbound Resolver query/pid entries into SQLite3 database
+// TRUE when a pfBlockerNG feed task (cron/update/pfb_trigger/tick/forcecheck) is
+// currently running. The GLOBAL active-process guard for the Update-page Run-Now
+// dispatchers (pfb_active_task_running): it refuses a second run while ANY pfB feed task
+// is running -- including a cron tick this page never launched, so it must scan ps rather
+// than rely on a per-run pidfile. (The Run-Now livetail tracks its OWN dispatched process
+// by pidfile via isvalidpid() -- a narrower check; this ps scan is the broad one the guard needs.)
+function pfb_feed_task_running(): bool {
+	$result_ps = array();
+	exec('/bin/ps -wax', $result_ps);
+	return (bool) preg_grep('/pfblockerng[.]php\s+?(cron|update|pfb_trigger|tick|forcecheck)/', $result_ps);
+}
+
+
+// Decide whether the Run-Now livetail loop should stop this cycle (pfb_livetail's
+// non-'view' mode -- internally 'force', driving EVERY Update-page run + the Force-check,
+// NOT the page's Force radios), given whether the dispatched process ($running -- the
+// caller passes isvalidpid() of the process's pidfile) is alive and whether it has
+// produced any output yet ($saw_output). The process is the completion signal, replacing
+// the old 'UPDATE PROCESS ENDED' log-string probe. Note the loop STREAMS the log every cycle
+// regardless of this result, so output is never delayed:
+//   - while the task runs, keep tailing (and latch that we saw it);
+//   - once it is gone, stop IMMEDIATELY if it ever ran OR has already produced output
+//     (it has finished -- nothing more will come);
+//   - only when NOTHING has happened (never seen running AND no output at all) wait up
+//     to $grace cycles before giving up -- the dead-launch (failed mwexec_bg) safety net,
+//     so the tail can't loop forever yet a real run is never cut short or held blank.
+// $seen and $cycles carry the loop's state across cycles (by reference).
+function pfb_livetail_force_done(bool $running, bool $saw_output, bool &$seen, int &$cycles, int $grace): bool {
+	if ($running) {
+		$seen = TRUE;
+		return FALSE;
+	}
+	if ($seen || $saw_output) {
+		return TRUE;
+	}
+	return (++$cycles >= $grace);
+}
+
+
 // Read logfile in realtime (livetail)
 // Reference: http://stackoverflow.com/questions/3218895/php-how-to-read-a-file-live-that-is-constantly-being-written-to
-function pfb_livetail($logfile, $mode) {
+function pfb_livetail($logfile, $mode, $pidfile = '') {
 	global $pfb;
 
 	if (!file_exists("{$logfile}")) {
@@ -11513,6 +11576,17 @@ function pfb_livetail($logfile, $mode) {
 	else {
 		$lastpos = $len;
 	}
+
+	// Run-Now termination state (the non-'view' tail): stop the tail when the dispatched
+	// process exits -- tracked authoritatively by its pidfile (isvalidpid), so no ps-pattern
+	// guessing. The grace bounds ONLY the launch-lag / dead-launch case (pidfile never valid
+	// AND nothing written): ~0.3s per cycle => ~3s. The process not even appearing within a
+	// full 3s already means something is wrong, so we give up rather than loop. Any output
+	// (or seeing the pid) ends the tail as soon as the process is gone, and the log streams
+	// every cycle regardless, so the page is never held blank.
+	$seen_running	= FALSE;
+	$startup_cycles	= 0;
+	$startup_grace	= 10;	// ~3s at 0.3s/cycle
 
 	while (TRUE) {
 		usleep(300000); //0.3s
@@ -11546,17 +11620,22 @@ function pfb_livetail($logfile, $mode) {
 				@fclose($f);
 			}
 
-			// Capture remaining output
-			if ($mode != 'view' && strpos($pfb_output, 'UPDATE PROCESS ENDED') !== FALSE) {
+			// Terminate the Run-Now tail when the dispatched process exits -- the process
+			// itself is the completion signal (its pidfile, via isvalidpid), replacing the
+			// brittle 'UPDATE PROCESS ENDED' log-string probe. 'view' is a passive live
+			// viewer: it streams until the client disconnects, so it never stops here.
+			if ($mode != 'view' &&
+			    pfb_livetail_force_done(isvalidpid($pidfile), $pfb_output !== '', $seen_running, $startup_cycles, $startup_grace)) {
+				// Capture remaining output, run log mgmt, end the tail.
 				$f = @fopen($pfb['log'], 'rb');
-				@fseek($f, $lastpos);
-				$pfb_buffer = @fread($f, 2048);
-				$pfb_output .= str_replace( "\r", '', $pfb_buffer);
-				pfbupdate_output($pfb_output);
-				clearstatcache(FALSE, $pfb['log']);
-				ob_flush();
-				flush();
-				if ($f) {
+				if ($f !== FALSE) {
+					@fseek($f, $lastpos);
+					$pfb_buffer = @fread($f, 2048);
+					$pfb_output .= str_replace("\r", '', $pfb_buffer);
+					pfbupdate_output($pfb_output);
+					clearstatcache(FALSE, $pfb['log']);
+					ob_flush();
+					flush();
 					@fclose($f);
 				}
 
