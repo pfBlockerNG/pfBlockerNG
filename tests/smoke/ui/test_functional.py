@@ -1213,8 +1213,8 @@ def test_dnsvip_auto_form_provisions_and_removes_marked_vip(
             f"auto VIP {helpers.AUTO_VIP_IP4} still live on lo0 after the form disabled it"
         )
     finally:
-        # Leave the box clean for the sibling flows: auto off + drop the test alias
-        # and rebuild from baseline (reset = clearip/cleardnsbl + a forced update).
+        # Leave the box clean for the sibling flows: auto off + drop the derived
+        # state (reset = clearip/cleardnsbl + a blocking filter sync).
         helpers.set_dnsvip_auto(vm, False)
         helpers.reset(vm)
 

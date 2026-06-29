@@ -2322,18 +2322,24 @@ def apply_filter_sync(vm: SmokeVM, *, timeout: float = 60.0) -> None:
 
 
 @timed_step("reset")
-def reset(vm: SmokeVM, *, timeout: float = 600.0) -> None:
+def reset(vm: SmokeVM, *, timeout: float = 60.0) -> None:
     """Return the VM to the per-case baseline (Phase-3 isolation strategy).
 
     ``clearip`` + ``cleardnsbl`` drop the accumulated tables/sqlite, then a
-    forced ``update`` rebuilds from config — required because pfBlockerNG caches
-    feeds, so an edited mock fixture is re-fetched only on a force.
+    blocking ``apply_filter_sync`` settles the pf ruleset — the same proven
+    teardown shape :func:`reset_pfb_baseline` uses. This is teardown ONLY: it
+    drops derived state so the next case starts clean. It does NOT rebuild from
+    config — the old forced ``update`` here was pure overhead (~31s/case on CI's
+    nested-KVM, issue #611), because the NEXT ``CaseContext.__enter__`` re-injects
+    its spec and runs its own targeted force-reload (``updateip``/``updatednsbl``,
+    which re-reads the feed regardless), so re-fetching the just-tested feed on
+    teardown is wasted work.
     """
     for verb in ("clearip", "cleardnsbl"):
         result = vm.ssh(PHP_BIN, PFB_CLI, verb, timeout=120.0)
         if result.returncode != 0:
             raise RuntimeError(f"reset {verb} failed: rc={result.returncode} stderr={result.stderr!r}")
-    reload(vm, "update", timeout=timeout)
+    apply_filter_sync(vm, timeout=timeout)
 
 
 # Whole config sections a smoke case injects into. reset_pfb_baseline DELETES these — they
@@ -4362,7 +4368,8 @@ class CaseContext:
 
     @timed_step(lambda self, *exc: f"casecontext_exit:{self.spec.aliasname}")
     def __exit__(self, *exc: object) -> None:
-        # Restore egress before reset() — its forced update reloads pfBlockerNG.
+        # Restore egress so the box is left in a clean network state for the next case
+        # (reset() itself is now local-only: clearip/cleardnsbl + a blocking filter sync).
         unblock_egress()
         # Don't let a reset() failure during teardown MASK a failure the case body
         # already raised — pytest would report the teardown error and bury the real
