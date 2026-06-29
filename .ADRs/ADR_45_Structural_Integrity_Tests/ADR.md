@@ -1,6 +1,13 @@
 # ADR-45: Structural integrity testing for downloaded compressed feeds
 
-- **Status:** **Proposed** (2026-06-28)
+- **Status:** **Accepted** (2026-06-29) — green on the **CE 2.8** live-VM smoke
+  (`tests/smoke/test_smoke_feeds.py`, 8/8: corrupt-{zip,gz,bz2}-rejected,
+  octet-stream-recovered, junk-octet-rejected, + healthy pairs). Validated CE-only
+  per maintainer direction; the Plus leg exercises the same logic on a different
+  base and is deferred. 7z *extraction* end-to-end stays a documented out-of-CI
+  limitation (the smoke image ships no 7-Zip binary; the safe-reject path is
+  unit-pinned). Implemented via PR #617; smoke fixtures hardened for FreeBSD
+  `file(1)`/bsdtar in PR #621 (see `tests/smoke/fixtures/README.md` "Archive corpus").
 - **Date:** 2026-06-28
 - **Branch:** `adr/45-structural-integrity-tests` (off `devel`) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfblockerng.inc`
 - **Target runtime:** PHP 8.3, FreeBSD / pfSense; shell via `exec()` to base archive tools (`gunzip`, `bzip2`, `bsdtar`, `7z`)
