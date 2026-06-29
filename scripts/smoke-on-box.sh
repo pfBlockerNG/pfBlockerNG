@@ -217,9 +217,16 @@ pkill -9 -f qemu-system-x86_64 2>/dev/null || true
 # SMOKE_PFSENSE_MGMT_IP / SMOKE_CLIENT_MGMT_IP — consumed by boot_vm.sh via env
 # inheritance through exec run-smoke.sh → pytest → boot_vm.sh.
 if [ "$_NET_MODE" = bridge ]; then
-    eval "$(sh "$REPO_ROOT/scripts/bridge-net.sh" up)"
-    export SMOKE_WAN_TAP SMOKE_MGMT_TAP SMOKE_CLIENT_MGMT_TAP \
-           SMOKE_PFSENSE_MGMT_IP SMOKE_CLIENT_MGMT_IP
+    _bridge_env="$(sh "$REPO_ROOT/scripts/bridge-net.sh" up)"
+    # Strict allowlist parse — never eval bridge-net.sh output (the values are env-derived).
+    while IFS='=' read -r _k _v; do
+        case "$_k" in
+            SMOKE_WAN_TAP|SMOKE_MGMT_TAP|SMOKE_CLIENT_MGMT_TAP|SMOKE_PFSENSE_MGMT_IP|SMOKE_CLIENT_MGMT_IP)
+                export "${_k}=${_v}" ;;
+        esac
+    done <<BRIDGE_ENV
+${_bridge_env}
+BRIDGE_ENV
     SMOKE_NET_MODE=bridge
     export SMOKE_NET_MODE
 fi

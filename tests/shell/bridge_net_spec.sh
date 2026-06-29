@@ -4,15 +4,18 @@
 # Pins the command contract:
 #   - 'up' creates br-wan (192.168.89.2/24) + br-mgmt (192.168.43.2/24) and lane-named taps
 #   - 'up' starts dnsmasq DHCP-only (port=0) with static MGMT leases at .15 / .16
-#   - 'up' emits eval-able SMOKE_* vars on stdout
+#   - 'up' emits SMOKE_* vars on stdout (strict allowlist KEY=value format)
 #   - 'up' is idempotent: calls 'down' first (link del AND link add both present)
 #   - per-lane tap names: SMOKE_LANE=1 → tap-wan1 / tap-mgmt1 / tap-cli1
 #   - SMOKE_VM_MAC line-2 override drives the pfSense MGMT lease MAC
 #   - 'down' deletes taps + bridges; exits 0 even when nothing exists
+#   - 'down' exits 0 even when ip link del returns non-zero (missing devices)
+#   - invalid SMOKE_LANE (non-numeric) → exit 2 for both up and down
+#   - metacharacters in SMOKE_PFSENSE_MGMT_IP → exit 2 (injection rejected)
 #   - unknown subcommand → exit 2 with usage on stderr
 #
-# Hermetic: stubs ip (SMOKE_IP_BIN) and dnsmasq (SMOKE_DNSMASQ_BIN) that record
-# their argv to files; no real bridges, taps, or DHCP.
+# Hermetic: stubs ip (SMOKE_IP_BIN), dnsmasq (SMOKE_DNSMASQ_BIN), and the runtime
+# dir (SMOKE_BRIDGE_RUN_DIR) so no real bridges, taps, DHCP, or root-owned dirs.
 
 Describe 'bridge-net.sh'
   SCRIPT="${PFB_ROOT}/scripts/bridge-net.sh"
@@ -20,7 +23,7 @@ Describe 'bridge-net.sh'
   setup() {
     scrub_git_env
     unset SMOKE_LANE SMOKE_VM_MAC SMOKE_CLIENT_MGMT_MAC \
-          SMOKE_PFSENSE_MGMT_IP SMOKE_CLIENT_MGMT_IP
+          SMOKE_PFSENSE_MGMT_IP SMOKE_CLIENT_MGMT_IP SMOKE_BRIDGE_RUN_DIR
     WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/bridgenetspec.XXXXXX")"
     IP_ARGV_FILE="${WORK}/ip_argv"
     DNSMASQ_ARGV_FILE="${WORK}/dnsmasq_argv"
@@ -43,9 +46,13 @@ printf '%s\n' "$*" >> "$DNSMASQ_ARGV_FILE"
 EOF
     chmod +x "${BIN}/dnsmasq"
 
+    # Runtime dir override: keeps the PID file out of the real /run/pfb-smoke.
+    RUNDIR="${WORK}/run"
     SMOKE_IP_BIN="${BIN}/ip"
     SMOKE_DNSMASQ_BIN="${BIN}/dnsmasq"
-    export WORK IP_ARGV_FILE DNSMASQ_ARGV_FILE SMOKE_IP_BIN SMOKE_DNSMASQ_BIN
+    SMOKE_BRIDGE_RUN_DIR="${RUNDIR}"
+    export WORK IP_ARGV_FILE DNSMASQ_ARGV_FILE SMOKE_IP_BIN SMOKE_DNSMASQ_BIN \
+           SMOKE_BRIDGE_RUN_DIR RUNDIR
   }
   teardown() { rm -rf "${WORK}"; }
   BeforeEach 'setup'
@@ -144,7 +151,7 @@ EOF
       The stderr should include 'bridge-net:'
       The stdout should include 'SMOKE_CLIENT_MGMT_IP=192.168.43.16'
       The contents of file "$DNSMASQ_ARGV_FILE" \
-        should include '--pid-file=/tmp/pfb-dnsmasq-0.pid'
+        should include "--pid-file=${RUNDIR}/dnsmasq-0.pid"
     End
   End
 
@@ -259,6 +266,58 @@ EOF
       When run sh "$SCRIPT"
       The status should equal 2
       The stderr should include 'Usage:'
+    End
+  End
+
+  # ---- down: tolerates ip link del errors --------------------------------
+
+  Describe 'down tolerates ip link del errors (missing devices are not an error)'
+    setup_fail_ip() {
+      # Override the ip stub (setup() already ran) with one that exits 1 on
+      # 'link del *' to simulate missing devices.  Proves the || true guards work.
+      cat > "${BIN}/ip" << 'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$IP_ARGV_FILE"
+case "$*" in link\ del*) exit 1 ;; esac
+EOF
+      chmod +x "${BIN}/ip"
+    }
+    BeforeEach 'setup_fail_ip'
+
+    It 'exits 0 even when ip link del returns non-zero (|| true guards protect it)'
+      When run sh "$SCRIPT" down
+      The status should be success
+      The contents of file "$IP_ARGV_FILE" should include 'link del br-wan'
+    End
+  End
+
+  # ---- input validation: invalid SMOKE_LANE ------------------------------
+
+  Describe 'input validation: non-numeric SMOKE_LANE is rejected before any command runs'
+    It 'down with SMOKE_LANE=bad exits 2 with a message about SMOKE_LANE'
+      # RED→GREEN: pre-validation code has no exit 2 for bad LANE → status was 0 or 1.
+      # After validation: exits 2 with the SMOKE_LANE message.
+      When run env SMOKE_LANE=bad sh "$SCRIPT" down
+      The status should equal 2
+      The stderr should include 'SMOKE_LANE'
+    End
+
+    It 'up with SMOKE_LANE=bad exits 2 with a message about SMOKE_LANE'
+      When run env SMOKE_LANE=bad sh "$SCRIPT" up
+      The status should equal 2
+      The stderr should include 'SMOKE_LANE'
+    End
+  End
+
+  # ---- input validation: injection in SMOKE_PFSENSE_MGMT_IP -------------
+
+  Describe 'input validation: metacharacters in SMOKE_PFSENSE_MGMT_IP are rejected'
+    It 'up with a semicolon-injection in SMOKE_PFSENSE_MGMT_IP exits 2'
+      # RED→GREEN: pre-validation code passes the value straight to dnsmasq args;
+      # after validation: exits 2 before any binary is called.
+      When run env SMOKE_PFSENSE_MGMT_IP='1.2.3.4; rm -rf /' sh "$SCRIPT" up
+      The status should equal 2
+      The stderr should include 'invalid characters'
     End
   End
 End

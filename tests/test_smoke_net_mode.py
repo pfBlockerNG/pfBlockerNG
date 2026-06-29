@@ -62,10 +62,13 @@ def _load_conftest(
 ) -> types.ModuleType:
     """Import tests.smoke.conftest with controlled env vars.
 
-    Saves and restores all conftest-side-effected env vars so tests are fully
-    isolated from one another.  Mirrors the pattern in test_adr47_conftest_lane.
+    Saves and restores all conftest-side-effected env vars AND the affected
+    sys.modules entries so tests are fully order-independent.
     """
     saved = {k: os.environ.get(k) for k in _CONFTEST_ENV_KEYS}
+    saved_modules = {
+        k: sys.modules[k] for k in list(sys.modules) if "smoke.conftest" in k or k == "tests.smoke.conftest"
+    }
 
     os.environ["SMOKE_LANE"] = str(lane)
     # Set or unset each NET_MODE-related env var.
@@ -89,6 +92,11 @@ def _load_conftest(
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+        # Restore sys.modules to the pre-call state (delete any entries this call added).
+        for key in list(sys.modules):
+            if "smoke.conftest" in key or key == "tests.smoke.conftest":
+                del sys.modules[key]
+        sys.modules.update(saved_modules)
 
 
 def _set_or_pop(key: str, value: str | None) -> None:
@@ -267,21 +275,5 @@ class TestInvalidNetMode:
 
     def test_invalid_mode_raises(self) -> None:
         """SMOKE_NET_MODE='garbage' → ValueError on import (same guard as boot_vm.sh)."""
-        # Force a fresh import attempt with the bad value.
-        saved = os.environ.get("SMOKE_NET_MODE")
-        for key in list(sys.modules):
-            if "smoke.conftest" in key or key == "tests.smoke.conftest":
-                del sys.modules[key]
-        os.environ["SMOKE_NET_MODE"] = "garbage"
-        try:
-            with pytest.raises(ValueError, match="SMOKE_NET_MODE"):
-                importlib.import_module("tests.smoke.conftest")
-        finally:
-            if saved is None:
-                os.environ.pop("SMOKE_NET_MODE", None)
-            else:
-                os.environ["SMOKE_NET_MODE"] = saved
-            # Clean up the partial/failed module import.
-            for key in list(sys.modules):
-                if "smoke.conftest" in key or key == "tests.smoke.conftest":
-                    del sys.modules[key]
+        with pytest.raises(ValueError, match="SMOKE_NET_MODE"):
+            _load_conftest(net_mode="garbage")

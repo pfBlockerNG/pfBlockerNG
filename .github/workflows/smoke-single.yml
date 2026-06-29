@@ -488,14 +488,14 @@ jobs:
           set -eu
           sudo apt-get install -y dnsmasq
           # `ip`/`dnsmasq` need root; pass SMOKE_VM_MAC through sudo's env reset explicitly.
-          eval "$(sudo env SMOKE_VM_MAC="${SMOKE_VM_MAC:-}" sh scripts/bridge-net.sh up)"
-          {
-            echo "SMOKE_WAN_TAP=${SMOKE_WAN_TAP}"
-            echo "SMOKE_MGMT_TAP=${SMOKE_MGMT_TAP}"
-            echo "SMOKE_CLIENT_MGMT_TAP=${SMOKE_CLIENT_MGMT_TAP}"
-            echo "SMOKE_PFSENSE_MGMT_IP=${SMOKE_PFSENSE_MGMT_IP}"
-            echo "SMOKE_CLIENT_MGMT_IP=${SMOKE_CLIENT_MGMT_IP}"
-          } >> "$GITHUB_ENV"
+          # Strict allowlist parse — never eval bridge-net.sh output (the values are env-derived).
+          _bridge_env="$(sudo env SMOKE_VM_MAC="${SMOKE_VM_MAC:-}" sh scripts/bridge-net.sh up)"
+          printf '%s\n' "$_bridge_env" | while IFS='=' read -r _k _v; do
+            case "$_k" in
+              SMOKE_WAN_TAP|SMOKE_MGMT_TAP|SMOKE_CLIENT_MGMT_TAP|SMOKE_PFSENSE_MGMT_IP|SMOKE_CLIENT_MGMT_IP)
+                printf '%s=%s\n' "$_k" "$_v" >> "$GITHUB_ENV" ;;
+            esac
+          done
 
       # HERMETICITY (ADR §2/§4): the egress block is done INSIDE pytest, by the
       # matrix's `deployed_vm` fixture, after deploy() and before the per-case
