@@ -27,11 +27,19 @@ $shortcuts['pfblockerng'] = array();
 // pfBlockerNG's syslog (ADR-38) is a <logging>-registered package log, surfaced under
 // Status > System Logs > Packages. Resolve the channel-correct package name
 // (pfBlockerNG vs pfBlockerNG-devel) from its configurationfile so the link is right on
-// either channel. installedpackages/package is a pfSense-core section (not a registered
-// pfblockerng config scalar), so this read is outside the ADR-29 config-gateway scope.
+// either channel. The package name is required: status_logs_packages.php selects the log
+// via get_package_id($_GET['pkg']), which matches installedpackages/package/name — so the
+// query string must carry the real variant name, not a fixed "pfBlockerNG".
+// installedpackages/package is a pfSense-core section (not a registered pfblockerng config
+// scalar), so this read is outside the ADR-29 config-gateway scope.
+//
+// The href is ROOT-ABSOLUTE ("/status_logs_packages.php..."): head.inc emits the 'log'
+// value verbatim, and pfBlockerNG's GUI pages live under /pfblockerng/, so a relative
+// value would resolve to /pfblockerng/status_logs_packages.php and 404. (cmp_page_matches
+// ltrim()s the leading slash, so the privilege gate is unaffected.)
 foreach (config_get_path('installedpackages/package', array()) as $pfb_pkg) {
 	if (($pfb_pkg['configurationfile'] ?? '') === 'pfblockerng.xml') {
-		$shortcuts['pfblockerng']['log'] = 'status_logs_packages.php?pkg=' . $pfb_pkg['name'];
+		$shortcuts['pfblockerng']['log'] = '/status_logs_packages.php?pkg=' . $pfb_pkg['name'];
 		break;
 	}
 }
