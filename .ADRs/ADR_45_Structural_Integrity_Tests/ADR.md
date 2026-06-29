@@ -33,7 +33,12 @@ real, reproducible gap #581 describes is elsewhere:
   unusual shapes, or an older magic database. `file(1)` then returns a string not in the
   allow-list and the feed is **rejected even though it is a perfectly valid, extractable
   archive**. ADR-44 deliberately does **not** promote `octet-stream` (blind promotion is
-  unsafe), so that rejection stands today with no remedy.
+  unsafe), so that rejection stands today with no remedy. **Real in-tree reproduction
+  (BBcan177, #581):** the Top1M list — `top-1m.csv.zip` from alexa / tranco /
+  umbrella-Cisco, fetched by `pfb_download()` via `pfblockerng.php`'s `$pfb['extras'][2]`
+  — is a real, shipping `.zip` feed that `file(1)` is reported to return as
+  `octet-stream`. It is the canonical *live* case this recovery path must handle, not a
+  synthetic one.
 - **Corrupt / truncated archives are not caught early.** "Magic said gzip but the body
   was truncated HTML" reaches the decompressor and fails late and opaquely.
 
@@ -191,6 +196,22 @@ canonical type. Smoke proves a valid ZIP that `file` reports as `octet-stream` n
 
 Add the corrupt-archive + octet-stream-recovery fixtures to `tests/smoke/test_smoke_feeds.py`;
 green CE + Plus fan-out flips the ADR to Accepted (per CLAUDE.md ADR-acceptance).
+
+**Real-world fixtures (BBcan177, #581).** Prefer inert samples captured from the archive
+feeds pfBlockerNG actually ships, so the suite covers more than the lab happy path:
+
+- **`.zip`** — `pfblockerng_feeds.json` carries 14 `.zip` feeds (StopForumSpam
+  `listed_ip_*.zip` / `bannedips.zip`; myip.ms `full_blacklist_database.zip`), and
+  `pfblockerng.php` adds the Top1M `top-1m.csv.zip` (the octet-stream reproduction in §1)
+  plus the MaxMind `GeoLite2-Country-CSV.zip`.
+- **other compression** — also cover `.gz` (nixspam, manitu, AlienVault Snort) and `.bz2`
+  (PhishTank), already present as feeds, so every decompression branch (`gunzip` / `bzip2` /
+  `bsdtar` / `7z`) has a real sample, not just ZIP.
+
+Capture each ONCE and commit the small, inert sample under `tests/smoke/fixtures/` per the
+existing fixtures policy — **never fetch a feed live in smoke** (several of these sites
+rate-limit downloads). The Top1M `.zip` octet-stream sample is the primary recovery-path
+fixture; a truncated copy of each is the matching corrupt-archive fixture.
 
 ---
 
