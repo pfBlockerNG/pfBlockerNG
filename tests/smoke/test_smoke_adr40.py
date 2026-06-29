@@ -537,3 +537,35 @@ def test_adr40_delta_replace_mode(adr40_vm: h.SmokeVM) -> None:
     finally:
         _set_delta_mode(adr40_vm, "auto")
         h.clear_update_hooks(adr40_vm)
+
+
+def test_pfctl_table_count_absent_table_no_bare_error(adr40_vm: SmokeVM) -> None:
+    """Reading an absent pf table reports 0 entries and leaks NO bare 'pfctl: Table does not exist'.
+
+    The mutation wrapper pfb_pfctl_table_op() attributes add/delete/replace/kill failures in the
+    log, but the table-SIZE reads were unwrapped and did not redirect pfctl's stderr — so reading
+    an alias whose kernel table does not exist yet (as mid-reload, right after the previous version
+    flushed it during a package update) leaked a bare 'pfctl: Table does not exist' into the update
+    / Software-page output. pfb_pfctl_table_count() now reads with pfctl's OWN stderr suppressed and
+    counts in PHP, so an absent table is simply 0 entries — no leak.
+
+    Red→green: pfb_pfctl_table_count() does not exist before the change, so the snippet fatals (no
+    COUNT marker emitted); green after.
+    """
+    absent = "pfB_smoke_absent_xyzzy_v4"  # a table name that is never created on the box
+    snippet = (
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');"
+        f"echo '<<<CNT>>>' . pfb_pfctl_table_count('{absent}') . '<<<END>>>';"
+    )
+    result = h.php_eval(adr40_vm, snippet)
+    combined = result.stdout + result.stderr
+
+    # A read of an absent table is "0 entries", not a failure.
+    assert "<<<CNT>>>0<<<END>>>" in result.stdout, (
+        f"expected 0 entries for an absent table; rc={result.returncode} "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    # ...and emits no bare pfctl 'Table does not exist' anywhere (stdout or stderr).
+    assert "Table does not exist" not in combined, (
+        f"bare 'pfctl: Table does not exist' leaked despite the read helper: {combined!r}"
+    )

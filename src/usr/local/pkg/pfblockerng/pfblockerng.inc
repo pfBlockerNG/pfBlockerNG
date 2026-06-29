@@ -3798,6 +3798,21 @@ function pfb_pfctl_table_op(string $table, string $op, string $args = '', string
 }
 
 
+// Number of entries in pf table $table, or 0 when the table does not exist yet (a benign read
+// on boot / mid-reload). Reads via `pfctl -T show` with pfctl's OWN stderr suppressed: a missing
+// table writes "pfctl: Table does not exist" to stderr, which would otherwise leak UNATTRIBUTED
+// into the update / Software-page output. (The mutation wrapper pfb_pfctl_table_op() only covers
+// add/delete/replace/kill; reading an absent table is not a failure to attribute -- just "no
+// entries yet".) Counts in PHP, not `| wc -l`, so a wrapping 2>&1 can't bind to wc instead of
+// pfctl and let the error through.
+function pfb_pfctl_table_count(string $table): int {
+	global $pfb;
+	$out = [];
+	exec("{$pfb['pfctl']} -t " . escapeshellarg($table) . " -T show 2>/dev/null", $out);
+	return count($out);
+}
+
+
 // ADR-11 Phase 3: build + register the opt-in per-type aggregate ("Uber") Native aliases.
 //
 // ONE generic loop over the type->dir map {Deny,Permit,Match,Native} x family {v4,v6}.
@@ -14911,11 +14926,7 @@ function sync_package_pfblockerng($cron='') {
 						}
 
 						// Check if pfBlockerNG pfctl Continent tables are empty (pfBlockerNG was disabled w/ "keep", then re-enabled)
-						$pfctlck = trim(exec_command(implode(' ', [
-							$pfb['pfctl'], '-t',
-							$cc_alias,
-							'-Tshow', '|', $pfb['wc'], '-l'
-						])));
+						$pfctlck = pfb_pfctl_table_count($cc_alias);
 
 						if (empty($pfctlck) && file_exists("{$pfbfolder}/{$cc_alias}.txt")) {
 							@copy("{$pfbfolder}/{$cc_alias}.txt", "{$pfb['aliasdir']}/{$cc_alias}.txt");
@@ -15755,7 +15766,6 @@ function sync_package_pfblockerng($cron='') {
 					pfb_logger("\n Invalid Aliasname:{$list['aliasname']}{$vtype}, *skipping*", 1);
 					continue;
 				}
-				$alias_esc = escapeshellarg($alias);
 
 				// Skip any Alias that are 'enabled' but Lists/customlists are not defined.
 				if (empty($list['row'][0]['url']) && empty($list['custom'])) {
@@ -15797,11 +15807,7 @@ function sync_package_pfblockerng($cron='') {
 								$header_esc	= escapeshellarg($header);
 								$urlvalue	.= "{$header},";
 
-								$pfctlck = trim(exec_command(implode(' ', [
-									$pfb['pfctl'], '-t',
-									$alias_esc,
-									'-Tshow', '|', $pfb['wc'], '-l'
-								])));
+								$pfctlck = pfb_pfctl_table_count($alias);
 
 								// ADR-40 P3: read member files when:
 								//   (a) cross-list scope → always (dedup/rep can shift any alias), OR
@@ -15836,12 +15842,7 @@ function sync_package_pfblockerng($cron='') {
 					$aliasname = "{$list['aliasname']}_custom{$vtype}";
 
 					// Update alias if list file exists and its been updated or if the alias URL table is empty.
-					$alias_esc = escapeshellarg($alias);
-					$pfctlck = trim(exec_command(implode(' ', [
-						$pfb['pfctl'], '-t',
-						$alias_esc,
-						'-Tshow', '|', $pfb['wc'], '-l'
-					])));
+					$pfctlck = pfb_pfctl_table_count($alias);
 					if (!empty($list['custom'])) {
 						$urlvalue .= "{$aliasname},";
 						// ADR-40 P3: same scope logic for custom lists.
