@@ -36,14 +36,14 @@ Describe 'ADR-26 — pfb_list_orig_by_mtime() diagnostic listing (Phase 3)'
   # in POSIX sh, so wrap the negation in a function (where `!` is a valid pipeline op).
   not_gnu() { ! is_gnu; }
 
-  It 'lists *.orig oldest-first as "<Mon> <Day><TAB><HH:MM><TAB><name>" (path + .orig stripped)'
+  It 'lists *.orig oldest-first as "<YYYY-MM-DD> <HH:MM><TAB><name>" (ISO date, path + .orig stripped)'
     Skip if 'needs GNU stat/date/touch (the BSD branch is covered live by ADR-04 smoke)' not_gnu
     # Created out of mtime order; the helper must emit them oldest-first (the old `ls -lahtr`).
     touch -d '2026-01-15 23:59:00' "${work}/pfB_Charlie.orig"
     touch -d '2026-01-10 08:05:00' "${work}/pfB_Alpha.orig"
     touch -d '2026-01-12 14:30:00' "${work}/pfB_Bravo.orig"
     touch "${work}/ignore.txt"   # a non-.orig file must NOT appear
-    expected="$(printf 'Jan 10\t08:05\tpfB_Alpha\nJan 12\t14:30\tpfB_Bravo\nJan 15\t23:59\tpfB_Charlie')"
+    expected="$(printf '2026-01-10 08:05\tpfB_Alpha\n2026-01-12 14:30\tpfB_Bravo\n2026-01-15 23:59\tpfB_Charlie')"
     When call pfb_list_orig_by_mtime "${work}/"
     The status should be success
     The output should equal "$expected"
