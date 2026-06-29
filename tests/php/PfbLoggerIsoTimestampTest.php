@@ -85,15 +85,16 @@ final class PfbLoggerIsoTimestampTest extends TestCase
 	 */
 	public function testFailuresGrepMatchesIsoLogTimestamp(): void
 	{
-		// Given: an error log holding a FAIL line stamped with today's date in the SAME ISO
-		// format pfb_logger() now writes ('Y-m-d ...'), plus enough tokens for pfb_failures()'s
-		// explode(' ')[4] alias field.
+		// Given: an error log holding a Download-FAIL line in pfb_logger()'s REAL shape
+		// (pfblockerng.inc:8678 " [ {alias} - {header} ] Download FAIL [ NOW ]"), stamped with
+		// today's date in the SAME ISO format pfb_logger() now writes. pfb_failures() tallies
+		// by explode(' ')[4] = the feed header, so the key we assert is the header token.
 		$errlog = tempnam(sys_get_temp_dir(), 'pfb_errlogtest_');
 		$this->assertNotFalse($errlog, 'could not create temp errlog file');
 		$this->tmpfiles[] = $errlog;
 		$stamp = date('Y-m-d H:i:s', time());
 		$this->assertNotFalse(
-			file_put_contents($errlog, "{$stamp} [ FAIL pfbtestalias ] download error\n"),
+			file_put_contents($errlog, " [ pfB_TestAlias - pfbtestheader ] Download FAIL [ {$stamp} ]\n"),
 			'could not seed the temp errlog'
 		);
 		$GLOBALS['pfb']['errlog'] = $errlog;
@@ -103,9 +104,9 @@ final class PfbLoggerIsoTimestampTest extends TestCase
 		// When.
 		pfb_failures();
 
-		// Then: today's FAIL line was matched by the date grep and tallied.
+		// Then: today's FAIL line was matched by the date grep and tallied under the header.
 		$this->assertArrayHasKey(
-			'pfbtestalias',
+			'pfbtestheader',
 			$GLOBALS['pfb']['failed'] ?? [],
 			"pfb_failures() did not find today's FAIL line — the grep date format is out of sync "
 			. 'with pfb_logger()'
