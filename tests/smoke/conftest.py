@@ -146,6 +146,39 @@ os.environ["SMOKE_WEB_HOSTPORT"] = str(DEFAULT_WEB_PORT)
 os.environ["SMOKE_CLIENT_SSH_HOSTPORT"] = str(DEFAULT_CLIENT_SSH_PORT)
 os.environ["SMOKE_LAN_SOCKET_PORT"] = str(DEFAULT_LAN_SOCKET_PORT)
 
+# --------------------------------------------------------------------------- #
+# Network mode — bridge vs slirp SSH/DNS targeting (ADR-50 P3)
+# --------------------------------------------------------------------------- #
+#
+# slirp (default): QEMU user-net hostfwd; DEFAULT_HOST/SSH_PORT/WEB_PORT are the
+#   loopback hostfwd values computed above.  No change to slirp behaviour.
+# bridge: tap devices on host Linux bridges; the harness SSHes the guest MGMT bridge
+#   IPs directly (no hostfwd) and the stub DNS binds the WAN bridge IP.
+#   The env write-back above (SMOKE_*_HOSTPORT) is a harmless no-op in bridge mode
+#   because boot_vm.sh ignores hostfwd when NET_MODE=bridge — left unbranched.
+NET_MODE = os.environ.get("SMOKE_NET_MODE", "slirp")
+if NET_MODE not in ("slirp", "bridge"):
+    raise ValueError(f"SMOKE_NET_MODE must be 'slirp' or 'bridge' (got {NET_MODE!r})")
+
+# Bridge MGMT static lease IPs, env-overridable so P2's per-box setup can export them.
+# Defaults match boot_vm.sh PFSENSE_MGMT_IP (.15) and the civm static lease on br-mgmt (.16).
+PFSENSE_MGMT_IP = os.environ.get("SMOKE_PFSENSE_MGMT_IP") or "192.168.43.15"
+CLIENT_MGMT_IP = os.environ.get("SMOKE_CLIENT_MGMT_IP") or "192.168.43.16"
+
+if NET_MODE == "bridge":
+    # Override the slirp loopback-hostfwd values with the bridge MGMT IPs + standard ports.
+    DEFAULT_HOST = PFSENSE_MGMT_IP
+    DEFAULT_SSH_PORT = 22
+    DEFAULT_WEB_PORT = 80
+    DEFAULT_CLIENT_SSH_PORT = 22
+
+# civm SSH target: slirp → loopback hostfwd (same as DEFAULT_HOST); bridge → civm MGMT IP.
+DEFAULT_CLIENT_HOST: str = CLIENT_MGMT_IP if NET_MODE == "bridge" else DEFAULT_HOST
+
+# Stub DNS bind address: bridge → WAN bridge IP 192.168.89.2 (systemd-resolved sits on
+# 127.0.0.53:53 so loopback :53 is taken; the bridge IP :53 is free); slirp → loopback.
+DEFAULT_STUB_DNS_ADDR: str = GUEST_TO_HOST_ALIAS if NET_MODE == "bridge" else "127.0.0.1"
+
 # The address civm uses to reach pfSense (pfSense LAN side of the socket crossover).
 PFSENSE_LAN_IP = "192.168.1.1"  # pfSense LAN IP baked in the two-VM image
 
@@ -704,7 +737,7 @@ def client_vm(
                 "sh",
                 str(WAIT_READY_SH),
                 ssh_key_path,
-                DEFAULT_HOST,
+                DEFAULT_CLIENT_HOST,
                 str(DEFAULT_CLIENT_SSH_PORT),
                 str(DEFAULT_BOOT_TIMEOUT),
                 str(process.pid),
@@ -734,7 +767,7 @@ def client_vm(
 
     vm = SmokeVM(
         ssh_key_path=ssh_key_path,
-        host=DEFAULT_HOST,
+        host=DEFAULT_CLIENT_HOST,
         ssh_port=DEFAULT_CLIENT_SSH_PORT,
         vm_pid=process.pid,
         log_path=str(log_path),
@@ -1062,7 +1095,9 @@ class _StubDnsServer:
         # with systemd-resolved on 127.0.0.53:53. ``port`` overrides the env (the pure
         # unit tests pass ``port=0`` to force an ephemeral port, so they never collide
         # with the session mock holding :53).
-        addr = os.environ.get("SMOKE_STUB_DNS_ADDR") or "127.0.0.1"
+        # bridge mode: DEFAULT_STUB_DNS_ADDR is the WAN bridge IP 192.168.89.2; an explicit
+        # SMOKE_STUB_DNS_ADDR env still wins in both modes.
+        addr = os.environ.get("SMOKE_STUB_DNS_ADDR") or DEFAULT_STUB_DNS_ADDR
         if port is None:
             port = int(os.environ.get("SMOKE_STUB_DNS_PORT") or "0")
         # Bind TCP first so the shared port number is proven free for both (issue #243).
