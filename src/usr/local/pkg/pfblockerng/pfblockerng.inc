@@ -3757,8 +3757,9 @@ function pfb_pfctl_error_message(string $table, string $op, int $rc, string $std
 
 // Thin wrapper around `pfctl -t <table> -T <op>` for mutation ops (kill/replace/add/delete).
 // Owns the escapeshellarg() for the table; $args must already be fully escaped by
-// the caller (e.g. "-f " . escapeshellarg($path)).  On failure (non-zero rc or
-// pfctl error output) logs one attributed line via pfb_logger().
+// the caller (e.g. "-f " . escapeshellarg($path)).  $op is a fixed verb literal
+// (kill|replace|add|delete), interpolated UNescaped — never pass a caller-supplied value.
+// On failure (non-zero rc or pfctl error output) logs one attributed line via pfb_logger().
 // $pfctl_bin defaults to $pfb['pfctl']; pass explicitly when the binary is a
 // per-call parameter (e.g. pfb_apply_alias_delta, which accepts a mock binary in tests).
 function pfb_pfctl_table_op(string $table, string $op, string $args = '', string $pfctl_bin = ''): array {
@@ -3820,7 +3821,6 @@ function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_li
 			$aliasname	= "pfB_{$type}_Aggregated_{$family}";
 			$aggout		= "{$pfb['aliasdir']}/{$aliasname}.txt";
 			$consumer	= "{$pfb['dbdir']}/{$aliasname}.lst";	// never-empty '-f' consumer (ADR-12)
-			$aliasname_esc	= escapeshellarg($aliasname);
 
 			// ---- Teardown: a NON-selected type (or disabled) leaves no orphans. ----
 			// Strictly additive: only act when this aggregate actually exists -- on a box
@@ -4118,7 +4118,6 @@ function pfb_apply_alias_delta(
 	int    $batch_size,
 	bool   $force_replace = FALSE
 ): bool {
-	$table_esc      = escapeshellarg($table);
 	$table_file_esc = escapeshellarg($table_file);
 	$batch_size     = pfb_alias_delta_batch_clamp($batch_size);
 
@@ -16142,7 +16141,6 @@ function sync_package_pfblockerng($cron='') {
 				? []
 				: array_values(array_intersect(array_unique($pfb_alias_lists), $pfb_active_aliases));
 			foreach ($pfb_tables as $pfb_table) {
-				$pfb_table_esc      = escapeshellarg($pfb_table);
 				$pfb_table_path_esc = escapeshellarg("{$pfb['aliasdir']}/{$pfb_table}.txt");
 				if (in_array($pfb_table, $pfb_active_aliases)) {
 					if (in_array($pfb_table, $final_alias)) {

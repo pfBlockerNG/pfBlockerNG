@@ -18,7 +18,7 @@ use PHPUnit\Framework\TestCase;
  * Scenarios:
  *   A — failure message contains table, op, rc, and trimmed stderr.
  *   B — multiline stderr collapses to a single line.
- *   C — rc=0 with clean output formats without the error marker.
+ *   C — message format is stable across all four mutation ops (kill/replace/add/delete).
  *   D — empty stderr is represented cleanly (no trailing colon-space).
  */
 #[CoversFunction('pfb_pfctl_error_message')]
