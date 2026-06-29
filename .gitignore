@@ -46,6 +46,11 @@ node_modules/
 *.tar.gz
 *.tar.bz2
 *.zip
+# Committed smoke archive fixtures (ADR-45) are inert test data, not build output —
+# keep them tracked despite the *.zip / *.gz / *.bz2 rules above.
+!tests/smoke/fixtures/archive_*.zip
+!tests/smoke/fixtures/archive_*.gz
+!tests/smoke/fixtures/archive_*.bz2
 
 # ── ADR-14 Tier-B browser screenshots (build output, human-review artifacts) ──
 test-results/

@@ -60,7 +60,7 @@ from collections.abc import Iterator
 import pytest
 
 from . import helpers as h
-from .conftest import STUB_DNS_A, SmokeVM, _MockFeedServer, _StubDnsServer
+from .conftest import FIXTURES_DIR, STUB_DNS_A, SmokeVM, _MockFeedServer, _StubDnsServer
 
 pytestmark = pytest.mark.smoke
 
@@ -1944,9 +1944,20 @@ def test_cron_spurious_200_same_bytes_no_reingest(
 _ADR44_BODY = "203.0.113.7\n198.51.100.23\n"
 _ADR44_MEMBER = "203.0.113.7"
 
-# ADR-45 structural-integrity smoke fixtures — distinct IPs from ADR-44 for isolation.
-_ADR45_BODY = "203.0.113.11\n198.51.100.33\n"
+# ADR-45 structural-integrity smoke fixtures live in the committed corpus
+# (fixtures/archive_*; see fixtures/README.md). The member below is the IP the
+# recoverable octet-stream ZIP (archive_octet_recover.zip) extracts to — distinct
+# from ADR-44's for isolation.
 _ADR45_MEMBER = "203.0.113.11"
+
+
+def _fixture_bytes(name: str) -> bytes:
+    """Raw bytes of a committed fixture — the same file the mock serves via feed_url(name).
+
+    Lets the ADR-45 octet-stream guards probe file(1) on EXACTLY the bytes the guest
+    fetches, so the guard and the served feed can never drift apart.
+    """
+    return (FIXTURES_DIR / name).read_bytes()
 
 
 def _box_mime_type(vm: SmokeVM, data: bytes, remote_tmp: str = "/tmp/adr45_mime_probe.bin") -> str:
@@ -2090,27 +2101,33 @@ def test_bzip2_feed_imports(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -
 
 @pytest.mark.timeout(120)
 def test_corrupt_zip_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
-    """ADR-45: a corrupt (truncated) ZIP feed is rejected by the structural probe.
+    """ADR-45: a corrupt ZIP feed is rejected by the structural probe.
 
-    Scenario: the mock serves the first half of a valid ZIP archive — the central
-    directory and EOCD are missing so bsdtar exits non-zero. pfb_validate_archive()
-    catches the failure; pfb_download() returns FALSE; the alias is never created.
+    Scenario: the mock serves a ZIP whose first local-file-header signature
+    (``PK\\x03\\x04``) is clobbered but whose central directory + EOCD are intact.
+    file(1) still reports ``application/zip`` (it reads the EOCD), so the feed
+    enters the ZIP branch; ``bsdtar -tf`` then fails to parse the broken local
+    header and exits non-zero. pfb_validate_archive() catches that; pfb_download()
+    returns FALSE; the alias is never created.
+
+    NB: a *tail-truncated* ZIP is NOT a reliable corruption — libarchive streams
+    local headers without needing the EOCD, so ``tar -tf`` on the first half still
+    lists+extracts the entry (verified on the FreeBSD smoke box). Corrupting the
+    leading local-header signature is what makes the probe reject.
 
     Paired with ``test_zip_feed_imports`` (healthy ZIP imports) to prove the probe
     is a real branch, not an always-reject path: if the probe were always-reject,
     the healthy case would also fail; it does not.
 
     Given the alias does not exist (the feed has never been successfully loaded).
-    When the case injects + Force-Updates over the truncated ZIP bytes,
+    When the case injects + Force-Updates over the corrupt ZIP bytes,
     Then the alias remains absent — the structural probe rejected the corrupt archive
       before extraction and pfb_download() returned FALSE.
     """
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("list.txt", _ADR45_BODY)
-    valid_zip = buf.getvalue()
-    corrupt_zip = valid_zip[: len(valid_zip) // 2]  # truncate — no EOCD
-    feed_url = mock_feeds.register("adr45_corrupt_zip.zip", corrupt_zip)
+    # FreeBSD-verified corpus fixture (fixtures/archive_corrupt.zip; see
+    # fixtures/README.md "Archive corpus"): leading PK\x03\x04 signature clobbered,
+    # EOCD intact — file(1) → application/zip (ZIP branch), bsdtar -tf then rejects.
+    feed_url = mock_feeds.feed_url("archive_corrupt.zip")
     spec = h.IpCase(aliasname="adr45czp", feed_url=feed_url, header="adr45czp", family="v4")
 
     # Given — alias absent before any load attempt.
@@ -2132,10 +2149,11 @@ def test_corrupt_zip_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer)
 def test_corrupt_gzip_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """ADR-45: a corrupt (truncated) gzip feed is rejected by the structural probe.
 
-    Scenario: the mock serves the first half of a valid gzip stream — the deflate
-    payload and checksum trailer are missing so bsdtar exits non-zero.
-    pfb_validate_archive() catches the failure; pfb_download() returns FALSE; the
-    alias is never created.
+    Scenario: the corpus fixture is a valid gzip stream truncated past its header —
+    the deflate payload and CRC/ISIZE trailer are gone, so ``gunzip -t`` exits
+    non-zero. pfb_validate_archive() catches the failure; pfb_download() returns
+    FALSE; the alias is never created. (Unlike ZIP, a truncated gzip IS reliably
+    corrupt to the codec — gzip is a single stream with no streamable directory.)
 
     Paired with ``test_gzip_feed_imports`` (healthy gzip imports) to prove the probe
     is a real branch.
@@ -2144,9 +2162,9 @@ def test_corrupt_gzip_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer
     When the case injects + Force-Updates over the truncated gzip bytes,
     Then the alias remains absent — the structural probe rejected the corrupt archive.
     """
-    valid_gz = gzip.compress(_ADR45_BODY.encode(), mtime=0)
-    corrupt_gz = valid_gz[: len(valid_gz) // 2]  # truncate — missing checksum + payload
-    feed_url = mock_feeds.register("adr45_corrupt_gz.gz", corrupt_gz)
+    # FreeBSD-verified corpus fixture (fixtures/archive_corrupt.gz; see README):
+    # file(1) → application/gzip (gzip branch), gunzip -t rejects the truncated stream.
+    feed_url = mock_feeds.feed_url("archive_corrupt.gz")
     spec = h.IpCase(aliasname="adr45cgz", feed_url=feed_url, header="adr45cgz", family="v4")
 
     # Given — alias absent before any load attempt.
@@ -2168,9 +2186,9 @@ def test_corrupt_gzip_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer
 def test_corrupt_bzip2_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """ADR-45: a corrupt (truncated) bzip2 feed is rejected by the structural probe.
 
-    Scenario: the mock serves the first half of a valid bzip2 stream.  bsdtar exits
-    non-zero; pfb_validate_archive() rejects it; pfb_download() returns FALSE; the
-    alias is never created.
+    Scenario: the corpus fixture is a valid bzip2 stream truncated mid-block, so
+    ``bzip2 -t`` exits non-zero. pfb_validate_archive() rejects it; pfb_download()
+    returns FALSE; the alias is never created.
 
     Paired with ``test_bzip2_feed_imports`` (healthy bzip2 imports) to prove the probe
     is a real branch.
@@ -2179,9 +2197,9 @@ def test_corrupt_bzip2_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServe
     When the case injects + Force-Updates over the truncated bzip2 bytes,
     Then the alias remains absent — the structural probe rejected the corrupt archive.
     """
-    valid_bz = bz2.compress(_ADR45_BODY.encode())
-    corrupt_bz = valid_bz[: len(valid_bz) // 2]  # truncate — incomplete block header
-    feed_url = mock_feeds.register("adr45_corrupt_bz.bz2", corrupt_bz)
+    # FreeBSD-verified corpus fixture (fixtures/archive_corrupt.bz2; see README):
+    # file(1) → application/x-bzip2 (bzip2 branch), bzip2 -t rejects the truncated stream.
+    feed_url = mock_feeds.feed_url("archive_corrupt.bz2")
     spec = h.IpCase(aliasname="adr45cbz", feed_url=feed_url, header="adr45cbz", family="v4")
 
     # Given — alias absent before any load attempt.
@@ -2210,31 +2228,33 @@ def test_octet_stream_zip_recovered(deployed_vm: SmokeVM, mock_feeds: _MockFeedS
     pfb_filter() would reject it outright; after, pfb_octet_recover_type() probes
     the bytes with bsdtar and recovers the correct type.
 
-    Fixture: a valid ZIP with 8 NUL+control bytes prepended before the local file
-    header (``PK\\x03\\x04``).  bsdtar uses backward EOCD scanning + SFX-offset
-    correction and can still extract it; ``file(1)`` sees the NUL/ctrl preamble and
-    reports ``application/octet-stream``.
+    Fixture: a valid ZIP with a short text SFX-stub-like preamble prepended before the
+    local file header (``PK\\x03\\x04``).  bsdtar uses backward EOCD scanning + SFX-offset
+    correction and still extracts it; FreeBSD ``file(1)`` (libmagic) cannot classify the
+    text-then-binary stream and reports ``application/octet-stream`` (verified on the
+    CE 2.8 smoke box).  NB: a raw NUL/control-byte prefix is NOT usable here — FreeBSD
+    libmagic misreads ``\\x00\\x01\\x02..`` as ``image/x-tga`` (a non-allow-listed type
+    that the gate rejects outright, never reaching octet-stream recovery), whereas the
+    same bytes read as octet-stream on macOS/Linux.  The text preamble avoids that.
 
     On-box guard: if the box's ``file(1)`` does NOT report ``application/octet-stream``
-    for these bytes (different magic-db heuristic), the recovery path is not exercised
-    — the feed still imports via the normal ``application/zip`` branch and the test
-    logs the observed verdict rather than failing.
+    for these bytes (e.g. it instead detects the embedded ZIP), the recovery path is not
+    exercised — the feed still imports via the normal ``application/zip`` branch and the
+    test logs the observed verdict rather than failing.
 
     Given the alias does not exist.
     When the case injects + Force-Updates over the junk-prefixed ZIP,
     Then 203.0.113.11 is present in the pf table — the archive was recovered and loaded.
     """
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("list.txt", _ADR45_BODY)
-    valid_zip = buf.getvalue()
-    junk_prefix = b"\x00\x01\x02\x03\x04\x05\x06\x07"  # NUL + ctrl bytes before PK header
-    junk_zip = junk_prefix + valid_zip
-    feed_url = mock_feeds.register("adr45_octet_zip.zip", junk_zip)
+    # FreeBSD-verified corpus fixture (fixtures/archive_octet_recover.zip; see README):
+    # a valid ZIP behind a text SFX-stub preamble → FreeBSD file(1) octet-stream (recovery
+    # exercised), bsdtar still extracts the trailing ZIP.
+    fixture = "archive_octet_recover.zip"
+    feed_url = mock_feeds.feed_url(fixture)
     spec = h.IpCase(aliasname="adr45orec", feed_url=feed_url, header="adr45orec", family="v4")
 
-    # On-box MIME guard: check what file(1) actually reports for these bytes.
-    box_mime = _box_mime_type(deployed_vm, junk_zip)
+    # On-box MIME guard: probe file(1) on EXACTLY the bytes the guest fetches.
+    box_mime = _box_mime_type(deployed_vm, _fixture_bytes(fixture))
     recovery_exercised = box_mime == "application/octet-stream"
     if recovery_exercised:
         print(
@@ -2281,21 +2301,23 @@ def test_junk_octet_stream_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedS
     is ever accepted" is a REJECT criterion.  pfb_octet_recover_type() returns NULL when
     no archive type passes bsdtar; pfb_filter() then calls unlink_if_exists + returns FALSE.
 
-    Fixture: NUL + control bytes (\\x00\\x01\\x02\\x03, repeated) — reliably reported as
-    ``application/octet-stream`` by file(1) on macOS and Linux (confirmed in Phase-3 unit
-    tests).  On-box guard: if the box's file(1) does NOT report octet-stream, the test
-    is skipped (inconclusive — the reject branch for octet-stream is not triggered).
+    Fixture: NUL + control bytes (\\x00\\x01\\x02\\x03, repeated) — reported as
+    ``application/octet-stream`` by file(1) on FreeBSD (verified on the CE 2.8 smoke box),
+    macOS, and Linux.  On-box guard: if the box's file(1) does NOT report octet-stream, the
+    test is skipped (inconclusive — the reject branch for octet-stream is not triggered).
 
     Given the alias does not exist.
     When the case injects + Force-Updates over the junk blob,
     Then the alias remains absent — no structural probe passed; the blob was rejected.
     """
-    junk_blob = b"\x00\x01\x02\x03" * 256  # NUL + ctrl, no archive magic
-    feed_url = mock_feeds.register("adr45_junk.bin", junk_blob)
+    # FreeBSD-verified corpus fixture (fixtures/archive_junk_octet.bin; see README):
+    # pure NUL/ctrl bytes → file(1) octet-stream, no archive magic → every probe fails.
+    fixture = "archive_junk_octet.bin"
+    feed_url = mock_feeds.feed_url(fixture)
     spec = h.IpCase(aliasname="adr45junk", feed_url=feed_url, header="adr45junk", family="v4")
 
     # On-box MIME guard: the junk-rejected branch only applies when file(1) sees octet-stream.
-    box_mime = _box_mime_type(deployed_vm, junk_blob)
+    box_mime = _box_mime_type(deployed_vm, _fixture_bytes(fixture))
     if box_mime != "application/octet-stream":
         pytest.skip(
             f"junk blob produced {box_mime!r} on this box (not application/octet-stream); "
