@@ -279,6 +279,32 @@ function pfb_ledger_entry_html(?array $entry): string {
 	return "Last: <strong>{$last}</strong>&emsp;Next: <strong>{$next}</strong>";
 }
 
+/**
+ * Format the DNSBL Category ('bl') schedule row.
+ *
+ * Unlike the feed/extras jobs, the category job only runs (and so only ever records a
+ * ledger entry) when the DNSBL Category feature is enabled with at least one category
+ * selected — the exact gate the tick dispatcher applies before dispatching 'bl'. When the
+ * feature is off, a bare "Not yet run" reads as if a scheduled job is stuck, so report WHY
+ * it is not scheduled instead.
+ */
+function pfb_dnsbl_category_schedule_html(array $pfb, ?array $entry): string {
+	$bl = $pfb['blconfig'] ?? array();
+	if (($pfb['enable'] ?? '') !== 'on' ||
+	    empty($bl['blacklist_enable']) || $bl['blacklist_enable'] === 'Disable') {
+		return '<em>Disabled</em>';
+	}
+	// Enabled — but is any category actually selected? (Mirrors the tick's bl_str build:
+	// an item counts only when it is in blacklist_selected AND flagged selected.)
+	$selected = !empty($bl['blacklist_selected']) ? array_flip(explode(',', $bl['blacklist_selected'])) : array();
+	foreach (($bl['item'] ?? array()) as $item) {
+		if (isset($selected[$item['xml']]) && !empty($item['selected'])) {
+			return pfb_ledger_entry_html($entry);	// active — show the real schedule
+		}
+	}
+	return '<em>None selected</em>';
+}
+
 // Create Form
 $form = new Form(FALSE);
 
@@ -319,7 +345,7 @@ $group->add(new Form_Checkbox(
 	'dnsbl'
 ))->displayAsRadio('pfb_scope_dnsbl')->setAttribute('title', 'Sync DNSBL feeds only.')->setWidth(2);
 
-$group->setHelp('Which lists to sync on Run Now: Both, IP-only, or DNSBL-only.');
+$group->setHelp('Which lists to sync: Both, IP-only, or DNSBL-only.');
 $section->add($group);
 
 // Force mode — mutually-exclusive radios. None = a plain detector-respecting run.
@@ -333,9 +359,10 @@ $group->add(new Form_Checkbox('pfb_force_mode', NULL, 'Download', $pfb_force_mod
 	->displayAsRadio('pfb_force_download')->setAttribute('title', 'Re-fetch all list files (reload only if changes are detected).')->setWidth(2);
 $group->add(new Form_Checkbox('pfb_force_mode', NULL, 'Both',     $pfb_force_mode === 'both',     'both'))
 	->displayAsRadio('pfb_force_both')->setAttribute('title', 'Re-fetch all list files and reload all lists regardless of changes.')->setWidth(2);
-$group->setHelp('Parse: reload all lists regardless of changes (no re-download). '
-	. 'Download: re-fetch all list files (reload only if changes are detected). '
-	. 'Both: re-fetch all list files and reload all lists regardless of changes.');
+$group->setHelp('<strong>None:</strong> reload only what changed (normal run).<br />'
+	. '<strong>Parse:</strong> reload all lists regardless of changes (no re-download).<br />'
+	. '<strong>Download:</strong> re-fetch all list files (reload only if changes are detected).<br />'
+	. '<strong>Both:</strong> re-fetch all list files and reload all lists regardless of changes.');
 $section->add($group);
 
 $group = new Form_Group(NULL);
@@ -345,7 +372,10 @@ $btn_run = new Form_Button(
 	NULL,
 	'fa-solid fa-play-circle'
 );
-$btn_run->removeClass('btn-primary')->addClass('btn-primary btn-xs')->setWidth(1);
+// No setWidth(): a per-button column wrapper floats the two buttons flush together on
+// desktop (the gap only showed on mobile, where the columns stack). Keep them inline and
+// space them with a margin on Run instead.
+$btn_run->removeClass('btn-primary')->addClass('btn-primary btn-xs')->setAttribute('style', 'margin-right: 0.5em;');
 
 // Alternate view/end view button text
 if (!isset($pconfig['log_view'])) {
@@ -368,11 +398,11 @@ $btn_logview = new Form_Button(
 	NULL,
 	'fa-regular fa-circle-play'
 );
-$btn_logview->removeClass('btn-primary')->addClass('btn-primary btn-xs')->setWidth(1)
+$btn_logview->removeClass('btn-primary')->addClass('btn-primary btn-xs')
 	    ->setAttribute('title', $btn_logview_title);
 $group->add(new Form_StaticText(
 		NULL,
-		$btn_run . '&emsp;' . $btn_logview
+		$btn_run . $btn_logview
 ));
 
 $section->add($group);
@@ -394,7 +424,7 @@ $section->addInput(new Form_StaticText(
 ));
 $section->addInput(new Form_StaticText(
 	'DNSBL category',
-	pfb_ledger_entry_html($ledger_bl)
+	pfb_dnsbl_category_schedule_html($pfb, $ledger_bl)
 ));
 $form->add($section);
 
