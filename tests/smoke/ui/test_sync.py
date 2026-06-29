@@ -306,6 +306,26 @@ def test_sync_target_row_add_persists(webui: WebUI, smoke_vm: helpers.SmokeVM) -
         )
         assert helpers.config_get(vm, _row_path(0, "varsyncdestinenable")) == "on", "row enable flag not persisted"
 
+        # Off-branch (CLAUDE.md branch coverage): re-post the SAME row WITHOUT the
+        # enable checkbox (a browser omits an unchecked box). The per-row resolver
+        # stores the canonical '' so the enable flag's OTHER state also persists --
+        # the target is now disabled (never synced), not left at the stale 'on'.
+        _post_sync(
+            webui,
+            {
+                "varsynconchanges": "manual",
+                "varsynctimeout": "150",
+                "syncinterfaces": "",
+                **{k: v for k, v in row.items() if k != "varsyncdestinenable-0"},
+            },
+        )
+        assert helpers.config_get(vm, _row_path(0, "varsyncdestinenable")) == "", (
+            "row enable flag not cleared to '' when the checkbox is omitted"
+        )
+        assert helpers.config_get(vm, _row_path(0, "varsyncipaddress")) == host, (
+            "row hostname lost on the disable re-post"
+        )
+
         # Reverse: omit the row keys -> the undefined-row prune deletes row/0.
         _post_sync(webui, {"varsynconchanges": "manual", "varsynctimeout": "150", "syncinterfaces": ""})
         assert helpers.config_get(vm, _row_path(0, "varsyncipaddress")) == "", "row/0 not pruned after omission"

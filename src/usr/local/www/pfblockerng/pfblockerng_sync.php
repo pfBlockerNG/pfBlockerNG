@@ -125,14 +125,19 @@ if ($_POST) {
 				// foreign structure: pfblockerngsync/config/0/row is a dynamic XMLRPC row blob, not in registry
 				config_set_path("installedpackages/pfblockerngsync/config/0/row/{$k_field[1]}/{$k_field[0]}", $pfb['sconfig']['row'][$k_field[1]][$k_field[0]]);
 
-				// Clear checkbox field when POST is empty
-				if ($pfb['sconfig']['row'][$k_field[1]]['varsyncdestinenable'] == 'on' &&
-				    !isset($_POST["varsyncdestinenable-{$k_field[1]}"])) {
-					$pfb['sconfig']['row'][$k_field[1]]['varsyncdestinenable'] = '';
-					// foreign structure: pfblockerngsync/config/0/row is a dynamic XMLRPC row blob, not in registry
-					config_set_path("installedpackages/pfblockerngsync/config/0/row/{$k_field[1]}/varsyncdestinenable", $pfb['sconfig']['row'][$k_field[1]]['varsyncdestinenable']);
-				}
 			}
+		}
+
+		// Per-target enable checkbox: an unchecked box sends no POST field, so the
+		// in-loop switch cannot persist it. Resolve it for every touched row after
+		// the loop -- 'on' when checked, '' otherwise -- so a new or re-enabled
+		// target stores 'on' (the XMLRPC engine gates on $sh['varsyncdestinenable'])
+		// and a new or cleared disabled target stores the canonical '' (not absent).
+		foreach (array_keys($rowhelper_exist) as $r_idx) {
+			$enabled = ((($_POST["varsyncdestinenable-{$r_idx}"] ?? '') == 'on') ? 'on' : '');
+			$pfb['sconfig']['row'][$r_idx]['varsyncdestinenable'] = $enabled;
+			// foreign structure: pfblockerngsync/config/0/row is a dynamic XMLRPC row blob, not in registry
+			config_set_path("installedpackages/pfblockerngsync/config/0/row/{$r_idx}/varsyncdestinenable", $enabled);
 		}
 
 		// Remove all undefined rowhelpers
