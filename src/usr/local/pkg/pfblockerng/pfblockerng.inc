@@ -8318,6 +8318,11 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 
 		// Decompress file if required
 		if ($file_type == 'application/x-gzip' || $file_type == 'application/gzip') {
+			if (!pfb_validate_archive($file_download, $file_type)) {
+				pfb_logger("\n[pfb_download] Corrupt or unreadable {$file_type} archive (structural probe failed): [" . htmlspecialchars($file_download) . "]", 2);
+				unlink_if_exists($file_download);
+				return FALSE;
+			}
 			if ($type == 'geoip') {
 				// Extras - MaxMind downloads
 				exec("/usr/bin/tar -xzf {$file_dwn_esc} --strip=1 -C {$pfb['geoipshare']} >/dev/null 2>&1");
@@ -8378,6 +8383,11 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			}
 		}
 		elseif ($file_type == 'application/x-bzip2') {
+			if (!pfb_validate_archive($file_download, $file_type)) {
+				pfb_logger("\n[pfb_download] Corrupt or unreadable {$file_type} archive (structural probe failed): [" . htmlspecialchars($file_download) . "]", 2);
+				unlink_if_exists($file_download);
+				return FALSE;
+			}
 			if (!pfb_filter(array("{$file_dwn_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download')) {
 				return FALSE;
 			}
@@ -8385,6 +8395,11 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			exec("/usr/bin/bzip2 -dkc {$file_dwn_esc} > {$file_org_esc}", $output, $retval);
 		}
 		elseif ($file_type == 'application/zip') {
+			if (!pfb_validate_archive($file_download, $file_type)) {
+				pfb_logger("\n[pfb_download] Corrupt or unreadable {$file_type} archive (structural probe failed): [" . htmlspecialchars($file_download) . "]", 2);
+				unlink_if_exists($file_download);
+				return FALSE;
+			}
 
 			// Extras - MaxMind/TOP1M downloads
 			if ($type == 'geoip' || $type == 'top1m') {
@@ -8437,6 +8452,11 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			}
 		}
 		elseif ($file_type == 'application/x-7z-compressed') {
+			if (!pfb_validate_archive($file_download, $file_type)) {
+				pfb_logger("\n[pfb_download] Corrupt or unreadable {$file_type} archive (structural probe failed): [" . htmlspecialchars($file_download) . "]", 2);
+				unlink_if_exists($file_download);
+				return FALSE;
+			}
 			if (!pfb_filter(array("{$file_dwn_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download')) {
 				return FALSE;
 			}
