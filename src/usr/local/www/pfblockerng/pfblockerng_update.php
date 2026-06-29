@@ -316,7 +316,7 @@ $group->add(new Form_Checkbox(
 	'Both',
 	$pfb_scope_val === 'both',
 	'both'
-))->displayAsRadio('pfb_scope_both')->setAttribute('title', 'Sync IP and DNSBL feeds.')->setWidth(1);
+))->displayAsRadio('pfb_scope_both')->setAttribute('title', 'Sync IP and DNSBL feeds.')->setWidth(2);
 
 $group->add(new Form_Checkbox(
 	'pfb_scope',
@@ -324,7 +324,7 @@ $group->add(new Form_Checkbox(
 	'IP',
 	$pfb_scope_val === 'ip',
 	'ip'
-))->displayAsRadio('pfb_scope_ip')->setAttribute('title', 'Sync IP feeds only.')->setWidth(1);
+))->displayAsRadio('pfb_scope_ip')->setAttribute('title', 'Sync IP feeds only.')->setWidth(2);
 
 $group->add(new Form_Checkbox(
 	'pfb_scope',
@@ -332,7 +332,7 @@ $group->add(new Form_Checkbox(
 	'DNSBL',
 	$pfb_scope_val === 'dnsbl',
 	'dnsbl'
-))->displayAsRadio('pfb_scope_dnsbl')->setAttribute('title', 'Sync DNSBL feeds only.')->setWidth(1);
+))->displayAsRadio('pfb_scope_dnsbl')->setAttribute('title', 'Sync DNSBL feeds only.')->setWidth(2);
 
 $group->setHelp('Which lists to sync on Run Now: Both, IP-only, or DNSBL-only.');
 $section->add($group);
@@ -382,7 +382,7 @@ $btn_logview->removeClass('btn-primary')->addClass('btn-primary btn-xs')->setWid
 	    ->setAttribute('title', $btn_logview_title);
 $group->add(new Form_StaticText(
 		NULL,
-		$btn_run . $btn_logview
+		$btn_run . '&emsp;' . $btn_logview
 ));
 
 $section->add($group);
