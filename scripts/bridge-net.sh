@@ -8,7 +8,7 @@
 # MGMT leases so the pfSense + civm MGMT NICs get deterministic IPs.
 #
 # Subcommands:
-#   up    create bridges, taps, start dnsmasq; emit eval-able KEY=value on stdout.
+#   up    create bridges, taps, start dnsmasq; emit KEY=value on stdout.
 #   down  stop dnsmasq, delete taps + bridges (safe when nothing exists).
 #
 # Env read:
@@ -20,10 +20,13 @@
 #   SMOKE_CLIENT_MGMT_MAC   civm MGMT MAC (default BC:24:11:29:A4:1B)
 #
 # Overridable binaries (shellspec injects stubs via these):
-#   SMOKE_IP_BIN       ip command (default: ip)
-#   SMOKE_DNSMASQ_BIN  dnsmasq command (default: dnsmasq)
+#   SMOKE_IP_BIN       ip command (default: /usr/sbin/ip, then command -v fallback)
+#   SMOKE_DNSMASQ_BIN  dnsmasq command (default: /usr/sbin/dnsmasq, then command -v fallback)
 #
-# Eval-able output of 'up' (progress + diagnostics go to stderr):
+# Overridable runtime dir (shellspec points at a tmp dir via this):
+#   SMOKE_BRIDGE_RUN_DIR  runtime dir for PID file (default: /run/pfb-smoke)
+#
+# Output of 'up' (progress + diagnostics go to stderr):
 #   SMOKE_WAN_TAP=tap-wan<lane>
 #   SMOKE_MGMT_TAP=tap-mgmt<lane>
 #   SMOKE_CLIENT_MGMT_TAP=tap-cli<lane>
@@ -38,10 +41,21 @@ set -eu
 
 LANE="${SMOKE_LANE:-0}"
 
-# ponytail: ip + dnsmasq are privileged/add-on binaries — keep as overridable vars so
-# the shellspec can inject stubs without PATH manipulation. Do NOT hardcode absolute paths.
-IP_BIN="${SMOKE_IP_BIN:-ip}"
-DNSMASQ_BIN="${SMOKE_DNSMASQ_BIN:-dnsmasq}"
+# ponytail: absolute default per CLAUDE.md privileged-binary rule; command -v fallback
+# mirrors boot_vm.sh so the path is robust on varied installs; SMOKE_*_BIN stub override
+# is honoured because an executable stub path is taken as-is (skips the fallback).
+IP_BIN="${SMOKE_IP_BIN:-/usr/sbin/ip}"
+DNSMASQ_BIN="${SMOKE_DNSMASQ_BIN:-/usr/sbin/dnsmasq}"
+if [ ! -x "$IP_BIN" ]; then IP_BIN="$(command -v ip || true)"; fi
+if [ ! -x "$DNSMASQ_BIN" ]; then DNSMASQ_BIN="$(command -v dnsmasq || true)"; fi
+if [ -z "$IP_BIN" ] || [ ! -x "$IP_BIN" ]; then
+    printf 'bridge-net: ip binary not found (set SMOKE_IP_BIN or install iproute2)\n' >&2
+    exit 1
+fi
+if [ -z "$DNSMASQ_BIN" ] || [ ! -x "$DNSMASQ_BIN" ]; then
+    printf 'bridge-net: dnsmasq binary not found (set SMOKE_DNSMASQ_BIN or install dnsmasq)\n' >&2
+    exit 1
+fi
 
 # Bridge names + addresses (singletons — not per-lane; see ceiling note above).
 WAN_BRIDGE="br-wan"
@@ -63,7 +77,9 @@ MGMT_TAP="tap-mgmt${LANE}"
 CLI_TAP="tap-cli${LANE}"
 
 # Lane-scoped dnsmasq PID file so 'down' can stop the right instance.
-PIDFILE="/tmp/pfb-dnsmasq-${LANE}.pid"
+# Root-owned runtime dir (not /tmp) prevents symlink/pre-create attacks on the PID file.
+RUNDIR="${SMOKE_BRIDGE_RUN_DIR:-/run/pfb-smoke}"
+PIDFILE="${RUNDIR}/dnsmasq-${LANE}.pid"
 
 # MGMT MACs for dnsmasq static leases.
 # pfSense net1/MGMT MAC: line 2 of SMOKE_VM_MAC (mirrors boot_vm.sh's nth_mac 1
@@ -75,6 +91,33 @@ else
     _pfsense_mgmt_mac="BC:24:11:80:42:35"
 fi
 _client_mgmt_mac="${SMOKE_CLIENT_MGMT_MAC:-BC:24:11:29:A4:1B}"
+
+# Validate env-derived inputs — values flow into shell args; reject metacharacters fail-closed.
+case "$LANE" in
+    ''|*[!0-9]*)
+        printf 'bridge-net: SMOKE_LANE must be a non-negative integer (got: %s)\n' "${LANE}" >&2
+        exit 2 ;;
+esac
+case "$PFSENSE_MGMT_IP" in
+    *[!0-9.]*)
+        printf 'bridge-net: SMOKE_PFSENSE_MGMT_IP contains invalid characters (got: %s)\n' "${PFSENSE_MGMT_IP}" >&2
+        exit 2 ;;
+esac
+case "$CLIENT_MGMT_IP" in
+    *[!0-9.]*)
+        printf 'bridge-net: SMOKE_CLIENT_MGMT_IP contains invalid characters (got: %s)\n' "${CLIENT_MGMT_IP}" >&2
+        exit 2 ;;
+esac
+case "$_pfsense_mgmt_mac" in
+    ''|*[!0-9A-Fa-f:]*)
+        printf 'bridge-net: pfSense MGMT MAC contains invalid characters (got: %s)\n' "${_pfsense_mgmt_mac}" >&2
+        exit 2 ;;
+esac
+case "$_client_mgmt_mac" in
+    ''|*[!0-9A-Fa-f:]*)
+        printf 'bridge-net: client MGMT MAC contains invalid characters (got: %s)\n' "${_client_mgmt_mac}" >&2
+        exit 2 ;;
+esac
 
 _do_down() {
     # Stop dnsmasq by PID file; silent when absent or already gone.
@@ -99,6 +142,9 @@ _do_up() {
     # intentionally untouched (CI runners are ephemeral; local boxes have one lane).
     printf 'bridge-net: teardown any stale config (lane=%s)\n' "${LANE}" >&2
     _do_down
+    # Create the runtime dir (root-owned 700) before starting dnsmasq.
+    mkdir -p "${RUNDIR}"
+    chmod 700 "${RUNDIR}"
 
     printf 'bridge-net: creating bridges and taps (lane=%s)\n' "${LANE}" >&2
 
@@ -147,9 +193,9 @@ _do_up() {
         --dhcp-host="${_client_mgmt_mac},${CLIENT_MGMT_IP}" \
         --pid-file="${PIDFILE}"
 
-    printf 'bridge-net: up (lane=%s); emitting eval-able env\n' "${LANE}" >&2
+    printf 'bridge-net: up (lane=%s); emitting env\n' "${LANE}" >&2
 
-    # Emit eval-able KEY=value on stdout; caller: eval "$(sh scripts/bridge-net.sh up)"
+    # Emit KEY=value on stdout; caller parses with a strict allowlist (no eval).
     printf 'SMOKE_WAN_TAP=%s\n'         "${WAN_TAP}"
     printf 'SMOKE_MGMT_TAP=%s\n'        "${MGMT_TAP}"
     printf 'SMOKE_CLIENT_MGMT_TAP=%s\n' "${CLI_TAP}"
