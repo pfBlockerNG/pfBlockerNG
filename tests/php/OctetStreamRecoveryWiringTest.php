@@ -39,6 +39,12 @@ final class OctetStreamRecoveryWiringTest extends TestCase
 
 	protected function setUp(): void
 	{
+		// Both tests build the fixture ZIP via ZipArchive; without php-zip the suite
+		// must SKIP, not ERROR with "Class ZipArchive not found" (cf. ArchiveValidateWiringTest).
+		if (!class_exists('ZipArchive')) {
+			$this->markTestSkipped('ZipArchive not available (php-zip extension missing)');
+		}
+
 		$this->dir             = sys_get_temp_dir() . '/pfb_octet_wiring_' . uniqid('', TRUE);
 		mkdir($this->dir);
 		$this->cwd             = (string) getcwd();
