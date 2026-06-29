@@ -89,7 +89,7 @@ def test_inject_control_record_resolves(deployed_vm: SmokeVM, client_vm: SmokeVM
 
 
 def test_reset_returns_to_baseline(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
-    """reset() runs clear* + a forced update and leaves Unbound ready."""
+    """reset() runs clear* + a blocking filter sync and leaves the resolver intact."""
     h.reset(deployed_vm)
     # The baked control name still resolves (reset didn't break the resolver).
     name, expected_ip = expected_control_answer()
