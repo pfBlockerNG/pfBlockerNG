@@ -435,9 +435,7 @@ if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On && isset($pconfig['run
 		} else {
 			// Clear the scoped conditional-GET sidecars, then run the detector on-demand so it
 			// re-fetches (200) and re-ingests changed feeds (Both also clears the hash => all).
-			$dirs = ($scope === 'ip')    ? array($pfb['origdir'])
-			      : (($scope === 'dnsbl') ? array($pfb['dnsorigdir'])
-			      : array($pfb['origdir'], $pfb['dnsorigdir']));
+			$dirs = pfb_force_scope_dirs($scope, $pfb['origdir'], $pfb['dnsorigdir']);
 			pfb_force_clear_validators($dirs, $force_mode === 'both');
 			pfb_runnow_forcecheck($scope);
 		}

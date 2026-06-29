@@ -23,6 +23,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_conditional_get_decision')]
 #[CoversFunction('pfb_conditional_get_validator_base')]
 #[CoversFunction('pfb_force_clear_validators')]
+#[CoversFunction('pfb_force_scope_dirs')]
 final class ConditionalGetHelpersTest extends TestCase
 {
 	/** @var string Writable temp directory for this test class. */
@@ -663,6 +664,52 @@ final class ConditionalGetHelpersTest extends TestCase
 			0,
 			$removed,
 			'A nonexistent dir must produce 0 removals and no error'
+		);
+	}
+
+	// -----------------------------------------------------------------------
+	// pfb_force_scope_dirs — Run Now scope -> orig dir(s). Covers all three scope
+	// branches deterministically so the live (scope x force-mode) matrix does not
+	// have to retest the dir selection on a VM. Red->green: the function is new.
+	// -----------------------------------------------------------------------
+
+	private const IP_DIR = '/var/db/pfblockerng/original';
+	private const DNSBL_DIR = '/var/db/pfblockerng/dnsblorig';
+
+	public function test_force_scope_dirs_ip_is_ip_origdir_only(): void
+	{
+		$this->assertSame(
+			[self::IP_DIR],
+			pfb_force_scope_dirs('ip', self::IP_DIR, self::DNSBL_DIR),
+			"scope=ip must map to the IP orig dir only"
+		);
+	}
+
+	public function test_force_scope_dirs_dnsbl_is_dnsbl_origdir_only(): void
+	{
+		$this->assertSame(
+			[self::DNSBL_DIR],
+			pfb_force_scope_dirs('dnsbl', self::IP_DIR, self::DNSBL_DIR),
+			"scope=dnsbl must map to the DNSBL orig dir only"
+		);
+	}
+
+	public function test_force_scope_dirs_both_is_both_origdirs(): void
+	{
+		$this->assertSame(
+			[self::IP_DIR, self::DNSBL_DIR],
+			pfb_force_scope_dirs('both', self::IP_DIR, self::DNSBL_DIR),
+			"scope=both must map to both orig dirs (IP first, then DNSBL)"
+		);
+	}
+
+	public function test_force_scope_dirs_unknown_scope_fails_safe_to_both(): void
+	{
+		// An unrecognized scope falls through to 'both' so a clear never under-covers.
+		$this->assertSame(
+			[self::IP_DIR, self::DNSBL_DIR],
+			pfb_force_scope_dirs('bogus', self::IP_DIR, self::DNSBL_DIR),
+			"an unrecognized scope must fail safe to both orig dirs"
 		);
 	}
 }

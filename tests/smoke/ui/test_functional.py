@@ -1437,7 +1437,9 @@ def test_force_mode_download_clears_validators(
         before = vm.ssh("/bin/test", "-f", sidecar_etag)
         assert before.returncode == 0, f"{sidecar_etag} not found after planting — cannot prove the POST caused removal"
 
-        # ACT: POST force_mode=download, scope=ip.
+        # ACT: POST force_mode=download, scope=ip. Wait for a quiescent box first — the page's
+        # guard skips Run Now (and the sidecar clear) if a prior test's run is still alive.
+        helpers.wait_no_active_pfb_task(vm)
         resp = webui.post(
             UPDATE_PAGE,
             overrides={"pfb_scope": "ip", "pfb_force_mode": "download"},
@@ -1522,7 +1524,9 @@ def test_force_mode_both_clears_hash_sidecars(
             r = vm.ssh("/bin/test", "-f", path)
             assert r.returncode == 0, f"{path} not found before POST — cannot prove the POST caused removal"
 
-        # ACT: scope=both exercises both orig dirs.
+        # ACT: scope=both exercises both orig dirs. Wait for a quiescent box first — the page's
+        # guard skips Run Now (and the sidecar clear) if a prior test's run is still alive.
+        helpers.wait_no_active_pfb_task(vm)
         resp = webui.post(
             UPDATE_PAGE,
             overrides={"pfb_scope": "both", "pfb_force_mode": "both"},
@@ -1542,5 +1546,78 @@ def test_force_mode_both_clears_hash_sidecars(
     finally:
         for path, _ in planted:
             vm.ssh("/bin/rm", "-f", path)
+        if original_enabled != "on":
+            helpers.set_package_enabled(vm, False)
+
+
+def test_force_mode_parse_keeps_sidecars(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """Force=Parse reparses cached lists (reuse=on) and does NOT clear any sidecars.
+
+    Scenario: Parse is the one Force mode that takes the reuse=on path — reparse cached,
+      no re-download — so it must NOT touch the conditional-GET sidecars (unlike
+      Download/Both, which clear them to force a re-fetch).
+
+    Given a synthetic pfbtest.orig.etag in the IP orig dir,
+    And the .orig.etag EXISTS (pre-state confirmed),
+
+    When the Update page is submitted with pfb_force_mode=parse and pfb_scope=ip,
+
+    Then the .orig.etag sidecar STILL EXISTS afterwards — proving Parse routes to
+      pfb_runnow(force=TRUE) and does NOT call pfb_force_clear_validators.
+
+    Red→green: before this change there was no pfb_force_mode dispatch split; this pins
+    that Parse and Download/Both take different paths (the former never clears sidecars).
+    """
+    vm = smoke_vm
+    original_enabled = helpers.config_get(vm, _ENABLE_CB_CFG)
+    if original_enabled != "on":
+        helpers.set_package_enabled(vm, True)
+
+    sidecar_etag = f"{_IP_ORIG_DIR}/pfbtest.orig.etag"
+    try:
+        mk = subprocess.run(
+            vm.ssh_argv("/bin/mkdir", "-p", _IP_ORIG_DIR),
+            capture_output=True,
+            text=True,
+            timeout=30.0,
+            check=False,
+        )
+        assert mk.returncode == 0, f"mkdir {_IP_ORIG_DIR} failed: {mk.stderr!r}"
+
+        plant = subprocess.run(
+            vm.ssh_argv("tee", sidecar_etag),
+            input='"test-etag-parse"',
+            capture_output=True,
+            text=True,
+            timeout=30.0,
+            check=False,
+        )
+        assert plant.returncode == 0, f"plant {sidecar_etag} failed: {plant.stderr!r}"
+
+        # BEFORE: the sidecar exists.
+        before = vm.ssh("/bin/test", "-f", sidecar_etag)
+        assert before.returncode == 0, f"{sidecar_etag} not found after planting — cannot prove non-removal"
+
+        # ACT: Parse. Wait for quiescence first (the page skips Run Now if a task runs).
+        helpers.wait_no_active_pfb_task(vm)
+        resp = webui.post(
+            UPDATE_PAGE,
+            overrides={"pfb_scope": "ip", "pfb_force_mode": "parse"},
+            submit=("run", "Run Now"),
+            timeout=SAVE_TIMEOUT,
+        )
+        assert not looks_like_login_page(resp.text), "force=parse POST returned the login form (session lost)"
+
+        # AFTER: Parse must NOT clear the sidecar (reuse=on path, not the forcecheck clear).
+        after = vm.ssh("/bin/test", "-f", sidecar_etag)
+        assert after.returncode == 0, (
+            f"{sidecar_etag} was removed after force=parse POST — Parse must take the reuse=on "
+            "path (reparse cached, no sidecar clear), NOT the Download/Both clear path"
+        )
+    finally:
+        vm.ssh("/bin/rm", "-f", sidecar_etag)
         if original_enabled != "on":
             helpers.set_package_enabled(vm, False)
