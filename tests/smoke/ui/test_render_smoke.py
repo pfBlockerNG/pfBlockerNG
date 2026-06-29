@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -1055,10 +1056,20 @@ def test_update_log_prefills_on_plain_get(
 
     Multi-step (seed → GET) classifies as Tier B per the CLAUDE.md mandate.
     """
-    seed = "pfb-update-log-prefill-test-marker"
+    seed = f"pfb-update-log-prefill-{uuid.uuid4().hex}"
+    pat = r'<textarea\b[^>]*name="pfb_output"[^>]*>(.*?)</textarea>'
+
+    # Before seeding: the unique marker is ABSENT — proves the prefill caused it (not a
+    # pre-existing log line), and is robust to a re-run on the same VM where tail -a accumulates.
+    m_before = re.search(pat, webui.get(_UPDATE_PAGE).text, re.DOTALL)
+    assert m_before is not None, "Update page is missing the pfb_output textarea (before seed)"
+    assert seed not in m_before.group(1), (
+        f"seed marker {seed!r} already present before seeding — test is not self-proving"
+    )
+
+    # After seeding the log: a plain GET prefills pfb_output with the tail (marker now present).
     _seed_vm_file(smoke_vm, _PFB_LOG, seed + "\n")
-    body = webui.get(_UPDATE_PAGE).text
-    m = re.search(r'<textarea\b[^>]*name="pfb_output"[^>]*>(.*?)</textarea>', body, re.DOTALL)
+    m = re.search(pat, webui.get(_UPDATE_PAGE).text, re.DOTALL)
     assert m is not None, "Update page is missing the pfb_output textarea in the rendered body"
     content = m.group(1)
     assert seed in content, (
@@ -1088,11 +1099,19 @@ def test_software_log_prefills_on_plain_get(
 
     Multi-step (seed → GET) classifies as Tier B per the CLAUDE.md mandate.
     """
-    seed = "pfb-software-log-prefill-test-marker"
-    _seed_vm_file(smoke_vm, _SOFTWARE_LOG, seed + "\n")
+    seed = f"pfb-software-log-prefill-{uuid.uuid4().hex}"
+    pat = r'<textarea\b[^>]*name="pfb_output"[^>]*>(.*?)</textarea>'
     with software_panel_forced(smoke_vm, "on"):
-        body = webui.get(_SOFTWARE_PAGE).text
-        m = re.search(r'<textarea\b[^>]*name="pfb_output"[^>]*>(.*?)</textarea>', body, re.DOTALL)
+        # Before seeding: the unique marker is ABSENT (self-proving + same-VM re-run safe).
+        m_before = re.search(pat, webui.get(_SOFTWARE_PAGE).text, re.DOTALL)
+        assert m_before is not None, "Software page is missing the pfb_output textarea (before seed)"
+        assert seed not in m_before.group(1), (
+            f"seed marker {seed!r} already present before seeding — test is not self-proving"
+        )
+
+        # After seeding software.log: a plain GET prefills pfb_output with its tail.
+        _seed_vm_file(smoke_vm, _SOFTWARE_LOG, seed + "\n")
+        m = re.search(pat, webui.get(_SOFTWARE_PAGE).text, re.DOTALL)
         assert m is not None, "Software page is missing the pfb_output textarea in the rendered body"
         content = m.group(1)
         assert seed in content, (

@@ -429,8 +429,10 @@ $section->addInput(new Form_StaticText(
 $form->add($section);
 
 // ---- Log section ----
-// Plain GET (not a Run Now POST and not a live-view) → prefill pfb_output with the last log tail.
-$pfb_log_active = (isset($_POST['run']) && $_POST['run']) ||
+// Plain GET (no active run and no live-view) → prefill pfb_output with the last log tail.
+// $pconfig['run'] is the SAME signal the Run Now dispatch gate keys on (set by a button POST
+// and by the wizard-reload GET), so this suppresses the stale prefill on every run-start path.
+$pfb_log_active = isset($pconfig['run']) ||
                   (isset($pconfig['log_view']) && $pconfig['log_view'] !== 'View');
 $section = new Form_Section('Log');
 $section->addInput(new Form_Textarea(
