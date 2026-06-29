@@ -60,8 +60,10 @@
 
 set -eu
 
-QEMU=/usr/bin/qemu-system-x86_64
-QEMU_IMG=/usr/bin/qemu-img
+# Overridable for tests (the shellspec injects stubs to assert the assembled argv
+# without booting); falls through to command -v below when the path isn't executable.
+QEMU="${SMOKE_QEMU_BIN:-/usr/bin/qemu-system-x86_64}"
+QEMU_IMG="${SMOKE_QEMU_IMG_BIN:-/usr/bin/qemu-img}"
 
 # Source-VM hardware profile (mirror — do not change without re-baking image).
 # DEFAULT_CE_MAC is the CE source VM's own 8 NIC MACs (net0..net7, in order),
@@ -118,6 +120,22 @@ PFSENSE_MGT_TARGET="${SMOKE_PFSENSE_MGT_TARGET-$PFSENSE_MGMT_IP}"
 
 # pfSense<->civm LAN crossover socket (point-to-point; pfSense listens, civm connects).
 LAN_SOCKET_PORT="${SMOKE_LAN_SOCKET_PORT:-12340}"
+
+# Network backend for the WAN + MGMT NICs (the LAN crossover socket + the unassigned
+# net3-7 are identical either way):
+#   slirp  (default) — QEMU user-net: built-in DHCP/DNS/NAT, host alias 192.168.89.2,
+#                      host->guest ssh/web via hostfwd. Zero host setup. Today's behaviour.
+#   bridge — tap devices on host Linux bridges (br-wan 192.168.89.0/24, br-mgmt
+#                      192.168.43.0/24) that a per-box setup created + put dnsmasq on; the
+#                      runner IS 192.168.89.2 / 192.168.43.2. Lower latency/CPU than slirp's
+#                      userspace path. The tap names are passed in (SMOKE_WAN_TAP /
+#                      SMOKE_MGMT_TAP / SMOKE_CLIENT_MGMT_TAP) by that setup; no hostfwd
+#                      (the harness ssh's the guest's MGMT bridge IP directly).
+NET_MODE="${SMOKE_NET_MODE:-slirp}"
+case "$NET_MODE" in
+    slirp|bridge) ;;
+    *) echo "boot_vm: SMOKE_NET_MODE must be 'slirp' or 'bridge' (got '$NET_MODE')" >&2; exit 2 ;;
+esac
 
 ROLE=pfsense
 
@@ -183,9 +201,17 @@ if [ -z "$OVERLAY" ]; then
 fi
 
 cleanup() {
+    # Preserve the triggering exit status: without capturing $? first, the trap's
+    # last command (the rm / the if) would reset it to 0 and MASK every error-path
+    # exit (base-not-found, qemu-not-found, the bridge tap guards) as success — a
+    # caller could not tell a failed boot from a good one. The happy path execs qemu
+    # and never runs this trap. trap - EXIT avoids re-entry from the explicit exit.
+    _rc=$?
     if [ "$CLEANUP_OVERLAY" -eq 1 ] && [ -n "$OVERLAY" ]; then
         rm -f "$OVERLAY"
     fi
+    trap - EXIT
+    exit "$_rc"
 }
 trap cleanup EXIT INT TERM
 
@@ -225,7 +251,11 @@ if [ "$ROLE" = pfsense ]; then
     # SMBIOS identity (license/NDI-keyed for Plus; public pin for CE).
     set -- "$@" -smbios "type=1,uuid=${VM_SMBIOS_UUID}"
 
-    echo "boot_vm: pfsense hostfwd ssh=${SSH_HOSTPORT}->${PFSENSE_MGT_TARGET}:22 web=${WEB_HOSTPORT}->${PFSENSE_MGT_TARGET}:80 (mgmt net1)" >&2
+    if [ "$NET_MODE" = bridge ]; then
+        echo "boot_vm: pfsense WAN=tap:${SMOKE_WAN_TAP:-?} MGMT=tap:${SMOKE_MGMT_TAP:-?} (bridge; ssh the guest MGMT bridge IP)" >&2
+    else
+        echo "boot_vm: pfsense hostfwd ssh=${SSH_HOSTPORT}->${PFSENSE_MGT_TARGET}:22 web=${WEB_HOSTPORT}->${PFSENSE_MGT_TARGET}:80 (mgmt net1)" >&2
+    fi
     echo "boot_vm: pfsense LAN socket LISTEN 127.0.0.1:${LAN_SOCKET_PORT} (net2)" >&2
 
     i=0
@@ -235,12 +265,25 @@ if [ "$ROLE" = pfsense ]; then
             # VIP (10.10.10.1) or the auto-VIP (10.10.10.53) — pfBlockerNG refuses
             # a VIP that overlaps an interface subnet and disables DNSBL wholesale.
             # 192.168.89.0/24 keeps the host alias 192.168.89.2 while leaving 10.10.10.x free.
-            0) netdev="user,id=net0,net=192.168.89.0/24,host=192.168.89.2" ;;
+            # bridge: a pre-created tap on br-wan (same subnet; the runner is .2).
+            0)  if [ "$NET_MODE" = bridge ]; then
+                    [ -n "${SMOKE_WAN_TAP:-}" ] || { echo "boot_vm: bridge mode needs SMOKE_WAN_TAP (the per-box setup creates it)" >&2; exit 1; }
+                    netdev="tap,id=net0,ifname=${SMOKE_WAN_TAP},script=no,downscript=no"
+                else
+                    netdev="user,id=net0,net=192.168.89.0/24,host=192.168.89.2"
+                fi ;;
             # net1 MGMT: a /24 (NOT a /16). A /16 made qemu's SLIRP DHCP lease the
             # guest an unexpected address (10.0.2.x) the forwards never reached; a
             # /24 is predictable (net|.15), mirroring net0. 192.168.43.0/24 avoids
-            # the DNSBL VIP ranges and the LAN (192.168.1.0/24).
-            1) netdev="user,id=net1,net=192.168.43.0/24,host=192.168.43.2,hostfwd=tcp::${SSH_HOSTPORT}-${PFSENSE_MGT_TARGET}:22,hostfwd=tcp::${WEB_HOSTPORT}-${PFSENSE_MGT_TARGET}:80" ;;
+            # the DNSBL VIP ranges and the LAN (192.168.1.0/24). bridge: a pre-created
+            # tap on br-mgmt (separate subnet from WAN — two NICs on one subnet break
+            # pfSense routing/anti-spoof); the harness ssh's the guest's MGMT lease IP.
+            1)  if [ "$NET_MODE" = bridge ]; then
+                    [ -n "${SMOKE_MGMT_TAP:-}" ] || { echo "boot_vm: bridge mode needs SMOKE_MGMT_TAP (the per-box setup creates it)" >&2; exit 1; }
+                    netdev="tap,id=net1,ifname=${SMOKE_MGMT_TAP},script=no,downscript=no"
+                else
+                    netdev="user,id=net1,net=192.168.43.0/24,host=192.168.43.2,hostfwd=tcp::${SSH_HOSTPORT}-${PFSENSE_MGT_TARGET}:22,hostfwd=tcp::${WEB_HOSTPORT}-${PFSENSE_MGT_TARGET}:80"
+                fi ;;
             2) netdev="socket,id=net2,listen=127.0.0.1:${LAN_SOCKET_PORT}" ;;
             # net3..7: present so the 8-NIC image sees no hardware change, but
             # isolated (restrict=on) with distinct dummy subnets — pfSense leaves
@@ -257,13 +300,21 @@ if [ "$ROLE" = pfsense ]; then
         i=$((i + 1))
     done
 else
-    # civm: net0 management (ssh hostfwd, DHCP, don't-care MAC); net1 data
-    # (socket CONNECT to the pfSense LAN listener, MAC = static-lease key).
+    # civm: net0 management (ssh, DHCP, don't-care MAC); net1 data (socket CONNECT
+    # to the pfSense LAN listener, MAC = static-lease key). slirp: ssh via hostfwd.
+    # bridge: a pre-created tap on br-mgmt; the harness ssh's the civm's MGMT lease IP.
     set -- "$@" -smbios "type=1,uuid=${CLIENT_SMBIOS_UUID}"
-    echo "boot_vm: client hostfwd ssh=${CLIENT_SSH_HOSTPORT}->:22 (mgmt net0)" >&2
+    if [ "$NET_MODE" = bridge ]; then
+        [ -n "${SMOKE_CLIENT_MGMT_TAP:-}" ] || { echo "boot_vm: bridge mode needs SMOKE_CLIENT_MGMT_TAP (the per-box setup creates it)" >&2; exit 1; }
+        client_mgmt_netdev="tap,id=net0,ifname=${SMOKE_CLIENT_MGMT_TAP},script=no,downscript=no"
+        echo "boot_vm: client MGMT=tap:${SMOKE_CLIENT_MGMT_TAP} (bridge; ssh the civm MGMT bridge IP)" >&2
+    else
+        client_mgmt_netdev="user,id=net0,hostfwd=tcp::${CLIENT_SSH_HOSTPORT}-:22"
+        echo "boot_vm: client hostfwd ssh=${CLIENT_SSH_HOSTPORT}->:22 (mgmt net0)" >&2
+    fi
     echo "boot_vm: client DATA socket CONNECT 127.0.0.1:${LAN_SOCKET_PORT} mac=${CLIENT_MAC} (net1)" >&2
     set -- "$@" \
-        -netdev "user,id=net0,hostfwd=tcp::${CLIENT_SSH_HOSTPORT}-:22" \
+        -netdev "$client_mgmt_netdev" \
         -device "virtio-net-pci,mac=${CLIENT_MGMT_MAC},netdev=net0,id=nic0" \
         -netdev "socket,id=net1,connect=127.0.0.1:${LAN_SOCKET_PORT}" \
         -device "virtio-net-pci,mac=${CLIENT_MAC},netdev=net1,id=nic1" \
