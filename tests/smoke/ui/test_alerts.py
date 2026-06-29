@@ -649,6 +649,23 @@ def test_ipv6_alert_external_host_attribution(
     threat_foreign = f"/pfblockerng/pfblockerng_threats.php?host={foreign}"
     threat_local = f"/pfblockerng/pfblockerng_threats.php?host={local}"
 
+    # ip_block.log is created lazily by the package — only after the first real
+    # IP-block event — so on a clean VM (or before any IP has been blocked) it may
+    # not exist yet, while the sibling dnsbl.log test passes because DNSBL activity
+    # creates its log. This test only needs the file PRESENT to append a synthetic
+    # row and check the rendering; it does not need a real block event. Guarantee
+    # the file (and its directory) exist idempotently before the stat below so the
+    # precondition cannot fail on a missing log. mkdir -p / touch are no-ops when
+    # the dir/file already exist, and touch preserves an existing log's content and
+    # size — a freshly created file is empty, so original_size == "0" and the
+    # finally truncate-back still restores it cleanly.
+    log_dir = ip_block_log.rsplit("/", 1)[0]
+    ensure_result = vm.ssh(f"mkdir -p {log_dir} && touch {ip_block_log}", timeout=15)
+    assert ensure_result.returncode == 0, (
+        f"Failed to ensure {ip_block_log!r} exists before mutation: "
+        f"rc={ensure_result.returncode}, stderr={ensure_result.stderr!r}"
+    )
+
     # Capture the original byte size — fail fast so cleanup cannot wipe the log.
     size_result = vm.ssh("stat", "-f", "%z", ip_block_log, timeout=15)
     assert size_result.returncode == 0, (
