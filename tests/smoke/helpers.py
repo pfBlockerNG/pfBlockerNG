@@ -2396,9 +2396,10 @@ def reset_pfb_baseline(vm: SmokeVM, *, timeout: float = 300.0) -> None:
       * drops the derived state — ``clearip``/``cleardnsbl`` (tables/sqlite) then a blocking
         ``apply_filter_sync`` (pf rules).
 
-    NO forced ``update`` (unlike :func:`reset`): the config is now empty, so there is nothing
-    to rebuild — the next module's ``deployed_vm`` re-establishes the VIP/DNS/feed config it
-    needs. Used by the module-scoped autouse teardown in ``conftest.py``; safe to call
+    NO forced ``update``: the config is now empty, so there is nothing to rebuild — the next
+    module's ``deployed_vm`` re-establishes the VIP/DNS/feed config it needs. (Like :func:`reset`,
+    teardown drops derived state only; this one also wipes config.) Used by the module-scoped
+    autouse teardown in ``conftest.py``; safe to call
     directly. Raises on a non-zero ``pfSsh.php`` eval so a broken baseline surfaces loudly.
     """
     del_sections = "".join(f"config_del_path({_php_str(s)});\n" for s in _BASELINE_DEL_SECTIONS)

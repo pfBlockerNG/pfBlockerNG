@@ -153,7 +153,7 @@ def test_dnsbl_lock_unlock_lifecycle_via_alerts(
       the name is VIP-blocked again. Poll until the block shape returns.
 
     Oracle = the on-box DNS answer shape, never the HTTP body. ``reset(vm)`` in
-    ``finally`` drops the test feed/alias and rebuilds the baseline so the session VM
+    ``finally`` drops the derived state (tables/sqlite + a filter sync) so the session VM
     is clean for the sibling flows.
     """
     vm = smoke_vm
