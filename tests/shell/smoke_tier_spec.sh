@@ -61,6 +61,11 @@ Describe 'smoke-tier.sh'
       The output should equal '300'
     End
 
+    It 'gives the UI tiers the 300s ceiling (ui_e2e)'
+      When call pfb_smoke_tier_timeout ui_e2e
+      The output should equal '300'
+    End
+
     It 'gives the UI tiers the 300s ceiling (ui_browser)'
       When call pfb_smoke_tier_timeout ui_browser
       The output should equal '300'
