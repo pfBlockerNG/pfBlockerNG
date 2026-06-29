@@ -68,14 +68,20 @@ function pfbupdate_status($status) {
 }
 
 
+// TRUE when a pfBlockerNG feed task (cron/update/trigger/tick/forcecheck) is already running.
+// Single source for the active-process guard used by the Run Now dispatchers and the status line.
+function pfb_active_task_running(): bool {
+	exec('/bin/ps -wax', $result_ps);
+	return (bool) preg_grep('/pfblockerng[.]php\s+?(cron|update|pfb_trigger|tick|forcecheck)/', $result_ps);
+}
+
 // Dispatch pfb_trigger via the Phase-3 explicit API, stream log output,
 // then update the due ledger so the Schedule view reflects the manual run.
 function pfb_runnow(string $scope, bool $force): void {
 	global $pfb;
 
 	// Check for any active pfBlockerNG process before dispatching.
-	exec('/bin/ps -wax', $result_ps);
-	if (preg_grep('/pfblockerng[.]php\s+?(cron|update|pfb_trigger|tick|forcecheck)/', $result_ps)) {
+	if (pfb_active_task_running()) {
 		pfbupdate_status(gettext('Run Now skipped — an active pfBlockerNG task is running.'));
 		return;
 	}
@@ -121,9 +127,9 @@ function pfb_runnow(string $scope, bool $force): void {
 function pfb_runnow_forcecheck(string $scope): void {
 	global $pfb;
 
-	// Active-process guard — same check as pfb_runnow().
-	exec('/bin/ps -wax', $result_ps);
-	if (preg_grep('/pfblockerng[.]php\s+?(cron|update|pfb_trigger|tick|forcecheck)/', $result_ps)) {
+	// Active-process guard — TOCTOU backstop; the POST handler also pre-checks before
+	// clearing any sidecars (so a skipped run never leaves the box primed for a re-fetch).
+	if (pfb_active_task_running()) {
 		pfbupdate_status(gettext('Run Now skipped — an active pfBlockerNG task is running.'));
 		return;
 	}
@@ -236,8 +242,7 @@ $status = 'NEXT Scheduled CRON Event will run at'
 	. '&emsp;</span></strong> time remaining.';
 
 // Query for any active pfBlockerNG task
-exec('/bin/ps -wax', $result_ps);
-if (preg_grep('/pfblockerng[.]php\s+?(cron|update|pfb_trigger|tick|forcecheck)/', $result_ps)) {
+if (pfb_active_task_running()) {
 	$status = '<span style="color: red;">&emsp;&emsp;'
 		. 'Active pfBlockerNG CRON JOB'
 		. '</span>&emsp;<i class="fa-solid fa-spinner fa-pulse fa-lg"></i>';
@@ -422,13 +427,20 @@ if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On && isset($pconfig['run
 		$force_mode = 'none';
 	}
 	if ($force_mode === 'download' || $force_mode === 'both') {
-		// Clear the scoped conditional-GET sidecars, then run the detector on-demand so it
-		// re-fetches (200) and re-ingests changed feeds (Both also clears the hash => all).
-		$dirs = ($scope === 'ip')    ? array($pfb['origdir'])
-		      : (($scope === 'dnsbl') ? array($pfb['dnsorigdir'])
-		      : array($pfb['origdir'], $pfb['dnsorigdir']));
-		pfb_force_clear_validators($dirs, $force_mode === 'both');
-		pfb_runnow_forcecheck($scope);
+		// Pre-check the active-task guard BEFORE clearing any sidecars: if a run is already
+		// in progress, clearing them here (then skipping the dispatch) would leave the box
+		// primed for an unrequested re-fetch on the next scheduled tick.
+		if (pfb_active_task_running()) {
+			pfbupdate_status(gettext('Run Now skipped — an active pfBlockerNG task is running.'));
+		} else {
+			// Clear the scoped conditional-GET sidecars, then run the detector on-demand so it
+			// re-fetches (200) and re-ingests changed feeds (Both also clears the hash => all).
+			$dirs = ($scope === 'ip')    ? array($pfb['origdir'])
+			      : (($scope === 'dnsbl') ? array($pfb['dnsorigdir'])
+			      : array($pfb['origdir'], $pfb['dnsorigdir']));
+			pfb_force_clear_validators($dirs, $force_mode === 'both');
+			pfb_runnow_forcecheck($scope);
+		}
 	} else {
 		// none -> plain pass; parse -> reuse=on (reparse cached, no download).
 		pfb_runnow($scope, $force_mode === 'parse');

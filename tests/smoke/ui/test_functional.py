@@ -1380,6 +1380,7 @@ def test_update_page_cron_status_reports_scheduled_tick(
 # ---------------------------------------------------------------------------
 
 _IP_ORIG_DIR = f"{helpers.PFB_DBDIR}/original"
+_DNSBL_ORIG_DIR = f"{helpers.PFB_DBDIR}/dnsblorig"
 
 
 def test_force_mode_download_clears_validators(
@@ -1465,15 +1466,20 @@ def test_force_mode_both_clears_hash_sidecars(
 ) -> None:
     """Force=Both clears .orig.etag AND .orig.xxhash128 before dispatching forcecheck.
 
-    Scenario: Both mode removes validator AND hash sidecars for in-scope feeds.
+    Scenario: Both mode removes validator AND hash sidecars in EVERY in-scope orig dir.
 
-    Given synthetic pfbtest.orig.etag AND pfbtest.orig.xxhash128 in the IP orig dir,
-    And both files EXIST (pre-state confirmed),
+    Given synthetic pfbtest.orig.etag AND pfbtest.orig.xxhash128 planted in BOTH the IP
+      orig dir and the DNSBL orig dir,
+    And all four files EXIST (pre-state confirmed),
 
-    When the Update page is submitted with pfb_force_mode=both and pfb_scope=ip,
+    When the Update page is submitted with pfb_force_mode=both and pfb_scope=both,
 
-    Then BOTH the .orig.etag and .orig.xxhash128 sidecars are GONE —
-      proving pfb_force_clear_validators() was called with clear_hashes=TRUE.
+    Then all four sidecars are GONE — proving pfb_force_clear_validators(clear_hashes=TRUE)
+      ran over the scope=both dir set (both $pfb['origdir'] and $pfb['dnsorigdir']).
+
+    scope=both is used deliberately so this covers the both-branch of the handler's
+    scope→dirs map (both dirs at once); scope=dnsbl-alone is symmetric to the scope=ip
+    download test and is the one documented out-of-CI gap.
 
     Red→green: before this change, force=both did not exist; no sidecar was cleared.
     """
@@ -1482,19 +1488,25 @@ def test_force_mode_both_clears_hash_sidecars(
     if original_enabled != "on":
         helpers.set_package_enabled(vm, True)
 
-    sidecar_etag = f"{_IP_ORIG_DIR}/pfbtest.orig.etag"
-    sidecar_hash = f"{_IP_ORIG_DIR}/pfbtest.orig.xxhash128"
+    # One etag + one hash sidecar in EACH in-scope orig dir (IP + DNSBL).
+    planted = [
+        (f"{_IP_ORIG_DIR}/pfbtest.orig.etag", '"test-etag-both"'),
+        (f"{_IP_ORIG_DIR}/pfbtest.orig.xxhash128", "deadbeef"),
+        (f"{_DNSBL_ORIG_DIR}/pfbtest.orig.etag", '"test-etag-both"'),
+        (f"{_DNSBL_ORIG_DIR}/pfbtest.orig.xxhash128", "deadbeef"),
+    ]
     try:
-        mk = subprocess.run(
-            vm.ssh_argv("/bin/mkdir", "-p", _IP_ORIG_DIR),
-            capture_output=True,
-            text=True,
-            timeout=30.0,
-            check=False,
-        )
-        assert mk.returncode == 0, f"mkdir {_IP_ORIG_DIR} failed: {mk.stderr!r}"
+        for orig_dir in (_IP_ORIG_DIR, _DNSBL_ORIG_DIR):
+            mk = subprocess.run(
+                vm.ssh_argv("/bin/mkdir", "-p", orig_dir),
+                capture_output=True,
+                text=True,
+                timeout=30.0,
+                check=False,
+            )
+            assert mk.returncode == 0, f"mkdir {orig_dir} failed: {mk.stderr!r}"
 
-        for path, content in ((sidecar_etag, '"test-etag-both"'), (sidecar_hash, "deadbeef")):
+        for path, content in planted:
             p = subprocess.run(
                 vm.ssh_argv("tee", path),
                 input=content,
@@ -1505,30 +1517,30 @@ def test_force_mode_both_clears_hash_sidecars(
             )
             assert p.returncode == 0, f"plant {path} failed: {p.stderr!r}"
 
-        # BEFORE: both sidecars must exist.
-        for path in (sidecar_etag, sidecar_hash):
+        # BEFORE: every planted sidecar must exist.
+        for path, _ in planted:
             r = vm.ssh("/bin/test", "-f", path)
             assert r.returncode == 0, f"{path} not found before POST — cannot prove the POST caused removal"
 
-        # ACT.
+        # ACT: scope=both exercises both orig dirs.
         resp = webui.post(
             UPDATE_PAGE,
-            overrides={"pfb_scope": "ip", "pfb_force_mode": "both"},
+            overrides={"pfb_scope": "both", "pfb_force_mode": "both"},
             submit=("run", "Run Now"),
             timeout=SAVE_TIMEOUT,
         )
         assert not looks_like_login_page(resp.text), "force=both POST returned the login form (session lost)"
 
-        # AFTER: both sidecars must be gone.
-        for path, label in ((sidecar_etag, ".orig.etag"), (sidecar_hash, ".orig.xxhash128")):
+        # AFTER: every sidecar (etag + hash) in BOTH dirs must be gone.
+        for path, _ in planted:
             r = vm.ssh("/bin/test", "-f", path)
             assert r.returncode != 0, (
-                f"{path} ({label}) still exists after force=both POST — "
-                "pfb_force_clear_validators(clear_hashes=TRUE) was not called for scope=ip"
+                f"{path} still exists after force=both/scope=both POST — "
+                "pfb_force_clear_validators(clear_hashes=TRUE) did not clear this in-scope orig dir"
             )
 
     finally:
-        for path in (sidecar_etag, sidecar_hash):
+        for path, _ in planted:
             vm.ssh("/bin/rm", "-f", path)
         if original_enabled != "on":
             helpers.set_package_enabled(vm, False)
