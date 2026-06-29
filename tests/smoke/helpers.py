@@ -2822,6 +2822,39 @@ def wait_boot_complete(vm: SmokeVM, *, timeout: float = 180.0, delay: float = 3.
     )
 
 
+# Mirrors the Update page's active-task guard (pfblockerng_update.php pfb_active_task_running).
+_PFB_TASK_RE = re.compile(r"pfblockerng[.]php\s+(cron|update|pfb_trigger|tick|forcecheck)")
+
+
+def wait_no_active_pfb_task(vm: SmokeVM, *, timeout: float = 90.0, delay: float = 1.0) -> None:
+    """Block until no pfBlockerNG feed task is running on the box.
+
+    The Update page's Run Now guard skips when a cron/update/pfb_trigger/tick/forcecheck
+    process is already running -- so a test that POSTs Run Now while a PRIOR test's
+    backgrounded run is still alive gets skipped (no reload, no sidecar clear) and fails
+    spuriously. ``pfb_runnow*`` blocks on the log marker, but ``pfblockerng_sync_cron``
+    lingers briefly after writing it (a trailing sleep + the ADR-19 software-update check),
+    so the process outlives the POST. This polls the SAME ``ps`` signal the page checks so a
+    test establishes a quiescent box itself (self-encapsulated; never order-dependent).
+
+    Last-resort poll of production-side state we cannot signal (issue #456); the timeout
+    RAISES loudly with the offending process lines rather than returning on a still-busy box.
+    """
+    deadline = time.monotonic() + timeout
+    last: list[str] = []
+    while time.monotonic() < deadline:
+        out = vm.ssh("/bin/ps", "-wax").stdout
+        last = [ln.strip() for ln in out.splitlines() if _PFB_TASK_RE.search(ln)]
+        if not last:
+            return
+        time.sleep(delay)
+    raise AssertionError(
+        f"pfBlockerNG task still running after {timeout:.0f}s -- Run Now would be skipped.\n"
+        f"  expected: no cron/update/pfb_trigger/tick/forcecheck process\n"
+        f"  actual:   {last!r}"
+    )
+
+
 # --------------------------------------------------------------------------- #
 # ADR-10 zero-downtime swap — no-restart readiness + invariants
 # --------------------------------------------------------------------------- #

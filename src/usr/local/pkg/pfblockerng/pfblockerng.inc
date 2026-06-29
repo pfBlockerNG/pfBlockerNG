@@ -10179,6 +10179,20 @@ function pfb_force_clear_validators(array $dirs, bool $clear_hashes): int {
 	return $removed;
 }
 
+// ADR-43 Force modes: map a Run Now scope to the feed orig dir(s) it covers — 'ip' => the IP
+// orig dir, 'dnsbl' => the DNSBL orig dir, 'both' (and any unrecognized scope, fail-safe) =>
+// both. Pure (the two dir paths are passed in) so it is unit-testable off-appliance; the
+// Update page feeds it $pfb['origdir'] and $pfb['dnsorigdir'].
+function pfb_force_scope_dirs(string $scope, string $ip_origdir, string $dnsbl_origdir): array {
+	if ($scope === 'ip') {
+		return array($ip_origdir);
+	}
+	if ($scope === 'dnsbl') {
+		return array($dnsbl_origdir);
+	}
+	return array($ip_origdir, $dnsbl_origdir);
+}
+
 // ADR-42 Phase 3: pure decision helper for the remote conditional-GET result.
 // Called by the detector after pfb_download returns the probe response.
 //
