@@ -3335,8 +3335,9 @@ $form->add($section);
 $section = new Form_Section('DNSBL IPs');
 $section->addInput(new Form_StaticText(
 	NULL,
-	'When IPs are found in any Domain based Feed, these IPs will be added to the <strong>pfB_DNSBL_IP</strong> IP Aliastable and<br />'
+	'When literal IP addresses are found in any Domain based Feed, those IPs are added to the <strong>pfB_DNSBLIP_v4</strong> / <strong>pfB_DNSBLIP_v6</strong> IP Aliastables and<br />'
 	. ' a firewall rule will be added to block those IPs.<br /><br />'
+	. 'IPv6 entries appear only when a Feed lists literal IPv6 addresses (uncommon); an empty <strong>pfB_DNSBLIP_v6</strong> does not mean the blocked Domains have no IPv6 &#8212; the Domain itself is sinkholed at the DNS layer for both A and AAAA queries.<br /><br />'
 	. '<span class="text-danger">Note: </span>To utilize this feature, select the appropriate List Action and define the Inbound/Outbound Interfaces in the <strong>IP Tab</strong>.'
 ));
 
