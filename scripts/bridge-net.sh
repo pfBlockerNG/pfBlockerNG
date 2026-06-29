@@ -80,7 +80,9 @@ _do_down() {
     # Stop dnsmasq by PID file; silent when absent or already gone.
     if [ -f "${PIDFILE}" ]; then
         _pid="$(cat "${PIDFILE}" 2>/dev/null)" || _pid=""
-        [ -n "${_pid}" ] && kill "${_pid}" 2>/dev/null || true
+        if [ -n "${_pid}" ]; then
+            kill "${_pid}" 2>/dev/null || true
+        fi
         rm -f "${PIDFILE}"
     fi
     # Delete taps first (they are attached to bridges), then the bridges.
