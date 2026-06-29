@@ -1,7 +1,7 @@
 """Tier-B browser tests (ADR-14 Phase 4): small, high-confidence JS behaviours.
 
 A companion to ``test_browser.py`` covering the OTHER client-side UX scattered
-across the package's settings pages -- the radio-exclusivity / show-hide wiring
+across the package's settings pages -- the radio-exclusivity and auto-submit wiring
 and the ``.repeatable`` rowhelper add/delete -- driven by a headless Chromium on
 the live ADR-04 smoke VM through the Phase-1 authenticated session (the
 ``browser_page`` fixture's cookie-authed context, so the browser never logs in a
@@ -10,17 +10,12 @@ second time).
 The JS under test is READ-ONLY reference (no ``src/`` change); every selector and
 handler is taken from the pages' own inline ``events.push`` scripts:
 
-* Update page (``pfblockerng_update.php`` <script> at lines 480-542): the three
-  ``Force`` radios ``#pfb_force_update`` (checked by default, php:316),
-  ``#pfb_force_cron``, ``#pfb_force_reload`` are mutually exclusive -- each one's
-  click handler ``.prop('checked', false)``s the other two (php:500-514). The
-  same handlers call ``mode_change()``: ``#pfb_force_reload`` -> ``mode_change('on')``
-  -> ``hideCheckbox('pfb_reload_option_all', false)`` SHOWS the ``Select 'Reload'
-  option`` group; ``#pfb_force_update``/``#pfb_force_cron`` -> ``mode_change()``
-  (no arg) -> ``hideCheckbox(..., true)`` HIDES it (php:490-497, called once on
-  load -> the group starts hidden). The three reload radios
-  ``#pfb_reload_option_all`` (checked default, php:342), ``#pfb_reload_option_ip``,
-  ``#pfb_reload_option_dnsbl`` are likewise mutually exclusive (php:517-528).
+* Update page (``pfblockerng_update.php``, ADR-43 revamp): two ``displayAsRadio``
+  groups -- ``Run Scope`` (``#pfb_scope_both``/``#pfb_scope_ip``/``#pfb_scope_dnsbl``,
+  php:286-308) and ``Force`` mode (``#pfb_force_none``/``#pfb_force_parse``/
+  ``#pfb_force_download``/``#pfb_force_both``, php:316-323). Each group is a native
+  radio set (shared ``name``), so selecting one unchecks its siblings -- there is no
+  custom show/hide JS in this revamp (the page's only script is layout/scroll).
 * Sync page (``pfblockerng_sync.php``): the ``XMLRPC Replication Targets`` section
   is a pfSense ``.repeatable`` rowhelper (php:236) with an ``#addrow`` Add button
   (php:303) and a per-row ``Delete`` button (php:292-297). Each row carries exactly
@@ -69,7 +64,7 @@ SOFTWARE_PANEL_MARKER = "pfb-software-panel"
 
 pytestmark = pytest.mark.ui_browser
 
-# The Update page hosts the Force/Reload radio groups + their show/hide wiring.
+# The Update page hosts the Run-Scope + Force-mode radio groups (ADR-43 revamp).
 UPDATE_PAGE = "/pfblockerng/pfblockerng_update.php"
 # The Sync page hosts the `.repeatable` XMLRPC Replication Targets rowhelper.
 SYNC_PAGE = "/pfblockerng/pfblockerng_sync.php"
@@ -107,134 +102,94 @@ def _shot(page: Page, screenshot_dir: Path, name: str) -> None:
     page.screenshot(path=str(screenshot_dir / f"{name}.png"), full_page=True)
 
 
-def test_force_radio_toggles_reload_option_visibility(
-    browser_page: Page,
-    webui: WebUI,
-    screenshot_dir: Path,
-) -> None:
-    """Selecting the `Reload` force-radio reveals the `Select 'Reload' option` group.
-
-    Before->after transition with BOTH directions (CLAUDE.md): on load
-    ``mode_change()`` ran with no arg so ``hideCheckbox('pfb_reload_option_all',
-    true)`` HID the reload-option group (``#pfb_reload_option_all`` not visible),
-    and ``#pfb_force_update`` is checked by default. Clicking ``#pfb_force_reload``
-    fires ``mode_change('on')`` -> the group becomes VISIBLE. Clicking
-    ``#pfb_force_update`` again fires ``mode_change()`` -> the group is HIDDEN once
-    more -- proving the show/hide is a real two-way branch, not always-shown.
-    """
-    page = browser_page
-    _open(page, webui, UPDATE_PAGE)
-
-    force_update = page.locator("#pfb_force_update")
-    force_reload = page.locator("#pfb_force_reload")
-    reload_all = page.locator("#pfb_reload_option_all")
-
-    # These radios live in the non-collapsible Update form section, so they are
-    # visible (not the collapsed-panel case test_browser.py handles) -- a real
-    # click works and visibility is directly observable.
-    expect(force_update).to_be_visible(timeout=JS_TIMEOUT_MS)
-    expect(force_reload).to_be_visible(timeout=JS_TIMEOUT_MS)
-
-    # BEFORE: default force-radio is Update; the reload-option group is HIDDEN
-    # (mode_change() ran on load with no arg -> hideCheckbox(..., true)).
-    expect(force_update).to_be_checked(timeout=JS_TIMEOUT_MS)
-    expect(reload_all).not_to_be_visible(timeout=JS_TIMEOUT_MS)
-    _shot(page, screenshot_dir, "update_reload_options_hidden")
-
-    # FLIP to Reload -> mode_change('on') reveals the reload-option group.
-    force_reload.click()
-    expect(force_reload).to_be_checked(timeout=JS_TIMEOUT_MS)
-    expect(force_update).not_to_be_checked(timeout=JS_TIMEOUT_MS)
-    expect(reload_all).to_be_visible(timeout=JS_TIMEOUT_MS)
-    _shot(page, screenshot_dir, "update_reload_options_shown")
-
-    # FLIP BACK to Update -> mode_change() hides the group again (two-way branch).
-    force_update.click()
-    expect(force_update).to_be_checked(timeout=JS_TIMEOUT_MS)
-    expect(reload_all).not_to_be_visible(timeout=JS_TIMEOUT_MS)
-
-
 def test_force_radios_are_mutually_exclusive(
     browser_page: Page,
     webui: WebUI,
     screenshot_dir: Path,
 ) -> None:
-    """The three `Force` radios uncheck each other (php:500-514).
+    """The four `Force` mode radios (None/Parse/Download/Both) uncheck each other.
 
-    Before->after (CLAUDE.md): start with ``#pfb_force_update`` checked (default)
-    and the other two unchecked; clicking ``#pfb_force_cron`` checks Cron and
-    unchecks Update + Reload; clicking ``#pfb_force_reload`` checks Reload and
-    unchecks Cron + Update. Each click asserts the prior state first so a green
-    proves the click caused the change.
+    The Update page (ADR-43 revamp) renders ``pfb_force_mode`` as four
+    mutually-exclusive radios via ``displayAsRadio``: ``#pfb_force_none``,
+    ``#pfb_force_parse``, ``#pfb_force_download``, ``#pfb_force_both``. To stay
+    order-independent on the shared session VM (a sibling test may have persisted a
+    force_mode), the test establishes its own baseline by clicking None first, then
+    drives transitions: before->after (CLAUDE.md) each click asserts the clicked
+    radio becomes checked and every sibling becomes unchecked -- proving the click
+    caused the exclusivity.
     """
     page = browser_page
     _open(page, webui, UPDATE_PAGE)
 
-    force_update = page.locator("#pfb_force_update")
-    force_cron = page.locator("#pfb_force_cron")
-    force_reload = page.locator("#pfb_force_reload")
-    expect(force_update).to_be_visible(timeout=JS_TIMEOUT_MS)
+    none = page.locator("#pfb_force_none")
+    parse = page.locator("#pfb_force_parse")
+    download = page.locator("#pfb_force_download")
+    both = page.locator("#pfb_force_both")
+    expect(none).to_be_visible(timeout=JS_TIMEOUT_MS)
 
-    # BEFORE: only Update is checked.
-    expect(force_update).to_be_checked(timeout=JS_TIMEOUT_MS)
-    expect(force_cron).not_to_be_checked(timeout=JS_TIMEOUT_MS)
-    expect(force_reload).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    # Baseline: None checked, the rest off (independent of any persisted force_mode).
+    none.click()
+    expect(none).to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(parse).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(download).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(both).not_to_be_checked(timeout=JS_TIMEOUT_MS)
 
-    # Click Cron -> Cron on, the other two off.
-    force_cron.click()
-    expect(force_cron).to_be_checked(timeout=JS_TIMEOUT_MS)
-    expect(force_update).not_to_be_checked(timeout=JS_TIMEOUT_MS)
-    expect(force_reload).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    # Click Download -> Download on, the other three off.
+    download.click()
+    expect(download).to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(none).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(parse).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(both).not_to_be_checked(timeout=JS_TIMEOUT_MS)
 
-    # Click Reload -> Reload on, the other two off.
-    force_reload.click()
-    expect(force_reload).to_be_checked(timeout=JS_TIMEOUT_MS)
-    expect(force_update).not_to_be_checked(timeout=JS_TIMEOUT_MS)
-    expect(force_cron).not_to_be_checked(timeout=JS_TIMEOUT_MS)
-    _shot(page, screenshot_dir, "update_force_radio_exclusive")
+    # Click Both -> Both on, the other three off.
+    both.click()
+    expect(both).to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(none).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(parse).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(download).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "update_force_mode_exclusive")
 
 
-def test_reload_option_radios_are_mutually_exclusive(
+def test_scope_radios_are_mutually_exclusive(
     browser_page: Page,
     webui: WebUI,
     screenshot_dir: Path,
 ) -> None:
-    """The three `Reload` option radios uncheck each other (php:517-528).
+    """The three `Run Scope` radios (Both/IP/DNSBL) uncheck each other.
 
-    The reload-option group is hidden until a `Force Reload` is selected, so first
-    click ``#pfb_force_reload`` to reveal it (proven by the visibility test). Then,
-    before->after (CLAUDE.md): ``#pfb_reload_option_all`` is checked by default;
-    clicking ``#pfb_reload_option_ip`` checks IP and unchecks All + DNSBL; clicking
-    ``#pfb_reload_option_dnsbl`` checks DNSBL and unchecks the other two.
+    The Update page (ADR-43 revamp) renders ``pfb_scope`` as three
+    mutually-exclusive radios via ``displayAsRadio``: ``#pfb_scope_both``,
+    ``#pfb_scope_ip``, ``#pfb_scope_dnsbl``. The test establishes its own baseline
+    by clicking Both first (order-independent on the shared VM), then drives
+    transitions: before->after (CLAUDE.md) each click asserts the clicked radio
+    becomes checked and every sibling becomes unchecked.
     """
     page = browser_page
     _open(page, webui, UPDATE_PAGE)
 
-    # Reveal the reload-option group (it is hidden on load).
-    page.locator("#pfb_force_reload").click()
+    both = page.locator("#pfb_scope_both")
+    ip = page.locator("#pfb_scope_ip")
+    dnsbl = page.locator("#pfb_scope_dnsbl")
+    expect(both).to_be_visible(timeout=JS_TIMEOUT_MS)
 
-    reload_all = page.locator("#pfb_reload_option_all")
-    reload_ip = page.locator("#pfb_reload_option_ip")
-    reload_dnsbl = page.locator("#pfb_reload_option_dnsbl")
-    expect(reload_all).to_be_visible(timeout=JS_TIMEOUT_MS)
-
-    # BEFORE: only All is checked.
-    expect(reload_all).to_be_checked(timeout=JS_TIMEOUT_MS)
-    expect(reload_ip).not_to_be_checked(timeout=JS_TIMEOUT_MS)
-    expect(reload_dnsbl).not_to_be_checked(timeout=JS_TIMEOUT_MS)
-    _shot(page, screenshot_dir, "update_reload_option_all")
+    # Baseline: Both checked, the rest off.
+    both.click()
+    expect(both).to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(ip).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(dnsbl).not_to_be_checked(timeout=JS_TIMEOUT_MS)
 
     # Click IP -> IP on, the other two off.
-    reload_ip.click()
-    expect(reload_ip).to_be_checked(timeout=JS_TIMEOUT_MS)
-    expect(reload_all).not_to_be_checked(timeout=JS_TIMEOUT_MS)
-    expect(reload_dnsbl).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    ip.click()
+    expect(ip).to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(both).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(dnsbl).not_to_be_checked(timeout=JS_TIMEOUT_MS)
 
     # Click DNSBL -> DNSBL on, the other two off.
-    reload_dnsbl.click()
-    expect(reload_dnsbl).to_be_checked(timeout=JS_TIMEOUT_MS)
-    expect(reload_all).not_to_be_checked(timeout=JS_TIMEOUT_MS)
-    expect(reload_ip).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    dnsbl.click()
+    expect(dnsbl).to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(both).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(ip).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "update_scope_exclusive")
 
 
 def test_sync_repeatable_add_then_delete_row(
