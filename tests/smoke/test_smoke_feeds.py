@@ -53,6 +53,7 @@ import io
 import ipaddress
 import os
 import shlex
+import subprocess
 import zipfile
 from collections.abc import Iterator
 
@@ -1943,6 +1944,24 @@ def test_cron_spurious_200_same_bytes_no_reingest(
 _ADR44_BODY = "203.0.113.7\n198.51.100.23\n"
 _ADR44_MEMBER = "203.0.113.7"
 
+# ADR-45 structural-integrity smoke fixtures — distinct IPs from ADR-44 for isolation.
+_ADR45_BODY = "203.0.113.11\n198.51.100.33\n"
+_ADR45_MEMBER = "203.0.113.11"
+
+
+def _box_mime_type(vm: SmokeVM, data: bytes, remote_tmp: str = "/tmp/adr45_mime_probe.bin") -> str:
+    """Upload ``data`` to ``remote_tmp`` on the guest via stdin, return ``file(1)`` MIME type.
+
+    Used by the ADR-45 octet-stream guard tests to verify that the specific bytes
+    actually trigger ``application/octet-stream`` on the box's ``file(1)`` before
+    asserting the recovery / rejection behaviour.  Cleans up the temp file afterwards.
+    """
+    # Binary upload: subprocess.run without text=True accepts bytes as input.
+    subprocess.run(vm.ssh_argv("tee", remote_tmp), input=data, capture_output=True, timeout=30.0, check=False)
+    result = vm.ssh("file", "-b", "--mime-type", remote_tmp)
+    vm.ssh("rm", "-f", remote_tmp)
+    return result.stdout.strip()
+
 
 @pytest.mark.timeout(120)  # full update + targeted reload + file-detect/decompress/re-validate > the 30s cap on slow CI
 def test_zip_feed_imports(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
@@ -2053,4 +2072,247 @@ def test_bzip2_feed_imports(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -
         )
         assert h.rule_references(deployed_vm, spec.alias), (
             f"no loaded pf rule references {spec.alias} after bzip2 feed import"
+        )
+
+
+# --------------------------------------------------------------------------- #
+# ADR-45 structural-integrity smoke — corrupt-archive-rejected + octet-stream
+# --------------------------------------------------------------------------- #
+# Paired design (one corrupt + one healthy per format) so green proves the probe
+# is a REAL branch, not an always-reject path:
+#   corrupt zip   ←→ test_zip_feed_imports  (healthy valid pair)
+#   corrupt gzip  ←→ test_gzip_feed_imports (healthy valid pair)
+#   corrupt bzip2 ←→ test_bzip2_feed_imports (healthy valid pair)
+# 7z: out-of-CI — /usr/local/bin/7z is not present on the smoke image
+# (image ships ldns, bind-tools, python311, unbound, php83, qemu-guest-agent only).
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.timeout(120)
+def test_corrupt_zip_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-45: a corrupt (truncated) ZIP feed is rejected by the structural probe.
+
+    Scenario: the mock serves the first half of a valid ZIP archive — the central
+    directory and EOCD are missing so bsdtar exits non-zero. pfb_validate_archive()
+    catches the failure; pfb_download() returns FALSE; the alias is never created.
+
+    Paired with ``test_zip_feed_imports`` (healthy ZIP imports) to prove the probe
+    is a real branch, not an always-reject path: if the probe were always-reject,
+    the healthy case would also fail; it does not.
+
+    Given the alias does not exist (the feed has never been successfully loaded).
+    When the case injects + Force-Updates over the truncated ZIP bytes,
+    Then the alias remains absent — the structural probe rejected the corrupt archive
+      before extraction and pfb_download() returned FALSE.
+    """
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("list.txt", _ADR45_BODY)
+    valid_zip = buf.getvalue()
+    corrupt_zip = valid_zip[: len(valid_zip) // 2]  # truncate — no EOCD
+    feed_url = mock_feeds.register("adr45_corrupt_zip.zip", corrupt_zip)
+    spec = h.IpCase(aliasname="adr45czp", feed_url=feed_url, header="adr45czp", family="v4")
+
+    # Given — alias absent before any load attempt.
+    assert spec.alias not in h.pfctl_tables(deployed_vm), (
+        f"{spec.alias} present before corrupt-zip feed — unexpected before-state"
+    )
+
+    with h.CaseContext(deployed_vm, spec):
+        # When — Force Update fetches corrupt ZIP; structural probe (bsdtar) fails.
+        # Then — alias still absent; pfb_download returned FALSE; table never created.
+        tables_after = h.pfctl_tables(deployed_vm)
+        assert spec.alias not in tables_after, (
+            f"expected {spec.alias!r} absent after corrupt ZIP (structural probe must reject), "
+            f"found it present — tables: {tables_after}"
+        )
+
+
+@pytest.mark.timeout(120)
+def test_corrupt_gzip_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-45: a corrupt (truncated) gzip feed is rejected by the structural probe.
+
+    Scenario: the mock serves the first half of a valid gzip stream — the deflate
+    payload and checksum trailer are missing so bsdtar exits non-zero.
+    pfb_validate_archive() catches the failure; pfb_download() returns FALSE; the
+    alias is never created.
+
+    Paired with ``test_gzip_feed_imports`` (healthy gzip imports) to prove the probe
+    is a real branch.
+
+    Given the alias does not exist (the feed has never been successfully loaded).
+    When the case injects + Force-Updates over the truncated gzip bytes,
+    Then the alias remains absent — the structural probe rejected the corrupt archive.
+    """
+    valid_gz = gzip.compress(_ADR45_BODY.encode(), mtime=0)
+    corrupt_gz = valid_gz[: len(valid_gz) // 2]  # truncate — missing checksum + payload
+    feed_url = mock_feeds.register("adr45_corrupt_gz.gz", corrupt_gz)
+    spec = h.IpCase(aliasname="adr45cgz", feed_url=feed_url, header="adr45cgz", family="v4")
+
+    # Given — alias absent before any load attempt.
+    assert spec.alias not in h.pfctl_tables(deployed_vm), (
+        f"{spec.alias} present before corrupt-gzip feed — unexpected before-state"
+    )
+
+    with h.CaseContext(deployed_vm, spec):
+        # When — Force Update fetches corrupt gzip; structural probe (bsdtar) fails.
+        # Then — alias still absent.
+        tables_after = h.pfctl_tables(deployed_vm)
+        assert spec.alias not in tables_after, (
+            f"expected {spec.alias!r} absent after corrupt gzip (structural probe must reject), "
+            f"found it present — tables: {tables_after}"
+        )
+
+
+@pytest.mark.timeout(120)
+def test_corrupt_bzip2_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-45: a corrupt (truncated) bzip2 feed is rejected by the structural probe.
+
+    Scenario: the mock serves the first half of a valid bzip2 stream.  bsdtar exits
+    non-zero; pfb_validate_archive() rejects it; pfb_download() returns FALSE; the
+    alias is never created.
+
+    Paired with ``test_bzip2_feed_imports`` (healthy bzip2 imports) to prove the probe
+    is a real branch.
+
+    Given the alias does not exist (the feed has never been successfully loaded).
+    When the case injects + Force-Updates over the truncated bzip2 bytes,
+    Then the alias remains absent — the structural probe rejected the corrupt archive.
+    """
+    valid_bz = bz2.compress(_ADR45_BODY.encode())
+    corrupt_bz = valid_bz[: len(valid_bz) // 2]  # truncate — incomplete block header
+    feed_url = mock_feeds.register("adr45_corrupt_bz.bz2", corrupt_bz)
+    spec = h.IpCase(aliasname="adr45cbz", feed_url=feed_url, header="adr45cbz", family="v4")
+
+    # Given — alias absent before any load attempt.
+    assert spec.alias not in h.pfctl_tables(deployed_vm), (
+        f"{spec.alias} present before corrupt-bzip2 feed — unexpected before-state"
+    )
+
+    with h.CaseContext(deployed_vm, spec):
+        # When — Force Update fetches corrupt bzip2; structural probe (bsdtar) fails.
+        # Then — alias still absent.
+        tables_after = h.pfctl_tables(deployed_vm)
+        assert spec.alias not in tables_after, (
+            f"expected {spec.alias!r} absent after corrupt bzip2 (structural probe must reject), "
+            f"found it present — tables: {tables_after}"
+        )
+
+
+@pytest.mark.timeout(120)
+def test_octet_stream_zip_recovered(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-45 / #581 fix: a valid ZIP that file(1) mislabels as octet-stream is recovered
+    and imported via the Phase-3 structural-recovery path.
+
+    Real-world analogue: the Cisco Umbrella / Popularity List ``top-1m.csv.zip`` (and
+    similar self-extracting ZIPs with a short SFX stub) causes ``file(1)`` to report
+    ``application/octet-stream`` rather than ``application/zip``.  Before ADR-45,
+    pfb_filter() would reject it outright; after, pfb_octet_recover_type() probes
+    the bytes with bsdtar and recovers the correct type.
+
+    Fixture: a valid ZIP with 8 NUL+control bytes prepended before the local file
+    header (``PK\\x03\\x04``).  bsdtar uses backward EOCD scanning + SFX-offset
+    correction and can still extract it; ``file(1)`` sees the NUL/ctrl preamble and
+    reports ``application/octet-stream``.
+
+    On-box guard: if the box's ``file(1)`` does NOT report ``application/octet-stream``
+    for these bytes (different magic-db heuristic), the recovery path is not exercised
+    — the feed still imports via the normal ``application/zip`` branch and the test
+    logs the observed verdict rather than failing.
+
+    Given the alias does not exist.
+    When the case injects + Force-Updates over the junk-prefixed ZIP,
+    Then 203.0.113.11 is present in the pf table — the archive was recovered and loaded.
+    """
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("list.txt", _ADR45_BODY)
+    valid_zip = buf.getvalue()
+    junk_prefix = b"\x00\x01\x02\x03\x04\x05\x06\x07"  # NUL + ctrl bytes before PK header
+    junk_zip = junk_prefix + valid_zip
+    feed_url = mock_feeds.register("adr45_octet_zip.zip", junk_zip)
+    spec = h.IpCase(aliasname="adr45orec", feed_url=feed_url, header="adr45orec", family="v4")
+
+    # On-box MIME guard: check what file(1) actually reports for these bytes.
+    box_mime = _box_mime_type(deployed_vm, junk_zip)
+    recovery_exercised = box_mime == "application/octet-stream"
+    if recovery_exercised:
+        print(
+            f"\n[adr45] on-box file(1) reports {box_mime!r} for junk-prefixed ZIP "
+            f"— octet-stream recovery path WILL be exercised"
+        )
+    else:
+        print(
+            f"\n[adr45] on-box file(1) reports {box_mime!r} for junk-prefixed ZIP "
+            f"(not octet-stream); recovery path not exercised — feed imports via normal zip branch"
+        )
+
+    # Given — alias absent before any load attempt.
+    assert spec.alias not in h.pfctl_tables(deployed_vm), (
+        f"{spec.alias} present before octet-stream-recovery feed — unexpected before-state"
+    )
+
+    with h.CaseContext(deployed_vm, spec):
+        # When — Force Update fetches the junk-prefixed ZIP.
+        members = h.wait_pfctl_table(deployed_vm, spec.alias)
+        # Then — member is present regardless of which branch handled it.
+        # (When recovery_exercised: proves octet-stream was recovered to application/zip and imported.
+        #  When not: proves the normal zip branch handled it — still a valid import assertion.)
+        assert h.member_present(members, _ADR45_MEMBER), (
+            f"expected {_ADR45_MEMBER!r} in {spec.alias} after junk-prefixed ZIP, got: {members} "
+            f"(box file(1) reported {box_mime!r}; recovery_exercised={recovery_exercised})"
+        )
+        assert h.rule_references(deployed_vm, spec.alias), (
+            f"no loaded pf rule references {spec.alias} after octet-stream ZIP recovery"
+        )
+
+
+@pytest.mark.timeout(120)
+def test_junk_octet_stream_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-45 / ADR §7: a genuine junk blob that file(1) reports as octet-stream is rejected.
+
+    This is the MUST-ACCOMPANY counterpart to ``test_octet_stream_zip_recovered`` —
+    together they pin BOTH branches of the recovery gate (ADR §3 positive-ID-only rule):
+
+    - Recovery case: octet-stream + valid archive  → IMPORTED (recovered to application/zip).
+    - This case:     octet-stream + junk blob       → REJECTED (no structural probe passes).
+
+    ADR §7 explicitly states: "a genuinely-unknown octet-stream (random binary / HTML page)
+    is ever accepted" is a REJECT criterion.  pfb_octet_recover_type() returns NULL when
+    no archive type passes bsdtar; pfb_filter() then calls unlink_if_exists + returns FALSE.
+
+    Fixture: NUL + control bytes (\\x00\\x01\\x02\\x03, repeated) — reliably reported as
+    ``application/octet-stream`` by file(1) on macOS and Linux (confirmed in Phase-3 unit
+    tests).  On-box guard: if the box's file(1) does NOT report octet-stream, the test
+    is skipped (inconclusive — the reject branch for octet-stream is not triggered).
+
+    Given the alias does not exist.
+    When the case injects + Force-Updates over the junk blob,
+    Then the alias remains absent — no structural probe passed; the blob was rejected.
+    """
+    junk_blob = b"\x00\x01\x02\x03" * 256  # NUL + ctrl, no archive magic
+    feed_url = mock_feeds.register("adr45_junk.bin", junk_blob)
+    spec = h.IpCase(aliasname="adr45junk", feed_url=feed_url, header="adr45junk", family="v4")
+
+    # On-box MIME guard: the junk-rejected branch only applies when file(1) sees octet-stream.
+    box_mime = _box_mime_type(deployed_vm, junk_blob)
+    if box_mime != "application/octet-stream":
+        pytest.skip(
+            f"junk blob produced {box_mime!r} on this box (not application/octet-stream); "
+            f"the octet-stream reject branch is not exercised — test inconclusive"
+        )
+
+    # Given — alias absent before any load attempt.
+    assert spec.alias not in h.pfctl_tables(deployed_vm), (
+        f"{spec.alias} present before junk-blob feed — unexpected before-state"
+    )
+
+    with h.CaseContext(deployed_vm, spec):
+        # When — Force Update fetches the junk blob; all structural probes fail.
+        # Then — alias remains absent (ADR §7: junk octet-stream must never be accepted).
+        tables_after = h.pfctl_tables(deployed_vm)
+        assert spec.alias not in tables_after, (
+            f"expected {spec.alias!r} absent after junk octet-stream blob "
+            f"(ADR §7: recovery must not blanket-accept application/octet-stream), "
+            f"found it present — tables: {tables_after}"
         )
