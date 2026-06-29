@@ -61,6 +61,7 @@ _ABI="FreeBSD:15:amd64"
 _MARKER="smoke"
 _FILTER=""
 _NO_TWO_VM=0
+_NET_MODE="slirp"
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -68,12 +69,17 @@ while [ "$#" -gt 0 ]; do
         --abi)      shift; _ABI="$1";    shift ;;
         --marker|-m) shift; _MARKER="$1"; shift ;;
         --filter)   shift; _FILTER="$1";      shift ;;
-        --no-two-vm) _NO_TWO_VM=1;       shift ;;
+        --no-two-vm) _NO_TWO_VM=1;        shift ;;
+        --net-mode)  shift; _NET_MODE="$1"; shift ;;
         --) shift; break ;;
         -*) printf 'local-smoke: unknown flag: %s\n' "$1" >&2; exit 2 ;;
         *)  break ;;  # extra positionals not supported in new model
     esac
 done
+case "$_NET_MODE" in
+    slirp|bridge) ;;
+    *) printf 'local-smoke: --net-mode must be slirp or bridge\n' >&2; exit 2 ;;
+esac
 if [ "$#" -gt 0 ]; then
     printf 'local-smoke: unexpected positional args (use --marker/--filter): %s\n' "$*" >&2
     exit 2
@@ -105,7 +111,8 @@ _ABI_Q="$(_sq "$_ABI")"
 _MARKER_Q="$(_sq "$_MARKER")"
 
 # Build the smoke-on-box.sh flags string (structured, no word-split risk after encoding).
-_ob_flags="--ref '$_REF_Q' --abi '$_ABI_Q' --marker '$_MARKER_Q'"
+_NET_MODE_Q="$(_sq "$_NET_MODE")"
+_ob_flags="--ref '$_REF_Q' --abi '$_ABI_Q' --marker '$_MARKER_Q' --net-mode '$_NET_MODE_Q'"
 if [ -n "$_FILTER" ]; then
     _ob_flags="$_ob_flags --filter '$(_sq "$_FILTER")'"
 fi

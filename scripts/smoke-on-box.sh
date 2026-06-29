@@ -40,6 +40,7 @@ _ABI="FreeBSD:15:amd64"
 _MARKER="smoke"
 _FILTER=""
 _NO_TWO_VM=0
+_NET_MODE="slirp"
 
 REPO_ROOT="/root/pfBlockerNG"
 
@@ -63,9 +64,15 @@ while [ "$#" -gt 0 ]; do
         --marker)   shift; _MARKER="$1"; shift ;;
         --filter)   shift; _FILTER="$1";      shift ;;
         --no-two-vm) _NO_TWO_VM=1;       shift ;;
+        --net-mode)  shift; _NET_MODE="$1"; shift ;;
         *) printf 'smoke-on-box: unknown argument: %s\n' "$1" >&2; exit 1 ;;
     esac
 done
+case "$_NET_MODE" in
+    slirp|bridge) ;;
+    *) printf 'smoke-on-box: --net-mode must be slirp or bridge (got: %s)\n' \
+           "$_NET_MODE" >&2; exit 1 ;;
+esac
 
 # ── Step 1: ref-checkout + re-exec ────────────────────────────────────────── #
 # The bootstrap (run by select-box.sh) may be at any ref; we git checkout the
@@ -91,7 +98,7 @@ if [ "${PFB_ONBOX_REEXEC:-}" != "1" ]; then
 
     # Re-exec the now-checked-out version with properly quoted args.
     # Build via set -- so each arg is a distinct word (no word-split on _FILTER spaces).
-    set -- --ref "$_REF" --abi "$_ABI" --marker "$_MARKER"
+    set -- --ref "$_REF" --abi "$_ABI" --marker "$_MARKER" --net-mode "$_NET_MODE"
     [ -n "$_FILTER" ] && set -- "$@" --filter "$_FILTER"
     [ "$_NO_TWO_VM" -eq 1 ] && set -- "$@" --no-two-vm
     PFB_ONBOX_REEXEC=1 exec sh "$REPO_ROOT/scripts/smoke-on-box.sh" "$@"
@@ -204,6 +211,18 @@ export SMOKE_STUB_DNS_PORT="${SMOKE_STUB_DNS_PORT:-53}"
 # Kill any stale qemu from a previous run on this box (lease guarantees we are
 # the only writer; pkill -9 never touches another box's VMs).
 pkill -9 -f qemu-system-x86_64 2>/dev/null || true
+
+# Bridge-mode host setup (ADR-50 P2): create host bridges, taps, and start dnsmasq.
+# Eval output is SMOKE_WAN_TAP / SMOKE_MGMT_TAP / SMOKE_CLIENT_MGMT_TAP /
+# SMOKE_PFSENSE_MGMT_IP / SMOKE_CLIENT_MGMT_IP — consumed by boot_vm.sh via env
+# inheritance through exec run-smoke.sh → pytest → boot_vm.sh.
+if [ "$_NET_MODE" = bridge ]; then
+    eval "$(sh "$REPO_ROOT/scripts/bridge-net.sh" up)"
+    export SMOKE_WAN_TAP SMOKE_MGMT_TAP SMOKE_CLIENT_MGMT_TAP \
+           SMOKE_PFSENSE_MGMT_IP SMOKE_CLIENT_MGMT_IP
+    SMOKE_NET_MODE=bridge
+    export SMOKE_NET_MODE
+fi
 
 # ── Step 5: build .pkg ─────────────────────────────────────────────────────── #
 printf 'smoke-on-box: building .pkg (abi=%s)...\n' "$_ABI" >&2
