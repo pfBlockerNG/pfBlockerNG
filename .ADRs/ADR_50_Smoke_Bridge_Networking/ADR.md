@@ -1,6 +1,6 @@
 # ADR-50: Bridge networking for the smoke VMs (SLIRP → tap+bridge)
 
-- **Status:** **Proposed** (2026-06-29; de-risked on both environments; **P1 landed** — `SMOKE_NET_MODE` toggle in `boot_vm.sh`, PR #615)
+- **Status:** **Proposed** (2026-06-29; de-risked on both environments; **P1–P4 landed** — P1 `SMOKE_NET_MODE` toggle in `boot_vm.sh` (PR #615); P2 per-box `bridge-net.sh` + box-setup wiring, P3 conftest SSH/stub-DNS targeting, P4 CI bridge-setup steps (PR #616). **P5 (the live A/B) is the remaining work before Accept.**)
 - **Date:** 2026-06-29
 - **Branch:** ADR text authored directly on `devel` (ADR-text carve-out); implementation on `smoke/bridge-networking` via the normal PR flow / **Component(s):** `tests/smoke/boot_vm.sh`, `tests/smoke/conftest.py`, the box-setup/lease path (ADR-47), `.github/workflows/{smoke-single,ui-tests}.yml`
 - **Target runtime:** GitHub Actions runners (CI) + developer LXC/KVM boxes (local) — POSIX sh + Python 3.11
@@ -140,12 +140,24 @@ total wall-clock (the #605 instrumentation makes this a direct read). Flip the d
   the spec exposed: `cleanup()` (the `EXIT` trap) ended with status 0, masking **every** error-path
   exit as success — now preserves `$?` (and uses explicit `exit 1` guards, since bash 3.2 reports
   `$?`=0 for `${VAR:?}` under an EXIT trap). Behaviour-preserving; bridge mode dormant until P2/P3.
-- **P2 — per-box bridge+dnsmasq setup (§5.2)** + bake `dnsmasq` into the box image. The biggest
-  piece. Wire into the ADR-47 box-setup/lease path; per-lane tap names; static MGMT lease; teardown.
-- **P3 — conftest SSH→MGMT-IP + stub-DNS rebind (§5.3)**, `SMOKE_NET_MODE`-guarded. Add a conftest
-  unit assertion for the SSH-target / DNS-bind selection per mode.
-- **P4 — CI bridge-setup step (§5.4)** in `smoke-single.yml` + `ui-tests.yml`.
-- **P5 — A/B (§5.5)** and (conditionally) flip the default.
+- **P2 — per-box bridge+dnsmasq setup (§5.2) (DONE; PR #616).** New `scripts/bridge-net.sh up|down`
+  (br-wan/br-mgmt, per-lane taps, DHCP-only dnsmasq with static MGMT leases keyed off the real
+  net1/civm MACs, fail-closed input validation, no-`eval` `KEY=value` emit). Wired into the ADR-47
+  box-setup path (`smoke-on-box.sh` Step 4 + `--net-mode` through `local-smoke.sh`). Pinned by
+  `tests/shell/bridge_net_spec.sh`. **Out-of-CI items (documented, not blockers):** baking `dnsmasq`
+  into the box image + the LXC `/dev/net/tun` host passthrough (§7.1) live in
+  `docs/misc/local-smoke-debian.md`; GH runners have `tun` natively.
+- **P3 — conftest SSH→MGMT-IP + stub-DNS rebind (§5.3) (DONE; PR #616).** `SMOKE_NET_MODE`-guarded;
+  bridge mode targets the guest MGMT bridge IPs (pfSense `.15` / civm `.16`) on :22 and binds the
+  stub DNS at `192.168.89.2:53`. Off-box unit test `tests/test_smoke_net_mode.py` (both modes +
+  overrides + invalid-mode), slirp byte-identical.
+- **P4 — CI bridge-setup step (§5.4) (DONE; PR #616)** in `smoke-single.yml` + `ui-tests.yml` (gated
+  `net_mode == 'bridge'`, default slirp = byte-identical), `net_mode` forwarded through the `smoke.yml`
+  fan-out so P5's A/B is dispatchable across CE+Plus.
+- **P5 — A/B (§5.5) (REMAINING).** Run the live-VM fan-out under both modes, record bridge timing,
+  and (conditionally) flip the default. Also finalizes the live-only details the shellspec/actionlint
+  can't assert: tap ownership vs non-root QEMU (may need a `user` on the tap), and that dnsmasq serves
+  DHCP + auto-announces option 3/6 (§7.3).
 
 **Out of scope:** the ~30s guest-internal reload cost (#611); provisioning the LXC pool / the host
 tun passthrough (user-owned infra, §7); vhost-net micro-tuning (revisit only if the A/B is marginal).
@@ -197,9 +209,13 @@ for the local path, not an acceptance blocker for CI.
 
 ### Handoff note for the next agent
 
-Branch `smoke/bridge-networking` carries **P1** (PR #615). Resume at **P2** (§5.2) — the per-box
-bridge+dnsmasq setup is the keystone; everything else (conftest, CI, A/B) hangs off the tap names +
-MGMT IP it exports. The full design, the proven derisk harness (`bridge-derisk.sh` in the session
-scratchpad), and every gotcha are above; the toggle contract (`SMOKE_NET_MODE` + `SMOKE_*_TAP`) is
-already live in `boot_vm.sh` + pinned by `tests/shell/boot_vm_spec.sh`. Keep `slirp` the default
-until P5's A/B justifies the flip.
+**P1–P4 have landed** (PR #615 + #616): the toggle, `scripts/bridge-net.sh` + its box-setup/CI
+wiring, the conftest targeting, and the CI steps are all on `devel`, with `slirp` the byte-identical
+default. **Resume at P5 (§5.5) — the live A/B.** Dispatch the live-VM smoke fan-out under both modes
+(e.g. `gh workflow run smoke.yml -f net_mode=bridge -f scope=full`, and the UI fan-out likewise),
+compare the `PFB_TIMING` per-step + total wall-clock against the slirp baseline, and flip the default
+to `bridge` **only** if it is a clear win on CE+Plus. P5 also finalizes the live-only mechanics the
+off-box gates can't prove (tap ownership vs non-root QEMU; dnsmasq actually serving DHCP + option
+3/6, §7.3) — the §7 de-risk proved a bridge boot works on a GH runner, so this is wiring confirmation,
+not a redesign. The full design + every gotcha are above; the proven derisk harness `bridge-derisk.sh`
+is in the original session scratchpad.
