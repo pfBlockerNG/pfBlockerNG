@@ -89,6 +89,8 @@ QIEOF
       The stderr should include 'boot_vm:'
       The contents of file "$ARGV_FILE" should include 'user,id=net0,hostfwd=tcp::2223-:22'
       The contents of file "$ARGV_FILE" should include 'socket,id=net1,connect=127.0.0.1:12340'
+      # Pin the slirp-only contract for the client path too (no tap backend leaked in).
+      The contents of file "$ARGV_FILE" should not include 'tap,id='
     End
   End
 
