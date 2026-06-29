@@ -144,4 +144,13 @@ def test_shortcut_log_anchor_in_dom(
         f"found in the DOM of {_GENERAL_PAGE} -- title-bar syslog shortcut not rendered "
         f"or its href is relative (resolves to the /pfblockerng/ subdir and 404s)"
     )
+    # Negative side: no anchor carries the relative (subdir-resolving) href.  The attribute
+    # selector matches the raw href, so a "status_logs_packages.php?pkg=" prefix (no leading
+    # slash) is the pre-fix regression -- it must be absent.
+    rel_anchor = page.locator('a[href^="status_logs_packages.php?pkg="]')
+    assert rel_anchor.count() == 0, (
+        'Found anchor with a relative href starting "status_logs_packages.php?pkg=" in the DOM '
+        f"of {_GENERAL_PAGE} -- it resolves against the /pfblockerng/ subdir and 404s; the href "
+        f"must be root-absolute"
+    )
     expect(log_anchor.first).to_be_attached(timeout=JS_TIMEOUT_MS)
