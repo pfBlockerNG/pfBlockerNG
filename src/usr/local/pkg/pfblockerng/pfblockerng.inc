@@ -16216,7 +16216,7 @@ function sync_package_pfblockerng($cron='') {
 				$pfb_delta_batch = pfb_alias_delta_batch_clamp((string) PfbConfig::read('pfb_alias_delta_batch'));
 
 				foreach ($final_alias as $final) {
-					$log = "\n Updating: {$final}\n";
+					$log = " Updating: {$final}\n";	// trailing \n only — a leading \n blank-separated every entry
 					pfb_logger("{$log}", 1);
 					if (file_exists("{$pfb['aliasdir']}/{$final}.txt")) {
 						// ADR-40 P4: compute delta from the stashed previous canonical set.
