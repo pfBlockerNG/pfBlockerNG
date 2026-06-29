@@ -2238,6 +2238,34 @@ function pfb_tick_interval_clamp(string $raw): int
 }
 
 /**
+ * pfb_next_tick_boundary — when does the next cron tick fire?
+ *
+ * The ADR-43 scheduler is one cron tick that fires every $tick_min minutes (the cron minute
+ * field is "star-slash-N"), so it runs at each minute-of-hour that is a multiple of $tick_min,
+ * rolling to :00 of the next hour. Given the current wall-clock, returns the next boundary so
+ * the Update page can show "next run at" and "time remaining" for the actual scheduled cron
+ * (not the legacy per-feed interval cadence).
+ *
+ * @param int $tick_min  Clamped tick interval in minutes (see pfb_tick_interval_clamp).
+ * @param int $cur_hour  Current hour (0–23).
+ * @param int $cur_min   Current minute (0–59).
+ * @param int $cur_sec   Current second (0–59).
+ * @return array{0:int,1:int,2:int}  [next_hour (0–23), next_min (0–59), seconds_remaining].
+ */
+function pfb_next_tick_boundary(int $tick_min, int $cur_hour, int $cur_min, int $cur_sec): array
+{
+	$tick_min = max(1, $tick_min);
+	$cur_hour_sec = ($cur_min * 60) + $cur_sec;
+
+	$next_min = (intdiv($cur_min, $tick_min) + 1) * $tick_min;
+	if ($next_min >= 60) {
+		// The minute field never fires past :59, so it rolls to :00 of the next hour.
+		return [($cur_hour + 1) % 24, 0, 3600 - $cur_hour_sec];
+	}
+	return [$cur_hour, $next_min, ($next_min * 60) - $cur_hour_sec];
+}
+
+/**
  * pfb_tick_seed — stable per-install seed for the due-ledger jitter.
  *
  * Uses the system hostname (stable across reboots unless the admin changes it).

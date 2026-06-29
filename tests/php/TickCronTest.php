@@ -334,4 +334,91 @@ final class TickCronTest extends TestCase
 		$this->assertSame(self::NOW + self::DAILY, $entry['next_due'],
 			"cron next_due: expected " . (self::NOW + self::DAILY) . " got {$entry['next_due']}");
 	}
+
+	// -----------------------------------------------------------------------
+	// pfb_next_tick_boundary — the Update page's "NEXT Scheduled CRON Event".
+	//
+	// The ADR-43 tick is a star-slash-N minute cron, so the next event is the
+	// next minute-of-hour that is a multiple of $tick_min. The Update page used
+	// to compute this from the legacy per-feed interval/min/24hour knobs, which
+	// described the feed cadence, NOT the tick — so it could show "[ Missing
+	// cron task ]" and a wrong time even though the tick was scheduled.
+	//
+	// Red→green: before this helper existed, calling pfb_next_tick_boundary()
+	// raised "Call to undefined function pfb_next_tick_boundary()".
+	// -----------------------------------------------------------------------
+
+	/**
+	 * The next tick is later in the same hour when one is still ahead.
+	 *
+	 * Scenario:
+	 *   Given a 15-minute tick and the clock at 10:20:00.
+	 *   When pfb_next_tick_boundary(15, 10, 20, 0).
+	 *   Then the next event is 10:30 with 600 s remaining.
+	 */
+	public function testNextTickLaterThisHour(): void
+	{
+		$this->assertSame([10, 30, 600], pfb_next_tick_boundary(15, 10, 20, 0),
+			'15-min tick at 10:20:00 must fire next at 10:30 (600 s remaining)');
+	}
+
+	/**
+	 * The next tick rolls to :00 of the next hour after the last in-hour slot.
+	 *
+	 * Scenario:
+	 *   Given a 15-minute tick (slots :00/:15/:30/:45) and the clock at 10:50:30.
+	 *   When pfb_next_tick_boundary(15, 10, 50, 30).
+	 *   Then the next event is 11:00 with 570 s remaining (no :60 slot exists).
+	 */
+	public function testNextTickRollsToNextHour(): void
+	{
+		$this->assertSame([11, 0, 570], pfb_next_tick_boundary(15, 10, 50, 30),
+			'15-min tick at 10:50:30 must roll to 11:00 (570 s remaining)');
+	}
+
+	/**
+	 * The hour wraps from 23 back to 0 across midnight.
+	 *
+	 * Scenario:
+	 *   Given a 15-minute tick and the clock at 23:50:00.
+	 *   When pfb_next_tick_boundary(15, 23, 50, 0).
+	 *   Then the next event is 00:00 with 600 s remaining.
+	 */
+	public function testNextTickWrapsPastMidnight(): void
+	{
+		$this->assertSame([0, 0, 600], pfb_next_tick_boundary(15, 23, 50, 0),
+			'15-min tick at 23:50:00 must wrap to 00:00 (600 s remaining)');
+	}
+
+	/**
+	 * On an exact boundary the NEXT slot is returned, not the current one.
+	 *
+	 * Scenario:
+	 *   Given a 15-minute tick and the clock at exactly 10:00:00.
+	 *   When pfb_next_tick_boundary(15, 10, 0, 0).
+	 *   Then the next event is 10:15 (the :00 tick just fired) with 900 s remaining.
+	 */
+	public function testNextTickAtExactBoundaryReturnsFollowingSlot(): void
+	{
+		$this->assertSame([10, 15, 900], pfb_next_tick_boundary(15, 10, 0, 0),
+			'15-min tick at 10:00:00 must advance to 10:15 (900 s remaining)');
+	}
+
+	/**
+	 * An interval that does not divide 60 has its discontinuity at the hour edge.
+	 *
+	 * A 7-minute tick fires at :00,:07,…,:56 then jumps to the next :00 (never
+	 * :63), so the gap between :56 and the next :00 is only 4 minutes.
+	 *
+	 * Scenario:
+	 *   Given a 7-minute tick.
+	 *   When at 10:50:00 → next is 10:56 (360 s); when at 10:56:00 → rolls to 11:00 (240 s).
+	 */
+	public function testNextTickNonDivisorInterval(): void
+	{
+		$this->assertSame([10, 56, 360], pfb_next_tick_boundary(7, 10, 50, 0),
+			'7-min tick at 10:50:00 must fire next at 10:56 (360 s remaining)');
+		$this->assertSame([11, 0, 240], pfb_next_tick_boundary(7, 10, 56, 0),
+			'7-min tick at 10:56:00 must roll to 11:00 (240 s remaining, no :63 slot)');
+	}
 }

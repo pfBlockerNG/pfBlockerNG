@@ -161,104 +161,35 @@ $tab_array_sub[]	= array(gettext('Run'),		TRUE,	'/pfblockerng/pfblockerng_update
 $tab_array_sub[]	= array(gettext('Hooks'),	FALSE,	'/pfblockerng/pfblockerng_hooks.php');
 display_top_tabs($tab_array_sub, TRUE);
 
+// ADR-43: the scheduler is a single */pfb_tick_interval cron tick that fires every hour ('*'),
+// installed iff pfBlockerNG is enabled (the feed `interval` only gates the feed job *inside* the
+// tick, not the tick itself). So the "NEXT Scheduled CRON Event" tracks the tick boundary; the
+// per-feed cadence lives in the Schedule view below.
+$pfb_tick_min = pfb_tick_interval_clamp(PfbConfig::read('pfb_tick_interval'));
+
 if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On) {
-	/* Legend - Time variables
+	list($next_hour, $next_min, $sec_remain) =
+	    pfb_next_tick_boundary($pfb_tick_min, (int) date('G'), (int) date('i'), (int) date('s'));
 
-	$pfb['interval']	Hour interval setting	(1,2,3,4,6,8,12,24)
-	$pfb['min']		Cron minute start time	(0-23)
-	$pfb['hour']		Cron start hour		(0-23)
-	$pfb['24hour']		Cron daily/wk start hr	(0-23)
+	$sec_final	= str_pad(($sec_remain % 60),          2, '0', STR_PAD_LEFT);
+	$min_remain	= (int) floor($sec_remain / 60);
+	$min_final	= str_pad(($min_remain % 60),          2, '0', STR_PAD_LEFT);
+	$hour_final	= str_pad((int) floor($min_remain / 60), 2, '0', STR_PAD_LEFT);
 
-	$currenthour		Current hour
-	$currentmin		Current minute
-	$currentsec		Current second
-	$currentdaysec		Total number of seconds elapsed so far in the day
-	$cron_hour_begin	First cron hour setting (interval 2-24)
-	$cron_hour_next		Next cron hour setting  (interval 2-24)
-
-	$nextcron		Next cron event in hour:mins
-	$cronreal		Time remaining to next cron in hours:mins:secs		*/
-
-	$currenthour	= date('G');
-	$currentmin	= date('i');
-	$currentsec	= date('s');
-	$currentdaysec	= ($currenthour * 3600) + ($currentmin * 60) + $currentsec;
-
-	if (!is_numeric($pfb['min'])) {
-		$pfb['min'] = 0;
-	}
-
-	if ($pfb['interval'] == 1) {
-		if ($currentmin < $pfb['min']) {
-			$cron_hour_next = $currenthour;
-		} else {
-			$cron_hour_next = ($currenthour + 1) % 24;
-		}
-	}
-	elseif ($pfb['interval'] == 24) {
-		$cron_hour_next = $cron_hour_begin = $pfb['24hour'] ?: '00';
-	}
-	else {
-		// Find next cron hour schedule
-		$crondata = pfb_cron_base_hour($pfb['interval']);
-		$cron_hour_begin = 0;
-		$cron_hour_next  = '';
-		if (!empty($crondata)) {
-			foreach ($crondata as $key => $line) {
-				if ($key == 0) {
-					$cron_hour_begin = $line;
-				}
-				if (($line * 3600) + ($pfb['min'] * 60) > $currentdaysec) {
-					$cron_hour_next = $line;
-					break;
-				}
-			}
-		}
-		// Roll over to the first cron hour setting
-		if (empty($cron_hour_next)) {
-			$cron_hour_next = $cron_hour_begin;
-		}
-	}
-
-	$cron_seconds_next = ($cron_hour_next * 3600) + ($pfb['min'] * 60);
-	if ($currentdaysec < $cron_seconds_next) {
-		// The next cron job is ahead of us in the day
-		$sec_remain = $cron_seconds_next - $currentdaysec;
-	} else {
-		// The next cron job is tomorrow
-		$sec_remain = (24*60*60) + $cron_seconds_next - $currentdaysec;
-	}
-
-	// Ensure hour:min:sec variables are two digit
-	$pfb['min']	= str_pad($pfb['min'], 2, '0', STR_PAD_LEFT);
-	$sec_final	= str_pad(($sec_remain % 60),  2, '0', STR_PAD_LEFT);
-	$min_remain	= str_pad(floor($sec_remain / 60), 2, '0', STR_PAD_LEFT);
-	$min_final	= str_pad(($min_remain % 60), 2, '0', STR_PAD_LEFT);
-	$hour_final	= str_pad(floor($min_remain / 60), 2, '0', STR_PAD_LEFT);
-	$cron_hour_next = str_pad($cron_hour_next, 2, '0', STR_PAD_LEFT);
-
-	$cronreal = "{$cron_hour_next}:{$pfb['min']}";
-	$nextcron = "{$hour_final}:{$min_final}:{$sec_final}";
+	$cronreal	= str_pad($next_hour, 2, '0', STR_PAD_LEFT) . ':' . str_pad($next_min, 2, '0', STR_PAD_LEFT);
+	$nextcron	= "{$hour_final}:{$min_final}:{$sec_final}";
 }
 
+// Probe for the exact tick signature install_cron_job() registers in pfblockerng.inc, so an
+// installed tick is not misreported as "[ Missing cron task ]".
 $pfb_cmd = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php tick >> {$pfb['log']} 2>&1";
-if ($pfb['interval'] == 1) {
-	$pfb_hour = '*';
-} elseif ($pfb['interval'] == 24) {
-	$pfb_hour = $pfb['24hour'];
+
+if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On) {
+	if (!pfblockerng_cron_exists($pfb_cmd, '*/' . $pfb_tick_min, '*', '*', '*')) {
+		$cronreal = ' [ Missing cron task ]';
+		$nextcron = '--';
+	}
 } else {
-	$pfb_hour = implode(',', pfb_cron_base_hour($pfb['interval']));
-}
-
-// Determine if the tick CRON job is missing
-if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On && $pfb['interval'] != 'Disabled' &&
-    !pfblockerng_cron_exists($pfb_cmd, $pfb['min'], $pfb_hour, '*', '*')) {
-	$cronreal = ' [ Missing cron task ]';
-	$nextcron = '--';
-}
-
-// Determine if CRON job is disabled
-elseif (empty($pfb['enable']) || empty($cron_hour_next) || $pfb['interval'] == 'Disabled') {
 	$cronreal = ' [ Disabled ]';
 	$nextcron = '--';
 }
