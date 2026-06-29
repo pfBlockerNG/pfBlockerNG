@@ -465,16 +465,19 @@ def test_update_page_schedule_and_help_polish(webui: WebUI, php_error_log_guard:
     assert result.ok, f"Update page render oracle failed: {result.detail}"
     body = resp.text
 
-    # DNSBL Category row: feature unconfigured ⇒ "Disabled" (only this row emits it).
+    # DNSBL Category row: feature unconfigured ⇒ "Disabled". Scope to THIS row's value cell
+    # (the markup right after its label), not the whole body, so unrelated markup can't pass it.
     assert "DNSBL category" in body, "Update page missing the 'DNSBL category' schedule row"
-    assert "<em>Disabled</em>" in body, (
+    cat_row = body.split("DNSBL category", 1)[1][:500]
+    assert "<em>Disabled</em>" in cat_row, (
         "DNSBL category row should read 'Disabled' when the category feature is off, "
-        "not the misleading 'Not yet run' — got neither in the body"
+        f"not the misleading 'Not yet run' — row markup was: {cat_row[:200]!r}"
     )
 
-    # Run Scope help: the stray 'on Run Now' qualifier is gone.
+    # Run Scope help: the stray 'on Run Now' qualifier is gone. Match the precise OLD help
+    # string (not a bare "on Run Now", which also appears in an unrelated inline JS comment).
     assert "Which lists to sync: Both, IP-only, or DNSBL-only." in body, "Run Scope help text not updated"
-    assert "on Run Now" not in body, "Run Scope help still carries the stray 'on Run Now' qualifier"
+    assert "Which lists to sync on Run Now" not in body, "Run Scope help still carries the stray 'on Run Now' qualifier"
 
     # Force help: itemized with a bold label per mode.
     for needle in (
@@ -485,11 +488,12 @@ def test_update_page_schedule_and_help_polish(webui: WebUI, php_error_log_guard:
     ):
         assert needle in body, f"Force help not itemized — missing {needle!r}"
 
-    # Run button: inline right margin (desktop spacing). The Run Now button is the only
-    # element on the page that sets margin-right, so its presence proves the spacing fix.
-    assert "Run Now" in body, "Update page missing the Run Now button"
-    assert "margin-right: 0.5em" in body, (
-        "Run button has no inline right margin — it will sit flush against View on desktop"
+    # Run button: inline right margin (desktop spacing). Scope to the Run Now <button>
+    # element itself, not the whole body, so the margin is proven to be ON that button.
+    run_btn = next((b for b in re.findall(r"<button\b.*?</button>", body, re.S) if "Run Now" in b), None)
+    assert run_btn is not None, "Update page missing the Run Now button"
+    assert "margin-right" in run_btn, (
+        f"Run button has no inline right margin — it will sit flush against View on desktop: {run_btn!r}"
     )
 
 
