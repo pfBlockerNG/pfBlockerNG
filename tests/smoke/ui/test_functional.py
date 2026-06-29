@@ -309,7 +309,11 @@ def test_toggle_flow_changes_effective_config(
     final restore leaves the box clean for Tier A / the sibling flows on the
     session VM. The oracle is config.xml read over SSH, never the POST response.
     """
-    original = helpers.config_get(smoke_vm, flow.config_path)
+    # An absent key reads as '' over the raw config path; normalise it to this flow's
+    # canonical off token so the before-state assertion and the restore compare against a
+    # real stored value (PfbLenient pfb_keep stores 'off', never ''). For the PfbToggle
+    # flows whose off token IS '', this is a no-op.
+    original = helpers.config_get(smoke_vm, flow.config_path) or flow.off
     # The toggle's "other" value -- we drive AWAY from original, then BACK.
     flipped = flow.off if original == flow.on else flow.on
 
