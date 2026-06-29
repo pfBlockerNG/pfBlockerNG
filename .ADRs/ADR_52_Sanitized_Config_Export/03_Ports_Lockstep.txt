@@ -1,0 +1,71 @@
+================================================================================
+PHASE 3 PROMPT — FreeBSD-ports lockstep wiring (pkg-plist + do-install)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_52_Sanitized_Config_Export/ADR.md   (read §1.2, §6 Phase 3 first)
+================================================================================
+
+ROLE
+Run /ponytail:ponytail full before anything else.
+You are the Phase 3 implementer for ADR-52. This phase touches the SEPARATE
+`pfBlockerNG/FreeBSD-ports` fork repo (build-input branch `pfblockerng/use-github`)
+to register the two new shipped files. You implement yourself; you do NOT spawn
+further agents.
+
+WHY THIS PHASE EXISTS
+Release archives contain only `src/`; a new shipped file is invisible to the
+package unless it is in the port's pkg-plist AND copied by do-install. PR CI does
+NOT build the .pkg, so missing wiring stays green on the package PR but BREAKS the
+smoke/release build (build-pkg-portable.py --dry-run hard-fails on plist↔staged
+drift). All three ports must be wired, in lockstep with the package change.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_52_Sanitized_Config_Export/RESULTS/02_Results.txt — it must list the
+  exact paths of BOTH new files (pfblockerng_diagnostics.inc + .php). If missing,
+  Phase 2 is not complete; STOP and report.
+- scripts/build-pkg-portable.py — `--print-build-origins` / `--dry-run`; how it
+  reconstructs `make package` from the Makefile + pkg-plist (the drift check)
+- The three port directories on the fork (net/pfSense-pkg-pfBlockerNG,
+  net/pfSense-pkg-pfBlockerNG-devel, and the nightly variant) — their `pkg-plist`
+  and the `do-install:` target in each Makefile (find the existing
+  `usr/local/pkg/pfblockerng/*.inc` and `usr/local/www/pfblockerng/*.php` lines as
+  the template)
+- CLAUDE.md — "New shipped file -> chroot + plist"; the worktree + lockstep rules;
+  ports are pushed to the build-input branch, not an upstream PR
+
+ACTION PLAN
+1. On the fork, for EACH of the three ports:
+   - add `usr/local/pkg/pfblockerng/pfblockerng_diagnostics.inc` and
+     `usr/local/www/pfblockerng/pfblockerng_diagnostics.php` to `pkg-plist`
+     (alongside the existing sibling entries, sorted as that plist is);
+   - add the matching `INSTALL_DATA` lines to `do-install:` (mirror how the
+     sibling `.inc`/`.php` files are installed; the target dirs already exist via
+     existing MKDIR — only add MKDIR if a new dir is introduced, which it is not).
+2. Run the package-side drift check against the fork checkout:
+   `python scripts/build-pkg-portable.py --dry-run` (point it at the branch +
+   ports per its existing invocation) — it MUST pass with the two files staged.
+
+CONSTRAINTS
+- Change ONLY the plist + do-install for these two files; do not bump versions or
+  touch unrelated port machinery.
+- Keep the three ports consistent — the same two lines in each.
+- POSIX/Make idioms already in the Makefile; match them exactly.
+
+VERIFICATION (all must pass)
+- build-pkg-portable.py --dry-run -> no plist↔staged drift (PASS)
+- diff-read each port: exactly the two plist lines + the two do-install lines
+  added, identical across the three ports
+
+EXPECTED RESULT
+The branch .pkg built by CI contains pfblockerng_diagnostics.inc and
+pfblockerng_diagnostics.php; the smoke/release build no longer drifts.
+
+COMMIT (single, on the FORK repo)
+    pfblockerng: ship Diagnostics page files (ADR-52 P3)
+Land in lockstep with the package branch per CLAUDE.md (fork pushes to the
+build-input branch; rebase-only).
+
+HANDOFF — write .ADRs/ADR_52_Sanitized_Config_Export/RESULTS/03_Results.txt
+State: the fork branch/commit; the three ports edited; the --dry-run result;
+confirmation the package branch + ports are landing together; and the go-ahead
+for Phase 4.
