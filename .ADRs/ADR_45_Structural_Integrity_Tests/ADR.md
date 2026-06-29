@@ -4,10 +4,17 @@
   (`tests/smoke/test_smoke_feeds.py`, 8/8: corrupt-{zip,gz,bz2}-rejected,
   octet-stream-recovered, junk-octet-rejected, + healthy pairs). Validated CE-only
   per maintainer direction; the Plus leg exercises the same logic on a different
-  base and is deferred. 7z *extraction* end-to-end stays a documented out-of-CI
-  limitation (the smoke image ships no 7-Zip binary; the safe-reject path is
-  unit-pinned). Implemented via PR #617; smoke fixtures hardened for FreeBSD
+  base and is deferred. Implemented via PR #617; smoke fixtures hardened for FreeBSD
   `file(1)`/bsdtar in PR #621 (see `tests/smoke/fixtures/README.md` "Archive corpus").
+- **7z (opportunistic) — PR #622.** 7-Zip stays an optional extractor (not shipped, not a
+  `RUN_DEPEND`); the full path was validated by hand on a real **CE 2.8 + Plus 26.03** box
+  (`file(1)` → `application/x-7z-compressed`; `7z t` / `7z e -so` behave). A 7z feed on a box
+  **without** 7-Zip now logs a clear *"Install the 7-Zip package"* message and safe-rejects
+  (not a misleading "corrupt archive"). Smoke covers **both** binary states: `test_7z_feed_imports`
+  / `test_corrupt_7z_rejected` run when the (baked) CI image has 7-Zip and skip otherwise, while
+  `test_7z_missing_binary_rejected` always runs — it hides `/usr/local/bin/7z` and asserts the
+  reject + message. So 7z is no longer an out-of-CI gap (the only residual is that the *import*
+  cases need the 7z-baked image to un-skip).
 - **Date:** 2026-06-28
 - **Branch:** `adr/45-structural-integrity-tests` (off `devel`) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfblockerng.inc`
 - **Target runtime:** PHP 8.3, FreeBSD / pfSense; shell via `exec()` to base archive tools (`gunzip`, `bzip2`, `bsdtar`, `7z`)
