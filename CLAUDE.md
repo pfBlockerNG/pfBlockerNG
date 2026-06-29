@@ -321,6 +321,22 @@ off-pattern name is a smell even when it works.
   path splits the knobs (`LC_COLLATE=C` + runtime-resolved `LC_CTYPE=<*.UTF-8>`), never bare
   `C`. Full policy + deferred resolver: `docs/misc/architecture-notes.md` ("Locale policy").
 
+### External processes — launching and waiting
+
+Launching or waiting on an external OS process has non-obvious semantics that have bitten us (a
+post-update hook falsely timing out and killing the daemon it had just restarted; the Update-page
+live tail hanging). Before writing or changing code that runs **`timeout(1)`**, **`mwexec_bg()`**,
+a spawned **daemon / `service` restart**, or a **live-tail / poll loop**, read
+[`docs/misc/external-process-waits.md`](docs/misc/external-process-waits.md). In short: FreeBSD
+`timeout` is a **process reaper** by default — it waits for *every* descendant (`&` / `setsid`
+daemonization cannot escape it) and then kills the whole tree — so a command that deliberately
+spawns a survivor needs **`--foreground`**, while a transform pipeline must stay default-mode (a
+hung pipeline is killed whole, not orphaned). `mwexec_bg()` returns **no PID**, so track a specific
+dispatched process by **`daemon -p <pidfile>` + `isvalidpid()`**, never a `ps` pattern or a magic
+log string; a *global* "is anything running?" guard still needs `ps`; and a daemon that inherits
+the capture pipe blocks `exec()` until it dies (redirect to a file). The ADR-12 hooks run
+`--foreground`; the `list_scripts` feed scripts deliberately stay default-mode.
+
 ### Code-quality conventions (ADR-28)
 
 Five conventions adopted as policy of record. Apply across the codebase in progressive phases
