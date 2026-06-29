@@ -49,6 +49,9 @@ REPO_ROOT="/root/pfBlockerNG"
 # shellcheck source=scripts/lib/git-env-scrub.sh
 . "${REPO_ROOT}/scripts/lib/git-env-scrub.sh"
 pfb_scrub_git_env
+# Marker → (paths, timeout, browser?) mapping for the ADR-14 UI tiers.
+# shellcheck source=scripts/lib/smoke-tier.sh
+. "${REPO_ROOT}/scripts/lib/smoke-tier.sh"
 PORTS_DIR="/root/FreeBSD-ports"
 IMAGES_DIR="/root/images"
 
@@ -235,10 +238,22 @@ printf 'smoke-on-box: provisioning test venv (.venv)...\n' >&2
 "${REPO_ROOT}/.venv/bin/python" -m pip install --quiet --upgrade pip
 "${REPO_ROOT}/.venv/bin/python" -m pip install --quiet -r "${REPO_ROOT}/tests/smoke/requirements.txt" pytest
 
-# ── Step 6: run smoke ─────────────────────────────────────────────────────── #
-printf 'smoke-on-box: running smoke (marker=%s%s)\n' \
-    "$_MARKER" "${_FILTER:+ filter=$_FILTER}" >&2
+# The Tier-B browser marker needs the Chromium BINARY (the pip wheel above ships
+# the bindings only); mirrors ui-tests.yml. Idempotent — a no-op if present.
+if pfb_smoke_tier_needs_browser "$_MARKER"; then
+    printf 'smoke-on-box: installing headless Chromium (browser tier)...\n' >&2
+    "${REPO_ROOT}/.venv/bin/python" -m playwright install --with-deps chromium
+fi
 
-set -- --paths tests/smoke --marker "$_MARKER" --timeout 30
+# ── Step 6: run smoke ─────────────────────────────────────────────────────── #
+# Paths + per-test timeout follow the marker: a UI tier scopes to tests/smoke/ui
+# with the 300s ceiling (matching ui-tests.yml); everything else keeps the
+# whole-suite tests/smoke + 30s default.
+_PATHS="$(pfb_smoke_tier_paths "$_MARKER")"
+_TIMEOUT="$(pfb_smoke_tier_timeout "$_MARKER")"
+printf 'smoke-on-box: running smoke (marker=%s paths=%s timeout=%s%s)\n' \
+    "$_MARKER" "$_PATHS" "$_TIMEOUT" "${_FILTER:+ filter=$_FILTER}" >&2
+
+set -- --paths "$_PATHS" --marker "$_MARKER" --timeout "$_TIMEOUT"
 [ -n "$_FILTER" ] && set -- "$@" --filter "$_FILTER"
 exec sh scripts/run-smoke.sh "$@"
