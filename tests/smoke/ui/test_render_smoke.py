@@ -432,6 +432,67 @@ def test_update_revamp_controls_render(webui: WebUI, php_error_log_guard: PhpErr
     )
 
 
+def test_update_page_schedule_and_help_polish(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """Update-page polish: honest DNSBL-category state, itemized Force help, clean Run-Scope
+    help, and spaced Run/View buttons.
+
+    Four user-reported alpha.6 rough edges on the Update page, all guarded here against
+    regression (each assertion fails on the pre-fix markup):
+
+    Scenario: the Update page renders the corrected Schedule + help + button markup.
+      Background: pfBlockerNG deployed with the DNSBL Category feature NOT configured
+      (the suite never enables it), so the category job can never run.
+
+    Given the Update page renders cleanly (200, no PHP diagnostic, section markers),
+
+    When the body is inspected,
+
+    Then the DNSBL Category schedule row reports ``Disabled`` rather than the misleading
+      ``Not yet run`` — the bl job only runs (and records a ledger entry) when the feature
+      is enabled with a category selected, so an unconfigured install must say why it is
+      not scheduled, not pretend a run is pending (pre-fix it showed ``<em>Not yet run</em>``);
+    And the Run Scope help no longer carries the stray ``on Run Now`` qualifier;
+    And the Force help is itemized per mode (a ``<strong>`` label per None/Parse/Download/Both)
+      instead of one run-on sentence (pre-fix there were no ``<strong>`` mode labels);
+    And the Run button carries an inline right margin so it is visibly separated from the
+      View button on desktop too (pre-fix the column-wrapped buttons sat flush, the gap only
+      appearing on mobile).
+
+    ``php_error_log_guard`` enrolls this GET in the module-level no-growth sweep.
+    """
+    resp = webui.get(_UPDATE_PAGE)
+    result = evaluate_render(_UPDATE_PAGE, resp.status_code, resp.text, ("Update Settings", "Schedule"))
+    assert result.ok, f"Update page render oracle failed: {result.detail}"
+    body = resp.text
+
+    # DNSBL Category row: feature unconfigured ⇒ "Disabled" (only this row emits it).
+    assert "DNSBL category" in body, "Update page missing the 'DNSBL category' schedule row"
+    assert "<em>Disabled</em>" in body, (
+        "DNSBL category row should read 'Disabled' when the category feature is off, "
+        "not the misleading 'Not yet run' — got neither in the body"
+    )
+
+    # Run Scope help: the stray 'on Run Now' qualifier is gone.
+    assert "Which lists to sync: Both, IP-only, or DNSBL-only." in body, "Run Scope help text not updated"
+    assert "on Run Now" not in body, "Run Scope help still carries the stray 'on Run Now' qualifier"
+
+    # Force help: itemized with a bold label per mode.
+    for needle in (
+        "<strong>None:</strong>",
+        "<strong>Parse:</strong>",
+        "<strong>Download:</strong>",
+        "<strong>Both:</strong>",
+    ):
+        assert needle in body, f"Force help not itemized — missing {needle!r}"
+
+    # Run button: inline right margin (desktop spacing). The Run Now button is the only
+    # element on the page that sets margin-right, so its presence proves the spacing fix.
+    assert "Run Now" in body, "Update page missing the Run Now button"
+    assert "margin-right: 0.5em" in body, (
+        "Run button has no inline right margin — it will sit flush against View on desktop"
+    )
+
+
 def test_dnsbl_idn_blocking_fields_render(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
     """The ADR-08 'IDN Blocking' selector + its two Confusable sub-toggles render
     cleanly on the DNSBL page — so a regression that drops or breaks the field is
