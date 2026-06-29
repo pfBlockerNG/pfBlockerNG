@@ -3744,6 +3744,41 @@ function pfb_member_file_is_placeholder_only($path, $placeholder) {
 }
 
 
+// Format a single log line for a failed pfctl table operation.  Pure function:
+// no side-effects, fully unit-testable without a live pfctl binary.
+// Callers: pfb_pfctl_table_op() (below) — which is the only exec() wrapper for
+// pfctl -T mutation ops.  The message names every field so "Table does not exist"
+// floods carry table/op attribution in the log.
+function pfb_pfctl_error_message(string $table, string $op, int $rc, string $stderr): string {
+	$msg = trim(str_replace(["\r\n", "\r", "\n"], ' ', $stderr));
+	return "[pfctl] op={$op} table={$table} failed (rc={$rc}): {$msg}";
+}
+
+
+// Thin wrapper around `pfctl -t <table> -T <op>` for mutation ops (kill/replace/add/delete).
+// Owns the escapeshellarg() for the table; $args must already be fully escaped by
+// the caller (e.g. "-f " . escapeshellarg($path)).  On failure (non-zero rc or
+// pfctl error output) logs one attributed line via pfb_logger().
+// $pfctl_bin defaults to $pfb['pfctl']; pass explicitly when the binary is a
+// per-call parameter (e.g. pfb_apply_alias_delta, which accepts a mock binary in tests).
+function pfb_pfctl_table_op(string $table, string $op, string $args = '', string $pfctl_bin = ''): array {
+	global $pfb;
+	if ($pfctl_bin === '') {
+		$pfctl_bin = $pfb['pfctl'];
+	}
+	$table_esc = escapeshellarg($table);
+	$args_part = $args !== '' ? " {$args}" : '';
+	$out       = [];
+	$rc        = 0;
+	exec("{$pfctl_bin} -t {$table_esc} -T {$op}{$args_part} 2>&1", $out, $rc);
+	$stderr    = implode(' ', $out);
+	if ($rc !== 0 || stripos($stderr, 'pfctl:') !== FALSE || stripos($stderr, 'Table does not exist') !== FALSE) {
+		pfb_logger(pfb_pfctl_error_message($table, $op, $rc, $stderr) . "\n", 1);
+	}
+	return ['out' => $out, 'rc' => $rc];
+}
+
+
 // ADR-11 Phase 3: build + register the opt-in per-type aggregate ("Uber") Native aliases.
 //
 // ONE generic loop over the type->dir map {Deny,Permit,Match,Native} x family {v4,v6}.
@@ -3798,7 +3833,7 @@ function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_li
 					unlink_if_exists("{$aggout}.members");
 					unlink_if_exists("{$aggout}.tmp");
 					// Kill the pf table only when we had built this aggregate before.
-					exec("{$pfb['pfctl']} -t {$aliasname_esc} -T kill 2>&1");
+					pfb_pfctl_table_op($aliasname, 'kill');
 				}
 				continue;
 			}
@@ -3835,9 +3870,9 @@ function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_li
 			// (e.g. an HAProxy graceful reload) always sees the FRESH aggregate. A 0-byte
 			// aggout (empty union) is pruned to an empty table, matching pfB member aliases.
 			if (file_exists($aggout) && filesize($aggout) > 0) {
-				exec("{$pfb['pfctl']} -t {$aliasname_esc} -T replace -f {$aggout_esc} 2>&1");
+				pfb_pfctl_table_op($aliasname, 'replace', "-f {$aggout_esc}");
 			} else {
-				exec("{$pfb['pfctl']} -t {$aliasname_esc} -T kill 2>&1");
+				pfb_pfctl_table_op($aliasname, 'kill');
 			}
 
 			// Merge a (re)built aggregate's name into the changed-alias set so the ADR-12
@@ -4089,7 +4124,7 @@ function pfb_apply_alias_delta(
 
 	// Force replace: boot/enable-disable initial load path.
 	if ($force_replace || $mode === 'replace') {
-		exec("{$pfctl_bin} -t {$table_esc} -T replace -f {$table_file_esc} 2>&1");
+		pfb_pfctl_table_op($table, 'replace', "-f {$table_file_esc}", $pfctl_bin);
 		return FALSE;
 	}
 
@@ -4102,7 +4137,7 @@ function pfb_apply_alias_delta(
 
 	// Churn-ratio fallback: auto mode with large churn → replace.
 	if ($mode === 'auto' && $table_size > 0 && ($churn / $table_size) >= PFB_DELTA_CHURN_THRESHOLD) {
-		exec("{$pfctl_bin} -t {$table_esc} -T replace -f {$table_file_esc} 2>&1");
+		pfb_pfctl_table_op($table, 'replace', "-f {$table_file_esc}", $pfctl_bin);
 		return FALSE;
 	}
 
@@ -4121,7 +4156,7 @@ function pfb_apply_alias_delta(
 		}
 		@file_put_contents($tmp, $entries . "\n");
 		$tmp_esc = escapeshellarg($tmp);
-		exec("{$pfctl_bin} -t {$table_esc} -T add -f {$tmp_esc} 2>&1");
+		pfb_pfctl_table_op($table, 'add', "-f {$tmp_esc}", $pfctl_bin);
 		@unlink($tmp);
 	}
 
@@ -4135,7 +4170,7 @@ function pfb_apply_alias_delta(
 		}
 		@file_put_contents($tmp, $entries . "\n");
 		$tmp_esc = escapeshellarg($tmp);
-		exec("{$pfctl_bin} -t {$table_esc} -T delete -f {$tmp_esc} 2>&1");
+		pfb_pfctl_table_op($table, 'delete', "-f {$tmp_esc}", $pfctl_bin);
 		@unlink($tmp);
 	}
 
@@ -15706,7 +15741,7 @@ function sync_package_pfblockerng($cron='') {
 
 				// Skip any Alias that are 'enabled' but Lists/customlists are not defined.
 				if (empty($list['row'][0]['url']) && empty($list['custom'])) {
-					exec("{$pfb['pfctl']} -t {$alias_esc} -T kill 2>&1", $result);
+					pfb_pfctl_table_op($alias, 'kill');
 					continue;
 				}
 
@@ -16113,11 +16148,11 @@ function sync_package_pfblockerng($cron='') {
 					if (in_array($pfb_table, $final_alias)) {
 						// Active + changed: full -T replace so the kernel table is in sync
 						// before filter_configure() rebuilds the ruleset from the aliasdir file.
-						exec("{$pfb['pfctl']} -t {$pfb_table_esc} -T replace -f {$pfb_table_path_esc} 2>&1", $result);
+						pfb_pfctl_table_op($pfb_table, 'replace', "-f {$pfb_table_path_esc}");
 					}
 				} else {
 					// Remove inactive pfB aliastables
-					exec("{$pfb['pfctl']} -t {$pfb_table_esc} -T kill 2>&1", $result);
+					pfb_pfctl_table_op($pfb_table, 'kill');
 				}
 			}
 		}
@@ -16484,8 +16519,7 @@ function pfblockerng_php_pre_deinstall_command() {
 	exec("{$pfb['pfctl']} -s Tables | {$pfb['grep']} '^pfB_'", $pfb_tables);
 	if (isset($pfb_tables)) {
 		foreach ($pfb_tables as $pfb_table) {
-			$pfb_table_esc = escapeshellarg($pfb_table);
-			exec("{$pfb['pfctl']} -t {$pfb_table_esc} -T kill 2>&1", $result);
+			pfb_pfctl_table_op($pfb_table, 'kill');
 		}
 	}
 
