@@ -12,12 +12,13 @@ correct; under CI the secret is required, so an unset password is a hard failure
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Literal
 
 # Env var carrying the baked webConfigurator admin password (ADR-04 SMOKE_ADMIN_PASSWORD).
 ADMIN_PASSWORD_ENV = "SMOKE_ADMIN_PASSWORD"
 
 
-def admin_password_decision(env: Mapping[str, str]) -> tuple[str, str]:
+def admin_password_decision(env: Mapping[str, str]) -> tuple[Literal["ok", "fail", "skip"], str]:
     """Decide how the ``admin_credentials`` fixture resolves the admin password.
 
     Returns ``(action, value)``:

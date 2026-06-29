@@ -189,7 +189,8 @@ to drive the live webConfigurator. It is off the default `pytest` like the rest 
   (`python -m playwright install chromium`); module-level `importorskip` SKIPs cleanly without it.
 
 Run a tier against a smoke VM exactly like the smoke suite — re-enable the package and select
-the marker (`SMOKE_ADMIN_PASSWORD` must be set, else the UI fixtures SKIP, never fail):
+the marker (`SMOKE_ADMIN_PASSWORD` must be set; if unset the UI fixtures SKIP off-CI but FAIL
+under CI — `CI`/`GITHUB_ACTIONS` — so a missing secret can't pass the tier by skipping it):
 
 ```sh
 python -m pytest tests/smoke/ui -m ui_render --override-ini="addopts="
