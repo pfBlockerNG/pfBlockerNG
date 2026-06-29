@@ -665,6 +665,48 @@ function pfb_mime_normalise(string $raw): string {
 	return $raw;
 }
 
+// ADR-45 Phase 1: pure mapping — canonical archive MIME → base integrity-test argv.
+// Returns the binary + flags array (file NOT included; pfb_validate_archive() appends
+// it at call time so this helper stays pure and trivially oracle-testable).
+// Returns NULL for non-archive types — nothing to probe.
+function pfb_archive_probe(string $canonical_type): ?array {
+	switch ($canonical_type) {
+		case 'application/zip':
+			return array('/usr/bin/tar', '-tf');
+		case 'application/gzip':
+		case 'application/x-gzip':
+			return array('/usr/bin/gunzip', '-t');
+		case 'application/x-bzip2':
+			return array('/usr/bin/bzip2', '-t');
+		case 'application/x-7z-compressed':
+			return array('/usr/local/bin/7z', 't');
+		default:
+			return NULL;
+	}
+}
+
+// ADR-45 Phase 1: run the structural integrity probe for $file.
+// Returns TRUE for non-archive types (nothing to test), TRUE if the probe exits 0
+// (archive is intact), FALSE if the probe exits non-zero (corrupt/truncated archive).
+// The $runner callable(array $argv): int is injectable for unit tests — default runner
+// escapeshellarg()s every element, execs to /dev/null, and returns the exit code.
+// Mirror of the ?callable $guard seam in pfb_find_managed_obj().
+function pfb_validate_archive(string $file, string $canonical_type, ?callable $runner = NULL): bool {
+	$argv = pfb_archive_probe($canonical_type);
+	if ($argv === NULL) {
+		return TRUE;    // non-archive: nothing to test
+	}
+	$argv[] = $file;    // file appended here, escaped in the runner
+	if ($runner === NULL) {
+		$runner = function (array $a): int {
+			$cmd = implode(' ', array_map('escapeshellarg', $a));
+			exec($cmd . ' >/dev/null 2>&1', $out, $rv);
+			return (int) $rv;
+		};
+	}
+	return $runner($argv) === 0;
+}
+
 // Function to filter/sanitize user input
 function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FALSE) {
 	global $pfb;
