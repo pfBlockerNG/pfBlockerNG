@@ -129,12 +129,13 @@ QIEOF
       The contents of file "$ARGV_FILE" should include 'socket,id=net1,connect=127.0.0.1:12340'
     End
 
-    It 'bridge: MGMT net0 is a tap; data net1 stays the connect socket'
+    It 'bridge: MGMT net0 is a tap; data net1 stays the connect socket; no hostfwd'
       When run env SMOKE_NET_MODE=bridge SMOKE_CLIENT_MGMT_TAP=tap-cli0 sh "$SCRIPT" --role client "$BASE" "$OVERLAY"
       The status should be success
       The stderr should include 'boot_vm:'
       The contents of file "$ARGV_FILE" should include 'tap,id=net0,ifname=tap-cli0,script=no,downscript=no'
       The contents of file "$ARGV_FILE" should include 'socket,id=net1,connect=127.0.0.1:12340'
+      The contents of file "$ARGV_FILE" should not include 'hostfwd='
     End
   End
 
@@ -147,10 +148,22 @@ QIEOF
       The stderr should include "SMOKE_NET_MODE must be 'slirp' or 'bridge'"
     End
 
-    It 'bridge mode fails fast (non-zero) when SMOKE_WAN_TAP is unset'
+    It 'pfsense bridge mode fails fast (exit 1) when SMOKE_WAN_TAP is unset'
       When run env SMOKE_NET_MODE=bridge SMOKE_MGMT_TAP=tap-mgmt0 sh "$SCRIPT" --role pfsense "$BASE" "$OVERLAY"
-      The status should not equal 0
+      The status should equal 1
       The stderr should include 'SMOKE_WAN_TAP'
+    End
+
+    It 'pfsense bridge mode fails fast (exit 1) when SMOKE_MGMT_TAP is unset'
+      When run env SMOKE_NET_MODE=bridge SMOKE_WAN_TAP=tap-wan0 sh "$SCRIPT" --role pfsense "$BASE" "$OVERLAY"
+      The status should equal 1
+      The stderr should include 'SMOKE_MGMT_TAP'
+    End
+
+    It 'client bridge mode fails fast (exit 1) when SMOKE_CLIENT_MGMT_TAP is unset'
+      When run env SMOKE_NET_MODE=bridge sh "$SCRIPT" --role client "$BASE" "$OVERLAY"
+      The status should equal 1
+      The stderr should include 'SMOKE_CLIENT_MGMT_TAP'
     End
   End
 End
