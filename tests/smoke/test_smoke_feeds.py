@@ -2355,7 +2355,7 @@ def _have_7z(vm: SmokeVM) -> bool:
     return vm.ssh(f"test -x {_SEVENZIP_BIN} && echo y || echo n").stdout.strip() == "y"
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(120)  # full update + targeted reload + file-detect/7z-probe/extract > the 30s cap on slow CI
 def test_7z_feed_imports(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """ADR-45: a 7z-compressed IP feed imports when 7-Zip is installed.
 
@@ -2387,7 +2387,7 @@ def test_7z_feed_imports(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> N
         assert h.rule_references(deployed_vm, spec.alias), f"no loaded pf rule references {spec.alias} after 7z import"
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(120)  # full update + targeted reload + file-detect/7z-probe > the 30s cap on slow CI
 def test_corrupt_7z_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """ADR-45: a corrupt 7z feed is rejected by the structural probe (when 7-Zip is present).
 
@@ -2417,7 +2417,7 @@ def test_corrupt_7z_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) 
         )
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(120)  # full update + targeted reload + hide/restore the 7z binary > the 30s cap on slow CI
 def test_7z_missing_binary_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """ADR-45: a 7z feed on a box WITHOUT 7-Zip is rejected with a clear "install 7-zip" message.
 
@@ -2435,6 +2435,7 @@ def test_7z_missing_binary_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedS
     stash = "/tmp/pfb_7z_hidden_for_test"
     hidden = False
     if _have_7z(deployed_vm):
+        # ssh() is check=False; a silent mv failure is caught by the assert below (not a wrong pass).
         deployed_vm.ssh(f"mv {_SEVENZIP_BIN} {stash}")
         hidden = True
     try:
