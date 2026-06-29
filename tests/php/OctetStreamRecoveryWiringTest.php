@@ -103,6 +103,18 @@ final class OctetStreamRecoveryWiringTest extends TestCase
 			);
 		}
 
+		// Recovery adopts application/zip only if the structural probe (tar -tf) can list the
+		// junk-prefixed ZIP — which needs bsdtar (the FreeBSD target). On a host whose /usr/bin/tar
+		// is GNU tar (cannot read ZIP), the recovery is untestable — skip rather than fail.
+		$tarout = [];
+		exec('/usr/bin/tar -tf ' . escapeshellarg($this->junkPrefixedZip) . ' >/dev/null 2>&1', $tarout, $tarrv);
+		if ($tarrv !== 0) {
+			$this->markTestSkipped(
+				'/usr/bin/tar on this host cannot read the junk-prefixed ZIP (GNU tar, not bsdtar); '
+				. 'octet-stream->zip recovery is untestable here — skipping'
+			);
+		}
+
 		$result = pfb_filter(
 			["'unused'", $this->junkPrefixedZip, 'http://feed.example/top-1m.csv.zip'],
 			PFB_FILTER_FILE_MIME,

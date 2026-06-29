@@ -183,6 +183,19 @@ final class ArchiveValidateWiringTest extends TestCase
 		$zip->addFromString('data.txt', 'pfblockerng zip wiring test ' . uniqid('', TRUE));
 		$zip->close();
 
+		// pfBlockerNG targets FreeBSD, where /usr/bin/tar IS bsdtar (libarchive) and reads
+		// ZIP — the production probe (application/zip -> tar -tf). On a host whose /usr/bin/tar
+		// is GNU tar (typical Linux CI), tar cannot read ZIP at all, so the probe is untestable
+		// here. Skip rather than fail: it is a host-tool limitation, not a production defect.
+		$tarout = [];
+		exec('/usr/bin/tar -tf ' . escapeshellarg($validPath) . ' >/dev/null 2>&1', $tarout, $tarrv);
+		if ($tarrv !== 0) {
+			$this->markTestSkipped(
+				'/usr/bin/tar on this host cannot read ZIP (GNU tar, not bsdtar/libarchive); '
+				. 'pfBlockerNG targets FreeBSD where /usr/bin/tar is bsdtar — skipping the zip probe wiring here'
+			);
+		}
+
 		$raw = file_get_contents($validPath);
 		$this->assertNotFalse($raw, 'Could not read created zip file');
 		// Truncate: keep only 20 bytes (local file header start; omits end-of-central-dir).
