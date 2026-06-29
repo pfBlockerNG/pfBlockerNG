@@ -8036,9 +8036,9 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 		return FALSE;
 	}
 
-	// Cron update function for md5 comparison
-	if ($type == 'md5') {
-		pfb_logger("\t\t\t\t( md5 feed )\t\t", 1);
+	// Cron change-detection probe (conditional GET + content hash; legacy name was 'md5')
+	if ($type == 'change_detect') {
+		pfb_logger("\t\t\t\t( change check )\t\t", 1);
 	}
 
 	$file_dwn_esc	= escapeshellarg("{$file_dwn}.raw");
@@ -8053,10 +8053,10 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 
 	$md5_download	= trim(escapeshellarg("{$file_dwn}.md5.raw"), "'");
 
-	// If the Cron update function 'md5 comparison' generated an md5 file, re-utilize instead of downloading twice
+	// If the change-detection probe already downloaded the body, re-utilize instead of downloading twice
 	if (file_exists("{$md5_download}")) {
 		$list_download = "{$md5_download}";
-		pfb_logger(' ( md5 feed ) ', 1);
+		pfb_logger(' ( change check ) ', 1);
 	}
 
 	// Download RSYNC format
@@ -8207,9 +8207,9 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				// ADR-42 Phase 3: send a conditional GET when stored validators are
 				// available for this feed's .orig baseline.  ETag → If-None-Match
 				// (primary); Last-Modified epoch → CURLOPT_TIMECONDITION (fallback).
-				// Only applied to the probe ('md5') mode: the sync ingest callers pass
-				// $type == '' and must always receive the full body.
-				if ($type === 'md5') {
+				// Only applied to the probe ('change_detect') mode: the sync ingest callers
+				// pass $type == '' and must always receive the full body.
+				if ($type === 'change_detect') {
 					// Read the validators the detector persisted at {header}.orig, NOT the
 					// probe's infixed {file_dwn}.orig (= {header}.md5.orig) — see
 					// pfb_conditional_get_validator_base().  Otherwise If-None-Match is never
@@ -8378,7 +8378,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 		}
 	}
 
-	// Probe mode for the cron detector (type='md5'): fill $response_meta when
+	// Probe mode for the cron detector (type='change_detect'): fill $response_meta when
 	// the caller requested it (ADR-42 Phase 3 conditional-GET path), then return.
 	// A 304 means "not modified" — the server confirmed the feed unchanged; the
 	// caller (pfb_update_check detector) handles the 304 via pfb_conditional_get_decision.
@@ -8388,7 +8388,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 	// CONTRACT: the caller MUST pass $response_meta = array() (not NULL) to activate
 	// the fill block.  NULL is the sentinel for the two sync callers that do NOT want
 	// the block filled; NULL !== NULL is always FALSE, so NULL silently skips the fill.
-	if ($type == 'md5') {
+	if ($type == 'change_detect') {
 		if ($response_meta !== NULL) {
 			$response_meta = array(
 				'status'  => (string) $http_status,
@@ -10160,7 +10160,7 @@ function pfb_hash_write($base, $path) {
 	return $ok;
 }
 
-// ADR-42 Phase 3: map a probe ('md5' mode) download path to the feed's persisted
+// ADR-42 Phase 3: map a probe ('change_detect' mode) download path to the feed's persisted
 // conditional-GET validator baseline.  The detector (pfb_update_check) persists the
 // ETag/Last-Modified sidecars at {header}.orig (pfb_validator_write on its $local_file),
 // but the probe is handed file_dwn = {header}.md5 so the probe body ({file_dwn}.raw =

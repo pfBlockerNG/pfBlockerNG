@@ -534,7 +534,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 			// ADR-42 Phase 3: replace the HEAD+Last-Modified client-compare and the
 			// whole-feed md5 fallback with a single conditional GET.
 			//
-			// pfb_download() (probe mode, type='md5') downloads the body to
+			// pfb_download() (probe mode, type='change_detect') downloads the body to
 			// {pfborig}/{header}.md5.raw and fills $probe_meta with the response HTTP
 			// status, the response ETag, and the response Last-Modified epoch.  Before
 			// the request it sends If-None-Match (from the stored .etag sidecar) or
@@ -552,7 +552,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 			// manual redirect revalidation loop stay fully intact because the probe goes
 			// through pfb_download(), not a separate bare curl_init().
 			$probe_meta = array();
-			$probe_ok = pfb_download("{$list_download}", "{$pfborig}/{$header}.md5", $pflex, $header, '', 1, '', 300, 'md5', '', '', $srcint, $probe_meta);
+			$probe_ok = pfb_download("{$list_download}", "{$pfborig}/{$header}.md5", $pflex, $header, '', 1, '', 300, 'change_detect', '', '', $srcint, $probe_meta);
 
 			if (!$probe_ok || $probe_meta === NULL) {
 				// Probe failed entirely (connection error, bad URL, etc.) → fail-safe.
