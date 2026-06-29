@@ -59,11 +59,20 @@ on-box verdict and why it matters.
 | `archive_corrupt.bz2` | `application/x-bzip2` | `bzip2 -t` → **rc≠0** | Valid bzip2 truncated mid-block; `bzip2 -t` fails. |
 | `archive_octet_recover.zip` | `application/octet-stream` | `tar -tf` → **rc=0**, extracts the IP list | The #581 recovery case: a valid ZIP behind a short text SFX-stub preamble (`#!/bin/false …`). FreeBSD `file(1)` cannot classify the text-then-binary stream → `application/octet-stream` (not allow-listed), triggering `pfb_octet_recover_type()`, which probes with `bsdtar` (rc=0) → recovers `application/zip` → imports. **Why not a raw `\x00\x01…` prefix:** FreeBSD libmagic misreads that as `image/x-tga` (a non-allow-listed type rejected outright, never reaching recovery), even though macOS/Linux read it as octet-stream. The text preamble avoids every magic rule. |
 | `archive_junk_octet.bin` | `application/octet-stream` | none (not an archive) | The ADR §7 "never blanket-accept octet-stream" branch: pure NUL/control bytes → `octet-stream`, no archive type passes any probe → `pfb_octet_recover_type()` returns NULL → rejected. |
+| `archive_valid.7z` | `application/x-7z-compressed` | `7z t` → **rc=0**, extracts the IP list | First-class 7z import: `file(1)` reports the canonical 7z MIME (allow-listed), the 7z branch runs `7z t` then `7z e -so`. **Created on a real FreeBSD box — there is no stdlib 7z writer**, so this cannot be built inline. Drives `test_7z_feed_imports` and (with the binary hidden) `test_7z_missing_binary_rejected`. |
+| `archive_corrupt.7z` | `application/x-7z-compressed` | `7z t` → **rc≠0** | Truncated 7z; `7z t` fails → the probe rejects (`test_corrupt_7z_rejected`). |
 
-All bodies are inert (RFC 5737 IPs). The recoverable ZIP extracts to `203.0.113.11`
-(`_ADR45_MEMBER`). Regenerate + re-verify on a FreeBSD box if libmagic/libarchive
-behaviour ever shifts; the tests read each file's exact bytes for the on-box
-`file(1)` guard (`_fixture_bytes`), so the served feed and the guard never drift.
+**7-Zip is opportunistic, not shipped** — `/usr/local/bin/7z` is an add-on, not a
+pfBlockerNG `RUN_DEPEND`. The CI smoke image bakes it in so the import/corrupt 7z cases
+run; on a box without it they SKIP. The missing-binary case always runs (it hides the
+binary when present) and asserts the clear "Install the 7-Zip package" log line — so the
+default "no 7-Zip → safe reject + guidance" reality stays covered even on the 7z-baked image.
+
+All bodies are inert (RFC 5737 IPs). The recoverable ZIP and the 7z fixtures extract to
+`203.0.113.11` (`_ADR45_MEMBER`). Regenerate + re-verify on a FreeBSD box if
+libmagic/libarchive (or the 7z build) behaviour ever shifts; the tests read each file's
+exact bytes for the on-box `file(1)` guard (`_fixture_bytes`), so the served feed and the
+guard never drift.
 
 ## Omitted formats (and why)
 
