@@ -27,6 +27,7 @@ import pytest
 
 from ..conftest import SmokeVM
 from ..helpers import REDACTED, parse_redact_values
+from .credgate import admin_password_decision
 from .webui import SESSION_COOKIE, WebUI
 
 if TYPE_CHECKING:
@@ -43,8 +44,7 @@ PFB_READY_PATH = "/pfblockerng/pfblockerng_general.php"
 PFB_READY_ATTEMPTS = 60
 PFB_READY_DELAY = 2.0
 
-# Env var carrying the baked admin password (ADR-04 SMOKE_ADMIN_PASSWORD).
-ADMIN_PASSWORD_ENV = "SMOKE_ADMIN_PASSWORD"
+# The admin password env var ("SMOKE_ADMIN_PASSWORD") + its skip/fail decision live in .credgate.
 # Optional override of the admin username; pfSense's default is "admin".
 ADMIN_USER_ENV = "SMOKE_ADMIN_USER"
 DEFAULT_ADMIN_USER = "admin"
@@ -148,15 +148,18 @@ __all__ = ["REDACTED", "mask_page_identity"]
 def admin_credentials() -> tuple[str, str]:
     """``(username, password)`` for the webConfigurator, from the environment.
 
-    Skips when ``SMOKE_ADMIN_PASSWORD`` is unset so a credential-less local run
-    is a clean skip rather than a login failure.
+    Off-CI (a credential-less local run) an unset ``SMOKE_ADMIN_PASSWORD`` is a clean
+    skip. Under CI it is a HARD FAILURE: the secret is required there, and skipping the
+    whole UI tier while the job still reports green is a false pass (see :mod:`.credgate`).
     """
-    password: str | None = os.environ.get(ADMIN_PASSWORD_ENV)
-    if not password:
-        pytest.skip(f"{ADMIN_PASSWORD_ENV} not set -- no webConfigurator admin password")
-    assert password is not None  # narrow for the type checker (pytest.skip is NoReturn)
+    action, value = admin_password_decision(os.environ)
+    if action == "fail":
+        pytest.fail(value)
+    if action == "skip":
+        pytest.skip(value)
+    # action == "ok": value is the password.
     username = os.environ.get(ADMIN_USER_ENV) or DEFAULT_ADMIN_USER
-    return username, password
+    return username, value
 
 
 @pytest.fixture(scope="session")
