@@ -40,6 +40,31 @@ DNSBL assertion: `dns_probe` block-shape on the box (NOERROR + VIP, or NULL per 
 list's `logging`); the non-member (and the ABP allow-exception, where a feed `@@`
 allow band 2 beats the `||` block band 1) must RESOLVE, not block.
 
+## Archive corpus (ADR-45 — structural integrity)
+
+Binary fixtures for the ADR-45 structural-probe + octet-stream-recovery smoke cases
+(`test_corrupt_*_rejected`, `test_octet_stream_zip_recovered`,
+`test_junk_octet_stream_rejected` in `test_smoke_feeds.py`). **Committed rather than
+built inline** because the relevant FreeBSD tooling (`file(1)` libmagic, `bsdtar`
+libarchive) classifies/parses these bytes DIFFERENTLY from the macOS/Linux dev+CI
+host — an inline fixture that looked corrupt/octet-stream on the dev box behaved as
+valid/`image/x-tga` on the live pfSense VM. Each file below is **verified on a
+pfSense CE 2.8 box** (FreeBSD 15, `file-5.46`, `bsdtar 3.7.7`); the table records the
+on-box verdict and why it matters.
+
+| File | on-box `file(1)` | integrity test | Purpose / FreeBSD peculiarity |
+| --- | --- | --- | --- |
+| `archive_corrupt.zip` | `application/zip` | `tar -tf` → **rc≠0** | Leading local-header signature (`PK\x03\x04`) clobbered, **EOCD left intact**. `file(1)` still reports `application/zip` (it reads the EOCD) → the ZIP branch runs, and `bsdtar -tf` fails on the broken header → the probe rejects. **Why not just truncate:** libarchive streams local headers without needing the central directory, so a tail-truncated ZIP still lists+extracts (`tar -tf` rc=0) and is NOT rejected. |
+| `archive_corrupt.gz` | `application/gzip` | `gunzip -t` → **rc≠0** | Valid gzip truncated past the header (no payload/CRC/ISIZE trailer). gzip is a single stream with no streamable directory, so truncation IS reliably corrupt to the codec. |
+| `archive_corrupt.bz2` | `application/x-bzip2` | `bzip2 -t` → **rc≠0** | Valid bzip2 truncated mid-block; `bzip2 -t` fails. |
+| `archive_octet_recover.zip` | `application/octet-stream` | `tar -tf` → **rc=0**, extracts the IP list | The #581 recovery case: a valid ZIP behind a short text SFX-stub preamble (`#!/bin/false …`). FreeBSD `file(1)` cannot classify the text-then-binary stream → `application/octet-stream` (not allow-listed), triggering `pfb_octet_recover_type()`, which probes with `bsdtar` (rc=0) → recovers `application/zip` → imports. **Why not a raw `\x00\x01…` prefix:** FreeBSD libmagic misreads that as `image/x-tga` (a non-allow-listed type rejected outright, never reaching recovery), even though macOS/Linux read it as octet-stream. The text preamble avoids every magic rule. |
+| `archive_junk_octet.bin` | `application/octet-stream` | none (not an archive) | The ADR §7 "never blanket-accept octet-stream" branch: pure NUL/control bytes → `octet-stream`, no archive type passes any probe → `pfb_octet_recover_type()` returns NULL → rejected. |
+
+All bodies are inert (RFC 5737 IPs). The recoverable ZIP extracts to `203.0.113.11`
+(`_ADR45_MEMBER`). Regenerate + re-verify on a FreeBSD box if libmagic/libarchive
+behaviour ever shifts; the tests read each file's exact bytes for the on-box
+`file(1)` guard (`_fixture_bytes`), so the served feed and the guard never drift.
+
 ## Omitted formats (and why)
 
 CSV/iblocklist, regex, and the ABP IP-anchor (`||1.2.3.4^`) variants are out of the
