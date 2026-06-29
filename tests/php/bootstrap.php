@@ -56,6 +56,12 @@ error_reporting($pfb_prev_er & ~E_DEPRECATED & ~E_WARNING);
 require_once dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc';
 error_reporting($pfb_prev_er);
 
+// Snapshot the SHIPPED $pfb['mime_types'] allow-list exactly as the just-loaded
+// production source defines it, before any test mutates/unsets $GLOBALS['pfb']
+// (several sibling tests overwrite it in setUp/tearDown). This immutable copy
+// lets allow-list oracles assert against the REAL shipped list, not a hand-mirror.
+$GLOBALS['pfb_shipped_mime_types'] = $GLOBALS['pfb']['mime_types'] ?? [];
+
 // 5. Load the setup-wizard controller's FUNCTIONS so the unit suite can invoke
 //    them on shipped code (WizardVipAutoTest -> step3_submitphpaction). The wizard
 //    .inc cannot be require()d as-is here: it opens with four require_once()s —

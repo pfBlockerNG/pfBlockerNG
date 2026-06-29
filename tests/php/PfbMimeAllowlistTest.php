@@ -26,7 +26,7 @@ final class PfbMimeAllowlistTest extends TestCase
 
 	protected function setUp(): void
 	{
-		// Always repopulate from the canonical shipped list (pfblockerng.inc:274-287)
+		// Always repopulate from the canonical shipped list (pfblockerng.inc:274-289)
 		// so sibling-test tearDown() calls that unset $pfb['mime_types'] cannot
 		// affect these oracles. If the shipped list changes, update this mirror.
 		$GLOBALS['pfb']['mime_types'] = array_flip([
@@ -37,6 +37,7 @@ final class PfbMimeAllowlistTest extends TestCase
 			'application/gzip', 'application/x-gzip',
 			'application/x-bzip2',
 			'application/zip',
+			'application/x-7z-compressed',
 		]);
 		$this->allowlist = $GLOBALS['pfb']['mime_types'];
 	}
@@ -91,5 +92,39 @@ final class PfbMimeAllowlistTest extends TestCase
 	{
 		// 'text/plain' is in the shipped allow-list → must be accepted.
 		$this->assertTrue(pfb_mime_in_allowlist('text/plain', $this->allowlist));
+	}
+
+	public function test_pfb_mime_allowlist_accepts_x_7z_compressed(): void
+	{
+		// ADR-45: 'application/x-7z-compressed' is now a first-class archive type
+		// in the shipped allow-list → must be accepted. file(1) reports this MIME
+		// for real 7-Zip archives; the pfb_download() 7z branch (structural-probe
+		// guarded) handles extraction.
+		$this->assertTrue(pfb_mime_in_allowlist('application/x-7z-compressed', $this->allowlist));
+	}
+
+	public function test_shipped_allowlist_includes_x_7z_compressed(): void
+	{
+		// Asserts against the REAL shipped $pfb['mime_types'] captured at bootstrap
+		// (not the hand-mirror above), so reverting the pfblockerng.inc allow-list
+		// entry makes this fail — genuine red→green for the ADR-45 7z addition.
+		$shipped = $GLOBALS['pfb_shipped_mime_types'] ?? [];
+
+		// Sanity: the snapshot is the real, populated list (not empty / not the mirror).
+		$this->assertNotEmpty($shipped, 'shipped mime_types snapshot is empty — bootstrap capture broke');
+		$this->assertTrue(
+			pfb_mime_in_allowlist('application/zip', $shipped),
+			'baseline: application/zip must be in the shipped allow-list'
+		);
+		$this->assertFalse(
+			pfb_mime_in_allowlist('application/octet-stream', $shipped),
+			'baseline: application/octet-stream must NOT be in the shipped allow-list'
+		);
+
+		// The ADR-45 change: 7z is now shipped.
+		$this->assertTrue(
+			pfb_mime_in_allowlist('application/x-7z-compressed', $shipped),
+			'ADR-45: application/x-7z-compressed must be in the shipped allow-list'
+		);
 	}
 }

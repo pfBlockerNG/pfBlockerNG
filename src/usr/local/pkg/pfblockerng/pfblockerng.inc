@@ -284,7 +284,12 @@ $pfb['mime_types'] = array_flip(array(	'inode/x-empty',
 					'application/gzip',
 					'application/x-gzip',
 					'application/x-bzip2',
-					'application/zip'));
+					'application/zip',
+					// ADR-45: first-class 7-Zip feeds. The pfb_download() 7z branch
+					// extracts via /usr/local/bin/7z; the ADR-45 structural probe
+					// (pfb_validate_archive '7z t') guards it, so a box without the
+					// 7-Zip binary cleanly rejects rather than failing mid-extract.
+					'application/x-7z-compressed'));
 
 // pfb_filter constants
 define('PFB_FILTER_HTML', 1);
