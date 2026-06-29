@@ -707,6 +707,20 @@ function pfb_validate_archive(string $file, string $canonical_type, ?callable $r
 	return $runner($argv) === 0;
 }
 
+// ADR-45 Phase 3: seamed recovery helper for application/octet-stream (or empty) MIME.
+// Loops $supported_types in order; returns the first $type for which $validator($file, $type)
+// is TRUE (positive structural identification), or NULL when no probe matches.
+// $validator shape: callable(string $file, string $type): bool — production value is
+// 'pfb_validate_archive'; tests inject a fake closure to exercise the loop without shell.
+function pfb_octet_recover_type(string $file, array $supported_types, callable $validator): ?string {
+	foreach ($supported_types as $type) {
+		if ($validator($file, $type)) {
+			return $type;
+		}
+	}
+	return NULL;
+}
+
 // Function to filter/sanitize user input
 function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FALSE) {
 	global $pfb;
@@ -1100,9 +1114,22 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 					$output[0] = 'text/plain';
 				}
 				else {
-					pfb_logger("\n[PFB_FILTER - {$type}] Failed or invalid Mime Type: [" .  htmlspecialchars($output[0]) . "|" . htmlspecialchars($retval) . "]", 2);
-					unlink_if_exists($input[1]);
-					return FALSE;
+					$recovered = NULL;
+					if ($output[0] === 'application/octet-stream' || empty($output[0])) {
+						$recovered = pfb_octet_recover_type(
+							$input[1],
+							array('application/zip', 'application/gzip', 'application/x-bzip2', 'application/x-7z-compressed'),
+							'pfb_validate_archive'
+						);
+					}
+					if ($recovered !== NULL) {
+						pfb_logger("MIME recovered: octet-stream positively identified as \"" . htmlspecialchars($recovered) . "\" via structural probe", 5);
+						$output[0] = $recovered;
+					} else {
+						pfb_logger("\n[PFB_FILTER - {$type}] Failed or invalid Mime Type: [" .  htmlspecialchars($output[0]) . "|" . htmlspecialchars($retval) . "]", 2);
+						unlink_if_exists($input[1]);
+						return FALSE;
+					}
 				}
 			}
 			$result = htmlspecialchars($output[0]);
