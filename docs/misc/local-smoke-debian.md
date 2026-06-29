@@ -34,12 +34,25 @@ scripts/local-smoke.sh
 # Specific --filter (pytest -k expression rides as one quoted arg, no word-split):
 scripts/local-smoke.sh --filter "test_dns_redirect or test_killstates"
 
-# Different marker:
-scripts/local-smoke.sh --marker ui_render
+# Different marker (e.g. the reboot-persistence tier):
+scripts/local-smoke.sh --marker reboot
 
 # Skip civm (two-VM LAN-client tests will SKIP):
 scripts/local-smoke.sh --no-two-vm
 
+# The ADR-14 Web-UI tiers (ui_render / ui_e2e / ui_browser):
+scripts/local-smoke.sh --marker ui_render
+```
+
+A UI-tier marker auto-scopes the run to `tests/smoke/ui` with the 300s per-test ceiling
+(matching `ui-tests.yml`); `ui_browser` additionally installs the headless Chromium binary on
+the box. **The webConfigurator admin password must be on the box** — the UI fixtures log in over
+the CSRF form, so an unset `SMOKE_ADMIN_PASSWORD` SKIPS the whole tier off-CI (a false-green of
+all-skips). Put it (and an optional `SMOKE_ADMIN_USER`, default `admin`) in the box's
+`~/.ssh/environment` (needs `PermitUserEnvironment yes`) so the on-box pytest inherits it; it
+must match the password baked into the pfSense image the box pulls.
+
+```sh
 # Explicit ref:
 scripts/local-smoke.sh --ref origin/devel
 ```
@@ -57,7 +70,9 @@ the bootstrap command string.
    - `oras` digest-compare → pull pfSense + civm images to `/root/images/{pfsense,civm}` if stale.
    - `sysctl net.ipv4.ip_unprivileged_port_start=53` + `pkill -9 -f qemu-system-x86_64`.
    - `build-leg.sh` → `SMOKE_PKG`.
-   - `run-smoke.sh --paths tests/smoke --marker <M> --timeout 30 [--filter <K>]`.
+   - `run-smoke.sh --paths <P> --marker <M> --timeout <T> [--filter <K>]` — `<P>`/`<T>` derive
+     from the marker (`scripts/lib/smoke-tier.sh`): a UI tier → `tests/smoke/ui` + 300s, else
+     `tests/smoke` + 30s; a `ui_browser` marker also installs Chromium first.
 3. `run-smoke.sh` is the ONE canonical pytest argv — same script CI uses.
 
 The CI `scope=impacted` / min-CE / auto-derived-`-k` defaulting (see
