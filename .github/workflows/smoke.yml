@@ -58,15 +58,6 @@ on:
         description: "pytest -k selector — OVERRIDES the impacted auto-derivation. Blank in impacted scope = the tests changed vs origin/devel (whole marker if none). e.g. 'test_dns_redirect' or 'redirect and not browser'."
         required: false
         default: ""
-      net_mode:
-        description: "Smoke VM network backend (ADR-50): slirp (default) | bridge. Forwarded to each leg's smoke-single.yml; used for the P5 A/B fan-out."
-        required: false
-        type: choice
-        default: "slirp"
-        options:
-          - slirp
-          - bridge
-
   # Called by other workflows. Defaults to the FULL suite so existing callers
   # that pass nothing are unchanged (workflow_call -> scope=full by default).
   workflow_call:
@@ -91,12 +82,6 @@ on:
         required: false
         type: string
         default: ""
-      net_mode:
-        description: "Smoke VM network backend (ADR-50): slirp (default) | bridge. Forwarded to each leg's smoke-single.yml."
-        required: false
-        type: string
-        default: "slirp"
-
   # Daily nightly run — runs the full CE suite every night.
   schedule:
     - cron: "0 7 * * *"
@@ -229,9 +214,6 @@ jobs:
       # input, else the impacted auto-derivation, else blank = whole marker).
       pytest_marker: ${{ needs.prepare.outputs.pytest_marker || 'smoke' }}
       pytest_filter: ${{ needs.prepare.outputs.pytest_filter }}
-      # ADR-50: forward the network backend so the P5 A/B can run the whole fan-out
-      # under bridge mode. Defaults to slirp -> byte-identical to today.
-      net_mode: ${{ inputs.net_mode || 'slirp' }}
     secrets: inherit
 
   # ── 3. AND-gate: green only if ALL legs passed ───────────────────────────────

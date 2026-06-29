@@ -107,54 +107,6 @@ lie**; the image is the Debian client, not pfSense.
 `SMOKE_CLIENT_IMAGE_DIR` must hold **exactly one** `*.qcow2`, so keep it in its own directory
 separate from `SMOKE_IMAGE_DIR`.
 
-## Bridge networking (ADR-50, opt-in)
-
-`SMOKE_NET_MODE=bridge` replaces QEMU SLIRP with tap devices on host Linux bridges for lower
-SSH round-trip latency. **Default is `slirp`** — nothing changes unless you opt in.
-
-### One-time box prerequisites
-
-1. **Install dnsmasq** on each LXC box (it is not installed by default; add it to the box
-   image / LXC template):
-
-   ```sh
-   apt-get install -y dnsmasq
-   ```
-
-   This is a **host** dependency (the bridge DHCP daemon), not a pfSense guest dep — do **not**
-   add it to `scripts/misc/install_deps_CE_2.8.sh`.
-
-2. **LXC `/dev/net/tun` passthrough** (Proxmox host, per container `.conf`, then restart).
-   SLIRP never needed `/dev/net/tun`; LXC's default cgroup policy denies it. Run on the
-   Proxmox host:
-
-   ```text
-   lxc.cgroup2.devices.allow: c 10:200 rwm
-   lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file 0 0
-   ```
-
-   GitHub-hosted runners are VMs with `/dev/net/tun` present — no change needed there.
-
-### Running in bridge mode
-
-```sh
-# Bridge mode: creates br-wan/br-mgmt, taps, and dnsmasq before the first leg.
-scripts/local-smoke.sh --net-mode bridge
-
-# Combined with a filter:
-scripts/local-smoke.sh --net-mode bridge --filter "test_dns_redirect"
-```
-
-`smoke-on-box.sh` calls `scripts/bridge-net.sh up` (ADR-50 P2) which creates the bridges,
-taps, and starts dnsmasq; `bridge-net.sh down` runs as part of each `up` for idempotent
-cleanup of prior state. The tap names (`SMOKE_WAN_TAP`, `SMOKE_MGMT_TAP`,
-`SMOKE_CLIENT_MGMT_TAP`) and the MGMT IPs (`SMOKE_PFSENSE_MGMT_IP=192.168.43.15`,
-`SMOKE_CLIENT_MGMT_IP=192.168.43.16`) are exported into the environment inherited by pytest →
-`boot_vm.sh`.
-
-**Live correctness** (actual network bring-up, DHCP, SSH reachability) is validated by ADR-50
-P5's A/B run — this phase ships the script and its command-contract shellspec, not a live boot.
-
 ## Building the `.pkg` off-FreeBSD (CI reference)
 
 The portable Linux builder reproduces `make package` for this `NO_BUILD` port. For CE 2.8

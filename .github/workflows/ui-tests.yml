@@ -100,11 +100,6 @@ on:
         required: false
         type: string
         default: ""
-      net_mode:
-        description: "Smoke VM network backend (ADR-50): slirp (default) | bridge (tap+dnsmasq on host bridges)."
-        required: false
-        type: string
-        default: "slirp"
   workflow_dispatch:
     inputs:
       image_ref:
@@ -145,14 +140,6 @@ on:
         description: "FreeBSD-ports branch (blank = build-pkg-linux default pfblockerng/use-github)."
         required: false
         default: ""
-      net_mode:
-        description: "Smoke VM network backend (ADR-50): slirp (default, QEMU user-net) | bridge (tap+dnsmasq on host bridges; runs the per-box bridge-net.sh setup first)."
-        required: false
-        type: choice
-        options:
-          - slirp
-          - bridge
-        default: "slirp"
   # Daily Tier-B run (functional + browser). Non-PR-blocking by construction.
   # The `prepare` job guards it to SKIP when there were no commits in the last
   # day (mirrors a smoke-style nightly guard) so an idle repo does not boot a VM.
@@ -384,27 +371,6 @@ jobs:
           # UI job has no civm data-NIC MAC — no --civm-mac flag (deny-by-default: empty).
           sh scripts/resolve-legs.sh vm-identity
 
-      # ADR-50 P2/P4 — bridge networking (opt-in; default slirp skips this step entirely).
-      # Same per-box setup as smoke-single.yml: br-wan/br-mgmt + per-lane taps + a DHCP-only
-      # dnsmasq with static MGMT leases; emits the tap names + MGMT IPs to $GITHUB_ENV for
-      # boot_vm.sh (bridge mode) + conftest. GH runners have /dev/net/tun natively. Runs after
-      # "Resolve VM identity" so RESOLVED_VM_MAC (Plus net1 MAC) keys the pfSense MGMT lease.
-      - name: Set up bridge networking (SMOKE_NET_MODE=bridge)
-        if: ${{ inputs.net_mode == 'bridge' }}
-        env:
-          SMOKE_VM_MAC: ${{ env.RESOLVED_VM_MAC }}
-        run: |
-          set -eu
-          sudo apt-get install -y dnsmasq
-          # Strict allowlist parse — never eval bridge-net.sh output (the values are env-derived).
-          _bridge_env="$(sudo env SMOKE_VM_MAC="${SMOKE_VM_MAC:-}" sh scripts/bridge-net.sh up)"
-          printf '%s\n' "$_bridge_env" | while IFS='=' read -r _k _v; do
-            case "$_k" in
-              SMOKE_WAN_TAP|SMOKE_MGMT_TAP|SMOKE_CLIENT_MGMT_TAP|SMOKE_PFSENSE_MGMT_IP|SMOKE_CLIENT_MGMT_IP)
-                printf '%s=%s\n' "$_k" "$_v" >> "$GITHUB_ENV" ;;
-            esac
-          done
-
       - name: Install oras
         uses: oras-project/setup-oras@v2
 
@@ -533,11 +499,6 @@ jobs:
           # auto-derivation (UI tests changed vs origin/devel), else blank = whole tier.
           PYTEST_FILTER: ${{ needs.prepare.outputs.pytest_filter }}
           MARKER: ${{ steps.tier.outputs.marker }}
-          # Network backend (ADR-50): slirp (default) | bridge. conftest + boot_vm.sh
-          # branch on it; the SMOKE_*_TAP vars come from the bridge-setup step's $GITHUB_ENV.
-          # No SMOKE_STUB_DNS_ADDR override here — conftest defaults it to the WAN bridge IP
-          # (192.168.89.2) in bridge mode, loopback in slirp.
-          SMOKE_NET_MODE: ${{ inputs.net_mode }}
         run: |
           set -eu
           # Delegate to the canonical argv emitter (ADR-47 P4 — drift-kill).
