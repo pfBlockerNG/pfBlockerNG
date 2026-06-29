@@ -24,6 +24,7 @@ with the reason and the access note for Phase 5, NOT silently dropped.
 from __future__ import annotations
 
 import re
+import subprocess
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -971,3 +972,130 @@ def test_page_table_covers_every_pfblockerng_page() -> None:
     excluded_names = {e.name for e in EXCLUDED_FROM_TIER_A}
     assert "geoip_continent_views" in excluded_names
     assert "dnsbl_vip_sinkhole_pages" in excluded_names
+
+
+# ---------------------------------------------------------------------------
+# Tier-B tests — ui_e2e marker; schedule/dispatch-only, NOT PR-blocking.
+# These require VM state setup (seeding files or multi-step POST → GET flows).
+# ---------------------------------------------------------------------------
+
+_PFB_LOG = "/var/log/pfblockerng/pfblockerng.log"
+_SOFTWARE_LOG = "/var/log/pfblockerng/software.log"
+
+
+def _seed_vm_file(vm: SmokeVM, path: str, content: str, *, timeout: float = 30.0) -> None:
+    """Append *content* to *path* on the guest via ``tee -a``.
+
+    Uses ``subprocess.run`` directly so ``input=`` can carry the data (the
+    ``SmokeVM.ssh()`` helper captures stdout/stderr only, no stdin pipe).
+    The parent directory must already exist (``/var/log/pfblockerng/`` is
+    created by pfBlockerNG on install — always present after ``pkg add``).
+    """
+    result = subprocess.run(
+        vm.ssh_argv("tee", "-a", path),
+        input=content,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"_seed_vm_file({path!r}) failed: rc={result.returncode} {result.stderr!r}")
+
+
+@pytest.mark.ui_e2e
+def test_software_textareas_are_readonly(
+    smoke_vm: SmokeVM,
+    webui: WebUI,
+    php_error_log_guard: PhpErrorLogGuard,  # noqa: ARG001
+) -> None:
+    """The Software page's pfb_status and pfb_output textareas carry the readonly attribute.
+
+    Scenario: Software output windows are display-only — they must not be editable.
+      Given the Software page rendered with the override gate forced on,
+      When each log textarea opening tag is located by name,
+      Then it contains the readonly attribute.
+
+    Fail-before / pass-after: before this change the two textareas on the Software page
+    had no readonly attribute (unlike the Update page which already had it). These
+    assertions FAIL on the old markup and PASS only after the attribute is added.
+    Paired with ``test_update_log_textareas_are_readonly`` (Tier A) to prove both pages
+    now carry the attribute.
+
+    The Software page's provenance gate blocks direct GET on the sideload deploy, so the
+    hidden override sentinel is used (same pattern as the other software tests above).
+    """
+    with software_panel_forced(smoke_vm, "on"):
+        body = webui.get(_SOFTWARE_PAGE).text
+        for name in ("pfb_status", "pfb_output"):
+            m = re.search(r"<textarea\b[^>]*\bname=([\"'])" + re.escape(name) + r"\1[^>]*>", body)
+            assert m is not None, f"Software page is missing the '{name}' textarea"
+            tag = m.group(0)
+            assert re.search(r"\breadonly\b", tag), (
+                f"Software page '{name}' textarea is editable (no readonly attribute): {tag!r}"
+            )
+
+
+@pytest.mark.ui_e2e
+def test_update_log_prefills_on_plain_get(
+    smoke_vm: SmokeVM,
+    webui: WebUI,
+    php_error_log_guard: PhpErrorLogGuard,  # noqa: ARG001
+) -> None:
+    """A plain GET of the Update page prefills pfb_output with the last log tail.
+
+    Scenario: After seeding the pfBlockerNG log, a fresh plain GET shows the content.
+      Given a known marker line appended to /var/log/pfblockerng/pfblockerng.log on the VM,
+      When the Update page is GET with no POST parameters,
+      Then the pfb_output textarea's initial value contains the seeded marker.
+
+    Fail-before / pass-after: before this change pfb_output was always rendered empty
+    (value=NULL) on a plain GET, so the textarea content would be blank and the seeded
+    marker absent. After the fix, pfb_log_tail() prefills it, so the marker appears.
+
+    Multi-step (seed → GET) classifies as Tier B per the CLAUDE.md mandate.
+    """
+    seed = "pfb-update-log-prefill-test-marker"
+    _seed_vm_file(smoke_vm, _PFB_LOG, seed + "\n")
+    body = webui.get(_UPDATE_PAGE).text
+    m = re.search(r'<textarea\b[^>]*name="pfb_output"[^>]*>(.*?)</textarea>', body, re.DOTALL)
+    assert m is not None, "Update page is missing the pfb_output textarea in the rendered body"
+    content = m.group(1)
+    assert seed in content, (
+        f"Update page pfb_output is not prefilled on plain GET: "
+        f"expected seed marker {seed!r} in textarea content, got {content[:200]!r}"
+    )
+
+
+@pytest.mark.ui_e2e
+def test_software_log_prefills_on_plain_get(
+    smoke_vm: SmokeVM,
+    webui: WebUI,
+    php_error_log_guard: PhpErrorLogGuard,  # noqa: ARG001
+) -> None:
+    """A plain GET of the Software page prefills pfb_output from software.log.
+
+    Scenario: After seeding /var/log/pfblockerng/software.log, a fresh plain GET shows
+    that content in the pfb_output textarea.
+      Given a known marker line written to software.log on the VM,
+      When the Software page is GET (override gate forced on),
+      Then the pfb_output textarea's initial value contains the seeded marker.
+
+    Fail-before / pass-after: before this change pfb_output was rendered empty on a
+    plain GET (value=NULL). After the fix, pfb_log_tail() reads software.log and prefills
+    the textarea, so the seeded marker appears. A real pkg upgrade is too heavy to
+    simulate in this suite, so the seed-file approach exercises the full prefill path.
+
+    Multi-step (seed → GET) classifies as Tier B per the CLAUDE.md mandate.
+    """
+    seed = "pfb-software-log-prefill-test-marker"
+    _seed_vm_file(smoke_vm, _SOFTWARE_LOG, seed + "\n")
+    with software_panel_forced(smoke_vm, "on"):
+        body = webui.get(_SOFTWARE_PAGE).text
+        m = re.search(r'<textarea\b[^>]*name="pfb_output"[^>]*>(.*?)</textarea>', body, re.DOTALL)
+        assert m is not None, "Software page is missing the pfb_output textarea in the rendered body"
+        content = m.group(1)
+        assert seed in content, (
+            f"Software page pfb_output is not prefilled on plain GET: "
+            f"expected seed marker {seed!r} in textarea content, got {content[:200]!r}"
+        )

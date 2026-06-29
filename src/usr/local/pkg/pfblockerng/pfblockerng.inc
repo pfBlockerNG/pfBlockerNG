@@ -2290,6 +2290,21 @@ function pfbng_text_area_decode($text, $mode=FALSE, $type=TRUE, $idn=FALSE) {
 }
 
 
+/**
+ * Return the last $lines lines of $file as a string; '' if the file is missing or unreadable.
+ *
+ * PURE — library function, no side effects, no globals.
+ */
+function pfb_log_tail(string $file, int $lines = 1000): string
+{
+	if (!file_exists($file) || !is_readable($file)) {
+		return '';
+	}
+	exec('/usr/bin/tail -n ' . escapeshellarg((string)$lines) . ' ' . escapeshellarg($file), $out, $ret);
+	return $ret === 0 ? implode("\n", $out) : '';
+}
+
+
 // Manage log files line limit
 function pfb_log_mgmt() {
 	global $g, $pfb;

@@ -100,14 +100,27 @@ function pfb_software_status($status) {
 // shell-injection surface — the only variable parts are pkg-derived names already
 // escapeshellarg'd by the caller. Returns the command's exit status (0 = success,
 // -1 if it could not be started) so the caller can act on the result.
+// Each streamed line is also written to /var/log/pfblockerng/software.log (truncated at
+// run start) so a subsequent plain GET can prefill the output textarea.
 function pfb_software_run_stream($cmd) {
-	$fh = popen("{$cmd} 2>&1", 'r');
+	$log    = '/var/log/pfblockerng/software.log';
+	$log_fh = @fopen($log, 'w');
+	$fh     = popen("{$cmd} 2>&1", 'r');
 	if (!is_resource($fh)) {
 		pfb_software_output(gettext('Failed to start the task.'));
+		if (is_resource($log_fh)) {
+			@fclose($log_fh);
+		}
 		return -1;
 	}
 	while (($line = fgets($fh)) !== FALSE) {
+		if (is_resource($log_fh)) {
+			@fwrite($log_fh, $line);
+		}
 		pfb_software_output(rtrim($line, "\r\n"));
+	}
+	if (is_resource($log_fh)) {
+		@fclose($log_fh);
 	}
 	return pclose($fh);
 }
@@ -280,19 +293,21 @@ $section->addInput(new Form_StaticText(null, $btn_uninstall))
 $form->add($section);
 
 // Live terminal window (shown when an Update is streaming).
+// Plain GET (no active update/uninstall stream) → prefill pfb_output with the last software log.
+$pfb_sw_active = ($pfb_sw_action !== '');
 $section = new Form_Section('Output');
 $section->addInput(new Form_Textarea(
 	'pfb_status',
 	null,
 	'Standby'
 ))->removeClass('form-control')->addClass('row-fluid col-sm-12')->setAttribute('rows', '1')->setAttribute('wrap', 'off')
-  ->setAttribute('style', 'background:#fafafa; width: 100%');
+  ->setAttribute('readonly', 'readonly')->setAttribute('style', 'background:#fafafa; width: 100%');
 $section->addInput(new Form_Textarea(
 	'pfb_output',
 	null,
-	null
+	$pfb_sw_active ? null : pfb_log_tail('/var/log/pfblockerng/software.log')
 ))->removeClass('form-control')->addClass('row-fluid col-sm-12')->setAttribute('rows', '20')->setAttribute('wrap', 'off')
-  ->setAttribute('style', 'background:#fafafa; width: 100%');
+  ->setAttribute('readonly', 'readonly')->setAttribute('style', 'background:#fafafa; width: 100%');
 $form->add($section);
 
 print($form);
