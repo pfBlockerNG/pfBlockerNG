@@ -1,6 +1,10 @@
 # ADR-50: Bridge networking for the smoke VMs (SLIRP → tap+bridge)
 
-- **Status:** **Proposed** (2026-06-29; de-risked on both environments; **P1–P4 landed** — P1 `SMOKE_NET_MODE` toggle in `boot_vm.sh` (PR #615); P2 per-box `bridge-net.sh` + box-setup wiring, P3 conftest SSH/stub-DNS targeting, P4 CI bridge-setup steps (PR #616). **P5 (the live A/B) is the remaining work before Accept.**)
+- **Status:** **Rejected** (2026-06-29) — P1–P4 were implemented and the P5 live A/B ran, but
+  bridge mode showed **no wall-clock win** (per-step parity with slirp; the smoke run is
+  guest-compute-bound, not transport-bound) and exposed a hermetic-egress WAN-path gap. The
+  `SMOKE_NET_MODE` machinery is being **removed in full**; `slirp` remains the sole backend. Full
+  outcome in **§9**. (History: P1 `SMOKE_NET_MODE` toggle, PR #615; P2–P4 setup/conftest/CI, PR #616.)
 - **Date:** 2026-06-29
 - **Branch:** ADR text authored directly on `devel` (ADR-text carve-out); implementation on `smoke/bridge-networking` via the normal PR flow / **Component(s):** `tests/smoke/boot_vm.sh`, `tests/smoke/conftest.py`, the box-setup/lease path (ADR-47), `.github/workflows/{smoke-single,ui-tests}.yml`
 - **Target runtime:** GitHub Actions runners (CI) + developer LXC/KVM boxes (local) — POSIX sh + Python 3.11
@@ -207,15 +211,30 @@ for the local path, not an acceptance blocker for CI.
 
 ---
 
-### Handoff note for the next agent
+## 9. Outcome — Rejected (2026-06-29)
 
-**P1–P4 have landed** (PR #615 + #616): the toggle, `scripts/bridge-net.sh` + its box-setup/CI
-wiring, the conftest targeting, and the CI steps are all on `devel`, with `slirp` the byte-identical
-default. **Resume at P5 (§5.5) — the live A/B.** Dispatch the live-VM smoke fan-out under both modes
-(e.g. `gh workflow run smoke.yml -f net_mode=bridge -f scope=full`, and the UI fan-out likewise),
-compare the `PFB_TIMING` per-step + total wall-clock against the slirp baseline, and flip the default
-to `bridge` **only** if it is a clear win on CE+Plus. P5 also finalizes the live-only mechanics the
-off-box gates can't prove (tap ownership vs non-root QEMU; dnsmasq actually serving DHCP + option
-3/6, §7.3) — the §7 de-risk proved a bridge boot works on a GH runner, so this is wiring confirmation,
-not a redesign. The full design + every gotcha are above; the proven derisk harness `bridge-derisk.sh`
-is in the original session scratchpad.
+P1–P4 were implemented (PR #615 + #616) and the **P5 live A/B** ran the full CE+Plus smoke fan-out
+on the same commit under both modes ([slirp run 28360739642](https://github.com/pfBlockerNG/pfBlockerNG/actions/runs/28360739642),
+[bridge run 28360747842](https://github.com/pfBlockerNG/pfBlockerNG/actions/runs/28360747842)). The result rejects the hypothesis:
+
+- **Bridge transport works.** The guest booted, took the static MGMT lease (`192.168.43.15`), and the
+  harness drove it over the bridge (`sshd … 192.168.43.15:22`); DNS probes + most feed tests ran. The
+  feared tap-ownership / non-root-QEMU issue (§7) was a **non-issue** on the GH runner.
+- **No wall-clock win.** For every step both legs ran, `PFB_TIMING` medians are within noise
+  (`reload:cron` 35.72 s vs 35.84 s; `php_eval` 1.57 vs 1.55; `pfb_trigger` 3.35 vs 3.02; ssh: means
+  equal). The smoke run is **guest-compute-bound** (PHP feed-parse + `filter_configure`), exactly the
+  ADR's §1 "honest scope" caveat — SLIRP's transport latency was never the bottleneck, so removing it
+  buys ≈ nothing.
+- **WAN-path gap.** The hermetic egress block (`helpers.block_egress`, CI smoke only) opens only
+  loopback (`-o lo`). slirp's feed path is NAT'd to `127.0.0.1` so it survives; bridge reaches the
+  mock feed server at the runner's `br-wan` IP (`192.168.89.2`) — a non-loopback interface the block
+  severs → 255 `cURL Error: 7` → feed-test errors + the 45-min job timeout. It passed locally / in the
+  §7 de-risk because `SMOKE_BLOCK_EGRESS` is set **only** by the CI smoke matrix (not `local-smoke.sh`,
+  not the de-risk harness), so the egress-blocked feed path over a bridge had never run anywhere else.
+
+**Decision:** since fixing the egress carve-out would yield a *passing* but still not *faster* bridge
+(the timing parity is independent of the WAN bug), bridge mode is **not worth carrying even as opt-in**.
+The `SMOKE_NET_MODE` machinery (P1–P4) is **removed in full** — `boot_vm.sh` toggle, `scripts/bridge-net.sh`,
+the conftest targeting, the box-setup/CI wiring, and the docs — restoring slirp-only. The independent
+`cleanup()` exit-status fix from P1 (§6) is a genuine bug fix and is **kept**. Removal PR tracked
+separately; this ADR stands as the record of why bridge was tried and dropped.
