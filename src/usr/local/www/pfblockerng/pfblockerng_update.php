@@ -429,6 +429,9 @@ $section->addInput(new Form_StaticText(
 $form->add($section);
 
 // ---- Log section ----
+// Plain GET (not a Run Now POST and not a live-view) → prefill pfb_output with the last log tail.
+$pfb_log_active = (isset($_POST['run']) && $_POST['run']) ||
+                  (isset($pconfig['log_view']) && $pconfig['log_view'] !== 'View');
 $section = new Form_Section('Log');
 $section->addInput(new Form_Textarea(
 	'pfb_status',
@@ -440,7 +443,7 @@ $section->addInput(new Form_Textarea(
 $section->addInput(new Form_Textarea(
 	'pfb_output',
 	NULL,
-	NULL
+	$pfb_log_active ? NULL : pfb_log_tail($pfb['log'])
 ))->removeClass('form-control')->addClass('row-fluid col-sm-12')->setAttribute('rows', '30')->setAttribute('wrap', 'off')
   ->setAttribute('readonly', 'readonly')->setAttribute('style', 'background:#fafafa; width: 100%');
 
