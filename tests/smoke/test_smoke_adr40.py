@@ -272,6 +272,9 @@ def test_adr40_content_gate_fires_on_change(adr40_vm: SmokeVM) -> None:
     h.force_ip_refetch(adr40_vm, f"{ip_spec.header}_{ip_spec.family}")
 
     h.clear_hook_markers(adr40_vm, token)
+    # Capture the log size BEFORE the change reload so the "Updating:" formatting check below
+    # inspects ONLY this reload's output, not the session-accumulated log (order-independent).
+    log_len_before = len(adr40_vm.ssh("cat", h.PFB_LOG).stdout)
     h.reload(adr40_vm, "update")
     env_changed = h.read_hook_env(adr40_vm, marker)
     assert env_changed is not None, "post hook did not fire after feed content change"
@@ -296,14 +299,15 @@ def test_adr40_content_gate_fires_on_change(adr40_vm: SmokeVM) -> None:
     # The content change ran the no-rule-change reload path, which logs a per-alias
     # " Updating: <alias>" line. Those lines must render CONTIGUOUSLY (one per line), not
     # blank-separated — a leading "\n" in the log format put a blank line above every entry.
-    # Guard the exact regression: no "Updating:" entry preceded by a blank line.
-    reload_log = adr40_vm.ssh("cat", h.PFB_LOG).stdout
+    # Inspect only THIS reload's slice of the log (order-independent — the session VM's log
+    # accumulates across tests), guarding the exact regression: no entry preceded by a blank line.
+    reload_log = adr40_vm.ssh("cat", h.PFB_LOG).stdout[log_len_before:]
     assert " Updating:" in reload_log, (
         f"expected a per-alias ' Updating:' line in the reload log after a content change:\n{reload_log[-1500:]}"
     )
     assert "\n\n Updating:" not in reload_log, (
         "per-alias ' Updating:' log lines are blank-separated (a leading newline in the log "
-        f"format); they must be contiguous:\n{reload_log[-1500:]}"
+        f"format) — they must be contiguous:\n{reload_log[-1500:]}"
     )
 
     h.clear_update_hooks(adr40_vm)
