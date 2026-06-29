@@ -2590,7 +2590,10 @@ function pfb_log_reset(): void
 function pfb_logger($log, $logtype) {
 	global $g, $pfb;
 
-	$now = date('m/j/y H:i:s', time());
+	// ISO-8601 'YYYY-MM-DD HH:MM:SS' (unambiguous, locale-independent, sorts lexically).
+	// The "FAIL" error-log greps in pfblockerng.inc + the dashboard widget match THIS log
+	// timestamp by today's date, so they use the same Y-m-d pattern (keep them in lockstep).
+	$now = date('Y-m-d H:i:s', time());
 
 	// Only log timestamp if new
 	if (strpos($log, 'NOW') !== FALSE) {
@@ -6281,7 +6284,7 @@ function pfb_unbound_python($mode) {
 
 		$forwarding = (config_get_path('unbound/forwarding') == 'on') ? 'on' : 'off';
 
-		$now = date('m/j/y H:i:s', time());
+		$now = date('Y-m-d H:i:s', time());	// ISO-8601 (py_unbound.ini "File created" comment)
 
 		$pfb_py_conf = <<<EOF
 ; pfBlockerNG DNSBL Unbound python configuration file
@@ -8775,12 +8778,13 @@ function pfb_failures() {
 	$pfb['failed'] = array();
 
 	if (file_exists("{$pfb['errlog']}")) {
-		$today_date = date('m/j/y', time());
+		$today_date = date('Y-m-d', time());	// matches pfb_logger()'s ISO-8601 log timestamp
 		exec("{$pfb['grep']} 'FAIL' {$pfb['errlog']} | {$pfb['grep']} {$today_date}", $results);
 		if (!empty($results)) {
 			foreach ($results as $result) {
 				$header = explode(' ', $result);
-				$pfb['failed'][$header[4]] += 1;
+				$alias  = $header[4] ?? '';
+				$pfb['failed'][$alias] = ($pfb['failed'][$alias] ?? 0) + 1;	// avoid PHP 8 undefined-key warning on first failure
 			}
 		}
 	}
