@@ -88,6 +88,14 @@ on:
         description: "FreeBSD-ports branch (blank = build-pkg-linux default pfblockerng/use-github)."
         required: false
         default: ""
+      net_mode:
+        description: "Smoke VM network backend (ADR-50): slirp (default, QEMU user-net) | bridge (tap+dnsmasq on host bridges; runs the per-box bridge-net.sh setup first)."
+        required: false
+        type: choice
+        options:
+          - slirp
+          - bridge
+        default: "slirp"
   workflow_call:
     inputs:
       image_ref:
@@ -150,6 +158,11 @@ on:
         required: false
         type: string
         default: ""
+      net_mode:
+        description: "Smoke VM network backend (ADR-50): slirp (default) | bridge. The fan-out (smoke.yml) forwards its own net_mode input here."
+        required: false
+        type: string
+        default: "slirp"
   # Nightly gated run — enable once the wall-time is confirmed within budget.
   # schedule:
   #   - cron: "0 5 * * *"
@@ -458,6 +471,32 @@ jobs:
           # --civm-mac passes the civm data-NIC MAC for masking + redaction (deny-by-default: empty).
           sh scripts/resolve-legs.sh vm-identity --civm-mac "${CLIENT_MAC:-}"
 
+      # ADR-50 P2/P4 — bridge networking (opt-in; default slirp skips this step entirely).
+      # GH-hosted runners ship /dev/net/tun natively, so no host change is needed (the §7.1
+      # LXC tun passthrough is a local-box-only prerequisite). bridge-net.sh creates
+      # br-wan/br-mgmt + per-lane taps + a DHCP-only dnsmasq with static MGMT leases, then
+      # emits the tap names + MGMT IPs we forward to $GITHUB_ENV so boot_vm.sh (bridge mode)
+      # and conftest pick them up. Runs AFTER "Resolve VM identity" so RESOLVED_VM_MAC (the
+      # Plus net1 MAC, secret-derived) is available; the pfSense MGMT static lease keys on it.
+      - name: Set up bridge networking (SMOKE_NET_MODE=bridge)
+        if: ${{ inputs.net_mode == 'bridge' }}
+        env:
+          # net1/MGMT MAC for the static lease: CE -> empty -> bridge-net.sh's CE default;
+          # Plus -> the secret-derived RESOLVED_VM_MAC list (bridge-net.sh reads line 2).
+          SMOKE_VM_MAC: ${{ env.RESOLVED_VM_MAC }}
+        run: |
+          set -eu
+          sudo apt-get install -y dnsmasq
+          # `ip`/`dnsmasq` need root; pass SMOKE_VM_MAC through sudo's env reset explicitly.
+          eval "$(sudo env SMOKE_VM_MAC="${SMOKE_VM_MAC:-}" sh scripts/bridge-net.sh up)"
+          {
+            echo "SMOKE_WAN_TAP=${SMOKE_WAN_TAP}"
+            echo "SMOKE_MGMT_TAP=${SMOKE_MGMT_TAP}"
+            echo "SMOKE_CLIENT_MGMT_TAP=${SMOKE_CLIENT_MGMT_TAP}"
+            echo "SMOKE_PFSENSE_MGMT_IP=${SMOKE_PFSENSE_MGMT_IP}"
+            echo "SMOKE_CLIENT_MGMT_IP=${SMOKE_CLIENT_MGMT_IP}"
+          } >> "$GITHUB_ENV"
+
       # HERMETICITY (ADR §2/§4): the egress block is done INSIDE pytest, by the
       # matrix's `deployed_vm` fixture, after deploy() and before the per-case
       # assertions (helpers.block_egress, gated by SMOKE_BLOCK_EGRESS=1 below;
@@ -526,10 +565,16 @@ jobs:
           SMOKE_DNSBL_VIP4: ${{ secrets.SMOKE_DNSBL_VIP4 || vars.SMOKE_DNSBL_VIP4 }}
           SMOKE_CONTROL_NAME: ${{ secrets.SMOKE_CONTROL_NAME || vars.SMOKE_CONTROL_NAME }}
           SMOKE_CONTROL_IP: ${{ secrets.SMOKE_CONTROL_IP || vars.SMOKE_CONTROL_IP }}
+          # Network backend (ADR-50): slirp (default) | bridge. conftest + boot_vm.sh
+          # branch on this; boot_vm.sh also reads the SMOKE_*_TAP vars the bridge-setup
+          # step wrote to $GITHUB_ENV.
+          SMOKE_NET_MODE: ${{ inputs.net_mode }}
           # System-DNS upstream wiring: the mock binds the runner loopback :53, and
-          # pfSense forwards to the SLIRP host alias 10.0.2.2 which libslirp NATs
+          # pfSense forwards to the SLIRP host alias 192.168.89.2 which libslirp NATs
           # (port-preserving) straight to that mock — no /etc/resolv.conf involvement.
-          SMOKE_STUB_DNS_ADDR: "127.0.0.1"
+          # bridge mode has no NAT alias: the mock binds the WAN BRIDGE IP 192.168.89.2:53
+          # directly (the guest reaches it on the bridge), so the bind address flips.
+          SMOKE_STUB_DNS_ADDR: ${{ inputs.net_mode == 'bridge' && '192.168.89.2' || '127.0.0.1' }}
           SMOKE_STUB_DNS_PORT: "53"
         run: |
           set -eu
