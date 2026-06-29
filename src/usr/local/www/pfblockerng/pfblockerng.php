@@ -1466,7 +1466,7 @@ function pfblockerng_uc_countries() {
 						$pfb_file = "{$pfb['ccdir']}/Top_Spammers_v{$type}.info";
 
 						if (!file_exists($pfb_file)) {
-							$header  = '# Generated from MaxMind Inc. on: ' . date('m/j/y G:i:s', time()) . "\n";
+							$header  = '# Generated from MaxMind Inc. on: ' . date('Y-m-d H:i:s', time()) . "\n";
 							$header .= "# Continent IPv{$type}: Top_Spammers\n";
 							$header .= "# Continent en: Top_Spammers\n";
 							@file_put_contents($pfb_file, $header, LOCK_EX);
@@ -1494,7 +1494,7 @@ function pfblockerng_uc_countries() {
 							$pfb_file_esc	= escapeshellarg($pfb_file);
 
 							if (!file_exists($pfb_file)) {
-								$header  = '# Generated from MaxMind Inc. on: ' . date('m/j/y G:i:s', time()) . "\n";
+								$header  = '# Generated from MaxMind Inc. on: ' . date('Y-m-d H:i:s', time()) . "\n";
 								$header .= "# Continent IPv{$type}: {$geoip['continent']}\n";
 								$header .= "# Continent en: {$geoip['continent_en']}\n";
 								@file_put_contents($pfb_file, $header, LOCK_EX);

@@ -485,7 +485,7 @@ function pfBlockerNG_get_failed() {
 	$response = '';
 
 	// Collect any failed downloads
-	$today_date = date('m/j/y', time());
+	$today_date = date('Y-m-d', time());	// matches pfb_logger()'s ISO-8601 log timestamp
 	exec("{$pfb['grep']} 'FAIL' {$pfb['errlog']} | {$pfb['grep']} {$today_date}", $results);
 	$results = array_reverse($results);
 
