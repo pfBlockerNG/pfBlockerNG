@@ -1452,7 +1452,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 		'States Removal',
 		$pconfig['stateremoval'],
 		$options_stateremoval
-	))->setHelp('With the \'Kill States\' option (General Tab), you can disable States removal for this Alias.');
+	))->setHelp('With the \'Kill States\' option (IP Tab), you can disable States removal for this Alias.');
 
 	$form->add($section);
 
