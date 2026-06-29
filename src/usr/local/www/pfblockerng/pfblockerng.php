@@ -234,7 +234,7 @@ if ($argv[1] == 'bl' || $argv[1] == 'bls') {
 }
 
 // Call include file and collect updated Global settings
-if (in_array($argv[1], array('update', 'updateip', 'updatednsbl', 'dc', 'dcc', 'bu', 'uc', 'gc', 'al', 'asn', 'asn_shell', 'bl', 'bls', 'cron', 'ugc', 'pfb_trigger', 'tick'))) {
+if (in_array($argv[1], array('update', 'updateip', 'updatednsbl', 'dc', 'dcc', 'bu', 'uc', 'gc', 'al', 'asn', 'asn_shell', 'bl', 'bls', 'cron', 'ugc', 'pfb_trigger', 'tick', 'forcecheck'))) {
 	pfb_global();
 
 	$pfb['extras_update'] = FALSE;  // Flag when Extras (MaxMind/TOP1M) are updateded via cron job
@@ -277,6 +277,23 @@ if (in_array($argv[1], array('update', 'updateip', 'updatednsbl', 'dc', 'dcc', '
 				$pfb_ttrigger = 'manual';
 			}
 			sync_package_pfblockerng(array('scope' => $pfb_tscope, 'force' => $pfb_tforce, 'trigger' => $pfb_ttrigger));
+			break;
+		case 'forcecheck':	// On-demand detector: bypass hour-gate, run pfb_update_check for all in-scope feeds.
+			// Usage: pfblockerng.php forcecheck scope=<both|ip|dnsbl>
+			// Validators (and optionally hashes) must be cleared by the caller before dispatching
+			// this verb so the detector re-fetches and re-evaluates feed content.
+			$pfb_fcscope = 'both';
+			foreach (array_slice($argv, 2) as $pfb_fcarg) {
+				if (str_starts_with($pfb_fcarg, 'scope=')) {
+					$pfb_fcscope = substr($pfb_fcarg, 6);
+				}
+			}
+			if (!in_array($pfb_fcscope, array('ip', 'dnsbl', 'both'), TRUE)) {
+				pfb_logger("forcecheck: unknown scope={$pfb_fcscope} ignored — defaulting to 'both'\n", 1);
+				$pfb_fcscope = 'both';
+			}
+			pfb_logger("\n [ Force check - scope={$pfb_fcscope} ]\n", 1);
+			pfblockerng_sync_cron(TRUE, $pfb_fcscope);
 			break;
 		case 'dc':		// Update Extras - MaxMind/TOP1M/ASN database files
 		case 'dcc':
@@ -689,8 +706,13 @@ function pfblockerng_download_extras($timeout=600, $type='') {
 	}
 }
 
-// Function to update Lists/Feeds as per Cron
-function pfblockerng_sync_cron() {
+// Function to update Lists/Feeds as per Cron.
+// $force_all — when TRUE, bypass the per-list hour-gate and call pfb_update_check()
+//   unconditionally for every non-disabled, non-Hold, non-Never row (used by forcecheck).
+//   Defaults to FALSE to preserve the existing cron behaviour byte-identically.
+// $scope — 'both' (default), 'ip', or 'dnsbl'; filters which list types are probed.
+//   Defaults to 'both' so existing callers (case 'cron') are unchanged.
+function pfblockerng_sync_cron($force_all = FALSE, $scope = 'both') {
 	global $pfb, $pfbarr;
 
 	$hour = date('G');
@@ -701,6 +723,11 @@ function pfblockerng_sync_cron() {
 
 	$list_type = array('pfblockernglistsv4' => '_v4', 'pfblockernglistsv6' => '_v6', 'pfblockerngdnsbl' => '_v4');
 	foreach ($list_type as $ltype => $vtype) {
+		// Scope filter: skip list types not covered by $scope.
+		$is_dnsbl = ($ltype === 'pfblockerngdnsbl');
+		if ($scope === 'ip'    &&  $is_dnsbl) { continue; }
+		if ($scope === 'dnsbl' && !$is_dnsbl) { continue; }
+
 		foreach (config_get_path("installedpackages/{$ltype}/config", []) as $list) {
 			if (isset($list['row']) && $list['action'] != 'Disabled' && $list['cron'] != 'Never') {
 				foreach ($list['row'] as $row) {
@@ -742,23 +769,28 @@ function pfblockerng_sync_cron() {
 							$pflex = TRUE;
 						}
 
-						switch ($list['cron']) {
-							case 'EveryDay':
-								if ($hour == $pfb['24hour']) {
-									pfb_update_check($header, $row['url'], $pfbfolder, $pfborig, $pflex, $row['format'], $vtype, $srcint);
-								}
-								break;
-							case 'Weekly':
-								if ($hour == $pfb['24hour'] && $dow == $list['dow']) {
-									pfb_update_check($header, $row['url'], $pfbfolder, $pfborig, $pflex, $row['format'], $vtype, $srcint);
-								}
-								break;
-							default:
-								$pfb_sch = pfb_cron_base_hour($list['cron']);
-								if (in_array($hour, $pfb_sch)) {
-									pfb_update_check($header, $row['url'], $pfbfolder, $pfborig, $pflex, $row['format'], $vtype, $srcint);
-								}
-								break;
+						if ($force_all) {
+							// Bypass the hour-gate: check every in-scope feed unconditionally.
+							pfb_update_check($header, $row['url'], $pfbfolder, $pfborig, $pflex, $row['format'], $vtype, $srcint);
+						} else {
+							switch ($list['cron']) {
+								case 'EveryDay':
+									if ($hour == $pfb['24hour']) {
+										pfb_update_check($header, $row['url'], $pfbfolder, $pfborig, $pflex, $row['format'], $vtype, $srcint);
+									}
+									break;
+								case 'Weekly':
+									if ($hour == $pfb['24hour'] && $dow == $list['dow']) {
+										pfb_update_check($header, $row['url'], $pfbfolder, $pfborig, $pflex, $row['format'], $vtype, $srcint);
+									}
+									break;
+								default:
+									$pfb_sch = pfb_cron_base_hour($list['cron']);
+									if (in_array($hour, $pfb_sch)) {
+										pfb_update_check($header, $row['url'], $pfbfolder, $pfborig, $pflex, $row['format'], $vtype, $srcint);
+									}
+									break;
+							}
 						}
 					}
 				}

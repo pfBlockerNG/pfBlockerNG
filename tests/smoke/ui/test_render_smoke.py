@@ -369,13 +369,13 @@ def test_update_log_textareas_are_readonly(webui: WebUI) -> None:
 
 
 def test_update_revamp_controls_render(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
-    """Phase-6 Update page revamp: new scope/force controls present; old opaque ones gone.
+    """Update page revamp: new scope + force-mode controls present; old opaque ones gone.
 
     The opaque Force/Update/Cron/Reload radio trio was replaced with an explicit Run
-    Scope radio (ip / dnsbl / both) and a Force Reparse checkbox.  A read-only Schedule
-    section now shows last-run and next-due per ledger job.
+    Scope radio (ip / dnsbl / both) and a Force radio group (none / parse / download /
+    both).  A read-only Schedule section shows last-run and next-due per ledger job.
 
-    Scenario: Update page revamp controls render after Phase 6.
+    Scenario: Update page revamp controls render after Phase 6 + Force-mode addition.
       Background: pfBlockerNG deployed; Update page renders cleanly.
 
     Given the Update page renders via the clean-render oracle (200, no PHP diagnostic,
@@ -385,14 +385,15 @@ def test_update_revamp_controls_render(webui: WebUI, php_error_log_guard: PhpErr
 
     Then the new scope radio IDs are PRESENT (``pfb_scope_both``, ``pfb_scope_ip``,
       ``pfb_scope_dnsbl``) — proving the scope selector rendered;
-    And the Force Reparse checkbox name is PRESENT (``pfb_run_force``) — proving the
-      force toggle rendered;
-    And ``Run Scope`` and ``Force Reparse`` group labels are PRESENT — proving the new
-      form groups rendered;
+    And the Force radio group field name is PRESENT (``pfb_force_mode``) — proving the
+      four-mode force selector rendered (none / parse / download / both);
+    And ``Run Scope`` and ``Force`` group labels are PRESENT — proving the new form
+      groups rendered;
     And ``Schedule`` section text is PRESENT — proving the new section rendered;
     And the old opaque radio IDs are ABSENT (``pfb_force_update``, ``pfb_force_cron``,
       ``pfb_force_reload``, ``pfb_reload_option_all``) — PRESENT before Phase 6 in the
-      old Force/Reload radio groups, so their absence is the before/after fail guard.
+      old Force/Reload radio groups, so their absence is the before/after fail guard;
+    And the old ``pfb_run_force`` checkbox name is ABSENT — replaced by ``pfb_force_mode``.
 
     ``php_error_log_guard`` enrolls this GET in the module-level no-growth sweep.
     """
@@ -405,11 +406,14 @@ def test_update_revamp_controls_render(webui: WebUI, php_error_log_guard: PhpErr
     for needle in ('id="pfb_scope_both"', 'id="pfb_scope_ip"', 'id="pfb_scope_dnsbl"'):
         assert needle in body, f"Update page missing new scope radio {needle!r}"
 
-    # PRESENT: Force Reparse checkbox
-    assert 'name="pfb_run_force"' in body, "Update page missing 'pfb_run_force' checkbox"
+    # PRESENT: Force radio group (four-mode: none / parse / download / both)
+    assert 'name="pfb_force_mode"' in body, (
+        "Update page missing 'pfb_force_mode' Force radio group — "
+        "the four-mode force selector (none/parse/download/both) did not render"
+    )
 
     # PRESENT: section / group labels confirming the new design
-    for needle in ("Run Scope", "Force Reparse", "Schedule"):
+    for needle in ("Run Scope", "Force", "Schedule"):
         assert needle in body, f"Update page missing new label {needle!r}"
 
     # ABSENT: old opaque force/reload radio IDs (PRESENT in old code → fail before Phase 6)
@@ -420,6 +424,11 @@ def test_update_revamp_controls_render(webui: WebUI, php_error_log_guard: PhpErr
         'id="pfb_reload_option_all"',
     ):
         assert needle not in body, f"Update page still has old control {needle!r} — Phase-6 revamp not applied"
+
+    # ABSENT: old single-checkbox force name (replaced by the four-mode radio group)
+    assert 'name="pfb_run_force"' not in body, (
+        "Update page still has old 'pfb_run_force' checkbox — it must be replaced by the 'pfb_force_mode' radio group"
+    )
 
 
 def test_dnsbl_idn_blocking_fields_render(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:

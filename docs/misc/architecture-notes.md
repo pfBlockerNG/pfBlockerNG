@@ -779,9 +779,15 @@ midnight-wrapping ranges.
 ### Operator surface — the Update page & the knobs
 
 The **Update page** (`www/pfblockerng/pfblockerng_update.php`) is rebuilt on the API: an explicit
-**Run Scope** selector (`pfb_scope`: ip/dnsbl/both) + a **Force Reparse** toggle (`pfb_run_force`)
-feeding one **Run now** that POSTs `pfb_trigger`; a read-only **Schedule** view sourced from the
-ledger (last-run / next-due per job); a tidied update-log pane. No raw verb strings in the UI.
+**Run Scope** selector (`pfb_scope`: ip/dnsbl/both) + a **Force** radio group (`pfb_force_mode`:
+none/parse/download/both) feeding one **Run now**. **None** — plain detector-respecting pass via
+`pfb_trigger`. **Parse** — reparse cached lists without re-downloading (`force=true`). **Download**
+— clear `.etag`/`.lastmod` sidecars for in-scope feeds, then run the per-feed detector
+on-demand (bypassing the hour-gate) via the `forcecheck` verb so every feed is re-fetched; feeds
+whose body is unchanged are still skipped. **Both** — also clears `.xxhash128`/`.md5` hash sidecars
+so every re-fetched feed re-ingests regardless of content. A read-only **Schedule** view is sourced
+from the ledger (last-run / next-due per job); a tidied update-log pane. No raw verb strings in
+the UI.
 
 Two registered `PfbConfig` knobs (ADR-29), both with safe defaults and **no GUI control** — set via
 config/CLI for advanced tuning:

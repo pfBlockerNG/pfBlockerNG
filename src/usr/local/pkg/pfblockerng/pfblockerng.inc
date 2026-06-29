@@ -10154,6 +10154,31 @@ function pfb_validator_write($base, $etag, $lastmod) {
 	}
 }
 
+// ADR-43 Force modes: clear the per-feed conditional-GET sidecars so an on-demand detector
+// run re-fetches every in-scope list file (no ETag/Last-Modified to send => the server returns
+// 200 + body instead of 304).  Sweeps {dir}/*.orig.etag and *.orig.lastmod in each $dir; when
+// $clear_hashes is TRUE also removes *.orig.xxhash128 and *.orig.md5 so a re-fetched body has no
+// baseline to compare against and every list re-ingests regardless of content.  The .orig content
+// files are left intact.  Returns the number of sidecars removed.
+function pfb_force_clear_validators(array $dirs, bool $clear_hashes): int {
+	$suffixes = array('etag', 'lastmod');
+	if ($clear_hashes) {
+		$suffixes[] = 'xxhash128';
+		$suffixes[] = 'md5';
+	}
+	$removed = 0;
+	foreach ($dirs as $dir) {
+		foreach ($suffixes as $sfx) {
+			foreach (glob("{$dir}/*.orig.{$sfx}") ?: array() as $sidecar) {
+				if (unlink_if_exists($sidecar)) {
+					$removed++;
+				}
+			}
+		}
+	}
+	return $removed;
+}
+
 // ADR-42 Phase 3: pure decision helper for the remote conditional-GET result.
 // Called by the detector after pfb_download returns the probe response.
 //

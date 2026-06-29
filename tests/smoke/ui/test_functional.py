@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -1363,5 +1364,171 @@ def test_update_page_cron_status_reports_scheduled_tick(
             f"no HH:MM next-tick time rendered in the Cron Status; excerpt={excerpt!r}"
         )
     finally:
+        if original_enabled != "on":
+            helpers.set_package_enabled(vm, False)
+
+
+# ---------------------------------------------------------------------------
+# Force mode — Download / Both sidecar-clear wiring (ADR-43)
+#
+# These tests prove that pfb_force_clear_validators() is called by the handler
+# and clears the right sidecar files before dispatching forcecheck.
+#
+# Full re-fetch / reload-if-changed / reload-all behaviour requires configured
+# feeds and is validated on a maintainer live-VM run; the hermetic harness has
+# no feeds, so these tests pin the side-effect (sidecar removal) only.
+# ---------------------------------------------------------------------------
+
+_IP_ORIG_DIR = f"{helpers.PFB_DBDIR}/original"
+
+
+def test_force_mode_download_clears_validators(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """Force=Download clears .orig.etag before dispatching forcecheck.
+
+    Scenario: Download mode removes validator sidecars for in-scope feeds.
+      Background: pfBlockerNG deployed and enabled.
+
+    Given a synthetic feedA.orig.etag sidecar planted in the IP orig dir,
+    And the .orig.etag file EXISTS (pre-state confirmed),
+
+    When the Update page Run Now form is submitted with pfb_force_mode=download
+      and pfb_scope=ip,
+
+    Then the .orig.etag sidecar is GONE (the handler cleared it before dispatch) —
+      proving pfb_force_clear_validators() was called with the correct dir and
+      clear_hashes=FALSE.
+
+    Red→green: before this change, force=download did not exist and no sidecar
+    was cleared; the test would fail on the assertFileDoesNotExist equivalent.
+    """
+    vm = smoke_vm
+    original_enabled = helpers.config_get(vm, _ENABLE_CB_CFG)
+    if original_enabled != "on":
+        helpers.set_package_enabled(vm, True)
+
+    # Plant a synthetic validator sidecar under the IP orig dir.
+    sidecar_etag = f"{_IP_ORIG_DIR}/pfbtest.orig.etag"
+    try:
+        # Ensure the orig dir exists and plant the sidecar.
+        mk = subprocess.run(
+            vm.ssh_argv("/bin/mkdir", "-p", _IP_ORIG_DIR),
+            capture_output=True,
+            text=True,
+            timeout=30.0,
+            check=False,
+        )
+        assert mk.returncode == 0, f"mkdir {_IP_ORIG_DIR} failed: {mk.stderr!r}"
+
+        plant = subprocess.run(
+            vm.ssh_argv("tee", sidecar_etag),
+            input='"test-etag-download"',
+            capture_output=True,
+            text=True,
+            timeout=30.0,
+            check=False,
+        )
+        assert plant.returncode == 0, f"plant {sidecar_etag} failed: {plant.stderr!r}"
+
+        # BEFORE: confirm the sidecar exists.
+        before = vm.ssh("/bin/test", "-f", sidecar_etag)
+        assert before.returncode == 0, f"{sidecar_etag} not found after planting — cannot prove the POST caused removal"
+
+        # ACT: POST force_mode=download, scope=ip.
+        resp = webui.post(
+            UPDATE_PAGE,
+            overrides={"pfb_scope": "ip", "pfb_force_mode": "download"},
+            submit=("run", "Run Now"),
+            timeout=SAVE_TIMEOUT,
+        )
+        assert not looks_like_login_page(resp.text), "force=download POST returned the login form (session lost)"
+
+        # AFTER: the .etag sidecar must be gone (handler cleared it).
+        after = vm.ssh("/bin/test", "-f", sidecar_etag)
+        assert after.returncode != 0, (
+            f"{sidecar_etag} still exists after force=download POST — "
+            "pfb_force_clear_validators(clear_hashes=FALSE) was not called for scope=ip"
+        )
+
+    finally:
+        # Clean up: remove any leftover sidecar; restore enable state.
+        vm.ssh("/bin/rm", "-f", sidecar_etag)
+        if original_enabled != "on":
+            helpers.set_package_enabled(vm, False)
+
+
+def test_force_mode_both_clears_hash_sidecars(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """Force=Both clears .orig.etag AND .orig.xxhash128 before dispatching forcecheck.
+
+    Scenario: Both mode removes validator AND hash sidecars for in-scope feeds.
+
+    Given synthetic pfbtest.orig.etag AND pfbtest.orig.xxhash128 in the IP orig dir,
+    And both files EXIST (pre-state confirmed),
+
+    When the Update page is submitted with pfb_force_mode=both and pfb_scope=ip,
+
+    Then BOTH the .orig.etag and .orig.xxhash128 sidecars are GONE —
+      proving pfb_force_clear_validators() was called with clear_hashes=TRUE.
+
+    Red→green: before this change, force=both did not exist; no sidecar was cleared.
+    """
+    vm = smoke_vm
+    original_enabled = helpers.config_get(vm, _ENABLE_CB_CFG)
+    if original_enabled != "on":
+        helpers.set_package_enabled(vm, True)
+
+    sidecar_etag = f"{_IP_ORIG_DIR}/pfbtest.orig.etag"
+    sidecar_hash = f"{_IP_ORIG_DIR}/pfbtest.orig.xxhash128"
+    try:
+        mk = subprocess.run(
+            vm.ssh_argv("/bin/mkdir", "-p", _IP_ORIG_DIR),
+            capture_output=True,
+            text=True,
+            timeout=30.0,
+            check=False,
+        )
+        assert mk.returncode == 0, f"mkdir {_IP_ORIG_DIR} failed: {mk.stderr!r}"
+
+        for path, content in ((sidecar_etag, '"test-etag-both"'), (sidecar_hash, "deadbeef")):
+            p = subprocess.run(
+                vm.ssh_argv("tee", path),
+                input=content,
+                capture_output=True,
+                text=True,
+                timeout=30.0,
+                check=False,
+            )
+            assert p.returncode == 0, f"plant {path} failed: {p.stderr!r}"
+
+        # BEFORE: both sidecars must exist.
+        for path in (sidecar_etag, sidecar_hash):
+            r = vm.ssh("/bin/test", "-f", path)
+            assert r.returncode == 0, f"{path} not found before POST — cannot prove the POST caused removal"
+
+        # ACT.
+        resp = webui.post(
+            UPDATE_PAGE,
+            overrides={"pfb_scope": "ip", "pfb_force_mode": "both"},
+            submit=("run", "Run Now"),
+            timeout=SAVE_TIMEOUT,
+        )
+        assert not looks_like_login_page(resp.text), "force=both POST returned the login form (session lost)"
+
+        # AFTER: both sidecars must be gone.
+        for path, label in ((sidecar_etag, ".orig.etag"), (sidecar_hash, ".orig.xxhash128")):
+            r = vm.ssh("/bin/test", "-f", path)
+            assert r.returncode != 0, (
+                f"{path} ({label}) still exists after force=both POST — "
+                "pfb_force_clear_validators(clear_hashes=TRUE) was not called for scope=ip"
+            )
+
+    finally:
+        for path in (sidecar_etag, sidecar_hash):
+            vm.ssh("/bin/rm", "-f", path)
         if original_enabled != "on":
             helpers.set_package_enabled(vm, False)

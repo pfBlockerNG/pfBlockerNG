@@ -75,7 +75,7 @@ function pfb_runnow(string $scope, bool $force): void {
 
 	// Check for any active pfBlockerNG process before dispatching.
 	exec('/bin/ps -wax', $result_ps);
-	if (preg_grep('/pfblockerng[.]php\s+?(cron|update|pfb_trigger|tick)/', $result_ps)) {
+	if (preg_grep('/pfblockerng[.]php\s+?(cron|update|pfb_trigger|tick|forcecheck)/', $result_ps)) {
 		pfbupdate_status(gettext('Run Now skipped — an active pfBlockerNG task is running.'));
 		return;
 	}
@@ -114,6 +114,43 @@ function pfb_runnow(string $scope, bool $force): void {
 	}
 }
 
+// Dispatch the on-demand detector (forcecheck verb) via mwexec_bg, stream log output,
+// and update the due ledger — same active-process guard and livetail as pfb_runnow().
+// Callers must clear the appropriate sidecars (pfb_force_clear_validators) BEFORE calling
+// this so pfblockerng_sync_cron($force_all=TRUE) re-fetches every in-scope feed.
+function pfb_runnow_forcecheck(string $scope): void {
+	global $pfb;
+
+	// Active-process guard — same check as pfb_runnow().
+	exec('/bin/ps -wax', $result_ps);
+	if (preg_grep('/pfblockerng[.]php\s+?(cron|update|pfb_trigger|tick|forcecheck)/', $result_ps)) {
+		pfbupdate_status(gettext('Run Now skipped — an active pfBlockerNG task is running.'));
+		return;
+	}
+
+	if (!file_exists("{$pfb['log']}")) {
+		touch("{$pfb['log']}");
+	}
+
+	$scope_esc = escapeshellarg($scope);
+
+	pfbupdate_status(gettext("Running: scope={$scope} force=download/both (on-demand detector)"));
+
+	install_cron_job('pfblockerng.php tick', FALSE);
+
+	pfb_logger("\n [ Force check - scope={$scope} ]\n", 1);
+
+	$now = time();
+	mwexec_bg("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php forcecheck scope={$scope_esc} >> {$pfb['log']} 2>&1");
+
+	pfb_livetail($pfb['log'], 'force');
+
+	if ($scope === 'both') {
+		$interval = ((int)($pfb['interval'] ?: 1)) * 3600;
+		pfb_due_ledger_mark_ran('cron', $interval, $now, pfb_tick_seed(), 0, $pfb['dbdir']);
+	}
+}
+
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Update'));
 $pglinks = array('', '/pfblockerng/pfblockerng_general.php', '@self');
 $shortcut_section = 'pfblockerng';
@@ -124,13 +161,13 @@ if ($_POST) {
 	$pconfig = $_POST;
 }
 
-// Wizard handler (updated to Phase-3 API: scope=both force-reparse).
+// Wizard handler (updated to Phase-3 API: scope=both, force=parse).
 $pfb_wizard = FALSE;
 if (isset($_GET) && isset($_GET['wizard']) && $_GET['wizard'] == 'reload') {
-	$pconfig['run']           = '';
-	$pconfig['pfb_scope']     = 'both';
-	$pconfig['pfb_run_force'] = 'on';	// reparse = Force Reload equivalent
-	$pfb_wizard               = TRUE;
+	$pconfig['run']            = '';
+	$pconfig['pfb_scope']      = 'both';
+	$pconfig['pfb_force_mode'] = 'parse';	// reparse cached lists, no re-download
+	$pfb_wizard                = TRUE;
 }
 
 // Validate user-supplied scope; default to 'both' for unexpected input.
@@ -200,7 +237,7 @@ $status = 'NEXT Scheduled CRON Event will run at'
 
 // Query for any active pfBlockerNG task
 exec('/bin/ps -wax', $result_ps);
-if (preg_grep('/pfblockerng[.]php\s+?(cron|update|pfb_trigger|tick)/', $result_ps)) {
+if (preg_grep('/pfblockerng[.]php\s+?(cron|update|pfb_trigger|tick|forcecheck)/', $result_ps)) {
 	$status = '<span style="color: red;">&emsp;&emsp;'
 		. 'Active pfBlockerNG CRON JOB'
 		. '</span>&emsp;<i class="fa-solid fa-spinner fa-pulse fa-lg"></i>';
@@ -268,15 +305,20 @@ $group->add(new Form_Checkbox(
 $group->setHelp('Which lists to sync on Run Now: Both, IP-only, or DNSBL-only.');
 $section->add($group);
 
-// Force Reparse toggle
-$group = new Form_Group('Force Reparse');
-$group->add(new Form_Checkbox(
-	'pfb_run_force',
-	NULL,
-	'Reparse',
-	isset($pconfig['pfb_run_force']) && $pconfig['pfb_run_force'] === 'on'
-))->setAttribute('title', 'Reparse cached downloads even if no changes are detected.');
-$group->setHelp('When checked, reprocesses existing downloaded files without re-checking for changes.');
+// Force mode — mutually-exclusive radios. None = a plain detector-respecting run.
+$pfb_force_mode = $pconfig['pfb_force_mode'] ?? 'none';
+$group = new Form_Group('Force');
+$group->add(new Form_Checkbox('pfb_force_mode', NULL, 'None',     $pfb_force_mode === 'none',     'none'))
+	->displayAsRadio('pfb_force_none')->setAttribute('title', 'Normal run — reload only what changed.')->setWidth(2);
+$group->add(new Form_Checkbox('pfb_force_mode', NULL, 'Parse',    $pfb_force_mode === 'parse',    'parse'))
+	->displayAsRadio('pfb_force_parse')->setAttribute('title', 'Reload all lists regardless of changes (no re-download).')->setWidth(2);
+$group->add(new Form_Checkbox('pfb_force_mode', NULL, 'Download', $pfb_force_mode === 'download', 'download'))
+	->displayAsRadio('pfb_force_download')->setAttribute('title', 'Re-fetch all list files (reload only if changes are detected).')->setWidth(2);
+$group->add(new Form_Checkbox('pfb_force_mode', NULL, 'Both',     $pfb_force_mode === 'both',     'both'))
+	->displayAsRadio('pfb_force_both')->setAttribute('title', 'Re-fetch all list files and reload all lists regardless of changes.')->setWidth(2);
+$group->setHelp('Parse: reload all lists regardless of changes (no re-download). '
+	. 'Download: re-fetch all list files (reload only if changes are detected). '
+	. 'Both: re-fetch all list files and reload all lists regardless of changes.');
 $section->add($group);
 
 $group = new Form_Group(NULL);
@@ -371,12 +413,26 @@ if (isset($pconfig['log_view'])) {
 	}
 }
 
-// Run Now handler — dispatches pfb_trigger via the Phase-3 explicit API.
+// Run Now handler — dispatches pfb_trigger or forcecheck depending on force mode.
 if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On && isset($pconfig['run']) &&
     isset($pconfig['pfb_scope']) && !empty($pconfig['pfb_scope'])) {
-	$scope = in_array($pconfig['pfb_scope'], $pfb_allowed_scopes, TRUE) ? $pconfig['pfb_scope'] : 'both';
-	$force = isset($pconfig['pfb_run_force']) && $pconfig['pfb_run_force'] === 'on';
-	pfb_runnow($scope, $force);
+	$scope      = in_array($pconfig['pfb_scope'], $pfb_allowed_scopes, TRUE) ? $pconfig['pfb_scope'] : 'both';
+	$force_mode = $pconfig['pfb_force_mode'] ?? 'none';
+	if (!in_array($force_mode, array('none', 'parse', 'download', 'both'), TRUE)) {
+		$force_mode = 'none';
+	}
+	if ($force_mode === 'download' || $force_mode === 'both') {
+		// Clear the scoped conditional-GET sidecars, then run the detector on-demand so it
+		// re-fetches (200) and re-ingests changed feeds (Both also clears the hash => all).
+		$dirs = ($scope === 'ip')    ? array($pfb['origdir'])
+		      : (($scope === 'dnsbl') ? array($pfb['dnsorigdir'])
+		      : array($pfb['origdir'], $pfb['dnsorigdir']));
+		pfb_force_clear_validators($dirs, $force_mode === 'both');
+		pfb_runnow_forcecheck($scope);
+	} else {
+		// none -> plain pass; parse -> reuse=on (reparse cached, no download).
+		pfb_runnow($scope, $force_mode === 'parse');
+	}
 
 	if ($pfb_wizard) {
 
