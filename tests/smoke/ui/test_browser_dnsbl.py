@@ -307,10 +307,11 @@ def test_idn_mode_select_gates_confusable_subtoggles(
     """`#pfb_idn` = "Confusable" SHOWS the two Confusable sub-toggle checkboxes; any
     other mode HIDES them (ADR-08).
 
-    ``enable_idn_mode()`` (pfblockerng_dnsbl.php:3143, bound to ``#pfb_idn.change``)
-    ``hideCheckbox()``s ``#pfb_idn_block_malicious`` + ``#pfb_idn_escalate_suspicious``
-    -- shown ONLY when the select is "confusable". Three states are asserted
-    (Off -> Confusable -> All-IDN) so green proves the sub-toggles are confusable-
+    ``enable_idn_mode()`` (pfblockerng_dnsbl.php:3607, bound to ``#pfb_idn.change`` at
+    :3670) ``hideCheckbox()``s ``#pfb_idn_block_malicious`` + ``#pfb_idn_escalate_suspicious``
+    -- shown ONLY when the select is "confusable". The three option values are 'off'
+    (Off) / 'confusable' (Confusable) / 'on' (Always); all three states are asserted
+    (Off -> Confusable -> Always) so green proves the sub-toggles are confusable-
     specific, not always-shown nor merely "anything but Off". Playwright ``to_be_hidden``
     on the input holds when hideCheckbox sets ``display:none`` on the enclosing
     ``.form-group`` row. A full-page screenshot is captured at each state.
@@ -325,14 +326,14 @@ def test_idn_mode_select_gates_confusable_subtoggles(
     expect(block_mal).to_be_attached(timeout=JS_TIMEOUT_MS)
     expect(escalate).to_be_attached(timeout=JS_TIMEOUT_MS)
 
-    # Normalise to a deterministic start (Off) regardless of saved config.
-    if sel.input_value() != "":
-        sel.select_option("")
+    # Normalise to a deterministic start (Off = 'off') regardless of saved config.
+    if sel.input_value() != "off":
+        sel.select_option("off")
         sel.dispatch_event("change")
-        expect(sel).to_have_value("", timeout=JS_TIMEOUT_MS)
+        expect(sel).to_have_value("off", timeout=JS_TIMEOUT_MS)
 
     # BEFORE: Off -> both sub-toggles hidden.
-    expect(sel).to_have_value("", timeout=JS_TIMEOUT_MS)
+    expect(sel).to_have_value("off", timeout=JS_TIMEOUT_MS)
     expect(block_mal).to_be_hidden(timeout=JS_TIMEOUT_MS)
     expect(escalate).to_be_hidden(timeout=JS_TIMEOUT_MS)
     _shot(page, screenshot_dir, "dnsbl_idn_off_subtoggles_hidden")
@@ -345,13 +346,13 @@ def test_idn_mode_select_gates_confusable_subtoggles(
     expect(escalate).to_be_visible(timeout=JS_TIMEOUT_MS)
     _shot(page, screenshot_dir, "dnsbl_idn_confusable_subtoggles_shown")
 
-    # SELECT All-IDN -> hidden again (third state: confusable-specific, not just != Off).
-    sel.select_option("all")
+    # SELECT Always ('on') -> hidden again (third state: confusable-specific, not just != Off).
+    sel.select_option("on")
     sel.dispatch_event("change")
-    expect(sel).to_have_value("all", timeout=JS_TIMEOUT_MS)
+    expect(sel).to_have_value("on", timeout=JS_TIMEOUT_MS)
     expect(block_mal).to_be_hidden(timeout=JS_TIMEOUT_MS)
     expect(escalate).to_be_hidden(timeout=JS_TIMEOUT_MS)
-    _shot(page, screenshot_dir, "dnsbl_idn_all_subtoggles_hidden")
+    _shot(page, screenshot_dir, "dnsbl_idn_always_subtoggles_hidden")
 
 
 # --------------------------------------------------------------------------- #

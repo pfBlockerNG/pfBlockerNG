@@ -82,14 +82,19 @@ def test_gateway_pfb_keep_save_roundtrip(
     """pfb_keep (PfbToggle gateway field) persists via the General page and reflects in the DOM.
 
     Proves that the ADR-29 gateway routing on ``pfblockerng_general.php`` stores
-    the exact legacy token for ``pfb_keep`` ('on'/''), and that the General page
+    the exact legacy token for ``pfb_keep`` ('on'/'off'), and that the General page
     re-renders the checkbox in the correct state when the page is reloaded.
+
+    NOTE on the off-token (issue #484): the General save persists an EXPLICIT 'off'
+    for an unchecked pfb_keep (``(($_POST['pfb_keep'] ?? '') === 'on') ? 'on' : 'off'``),
+    not '' -- so a default-on flag can record a deliberate off across a pkg upgrade.
+    The two page-reachable tokens are therefore 'on' (checked) and 'off' (unchecked).
 
     Scenario: ADR-29 gateway save→reload round-trip for pfb_keep on the General page.
       Background: pfBlockerNG deployed; webConfigurator authenticated; wizard dismissed.
 
     Given the current stored value of pfb_keep (read via config_get oracle) is one
-      of the two legal tokens ('on' or ''),
+      of the two legal tokens ('on' or 'off'),
 
     When the General page is POST-saved with pfb_keep set to the OTHER value,
 
@@ -102,9 +107,10 @@ def test_gateway_pfb_keep_save_roundtrip(
 
     # GIVEN: read the starting value so we know which direction to flip first.
     original = helpers.config_get(smoke_vm, _CFG_KEEP)
-    assert original in ("on", ""), f"pfb_keep starting value {original!r} not in expected vocabulary {{'on', ''}}"
-    # The two branches: flip to the opposite, then restore.
-    flipped = "" if original == "on" else "on"
+    assert original in ("on", "off"), f"pfb_keep starting value {original!r} not in expected vocabulary {{'on', 'off'}}"
+    # The two branches: flip to the opposite, then restore. The off-token is the explicit
+    # 'off' the save emits for an unchecked box (issue #484), not ''.
+    flipped = "off" if original == "on" else "on"
 
     try:
         # ---- FLIP: POST pfb_keep to the opposite value ---- #
@@ -206,8 +212,10 @@ def test_log_settings_grouped_layout(
     _shot(page, screenshot_dir, "log_settings_grouped_layout")
 
     # Column header texts visible (emitted by the header Form_Group's StaticText children).
+    # exact=True so the "Schedule" header is not shadowed by the hidden "Schedules" nav
+    # link (/firewall_schedule.php), whose substring match would pick a hidden element.
     for col_header in ("Max lines", "Schedule", "Keep lines"):
-        expect(page.get_by_text(col_header).first).to_be_visible(timeout=JS_TIMEOUT_MS)
+        expect(page.get_by_text(col_header, exact=True).first).to_be_visible(timeout=JS_TIMEOUT_MS)
 
     # The log_max_log control's enclosing form-group carries the per-log label "pfBlockerNG".
     log_max_log = page.locator('select[name="log_max_log"]')

@@ -116,6 +116,9 @@ FLOWS: tuple[ToggleFlow, ...] = (
         page=GENERAL_PAGE,
         field="pfb_keep",
         config_path="installedpackages/pfblockerng/config/0/pfb_keep",
+        # issue #484: the General save stores an explicit 'off' for an unchecked
+        # pfb_keep (not '') so a default-on flag can persist a deliberate off.
+        off="off",
     ),
     # ---- IP settings (installedpackages/pfblockerngipsettings/config/0) -------
     # The IP save validates ip_placeholder + maxmind_locale and fires a MaxMind
@@ -396,22 +399,26 @@ def test_dnsbl_idn_mode_select_round_trips_all_modes(
 ) -> None:
     """The 'IDN Blocking' select (``pfb_idn``) round-trips all three modes via config.xml.
 
-    Off (``''``) / All-IDN (``'all'``) / Confusable (``'confusable'``) are the options;
-    the save stores the value verbatim for 'all'/'confusable', else '' (Off). Drives
-    EACH mode and asserts the effective config node (branch coverage: every selectable
-    value, not just one), restoring the original at the end. The DNSBL save only
-    write_config()s (config.xml is the oracle) and needs the sinkhole VIP -- supplied
-    by ``dnsbl_vip_ready``.
+    Off (``'off'``) / Confusable (``'confusable'``) / Always (``'on'``) are the options
+    (ADR-08 reuses the legacy ``'on'`` token to back the "Always"/block-all-IDN mode, so it
+    round-trips with no migration); the save stores the posted token verbatim for each
+    (off->off, confusable->confusable, on->on). The 4.0.0-alpha ``'all'`` token no longer
+    exists. Drives EACH mode and asserts the effective config node (branch coverage: every
+    selectable value, not just one), restoring the original at the end. The DNSBL save only
+    write_config()s (config.xml is the oracle) and needs the sinkhole VIP -- supplied by
+    ``dnsbl_vip_ready``.
     """
     page = "/pfblockerng/pfblockerng_dnsbl.php"
     cfg = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn"
     original = helpers.config_get(smoke_vm, cfg)
     try:
-        for mode in ("confusable", "all", ""):
+        for mode in ("confusable", "on", "off"):
             got = _post_and_get(webui, smoke_vm, page, {"pfb_idn": mode}, cfg)
             assert got == mode, f"pfb_idn select: POSTing {mode!r} stored {got!r} (expected {mode!r})"
     finally:
-        _post_and_get(webui, smoke_vm, page, {"pfb_idn": original}, cfg)
+        # Restore the original; fall back to 'off' since the save validator rejects an
+        # empty/absent value (only off/confusable/on are accepted), leaving the box clean.
+        _post_and_get(webui, smoke_vm, page, {"pfb_idn": original or "off"}, cfg)
 
 
 # --------------------------------------------------------------------------- #
@@ -726,11 +733,17 @@ def test_ip_inbound_interface_multiselect_comma_join_and_empty_clear(
 
 # --------------------------------------------------------------------------- #
 # SafeSearch settings (installedpackages/pfblockerngsafesearch -- BARE node, no
-# /config/0 array). All inputs are <select> (three single + one multi). Save is
-# ALL-OR-NOTHING: the doh-Enable-needs-a-list guard aborts the ENTIRE save, so on
-# that reject path NO field is written. Single-value selects coerce a bogus value
-# to '' then ``?: 'Disable'``; the doh_list multi coerces a bogus key to ''.
-# write_config() only -- fully hermetic.
+# /config/0 array). safesearch_enable / safesearch_youtube are <select>s rendered
+# and SAVED ON THE SAFESEARCH PAGE; a bogus value coerces via ``$s_default='' ?:
+# 'Disable'``. write_config() only -- hermetic.
+#
+# The DoH/DoT/DoQ fields (safesearch_doh / safesearch_doh_list) live in the SAME
+# bare section but are rendered and SAVED ON THE DNSBL PAGE (ADR-29 foreign-section
+# write via PfbConfig::write) -- so their tests POST to DNSBL_PAGE and need the
+# sinkhole VIP (dnsbl_vip_ready), exactly like the other DNSBL-page saves. That save
+# is ALL-OR-NOTHING: the doh-Enable-needs-a-list guard aborts the ENTIRE save (no
+# field written); a non-key safesearch_doh coerces to 'Disable', a bogus doh_list key
+# coerces to ''. write_config() only -- hermetic.
 # --------------------------------------------------------------------------- #
 
 
@@ -794,15 +807,19 @@ def test_safesearch_youtube_select_three_branches_and_bogus(
 def test_safesearch_doh_select_valid_needs_list_and_bogus_coerces(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
+    dnsbl_vip_ready: None,
 ) -> None:
-    """``safesearch_doh` stores 'Enable' (with a list) and coerces a bogus value to 'Disable'.
+    """``safesearch_doh`` stores 'Enable' (with a list) and coerces a bogus value to 'Disable'.
 
-    Select opts {Disable, Enable}. CAVEAT: 'Enable' with an EMPTY safesearch_doh_list
-    raises an input_error that aborts the WHOLE save, so the valid branch MUST also
-    supply a valid list (overrides include ``safesearch_doh_list='dns.google'``) ->
-    node == 'Enable'. The BOGUS branch ('Bogus') coerces via ``$s_default=''`` then
-    ``?: 'Disable'`` -> 'Disable' (the doh-list guard compares to the literal
-    'Enable', so a bogus value does not trip it). write_config() only -- hermetic.
+    Rendered and saved on the DNSBL page (ADR-29 foreign-section write into the bare
+    pfblockerngsafesearch node). Select opts {Disable, Enable}. CAVEAT: 'Enable' with an
+    EMPTY safesearch_doh_list raises an input_error that aborts the WHOLE save, so the
+    valid branch MUST also supply a valid list (overrides include
+    ``safesearch_doh_list='dns.google'``) -> node == 'Enable'. The BOGUS branch ('Bogus')
+    is not a key of $options_safesearch_doh -> coerced to 'Disable' (the empty-list guard
+    compares to the literal 'Enable', so a bogus value does not trip it). Needs the sinkhole
+    VIP (``dnsbl_vip_ready``) -- every DNSBL save runs pfb_validate_vips. write_config()
+    only -- hermetic.
     """
     vm = smoke_vm
     cfg = "installedpackages/pfblockerngsafesearch/safesearch_doh"
@@ -811,27 +828,30 @@ def test_safesearch_doh_select_valid_needs_list_and_bogus_coerces(
         assert original != "Enable", f"safesearch_doh already 'Enable' before the valid POST (original={original!r})"
         # VALID 'Enable' REQUIRES a non-empty list (else the guard aborts the save).
         got = _post_and_get(
-            webui, vm, SAFESEARCH_PAGE, {"safesearch_doh": "Enable", "safesearch_doh_list": "dns.google"}, cfg
+            webui, vm, DNSBL_PAGE, {"safesearch_doh": "Enable", "safesearch_doh_list": "dns.google"}, cfg
         )
         assert got == "Enable", f"safesearch_doh should store 'Enable' with a valid list, got {got!r}"
         # Restore: doh back to 'Disable' and clear the list.
         assert (
-            _post_and_get(webui, vm, SAFESEARCH_PAGE, {"safesearch_doh": "Disable", "safesearch_doh_list": ""}, cfg)
+            _post_and_get(webui, vm, DNSBL_PAGE, {"safesearch_doh": "Disable", "safesearch_doh_list": ""}, cfg)
             == "Disable"
         )
         # BOGUS doh -> coerced to 'Disable' (the empty-list guard only fires for literal 'Enable').
-        got = _post_and_get(webui, vm, SAFESEARCH_PAGE, {"safesearch_doh": "Bogus", "safesearch_doh_list": ""}, cfg)
+        got = _post_and_get(webui, vm, DNSBL_PAGE, {"safesearch_doh": "Bogus", "safesearch_doh_list": ""}, cfg)
         assert got == "Disable", f"bogus safesearch_doh should coerce to 'Disable', got {got!r}"
     finally:
-        webui.post(SAFESEARCH_PAGE, {"safesearch_doh": "Disable", "safesearch_doh_list": ""}, timeout=SAVE_TIMEOUT)
+        webui.post(DNSBL_PAGE, {"safesearch_doh": "Disable", "safesearch_doh_list": ""}, timeout=SAVE_TIMEOUT)
 
 
 def test_safesearch_doh_list_multiselect_valid_and_bogus_clears(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
+    dnsbl_vip_ready: None,
 ) -> None:
     """``safesearch_doh_list`` stores a valid key (CSV); a bogus key coerces to ''.
 
+    Rendered and saved on the DNSBL page (ADR-29 foreign-section write); needs the
+    sinkhole VIP (``dnsbl_vip_ready``) since every DNSBL save runs pfb_validate_vips.
     Multi-select, valid keys are the ~180 entries of ``$options_safesearch_doh_list``
     (e.g. 'dns.google', 'cloudflare-dns.com'), stored as a CSV via
     ``implode(',', (array)$_POST[...])``. The validator sets the field to '' when a
@@ -847,33 +867,34 @@ def test_safesearch_doh_list_multiselect_valid_and_bogus_clears(
     try:
         # VALID single key -> stored verbatim (doh kept Disable so the guard is inert).
         got = _post_and_get(
-            webui, vm, SAFESEARCH_PAGE, {"safesearch_doh": "Disable", "safesearch_doh_list": "dns.google"}, cfg
+            webui, vm, DNSBL_PAGE, {"safesearch_doh": "Disable", "safesearch_doh_list": "dns.google"}, cfg
         )
         assert got == "dns.google", f"safesearch_doh_list should store 'dns.google', got {got!r}"
         # Restore/clear to '' (empty list).
-        got_clear = _post_and_get(
-            webui, vm, SAFESEARCH_PAGE, {"safesearch_doh": "Disable", "safesearch_doh_list": ""}, cfg
-        )
+        got_clear = _post_and_get(webui, vm, DNSBL_PAGE, {"safesearch_doh": "Disable", "safesearch_doh_list": ""}, cfg)
         assert got_clear == "", f"clearing safesearch_doh_list should store '', got {got_clear!r}"
         # BOGUS key -> not in the opts map -> coerced to '' (NOT the bogus value).
         got = _post_and_get(
             webui,
             vm,
-            SAFESEARCH_PAGE,
+            DNSBL_PAGE,
             {"safesearch_doh": "Disable", "safesearch_doh_list": "evil.example.invalid"},
             cfg,
         )
         assert got == "", f"bogus safesearch_doh_list key should coerce to '', got {got!r}"
     finally:
-        webui.post(SAFESEARCH_PAGE, {"safesearch_doh": "Disable", "safesearch_doh_list": ""}, timeout=SAVE_TIMEOUT)
+        webui.post(DNSBL_PAGE, {"safesearch_doh": "Disable", "safesearch_doh_list": ""}, timeout=SAVE_TIMEOUT)
 
 
 def test_safesearch_doh_enable_requires_list_guard(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
+    dnsbl_vip_ready: None,
 ) -> None:
     """Enabling DoH with an EMPTY list aborts the whole save (config unchanged).
 
+    Rendered and saved on the DNSBL page (ADR-29 foreign-section write); needs the
+    sinkhole VIP (``dnsbl_vip_ready``) since every DNSBL save runs pfb_validate_vips.
     The input_error guard: ``$_POST['safesearch_doh']=='Enable' &&
     empty($_POST['safesearch_doh_list'])`` -> ``$input_errors`` -> the
     ``if (!$input_errors)`` save block is skipped -> NO write_config, config
@@ -893,27 +914,27 @@ def test_safesearch_doh_enable_requires_list_guard(
     cfg = "installedpackages/pfblockerngsafesearch/safesearch_doh"
     list_cfg = "installedpackages/pfblockerngsafesearch/safesearch_doh_list"
     # Establish a known before-state: doh Disable, no list.
-    webui.post(SAFESEARCH_PAGE, {"safesearch_doh": "Disable", "safesearch_doh_list": ""}, timeout=SAVE_TIMEOUT)
+    webui.post(DNSBL_PAGE, {"safesearch_doh": "Disable", "safesearch_doh_list": ""}, timeout=SAVE_TIMEOUT)
     before = helpers.config_get(vm, cfg)
     try:
         # BEFORE: doh is 'Disable' (not 'Enable').
         assert before == "Disable", f"expected safesearch_doh 'Disable' baseline, got {before!r}"
         # PASS path: Enable WITH a valid list -> persists both fields.
         got = _post_and_get(
-            webui, vm, SAFESEARCH_PAGE, {"safesearch_doh": "Enable", "safesearch_doh_list": "dns.google"}, cfg
+            webui, vm, DNSBL_PAGE, {"safesearch_doh": "Enable", "safesearch_doh_list": "dns.google"}, cfg
         )
         assert got == "Enable", f"safesearch_doh should persist 'Enable' with a valid list, got {got!r}"
         assert helpers.config_get(vm, list_cfg) == "dns.google", "safesearch_doh_list not persisted on the pass path"
         # Reset to the Disable baseline before the reject leg.
         assert (
-            _post_and_get(webui, vm, SAFESEARCH_PAGE, {"safesearch_doh": "Disable", "safesearch_doh_list": ""}, cfg)
+            _post_and_get(webui, vm, DNSBL_PAGE, {"safesearch_doh": "Disable", "safesearch_doh_list": ""}, cfg)
             == "Disable"
         )
         # REJECT path: Enable WITHOUT a list -> the whole save aborts -> UNCHANGED.
-        got = _post_and_get(webui, vm, SAFESEARCH_PAGE, {"safesearch_doh": "Enable", "safesearch_doh_list": ""}, cfg)
+        got = _post_and_get(webui, vm, DNSBL_PAGE, {"safesearch_doh": "Enable", "safesearch_doh_list": ""}, cfg)
         assert got == "Disable", f"DoH-Enable-with-empty-list must abort the save (config unchanged), got {got!r}"
     finally:
-        webui.post(SAFESEARCH_PAGE, {"safesearch_doh": "Disable", "safesearch_doh_list": ""}, timeout=SAVE_TIMEOUT)
+        webui.post(DNSBL_PAGE, {"safesearch_doh": "Disable", "safesearch_doh_list": ""}, timeout=SAVE_TIMEOUT)
 
 
 # --------------------------------------------------------------------------- #
