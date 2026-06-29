@@ -567,8 +567,9 @@ jobs:
           SMOKE_CONTROL_IP: ${{ secrets.SMOKE_CONTROL_IP || vars.SMOKE_CONTROL_IP }}
           # Network backend (ADR-50): slirp (default) | bridge. conftest + boot_vm.sh
           # branch on this; boot_vm.sh also reads the SMOKE_*_TAP vars the bridge-setup
-          # step wrote to $GITHUB_ENV.
-          SMOKE_NET_MODE: ${{ inputs.net_mode }}
+          # step wrote to $GITHUB_ENV. `|| 'slirp'` keeps it non-empty even if a caller
+          # passes nothing (defensive — callers default to slirp, but never emit "").
+          SMOKE_NET_MODE: ${{ inputs.net_mode || 'slirp' }}
           # System-DNS upstream wiring: the mock binds the runner loopback :53, and
           # pfSense forwards to the SLIRP host alias 192.168.89.2 which libslirp NATs
           # (port-preserving) straight to that mock — no /etc/resolv.conf involvement.

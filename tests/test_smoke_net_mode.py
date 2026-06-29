@@ -160,6 +160,19 @@ class TestSlirpDefault:
         assert mod.DEFAULT_CLIENT_SSH_PORT == 2223
         assert mod.DEFAULT_STUB_DNS_ADDR == "127.0.0.1"
 
+    def test_empty_net_mode_reads_as_slirp(self) -> None:
+        """An EMPTY SMOKE_NET_MODE reads as slirp, not a ValueError (regression guard).
+
+        A workflow expression like ``SMOKE_NET_MODE: ${{ inputs.net_mode }}`` sets the env
+        var to "" on a schedule / no-input event. conftest must treat that as slirp (matching
+        boot_vm.sh's ``${SMOKE_NET_MODE:-slirp}``); the pre-fix ``get(key, "slirp")`` kept ""
+        and raised ValueError on import, crashing the nightly UI run (run 28361863025).
+        """
+        mod = _load_conftest(net_mode="")
+        assert mod.NET_MODE == "slirp", f"expected slirp; got {mod.NET_MODE!r}"
+        assert mod.DEFAULT_HOST == "127.0.0.1"
+        assert mod.DEFAULT_STUB_DNS_ADDR == "127.0.0.1"
+
 
 # ---------------------------------------------------------------------------
 # 2 — bridge flips the endpoints (RED→GREEN: fails on pre-P3 code)

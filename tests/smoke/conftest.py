@@ -156,7 +156,12 @@ os.environ["SMOKE_LAN_SOCKET_PORT"] = str(DEFAULT_LAN_SOCKET_PORT)
 #   IPs directly (no hostfwd) and the stub DNS binds the WAN bridge IP.
 #   The env write-back above (SMOKE_*_HOSTPORT) is a harmless no-op in bridge mode
 #   because boot_vm.sh ignores hostfwd when NET_MODE=bridge — left unbranched.
-NET_MODE = os.environ.get("SMOKE_NET_MODE", "slirp")
+# `or "slirp"` (NOT a get-default): an EMPTY SMOKE_NET_MODE must read as slirp, matching
+# boot_vm.sh's `${SMOKE_NET_MODE:-slirp}`. A workflow expression like `${{ inputs.net_mode }}`
+# sets the env var to "" on a schedule / no-input event (inputs are absent then), and
+# `get("SMOKE_NET_MODE", "slirp")` would keep "" and trip the guard below — crashing the
+# conftest import on the nightly UI run. Empty == unset == slirp.
+NET_MODE = os.environ.get("SMOKE_NET_MODE") or "slirp"
 if NET_MODE not in ("slirp", "bridge"):
     raise ValueError(f"SMOKE_NET_MODE must be 'slirp' or 'bridge' (got {NET_MODE!r})")
 
