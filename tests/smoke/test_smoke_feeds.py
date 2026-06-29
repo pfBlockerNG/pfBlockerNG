@@ -2338,3 +2338,129 @@ def test_junk_octet_stream_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedS
             f"(ADR §7: recovery must not blanket-accept application/octet-stream), "
             f"found it present — tables: {tables_after}"
         )
+
+
+# ── ADR-45: first-class 7z (opportunistic — 7-Zip is NOT shipped with pfBlockerNG) ──
+# /usr/local/bin/7z is an optional add-on. The CI smoke image bakes it in so the import +
+# corrupt cases run; on any box without it those two SKIP. The missing-binary case ALWAYS
+# runs (it hides the binary when present) so the default "no 7-Zip → safe reject + clear
+# message" reality stays covered even on the 7z-baked image.
+_SEVENZIP_BIN = "/usr/local/bin/7z"
+# Substring of the pfb_download() "install 7-zip" log line (pfblockerng.inc).
+_SEVENZIP_MISSING_MARKER = "Install the 7-Zip package"
+
+
+def _have_7z(vm: SmokeVM) -> bool:
+    """True iff /usr/local/bin/7z is executable on the guest (the opportunistic extractor)."""
+    return vm.ssh(f"test -x {_SEVENZIP_BIN} && echo y || echo n").stdout.strip() == "y"
+
+
+@pytest.mark.timeout(120)
+def test_7z_feed_imports(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-45: a 7z-compressed IP feed imports when 7-Zip is installed.
+
+    7-Zip is an OPTIONAL extractor (not shipped with pfBlockerNG), so this exercises the
+    first-class 7z path only when /usr/local/bin/7z is present — it is baked into the CI
+    smoke image; on a box without it the test SKIPS (the missing-binary behaviour is pinned
+    by ``test_7z_missing_binary_rejected``). Paired with ``test_corrupt_7z_rejected``.
+
+    Given the alias does not exist.
+    When the case Force-Updates over the .7z feed (file(1) → application/x-7z-compressed →
+      allow-listed → 7z branch → 7z t probe → 7z e -so),
+    Then 203.0.113.11 is present in the pf table — the 7z archive was extracted end-to-end.
+    """
+    if not _have_7z(deployed_vm):
+        pytest.skip(f"{_SEVENZIP_BIN} not installed; 7z extraction is opportunistic — skipping import case")
+    feed_url = mock_feeds.feed_url("archive_valid.7z")
+    spec = h.IpCase(aliasname="adr457z", feed_url=feed_url, header="adr457z", family="v4")
+
+    # Given — alias absent before any load attempt.
+    assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the 7z feed was ever loaded"
+
+    with h.CaseContext(deployed_vm, spec):
+        # When — Force Update fetches + file-detects application/x-7z-compressed + 7z e -so extracts.
+        members = h.wait_pfctl_table(deployed_vm, spec.alias)
+        # Then — the inner IP loaded, proving the 7z branch extracted end-to-end.
+        assert h.member_present(members, _ADR45_MEMBER), (
+            f"expected {_ADR45_MEMBER!r} in {spec.alias} after 7z extraction, got: {members}"
+        )
+        assert h.rule_references(deployed_vm, spec.alias), f"no loaded pf rule references {spec.alias} after 7z import"
+
+
+@pytest.mark.timeout(120)
+def test_corrupt_7z_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-45: a corrupt 7z feed is rejected by the structural probe (when 7-Zip is present).
+
+    Skips when 7-Zip is absent (the ``7z t`` probe can't run; the missing-binary path is its
+    own test). Paired with ``test_7z_feed_imports`` to prove the probe is a real branch, not
+    an always-reject path.
+
+    Given the alias does not exist.
+    When the case Force-Updates over a truncated .7z (file(1) → application/x-7z-compressed →
+      7z branch → ``7z t`` exits non-zero),
+    Then the alias remains absent — the structural probe rejected the corrupt archive.
+    """
+    if not _have_7z(deployed_vm):
+        pytest.skip(f"{_SEVENZIP_BIN} not installed; the 7z probe can't run — skipping corrupt-7z case")
+    feed_url = mock_feeds.feed_url("archive_corrupt.7z")
+    spec = h.IpCase(aliasname="adr45c7z", feed_url=feed_url, header="adr45c7z", family="v4")
+
+    # Given — alias absent before any load attempt.
+    assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the corrupt-7z feed"
+
+    with h.CaseContext(deployed_vm, spec):
+        # When — Force Update; the 7z t probe fails. Then — alias never created.
+        tables_after = h.pfctl_tables(deployed_vm)
+        assert spec.alias not in tables_after, (
+            f"expected {spec.alias!r} absent after corrupt 7z (7z -t probe must reject), "
+            f"found it present — tables: {tables_after}"
+        )
+
+
+@pytest.mark.timeout(120)
+def test_7z_missing_binary_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-45: a 7z feed on a box WITHOUT 7-Zip is rejected with a clear "install 7-zip" message.
+
+    7z extraction is opportunistic (pfBlockerNG ships no 7-Zip), so the DEFAULT user reality
+    is "no 7-Zip → safe reject". This pins that path AND the message that tells the user how
+    to enable 7z — instead of the misleading "corrupt archive". The CI image bakes 7-Zip in
+    (for the import case), so this test temporarily HIDES the binary to recreate the
+    missing-tool condition, then restores it in a finally.
+
+    Given a valid .7z feed (file(1) → application/x-7z-compressed) and no usable 7-Zip,
+    When the case Force-Updates,
+    Then the alias is NOT created (rejected before extraction) AND pfblockerng.log gains the
+      "Install the 7-Zip package" line — NOT a "corrupt archive" line.
+    """
+    stash = "/tmp/pfb_7z_hidden_for_test"
+    hidden = False
+    if _have_7z(deployed_vm):
+        deployed_vm.ssh(f"mv {_SEVENZIP_BIN} {stash}")
+        hidden = True
+    try:
+        assert not _have_7z(deployed_vm), (
+            f"{_SEVENZIP_BIN} still resolves after hiding it — cannot recreate the missing-7z condition"
+        )
+        feed_url = mock_feeds.feed_url("archive_valid.7z")
+        spec = h.IpCase(aliasname="adr45m7z", feed_url=feed_url, header="adr45m7z", family="v4")
+
+        # Given — alias absent + record the current "install 7-zip" message count.
+        assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the missing-7z feed"
+        before = h.count_log_marker(deployed_vm, h.PFB_LOG, _SEVENZIP_MISSING_MARKER)
+
+        with h.CaseContext(deployed_vm, spec):
+            # Then — no extraction is possible, so the alias is never created (safe reject).
+            tables_after = h.pfctl_tables(deployed_vm)
+            assert spec.alias not in tables_after, (
+                f"expected {spec.alias!r} absent when 7-Zip is missing (must safe-reject, not extract), "
+                f"found it present — tables: {tables_after}"
+            )
+            # And — a NEW "install 7-zip" line was logged (clear guidance, not "corrupt archive").
+            after = h.count_log_marker(deployed_vm, h.PFB_LOG, _SEVENZIP_MISSING_MARKER)
+            assert after > before, (
+                f"expected a new {_SEVENZIP_MISSING_MARKER!r} line in {h.PFB_LOG} after a 7z feed with no 7-Zip "
+                f"(clear install guidance, not a 'corrupt archive' message); count before={before} after={after}"
+            )
+    finally:
+        if hidden:
+            deployed_vm.ssh(f"mv {stash} {_SEVENZIP_BIN}")

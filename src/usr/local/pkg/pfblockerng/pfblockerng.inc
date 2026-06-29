@@ -726,6 +726,23 @@ function pfb_octet_recover_type(string $file, array $supported_types, callable $
 	return NULL;
 }
 
+// ADR-45: which structural-probe extractor a feed type needs WHEN that extractor is
+// missing — returns the binary path, else NULL (tool present, or non-archive type).
+// Lets pfb_download() emit a clear "install <tool>" message instead of a misleading
+// "corrupt archive" when an OPTIONAL extractor is absent. In practice only 7-Zip is
+// optional (/usr/local/bin/7z is an add-on package); gunzip/bzip2/tar are FreeBSD base
+// and always present. $checker is injectable (defaults to is_executable) for unit tests.
+function pfb_archive_missing_tool(string $canonical_type, ?callable $checker = NULL): ?string {
+	$argv = pfb_archive_probe($canonical_type);
+	if ($argv === NULL) {
+		return NULL;        // non-archive: no extractor needed
+	}
+	if ($checker === NULL) {
+		$checker = 'is_executable';
+	}
+	return $checker($argv[0]) ? NULL : $argv[0];
+}
+
 // Function to filter/sanitize user input
 function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FALSE) {
 	global $pfb;
@@ -8484,6 +8501,15 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			}
 		}
 		elseif ($file_type == 'application/x-7z-compressed') {
+			// 7-Zip is an OPTIONAL add-on (not in the FreeBSD base, unlike gunzip/bzip2/tar),
+			// so a 7z feed on a box without it must say "install 7-zip" — not the misleading
+			// "corrupt archive" the structural probe would otherwise report (ADR-45).
+			$missing_7z = pfb_archive_missing_tool($file_type);
+			if ($missing_7z !== NULL) {
+				pfb_logger("\n[pfb_download] Cannot process {$file_type} feed: '{$missing_7z}' is not installed. Install the 7-Zip package (pkg install 7-zip) to use 7z-compressed feeds. Skipping [" . htmlspecialchars($list_url) . "]", 2);
+				unlink_if_exists($file_download);
+				return FALSE;
+			}
 			if (!pfb_validate_archive($file_download, $file_type)) {
 				pfb_logger("\n[pfb_download] Corrupt or unreadable {$file_type} archive (structural probe failed): [" . htmlspecialchars($file_download) . "]", 2);
 				unlink_if_exists($file_download);
