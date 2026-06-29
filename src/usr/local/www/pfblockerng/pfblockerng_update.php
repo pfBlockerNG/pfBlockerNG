@@ -69,10 +69,11 @@ function pfbupdate_status($status) {
 
 
 // TRUE when a pfBlockerNG feed task (cron/update/trigger/tick/forcecheck) is already running.
-// Single source for the active-process guard used by the Run Now dispatchers and the status line.
+// The active-process guard used by the Run Now dispatchers and the status line; delegates to
+// pfb_feed_task_running() (pfblockerng.inc) so the guard and pfb_livetail's terminator share
+// one process-liveness check.
 function pfb_active_task_running(): bool {
-	exec('/bin/ps -wax', $result_ps);
-	return (bool) preg_grep('/pfblockerng[.]php\s+?(cron|update|pfb_trigger|tick|forcecheck)/', $result_ps);
+	return pfb_feed_task_running();
 }
 
 // Dispatch pfb_trigger via the Phase-3 explicit API, stream log output,
@@ -104,10 +105,16 @@ function pfb_runnow(string $scope, bool $force): void {
 
 	// Record $now before dispatching so last_run reflects when the run was requested.
 	$now = time();
-	mwexec_bg("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php pfb_trigger scope={$scope_esc} force={$force_val} trigger={$trigger_esc} >> {$pfb['log']} 2>&1");
+	// Launch detached under daemon(8) with a pidfile so the livetail can track THIS
+	// dispatched process by pid (isvalidpid) rather than a ps-pattern guess. daemon writes
+	// the child pid to $pidfile and removes it on exit; mwexec_bg keeps the robust detach.
+	$pidfile = '/var/run/pfb_runnow.pid';
+	@unlink($pidfile);
+	mwexec_bg("/usr/sbin/daemon -p " . escapeshellarg($pidfile) .
+		" /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php pfb_trigger scope={$scope_esc} force={$force_val} trigger={$trigger_esc} >> {$pfb['log']} 2>&1");
 
-	// Block until the bg process writes "UPDATE PROCESS ENDED".
-	pfb_livetail($pfb['log'], 'force');
+	// Block until the dispatched process exits (the tail keys on its pidfile).
+	pfb_livetail($pfb['log'], 'force', $pidfile);
 
 	// Update the 'cron' ledger entry so the Schedule view reflects this manual run.
 	// Only advance the full-pass ledger when scope=both — a partial scope=ip/dnsbl run
@@ -147,9 +154,14 @@ function pfb_runnow_forcecheck(string $scope): void {
 	pfb_logger("\n [ Force check - scope={$scope} ]\n", 1);
 
 	$now = time();
-	mwexec_bg("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php forcecheck scope={$scope_esc} >> {$pfb['log']} 2>&1");
+	// Launch detached under daemon(8) with a pidfile — see pfb_runnow(); the livetail
+	// tracks this dispatched process by pid (isvalidpid), not a ps-pattern.
+	$pidfile = '/var/run/pfb_runnow.pid';
+	@unlink($pidfile);
+	mwexec_bg("/usr/sbin/daemon -p " . escapeshellarg($pidfile) .
+		" /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php forcecheck scope={$scope_esc} >> {$pfb['log']} 2>&1");
 
-	pfb_livetail($pfb['log'], 'force');
+	pfb_livetail($pfb['log'], 'force', $pidfile);
 
 	if ($scope === 'both') {
 		$interval = ((int)($pfb['interval'] ?: 1)) * 3600;
