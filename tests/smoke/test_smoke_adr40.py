@@ -293,6 +293,19 @@ def test_adr40_content_gate_fires_on_change(adr40_vm: SmokeVM) -> None:
         f"after content change: pf table {ip_spec.alias} still contains old IP {old_ip}: {members_after}"
     )
 
+    # The content change ran the no-rule-change reload path, which logs a per-alias
+    # " Updating: <alias>" line. Those lines must render CONTIGUOUSLY (one per line), not
+    # blank-separated — a leading "\n" in the log format put a blank line above every entry.
+    # Guard the exact regression: no "Updating:" entry preceded by a blank line.
+    reload_log = adr40_vm.ssh("cat", h.PFB_LOG).stdout
+    assert " Updating:" in reload_log, (
+        f"expected a per-alias ' Updating:' line in the reload log after a content change:\n{reload_log[-1500:]}"
+    )
+    assert "\n\n Updating:" not in reload_log, (
+        "per-alias ' Updating:' log lines are blank-separated (a leading newline in the log "
+        f"format); they must be contiguous:\n{reload_log[-1500:]}"
+    )
+
     h.clear_update_hooks(adr40_vm)
 
 
