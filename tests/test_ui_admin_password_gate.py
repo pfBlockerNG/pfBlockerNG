@@ -50,5 +50,7 @@ def test_unset_password_off_ci_skips() -> None:
 
 def test_empty_password_treated_as_unset() -> None:
     """An empty-string password is not a real credential — treated as unset."""
-    assert admin_password_decision({ADMIN_PASSWORD_ENV: ""})[0] == "skip"
-    assert admin_password_decision({ADMIN_PASSWORD_ENV: "", "CI": "true"})[0] == "fail"
+    action, _ = admin_password_decision({ADMIN_PASSWORD_ENV: ""})
+    assert action == "skip", f"empty password off-CI must skip (treated as unset), got {action!r}"
+    action, _ = admin_password_decision({ADMIN_PASSWORD_ENV: "", "CI": "true"})
+    assert action == "fail", f"empty password under CI must fail (treated as unset), got {action!r}"
