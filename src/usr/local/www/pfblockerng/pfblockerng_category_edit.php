@@ -608,7 +608,11 @@ if ($_POST && isset($_POST['save'])) {
 	// Validate Adv. firewall rule settings (issue #356/#636: per-field alias-type check).
 	// Existence + type are resolved from the configuration (alias_get_type), NOT is_alias()
 	// whose $aliastable cache is empty on this page — see pfb_adv_alias_field_errors().
-	$input_errors = array_merge($input_errors, pfb_adv_alias_field_errors($_POST));
+	// Append (not array_merge): $input_errors is left unset until the first error so the
+	// later isset($input_errors) checks hold — appending auto-vivifies only on a real error.
+	foreach (pfb_adv_alias_field_errors($_POST) as $pfb_alias_error) {
+		$input_errors[] = $pfb_alias_error;
+	}
 
 	// Validate Adv. firewall rule 'Protocol' setting
 	if (!empty($_POST['autoports_in']) || !empty($_POST['autoaddr_in'])) {
