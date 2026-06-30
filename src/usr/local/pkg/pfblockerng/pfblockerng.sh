@@ -645,26 +645,29 @@ pfb_aggregate() {
 	done < "${agg_memberlist}"
 	LC_ALL=C sort -u "${tempfile}" > "${dedupfile}"
 
-	# CIDR-collapse the deduped union. iprange is IPv4-ONLY: given IPv6 it truncates each
-	# address at the first ':' and reads the leading hextet as a decimal, emitting bogus
-	# 0.0.x.y entries -- so ONLY v4 is passed through it (mirroring the per-alias path, which
-	# gates cidr_aggregate to _v4 in pfblockerng.inc). For v6 the deduped sort -u union IS the
-	# result: set-correct, just not minimal-CIDR-collapsed -- exactly how every individual v6
-	# alias is already kept. Write via a temp + mv so a transient iprange failure cannot clobber
-	# a previously valid aggregate (the '>' redirect would truncate ${agg_out} before it ran).
+	# CIDR-collapse the deduped union into a temp, then mv into place only on success -- so a
+	# failure in ANY branch (iprange error, or a write/copy failure) cannot clobber a previously
+	# valid aggregate (a direct '>' redirect would truncate ${agg_out} before the producer ran).
+	# iprange is IPv4-ONLY: given IPv6 it truncates each address at the first ':' and reads the
+	# leading hextet as a decimal, emitting bogus 0.0.x.y entries -- so ONLY v4 is passed through
+	# it (mirroring the per-alias path, which gates cidr_aggregate to _v4 in pfblockerng.inc). For
+	# v6 the deduped sort -u union IS the result: set-correct, just not minimal-CIDR-collapsed --
+	# exactly how every individual v6 alias is already kept. An empty union writes an empty
+	# aggregate (the never-empty consumer placeholder is handled below).
+	agg_tmp="${agg_out}.tmp"
 	if [ ! -s "${dedupfile}" ]; then
-		: > "${agg_out}"
+		: > "${agg_tmp}"
 	elif [ "${agg_family}" = 'v6' ]; then
-		cp -f "${dedupfile}" "${agg_out}"
+		cp -f "${dedupfile}" "${agg_tmp}"
 	else
-		agg_tmp="${agg_out}.tmp"
-		if ! "${pathaggregate}" "${dedupfile}" > "${agg_tmp}"; then
-			rm -f "${agg_tmp}"
-			log="aggregate [ ${agg_family} ]: iprange failed; keeping existing [ ${agg_out} ]."
-			echo "${log}" | tee -a "${errorlog}"
-			return
-		fi
-		mv -f "${agg_tmp}" "${agg_out}"
+		"${pathaggregate}" "${dedupfile}" > "${agg_tmp}"
+	fi
+	agg_rc="$?"
+	if [ "${agg_rc}" -ne 0 ] || ! mv -f "${agg_tmp}" "${agg_out}"; then
+		rm -f "${agg_tmp}"
+		log="aggregate [ ${agg_family} ]: build of [ ${agg_out} ] failed; keeping existing."
+		echo "${log}" | tee -a "${errorlog}"
+		return
 	fi
 
 	# Never-empty '-f' consumer file: mirror the aggregate, but substitute a single
