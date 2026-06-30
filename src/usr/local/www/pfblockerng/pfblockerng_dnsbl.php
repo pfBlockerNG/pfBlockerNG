@@ -2859,7 +2859,7 @@ foreach (config_get_path('aliases/alias', []) as $pfb_alias_entry) {
 	if (str_starts_with($pfb_alias_entry_name, PFB_MANAGED_FILTER_PFX)) {
 		continue;
 	}
-	if (in_array($pfb_alias_entry['type'] ?? '', array('host', 'network', 'urltable'), TRUE)) {
+	if (in_array($pfb_alias_entry['type'] ?? '', pfb_exclude_alias_types(), TRUE)) {
 		$pfb_alias_names[] = $pfb_alias_entry_name;
 	}
 }

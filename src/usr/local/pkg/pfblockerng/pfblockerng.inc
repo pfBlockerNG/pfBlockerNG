@@ -459,10 +459,13 @@ function pfb_validate_dns_redirect_post(
 		} elseif (str_starts_with($posted_alias, PFB_MANAGED_FILTER_PFX)) {
 			$errors[] = 'DNS Redirect: Exception alias must not be a pfBlockerNG-managed (' .
 				PFB_MANAGED_FILTER_PFX . '*) alias: ' . htmlspecialchars($posted_alias, ENT_QUOTES);
-		} elseif (!pfb_exclude_alias_exists($posted_alias)) {
+		} elseif (pfb_alias_type($posted_alias) === NULL) {
 			$errors[] = 'DNS Redirect: Exception alias does not exist: ' .
 				htmlspecialchars($posted_alias, ENT_QUOTES) .
 				' (create it under Firewall > Aliases first)';
+		} elseif (!pfb_exclude_alias_exists($posted_alias)) {
+			$errors[] = 'DNS Redirect: Exception alias must be an address alias usable in ' .
+				'firewall rules (port aliases are not allowed): ' . htmlspecialchars($posted_alias, ENT_QUOTES);
 		}
 	}
 	return $errors;
@@ -505,10 +508,13 @@ function pfb_validate_dot_block_post(
 		} elseif (str_starts_with($posted_alias, PFB_MANAGED_FILTER_PFX)) {
 			$errors[] = 'DoT/DoQ Block: Exception alias must not be a pfBlockerNG-managed (' .
 				PFB_MANAGED_FILTER_PFX . '*) alias: ' . htmlspecialchars($posted_alias, ENT_QUOTES);
-		} elseif (!pfb_exclude_alias_exists($posted_alias)) {
+		} elseif (pfb_alias_type($posted_alias) === NULL) {
 			$errors[] = 'DoT/DoQ Block: Exception alias does not exist: ' .
 				htmlspecialchars($posted_alias, ENT_QUOTES) .
 				' (create it under Firewall > Aliases first)';
+		} elseif (!pfb_exclude_alias_exists($posted_alias)) {
+			$errors[] = 'DoT/DoQ Block: Exception alias must be an address alias usable in ' .
+				'firewall rules (port aliases are not allowed): ' . htmlspecialchars($posted_alias, ENT_QUOTES);
 		}
 	}
 	if (!in_array($posted_action, ['block', 'reject'], TRUE)) {
@@ -518,23 +524,39 @@ function pfb_validate_dot_block_post(
 	return $errors;
 }
 
-// Existence check for a DNS-redirect/DoT exception alias that is correct in EVERY context.
-// pfSense's is_alias() consults the in-memory $aliastable cache, which is populated only by
-// alias_make_table() during filter generation — so in a cron/service-restart sync (e.g. the
-// DNSBL reload) that cache is empty and is_alias() reports every user-defined alias as
-// missing (#664). Read the configuration directly instead — the same source the Exception
-// Alias autocomplete and the rest of the package use — so a valid alias resolves regardless
-// of whether the filter has been generated in this process.
-function pfb_exclude_alias_exists(string $alias): bool {
+// Alias types usable as a firewall-rule SOURCE (an address-bearing alias) — and therefore
+// valid as a DNS-redirect/DoT exception. Port aliases ('port', 'urltable_ports') are excluded:
+// a port alias cannot be a rule source. Single source of truth for the save-time validators,
+// the rule builder, and the Exception-Alias autocomplete (pfblockerng_dnsbl.php).
+function pfb_exclude_alias_types(): array {
+	return ['host', 'network', 'urltable'];
+}
+
+// Return the configured type of the firewall alias named $alias ('host'|'network'|'urltable'|
+// 'port'|…), or NULL when no alias by that name exists. Reads the configuration directly,
+// which is correct in EVERY context — unlike is_alias(), which consults the in-memory
+// $aliastable cache that alias_make_table() only populates during filter generation, so in a
+// cron/service-restart sync (e.g. the DNSBL reload) that cache is empty and is_alias() reports
+// every user-defined alias as missing (#664). Config is the authoritative source the cache is
+// derived from, and the same source the Exception-Alias autocomplete and the rest of the
+// package use.
+function pfb_alias_type(string $alias): ?string {
 	if ($alias === '') {
-		return FALSE;
+		return NULL;
 	}
 	foreach (config_get_path('aliases/alias', []) as $pfb_cfg_alias) {
 		if (($pfb_cfg_alias['name'] ?? '') === $alias) {
-			return TRUE;
+			return (string) ($pfb_cfg_alias['type'] ?? '');
 		}
 	}
-	return FALSE;
+	return NULL;
+}
+
+// TRUE iff $alias is a configured alias usable as a DNS-redirect/DoT exception source
+// (it exists AND is an address-bearing type, not a port alias).
+function pfb_exclude_alias_exists(string $alias): bool {
+	$type = pfb_alias_type($alias);
+	return $type !== NULL && in_array($type, pfb_exclude_alias_types(), TRUE);
 }
 
 // Build the NAT/filter SOURCE array for a DNS-redirect / DoT-block exception alias.
