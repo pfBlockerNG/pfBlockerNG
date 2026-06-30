@@ -525,11 +525,13 @@ function pfb_validate_dot_block_post(
 }
 
 // Alias types usable as a firewall-rule SOURCE (an address-bearing alias) — and therefore
-// valid as a DNS-redirect/DoT exception. Port aliases ('port', 'urltable_ports') are excluded:
-// a port alias cannot be a rule source. Single source of truth for the save-time validators,
-// the rule builder, and the Exception-Alias autocomplete (pfblockerng_dnsbl.php).
+// valid as a DNS-redirect/DoT exception. Covers the four address types: 'host', 'network',
+// 'url' (URL of IPs/hosts) and 'urltable' (URL Table of IPs). Port aliases ('port',
+// 'url_ports', 'urltable_ports') are excluded: a port alias cannot be a rule source. Single
+// source of truth for the save-time validators, the rule builder, and the Exception-Alias
+// autocomplete (pfblockerng_dnsbl.php).
 function pfb_exclude_alias_types(): array {
-	return ['host', 'network', 'urltable'];
+	return ['host', 'network', 'url', 'urltable'];
 }
 
 // Return the configured type of the firewall alias named $alias ('host'|'network'|'urltable'|

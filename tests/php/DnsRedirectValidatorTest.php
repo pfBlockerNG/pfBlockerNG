@@ -169,6 +169,16 @@ final class DnsRedirectValidatorTest extends TestCase
 		$this->assertStringContainsString('port aliases are not allowed', $errors[0]);
 	}
 
+	public function testUrlTypeAliasIsAccepted(): void
+	{
+		// A pfSense 'url' alias (URL of IPs/hosts) is an address-bearing type and a valid
+		// firewall-rule source, so it must be ACCEPTED as an exception alias — not rejected
+		// as a "port alias".
+		$this->seedAliases(['Url_Feed'], 'url');
+		$errors = pfb_validate_dns_redirect_post(['lan'], $this->validIfaceList, 'Url_Feed');
+		$this->assertSame([], $errors, "a 'url' (address) alias must be accepted");
+	}
+
 	public function testMultipleValidInterfacesAreAccepted(): void
 	{
 		// Given multiple valid interfaces
