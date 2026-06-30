@@ -577,6 +577,35 @@ def test_dnsbl_lenient_parsing_field_renders(webui: WebUI, php_error_log_guard: 
         assert needle in body, f"DNSBL page is missing the lenient-parsing marker {needle!r}"
 
 
+def test_dnsbl_redir_exception_and_fill_fields_render(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """The ADR-36/37 DNS-Redirect & DoT/DoQ-Block exception-alias autocomplete + the
+    interface quick-fill rewrite render cleanly on the DNSBL page — so a regression that
+    drops the autocomplete wiring or reverts the fill helper is caught at the render tier
+    (the browser-only behaviours themselves are exercised by the Tier-B browser tests).
+
+    Asserts the page passes the clean-render oracle AND that the markers for all three
+    PR-660 fixes are present: the two exception-alias input field names, the autocomplete
+    bootstrap function + its alias-name source array, and the ``.val(...)`` fill rewrite
+    (the form that replaced the broken per-option ``.prop('selected')`` loop).
+    ``php_error_log_guard`` enrolls this GET in the module-level no-growth sweep.
+    """
+    path = "/pfblockerng/pfblockerng_dnsbl.php"
+    resp = webui.get(path)
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Configuration",))
+    assert result.ok, f"DNSBL render oracle failed: {result.detail}"
+    body = resp.text
+    for needle in (
+        # (2) Exception Alias fields + their autocomplete wiring.
+        'name="dnsbl_redir_exclude"',
+        'name="dnsbl_dot_block_exclude"',
+        "pfb_redir_exclude_autocomplete",
+        "pfb_alias_names",
+        # (3) The fill rewrite — the canonical .val([...]) form (not the old .prop() loop).
+        ".val(pfb_redir_fill_ifaces)",
+    ):
+        assert needle in body, f"DNSBL page is missing the redirect/fill marker {needle!r}"
+
+
 def test_feeds_custom_panel_heading_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
     """The second Feeds panel — the one listing user-configured feeds that don't match the
     predefined catalog — is headed "Custom Feeds", not the former "Unknown user defined Feeds".
