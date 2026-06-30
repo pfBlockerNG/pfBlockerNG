@@ -1479,6 +1479,30 @@ function pfb_dnsblip_rebuild_check(string $output, array $ip_files, string $fp_p
 	return array($rebuild, $fp_now);
 }
 
+// Resolve the working folder a DNSBLIP feed lands in from its configured action
+// ($pfb['dnsbl_ip']). This is the SAME action -> folder routing the IP-feed loop applies
+// via pfb_determine_list_detail() (Deny_*/Alias_Deny -> denydir, Alias_Native -> nativedir),
+// so the reprocess marker and the loop's reprocess gate agree on the folder. Returns ''
+// for a non-routable action (e.g. 'Disabled'). (#655)
+function pfb_dnsblip_action_folder($action): string {
+	global $pfbarr;
+	// key 0 + the DNSBL settings section mirror what the IP loop passes for DNSBLIP,
+	// so the force-Native override (Advanced Invert) routes identically here.
+	pfb_determine_list_detail($action, 'DNSBLIP', 'pfblockerngdnsblsettings', 0);
+	return (string) ($pfbarr['folder'] ?? '');
+}
+
+// Write the DNSBLIP '.update' reprocess marker into the folder that matches the feed's
+// configured action, NOT a hardcoded denydir. With $pfb['dnsbl_ip'] = 'Alias_Native' the
+// feed loop looks in nativedir; a denydir marker was never seen there, so a changed
+// Alias_Native DNSBLIP fell into the "exists" branch and was not reprocessed. (#655)
+function pfb_dnsblip_mark_reprocess($action, string $vtype): void {
+	$folder = pfb_dnsblip_action_folder($action);
+	if ($folder !== '') {
+		touch("{$folder}/DNSBLIP{$vtype}.update");
+	}
+}
+
 // v6 stays OPTIONAL (ADR-13 §7 pivot): a missing v6 VIP never fails validation, even when
 // the resolver listens on IPv6 — pfb_global surfaces that as a non-blocking warning, not a
 // force-disable. The validator only checks the VIPs that ARE configured (existence,
@@ -14662,15 +14686,17 @@ function sync_package_pfblockerng($cron='') {
 			}
 			@file_put_contents("{$dnsblip_v4}.fp", $pfb_dnsblip_fp, LOCK_EX);
 			unlink_if_exists($pfb['ip_cache']);
-			touch("{$pfb['denydir']}/DNSBLIP_v4.update");
+			pfb_dnsblip_mark_reprocess($pfb['dnsbl_ip'], '_v4');
 		}
 	}
 
-	// Remove DNSBL IP feed, if disabled
+	// Remove DNSBL IP feed, if disabled. The prior action is unknown here, so clear the
+	// marker/destination from BOTH folders DNSBLIP can land in (denydir + nativedir). (#655)
 	if ($pfb['dnsbl_ip'] == 'Disabled') {
 		unlink_if_exists("{$pfb['dbdir']}/DNSBLIP_v4.txt");
 		unlink_if_exists("{$pfb['dbdir']}/DNSBLIP_v4.txt.fp");
 		unlink_if_exists("{$pfb['denydir']}/DNSBLIP_v4.*");
+		unlink_if_exists("{$pfb['nativedir']}/DNSBLIP_v4.*");
 	}
 
 	// Collect all DNSBL IP feeds (IPv6 only) into DNSBLIP_v6.txt -- gated on the *_v6.ip source
@@ -14705,15 +14731,17 @@ function sync_package_pfblockerng($cron='') {
 			}
 			@file_put_contents("{$dnsblip_v6}.fp", $pfb_dnsblip_fp, LOCK_EX);
 			unlink_if_exists($pfb['ip_cache']);
-			touch("{$pfb['denydir']}/DNSBLIP_v6.update");
+			pfb_dnsblip_mark_reprocess($pfb['dnsbl_ip'], '_v6');
 		}
 	}
 
-	// Remove DNSBL IP feed, if disabled
+	// Remove DNSBL IP feed, if disabled. The prior action is unknown here, so clear the
+	// marker/destination from BOTH folders DNSBLIP can land in (denydir + nativedir). (#655)
 	if ($pfb['dnsbl_ip'] == 'Disabled') {
 		unlink_if_exists("{$pfb['dbdir']}/DNSBLIP_v6.txt");
 		unlink_if_exists("{$pfb['dbdir']}/DNSBLIP_v6.txt.fp");
 		unlink_if_exists("{$pfb['denydir']}/DNSBLIP_v6.*");
+		unlink_if_exists("{$pfb['nativedir']}/DNSBLIP_v6.*");
 	}
 
 	#########################################
