@@ -11621,6 +11621,17 @@ function pfb_livetail_force_done(bool $running, bool $saw_output, bool &$seen, i
 }
 
 
+// Decide whether a plain Update-page load should AUTO-TAIL an in-progress update (stream it
+// live like the View button) instead of pre-filling the last-run log tail. TRUE iff a
+// pfBlockerNG feed task is running AND this request is neither a Run-Now/wizard dispatch
+// ($run_dispatch) nor a View/End-View button click ($logview_posted) — those paths drive their
+// own livetail. Pure (no globals/IO) so it is unit-tested directly; the page passes isset()
+// booleans for the two POST signals.
+function pfb_update_autotail(bool $task_running, bool $run_dispatch, bool $logview_posted): bool {
+	return $task_running && !$run_dispatch && !$logview_posted;
+}
+
+
 // Read logfile in realtime (livetail)
 // Reference: http://stackoverflow.com/questions/3218895/php-how-to-read-a-file-live-that-is-constantly-being-written-to
 function pfb_livetail($logfile, $mode, $pidfile = '') {
