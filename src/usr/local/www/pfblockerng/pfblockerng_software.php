@@ -152,6 +152,11 @@ if ($_POST && !empty($_POST['pfb_sw_action'])) {
 	$pfb_sw_action = (string) $_POST['pfb_sw_action'];
 }
 
+// Prefill the output textarea with the last software.log tail ONLY when this is the reload
+// right after a successful upgrade — pfb_software_reload() below redirects back here with
+// ?postupgrade=1 on success. A normal visit to the tab leaves the output empty.
+$pfb_sw_postupgrade = (($_GET['postupgrade'] ?? '') === '1');
+
 // "Save" the settings (standard pfSense CSRF POST). A checkbox is absent from the POST when
 // unticked, so persist an explicit 'on'/'off' — an unset value defaults to enabled, an
 // explicit 'off' is the user opting out.
@@ -294,7 +299,9 @@ $section->addInput(new Form_StaticText(null, $btn_uninstall))
 $form->add($section);
 
 // Live terminal window (shown when an Update is streaming).
-// Plain GET (no active update/uninstall stream) → prefill pfb_output with the last software log.
+// pfb_output is prefilled with the last software-log tail ONLY on the post-upgrade reload
+// (?postupgrade=1); a plain visit leaves it empty. While an update/uninstall is streaming it
+// also starts empty (the stream fills it live).
 $pfb_sw_active = ($pfb_sw_action !== '');
 $section = new Form_Section('Output');
 $section->addInput(new Form_Textarea(
@@ -306,7 +313,7 @@ $section->addInput(new Form_Textarea(
 $section->addInput(new Form_Textarea(
 	'pfb_output',
 	null,
-	$pfb_sw_active ? null : pfb_log_tail('/var/log/pfblockerng/software.log')
+	($pfb_sw_active || !$pfb_sw_postupgrade) ? null : pfb_log_tail('/var/log/pfblockerng/software.log')
 ))->removeClass('form-control')->addClass('row-fluid col-sm-12')->setAttribute('rows', '20')->setAttribute('wrap', 'off')
   ->setAttribute('readonly', 'readonly')->setAttribute('style', 'background:#fafafa; width: 100%');
 $form->add($section);
@@ -332,7 +339,9 @@ if ($pfb_sw_action === 'update') {
 		// on failure, leave the terminal log on screen for the user to inspect.
 		if ($pfb_sw_rc === 0) {
 			pfb_software_status(gettext('Update complete — refreshing the page...'));
-			pfb_software_reload();
+			// Reload WITH the post-upgrade marker so the refreshed page prefills the output
+			// with the upgrade log tail (and scrolls to it); a normal visit stays empty.
+			pfb_software_reload('/pfblockerng/pfblockerng_software.php?postupgrade=1');
 		} else {
 			pfb_software_status(gettext('Update task finished with errors — see the log above.'));
 		}
@@ -404,11 +413,14 @@ events.push(function() {
 		}
 	});
 
-	// Show the newest lines: scroll the prefilled output textarea to the bottom on load
-	// (the streamed update/uninstall paths scroll as they write; the plain-GET prefill did not).
+<?php if ($pfb_sw_postupgrade): ?>
+	// Post-upgrade reload only: the output was prefilled with the upgrade log tail, so scroll
+	// it to the newest lines. (The streamed update/uninstall paths scroll as they write; a
+	// normal visit has no prefill, so there is nothing to scroll.)
 	$('textarea[name="pfb_output"]').each(function() {
 		this.scrollTop = this.scrollHeight;
 	});
+<?php endif; ?>
 });
 //]]>
 </script>

@@ -138,8 +138,7 @@ PAGE_TABLE: tuple[Page, ...] = (
     Page(
         "update",
         "/pfblockerng/pfblockerng_update.php",
-        # "Show the newest lines:" — the prefilled-log auto-scroll snippet (issue: log auto-scroll).
-        ("Update Settings", "Schedule", "Show the newest lines:"),
+        ("Update Settings", "Schedule"),
     ),
     # blacklist.php is always the DNSBL Category view; the long info line is a stable literal.
     Page(
@@ -886,6 +885,52 @@ def test_software_page_renders_uninstall_controls(
         assert "disabled" in btn_tag, (
             f"Uninstall button expected 'disabled' attribute on initial render, got: {btn_tag!r}"
         )
+
+
+def _pfb_output_value(body: str) -> str:
+    """Return the rendered value (text between the tags) of the ``pfb_output`` textarea."""
+    match = re.search(r'<textarea\b[^>]*name="pfb_output"[^>]*>(.*?)</textarea>', body, re.DOTALL)
+    assert match is not None, "pfb_output textarea not found in body"
+    return match.group(1)
+
+
+def test_log_output_prefill_gating(smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """The log output textarea is prefilled only on the Software post-upgrade reload (#666).
+
+    Scenario (prefill gating):
+      Given software.log and the pfBlockerNG log each seeded with a unique marker,
+      When the Software page is GET WITHOUT ``?postupgrade=1`` -> pfb_output is EMPTY;
+      When the Software page is GET WITH ``?postupgrade=1`` -> pfb_output is prefilled with the
+           software.log tail (the marker appears);
+      When the Update page is GET -> pfb_output is EMPTY (prefill removed).
+
+    The seeded markers make the empty assertions meaningful (the textarea is empty by choice,
+    not because the log is empty) — fail-before: the old code prefilled the tail on every plain
+    GET, so both markers would appear.
+    """
+    sw_marker = f"pfb-sw-prefill-{uuid.uuid4().hex[:8]}"
+    upd_marker = f"pfb-upd-prefill-{uuid.uuid4().hex[:8]}"
+    with software_panel_forced(smoke_vm, "on"):
+        _seed_vm_file(smoke_vm, "/var/log/pfblockerng/software.log", sw_marker + "\n")
+        _seed_vm_file(smoke_vm, helpers.PFB_LOG, upd_marker + "\n")
+
+        # Software, plain GET → no prefill.
+        body = webui.get(_SOFTWARE_PAGE).text
+        assert sw_marker not in _pfb_output_value(body), (
+            "Software page must not prefill pfb_output without ?postupgrade=1"
+        )
+
+        # Software, post-upgrade reload → prefilled with the software.log tail.
+        body = webui.get(f"{_SOFTWARE_PAGE}?postupgrade=1").text
+        assert sw_marker in _pfb_output_value(body), (
+            "Software ?postupgrade=1 must prefill pfb_output with the software.log tail"
+        )
+
+        # Update page → no prefill (clean render, and the seeded log marker must be absent).
+        resp = webui.get(_UPDATE_PAGE)
+        result = evaluate_render(_UPDATE_PAGE, resp.status_code, resp.text, ("Update Settings", "Schedule"))
+        assert result.ok, f"Update page render oracle failed: {result.detail}"
+        assert upd_marker not in _pfb_output_value(resp.text), "Update page must not prefill pfb_output"
 
 
 def test_software_page_hidden_when_override_forces_off(

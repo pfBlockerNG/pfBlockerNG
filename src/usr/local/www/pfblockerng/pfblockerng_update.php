@@ -436,14 +436,9 @@ $section->addInput(new Form_StaticText(
 $form->add($section);
 
 // ---- Log section ----
-// Plain GET (no active run and no live-view) → prefill pfb_output with the last log tail.
-// $pconfig['run'] is the SAME signal the Run Now dispatch gate keys on (set by a button POST
-// and by the wizard-reload GET), so this suppresses the stale prefill on every run-start path.
-// $pfb_auto_tail also suppresses the stale prefill: an in-progress update is streamed live
-// (below) instead, so pfb_output must start empty for the livetail to fill it.
-$pfb_log_active = isset($pconfig['run']) ||
-                  (isset($pconfig['log_view']) && $pconfig['log_view'] !== 'View') ||
-                  $pfb_auto_tail;
+// The output textarea always starts EMPTY on load — no prefill of the last log tail. The
+// live paths fill it dynamically: Run Now / View / an in-progress update stream into it (and
+// scroll as they write); use the View button to inspect the last log.
 $section = new Form_Section('Log');
 $section->addInput(new Form_Textarea(
 	'pfb_status',
@@ -455,7 +450,7 @@ $section->addInput(new Form_Textarea(
 $section->addInput(new Form_Textarea(
 	'pfb_output',
 	NULL,
-	$pfb_log_active ? NULL : pfb_log_tail($pfb['log'])
+	NULL
 ))->removeClass('form-control')->addClass('row-fluid col-sm-12')->setAttribute('rows', '30')->setAttribute('wrap', 'off')
   ->setAttribute('readonly', 'readonly')->setAttribute('style', 'background:#fafafa; width: 100%');
 
@@ -550,12 +545,6 @@ events.push(function(){
 		var $row = $(this).closest('.row.form-group, .form-group');
 		$row.find('label.col-sm-2').remove();
 		$row.find('div.col-sm-10').removeClass('col-sm-10').addClass('col-sm-12');
-	});
-
-	// Show the newest lines: scroll the prefilled log textarea to the bottom on load
-	// (the live-tail/Run-Now paths scroll as they stream; the plain-GET prefill did not).
-	$('textarea[name="pfb_output"]').each(function() {
-		this.scrollTop = this.scrollHeight;
 	});
 
 	// Scroll to the bottom of the page after wizard
