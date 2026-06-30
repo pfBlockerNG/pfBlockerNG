@@ -586,16 +586,18 @@ cidr_aggregate() {
 # the cat|sort -u|iprange entirely. The consumer file must also already exist and be
 # non-empty, else we always (re)build to honour the never-empty contract.
 pfb_aggregate() {
-	if [ ! -x "${pathaggregate}" ]; then
-		log="Application [ iprange ] Not found. Cannot proceed."
-		echo "${log}" | tee -a "${errorlog}"
-		return
-	fi
-
 	agg_family="${2}"
 	agg_memberlist="${3}"
 	agg_out="${4}"
 	agg_consumer="${5}"
+
+	# v4 aggregation CIDR-collapses through iprange (below); v6 does NOT use iprange (it is
+	# IPv4-only), so require it only for v4 -- a v6 aggregate must still build without it.
+	if [ "${agg_family}" != 'v6' ] && [ ! -x "${pathaggregate}" ]; then
+		log="Application [ iprange ] Not found. Cannot proceed."
+		echo "${log}" | tee -a "${errorlog}"
+		return
+	fi
 
 	if [ -z "${agg_memberlist}" ] || [ -z "${agg_out}" ] || [ -z "${agg_consumer}" ]; then
 		log="aggregate [ ${agg_family} ]: missing memberlist/output path argument."
@@ -643,10 +645,18 @@ pfb_aggregate() {
 	done < "${agg_memberlist}"
 	LC_ALL=C sort -u "${tempfile}" > "${dedupfile}"
 
-	# CIDR-collapse the deduped union via iprange (set-exact). Write to a temp and mv into
-	# place only on success, so a transient iprange failure cannot clobber a previously valid
-	# aggregate (the '>' redirect would otherwise truncate ${agg_out} before iprange even ran).
-	if [ -s "${dedupfile}" ]; then
+	# CIDR-collapse the deduped union. iprange is IPv4-ONLY: given IPv6 it truncates each
+	# address at the first ':' and reads the leading hextet as a decimal, emitting bogus
+	# 0.0.x.y entries -- so ONLY v4 is passed through it (mirroring the per-alias path, which
+	# gates cidr_aggregate to _v4 in pfblockerng.inc). For v6 the deduped sort -u union IS the
+	# result: set-correct, just not minimal-CIDR-collapsed -- exactly how every individual v6
+	# alias is already kept. Write via a temp + mv so a transient iprange failure cannot clobber
+	# a previously valid aggregate (the '>' redirect would truncate ${agg_out} before it ran).
+	if [ ! -s "${dedupfile}" ]; then
+		: > "${agg_out}"
+	elif [ "${agg_family}" = 'v6' ]; then
+		cp -f "${dedupfile}" "${agg_out}"
+	else
 		agg_tmp="${agg_out}.tmp"
 		if ! "${pathaggregate}" "${dedupfile}" > "${agg_tmp}"; then
 			rm -f "${agg_tmp}"
@@ -655,8 +665,6 @@ pfb_aggregate() {
 			return
 		fi
 		mv -f "${agg_tmp}" "${agg_out}"
-	else
-		: > "${agg_out}"
 	fi
 
 	# Never-empty '-f' consumer file: mirror the aggregate, but substitute a single
