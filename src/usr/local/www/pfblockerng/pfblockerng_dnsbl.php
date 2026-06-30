@@ -3128,7 +3128,7 @@ $section->addInput(new Form_Checkbox(
 	gettext('Enable'),
 	pfb_cfg_toggle_read($pconfig['pfb_dnsbl_rule']) === PfbToggle::On,
 	'on'
-))->setHelp('This will create \'Floating\' Firewall permit rules to allow traffic from the Selected Interface(s) to access<br />'
+))->setHelp('This will create \'Floating\' Firewall permit rules to allow traffic from the Selected Interface(s) to access '
 		. 'the <strong>DNSBL Webserver</strong>. (ICMP and Webserver ports only).'
 		. '<br /><br />'
 		. 'This option is not designed to bypass DNSBL for the non-selected LAN segments<br />'

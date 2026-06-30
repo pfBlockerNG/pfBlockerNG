@@ -96,6 +96,10 @@ PAGE_TABLE: tuple[Page, ...] = (
             "no-AAAA",
             "pfb_dnsbl_nonat",  # issue-#381 NAT opt-out checkbox (name= attr in rendered HTML)
             "pfB_DNSBLIP_v4",  # DNSBL IPs help text names the real alias (was stale 'pfB_DNSBL_IP')
+            # Permit-rules help renders as one flowing sentence — a stray <br /> split
+            # "...to access<br />the DNSBL Webserver", so this space-joined phrase is the
+            # red→green guard (absent with the <br />, present once it is a space).
+            "Selected Interface(s) to access the ",
         ),
     ),
     # feeds.php is split into IPv4/IPv6/DNSBL ?type sub-tabs (ADR-16 Phase 3). Each type
