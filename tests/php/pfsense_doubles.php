@@ -743,6 +743,21 @@ if (!function_exists('is_alias')) {
 	}
 }
 
+if (!function_exists('alias_get_type')) {
+	// pfSense util.inc: return the 'type' of the named firewall alias from the
+	// configuration ('host'/'network'/'port'/'urltable'/...), or '' when no alias
+	// of that name exists. Config-based (reads aliases/alias via config_get_path),
+	// matching the real function — NOT the $aliastable cache that is_alias() uses.
+	function alias_get_type($name) {
+		foreach (config_get_path('aliases/alias', []) as $a) {
+			if (($a['name'] ?? '') === (string) $name) {
+				return (string) ($a['type'] ?? '');
+			}
+		}
+		return '';
+	}
+}
+
 if (!function_exists('get_configured_interface_with_descr')) {
 	// pfSense interfaces.inc: returns a map of interface_name => friendly description.
 	// Off-appliance, use pfb_test_interfaces if seeded; otherwise return an empty map.
