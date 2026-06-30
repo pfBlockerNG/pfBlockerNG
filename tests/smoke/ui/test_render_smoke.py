@@ -635,6 +635,38 @@ def test_dnsbl_doh_list_select_is_bounded_scrollable(webui: WebUI, php_error_log
     assert 'size="20"' in body, "DoH/DoT/DoQ Blocking List select is missing the bounded scrollable size='20'"
 
 
+def test_dnsbl_encrypted_dns_sections_order(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """The DNS Redirect and DoT/DoQ Block sections render ABOVE the DoH/DoT/DoQ Blocking
+    (DNS over HTTPS/TLS/QUIC Blocking) section on the DNSBL page.
+
+    The encrypted-DNS controls were reordered so the active interception controls (redirect
+    plain DNS, block DoT/DoQ) come first and the provider-name blocklist (DoH/DoT/DoQ
+    Blocking) sits last. This is a structural/positional change, so the order of the section
+    headings in the rendered HTML is the oracle.
+
+    Pins the change: pre-change the DoH section heading appeared FIRST (so it preceded the
+    other two and these assertions fail); post-change it appears last and both ``DNS
+    Redirect`` and ``DoT/DoQ Block`` precede it.
+    """
+    path = "/pfblockerng/pfblockerng_dnsbl.php"
+    resp = webui.get(path)
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Configuration",))
+    assert result.ok, f"DNSBL render oracle failed: {result.detail}"
+    body = resp.text
+    doh_pos = body.find("DNS over HTTPS/TLS/QUIC Blocking")
+    redir_pos = body.find("DNS Redirect")
+    dot_pos = body.find("DoT/DoQ Block")
+    assert doh_pos != -1, "DNSBL page is missing the 'DNS over HTTPS/TLS/QUIC Blocking' section heading"
+    assert redir_pos != -1, "DNSBL page is missing the 'DNS Redirect' section heading"
+    assert dot_pos != -1, "DNSBL page is missing the 'DoT/DoQ Block' section heading"
+    assert redir_pos < doh_pos, (
+        f"'DNS Redirect' (pos {redir_pos}) must render above 'DNS over HTTPS/TLS/QUIC Blocking' (pos {doh_pos})"
+    )
+    assert dot_pos < doh_pos, (
+        f"'DoT/DoQ Block' (pos {dot_pos}) must render above 'DNS over HTTPS/TLS/QUIC Blocking' (pos {doh_pos})"
+    )
+
+
 def test_feeds_custom_panel_heading_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
     """The second Feeds panel — the one listing user-configured feeds that don't match the
     predefined catalog — is headed "Custom Feeds", not the former "Unknown user defined Feeds".
