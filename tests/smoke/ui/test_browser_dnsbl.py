@@ -57,6 +57,7 @@ absent.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -463,3 +464,173 @@ def test_gateway_dnsbl_lenient_save_roundtrip(
         # Belt-and-suspenders: restore to the original checkbox value on any mid-flip abort.
         if helpers.config_get(smoke_vm, _CFG_LENIENT) != original_box:
             webui.post(DNSBL_PAGE, {"pfb_dnsbl_lenient": original_box}, timeout=_DNSBL_POST_TIMEOUT)
+
+
+# --------------------------------------------------------------------------- #
+# PR #660 (ADR-36/37): DNS-Redirect interface quick-fill + Exception-Alias
+# autocomplete. Both are browser-only behaviours an HTTP POST cannot reach, so
+# they live in the Tier-B browser tier per the CLAUDE.md test mandate.
+# --------------------------------------------------------------------------- #
+
+# IP-settings interface keys feeding the DNS Redirect quick-fill union (inbound ∪
+# outbound). 'lan' is the canonical non-WAN interface on the smoke VM and is in
+# pfb_build_if_list(FALSE, FALSE) (the redirect option list), so it survives the
+# array_intersect that builds pfb_redir_fill_ifaces.
+_CFG_INBOUND = "installedpackages/pfblockerngipsettings/config/0/inbound_interface"
+_CFG_OUTBOUND = "installedpackages/pfblockerngipsettings/config/0/outbound_interface"
+_FILL_IFACE = "lan"
+
+# A host (address-type) alias name for the Exception-Alias autocomplete source. Only
+# host/network/urltable aliases land in pfb_alias_names, so a 'host' alias must appear.
+_AC_ALIAS = "PfbPr660ExcAlias"
+
+
+def _php_ok(smoke_vm: helpers.SmokeVM, snippet: str, *, timeout: float = 120.0) -> None:
+    """Run a config-mutating PHP snippet (must ``echo 'OK'``) and assert it succeeded."""
+    result = helpers.php_eval(smoke_vm, snippet, timeout=timeout)
+    assert result.returncode == 0 and "OK" in result.stdout, (
+        f"php_eval failed: rc={result.returncode}\nstdout={result.stdout!r}\nstderr={result.stderr!r}"
+    )
+
+
+def test_redir_fill_populates_interface_select(
+    browser_page: Page,
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    screenshot_dir: Path,
+) -> None:
+    """`#pfb_redir_fill` ("Fill from IP Interfaces") sets `#dnsbl_redir_int` to the
+    Inbound∪Outbound interface union — the reported "clicking Fill did nothing" bug.
+
+    ``pfb_redir_fill_interfaces()`` (pfblockerng_dnsbl.php) was rewritten from a broken
+    per-option ``.prop('selected', …)`` loop to the canonical
+    ``$('#dnsbl_redir_int').val(pfb_redir_fill_ifaces).trigger('change')``. This drives
+    the click against the LIVE page with the before-state asserted (CLAUDE.md): seed the
+    IP-settings interfaces so the fill union is non-empty, open the page, force the
+    multi-select EMPTY (deterministic BEFORE), click Fill, assert the select now holds
+    exactly the fill set (AFTER). Restores the original interface config in teardown.
+
+    NOTE (from the PR handoff): the exact ``.prop()`` failure could not be reproduced by
+    inspection — the JS source is non-empty and the function is defined — so this is the
+    canonical forward regression guard for the ``.val()`` form rather than a reproduction
+    of an env-specific failure.
+    """
+    page = browser_page
+
+    original_in = helpers.config_get(smoke_vm, _CFG_INBOUND)
+    original_out = helpers.config_get(smoke_vm, _CFG_OUTBOUND)
+
+    try:
+        # GIVEN the IP-settings inbound/outbound interfaces both include the LAN, so the
+        # DNS-Redirect quick-fill union (read at page render) is the non-empty set {lan}.
+        _php_ok(
+            smoke_vm,
+            f"config_set_path({helpers._php_str(_CFG_INBOUND)}, {helpers._php_str(_FILL_IFACE)});\n"
+            f"config_set_path({helpers._php_str(_CFG_OUTBOUND)}, {helpers._php_str(_FILL_IFACE)});\n"
+            "write_config('pfBlockerNG smoke: PR660 fill setup');\n"
+            "echo 'OK';",
+        )
+
+        _open(page, webui, DNSBL_PAGE)
+        sel = page.locator("#dnsbl_redir_int")
+        expect(sel).to_be_attached(timeout=JS_TIMEOUT_MS)
+
+        # The page-computed fill set (intersection of the union with the option list).
+        fill_set = page.evaluate("pfb_redir_fill_ifaces")
+        assert fill_set, (
+            f"pfb_redir_fill_ifaces is empty — {_FILL_IFACE!r} is not in the DNS-Redirect "
+            f"option list on this VM, so the fill click has nothing to select"
+        )
+        assert _FILL_IFACE in fill_set, f"expected {_FILL_IFACE!r} in the fill set, got {fill_set!r}"
+
+        # BEFORE: force the multi-select empty so a non-empty AFTER proves the click acted.
+        sel.evaluate("el => { for (const o of el.options) o.selected = false; }")
+        selected_before = sel.evaluate("el => Array.from(el.selectedOptions).map(o => o.value)")
+        assert selected_before == [], f"pre-condition: select should be empty, got {selected_before!r}"
+        _shot(page, screenshot_dir, "redir_fill_before_empty")
+
+        # CLICK Fill -> the select is set to exactly the fill union.
+        page.locator("#pfb_redir_fill").click()
+        selected_after = sel.evaluate("el => Array.from(el.selectedOptions).map(o => o.value)")
+        assert sorted(selected_after) == sorted(fill_set), (
+            f"Fill from IP Interfaces did not populate the select: expected {sorted(fill_set)!r}, "
+            f"got {sorted(selected_after)!r}"
+        )
+        _shot(page, screenshot_dir, "redir_fill_after_populated")
+
+    finally:
+        _php_ok(
+            smoke_vm,
+            f"config_set_path({helpers._php_str(_CFG_INBOUND)}, {helpers._php_str(original_in)});\n"
+            f"config_set_path({helpers._php_str(_CFG_OUTBOUND)}, {helpers._php_str(original_out)});\n"
+            "write_config('pfBlockerNG smoke: PR660 fill restore');\n"
+            "echo 'OK';",
+        )
+
+
+def test_redir_exception_field_has_alias_autocomplete(
+    browser_page: Page,
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    screenshot_dir: Path,
+) -> None:
+    """`#dnsbl_redir_exclude` gets jQuery-UI autocomplete sourced from the firewall's
+    address-type alias names — the guidance that was missing (bug 2), whose absence let a
+    typo'd alias save and then break the whole pf ruleset.
+
+    ``pfb_redir_exclude_autocomplete()`` (pfblockerng_dnsbl.php, called from the page's
+    ``events`` ready handler) wires ``.autocomplete({minLength:0, source: pfb_alias_names})``
+    onto the Exception-Alias field. Seed a host alias so the source is non-empty, open the
+    page, then assert (a) the widget initialised — jQuery UI stamps the input with the
+    ``ui-autocomplete-input`` class + ``aria-autocomplete`` attr on init — and (b) typing the
+    alias prefix surfaces it in the ``.ui-autocomplete`` suggestion menu. Removes the seeded
+    alias in teardown.
+    """
+    page = browser_page
+
+    try:
+        # GIVEN a host (address-type) firewall alias exists, so it is in pfb_alias_names.
+        _php_ok(
+            smoke_vm,
+            "$aliases = config_get_path('aliases/alias', array());\n"
+            "$aliases[] = array("
+            f"'name' => {helpers._php_str(_AC_ALIAS)}, 'type' => 'host', "
+            "'address' => '192.0.2.10', 'detail' => 'PR660 smoke', "
+            "'descr' => 'pfBlockerNG PR660 autocomplete smoke');\n"
+            "config_set_path('aliases/alias', $aliases);\n"
+            "write_config('pfBlockerNG smoke: PR660 autocomplete alias');\n"
+            "echo 'OK';",
+        )
+
+        _open(page, webui, DNSBL_PAGE)
+
+        # The alias name must have reached the page's JS source array.
+        alias_names = page.evaluate("pfb_alias_names")
+        assert _AC_ALIAS in alias_names, f"seeded alias {_AC_ALIAS!r} not in pfb_alias_names: {alias_names!r}"
+
+        field = page.locator("#dnsbl_redir_exclude")
+        expect(field).to_be_attached(timeout=JS_TIMEOUT_MS)
+
+        # (a) Widget initialised: jQuery UI adds this class + ARIA attr on .autocomplete().
+        expect(field).to_have_class(re.compile(r"\bui-autocomplete-input\b"), timeout=JS_TIMEOUT_MS)
+        expect(field).to_have_attribute("aria-autocomplete", "list", timeout=JS_TIMEOUT_MS)
+
+        # (b) Behaviour: typing the prefix surfaces the seeded alias in the suggestion menu.
+        field.click()
+        field.press_sequentially(_AC_ALIAS[:6], delay=20)
+        menu = page.locator("ul.ui-autocomplete")
+        expect(menu).to_be_visible(timeout=JS_TIMEOUT_MS)
+        expect(menu.locator("li", has_text=_AC_ALIAS)).to_have_count(1, timeout=JS_TIMEOUT_MS)
+        _shot(page, screenshot_dir, "redir_exclude_autocomplete_menu")
+
+    finally:
+        _php_ok(
+            smoke_vm,
+            "$aliases = config_get_path('aliases/alias', array());\n"
+            "$aliases = array_values(array_filter($aliases, function($a) {\n"
+            f"  return ($a['name'] ?? '') !== {helpers._php_str(_AC_ALIAS)};\n"
+            "}));\n"
+            "config_set_path('aliases/alias', $aliases);\n"
+            "write_config('pfBlockerNG smoke: PR660 autocomplete cleanup');\n"
+            "echo 'OK';",
+        )
