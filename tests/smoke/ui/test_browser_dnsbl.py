@@ -73,7 +73,7 @@ sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not ins
 expect = sync_api.expect
 
 if TYPE_CHECKING:
-    from playwright.sync_api import Page
+    from playwright.sync_api import Locator, Page
 
     from .webui import WebUI
 
@@ -467,15 +467,17 @@ def test_gateway_dnsbl_lenient_save_roundtrip(
 
 
 # --------------------------------------------------------------------------- #
-# PR #660 (ADR-36/37): DNS-Redirect interface quick-fill + Exception-Alias
-# autocomplete. Both are browser-only behaviours an HTTP POST cannot reach, so
-# they live in the Tier-B browser tier per the CLAUDE.md test mandate.
+# PR #660 (ADR-36/37): DNS-Redirect + DoT/DoQ-Block interface quick-fill and
+# Exception-Alias autocomplete. Both are browser-only behaviours an HTTP POST
+# cannot reach, so they live in the Tier-B browser tier per the CLAUDE.md mandate.
+# Each behaviour is mirrored on the two sections, so every test exercises BOTH the
+# DNS-Redirect and the DoT/DoQ-Block widget (branch coverage).
 # --------------------------------------------------------------------------- #
 
-# IP-settings interface keys feeding the DNS Redirect quick-fill union (inbound ∪
-# outbound). 'lan' is the canonical non-WAN interface on the smoke VM and is in
-# pfb_build_if_list(FALSE, FALSE) (the redirect option list), so it survives the
-# array_intersect that builds pfb_redir_fill_ifaces.
+# IP-settings interface keys feeding the quick-fill union (inbound ∪ outbound) for
+# BOTH the DNS-Redirect and DoT/DoQ-Block sections. 'lan' is the canonical non-WAN
+# interface on the smoke VM and is in pfb_build_if_list(FALSE, FALSE) (the option
+# list), so it survives the array_intersect that builds the fill sets.
 _CFG_INBOUND = "installedpackages/pfblockerngipsettings/config/0/inbound_interface"
 _CFG_OUTBOUND = "installedpackages/pfblockerngipsettings/config/0/outbound_interface"
 _FILL_IFACE = "lan"
@@ -493,27 +495,104 @@ def _php_ok(smoke_vm: helpers.SmokeVM, snippet: str, *, timeout: float = 120.0) 
     )
 
 
-def test_redir_fill_populates_interface_select(
+def _selected_values(sel: Locator) -> list[str]:
+    """Return the selected <option> values of a <select> locator."""
+    return sel.evaluate("el => Array.from(el.selectedOptions).map(o => o.value)")
+
+
+def _assert_fill_button_populates(
+    page: Page,
+    *,
+    button_id: str,
+    fill_var: str,
+    select_name: str,
+    screenshot_dir: Path,
+    shot_prefix: str,
+) -> None:
+    """Click a "Fill from IP Interfaces" button and assert it sets its multi-select.
+
+    The multi-select is located **by name** (``select[name="<field>[]"]``), NOT by a
+    bracket-free ``#id``: a pfSense ``Form_Select`` with multiple=TRUE renders id AND
+    name as ``<field>[]``, so ``$('#dnsbl_redir_int')`` matches nothing — which is the
+    actual reason the Fill button "did nothing" before this fix. Drives the full
+    transition with the before-state asserted (CLAUDE.md): force the select EMPTY
+    (deterministic BEFORE), click Fill, assert it now holds exactly the page-computed
+    fill set (AFTER), so green proves the click — not pre-existing state — populated it.
+    """
+    sel = page.locator(f'select[name="{select_name}"]')
+    expect(sel).to_be_attached(timeout=JS_TIMEOUT_MS)
+
+    # The page-computed fill set (intersection of the inbound∪outbound union with the
+    # option list). Non-empty because the fixture seeded inbound/outbound = lan.
+    fill_set = page.evaluate(fill_var)
+    assert fill_set, (
+        f"{fill_var} is empty — {_FILL_IFACE!r} is not in the option list on this VM, "
+        f"so the fill click has nothing to select"
+    )
+    assert _FILL_IFACE in fill_set, f"expected {_FILL_IFACE!r} in {fill_var}, got {fill_set!r}"
+
+    # BEFORE: force the multi-select empty so a non-empty AFTER proves the click acted.
+    sel.evaluate("el => { for (const o of el.options) o.selected = false; }")
+    before = _selected_values(sel)
+    assert before == [], f"pre-condition: {select_name} should be empty, got {before!r}"
+    _shot(page, screenshot_dir, f"{shot_prefix}_before_empty")
+
+    # CLICK Fill -> the select is set to exactly the fill union.
+    page.locator(f"#{button_id}").click()
+    after = _selected_values(sel)
+    assert sorted(after) == sorted(fill_set), (
+        f"Fill button #{button_id} did not populate {select_name}: expected {sorted(fill_set)!r}, got {sorted(after)!r}"
+    )
+    _shot(page, screenshot_dir, f"{shot_prefix}_after_populated")
+
+
+def _assert_exclude_autocomplete(
+    page: Page,
+    *,
+    field_id: str,
+    screenshot_dir: Path,
+    shot_prefix: str,
+) -> None:
+    """Assert an Exception-Alias field has jQuery-UI autocomplete over the seeded alias.
+
+    (a) Widget initialised: jQuery UI stamps the input with the ``ui-autocomplete-input``
+    class on ``.autocomplete()`` (the ``aria-autocomplete`` attr is NOT set by the bundled
+    jQuery-UI build, so the class is the reliable init marker). (b) Behaviour: typing the
+    alias prefix surfaces the seeded alias in the (visible) ``.ui-autocomplete`` menu —
+    there is one menu element per initialised field, so it is scoped to the visible one.
+    """
+    field = page.locator(f"#{field_id}")
+    expect(field).to_be_attached(timeout=JS_TIMEOUT_MS)
+    expect(field).to_have_class(re.compile(r"\bui-autocomplete-input\b"), timeout=JS_TIMEOUT_MS)
+
+    field.click()
+    field.press_sequentially(_AC_ALIAS[:6], delay=20)
+    menu = page.locator("ul.ui-autocomplete:visible")
+    expect(menu).to_be_visible(timeout=JS_TIMEOUT_MS)
+    expect(menu.locator("li", has_text=_AC_ALIAS)).to_have_count(1, timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, f"{shot_prefix}_menu")
+
+    # Dismiss the menu so it doesn't overlap the next field's search.
+    field.press("Escape")
+
+
+def test_fill_buttons_populate_interface_selects(
     browser_page: Page,
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
     screenshot_dir: Path,
 ) -> None:
-    """`#pfb_redir_fill` ("Fill from IP Interfaces") sets `#dnsbl_redir_int` to the
-    Inbound∪Outbound interface union — the reported "clicking Fill did nothing" bug.
+    """ "Fill from IP Interfaces" populates BOTH the DNS-Redirect and DoT/DoQ-Block
+    interface multi-selects from the Inbound∪Outbound union — the reported "clicking
+    Fill did nothing" bug, on both mirrored sections.
 
-    ``pfb_redir_fill_interfaces()`` (pfblockerng_dnsbl.php) was rewritten from a broken
-    per-option ``.prop('selected', …)`` loop to the canonical
-    ``$('#dnsbl_redir_int').val(pfb_redir_fill_ifaces).trigger('change')``. This drives
-    the click against the LIVE page with the before-state asserted (CLAUDE.md): seed the
-    IP-settings interfaces so the fill union is non-empty, open the page, force the
-    multi-select EMPTY (deterministic BEFORE), click Fill, assert the select now holds
-    exactly the fill set (AFTER). Restores the original interface config in teardown.
-
-    NOTE (from the PR handoff): the exact ``.prop()`` failure could not be reproduced by
-    inspection — the JS source is non-empty and the function is defined — so this is the
-    canonical forward regression guard for the ``.val()`` form rather than a reproduction
-    of an env-specific failure.
+    ``pfb_redir_fill_interfaces()`` / ``pfb_dot_block_fill_interfaces()``
+    (pfblockerng_dnsbl.php) set the multi-select via ``.val(fill_set).trigger('change')``,
+    targeting it **by name** (``select[name="…[]"]``) because a pfSense multi-select's id
+    carries the ``[]`` suffix — the bracket-free ``#id`` the code used before matched
+    nothing, which is why the button did nothing. Seeds inbound/outbound = lan so both
+    fill unions are the non-empty set {lan}; restores the original interface config in
+    teardown.
     """
     page = browser_page
 
@@ -521,8 +600,8 @@ def test_redir_fill_populates_interface_select(
     original_out = helpers.config_get(smoke_vm, _CFG_OUTBOUND)
 
     try:
-        # GIVEN the IP-settings inbound/outbound interfaces both include the LAN, so the
-        # DNS-Redirect quick-fill union (read at page render) is the non-empty set {lan}.
+        # GIVEN the IP-settings inbound/outbound interfaces both include the LAN, so each
+        # section's quick-fill union (read at page render) is the non-empty set {lan}.
         _php_ok(
             smoke_vm,
             f"config_set_path({helpers._php_str(_CFG_INBOUND)}, {helpers._php_str(_FILL_IFACE)});\n"
@@ -532,31 +611,25 @@ def test_redir_fill_populates_interface_select(
         )
 
         _open(page, webui, DNSBL_PAGE)
-        sel = page.locator("#dnsbl_redir_int")
-        expect(sel).to_be_attached(timeout=JS_TIMEOUT_MS)
 
-        # The page-computed fill set (intersection of the union with the option list).
-        fill_set = page.evaluate("pfb_redir_fill_ifaces")
-        assert fill_set, (
-            f"pfb_redir_fill_ifaces is empty — {_FILL_IFACE!r} is not in the DNS-Redirect "
-            f"option list on this VM, so the fill click has nothing to select"
+        # DNS Redirect fill.
+        _assert_fill_button_populates(
+            page,
+            button_id="pfb_redir_fill",
+            fill_var="pfb_redir_fill_ifaces",
+            select_name="dnsbl_redir_int[]",
+            screenshot_dir=screenshot_dir,
+            shot_prefix="redir_fill",
         )
-        assert _FILL_IFACE in fill_set, f"expected {_FILL_IFACE!r} in the fill set, got {fill_set!r}"
-
-        # BEFORE: force the multi-select empty so a non-empty AFTER proves the click acted.
-        sel.evaluate("el => { for (const o of el.options) o.selected = false; }")
-        selected_before = sel.evaluate("el => Array.from(el.selectedOptions).map(o => o.value)")
-        assert selected_before == [], f"pre-condition: select should be empty, got {selected_before!r}"
-        _shot(page, screenshot_dir, "redir_fill_before_empty")
-
-        # CLICK Fill -> the select is set to exactly the fill union.
-        page.locator("#pfb_redir_fill").click()
-        selected_after = sel.evaluate("el => Array.from(el.selectedOptions).map(o => o.value)")
-        assert sorted(selected_after) == sorted(fill_set), (
-            f"Fill from IP Interfaces did not populate the select: expected {sorted(fill_set)!r}, "
-            f"got {sorted(selected_after)!r}"
+        # DoT/DoQ Block fill (the mirrored section — same bug, same fix).
+        _assert_fill_button_populates(
+            page,
+            button_id="pfb_dot_block_fill",
+            fill_var="pfb_dot_block_fill_ifaces",
+            select_name="dnsbl_dot_block_int[]",
+            screenshot_dir=screenshot_dir,
+            shot_prefix="dot_block_fill",
         )
-        _shot(page, screenshot_dir, "redir_fill_after_populated")
 
     finally:
         _php_ok(
@@ -568,23 +641,21 @@ def test_redir_fill_populates_interface_select(
         )
 
 
-def test_redir_exception_field_has_alias_autocomplete(
+def test_exception_fields_have_alias_autocomplete(
     browser_page: Page,
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
     screenshot_dir: Path,
 ) -> None:
-    """`#dnsbl_redir_exclude` gets jQuery-UI autocomplete sourced from the firewall's
-    address-type alias names — the guidance that was missing (bug 2), whose absence let a
-    typo'd alias save and then break the whole pf ruleset.
+    """BOTH Exception-Alias fields (``#dnsbl_redir_exclude`` + ``#dnsbl_dot_block_exclude``)
+    get jQuery-UI autocomplete sourced from the firewall's address-type alias names — the
+    guidance that was missing (bug 2), whose absence let a typo'd alias save and then break
+    the whole pf ruleset.
 
-    ``pfb_redir_exclude_autocomplete()`` (pfblockerng_dnsbl.php, called from the page's
-    ``events`` ready handler) wires ``.autocomplete({minLength:0, source: pfb_alias_names})``
-    onto the Exception-Alias field. Seed a host alias so the source is non-empty, open the
-    page, then assert (a) the widget initialised — jQuery UI stamps the input with the
-    ``ui-autocomplete-input`` class + ``aria-autocomplete`` attr on init — and (b) typing the
-    alias prefix surfaces it in the ``.ui-autocomplete`` suggestion menu. Removes the seeded
-    alias in teardown.
+    ``pfb_redir_exclude_autocomplete()`` wires ``.autocomplete({minLength:0,
+    source: pfb_alias_names})`` onto both fields. Seed one host alias so the source is
+    non-empty, open the page, and assert each field initialised the widget and surfaces
+    the alias in its suggestion menu. Removes the seeded alias in teardown.
     """
     page = browser_page
 
@@ -608,20 +679,19 @@ def test_redir_exception_field_has_alias_autocomplete(
         alias_names = page.evaluate("pfb_alias_names")
         assert _AC_ALIAS in alias_names, f"seeded alias {_AC_ALIAS!r} not in pfb_alias_names: {alias_names!r}"
 
-        field = page.locator("#dnsbl_redir_exclude")
-        expect(field).to_be_attached(timeout=JS_TIMEOUT_MS)
-
-        # (a) Widget initialised: jQuery UI adds this class + ARIA attr on .autocomplete().
-        expect(field).to_have_class(re.compile(r"\bui-autocomplete-input\b"), timeout=JS_TIMEOUT_MS)
-        expect(field).to_have_attribute("aria-autocomplete", "list", timeout=JS_TIMEOUT_MS)
-
-        # (b) Behaviour: typing the prefix surfaces the seeded alias in the suggestion menu.
-        field.click()
-        field.press_sequentially(_AC_ALIAS[:6], delay=20)
-        menu = page.locator("ul.ui-autocomplete")
-        expect(menu).to_be_visible(timeout=JS_TIMEOUT_MS)
-        expect(menu.locator("li", has_text=_AC_ALIAS)).to_have_count(1, timeout=JS_TIMEOUT_MS)
-        _shot(page, screenshot_dir, "redir_exclude_autocomplete_menu")
+        # DNS Redirect exception field, then the mirrored DoT/DoQ Block exception field.
+        _assert_exclude_autocomplete(
+            page,
+            field_id="dnsbl_redir_exclude",
+            screenshot_dir=screenshot_dir,
+            shot_prefix="redir_exclude_autocomplete",
+        )
+        _assert_exclude_autocomplete(
+            page,
+            field_id="dnsbl_dot_block_exclude",
+            screenshot_dir=screenshot_dir,
+            shot_prefix="dot_block_exclude_autocomplete",
+        )
 
     finally:
         _php_ok(
