@@ -38,6 +38,18 @@ final class DnsRedirectValidatorTest extends TestCase
 	/** @var array<string> */
 	private array $validIfaceList = ['lan', 'opt1', 'opt2', 'wireguard', 'openvpn'];
 
+	// Reset the is_alias() existence oracle before each test (test isolation): the
+	// validator now requires a non-empty exception alias to be a REAL firewall alias.
+	protected function setUp(): void
+	{
+		$GLOBALS['pfb_test_aliases'] = [];
+	}
+
+	protected function tearDown(): void
+	{
+		$GLOBALS['pfb_test_aliases'] = [];
+	}
+
 	// -----------------------------------------------------------------------
 	// Helper: assert no PfbConfig::write() calls happened via the write tracker.
 	// pfblockerng.inc loads PfbConfig; write calls land in pfb_test_write_config_calls.
@@ -76,13 +88,36 @@ final class DnsRedirectValidatorTest extends TestCase
 		$this->assertSame([], $errorsBefore, 'empty alias must be accepted');
 	}
 
-	public function testValidAliasNameIsAccepted(): void
+	public function testValidExistingAliasNameIsAccepted(): void
 	{
-		// Given a valid alias name (alphanumeric + underscore, no leading digit)
+		// Given a valid alias name that EXISTS as a firewall alias
+		$GLOBALS['pfb_test_aliases'] = ['DNS_Whitelist'];
 		$errors = pfb_validate_dns_redirect_post(['opt1'], $this->validIfaceList, 'DNS_Whitelist');
 
 		// Then no errors are returned
-		$this->assertSame([], $errors, 'a valid alias name must be accepted');
+		$this->assertSame([], $errors, 'a valid, existing alias name must be accepted');
+	}
+
+	public function testValidFormatButNonexistentAliasIsRejected(): void
+	{
+		// Regression (the real-world bite): a name that is syntactically valid but is NOT a
+		// real alias used to pass format-only validation, then the rule builder emitted an
+		// unresolvable "from !" that fails the entire pf ruleset load. It must now be rejected.
+
+		// Given: before → the same name accepted WHEN it exists (proves it's the existence
+		// check, not the format check, doing the rejecting)
+		$GLOBALS['pfb_test_aliases'] = ['BraitServers_IPv4'];
+		$errorsExisting = pfb_validate_dns_redirect_post(['lan'], $this->validIfaceList, 'BraitServers_IPv4');
+		$this->assertSame([], $errorsExisting, 'pre-condition: the alias is accepted while it exists');
+
+		// When the alias does NOT exist (e.g. a typo: _v4 instead of _IPv4)
+		$GLOBALS['pfb_test_aliases'] = ['BraitServers_IPv4'];
+		$errors = pfb_validate_dns_redirect_post(['lan'], $this->validIfaceList, 'BraitServers_v4');
+
+		// Then it is rejected with a "does not exist" error
+		$this->assertNotEmpty($errors, 'a non-existent exception alias must be rejected');
+		$this->assertStringContainsString('DNS Redirect', $errors[0]);
+		$this->assertStringContainsString('does not exist', $errors[0]);
 	}
 
 	public function testMultipleValidInterfacesAreAccepted(): void
@@ -135,7 +170,8 @@ final class DnsRedirectValidatorTest extends TestCase
 
 	public function testAliasNameWithShellSpecialCharIsRejected(): void
 	{
-		// Given: before → valid alias accepted
+		// Given: before → valid, existing alias accepted
+		$GLOBALS['pfb_test_aliases'] = ['Good_Alias'];
 		$errorsBefore = pfb_validate_dns_redirect_post(['lan'], $this->validIfaceList, 'Good_Alias');
 		$this->assertSame([], $errorsBefore, 'pre-condition: Good_Alias is accepted');
 

@@ -2847,6 +2847,18 @@ $pfb_redir_fill_ifaces = array_unique(array_filter(array_merge(
 $pfb_redir_fill_ifaces = array_values(array_intersect($pfb_redir_fill_ifaces, array_keys($options_dnsbl_redir_int)));
 $pfb_redir_fill_json   = json_encode($pfb_redir_fill_ifaces);
 
+// [ ADR-36/37 ] Address-type firewall alias names for the Exception Alias autocomplete on the
+// DNS Redirect + DoT/DoQ Block fields. Restrict to host/network/urltable (address) aliases —
+// a port alias cannot be a rule source. The field still accepts free text; existence is
+// enforced server-side (pfb_validate_dns_redirect_post / pfb_validate_dot_block_post).
+$pfb_alias_names = array();
+foreach (config_get_path('aliases/alias', []) as $pfb_alias_entry) {
+	if (in_array($pfb_alias_entry['type'] ?? '', array('host', 'network', 'urltable'), TRUE)) {
+		$pfb_alias_names[] = (string)($pfb_alias_entry['name'] ?? '');
+	}
+}
+$pfb_alias_names_json = json_encode(array_values(array_filter(array_unique($pfb_alias_names), 'strlen')));
+
 $group->add(new Form_Select(
 	'dnsbl_redir_int',
 	NULL,
@@ -3514,16 +3526,27 @@ var networksarray = nlist.split(',');
 // Disable GeoIP/ASN Autocomplete as not required for the DNSBL page
 var geoiparray = 'disabled';
 
+// [ ADR-36/37 ] Address-type firewall alias names for the Exception Alias autocomplete.
+var pfb_alias_names = <?=$pfb_alias_names_json?>;
+
+// Wire jQuery-UI autocomplete onto the DNS Redirect + DoT/DoQ Block exception fields so a
+// valid alias name can be picked rather than typed (a typo there used to save and then emit
+// an unresolvable "from !" rule that broke the whole ruleset). minLength 0 + the focus search
+// shows the full alias list on focus.
+function pfb_redir_exclude_autocomplete() {
+	$('#dnsbl_redir_exclude, #dnsbl_dot_block_exclude')
+		.autocomplete({ minLength: 0, source: pfb_alias_names })
+		.on('focus', function() { $(this).autocomplete('search', $(this).val()); });
+}
+
 // [ ADR-36 ] DNS Redirect quick-fill: union of pfBlockerNG Inbound + Outbound interfaces.
 // When clicked, selects those interfaces in the #dnsbl_redir_int multi-select.
 var pfb_redir_fill_ifaces = <?=$pfb_redir_fill_json?>;
 
 function pfb_redir_fill_interfaces() {
-	var $sel = $('#dnsbl_redir_int');
-	$sel.find('option').prop('selected', false);
-	$.each(pfb_redir_fill_ifaces, function(i, val) {
-		$sel.find('option[value="' + val + '"]').prop('selected', true);
-	});
+	// Set the multi-select to exactly the fill set (deselects the rest). .val([...]) is the
+	// reliable jQuery idiom for a <select multiple>; trigger('change') notifies any listeners.
+	$('#dnsbl_redir_int').val(pfb_redir_fill_ifaces).trigger('change');
 }
 
 // [ ADR-37 ] DoT/DoQ Block quick-fill: union of pfBlockerNG Inbound + Outbound interfaces.
@@ -3531,11 +3554,9 @@ function pfb_redir_fill_interfaces() {
 var pfb_dot_block_fill_ifaces = <?=$pfb_dot_block_fill_json?>;
 
 function pfb_dot_block_fill_interfaces() {
-	var $sel = $('#dnsbl_dot_block_int');
-	$sel.find('option').prop('selected', false);
-	$.each(pfb_dot_block_fill_ifaces, function(i, val) {
-		$sel.find('option[value="' + val + '"]').prop('selected', true);
-	});
+	// Set the multi-select to exactly the fill set (deselects the rest). .val([...]) is the
+	// reliable jQuery idiom for a <select multiple>; trigger('change') notifies any listeners.
+	$('#dnsbl_dot_block_int').val(pfb_dot_block_fill_ifaces).trigger('change');
 }
 
 // [ ADR-13 ] Address(es) the package would auto-create for the selected interface, so
@@ -3699,6 +3720,8 @@ events.push(function(){
 		enable_dnsvip_auto();
 	});
 	enable_dnsvip_auto();
+
+	pfb_redir_exclude_autocomplete();
 });
 
 //]]>

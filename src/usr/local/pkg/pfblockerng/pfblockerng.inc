@@ -456,6 +456,10 @@ function pfb_validate_dns_redirect_post(
 		if (!is_validaliasname($posted_alias)) {
 			$errors[] = 'DNS Redirect: Invalid exception alias name: ' .
 				htmlspecialchars($posted_alias, ENT_QUOTES);
+		} elseif (!is_alias($posted_alias)) {
+			$errors[] = 'DNS Redirect: Exception alias does not exist: ' .
+				htmlspecialchars($posted_alias, ENT_QUOTES) .
+				' (create it under Firewall > Aliases first)';
 		}
 	}
 	return $errors;
@@ -495,6 +499,10 @@ function pfb_validate_dot_block_post(
 		if (!is_validaliasname($posted_alias)) {
 			$errors[] = 'DoT/DoQ Block: Invalid exception alias name: ' .
 				htmlspecialchars($posted_alias, ENT_QUOTES);
+		} elseif (!is_alias($posted_alias)) {
+			$errors[] = 'DoT/DoQ Block: Exception alias does not exist: ' .
+				htmlspecialchars($posted_alias, ENT_QUOTES) .
+				' (create it under Firewall > Aliases first)';
 		}
 	}
 	if (!in_array($posted_action, ['block', 'reject'], TRUE)) {
@@ -502,6 +510,26 @@ function pfb_validate_dot_block_post(
 			htmlspecialchars($posted_action, ENT_QUOTES);
 	}
 	return $errors;
+}
+
+// Build the NAT/filter SOURCE array for a DNS-redirect / DoT-block exception alias.
+// An empty alias yields source 'any' (no exception). A non-empty alias becomes a negated
+// source (listed hosts bypass) ONLY when it resolves to a real firewall alias; an
+// unknown/stale name (e.g. a typo, or an alias deleted after it was referenced) falls back
+// to 'any' and is logged. This guard is the single point that prevents a non-resolving alias
+// from emitting a sourceless "from ! ..." rule — pf rejects that as a syntax error, which
+// fails the WHOLE ruleset load, not just this one rule. Shared by pfb_dot_block_rule(),
+// pfb_dot_block_floating_rule() and the DNS-redirect NAT builder in sync_package_pfblockerng().
+function pfb_redirect_exclude_source(string $alias): array {
+	if ($alias === '') {
+		return ['any' => ''];
+	}
+	if (!is_alias($alias)) {
+		pfb_logger("\nDNS redirect/DoT block: exception alias [ " .
+			substr(htmlspecialchars($alias), 0, 100) . " ] not found — ignoring (no exception applied)", 2);
+		return ['any' => ''];
+	}
+	return ['address' => $alias, 'not' => ''];
 }
 
 // Build a single DoT/DoQ block filter/rule array for $iface. $action is the rule
@@ -513,9 +541,7 @@ function pfb_validate_dot_block_post(
 // build, preserving the stored key order so the sync change-detection compare stays
 // stable when nothing changed.
 function pfb_dot_block_rule(string $iface, string $exclude_alias, string $action): array {
-	$source = ($exclude_alias !== '')
-		? ['address' => $exclude_alias, 'not' => '']
-		: ['any' => ''];
+	$source = pfb_redirect_exclude_source($exclude_alias);
 
 	return [
 		'type'        => pfb_dot_block_action($action),
@@ -537,9 +563,7 @@ function pfb_dot_block_rule(string $iface, string $exclude_alias, string $action
 // negated-(self):853 destination + optional exception-alias source as the per-interface
 // rule. The caller appends the 'tracker' (last key) after build.
 function pfb_dot_block_floating_rule(array $ifaces, string $exclude_alias, string $action): array {
-	$source = ($exclude_alias !== '')
-		? ['address' => $exclude_alias, 'not' => '']
-		: ['any' => ''];
+	$source = pfb_redirect_exclude_source($exclude_alias);
 
 	return [
 		'type'        => pfb_dot_block_action($action),
@@ -14771,9 +14795,7 @@ function sync_package_pfblockerng($cron='') {
 						$redir_sfx    = ($redir_family === 'inet') ? PFB_DNS_REDIR_DESCR_V4_SFX : PFB_DNS_REDIR_DESCR_V6_SFX;
 						$redir_target = ($redir_family === 'inet') ? '127.0.0.1' : '::1';
 						$redir_descr  = PFB_DNS_REDIR_DESCR_V4_PFX . $redir_iface . $redir_sfx;
-						$redir_source = ($redir_exception !== '')
-							? ['address' => $redir_exception, 'not' => '']
-							: ['any' => ''];
+						$redir_source = pfb_redirect_exclude_source($redir_exception);
 						$redir_new_owned[] = [
 							'source'             => $redir_source,
 							'destination'        => ['network' => '(self)', 'not' => '', 'port' => '53'],

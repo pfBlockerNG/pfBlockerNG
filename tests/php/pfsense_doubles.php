@@ -731,6 +731,14 @@ if (!function_exists('is_validaliasname')) {
 	}
 }
 
+if (!function_exists('is_alias')) {
+	// pfSense util.inc: TRUE if a firewall alias with this name exists. Off-appliance,
+	// resolve against the seeded $GLOBALS['pfb_test_aliases'] name list (empty by default).
+	function is_alias($name) {
+		return in_array((string) $name, $GLOBALS['pfb_test_aliases'] ?? [], TRUE);
+	}
+}
+
 if (!function_exists('get_configured_interface_with_descr')) {
 	// pfSense interfaces.inc: returns a map of interface_name => friendly description.
 	// Off-appliance, use pfb_test_interfaces if seeded; otherwise return an empty map.
