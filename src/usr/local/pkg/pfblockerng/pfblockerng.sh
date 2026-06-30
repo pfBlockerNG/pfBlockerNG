@@ -590,10 +590,17 @@ pfb_aggregate() {
 	agg_memberlist="${3}"
 	agg_out="${4}"
 	agg_consumer="${5}"
+	# CIDR Aggregation (the global enable_agg setting) state, passed by the PHP caller as
+	# 'on'/'off'. When 'on', every member feed already ran through cidr_aggregate during
+	# processing, so the members are individually CIDR-collapsed -- the union then needs only a
+	# sort -u (the union's iprange would do marginal cross-member merges only). See the build
+	# branch below.
+	agg_collapsed="${6:-off}"
 
-	# v4 aggregation CIDR-collapses through iprange (below); v6 does NOT use iprange (it is
-	# IPv4-only), so require it only for v4 -- a v6 aggregate must still build without it.
-	if [ "${agg_family}" != 'v6' ] && [ ! -x "${pathaggregate}" ]; then
+	# v4 aggregation CIDR-collapses the union through iprange (below) ONLY when CIDR Aggregation
+	# is off (raw members); v6 never uses iprange (IPv4-only), and v4 with CIDR Aggregation on
+	# skips it too -- so require iprange only for the v4 + agg-off case.
+	if [ "${agg_family}" != 'v6' ] && [ "${agg_collapsed}" != 'on' ] && [ ! -x "${pathaggregate}" ]; then
 		log="Application [ iprange ] Not found. Cannot proceed."
 		echo "${log}" | tee -a "${errorlog}"
 		return
@@ -652,12 +659,18 @@ pfb_aggregate() {
 	# leading hextet as a decimal, emitting bogus 0.0.x.y entries -- so ONLY v4 is passed through
 	# it (mirroring the per-alias path, which gates cidr_aggregate to _v4 in pfblockerng.inc). For
 	# v6 the deduped sort -u union IS the result: set-correct, just not minimal-CIDR-collapsed --
-	# exactly how every individual v6 alias is already kept. An empty union writes an empty
-	# aggregate (the never-empty consumer placeholder is handled below).
+	# exactly how every individual v6 alias is already kept.
+	#
+	# v4 ALSO takes that sort -u path when CIDR Aggregation is on (agg_collapsed='on'): every
+	# member already ran through cidr_aggregate, so the union's iprange would only do marginal
+	# cross-member merges -- not worth a redundant pass over the whole (possibly huge) union. The
+	# sort -u union is set-correct (the same addresses), just not cross-feed minimal-collapsed. With
+	# CIDR Aggregation off the members are raw, so v4 still collapses the union through iprange.
+	# An empty union writes an empty aggregate (the never-empty consumer placeholder is below).
 	agg_tmp="${agg_out}.tmp"
 	if [ ! -s "${dedupfile}" ]; then
 		: > "${agg_tmp}"
-	elif [ "${agg_family}" = 'v6' ]; then
+	elif [ "${agg_family}" = 'v6' ] || [ "${agg_collapsed}" = 'on' ]; then
 		cp -f "${dedupfile}" "${agg_tmp}"
 	else
 		"${pathaggregate}" "${dedupfile}" > "${agg_tmp}"

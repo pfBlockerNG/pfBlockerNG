@@ -3952,7 +3952,10 @@ function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_li
 			$memberlist_esc	= escapeshellarg($memberlist);
 			$aggout_esc	= escapeshellarg($aggout);
 			$consumer_esc	= escapeshellarg($consumer);
-			exec("{$pfb['script']} aggregate {$family_esc} {$memberlist_esc} {$aggout_esc} {$consumer_esc} 2>&1");
+			// CIDR Aggregation state: with it ON every member feed is already CIDR-collapsed, so
+			// the shell skips the union's redundant iprange for v4 and just sort -u's it (like v6).
+			$agg_esc	= escapeshellarg(($pfb['agg'] ?? '') === 'on' ? 'on' : 'off');
+			exec("{$pfb['script']} aggregate {$family_esc} {$memberlist_esc} {$aggout_esc} {$consumer_esc} {$agg_esc} 2>&1");
 
 			$rebuilt = file_exists($aggout) && (pfb_file_mtime($aggout) > $mtime_before);
 
