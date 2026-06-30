@@ -12978,6 +12978,33 @@ function sync_package_pfblockerng($cron='') {
 				}
 			}
 		}
+
+		// Remove orphaned IP "original" feed files -- but ONLY for feeds no longer CONFIGURED,
+		// never merely because a .txt is currently missing. The .orig is the cached download the
+		// reparse/reuse path re-reads, and a configured feed can legitimately have no .txt this
+		// pass (reuse/reparse, an empty or all-filtered result), so keying on .txt would delete a
+		// live feed's source. origdir is shared by deny/permit/match/native, so reconcile it ONCE
+		// against the union of those types' configured headers ($existing, built from config
+		// above): a removed feed has no config entry, so its <header>.orig (+ change-detect probe
+		// + sidecars) is deleted -- otherwise it lingers forever in the IPv4/6 "Last Updated List
+		// Summary" (pfb_list_orig_by_mtime lists every *.orig). Sibling of the DNSBL dnsorigdir
+		// prune above, keyed on config (the removed-feed signal) rather than on .txt presence.
+		$ip_orig_keep = array_flip(array_merge(
+			$pfb['existing']['deny']   ?? [], $pfb['existing']['permit'] ?? [],
+			$pfb['existing']['match']  ?? [], $pfb['existing']['native'] ?? []
+		));
+		foreach (glob("{$pfb['origdir']}/*.orig") ?: [] as $pfb_orig) {
+			// {header}.orig (sync baseline) and {header}.md5.orig (change-detect probe) belong to
+			// the same feed; strip the probe infix so a live feed's probe file is not mistaken for
+			// an orphan (a removed feed's probe file is still swept by the {header}.* unlink).
+			$header = basename($pfb_orig, '.orig');
+			if (str_ends_with($header, '.md5')) {
+				$header = substr($header, 0, -4);
+			}
+			if (!isset($ip_orig_keep[$header])) {
+				unlink_if_exists("{$pfb['origdir']}/{$header}.*");
+			}
+		}
 	}
 
 	#########################################################

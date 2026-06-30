@@ -569,3 +569,67 @@ def test_pfctl_table_count_absent_table_no_bare_error(adr40_vm: SmokeVM) -> None
     assert "Table does not exist" not in combined, (
         f"bare 'pfctl: Table does not exist' leaked despite the read helper: {combined!r}"
     )
+
+
+def test_ip_orig_pruned_only_when_feed_unconfigured(adr40_vm: SmokeVM) -> None:
+    """origdir/*.orig is reclaimed iff the feed is no longer CONFIGURED -- not merely missing a .txt.
+
+    The IPv4/6 'Last Updated List Summary' lists every *.orig in origdir. A feed the user
+    un-subscribed used to leave its <header>.orig behind forever -- the IP side lacked the
+    orphan-prune the DNSBL side has -- so removed feeds kept appearing in the summary. The prune
+    keys on CONFIG, not on .txt presence: the .orig is the cached download the reuse/reparse path
+    re-reads, and a configured feed can legitimately have no .txt this pass (reuse/reparse, an
+    empty or all-filtered result), so it MUST be kept; only a removed feed's .orig is deleted.
+
+    Branch coverage (both sides of the keep/prune decision):
+      * configured feed, even with its .txt deleted (the reuse/reparse case) -> KEPT;
+      * unconfigured header (a feed removed from config)                      -> PRUNED.
+
+    Red->green: before the fix the IP side had no prune, so the unconfigured orphan survived.
+    """
+    origdir = "/var/db/pfblockerng/original"
+
+    # Given: one configured IPv4 deny feed, settled on disk (its .orig written by the download).
+    feed_url = h.write_local_feed(adr40_vm, "smoke_origprune.txt", "203.0.113.7\n")
+    ip_spec = h.IpCase(aliasname="smokeorigprune", feed_url=feed_url, header="smokeorigprune")
+    h.inject(adr40_vm, ip_spec)
+    h.reload(adr40_vm, "update")
+    # IP feeds carry a _v4/_v6 family suffix in the stored header, the .orig, and $existing,
+    # so the download lands at <header>_v4.orig (the v4-only feed above).
+    kept = f"{origdir}/smokeorigprune_v4.orig"
+    assert "PRESENT" in adr40_vm.ssh(f"test -f {kept} && echo PRESENT || echo MISSING").stdout, (
+        f"setup failed: configured feed's .orig not created at {kept}"
+    )
+
+    # And: the change-detect probe file for the SAME configured feed. It shares the *.orig glob
+    # via its legacy .md5 infix ({header}.md5.orig), so it must be kept too -- asserting this pins
+    # the .md5-infix strip (without it the probe basename would read as an unknown header).
+    kept_probe = f"{origdir}/smokeorigprune_v4.md5.orig"
+    adr40_vm.ssh(f"echo '203.0.113.7' > {kept_probe}")
+
+    # And: delete that feed's parsed .txt -- the reuse/reparse/empty case where keying on .txt
+    # would wrongly delete a still-configured feed's cached .orig.
+    adr40_vm.ssh("rm -f /var/db/pfblockerng/deny/smokeorigprune*")
+
+    # And: an unconfigured orphan .orig (a feed removed from config in some prior pass).
+    orphan = f"{origdir}/zzz_orphan_xyzzy.orig"
+    adr40_vm.ssh(f"echo '198.51.100.0/24' > {orphan}")
+
+    # When: a reload runs the IP list reconciliation.
+    h.reload(adr40_vm, "update")
+
+    # Then: the configured feed's .orig (and its .md5 probe) are KEPT; the orphan is PRUNED.
+    kept_state = adr40_vm.ssh(f"test -f {kept} && echo PRESENT || echo GONE").stdout
+    probe_state = adr40_vm.ssh(f"test -f {kept_probe} && echo PRESENT || echo GONE").stdout
+    orphan_state = adr40_vm.ssh(f"test -f {orphan} && echo PRESENT || echo GONE").stdout
+    assert "PRESENT" in kept_state, (
+        "configured feed's .orig wrongly pruned -- the prune must key on config, not .txt.\n"
+        f"  expected: {kept} PRESENT\n  actual:   {kept_state!r}"
+    )
+    assert "PRESENT" in probe_state, (
+        "configured feed's .md5.orig probe wrongly pruned -- the .md5 infix must be stripped so it "
+        f"maps back to its header.\n  expected: {kept_probe} PRESENT\n  actual:   {probe_state!r}"
+    )
+    assert "GONE" in orphan_state, (
+        f"unconfigured orphan .orig not pruned.\n  expected: {orphan} GONE\n  actual:   {orphan_state!r}"
+    )
