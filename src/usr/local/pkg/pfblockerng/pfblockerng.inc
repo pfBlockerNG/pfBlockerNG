@@ -3473,27 +3473,24 @@ function pfb_run_hooks($when, $ctx = array()) {
 		//      soon as the DIRECT hook process exits (a genuine overrun is still SIGTERM'd,
 		//      kill(child)), leaving any daemon reparented to init.
 		//   2. A spawned daemon inherits the hook's stdout/stderr. If those are exec()'s
-		//      capture pipe, exec() never reads EOF while the daemon lives. Capturing to a
-		//      temp FILE (held harmlessly by the daemon) + stdin from /dev/null decouples
-		//      exec() from the daemon.
+		//      capture pipe, exec() never reads EOF while the daemon lives. Redirecting to a
+		//      regular FILE (the pfB log, held harmlessly by the daemon) + stdin from /dev/null
+		//      decouples exec() from the daemon.
 		//
 		// Together, completion depends ONLY on the hook process exiting.
-		$hooklog = tempnam('/tmp', 'pfb_hook_');
-		$sink    = ($hooklog !== FALSE) ? escapeshellarg($hooklog) : '/dev/null';
+		//
+		// Append straight to the pfB log instead of a temp file flushed after exec() returns, so
+		// the Update-page live tail streams the hook's output AS it runs (not in one batch at the
+		// end). The log is a regular file, so reason #2 still holds; pfb_logger(..., 1) appends to
+		// the same file, so the on-disk format is unchanged. (A rare lingering daemon could append
+		// a stray line to the log later -- cosmetic, vs a now-discarded temp file.)
+		$logf = escapeshellarg($pfb['log']);
 		$cmd = "{$envprefix} /usr/bin/timeout --foreground -s TERM -k " . PFB_HOOK_KILL_GRACE .
-			" {$timeout} " . escapeshellarg($path) . " > {$sink} 2>&1 < /dev/null";
+			" {$timeout} " . escapeshellarg($path) . " >> {$logf} 2>&1 < /dev/null";
 
 		$discard = array();
 		$retval  = 0;
 		exec($cmd, $discard, $retval);
-
-		$output = ($hooklog !== FALSE) ? (string) @file_get_contents($hooklog) : '';
-		if ($hooklog !== FALSE) {
-			@unlink($hooklog);
-		}
-		if ($output !== '') {
-			pfb_logger(rtrim($output, "\n") . "\n", 1);
-		}
 
 		if ($retval === 124) {
 			pfb_logger("[ pfB Hook ] {$when} {$label} TIMED OUT after {$timeout}s (killed); continuing\n", 2);
