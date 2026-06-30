@@ -69,6 +69,7 @@ if (isset($_POST['save'])) {
 		PfbConfig::writeSection('installedpackages/pfblockerngsafesearch', $pfb['bconfig']);
 		$msg = 'Saved SafeSearch configuration';
 		write_config("[ pfBlockerNG ] {$msg}");
+		pfb_mark_pending_changes();	// applies on the next Update, not on save
 		$savemsg = "{$msg}. A Force Update|Reload is required to apply changes!";
 		header("Location: /pfblockerng/pfblockerng_safesearch.php?savemsg={$savemsg}");
 	}
@@ -103,6 +104,7 @@ $tab_array[]	= array(gettext('DNSBL Groups'),	FALSE,	'/pfblockerng/pfblockerng_c
 $tab_array[]	= array(gettext('DNSBL Category'),	FALSE,	'/pfblockerng/pfblockerng_blacklist.php');
 $tab_array[]	= array(gettext('DNSBL SafeSearch'),	TRUE,	'/pfblockerng/pfblockerng_safesearch.php');
 display_top_tabs($tab_array, TRUE);
+pfb_print_pending_changes_box();
 
 if (isset($_REQUEST['savemsg'])) {
 	$savemsg = htmlspecialchars($_REQUEST['savemsg']);

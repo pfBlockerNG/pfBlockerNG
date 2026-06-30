@@ -215,6 +215,7 @@ $tab_array_sub	= array();
 $tab_array_sub[]	= array(gettext('Run'),		TRUE,	'/pfblockerng/pfblockerng_update.php');
 $tab_array_sub[]	= array(gettext('Hooks'),	FALSE,	'/pfblockerng/pfblockerng_hooks.php');
 display_top_tabs($tab_array_sub, TRUE);
+pfb_print_pending_changes_box(TRUE);
 
 // ADR-43: the scheduler is a single */pfb_tick_interval cron tick that fires every hour ('*'),
 // installed iff pfBlockerNG is enabled (the feed `interval` only gates the feed job *inside* the

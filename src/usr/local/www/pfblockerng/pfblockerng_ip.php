@@ -240,6 +240,7 @@ if ($_POST) {
 
 			PfbConfig::writeSection('installedpackages/pfblockerngipsettings/config/0', $pfb['iconfig']);
 			write_config('[pfBlockerNG] save IP settings');
+			pfb_mark_pending_changes();	// applies on the next Update, not on save
 			if (!empty($savemsg)) {
 				header("Location: /pfblockerng/pfblockerng_ip.php?savemsg={$savemsg}");
 			} else {
@@ -283,6 +284,7 @@ $tab_array[]	= array(gettext('IPv6'),	FALSE,	'/pfblockerng/pfblockerng_category.
 $tab_array[]	= array(gettext('GeoIP'),	FALSE,	'/pfblockerng/pfblockerng_category.php?type=geoip');
 $tab_array[]	= array(gettext('Reputation'),	FALSE,	'/pfblockerng/pfblockerng_reputation.php');
 display_top_tabs($tab_array, TRUE);
+pfb_print_pending_changes_box();
 
 if (!$input_errors && isset($_REQUEST['savemsg'])) {
 	$savemsg = htmlspecialchars($_REQUEST['savemsg']);

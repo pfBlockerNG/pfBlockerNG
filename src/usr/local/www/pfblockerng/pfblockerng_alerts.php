@@ -3402,6 +3402,7 @@ $tab_array[] = array(gettext('DNS Reply'),		$active['reply'],		'/pfblockerng/pfb
 $tab_array[] = array(gettext('DNS Reply Stats'),	$active['dnsbl_reply_stat'],	'/pfblockerng/pfblockerng_alerts.php?view=dnsbl_reply_stat');
 $tab_array[] = array(gettext('DNSBL Block Stats'),	$active['dnsbl'],	'/pfblockerng/pfblockerng_alerts.php?view=dnsbl_stat');
 display_top_tabs($tab_array, TRUE);
+pfb_print_pending_changes_box();
 
 // Create Form
 $form = new Form(FALSE);

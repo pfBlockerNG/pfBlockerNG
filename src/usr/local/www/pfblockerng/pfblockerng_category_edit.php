@@ -837,6 +837,7 @@ if ($_POST && isset($_POST['save'])) {
 		$name = config_get_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname") ?: 'Unknown';
 		$savemsg = "Saved [ Type:{$type}, Name:{$name} ] configuration";
 		write_config("pfBlockerNG: {$savemsg}");
+		pfb_mark_pending_changes();	// applies on the next Update, not on save
 		header("Location: /pfblockerng/pfblockerng_category_edit.php?type={$gtype}&rowid={$rowid}&savemsg={$savemsg}");
 		exit;
 	}
@@ -952,6 +953,7 @@ if (isset($Lmove) and isset($Xmove) && isset($rowdata[$rowid]['row'])) {
 	config_set_path("installedpackages/{$conf_type}/config/{$rowid}/row", $rowdata[$rowid]['row']);
 	$savemsg = 'The selected row(s) have been moved.';
 	write_config("pfBlockerNG: {$gtype} - Rows(s) moved");
+	pfb_mark_pending_changes();	// applies on the next Update, not on save
 	header("Location: /pfblockerng/pfblockerng_category_edit.php?type={$gtype}&rowid={$rowid}&savemsg={$savemsg}");
 	exit;
 }
@@ -988,6 +990,7 @@ else {
 	$tab_array[]	= array(gettext('DNSBL SafeSearch'),	FALSE,			'/pfblockerng/pfblockerng_safesearch.php');
 }
 display_top_tabs($tab_array, TRUE);
+pfb_print_pending_changes_box();
 
 if (empty($gtype)) {
 	print ('No Category type selected.');

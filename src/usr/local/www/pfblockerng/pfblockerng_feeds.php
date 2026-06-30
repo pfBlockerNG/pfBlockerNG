@@ -151,6 +151,7 @@ if ($_POST) {
 		if ($config_mod) {
 			if (!$input_errors) {
 				write_config('[pfBlockerNG] save Feed settings');
+				pfb_mark_pending_changes();	// applies on the next Update, not on save
 				header("Location: /pfblockerng/pfblockerng_feeds.php?type={$gtype}");
 				exit;
 			}
@@ -628,6 +629,7 @@ $tab_array[]	= array(gettext('IPv4'),	$active['ipv4'],	'/pfblockerng/pfblockerng
 $tab_array[]	= array(gettext('IPv6'),	$active['ipv6'],	'/pfblockerng/pfblockerng_feeds.php?type=ipv6');
 $tab_array[]	= array(gettext('DNSBL'),	$active['dnsbl'],	'/pfblockerng/pfblockerng_feeds.php?type=dnsbl');
 display_top_tabs($tab_array, TRUE);
+pfb_print_pending_changes_box();
 
 ?>
 <form action="/pfblockerng/pfblockerng_feeds.php?type=<?=$gtype?>" method="post" name="iform" id="iform" class="form-horizontal">

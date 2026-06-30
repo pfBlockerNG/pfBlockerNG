@@ -367,6 +367,7 @@ $tab_array[]	= array(gettext('Logs'),	TRUE,	'/pfblockerng/pfblockerng_log.php');
 $tab_array[]	= array(gettext('Sync'),	FALSE,	'/pfblockerng/pfblockerng_sync.php');
 pfb_software_add_tab($tab_array);
 display_top_tabs($tab_array, TRUE);
+pfb_print_pending_changes_box();
 
 // Create Form
 $form = new Form(FALSE);

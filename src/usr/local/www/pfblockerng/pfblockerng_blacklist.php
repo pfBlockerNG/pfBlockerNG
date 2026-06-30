@@ -292,6 +292,7 @@ if ($_POST && !$_POST['enableall'] && !$_POST['disableall']) {
 	if ($config_mod && !isset($input_errors)) {
 
 		write_config('[ pfBlockerNG ] save DNSBL Category settings');
+		pfb_mark_pending_changes();	// applies on the next Update, not on save
 		if ($savemsg) {
 			header("Location: /pfblockerng/pfblockerng_blacklist.php?savemsg={$savemsg}");
 		} else {
@@ -329,6 +330,7 @@ $tab_array[]	= array(gettext('DNSBL Groups'),	FALSE,	'/pfblockerng/pfblockerng_c
 $tab_array[]	= array(gettext('DNSBL Category'),	TRUE,	'/pfblockerng/pfblockerng_blacklist.php');
 $tab_array[]	= array(gettext('DNSBL SafeSearch'),	FALSE,	'/pfblockerng/pfblockerng_safesearch.php');
 display_top_tabs($tab_array, TRUE);
+pfb_print_pending_changes_box();
 
 if (isset($_REQUEST['savemsg'])) {
 	$savemsg = str_replace('BR', '<br />', htmlspecialchars($_REQUEST['savemsg']));

@@ -163,6 +163,7 @@ if ($_POST) {
 			}
 
 			write_config('[pfBlockerNG] save Update Hooks settings');
+			pfb_mark_pending_changes();	// hooks run during the Update, not on save
 			header('Location: /pfblockerng/pfblockerng_hooks.php');
 			exit;
 		}
@@ -199,6 +200,7 @@ $tab_array_sub	= array();
 $tab_array_sub[]	= array(gettext('Run'),		FALSE,	'/pfblockerng/pfblockerng_update.php');
 $tab_array_sub[]	= array(gettext('Hooks'),	TRUE,	'/pfblockerng/pfblockerng_hooks.php');
 display_top_tabs($tab_array_sub, TRUE);
+pfb_print_pending_changes_box();
 
 $form = new Form('Save');
 
