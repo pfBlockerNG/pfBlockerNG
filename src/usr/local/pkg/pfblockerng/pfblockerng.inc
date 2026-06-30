@@ -75,6 +75,10 @@ $pfb['folder_array'] = array(	"{$pfb['dbdir']}", "{$pfb['logdir']}", "{$pfb['ccd
 
 // Files
 $pfb['log']		= "{$pfb['logdir']}/pfblockerng.log";
+// Per-run log for the live Update viewer (AJAX tail). Mirrors the main-log lines of the CURRENT
+// run only; truncated at each run start and NOT registered with pfb_log_mgmt(), so byte offsets
+// stay stable for the tail even when pfb_log_mgmt() trims the cumulative log mid-schedule.
+$pfb['runlog']		= "{$pfb['logdir']}/pfblockerng_run.log";
 $pfb['dnslog']		= "{$pfb['logdir']}/dnsbl.log";
 $pfb['dnsreplylog']	= "{$pfb['logdir']}/dns_reply.log";
 $pfb['ip_blocklog']	= "{$pfb['logdir']}/ip_block.log";
@@ -2745,17 +2749,29 @@ function pfb_logger($log, $logtype) {
 		$elog = "{$log} [ {$now} ]";
 	} 
 
+	// Mirror the main-log lines into the per-run log while a run is active (set by
+	// sync_package_pfblockerng). The live Update viewer tails this file; the cumulative log is
+	// untouched. Only writes inside a run process (the dispatched daemon) -- a stray pfb_logger
+	// call from a normal page never pollutes it.
+	$runlog = (!empty($pfb['runlog']) && !empty($pfb['runlog_active'])) ? $pfb['runlog'] : '';
+
 	switch ($logtype) {
 
 		// Print to pfBlockerNG log
 		case 1:
 			@file_put_contents("{$pfb['log']}", "{$log}", FILE_APPEND);
+			if ($runlog !== '') {
+				@file_put_contents($runlog, "{$log}", FILE_APPEND);
+			}
 			break;
 
 		// Print to pfBlockerNG log and Error log
 		case 2:
 			@file_put_contents("{$pfb['log']}", "{$log}", FILE_APPEND);
 			@file_put_contents("{$pfb['errlog']}", "{$elog}", FILE_APPEND);
+			if ($runlog !== '') {
+				@file_put_contents($runlog, "{$log}", FILE_APPEND);
+			}
 			break;
 
 		// Print to Extras log
@@ -11850,6 +11866,59 @@ function pfb_js_string(string $text): string {
 }
 
 
+// Read the next slice of a live log file for the AJAX tail endpoint, starting at byte $offset.
+// Returns ['data' => <new text>, 'offset' => <next byte offset to request>].
+//
+// - Whole lines only (default): a trailing partial line is held back -- $offset advances only
+//   past the last newline -- so a multibyte UTF-8 char is never split across two polls (the JSON
+//   encoder would otherwise substitute the split byte and corrupt it irreparably). Pass
+//   $flush = TRUE on the FINAL read (the run is done, no more lines are coming) to emit the
+//   trailing partial line too.
+// - $offset is always a RAW byte position in the file; the returned data has CR stripped for
+//   display only, so the count is computed on raw bytes BEFORE stripping (the two would diverge).
+// - $offset past EOF (the file was truncated/rotated -- e.g. a fresh run truncated the run log)
+//   resets to 0, so the tail re-reads from the new start instead of desyncing.
+function pfb_log_tail_chunk(string $file, int $offset, bool $flush = FALSE): array {
+	clearstatcache(FALSE, $file);
+	$len = @filesize($file);
+	if ($len === FALSE) {
+		return ['data' => '', 'offset' => 0];	// no file yet
+	}
+	if ($offset < 0 || $offset > $len) {
+		$offset = 0;				// truncated/rotated -> restart
+	}
+	if ($offset === $len) {
+		return ['data' => '', 'offset' => $len];	// nothing new
+	}
+
+	$f = @fopen($file, 'rb');
+	if ($f === FALSE) {
+		return ['data' => '', 'offset' => $offset];
+	}
+	@fseek($f, $offset);
+	$raw = '';
+	while (!feof($f)) {
+		$buf = @fread($f, 8192);
+		if ($buf === FALSE) {
+			break;
+		}
+		$raw .= $buf;
+	}
+	@fclose($f);
+
+	if (!$flush) {
+		// Emit up to the last complete line; hold the trailing partial for the next poll.
+		$nl = strrpos($raw, "\n");
+		if ($nl === FALSE) {
+			return ['data' => '', 'offset' => $offset];
+		}
+		$raw = substr($raw, 0, $nl + 1);
+	}
+
+	return ['data' => str_replace("\r", '', $raw), 'offset' => $offset + strlen($raw)];
+}
+
+
 // Build the JS that writes $text into the named live-terminal textarea and follows the tail.
 // Auto-follow is "sticky": the scroll position is measured BEFORE the value changes, and the box
 // is re-pinned to the bottom ONLY when the user was already at the bottom -- so scrolling up to
@@ -12583,6 +12652,14 @@ function pfb_build_autorule_list(
 function sync_package_pfblockerng($cron='') {
 	global $g, $pfb, $pfbarr;
 	pfb_global();
+
+	// Start a fresh per-run log for the live Update viewer and activate the pfb_logger mirror for
+	// the duration of this run. Truncated once here so the viewer always tails THIS run from its
+	// start (GUI- and cron-triggered runs both funnel through here -- ADR-43 entrypoint).
+	if (!empty($pfb['runlog'])) {
+		@file_put_contents($pfb['runlog'], '');
+		$pfb['runlog_active'] = TRUE;
+	}
 
 	$pfb['filter_configure']	= FALSE;	// Flag to call filter_configure once
 
