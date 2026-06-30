@@ -296,12 +296,16 @@ def test_adr40_content_gate_fires_on_change(adr40_vm: SmokeVM) -> None:
         f"after content change: pf table {ip_spec.alias} still contains old IP {old_ip}: {members_after}"
     )
 
-    # The content change ran the no-rule-change reload path, which logs a per-alias
-    # " Updating: <alias>" line. Those lines must render CONTIGUOUSLY (one per line), not
-    # blank-separated — a leading "\n" in the log format put a blank line above every entry.
-    # Inspect only THIS reload's slice of the log (order-independent — the session VM's log
-    # accumulates across tests), guarding the exact regression: no entry preceded by a blank line.
+    # The content change ran the no-rule-change reload path, which logs:
+    #   "Alias table changes detected, updating:\n"
+    # immediately followed by per-alias " Updating: <alias>" lines, all CONTIGUOUS (one per
+    # line, no blank lines between them). The sub-header is the anchor; without it the block
+    # reads as a contradiction after "No changes to Firewall rules".
     reload_log = adr40_vm.ssh("cat", h.PFB_LOG).stdout[log_len_before:]
+    assert "Alias table changes detected, updating:" in reload_log, (
+        "expected 'Alias table changes detected, updating:' sub-header in the reload log "
+        f"after a content change (no-rule-change path):\n{reload_log[-1500:]}"
+    )
     assert " Updating:" in reload_log, (
         f"expected a per-alias ' Updating:' line in the reload log after a content change:\n{reload_log[-1500:]}"
     )

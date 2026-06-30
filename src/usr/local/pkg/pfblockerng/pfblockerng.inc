@@ -12154,6 +12154,48 @@ function pfb_syslog_logging_needs_update($current, $want) {
 }
 
 /**
+ * Diff two filter-rule arrays, restricted to pfBlockerNG-owned rules (pfb_is_managed_obj()
+ * on the rule 'descr'). Returns the descr lists of pfB rules created / modified / removed
+ * between $old_rules and $new_rules, plus a 'reordered' flag = TRUE when no pfB rule was
+ * added, modified, or removed (the caller only diffs when the full arrays already differ, so
+ * an empty pfB diff means the change was a reorder and/or user-rule edit). User rules are
+ * never reported — ADR-41 reorders them but pfB does not own them.
+ *
+ * @param array $old_rules Rules before the change (created-tag stripped).
+ * @param array $new_rules Rules after the change (created-tag stripped).
+ * @return array{created: list<string>, modified: list<string>, removed: list<string>, reordered: bool}
+ */
+function pfb_diff_managed_rules(array $old_rules, array $new_rules): array {
+	// Build descr => rule maps for pfB-owned rules only (last wins on duplicate descr).
+	$old_map = [];
+	foreach ($old_rules as $r) {
+		$descr = (string) ($r['descr'] ?? '');
+		if (pfb_is_managed_obj($descr)) {
+			$old_map[$descr] = $r;
+		}
+	}
+	$new_map = [];
+	foreach ($new_rules as $r) {
+		$descr = (string) ($r['descr'] ?? '');
+		if (pfb_is_managed_obj($descr)) {
+			$new_map[$descr] = $r;
+		}
+	}
+
+	$created  = array_values(array_diff(array_keys($new_map), array_keys($old_map)));
+	$removed  = array_values(array_diff(array_keys($old_map), array_keys($new_map)));
+	$modified = [];
+	foreach (array_intersect(array_keys($old_map), array_keys($new_map)) as $descr) {
+		if ($old_map[$descr] != $new_map[$descr]) {
+			$modified[] = $descr;
+		}
+	}
+
+	$reordered = empty($created) && empty($modified) && empty($removed);
+	return ['created' => $created, 'modified' => $modified, 'removed' => $removed, 'reordered' => $reordered];
+}
+
+/**
  * pfb_build_autorule_list() — pure emission helper extracted from sync_package_pfblockerng().
  *
  * Reconciles the firewall auto-rules by a STABLE bucket reorder: every surviving rule is sorted
@@ -16292,6 +16334,24 @@ function sync_package_pfblockerng($cron='') {
 			$log = localize_text("Firewall rule changes found, applying Filter Reload");
 			logger(LOG_NOTICE, $log, LOG_PREFIX_PKG_PFBLOCKERNG);
 			pfb_logger("{$log}\n", 1);
+
+			$rule_diff = pfb_diff_managed_rules($orig_rules_nocreated ?? [], $new_rules_nocreated ?? []);
+			if ($rule_diff['reordered']) {
+				pfb_logger(" " . localize_text("Rule order changed (no pfB rules added, modified, or removed)") . "\n", 1);
+			} else {
+				foreach ($rule_diff['created'] as $descr) {
+					pfb_logger(" Created: {$descr}\n", 1);
+				}
+				foreach ($rule_diff['modified'] as $descr) {
+					pfb_logger(" Modified: {$descr}\n", 1);
+				}
+				foreach ($rule_diff['removed'] as $descr) {
+					pfb_logger(" Removed: {$descr}\n", 1);
+				}
+			}
+			if (!empty($pfb_alias_lists)) {
+				pfb_logger(localize_text("Alias tables: skipped (Filter Reload rebuilds them from the alias files)") . "\n", 1);
+			}
 		}
 
 		exec("{$pfb['pfctl']} -s Tables | {$pfb['grep']} '^pfB_'", $pfb_tables);
@@ -16358,6 +16418,8 @@ function sync_package_pfblockerng($cron='') {
 			$final_alias = array_unique($pfb_alias_lists);
 
 			if (!empty($final_alias)) {
+				pfb_logger(localize_text("Alias table changes detected, updating:") . "\n", 1);
+
 				// ADR-40 P4: read mode/batch once for the loop (PfbConfig gateway).
 				$pfb_delta_mode  = (string) PfbConfig::read('pfb_alias_delta_mode')->toStored();
 				$pfb_delta_batch = pfb_alias_delta_batch_clamp((string) PfbConfig::read('pfb_alias_delta_batch'));
