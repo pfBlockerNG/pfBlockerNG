@@ -253,12 +253,18 @@ $status = 'NEXT Scheduled CRON Event will run at'
 	. "&emsp;<strong>{$cronreal}</strong>&emsp;with<strong><span style=\"color: red;\">&emsp;{$nextcron}"
 	. '&emsp;</span></strong> time remaining.';
 
-// Query for any active pfBlockerNG task
-if (pfb_active_task_running()) {
+// Query for any active pfBlockerNG task (captured once: reused by the status line AND the
+// auto-tail decision below).
+$pfb_task_running = pfb_active_task_running();
+if ($pfb_task_running) {
 	$status = '<span style="color: red;">&emsp;&emsp;'
 		. 'Active pfBlockerNG CRON JOB'
 		. '</span>&emsp;<i class="fa-solid fa-spinner fa-pulse fa-lg"></i>';
 }
+
+// Auto-tail an IN-PROGRESS update on a plain page load (no Run Now / wizard dispatch, no View
+// button click) — stream it live like the View button instead of showing a stale last-run tail.
+$pfb_auto_tail = pfb_update_autotail($pfb_task_running, isset($pconfig['run']), isset($_POST['log_view']));
 $status .= '<br />&emsp;<small><span style="color: red;">Refresh to update current status and time remaining.</span></small>';
 
 // Read the due-ledger entries for the Schedule view (read-only at page load).
@@ -432,8 +438,11 @@ $form->add($section);
 // Plain GET (no active run and no live-view) → prefill pfb_output with the last log tail.
 // $pconfig['run'] is the SAME signal the Run Now dispatch gate keys on (set by a button POST
 // and by the wizard-reload GET), so this suppresses the stale prefill on every run-start path.
+// $pfb_auto_tail also suppresses the stale prefill: an in-progress update is streamed live
+// (below) instead, so pfb_output must start empty for the livetail to fill it.
 $pfb_log_active = isset($pconfig['run']) ||
-                  (isset($pconfig['log_view']) && $pconfig['log_view'] !== 'View');
+                  (isset($pconfig['log_view']) && $pconfig['log_view'] !== 'View') ||
+                  $pfb_auto_tail;
 $section = new Form_Section('Log');
 $section->addInput(new Form_Textarea(
 	'pfb_status',
@@ -456,6 +465,11 @@ print($form);
 if (isset($pconfig['log_view'])) {
 	if ($pconfig['log_view'] !== 'View') {
 		pfbupdate_status(gettext("Log Viewing in progress.    ** Press 'END VIEW' to Exit ** "));
+		pfb_livetail($pfb['log'], 'view');
+	} elseif ($pfb_auto_tail) {
+		// Plain page load while an update is in progress: tail it live (passive 'view' viewer,
+		// same as the View button) rather than leaving the prefilled last-run tail.
+		pfbupdate_status(gettext("Update in progress — tailing the live log..."));
 		pfb_livetail($pfb['log'], 'view');
 	} else {
 		// End the viewer output Window
