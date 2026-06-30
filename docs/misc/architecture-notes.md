@@ -80,7 +80,8 @@ description, timeout}`), runs each **as root** via `/usr/bin/timeout … <script
 captures output to the pfBlockerNG log, and **non-zero/timeout → log + continue** (a hook can
 never abort/stall an update; no enabled hooks ⇒ byte-identical pass). Security model: `script` is
 NOT a GUI-typed command — it is a `hook_<when>_*.{sh,py}` file a shell-access admin places in
-`list_scripts/` (`PFB_HOOK_SCRIPT_DIR`); the picker/save/runner all gate on the same allow-list
+the dedicated `hooks/` dir (`PFB_HOOK_SCRIPT_DIR`, created at install, separate from the per-feed
+`list_scripts/`); the picker/save/runner all gate on the same allow-list
 (`pfb_hook_script_valid()`), so a GUI user can only *select* a vetted file, never inject shell.
 Admin-only **Update Hooks** settings tab (`www/pfblockerng/pfblockerng_hooks.php`, same WebCfg
 priv as the other settings).

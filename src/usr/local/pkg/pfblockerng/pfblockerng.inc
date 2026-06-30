@@ -2713,10 +2713,12 @@ if (!defined('PFB_LIST_SCRIPT_TIMEOUT')) {
 
 // Directory holding the admin-authored hook scripts the picker offers and the
 // runner executes (ADR-12 security model: a hook runs a vetted on-box script
-// file, never a GUI-entered command). Shared with the per-feed list pre/post
-// scripts; hook scripts are named hook_pre_*/hook_post_* (.sh/.py).
+// file, never a GUI-entered command). A dedicated dir, separate from the per-feed
+// list pre/post scripts (list_scripts/), so update hooks and feed transforms don't
+// share a folder; hook scripts are named hook_pre_*/hook_post_* (.sh/.py). Created
+// at install by pfblockerng_install.inc (no shipped files live here).
 if (!defined('PFB_HOOK_SCRIPT_DIR')) {
-	define('PFB_HOOK_SCRIPT_DIR', '/usr/local/pkg/pfblockerng/list_scripts');
+	define('PFB_HOOK_SCRIPT_DIR', '/usr/local/pkg/pfblockerng/hooks');
 }
 
 /*
@@ -3455,7 +3457,7 @@ function pfb_run_hooks($when, $ctx = array()) {
 		// Run the vetted script as root under timeout(1): SIGTERM at $timeout,
 		// SIGKILL after the grace period. The PFB_* context rides the env prefix
 		// (the script reads it from the environment). The script runs via its own
-		// shebang + execute bit (the list_scripts convention).
+		// shebang + execute bit (the hook-script dir convention).
 		//
 		// Two independent reasons a hook that (re)starts a daemon -- e.g. the documented
 		// HAProxy graceful-reload recipe -- would otherwise hang the WHOLE pass for the

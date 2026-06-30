@@ -224,7 +224,7 @@ $section->addInput(new Form_StaticText(
 		. 'shell) in <code>%1$s</code>, name it <code>hook_pre_<em>name</em>.sh</code> or '
 		. '<code>hook_post_<em>name</em>.sh</code> (<code>.sh</code> or <code>.py</code>), and make it executable '
 		. '(<code>chmod +x</code>, with a <code>#!</code> shebang). Only files matching that naming appear in the '
-		. 'list below for the matching Pre/Post. (Same model as the per-feed list scripts.)'), PFB_HOOK_SCRIPT_DIR)
+		. 'list below for the matching Pre/Post. (Same picker model as the per-feed list scripts.)'), PFB_HOOK_SCRIPT_DIR)
 	. '</small>'
 ));
 

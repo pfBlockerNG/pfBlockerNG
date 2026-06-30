@@ -1491,7 +1491,7 @@ HOOK_MARKER_DIR = "/tmp"
 # On-box dir holding the admin-authored hook scripts (PFB_HOOK_SCRIPT_DIR in the
 # inc). The picker/runner accept ONLY hook_<when>_*.{sh,py} files that live here, so
 # a smoke hook installs its script here before referencing it (see install_hook_script).
-HOOK_SCRIPT_DIR = "/usr/local/pkg/pfblockerng/list_scripts"
+HOOK_SCRIPT_DIR = "/usr/local/pkg/pfblockerng/hooks"
 
 
 def install_hook_script(vm: SmokeVM, name: str, body: str, *, timeout: float = 60.0) -> str:
@@ -1501,7 +1501,7 @@ def install_hook_script(vm: SmokeVM, name: str, body: str, *, timeout: float = 6
     match ``hook_<when>_*.{sh,py}`` (the ADR-12 allow-list), so a smoke hook must
     install its script before set_update_hooks() references it. Writes via ``tee`` (the
     same file-write pattern used elsewhere) and ``chmod 0755`` so the script runs via
-    its shebang (the list_scripts convention).
+    its shebang (the hook-script dir convention).
     """
     # A bare basename only -- never let a caller's ``name`` (``..``/``/``) escape
     # HOOK_SCRIPT_DIR and write elsewhere on the guest.

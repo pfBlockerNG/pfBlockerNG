@@ -246,4 +246,16 @@ final class PfbHookScriptsTest extends TestCase
 			self::cleanSymlinkFixture($fixture);
 		}
 	}
+
+	/**
+	 * Update hooks live in their OWN directory, not the per-feed list_scripts/ folder:
+	 * the production default the picker/runner use when no $dir override is passed is
+	 * the dedicated hooks/ dir. Pins the relocation so it can't silently revert to
+	 * sharing list_scripts/ with the feed transform scripts.
+	 */
+	public function testProductionHookDirIsDedicatedHooksFolder(): void
+	{
+		$this->assertSame('/usr/local/pkg/pfblockerng/hooks', PFB_HOOK_SCRIPT_DIR);
+		$this->assertNotSame('/usr/local/pkg/pfblockerng/list_scripts', PFB_HOOK_SCRIPT_DIR);
+	}
 }
