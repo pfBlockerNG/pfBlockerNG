@@ -3540,23 +3540,27 @@ function pfb_redir_exclude_autocomplete() {
 }
 
 // [ ADR-36 ] DNS Redirect quick-fill: union of pfBlockerNG Inbound + Outbound interfaces.
-// When clicked, selects those interfaces in the #dnsbl_redir_int multi-select.
+// When clicked, selects those interfaces in the dnsbl_redir_int multi-select.
 var pfb_redir_fill_ifaces = <?=$pfb_redir_fill_json?>;
 
 function pfb_redir_fill_interfaces() {
 	// Set the multi-select to exactly the fill set (deselects the rest). .val([...]) is the
 	// reliable jQuery idiom for a <select multiple>; trigger('change') notifies any listeners.
-	$('#dnsbl_redir_int').val(pfb_redir_fill_ifaces).trigger('change');
+	// NOTE: a pfSense multi-select renders id (and name) as "<field>[]", so the bracket-free
+	// id selector "#dnsbl_redir_int" matches nothing — target it by name instead (this is why
+	// the button previously appeared to do nothing).
+	$('select[name="dnsbl_redir_int[]"]').val(pfb_redir_fill_ifaces).trigger('change');
 }
 
 // [ ADR-37 ] DoT/DoQ Block quick-fill: union of pfBlockerNG Inbound + Outbound interfaces.
-// When clicked, selects those interfaces in the #dnsbl_dot_block_int multi-select.
+// When clicked, selects those interfaces in the dnsbl_dot_block_int multi-select.
 var pfb_dot_block_fill_ifaces = <?=$pfb_dot_block_fill_json?>;
 
 function pfb_dot_block_fill_interfaces() {
 	// Set the multi-select to exactly the fill set (deselects the rest). .val([...]) is the
 	// reliable jQuery idiom for a <select multiple>; trigger('change') notifies any listeners.
-	$('#dnsbl_dot_block_int').val(pfb_dot_block_fill_ifaces).trigger('change');
+	// Same bracketed-id caveat as the DNS Redirect fill above — select by name, not "#id".
+	$('select[name="dnsbl_dot_block_int[]"]').val(pfb_dot_block_fill_ifaces).trigger('change');
 }
 
 // [ ADR-13 ] Address(es) the package would auto-create for the selected interface, so

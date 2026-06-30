@@ -600,8 +600,12 @@ def test_dnsbl_redir_exception_and_fill_fields_render(webui: WebUI, php_error_lo
         'name="dnsbl_dot_block_exclude"',
         "pfb_redir_exclude_autocomplete",
         "pfb_alias_names",
-        # (3) The fill rewrite — the canonical .val([...]) form (not the old .prop() loop).
+        # (3) The fill rewrite — the canonical .val([...]) form (not the old .prop() loop),
+        # AND the bracketed-name selectors: a pfSense multi-select renders id/name as
+        # "<field>[]", so the fill must target it by name, not the broken bracket-free "#id".
         ".val(pfb_redir_fill_ifaces)",
+        'select[name="dnsbl_redir_int[]"]',
+        'select[name="dnsbl_dot_block_int[]"]',
     ):
         assert needle in body, f"DNSBL page is missing the redirect/fill marker {needle!r}"
 
