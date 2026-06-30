@@ -80,7 +80,8 @@ direct command exits. Read the output back from the file.
 - **Do not** decide "is it done?" by grepping `ps` for a command pattern (it matches concurrent
   unrelated runs) or by waiting for a magic **log string** (brittle: a crash that never writes
   the string loops the wait forever — this is the bug the `UPDATE PROCESS ENDED` live-tail probe
-  had; `pfb_livetail()` now keys on `isvalidpid()` instead).
+  had; the live-log tail (the `?ajax=tail` poll endpoint, `pfb_log_tail_payload()`) now keys its
+  "done" signal on `isvalidpid()` instead).
 - There is an inherent, small **launch-lag** (any process takes nonzero time to become
   observable). Bound it with a short grace; if the process hasn't appeared within a few seconds
   something is already wrong, so give up rather than loop.
@@ -91,8 +92,8 @@ A per-run pidfile answers "is the process **I** launched alive?" — it cannot a
 instance running?". A scheduled cron tick that fired independently has no per-run pidfile, so a
 guard that refuses to start a second run must scan **`ps`** (it sees every process regardless of
 who launched it). In this package the anti-double-run guard (`pfb_active_task_running()` →
-`pfb_feed_task_running()`) is `ps`-based for exactly this reason, while the per-run live tail uses
-the pidfile.
+`pfb_feed_task_running()`) is `ps`-based for exactly this reason, while the per-run live-log tail
+(the AJAX poll's "done" check) uses the pidfile.
 
 ## Testing: launch detached, never drive-and-wait over SSH
 
@@ -104,9 +105,11 @@ thing under observation is the process behaviour itself.
 
 ## See also
 
-- `pfb_run_hooks()` (the `--foreground` + temp-file capture) and `pfb_livetail()` (the
-  `daemon -p` / `isvalidpid` tail) in `src/usr/local/pkg/pfblockerng/pfblockerng.inc` — landed in
-  PR #634.
+- `pfb_run_hooks()` (the `--foreground` + temp-file capture) in
+  `src/usr/local/pkg/pfblockerng/pfblockerng.inc` — landed in PR #634.
+- The detached `daemon -p` dispatch (`pfb_runnow()` / `pfb_runnow_forcecheck()` in
+  `pfblockerng_update.php`, `pfb_software_dispatch()` in `pfblockerng_software.php`) feeding the
+  `?ajax=tail` poll endpoint (`pfb_log_tail_payload()` keyed on `isvalidpid`) — the live-log tail.
 - CLAUDE.md "Bounded waits" and the Python "no fixed-time waits to coordinate concurrency" rule —
   the agent/test-side analogue: synchronise on a signal and bound every wait, never sleep-poll
   blindly.
