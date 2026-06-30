@@ -329,7 +329,7 @@ if (!function_exists('get_configured_vip_ipv6')) {
 
 if (!function_exists('get_configured_vip_interface')) {
 	// pfSense util.inc: the friendly interface a VIP id lives on. The test sentinels are
-	// not real VIPs, so report a non-'lo0' interface -> the validator's "VIP not on
+	// not real VIPs, so report a non-'lo0' interface -> the validator's "VIP not found on
 	// interface" check fails for them. That is fine: those tests only assert the error is
 	// NOT the v6-required message, never that validation passes.
 	function get_configured_vip_interface($vipif) {
@@ -345,7 +345,7 @@ if (!function_exists('get_configured_vip_interface')) {
 
 if (!function_exists('convert_friendly_interface_to_friendly_descr')) {
 	// pfSense interfaces.inc: friendly name -> human description. Identity is enough for
-	// the "VIP not on interface %s" message the doubled-interface path produces.
+	// the "VIP not found on interface %s" message the doubled-interface path produces.
 	function convert_friendly_interface_to_friendly_descr($interface) {
 		return $interface;
 	}
