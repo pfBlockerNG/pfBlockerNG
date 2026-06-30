@@ -552,6 +552,12 @@ events.push(function(){
 		$row.find('div.col-sm-10').removeClass('col-sm-10').addClass('col-sm-12');
 	});
 
+	// Show the newest lines: scroll the prefilled log textarea to the bottom on load
+	// (the live-tail/Run-Now paths scroll as they stream; the plain-GET prefill did not).
+	$('textarea[name="pfb_output"]').each(function() {
+		this.scrollTop = this.scrollHeight;
+	});
+
 	// Scroll to the bottom of the page after wizard
 	var pfb_wizard = "<?=$pfb_wizard;?>";
 	if (pfb_wizard) {
