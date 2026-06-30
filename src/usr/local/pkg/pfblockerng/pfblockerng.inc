@@ -1902,7 +1902,7 @@ function pfb_global() {
 			} else {
 				// Manual mode: a genuinely invalid/missing/mismatched VIP disables DNSBL.
 				$pfb['dnsbl'] = '';
-				pfb_logger("\nDNSBL disabled: {$vips_valid_result[1]}", 1);
+				pfb_logger("\nDNSBL disabled: {$vips_valid_result[1]}\n", 1);
 			}
 		} elseif (pfb_dnsbl_v6_vip_required(pfb_unbound_listens_v6(), ($pfb['dnsbl_vip_auto'] === 'on')) && empty($pfb['dnsblconfig']['pfb_dnsvip6'])) {
 			// [ ADR-13 §7 pivot ] NON-BLOCKING: the resolver listens on IPv6 but no v6
