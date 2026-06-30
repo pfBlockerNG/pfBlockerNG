@@ -1129,9 +1129,8 @@ def test_software_log_prefills_on_plain_get(
         )
 
         # The prefilled output auto-scrolls to the bottom on load (issue: log auto-scroll).
-        assert "Show the newest lines:" in webui.get(_SOFTWARE_PAGE).text, (
-            "Software page is missing the prefilled-output auto-scroll snippet"
-        )
+        # Reuse the page already fetched for the prefill check above (m.string) — no extra GET.
+        assert "Show the newest lines:" in m.string, "Software page is missing the prefilled-output auto-scroll snippet"
 
 
 _PENDING_MARKER = "/usr/local/etc/pfb_pending_changes"
