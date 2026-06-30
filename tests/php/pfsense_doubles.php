@@ -124,9 +124,13 @@ if (!function_exists('system_get_uniqueid')) {
 }
 
 if (!function_exists('write_rcfile')) {
-	// pfb_filter_service()/pfb_dnsbl_service() call this at load time. No-op:
-	// we never assert rc.d generation in unit tests.
+	// pfb_filter_service()/pfb_dnsbl_service() call this at load time. Capture the rc
+	// array (keyed by its 'file') so a test can assert the generated start/stop bodies
+	// (e.g. the #662 daemon-fd-detach); behaviourally still a no-op on disk.
 	function write_rcfile($rc) {
+		if (isset($rc['file'])) {
+			$GLOBALS['pfb_test_rcfiles'][$rc['file']] = $rc;
+		}
 		return true;
 	}
 }
