@@ -605,23 +605,10 @@ if ($_POST && isset($_POST['save'])) {
 	}
 
 
-	// Validate Adv. firewall rule settings (issue #356: per-field alias-type check).
-	// Port fields require a port-type alias; address fields require a network or host alias.
-	$adv_alias_fields = [
-		'aliasports_in'  => ['dir' => 'Port In',         'type_label' => 'Port-type'],
-		'aliasports_out' => ['dir' => 'Port Out',        'type_label' => 'Port-type'],
-		'aliasaddr_in'   => ['dir' => 'Destination In',  'type_label' => 'Network or Host-type'],
-		'aliasaddr_out'  => ['dir' => 'Source Out',      'type_label' => 'Network or Host-type'],
-	];
-	foreach ($adv_alias_fields as $field => $meta) {
-		if (!empty($_POST[$field])) {
-			if (!is_alias($_POST[$field])) {
-				$input_errors[] = "Settings: Advanced {$meta['dir']}bound Alias error - Must use an existing Alias";
-			} elseif (!pfb_alias_field_type_ok($field, alias_get_type($_POST[$field]))) {
-				$input_errors[] = "Settings: Advanced {$meta['dir']}bound Alias error - Must use a {$meta['type_label']} alias";
-			}
-		}
-	}
+	// Validate Adv. firewall rule settings (issue #356/#636: per-field alias-type check).
+	// Existence + type are resolved from the configuration (alias_get_type), NOT is_alias()
+	// whose $aliastable cache is empty on this page — see pfb_adv_alias_field_errors().
+	$input_errors = array_merge($input_errors, pfb_adv_alias_field_errors($_POST));
 
 	// Validate Adv. firewall rule 'Protocol' setting
 	if (!empty($_POST['autoports_in']) || !empty($_POST['autoaddr_in'])) {

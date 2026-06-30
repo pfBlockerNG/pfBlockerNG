@@ -1575,6 +1575,48 @@ function pfb_alias_field_type_ok(string $field, string $alias_type): bool
 	return FALSE;
 }
 
+/**
+ * pfb_adv_alias_field_errors — validate the Advanced Inbound/Outbound alias
+ * fields of a category-edit POST (issue #356, #636).
+ *
+ * Each non-empty field must name an EXISTING firewall alias whose type the field
+ * accepts (port fields -> a port alias; address fields -> a network or host alias).
+ *
+ * Existence AND type are resolved from alias_get_type(), which reads the
+ * 'aliases/alias' configuration directly (returning '' for an unknown name) —
+ * the same source the page builds its alias dropdowns/autocomplete from. This
+ * deliberately replaces is_alias(): is_alias() consults the in-memory $aliastable
+ * cache, populated only by alias_make_table() during filter generation, so on the
+ * category-edit page that cache is empty and is_alias() reports every existing
+ * alias as missing — rejecting valid aliases with "Must use an existing Alias" (#636).
+ *
+ * @param  array $post           The submitted form ($_POST).
+ * @return array<int, string>    Human-readable input-error strings (empty when valid).
+ */
+function pfb_adv_alias_field_errors(array $post): array
+{
+	$adv_alias_fields = [
+		'aliasports_in'  => ['dir' => 'Port In',         'type_label' => 'Port-type'],
+		'aliasports_out' => ['dir' => 'Port Out',        'type_label' => 'Port-type'],
+		'aliasaddr_in'   => ['dir' => 'Destination In',  'type_label' => 'Network or Host-type'],
+		'aliasaddr_out'  => ['dir' => 'Source Out',      'type_label' => 'Network or Host-type'],
+	];
+
+	$errors = [];
+	foreach ($adv_alias_fields as $field => $meta) {
+		if (empty($post[$field])) {
+			continue;
+		}
+		$alias_type = alias_get_type($post[$field]);
+		if ($alias_type === '') {
+			$errors[] = "Settings: Advanced {$meta['dir']}bound Alias error - Must use an existing Alias";
+		} elseif (!pfb_alias_field_type_ok($field, $alias_type)) {
+			$errors[] = "Settings: Advanced {$meta['dir']}bound Alias error - Must use a {$meta['type_label']} alias";
+		}
+	}
+	return $errors;
+}
+
 // ---------------------------------------------------------------------------
 // ADR-30 Phase 1 — Pure schedule-period deciders for log rotation.
 //
