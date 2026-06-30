@@ -23,6 +23,7 @@ with the reason and the access note for Phase 5, NOT silently dropped.
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import uuid
@@ -952,19 +953,18 @@ def _pfb_output_value(body: str) -> str:
     return match.group(1)
 
 
-def test_log_output_prefill_gating(smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
-    """The log output textarea is prefilled only on the Software post-upgrade reload (#666).
+def test_log_output_never_prefilled(smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """Neither page prefills the output textarea on any GET (#671 — live log now AJAX-polled).
 
-    Scenario (prefill gating):
+    Scenario (no prefill):
       Given software.log and the pfBlockerNG log each seeded with a unique marker,
-      When the Software page is GET WITHOUT ``?postupgrade=1`` -> pfb_output is EMPTY;
-      When the Software page is GET WITH ``?postupgrade=1`` -> pfb_output is prefilled with the
-           software.log tail (the marker appears);
-      When the Update page is GET -> pfb_output is EMPTY (prefill removed).
+      When the Software page is GET (plain AND with the old ``?postupgrade=1``) -> pfb_output EMPTY;
+      When the Update page is GET -> pfb_output EMPTY.
 
-    The seeded markers make the empty assertions meaningful (the textarea is empty by choice,
-    not because the log is empty) — fail-before: the old code prefilled the tail on every plain
-    GET, so both markers would appear.
+    The live log is streamed by the client poller (``?ajax=tail``), so the rendered box is always
+    empty; the #666 post-upgrade prefill is removed. The seeded markers make the empty assertions
+    meaningful (empty by choice, not an empty log) — fail-before: #666 prefilled the software.log
+    tail on ``?postupgrade=1``, so ``sw_marker`` would appear there.
     """
     sw_marker = f"pfb-sw-prefill-{uuid.uuid4().hex[:8]}"
     upd_marker = f"pfb-upd-prefill-{uuid.uuid4().hex[:8]}"
@@ -972,23 +972,51 @@ def test_log_output_prefill_gating(smoke_vm: SmokeVM, webui: WebUI, php_error_lo
         _seed_vm_file(smoke_vm, _SOFTWARE_LOG, sw_marker + "\n")
         _seed_vm_file(smoke_vm, _PFB_LOG, upd_marker + "\n")
 
-        # Software, plain GET → no prefill.
-        body = webui.get(_SOFTWARE_PAGE).text
-        assert sw_marker not in _pfb_output_value(body), (
-            "Software page must not prefill pfb_output without ?postupgrade=1"
-        )
-
-        # Software, post-upgrade reload → prefilled with the software.log tail.
-        body = webui.get(f"{_SOFTWARE_PAGE}?postupgrade=1").text
-        assert sw_marker in _pfb_output_value(body), (
-            "Software ?postupgrade=1 must prefill pfb_output with the software.log tail"
-        )
+        # Software: empty on a plain GET AND on the (now-removed) post-upgrade reload.
+        for url in (_SOFTWARE_PAGE, f"{_SOFTWARE_PAGE}?postupgrade=1"):
+            assert sw_marker not in _pfb_output_value(webui.get(url).text), (
+                f"Software page must not prefill pfb_output ({url})"
+            )
 
         # Update page → no prefill (clean render, and the seeded log marker must be absent).
         resp = webui.get(_UPDATE_PAGE)
         result = evaluate_render(_UPDATE_PAGE, resp.status_code, resp.text, ("Update Settings", "Schedule"))
         assert result.ok, f"Update page render oracle failed: {result.detail}"
         assert upd_marker not in _pfb_output_value(resp.text), "Update page must not prefill pfb_output"
+
+
+def test_ajax_tail_endpoint_returns_json(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """The ``?ajax=tail`` poll endpoint returns a well-formed JSON tail payload (#671).
+
+    The live log is served by this endpoint instead of a blocking inline-<script> stream, which
+    is why the page now completes loading (foot.inc + nav menu). A GET with no offset must return
+    the JSON contract the client poller consumes — parseable JSON (not an HTML page) carrying the
+    data/offset/done/source keys — on BOTH pages.
+
+    For the Update source the per-run log is seeded, so the payload tails it: source 'run' with the
+    marker present. fail-before: there was no such endpoint, so the request rendered the full HTML
+    page and ``json.loads`` would raise.
+    """
+    run_marker = f"pfb-tail-{uuid.uuid4().hex[:8]}"
+    _seed_vm_file(smoke_vm, _PFB_RUNLOG, run_marker + "\n")
+
+    resp = webui.get(f"{_UPDATE_PAGE}?ajax=tail")
+    assert resp.status_code == 200, f"ajax=tail status {resp.status_code}"
+    payload = json.loads(resp.text)  # must parse as JSON, not HTML
+    for key in ("data", "offset", "done", "source"):
+        assert key in payload, f"update ajax=tail payload missing {key!r}: {payload}"
+    assert payload["source"] == "run", f"seeded run log should be tailed (source 'run'): {payload}"
+    assert run_marker in payload["data"], f"seeded run-log marker missing from tail data: {payload}"
+
+    # Software endpoint likewise returns JSON (provenance-gated → force the panel on).
+    with software_panel_forced(smoke_vm, "on"):
+        sresp = webui.get(f"{_SOFTWARE_PAGE}?ajax=tail")
+        assert sresp.status_code == 200, f"software ajax=tail status {sresp.status_code}"
+        spayload = json.loads(sresp.text)
+        for key in ("offset", "done", "source"):
+            assert key in spayload, f"software ajax=tail payload missing {key!r}: {spayload}"
 
 
 def test_software_page_hidden_when_override_forces_off(
@@ -1126,6 +1154,7 @@ def test_page_table_covers_every_pfblockerng_page() -> None:
 # ---------------------------------------------------------------------------
 
 _PFB_LOG = "/var/log/pfblockerng/pfblockerng.log"
+_PFB_RUNLOG = "/var/log/pfblockerng/pfblockerng_run.log"
 _SOFTWARE_LOG = "/var/log/pfblockerng/software.log"
 
 

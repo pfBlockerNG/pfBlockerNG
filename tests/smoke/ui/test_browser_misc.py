@@ -359,50 +359,58 @@ def test_software_output_prefill_only_after_upgrade(
     browser_page: Page,
     webui: WebUI,
 ) -> None:
-    """The Software output prefill+auto-scroll is gated on the post-upgrade reload (#666).
+    """The Software output is never prefilled — the live log is AJAX-polled now (#671).
 
-    The output is prefilled with the last software.log tail (and scrolled to the newest lines)
-    ONLY when the page is the reload right after a successful upgrade — which redirects here
-    with ``?postupgrade=1``. A normal visit to the tab leaves the output empty.
+    The #666 post-upgrade prefill is removed: a successful upgrade patches the version/status
+    fields in place (no reload), so the output box always renders empty and fills via the
+    ``?ajax=tail`` poller while an action runs.
 
-    Scenario (post-upgrade prefill):
-      Given software.log seeded with more lines than the textarea shows at once,
-      When the Software page is opened WITHOUT the marker -> pfb_output is EMPTY (no prefill);
-      When opened WITH ``?postupgrade=1`` -> pfb_output is prefilled AND scrolled to the bottom.
+    Scenario (no prefill):
+      Given software.log seeded with content,
+      When the Software page is opened plain AND with the old ``?postupgrade=1`` marker,
+      Then pfb_output is EMPTY in both cases.
 
-    Both branches are asserted, so green proves the param — not pre-existing state — drives the
-    prefill (fail-before: the old code prefilled on every plain GET).
+    fail-before: #666 prefilled the software.log tail on ``?postupgrade=1``, so the seeded line
+    would appear there.
     """
     page = browser_page
-    # Seed enough distinct lines to overflow the textarea so a scroll is observable.
     seed = "".join(f"pfb-autoscroll-line-{i:03d}\n" for i in range(1, 81))
     with software_panel_forced(smoke_vm, "on"):
         _seed_vm_file(smoke_vm, "/var/log/pfblockerng/software.log", seed)
 
-        # WITHOUT the marker: a normal visit must NOT prefill the output.
-        _open(page, webui, SOFTWARE_PAGE)
-        empty_val = page.locator('textarea[name="pfb_output"]').input_value()
-        assert empty_val == "", f"a normal Software visit must not prefill pfb_output, got {empty_val!r}"
+        for url in (SOFTWARE_PAGE, f"{SOFTWARE_PAGE}?postupgrade=1"):
+            _open(page, webui, url)
+            val = page.locator('textarea[name="pfb_output"]').input_value()
+            assert val == "", f"Software must not prefill pfb_output ({url}), got {val!r}"
 
-        # WITH ?postupgrade=1: prefilled with the log tail AND scrolled to the bottom.
-        _open(page, webui, f"{SOFTWARE_PAGE}?postupgrade=1")
-        val = page.locator('textarea[name="pfb_output"]').input_value()
-        assert "pfb-autoscroll-line-080" in val, (
-            "the post-upgrade reload must prefill pfb_output with the software.log tail"
-        )
-        metrics = page.locator('textarea[name="pfb_output"]').evaluate(
-            "el => ({ top: el.scrollTop, sh: el.scrollHeight, ch: el.clientHeight })"
-        )
-        assert metrics["sh"] > metrics["ch"], (
-            "pfb_output is not overflowing — cannot assert scroll "
-            f"(scrollHeight={metrics['sh']} clientHeight={metrics['ch']}); seed more lines"
-        )
-        # At the bottom: scrollTop within a few px of (scrollHeight - clientHeight), and
-        # strictly > 0 (proving it scrolled rather than loading at the top).
-        bottom = metrics["sh"] - metrics["ch"]
-        assert metrics["top"] > 0 and metrics["top"] >= bottom - 4, (
-            f"prefilled output not scrolled to bottom: expected scrollTop≈{bottom}, got {metrics['top']}"
-        )
+
+@pytest.mark.ui_browser
+def test_update_page_completes_while_tailing(
+    smoke_vm: SmokeVM,
+    browser_page: Page,
+    webui: WebUI,
+) -> None:
+    """The page finishes loading while the live log tails — the nav menu is no longer dead (#671).
+
+    The old blocking stream parked the request inside pfb_livetail(), so foot.inc never ran and the
+    navigation JS never initialized during a run/view: tapping the menu did nothing until the run
+    ended. The log is now AJAX-polled, so the document reaches readyState 'complete' with the poller
+    active and the page is fully interactive.
+
+    Scenario:
+      Given the Update page,
+      When the View button is clicked (which wires the live-log poller),
+      Then the document reaches readyState 'complete' (it parked mid-stream before #671) and the
+           output textarea the poller targets is present.
+    """
+    page = browser_page
+    _open(page, webui, UPDATE_PAGE)
+    page.locator('button[name="log_view"], #log_view').first.click()
+    page.wait_for_load_state("load")
+    assert page.evaluate("document.readyState") == "complete", (
+        "the page must finish loading while the live-log poller runs (it parked mid-stream before #671)"
+    )
+    assert page.locator('textarea[name="pfb_output"]').count() == 1, "poller target textarea must be present"
 
 
 def test_update_output_is_not_prefilled(
