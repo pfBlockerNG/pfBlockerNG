@@ -253,12 +253,12 @@ def test_hooks_pre_and_post_fire_with_context(deployed_vm: SmokeVM, mock_feeds: 
 def test_post_hook_output_precedes_end_marker(deployed_vm: SmokeVM) -> None:
     """The "UPDATE PROCESS ENDED" marker is logged AFTER the post-update hooks.
 
-    The Update-page live tail (``pfb_livetail``, 'force' mode) stops streaming when
-    the log reaches the ``UPDATE PROCESS ENDED`` marker. The ADR-12 post-update hooks
-    log their output (``[ pfB Hook ] post <name> ...``) progressively — a HAProxy
-    reload hook can run up to its timeout — so emitting the marker BEFORE the hooks
-    truncated their output from the live view (it only reappeared on a manual 'View').
-    The marker is now emitted after ``pfb_run_hooks('post', ...)``.
+    The marker must be the genuine last line of the update log. The ADR-12 post-update
+    hooks log their output (``[ pfB Hook ] post <name> ...``) progressively — a HAProxy
+    reload hook can run up to its timeout — so emitting the marker BEFORE the hooks would
+    place it mid-run. The marker is now emitted after ``pfb_run_hooks('post', ...)``.
+    (The Update-page live tail itself now stops on the dispatched process exiting, not on
+    this marker, but the marker still bounds the end of the run in the log.)
 
     Given a clean update log and an enabled post hook,
     When a force update runs,
