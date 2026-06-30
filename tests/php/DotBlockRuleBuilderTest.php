@@ -189,6 +189,25 @@ final class DotBlockRuleBuilderTest extends TestCase
 		$this->assertSame(['any' => ''], $rule['source'], 'port alias -> source any');
 	}
 
+	public function testSourceFallsBackToAnyForPfbManagedAlias(): void
+	{
+		// Defense-in-depth: a pfBlockerNG-managed (pfB_*) alias is rejected at save time, but if
+		// a stale/hand-edited config still references one, the rule builder must NOT emit it as
+		// the source — it falls back to 'any', same as a missing alias.
+		// Before -> an ordinary (non-pfB_) address alias yields a negated-alias source.
+		$this->seedAliases(['DoT_Exceptions']);
+		$ruleOk = pfb_dot_block_rule('lan', 'DoT_Exceptions', 'reject');
+		$this->assertSame(['address' => 'DoT_Exceptions', 'not' => ''], $ruleOk['source'],
+			'pre-condition: a non-managed address alias -> negated alias source');
+
+		// When the alias is a pfB_-managed alias that EXISTS (urltable) in config
+		$this->seedAliases(['pfB_DNSBLIP'], 'urltable');
+		$rule = pfb_dot_block_rule('lan', 'pfB_DNSBLIP', 'reject');
+
+		// Then the source falls back to 'any' (a managed alias is not a usable exception source)
+		$this->assertSame(['any' => ''], $rule['source'], 'pfB_ managed alias -> source any');
+	}
+
 	// -----------------------------------------------------------------------
 	// Key order — the 'tracker' is appended by the caller, so the builder's last
 	// key must be 'descr'. Pins the stored-rule key order the sync compare relies on.
