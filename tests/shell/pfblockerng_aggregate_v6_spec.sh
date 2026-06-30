@@ -41,18 +41,19 @@ STUB
     printf '2001:db8::/32\n2606:4700::/32\n' > "${work}/m1"
     printf '2606:4700::/32\n2a00:1450::/32\n' > "${work}/m2"
     printf '%s\n%s\n' "${work}/m1" "${work}/m2" > "${memberlist}"
+    # The EXACT deduped union, LC_ALL=C-sorted (the duplicate 2606:4700::/32 collapses).
+    expected_v6="$(printf '%s\n' '2001:db8::/32' '2606:4700::/32' '2a00:1450::/32')"
 
     When call pfb_aggregate agg v6 "${memberlist}" "${aggout}" "${consumer}"
 
     The status should be success
-    # Then the aggregate is the deduped union of REAL IPv6 (not iprange-mangled to "2001"/"2a00")
-    The contents of file "${aggout}" should include '2001:db8::/32'
-    The contents of file "${aggout}" should include '2606:4700::/32'
-    The contents of file "${aggout}" should include '2a00:1450::/32'
+    # Then the aggregate is EXACTLY the deduped IPv6 union: no duplicates, no extra lines, and
+    # none iprange-mangled to "2001"/"2a00" (an `include` check would miss all three).
+    The contents of file "${aggout}" should equal "${expected_v6}"
     # and iprange was NOT invoked for v6 (the bug was running the IPv4-only tool on it)
     The path "${marker}" should not be exist
-    # consumer mirror is populated (never-empty contract)
-    The contents of file "${consumer}" should include '2001:db8::/32'
+    # consumer mirror equals the aggregate (never-empty contract)
+    The contents of file "${consumer}" should equal "${expected_v6}"
     The stdout should include 'aggregate'
   End
 
@@ -61,14 +62,31 @@ STUB
     printf '192.0.2.0/24\n198.51.100.0/24\n' > "${work}/m1"
     printf '198.51.100.0/24\n203.0.113.0/24\n' > "${work}/m2"
     printf '%s\n%s\n' "${work}/m1" "${work}/m2" > "${memberlist}"
+    expected_v4="$(printf '%s\n' '192.0.2.0/24' '198.51.100.0/24' '203.0.113.0/24')"
 
     When call pfb_aggregate agg v4 "${memberlist}" "${aggout}" "${consumer}"
 
     The status should be success
-    # iprange WAS invoked for v4 (the CIDR-collapse path), and the union is present + deduped
+    # iprange WAS invoked for v4 (the CIDR-collapse path), and the union is exactly the deduped set
     The path "${marker}" should be exist
-    The contents of file "${aggout}" should include '192.0.2.0/24'
-    The contents of file "${aggout}" should include '203.0.113.0/24'
+    The contents of file "${aggout}" should equal "${expected_v4}"
+    The stdout should include 'aggregate'
+  End
+
+  It 'empties the aggregate and writes the consumer placeholder on an empty union'
+    # The third branch: no members -> empty union. A pre-existing (stale) aggregate must be
+    # truncated, the never-empty consumer must fall back to the '#' placeholder, and iprange is
+    # never invoked. Pre-seed stale content to prove the rebuild actually clears it.
+    printf 'stale\n' > "${aggout}"
+    printf 'stale\n' > "${consumer}"
+    : > "${memberlist}"
+
+    When call pfb_aggregate agg v6 "${memberlist}" "${aggout}" "${consumer}"
+
+    The status should be success
+    The contents of file "${aggout}" should equal ''
+    The contents of file "${consumer}" should equal '#'
+    The path "${marker}" should not be exist
     The stdout should include 'aggregate'
   End
 End
