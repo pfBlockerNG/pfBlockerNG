@@ -62,27 +62,30 @@ if (!isAllowedPage('pkg_mgr_installed.php')) {
 $pfb_sw_pkgname	= pfb_pkg_installed_name();
 $pfb_sw_channel	= pfb_channel_from_pkgname($pfb_sw_pkgname);
 
+// AJAX live-log tail for the Software terminal (polled by the client; gated by the same provenance
+// + privilege checks above). Returns the next log slice; on completion the done-payload also
+// carries the action result + refreshed version/status so the client patches the page in place
+// (no post-upgrade reload). Must run before any head/HTML output.
+if (($_GET['ajax'] ?? '') === 'tail') {
+	header('Content-Type: application/json');
+	header('Cache-Control: no-cache, no-store, must-revalidate');
+	$pfb_has_off = isset($_GET['offset']) && ctype_digit((string) $_GET['offset']);
+	$pfb_tail = pfb_log_tail_payload('software', $pfb_has_off ? (int) $_GET['offset'] : -1, $pfb_has_off);
+	if (!empty($pfb_tail['done'])) {
+		$pfb_tail += pfb_software_done_extras();
+	}
+	print(json_encode($pfb_tail));
+	exit;
+}
+
 // The "Check for new versions" setting (default ENABLED). Persisted as 'on'/'off'; an unset
 // value (never saved) reads as enabled via pfb_software_check_enabled().
 $pfb_sw_check_raw = PfbConfig::read('pfb_software_check');
 $pfb_sw_check	= pfb_software_check_enabled(is_string($pfb_sw_check_raw) ? $pfb_sw_check_raw : null);
 
 
-// Stream one line to the live terminal window (reuses the _update.php mechanic). The caller
-// passes a newline-stripped line, so append it with its own line break (the helper appends the
-// text verbatim).
-function pfb_software_output($text) {
-	print("\n<script type=\"text/javascript\">");
-	print("\n//<![CDATA[");
-	print("\n" . pfb_term_write_js('pfb_output', $text . "\n", TRUE));
-	print("\n//]]>");
-	print("\n</script>");
-	ob_flush();
-	flush();
-}
-
-
-// Post a one-line status to the terminal status window.
+// Post a one-line status to the terminal status window (a one-shot refusal/notice message). The
+// live log itself is streamed by the client poller via ?ajax=tail, not from here.
 function pfb_software_status($status) {
 	print("\n<script type=\"text/javascript\">");
 	print("\n//<![CDATA[");
@@ -94,49 +97,49 @@ function pfb_software_status($status) {
 }
 
 
-// Run a fixed command and stream its output to the terminal, line by line. The
-// command is a FIXED string (no request input is interpolated), so there is no
-// shell-injection surface — the only variable parts are pkg-derived names already
-// escapeshellarg'd by the caller. Returns the command's exit status (0 = success,
-// -1 if it could not be started) so the caller can act on the result.
-// Each streamed line is also written to /var/log/pfblockerng/software.log (truncated at
-// run start) so a subsequent plain GET can prefill the output textarea.
-function pfb_software_run_stream($cmd) {
-	$log    = '/var/log/pfblockerng/software.log';
-	$log_fh = @fopen($log, 'w');
-	$fh     = popen("{$cmd} 2>&1", 'r');
-	if (!is_resource($fh)) {
-		pfb_software_output(gettext('Failed to start the task.'));
-		if (is_resource($log_fh)) {
-			@fclose($log_fh);
-		}
-		return -1;
-	}
-	while (($line = fgets($fh)) !== FALSE) {
-		if (is_resource($log_fh)) {
-			@fwrite($log_fh, $line);
-		}
-		pfb_software_output(rtrim($line, "\r\n"));
-	}
-	if (is_resource($log_fh)) {
-		@fclose($log_fh);
-	}
-	return pclose($fh);
+// Dispatch a pkg action (update/uninstall) as a DETACHED daemon writing the per-run software log,
+// so the page returns immediately (head.inc + foot.inc load and the nav menu works) and the client
+// polls ?ajax=tail for the live output. $pkgsubcmd is a FIXED pkg invocation whose only variable
+// parts are pkg-derived names already escapeshellarg'd by the caller — no request input is
+// interpolated. The daemon redirects all output to the run log ('>' truncate-on-open) and records
+// the exit code in the result sidecar on completion; $action is recorded so the tail's done-payload
+// can tell the client what to do (patch the version fields / redirect).
+function pfb_software_dispatch(string $action, string $pkgsubcmd): void {
+	global $pfb;
+	$pidfile = '/var/run/pfb_software.pid';
+	@unlink($pidfile);
+	@unlink('/var/run/pfb_software.result');
+	@file_put_contents('/var/run/pfb_software.action', $action);
+	@file_put_contents($pfb['sw_runlog'], '');
+	$logq = escapeshellarg($pfb['sw_runlog']);
+	$resq = escapeshellarg('/var/run/pfb_software.result');
+	// Nested shell: the inner sh -c string is passed as ONE escapeshellarg'd argument, so the
+	// outer mwexec_bg shell does not evaluate $? or re-split the already-quoted paths.
+	$inner = "{$pkgsubcmd} > {$logq} 2>&1; echo \$? > {$resq}";
+	mwexec_bg('/usr/sbin/daemon -p ' . escapeshellarg($pidfile) . ' /bin/sh -c ' . escapeshellarg($inner));
 }
 
 
-// Reload the Software page after a short delay so the freshly-installed version and
-// status are shown. Navigates (GET) to the page URL rather than reloading the current
-// request, so the Update POST is never resubmitted. The delay lets the final terminal
-// output settle on screen first.
-function pfb_software_reload($url = '/pfblockerng/pfblockerng_software.php') {
-	print("\n<script type=\"text/javascript\">");
-	print("\n//<![CDATA[");
-	print("\nsetTimeout(function(){ window.location.assign(" . json_encode($url) . "); }, 1500);");
-	print("\n//]]>");
-	print("\n</script>");
-	ob_flush();
-	flush();
+// Software-specific tail done-payload: the action + exit code from the sidecars, plus the freshly
+// re-read installed version + status after a successful update, so the client patches the page in
+// place (no post-upgrade reload). Read in the ?ajax=tail branch once the run is done.
+function pfb_software_done_extras(): array {
+	global $pfb_sw_pkgname;
+	$action = @file_get_contents('/var/run/pfb_software.action');
+	$rcraw  = @file_get_contents('/var/run/pfb_software.result');
+	$out = array(
+		'sw_action' => ($action !== FALSE) ? trim($action) : '',
+		'sw_rc'     => ($rcraw !== FALSE && trim((string) $rcraw) !== '') ? (int) trim((string) $rcraw) : -1,
+	);
+	if ($out['sw_action'] === 'update') {
+		$installed = pfb_pkg_installed_version((string) $pfb_sw_pkgname);
+		$cache     = pfb_software_read_cache();
+		$avail     = pfb_update_available($installed, (string) ($cache['latest'] ?? ''));
+		$out['sw_installed']        = ($installed !== '') ? $installed : gettext('unknown');
+		$out['sw_update_available'] = $avail;
+		$out['sw_status']           = $avail ? gettext('Update available') : gettext('Up to date');
+	}
+	return $out;
 }
 
 
@@ -151,10 +154,6 @@ if ($_POST && !empty($_POST['pfb_sw_action'])) {
 	$pfb_sw_action = (string) $_POST['pfb_sw_action'];
 }
 
-// Prefill the output textarea with the last software.log tail ONLY when this is the reload
-// right after a successful upgrade — pfb_software_reload() below redirects back here with
-// ?postupgrade=1 on success. A normal visit to the tab leaves the output empty.
-$pfb_sw_postupgrade = (($_GET['postupgrade'] ?? '') === '1');
 
 // "Save" the settings (standard pfSense CSRF POST). A checkbox is absent from the POST when
 // unticked, so persist an explicit 'on'/'off' — an unset value defaults to enabled, an
@@ -225,7 +224,7 @@ $section->addInput(new Form_StaticText(
 ));
 $section->addInput(new Form_StaticText(
 	'Installed version',
-	htmlspecialchars((string) $disp_installed)
+	'<span id="pfb-sw-installed">' . htmlspecialchars((string) $disp_installed) . '</span>'
 ));
 $section->addInput(new Form_StaticText(
 	'Latest version',
@@ -233,7 +232,7 @@ $section->addInput(new Form_StaticText(
 ));
 $section->addInput(new Form_StaticText(
 	'Status',
-	$disp_status
+	'<span id="pfb-sw-status">' . $disp_status . '</span>'
 ));
 $section->addInput(new Form_StaticText(
 	'Last checked',
@@ -297,11 +296,12 @@ $section->addInput(new Form_StaticText(null, $btn_uninstall))
 	->setHelp('Remove pfBlockerNG from this firewall. Enabled only after the confirmation box is checked.');
 $form->add($section);
 
-// Live terminal window (shown when an Update is streaming).
-// pfb_output is prefilled with the last software-log tail ONLY on the post-upgrade reload
-// (?postupgrade=1); a plain visit leaves it empty. While an update/uninstall is streaming it
-// also starts empty (the stream fills it live).
-$pfb_sw_active = ($pfb_sw_action !== '');
+// Live terminal window. The output textarea always starts EMPTY; the client poller fills it via
+// ?ajax=tail when a software action is dispatched (or one is already running). $pfb_sw_poll gates
+// the poller — TRUE on an update/uninstall POST (set in the handlers below) or when a software
+// task is already running (a reload mid-run). $pfb_sw_poll_status seeds the status line.
+$pfb_sw_poll        = isvalidpid('/var/run/pfb_software.pid');
+$pfb_sw_poll_status = $pfb_sw_poll ? gettext('A pfBlockerNG software task is running...') : '';
 $section = new Form_Section('Output');
 $section->addInput(new Form_Textarea(
 	'pfb_status',
@@ -312,15 +312,15 @@ $section->addInput(new Form_Textarea(
 $section->addInput(new Form_Textarea(
 	'pfb_output',
 	null,
-	($pfb_sw_active || !$pfb_sw_postupgrade) ? null : pfb_log_tail('/var/log/pfblockerng/software.log')
+	null
 ))->removeClass('form-control')->addClass('row-fluid col-sm-12')->setAttribute('rows', '20')->setAttribute('wrap', 'off')
   ->setAttribute('readonly', 'readonly')->setAttribute('style', 'background:#fafafa; width: 100%');
 $form->add($section);
 
 print($form);
 
-// The destructive Update streams into the terminal AFTER the form has rendered (so the
-// textareas exist for the JS to write into). POST-guarded only.
+// The destructive Update is DISPATCHED (detached daemon) after the form has rendered; the page
+// then returns and the client poller tails the live log via ?ajax=tail. POST-guarded only.
 if ($pfb_sw_action === 'update') {
 	// Defense-in-depth: the "Update now" button is only disabled client-side, so also
 	// refuse the action server-side when there is nothing to install — never run pkg on a
@@ -330,24 +330,17 @@ if ($pfb_sw_action === 'update') {
 	} elseif ($pfb_sw_pkgname === '') {
 		pfb_software_status(gettext('No pfBlockerNG package detected — cannot update.'));
 	} else {
-		pfb_software_status(gettext('Updating pfBlockerNG...'));
 		$bin = escapeshellarg(PFB_PKG_BIN);
 		$pkg = escapeshellarg($pfb_sw_pkgname);
-		$pfb_sw_rc = pfb_software_run_stream("{$bin} upgrade -y {$pkg}");
-		// On success, reload so the page reflects the new installed version + status;
-		// on failure, leave the terminal log on screen for the user to inspect.
-		if ($pfb_sw_rc === 0) {
-			pfb_software_status(gettext('Update complete — refreshing the page...'));
-			// Reload WITH the post-upgrade marker so the refreshed page prefills the output
-			// with the upgrade log tail (and scrolls to it); a normal visit stays empty.
-			pfb_software_reload('/pfblockerng/pfblockerng_software.php?postupgrade=1');
-		} else {
-			pfb_software_status(gettext('Update task finished with errors — see the log above.'));
-		}
+		pfb_software_dispatch('update', "{$bin} upgrade -y {$pkg}");
+		// The poller tails the log; on a clean finish it patches the installed-version + status
+		// fields in place (no reload) from the done-payload.
+		$pfb_sw_poll        = TRUE;
+		$pfb_sw_poll_status = gettext('Updating pfBlockerNG...');
 	}
 }
 
-// Uninstall streams AFTER the form renders (textareas must exist for the JS). POST-guarded.
+// Uninstall is dispatched the same way. POST-guarded.
 if ($pfb_sw_action === 'uninstall') {
 	// Defense-in-depth: the Uninstall button is only disabled client-side, so re-check the
 	// confirmation server-side and refuse without it. (CSRF token enforces request authenticity.)
@@ -356,18 +349,14 @@ if ($pfb_sw_action === 'uninstall') {
 	} elseif ($pfb_sw_pkgname === '') {
 		pfb_software_status(gettext('No pfBlockerNG package detected — cannot uninstall.'));
 	} else {
-		pfb_software_status(gettext('Uninstalling pfBlockerNG...'));
 		$bin = escapeshellarg(PFB_PKG_BIN);
 		$pkg = escapeshellarg($pfb_sw_pkgname);
-		$pfb_sw_rc = pfb_software_run_stream("{$bin} delete -y {$pkg}");
-		// Success removes the very package serving this page; redirect somewhere safe instead
-		// of leaving the user on a now-404 tab. Failure leaves the log on screen to inspect.
-		if ($pfb_sw_rc === 0) {
-			pfb_software_status(gettext('Uninstall complete — redirecting...'));
-			pfb_software_reload('/pkg_mgr_installed.php');
-		} else {
-			pfb_software_status(gettext('Uninstall task finished with errors — see the log above.'));
-		}
+		pfb_software_dispatch('uninstall', "{$bin} delete -y {$pkg}");
+		// Uninstall removes the very package serving this page, so the poller's endpoint will
+		// vanish near the end: the client treats a poll failure (or a clean 'done') as success
+		// and redirects to the Package Manager.
+		$pfb_sw_poll        = TRUE;
+		$pfb_sw_poll_status = gettext('Uninstalling pfBlockerNG...');
 	}
 }
 ?>
@@ -412,13 +401,67 @@ events.push(function() {
 		}
 	});
 
-<?php if ($pfb_sw_postupgrade): ?>
-	// Post-upgrade reload only: the output was prefilled with the upgrade log tail, so scroll
-	// it to the newest lines. (The streamed update/uninstall paths scroll as they write; a
-	// normal visit has no prefill, so there is nothing to scroll.)
-	$('textarea[name="pfb_output"]').each(function() {
-		this.scrollTop = this.scrollHeight;
-	});
+<?php if ($pfb_sw_poll): ?>
+	// Live-log tail for the software action. The page has fully rendered (foot.inc ran, the nav
+	// menu works); the log streams in by polling ?ajax=tail. On completion the done-payload carries
+	// the result: a successful update patches the installed-version + status fields in place (no
+	// reload), and an uninstall — which removes this very page — redirects to the Package Manager.
+	(function() {
+		var out    = document.forms[0].pfb_output;
+		var stat   = document.forms[0].pfb_status;
+		var offset = null;
+		var timer  = null;
+		var action = <?=pfb_js_string($pfb_sw_action);?>;
+		var initStatus = <?=pfb_js_string($pfb_sw_poll_status);?>;
+		if (initStatus) { stat.value = initStatus; }
+		function gotoInstalled() { window.location.assign('/pkg_mgr_installed.php'); }
+		function poll() {
+			var url = '/pfblockerng/pfblockerng_software.php?ajax=tail' + (offset !== null ? '&offset=' + offset : '');
+			$.ajax({ url: url, type: 'GET', dataType: 'json', cache: false }).done(function(r) {
+				if (!r) { return; }
+				if (r.data) {
+					var atBottom = (out.scrollHeight - out.scrollTop - out.clientHeight) <= 16;
+					out.value += r.data;
+					if (atBottom) { out.scrollTop = out.scrollHeight; }
+				}
+				if (typeof r.offset !== 'undefined') { offset = r.offset; }
+				if (!r.done) { return; }
+				if (timer) { clearInterval(timer); timer = null; }
+				if (r.sw_action === 'uninstall') {
+					stat.value = (r.sw_rc === 0)
+						? 'Uninstall complete — redirecting...'
+						: 'Uninstall finished with errors — see the log above.';
+					if (r.sw_rc === 0) { setTimeout(gotoInstalled, 1200); }
+				} else if (r.sw_action === 'update') {
+					if (r.sw_rc === 0) {
+						if (r.sw_installed) { $('#pfb-sw-installed').text(r.sw_installed); }
+						if (typeof r.sw_status !== 'undefined') {
+							$('#pfb-sw-status').html((r.sw_update_available ? '<span class="text-warning">' : '<span class="text-success">') + r.sw_status + '</span>');
+						}
+						if (r.sw_update_available === false) { $('#pfb_sw_update').prop('disabled', true); }
+						// Clean the URL so a manual refresh is a GET, never a re-POST of the action.
+						if (window.history && window.history.replaceState) {
+							window.history.replaceState({}, '', '/pfblockerng/pfblockerng_software.php');
+						}
+						stat.value = 'Update complete.';
+					} else {
+						stat.value = 'Update finished with errors — see the log above.';
+					}
+				} else {
+					stat.value = 'Done.';
+				}
+			}).fail(function() {
+				// During an uninstall the package (and this endpoint) disappears: a poll failure
+				// means the uninstall succeeded — stop and redirect. Otherwise ignore + retry.
+				if (action === 'uninstall') {
+					if (timer) { clearInterval(timer); timer = null; }
+					gotoInstalled();
+				}
+			});
+		}
+		poll();
+		timer = setInterval(poll, 1000);
+	})();
 <?php endif; ?>
 });
 //]]>

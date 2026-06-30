@@ -2433,21 +2433,6 @@ function pfbng_text_area_decode($text, $mode=FALSE, $type=TRUE, $idn=FALSE) {
 }
 
 
-/**
- * Return the last $lines lines of $file as a string; '' if the file is missing or unreadable.
- *
- * PURE — library function, no side effects, no globals.
- */
-function pfb_log_tail(string $file, int $lines = 1000): string
-{
-	if (!file_exists($file) || !is_readable($file)) {
-		return '';
-	}
-	exec('/usr/bin/tail -n ' . escapeshellarg((string)$lines) . ' ' . escapeshellarg($file), $out, $ret);
-	return $ret === 0 ? implode("\n", $out) : '';
-}
-
-
 // Manage log files line limit
 function pfb_log_mgmt() {
 	global $g, $pfb;
@@ -11949,24 +11934,6 @@ function pfb_log_tail_payload(string $which, int $offset, bool $has_offset): arr
 	// Follow the run log; flush the final partial line once the process is gone.
 	$chunk = pfb_log_tail_chunk($runfile, $offset, !$running);
 	return ['data' => $chunk['data'], 'offset' => $chunk['offset'], 'running' => $running, 'done' => !$running, 'source' => 'run'];
-}
-
-
-// Build the JS that writes $text into the named live-terminal textarea and follows the tail.
-// Auto-follow is "sticky": the scroll position is measured BEFORE the value changes, and the box
-// is re-pinned to the bottom ONLY when the user was already at the bottom -- so scrolling up to
-// read older lines pauses the follow instead of being snapped back on every streamed refresh, and
-// scrolling back to the bottom resumes it. $append adds the text to the end (the live tail streams
-// deltas); otherwise it replaces the whole value (a single status line). Newlines belong to $text
-// -- the caller owns them -- so a delta that already ends in "\n" is appended verbatim.
-function pfb_term_write_js(string $field, string $text, bool $append = FALSE): string {
-	$el  = "this.document.forms[0].{$field}";
-	$lit = pfb_js_string($text);
-	$set = $append ? "{$el}.value += {$lit};" : "{$el}.value = {$lit};";
-	return
-		"var _pfb_atbottom = ({$el}.scrollHeight - {$el}.scrollTop - {$el}.clientHeight) <= 16;\n" .
-		"{$set}\n" .
-		"if (_pfb_atbottom) { {$el}.scrollTop = {$el}.scrollHeight; }";
 }
 
 
