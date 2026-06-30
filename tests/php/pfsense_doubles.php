@@ -829,3 +829,12 @@ if (!function_exists('find_interface_subnetv6')) {
 		return $map[$real_interface] ?? null;
 	}
 }
+
+if (!function_exists('isvalidpid')) {
+	// pfSense util.inc: TRUE when the pidfile names a live process. Test double: liveness is
+	// controlled per pidfile via $GLOBALS['pfb_test_valid_pids'] (map of pidfile => bool,
+	// default []); an absent key reads as not running.
+	function isvalidpid($pidfile) {
+		return !empty($GLOBALS['pfb_test_valid_pids'][$pidfile]);
+	}
+}

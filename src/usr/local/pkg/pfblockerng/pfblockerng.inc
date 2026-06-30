@@ -79,6 +79,9 @@ $pfb['log']		= "{$pfb['logdir']}/pfblockerng.log";
 // run only; truncated at each run start and NOT registered with pfb_log_mgmt(), so byte offsets
 // stay stable for the tail even when pfb_log_mgmt() trims the cumulative log mid-schedule.
 $pfb['runlog']		= "{$pfb['logdir']}/pfblockerng_run.log";
+// Per-run log for the live Software viewer (the upgrade/uninstall daemon writes it with '>',
+// truncate-on-open). Same dedicated-per-run-file strategy as $pfb['runlog'], for consistency.
+$pfb['sw_runlog']	= "{$pfb['logdir']}/software.log";
 $pfb['dnslog']		= "{$pfb['logdir']}/dnsbl.log";
 $pfb['dnsreplylog']	= "{$pfb['logdir']}/dns_reply.log";
 $pfb['ip_blocklog']	= "{$pfb['logdir']}/ip_block.log";
@@ -11916,6 +11919,62 @@ function pfb_log_tail_chunk(string $file, int $offset, bool $flush = FALSE): arr
 	}
 
 	return ['data' => str_replace("\r", '', $raw), 'offset' => $offset + strlen($raw)];
+}
+
+
+// Build the JSON payload for the AJAX live-log tail (the ?ajax=tail branch on the Update and
+// Software pages). Returns an array the caller json_encode()s; no print/exit here (library code).
+//
+// $which selects the source: 'update' tails the per-run pfblockerng_run.log, falling back to the
+// last ~15KB of the cumulative log for a View when no run file exists yet; 'software' tails the
+// per-run software.log. $offset is the client's last byte position; $has_offset is FALSE on the
+// first poll (the function then picks the source + starting offset). 'done' (process gone, via
+// isvalidpid on the pidfile) tells the client to stop polling; the final read is flushed so the
+// trailing partial line is not lost.
+function pfb_log_tail_payload(string $which, int $offset, bool $has_offset): array {
+	global $pfb;
+
+	switch ($which) {
+		case 'update':
+			$pidfile  = '/var/run/pfb_runnow.pid';
+			$runfile  = $pfb['runlog'];
+			$fallback = $pfb['log'];
+			break;
+		case 'software':
+			$pidfile  = '/var/run/pfb_software.pid';
+			$runfile  = $pfb['sw_runlog'];
+			$fallback = '';
+			break;
+		default:
+			return ['error' => 'invalid source'];
+	}
+
+	$running = isvalidpid($pidfile);
+
+	// First poll: choose the source + initial offset.
+	if (!$has_offset) {
+		clearstatcache(FALSE, $runfile);
+		$runsize = @filesize($runfile);
+		if ($runsize === FALSE || $runsize === 0) {
+			// No current/last run log -> a View falls back to the tail of the cumulative log.
+			// One-shot (no live run to follow), so done = TRUE.
+			$fsize = '';
+			if ($fallback !== '') {
+				clearstatcache(FALSE, $fallback);
+				$fsize = @filesize($fallback);
+			}
+			if ($fsize !== '' && $fsize !== FALSE && $fsize > 0) {
+				$chunk = pfb_log_tail_chunk($fallback, ($fsize > 15000) ? ($fsize - 15000) : 0, TRUE);
+				return ['data' => $chunk['data'], 'offset' => $chunk['offset'], 'running' => FALSE, 'done' => TRUE, 'source' => 'fallback'];
+			}
+			return ['data' => '', 'offset' => 0, 'running' => $running, 'done' => !$running, 'source' => 'none'];
+		}
+		$offset = 0;
+	}
+
+	// Follow the run log; flush the final partial line once the process is gone.
+	$chunk = pfb_log_tail_chunk($runfile, $offset, !$running);
+	return ['data' => $chunk['data'], 'offset' => $chunk['offset'], 'running' => $running, 'done' => !$running, 'source' => 'run'];
 }
 
 
