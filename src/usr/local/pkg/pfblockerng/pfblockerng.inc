@@ -552,28 +552,37 @@ function pfb_alias_type(string $alias): ?string {
 	return NULL;
 }
 
-// TRUE iff $alias is a configured alias usable as a DNS-redirect/DoT exception source
-// (it exists AND is an address-bearing type, not a port alias).
+// TRUE iff $alias is a configured alias usable as a DNS-redirect/DoT exception source: it
+// exists, is an address-bearing type (not a port alias), and is NOT a pfBlockerNG-managed
+// (pfB_*) alias. Enforced here — not only in the save-time validators — so a stale or
+// hand-edited config that references a port/managed alias still falls back safely at
+// rule-build time rather than emitting a bad rule.
 function pfb_exclude_alias_exists(string $alias): bool {
+	if (str_starts_with($alias, PFB_MANAGED_FILTER_PFX)) {
+		return FALSE;
+	}
 	$type = pfb_alias_type($alias);
 	return $type !== NULL && in_array($type, pfb_exclude_alias_types(), TRUE);
 }
 
 // Build the NAT/filter SOURCE array for a DNS-redirect / DoT-block exception alias.
 // An empty alias yields source 'any' (no exception). A non-empty alias becomes a negated
-// source (listed hosts bypass) ONLY when it resolves to a real firewall alias; an
-// unknown/stale name (e.g. a typo, or an alias deleted after it was referenced) falls back
-// to 'any' and is logged. This guard is the single point that prevents a non-resolving alias
+// source (listed hosts bypass) ONLY when it is a usable firewall-rule source (an existing
+// address-bearing, non-pfB_ alias); a missing / port / managed / stale name falls back to
+// 'any' and is logged. This guard is the single point that prevents a non-resolving alias
 // from emitting a sourceless "from ! ..." rule — pf rejects that as a syntax error, which
 // fails the WHOLE ruleset load, not just this one rule. Shared by pfb_dot_block_rule(),
 // pfb_dot_block_floating_rule() and the DNS-redirect NAT builder in sync_package_pfblockerng().
-function pfb_redirect_exclude_source(string $alias): array {
+// $context names the specific rule (interface [+ IP version]) so the log identifies WHICH rule
+// dropped its exception, rather than repeating an identical line per rule (#664).
+function pfb_redirect_exclude_source(string $alias, string $context = ''): array {
 	if ($alias === '') {
 		return ['any' => ''];
 	}
 	if (!pfb_exclude_alias_exists($alias)) {
-		pfb_logger("\nDNS redirect/DoT block: exception alias [ " .
-			substr(htmlspecialchars($alias), 0, 100) . " ] not found — ignoring (no exception applied)", 2);
+		$where = ($context !== '') ? " [ {$context} ]" : '';
+		pfb_logger("\nDNS redirect/DoT block{$where}: exception alias [ " .
+			substr(htmlspecialchars($alias), 0, 100) . " ] not usable — ignoring (no exception applied)", 2);
 		return ['any' => ''];
 	}
 	return ['address' => $alias, 'not' => ''];
@@ -588,7 +597,7 @@ function pfb_redirect_exclude_source(string $alias): array {
 // build, preserving the stored key order so the sync change-detection compare stays
 // stable when nothing changed.
 function pfb_dot_block_rule(string $iface, string $exclude_alias, string $action): array {
-	$source = pfb_redirect_exclude_source($exclude_alias);
+	$source = pfb_redirect_exclude_source($exclude_alias, "DoT/DoQ Block on {$iface}");
 
 	return [
 		'type'        => pfb_dot_block_action($action),
@@ -610,7 +619,7 @@ function pfb_dot_block_rule(string $iface, string $exclude_alias, string $action
 // negated-(self):853 destination + optional exception-alias source as the per-interface
 // rule. The caller appends the 'tracker' (last key) after build.
 function pfb_dot_block_floating_rule(array $ifaces, string $exclude_alias, string $action): array {
-	$source = pfb_redirect_exclude_source($exclude_alias);
+	$source = pfb_redirect_exclude_source($exclude_alias, 'DoT/DoQ Block (floating)');
 
 	return [
 		'type'        => pfb_dot_block_action($action),
@@ -1989,11 +1998,11 @@ function pfb_global() {
 				// interface during this same update pass. A stale / missing / wrong-interface
 				// manual reference must NOT force-disable DNSBL here, or the auto bootstrap
 				// can never run (mode would compute to 'disabled' and creation would be skipped).
-				pfb_logger("\nDNSBL auto-VIP: VIP validation deferred to auto-create ({$vips_valid_result[1]})\n", 1);
+				pfb_logger("\nDNSBL auto-VIP: VIP validation deferred to auto-create ({$vips_valid_result[1]})", 1);
 			} else {
 				// Manual mode: a genuinely invalid/missing/mismatched VIP disables DNSBL.
 				$pfb['dnsbl'] = '';
-				pfb_logger("\nDNSBL disabled: {$vips_valid_result[1]}\n", 1);
+				pfb_logger("\nDNSBL disabled: {$vips_valid_result[1]}", 1);
 			}
 		} elseif (pfb_dnsbl_v6_vip_required(pfb_unbound_listens_v6(), ($pfb['dnsbl_vip_auto'] === 'on')) && empty($pfb['dnsblconfig']['pfb_dnsvip6'])) {
 			// [ ADR-13 §7 pivot ] NON-BLOCKING: the resolver listens on IPv6 but no v6
@@ -14845,17 +14854,18 @@ function sync_package_pfblockerng($cron='') {
 					}
 				}
 
-				// Build new NAT rdr rules for each interface × family.
-				// The exception-alias source is loop-invariant, so resolve it ONCE here rather
-				// than per interface×family — otherwise a missing alias logs once per grid cell
-				// (#664). All rules in this pass share the same source array.
-				$redir_source = pfb_redirect_exclude_source($redir_exception);
+				// Build new NAT rdr rules for each interface × family. Resolve the exception
+				// source PER rule with a context label (interface + IP version), so when the
+				// exception alias is not usable the log names the specific rule that dropped it
+				// (#664) instead of an identical line per grid cell. The lookup itself is cheap.
 				$redir_new_owned = [];
 				foreach ($redir_ifaces as $redir_iface) {
 					foreach (['inet', 'inet6'] as $redir_family) {
 						$redir_sfx    = ($redir_family === 'inet') ? PFB_DNS_REDIR_DESCR_V4_SFX : PFB_DNS_REDIR_DESCR_V6_SFX;
 						$redir_target = ($redir_family === 'inet') ? '127.0.0.1' : '::1';
+						$redir_ver    = ($redir_family === 'inet') ? 'IPv4' : 'IPv6';
 						$redir_descr  = PFB_DNS_REDIR_DESCR_V4_PFX . $redir_iface . $redir_sfx;
+						$redir_source = pfb_redirect_exclude_source($redir_exception, "DNS Redirect on {$redir_iface} {$redir_ver}");
 						$redir_new_owned[] = [
 							'source'             => $redir_source,
 							'destination'        => ['network' => '(self)', 'not' => '', 'port' => '53'],
