@@ -221,6 +221,14 @@ foreach (glob("{$pfb_pkgdir}/{ip,dnsbl}_{pre,post}_*.{sh,py}", GLOB_BRACE) ?: []
 }
 update_status(($pfb_moved > 0 ? " moved {$pfb_moved} ... done.\n" : " none ... done.\n"));
 
+// ADR-12 update hooks live in their own dir (PFB_HOOK_SCRIPT_DIR = hooks/), separate
+// from list_scripts/. No files ship there (hooks are admin-authored), so create the
+// empty dir here for the picker to scan and admins to drop scripts into.
+$pfb_hookdir = "{$pfb_pkgdir}/hooks";
+if (!is_dir($pfb_hookdir)) {
+	@mkdir($pfb_hookdir, 0755, TRUE);
+}
+
 // Remove discontinued pfBlockerNG CRON job
 foreach (config_get_path('cron/item', []) as $key => $item) { // foreign key — out of ADR-29 gateway scope
 	if (strpos($item['command'], 'pfblockerng.php dc >>') !== FALSE) {
