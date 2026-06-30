@@ -2853,8 +2853,14 @@ $pfb_redir_fill_json   = json_encode($pfb_redir_fill_ifaces);
 // enforced server-side (pfb_validate_dns_redirect_post / pfb_validate_dot_block_post).
 $pfb_alias_names = array();
 foreach (config_get_path('aliases/alias', []) as $pfb_alias_entry) {
+	$pfb_alias_entry_name = (string)($pfb_alias_entry['name'] ?? '');
+	// Skip pfBlockerNG-managed aliases (pfB_*): they are not valid exception aliases
+	// (rejected server-side in pfb_validate_dns_redirect_post / pfb_validate_dot_block_post).
+	if (str_starts_with($pfb_alias_entry_name, PFB_MANAGED_FILTER_PFX)) {
+		continue;
+	}
 	if (in_array($pfb_alias_entry['type'] ?? '', array('host', 'network', 'urltable'), TRUE)) {
-		$pfb_alias_names[] = (string)($pfb_alias_entry['name'] ?? '');
+		$pfb_alias_names[] = $pfb_alias_entry_name;
 	}
 }
 $pfb_alias_names_json = json_encode(array_values(array_filter(array_unique($pfb_alias_names), 'strlen')));

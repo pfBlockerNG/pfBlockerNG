@@ -41,16 +41,27 @@ final class DotDoQBlockUiValidatorTest extends TestCase
 	/** @var array<string> */
 	private array $validIfaceList = ['lan', 'opt1', 'opt2', 'wireguard', 'openvpn'];
 
-	// Reset the is_alias() existence oracle before each test (test isolation): a non-empty
-	// exception alias must now be a REAL firewall alias to be accepted.
+	// Reset the seeded firewall aliases before each test (test isolation): a non-empty
+	// exception alias must be a REAL firewall alias to be accepted.
 	protected function setUp(): void
 	{
-		$GLOBALS['pfb_test_aliases'] = [];
+		$this->seedAliases([]);
 	}
 
 	protected function tearDown(): void
 	{
-		$GLOBALS['pfb_test_aliases'] = [];
+		$this->seedAliases([]);
+	}
+
+	// Seed firewall aliases into config — the source pfb_exclude_alias_exists() reads (#664).
+	// (The check is config-based, NOT is_alias(): is_alias() consults the $aliastable cache,
+	// which is empty in a cron/service-restart sync, so a valid alias would read as missing.)
+	private function seedAliases(array $names): void
+	{
+		$GLOBALS['config']['aliases']['alias'] = array_map(
+			static fn (string $name): array => ['name' => $name, 'type' => 'host'],
+			$names
+		);
 	}
 
 	// -----------------------------------------------------------------------
@@ -87,7 +98,7 @@ final class DotDoQBlockUiValidatorTest extends TestCase
 	public function testValidExistingAliasNameIsAccepted(): void
 	{
 		// Given a valid alias name that EXISTS as a firewall alias
-		$GLOBALS['pfb_test_aliases'] = ['DoT_Exceptions'];
+		$this->seedAliases(['DoT_Exceptions']);
 		$errors = pfb_validate_dot_block_post(['opt1'], $this->validIfaceList, 'DoT_Exceptions');
 
 		// Then no errors are returned
@@ -99,18 +110,36 @@ final class DotDoQBlockUiValidatorTest extends TestCase
 		// Regression: a syntactically-valid but non-existent alias used to pass and then emit
 		// an unresolvable "from !" rule. It must now be rejected.
 		// Before -> accepted while it exists (isolates the existence check from the format check)
-		$GLOBALS['pfb_test_aliases'] = ['DoT_Exceptions'];
+		$this->seedAliases(['DoT_Exceptions']);
 		$errorsExisting = pfb_validate_dot_block_post(['lan'], $this->validIfaceList, 'DoT_Exceptions');
 		$this->assertSame([], $errorsExisting, 'pre-condition: accepted while the alias exists');
 
 		// When the alias does not exist
-		$GLOBALS['pfb_test_aliases'] = ['DoT_Exceptions'];
+		$this->seedAliases(['DoT_Exceptions']);
 		$errors = pfb_validate_dot_block_post(['lan'], $this->validIfaceList, 'DoT_Missing');
 
 		// Then it is rejected with a "does not exist" error
 		$this->assertNotEmpty($errors, 'a non-existent exception alias must be rejected');
 		$this->assertStringContainsString('DoT/DoQ Block', $errors[0]);
 		$this->assertStringContainsString('does not exist', $errors[0]);
+	}
+
+	public function testPfbManagedAliasIsRejected(): void
+	{
+		// A pfBlockerNG-managed alias (pfB_*) must NOT be usable as an exception alias, even
+		// though it exists in config — it must be rejected with a clear "managed alias" error
+		// rather than silently accepted.
+
+		// Given a pfB_-managed alias that EXISTS in config
+		$this->seedAliases(['pfB_DNSBLIP']);
+
+		// When it is used as the exception alias
+		$errors = pfb_validate_dot_block_post(['lan'], $this->validIfaceList, 'pfB_DNSBLIP');
+
+		// Then it is rejected as a managed alias
+		$this->assertNotEmpty($errors, 'a pfB_-managed alias must be rejected');
+		$this->assertStringContainsString('DoT/DoQ Block', $errors[0]);
+		$this->assertStringContainsString('pfBlockerNG-managed', $errors[0]);
 	}
 
 	public function testMultipleValidInterfacesAreAccepted(): void
@@ -164,7 +193,7 @@ final class DotDoQBlockUiValidatorTest extends TestCase
 	public function testAliasNameWithShellSpecialCharIsRejected(): void
 	{
 		// Given: before → valid, existing alias accepted
-		$GLOBALS['pfb_test_aliases'] = ['Good_Alias'];
+		$this->seedAliases(['Good_Alias']);
 		$errorsBefore = pfb_validate_dot_block_post(['lan'], $this->validIfaceList, 'Good_Alias');
 		$this->assertSame([], $errorsBefore, 'pre-condition: Good_Alias is accepted');
 

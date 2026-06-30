@@ -26,16 +26,27 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dot_block_floating_rule')]
 final class DotBlockRuleBuilderTest extends TestCase
 {
-	// Reset the is_alias() existence oracle before each test (test isolation): the source
-	// builder now only negates an exception alias that actually resolves to a firewall alias.
+	// Reset the seeded firewall aliases before each test (test isolation): the source
+	// builder only negates an exception alias that actually resolves to a firewall alias.
 	protected function setUp(): void
 	{
-		$GLOBALS['pfb_test_aliases'] = [];
+		$this->seedAliases([]);
 	}
 
 	protected function tearDown(): void
 	{
-		$GLOBALS['pfb_test_aliases'] = [];
+		$this->seedAliases([]);
+	}
+
+	// Seed firewall aliases into config — the source pfb_exclude_alias_exists() reads (#664).
+	// (The check is config-based, NOT is_alias(): is_alias() consults the $aliastable cache,
+	// which is empty in a cron/service-restart sync, so a valid alias would read as missing.)
+	private function seedAliases(array $names): void
+	{
+		$GLOBALS['config']['aliases']['alias'] = array_map(
+			static fn (string $name): array => ['name' => $name, 'type' => 'host'],
+			$names
+		);
 	}
 
 	// -----------------------------------------------------------------------
@@ -130,7 +141,7 @@ final class DotBlockRuleBuilderTest extends TestCase
 	public function testSourceIsNegatedAliasWhenExcludeAliasGiven(): void
 	{
 		// Given an exception alias that EXISTS, the source negates it so listed hosts bypass
-		$GLOBALS['pfb_test_aliases'] = ['DoT_Exceptions'];
+		$this->seedAliases(['DoT_Exceptions']);
 		$rule = pfb_dot_block_rule('lan', 'DoT_Exceptions', 'reject');
 		$this->assertSame(
 			['address' => 'DoT_Exceptions', 'not' => ''],
@@ -147,13 +158,13 @@ final class DotBlockRuleBuilderTest extends TestCase
 		// 'any' (no exception applied) instead.
 		// Before -> the SAME name yields a negated-alias source while it exists (proves the
 		// existence check, not some always-any path, is what changes the result).
-		$GLOBALS['pfb_test_aliases'] = ['DoT_Exceptions'];
+		$this->seedAliases(['DoT_Exceptions']);
 		$ruleExisting = pfb_dot_block_rule('lan', 'DoT_Exceptions', 'reject');
 		$this->assertSame(['address' => 'DoT_Exceptions', 'not' => ''], $ruleExisting['source'],
 			'pre-condition: existing alias -> negated alias source');
 
 		// When the alias is not a real firewall alias
-		$GLOBALS['pfb_test_aliases'] = ['DoT_Exceptions'];
+		$this->seedAliases(['DoT_Exceptions']);
 		$rule = pfb_dot_block_rule('lan', 'DoT_Typo', 'reject');
 
 		// Then the source is 'any' (the exception is dropped, the ruleset stays valid)
@@ -222,7 +233,7 @@ final class DotBlockRuleBuilderTest extends TestCase
 		$this->assertSame(['any' => ''], $rule['source'], 'no alias -> source any');
 
 		// An existing exception alias negates the source, same as the per-interface rule.
-		$GLOBALS['pfb_test_aliases'] = ['DoT_Exceptions'];
+		$this->seedAliases(['DoT_Exceptions']);
 		$withAlias = pfb_dot_block_floating_rule(['lan'], 'DoT_Exceptions', 'reject');
 		$this->assertSame(
 			['address' => 'DoT_Exceptions', 'not' => ''],

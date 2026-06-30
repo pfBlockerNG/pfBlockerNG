@@ -456,7 +456,10 @@ function pfb_validate_dns_redirect_post(
 		if (!is_validaliasname($posted_alias)) {
 			$errors[] = 'DNS Redirect: Invalid exception alias name: ' .
 				htmlspecialchars($posted_alias, ENT_QUOTES);
-		} elseif (!is_alias($posted_alias)) {
+		} elseif (str_starts_with($posted_alias, PFB_MANAGED_FILTER_PFX)) {
+			$errors[] = 'DNS Redirect: Exception alias must not be a pfBlockerNG-managed (' .
+				PFB_MANAGED_FILTER_PFX . '*) alias: ' . htmlspecialchars($posted_alias, ENT_QUOTES);
+		} elseif (!pfb_exclude_alias_exists($posted_alias)) {
 			$errors[] = 'DNS Redirect: Exception alias does not exist: ' .
 				htmlspecialchars($posted_alias, ENT_QUOTES) .
 				' (create it under Firewall > Aliases first)';
@@ -499,7 +502,10 @@ function pfb_validate_dot_block_post(
 		if (!is_validaliasname($posted_alias)) {
 			$errors[] = 'DoT/DoQ Block: Invalid exception alias name: ' .
 				htmlspecialchars($posted_alias, ENT_QUOTES);
-		} elseif (!is_alias($posted_alias)) {
+		} elseif (str_starts_with($posted_alias, PFB_MANAGED_FILTER_PFX)) {
+			$errors[] = 'DoT/DoQ Block: Exception alias must not be a pfBlockerNG-managed (' .
+				PFB_MANAGED_FILTER_PFX . '*) alias: ' . htmlspecialchars($posted_alias, ENT_QUOTES);
+		} elseif (!pfb_exclude_alias_exists($posted_alias)) {
 			$errors[] = 'DoT/DoQ Block: Exception alias does not exist: ' .
 				htmlspecialchars($posted_alias, ENT_QUOTES) .
 				' (create it under Firewall > Aliases first)';
@@ -510,6 +516,25 @@ function pfb_validate_dot_block_post(
 			htmlspecialchars($posted_action, ENT_QUOTES);
 	}
 	return $errors;
+}
+
+// Existence check for a DNS-redirect/DoT exception alias that is correct in EVERY context.
+// pfSense's is_alias() consults the in-memory $aliastable cache, which is populated only by
+// alias_make_table() during filter generation — so in a cron/service-restart sync (e.g. the
+// DNSBL reload) that cache is empty and is_alias() reports every user-defined alias as
+// missing (#664). Read the configuration directly instead — the same source the Exception
+// Alias autocomplete and the rest of the package use — so a valid alias resolves regardless
+// of whether the filter has been generated in this process.
+function pfb_exclude_alias_exists(string $alias): bool {
+	if ($alias === '') {
+		return FALSE;
+	}
+	foreach (config_get_path('aliases/alias', []) as $pfb_cfg_alias) {
+		if (($pfb_cfg_alias['name'] ?? '') === $alias) {
+			return TRUE;
+		}
+	}
+	return FALSE;
 }
 
 // Build the NAT/filter SOURCE array for a DNS-redirect / DoT-block exception alias.
@@ -524,7 +549,7 @@ function pfb_redirect_exclude_source(string $alias): array {
 	if ($alias === '') {
 		return ['any' => ''];
 	}
-	if (!is_alias($alias)) {
+	if (!pfb_exclude_alias_exists($alias)) {
 		pfb_logger("\nDNS redirect/DoT block: exception alias [ " .
 			substr(htmlspecialchars($alias), 0, 100) . " ] not found — ignoring (no exception applied)", 2);
 		return ['any' => ''];
@@ -14799,13 +14824,16 @@ function sync_package_pfblockerng($cron='') {
 				}
 
 				// Build new NAT rdr rules for each interface × family.
+				// The exception-alias source is loop-invariant, so resolve it ONCE here rather
+				// than per interface×family — otherwise a missing alias logs once per grid cell
+				// (#664). All rules in this pass share the same source array.
+				$redir_source = pfb_redirect_exclude_source($redir_exception);
 				$redir_new_owned = [];
 				foreach ($redir_ifaces as $redir_iface) {
 					foreach (['inet', 'inet6'] as $redir_family) {
 						$redir_sfx    = ($redir_family === 'inet') ? PFB_DNS_REDIR_DESCR_V4_SFX : PFB_DNS_REDIR_DESCR_V6_SFX;
 						$redir_target = ($redir_family === 'inet') ? '127.0.0.1' : '::1';
 						$redir_descr  = PFB_DNS_REDIR_DESCR_V4_PFX . $redir_iface . $redir_sfx;
-						$redir_source = pfb_redirect_exclude_source($redir_exception);
 						$redir_new_owned[] = [
 							'source'             => $redir_source,
 							'destination'        => ['network' => '(self)', 'not' => '', 'port' => '53'],
@@ -16496,7 +16524,7 @@ function sync_package_pfblockerng($cron='') {
 				// Call function for Ramdisk processes.
 				pfb_aliastables('update');
 			} else {
-				$log = "No Changes to Aliases, Skipping pfctl Update\n";
+				$log = "No changes to Aliases, skipping pfctl Update\n";
 				pfb_logger("{$log}", 1);
 			}
 		}
