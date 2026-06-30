@@ -2103,15 +2103,21 @@ function pfb_filter_service() {
 	if [ -e '/var/log/filter.log' ]; then
 		/usr/bin/logger -p daemon.info -t "\${filter_type}" "INFO [{$LOG_PREFIX_PKG_PFBLOCKERNG}] Firewall Filter Service started"
 
+		# Detach the daemon's std fds (#662): a backgrounded daemon that inherits the
+		# caller's pipe -- e.g. the package-manager capture pipe when start_service() runs
+		# during a package install/upgrade -- holds it open for its whole life, so pkg's
+		# streamed output never reaches EOF and the upgrade page's live log freezes. Group
+		# the pipeline and redirect its outer fds to /dev/null (stdin too); the internal
+		# tail->php_pfb pipe is unaffected, so only the inherited descriptor is released.
 		if [ "\${filter_type}" == 'clog_pfb' ]; then
 			# clog_pfb is the pre-2.5 circular-log reader (below min CE 2.8); it reads
 			# only the filter.log clog. The DNSBL feature-log tail is tail_pfb-only.
-			/usr/local/sbin/clog_pfb -f /var/log/filter.log | /usr/local/bin/php_pfb -f /usr/local/pkg/pfblockerng/pfblockerng.inc filterlog &
+			{ /usr/local/sbin/clog_pfb -f /var/log/filter.log | /usr/local/bin/php_pfb -f /usr/local/pkg/pfblockerng/pfblockerng.inc filterlog ; } >/dev/null 2>&1 </dev/null &
 		else
 			# ADR-38 Amendment 1: one daemon also tails the DNSBL feature logs so it
 			# can write unified.log + emit DNSBL syslog host-side. -q suppresses tail's
 			# per-file "==> name <==" headers; -F retries files that don't exist yet.
-			/usr/bin/tail_pfb -q -n0 -F /var/log/filter.log /var/log/pfblockerng/dnsbl.log /var/log/pfblockerng/dns_reply.log | /usr/local/bin/php_pfb -f /usr/local/pkg/pfblockerng/pfblockerng.inc filterlog &
+			{ /usr/bin/tail_pfb -q -n0 -F /var/log/filter.log /var/log/pfblockerng/dnsbl.log /var/log/pfblockerng/dns_reply.log | /usr/local/bin/php_pfb -f /usr/local/pkg/pfblockerng/pfblockerng.inc filterlog ; } >/dev/null 2>&1 </dev/null &
 		fi
 	fi
 
@@ -2159,7 +2165,11 @@ function pfb_dnsbl_service() {
 	# Start DNSBL Lighttpd webserver (Python mode)
 	if [ -e '/var/unbound/pfb_dnsbl_lighty.conf' ]; then
 		/usr/bin/logger -p daemon.info -t lighttpd_pfb "INFO [{$LOG_PREFIX_PKG_PFBLOCKERNG}] DNSBL Webserver started"
-		/usr/local/sbin/lighttpd_pfb -f /var/unbound/pfb_dnsbl_lighty.conf
+		# Detach std fds (#662): lighttpd self-daemonizes, and its forked child would
+		# otherwise inherit the caller's pipe (the package-manager capture pipe during a
+		# package install/upgrade) and hold it open, freezing the upgrade page's live log.
+		# Redirect so the daemon never holds an inherited descriptor.
+		/usr/local/sbin/lighttpd_pfb -f /var/unbound/pfb_dnsbl_lighty.conf >/dev/null 2>&1 </dev/null
 	fi
 
 	# Warn if the DNSBL python script is missing
