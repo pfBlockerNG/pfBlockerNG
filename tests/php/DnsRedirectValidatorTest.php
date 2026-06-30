@@ -38,16 +38,27 @@ final class DnsRedirectValidatorTest extends TestCase
 	/** @var array<string> */
 	private array $validIfaceList = ['lan', 'opt1', 'opt2', 'wireguard', 'openvpn'];
 
-	// Reset the is_alias() existence oracle before each test (test isolation): the
-	// validator now requires a non-empty exception alias to be a REAL firewall alias.
+	// Reset the seeded firewall aliases before each test (test isolation): the validator
+	// requires a non-empty exception alias to be a REAL firewall alias.
 	protected function setUp(): void
 	{
-		$GLOBALS['pfb_test_aliases'] = [];
+		$this->seedAliases([]);
 	}
 
 	protected function tearDown(): void
 	{
-		$GLOBALS['pfb_test_aliases'] = [];
+		$this->seedAliases([]);
+	}
+
+	// Seed firewall aliases into config — the source pfb_exclude_alias_exists() reads (#664).
+	// (The check is config-based, NOT is_alias(): is_alias() consults the $aliastable cache,
+	// which is empty in a cron/service-restart sync, so a valid alias would read as missing.)
+	private function seedAliases(array $names): void
+	{
+		$GLOBALS['config']['aliases']['alias'] = array_map(
+			static fn (string $name): array => ['name' => $name, 'type' => 'host'],
+			$names
+		);
 	}
 
 	// -----------------------------------------------------------------------
@@ -91,7 +102,7 @@ final class DnsRedirectValidatorTest extends TestCase
 	public function testValidExistingAliasNameIsAccepted(): void
 	{
 		// Given a valid alias name that EXISTS as a firewall alias
-		$GLOBALS['pfb_test_aliases'] = ['DNS_Whitelist'];
+		$this->seedAliases(['DNS_Whitelist']);
 		$errors = pfb_validate_dns_redirect_post(['opt1'], $this->validIfaceList, 'DNS_Whitelist');
 
 		// Then no errors are returned
@@ -106,18 +117,36 @@ final class DnsRedirectValidatorTest extends TestCase
 
 		// Given: before → the same name accepted WHEN it exists (proves it's the existence
 		// check, not the format check, doing the rejecting)
-		$GLOBALS['pfb_test_aliases'] = ['BraitServers_IPv4'];
+		$this->seedAliases(['BraitServers_IPv4']);
 		$errorsExisting = pfb_validate_dns_redirect_post(['lan'], $this->validIfaceList, 'BraitServers_IPv4');
 		$this->assertSame([], $errorsExisting, 'pre-condition: the alias is accepted while it exists');
 
 		// When the alias does NOT exist (e.g. a typo: _v4 instead of _IPv4)
-		$GLOBALS['pfb_test_aliases'] = ['BraitServers_IPv4'];
+		$this->seedAliases(['BraitServers_IPv4']);
 		$errors = pfb_validate_dns_redirect_post(['lan'], $this->validIfaceList, 'BraitServers_v4');
 
 		// Then it is rejected with a "does not exist" error
 		$this->assertNotEmpty($errors, 'a non-existent exception alias must be rejected');
 		$this->assertStringContainsString('DNS Redirect', $errors[0]);
 		$this->assertStringContainsString('does not exist', $errors[0]);
+	}
+
+	public function testPfbManagedAliasIsRejected(): void
+	{
+		// A pfBlockerNG-managed alias (pfB_*) must NOT be usable as an exception alias, even
+		// though it exists in config. Before this guard a pfB_ alias would pass (it exists);
+		// it must now be rejected with a clear "managed alias" error.
+
+		// Given a pfB_-managed alias that EXISTS in config
+		$this->seedAliases(['pfB_DNSBLIP']);
+
+		// When it is used as the exception alias
+		$errors = pfb_validate_dns_redirect_post(['lan'], $this->validIfaceList, 'pfB_DNSBLIP');
+
+		// Then it is rejected as a managed alias (not silently accepted because it exists)
+		$this->assertNotEmpty($errors, 'a pfB_-managed alias must be rejected');
+		$this->assertStringContainsString('DNS Redirect', $errors[0]);
+		$this->assertStringContainsString('pfBlockerNG-managed', $errors[0]);
 	}
 
 	public function testMultipleValidInterfacesAreAccepted(): void
@@ -171,7 +200,7 @@ final class DnsRedirectValidatorTest extends TestCase
 	public function testAliasNameWithShellSpecialCharIsRejected(): void
 	{
 		// Given: before → valid, existing alias accepted
-		$GLOBALS['pfb_test_aliases'] = ['Good_Alias'];
+		$this->seedAliases(['Good_Alias']);
 		$errorsBefore = pfb_validate_dns_redirect_post(['lan'], $this->validIfaceList, 'Good_Alias');
 		$this->assertSame([], $errorsBefore, 'pre-condition: Good_Alias is accepted');
 
