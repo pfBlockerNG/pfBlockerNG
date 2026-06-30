@@ -1382,6 +1382,21 @@ function pfb_dnsbl_loaded_fingerprint(array $paths): string {
 	return md5(implode("\n", $parts));
 }
 
+/* DNSBLIP rebuild gate (issue #653). DNSBLIP_<fam> is the union of the *_v<fam>.ip files (the IPs
+   extracted from the DNSBL feeds). Rebuilding + re-filtering it on every IP update is wasteful when
+   no source .ip changed. Decide via a content fingerprint of the .ip source set (ADR-42 style --
+   mtime-agnostic, since a .ip file may be rewritten with identical content): rebuild iff the output
+   is missing, the stored fingerprint is missing, or the current fingerprint differs. Returns
+   [bool $rebuild, string $fp_now]; the caller persists $fp_now beside the output on a rebuild.
+   Pure (read-only fs on the given paths). */
+function pfb_dnsblip_rebuild_check(string $output, array $ip_files, string $fp_path): array {
+	$fp_now  = pfb_dnsbl_loaded_fingerprint($ip_files);
+	$rebuild = !is_file($output)
+		|| !is_file($fp_path)
+		|| trim((string) @file_get_contents($fp_path)) !== $fp_now;
+	return array($rebuild, $fp_now);
+}
+
 // v6 stays OPTIONAL (ADR-13 §7 pivot): a missing v6 VIP never fails validation, even when
 // the resolver listens on IPv6 — pfb_global surfaces that as a non-blocking warning, not a
 // force-disable. The validator only checks the VIPs that ARE configured (existence,
@@ -14425,73 +14440,92 @@ function sync_package_pfblockerng($cron='') {
 		}
 	}
 
-	// Collect all DNSBL IP feeds (IPv4 only) into DNSBLIP_v4.txt
+	// Collect all DNSBL IP feeds (IPv4 only) into DNSBLIP_v4.txt -- but ONLY when the source
+	// *_v4.ip set actually changed (or the output is missing). Rebuilding + re-filtering DNSBLIP
+	// on every IP update churned it needlessly (issue #653); the content fingerprint (ADR-42
+	// style) gates the rebuild, the '.update' reprocess marker, and the ip_cache flush, so an
+	// unchanged source is left alone (the feed loop then logs "exists" instead of reprocessing).
 	if ($pfb['dnsbl_ip'] != 'Disabled' && ($pfb['updateip'] || !file_exists("{$pfb['dbdir']}/DNSBLIP_v4.txt"))) {
 
-		$dnsbl_ip = glob("{$pfb['dnsdir']}/*_v4.ip");
-		if (!empty($dnsbl_ip)) {
-			$pfb_ips = @fopen("{$pfb['dbdir']}/DNSBLIP_v4.txt", 'w');
-			foreach ($dnsbl_ip as $d_ip) {
-				if (($handle = @fopen("{$d_ip}", 'r')) !== FALSE) {
-					while (($line = @fgets($handle)) !== FALSE) {
-						@fwrite($pfb_ips, $line);
+		$dnsblip_v4 = "{$pfb['dbdir']}/DNSBLIP_v4.txt";
+		$dnsbl_ip   = glob("{$pfb['dnsdir']}/*_v4.ip") ?: array();
+		list($pfb_dnsblip_rebuild, $pfb_dnsblip_fp) = pfb_dnsblip_rebuild_check($dnsblip_v4, $dnsbl_ip, "{$dnsblip_v4}.fp");
+
+		if ($pfb_dnsblip_rebuild) {
+			if (!empty($dnsbl_ip)) {
+				$pfb_ips = @fopen($dnsblip_v4, 'w');
+				foreach ($dnsbl_ip as $d_ip) {
+					if (($handle = @fopen("{$d_ip}", 'r')) !== FALSE) {
+						while (($line = @fgets($handle)) !== FALSE) {
+							@fwrite($pfb_ips, $line);
+						}
+					}
+					if ($handle) {
+						@fclose($handle);
 					}
 				}
-				if ($handle) {
-					@fclose($handle);
+				if ($pfb_ips) {
+					@fclose($pfb_ips);
 				}
 			}
-			if ($pfb_ips) {
-				@fclose($pfb_ips);
-			}
-		}
 
-		// Add empty placeholder IP
-		else {
-			@file_put_contents("{$pfb['dbdir']}/DNSBLIP_v4.txt", "{$pfb['ip_ph']}\n", LOCK_EX);
+			// Add empty placeholder IP
+			else {
+				@file_put_contents($dnsblip_v4, "{$pfb['ip_ph']}\n", LOCK_EX);
+			}
+			@file_put_contents("{$dnsblip_v4}.fp", $pfb_dnsblip_fp, LOCK_EX);
+			unlink_if_exists($pfb['ip_cache']);
+			touch("{$pfb['denydir']}/DNSBLIP_v4.update");
 		}
-		unlink_if_exists($pfb['ip_cache']);
-		touch("{$pfb['denydir']}/DNSBLIP_v4.update");
 	}
 
 	// Remove DNSBL IP feed, if disabled
 	if ($pfb['dnsbl_ip'] == 'Disabled') {
 		unlink_if_exists("{$pfb['dbdir']}/DNSBLIP_v4.txt");
+		unlink_if_exists("{$pfb['dbdir']}/DNSBLIP_v4.txt.fp");
 		unlink_if_exists("{$pfb['denydir']}/DNSBLIP_v4.*");
 	}
 
-	// Collect all DNSBL IP feeds (IPv6 only) into DNSBLIP_v6.txt
+	// Collect all DNSBL IP feeds (IPv6 only) into DNSBLIP_v6.txt -- gated on the *_v6.ip source
+	// set changing, identical to the v4 path above (issue #653).
 	if ($pfb['dnsbl_ip'] != 'Disabled' && ($pfb['updateip'] || !file_exists("{$pfb['dbdir']}/DNSBLIP_v6.txt"))) {
 
-		$dnsbl_ip = glob("{$pfb['dnsdir']}/*_v6.ip");
-		if (!empty($dnsbl_ip)) {
-			$pfb_ips = @fopen("{$pfb['dbdir']}/DNSBLIP_v6.txt", 'w');
-			foreach ($dnsbl_ip as $d_ip) {
-				if (($handle = @fopen("{$d_ip}", 'r')) !== FALSE) {
-					while (($line = @fgets($handle)) !== FALSE) {
-						@fwrite($pfb_ips, $line);
+		$dnsblip_v6 = "{$pfb['dbdir']}/DNSBLIP_v6.txt";
+		$dnsbl_ip   = glob("{$pfb['dnsdir']}/*_v6.ip") ?: array();
+		list($pfb_dnsblip_rebuild, $pfb_dnsblip_fp) = pfb_dnsblip_rebuild_check($dnsblip_v6, $dnsbl_ip, "{$dnsblip_v6}.fp");
+
+		if ($pfb_dnsblip_rebuild) {
+			if (!empty($dnsbl_ip)) {
+				$pfb_ips = @fopen($dnsblip_v6, 'w');
+				foreach ($dnsbl_ip as $d_ip) {
+					if (($handle = @fopen("{$d_ip}", 'r')) !== FALSE) {
+						while (($line = @fgets($handle)) !== FALSE) {
+							@fwrite($pfb_ips, $line);
+						}
+					}
+					if ($handle) {
+						@fclose($handle);
 					}
 				}
-				if ($handle) {
-					@fclose($handle);
+				if ($pfb_ips) {
+					@fclose($pfb_ips);
 				}
 			}
-			if ($pfb_ips) {
-				@fclose($pfb_ips);
-			}
-		}
 
-		// Add empty placeholder IP
-		else {
-			@file_put_contents("{$pfb['dbdir']}/DNSBLIP_v6.txt", "::{$pfb['ip_ph']}\n", LOCK_EX);
+			// Add empty placeholder IP
+			else {
+				@file_put_contents($dnsblip_v6, "::{$pfb['ip_ph']}\n", LOCK_EX);
+			}
+			@file_put_contents("{$dnsblip_v6}.fp", $pfb_dnsblip_fp, LOCK_EX);
+			unlink_if_exists($pfb['ip_cache']);
+			touch("{$pfb['denydir']}/DNSBLIP_v6.update");
 		}
-		unlink_if_exists($pfb['ip_cache']);
-		touch("{$pfb['denydir']}/DNSBLIP_v6.update");
 	}
 
 	// Remove DNSBL IP feed, if disabled
 	if ($pfb['dnsbl_ip'] == 'Disabled') {
 		unlink_if_exists("{$pfb['dbdir']}/DNSBLIP_v6.txt");
+		unlink_if_exists("{$pfb['dbdir']}/DNSBLIP_v6.txt.fp");
 		unlink_if_exists("{$pfb['denydir']}/DNSBLIP_v6.*");
 	}
 
