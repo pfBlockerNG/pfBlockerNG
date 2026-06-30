@@ -403,6 +403,12 @@ events.push(function() {
 			pfb_sw_submit('uninstall');
 		}
 	});
+
+	// Show the newest lines: scroll the prefilled output textarea to the bottom on load
+	// (the streamed update/uninstall paths scroll as they write; the plain-GET prefill did not).
+	$('textarea[name="pfb_output"]').each(function() {
+		this.scrollTop = this.scrollHeight;
+	});
 });
 //]]>
 </script>

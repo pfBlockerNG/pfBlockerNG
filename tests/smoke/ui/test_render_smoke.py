@@ -135,7 +135,12 @@ PAGE_TABLE: tuple[Page, ...] = (
     Page("log", "/pfblockerng/pfblockerng_log.php", ("Log/File Browser selections",)),
     Page("sync", "/pfblockerng/pfblockerng_sync.php", ("XMLRPC Sync Settings",)),
     Page("safesearch", "/pfblockerng/pfblockerng_safesearch.php", ("SafeSearch settings", "DNSBL SafeSearch")),
-    Page("update", "/pfblockerng/pfblockerng_update.php", ("Update Settings", "Schedule")),
+    Page(
+        "update",
+        "/pfblockerng/pfblockerng_update.php",
+        # "Show the newest lines:" — the prefilled-log auto-scroll snippet (issue: log auto-scroll).
+        ("Update Settings", "Schedule", "Show the newest lines:"),
+    ),
     # blacklist.php is always the DNSBL Category view; the long info line is a stable literal.
     Page(
         "blacklist",
@@ -1121,6 +1126,11 @@ def test_software_log_prefills_on_plain_get(
         assert seed in content, (
             f"Software page pfb_output is not prefilled on plain GET: "
             f"expected seed marker {seed!r} in textarea content, got {content[:200]!r}"
+        )
+
+        # The prefilled output auto-scrolls to the bottom on load (issue: log auto-scroll).
+        assert "Show the newest lines:" in webui.get(_SOFTWARE_PAGE).text, (
+            "Software page is missing the prefilled-output auto-scroll snippet"
         )
 
 

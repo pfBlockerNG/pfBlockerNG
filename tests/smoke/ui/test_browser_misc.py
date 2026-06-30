@@ -47,7 +47,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from .conftest import mask_page_identity
-from .test_render_smoke import software_panel_forced
+from .test_render_smoke import _seed_vm_file, software_panel_forced
 
 sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed (Tier-B browser dep)")
 expect = sync_api.expect
@@ -352,3 +352,43 @@ def test_software_uninstall_confirm_gate(
         _shot(page, screenshot_dir, "software_uninstall_after_confirm")
         # DO NOT click uninstall_btn — clicking it would uninstall the package and
         # break every subsequent test in this smoke run.
+
+
+def test_software_output_prefill_scrolls_to_bottom(
+    smoke_vm: SmokeVM,
+    browser_page: Page,
+    webui: WebUI,
+) -> None:
+    """The prefilled Software output textarea auto-scrolls to the newest lines on load.
+
+    Scenario (log auto-scroll): the streamed update/uninstall paths scroll as they write,
+    but a plain GET prefilled the output and left it at the top — burying the latest lines.
+
+      Given software.log seeded with more lines than the textarea shows at once,
+      When the Software page is opened in the browser (plain-GET prefill),
+      Then pfb_output is scrolled to the bottom (newest lines visible), not left at the top.
+
+    Fail-before / pass-after: before the auto-scroll snippet the prefilled textarea loads at
+    scrollTop 0; after, it lands at the bottom. The Update page uses the byte-identical
+    snippet, guarded at the render tier by its "Show the newest lines:" marker.
+    """
+    page = browser_page
+    # Seed enough distinct lines to overflow the textarea so a scroll is observable.
+    seed = "".join(f"pfb-autoscroll-line-{i:03d}\n" for i in range(1, 81))
+    with software_panel_forced(smoke_vm, "on"):
+        _seed_vm_file(smoke_vm, "/var/log/pfblockerng/software.log", seed)
+        _open(page, webui, SOFTWARE_PAGE)
+
+        metrics = page.locator('textarea[name="pfb_output"]').evaluate(
+            "el => ({ top: el.scrollTop, sh: el.scrollHeight, ch: el.clientHeight })"
+        )
+        assert metrics["sh"] > metrics["ch"], (
+            "pfb_output is not overflowing — cannot assert scroll "
+            f"(scrollHeight={metrics['sh']} clientHeight={metrics['ch']}); seed more lines"
+        )
+        # At the bottom: scrollTop within a few px of (scrollHeight - clientHeight), and
+        # strictly > 0 (proving it scrolled rather than loading at the top — the pre-fix state).
+        bottom = metrics["sh"] - metrics["ch"]
+        assert metrics["top"] > 0 and metrics["top"] >= bottom - 4, (
+            f"prefilled output not scrolled to bottom: expected scrollTop≈{bottom}, got {metrics['top']}"
+        )
