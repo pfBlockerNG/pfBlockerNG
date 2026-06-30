@@ -2795,30 +2795,7 @@ $section->addInput(new Form_Checkbox(
 
 $form->add($section);
 
-$section = new Form_Section('DNS over HTTPS/TLS/QUIC Blocking');
-$section->addInput(new Form_Select(
-	'safesearch_doh',
-	gettext('DoH/DoT/DoQ Blocking'),
-	$pconfig['safesearch_doh'],
-	$options_safesearch_doh
-))->setHelp('Block well-known DNS over HTTPS/TLS/QUIC (DoH/DoT/DoQ) providers. Modern browsers and devices often use encrypted DNS that bypasses DNSBL; blocking these providers keeps clients on the local resolver so DNSBL stays effective.<br />'
-		. 'DNS requests to these domains will return NXDOMAIN.<br />'
-		. 'A DoH/DoT/DoQ <a href="/pfblockerng/pfblockerng_feeds.php" target="_blank">Feed</a> may cover more providers and update more often than this built-in list.')
-  ->setAttribute('style', 'width: auto');
-
-$section->addInput(new Form_Select(
-	'safesearch_doh_list',
-	gettext('DoH/DoT/DoQ Blocking List'),
-	$pconfig['safesearch_doh_list'],
-	$options_safesearch_doh_list,
-	TRUE
-))->setHelp('Select the DoH/DoT/DoQ providers to block.')
-  ->setAttribute('style', 'width: auto')
-  ->setAttribute('size', '20');
-
-$form->add($section);
-
-// [ ADR-36 ] DNS Redirect section — placed adjacent to the DoH/DoT/DoQ section.
+// [ ADR-36 ] DNS Redirect section — placed above the DoH/DoT/DoQ Blocking section.
 // Redirects outbound port-53 DNS traffic on the selected interfaces to the
 // firewall's own resolver. DoH/DoT bypass is NOT covered.
 $section = new Form_Section('DNS Redirect');
@@ -2833,7 +2810,7 @@ $group->add(new Form_Checkbox(
 ))->setWidth(7)
   ->setHelp('Redirects outbound port-53 DNS traffic on the selected interface(s) to the firewall\'s own resolver.<br />'
 		. 'Keeps clients on the local DNS resolver so DNSBL stays effective.<br />'
-		. 'The firewall itself is always exempt. Does not cover DoH/DoT/DoQ traffic (use the section above for that).');
+		. 'The firewall itself is always exempt. Does not cover DoH/DoT/DoQ traffic (use the DoH/DoT/DoQ Blocking section below for that).');
 
 // [ ADR-36 ] Build the quick-fill interface union (inbound + outbound from IP settings).
 // These are the pfBlockerNG firewall-rule interfaces; the quick-fill populates the
@@ -2959,6 +2936,30 @@ $section->addInput(new Form_Checkbox(
 		. 'When enabled, a single floating rule (direction <strong>in</strong>, quick) is created over '
 		. 'all selected interfaces instead of a separate rule per interface. The action, interface '
 		. 'selection, and exception alias all apply unchanged.');
+
+$form->add($section);
+
+// DoH/DoT/DoQ Blocking section — placed below DNS Redirect + DoT/DoQ Block.
+$section = new Form_Section('DNS over HTTPS/TLS/QUIC Blocking');
+$section->addInput(new Form_Select(
+	'safesearch_doh',
+	gettext('DoH/DoT/DoQ Blocking'),
+	$pconfig['safesearch_doh'],
+	$options_safesearch_doh
+))->setHelp('Block well-known DNS over HTTPS/TLS/QUIC (DoH/DoT/DoQ) providers. Modern browsers and devices often use encrypted DNS that bypasses DNSBL; blocking these providers keeps clients on the local resolver so DNSBL stays effective.<br />'
+		. 'DNS requests to these domains will return NXDOMAIN.<br />'
+		. 'A DoH/DoT/DoQ <a href="/pfblockerng/pfblockerng_feeds.php" target="_blank">Feed</a> may cover more providers and update more often than this built-in list.')
+  ->setAttribute('style', 'width: auto');
+
+$section->addInput(new Form_Select(
+	'safesearch_doh_list',
+	gettext('DoH/DoT/DoQ Blocking List'),
+	$pconfig['safesearch_doh_list'],
+	$options_safesearch_doh_list,
+	TRUE
+))->setHelp('Select the DoH/DoT/DoQ providers to block.')
+  ->setAttribute('style', 'width: auto')
+  ->setAttribute('size', '20');
 
 $form->add($section);
 
