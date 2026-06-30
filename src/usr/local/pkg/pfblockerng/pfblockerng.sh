@@ -698,6 +698,13 @@ duplicate() {
 		return
 	fi
 
+	# "Original" in the stats below is the size ENTERING de-duplication -- i.e. the CIDR-aggregated
+	# feed when aggregation ran, not the raw download. Capture it before the cross-feed grepcidr
+	# prune mutates .txt, and persist it beside the feed so closingprocess() can sum the aggregated
+	# originals for the FINAL Processing report.
+	counto="$(grep -c ^ "${pfbdeny}${alias}.txt")"
+	echo "${counto}" > "${pfborig}${alias}.aggcount"
+
 	dupcheck=1
 	# Check if masterfile is empty
 	hcheck="$(grep -cv ^$ "${masterfile}")"; if [ "${hcheck}" -eq 0 ]; then dupcheck=0; fi
@@ -723,7 +730,6 @@ duplicate() {
 	sed -e 's/^/'"$alias"' /' "${pfbdeny}${alias}.txt" >> "${masterfile}"
 	cut -d ' ' -f2 "${masterfile}" > "${mastercat}"
 
-	counto="$(grep -cv '^#\|^$' "${pfborig}${alias}.orig")"
 	countm="$(grep -c "${alias}" "${masterfile}")"
 	countf="$(grep -c ^ "${pfbdeny}${alias}.txt")"
 
@@ -1348,7 +1354,13 @@ closingprocess() {
 	counto=0
 	echo; echo '===[ FINAL Processing ]====================================='; echo
 	if [ -d "${pfborig}" ] && [ "$(ls -A "${pfborig}")" ]; then
-		counto="$(find "${pfborig}"*_v4.orig 2>/dev/null | xargs cat | grep -cv '^#\|^$')"
+		# Sum the per-feed aggregated "Original" counts written by duplicate() -- these reflect the
+		# CIDR-aggregated input when aggregation ran. Fall back to the raw *_v4.orig total when no
+		# sidecars exist (de-duplication disabled, so duplicate() never ran).
+		counto="$(find "${pfborig}"*_v4.aggcount 2>/dev/null | xargs cat 2>/dev/null | awk '{s += $1} END {print s + 0}')"
+		if [ "${counto}" -eq 0 ]; then
+			counto="$(find "${pfborig}"*_v4.orig 2>/dev/null | xargs cat | grep -cv '^#\|^$')"
+		fi
 	fi
 
 	# Execute when 'de-duplication' is enabled
