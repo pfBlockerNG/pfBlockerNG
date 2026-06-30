@@ -47,7 +47,7 @@ final class LiveTerminalEscapeTest extends TestCase
 		// the browser assigns to .value is byte-for-byte the original.
 		$this->assertSame(
 			'feed --> sink',
-			json_decode($literal, false, 512, JSON_THROW_ON_ERROR),
+			json_decode($literal, FALSE, 512, JSON_THROW_ON_ERROR),
 			"decoded literal must equal the input; got literal: {$literal}"
 		);
 		$this->assertStringNotContainsString(
@@ -75,7 +75,7 @@ final class LiveTerminalEscapeTest extends TestCase
 		);
 		$this->assertSame(
 			'oops</script><b>x</b>',
-			json_decode($literal, false, 512, JSON_THROW_ON_ERROR)
+			json_decode($literal, FALSE, 512, JSON_THROW_ON_ERROR)
 		);
 	}
 
@@ -91,7 +91,7 @@ final class LiveTerminalEscapeTest extends TestCase
 
 		$this->assertSame(
 			'C:\\path\\',
-			json_decode($literal, false, 512, JSON_THROW_ON_ERROR),
+			json_decode($literal, FALSE, 512, JSON_THROW_ON_ERROR),
 			"trailing backslash must round-trip; got literal: {$literal}"
 		);
 	}
@@ -102,7 +102,7 @@ final class LiveTerminalEscapeTest extends TestCase
 		$input   = "say \"hi\"\nnext line\tand a tab";
 		$literal = pfb_js_string($input);
 
-		$this->assertSame($input, json_decode($literal, false, 512, JSON_THROW_ON_ERROR));
+		$this->assertSame($input, json_decode($literal, FALSE, 512, JSON_THROW_ON_ERROR));
 	}
 
 	/**
@@ -116,7 +116,7 @@ final class LiveTerminalEscapeTest extends TestCase
 
 		$this->assertNotSame('""', $literal, 'invalid UTF-8 must not collapse to an empty literal');
 		// Still a decodable JSON string literal (the bad byte became U+FFFD).
-		$this->assertIsString(json_decode($literal, false, 512, JSON_THROW_ON_ERROR));
+		$this->assertIsString(json_decode($literal, FALSE, 512, JSON_THROW_ON_ERROR));
 	}
 
 	// ---- 2. pfb_term_write_js(): sticky auto-follow -----------------------------
@@ -128,7 +128,7 @@ final class LiveTerminalEscapeTest extends TestCase
 	 */
 	public function testStickyFollowMeasuresBeforeWriteAndRepinsConditionally(): void
 	{
-		$js = pfb_term_write_js('pfb_output', 'a line', true);
+		$js = pfb_term_write_js('pfb_output', 'a line', TRUE);
 
 		// Guard expression present (distance-from-bottom against the three metrics).
 		$this->assertStringContainsString('scrollHeight', $js);
@@ -156,7 +156,7 @@ final class LiveTerminalEscapeTest extends TestCase
 	/** Append mode adds to the end (live tail); the text is appended verbatim. */
 	public function testAppendModeUsesPlusEquals(): void
 	{
-		$js = pfb_term_write_js('pfb_output', "x>y\n", true);
+		$js = pfb_term_write_js('pfb_output', "x>y\n", TRUE);
 
 		$this->assertStringContainsString('.value +=', $js);
 		$this->assertStringNotContainsString('.value =', $js); // not the replace form
@@ -167,7 +167,7 @@ final class LiveTerminalEscapeTest extends TestCase
 	/** Replace mode (a single status line) overwrites the whole value. */
 	public function testReplaceModeUsesAssignment(): void
 	{
-		$js = pfb_term_write_js('pfb_status', 'Standby', false);
+		$js = pfb_term_write_js('pfb_status', 'Standby', FALSE);
 
 		$this->assertStringContainsString('.value =', $js);
 		$this->assertStringNotContainsString('.value +=', $js);
@@ -177,7 +177,7 @@ final class LiveTerminalEscapeTest extends TestCase
 	/** The targeted field name is honoured (no hard-coded element). */
 	public function testFieldNameIsHonoured(): void
 	{
-		$js = pfb_term_write_js('pfb_custom', 'z', true);
+		$js = pfb_term_write_js('pfb_custom', 'z', TRUE);
 		$this->assertStringContainsString('forms[0].pfb_custom.value', $js);
 	}
 }
