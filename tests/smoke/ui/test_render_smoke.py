@@ -609,6 +609,32 @@ def test_dnsbl_redir_exception_and_fill_fields_render(webui: WebUI, php_error_lo
         assert needle in body, f"DNSBL page is missing the redirect/fill marker {needle!r}"
 
 
+def test_dnsbl_doh_list_select_is_bounded_scrollable(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """The 'DoH/DoT/DoQ Blocking List' multi-select renders with a bounded, scrollable
+    height instead of expanding to show all ~140 providers at once.
+
+    A ``<select multiple>`` whose ``size`` exceeds its option count shows every row with no
+    scrollbar; the field previously carried ``size="140"`` (one row per provider), so the
+    list dominated the page. Capping ``size`` below the option count makes the browser render
+    a fixed-height, natively scrollable box — matching the TLD multi-select (``size="20"``).
+
+    Pins the change: against the pre-change page the oversized ``size="140"`` was present
+    (this fails), against the post-change page it is gone and the field renders with the
+    bounded ``size="20"`` (this passes). ``php_error_log_guard`` enrolls this GET in the
+    module-level no-growth sweep.
+    """
+    path = "/pfblockerng/pfblockerng_dnsbl.php"
+    resp = webui.get(path)
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Configuration",))
+    assert result.ok, f"DNSBL render oracle failed: {result.detail}"
+    body = resp.text
+    # The field still renders (a pfSense multi-select renders its name as "<field>[]").
+    assert 'name="safesearch_doh_list[]"' in body, "DNSBL page is missing the DoH/DoT/DoQ Blocking List select"
+    # The oversized, unscrollable height is gone and replaced by the bounded one.
+    assert 'size="140"' not in body, "DoH/DoT/DoQ Blocking List select still renders the oversized size='140'"
+    assert 'size="20"' in body, "DoH/DoT/DoQ Blocking List select is missing the bounded scrollable size='20'"
+
+
 def test_feeds_custom_panel_heading_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
     """The second Feeds panel — the one listing user-configured feeds that don't match the
     predefined catalog — is headed "Custom Feeds", not the former "Unknown user defined Feeds".

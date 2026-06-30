@@ -2814,7 +2814,7 @@ $section->addInput(new Form_Select(
 	TRUE
 ))->setHelp('Select the DoH/DoT/DoQ providers to block.')
   ->setAttribute('style', 'width: auto')
-  ->setAttribute('size', 140);
+  ->setAttribute('size', '20');
 
 $form->add($section);
 
