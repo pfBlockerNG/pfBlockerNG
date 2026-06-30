@@ -41,18 +41,16 @@ require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
 global $pfb;
 pfb_global();
 
-// Collect pfBlockerNG log file and post live output to terminal window. pfb_livetail() streams
-// whole-line deltas, so each call APPENDS to the terminal (the text carries its own newlines).
-function pfbupdate_output($text) {
-	print("\n<script type=\"text/javascript\">");
-	print("\n//<![CDATA[");
-	print("\n" . pfb_term_write_js('pfb_output', $text, TRUE));
-	print("\n//]]>");
-	print("\n</script>");
-	/* ensure that contents are written out */
-	ob_flush();
+// AJAX live-log tail: the terminal poller fetches this URL with ?ajax=tail&offset=N and appends
+// the returned bytes (replacing the old blocking inline-<script> stream that parked the request
+// and left the page -- and its nav menu -- half-loaded). Must run before any head/HTML output.
+if (($_GET['ajax'] ?? '') === 'tail') {
+	header('Content-Type: application/json');
+	header('Cache-Control: no-cache, no-store, must-revalidate');
+	$pfb_has_off = isset($_GET['offset']) && ctype_digit((string) $_GET['offset']);
+	print(json_encode(pfb_log_tail_payload('update', $pfb_has_off ? (int) $_GET['offset'] : -1, $pfb_has_off)));
+	exit;
 }
-
 
 // Post status message to terminal window.
 function pfbupdate_status($status) {
@@ -68,14 +66,13 @@ function pfbupdate_status($status) {
 
 // TRUE when a pfBlockerNG feed task (cron/update/trigger/tick/forcecheck) is already running.
 // The active-process guard used by the Run Now dispatchers and the status line; delegates to
-// pfb_feed_task_running() (pfblockerng.inc) so the guard and pfb_livetail's terminator share
-// one process-liveness check.
+// pfb_feed_task_running() (pfblockerng.inc).
 function pfb_active_task_running(): bool {
 	return pfb_feed_task_running();
 }
 
-// Dispatch pfb_trigger via the Phase-3 explicit API, stream log output,
-// then update the due ledger so the Schedule view reflects the manual run.
+// Dispatch pfb_trigger via the Phase-3 explicit API, then update the due ledger so the Schedule
+// view reflects the manual run. The page returns immediately; the client polls ?ajax=tail.
 function pfb_runnow(string $scope, bool $force): void {
 	global $pfb;
 
@@ -108,11 +105,12 @@ function pfb_runnow(string $scope, bool $force): void {
 	// the child pid to $pidfile and removes it on exit; mwexec_bg keeps the robust detach.
 	$pidfile = '/var/run/pfb_runnow.pid';
 	@unlink($pidfile);
+	@file_put_contents($pfb['runlog'], '');	// fresh per-run log for the live viewer to tail
 	mwexec_bg("/usr/sbin/daemon -p " . escapeshellarg($pidfile) .
 		" /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php pfb_trigger scope={$scope_esc} force={$force_val} trigger={$trigger_esc} >> {$pfb['log']} 2>&1");
 
-	// Block until the dispatched process exits (the tail keys on its pidfile).
-	pfb_livetail($pfb['log'], 'force', $pidfile);
+	// The page no longer blocks tailing here: it returns immediately (so foot.inc loads and the
+	// nav menu works) and the client polls ?ajax=tail for the live log, keyed on $pidfile.
 
 	// Update the 'cron' ledger entry so the Schedule view reflects this manual run.
 	// Only advance the full-pass ledger when scope=both — a partial scope=ip/dnsbl run
@@ -156,10 +154,11 @@ function pfb_runnow_forcecheck(string $scope): void {
 	// tracks this dispatched process by pid (isvalidpid), not a ps-pattern.
 	$pidfile = '/var/run/pfb_runnow.pid';
 	@unlink($pidfile);
+	@file_put_contents($pfb['runlog'], '');	// fresh per-run log for the live viewer to tail
 	mwexec_bg("/usr/sbin/daemon -p " . escapeshellarg($pidfile) .
 		" /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php forcecheck scope={$scope_esc} >> {$pfb['log']} 2>&1");
 
-	pfb_livetail($pfb['log'], 'force', $pidfile);
+	// Page returns immediately; the client polls ?ajax=tail for the live log (see pfb_runnow).
 
 	if ($scope === 'both') {
 		$interval = ((int)($pfb['interval'] ?: 1)) * 3600;
@@ -265,6 +264,12 @@ if ($pfb_task_running) {
 // button click) — stream it live like the View button instead of showing a stale last-run tail.
 $pfb_auto_tail = pfb_update_autotail($pfb_task_running, isset($pconfig['run']), isset($_POST['log_view']));
 $status .= '<br />&emsp;<small><span style="color: red;">Refresh to update current status and time remaining.</span></small>';
+
+// Whether the client should poll the live-log tail (?ajax=tail) once the page has rendered. TRUE
+// when an update is already in progress (auto-tail); also set TRUE by the View button and the Run
+// Now dispatch below. A plain visit with no active run leaves it FALSE (empty box, per #666).
+$pfb_poll        = $pfb_auto_tail;
+$pfb_poll_status = $pfb_auto_tail ? gettext('Update in progress — tailing the live log...') : '';
 
 // Read the due-ledger entries for the Schedule view (read-only at page load).
 $ledger_cron = pfb_due_ledger_read_entry('cron', $pfb['dbdir']);
@@ -455,27 +460,23 @@ $section->addInput(new Form_Textarea(
 $form->add($section);
 print($form);
 
-// Execute the viewer output window
+// View / End-View button: start (or stop) the client-side live-log poll. 'End View' text means
+// the viewer is now active (the toggle flipped it above); 'View' means it was just ended.
 if (isset($pconfig['log_view'])) {
 	if ($pconfig['log_view'] !== 'View') {
-		pfbupdate_status(gettext("Log Viewing in progress.    ** Press 'END VIEW' to Exit ** "));
-		pfb_livetail($pfb['log'], 'view');
-	} elseif ($pfb_auto_tail) {
-		// Plain page load while an update is in progress: tail it live (passive 'view' viewer,
-		// same as the View button) rather than leaving the prefilled last-run tail.
-		pfbupdate_status(gettext("Update in progress — tailing the live log..."));
-		pfb_livetail($pfb['log'], 'view');
+		$pfb_poll        = TRUE;
+		$pfb_poll_status = gettext("Log Viewing in progress.    ** Press 'END VIEW' to Exit ** ");
 	} else {
-		// End the viewer output Window
-		clearstatcache(FALSE, $pfb['log']);
-		ob_flush();
-		flush();
+		// End View — leave $pfb_poll as-is (an in-progress update still auto-tails).
+		clearstatcache(FALSE, $pfb['runlog']);
 	}
 }
 
 // Run Now handler — dispatches pfb_trigger or forcecheck depending on force mode.
 if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On && isset($pconfig['run']) &&
     isset($pconfig['pfb_scope']) && !empty($pconfig['pfb_scope'])) {
+	// A Run Now (or a skip that finds a task already running) tails the live log via the poller.
+	$pfb_poll   = TRUE;
 	$scope      = in_array($pconfig['pfb_scope'], $pfb_allowed_scopes, TRUE) ? $pconfig['pfb_scope'] : 'both';
 	$force_mode = $pconfig['pfb_force_mode'] ?? 'none';
 	if (!in_array($force_mode, array('none', 'parse', 'download', 'both'), TRUE)) {
@@ -555,6 +556,40 @@ events.push(function(){
 	$('#run').click(function() {
 		$("html, body").animate({ scrollTop: $(document).height() }, 2000);
 	});
+
+<?php if ($pfb_poll): ?>
+	// Live-log tail. The page has fully rendered (foot.inc ran, so the nav menu works); the log
+	// streams in by polling ?ajax=tail and appending the new bytes, instead of the old blocking
+	// inline-<script> stream that parked the request. Sticky auto-follow: re-pin to the bottom
+	// only when the user is already at the bottom, so scrolling up to read is not yanked back.
+	(function() {
+		var out    = document.forms[0].pfb_output;
+		var stat   = document.forms[0].pfb_status;
+		var offset = null;
+		var timer  = null;
+		var initStatus = <?=pfb_js_string($pfb_poll_status);?>;
+		var doneStatus = <?=pfb_js_string(gettext('Log viewer idle.'));?>;
+		if (initStatus) { stat.value = initStatus; }
+		function poll() {
+			var url = '/pfblockerng/pfblockerng_update.php?ajax=tail' + (offset !== null ? '&offset=' + offset : '');
+			$.ajax({ url: url, type: 'GET', dataType: 'json', cache: false }).done(function(r) {
+				if (!r) { return; }
+				if (r.data) {
+					var atBottom = (out.scrollHeight - out.scrollTop - out.clientHeight) <= 16;
+					out.value += r.data;
+					if (atBottom) { out.scrollTop = out.scrollHeight; }
+				}
+				if (typeof r.offset !== 'undefined') { offset = r.offset; }
+				if (r.done) {
+					if (timer) { clearInterval(timer); timer = null; }
+					stat.value = doneStatus;
+				}
+			});
+		}
+		poll();
+		timer = setInterval(poll, 1000);
+	})();
+<?php endif; ?>
 });
 //]]>
 </script>

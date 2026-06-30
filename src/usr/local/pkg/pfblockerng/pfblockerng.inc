@@ -11819,32 +11819,6 @@ function pfb_feed_task_running(): bool {
 }
 
 
-// Decide whether the Run-Now livetail loop should stop this cycle (pfb_livetail's
-// non-'view' mode -- internally 'force', driving EVERY Update-page run + the Force-check,
-// NOT the page's Force radios), given whether the dispatched process ($running -- the
-// caller passes isvalidpid() of the process's pidfile) is alive and whether it has
-// produced any output yet ($saw_output). The process is the completion signal, replacing
-// the old 'UPDATE PROCESS ENDED' log-string probe. Note the loop STREAMS the log every cycle
-// regardless of this result, so output is never delayed:
-//   - while the task runs, keep tailing (and latch that we saw it);
-//   - once it is gone, stop IMMEDIATELY if it ever ran OR has already produced output
-//     (it has finished -- nothing more will come);
-//   - only when NOTHING has happened (never seen running AND no output at all) wait up
-//     to $grace cycles before giving up -- the dead-launch (failed mwexec_bg) safety net,
-//     so the tail can't loop forever yet a real run is never cut short or held blank.
-// $seen and $cycles carry the loop's state across cycles (by reference).
-function pfb_livetail_force_done(bool $running, bool $saw_output, bool &$seen, int &$cycles, int $grace): bool {
-	if ($running) {
-		$seen = TRUE;
-		return FALSE;
-	}
-	if ($seen || $saw_output) {
-		return TRUE;
-	}
-	return (++$cycles >= $grace);
-}
-
-
 // Decide whether a plain Update-page load should AUTO-TAIL an in-progress update (stream it
 // live like the View button) instead of pre-filling the last-run log tail. TRUE iff a
 // pfBlockerNG feed task is running AND this request is neither a Run-Now/wizard dispatch
@@ -11993,121 +11967,6 @@ function pfb_term_write_js(string $field, string $text, bool $append = FALSE): s
 		"var _pfb_atbottom = ({$el}.scrollHeight - {$el}.scrollTop - {$el}.clientHeight) <= 16;\n" .
 		"{$set}\n" .
 		"if (_pfb_atbottom) { {$el}.scrollTop = {$el}.scrollHeight; }";
-}
-
-
-// Read logfile in realtime (livetail)
-// Reference: http://stackoverflow.com/questions/3218895/php-how-to-read-a-file-live-that-is-constantly-being-written-to
-function pfb_livetail($logfile, $mode, $pidfile = '') {
-	global $pfb;
-
-	if (!file_exists("{$logfile}")) {
-		touch("{$logfile}");
-	}
-
-	$len = @filesize("{$logfile}");	// Start at EOF
-
-	if ($mode == 'view') {
-		// Start ~15000 bytes back so the viewer opens on recent history.
-		$lastpos = ($len > 15000) ? ($len - 15000) : 0;
-	} else {
-		$lastpos = $len;
-	}
-
-	// Run-Now termination state (the non-'view' tail): stop the tail when the dispatched
-	// process exits -- tracked authoritatively by its pidfile (isvalidpid), so no ps-pattern
-	// guessing. The grace bounds ONLY the launch-lag / dead-launch case (pidfile never valid
-	// AND nothing written): ~0.3s per cycle => ~3s. The process not even appearing within a
-	// full 3s already means something is wrong, so we give up rather than loop. Any output
-	// (or seeing the pid) ends the tail as soon as the process is gone, and the log streams
-	// every cycle regardless, so the page is never held blank.
-	$seen_running	= FALSE;
-	$saw_output	= FALSE;
-	$startup_cycles	= 0;
-	$startup_grace	= 10;	// ~3s at 0.3s/cycle
-
-	// Bytes read but not yet streamed. The terminal appends each delta, so a delta must be WHOLE
-	// lines: we hold back any trailing partial line until its newline arrives. Streaming a partial
-	// line could split a multibyte UTF-8 char across two appends -> a permanent replacement-char
-	// artifact the append-only textarea can never repair.
-	$pending = '';
-
-	while (TRUE) {
-		usleep(300000); //0.3s
-		clearstatcache(FALSE, "{$logfile}");
-		$len = @filesize("{$logfile}");
-
-		if ($len < $lastpos) {
-			$lastpos = $len;	// File deleted/rotated -- resync to the new EOF.
-			$pending = '';
-		} elseif ($len > $lastpos) {
-			$f = @fopen("{$logfile}", 'rb');
-			if ($f === FALSE) {
-				break;
-			}
-			@fseek($f, $lastpos);
-			while (!feof($f)) {
-				$buf = @fread($f, 8192);
-				if ($buf === FALSE) {
-					break;
-				}
-				$pending .= $buf;
-			}
-			$lastpos = @ftell($f);
-			@fclose($f);
-
-			// Stream up to the last complete line; keep the trailing partial for the next cycle.
-			$nl = strrpos($pending, "\n");
-			if ($nl !== FALSE) {
-				$delta   = str_replace("\r", '', substr($pending, 0, $nl + 1));
-				$pending = substr($pending, $nl + 1);
-				if ($delta !== '') {
-					pfbupdate_output($delta);
-					$saw_output = TRUE;
-					ob_flush();
-					flush();
-				}
-			}
-		}
-
-		// Terminate the Run-Now tail when the dispatched process exits -- the process itself is
-		// the completion signal (its pidfile, via isvalidpid), replacing the brittle
-		// 'UPDATE PROCESS ENDED' log-string probe. 'view' is a passive live viewer: it streams
-		// until the client disconnects, so it never stops here.
-		if ($mode != 'view' &&
-		    pfb_livetail_force_done(isvalidpid($pidfile), $saw_output, $seen_running, $startup_cycles, $startup_grace)) {
-			// Final drain: capture anything written between the last read and the process exit,
-			// then flush the remainder including a final line with no trailing newline.
-			clearstatcache(FALSE, "{$logfile}");
-			$len = @filesize("{$logfile}");
-			if ($len > $lastpos) {
-				$f = @fopen("{$logfile}", 'rb');
-				if ($f !== FALSE) {
-					@fseek($f, $lastpos);
-					while (!feof($f)) {
-						$buf = @fread($f, 8192);
-						if ($buf === FALSE) {
-							break;
-						}
-						$pending .= $buf;
-					}
-					$lastpos = @ftell($f);
-					@fclose($f);
-				}
-			}
-			$tail = str_replace("\r", '', $pending);
-			if ($tail !== '') {
-				pfbupdate_output($tail);
-				$pending = '';
-				ob_flush();
-				flush();
-			}
-
-			// Call log mgmt function
-			pfb_log_mgmt();
-			break;
-		}
-	}
 }
 
 
@@ -17024,10 +16883,10 @@ function sync_package_pfblockerng($cron='') {
 	));
 
 	// Terminal marker -- emitted AFTER the post-update hooks so it is genuinely the
-	// last line of the update log. The Update-page live tail (pfb_livetail) stops on
-	// this marker; emitting it before the hooks truncated their progressive output
-	// from the live view (e.g. a HAProxy reload hook running up to its timeout) -- it
-	// then only reappeared on a manual 'View'.
+	// last line of the update log (the hooks' progressive output, e.g. a HAProxy reload
+	// running up to its timeout, must precede it). The Update-page live tail now stops on
+	// the dispatched process exiting (its pidfile), not on this marker, but keeping the
+	// marker last preserves a clean end-of-run boundary in the log.
 	// A real Update pass (NOT a settings-save sync, $pfb['save']) has rebuilt from the current
 	// config, so any deferred-settings changes are now applied: clear the GUI "pending changes"
 	// banner. A General-page save ($pfb['save']=TRUE) deliberately does not reach this, so its
