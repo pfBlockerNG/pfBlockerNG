@@ -522,6 +522,14 @@ if ($pfb_feed_default !== null) {
 	PfbConfig::write('pfb_feed_internal_filter', $pfb_feed_default);
 }
 
+// ADR-40: grandfather an already-configured install to 'replace' (pre-ADR-40 full -T replace) so
+// an upgrade keeps its prior alias-apply behaviour; a new install takes the 'auto' registry
+// default. Run-once via the !isset guard in pfb_alias_delta_mode_install_default().
+$pfb_delta_default = pfb_alias_delta_mode_install_default($pfb_gcfg);
+if ($pfb_delta_default !== null) {
+	PfbConfig::write('pfb_alias_delta_mode', $pfb_delta_default);
+}
+
 // Convert dnsbl_info CSV file to SQLite3 database format
 if (file_exists('/var/db/pfblockerng/dnsbl_info') &&
     !file_exists('/var/db/pfblockerng/dnsbl.sqlite') &&

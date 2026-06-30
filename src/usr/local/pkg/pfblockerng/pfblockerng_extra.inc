@@ -180,10 +180,12 @@ enum PfbIdnMode: string implements PfbStoredEnum
 //                         the safe default.
 //   Replace ('replace') — always full -T replace (pre-ADR-40 behaviour).
 //
-// Absent-default = 'auto' for ALL installs (new AND existing): ADR-40 end-state is
-// identical to replace (contract item 1 — table membership unchanged), so no
-// grandfather seed is required. Downgrade-safe: an older release lacking this key
-// ignores it and performs its existing full replace.
+// Absent-default = 'auto' for a NEW install. An already-configured install is grandfathered to
+// 'replace' (pre-ADR-40 full -T replace) by a one-time install/upgrade seed
+// (pfb_alias_delta_mode_install_default() + pfblockerng_install.inc), so an upgrade preserves the
+// operator's prior apply path instead of silently switching to delta — the absent-default 'auto'
+// reaches only brand-new installs. Downgrade-safe: an older release lacking this key ignores it
+// and performs its existing full replace.
 enum PfbAliasDeltaMode: string implements PfbStoredEnum
 {
 	use PfbStoredEnumAdapter;
@@ -543,12 +545,12 @@ function pfb_cfg_registry(): array
 			'since'         => '2.0.0',
 		],
 
-		// ADR-40: alias-table apply mode: 'auto' | 'delta' | 'replace'. Default 'auto'.
+		// ADR-40: alias-table apply mode: 'auto' | 'delta' | 'replace'. New-install default 'auto'.
 		// 'auto' = delta for small churn (< ~5%), full replace for initial load / large churn;
 		// 'delta' = ALWAYS forward delta, NO large-churn replace fallback (power-user override);
-		// 'replace' = always full -T replace.
-		// Absent-default 'auto' is safe for existing installs (end-state identical to
-		// replace — ADR-40 contract item 1); no grandfather seed needed.
+		// 'replace' = always full -T replace (pre-ADR-40 behaviour).
+		// Existing installs are grandfather-seeded to 'replace' at install/upgrade
+		// (pfb_alias_delta_mode_install_default); only brand-new installs take the 'auto' default.
 		'pfb_alias_delta_mode' => [
 			'section'       => $gen,
 			'default'       => 'auto',

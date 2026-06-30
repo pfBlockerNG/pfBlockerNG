@@ -740,8 +740,10 @@ for large churn, boot, or enable/disable; `delta` always applies the forward del
 large-churn replace fallback (power-user override — can be slow on full-table rebuilds); `replace`
 always does a full `-T replace`. Both paths produce the same `pfctl -t <t> -T show` membership
 (end-state invariant). Two registered `PfbConfig` fields: `pfb_alias_delta_mode` (enum
-`auto`/`delta`/`replace`, default `auto`) and `pfb_alias_delta_batch` (chunk size, default 512,
-clamped 64–4096). See
+`auto`/`delta`/`replace`; **new-install default `auto`**, but an **already-configured install is
+grandfather-seeded to `replace`** at install/upgrade — `pfb_alias_delta_mode_install_default()` —
+so an upgrade keeps the prior full-replace apply path, never silently switching to delta) and
+`pfb_alias_delta_batch` (chunk size, default 512, clamped 64–4096). See
 `docs/misc/architecture-notes.md` ("ADR-40") for the cross-list dedup/reputation scope rules.
 
 **Scheduling, trigger API & verb routing (ADR-43).** The reload entrypoint

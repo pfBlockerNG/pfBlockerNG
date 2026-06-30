@@ -12,11 +12,15 @@ field, reasoning about rollback/downgrade, or checking the foreign-key exclusion
   - `dnsbl_lenient` / `pfb_keep` → `PfbLenient` (`'on'`/`'off'`); `dnsbl_vip_auto` and ~76 other
     `'on'`/`''` checkbox fields → `PfbToggle` (off-value `''`).
   - **`pfb_alias_delta_mode` → `PfbAliasDeltaMode`** (ADR-40, registry adapters
-    `pfb_cfg_alias_delta_mode_read/write`): tokens `'auto'` (default) / `'delta'` / `'replace'`.
-    Unknown or absent token reads as `Auto`. Absent on a pre-4.0.0 install → feature silently
-    absent (full replace, the pre-4.0.0 behaviour). `pfb_alias_delta_batch` (plain string,
-    `NULL`/`NULL` adapters) is the batch-size companion field; its stored value is a decimal
-    integer string, clamped to `[64, 4096]` at read time by `pfb_alias_delta_batch_clamp()`.
+    `pfb_cfg_alias_delta_mode_read/write`): tokens `'auto'` (new-install default) / `'delta'` /
+    `'replace'`. Unknown or absent token reads as `Auto`. **Grandfather seed:** an already-configured
+    install is pinned to `'replace'` (pre-ADR-40 full `-T replace`) at install/upgrade by
+    `pfb_alias_delta_mode_install_default()` + `pfblockerng_install.inc` — run-once via its `!isset`
+    guard — so only a brand-new install takes the `'auto'` absent-default; an upgrade keeps full
+    replace. Absent on a pre-4.0.0 (downgrade) install → feature silently absent (full replace).
+    `pfb_alias_delta_batch` (plain string, `NULL`/`NULL` adapters) is the batch-size companion
+    field; its stored value is a decimal integer string, clamped to `[64, 4096]` at read time by
+    `pfb_alias_delta_batch_clamp()`.
   - **`pfb_idn` → `PfbIdnMode`** (registry adapters `pfb_cfg_idn_mode_read/write`): tokens
     `'on'` (= All) / `'confusable'` / `'off'`. `All` **reuses the original `'on'`** block-all
     token, so a pre-4.0.0 install round-trips with no migration *and* an older release reading

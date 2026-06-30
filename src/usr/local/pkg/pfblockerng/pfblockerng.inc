@@ -7667,6 +7667,23 @@ function pfb_feed_filter_install_default($gconfig) {
 }
 
 
+// ADR-40: alias-table apply-mode grandfather decision the install/upgrade hook applies.
+// $gconfig is the existing General-settings 'config/0' node (null on a fresh, never-configured
+// install). A new install takes the registry absent-default 'auto' (delta for small churn, full
+// replace for large churn / boot); an
+// already-configured install that has not yet seen the key is pinned to 'replace' (the pre-ADR-40
+// full -T replace) so the upgrade preserves that operator's prior apply behaviour instead of
+// silently switching to delta. Run-once + idempotent: once the key is set (any value) it returns
+// NULL, so a later save never overrides an operator's explicit choice.
+function pfb_alias_delta_mode_install_default($gconfig) {
+
+	if (is_array($gconfig) && !isset($gconfig['pfb_alias_delta_mode'])) {
+		return 'replace';
+	}
+	return NULL;
+}
+
+
 // ADR-02: one-time upgrade migration for the DNSBL python-only mode. $dconfig is the
 // existing DNSBL-settings 'config/0' node. Forces 'dnsbl_mode' to 'dnsbl_python' and
 // 'pfb_py_block' to 'on'. Idempotent: returns NULL when both keys already carry the target
