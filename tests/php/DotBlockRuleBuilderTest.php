@@ -26,6 +26,18 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dot_block_floating_rule')]
 final class DotBlockRuleBuilderTest extends TestCase
 {
+	// Reset the is_alias() existence oracle before each test (test isolation): the source
+	// builder now only negates an exception alias that actually resolves to a firewall alias.
+	protected function setUp(): void
+	{
+		$GLOBALS['pfb_test_aliases'] = [];
+	}
+
+	protected function tearDown(): void
+	{
+		$GLOBALS['pfb_test_aliases'] = [];
+	}
+
 	// -----------------------------------------------------------------------
 	// pfb_dot_block_action() — normalisation
 	// -----------------------------------------------------------------------
@@ -117,13 +129,35 @@ final class DotBlockRuleBuilderTest extends TestCase
 
 	public function testSourceIsNegatedAliasWhenExcludeAliasGiven(): void
 	{
-		// Given an exception alias, the source negates that alias so listed hosts bypass
+		// Given an exception alias that EXISTS, the source negates it so listed hosts bypass
+		$GLOBALS['pfb_test_aliases'] = ['DoT_Exceptions'];
 		$rule = pfb_dot_block_rule('lan', 'DoT_Exceptions', 'reject');
 		$this->assertSame(
 			['address' => 'DoT_Exceptions', 'not' => ''],
 			$rule['source'],
-			'alias present -> negated alias source'
+			'existing alias present -> negated alias source'
 		);
+	}
+
+	public function testSourceFallsBackToAnyWhenExcludeAliasNotFound(): void
+	{
+		// Regression: a non-empty exception alias that does NOT resolve to a real firewall
+		// alias must NOT be emitted as the source — an unresolvable address renders as a
+		// sourceless "from !" that fails the entire pf ruleset load. The guard falls back to
+		// 'any' (no exception applied) instead.
+		// Before -> the SAME name yields a negated-alias source while it exists (proves the
+		// existence check, not some always-any path, is what changes the result).
+		$GLOBALS['pfb_test_aliases'] = ['DoT_Exceptions'];
+		$ruleExisting = pfb_dot_block_rule('lan', 'DoT_Exceptions', 'reject');
+		$this->assertSame(['address' => 'DoT_Exceptions', 'not' => ''], $ruleExisting['source'],
+			'pre-condition: existing alias -> negated alias source');
+
+		// When the alias is not a real firewall alias
+		$GLOBALS['pfb_test_aliases'] = ['DoT_Exceptions'];
+		$rule = pfb_dot_block_rule('lan', 'DoT_Typo', 'reject');
+
+		// Then the source is 'any' (the exception is dropped, the ruleset stays valid)
+		$this->assertSame(['any' => ''], $rule['source'], 'unknown alias -> source any (no "from !")');
 	}
 
 	// -----------------------------------------------------------------------
@@ -187,13 +221,18 @@ final class DotBlockRuleBuilderTest extends TestCase
 		$this->assertSame('tcp/udp', $rule['protocol'], 'floating protocol = tcp/udp');
 		$this->assertSame(['any' => ''], $rule['source'], 'no alias -> source any');
 
-		// Exception alias negates the source, same as the per-interface rule.
+		// An existing exception alias negates the source, same as the per-interface rule.
+		$GLOBALS['pfb_test_aliases'] = ['DoT_Exceptions'];
 		$withAlias = pfb_dot_block_floating_rule(['lan'], 'DoT_Exceptions', 'reject');
 		$this->assertSame(
 			['address' => 'DoT_Exceptions', 'not' => ''],
 			$withAlias['source'],
-			'alias present -> negated alias source'
+			'existing alias present -> negated alias source'
 		);
+
+		// A non-existent alias falls back to 'any' (never a sourceless "from !").
+		$rule = pfb_dot_block_floating_rule(['lan'], 'DoT_Missing', 'reject');
+		$this->assertSame(['any' => ''], $rule['source'], 'unknown alias -> source any');
 	}
 
 	public function testFloatingBuilderOmitsTrackerAndEndsOnDescr(): void
