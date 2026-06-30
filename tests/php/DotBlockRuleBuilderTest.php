@@ -41,10 +41,10 @@ final class DotBlockRuleBuilderTest extends TestCase
 	// Seed firewall aliases into config — the source pfb_exclude_alias_exists() reads (#664).
 	// (The check is config-based, NOT is_alias(): is_alias() consults the $aliastable cache,
 	// which is empty in a cron/service-restart sync, so a valid alias would read as missing.)
-	private function seedAliases(array $names): void
+	private function seedAliases(array $names, string $type = 'host'): void
 	{
 		$GLOBALS['config']['aliases']['alias'] = array_map(
-			static fn (string $name): array => ['name' => $name, 'type' => 'host'],
+			static fn (string $name): array => ['name' => $name, 'type' => $type],
 			$names
 		);
 	}
@@ -169,6 +169,24 @@ final class DotBlockRuleBuilderTest extends TestCase
 
 		// Then the source is 'any' (the exception is dropped, the ruleset stays valid)
 		$this->assertSame(['any' => ''], $rule['source'], 'unknown alias -> source any (no "from !")');
+	}
+
+	public function testSourceFallsBackToAnyForPortAlias(): void
+	{
+		// A port alias cannot be a firewall-rule source, so even though it exists it must NOT
+		// be emitted as the negated source — it falls back to 'any', same as a missing alias.
+		// Before -> the SAME name yields a negated-alias source as an ADDRESS (host) alias.
+		$this->seedAliases(['SvcAlias'], 'host');
+		$ruleHost = pfb_dot_block_rule('lan', 'SvcAlias', 'reject');
+		$this->assertSame(['address' => 'SvcAlias', 'not' => ''], $ruleHost['source'],
+			'pre-condition: an address (host) alias -> negated alias source');
+
+		// When the same name is a PORT alias instead
+		$this->seedAliases(['SvcAlias'], 'port');
+		$rule = pfb_dot_block_rule('lan', 'SvcAlias', 'reject');
+
+		// Then the source falls back to 'any' (a port alias is not a usable source)
+		$this->assertSame(['any' => ''], $rule['source'], 'port alias -> source any');
 	}
 
 	// -----------------------------------------------------------------------

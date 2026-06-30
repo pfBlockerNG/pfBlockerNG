@@ -56,10 +56,10 @@ final class DotDoQBlockUiValidatorTest extends TestCase
 	// Seed firewall aliases into config — the source pfb_exclude_alias_exists() reads (#664).
 	// (The check is config-based, NOT is_alias(): is_alias() consults the $aliastable cache,
 	// which is empty in a cron/service-restart sync, so a valid alias would read as missing.)
-	private function seedAliases(array $names): void
+	private function seedAliases(array $names, string $type = 'host'): void
 	{
 		$GLOBALS['config']['aliases']['alias'] = array_map(
-			static fn (string $name): array => ['name' => $name, 'type' => 'host'],
+			static fn (string $name): array => ['name' => $name, 'type' => $type],
 			$names
 		);
 	}
@@ -140,6 +140,26 @@ final class DotDoQBlockUiValidatorTest extends TestCase
 		$this->assertNotEmpty($errors, 'a pfB_-managed alias must be rejected');
 		$this->assertStringContainsString('DoT/DoQ Block', $errors[0]);
 		$this->assertStringContainsString('pfBlockerNG-managed', $errors[0]);
+	}
+
+	public function testPortAliasIsRejected(): void
+	{
+		// Only address-bearing aliases can be a firewall-rule source. A PORT alias exists but
+		// cannot be a source, so it must be rejected (not accepted, and not reported as missing).
+
+		// Given: before → the SAME name is accepted as an ADDRESS (host) alias
+		$this->seedAliases(['SvcAlias'], 'host');
+		$errorsHost = pfb_validate_dot_block_post(['lan'], $this->validIfaceList, 'SvcAlias');
+		$this->assertSame([], $errorsHost, 'pre-condition: an address (host) alias is accepted');
+
+		// When the same name is a PORT alias instead
+		$this->seedAliases(['SvcAlias'], 'port');
+		$errors = pfb_validate_dot_block_post(['lan'], $this->validIfaceList, 'SvcAlias');
+
+		// Then it is rejected as not usable in firewall rules (not "does not exist")
+		$this->assertNotEmpty($errors, 'a port alias must be rejected');
+		$this->assertStringContainsString('DoT/DoQ Block', $errors[0]);
+		$this->assertStringContainsString('port aliases are not allowed', $errors[0]);
 	}
 
 	public function testMultipleValidInterfacesAreAccepted(): void
