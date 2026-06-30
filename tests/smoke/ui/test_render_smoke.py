@@ -1122,3 +1122,59 @@ def test_software_log_prefills_on_plain_get(
             f"Software page pfb_output is not prefilled on plain GET: "
             f"expected seed marker {seed!r} in textarea content, got {content[:200]!r}"
         )
+
+
+_PENDING_MARKER = "/usr/local/etc/pfb_pending_changes"
+_PENDING_NEEDLE = "Pending changes will be applied on the next list update"
+
+
+def test_pending_changes_banner_tracks_the_marker(
+    smoke_vm: SmokeVM,
+    webui: WebUI,
+    php_error_log_guard: PhpErrorLogGuard,  # noqa: ARG001
+) -> None:
+    """The "pending changes" banner shows on a settings page iff there are unapplied
+    settings changes, and disappears once an Update has applied them.
+
+    A save on a deferred page (DNSBL/IP/Feeds) writes config but only the next Update
+    applies it, so the GUI flags the wait with a banner linking to the Update page. The
+    flag is the persisted marker file at ``/usr/local/etc/pfb_pending_changes``.
+
+    Scenario:
+      Given no marker (no pending changes), the DNSBL page renders WITHOUT the banner;
+      When the marker is present (settings changed, no Update run yet),
+      Then the DNSBL page renders WITH the banner + its "go to the Update tab" link.
+    Driving the marker file directly stands in for the save (which sets it) and the
+    Update (which clears it) — a genuine before/after, not a one-sided assertion.
+    """
+    path = "/pfblockerng/pfblockerng_dnsbl.php"
+    try:
+        # Given a clean state — banner ABSENT, page still renders cleanly.
+        smoke_vm.ssh("rm", "-f", _PENDING_MARKER)
+        resp = webui.get(path)
+        result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Configuration",))
+        assert result.ok, f"DNSBL render oracle failed (clean state): {result.detail}"
+        assert _PENDING_NEEDLE not in resp.text, "pending-changes banner must be ABSENT when there is no marker file"
+
+        # When settings have changed but no Update has run — banner SHOWS, with its link.
+        smoke_vm.ssh("touch", _PENDING_MARKER)
+        resp2 = webui.get(path)
+        result2 = evaluate_render(path, resp2.status_code, resp2.text, ("DNSBL Configuration",))
+        assert result2.ok, f"DNSBL render oracle failed (pending state): {result2.detail}"
+        assert _PENDING_NEEDLE in resp2.text, "pending-changes banner must SHOW when the marker file exists"
+        assert "To run an update now, go to the" in resp2.text, (
+            "pending-changes banner must carry the Update-page call to action"
+        )
+
+        # On the Update page itself ($on_update_page=TRUE) the banner SHOWS but drops the
+        # redundant self-link — exercising the other branch of pfb_print_pending_changes_box().
+        update_path = "/pfblockerng/pfblockerng_update.php"
+        resp3 = webui.get(update_path)
+        result3 = evaluate_render(update_path, resp3.status_code, resp3.text, ("Update Settings",))
+        assert result3.ok, f"Update render oracle failed (pending state): {result3.detail}"
+        assert _PENDING_NEEDLE in resp3.text, "banner must SHOW on the Update page too when pending"
+        assert "To run an update now, go to the" not in resp3.text, (
+            "on the Update page the banner must NOT carry the go-to-Update self-link"
+        )
+    finally:
+        smoke_vm.ssh("rm", "-f", _PENDING_MARKER)

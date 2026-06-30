@@ -186,6 +186,7 @@ $tab_array[]	= array(gettext('Logs'),	FALSE,	'/pfblockerng/pfblockerng_log.php')
 $tab_array[]	= array(gettext('Sync'),	TRUE,	'/pfblockerng/pfblockerng_sync.php');
 pfb_software_add_tab($tab_array);
 display_top_tabs($tab_array, TRUE);
+pfb_print_pending_changes_box();
 
 $form = new Form('Save XMLRPC sync settings');
 

@@ -105,6 +105,11 @@ $pfb['aliasarchive']	= '/usr/local/etc/aliastables.tar';
 // #468: DNSBL python-integration cache (RAM-disk /var restore). SEPARATE base from the IP
 // aliastables archive -- managed by pfb_dnsbl_cache() / 'pfblockerng.sh dnsbl_cache'.
 $pfb['dnsblarchive']	= '/usr/local/etc/pfb_dnsbl_cache.tar';
+// "Pending changes" marker (deferred DNSBL/IP/Feeds settings await the next Update). Kept in
+// /usr/local/etc, NOT $pfb['dbdir'] (/var/db): use_mfs_tmpvar RAM-disks only /var + /tmp, so a
+// marker here survives a reboot (the change really is still unapplied) until a real Update clears
+// it. See pfb_pending_changes_marker().
+$pfb['pending_marker']	= '/usr/local/etc/pfb_pending_changes';
 
 $pfb['dnsbl_tld_txt']	= "{$pfb['dnsdir']}/DNSBL_TLD.txt";
 $pfb['dnsbl_tld_data']	= '/usr/local/pkg/pfblockerng/dnsbl_tld';
@@ -3159,6 +3164,56 @@ function pfb_software_provenance_ok(): bool {
 		return $forced;
 	}
 	return pfb_software_is_our_build(pfb_pkg_installed_repo(pfb_pkg_installed_name()));
+}
+
+/*
+ * Pending-changes flag. A save on a DEFERRED settings page (DNSBL/IP/Feeds) writes config.xml
+ * but does NOT apply — only a real Update/cron pass applies it. The flag drives a GUI banner
+ * ("applies on the next Update") that stays up until a real Update runs.
+ *
+ * It is a PERSISTED marker file ($pfb['pending_marker'], in /usr/local/etc), NOT pfSense's
+ * mark_subsystem_dirty() (which stores the flag in /var/run, wiped on every reboot) and NOT
+ * $pfb['dbdir'] (/var/db, RAM-disked on use_mfs_tmpvar): pfBlockerNG only RESTORES its cache on
+ * boot (it does not re-apply config), so a reboot must NOT silently drop a still-unapplied change.
+ * /usr/local/etc survives a RAM-disk-/var reboot (only /var + /tmp are volatile), so "pending"
+ * stays true across a reboot until a genuine Update clears it.
+ *
+ * A General save ($pfb['save']=TRUE) neither applies the deferred changes nor clears this flag —
+ * only sync_package_pfblockerng() with !$pfb['save'] clears it.
+ */
+function pfb_pending_changes_marker(): string {
+	global $pfb;
+	return $pfb['pending_marker'] ?? '/usr/local/etc/pfb_pending_changes';
+}
+function pfb_mark_pending_changes(): void {
+	@touch(pfb_pending_changes_marker());
+}
+function pfb_clear_pending_changes(): void {
+	@unlink(pfb_pending_changes_marker());
+}
+function pfb_pending_changes(): bool {
+	return file_exists(pfb_pending_changes_marker());
+}
+
+/*
+ * Print the "settings changed — apply on the next Update" info banner when there are pending
+ * changes; no-op otherwise. Call immediately after display_top_tabs() on each pfBlockerNG page.
+ * $on_update_page drops the redundant cross-link when already on the Update page.
+ */
+function pfb_print_pending_changes_box(bool $on_update_page = FALSE): void {
+	if (!pfb_pending_changes()) {
+		return;
+	}
+	$msg = gettext('Pending changes will be applied on the next list update.');
+	if ($on_update_page) {
+		$msg .= ' ' . gettext('Use the Run Now function below to apply them now.');
+	} else {
+		$msg .= ' ' . sprintf(
+			gettext('To run an update now, go to the %s tab and use the Run Now function.'),
+			'<a href="/pfblockerng/pfblockerng_update.php">' . gettext('Update') . '</a>'
+		);
+	}
+	print_info_box($msg, 'warning');
 }
 
 /*
@@ -16566,6 +16621,14 @@ function sync_package_pfblockerng($cron='') {
 	// this marker; emitting it before the hooks truncated their progressive output
 	// from the live view (e.g. a HAProxy reload hook running up to its timeout) -- it
 	// then only reappeared on a manual 'View'.
+	// A real Update pass (NOT a settings-save sync, $pfb['save']) has rebuilt from the current
+	// config, so any deferred-settings changes are now applied: clear the GUI "pending changes"
+	// banner. A General-page save ($pfb['save']=TRUE) deliberately does not reach this, so its
+	// changes stay flagged until a genuine cron/Run-Now Update applies them.
+	if (!$pfb['save']) {
+		pfb_clear_pending_changes();
+	}
+
 	if ($pfb['enable'] == 'on' && !$pfb['save'] || $pfb['summary']) {
 		pfb_logger("\n UPDATE PROCESS ENDED [ NOW ]\n", 1);
 	}

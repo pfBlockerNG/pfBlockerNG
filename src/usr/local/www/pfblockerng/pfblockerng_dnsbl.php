@@ -888,6 +888,7 @@ if ($_POST) {
 			PfbConfig::write('dnsbl_dot_block_floating', pfb_filter($_POST['dnsbl_dot_block_floating'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '');
 
 			write_config('[pfBlockerNG] save DNSBL settings');
+			pfb_mark_pending_changes();	// applies on the next Update, not on save
 			if ($savemsg) {
 				header("Location: /pfblockerng/pfblockerng_dnsbl.php?savemsg={$savemsg}");
 			} else {
@@ -930,6 +931,7 @@ $tab_array[]	= array(gettext('DNSBL Groups'),	FALSE,		'/pfblockerng/pfblockerng_
 $tab_array[]	= array(gettext('DNSBL Category'),	FALSE,		'/pfblockerng/pfblockerng_blacklist.php');
 $tab_array[]	= array(gettext('DNSBL SafeSearch'),	FALSE,		'/pfblockerng/pfblockerng_safesearch.php');
 display_top_tabs($tab_array, TRUE);
+pfb_print_pending_changes_box();
 
 if (isset($_REQUEST['savemsg'])) {
 	$savemsg = htmlspecialchars($_REQUEST['savemsg']);

@@ -164,6 +164,7 @@ if (!empty($action) && isset($gtype) && isset($rowid)) {
 					config_del_path("{$rowdata_path}/{$rowid}");
 				}
 				write_config("pfBlockerNG: Removed [ {$type} | {$name} ]", FALSE);
+				pfb_mark_pending_changes();	// applies on the next Update, not on save
 				$savemsg = "Removed [ Type: {$type}, Name: {$name} ]";
 			} else {
 				$savemsg = "Could not delete [ Type: {$type}, Name: {$name} ], not found";
@@ -309,6 +310,7 @@ if (!empty($action) && isset($gtype) && isset($rowid)) {
 				// Save postdata and Table re-ordering
 				if (!$input_errors) {
 					write_config("pfBlockerNG: Saved page order format/settings for [ {$type} ]", FALSE);
+					pfb_mark_pending_changes();	// applies on the next Update, not on save
 				} else {
 					// return errors to AJAX request
 					print(json_encode($input_errors));
@@ -361,6 +363,7 @@ else {
 	$tab_array[]	= array(gettext('DNSBL SafeSearch'),	FALSE,			'/pfblockerng/pfblockerng_safesearch.php');
 }
 display_top_tabs($tab_array, TRUE);
+pfb_print_pending_changes_box();
 
 if (isset($savemsg)) {
 	print_info_box($savemsg, 'success');

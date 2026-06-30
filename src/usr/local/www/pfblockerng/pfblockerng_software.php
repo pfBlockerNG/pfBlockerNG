@@ -187,6 +187,7 @@ $tab_array[]	= array(gettext('Logs'),	FALSE,	'/pfblockerng/pfblockerng_log.php')
 $tab_array[]	= array(gettext('Sync'),	FALSE,	'/pfblockerng/pfblockerng_sync.php');
 pfb_software_add_tab($tab_array, TRUE);
 display_top_tabs($tab_array, TRUE);
+pfb_print_pending_changes_box();
 
 // Channel + installed version are read LIVE (local `pkg query`, no network) so they are
 // always known on an installed box. Only the our-repo "latest" + status + last-checked come

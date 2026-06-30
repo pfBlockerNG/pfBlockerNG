@@ -327,6 +327,7 @@ else {
 	pfb_software_add_tab($tab_array);
 	$tab_array[]	= array(gettext('Wizard'),	FALSE,	'/wizard.php?xml=pfblockerng_wizard.xml');
 	display_top_tabs($tab_array, TRUE);
+	pfb_print_pending_changes_box();
 }
 
 $form = new Form('Save');

@@ -1976,6 +1976,7 @@ if ($_POST) {
 
 			config_set_path("installedpackages/{$conf_type}/config/0", $pfb['geoipconfig']);
 			write_config("[pfBlockerNG] save GeoIP [ {$continent_display} ] settings");
+			pfb_mark_pending_changes();	// applies on the next Update, not on save
 			header("Location: /pfblockerng/pfblockerng_{$continent_en}.php");
 			exit;
 		}
@@ -2023,6 +2024,7 @@ $tab_array[]	= array(gettext('Oceania'),		$active['Oceania']		?: FALSE,	'/pfbloc
 $tab_array[]	= array(gettext('South America'),	$active['South America']	?: FALSE,	'/pfblockerng/pfblockerng_South_America.php');
 $tab_array[]	= array(gettext('Proxy and Satellite'),	$active['Proxy and Satellite']	?: FALSE,	'/pfblockerng/pfblockerng_Proxy_and_Satellite.php');
 display_top_tabs($tab_array, TRUE);
+pfb_print_pending_changes_box();
 
 $form = new Form('Save');
 
@@ -2523,6 +2525,7 @@ if ($_POST) {
 
 			config_set_path('installedpackages/pfblockerngreputation/config/0', $pfb['repconfig']);
 			write_config('[pfBlockerNG] save Reputation settings');
+			pfb_mark_pending_changes();	// applies on the next Update, not on save
 			header('Location: /pfblockerng/pfblockerng_reputation.php');
 			exit;
 		}
@@ -2559,6 +2562,7 @@ $tab_array[]	= array(gettext('IPv6'),	FALSE,	'/pfblockerng/pfblockerng_category.
 $tab_array[]	= array(gettext('GeoIP'),       FALSE,	'/pfblockerng/pfblockerng_category.php?type=geoip');
 $tab_array[]	= array(gettext('Reputation'),  TRUE,	'/pfblockerng/pfblockerng_reputation.php');
 display_top_tabs($tab_array, TRUE);
+pfb_print_pending_changes_box();
 
 $form = new Form('Save');
 
