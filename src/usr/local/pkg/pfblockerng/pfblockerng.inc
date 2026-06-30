@@ -1390,10 +1390,10 @@ function pfb_validate_vips(string $interface, string|null $vip4 = '', string|nul
 	}
 
 	if ($enabled4 && ($interface != get_configured_vip_interface($vip4))) {
-		return [FALSE, sprintf(gettext('IPv4 VIP not on interface %s'), convert_friendly_interface_to_friendly_descr($interface))];
+		return [FALSE, sprintf(gettext('IPv4 VIP not found on interface %s'), convert_friendly_interface_to_friendly_descr($interface))];
 	}
 	if ($enabled6 && ($interface != get_configured_vip_interface($vip6))) {
-		return [FALSE, sprintf(gettext('IPv6 VIP not on interface %s'), convert_friendly_interface_to_friendly_descr($interface))];
+		return [FALSE, sprintf(gettext('IPv6 VIP not found on interface %s'), convert_friendly_interface_to_friendly_descr($interface))];
 	}
 
 	$vips = pfb_get_vips();
@@ -1898,7 +1898,7 @@ function pfb_global() {
 				// interface during this same update pass. A stale / missing / wrong-interface
 				// manual reference must NOT force-disable DNSBL here, or the auto bootstrap
 				// can never run (mode would compute to 'disabled' and creation would be skipped).
-				pfb_logger("\nDNSBL auto-VIP: VIP validation deferred to auto-create ({$vips_valid_result[1]})", 1);
+				pfb_logger("\nDNSBL auto-VIP: VIP validation deferred to auto-create ({$vips_valid_result[1]})\n", 1);
 			} else {
 				// Manual mode: a genuinely invalid/missing/mismatched VIP disables DNSBL.
 				$pfb['dnsbl'] = '';
