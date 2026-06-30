@@ -911,8 +911,8 @@ def test_log_output_prefill_gating(smoke_vm: SmokeVM, webui: WebUI, php_error_lo
     sw_marker = f"pfb-sw-prefill-{uuid.uuid4().hex[:8]}"
     upd_marker = f"pfb-upd-prefill-{uuid.uuid4().hex[:8]}"
     with software_panel_forced(smoke_vm, "on"):
-        _seed_vm_file(smoke_vm, "/var/log/pfblockerng/software.log", sw_marker + "\n")
-        _seed_vm_file(smoke_vm, helpers.PFB_LOG, upd_marker + "\n")
+        _seed_vm_file(smoke_vm, _SOFTWARE_LOG, sw_marker + "\n")
+        _seed_vm_file(smoke_vm, _PFB_LOG, upd_marker + "\n")
 
         # Software, plain GET → no prefill.
         body = webui.get(_SOFTWARE_PAGE).text
@@ -1122,93 +1122,6 @@ def test_software_textareas_are_readonly(
             assert re.search(r"\breadonly\b", tag), (
                 f"Software page '{name}' textarea is editable (no readonly attribute): {tag!r}"
             )
-
-
-@pytest.mark.ui_e2e
-def test_update_log_prefills_on_plain_get(
-    smoke_vm: SmokeVM,
-    webui: WebUI,
-    php_error_log_guard: PhpErrorLogGuard,  # noqa: ARG001
-) -> None:
-    """A plain GET of the Update page prefills pfb_output with the last log tail.
-
-    Scenario: After seeding the pfBlockerNG log, a fresh plain GET shows the content.
-      Given a known marker line appended to /var/log/pfblockerng/pfblockerng.log on the VM,
-      When the Update page is GET with no POST parameters,
-      Then the pfb_output textarea's initial value contains the seeded marker.
-
-    Fail-before / pass-after: before this change pfb_output was always rendered empty
-    (value=NULL) on a plain GET, so the textarea content would be blank and the seeded
-    marker absent. After the fix, pfb_log_tail() prefills it, so the marker appears.
-
-    Multi-step (seed → GET) classifies as Tier B per the CLAUDE.md mandate.
-    """
-    seed = f"pfb-update-log-prefill-{uuid.uuid4().hex}"
-    pat = r'<textarea\b[^>]*name="pfb_output"[^>]*>(.*?)</textarea>'
-
-    # Before seeding: the unique marker is ABSENT — proves the prefill caused it (not a
-    # pre-existing log line), and is robust to a re-run on the same VM where tail -a accumulates.
-    m_before = re.search(pat, webui.get(_UPDATE_PAGE).text, re.DOTALL)
-    assert m_before is not None, "Update page is missing the pfb_output textarea (before seed)"
-    assert seed not in m_before.group(1), (
-        f"seed marker {seed!r} already present before seeding — test is not self-proving"
-    )
-
-    # After seeding the log: a plain GET prefills pfb_output with the tail (marker now present).
-    _seed_vm_file(smoke_vm, _PFB_LOG, seed + "\n")
-    m = re.search(pat, webui.get(_UPDATE_PAGE).text, re.DOTALL)
-    assert m is not None, "Update page is missing the pfb_output textarea in the rendered body"
-    content = m.group(1)
-    assert seed in content, (
-        f"Update page pfb_output is not prefilled on plain GET: "
-        f"expected seed marker {seed!r} in textarea content, got {content[:200]!r}"
-    )
-
-
-@pytest.mark.ui_e2e
-def test_software_log_prefills_on_plain_get(
-    smoke_vm: SmokeVM,
-    webui: WebUI,
-    php_error_log_guard: PhpErrorLogGuard,  # noqa: ARG001
-) -> None:
-    """A plain GET of the Software page prefills pfb_output from software.log.
-
-    Scenario: After seeding /var/log/pfblockerng/software.log, a fresh plain GET shows
-    that content in the pfb_output textarea.
-      Given a known marker line written to software.log on the VM,
-      When the Software page is GET (override gate forced on),
-      Then the pfb_output textarea's initial value contains the seeded marker.
-
-    Fail-before / pass-after: before this change pfb_output was rendered empty on a
-    plain GET (value=NULL). After the fix, pfb_log_tail() reads software.log and prefills
-    the textarea, so the seeded marker appears. A real pkg upgrade is too heavy to
-    simulate in this suite, so the seed-file approach exercises the full prefill path.
-
-    Multi-step (seed → GET) classifies as Tier B per the CLAUDE.md mandate.
-    """
-    seed = f"pfb-software-log-prefill-{uuid.uuid4().hex}"
-    pat = r'<textarea\b[^>]*name="pfb_output"[^>]*>(.*?)</textarea>'
-    with software_panel_forced(smoke_vm, "on"):
-        # Before seeding: the unique marker is ABSENT (self-proving + same-VM re-run safe).
-        m_before = re.search(pat, webui.get(_SOFTWARE_PAGE).text, re.DOTALL)
-        assert m_before is not None, "Software page is missing the pfb_output textarea (before seed)"
-        assert seed not in m_before.group(1), (
-            f"seed marker {seed!r} already present before seeding — test is not self-proving"
-        )
-
-        # After seeding software.log: a plain GET prefills pfb_output with its tail.
-        _seed_vm_file(smoke_vm, _SOFTWARE_LOG, seed + "\n")
-        m = re.search(pat, webui.get(_SOFTWARE_PAGE).text, re.DOTALL)
-        assert m is not None, "Software page is missing the pfb_output textarea in the rendered body"
-        content = m.group(1)
-        assert seed in content, (
-            f"Software page pfb_output is not prefilled on plain GET: "
-            f"expected seed marker {seed!r} in textarea content, got {content[:200]!r}"
-        )
-
-        # The prefilled output auto-scrolls to the bottom on load (issue: log auto-scroll).
-        # Reuse the page already fetched for the prefill check above (m.string) — no extra GET.
-        assert "Show the newest lines:" in m.string, "Software page is missing the prefilled-output auto-scroll snippet"
 
 
 _PENDING_MARKER = "/usr/local/etc/pfb_pending_changes"
