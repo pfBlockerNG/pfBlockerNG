@@ -354,31 +354,42 @@ def test_software_uninstall_confirm_gate(
         # break every subsequent test in this smoke run.
 
 
-def test_software_output_prefill_scrolls_to_bottom(
+def test_software_output_prefill_only_after_upgrade(
     smoke_vm: SmokeVM,
     browser_page: Page,
     webui: WebUI,
 ) -> None:
-    """The prefilled Software output textarea auto-scrolls to the newest lines on load.
+    """The Software output prefill+auto-scroll is gated on the post-upgrade reload (#666).
 
-    Scenario (log auto-scroll): the streamed update/uninstall paths scroll as they write,
-    but a plain GET prefilled the output and left it at the top — burying the latest lines.
+    The output is prefilled with the last software.log tail (and scrolled to the newest lines)
+    ONLY when the page is the reload right after a successful upgrade — which redirects here
+    with ``?postupgrade=1``. A normal visit to the tab leaves the output empty.
 
+    Scenario (post-upgrade prefill):
       Given software.log seeded with more lines than the textarea shows at once,
-      When the Software page is opened in the browser (plain-GET prefill),
-      Then pfb_output is scrolled to the bottom (newest lines visible), not left at the top.
+      When the Software page is opened WITHOUT the marker -> pfb_output is EMPTY (no prefill);
+      When opened WITH ``?postupgrade=1`` -> pfb_output is prefilled AND scrolled to the bottom.
 
-    Fail-before / pass-after: before the auto-scroll snippet the prefilled textarea loads at
-    scrollTop 0; after, it lands at the bottom. The Update page uses the byte-identical
-    snippet, guarded at the render tier by its "Show the newest lines:" marker.
+    Both branches are asserted, so green proves the param — not pre-existing state — drives the
+    prefill (fail-before: the old code prefilled on every plain GET).
     """
     page = browser_page
     # Seed enough distinct lines to overflow the textarea so a scroll is observable.
     seed = "".join(f"pfb-autoscroll-line-{i:03d}\n" for i in range(1, 81))
     with software_panel_forced(smoke_vm, "on"):
         _seed_vm_file(smoke_vm, "/var/log/pfblockerng/software.log", seed)
-        _open(page, webui, SOFTWARE_PAGE)
 
+        # WITHOUT the marker: a normal visit must NOT prefill the output.
+        _open(page, webui, SOFTWARE_PAGE)
+        empty_val = page.locator('textarea[name="pfb_output"]').input_value()
+        assert empty_val == "", f"a normal Software visit must not prefill pfb_output, got {empty_val!r}"
+
+        # WITH ?postupgrade=1: prefilled with the log tail AND scrolled to the bottom.
+        _open(page, webui, f"{SOFTWARE_PAGE}?postupgrade=1")
+        val = page.locator('textarea[name="pfb_output"]').input_value()
+        assert "pfb-autoscroll-line-080" in val, (
+            "the post-upgrade reload must prefill pfb_output with the software.log tail"
+        )
         metrics = page.locator('textarea[name="pfb_output"]').evaluate(
             "el => ({ top: el.scrollTop, sh: el.scrollHeight, ch: el.clientHeight })"
         )
@@ -387,8 +398,32 @@ def test_software_output_prefill_scrolls_to_bottom(
             f"(scrollHeight={metrics['sh']} clientHeight={metrics['ch']}); seed more lines"
         )
         # At the bottom: scrollTop within a few px of (scrollHeight - clientHeight), and
-        # strictly > 0 (proving it scrolled rather than loading at the top — the pre-fix state).
+        # strictly > 0 (proving it scrolled rather than loading at the top).
         bottom = metrics["sh"] - metrics["ch"]
         assert metrics["top"] > 0 and metrics["top"] >= bottom - 4, (
             f"prefilled output not scrolled to bottom: expected scrollTop≈{bottom}, got {metrics['top']}"
         )
+
+
+def test_update_output_is_not_prefilled(
+    smoke_vm: SmokeVM,
+    browser_page: Page,
+    webui: WebUI,
+) -> None:
+    """The Update page no longer prefills the output textarea on a plain GET (#666).
+
+      Given the pfBlockerNG log seeded with content,
+      When the Update page is opened on a plain GET (no run / view / in-progress update),
+      Then pfb_output is EMPTY — the last log tail is no longer prefilled.
+
+    Fail-before / pass-after: the old code prefilled pfb_output with the log tail on a plain
+    GET; now it starts empty (use the View button to inspect the log). The seeded marker proves
+    the textarea is empty by choice, not because the log is empty.
+    """
+    page = browser_page
+    seed = "".join(f"pfb-update-noprefill-{i:03d}\n" for i in range(1, 41))
+    _seed_vm_file(smoke_vm, "/var/log/pfblockerng/pfblockerng.log", seed)
+
+    _open(page, webui, UPDATE_PAGE)
+    val = page.locator('textarea[name="pfb_output"]').input_value()
+    assert val == "", f"the Update page must not prefill pfb_output on a plain GET, got {val!r}"
