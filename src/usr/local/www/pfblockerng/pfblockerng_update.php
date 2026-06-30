@@ -41,13 +41,12 @@ require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
 global $pfb;
 pfb_global();
 
-// Collect pfBlockerNG log file and post live output to terminal window.
+// Collect pfBlockerNG log file and post live output to terminal window. pfb_livetail() streams
+// whole-line deltas, so each call APPENDS to the terminal (the text carries its own newlines).
 function pfbupdate_output($text) {
-	$text = htmlspecialchars(str_replace("\n", "\\n", $text), ENT_COMPAT);
 	print("\n<script type=\"text/javascript\">");
 	print("\n//<![CDATA[");
-	print("\nthis.document.forms[0].pfb_output.value = \"" . $text . "\";");
-	print("\nthis.document.forms[0].pfb_output.scrollTop = this.document.forms[0].pfb_output.scrollHeight;");
+	print("\n" . pfb_term_write_js('pfb_output', $text, TRUE));
 	print("\n//]]>");
 	print("\n</script>");
 	/* ensure that contents are written out */
@@ -57,10 +56,9 @@ function pfbupdate_output($text) {
 
 // Post status message to terminal window.
 function pfbupdate_status($status) {
-	$status = htmlspecialchars(str_replace("\n", "\\n", $status), ENT_COMPAT);
 	print("\n<script type=\"text/javascript\">");
 	print("\n//<![CDATA[");
-	print("\nthis.document.forms[0].pfb_status.value=\"" . $status . "\";");
+	print("\nthis.document.forms[0].pfb_status.value = " . pfb_js_string($status) . ";");
 	print("\n//]]>");
 	print("\n</script>");
 	/* ensure that contents are written out */

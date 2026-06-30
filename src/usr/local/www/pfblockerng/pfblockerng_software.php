@@ -68,13 +68,13 @@ $pfb_sw_check_raw = PfbConfig::read('pfb_software_check');
 $pfb_sw_check	= pfb_software_check_enabled(is_string($pfb_sw_check_raw) ? $pfb_sw_check_raw : null);
 
 
-// Stream one line to the live terminal window (reuses the _update.php mechanic).
+// Stream one line to the live terminal window (reuses the _update.php mechanic). The caller
+// passes a newline-stripped line, so append it with its own line break (the helper appends the
+// text verbatim).
 function pfb_software_output($text) {
-	$text = htmlspecialchars(str_replace("\n", "\\n", $text), ENT_COMPAT);
 	print("\n<script type=\"text/javascript\">");
 	print("\n//<![CDATA[");
-	print("\nthis.document.forms[0].pfb_output.value += \"" . $text . "\\n\";");
-	print("\nthis.document.forms[0].pfb_output.scrollTop = this.document.forms[0].pfb_output.scrollHeight;");
+	print("\n" . pfb_term_write_js('pfb_output', $text . "\n", TRUE));
 	print("\n//]]>");
 	print("\n</script>");
 	ob_flush();
@@ -84,10 +84,9 @@ function pfb_software_output($text) {
 
 // Post a one-line status to the terminal status window.
 function pfb_software_status($status) {
-	$status = htmlspecialchars(str_replace("\n", "\\n", $status), ENT_COMPAT);
 	print("\n<script type=\"text/javascript\">");
 	print("\n//<![CDATA[");
-	print("\nthis.document.forms[0].pfb_status.value=\"" . $status . "\";");
+	print("\nthis.document.forms[0].pfb_status.value = " . pfb_js_string($status) . ";");
 	print("\n//]]>");
 	print("\n</script>");
 	ob_flush();
