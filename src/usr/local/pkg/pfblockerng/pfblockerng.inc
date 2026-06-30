@@ -11813,6 +11813,37 @@ function pfb_update_autotail(bool $task_running, bool $run_dispatch, bool $logvi
 }
 
 
+// Encode a string as a JavaScript string literal (including the surrounding double quotes) for
+// assignment to a textarea's plain-text .value. json_encode gives correct JS-string escaping --
+// unlike htmlspecialchars(), which HTML-entity-escapes (so a '>' would render as a literal
+// '&gt;' in the .value) and leaves backslashes unescaped (a log line ending in '\' could break
+// out of the literal). JSON_HEX_TAG/AMP/APOS/QUOT neutralise a '</script>' or quote breakout;
+// JSON_INVALID_UTF8_SUBSTITUTE keeps invalid bytes in log data from making json_encode return
+// FALSE (the fallback is an empty literal).
+function pfb_js_string(string $text): string {
+	$json = json_encode($text, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE);
+	return ($json === FALSE) ? '""' : $json;
+}
+
+
+// Build the JS that writes $text into the named live-terminal textarea and follows the tail.
+// Auto-follow is "sticky": the scroll position is measured BEFORE the value changes, and the box
+// is re-pinned to the bottom ONLY when the user was already at the bottom -- so scrolling up to
+// read older lines pauses the follow instead of being snapped back on every streamed refresh, and
+// scrolling back to the bottom resumes it. $append adds the text to the end (the live tail streams
+// deltas); otherwise it replaces the whole value (a single status line). Newlines belong to $text
+// -- the caller owns them -- so a delta that already ends in "\n" is appended verbatim.
+function pfb_term_write_js(string $field, string $text, bool $append = FALSE): string {
+	$el  = "this.document.forms[0].{$field}";
+	$lit = pfb_js_string($text);
+	$set = $append ? "{$el}.value += {$lit};" : "{$el}.value = {$lit};";
+	return
+		"var _pfb_atbottom = ({$el}.scrollHeight - {$el}.scrollTop - {$el}.clientHeight) <= 16;\n" .
+		"{$set}\n" .
+		"if (_pfb_atbottom) { {$el}.scrollTop = {$el}.scrollHeight; }";
+}
+
+
 // Read logfile in realtime (livetail)
 // Reference: http://stackoverflow.com/questions/3218895/php-how-to-read-a-file-live-that-is-constantly-being-written-to
 function pfb_livetail($logfile, $mode, $pidfile = '') {
@@ -11822,18 +11853,12 @@ function pfb_livetail($logfile, $mode, $pidfile = '') {
 		touch("{$logfile}");
 	}
 
-	$len		= @filesize("{$logfile}");	// Start at EOF
-	$lastpos_old	= $pfb_output = '';
+	$len = @filesize("{$logfile}");	// Start at EOF
 
 	if ($mode == 'view') {
-		// Start at EOF ( - 15000)
-		if ($len > 15000) {
-			$lastpos = ($len - 15000);
-		} else {
-			$lastpos = 0;
-		}
-	}
-	else {
+		// Start ~15000 bytes back so the viewer opens on recent history.
+		$lastpos = ($len > 15000) ? ($len - 15000) : 0;
+	} else {
 		$lastpos = $len;
 	}
 
@@ -11845,8 +11870,15 @@ function pfb_livetail($logfile, $mode, $pidfile = '') {
 	// (or seeing the pid) ends the tail as soon as the process is gone, and the log streams
 	// every cycle regardless, so the page is never held blank.
 	$seen_running	= FALSE;
+	$saw_output	= FALSE;
 	$startup_cycles	= 0;
 	$startup_grace	= 10;	// ~3s at 0.3s/cycle
+
+	// Bytes read but not yet streamed. The terminal appends each delta, so a delta must be WHOLE
+	// lines: we hold back any trailing partial line until its newline arrives. Streaming a partial
+	// line could split a multibyte UTF-8 char across two appends -> a permanent replacement-char
+	// artifact the append-only textarea can never repair.
+	$pending = '';
 
 	while (TRUE) {
 		usleep(300000); //0.3s
@@ -11854,55 +11886,74 @@ function pfb_livetail($logfile, $mode, $pidfile = '') {
 		$len = @filesize("{$logfile}");
 
 		if ($len < $lastpos) {
-			$lastpos = $len;	// File deleted or reset
-		}
-		else {
-			$f = @fopen("{$logfile}", 'rb+');
+			$lastpos = $len;	// File deleted/rotated -- resync to the new EOF.
+			$pending = '';
+		} elseif ($len > $lastpos) {
+			$f = @fopen("{$logfile}", 'rb');
 			if ($f === FALSE) {
 				break;
 			}
 			@fseek($f, $lastpos);
-
 			while (!feof($f)) {
-				$pfb_buffer = @fread($f, 2048);
-				$pfb_output .= str_replace( array ("\r", "\")"), '', $pfb_buffer);
-				// Refresh on new lines only. This allows Scrolling.
-				if ($lastpos != $lastpos_old) {
-					pfbupdate_output($pfb_output);
+				$buf = @fread($f, 8192);
+				if ($buf === FALSE) {
+					break;
 				}
-				$lastpos_old = $lastpos;
+				$pending .= $buf;
+			}
+			$lastpos = @ftell($f);
+			@fclose($f);
+
+			// Stream up to the last complete line; keep the trailing partial for the next cycle.
+			$nl = strrpos($pending, "\n");
+			if ($nl !== FALSE) {
+				$delta   = str_replace("\r", '', substr($pending, 0, $nl + 1));
+				$pending = substr($pending, $nl + 1);
+				if ($delta !== '') {
+					pfbupdate_output($delta);
+					$saw_output = TRUE;
+					ob_flush();
+					flush();
+				}
+			}
+		}
+
+		// Terminate the Run-Now tail when the dispatched process exits -- the process itself is
+		// the completion signal (its pidfile, via isvalidpid), replacing the brittle
+		// 'UPDATE PROCESS ENDED' log-string probe. 'view' is a passive live viewer: it streams
+		// until the client disconnects, so it never stops here.
+		if ($mode != 'view' &&
+		    pfb_livetail_force_done(isvalidpid($pidfile), $saw_output, $seen_running, $startup_cycles, $startup_grace)) {
+			// Final drain: capture anything written between the last read and the process exit,
+			// then flush the remainder including a final line with no trailing newline.
+			clearstatcache(FALSE, "{$logfile}");
+			$len = @filesize("{$logfile}");
+			if ($len > $lastpos) {
+				$f = @fopen("{$logfile}", 'rb');
+				if ($f !== FALSE) {
+					@fseek($f, $lastpos);
+					while (!feof($f)) {
+						$buf = @fread($f, 8192);
+						if ($buf === FALSE) {
+							break;
+						}
+						$pending .= $buf;
+					}
+					$lastpos = @ftell($f);
+					@fclose($f);
+				}
+			}
+			$tail = str_replace("\r", '', $pending);
+			if ($tail !== '') {
+				pfbupdate_output($tail);
+				$pending = '';
 				ob_flush();
 				flush();
 			}
 
-			$lastpos = @ftell($f);
-			if ($f) {
-				@fclose($f);
-			}
-
-			// Terminate the Run-Now tail when the dispatched process exits -- the process
-			// itself is the completion signal (its pidfile, via isvalidpid), replacing the
-			// brittle 'UPDATE PROCESS ENDED' log-string probe. 'view' is a passive live
-			// viewer: it streams until the client disconnects, so it never stops here.
-			if ($mode != 'view' &&
-			    pfb_livetail_force_done(isvalidpid($pidfile), $pfb_output !== '', $seen_running, $startup_cycles, $startup_grace)) {
-				// Capture remaining output, run log mgmt, end the tail.
-				$f = @fopen($pfb['log'], 'rb');
-				if ($f !== FALSE) {
-					@fseek($f, $lastpos);
-					$pfb_buffer = @fread($f, 2048);
-					$pfb_output .= str_replace("\r", '', $pfb_buffer);
-					pfbupdate_output($pfb_output);
-					clearstatcache(FALSE, $pfb['log']);
-					ob_flush();
-					flush();
-					@fclose($f);
-				}
-
-				// Call log mgmt function
-				pfb_log_mgmt();
-				break;
-			}
+			// Call log mgmt function
+			pfb_log_mgmt();
+			break;
 		}
 	}
 }
