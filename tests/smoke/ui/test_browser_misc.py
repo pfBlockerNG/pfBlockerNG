@@ -353,3 +353,46 @@ def test_update_output_is_not_prefilled(
     _open(page, webui, UPDATE_PAGE)
     val = page.locator('textarea[name="pfb_output"]').input_value()
     assert val == "", f"the Update page must not prefill pfb_output on a plain GET, got {val!r}"
+
+
+@pytest.mark.ui_browser
+def test_update_runnow_does_not_scroll_the_page(
+    smoke_vm: SmokeVM,
+    browser_page: Page,
+    webui: WebUI,
+) -> None:
+    """Clicking Run Now must not auto-scroll the whole page to the bottom (matches View).
+
+    Run Now reloads into the AJAX poll tail, which sticky-follows the live log WITHIN the
+    output box. A leftover jQuery handler additionally animated the ENTIRE page to the
+    document bottom on '#run' click (View had no such handler), yanking the page down and
+    leaving the reloaded page scrolled off the top. This pins that the page stays put.
+
+    Fail-before / pass-after: with the old '#run' bottom-animate handler present the window
+    scrolls down after the click; with it removed the offset stays at the top.
+
+    Scenario:
+      Given the Update page loaded at the top and tall enough to scroll,
+      When Run Now is clicked (its form submit suppressed so the on-click page animation is
+           observed in isolation — no real update run is dispatched on the VM),
+      Then the window scroll offset stays at the top (no whole-page auto-scroll).
+    """
+    page = browser_page
+    _open(page, webui, UPDATE_PAGE)
+
+    # Precondition: the page must actually be scrollable, else a no-scroll assertion is vacuous.
+    scrollable = page.evaluate("document.documentElement.scrollHeight > window.innerHeight + 50")
+    assert scrollable, "Update page is not tall enough to scroll — cannot assert no auto-scroll"
+
+    # Suppress the POST navigation so the (old) on-click animation is observed alone and no
+    # real run is dispatched; the click handler under test still fires either way.
+    page.evaluate("document.forms[0].addEventListener('submit', e => e.preventDefault(), true)")
+    assert page.evaluate("window.pageYOffset") == 0, "the page should start at the top"
+
+    page.locator('button[name="run"], #run').first.click()
+    # Bounded wait to prove ABSENCE of the scroll: outlast the old 2000ms animate window so a
+    # regression would have moved the page by the time we read the offset.
+    page.wait_for_timeout(2500)
+
+    offset = page.evaluate("window.pageYOffset")
+    assert offset == 0, f"Run Now must not auto-scroll the page; expected top (0), got pageYOffset={offset}"
