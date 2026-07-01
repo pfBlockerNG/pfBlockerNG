@@ -7905,6 +7905,51 @@ function pfb_alias_delta_mode_install_default($gconfig) {
 }
 
 
+// #687: grandfather decision for the "Keep enabled during version upgrades" toggle at
+// install/upgrade. $gconfig is the existing General-settings 'config/0' node (null on a fresh,
+// never-configured install). A NEW install takes the registry absent-default 'on' (stay active
+// across upgrades by default); an already-configured install that has not yet seen the key is
+// pinned to 'off' -- preserving its prior teardown-on-removal behaviour and the safe stock-Package-
+// Manager-uninstall path for existing operators. Run-once + idempotent: once the key is set (any
+// value) it returns NULL, so a later save never overrides an operator's explicit choice.
+function pfb_keep_on_upgrade_install_default($gconfig) {
+
+	if (is_array($gconfig) && !isset($gconfig['pfb_keep_on_upgrade'])) {
+		return 'off';
+	}
+	return NULL;
+}
+
+
+// #687: the intent marker the Software-page Uninstall drops (via ?do=uninstall) before handing off
+// to pfSense's Package Manager, so the pre-deinstall knows THIS removal is a real uninstall (full
+// teardown) rather than a version/OS upgrade. A plain flag file under /var/run (tmpfs); consumed +
+// removed by the pre-deinstall, and also cleared on a normal Software-page load so a cancelled
+// confirm cannot leave it stale.
+function pfb_full_uninstall_marker_file(): string {
+	return '/var/run/pfb_full_uninstall';
+}
+
+
+// #687: decide whether the pre-deinstall performs a FULL teardown (turn pfBlockerNG OFF + remove
+// live objects) or SKIPS it to keep pfBlockerNG active across a version/OS upgrade. Pure decision,
+// no I/O -- pfSense cannot distinguish an upgrade from a real uninstall in the pre-deinstall, so the
+// user's settings + the explicit-intent marker decide, never upgrade-detection:
+//   * keep-settings OFF -> FULL teardown (settings are going away, cleanup is mandatory);
+//   * the Software-page "Uninstall" intent marker present -> FULL teardown (explicit removal);
+//   * otherwise the "Keep enabled during version upgrades" toggle: ON skips teardown, OFF tears down.
+// Only keep-on + toggle-on + no-marker skips teardown.
+function pfb_deinstall_full_teardown(bool $keep_settings, bool $keep_on_upgrade, bool $intentional): bool {
+	if (!$keep_settings) {
+		return TRUE;
+	}
+	if ($intentional) {
+		return TRUE;
+	}
+	return !$keep_on_upgrade;
+}
+
+
 // ADR-02: one-time upgrade migration for the DNSBL python-only mode. $dconfig is the
 // existing DNSBL-settings 'config/0' node. Forces 'dnsbl_mode' to 'dnsbl_python' and
 // 'pfb_py_block' to 'on'. Idempotent: returns NULL when both keys already carry the target
@@ -16919,6 +16964,23 @@ function sync_package_pfblockerng($cron='') {
 function pfblockerng_php_pre_deinstall_command() {
 	require_once('config.inc');
 	global $g, $pfb;
+
+	// #687: decide whether to fully tear pfBlockerNG down, or keep it live across a version/OS
+	// upgrade. pfSense cannot tell an upgrade from a real uninstall here, so the user's settings
+	// decide (no upgrade-detection). Consume the Software-page "Uninstall" intent marker here so it
+	// never lingers, then apply the pure decision ladder.
+	$keep_settings   = (PfbConfig::read('pfb_keep') === PfbLenient::On);
+	$keep_on_upgrade = (PfbConfig::read('pfb_keep_on_upgrade') === PfbLenient::On);
+	$intentional     = @file_exists(pfb_full_uninstall_marker_file());
+	@unlink(pfb_full_uninstall_marker_file());
+
+	if (!pfb_deinstall_full_teardown($keep_settings, $keep_on_upgrade, $intentional)) {
+		// Keep pfBlockerNG active across the upgrade: run NO disable pass and NO teardown, so its
+		// rules / DNSBL / Unbound integration stay live until the reinstall's resync re-applies.
+		// No PFB_PRE_UNINSTALL hooks fire (nothing changed); settings are preserved (keep=on here).
+		update_status("Keeping pfBlockerNG active across the upgrade (per 'Keep enabled during version upgrades').\n");
+		return;
+	}
 
 	// Set these two variables to disable pfBlockerNG on de-install. pfb_global() turns the
 	// install/reinstall flag into enable/dnsbl='' (2129), so this runs a full DISABLE pass --

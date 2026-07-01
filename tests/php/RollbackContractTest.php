@@ -794,13 +794,15 @@ final class RollbackContractTest extends TestCase
 	}
 
 	/**
-	 * pfb_cfg_field_adapter_type() assigns 'lenient' to pfb_keep and pfb_dnsbl_lenient.
+	 * pfb_cfg_field_adapter_type() assigns 'lenient' to pfb_keep, pfb_keep_on_upgrade and
+	 * pfb_dnsbl_lenient.
 	 *
 	 * Scenario:
-	 *   Background: pfb_keep (#484 fix) and pfb_dnsbl_lenient use the lenient adapter.
+	 *   Background: pfb_keep (#484 fix), pfb_keep_on_upgrade (#687 — absent-default 'on' must be
+	 *     distinguishable from an explicit 'off') and pfb_dnsbl_lenient use the lenient adapter.
 	 *     Given the full registry.
 	 *     When collecting all fields whose type is 'lenient'.
-	 *     Then exactly 'pfb_keep' and 'pfb_dnsbl_lenient' appear (registry insertion order).
+	 *     Then exactly those three appear.
 	 */
 	public function testAdapterTypeHelperLenientAssignedToPfbKeepAndPfbDnsblLenient(): void
 	{
@@ -812,9 +814,10 @@ final class RollbackContractTest extends TestCase
 			}
 		}
 
-		$this->assertContains('pfb_keep',        $lenient_fields, 'pfb_keep must be lenient (#484 fix)');
-		$this->assertContains('pfb_dnsbl_lenient', $lenient_fields, 'pfb_dnsbl_lenient must be lenient');
-		$this->assertCount(2, $lenient_fields, 'Exactly two lenient fields: pfb_keep + pfb_dnsbl_lenient');
+		$this->assertContains('pfb_keep',            $lenient_fields, 'pfb_keep must be lenient (#484 fix)');
+		$this->assertContains('pfb_keep_on_upgrade', $lenient_fields, 'pfb_keep_on_upgrade must be lenient (#687)');
+		$this->assertContains('pfb_dnsbl_lenient',   $lenient_fields, 'pfb_dnsbl_lenient must be lenient');
+		$this->assertCount(3, $lenient_fields, 'Exactly three lenient fields: pfb_keep + pfb_keep_on_upgrade + pfb_dnsbl_lenient');
 	}
 
 	/**

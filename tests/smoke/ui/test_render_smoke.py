@@ -358,6 +358,42 @@ def test_update_hooks_subtab_relocation(webui: WebUI) -> None:
     assert _UPDATE_PAGE in body, "the General page no longer links the Update tab"
 
 
+def test_general_page_has_keep_on_upgrade_toggle(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
+    """The General page renders the "Keep enabled during version upgrades" toggle (#687).
+
+    Given the General page,
+    When GET,
+    Then the ``pfb_keep_on_upgrade`` checkbox is present with its label + help text.
+
+    Fail-before / pass-after: the id and help text were added in #687, so both assertions fail on
+    the pre-#687 General page (no such control) and pass after.
+    """
+    body = webui.get(_GENERAL_PAGE).text
+    result = evaluate_render(_GENERAL_PAGE, 200, body, ("General Settings",))
+    assert result.ok, f"General page render oracle failed: {result.detail}"
+    assert 'name="pfb_keep_on_upgrade"' in body, "the pfb_keep_on_upgrade checkbox is missing from the General page"
+    assert "Keep enabled during version upgrades" in body, "the toggle label is missing from the General page"
+    assert "briefly disabled during package and OS upgrades" in body, "the toggle help text is missing"
+
+
+def test_hooks_page_documents_lifecycle_env_vars(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
+    """The hooks page lists the PFB_POST_INSTALL / PFB_PRE_UNINSTALL env vars (#684 doc gap, #687).
+
+    Given the hooks page,
+    When GET,
+    Then the Environment help text names both lifecycle variables so hook authors can react to
+        install/upgrade and uninstall passes.
+
+    Fail-before / pass-after: the vars shipped in the previous release without help text; both
+    assertions fail on that build and pass once the help text lists them.
+    """
+    body = webui.get(_HOOKS_PAGE).text
+    result = evaluate_render(_HOOKS_PAGE, 200, body, ("Update Hooks",))
+    assert result.ok, f"Hooks page render oracle failed: {result.detail}"
+    assert "PFB_POST_INSTALL" in body, "hooks page help does not document PFB_POST_INSTALL"
+    assert "PFB_PRE_UNINSTALL" in body, "hooks page help does not document PFB_PRE_UNINSTALL"
+
+
 def test_update_log_textareas_are_readonly(webui: WebUI) -> None:
     """The Update page's two log windows are display-only — they render readonly.
 
@@ -917,7 +953,9 @@ def test_software_actions_link_to_package_manager(
     Scenario:
       Given the override sentinel set to 'on' (so the provenance gate passes),
       When the Software page is GET,
-      Then the Uninstall control is an ``<a>`` whose href is ``pkg_mgr_install.php?mode=delete&pkg=…``;
+      Then the Uninstall control is an ``<a>`` whose href routes through this page
+          (``pfblockerng_software.php?do=uninstall``) — which drops the full-removal intent marker
+          before handing off to the Package Manager delete flow (#687);
       And the Update control's href GATES on update-availability (CodeRabbit #685): with no cached
           newer version it is inert (``href="#"``, disabled), and with a newer version cached it is an
           actionable ``pkg_mgr_install.php?mode=reinstallpkg&pkg=…`` link — the href, not just CSS,
@@ -957,11 +995,16 @@ def test_software_actions_link_to_package_manager(
         )
         assert re.search(r'href=["\']#["\']', up_tag), f"Update href must be inert ('#') when no update: {up_tag!r}"
 
-        # Uninstall is ALWAYS the actionable delete link (removal does not gate on availability).
+        # Uninstall is ALWAYS actionable (removal does not gate on availability) and routes through
+        # THIS page's ?do=uninstall so it can drop the #687 full-removal intent marker before the
+        # Package Manager delete hand-off — NOT a direct pkg_mgr_install.php?mode=delete link.
         un_tag = re.search(r'<a\b[^>]*id=["\']pfb_sw_uninstall["\'][^>]*>', body)
         assert un_tag is not None, f"Uninstall control is not an <a> link in {_SOFTWARE_PAGE} body"
-        assert _has_pkgmgr_href(un_tag.group(0), "delete"), (
-            f"Uninstall link must target pkg_mgr_install.php?mode=delete&pkg=…, got: {un_tag.group(0)!r}"
+        assert re.search(r'href=["\']/pfblockerng/pfblockerng_software\.php\?do=uninstall["\']', un_tag.group(0)), (
+            f"Uninstall link must route through ?do=uninstall (drops the #687 marker), got: {un_tag.group(0)!r}"
+        )
+        assert "mode=delete" not in un_tag.group(0), (
+            "Uninstall must NOT link directly to pkg_mgr_install.php?mode=delete"
         )
 
         # The in-page pkg machinery is gone entirely.
