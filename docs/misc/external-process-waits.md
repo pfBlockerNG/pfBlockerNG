@@ -70,6 +70,24 @@ cmd > /tmp/somefile 2>&1 < /dev/null
 A spawned daemon then holds a harmless regular-file fd, and the capture returns the moment the
 direct command exits. Read the output back from the file.
 
+## Package-page visibility is the mirror image: stream to stdout, not just the log file
+
+The same fd that a stray daemon must *not* hold is the one the pfSense **Software page reads** to
+show install/upgrade/uninstall progress: **stdout**. Once the Update/Uninstall buttons delegate to
+pfSense's native `pkg_mgr_install.php`, that page shows only what the package operation writes to
+stdout. But `pfb_logger()` writes the whole sync pass to the **log file** (and, during a Run Now,
+the per-run log the Update page's AJAX viewer tails) — never stdout. So the delegated page sits
+**silent** through the (longstanding) disable/enable passes — worst case the up-to-30 s
+`pfb_stop_start_unbound()` wait — and looks like a frozen/lost pipe even though nothing is stuck
+(issue #690). This is a **visibility** gap, distinct from the fd-hold hang above.
+
+Fix: while a package lifecycle callback is active — `$pfb['hook_lifecycle']` is set by the install
+command (`'install'`) and the pre-deinstall (`'uninstall'`), unset on every normal
+cron/manual/Run-Now pass — `pfb_logger()` also **mirrors its main-log lines (cases 1/2) to stdout**,
+so the page streams live progress. The unbound-stop wait logs its keepalive dots through the same
+path, so that closes the silent gap too. Visibility only: the fd-detach, `--foreground`, and
+redirect safety above are untouched.
+
 ## Following one specific dispatched process — pidfile, not a `ps` pattern or a log string
 
 - **`mwexec_bg()` returns no PID** — only the launcher's status. You cannot wait on what you
