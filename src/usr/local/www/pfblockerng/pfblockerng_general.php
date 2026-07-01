@@ -56,8 +56,6 @@ $pconfig['enable_cb']			= $pfb['gconfig']['enable_cb']				?: '';
 
 // Default 'on' — owned by the registry (ADR-29); PfbConfig::read applies it when absent.
 $pconfig['pfb_keep']			= PfbConfig::read('pfb_keep')->value;
-// Default 'on' for new installs; existing installs grandfather-seeded to 'off' at upgrade (#687).
-$pconfig['pfb_keep_on_upgrade']		= PfbConfig::read('pfb_keep_on_upgrade')->value;
 
 // Default 'on' — owned by the registry (ADR-29); PfbConfig::read applies it when absent.
 // Pinned 'off' on existing installs by the upgrade migration in pfblockerng_install.inc.
@@ -218,9 +216,6 @@ if ($_POST) {
 			// (off) is distinguishable from a never-configured install (key absent =>
 			// default on). Mirrors the pfb_feed_internal_filter precedent.
 			$pfb['gconfig']['pfb_keep']			= (($_POST['pfb_keep'] ?? '') === 'on') ? 'on' : 'off';
-			// #687: explicit 'on'/'off' (not '' for unchecked) so an operator opt-out is
-			// distinguishable from a never-configured install (absent => default 'on').
-			$pfb['gconfig']['pfb_keep_on_upgrade']		= (($_POST['pfb_keep_on_upgrade'] ?? '') === 'on') ? 'on' : 'off';
 
 			// Store the master feed-host filter toggle as an explicit 'on'/'off' (a
 			// checkbox submits 'on' when checked, nothing when unchecked) so the
@@ -365,22 +360,11 @@ $section->addInput(new Form_Checkbox(
 	'on'
 ))->setHelp('<span class="text-danger">Note: </span>'
 		. 'With \'Keep settings\' enabled, pfBlockerNG will maintain run state on Installation/Upgrade.<br />'
-		. ' If \'Keep Settings\' is not \'enabled\' on pkg Install/De-Install, all settings will be Wiped!<br /><br />'
+		. ' If \'Keep Settings\' is not \'enabled\' on pkg Install/De-Install, all settings will be Wiped!<br />'
+		. ' This also applies to pfSense version upgrades, which remove and reinstall packages &mdash; '
+		. 'with \'Keep Settings\' disabled, a version upgrade wipes pfBlockerNG\'s settings too.<br /><br />'
 		. '<span class="text-danger">Note: </span>'
 		. ' To clear all downloaded lists, uncheck these two checkboxes and \'Save\'. Re-check both boxes and run a \'Force Update|Reload\''
-);
-
-$section->addInput(new Form_Checkbox(
-	'pfb_keep_on_upgrade',
-	'Keep enabled during version upgrades',
-	gettext('Enable'),
-	pfb_cfg_lenient_read($pconfig['pfb_keep_on_upgrade']) === PfbLenient::On,
-	'on'
-))->setHelp('pfSense provides no way for pfBlockerNG to tell a version upgrade from an actual '
-		. 'uninstall, so pfBlockerNG is briefly disabled during package and OS upgrades. Enable this '
-		. 'to keep it active across upgrades.<br />'
-		. '<span class="text-danger">Note: </span>'
-		. 'Uninstalling through the Software page always performs a full removal.'
 );
 
 $section->addInput(new Form_Checkbox(

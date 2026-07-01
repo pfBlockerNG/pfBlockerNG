@@ -9,13 +9,8 @@ field, reasoning about rollback/downgrade, or checking the foreign-key exclusion
 
 - **PHP adapters / enums** (`PfbToggle`, `PfbLenient`, `PfbIdnMode` + the thin
   `pfb_cfg_*_read/write` delegations) in `src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc`:
-  - `dnsbl_lenient` / `pfb_keep` / `pfb_keep_on_upgrade` → `PfbLenient` (`'on'`/`'off'`);
-    `dnsbl_vip_auto` and ~76 other `'on'`/`''` checkbox fields → `PfbToggle` (off-value `''`).
-    **`pfb_keep_on_upgrade`** (#687, "Keep enabled during version upgrades") is lenient so the
-    absent-default `'on'` (new install) is distinguishable from an explicit `'off'`; an
-    already-configured install is grandfather-seeded to `'off'` at install/upgrade by
-    `pfb_keep_on_upgrade_install_default()` + `pfblockerng_install.inc` (run-once via `!isset`), so
-    an upgrade preserves its prior teardown-on-removal behaviour.
+  - `dnsbl_lenient` / `pfb_keep` → `PfbLenient` (`'on'`/`'off'`); `dnsbl_vip_auto` and ~76 other
+    `'on'`/`''` checkbox fields → `PfbToggle` (off-value `''`).
   - **`pfb_alias_delta_mode` → `PfbAliasDeltaMode`** (ADR-40, registry adapters
     `pfb_cfg_alias_delta_mode_read/write`): tokens `'auto'` (new-install default) / `'delta'` /
     `'replace'`. Unknown or absent token reads as `Auto`. **Grandfather seed:** an already-configured

@@ -545,15 +545,6 @@ if ($pfb_delta_default !== null) {
 	PfbConfig::write('pfb_alias_delta_mode', $pfb_delta_default);
 }
 
-// #687: grandfather an already-configured install to 'off' for "Keep enabled during version
-// upgrades" so an upgrade preserves its prior teardown-on-removal behaviour; a NEW install takes
-// the registry absent-default 'on' (stay active across upgrades). Run-once via the !isset guard in
-// pfb_keep_on_upgrade_install_default().
-$pfb_keepup_default = pfb_keep_on_upgrade_install_default($pfb_gcfg);
-if ($pfb_keepup_default !== null) {
-	PfbConfig::write('pfb_keep_on_upgrade', $pfb_keepup_default);
-}
-
 // Convert dnsbl_info CSV file to SQLite3 database format
 if (file_exists('/var/db/pfblockerng/dnsbl_info') &&
     !file_exists('/var/db/pfblockerng/dnsbl.sqlite') &&

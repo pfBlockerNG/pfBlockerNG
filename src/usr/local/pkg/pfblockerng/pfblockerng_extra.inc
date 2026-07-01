@@ -352,19 +352,6 @@ function pfb_cfg_registry(): array
 			'since'         => '2.1.0',
 		],
 
-		// #687: keep pfBlockerNG active across a version/OS upgrade (which pkg cannot distinguish
-		// from a real uninstall). Lenient like pfb_keep so an absent key (NEW install) reads to the
-		// 'on' default (protect across upgrades) while an explicit 'off' (an existing install
-		// grandfather-seeded at upgrade, or an operator opting out) is distinguishable. Consumed by
-		// the pre-deinstall's teardown decision (pfb_deinstall_full_teardown).
-		'pfb_keep_on_upgrade' => [
-			'section'       => $gen,
-			'default'       => 'on',
-			'read_adapter'  => 'pfb_cfg_lenient_read',
-			'write_adapter' => 'pfb_cfg_lenient_write',
-			'since'         => '4.0.0',
-		],
-
 		// Update interval: numeric hour string | 'Disabled'. Default '1'.
 		'pfb_interval' => [
 			'section'       => $gen,
