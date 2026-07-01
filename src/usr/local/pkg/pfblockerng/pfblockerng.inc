@@ -3523,6 +3523,17 @@ function pfb_hook_script_valid($script, $when, $dir = null) {
 function pfb_run_hooks($when, $ctx = array()) {
 	global $pfb;
 
+	// #682: never run update hooks during a package removal. The pre-deinstall
+	// (pfblockerng_php_pre_deinstall_command) sets $pfb['deinstall'] and drives a DISABLE
+	// teardown, not an update -- firing a user's pre/post hooks while pfBlockerNG is being
+	// uninstalled is semantically wrong, and a hook that (re)starts a service (e.g. the
+	// documented HAProxy graceful reload) would block pkg's "Removing pfBlockerNG..." phase
+	// indefinitely: the spawned/daemonised child holds the operation open (the #662
+	// pipe/daemon class, here under pkg's context). Suppress every fire point on removal.
+	if (!empty($pfb['deinstall'])) {
+		return;
+	}
+
 	$pfbconfig = config_get_path('installedpackages/pfblockerng/config/0', []);
 	$hooks = pfb_get_hooks($pfbconfig, $when);
 	if (empty($hooks)) {
@@ -16901,6 +16912,12 @@ function pfblockerng_php_pre_deinstall_command() {
 
 	// Set these two variables to disable pfBlockerNG on de-install
 	$pfb['save'] = $pfb['install'] = TRUE;
+	// #682: mark this a package-removal pass. pfb_global() already forces enable/dnsbl off for
+	// the install/reinstall flag above, so the sync below runs a clean DISABLE teardown (no feed
+	// download, DNSBL/Unbound disabled) -- but its ADR-12 hook runner would still fire the user's
+	// pre/post hooks. A hook that (re)starts a service during "Removing pfBlockerNG..." hangs the
+	// pkg operation, so hold the hooks back for this pass (pfb_run_hooks checks $pfb['deinstall']).
+	$pfb['deinstall'] = TRUE;
 
 	update_status("Removing pfBlockerNG...");
 	sync_package_pfblockerng();
