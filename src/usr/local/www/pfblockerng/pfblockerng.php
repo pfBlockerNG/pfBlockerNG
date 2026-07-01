@@ -1909,12 +1909,13 @@ if ($_POST) {
 			}
 		}
 
-		// Validate Adv. In/Outbound firewall rules settings
-		foreach (array( 'aliasports_in' => 'Port In', 'aliasaddr_in' => 'Destination In',
-				'aliasports_out' => 'Port Out', 'aliasaddr_out' => 'Destination Out') as $value => $auto_dir) {
-			if (!empty($_POST[$value]) && !is_alias($_POST[$value])) {
-				$input_errors[] = "Settings: Advanced {$auto_dir}bound Alias error - Must use an existing Alias";
-			}
+		// Validate Adv. In/Outbound firewall rules settings (issue #676, sibling of #636).
+		// Existence + type are resolved from the configuration (alias_get_type), NOT is_alias()
+		// whose $aliastable cache is empty on this page — see pfb_adv_alias_field_errors().
+		// Append (not array_merge): $input_errors is left unset until the first error so the
+		// later isset($input_errors) checks hold — appending auto-vivifies only on a real error.
+		foreach (pfb_adv_alias_field_errors($_POST) as $pfb_alias_error) {
+			$input_errors[] = $pfb_alias_error;
 		}
 
 		// Validate Adv. firewall rule 'Protocol' setting
