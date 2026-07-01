@@ -1797,7 +1797,10 @@ $options_aliaslog		= [	'enabled' => 'Enabled', 'disabled' => 'Disabled' ];
 
 // Collect all pfSense 'Port' Aliases
 $portslist = $networkslist = '';
-$options_aliasports_in = $options_aliasports_out = array();
+// Init all four to arrays: with no network aliases the address options are never
+// populated below, so a later array_key_exists($v, $options_aliasaddr_*) would fatal
+// on PHP 8 (TypeError on a null array arg) when a settings page is saved.
+$options_aliasports_in = $options_aliasports_out = $options_aliasaddr_in = $options_aliasaddr_out = array();
 
 foreach (config_get_path('aliases/alias', []) as $alias) {
 	if ($alias['type'] == 'port') {

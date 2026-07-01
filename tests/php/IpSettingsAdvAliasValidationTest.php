@@ -209,4 +209,27 @@ final class IpSettingsAdvAliasValidationTest extends TestCase
 
 		$this->assertSame([], $result['errors']);
 	}
+
+	// -----------------------------------------------------------------------
+	// Latent fatal: with NO network alias configured, $options_aliasaddr_in/_out
+	// are never built (only the port fields init to array()), so normalizing a
+	// submitted address field ran array_key_exists($v, null) → PHP 8 TypeError on
+	// save. The is_array() guard (mirroring pfblockerng_category_edit.php) resolves
+	// it so the value is silently normalized to '' like any other unknown option.
+	// -----------------------------------------------------------------------
+
+	public function testAddressFieldWithNoNetworkAliasDoesNotFatal(): void
+	{
+		// Given a configuration with only a PORT alias — so $options_aliasaddr_in
+		// stays unset (there is no network alias to populate it)
+		$this->seedAliases(['GoodPort' => 'port']);
+
+		// When an address field is submitted with a value
+		// Then normalization must not fatal on array_key_exists($v, null); the value
+		// is reset to '' (not a key of the empty/absent options) with no error.
+		$result = $this->runSavePath(['aliasaddr_in' => 'AnyValue']);
+
+		$this->assertSame('', $result['post']['aliasaddr_in']);
+		$this->assertSame([], $result['errors']);
+	}
 }
