@@ -22,7 +22,10 @@
 
 // ADR-19: the "Software" page — show the installed pfBlockerNG channel/version vs our-repo
 // latest (from the cron-maintained cache), toggle the "Check for new versions" setting, and
-// run same-channel Check / Update actions.
+// offer Check / Update / Uninstall. The Update and Uninstall actions are SHORTCUTS to pfSense's
+// base-system Package Manager (pkg_mgr_install.php): it runs pkg and streams its own progress
+// from a page that SURVIVES pfBlockerNG's own removal/upgrade, so this page never self-hosts a
+// pkg dispatch (no detached daemon, no live-tail endpoint, no state files to vanish mid-operation).
 
 require_once('guiconfig.inc');
 require_once('globals.inc');
@@ -43,115 +46,35 @@ if (!pfb_software_provenance_ok()) {
 }
 
 // SECONDARY PRIVILEGE GATE (issue #485). The framework page-guard already requires
-// page-firewall-pfblockerng to reach here; this page can now UNINSTALL the package, so
-// additionally require the Package Manager "Installed" privilege — the priv pfSense uses for
-// its own package-Remove page (page-system-packagemanager-installed, match 'pkg_mgr_installed.php*').
-// pfSense match-based privilege is OR across groups, so this AND can only be enforced by an
-// explicit in-page check. Use isAllowedPage() against that page, NOT userHasPrivilege() with the
-// raw priv id: isAllowedPage honours the admin (uid 0) short-circuit AND the 'page-all' wildcard
-// match, whereas userHasPrivilege does an exact priv-id membership test that wrongly excludes a
-// page-all admin (who lacks the literal '…-installed' priv) — that would lock admins out.
+// page-firewall-pfblockerng to reach here; the Update/Uninstall shortcuts lead to the Package
+// Manager, so additionally require the Package Manager "Installed" privilege — the priv pfSense
+// uses for its own package-Remove page (page-system-packagemanager-installed, match
+// 'pkg_mgr_installed.php*'). pfSense match-based privilege is OR across groups, so this AND can
+// only be enforced by an explicit in-page check. Use isAllowedPage() against that page, NOT
+// userHasPrivilege() with the raw priv id: isAllowedPage honours the admin (uid 0) short-circuit
+// AND the 'page-all' wildcard match, whereas userHasPrivilege does an exact priv-id membership
+// test that wrongly excludes a page-all admin (who lacks the literal '…-installed' priv) — that
+// would lock admins out.
 if (!isAllowedPage('pkg_mgr_installed.php')) {
 	header('Location: /index.php');
 	exit;
 }
 
-// Resolve the installed package + channel ONCE (used by display + the actions).
+// Resolve the installed package + channel ONCE (used by display + the action shortcuts).
 $pfb_sw_pkgname	= pfb_pkg_installed_name();
 $pfb_sw_channel	= pfb_channel_from_pkgname($pfb_sw_pkgname);
-
-// AJAX live-log tail for the Software terminal (polled by the client; gated by the same provenance
-// + privilege checks above). Returns the next log slice; on completion the done-payload also
-// carries the action result + refreshed version/status so the client patches the page in place
-// (no post-upgrade reload). Must run before any head/HTML output.
-if (($_GET['ajax'] ?? '') === 'tail') {
-	header('Content-Type: application/json');
-	header('Cache-Control: no-cache, no-store, must-revalidate');
-	$pfb_has_off = isset($_GET['offset']) && ctype_digit((string) $_GET['offset']);
-	$pfb_tail = pfb_log_tail_payload('software', $pfb_has_off ? (int) $_GET['offset'] : -1, $pfb_has_off);
-	if (!empty($pfb_tail['done'])) {
-		$pfb_tail += pfb_software_done_extras();
-	}
-	print(json_encode($pfb_tail));
-	exit;
-}
 
 // The "Check for new versions" setting (default ENABLED). Persisted as 'on'/'off'; an unset
 // value (never saved) reads as enabled via pfb_software_check_enabled().
 $pfb_sw_check_raw = PfbConfig::read('pfb_software_check');
 $pfb_sw_check	= pfb_software_check_enabled(is_string($pfb_sw_check_raw) ? $pfb_sw_check_raw : null);
 
-
-// Post a one-line status to the terminal status window (a one-shot refusal/notice message). The
-// live log itself is streamed by the client poller via ?ajax=tail, not from here.
-function pfb_software_status($status) {
-	print("\n<script type=\"text/javascript\">");
-	print("\n//<![CDATA[");
-	print("\nthis.document.forms[0].pfb_status.value = " . pfb_js_string($status) . ";");
-	print("\n//]]>");
-	print("\n</script>");
-	ob_flush();
-	flush();
-}
-
-
-// Dispatch a pkg action (update/uninstall) as a DETACHED daemon writing the per-run software log,
-// so the page returns immediately (head.inc + foot.inc load and the nav menu works) and the client
-// polls ?ajax=tail for the live output. $pkgsubcmd is a FIXED pkg invocation whose only variable
-// parts are pkg-derived names already escapeshellarg'd by the caller — no request input is
-// interpolated. The daemon redirects all output to the run log ('>' truncate-on-open) and records
-// the exit code in the result sidecar on completion; $action is recorded so the tail's done-payload
-// can tell the client what to do (patch the version fields / redirect).
-function pfb_software_dispatch(string $action, string $pkgsubcmd): void {
-	global $pfb;
-	$pidfile = '/var/run/pfb_software.pid';
-	@unlink($pidfile);
-	@unlink('/var/run/pfb_software.result');
-	@file_put_contents('/var/run/pfb_software.action', $action);
-	@file_put_contents($pfb['sw_runlog'], '');
-	$logq = escapeshellarg($pfb['sw_runlog']);
-	$resq = escapeshellarg('/var/run/pfb_software.result');
-	// Nested shell: the inner sh -c string is passed as ONE escapeshellarg'd argument, so the
-	// outer mwexec_bg shell does not evaluate $? or re-split the already-quoted paths.
-	$inner = "{$pkgsubcmd} > {$logq} 2>&1; echo \$? > {$resq}";
-	mwexec_bg('/usr/sbin/daemon -p ' . escapeshellarg($pidfile) . ' /bin/sh -c ' . escapeshellarg($inner));
-}
-
-
-// Software-specific tail done-payload: the action + exit code from the sidecars, plus the freshly
-// re-read installed version + status after a successful update, so the client patches the page in
-// place (no post-upgrade reload). Read in the ?ajax=tail branch once the run is done.
-function pfb_software_done_extras(): array {
-	global $pfb_sw_pkgname;
-	$action = @file_get_contents('/var/run/pfb_software.action');
-	$rcraw  = @file_get_contents('/var/run/pfb_software.result');
-	$out = array(
-		'sw_action' => ($action !== FALSE) ? trim($action) : '',
-		'sw_rc'     => ($rcraw !== FALSE && trim((string) $rcraw) !== '') ? (int) trim((string) $rcraw) : -1,
-	);
-	if ($out['sw_action'] === 'update') {
-		$installed = pfb_pkg_installed_version((string) $pfb_sw_pkgname);
-		$cache     = pfb_software_read_cache();
-		$avail     = pfb_update_available($installed, (string) ($cache['latest'] ?? ''));
-		$out['sw_installed']        = ($installed !== '') ? $installed : gettext('unknown');
-		$out['sw_update_available'] = $avail;
-		$out['sw_status']           = $avail ? gettext('Update available') : gettext('Up to date');
-	}
-	return $out;
-}
-
-
-$pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Software'));
-$pglinks = array('', '/pfblockerng/pfblockerng_general.php', '@self');
-
-// Determine which (POST-guarded) action was requested. The destructive Update and the
-// cache-refreshing Check run on POST only — never on a GET (so the ui_render gate's GET
-// cannot trigger pkg).
+// Which (POST-guarded) action was requested. Only the cache-refreshing Check runs here now;
+// Update/Uninstall are plain links to pkg_mgr_install.php, not POST actions.
 $pfb_sw_action = '';
 if ($_POST && !empty($_POST['pfb_sw_action'])) {
 	$pfb_sw_action = (string) $_POST['pfb_sw_action'];
 }
-
 
 // "Save" the settings (standard pfSense CSRF POST). A checkbox is absent from the POST when
 // unticked, so persist an explicit 'on'/'off' — an unset value defaults to enabled, an
@@ -170,6 +93,9 @@ if ($pfb_sw_action === 'check') {
 	header('Location: /pfblockerng/pfblockerng_software.php');
 	exit;
 }
+
+$pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Software'));
+$pglinks = array('', '/pfblockerng/pfblockerng_general.php', '@self');
 
 $shortcut_section = 'pfblockerng';
 include_once('head.inc');
@@ -249,6 +175,7 @@ $form->add($section);
 
 $section = new Form_Section('Actions');
 
+// Check now — a local cache refresh from our repo (no network mutation), POSTed below.
 $btn_check = new Form_Button(
 	'pfb_sw_check',
 	'Check now',
@@ -261,229 +188,58 @@ $btn_check->removeClass('btn-primary')->addClass('btn-primary btn-xs')->setWidth
 $section->addInput(new Form_StaticText(null, $btn_check))
 	->setHelp('Check for a new version now.');
 
+// Update now — a LINK to pfSense's Package Manager (reinstallpkg = pfSense's own single-package
+// upgrade path; pkg resolves the newest candidate, which is ours by repo priority). The base page
+// runs pkg and streams progress from a page that survives the swap. Enabled only when an update
+// is available and the package name is known.
+$pfb_pkg_arg = rawurlencode((string) $pfb_sw_pkgname);
 $btn_update = new Form_Button(
 	'pfb_sw_update',
 	'Update now',
-	null,
+	($pfb_sw_pkgname !== '') ? "/pkg_mgr_install.php?mode=reinstallpkg&pkg={$pfb_pkg_arg}" : '#',
 	'fa-solid fa-download'
 );
 $btn_update->removeClass('btn-primary')->addClass('btn-warning btn-xs')->setWidth(2);
-// Enabled ONLY when an update is available (there is something to install).
-if (!$update_available) {
-	$btn_update->setAttribute('disabled', 'disabled');
+if (!$update_available || $pfb_sw_pkgname === '') {
+	$btn_update->addClass('disabled')->setAttribute('disabled', 'disabled')->setAttribute('aria-disabled', 'true');
 }
 $section->addInput(new Form_StaticText(null, $btn_update))
-	->setHelp('Install the latest version. Available only when an update is found.');
+	->setHelp('Install the latest version via the pfSense Package Manager. Available only when an update is found.');
 
-$section->addInput(new Form_Checkbox(
-	'pfb_sw_uninstall_confirm',
-	'Confirm uninstall',
-	'Confirm I want to uninstall pfBlockerNG',
-	FALSE
-))->setHelp('Required before the Uninstall button is enabled. Uninstalling removes pfBlockerNG entirely.');
-
+// Uninstall — a LINK to pfSense's Package Manager delete flow (its own confirm step runs there).
 $btn_uninstall = new Form_Button(
 	'pfb_sw_uninstall',
 	'Uninstall',
-	null,
+	($pfb_sw_pkgname !== '') ? "/pkg_mgr_install.php?mode=delete&pkg={$pfb_pkg_arg}" : '#',
 	'fa-solid fa-trash-can'
 );
 $btn_uninstall->removeClass('btn-primary')->addClass('btn-danger btn-xs')->setWidth(2);
-$btn_uninstall->setAttribute('disabled', 'disabled');
-$section->addInput(new Form_StaticText(null, $btn_uninstall))
-	->setHelp('Remove pfBlockerNG from this firewall. Enabled only after the confirmation box is checked.');
-$form->add($section);
-
-// Live terminal window. The output textarea always starts EMPTY; the client poller fills it via
-// ?ajax=tail when a software action is dispatched (or one is already running). $pfb_sw_poll gates
-// the poller — TRUE on an update/uninstall POST (set in the handlers below) or when a software
-// task is already running (a reload mid-run). $pfb_sw_poll_status seeds the status line.
-$pfb_sw_poll        = isvalidpid('/var/run/pfb_software.pid');
-$pfb_sw_poll_status = $pfb_sw_poll ? gettext('A pfBlockerNG software task is running...') : '';
-// The in-flight action drives the poller's completion handling (esp. the uninstall .fail redirect,
-// since pkg delete removes this endpoint). On a fresh POST it is $pfb_sw_action; on a plain reload
-// mid-run there is no POST, so recover it from the dispatcher's action sidecar.
-$pfb_sw_poll_action = $pfb_sw_action;
-if ($pfb_sw_poll_action === '' && $pfb_sw_poll) {
-	$pfb_sw_action_raw  = @file_get_contents('/var/run/pfb_software.action');
-	$pfb_sw_poll_action = ($pfb_sw_action_raw !== FALSE) ? trim($pfb_sw_action_raw) : '';
+if ($pfb_sw_pkgname === '') {
+	$btn_uninstall->addClass('disabled')->setAttribute('disabled', 'disabled')->setAttribute('aria-disabled', 'true');
 }
-$section = new Form_Section('Output');
-$section->addInput(new Form_Textarea(
-	'pfb_status',
-	null,
-	'Standby'
-))->removeClass('form-control')->addClass('row-fluid col-sm-12')->setAttribute('rows', '1')->setAttribute('wrap', 'off')
-  ->setAttribute('readonly', 'readonly')->setAttribute('style', 'background:#fafafa; width: 100%');
-$section->addInput(new Form_Textarea(
-	'pfb_output',
-	null,
-	null
-))->removeClass('form-control')->addClass('row-fluid col-sm-12')->setAttribute('rows', '20')->setAttribute('wrap', 'off')
-  ->setAttribute('readonly', 'readonly')->setAttribute('style', 'background:#fafafa; width: 100%');
+$section->addInput(new Form_StaticText(null, $btn_uninstall))
+	->setHelp('Remove pfBlockerNG from this firewall via the pfSense Package Manager (it will ask you to confirm).');
 $form->add($section);
 
 print($form);
-
-// The destructive Update is DISPATCHED (detached daemon) after the form has rendered; the page
-// then returns and the client poller tails the live log via ?ajax=tail. POST-guarded only.
-if ($pfb_sw_action === 'update') {
-	// Defense-in-depth: the "Update now" button is only disabled client-side, so also
-	// refuse the action server-side when there is nothing to install — never run pkg on a
-	// stale/no-op POST. (Request authenticity is enforced by pfSense's CSRF token.)
-	if (!$update_available) {
-		pfb_software_status(gettext('No update is currently available.'));
-	} elseif ($pfb_sw_pkgname === '') {
-		pfb_software_status(gettext('No pfBlockerNG package detected — cannot update.'));
-	} elseif (isvalidpid('/var/run/pfb_software.pid')) {
-		// A software task is already running — refuse a second concurrent pkg dispatch (which would
-		// clobber the in-flight run's sidecars). Mirrors the Update page's active-task guard.
-		pfb_software_status(gettext('A pfBlockerNG software task is already running.'));
-		$pfb_sw_poll = TRUE;
-	} else {
-		$bin = escapeshellarg(PFB_PKG_BIN);
-		$pkg = escapeshellarg($pfb_sw_pkgname);
-		pfb_software_dispatch('update', "{$bin} upgrade -y {$pkg}");
-		// The poller tails the log; on a clean finish it patches the installed-version + status
-		// fields in place (no reload) from the done-payload.
-		$pfb_sw_poll        = TRUE;
-		$pfb_sw_poll_status = gettext('Updating pfBlockerNG...');
-	}
-}
-
-// Uninstall is dispatched the same way. POST-guarded.
-if ($pfb_sw_action === 'uninstall') {
-	// Defense-in-depth: the Uninstall button is only disabled client-side, so re-check the
-	// confirmation server-side and refuse without it. (CSRF token enforces request authenticity.)
-	if (!isset($_POST['pfb_sw_uninstall_confirm'])) {
-		pfb_software_status(gettext('Uninstall not confirmed — tick the confirmation box first.'));
-	} elseif ($pfb_sw_pkgname === '') {
-		pfb_software_status(gettext('No pfBlockerNG package detected — cannot uninstall.'));
-	} elseif (isvalidpid('/var/run/pfb_software.pid')) {
-		pfb_software_status(gettext('A pfBlockerNG software task is already running.'));
-		$pfb_sw_poll = TRUE;
-	} else {
-		$bin = escapeshellarg(PFB_PKG_BIN);
-		$pkg = escapeshellarg($pfb_sw_pkgname);
-		pfb_software_dispatch('uninstall', "{$bin} delete -y {$pkg}");
-		// Uninstall removes the very package serving this page, so the poller's endpoint will
-		// vanish near the end: the client treats a poll failure (or a clean 'done') as success
-		// and redirects to the Package Manager.
-		$pfb_sw_poll        = TRUE;
-		$pfb_sw_poll_status = gettext('Uninstalling pfBlockerNG...');
-	}
-}
 ?>
 
 <script type="text/javascript">
 //<![CDATA[
 events.push(function() {
 
-	// Wire each action button to a POST. Update is destructive (it runs pkg) so it
-	// confirms first; Check is a cache refresh and posts straight through.
-	function pfb_sw_submit(action) {
+	// Check now is the only in-page action left — a cache refresh POSTed back to this page.
+	// Update / Uninstall are plain links to the Package Manager (no JS, no POST).
+	$('#pfb_sw_check').click(function(e) {
+		e.preventDefault();
 		var f = document.forms[0];
 		var i = document.createElement('input');
 		i.type = 'hidden';
 		i.name = 'pfb_sw_action';
-		i.value = action;
+		i.value = 'check';
 		f.appendChild(i);
 		f.submit();
-	}
-
-	$('#pfb_sw_check').click(function(e) {
-		e.preventDefault();
-		pfb_sw_submit('check');
 	});
-	$('#pfb_sw_update').click(function(e) {
-		e.preventDefault();
-		if (confirm('Update pfBlockerNG to the latest version now?')) {
-			pfb_sw_submit('update');
-		}
-	});
-
-	function pfb_sw_uninstall_sync() {
-		document.getElementById('pfb_sw_uninstall').disabled = !document.getElementById('pfb_sw_uninstall_confirm').checked;
-	}
-	$('#pfb_sw_uninstall_confirm').on('change', pfb_sw_uninstall_sync);
-	pfb_sw_uninstall_sync();
-
-	$('#pfb_sw_uninstall').click(function(e) {
-		e.preventDefault();
-		if (confirm('Uninstall pfBlockerNG from this firewall? This cannot be undone.')) {
-			pfb_sw_submit('uninstall');
-		}
-	});
-
-<?php if ($pfb_sw_poll): ?>
-	// Live-log tail for the software action. The page has fully rendered (foot.inc ran, the nav
-	// menu works); the log streams in by polling ?ajax=tail. On completion the done-payload carries
-	// the result: a successful update patches the installed-version + status fields in place (no
-	// reload), and an uninstall — which removes this very page — redirects to the Package Manager.
-	(function() {
-		var out     = document.forms[0].pfb_output;
-		var stat    = document.forms[0].pfb_status;
-		var offset  = null;
-		var timer   = null;
-		var pending = false;   // at most one poll in flight (mobile-resume overlap guard)
-		var done    = false;
-		var action = <?=pfb_js_string($pfb_sw_poll_action);?>;
-		var initStatus = <?=pfb_js_string($pfb_sw_poll_status);?>;
-		if (initStatus) { stat.value = initStatus; }
-		// pfBlockerNG installs from its own pkg repo, so pfSense's Package Manager "Installed" list
-		// may not list it -- send the user to the dashboard after an uninstall, not to that page.
-		function goHome() { window.location.assign('/index.php'); }
-		function stop() { done = true; if (timer) { clearInterval(timer); timer = null; } }
-		function poll() {
-			if (pending || done) { return; }
-			pending = true;
-			var url = '/pfblockerng/pfblockerng_software.php?ajax=tail' + (offset !== null ? '&offset=' + offset : '');
-			$.ajax({ url: url, type: 'GET', dataType: 'json', cache: false }).done(function(r) {
-				if (!r) { return; }
-				if (r.data) {
-					var atBottom = (out.scrollHeight - out.scrollTop - out.clientHeight) <= 16;
-					out.value += r.data;
-					if (atBottom) { out.scrollTop = out.scrollHeight; }
-				}
-				if (typeof r.offset !== 'undefined') { offset = r.offset; }
-				if (!r.done) { return; }
-				stop();
-				if (r.sw_action === 'uninstall') {
-					stat.value = (r.sw_rc === 0)
-						? 'Uninstall complete — redirecting...'
-						: 'Uninstall finished with errors — see the log above.';
-					if (r.sw_rc === 0) { setTimeout(goHome, 1200); }
-				} else if (r.sw_action === 'update') {
-					if (r.sw_rc === 0) {
-						if (r.sw_installed) { $('#pfb-sw-installed').text(r.sw_installed); }
-						if (typeof r.sw_status !== 'undefined') {
-							$('#pfb-sw-status').html((r.sw_update_available ? '<span class="text-warning">' : '<span class="text-success">') + r.sw_status + '</span>');
-						}
-						if (r.sw_update_available === false) { $('#pfb_sw_update').prop('disabled', true); }
-						// Clean the URL so a manual refresh is a GET, never a re-POST of the action.
-						if (window.history && window.history.replaceState) {
-							window.history.replaceState({}, '', '/pfblockerng/pfblockerng_software.php');
-						}
-						stat.value = 'Update complete.';
-					} else {
-						stat.value = 'Update finished with errors — see the log above.';
-					}
-				} else {
-					stat.value = 'Done.';
-				}
-			}).fail(function() {
-				// During an uninstall the package (and this endpoint) disappears: a poll failure
-				// means the uninstall succeeded — stop and go to the dashboard. Otherwise retry.
-				if (action === 'uninstall') { stop(); goHome(); }
-			}).always(function() { pending = false; });
-		}
-		poll();
-		timer = setInterval(poll, 1000);
-		document.addEventListener('visibilitychange', function() {
-			if (!document.hidden && !done) { poll(); }
-		});
-	})();
-<?php endif; ?>
 });
 //]]>
 </script>

@@ -79,9 +79,6 @@ $pfb['log']		= "{$pfb['logdir']}/pfblockerng.log";
 // run only; truncated at each run start and NOT registered with pfb_log_mgmt(), so byte offsets
 // stay stable for the tail even when pfb_log_mgmt() trims the cumulative log mid-schedule.
 $pfb['runlog']		= "{$pfb['logdir']}/pfblockerng_run.log";
-// Per-run log for the live Software viewer (the upgrade/uninstall daemon writes it with '>',
-// truncate-on-open). Same dedicated-per-run-file strategy as $pfb['runlog'], for consistency.
-$pfb['sw_runlog']	= "{$pfb['logdir']}/software.log";
 $pfb['dnslog']		= "{$pfb['logdir']}/dnsbl.log";
 $pfb['dnsreplylog']	= "{$pfb['logdir']}/dns_reply.log";
 $pfb['ip_blocklog']	= "{$pfb['logdir']}/ip_block.log";
@@ -3509,6 +3506,31 @@ function pfb_hook_script_valid($script, $when, $dir = null) {
 }
 
 /*
+ * Map a package-lifecycle marker to the extra PFB_* hook-context keys (issue #684).
+ *
+ * pfBlockerNG does NOT branch on the lifecycle -- hooks fire the same way on every enable/disable
+ * pass. This only PUBLISHES which pkg transition (if any) the pass belongs to, so a hook owner can
+ * decide what to do; it is context, not special handling. $lifecycle is $pfb['hook_lifecycle'],
+ * set to 'install' by the install-command path (turn ON via the resync) and 'uninstall' by the
+ * pre-deinstall (turn OFF), and unset on a normal cron/manual/force update.
+ *
+ * Returns [] for a normal pass, ['POST_INSTALL' => '1'] on install/upgrade, ['PRE_UNINSTALL' => '1']
+ * on removal -> exported as PFB_POST_INSTALL / PFB_PRE_UNINSTALL. Present-when-applicable (a hook
+ * tests `[ -n "$PFB_POST_INSTALL" ]`), matching the ADR-12 style where a key's presence is the
+ * signal.
+ */
+function pfb_hook_lifecycle_ctx($lifecycle): array {
+	switch ((string) $lifecycle) {
+		case 'install':
+			return array('POST_INSTALL' => '1');
+		case 'uninstall':
+			return array('PRE_UNINSTALL' => '1');
+		default:
+			return array();
+	}
+}
+
+/*
  * Run every enabled hook matching $when, in list order, as root.
  *
  * $ctx is a flat name => value map exported to each hook as PFB_* environment
@@ -3523,17 +3545,6 @@ function pfb_hook_script_valid($script, $when, $dir = null) {
 function pfb_run_hooks($when, $ctx = array()) {
 	global $pfb;
 
-	// #682: never run update hooks during a package removal. The pre-deinstall
-	// (pfblockerng_php_pre_deinstall_command) sets $pfb['deinstall'] and drives a DISABLE
-	// teardown, not an update -- firing a user's pre/post hooks while pfBlockerNG is being
-	// uninstalled is semantically wrong, and a hook that (re)starts a service (e.g. the
-	// documented HAProxy graceful reload) would block pkg's "Removing pfBlockerNG..." phase
-	// indefinitely: the spawned/daemonised child holds the operation open (the #662
-	// pipe/daemon class, here under pkg's context). Suppress every fire point on removal.
-	if (!empty($pfb['deinstall'])) {
-		return;
-	}
-
 	$pfbconfig = config_get_path('installedpackages/pfblockerng/config/0', []);
 	$hooks = pfb_get_hooks($pfbconfig, $when);
 	if (empty($hooks)) {
@@ -3545,6 +3556,11 @@ function pfb_run_hooks($when, $ctx = array()) {
 		$ctx = array();
 	}
 	$ctx['WHEN'] = $when;
+	// Package-lifecycle context (issue #684): a lifecycle transition fires these hooks like any
+	// other enable/disable, and tells the hook WHICH transition so its owner can react (or no-op).
+	// PFB_POST_INSTALL=1 when the pass is the install/upgrade resync (turn ON); PFB_PRE_UNINSTALL=1
+	// when it is the pre-deinstall (turn OFF); neither on a normal cron/manual/force update.
+	$ctx += pfb_hook_lifecycle_ctx($pfb['hook_lifecycle'] ?? '');
 	$env = array();
 	foreach ($ctx as $name => $value) {
 		// Names are developer-controlled (PFB_TRIGGER, PFB_IP_CHANGED, ...); values
@@ -11894,15 +11910,14 @@ function pfb_log_tail_chunk(string $file, int $offset, bool $flush = FALSE): arr
 }
 
 
-// Build the JSON payload for the AJAX live-log tail (the ?ajax=tail branch on the Update and
-// Software pages). Returns an array the caller json_encode()s; no print/exit here (library code).
+// Build the JSON payload for the AJAX live-log tail (the ?ajax=tail branch on the Update page).
+// Returns an array the caller json_encode()s; no print/exit here (library code).
 //
 // $which selects the source: 'update' tails the per-run pfblockerng_run.log, falling back to the
-// last ~15KB of the cumulative log for a View when no run file exists yet; 'software' tails the
-// per-run software.log. $offset is the client's last byte position; $has_offset is FALSE on the
-// first poll (the function then picks the source + starting offset). 'done' (process gone, via
-// isvalidpid on the pidfile) tells the client to stop polling; the final read is flushed so the
-// trailing partial line is not lost.
+// last ~15KB of the cumulative log for a View when no run file exists yet. $offset is the client's
+// last byte position; $has_offset is FALSE on the first poll (the function then picks the source +
+// starting offset). 'done' (process gone, via isvalidpid on the pidfile) tells the client to stop
+// polling; the final read is flushed so the trailing partial line is not lost.
 function pfb_log_tail_payload(string $which, int $offset, bool $has_offset): array {
 	global $pfb;
 
@@ -11911,11 +11926,6 @@ function pfb_log_tail_payload(string $which, int $offset, bool $has_offset): arr
 			$pidfile  = '/var/run/pfb_runnow.pid';
 			$runfile  = $pfb['runlog'];
 			$fallback = $pfb['log'];
-			break;
-		case 'software':
-			$pidfile  = '/var/run/pfb_software.pid';
-			$runfile  = $pfb['sw_runlog'];
-			$fallback = '';
 			break;
 		default:
 			return ['error' => 'invalid source'];
@@ -16910,14 +16920,14 @@ function pfblockerng_php_pre_deinstall_command() {
 	require_once('config.inc');
 	global $g, $pfb;
 
-	// Set these two variables to disable pfBlockerNG on de-install
+	// Set these two variables to disable pfBlockerNG on de-install. pfb_global() turns the
+	// install/reinstall flag into enable/dnsbl='' (2129), so this runs a full DISABLE pass --
+	// uninstall == turning pfBlockerNG OFF (rules removed, DNSBL/Unbound disabled, its pre/post
+	// hooks fired so external consumers reconfigure to the off state), a no-op if already off.
 	$pfb['save'] = $pfb['install'] = TRUE;
-	// #682: mark this a package-removal pass. pfb_global() already forces enable/dnsbl off for
-	// the install/reinstall flag above, so the sync below runs a clean DISABLE teardown (no feed
-	// download, DNSBL/Unbound disabled) -- but its ADR-12 hook runner would still fire the user's
-	// pre/post hooks. A hook that (re)starts a service during "Removing pfBlockerNG..." hangs the
-	// pkg operation, so hold the hooks back for this pass (pfb_run_hooks checks $pfb['deinstall']).
-	$pfb['deinstall'] = TRUE;
+	// #684: publish the pkg transition to the hooks fired by the disable pass below (they get
+	// PFB_PRE_UNINSTALL=1). Context only -- pfBlockerNG does not branch on it.
+	$pfb['hook_lifecycle'] = 'uninstall';
 
 	update_status("Removing pfBlockerNG...");
 	sync_package_pfblockerng();

@@ -835,29 +835,6 @@ def software_panel_forced(vm: SmokeVM, state: str) -> Iterator[None]:
         assert clear.returncode == 0, f"failed to clear software override sentinel: {clear.stderr.strip()}"
 
 
-@contextmanager
-def _live_pidfile(vm: SmokeVM, pidfile: str) -> Iterator[str]:
-    """Make ``isvalidpid(pidfile)`` TRUE for the block by pointing it at a real, live process.
-
-    Backgrounds a short ``sleep`` on the guest and writes its PID to ``pidfile`` (the bare
-    number daemon(8) would write, which ``isvalidpid`` → ``pgrep -F`` checks is running), so a
-    page gated on ``isvalidpid`` renders its in-progress branch WITHOUT a real task. The sleeper
-    is killed and the pidfile removed on exit so no stale "task running" state leaks to a later
-    test. The whole launch+write is ONE ``/bin/sh -c`` so ``$!`` is captured in the same shell.
-    """
-    launch = vm.ssh(
-        "/bin/sh",
-        "-c",
-        f"nohup /bin/sleep 120 >/dev/null 2>&1 & echo $! > {pidfile}; cat {pidfile}",
-    )
-    pid = launch.stdout.strip()
-    assert launch.returncode == 0 and pid.isdigit(), f"failed to seed live pidfile {pidfile}: {launch.stderr.strip()!r}"
-    try:
-        yield pid
-    finally:
-        vm.ssh("/bin/sh", "-c", f"kill {pid} 2>/dev/null; /bin/rm -f {pidfile}")
-
-
 def test_software_page_provenance_gate_hides_on_nonour_build(
     webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:
@@ -927,24 +904,28 @@ def test_software_page_renders_when_override_forces_on(
         assert _SOFTWARE_TAB_HREF in general.text, "the Software tab must be PRESENT when the gate is forced on"
 
 
-def test_software_page_renders_uninstall_controls(
+def test_software_actions_link_to_package_manager(
     smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:
-    """The Software page renders the Uninstall confirm checkbox and button, button disabled by default.
+    """Update/Uninstall are LINKS to pfSense's base-system Package Manager (issue #684).
 
-    Scenario: the Uninstall Controls (issue #485) are present in the forced-on render.
+    The Software page no longer self-hosts the pkg operation (no detached daemon, no ``?ajax=tail``
+    live tail). The Update and Uninstall controls are anchors to ``pkg_mgr_install.php`` — the
+    base-system page that runs pkg and shows its own progress from a page that SURVIVES pfBlockerNG's
+    own removal/upgrade.
+
+    Scenario:
       Given the override sentinel set to 'on' (so the provenance gate passes),
       When the Software page is GET,
-      Then the confirm checkbox ``id="pfb_sw_uninstall_confirm"`` is in the body;
-      And the Uninstall button ``id="pfb_sw_uninstall"`` is in the body;
-      And the button tag carries a ``disabled`` attribute by default (JS enables it only
-          after the checkbox is ticked) — the OFF branch of the confirm gate;
+      Then the Uninstall control is an ``<a>`` whose href is ``pkg_mgr_install.php?mode=delete&pkg=…``;
+      And the Update control is an ``<a>`` whose href is ``pkg_mgr_install.php?mode=reinstallpkg&pkg=…``;
+      And the page carries NO in-page pkg machinery — no ``?ajax=tail`` poller, no ``pfb_output``
+          textarea, no old ``pkg_mgr_installed.php`` redirect;
       And the clean render oracle (200, no Fatal/Warning/Notice, marker present) holds.
 
-    Fail-before / pass-after: the ids ``pfb_sw_uninstall_confirm`` / ``pfb_sw_uninstall``
-    and the ``disabled`` attribute on the button were added in issue #485 Step 1. Running
-    against the pre-Step-1 Software page yields a 200 but the ids are absent, failing
-    the ``in body`` assertions.
+    Fail-before / pass-after: the pre-#684 page ran ``pkg`` from a detached daemon and tailed it via
+    ``?ajax=tail`` into a ``pfb_output`` textarea — so the ``pkg_mgr_install.php`` hrefs were absent
+    and ``?ajax=tail`` / ``pfb_output`` were present, inverting every assertion below.
     """
     with software_panel_forced(smoke_vm, "on"):
         resp = webui.get(_SOFTWARE_PAGE)
@@ -952,68 +933,24 @@ def test_software_page_renders_uninstall_controls(
         assert result.ok, f"Software page render oracle failed: {result.detail}"
         body = resp.text
 
-        assert 'id="pfb_sw_uninstall_confirm"' in body, (
-            f"confirm checkbox id='pfb_sw_uninstall_confirm' not found in {_SOFTWARE_PAGE} body"
-        )
-        assert 'id="pfb_sw_uninstall"' in body, (
-            f"Uninstall button id='pfb_sw_uninstall' not found in {_SOFTWARE_PAGE} body"
-        )
-        # The button must carry the `disabled` attribute on initial render (JS enables it
-        # only after the confirm checkbox is ticked). Match the button tag itself to avoid
-        # false-matching the id string in an unrelated attribute or script block.
-        btn_tag_match = re.search(r'<button\b[^>]*id=["\']pfb_sw_uninstall["\'][^>]*>', body)
-        assert btn_tag_match is not None, f"Uninstall button tag not found in {_SOFTWARE_PAGE} body"
-        btn_tag = btn_tag_match.group(0)
-        assert "disabled" in btn_tag, (
-            f"Uninstall button expected 'disabled' attribute on initial render, got: {btn_tag!r}"
-        )
+        # Each control is an anchor carrying its id (not a POST button) whose href points at the
+        # base Package Manager with the right mode + our pfSense-pkg-pfBlockerNG* package. `&` may
+        # be HTML-escaped to `&amp;` in the rendered href.
+        def _assert_pkgmgr_link(elem_id: str, mode: str) -> None:
+            tag = re.search(rf'<a\b[^>]*id=["\']{elem_id}["\'][^>]*>', body)
+            assert tag is not None, f"control {elem_id} is not an <a> link in {_SOFTWARE_PAGE} body"
+            href_re = rf'href=["\']/pkg_mgr_install\.php\?mode={mode}&(?:amp;)?pkg=pfSense-pkg-pfBlockerNG'
+            assert re.search(href_re, tag.group(0)), (
+                f"{elem_id} link must target pkg_mgr_install.php?mode={mode}&pkg=…, got: {tag.group(0)!r}"
+            )
 
+        _assert_pkgmgr_link("pfb_sw_uninstall", "delete")
+        _assert_pkgmgr_link("pfb_sw_update", "reinstallpkg")
 
-def test_software_poller_has_inflight_guard_and_home_redirect(
-    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
-) -> None:
-    """The Software live-log poller ships the in-flight guard + dashboard redirect (issue #680).
-
-    The alpha.14 poller had two field-reported defects the #680 fixes address, both living in the
-    inline poll script that renders ONLY while a software task is active (``$pfb_sw_poll`` =
-    ``isvalidpid('/var/run/pfb_software.pid')``):
-
-    * **Fix B — mobile double lines.** With no in-flight guard, a mobile tab-resume fired an extra
-      ``poll()`` while one was still outstanding; the two overlapping responses appended the same
-      tail slice twice. The fix adds a ``pending`` flag (at most one poll in flight) and a
-      ``visibilitychange`` re-poll that respects it.
-    * **Fix C — uninstall redirect.** On a successful uninstall the poller sent the user to
-      ``/pkg_mgr_installed.php``, which does NOT list pfBlockerNG (installed from our own pkg repo).
-      The fix redirects to the dashboard: ``goHome()`` → ``window.location.assign('/index.php')``.
-
-    Scenario:
-      Given the provenance override forced on AND a LIVE software pidfile (so ``$pfb_sw_poll`` is
-        TRUE and the poll script renders),
-      When the Software page is GET,
-      Then the emitted poller carries the ``pending`` in-flight guard, the ``visibilitychange``
-        re-poll, and a ``goHome()`` that assigns ``/index.php`` — and NOT the old
-        ``/pkg_mgr_installed.php`` target.
-
-    Fail-before / pass-after: against the alpha.14 poller the ``pending`` guard + ``visibilitychange``
-    are absent and the redirect target is ``/pkg_mgr_installed.php`` — so each assertion below flips
-    from failing to passing with the #680 fix.
-    """
-    with software_panel_forced(smoke_vm, "on"), _live_pidfile(smoke_vm, "/var/run/pfb_software.pid"):
-        resp = webui.get(_SOFTWARE_PAGE)
-        result = evaluate_render(_SOFTWARE_PAGE, resp.status_code, resp.text, (_SOFTWARE_PANEL_MARKER,))
-        assert result.ok, f"Software page render oracle failed: {result.detail}"
-        body = resp.text
-
-        # The poll script must actually have rendered (pidfile live ⇒ $pfb_sw_poll TRUE).
-        assert "?ajax=tail" in body, "the software poll script did not render (pidfile not seen as live?)"
-        # Fix B — in-flight guard + visibility re-poll.
-        assert "var pending = false" in body, "poller missing the in-flight guard (Fix B) — mobile double-lines regress"
-        assert "visibilitychange" in body, "poller missing the visibilitychange re-poll (Fix B)"
-        # Fix C — uninstall redirects to the dashboard, not the (empty-for-us) Package Manager list.
-        assert "window.location.assign('/index.php')" in body, "uninstall redirect must target /index.php (Fix C)"
-        assert "/pkg_mgr_installed.php" not in body, (
-            "poller still references the old /pkg_mgr_installed.php redirect target (Fix C not applied)"
-        )
+        # The in-page pkg machinery is gone entirely.
+        assert "?ajax=tail" not in body, "Software page must no longer host the ?ajax=tail poller"
+        assert 'name="pfb_output"' not in body, "Software page must no longer render the pfb_output textarea"
+        assert "/pkg_mgr_installed.php" not in body, "the old post-uninstall redirect target must be gone"
 
 
 def _pfb_output_value(body: str) -> str:
@@ -1024,35 +961,25 @@ def _pfb_output_value(body: str) -> str:
 
 
 def test_log_output_never_prefilled(smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
-    """Neither page prefills the output textarea on any GET (#671 — live log now AJAX-polled).
+    """The Update page never prefills the output textarea on a GET (#671 — live log AJAX-polled).
 
     Scenario (no prefill):
-      Given software.log and the pfBlockerNG log each seeded with a unique marker,
-      When the Software page is GET (plain AND with the old ``?postupgrade=1``) -> pfb_output EMPTY;
+      Given the pfBlockerNG log seeded with a unique marker,
       When the Update page is GET -> pfb_output EMPTY.
 
     The live log is streamed by the client poller (``?ajax=tail``), so the rendered box is always
-    empty; the #666 post-upgrade prefill is removed. The seeded markers make the empty assertions
-    meaningful (empty by choice, not an empty log) — fail-before: #666 prefilled the software.log
-    tail on ``?postupgrade=1``, so ``sw_marker`` would appear there.
+    empty; the #666 post-upgrade prefill is removed. The seeded marker makes the empty assertion
+    meaningful (empty by choice, not an empty log). (The Software page no longer has an output
+    textarea at all — its Update/Uninstall now link to pfSense's Package Manager, issue #684.)
     """
-    sw_marker = f"pfb-sw-prefill-{uuid.uuid4().hex[:8]}"
     upd_marker = f"pfb-upd-prefill-{uuid.uuid4().hex[:8]}"
-    with software_panel_forced(smoke_vm, "on"):
-        _seed_vm_file(smoke_vm, _SOFTWARE_LOG, sw_marker + "\n")
-        _seed_vm_file(smoke_vm, _PFB_LOG, upd_marker + "\n")
+    _seed_vm_file(smoke_vm, _PFB_LOG, upd_marker + "\n")
 
-        # Software: empty on a plain GET AND on the (now-removed) post-upgrade reload.
-        for url in (_SOFTWARE_PAGE, f"{_SOFTWARE_PAGE}?postupgrade=1"):
-            assert sw_marker not in _pfb_output_value(webui.get(url).text), (
-                f"Software page must not prefill pfb_output ({url})"
-            )
-
-        # Update page → no prefill (clean render, and the seeded log marker must be absent).
-        resp = webui.get(_UPDATE_PAGE)
-        result = evaluate_render(_UPDATE_PAGE, resp.status_code, resp.text, ("Update Settings", "Schedule"))
-        assert result.ok, f"Update page render oracle failed: {result.detail}"
-        assert upd_marker not in _pfb_output_value(resp.text), "Update page must not prefill pfb_output"
+    # Update page → no prefill (clean render, and the seeded log marker must be absent).
+    resp = webui.get(_UPDATE_PAGE)
+    result = evaluate_render(_UPDATE_PAGE, resp.status_code, resp.text, ("Update Settings", "Schedule"))
+    assert result.ok, f"Update page render oracle failed: {result.detail}"
+    assert upd_marker not in _pfb_output_value(resp.text), "Update page must not prefill pfb_output"
 
 
 def test_ajax_tail_endpoint_returns_json(
@@ -1067,7 +994,8 @@ def test_ajax_tail_endpoint_returns_json(
 
     For the Update source the per-run log is seeded, so the payload tails it: source 'run' with the
     marker present. fail-before: there was no such endpoint, so the request rendered the full HTML
-    page and ``json.loads`` would raise.
+    page and ``json.loads`` would raise. (The Software page no longer has an ``?ajax=tail`` endpoint
+    — its Update/Uninstall link to pfSense's Package Manager, issue #684.)
     """
     run_marker = f"pfb-tail-{uuid.uuid4().hex[:8]}"
     _seed_vm_file(smoke_vm, _PFB_RUNLOG, run_marker + "\n")
@@ -1079,14 +1007,6 @@ def test_ajax_tail_endpoint_returns_json(
         assert key in payload, f"update ajax=tail payload missing {key!r}: {payload}"
     assert payload["source"] == "run", f"seeded run log should be tailed (source 'run'): {payload}"
     assert run_marker in payload["data"], f"seeded run-log marker missing from tail data: {payload}"
-
-    # Software endpoint likewise returns JSON (provenance-gated → force the panel on).
-    with software_panel_forced(smoke_vm, "on"):
-        sresp = webui.get(f"{_SOFTWARE_PAGE}?ajax=tail")
-        assert sresp.status_code == 200, f"software ajax=tail status {sresp.status_code}"
-        spayload = json.loads(sresp.text)
-        for key in ("offset", "done", "source"):
-            assert key in spayload, f"software ajax=tail payload missing {key!r}: {spayload}"
 
 
 def test_software_page_hidden_when_override_forces_off(
@@ -1225,7 +1145,6 @@ def test_page_table_covers_every_pfblockerng_page() -> None:
 
 _PFB_LOG = "/var/log/pfblockerng/pfblockerng.log"
 _PFB_RUNLOG = "/var/log/pfblockerng/pfblockerng_run.log"
-_SOFTWARE_LOG = "/var/log/pfblockerng/software.log"
 
 
 def _seed_vm_file(vm: SmokeVM, path: str, content: str, *, timeout: float = 30.0) -> None:
@@ -1246,39 +1165,6 @@ def _seed_vm_file(vm: SmokeVM, path: str, content: str, *, timeout: float = 30.0
     )
     if result.returncode != 0:
         raise RuntimeError(f"_seed_vm_file({path!r}) failed: rc={result.returncode} {result.stderr!r}")
-
-
-@pytest.mark.ui_e2e
-def test_software_textareas_are_readonly(
-    smoke_vm: SmokeVM,
-    webui: WebUI,
-    php_error_log_guard: PhpErrorLogGuard,  # noqa: ARG001
-) -> None:
-    """The Software page's pfb_status and pfb_output textareas carry the readonly attribute.
-
-    Scenario: Software output windows are display-only — they must not be editable.
-      Given the Software page rendered with the override gate forced on,
-      When each log textarea opening tag is located by name,
-      Then it contains the readonly attribute.
-
-    Fail-before / pass-after: before this change the two textareas on the Software page
-    had no readonly attribute (unlike the Update page which already had it). These
-    assertions FAIL on the old markup and PASS only after the attribute is added.
-    Paired with ``test_update_log_textareas_are_readonly`` (Tier A) to prove both pages
-    now carry the attribute.
-
-    The Software page's provenance gate blocks direct GET on the sideload deploy, so the
-    hidden override sentinel is used (same pattern as the other software tests above).
-    """
-    with software_panel_forced(smoke_vm, "on"):
-        body = webui.get(_SOFTWARE_PAGE).text
-        for name in ("pfb_status", "pfb_output"):
-            m = re.search(r"<textarea\b[^>]*\bname=([\"'])" + re.escape(name) + r"\1[^>]*>", body)
-            assert m is not None, f"Software page is missing the '{name}' textarea"
-            tag = m.group(0)
-            assert re.search(r"\breadonly\b", tag), (
-                f"Software page '{name}' textarea is editable (no readonly attribute): {tag!r}"
-            )
 
 
 _PENDING_MARKER = "/usr/local/etc/pfb_pending_changes"
