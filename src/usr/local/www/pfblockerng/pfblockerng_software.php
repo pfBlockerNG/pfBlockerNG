@@ -210,8 +210,9 @@ $section->addInput(new Form_StaticText(null, $btn_update))
 	->setHelp('Install the latest version via the pfSense Package Manager. Available only when an update is found.');
 
 // Uninstall — a link straight to pfSense's Package Manager delete flow (its own confirm step runs
-// there). #697: a delete always performs a full teardown (uninstall = OFF), so no intent marker is
-// needed; a version upgrade is a `pkg delete` we cannot distinguish and is handled the same way.
+// there). #697: this is a `pkg delete`, which the pre-deinstall detects as a removal and fully tears
+// down (uninstall = OFF), so no intent marker is needed. (A package Update is `pkg install -f`, a
+// different op the pre-deinstall keeps live.)
 $btn_uninstall = new Form_Button(
 	'pfb_sw_uninstall',
 	'Uninstall',

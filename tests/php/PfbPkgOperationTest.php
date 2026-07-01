@@ -18,8 +18,32 @@ use PHPUnit\Framework\TestCase;
  */
 #[CoversFunction('pfb_parse_pkg_operation')]
 #[CoversFunction('pfb_pkg_argv_subcommand')]
+#[CoversFunction('pfb_pkg_op_tears_down')]
 final class PfbPkgOperationTest extends TestCase
 {
+	/**
+	 * The teardown gate (#697): the pre-deinstall tears pfBlockerNG down ONLY on a genuine removal
+	 * ('delete' — a real uninstall or a major OS upgrade's mass-removal), and keeps it live across a
+	 * package upgrade/reinstall ('install'/'upgrade'/'reinstall'). An undetectable op ('') fails safe
+	 * to teardown, since a real uninstall is always a detectable `pkg delete`.
+	 */
+	public function testDeleteTearsDown(): void
+	{
+		$this->assertTrue(pfb_pkg_op_tears_down('delete'));
+	}
+
+	public function testUndetectableOpFailsSafeToTeardown(): void
+	{
+		$this->assertTrue(pfb_pkg_op_tears_down(''), 'an unknown op must fail safe to teardown');
+	}
+
+	public function testPackageOperationsKeepPfblockerngLive(): void
+	{
+		$this->assertFalse(pfb_pkg_op_tears_down('install'), 'a fresh install must not tear down');
+		$this->assertFalse(pfb_pkg_op_tears_down('reinstall'), 'a forced reinstall must not tear down');
+		$this->assertFalse(pfb_pkg_op_tears_down('upgrade'), 'a package upgrade must not tear down');
+	}
+
 	/** Build a simple linear ancestry: pid 100 (self) -> 90 -> 80 (the pkg proc). */
 	private function chain(string $pkg_cmd): array
 	{
