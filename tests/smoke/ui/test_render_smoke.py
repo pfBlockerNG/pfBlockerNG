@@ -918,39 +918,69 @@ def test_software_actions_link_to_package_manager(
       Given the override sentinel set to 'on' (so the provenance gate passes),
       When the Software page is GET,
       Then the Uninstall control is an ``<a>`` whose href is ``pkg_mgr_install.php?mode=delete&pkg=…``;
-      And the Update control is an ``<a>`` whose href is ``pkg_mgr_install.php?mode=reinstallpkg&pkg=…``;
+      And the Update control's href GATES on update-availability (CodeRabbit #685): with no cached
+          newer version it is inert (``href="#"``, disabled), and with a newer version cached it is an
+          actionable ``pkg_mgr_install.php?mode=reinstallpkg&pkg=…`` link — the href, not just CSS,
+          is the gate (an anchor's ``disabled``/``aria-disabled`` are advisory only);
       And the page carries NO in-page pkg machinery — no ``?ajax=tail`` poller, no ``pfb_output``
           textarea, no old ``pkg_mgr_installed.php`` redirect;
       And the clean render oracle (200, no Fatal/Warning/Notice, marker present) holds.
 
     Fail-before / pass-after: the pre-#684 page ran ``pkg`` from a detached daemon and tailed it via
     ``?ajax=tail`` into a ``pfb_output`` textarea — so the ``pkg_mgr_install.php`` hrefs were absent
-    and ``?ajax=tail`` / ``pfb_output`` were present, inverting every assertion below.
+    and ``?ajax=tail`` / ``pfb_output`` were present, inverting the assertions below.
     """
+    software_cache = "/var/db/pfblockerng/software_update.json"
+
+    def _update_anchor(body: str) -> str:
+        tag = re.search(r'<a\b[^>]*id=["\']pfb_sw_update["\'][^>]*>', body)
+        assert tag is not None, f"Update control is not an <a> link in {_SOFTWARE_PAGE} body"
+        return tag.group(0)
+
+    def _has_pkgmgr_href(tag: str, mode: str) -> bool:
+        # `&` may render HTML-escaped to `&amp;`; the pkg is our pfSense-pkg-pfBlockerNG*.
+        pat = rf'href=["\']/pkg_mgr_install\.php\?mode={mode}&(?:amp;)?pkg=pfSense-pkg-pfBlockerNG'
+        return bool(re.search(pat, tag))
+
     with software_panel_forced(smoke_vm, "on"):
+        # (A) No cached 'latest' → no update available → the Update href is inert ('#'), NOT an
+        #     actionable reinstall link (CodeRabbit #685: the href itself must gate, not just CSS).
+        smoke_vm.ssh("/bin/rm", "-f", software_cache)
         resp = webui.get(_SOFTWARE_PAGE)
         result = evaluate_render(_SOFTWARE_PAGE, resp.status_code, resp.text, (_SOFTWARE_PANEL_MARKER,))
         assert result.ok, f"Software page render oracle failed: {result.detail}"
         body = resp.text
 
-        # Each control is an anchor carrying its id (not a POST button) whose href points at the
-        # base Package Manager with the right mode + our pfSense-pkg-pfBlockerNG* package. `&` may
-        # be HTML-escaped to `&amp;` in the rendered href.
-        def _assert_pkgmgr_link(elem_id: str, mode: str) -> None:
-            tag = re.search(rf'<a\b[^>]*id=["\']{elem_id}["\'][^>]*>', body)
-            assert tag is not None, f"control {elem_id} is not an <a> link in {_SOFTWARE_PAGE} body"
-            href_re = rf'href=["\']/pkg_mgr_install\.php\?mode={mode}&(?:amp;)?pkg=pfSense-pkg-pfBlockerNG'
-            assert re.search(href_re, tag.group(0)), (
-                f"{elem_id} link must target pkg_mgr_install.php?mode={mode}&pkg=…, got: {tag.group(0)!r}"
-            )
+        up_tag = _update_anchor(body)
+        assert not _has_pkgmgr_href(up_tag, "reinstallpkg"), (
+            f"Update must NOT be an actionable reinstall link when no update is available, got: {up_tag!r}"
+        )
+        assert re.search(r'href=["\']#["\']', up_tag), f"Update href must be inert ('#') when no update: {up_tag!r}"
 
-        _assert_pkgmgr_link("pfb_sw_uninstall", "delete")
-        _assert_pkgmgr_link("pfb_sw_update", "reinstallpkg")
+        # Uninstall is ALWAYS the actionable delete link (removal does not gate on availability).
+        un_tag = re.search(r'<a\b[^>]*id=["\']pfb_sw_uninstall["\'][^>]*>', body)
+        assert un_tag is not None, f"Uninstall control is not an <a> link in {_SOFTWARE_PAGE} body"
+        assert _has_pkgmgr_href(un_tag.group(0), "delete"), (
+            f"Uninstall link must target pkg_mgr_install.php?mode=delete&pkg=…, got: {un_tag.group(0)!r}"
+        )
 
         # The in-page pkg machinery is gone entirely.
         assert "?ajax=tail" not in body, "Software page must no longer host the ?ajax=tail poller"
         assert 'name="pfb_output"' not in body, "Software page must no longer render the pfb_output textarea"
         assert "/pkg_mgr_installed.php" not in body, "the old post-uninstall redirect target must be gone"
+
+        # (B) Seed a newer cached 'latest' → update available → the Update href becomes the actionable
+        #     reinstallpkg link (the ON branch of the availability gate). 99.0.0 > any real installed
+        #     version, so pfb_update_available() is TRUE regardless of the branch build.
+        try:
+            smoke_vm.ssh("/bin/rm", "-f", software_cache)
+            _seed_vm_file(smoke_vm, software_cache, '{"latest": "99.0.0", "last_checked": 1}')
+            up_tag2 = _update_anchor(webui.get(_SOFTWARE_PAGE).text)
+            assert _has_pkgmgr_href(up_tag2, "reinstallpkg"), (
+                f"Update link must target pkg_mgr_install.php?mode=reinstallpkg when an update exists: {up_tag2!r}"
+            )
+        finally:
+            smoke_vm.ssh("/bin/rm", "-f", software_cache)
 
 
 def _pfb_output_value(body: str) -> str:
