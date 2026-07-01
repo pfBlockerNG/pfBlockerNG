@@ -7,7 +7,7 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Pin pfb_log_tail_payload() -- the response builder behind the ?ajax=tail branch on the Update
- * and Software pages (issue #671). It maps the requested source to its per-run log + pidfile,
+ * page (issue #671). It maps the requested source to its per-run log + pidfile,
  * reads the next slice via pfb_log_tail_chunk(), and reports whether the client should keep
  * polling. The 'done' flag is driven by the dispatched process's liveness (isvalidpid on the
  * pidfile), doubled here via $GLOBALS['pfb_test_valid_pids'].
@@ -27,7 +27,6 @@ final class LiveLogTailPayloadTest extends TestCase
 		@mkdir($pfb['logdir'], 0777, TRUE);
 		@file_put_contents($pfb['runlog'], '');
 		@file_put_contents($pfb['log'], '');
-		@file_put_contents($pfb['sw_runlog'], '');
 		$GLOBALS['pfb_test_valid_pids'] = [];
 	}
 
@@ -124,17 +123,5 @@ final class LiveLogTailPayloadTest extends TestCase
 		$this->assertSame('none', $p['source']);
 		$this->assertSame('', $p['data']);
 		$this->assertTrue($p['done']);
-	}
-
-	public function testSoftwareSourceTailsItsOwnRunLog(): void
-	{
-		global $pfb;
-		file_put_contents($pfb['sw_runlog'], "Updating pfBlockerNG...\n");
-		$GLOBALS['pfb_test_valid_pids']['/var/run/pfb_software.pid'] = TRUE;
-
-		$p = pfb_log_tail_payload('software', -1, FALSE);
-		$this->assertSame('run', $p['source']);
-		$this->assertSame("Updating pfBlockerNG...\n", $p['data']);
-		$this->assertTrue($p['running']);
 	}
 }
