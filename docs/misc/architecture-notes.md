@@ -90,6 +90,13 @@ Exported env (only these are promised):
 
 - `PFB_WHEN` (`pre`|`post`)
 - `PFB_TRIGGER` (`cron`|`update`|`force-reload` — the ADR's `force-update` collapses to `cron`)
+- `PFB_POST_INSTALL` (`1` when the run is the install/upgrade resync — the reconfigure right after
+  the package is installed/upgraded; otherwise unset) and `PFB_PRE_UNINSTALL` (`1` when the run is
+  the pre-deinstall teardown as the package is uninstalled; otherwise unset). Set on both `pre` and
+  `post`. Published by `pfb_hook_lifecycle_ctx()` from `$pfb['hook_lifecycle']` (set by `install.inc`
+  / the pre-deinstall); a normal cron/manual/force update sets neither. `PFB_PRE_UNINSTALL` does not
+  fire when "Keep enabled during version upgrades" (#687) keeps pfBlockerNG live across an upgrade —
+  no teardown pass runs, so no hook fires.
 - post-only `PFB_IP_CHANGED`/`PFB_DNSBL_CHANGED` (`0`|`1`, accurate — guard on these)
 - `PFB_CHANGED_IP_ALIASES` (post-only, space-separated `pfB_*` IP firewall aliases updated this
   pass) and `PFB_CHANGED_DNSBL_GROUPS` (post-only, space-separated `DNSBL_*` groups updated this
