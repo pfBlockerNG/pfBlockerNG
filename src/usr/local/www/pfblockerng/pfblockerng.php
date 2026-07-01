@@ -715,6 +715,11 @@ function pfblockerng_download_extras($timeout=600, $type='') {
 function pfblockerng_sync_cron($force_all = FALSE, $scope = 'both') {
 	global $pfb, $pfbarr;
 
+	// Open the per-run log window BEFORE the first log line so the live viewer mirrors the whole
+	// feed pass. Force Check / cron dispatch through here (not sync_package_pfblockerng directly,
+	// which is only reached at the very end); without this the tail would stay silent until then.
+	pfb_runlog_begin();
+
 	$hour = date('G');
 	$dow  = date('N');
 	$pfb['update_cron'] = FALSE;

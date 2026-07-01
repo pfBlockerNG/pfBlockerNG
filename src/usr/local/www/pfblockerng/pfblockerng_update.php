@@ -28,9 +28,6 @@
  * limitations under the License.
  */
 
-// Disable NGINX output buffering
-header("X-Accel-Buffering: no");
-
 require_once('guiconfig.inc');
 require_once('globals.inc');
 require_once('pfsense-utils.inc');

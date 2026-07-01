@@ -11914,9 +11914,13 @@ function pfb_log_tail_payload(string $which, int $offset, bool $has_offset): arr
 	if (!$has_offset) {
 		clearstatcache(FALSE, $runfile);
 		$runsize = @filesize($runfile);
-		if ($runsize === FALSE || $runsize === 0) {
-			// No current/last run log -> a View falls back to the tail of the cumulative log.
-			// One-shot (no live run to follow), so done = TRUE.
+		// Fall back to the cumulative log's tail ONLY when the run log is empty AND no run is in
+		// flight (a View with nothing current). While a run IS alive, an empty run log just means
+		// the dispatched daemon has not written its first line yet -- the client's first poll
+		// commonly beats the fork/exec/bootstrap -- so fall through to the run-log follow and keep
+		// polling (done = FALSE), never a one-shot fallback that would stop the tail prematurely.
+		if (($runsize === FALSE || $runsize === 0) && !$running) {
+			// No current/last run log and nothing running -> one-shot View of the cumulative tail.
 			$fsize = '';
 			if ($fallback !== '') {
 				clearstatcache(FALSE, $fallback);
@@ -11934,6 +11938,20 @@ function pfb_log_tail_payload(string $which, int $offset, bool $has_offset): arr
 	// Follow the run log; flush the final partial line once the process is gone.
 	$chunk = pfb_log_tail_chunk($runfile, $offset, !$running);
 	return ['data' => $chunk['data'], 'offset' => $chunk['offset'], 'running' => $running, 'done' => !$running, 'source' => 'run'];
+}
+
+
+// Open the per-run log window for the live viewer: truncate the run log once and turn on the
+// pfb_logger() mirror (runlog_active). Guarded so the OUTERMOST entry point wins -- when
+// pfblockerng_sync_cron() (Force Check / cron tick) begins the window and later calls
+// sync_package_pfblockerng(), the inner call is a no-op and does NOT re-truncate mid-run (which
+// would wipe the feed-pass output the client is already tailing). Idempotent within a process.
+function pfb_runlog_begin() {
+	global $pfb;
+	if (!empty($pfb['runlog']) && empty($pfb['runlog_active'])) {
+		@file_put_contents($pfb['runlog'], '');
+		$pfb['runlog_active'] = TRUE;
+	}
 }
 
 
@@ -12538,13 +12556,9 @@ function sync_package_pfblockerng($cron='') {
 	global $g, $pfb, $pfbarr;
 	pfb_global();
 
-	// Start a fresh per-run log for the live Update viewer and activate the pfb_logger mirror for
-	// the duration of this run. Truncated once here so the viewer always tails THIS run from its
-	// start (GUI- and cron-triggered runs both funnel through here -- ADR-43 entrypoint).
-	if (!empty($pfb['runlog'])) {
-		@file_put_contents($pfb['runlog'], '');
-		$pfb['runlog_active'] = TRUE;
-	}
+	// Open the per-run log window for the live viewer (no-op if pfblockerng_sync_cron() already
+	// opened it for a Force Check / cron pass -- see pfb_runlog_begin).
+	pfb_runlog_begin();
 
 	$pfb['filter_configure']	= FALSE;	// Flag to call filter_configure once
 

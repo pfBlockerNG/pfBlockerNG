@@ -1275,7 +1275,9 @@ def test_update_runnow_scope_guard_and_ledger(
             )
 
         # ACT 1: POST scope=ip — a partial run; the cron ledger must NOT advance.
-        # pfb_runnow() blocks until pfb_trigger writes 'UPDATE PROCESS ENDED'.
+        # pfb_runnow() dispatches a detached process and returns immediately (the live log is
+        # AJAX-polled since #671); mark_ran('cron') still runs synchronously in the page process,
+        # so the ledger assertions below read the intended state regardless of the run's progress.
         resp = webui.post(
             UPDATE_PAGE,
             overrides={"pfb_scope": "ip"},
@@ -1294,6 +1296,25 @@ def test_update_runnow_scope_guard_and_ledger(
             f"ledger cron.last_run={cron_last_after_ip} >= before_ts={before_ts} after scope=ip — "
             "pfb_runnow() must NOT call mark_ran('cron') for a partial scope=ip run "
             "(would suppress the next DNSBL-inclusive full pass)"
+        )
+
+        # Run Now no longer blocks (the live log is AJAX-polled, #671), so the scope=ip dispatched
+        # process may still be alive. Wait for it to exit before the next POST — otherwise
+        # pfb_active_task_running() would refuse the scope=both dispatch and the cron ledger would
+        # not advance (a race the old blocking pfb_livetail() masked). Mirrors isvalidpid: read the
+        # pidfile daemon(8) self-clears on exit and probe the pid with kill -0.
+        def _runnow_idle() -> bool:
+            probe = vm.ssh(
+                "/bin/sh",
+                "-c",
+                "p=$(cat /var/run/pfb_runnow.pid 2>/dev/null); "
+                'if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then echo up; else echo down; fi',
+            )
+            return probe.stdout.strip() == "down"
+
+        assert helpers.wait_until(_runnow_idle, timeout=25.0), (
+            "scope=ip Run Now process did not exit before the scope=both POST — "
+            "pfb_active_task_running() would refuse the next dispatch"
         )
 
         # ACT 2: POST scope=both — a full-pass run; the cron ledger MUST advance.
