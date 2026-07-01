@@ -361,8 +361,9 @@ $section->addInput(new Form_Checkbox(
 ))->setHelp('<span class="text-danger">Note: </span>'
 		. 'With \'Keep settings\' enabled, pfBlockerNG will maintain run state on Installation/Upgrade.<br />'
 		. ' If \'Keep Settings\' is not \'enabled\' on pkg Install/De-Install, all settings will be Wiped!<br />'
-		. ' This also applies to pfSense version upgrades, which remove and reinstall packages &mdash; '
-		. 'with \'Keep Settings\' disabled, a version upgrade wipes pfBlockerNG\'s settings too.<br /><br />'
+		. ' This also applies to a major pfSense version upgrade, which fully removes and reinstalls '
+		. 'packages &mdash; with \'Keep Settings\' disabled it wipes pfBlockerNG\'s settings too. A normal '
+		. 'package update keeps them.<br /><br />'
 		. '<span class="text-danger">Note: </span>'
 		. ' To clear all downloaded lists, uncheck these two checkboxes and \'Save\'. Re-check both boxes and run a \'Force Update|Reload\''
 );

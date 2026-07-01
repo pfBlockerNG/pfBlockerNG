@@ -95,18 +95,19 @@ Exported env (only these are promised):
   pre-deinstall teardown as the package is uninstalled, else `0`). **Always emitted as `1`/`0`**
   (#695, like `PFB_IP_CHANGED`), on both `pre` and `post`. Published by `pfb_hook_lifecycle_ctx()`
   from `$pfb['hook_lifecycle']` (set by `install.inc` / the pre-deinstall); a normal cron/manual/force
-  update sets both to `0`. A delete ALWAYS tears pfBlockerNG down (uninstall = OFF), so
-  `PFB_PRE_UNINSTALL=1` fires on every removal, INCLUDING a pfSense version upgrade — which pkg
-  removes with the same `pkg delete` a real uninstall uses, indistinguishable in the pre-deinstall
-  (#697). A version upgrade is handled "the usual way": torn down, then reinstalled after reboot,
-  settings preserved by `keep=on` (the default; `keep=off` wipes config on any delete, upgrades
-  included).
+  update sets both to `0`. The pre-deinstall tears pfBlockerNG down (and fires `PFB_PRE_UNINSTALL=1`)
+  ONLY on a genuine removal: `pfb_pkg_op_tears_down()` gates on the detected pkg op (#697) — a real
+  uninstall and a MAJOR OS upgrade's mass-removal are `pkg delete` → teardown; a package
+  upgrade/reinstall / minor in-place update is `pkg install -f` / `pkg upgrade` → SKIP (pfBlockerNG
+  stays live, its resync re-applies). A major OS upgrade is reinstalled after reboot, settings kept
+  by `keep=on` (the default; `keep=off` wipes config only when the teardown runs — an uninstall or a
+  major OS upgrade, not a normal package update). `''` (undetectable op) fails safe to teardown.
 - `PFB_PKG_OP` (`install`|`upgrade`|`reinstall`|`delete`, else `''`) — the actual package-manager
-  operation, read by `pfb_pkg_operation()` from the pkg/pkg-static ancestor's argv (#697). Its
-  discriminating value is in the post-install (fresh `install` vs `upgrade` vs forced `reinstall`);
-  in the pre-deinstall it is `delete` for both a real uninstall and a version-upgrade removal (they
-  are the same `pkg delete`). `''` on a normal cron/manual pass (not run under pkg). Context only —
-  never a teardown decision.
+  operation, read by `pfb_pkg_operation()` from the pkg/pkg-static ancestor's argv (#697). It both
+  gates the pre-deinstall teardown (above) and rides to hooks so a hook can tell a fresh install
+  from an upgrade. The parser skips pkg's arg-taking GLOBAL options (`-o -j -c -r -C -R` + long
+  forms) that precede the subcommand — pfSense passes `-c`/`-r` during an OS upgrade. `''` on a
+  normal cron/manual pass (not run under pkg).
 - post-only `PFB_IP_CHANGED`/`PFB_DNSBL_CHANGED` (`0`|`1`, accurate — guard on these)
 - `PFB_CHANGED_IP_ALIASES` (post-only, space-separated `pfB_*` IP firewall aliases updated this
   pass) and `PFB_CHANGED_DNSBL_GROUPS` (post-only, space-separated `DNSBL_*` groups updated this

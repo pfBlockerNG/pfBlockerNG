@@ -3681,6 +3681,24 @@ function pfb_pkg_operation(): string {
 
 
 /*
+ * #697: does a pre-deinstall pass that saw pkg operation $op perform a FULL teardown (turn
+ * pfBlockerNG OFF + remove live objects), or SKIP it to keep pfBlockerNG live? Pure decision.
+ *
+ * pfSense reaches our pre-deinstall for BOTH a genuine removal and an in-place package
+ * reinstall/upgrade, but with a DIFFERENT pkg operation: a real uninstall (and a major OS upgrade's
+ * mass-removal) is `pkg delete` -> 'delete'; the GUI Update / a `pkg upgrade` / a forced reinstall
+ * is `pkg install -f` / `pkg upgrade` -> 'install'|'reinstall'|'upgrade'. So tear down ONLY on a
+ * delete; keep pfBlockerNG live across a package upgrade/reinstall (its resync re-applies). An
+ * unrecognised/undetectable op ('') FAILS SAFE to teardown -- a real uninstall is always a
+ * detectable `pkg delete`, so '' can only be an odd case, and tearing down (rebuilt by any following
+ * resync, config kept by keep=on) never orphans live objects the way a wrong skip would.
+ */
+function pfb_pkg_op_tears_down(string $op): bool {
+	return $op === 'delete' || $op === '';
+}
+
+
+/*
  * #693 (follow-up to #690): mirror a completed hook's captured stdout/stderr to the
  * package-manager output during a pkg install/upgrade/uninstall.
  *
@@ -17122,13 +17140,21 @@ function pfblockerng_php_pre_deinstall_command() {
 	require_once('config.inc');
 	global $g, $pfb;
 
-	// #697: a delete ALWAYS tears pfBlockerNG down. pfSense removes a package during a version/OS
-	// upgrade with the same `pkg delete` a real uninstall uses (verified against pkg-utils.inc), so
-	// the pre-deinstall cannot tell them apart -- and rather than try, we handle a version upgrade
-	// "the usual way": tear down here, then pfSense's post-reboot reinstall + resync brings
-	// pfBlockerNG back, with settings preserved by keep=on (the default). A keep=off config wipe
-	// (below) therefore happens on any delete, INCLUDING an upgrade -- documented on the keep field.
-	//
+	// #697: tear down ONLY on a genuine removal; keep pfBlockerNG live across a package upgrade.
+	// pfSense reaches the pre-deinstall for both, but with a different pkg operation (read from the
+	// pkg ancestor's argv): a real uninstall -- and a MAJOR OS upgrade's mass-removal -- is
+	// `pkg delete` (op 'delete'); the GUI Update / `pkg upgrade` / a forced reinstall is
+	// `pkg install -f` / `pkg upgrade` (op install|reinstall|upgrade). On a non-delete op we SKIP
+	// the teardown and let the package's post-install resync re-apply -- so a version bump keeps
+	// pfBlockerNG running. On a delete we tear down (uninstall = OFF); a major OS upgrade takes that
+	// path too and is reinstalled after reboot, settings kept by keep=on (the default). '' fails safe
+	// to teardown (a real uninstall is always a detectable `pkg delete`).
+	$pfb_pkg_op = pfb_pkg_operation();
+	if (!pfb_pkg_op_tears_down($pfb_pkg_op)) {
+		update_status("Keeping pfBlockerNG active across the package {$pfb_pkg_op} (not a removal).\n");
+		return;
+	}
+
 	// Set these two variables to disable pfBlockerNG on de-install. pfb_global() turns the
 	// install/reinstall flag into enable/dnsbl='' (2129), so this runs a full DISABLE pass --
 	// uninstall == turning pfBlockerNG OFF (rules removed, DNSBL/Unbound disabled, its pre/post
