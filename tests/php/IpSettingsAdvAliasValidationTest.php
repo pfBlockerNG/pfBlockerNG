@@ -5,36 +5,46 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * Tests for the Advanced Inbound/Outbound alias validation on the IP settings
- * page (issue #676, sibling of #636).
+ * Tests for the Advanced Inbound/Outbound alias handling on the IP settings page
+ * (issue #676, sibling of #636).
  *
  * pfblockerng.php is a TEMPLATE: it generates the per-continent settings pages
- * (pfblockerng_<Continent>.php) via file_put_contents. The Advanced In/Out alias
- * validation lives inside that generated template. Historically it gated each of
- * the four fields (aliasports_in / aliasaddr_in / aliasports_out / aliasaddr_out)
- * with is_alias(), which reads the in-memory $aliastable cache — never populated
- * on this page — so every EXISTING alias was rejected with "Must use an existing
- * Alias" (#676, identical root cause to #636 on the category-edit page).
+ * (pfblockerng_<Continent>.php) via file_put_contents. On a POST save those pages
+ * process the four Advanced alias fields (aliasports_in / aliasaddr_in /
+ * aliasports_out / aliasaddr_out) in TWO steps that this suite exercises together,
+ * both extracted verbatim from the shipped template source so the real page code
+ * runs — not a copy:
  *
- * The fix delegates the block to pfb_adv_alias_field_errors(), which resolves
- * existence AND type from alias_get_type() (config-based). This suite EXECUTES
- * the real validation block, extracted verbatim from the shipped template source,
- * against a seeded configuration — so it exercises the generated page's actual
- * code, not a copy. The generated per-continent pages cannot be driven in CI
- * (they only exist after a MaxMind GeoIP update needing a key + network), so this
- * PHP-layer execution is the CI-runnable evidence for the page.
+ *   1. Select-option normalization: each field whose submitted value is not a key
+ *      in its dropdown options is reset to '' (its default). The options are built
+ *      from the configuration — port aliases for the port fields, network aliases
+ *      for the address fields — so this step silently drops any non-existent or
+ *      wrong-type value BEFORE validation.
+ *   2. Advanced alias validation: pfb_adv_alias_field_errors() (#636) checks each
+ *      surviving value against the configuration via alias_get_type().
  *
- * Red -> green: aliases are seeded into the configuration ONLY (never into the
- * is_alias() name list $GLOBALS['pfb_test_aliases']). Against the old
- * is_alias()-backed block, an existing alias reads as missing (the bug); the type
- * check did not exist there at all. After the fix the block accepts existing
- * aliases, corrects the aliasaddr_out label to "Source" (the rendered field is
- * "Custom Source"), and enforces per-field type.
+ * The #676 bug is in step 2: it used is_alias(), which reads the in-memory
+ * $aliastable cache — never populated on this page — so every alias that SURVIVED
+ * normalization (i.e. every valid, existing, correct-type alias the user picked
+ * from the dropdown) was then rejected with "Must use an existing Alias". The fix
+ * resolves existence from alias_get_type() (config-based) instead, so surviving
+ * aliases are accepted.
+ *
+ * Because normalization runs first, a non-existent or wrong-type value never
+ * reaches validation as an error — it is reset to '' and saved empty. These tests
+ * therefore assert the REAL page behaviour: a valid alias is accepted (the
+ * regression, red->green against the old is_alias() check), while an invalid one
+ * is silently normalized away. The generated per-continent pages need a MaxMind
+ * GeoIP update to exist on disk, so this PHP-layer execution of the real blocks is
+ * the CI-runnable evidence for the page.
  */
 final class IpSettingsAdvAliasValidationTest extends TestCase
 {
-	/** The Advanced In/Out validation block extracted from the shipped template. */
-	private static string $validationBlock;
+	/** The config-driven alias-options builder, extracted from the template. */
+	private static string $optionsBlock;
+
+	/** The select-option normalization + Advanced alias validation, extracted. */
+	private static string $processBlock;
 
 	public static function setUpBeforeClass(): void
 	{
@@ -43,24 +53,33 @@ final class IpSettingsAdvAliasValidationTest extends TestCase
 		);
 		self::assertNotFalse($src, 'could not read pfblockerng.php');
 
-		// Extract the block between the two anchor comments of the generated
-		// template — from the Advanced In/Out validation up to the next validation
-		// section (Protocol). This is the exact code the generated pages run.
+		// Slice 1: build $options_aliasports_* / $options_aliasaddr_* from config.
 		$ok = preg_match(
-			'/\/\/ Validate Adv\. In\/Outbound firewall rules settings.*?' .
+			'/\/\/ Collect all pfSense .Port. Aliases.*?(?=\$ports_list\s*=)/s',
+			$src,
+			$m
+		);
+		self::assertSame(1, $ok, 'could not locate the alias-options block in pfblockerng.php');
+		self::$optionsBlock = $m[0];
+
+		// Slice 2: the select-option normalization foreach(es) + the Advanced In/Out
+		// validation — the full save-time processing of the four alias fields.
+		$ok = preg_match(
+			'/\/\/ Validate Select field options.*?' .
 			'(?=\/\/ Validate Adv\. firewall rule \x27Protocol\x27 setting)/s',
 			$src,
 			$m
 		);
-		self::assertSame(1, $ok, 'could not locate the Advanced In/Out validation block in pfblockerng.php');
-		self::$validationBlock = $m[0];
+		self::assertSame(1, $ok, 'could not locate the alias normalization/validation block in pfblockerng.php');
+		self::$processBlock = $m[0];
 	}
 
 	protected function setUp(): void
 	{
 		$GLOBALS['config'] = [];
-		// The alias exists in the CONFIG but NOT in the is_alias() name list, so a
-		// regression to is_alias() would visibly reject every seeded alias below.
+		// The aliases exist in the CONFIG but NOT in the is_alias() name list, so a
+		// regression to is_alias() would reject every seeded alias that survives
+		// normalization — the exact #676 failure.
 		$GLOBALS['pfb_test_aliases'] = [];
 	}
 
@@ -71,7 +90,8 @@ final class IpSettingsAdvAliasValidationTest extends TestCase
 	}
 
 	/**
-	 * Seed firewall aliases into config — the source alias_get_type() reads.
+	 * Seed firewall aliases into config — the source alias_get_type() and the
+	 * dropdown-option builder both read.
 	 *
 	 * @param array<string, string> $typesByName  name => type ('port'/'network'/'host'/...)
 	 */
@@ -85,118 +105,108 @@ final class IpSettingsAdvAliasValidationTest extends TestCase
 	}
 
 	/**
-	 * Run the extracted validation block against a POST and return the collected
-	 * $input_errors. $input_errors is left UNSET before the block runs, exactly as
-	 * on the real page — proving the append idiom does not fatal on the happy path
-	 * (an array_merge(null, ...) would).
+	 * Run the REAL page save path for the four alias fields — options build, then
+	 * normalization, then validation — against $post, and return both the
+	 * normalized POST values and the collected $input_errors. $input_errors is left
+	 * UNSET before the blocks run, exactly as on the page (proving the append idiom
+	 * does not fatal on the happy path — an array_merge(null, ...) would).
 	 *
 	 * @param  array<string, string> $post
-	 * @return array<int, string>
+	 * @return array{errors: array<int, string>, post: array<string, mixed>}
 	 */
-	private function runValidation(array $post): array
+	private function runSavePath(array $post): array
 	{
 		$_POST = $post;
+		eval(self::$optionsBlock);
 		unset($input_errors);
-		eval(self::$validationBlock);
-		return $input_errors ?? [];
+		eval(self::$processBlock);
+		return ['errors' => $input_errors ?? [], 'post' => $_POST];
 	}
 
 	// -----------------------------------------------------------------------
-	// Existence oracle — the #676 regression: an EXISTING alias is accepted.
+	// The #676 regression: a valid, existing, correct-type alias — exactly what
+	// the dropdown offers — survives normalization and is ACCEPTED (is_alias()
+	// wrongly rejected it).
 	// -----------------------------------------------------------------------
-
-	public function testExistingNetworkAliasInAddressFieldIsAccepted(): void
-	{
-		// Given a network alias that exists in the firewall configuration
-		$this->seedAliases(['MyNet' => 'network']);
-
-		// When it is supplied to the outbound address field
-		$errors = $this->runValidation(['aliasaddr_out' => 'MyNet']);
-
-		// Then the save is allowed — under the old is_alias() block this existing
-		// alias was wrongly rejected as non-existent (#676).
-		$this->assertSame([], $errors);
-	}
 
 	public function testExistingPortAliasInPortFieldIsAccepted(): void
 	{
-		// Given a port alias that exists
-		$this->seedAliases(['MyPorts' => 'port']);
+		// Given a port alias that exists in the firewall configuration
+		$this->seedAliases(['GoodPort' => 'port', 'GoodNet' => 'network']);
 
-		// When supplied to a port field
-		$errors = $this->runValidation(['aliasports_in' => 'MyPorts']);
+		// When it is submitted to a port field (as picked from the dropdown)
+		$result = $this->runSavePath(['aliasports_in' => 'GoodPort']);
 
-		// Then it is accepted
-		$this->assertSame([], $errors);
+		// Then it survives normalization and is accepted — no error, value kept.
+		// Under the old is_alias() check this existing alias was rejected (#676).
+		$this->assertSame([], $result['errors']);
+		$this->assertSame('GoodPort', $result['post']['aliasports_in']);
+	}
+
+	public function testExistingNetworkAliasInAddressFieldIsAccepted(): void
+	{
+		// Given a network alias that exists
+		$this->seedAliases(['GoodPort' => 'port', 'GoodNet' => 'network']);
+
+		// When submitted to the outbound address field
+		$result = $this->runSavePath(['aliasaddr_out' => 'GoodNet']);
+
+		// Then it is accepted and kept (the outbound address field renders as
+		// "Custom Source"; the value is preserved regardless of the label).
+		$this->assertSame([], $result['errors']);
+		$this->assertSame('GoodNet', $result['post']['aliasaddr_out']);
 	}
 
 	// -----------------------------------------------------------------------
-	// Non-existent alias — rejected, and with the corrected outbound label.
+	// Real page behaviour: an invalid value never reaches validation as an error
+	// — normalization silently resets it to '' first. (These pin the surrounding
+	// normalization CodeRabbit flagged, so the accept cases above are not read in
+	// isolation.)
 	// -----------------------------------------------------------------------
 
-	public function testNonExistentAliasIsRejectedAsMissing(): void
+	public function testWrongTypeAliasIsSilentlyNormalizedToEmpty(): void
 	{
-		// Given: while it exists, the same name is accepted (proves it is the
-		// existence check doing the rejecting below, not a format error).
-		$this->seedAliases(['KnownNet' => 'network']);
-		$this->assertSame([], $this->runValidation(['aliasaddr_out' => 'KnownNet']),
-			'pre-condition: the alias is accepted while it exists');
+		// Given a NETWORK alias supplied to a PORT field (a wrong-type pick)
+		$this->seedAliases(['GoodPort' => 'port', 'GoodNet' => 'network']);
+
+		// When processed
+		$result = $this->runSavePath(['aliasports_in' => 'GoodNet']);
+
+		// Then normalization drops it to '' (not a port-dropdown option) and no
+		// error is raised — the page saves it empty rather than surfacing a type
+		// error. Asserting an error here would test behaviour the page cannot show.
+		$this->assertSame('', $result['post']['aliasports_in']);
+		$this->assertSame([], $result['errors']);
+	}
+
+	public function testNonExistentAliasIsSilentlyNormalizedToEmpty(): void
+	{
+		// Given: while it exists, the same name survives and is accepted (proves it
+		// is normalization — not validation — that clears the non-existent case).
+		$this->seedAliases(['GoodPort' => 'port', 'GoodNet' => 'network']);
+		$survived = $this->runSavePath(['aliasports_in' => 'GoodPort']);
+		$this->assertSame('GoodPort', $survived['post']['aliasports_in'],
+			'pre-condition: an existing correct-type alias survives normalization');
 
 		// When a name that is NOT a configured alias is supplied
-		$errors = $this->runValidation(['aliasaddr_out' => 'NoSuchAlias']);
+		$result = $this->runSavePath(['aliasports_in' => 'NoSuchAlias']);
 
-		// Then it is rejected as non-existent...
-		$this->assertCount(1, $errors);
-		$this->assertStringContainsString('Must use an existing Alias', $errors[0]);
-		// ...labelled "Source Outbound" — the outbound address field renders as
-		// "Custom Source" on this page, so the old "Destination Out" label was wrong.
-		$this->assertStringContainsString('Source Outbound', $errors[0]);
+		// Then it is reset to '' and produces no error.
+		$this->assertSame('', $result['post']['aliasports_in']);
+		$this->assertSame([], $result['errors']);
 	}
-
-	// -----------------------------------------------------------------------
-	// Type enforcement — new on this page (issue #676 decision): a wrong-type
-	// alias that previously saved is now rejected.
-	// -----------------------------------------------------------------------
-
-	public function testWrongTypeAliasInAddressFieldIsRejected(): void
-	{
-		// Given a PORT alias (exists) supplied to an ADDRESS field
-		$this->seedAliases(['MyPorts' => 'port']);
-
-		// When validated
-		$errors = $this->runValidation(['aliasaddr_out' => 'MyPorts']);
-
-		// Then it is rejected on type — the old block had no type check and saved it.
-		$this->assertCount(1, $errors);
-		$this->assertStringContainsString('Must use a Network or Host-type alias', $errors[0]);
-	}
-
-	public function testWrongTypeAliasInPortFieldIsRejected(): void
-	{
-		// Given a NETWORK alias (exists) supplied to a PORT field
-		$this->seedAliases(['MyNet' => 'network']);
-
-		$errors = $this->runValidation(['aliasports_out' => 'MyNet']);
-
-		$this->assertCount(1, $errors);
-		$this->assertStringContainsString('Must use a Port-type alias', $errors[0]);
-	}
-
-	// -----------------------------------------------------------------------
-	// Empty fields are skipped (no spurious errors).
-	// -----------------------------------------------------------------------
 
 	public function testEmptyFieldsProduceNoErrors(): void
 	{
-		$this->seedAliases(['MyNet' => 'network']);
+		$this->seedAliases(['GoodPort' => 'port', 'GoodNet' => 'network']);
 
-		$errors = $this->runValidation([
+		$result = $this->runSavePath([
 			'aliasports_in'  => '',
 			'aliasaddr_in'   => '',
 			'aliasports_out' => '',
 			'aliasaddr_out'  => '',
 		]);
 
-		$this->assertSame([], $errors);
+		$this->assertSame([], $result['errors']);
 	}
 }
