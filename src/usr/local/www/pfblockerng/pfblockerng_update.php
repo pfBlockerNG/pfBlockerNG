@@ -549,10 +549,10 @@ events.push(function(){
 		$("html, body").animate({ scrollTop: $(document).height() }, 2000);
 	}
 
-	// Scroll to the bottom on Run Now click
-	$('#run').click(function() {
-		$("html, body").animate({ scrollTop: $(document).height() }, 2000);
-	});
+	// Run Now no longer yanks the whole page to the bottom on click: it reloads into the
+	// AJAX poll tail, which sticky-follows the live log WITHIN the output box on its own.
+	// The old whole-page animate scrolled the pre-reload page (matching neither View nor the
+	// post-reload state) and left the reloaded page scrolled down. Match View: no page scroll.
 
 <?php if ($pfb_poll): ?>
 	// Live-log tail. The page has fully rendered (foot.inc ran, so the nav menu works); the log
