@@ -2784,6 +2784,21 @@ function pfb_logger($log, $logtype) {
 		default:
 			break;
 	}
+
+	// #690: a package install/upgrade/uninstall runs its work synchronously inside the pkg
+	// lifecycle callbacks, but pfSense's native Software page (and the pkg CLI) show only what
+	// reaches STDOUT. pfb_logger() otherwise writes the whole sync pass to the log FILE, so the
+	// page sits silent through it -- worst case the ~30s pfb_stop_start_unbound() wait, which
+	// emits its progress dots through this same function -- and looks like a frozen/lost pipe.
+	// While a lifecycle callback is active ($pfb['hook_lifecycle'] is set by the install command
+	// and the pre-deinstall, unset on every normal cron/manual/Run-Now pass and in the log
+	// daemon), mirror the main-log lines (cases 1 and 2) to the package-manager output so the
+	// page streams live progress. This also closes the silent unbound-stop gap with no separate
+	// keepalive, since that wait already logs via case 1. The redirected update hooks and the
+	// detached rc.d daemons are untouched -- this is visibility only, not the process-safety.
+	if (($logtype == 1 || $logtype == 2) && !empty($pfb['hook_lifecycle'])) {
+		print "{$log}";
+	}
 }
 
 
