@@ -835,6 +835,29 @@ def software_panel_forced(vm: SmokeVM, state: str) -> Iterator[None]:
         assert clear.returncode == 0, f"failed to clear software override sentinel: {clear.stderr.strip()}"
 
 
+@contextmanager
+def _live_pidfile(vm: SmokeVM, pidfile: str) -> Iterator[str]:
+    """Make ``isvalidpid(pidfile)`` TRUE for the block by pointing it at a real, live process.
+
+    Backgrounds a short ``sleep`` on the guest and writes its PID to ``pidfile`` (the bare
+    number daemon(8) would write, which ``isvalidpid`` → ``pgrep -F`` checks is running), so a
+    page gated on ``isvalidpid`` renders its in-progress branch WITHOUT a real task. The sleeper
+    is killed and the pidfile removed on exit so no stale "task running" state leaks to a later
+    test. The whole launch+write is ONE ``/bin/sh -c`` so ``$!`` is captured in the same shell.
+    """
+    launch = vm.ssh(
+        "/bin/sh",
+        "-c",
+        f"nohup /bin/sleep 120 >/dev/null 2>&1 & echo $! > {pidfile}; cat {pidfile}",
+    )
+    pid = launch.stdout.strip()
+    assert launch.returncode == 0 and pid.isdigit(), f"failed to seed live pidfile {pidfile}: {launch.stderr.strip()!r}"
+    try:
+        yield pid
+    finally:
+        vm.ssh("/bin/sh", "-c", f"kill {pid} 2>/dev/null; /bin/rm -f {pidfile}")
+
+
 def test_software_page_provenance_gate_hides_on_nonour_build(
     webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:
@@ -943,6 +966,53 @@ def test_software_page_renders_uninstall_controls(
         btn_tag = btn_tag_match.group(0)
         assert "disabled" in btn_tag, (
             f"Uninstall button expected 'disabled' attribute on initial render, got: {btn_tag!r}"
+        )
+
+
+def test_software_poller_has_inflight_guard_and_home_redirect(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """The Software live-log poller ships the in-flight guard + dashboard redirect (issue #680).
+
+    The alpha.14 poller had two field-reported defects the #680 fixes address, both living in the
+    inline poll script that renders ONLY while a software task is active (``$pfb_sw_poll`` =
+    ``isvalidpid('/var/run/pfb_software.pid')``):
+
+    * **Fix B — mobile double lines.** With no in-flight guard, a mobile tab-resume fired an extra
+      ``poll()`` while one was still outstanding; the two overlapping responses appended the same
+      tail slice twice. The fix adds a ``pending`` flag (at most one poll in flight) and a
+      ``visibilitychange`` re-poll that respects it.
+    * **Fix C — uninstall redirect.** On a successful uninstall the poller sent the user to
+      ``/pkg_mgr_installed.php``, which does NOT list pfBlockerNG (installed from our own pkg repo).
+      The fix redirects to the dashboard: ``goHome()`` → ``window.location.assign('/index.php')``.
+
+    Scenario:
+      Given the provenance override forced on AND a LIVE software pidfile (so ``$pfb_sw_poll`` is
+        TRUE and the poll script renders),
+      When the Software page is GET,
+      Then the emitted poller carries the ``pending`` in-flight guard, the ``visibilitychange``
+        re-poll, and a ``goHome()`` that assigns ``/index.php`` — and NOT the old
+        ``/pkg_mgr_installed.php`` target.
+
+    Fail-before / pass-after: against the alpha.14 poller the ``pending`` guard + ``visibilitychange``
+    are absent and the redirect target is ``/pkg_mgr_installed.php`` — so each assertion below flips
+    from failing to passing with the #680 fix.
+    """
+    with software_panel_forced(smoke_vm, "on"), _live_pidfile(smoke_vm, "/var/run/pfb_software.pid"):
+        resp = webui.get(_SOFTWARE_PAGE)
+        result = evaluate_render(_SOFTWARE_PAGE, resp.status_code, resp.text, (_SOFTWARE_PANEL_MARKER,))
+        assert result.ok, f"Software page render oracle failed: {result.detail}"
+        body = resp.text
+
+        # The poll script must actually have rendered (pidfile live ⇒ $pfb_sw_poll TRUE).
+        assert "?ajax=tail" in body, "the software poll script did not render (pidfile not seen as live?)"
+        # Fix B — in-flight guard + visibility re-poll.
+        assert "var pending = false" in body, "poller missing the in-flight guard (Fix B) — mobile double-lines regress"
+        assert "visibilitychange" in body, "poller missing the visibilitychange re-poll (Fix B)"
+        # Fix C — uninstall redirects to the dashboard, not the (empty-for-us) Package Manager list.
+        assert "window.location.assign('/index.php')" in body, "uninstall redirect must target /index.php (Fix C)"
+        assert "/pkg_mgr_installed.php" not in body, (
+            "poller still references the old /pkg_mgr_installed.php redirect target (Fix C not applied)"
         )
 
 

@@ -3599,12 +3599,14 @@ function pfb_run_hooks($when, $ctx = array()) {
 		//
 		// Together, completion depends ONLY on the hook process exiting.
 		//
-		// Append straight to the pfB log instead of a temp file flushed after exec() returns, so
-		// the Update-page live tail streams the hook's output AS it runs (not in one batch at the
-		// end). The log is a regular file, so reason #2 still holds; pfb_logger(..., 1) appends to
-		// the same file, so the on-disk format is unchanged. (A rare lingering daemon could append
-		// a stray line to the log later -- cosmetic, vs a now-discarded temp file.)
-		$logf = escapeshellarg($pfb['log']);
+		// Append straight to a REGULAR FILE (not a temp file flushed after exec(), and never a
+		// pipe/tee -- reason #2 above: a pipe the hook's spawned daemon inherits would hang exec()
+		// on missing EOF). During a run this is the per-run log the live tail reads ($pfb['runlog'],
+		// with pfb_logger() mirroring into the same file, so the hook's output and the surrounding
+		// "[ pfB Hook ] ..." markers interleave and stream AS the hook runs); outside a run it falls
+		// back to the cumulative log. (A rare lingering daemon could append a stray line later --
+		// cosmetic.)
+		$logf = escapeshellarg(pfb_run_log_target());
 		$cmd = "{$envprefix} /usr/bin/timeout --foreground -s TERM -k " . PFB_HOOK_KILL_GRACE .
 			" {$timeout} " . escapeshellarg($path) . " >> {$logf} 2>&1 < /dev/null";
 
@@ -11952,6 +11954,16 @@ function pfb_runlog_begin() {
 		@file_put_contents($pfb['runlog'], '');
 		$pfb['runlog_active'] = TRUE;
 	}
+}
+
+
+// The regular file a run's raw output (dispatched-process stdout, hook-script output) should be
+// appended to: the per-run log WHILE a run is active (so the live tail streams it, interleaved
+// with pfb_logger()'s mirror), else the cumulative log. Never a pipe -- a hook's spawned daemon
+// inheriting a pipe would hang exec() on missing EOF (see pfb_run_hooks).
+function pfb_run_log_target(): string {
+	global $pfb;
+	return (!empty($pfb['runlog_active']) && !empty($pfb['runlog'])) ? $pfb['runlog'] : $pfb['log'];
 }
 
 

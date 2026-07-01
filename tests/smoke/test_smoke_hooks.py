@@ -635,28 +635,32 @@ def test_hooks_spawned_daemon_does_not_stall_pass(deployed_vm: SmokeVM) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_post_hook_output_streams_during_run(deployed_vm: SmokeVM) -> None:
-    """A post hook's output reaches the log WHILE it runs, not only after it exits.
+def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -> None:
+    """A post hook's output reaches the PER-RUN log WHILE it runs — the file the live tail reads.
 
-    THE BEHAVIOUR: pfb_run_hooks streams each hook's stdout/stderr straight into the pfB
-    log (append) instead of buffering to a temp file flushed only after exec() returns — so
-    the Update-page live tail shows hook output progressively. Pre-fix, a hook that did real
-    work (e.g. a HAProxy reload taking several seconds) made the live log go silent for the
-    whole hook, its output appearing in one batch only once the hook finished.
+    THE BEHAVIOUR (issue #680, Fix A): pfb_run_hooks appends each hook's stdout/stderr to
+    pfb_run_log_target() — the per-run log ($pfb['runlog']) WHILE a run is active — instead of
+    the cumulative log. The #671 AJAX Update-page tail reads the per-run log, so before this fix
+    a hook's own output (a HAProxy-reload hook's lines, the closing run block) went to the
+    cumulative log the tail no longer reads and was MISSING from the live view — exactly the
+    user's alpha.14 report. pfb_logger() still mirrors the surrounding "[ pfB Hook ] …" markers
+    into the same per-run file, so header and hook output interleave and stream together.
 
     DETACHED launch + log polling, for the same reason as the bg-daemon test (an
-    SSH-synchronous reload would confound the observation).
+    SSH-synchronous reload would confound the observation). The per-run log is truncated at run
+    start (pfb_runlog_begin), so the slice we read is exactly this pass — no manual truncate.
 
     Given an enabled post hook that emits a marker, sleeps 12s, then emits a closing marker,
     When a pass runs,
-    Then the leading marker is in the log within a few seconds of the hook starting — while
-        it is still sleeping (closing marker absent).
+    Then the leading marker is in the PER-RUN log within a few seconds of the hook starting —
+        while it is still sleeping (closing marker absent).
 
-    Red→green discriminator: STREAMED → the leading marker hits the log a second or two
-    after the hook starts (inside the 5s window, closing marker still absent). BUFFERED (old
-    code) → nothing is written to the log until exec() returns ~12s later, so the leading
-    marker is ABSENT for the whole 5s window — the failing assertion. (Window << the 12s
-    sleep; if a loaded runner ever flakes, raise the sleep AND the window together.)
+    Red→green discriminator for Fix A: FIXED → the leading marker hits the per-run log a second
+    or two after the hook starts (inside the 5s window, closing marker still absent). PRE-FIX →
+    the hook's stdout went to the CUMULATIVE log, never the per-run log, so this window (and any
+    later read of the per-run log) sees NOTHING — the failing assertion, mirroring the missing
+    live-view output. (Window << the 12s sleep; if a loaded runner ever flakes, raise the sleep
+    AND the window together.)
     """
     token = "stream"
     stream_marker = f"STREAM_{token}_MARK"
@@ -673,47 +677,48 @@ def test_post_hook_output_streams_during_run(deployed_vm: SmokeVM) -> None:
     }
     h.set_update_hooks(deployed_vm, [post_hook])
     h.wait_no_active_pfb_task(deployed_vm)  # clean baseline — no prior pass in flight
-    # Truncate so the slice we read is exactly this pass (truncate(1): clean argv, no shell redir).
-    deployed_vm.ssh("/usr/bin/truncate", "-s", "0", h.PFB_LOG)
 
     try:
         # Dispatch DETACHED (mirrors the GUI's mwexec_bg): returns at once; observe via the log.
+        # The launcher's own stdout rides the cumulative log (as the GUI does) — the point of the
+        # fix is that the HOOK's output lands in the per-run log regardless of the launcher target.
         deployed_vm.ssh(
             f"nohup {h.PHP_BIN} {h.PFB_CLI} pfb_trigger scope=both force=false trigger=cron "
             f">> {h.PFB_LOG} 2>&1 </dev/null &"
         )
 
-        # Wait for the pass to REACH the post hook: its runner header is logged (by pfb_logger)
-        # right before the hook's exec(), in BOTH old and new code — so this marks t0 of the
-        # hook regardless of streaming.
+        # Wait for the pass to REACH the post hook: its runner header is logged (by pfb_logger,
+        # mirrored into the per-run log) right before the hook's exec() in BOTH old and new code
+        # — so this marks t0 of the hook regardless of where the hook's own stdout goes.
         hook_started = h.wait_until(
-            lambda: f"hook_post_{token}_slow.sh" in deployed_vm.ssh("cat", h.PFB_LOG).stdout,
+            lambda: f"hook_post_{token}_slow.sh" in deployed_vm.ssh("cat", h.PFB_RUNLOG).stdout,
             timeout=30.0,
             interval=1.0,
         )
         assert hook_started, (
-            "the pass never reached the post hook within 30s (its runner header never logged):\n"
-            f"{deployed_vm.ssh('cat', h.PFB_LOG).stdout[-1500:]}"
+            "the pass never reached the post hook within 30s (its runner header never logged to "
+            f"the per-run log):\n{deployed_vm.ssh('cat', h.PFB_RUNLOG).stdout[-1500:]}"
         )
 
         # THE DISCRIMINATOR: within 5s of the hook starting (it sleeps 12s), its leading marker
-        # must already be in the log — proof the output STREAMED. Buffered output would not reach
-        # the log until exec() returns ~12s later, so this window would see nothing.
+        # must already be in the PER-RUN log — proof the hook's output is routed there and streams.
+        # Pre-fix it went to the cumulative log only, so the per-run log would never see it.
         streamed = h.wait_until(
-            lambda: stream_marker in deployed_vm.ssh("cat", h.PFB_LOG).stdout,
+            lambda: stream_marker in deployed_vm.ssh("cat", h.PFB_RUNLOG).stdout,
             timeout=5.0,
             interval=0.5,
         )
-        log_now = deployed_vm.ssh("cat", h.PFB_LOG).stdout
+        runlog_now = deployed_vm.ssh("cat", h.PFB_RUNLOG).stdout
         assert streamed, (
-            f"hook marker {stream_marker!r} did not reach the log within 5s of the hook starting — "
-            f"its output was buffered until the hook exited, not streamed live:\n{log_now[-1500:]}"
+            f"hook marker {stream_marker!r} did not reach the PER-RUN log within 5s of the hook "
+            "starting — its output was not routed to the file the live tail reads (Fix A regressed):\n"
+            f"{runlog_now[-1500:]}"
         )
         # Caught it MID-RUN: the hook is still sleeping, so its closing marker is absent — proves
-        # we observed a live stream, not the post-exit flush.
-        assert done_marker not in log_now, (
+        # we observed a live stream into the per-run log, not the post-exit flush.
+        assert done_marker not in runlog_now, (
             f"caught the marker only AFTER the hook finished ({done_marker!r} already present) — "
-            f"not a live-stream proof:\n{log_now[-1500:]}"
+            f"not a live-stream proof:\n{runlog_now[-1500:]}"
         )
     finally:
         h.wait_no_active_pfb_task(deployed_vm, timeout=40.0)

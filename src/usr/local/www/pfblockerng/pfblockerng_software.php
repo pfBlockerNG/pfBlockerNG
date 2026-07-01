@@ -421,15 +421,22 @@ events.push(function() {
 	// the result: a successful update patches the installed-version + status fields in place (no
 	// reload), and an uninstall — which removes this very page — redirects to the Package Manager.
 	(function() {
-		var out    = document.forms[0].pfb_output;
-		var stat   = document.forms[0].pfb_status;
-		var offset = null;
-		var timer  = null;
+		var out     = document.forms[0].pfb_output;
+		var stat    = document.forms[0].pfb_status;
+		var offset  = null;
+		var timer   = null;
+		var pending = false;   // at most one poll in flight (mobile-resume overlap guard)
+		var done    = false;
 		var action = <?=pfb_js_string($pfb_sw_poll_action);?>;
 		var initStatus = <?=pfb_js_string($pfb_sw_poll_status);?>;
 		if (initStatus) { stat.value = initStatus; }
-		function gotoInstalled() { window.location.assign('/pkg_mgr_installed.php'); }
+		// pfBlockerNG installs from its own pkg repo, so pfSense's Package Manager "Installed" list
+		// may not list it -- send the user to the dashboard after an uninstall, not to that page.
+		function goHome() { window.location.assign('/index.php'); }
+		function stop() { done = true; if (timer) { clearInterval(timer); timer = null; } }
 		function poll() {
+			if (pending || done) { return; }
+			pending = true;
 			var url = '/pfblockerng/pfblockerng_software.php?ajax=tail' + (offset !== null ? '&offset=' + offset : '');
 			$.ajax({ url: url, type: 'GET', dataType: 'json', cache: false }).done(function(r) {
 				if (!r) { return; }
@@ -440,12 +447,12 @@ events.push(function() {
 				}
 				if (typeof r.offset !== 'undefined') { offset = r.offset; }
 				if (!r.done) { return; }
-				if (timer) { clearInterval(timer); timer = null; }
+				stop();
 				if (r.sw_action === 'uninstall') {
 					stat.value = (r.sw_rc === 0)
 						? 'Uninstall complete — redirecting...'
 						: 'Uninstall finished with errors — see the log above.';
-					if (r.sw_rc === 0) { setTimeout(gotoInstalled, 1200); }
+					if (r.sw_rc === 0) { setTimeout(goHome, 1200); }
 				} else if (r.sw_action === 'update') {
 					if (r.sw_rc === 0) {
 						if (r.sw_installed) { $('#pfb-sw-installed').text(r.sw_installed); }
@@ -466,15 +473,15 @@ events.push(function() {
 				}
 			}).fail(function() {
 				// During an uninstall the package (and this endpoint) disappears: a poll failure
-				// means the uninstall succeeded — stop and redirect. Otherwise ignore + retry.
-				if (action === 'uninstall') {
-					if (timer) { clearInterval(timer); timer = null; }
-					gotoInstalled();
-				}
-			});
+				// means the uninstall succeeded — stop and go to the dashboard. Otherwise retry.
+				if (action === 'uninstall') { stop(); goHome(); }
+			}).always(function() { pending = false; });
 		}
 		poll();
 		timer = setInterval(poll, 1000);
+		document.addEventListener('visibilitychange', function() {
+			if (!document.hidden && !done) { poll(); }
+		});
 	})();
 <?php endif; ?>
 });
