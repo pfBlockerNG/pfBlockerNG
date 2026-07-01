@@ -94,20 +94,6 @@ if ($pfb_sw_action === 'check') {
 	exit;
 }
 
-// #687: "Uninstall via the Software page". Drop the intent marker so the pre-deinstall performs a
-// FULL removal regardless of the "Keep enabled during version upgrades" toggle, then hand off to
-// pfSense's Package Manager delete flow (its own confirm step runs there). A GET (link click) that
-// only sets a flag + redirects — not itself destructive.
-if (($_GET['do'] ?? '') === 'uninstall' && $pfb_sw_pkgname !== '') {
-	@touch(pfb_full_uninstall_marker_file());
-	header('Location: /pkg_mgr_install.php?mode=delete&pkg=' . rawurlencode((string) $pfb_sw_pkgname));
-	exit;
-}
-
-// #687: a normal Software-page view clears any stale intent marker (e.g. Uninstall opened, then
-// cancelled on the Package Manager confirm), so it can never force a teardown on a later upgrade.
-@unlink(pfb_full_uninstall_marker_file());
-
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Software'));
 $pglinks = array('', '/pfblockerng/pfblockerng_general.php', '@self');
 
@@ -223,14 +209,13 @@ if (!$update_available || $pfb_sw_pkgname === '') {
 $section->addInput(new Form_StaticText(null, $btn_update))
 	->setHelp('Install the latest version via the pfSense Package Manager. Available only when an update is found.');
 
-// Uninstall — a LINK that routes through THIS page (?do=uninstall) so it drops the full-removal
-// intent marker (#687) before handing off to pfSense's Package Manager delete flow (its own confirm
-// step runs there). The marker makes the pre-deinstall perform a full teardown regardless of the
-// "Keep enabled during version upgrades" toggle.
+// Uninstall — a link straight to pfSense's Package Manager delete flow (its own confirm step runs
+// there). #697: a delete always performs a full teardown (uninstall = OFF), so no intent marker is
+// needed; a version upgrade is a `pkg delete` we cannot distinguish and is handled the same way.
 $btn_uninstall = new Form_Button(
 	'pfb_sw_uninstall',
 	'Uninstall',
-	($pfb_sw_pkgname !== '') ? '/pfblockerng/pfblockerng_software.php?do=uninstall' : '#',
+	($pfb_sw_pkgname !== '') ? "/pkg_mgr_install.php?mode=delete&pkg={$pfb_pkg_arg}" : '#',
 	'fa-solid fa-trash-can'
 );
 $btn_uninstall->removeClass('btn-primary')->addClass('btn-danger btn-xs')->setWidth(2);

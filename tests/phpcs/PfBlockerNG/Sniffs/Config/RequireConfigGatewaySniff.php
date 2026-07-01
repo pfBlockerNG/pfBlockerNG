@@ -62,7 +62,6 @@ class RequireConfigGatewaySniff implements Sniff
 		// installedpackages/pfblockerng/config/0 (general settings)
 		'installedpackages/pfblockerng/config/0/enable_cb',
 		'installedpackages/pfblockerng/config/0/pfb_keep',
-		'installedpackages/pfblockerng/config/0/pfb_keep_on_upgrade',
 		'installedpackages/pfblockerng/config/0/pfb_interval',
 		'installedpackages/pfblockerng/config/0/pfb_min',
 		'installedpackages/pfblockerng/config/0/pfb_hour',

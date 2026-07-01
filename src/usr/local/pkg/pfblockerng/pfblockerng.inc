@@ -3542,6 +3542,144 @@ function pfb_hook_lifecycle_ctx($lifecycle): array {
 	);
 }
 
+
+/*
+ * #697: from a pkg/pkg-static argv ($argv[0] = the binary), return the mapped subcommand:
+ * 'delete' (delete/remove/autoremove), 'upgrade', 'reinstall' (install with -f/--force), 'install'
+ * (bare install), or '' (anything else).
+ *
+ * pkg's grammar is `pkg [GLOBAL opts] <command> [command flags]`, and several GLOBAL options come
+ * BEFORE the subcommand and CONSUME the following token as their value (-o -j -c -r -C -R and the
+ * long forms). Those are skipped WITH their value before the subcommand is read -- pfSense passes
+ * -c <chroot> / -r <rootdir> during an OS upgrade, so a naive "first non-dash token" read would
+ * misfire exactly then.
+ */
+function pfb_pkg_argv_subcommand(array $argv): string {
+	// Global options that consume the FOLLOWING token as their value (separated form).
+	$arg_taking_long  = array('--option', '--jail', '--chroot', '--rootdir', '--config', '--repo-conf-dir');
+	$arg_taking_short = array('-o', '-j', '-c', '-r', '-C', '-R');
+
+	$n = count($argv);
+	$i = 1;	// $argv[0] is the binary
+	while ($i < $n) {
+		$tok = (string) $argv[$i];
+		if ($tok === '' || $tok[0] !== '-') {
+			break;	// first non-option token => the subcommand
+		}
+		// Attached value (`--rootdir=/x`, `-r/x`) consumes no extra token.
+		if (str_contains($tok, '=')) {
+			$i++;
+			continue;
+		}
+		if (in_array($tok, $arg_taking_short, TRUE) || in_array($tok, $arg_taking_long, TRUE)) {
+			$i += 2;	// skip the flag AND its value
+			continue;
+		}
+		// Short arg-taking flag with the value glued on (`-r/root`, `-jname`): consume only this token.
+		if (strlen($tok) > 2 && in_array(substr($tok, 0, 2), $arg_taking_short, TRUE)) {
+			$i++;
+			continue;
+		}
+		// No-arg global flag (-v -d -l -N -4 -6, bundles), or an unrecognised bare flag: skip just it.
+		$i++;
+	}
+	if ($i >= $n) {
+		return '';
+	}
+
+	switch (strtolower((string) $argv[$i])) {
+		case 'delete':
+		case 'remove':
+		case 'autoremove':
+			return 'delete';
+		case 'upgrade':
+			return 'upgrade';
+		case 'install':
+			// -f/--force among the COMMAND flags => a forced reinstall.
+			for ($j = $i + 1; $j < $n; $j++) {
+				$f = (string) $argv[$j];
+				if ($f === '-f' || $f === '--force') {
+					return 'reinstall';
+				}
+				if (strlen($f) > 1 && $f[0] === '-' && $f[1] !== '-' && str_contains($f, 'f')) {
+					return 'reinstall';	// bundled short flags, e.g. -fy
+				}
+			}
+			return 'install';
+		default:
+			return '';
+	}
+}
+
+
+/*
+ * #697: classify the current package-manager operation by reading the pkg/pkg-static ANCESTOR's
+ * argv. Pure (no I/O) so it is unit-testable: $ps_lines is `ps -o pid,ppid,command` output (one
+ * process per line, "PID PPID COMMAND ..."), $start_pid is the pid to walk up from. Walks the ppid
+ * chain and, at the first ancestor that is pkg/pkg-static, parses + maps the subcommand. Returns ''
+ * when there is no pkg ancestor (a normal cron/manual update, or the GUI) or the subcommand is
+ * unrecognised.
+ *
+ * KEY limitation (the reason the pre-deinstall no longer branches on this): a real uninstall and a
+ * pfSense OS-upgrade removal are the SAME `pkg delete` -- indistinguishable here. The op's
+ * discriminating value is in the post-install (fresh 'install' vs 'upgrade' vs forced 'reinstall');
+ * it rides to update hooks as PFB_PKG_OP for context only, never a teardown decision.
+ */
+function pfb_parse_pkg_operation(array $ps_lines, int $start_pid): string {
+	$procs = array();	// pid => array(ppid, argv[])
+	foreach ($ps_lines as $line) {
+		$parts = preg_split('/\s+/', trim((string) $line));
+		if (!is_array($parts) || count($parts) < 3 || !ctype_digit($parts[0]) || !ctype_digit($parts[1])) {
+			continue;	// header row / malformed
+		}
+		$procs[(int) $parts[0]] = array((int) $parts[1], array_slice($parts, 2));
+	}
+
+	$pid  = $start_pid;
+	$seen = array();
+	for ($hops = 0; $hops < 64; $hops++) {
+		if (!isset($procs[$pid]) || isset($seen[$pid])) {
+			break;
+		}
+		$seen[$pid] = TRUE;
+		list($ppid, $argv) = $procs[$pid];
+
+		// $argv always has >= 1 element (the count()<3 guard above skips shorter rows).
+		$bin = basename((string) $argv[0]);
+		if ($bin === 'pkg' || $bin === 'pkg-static') {
+			$op = pfb_pkg_argv_subcommand($argv);
+			if ($op !== '') {
+				return $op;
+			}
+		}
+
+		if ($ppid <= 1 || $ppid === $pid) {
+			break;
+		}
+		$pid = $ppid;
+	}
+	return '';
+}
+
+
+/*
+ * #697: thin, cached wrapper around pfb_parse_pkg_operation() that reads the live process table.
+ * Returns the current pkg operation ('install'/'upgrade'/'reinstall'/'delete') or '' when not run
+ * under pkg. Cached per-process: hooks call it once per fire point and it must not re-ps each time.
+ */
+function pfb_pkg_operation(): string {
+	static $cached = NULL;
+	if ($cached !== NULL) {
+		return $cached;
+	}
+	$out = array();
+	$rc  = 0;
+	exec('/bin/ps -axww -o pid,ppid,command 2>/dev/null', $out, $rc);
+	$cached = ($rc === 0) ? pfb_parse_pkg_operation($out, (int) getmypid()) : '';
+	return $cached;
+}
+
+
 /*
  * #693 (follow-up to #690): mirror a completed hook's captured stdout/stderr to the
  * package-manager output during a pkg install/upgrade/uninstall.
@@ -3609,6 +3747,10 @@ function pfb_run_hooks($when, $ctx = array()) {
 	// when it is the pre-deinstall (turn OFF); both '0' on a normal cron/manual/force update
 	// (always emitted as '1'/'0', #695).
 	$ctx += pfb_hook_lifecycle_ctx($pfb['hook_lifecycle'] ?? '');
+	// #697: the actual package-manager operation read from the pkg ancestor's argv, so a hook can
+	// tell a fresh install from an upgrade (PFB_PKG_OP = install|upgrade|reinstall|delete; '' when
+	// the pass is not run under pkg -- a normal cron/manual update). Context only.
+	$ctx['PKG_OP'] = pfb_pkg_operation();
 	$env = array();
 	foreach ($ctx as $name => $value) {
 		// Names are developer-controlled (PFB_TRIGGER, PFB_IP_CHANGED, ...); values
@@ -7962,67 +8104,6 @@ function pfb_alias_delta_mode_install_default($gconfig) {
 		return 'replace';
 	}
 	return NULL;
-}
-
-
-// #687: grandfather decision for the "Keep enabled during version upgrades" toggle at
-// install/upgrade. $gconfig is the existing General-settings 'config/0' node (null on a fresh,
-// never-configured install). A NEW install takes the registry absent-default 'on' (stay active
-// across upgrades by default); an already-configured install that has not yet seen the key is
-// pinned to 'off' -- preserving its prior teardown-on-removal behaviour and the safe stock-Package-
-// Manager-uninstall path for existing operators. Run-once + idempotent: once the key is set (any
-// value) it returns NULL, so a later save never overrides an operator's explicit choice.
-function pfb_keep_on_upgrade_install_default($gconfig) {
-
-	if (is_array($gconfig) && !isset($gconfig['pfb_keep_on_upgrade'])) {
-		return 'off';
-	}
-	return NULL;
-}
-
-
-// #687: the intent marker the Software-page Uninstall drops (via ?do=uninstall) before handing off
-// to pfSense's Package Manager, so the pre-deinstall knows THIS removal is a real uninstall (full
-// teardown) rather than a version/OS upgrade. A plain flag file under /var/run (tmpfs); consumed +
-// removed by the pre-deinstall, and also cleared on a normal Software-page load so a cancelled
-// confirm cannot leave it stale.
-function pfb_full_uninstall_marker_file(): string {
-	return '/var/run/pfb_full_uninstall';
-}
-
-
-// #688 (CodeRabbit): honour the uninstall-intent marker only while FRESH. The Software-page
-// Uninstall drops it immediately before redirecting to the Package Manager confirm, so a genuine
-// removal consumes it within seconds. But an admin who clicks Uninstall then CANCELS the confirm
-// WITHOUT reopening the Software page would otherwise leave the marker until the next pre-deinstall
-// -- possibly an unrelated, much-later version/OS upgrade -- wrongly forcing a full teardown (and
-// wiping settings) even with "Keep enabled during version upgrades" on. Gate on filemtime within a
-// short TTL so a stale marker can never poison a later upgrade. $mtime is @filemtime()'s result
-// (int, or FALSE when the marker is absent).
-if (!defined('PFB_FULL_UNINSTALL_TTL')) {
-	define('PFB_FULL_UNINSTALL_TTL', 300);	// seconds — a genuine uninstall consumes the marker in seconds
-}
-function pfb_full_uninstall_intent(int|false $mtime, int $now): bool {
-	return ($mtime !== FALSE) && ($mtime >= ($now - PFB_FULL_UNINSTALL_TTL));
-}
-
-
-// #687: decide whether the pre-deinstall performs a FULL teardown (turn pfBlockerNG OFF + remove
-// live objects) or SKIPS it to keep pfBlockerNG active across a version/OS upgrade. Pure decision,
-// no I/O -- pfSense cannot distinguish an upgrade from a real uninstall in the pre-deinstall, so the
-// user's settings + the explicit-intent marker decide, never upgrade-detection:
-//   * keep-settings OFF -> FULL teardown (settings are going away, cleanup is mandatory);
-//   * the Software-page "Uninstall" intent marker present -> FULL teardown (explicit removal);
-//   * otherwise the "Keep enabled during version upgrades" toggle: ON skips teardown, OFF tears down.
-// Only keep-on + toggle-on + no-marker skips teardown.
-function pfb_deinstall_full_teardown(bool $keep_settings, bool $keep_on_upgrade, bool $intentional): bool {
-	if (!$keep_settings) {
-		return TRUE;
-	}
-	if ($intentional) {
-		return TRUE;
-	}
-	return !$keep_on_upgrade;
 }
 
 
@@ -17041,25 +17122,13 @@ function pfblockerng_php_pre_deinstall_command() {
 	require_once('config.inc');
 	global $g, $pfb;
 
-	// #687: decide whether to fully tear pfBlockerNG down, or keep it live across a version/OS
-	// upgrade. pfSense cannot tell an upgrade from a real uninstall here, so the user's settings
-	// decide (no upgrade-detection). Consume the Software-page "Uninstall" intent marker here so it
-	// never lingers, and honour it only while FRESH (#688) so an abandoned/cancelled uninstall
-	// cannot force a full teardown on a much-later, unrelated upgrade. Then apply the pure ladder.
-	$keep_settings   = (PfbConfig::read('pfb_keep') === PfbLenient::On);
-	$keep_on_upgrade = (PfbConfig::read('pfb_keep_on_upgrade') === PfbLenient::On);
-	$pfb_marker      = pfb_full_uninstall_marker_file();
-	$intentional     = pfb_full_uninstall_intent(@filemtime($pfb_marker), time());
-	@unlink($pfb_marker);
-
-	if (!pfb_deinstall_full_teardown($keep_settings, $keep_on_upgrade, $intentional)) {
-		// Keep pfBlockerNG active across the upgrade: run NO disable pass and NO teardown, so its
-		// rules / DNSBL / Unbound integration stay live until the reinstall's resync re-applies.
-		// No PFB_PRE_UNINSTALL hooks fire (nothing changed); settings are preserved (keep=on here).
-		update_status("Keeping pfBlockerNG active across the upgrade (per 'Keep enabled during version upgrades').\n");
-		return;
-	}
-
+	// #697: a delete ALWAYS tears pfBlockerNG down. pfSense removes a package during a version/OS
+	// upgrade with the same `pkg delete` a real uninstall uses (verified against pkg-utils.inc), so
+	// the pre-deinstall cannot tell them apart -- and rather than try, we handle a version upgrade
+	// "the usual way": tear down here, then pfSense's post-reboot reinstall + resync brings
+	// pfBlockerNG back, with settings preserved by keep=on (the default). A keep=off config wipe
+	// (below) therefore happens on any delete, INCLUDING an upgrade -- documented on the keep field.
+	//
 	// Set these two variables to disable pfBlockerNG on de-install. pfb_global() turns the
 	// install/reinstall flag into enable/dnsbl='' (2129), so this runs a full DISABLE pass --
 	// uninstall == turning pfBlockerNG OFF (rules removed, DNSBL/Unbound disabled, its pre/post
