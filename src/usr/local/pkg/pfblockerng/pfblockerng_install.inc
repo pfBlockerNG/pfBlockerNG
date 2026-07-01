@@ -33,7 +33,8 @@ $g['pfblockerng_install'] = TRUE;
 // #684: mark this process an install/upgrade so the resync (custom_php_resync_config_command,
 // run next in the same install_package_xml process) publishes PFB_POST_INSTALL=1 to the hooks its
 // turn-ON pass fires. Scoped to install.inc, so a boot/config-restore resync -- which does NOT run
-// this file -- carries no POST_INSTALL. Context only: pfBlockerNG never branches on it.
+// this file -- carries PFB_POST_INSTALL=0 (the vars are always emitted as '1'/'0', #695). Context
+// only: pfBlockerNG never branches on it.
 $pfb['hook_lifecycle'] = 'install';
 
 // Migrate old VIP configuration.

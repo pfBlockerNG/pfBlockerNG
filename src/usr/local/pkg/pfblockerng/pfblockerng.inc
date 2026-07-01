@@ -3529,20 +3529,17 @@ function pfb_hook_script_valid($script, $when, $dir = null) {
  * set to 'install' by the install-command path (turn ON via the resync) and 'uninstall' by the
  * pre-deinstall (turn OFF), and unset on a normal cron/manual/force update.
  *
- * Returns [] for a normal pass, ['POST_INSTALL' => '1'] on install/upgrade, ['PRE_UNINSTALL' => '1']
- * on removal -> exported as PFB_POST_INSTALL / PFB_PRE_UNINSTALL. Present-when-applicable (a hook
- * tests `[ -n "$PFB_POST_INSTALL" ]`), matching the ADR-12 style where a key's presence is the
- * signal.
+ * Both keys are ALWAYS emitted as '1'/'0' (issue #695), matching the '1'/'0' contract of the other
+ * context vars (PFB_IP_CHANGED / PFB_DNSBL_CHANGED) so a hook can guard every PFB_* flag uniformly
+ * (`[ "$PFB_PRE_UNINSTALL" = '1' ]`): POST_INSTALL=1 only on the install/upgrade resync, PRE_UNINSTALL=1
+ * only on the pre-deinstall, and both '0' on a normal cron/manual/force update. (Supersedes the
+ * earlier present-only form, where the key was unset off-phase and a hook tested `[ -n ... ]`.)
  */
 function pfb_hook_lifecycle_ctx($lifecycle): array {
-	switch ((string) $lifecycle) {
-		case 'install':
-			return array('POST_INSTALL' => '1');
-		case 'uninstall':
-			return array('PRE_UNINSTALL' => '1');
-		default:
-			return array();
-	}
+	return array(
+		'POST_INSTALL'  => ((string) $lifecycle === 'install')   ? '1' : '0',
+		'PRE_UNINSTALL' => ((string) $lifecycle === 'uninstall') ? '1' : '0',
+	);
 }
 
 /*
@@ -3609,7 +3606,8 @@ function pfb_run_hooks($when, $ctx = array()) {
 	// Package-lifecycle context (issue #684): a lifecycle transition fires these hooks like any
 	// other enable/disable, and tells the hook WHICH transition so its owner can react (or no-op).
 	// PFB_POST_INSTALL=1 when the pass is the install/upgrade resync (turn ON); PFB_PRE_UNINSTALL=1
-	// when it is the pre-deinstall (turn OFF); neither on a normal cron/manual/force update.
+	// when it is the pre-deinstall (turn OFF); both '0' on a normal cron/manual/force update
+	// (always emitted as '1'/'0', #695).
 	$ctx += pfb_hook_lifecycle_ctx($pfb['hook_lifecycle'] ?? '');
 	$env = array();
 	foreach ($ctx as $name => $value) {
