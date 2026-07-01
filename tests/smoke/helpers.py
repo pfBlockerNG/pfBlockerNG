@@ -2880,6 +2880,11 @@ UNBOUND_PID_FILE = "/var/run/unbound.pid"
 # (inc:3956 "[ zero-downtime swap ]" then inc:3962 " completed [ NOW ]"). Their
 # appearance proves the no-restart data path was TAKEN (vs the restart fallback).
 PFB_LOG = f"{PFB_LOGDIR}/pfblockerng.log"
+# The per-run log (issue #680): truncated at the start of every sync run and fed BOTH the
+# pfb_logger() mirror AND the raw stdout of the dispatched process and the hook scripts
+# (pfb_run_log_target() routes hook/exec output here while a run is active). This is the file
+# the #671 AJAX live tail reads, so anything that must appear in the live view lands here.
+PFB_RUNLOG = f"{PFB_LOGDIR}/pfblockerng_run.log"
 # The Python module's stderr is redirected here (pfb_unbound.py:590); a FAILED build
 # (bad/partial manifest) writes "Failed to load DNSBL manifest" / "DNSBL rebuild
 # failed, keeping current snapshot" here — the fail-closed signal.

@@ -104,7 +104,7 @@ function pfb_runnow(string $scope, bool $force): void {
 	@unlink($pidfile);
 	@file_put_contents($pfb['runlog'], '');	// fresh per-run log for the live viewer to tail
 	mwexec_bg("/usr/sbin/daemon -p " . escapeshellarg($pidfile) .
-		" /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php pfb_trigger scope={$scope_esc} force={$force_val} trigger={$trigger_esc} >> {$pfb['log']} 2>&1");
+		" /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php pfb_trigger scope={$scope_esc} force={$force_val} trigger={$trigger_esc} >> {$pfb['runlog']} 2>&1");
 
 	// The page no longer blocks tailing here: it returns immediately (so foot.inc loads and the
 	// nav menu works) and the client polls ?ajax=tail for the live log, keyed on $pidfile.
@@ -153,7 +153,7 @@ function pfb_runnow_forcecheck(string $scope): void {
 	@unlink($pidfile);
 	@file_put_contents($pfb['runlog'], '');	// fresh per-run log for the live viewer to tail
 	mwexec_bg("/usr/sbin/daemon -p " . escapeshellarg($pidfile) .
-		" /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php forcecheck scope={$scope_esc} >> {$pfb['log']} 2>&1");
+		" /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php forcecheck scope={$scope_esc} >> {$pfb['runlog']} 2>&1");
 
 	// Page returns immediately; the client polls ?ajax=tail for the live log (see pfb_runnow).
 
@@ -560,14 +560,18 @@ events.push(function(){
 	// inline-<script> stream that parked the request. Sticky auto-follow: re-pin to the bottom
 	// only when the user is already at the bottom, so scrolling up to read is not yanked back.
 	(function() {
-		var out    = document.forms[0].pfb_output;
-		var stat   = document.forms[0].pfb_status;
-		var offset = null;
-		var timer  = null;
+		var out     = document.forms[0].pfb_output;
+		var stat    = document.forms[0].pfb_status;
+		var offset  = null;
+		var timer   = null;
+		var pending = false;   // at most one poll in flight -- guards against overlapping requests
+		var done    = false;   // (mobile resume / catch-up ticks) both reading the same offset
 		var initStatus = <?=pfb_js_string($pfb_poll_status);?>;
 		var doneStatus = <?=pfb_js_string(gettext('Log viewer idle.'));?>;
 		if (initStatus) { stat.value = initStatus; }
 		function poll() {
+			if (pending || done) { return; }   // skip the tick while a request is outstanding
+			pending = true;
 			var url = '/pfblockerng/pfblockerng_update.php?ajax=tail' + (offset !== null ? '&offset=' + offset : '');
 			$.ajax({ url: url, type: 'GET', dataType: 'json', cache: false }).done(function(r) {
 				if (!r) { return; }
@@ -578,13 +582,19 @@ events.push(function(){
 				}
 				if (typeof r.offset !== 'undefined') { offset = r.offset; }
 				if (r.done) {
+					done = true;
 					if (timer) { clearInterval(timer); timer = null; }
 					stat.value = doneStatus;
 				}
-			});
+			}).always(function() { pending = false; });
 		}
 		poll();
 		timer = setInterval(poll, 1000);
+		// Mobile browsers suspend timers when the tab is backgrounded; re-poll once on return so
+		// the tail catches up from its stored offset (the in-flight guard prevents a double read).
+		document.addEventListener('visibilitychange', function() {
+			if (!document.hidden && !done) { poll(); }
+		});
 	})();
 <?php endif; ?>
 });
