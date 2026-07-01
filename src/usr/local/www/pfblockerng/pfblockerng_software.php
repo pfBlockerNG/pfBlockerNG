@@ -193,10 +193,13 @@ $section->addInput(new Form_StaticText(null, $btn_check))
 // runs pkg and streams progress from a page that survives the swap. Enabled only when an update
 // is available and the package name is known.
 $pfb_pkg_arg = rawurlencode((string) $pfb_sw_pkgname);
+// The href itself is the gate (an anchor's disabled/aria-disabled are advisory only, so a
+// stray activation must land nowhere actionable): a real reinstall target ONLY when an update
+// is available and the package name is known, else '#'. The disabled styling is the visual cue.
 $btn_update = new Form_Button(
 	'pfb_sw_update',
 	'Update now',
-	($pfb_sw_pkgname !== '') ? "/pkg_mgr_install.php?mode=reinstallpkg&pkg={$pfb_pkg_arg}" : '#',
+	($update_available && $pfb_sw_pkgname !== '') ? "/pkg_mgr_install.php?mode=reinstallpkg&pkg={$pfb_pkg_arg}" : '#',
 	'fa-solid fa-download'
 );
 $btn_update->removeClass('btn-primary')->addClass('btn-warning btn-xs')->setWidth(2);
