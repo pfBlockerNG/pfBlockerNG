@@ -21,8 +21,40 @@ use PHPUnit\Framework\TestCase;
  * Only keep-on + toggle-on + no-marker skips teardown. Every branch is asserted below.
  */
 #[CoversFunction('pfb_deinstall_full_teardown')]
+#[CoversFunction('pfb_full_uninstall_intent')]
 final class DeinstallTeardownDecisionTest extends TestCase
 {
+	public function testFreshMarkerIsHonouredAsIntent(): void
+	{
+		// A marker written moments ago (well within the TTL) => the removal is a real uninstall.
+		$now = 1_000_000;
+		$this->assertTrue(pfb_full_uninstall_intent($now - 5, $now), 'a fresh marker signals an intentional uninstall');
+	}
+
+	public function testStaleMarkerIsIgnored(): void
+	{
+		// A marker older than the TTL (an abandoned/cancelled uninstall) must NOT force a teardown on
+		// a much-later, unrelated upgrade (#688).
+		$now = 1_000_000;
+		$this->assertFalse(
+			pfb_full_uninstall_intent($now - (PFB_FULL_UNINSTALL_TTL + 1), $now),
+			'a marker older than the TTL is stale and must be ignored'
+		);
+	}
+
+	public function testAbsentMarkerIsNotIntent(): void
+	{
+		// @filemtime() returns FALSE when the marker file does not exist => not an intentional uninstall.
+		$this->assertFalse(pfb_full_uninstall_intent(false, 1_000_000));
+	}
+
+	public function testMarkerExactlyAtTtlBoundaryIsHonoured(): void
+	{
+		// The boundary is inclusive (>=): a marker exactly TTL seconds old still counts as fresh.
+		$now = 1_000_000;
+		$this->assertTrue(pfb_full_uninstall_intent($now - PFB_FULL_UNINSTALL_TTL, $now));
+	}
+
 	public function testKeepSettingsOffAlwaysTearsDown(): void
 	{
 		// keep=off => cleanup is mandatory regardless of the toggle or the marker.

@@ -251,6 +251,53 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('off', config_get_path($path), "write(read(''))==off for pfb_keep");
 	}
 
+	/**
+	 * pfb_keep_on_upgrade (lenient adapter, #687): 'on'/'off'/'' round-trip; legacy '' -> 'off'.
+	 * Lenient like pfb_keep so the absent-default 'on' (new install) is distinguishable from an
+	 * explicit 'off' (existing install grandfather-seeded at upgrade, or an operator opt-out).
+	 */
+	public function testPfbKeepOnUpgradeLenientRoundTripOn(): void
+	{
+		$path = 'installedpackages/pfblockerng/config/0/pfb_keep_on_upgrade';
+
+		$this->seedConfig($path, 'on');
+		$this->assertSame('on', config_get_path($path), 'before: pfb_keep_on_upgrade seed is on');
+
+		$enum = PfbConfig::read('pfb_keep_on_upgrade');
+		$this->assertSame(PfbLenient::On, $enum, "read: pfb_keep_on_upgrade 'on' -> PfbLenient::On");
+
+		PfbConfig::write('pfb_keep_on_upgrade', $enum);
+		$this->assertSame('on', config_get_path($path), "write(read('on'))==on for pfb_keep_on_upgrade");
+	}
+
+	public function testPfbKeepOnUpgradeLenientRoundTripOff(): void
+	{
+		$path = 'installedpackages/pfblockerng/config/0/pfb_keep_on_upgrade';
+
+		$this->seedConfig($path, 'off');
+		$this->assertSame('off', config_get_path($path), 'before: pfb_keep_on_upgrade seed is off');
+
+		$enum = PfbConfig::read('pfb_keep_on_upgrade');
+		$this->assertSame(PfbLenient::Off, $enum, "read: pfb_keep_on_upgrade 'off' -> PfbLenient::Off");
+
+		PfbConfig::write('pfb_keep_on_upgrade', $enum);
+		$this->assertSame('off', config_get_path($path), "write(read('off'))==off for pfb_keep_on_upgrade");
+	}
+
+	public function testPfbKeepOnUpgradeLenientLegacyEmptyNormalisesToOff(): void
+	{
+		$path = 'installedpackages/pfblockerng/config/0/pfb_keep_on_upgrade';
+
+		$this->seedConfig($path, '');
+		$this->assertSame('', config_get_path($path), 'before: pfb_keep_on_upgrade seed is empty string');
+
+		$enum = PfbConfig::read('pfb_keep_on_upgrade');
+		$this->assertSame(PfbLenient::Off, $enum, "read: pfb_keep_on_upgrade '' -> PfbLenient::Off (legacy)");
+
+		PfbConfig::write('pfb_keep_on_upgrade', $enum);
+		$this->assertSame('off', config_get_path($path), "write(read(''))==off for pfb_keep_on_upgrade");
+	}
+
 	// -----------------------------------------------------------------------
 	// B — Default on absent key
 	// -----------------------------------------------------------------------
@@ -286,6 +333,17 @@ final class CfgGatewayTest extends TestCase
 
 		// Then: returns On (the registered default 'on', applied through lenient adapter).
 		$this->assertSame(PfbLenient::On, $result, 'pfb_keep absent -> PfbLenient::On (default on)');
+	}
+
+	public function testReadReturnsRegisteredDefaultForPfbKeepOnUpgradeAbsentKey(): void
+	{
+		// #687: pfb_keep_on_upgrade default is 'on' (the NEW-install default — stay active across
+		// upgrades). Absent key -> PfbLenient::On through the lenient adapter. (An existing install is
+		// grandfather-seeded to 'off' at upgrade, so the key is only ever absent on a brand-new one.)
+		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/pfb_keep_on_upgrade'));
+
+		$result = PfbConfig::read('pfb_keep_on_upgrade');
+		$this->assertSame(PfbLenient::On, $result, 'pfb_keep_on_upgrade absent -> PfbLenient::On (default on)');
 	}
 
 	public function testReadReturnsRegisteredDefaultForLenientAbsentKey(): void

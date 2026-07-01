@@ -7931,6 +7931,22 @@ function pfb_full_uninstall_marker_file(): string {
 }
 
 
+// #688 (CodeRabbit): honour the uninstall-intent marker only while FRESH. The Software-page
+// Uninstall drops it immediately before redirecting to the Package Manager confirm, so a genuine
+// removal consumes it within seconds. But an admin who clicks Uninstall then CANCELS the confirm
+// WITHOUT reopening the Software page would otherwise leave the marker until the next pre-deinstall
+// -- possibly an unrelated, much-later version/OS upgrade -- wrongly forcing a full teardown (and
+// wiping settings) even with "Keep enabled during version upgrades" on. Gate on filemtime within a
+// short TTL so a stale marker can never poison a later upgrade. $mtime is @filemtime()'s result
+// (int, or FALSE when the marker is absent).
+if (!defined('PFB_FULL_UNINSTALL_TTL')) {
+	define('PFB_FULL_UNINSTALL_TTL', 300);	// seconds — a genuine uninstall consumes the marker in seconds
+}
+function pfb_full_uninstall_intent(int|false $mtime, int $now): bool {
+	return ($mtime !== FALSE) && ($mtime >= ($now - PFB_FULL_UNINSTALL_TTL));
+}
+
+
 // #687: decide whether the pre-deinstall performs a FULL teardown (turn pfBlockerNG OFF + remove
 // live objects) or SKIPS it to keep pfBlockerNG active across a version/OS upgrade. Pure decision,
 // no I/O -- pfSense cannot distinguish an upgrade from a real uninstall in the pre-deinstall, so the
@@ -16968,11 +16984,13 @@ function pfblockerng_php_pre_deinstall_command() {
 	// #687: decide whether to fully tear pfBlockerNG down, or keep it live across a version/OS
 	// upgrade. pfSense cannot tell an upgrade from a real uninstall here, so the user's settings
 	// decide (no upgrade-detection). Consume the Software-page "Uninstall" intent marker here so it
-	// never lingers, then apply the pure decision ladder.
+	// never lingers, and honour it only while FRESH (#688) so an abandoned/cancelled uninstall
+	// cannot force a full teardown on a much-later, unrelated upgrade. Then apply the pure ladder.
 	$keep_settings   = (PfbConfig::read('pfb_keep') === PfbLenient::On);
 	$keep_on_upgrade = (PfbConfig::read('pfb_keep_on_upgrade') === PfbLenient::On);
-	$intentional     = @file_exists(pfb_full_uninstall_marker_file());
-	@unlink(pfb_full_uninstall_marker_file());
+	$pfb_marker      = pfb_full_uninstall_marker_file();
+	$intentional     = pfb_full_uninstall_intent(@filemtime($pfb_marker), time());
+	@unlink($pfb_marker);
 
 	if (!pfb_deinstall_full_teardown($keep_settings, $keep_on_upgrade, $intentional)) {
 		// Keep pfBlockerNG active across the upgrade: run NO disable pass and NO teardown, so its
