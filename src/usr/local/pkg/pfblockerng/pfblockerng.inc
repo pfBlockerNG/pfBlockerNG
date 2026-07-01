@@ -3546,6 +3546,41 @@ function pfb_hook_lifecycle_ctx($lifecycle): array {
 }
 
 /*
+ * #693 (follow-up to #690): mirror a completed hook's captured stdout/stderr to the
+ * package-manager output during a pkg install/upgrade/uninstall.
+ *
+ * pfb_run_hooks() redirects each hook's stdout+stderr to a LOG FILE, never a pipe, so a hook that
+ * (re)starts a daemon -- e.g. the documented HAProxy graceful reload -- cannot hold exec()'s
+ * capture pipe open and hang the pass (#662). The cost: the hook's own output then lands only in
+ * that file, so pfSense's Software page (which shows only STDOUT) frames the hook with its
+ * "[ pfB Hook ] ..." markers but shows an empty body. While a lifecycle callback is active
+ * ($pfb['hook_lifecycle'], set by the install command / pre-deinstall), print exactly the bytes
+ * the hook just appended ($logfile from $offset to EOF) so the page shows what it did.
+ *
+ * The bytes are ALREADY in the log file (the shell append), so this only prints -- it never
+ * re-logs. Reading a regular file cannot hang: a lingering daemon holds a harmless file fd, not
+ * this reader. No-op outside a lifecycle callback (a normal cron/manual/Run-Now pass already
+ * streams the hook body to the per-run log the Update-page tail reads).
+ */
+function pfb_mirror_hook_output(string $logfile, int $offset): void {
+	global $pfb;
+
+	if (empty($pfb['hook_lifecycle']) || $logfile === '') {
+		return;
+	}
+	clearstatcache(TRUE, $logfile);
+	$end = @filesize($logfile);
+	if ($end === FALSE || $end <= $offset) {
+		return;
+	}
+	$body = @file_get_contents($logfile, FALSE, NULL, $offset, $end - $offset);
+	if (is_string($body) && $body !== '') {
+		print $body;
+	}
+}
+
+
+/*
  * Run every enabled hook matching $when, in list order, as root.
  *
  * $ctx is a flat name => value map exported to each hook as PFB_* environment
@@ -3648,13 +3683,25 @@ function pfb_run_hooks($when, $ctx = array()) {
 		// "[ pfB Hook ] ..." markers interleave and stream AS the hook runs); outside a run it falls
 		// back to the cumulative log. (A rare lingering daemon could append a stray line later --
 		// cosmetic.)
-		$logf = escapeshellarg(pfb_run_log_target());
+		$logtarget = pfb_run_log_target();
+		$logf = escapeshellarg($logtarget);
 		$cmd = "{$envprefix} /usr/bin/timeout --foreground -s TERM -k " . PFB_HOOK_KILL_GRACE .
 			" {$timeout} " . escapeshellarg($path) . " >> {$logf} 2>&1 < /dev/null";
+
+		// #693: the hook's own stdout/stderr goes to the log FILE above (never a pipe -- a hook
+		// that restarts a daemon would otherwise hang exec(), #662), so on the pkg Software page
+		// only the surrounding pfb_logger() markers show and the hook body is invisible. Record
+		// where the log ends BEFORE the hook runs so we can mirror exactly what it appends.
+		clearstatcache(TRUE, $logtarget);
+		$hook_log_offset = (int) (@filesize($logtarget) ?: 0);
 
 		$discard = array();
 		$retval  = 0;
 		exec($cmd, $discard, $retval);
+
+		// #693: during a pkg install/upgrade/uninstall (lifecycle callback), stream the hook's
+		// captured output to the package-manager output so the admin sees what it actually did.
+		pfb_mirror_hook_output($logtarget, $hook_log_offset);
 
 		if ($retval === 124) {
 			pfb_logger("[ pfB Hook ] {$when} {$label} TIMED OUT after {$timeout}s (killed); continuing\n", 2);
