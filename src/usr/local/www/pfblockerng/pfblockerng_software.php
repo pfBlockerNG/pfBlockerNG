@@ -22,9 +22,7 @@
 
 // ADR-19: the "Software" page — show the installed pfBlockerNG channel/version vs our-repo
 // latest (from the cron-maintained cache), toggle the "Check for new versions" setting, and
-// run same-channel Check / Update actions. Disable NGINX output buffering so the Update live
-// terminal streams (mirrors _update.php).
-header("X-Accel-Buffering: no");
+// run same-channel Check / Update actions.
 
 require_once('guiconfig.inc');
 require_once('globals.inc');
@@ -302,6 +300,14 @@ $form->add($section);
 // task is already running (a reload mid-run). $pfb_sw_poll_status seeds the status line.
 $pfb_sw_poll        = isvalidpid('/var/run/pfb_software.pid');
 $pfb_sw_poll_status = $pfb_sw_poll ? gettext('A pfBlockerNG software task is running...') : '';
+// The in-flight action drives the poller's completion handling (esp. the uninstall .fail redirect,
+// since pkg delete removes this endpoint). On a fresh POST it is $pfb_sw_action; on a plain reload
+// mid-run there is no POST, so recover it from the dispatcher's action sidecar.
+$pfb_sw_poll_action = $pfb_sw_action;
+if ($pfb_sw_poll_action === '' && $pfb_sw_poll) {
+	$pfb_sw_action_raw  = @file_get_contents('/var/run/pfb_software.action');
+	$pfb_sw_poll_action = ($pfb_sw_action_raw !== FALSE) ? trim($pfb_sw_action_raw) : '';
+}
 $section = new Form_Section('Output');
 $section->addInput(new Form_Textarea(
 	'pfb_status',
@@ -329,6 +335,11 @@ if ($pfb_sw_action === 'update') {
 		pfb_software_status(gettext('No update is currently available.'));
 	} elseif ($pfb_sw_pkgname === '') {
 		pfb_software_status(gettext('No pfBlockerNG package detected — cannot update.'));
+	} elseif (isvalidpid('/var/run/pfb_software.pid')) {
+		// A software task is already running — refuse a second concurrent pkg dispatch (which would
+		// clobber the in-flight run's sidecars). Mirrors the Update page's active-task guard.
+		pfb_software_status(gettext('A pfBlockerNG software task is already running.'));
+		$pfb_sw_poll = TRUE;
 	} else {
 		$bin = escapeshellarg(PFB_PKG_BIN);
 		$pkg = escapeshellarg($pfb_sw_pkgname);
@@ -348,6 +359,9 @@ if ($pfb_sw_action === 'uninstall') {
 		pfb_software_status(gettext('Uninstall not confirmed — tick the confirmation box first.'));
 	} elseif ($pfb_sw_pkgname === '') {
 		pfb_software_status(gettext('No pfBlockerNG package detected — cannot uninstall.'));
+	} elseif (isvalidpid('/var/run/pfb_software.pid')) {
+		pfb_software_status(gettext('A pfBlockerNG software task is already running.'));
+		$pfb_sw_poll = TRUE;
 	} else {
 		$bin = escapeshellarg(PFB_PKG_BIN);
 		$pkg = escapeshellarg($pfb_sw_pkgname);
@@ -411,7 +425,7 @@ events.push(function() {
 		var stat   = document.forms[0].pfb_status;
 		var offset = null;
 		var timer  = null;
-		var action = <?=pfb_js_string($pfb_sw_action);?>;
+		var action = <?=pfb_js_string($pfb_sw_poll_action);?>;
 		var initStatus = <?=pfb_js_string($pfb_sw_poll_status);?>;
 		if (initStatus) { stat.value = initStatus; }
 		function gotoInstalled() { window.location.assign('/pkg_mgr_installed.php'); }

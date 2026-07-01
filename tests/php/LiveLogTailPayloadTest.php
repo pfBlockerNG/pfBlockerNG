@@ -84,6 +84,25 @@ final class LiveLogTailPayloadTest extends TestCase
 		$this->assertStringContainsString('trailing-partial', $p['data'], 'final partial line is flushed');
 	}
 
+	public function testLiveRunWithEmptyRunLogKeepsPollingNotFallback(): void
+	{
+		global $pfb;
+		// The run log is freshly truncated (empty) but the dispatched process is ALIVE — the
+		// client's first poll commonly beats the daemon's first write. This must NOT one-shot the
+		// cumulative fallback (which would stop the tail before any live output); it must follow the
+		// run log and keep polling. Regression guard for the first-poll false-'done' bug.
+		file_put_contents($pfb['runlog'], '');
+		file_put_contents($pfb['log'], "old cumulative history line\n"); // fallback HAS content
+		$GLOBALS['pfb_test_valid_pids'][self::UPDATE_PID] = TRUE;
+
+		$p = pfb_log_tail_payload('update', -1, FALSE);
+
+		$this->assertSame('run', $p['source'], 'a live run must follow the run log, never the cumulative fallback');
+		$this->assertFalse($p['done'], 'must keep polling while the process is alive and the run log is still empty');
+		$this->assertTrue($p['running']);
+		$this->assertSame('', $p['data'], 'no data yet — the daemon has not written its first line');
+	}
+
 	public function testNoRunFileFallsBackToCumulativeTailOneShot(): void
 	{
 		global $pfb;
