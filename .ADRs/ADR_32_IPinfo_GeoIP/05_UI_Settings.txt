@@ -1,6 +1,6 @@
 ================================================================================
 PHASE 5 PROMPT — UI: provider selectors + capability notices (PfbConfig)
-Target model: Claude Sonnet 4.6
+Target model: Claude Sonnet 5
 ADR: .ADRs/ADR_32_IPinfo_GeoIP/ADR.md   (read SS2, SS5 first)
 ================================================================================
 

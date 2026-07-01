@@ -176,7 +176,7 @@ using the banner template:
 ```text
 ================================================================================
 PHASE N PROMPT — <title>
-Target model: <e.g. Claude Sonnet 4.6>
+Target model: <e.g. Claude Sonnet 5>
 ADR: .ADRs/ADR_NN_Name/ADR.md   (read <relevant section> first)
 ================================================================================
 

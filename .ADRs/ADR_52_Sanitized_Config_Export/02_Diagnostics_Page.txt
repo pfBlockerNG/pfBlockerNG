@@ -1,6 +1,6 @@
 ================================================================================
 PHASE 2 PROMPT — Diagnostics page, Export download, tab + ACL (www)
-Target model: Claude Sonnet 4.6
+Target model: Claude Sonnet 5
 ADR: .ADRs/ADR_52_Sanitized_Config_Export/ADR.md   (read §1.2, §2.1, §5 first)
 ================================================================================
 

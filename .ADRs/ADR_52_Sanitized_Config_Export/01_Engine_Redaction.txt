@@ -1,6 +1,6 @@
 ================================================================================
 PHASE 1 PROMPT — Diagnostics engine + redaction (pure PHP, TDD, off-appliance)
-Target model: Claude Sonnet 4.6
+Target model: Claude Sonnet 5
 ADR: .ADRs/ADR_52_Sanitized_Config_Export/ADR.md   (read §1.2, §2.1, §2.2 first)
 ================================================================================
 

@@ -160,10 +160,10 @@ commits are the reliable handle. **Prefer stubbing the real function over an exc
 stubs encode reality and keep PHPStan/Intelephense honest. By-hand counterpart to the bulk
 generator under "Updating documentation".
 
-### Plan with a higher model, implement with Sonnet
+### Plan with a higher model, implement with Sonnet 5
 
 Substantial coding work is **planned and gated by a higher model** (Opus / Fable) and
-**implemented by Sonnet** sub-agents: the planner splits the task into steps, a Sonnet
+**implemented by Sonnet 5** sub-agents: the planner splits the task into steps, a Sonnet 5
 implementer executes each, and the planner **independently checks every step** before the next
 — that per-step gating is what makes a cheaper implementer safe. The skills already wire this
 (`/adr-phase` and `/gh-issue --fix` spawn `model: sonnet` implementers under orchestrator
@@ -173,13 +173,13 @@ trivial one-line edits — and always handles **docs / config / settings / skill
 Delegation is for non-trivial, multi-step `src/`/`tests/`/CI work.
 
 - **The implementer implements; it never re-delegates — the split is exactly one level deep.**
-  A Sonnet implementer spawned for a step does the work itself with Read/Edit/Write/Bash and
+  A Sonnet 5 implementer spawned for a step does the work itself with Read/Edit/Write/Bash and
   **must not spawn further agents** (no `Agent`/Task call). Only the orchestrating higher model
   delegates. This section is read by both roles, so be explicit: **if you are reading it as a
   spawned implementer, you are the implementer, not a new planner** — build, don't re-delegate.
-  (Recursion here is a real failure mode: an implementer that re-reads "implement with Sonnet"
+  (Recursion here is a real failure mode: an implementer that re-reads "implement with Sonnet 5"
   and spawns its own sub-agent returns an "I launched an agent…" no-op instead of code.)
-- **The planner's brief to Sonnet must be self-contained, accurate, and well-referenced** — the
+- **The planner's brief to Sonnet 5 must be self-contained, accurate, and well-referenced** — the
   exact objective, the files/symbols to read and change (paths, `file:line`), the constraints,
   the verification gates, and the prior step's handoff. A vague or wrong brief is a planner bug.
 - **Propagate an active ponytail level to every delegate.** If the `ponytail` plugin is installed
@@ -188,7 +188,7 @@ Delegation is for non-trivial, multi-step `src/`/`tests/`/CI work.
   `Run /ponytail:ponytail <level>` (the level active here: full/lite/ultra) before any other work,
   so the delegate inherits the same laziness discipline. This is part of the mandatory handoff,
   not optional; skip it only when ponytail is not active in this session.
-- **Sonnet follows every directive in this file** — communication, the working principles
+- **Sonnet 5 follows every directive in this file** — communication, the working principles
   (investigate / "don't assume, read" / confirm ambiguity), code standards (style, naming,
   per-language rules), the test-coverage mandate, and how to work with the specific
   codes/frameworks/tests. The implementer is cheaper, not exempt.
@@ -1021,14 +1021,14 @@ change, land its PR with **`/pr-merge-flow N`** — roughly `/pr-comments N
 --wait-for=coderabbitai && /pr-merge N`: get review feedback, validate + apply its findings and
 reply, then (only if that completes cleanly) rebase-merge once real CI is green. The review
 source adapts: **CodeRabbit** when active on the repo (it is — installed on the `pfBlockerNG`
-org), else a **Claude Sonnet sub-agent reviewer**. **Snyk** reviews PRs too: when it is
+org), else a **Claude Sonnet 5 sub-agent reviewer**. **Snyk** reviews PRs too: when it is
 reviewing (detectable via its `code/snyk` **commit status/gate** on the head SHA — Snyk posts
 **no** review comments), wait for it **in parallel** and handle its security findings the same
 way — every Snyk finding is an in-diff item to fix or justify-skip, read from the status detail.
 **Either bot can run out of quota** — CodeRabbit replies with a "Review limit reached" / "run out
 of usage credits" / "rate limited by coderabbit.ai" comment; Snyk's status goes to `error` ("Code
 test limit reached"). A quota notice is an **acknowledgement with no review**, never a clean pass:
-treat the bot as did-not-review — CodeRabbit's quota falls through to the Sonnet substitute, Snyk's
+treat the bot as did-not-review — CodeRabbit's quota falls through to the Sonnet 5 substitute, Snyk's
 is dropped from the gate — and **surface the skipped reviewer** so it never reads as "PR is clean".
 The **only** exemptions are the dev-only
 classes that go straight to `devel` with no PR (documentation-only, `CLAUDE.md`, ADR text, skills

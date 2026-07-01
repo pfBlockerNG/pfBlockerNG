@@ -180,7 +180,7 @@ then express every Force mode as sidecar removal and delete the reuse flag.
 - Test-coverage mandate: every behaviour change red→green; branch coverage of the detector's
   decision (304 present-hash vs missing-hash; 200 changed vs unchanged); Tier A + Tier B for the
   `www/` Parse rewire; self-heal pinned.
-- Plan-with-higher-model / implement-with-Sonnet for the multi-step `src/` work.
+- Plan-with-higher-model / implement-with-Sonnet 5 for the multi-step `src/` work.
 
 ## 6. Action plan (phases — each one behaviour-preserving or with red→green tests)
 

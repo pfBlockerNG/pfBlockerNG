@@ -238,7 +238,7 @@ For each plan step `M`, in order:
 **7a. Delegate to a clean sub-agent.** Spawn an Agent (`subagent_type:
 general-purpose`, **`model: sonnet`**, no `isolation` — the worktree already exists)
 with a self-contained brief. Per CLAUDE.md "Plan with a higher model, implement with
-Sonnet", **you are the higher-model planner/gater and the implementer runs on Sonnet** —
+Sonnet 5", **you are the higher-model planner/gater and the implementer runs on Sonnet 5** —
 the brief must be self-contained, accurate, and well-referenced, since the cheaper
 implementer is only safe because you independently gate every step (7b). The brief: the
 **full step prompt** from Step 5, the instruction to work

@@ -1,6 +1,6 @@
 ================================================================================
 PHASE 3 PROMPT — Config: the feed_mgmt_mode setting (default off)
-Target model: Claude Sonnet 4.6
+Target model: Claude Sonnet 5
 ADR: .ADRs/ADR_33_Auto_Feed_Management/ADR.md   (read SS2, SS5 first)
 ================================================================================
 

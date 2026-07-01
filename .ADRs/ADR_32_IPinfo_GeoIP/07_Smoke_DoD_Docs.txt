@@ -1,6 +1,6 @@
 ================================================================================
 PHASE 7 PROMPT — Smoke + Definition of Done + docs
-Target model: Claude Sonnet 4.6
+Target model: Claude Sonnet 5
 ADR: .ADRs/ADR_32_IPinfo_GeoIP/ADR.md   (read SS7 first)
 ================================================================================
 

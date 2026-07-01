@@ -1,6 +1,6 @@
 ================================================================================
 PHASE 3 PROMPT — IPinfo ingestion (download + parse CIDR DB -> normalized record)
-Target model: Claude Sonnet 4.6
+Target model: Claude Sonnet 5
 ADR: .ADRs/ADR_32_IPinfo_GeoIP/ADR.md   (read SS1, SS2.1, SS2.2 first)
 ================================================================================
 

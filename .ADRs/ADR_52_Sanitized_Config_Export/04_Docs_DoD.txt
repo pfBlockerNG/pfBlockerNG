@@ -1,6 +1,6 @@
 ================================================================================
 PHASE 4 PROMPT — Docs + Definition-of-done / live-VM
-Target model: Claude Sonnet 4.6
+Target model: Claude Sonnet 5
 ADR: .ADRs/ADR_52_Sanitized_Config_Export/ADR.md   (read §6 Phase 4, §7 first)
 ================================================================================
 

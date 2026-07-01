@@ -1,6 +1,6 @@
 ================================================================================
 PHASE 2 PROMPT — Prep: extract + pin current behaviour; CIDR resolver (behaviour-preserving)
-Target model: Claude Sonnet 4.6
+Target model: Claude Sonnet 5
 ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS1, SS2.1, SS2.3 first)
 ================================================================================
 

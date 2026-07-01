@@ -1,6 +1,6 @@
 ================================================================================
 PHASE 4 PROMPT — IPinfo provider for enrichment + ASN
-Target model: Claude Sonnet 4.6
+Target model: Claude Sonnet 5
 ADR: .ADRs/ADR_32_IPinfo_GeoIP/ADR.md   (read SS2.1, SS2.2 first)
 ================================================================================
 

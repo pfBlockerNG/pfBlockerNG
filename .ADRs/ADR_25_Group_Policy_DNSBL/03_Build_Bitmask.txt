@@ -1,6 +1,6 @@
 ================================================================================
 PHASE 3 PROMPT — Build: alias-membership bitmask (feature-flagged; OFF => identical)
-Target model: Claude Sonnet 4.6
+Target model: Claude Sonnet 5
 ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS2.1, SS2.3 first)
 ================================================================================
 

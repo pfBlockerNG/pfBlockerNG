@@ -9,7 +9,7 @@ description: >
   delete the branch. The review step gives CodeRabbit ~10 minutes to acknowledge the
   PR: if it does, wait on its review; if it stays silent, nudge it once with
   `@coderabbitai review` and wait 10 more minutes, and only if it is STILL silent spawn
-  a Claude Sonnet sub-agent to review in its place (still folding CodeRabbit's review in
+  a Claude Sonnet 5 sub-agent to review in its place (still folding CodeRabbit's review in
   if it shows up late) — and handle every comment of every review the same way. This
   is the default flow after any GitHub issue, ADR, or code change — everything
   except the dev-only classes that land straight on devel with no PR
@@ -46,9 +46,9 @@ Args: `{{ args }}`
 ## Step 1 — Review feedback
 
 Decide the review source with a **10-minute acknowledgement window** (1a), run the
-matching path — 1b (CodeRabbit) or 1c (Sonnet substitute, which still folds CodeRabbit
+matching path — 1b (CodeRabbit) or 1c (Sonnet 5 substitute, which still folds CodeRabbit
 back in if it shows up late) — then apply the shared gate. **Independently, Snyk may also be
-reviewing the PR** (security findings): Step 1e runs **in parallel** with the CodeRabbit/Sonnet
+reviewing the PR** (security findings): Step 1e runs **in parallel** with the CodeRabbit/Sonnet 5
 path and folds into the same gate. Whichever reviews you end up with, **handle every comment of
 every review you receive**; *how* each comment is handled (the triage below) never changes.
 
@@ -97,7 +97,7 @@ done
 - **`NOACK`** (silent for the full window) → **Step 1c** (nudge before giving up).
 - **`QUOTA`** is no longer emitted by 1a (it is decided in 1b). When Step 1b's wait returns
   `QUOTA` — a genuine usage/rate-limit with **no** review content for the whole window — go to
-  **Step 1d** (Sonnet substitute) and **surface** that CodeRabbit was skipped for quota.
+  **Step 1d** (Sonnet 5 substitute) and **surface** that CodeRabbit was skipped for quota.
 
 ### Step 1b — CodeRabbit acknowledged → wait on + handle its review
 
@@ -107,11 +107,11 @@ done
   reviewing, then validates each finding against the current code, applies the ones that
   genuinely hold, skips the rest with a reason, and replies on every thread.
 - If that wait **times out** (CodeRabbit acknowledged but never finished the review),
-  do not stall the flow — fall back to the Sonnet stand-in (**Step 1d**); the nudge in
+  do not stall the flow — fall back to the Sonnet 5 stand-in (**Step 1d**); the nudge in
   Step 1c is for the *no-acknowledgement* case, so it won't help once it has already
   acknowledged.
 - If the wait returns **`QUOTA`** for CodeRabbit (it acknowledged only with a usage/rate-limit
-  notice — see Step 2 of `pr-comments`), it will not review: go to the Sonnet stand-in
+  notice — see Step 2 of `pr-comments`), it will not review: go to the Sonnet 5 stand-in
   (**Step 1d**) and note the quota skip in the final report. (A `QUOTA` for **Snyk** just
   drops Snyk from this wait — surface the skipped scan; it does not trigger the substitute.)
 
@@ -133,7 +133,7 @@ Re-run the Step-1a loop with `deadline=$(( $(date -u +%s) + 600 ))`. On the resu
 Nudge **once only** — a second silent window means CodeRabbit is genuinely unavailable;
 do not loop on it.
 
-### Step 1d — Still no ack → Claude Sonnet sub-agent reviewer (fold in a late CodeRabbit)
+### Step 1d — Still no ack → Claude Sonnet 5 sub-agent reviewer (fold in a late CodeRabbit)
 
 Stand in a reviewer yourself; if CodeRabbit turns up late, fold its review in too.
 
@@ -148,11 +148,11 @@ Stand in a reviewer yourself; if CodeRabbit turns up late, fold its review in to
    here — full/lite/ultra; CLAUDE.md "Plan with a higher model"), so the reviewer matches the
    parent's ponytail mode.
 2. **When the sub-agent finishes, re-check the PR for CodeRabbit.** If it has now
-   posted anything (it acknowledged late, during the Sonnet review), treat it as
+   posted anything (it acknowledged late, during the Sonnet 5 review), treat it as
    available after all: wait for its review to finish (the `pr-comments`
    `--wait-for=coderabbitai` wait, or poll until a terminal CodeRabbit result), so you
-   hold **both** reviews. If it is still silent, you have only the Sonnet review.
-3. **Triage and handle EACH comment of EACH review you received** — every Sonnet
+   hold **both** reviews. If it is still silent, you have only the Sonnet 5 review.
+3. **Triage and handle EACH comment of EACH review you received** — every Sonnet 5
    finding, plus every CodeRabbit finding if one arrived. The per-comment handling is
    unchanged: **APPLY** (valid, in scope, safe) · **SKIP** (stale / unenforced /
    wrong-premise / suggestion-unsafe — record the reason) · **DEFER** (valid but
@@ -165,7 +165,7 @@ Stand in a reviewer yourself; if CodeRabbit turns up late, fold its review in to
    the relevant gates (`php -l` / PHPUnit / PHPStan for PHP, `python -m pytest` / `ruff` / `mypy`
    for Python, ShellCheck for shell — whatever the change touches), commit
    (`<scope>: <imperative summary>`) and push to the PR head branch.
-5. **Record the review on the PR** — post one comment summarising the Sonnet substitute
+5. **Record the review on the PR** — post one comment summarising the Sonnet 5 substitute
    review (and noting CodeRabbit's, if it was folded in) plus the per-finding
    resolution (applied + commit / skipped + reason / deferred + tracking-issue link), so there is an
    audit trail. Use `gh pr comment N --body-file` and append the attribution footer
@@ -181,7 +181,7 @@ Stand in a reviewer yourself; if CodeRabbit turns up late, fold its review in to
 Snyk reviews PRs independently of CodeRabbit — handle it **alongside** the 1a–1d path, not
 instead of it. **The wait runs through `/pr-comments`, not a bespoke poll here:** on the
 CodeRabbit-present path (1b) Snyk is already folded into that one call's
-`--wait-for=coderabbitai,snyk`; on the **Sonnet-substitute path (1d)** — where no CodeRabbit
+`--wait-for=coderabbitai,snyk`; on the **Sonnet 5-substitute path (1d)** — where no CodeRabbit
 `pr-comments` wait runs — invoke `/pr-comments N --wait-for=snyk` so Snyk is still waited on and
 its findings fetched/replied. `pr-comments` tolerates an absent Snyk (no `snyk` status ⇒ skipped,
 no stall), so it is always safe to include. This step just records Snyk's specifics:
@@ -206,7 +206,7 @@ no stall), so it is always safe to include. This step just records Snyk's specif
 ### Gate before Step 2 (all paths)
 
 Continue to the merge ONLY if the review step finished cleanly: every finding from **every**
-review received — CodeRabbit/Sonnet **and** Snyk — triaged, any accepted fixes committed and
+review received — CodeRabbit/Sonnet 5 **and** Snyk — triaged, any accepted fixes committed and
 pushed, and nothing left that needs a human decision. If a finding is unresolved, contested, or
 needs the user, **stop here and report** — do not merge.
 
@@ -221,7 +221,7 @@ needs the user, **stop here and report** — do not merge.
 
 ## Definition of done
 
-- Review resolved (note which reviewers were used — CodeRabbit or the Sonnet
+- Review resolved (note which reviewers were used — CodeRabbit or the Sonnet 5
   substitute, **plus Snyk if it reviewed**); PR merged by rebase; remote branch deleted.
 - Sync the work item's labels (an issue's `Waiting PR` removed on merge), per
   `CLAUDE.md` → "Labels (lifecycle)".

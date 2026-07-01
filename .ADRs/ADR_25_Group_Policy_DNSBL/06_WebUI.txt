@@ -1,6 +1,6 @@
 ================================================================================
 PHASE 6 PROMPT — Web UI: policy-group management
-Target model: Claude Sonnet 4.6
+Target model: Claude Sonnet 5
 ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS2, SS4 first)
 ================================================================================
 

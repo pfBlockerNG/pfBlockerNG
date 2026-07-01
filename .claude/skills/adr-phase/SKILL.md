@@ -174,7 +174,7 @@ For every phase `M` to run (the loop body in `all`):
 **6a. Delegate to a clean sub-agent.** Spawn an Agent (`subagent_type:
 general-purpose`, **`model: sonnet`**) — **without** `isolation: "worktree"`, since
 the worktree already exists. Per CLAUDE.md "Plan with a higher model, implement with
-Sonnet", **you are the higher-model planner/gater and the implementer runs on Sonnet**;
+Sonnet 5", **you are the higher-model planner/gater and the implementer runs on Sonnet 5**;
 your brief must be self-contained, accurate, and well-referenced (the cheaper implementer
 is only safe because you gate every step). Give it a **self-contained** brief — no
 carry-over from this conversation, though it has the full worktree (the whole codebase) to

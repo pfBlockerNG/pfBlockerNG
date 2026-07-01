@@ -183,7 +183,7 @@ comment body and adjust the `grep` patterns rather than waiting out the timeout.
   comments — **always also eyeball the PR for posted comments before acting on QUOTA**). In
   a multi-handle wait, **drop this handle and continue** with the others. For a
   lone-CodeRabbit wait, fall through and let the caller (`/pr-merge-flow`) stand up the
-  Sonnet substitute reviewer. **Do not retry-loop** — a genuine limit won't clear in this
+  Sonnet 5 substitute reviewer. **Do not retry-loop** — a genuine limit won't clear in this
   window. Always **surface** the skipped reviewer to the user.
 - **`NOTPRESENT`** → no engagement within the presence window — this handle isn't
   reviewing the PR. **Skip it** (in a multi-handle wait, drop this handle and continue

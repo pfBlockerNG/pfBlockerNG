@@ -1,6 +1,6 @@
 ================================================================================
 PHASE 1 PROMPT — Prep: extract reusable match/classify helpers (oracle)
-Target model: Claude Sonnet 4.6
+Target model: Claude Sonnet 5
 ADR: .ADRs/ADR_34_Triangulator_Tool/ADR.md   (read SS1, SS2.1, SS2.2 first)
 ================================================================================
 

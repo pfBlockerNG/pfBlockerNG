@@ -1,6 +1,6 @@
 ================================================================================
 PHASE 5 PROMPT — UI: mode selector + "Recheck Feeds" + change review
-Target model: Claude Sonnet 4.6
+Target model: Claude Sonnet 5
 ADR: .ADRs/ADR_33_Auto_Feed_Management/ADR.md   (read SS2, SS4 first)
 ================================================================================
 

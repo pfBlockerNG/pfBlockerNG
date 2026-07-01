@@ -1,6 +1,6 @@
 ================================================================================
 PHASE 6 PROMPT — Smoke + Definition of Done + docs
-Target model: Claude Sonnet 4.6
+Target model: Claude Sonnet 5
 ADR: .ADRs/ADR_33_Auto_Feed_Management/ADR.md   (read SS7 first)
 ================================================================================
 

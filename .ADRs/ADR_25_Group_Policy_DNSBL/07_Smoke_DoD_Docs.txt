@@ -1,6 +1,6 @@
 ================================================================================
 PHASE 7 PROMPT — Smoke (multi-source) + Definition of Done + docs
-Target model: Claude Sonnet 4.6
+Target model: Claude Sonnet 5
 ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS7 first)
 ================================================================================
 

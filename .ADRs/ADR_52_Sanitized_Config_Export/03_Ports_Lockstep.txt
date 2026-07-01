@@ -1,6 +1,6 @@
 ================================================================================
 PHASE 3 PROMPT — FreeBSD-ports lockstep wiring (pkg-plist + do-install)
-Target model: Claude Sonnet 4.6
+Target model: Claude Sonnet 5
 ADR: .ADRs/ADR_52_Sanitized_Config_Export/ADR.md   (read §1.2, §6 Phase 3 first)
 ================================================================================
 

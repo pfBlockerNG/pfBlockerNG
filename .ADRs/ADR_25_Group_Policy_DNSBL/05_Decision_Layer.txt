@@ -1,6 +1,6 @@
 ================================================================================
 PHASE 5 PROMPT — Python per-client decision layer + Phase-1 cache scheme
-Target model: Claude Sonnet 4.6 (or Opus if the cache scheme is intricate)
+Target model: Claude Sonnet 5 (or Opus if the cache scheme is intricate)
 ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS2.1, SS2.2, SS2.3 first)
 ================================================================================
 

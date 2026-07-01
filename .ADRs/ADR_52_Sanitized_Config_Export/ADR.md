@@ -188,7 +188,7 @@ bug report.
   in **Tier B** ⇒ Tier B required for it.
 - New shipped file ⇒ FreeBSD-ports `pkg-plist` + `do-install` in all three ports, landed in
   lockstep; verify with `build-pkg-portable.py --dry-run`.
-- Plan-with-higher-model / implement-with-Sonnet for the multi-step `src/`/`www/`/ports work.
+- Plan-with-higher-model / implement-with-Sonnet 5 for the multi-step `src/`/`www/`/ports work.
 
 ## 6. Action plan (phases)
 

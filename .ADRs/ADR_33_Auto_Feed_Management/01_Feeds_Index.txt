@@ -1,6 +1,6 @@
 ================================================================================
 PHASE 1 PROMPT — Prep: pure catalog index (pfb_feeds_index) + tests
-Target model: Claude Sonnet 4.6
+Target model: Claude Sonnet 5
 ADR: .ADRs/ADR_33_Auto_Feed_Management/ADR.md   (read SS1, SS2.1 first)
 ================================================================================
 

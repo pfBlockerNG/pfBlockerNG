@@ -1,6 +1,6 @@
 ================================================================================
 PHASE 2 PROMPT — Prep: pure reconcile-plan (pfb_feed_reconcile_plan) + tests
-Target model: Claude Sonnet 4.6
+Target model: Claude Sonnet 5
 ADR: .ADRs/ADR_33_Auto_Feed_Management/ADR.md   (read SS2.1, SS2.2 first)
 ================================================================================
 

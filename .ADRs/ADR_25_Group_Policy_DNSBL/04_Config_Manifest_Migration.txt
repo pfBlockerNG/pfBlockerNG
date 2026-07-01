@@ -1,6 +1,6 @@
 ================================================================================
 PHASE 4 PROMPT — Config schema + manifest extension + legacy migration (PHP)
-Target model: Claude Sonnet 4.6
+Target model: Claude Sonnet 5
 ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS1.3, SS1.4, SS2.1, SS2.3, SS2.4)
 ================================================================================
 
