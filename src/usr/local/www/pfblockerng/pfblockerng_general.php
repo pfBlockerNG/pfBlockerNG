@@ -365,7 +365,7 @@ $section->addInput(new Form_Checkbox(
 		. 'packages &mdash; with \'Keep Settings\' disabled it wipes pfBlockerNG\'s settings too. A normal '
 		. 'package update keeps them.<br /><br />'
 		. '<span class="text-danger">Note: </span>'
-		. ' To clear all downloaded lists, uncheck these two checkboxes and \'Save\'. Re-check both boxes and run a \'Force Update|Reload\''
+		. ' To clear all downloaded lists, uncheck this checkbox and \'Save\'. Re-check it and run a \'Force Update|Reload\''
 );
 
 $section->addInput(new Form_Checkbox(

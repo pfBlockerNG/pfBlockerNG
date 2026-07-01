@@ -369,10 +369,11 @@ def test_general_page_keep_help_upgrade_warning(webui: WebUI, php_error_log_guar
     Fail-before / pass-after: the disclaimer sentence is added in #697 (fails on the pre-#697 page),
     and the removed checkbox must be absent (fails while the old toggle still renders).
     """
-    body = webui.get(_GENERAL_PAGE).text
-    result = evaluate_render(_GENERAL_PAGE, 200, body, ("General Settings",))
+    resp = webui.get(_GENERAL_PAGE)
+    body = resp.text
+    result = evaluate_render(_GENERAL_PAGE, resp.status_code, body, ("General Settings",))
     assert result.ok, f"General page render oracle failed: {result.detail}"
-    assert "This also applies to pfSense version upgrades" in body, "keep=off version-upgrade disclaimer is missing"
+    assert "This also applies to a major pfSense version upgrade" in body, "keep=off upgrade-wipe disclaimer missing"
     assert 'name="pfb_keep_on_upgrade"' not in body, "the removed pfb_keep_on_upgrade toggle still renders (#697)"
 
 
