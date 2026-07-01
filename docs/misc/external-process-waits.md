@@ -88,6 +88,14 @@ so the page streams live progress. The unbound-stop wait logs its keepalive dots
 path, so that closes the silent gap too. Visibility only: the fd-detach, `--foreground`, and
 redirect safety above are untouched.
 
+An **update hook's own** stdout/stderr needs the same treatment, but it can't just be printed live:
+the hook body is redirected to the log file precisely so a daemon it starts can't hold the capture
+pipe (above), so mirroring it with a `tee`/pipe would reintroduce the hang. Instead `pfb_run_hooks()`
+records the log offset before `exec()` and, after the hook returns, `pfb_mirror_hook_output()` reads
+back exactly the bytes the hook appended and prints them (during a lifecycle callback only). A plain
+file read can't hang — the daemon holds a harmless file fd, not the reader — so the page shows the
+`[ pfB Hook ] …` markers *and* the hook's real output between them (issue #693).
+
 ## Following one specific dispatched process — pidfile, not a `ps` pattern or a log string
 
 - **`mwexec_bg()` returns no PID** — only the launcher's status. You cannot wait on what you
