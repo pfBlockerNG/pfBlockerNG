@@ -305,10 +305,9 @@ class TestClassify:
         assert _resolve(res, "deep.ads.example.com") == "block"
 
     def test_deep_anchor_exclusion_forces_exact_data(self) -> None:
-        # The OTHER side of the branch (CLAUDE.md: assert every branch, not one
-        # side): a whole-domain TLD exclusion is the user's knob to opt a domain
-        # OUT of wildcarding, so it still forces a transparent exact DATA entry even
-        # for a deep anchor -- subdomains stay unblocked.
+        # The other side of the branch: a whole-domain TLD exclusion is the user's
+        # knob to opt a domain OUT of wildcarding, so it still forces a transparent
+        # exact DATA entry even for a deep anchor -- subdomains stay unblocked.
         rules = _production_rules(["||ads.example.com^"])
         res = P.reconcile(rules, _TLDS, {"ads.example.com"})
         b = res.block_domains[0]
