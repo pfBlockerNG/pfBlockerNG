@@ -106,12 +106,15 @@ final class SanitizeIpaddrTest extends TestCase
 	}
 
 	// Suppression's old '> 32' guard rewrote /33 into a bare host instead of
-	// rejecting it; with the mask validated up front the line is dropped on
-	// this branch too.
-	public function testOutOfRangeMaskDroppedUnderSuppression(): void
+	// rejecting it (and the substring strip mangled /132 -> /1, /320 -> bare
+	// host, on this branch too); with the mask validated up front the line is
+	// dropped regardless of suppression state.
+	public function testInvalidMasksDroppedUnderSuppression(): void
 	{
 		$GLOBALS['pfb']['supp'] = 'on';
 		$this->assertNull(sanitize_ipaddr('192.0.2.1/33', false, 'Disabled'));
+		$this->assertNull(sanitize_ipaddr('192.0.2.1/132', false, 'Disabled'));
+		$this->assertNull(sanitize_ipaddr('192.0.2.1/320', false, 'Disabled'));
 	}
 
 	public function testNonNumericMaskDropped(): void
