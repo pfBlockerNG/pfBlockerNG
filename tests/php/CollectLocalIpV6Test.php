@@ -214,8 +214,9 @@ final class CollectLocalIpV6Test extends TestCase
 		//           in CIDR notation, exactly like the dynamic (track6/dhcp6/SLAAC) case.
 		//
 		// Background:
-		//   pfSense stores a static IPv6 assignment under interfaces[x]['ipaddrv6']/
-		//   ['subnetv6'] (e.g. 'static'/'64') with the literal address in ['ipv6addr'] —
+		//   pfSense stores a static IPv6 assignment with the literal address directly in
+		//   interfaces[x]['ipaddrv6'] and the prefix bits in ['subnetv6'] (dynamic modes
+		//   store a keyword — 'slaac'/'dhcp6'/'track6' — in ['ipaddrv6'] instead);
 		//   interfaces[x]['ipaddr'] holds the IPv4 value or a mode keyword (dhcp/pppoe/…)
 		//   and NEVER an IPv6 literal. So the config-interface loop in
 		//   pfb_collect_localip() (which only reads ['ipaddr']/['subnet']) cannot see a
@@ -232,8 +233,8 @@ final class CollectLocalIpV6Test extends TestCase
 
 		$GLOBALS['config']['interfaces']['lan'] = [
 			'enable'   => '',
-			'ipaddrv6' => 'static',
-			'ipv6addr' => '2001:db8:99:1::1',
+			// Real pfSense schema: a static assignment puts the v6 literal itself here.
+			'ipaddrv6' => '2001:db8:99:1::1',
 			'subnetv6' => '64',
 			// 'ipaddr' never carries a v6 literal for a static assignment — leave it at
 			// the IPv4 default so the config-interface loop contributes nothing for v6.
