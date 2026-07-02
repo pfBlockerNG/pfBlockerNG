@@ -50,8 +50,9 @@ or dependencies, so it tracks changes to the port automatically:
    from the port's embedded `files/` directory, so nothing is fetched.
 3. **Replay the recipe.** The tool interprets the port's `do-extract`,
    `post-extract` and `do-install` targets with a small command vocabulary
-   (`MKDIR`, `INSTALL_DATA`, `INSTALL_SCRIPT`, `INSTALL_PROGRAM`, `MV`, `CP`,
-   `LN`, `RM`, `REINPLACE_CMD`/`SED`) into a controlled staging directory — the
+   (`MKDIR`, `INSTALL_DATA`, `INSTALL_SCRIPT`, `MV`, `REINPLACE_CMD`/`SED` —
+   `CP`/`LN`/`RM`/`INSTALL_PROGRAM` were deliberately dropped, #502, as no port
+   recipe uses them) into a controlled staging directory — the
    same effect `make` would have, minus the shell. An **unknown recipe command
    is a hard error** (a signal that the port changed in a way the tool must be
    taught — rather than silently producing a broken package).
