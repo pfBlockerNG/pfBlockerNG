@@ -1115,8 +1115,8 @@ def abi_to_arch(abi: str) -> str:
         "i386": "x86:32",
         "aarch64": "aarch64:64",
         "armv7": "armv7:32",
-        "powerpc64": "powerpc:64",
-        "powerpc64le": "powerpc:64:eb",
+        "powerpc64": "powerpc:64:eb",
+        "powerpc64le": "powerpc:64:el",
     }
     parts = abi.split(":")
     if len(parts) != 3:

@@ -130,6 +130,10 @@ def test_compute_pkgversion(tmp_path: Path, ver: str, rev: str, epoch: str, expe
         ("FreeBSD:16:amd64", "freebsd:16:x86:64"),
         ("FreeBSD:14:aarch64", "freebsd:14:aarch64:64"),
         ("FreeBSD:13:i386", "freebsd:13:x86:32"),
+        # FreeBSD pkg ALTABI tags PowerPC with an explicit endian token:
+        # big-endian "eb", little-endian "el".
+        ("FreeBSD:15:powerpc64le", "freebsd:15:powerpc:64:el"),
+        ("FreeBSD:15:powerpc64", "freebsd:15:powerpc:64:eb"),
     ],
 )
 def test_abi_to_arch(abi: str, arch: str) -> None:
