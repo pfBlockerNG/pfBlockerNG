@@ -1,6 +1,8 @@
 #shellcheck shell=sh
-# pfblockerng.sh fail-open feed-list redirects (issue #713 bug 8, family of 9
-# sites in two producer classes). A producer (grepcidr / awk dedup) was
+# pfblockerng.sh fail-open feed-list redirects (issue #713 bug 8, family of 12
+# sites in two producer classes -- the original 9 plus 3 the initial fix missed:
+# suppress()'s dedup='on' masterfile block, process255(), and reputation_max()'s
+# ccblack='block' arm). A producer (grepcidr / awk dedup) was
 # redirected into a file consumed downstream with NO exit-status gating, so a
 # producer error truncated/overwrote the live list to empty/partial:
 #
@@ -103,6 +105,61 @@ SHIM
       When call suppress
       The status should be success
       The contents of file "${livelist}" should equal "$(printf '192.0.2.1\n192.0.2.2')"
+    End
+  End
+
+  Describe 'suppress() -- Class B (dedup="on" masterfile block, the site the initial bug-8 fix missed)'
+    setup() {
+      work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pfbsuppdd.XXXXXX")"
+      max="${work}"
+      alias='DedupList_v4'
+      pfbsuppression="${work}/suppression.txt"
+      # A plain /24 (not /32) suppression entry stays out of the earlier
+      # awk/dupfile branch (already gated), isolating the dedup='on' masterfile
+      # awk call at the end of suppress() for this test.
+      printf '198.51.100.0/24\n' > "${pfbsuppression}"
+      tmpdir="${work}"
+      tempfile="${work}/t1"; tempfile2="${work}/t2"; dupfile="${work}/t3"; dedupfile="${work}/t4"
+      masterfile="${work}/master"; mastercat="${work}/mastercat"
+      printf 'DedupList_v4 PRIOR-1\nDedupList_v4 PRIOR-2\nOtherList_v4 203.0.113.5\n' > "${masterfile}"
+      dedup='on'
+      errorlog="${work}/error.log"; : > "${errorlog}"
+      pathgrepcidr="${work}/grepcidr"
+      write_grepcidr_shim "${pathgrepcidr}"
+      livelist="${work}/${alias}.txt"
+      printf 'PRIOR-1\nPRIOR-2\n' > "${livelist}"
+      awkshim="${work}/bin"
+      setup_awk_shim "${awkshim}"
+    }
+    cleanup() { rm -rf "${work}"; }
+    Before 'setup'
+    After 'cleanup'
+
+    It 'keeps the PRIOR masterfile rows when awk errors -- pre-fix this truncated masterfile, losing them all (incl. the unrelated OtherList_v4 row)'
+      GREPCIDR_MODE='success'; AWK_MODE='error'; export GREPCIDR_MODE AWK_MODE
+      # Given: masterfile holds both this alias's rows and an unrelated one.
+      The contents of file "${masterfile}" should equal "$(printf 'DedupList_v4 PRIOR-1\nDedupList_v4 PRIOR-2\nOtherList_v4 203.0.113.5')"
+      PATH="${awkshim}:${PATH}"
+      When call suppress
+      The status should be success
+      # suppress()'s trailing sed always re-appends the (here: grepcidr-succeeded)
+      # fresh list content regardless of the dedup outcome -- pre-existing,
+      # unrelated to this fix -- so the fix's proof is that NONE of the prior
+      # rows are lost, not that the file is byte-identical to its pre-call state.
+      The contents of file "${masterfile}" should include 'DedupList_v4 PRIOR-1'
+      The contents of file "${masterfile}" should include 'DedupList_v4 PRIOR-2'
+      The contents of file "${masterfile}" should include 'OtherList_v4 203.0.113.5'
+    End
+
+    It 'dedups masterfile (drops the stale alias rows, keeps the unrelated one, appends the fresh list) on awk success'
+      GREPCIDR_MODE='success'; AWK_MODE='real'; export GREPCIDR_MODE AWK_MODE
+      PATH="${awkshim}:${PATH}"
+      When call suppress
+      The status should be success
+      The contents of file "${masterfile}" should include 'OtherList_v4 203.0.113.5'
+      The contents of file "${masterfile}" should not include 'PRIOR-1'
+      The contents of file "${masterfile}" should include 'DedupList_v4 192.0.2.1'
+      The contents of file "${masterfile}" should include 'DedupList_v4 192.0.2.2'
     End
   End
 
