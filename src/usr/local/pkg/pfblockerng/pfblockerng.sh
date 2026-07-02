@@ -816,6 +816,13 @@ whoisconvert() {
 	fi
 
 	echo
+	# ${found} ACCUMULATES across the loop: it is initialised false here and only
+	# ever set true on a successful entry, NEVER reset false inside the loop. So
+	# after the loop found=true iff AT LEAST ONE entry resolved (keep the data
+	# collected from the successful entries) and false iff nothing did (restore
+	# the .bk). Resetting it per-iteration would make it reflect only the LAST
+	# entry, discarding good data from earlier entries when the last one fails
+	# (issue #714).
 	found=false
 
 	# Iterate via a here-doc so the loop body stays in THIS shell (it sets the
@@ -847,7 +854,6 @@ whoisconvert() {
 			else
 				printf "... Failed to resolve host [ %s ]" "${host}"
 				touch "${pfborig}${alias}.fail"
-				found=false
 			fi
 			;;
 		*)
@@ -871,7 +877,6 @@ whoisconvert() {
 					''|*[!0-9]*)
 						printf "... Invalid ASN [ %s ]" "${host}"
 						touch "${pfborig}${alias}.fail"
-						found=false
 						continue
 						;;
 				esac
@@ -890,7 +895,6 @@ whoisconvert() {
 			else
 				printf "... Failed to collect ASN"
 				touch "${pfborig}${alias}.fail"
-				found=false
 			fi
 			rm -f "${pfborig}${alias}.wk"
 			;;
