@@ -2456,6 +2456,29 @@ function pfbng_text_area_decode($text, $mode=FALSE, $type=TRUE, $idn=FALSE) {
 }
 
 
+// Resolve a stored 'log_max_<type>' config value to the truncation limit
+// pfb_log_mgmt() should apply. The web UI stores the literal string 'nolimit'
+// for the "No Limit - Not recommended" option (pfblockerng_general.php);
+// PFB_FILTER_NUM only accepts digit strings, so running the raw value
+// through it directly silently collapses 'nolimit' to the numeric default
+// and the opt-out never takes effect (issue #713) — this helper must run on
+// the RAW config value, before any numeric filtering.
+//
+// PURE — no I/O, no globals, no side effects.
+//
+// @param mixed $raw  Raw 'log_max_<type>' config value.
+// @return int|string  'nolimit' (skip truncation), or a positive int line
+//                      count (a numeric raw value, else the 20000 default).
+function pfb_log_max_lines($raw) {
+	if ($raw === 'nolimit') {
+		return 'nolimit';
+	}
+	if (is_scalar($raw) && preg_match('/^[0-9]+$/', (string) $raw)) {
+		return (int) $raw;
+	}
+	return 20000;
+}
+
 // Manage log files line limit
 function pfb_log_mgmt() {
 	global $g, $pfb;
@@ -2467,9 +2490,14 @@ function pfb_log_mgmt() {
 			'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog') as $logtype) {
 
 		// Max lines in Log file
-		$logmax = pfb_filter($pfb['config']['log_max_' . $logtype], PFB_FILTER_NUM, 'pfb_log_mgmt', 20000);
+		$logmax = pfb_log_max_lines($pfb['config']['log_max_' . $logtype] ?? '');
 
-		if ($logmax != 'nolimit' && file_exists($pfb[$logtype])) {
+		// 'nolimit' opt-out: skip truncation for this log entirely.
+		if ($logmax === 'nolimit') {
+			continue;
+		}
+
+		if (file_exists($pfb[$logtype])) {
 			if ($logtype == 'dnslog' || $logtype == 'dnsreplylog' || $logtype == 'unilog') {
 
 				// Set DNSBL python logfile permissions using chroot folder
