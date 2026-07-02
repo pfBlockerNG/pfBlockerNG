@@ -143,7 +143,6 @@ def reset_pfb_globals() -> None:
     pfb_unbound.hstsDB = defaultdict(str)
     pfb_unbound.gpListDB = defaultdict(str)
     pfb_unbound.noAAAADB = defaultdict(str)
-    pfb_unbound.threads = []
 
     # ADR-10 P2: init_standard bundles the matcher strata into ONE immutable Snapshot
     # and operate() reads every stratum off it. Mirror that here: build the single

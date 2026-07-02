@@ -152,6 +152,31 @@ class TestRebuildAndSwapSuccess:
         assert emitted[P.pfb["pfb_py_count"]] == 42
         assert emitted[P.pfb["pfb_py_regex_count"]] == 7
 
+    def test_swap_clears_regex_warn_and_perf_strike_state(self, tmp_path: Any, monkeypatch: Any) -> None:
+        # #714 FIX #2: a swap installs a BRAND-NEW regex_db/allow_regex_db, so the
+        # runtime warn-suppression + perf-fallback strike bookkeeping (keyed on
+        # pattern NAME, ADR-07 P7) must not survive it -- a name reused across
+        # reloads (a re-added or edited rule) would otherwise inherit stale
+        # strikes/suppression from the OLD pattern object. init_standard already
+        # clears both on a restart; rebuild_and_swap must mirror it for a
+        # no-restart swap (pre-fix it left this state dangling).
+        _set_count_paths(tmp_path)
+        monkeypatch.setattr(P, "dnsbl_emit_count", lambda *a, **k: True)
+        P._snapshot = _snapshot(counts=0)
+
+        # ---- BEFORE-state: stale bookkeeping left by a PRIOR pattern set.
+        P._regex_warned.add("stale-pattern")
+        P._regex_perf_strikes["stale-pattern"] = 3
+        assert "stale-pattern" in P._regex_warned
+        assert P._regex_perf_strikes["stale-pattern"] == 3
+
+        # ---- act: a successful swap.
+        assert P.rebuild_and_swap(lambda: _snapshot(counts=1)) is True
+
+        # ---- AFTER-state: both runtime dicts are cleared, in parity with init.
+        assert P._regex_warned == set()
+        assert P._regex_perf_strikes == {}
+
     def test_swap_enables_master_dnsbl_gate_when_new_lists_load(self, tmp_path: Any, monkeypatch: Any) -> None:
         # ADR-10: operate() gates ALL DNSBL evaluation on pfb["python_blacklist"], which
         # is otherwise written only at init. A swap that loads lists into a previously-
