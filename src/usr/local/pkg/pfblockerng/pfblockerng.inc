@@ -11953,6 +11953,36 @@ function pfb_daemon_dnsbl_index() {
 }
 
 
+// Map a numeric SQLite3 handle index (1-7, see pfb_open_sqlite() callers) to its
+// table name + CREATE statement. Extracted as a pure function so the index->table
+// mapping is unit-testable without a live SQLite3 file (issue #713 bug 10: table 6
+// used to map to db_table 'stats' while its CREATE TABLE built 'lastclear' -- the
+// name every other query in this file actually uses -- so DB-corruption recovery
+// dropped the wrong/nonexistent table and aborted before 'lastclear' was rebuilt).
+// Unknown $table returns empty strings (behaviour-preserving default; callers only
+// ever pass 1-7).
+function pfb_sqlite_table_spec(int $table): array {
+	switch ($table) {
+		case 1:
+			return [ 'db_table' => 'dnsbl', 'db_create' => "CREATE TABLE IF NOT EXISTS dnsbl ( groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER );" ];
+		case 2:
+			return [ 'db_table' => 'lastevent', 'db_create' => "CREATE TABLE IF NOT EXISTS lastevent ( row INTEGER, groupname TEXT, entry TEXT, details TEXT );" ];
+		case 3:
+			return [ 'db_table' => 'resolver', 'db_create' => "CREATE TABLE IF NOT EXISTS resolver ( row INTEGER, totalqueries INTEGER, queries INTEGER );" ];
+		case 4:
+			return [ 'db_table' => 'dnsblcache', 'db_create' => "CREATE TABLE IF NOT EXISTS dnsblcache ( type TEXT, domain TEXT, groupname TEXT, final TEXT, feed TEXT );" ];
+		case 5:
+			return [ 'db_table' => 'asncache', 'db_create' => "CREATE TABLE IF NOT EXISTS asncache ( asn TEXT, host TEXT, timestamp TEXT );" ];
+		case 6:
+			return [ 'db_table' => 'lastclear', 'db_create' => "CREATE TABLE IF NOT EXISTS lastclear ( row INTEGER, lastipclear TEXT, lastdnsblclear TEXT );" ];
+		case 7:
+			return [ 'db_table' => 'ipcache', 'db_create' => "CREATE TABLE IF NOT EXISTS ipcache ( host TEXT, q0 TEXT, q1 TEXT, geoip TEXT, resolved_host TEXT );" ];
+		default:
+			return [ 'db_table' => '', 'db_create' => '' ];
+	}
+}
+
+
 // Function to create/open SQLite3 database(s)
 function pfb_open_sqlite($table, $message) {
 	global $pfb;
@@ -11960,38 +11990,26 @@ function pfb_open_sqlite($table, $message) {
 	// $table is always 1-7 from callers, but the if/elseif chain below has no else;
 	// default these so they are defined for any value. Behaviour-preserving.
 	$database	= '';
-	$db_table	= '';
-	$db_create	= '';
 
 	if ($table == 1) {
 		$database	= $pfb['dnsbl_info'];
-		$db_table	= 'dnsbl';
-		$db_create	= "CREATE TABLE IF NOT EXISTS dnsbl ( groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER );";
 	} elseif ($table == 2) {
 		$database	= $pfb['dnsbl_resolver'];
-		$db_table	= 'lastevent';
-		$db_create	= "CREATE TABLE IF NOT EXISTS lastevent ( row INTEGER, groupname TEXT, entry TEXT, details TEXT );";
 	} elseif ($table == 3) {
 		$database	= $pfb['dnsbl_resolver'];
-		$db_table	= 'resolver';
-		$db_create	= "CREATE TABLE IF NOT EXISTS resolver ( row INTEGER, totalqueries INTEGER, queries INTEGER );";
 	} elseif ($table == 4) {
 		$database	= $pfb['dnsbl_cache'];
-		$db_table	= 'dnsblcache';
-		$db_create	= "CREATE TABLE IF NOT EXISTS dnsblcache ( type TEXT, domain TEXT, groupname TEXT, final TEXT, feed TEXT );";
 	} elseif ($table == 5) {
 		$database	= $pfb['asn_cache'];
-		$db_table	= 'asncache';
-		$db_create	= "CREATE TABLE IF NOT EXISTS asncache ( asn TEXT, host TEXT, timestamp TEXT );";
 	} elseif ($table == 6) {
 		$database	= $pfb['dnsbl_resolver'];
-		$db_table	= 'stats';
-		$db_create	= "CREATE TABLE IF NOT EXISTS lastclear ( row INTEGER, lastipclear TEXT, lastdnsblclear TEXT );";
 	} elseif ($table == 7) {
 		$database	= $pfb['ip_cache'];
-		$db_table	= 'ipcache';
-		$db_create      = "CREATE TABLE IF NOT EXISTS ipcache ( host TEXT, q0 TEXT, q1 TEXT, geoip TEXT, resolved_host TEXT );";
 	}
+
+	$table_spec	= pfb_sqlite_table_spec((int) $table);
+	$db_table	= $table_spec['db_table'];
+	$db_create	= $table_spec['db_create'];
 
 	try {
 		$db_handle = new SQLite3($database);
@@ -12047,7 +12065,12 @@ function pfb_open_sqlite($table, $message) {
 		if (!$pfb_validate) {
 			logger(LOG_WARNING, localize_text("DNSBL SQLite3 database [ %s ] corrupt. Table deletion/re-creation completed.", $db_table), LOG_PREFIX_PKG_PFBLOCKERNG);
 			@copy("{$database}", "{$database}.invalid");
-			$db_create = "DROP TABLE {$db_table}; {$db_create}";
+			// IF EXISTS: the table may already be absent (e.g. a fresh/never-created
+			// DB, or exactly the table-6 'stats'/'lastclear' name mismatch this fix
+			// resolves) -- a bare DROP TABLE on a missing table errors and aborts the
+			// whole BEGIN/END TRANSACTION below, so 'lastclear' (etc.) never gets
+			// rebuilt and recovery silently fails (issue #713 bug 10).
+			$db_create = "DROP TABLE IF EXISTS {$db_table}; {$db_create}";
 		}
 
 		try {
