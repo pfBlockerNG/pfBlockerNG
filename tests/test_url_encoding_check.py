@@ -117,6 +117,27 @@ def test_shell_path_segment_var_is_clean() -> None:
     assert _find('curl "http://h/$ID"') == []
 
 
+# --------------------------------------------------------------------------- #
+# bug-15 over-widening: a bare "?" anywhere in a token used to mark it
+# URL-bearing, which flagged curl OPTION VALUES that merely contain a "?...=$"
+# shape but are not URLs. These pin the negative side; the positive bug-15
+# cases above (var-BASE-with-query, bare-$-after-separator) stay flagged.
+# --------------------------------------------------------------------------- #
+
+
+def test_shell_data_urlencode_value_containing_query_shape_is_clean() -> None:
+    # The OPTION VALUE itself contains "?b=$" -- not a URL, must not be flagged.
+    assert _find('curl --data-urlencode "path=/a?b=$c" "$HOOK"') == []
+
+
+def test_shell_form_value_containing_query_shape_is_clean() -> None:
+    assert _find('curl -F "note=a?x=$B" http://h/x') == []
+
+
+def test_shell_header_value_containing_query_shape_is_clean() -> None:
+    assert _find('curl -H "X: a?b=$c" http://h/x') == []
+
+
 def test_non_http_client_line_with_query_var_is_clean() -> None:
     # Same `?k=$V` shape, but not a curl/wget/fetch invocation.
     assert _find('echo "http://h/x?ip=$VAR"') == []
