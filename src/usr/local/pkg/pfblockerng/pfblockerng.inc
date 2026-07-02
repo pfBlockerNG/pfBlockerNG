@@ -1311,7 +1311,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 		}
 	}
 
-	return $result == FALSE ? $default : $result;
+	return $result === FALSE ? $default : $result;
 }
 
 function pfb_get_vips(): array {
@@ -11529,11 +11529,9 @@ function pfb_dnsbl_parse($mode='daemon', $domain, $src_ip, $req_agent) {
 
 				$dcnt = count($dparts);
 
-				for ($i=0; $i <= $dcnt; $i++) {
+				for ($i=0; $i < $dcnt; $i++) {
 
-					$domainparse		= str_replace('.', '\.', implode('.', $dparts));
-					$domainparse_esc	= escapeshellarg("^{$domainparse}$");
-
+					$domainparse	= str_replace('.', '\.', implode('.', $dparts));
 
 					$dquery_esc	= escapeshellarg(",{$domainparse},,");
 					$pfb_feed	= exec("{$pfb['grep']} -shm1 {$dquery_esc} {$pfb['unbound_py_zone']} 2>&1");
@@ -14129,8 +14127,6 @@ function sync_package_pfblockerng($cron='') {
 							// If Null Blocking mode is selected, use '0.0.0.0|::0', otherwise utilize DNSBL WebServer/DNSBL VIP
 							// NXDOMAIN modes ('3'/'4', issue #31) emit a bare NXDOMAIN in pfb_unbound.py; no sinkhole IP applies.
 							if ($list['logging'] == 'disabled') {
-								$sinkhole_type4 = '0.0.0.0';
-								$sinkhole_type6 = '::0';
 								$logging_type	= '2';	// Null Blocking no logging
 							}
 							elseif ($list['logging'] == 'disabled_log') {
@@ -14142,8 +14138,6 @@ function sync_package_pfblockerng($cron='') {
 							elseif ($list['logging'] == 'nxdomain') {
 								$logging_type	= '4';	// NXDOMAIN no logging
 							} else {
-								$sinkhole_type4 = "{$pfb['dnsbl_vip4']}";
-								$sinkhole_type6 = "{$pfb['dnsbl_vip6']}";
 								$logging_type	= '1';	// DNSBL VIP logging
 							}
 

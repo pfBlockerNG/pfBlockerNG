@@ -120,10 +120,12 @@ final class PfbFilterTest extends TestCase
 			'digits'              => ['12345', '12345'],
 			'alpha -> default'    => ['12a', ''],
 			'negative -> default' => ['-5', ''],
-			// Quirk worth pinning: '0' validates, but the final
-			// `return $result == FALSE ? $default : $result` treats the string
-			// '0' as loosely == FALSE, so NUM can never return '0' -> default.
-			'zero is loose-false' => ['0', ''],
+			// '0' is a legitimately validated digit string (matches
+			// /^[0-9]+$/) and must round-trip unchanged, not collapse to
+			// the default -- a hook_timeout of '0' (pfblockerng_hooks.php)
+			// must not be rejected as invalid just because PHP's loose
+			// '0' == FALSE coercion used to treat it as a filter failure.
+			'zero validates'      => ['0', '0'],
 		];
 	}
 
