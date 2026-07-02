@@ -46,6 +46,8 @@ import threading
 import time
 from collections.abc import Generator, Iterator, Mapping
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from functools import partial
 from http.server import BaseHTTPRequestHandler, SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -753,6 +755,33 @@ def client_vm(
 # --------------------------------------------------------------------------- #
 
 
+# Fixed Last-Modified the mock emits on every registered-feed 200 (unless
+# disable_lastmod() opts a name out): epoch 1700000000 = 2023-11-14T22:13:20Z.
+# Shared by the emitted header string and the enable_lastmod_304() IMS compare
+# so the two can never drift apart.
+_MOCK_LAST_MODIFIED_EPOCH = 1700000000
+_MOCK_LAST_MODIFIED_HTTPDATE = "Tue, 14 Nov 2023 22:13:20 GMT"
+
+
+def _parse_http_date(raw: str) -> datetime | None:
+    """Parse an RFC 7231 HTTP-date request header (``If-Modified-Since``) to an aware UTC datetime.
+
+    Returns ``None`` for an empty/unparsable value — the caller then falls through to a plain
+    200, exactly as a real server would for a header it cannot understand.
+    """
+    if not raw:
+        return None
+    try:
+        parsed = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        # email.utils returns a naive datetime for an obsolete/no-tz date; HTTP-dates are
+        # always GMT, so treat naive results as UTC rather than the local zone's offset.
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 class _MockFeedServer:
     """A stdlib HTTP server serving feed fixtures to the guest over SLIRP.
 
@@ -764,6 +793,14 @@ class _MockFeedServer:
     headers on 200 replies, and answer ``304 Not Modified`` to a matching
     ``If-None-Match`` request header.  Use :meth:`set_content` to update a feed's
     body and bump its ETag atomically (simulates a real feed update).
+
+    issue #722: two more per-name opt-outs/opt-ins isolate the OTHER two
+    conditional-GET branches that the always-on Last-Modified header masked:
+    :meth:`disable_lastmod` (no validator at all -> exercises the genuine
+    no-validator download+hash path) and :meth:`enable_lastmod_304` (an
+    RFC-conformant ``If-Modified-Since`` responder -> exercises the
+    Last-Modified/``CURLOPT_TIMECONDITION`` fallback, distinct from the
+    ETag/``If-None-Match`` path above).
     """
 
     def __init__(self, root: Path) -> None:
@@ -773,9 +810,18 @@ class _MockFeedServer:
         # in this map serves no ETag (simulates a server that does not support
         # conditional requests).
         self._etag_map: dict[str, str] = {}
+        # issue #722: names in this set get NO Last-Modified header on 200 (the
+        # genuine "no validator at all" server) — default behaviour (no entry)
+        # still emits the fixed Last-Modified below, unchanged for existing tests.
+        self._no_lastmod: set[str] = set()
+        # issue #722: names in this set get a real If-Modified-Since responder
+        # (RFC 9110 §13.1.3) instead of the fixed header being ignored.
+        self._ims_304: set[str] = set()
         self._lock = threading.Lock()
         registered = self._registered
         etag_map = self._etag_map
+        no_lastmod = self._no_lastmod
+        ims_304 = self._ims_304
         lock = self._lock
 
         class Handler(SimpleHTTPRequestHandler):
@@ -785,10 +831,15 @@ class _MockFeedServer:
                 with lock:
                     body = registered.get(name)
                     etag = etag_map.get(name)
+                    emit_lastmod = name not in no_lastmod
+                    honour_ims = name in ims_304
                 if body is None:
                     super().do_GET()
                     return
                 # ADR-42 Phase 3: honour If-None-Match for conditional-GET.
+                # RFC 9110 §13.1.3: a recipient MUST ignore If-Modified-Since when the
+                # request also carries If-None-Match, so this branch always takes
+                # precedence over the IMS handling below for a name that has an ETag.
                 if etag is not None:
                     client_etag = self.headers.get("If-None-Match", "")
                     if client_etag.strip() == etag:
@@ -796,14 +847,28 @@ class _MockFeedServer:
                         self.send_header("ETag", etag)
                         self.end_headers()
                         return
+                elif honour_ims:
+                    # issue #722: RFC-conformant If-Modified-Since — 304 when this
+                    # resource's fixed Last-Modified is NOT newer than the client's
+                    # IMS value (i.e. the client already has the current version).
+                    ims_raw = self.headers.get("If-Modified-Since", "")
+                    ims_dt = _parse_http_date(ims_raw)
+                    if ims_dt is not None:
+                        resource_dt = datetime.fromtimestamp(_MOCK_LAST_MODIFIED_EPOCH, tz=timezone.utc)
+                        if resource_dt <= ims_dt:
+                            self.send_response(304)
+                            self.send_header("Last-Modified", _MOCK_LAST_MODIFIED_HTTPDATE)
+                            self.end_headers()
+                            return
                 self.send_response(200)
                 self.send_header("Content-Type", "text/plain")
                 self.send_header("Content-Length", str(len(body)))
                 if etag is not None:
                     self.send_header("ETag", etag)
-                # Emit a fixed Last-Modified in the past so the guest also has a
-                # validator to store (epoch 1700000000 = 2023-11-14T22:13:20Z).
-                self.send_header("Last-Modified", "Tue, 14 Nov 2023 22:13:20 GMT")
+                if emit_lastmod:
+                    # Emit a fixed Last-Modified in the past so the guest also has a
+                    # validator to store (epoch 1700000000 = 2023-11-14T22:13:20Z).
+                    self.send_header("Last-Modified", _MOCK_LAST_MODIFIED_HTTPDATE)
                 self.end_headers()
                 self.wfile.write(body)
 
@@ -863,6 +928,35 @@ class _MockFeedServer:
         """
         with self._lock:
             self._etag_map[name] = etag
+
+    def disable_lastmod(self, name: str) -> None:
+        """Opt a registered feed OUT of the default Last-Modified header entirely.
+
+        issue #722: the mock emits a fixed Last-Modified on every 200 by default, so a feed
+        registered without :meth:`enable_etag` still leaves the guest with a ``.lastmod``
+        validator — the genuine "server supports no conditional requests at all" case was
+        never actually reachable. A name in this set gets NO Last-Modified (and, since
+        :meth:`enable_etag` was not called either, no ETag) — the guest stores no validator,
+        so every future probe is a plain GET and the download+hash comparison genuinely
+        decides the outcome.
+        """
+        with self._lock:
+            self._no_lastmod.add(name)
+
+    def enable_lastmod_304(self, name: str) -> None:
+        """Make a registered feed answer a matching ``If-Modified-Since`` with a real 304.
+
+        issue #722: without this, the mock's fixed Last-Modified header is emitted but never
+        consulted on the request side, so a stored ``.lastmod`` validator never actually gets
+        a 304 back — the Last-Modified/``CURLOPT_TIMECONDITION`` fallback (the branch used
+        when a feed has no ETag) was unexercised. After this call, a request whose
+        If-Modified-Since is at or after this feed's fixed Last-Modified
+        (epoch 1700000000) gets a 304 (still with the Last-Modified header echoed back);
+        otherwise a plain 200. Has no effect on a name that also carries an ETag — RFC 9110
+        §13.1.3 has If-None-Match take precedence, and the handler enforces that ordering.
+        """
+        with self._lock:
+            self._ims_304.add(name)
 
     def feed_url(self, name: str) -> str:
         """The URL the GUEST uses to fetch ``name`` (via the SLIRP host alias)."""

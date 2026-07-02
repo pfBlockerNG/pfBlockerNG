@@ -1555,20 +1555,36 @@ def test_cron_detects_changed_local_feed_same_second(deployed_vm: SmokeVM, clien
 
 
 # --------------------------------------------------------------------------- #
-# ADR-42 Phase 3 — conditional GET (ETag / If-None-Match → 304) over the live box.
+# ADR-42 Phase 3 — conditional GET (ETag / If-None-Match → 304, and the
+# Last-Modified / CURLOPT_TIMECONDITION fallback) over the live box.
 #
-# Four cases prove the four reachable branches of pfb_conditional_get_decision():
+# Five cases prove the reachable branches of pfb_update_check()'s remote-feed
+# detector (the ETag path via pfb_conditional_get_decision(), plus the
+# no-validator and Last-Modified-driven-304 paths that sit in front of it):
 #
 #   (a) unchanged feed + matching ETag → 304 → "304 not modified" → no re-ingest.
 #   (b) changed feed + new ETag → 200 → body_hash != persisted → re-ingest.
-#   (c) server emits no ETag (no validator) → download + hash decides (same bytes →
-#       "content unchanged" → no re-ingest).
-#   (d) spurious 200 with identical bytes (server ignores If-None-Match) →
-#       body_hash == persisted → "content unchanged" → no re-ingest.
+#   (c) server emits NO validator at all (no ETag, no Last-Modified —
+#       mock_feeds.disable_lastmod()) → the guest stores nothing, so every probe
+#       is a plain GET and download + hash genuinely decides (same bytes →
+#       "content unchanged" → no re-ingest). Distinct from (d): here there is no
+#       stored validator to send in the first place.
+#   (d) a stored Last-Modified validator exists but the server IGNORES the
+#       conditional request and always answers 200 (identical bytes) →
+#       body_hash == persisted → "content unchanged" → no re-ingest. Distinct
+#       from (c): the guest DOES send a conditional header; the server just
+#       doesn't honour it.
+#   (e) a stored Last-Modified validator exists and the server DOES honour
+#       If-Modified-Since (mock_feeds.enable_lastmod_304()) → 304 → "304 not
+#       modified" → no re-ingest. Proves the CURLOPT_TIMECONDITION fallback
+#       (no ETag) reaches an actual 304, not just the ETag/If-None-Match path
+#       that (a) already covers.
 #
-# The mock server is extended with ETag support (enable_etag / set_content).
-# All cases use the cron verb — the real detector path.  These run live in Phase 5;
-# they are correct by construction here.
+# The mock server is extended with ETag support (enable_etag / set_content),
+# a no-validator-at-all opt-out (disable_lastmod), and an IMS-aware 304
+# responder (enable_lastmod_304). All cases use the cron verb — the real
+# detector path.  These run live in Phase 5; they are correct by construction
+# here.
 # --------------------------------------------------------------------------- #
 
 
@@ -1760,18 +1776,22 @@ def test_cron_200_reingest_changed_remote_feed(
 def test_cron_no_validator_download_hash_decides(
     deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
 ) -> None:
-    """ADR-42 Phase 3 (c): server with no ETag → download + hash decides (same bytes → no re-ingest).
+    """ADR-42 Phase 3 (c): server with NO validator at all → download + hash decides (same bytes → no re-ingest).
 
-    When no validator is stored (server emits no ETag, no Last-Modified), the detector
-    downloads the full body and compares the xxh128 hash.  Identical bytes → "content
-    unchanged" → no re-ingest.  This proves the last-resort path never stalls.
+    The mock is opted OUT of its default Last-Modified header via ``disable_lastmod()``, so
+    this feed genuinely emits no ETag AND no Last-Modified — the guest never stores a ``.etag``
+    or ``.lastmod`` sidecar for it, and every probe is an unconditional GET. The detector
+    downloads the full body and compares the xxh128 hash. Identical bytes → "content unchanged"
+    → no re-ingest. This proves the last-resort path never stalls even with zero validators to
+    fall back on — distinct from the sibling "spurious 200" case below, where a validator IS
+    stored but the server ignores the conditional request it produces.
 
     RED on a broken impl that skips the download when no validator is stored: no
-    "content unchanged" marker would ever appear for a no-ETag server feed.
+    "content unchanged" marker would ever appear for a no-validator server feed.
 
     Scenario (BDD):
-      Given the remote DNSBL feed is loaded with NO ETag (server does not emit one);
-        ``dom`` is VIP-blocked;
+      Given the remote DNSBL feed is loaded with NO validator at all (server emits neither
+        ETag nor Last-Modified); ``dom`` is VIP-blocked;
       When feed content is UNCHANGED, pfb_reuse is OFF, pfb_dailystart matches now,
         and the ``cron`` verb runs;
       Then the detector downloads the full body, logs "content unchanged",
@@ -1784,8 +1804,11 @@ def test_cron_no_validator_download_hash_decides(
     try:
         h.unblock_egress()
 
-        # Register WITHOUT ETag — server always returns plain 200 (no conditional support).
+        # Register WITHOUT ETag, and opt out of the mock's default Last-Modified header too:
+        # the server emits NO validator whatsoever (no conditional support), so the guest
+        # never has anything to send back and the download+hash path is the only option.
         mock_feeds.register(feed_name, dom + "\n")
+        mock_feeds.disable_lastmod(feed_name)
         feed_url = mock_feeds.feed_url(feed_name)
 
         spec = h.DnsblCase(aliasname="smokep3noetag", feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
@@ -1842,8 +1865,11 @@ def test_cron_spurious_200_same_bytes_no_reingest(
 ) -> None:
     """ADR-42 Phase 3 (d) — §2 contract #5: a spurious 200 with identical bytes is NOT re-ingested.
 
-    A server that ignores conditional requests always answers 200.  body_hash ==
-    persisted_hash → "content unchanged" → no re-ingest.  This proves contract #5.
+    Unlike case (c), this feed keeps the mock's DEFAULT Last-Modified header (no
+    ``disable_lastmod()`` call), so the guest DOES store a ``.lastmod`` validator and DOES send
+    a conditional request on the next probe — the server just ignores it and always answers
+    200.  body_hash == persisted_hash → "content unchanged" → no re-ingest.  This proves
+    contract #5: the hash compare, not the raw status code, is what decides.
 
     RED on a broken impl that treats every 200 as changed: it would log "Downloading update"
     and re-ingest on every cron run — the "content unchanged" marker proves the hash
@@ -1909,6 +1935,115 @@ def test_cron_spurious_200_same_bytes_no_reingest(
             assert h.member_present(members_after, member_ip), (
                 f"AFTER spurious-200 cron: {member_ip} must still be in {spec.alias}: {members_after}"
             )
+
+    finally:
+        reset_exc = None
+        try:
+            h.reset(deployed_vm)
+        except Exception as exc:  # noqa: BLE001
+            reset_exc = exc
+        if reset_exc is not None:
+            raise reset_exc
+
+
+@pytest.mark.timeout(600)
+def test_cron_lastmod_304_skips_unchanged_feed(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
+    """ADR-42 Phase 3 (e): a Last-Modified-driven 304 (no ETag) skips re-ingest via CURLOPT_TIMECONDITION.
+
+    Case (a) already proves the ETag/If-None-Match half of the conditional-GET contract.  This
+    feed carries NO ETag, so once a ``.lastmod`` validator is stored, the detector's fallback
+    branch (``CURLOPT_TIMECONDITION`` / ``CURLOPT_TIMEVALUE`` — pfblockerng.inc ~8818-8821) is
+    what sends the conditional request; ``mock_feeds.enable_lastmod_304()`` makes the server
+    actually honour ``If-Modified-Since`` and answer 304, distinct from case (d) where a
+    Last-Modified validator exists but the server ignores it. Without this test, the
+    CURLOPT_TIMECONDITION branch could regress to always-200 and nothing would notice — every
+    other case either uses ETag or never reaches an actual 304.
+
+    RED on a broken/regressed CURLOPT_TIMECONDITION wire-up (e.g. the fallback branch silently
+    stops sending a conditional header, or the value sent isn't recognised by an IMS-aware
+    server): the mock's ``enable_lastmod_304()`` responder would never see a satisfying
+    If-Modified-Since, so it always answers 200 — no "304 not modified" marker would appear
+    within the cron-pass cap.
+
+    Scenario (BDD):
+      Given the remote DNSBL feed is loaded with NO ETag (server does not emit one);
+        ``dom`` is VIP-blocked;
+      When feed content is UNCHANGED, the server honours If-Modified-Since with a real 304,
+        pfb_reuse is OFF, pfb_dailystart matches now, and the ``cron`` verb runs;
+      Then the detector logs "304 not modified", does NOT log "Downloading update",
+        and ``dom`` remains blocked.
+    """
+    dom = h.unique_domain("p3lm304")
+    header = "smokep3lm304"
+    feed_name = "p3_lastmod_304.txt"
+
+    try:
+        h.unblock_egress()
+
+        # Register WITHOUT ETag — only the mock's default Last-Modified header is emitted —
+        # and opt this name into the RFC-conformant If-Modified-Since responder so the guest's
+        # stored .lastmod validator actually earns a 304 (not just a header that's ignored, as
+        # in case (d) above).
+        mock_feeds.register(feed_name, dom + "\n")
+        mock_feeds.enable_lastmod_304(feed_name)
+        feed_url = mock_feeds.feed_url(feed_name)
+
+        # GIVEN — inject + Force Update to establish the .orig baseline + ingest the body.
+        spec = h.DnsblCase(aliasname="smokep3lm304", feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
+        h.inject(deployed_vm, spec)
+        h.reload(deployed_vm, "updatednsbl")
+
+        # BEFORE: dom is VIP-blocked.
+        h.flush_unbound_name(deployed_vm, dom)
+        ans_before = h.dns_probe_client_until(client_vm, dom, h.is_vip)
+        assert h.is_vip(ans_before), f"BEFORE: {dom} must be VIP-blocked after initial ingest, got {ans_before}"
+
+        # Feed unchanged; the stored Last-Modified validator still matches. Same global-count
+        # rationale as case (a): "( 304 not modified )" is logged without a "[ header ]" prefix,
+        # so count it globally over the cron window. No other feed in this run stores a
+        # Last-Modified-only validator that the server actually honours, so the delta isolates
+        # this feed's conditional GET.
+        _pin_cron_due(deployed_vm)
+        not_mod_before = h.count_log_marker(deployed_vm, h.PFB_LOG, "304 not modified")
+        dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
+        hdr_before = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
+
+        # WHEN — same store-then-read span as case (a): the .lastmod validator is written by
+        # the cron detector (pfb_update_check) on its first 200, not by the updatednsbl Force
+        # ingest above. Run cron until "304 not modified" appears, capped so a genuine failure
+        # still surfaces.
+        for _pass in range(4):
+            h.reload(deployed_vm, "cron")
+            if h.count_log_marker(deployed_vm, h.PFB_LOG, "304 not modified") > not_mod_before:
+                break
+
+        # Fast guard — the feed was evaluated at least once.
+        hdr_after = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
+        assert hdr_after > hdr_before, (
+            f"cron did not evaluate [ {header} ] (before={hdr_before}, after={hdr_after}) — "
+            f"EveryDay feed not due (hour rollover?); re-run"
+        )
+
+        # THEN — "304 not modified" appeared within the cap (CURLOPT_TIMECONDITION proof).
+        not_mod_after = h.count_log_marker(deployed_vm, h.PFB_LOG, "304 not modified")
+        assert not_mod_after > not_mod_before, (
+            f"Expected '( 304 not modified )' (Last-Modified/CURLOPT_TIMECONDITION 304 proof) "
+            f"within 4 cron passes (before={not_mod_before}, after={not_mod_after}) — "
+            f"the no-ETag conditional-GET fallback did not reach a 304"
+        )
+
+        # THEN — no re-ingest.
+        dl_after = _feed_log_count(deployed_vm, header, "Downloading update")
+        assert dl_after == dl_before, (
+            f"Expected NO '[ {header} ] ... Downloading update' after 304 "
+            f"(before={dl_before}, after={dl_after}) — detector incorrectly re-ingested"
+        )
+
+        # THEN — dom remains blocked.
+        ans_after = h.dns_probe_client(client_vm, dom, "A")
+        assert h.is_vip(ans_after), f"AFTER 304 cron: {dom} must remain VIP-blocked, got {ans_after}"
 
     finally:
         reset_exc = None
