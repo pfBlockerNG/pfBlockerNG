@@ -785,6 +785,37 @@ def pfb_control_watcher() -> None:
             waiter.close()
 
 
+def parse_python_tlds(raw: str) -> list[str]:
+    """Parse the MAIN-ini ``python_tlds`` value into a cleaned TLD-Allow list.
+
+    issue #713: the previous unconditional ``raw.split(",")`` left a degenerate value
+    (absent/empty ini key -- "") as ``['']`` -- a non-empty LIST holding one blank
+    entry. That fed a buggy ``!= ""`` guard (a list is never equal to a str, so it was
+    ALWAYS True) which force-enabled the TLD-Allow blacklist even with no TLDs
+    configured -- "empty TLD-Allow blocks all". Splitting, stripping, and dropping
+    blank entries here makes an empty/whitespace-only value parse to ``[]`` (falsy),
+    so the caller's plain truthiness guard (``if python_tld and python_tlds:``) behaves
+    correctly.
+    """
+    return [t.strip() for t in raw.split(",") if t.strip()]
+
+
+def _parse_ini_int(config: ConfigParser, section: str, option: str) -> int | None:
+    """Parse an integer MAIN-ini option; ``None`` on a malformed (non-integer) value.
+
+    issue #713: ``ConfigParser.getint()`` raises ``ValueError`` on a non-integer ini
+    value. Mirrors the existing ``regex_warn_ms``/``regex_evict_ms`` try/except-ValueError
+    guard (a few lines below the callers in ``init_standard``) so a malformed
+    ``python_tld_seg``/``decisiondb_max`` value can no longer throw out of module init
+    and take the whole Unbound Python module down. The caller keeps its own current
+    value on a ``None`` return instead of crashing.
+    """
+    try:
+        return config.getint(section, option)
+    except ValueError:
+        return None
+
+
 def warn_if_legacy_control_enabled(enabled: bool) -> None:
     """PFBL-03: log a one-time deprecation warning at module load when the legacy
     DNS-TXT control transport is enabled. Neutral wording -- the path is deprecated
@@ -939,8 +970,8 @@ def init_standard(id: int, env: module_env) -> bool:
     # the config.has_option() loads below normally populate them -- but default them
     # here too so a hand-edited/corrupted ini that drops the keys can't KeyError on
     # the unconditional reads (TLD-Allow check + manifest cfg). ``python_tlds`` is a
-    # list (line stores it via ``.split(",")``); the consumer ``tld not in
-    # cfg["python_tlds"]`` treats the empty list correctly.
+    # list (the ini load below populates it via ``parse_python_tlds()``, issue #713);
+    # the consumer ``tld not in cfg["python_tlds"]`` treats the empty list correctly.
     pfb["python_tld"] = False
     pfb["python_tlds"] = []
     pfb["python_tld_seg"] = 0
@@ -1133,15 +1164,26 @@ def init_standard(id: int, env: module_env) -> bool:
                 pfb["python_idn_block_malicious"] = config.getboolean("MAIN", "python_idn_block_malicious")
             if config.has_option("MAIN", "python_idn_escalate_suspicious"):
                 pfb["python_idn_escalate_suspicious"] = config.getboolean("MAIN", "python_idn_escalate_suspicious")
+            # issue #713: config.getint() raises ValueError on a non-integer ini value.
+            # Unlike the regex_warn_ms/regex_evict_ms getfloat reads above (already
+            # guarded), these two getint reads were UNGUARDED -- a malformed
+            # python_tld_seg/decisiondb_max value threw out of module init and took the
+            # whole Unbound Python module down. _parse_ini_int() mirrors the regex_*
+            # try/except-ValueError guard; keep the current default on a parse failure,
+            # and only touch decisionDB.maxsize when the parse actually succeeded.
             if config.has_option("MAIN", "python_tld_seg"):
-                pfb["python_tld_seg"] = config.getint("MAIN", "python_tld_seg")
+                parsed_tld_seg = _parse_ini_int(config, "MAIN", "python_tld_seg")
+                if parsed_tld_seg is not None:
+                    pfb["python_tld_seg"] = parsed_tld_seg
             if config.has_option("MAIN", "decisiondb_max"):
-                pfb["decisiondb_max"] = config.getint("MAIN", "decisiondb_max")
-                decisionDB.maxsize = pfb["decisiondb_max"]
+                parsed_decisiondb_max = _parse_ini_int(config, "MAIN", "decisiondb_max")
+                if parsed_decisiondb_max is not None:
+                    pfb["decisiondb_max"] = parsed_decisiondb_max
+                    decisionDB.maxsize = pfb["decisiondb_max"]
             if config.has_option("MAIN", "python_tld"):
                 pfb["python_tld"] = config.getboolean("MAIN", "python_tld")
             if config.has_option("MAIN", "python_tlds"):
-                pfb["python_tlds"] = config.get("MAIN", "python_tlds").split(",")
+                pfb["python_tlds"] = parse_python_tlds(config.get("MAIN", "python_tlds"))
             if config.has_option("MAIN", "dnsbl_ipv4"):
                 pfb["dnsbl_ipv4"] = config.get("MAIN", "dnsbl_ipv4")
             if config.has_option("MAIN", "dnsbl_ipv6"):
@@ -1211,8 +1253,12 @@ def init_standard(id: int, env: module_env) -> bool:
             if pfb["python_idn"] or pfb["idn_mode"] is not IdnMode.Off:
                 pfb["python_blacklist"] = True
 
-            # Enable the Blacklist functions (TLD Allow)
-            if pfb["python_tld"] and pfb["python_tlds"] != "":
+            # Enable the Blacklist functions (TLD Allow). issue #713: python_tlds is a
+            # LIST (parse_python_tlds()'s output) -- `!= ""` compares a list to a str,
+            # which is ALWAYS True, so an empty/degenerate TLD-Allow value used to force
+            # this on regardless of content. Plain truthiness is the correct guard: an
+            # empty list (no configured TLDs) must NOT enable the blacklist gate.
+            if pfb["python_tld"] and pfb["python_tlds"]:
                 pfb["python_blacklist"] = True
 
             # Collect user-defined Regex patterns
