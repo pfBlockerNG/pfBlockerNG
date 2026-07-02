@@ -104,8 +104,13 @@ def test_sync_with_resolver_disabled_completes_without_typeerror(dnsbl_on_vm: Sm
         assert not _resolver_enabled(vm), "resolver disable did not take in config"
 
         # When/Then: the measured sync. Drive the CLI directly so stdout is assertable —
-        # a PHP fatal (the pre-fix TypeError) lands on stdout with a non-zero rc.
-        r = vm.ssh(h.PHP_BIN, h.PFB_CLI, "pfb_trigger", "scope=both", "force=false", "trigger=cron", timeout=600)
+        # a PHP fatal (the pre-fix TypeError) lands on stdout with a non-zero rc. The
+        # trigger args come from the shared reload() mapping so this stays the same
+        # request shape h.reload(vm, "update") sends.
+        scope, force, trigger = h._SCOPE_TO_PFBTRIGGER["update"]
+        r = vm.ssh(
+            h.PHP_BIN, h.PFB_CLI, "pfb_trigger", f"scope={scope}", f"force={force}", f"trigger={trigger}", timeout=600
+        )
         assert r.returncode == 0, (
             f"sync with the Resolver disabled must complete, got rc={r.returncode}\n"
             f"  stdout: {r.stdout[-2000:]!r}\n  stderr: {r.stderr!r}"
