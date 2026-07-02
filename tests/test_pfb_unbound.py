@@ -892,6 +892,15 @@ class TestGetTld:
     def test_none_qstate_returns_empty(self) -> None:
         assert pfb_unbound.get_tld(None) == ""
 
+    def test_mixed_case_wire_label_is_lowercased(self) -> None:
+        # RFC 4343: DNS name comparison is case-insensitive, but production Unbound's
+        # qname_list preserves the CLIENT's wire case (e.g. dns0x20 case
+        # randomization). python_tlds/hsts_tlds are stored lowercase-only, so a
+        # mixed-case wire label must still resolve to the lowercase TLD -- else a
+        # membership test against those lists silently mismatches (#720).
+        qstate = types.SimpleNamespace(qinfo=types.SimpleNamespace(qname_list=["sub", "ExAmPlE", "CoM", ""]))
+        assert pfb_unbound.get_tld(qstate) == "com"
+
     def test_invalid_utf8_qname_returns_empty_not_raise(self) -> None:
         # Regression (issue #328): a qname carrying an invalid UTF-8 byte (0xdc) makes
         # Unbound's qname_list access raise while decoding the labels. get_tld must
@@ -920,6 +929,12 @@ class TestGetTldFromName:
     def test_single_label_returns_empty(self) -> None:
         assert pfb_unbound.get_tld_from_name("com") == ""
         assert pfb_unbound.get_tld_from_name("") == ""
+
+    def test_mixed_case_name_is_lowercased(self) -> None:
+        # Same RFC 4343 contract as get_tld(): a CNAME target string carrying mixed
+        # case must still resolve to the lowercase TLD python_tlds/hsts_tlds compare
+        # against (#720).
+        assert pfb_unbound.get_tld_from_name("sub.ExAmPlE.CoM") == "com"
 
 
 class TestGetQIp:
@@ -2536,6 +2551,27 @@ class TestEvaluateDomainGolden:
         dec_allowed = evaluate_domain("example.com", "example.com", "com", False, cfg, containers)
         assert dec_allowed.is_found is False
 
+    def test_tld_allow_mixed_case_query_gets_same_verdict_as_lowercase(self) -> None:
+        # #720: python_tlds is stored lowercase-only ("com"); operate() derives ``tld``
+        # via get_tld(qstate), which reads production Unbound's qname_list -- carrying
+        # the CLIENT's wire case (RFC 4343 case-insensitive compare, e.g. dns0x20). A
+        # mixed-case query for an ALLOWED tld must resolve exactly like its lowercase
+        # form, not be falsely TLD-Allow-blocked because the raw-case label ("CoM")
+        # never matched the lowercase list.
+        cfg = _make_cfg(python_tld=True, python_tlds=["com"])
+        containers = _make_containers()
+
+        # Before-state: the lowercase wire form's tld ("com") is allowed -> passes.
+        tld_lower = pfb_unbound.get_tld(make_qstate("example.com."))
+        dec_lower = evaluate_domain("example.com", "example.com", tld_lower, False, cfg, containers)
+        assert dec_lower.is_found is False
+
+        # A mixed-case wire form of the SAME domain must get the SAME verdict.
+        tld_mixed = pfb_unbound.get_tld(make_qstate("ExAmPlE.CoM."))
+        assert tld_mixed == "com"
+        dec_mixed = evaluate_domain("example.com", "example.com", tld_mixed, False, cfg, containers)
+        assert dec_mixed.is_found is False
+
     def test_idn_block(self) -> None:
         cfg = _make_cfg(python_idn=True)
         containers = _make_containers()
@@ -2606,6 +2642,32 @@ class TestEvaluateDomainGolden:
         assert dec.in_hsts is True
         assert dec.p_type == "HSTS_TLD"
         assert dec.null_blocking is True
+
+    def test_hsts_tld_mixed_case_query_still_null_blocks(self) -> None:
+        # #720: hsts_tlds is stored lowercase-only ("app"); a mixed-case query under
+        # an HSTS TLD must still trip the NULL-block override (p_type HSTS_TLD, same
+        # as its lowercase form) -- not fall through to a VIP block and serve the
+        # block page under the wrong certificate (an HSTS violation) because
+        # get_tld() returned the raw wire-case label.
+        data_db: dict = {"evil.app": {"log": "1", "index": 0}}
+        fgi_db: dict = {0: {"feed": "F", "group": "G"}}
+        containers = _make_containers(dataDB=data_db, feedGroupIndexDB=fgi_db)
+        cfg = _make_cfg(dataDB=True, hstsDB=True, hsts_tlds=("app",))
+
+        # Before-state: the lowercase wire form's tld ("app") trips the override.
+        tld_lower = pfb_unbound.get_tld(make_qstate("evil.app."))
+        dec_lower = evaluate_domain("evil.app", "evil.app", tld_lower, False, cfg, containers)
+        assert dec_lower.in_hsts is True
+        assert dec_lower.p_type == "HSTS_TLD"
+        assert dec_lower.null_blocking is True
+
+        # A mixed-case wire form of the SAME domain must get the SAME override.
+        tld_mixed = pfb_unbound.get_tld(make_qstate("Evil.APP."))
+        assert tld_mixed == "app"
+        dec_mixed = evaluate_domain("evil.app", "evil.app", tld_mixed, False, cfg, containers)
+        assert dec_mixed.in_hsts is True
+        assert dec_mixed.p_type == "HSTS_TLD"
+        assert dec_mixed.null_blocking is True
 
     def test_cname_b_type_suffix(self) -> None:
         data_db: dict = {"evil.com": {"log": "1", "index": 0}}
