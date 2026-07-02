@@ -105,7 +105,7 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
-from pfb_pkg import PkgError, read_compact_manifest
+from pfb_pkg import PkgError, pkg_version_sort_key, read_compact_manifest
 
 # --------------------------------------------------------------------------- #
 # Catalog descriptor (meta.conf / meta) — byte-identical to real `pkg repo`.
@@ -490,14 +490,16 @@ _CATALOG_PKG_FILES = {"packagesite.pkg", "data.pkg"}
 
 
 def _pkg_version_key(version: str) -> list[int]:
-    """A monotone sort key for a pkg version, component-wise on ``.`` / ``_`` / ``,``.
+    """A monotone sort key for a pkg version — see ``pfb_pkg.pkg_version_sort_key``.
 
-    Nightly versions are ``<target>.YYYYMMDD.N`` (all-numeric components), so a plain
-    numeric component compare orders them chronologically — a later build sorts higher.
-    Non-numeric components degrade to 0 (good enough for the nightly retention sort,
-    the only caller).
+    Used for nightly retention (``<target>.YYYYMMDD.N``, all-numeric — a later build
+    sorts higher) AND release-channel retention (``vX.Y.Z(.alpha|beta|rc.N)?`` tags,
+    via ``retain_by_channel``'s ``--release-keep-devel``/``--release-keep-stable`` >
+    1), so it must also order the alpha/beta/rc prerelease stages correctly, not just
+    the nightly date/counter shape. Kept as a thin alias — this module's ``_retain_newest``
+    callers reference it by this name.
     """
-    return [int(c) if c.isdigit() else 0 for c in re.split(r"[._,]", version)]
+    return pkg_version_sort_key(version)
 
 
 def _emit_catalog_from_paths(dest: Path, pkg_paths: list[Path]) -> int:

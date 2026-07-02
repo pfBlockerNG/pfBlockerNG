@@ -24,7 +24,7 @@ import subprocess
 from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
 
-from pfb_pkg import read_compact_manifest
+from pfb_pkg import pkg_version_sort_key, read_compact_manifest
 
 # Display order for the published-packages table (newest per channel). The channel of a
 # package is read from its name suffix (channel_of); the install CARDS are rendered
@@ -71,8 +71,13 @@ def human_size(n: int) -> str:
 
 
 def ver_key(v: str) -> list[int]:
-    """A coarse version sort key (numeric runs) — enough to pick the newest build."""
-    return [int(x) for x in re.findall(r"\d+", v)]
+    """The newest-build sort key — see ``pfb_pkg.pkg_version_sort_key``.
+
+    Must order the alpha/beta/rc prerelease stages correctly (not just fold them
+    away), since devel-channel rows compared here can be release-tag-shaped
+    (``4.0.0.alpha.1`` etc.) as well as nightly-dated or bare edition versions.
+    """
+    return pkg_version_sort_key(v)
 
 
 def artifact_datetime(epoch: float) -> str:
