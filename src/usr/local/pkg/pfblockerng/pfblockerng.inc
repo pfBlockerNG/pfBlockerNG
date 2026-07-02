@@ -8963,7 +8963,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				exec("/usr/bin/gunzip -c {$file_dwn_esc} > {$header_esc}", $output, $retval);
 
 				// Update ASN Lookup table definitions
-				exec("{$pfb['script']} asn_table >> {$logtype} 2>&1");
+				exec("{$pfb['script']} asn_table {$elog}");
 
 				unlink_if_exists($file_dwn_esc);
 				return TRUE;
@@ -15610,7 +15610,7 @@ function sync_package_pfblockerng($cron='') {
 									$file_chk = exec("{$pfb['grep']} -cv '^#\|^\$' {$cont_chk}");
 								}
 
-								if ($file_chk <= 1) {
+								if ($file_chk == 0) {
 									if ($vtype == '_v6') {
                                                                                 $p_ip = "::{$pfb['ip_ph']}";
                                                                         } else {
@@ -16180,13 +16180,13 @@ function sync_package_pfblockerng($cron='') {
 											}
 										}
 									}
-								}
 
-								// Check for parse failures
-								if (!empty($line) && !preg_match('/[a-zA-Z,;|\"\'?]/', $line)) {
-									$parse_fail++;
-									$log = "[!] Parse Errors [ {$parse_fail} ]\n";
-									pfb_logger("{$log}", 2);
+									// Check for parse failures
+									if (!empty($line) && !preg_match('/[a-zA-Z,;|\"\'?]/', $line)) {
+										$parse_fail++;
+										$log = "[!] Parse Errors [ {$parse_fail} ]\n";
+										pfb_logger("{$log}", 2);
+									}
 								}
 							}
 							if ($fhandle) {
