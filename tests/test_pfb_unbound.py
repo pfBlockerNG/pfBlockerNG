@@ -861,12 +861,22 @@ class TestGetOType:
 
 
 class TestGetTld:
+    # Production Unbound's qname_list carries the trailing empty root label
+    # (GetNameAsLabelList), so a real query for "sub.example.com." arrives as
+    # ["sub", "example", "com", ""] and the TLD is qname_list[-2]. Modelling the
+    # root label is what makes these assert the real TLD rather than the SLD (#706).
     def test_multilabel(self) -> None:
-        qstate = types.SimpleNamespace(qinfo=types.SimpleNamespace(qname_list=["sub", "example", "com"]))
-        assert pfb_unbound.get_tld(qstate) == "example"
+        qstate = types.SimpleNamespace(qinfo=types.SimpleNamespace(qname_list=["sub", "example", "com", ""]))
+        assert pfb_unbound.get_tld(qstate) == "com"
 
-    def test_single_label_returns_empty(self) -> None:
-        qstate = types.SimpleNamespace(qinfo=types.SimpleNamespace(qname_list=["com"]))
+    def test_tld_only_query(self) -> None:
+        # A bare-TLD query "com." -> ["com", ""]; [-2] is the TLD itself.
+        qstate = types.SimpleNamespace(qinfo=types.SimpleNamespace(qname_list=["com", ""]))
+        assert pfb_unbound.get_tld(qstate) == "com"
+
+    def test_root_query_returns_empty(self) -> None:
+        # The root query "." -> [""] is the only len<=1 case in production; no TLD.
+        qstate = types.SimpleNamespace(qinfo=types.SimpleNamespace(qname_list=[""]))
         assert pfb_unbound.get_tld(qstate) == ""
 
     def test_none_qstate_returns_empty(self) -> None:
@@ -886,13 +896,16 @@ class TestGetTld:
 
 
 class TestGetTldFromName:
+    # The string counterpart of get_tld(): both must yield the real TLD -- the LAST
+    # label of the name -- so a CNAME target's TLD-Allow/HSTS check runs against its
+    # own TLD, not its second-level label. Pre-#706 this returned parts[-2] (the SLD),
+    # so a target whose TLD was allowed was falsely blocked. (#706)
     def test_multilabel(self) -> None:
-        # Same second-level label get_tld() yields, but from a name string.
-        assert pfb_unbound.get_tld_from_name("sub.example.com") == "example"
-        assert pfb_unbound.get_tld_from_name("evil.net") == "evil"
+        assert pfb_unbound.get_tld_from_name("sub.example.com") == "com"
+        assert pfb_unbound.get_tld_from_name("evil.net") == "net"
 
     def test_trailing_dot_ignored(self) -> None:
-        assert pfb_unbound.get_tld_from_name("evil.net.") == "evil"
+        assert pfb_unbound.get_tld_from_name("evil.net.") == "net"
 
     def test_single_label_returns_empty(self) -> None:
         assert pfb_unbound.get_tld_from_name("com") == ""
@@ -925,7 +938,10 @@ def make_qstate(
         qname_str=qname,
         qtype=qtype,
         qtype_str="",
-        qname_list=qname.rstrip(".").split("."),
+        # Production Unbound's qname_list carries the trailing empty root label
+        # (GetNameAsLabelList), so ["example", "com", ""] -- get_tld reads [-2].
+        # Modelling that here is what makes get_tld return the real TLD, not the SLD.
+        qname_list=qname.rstrip(".").split(".") + [""],
     )
     return types.SimpleNamespace(
         qinfo=qinfo,
@@ -1227,17 +1243,37 @@ class TestOperateDnsbl:
         assert qstate.ext_state[0] == MODULE_FINISHED  # B is blocked
         assert _is_block(pfb_unbound.decisionDB.get("evil-cname.com"))
 
-    def test_cname_target_uses_target_tld_not_original(self, monkeypatch: Any) -> None:
-        # operate() must derive the TLD-Allow tld from the CNAME TARGET being evaluated,
-        # not the original query. python_tld allows the SLD "orig"; the original
-        # (orig.com) passes, but its CNAME target (evil.net, SLD "evil") is NOT allowed
-        # -> the chain must block. With the bug (tld taken from the original query) the
-        # target was checked against "orig" and slipped through.
+    def test_cname_target_allowed_by_its_own_tld(self, monkeypatch: Any) -> None:
+        # #706 red->green: operate() must derive the TLD-Allow tld from the CNAME TARGET
+        # being evaluated (a name STRING) using its REAL TLD -- the last label -- not its
+        # second-level label. TLD-Allow lists "com" and "net"; the original (orig.com,
+        # TLD "com") passes, and its CNAME target (good.net, TLD "net") is ALSO allowed,
+        # so the chain must NOT block. With the pre-fix bug get_tld_from_name("good.net")
+        # returned the SLD "good", which is not in the allow-list, so the target was
+        # falsely blocked. So this asserts the target RESOLVES: red pre-fix (blocked),
+        # green post-fix (allowed).
         self._enable(monkeypatch)
         pfb_unbound.pfb["python_cname"] = True
         pfb_unbound.pfb["python_tld"] = True
-        pfb_unbound.pfb["python_tlds"] = ["orig"]
-        monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: "evil.net")
+        pfb_unbound.pfb["python_tlds"] = ["com", "net"]
+        monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: "good.net")
+        qstate = make_qstate("orig.com.", qtype=RR_A, return_msg=self._cname_reply("orig.com."))
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        # Neither the original nor its target is blocked -> passes to the resolver.
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE
+        assert not _is_block(pfb_unbound.decisionDB.get("orig.com"))
+
+    def test_cname_target_blocked_by_its_own_tld(self, monkeypatch: Any) -> None:
+        # The paired block branch: TLD-Allow lists ONLY "com", so the original (orig.com)
+        # passes but its CNAME target (good.net, TLD "net") is NOT allowed -> the chain
+        # blocks, keyed on the original, via the target's own TLD. Together with the test
+        # above this proves the TLD-Allow check on the target is real and branches on the
+        # target's TLD, not an always-pass or a check against the original.
+        self._enable(monkeypatch)
+        pfb_unbound.pfb["python_cname"] = True
+        pfb_unbound.pfb["python_tld"] = True
+        pfb_unbound.pfb["python_tlds"] = ["com"]
+        monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: "good.net")
         qstate = make_qstate("orig.com.", qtype=RR_A, return_msg=self._cname_reply("orig.com."))
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert rcd is True

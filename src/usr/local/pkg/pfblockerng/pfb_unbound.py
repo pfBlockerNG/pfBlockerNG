@@ -2088,12 +2088,21 @@ def get_tld(qstate: module_qstate) -> str:
 
 
 def get_tld_from_name(q_name: str) -> str:
-    # The same second-level label get_tld() reads from qstate.qinfo.qname_list, but
-    # derived from a name STRING -- for a CNAME target evaluated mid-chain, whose TLD
-    # differs from the original query's. evaluate_domain() uses it for the TLD-Allow
-    # and HSTS checks, so each evaluated name must be checked against its own TLD.
+    # The TLD get_tld() reads from qstate.qinfo.qname_list, but derived from a name
+    # STRING -- for a CNAME target evaluated mid-chain, whose TLD differs from the
+    # original query's. evaluate_domain() uses it for the TLD-Allow and HSTS checks,
+    # so each evaluated name must be checked against its own TLD.
+    #
+    # This must match get_tld(): production Unbound's qname_list carries the trailing
+    # root label "" (pythonmod GetNameAsLabelList counts the zero-length root), so
+    # qname_list[-2] is the TLD (e.g. "com" for "sub.example.com."). From a string the
+    # equivalent is the LAST label of the dot-split name -- parts[-1], NOT parts[-2]
+    # (which is the second-level label / SLD). The prior parts[-2] yielded the SLD, so a
+    # CNAME target's TLD-Allow check ran against the wrong label: a target whose real TLD
+    # is allowed was falsely blocked, and `tld in hsts_tlds` never fired for a CNAME
+    # target (VIP instead of NULL). (#706)
     parts = q_name.rstrip(".").split(".")
-    return parts[-2] if len(parts) > 1 else ""
+    return parts[-1] if len(parts) > 1 else ""
 
 
 def convert_ipv4(x: Any) -> str:

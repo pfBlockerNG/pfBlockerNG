@@ -339,8 +339,11 @@ class query_info(_Struct):
 
     - ``qname``       : Wire-format question name (bytes).
     - ``qname_str``   : Human-readable FQDN string, e.g. ``"example.com."``.
-    - ``qname_list``  : Labels as a list of strings (root label excluded),
-                        e.g. ``["example", "com"]``.
+    - ``qname_list``  : Labels as a list of strings, **including the empty
+                        root label**, e.g. ``["example", "com", ""]`` — this
+                        mirrors Unbound's ``GetNameAsLabelList`` (the wire name
+                        ends with the zero-length root label). So the real TLD
+                        is ``qname_list[-2]``, not ``qname_list[-1]``.
     - ``qtype``       : Numeric RR type (e.g. ``RR_TYPE_A``).
     - ``qclass``      : Numeric RR class (e.g. ``RR_CLASS_IN``).
     - ``local_alias`` : Local alias chain if the name matched a local-data alias.
