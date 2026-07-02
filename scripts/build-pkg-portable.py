@@ -64,22 +64,27 @@ from pathlib import Path
 # Just enough of bsd.port.mk's variable semantics to read a pfSense pkg port:
 # =/?=/+=/:= assignments, line continuations, # comments, ${VAR}/$(VAR) and a
 # couple of :modifiers. .include lines are ignored — we seed the framework
-# variables the port relies on (PREFIX, DATADIR, PYTHON_*, install macros, …).
-# Target recipes (do-install, post-extract, …) are captured verbatim, joined on
+# variables the port relies on (PREFIX, DATADIR, PYTHON_*, install macros, …) —
+# while a conditional/loop directive (.if/.for/…) is a hard error: the evaluator
+# has no branch logic, so skipping one would silently drop port logic. Dep-port
+# mining passes lenient_directives (see _read_dep_port). Target recipes
+# (do-install, post-extract, …) are captured verbatim, joined on
 # backslash-continuation, and run later by the recipe interpreter.
 # --------------------------------------------------------------------------- #
 
 
 class Makefile:
     _ASSIGN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*(\?=|\+=|:=|=)\s*(.*)$")
+    _BRANCH_DIRECTIVE = re.compile(r"^\.\s*(if\w*|elif\w*|else|endif|for|endfor)\b")
 
-    def __init__(self, path: Path, seed: dict[str, str]):
+    def __init__(self, path: Path, seed: dict[str, str], *, lenient_directives: bool = False):
         self.vars: dict[str, str] = dict(seed)
         # Assignment order matters for ?= (only set if unset). Keep raw values;
         # expand lazily so later-defined vars are visible (ports are order-tolerant
         # for our reads because we expand at access time).
         self.recipes: dict[str, list[str]] = {}
         self._raw: dict[str, tuple[str, str]] = {}  # name -> (op, value) last write
+        self._lenient_directives = lenient_directives
         self._parse(path)
 
     def _parse(self, path: Path) -> None:
@@ -115,7 +120,18 @@ class Makefile:
             if not stripped or stripped.startswith("#"):
                 cur_target = None
                 continue
-            if stripped.startswith(".include") or stripped.startswith("."):
+            if stripped.startswith("."):
+                # .include <bsd.port.mk> is deliberately ignored (the framework
+                # vars are seeded). A conditional/loop would silently lose the
+                # logic it guards if skipped — fail loud instead. Dep-port
+                # mining (best-effort PKGBASE/PORTVERSION reads over real ports
+                # tree Makefiles, which routinely carry .if blocks) stays
+                # lenient — the guard protects the port actually being built.
+                if not self._lenient_directives and self._BRANCH_DIRECTIVE.match(stripped):
+                    raise BuildError(
+                        f"unsupported Makefile directive {stripped.split()[0]!r} — the evaluator has no "
+                        f"conditional/loop support; teach build-pkg-portable.py (line: {stripped!r})"
+                    )
                 cur_target = None
                 continue
             # Target header:  name:  (possibly with deps after the colon)
@@ -199,12 +215,44 @@ class Makefile:
         return self.expand(val, depth + 1)
 
     @staticmethod
+    def _split_mods(mods: str) -> list[str]:
+        # Split a :modifier chain on ':', keeping an :S<delim>old<delim>new<delim>[flags]
+        # group intact even when its body contains ':' (e.g. a URL) — a blind
+        # split(':') would mangle it silently. Backslash escapes a delimiter.
+        out: list[str] = []
+        i = 0
+        n = len(mods)
+        while i < n:
+            if mods[i] == "S" and i + 1 < n:
+                delim = mods[i + 1]
+                j = i + 2
+                seen = 0
+                while j < n and seen < 2:
+                    if mods[j] == "\\":
+                        j += 2
+                        continue
+                    if mods[j] == delim:
+                        seen += 1
+                    j += 1
+                while j < n and mods[j] != ":":  # trailing [1g] flags
+                    j += 1
+                out.append(mods[i:j])
+                i = j + 1
+            else:
+                j = mods.find(":", i)
+                if j < 0:
+                    out.append(mods[i:])
+                    return out
+                out.append(mods[i:j])
+                i = j + 1
+        return out
+
+    @staticmethod
     def _apply_mods(val: str, mods: str) -> str:
         # Minimal :H (dirname), :T (basename), :R (root), :E (ext), and :S/old/new/[g]
         # (string substitution — used to strip the pfSense-pkg- prefix for the info.xml
         # registration <name>). Enough for the recipes we run; extend if a port needs more.
-        # Split on ':' but keep an :S/.../.../ group intact (its body has no ':').
-        for mod in mods.split(":"):
+        for mod in Makefile._split_mods(mods):
             if mod == "H":
                 val = os.path.dirname(val)
             elif mod == "T":
@@ -463,7 +511,22 @@ class Recipe:
         pattern, repl = parts[0], parts[1]
         flags = parts[2] if len(parts) > 2 else ""
         # The pfSense ports only substitute literal %%TOKEN%% placeholders, so a
-        # literal replace is faithful and avoids BRE/ERE ambiguity. 'g' => all.
+        # literal replace is faithful and avoids BRE/ERE ambiguity. Guard that
+        # assumption: a pattern with regex metachars, or a replacement using
+        # sed's & / \N backreferences, would be applied wrongly — fail loud.
+        # Allowed pattern chars are only those that mean themselves in every sed
+        # dialect (BRE/ERE) — notably NO '.', which would silently match any char.
+        if not re.fullmatch(r"[A-Za-z0-9_% /-]+", pattern):
+            raise BuildError(
+                f"sed pattern {pattern!r} is not literal-safe — the emulation does literal "
+                f"replacement only; teach build-pkg-portable.py real regex support"
+            )
+        if "&" in repl or re.search(r"\\\d", repl):
+            raise BuildError(
+                f"sed replacement {repl!r} uses & or a \\N backreference — the emulation does "
+                f"literal replacement only; teach build-pkg-portable.py real regex support"
+            )
+        # 'g' => all.
         if "g" in flags:
             return text.replace(pattern, repl)
         out = []
@@ -622,7 +685,11 @@ def _read_dep_port(makefile: Path, flavor: str, seed: dict[str, str]) -> tuple[s
     if not makefile.is_file():
         return "", ""
     try:
-        mk = Makefile(makefile, seed)
+        # Real ports-tree dep Makefiles routinely carry .if/.for blocks; this is
+        # a best-effort PKGBASE/PORTVERSION read (exact versions come from
+        # --repo-catalogue), so directives stay ignored here — the hard
+        # directive guard protects only the port actually being built.
+        mk = Makefile(makefile, seed, lenient_directives=True)
     except Exception:
         return "", ""
     portname = mk.get("PORTNAME")
@@ -939,22 +1006,38 @@ def build_scripts(mk: Makefile, filesdir: Path) -> dict[str, str]:
     for name in sub_files:
         key = _SCRIPT_KEYS.get(name)
         if key is None:
-            continue
+            # A real `make package` would process it (e.g. pkg-message -> the
+            # +DISPLAY message, pkg-*.lua -> lua_scripts) — shipping without it
+            # would be a silently incomplete package.
+            raise BuildError(
+                f"SUB_FILES names {name!r}, which is not a pkg script this tool models "
+                f"(known: {', '.join(sorted(_SCRIPT_KEYS))}) — teach build-pkg-portable.py"
+            )
         src = filesdir / f"{name}.in"
         if not src.is_file():
             raise BuildError(f"SUB_FILES references {name} but {src} is missing")
         body = src.read_text()
         body = _sub_tokens(body, sub_list)
+        if "%%" in body:
+            bad = next(ln for ln in body.splitlines() if "%%" in ln)
+            raise BuildError(f"unresolved %%token%% in {name}.in after SUB_LIST substitution: {bad.strip()!r}")
         # pkg create embeds the script without its trailing newline.
         scripts[key] = body.rstrip("\n")
     return scripts
 
 
 def _parse_sub_list(mk: Makefile) -> dict[str, str]:
+    # The framework seeds SUB_LIST with PREFIX/LOCALBASE/DATADIR plus DOCSDIR/
+    # EXAMPLESDIR/WWWDIR/ETCDIR (bsd.port.mk); the dir values are seeded in
+    # seed_vars. PORTNAME/PORTVERSION ride along for the pfSense scripts.
     sub: dict[str, str] = {
         "PREFIX": mk.get("PREFIX"),
         "LOCALBASE": mk.get("LOCALBASE"),
         "DATADIR": mk.get("DATADIR"),
+        "DOCSDIR": mk.get("DOCSDIR"),
+        "EXAMPLESDIR": mk.get("EXAMPLESDIR"),
+        "WWWDIR": mk.get("WWWDIR"),
+        "ETCDIR": mk.get("ETCDIR"),
         "PORTNAME": mk.get("PORTNAME"),
         "PORTVERSION": mk.get("PORTVERSION"),
     }
@@ -1114,7 +1197,8 @@ def abi_to_arch(abi: str) -> str:
         "amd64": "x86:64",
         "i386": "x86:32",
         "aarch64": "aarch64:64",
-        "armv7": "armv7:32",
+        # Triplets per machine_arch_translation[] in libpkg/pkg_abi.c.
+        "armv7": "armv7:32:el:eabi:hardfp",
         "powerpc64": "powerpc:64:eb",
         "powerpc64le": "powerpc:64:el",
     }
@@ -1127,6 +1211,9 @@ def abi_to_arch(abi: str) -> str:
 
 def compute_pkgversion(mk: Makefile) -> str:
     ver = mk.get("PORTVERSION") or mk.get("DISTVERSION")
+    # bsd.port.mk: PKGVERSION = ${PORTVERSION:C/[-_,]/./g}… — the framework maps
+    # '-'/'_'/',' in PORTVERSION to '.' before appending revision/epoch.
+    ver = re.sub(r"[-_,]", ".", ver)
     rev = mk.get("PORTREVISION").strip()
     epoch = mk.get("PORTEPOCH").strip()
     if rev and rev != "0":
@@ -1177,6 +1264,11 @@ def seed_vars(portdir: Path, workdir: Path, py_flavor: str) -> dict[str, str]:
         "PREFIX": prefix,
         "LOCALBASE": prefix,
         "DATADIR": "${PREFIX}/share/${PORTNAME}",
+        # Framework dir defaults the SUB_LIST seeds reference (bsd.port.mk).
+        "DOCSDIR": "${PREFIX}/share/doc/${PORTNAME}",
+        "EXAMPLESDIR": "${PREFIX}/share/examples/${PORTNAME}",
+        "WWWDIR": "${PREFIX}/www/${PORTNAME}",
+        "ETCDIR": "${PREFIX}/etc/${PORTNAME}",
         "FILESDIR": str(portdir / "files"),
         "WRKDIR": str(workdir / "work"),
         "WRKSRC": "${WRKDIR}/${DISTNAME}",

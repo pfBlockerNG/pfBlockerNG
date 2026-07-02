@@ -89,6 +89,34 @@ def test_makefile_comment_stripping(tmp_path: Path) -> None:
     assert mk.get("X") == "value"
 
 
+@pytest.mark.parametrize(
+    "directive",
+    [".if defined(X)", ".ifdef X", ".for f in a b", ".else", ".elif ${X}", ".endif", ".endfor"],
+)
+def test_makefile_conditional_directive_is_a_hard_error(tmp_path: Path, directive: str) -> None:
+    # The evaluator has no branch logic: silently skipping a conditional/loop
+    # would silently drop the port logic it guards (issue #727 finding 3a).
+    with pytest.raises(bpp.BuildError, match="directive"):
+        make_mk(tmp_path, f"A=\t1\n{directive}\n")
+
+
+def test_makefile_include_stays_ignored(tmp_path: Path) -> None:
+    # .include <bsd.port.mk> is the one dot-directive every port legitimately
+    # carries — it must keep parsing cleanly (the framework vars are seeded).
+    mk = make_mk(tmp_path, "A=\t1\n.include <bsd.port.mk>\n")
+    assert mk.get("A") == "1"
+
+
+def test_read_dep_port_tolerates_conditionals(tmp_path: Path) -> None:
+    # Behaviour-preserving pin: dep-port mining is best-effort over REAL ports
+    # tree Makefiles (php83, jq, …), which routinely carry .if blocks — the
+    # directive hard-error must NOT apply there or every real build would break.
+    ports = tmp_path / "ports"
+    write_port(ports, "misc/dep", "PORTNAME=\tdep\nPORTVERSION=\t2.5\n.if defined(NEVER)\n.endif\n")
+    seed = {"PORTREVISION": "0", "PORTEPOCH": "0"}
+    assert bpp._read_dep_port(ports / "misc/dep/Makefile", "", seed) == ("dep", "2.5")
+
+
 def test_makefile_line_continuation_and_recipe_capture(tmp_path: Path) -> None:
     mk = make_mk(
         tmp_path,
@@ -111,7 +139,18 @@ def test_makefile_line_continuation_and_recipe_capture(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "ver,rev,epoch,expected",
-    [("1.0", "", "", "1.0"), ("1.0", "2", "", "1.0_2"), ("1.0", "0", "", "1.0"), ("1.0", "2", "3", "1.0_2,3")],
+    [
+        ("1.0", "", "", "1.0"),
+        ("1.0", "2", "", "1.0_2"),
+        ("1.0", "0", "", "1.0"),
+        ("1.0", "2", "3", "1.0_2,3"),
+        # bsd.port.mk: PKGVERSION = ${PORTVERSION:C/[-_,]/./g}… — '-'/'_'/',' in
+        # PORTVERSION become '.' BEFORE the _REV/,EPOCH suffixes are appended
+        # (else a '4.0.0-rc1' edit would break the <name>-<version>.pkg split).
+        ("4.0.0-rc1", "", "", "4.0.0.rc1"),
+        ("4.0.0-rc1", "2", "", "4.0.0.rc1_2"),
+        ("1_0,x", "", "", "1.0.x"),
+    ],
 )
 def test_compute_pkgversion(tmp_path: Path, ver: str, rev: str, epoch: str, expected: str) -> None:
     text = f"PORTVERSION=\t{ver}\n"
@@ -134,6 +173,9 @@ def test_compute_pkgversion(tmp_path: Path, ver: str, rev: str, epoch: str, expe
         # big-endian "eb", little-endian "el".
         ("FreeBSD:15:powerpc64le", "freebsd:15:powerpc:64:el"),
         ("FreeBSD:15:powerpc64", "freebsd:15:powerpc:64:eb"),
+        # armv7 carries the full endian/eabi/float triplet — per pkg's own
+        # machine_arch_translation[] (libpkg/pkg_abi.c), not a bare armv7:32.
+        ("FreeBSD:15:armv7", "freebsd:15:armv7:32:el:eabi:hardfp"),
     ],
 )
 def test_abi_to_arch(abi: str, arch: str) -> None:
@@ -200,6 +242,31 @@ def test_sed_s_unsupported() -> None:
     r = bpp.Recipe.__new__(bpp.Recipe)
     with pytest.raises(bpp.BuildError):
         r._sed_s("text", "y|a|b|")  # only the s command is supported
+
+
+@pytest.mark.parametrize(
+    "expr",
+    [
+        "s|a.b|Z|",  # '.' would match any char in real sed; literal replace would miss
+        "s|x[0-9]|Z|",  # character class
+        "s|^a|Z|",  # anchor
+        "s|a\\+|Z|",  # escaped metachar — still not literal-safe
+    ],
+)
+def test_sed_s_rejects_non_literal_pattern(expr: str) -> None:
+    # The emulation is a literal str.replace; a regex pattern would be applied
+    # wrongly with no error (issue #727 finding 3b) — it must fail loud instead.
+    r = bpp.Recipe.__new__(bpp.Recipe)
+    with pytest.raises(bpp.BuildError, match="literal"):
+        r._sed_s("aXb", expr)
+
+
+@pytest.mark.parametrize("expr", ["s|A|B&C|", "s|A|\\1|"])
+def test_sed_s_rejects_ampersand_and_backref_replacement(expr: str) -> None:
+    # sed's & (whole match) and \N (group) have no literal-replace equivalent.
+    r = bpp.Recipe.__new__(bpp.Recipe)
+    with pytest.raises(bpp.BuildError, match="literal"):
+        r._sed_s("A", expr)
 
 
 # --------------------------------------------------------------------------- #
@@ -274,6 +341,50 @@ def test_safe_extract_rejects_traversal(tmp_path: Path) -> None:
     buf.seek(0)
     with tarfile.open(fileobj=buf) as tf2, pytest.raises(bpp.BuildError):
         bpp._safe_extract(tf2, tmp_path / "dest")
+
+
+# --------------------------------------------------------------------------- #
+# Scripts (SUB_FILES -> manifest scripts) — fail-loud guards (issue #727 f.1)
+# --------------------------------------------------------------------------- #
+
+
+def test_build_scripts_unknown_sub_files_name_raises(tmp_path: Path) -> None:
+    # A SUB_FILES entry the tool does not model (pkg-message, pkg-*.lua, …) is
+    # picked up by a real `make package`; skipping it ships an incomplete
+    # package. It must be a hard error naming the file, not a silent continue.
+    files = tmp_path / "files"
+    files.mkdir()
+    (files / "pkg-message.in").write_text("hello\n")
+    mk = make_mk(tmp_path, "PORTNAME=\tx\nSUB_FILES=\tpkg-message\n")
+    with pytest.raises(bpp.BuildError, match="pkg-message"):
+        bpp.build_scripts(mk, files)
+
+
+def test_build_scripts_unresolved_token_raises(tmp_path: Path) -> None:
+    # Mirror parse_plist: a %%TOKEN%% still present after SUB_LIST substitution
+    # would ship literally inside the install script — fail loud instead.
+    files = tmp_path / "files"
+    files.mkdir()
+    (files / "pkg-install.in").write_text("#!/bin/sh\necho %%UNKNOWN%%\n")
+    mk = make_mk(tmp_path, "PORTNAME=\tx\nSUB_FILES=\tpkg-install\n")
+    with pytest.raises(bpp.BuildError, match="UNKNOWN"):
+        bpp.build_scripts(mk, files)
+
+
+def test_build_scripts_framework_sub_list_defaults(tmp_path: Path) -> None:
+    # The framework seeds SUB_LIST with DOCSDIR/EXAMPLESDIR/WWWDIR/ETCDIR too
+    # (bsd.port.mk) — a script using one must get the framework default value,
+    # and the pfSense scripts' %%PORTNAME%% must keep substituting.
+    files = tmp_path / "files"
+    files.mkdir()
+    (files / "pkg-install.in").write_text("d=%%DOCSDIR%% e=%%EXAMPLESDIR%% w=%%WWWDIR%% c=%%ETCDIR%% n=%%PORTNAME%%\n")
+    seed = bpp.seed_vars(tmp_path, tmp_path / "work", "py311")
+    mk = make_mk(tmp_path, "PORTNAME=\ttestpkg\nSUB_FILES=\tpkg-install\n", seed=seed)
+    scripts = bpp.build_scripts(mk, files)
+    assert scripts["install"] == (
+        "d=/usr/local/share/doc/testpkg e=/usr/local/share/examples/testpkg"
+        " w=/usr/local/www/testpkg c=/usr/local/etc/testpkg n=testpkg"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -558,6 +669,13 @@ def test_end_to_end_plist_drift_aborts(tmp_path: Path) -> None:
         ("aXbXc", "S/X/-/g", "a-b-c"),  # g (global) flag
         ("no-match", "S/zzz/q/", "no-match"),  # no occurrence → unchanged
         ("/usr/local/share/x.txt", "T", "x.txt"),  # pre-existing :T still works
+        # An :S body containing ':' must survive the modifier split intact —
+        # a blind split(':') silently no-ops it (issue #727 finding 3c).
+        ("http://old.example/x", "S|http://old.example|https://new.example|", "https://new.example/x"),
+        ("x a:b y", "S/a:b/c/", "x c y"),
+        # …and the split must resume correctly after the :S group.
+        ("dir/pfSense-pkg-x", "T:S/pfSense-pkg-//", "x"),
+        ("a:b-c", "S/a:b/z/:S/-/./", "z.c"),
     ],
 )
 def test_makefile_apply_mods_substitution(val: str, mods: str, expected: str) -> None:

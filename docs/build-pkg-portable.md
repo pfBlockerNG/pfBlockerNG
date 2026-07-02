@@ -40,6 +40,11 @@ or dependencies, so it tracks changes to the port automatically:
    `${VAR}`/`$(VAR)` expansion and a couple of `:modifiers`. Framework variables
    the port relies on (`PREFIX`, `DATADIR`, `WRKSRC`, `FILESDIR`, the install
    macros, the Python prefix, …) are seeded; `.include <bsd.port.mk>` is ignored.
+   A conditional/loop directive (`.if` / `.for` / …) in the port Makefile is a
+   **hard error** — the evaluator has no branch logic, and skipping one would
+   silently drop the logic it guards. (Dependency-port Makefiles, read only for
+   best-effort name/version mining, are exempt: real tree ports routinely carry
+   `.if` blocks.)
 2. **Acquire the source** (USE_GITHUB ports): fetch the GitHub tarball for
    `GH_TAGNAME`, or use a local checkout (`--local-src`). Classic ports install
    from the port's embedded `files/` directory, so nothing is fetched.
@@ -233,6 +238,33 @@ specific past build:
    the tool records `0`.
 2. **A few dependency versions** — read from the build host's installed binary
    packages (see [above](#dependency-versions)). `--repo-catalogue` pins them.
+
+### Known benign divergences vs current pkg
+
+The field-by-field diff above was a one-time validation; libpkg has since moved.
+These divergences are deliberate, interop-safe, and would show up in a fresh
+diff (re-run per the runbook step in
+[`misc/version-bump-runbook.md`](misc/version-bump-runbook.md) on min-CE bumps /
+ports-framework moves):
+
+- **File checksum type**: the tool writes `1$<sha256hex>`; modern `pkg create`
+  writes `2$<blake2b-zbase32>`. Type `1` is a registered type the validator
+  dispatches on (`pkg_checksum_validate_fileat` parses the `N$` prefix), so
+  installs verify fine — but a fresh byte-diff will differ on every `sum`.
+- **Tar flavor**: libpkg writes pax-restricted tar; the tool writes plain ustar.
+  Identical bytes for short paths; an install path over ustar's 100/155-char
+  limits makes Python's `tarfile` raise — loud, and no port path comes close.
+- **Payload tar uid/gid**: libpkg on FreeBSD stamps `65534`, the tool `0`.
+  Extraction uses the manifest's `uname`/`gname` (`root`/`wheel`) either way.
+- **`licenselogic`**: the tool guesses `"and"` for >1 license; the framework
+  emits `LICENSE_COMB` verbatim (`dual`/`multi`). No port has >1 license today.
+- **`FreeBSD_version` annotation**: a real `make package` always records the
+  build host's `__FreeBSD_version`; no CI caller passes `--freebsd-version`, so
+  the annotation is absent from CI/release packages. Verified against libpkg
+  source (`utils.c` `is_valid_os_version`): with the annotation absent, pkg's
+  os-version sanity check is **skipped entirely** (returns valid), not fatal.
+  Acceptable — the ADR-20 versioned php/python variant deps are the real guard
+  against wrong-edition installs.
 
 ## Output format
 
