@@ -87,6 +87,27 @@ def test_shell_static_query_param_is_clean() -> None:
     assert _find('curl "http://h/x?fixed=1"') == []
 
 
+def test_shell_var_base_with_naked_query_var_is_flagged() -> None:
+    # The exact webhook shape this checker exists to guard: a VARIABLE base with the
+    # `?` in the MIDDLE of the token (not at the start), still carrying a naked var.
+    v = _find('curl "$BASE/cb?ip=$VAR"')
+    assert len(v) == 1
+    assert "--data-urlencode" in v[0].message
+
+
+def test_shell_bare_dollar_right_after_query_separator_is_flagged() -> None:
+    # A bare `$VAR` immediately after `?` (no `key=` prefix) is still a naked
+    # interpolation — the comment in _NAKED_QUERY_VAR_RE documents this case.
+    v = _find('curl "http://h/cb?$VAR"')
+    assert len(v) == 1
+    assert "--data-urlencode" in v[0].message
+
+
+def test_shell_bare_dollar_after_ampersand_is_flagged() -> None:
+    v = _find('curl "http://h/cb?a=1&$VAR"')
+    assert len(v) == 1
+
+
 def test_shell_base_var_no_query_is_clean() -> None:
     assert _find('curl "$BASE/path"') == []
 
