@@ -64,8 +64,9 @@ _HTTP_CLIENT_RE = re.compile(r"(?<![\w-])(?:curl|wget|fetch)(?![\w-])")
 
 # A query parameter assigned a shell variable: `?key=$VAR`, `&key=$VAR`, or a
 # bare `$` right after the `?`/`&`/`=` separator. `[^=&\s"']*` keeps the key on
-# the same token (no spaces); the trailing `\$` is the shell expansion.
-_NAKED_QUERY_VAR_RE = re.compile(r"[?&][^=&\s\"']*=\$")
+# the same token (no spaces); the optional `=` covers both `?key=$VAR` and a bare
+# `?$VAR`/`&$VAR` (no `key=` at all); the trailing `\$` is the shell expansion.
+_NAKED_QUERY_VAR_RE = re.compile(r"[?&][^=&\s\"']*=?\$")
 
 # Fix hint surfaced in every message (asserted by the tests).
 _FIX_HINT = 'use `curl --data-urlencode "key=$VAR"` so the value is percent-encoded'
@@ -96,8 +97,11 @@ def _looks_like_url_token(token: str) -> bool:
         return True
     if stripped.startswith(("http", "https")):
         return True
-    # A bare query string token (rare, but `?k=$V` with no scheme still encodes).
-    return stripped.startswith("?")
+    # A query string anywhere in the token — not just at the start — still marks
+    # it URL-bearing: a variable BASE with the `?` in the middle (`$BASE/cb?ip=$VAR`)
+    # is the exact webhook shape this checker exists to guard, and a leading-only
+    # check missed it entirely.
+    return "?" in stripped
 
 
 def _split_tokens(line: str) -> list[str]:
