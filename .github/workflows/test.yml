@@ -244,6 +244,13 @@ jobs:
         # PG-1: gate that no workflow bypasses the shared build/smoke scripts.
         run: sh scripts/parity-guard.sh .github/workflows
 
+      - name: Resolve runner image id for the kcov cache key
+        # ImageOS/ImageVersion are runner machine env vars, NOT part of the GHA
+        # `env` context — `${{ env.ImageOS }}` renders empty, so a key built from it
+        # never rolls over with the runner image. Export them via a step output.
+        id: runner-image
+        run: echo "id=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+
       - name: Restore cached kcov binary
         # kcov was removed from ubuntu-latest's apt repos; build from source and
         # cache the install dir so subsequent runs skip the compile step.
@@ -251,7 +258,7 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: ~/.local/kcov
-          key: kcov-v43-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageOS }}-${{ env.ImageVersion }}
+          key: kcov-v43-${{ runner.os }}-${{ runner.arch }}-${{ steps.runner-image.outputs.id }}
 
       - name: Build kcov from source (cache miss)
         # Only runs when the cache is cold. best-effort: a compile failure still
@@ -275,7 +282,7 @@ jobs:
         uses: actions/cache/save@v5
         with:
           path: ~/.local/kcov
-          key: kcov-v43-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageOS }}-${{ env.ImageVersion }}
+          key: kcov-v43-${{ runner.os }}-${{ runner.arch }}-${{ steps.runner-image.outputs.id }}
 
       - name: Install kcov runtime deps and add to PATH
         # Runtime shared libs (libcurl, libelf, libdw) needed on both cache hit
@@ -288,21 +295,27 @@ jobs:
       - name: Coverage (kcov) — informational
         # Informational only (no floor yet, mirroring #38); never gates CI. Guard on
         # kcov being present so a missing tool does not leave an error annotation.
+        # shellspec's kcov integration refuses .shellspec's `--shell sh` ("Require to
+        # use bash/zsh/ksh to run kcov") — override to bash for this re-run only; the
+        # gating `shellspec` run above stays on sh, and the POSIX specs run unchanged
+        # under bash (a superset) purely to collect coverage.
         continue-on-error: true
         run: |
           if command -v kcov >/dev/null 2>&1; then
-            shellspec --kcov
+            shellspec --kcov --shell bash
           else
             echo "kcov absent; skipping informational shell coverage"
           fi
 
       - name: Upload coverage report
+        # if-no-files-found: warn (not ignore) — a coverage run that produced nothing
+        # is exactly the silent-failure mode that hid the broken kcov invocation.
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: shell-coverage
           path: coverage/
-          if-no-files-found: ignore
+          if-no-files-found: warn
 
   php-syntax:
     name: PHP syntax check (php -l) / PHP ${{ matrix.php-version }}
