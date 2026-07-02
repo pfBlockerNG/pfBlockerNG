@@ -697,6 +697,32 @@ function pfb_rule_alias_needs_v4_suffix($address, $ipprotocol) {
 	       $ipprotocol === 'inet';
 }
 
+// Collect the auto-rule suffix already in use by an existing pfB_ firewall
+// rule (sync_package_pfblockerng() auto-rule-suffix configuration, issue
+// #713). Scans $rules for the FIRST rule whose descr matches the
+// pfBlockerNG auto-rule naming pattern ('pfB_<Type><suffix>') and, when
+// found, both confirms a pfB_ rule already exists ('found') and extracts its
+// suffix ('suffix') so the caller can preserve it instead of re-applying the
+// currently configured suffix setting over already-deployed rules.
+//
+// PURE — no I/O, no globals, no side effects.
+//
+// @param array<int, array<string, mixed>> $rules  config 'filter/rule' entries.
+// @return array{found: bool, suffix: string}
+function pfb_collect_autorule_suffix(array $rules): array {
+	$found  = FALSE;
+	$suffix = '';
+
+	foreach ($rules as $rule) {
+		if (empty($suffix) && preg_match('/^pfB_\w+(\s.*)/', $rule['descr'] ?? '', $match)) {
+			$found  = TRUE;
+			$suffix = $match[1];
+		}
+	}
+
+	return ['found' => $found, 'suffix' => $suffix];
+}
+
 // Validate and normalise the Reports-tab whitelist composite 'atype' parameter,
 // which arrives as 'Whitelist|<ip>|<description>'. The IP is validated via
 // PFB_FILTER_IP (is_ipaddr); an invalid IP yields an empty IP slot
@@ -13144,9 +13170,8 @@ function sync_package_pfblockerng($cron='') {
 	}
 
 	// Configure auto rule suffix.
-	$pfbfound = FALSE;
-	$pfb_suffix_match = '';
-	foreach (config_get_path('filter/rule', []) as $rule) {
+	$pfb_filter_rules = config_get_path('filter/rule', []);
+	foreach ($pfb_filter_rules as $rule) {
 
 		// Query for previous IPv4 pfBlockerNG 'alias type' aliasnames which are not in the new '_v4' suffix format
 		foreach (array('source', 'destination') as $rtype) {
@@ -13154,12 +13179,13 @@ function sync_package_pfblockerng($cron='') {
 				$pfb['autorules'] = TRUE;	// Set flag to re-configure Firewall rules and add missing '_v4' suffix
 			}
 		}
-
-		// Collect any pre-existing suffix
-		if (!empty($pfb_suffix_match) && preg_match('/^pfB_\w+(\s.*)/', $rule['descr'], $pfb_suffix_real)) {
-			$pfb_suffix_match = $pfb_suffix_real[1];
-		}
 	}
+
+	// Collect any pre-existing suffix from an already-deployed pfB_ rule
+	// (issue #713 — 'found' must reflect a real match, not stay permanently FALSE).
+	$pfb_autorule_suffix = pfb_collect_autorule_suffix($pfb_filter_rules);
+	$pfbfound = $pfb_autorule_suffix['found'];
+	$pfb_suffix_match = $pfb_autorule_suffix['suffix'];
 
 	// Change suffix only if no pfB rules found and autorules are enabled.
 	if ($pfb['autorules'] && !$pfbfound) {
