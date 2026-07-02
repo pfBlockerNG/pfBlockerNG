@@ -4709,6 +4709,10 @@ function pfb_apply_alias_delta(
 
 	// Force replace: boot/enable-disable initial load path.
 	if ($force_replace || $mode === 'replace') {
+		// issue #722: nothing else on a live box distinguishes the delta path from a
+		// replace (pfb_pfctl_table_op logs only on error) — this line is the sole apply-path
+		// oracle the smoke suite (and a human reading the log) can grep for.
+		pfb_logger(" ADR-40 apply [ {$table} ]: replace\n", 1);
 		pfb_pfctl_table_op($table, 'replace', "-f {$table_file_esc}", $pfctl_bin);
 		return FALSE;
 	}
@@ -4722,9 +4726,14 @@ function pfb_apply_alias_delta(
 
 	// Churn-ratio fallback: auto mode with large churn → replace.
 	if ($mode === 'auto' && $table_size > 0 && ($churn / $table_size) >= PFB_DELTA_CHURN_THRESHOLD) {
+		pfb_logger(" ADR-40 apply [ {$table} ]: replace\n", 1);
 		pfb_pfctl_table_op($table, 'replace', "-f {$table_file_esc}", $pfctl_bin);
 		return FALSE;
 	}
+
+	// issue #722: log the delta decision (incl. the zero-churn idempotent no-op below) so the
+	// delta path is just as observable on a live box as the replace path logged above.
+	pfb_logger(" ADR-40 apply [ {$table} ]: delta +" . count($add_set) . '/-' . count($del_set) . "\n", 1);
 
 	// Idempotence: empty delta → zero pfctl calls.
 	if (empty($add_set) && empty($del_set)) {
