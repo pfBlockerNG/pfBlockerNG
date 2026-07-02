@@ -704,11 +704,14 @@ jobs:
             *) BODY=$(printf '%s\n\n%s' "$BODY" "$FULL_LINK") ;;
           esac
 
-          # Release title: product + version, plus the short summary when we have one.
+          # Release title: ISO publish date + version, plus the short summary when we have
+          # one. The date prefix (UTC, yyyy-mm-dd) keeps GitHub's alphabetical release sort
+          # in chronological order. Product name is omitted — this repo only ships pfBlockerNG.
+          DATE=$(date -u +%Y-%m-%d)
           if [ -n "$SUMMARY" ]; then
-            NAME="pfBlockerNG ${VERSION} — ${SUMMARY}"
+            NAME="${DATE} - ${VERSION} — ${SUMMARY}"
           else
-            NAME="pfBlockerNG ${VERSION}"
+            NAME="${DATE} - ${VERSION}"
           fi
 
           # Emit name + body to the step output (consumed by the publish step) …
