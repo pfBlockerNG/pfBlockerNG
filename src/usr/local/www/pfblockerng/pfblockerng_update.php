@@ -42,6 +42,13 @@ pfb_global();
 // the returned bytes (replacing the old blocking inline-<script> stream that parked the request
 // and left the page -- and its nav menu -- half-loaded). Must run before any head/HTML output.
 if (($_GET['ajax'] ?? '') === 'tail') {
+	// Release the PHP session write-lock immediately: this poll only READS files + isvalidpid,
+	// it never writes the session. guiconfig.inc holds an EXCLUSIVE per-session lock for the whole
+	// request, so without this every 1s poll serialises behind any other same-session request
+	// (other tabs, nav background requests, the dispatching POST). During a long no-output gap --
+	// e.g. an HAProxy graceful-restart drain in an update hook -- one such blocked poll leaves the
+	// client's in-flight guard stuck and freezes the live tail until a manual reload.
+	session_write_close();
 	header('Content-Type: application/json');
 	header('Cache-Control: no-cache, no-store, must-revalidate');
 	$pfb_has_off = isset($_GET['offset']) && ctype_digit((string) $_GET['offset']);
@@ -573,7 +580,11 @@ events.push(function(){
 			if (pending || done) { return; }   // skip the tick while a request is outstanding
 			pending = true;
 			var url = '/pfblockerng/pfblockerng_update.php?ajax=tail' + (offset !== null ? '&offset=' + offset : '');
-			$.ajax({ url: url, type: 'GET', dataType: 'json', cache: false }).done(function(r) {
+			// timeout: a poll normally returns in ms; if one ever blocks, abort at 5s so .always()
+			// clears the in-flight guard and the next tick retries (the offset only advances on a
+			// successful .done, so a retry re-reads the same range -- no data lost). Without it, a
+			// single blocked poll would freeze the tail until a manual reload.
+			$.ajax({ url: url, type: 'GET', dataType: 'json', cache: false, timeout: 5000 }).done(function(r) {
 				if (!r) { return; }
 				if (r.data) {
 					var atBottom = (out.scrollHeight - out.scrollTop - out.clientHeight) <= 16;

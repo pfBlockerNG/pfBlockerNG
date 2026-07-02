@@ -417,6 +417,30 @@ def test_update_log_textareas_are_readonly(webui: WebUI) -> None:
         assert re.search(r"\breadonly\b", tag), f"'{name}' textarea is editable (no readonly): {tag}"
 
 
+def test_update_ajax_tail_returns_wellformed_json(webui: WebUI) -> None:
+    """The ?ajax=tail live-log poll endpoint returns well-formed JSON with the poller's contract keys.
+
+    The handler now calls session_write_close() before reading the log so the poll never holds the
+    PHP session write-lock — otherwise every 1s poll serialises behind any other same-session
+    request, and one such blocked poll freezes the live tail during a long no-output gap (an
+    HAProxy graceful-restart drain in an update hook). This guards that early close: it must not
+    emit a warning/notice into the response (which would corrupt the JSON) and the endpoint must
+    still return the {running, done, offset} contract the client poller consumes.
+
+    Given the Update page's AJAX tail endpoint,
+    When it is fetched with no offset (the client's first poll),
+    Then the body parses as JSON and carries the running/done/offset keys (done is a bool).
+    """
+    resp = webui.get(_UPDATE_PAGE + "?ajax=tail")
+    assert resp.status_code == 200, f"ajax=tail returned HTTP {resp.status_code}, body={resp.text[:200]!r}"
+    # json.loads FAILS if a PHP warning/notice leaked into the body ahead of the JSON — exactly
+    # the failure a misplaced session_write_close() (or an un-started session) would produce.
+    payload = json.loads(resp.text)
+    for key in ("running", "done", "offset"):
+        assert key in payload, f"ajax=tail JSON missing the poller-contract key {key!r}: {payload!r}"
+    assert isinstance(payload["done"], bool), f"'done' must be a bool for the client stop-check: {payload!r}"
+
+
 def test_update_revamp_controls_render(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
     """Update page revamp: new scope + force-mode controls present; old opaque ones gone.
 
