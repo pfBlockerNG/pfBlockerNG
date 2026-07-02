@@ -417,7 +417,7 @@ def test_update_log_textareas_are_readonly(webui: WebUI) -> None:
         assert re.search(r"\breadonly\b", tag), f"'{name}' textarea is editable (no readonly): {tag}"
 
 
-def test_update_ajax_tail_returns_wellformed_json(webui: WebUI) -> None:
+def test_update_ajax_tail_returns_wellformed_json(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
     """The ?ajax=tail live-log poll endpoint returns well-formed JSON with the poller's contract keys.
 
     The handler now calls session_write_close() before reading the log so the poll never holds the
