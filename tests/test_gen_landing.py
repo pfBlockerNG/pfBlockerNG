@@ -59,6 +59,49 @@ def test_ver_key_orders_nightly_after_release() -> None:
     assert gl.ver_key("3.2.16.20260614.20") > gl.ver_key("3.2.16.20260614.7")
 
 
+def test_ver_key_orders_prerelease_stages_alpha_beta_rc_then_release() -> None:
+    """ver_key ranks the release-tag stages the way FreeBSD pkg does (release-version.sh).
+
+    A naive numeric-run key (re.findall(r"\\d+", v)) folds the stage keyword away
+    entirely: 4.0.0.alpha.1 / .beta.1 / .rc.1 all collapsed to the SAME key [4,0,0,1],
+    and the bare 4.0.0 release ([4,0,0]) sorted BELOW every prerelease. This bites
+    when more than one devel build is retained (--release-keep-devel > 1): builds
+    mis-order and collapse. Correct order: alpha < beta < rc < release.
+    """
+    versions = ["4.0.0.alpha.1", "4.0.0.beta.1", "4.0.0.rc.1", "4.0.0"]
+    assert sorted(versions, key=gl.ver_key) == versions
+
+    # Stage keywords must NOT compare equal — each is a distinct, ordered stage.
+    assert gl.ver_key("4.0.0.alpha.1") < gl.ver_key("4.0.0.beta.1")
+    assert gl.ver_key("4.0.0.beta.1") < gl.ver_key("4.0.0.rc.1")
+    # The bare release ranks ABOVE every prerelease, not below.
+    assert gl.ver_key("4.0.0.rc.1") < gl.ver_key("4.0.0")
+
+    # The stage NUMBER still tie-breaks within one stage.
+    assert gl.ver_key("4.0.0.alpha.1") < gl.ver_key("4.0.0.alpha.2")
+
+
+def test_ver_key_full_multi_version_sort_matches_pkg_order() -> None:
+    """A shuffled multi-version list sorts into the exact pkg-defined order."""
+    shuffled = [
+        "4.0.0",
+        "4.0.0.rc.1",
+        "4.0.0.alpha.2",
+        "4.0.0.beta.1",
+        "4.0.0.alpha.1",
+        "4.0.1.alpha.1",
+    ]
+    expected = [
+        "4.0.0.alpha.1",
+        "4.0.0.alpha.2",
+        "4.0.0.beta.1",
+        "4.0.0.rc.1",
+        "4.0.0",
+        "4.0.1.alpha.1",
+    ]
+    assert sorted(shuffled, key=gl.ver_key) == expected
+
+
 def test_artifact_datetime_is_utc_minute_precision() -> None:
     """A Unix epoch formats to a UTC, minute-precision datetime.
 

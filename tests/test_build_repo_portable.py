@@ -880,6 +880,89 @@ def test_pkg_version_key_orders_nightlies_chronologically() -> None:
     assert brp._pkg_version_key("3.2.16.20260606.10") > brp._pkg_version_key("3.2.16.20260606.2")
 
 
+def test_pkg_version_key_orders_prerelease_stages_alpha_beta_rc_then_release() -> None:
+    """_pkg_version_key ranks release-tag stages the way FreeBSD pkg does (release-version.sh).
+
+    A naive component-numeric key folds the stage keyword to 0: 4.0.0.alpha.1 /
+    .beta.1 / .rc.1 all collapsed to the SAME key, and the bare 4.0.0 release
+    sorted BELOW every prerelease. This bites when more than one devel build is
+    retained (--release-keep-devel > 1): builds mis-order and collapse. Correct
+    order: alpha < beta < rc < release.
+    """
+    versions = ["4.0.0.alpha.1", "4.0.0.beta.1", "4.0.0.rc.1", "4.0.0"]
+    assert sorted(versions, key=brp._pkg_version_key) == versions
+
+    # Stage keywords must NOT compare equal — each is a distinct, ordered stage.
+    assert brp._pkg_version_key("4.0.0.alpha.1") < brp._pkg_version_key("4.0.0.beta.1")
+    assert brp._pkg_version_key("4.0.0.beta.1") < brp._pkg_version_key("4.0.0.rc.1")
+    # The bare release ranks ABOVE every prerelease, not below.
+    assert brp._pkg_version_key("4.0.0.rc.1") < brp._pkg_version_key("4.0.0")
+
+    # The stage NUMBER still tie-breaks within one stage.
+    assert brp._pkg_version_key("4.0.0.alpha.1") < brp._pkg_version_key("4.0.0.alpha.2")
+
+
+def test_pkg_version_key_full_multi_version_sort_matches_pkg_order() -> None:
+    """A shuffled multi-version list sorts into the exact pkg-defined order."""
+    shuffled = [
+        "4.0.0",
+        "4.0.0.rc.1",
+        "4.0.0.alpha.2",
+        "4.0.0.beta.1",
+        "4.0.0.alpha.1",
+        "4.0.1.alpha.1",
+    ]
+    expected = [
+        "4.0.0.alpha.1",
+        "4.0.0.alpha.2",
+        "4.0.0.beta.1",
+        "4.0.0.rc.1",
+        "4.0.0",
+        "4.0.1.alpha.1",
+    ]
+    assert sorted(shuffled, key=brp._pkg_version_key) == expected
+
+
+def test_retain_by_channel_devel_retains_prerelease_stages_in_pkg_order(tmp_path: Path) -> None:
+    """retain_by_channel(keep_devel>1) keeps the newest N devel builds in REAL pkg order.
+
+    Scenario: a devel series progressing alpha.1 -> alpha.2 -> beta.1 -> rc.1, retained 3-deep,
+    with mtimes set ADVERSARIALLY (oldest-stage file gets the NEWEST mtime) so the result can
+    only be right via the VERSION key, never via _retain_newest's mtime tie-break falling back
+    on file-creation order.
+      Given 4 devel .pkg spanning the alpha/beta/rc lifecycle of one series
+        And keep_devel=3 (rollback retention, --release-keep-devel > 1)
+        And mtimes DELIBERATELY inverted vs. stage order (alpha.1 is newest-on-disk)
+      When retain_by_channel is called
+      Then the 3 NEWEST BY VERSION survive: alpha.2, beta.1, rc.1
+       And the oldest BY VERSION (alpha.1) is dropped, despite having the newest mtime —
+       proving the primary key (not the mtime tie-break) drives the decision
+    """
+    d = tmp_path / "pkgs"
+    d.mkdir()
+    a1 = _make_pkg_channel(d, "pfBlockerNG-devel", "4.0.0.alpha.1")
+    a2 = _make_pkg_channel(d, "pfBlockerNG-devel", "4.0.0.alpha.2")
+    b1 = _make_pkg_channel(d, "pfBlockerNG-devel", "4.0.0.beta.1")
+    r1 = _make_pkg_channel(d, "pfBlockerNG-devel", "4.0.0.rc.1")
+    # Invert mtimes vs. version-stage order: the OLDEST version (alpha.1) gets the
+    # NEWEST mtime, and vice versa. A tie-break-by-mtime alone would then pick the
+    # WRONG 3 (a1, a2, b1) — only a version key that keeps alpha/beta/rc DISTINCT
+    # (never tying) picks the right 3 (a2, b1, r1) regardless of mtime.
+    base = 1_700_000_000.0
+    for path, offset in ((r1, 0), (b1, 10), (a2, 20), (a1, 30)):
+        os.utime(path, (base + offset, base + offset))
+
+    # Before-state: all 4 present.
+    all_paths = [a1, a2, b1, r1]
+    kept_all = brp.retain_by_channel(all_paths, keep_devel=0, keep_stable=0)
+    assert len(kept_all) == 4
+
+    kept = brp.retain_by_channel(all_paths, keep_devel=3, keep_stable=0)
+    kept_versions = {brp.read_compact_manifest(p)["version"] for p in kept}
+    assert kept_versions == {"4.0.0.alpha.2", "4.0.0.beta.1", "4.0.0.rc.1"}
+    assert "4.0.0.alpha.1" not in kept_versions
+
+
 def test_build_matrix_tree_layout_arch_leaf(tmp_path: Path) -> None:
     """build_repo_matrix projects the matrix 1:1 with the bare ARCH as the leaf.
 
