@@ -28,7 +28,9 @@ Describe 'pfblockerng.sh remove() entry guard'
     tempfile="${sandbox}/t1"
     tempfile2="${sandbox}/t2"
     : > "${masterfile}"
-    # A sentinel OUTSIDE the sandbox that an unguarded traversal glob could delete.
+    # A sentinel INSIDE the sandbox, one level above every ${pfb*} prefix dir
+    # (they all live at "${sandbox}/<name>/") -- exactly where a single "../"
+    # traversal in a header/alias lands, so an unguarded glob can delete it.
     sentinel="${sandbox}/SENTINEL"
     : > "${sentinel}"
   }
@@ -64,11 +66,20 @@ Describe 'pfblockerng.sh remove() entry guard'
   It 'skips a per-entry header that contains a traversal sequence'
     setup_sandbox
     # A benign alias passes the entry guard; the malicious value rides the header.
+    # A single "../" from any ${pfb*} prefix (e.g. "${pfborig}" = "${sandbox}/orig/")
+    # resolves EXACTLY to "${sandbox}/SENTINEL" -- the sentinel itself -- so an
+    # unguarded "rm -f ...${header}*" glob would actually reach it. This is what
+    # makes the assertion below a real effect oracle, not a name that never lines
+    # up with anything on disk.
     alias='Benign'
-    cc='../../SENTINEL,'
+    cc='../SENTINEL,'
     When call remove
+    # remove() completes normally: the per-header guard 'continue's past this one
+    # entry (skipping its rm globs) and the function finishes the rest of its work.
+    The status should be success
     The output should include 'Invalid header'
     # Then the sentinel survives — the malicious header never built an rm glob.
+    # If the 'continue' guard were lost, the unguarded glob above would delete it.
     The path "${sentinel}" should be exist
     cleanup_sandbox
   End
