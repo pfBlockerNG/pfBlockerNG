@@ -27,6 +27,13 @@ pfb_make_tmpdir() {
 	addfile="${tmpdir}/pfbtemp5"
 	matchfile="${tmpdir}/pfbtemp7"
 	tempmatchfile="${tmpdir}/pfbtemp8"
+	# XLSX extraction scratch dir (issue #714) -- was a fixed /tmp/xlsx/ path
+	# (mkdir guarded only by "[ ! -d ]", which follows symlinks): a predictable
+	# world-writable location TOCTOU/symlink-attackable by another local user
+	# against this root-run script. Folding it under the private 0700 mktemp
+	# dir closes that hole the same way issue #30 closed it for the other temp
+	# files above.
+	tmpxlsx="${tmpdir}/xlsx/"
 }
 
 # Top-level initialisation. Guarded so the script can be sourced for unit tests
@@ -76,7 +83,6 @@ if [ -z "${PFB_SOURCED:-}" ]; then
 
 	# Folder Locations
 	etdir=/var/db/pfblockerng/ET
-	tmpxlsx=/tmp/xlsx/
 	pfbdb=/var/db/pfblockerng/
 	pfbdeny=/var/db/pfblockerng/deny/
 	pfborig=/var/db/pfblockerng/original/
@@ -90,7 +96,8 @@ if [ -z "${PFB_SOURCED:-}" ]; then
 	# Store 'Match' d-dedups in matchdedup.txt file
 	matchdedup=matchdedup_v4.txt
 
-	# Create a private per-run temp directory (sets tempfile, tempfile2, ...).
+	# Create a private per-run temp directory (sets tempfile, tempfile2, ...,
+	# tmpxlsx).
 	pfb_make_tmpdir
 
 	# ADR-06: domainmaster / dnsbl_tld_remove / dnsbl_python_{data,zone,count} removed
@@ -111,7 +118,10 @@ if [ -z "${PFB_SOURCED:-}" ]; then
 	if [ ! -d "${pfsensealias}" ]; then mkdir "${pfsensealias}"; fi
 	if [ ! -d "${pfbmatch}" ]; then mkdir "${pfbmatch}"; fi
 	if [ ! -d "${etdir}" ]; then mkdir "${etdir}"; fi
-	if [ ! -d "${tmpxlsx}" ]; then mkdir "${tmpxlsx}"; fi
+	# tmpxlsx is a fresh subdir of the private mktemp -d tmpdir -- no existence
+	# guard needed (and none wanted: a pre-existing entry there would be a
+	# symlink-attack signal, not a legitimate state to tolerate).
+	mkdir "${tmpxlsx}"
 
 	if [ ! -f "${masterfile}" ]; then touch "${masterfile}"; fi
 	if [ ! -f "${mastercat}" ]; then touch "${mastercat}"; fi
@@ -387,8 +397,11 @@ remove() {
 			masterchk="$(grep -m1 "${query}" "${masterfile}")"
 
 			if [ -n "${masterchk}" ]; then
-				# Grep header with a trailing space character
-				grep "${header}[[:space:]]" "${masterfile}" > "${tempfile}"
+				# Grep header with a trailing space character. Anchored (^) so a
+				# shorter alias that is a SUFFIX of another (e.g. "Ads_v4" inside
+				# "BadAds_v4") doesn't over-match and strip a sibling's masterfile
+				# row -- masterfile rows always start with the alias at column 0.
+				grep "^${header}[[:space:]]" "${masterfile}" > "${tempfile}"
 				awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile}" "${masterfile}" > "${tempfile2}"; mv -f "${tempfile2}" "${masterfile}"
 			fi
 
@@ -515,8 +528,10 @@ EOF
 					lcheck="$(grep -m1 "${alias}" "${masterfile}")"
 
 					if [ -n "${lcheck}" ]; then
-						# Replace masterfile with changes to list.
-						grep "${alias}[[:space:]]" "${masterfile}" > "${tempfile}"
+						# Replace masterfile with changes to list. Anchored (^) --
+						# see duplicate()'s sibling grep for the suffix-over-match
+						# rationale (issue #714).
+						grep "^${alias}[[:space:]]" "${masterfile}" > "${tempfile}"
 						awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile}" "${masterfile}" > "${tempfile2}"
 						mv -f "${tempfile2}" "${masterfile}"
 						sed -e 's/^/'"$alias"' /' "${pfbfolder}${alias}.txt" >> "${masterfile}"
@@ -728,8 +743,12 @@ duplicate() {
 
 	# Only execute if 'Alias' exists in masterfile
 	if [ "${dupcheck}" -eq 1 ]; then
-		# Grep alias with a trailing space character
-		grep "${alias}[[:space:]]" "${masterfile}" > "${tempfile}"
+		# Grep alias with a trailing space character. Anchored (^) -- an
+		# unanchored pattern over-matches a shorter alias that is a SUFFIX of
+		# another (e.g. "Ads_v4" inside "BadAds_v4"), pulling the sibling's
+		# masterfile row into the removal set and silently dropping it
+		# (issue #714). Masterfile rows always start with the alias.
+		grep "^${alias}[[:space:]]" "${masterfile}" > "${tempfile}"
 		awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile}" "${masterfile}" > "${tempfile2}"; mv -f "${tempfile2}" "${masterfile}"
 		cut -d ' ' -f2 "${masterfile}" > "${mastercat}"
 	fi
@@ -806,11 +825,30 @@ whoisconvert() {
 		# Determine if host is a Domain or an AS: a domain contains a dot.
 		case "${host}" in
 		*.*)
-			found=true
 			printf '  Collecting host IP: %s' "${host}"
-			echo "### Domain: ${host} ###" >> "${pfborig}${alias}.orig"
-			"${pathhost}" -t "${_type}" "${host}" | sed 's/^.* //' >> "${pfborig}${alias}.orig"
-			echo "... completed"
+			# Capture the lookup output + its OWN exit code first (a pipe's $?
+			# would reflect sed's status, not host's, hiding a failed lookup) --
+			# then keep only the "has (IPv6) address" lines so a failure message
+			# (e.g. "Host x not found: 3(NXDOMAIN)") can never be captured as
+			# data (issue #714). Mirrors the ASN branch below.
+			hostout="$("${pathhost}" -t "${_type}" "${host}")"
+			hostrc=$?
+			if [ "${hostrc}" -eq 0 ]; then
+				hostips="$(echo "${hostout}" | grep -E 'has( IPv6)? address' | sed 's/^.* //')"
+			else
+				hostips=''
+			fi
+
+			if [ -n "${hostips}" ]; then
+				found=true
+				echo "### Domain: ${host} ###" >> "${pfborig}${alias}.orig"
+				echo "${hostips}" >> "${pfborig}${alias}.orig"
+				echo "... completed"
+			else
+				printf "... Failed to resolve host [ %s ]" "${host}"
+				touch "${pfborig}${alias}.fail"
+				found=false
+			fi
 			;;
 		*)
 			# Download IPinfo asn databases on first use.
