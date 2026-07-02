@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -227,6 +228,77 @@ final class AliasRenameFollowupTest extends TestCase
 		$this->assertFalse($result, 'Absent old_name must return FALSE');
 		$this->assertSame('CompletelyDifferent', $this->readRowKey('pfblockernglistsv4', 0, 'aliasaddr_in'),
 			'Unrelated value must be unchanged');
+	}
+
+	// -----------------------------------------------------------------------
+	// #708 — single-config (config/0) sections: DNSBL settings + GeoIP tabs.
+	// The DNSBL-settings tab and every GeoIP continent tab store the same four
+	// alias keys on config/0 (not in a multi-row feed list). Pre-#708 the
+	// follow-up skipped them, so after a rename the built DNSBL/GeoIP rule lost
+	// its In/Out restriction. Each case seeds ONE such section and asserts the
+	// rename propagates — red before the fix, green after, and every hardcoded
+	// section name is exercised (a typo in the list fails its case).
+	// -----------------------------------------------------------------------
+
+	/**
+	 * @return array<string, array{string}>
+	 */
+	public static function configZeroSections(): array
+	{
+		return [
+			'DNSBL settings'      => ['pfblockerngdnsblsettings'],
+			'Top Spammers'        => ['pfblockerngtopspammers'],
+			'Africa'              => ['pfblockerngafrica'],
+			'Antarctica'          => ['pfblockerngantarctica'],
+			'Asia'                => ['pfblockerngasia'],
+			'Europe'              => ['pfblockerngeurope'],
+			'North America'       => ['pfblockerngnorthamerica'],
+			'Oceania'             => ['pfblockerngoceania'],
+			'South America'       => ['pfblockerngsouthamerica'],
+			'Proxy and Satellite' => ['pfblockerngproxyandsatellite'],
+		];
+	}
+
+	#[DataProvider('configZeroSections')]
+	public function testConfigZeroSectionKeyIsRewritten(string $section): void
+	{
+		// Given: config/0 of this section references OldAlias on an address key.
+		$this->seedRow($section, 0, [
+			'aliasports_in' => 'OldPorts',
+			'aliasaddr_out' => 'OldAlias',
+		]);
+
+		// Before.
+		$this->assertSame('OldAlias', $this->readRowKey($section, 0, 'aliasaddr_out'),
+			"Before rename: {$section} config/0 aliasaddr_out must be OldAlias");
+
+		// When.
+		$result = pfb_alias_rename_followup('OldAlias', 'NewAlias');
+
+		// Then.
+		$this->assertTrue($result, "Rewriting {$section} config/0 must return TRUE");
+		$this->assertSame('NewAlias', $this->readRowKey($section, 0, 'aliasaddr_out'),
+			"After rename: {$section} config/0 aliasaddr_out must be NewAlias");
+		// The untouched key stays as seeded (targeted rewrite).
+		$this->assertSame('OldPorts', $this->readRowKey($section, 0, 'aliasports_in'),
+			"After rename: {$section} config/0 aliasports_in (unrelated) must be unchanged");
+	}
+
+	/**
+	 * A config/0 section referencing a DIFFERENT alias is left untouched — the
+	 * rewrite is targeted, and $changed stays FALSE when nothing matches.
+	 */
+	public function testConfigZeroSectionDifferentAliasIsNotTouched(): void
+	{
+		$this->seedRow('pfblockerngeurope', 0, ['aliasaddr_in' => 'KeepMe']);
+
+		$this->assertSame('KeepMe', $this->readRowKey('pfblockerngeurope', 0, 'aliasaddr_in'));
+
+		$result = pfb_alias_rename_followup('OldAlias', 'NewAlias');
+
+		$this->assertFalse($result, 'No matching key anywhere must return FALSE');
+		$this->assertSame('KeepMe', $this->readRowKey('pfblockerngeurope', 0, 'aliasaddr_in'),
+			'A config/0 section referencing a different alias must be untouched');
 	}
 
 	// -----------------------------------------------------------------------

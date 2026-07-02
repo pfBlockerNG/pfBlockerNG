@@ -1497,9 +1497,11 @@ function pfb_cfg_field_adapter_type(array $entry): string
  * pfBlockerNG's stored Advanced Inbound/Outbound references.
  *
  * pfSense's alias rename does not update installedpackages/*, so rewrite
- * the four per-row alias keys across the IP/DNSBL list sections, through
- * the PfbConfig section gateway. Does NOT persist (write_config is the
- * caller's job). Returns TRUE if anything changed.
+ * the four alias keys everywhere pfBlockerNG stores them: the multi-row IP/
+ * DNSBL feed list sections AND the single-config DNSBL-settings and GeoIP
+ * continent sections (config/0), through the PfbConfig section gateway. Does
+ * NOT persist (write_config is the caller's job). Returns TRUE if anything
+ * changed.
  *
  * @param  string $old_name  The alias name before the rename.
  * @param  string $new_name  The alias name after the rename.
@@ -1511,11 +1513,13 @@ function pfb_alias_rename_followup(string $old_name, string $new_name): bool
 		return FALSE;
 	}
 
-	$changed  = FALSE;
-	$sections = ['pfblockernglistsv4', 'pfblockernglistsv6', 'pfblockerngdnsbl'];
-	$keys     = ['aliasports_in', 'aliasports_out', 'aliasaddr_in', 'aliasaddr_out'];
+	$changed = FALSE;
+	$keys    = ['aliasports_in', 'aliasports_out', 'aliasaddr_in', 'aliasaddr_out'];
 
-	foreach ($sections as $section) {
+	// Multi-row list sections: each feed row can carry the four alias keys.
+	$list_sections = ['pfblockernglistsv4', 'pfblockernglistsv6', 'pfblockerngdnsbl'];
+
+	foreach ($list_sections as $section) {
 		$path = "installedpackages/{$section}/config";
 		$rows = PfbConfig::readSection($path);
 		if (empty($rows)) {
@@ -1535,6 +1539,47 @@ function pfb_alias_rename_followup(string $old_name, string $new_name): bool
 
 		if ($section_dirty) {
 			PfbConfig::writeSection($path, $rows);
+		}
+	}
+
+	// Single-config sections store the same four keys on config/0: the DNSBL
+	// settings tab (pfblockerng_dnsbl.php) and every GeoIP continent tab
+	// (pfblockerng.php). pfSense's alias rename skips installedpackages/* here
+	// too, so the built DNSBL/GeoIP rule stops matching the stale name and
+	// silently drops its In/Out restriction (#708). The continent section names
+	// are 'pfblockerng' + the continent name lowercased with spaces removed
+	// (the $conf_type the GeoIP page derives from $pfb['continents']).
+	$cfg0_sections = [
+		'pfblockerngdnsblsettings',
+		'pfblockerngtopspammers',
+		'pfblockerngafrica',
+		'pfblockerngantarctica',
+		'pfblockerngasia',
+		'pfblockerngeurope',
+		'pfblockerngnorthamerica',
+		'pfblockerngoceania',
+		'pfblockerngsouthamerica',
+		'pfblockerngproxyandsatellite',
+	];
+
+	foreach ($cfg0_sections as $section) {
+		$path = "installedpackages/{$section}/config/0";
+		$cfg  = PfbConfig::readSection($path);
+		if (empty($cfg)) {
+			continue;
+		}
+
+		$section_dirty = FALSE;
+		foreach ($keys as $key) {
+			if (($cfg[$key] ?? '') === $old_name) {
+				$cfg[$key]     = $new_name;
+				$section_dirty = TRUE;
+				$changed       = TRUE;
+			}
+		}
+
+		if ($section_dirty) {
+			PfbConfig::writeSection($path, $cfg);
 		}
 	}
 
