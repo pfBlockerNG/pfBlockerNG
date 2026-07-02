@@ -197,6 +197,61 @@ Describe 'pfblockerng.sh archive helpers (#468)'
     cleanup_arc
   End
 
+  # issue #713 bug 7: POSIX sh has no pipefail, so the OLD `tar -Pcf - ... | zstd
+  # ...` pipe silently discarded a failed/truncated tar's exit status (only
+  # zstd's mattered), and "zstd -tq" verifies only the zstd FRAMING, not tar
+  # completeness -- so a truncated tar stream still compressed into a small but
+  # VALID .zst, publishing a corrupt archive AND deleting the still-good .bz2.
+  # A tar stand-in that dies mid-write (simulates a killed process / disk-full /
+  # a genuinely truncated source) reproduces the exact shape: it writes SOME
+  # bytes then exits non-zero, same as a real truncated tar stream would.
+  write_faketar() {
+    cat > "${arcbox}/faketar" <<'EOF'
+#!/bin/sh
+printf 'PARTIAL-NOT-A-COMPLETE-TAR-STREAM'
+exit 2
+EOF
+    chmod +x "${arcbox}/faketar"
+  }
+
+  # Wrapper: report the pre-existing .bz2's validity, run compress with a tar
+  # that dies mid-stream, then report compress's own exit status plus the
+  # POST-run .bz2 validity -- so the example proves the failed attempt neither
+  # published a corrupt .zst nor damaged the pre-existing backup (not just that
+  # a .bz2 happens to exist afterwards).
+  faketar_compress_and_report() {
+    # Given: a pre-existing, verified-good .bz2 backup (as if from a prior run).
+    /usr/bin/tar -Pjcf "${arc_bz2}" "${payload}"
+    if /usr/bin/tar -Ptjf "${arc_bz2}" >/dev/null 2>&1; then echo 'PRE:bz2-valid'; else echo 'PRE:bz2-invalid'; fi
+    write_faketar
+    pathtar="${arcbox}/faketar"
+    pfb_archive_compress "${arc_base}" "${payload}"
+    echo "COMPRESS_RC:$?"
+    pathtar='/usr/bin/tar'
+    if /usr/bin/tar -Ptjf "${arc_bz2}" >/dev/null 2>&1; then echo 'POST:bz2-valid'; else echo 'POST:bz2-invalid'; fi
+  }
+
+  It 'compress never publishes a corrupt .zst and never deletes the pre-existing .bz2 when tar fails (issue #713 bug 7)'
+    setup_arc
+    When call faketar_compress_and_report
+    The output should include 'PRE:bz2-valid'
+    # compress fails end-to-end (tar failed, so the bzip2 fallback -- itself run
+    # through the same broken ${pathtar} stand-in in this scenario -- fails too).
+    The output should include 'COMPRESS_RC:2'
+    # The pre-existing .bz2 is untouched: still a valid, complete archive.
+    The output should include 'POST:bz2-valid'
+    # No .zst was ever published -- a truncated tar must never reach the
+    # "zstd -tq passed, publish it" branch.
+    The path "${arc_base}.zst" should not be exist
+    The path "${arc_bz2}" should be exist
+    payload_content="$(/usr/bin/tar -Pxjf "${arc_bz2}" -O)"
+    The value "$payload_content" should equal 'PAYLOAD-v1'
+    # No leftover mktemp temp files from the failed attempt.
+    leftover="$(find "${arcbox}" -maxdepth 1 -name "$(basename "${arc_base}").??????" 2>/dev/null)"
+    The value "$leftover" should equal ''
+    cleanup_arc
+  End
+
   # Wrapper: report the no-archive before-state, then extract from the bz2 fallback.
   extract_legacy_and_report() {
     if [ -f "${arc_base}.zst" ]; then echo 'PRE:zst-present'; else echo 'PRE:zst-absent'; fi
