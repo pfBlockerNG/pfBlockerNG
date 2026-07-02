@@ -9,9 +9,19 @@
  * actually invoke, with FAITHFUL behaviour where a tested function's result
  * depends on it:
  *
- *   - is_ipaddrv4 / is_ipaddrv6 / is_ipaddr — mirror pfSense util.inc exactly
- *     (ip2long round-trip for v4; filter_var for v6). pfb_filter (IP/IPV4) and
+ *   - is_ipaddrv4 / is_ipaddrv6 / is_ipaddr / is_linklocal — mirror pfSense
+ *     util.inc CONTROL FLOW exactly: a bare ip2long() check for v4 (NO
+ *     long2ip() round-trip); for v6 the "/" reject + link-local-only "%zone"
+ *     strip + double-"::" reject, via filter_var() standing in for
+ *     Net_IPv6::checkIPv6 (no PEAR off-appliance). pfb_filter (IP/IPV4) and
  *     pfb_dnsbl_abp_extract_ip depend on their precise accept/reject behaviour.
+ *     NOTE on v4: PHP's ip2long() delegates to libc inet_pton(AF_INET), which
+ *     accepts only the canonical dotted-quad — leading-zero octets like
+ *     '192.000.002.005' are rejected on BOTH FreeBSD (the pfSense/CE target;
+ *     inet_pton4's leading-zero guard) and glibc. Consequently the old
+ *     round-trip was behaviourally equivalent for v4; dropping it is a
+ *     control-flow-fidelity fix (mirror upstream verbatim), not a verdict
+ *     flip. The v6 %zone fix IS a real verdict flip — see IpAddrDoublesTest.
  *
  * Everything else is a minimal no-op/throwaway double: it exists only so the
  * symbol resolves. Functions reached only by code paths the seed suite does NOT
@@ -22,27 +32,59 @@
  */
 
 if (!function_exists('is_ipaddrv4')) {
-	// pfSense util.inc: a string whose ip2long round-trips back to itself.
-	// Rejects '1.2.3', leading-zero octets, out-of-range, non-strings.
+	// pfSense util.inc verbatim: a bare ip2long() check, NO long2ip() round-trip.
+	// Rejects '1.2.3' / out-of-range / leading-zero octets / non-strings —
+	// ip2long() (libc inet_pton) accepts only the canonical dotted-quad, on
+	// FreeBSD and glibc alike (see the file-header NOTE), so this double now
+	// runs the exact same control flow as the real function.
 	function is_ipaddrv4($ipaddr) {
-		if (!is_string($ipaddr) || empty($ipaddr)) {
+		if (!is_string($ipaddr) || empty($ipaddr) || ip2long($ipaddr) === FALSE) {
 			return false;
 		}
-		$ip_long = ip2long($ipaddr);
-		$ip_reverse = long2ip($ip_long);
-		return ($ipaddr === $ip_reverse);
+		return true;
+	}
+}
+
+if (!function_exists('is_linklocal')) {
+	// pfSense util.inc: 4 for a 169.254.0.0/16 v4 address, 6 for a link-local v6
+	// address, FALSE otherwise. Off-appliance there is no PEAR Net_IPv6, so the
+	// v6 branch approximates NET_IPV6_LOCAL_LINK with a case-insensitive 'fe80:'
+	// prefix check on the address (checked BEFORE any '%zone' is stripped, same
+	// as upstream — the zone is part of the string Net_IPv6::getAddressType sees).
+	function is_linklocal($ipaddr) {
+		if (is_ipaddrv4($ipaddr)) {
+			$ip4 = explode('.', $ipaddr);
+			if ($ip4[0] === '169' && $ip4[1] === '254') {
+				return 4;
+			}
+			return false;
+		}
+		if (is_string($ipaddr) && stripos($ipaddr, 'fe80:') === 0) {
+			return 6;
+		}
+		return false;
 	}
 }
 
 if (!function_exists('is_ipaddrv6')) {
-	// pfSense util.inc: strip a zone id (%scope), then FILTER_VALIDATE_IP v6.
+	// pfSense util.inc verbatim ordering: string/empty guard -> reject a "/mask"
+	// suffix -> strip a "%zone" ONLY when the address is link-local (a non-link-
+	// local zoned address like '2001:db8::1%em0' keeps its zone and fails to
+	// validate) -> reject a double "::" (redmine #13069) -> validate. filter_var()
+	// with FILTER_FLAG_IPV6 stands in for Net_IPv6::checkIPv6() (no PEAR off-appliance).
 	function is_ipaddrv6($ipaddr) {
 		if (!is_string($ipaddr) || empty($ipaddr)) {
 			return false;
 		}
-		if (strstr($ipaddr, '%') !== false) {
-			$parts = explode('%', $ipaddr);
-			$ipaddr = $parts[0];
+		if (strstr($ipaddr, '/')) {
+			return false;
+		}
+		if (strstr($ipaddr, '%') && is_linklocal($ipaddr)) {
+			$tmpip = explode('%', $ipaddr);
+			$ipaddr = $tmpip[0];
+		}
+		if (substr_count($ipaddr, '::') > 1) {
+			return false;
 		}
 		return (filter_var($ipaddr, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false);
 	}
