@@ -375,6 +375,15 @@ def test_adr40_delta_apply_small_churn(adr40_vm: h.SmokeVM) -> None:
 
     Together with ``test_adr40_delta_replace_mode`` (which uses mode=replace and
     asserts the same end-state) this proves the two apply paths are equivalent.
+
+    issue #722: the end-state invariant alone does NOT distinguish delta from replace
+    — ``test_adr40_delta_replace_mode`` produces the identical pf-table end-state, so a
+    regression that silently routed this "delta" run through -T replace would pass every
+    assertion above unnoticed. ``pfb_apply_alias_delta()`` now logs a
+    " ADR-40 apply [ <table> ]: delta +N/-M" / "…: replace" marker naming the actual
+    apply path taken (pfblockerng.inc ~4711-4736) — the ONLY on-box signal that
+    discriminates the two (``pfb_pfctl_table_op()`` itself logs only on error). This test
+    asserts the DELTA marker fired for this table and the REPLACE marker did NOT.
     """
     token = "p4delta"
     marker = h.hook_marker_path(token, "post")
@@ -409,6 +418,14 @@ def test_adr40_delta_apply_small_churn(adr40_vm: h.SmokeVM) -> None:
             f"before-state: pf table {ip_spec.alias} already has {new_ip}: {members_before}"
         )
 
+        # issue #722: capture the apply-path markers for THIS table right before the change
+        # reload, isolating its own delta/replace decision from the settling reload above
+        # (which force-replaces on first creation) and from any other table in the run.
+        delta_marker = f" ADR-40 apply [ {ip_spec.alias} ]: delta "
+        replace_marker = f" ADR-40 apply [ {ip_spec.alias} ]: replace"
+        delta_before = h.count_log_marker(adr40_vm, h.PFB_LOG, delta_marker)
+        replace_before = h.count_log_marker(adr40_vm, h.PFB_LOG, replace_marker)
+
         # Change the feed; invalidate the reuse cache.
         h.write_local_feed(adr40_vm, feed_file, f"{new_ip}\n")
         h.force_ip_refetch(adr40_vm, f"{ip_spec.header}_{ip_spec.family}")
@@ -423,6 +440,21 @@ def test_adr40_delta_apply_small_churn(adr40_vm: h.SmokeVM) -> None:
             f"ADR-40 P4 delta FAILED: alias {ip_spec.alias!r} absent from PFB_CHANGED_IP_ALIASES.\n"
             f"Got PFB_CHANGED_IP_ALIASES={changed!r}\n"
             f"Feed changed from {old_ip!r} to {new_ip!r}; content-gate should have fired."
+        )
+
+        # issue #722: the apply-path oracle — DELTA marker fired for this table, REPLACE did
+        # NOT. Without this, a regression silently routing delta -> replace would pass every
+        # end-state assertion below unnoticed (both paths converge on the same pf-table
+        # membership).
+        delta_after = h.count_log_marker(adr40_vm, h.PFB_LOG, delta_marker)
+        replace_after = h.count_log_marker(adr40_vm, h.PFB_LOG, replace_marker)
+        assert delta_after > delta_before, (
+            f"ADR-40 P4 delta FAILED: expected a new {delta_marker!r} log line "
+            f"(before={delta_before}, after={delta_after}) — delta apply path not observed"
+        )
+        assert replace_after == replace_before, (
+            f"ADR-40 P4 delta FAILED: expected NO new {replace_marker!r} log line "
+            f"(before={replace_before}, after={replace_after}) — mode=delta silently used replace"
         )
 
         # End-state: exact table contents must equal the new feed (new_ip only; old_ip gone).
@@ -473,6 +505,12 @@ def test_adr40_delta_replace_mode(adr40_vm: h.SmokeVM) -> None:
     membership equals the canonical desired set — irrespective of whether the
     delta or replace path was taken.  Together they make the delta/replace
     equivalence provable from smoke alone.
+
+    issue #722: the mirror of the ``test_adr40_delta_apply_small_churn`` apply-path
+    assertion — same end-state-only gap, opposite direction. Asserts the REPLACE
+    marker fired for this table and the DELTA marker did NOT, proving branch coverage
+    both ways (a regression that silently routed replace -> delta would otherwise pass
+    every end-state assertion below unnoticed).
     """
     token = "p4repl"
     marker = h.hook_marker_path(token, "post")
@@ -507,6 +545,14 @@ def test_adr40_delta_replace_mode(adr40_vm: h.SmokeVM) -> None:
             f"before-state: pf table {ip_spec.alias} already has {new_ip}: {members_before}"
         )
 
+        # issue #722: capture the apply-path markers for THIS table right before the change
+        # reload (the settling reload above already force-replaces on first creation, so it
+        # must NOT be counted as evidence of this change's own decision).
+        delta_marker = f" ADR-40 apply [ {ip_spec.alias} ]: delta "
+        replace_marker = f" ADR-40 apply [ {ip_spec.alias} ]: replace"
+        delta_before = h.count_log_marker(adr40_vm, h.PFB_LOG, delta_marker)
+        replace_before = h.count_log_marker(adr40_vm, h.PFB_LOG, replace_marker)
+
         # Change the feed; invalidate the reuse cache.
         h.write_local_feed(adr40_vm, feed_file, f"{new_ip}\n")
         h.force_ip_refetch(adr40_vm, f"{ip_spec.header}_{ip_spec.family}")
@@ -520,6 +566,19 @@ def test_adr40_delta_replace_mode(adr40_vm: h.SmokeVM) -> None:
         assert ip_spec.alias in changed, (
             f"ADR-40 P4 replace-mode FAILED: alias {ip_spec.alias!r} absent from "
             f"PFB_CHANGED_IP_ALIASES.\nGot {changed!r}"
+        )
+
+        # issue #722: the apply-path oracle — REPLACE marker fired for this table, DELTA did
+        # NOT. Mirror of the delta-mode assertion above: proves branch coverage both ways.
+        delta_after = h.count_log_marker(adr40_vm, h.PFB_LOG, delta_marker)
+        replace_after = h.count_log_marker(adr40_vm, h.PFB_LOG, replace_marker)
+        assert replace_after > replace_before, (
+            f"ADR-40 P4 replace-mode FAILED: expected a new {replace_marker!r} log line "
+            f"(before={replace_before}, after={replace_after}) — replace apply path not observed"
+        )
+        assert delta_after == delta_before, (
+            f"ADR-40 P4 replace-mode FAILED: expected NO new {delta_marker!r} log line "
+            f"(before={delta_before}, after={delta_after}) — mode=replace silently used delta"
         )
 
         # End-state: exact table contents must equal the new feed (new_ip only; old_ip gone).
