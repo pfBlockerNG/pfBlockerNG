@@ -2349,6 +2349,33 @@ class TestEvaluateDomainGolden:
         dec = evaluate_domain("example.com", "example.com", "com", False, cfg, containers)
         assert dec.is_found is False
 
+    def test_tld_allow_empty_list_is_a_noop(self) -> None:
+        """issue #713: an empty ``python_tlds`` (TLD-Allow enabled but no TLDs
+        configured) must NOT block every domain. Pre-fix, ``tld not in []`` is
+        always True, so this arm fired for any query regardless of tld -- the
+        "empty TLD-Allow blocks all" bug, still reachable here even after the
+        config-load ``python_blacklist`` enable guard was fixed, because this
+        decision site only gates on ``cfg["python_tld"]``."""
+        cfg = _make_cfg(python_tld=True, python_tlds=[])
+        containers = _make_containers()
+        dec = evaluate_domain("example.com", "example.com", "com", False, cfg, containers)
+        assert dec.is_found is False
+
+    def test_tld_allow_branches_both_ways_on_a_populated_list(self) -> None:
+        """With a populated TLD-Allow list, a disallowed tld is still blocked
+        (the empty-list guard must not swallow the real case) and an allowed
+        tld still passes through."""
+        cfg = _make_cfg(python_tld=True, python_tlds=["com"])
+        containers = _make_containers()
+
+        dec_blocked = evaluate_domain("example.net", "example.net", "net", False, cfg, containers)
+        assert dec_blocked.is_found is True
+        assert dec_blocked.feed == "TLD_Allow"
+        assert dec_blocked.group == "DNSBL_TLD_Allow"
+
+        dec_allowed = evaluate_domain("example.com", "example.com", "com", False, cfg, containers)
+        assert dec_allowed.is_found is False
+
     def test_idn_block(self) -> None:
         cfg = _make_cfg(python_idn=True)
         containers = _make_containers()
