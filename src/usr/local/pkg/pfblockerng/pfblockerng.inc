@@ -4296,6 +4296,22 @@ function pfb_pfctl_error_message(string $table, string $op, int $rc, string $std
 }
 
 
+// Should a completed pfctl mutation op be logged as an attributed failure?  Pure predicate:
+// no side-effects, unit-testable without a live pfctl (sibling of pfb_pfctl_error_message()).
+// A `kill` that reports "Table does not exist" is the IDEMPOTENT SUCCESS case for kill (goal:
+// table gone — it already is): the unguarded kill sites (an enabled alias with no
+// URL/customlist; an empty aggregate union) call it every sync/cron tick, so treating an
+// absent-table kill as a failure would flood the log with a benign no-op forever.  Any OTHER
+// kill error (permissions, syntax), and every non-kill op with a non-zero rc / pfctl error,
+// stays a real failure.
+function pfb_pfctl_op_failed(string $op, int $rc, string $stderr): bool {
+	if ($op === 'kill' && stripos($stderr, 'Table does not exist') !== FALSE) {
+		return FALSE;
+	}
+	return $rc !== 0 || stripos($stderr, 'pfctl:') !== FALSE || stripos($stderr, 'Table does not exist') !== FALSE;
+}
+
+
 // Thin wrapper around `pfctl -t <table> -T <op>` for mutation ops (kill/replace/add/delete).
 // Owns the escapeshellarg() for the table; $args must already be fully escaped by
 // the caller (e.g. "-f " . escapeshellarg($path)).  $op is a fixed verb literal
@@ -4314,7 +4330,7 @@ function pfb_pfctl_table_op(string $table, string $op, string $args = '', string
 	$rc        = 0;
 	exec("{$pfctl_bin} -t {$table_esc} -T {$op}{$args_part} 2>&1", $out, $rc);
 	$stderr    = implode(' ', $out);
-	if ($rc !== 0 || stripos($stderr, 'pfctl:') !== FALSE || stripos($stderr, 'Table does not exist') !== FALSE) {
+	if (pfb_pfctl_op_failed($op, $rc, $stderr)) {
 		pfb_logger(pfb_pfctl_error_message($table, $op, $rc, $stderr) . "\n", 1);
 	}
 	return ['out' => $out, 'rc' => $rc];
