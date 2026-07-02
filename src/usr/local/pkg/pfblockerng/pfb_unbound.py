@@ -1752,6 +1752,10 @@ LEVEL_NON_RESTRICTIVE = "non_restrictive"
 # {Han, Hiragana, Katakana, Hangul, Bopomofo}.
 CONFUSABLE_SET = frozenset({"Latin", "Cyrillic", "Greek"})
 _HIGHLY_RESTRICTIVE_SET = frozenset({"Latin", "Han", "Hiragana", "Katakana", "Hangul", "Bopomofo"})
+# ADR-08 Section 2: digits + hyphen are the EURid-exempt, letter-less "Common-only mix"
+# -- legitimate and never touched in Confusable mode, even though they resolve to NO
+# letter-script (same as an empty/control-char/emoji label, which stays flagged; #720).
+_DIGIT_HYPHEN_CHARS = frozenset("0123456789-")
 _SEV_ORDER = {SEV_LEGIT: 0, SEV_FLAGGED: 1, SEV_SUSPICIOUS: 2, SEV_MALICIOUS: 3}
 _DECODE_ERRORS = (UnicodeDecodeError, UnicodeError, ValueError)
 # unicodedata.name() leading token -> script; CJK ideographs name themselves "CJK".
@@ -1806,7 +1810,11 @@ def severity_of(text: str) -> str:
     if len(scripts & CONFUSABLE_SET) >= 2:
         return SEV_MALICIOUS
     if not scripts:
-        return SEV_FLAGGED
+        # A digits/hyphen-only label is the ADR-08 Section 2 Common-only carve-out --
+        # legit, not flagged. Every OTHER scriptless label (empty, control-char, emoji,
+        # combining-marks-alone) has no such contract exemption and stays flagged (the
+        # decision-table's borderline call: "no letter-script -> flagged, NOT legit").
+        return SEV_LEGIT if text and set(text) <= _DIGIT_HYPHEN_CHARS else SEV_FLAGGED
     if restriction_level(scripts) in (LEVEL_SINGLE, LEVEL_HIGHLY_RESTRICTIVE):
         return SEV_LEGIT
     return SEV_SUSPICIOUS
