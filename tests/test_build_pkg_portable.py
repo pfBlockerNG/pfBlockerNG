@@ -682,6 +682,20 @@ def test_makefile_apply_mods_substitution(val: str, mods: str, expected: str) ->
     assert bpp.Makefile._apply_mods(val, mods) == expected
 
 
+@pytest.mark.parametrize(
+    "mods",
+    [
+        "S/a\\/b/c/",  # escaped delimiter in the body — the old/new split can't interpret it
+        "S/foo",  # unterminated group (no second delimiter)
+    ],
+)
+def test_makefile_apply_mods_rejects_uninterpretable_s_body(mods: str) -> None:
+    # Both shapes previously no-opped SILENTLY (returned the input unchanged) —
+    # worse than a loud failure for a substitution the recipe relies on.
+    with pytest.raises(bpp.BuildError, match=":S modifier"):
+        bpp.Makefile._apply_mods("xxa/bxx", mods)
+
+
 # --------------------------------------------------------------------------- #
 # Nightly overrides (ADR-18 --channel nightly): --pkgversion / --annotate.
 # The pair below is the branch contrast — OFF (release build, default flags) vs

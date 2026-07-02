@@ -218,7 +218,9 @@ class Makefile:
     def _split_mods(mods: str) -> list[str]:
         # Split a :modifier chain on ':', keeping an :S<delim>old<delim>new<delim>[flags]
         # group intact even when its body contains ':' (e.g. a URL) — a blind
-        # split(':') would mangle it silently. Backslash escapes a delimiter.
+        # split(':') would mangle it silently. Backslash escapes protect the
+        # group-boundary scan only; escape CONTENT is rejected in _apply_mods
+        # (its old/new split does not interpret escapes — fail loud, not wrong).
         out: list[str] = []
         i = 0
         n = len(mods)
@@ -265,23 +267,32 @@ class Makefile:
                 # :S<delim>old<delim>new<delim>[1g]  (make string substitution). Supports
                 # a leading ^ / trailing $ anchor in <old> and the g (global) flag.
                 delim = mod[1]
-                parts = mod[2:].split(delim)
-                if len(parts) >= 2:
-                    old, new = parts[0], parts[1]
-                    flags = parts[2] if len(parts) > 2 else ""
-                    anchor_start, anchor_end = old.startswith("^"), old.endswith("$")
-                    pat = old[1:] if anchor_start else old
-                    pat = pat[:-1] if anchor_end else pat
-                    if not pat:
-                        pass
-                    elif "g" in flags and not (anchor_start or anchor_end):
-                        val = val.replace(pat, new)
-                    elif anchor_start and val.startswith(pat):
-                        val = new + val[len(pat) :]
-                    elif anchor_end and val.endswith(pat):
-                        val = val[: -len(pat)] + new
-                    elif not (anchor_start or anchor_end):
-                        val = val.replace(pat, new, 1)
+                body = mod[2:]
+                # The old/new split below does not interpret backslash escapes —
+                # an escaped delimiter would silently misparse; fail loud instead.
+                if "\\" in body:
+                    raise BuildError(
+                        f"unsupported escape in :S modifier (the parser does not interpret "
+                        f"backslashes; teach build-pkg-portable.py): {mod!r}"
+                    )
+                parts = body.split(delim)
+                if len(parts) < 2:
+                    raise BuildError(f"malformed :S modifier (unterminated?): {mod!r}")
+                old, new = parts[0], parts[1]
+                flags = parts[2] if len(parts) > 2 else ""
+                anchor_start, anchor_end = old.startswith("^"), old.endswith("$")
+                pat = old[1:] if anchor_start else old
+                pat = pat[:-1] if anchor_end else pat
+                if not pat:
+                    pass
+                elif "g" in flags and not (anchor_start or anchor_end):
+                    val = val.replace(pat, new)
+                elif anchor_start and val.startswith(pat):
+                    val = new + val[len(pat) :]
+                elif anchor_end and val.endswith(pat):
+                    val = val[: -len(pat)] + new
+                elif not (anchor_start or anchor_end):
+                    val = val.replace(pat, new, 1)
         return val
 
     def get(self, name: str, default: str = "") -> str:
