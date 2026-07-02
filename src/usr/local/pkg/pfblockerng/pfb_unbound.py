@@ -971,7 +971,9 @@ def init_standard(id: int, env: module_env) -> bool:
     # here too so a hand-edited/corrupted ini that drops the keys can't KeyError on
     # the unconditional reads (TLD-Allow check + manifest cfg). ``python_tlds`` is a
     # list (the ini load below populates it via ``parse_python_tlds()``, issue #713);
-    # the consumer ``tld not in cfg["python_tlds"]`` treats the empty list correctly.
+    # evaluate_domain's TLD-Allow arm requires a non-empty ``cfg["python_tlds"]`` before
+    # testing ``tld not in cfg["python_tlds"]``, so the empty-list default here is a
+    # no-op rather than a block-everything trap.
     pfb["python_tld"] = False
     pfb["python_tlds"] = []
     pfb["python_tld_seg"] = 0
@@ -5589,6 +5591,7 @@ def evaluate_domain(
     if not is_found:
         if (
             cfg["python_tld"]
+            and cfg["python_tlds"]
             and tld != ""
             and q_name not in (cfg["dnsbl_ipv4"], cfg["dnsbl_ipv6"])
             and tld not in cfg["python_tlds"]
