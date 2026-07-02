@@ -526,6 +526,173 @@ def test_dnsbl_resolve_block_unlock_relock_lifecycle(
         )
 
 
+# The ADR-10 sentinel PHP flips to wake the reload-watcher (pfblockerng.inc:6001);
+# fixed host path (dnsbldir='/var/unbound').
+_ADR10_SENTINEL = "/var/unbound/pfb_py_reload"
+# The daemon-suppression marker pfb_reload_unbound() touches at the top of the fast
+# path -- $pfb['dnsbl_file'] . '.sync' (pfblockerng.inc:153 dnsbl_file + inc:~7466).
+_ADR10_SYNC_MARKER = "/var/unbound/pfb_dnsbl.sync"
+
+
+@pytest.mark.timeout(180)  # ADR-10: this forces the restart FALLBACK (a full Unbound restart).
+def test_dnsbl_sentinel_flip_failure_clears_sync_marker(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-10 fallback: a failed sentinel flip must NOT leak the '.sync' daemon-suppression
+    marker (issue #713 bug 3).
+
+    ``pfb_reload_unbound()``'s zero-downtime fast path touches ``<dnsbl_file>.sync`` (to
+    suppress the DNSBL Queries daemon's control-socket use during the swap) BEFORE
+    attempting the sentinel flip. On a successful swap it clears that marker itself before
+    returning -- the #51 alerts-page caller (``pfblockerng_alerts.php``) has NO later
+    ``clear_work_files`` call (unlike the CLI ``update``/``updatednsbl`` verbs, whose
+    ``pfb_update_unbound()`` always clears it at the end regardless of which branch ran),
+    so the marker must be cleared on every exit from the fast path, not just the happy
+    one. Before this fix, BOTH fallback branches ("sentinel flip failed" and "swap not
+    confirmed in time") fell through to the restart WITHOUT clearing it, leaking a
+    suppressed DNSBL Queries daemon until the next full update.
+
+    This pins the "sentinel flip failed" branch specifically: it fails SYNCHRONOUSLY
+    (no 30s wait) and never touches the DNSBL manifest, so it is safe to induce on the
+    shared session VM. The ADR-10 sentinel (``/var/unbound/pfb_py_reload``) is replaced
+    with a DIRECTORY, so ``pfb_unbound_py_atomic_write()``'s publishing ``rename()`` fails
+    deterministically (EISDIR) -- the manifest itself is untouched, so the restart's
+    cold-start rebuild that follows is unaffected. The #51 sequence is replayed via
+    ``pfSsh.php`` exactly as ``pfblockerng_alerts.php``'s ``dnsbl_remove`` handler does
+    (mirroring ``helpers.dnsbl_alert_lock_toggle``, minus its trailing swap-applied wait --
+    no swap occurs on this branch).
+
+    Given a DNSBL-listed domain already blocked (VIP) by the CaseContext setup,
+    When the ADR-10 sentinel is corrupted and a #51 temporary Unlock fires -- taking the
+      fast path, which fails to flip and falls back to a full Unbound restart --
+    Then the "sentinel flip failed" fallback log line appears (proving the branch under
+      test actually ran), Unbound genuinely restarted (pid changed), and the '.sync'
+      marker is ABSENT afterward -- the regression this fix guards.
+
+    Teardown restores the sentinel to its ORIGINAL content (captured before corruption --
+    never a fresh '1': the in-module watcher tracks a monotonically non-decreasing
+    generation in memory, so resetting to a lower/absent value would silently desync
+    every LATER fast-path swap in this session VM) and PROVES the fast path still works
+    by running one more ordinary #51 action and relying on
+    ``dnsbl_alert_lock_toggle``'s own swap-applied wait (raises loudly on timeout) -- so a
+    bad restore fails HERE, not as a mysterious later test failure.
+    """
+    domain = h.unique_domain("sentinelfail")
+    feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_sentinelfail.txt", f"{domain}\n")
+    spec = h.DnsblCase(
+        aliasname="smokesentinelfail", feed_url=feed_url, header="smokesentinelfail", mode=h.DnsblMode.VIP
+    )
+    with h.CaseContext(deployed_vm, spec):
+        # Given: the domain is already VIP-blocked by CaseContext's own (healthy) reload.
+        blocked_before = h.dns_probe(deployed_vm, domain, "A")
+        assert h.is_vip(blocked_before), (
+            f"{domain} expected VIP block before the sentinel corruption, got {blocked_before}"
+        )
+
+        pid_before = h.unbound_pid(deployed_vm)
+        fail_log_before = h.count_log_marker(deployed_vm, h.PFB_LOG, "ADR-10: sentinel flip failed")
+        # Pre-condition, not the regression under test: a marker already present here
+        # would mean an EARLIER case/module leaked it, not this one.
+        assert not h.hook_marker_exists(deployed_vm, _ADR10_SYNC_MARKER), (
+            f"'.sync' marker unexpectedly present BEFORE this test runs: {_ADR10_SYNC_MARKER} "
+            f"-- an earlier case/module leaked it (not this test's regression)"
+        )
+
+        # Capture the sentinel's PRIOR content (for restoration), then corrupt it.
+        capture = h.php_eval(
+            deployed_vm,
+            f"$s = {h._php_str(_ADR10_SENTINEL)};\n"
+            "$prior = @file_get_contents($s);\n"
+            f"echo ($prior === FALSE) ? 'ABSENT' : "
+            f"({h._php_str(h._CFG_VAL_OPEN)} . $prior . {h._php_str(h._CFG_VAL_CLOSE)});\n"
+            "@unlink($s);\n"
+            "@mkdir($s, 0755);\n"
+            "@chown($s, 'unbound'); @chgrp($s, 'unbound');\n"
+            "echo '|CORRUPTED';",
+            timeout=30.0,
+        )
+        assert "CORRUPTED" in capture.stdout, (
+            f"failed to corrupt the ADR-10 sentinel: rc={capture.returncode} {capture.stderr!r} {capture.stdout!r}"
+        )
+        prior_start = capture.stdout.find(h._CFG_VAL_OPEN)
+        prior_end = capture.stdout.find(h._CFG_VAL_CLOSE)
+        prior_sentinel_content = None
+        if prior_start != -1 and prior_end != -1:
+            prior_sentinel_content = capture.stdout[prior_start + len(h._CFG_VAL_OPEN) : prior_end]
+
+        try:
+            # When: replay the #51 alerts-page temporary-Unlock sequence. The corrupted
+            # sentinel makes pfb_unbound_py_flip_sentinel() fail, so pfb_reload_unbound()
+            # falls back to pfb_stop_start_unbound() -- a REAL restart with the
+            # UNCORRUPTED, freshly-published manifest (only the sentinel was touched), so
+            # the restart's cold-start rebuild is unaffected.
+            snippet = (
+                "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
+                "pfb_global();\n"
+                "$ua = pfb_dnsbl_unlock_action('unlock');\n"
+                "$u = pfb_unlock('read', 'dnsbl', '', '', '');\n"
+                f"pfb_unlock($ua['mode'], 'dnsbl', {h._php_str(domain)}, 'python', $u);\n"
+                "pfb_unbound_python_sources_unlock();\n"
+                f"$newly_blocked = ($ua['mode'] === 'lock') ? array({h._php_str(domain)}) : array();\n"
+                "pfb_reload_unbound('enabled', FALSE, FALSE, TRUE, $newly_blocked);\n"
+                "echo 'OK';"
+            )
+            result = h.php_eval(deployed_vm, snippet, timeout=150.0)
+            assert result.returncode == 0 and "OK" in result.stdout, (
+                f"#51 unlock (sentinel-flip-failure replay) failed: rc={result.returncode} "
+                f"{result.stderr!r} {result.stdout!r}"
+            )
+
+            # Then: Unbound is back up (the fallback restarted it) before any further check.
+            h.wait_unbound_ready(deployed_vm)
+
+            # Then: the fallback branch under test actually ran (not a false pass from a
+            # differently-shaped failure) -- the "sentinel flip failed" line is NEW.
+            fail_log_after = h.count_log_marker(deployed_vm, h.PFB_LOG, "ADR-10: sentinel flip failed")
+            assert fail_log_after > fail_log_before, (
+                f"expected a NEW 'ADR-10: sentinel flip failed' line in {h.PFB_LOG} "
+                f"(before={fail_log_before}, after={fail_log_after}) -- the sentinel corruption "
+                f"did not drive pfb_reload_unbound() into the branch under test"
+            )
+
+            # Then: it genuinely fell back to a RESTART (pid changed) -- the fallback this
+            # fix's comment describes, not some other no-op path.
+            pid_after = h.unbound_pid(deployed_vm)
+            assert pid_after != pid_before, (
+                f"expected the sentinel-flip-failure fallback to RESTART Unbound, but pid was "
+                f"unchanged ({pid_before}) -- the restart fallback did not run"
+            )
+
+            # Then: the '.sync' daemon-suppression marker touched at the top of the fast
+            # path must NOT be left behind -- this IS the regression (issue #713 bug 3).
+            leaked = h.hook_marker_exists(deployed_vm, _ADR10_SYNC_MARKER)
+            assert not leaked, (
+                f"'.sync' marker leaked after the sentinel-flip-failure fallback: {_ADR10_SYNC_MARKER} "
+                f"-- the DNSBL Queries daemon stays suppressed until the next full update"
+            )
+        finally:
+            # Restore the sentinel to its ORIGINAL content -- never a fresh value (see
+            # docstring: a lower/absent generation would desync the in-memory watcher).
+            restore_snippet = f"$s = {h._php_str(_ADR10_SENTINEL)};\nif (is_dir($s)) {{ @rmdir($s); }}\n"
+            if prior_sentinel_content is not None:
+                restore_snippet += (
+                    f"if (!file_exists($s)) {{ file_put_contents($s, {h._php_str(prior_sentinel_content)}); "
+                    "@chown($s, 'unbound'); @chgrp($s, 'unbound'); }\n"
+                )
+            restore_snippet += "echo (is_dir($s) ? 'STILL_DIR' : 'RESTORED');"
+            restore = h.php_eval(deployed_vm, restore_snippet, timeout=30.0)
+            assert "RESTORED" in restore.stdout, (
+                f"failed to restore the ADR-10 sentinel after corrupting it: "
+                f"rc={restore.returncode} {restore.stderr!r} {restore.stdout!r} -- "
+                f"the session VM's ADR-10 fast path is left broken for later tests"
+            )
+
+            # Prove the fast path genuinely still works post-restore: one more ordinary
+            # #51 action (re-Lock; the domain is presently unlocked) must take the swap.
+            # dnsbl_alert_lock_toggle raises loudly on a swap-applied timeout, so a bad
+            # restore (a desynced generation counter) surfaces HERE, not as a later
+            # test's unrelated-looking failure.
+            h.dnsbl_alert_lock_toggle(deployed_vm, domain, "lock")
+
+
 @pytest.mark.timeout(120)  # ADR-10: multiple wait-for-apply round-trips > the 30s smoke cap.
 def test_dnsbl_temp_unlock_cleared_by_force_update(
     deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
