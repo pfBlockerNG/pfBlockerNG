@@ -81,6 +81,17 @@ def test_ver_key_orders_prerelease_stages_alpha_beta_rc_then_release() -> None:
     assert gl.ver_key("4.0.0.alpha.1") < gl.ver_key("4.0.0.alpha.2")
 
 
+def test_ver_key_preserves_numeric_prefix_ordering() -> None:
+    """A shorter all-numeric version must sort BELOW its longer prefix-extension
+    (build_edition_sections sorts rows by ver_key(pfsense_version), a bare
+    edition version like '2.8' vs '2.8.1'). A flat [*base, stage_rank, stage_num]
+    key breaks this -- see pfb_pkg.pkg_version_sort_key's docstring for why the
+    nested (base, stage_rank, stage_num) tuple fixes it.
+    """
+    assert gl.ver_key("2.8") < gl.ver_key("2.8.1")
+    assert gl.ver_key("4.0.0") < gl.ver_key("4.0.0.1")
+
+
 def test_ver_key_full_multi_version_sort_matches_pkg_order() -> None:
     """A shuffled multi-version list sorts into the exact pkg-defined order."""
     shuffled = [

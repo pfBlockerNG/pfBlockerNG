@@ -70,7 +70,7 @@ def human_size(n: int) -> str:
     return f"{f:.1f} GiB"
 
 
-def ver_key(v: str) -> list[int]:
+def ver_key(v: str) -> tuple[list[int], int, int]:
     """The newest-build sort key — see ``pfb_pkg.pkg_version_sort_key``.
 
     Must order the alpha/beta/rc prerelease stages correctly (not just fold them
