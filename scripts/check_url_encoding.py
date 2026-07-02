@@ -26,10 +26,15 @@ HEURISTIC (deliberately low false-positive)
   ``curl``, ``wget`` or ``fetch``. Backslash-continued shell lines are joined into
   one logical line first, so a URL sitting on a continuation is still seen.
 * Within such a line we inspect URL-looking TOKENS only — a token containing
-  ``://``, or a quoted token that begins with ``http``/``https``, or a token that
-  contains a ``?`` query separator. A violation is a query parameter assigned a
-  shell variable inside that token: ``[?&]<key>=$`` (e.g. ``?ip=$VAR`` /
-  ``&k=${VAR}``), including ``$`` immediately after ``?``/``&``/``=``.
+  ``://``, a quoted token that begins with ``http``/``https``/``?``, or a token
+  that STARTS with a shell variable (``$``) and also contains a ``?`` (the
+  variable-BASE-with-query shape, e.g. ``$BASE/cb?ip=$VAR``). A bare ``?``
+  ANYWHERE in the token is deliberately NOT enough — that over-wide check used
+  to flag curl OPTION VALUES that merely contain ``?...=$`` (e.g.
+  ``--data-urlencode "path=/a?b=$c"``), which are not URLs at all. A violation
+  is a query parameter assigned a shell variable inside a URL-looking token:
+  ``[?&]<key>=$`` (e.g. ``?ip=$VAR`` / ``&k=${VAR}``), including ``$``
+  immediately after ``?``/``&``/``=``.
 * The CORRECT form ``--data-urlencode "k=$VAR"`` is NOT flagged: that value rides
   its own flag token, which has no ``://`` and no leading ``?``/``&`` query
   separator, so it never qualifies as a URL token. (Pinned by a test.)
@@ -91,17 +96,22 @@ def _looks_like_url_token(token: str) -> bool:
 
     Confines the naked-variable match to URL-bearing tokens, so option values
     such as ``--data-urlencode "k=$V"`` (a separate, non-URL token) are excluded.
+    A BARE ``"?" in stripped`` check is too wide: it also flags curl OPTION
+    VALUES that merely contain ``?...=$`` — e.g. ``--data-urlencode "path=/a?b=$c"``,
+    ``-F "note=a?x=$B"``, ``-H "X: a?b=$c"`` — none of which are URLs. A token
+    is URL-bearing only if it contains ``://``, starts with ``http``/``https``/
+    ``?``, OR starts with a shell variable (``$``) AND contains a ``?`` — the
+    last clause is the variable-BASE-with-query shape this checker exists to
+    guard (``$BASE/cb?ip=$VAR``, ``${BASE}/...?...``), which a leading-token-only
+    check would miss, while still excluding an option value that starts with a
+    literal key name.
     """
     stripped = token.strip("\"'")
     if "://" in stripped:
         return True
-    if stripped.startswith(("http", "https")):
+    if stripped.startswith(("http", "https", "?")):
         return True
-    # A query string anywhere in the token — not just at the start — still marks
-    # it URL-bearing: a variable BASE with the `?` in the middle (`$BASE/cb?ip=$VAR`)
-    # is the exact webhook shape this checker exists to guard, and a leading-only
-    # check missed it entirely.
-    return "?" in stripped
+    return stripped.startswith("$") and "?" in stripped
 
 
 def _split_tokens(line: str) -> list[str]:
