@@ -57,6 +57,26 @@ SHIM
     chmod +x "$1/awk"
   }
 
+  # Like setup_awk_shim but fails ONLY the dedup pass (awk program text holds
+  # FNR==NR) under AWK_MODE=error. process255()/reputation_max() compute their
+  # /24 offender set with an EARLIER, unrelated awk; a blanket shim would fail
+  # that first and no-op the whole function, so the test would prove nothing.
+  setup_awk_shim_dedup() {
+    mkdir -p "$1"
+    cat > "$1/awk" <<SHIM
+#!/bin/sh
+for _a in "\$@"; do
+	case "\${_a}" in *FNR==NR*) _dedup=1 ;; esac
+done
+if [ "\${AWK_MODE:-real}" = 'error' ] && [ "\${_dedup:-0}" = '1' ]; then
+	echo 'awk: simulated dedup failure' >&2
+	exit 2
+fi
+exec "${SHELLSPEC_REAL_AWK}" "\$@"
+SHIM
+    chmod +x "$1/awk"
+  }
+
   Describe 'suppress() -- Class A worst case (direct redirect into the LIVE published list)'
     setup() {
       work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pfbsupp.XXXXXX")"
@@ -259,6 +279,89 @@ SHIM
       When call remove
       The status should be success
       The contents of file "${masterfile}" should equal 'OtherList_v4 203.0.113.9'
+    End
+  End
+
+  Describe 'process255() -- Class B (dedup awk redirected straight into the LIVE deny list)'
+    setup() {
+      work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pfbp255.XXXXXX")"
+      alias='P255List_v4'
+      pfbdeny="${work}/deny/"; mkdir -p "${pfbdeny}"
+      tempfile="${work}/t1"; tempfile2="${work}/t2"; dedupfile="${work}/t3"
+      # >253 hosts inside 10.0.0.0/24 trips process255()'s collapse path; a
+      # PRIOR-MARKER row (outside that /24) stands in for unrelated live content.
+      { i=1; while [ "${i}" -le 254 ]; do echo "10.0.0.${i}"; i=$((i + 1)); done; echo 'PRIOR-MARKER'; } > "${pfbdeny}${alias}.txt"
+      awkshim="${work}/bin"
+      setup_awk_shim_dedup "${awkshim}"
+    }
+    cleanup() { rm -rf "${work}"; }
+    Before 'setup'
+    After 'cleanup'
+
+    It 'keeps the live deny list UNCHANGED when the dedup awk errors -- pre-fix the direct redirect truncated it before the awk even ran, losing every prior host'
+      AWK_MODE='error'; export AWK_MODE
+      # Given: the deny list holds real prior hosts.
+      The contents of file "${pfbdeny}${alias}.txt" should include '10.0.0.5'
+      The contents of file "${pfbdeny}${alias}.txt" should include 'PRIOR-MARKER'
+      PATH="${awkshim}:${PATH}"
+      When call process255
+      The status should be success
+      # Then: the prior hosts survive the failed collapse (only the /24 summary is appended).
+      The contents of file "${pfbdeny}${alias}.txt" should include '10.0.0.5'
+      The contents of file "${pfbdeny}${alias}.txt" should include 'PRIOR-MARKER'
+    End
+
+    It 'collapses the /24 (drops the individual hosts, appends the summary) on awk success -- proves the error branch is a real fail-safe, not an always-preserve no-op'
+      AWK_MODE='real'; export AWK_MODE
+      PATH="${awkshim}:${PATH}"
+      When call process255
+      The status should be success
+      The contents of file "${pfbdeny}${alias}.txt" should not include '10.0.0.5'
+      The contents of file "${pfbdeny}${alias}.txt" should include '10.0.0.0/24'
+      The contents of file "${pfbdeny}${alias}.txt" should include 'PRIOR-MARKER'
+    End
+  End
+
+  Describe 'reputation_max() -- Class B (ccblack="block" dedup awk redirected into the LIVE deny list)'
+    setup() {
+      work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pfbrmax.XXXXXX")"
+      alias='RMaxList_v4'
+      pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"; mkdir -p "${pfbdeny}" "${pfbmatch}"
+      tempfile="${work}/r1"; tempfile2="${work}/r2"; dupfile="${work}/r3"
+      matchfile="${work}/r4"; tempmatchfile="${work}/r5"
+      : > "${dupfile}"; : > "${matchfile}"; : > "${tempmatchfile}"
+      max=253; cc='ZZ,'; ccwhite='block'; ccblack='block'; dedup='off'; count=0; countr=0
+      # An empty GeoIP answer routes every repeat offender down the block/dupfile
+      # path (the unknown-country branch), reaching the ccblack='block' dedup awk.
+      pathgeoip="${work}/mmdblookup"; pathgeoipdat="${work}/geo.mmdb"; : > "${pathgeoipdat}"
+      make_geoip_stub "${pathgeoip}" ''
+      { i=1; while [ "${i}" -le 254 ]; do echo "10.0.0.${i}"; i=$((i + 1)); done; echo 'PRIOR-MARKER'; } > "${pfbdeny}${alias}.txt"
+      awkshim="${work}/bin"
+      setup_awk_shim_dedup "${awkshim}"
+    }
+    cleanup() { rm -rf "${work}"; }
+    Before 'setup'
+    After 'cleanup'
+
+    It 'keeps the live deny list UNCHANGED when the ccblack="block" dedup awk errors -- pre-fix the direct redirect truncated it, losing every prior host'
+      AWK_MODE='error'; export AWK_MODE
+      The contents of file "${pfbdeny}${alias}.txt" should include '10.0.0.5'
+      The contents of file "${pfbdeny}${alias}.txt" should include 'PRIOR-MARKER'
+      PATH="${awkshim}:${PATH}"
+      When call reputation_max
+      The status should be success
+      The contents of file "${pfbdeny}${alias}.txt" should include '10.0.0.5'
+      The contents of file "${pfbdeny}${alias}.txt" should include 'PRIOR-MARKER'
+    End
+
+    It 'removes the country-classified hosts and appends the /24 summary on awk success -- proves the error branch is a real fail-safe, not an always-preserve no-op'
+      AWK_MODE='real'; export AWK_MODE
+      PATH="${awkshim}:${PATH}"
+      When call reputation_max
+      The status should be success
+      The contents of file "${pfbdeny}${alias}.txt" should not include '10.0.0.5'
+      The contents of file "${pfbdeny}${alias}.txt" should include '10.0.0.0/24'
+      The contents of file "${pfbdeny}${alias}.txt" should include 'PRIOR-MARKER'
     End
   End
 End
