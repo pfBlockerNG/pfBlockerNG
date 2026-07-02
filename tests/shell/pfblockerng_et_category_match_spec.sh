@@ -61,7 +61,7 @@ Describe 'processet() ET category selection (issue #713 bug 6)'
     It 'matches only the exact selected category (ET_P2Pcnc), not the substring sibling ET_P2P'
       etblock='x'
       etmatch='ET_P2Pcnc'
-      When call processet
+      When call silently processet
       The status should be success
       The path "${pfbmatch}/ETMatch.txt" should be file
       The contents of file "${pfbmatch}/ETMatch.txt" should include '10.0.0.31'
@@ -77,7 +77,7 @@ Describe 'processet() ET category selection (issue #713 bug 6)'
     It 'blocks nothing and writes no ETMatch.txt when neither is selected'
       etblock='x'
       etmatch='x'
-      When call processet
+      When call silently processet
       The status should be success
       The path "${pfbmatch}/ETMatch.txt" should not be exist
       The contents of file "${pfborig}${alias}.orig" should not include '10.0.0.15'
