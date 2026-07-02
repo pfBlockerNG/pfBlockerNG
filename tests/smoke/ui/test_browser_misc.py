@@ -72,6 +72,9 @@ SYNC_PAGE = "/pfblockerng/pfblockerng_sync.php"
 # Split into ?type sub-tabs (ADR-16 Phase 3); the IPv4 tab carries the bulk of the
 # pre-defined feeds (and so any Alternate-URL radios), so the alt-URL flow targets it.
 FEEDS_PAGE = "/pfblockerng/pfblockerng_feeds.php?type=ipv4"
+# The IP page includes pfBlockerNG.js, whose window.onload runs the
+# location.hash scroll-to-anchor + CustomList panel toggle (issue #714).
+IP_PAGE = "/pfblockerng/pfblockerng_ip.php"
 
 # A short, explicit timeout (ms) for the JS-driven DOM transitions: the handlers
 # fire synchronously on load/click, so this is a flake ceiling, not a wait knob.
@@ -396,3 +399,36 @@ def test_update_runnow_does_not_scroll_the_page(
 
     offset = page.evaluate("window.pageYOffset")
     assert offset == 0, f"Run Now must not auto-scroll the page; expected top (0), got pageYOffset={offset}"
+
+
+def test_onload_survives_hash_with_no_matching_element(
+    browser_page: Page,
+    webui: WebUI,
+) -> None:
+    """A URL hash naming no element must not crash pfBlockerNG.js's window.onload (#714).
+
+    ``window.onload`` (pfBlockerNG.js:24-33) is wired to scroll to, and expand the
+    CustomList panel for, a bookmarked ``location.hash`` anchor (used by the widget's
+    Suppression/Whitelist links). It called ``document.getElementById(elId)
+    .scrollIntoView(true)`` unconditionally -- a hash the page does not recognise (a
+    stale bookmark, a typo, user-supplied) makes ``getElementById`` return ``null``,
+    so ``null.scrollIntoView()`` threw and aborted onload before the CustomList panel
+    toggle ran.
+
+    Scenario:
+      Given the IP page (which includes pfBlockerNG.js),
+      When it is loaded with a hash that names no element on the page,
+      Then onload completes without an uncaught page error, and the page still
+           renders (the login form is absent, proving a real authenticated render,
+           not a blank/errored page).
+    """
+    page = browser_page
+    errors: list[str] = []
+    page.on("pageerror", lambda exc: errors.append(str(exc)))
+
+    _open(page, webui, f"{IP_PAGE}#pfb_nonexistent_anchor_714")
+
+    assert errors == [], f"window.onload threw on an unmatched hash: {errors!r}"
+    # Same marker Tier A (test_render_smoke.py PAGE_TABLE) asserts for this page --
+    # proves a real authenticated render, not a blank/errored page.
+    assert "IP Configuration" in page.content(), "IP page did not render its 'IP Configuration' section after onload"

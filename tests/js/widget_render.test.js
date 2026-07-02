@@ -9,7 +9,50 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { pfBlockerNG_escapeHtml, pfBlockerNG_buildWidgetRow } = require('../../src/usr/local/www/widgets/javascript/pfblockerng.js');
+const {
+	pfBlockerNG_escapeHtml,
+	pfBlockerNG_buildWidgetRow,
+	pfBlockerNG_fetch_new_widget_callback,
+} = require('../../src/usr/local/www/widgets/javascript/pfblockerng.js');
+
+// ── jQuery test double for pfBlockerNG_fetch_new_widget_callback ──────────────
+//
+// A minimal chainable stub: $(sel).attr(name, val).prop(name, val) records the
+// last class/title set for the given selector. Installed on global.$/jQuery
+// (the widget JS calls the bare `$` form) only for the lifetime of a test, and
+// removed afterwards so it cannot leak into a sibling test.
+function installJQueryStub() {
+	var state = {};
+	function stub(sel) {
+		if (!state[sel]) {
+			state[sel] = { class: null, title: null };
+		}
+		var record = state[sel];
+		var chain = {
+			attr: function(name, val) {
+				if (name === 'class') {
+					record.class = val;
+				}
+				return chain;
+			},
+			prop: function(name, val) {
+				if (name === 'title') {
+					record.title = val;
+				}
+				return chain;
+			},
+		};
+		return chain;
+	}
+	global.$ = stub;
+	global.jQuery = stub;
+	return state;
+}
+
+function uninstallJQueryStub() {
+	delete global.$;
+	delete global.jQuery;
+}
 
 // ── pfBlockerNG_escapeHtml ────────────────────────────────────────────────────
 
@@ -174,4 +217,49 @@ test('pfBlockerNG_buildWidgetRow: rows join into well-formed markup with no stra
 	assert.ok(!assembled.includes(','), 'no stray comma between rows');
 	assert.equal(assembled.split('<tr>').length - 1, 2, 'one opening <tr> per row');
 	assert.equal(assembled.split('</tr>').length - 1, 2, 'one closing </tr> per row');
+});
+
+// ── pfBlockerNG_fetch_new_widget_callback: status-icon anchor class ───────────
+//
+// Scenario: the status icon must stay pollable across repeated AJAX refreshes.
+//
+// Given the initial server render anchors the status <i> with the class
+//   "PFBSTATUS <icon-classes>" (widget PHP php:906/912), and the AJAX payload
+//   sends only the icon classes (no anchor) as row_split[1],
+// When pfBlockerNG_fetch_new_widget_callback applies the payload,
+// Then the element's class is set back to "PFBSTATUS <icon-classes>" (anchor
+//   preserved) so a LATER poll's $('.PFBSTATUS') selector still matches it
+//   (issue #714: overwriting the whole class attribute with just the icon
+//   classes drops the anchor and freezes the icon after the first poll).
+
+test('pfBlockerNG_fetch_new_widget_callback: PFBSTATUS payload preserves the PFBSTATUS anchor class', () => {
+	var state = installJQueryStub();
+	try {
+		pfBlockerNG_fetch_new_widget_callback('PFBSTATUS||fa-solid fa-check-circle text-success||pfBlockerNG is Active.\n');
+
+		assert.equal(
+			state['.PFBSTATUS'].class,
+			'PFBSTATUS fa-solid fa-check-circle text-success',
+			'the PFBSTATUS anchor class must survive the AJAX class update',
+		);
+		assert.equal(state['.PFBSTATUS'].title, 'pfBlockerNG is Active.');
+	} finally {
+		uninstallJQueryStub();
+	}
+});
+
+test('pfBlockerNG_fetch_new_widget_callback: DNSBLSTATUS payload preserves the DNSBLSTATUS anchor class', () => {
+	var state = installJQueryStub();
+	try {
+		pfBlockerNG_fetch_new_widget_callback('DNSBLSTATUS||fa-solid fa-exclamation-circle text-warning||DNSBL is Inactive.\n');
+
+		assert.equal(
+			state['.DNSBLSTATUS'].class,
+			'DNSBLSTATUS fa-solid fa-exclamation-circle text-warning',
+			'the DNSBLSTATUS anchor class must survive the AJAX class update',
+		);
+		assert.equal(state['.DNSBLSTATUS'].title, 'DNSBL is Inactive.');
+	} finally {
+		uninstallJQueryStub();
+	}
 });

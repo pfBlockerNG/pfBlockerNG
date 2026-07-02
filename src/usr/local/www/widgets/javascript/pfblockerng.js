@@ -85,9 +85,13 @@ function pfBlockerNG_fetch_new_widget_callback(callback_data) {
 					row_split[1] = row_split[1].replaceAll('_BR_', '\n');
 					$('.pfb_title_' + row_split[0]).attr('title', row_split[1]);
 				} else if (row_split[0] == 'PFBSTATUS') {
-					$('.PFBSTATUS').attr('class', row_split[1]).prop('title', row_split[2]);
+					// The anchor class (PFBSTATUS) must be re-applied, not just the icon
+					// class: the AJAX payload carries only the icon class, and overwriting
+					// the whole class attribute would drop the anchor so the NEXT poll's
+					// $('.PFBSTATUS') selector matches nothing (issue #714).
+					$('.PFBSTATUS').attr('class', 'PFBSTATUS ' + row_split[1]).prop('title', row_split[2]);
 				} else if (row_split[0] == 'DNSBLSTATUS') {
-					$('.DNSBLSTATUS').attr('class', row_split[1]).prop('title', row_split[2]);
+					$('.DNSBLSTATUS').attr('class', 'DNSBLSTATUS ' + row_split[1]).prop('title', row_split[2]);
 				}
 			}
 			else if (row_cnt > 4) {
@@ -226,5 +230,9 @@ if (typeof window !== 'undefined') {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-	module.exports = { pfBlockerNG_escapeHtml: pfBlockerNG_escapeHtml, pfBlockerNG_buildWidgetRow: pfBlockerNG_buildWidgetRow };
+	module.exports = {
+		pfBlockerNG_escapeHtml: pfBlockerNG_escapeHtml,
+		pfBlockerNG_buildWidgetRow: pfBlockerNG_buildWidgetRow,
+		pfBlockerNG_fetch_new_widget_callback: pfBlockerNG_fetch_new_widget_callback
+	};
 }
