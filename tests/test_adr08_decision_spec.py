@@ -47,6 +47,9 @@ BORDERLINE CALLS RECORDED (consistent with RESULTS/01)
     carry no letter-script (empty / control char / emoji), resolves to severity
     ``FLAGGED`` -- NOT malicious (no confusable mix) but NOT silently legit either;
     surfaced so it is never silently passed, and the decode never crashes.
+  * EXCEPTION: a digits/hyphen-only label (the EURid Common-only exempt characters,
+    section 2's "Legitimate (no action)" row) also carries no letter-script but
+    resolves ``LEGIT``, not ``FLAGGED`` -- the ONLY scriptless case that does (#720).
 
 DECISION-LABEL DRIVER API (imported by Phases 4/5)
 --------------------------------------------------
@@ -119,6 +122,12 @@ CONFUSABLE_SET = frozenset({"Latin", "Cyrillic", "Greek"})
 # UTS#39 "Highly Restrictive" CJK companions to Han (Jpan / Kore / Hanb).
 CJK_COMPANIONS = frozenset({"Hiragana", "Katakana", "Hangul", "Bopomofo"})
 _HIGHLY_RESTRICTIVE_SET = frozenset({"Latin", "Han"}) | CJK_COMPANIONS
+# ADR-08 section 2: digits/hyphen (Common-only mixes) are the EURid-exempt,
+# letter-less carve-out -- legit, never touched in Confusable mode -- distinct from
+# every OTHER scriptless label (empty/control-char/emoji), which stays flagged
+# (#720). Kept here so this oracle stays in lockstep with the shipped analyzer's
+# severity_of().
+_DIGIT_HYPHEN_CHARS = frozenset("0123456789-")
 
 
 # --------------------------------------------------------------------------- #
@@ -280,7 +289,9 @@ def severity(text: str) -> str:
       * >= 2 of the confusable trio -> MALICIOUS;
       * single resolvable script (incl. all-Latin/-Cyrillic/-Greek) or Latin+CJK
         (Highly Restrictive) -> LEGIT;
-      * a label with NO resolvable letter-script (empty / control / emoji) -> FLAGGED;
+      * a digits/hyphen-only label (Common-only mix, section 2) -> LEGIT;
+      * a label with NO resolvable letter-script AND NOT digits/hyphen-only (empty /
+        control / emoji) -> FLAGGED;
       * any other multi-script mix (fails Highly Restrictive, not the malicious pair)
         -> SUSPICIOUS.
     """
@@ -291,9 +302,11 @@ def severity(text: str) -> str:
     if len(letters & CONFUSABLE_SET) >= 2:
         return SEV_MALICIOUS
 
-    # No resolvable letter-script at all (empty label, control char, emoji) -> flagged.
+    # No resolvable letter-script at all. Digits/hyphen-only is the ADR-08 section 2
+    # Common-only carve-out (legit); every OTHER scriptless label (empty, control
+    # char, emoji) stays flagged.
     if not letters:
-        return SEV_FLAGGED
+        return SEV_LEGIT if text and set(text) <= _DIGIT_HYPHEN_CHARS else SEV_FLAGGED
 
     level = restriction_level(scripts, ascii_only=False)
     if level in (LEVEL_SINGLE, LEVEL_HIGHLY_RESTRICTIVE):

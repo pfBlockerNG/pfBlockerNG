@@ -16,12 +16,13 @@
       "legit": "none (resolve normally; never touched in Confusable mode).",
       "suspicious": "alert (logged, resolution NOT broken) by default; block only when the opt-in suspicious->block sub-toggle is enabled.",
       "malicious": "block by default (the block-malicious sub-toggle is default-ON; the operator may disable it, downgrading the action to alert).",
-      "flagged": "an undecodable / unresolvable-script label (malformed punycode, or a decoded label whose code points carry no letter-script). NOT malicious; surfaced as flagged so it is never silently passed and never crashes the resolver. Action under the default policy = alert (it is a non-legit anomaly, treated as the suspicious tier for the action mapping)."
+      "flagged": "an undecodable / unresolvable-script label (malformed punycode, or a decoded label whose code points carry no letter-script) THAT IS NOT a digits/hyphen-only Common mix. NOT malicious; surfaced as flagged so it is never silently passed and never crashes the resolver. Action under the default policy = alert (it is a non-legit anomaly, treated as the suspicious tier for the action mapping)."
     },
     "borderline_calls": [
       "Cherokee / Armenian / Coptic mixed with Latin are SUSPICIOUS, not malicious: they confuse with Latin but are outside the high-confidence {Latin,Cyrillic,Greek} trio and have legitimate single-script use; folding them into default-block risks FP without a measured TP need (RESULTS/01 section 3). Revisit only if a future corpus shows a real missed attack class.",
       "Cyrillic+Greek (no Latin) IS malicious: the rule is >=2 of the trio, NOT Latin-anchored (RESULTS/01 section 3); proven by xn--mxa00ab.",
-      "An empty / control-char / emoji label resolves to NO letter-script -> severity 'flagged', NOT 'legit'. It carries no confusable mix so it is not malicious, but it is an anomaly and is surfaced (action = alert), never silently passed."
+      "An empty / control-char / emoji label resolves to NO letter-script -> severity 'flagged', NOT 'legit'. It carries no confusable mix so it is not malicious, but it is an anomaly and is surfaced (action = alert), never silently passed.",
+      "EXCEPTION to the rule above: a digits/hyphen-only label (the EURid Common-only exempt characters, section 2's 'Legitimate (no action)' row) ALSO resolves to NO letter-script, but is 'legit', NOT 'flagged' -- the ADR-08 Section 2 contract carve-out (#720). It is the ONLY scriptless case that reads legit; every other scriptless label (empty/control-char/emoji/marks-only) stays flagged per the row above."
     ],
     "documented_limitations": [
       "Whole-script confusables (an all-Cyrillic look-alike of a Latin word, e.g. xn--80ak6aa92e 'аррӏе') are single-script -> NOT caught. Out of scope (ADR-08 section 7): catching them needs a confusables + protected-brand table, deliberately not built here.",
@@ -189,6 +190,16 @@
       "severity": "suspicious",
       "action": "alert",
       "intent": "Latin+Coptic -> suspicious -> alert. Third non-trio confusable script."
+    },
+    {
+      "id": "digit_hyphen_only",
+      "a_label": "12-21",
+      "decoded": "12-21",
+      "resolved_scripts": [],
+      "restriction_level": "ascii_only",
+      "severity": "legit",
+      "action": "none",
+      "intent": "ADR-08 Section 2: a digits/hyphen-only label (the EURid Common-only exempt characters) resolves to NO letter-script but is legit, never touched in Confusable mode -- distinct from an empty/control-char/emoji label (edge_decode section), which stays flagged (#720)."
     },
     {
       "id": "limitation_whole_script_cyrillic",

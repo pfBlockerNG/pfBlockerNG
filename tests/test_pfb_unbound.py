@@ -937,6 +937,43 @@ class TestGetTldFromName:
         assert pfb_unbound.get_tld_from_name("sub.ExAmPlE.CoM") == "com"
 
 
+class TestSeverityOfDigitHyphenCarveOut:
+    """ADR-08 Section 2: a digits/hyphen-only decoded label (the EURid Common-only
+    exempt characters) is LEGITIMATE and must never be touched in Confusable mode --
+    distinct from every OTHER scriptless label (empty / control-char / emoji), which
+    stays FLAGGED. Pins the narrow carve-out, not a blanket "any empty script set is
+    legit" rule (#720)."""
+
+    def test_digits_and_hyphen_only_label_is_legit(self) -> None:
+        assert pfb_unbound.severity_of("24") == pfb_unbound.SEV_LEGIT
+        assert pfb_unbound.severity_of("123-45") == pfb_unbound.SEV_LEGIT
+
+    def test_other_scriptless_labels_stay_flagged(self) -> None:
+        # The contrast that proves the carve-out is narrow: an empty label and an
+        # emoji label (neither is digits/hyphen) resolve to NO letter-script too, but
+        # must stay flagged -- behaviour-PRESERVING on both sides of #720 (these were
+        # already flagged pre-fix and must remain so).
+        assert pfb_unbound.severity_of("") == pfb_unbound.SEV_FLAGGED
+        assert pfb_unbound.severity_of("\U0001f4a9") == pfb_unbound.SEV_FLAGGED  # pile of poo
+
+    def test_escalate_suspicious_does_not_promote_a_digit_label_to_action(self) -> None:
+        # A digits/hyphen-only label reaches idn_confusable_action via classify_idn
+        # whenever ANY label in the name is xn-- (is_idn_domain gates on the WHOLE
+        # name, then classify_idn analyses EVERY label) -- e.g. a numeric subdomain
+        # under an otherwise-legit punycode label. Pre-fix "24" was FLAGGED and
+        # treated like the suspicious tier for the action mapping, so BOTH the
+        # default (alert) and the escalate-suspicious opt-in (block) falsely touched
+        # this benign numeric label. Post-fix it resolves untouched under EITHER
+        # toggle state -- the real branch contrast, not merely "escalation happens to
+        # be off".
+        q_name = "24.xn--mnchen-3ya.com"  # digit subdomain + a legit accented-Latin label
+        action_off, _ = pfb_unbound.idn_confusable_action(q_name, block_malicious=True, escalate_suspicious=False)
+        assert action_off == pfb_unbound.IDN_ACT_NONE
+
+        action_on, _ = pfb_unbound.idn_confusable_action(q_name, block_malicious=True, escalate_suspicious=True)
+        assert action_on == pfb_unbound.IDN_ACT_NONE
+
+
 class TestGetQIp:
     def test_first_node_with_addr_wins(self) -> None:
         node2 = types.SimpleNamespace(query_reply=types.SimpleNamespace(addr="2.2.2.2"), next=None)
