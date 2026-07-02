@@ -1327,6 +1327,32 @@ class TestOperateDnsbl:
         assert qstate.ext_state[0] == MODULE_FINISHED
         assert calls["n"] == 1
 
+    def test_cname_unknown_sentinel_is_never_evaluated(self, monkeypatch: Any) -> None:
+        # #714 FIX #3: convert_other() returns the is_unknown() decode-failure sentinel
+        # "Unknown" (capital U) for a CNAME target it can't parse. The guard filtering it
+        # out must compare BEFORE lowering -- lowering first turns "Unknown" into
+        # "unknown", which never equals "Unknown", so the (pre-fix) guard was a no-op and
+        # the bogus "unknown" string was appended to `validate` and DNSBL-evaluated.
+        #
+        # Prove it by putting "unknown" itself on the blocklist: pre-fix, the leaked
+        # sentinel is evaluated, matches, and blocks the ORIGINAL query (chained through
+        # decisionDB.get(q_name_original) reassignment); post-fix, the sentinel is
+        # dropped before ever reaching the evaluated `validate` list, so the query
+        # resolves clean and "unknown" is never memoized as a decided name.
+        self._enable(monkeypatch)
+        pfb_unbound.pfb["python_cname"] = True
+        monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: "Unknown")
+        add_data("unknown", log="1", index=0)
+        set_feed_group(0, "F", "G")
+
+        qstate = make_qstate("orig.com.", qtype=RR_A, return_msg=self._cname_reply("orig.com."))
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE  # resolves clean, not blocked
+        assert not _is_block(pfb_unbound.decisionDB.get("orig.com"))
+        # The sentinel itself must never be memoized as an evaluated decision.
+        assert pfb_unbound.decisionDB.get("unknown") is None
+
 
 class TestOperateEvents:
     def test_moddone_logs_and_finishes(self) -> None:
@@ -1340,6 +1366,57 @@ class TestOperateEvents:
         rcd = pfb_unbound.operate(0, 99, qstate, None)
         assert rcd is True
         assert qstate.ext_state[0] == MODULE_ERROR
+
+
+class TestLoadSafeSearchDb:
+    """_load_safesearch_db() -- extracted out of init_standard (#714 FIX #6) so the
+    SafeSearch CSV load, and its failure diagnostic, are unit-testable."""
+
+    def test_parses_3_and_5_column_rows(self, tmp_path: Any) -> None:
+        # Behaviour-preserving: same 3-col (A/AAAA rewrite) and 5-col (CNAME redirect,
+        # issue #149) row shapes init_standard always parsed.
+        path = tmp_path / "pfb_py_ss.txt"
+        path.write_text(
+            "forcesafe.com,1.2.3.4,::1\ncname.com,cname,target.com,5.6.7.8,::2\n",
+            encoding="utf-8",
+        )
+        pfb_unbound.pfb["pfb_py_ss"] = str(path)
+
+        pfb_unbound._load_safesearch_db()
+
+        assert pfb_unbound.safeSearchDB["forcesafe.com"] == {"A": "1.2.3.4", "AAAA": "::1"}
+        assert pfb_unbound.safeSearchDB["cname.com"] == {
+            "A": "cname",
+            "AAAA": "target.com",
+            "v4": "5.6.7.8",
+            "v6": "::2",
+        }
+        assert pfb_unbound.pfb["safeSearchDB"] is True
+
+    def test_load_failure_names_the_safesearch_file_not_the_zone_file(
+        self, tmp_path: Any, monkeypatch: Any, capsys: Any
+    ) -> None:
+        # #714 FIX #6: the failure diagnostic must name pfb_py_ss (the SafeSearch
+        # source that just failed to load), not pfb_py_zone -- a copy-paste leftover
+        # from the neighbouring zone-list loader that pointed a real SafeSearch load
+        # failure at the WRONG file. Force the parse to raise so the except path runs,
+        # with pfb_py_zone set to a visibly different path (the wrong-file trap), and
+        # assert the emitted message carries the right one.
+        ss_path = tmp_path / "pfb_py_ss.txt"
+        ss_path.write_text("forcesafe.com,1.2.3.4,::1\n", encoding="utf-8")
+        pfb_unbound.pfb["pfb_py_ss"] = str(ss_path)
+        pfb_unbound.pfb["pfb_py_zone"] = str(tmp_path / "pfb_py_zone.txt")
+
+        def _boom(*a: Any, **k: Any) -> Any:
+            raise RuntimeError("csv boom")
+
+        monkeypatch.setattr(pfb_unbound.csv, "reader", _boom)
+
+        pfb_unbound._load_safesearch_db()
+
+        err = capsys.readouterr().err
+        assert str(ss_path) in err
+        assert str(pfb_unbound.pfb["pfb_py_zone"]) not in err
 
 
 class TestSafeSearchEntry:

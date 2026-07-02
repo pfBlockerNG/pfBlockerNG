@@ -169,7 +169,6 @@ try:
     import threading  # noqa: F811
 
     pfb["mod_threading"] = True
-    threads: list[Any] = list()
 except Exception as e:
     pfb["mod_threading"] = False
     pfb["mod_threading_e"] = e
@@ -1304,25 +1303,7 @@ def init_standard(id: int, env: module_env) -> bool:
                         pass
 
             # Collect SafeSearch Redirection list
-            if os.path.isfile(pfb["pfb_py_ss"]):
-                try:
-                    with open(pfb["pfb_py_ss"]) as csv_file:
-                        csv_reader = csv.reader(csv_file, delimiter=",")
-                        for row in csv_reader:
-                            # 3 cols: domain,A,AAAA (A/AAAA rewrite or nxdomain).
-                            # 5 cols: domain,cname,target,baked_v4,baked_v6 -- a CNAME
-                            # redirect (issue #149); v4/v6 are the #2 baked fallback IPs.
-                            if row and len(row) == 3:
-                                safeSearchDB[row[0]] = {"A": row[1], "AAAA": row[2]}
-                            elif row and len(row) == 5:
-                                safeSearchDB[row[0]] = {"A": row[1], "AAAA": row[2], "v4": row[3], "v6": row[4]}
-                            else:
-                                sys.stderr.write("[pfBlockerNG]: Failed to parse: {}: {}".format(pfb["pfb_py_ss"], row))
-
-                        pfb["safeSearchDB"] = True
-                except Exception as e:
-                    sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}".format(pfb["pfb_py_zone"], e))
-                    pass
+            _load_safesearch_db()
 
             # ADR-06 P4: prefer BUILDING the DNSBL structures from the raw feeds via
             # the pure build() layer (the new shell->Python boundary). When the
@@ -2853,8 +2834,6 @@ def python_control_duration(duration: str) -> int | bool:
 
 # Is thread still active
 def python_control_thread(tname: str) -> bool:
-    global threads
-
     try:
         for t in threading.enumerate():
             if t.name == tname:
@@ -2867,11 +2846,8 @@ def python_control_thread(tname: str) -> bool:
 
 # Python_control Start Thread
 def python_control_start_thread(tname: str, fcall: Callable[..., Any], arg1: Any, arg2: Any) -> bool:
-    global threads
-
     try:
         t1 = threading.Thread(name=tname, target=fcall, args=(arg1, arg2), daemon=True)
-        threads.append(t1)
         t1.start()
         return True
     except Exception as e:
@@ -4999,6 +4975,14 @@ def rebuild_and_swap(build_snapshot: Callable[[], Snapshot | None], *, emit_coun
     _snapshot = new_snapshot
     decisionDB.clear()
     _db_reset_cache()
+    # #714 FIX #2: a swap installs a brand-new regex_db/allow_regex_db, so the runtime
+    # warn-suppression + perf-fallback strike bookkeeping keyed on pattern NAME must not
+    # survive it -- a name reused across reloads (a re-added or edited rule) would
+    # otherwise inherit stale strikes/suppression from the OLD pattern object. Mirrors
+    # the init_standard clear (ADR-07 P7) so a no-restart swap resets the same state a
+    # restart would.
+    _regex_warned.clear()
+    _regex_perf_strikes.clear()
     # ADR-10: refresh the MASTER DNSBL gate from the new snapshot, parity with init
     # (init sets pfb["python_blacklist"] True when any blocking stratum loaded -- line
     # ~1061). operate() gates ALL DNSBL evaluation on this flag; it is otherwise written
@@ -5761,6 +5745,37 @@ def evaluate_noaaaa(q_name: str, noaaaa_db: dict[str, Any]) -> bool:
     return find_noaaaa_wildcard_parent(q_name, noaaaa_db) is not None
 
 
+def _load_safesearch_db() -> None:
+    """Parse the SafeSearch Redirection CSV (``pfb["pfb_py_ss"]``) into ``safeSearchDB``.
+
+    Extracted out of ``init_standard`` (#714 FIX #6) so the load -- and its failure
+    diagnostic -- are unit-testable without the full Unbound ``env``/``id`` init rig.
+    Behaviour-preserving: same parse rules, same ``pfb["safeSearchDB"]`` flag.
+    """
+    if os.path.isfile(pfb["pfb_py_ss"]):
+        try:
+            with open(pfb["pfb_py_ss"]) as csv_file:
+                csv_reader = csv.reader(csv_file, delimiter=",")
+                for row in csv_reader:
+                    # 3 cols: domain,A,AAAA (A/AAAA rewrite or nxdomain).
+                    # 5 cols: domain,cname,target,baked_v4,baked_v6 -- a CNAME
+                    # redirect (issue #149); v4/v6 are the #2 baked fallback IPs.
+                    if row and len(row) == 3:
+                        safeSearchDB[row[0]] = {"A": row[1], "AAAA": row[2]}
+                    elif row and len(row) == 5:
+                        safeSearchDB[row[0]] = {"A": row[1], "AAAA": row[2], "v4": row[3], "v6": row[4]}
+                    else:
+                        sys.stderr.write("[pfBlockerNG]: Failed to parse: {}: {}".format(pfb["pfb_py_ss"], row))
+
+                pfb["safeSearchDB"] = True
+        except Exception as e:
+            # #714 FIX #6: name the SafeSearch source (pfb_py_ss), not pfb_py_zone -- a
+            # copy-paste leftover from the zone-list loader below sent a real SafeSearch
+            # load failure diagnostic at the wrong file.
+            sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}".format(pfb["pfb_py_ss"], e))
+            pass
+
+
 def safesearch_entry(q_name_original: str) -> Any:
     """Look up (and memoize on the Decision) the SafeSearch entry for a name.
 
@@ -5898,7 +5913,7 @@ def safesearch_cname_redirect(id: int, qstate: module_qstate, q_type: Any, isSaf
 
 
 def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
-    global pfb, threads, dataDB, zoneDB, hstsDB, whiteDB, decisionDB
+    global pfb, dataDB, zoneDB, hstsDB, whiteDB, decisionDB
     global noAAAADB, gpListDB, safeSearchDB
 
     qstate_valid = False
@@ -6057,9 +6072,14 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                             continue
 
                         for j in range(0, rr.entry.data.count):
-                            domain = convert_other(rr.entry.data.rr_data[j]).lower()
+                            # #714 FIX #3: compare the is_unknown() sentinel BEFORE
+                            # lowering it. convert_other() returns the literal "Unknown"
+                            # (capital U) on decode failure; lowering first turns it into
+                            # "unknown", which never equals "Unknown", so the guard became
+                            # a no-op and the bogus "unknown" string was DNSBL-evaluated.
+                            domain = convert_other(rr.entry.data.rr_data[j])
                             if domain != "Unknown":
-                                validate.append(domain)
+                                validate.append(domain.lower())
 
         isCNAME = False
         for val_counter, q_name in enumerate(validate, start=1):
