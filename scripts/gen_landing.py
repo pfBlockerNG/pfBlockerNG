@@ -622,7 +622,7 @@ def eol_versions(pkgs: list[dict], matrix: list[dict] | None) -> list[tuple[str,
     # Sort: edition order (CE < Plus < Other), then pfSense version newest-first, then ABI.
     edition_rank = {k: i for i, k in enumerate(EDITION_ORDER)}
 
-    def _sort_key(t: tuple[str, str, dict]) -> tuple[int, list[int], str]:
+    def _sort_key(t: tuple[str, str, dict]) -> tuple[int, tuple[list[int], int, int], str]:
         ekey, ver, row = t
         return (edition_rank.get(ekey, len(EDITION_ORDER)), ver_key(ver), row["abi"])
 
