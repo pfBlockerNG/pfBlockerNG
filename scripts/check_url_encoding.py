@@ -102,16 +102,20 @@ def _looks_like_url_token(token: str) -> bool:
     is URL-bearing only if it contains ``://``, starts with ``http``/``https``/
     ``?``, OR starts with a shell variable (``$``) AND contains a ``?`` — the
     last clause is the variable-BASE-with-query shape this checker exists to
-    guard (``$BASE/cb?ip=$VAR``, ``${BASE}/...?...``), which a leading-token-only
-    check would miss, while still excluding an option value that starts with a
-    literal key name.
+    guard (``$BASE/cb?ip=$VAR``, ``${BASE}/...?...``): it requires a path
+    separator before the ``?`` so a ``$``-prefixed option VALUE holding a
+    ``?...=$`` shape (``$body?k=$v``, ``$AUTH?token=$T``) is not mistaken for a URL.
     """
     stripped = token.strip("\"'")
     if "://" in stripped:
         return True
     if stripped.startswith(("http", "https", "?")):
         return True
-    return stripped.startswith("$") and "?" in stripped
+    # A "$"-prefixed token is a variable-BASE URL only when a path separator
+    # precedes the query ("$BASE/cb?ip=$VAR"); a "$"-prefixed OPTION VALUE that
+    # merely holds a "?...=$" shape ("$body?k=$v", "$AUTH?token=$T") has no "/"
+    # before the "?" and is not a URL, so it stays clean.
+    return stripped.startswith("$") and "?" in stripped and "/" in stripped.split("?", 1)[0]
 
 
 def _split_tokens(line: str) -> list[str]:
