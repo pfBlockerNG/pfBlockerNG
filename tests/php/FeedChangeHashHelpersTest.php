@@ -17,6 +17,12 @@ use PHPUnit\Framework\TestCase;
  *                             content-identical → FALSE; content-different → TRUE;
  *                             legacy .md5 sidecar read + migration; absent sidecar
  *                             falls back to live .orig hash; idempotence guard.
+ *   pfb_source_hash_target() — issue #713 bug 5: resolves which on-disk file (the raw
+ *                             '.raw' download or the finalised '.orig') holds the SAME
+ *                             bytes the change-detection probe hashes, so a compressed
+ *                             feed's persisted sidecar and the probe's body hash cover
+ *                             one consistent domain of bytes instead of silently
+ *                             comparing compressed-vs-decompressed and never matching.
  *
  * Every test carries a failable assertion.
  */
@@ -24,6 +30,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_hash_read')]
 #[CoversFunction('pfb_hash_write')]
 #[CoversFunction('pfb_local_feed_changed')]
+#[CoversFunction('pfb_source_hash_target')]
 final class FeedChangeHashHelpersTest extends TestCase
 {
 	/** @var string Writable temp directory for this test class. */
@@ -605,6 +612,240 @@ final class FeedChangeHashHelpersTest extends TestCase
 		$this->assertFalse(
 			$second,
 			sprintf('Second call must return FALSE (idempotent — no perpetual re-ingest), got %s', var_export($second, TRUE))
+		);
+	}
+
+	// -------------------------------------------------------------------------
+	// pfb_source_hash_target() — issue #713 bug 5: raw-vs-orig sidecar target
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Compressed feed: the raw '.raw' download is still on disk (gunzip/bzip2/tar/7z
+	 * never delete their source archive) — it must be preferred, since it holds the
+	 * SAME bytes the probe hashes (pfb_download() in change_detect mode returns before
+	 * any decompression).
+	 *
+	 *  GIVEN both the raw download and the decompressed .orig exist on disk;
+	 *   WHEN pfb_source_hash_target($file_download, $orig_download) is called;
+	 *   THEN it returns the raw download path, not the decompressed .orig.
+	 */
+	public function test_source_hash_target_prefers_raw_when_present(): void
+	{
+		$raw  = $this->dir . '/compressed.raw';
+		$orig = $this->dir . '/compressed.orig';
+		file_put_contents($raw, 'RAW COMPRESSED BYTES');
+		file_put_contents($orig, 'DECOMPRESSED BYTES');
+
+		$target = pfb_source_hash_target($raw, $orig);
+
+		$this->assertSame(
+			$raw,
+			$target,
+			sprintf(
+				'When the raw fetched download still exists (compressed feed), it must be '
+				. 'preferred over the decompressed .orig — the probe hashes these same raw '
+				. 'bytes (expected %s, got %s)',
+				$raw,
+				var_export($target, TRUE)
+			)
+		);
+	}
+
+	/**
+	 * Uncompressed feed: pfb_download() @rename()s the raw download straight onto
+	 * $orig_download, so the raw path no longer exists on disk by the time the sidecar
+	 * is written. Falling back to $orig_download is exact (byte-identical), not an
+	 * approximation.
+	 *
+	 *  GIVEN the raw download path does not exist (already renamed onto .orig);
+	 *   WHEN pfb_source_hash_target($file_download, $orig_download) is called;
+	 *   THEN it returns the .orig path.
+	 */
+	public function test_source_hash_target_falls_back_to_orig_when_raw_absent(): void
+	{
+		$missing_raw = $this->dir . '/uncompressed.raw';
+		$orig        = $this->dir . '/uncompressed.orig';
+		file_put_contents($orig, 'plain feed content');
+
+		$this->assertFileDoesNotExist(
+			$missing_raw,
+			'Precondition: the raw download was renamed onto .orig and no longer exists'
+		);
+
+		$target = pfb_source_hash_target($missing_raw, $orig);
+
+		$this->assertSame(
+			$orig,
+			$target,
+			sprintf(
+				'When the raw download no longer exists, fall back to .orig (expected %s, got %s)',
+				$orig,
+				var_export($target, TRUE)
+			)
+		);
+	}
+
+	// -------------------------------------------------------------------------
+	// Integration: the probe and the persisted sidecar must agree on a compressed feed
+	// -------------------------------------------------------------------------
+
+	/**
+	 * The bug (issue #713 bug 5): the change-detection probe (pfb_update_check ->
+	 * pfb_download($type='change_detect')) hashes the RAW fetched body — it returns
+	 * before any decompression. For a compressed feed, ingest used to persist the
+	 * sidecar from the DECOMPRESSED .orig instead, so the two hashes covered different
+	 * bytes and could never match — every cron re-ingested a compressed feed even when
+	 * the server returned byte-identical content.
+	 *
+	 * This test reproduces both sides of that comparison with the real hash helpers:
+	 * ingest persists via pfb_source_hash_target() (the fix), the probe re-fetches the
+	 * SAME compressed bytes (server unchanged), and pfb_conditional_get_decision() must
+	 * report "unchanged".
+	 *
+	 *  GIVEN a compressed feed ingested once (raw gzip body decompressed to .orig, sidecar
+	 *        persisted from pfb_source_hash_target($file_download, $orig_download));
+	 *   WHEN a later probe re-fetches byte-identical compressed bytes and its body hash is
+	 *        compared against the persisted sidecar via pfb_conditional_get_decision();
+	 *   THEN the decision is "unchanged" (FALSE) — no needless re-ingest.
+	 *
+	 * RED on the pre-fix code: pfb_source_hash_target() does not exist there, and the old
+	 * call site hashed $orig_download (decompressed) directly — the sanity assertion below
+	 * proves that would have produced a DIFFERENT digest than the probe's raw body hash,
+	 * i.e. pfb_conditional_get_decision() would have returned TRUE (changed) instead.
+	 */
+	public function test_compressed_feed_unchanged_is_detected_via_raw_hash(): void
+	{
+		// GIVEN: a compressed feed body, ingested once.
+		$content   = "ip 192.0.2.1\nip 192.0.2.2\n";
+		$raw_bytes = gzencode($content, 9);
+
+		$file_download = $this->dir . '/feed.raw';
+		$orig_download = $this->dir . '/feed.orig';
+		file_put_contents($file_download, $raw_bytes);
+		// Mirrors `gunzip -c {raw} > {orig}` in pfb_download(): decompressed content,
+		// raw archive left intact on disk.
+		file_put_contents($orig_download, gzdecode($raw_bytes));
+
+		// Ingest persists the source-hash sidecar via the fixed target-resolution helper.
+		$hash_target = pfb_source_hash_target($file_download, $orig_download);
+		$write_ok    = pfb_hash_write($orig_download, $hash_target);
+		$this->assertTrue($write_ok, 'Precondition: pfb_hash_write() must succeed for the ingest sidecar');
+
+		$persisted = pfb_hash_read($orig_download);
+		$this->assertSame(
+			'xxh128',
+			$persisted['algo'],
+			'Precondition: the ingest sidecar must be written as xxh128'
+		);
+
+		// WHEN: a later cron probe re-fetches the SAME compressed bytes (server unchanged
+		// — pfb_download($type='change_detect') writes the raw body to {header}.md5.raw
+		// and returns before decompressing).
+		$probe_raw = $this->dir . '/feed.md5.raw';
+		file_put_contents($probe_raw, $raw_bytes);
+		$body_hash = pfb_content_hash($probe_raw, TRUE);
+
+		$changed = pfb_conditional_get_decision('200', $body_hash, $persisted['digest']);
+
+		// THEN: correctly detected as unchanged — no needless re-ingest.
+		$this->assertFalse(
+			$changed,
+			sprintf(
+				'A compressed feed with byte-identical content on re-fetch must be reported '
+				. 'unchanged (body_hash=%s, persisted_hash=%s)',
+				var_export($body_hash, TRUE),
+				var_export($persisted['digest'], TRUE)
+			)
+		);
+
+		// RED-proof sanity check: hashing the DECOMPRESSED .orig directly (the pre-fix
+		// call site: pfb_hash_write($orig_download, $orig_download)) produces a digest
+		// that can NEVER equal the probe's raw (compressed) body hash — proving the two
+		// sides compared different bytes before this fix.
+		$broken_persisted_hash = pfb_content_hash($orig_download, TRUE);
+		$this->assertNotSame(
+			$body_hash,
+			$broken_persisted_hash,
+			'Sanity: the probe\'s raw (compressed) body hash must differ from the hash of the '
+			. 'decompressed .orig — this is exactly why the pre-fix code (which persisted the '
+			. 'latter) could never match and forced a false "changed" on every cron'
+		);
+		$this->assertTrue(
+			pfb_conditional_get_decision('200', $body_hash, $broken_persisted_hash),
+			'Sanity: comparing the probe body hash against the pre-fix (decompressed) '
+			. 'persisted hash must yield "changed" — reproducing the reported defect'
+		);
+	}
+
+	/**
+	 * Branch coverage: a REAL content change on a compressed feed must still be detected
+	 * as "changed" — the fix must not overcorrect into a false "unchanged".
+	 *
+	 *  GIVEN a compressed feed ingested once, then the upstream body genuinely changes;
+	 *   WHEN the probe's re-fetched (different) compressed bytes are compared against the
+	 *        persisted sidecar via pfb_conditional_get_decision();
+	 *   THEN the decision is "changed" (TRUE) — re-ingest happens.
+	 */
+	public function test_compressed_feed_real_change_is_still_detected(): void
+	{
+		$old_bytes = gzencode("ip 192.0.2.1\n", 9);
+		$new_bytes = gzencode("ip 192.0.2.1\nip 192.0.2.99\n", 9);
+
+		$file_download = $this->dir . '/feed2.raw';
+		$orig_download = $this->dir . '/feed2.orig';
+		file_put_contents($file_download, $old_bytes);
+		file_put_contents($orig_download, gzdecode($old_bytes));
+
+		pfb_hash_write($orig_download, pfb_source_hash_target($file_download, $orig_download));
+		$persisted = pfb_hash_read($orig_download);
+
+		// A later probe fetches the genuinely-updated compressed body.
+		$probe_raw = $this->dir . '/feed2.md5.raw';
+		file_put_contents($probe_raw, $new_bytes);
+		$body_hash = pfb_content_hash($probe_raw, TRUE);
+
+		$changed = pfb_conditional_get_decision('200', $body_hash, $persisted['digest']);
+
+		$this->assertTrue(
+			$changed,
+			'A genuinely updated compressed feed body must still be detected as changed'
+		);
+	}
+
+	/**
+	 * Regression guard: an UNCOMPRESSED feed's unchanged round-trip must be unaffected by
+	 * this fix — pfb_source_hash_target() falls back to .orig there, which already holds
+	 * the exact fetched bytes (no decompression step).
+	 *
+	 *  GIVEN an uncompressed feed ingested once via pfb_source_hash_target();
+	 *   WHEN a later probe re-fetches byte-identical content;
+	 *   THEN pfb_conditional_get_decision() still reports "unchanged".
+	 */
+	public function test_uncompressed_feed_unchanged_round_trip_is_unaffected(): void
+	{
+		$content = "ip 192.0.2.1\nip 192.0.2.2\n";
+
+		// Mirrors pfb_download(): the raw download is @rename()'d onto .orig for an
+		// uncompressed feed, so only .orig exists by ingest-sidecar time.
+		$missing_raw   = $this->dir . '/plain.raw';
+		$orig_download = $this->dir . '/plain.orig';
+		file_put_contents($orig_download, $content);
+
+		pfb_hash_write($orig_download, pfb_source_hash_target($missing_raw, $orig_download));
+		$persisted = pfb_hash_read($orig_download);
+		$this->assertSame('xxh128', $persisted['algo'], 'Precondition: ingest sidecar written as xxh128');
+
+		// The probe's raw body for an uncompressed feed IS the fetched content verbatim.
+		$probe_raw = $this->dir . '/plain.md5.raw';
+		file_put_contents($probe_raw, $content);
+		$body_hash = pfb_content_hash($probe_raw, TRUE);
+
+		$changed = pfb_conditional_get_decision('200', $body_hash, $persisted['digest']);
+
+		$this->assertFalse(
+			$changed,
+			'An uncompressed feed with byte-identical content on re-fetch must still be '
+			. 'reported unchanged (regression guard for this fix)'
 		);
 	}
 }
