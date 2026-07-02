@@ -25,7 +25,10 @@ window.onload = function() {
 	if (location.hash) {
 		var elId = location.hash.replace('#','');
 		var scrollToEl = document.getElementById(elId);
-		scrollToEl.scrollIntoView(true);
+		// A hash naming no element (bad/stale bookmark) must not crash onload (#714).
+		if (scrollToEl) {
+			scrollToEl.scrollIntoView(true);
+		}
 
 		// Toggle Collapsible window
 		$("[id$='customlist_panel-body']").removeClass('out').addClass('in');
