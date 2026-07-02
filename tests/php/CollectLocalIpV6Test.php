@@ -205,37 +205,44 @@ final class CollectLocalIpV6Test extends TestCase
 	}
 
 	// -------------------------------------------------------------------------
-	// Case E — static IPv6 on an interface (literal ipaddr in config.xml)
+	// Case E — static IPv6 on an interface, via the runtime address path
 	// -------------------------------------------------------------------------
 
-	public function testStaticIpv6InterfaceSubnetIsRecognisedAsLocal(): void
+	public function testStaticIpv6IsLocalViaRuntimeAddressesRegardlessOfAssignmentMode(): void
 	{
-		// Scenario: An interface carrying a literal static IPv6 address and subnet must
-		//           be recognised as local via $pfb_localsub in CIDR notation.
+		// Scenario: A STATIC IPv6 interface must be recognised as local via $pfb_localsub
+		//           in CIDR notation, exactly like the dynamic (track6/dhcp6/SLAAC) case.
 		//
 		// Background:
-		//   pfb_collect_localip() processes config interfaces.  When 'ipaddr' holds a
-		//   literal IPv6 address (static assignment, not a keyword like 'track6'), it
+		//   pfSense stores a static IPv6 assignment under interfaces[x]['ipaddrv6']/
+		//   ['subnetv6'] (e.g. 'static'/'64') with the literal address in ['ipv6addr'] —
+		//   interfaces[x]['ipaddr'] holds the IPv4 value or a mode keyword (dhcp/pppoe/…)
+		//   and NEVER an IPv6 literal. So the config-interface loop in
+		//   pfb_collect_localip() (which only reads ['ipaddr']/['subnet']) cannot see a
+		//   static IPv6 either — static and dynamic v6 both rely on the single runtime
+		//   block that calls get_configured_ipv6_addresses() + get_interface_subnetv6(),
+		//   which reports the live address for EVERY v6 mode alike. That runtime block
 		//   calls gen_subnetv6(addr, bits) and MUST append "/{bits}" to form CIDR
-		//   notation before storing in $pfb_localsub.  Before the fix the bare network
-		//   address was stored (e.g. "2001:db8:1:2::"), so ip_in_subnet() failed to
-		//   match hosts inside the prefix.
+		//   notation before storing in $pfb_localsub, or ip_in_subnet() fails to match
+		//   hosts inside the prefix.
 		//
-		// Given  a LAN interface with a static IPv6 2001:db8:99:1::1/64
+		// Given  a LAN interface whose static IPv6 resolves at runtime to 2001:db8:99:1::1/64
 		// When   pfb_collect_localip() is called
 		// Then   a host inside the /64 (e.g. 2001:db8:99:1::abcd) is recognised as local
 
 		$GLOBALS['config']['interfaces']['lan'] = [
-			'enable'  => '',
+			'enable'   => '',
 			'ipaddrv6' => 'static',
 			'ipv6addr' => '2001:db8:99:1::1',
 			'subnetv6' => '64',
-			// Literal IPv6 in the 'ipaddr' field (pfSense stores static IPv6 here):
-			'ipaddr'   => '2001:db8:99:1::1',
-			'subnet'   => '64',
+			// 'ipaddr' never carries a v6 literal for a static assignment — leave it at
+			// the IPv4 default so the config-interface loop contributes nothing for v6.
+			'ipaddr'   => '',
+			'subnet'   => '',
 		];
-		// No runtime configured-ipv6 needed — this goes through the config loop.
-		$GLOBALS['pfb_test_configured_ipv6'] = [];
+		// The static address surfaces through the same runtime lookup as track6/dhcp6/SLAAC.
+		$GLOBALS['pfb_test_configured_ipv6']    = ['lan' => '2001:db8:99:1::1'];
+		$GLOBALS['pfb_test_interface_subnetv6'] = ['lan' => '64'];
 
 		[$pfb_local, $pfb_localsub] = pfb_collect_localip();
 
@@ -246,8 +253,9 @@ final class CollectLocalIpV6Test extends TestCase
 			$isLocal,
 			sprintf(
 				"Host %s inside static IPv6 /64 must be recognised as local.\n"
-				. "pfb_localsub: %s",
+				. "pfb_local keys: %s\npfb_localsub: %s",
 				$host,
+				implode(', ', array_keys($pfb_local)),
 				implode(', ', $pfb_localsub),
 			)
 		);

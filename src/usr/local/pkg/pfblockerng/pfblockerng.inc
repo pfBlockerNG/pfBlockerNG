@@ -10411,9 +10411,6 @@ function pfb_collect_localip() {
 						$pfb_localsub[]	= "{$int['ipaddr']}/{$int['subnet']}";
 					}
 				}
-				elseif (is_ipaddrv6($int['ipaddr'])) {
-					$pfb_localsub[] = gen_subnetv6("{$int['ipaddr']}", "{$int['subnet']}") . "/{$int['subnet']}";
-				}
 			}
 			elseif (is_ipaddr($int['ipaddr'])) {
 				$pfb_local[] = "{$int['ipaddr']}";
@@ -10422,10 +10419,12 @@ function pfb_collect_localip() {
 	}
 
 	// Collect runtime IPv6 addresses for inbound/outbound list matching.
-	// Interfaces using a dynamic address mode (track6/dhcp6/SLAAC) store a keyword
-	// in config.xml rather than a literal IPv6 address, so the interface loop above
-	// produces nothing for them.  get_configured_ipv6_addresses() returns the actual
-	// runtime addresses (keyed by friendly interface name) and covers all modes.
+	// pfSense stores an interface's IPv6 assignment under ['ipaddrv6']/['subnetv6'];
+	// ['ipaddr'] (read by the interface loop above) only ever holds the IPv4 value or a
+	// mode keyword (dhcp/pppoe/…) — never an IPv6 literal, static or dynamic. So this
+	// runtime block is the SOLE source of interface-IPv6 locality, for every assignment
+	// mode (static as well as track6/dhcp6/SLAAC): get_configured_ipv6_addresses()
+	// returns the actual runtime addresses (keyed by friendly interface name).
 	$pfb_v6 = get_configured_ipv6_addresses();
 	if (!empty($pfb_v6)) {
 		foreach ($pfb_v6 as $iface => $v6addr) {
