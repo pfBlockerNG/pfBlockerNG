@@ -10956,6 +10956,26 @@ function pfb_filterlog_refresh_config() {
 	}
 }
 
+// Select the correct filterlog port field for an exploded filter.log CSV row ($d) by
+// IP version ($d[8]) and flow direction. The v4 row carries its ports at $d[20]
+// (src) / $d[21] (dst); the v6 row -- which has fewer leading fields -- carries them
+// at $d[17] (src) / $d[18] (dst). Issue #713: the port-selection at the 'in'/'out'
+// branch used the v4 indices unconditionally, so a v6 flow read the wrong CSV field
+// as its port, mis-attributing the local_hosts reverse-lookup key.
+//
+// PURE -- no I/O, no globals, no side effects.
+//
+// @param array<int, string> $d           Exploded filter.log CSV row.
+// @param bool                $is_inbound  TRUE for the 'in' branch (dst is local).
+function pfb_filterlog_port(array $d, bool $is_inbound): string {
+	$is_v6 = ((int) ($d[8] ?? 0)) === 6;
+	if ($is_inbound) {
+		return $is_v6 ? ($d[18] ?? '') : ($d[21] ?? '');
+	}
+	return $is_v6 ? ($d[17] ?? '') : ($d[20] ?? '');
+}
+
+
 // Firewall filter.log parser daemon
 function pfb_daemon_filterlog() {
 	global $pfb;
@@ -11233,16 +11253,17 @@ function pfb_daemon_filterlog() {
 					}
 
 					// Determine if DST IP or SRC IP is the external host
+					// issue #713: port field is selected by IP version -- see pfb_filterlog_port().
 					if (isset($pfb_local[$dstip]) || pfb_local_ip($dstip, $pfb_localsub)) {
 						$dir	= 'in';
 						$host	= $srcip;
 						$client	= $dstip;
-						$port	= $d[21];
+						$port	= pfb_filterlog_port($d, TRUE);
 					} else {
 						$dir	= 'out';
 						$host	= $dstip;
 						$client	= $srcip;
-						$port	= $d[20];
+						$port	= pfb_filterlog_port($d, FALSE);
 					}
 
 					if (!is_ipaddr($host)) {
