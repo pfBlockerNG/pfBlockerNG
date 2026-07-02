@@ -6,11 +6,15 @@ description: >
   feedback, validate + apply each finding and reply, and ONLY if that completes
   cleanly, rebase the head onto the live base, wait for the real CI to go green
   (EXCLUDING the bot), merge `--rebase` (never a merge commit, never squash) and
-  delete the branch. The review step gives CodeRabbit ~10 minutes to acknowledge the
-  PR: if it does, wait on its review; if it stays silent, nudge it once with
-  `@coderabbitai review` and wait 10 more minutes, and only if it is STILL silent spawn
-  a Claude Sonnet 5 sub-agent to review in its place (still folding CodeRabbit's review in
-  if it shows up late) — and handle every comment of every review the same way. This
+  delete the branch. The review step ALWAYS runs a Claude Sonnet 5 sub-agent as an
+  ADVERSARIAL, maximally thorough reviewer IN ADDITION TO CodeRabbit — never as a mere
+  fallback — at reasoning effort xhigh, or as an ultracode multi-agent review for a
+  large/complex PR (orchestrator's pick; never below xhigh, never max). In parallel it
+  gives CodeRabbit ~10 minutes to acknowledge the PR: if it does, wait on its review
+  too; if it stays silent, nudge it once with `@coderabbitai review` and wait 10 more
+  minutes; if it is STILL silent the Sonnet 5 review stands alone (folding CodeRabbit's
+  review in if it shows up late) — and handle every comment of every review the same
+  way. This
   is the default flow after any GitHub issue, ADR, or code change — everything
   except the dev-only classes that land straight on devel with no PR
   (documentation-only, CLAUDE.md, ADR text, skills). Args: [PR number] (defaults to
@@ -25,11 +29,12 @@ It is roughly:
 /pr-comments N --wait-for=coderabbitai && /pr-merge N
 ```
 
-with one adaptation — the review **source** depends on whether **CodeRabbit is
-available for this repository** (Step 1). The `&&` is load-bearing: **never start
-the merge until the review step has completed cleanly.** Where this delegates to the
-existing `pr-comments` / `pr-merge` skills, invoke each via the Skill tool — do not
-re-implement them.
+with two adaptations: a **Claude Sonnet 5 adversarial review always runs in addition
+to CodeRabbit** (Step 1d — never a mere substitute), and the CodeRabbit wait adapts to
+whether **CodeRabbit is available for this repository** (Steps 1a–1c). The `&&` is
+load-bearing: **never start the merge until the review step has completed cleanly.**
+Where this delegates to the existing `pr-comments` / `pr-merge` skills, invoke each via
+the Skill tool — do not re-implement them.
 
 Args: `{{ args }}`
 
@@ -45,12 +50,19 @@ Args: `{{ args }}`
 
 ## Step 1 — Review feedback
 
-Decide the review source with a **10-minute acknowledgement window** (1a), run the
-matching path — 1b (CodeRabbit) or 1c (Sonnet 5 substitute, which still folds CodeRabbit
-back in if it shows up late) — then apply the shared gate. **Independently, Snyk may also be
-reviewing the PR** (security findings): Step 1e runs **in parallel** with the CodeRabbit/Sonnet 5
-path and folds into the same gate. Whichever reviews you end up with, **handle every comment of
-every review you receive**; *how* each comment is handled (the triage below) never changes.
+**Two code reviews run on every PR, plus Snyk when present:**
+
+- **Claude Sonnet 5 adversarial review (Step 1d) — ALWAYS.** Spawn it **first**, in the
+  background, before starting the CodeRabbit wait; it is independent of CodeRabbit's
+  availability and never a mere fallback.
+- **CodeRabbit (Steps 1a–1c)** — decide availability with a **10-minute acknowledgement
+  window** (1a), wait on + handle its review when it acknowledges (1b), nudge once when
+  silent (1c). If CodeRabbit never reviews (NOACK / QUOTA / timeout), the Sonnet 5
+  review stands alone — **surface the skip**; never stall the flow on CodeRabbit.
+- **Snyk (Step 1e)** runs **in parallel** (security findings) and folds into the same gate.
+
+Whichever reviews you end up with, **handle every comment of every review you receive**;
+*how* each comment is handled (the triage below) never changes.
 
 ### Step 1a — Give CodeRabbit 10 minutes to acknowledge THIS PR
 
@@ -96,8 +108,9 @@ done
   "won't review" here, because CR often posts one transiently and then reviews.
 - **`NOACK`** (silent for the full window) → **Step 1c** (nudge before giving up).
 - **`QUOTA`** is no longer emitted by 1a (it is decided in 1b). When Step 1b's wait returns
-  `QUOTA` — a genuine usage/rate-limit with **no** review content for the whole window — go to
-  **Step 1d** (Sonnet 5 substitute) and **surface** that CodeRabbit was skipped for quota.
+  `QUOTA` — a genuine usage/rate-limit with **no** review content for the whole window —
+  CodeRabbit will not review: the Step-1d Sonnet 5 review (already running) stands alone;
+  **surface** that CodeRabbit was skipped for quota.
 
 ### Step 1b — CodeRabbit acknowledged → wait on + handle its review
 
@@ -107,13 +120,13 @@ done
   reviewing, then validates each finding against the current code, applies the ones that
   genuinely hold, skips the rest with a reason, and replies on every thread.
 - If that wait **times out** (CodeRabbit acknowledged but never finished the review),
-  do not stall the flow — fall back to the Sonnet 5 stand-in (**Step 1d**); the nudge in
-  Step 1c is for the *no-acknowledgement* case, so it won't help once it has already
-  acknowledged.
+  do not stall the flow — proceed on the Step-1d Sonnet 5 review (already running) and
+  note the timeout; the nudge in Step 1c is for the *no-acknowledgement* case, so it
+  won't help once it has already acknowledged.
 - If the wait returns **`QUOTA`** for CodeRabbit (it acknowledged only with a usage/rate-limit
-  notice — see Step 2 of `pr-comments`), it will not review: go to the Sonnet 5 stand-in
-  (**Step 1d**) and note the quota skip in the final report. (A `QUOTA` for **Snyk** just
-  drops Snyk from this wait — surface the skipped scan; it does not trigger the substitute.)
+  notice — see Step 2 of `pr-comments`), it will not review: proceed on the Step-1d
+  Sonnet 5 review alone and note the quota skip in the final report. (A `QUOTA` for **Snyk**
+  just drops Snyk from this wait — surface the skipped scan.)
 
 ### Step 1c — No ack → nudge `@coderabbitai review`, then wait 10 more minutes
 
@@ -128,30 +141,45 @@ gh pr comment "$PR" --repo "$OWNER_REPO" --body '@coderabbitai review'
 Re-run the Step-1a loop with `deadline=$(( $(date -u +%s) + 600 ))`. On the result:
 
 - **`ACK`** (CodeRabbit posted something after the nudge) → **Step 1b**.
-- **`NOACK`** (still silent 10 min after the nudge) → **Step 1d**.
+- **`NOACK`** (still silent 10 min after the nudge) → CodeRabbit is unavailable; the
+  Step-1d Sonnet 5 review (already running) is the only code review. Invoke
+  `/pr-comments N --wait-for=snyk` so Snyk is still waited on (Step 1e).
 
 Nudge **once only** — a second silent window means CodeRabbit is genuinely unavailable;
 do not loop on it.
 
-### Step 1d — Still no ack → Claude Sonnet 5 sub-agent reviewer (fold in a late CodeRabbit)
+### Step 1d — Claude Sonnet 5 adversarial review (EVERY PR, in addition to CodeRabbit)
 
-Stand in a reviewer yourself; if CodeRabbit turns up late, fold its review in too.
+Runs on **every** PR — spawn it at the **start of Step 1**, in the background, in
+parallel with the CodeRabbit wait. It is additive: CodeRabbit reviewing does not skip
+it, and it does not replace CodeRabbit; when CodeRabbit never reviews it stands alone.
 
-1. **Spawn one sub-agent** with the Agent tool, `model: sonnet`, briefed to act as
-   CodeRabbit: review the PR's diff (`git diff origin/<BASE>...HEAD` in the PR's
-   worktree/branch), grounded in the **current** code (read the surrounding files,
-   not just the hunk), and return structured findings — each with a severity
-   (`blocking` / `nitpick` / `outside-diff`), `file:line`, a grounded explanation,
-   and a concrete suggested fix — plus a short "considered-and-fine" list. Tell it
-   the result IS its final message and not to edit anything. If `ponytail` is active in this
-   session, the brief's first instruction is `Run /ponytail:ponytail <level>` (the level active
-   here — full/lite/ultra; CLAUDE.md "Plan with a higher model"), so the reviewer matches the
-   parent's ponytail mode.
-2. **When the sub-agent finishes, re-check the PR for CodeRabbit.** If it has now
-   posted anything (it acknowledged late, during the Sonnet 5 review), treat it as
-   available after all: wait for its review to finish (the `pr-comments`
-   `--wait-for=coderabbitai` wait, or poll until a terminal CodeRabbit result), so you
-   hold **both** reviews. If it is still silent, you have only the Sonnet 5 review.
+1. **Spawn one sub-agent**, `model: sonnet`, briefed as an independent **ADVERSARIAL**
+   reviewer — its job is to try to **break the change**, not to rubber-stamp it: review
+   the PR's diff (`git diff origin/<BASE>...HEAD` in the PR's worktree/branch), grounded
+   in the **current** code (read the surrounding files, not just the hunk), and hunt as
+   thoroughly as the PR allows for bugs, unhandled edge cases and input classes, races,
+   security holes, CLAUDE.md/code-standard violations, and **coverage theater** (tests
+   that execute but cannot fail on a regression; missing fail-before/pass-after
+   evidence). Return structured findings — each with a severity (`blocking` / `nitpick`
+   / `outside-diff`), `file:line`, a grounded explanation, and a concrete suggested fix
+   — plus a short "considered-and-fine" list. Tell it the result IS its final message
+   and not to edit anything.
+   **Reasoning effort: `xhigh` minimum — NEVER lower, and NEVER `max`.** You (the
+   orchestrator) pick the shape by the PR's size and complexity: a small/simple PR →
+   one sub-agent at effort `xhigh` (e.g. a Workflow `agent()` call with
+   `effort: 'xhigh'` when the spawning tool cannot set effort directly); a large or
+   complex PR → an **ultracode-style multi-agent review** (a Workflow fanning
+   independent reviewers per dimension with adversarial verification of each finding),
+   its agents likewise capped at `xhigh`. If `ponytail` is active in this session, the
+   brief's first instruction is `Run /ponytail:ponytail <level>` (the level active here
+   — full/lite/ultra; CLAUDE.md "Plan with a higher model"), so the reviewer matches
+   the parent's ponytail mode.
+2. **When the sub-agent finishes, resolve the CodeRabbit outcome (Steps 1a–1c).** If
+   CodeRabbit reviewed — or turns up late (re-check the PR) — wait for its review to
+   finish (the `pr-comments` `--wait-for=coderabbitai` wait, or poll until a terminal
+   CodeRabbit result), so you hold **both** reviews. If it never did, you have only the
+   Sonnet 5 review.
 3. **Triage and handle EACH comment of EACH review you received** — every Sonnet 5
    finding, plus every CodeRabbit finding if one arrived. The per-comment handling is
    unchanged: **APPLY** (valid, in scope, safe) · **SKIP** (stale / unenforced /
@@ -165,8 +193,8 @@ Stand in a reviewer yourself; if CodeRabbit turns up late, fold its review in to
    the relevant gates (`php -l` / PHPUnit / PHPStan for PHP, `python -m pytest` / `ruff` / `mypy`
    for Python, ShellCheck for shell — whatever the change touches), commit
    (`<scope>: <imperative summary>`) and push to the PR head branch.
-5. **Record the review on the PR** — post one comment summarising the Sonnet 5 substitute
-   review (and noting CodeRabbit's, if it was folded in) plus the per-finding
+5. **Record the review on the PR** — post one comment summarising the Sonnet 5 adversarial
+   review (and noting CodeRabbit's, if one arrived) plus the per-finding
    resolution (applied + commit / skipped + reason / deferred + tracking-issue link), so there is an
    audit trail. Use `gh pr comment N --body-file` and append the attribution footer
    (resolve `<gh-login>` once with `gh api user -q .login`):
@@ -181,8 +209,8 @@ Stand in a reviewer yourself; if CodeRabbit turns up late, fold its review in to
 Snyk reviews PRs independently of CodeRabbit — handle it **alongside** the 1a–1d path, not
 instead of it. **The wait runs through `/pr-comments`, not a bespoke poll here:** on the
 CodeRabbit-present path (1b) Snyk is already folded into that one call's
-`--wait-for=coderabbitai,snyk`; on the **Sonnet 5-substitute path (1d)** — where no CodeRabbit
-`pr-comments` wait runs — invoke `/pr-comments N --wait-for=snyk` so Snyk is still waited on and
+`--wait-for=coderabbitai,snyk`; when **no CodeRabbit `pr-comments` wait ran** (CodeRabbit
+absent after 1c, or quota) invoke `/pr-comments N --wait-for=snyk` so Snyk is still waited on and
 its findings fetched/replied. `pr-comments` tolerates an absent Snyk (no `snyk` status ⇒ skipped,
 no stall), so it is always safe to include. This step just records Snyk's specifics:
 
@@ -206,9 +234,11 @@ no stall), so it is always safe to include. This step just records Snyk's specif
 ### Gate before Step 2 (all paths)
 
 Continue to the merge ONLY if the review step finished cleanly: every finding from **every**
-review received — CodeRabbit/Sonnet 5 **and** Snyk — triaged, any accepted fixes committed and
-pushed, and nothing left that needs a human decision. If a finding is unresolved, contested, or
-needs the user, **stop here and report** — do not merge.
+review received — the always-on Sonnet 5 adversarial review, CodeRabbit when it reviewed,
+**and** Snyk — triaged, any accepted fixes committed and pushed, and nothing left that needs a
+human decision. The Sonnet 5 review is **mandatory** — never merge without its findings triaged,
+even when CodeRabbit came back clean. If a finding is unresolved, contested, or needs the user,
+**stop here and report** — do not merge.
 
 ## Step 2 — Land it (`/pr-merge N`)
 
@@ -221,8 +251,10 @@ needs the user, **stop here and report** — do not merge.
 
 ## Definition of done
 
-- Review resolved (note which reviewers were used — CodeRabbit or the Sonnet 5
-  substitute, **plus Snyk if it reviewed**); PR merged by rebase; remote branch deleted.
+- Review resolved (note which reviews landed — the always-on Sonnet 5 adversarial
+  review and its effort shape (`xhigh` single-agent or ultracode multi-agent),
+  CodeRabbit when it reviewed, **plus Snyk if it reviewed**); PR merged by rebase;
+  remote branch deleted.
 - Sync the work item's labels (an issue's `Waiting PR` removed on merge), per
   `CLAUDE.md` → "Labels (lifecycle)".
 - If you stopped before merging, state exactly why and what is needed to proceed.
