@@ -18,11 +18,14 @@ faithfully (a fully-enumerated payload, no same-name multi-value collision).
 
 Handler facts pinned from the PHP source (read end to end):
 
-* ``act=update`` (pfblockerng_category.php:35-37,174-314): the page does
-  ``$_POST = $_REQUEST`` for ``act=update`` then reads ``$_POST['postdata']`` --
-  itself a urlencoded query string -- via ``parse_str`` into ``$post_data``.
-  Each key shaped ``<var>-<rowid>`` (``var`` in {action,cron,aliaslog,logging})
-  is validated against that field's whitelist; on success it writes
+* ``act=update`` (pfblockerng_category.php:169-309): the handler is POST-ONLY —
+  ``$action``/``postdata``/``ids`` are read exclusively from ``$_POST`` (issue
+  #704 removed the historical ``$_POST = $_REQUEST`` fold that let a crafted GET
+  drive the config-writing handler past csrf-magic, which validates POST bodies
+  only). ``$_POST['postdata']`` -- itself a urlencoded query string -- is parsed
+  via ``parse_str`` into ``$post_data``. Each key shaped ``<var>-<rowid>``
+  (``var`` in {action,cron,aliaslog,logging}) is validated against that field's
+  whitelist; on success it writes
   ``config_set_path("{$rowdata_path}/{$rowid}/{$variable}", ...)``. ANY invalid
   key/value appends to ``$input_errors`` and the ``if (!$input_errors)`` guard
   skips the ENTIRE write (config UNCHANGED) and the handler echoes
@@ -247,6 +250,57 @@ def test_category_update_row_cron_valid_and_reject_unchanged(
         _ajax_post(webui, {"act": "update", "type": "ipv4", "rowid": "0", "postdata": postdata})
         got = helpers.config_get(vm, cfg)
         assert got == "Never", f"bogus cron must leave config unchanged at 'Never', got {got!r}"
+    finally:
+        _restore_lists(vm, snap)
+
+
+def test_category_update_via_get_does_not_mutate_config(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """An authenticated GET carrying ``act=update`` params mutates NOTHING (#704).
+
+    csrf-magic validates POST bodies only, so a GET reaching the update handler is a
+    CSRF hole: a logged-in admin lured to a crafted link would flip real config. The
+    fix makes the handler POST-only (``$_POST`` is never populated from ``$_GET``).
+
+    * GET: the full ``act=update&type=ipv4&rowid=0&postdata=action-0%3DPermit_Both``
+      query — the exact crafted-link shape — must leave the seeded row's action
+      UNCHANGED. Pre-fix, the ``$_POST = $_REQUEST`` fold fed these params to the
+      handler and the row flipped to Permit_Both (this assert is the red→green).
+    * CONTROL: the SAME parameters via the CSRF-token POST DO change the row —
+      proving the GET was rejected for its METHOD, not for its payload.
+
+    Oracle is config.xml over SSH, never the HTTP response body.
+    """
+    vm = smoke_vm
+    alias = "pfbcatcsrf"
+    cfg = f"{IPV4_LISTS}/0/action"
+    snap = _snapshot_lists(vm)
+    try:
+        _seed_single_ipv4_row(vm, alias, "Deny_Inbound")
+        # BEFORE: the seeded row holds an action the crafted GET would change.
+        assert helpers.config_get(vm, cfg) == "Deny_Inbound", "seed did not land Deny_Inbound at row 0"
+
+        # WHEN: the crafted-link GET (authenticated session, no CSRF token — GETs never carry one).
+        postdata = urlencode({"action-0": "Permit_Both"})
+        query = urlencode({"act": "update", "type": "ipv4", "rowid": "0", "postdata": postdata})
+        page = webui.get(f"{CATEGORY_PAGE}?{query}")
+        assert not looks_like_login_page(page.text), "Category GET returned the login form (session lost)"
+
+        # THEN: config is UNCHANGED — the update handler must be unreachable via GET.
+        got = helpers.config_get(vm, cfg)
+        assert got == "Deny_Inbound", (
+            f"a GET with act=update params must not mutate config: expected row action to stay "
+            f"'Deny_Inbound', got {got!r} — the handler accepted a GET (CSRF hole, #704)"
+        )
+
+        # CONTROL: the same parameters via the token POST DO mutate — the branch is the method.
+        _update_action(webui, 0, "Permit_Both")
+        got = helpers.config_get(vm, cfg)
+        assert got == "Permit_Both", (
+            f"the CSRF-token POST with identical params must still change the row action, got {got!r}"
+        )
     finally:
         _restore_lists(vm, snap)
 
