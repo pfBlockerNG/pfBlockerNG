@@ -3,6 +3,7 @@ import random
 import re
 import types
 from collections import defaultdict
+from configparser import ConfigParser
 from typing import Any
 
 # Unbound injects these as module-level globals at runtime; conftest copies them
@@ -25,6 +26,7 @@ from unboundmodule import (
 
 import pfb_unbound
 from pfb_unbound import (
+    _parse_ini_int,
     convert_ipv4,
     convert_ipv6,
     convert_other,
@@ -35,6 +37,7 @@ from pfb_unbound import (
     hsts_check_domain,
     is_unknown,
     iter_domain_suffixes,
+    parse_python_tlds,
     python_control_duration,
     resolve_feed_group,
     whitelist_check_domain,
@@ -2060,6 +2063,72 @@ class TestHstsCheckDomain:
         hsts_db: dict = {"other.com": 0}
         result = hsts_check_domain("example.com", hsts_db, (), "com")
         assert result == (False, "Python")
+
+
+class TestParsePythonTlds:
+    """issue #713: the MAIN-ini ``python_tlds`` value must parse to a CLEANED list so
+    an empty/degenerate value is falsy -- the caller's guard (``python_tld and
+    python_tlds``) then correctly skips enabling the TLD-Allow blacklist gate instead
+    of force-enabling it (the old ``!= ""`` list-vs-str compare was always True)."""
+
+    def test_empty_value_parses_to_empty_list(self) -> None:
+        assert parse_python_tlds("") == []
+
+    def test_whitespace_only_value_parses_to_empty_list(self) -> None:
+        assert parse_python_tlds("   ") == []
+
+    def test_populated_value_parses_and_strips_entries(self) -> None:
+        assert parse_python_tlds("com, net ,org") == ["com", "net", "org"]
+
+    def test_empty_parsed_list_does_not_enable_tld_blacklist(self) -> None:
+        # Reproduces init_standard's guard verbatim: `if python_tld and python_tlds:`.
+        # An empty/degenerate TLD-Allow value must NOT force python_blacklist on.
+        python_tlds = parse_python_tlds("")
+        python_tld = True
+        assert bool(python_tld and python_tlds) is False
+
+    def test_populated_parsed_list_enables_tld_blacklist(self) -> None:
+        python_tlds = parse_python_tlds("com,net")
+        python_tld = True
+        assert bool(python_tld and python_tlds) is True
+
+
+class TestParseIniInt:
+    """issue #713: ``config.getint()`` raises ``ValueError`` on a non-integer ini
+    value. init_standard's ``python_tld_seg``/``decisiondb_max`` reads called it
+    UNGUARDED, so a malformed ini value crashed the whole Unbound Python module at
+    init. ``_parse_ini_int`` guards it (mirrors the existing ``regex_warn_ms``/
+    ``regex_evict_ms`` try/except-ValueError pattern) and reports failure via
+    ``None`` instead of raising, so the caller keeps its current default."""
+
+    def _config(self, value: str) -> ConfigParser:
+        config = ConfigParser()
+        config.read_string("[MAIN]\npython_tld_seg = {}\n".format(value))
+        return config
+
+    def test_malformed_value_returns_none_instead_of_raising(self) -> None:
+        config = self._config("not-an-int")
+        assert _parse_ini_int(config, "MAIN", "python_tld_seg") is None
+
+    def test_well_formed_value_parses_to_int(self) -> None:
+        config = self._config("3")
+        assert _parse_ini_int(config, "MAIN", "python_tld_seg") == 3
+
+    def test_default_is_preserved_when_parse_fails(self) -> None:
+        # Mirrors init_standard's call-site guard: only overwrite the current default
+        # when the parse actually succeeded.
+        current_default = 2
+        config = self._config("garbage")
+        parsed = _parse_ini_int(config, "MAIN", "python_tld_seg")
+        result = parsed if parsed is not None else current_default
+        assert result == current_default
+
+    def test_default_is_replaced_when_parse_succeeds(self) -> None:
+        current_default = 2
+        config = self._config("9")
+        parsed = _parse_ini_int(config, "MAIN", "python_tld_seg")
+        result = parsed if parsed is not None else current_default
+        assert result == 9
 
 
 class TestResolveFeedGroup:
