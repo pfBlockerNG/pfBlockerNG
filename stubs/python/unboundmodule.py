@@ -49,6 +49,7 @@ __all__ = [
     "PKT_QR",
     "PKT_RA",
     "PKT_RD",
+    "PKT_AA",
     # Response codes
     "RCODE_NOERROR",
     "RCODE_NXDOMAIN",
@@ -96,6 +97,7 @@ RR_CLASS_IN = 1
 PKT_QR = 0x8000  # QR bit: set -> response, clear -> query
 PKT_RD = 0x0100  # RD bit: recursion desired (client requests recursive lookup)
 PKT_RA = 0x0080  # RA bit: recursion available (server supports recursion)
+PKT_AA = 0x0400  # AA bit: authoritative answer (as used in pythonmod)
 
 # ---------------------------------------------------------------------------
 # Response codes (RCODE field in DNS header)
@@ -358,7 +360,9 @@ class reply_info(_Struct):
     - ``flags``       : DNS header flags bitmask (``PKT_QR | PKT_RA | …``).
     - ``an_numrrsets``: Number of RRsets in the answer section.
     - ``rrsets``      : List of RRset objects in the reply.
-    - ``security``    : DNSSEC security status integer (2 = secure).
+    - ``security``    : DNSSEC security status integer -- one of the
+                        ``sec_status_*`` constants above (0 = unchecked,
+                        4 = secure; NOT 2, which is ``indeterminate``).
     """
 
 
@@ -399,8 +403,18 @@ class DNSMessage:
     def set_return_msg(self, qstate: Any) -> bool:
         """Attach this message as the response on ``qstate.return_msg``.
 
-        Initialises ``qstate.return_msg`` if not already set, then marks the
-        reply as DNSSEC-secure (security = 2) so Unbound accepts it.
+        Mirrors real Unbound's ``createResponse`` (pythonmod/pythonmod_utils.c):
+        it REPLACES any existing ``qstate.return_msg`` wholesale with a fresh,
+        zeroed reply -- it never mutates one in place. The fresh reply's
+        ``rep.security`` is left at :data:`sec_status_unchecked` (0);
+        ``createResponse`` never stamps security, so a caller that wants a
+        trusted synthesized reply must stamp ``rep.security`` itself, exactly
+        as on the real box -- else the validator treats it as unchecked and
+        SERVFAILs it (issue #149 class).
+
+        Also mirrors the Python wrapper's post-success step: sets
+        ``rep.authoritative = 1`` iff ``PKT_AA`` is set in this message's
+        ``flags``.
 
         Args:
             qstate: The :class:`module_qstate` whose ``return_msg`` to populate.
@@ -409,10 +423,10 @@ class DNSMessage:
             True on success.
         """
         self._qstate = qstate
-        if getattr(qstate, "return_msg", None) is None:
-            qstate.return_msg = types.SimpleNamespace(
-                rep=types.SimpleNamespace(security=0, an_numrrsets=0, rrsets=[]),
-                qinfo=types.SimpleNamespace(qname_str=self.qname, qname_list=[]),
-            )
-        qstate.return_msg.rep.security = 2
+        qstate.return_msg = types.SimpleNamespace(
+            rep=types.SimpleNamespace(security=0, an_numrrsets=0, rrsets=[], authoritative=0),
+            qinfo=types.SimpleNamespace(qname_str=self.qname, qname_list=[]),
+        )
+        if self.flags & PKT_AA:
+            qstate.return_msg.rep.authoritative = 1
         return True
