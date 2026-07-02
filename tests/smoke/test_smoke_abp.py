@@ -1,8 +1,9 @@
 """ADR-07 — the ABP DNSBL smoke matrix (live pfSense VM).
 
 Proves the **full Adblock-Plus DNS decision logic** (``@@`` exceptions, cross-feed
-``@@``, ``$important`` / ``$badfilter`` precedence, regex block/allow + admitted
-count, whitelist sovereignty, and the opt-in regex static cap) holds END-TO-END on
+``@@``, deep-anchor subdomain coverage (#718), ``$important`` / ``$badfilter``
+precedence, regex block/allow + admitted count, whitelist sovereignty, and the
+opt-in regex static cap) holds END-TO-END on
 a real resolver — what the pure ADR-07 unit oracle (``tests/test_adr07_*``) cannot:
 it models ``decide()`` in Python, but only a live Unbound + ``pfb_unbound.py`` loader
 proves the manifest build + matcher agree with that model on the box.
@@ -142,6 +143,48 @@ def test_abp_exception_unblocks(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_f
         ans_good = h.dns_probe_client(client_vm, good, "A")
         assert h.resolves_to(ans_good, PASS_IP), f"exempted {good} should resolve to {PASS_IP}, got {ans_good}"
         assert not h.is_vip(ans_good), f"exempted {good} wrongly VIP-blocked: {ans_good}"
+
+
+# --------------------------------------------------------------------------- #
+# 1b) Deep anchor — ||host^ covers subdomains at ANY anchor depth (#718)
+# --------------------------------------------------------------------------- #
+
+
+def test_abp_deep_anchor_blocks_subdomains(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
+    """A ≥3-label ABP anchor ``||ads.base^`` blocks its own subdomains (#718).
+
+    ``||host^`` covers the host AND all its subdomains regardless of
+    registrable-parent depth: the anchor emits a wildcard ZONE keyed at itself
+    (reconcile no longer demotes a deeper-than-registrable anchor to an exact
+    entry). Scenario: Given a feed anchoring ``ads.<base>``, When the client
+    queries the unlisted parent, the anchor apex, and a subdomain of the anchor,
+    Then the parent resolves (block scoped to the anchor) while apex AND
+    subdomain are VIP-blocked.
+    """
+    base = h.unique_domain("abpdeep")
+    anchor = f"ads.{base}"  # 3-label anchor -- deeper than the registrable parent
+    deep = f"deep.{anchor}"  # subdomain of the anchor
+    body = h.abp_feed(f"||{anchor}^")
+    feed_url = h.write_local_feed(deployed_vm, "smoke_abp_deep.txt", body)
+    spec = h.DnsblCase(
+        aliasname="smokeabpdeep",
+        feed_url=feed_url,
+        header="smokeabpdeep",
+        mode=h.DnsblMode.VIP,
+        control_local_data={base: {"A": PASS_IP}},
+    )
+    with h.CaseContext(deployed_vm, spec):
+        # Given: the unlisted parent still resolves -- proves the zone is keyed at
+        # the anchor, not lifted/widened to the registrable parent.
+        ans_base = h.dns_probe_client(client_vm, base, "A")
+        assert h.resolves_to(ans_base, PASS_IP), f"unlisted parent {base} should resolve to {PASS_IP}, got {ans_base}"
+        # Then: the anchor apex and its subdomain are both VIP-blocked.
+        ans_anchor = h.dns_probe_client(client_vm, anchor, "A")
+        assert h.is_vip(ans_anchor), f"anchor {anchor} expected VIP block, got {ans_anchor}"
+        ans_deep = h.dns_probe_client(client_vm, deep, "A")
+        assert h.is_vip(ans_deep), f"{deep} (subdomain of deep anchor) expected VIP block, got {ans_deep}"
 
 
 # --------------------------------------------------------------------------- #
