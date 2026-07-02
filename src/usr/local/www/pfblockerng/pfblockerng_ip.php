@@ -236,7 +236,7 @@ if ($_POST) {
 			// ADR-40: batch size — clamp to [64, 4096].  An empty field (user
 			// cleared the value) must default to 512, not cast to 0 and clamp to 64.
 			$_pfb_batch_raw = trim((string) ($_POST['pfb_alias_delta_batch'] ?? ''));
-			PfbConfig::write('pfb_alias_delta_batch', (string) pfb_alias_delta_batch_clamp($_pfb_batch_raw === '' ? 512 : (int) $_pfb_batch_raw));
+			PfbConfig::write('pfb_alias_delta_batch', (string) pfb_alias_delta_batch_resolve($_pfb_batch_raw));
 
 			PfbConfig::writeSection('installedpackages/pfblockerngipsettings/config/0', $pfb['iconfig']);
 			write_config('[pfBlockerNG] save IP settings');

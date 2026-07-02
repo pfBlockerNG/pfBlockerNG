@@ -4656,6 +4656,19 @@ function pfb_alias_delta_batch_clamp(int|string $raw): int {
 }
 
 /**
+ * Resolve a raw POST batch-size field to its clamped stored value.
+ *
+ * An empty field (user cleared it in the UI) means "use the default 512" —
+ * it must NOT cast to (int) '' == 0 and clamp down to the 64 floor.
+ *
+ * @param string $raw  Trimmed raw POST value (may be '').
+ * @return int          Clamped batch size, ready for PfbConfig::write().
+ */
+function pfb_alias_delta_batch_resolve(string $raw): int {
+	return pfb_alias_delta_batch_clamp($raw === '' ? 512 : (int) $raw);
+}
+
+/**
  * Apply an alias-table change via forward delta (-T add / -T delete) or full replace.
  *
  * Decision (when $force_replace is FALSE):
