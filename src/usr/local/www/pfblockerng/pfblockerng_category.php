@@ -31,11 +31,6 @@ $action = $gtype = '';
 $rowdata = array();
 $rowid = 0;
 
-// Called via AJAX (Save page order format/settings)
-if (isset($_REQUEST) && isset($_REQUEST['act']) && ($_REQUEST['act'] == 'update')) {
-	$_POST = $_REQUEST;
-}
-
 if (isset($_GET)) {
 	if (isset($_GET['savemsg']) && !empty($_GET['savemsg'])) {
 		$savemsg = htmlspecialchars($_GET['savemsg']);
