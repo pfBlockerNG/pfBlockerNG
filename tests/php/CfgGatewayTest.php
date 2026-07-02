@@ -609,8 +609,9 @@ final class CfgGatewayTest extends TestCase
 	 *   - pfblockerngsync sub-keys: syncinterfaces, varsynconchanges, row/*
 	 *   - pfblockerngblacklist sub-keys: blacklist_enable, blacklist_freq,
 	 *     blacklist_lang, blacklist_logging, blacklist_selected, item
-	 *   - pfblockerngdnsblsettings sub-keys with ambiguous names across files:
-	 *     dnsbl_webpage (used inconsistently with dnsblwebpage in the codebase)
+	 *   - pfblockerngdnsblsettings foreign key: dnsbl_webpage (written directly by
+	 *     www/pfblockerng_dnsbl.php, read via pfb_dnsbl_webpage(); issue #713 removed
+	 *     the never-written 'dnsblwebpage' registry mis-spelling)
 	 */
 	public function testInventoryCompletenessAllKnownKeysAccountedFor(): void
 	{
@@ -667,9 +668,9 @@ final class CfgGatewayTest extends TestCase
 			'varsynctimeout',
 			'varsyncdestinenable',
 
-			// pfblockerngdnsblsettings ambiguous duplicate name (typo in pfblockerng.inc:
-			// 'dnsbl_webpage' used at line 413 in www/pfblockerng_dnsbl.php vs
-			// 'dnsblwebpage' which IS registered above).
+			// pfblockerngdnsblsettings foreign key: written directly by
+			// www/pfblockerng_dnsbl.php and read via pfb_dnsbl_webpage() (issue #713
+			// removed the never-written 'dnsblwebpage' registry mis-spelling).
 			'dnsbl_webpage',
 		];
 
@@ -782,7 +783,6 @@ final class CfgGatewayTest extends TestCase
 			'pfb_py_cache_max',
 			'pfb_tld',
 			'aliaslog',
-			'dnsblwebpage',
 			// ADR-36: NAT DNS-redirect fields
 			'dnsbl_redir',
 			'dnsbl_redir_int',

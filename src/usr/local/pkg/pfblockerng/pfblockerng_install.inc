@@ -198,7 +198,7 @@ if (!empty($pfb['dnsbl_port']) && !empty($pfb['dnsbl_port_ssl']) && ($pfb['dnsbl
 
 // Replace 'default' DNSBL active blocked webpage
 if (!file_exists('/usr/local/www/pfblockerng/www/dnsbl_active.php') ||
-    PfbConfig::read('dnsblwebpage') == 'dnsbl_default.php') {
+    pfb_dnsbl_webpage() == 'dnsbl_default.php') {
     @copy('/usr/local/www/pfblockerng/www/dnsbl_default.php', '/usr/local/www/pfblockerng/www/dnsbl_active.php');
 }
 

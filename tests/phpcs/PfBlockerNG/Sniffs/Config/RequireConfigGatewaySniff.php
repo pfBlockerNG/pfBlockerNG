@@ -18,9 +18,9 @@
  *   c) Section-level calls (path stops at the section, no trailing key name).
  *   d) The gateway's own implementation (pfblockerng_extra.inc) — excluded
  *      via phpcs.xml.dist <exclude-pattern>.
- *   e) Out-of-scope keys documented in ADR-29 §2.5 (dnsbl_webpage is
- *      registered as 'dnsblwebpage'; the legacy 'dnsbl_webpage' raw key used
- *      in pfblockerng_dnsbl.php is not in the registered path set).
+ *   e) Out-of-scope keys documented in ADR-29 §2.5 (e.g. 'dnsbl_webpage' — a
+ *      foreign key written directly by pfblockerng_dnsbl.php and read via
+ *      pfb_dnsbl_webpage(); it is not in the registered path set).
  *
  * Scope is an explicit, auditable list of full config paths (the registered
  * paths derived from pfb_cfg_registry()) embedded as a sniff property.  The
@@ -150,7 +150,6 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_cache_max',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_tld',
 		'installedpackages/pfblockerngdnsblsettings/config/0/aliaslog',
-		'installedpackages/pfblockerngdnsblsettings/config/0/dnsblwebpage',
 		// ADR-36: NAT DNS-redirect fields
 		'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_redir',
 		'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_redir_int',

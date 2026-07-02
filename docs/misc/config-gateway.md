@@ -127,6 +127,6 @@ registered path set). Each annotation is committed in the relevant source file.
 | `installedpackages` (bulk blob) | Bulk wizard init write, foreign structure |
 | `pfblockerngreputation/config/0` | Static display section, no registered keys |
 | `pfblockerng{continent}/config/0` | Dynamic per-continent structure |
-| `pfblockerngdnsblsettings/config/0/dnsbl_webpage` | Out-of-scope key (ADR-29 §2.5); the registered key is `dnsblwebpage` |
+| `pfblockerngdnsblsettings/config/0/dnsbl_webpage` | Out-of-scope foreign key (ADR-29 §2.5); written directly by `pfblockerng_dnsbl.php`, read via `pfb_dnsbl_webpage()` (issue #713 removed the never-written `dnsblwebpage` registry mis-spelling) |
 | `pfblockerngdnsbl` / `pfblockernglistsv4/v6` (section-level reads) | Dynamic list sections |
 | `aliases/alias`, `filter/rule`, `system/*`, `interfaces`, `unbound/*` | pfSense core sections |
