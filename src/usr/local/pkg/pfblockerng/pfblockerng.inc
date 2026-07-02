@@ -11003,6 +11003,20 @@ function pfb_asn_cache_window(string $asn_reporting): string {
 }
 
 
+// Number of already-processed filter.log lines to skip on daemon (re)start, derived
+// from `grep -c ^ /var/log/filter.log`'s raw output. (int) casts so a grep error
+// string (e.g. filter.log momentarily absent between rotation and daemon restart)
+// coerces to 0 instead of throwing PHP 8's "Unsupported operand types: string - int"
+// TypeError out of the daemon (issue #713 -- a crash loop). Callers must also guard
+// with file_exists('/var/log/filter.log') so the exec() is skipped entirely when the
+// file is absent.
+//
+// PURE -- no I/O, no globals, no side effects.
+function pfb_filterlog_skip_count(string $grep_output): int {
+	return max((int) $grep_output - 1, 0);
+}
+
+
 // Firewall filter.log parser daemon
 function pfb_daemon_filterlog() {
 	global $pfb;
@@ -11043,8 +11057,13 @@ function pfb_daemon_filterlog() {
 		// Parse full filter.log on first run, otherwise only parse new filter.log events
 		if (!file_exists($pfb['ip_blocklog']) && !file_exists($pfb['ip_permitlog']) && !file_exists($pfb['ip_matchlog'])) {
 			$filter_cnt = 0;
+		} elseif (file_exists('/var/log/filter.log')) {
+			// issue #713: guarded by file_exists() -- an absent filter.log made exec()
+			// return a grep error string, and pfb_filterlog_skip_count() (int)-casts it
+			// so it can never throw the old bare-subtraction TypeError.
+			$filter_cnt = pfb_filterlog_skip_count(exec("{$pfb['grep']} -c ^ /var/log/filter.log 2>&1"));
 		} else {
-			$filter_cnt = max( exec("{$pfb['grep']} -c ^ /var/log/filter.log 2>&1") -1, 0) ?: 0;
+			$filter_cnt = 0;
 		}
 		$skip_cnt = $filter_cnt;
 	}
