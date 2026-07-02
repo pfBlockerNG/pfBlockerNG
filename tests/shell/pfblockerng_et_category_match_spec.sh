@@ -61,8 +61,12 @@ Describe 'processet() ET category selection (issue #713 bug 6)'
     It 'matches only the exact selected category (ET_P2Pcnc), not the substring sibling ET_P2P'
       etblock='x'
       etmatch='ET_P2Pcnc'
-      When call silently processet
+      When call processet
       The status should be success
+      # The selected token matches exactly; the substring sibling ET_P2P must not
+      # (matching the etblock case's stdout check + closing the shellspec output gap).
+      The stdout should include 'Match:   ET_P2Pcnc'
+      The stdout should not include 'Match:   ET_P2P '
       The path "${pfbmatch}/ETMatch.txt" should be file
       The contents of file "${pfbmatch}/ETMatch.txt" should include '10.0.0.31'
       The contents of file "${pfbmatch}/ETMatch.txt" should not include '10.0.0.15'
@@ -77,8 +81,12 @@ Describe 'processet() ET category selection (issue #713 bug 6)'
     It 'blocks nothing and writes no ETMatch.txt when neither is selected'
       etblock='x'
       etmatch='x'
-      When call silently processet
+      When call processet
       The status should be success
+      # No category selected -> processet emits neither a Block nor a Match row
+      # (closes the shellspec unchecked-output gap for the sentinel case).
+      The stdout should not include 'Block:'
+      The stdout should not include 'Match:'
       The path "${pfbmatch}/ETMatch.txt" should not be exist
       The contents of file "${pfborig}${alias}.orig" should not include '10.0.0.15'
       The contents of file "${pfborig}${alias}.orig" should not include '10.0.0.31'
