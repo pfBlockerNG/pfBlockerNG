@@ -12,10 +12,14 @@ name: build-pkg (Linux, portable)
 # dependency is PRESENT, not its version, so installability is identical). See
 # docs/build-pkg-portable.md.
 #
-# This is the FAST build path the ADR-04 smoke workflow consumes (drop-in for the
-# FreeBSD build-pkg.yml: same `pfBlockerNG-pkg` artifact, same out/*.pkg layout,
-# same `channel` input). The FreeBSD build-pkg.yml is RETAINED as the ground-truth
-# `make package` fidelity oracle (dispatch-only) — not deleted.
+# This is the FAST build path the ADR-04 smoke workflow consumes (drop-in
+# replacement for the retired FreeBSD build-pkg.yml: same `pfBlockerNG-pkg`
+# artifact, same out/*.pkg layout, same `channel` input). The FreeBSD
+# `make package` workflow was retired in 68992f4c after the portable output was
+# validated by hand (field-by-field diff against a real `make package` build of
+# the same commit); that validation is repeated manually on min-CE bumps and
+# ports-framework moves — see the "Re-diff the portable .pkg" step in
+# docs/misc/version-bump-runbook.md.
 #
 # TARGET facts (ABI, py-flavor, PHP) are INPUTS, never read from this fork's tree:
 # they describe the pfSense the .pkg installs onto (CE 2.8 = FreeBSD 15 / py311 /

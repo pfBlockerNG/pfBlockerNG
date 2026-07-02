@@ -77,3 +77,14 @@ entry — no new shipped file, no extra deploy wiring.
    Runs the ADR-04 suite against **all** `ci: true` entries — **CE and Plus** (ADR-24) — in
    parallel (`fail-fast: false`); the `all-smoke-passed` AND-gate fails if **any** leg fails.
    version-tracker triggers it daily; dispatch manually to verify a new image.
+4. **Re-diff the portable `.pkg` against a real `make package` build** (manual; also do this
+   whenever the FreeBSD-ports fork's `Mk/` framework moves). `build-pkg-portable.py` is the sole
+   `.pkg` builder — its `make package` fidelity was validated by a one-time field-by-field diff
+   (the FreeBSD `build-pkg.yml` oracle was retired in `68992f4c`), and that validation rots as
+   libpkg and the ports framework evolve. On a FreeBSD box (a dev pfSense VM works): check out the
+   same port + source commit, run `make package`, then diff the two archives member-by-member
+   (`tar -tvf`; extract both `+MANIFEST`s and compare field-by-field after `json`/UCL
+   normalization). Expected benign divergences — file `sum` type (`1$sha256` vs modern
+   `2$blake2b`), tar flavor/uid, mtime, and best-effort dep versions — are enumerated in
+   `docs/build-pkg-portable.md` ("Fidelity vs `make package`"); anything else is a builder bug to
+   fix before the bump lands.
