@@ -4097,13 +4097,17 @@ def reconcile(
          ``$badfilter`` rules themselves emit nothing. USER rules are IMMUNE (never
          collected, never pruned -- sovereignty, fact 7).
       2. REGEX REDUCTION: a reducible regex Rule folds to a domain rule (block ->
-         data/zone via classify, allow -> whiteDB wildcard); irreducible regex
-         passes through into the irreducible set (compiled in Phase 6).
-      3. CLASSIFY domain blocks data vs zone via ``classify`` (reuse ADR-06).
+         data/zone by its wildcard bit, allow -> whiteDB wildcard); irreducible
+         regex passes through into the irreducible set (compiled in Phase 6).
+      3. DATA vs ZONE: a wildcard block (``||host^`` / wildcard fold) emits a ZONE
+         keyed at the anchor itself -- ABP subdomain coverage at ANY depth (#718);
+         a TLD-exclusion domain still forces exact DATA; an exact fold stays DATA.
       4. ASSIGN priority BANDS to every surviving rule (``_dnsbl_rule_band``).
 
-    ``tlds`` / ``exclusion`` are the classify inputs (same shapes build() uses).
-    Matches the Phase-2 oracle ``reconcile`` + ``decide`` precedence.
+    ``exclusion`` is the TLD-exclusion set (same shape build() uses). ``tlds`` is
+    kept for signature stability but no longer consulted: classify's registrable-
+    parent rule is a plain/hosts-path concept (ADR-06) that must not demote an ABP
+    anchor. Matches the Phase-2 oracle ``reconcile`` + ``decide`` precedence.
     """
     rule_list = list(rules)
 
@@ -4169,11 +4173,15 @@ def reconcile(
                 )
             )
         else:
-            # BLOCK domain -> classify data vs zone (reuse ADR-06 classify). A
-            # wildcard=False fold (exact /^D$/) is forced to DATA; otherwise the
-            # registrable-parent classify decides (matching the plain/hosts path).
-            if wildcard:
-                cls, key = classify(domain, tlds, exclusion)
+            # BLOCK domain -> data vs zone. ABP wildcard semantics come from the
+            # rule itself: ``||host^`` (and a wildcard-shaped regex fold) covers
+            # host + ALL subdomains, so it emits a ZONE keyed at the anchor at any
+            # depth (#718) -- classify's registrable-parent rule is a plain/hosts
+            # path concept and must not demote an ABP anchor. TLD exclusion still
+            # opts a domain out of wildcarding (transparent exact DATA), and a
+            # wildcard=False fold (exact /^D$/) stays forced to DATA.
+            if wildcard and domain not in exclusion:
+                cls, key = DNSBL_CLASS_ZONE, domain
             else:
                 cls, key = DNSBL_CLASS_DATA, domain
             result.block_domains.append(

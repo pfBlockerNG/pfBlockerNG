@@ -491,7 +491,9 @@ GOLDEN_TOP1M_DISABLED: dict[str, dict[str, Any]] = {
     "silentblock.com": {"decision": "block-nolog", "b_type": "TLD"},
     # basic-ABP "||domain^" 2-label -> blocked ZONE.
     "abpblocked.com": {"decision": "block-null", "b_type": "TLD"},
-    # basic-ABP deep "||sub.abpzone.net^" (parent abpzone.net NOT listed) -> DATA.
+    # basic-ABP deep "||sub.abpzone.net^" (parent abpzone.net NOT listed): the
+    # LEGACY pass demoted it to exact DATA -- pinned here for the reference
+    # pipeline only; production overlays GOLDEN_ABP_CONFORMANT_OVERRIDES (#718).
     "sub.abpzone.net": {"decision": "block-null", "b_type": "DNSBL"},
     "abpzone.net": {"decision": "pass"},
     # basic-ABP IGNORED lines -> NOT blocked (pass-through):
@@ -517,6 +519,20 @@ GOLDEN_TOP1M_DISABLED: dict[str, dict[str, Any]] = {
 # is identical. Asserting both scenarios pins the TOP1M-when-enabled decision.
 GOLDEN_TOP1M_ENABLED_OVERRIDES: dict[str, dict[str, Any]] = {
     "popularcdn.com": {"decision": "whitelist"},
+}
+
+# INTENTIONAL divergence from the legacy pipeline (#718): a conformant ABP
+# "||host^" anchor covers host + ALL subdomains at ANY depth, so production emits
+# a wildcard ZONE where the legacy basic-ABP pass demoted a deep anchor to exact
+# DATA. The reference pipeline (and the GOLDEN dicts above) keep the legacy
+# behaviour; the production-side suites (build module / init-from-raw) overlay
+# these expectations, and the old-loader equivalence comparison skips exactly
+# these keys.
+GOLDEN_ABP_CONFORMANT_OVERRIDES: dict[str, dict[str, Any]] = {
+    # the deep anchor now matches as a zone (b_type TLD); same block decision.
+    "sub.abpzone.net": {"decision": "block-null", "b_type": "TLD"},
+    # ...and its subdomain is now covered (the legacy pass resolved it).
+    "deep.sub.abpzone.net": {"decision": "block-null", "b_type": "TLD"},
 }
 
 # The extracted-IP firewall handoff set (the *_v4.ip -> DNSBLIP_v4 input). Comes
