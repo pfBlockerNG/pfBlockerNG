@@ -7524,17 +7524,22 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 				// the new lists definitely load. NOT an error: fail-safe by design.
 				pfb_logger(" not confirmed in time -- falling back to Unbound restart", 2);
 				// Clear the daemon-suppression marker touched above before falling
-				// through: the restart path below re-touches + manages its own '.sync'
-				// (pfb_update_unbound parity), but the alert/#51 caller has no later
-				// clear_work_files, so leaving it set here would suppress the DNSBL
-				// Queries daemon until the next full update (issue #713 bug 3).
+				// through: the inline restart path below (pfb_stop_start_unbound) does
+				// NOT touch '.sync' at all -- a normal, non-fast-path reload restarts
+				// with no suppression marker involved -- so clearing it here is safe.
+				// It is still REQUIRED because the alert/#51 caller (pfb_reload_unbound
+				// invoked from pfblockerng_alerts.php) has no later clear_work_files, so
+				// leaving it set here would leak and suppress the DNSBL Queries daemon
+				// until the next full update (issue #713 bug 3).
 				unlink_if_exists("{$pfb['dnsbl_file']}.sync");
 			}
 			else {
 				// Sentinel flip failed (could not stage/rename) -> fall back to the restart
 				// so the new lists still load (don't leave a flipped-but-no-op state).
 				pfb_logger("\nADR-10: sentinel flip failed -- falling back to Unbound restart", 2);
-				// Same '.sync' leak risk as the timeout branch above -- clear it here too.
+				// Same rationale as the timeout branch above: the inline restart path
+				// below does not touch '.sync', and clearing it here only exists to stop
+				// the marker leaking to the alert/#51 caller (no later clear_work_files).
 				unlink_if_exists("{$pfb['dnsbl_file']}.sync");
 			}
 		}
@@ -9213,8 +9218,8 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			// an uncompressed feed, where $file_download was already renamed away (above)
 			// into $orig_download -- byte-identical to what was fetched, so the fallback is
 			// exact, not an approximation.  This covers both local and remote standard feeds
-			// (any path that finalises a plain .orig here).  geoip/asn early-returns
-			// (~line 7872) do not reach this block, so they correctly never get a sidecar.
+			// (any path that finalises a plain .orig here).  The geoip/asn early-returns
+			// above do not reach this block, so they correctly never get a sidecar.
 			pfb_hash_write("{$orig_download}", pfb_source_hash_target($file_download, $orig_download));
 
 			// Process Emerging Threats IQRisk if required

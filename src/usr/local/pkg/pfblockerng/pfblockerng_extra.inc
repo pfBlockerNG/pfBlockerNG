@@ -1117,13 +1117,17 @@ function pfb_cfg_registry(): array
 // FOREIGN key (ADR-29 §2.5 out-of-scope) written directly by pfblockerng_dnsbl.php
 // as 'dnsbl_webpage' — NOT a gateway-registered key — so it is read here with a
 // direct config_get_path(), mirroring how the DNSBL settings page stores and reads
-// it ($pfb['dconfig']['dnsbl_webpage'] ?: 'dnsbl_default.php'). The 'dnsbl_default.php'
-// default matches that page, so an install that never saved DNSBL settings still
-// reports the default template (and the install/upgrade refresh of dnsbl_active.php
-// then fires). Fixes the dead read of the mis-spelled 'dnsblwebpage' registry key,
-// which always returned '' because nothing ever writes that path.
-function pfb_dnsbl_webpage(): string {
-	return config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_webpage', 'dnsbl_default.php');
+// it ($pfb['dconfig']['dnsbl_webpage'] ?: 'dnsbl_default.php'). config_get_path()'s
+// default arg only substitutes when the key is ABSENT, not when it is present but
+// empty (''), so the `?:` coercion below is required to actually match that page —
+// a saved-then-cleared 'dnsbl_webpage' must still report 'dnsbl_default.php', the
+// same as an install that never saved DNSBL settings (and the install/upgrade
+// refresh of dnsbl_active.php then fires). Fixes the dead read of the mis-spelled
+// 'dnsblwebpage' registry key, which always returned '' because nothing ever
+// writes that path.
+function pfb_dnsbl_webpage(): string
+{
+	return config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_webpage', 'dnsbl_default.php') ?: 'dnsbl_default.php';
 }
 
 /**
