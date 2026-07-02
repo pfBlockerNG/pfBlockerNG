@@ -85,4 +85,37 @@ final class SanitizeIpaddrTest extends TestCase
 		// mask 8 < floor 24 -> clamped to /32 (public TEST-NET-2 survives the filter).
 		$this->assertSame('198.51.100.0/32', sanitize_ipaddr('198.51.100.0/8', false, 24));
 	}
+
+	// --- RFC 4632-invalid prefix lengths are dropped, never rewritten (#719) ---
+
+	// The old substring str_replace('32', '') rewrote an invalid mask into a
+	// valid, far broader one (/132 -> /1 ingested half of IPv4 into a Deny
+	// table; /320 and /3232 collapsed to a bare host). Such lines must be
+	// dropped outright.
+	public function testMaskContaining32AsSubstringDroppedNotRewritten(): void
+	{
+		$this->assertNull(sanitize_ipaddr('1.2.3.4/132', false, 'Disabled'));
+		$this->assertNull(sanitize_ipaddr('10.0.0.0/232', false, 'Disabled'));
+		$this->assertNull(sanitize_ipaddr('10.0.0.0/320', false, 'Disabled'));
+		$this->assertNull(sanitize_ipaddr('1.2.3.4/3232', false, 'Disabled'));
+	}
+
+	public function testOutOfRangeMaskDropped(): void
+	{
+		$this->assertNull(sanitize_ipaddr('1.2.3.4/33', false, 'Disabled'));
+	}
+
+	// Suppression's old '> 32' guard rewrote /33 into a bare host instead of
+	// rejecting it; with the mask validated up front the line is dropped on
+	// this branch too.
+	public function testOutOfRangeMaskDroppedUnderSuppression(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
+		$this->assertNull(sanitize_ipaddr('192.0.2.1/33', false, 'Disabled'));
+	}
+
+	public function testNonNumericMaskDropped(): void
+	{
+		$this->assertNull(sanitize_ipaddr('1.2.3.4/abc', false, 'Disabled'));
+	}
 }
