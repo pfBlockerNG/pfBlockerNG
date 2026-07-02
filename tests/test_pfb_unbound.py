@@ -18,8 +18,11 @@ from unboundmodule import (
     MODULE_FINISHED,
     MODULE_RESTART_NEXT,
     MODULE_WAIT_MODULE,
+    PKT_AA,
+    PKT_QR,
     RCODE_NOERROR,
     RCODE_NXDOMAIN,
+    RR_CLASS_IN,
     DNSMessage,
     sec_status_insecure,
 )
@@ -962,6 +965,56 @@ RR_AAAA = 28
 RR_TXT = 16
 
 
+class TestSetReturnMsgStubFidelity:
+    """DNSMessage.set_return_msg() must model real Unbound's createResponse
+    (pythonmod/pythonmod_utils.c): replace ``return_msg`` wholesale, never
+    mutate an existing one, and never stamp ``rep.security`` itself -- a
+    caller that skips its own stamp must see an unchecked (not falsely
+    secure) reply, or a real DNSSEC-failure class (issue #149) goes untested.
+    """
+
+    def test_leaves_security_unchecked(self) -> None:
+        # Given a fresh DNSMessage, When set_return_msg() attaches it to a
+        # qstate with no prior return_msg, Then rep.security stays at
+        # sec_status_unchecked (0) -- createResponse never stamps security.
+        qstate = make_qstate("example.com.")
+        msg = DNSMessage("example.com.", RR_A, RR_CLASS_IN, PKT_QR)
+        assert msg.set_return_msg(qstate) is True
+        assert qstate.return_msg.rep.security == 0
+
+    def test_replaces_existing_return_msg(self) -> None:
+        # Given a qstate that already carries a return_msg (e.g. a resolved
+        # CNAME chain), When set_return_msg() runs, Then it REPLACES the
+        # object wholesale (a fresh rep/qinfo), never mutating the prior one
+        # in place -- real createResponse always allocates a new reply.
+        sentinel = types.SimpleNamespace(
+            rep=types.SimpleNamespace(security=0, an_numrrsets=2, rrsets=["sentinel"]),
+            qinfo=types.SimpleNamespace(qname_str="old.example.com.", qname_list=[]),
+        )
+        qstate = make_qstate("example.com.", return_msg=sentinel)
+        msg = DNSMessage("example.com.", RR_A, RR_CLASS_IN, PKT_QR)
+        assert msg.set_return_msg(qstate) is True
+        assert qstate.return_msg is not sentinel
+        assert qstate.return_msg.rep is not sentinel.rep
+        assert qstate.return_msg.rep.rrsets == []
+        assert qstate.return_msg.rep.an_numrrsets == 0
+
+    def test_authoritative_set_only_when_pkt_aa_flagged(self) -> None:
+        # Given PKT_AA is set on the message's flags, When set_return_msg()
+        # attaches it, Then rep.authoritative is 1; given PKT_AA is absent,
+        # Then it stays 0 -- both branches of the real Python wrapper's
+        # post-success authoritative stamp.
+        qstate_aa = make_qstate("example.com.")
+        msg_aa = DNSMessage("example.com.", RR_A, RR_CLASS_IN, PKT_QR | PKT_AA)
+        msg_aa.set_return_msg(qstate_aa)
+        assert qstate_aa.return_msg.rep.authoritative == 1
+
+        qstate_no_aa = make_qstate("example.com.")
+        msg_no_aa = DNSMessage("example.com.", RR_A, RR_CLASS_IN, PKT_QR)
+        msg_no_aa.set_return_msg(qstate_no_aa)
+        assert qstate_no_aa.return_msg.rep.authoritative == 0
+
+
 class TestOperateNoAAAA:
     def test_exact_match_blocks(self, monkeypatch: Any) -> None:
         add_noaaaa("example.com", wildcard=False)
@@ -970,6 +1023,9 @@ class TestOperateNoAAAA:
         assert rcd is True
         assert qstate.ext_state[0] == MODULE_FINISHED
         assert qstate.return_rcode == RCODE_NOERROR
+        # The synthesized AAAA -> A reply is unsigned; it must be stamped
+        # non-bogus or the validator SERVFAILs it (issue #149 class).
+        assert qstate.return_msg.rep.security == 2
 
     def test_wildcard_blocks_subdomain_and_caches(self) -> None:
         add_noaaaa("example.com", wildcard=True)
@@ -1329,6 +1385,9 @@ class TestOperateDnsbl:
         assert rcd is True
         assert qstate.ext_state[0] == MODULE_FINISHED
         assert calls["n"] == 1
+        # The synthesized DNSBL block reply is unsigned; it must be stamped
+        # non-bogus or the validator SERVFAILs it (issue #149 class).
+        assert qstate.return_msg.rep.security == 2
 
     def test_cname_unknown_sentinel_is_never_evaluated(self, monkeypatch: Any) -> None:
         # #714 FIX #3: convert_other() returns the is_unknown() decode-failure sentinel
@@ -1369,6 +1428,30 @@ class TestOperateEvents:
         rcd = pfb_unbound.operate(0, 99, qstate, None)
         assert rcd is True
         assert qstate.ext_state[0] == MODULE_ERROR
+
+
+class TestOperatePythonControlLegacy:
+    """The deprecated DNS-TXT control channel (PFBL-03) is inert unless
+    python_control_legacy is explicitly opted in, but when it IS, its
+    synthesized TXT reply must go through the same DNSSEC-stamping discipline
+    as every other set_return_msg() site (issue #149 class).
+    """
+
+    def test_disable_command_answers_txt_and_stamps_security(self) -> None:
+        # Given the legacy control channel is enabled and the query comes from
+        # loopback, When a valid "python_control.disable" TXT query arrives,
+        # Then operate() synthesizes a TXT reply AND stamps rep.security
+        # non-bogus -- an unstamped synthesized reply is SERVFAILed by the
+        # validator.
+        pfb_unbound.pfb["python_control_legacy"] = True
+        pfb_unbound.pfb["python_control"] = True
+        qstate = make_qstate("python_control.disable.", qtype=RR_TXT, q_ip="127.0.0.1")
+        rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert rcd is True
+        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert qstate.return_rcode == RCODE_NOERROR
+        assert any("IN TXT" in a for a in DNSMessage.instances[-1].answer)
+        assert qstate.return_msg.rep.security == 2
 
 
 class TestLoadSafeSearchDb:
@@ -1562,6 +1645,9 @@ class TestSafeSearchCnameRedirect:
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert qstate.ext_state[0] == MODULE_FINISHED
         assert any(a.startswith("forcesafe.com. ") and " A 1.2.3.4" in a for a in DNSMessage.instances[-1].answer)
+        # The synthesized SafeSearch answer is unsigned; it must be stamped
+        # non-bogus or the validator SERVFAILs it (issue #149 class).
+        assert qstate.return_msg.rep.security == 2
 
     def test_phase1_plants_cname_and_restarts(self, monkeypatch: Any) -> None:
         # Phase 1 (When the resolved answer does not yet carry our CNAME): plant the
