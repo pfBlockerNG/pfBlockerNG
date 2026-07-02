@@ -240,17 +240,29 @@ pfb_zstd_threads() {
 pfb_archive_compress() {
 	_base="$1"
 	shift
-	# No availability probe: just attempt zstd. If the binary is missing OR errors, the
-	# pipeline fails and we fall through -- the attempt IS the check. On a verified write
-	# retire a stale .bz2.
-	if "${pathtar}" -Pcf - "$@" | zstd -q -f -T"$(pfb_zstd_threads)" -o "${_base}.zst" 2>/dev/null \
-		&& zstd -tq "${_base}.zst" 2>/dev/null; then
-		rm -f "${_base}.bz2"
+	# Tar to a private temp file FIRST and check tar's own exit status directly.
+	# POSIX sh has no pipefail, so a `tar -Pcf - ... | zstd ...` pipe silently
+	# discards tar's exit code (only zstd's mattered) -- and "zstd -tq" verifies
+	# only the zstd FRAMING, not tar completeness, so a truncated tar stream still
+	# compressed into a small but VALID .zst: the old check passed on a corrupt
+	# archive AND deleted the still-good .bz2 (issue #713 bug 7). Both temp files
+	# live alongside "${_base}" so the publish "mv" below is same-filesystem and
+	# atomic; on ANY failure below, the pre-existing .bz2 is never touched (only
+	# retired after a verified .zst is published), so the bzip2 fallback always
+	# has a good backup to fall back to.
+	_tartmp="$(mktemp "${_base}.XXXXXX")" || return 1
+	_ztmp="$(mktemp "${_base}.XXXXXX")" || { rm -f "${_tartmp}"; return 1; }
+	if "${pathtar}" -Pcf "${_tartmp}" "$@" \
+		&& zstd -q -f -T"$(pfb_zstd_threads)" -o "${_ztmp}" "${_tartmp}" 2>/dev/null \
+		&& zstd -tq "${_ztmp}" 2>/dev/null; then
+		mv -f "${_ztmp}" "${_base}.zst"
+		rm -f "${_tartmp}" "${_base}.bz2"
 		return 0
 	fi
-	# zstd unavailable or errored: drop any partial/stale .zst, fall back to bzip2
-	# ("who knows what the future holds").
-	rm -f "${_base}.zst"
+	# tar, zstd compression, or zstd verification failed: drop the temp/partial
+	# output (never the pre-existing .bz2 -- it was never touched above) and fall
+	# back to bzip2 ("who knows what the future holds").
+	rm -f "${_tartmp}" "${_ztmp}" "${_base}.zst"
 	"${pathtar}" -Pjcf "${_base}.bz2" "$@"
 }
 
