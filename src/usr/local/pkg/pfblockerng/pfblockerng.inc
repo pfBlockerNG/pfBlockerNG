@@ -4336,6 +4336,20 @@ function pfb_pfctl_table_count(string $table): int {
 }
 
 
+// Parse the numeric match count out of `pfctl -t <table> -T test <ip> 2>&1` output --
+// "N/1 addresses match." on a normal run, or (because of the merged 2>&1) an error
+// string such as "pfctl: Table does not exist." when the table is absent. (int) casts
+// the leading numeric prefix, which PHP resolves to 0 for any non-numeric string --
+// unlike the old `substr($output, 0, 1) > 0` comparison it replaces, which took the
+// output's first CHARACTER and let PHP 8's string/int comparison rules turn a leading
+// letter (e.g. the 'p' in "pfctl: ...") into a false positive match (issue #713).
+//
+// PURE -- no I/O, no globals, no side effects.
+function pfb_pfctl_test_match_count(string $output): int {
+	return (int) $output;
+}
+
+
 // ADR-11 Phase 3: build + register the opt-in per-type aggregate ("Uber") Native aliases.
 //
 // ONE generic loop over the type->dir map {Deny,Permit,Match,Native} x family {v4,v6}.
@@ -9295,8 +9309,10 @@ function pfb_download_failure($alias, $header, $pfbfolder, $list_url, $format, $
 
 						// Query Snort/Suricata snort2c IP block table
 						$ip_esc = escapeshellarg($ip);
-						$result = substr(exec("{$pfb['pfctl']} -t snort2c -T test {$ip_esc} 2>&1"), 0, 1);
-						if ($result > 0) {
+						// issue #713: parse the numeric match count instead of comparing the
+						// raw output's first character -- see pfb_pfctl_test_match_count().
+						$count = pfb_pfctl_test_match_count(exec("{$pfb['pfctl']} -t snort2c -T test {$ip_esc} 2>&1"));
+						if ($count > 0) {
 							$log = " [ {$ip} ] IDS IP block found for HOST:{$host}!\n";
 							pfb_logger("{$log}", 2);
 							$pfbfound = TRUE;
@@ -10241,8 +10257,10 @@ function pfb_remove_states() {
 
 					$s_table_esc	= escapeshellarg($s_table);
 					$s_ip_esc	= escapeshellarg($s_ip);
-					$result = substr(exec("{$pfb['pfctl']} -t {$s_table_esc} -T test {$s_ip_esc} 2>&1"), 0, 1);
-					if ($result > 0) {
+					// issue #713: parse the numeric match count instead of comparing the
+					// raw output's first character -- see pfb_pfctl_test_match_count().
+					$count = pfb_pfctl_test_match_count(exec("{$pfb['pfctl']} -t {$s_table_esc} -T test {$s_ip_esc} 2>&1"));
+					if ($count > 0) {
 
 						$pfbfound = TRUE;
 						$log = "\n\n\t[ {$s_table} ] Removed " . count($state) . " state(s) for [ {$s_ip} ]\n\n";
