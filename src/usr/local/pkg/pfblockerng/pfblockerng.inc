@@ -9201,12 +9201,21 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				@touch("{$orig_download}", $remote_stamp);
 			}
 
-			// ADR-42 Phase 2: refresh the content-hash sidecar at every successful ingest
-			// so pfb_local_feed_changed() always compares against the last-ingested bytes.
-			// This covers both local and remote standard feeds (any path that finalises a
-			// plain .orig here).  geoip/asn early-returns (~line 7872) do not reach this
-			// block, so they correctly never get a sidecar.
-			pfb_hash_write("{$orig_download}", "{$orig_download}");
+			// ADR-42 Phase 2 / issue #713 bug 5: refresh the content-hash sidecar at every
+			// successful ingest so pfb_local_feed_changed() / the probe's conditional-GET
+			// compare always land on the SAME domain of bytes the probe hashed.  The probe
+			// (pfb_update_check -> pfb_download($type='change_detect')) hashes the RAW
+			// fetched body (it returns before any decompression), so the persisted digest
+			// here must cover those same raw bytes too -- not the decompressed '.orig' --
+			// or a compressed feed (gz/bz2/zip/7z) never matches and re-ingests every cron.
+			// pfb_source_hash_target() resolves to $file_download (the raw '.raw' download,
+			// still on disk for every compressed format) or falls back to $orig_download for
+			// an uncompressed feed, where $file_download was already renamed away (above)
+			// into $orig_download -- byte-identical to what was fetched, so the fallback is
+			// exact, not an approximation.  This covers both local and remote standard feeds
+			// (any path that finalises a plain .orig here).  geoip/asn early-returns
+			// (~line 7872) do not reach this block, so they correctly never get a sidecar.
+			pfb_hash_write("{$orig_download}", pfb_source_hash_target($file_download, $orig_download));
 
 			// Process Emerging Threats IQRisk if required
 			if (strpos($list_url, 'iprepdata.txt') !== FALSE) {
@@ -10724,6 +10733,27 @@ function pfb_hash_read($base) {
 
 	// No sidecar found — treat as changed (fail-safe).
 	return $sentinel;
+}
+
+// ADR-42 / issue #713 bug 5: resolve which on-disk file holds the RAW fetched body, so
+// the source-hash sidecar pfb_download() persists at ingest time hashes the SAME bytes
+// as the probe (pfb_update_check -> pfb_download($type='change_detect') hashes the raw
+// fetched body -- it returns before any decompression).
+//
+// $file_download is the '.raw' download (pre-decompression); $orig_download is the
+// finalised '.orig' the caller will ingest (decompressed for a compressed feed, or the
+// renamed raw file itself for an uncompressed one).
+//
+//   - Compressed feed (gz/bz2/zip/7z): the decompress tool (gunzip/bzip2/tar/7z) does
+//     not delete its source archive, so $file_download still exists on disk here and IS
+//     the raw fetched bytes -> hash that, not the decompressed $orig_download.
+//   - Uncompressed feed: $file_download was already @rename()'d onto $orig_download
+//     before this is called, so it no longer exists on disk -- but $orig_download now
+//     holds byte-identical content to what was fetched, so falling back to it is exact.
+//
+// Pure / no I/O beyond file_exists(); unit-testable in isolation from pfb_download().
+function pfb_source_hash_target($file_download, $orig_download) {
+	return file_exists($file_download) ? $file_download : $orig_download;
 }
 
 // Write the xxhash128 sidecar for a file path and remove any superseded .md5 sidecar.
