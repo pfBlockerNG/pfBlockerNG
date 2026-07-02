@@ -187,7 +187,9 @@ class TestRawAbpBoundaryDecisions:
     # TLD master), so ``||example.com^`` classifies to a wildcard ZONE covering its
     # subdomains -- matching the Phase-2 oracle's wildcard semantics. The ``@@``
     # exception carves a subdomain back out of an overarching block (the real
-    # over-blocking fix; the old PHP lite parser dropped it).
+    # over-blocking fix; the old PHP lite parser dropped it). ``||ads.metrics.net^``
+    # is a DEEPER anchor (its own registrable parent is metrics.net, one level up):
+    # ABP semantics still cover ITS subdomains too, regardless of that extra depth.
     FEED = [
         "[Adblock Plus 2.0]",  # header (PHP drops; never reaches Python)
         "! Title: test",  # comment (dropped)
@@ -201,6 +203,7 @@ class TestRawAbpBoundaryDecisions:
         "##.banner",  # element-hiding (skip)
         "||img.example.net/banner.gif",  # path/URL (skip)
         "||evil.example.net^$third-party",  # page-context option (skip)
+        "||ads.metrics.net^",  # deep anchor -- blocks its subdomains too
     ]
 
     QUERIES = [
@@ -214,6 +217,9 @@ class TestRawAbpBoundaryDecisions:
         "img.example.net",  # path/URL skipped -> not blocked
         "evil.example.net",  # page-context option skipped -> not blocked
         "nothing.example.org",
+        "ads.metrics.net",  # deep anchor itself -> blocked
+        "deep.ads.metrics.net",  # deep anchor's subdomain -> blocked too
+        "metrics.net",  # unblocked parent -- must stay unblocked
     ]
 
     def test_decisions_match_oracle(self) -> None:

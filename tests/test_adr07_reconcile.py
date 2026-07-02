@@ -293,14 +293,27 @@ class TestClassify:
         b = res.block_domains[0]
         assert (b.cls, b.key) == (P.DNSBL_CLASS_ZONE, "example.com")
 
-    def test_subdomain_block_classifies_via_classify(self) -> None:
-        # ||ads.example.com^ -> classify(ads.example.com) -> DATA (deeper sub) but
-        # wildcard zone semantics come from the rule covering subs; verify classify
-        # agreement directly.
+    def test_deep_anchor_classifies_zone_at_its_own_key(self) -> None:
+        # ABP semantics: ||host^ blocks host AND every subdomain, no matter how many
+        # labels sit above host's own registrable parent (the oracle decide() has no
+        # depth restriction). A deep anchor like ||ads.example.com^ must classify as
+        # ZONE at its OWN key -- NOT get demoted to an exact DATA entry that would
+        # silently drop subdomain coverage.
         res = _reconcile(["||ads.example.com^"])
         b = res.block_domains[0]
-        cls, key = P.classify("ads.example.com", _TLDS, _EXCLUSION)
-        assert (b.cls, b.key) == (cls, key)
+        assert (b.cls, b.key) == (P.DNSBL_CLASS_ZONE, "ads.example.com")
+        assert _resolve(res, "deep.ads.example.com") == "block"
+
+    def test_deep_anchor_exclusion_forces_exact_data(self) -> None:
+        # The OTHER side of the branch (CLAUDE.md: assert every branch, not one
+        # side): a whole-domain TLD exclusion is the user's knob to opt a domain
+        # OUT of wildcarding, so it still forces a transparent exact DATA entry even
+        # for a deep anchor -- subdomains stay unblocked.
+        rules = _production_rules(["||ads.example.com^"])
+        res = P.reconcile(rules, _TLDS, {"ads.example.com"})
+        b = res.block_domains[0]
+        assert (b.cls, b.key) == (P.DNSBL_CLASS_DATA, "ads.example.com")
+        assert _resolve(res, "deep.ads.example.com") == "pass"
 
     def test_exact_fold_forces_data(self) -> None:
         # an exact /^D$/ fold (wildcard=False) must NOT be wildcarded into a zone.
