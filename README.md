@@ -211,11 +211,11 @@ is the general reference. A couple of this fork's additions are worth calling ou
 
 ### Update Hooks
 
-The **Update Hooks** tab runs your own script at the start (`pre`) and end (`post`)
+The Update page's **Hooks** tab runs your own script at the start (`pre`) and end (`post`)
 of every update pass — for example to reload a downstream service when the blocklist
 changes. For security the hook is a **script file you place on the firewall**, not a
 command typed into the GUI: author it over SSH/console (root shell) in
-`/usr/local/pkg/pfblockerng/list_scripts/`, name it `hook_pre_<name>.sh` or
+`/usr/local/pkg/pfblockerng/hooks/`, name it `hook_pre_<name>.sh` or
 `hook_post_<name>.sh` (`.sh` or `.py`), and make it executable (`chmod +x`, with a
 `#!` shebang) — then the tab's picker selects it. Each enabled hook runs as root (the
 same trust class as pfSense's `shellcmd`/cron) under a timeout; a hook's failure is
@@ -240,7 +240,7 @@ A `post` hook receives this environment:
 **Reload HAProxy after an IP update** — the motivating use case: block a
 Cloudflare-fronted real client IP via an aggregate alias, refreshed by a graceful
 HAProxy reload. Save this as
-`/usr/local/pkg/pfblockerng/list_scripts/hook_post_haproxy.sh` (`chmod +x`), then
+`/usr/local/pkg/pfblockerng/hooks/hook_post_haproxy.sh` (`chmod +x`), then
 pick it as a `post` hook:
 
 ```sh
@@ -252,7 +252,7 @@ pick it as a `post` hook:
 **Notify a webhook of what changed** — fires on any blocklist-data change (including
 content-only refreshes). Each field rides its own `--data-urlencode` so the
 space-separated lists are encoded correctly. Save as
-`/usr/local/pkg/pfblockerng/list_scripts/hook_post_webhook.sh` (`chmod +x`), then pick
+`/usr/local/pkg/pfblockerng/hooks/hook_post_webhook.sh` (`chmod +x`), then pick
 it as a `post` hook:
 
 ```sh
