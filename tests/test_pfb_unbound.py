@@ -2021,27 +2021,38 @@ class TestHstsCheckDomain:
         assert result == (True, "HSTS")
 
     def test_suffix_walk_hits_parent(self) -> None:
-        # "sub.example.com" (2 dots): range(3,0,-2) → [3, 1]
-        # iter 0: check "sub.example.com" (miss), step → "example.com"
-        # iter 1: check "example.com" (hit)
+        # "sub.example.com" (2 dots): the walk checks "sub.example.com" (miss), steps
+        # to "example.com" (hit) -- every parent suffix level is visited in order.
         hsts_db: dict = {"example.com": 0}
         result = hsts_check_domain("sub.example.com", hsts_db, (), "com")
         assert result == (True, "HSTS")
 
-    def test_stride_2_skips_alternate_label(self) -> None:
-        # "a.b.c.d" (3 dots): range(4,0,-2) → 2 iterations
-        # The loop runs twice: q starts at "a.b.c.d", then steps to "b.c.d".
-        # Positions checked: "a.b.c.d" (iter 0), "b.c.d" (iter 1).
-        # "c.d" is never checked (one more step would be needed).
-        # This pins the stride-2 quirk: "c.d" alone is NOT found.
+    def test_every_parent_suffix_is_checked_for_hsts(self) -> None:
+        # issue #713: the walk used to stride by -2, skipping every OTHER parent
+        # suffix level. For "a.b.c.d" (3 dots) the buggy walk checked only
+        # "a.b.c.d" and "b.c.d" -- it never reached "c.d" -- so a name whose HSTS
+        # parent is exactly "c.d" incorrectly fell through to ("Python") instead of
+        # ("HSTS"), forcing a VIP block instead of NULL for that HSTS-preloaded
+        # parent (wrong TLS cert on the block page). The corrected stride-1 walk
+        # checks every level ("a.b.c.d", "b.c.d", "c.d", "d") and finds it.
         hsts_db: dict = {"c.d": 0}
         result = hsts_check_domain("a.b.c.d", hsts_db, (), "d")
-        assert result == (False, "Python")
+        assert result == (True, "HSTS")
 
-    def test_stride_2_hits_second_position(self) -> None:
-        # The second position checked is "b.c.d" (after one step from "a.b.c.d").
-        # A stride-1 walk would also check "c.d" and "d"; stride-2 stops after "b.c.d".
+    def test_second_level_parent_suffix_matches(self) -> None:
+        # The second suffix level checked ("b.c.d", one step up from the full name)
+        # resolves to HSTS -- confirms the walk isn't only correct at the extremes.
         hsts_db: dict = {"b.c.d": 0}
+        result = hsts_check_domain("a.b.c.d", hsts_db, (), "d")
+        assert result == (True, "HSTS")
+
+    def test_bare_tld_suffix_is_checked(self) -> None:
+        # issue #713: the walk must reach the LAST level -- the bare TLD label itself.
+        # The buggy stride-2 walk for this 4-label name stopped two levels short of
+        # "d" (it only ever reached "b.c.d"), so a parent HSTS entry at the bare TLD
+        # was never found. Confirms the loop count now covers every suffix down to
+        # (and including) the TLD.
+        hsts_db: dict = {"d": 0}
         result = hsts_check_domain("a.b.c.d", hsts_db, (), "d")
         assert result == (True, "HSTS")
 

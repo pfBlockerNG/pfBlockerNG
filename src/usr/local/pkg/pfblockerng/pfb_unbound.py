@@ -5105,7 +5105,11 @@ def hsts_check_domain(
     if tld in hsts_tlds:
         return True, "HSTS_TLD"
     q = name
-    for _ in range(q.count(".") + 1, 0, -2):
+    # issue #713: this walk must check EVERY parent suffix (stride -1) -- a stride of
+    # -2 skips every other suffix level, so a name whose HSTS parent sits at a skipped
+    # level would fall through to "Python" (VIP block) instead of "HSTS" (NULL block),
+    # serving the block page over the wrong cert for an HSTS-preloaded parent.
+    for _ in range(q.count(".") + 1, 0, -1):
         if hsts_db.get(q) is not None:
             return True, "HSTS"
         q = q.split(".", 1)[-1]
