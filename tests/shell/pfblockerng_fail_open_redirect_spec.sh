@@ -102,11 +102,9 @@ SHIM
     After 'cleanup'
 
     It 'keeps the live list UNCHANGED when grepcidr errors (rc>=2) -- pre-fix this truncated it to empty'
-      # Given: the live list holds prior, real content.
-      The contents of file "${livelist}" should equal "$(printf 'PRIOR-1\nPRIOR-2')"
       # When: grepcidr errors.
       GREPCIDR_MODE='error'; export GREPCIDR_MODE
-      When call suppress
+      When call silently suppress
       # Then: the prior content survives -- and the error is logged, not swallowed.
       The status should be success
       The contents of file "${livelist}" should equal "$(printf 'PRIOR-1\nPRIOR-2')"
@@ -115,14 +113,14 @@ SHIM
 
     It 'replaces the live list with an EMPTY result on grepcidr rc=1 (a legitimate "everything suppressed" outcome)'
       GREPCIDR_MODE='empty'; export GREPCIDR_MODE
-      When call suppress
+      When call silently suppress
       The status should be success
       The contents of file "${livelist}" should equal ''
     End
 
     It 'publishes the new content on grepcidr success'
       GREPCIDR_MODE='success'; export GREPCIDR_MODE
-      When call suppress
+      When call silently suppress
       The status should be success
       The contents of file "${livelist}" should equal "$(printf '192.0.2.1\n192.0.2.2')"
     End
@@ -157,10 +155,8 @@ SHIM
 
     It 'keeps the PRIOR masterfile rows when awk errors -- pre-fix this truncated masterfile, losing them all (incl. the unrelated OtherList_v4 row)'
       GREPCIDR_MODE='success'; AWK_MODE='error'; export GREPCIDR_MODE AWK_MODE
-      # Given: masterfile holds both this alias's rows and an unrelated one.
-      The contents of file "${masterfile}" should equal "$(printf 'DedupList_v4 PRIOR-1\nDedupList_v4 PRIOR-2\nOtherList_v4 203.0.113.5')"
       PATH="${awkshim}:${PATH}"
-      When call suppress
+      When call silently suppress
       The status should be success
       # suppress()'s trailing sed always re-appends the (here: grepcidr-succeeded)
       # fresh list content regardless of the dedup outcome -- pre-existing,
@@ -174,7 +170,7 @@ SHIM
     It 'dedups masterfile (drops the stale alias rows, keeps the unrelated one, appends the fresh list) on awk success'
       GREPCIDR_MODE='success'; AWK_MODE='real'; export GREPCIDR_MODE AWK_MODE
       PATH="${awkshim}:${PATH}"
-      When call suppress
+      When call silently suppress
       The status should be success
       The contents of file "${masterfile}" should include 'OtherList_v4 203.0.113.5'
       The contents of file "${masterfile}" should not include 'PRIOR-1'
@@ -211,7 +207,7 @@ SHIM
     It 'keeps masterfile rows from the dedup step UNCHANGED when awk errors -- pre-fix this truncated masterfile, losing the unrelated OtherList_v4 row'
       GREPCIDR_MODE='success'; AWK_MODE='error'; export GREPCIDR_MODE AWK_MODE
       PATH="${awkshim}:${PATH}"
-      When call duplicate
+      When call silently duplicate
       The status should be success
       # duplicate()'s own trailing append always re-adds the (here: grepcidr-
       # succeeded) pfbdeny content -- pre-existing, unrelated to this fix -- so
@@ -223,9 +219,7 @@ SHIM
 
     It 'keeps the pfbdeny list UNCHANGED when grepcidr errors (rc>=2) -- Class A temp+mv variant'
       GREPCIDR_MODE='error'; export GREPCIDR_MODE
-      # Given: the deny list holds prior, real content.
-      The contents of file "${denyfile}" should equal "$(printf '192.0.2.10\n192.0.2.11')"
-      When call duplicate
+      When call silently duplicate
       The status should be success
       The contents of file "${denyfile}" should equal "$(printf '192.0.2.10\n192.0.2.11')"
       The contents of file "${errorlog}" should include 'grepcidr error'
@@ -233,7 +227,7 @@ SHIM
 
     It 'dedups masterfile and publishes the new pfbdeny content on full success'
       GREPCIDR_MODE='success'; export GREPCIDR_MODE
-      When call duplicate
+      When call silently duplicate
       The status should be success
       # DupList_v4's original rows are dedup'd out of masterfile; only the
       # unrelated OtherList_v4 row plus the freshly-published pfbdeny content
@@ -265,10 +259,8 @@ SHIM
 
     It 'keeps masterfile UNCHANGED when awk errors -- pre-fix this truncated masterfile (remove() then deletes an empty masterfile entirely)'
       AWK_MODE='error'; export AWK_MODE
-      # Given: masterfile holds both the removed alias's row and an unrelated one.
-      The contents of file "${masterfile}" should equal "$(printf 'RmList_v4 192.0.2.20\nOtherList_v4 203.0.113.9')"
       PATH="${awkshim}:${PATH}"
-      When call remove
+      When call silently remove
       The status should be success
       The contents of file "${masterfile}" should equal "$(printf 'RmList_v4 192.0.2.20\nOtherList_v4 203.0.113.9')"
     End
@@ -276,7 +268,7 @@ SHIM
     It 'dedups masterfile (drops the removed alias row, keeps the unrelated one) on awk success'
       AWK_MODE='real'; export AWK_MODE
       PATH="${awkshim}:${PATH}"
-      When call remove
+      When call silently remove
       The status should be success
       The contents of file "${masterfile}" should equal 'OtherList_v4 203.0.113.9'
     End
@@ -300,11 +292,8 @@ SHIM
 
     It 'keeps the live deny list UNCHANGED when the dedup awk errors -- pre-fix the direct redirect truncated it before the awk even ran, losing every prior host'
       AWK_MODE='error'; export AWK_MODE
-      # Given: the deny list holds real prior hosts.
-      The contents of file "${pfbdeny}${alias}.txt" should include '10.0.0.5'
-      The contents of file "${pfbdeny}${alias}.txt" should include 'PRIOR-MARKER'
       PATH="${awkshim}:${PATH}"
-      When call process255
+      When call silently process255
       The status should be success
       # Then: the prior hosts survive the failed collapse (only the /24 summary is appended).
       The contents of file "${pfbdeny}${alias}.txt" should include '10.0.0.5'
@@ -314,7 +303,7 @@ SHIM
     It 'collapses the /24 (drops the individual hosts, appends the summary) on awk success -- proves the error branch is a real fail-safe, not an always-preserve no-op'
       AWK_MODE='real'; export AWK_MODE
       PATH="${awkshim}:${PATH}"
-      When call process255
+      When call silently process255
       The status should be success
       The contents of file "${pfbdeny}${alias}.txt" should not include '10.0.0.5'
       The contents of file "${pfbdeny}${alias}.txt" should include '10.0.0.0/24'
@@ -345,10 +334,8 @@ SHIM
 
     It 'keeps the live deny list UNCHANGED when the ccblack="block" dedup awk errors -- pre-fix the direct redirect truncated it, losing every prior host'
       AWK_MODE='error'; export AWK_MODE
-      The contents of file "${pfbdeny}${alias}.txt" should include '10.0.0.5'
-      The contents of file "${pfbdeny}${alias}.txt" should include 'PRIOR-MARKER'
       PATH="${awkshim}:${PATH}"
-      When call reputation_max
+      When call silently reputation_max
       The status should be success
       The contents of file "${pfbdeny}${alias}.txt" should include '10.0.0.5'
       The contents of file "${pfbdeny}${alias}.txt" should include 'PRIOR-MARKER'
@@ -357,7 +344,7 @@ SHIM
     It 'removes the country-classified hosts and appends the /24 summary on awk success -- proves the error branch is a real fail-safe, not an always-preserve no-op'
       AWK_MODE='real'; export AWK_MODE
       PATH="${awkshim}:${PATH}"
-      When call reputation_max
+      When call silently reputation_max
       The status should be success
       The contents of file "${pfbdeny}${alias}.txt" should not include '10.0.0.5'
       The contents of file "${pfbdeny}${alias}.txt" should include '10.0.0.0/24'

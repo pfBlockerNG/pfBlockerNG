@@ -65,3 +65,13 @@ run_exitnow_on() {
 	tmpdir="$1"
 	exitnow
 }
+
+# Run a sourced function with its stdout/stderr discarded while preserving its
+# exit status. Lets a spec assert a function's FILE side-effects + status without
+# tripping shellspec's "unexpected output" warning on the function's own progress
+# / stat printing (or an injected shim's diagnostic) -- output that is incidental,
+# not the behaviour under test. Use for examples that assert files/status only;
+# examples that assert stdout keep a plain `When call`.
+silently() {
+	"$@" >/dev/null 2>&1
+}
