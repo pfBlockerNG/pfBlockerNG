@@ -20,6 +20,7 @@ from unboundmodule import (
     MODULE_WAIT_MODULE,
     PKT_AA,
     PKT_QR,
+    PKT_RA,
     RCODE_NOERROR,
     RCODE_NXDOMAIN,
     RR_CLASS_IN,
@@ -1003,6 +1004,16 @@ class TestSetReturnMsgStubFidelity:
         assert qstate.return_msg.rep.rrsets == []
         assert qstate.return_msg.rep.an_numrrsets == 0
 
+    def test_rep_flags_carry_wire_format_bits(self) -> None:
+        # Given a message built with runtime PKT_* constants, When
+        # set_return_msg() attaches it, Then rep.flags carries the WIRE-format
+        # header word (as real createResponse's packet parse yields), not the
+        # runtime PKT_* vocabulary -- QR|RA maps to 0x8000|0x0080.
+        qstate = make_qstate("example.com.")
+        msg = DNSMessage("example.com.", RR_A, RR_CLASS_IN, PKT_QR | PKT_RA)
+        assert msg.set_return_msg(qstate) is True
+        assert qstate.return_msg.rep.flags == 0x8080
+
     def test_authoritative_set_only_when_pkt_aa_flagged(self) -> None:
         # Given PKT_AA is set on the message's flags, When set_return_msg()
         # attaches it, Then rep.authoritative is 1; given PKT_AA is absent,
@@ -1037,15 +1048,20 @@ class TestOperateNoAAAA:
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert rcd is True
         assert qstate.ext_state[0] == MODULE_FINISHED
+        # The wildcard-path synthesized reply needs the same non-bogus stamp
+        # as the exact-match one (issue #149 class).
+        assert qstate.return_msg.rep.security == 2
         # The wildcard-parent hit is memoized as the child's noaaaa verdict on its
         # Decision, so a subsequent identical query short-circuits on the cache.
         assert pfb_unbound.decisionDB["sub.example.com"].noaaaa is True
         assert evaluate_noaaaa("sub.example.com", pfb_unbound.noAAAADB) is True
-        # Fast-path is unchanged: a subsequent identical query still blocks.
+        # Fast-path is unchanged: a subsequent identical query still blocks,
+        # and the memoized-verdict reply carries the stamp too.
         qstate2 = make_qstate("sub.example.com.", qtype=RR_AAAA)
         rcd2 = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate2, None)
         assert rcd2 is True
         assert qstate2.ext_state[0] == MODULE_FINISHED
+        assert qstate2.return_msg.rep.security == 2
 
     def test_excluded_domain_not_blocked(self) -> None:
         add_noaaaa("example.com", wildcard=False)
