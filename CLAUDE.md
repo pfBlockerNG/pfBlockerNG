@@ -973,7 +973,8 @@ persisted from a prior run) — when present the Models step is **skipped**; els
 the generator). When Models runs, a shell step gathers the commits since the **previous
 same-channel release** (`prev_tag` classifies each tag's channel via `release-version.sh`) and
 feeds them with the static system prompt in **`scripts/release-notes-prompt.txt`**; the model
-returns a `SUMMARY:` line (→ the Release **title** suffix, `pfBlockerNG VER — 3-word summary`) plus
+returns a `SUMMARY:` line (→ the Release **title** suffix; the title is `YYYY-MM-DD - VER — 3-word summary`,
+the ISO publish date prefixed so GitHub's alphabetical release sort stays chronological) plus
 a Markdown code block grouping user-facing changes under **Features / Improvements / Bug Fixes**
 with PR/issue links (CI/test/tooling/ADR noise filtered out), ending with the compare link. A
 **committed file** carries the same notes; its title summary rides in an optional first-line

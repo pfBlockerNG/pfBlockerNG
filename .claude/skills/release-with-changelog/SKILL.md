@@ -57,7 +57,7 @@ model; you apply it by hand here. `scripts/release-version.sh` classifies the ta
 
 5. **Write `docs/release-notes/<tag>.md`.** First line is the title marker
    `<!-- SUMMARY: <three-word summary> -->` (the workflow turns it into the Release title
-   suffix `pfBlockerNG <version> — <summary>` and strips it from the rendered body); then the
+   `<YYYY-MM-DD publish date> - <version> — <summary>` and strips it from the rendered body); then the
    grouped body. Lint it: `npx markdownlint-cli2 docs/release-notes/<tag>.md` → 0 errors.
 
 6. **Confirm the rendered notes with the user.** Show the title + body. This is the public
