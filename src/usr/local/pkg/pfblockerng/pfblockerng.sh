@@ -414,7 +414,10 @@ remove() {
 				# "BadAds_v4") doesn't over-match and strip a sibling's masterfile
 				# row -- masterfile rows always start with the alias at column 0.
 				grep "^${header}[[:space:]]" "${masterfile}" > "${tempfile}"
-				awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile}" "${masterfile}" > "${tempfile2}"; mv -f "${tempfile2}" "${masterfile}"
+				# #713: gate the publish on awk's own exit status (awk has no "empty
+				# result = rc 1" quirk -- non-zero is a real error) so a failed dedup
+				# can't truncate masterfile via an unconditional mv.
+				awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile}" "${masterfile}" > "${tempfile2}" && mv -f "${tempfile2}" "${masterfile}"
 			fi
 
 			rm -f "${pfborig}${header}"*; rm -f "${pfbdeny}${header}"*; rm -f "${pfbmatch}${header}"*
@@ -528,11 +531,26 @@ EOF
 
 				if [ -s "${dupfile}" ]; then
 					# Remove '/24' suppressed ranges
-					awk 'FNR==NR{a[$0];next}!($0 in a)' "${dupfile}" "${tempfile}" > "${tempfile2}"; mv -f "${tempfile2}" "${tempfile}"
+					# #713: gate the publish on awk's own exit status (awk has no "empty
+					# result = rc 1" quirk -- non-zero is a real error) so a failed dedup
+					# can't truncate the working copy via an unconditional mv.
+					awk 'FNR==NR{a[$0];next}!($0 in a)' "${dupfile}" "${tempfile}" > "${tempfile2}" && mv -f "${tempfile2}" "${tempfile}"
 				fi
 
-				# Remove all other suppressions from list
-				"${pathgrepcidr}" -vf "${pfbsuppression}" "${tempfile}" > "${pfbfolder}${alias}.txt"
+				# Remove all other suppressions from list. #713: redirect to a scratch
+				# temp and gate the publish on grepcidr's exit status -- rc 0 (matches
+				# removed) and rc 1 (everything suppressed, a LEGITIMATE empty result)
+				# both replace the live list; rc >= 2 is a real grepcidr error, so keep
+				# the previous list intact (no truncation) and warn instead.
+				"${pathgrepcidr}" -vf "${pfbsuppression}" "${tempfile}" > "${tempfile2}"
+				grc=$?
+				if [ "${grc}" -lt 2 ]; then
+					mv -f "${tempfile2}" "${pfbfolder}${alias}.txt"
+				else
+					rm -f "${tempfile2}"
+					log="grepcidr error (rc=${grc}) suppressing [ ${alias} ]; keeping previous list"
+					echo "${log}" | tee -a "${errorlog}"
+				fi
 
 				# Update masterfiles. Don't execute if duplication process is disabled
 				if [ "${dedup}" = 'on' ]; then
@@ -761,14 +779,30 @@ duplicate() {
 		# masterfile row into the removal set and silently dropping it
 		# (issue #714). Masterfile rows always start with the alias.
 		grep "^${alias}[[:space:]]" "${masterfile}" > "${tempfile}"
-		awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile}" "${masterfile}" > "${tempfile2}"; mv -f "${tempfile2}" "${masterfile}"
+		# #713: gate the publish on awk's own exit status (awk has no "empty
+		# result = rc 1" quirk -- non-zero is a real error) so a failed dedup
+		# can't truncate masterfile via an unconditional mv.
+		awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile}" "${masterfile}" > "${tempfile2}" && mv -f "${tempfile2}" "${masterfile}"
 		cut -d ' ' -f2 "${masterfile}" > "${mastercat}"
 	fi
 
 	# Don't execute when only a single 'Alias' exists in masterfile
 	if [ ! "${hcheck}" -eq 0 ]; then
 		LC_ALL=C sort -u "${pfbdeny}${alias}.txt" > "${tempfile}"; mv -f "${tempfile}" "${pfbdeny}${alias}.txt"
-		"${pathgrepcidr}" -vf "${mastercat}" "${pfbdeny}${alias}.txt" > "${tempfile}"; mv -f "${tempfile}" "${pfbdeny}${alias}.txt"
+
+		# #713: gate the publish on grepcidr's exit status -- rc 0 (matches removed)
+		# and rc 1 (everything pruned, a LEGITIMATE empty result) both replace the
+		# list; rc >= 2 is a real grepcidr error, so keep the previous list intact
+		# (no truncation via an unconditional mv) and warn instead.
+		"${pathgrepcidr}" -vf "${mastercat}" "${pfbdeny}${alias}.txt" > "${tempfile}"
+		grc=$?
+		if [ "${grc}" -lt 2 ]; then
+			mv -f "${tempfile}" "${pfbdeny}${alias}.txt"
+		else
+			rm -f "${tempfile}"
+			log="grepcidr error (rc=${grc}) de-duplicating [ ${alias} ]; keeping previous list"
+			echo "${log}" | tee -a "${errorlog}"
+		fi
 	fi
 
 	sed -e 's/^/'"$alias"' /' "${pfbdeny}${alias}.txt" >> "${masterfile}"
@@ -1199,7 +1233,10 @@ EOF
 				grep "${ii}" "${blfile}" > "${tempfile}"
 
 				if [ "${ccblack}" = 'block' ]; then
-					awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile}" "${blfile}" > "${tempfile2}"; mv -f "${tempfile2}" "${blfile}"
+					# #713: gate the publish on awk's own exit status (awk has no "empty
+					# result = rc 1" quirk -- non-zero is a real error) so a failed dedup
+					# can't truncate this blocklist via an unconditional mv.
+					awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile}" "${blfile}" > "${tempfile2}" && mv -f "${tempfile2}" "${blfile}"
 					if [ "${runonce}" -eq 0 ]; then
 						echo "${ip}0/24" >> "${blfile}"
 						echo "${header}" "${ip}" >> "${dedupfile}"
@@ -1233,7 +1270,10 @@ EOF
 			grep -F "${ips}" "${masterfile}" >> "${tempfile}"
 		done < "${dedupfile}"
 		countb="$(grep -c ^ "${tempfile}")"
-		awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile}" "${masterfile}" > "${tempfile2}"; mv -f "${tempfile2}" "${masterfile}"
+		# #713: gate the publish on awk's own exit status (awk has no "empty
+		# result = rc 1" quirk -- non-zero is a real error) so a failed dedup
+		# can't truncate masterfile via an unconditional mv.
+		awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile}" "${masterfile}" > "${tempfile2}" && mv -f "${tempfile2}" "${masterfile}"
 		cat "${addfile}" >> "${masterfile}"
 		cut -d ' ' -f2 "${masterfile}" > "${mastercat}"
 
@@ -1285,7 +1325,10 @@ reputation_pmax(){
 				[ -z "${blfile}" ] && continue
 				header="${blfile##*/}"; header="${header%%.*}"
 				grep "${ii}" "${blfile}" > "${tempfile}"
-				awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile}" "${blfile}" > "${tempfile2}"; mv -f "${tempfile2}" "${blfile}"
+				# #713: gate the publish on awk's own exit status (awk has no "empty
+				# result = rc 1" quirk -- non-zero is a real error) so a failed dedup
+				# can't truncate this blocklist via an unconditional mv.
+				awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile}" "${blfile}" > "${tempfile2}" && mv -f "${tempfile2}" "${blfile}"
 
 				if [ "${runonce}" -eq 0 ]; then
 					echo "${ip}.0/24" >> "${blfile}"
@@ -1312,7 +1355,10 @@ EOF
 			grep -F "${ips}" "${masterfile}" >> "${tempfile}"
 		done < "${dedupfile}"
 		countb="$(grep -c ^ "${tempfile}")"
-		awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile}" "${masterfile}" > "${tempfile2}"; mv -f "${tempfile2}" "${masterfile}"
+		# #713: gate the publish on awk's own exit status (awk has no "empty
+		# result = rc 1" quirk -- non-zero is a real error) so a failed dedup
+		# can't truncate masterfile via an unconditional mv.
+		awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile}" "${masterfile}" > "${tempfile2}" && mv -f "${tempfile2}" "${masterfile}"
 		cat "${addfile}" >> "${masterfile}"
 		cut -d ' ' -f2 "${masterfile}" > "${mastercat}"
 
