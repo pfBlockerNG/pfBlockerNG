@@ -489,7 +489,7 @@ _BUILD_PKG = _THIS_DIR / "build-pkg-portable.py"
 _CATALOG_PKG_FILES = {"packagesite.pkg", "data.pkg"}
 
 
-def _pkg_version_key(version: str) -> list[int]:
+def _pkg_version_key(version: str) -> tuple[list[int], int, int]:
     """A monotone sort key for a pkg version — see ``pfb_pkg.pkg_version_sort_key``.
 
     Used for nightly retention (``<target>.YYYYMMDD.N``, all-numeric — a later build

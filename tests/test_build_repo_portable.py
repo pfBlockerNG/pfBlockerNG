@@ -902,6 +902,20 @@ def test_pkg_version_key_orders_prerelease_stages_alpha_beta_rc_then_release() -
     assert brp._pkg_version_key("4.0.0.alpha.1") < brp._pkg_version_key("4.0.0.alpha.2")
 
 
+def test_pkg_version_key_preserves_numeric_prefix_ordering() -> None:
+    """A shorter all-numeric version must sort BELOW its longer prefix-extension.
+
+    A flat `[*base, stage_rank, stage_num]` key breaks this: '2.8' -> [2, 8, 3, 0]
+    compares its OWN stage_rank (index 2 = 3) against '2.8.1' -> [2, 8, 1, 3, 0]'s
+    THIRD version component (index 2 = 1) at the same list position, so '2.8'
+    wrongly sorts ABOVE '2.8.1'. The nested (base, stage_rank, stage_num) tuple
+    compares `base` as a whole list first (Python's list-prefix rule), so the
+    shorter numeric run correctly sorts below its extension.
+    """
+    assert brp._pkg_version_key("2.8") < brp._pkg_version_key("2.8.1")
+    assert brp._pkg_version_key("4.0.0") < brp._pkg_version_key("4.0.0.1")
+
+
 def test_pkg_version_key_full_multi_version_sort_matches_pkg_order() -> None:
     """A shuffled multi-version list sorts into the exact pkg-defined order."""
     shuffled = [

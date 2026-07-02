@@ -81,7 +81,7 @@ _STAGE_RANK = {"alpha": 0, "beta": 1, "rc": 2}
 _RELEASE_RANK = 3
 
 
-def pkg_version_sort_key(version: str) -> list[int]:
+def pkg_version_sort_key(version: str) -> tuple[list[int], int, int]:
     """Monotone sort key for a pfBlockerNG pkg VERSION string.
 
     Splits on ``.``/``_``/``,`` like a plain numeric-run compare, but a component
@@ -101,6 +101,17 @@ def pkg_version_sort_key(version: str) -> list[int]:
     RELEASE — unchanged ordering vs. the historical key for that case. Any
     non-numeric, non-stage-keyword component maps to ``0`` (same fallback the
     historical key used), so a malformed component never raises.
+
+    Returns a NESTED ``(base, stage_rank, stage_num)`` tuple, NOT a flat list.
+    A flat ``[*base, stage_rank, stage_num]`` breaks the "shorter all-numeric
+    version sorts below its longer prefix-extension" rule: Python compares
+    lists element-by-element, so ``2.8`` -> ``[2, 8, 3, 0]`` would compare its
+    OWN stage_rank (index 2 = 3) against ``2.8.1``'s THIRD version component
+    (index 2 = 1) and wrongly sort ``2.8`` above ``2.8.1``. Tuple comparison
+    instead compares ``base`` as a whole LIST first (Python's list-prefix rule:
+    ``[2, 8] < [2, 8, 1]``), so a bare edition version like ``2.8`` still sorts
+    below its extension ``2.8.1``; stage_rank/stage_num only break ties within
+    an equal base.
     """
     parts = re.split(r"[._,]", version)
     base: list[int] = []
@@ -120,4 +131,4 @@ def pkg_version_sort_key(version: str) -> list[int]:
             continue
         base.append(int(part) if part.isdigit() else 0)
         i += 1
-    return [*base, stage_rank, stage_num]
+    return (base, stage_rank, stage_num)
