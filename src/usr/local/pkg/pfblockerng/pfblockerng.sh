@@ -453,7 +453,11 @@ process255() {
 ${data255}
 EOF
 
-		awk 'FNR==NR{a[$0];next}!($0 in a)' "${dedupfile}" "${tempfile}" > "${pfbdeny}${alias}.txt"
+		# #713: gate the publish on awk's own exit status (awk has no "empty
+		# result = rc 1" quirk -- non-zero is a real error) so a failed dedup
+		# can't truncate the live deny list via a direct redirect; write to a
+		# sibling temp and publish only on success.
+		awk 'FNR==NR{a[$0];next}!($0 in a)' "${dedupfile}" "${tempfile}" > "${pfbdeny}${alias}.txt.tmp" && mv -f "${pfbdeny}${alias}.txt.tmp" "${pfbdeny}${alias}.txt"
 		while IFS= read -r ip; do
 			pfb_is_octet_prefix "${ip}" || continue
 			echo "${ip}.0/24" >> "${pfbdeny}${alias}.txt"
@@ -562,8 +566,10 @@ EOF
 						# see duplicate()'s sibling grep for the suffix-over-match
 						# rationale (issue #714).
 						grep "^${alias}[[:space:]]" "${masterfile}" > "${tempfile}"
-						awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile}" "${masterfile}" > "${tempfile2}"
-						mv -f "${tempfile2}" "${masterfile}"
+						# #713: gate the publish on awk's own exit status (awk has no "empty
+						# result = rc 1" quirk -- non-zero is a real error) so a failed dedup
+						# can't truncate masterfile via an unconditional mv.
+						awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile}" "${masterfile}" > "${tempfile2}" && mv -f "${tempfile2}" "${masterfile}"
 						sed -e 's/^/'"$alias"' /' "${pfbfolder}${alias}.txt" >> "${masterfile}"
 						cut -d ' ' -f2 "${masterfile}" > "${mastercat}"
 					fi
@@ -1122,7 +1128,11 @@ EOF
 		countb="$(grep -c ^ "${tempfile2}")"
 
 		if [ "${ccblack}" = 'block' ]; then
-			awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile2}" "${tempfile}" > "${pfbdeny}${alias}.txt"
+			# #713: gate the publish on awk's own exit status (awk has no "empty
+			# result = rc 1" quirk -- non-zero is a real error) so a failed dedup
+			# can't truncate the live deny list via a direct redirect; write to a
+			# sibling temp and publish only on success.
+			awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile2}" "${tempfile}" > "${pfbdeny}${alias}.txt.tmp" && mv -f "${pfbdeny}${alias}.txt.tmp" "${pfbdeny}${alias}.txt"
 			sed 's/$/0\/24/' "${dupfile}" >> "${pfbdeny}${alias}.txt"
 		elif [ "${ccblack}" = 'match' ]; then
 			sed 's/$/0\/24/' "${dupfile}" >> "${tempmatchfile}"
