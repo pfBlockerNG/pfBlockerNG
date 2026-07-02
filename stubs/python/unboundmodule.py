@@ -434,8 +434,20 @@ class DNSMessage:
             True on success.
         """
         self._qstate = qstate
+        # reply_info.flags carries WIRE-format header bits on the real box:
+        # createResponse builds a packet from the runtime PKT_* flags and the
+        # parse fills rep.flags with the wire word — map them the same way.
+        wire_flags = 0
+        if self.flags & PKT_QR:
+            wire_flags |= 0x8000
+        if self.flags & PKT_AA:
+            wire_flags |= 0x0400
+        if self.flags & PKT_RD:
+            wire_flags |= 0x0100
+        if self.flags & PKT_RA:
+            wire_flags |= 0x0080
         qstate.return_msg = types.SimpleNamespace(
-            rep=types.SimpleNamespace(security=0, an_numrrsets=0, rrsets=[], authoritative=0),
+            rep=types.SimpleNamespace(flags=wire_flags, security=0, an_numrrsets=0, rrsets=[], authoritative=0),
             qinfo=types.SimpleNamespace(qname_str=self.qname, qname_list=[]),
         )
         if self.flags & PKT_AA:
