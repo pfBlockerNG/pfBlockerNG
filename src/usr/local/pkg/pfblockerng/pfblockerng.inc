@@ -10005,7 +10005,7 @@ function pfb_remove_states() {
 	// Collect any 'Permit' Customlist IPs to suppress
 	$custom_supp = array();
 	foreach (array('pfblockernglistsv4', 'pfblockernglistsv6') as $ip_type) {
-		foreach (config_get_path("installedpackages{$ip_type}/config", []) as $list) {
+		foreach (config_get_path("installedpackages/{$ip_type}/config", []) as $list) {
 			if (!empty($list['custom']) && strpos($list['action'], 'Permit_') !== FALSE) {
 				$custom		= pfbng_text_area_decode($list['custom'], TRUE, FALSE);
 				$custom_supp	= array_merge($custom_supp, $custom);
@@ -10102,8 +10102,7 @@ function pfb_remove_states() {
 				else {
 					if (isset($pfb_local[$s_ip]) ||
 					    pfb_local_ip($s_ip, $pfb_localsub) ||
-					    !filter_var($s_ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) ||
-					    !filter_var($s_ip, FILTER_CALLBACK, array('options' => 'FILTER_FLAG_NO_LOOPBACK_RANGE'))) {
+					    !filter_var($s_ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
 						continue;
 					}
 				}
@@ -10111,7 +10110,7 @@ function pfb_remove_states() {
 				// Exclude any 'Permit' Customlist IPs
 				foreach ($custom_supp as $custom) {
 					if (ip_in_subnet($s_ip, $custom)) {
-						continue;
+						continue 2;
 					}
 				}
 			}
@@ -15069,6 +15068,10 @@ function sync_package_pfblockerng($cron='') {
 	#################################
 
 	$pfbupdate = $pfbpython = FALSE;
+	// $mode must be a defined string for the consumers below (incl. the typed
+	// pfb_manage_dnsbl_vip(string $mode)); the if/elseif does not cover every state
+	// (e.g. DNSBL enabled while the DNS Resolver is disabled). '' is a no-op mode.
+	$mode = '';
 	if ($pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on' && $pfb['unbound_state'] == 'on') {
 		$mode = 'enabled';
 	}
@@ -15105,7 +15108,7 @@ function sync_package_pfblockerng($cron='') {
 	{
 		$redir_changed = FALSE;
 		$redir_toggle  = PfbConfig::read('dnsbl_redir');
-		$redir_enabled = (($mode ?? '') === 'enabled') && ($redir_toggle instanceof PfbToggle && $redir_toggle === PfbToggle::On);
+		$redir_enabled = ($mode === 'enabled') && ($redir_toggle instanceof PfbToggle && $redir_toggle === PfbToggle::On);
 
 		if (!$redir_enabled) {
 			// DISABLED: remove all pfB_DNS_Redirect_* NAT rules.
@@ -15215,7 +15218,7 @@ function sync_package_pfblockerng($cron='') {
 	{
 		$dot_changed = FALSE;
 		$dot_toggle  = PfbConfig::read('dnsbl_dot_block');
-		$dot_enabled = (($mode ?? '') === 'enabled') && ($dot_toggle instanceof PfbToggle && $dot_toggle === PfbToggle::On);
+		$dot_enabled = ($mode === 'enabled') && ($dot_toggle instanceof PfbToggle && $dot_toggle === PfbToggle::On);
 
 		if (!$dot_enabled) {
 			// DISABLED: remove all pfB_DoT_Block_* filter rules.

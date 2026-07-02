@@ -10,6 +10,11 @@ real two-VM pfSense CE setup (civm = the LAN client behind the firewall):
   2. killstates ON ⇒ pfBlockerNG kills the state for the newly-blocked IP on Update
      (``pfb_remove_states`` → ``pfctl -k``), so the block takes effect immediately for
      the existing flow too.
+  3. killstates ON + the IP ALSO on a 'Permit_*' custom list ⇒ the state SURVIVES the
+     Update (issue #705): pfb_remove_states excludes Permit-customlist IPs from
+     clearing. Pre-fix, two independent bugs each broke this (a misspelt config path
+     left the suppression set empty; the inner-loop ``continue`` skipped nothing) — the
+     permitted IP's state was killed like any other.
 
 Non-obvious facts this exercises (each cost a live investigation):
 
@@ -59,9 +64,14 @@ CFG_IP_SETTINGS = "installedpackages/pfblockerngipsettings/config/0"
 # The blocked victim: a PUBLIC IP (RFC 5737 TEST-NET-3, inert/non-routable) — public so
 # killstates does not suppress it as local/private. DUMMY keeps the alias non-empty (the
 # rule built) while the victim is UNBLOCKED, so the pre-block state can be created.
+# PERMIT_VICTIM is a SECOND public victim that additionally sits on a Permit custom list
+# (module fixture) — the #705 exclusion subject; it must be a different IP from VICTIM so
+# tests 2 and 3 prove kill-vs-spare in the same pass, attributable only to the permit.
 VICTIM = "203.0.113.9"
+PERMIT_VICTIM = "203.0.113.10"
 DUMMY = "203.0.113.77"
 HEADER = "pfbkillstates"  # IP feed header → on-disk file pfbkillstates_v4.txt
+PERMIT_ALIAS = "pfbkillpermit"  # the Permit custom-list aliasname (config row 1)
 ALIAS_TABLE = f"pfB_{HEADER}_v4"  # the pf alias table the rule references
 FEED_FILE = "pfb_killstates_ip.txt"
 
@@ -87,8 +97,8 @@ def _set_ipcfg(vm: SmokeVM, kv: dict[str, str], *, timeout: float = 60.0) -> Non
         raise RuntimeError(f"_set_ipcfg failed: rc={r.returncode} {r.stderr!r} {r.stdout!r}")
 
 
-def _civm_connect(cl: SmokeVM, *, timeout: float = 20.0) -> int:
-    """civm attempts a TCP connection to the victim through pfSense; return curl's rc.
+def _civm_connect(cl: SmokeVM, ip: str = VICTIM, *, timeout: float = 20.0) -> int:
+    """civm attempts a TCP connection to ``ip`` through pfSense; return curl's rc.
 
     Pins a host route for the victim via pfSense (civm has two equal-metric default
     routes; without the pin the SYN may egress the mgmt NIC). The SYN passes the LAN
@@ -98,8 +108,8 @@ def _civm_connect(cl: SmokeVM, *, timeout: float = 20.0) -> int:
         "/bin/sh",
         "-c",
         f"dev=$(ip -4 -o addr show | awk '/192\\.168\\.1\\./{{print $2; exit}}'); "
-        f'ip route replace {VICTIM}/32 via {PFSENSE_LAN_IP} dev "$dev" 2>/dev/null || true; '
-        f"curl -s -o /dev/null --connect-timeout 3 --max-time 4 http://{VICTIM}/ >/dev/null 2>&1; echo rc=$?",
+        f'ip route replace {ip}/32 via {PFSENSE_LAN_IP} dev "$dev" 2>/dev/null || true; '
+        f"curl -s -o /dev/null --connect-timeout 3 --max-time 4 http://{ip}/ >/dev/null 2>&1; echo rc=$?",
         timeout=timeout,
     )
     marker = "rc="
@@ -107,8 +117,8 @@ def _civm_connect(cl: SmokeVM, *, timeout: float = 20.0) -> int:
     return int(line[len(marker) :] or -1)
 
 
-def _establish_victim_state(vm: SmokeVM, cl: SmokeVM, *, attempts: int = 6) -> str:
-    """civm opens a connection to the (unblocked) victim until a pf state appears.
+def _establish_victim_state(vm: SmokeVM, cl: SmokeVM, ip: str = VICTIM, *, attempts: int = 6) -> str:
+    """civm opens a connection to the (unblocked) ``ip`` until a pf state appears.
 
     The SYN passing the LAN allow creates a SYN_SENT state (pf tcp.first ~120s). A fresh
     reload can briefly leave the WAN gateway re-initialising, so retry until the state is
@@ -116,28 +126,28 @@ def _establish_victim_state(vm: SmokeVM, cl: SmokeVM, *, attempts: int = 6) -> s
     lines. Raises with rich civm/pfSense diagnostics if no state forms.
     """
     for _ in range(attempts):
-        _civm_connect(cl)
+        _civm_connect(cl, ip)
         time.sleep(1.0)
-        st = _victim_states(vm)
-        if VICTIM in st:
+        st = _victim_states(vm, ip)
+        if ip in st:
             return st
         time.sleep(2.0)
     raise AssertionError(
-        f"could not create a firewall state to {VICTIM} from civm after {attempts} attempts.\n"
-        f"{_civm_diag(cl)}\n{_state_diag(vm)}"
+        f"could not create a firewall state to {ip} from civm after {attempts} attempts.\n"
+        f"{_civm_diag(cl, ip)}\n{_state_diag(vm)}"
     )
 
 
-def _civm_diag(cl: SmokeVM) -> str:
+def _civm_diag(cl: SmokeVM, ip: str = VICTIM) -> str:
     """civm-side reachability diagnostics. Never raises."""
     try:
         out = cl.ssh(
             "/bin/sh",
             "-c",
             "echo rc=$(curl -s -o /dev/null --connect-timeout 3 --max-time 4 -w '%{http_code}' "
-            f"http://{VICTIM}/ 2>&1; echo :$?); "
+            f"http://{ip}/ 2>&1; echo :$?); "
             f"ping -c1 -W2 {PFSENSE_LAN_IP} >/dev/null 2>&1 && echo pf_ping=ok || echo pf_ping=FAIL; "
-            "ip route get " + VICTIM + " 2>&1 | head -1",
+            "ip route get " + ip + " 2>&1 | head -1",
             timeout=20,
         ).stdout.strip()
     except Exception:
@@ -145,9 +155,16 @@ def _civm_diag(cl: SmokeVM) -> str:
     return f"  civm: {out}"
 
 
-def _victim_states(vm: SmokeVM, *, timeout: float = 30.0) -> str:
-    """The pf state-table lines referencing the victim (empty string if none)."""
-    return vm.ssh("/bin/sh", "-c", f"pfctl -ss 2>/dev/null | grep '{VICTIM}' || true", timeout=timeout).stdout.strip()
+def _victim_states(vm: SmokeVM, ip: str = VICTIM, *, timeout: float = 30.0) -> str:
+    """The pf state-table lines referencing exactly ``ip`` (empty string if none).
+
+    Boundary-anchored: a bare substring grep for 203.0.113.9 ALSO matches the stub-DNS
+    answer address 203.0.113.99 (``STUB_DNS_A`` — e.g. a civm NTP state resolved through
+    the stub), a false hit observed live that made a killed victim read as surviving.
+    """
+    pat = ip.replace(".", "\\.")
+    cmd = f"pfctl -ss 2>/dev/null | grep -E '(^|[^0-9]){pat}([^0-9]|$)' || true"
+    return vm.ssh("/bin/sh", "-c", cmd, timeout=timeout).stdout.strip()
 
 
 def _rule_block_packets(vm: SmokeVM, *, timeout: float = 30.0) -> int:
@@ -212,14 +229,14 @@ def _assert_fresh_connection_blocked(vm: SmokeVM, cl: SmokeVM) -> None:
     )
 
 
-def _block_victim(vm: SmokeVM, *, timeout: float = 600.0) -> None:
-    """Add the victim to the existing rule's alias and run an Update.
+def _block_victim(vm: SmokeVM, ips: tuple[str, ...] = (VICTIM,), *, timeout: float = 600.0) -> None:
+    """Add the given IPs to the existing rule's alias and run an Update.
 
     Feed CONTENT change only (the rule already exists) ⇒ no rule change ⇒
     ``filter_configure`` stays FALSE ⇒ killstates is eligible to run. ``force_ip_refetch``
     defeats the per-feed reuse gate so the edited feed is actually re-parsed.
     """
-    h.write_local_feed(vm, FEED_FILE, f"{VICTIM}/32\n")
+    h.write_local_feed(vm, FEED_FILE, "".join(f"{ip}/32\n" for ip in ips))
     h.force_ip_refetch(vm, f"{HEADER}_v4")
     h.reload(vm, "update", timeout=timeout)
     time.sleep(SETTLE_SECS)
@@ -231,6 +248,50 @@ def _unblock_baseline(vm: SmokeVM, *, kill_on: bool, timeout: float = 600.0) -> 
     _set_ipcfg(vm, {"killstates": "on" if kill_on else ""})
     h.force_ip_refetch(vm, f"{HEADER}_v4")
     h.reload(vm, "update", timeout=timeout)
+
+
+def _append_permit_customlist(vm: SmokeVM, aliasname: str, ip: str, *, timeout: float = 60.0) -> None:
+    """Append a 'Permit_Inbound' CUSTOM list row holding ``ip`` to the IPv4 lists.
+
+    pfb_remove_states builds its suppression set from config rows whose ``action``
+    contains ``Permit_`` and whose ``custom`` (a base64 textarea) is non-empty — the
+    row itself is the #705 input; no feed row is needed. The action is deliberately
+    INBOUND: the suppression is direction-agnostic (any ``Permit_*``), but a
+    Permit_OUTBOUND list would add a floating ``pass out quick`` rule that then
+    CREATES the outbound test state — and a floating-pass state binds to interface
+    'all', which the kill walk's pfB-interface gate skips, so the state would
+    survive for a reason unrelated to #705 (observed live: the pre-fix code passed
+    the survival assert that way). With an inbound-only permit rule the outbound
+    state is created by the default pass-out path and binds to the WAN interface,
+    exactly like the non-permitted victim's — entering the walk, where only the
+    suppression can spare it. Idempotent: replaces any prior row with the same
+    aliasname.
+    """
+    row = {
+        "aliasname": aliasname,
+        "action": "Permit_Inbound",
+        "cron": "Never",
+        "aliaslog": "enabled",
+        "description": "pfBlockerNG smoke: killstates permit custom list",
+        "custom": h._b64_textarea([ip]),
+    }
+    snippet = (
+        f"$lists = config_get_path({h._php_str(h.CFG_IP_V4_LISTS)}, array());\n"
+        f"$lists = array_values(array_filter($lists, "
+        f"fn($l) => ($l['aliasname'] ?? '') !== {h._php_str(aliasname)}));\n"
+        f"$lists[] = {h._php_kv_array(row)};\n"
+        f"config_set_path({h._php_str(h.CFG_IP_V4_LISTS)}, $lists);\n"
+        "write_config('pfBlockerNG smoke: killstates permit custom list');\n"
+        "echo 'OK';"
+    )
+    r = h.php_eval(vm, snippet, timeout=timeout)
+    if r.returncode != 0 or "OK" not in r.stdout:
+        raise RuntimeError(f"_append_permit_customlist failed: rc={r.returncode} {r.stderr!r} {r.stdout!r}")
+
+
+# The permit custom-list row's config index: h.inject() REPLACES the v4 lists node with
+# the one deny list (index 0), then _append_permit_customlist appends — so row 1, stably.
+PERMIT_ROW = 1
 
 
 # --------------------------------------------------------------------------- #
@@ -245,9 +306,13 @@ def ip_block_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer)
     Given: the smoke VM is booted and the branch .pkg is available; civm is up.
     When:  we deploy and inject one IP block feed (header ``pfbkillstates``) whose alias
            starts with only DUMMY (so the rule is built but the victim is NOT blocked),
-           as a floating rule (enable_float) with logging on.
-    Then:  the module VM is ready: the reject rule exists, the victim is reachable enough
-           for civm to create a firewall state to it.
+           as a floating rule (enable_float) with logging on — plus a 'Permit_Inbound'
+           CUSTOM list holding PERMIT_VICTIM (the #705 suppression source; set up HERE so
+           the per-test measured Update stays a content-only change: adding the list
+           mid-test would rebuild the ruleset, filter_configure would go TRUE, and
+           killstates would be skipped — a false pass).
+    Then:  the module VM is ready: the reject rule exists, both victims are reachable
+           enough for civm to create firewall states to them.
     """
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
@@ -260,6 +325,7 @@ def ip_block_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer)
         smoke_vm,
         h.IpCase(aliasname=HEADER, feed_url=feed, action="Deny_Outbound", family="v4", header=HEADER),
     )
+    _append_permit_customlist(smoke_vm, PERMIT_ALIAS, PERMIT_VICTIM)
     # FLOATING rule (inject wired the interface to wan): enable_float flips Deny_Outbound to
     # a floating `block out quick` on WAN that catches the client's forwarded traffic without
     # disturbing the LAN allow. Global IP logging on so the block is visible in filter.log.
@@ -349,3 +415,67 @@ def test_killstates_on_clears_state_so_block_takes_effect(ip_block_vm: SmokeVM, 
 
     # And: the block is live — a connection to the victim is actually dropped by the rule.
     _assert_fresh_connection_blocked(vm, client_vm)
+
+
+# --------------------------------------------------------------------------- #
+# Test 3 (#705): killstates ON + Permit custom list ⇒ the permitted IP's state SURVIVES
+# --------------------------------------------------------------------------- #
+
+
+def test_killstates_on_spares_permit_customlist_state(ip_block_vm: SmokeVM, client_vm: SmokeVM) -> None:
+    """killstates ON: a Permit-customlist IP's state survives the very pass that kills others (#705).
+
+    Given: Clear-States ON; a 'Permit_Inbound' custom list holding PERMIT_VICTIM (module
+           fixture — asserted from config so the suppression input is REAL, not assumed);
+           and civm-created firewall states to BOTH victims.
+    When:  BOTH victims are added to the block alias and pfBlockerNG runs an Update
+           (content-only change, so killstates actually fires).
+    Then:  PERMIT_VICTIM is genuinely IN the live block table (the permit-vs-deny conflict
+           exists — otherwise survival would be trivial), the non-permitted VICTIM's state
+           is KILLED in this same pass (killstates demonstrably ran), and PERMIT_VICTIM's
+           state SURVIVES — attributable only to the Permit-customlist exclusion.
+           Pre-fix, either #705 bug (empty suppression set from the misspelt config path,
+           or the no-op inner 'continue') let the pass kill PERMIT_VICTIM's state too.
+    """
+    vm = ip_block_vm
+    _unblock_baseline(vm, kill_on=True)
+
+    # Given: the Permit custom-list row is present in config — the exact input
+    # pfb_remove_states builds its suppression set from (non-theater guard).
+    row = f"{h.CFG_IP_V4_LISTS}/{PERMIT_ROW}"
+    name = h.config_get(vm, f"{row}/aliasname")
+    action = h.config_get(vm, f"{row}/action")
+    custom = h.config_get(vm, f"{row}/custom")
+    assert (name, action) == (PERMIT_ALIAS, "Permit_Inbound") and custom != "", (
+        f"expected the module fixture's Permit custom-list row '{PERMIT_ALIAS}' (action "
+        f"'Permit_Inbound', non-empty custom) at config row {PERMIT_ROW}, got "
+        f"name={name!r} action={action!r} custom={custom!r} — the suppression input is missing"
+    )
+
+    # Given: civm creates states to BOTH still-unblocked victims.
+    before_victim = _establish_victim_state(vm, client_vm, VICTIM)
+    before_permit = _establish_victim_state(vm, client_vm, PERMIT_VICTIM)
+
+    # When: block BOTH victims (Clear-States ON).
+    _block_victim(vm, (VICTIM, PERMIT_VICTIM))
+
+    # Then: PERMIT_VICTIM is genuinely in the live block table — the deny side of the
+    # conflict is real, so its survival below is the EXCLUSION working, not a missing block.
+    table = vm.ssh("/bin/sh", "-c", f"pfctl -t {ALIAS_TABLE} -T show 2>/dev/null | tr -d ' '", timeout=30).stdout
+    assert PERMIT_VICTIM in table and VICTIM in table, (
+        f"expected both {VICTIM} and {PERMIT_VICTIM} in the live block alias {ALIAS_TABLE}, got:\n{table}"
+    )
+
+    # Then: the NON-permitted victim's state is gone — killstates ran in this pass.
+    after_victim = _victim_states(vm)
+    assert VICTIM not in after_victim, (
+        f"killstates ON must CLEAR the state to the non-permitted {VICTIM} (proves the kill pass "
+        f"ran), but it survived.\n  before: {before_victim!r}\n  after: {after_victim!r}\n{_state_diag(vm)}"
+    )
+
+    # Then: the PERMITTED victim's state SURVIVES the same pass (#705).
+    after_permit = _victim_states(vm, PERMIT_VICTIM)
+    assert PERMIT_VICTIM in after_permit, (
+        f"killstates must EXCLUDE the Permit-customlist IP {PERMIT_VICTIM} from clearing, but its "
+        f"state was killed.\n  before: {before_permit!r}\n  after: {after_permit!r}\n{_state_diag(vm)}"
+    )
