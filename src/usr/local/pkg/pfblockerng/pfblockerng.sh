@@ -1273,11 +1273,15 @@ EOF
 		# Remove repeat offenders in masterfiles
 		echo '  Removing   [ Block ] IPs'
 		: > "${tempfile}"
-		# Each dedupfile line is 'header 10.0.0.[0/24]' -- a literal whole token,
-		# no anchor needed, so match it with grep -F (the '.' is a literal dot).
+		# Each dedupfile line is '<alias> 10.0.0.'. Anchor it at column 0 and escape
+		# the prefix's dots (via pfb_anchor_octet_pattern; the alias field is \w-only,
+		# so escaping the dots is sufficient) so the removal grep matches ONLY this
+		# alias's own rows in that /24. An unanchored grep -F over-matched a SIBLING
+		# alias whose name ends with this one's (e.g. row 'XMYLIST 1.2.3.9' contains
+		# the substring 'MYLIST 1.2.3.'), silently dropping its masterfile entry (#730).
 		while IFS= read -r ips; do
 			[ -z "${ips}" ] && continue
-			grep -F "${ips}" "${masterfile}" >> "${tempfile}"
+			grep "$(pfb_anchor_octet_pattern "${ips}")" "${masterfile}" >> "${tempfile}"
 		done < "${dedupfile}"
 		countb="$(grep -c ^ "${tempfile}")"
 		# #713: gate the publish on awk's own exit status (awk has no "empty
@@ -1358,11 +1362,15 @@ EOF
 		# Remove repeat offenders in masterfile
 		echo '  Removing   [ Block ] IPs'
 		: > "${tempfile}"
-		# Each dedupfile line is 'header 10.0.0.' -- a literal whole token, no
-		# anchor needed, so match it with grep -F (the '.' is a literal dot).
+		# Each dedupfile line is '<alias> 10.0.0.'. Anchor it at column 0 and escape
+		# the prefix's dots (via pfb_anchor_octet_pattern; the alias field is \w-only,
+		# so escaping the dots is sufficient) so the removal grep matches ONLY this
+		# alias's own rows in that /24. An unanchored grep -F over-matched a SIBLING
+		# alias whose name ends with this one's (e.g. row 'XMYLIST 1.2.3.9' contains
+		# the substring 'MYLIST 1.2.3.'), silently dropping its masterfile entry (#730).
 		while IFS= read -r ips; do
 			[ -z "${ips}" ] && continue
-			grep -F "${ips}" "${masterfile}" >> "${tempfile}"
+			grep "$(pfb_anchor_octet_pattern "${ips}")" "${masterfile}" >> "${tempfile}"
 		done < "${dedupfile}"
 		countb="$(grep -c ^ "${tempfile}")"
 		# #713: gate the publish on awk's own exit status (awk has no "empty
