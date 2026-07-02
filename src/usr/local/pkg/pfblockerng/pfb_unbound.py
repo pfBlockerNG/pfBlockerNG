@@ -2107,7 +2107,11 @@ def get_tld(qstate: module_qstate) -> str:
     tld = ""
     try:
         if qstate and qstate.qinfo and len(qstate.qinfo.qname_list) > 1:
-            tld = qstate.qinfo.qname_list[-2]
+            # RFC 4343: DNS name comparison is case-insensitive, but production Unbound's
+            # qname_list preserves the client's wire case (e.g. dns0x20). python_tlds /
+            # hsts_tlds are stored lowercase-only, so lowercase here at the source rather
+            # than at every membership-test call site (#720).
+            tld = qstate.qinfo.qname_list[-2].lower()
     except Exception as e:
         # A qname carrying invalid UTF-8 bytes makes Unbound's qname_list access raise
         # while decoding the labels; swallow it and fall back to an empty TLD rather than
@@ -2130,8 +2134,14 @@ def get_tld_from_name(q_name: str) -> str:
     # CNAME target's TLD-Allow check ran against the wrong label: a target whose real TLD
     # is allowed was falsely blocked, and `tld in hsts_tlds` never fired for a CNAME
     # target (VIP instead of NULL). (#706)
+    #
+    # Lowercased for the same reason as get_tld() (RFC 4343 case-insensitive compare
+    # against the lowercase-only python_tlds/hsts_tlds; #720). The current caller
+    # already passes a lowercased q_name, so this is a no-op there -- it keeps the
+    # pair's contract (both always return a lowercase TLD) consistent for any future
+    # caller that doesn't pre-lowercase.
     parts = q_name.rstrip(".").split(".")
-    return parts[-1] if len(parts) > 1 else ""
+    return parts[-1].lower() if len(parts) > 1 else ""
 
 
 def convert_ipv4(x: Any) -> str:
