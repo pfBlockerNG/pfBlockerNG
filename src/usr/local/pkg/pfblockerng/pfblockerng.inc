@@ -3998,6 +3998,37 @@ function pfb_parsed_fail($header, $line='', $oline, $logfile) {
 }
 
 
+// Map an IP list's vtype ('_v4'/'_v6') to its config section. The download loop
+// runs AFTER the $ip_types collection loop, so $ip_type is left at its last value
+// ('pfblockernglistsv6') there; deriving the section from the list's own vtype keeps
+// a v4 list reading the v4 section instead of the stale v6 one (#709).
+function pfb_list_section_for_vtype(string $vtype): string {
+	return ($vtype === '_v6') ? 'pfblockernglistsv6' : 'pfblockernglistsv4';
+}
+
+// Drop the Blacklist categories whose download Failed, matching by feed NAME in the
+// child's output line rather than the stdout-line index. pfblockerng_download_extras
+// only processes the not-yet-downloaded types and silently skips some feeds (e.g.
+// Shallalist), so the stdout-line index does NOT map to the $lists index; a positional
+// unset() removed the wrong (often a healthy, already-downloaded) category (#711). The
+// child prints "\t{name} ... Failed" / "... Completed" (pfblockerng.php) with
+// name == $list['aliasname']; the " ... " delimiter guards against a prefix collision.
+function pfb_prune_failed_bl_lists(array $lists, array $pfb_return): array {
+	foreach ($pfb_return as $return_output) {
+		if (strpos($return_output, 'Failed') === FALSE) {
+			continue;
+		}
+		foreach ($lists as $list_key => $list_val) {
+			if (isset($list_val['aliasname']) &&
+			    str_starts_with(ltrim($return_output), "{$list_val['aliasname']} ... ")) {
+				unset($lists[$list_key]);
+				break;
+			}
+		}
+	}
+	return $lists;
+}
+
 // Determine 'list' details
 function pfb_determine_list_detail($list='', $header='', $confconfig='', $key='') {
 	global $pfb, $pfbarr;
@@ -13977,15 +14008,15 @@ function sync_package_pfblockerng($cron='') {
 							exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php bls {$bl_string} 2>&1", $pfb_return);
 
 							if (is_array($pfb_return)) {
-								foreach ($pfb_return as $key => $return_output) {
-
+								foreach ($pfb_return as $return_output) {
 									pfb_logger("{$return_output}\n", 1);
-
-									// On download failure, remove associated Blacklist category configuration
-									if (strpos($return_output, 'Failed') !== FALSE) {
-										unset($lists[$key]);
-									}
 								}
+
+								// On download failure, remove the associated Blacklist category
+								// by matching the feed NAME in the child's output line, not the
+								// stdout-line index (the child skips already-downloaded/some feeds,
+								// so the index does not map to $lists) — #711.
+								$lists = pfb_prune_failed_bl_lists($lists, $pfb_return);
 							}
 						}
 						else {
@@ -14047,6 +14078,13 @@ function sync_package_pfblockerng($cron='') {
 						continue;
 					}
 					$pfb['alias_dnsbl_all'][]	= "{$alias}";
+
+					// cURL Source Interface (sets CURLOPT_INTERFACE) — per-DNSBL-group
+					// field, mirrors the IP loop. Previously $srcint was undefined here
+					// (only assigned later in the IP loop), so the configured interface was
+					// silently ignored on DNSBL ingest (#712). '?? '' keeps a legacy DNSBL
+					// config with no srcint field warning-free.
+					$srcint = $list['srcint'] ?? '' ?: FALSE;
 
 					foreach ($list['row'] as $key => $row) {
 						if (!empty($row['url']) && $row['state'] != 'Disabled') {
@@ -14171,7 +14209,7 @@ function sync_package_pfblockerng($cron='') {
 									} else {
 										// Download file
 										if (!pfb_download($row['url'], $file_dwn, $pflex, $header,
-											$row['format'], 1, '', '', '', '', '', $srcint)) {
+											$row['format'], 1, '', 300, '', '', '', $srcint)) {
 
 											// Determine reason for download failure
 											pfb_download_failure($alias, $header, $pfbfolder, $row['url'], $row['format'], '');
@@ -15773,7 +15811,9 @@ function sync_package_pfblockerng($cron='') {
 						if (isset($list['dnsblip'])) {
 							$list_type = 'pfblockerngdnsblsettings';
 						} else {
-							$list_type = "{$ip_type}";
+							// $ip_type is stale here (this download loop runs after the
+							// collection loop); derive the section from the list's vtype (#709).
+							$list_type = pfb_list_section_for_vtype($list['vtype']);
 						}
 
 						pfb_determine_list_detail($list['action'], $header, $list_type, $list['key']);
@@ -15866,7 +15906,7 @@ function sync_package_pfblockerng($cron='') {
 								else {
 									// Download list
 									if (!pfb_download($row['url'], $file_dwn, $pflex, $header, $row['format'],
-										1, $list['vtype'], '', '', '', '', $srcint)) {
+										1, $list['vtype'], 300, '', '', '', $srcint)) {
 
 										// Determine reason for download failure
 										pfb_download_failure($alias, $header, $pfbfolder, $row['url'], $row['format'], $list['vtype']);
@@ -16372,8 +16412,11 @@ function sync_package_pfblockerng($cron='') {
 					$list_type = "{$ip_type}";
 				}
 
-				// Determine 'list' details (return array $pfbarr)
-				pfb_determine_list_detail($list['action'], '', $list_type, $key);
+				// Determine 'list' details (return array $pfbarr). Use the list's own key
+				// (the synthetic DNSBLIP entry carries key=0 for the pfblockerngdnsblsettings
+				// singleton); real config rows have no 'key', so fall back to the foreach index
+				// = the config row index (#710). Mirrors the download-loop call.
+				pfb_determine_list_detail($list['action'], '', $list_type, $list['key'] ?? $key);
 				$pfbadv		= $pfbarr['adv'];
 				$pfbdescr	= $pfbarr['descr'];
 				$pfbfolder	= $pfbarr['folder'];
