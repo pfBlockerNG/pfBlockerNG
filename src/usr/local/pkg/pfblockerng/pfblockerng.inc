@@ -7523,11 +7523,19 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 				// its own RAM re-check / very slow box) -> fall back to the restart so
 				// the new lists definitely load. NOT an error: fail-safe by design.
 				pfb_logger(" not confirmed in time -- falling back to Unbound restart", 2);
+				// Clear the daemon-suppression marker touched above before falling
+				// through: the restart path below re-touches + manages its own '.sync'
+				// (pfb_update_unbound parity), but the alert/#51 caller has no later
+				// clear_work_files, so leaving it set here would suppress the DNSBL
+				// Queries daemon until the next full update (issue #713 bug 3).
+				unlink_if_exists("{$pfb['dnsbl_file']}.sync");
 			}
 			else {
 				// Sentinel flip failed (could not stage/rename) -> fall back to the restart
 				// so the new lists still load (don't leave a flipped-but-no-op state).
 				pfb_logger("\nADR-10: sentinel flip failed -- falling back to Unbound restart", 2);
+				// Same '.sync' leak risk as the timeout branch above -- clear it here too.
+				unlink_if_exists("{$pfb['dnsbl_file']}.sync");
 			}
 		}
 		else {
