@@ -43,6 +43,7 @@ import pfb_unbound
 # Reuse the Phase-2 oracle's fixtures, golden decision tables and decision driver so
 # the new build layer is validated against the EXACT same contract, not a copy.
 from tests.test_adr06_golden_oracle import (
+    GOLDEN_ABP_CONFORMANT_OVERRIDES,
     GOLDEN_EXTRACTED_IPS,
     GOLDEN_TOP1M_DISABLED,
     GOLDEN_TOP1M_ENABLED_OVERRIDES,
@@ -294,8 +295,10 @@ class TestBuildDecisionsTop1mDisabled:
 
     def test_decisions(self) -> None:
         result, config = _run_build(top1m_enabled=False)
+        expected_map = dict(GOLDEN_TOP1M_DISABLED)
+        expected_map.update(GOLDEN_ABP_CONFORMANT_OVERRIDES)  # conformant ABP zones (#718)
         failures: list[str] = []
-        for q_name, expected in GOLDEN_TOP1M_DISABLED.items():
+        for q_name, expected in expected_map.items():
             got = _evaluate_build(result, config, q_name)
             for k, v in expected.items():
                 if got[k] != v:
@@ -311,6 +314,7 @@ class TestBuildDecisionsTop1mEnabled:
         result, config = _run_build(top1m_enabled=True)
         expected_map = dict(GOLDEN_TOP1M_DISABLED)
         expected_map.update(GOLDEN_TOP1M_ENABLED_OVERRIDES)
+        expected_map.update(GOLDEN_ABP_CONFORMANT_OVERRIDES)  # conformant ABP zones (#718)
         failures: list[str] = []
         for q_name, expected in expected_map.items():
             got = _evaluate_build(result, config, q_name)

@@ -44,6 +44,7 @@ import pfb_unbound
 # against the EXACT same contract -- never a copy.
 from tests.test_adr06_golden_oracle import (
     FIXTURES,
+    GOLDEN_ABP_CONFORMANT_OVERRIDES,
     GOLDEN_EXTRACTED_IPS,
     GOLDEN_TOP1M_DISABLED,
     GOLDEN_TOP1M_ENABLED_OVERRIDES,
@@ -162,7 +163,9 @@ class TestInitFromRawDecisionsTop1mDisabled:
         result = _build_from_manifest(tmp_path, top1m_enabled=False)
         config = _load_json("config.json")
         failures: list[str] = []
-        for q_name, expected in GOLDEN_TOP1M_DISABLED.items():
+        expected_map = dict(GOLDEN_TOP1M_DISABLED)
+        expected_map.update(GOLDEN_ABP_CONFORMANT_OVERRIDES)  # conformant ABP zones (#718)
+        for q_name, expected in expected_map.items():
             got = _evaluate_result(result, config, q_name)
             for k, v in expected.items():
                 if got[k] != v:
@@ -176,6 +179,7 @@ class TestInitFromRawDecisionsTop1mEnabled:
         config = _load_json("config.json")
         expected_map = dict(GOLDEN_TOP1M_DISABLED)
         expected_map.update(GOLDEN_TOP1M_ENABLED_OVERRIDES)
+        expected_map.update(GOLDEN_ABP_CONFORMANT_OVERRIDES)  # conformant ABP zones (#718)
         failures: list[str] = []
         for q_name, expected in expected_map.items():
             got = _evaluate_result(result, config, q_name)
@@ -217,6 +221,10 @@ class TestInitFromRawEqualsOldLoader:
 
         failures: list[str] = []
         for q_name in expected_map:
+            if q_name in GOLDEN_ABP_CONFORMANT_OVERRIDES:
+                # INTENTIONAL divergence (#718): conformant ABP deep anchors emit a
+                # wildcard zone; the legacy pipeline demoted them to exact DATA.
+                continue
             new = _evaluate_result(result, config, q_name)
             old = _evaluate(pipeline, config, q_name)
             if new != old:
