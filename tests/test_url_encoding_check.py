@@ -138,6 +138,28 @@ def test_shell_header_value_containing_query_shape_is_clean() -> None:
     assert _find('curl -H "X: a?b=$c" http://h/x') == []
 
 
+def test_shell_var_prefixed_data_value_without_path_is_clean() -> None:
+    # A "$"-prefixed OPTION VALUE with a "?...=$" shape but NO path separator
+    # before the "?" ("$q?x=$y") is a -d body, not a variable-BASE URL. Pre-fix
+    # the bare startswith("$")+"?" clause flagged it; it must stay clean now.
+    assert _find('curl -d "$q?x=$y" http://h') == []
+
+
+def test_shell_var_prefixed_header_value_without_path_is_clean() -> None:
+    assert _find('curl -H "$AUTH?token=$T" http://h/x') == []
+
+
+def test_shell_var_prefixed_data_value_https_without_path_is_clean() -> None:
+    assert _find('curl --data "$body?k=$v" https://api') == []
+
+
+def test_shell_var_base_with_path_and_query_still_flagged() -> None:
+    # The genuine target: a "$"-BASE with a path segment THEN a naked-var query
+    # ("$BASE/cb?ip=$VAR") has a "/" before the "?", so it stays flagged -- the
+    # tightening must not silence the case the checker exists to guard.
+    assert _find('curl "$BASE/cb?ip=$VAR"') != []
+
+
 def test_non_http_client_line_with_query_var_is_clean() -> None:
     # Same `?k=$V` shape, but not a curl/wget/fetch invocation.
     assert _find('echo "http://h/x?ip=$VAR"') == []
