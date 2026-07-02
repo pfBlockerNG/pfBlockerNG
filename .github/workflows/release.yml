@@ -1038,6 +1038,18 @@ jobs:
             exit 0
           fi
           if [ "$PRERELEASE" = "true" ]; then PRE_FLAG="--prerelease"; else PRE_FLAG="--latest"; fi
+          # Recompute the ISO date prefix at PUBLISH time so the title reflects the actual publish
+          # date, not the draft-creation date: a run crossing midnight UTC, or a draft resumed and
+          # published on a later day (the "resume a prior draft" path), would otherwise keep the
+          # stale draft-creation date. Rewrite only the leading "YYYY-MM-DD - "; the
+          # "<version> — <summary>" tail is preserved. Done BEFORE the flip so a rewrite failure
+          # leaves a resumable draft, never a published release with a stale/bad title.
+          CUR_NAME=$(gh release view "$TAG" --repo "$REPO" --json name --jq '.name')
+          NEW_NAME="$(date -u +%Y-%m-%d) - $(printf '%s' "$CUR_NAME" | sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2} - //')"
+          if [ "$NEW_NAME" != "$CUR_NAME" ]; then
+            gh release edit "$TAG" --repo "$REPO" --title "$NEW_NAME"
+            echo "Retitled with publish date: ${CUR_NAME} -> ${NEW_NAME}"
+          fi
           gh release edit "$TAG" --repo "$REPO" --draft=false $PRE_FLAG
           echo "Published release ${TAG} (prerelease=${PRERELEASE})."
 
