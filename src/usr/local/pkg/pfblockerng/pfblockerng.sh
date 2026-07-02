@@ -1368,14 +1368,20 @@ processet() {
 		echo '-------------------------------------------'
 
 		for list in ${data}; do
-			case "${etblock}" in
-				*$list*)
+			# etblock/etmatch are ", "-separated token lists (see the sed transform
+			# above); pad both sides with the delimiter and anchor on it so a token
+			# only matches its OWN whole entry -- a bare "*$list*" substring glob
+			# would let e.g. a selected ET_P2Pcnc also match list=ET_P2P (issue #713
+			# bug 6). The padded 'x' sentinel (no selection) still matches nothing
+			# real, since no category is literally named 'x'.
+			case ", ${etblock}, " in
+				*", ${list}, "*)
 					printf "%-10s %-25s\n" '  Block: ' "${list}"
 					cat "${etdir}/${list}.txt" >> "${tempfile}"
 					;;
 			esac
-			case "${etmatch}" in
-				*$list*)
+			case ", ${etmatch}, " in
+				*", ${list}, "*)
 					printf "%-10s %-25s\n" '  Match: ' "${list}"
 					cat "${etdir}/${list}.txt" >> "${tempfile2}"
 					;;
