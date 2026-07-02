@@ -838,3 +838,32 @@ if (!function_exists('isvalidpid')) {
 		return !empty($GLOBALS['pfb_test_valid_pids'][$pidfile]);
 	}
 }
+
+// --- pfb_remove_states() doubles (#702/#705) ---
+//
+// The kill-states validation walk (pfb_remove_states) reaches two util.inc
+// helpers with no prior double: the RFC1918/CGN class check on the IPv4 branch
+// and the DNS-server suppression source. Both are needed so the REAL function
+// runs off-appliance (the pfctl boundary itself is the committed
+// fixtures/fake_pfctl.sh stub).
+
+if (!function_exists('is_private_ip')) {
+	// pfSense util.inc: TRUE when the IPv4 address falls within a private range.
+	// Faithful port of the upstream list-walk over ip_in_subnet().
+	function is_private_ip($iptocheck) {
+		foreach (['10.0.0.0/8', '100.64.0.0/10', '172.16.0.0/12', '192.168.0.0/16'] as $private) {
+			if (ip_in_subnet($iptocheck, $private)) {
+				return true;
+			}
+		}
+		return false;
+	}
+}
+
+if (!function_exists('get_dns_servers')) {
+	// pfSense util.inc: the system's configured DNS servers. Test double: seedable
+	// via $GLOBALS['pfb_test_dns_servers'] (default: none configured).
+	function get_dns_servers() {
+		return $GLOBALS['pfb_test_dns_servers'] ?? [];
+	}
+}
