@@ -955,6 +955,11 @@ class TestSeverityOfDigitHyphenCarveOut:
         # already flagged pre-fix and must remain so).
         assert pfb_unbound.severity_of("") == pfb_unbound.SEV_FLAGGED
         assert pfb_unbound.severity_of("\U0001f4a9") == pfb_unbound.SEV_FLAGGED  # pile of poo
+        # Non-ASCII digits (Arabic-Indic 012, category Nd) are scriptless too but are
+        # NOT in the ASCII-only carve-out set -- pins the boundary so a future
+        # refactor to str.isdigit()/isdecimal() (both True for these) cannot silently
+        # widen the carve-out (#745 review).
+        assert pfb_unbound.severity_of("٠١٢") == pfb_unbound.SEV_FLAGGED
 
     def test_escalate_suspicious_does_not_promote_a_digit_label_to_action(self) -> None:
         # A digits/hyphen-only label reaches idn_confusable_action via classify_idn
@@ -2291,6 +2296,13 @@ class TestParsePythonTlds:
 
     def test_populated_value_parses_and_strips_entries(self) -> None:
         assert parse_python_tlds("com, net ,org") == ["com", "net", "org"]
+
+    def test_entries_are_lowercased(self) -> None:
+        # issue #720: the value can carry the case-preserved system-domain TLD
+        # (free-text `system/domain`, e.g. "MyLab.LOCAL" -> "LOCAL"); the membership
+        # test compares against the lowercased qname label (RFC 4343), so the config
+        # side must normalise at the same read boundary.
+        assert parse_python_tlds("CoM, LOCAL") == ["com", "local"]
 
     def test_empty_parsed_list_does_not_enable_tld_blacklist(self) -> None:
         # Reproduces init_standard's guard verbatim: `if python_tld and python_tlds:`.

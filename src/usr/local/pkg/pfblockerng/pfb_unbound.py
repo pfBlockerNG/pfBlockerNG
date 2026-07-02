@@ -796,8 +796,14 @@ def parse_python_tlds(raw: str) -> list[str]:
     blank entries here makes an empty/whitespace-only value parse to ``[]`` (falsy),
     so the caller's plain truthiness guard (``if python_tld and python_tlds:``) behaves
     correctly.
+
+    issue #720: entries are lowercased too. The GUI's TLD checkboxes are lowercase,
+    but the value also splices in the SYSTEM DOMAIN's TLD (``system/domain`` -- a
+    case-preserved free-text field), and the TLD-Allow membership test compares
+    against the lowercased qname label (RFC 4343) -- so normalise the config side
+    at the same read boundary.
     """
-    return [t.strip() for t in raw.split(",") if t.strip()]
+    return [t.strip().lower() for t in raw.split(",") if t.strip()]
 
 
 def _parse_ini_int(config: ConfigParser, section: str, option: str) -> int | None:
