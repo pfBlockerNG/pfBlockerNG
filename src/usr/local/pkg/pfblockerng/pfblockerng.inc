@@ -7858,7 +7858,14 @@ function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 
 	$parts	= explode('/', $ipaddr);
 	$subnet	= $parts[0];
-	$mask	= $parts[1] ?? '';	// '' (not undef) when no CIDR -> avoids str_replace(null) below
+	$mask	= $parts[1] ?? '';	// '' (not undef) when no CIDR
+
+	// An IPv4 prefix length must be 0..32; drop the line outright. A substring
+	// strip here (str_replace('32', '')) used to rewrite an invalid mask into a
+	// valid, far broader one (/132 -> /1 = half of IPv4) (issue #719).
+	if ($mask !== '' && (!ctype_digit($mask) || (int)$mask > 32)) {
+		return;
+	}
 	$iparr = explode('.', $subnet);
 
 	foreach ($iparr as $key => $octet) {
@@ -7881,7 +7888,9 @@ function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 		}
 	}
 
-	$mask = str_replace('32', '', $mask);	// Strip '/32' mask
+	if ((int)$mask == 32) {
+		$mask = '';	// Strip '/32' mask (bare host)
+	}
 	$ip_final = implode('.', $ip);
 
 	// Exclude private/reserved IPs (bypass exclusion for custom lists)
@@ -7896,10 +7905,6 @@ function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 		if ($pfbcidr != 'Disabled' && !empty($mask) && $mask < $pfbcidr) {
 			pfb_logger("\n  Suppression CIDR Limit: {$ip_final}/{$mask}", 1);
 			$mask = '32';
-		}
-
-		if ($mask > 32) {
-			$mask = '';
 		}
 
 		if (!filter_var($ip_final, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== FALSE) {
