@@ -9,7 +9,10 @@ use PHPUnit\Framework\TestCase;
 /**
  * is_ipaddrv4() / is_ipaddrv6() / is_ipaddr() / is_linklocal() — pin the
  * pfsense_doubles.php behavioural doubles to REAL pfSense util.inc semantics
- * (verified against pfSense master and the CE-2.8.0-era source; identical).
+ * (verified against pfSense master and the CE-2.8.0-era source at commit
+ * 4ecba17, 2025-03-26 — the youngest util.inc change before the CE 2.8.0
+ * release; both bodies identical, including the redmine #16005 try/catch,
+ * which the filter_var() stand-in absorbs since it cannot throw).
  *
  * Regression for two doubles that modeled util.inc wrongly (issue #721):
  *   - is_ipaddrv4() did an ip2long()/long2ip() ROUND-TRIP that real pfSense
@@ -89,10 +92,12 @@ final class IpAddrDoublesTest extends TestCase
 	public static function linklocalProvider(): array
 	{
 		return [
-			'v4 link-local (169.254/16) -> 4' => ['169.254.1.1', 4],
-			'v6 link-local (fe80::) -> 6'     => ['fe80::1', 6],
-			'v6 non-linklocal -> false'       => ['2001:db8::1', false],
-			'v4 non-linklocal -> false'       => ['10.0.0.1', false],
+			'v4 link-local (169.254/16) -> 4'      => ['169.254.1.1', 4],
+			'v6 link-local (fe80::) -> 6'          => ['fe80::1', 6],
+			'v6 link-local /10 upper bound -> 6'   => ['febf::1', 6],
+			'v6 just past /10 (site-local) falsy'  => ['fec0::1', false],
+			'v6 non-linklocal -> false'            => ['2001:db8::1', false],
+			'v4 non-linklocal -> false'            => ['10.0.0.1', false],
 		];
 	}
 

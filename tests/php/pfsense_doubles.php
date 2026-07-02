@@ -48,9 +48,10 @@ if (!function_exists('is_ipaddrv4')) {
 if (!function_exists('is_linklocal')) {
 	// pfSense util.inc: 4 for a 169.254.0.0/16 v4 address, 6 for a link-local v6
 	// address, FALSE otherwise. Off-appliance there is no PEAR Net_IPv6, so the
-	// v6 branch approximates NET_IPV6_LOCAL_LINK with a case-insensitive 'fe80:'
-	// prefix check on the address (checked BEFORE any '%zone' is stripped, same
-	// as upstream — the zone is part of the string Net_IPv6::getAddressType sees).
+	// v6 branch approximates NET_IPV6_LOCAL_LINK (fe80::/10, first hextet
+	// fe80–febf) with a first-hextet pattern check on the address (checked
+	// BEFORE any '%zone' is stripped, same as upstream — the zone is part of
+	// the string Net_IPv6::getAddressType sees).
 	function is_linklocal($ipaddr) {
 		if (is_ipaddrv4($ipaddr)) {
 			$ip4 = explode('.', $ipaddr);
@@ -59,7 +60,7 @@ if (!function_exists('is_linklocal')) {
 			}
 			return false;
 		}
-		if (is_string($ipaddr) && stripos($ipaddr, 'fe80:') === 0) {
+		if (is_string($ipaddr) && preg_match('/^fe[89ab][0-9a-f]:/i', $ipaddr) === 1) {
 			return 6;
 		}
 		return false;

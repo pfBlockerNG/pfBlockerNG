@@ -986,7 +986,11 @@ class TestSetReturnMsgStubFidelity:
         # Given a qstate that already carries a return_msg (e.g. a resolved
         # CNAME chain), When set_return_msg() runs, Then it REPLACES the
         # object wholesale (a fresh rep/qinfo), never mutating the prior one
-        # in place -- real createResponse always allocates a new reply.
+        # in place -- real createResponse always allocates a new reply. The
+        # empty-rep assertions are faithful here because this message appends
+        # no answer RRs (on-box, createResponse parses the answer section into
+        # the fresh rep; the stub leaves rep empty as a documented
+        # simplification -- answers ride DNSMessage.instances).
         sentinel = types.SimpleNamespace(
             rep=types.SimpleNamespace(security=0, an_numrrsets=2, rrsets=["sentinel"]),
             qinfo=types.SimpleNamespace(qname_str="old.example.com.", qname_list=[]),

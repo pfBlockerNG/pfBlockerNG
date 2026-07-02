@@ -92,12 +92,17 @@ RR_TYPE_ANY = 255  # Wildcard match — any RR type (query only)
 RR_CLASS_IN = 1
 
 # ---------------------------------------------------------------------------
-# Packet flags (DNS header bitmask positions)
+# Packet flags — pythonmod's injected runtime constants (interface.i
+# ``%constant uint16_t PKT_QR = 1`` etc.). These are NOT the wire-format
+# header bits: ``set_return_msg``/``createResponse`` maps them onto the wire
+# internally, and ``reply_info.flags`` carries the WIRE bits (mask those with
+# hex literals, e.g. 0x0080 for RA — see pfb_unbound.py's upstream-block
+# classifier), never these constants.
 # ---------------------------------------------------------------------------
-PKT_QR = 0x8000  # QR bit: set -> response, clear -> query
-PKT_RD = 0x0100  # RD bit: recursion desired (client requests recursive lookup)
-PKT_RA = 0x0080  # RA bit: recursion available (server supports recursion)
-PKT_AA = 0x0400  # AA bit: authoritative answer (as used in pythonmod)
+PKT_QR = 1  # QR: set -> response, clear -> query
+PKT_AA = 2  # AA: authoritative answer
+PKT_RD = 8  # RD: recursion desired (client requests recursive lookup)
+PKT_RA = 32  # RA: recursion available (server supports recursion)
 
 # ---------------------------------------------------------------------------
 # Response codes (RCODE field in DNS header)
@@ -357,7 +362,10 @@ class reply_info(_Struct):
 
     Key attributes (dynamic SWIG surface):
 
-    - ``flags``       : DNS header flags bitmask (``PKT_QR | PKT_RA | …``).
+    - ``flags``       : WIRE-format DNS header flags word — mask with hex
+                        literals (e.g. ``0x0080`` for RA, ``0x0400`` for AA),
+                        NOT the runtime ``PKT_*`` constants above (a different
+                        vocabulary; see the packet-flags comment).
     - ``an_numrrsets``: Number of RRsets in the answer section.
     - ``rrsets``      : List of RRset objects in the reply.
     - ``security``    : DNSSEC security status integer -- one of the
@@ -404,13 +412,16 @@ class DNSMessage:
         """Attach this message as the response on ``qstate.return_msg``.
 
         Mirrors real Unbound's ``createResponse`` (pythonmod/pythonmod_utils.c):
-        it REPLACES any existing ``qstate.return_msg`` wholesale with a fresh,
-        zeroed reply -- it never mutates one in place. The fresh reply's
-        ``rep.security`` is left at :data:`sec_status_unchecked` (0);
-        ``createResponse`` never stamps security, so a caller that wants a
-        trusted synthesized reply must stamp ``rep.security`` itself, exactly
-        as on the real box -- else the validator treats it as unchecked and
-        SERVFAILs it (issue #149 class).
+        it REPLACES any existing ``qstate.return_msg`` wholesale with a fresh
+        reply -- it never mutates one in place. On the real box the message's
+        RR sections are parsed INTO that fresh reply (``rep.rrsets`` carries
+        the answer); this stub deliberately leaves ``rep`` empty as a
+        simplification -- tests inspect ``DNSMessage.instances[-1].answer``
+        instead. The fresh reply's ``rep.security`` is left at
+        :data:`sec_status_unchecked` (0); ``createResponse`` never stamps
+        security, so a caller that wants a trusted synthesized reply must
+        stamp ``rep.security`` itself, exactly as on the real box -- else the
+        validator treats it as unchecked and SERVFAILs it (issue #149 class).
 
         Also mirrors the Python wrapper's post-success step: sets
         ``rep.authoritative = 1`` iff ``PKT_AA`` is set in this message's
