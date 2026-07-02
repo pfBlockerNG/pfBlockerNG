@@ -285,7 +285,8 @@ class TestRegexReduction:
 
 
 # --------------------------------------------------------------------------- #
-# 3. classify reuse: domain blocks -> data vs zone (ADR-06 classify)
+# 3. DATA vs ZONE: an ABP wildcard block is a zone at its own key at any depth
+#    (#718); the exact fold and the TLD-exclusion carve-out stay exact DATA.
 # --------------------------------------------------------------------------- #
 class TestClassify:
     def test_registrable_parent_is_zone(self) -> None:
@@ -300,6 +301,15 @@ class TestClassify:
         # ZONE at its OWN key -- NOT get demoted to an exact DATA entry that would
         # silently drop subdomain coverage.
         res = _reconcile(["||ads.example.com^"])
+        b = res.block_domains[0]
+        assert (b.cls, b.key) == (P.DNSBL_CLASS_ZONE, "ads.example.com")
+        assert _resolve(res, "deep.ads.example.com") == "block"
+
+    def test_deep_wildcard_regex_fold_classifies_zone_at_its_own_key(self) -> None:
+        # The OTHER wildcard source: a wildcard-shaped reducible regex folds to the
+        # same shape as its ||host^ literal form, so a deep fold must also keep its
+        # zone at the anchor key -- pins that the regex-fold arm shares the #718 fix.
+        res = _reconcile([r"/^(.+\.)?ads\.example\.com$/"])
         b = res.block_domains[0]
         assert (b.cls, b.key) == (P.DNSBL_CLASS_ZONE, "ads.example.com")
         assert _resolve(res, "deep.ads.example.com") == "block"
