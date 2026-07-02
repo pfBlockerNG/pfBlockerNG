@@ -17,6 +17,11 @@ use PHPUnit\Framework\TestCase;
  *   pfb_alias_delta_batch_clamp(int|string $raw): int
  *     Clamps a batch-size value to [64, 4096].
  *
+ *   pfb_alias_delta_batch_resolve(string $raw): int
+ *     Resolves a raw (trimmed) POST batch-size field to its clamped stored
+ *     value — '' means "use the default 512", never (int) '' == 0.  This is
+ *     the exact function pfblockerng_ip.php's save path calls.
+ *
  *   pfb_apply_alias_delta(
  *       string $pfctl_bin, string $table, string $table_file,
  *       array $desired_set, array $last_set,
@@ -41,6 +46,7 @@ use PHPUnit\Framework\TestCase;
  *   J — off-by-one detection: a deliberate off-by-one in delta set is caught.
  */
 #[CoversFunction('pfb_alias_delta_batch_clamp')]
+#[CoversFunction('pfb_alias_delta_batch_resolve')]
 #[CoversFunction('pfb_apply_alias_delta')]
 final class AliasDeltaApplyTest extends TestCase
 {
@@ -549,30 +555,32 @@ SH
 	 * Scenario H6 — empty-string POST field → default 512, not clamped-to-64.
 	 *
 	 * An HTML form submits an empty string when the user clears the batch-size
-	 * field.  The UI save path must treat '' as "use default 512", not cast to
-	 * int(0) and clamp to 64.  Pinning the fix in pfblockerng_ip.php F1.
+	 * field.  The UI save path (pfblockerng_ip.php) resolves the raw POST value
+	 * through pfb_alias_delta_batch_resolve() — the real production helper, not
+	 * a reimplementation of its ternary — which must treat '' as "use default
+	 * 512", never cast to int(0) and clamp to 64.
 	 *
 	 * Before the fix: (int)'' == 0 → pfb_alias_delta_batch_clamp(0) == 64.
-	 * After the fix: '' → 512 → pfb_alias_delta_batch_clamp(512) == 512.
+	 * After the fix: pfb_alias_delta_batch_resolve('') == 512.
 	 */
 	public function testEmptyStringBatchPostFieldDefaultsTo512(): void
 	{
-		// Simulate the fixed UI save path logic (F1 fix in pfblockerng_ip.php).
-		$raw_empty  = '';
-		$batch_from_empty = pfb_alias_delta_batch_clamp($raw_empty === '' ? 512 : (int) $raw_empty);
+		// Given: the user cleared the batch-size field — POST submits ''.
+		$batch_from_empty = pfb_alias_delta_batch_resolve('');
 
+		// Then: the real UI-save helper resolves it to the 512 default, not 64.
 		$this->assertSame(512, $batch_from_empty,
 			"expected: empty POST field → 512 (not 64); actual: {$batch_from_empty}\n"
 			. "Bug: (int)'' == 0 → clamp(0) == 64 (incorrect default when user clears field)");
 
-		// Before-fix behaviour would produce 64 — ensure we're not checking the wrong thing.
+		// Sanity: an explicit zero (not an empty field) still clamps to the 64 floor —
+		// proves the '' special-case is genuinely distinct from a real zero.
 		$batch_from_zero = pfb_alias_delta_batch_clamp(0);
 		$this->assertSame(64, $batch_from_zero,
-			"sanity: clamp(0) == 64 (pre-fix path result — still correct when int is explicit zero)");
+			"sanity: clamp(0) == 64 (an explicit zero is still a real value, not 'unset')");
 
-		// Out-of-range value still clamps correctly.
-		$raw_oob  = '9999';
-		$batch_from_oob = pfb_alias_delta_batch_clamp($raw_oob === '' ? 512 : (int) $raw_oob);
+		// A non-empty out-of-range POST value still clamps correctly through the same helper.
+		$batch_from_oob = pfb_alias_delta_batch_resolve('9999');
 		$this->assertSame(4096, $batch_from_oob,
 			"expected: out-of-range POST field → clamped to 4096; actual: {$batch_from_oob}");
 	}
