@@ -24,9 +24,16 @@
 !
 ! --- deliberately ReDoS-shaped patterns (catastrophic-backtracking exemplars).
 !     Real feeds rarely ship these, but the safety layer must handle them; the
-!     spike times their worst real first-hit on a <=253-char crafted input. ---
+!     spike times their worst real first-hit on a <=253-char crafted input.
+!     NOTE: the nested-quantifier body is anchored to a fixed literal domain
+!     (redos-exemplar.example) rather than a bare \w+ catch-all -- a bare \w+$
+!     tail matches EVERY dotted probe (any domain name), which silently masked
+!     the corpus-wide reconcile-vs-oracle equivalence test (issue #718). Still
+!     a genuine nested-quantifier catastrophic shape (`_regex_is_catastrophic_shape`
+!     stays True on the inner `(\w+\.)+`); it just no longer swallows unrelated
+!     probes. ---
 /^(a+)+$/
 /^(a|a)+$/
-/^(\w+\.)+\w+$/
+/^(\w+\.)+redos-exemplar\.example$/
 /^([a-z]+)*\.example$/
 /^(.*a){20}$/

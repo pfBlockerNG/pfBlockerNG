@@ -351,6 +351,19 @@ class TestLiveMatcherEqualsOracle:
         for q in ("example.com", "sub.example.com"):
             assert _live_label(res, q) == _oracle_label(feeds, [], q)
 
+    def test_deep_anchor_blocks_subdomains(self) -> None:
+        # ABP anchor semantics: ||host^ blocks host AND every subdomain of host,
+        # regardless of how many labels sit above host's own registrable parent
+        # (Phase-2 oracle decide(): "rule.wildcard and q.endswith('.' + rule.key)",
+        # no depth restriction). A THREE-label anchor like ||ads.example.com^ must
+        # cover deep.ads.example.com exactly as a two-label anchor covers its subs.
+        feeds = {"f": ["||ads.example.com^"]}
+        res = _build(feeds)
+        assert _live_label(res, "ads.example.com") == "block"
+        assert _live_label(res, "deep.ads.example.com") == "block"
+        for q in ("ads.example.com", "deep.ads.example.com", "example.com", "other.example.com"):
+            assert _live_label(res, q) == _oracle_label(feeds, [], q)
+
 
 # --------------------------------------------------------------------------- #
 # 4. User sovereignty (fact 7) is absolute -- user rules win over feeds + $important
