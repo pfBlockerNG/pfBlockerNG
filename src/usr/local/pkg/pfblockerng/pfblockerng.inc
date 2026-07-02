@@ -10976,6 +10976,33 @@ function pfb_filterlog_port(array $d, bool $is_inbound): string {
 }
 
 
+// Map the ASN Reporting setting to the SQLite relative-time window used to expire
+// cached ASN lookups (the pfb_daemon_filterlog() cache-eviction DELETE). Falls back
+// to '-24 hours' for BOTH 'disabled' and any unrecognised token, so the window is
+// ALWAYS defined -- including when reporting is 'disabled' but an ASN token is still
+// configured (issue #713: the old call site only ran this mapping when reporting
+// wasn't 'disabled', leaving $asn_cache undefined/NULL for the token-only case, so
+// the DELETE bound NULL and the cache never expired).
+//
+// PURE -- no I/O, no globals, no side effects.
+function pfb_asn_cache_window(string $asn_reporting): string {
+	switch ($asn_reporting) {
+		case '1hour':
+			return '-1 hour';
+		case '4hour':
+			return '-4 hours';
+		case '12hour':
+			return '-12 hours';
+		case '24hour':
+			return '-24 hours';
+		case 'week':
+			return '-1 week';
+		default:
+			return '-24 hours';
+	}
+}
+
+
 // Firewall filter.log parser daemon
 function pfb_daemon_filterlog() {
 	global $pfb;
@@ -10988,28 +11015,10 @@ function pfb_daemon_filterlog() {
 	// defeating the change-detection on the very first reload check).
 	$GLOBALS['pfb_daemon_config_mtime'] = pfb_file_mtime('/conf/config.xml');
 
-	// ASN Reporting - cached setting
-	if ($pfb['asn_reporting'] != 'disabled') {
-		switch ($pfb['asn_reporting']) {
-			case '1hour':
-				$asn_cache = '-1 hour';
-				break;
-			case '4hour':
-				$asn_cache = '-4 hours';
-				break;
-			case '12hour':
-				$asn_cache = '-12 hours';
-				break;
-			case '24hour':
-				$asn_cache = '-24 hours';
-				break;
-			case 'week':
-				$asn_cache = '-1 week';
-				break;
-			default:
-				$asn_cache = '-24 hours';
-		}
-	}
+	// ASN Reporting - cached setting. Unconditional (issue #713): the cache-eviction
+	// use site below runs whenever reporting is enabled OR an ASN token is set, so
+	// $asn_cache must always be defined -- see pfb_asn_cache_window().
+	$asn_cache = pfb_asn_cache_window($pfb['asn_reporting']);
 
 	// Application paths
 	if (file_exists('/usr/local/bin/mmdblookup') && file_exists("{$pfb['geoipshare']}/GeoLite2-Country.mmdb")) {
