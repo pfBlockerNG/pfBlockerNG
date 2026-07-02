@@ -4012,7 +4012,9 @@ class BlockDomainRule:
     """A reconciled domain BLOCK ready to emit into dataDB/zoneDB (Phase 6).
 
     ``cls`` is DNSBL_CLASS_DATA (exact) or DNSBL_CLASS_ZONE (wildcard); ``key`` is
-    the registrable parent for a ZONE or the exact domain for DATA (from classify).
+    the anchor domain itself for a ZONE (ABP ``||host^`` covers subdomains at any
+    depth -- no registrable-parent reduction, #718) or the exact domain for DATA
+    (an exact fold, or a TLD-exclusion carve-out).
     """
 
     cls: str
