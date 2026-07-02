@@ -57,4 +57,16 @@ final class DnsblWebpageForeignReadTest extends TestCase
 		// refresh still fires for it.
 		$this->assertSame('dnsbl_default.php', pfb_dnsbl_webpage());
 	}
+
+	public function testPresentButEmptyWebpageDefaultsToDnsblDefault(): void
+	{
+		// A saved-then-cleared 'dnsbl_webpage' (key PRESENT, value '') must still
+		// report the default -- config_get_path()'s default arg only substitutes
+		// on an ABSENT key, not a present-but-empty one, so a bare
+		// config_get_path(..., 'dnsbl_default.php') read (no `?:` coercion) wrongly
+		// returns '' here, same as pfblockerng_dnsbl.php's own
+		// `$pfb['dconfig']['dnsbl_webpage'] ?: 'dnsbl_default.php'` would not.
+		config_set_path(self::PATH, '');
+		$this->assertSame('dnsbl_default.php', pfb_dnsbl_webpage());
+	}
 }
