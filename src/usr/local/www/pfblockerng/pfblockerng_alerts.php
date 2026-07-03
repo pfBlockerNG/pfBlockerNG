@@ -252,11 +252,18 @@ if (!$alert_summary) {
 
 	PfbConfig::write('v4suppression', PfbConfig::read('v4suppression') ?: '');
 
+	// ADR-53 P8: v6 sibling -- same absent-key normalisation as v4suppression above.
+	PfbConfig::write('v6suppression', PfbConfig::read('v6suppression') ?: '');
+
 	PfbConfig::write('suppression', PfbConfig::read('suppression') ?: '');
 
 	PfbConfig::write('tldexclusion', PfbConfig::read('tldexclusion') ?: '');
 
-	foreach (array('ipsuppression', 'dnsblwhitelist', 'tldexclusion') as $key => $type) {
+	// ADR-53 P8: 'ipsuppression_v6' is the new v6suppression sibling of
+	// 'ipsuppression' (v4) -- same collection shape, keyed separately so the
+	// addsuppress handler below can dedup/rewrite each family's customlist
+	// independently.
+	foreach (array('ipsuppression', 'ipsuppression_v6', 'dnsblwhitelist', 'tldexclusion') as $key => $type) {
 
 		if (!isset($clists[$type]) || !is_array($clists[$type])) {
 			$clists[$type] = array();
@@ -265,8 +272,10 @@ if (!$alert_summary) {
 		if ($key == 0) {
 			$clists[$type]['base64'] = PfbConfig::read('v4suppression');
 		} elseif ($key == 1) {
-			$clists[$type]['base64'] = PfbConfig::read('suppression');
+			$clists[$type]['base64'] = PfbConfig::read('v6suppression');
 		} elseif ($key == 2) {
+			$clists[$type]['base64'] = PfbConfig::read('suppression');
+		} elseif ($key == 3) {
 			$clists[$type]['base64'] = PfbConfig::read('tldexclusion');
 		}
 
@@ -747,102 +756,117 @@ if (isset($_POST) && !empty($_POST)) {
 		$filterfieldsarray = array();
 	}
 
-	// Add an IPv4 (/32 or /24 only) to the suppression customlist
+	// Add a host (v4 or v6, ANY containing mask) to the suppression customlist,
+	// carving it out of whichever table entr(y/ies) currently block it live
+	// (ADR-53 §2.1 fork 3 -- full rework). The old /24-only 254-host re-add
+	// loop + "blocked by a CIDR other than /24" refusal are retired: any
+	// containing entry is now punched via pfb_live_punch_plan()'s
+	// covering-CIDR set-subtraction, mirroring the persisted v4/v6 engines
+	// (Phases 3/5).
 	elseif (isset($_POST['addsuppress']) && !empty($_POST['addsuppress'])) {
 
-		$cidr = '';
-		if ($_POST['cidr'] == '32' || $_POST['cidr'] == '24') {
-			$cidr = $_POST['cidr'];
-		}
-		$ip	= pfb_filter($_POST['ip'], PFB_FILTER_IPV4, 'alerts addsuppress', '', TRUE);
+		$ip	= pfb_filter($_POST['ip'], PFB_FILTER_IP, 'alerts addsuppress', '', TRUE);
 		$table	= pfb_filter($_POST['table'], PFB_FILTER_WORD, 'alerts addsuppress', '', TRUE);
 
-		// If IP is not valid or CIDR field is empty, or Table not valid exit
-		if (empty($ip) || empty($cidr) || empty($table)) {
-			$savemsg = gettext('Cannot Suppress: IPv4 not valid or CIDR value missing or Table not valid');
+		// If IP is not valid or Table not valid, exit.
+		if (empty($ip) || empty($table)) {
+			$savemsg = gettext('Cannot Suppress: IP address not valid or Table not valid');
 			header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$savemsg}");
 			exit;
 		}
+
+		$is_v6 = strpos($ip, ':') !== FALSE;
+		$family = $is_v6 ? 6 : 4;
 
 		$descr = '';
 		if (isset($_POST['descr']) && !empty($_POST['descr'])) {
 			$descr = pfb_filter($_POST['descr'], PFB_FILTER_HTML, 'alerts addsuppress');
 		}
 
+		// Read the table's current membership -- the ADR-40 mirror file when
+		// present (freshest applied set), else a live `pfctl -T show` fallback,
+		// both streamed line-by-line (fgets): a Deny table mirror can hold
+		// millions of entries (ADR-53 §3), so it is never slurped whole.
+		$table_esc	= escapeshellarg($table);
+		$mirror		= "{$pfb['aliasdir']}/{$table}.txt";
+		$scan_file	= is_readable($mirror) ? $mirror : NULL;
+		$scan_tmp	= NULL;
+		if ($scan_file === NULL) {
+			$scan_tmp = tempnam($pfb['dbdir'], 'pfb_punch_');
+			exec("{$pfb['pfctl']} -t {$table_esc} -T show > " . escapeshellarg($scan_tmp) . ' 2>&1');
+			$scan_file = $scan_tmp;
+		}
+		$table_entries = array();
+		if (($handle = @fopen($scan_file, 'r')) !== FALSE) {
+			while (($line = @fgets($handle)) !== FALSE) {
+				$table_entries[] = trim($line);
+			}
+			fclose($handle);
+		}
+		if ($scan_tmp !== NULL) {
+			@unlink($scan_tmp);
+		}
+
+		// Locate + carve every containing table entry (any mask, both
+		// families). Unlike the old /32 branch, an empty plan (nothing
+		// currently matches live) is NOT a refusal -- the customlist add below
+		// always proceeds, exactly as the old /24 branch already did
+		// unconditionally: suppression is a standing exemption for FUTURE
+		// loads, not contingent on today's live table snapshot.
+		$plan = pfb_live_punch_plan($ip, $table_entries);
+
+		foreach ($plan['delete'] as $entry) {
+			exec("{$pfb['pfctl']} -t {$table_esc} -T delete " . escapeshellarg($entry) . ' 2>&1');
+		}
+		foreach ($plan['add'] as $cidr) {
+			exec("{$pfb['pfctl']} -t {$table_esc} -T add " . escapeshellarg($cidr) . ' 2>&1');
+		}
+
+		$del_cnt = count($plan['delete']);
 		$savemsg1 = "Host IP address {$ip}";
-		$ix = ip_explode(trim($ip, "'"));	// Explode IP into evaluation strings
-		if ($cidr == '32') {
-
-			$pfb_pfctl = exec("{$pfb['pfctl']} -t {$table} -T show | grep {$ip} 2>&1");
-			if (!empty($pfb_pfctl)) {
-				$savemsg2 = ' : Removed /32 entry';
-				exec("{$pfb['pfctl']} -t {$table} -T delete {$ip} 2>&1");
-			}
-			else {
-				$pfb_pfctl = array();
-				$ip_esc = escapeshellarg("{$ix[5]}");
-				exec("{$pfb['pfctl']} -t {$table} -T delete {$ip_esc} 2>&1", $pfb_pfctl);
-				if (preg_grep("/1\/1 addresses deleted/", $pfb_pfctl)) {
-					$savemsg2 = ' : Removed /24 entry, added 254 addr';
-					for ($k=0; $k <= 255; $k++) {
-						if ($k != $ix[4]) {
-							$ip_esc = escapeshellarg("{$ix[6]}{$k}");
-							exec("{$pfb['pfctl']} -t {$table} -T add {$ip_esc} 2>&1");
-						}
-					}
-				}
-				else {
-					$savemsg = gettext("Not Suppressed. Host IP address {$ip} is blocked by a CIDR other than /24");
-					header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$savemsg}");
-					exit;
-				}
-			}
-		}
-		else {
-			$cidr = '24';
-			$savemsg2 = ' : Removed /24 entry';
-			$pfb_pfctl = array();
-			$ip_esc = escapeshellarg("{$ix[5]}");
-			exec("{$pfb['pfctl']} -t {$table} -T delete {$ip_esc} 2>&1", $pfb_pfctl);
-			if (!preg_grep("/1\/1 addresses deleted/", $pfb_pfctl)) {
-				$savemsg2 = ' : Removed all entries';
-				// Remove 0-255 IP address from alias table
-				for ($j=0; $j <= 255; $j++) {
-					$ip_esc = escapeshellarg("{$ix[6]}{$j}");
-					exec("{$pfb['pfctl']} -t {$table} -T delete {$ip_esc} 2>&1");
-				}
-			}
-		}
-
-		// Save IP to the v4 Suppression List
-		if (isset($clists['ipsuppression']['data'][$ix[5]]) || isset($clists['ipsuppression']['data'][$ix[0] . '/32'])) {
-			$savemsg = gettext("Host IP address {$ip} already exists in the IPv4 Suppression customlist.");
+		if ($del_cnt > 0) {
+			$add_cnt = count($plan['add']);
+			$savemsg2 = ' : Removed ' . $del_cnt . ' entr' . ($del_cnt == 1 ? 'y' : 'ies')
+				. ', added ' . $add_cnt . ' covering CIDR' . ($add_cnt == 1 ? '' : 's');
 		} else {
-			$v4suppression_dat = '';
-			if ($cidr == '24') {
-				$v4suppression_dat .= "{$ix[5]}";
-			} else {
-				$v4suppression_dat .= "{$ix[0]}/32";
-			}
+			$savemsg2 = " : Not currently blocked by Table [ {$table} ]";
+		}
 
+		$supp_key	= $is_v6 ? 'ipsuppression_v6' : 'ipsuppression';
+		$cfg_key	= $is_v6 ? 'v6suppression' : 'v4suppression';
+		$host_line	= $is_v6 ? "{$ip}/128" : "{$ip}/32";
+
+		// Save the host to the correct-family Suppression List (bare-host dedup
+		// unchanged UX from the original v4-only code -- the "+" always
+		// suppresses the exact reported host, never the whole containing entry).
+		$pfbupdate = FALSE;
+		if (isset($clists[$supp_key]['data'][$host_line])) {
+			$savemsg = gettext("Host IP address {$ip} already exists in the IPv{$family} Suppression customlist.");
+		} else {
+			$supp_dat = $host_line;
 			if (!empty($descr)) {
-				$v4suppression_dat .= " # {$descr}";
+				$supp_dat .= " # {$descr}";
 			}
 
-			$savemsg = gettext($savemsg1) . gettext($savemsg2) . gettext(' and added to the IPv4 Suppression customlist.');
+			$savemsg = gettext($savemsg1) . gettext($savemsg2) . gettext(" and added to the IPv{$family} Suppression customlist.");
 			$pfbupdate = TRUE;
 		}
 
 		if ($pfbupdate) {
 			$data = '';
-			foreach ($clists['ipsuppression']['data'] as $line) {
+			foreach ($clists[$supp_key]['data'] as $line) {
 				$data .= "{$line}";
 			}
-			$data .= "{$v4suppression_dat}\r\n";
-			$clists['ipsuppression']['base64'] = base64_encode($data);
-			PfbConfig::write('v4suppression', $clists['ipsuppression']['base64']);
-			write_config("pfBlockerNG: Added {$ip} to the IPv4 Suppression customlist", FALSE);
-			pfb_create_suppression_file();	// Create pfbsuppression.txt
+			$data .= "{$supp_dat}\r\n";
+			$clists[$supp_key]['base64'] = base64_encode($data);
+			PfbConfig::write($cfg_key, $clists[$supp_key]['base64']);
+			write_config("pfBlockerNG: Added {$ip} to the IPv{$family} Suppression customlist", FALSE);
+			// pfb_create_suppression_file() reads $pfb['ipconfig'][...], a
+			// snapshot taken at pfb_global() time -- refresh it in-memory so the
+			// suppression file this request writes reflects the entry just added,
+			// not a stale pre-write snapshot.
+			$pfb['ipconfig'][$cfg_key] = $clists[$supp_key]['base64'];
+			pfb_create_suppression_file();	// Refresh pfbsuppression(_v6).txt
 		}
 		header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$savemsg}");
 		exit;
@@ -4116,7 +4140,6 @@ if (!$alert_summary) {
 	$form->addGlobal(new Form_Input('dnsbl_customlist', 'dnsbl_customlist', 'hidden', ''));
 	$form->addGlobal(new Form_Input('table', 'table', 'hidden', ''));
 	$form->addGlobal(new Form_Input('descr', 'descr', 'hidden', ''));
-	$form->addGlobal(new Form_Input('cidr', 'cidr', 'hidden', ''));
 	$form->addGlobal(new Form_Input('ip', 'ip', 'hidden', ''));
 	$form->addGlobal(new Form_Input('addsuppress', 'addsuppress', 'hidden', ''));
 	$form->addGlobal(new Form_Input('addwhitelistdom', 'addwhitelistdom', 'hidden', ''));
@@ -5291,47 +5314,28 @@ function ip_suppression() {
 	var description = prompt('Please enter Suppression description');
 	$('#descr').val(description);
 
-	if (cidr.value != '' && ip && table) {
+	if (ip && table) {
 		$('#addsuppress').val('true');
 		$('form').submit();
 	}
 }
 
+// ADR-53 P8: the "+" now carves the reported host out of WHICHEVER table
+// entry currently contains it, at any mask -- the /32-vs-/24 mask-choice
+// dialog this function used to show is no longer meaningful (the backend
+// never reads a chosen mask, see pfblockerng_alerts.php's addsuppress
+// handler), so it goes straight to ip_suppression() once suppression is
+// confirmed enabled.
 function ip_suppression_type() {
 
 	// Confirm if the Suppression option is enabled
 	var is_supp = "<?=$pfb['supp']?>";
 	if (is_supp != 'on') {
 		alert('The IP Suppression option has not been enabled. Please enable this option in the IP Tab to suppress this IP.');
-		$(this).dialog('close');
+		return;
 	}
 
-	var buttons = {};
-	buttons['Suppress /32'] = function() {
-						$('#cidr').val('32');
-						$(this).dialog('close');
-						ip_suppression();
-						};
-	buttons['Suppress /24'] = function() {
-						$('#cidr').val('24');
-						$(this).dialog('close');
-						ip_suppression();
-						};
-	buttons['Cancel'] = function() { $(this).dialog('close'); };
-
-	$('<div></div>').appendTo('body')
-	.html('<div><h6>Select Suppression Mask:</h6></div>')
-	.dialog({
-		modal: true,
-		autoOpen: true,
-		resizable: false,
-		closeOnEscape: true,
-		width: 'auto',
-		title: 'Select a Suppression Mask:',
-		position: { my: 'top', at: 'top' },
-		buttons: buttons
-	}).css('background-color','#ffd700');
-	$("div[role=dialog]").find('button').addClass('btn-info btn-xs');
+	ip_suppression();
 }
 
 function add_description(mode) {
