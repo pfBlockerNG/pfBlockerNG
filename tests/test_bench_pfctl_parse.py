@@ -9,9 +9,10 @@ column always read 0.0 even when connections blackholed.
 
 The maintainer's decision (recorded in the issue): SIMPLER pooled semantics — count
 >=5s losses per RUN (summed across a probe's whole capture) and report an honest
-pooled loss%/total_sent, WITHOUT redesigning per-op-window attribution (the ICMP path's
-``_LiveProbe.slice_window`` already treats loss the same way — not attributable to a
-narrow time slice — and this mirrors that, not a new design).
+pooled loss%/total_sent, WITHOUT redesigning per-op-window attribution. NOTE this
+deliberately diverges from ICMP's ``_LiveProbe.slice_window`` (which zeroes ``lost``
+on op-aligned windows); see the ``TcpRstWindow`` docstring for the divergence and the
+one-slice-per-run invariant.
 
 These tests exercise ``_parse_tcp_probe_output`` and ``_compute_pooled_tcp``/
 ``_compute_pooled_tcp_full`` directly (pure functions, no VM needed) — importing
@@ -21,9 +22,12 @@ for the established pattern of pulling pure seams out of ``tests/smoke/`` for th
 
 from __future__ import annotations
 
+import asyncio
 import json
+from typing import Any
 
 from tests.smoke.test_bench_pfctl import (
+    _TCP_PROBE_SCRIPT,
     PooledStats,
     TcpRstWindow,
     _compute_pooled_tcp,
@@ -224,3 +228,98 @@ def test_compute_pooled_tcp_empty_windows_yields_zero_stats() -> None:
     """
     ps = _compute_pooled_tcp([], baseline_windows=[])
     assert ps == PooledStats(), f"expected an all-zero PooledStats() for no windows but got {ps}"
+
+
+def test_compute_pooled_tcp_all_lost_window_reports_full_loss() -> None:
+    """A fully blackholed run (only -1 records, zero RTT samples) reports 100% loss.
+
+    This is the n==0-samples branch where the fix changes the early-return's
+    output: pre-fix it returned an all-zero PooledStats (loss invisible); now
+    the losses ride total_loss/total_sent and loss_pct() reads 100%.
+    """
+    parsed = _parse_tcp_probe_output(
+        "\n".join(
+            [
+                _probe_line(start_t=0.0, t=5.0, rtt_ms=-1.0),
+                _probe_line(start_t=0.1, t=5.1, rtt_ms=-1.0),
+            ]
+        )
+    )
+    window = TcpRstWindow(samples=parsed.samples, lost=parsed.lost)
+
+    ps = _compute_pooled_tcp([window], baseline_windows=[])
+    assert ps.total_loss == 2, f"expected total_loss=2 (all records timed out) but got {ps.total_loss}"
+    assert ps.total_sent == 2, f"expected total_sent=2 but got {ps.total_sent}"
+    assert ps.loss_pct() == 100.0, f"expected loss_pct()=100.0% (fully blackholed) but got {ps.loss_pct():.2f}%"
+
+    ps_full, _buckets, _spike = _compute_pooled_tcp_full([window], baseline_windows=[])
+    assert ps_full.total_loss == 2, f"full-pooled: expected total_loss=2 but got {ps_full.total_loss}"
+    assert ps_full.loss_pct() == 100.0, f"full-pooled: expected 100.0% but got {ps_full.loss_pct():.2f}%"
+
+
+# --------------------------------------------------------------------------- #
+# probe_once — the guest-side except-order (the loss records must be emittable)
+# --------------------------------------------------------------------------- #
+
+
+def _guest_probe_once() -> Any:
+    """Materialize the guest script's probe_once by exec'ing _TCP_PROBE_SCRIPT.
+
+    The script is __main__-guarded, so exec with a test __name__ defines its
+    functions without running main() — the same code the civm guest executes.
+    """
+    ns: dict[str, Any] = {"__name__": "tcp_probe_under_test"}
+    exec(compile(_TCP_PROBE_SCRIPT, "tcp_rst_probe.py", "exec"), ns)  # noqa: S102
+    return ns["probe_once"]
+
+
+def _run_probe_once_with_connect(raiser: BaseException) -> float:
+    """Drive the guest probe_once with asyncio.open_connection raising `raiser`."""
+    probe_once = _guest_probe_once()
+    real_open = asyncio.open_connection
+
+    async def fake_open(*args: Any, **kwargs: Any) -> Any:
+        raise raiser
+
+    async def drive() -> float:
+        asyncio.open_connection = fake_open  # type: ignore[assignment]
+        try:
+            _start, _recv, rtt_ms = await probe_once("192.0.2.1")
+            return float(rtt_ms)
+        finally:
+            asyncio.open_connection = real_open  # type: ignore[assignment]
+
+    return asyncio.run(drive())
+
+
+def test_probe_once_timeout_yields_loss_record() -> None:
+    """A >=5s stall must produce the rtt_ms=-1 LOSS record, not a "valid" RTT sample.
+
+    On Python 3.11+ asyncio.TimeoutError IS the builtin TimeoutError, which
+    subclasses OSError — with the OSError clause first (the pre-fix order) the
+    timeout was swallowed as a positive ~5000ms RTT and the -1 branch was dead
+    code, so no loss could EVER be emitted (the root of the fabricated 0.0
+    loss%). Red on the pre-fix order: rtt_ms >= 0 here.
+    """
+    assert issubclass(asyncio.TimeoutError, OSError), (
+        "precondition: on the targeted Python (3.11+) asyncio.TimeoutError is the "
+        "builtin TimeoutError and subclasses OSError — the except-order trap this pins"
+    )
+    rtt_ms = _run_probe_once_with_connect(asyncio.TimeoutError())
+    assert rtt_ms == -1.0, (
+        f"expected rtt_ms=-1.0 (timeout recorded as a LOSS) but got {rtt_ms} — "
+        "the timeout was caught by the OSError clause and recorded as a valid RTT sample"
+    )
+
+
+def test_probe_once_refused_yields_rtt_sample() -> None:
+    """Branch pair: a fast RST/ECONNREFUSED is a genuine RTT sample, never a loss.
+
+    The RST-reject rules make refused connections the MEASURED behaviour — the
+    refusal time IS the RTT the bench characterizes.
+    """
+    rtt_ms = _run_probe_once_with_connect(ConnectionRefusedError())
+    assert rtt_ms >= 0.0, (
+        f"expected a non-negative RTT for a refused (RST) connection but got {rtt_ms} — "
+        "a refusal must never be tallied as a >=5s loss"
+    )

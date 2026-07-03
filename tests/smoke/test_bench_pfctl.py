@@ -643,10 +643,14 @@ async def probe_once(ip: str) -> tuple[float, float, float]:
         writer.close()
         await writer.wait_closed()
         rtt_ms = (time.monotonic() - t0) * 1000.0
+    # Timeout MUST be caught before OSError: on Python 3.11+ asyncio.TimeoutError
+    # IS the builtin TimeoutError, which subclasses OSError — with OSError first,
+    # a genuine ≥5s stall lands in the RTT clause as a ~5000ms "valid" sample and
+    # the -1 loss record is dead code (the #738 F5 masked-loss bug).
+    except TimeoutError:
+        rtt_ms = -1.0  # genuine ≥5s timeout — no RST received
     except (ConnectionRefusedError, OSError):
         rtt_ms = (time.monotonic() - t0) * 1000.0  # RST → ECONNREFUSED; time is RTT
-    except asyncio.TimeoutError:
-        rtt_ms = -1.0  # genuine ≥5s timeout — no RST received
     return start_epoch, time.time(), rtt_ms
 
 async def run(in_ips: list[str], out_ips: list[str], duration: float) -> None:
@@ -763,9 +767,14 @@ class TcpRstWindow:
 
     ``lost`` is the count of genuine >=5s timeouts (rtt_ms=-1 probe records)
     pooled across the WHOLE probe run that produced this window, not
-    attributed to this window's [t0, t1] slice — same simplification as
-    ICMP's ``_LiveProbe.slice_window`` (see its comment): a probe run spans
-    several batches, so precise sub-window attribution is skipped by design.
+    attributed to this window's [t0, t1] slice — the maintainer-chosen
+    pooled-per-run semantics (#738 F5). NOTE this deliberately DIVERGES from
+    ICMP's ``_LiveProbe.slice_window``, which zeroes ``lost`` on op-aligned
+    windows (its pooled op-aligned loss is always 0); do not "re-align" TCP
+    to that — it would resurrect the fabricated-0.0 loss column. Because the
+    run total rides on each sliced window, ``loss_pct()`` for a SHORT op
+    window divides run-scoped losses by window-scoped sends and is an upper
+    bound, not the window's own loss rate.
     """
 
     samples: list[TcpRstSample] = field(default_factory=list)
@@ -874,8 +883,11 @@ class _LiveTcpProbe:
 
         ``lost`` on the returned window is the probe's TOTAL genuine-timeout
         count across its whole run, not filtered to [t0, t1] — pooled-per-run
-        by design (see ``TcpRstWindow`` docstring), matching ICMP's
-        ``_LiveProbe.slice_window`` treatment of loss as non-window-attributable.
+        by design (see ``TcpRstWindow`` docstring; deliberately unlike ICMP's
+        ``slice_window``, which zeroes lost). INVARIANT: call at most once per
+        probe run — the returned window carries the run's whole lost tally, so
+        pooling summers (``_compute_pooled_tcp*``) that sum ``w.lost`` over
+        windows rely on one window per run to avoid double-counting.
         """
         with self._lock:
             w = TcpRstWindow()
