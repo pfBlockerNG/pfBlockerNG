@@ -2518,7 +2518,16 @@ def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT) -> None:
          side was unreadable), the readiness gate answered on the pre-reboot instance and this
          raises loudly instead of letting the caller assert against stale state.
     """
-    before_boottime = vm.ssh(_BOOTTIME_SYSCTL, timeout=15.0).stdout
+    # Fail FAST on an unreadable before-side: without it the proof is already lost, so
+    # refusing to reboot saves the whole settle+readiness cycle and leaves the box up in
+    # its pre-reboot state for diagnosis (#761 review).
+    before_read = vm.ssh(_BOOTTIME_SYSCTL, timeout=15.0)
+    before_boottime = before_read.stdout
+    if not before_boottime.strip():
+        raise AssertionError(
+            f"reboot_vm: kern.boottime unreadable BEFORE the reboot (rc={before_read.returncode} "
+            f"stderr={before_read.stderr!r}) -- refusing to reboot without the before-side of the proof"
+        )
 
     # Issue the reboot; it drops our SSH connection, so a non-zero/dropped result is EXPECTED.
     vm.ssh("/sbin/reboot", timeout=30.0)
