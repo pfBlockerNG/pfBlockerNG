@@ -189,41 +189,49 @@ def test_dnsbl_control_off_makes_cli_channel_inert(control_vm: tuple[SmokeVM, st
     vm, blocked = control_vm
 
     # GIVEN: the fixture baseline — Control on, reader live, domain blocked. Establish it
-    # explicitly (don't depend on a sibling test's end state).
+    # explicitly (don't depend on a sibling test's end state). Nothing mutated yet, so this
+    # stays outside the try below.
     h.assert_control_ini(vm, control=True, legacy=False)
     before = h.dns_probe_client(client_vm, blocked, "A")
     assert h.is_vip(before), f"{blocked} expected VIP block with DNSBL Control on, got {before}"
 
-    # WHEN: turn DNSBL Control OFF and reload so the reader thread does not start.
-    h.set_dnsbl_control(vm, False)
-    h.reload(vm, "update")
-    h.assert_control_ini(vm, control=False, legacy=False)
+    # #738 F6: everything from here mutates the MODULE-scoped control_vm's shared baseline
+    # (Control OFF). The two legacy tests below don't re-establish Control ON — they ASSERT
+    # it via assert_control_ini as a precondition. An assertion failure anywhere in this OFF
+    # phase must not skip the restore, or Control-OFF leaks into those tests and one real
+    # regression here reports as three failures. finally runs on every exit path.
+    try:
+        # WHEN: turn DNSBL Control OFF and reload so the reader thread does not start.
+        h.set_dnsbl_control(vm, False)
+        h.reload(vm, "update")
+        h.assert_control_ini(vm, control=False, legacy=False)
 
-    # AND: issue a disable. The CLI writer still validates + publishes it (returns a seq),
-    # but with no reader thread nothing consumes it — the writer waits up to 5s for the
-    # (absent) reader to confirm, logs "not confirmed applied", then returns the seq.
-    applied_before = h.read_control_applied(vm)
-    seq = h.dnsbl_control_cli(vm, "disable")
-    h.flush_unbound_cache(vm)
+        # AND: issue a disable. The CLI writer still validates + publishes it (returns a seq),
+        # but with no reader thread nothing consumes it — the writer waits up to 5s for the
+        # (absent) reader to confirm, logs "not confirmed applied", then returns the seq.
+        applied_before = h.read_control_applied(vm)
+        seq = h.dnsbl_control_cli(vm, "disable")
+        h.flush_unbound_cache(vm)
 
-    # THEN: blocking is UNCHANGED — the domain stays VIP-blocked (the disable never applied).
-    still = h.dns_probe_client(client_vm, blocked, "A")
-    assert h.is_vip(still), (
-        f"{blocked} should STAY VIP-blocked — with DNSBL Control OFF no reader thread consumes "
-        f"the CLI disable (seq {seq}), got {still}"
-    )
-    # AND: the applied marker did not advance to the queued command (no reader ran).
-    applied_after = h.read_control_applied(vm)
-    assert applied_after == applied_before, (
-        f"applied marker moved to {applied_after} (was {applied_before}); with DNSBL Control OFF "
-        f"the reader thread must be stopped, so command seq {seq} must NOT be applied"
-    )
-
-    # Restore the fixture baseline for the legacy tests below: Control back ON + reload
-    # re-initialises python_blacklist (blocking on) and restarts the reader thread.
-    h.set_dnsbl_control(vm, True)
-    h.reload(vm, "update")
-    h.assert_control_ini(vm, control=True, legacy=False)
+        # THEN: blocking is UNCHANGED — the domain stays VIP-blocked (the disable never applied).
+        still = h.dns_probe_client(client_vm, blocked, "A")
+        assert h.is_vip(still), (
+            f"{blocked} should STAY VIP-blocked — with DNSBL Control OFF no reader thread consumes "
+            f"the CLI disable (seq {seq}), got {still}"
+        )
+        # AND: the applied marker did not advance to the queued command (no reader ran).
+        applied_after = h.read_control_applied(vm)
+        assert applied_after == applied_before, (
+            f"applied marker moved to {applied_after} (was {applied_before}); with DNSBL Control OFF "
+            f"the reader thread must be stopped, so command seq {seq} must NOT be applied"
+        )
+    finally:
+        # Restore the fixture baseline for the legacy tests below: Control back ON + reload
+        # re-initialises python_blacklist (blocking on) and restarts the reader thread. Runs
+        # unconditionally — pass, assertion failure, or any other exception (#738 F6).
+        h.set_dnsbl_control(vm, True)
+        h.reload(vm, "update")
+        h.assert_control_ini(vm, control=True, legacy=False)
 
 
 def test_legacy_dns_txt_control_inert_by_default(control_vm: tuple[SmokeVM, str], client_vm: SmokeVM) -> None:
