@@ -63,17 +63,32 @@ final class SanitizeIpaddrV6Test extends TestCase
 	}
 
 	// --- Classes the PHP filter flags do NOT drop (issue #760) ---------------
-
+	//
 	// FILTER_FLAG_NO_PRIV_RANGE|NO_RES_RANGE keep documentation
 	// (2001:db8::/32), multicast (ff00::/8) and NAT64 (64:ff9b::/96) space —
 	// the same permissiveness as the v4 flags (192.0.2.0/24 and 224.0.0.0/4
-	// are kept too). This pins today's behaviour; dropping these classes is a
-	// policy decision tracked in issue #760 and would flip this test.
-	public function testSuppressionKeepsClassesOutsideFlagCoverage(): void
+	// are kept too). These pin today's behaviour; dropping these classes is a
+	// policy decision tracked in issue #760 and would flip these tests.
+
+	// 2001:db8::/32 is non-reserved only since PHP 8.3.16/8.4.3 (php-src
+	// GH-16944, the RFC 6890 range refactor); an older 8.3.x patch level
+	// DROPS it — a failure here on a stale toolchain is a PHP patch-floor
+	// problem, not a #760 policy change.
+	public function testSuppressionKeepsDocumentationRange(): void
 	{
 		$GLOBALS['pfb']['supp'] = 'on';
 		$this->assertSame('2001:db8::1', sanitize_ipaddr_v6('2001:db8::1', false), 'documentation (RFC 3849) is kept');
+	}
+
+	public function testSuppressionKeepsMulticastRange(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
 		$this->assertSame('ff02::1', sanitize_ipaddr_v6('ff02::1', false), 'multicast (ff00::/8) is kept');
+	}
+
+	public function testSuppressionKeepsNat64Range(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
 		$this->assertSame('64:ff9b::1', sanitize_ipaddr_v6('64:ff9b::1', false), 'NAT64 (RFC 6052) is kept');
 	}
 
