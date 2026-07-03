@@ -1,0 +1,100 @@
+================================================================================
+PHASE 6 PROMPT — v6suppression: config + UI + update-flow wiring
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_53_IP_Suppression_Set_Subtraction/ADR.md   (read §2.1 config/UI/wiring rows, §2.2)
+================================================================================
+
+ROLE
+Run /ponytail:ponytail full before anything else.
+You are the Phase 6 implementer for ADR-53, inline on branch
+`adr/53-ip-suppression-set-subtraction`, one commit, pushed directly. BEHAVIOUR
+CHANGE (v6 suppression comes into existence): red->green at three layers —
+validator (flip P4's pinned v6-not-yet contract), config round-trip, and the
+wiring's effect on a _v6 member file. You implement with Read/Edit/Write/Bash;
+you do NOT spawn further agents.
+
+WHY THIS PHASE EXISTS
+Phase 5 built the engine; nothing calls it. This phase gives users the v6
+suppression list end-to-end: stored key, UI, suppression file, and the
+update-flow invocation for _v6 member files — the parity goal of issue #422.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_53_IP_Suppression_Set_Subtraction/RESULTS/05_Results.txt — the
+  engine signatures + the perf verdict. If missing (or the perf flag says the
+  §7 bound failed and the orchestrator has not cleared it), STOP and report.
+- RESULTS/04_Results.txt — the validator's pinned v6-returns-error contract you
+  now flip, and RESULTS/02_Results.txt — the registration recipe you repeat.
+- docs/misc/config-gateway.md — registered-field procedure (again).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc:4954-4963
+  (pfb_create_suppression_file — extend for the v6 file), :16691-16715 (the
+  alias-build gates: $pfb['supp'], $vtype == '_v4', $pfb['supp_update'],
+  feed-changed in_array — replicate the SAME gates for '_v6' with a direct PHP
+  call to pfb_suppress_file_v6; NOTE dedup/masterfile is v4-only per
+  ADR §1.2/pfblockerng.inc:15847 — no masterfile work for v6).
+- src/usr/local/www/pfblockerng/pfblockerng_ip.php — the v4 suppression section
+  (POST handling ~147-165 area as reshaped by P4, textarea section ~491-510) —
+  mirror for v6.
+- tests/smoke/ui/ — Tier A + Tier B patterns for settings pages (find an
+  existing e2e that fills a field, saves, re-GETs, asserts persistence — reuse
+  its shape).
+- CLAUDE.md — naming (the key is `v6suppression`, sibling-patterned), help-text
+  style, Tier B REQUIRED for multi-step flows.
+
+ACTION PLAN
+1. Tests FIRST (red):
+   - Flip the P4 validator contract: family='ipv6' now validates — /32–/128
+     valid ('2001:db8::/64', '2001:db8::1/128', '2001:db8::/32'); '/31' and
+     '/129' invalid with range-naming messages; compressed/expanded forms;
+     comment suffix; garbage.
+   - Config round-trip + default-on-absent for v6suppression (CfgAdaptersTest
+     style) + the sniff fixture ($registeredPaths).
+   - Wiring test at the highest off-appliance level available: a PHPUnit test
+     that calls pfb_create_suppression_file() with a seeded v6suppression and
+     asserts pfbsuppression_v6.txt content (and absence when empty) — mirror
+     however the v4 supptxt is covered; if it is not, cover both now.
+2. Register 'v6suppression' (plain blob, default '', correct since) + sniff
+   path.
+3. pfb_create_suppression_file(): also decode v6suppression ->
+   {$pfb['dbdir']}/pfbsuppression_v6.txt (define $pfb['supptxt_v6'] beside
+   'supptxt' at pfblockerng.inc:94); unlink when empty — exact v4 symmetry.
+4. UI: v6 suppression collapsible section on pfblockerng_ip.php mirroring the
+   v4 one (anchor, base64 encode/decode, validator family='ipv6', help text
+   naming /32–/128); POST wiring via PfbConfig.
+5. Update-flow wiring at the 16700 region: for $vtype == '_v6' under the same
+   gates (supp on, supp_update, feed-changed, deny folder), call
+   pfb_suppress_file_v6("{$pfbfolder}/{$header}.txt", $pfb['supptxt_v6']) and
+   log a stats line consistent with the v4 table (Pre/Suppress counts). Respect
+   the suppressheader print-once behaviour.
+6. Tier A: page renders with the new section (marker). Tier B (REQUIRED —
+   multi-step): fill the v6 textarea with a valid entry -> save -> re-GET ->
+   assert persisted; plus an invalid entry -> input error rendered.
+7. Full gates.
+
+CONSTRAINTS
+- The v6 path NEVER touches iprange/grepcidr/masterfile.
+- Same enable chain as v4 — no new toggles; the existing Suppression checkbox
+  governs both families (its help text gains one v6 sentence).
+- PHP 8.3 standards; registered keys only via PfbConfig.
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit -> green (validator flip + round-trip + suppression-file
+  tests red-first)
+- php -l ; PHPCS ; PHPStan ; python -m pytest ; shellspec -> green
+- Tier A + Tier B for pfblockerng_ip.php (locally or note for the P9 fan-out)
+- diff-read: the _v4 shell call path is byte-identical; only _v6 gained a
+  branch.
+
+EXPECTED RESULT
+v6 suppression exists end-to-end: key, UI, file, engine invocation — same UX
+and gates as v4.
+
+COMMIT (single)
+    pfblockerng: add v6suppression end-to-end (config, UI, wiring) (ADR-53 P6)
+Push directly to adr/53-ip-suppression-set-subtraction; open a PR only if the
+direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_53_IP_Suppression_Set_Subtraction/RESULTS/06_Results.txt
+State: key registered (since), supptxt_v6 path var, UI section anchors/markers,
+the wiring gates as implemented, Tier A/B status, test counts; go-ahead for
+Phase 7 (killstates).

@@ -1,0 +1,84 @@
+================================================================================
+PHASE 7 PROMPT — killstates prefix-aware suppression exclusion (red->green)
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_53_IP_Suppression_Set_Subtraction/ADR.md   (read §1.2 killstates facts, §2.2)
+================================================================================
+
+ROLE
+Run /ponytail:ponytail full before anything else.
+You are the Phase 7 implementer for ADR-53, inline on branch
+`adr/53-ip-suppression-set-subtraction`, one commit, pushed directly. BEHAVIOUR
+CHANGE (a correctness strengthening): red->green. You implement with
+Read/Edit/Write/Bash; you do NOT spawn further agents.
+
+WHY THIS PHASE EXISTS
+The state-kill pass excludes suppressed IPs via an EXACT-IP hashmap: /32
+entries verbatim plus a PHP-side /24 materialisation (subnetv4_expand,
+pfblockerng.inc:10151-10163). With masks now /8–/32 (P4) and v6 (P6), that map
+cannot express the exclusions: a state IP inside a suppressed /16 would still
+be killed in the window between saving the suppression and the next table
+reload — cutting the exact connections the user just exempted. The Permit
+customlist exclusion a few lines down (10296-10301) already shows the correct
+prefix-aware shape (ip_in_subnet loop); suppression entries move to the same
+pattern.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_53_IP_Suppression_Set_Subtraction/RESULTS/06_Results.txt (v6 key +
+  supptxt_v6 exist). If missing, STOP and report.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc:10147-10351 — the whole
+  killstates collection pass: the v4suppression /32+/24-expand block
+  (10151-10163), the $pfb_local exact-map usage (10279, 10289), the Permit
+  ip_in_subnet loop (10296-10301), the pfctl -T test verification (10347).
+- tests/php/ conventions (doubles for ip_in_subnet/is_ipaddr* if not already
+  present — check pfsense_doubles.php first).
+- CLAUDE.md — test mandate (before-state asserted in transition tests).
+
+ACTION PLAN
+1. Tests FIRST (red) — tests/php/KillstatesSuppressionTest.php against a
+   not-yet-existing pure helper pfb_ip_suppressed(string $ip, array $entries):
+   bool (entries = decoded suppression lines, both families, comments
+   tolerated):
+   - v4: IP inside a /16 entry -> TRUE (this is the red: today's expansion
+     cannot express /16); IP outside -> FALSE; exact /32 hit -> TRUE; /24
+     member -> TRUE (legacy parity);
+   - v6: IP inside a /64 -> TRUE; outside -> FALSE; /128 exact -> TRUE;
+   - malformed entry skipped, never fatal; empty list -> FALSE.
+   Branch-cover both families x hit/miss/malformed.
+2. Implement the helper (pure, in pfblockerng_extra.inc; reuse
+   ip_in_subnet/is_inrange semantics as the Permit loop does — same doubles).
+3. Swap the killstates pass: replace the v4suppression /32+subnetv4_expand
+   block with collecting decoded v4suppression + v6suppression entries once,
+   and exclude a state IP when pfb_ip_suppressed() says so — wired exactly
+   where the exact-map checks run today (keep $pfb_local for local/DNS IPs,
+   which stay exact-match). v6 states check the v6 entries (the existing
+   ip_version split at 10251-10294 tells you where).
+4. Confirm no other consumer used the removed expansion (grep subnetv4_expand
+   usages before deleting the call).
+5. Full gates.
+
+CONSTRAINTS
+- Do NOT restructure the states loop beyond the exclusion swap — this pass
+  parses live pfctl output and is smoke-covered; minimal diff.
+- The helper is pure; no config reads inside it (caller passes decoded lists).
+- Per-state cost: the entry list is small (user-authored); a linear
+  ip_in_subnet loop is fine — do not build an interval tree (ponytail: note
+  the ceiling in a comment if you feel the urge).
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit -> green (the /16-spared case proven red pre-change)
+- php -l ; PHPCS ; PHPStan ; python -m pytest ; shellspec -> green
+- diff-read: $pfb_local still covers local/DNS IPs; only suppression moved.
+
+EXPECTED RESULT
+States of IPs inside any suppression entry — any mask, both families — are
+spared by the kill pass; everything else is killed exactly as before.
+
+COMMIT (single)
+    pfblockerng: spare suppressed prefixes in the killstates pass (ADR-53 P7)
+Push directly to adr/53-ip-suppression-set-subtraction; open a PR only if the
+direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_53_IP_Suppression_Set_Subtraction/RESULTS/07_Results.txt
+State: helper signature/home; where the swap landed (line refs); doubles added;
+test counts; go-ahead for Phase 8 (alerts "+").

@@ -1,0 +1,108 @@
+================================================================================
+PHASE 8 PROMPT — Alerts "+" / widget live punch: any mask + v6
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_53_IP_Suppression_Set_Subtraction/ADR.md   (read §1.2 alerts facts, §2.1 alerts row, §2.3 fork 3)
+================================================================================
+
+ROLE
+Run /ponytail:ponytail full before anything else.
+You are the Phase 8 implementer for ADR-53, inline on branch
+`adr/53-ip-suppression-set-subtraction`, one commit, pushed directly. BEHAVIOUR
+CHANGE: red->green (the "+" stops refusing non-/24 containment and gains v6).
+You implement with Read/Edit/Write/Bash; you do NOT spawn further agents.
+
+WHY THIS PHASE EXISTS
+The Alerts "+" button is a second, independent copy of the old hole-punch: live
+pfctl -T delete + re-add of 254 sibling hosts, refusing anything "blocked by a
+CIDR other than /24" (pfblockerng_alerts.php:753-860, refusal at 798). The
+dashboard widget shares the flow. With the engines fixed, this last
+materialisation site converts to covering-CIDR deltas and gains v6 — keeping
+today's IMMEDIATE effect (user-confirmed fork 3: full rework).
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_53_IP_Suppression_Set_Subtraction/RESULTS/07_Results.txt. If
+  missing, STOP and report.
+- src/usr/local/www/pfblockerng/pfblockerng_alerts.php:750-870 — the whole
+  addsuppress flow: the PFB_FILTER_IPV4 gate (760), the /32-vs-/24 branches,
+  the 254-host re-add loop, the "already exists" dedup checks (821-834), the
+  config write + pfb_create_suppression_file() call (845-849).
+- src/usr/local/www/widgets/widgets/pfblockerng.widget.php — VERIFY-FIRST how
+  the widget reaches this flow (grep addsuppress / v4suppression there; if it
+  posts to the alerts page, one fix covers both — confirm, don't assume).
+- ADR-40 mirror model: /var/db/aliastables/pfB_*_v{4,6}.txt is the last-applied
+  membership mirror (CLAUDE.md ADR-40 section) — your containment-scan source;
+  kernel/mirror drift after a live punch self-heals at the next update (the
+  fresh canonical set differs from the mirror -> reload). Fallback when the
+  mirror is absent: stream `pfctl -t <table> -T show`.
+- Phase 5's engine + the vendored ip_range_to_subnet_array double — the
+  covering-CIDR source for BOTH families (v4 ranges too: the function is
+  family-agnostic; do NOT shell out to iprange for a one-entry carve).
+- tests/smoke/ui/ Tier B e2e patterns + tests/smoke/test_smoke_feeds.py
+  (_MockFeedServer) for seeding a blocked alert.
+- CLAUDE.md — PFBL-01 sniff scope (pfblockerng.inc input-handling), pfb_filter
+  validation before exec/pfctl (every user-supplied token that reaches an exec
+  stays pfb_filter'd + escapeshellarg'd, as today).
+
+ACTION PLAN
+1. Extract the punch computation as a pure, PHPUnit-testable helper (suggested
+   home pfblockerng_extra.inc):
+   pfb_live_punch_plan(string $ip, array $table_entries): array — returns
+   ['delete' => [...containing entries...], 'add' => [...covering CIDRs...]]
+   using containment checks + ip_range_to_subnet_array-based subtraction, both
+   families. Tests FIRST (red): ip inside a /16 entry -> delete=/16,
+   add=16 CIDRs; ip listed bare -> delete=[ip], add=[]; ip inside a /64 (v6) ->
+   64 CIDRs; ip in NO entry -> both empty; multiple containing entries all
+   punched.
+2. Rework the addsuppress flow around it:
+   - accept v4 AND v6 (PFB_FILTER gate per family; table name still
+     PFB_FILTER_WORD + escapeshellarg);
+   - read the table membership: mirror file when present, else
+     `pfctl -T show` (stream, don't slurp);
+   - apply the plan: pfctl -T delete each containing entry, -T add each
+     covering CIDR (escapeshellarg every token);
+   - write the entry to the CORRECT family list via PfbConfig
+     (v4suppression / v6suppression), preserving the "already exists" checks
+     and the description suffix; call pfb_create_suppression_file();
+   - DELETE the 254-host loop and the "blocked by a CIDR other than /24"
+     refusal + its message.
+3. Widget: apply whatever its shared path needs (per your verify-first
+   finding) so both entry points behave identically.
+4. UI tests: Tier A alerts page render (existing case still green). Tier B e2e
+   (REQUIRED — multi-step): seed a fixture feed containing a /16 (or reuse an
+   existing feed fixture with a containing CIDR), let it block, drive the "+"
+   for a host inside it, then assert: the config gained the entry, the pf table
+   no longer test-matches the host (pfctl -T test = 0), a sibling still
+   matches, and the page reports success. Assert the BEFORE-state first (host
+   matched pre-punch).
+5. Full gates.
+
+CONSTRAINTS
+- Keep the flow's IMMEDIATE effect and its redirect/savemsg UX shape.
+- Every token reaching exec() stays validated + escapeshellarg'd (the existing
+  discipline at 787/791/845 — do not regress it).
+- The mirror scan streams line-by-line (fgets), never file() a
+  potentially-millions-line file into memory.
+- Do NOT change what the alerts TABLE VIEW displays (read side untouched).
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit -> green (punch-plan helper red-first)
+- php -l ; PHPCS ; PHPStan ; python -m pytest ; shellspec -> green
+- Tier A + Tier B e2e (locally via scripts/local-smoke.sh -k, or dispatch —
+  coordinate with Phase 9's fan-out if quota-tight)
+- diff-read: the 254-loop and the /24 refusal are GONE; validation intact.
+
+EXPECTED RESULT
+One click suppresses a host blocked by ANY containing entry, both families,
+with immediate pf effect and correct config/file bookkeeping — no
+materialisation anywhere in the tree.
+
+COMMIT (single)
+    pfblockerng: any-mask + v6 live suppression from Alerts/widget (ADR-53 P8)
+Push directly to adr/53-ip-suppression-set-subtraction; open a PR only if the
+direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_53_IP_Suppression_Set_Subtraction/RESULTS/08_Results.txt
+State: helper signature; the widget finding (shared path or separate fix);
+mirror-vs-pfctl fallback behaviour; Tier A/B status + how the e2e seeds the
+alert; test counts; go-ahead for Phase 9 (smoke + docs + DoD).

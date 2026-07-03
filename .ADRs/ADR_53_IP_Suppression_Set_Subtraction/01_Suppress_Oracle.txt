@@ -1,0 +1,96 @@
+================================================================================
+PHASE 1 PROMPT — suppress() oracle (shellspec, behaviour-preserving)
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_53_IP_Suppression_Set_Subtraction/ADR.md   (read §1.2, §2.2, §6 Phase 1 first)
+================================================================================
+
+ROLE
+Run /ponytail:ponytail full before anything else.
+You are the Phase 1 implementer for ADR-53, working inline on branch
+`adr/53-ip-suppression-set-subtraction`, one commit, pushed directly. This phase
+is BEHAVIOUR-PRESERVING: it adds an oracle spec that pins today's suppress()
+semantics — including its known defect — and must be green both before and after
+this phase. You implement with Read/Edit/Write/Bash; you do NOT spawn further
+agents.
+
+WHY THIS PHASE EXISTS
+Phase 3 rewrites suppress() around `iprange --except`. Without a pinned oracle,
+that swap could silently change semantics nobody asserted (stats output, rc
+gating, masterfile resync). The containing-entry silent no-op is pinned here AS
+TODAY'S BEHAVIOUR so Phase 3 can flip exactly that assertion red->green while
+everything else stays green.
+
+REQUIRED READING
+- .ADRs/ADR_53_IP_Suppression_Set_Subtraction/ADR.md (§1.2 empirical facts, §2.2 contract)
+- src/usr/local/pkg/pfblockerng/pfblockerng.sh:470-580 — suppress(): the grep -F
+  exact-/24 token match, the seq-255 explode, the dupfile/awk removal, the
+  grepcidr -vf pass with its #713 rc gating (rc<2 publish, rc>=2 keep-previous),
+  the masterfile resync under dedup=on (lines 559-575), the Suppression Stats
+  header block.
+- tests/shell/pfblockerng_original_count_spec.sh — the harness pattern to
+  follow: BeforeAll 'pfb_source', per-test $work tmpdir, stubbed path* binaries
+  (its grepcidr stub is `grep -vxF -f "$2" "$3"`).
+- The spec_helper providing pfb_source (find it under tests/shell/ / shellspec
+  config — read how existing specs source pfblockerng.sh without executing its
+  dispatch).
+- CLAUDE.md — shell standards, test-coverage mandate (oracle phases pin existing
+  behaviour and stay green; intent-named tests; expected-vs-actual on failure).
+
+ACTION PLAN
+1. VERIFY FIRST: confirm no existing spec already covers suppress()
+   (`grep -rl suppress tests/shell/`). If one exists, extend it instead of
+   creating a duplicate file.
+2. New tests/shell/pfblockerng_suppress_spec.sh, harness per the exemplar
+   (stub pathgrepcidr with the same literal-match fake — NOTE in a comment that
+   the stub models grepcidr's proven whole-token/containing-no-op semantics,
+   ADR-53 §1.2). Pin, each as an intent-named It block:
+   a. Suppression-file absent/empty -> member file untouched (early return).
+   b. Bare-host token in the member list + /32 suppression of it -> token
+      removed (the working case).
+   c. Exact-/24 explode: member list holds `10.9.8.0/24`, suppression holds
+      `10.9.8.4/32` -> published list has 255 host lines (all but .4), the /24
+      line is gone; a DUPLICATE /24 suppression entry does not double-explode
+      (dupfile dedup).
+   d. CONTAINING-ENTRY NO-OP (the defect, pinned as today's oracle): member list
+      holds `10.0.0.0/16`, suppression holds `10.0.3.4/32` -> the /16 line
+      SURVIVES UNCHANGED. Comment it explicitly: "ADR-53 Phase 3 flips this
+      assertion to the carve".
+   e. Fail-safe: grepcidr stub exits rc=2 -> previous list kept intact, error
+      logged (the #713 contract). And rc=1 with empty output -> empty list IS
+      published (legitimate full suppression).
+   f. Masterfile resync under dedup=on: the alias's masterfile lines are
+      replaced by the post-suppression list (mirror the exemplar's masterfile
+      fixtures).
+   g. The stats table: suppressheader prints the header block; a body run prints
+      the per-alias Pre/Suppress/Master line (assert shape, not exact spacing).
+3. Every custom assertion that can fail must print expected vs actual (shellspec
+   `The output/status/contents of file` matchers give this; keep to them).
+4. Run: shellspec (full), sh -n, shellcheck on the spec. All green. Confirm the
+   suite is green WITHOUT any src/ change (behaviour-preserving proof).
+
+CONSTRAINTS
+- POSIX sh in the spec; no bash-isms; LC_ALL=C where sorting matters.
+- Do NOT touch src/ in this phase. Tests only.
+- Do not stub/replace pfb_is_cidr_token or other pure helpers — exercise them
+  real.
+
+VERIFICATION (all must pass)
+- shellspec                          -> green (incl. the new spec)
+- shellcheck tests/shell/pfblockerng_suppress_spec.sh -> clean
+- python -m pytest                   -> green (untouched, sanity)
+- diff-read: the spec asserts INTENT (names read as behaviour statements), and
+  case (d) carries the Phase-3 flip comment.
+
+EXPECTED RESULT
+Today's suppress() is fully pinned: working cases, the defect, the fail-safe,
+the bookkeeping. Phase 3 has an oracle to flip.
+
+COMMIT (single)
+    tests: pin suppress() semantics incl. the containing-entry no-op (ADR-53 P1)
+Push directly to adr/53-ip-suppression-set-subtraction; open a PR only if the
+direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_53_IP_Suppression_Set_Subtraction/RESULTS/01_Results.txt
+State: spec file + It-block inventory (which case letter maps to which It); how
+pfb_source works; the grepcidr stub contract; shellspec counts; confirmation the
+suite was green with zero src/ changes; the go-ahead for Phase 2.
