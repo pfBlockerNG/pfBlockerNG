@@ -379,6 +379,63 @@ final class CfgGatewayTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
+	// ADR-53 — v4suppression (plain base64 blob; IPv4 suppression customlist)
+	// -----------------------------------------------------------------------
+
+	/**
+	 * v4suppression absent key returns the registered default '' (empty customlist).
+	 *
+	 * Scenario:
+	 *   Background: v4suppression is a plain base64-blob field; default = '' --
+	 *     mirrors the DNSBL 'suppression' sibling shape.
+	 *     Given no stored value.
+	 *     When PfbConfig::read('v4suppression').
+	 *     Then '' is returned (registered default).
+	 *
+	 * Red->green: before this phase, 'v4suppression' was not registered ->
+	 *   PfbConfig::read('v4suppression') threw InvalidArgumentException.
+	 */
+	public function testV4SuppressionAbsentKeyReturnsDefaultEmptyString(): void
+	{
+		$path = 'installedpackages/pfblockerngipsettings/config/0/v4suppression';
+
+		// Before: absent.
+		$this->assertNull(config_get_path($path), 'before: v4suppression must be absent');
+
+		// When/Then.
+		$this->assertSame('', PfbConfig::read('v4suppression'), 'v4suppression absent -> ""');
+	}
+
+	/**
+	 * v4suppression round-trips a base64 blob losslessly (write(read(v)) == v).
+	 *
+	 * Scenario:
+	 *   Background: v4suppression stores a base64-encoded CIDR/host customlist.
+	 *     Given stored = base64_encode("192.168.1.1/32\r\n").
+	 *     When PfbConfig::write('v4suppression', PfbConfig::read('v4suppression')).
+	 *     Then the stored string is unchanged (byte-identical round-trip).
+	 */
+	public function testV4SuppressionRoundTrips(): void
+	{
+		$path = 'installedpackages/pfblockerngipsettings/config/0/v4suppression';
+		$blob = base64_encode("192.168.1.1/32\r\n");
+
+		// Given: seed the blob.
+		$this->seedConfig($path, $blob);
+
+		// Before: raw stored value is the blob.
+		$this->assertSame($blob, config_get_path($path), 'before: v4suppression seed matches blob');
+
+		// When: read -> write.
+		$val = PfbConfig::read('v4suppression');
+		$this->assertSame($blob, $val, 'read: v4suppression round-trips the blob unchanged');
+
+		// After: write back produces the identical stored string.
+		PfbConfig::write('v4suppression', $val);
+		$this->assertSame($blob, config_get_path($path), 'write(read(blob))==blob for v4suppression');
+	}
+
+	// -----------------------------------------------------------------------
 	// ADR-43 — pfb_tick_interval (plain string; tick-cron dispatch interval)
 	// -----------------------------------------------------------------------
 
@@ -603,8 +660,10 @@ final class CfgGatewayTest extends TestCase
 	 *     pfblockerngantartica (typo in old data), pfblockerng{continent}
 	 *   - Dynamic feed/continent keys: feed_alt_*, widget-{type}
 	 *   - pfblockerngipsettings sub-keys (all section-level, handled together):
-	 *     v4suppression, maxmind_key, etc. (suppression key in ipsettings is a distinct
-	 *     concept from pfblockerngdnsblsettings/suppression which IS registered).
+	 *     maxmind_key, etc. (suppression key in ipsettings is a distinct concept
+	 *     from pfblockerngdnsblsettings/suppression which IS registered).
+	 *     ADR-53: v4suppression is now registered (see the registered inventory below) --
+	 *     it is the one ipsettings scalar NOT on this out-of-scope list.
 	 *   - pfblockerngreputation sub-keys: et_header
 	 *   - pfblockerngsync sub-keys: syncinterfaces, varsynconchanges, row/*
 	 *   - pfblockerngblacklist sub-keys: blacklist_enable, blacklist_freq,
@@ -641,7 +700,7 @@ final class CfgGatewayTest extends TestCase
 			'pfbextdns',
 
 			// pfblockerngipsettings — section read + sub-keys.
-			'v4suppression',
+			// (v4suppression is registered -- ADR-53 -- and lives in the registry, not here.)
 			'maxmind_key',
 			'maxmind_locale',
 			'database_cc',
@@ -800,6 +859,9 @@ final class CfgGatewayTest extends TestCase
 			'safesearch_doh',
 			'safesearch_doh_list',
 
+			// pfblockerngipsettings/config/0 scalar (ADR-53)
+			'v4suppression',
+
 			// Out-of-scope keys (must also appear in $out_of_scope above)
 			'pfb_wizard_skip',
 			'hooks',
@@ -811,7 +873,6 @@ final class CfgGatewayTest extends TestCase
 			'blacklist_selected',
 			'item',
 			'pfbextdns',
-			'v4suppression',
 			'maxmind_key',
 			'maxmind_locale',
 			'database_cc',

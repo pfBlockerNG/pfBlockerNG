@@ -491,7 +491,11 @@ update_status(" pfBlockerNGSuppress Alias -> IPv4 Suppression Customlist...");
 $ufound = FALSE;
 
 $pfb_ip_cfg = PfbConfig::readSection('installedpackages/pfblockerngipsettings/config/0');
-if (!isset($pfb_ip_cfg['v4suppression'])) { // v4suppression is unregistered — check via section read
+// ADR-53: v4suppression IS registered, but this needs the raw "key literally
+// absent from config.xml" check (never-migrated) vs "present but empty" --
+// a distinction PfbConfig::read()'s absent-default can't express -- so the
+// section-level read/write stays correct here (allowed per PfbConfig rules).
+if (!isset($pfb_ip_cfg['v4suppression'])) {
 	$customlist = '';
 	foreach (config_get_path('aliases/alias', []) as $key => $alias) { // foreign key — out of ADR-29 gateway scope
 		if ($alias['name'] == 'pfBlockerNGSuppress') {
@@ -510,7 +514,8 @@ if (!isset($pfb_ip_cfg['v4suppression'])) { // v4suppression is unregistered —
 					}
 				}
 			}
-			// v4suppression is unregistered; write via section to stay within the gateway surface.
+			// ADR-53: write via the same section array read above (a bulk migration
+			// write alongside the rest of $pfb_ip_cfg, not a lone per-field save).
 			$pfb_ip_cfg['v4suppression'] = base64_encode($customlist) ?: '';
 			PfbConfig::writeSection('installedpackages/pfblockerngipsettings/config/0', $pfb_ip_cfg);
 			// unset($config['aliases']['alias'][$key]);

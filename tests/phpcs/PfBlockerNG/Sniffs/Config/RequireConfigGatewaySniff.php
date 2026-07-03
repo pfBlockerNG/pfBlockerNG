@@ -167,6 +167,8 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngsafesearch/safesearch_youtube',
 		'installedpackages/pfblockerngsafesearch/safesearch_doh',
 		'installedpackages/pfblockerngsafesearch/safesearch_doh_list',
+		// ADR-53: installedpackages/pfblockerngipsettings/config/0 (IPv4 suppression)
+		'installedpackages/pfblockerngipsettings/config/0/v4suppression',
 	];
 
 	/**

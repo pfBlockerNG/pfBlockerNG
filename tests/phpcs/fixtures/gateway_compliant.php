@@ -10,14 +10,18 @@
  *   c) Section-level read (path is a section, not a registered scalar key) —
  *      sniff stays silent.
  *   d) pfSense-core section access (aliases/*, system/*, unbound/*) — silent.
+ *   e) ADR-53: the registered v4suppression key accessed via PfbConfig (not a
+ *      raw config_*_path call at all) — sniff stays silent.
  *
  * Pinned by RequireConfigGatewaySniffTest::testCompliantCasesAreClean.
  */
 
 function pfb_gateway_compliant_foreign_key()
 {
-	// Foreign section — pfblockerngipsettings is NOT in the registry.
-	$v4 = config_get_path('installedpackages/pfblockerngipsettings/config/0/v4suppression');
+	// Foreign section — pfblockerngipsettings/enable_dup is NOT in the registry.
+	// (v4suppression, the ADR-53 sibling in this same section, IS registered now —
+	// see pfb_gateway_compliant_v4suppression_via_gateway() below.)
+	$dup = config_get_path('installedpackages/pfblockerngipsettings/config/0/enable_dup');
 
 	// Foreign dynamic per-row key — not in the registered path set.
 	$row = 0;
@@ -32,7 +36,18 @@ function pfb_gateway_compliant_foreign_key()
 	// Section-level read of the DNSBL settings section — NOT a scalar key.
 	$dnsbl = config_get_path('installedpackages/pfblockerngdnsblsettings/config/0', []);
 
-	return [$v4, $custom, $aliases, $section, $dnsbl];
+	return [$dup, $custom, $aliases, $section, $dnsbl];
+}
+
+function pfb_gateway_compliant_v4suppression_via_gateway()
+{
+	// ADR-53: v4suppression is registered — access via PfbConfig::read/write, never
+	// raw config_get_path/config_set_path. Neither call here is one of the sniff's
+	// gated function names, so this stays silent regardless of the key.
+	$v4 = PfbConfig::read('v4suppression');
+	PfbConfig::write('v4suppression', $v4);
+
+	return $v4;
 }
 
 function pfb_gateway_compliant_dynamic_path($key)

@@ -111,7 +111,6 @@ registered path set). Each annotation is committed in the relevant source file.
 
 | Section / Key | Reason |
 | --- | --- |
-| `pfblockerngipsettings/config/0/v4suppression` | Foreign section — not in registry |
 | `pfblockerngdnsbl/config/{row}/custom` | Dynamic per-row key, not in registry |
 | `pfblockerngdnsbl/config/{row}/logging` | Dynamic per-row key, not in registry |
 | `pfblockernglistsv4/config/{row}/custom` | Dynamic per-row key, not in registry |
