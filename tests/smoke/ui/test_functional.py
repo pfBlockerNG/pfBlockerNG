@@ -631,17 +631,20 @@ def test_ip_v4suppression_mask_validation_base64_and_reject_unchanged(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """``v4suppression`` accepts /32 or /24 subnets (stored base64); other masks abort.
+    """``v4suppression`` accepts v4 masks /8-/32 (ADR-53 P4); out-of-range masks abort.
 
-    Textarea, one subnet per line. Validation loop: per non-comment line, the mask
-    ``strstr($host[0],'/')`` must be EXACTLY '/32' or '/24' AND ``is_subnetv4``
-    must pass; either failure -> ``$input_errors`` -> the WHOLE save aborts ->
-    config UNCHANGED. STORAGE IS BASE64 (``base64_encode`` on save, ``base64_decode``
-    on read), so the oracle compares config_get against base64 of the expected
-    textarea content. A valid '10.20.30.0/24' stores base64('10.20.30.0/24'); a
-    '/16' ('10.20.0.0/16') fails the mask check -> rejected -> config unchanged. An
-    empty textarea stores base64('') = '' so clearing/restoring to empty is clean.
-    NO egress, NO reload.
+    Textarea, one subnet per line. Validation (``pfb_validate_suppression_line()``,
+    ADR-53 P4): per non-comment line, the mask must fall in [/8, /32] AND
+    ``is_subnetv4`` must pass; either failure -> ``$input_errors`` -> the WHOLE save
+    aborts -> config UNCHANGED. STORAGE IS BASE64 (``base64_encode`` on save,
+    ``base64_decode`` on read), so the oracle compares config_get against base64 of
+    the expected textarea content. A valid '10.20.30.0/24' stores
+    base64('10.20.30.0/24'); a '/16' ('10.20.0.0/16') is now ALSO valid -- Phase 3's
+    iprange --except engine swap made suppression mask-agnostic, so Phase 4 lifted
+    the UI ceiling from /24 to /8, wider than the old /32-or-/24-only rule -- and
+    stores base64 of its own textarea; a '/7' ('10.20.0.0/7') is below the /8 floor
+    -> rejected -> config unchanged. An empty textarea stores base64('') = '' so
+    clearing/restoring to empty is clean. NO egress, NO reload.
     """
     import base64
 
@@ -652,14 +655,19 @@ def test_ip_v4suppression_mask_validation_base64_and_reject_unchanged(
     original = helpers.config_get(vm, cfg)
     try:
         assert original != valid_b64, f"v4suppression already holds {valid_text!r} (base64) before the valid POST"
-        # VALID /24 -> base64 of the textarea is stored.
+        # VALID /24 (the legacy-accepted shape) -> base64 of the textarea is stored.
         assert _post_and_get(webui, vm, IP_PAGE, {"v4suppression": valid_text}, cfg) == valid_b64
+        # VALID /16 -- NEW in ADR-53 P4: the widened /8-/32 range now accepts a
+        # containing-block mask that the pre-Phase-4 /32-or-/24-only rule rejected.
+        wide_text = "10.20.0.0/16"
+        wide_b64 = base64.b64encode(wide_text.encode()).decode()
+        assert _post_and_get(webui, vm, IP_PAGE, {"v4suppression": wide_text}, cfg) == wide_b64
         # Restore: an empty textarea stores base64('') = '' (clean clear).
         got_clear = _post_and_get(webui, vm, IP_PAGE, {"v4suppression": ""}, cfg)
         assert got_clear == "", f"clearing v4suppression should store '' (base64 of empty), got {got_clear!r}"
-        # REJECT: a /16 mask aborts the whole save -> config UNCHANGED (stays '').
-        got = _post_and_get(webui, vm, IP_PAGE, {"v4suppression": "10.20.0.0/16"}, cfg)
-        assert got == "", f"bogus /16 mask must leave v4suppression unchanged at '', got {got!r}"
+        # REJECT: a /7 is below the /8 floor -> aborts the whole save -> config UNCHANGED (stays '').
+        got = _post_and_get(webui, vm, IP_PAGE, {"v4suppression": "10.20.0.0/7"}, cfg)
+        assert got == "", f"below-floor /7 mask must leave v4suppression unchanged at '', got {got!r}"
     finally:
         # Restore whatever was there originally (re-encode if it was a plain capture
         # -- config_get returns the stored base64 verbatim, so re-post that decoded).

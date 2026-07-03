@@ -147,20 +147,9 @@ if ($_POST) {
 		$v4suppression = explode("\r\n", $_POST['v4suppression']);
 		if (!empty($v4suppression)) {
 			foreach ($v4suppression as $line) {
-
-				if (str_starts_with($line, '#') || empty($line)) {
-					continue;
-				}
-
-				$host = array_map('trim', preg_split('/(?=#)/', $line));
-				$mask = strstr($host[0], '/', FALSE);
-
-				if ($mask != '/32' && $mask != '/24') {
-					$input_errors[] = "IPv4 Suppression: Invalid mask [ {$host[0]} ]. Mask must be defined as /32 or /24 only.";
-				}
-
-				if (!is_subnetv4($host[0])) {
-					$input_errors[] = "IPv4 Suppression: Invalid IPv4 subnet address defined [ {$host[0]} ]";
+				$suppression_error = pfb_validate_suppression_line($line, 'ipv4');
+				if ($suppression_error !== NULL) {
+					$input_errors[] = $suppression_error;
 				}
 			}
 		}
@@ -366,11 +355,11 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	pfb_cfg_toggle_read($pconfig['suppression']) === PfbToggle::On,
 	'on'
-))->setHelp('Default enabled. This will prevent Selected IPs (and RFC1918/Loopback addresses) from being blocked. Only for IPv4 lists (/32 and /24).'
+))->setHelp('Default enabled. This will prevent Selected IPs (and RFC1918/Loopback addresses) from being blocked. Only for IPv4 lists (/8 through /32).'
 	. '<div class="infoblock">'
 	. 'GeoIP blocklist cannot be suppressed.<br /><br />'
 	. 'Alerts can be suppressed using the \'+\' icon in the Alerts tab and IPs are added to the IPv4 suppression custom list.<br />'
-	. 'For GeoIP/Blocked IPs in a CIDR other than /32 or /24, will need a \'Whitelist alias\' w/ a List Action: \'Permit Outbound\' Firewall rule.<br />'
+	. 'For GeoIP/Blocked IPs in a CIDR broader than /8, will need a \'Whitelist alias\' w/ a List Action: \'Permit Outbound\' Firewall rule.<br />'
 	. 'Only \'Deny\' type Aliases can be suppressed!'
 	. '</div>'
 );
@@ -497,7 +486,7 @@ $form->add($section);
 
 // Print Custom List TextArea section
 $section = new Form_Section('IPv4 Suppression', 'IPv4_Suppression_customlist', COLLAPSIBLE|SEC_CLOSED);
-$suppression_text = '<strong><u>This suppression list is for [ /32 or /24 ] IPv4 addresses only!</u></strong><br /><br />
+$suppression_text = '<strong><u>This suppression list is for [ /8 through /32 ] IPv4 addresses only!</u></strong><br /><br />
 
 			When \'Suppression\' is enabled, all RFC1918 and loopback addresses are also filtered on feed download|Update|Reload.<br /><br />
 
@@ -508,7 +497,7 @@ $suppression_text = '<strong><u>This suppression list is for [ /32 or /24 ] IPv4
 			icon(s) in the Alerts tab to add the IPv4 addresses automatically to this Suppression list and immeditely
 			remove the IPv4 address from the Deny aliastable.<br /><br />
 
-			Note: When manually adding an IPv4 address <strong>[ /32 or /24 only! ]</strong> to this Suppression List,
+			Note: When manually adding an IPv4 address <strong>[ /8 through /32 only! ]</strong> to this Suppression List,
 			you must run a <strong>"Force Reload - IP"</strong> for the changes to take effect.';
 
 $section->addInput(new Form_Textarea(

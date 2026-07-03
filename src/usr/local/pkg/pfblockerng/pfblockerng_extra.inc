@@ -2513,6 +2513,60 @@ function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir): bool
 	return $entry !== NULL && !empty($entry['pending_apply']);
 }
 
+// ---------------------------------------------------------------------------
+// ADR-53 P4 — pure suppression-line validator (v4 mask lift /8-/32)
+// ---------------------------------------------------------------------------
+
+/**
+ * pfb_validate_suppression_line — validate one line of a v4/v6 suppression textarea.
+ *
+ * Mirrors the tolerant textarea shape the page already accepts: a line starting
+ * with '#', or blank, is a no-op (skip, no error); an inline comment introduced
+ * by '#' (e.g. "10.0.0.1/32 # example.com") is stripped before validating the
+ * address/mask. IPv4 accepts masks /8-/32 (ADR-53 §2.3 fork 1 — the /8 floor is
+ * a fail-open-typo guard; the carve engine itself is mask-agnostic since Phase
+ * 3's iprange --except swap). IPv6 is not yet implemented (Phase 6) — every
+ * non-skipped v6 line is rejected so this stays a visible gap, not a silent
+ * accept, until Phase 6 flips it.
+ *
+ * PURE — no config access, no I/O; only the pfSense is_subnetv4() predicate.
+ *
+ * @param  string $line   One raw textarea line (as split on "\r\n"), untrimmed.
+ * @param  string $family 'ipv4' or 'ipv6'.
+ * @return string|null    NULL when the line is valid (or a comment/blank no-op);
+ *                         otherwise the input_errors message for this line.
+ */
+function pfb_validate_suppression_line(string $line, string $family): ?string
+{
+	if (str_starts_with($line, '#') || trim($line) === '') {
+		return NULL;
+	}
+
+	$host  = array_map('trim', preg_split('/(?=#)/', $line));
+	$entry = $host[0];
+
+	if ($family === 'ipv6') {
+		return "IPv6 Suppression: IPv6 suppression is not yet supported [ {$entry} ].";
+	}
+
+	// Mask-range check runs BEFORE the general subnet-shape check so an
+	// out-of-range-but-otherwise-well-formed mask (/7, /33) gets the message
+	// naming the accepted range, rather than the generic malformed-input one.
+	$mask = strstr($entry, '/', FALSE);
+	if ($mask !== FALSE && ctype_digit(substr($mask, 1))) {
+		$mask_num = (int) substr($mask, 1);
+		if ($mask_num < 8 || $mask_num > 32) {
+			return "IPv4 Suppression: Invalid mask [ {$entry} ]. Mask must be between /8 and /32.";
+		}
+	}
+
+	if (!is_subnetv4($entry)) {
+		return "IPv4 Suppression: Invalid IPv4 subnet address defined [ {$entry} ]";
+	}
+
+	return NULL;
+}
+
 // logger() and localize_text() are pfSense-core helpers (src/etc/inc/util.inc)
 // on pfSense Plus / master, but absent from released pfSense CE <= 2.8.1. Define
 // fallbacks ONLY when core does not provide them, so this package runs on both:
