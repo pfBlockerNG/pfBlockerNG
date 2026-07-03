@@ -280,3 +280,21 @@ Run 2/3 findings (after the stderr + escaped-IP fixes):
   Fix: a bare address parses as its own /128. Red->green PHPUnit vectors
   added (entry + hole + file level); the engine canonicalizes a surviving
   bare host to addr/128 — set-equivalent, tolerated by the smoke oracle.
+
+--------------------------------------------------------------------------------
+ACCEPTANCE EVIDENCE (orchestrator — final, 2026-07-03)
+--------------------------------------------------------------------------------
+
+Min-CE validation leg (post-fix): smoke run 28678721902 = SUCCESS.
+
+Full CE+Plus fan-out (filtered to ADR-53 surfaces, -k "suppress(ion)"):
+- smoke 28678906679 = SUCCESS (CE 2.8 + Plus 26.03 — test_smoke_suppression.py
+  green on both legs: v4 /16 carve, v6 /64 carve, bare-host + /24 parity).
+- ui    28678907701: functional CE+Plus = SUCCESS (addsuppress e2e + v6
+  textarea save-persist), render CE+Plus = SUCCESS (ip page + v6 section).
+  browser CE+Plus legs exited pytest rc=5 (ZERO TESTS COLLECTED — the -k
+  filter matches no browser-tier test; ADR-53 adds none). Not a failure of
+  any ADR-53 test; the tier had nothing to prove.
+
+Every §4 acceptance requirement now maps to a green automated test on the
+CE+Plus fan-out. Status flips to Accepted once PR #768 lands on devel.
