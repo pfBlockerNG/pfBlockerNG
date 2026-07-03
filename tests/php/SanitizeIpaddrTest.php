@@ -8,8 +8,10 @@ use PHPUnit\Framework\TestCase;
 /**
  * sanitize_ipaddr() — normalise an IPv4(/mask): strip leading zeros, drop a /32,
  * keep a bare address as a single host (/32) even when it ends in '.0', force
- * the 4th octet to 0 on an explicit /24, and (when $pfb['supp']=='on' and not a
- * custom list) drop loopback/reserved/private and apply the Advanced CIDR floor.
+ * the 4th octet to 0 on an explicit /24, clamp a downloaded feed's /0 to a
+ * single host while honoring /0 on a custom list (issue #744), and (when
+ * $pfb['supp']=='on' and not a custom list) drop loopback/reserved/private and
+ * apply the Advanced CIDR floor.
  */
 #[CoversFunction('sanitize_ipaddr')]
 final class SanitizeIpaddrTest extends TestCase
@@ -120,5 +122,53 @@ final class SanitizeIpaddrTest extends TestCase
 	public function testNonNumericMaskDropped(): void
 	{
 		$this->assertNull(sanitize_ipaddr('1.2.3.4/abc', false, 'Disabled'));
+	}
+
+	// --- Explicit /0 masks (issue #744) ---------------------------------------
+
+	// A downloaded feed's /0 covers the entire IPv4 space and is never honored:
+	// it is clamped to a single host, so the address itself stays blocked
+	// (dropping the whole line would under-block).
+	public function testFeedSlashZeroClampedToSingleHost(): void
+	{
+		$this->assertSame('198.51.100.7', sanitize_ipaddr('198.51.100.7/0', false, 'Disabled'));
+	}
+
+	// The clamp is visible in the pfBlockerNG log — never a silent rewrite.
+	public function testFeedSlashZeroClampIsLogged(): void
+	{
+		$prev_log = $GLOBALS['pfb']['log'];	// bootstrap sandbox log — restore after
+		$logfile = tempnam(sys_get_temp_dir(), 'pfb_log_');
+		$GLOBALS['pfb']['log'] = $logfile;
+		try {
+			sanitize_ipaddr('198.51.100.7/0', false, 'Disabled');
+			$this->assertStringContainsString('198.51.100.7/0', (string) file_get_contents($logfile));
+		} finally {
+			@unlink($logfile);
+			$GLOBALS['pfb']['log'] = $prev_log;
+		}
+	}
+
+	// The /0 is clamped to a host up front, so under suppression it no longer
+	// slips past the Advanced CIDR floor as an "empty" mask — the result is
+	// the same single host, not an unclamped /0.
+	public function testFeedSlashZeroUnderSuppressionCidrFloorStillSingleHost(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
+		$this->assertSame('198.51.100.7', sanitize_ipaddr('198.51.100.7/0', false, 24));
+	}
+
+	// Custom-list entries are user-authored: an explicit /0 is honored as
+	// written, never clamped or collapsed to a bare host (e.g. 0.0.0.0/0 in a
+	// custom list referenced by a manual firewall rule).
+	public function testCustomListSlashZeroHonored(): void
+	{
+		$this->assertSame('0.0.0.0/0', sanitize_ipaddr('0.0.0.0/0', true, 'Disabled'));
+	}
+
+	public function testCustomListSlashZeroHonoredUnderSuppression(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
+		$this->assertSame('0.0.0.0/0', sanitize_ipaddr('0.0.0.0/0', true, 24));
 	}
 }
