@@ -4652,6 +4652,24 @@ def collect_localip(
     return pfb_local, pfb_localsub
 
 
+def ip_in(addr: str, pool: set[str] | list[str]) -> bool:
+    """By-VALUE membership for IP strings (#723): equal-but-differently-rendered
+    forms (:: == ::0) must count as present. Unparseable entries on either side
+    never match. Sibling of ip_in_localsub (the CIDR-side counterpart below).
+    """
+    try:
+        target = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    for cand in pool:
+        try:
+            if ipaddress.ip_address(cand) == target:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 def ip_in_localsub(addr: str, pfb_localsub: list[str]) -> bool:
     """Return True iff ``addr`` falls inside any subnet in ``pfb_localsub``.
 
