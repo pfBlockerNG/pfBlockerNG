@@ -4258,6 +4258,12 @@ def dump_diagnostics(vm: SmokeVM) -> None:
         ("pf rules (pfB_/DNSBL refs)", "/sbin/pfctl -sr 2>/dev/null | grep -iE 'pfB_|DNSBL' || true"),
         ("/var/db/pfblockerng listing", "ls -lR /var/db/pfblockerng 2>/dev/null | head -80 || true"),
         (
+            # The listing above shows only presence/size; the tick (ADR-43) failures need
+            # the actual per-job next_due values as they were at failure time.
+            "due-ledger content (pfb_due_ledger.json)",
+            "cat /var/db/pfblockerng/pfb_due_ledger.json 2>/dev/null || echo '(absent)'",
+        ),
+        (
             # Target unbound.conf only — a recursive grep over /var/unbound is slow
             # (large python data files) and timed out. Include the forward config.
             "unbound.conf: forward/local-data/access",

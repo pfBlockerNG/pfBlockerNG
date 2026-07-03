@@ -280,7 +280,7 @@ def test_tick_wiped_ledger_jittered(deployed_vm: SmokeVM):
 
 
 @pytest.fixture
-def mfs_var(deployed_vm: SmokeVM) -> Iterator[SmokeVM]:
+def mfs_var(deployed_vm: SmokeVM, request: pytest.FixtureRequest) -> Iterator[SmokeVM]:
     """Arrange test_tick_reboot_persists_ledger's documented Background: MFS /var.
 
     ``set_ramdisk`` only flips the ``use_mfs_tmpvar`` config flag; the reload that follows
@@ -313,12 +313,27 @@ def mfs_var(deployed_vm: SmokeVM) -> Iterator[SmokeVM]:
     try:
         yield vm
     finally:
+        # Failure-time capture FIRST (issue #774): the revert reboot below wipes the MFS
+        # /var this test ran on, and the autouse _dump_vm_on_failure finalizes only AFTER
+        # this fixture (reverse setup order — pinned by test_fixture_teardown_contract.py),
+        # i.e. post-reboot, when that state is already gone. Dump here, pre-reboot, and
+        # flag the node so the autouse dump doesn't print a second, post-reboot snapshot.
+        rep = getattr(request.node, "_rep_call", None)
+        if rep is not None and rep.failed:
+            print("\n[smoke] mfs_var: failure-time diagnostics BEFORE the teardown reboot (issue #774)")
+            h.dump_diagnostics(vm)
+            request.node._pfb_failure_dumped = True  # type: ignore[attr-defined]
         # Best-effort, mirrors test_smoke_boot_reload's deployed_vm teardown: never mask
-        # the test result on cleanup failure. The reboot here is REQUIRED (not optional) —
-        # without it the running /var stays MFS and pollutes every module that runs next.
+        # the test result on cleanup failure.
         try:
             h.set_ramdisk(vm, False)
             h.reload(vm, "update")
+        except Exception as exc:  # noqa: BLE001 -- teardown cleanup, never mask the test result
+            print(f"[smoke] mfs_var ramdisk-off teardown failed (non-fatal): {exc}")
+        # Own try (matches the #765 sibling teardowns): a flaky reload must not skip the
+        # reboot — the one step that actually clears the running MFS /var once the flag is
+        # off. Without it /var stays MFS and pollutes every module that runs next.
+        try:
             h.reboot_vm(vm)
         except Exception as exc:  # noqa: BLE001 -- teardown cleanup, never mask the test result
             print(f"[smoke] mfs_var teardown reboot failed (non-fatal): {exc}")
