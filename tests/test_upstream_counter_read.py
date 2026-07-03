@@ -21,6 +21,13 @@ error is -2 with a non-empty detail, and a genuine counter is >= 0.
 
 from __future__ import annotations
 
+import subprocess
+from typing import cast
+
+import pytest
+
+from tests.smoke import test_smoke_upstream_block as upstream_mod
+from tests.smoke.conftest import SmokeVM
 from tests.smoke.test_smoke_upstream_block import _CTR_CLOSE, _CTR_OPEN, _parse_counter_output
 
 
@@ -71,3 +78,17 @@ def test_non_integer_value_is_a_read_error_with_detail() -> None:
     value, detail = _parse_counter_output(out)
     assert value == -2
     assert "not-a-number" in detail
+
+
+def test_php_eval_transport_failure_is_a_read_error_carrying_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A nonzero php_eval returncode (SSH/pfSsh.php transport failure) -> -2 with the
+    stderr in the detail — not the generic "no delimited counter" parse message."""
+
+    def fake_php_eval(vm: SmokeVM, snippet: str, *, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args=[], returncode=255, stdout="", stderr="ssh: connect refused")
+
+    monkeypatch.setattr(upstream_mod.h, "php_eval", fake_php_eval)
+    value, detail = upstream_mod._read_upstream_counter(cast(SmokeVM, object()))
+    assert value == -2
+    assert "rc=255" in detail
+    assert "ssh: connect refused" in detail

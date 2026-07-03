@@ -390,10 +390,11 @@ def _read_upstream_counter(vm: SmokeVM) -> tuple[int, str]:
     the chrooted Python module writes. The value is delimited so pfSsh.php's startup
     banner does not pollute it.
 
-    A transient ``SQLITE_BUSY`` (the chrooted Python module writes the same DB in
-    WAL mode with a 100 s busy_timeout — see ``pfb_unbound.py``) is absorbed by
-    SQLite's own bounded ``busyTimeout``, not a caller-side sleep loop; a lock held
-    past that timeout still surfaces, loudly, as a read error.
+    A transient ``SQLITE_BUSY`` (e.g. WAL recovery, or a rollback-journal fallback
+    when the module's WAL pragma did not take — ``_db_connect`` in ``pfb_unbound.py``
+    swallows pragma failures) is absorbed by SQLite's own bounded ``busyTimeout``,
+    not a caller-side sleep loop; a lock held past that timeout still surfaces,
+    loudly, as a read error.
 
     Returns ``(-1, "")`` when the row is genuinely absent, ``(-2, detail)`` when
     the read errored, else ``(counter, "")``. See ``_parse_counter_output``.
@@ -408,12 +409,16 @@ def _read_upstream_counter(vm: SmokeVM) -> tuple[int, str]:
         "    if ($__r === NULL) { $__c = -1; }\n"
         "    elseif ($__r === FALSE) { $__c = -2; $__m = 'querySingle returned FALSE'; }\n"
         "    else { $__c = (int) $__r; }\n"
-        "    $__db->close();\n"
+        "    try { $__db->close(); } catch (Throwable $__ignored) {}\n"
         "} catch (Throwable $__e) { $__c = -2; $__m = $__e->getMessage(); }\n"
         f"echo '{_CTR_OPEN}' . $__c . '|' . $__m . '{_CTR_CLOSE}';\n"
     )
-    out = h.php_eval(vm, snippet).stdout or ""
-    return _parse_counter_output(out)
+    res = h.php_eval(vm, snippet)
+    if res.returncode != 0:
+        # A transport/pfSsh.php failure is a read ERROR — surface the stderr instead
+        # of collapsing it into the generic "no delimited counter" parse detail.
+        return -2, f"php_eval failed (rc={res.returncode}): stderr={res.stderr[-500:]!r}"
+    return _parse_counter_output(res.stdout or "")
 
 
 def _wait_for_counter_above(
@@ -469,7 +474,7 @@ class TestUpstreamCounterIncrement:
         # DB-init seed for what is most likely a transient lock/read error.
         baseline, baseline_detail = _read_upstream_counter(vm)
         assert baseline != -2, (
-            f"Upstream counter read ERRORED (NOT an absent row — do not blame the seed): {baseline_detail}"
+            f"Upstream counter read ERRORED (NOT an absent row — do not blame the seed): {baseline_detail!r}"
         )
         assert baseline >= 0, (
             "Upstream row not found in dnsbl table before probe — "
@@ -490,10 +495,16 @@ class TestUpstreamCounterIncrement:
             f"Log excerpt:\n{_read_dnsbl_log(vm)[-2000:]}"
         )
 
-        # Then: wait for the async flush and assert strict increase.
+        # Then: wait for the async flush and assert strict increase. A read that is
+        # still ERRORED at the deadline is a read problem, not a stuck counter — keep
+        # the two failure modes distinct here too (mirrors the baseline assert).
         final, final_detail = _wait_for_counter_above(vm, baseline)
+        assert final != -2, (
+            f"Upstream counter read ERRORED while waiting for the increase "
+            f"(NOT a stuck counter — do not blame the enqueue/flush): {final_detail!r}"
+        )
         assert final > baseline, (
             f"Upstream counter did not increase after NXRA block: "
-            f"baseline={baseline}, final={final} (detail={final_detail!r}). "
+            f"baseline={baseline}, final={final}. "
             f"Detection fired (log line present), so the enqueue or flush may be broken."
         )
