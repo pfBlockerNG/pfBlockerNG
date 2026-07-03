@@ -33,6 +33,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('is_ipaddrv6')]
 #[CoversFunction('is_ipaddr')]
 #[CoversFunction('is_linklocal')]
+#[CoversFunction('is_port')]
 final class IpAddrDoublesTest extends TestCase
 {
 	// --- is_ipaddrv4() --------------------------------------------------------
@@ -116,6 +117,35 @@ final class IpAddrDoublesTest extends TestCase
 	public function testIsLinklocal(string $input, int|bool $expected): void
 	{
 		$this->assertSame($expected, is_linklocal($input));
+	}
+
+	// --- is_port() (double aligned with upstream util.inc, #723) ---------------
+
+	public static function portProvider(): array
+	{
+		return [
+			'numeric low bound'        => ['1', true],
+			'numeric high bound'       => ['65535', true],
+			'zero rejected'            => ['0', false],
+			'above range rejected'     => ['65536', false],
+			'service name domain'      => ['domain', true],
+			'service name http'        => ['http', true],
+			'unknown name rejected'    => ['no-such-service-xyz', false],
+		];
+	}
+
+	#[DataProvider('portProvider')]
+	public function testIsPort(string $input, bool $expected): void
+	{
+		$this->assertSame($expected, is_port($input),
+			"is_port({$input}) must match upstream util.inc (digits 1..65535 OR getservbyname)");
+	}
+
+	public function testIsPortNameRejectedWhenValidateNameOff(): void
+	{
+		// The \$validate_name=false branch: service names are rejected, digits still pass.
+		$this->assertFalse(is_port('domain', false));
+		$this->assertTrue(is_port('53', false));
 	}
 
 	// --- is_ipaddr() (existing double, unchanged) ------------------------------

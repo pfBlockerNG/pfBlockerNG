@@ -29,3 +29,5 @@
 @@/^(.+\.)?cdn\.example\.com$/
 @@/^login\.example\.org$/
 @@/(^|\.)static\.example\.net$/
+! underscore literal (#723)
+/^_tracker\.underscore-corpus\.com$/

@@ -146,11 +146,11 @@ def categorise(line: str) -> str:
 #   (^|\.)D$          -> wildcard zone
 #   ^D$               -> exact data
 #   ^(www\.)?D$       -> exact data (+www) ... (kept simple: treat as exact D)
-# where D is a domain literal: labels of [a-z0-9-] joined by an ESCAPED dot (\.),
+# where D is a domain literal: labels of [a-z0-9_-] joined by an ESCAPED dot (\.),
 # no other regex metacharacter. Anything with a char-class, quantifier on a label,
 # alternation in the body, or an unescaped/floating dot is IRREDUCIBLE.
 
-_DOMAIN_LITERAL = re.compile(r"^[a-z0-9-]+(?:\\\.[a-z0-9-]+)+$")
+_DOMAIN_LITERAL = re.compile(r"^[a-z0-9_-]+(?:\\\.[a-z0-9_-]+)+$")  # underscore per #723
 
 _WILDCARD_PREFIXES = (r"^(.+\.)?", r"(^|\.)", r"^(?:.+\.)?")
 _EXACT_PREFIXES = (r"^",)

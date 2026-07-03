@@ -40,6 +40,7 @@ from collections.abc import Iterator
 import pytest
 
 from . import helpers as h
+from .conftest import SmokeVM
 
 
 def _ip_in(addr: str, pool: set[str] | list[str]) -> bool:
@@ -58,8 +59,6 @@ def _ip_in(addr: str, pool: set[str] | list[str]) -> bool:
             continue
     return False
 
-
-from .conftest import SmokeVM
 
 pytestmark = pytest.mark.smoke
 
@@ -184,7 +183,7 @@ def test_collect_localip_recognises_ipv6_address_and_subnet(
         before_local, before_localsub = h.collect_localip(vm)
 
         # GIVEN assertions: the target address is absent before we add it.
-        assert addr not in before_local, (
+        assert not _ip_in(addr, before_local), (
             f"GIVEN violated: {addr!r} already in pfb_local before set_interface_ipv6 — "
             f"cannot assert causal before/after.  pfb_local={before_local!r}"
         )
