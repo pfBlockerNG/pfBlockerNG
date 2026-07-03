@@ -40,11 +40,13 @@ final class IpAddrDoublesTest extends TestCase
 	public static function v4Provider(): array
 	{
 		return [
-			// Rejected on-box and off: ip2long()/inet_pton() accepts only the
-			// canonical dotted-quad on FreeBSD and glibc alike (see class
-			// docblock) — old and fixed doubles agree here; the pinned oracle
-			// is the real pfSense verdict.
-			'leading-zero octets rejected (inet_pton is canonical-only)' => ['192.000.002.005', false],
+			// Leading-zero octets are LIBC-DEPENDENT (#723): FreeBSD (the
+			// pfSense target) and glibc (CI) reject them at inet_pton(), but
+			// macOS accepts them — so the verdict cannot be pinned as a
+			// constant without failing on a Mac dev box. The invariant that
+			// matters is MECHANISM parity: the double must agree with this
+			// platform's ip2long(), whatever it says (asserted in
+			// testIsIpaddrv4MatchesLocalIp2long below).
 			'plain dotted-quad accepted'   => ['192.0.2.5', true],
 			'three-octet form rejected'    => ['1.2.3', false],
 			'out-of-range octet rejected'  => ['256.1.1.1', false],
@@ -59,6 +61,15 @@ final class IpAddrDoublesTest extends TestCase
 	public function testIsIpaddrv4(mixed $input, bool $expected): void
 	{
 		$this->assertSame($expected, is_ipaddrv4($input));
+	}
+
+	public function testIsIpaddrv4MatchesLocalIp2long(): void
+	{
+		// Mechanism parity with real pfSense (bare ip2long check): whatever this
+		// platform's libc says about a leading-zero octet, the double says the same.
+		$expected = (ip2long('192.000.002.005') !== false);
+		$this->assertSame($expected, is_ipaddrv4('192.000.002.005'),
+			'expected: double verdict identical to local ip2long() for a leading-zero octet');
 	}
 
 	// --- is_ipaddrv6() --------------------------------------------------------

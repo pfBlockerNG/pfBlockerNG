@@ -4312,6 +4312,10 @@ function pfb_member_file_is_placeholder_only($path, $placeholder) {
 // floods carry table/op attribution in the log.
 function pfb_pfctl_error_message(string $table, string $op, int $rc, string $stderr): string {
 	$msg = trim(str_replace(["\r\n", "\r", "\n"], ' ', $stderr));
+	if ($msg === '') {
+		// No stderr: end at the rc -- never a dangling ": " (#723).
+		return "[pfctl] op={$op} table={$table} failed (rc={$rc})";
+	}
 	return "[pfctl] op={$op} table={$table} failed (rc={$rc}): {$msg}";
 }
 
