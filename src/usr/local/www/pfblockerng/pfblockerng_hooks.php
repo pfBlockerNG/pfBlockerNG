@@ -128,7 +128,10 @@ if ($_POST) {
 					}
 					break;
 				case 'hook_description':
-					if (preg_match('/[\p{C}]+/u', $value)) {
+					// !== 0 fails closed on invalid UTF-8: with /u, preg_match() returns
+					// FALSE (not 0) rather than a real no-match, and a bare truthiness
+					// check would silently let a malformed value through.
+					if (preg_match('/[\p{C}]+/u', $value) !== 0) {
 						$input_errors[] = gettext('The hook description contains invalid control characters.');
 					}
 					break;
