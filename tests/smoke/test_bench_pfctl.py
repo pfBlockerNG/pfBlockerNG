@@ -663,15 +663,16 @@ async def run(in_ips: list[str], out_ips: list[str], duration: float) -> None:
     async def one(ip: str) -> None:
         async with sem:
             start_epoch, recv_epoch, rtt_ms = await probe_once(ip)
-            if rtt_ms >= 0:
-                # Print to stdout — one JSON per line.
-                # start_t is used for op-aligned windowing by start time.
-                print(json.dumps({
-                    "start_t": round(start_epoch, 4),
-                    "t": round(recv_epoch, 4),
-                    "rtt_ms": round(rtt_ms, 3),
-                    "ip": ip,
-                }), flush=True)
+            # Print to stdout — one JSON per line, INCLUDING timeouts (rtt_ms=-1):
+            # a genuine >=5s timeout is a real loss and must be counted, not
+            # silently dropped.  start_t is used for op-aligned windowing by
+            # start time; a negative rtt_ms marks "no RST received".
+            print(json.dumps({
+                "start_t": round(start_epoch, 4),
+                "t": round(recv_epoch, 4),
+                "rtt_ms": round(rtt_ms, 3),
+                "ip": ip,
+            }), flush=True)
 
     tasks: list[asyncio.Task[None]] = []
     while time.monotonic() < deadline:
@@ -758,35 +759,69 @@ class TcpRstSample:
 
 @dataclass
 class TcpRstWindow:
-    """Samples from a single op-aligned window of the TCP RST probe."""
+    """Samples from a single op-aligned window of the TCP RST probe.
+
+    ``lost`` is the count of genuine >=5s timeouts (rtt_ms=-1 probe records)
+    pooled across the WHOLE probe run that produced this window, not
+    attributed to this window's [t0, t1] slice — same simplification as
+    ICMP's ``_LiveProbe.slice_window`` (see its comment): a probe run spans
+    several batches, so precise sub-window attribution is skipped by design.
+    """
 
     samples: list[TcpRstSample] = field(default_factory=list)
     total_attempts: int = 0  # incremented on collection
+    lost: int = 0  # genuine >=5s timeouts, pooled per probe run (see docstring)
+
+    def sent(self) -> int:
+        return len(self.samples) + self.lost
 
 
-def _parse_tcp_probe_output(text: str) -> list[TcpRstSample]:
-    """Parse JSON lines from the tcp_rst_probe.py output."""
+@dataclass
+class TcpProbeParse:
+    """Result of parsing tcp_rst_probe.py output: RTT samples plus timeouts.
+
+    A record with rtt_ms < 0 marks a genuine >=5s timeout (no RST received):
+    counted in ``lost``, never added to ``samples``.
+    """
+
+    samples: list[TcpRstSample] = field(default_factory=list)
+    lost: int = 0
+
+
+def _parse_tcp_probe_output(text: str) -> TcpProbeParse:
+    """Parse JSON lines from the tcp_rst_probe.py output.
+
+    Returns the kept RTT samples plus the count of genuine >=5s timeouts
+    (rtt_ms=-1 records) — those never enter the RTT sample list, since they
+    have no RTT to report, but they are real losses and must be counted.
+    """
     import json as _json
 
     samples: list[TcpRstSample] = []
+    lost = 0
     for line in text.splitlines():
         line = line.strip()
         if not line or not line.startswith("{"):
             continue
         try:
             obj = _json.loads(line)
-            if "rtt_ms" in obj and obj.get("rtt_ms", -1) >= 0:
-                samples.append(
-                    TcpRstSample(
-                        recv_epoch=float(obj.get("t", 0)),
-                        rtt_ms=float(obj["rtt_ms"]),
-                        ip=str(obj.get("ip", "")),
-                        start_epoch=float(obj.get("start_t", 0)),
-                    )
+            if "rtt_ms" not in obj:
+                continue
+            rtt_ms = float(obj["rtt_ms"])
+            if rtt_ms < 0:
+                lost += 1
+                continue
+            samples.append(
+                TcpRstSample(
+                    recv_epoch=float(obj.get("t", 0)),
+                    rtt_ms=rtt_ms,
+                    ip=str(obj.get("ip", "")),
+                    start_epoch=float(obj.get("start_t", 0)),
                 )
+            )
         except Exception:
             pass
-    return samples
+    return TcpProbeParse(samples=samples, lost=lost)
 
 
 class _LiveTcpProbe:
@@ -808,6 +843,7 @@ class _LiveTcpProbe:
         self._out_ips = out_ips
         self._batch_dur = batch_duration_s
         self._samples: list[TcpRstSample] = []
+        self._lost: int = 0  # genuine >=5s timeouts, pooled across the whole probe run
         self._lock = threading.Lock()
         self._stop_evt = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -821,9 +857,10 @@ class _LiveTcpProbe:
         while not self._stop_evt.is_set():
             cmd = f"python3 /tmp/tcp_rst_probe.py {in_arg} {out_arg} {self._batch_dur:.1f} 2>/dev/null"
             result = self._client.ssh(cmd, timeout=self._batch_dur + 15.0)
-            samples = _parse_tcp_probe_output(result.stdout)
+            parsed = _parse_tcp_probe_output(result.stdout)
             with self._lock:
-                self._samples.extend(samples)
+                self._samples.extend(parsed.samples)
+                self._lost += parsed.lost
 
     def slice_window(self, t0: float, t1: float) -> TcpRstWindow:
         """Return samples whose connection was STARTED during [t0, t1] (op-aligned).
@@ -834,16 +871,27 @@ class _LiveTcpProbe:
         would be missed if filtered by completion time.  start_epoch captures
         exactly "connections that were in-flight when the op ran".
         Falls back to recv_epoch when start_epoch is 0 (old probe format).
+
+        ``lost`` on the returned window is the probe's TOTAL genuine-timeout
+        count across its whole run, not filtered to [t0, t1] — pooled-per-run
+        by design (see ``TcpRstWindow`` docstring), matching ICMP's
+        ``_LiveProbe.slice_window`` treatment of loss as non-window-attributable.
         """
         with self._lock:
             w = TcpRstWindow()
             w.samples = [s for s in self._samples if t0 <= (s.start_epoch if s.start_epoch > 0 else s.recv_epoch) <= t1]
             w.total_attempts = len(w.samples)
+            w.lost = self._lost
             return w
 
     def all_samples(self) -> list[TcpRstSample]:
         with self._lock:
             return list(self._samples)
+
+    def total_lost(self) -> int:
+        """Total genuine >=5s timeouts observed across this probe's whole run."""
+        with self._lock:
+            return self._lost
 
     def stop(self) -> None:
         self._stop_evt.set()
@@ -854,10 +902,18 @@ def _compute_pooled_tcp(
     windows: list[TcpRstWindow],
     baseline_windows: list[TcpRstWindow],
 ) -> PooledStats:
-    """Pool TCP RST RTT samples from all repeat windows."""
+    """Pool TCP RST RTT samples from all repeat windows.
+
+    ``total_loss``/``total_sent`` are pooled per-run (summed from each
+    window's own ``.lost``, per-run tally — see ``TcpRstWindow`` docstring),
+    not attributed to a narrower sub-window.
+    """
     all_samples: list[TcpRstSample] = []
     for w in windows:
         all_samples.extend(w.samples)
+
+    total_loss = sum(w.lost for w in windows)
+    total_sent = sum(w.sent() for w in windows)
 
     baseline_rtts: list[float] = []
     for w in baseline_windows:
@@ -871,7 +927,7 @@ def _compute_pooled_tcp(
 
     n = len(all_samples)
     if n == 0:
-        return PooledStats()
+        return PooledStats(total_loss=total_loss, total_sent=total_sent)
 
     rtts = sorted(s.rtt_ms for s in all_samples)
     spikes = sum(1 for r in rtts if r > spike_thresh) if spike_thresh > 0 else 0
@@ -890,8 +946,8 @@ def _compute_pooled_tcp(
         p99_ms=pct(0.99),
         p999_ms=pct(0.999),
         max_ms=rtts[-1],
-        total_loss=0,
-        total_sent=n,
+        total_loss=total_loss,
+        total_sent=total_sent,
         spikes=spikes,
         spike_threshold_ms=spike_thresh,
     )
@@ -915,8 +971,9 @@ def _measure_with_rst_probe(
     out_arg = ",".join(_PROBE_OUT_TABLE_IPS)
     baseline_cmd = f"python3 /tmp/tcp_rst_probe.py {in_arg} {out_arg} {batch_dur_s:.1f} 2>/dev/null"
     baseline_result = client_vm.ssh(baseline_cmd, timeout=batch_dur_s + 15.0)
-    baseline_samples = _parse_tcp_probe_output(baseline_result.stdout)
-    baseline_w = TcpRstWindow(samples=baseline_samples, total_attempts=len(baseline_samples))
+    baseline_parsed = _parse_tcp_probe_output(baseline_result.stdout)
+    baseline_samples = baseline_parsed.samples
+    baseline_w = TcpRstWindow(samples=baseline_samples, total_attempts=len(baseline_samples), lost=baseline_parsed.lost)
     bl_p50 = 0.0
     if baseline_samples:
         sorted_bl = sorted(s.rtt_ms for s in baseline_samples)
@@ -954,7 +1011,7 @@ def _measure_with_rst_probe(
             f" during_samples={len(during_w.samples)}"
         )
     else:
-        during_w = TcpRstWindow(samples=probe.all_samples())
+        during_w = TcpRstWindow(samples=probe.all_samples(), lost=probe.total_lost())
 
     # ---- build result row ---- #
     gd = _parse_guest_row(kv)
@@ -1428,7 +1485,7 @@ def test_pfctl_reject_loop(
     # Keep stderr visible (no 2>/dev/null) for diagnostic purposes on failure.
     verify_cmd = f"python3 /tmp/tcp_rst_probe.py {in_arg} {out_arg} 2.0"
     verify_result = client_vm.ssh(verify_cmd, timeout=10.0)
-    verify_samples = _parse_tcp_probe_output(verify_result.stdout)
+    verify_samples = _parse_tcp_probe_output(verify_result.stdout).samples
     if not verify_samples:
         _bench(smoke_vm, "teardown_rules", timeout=30.0)
         pytest.skip(
@@ -1723,10 +1780,17 @@ def _compute_pooled_tcp_full(
 
     spike_threshold_ms is derived from the quiescent baseline p95 × _DISRUPT_SPIKE_FACTOR
     (NOT p99 × 3.0, which was degenerate in the prior run — see 02b_Replace_Disruption_Baseline.txt).
+
+    ``total_loss``/``total_sent`` are pooled per-run from each window's own
+    ``.lost`` (see ``TcpRstWindow`` docstring) — not attributed to a narrower
+    sub-window; the disruption buckets stay RTT-only.
     """
     all_rtts: list[float] = []
     for w in windows:
         all_rtts.extend(s.rtt_ms for s in w.samples)
+
+    total_loss = sum(w.lost for w in windows)
+    total_sent = sum(w.sent() for w in windows)
 
     # Compute spike threshold from baseline p95.
     baseline_rtts: list[float] = []
@@ -1741,7 +1805,11 @@ def _compute_pooled_tcp_full(
 
     n = len(all_rtts)
     if n == 0:
-        return PooledStats(), {t: (0, 0.0) for t in _DISRUPT_BUCKETS_MS}, spike_thresh
+        return (
+            PooledStats(total_loss=total_loss, total_sent=total_sent),
+            {t: (0, 0.0) for t in _DISRUPT_BUCKETS_MS},
+            spike_thresh,
+        )
 
     rtts_s = sorted(all_rtts)
     spikes = sum(1 for r in rtts_s if r > spike_thresh) if spike_thresh > 0 else 0
@@ -1760,8 +1828,8 @@ def _compute_pooled_tcp_full(
         p99_ms=pct(0.99),
         p999_ms=pct(0.999),
         max_ms=rtts_s[-1],
-        total_loss=0,
-        total_sent=n,
+        total_loss=total_loss,
+        total_sent=total_sent,
         spikes=spikes,
         spike_threshold_ms=spike_thresh,
     )
@@ -1842,7 +1910,7 @@ def test_pfctl_replace_disruption_baseline(
     in_arg = ",".join(_PROBE_IN_TABLE_IPS[:3])
     out_arg = ",".join(_PROBE_OUT_TABLE_IPS[:3])
     verify_result = client_vm.ssh(f"python3 /tmp/tcp_rst_probe.py {in_arg} {out_arg} 2.0", timeout=10.0)
-    verify_samples_disrupt = _parse_tcp_probe_output(verify_result.stdout)
+    verify_samples_disrupt = _parse_tcp_probe_output(verify_result.stdout).samples
     if not verify_samples_disrupt:
         _bench(smoke_vm, "teardown_rules", timeout=30.0)
         _bench(smoke_vm, "cleanup", timeout=30.0)
@@ -1937,7 +2005,8 @@ def test_pfctl_replace_disruption_baseline(
         out_arg2 = ",".join(_PROBE_OUT_TABLE_IPS)
         qcmd = f"python3 /tmp/tcp_rst_probe.py {in_arg2} {out_arg2} 5.0 2>/dev/null"
         qresult = client_vm.ssh(qcmd, timeout=20.0)
-        q_samples = _parse_tcp_probe_output(qresult.stdout)
+        q_parsed = _parse_tcp_probe_output(qresult.stdout)
+        q_samples = q_parsed.samples
         if q_samples:
             q_rtts = sorted(s.rtt_ms for s in q_samples)
             q_n = len(q_rtts)
@@ -1955,14 +2024,14 @@ def test_pfctl_replace_disruption_baseline(
                 p99_ms=q_p99,
                 p999_ms=q_rtts[min(int(math.floor(q_n * 0.999)), q_n - 1)],
                 max_ms=q_rtts[-1],
-                total_loss=0,
-                total_sent=q_n,
+                total_loss=q_parsed.lost,
+                total_sent=q_n + q_parsed.lost,
                 spikes=0,
                 spike_threshold_ms=0.0,
             )
             q_buckets = _compute_disrupt_buckets(q_rtts)
         else:
-            q_ps = PooledStats()
+            q_ps = PooledStats(total_loss=q_parsed.lost, total_sent=q_parsed.lost)
             q_buckets = {t: (0, 0.0) for t in _DISRUPT_BUCKETS_MS}
         quiet_stats[sz] = q_ps
         quiet_buckets[sz] = q_buckets
@@ -2085,7 +2154,9 @@ def test_pfctl_disruption_uncensored(
       1. PROBE CENSORING: prior timeout=0.5s clamped every stall ≥500ms to ~500ms.
          True replace disruption was invisible (100k→1M all flat ~500ms, 100%).
          Now timeout=5.0s records the REAL stall duration; only genuine ≥5s losses
-         are dropped (should be ~none with RST reject rules).
+         are excluded from the RTT distribution (they have no RTT to report) —
+         counted instead in the pooled loss tally (should be ~none with RST
+         reject rules).
       2. PROBE STARVATION (50k n=4): prior sem=64 with 0.5s timeout starved short
          op windows.  Now sem=400 with start-time slicing: connections STARTED during
          the op are captured regardless of when they complete (a 200ms stall on a
@@ -2146,7 +2217,7 @@ def test_pfctl_disruption_uncensored(
     in_arg = ",".join(_PROBE_IN_TABLE_IPS[:3])
     out_arg = ",".join(_PROBE_OUT_TABLE_IPS[:3])
     verify_result = client_vm.ssh(f"python3 /tmp/tcp_rst_probe.py {in_arg} {out_arg} 3.0", timeout=15.0)
-    verify_samples_unc = _parse_tcp_probe_output(verify_result.stdout)
+    verify_samples_unc = _parse_tcp_probe_output(verify_result.stdout).samples
     if not verify_samples_unc:
         _bench(smoke_vm, "teardown_rules", timeout=30.0)
         pytest.skip("TCP RST probe returned no samples — reject loop not working. STOP.")
@@ -2271,7 +2342,8 @@ def test_pfctl_disruption_uncensored(
             f"python3 /tmp/tcp_rst_probe.py {in_arg2} {out_arg2} 5.0 2>/dev/null",
             timeout=30.0,
         )
-        q_samples = _parse_tcp_probe_output(qresult.stdout)
+        q_parsed = _parse_tcp_probe_output(qresult.stdout)
+        q_samples = q_parsed.samples
         if q_samples:
             q_rtts = sorted(s.rtt_ms for s in q_samples)
             qn = len(q_rtts)
@@ -2289,10 +2361,11 @@ def test_pfctl_disruption_uncensored(
                 p99_ms=_qpct(0.99),
                 p999_ms=_qpct(0.999),
                 max_ms=q_rtts[-1],
-                total_sent=qn,
+                total_loss=q_parsed.lost,
+                total_sent=qn + q_parsed.lost,
             )
         else:
-            quiet_ps_unc[sz] = PooledStats()
+            quiet_ps_unc[sz] = PooledStats(total_loss=q_parsed.lost, total_sent=q_parsed.lost)
         qp = quiet_ps_unc[sz]
         print(
             f"  quiescent size={sz:,}: n={qp.n}"
@@ -2415,7 +2488,8 @@ def test_pfctl_disruption_uncensored(
     print(
         "\nProbe: in-table 11.x + out-table 13.x; both paths RST."
         "\nTimeout: 5.0s (loss = genuine ≥5s failures only)."
-        "\nWindow: connections STARTED in [t0, t1] (start-time slice)."
+        "\nWindow: connections STARTED in [t0, t1] (start-time slice) — RTT samples only;"
+        "\n  loss is pooled per RUN (not attributed to this start-time slice), by design."
         f"\n{_UNCENSORED_REPS} reps per cell | op-aligned."
     )
 
