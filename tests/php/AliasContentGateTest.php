@@ -524,10 +524,14 @@ final class AliasContentGateTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	/**
-	 * pfb_alias_set_different compares SETS (order-immune).
+	 * pfb_alias_set_different is order-immune on the MIRROR side only (#723).
 	 *
-	 * The last-applied mirror may have been written in a different order than the
-	 * newly-computed set. The comparison must be set-based (immune to order).
+	 * The last-applied mirror may have been written in any order — it is
+	 * re-canonicalised on read. The $new_set side is NOT re-canonicalised: the
+	 * documented contract (@param) requires the caller to pass a canonical
+	 * (sorted, unique) set, and the sole production caller does (it builds
+	 * $canonical_set via pfb_canonical_alias_set first). The companion test
+	 * below pins that sharp edge.
 	 */
 	public function testSetDifferentIsOrderImmune(): void
 	{
@@ -546,6 +550,29 @@ final class AliasContentGateTest extends TestCase
 			"mirror:  192.0.2.3, 192.0.2.1, 192.0.2.2\n" .
 			"new set: " . implode(', ', $newSet) . "\n" .
 			"changed: " . ($changed ? 'true' : 'false')
+		);
+	}
+
+	/**
+	 * The $new_set side is order-SENSITIVE by contract (#723): a non-canonical
+	 * (unsorted) $new_set with identical membership reports "different". This
+	 * pins the documented precondition — if canonicalisation is ever added
+	 * inside pfb_alias_set_different (or removed from the caller), this test
+	 * forces the contract and its callers to be revisited together.
+	 */
+	public function testSetDifferentRequiresCanonicalNewSet(): void
+	{
+		$path = $this->mirrorPath('pfB_OrderNew_v4');
+		$this->writeMirror('pfB_OrderNew_v4', "192.0.2.1\n192.0.2.2\n192.0.2.3\n");
+
+		// Same membership, NOT sorted — violates the @param contract on purpose.
+		$unsorted = ['192.0.2.3', '192.0.2.1', '192.0.2.2'];
+
+		$this->assertTrue(
+			pfb_alias_set_different($unsorted, $path),
+			"contract pin: an unsorted \$new_set must compare as different — the\n" .
+			"function does not re-canonicalise the caller side (callers must pass\n" .
+			"pfb_canonical_alias_set output)"
 		);
 	}
 
