@@ -35,11 +35,17 @@ The package ships a curated feed catalog, `pfblockerng_feeds.json`, a dict keyed
   therefore **(category, header)** — user config sections map `pfblockernglistsv4 → ipv4`,
   `…v6 → ipv6`, `pfblockerngdnsbl → dnsbl` — and intra-category duplicates are disambiguated
   by `url`/`past_urls` or treated as no-match (pick one when implementing; `SWC`/`MDL`/
-  `Malc0de` are mandatory test fixtures).
+  `Malc0de` are mandatory test fixtures). *Recommended (2026-07-03, non-binding): disambiguate
+  by the stored `url` ∈ that candidate's `{url} ∪ past_urls`; if no candidate matches uniquely,
+  treat as **no-match** — when ambiguous, touch nothing (consistent with the never-destructive
+  posture).*
 - **`status`** can be `discontinued` (**37** rows today, not 39) — and **1 row is
   `Suspended`**, a status the rules below must either fold into the discontinued handling or
   explicitly ignore (enumerate the full status vocabulary when implementing; today's live set
-  is `discontinued` + `Suspended` + absent).
+  is `discontinued` + `Suspended` + absent). *Recommended (2026-07-03, non-binding):
+  `Suspended` is report-only in BOTH modes ("feed suspended upstream") — never auto-disabled;
+  a suspension is temporary, and auto-disabling would need a symmetric re-enable path this ADR
+  deliberately does not have.*
 - **`past_urls`** (present on a few rows today) records prior URLs a feed has moved through —
   the breadcrumb that lets us recognise a user's stored-but-moved URL.
 - **`alternate`** offers replacement feeds.

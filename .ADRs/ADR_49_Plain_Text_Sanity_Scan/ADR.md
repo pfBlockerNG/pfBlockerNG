@@ -54,15 +54,30 @@ logs *through* it); changing the existing control-char check (kept; this complem
 
    - **Parameters:** sample size ("first few KB" — how many bytes?), the non-blank/non-comment
      line floor, the NUL/"excess binary" threshold, the "blocklist-shaped line" token regex and
-     its first-N-lines window.
+     its first-N-lines window. *Recommended (2026-07-03, non-binding): sample = first 8 KiB;
+     `nul_bytes` = ANY `\x00` in the sample (NUL in a text feed is unambiguous — no ratio
+     heuristic); `below_min_content` floor = 1 (fires only on zero non-blank, non-comment
+     lines — a legitimate single-line feed passes, which is the ADR's own stated FP guard);
+     `html_error_page` = sample opens with `<!doctype html`/`<html` (case-insensitive,
+     leading-whitespace-tolerant) AND zero blocklist-shaped lines in the first 20 lines, where
+     blocklist-shaped = an IP/CIDR, or a hosts-style `IP<ws>domain`, or a bare/ABP-wrapped
+     `domain.tld` token.*
    - **MIME scope of "text branches":** enumerate the exact MIMEs scanned. Two known self-FPs
      as currently sketched: a **minified one-line JSON feed** (`application/json` is
      allow-listed) trips `below_min_content`; `inode/x-empty` (also allow-listed — an empty
      200 body) reaches the text branch. Decide per-MIME exclusion or per-format rules.
+     *Recommended (2026-07-03, non-binding): scan `text/plain`, `text/html`, `text/csv` only;
+     exclude `application/json`/`application/x-ndjson` (structured formats — a parse failure
+     is already loud, and line-count heuristics are meaningless for minified JSON) and
+     `inode/x-empty` (an empty body is its own signal; rejecting it is a behaviour change
+     beyond this ADR's scope).*
    - **Encoding/fail-mode:** byte-level or `/u` matching, and the verdict on an
      invalid-UTF-8 sample (a chunk boundary can split a multibyte char and make `/u`
      `preg_match` return FALSE). The sibling control-char check's precedent is fail-closed
-     (`a13effe3`); pin a stance either way.
+     (`a13effe3`); pin a stance either way. *Recommended (2026-07-03, non-binding):
+     byte-level (no `/u`) — every pattern above is pure ASCII, byte matching cannot be flipped
+     by a chunk-truncated multibyte char, and it sidesteps the fail-open/fail-closed question
+     entirely (a truncated UTF-8 tail is simply bytes that match or don't).*
 
 2. **One registered PfbConfig field (ADR-28/29): `pfb_feed_sanity`** — a `PfbToggle`,
    **default off**. When off, `pfb_text_sanity()` is never consulted (zero behaviour change —

@@ -75,7 +75,9 @@ sibling ADRs one helper to call.
    each sibling ADR calls `pfb_validate_log()` rather than coining its own message.
    **Open sub-question:** the 7z missing-tool rejection in `pfb_download()` is a
    download-validation reject outside the `stage` vocabulary — decide in (new `stage` token) or
-   out (leave its ad-hoc message).
+   out (leave its ad-hoc message). *Recommended (2026-07-03, non-binding): OUT — a missing tool
+   is a system/tooling failure, not a content-validation verdict; the canonical line should
+   only ever mean "this feed's content was rejected".*
 
 ### Per-area decision table
 

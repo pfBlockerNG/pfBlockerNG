@@ -74,7 +74,9 @@ path is unchanged; the GeoIP/top-1M extraction still works for legitimate archiv
 2. **`pfb_archive_members_safe(array $names): bool`** — a **pure** predicate: `FALSE` if any
    member name is absolute, contains a `..` component (split on `/`), or exceeds a sane length
    cap (**cap value settled in Phase 1 and pinned by its tests** — it is currently
-   unspecified); `TRUE` otherwise. Unit-tested against the full matrix of hostile and benign
+   unspecified; *recommended, non-binding: the FreeBSD filesystem limits — 255 bytes per
+   path component (`NAME_MAX`) and 1024 bytes total (`PATH_MAX`) — anything above them cannot
+   extract anyway, so they reject nothing legitimate*); `TRUE` otherwise. Unit-tested against the full matrix of hostile and benign
    names.
 
 3. **Wire the guard before disk extraction** (sites per the §1.2 guard-scope fork). Before

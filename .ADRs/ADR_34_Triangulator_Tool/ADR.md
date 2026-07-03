@@ -69,7 +69,13 @@ must be redesigned around the **manifest-built matcher state incl. the allow lay
 defensible mechanisms diverging in ways the maintainer must pick: (a) a **PHP parity
 re-implementation** reading the manifest + raw feeds, pinned against the Python parser as the
 test oracle; or (b) **querying the live Python module/state** (a dump/control-channel
-interface). Until decided, Phase 1's "extract the classifier" premise is also wrong — there
+interface). *Recommended (2026-07-03, non-binding): (b) — extend the existing `python_control`
+channel with an `explain <domain>` op that returns the live verdict + matched layer/feed. It
+asks the one component that already knows the answer, is correct by construction across every
+band (ABP, regex, permit, whitelist, IDN, SafeSearch), and avoids a second matcher
+implementation in PHP that WILL drift from the Python one. Cost: the tool needs Unbound
+running — acceptable for a diagnostics page (report "resolver not running" otherwise). Option
+(a) means re-implementing and forever co-maintaining the ABP/precedence engine in PHP.* Until decided, Phase 1's "extract the classifier" premise is also wrong — there
 is **no pure name-vs-data function to extract**: `dnsbl_log_details()` is a **log-field**
 parser (usable only for the Alerts-row entry path), and `pfb_dnsbl_parse()` is a
 grep-over-CSV + SQLite-cache routine. The classification vocabulary gains an

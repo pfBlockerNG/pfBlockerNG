@@ -86,7 +86,9 @@ two alternative implementations behind one normalized seam** — so the active p
 3. **Parser home language** (if the CIDR form is chosen over MMDB): PHP vs Python for the
    CIDR→normalised-record conversion is left open by Phase 3's "whichever hosts the parse
    tests" — pick one (remember: no Python interpreter on the appliance outside
-   `pfb_unbound.py`).
+   `pfb_unbound.py`). *Recommended (2026-07-03, non-binding): PHP — the conversion runs on the
+   appliance as `pfb_download()` post-processing like the other extras, where Python is
+   unavailable by hard constraint; moot if fork 1 resolves to MMDB-as-seam.*
 
 **No per-consumer mix-and-match** (the maintainer's explicit call on #291): a provider is
 selected once per data domain and used by *every* consumer of that domain. We do **not**

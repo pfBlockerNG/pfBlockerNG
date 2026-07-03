@@ -108,18 +108,29 @@ comes due)", so the `force`/`reuse=on` flag disappears from the codebase entirel
    them, where `reuse=on` covers them today). The ADR must add a full decision table over
    {remote+validators, remote−validators, local, rsync, GeoIP/ASN/category, DNSBLIP} and pick a
    mechanism per class — or scope itself honestly to remote conditional-GET feeds and keep a
-   residual reuse mechanism for the rest.
+   residual reuse mechanism for the rest. _Recommended (2026-07-03, non-binding): scope down —
+   unify the remote-conditional-GET class now (the overwhelming majority of feeds) and keep the
+   internal reuse path as the residual mechanism for the other classes, retitling the ADR
+   accordingly; the full per-class table is a follow-up once the common case is proven. The
+   all-classes rework multiplies the blast radius for classes that change rarely._
 2. **`pfb_reuse`'s fate + grandfather analysis.** `pfb_reuse` is a **registered PfbConfig
    field** (toggle, `pfblockerng_extra.inc` ~`:540`). Today `reuse=on` + cron means "never
    download — reparse from cache every pass"; a sidecar re-expression cannot reproduce "never
    download" for a feed whose remote changed. Per the ADR-28 storage rules, any semantic change
    to an existing user's toggle on upgrade needs an explicit
    existing-config-preserves-behaviour / grandfather decision — currently absent (§2.4 hedges
-   "if it survives as a setting").
+   "if it survives as a setting"). _Recommended (2026-07-03, non-binding): keep `pfb_reuse`
+   with its exact current semantics ("never download") — no sidecar expression can reproduce
+   it, so removal would be a silent behaviour change for existing users; with semantics
+   unchanged, no grandfather seed is needed. Narrow the ADR's "delete the reuse flag" headline
+   to the internal `force`/`reuse=on` dispatch flag only._
 3. **Per-feed reuse-signal mechanism.** §2.2 needs the ingest to reuse cached `.orig`
    "triggered per-feed by the detector's signal", but the ingest gate is a **global**
    `$pfbreuse` + markers, and a `{header}.update` marker today means "re-download". The new
-   plumbing (e.g. a `{header}.reuse` marker vs an in-memory set) is unspecified.
+   plumbing (e.g. a `{header}.reuse` marker vs an in-memory set) is unspecified. _Recommended
+   (2026-07-03, non-binding): a `{header}.reuse` marker file consumed by the ingest — it is the
+   existing per-feed marker idiom, and it survives the detector→ingest process boundary (they
+   can run in separate invocations), which an in-memory set cannot._
 
 ### 1.6 Existing pinned tests that MUST flip (inventory for the red→green plan)
 
