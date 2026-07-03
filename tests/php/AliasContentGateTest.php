@@ -47,6 +47,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_alias_set_different')]
 #[CoversFunction('pfb_write_canonical_alias')]
 #[CoversFunction('pfb_cross_list_scope')]
+#[CoversFunction('pfb_supp_update_active')]
 final class AliasContentGateTest extends TestCase
 {
 	/** @var string Per-test temp dir for mirror files. */
@@ -516,6 +517,61 @@ final class AliasContentGateTest extends TestCase
 			"dup on, rep on → TRUE\n" .
 			"expected: true\n" .
 			"got:      false"
+		);
+	}
+
+	// -----------------------------------------------------------------------
+	// Scenario H — pfb_supp_update_active (ADR-53 adversarial-review finding A)
+	// -----------------------------------------------------------------------
+	//
+	// $pfb['supp_update'] gates BOTH the v4 and v6 suppression sub-passes in
+	// pfblockerng.inc's alias-build loop. Before this fix it was flipped TRUE
+	// only from inside the v4-only dedup/reputation block, so a v6-only Deny
+	// deployment could never unlock the v6 suppress pass. This pure helper
+	// did not exist before the fix -- every test below FAILS with a fatal
+	// "undefined function" against the pre-fix code and PASSES once
+	// pfb_supp_update_active() lands and is wired into the call site (the
+	// red->green proof for this ADR-53 review finding).
+
+	/**
+	 * Scenario H: a v6-only Deny alias (family v6, no v4 dedup/reputation
+	 * involvement) still unlocks the suppression pass -- the bug being fixed.
+	 */
+	public function testSuppUpdateActiveForDenyAliasRegardlessOfFamily(): void
+	{
+		$this->assertTrue(
+			pfb_supp_update_active(TRUE, TRUE),
+			"Deny-folder alias (pfbadv=TRUE), suppression enabled → TRUE, independent of v4/v6\n" .
+			"expected: true\n" .
+			"got:      false"
+		);
+	}
+
+	/**
+	 * Scenario H: a non-Deny alias (Permit/Match/Native/GeoIP) never unlocks
+	 * suppression, matching the "deny folder only" scope (ADR-53 §2.1).
+	 */
+	public function testSuppUpdateInactiveForNonDenyAlias(): void
+	{
+		$this->assertFalse(
+			pfb_supp_update_active(FALSE, TRUE),
+			"non-Deny alias, suppression enabled → FALSE (scope is deny-folder only)\n" .
+			"expected: false\n" .
+			"got:      true"
+		);
+	}
+
+	/**
+	 * Scenario H: the master "Enable Suppression" toggle off never unlocks
+	 * the pass, even for a Deny alias.
+	 */
+	public function testSuppUpdateInactiveWhenSuppressionDisabled(): void
+	{
+		$this->assertFalse(
+			pfb_supp_update_active(TRUE, FALSE),
+			"Deny alias, suppression disabled → FALSE\n" .
+			"expected: false\n" .
+			"got:      true"
 		);
 	}
 

@@ -3722,8 +3722,8 @@ def pfctl_table_members(vm: SmokeVM, alias: str, *, timeout: float = 30.0) -> li
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
-def pfctl_table_test(vm: SmokeVM, alias: str, ip: str, *, timeout: float = 30.0) -> bool:
-    """True iff ``ip`` matches an entry in pf table ``alias`` (``pfctl -t <alias> -T test <ip>``).
+def pfctl_table_test_raw(vm: SmokeVM, alias: str, ip: str, *, timeout: float = 30.0) -> tuple[bool, str]:
+    """Run ``pfctl -t <alias> -T test <ip>`` ONCE; return ``(matched, raw combined output)``.
 
     Unlike :func:`pfctl_table_members` (an exact-token list -- useless once a
     containing entry has been carved into covering CIDRs by ADR-53's live-punch
@@ -3734,10 +3734,21 @@ def pfctl_table_test(vm: SmokeVM, alias: str, ip: str, *, timeout: float = 30.0)
     (rc is 0 either way for a well-formed query against an existing table) —
     on STDERR, not stdout (verified live on FreeBSD; the PHP-side
     ``pfb_pfctl_test_match_count()`` call sites append ``2>&1`` for the same
-    reason), so the check must read both streams.
+    reason), so both streams are combined here and returned RAW so a caller can
+    print pf's own actual output on a failing assertion (CLAUDE.md
+    "expected vs actual" -- never a bare derived boolean).
     """
     result = vm.ssh(PFCTL, "-t", alias, "-T", "test", ip, timeout=timeout)
-    return "1/1 addresses match" in (result.stdout + result.stderr)
+    raw = (result.stdout + result.stderr).strip()
+    return "1/1 addresses match" in raw, raw
+
+
+def pfctl_table_test(vm: SmokeVM, alias: str, ip: str, *, timeout: float = 30.0) -> bool:
+    """True iff ``ip`` matches an entry in pf table ``alias``. See :func:`pfctl_table_test_raw`
+    for the raw pfctl output a failing assertion should print instead of this bare bool.
+    """
+    matched, _raw = pfctl_table_test_raw(vm, alias, ip, timeout=timeout)
+    return matched
 
 
 def pfctl_tables(vm: SmokeVM, *, timeout: float = 30.0) -> list[str]:

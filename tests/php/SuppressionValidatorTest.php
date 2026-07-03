@@ -86,6 +86,19 @@ final class SuppressionValidatorTest extends TestCase
 		$this->assertNotNull($error, 'an out-of-range octet must be rejected');
 	}
 
+	/**
+	 * ADR-53 review finding H5: pin CURRENT behaviour -- a bare v4 address with
+	 * no mask is REJECTED (is_subnetv4() requires an explicit '/bits'), the
+	 * same contract as testV6MissingMaskRejected() below. No behaviour change;
+	 * this closes a parity gap in coverage (the v6 case was pinned, the v4
+	 * sibling was not).
+	 */
+	public function testMissingMaskRejected(): void
+	{
+		$error = pfb_validate_suppression_line('10.0.0.1', 'ipv4');
+		$this->assertNotNull($error, 'a bare address with no mask must be rejected');
+	}
+
 	// --- v4: tolerated textarea shapes (unchanged from today) ---
 
 	public function testTrailingInlineCommentTolerated(): void

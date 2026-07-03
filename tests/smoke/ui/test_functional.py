@@ -96,6 +96,7 @@ GENERAL_PAGE = "/pfblockerng/pfblockerng_general.php"
 IP_PAGE = "/pfblockerng/pfblockerng_ip.php"
 SAFESEARCH_PAGE = "/pfblockerng/pfblockerng_safesearch.php"
 UPDATE_PAGE = "/pfblockerng/pfblockerng_update.php"
+WIDGET_PAGE = "/widgets/widgets/pfblockerng.widget.php"
 # DNSBL_PAGE is defined further down (used by the auto-VIP test too).
 
 FLOWS: tuple[ToggleFlow, ...] = (
@@ -729,6 +730,82 @@ def test_ip_v6suppression_mask_validation_base64_and_reject_unchanged(
             except Exception:
                 restore = ""
         webui.post(IP_PAGE, {"v6suppression": restore}, timeout=SAVE_TIMEOUT)
+
+
+def _widget_suppression_count(webui: WebUI) -> int:
+    """GET the widget's AJAX refresh endpoint and parse the ``Suppression||<n>||-`` line.
+
+    ``pfBlockerNG_get_header('js')`` (hit via ``?getNewWidget=1``, the same AJAX
+    path the dashboard widget's own JS polls) prints one ``<Type>||<value>||-``
+    line per stat -- plain text, no HTML markup to scrape, the cheapest way to
+    read the widget's Suppression count (ADR-53 P8: v4+v6 folded into one total,
+    ``pfblockerng.widget.php`` ~:720).
+    """
+    resp = webui.get(WIDGET_PAGE, params={"getNewWidget": "1"})
+    assert not looks_like_login_page(resp.text), "widget AJAX GET returned the login form (session lost)"
+    for line in resp.text.splitlines():
+        parts = line.split("||")
+        if parts and parts[0] == "Suppression":
+            return int(parts[1].replace(",", ""))
+    raise AssertionError(f"no 'Suppression||<n>||-' line in widget AJAX response: {resp.text!r}")
+
+
+def test_widget_suppression_count_folds_v4_and_v6(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """The widget's Suppression stat is a v4+v6 TOTAL, not v4-only (ADR-53 P8).
+
+    Before ADR-53 P8, the widget read only v4suppression; a v6-only entry was
+    invisible in the stat. True transition test (CLAUDE.md before/after rule):
+    given ONE v4 entry seeded (count == 1, matching even the OLD v4-only
+    reader), THEN a v6 entry is ALSO seeded alongside it (v4 untouched) and the
+    count becomes 2 -- provable only if the widget folds v6suppression in too.
+    """
+    import base64
+
+    vm = smoke_vm
+    v4_cfg = "installedpackages/pfblockerngipsettings/config/0/v4suppression"
+    v6_cfg = "installedpackages/pfblockerngipsettings/config/0/v6suppression"
+    original_v4 = helpers.config_get(vm, v4_cfg)
+    original_v6 = helpers.config_get(vm, v6_cfg)
+    try:
+        # GIVEN: both families start empty.
+        webui.post(IP_PAGE, {"v4suppression": ""}, timeout=SAVE_TIMEOUT)
+        webui.post(IP_PAGE, {"v6suppression": ""}, timeout=SAVE_TIMEOUT)
+
+        # WHEN: one v4 entry is seeded -- BEFORE state.
+        webui.post(IP_PAGE, {"v4suppression": "203.0.113.9/32"}, timeout=SAVE_TIMEOUT)
+        count_v4_only = _widget_suppression_count(webui)
+        assert count_v4_only == 1, (
+            f"expected Suppression=1 with one v4 entry seeded (v6 still empty); widget reported {count_v4_only}"
+        )
+
+        # THEN: a v6 entry is ALSO seeded (v4 untouched -- webui.post() scrapes
+        # + re-posts the form's current fields, so the v4 textarea round-trips
+        # unchanged) -- the count must rise to 2, provable only if v6suppression
+        # is folded into the same stat.
+        webui.post(IP_PAGE, {"v6suppression": "2001:db8:53::9/128"}, timeout=SAVE_TIMEOUT)
+        count_v4_v6 = _widget_suppression_count(webui)
+        assert count_v4_v6 == 2, (
+            f"expected Suppression=2 after adding one v6 entry alongside the existing v4 one "
+            f"(ADR-53 P8 v4+v6 fold-in); widget reported {count_v4_v6} -- stayed v4-only if this held at 1"
+        )
+    finally:
+        restore_v4 = ""
+        if original_v4:
+            try:
+                restore_v4 = base64.b64decode(original_v4).decode()
+            except Exception:
+                restore_v4 = ""
+        restore_v6 = ""
+        if original_v6:
+            try:
+                restore_v6 = base64.b64decode(original_v6).decode()
+            except Exception:
+                restore_v6 = ""
+        webui.post(IP_PAGE, {"v4suppression": restore_v4}, timeout=SAVE_TIMEOUT)
+        webui.post(IP_PAGE, {"v6suppression": restore_v6}, timeout=SAVE_TIMEOUT)
 
 
 def test_ip_asn_reporting_select_coerces_bogus_to_disabled(

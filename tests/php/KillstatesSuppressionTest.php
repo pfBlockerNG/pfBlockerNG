@@ -113,4 +113,42 @@ final class KillstatesSuppressionTest extends TestCase
 			pfb_ip_suppressed('2001:db8::1', ['10.0.0.0/8'])
 		);
 	}
+
+	// --- malformed MASK never falsely matches (ADR-53 review finding H3: the
+	// pfsense_doubles.php ip_in_subnet() double's own fidelity on this path --
+	// pfb_ip_suppressed() forwards raw entries straight to ip_in_subnet() with
+	// no mask-range validation of its own, so a lying double here would hide a
+	// real suppression over-match) ---
+
+	public function testV4OutOfRangeMaskEntryIsNeverSuppressed(): void
+	{
+		// '/33' is out of range for IPv4 (real pfSense's is_subnetv4() rejects
+		// it, so ip_in_subnet() always returns FALSE) -- must never silently
+		// degrade to an exact-host match.
+		$this->assertFalse(
+			pfb_ip_suppressed('10.0.0.1', ['10.0.0.1/33']),
+			"/33 is an out-of-range IPv4 mask -- must never match, not silently normalise to /32"
+		);
+	}
+
+	public function testV6OutOfRangeMaskEntryIsNeverSuppressed(): void
+	{
+		// '/129' is out of range for IPv6 -- same contract as the v4 case above.
+		$this->assertFalse(
+			pfb_ip_suppressed('2001:db8::1', ['2001:db8::1/129']),
+			"/129 is an out-of-range IPv6 mask -- must never match"
+		);
+	}
+
+	public function testV4NonNumericMaskEntryIsNeverSuppressed(): void
+	{
+		// A non-numeric mask ('/abc') must never fall through to matching
+		// EVERY address -- real pfSense's is_subnet() requires the mask to be
+		// all-digits; a bare (int) cast on the double's side would coerce
+		// 'abc' to 0, i.e. '/0' (matches everything).
+		$this->assertFalse(
+			pfb_ip_suppressed('8.8.8.8', ['1.2.3.4/abc']),
+			"a non-numeric mask must never coerce to /0 (match-everyone)"
+		);
+	}
 }

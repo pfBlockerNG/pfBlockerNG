@@ -467,12 +467,10 @@ def test_addsuppress_v4_carves_containing_range_and_spares_sibling(
         # CLI returns, hence the poll) and both addresses match it live.
         members = helpers.wait_pfctl_table(vm, table)
         assert members, f"pf table {table} never populated after the settling update"
-        assert helpers.pfctl_table_test(vm, table, target), (
-            f"{target} expected to match pf table {table} before suppression"
-        )
-        assert helpers.pfctl_table_test(vm, table, sibling), (
-            f"{sibling} expected to match pf table {table} before suppression"
-        )
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, target)
+        assert matched, f"{target} expected to match pf table {table} before suppression; pfctl said: {raw!r}"
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, sibling)
+        assert matched, f"{sibling} expected to match pf table {table} before suppression; pfctl said: {raw!r}"
         assert host_entry not in _suppression_entries(vm, CFG_V4SUPPRESSION), (
             f"{host_entry} already in v4suppression before the test"
         )
@@ -483,11 +481,15 @@ def test_addsuppress_v4_carves_containing_range_and_spares_sibling(
 
         # THEN: the target no longer matches (carved out of the /16); the
         # sibling -- a separate feed entry entirely outside the hole -- is untouched.
-        assert not helpers.pfctl_table_test(vm, table, target), (
-            f"{target} still matches pf table {table} after addsuppress -- the live punch did not take effect"
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, target)
+        assert not matched, (
+            f"{target} still matches pf table {table} after addsuppress -- the live punch did not take "
+            f"effect; pfctl said: {raw!r}"
         )
-        assert helpers.pfctl_table_test(vm, table, sibling), (
-            f"{sibling} no longer matches pf table {table} after addsuppress -- an unrelated entry was punched"
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, sibling)
+        assert matched, (
+            f"{sibling} no longer matches pf table {table} after addsuppress -- an unrelated entry was "
+            f"punched; pfctl said: {raw!r}"
         )
 
         # THEN: v4suppression gained the EXACT host -- never a 254-host
@@ -534,12 +536,10 @@ def test_addsuppress_v6_carves_containing_range_and_spares_sibling(
     try:
         members = helpers.wait_pfctl_table(vm, table)
         assert members, f"pf table {table} never populated after the settling update"
-        assert helpers.pfctl_table_test(vm, table, target), (
-            f"{target} expected to match pf table {table} before suppression"
-        )
-        assert helpers.pfctl_table_test(vm, table, sibling), (
-            f"{sibling} expected to match pf table {table} before suppression"
-        )
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, target)
+        assert matched, f"{target} expected to match pf table {table} before suppression; pfctl said: {raw!r}"
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, sibling)
+        assert matched, f"{sibling} expected to match pf table {table} before suppression; pfctl said: {raw!r}"
         assert host_entry not in _suppression_entries(vm, CFG_V6SUPPRESSION), (
             f"{host_entry} already in v6suppression before the test"
         )
@@ -547,11 +547,15 @@ def test_addsuppress_v6_carves_containing_range_and_spares_sibling(
         resp = _post_action(webui, {"addsuppress": "true", "ip": target, "table": table})
         assert not looks_like_login_page(resp.text), "addsuppress POST returned the login form (session lost)"
 
-        assert not helpers.pfctl_table_test(vm, table, target), (
-            f"{target} still matches pf table {table} after addsuppress -- the live punch did not take effect"
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, target)
+        assert not matched, (
+            f"{target} still matches pf table {table} after addsuppress -- the live punch did not take "
+            f"effect; pfctl said: {raw!r}"
         )
-        assert helpers.pfctl_table_test(vm, table, sibling), (
-            f"{sibling} no longer matches pf table {table} after addsuppress -- an unrelated entry was punched"
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, sibling)
+        assert matched, (
+            f"{sibling} no longer matches pf table {table} after addsuppress -- an unrelated entry was "
+            f"punched; pfctl said: {raw!r}"
         )
         assert host_entry in _suppression_entries(vm, CFG_V6SUPPRESSION), (
             f"{host_entry} not written to v6suppression after addsuppress"
@@ -561,6 +565,84 @@ def test_addsuppress_v6_carves_containing_range_and_spares_sibling(
             vm,
             f"config_set_path('{CFG_V6SUPPRESSION}', '{original}');\n"
             "write_config('pfBlockerNG smoke: restore v6suppression');\n"
+            "echo 'OK';",
+        )
+        helpers.reset(vm)
+
+
+def test_addsuppress_v4_already_covered_by_broader_entry_skips_duplicate(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """The "+" recognises a host already covered by a BROADER manual entry (ADR-53 review H6).
+
+    Before this fix, the addsuppress dedup only matched an EXACT host_line --
+    a host already covered by a wider existing entry (e.g. a /20 added earlier
+    by hand) still got its own redundant '/32' appended. Given a broader
+    v4suppression entry already covering the target (seeded directly, as a
+    prior manual "+"/edit would leave it -- NOT the exact host, so an
+    exact-match-only dedup would miss it): clicking "+" must (1) leave
+    v4suppression WITHOUT a new exact host_line for the target -- only the
+    pre-existing broader entry remains; (2) surface the "already covered by an
+    existing ... Suppression entry" savemsg; (3) still perform the live
+    pf-table punch (unconditional, unaffected by this dedup check).
+    """
+    vm = smoke_vm
+    target = "198.18.9.20"  # inside the broader /20 below
+    broader_entry = "198.18.0.0/20"
+    sibling = "198.19.60.6"  # a SEPARATE feed entry, outside the /20
+
+    feed_url = helpers.write_local_feed(vm, "ui_punch4_covered.txt", f"198.18.0.0/16\n{sibling}\n")
+    spec = helpers.IpCase(aliasname="uipunch4cov", feed_url=feed_url, header="uipunch4cov")
+    table = spec.alias
+    original = helpers.config_get(vm, CFG_V4SUPPRESSION)
+
+    helpers.inject(vm, spec)
+    helpers.reload(vm, "updateip")
+    try:
+        # GIVEN: a broader manual suppression entry already covers the target
+        # -- seeded directly via config (mirroring a prior manual "+"/edit),
+        # NOT the exact host, so an exact-match-only dedup would miss it.
+        broader_b64 = base64.b64encode(f"{broader_entry}\r\n".encode()).decode()
+        helpers.php_eval(
+            vm,
+            f"config_set_path('{CFG_V4SUPPRESSION}', '{broader_b64}');\n"
+            "write_config('pfBlockerNG smoke: seed broader v4suppression entry');\n"
+            "echo 'OK';",
+        )
+
+        # BEFORE: the target still matches the live table (the broader
+        # suppression entry is config-only until this point -- no reload ran
+        # since it was seeded).
+        members = helpers.wait_pfctl_table(vm, table)
+        assert members, f"pf table {table} never populated after the settling update"
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, target)
+        assert matched, (
+            f"{target} expected to match pf table {table} before the covered-host addsuppress; pfctl said: {raw!r}"
+        )
+
+        # WHEN: click "+" on the target -- already covered by the broader /20.
+        resp = _post_action(webui, {"addsuppress": "true", "ip": target, "table": table})
+        assert not looks_like_login_page(resp.text), "addsuppress POST returned the login form (session lost)"
+
+        # THEN: no redundant exact-host entry was appended -- only the
+        # pre-existing broader entry remains in v4suppression.
+        entries = _suppression_entries(vm, CFG_V4SUPPRESSION)
+        assert entries == {broader_entry}, (
+            f"expected v4suppression to still hold ONLY the broader entry {broader_entry!r} (no redundant "
+            f"{target}/32 appended); got {entries}"
+        )
+
+        # THEN: the savemsg names the "already covered" case, not "added".
+        assert "already covered by an existing" in resp.text, (
+            "expected the 'already covered by an existing ... Suppression entry' savemsg after a "
+            "covered-host addsuppress POST; response body did not contain it"
+        )
+    finally:
+        helpers.php_eval(
+            vm,
+            f"config_set_path('{CFG_V4SUPPRESSION}', '{original}');\n"
+            "write_config('pfBlockerNG smoke: restore v4suppression');\n"
             "echo 'OK';",
         )
         helpers.reset(vm)

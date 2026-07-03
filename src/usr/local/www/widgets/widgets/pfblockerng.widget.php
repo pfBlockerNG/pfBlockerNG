@@ -686,10 +686,14 @@ function pfBlockerNG_get_header($mode='') {
 
 	// Collect folder/file counts
 	$stats = array();
+	// ADR-53 review finding B: '?? ""' -- absent from config.xml until the
+	// IP-settings page's first post-upgrade save. Precomputed (complex '{$...}'
+	// string interpolation does not support the '??' operator).
+	$v4supp_val  = $pfb['ipconfig']['v4suppression'] ?? '';
 	$widget_head = 	array ( array (	'Deny'		=> '',
 					'Pass'		=> '',
 					'Match'		=> '',
-					'Suppression'	=> "{$pfb['ipconfig']['v4suppression']}"),
+					'Suppression'	=> "{$v4supp_val}"),
 
 				array (	'DNSBL'		=> '',
 					'Queries'	=> '',
@@ -722,7 +726,9 @@ function pfBlockerNG_get_header($mode='') {
 				// Alerts "+" writes v6 entries as well, so the widget stat reflects
 				// the TOTAL suppressed-host count across both families.
 				if ($type == 'Suppression') {
-					foreach (pfbng_text_area_decode($pfb['ipconfig']['v6suppression'], TRUE, FALSE, TRUE) as $cline) {
+					// ADR-53 review finding B: '?? ""' -- same absent-key guard
+					// as the v4 read above.
+					foreach (pfbng_text_area_decode($pfb['ipconfig']['v6suppression'] ?? '', TRUE, FALSE, TRUE) as $cline) {
 						if (!str_starts_with(trim($cline), '#') && !empty($cline)) {
 							$gcount++;
 						}

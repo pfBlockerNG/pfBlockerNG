@@ -2889,6 +2889,11 @@ function pfb_suppress_file_v6(string $file, string $suppfile): bool
 	$tmp  = $file . '.tmp';
 	$body = empty($result) ? '' : implode(PHP_EOL, $result) . PHP_EOL;
 	if (@file_put_contents($tmp, $body, LOCK_EX) === FALSE) {
+		// ADR-53 review finding H1: a failed write can still leave a stray
+		// (empty/partial, or pre-existing debris from a prior crashed run) file
+		// at $tmp -- unlink it on this branch too, matching the rename-failure
+		// branch below.
+		@unlink($tmp);
 		return FALSE;
 	}
 	if (!@rename($tmp, $file)) {

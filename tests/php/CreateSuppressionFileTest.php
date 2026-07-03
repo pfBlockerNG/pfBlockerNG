@@ -98,4 +98,61 @@ final class CreateSuppressionFileTest extends TestCase
 		$this->assertSame("10.0.0.1/32\n", file_get_contents($GLOBALS['pfb']['supptxt']), 'v4 file must hold only the v4 entry');
 		$this->assertSame("2001:db8::1/128\n", file_get_contents($GLOBALS['pfb']['supptxt_v6']), 'v6 file must hold only the v6 entry');
 	}
+
+	// --- ADR-53 adversarial-review finding B: the key ABSENT (not merely '') ---
+	//
+	// setUp() always seeds ['v4suppression' => '', 'v6suppression' => ''] --
+	// this masks a real PHP8 "undefined array key" warning that fires on every
+	// install whose config predates a save of these keys (v6suppression is
+	// NEVER install-migrated; v4suppression only migrates when a legacy
+	// pfBlockerNGSuppress alias existed). PHPUnit does not fail a test merely
+	// for triggering a PHP warning (verified: a bare `$arr['missing']` read
+	// reports "OK, but there were issues!" with exit 0, not a failure) -- these
+	// tests install their own error handler and assert zero warnings were
+	// raised, so the fix is actually enforced.
+
+	private function assertNoWarningsDuring(callable $fn, string $message): void
+	{
+		$warnings = [];
+		set_error_handler(static function (int $errno, string $errstr) use (&$warnings): bool {
+			$warnings[] = $errstr;
+			return true; // swallow -- we assert on the collected list instead
+		}, E_WARNING);
+
+		try {
+			$fn();
+		} finally {
+			restore_error_handler();
+		}
+
+		$this->assertSame([], $warnings, $message . '; got: ' . var_export($warnings, TRUE));
+	}
+
+	public function testV4SuppressionKeyAbsentDoesNotWarn(): void
+	{
+		// The key is literally UNSET, not ''.
+		unset($GLOBALS['pfb']['ipconfig']['v4suppression']);
+
+		$this->assertNoWarningsDuring(
+			static function (): void {
+				pfb_create_suppression_file();
+			},
+			'pfb_create_suppression_file() must not emit a PHP8 "undefined array key" warning '
+				. 'when v4suppression is absent from config (every install until its first save)'
+		);
+	}
+
+	public function testV6SuppressionKeyAbsentDoesNotWarn(): void
+	{
+		unset($GLOBALS['pfb']['ipconfig']['v6suppression']);
+
+		$this->assertNoWarningsDuring(
+			static function (): void {
+				pfb_create_suppression_file();
+			},
+			'pfb_create_suppression_file() must not emit a PHP8 "undefined array key" warning '
+				. 'when v6suppression is absent from config (never install-migrated, so absent '
+				. 'on every install until the IP-settings page is saved once post-upgrade)'
+		);
+	}
 }

@@ -45,7 +45,24 @@ Describe 'suppress() (ADR-53 Phase 1 oracle)'
   have_iprange() { [ -n "$(pfb_real_iprange)" ]; }
   # `Skip if` runs its condition as a simple command -- a leading `!` is not
   # a command in POSIX sh, so wrap the negation in a function.
-  no_iprange() { ! have_iprange; }
+  #
+  # Hardened (adversarial-review item E on PR #768): GitHub Actions sets
+  # CI=true and test.yml installs the real iprange binary for these specs --
+  # a silent skip there would be coverage theater (the install step broke and
+  # nothing would notice). In CI, refuse to skip: if the real binary is truly
+  # absent, let the example run and FAIL against the empty pathaggregate (the
+  # stderr line below explains why) rather than silently reporting green-via-
+  # skip. Locally (CI unset) the skip stays legitimate -- the house "missing
+  # tool = skip, CI is the hard gate" pattern is unchanged there.
+  no_iprange() {
+    have_iprange && return 1
+    if [ -n "${CI:-}" ]; then
+      echo 'FATAL (adversarial-review item E): real iprange binary not found on PATH in CI;' \
+        'refusing to silently skip -- test.yml is supposed to install it (ADR-53 §1.2)' >&2
+      return 1
+    fi
+    return 0
+  }
 
   # ---- iprange stub (address-equality) ----
   # Fake `<shim> <haystack-file> --except <except-file>` (iprange's own CLI
@@ -458,6 +475,105 @@ SHIM
       The status should be success
       The contents of file "${member}" should equal ''
       The contents of file "${errorlog}" should equal ''
+    End
+  End
+
+  Describe 'k — member-file pre-filter is ONE grep -E pass (adversarial-review item C on PR #768)'
+    setup() {
+      work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pfbsuppk.XXXXXX")"
+      max="${work}"
+      alias='TestList_v4'
+      pfbsuppression="${work}/suppression.txt"
+      printf '203.0.113.99/32\n' > "${pfbsuppression}"
+      tempfile="${work}/t1"; tempfile2="${work}/t2"; dupfile="${work}/t3"; dedupfile="${work}/t4"
+      masterfile="${work}/master"; mastercat="${work}/mastercat"
+      : > "${masterfile}"
+      dedup='off'
+      errorlog="${work}/error.log"; : > "${errorlog}"
+      pathaggregate="${work}/iprange"
+      # Identity shim (echoes the haystack -- here the pre-filtered member
+      # file -- back unchanged): isolates the member-file grep pre-filter
+      # itself, not iprange's own carve math (that's cases c/d/j above).
+      write_pathaggregate_identity_shim "${pathaggregate}"
+      member="${work}/${alias}.txt"
+      # One valid IPv4 host + one malformed (hostname-shaped) line. The
+      # member file is normally already-sanitised feed data -- the pre-filter
+      # is defense-in-depth against exactly this shape ever reaching iprange
+      # (which would silently DNS-resolve it as a hostname, ADR-53 §1.2).
+      printf '203.0.113.5\nevil.example.com\n' > "${member}"
+    }
+    cleanup() { rm -rf "${work}"; }
+    Before 'setup'
+    After 'cleanup'
+
+    It 'drops the malformed line, keeps the valid line, and logs ONE summary line (replacing the old while-read loop)'
+      When call silently suppress
+      The status should be success
+      # The filtered scratch file (what iprange actually sees) holds only the
+      # valid entry -- proving the grep pass, not just the published result.
+      The contents of file "${dedupfile}" should equal '203.0.113.5'
+      The contents of file "${dedupfile}" should not include 'evil.example.com'
+      # The identity shim echoes the haystack back unchanged, so the
+      # published member file mirrors the filtered scratch file exactly.
+      The contents of file "${member}" should equal '203.0.113.5'
+      The contents of file "${errorlog}" should include 'dropped 1 malformed member-file line'
+    End
+  End
+
+  Describe 'l — iprange binary missing entirely: the executable guard fails safe (adversarial-review item D on PR #768)'
+    setup() {
+      work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pfbsuppl.XXXXXX")"
+      max="${work}"
+      alias='TestList_v4'
+      pfbsuppression="${work}/suppression.txt"
+      printf '203.0.113.7/32\n' > "${pfbsuppression}"
+      tempfile="${work}/t1"; tempfile2="${work}/t2"; dupfile="${work}/t3"; dedupfile="${work}/t4"
+      masterfile="${work}/master"; mastercat="${work}/mastercat"
+      : > "${masterfile}"
+      dedup='off'
+      errorlog="${work}/error.log"; : > "${errorlog}"
+      # A path that does not exist at all -- `[ ! -x "${pathaggregate}" ]`
+      # (pfblockerng.sh's suppress()) must fire before ANY of the pre-filter
+      # or iprange machinery runs. No coverage existed for this guard before
+      # this ADR's shellspec suite.
+      pathaggregate="${work}/does-not-exist-iprange"
+      member="${work}/${alias}.txt"
+      printf '203.0.113.5\n203.0.113.7\n203.0.113.9\n' > "${member}"
+    }
+    cleanup() { rm -rf "${work}"; }
+    Before 'setup'
+    After 'cleanup'
+
+    It 'returns early: member file byte-identical, "Not found" error logged'
+      When call silently suppress
+      The status should be success
+      The contents of file "${member}" should equal "$(printf '203.0.113.5\n203.0.113.7\n203.0.113.9')"
+      The contents of file "${errorlog}" should include 'Not found'
+    End
+  End
+
+  Describe 'm — no_iprange CI-hardening (adversarial-review item E on PR #768): a broken CI install FAILS, never silently skips'
+    # Force the "no real iprange reachable" condition via a local override of
+    # have_iprange() -- NOT by scrubbing PATH, which would also break
+    # shellspec's own use of coreutils (sed et al.) mid-example. Proves the
+    # CI-vs-local discrimination itself, independent of whatever is actually
+    # installed on the host running this suite (CI included, where the real
+    # binary is normally present).
+    setup() { have_iprange() { return 1; }; }
+    Before 'setup'
+
+    It 'does NOT skip when CI is set and no real iprange is reachable -- fails loudly instead'
+      CI='true'
+      When call no_iprange
+      unset CI
+      The status should be failure
+      The stderr should include 'FATAL'
+    End
+
+    It 'still skips locally (CI unset) when no real iprange is reachable -- unchanged house pattern'
+      unset CI
+      When call no_iprange
+      The status should be success
     End
   End
 End

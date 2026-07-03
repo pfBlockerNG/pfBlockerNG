@@ -799,7 +799,11 @@ if (isset($_POST) && !empty($_POST)) {
 		$scan_tmp	= NULL;
 		if ($scan_file === NULL) {
 			$scan_tmp = tempnam($pfb['dbdir'], 'pfb_punch_');
-			exec("{$pfb['pfctl']} -t {$table_esc} -T show > " . escapeshellarg($scan_tmp) . ' 2>&1');
+			// ADR-53 review finding H4: stderr -> /dev/null, NOT 2>&1 -- the
+			// capture file is parsed line-by-line as membership entries below;
+			// merging stderr into it would feed any pfctl diagnostic line into
+			// that parse as if it were a table member.
+			exec("{$pfb['pfctl']} -t {$table_esc} -T show > " . escapeshellarg($scan_tmp) . ' 2>/dev/null');
 			$scan_file = $scan_tmp;
 		}
 		$table_entries = array();
@@ -845,17 +849,30 @@ if (isset($_POST) && !empty($_POST)) {
 		// Save the host to the correct-family Suppression List (bare-host dedup
 		// unchanged UX from the original v4-only code -- the "+" always
 		// suppresses the exact reported host, never the whole containing entry).
-		$pfbupdate = FALSE;
+		$pfbupdate        = FALSE;
+		$refresh_suppfile = FALSE;
 		if (isset($clists[$supp_key]['data'][$host_line])) {
 			$savemsg = gettext("Host IP address {$ip} already exists in the IPv{$family} Suppression customlist.");
+		} elseif (pfb_ip_suppressed($ip, array_keys($clists[$supp_key]['data']))) {
+			// ADR-53 review finding H6: the old flow also recognised a host
+			// already covered by a BROADER manual suppression entry (e.g. a
+			// /24 already covers this /32) -- appending the exact host on top
+			// would be a redundant customlist entry. Reuses the same
+			// prefix-aware predicate killstates uses (ADR-53 P7) rather than
+			// re-deriving containment here. The live punch above already ran
+			// (unaffected by this dedup); the suppression file is still
+			// refreshed below so it reflects the covering entry.
+			$savemsg          = gettext("Host IP address {$ip} is already covered by an existing IPv{$family} Suppression entry.");
+			$refresh_suppfile = TRUE;
 		} else {
 			$supp_dat = $host_line;
 			if (!empty($descr)) {
 				$supp_dat .= " # {$descr}";
 			}
 
-			$savemsg = gettext($savemsg1) . gettext($savemsg2) . gettext(" and added to the IPv{$family} Suppression customlist.");
-			$pfbupdate = TRUE;
+			$savemsg          = gettext($savemsg1) . gettext($savemsg2) . gettext(" and added to the IPv{$family} Suppression customlist.");
+			$pfbupdate        = TRUE;
+			$refresh_suppfile = TRUE;
 		}
 
 		if ($pfbupdate) {
@@ -867,10 +884,14 @@ if (isset($_POST) && !empty($_POST)) {
 			$clists[$supp_key]['base64'] = base64_encode($data);
 			PfbConfig::write($cfg_key, $clists[$supp_key]['base64']);
 			write_config("pfBlockerNG: Added {$ip} to the IPv{$family} Suppression customlist", FALSE);
+		}
+		if ($refresh_suppfile) {
 			// pfb_create_suppression_file() reads $pfb['ipconfig'][...], a
 			// snapshot taken at pfb_global() time -- refresh it in-memory so the
-			// suppression file this request writes reflects the entry just added,
-			// not a stale pre-write snapshot.
+			// suppression file this request writes reflects either the entry
+			// just appended, or (the "already covered" branch above) the
+			// pre-existing broader entry, keeping pfbsuppression(_v6).txt in
+			// step with the live punch that already ran.
 			$pfb['ipconfig'][$cfg_key] = $clists[$supp_key]['base64'];
 			pfb_create_suppression_file();	// Refresh pfbsuppression(_v6).txt
 		}
