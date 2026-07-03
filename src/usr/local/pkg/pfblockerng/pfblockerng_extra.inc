@@ -2940,6 +2940,116 @@ function pfb_ip_suppressed(string $ip, array $entries): bool
 	return FALSE;
 }
 
+// ---------------------------------------------------------------------------
+// ADR-53 P8 -- Alerts "+" / widget live-punch plan (any mask + v6)
+// ---------------------------------------------------------------------------
+//
+// The Alerts "+" button (and the dashboard widget, which shares its stats
+// read of the same suppression config) used to punch a hole in a live pf
+// table by deleting an exact '/24' and re-adding 254 sibling hosts, refusing
+// anything "blocked by a CIDR other than /24" (ADR-53 §1.2). This replaces
+// that with the same covering-CIDR set-subtraction already proven for the
+// persisted engines (P3's v4 `iprange --except` pass, P5's v6 PHP pass):
+// locate the table entr(y/ies) that actually contain the host, delete them,
+// and re-add only the covering-CIDR remainder -- any mask, both families.
+
+/**
+ * pfb_v4_carve_single -- the covering-CIDR remainder of one IPv4 CIDR (or
+ * bare host, normalised to '/32') with a single host removed. The IPv4
+ * sibling of pfb_cidr_subtract_v6(), scoped to the one-entry/one-hole shape
+ * the live punch actually needs -- pfb_cidr_subtract_v6() stays the only
+ * general multi-hole engine (the v4 persisted engine already has its own for
+ * that, P3's `iprange --except`). A v4 range fits a plain PHP int (32 bits,
+ * ip2long32() already returns it unsigned on 64-bit PHP), so no
+ * binary-string arithmetic is needed here.
+ *
+ * PURE.
+ *
+ * @param  string $cidr    The containing table entry ('addr/bits' or bare host).
+ * @param  string $host_ip The single IPv4 host to carve out (assumed to fall
+ *                          inside $cidr -- the caller establishes containment
+ *                          via ip_in_subnet() before calling).
+ * @return string[] Covering CIDRs for $cidr minus $host_ip (empty when $cidr
+ *                    IS $host_ip -- an exact host match, nothing left to add back).
+ */
+function pfb_v4_carve_single(string $cidr, string $host_ip): array
+{
+	$cidr  = str_contains($cidr, '/') ? $cidr : "{$cidr}/32";
+	[$addr, $bits] = explode('/', $cidr, 2);
+	$bits  = (int) $bits;
+	$mask  = $bits === 0 ? 0 : ((0xFFFFFFFF << (32 - $bits)) & 0xFFFFFFFF);
+	$start = ip2long32($addr) & $mask;
+	$end   = $start | ((~$mask) & 0xFFFFFFFF);
+	$hole  = ip2long32($host_ip);
+
+	$out = [];
+	if ($hole > $start) {
+		array_push($out, ...ip_range_to_subnet_array(long2ip32($start), long2ip32($hole - 1)));
+	}
+	if ($hole < $end) {
+		array_push($out, ...ip_range_to_subnet_array(long2ip32($hole + 1), long2ip32($end)));
+	}
+	return $out;
+}
+
+/**
+ * pfb_live_punch_plan -- compute the live pf-table punch for the Alerts "+"
+ * / widget suppression action (ADR-53 §2.1 fork 3): which existing table
+ * entries contain $ip (to `pfctl -T delete`) and which covering CIDRs
+ * replace them (to `pfctl -T add`) -- a genuine set-subtraction, replacing
+ * the retired /24-only 254-host re-add loop.
+ *
+ * $table_entries are raw lines from the table's membership snapshot (the
+ * ADR-40 mirror file, or a `pfctl -T show` fallback) -- bare host tokens
+ * ("1.2.3.4") or CIDR tokens ("1.2.3.0/24"), either family; blank/'#'-comment
+ * lines are tolerated (skipped). A bare host token is treated as an exact
+ * /32 or /128 -- containing ONLY itself, so punching it needs no
+ * covering-CIDR add (delete only, same as the old exact-/32-match case).
+ *
+ * PURE -- no pfctl/pf-table access; the caller supplies the already-read
+ * membership snapshot (streamed, never slurped whole -- see the alerts page
+ * call site) and applies the returned plan.
+ *
+ * @param  string   $ip             The host to carve out (v4 or v6).
+ * @param  string[] $table_entries  Raw table membership lines.
+ * @return array{delete: string[], add: string[]} 'delete' = every containing
+ *         entry to remove; 'add' = the covering-CIDR remainder to re-add
+ *         (empty when every containing entry was an exact host match).
+ */
+function pfb_live_punch_plan(string $ip, array $table_entries): array
+{
+	$delete    = [];
+	$add       = [];
+	$is_v6     = str_contains($ip, ':');
+	$host_cidr = $ip . ($is_v6 ? '/128' : '/32');
+
+	foreach ($table_entries as $entry) {
+		$entry = trim((string) $entry);
+		if ($entry === '' || str_starts_with($entry, '#')) {
+			continue;
+		}
+		$cidr = str_contains($entry, '/') ? $entry : $entry . ($is_v6 ? '/128' : '/32');
+
+		if (!ip_in_subnet($ip, $cidr)) {
+			continue;
+		}
+
+		$delete[] = $entry;
+
+		if ($cidr === $host_cidr) {
+			continue; // exact host match -- nothing to re-add
+		}
+
+		if ($is_v6) {
+			array_push($add, ...pfb_cidr_subtract_v6([$cidr], [$host_cidr]));
+		} else {
+			array_push($add, ...pfb_v4_carve_single($cidr, $ip));
+		}
+	}
+
+	return ['delete' => $delete, 'add' => $add];
+}
+
 // logger() and localize_text() are pfSense-core helpers (src/etc/inc/util.inc)
 // on pfSense Plus / master, but absent from released pfSense CE <= 2.8.1. Define
 // fallbacks ONLY when core does not provide them, so this package runs on both:

@@ -1,0 +1,274 @@
+ADR-53 Phase 8 -- Alerts "+" / widget live-punch (any mask + v6)
+====================================================================
+
+STATUS: Done. The Alerts "+" (addsuppress) live-punch is now a genuine
+set-subtraction, any mask, both families -- the retired /24-only 254-host
+re-add loop and the "blocked by a CIDR other than /24" refusal are gone.
+
+Helper -- signature and home
+-----------------------------
+`pfb_live_punch_plan(string $ip, array $table_entries): array` in
+pfblockerng_extra.inc (src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc,
+new "ADR-53 P8" section right after Phase 7's pfb_ip_suppressed()). PURE: no
+pfctl/pf-table access -- the caller supplies the already-read membership
+snapshot.
+
+Returns `['delete' => [...containing entries...], 'add' => [...covering
+CIDRs...]]`. For each raw table-membership line: normalise a bare host to
+'/32'/'/128' by family, test containment via `ip_in_subnet($ip, $cidr)`
+(reused as-is, same family-safe primitive P7 already vendored), and on a hit:
+mark the entry for deletion, then compute the covering-CIDR remainder --
+v6 via a direct call to Phase 5's `pfb_cidr_subtract_v6([$cidr], [$host_cidr])`
+(reused, not reinvented -- exactly what the phase brief asked for), v4 via a
+new small sibling `pfb_v4_carve_single(string $cidr, string $host_ip): array`
+(pfblockerng_extra.inc, same file). An exact host match (`$cidr === $host_cidr`)
+short-circuits to delete-only, no re-add -- mirrors the old /32-exact-hit case.
+
+pfb_v4_carve_single() is deliberately NOT the general multi-hole engine
+pfb_cidr_subtract_v6() is: the live punch only ever needs one entry minus one
+host, so it walks plain PHP ints (`ip2long32()`/`long2ip32()`, both already
+real pfSense functions -- ip2long32 already had a faithful double from Phase 5;
+long2ip32 did not, so I added one to tests/php/pfsense_doubles.php, verified
+BYTE-IDENTICAL against the SAME three dated refs already cited for
+ip_range_to_subnet_array (CE 2.8.0 ed6c2eb8..., CE 2.8.1 97f9eb5c...,
+master tip 9363ac5b... -- fetched fresh from the public pfsense/pfsense mirror
+this session, not reused from memory). Never shells out to iprange for the
+one-entry carve, per the phase brief.
+
+Widget finding (verify-first, per the brief)
+---------------------------------------------
+The widget (src/usr/local/www/widgets/widgets/pfblockerng.widget.php) has NO
+separate addsuppress form/JS of its own -- grepped for `addsuppress`,
+`PFBIPSUP`, `ip_suppression`, `.dialog(` and found none. It only reads the
+v4suppression blob's line count for its "Suppression" stats tile
+(`pfBlockerNG_get_header()`, the `Suppression`/`Whitelist` stats branch).
+That count was v4-only; since the "+" now writes v4 OR v6 depending on the
+reported host's family, the widget stat would silently undercount v6 adds.
+Fixed with a 12-line addition (fold in `pfbng_text_area_decode($pfb['ipconfig']
+['v6suppression'], ...)` into the same `$gcount` when `$type == 'Suppression'`)
+-- no separate suppress flow to rework, exactly as the brief anticipated
+("if it posts to the alerts page, one fix covers both").
+
+Mirror-vs-pfctl fallback (pfblockerng_alerts.php addsuppress block)
+----------------------------------------------------------------------
+`$mirror = "{$pfb['aliasdir']}/{$table}.txt"` (ADR-40 last-applied mirror);
+`is_readable($mirror)` selects it, else `tempnam($pfb['dbdir'], 'pfb_punch_')`
++ `exec("pfctl -t <table> -T show > <tmp> 2>&1")` (output-to-file, not a
+captured pipe -- the established idiom this codebase already uses for
+`pfctl -s state`, per CLAUDE.md's external-process-waits guidance) + the tmp
+file is unlinked after the scan. BOTH paths are then read identically via
+`fopen()`/`fgets()` line-by-line into `$table_entries` -- never `file()`,
+never slurped whole (a Deny mirror can be millions of lines). Every token
+reaching `exec()` (the table name, the tmp path, every delete/add CIDR) is
+`escapeshellarg()`'d.
+
+The rewritten flow (accepts v4 AND v6, any mask)
+---------------------------------------------------
+1. `pfb_filter($_POST['ip'], PFB_FILTER_IP, ...)` (was `PFB_FILTER_IPV4` --
+   `PFB_FILTER_IP` (constant 9, `is_ipaddr()`) validates either family).
+2. Family detected via `strpos($ip, ':')`.
+3. Read table membership (mirror/pfctl fallback above) -> `pfb_live_punch_plan()`.
+4. `pfctl -T delete` every containing entry, `pfctl -T add` every covering CIDR.
+5. Write the EXACT host (`ip/32` or `ip/128`, never a chosen network) to the
+   correct-family customlist (`ipsuppression`/`v4suppression` or
+   `ipsuppression_v6`/`v6suppression`), preserving the existing "already
+   exists" dedup shape and the description-comment suffix.
+6. `pfb_create_suppression_file()` refreshes `pfbsuppression(_v6).txt`.
+
+BEHAVIOUR-CHANGE CALL (flagging for the record, per CLAUDE.md ambiguity
+discipline -- made the reasoned default rather than blocking on it): the
+OLD `/32` branch REFUSED (no config write) when neither an exact bare host
+nor an exact `/24` line was found; the OLD `/24` branch, chosen explicitly,
+ALWAYS wrote the config regardless of live match. The ADR text ("Alerts '+'
+keeps immediate effect (live table punch + config write + suppression-file
+refresh)", §2.2) reads as an unconditional list of three effects, and since
+there is no longer a mask CHOICE to gate on, I generalised to the more
+permissive existing behaviour: an empty plan (nothing currently matches
+live) is INFORMATIONAL, never a refusal -- the customlist write always
+proceeds (suppression is a standing exemption for future loads, not
+contingent on today's live snapshot). This is why
+`test_addsuppress_writes_exact_host_and_invalid_ip_rejected` explicitly
+covers "valid IP, no live match, still writes" as an ACCEPT case, replacing
+the old `test_addsuppress_cidr24_writes_and_invalid_ip_rejected` (which
+encoded the retired {ip}/24-network-write shape).
+
+$pfb['ipconfig'][$cfg_key] snapshot-staleness fix (incidental, in-scope)
+----------------------------------------------------------------------------
+`pfb_create_suppression_file()` reads `$pfb['ipconfig'][...]`, a value
+snapshot taken once at `pfb_global()` time (`config_get_path()` returns by
+value, confirmed via the doubles). The pre-existing v4-only code called
+`PfbConfig::write()` then `pfb_create_suppression_file()` in the SAME
+request without ever refreshing that snapshot -- a latent staleness bug
+(the just-written entry wouldn't reach `pfbsuppression.txt` until some LATER
+request). Since my new code depends on this refresh actually working (both
+families, and it is the phase's own explicit "refresh suppression files"
+requirement), I added one line -- `$pfb['ipconfig'][$cfg_key] =
+$clists[$supp_key]['base64'];` -- immediately before the call. Minimal,
+strictly corrective, in-scope (my own new code path depends on it), and
+incidentally fixes the same latent gap for the v4 path too.
+
+JS simplification (in-scope cleanup, not gold-plating)
+----------------------------------------------------------
+The old `/32` vs `/24` "Select Suppression Mask" jQuery-UI dialog
+(`ip_suppression_type()`) is now meaningless -- the backend never reads a
+chosen mask. Replaced with a direct call to `ip_suppression()` once the
+suppression-enabled check passes (dropped a dead `$(this).dialog('close')`
+call in the disabled branch too, which would have targeted a
+never-initialised dialog). The now-unused hidden `#cidr` `Form_Input` and its
+`cidr.value` gate in `ip_suppression()` are deleted. No other JS/markup
+touched; the redirect/savemsg mechanics are byte-identical in shape.
+
+Doubles
+-------
+One new double: `long2ip32()` in tests/php/pfsense_doubles.php (see above --
+verified against the real pfSense source, not guessed). `ip2long32()`,
+`ip_range_to_subnet_array()`, `ip_in_subnet()`, `pfb_cidr_subtract_v6()` are
+all reused as-is from Phases 5/7.
+
+Tests FIRST (red->green) -- the punch-plan helper
+------------------------------------------------------
+tests/php/LivePunchPlanTest.php (NEW, 8 tests, 94 assertions):
+- v4 `/16` containing entry -> delete=[the /16], add = 16 covering CIDRs
+  (cross-checked against ADR-53 §1.2's own measured bound, not guessed --
+  verified with a throwaway `php -r` script against the real implementation
+  before committing to the assertion).
+- v4 bare host entry -> delete=[ip], add=[] (exact match).
+- v4 exact `/24` entry -> 8 covering CIDRs (matches §1.2's measured bound;
+  proves the NEW mechanism reproduces the OLD /24 case's cost, never the
+  254-host shape).
+- v6 `/64` containing entry -> 64 covering CIDRs (v6 had NO live-punch path
+  at all before this phase).
+- IP in no entry -> both empty.
+- Multiple containing entries (a `/24` AND the exact `/32` both matching) ->
+  every one punched, not just the first.
+- A sibling entry entirely outside the hole is left out of the plan.
+- Blank/comment lines in the table snapshot are tolerated.
+
+Red proof: `pfb_live_punch_plan()` did not exist pre-Phase-8, so ALL 8 tests
+fail with "Call to undefined function pfb_live_punch_plan()" against the
+pre-change code (verified via `git stash` of the two src/ files +
+pfsense_doubles.php, rerunning the filtered suite -- 8 errors, exact reason),
+and pass once the helper (+ its v4 carve sibling + the long2ip32 double)
+land.
+
+No PHPUnit coverage of the actual www-page wiring itself: pfblockerng_alerts.php
+calls `header()`/`exit()` directly in this branch, which is not safely
+invokable under PHPUnit (a real `exit()` would terminate the test runner) --
+consistent with how every OTHER www-page action in this file is covered
+(Tier A/B live-VM, never PHPUnit). The wiring is proven by the Tier B e2e
+below (dispatch-only; not run from this session per the orchestrator's
+UI-tier note).
+
+Tier A / Tier B status
+-----------------------
+Tier A: no change needed -- the Alerts page marker ("Alert Settings",
+tests/smoke/ui/test_render_smoke.py) and the render gate are untouched by
+this diff (no new/removed visible markup, only a hidden input + JS).
+
+Tier B (tests/smoke/ui/test_alerts.py), REQUIRED per CLAUDE.md (multi-step
+flow + a new capability observable only in Tier B):
+1. `test_addsuppress_writes_exact_host_and_invalid_ip_rejected` (rewrite of
+   the retired `test_addsuppress_cidr24_writes_and_invalid_ip_rejected`,
+   which encoded the old `{ip}/24`-network-write shape and the now-removed
+   `cidr` POST field -- updated, not just left stale): invalid-IP reject
+   (config unchanged) + valid IP with no live table match still writes the
+   exact `ip/32` host (proves the old refusal is gone AND the new
+   always-write-exact-host semantics).
+2. `test_addsuppress_v4_carves_containing_range_and_spares_sibling` (NEW,
+   the ADR's headline scenario): injects a local IPv4 feed listing an RFC
+   2544 benchmarking `/16` (`198.18.0.0/16` -- per the ADR's Phase 9 fixture
+   guidance, "RFC 2544 / RFC 3849 -- never RFC 1918") plus a separate
+   sibling entry, force-updates it, asserts the BEFORE-state (both target
+   and sibling match the live table via the new `helpers.pfctl_table_test()`
+   -- pf's own longest-prefix membership check, added to tests/smoke/helpers.py
+   since no existing helper did `-T test`, only `-T show`), drives the "+"
+   for the target only, then asserts: target no longer matches (any mask,
+   genuine carve, not a refusal), sibling still matches (an unrelated feed
+   entry untouched), and `v4suppression` gained the exact `ip/32` line.
+3. `test_addsuppress_v6_carves_containing_range_and_spares_sibling` (NEW):
+   the same shape over an RFC 3849 `/64` (`2001:db8:18:1::/64`) and
+   `v6suppression` -- v6 had NO live-punch capability before this phase at
+   all, so this is a pure new-capability case, not a regression guard.
+
+New helper: `helpers.pfctl_table_test(vm, alias, ip)` in tests/smoke/helpers.py
+(`pfctl -t <alias> -T test <ip>`, checks stdout for "1/1 addresses match.") --
+the authoritative "is this address COVERED by the table" oracle; the
+existing `pfctl_table_members()` (an exact-token list) cannot answer this
+once a containing entry has been carved into covering CIDRs.
+
+Collection proof (per the orchestrator's UI-tier note -- no live box driven
+from this session):
+    .venv/bin/python -m pytest tests/smoke/ui --collect-only -q
+    -> 188 tests collected, including the 3 addsuppress tests by name
+       (verified via a targeted collect-only grep).
+Live runs ride Phase 9's CE+Plus fan-out.
+
+Gate results (exact counts)
+----------------------------
+- vendor/bin/phpunit -> 1936 tests, 15901 assertions, 1 failure, 4 skipped --
+  the exact documented environmental baseline (IpAddrDoublesTest::
+  testIsIpaddrv4 "leading-zero octets", macOS inet_pton). Count = P7's 1928 +
+  8 new (LivePunchPlanTest).
+  New/changed filter alone: `--filter 'LivePunchPlanTest|KillstatesSuppressionTest'`
+  -> 19 tests, 105 assertions, 0 failures.
+- Red proof: `git stash push -- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+  tests/php/pfsense_doubles.php` (keeping LivePunchPlanTest.php in place),
+  rerun `--filter LivePunchPlanTest` -> 8 errors ("Call to undefined function
+  pfb_live_punch_plan()"). `git stash pop` restored the fix; rerun -> 8/8 green.
+- php -l on every touched/new PHP file -> clean (pre-existing unrelated
+  E_DEPRECATED notice in the widget file, untouched by this phase).
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/ -> clean, no output.
+- vendor/bin/phpstan --memory-limit=1G -> "[OK] No errors" (28/28 files).
+- .venv/bin/python -m pytest -q -> 2057 passed, 4 skipped -- byte-identical
+  to P7 (no non-smoke Python file touched; the two touched files live under
+  tests/smoke/, excluded from the default run).
+- .venv/bin/python -m py_compile on both touched tests/smoke/*.py files ->
+  clean; .venv/bin/python -m mypy tests/ -> "Success: no issues found in 62
+  source files".
+- .venv/bin/ruff check . -> "All checks passed!"; ruff format --check . ->
+  "160 files already formatted" (both touched smoke files individually
+  re-checked clean too).
+- shellspec (full suite) -> 259 examples, 0 failures, 8 skips -- byte-identical
+  to the P3-P7 baseline (no shell touched this phase).
+- tests/smoke/ui --collect-only -> 188 tests collected, 0 errors.
+
+Self-review (per the orchestrator's REVIEW step)
+-----------------------------------------------------
+- Every ACTION-PLAN item (1-5) done: pure punch-plan helper with red-first
+  tests; addsuppress reworked (v4+v6, mirror-then-pfctl-fallback streaming,
+  correct-family write, suppression-file refresh); widget's shared stats
+  path fixed; Tier A confirmed unaffected + Tier B written (collection-proven,
+  live deferred to Phase 9 per instruction); full gates green.
+- Every token reaching exec() is escapeshellarg()'d: the table name (once,
+  reused for every pfctl call), the tmp-file path, every delete/add CIDR/entry.
+  Confirmed by diff read -- no bare interpolation of a POST-derived or
+  plan-derived value into any exec() string.
+- The 254-host loop (`for ($k=0; $k <= 255; ...)` / `for ($j=0; $j <= 255;
+  ...)`) and the `/24`-only refusal ("blocked by a CIDR other than /24") are
+  GONE -- confirmed by grep across src/ (only comment-text mentions of the
+  retired behaviour remain, in my own explanatory comments).
+- Scope clean: `git diff --stat` touches exactly pfblockerng_extra.inc,
+  pfblockerng_alerts.php, the widget, pfsense_doubles.php, tests/smoke/helpers.py,
+  tests/smoke/ui/test_alerts.py, and 1 new PHP test file -- no ADR.md edit,
+  no other ADR's files, no killstates/config-gateway files (Phases 2/7,
+  already landed and untouched here).
+- Read-side unaffected: the alerts TABLE VIEW rendering (log parsing,
+  convert_ip_log/convert_dnsbl_log, stats charts) was not touched -- only the
+  `addsuppress` POST branch, the widget's Suppression stat COUNT (a write
+  side of the same feature, per the phase brief), and the JS mask-choice
+  dialog this ADR retires.
+
+Go-ahead for Phase 9 (smoke, docs, DoD)
+------------------------------------------
+Phase 8 is complete and green (PHPUnit incl. red->green proof, PHPCS,
+PHPStan, pytest, mypy, ruff, shellspec, Tier A/B collection). The
+`pfb_live_punch_plan()`/`pfb_v4_carve_single()` engine + the reworked
+addsuppress flow are ready for Phase 9's live-VM fan-out, which should run:
+  - `tests/smoke/ui/test_alerts.py::test_addsuppress_writes_exact_host_and_invalid_ip_rejected`
+  - `tests/smoke/ui/test_alerts.py::test_addsuppress_v4_carves_containing_range_and_spares_sibling`
+  - `tests/smoke/ui/test_alerts.py::test_addsuppress_v6_carves_containing_range_and_spares_sibling`
+  - the full `tests/smoke/ui -m ui_render` Tier A pass over the Alerts page
+    (unaffected marker, but re-confirm live)
+  - Phase 9's own planned `tests/smoke/test_smoke_suppression.py` (the
+    persisted-engine live leg, separate from this phase's live-punch leg)
+No Alerts/widget work remains outstanding from this ADR's action plan.

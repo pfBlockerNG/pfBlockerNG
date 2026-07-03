@@ -52,6 +52,7 @@ ALERTS_PAGE = "/pfblockerng/pfblockerng_alerts.php"
 CFG_SUPPRESSION = "installedpackages/pfblockerngdnsblsettings/config/0/suppression"
 CFG_TLDEXCLUSION = "installedpackages/pfblockerngdnsblsettings/config/0/tldexclusion"
 CFG_V4SUPPRESSION = "installedpackages/pfblockerngipsettings/config/0/v4suppression"
+CFG_V6SUPPRESSION = "installedpackages/pfblockerngipsettings/config/0/v6suppression"
 
 
 def _csrf(webui: WebUI) -> str:
@@ -350,65 +351,68 @@ def test_addwhitelistdom_exclude_writes_tld_exclusion_and_entry_delete_removes_i
 
 
 # --------------------------------------------------------------------------- #
-# addsuppress (alerts.php:741): add an IPv4 /32 or /24 to the IPv4 Suppression
-# customlist (``v4suppression`` node). Validator: a valid IPv4 + cidr in {32,24} +
-# a non-empty table word, else it exits with a savemsg and writes NOTHING.
+# addsuppress (alerts.php addsuppress branch): carve a host (v4 or v6, ANY
+# containing mask) out of whichever live pf table entry blocks it, and add the
+# EXACT host to the correct-family Suppression customlist (ADR-53 §2.1 fork 3 --
+# full rework). Validator: a valid IP (either family) + a non-empty table word,
+# else it exits with a savemsg and writes NOTHING. The retired mechanism only
+# understood a bare host or an EXACT /24 network and refused every other
+# containing mask ("blocked by a CIDR other than /24"); it also had no v6 path
+# at all and wrote the CHOSEN mask's network line (not the exact host) into the
+# customlist.
 #
-# We cover the cidr=24 ACCEPT (which writes the network entry to v4suppression even
-# without a live blocked IP -- the /24 branch never takes the /32 "blocked by a
-# CIDR other than /24" early exit) and an invalid-IP REJECT (config unchanged). The
-# /32 ACCEPT is NOT covered: it needs a real blocked IP in a live pf table to pass.
+# We cover: an invalid-IP REJECT (config unchanged); a valid IP with NO live
+# table match, which still writes the exact host (the customlist add is a
+# standing exemption for FUTURE loads, not contingent on today's live snapshot
+# -- ADR-53 §2.1); and, as the headline multi-step scenario, a REAL containing-
+# range carve for both families below.
 # --------------------------------------------------------------------------- #
 
 
-def test_addsuppress_cidr24_writes_and_invalid_ip_rejected(
+def test_addsuppress_writes_exact_host_and_invalid_ip_rejected(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """addsuppress accepts a valid /24 (writes config) and rejects an invalid IP.
+    """addsuppress writes the EXACT host (never a network line) and rejects a bad IP.
 
-    Branch coverage for the IPv4-suppression validator, both with the ``v4suppression``
-    config node as oracle:
+    Branch coverage for the any-mask/v4+v6 suppression validator, with
+    ``v4suppression`` as oracle:
 
-    * REJECT first (proves the node's before-value): an invalid IPv4 makes the handler
-      exit before any write -- the node is UNCHANGED.
-    * ACCEPT (cidr=24): a valid IPv4 + cidr '24' + table word writes the /24 network
-      entry (``a.b.c.0/24``) to ``v4suppression`` -- the node now contains it.
+    * REJECT first (proves the node's before-value): an invalid IPv4 makes the
+      handler exit before any write -- the node is UNCHANGED.
+    * ACCEPT with no live table match: a valid IPv4 against a table with no
+      matching entry still writes the ``ip/32`` line -- the retired mechanism's
+      "blocked by a CIDR other than /24" refusal is gone, and the ADR-53
+      rework always writes the EXACT host (never the old ``{ip}/24`` network
+      line the pre-rework code wrote for its cidr=24 choice).
 
-    The accept asserts the network entry is PRESENT where it was ABSENT, so the green
-    proves the POST caused the write. Config is restored to its original base64 value
-    in ``finally`` (the handler's pfctl calls against a non-resident table are no-ops,
-    so nothing on pf is left to clean up).
+    Config is restored to its original base64 value in ``finally`` (a
+    non-resident table's pfctl calls are no-ops, so nothing on pf needs cleanup).
     """
     vm = smoke_vm
-    # A documentation-range (RFC 5737) IPv4; its /24 network is 198.51.100.0/24.
+    # A documentation-range (RFC 5737) IPv4.
     valid_ip = "198.51.100.7"
-    network24 = "198.51.100.0/24"
+    host_entry = f"{valid_ip}/32"
     table = "pfBlockerNGsmoke"
     original = helpers.config_get(vm, CFG_V4SUPPRESSION)
     try:
         # REJECT: an invalid IPv4 -> handler exits, no write. This also pins the
-        # before-state of the config node (the network must be absent).
-        assert network24 not in _suppression_entries(vm, CFG_V4SUPPRESSION), (
-            f"{network24} already in v4suppression before the test"
+        # before-state of the config node (the host entry must be absent).
+        assert host_entry not in _suppression_entries(vm, CFG_V4SUPPRESSION), (
+            f"{host_entry} already in v4suppression before the test"
         )
-        resp = _post_action(
-            webui,
-            {"addsuppress": "Suppress", "ip": "999.999.999.999", "cidr": "32", "table": table},
-        )
+        resp = _post_action(webui, {"addsuppress": "true", "ip": "999.999.999.999", "table": table})
         assert not looks_like_login_page(resp.text), "addsuppress (invalid) POST returned the login form"
         assert helpers.config_get(vm, CFG_V4SUPPRESSION) == original, (
             "v4suppression config node changed after a REJECTED (invalid IP) addsuppress POST"
         )
 
-        # ACCEPT: a valid IPv4 with cidr 24 -> writes the /24 network entry.
-        resp = _post_action(
-            webui,
-            {"addsuppress": "Suppress", "ip": valid_ip, "cidr": "24", "table": table},
-        )
-        assert not looks_like_login_page(resp.text), "addsuppress (valid /24) POST returned the login form"
-        assert network24 in _suppression_entries(vm, CFG_V4SUPPRESSION), (
-            f"{network24} not written to v4suppression after a valid cidr=24 addsuppress POST"
+        # ACCEPT: a valid IPv4 against a table with no live match -> still writes
+        # the exact host (no mask choice exists any more; no refusal either).
+        resp = _post_action(webui, {"addsuppress": "true", "ip": valid_ip, "table": table})
+        assert not looks_like_login_page(resp.text), "addsuppress (valid, no live match) POST returned the login form"
+        assert host_entry in _suppression_entries(vm, CFG_V4SUPPRESSION), (
+            f"{host_entry} not written to v4suppression after a valid addsuppress POST"
         )
     finally:
         helpers.php_eval(
@@ -417,6 +421,149 @@ def test_addsuppress_cidr24_writes_and_invalid_ip_rejected(
             "write_config('pfBlockerNG smoke: restore v4suppression');\n"
             "echo 'OK';",
         )
+        helpers.reset(vm)
+
+
+def test_addsuppress_v4_carves_containing_range_and_spares_sibling(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """The "+" carves a host out of a containing /16 (ADR-53 §2.1 fork 3, headline case).
+
+    True multi-step transition (CLAUDE.md before/after rule): a local IPv4 feed
+    lists an RFC 2544 benchmarking ``/16`` (``198.18.0.0/16`` -- the retired
+    mechanism could only ever express an exact ``/24`` or a bare host, so this
+    mask was UNSUPPRESSIBLE before this phase) plus a separate sibling entry
+    outside it.
+
+    * SETUP: inject the feed as a Deny alias; a force IP update settles it.
+    * BEFORE: the target host AND the sibling both match the live pf table
+      (``pfctl -T test``); the target's exact-host entry is absent from
+      ``v4suppression``.
+    * WHEN: the "+" (``addsuppress``) is driven for the target host only.
+    * THEN: the target no longer matches the table (the containing ``/16`` was
+      carved into covering CIDRs and re-added minus the hole -- never a
+      254-host explosion, never the old refusal); the sibling -- a distinct
+      feed entry entirely outside the hole -- still matches; ``v4suppression``
+      gained the EXACT ``ip/32`` host line.
+
+    Teardown drops the injected list + derived pf state (``helpers.reset``) and
+    restores ``v4suppression`` to its original value.
+    """
+    vm = smoke_vm
+    target = "198.18.5.9"  # inside 198.18.0.0/16
+    sibling = "198.19.50.5"  # a SEPARATE feed entry, RFC 2544 space, outside the /16 hole
+    host_entry = f"{target}/32"
+
+    feed_url = helpers.write_local_feed(vm, "ui_punch4.txt", f"198.18.0.0/16\n{sibling}\n")
+    spec = helpers.IpCase(aliasname="uipunch4", feed_url=feed_url, header="uipunch4")
+    table = spec.alias
+    original = helpers.config_get(vm, CFG_V4SUPPRESSION)
+
+    helpers.inject(vm, spec)
+    helpers.reload(vm, "updateip")
+    try:
+        # BEFORE: the table is populated (filter_configure lands async after the
+        # CLI returns, hence the poll) and both addresses match it live.
+        members = helpers.wait_pfctl_table(vm, table)
+        assert members, f"pf table {table} never populated after the settling update"
+        assert helpers.pfctl_table_test(vm, table, target), (
+            f"{target} expected to match pf table {table} before suppression"
+        )
+        assert helpers.pfctl_table_test(vm, table, sibling), (
+            f"{sibling} expected to match pf table {table} before suppression"
+        )
+        assert host_entry not in _suppression_entries(vm, CFG_V4SUPPRESSION), (
+            f"{host_entry} already in v4suppression before the test"
+        )
+
+        # WHEN: drive the "+" for the target host against the containing-/16 table.
+        resp = _post_action(webui, {"addsuppress": "true", "ip": target, "table": table})
+        assert not looks_like_login_page(resp.text), "addsuppress POST returned the login form (session lost)"
+
+        # THEN: the target no longer matches (carved out of the /16); the
+        # sibling -- a separate feed entry entirely outside the hole -- is untouched.
+        assert not helpers.pfctl_table_test(vm, table, target), (
+            f"{target} still matches pf table {table} after addsuppress -- the live punch did not take effect"
+        )
+        assert helpers.pfctl_table_test(vm, table, sibling), (
+            f"{sibling} no longer matches pf table {table} after addsuppress -- an unrelated entry was punched"
+        )
+
+        # THEN: v4suppression gained the EXACT host -- never a 254-host
+        # explosion or the retired {ip}/24 shape, any containing mask.
+        assert host_entry in _suppression_entries(vm, CFG_V4SUPPRESSION), (
+            f"{host_entry} not written to v4suppression after addsuppress"
+        )
+    finally:
+        helpers.php_eval(
+            vm,
+            f"config_set_path('{CFG_V4SUPPRESSION}', '{original}');\n"
+            "write_config('pfBlockerNG smoke: restore v4suppression');\n"
+            "echo 'OK';",
+        )
+        helpers.reset(vm)
+
+
+def test_addsuppress_v6_carves_containing_range_and_spares_sibling(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """The "+" carves a v6 host out of a containing /64 -- v6 was NEVER punchable before.
+
+    Same multi-step shape as the v4 case above, over the ``v6suppression``
+    node: an RFC 3849 documentation ``/64`` (``2001:db8:18:1::/64``) feed plus a
+    sibling entry in a SEPARATE ``/64``. Before Phase 8, ``v6suppression`` had
+    no live-punch path at all (the retired mechanism was v4-only). BEFORE both
+    addresses match the live table; the "+" carves ONLY the target out (the
+    sibling, a distinct feed entry, is untouched); ``v6suppression`` gains the
+    exact ``ip/128`` host line. Teardown mirrors the v4 case.
+    """
+    vm = smoke_vm
+    target = "2001:db8:18:1::42"  # inside 2001:db8:18:1::/64
+    sibling = "2001:db8:18:2::9"  # a SEPARATE feed entry, a different /64, outside the hole
+    host_entry = f"{target}/128"
+
+    feed_url = helpers.write_local_feed(vm, "ui_punch6.txt", f"2001:db8:18:1::/64\n{sibling}\n")
+    spec = helpers.IpCase(aliasname="uipunch6", feed_url=feed_url, header="uipunch6", family="v6")
+    table = spec.alias
+    original = helpers.config_get(vm, CFG_V6SUPPRESSION)
+
+    helpers.inject(vm, spec)
+    helpers.reload(vm, "updateip")
+    try:
+        members = helpers.wait_pfctl_table(vm, table)
+        assert members, f"pf table {table} never populated after the settling update"
+        assert helpers.pfctl_table_test(vm, table, target), (
+            f"{target} expected to match pf table {table} before suppression"
+        )
+        assert helpers.pfctl_table_test(vm, table, sibling), (
+            f"{sibling} expected to match pf table {table} before suppression"
+        )
+        assert host_entry not in _suppression_entries(vm, CFG_V6SUPPRESSION), (
+            f"{host_entry} already in v6suppression before the test"
+        )
+
+        resp = _post_action(webui, {"addsuppress": "true", "ip": target, "table": table})
+        assert not looks_like_login_page(resp.text), "addsuppress POST returned the login form (session lost)"
+
+        assert not helpers.pfctl_table_test(vm, table, target), (
+            f"{target} still matches pf table {table} after addsuppress -- the live punch did not take effect"
+        )
+        assert helpers.pfctl_table_test(vm, table, sibling), (
+            f"{sibling} no longer matches pf table {table} after addsuppress -- an unrelated entry was punched"
+        )
+        assert host_entry in _suppression_entries(vm, CFG_V6SUPPRESSION), (
+            f"{host_entry} not written to v6suppression after addsuppress"
+        )
+    finally:
+        helpers.php_eval(
+            vm,
+            f"config_set_path('{CFG_V6SUPPRESSION}', '{original}');\n"
+            "write_config('pfBlockerNG smoke: restore v6suppression');\n"
+            "echo 'OK';",
+        )
+        helpers.reset(vm)
 
 
 # --------------------------------------------------------------------------- #

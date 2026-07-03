@@ -853,6 +853,25 @@ if (!function_exists('ip2long32')) {
 	}
 }
 
+// ADR-53 P8: pfb_v4_carve_single() (pfblockerng_extra.inc) calls the REAL
+// pfSense long2ip32() to render the gap-range endpoints it feeds into
+// ip_range_to_subnet_array() -- never redefined in production code.
+// Off-appliance it doesn't exist, so it needs a faithful double.
+//
+// Upstream body verified BYTE-IDENTICAL at the same three dated refs already
+// established for ip_range_to_subnet_array() above (src/etc/inc/util.inc;
+// CLAUDE.md "Resolve pfSense-provided PHP functions from upstream"): CE 2.8.0
+// (ed6c2eb84595aab998c3b3efaf16d226bd62c38d), CE 2.8.1
+// (97f9eb5c819fd7f0c5f232d2581e5080be1cb18a), master tip
+// (9363ac5b8651a1c7a333180425ce7719070f95f9). On 64-bit PHP (PHP_INT_SIZE ==
+// 8, our test environment and the pfSense appliance target) the 32-bit-ARM
+// branch never runs, so the double omits it and mirrors only the live path.
+if (!function_exists('long2ip32')) {
+	function long2ip32($ip) {
+		return long2ip($ip & 0xFFFFFFFF);
+	}
+}
+
 if (!function_exists('find_interface_subnet')) {
 	// pfSense interfaces.inc: returns the IPv4 prefix-length (as a string) for the
 	// REAL interface name (i.e. after get_real_interface() has resolved it).

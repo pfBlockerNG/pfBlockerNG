@@ -3722,6 +3722,21 @@ def pfctl_table_members(vm: SmokeVM, alias: str, *, timeout: float = 30.0) -> li
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
+def pfctl_table_test(vm: SmokeVM, alias: str, ip: str, *, timeout: float = 30.0) -> bool:
+    """True iff ``ip`` matches an entry in pf table ``alias`` (``pfctl -t <alias> -T test <ip>``).
+
+    Unlike :func:`pfctl_table_members` (an exact-token list -- useless once a
+    containing entry has been carved into covering CIDRs by ADR-53's live-punch
+    plan), ``-T test`` is pf's own longest-prefix-match membership check: it
+    answers "is this address COVERED by the table", the authoritative oracle for
+    the Alerts "+" live-punch e2e (ADR-53 §2.1). ``pfctl`` prints
+    ``"1/1 addresses match."`` on a hit and ``"0/1 addresses match."`` on a miss
+    (rc is 0 either way for a well-formed query against an existing table).
+    """
+    result = vm.ssh(PFCTL, "-t", alias, "-T", "test", ip, timeout=timeout)
+    return "1/1 addresses match" in result.stdout
+
+
 def pfctl_tables(vm: SmokeVM, *, timeout: float = 30.0) -> list[str]:
     """Return all defined pf table names (``pfctl -sTables``)."""
     result = vm.ssh(PFCTL, "-sTables", timeout=timeout)
