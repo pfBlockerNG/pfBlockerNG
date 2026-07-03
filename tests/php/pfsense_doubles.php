@@ -146,16 +146,17 @@ if (!function_exists('is_hostname')) {
 }
 
 if (!function_exists('is_port')) {
-	// pfSense util.inc: a single TCP/UDP port — a pure-digit string in 1..65535
-	// (no ranges, no aliases). step3_submitphpaction() validates pfb_dnsport /
-	// pfb_dnsport_ssl through this; WizardVipAutoTest supplies valid ports so the
-	// port branch never masks the VIP-validation branch under test.
-	function is_port($port) {
-		if (!ctype_digit((string) $port)) {
-			return false;
+	// pfSense util.inc verbatim (#723): digits 1..65535, OR a service name resolvable
+	// via getservbyname() when \$validate_name (the default) — 'domain'/'http' are
+	// valid ports to real pfSense, so the double must not model them as rejected.
+	function is_port($port, $validate_name = true) {
+		if (ctype_digit(strval($port)) && ((intval($port) >= 1) && (intval($port) <= 65535))) {
+			return true;
 		}
-		$port = (int) $port;
-		return ($port >= 1 && $port <= 65535);
+		if ($validate_name && (getservbyname($port, "tcp") || getservbyname($port, "udp") || getservbyname($port, "sctp"))) {
+			return true;
+		}
+		return false;
 	}
 }
 
