@@ -238,8 +238,13 @@ def _real_iface(vm: SmokeVM, iface: str, *, timeout: float = 60.0) -> str:
     return h._php_read_scalar(vm, "", f"get_real_interface({h._php_str(iface)})", timeout=timeout).strip()
 
 
-def _pfctl_sn_has_redir(vm: SmokeVM, iface: str, *, timeout: float = 30.0) -> bool:
-    """True iff ``pfctl -sn`` shows a pfBlockerNG DNS-redirect rdr rule on ``iface`` for port 53.
+def _pfctl_sn_redir_protos(vm: SmokeVM, iface: str, *, timeout: float = 30.0) -> set[str]:
+    """The protocols ({"tcp","udp"}) with a loaded pfBlockerNG DNS-redirect rdr rule on ``iface``.
+
+    Returns the SET of matched protocols rather than a bare bool (#723): pf expands a
+    config-level ``tcp/udp`` rule into per-protocol rules, so a regression rendering only
+    one protocol must fail the positive gate (require both) while the teardown gate still
+    checks full absence (empty set).
 
     Matches the LOADED form, which differs from the config / rules.debug form twice over:
 
@@ -257,8 +262,9 @@ def _pfctl_sn_has_redir(vm: SmokeVM, iface: str, *, timeout: float = 30.0) -> bo
     """
     dev = _real_iface(vm, iface)
     result = vm.ssh(h.PFCTL, "-sn", timeout=timeout)
+    protos: set[str] = set()
     if result.returncode != 0:
-        return False
+        return protos
     for line in result.stdout.splitlines():
         # Match the redirect hallmark explicitly: an rdr `on <device>` whose destination is
         # the negated self (`to ! (self)`). The anchored ` on {dev} ` (not a bare substring)
@@ -267,8 +273,21 @@ def _pfctl_sn_has_redir(vm: SmokeVM, iface: str, *, timeout: float = 30.0) -> bo
         if "rdr" not in line or not dev or f" on {dev} " not in line or "to ! (self)" not in line:
             continue
         if "domain" in line or "port = 53" in line or "port 53" in line:
-            return True
-    return False
+            if " proto tcp " in line:
+                protos.add("tcp")
+            if " proto udp " in line:
+                protos.add("udp")
+    return protos
+
+
+def _pfctl_sn_has_redir(vm: SmokeVM, iface: str, *, timeout: float = 30.0) -> bool:
+    """Positive render gate: BOTH protocols of the tcp/udp redirect are loaded (#723)."""
+    return {"tcp", "udp"} <= _pfctl_sn_redir_protos(vm, iface, timeout=timeout)
+
+
+def _pfctl_sn_redir_absent(vm: SmokeVM, iface: str, *, timeout: float = 30.0) -> bool:
+    """Negative render gate: NO redirect rule of either protocol remains loaded."""
+    return not _pfctl_sn_redir_protos(vm, iface, timeout=timeout)
 
 
 def _redir_match_report(vm: SmokeVM, iface: str, *, expected_present: bool, timeout: float = 30.0) -> str:
@@ -536,7 +555,7 @@ def test_dns_redirect_enable_creates_nat_and_filter_rules(deployed_vm: SmokeVM, 
         assert _filter_redir_count(vm, _REDIR_DESCR_PFX) == 0, (
             "pfB_DNS_Redirect_* filter/rule entries present before enable — before-state not clean"
         )
-        assert not _pfctl_sn_has_redir(vm, iface), (
+        assert _pfctl_sn_redir_absent(vm, iface), (
             f"pfctl -sn shows an rdr rule on {iface} before enable — before-state not clean\n"
             + _redir_match_report(vm, iface, expected_present=False)
         )
@@ -685,7 +704,7 @@ def test_dns_redirect_disable_removes_nat_and_filter_rules(deployed_vm: SmokeVM,
         )
 
         # THEN — pfctl -sn must show no rdr rule for port 53 on the primary interface.
-        assert not _pfctl_sn_has_redir(vm, iface), (
+        assert _pfctl_sn_redir_absent(vm, iface), (
             f"pfctl -sn still shows an rdr rule on {iface} after disable\n"
             + _redir_match_report(vm, iface, expected_present=False)
         )
@@ -1084,7 +1103,7 @@ def test_dns_redirect_master_disable_removes_rules_despite_toggle_on(deployed_vm
         )
 
         # THEN — pfctl confirms no rdr rule.
-        assert not _pfctl_sn_has_redir(vm, iface), (
+        assert _pfctl_sn_redir_absent(vm, iface), (
             f"pfctl -sn still shows an rdr rule on {iface} after master-disable\n"
             + _redir_match_report(vm, iface, expected_present=False)
         )
@@ -1154,7 +1173,7 @@ def test_dns_redirect_dnsbl_disable_removes_rules_despite_toggle_on(deployed_vm:
         )
 
         # THEN — pfctl confirms no rdr rule.
-        assert not _pfctl_sn_has_redir(vm, iface), (
+        assert _pfctl_sn_redir_absent(vm, iface), (
             f"pfctl -sn still shows an rdr rule on {iface} after DNSBL-disable\n"
             + _redir_match_report(vm, iface, expected_present=False)
         )
