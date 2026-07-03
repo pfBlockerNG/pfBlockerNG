@@ -10191,24 +10191,13 @@ function pfb_remove_states() {
 	// List of IPs to suppress
 	$pfb_local = $pfb_localsub = array();
 
-	// Collect IPv4 Suppression list IPs
+	// Collect v4/v6 Suppression list entries (ADR-53 P7): checked prefix-aware via
+	// pfb_ip_suppressed() below, replacing the old exact-IP hashmap + subnetv4_expand()
+	// '/24' materialisation -- which could only express a bare host or an exact '/24';
+	// any other containing mask (v4 '/8'-'/23', any v6 mask) silently stayed
+	// unsuppressed (ADR-53 §1.2/§2.2 -- a correctness strengthening).
 	$v4suppression = pfbng_text_area_decode($pfb['ipconfig']['v4suppression'], TRUE, FALSE);
-	foreach ($v4suppression as $line) {
-		if (strpos($line, '/32') != FALSE) {
-			$pfb_local[] = str_replace('/32', '', $line);
-		}
-
-		// Convert '/24' CIDRs
-		$pfb_suppcidr = array();
-		if (strpos($line, '/24') !== FALSE && is_ipaddrv4($line)) {
-			$pfb_suppcidr	= subnetv4_expand($line);
-			$pfb_local	= array_merge($pfb_local, $pfb_suppcidr);
-		}
-	}
-
-	if (!empty($pfb_local)) {
-		$pfb_local = array_flip($pfb_local);
-	}
+	$v6suppression = pfbng_text_area_decode($pfb['ipconfig']['v6suppression'], TRUE, FALSE);
 
 	// Collect Interface list that have pfB Rules assigned
 	$data		= pfb_filterrules();
@@ -10322,6 +10311,7 @@ function pfb_remove_states() {
 				if ($ip_version == 4) {
 					if (isset($pfb_local[$s_ip]) ||
 					    pfb_local_ip($s_ip, $pfb_localsub) ||
+					    pfb_ip_suppressed($s_ip, $v4suppression) ||
 					    is_private_ip($s_ip) ||
 					    substr($s_ip, 0, 2) == '0.' ||
 					    substr($s_ip, 0, 4) == '127.' ||
@@ -10332,6 +10322,7 @@ function pfb_remove_states() {
 				else {
 					if (isset($pfb_local[$s_ip]) ||
 					    pfb_local_ip($s_ip, $pfb_localsub) ||
+					    pfb_ip_suppressed($s_ip, $v6suppression) ||
 					    !filter_var($s_ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
 						continue;
 					}
