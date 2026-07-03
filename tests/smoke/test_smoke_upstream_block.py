@@ -113,6 +113,13 @@ def _upstream_block_lines(log: str, name: str) -> list[str]:
     return out
 
 
+# Absence checks cannot poll for a line that must NOT appear -- they settle, then read
+# once. The settle must cover the SAME async-flush window the positive path budgets
+# (timeout_s=8.0 below): with a shorter settle, an over-trigger whose line lands in the
+# gap reads as a clean pass (#723).
+_ABSENCE_SETTLE_S = 8.0
+
+
 def _wait_for_upstream_block_lines(vm: SmokeVM, name: str, *, timeout_s: float = 8.0, poll_s: float = 0.5) -> list[str]:
     """Poll the on-box dnsbl.log for ``name``'s Upstream_Block lines until they appear.
 
@@ -262,7 +269,7 @@ class TestUpstreamBlockAuthoritativeControl:
         ans = h.dns_probe_client(cvm, name, "A")
         assert ans.rcode == "NXDOMAIN", f"Expected NXDOMAIN for {name}, got {ans.rcode}"
 
-        time.sleep(2)
+        time.sleep(_ABSENCE_SETTLE_S)
         log = _read_dnsbl_log(vm)
         lines = _upstream_block_lines(log, name)
         assert not lines, (
@@ -295,7 +302,7 @@ class TestUpstreamBlockForwarderNaturalControl:
         ans = h.dns_probe_client(cvm, name, "A")
         assert ans.rcode == "NXDOMAIN", f"Expected NXDOMAIN for {name}, got {ans.rcode}"
 
-        time.sleep(2)
+        time.sleep(_ABSENCE_SETTLE_S)
         log = _read_dnsbl_log(vm)
         lines = _upstream_block_lines(log, name)
         assert not lines, (
@@ -324,7 +331,7 @@ class TestUpstreamBlockNormalControl:
         ans = h.dns_probe_client(cvm, name, "A")
         assert h.resolves_to(ans, h.STUB_DNS_A), f"Control name should resolve to sentinel {h.STUB_DNS_A}, got {ans}"
 
-        time.sleep(2)
+        time.sleep(_ABSENCE_SETTLE_S)
         log = _read_dnsbl_log(vm)
         lines = _upstream_block_lines(log, name)
         assert not lines, (

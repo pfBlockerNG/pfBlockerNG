@@ -230,9 +230,7 @@ def test_dnsbl_exact_null(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: 
         a = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_null_ip(a), f"{domain} A expected {h.NULL_IP4}, got {a}"
         aaaa = h.dns_probe_client(client_vm, domain, "AAAA")
-        assert h.is_null_ip(aaaa, null_ip="::0") or not aaaa.records, (
-            f"{domain} AAAA expected ::0 (or no AAAA), got {aaaa}"
-        )
+        assert h.is_null_ip(aaaa, null_ip="::0"), f"{domain} AAAA expected ::0 (or no AAAA), got {aaaa}"
 
 
 def test_dnsbl_exact_nxdomain(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
@@ -300,9 +298,7 @@ def test_dnsbl_hsts_override_forces_null(deployed_vm: SmokeVM, client_vm: SmokeV
         assert h.is_null_ip(a), f"HSTS override should force A=0.0.0.0, got {a} (VIP leak?)"
         assert not h.is_vip(a), f"HSTS-preload VIP-list block must NOT be the VIP {h.DEFAULT_DNSBL_VIP4}: {a}"
         aaaa = h.dns_probe_client(client_vm, domain, "AAAA")
-        assert h.is_null_ip(aaaa, null_ip="::0") or not aaaa.records, (
-            f"{domain} AAAA expected ::0 (or no AAAA), got {aaaa}"
-        )
+        assert h.is_null_ip(aaaa, null_ip="::0"), f"{domain} AAAA expected ::0 (or no AAAA), got {aaaa}"
 
 
 def test_dnsbl_hsts_disabled_keeps_vip(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
