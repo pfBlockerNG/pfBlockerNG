@@ -20,8 +20,8 @@ REQUIRED READING
   AND RESULTS/01_Results.txt (the CHOSEN cache scheme + kill-threshold) AND RESULTS/02_/03_.
   If any is missing, STOP and report. If 01 recommended REJECT, STOP and report.
 - .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md (SS2.1 resolution, SS2.3 contract).
-- src/usr/local/pkg/pfblockerng/pfb_unbound.py — operate() (~5001), get_q_ip (~1637), legacy
-  bypass (~5201), the block path + no_cache_store, decisionDB + the ADR-10 swap/clear
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py — operate() (~6049), get_q_ip (~2055), legacy
+  bypass (~6183), the block path + no_cache_store, decisionDB + the ADR-10 swap/clear
   (search "decisionDB.clear"), inplace_cb_reply* logging.
 - tests/ Phase 2 oracle + CIDR resolver + bypass tests; tests/conftest.py.
 - CLAUDE.md — Test coverage (branch + before/after + BDD), Python standards.

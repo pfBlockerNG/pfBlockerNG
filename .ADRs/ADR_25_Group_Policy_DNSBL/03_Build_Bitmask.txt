@@ -22,8 +22,10 @@ REQUIRED READING
 - .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md (SS1.4 alias/manifest shape, SS2.1 bitmask).
 - src/usr/local/pkg/pfblockerng/pfb_unbound.py — the build path: dnsbl_build_from_manifest()
   / build() and BuildResult (search "data_db", "zone_db", "BuildResult"); the per-feed
-  manifest entry fields {feed, group, log, ...}.
-- pfblockerng.inc:3744 and :9429 — how manifest 'feeds' rows carry 'group' (=DNSBL_ alias).
+  manifest entry fields {raw, feed, group, format_hint, provenance, log_flag} (+ optional
+  mode: 'permit' for ADR-31 permit feeds — the legacy {log, format} key names are GONE).
+- pfblockerng.inc — pfb_unbound_python_sources() (~:6568) — how manifest 'feeds' rows carry
+  'group' (=DNSBL_ alias).
 - tests/ oracle from Phase 2.
 
 ACTION PLAN (ordered)
@@ -33,7 +35,10 @@ ACTION PLAN (ordered)
 2. Extend the per-domain build records (data_db / zone_db) to carry an integer alias bitmask
    = OR of the bits of every alias the domain appears in. A domain in two aliases -> both
    bits set. Keep all EXISTING fields (log/index/important/band) intact.
-3. Gate any NEW observable behaviour behind the group-policy-enabled flag (default OFF). With
+3. Gate any NEW observable behaviour behind the group-policy-enabled flag (default OFF).
+   NOTE: the flag itself is defined in Phase 4 (its config key does not exist yet when this
+   phase runs) — in THIS phase the gate is "groups absent from the manifest ⇒ off"; do not
+   invent a config key here. With
    the flag OFF, the manifest/decision output and attribution must be byte-identical to today
    (oracle green). The bitmask may be computed regardless (it is additive metadata) provided
    it does not alter existing outputs.

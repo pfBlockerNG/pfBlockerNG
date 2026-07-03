@@ -20,10 +20,19 @@ REQUIRED READING
 - FIRST, read .ADRs/ADR_25_Group_Policy_DNSBL/RESULTS/03_Results.txt — confirm the alias->bit
   rule + bitmask field the manifest must mirror. If missing, STOP and report.
 - .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md (esp. SS2.4 schedule scope + SS3 chroot-TZ trap).
-- pfblockerng.inc: the manifest writer pfb_unbound_python_sources* (~3653-3815, the
-  $manifest array at ~3783 and feed rows at ~3744); legacy GP read $pfb['dnsbl_gp'] /
-  $pfb['dnsbl_gp_bypass_list'] (~1273) and ini write (~4133-4148); pfb_filter / sanitize_ipaddr
+- pfblockerng.inc: the manifest writer pfb_unbound_python_sources* (~6485-6650; the
+  $manifest_feeds rows at ~:6568 — keys {raw, feed, group, format_hint, provenance, log_flag}
+  + optional mode:'permit'); legacy GP read $pfb['dnsbl_gp'] /
+  $pfb['dnsbl_gp_bypass_list'] (~2107) and ini write (~6980-6995); pfb_filter / sanitize_ipaddr
   usage; pfb_unbound_py_atomic_write (atomic publish).
+- pfblockerng_extra.inc + docs/misc/config-gateway.md — PfbConfig + pfb_cfg_registry():
+  pfb_gp / pfb_gp_bypass_list are REGISTERED fields (~:861/:870). MANDATORY (added
+  2026-07-03; this prompt predates ADR-29): read/delete registered keys ONLY via PfbConfig
+  (the RequireConfigGateway sniff is a CI-blocking gate); every NEW scalar key gets a registry
+  entry + `since` + round-trip test + the sniff's $registeredPaths + the config-gateway.md
+  inventory row; group ROWS are structural — section helpers, items nested under a `row`
+  listtag (the pfSense config-list trap); pfb_gp_bypass_list is a base64 textarea — decode
+  via pfbng_text_area_decode() (see the ini write ~:6982).
 - pfSense schedules: the <schedules>/<schedule>/<timerange> config shape and
   filter_get_time_based_rule_status() (resolve from pfSense source per CLAUDE.md "Resolve
   pfSense-provided PHP functions") — the time-range fields you must serialise.

@@ -31,15 +31,15 @@
 
 Every LAN client gets the **same** DNSBL verdict for a name. The query-time matcher
 `evaluate_domain(q_name, q_name_original, tld, is_cname, cfg, containers)`
-(`pfb_unbound.py` ~4608) returns a `DnsblDecision` from the queried name alone — the
+(`pfb_unbound.py` ~5588) returns a `DnsblDecision` from the queried name alone — the
 **client source IP is never an input**. The verdict is memoised in the unified
 **domain-keyed** decision cache `decisionDB[name] = DnsblDecision` (ADR-15), cleared on a
 zero-downtime swap (ADR-10).
 
 ### 1.2 The client IP is, however, already in hand
 
-`operate(id, event, qstate, qdata)` (~5001) extracts the client source IP **today** via
-`get_q_ip(qstate)` (~1637 → `qstate.mesh_info.reply_list.query_reply.addr`) and uses it
+`operate(id, event, qstate, qdata)` (~6049) extracts the client source IP **today** via
+`get_q_ip(qstate)` (~2055 → `qstate.mesh_info.reply_list.query_reply.addr`) and uses it
 **only for log attribution** (`pfb_addr`, ~5204). **No new Unbound API plumbing is needed
 to make decisions client-aware** — the load-bearing premise of this ADR holds.
 
@@ -49,26 +49,29 @@ pfBlockerNG already exposes a feature literally named *Group Policy* but it is a
 global bypass list**:
 
 - Config: `pfb_gp` (on/off) + `pfb_gp_bypass_list` (textarea of client IPs), under
-  `dnsblconfig` (`pfblockerng.inc:1273-1274`).
-- `pfblockerng.inc:4133-4148` writes an ini `[GP_Bypass_List]` section into the file the
-  python module reads; `pfb_unbound.py:1042-1053` loads it into `gpListDB`; the decision
-  path (`:5201-5210`) sets `bypass_dnsbl = True` when `gpListDB.get(q_ip) is not None`.
+  `dnsblconfig` (`pfblockerng.inc:2107-2108`).
+- `pfblockerng.inc:6980-6995` writes an ini `[GP_Bypass_List]` section into the file the
+  python module reads; `pfb_unbound.py:1347-1357` loads it into `gpListDB`; the decision
+  path (`:6175-6195`) sets `bypass_dnsbl = True` when `gpListDB.get(q_ip) is not None`.
 - Semantics: a listed IP **skips all DNSBL**; everyone else gets **full DNSBL, Block**.
   Matching is **exact-IP only** (`gpListDB.get(q_ip)`, a dict lookup — no CIDR).
 - A runtime `python_control addbypass/removebypass [duration]` path mutates `gpListDB`
-  in place (`:5125-5178`) — a transient per-IP bypass.
+  in place (`:3000-3090`) — a transient per-IP bypass.
 
 This is exactly **one group with one action (bypass)**. This ADR generalises it.
 
 ### 1.4 DNSBL feed/alias organisation (the unit a group will subscribe to)
 
 DNSBL feeds are grouped under **aliases**: a settings row builds alias
-`DNSBL_{aliasname}` (`pfblockerng.inc:9342`) whose `$list['row']` feeds each carry
+`DNSBL_{aliasname}` (`pfblockerng.inc:14322`) whose `$list['row']` feeds each carry
 `header` / `url` / `state` / `custom`. The per-feed manifest entry the python build
-consumes is `{ 'feed', 'group' (=alias), 'log', 'format', 'provenance' }`
-(`pfblockerng.inc:3744`, `:9429`). The per-feed `log` flag already encodes an
+consumes is `{ 'raw', 'feed', 'group' (=alias), 'format_hint', 'provenance', 'log_flag' }`
+— plus `'mode' => 'permit'` for ADR-31 permit feeds — built in
+`pfb_unbound_python_sources()` (`pfblockerng.inc` ~`:6568`). (Corrected 2026-07-03: the
+original `{feed, group, log, format, provenance}` key names no longer exist — code written
+against `log`/`format` does dead lookups.) The per-feed `log_flag` already encodes an
 action/shape: `0`=block+log, `1`=VIP+log, `2`=null no-log, `3`=NXDOMAIN+log,
-`4`=NXDOMAIN no-log (`:9384-9400`). The manifest is published atomically and applied by
+`4`=NXDOMAIN no-log (`:14370-14390`). The manifest is published atomically and applied by
 the ADR-10 watcher via the `pfb_py_reload` sentinel.
 
 ### 1.5 Load-bearing constraints
@@ -87,9 +90,13 @@ the ADR-10 watcher via the `pfb_py_reload` sentinel.
 A standing feature request asks for **DNSBL blocking by schedule** — "enable/disable it
 during school hours". pfSense already ships a native scheduler: the `<schedules>` config
 section (Firewall > Schedules), referenced by firewall rules via a `sched` name and evaluated
-by `filter_get_time_based_rule_status()`. None of it is wired into the DNSBL decision path —
-the only time-driven element today is the hourly feed-update cron (`pfb_interval`), which
-governs list *refresh*, not whether blocking is *active*. Per-client policy and time-of-day
+by `filter_get_time_based_rule_status()`. None of it is wired into the DNSBL decision path.
+(Updated 2026-07-03 for ADR-43: package scheduling is now **one cron tick** —
+`pfblockerng.php tick` every `pfb_tick_interval` minutes reading the due-ledger — and an
+already-landed PHP time-window evaluator exists, `pfb_quiet_hours` +
+`pfb_quiet_hours_in_window()` in `pfblockerng_extra.inc`, a precedent/possible reuse for this
+ADR's schedule serialisation. Both still govern *refresh/apply timing*, not whether blocking
+is *active*.) Per-client policy and time-of-day
 gating are the same shape of problem (a group of clients gets a different verdict under a
 condition), so this ADR folds scheduling in as a **per-group axis** rather than a parallel
 feature — the maintainer's call on the issue.
@@ -346,6 +353,15 @@ Early phases are the behaviour-preserving **preparatory de-risking** pass; the c
 ### Phase 4 — Config + manifest + migration (PHP)
 
 - Prompt: `04_Config_Manifest_Migration.txt`
+- **ADR-29 gateway rules apply (added 2026-07-03 — the prompt predates the gateway):**
+  `pfb_gp`/`pfb_gp_bypass_list` are **registered PfbConfig fields** (`pfblockerng_extra.inc`
+  ~`:861`/`:870`) — read/delete them via `PfbConfig`, never direct `config_*_path` (the
+  `RequireConfigGateway` sniff blocks it in CI). Every **new scalar key** gets a
+  `pfb_cfg_registry()` entry + `since` + round-trip test + the sniff's `$registeredPaths` +
+  the `docs/misc/config-gateway.md` inventory row. Group **rows** are structural — use the
+  section helpers, and nest list items under a `row` listtag (the documented pfSense
+  config-list trap). `pfb_gp_bypass_list` is a **base64-encoded textarea** — decode via
+  `pfbng_text_area_decode()` (see the ini write, ~`:6982`).
 - `config.xml` schema for policy-groups (name, enabled, CIDRs, subscribed aliases, tier,
   allow/deny domains, **optional `sched` schedule reference**) + the default group.
 - Migrate legacy `pfb_gp`/`pfb_gp_bypass_list` → a Bypass group (idempotent; absent ⇒
@@ -357,7 +373,8 @@ Early phases are the behaviour-preserving **preparatory de-risking** pass; the c
   ref serialises as "always in force" (fail-open).
 - Tests (PHPUnit): schema decode, migration (before legacy → after group; absent → no-op),
   manifest shape before/after, bitmask map, **schedule serialisation (ranges + dangling-ref →
-  always-on)**.
+  always-on)**; new-key round-trips. **Red→green is mandatory** (CLAUDE.md test principle 1):
+  behaviour-adding tests must fail on the pre-change code — prove it, don't just add them.
 
 ### Phase 5 — Python decision layer + Phase-1 cache scheme
 
@@ -371,7 +388,10 @@ Early phases are the behaviour-preserving **preparatory de-risking** pass; the c
   no-match PASS, default group, union across 2 groups, migrated legacy bypass; **schedule:
   in-window enforces vs out-of-window PASS (assert before+after across the boundary), no-sched
   always-on, belongs-but-all-inactive ⇒ PASS not default, dangling ref ⇒ always-on**;
-  before/after transition tests; CNAME-chain + swap-invalidation cases.
+  before/after transition tests; CNAME-chain + swap-invalidation cases. **Red→green is
+  mandatory** — each behaviour-adding test proven failing on the pre-change code. Note the
+  ADR-31 interplay: a **global permit feed / allow-regex** (band-2 `whiteDB`) pre-empts any
+  group's block subscription — consistent with "allow wins", and pinned by a test.
 
 ### Phase 6 — Web UI (policy-group management)
 
@@ -381,8 +401,16 @@ Early phases are the behaviour-preserving **preparatory de-risking** pass; the c
   "none = always on" entry, with a link to Firewall > Schedules to create one). Replace the
   legacy bypass textarea with the migrated group (or link to it). Help text matches neighbours
   and notes the active-window semantics briefly.
+- **Ports lockstep (added 2026-07-03 — missing from the original plan):** every new shipped
+  `www/` file needs a pkg-plist line + `do-install` entry in **all three** ports
+  (`pfSense-pkg-pfBlockerNG{,-devel,-nightly}`) — the smoke `.pkg` is built from the plist,
+  so an unlisted page 404s Tier A on the live VM. Verify with
+  `build-pkg-portable.py --dry-run`.
 - Tests: ADR-14 Tier A `ui_render` (200, no PHP errors, page marker, no new
-  `php_error.log`); PHPUnit for any extracted page decider.
+  `php_error.log`) **plus Tier B `ui_e2e` — REQUIRED, not optional** (CLAUDE.md test
+  principle 4: a new page and a fill→save→navigate-back→persisted flow are Tier B by
+  definition): create a group → save → reload → assert persistence; the Alerts-style
+  multiselect flow. PHPUnit for any extracted page decider.
 
 ### Phase 7 — Smoke (multi-source) + DoD + docs
 
@@ -415,13 +443,21 @@ Early phases are the behaviour-preserving **preparatory de-risking** pass; the c
 - [ ] `ruff check . && ruff format --check .` clean; `mypy tests/` clean.
 - [ ] `php -l`, PHPStan, PHPUnit, PHPCS (PFBL-01) clean incl. new manifest/migration tests.
 - [ ] ADR-14 `ui_render` green for the new policy-group page (marker present, no new
-      `php_error.log` line).
+      `php_error.log` line) **and Tier B `ui_e2e`** (create→save→reload→persisted — required
+      for a new page/multi-step flow per CLAUDE.md).
+- [ ] **Live-VM smoke green on the CE + Plus fan-out** — the default ADR-acceptance
+      validation (CLAUDE.md "ADR acceptance"); a single-leg run is not the gate.
 - [ ] Off-state parity test: group policy disabled ⇒ ADR-06/07 oracles byte-identical.
 - [ ] Schedule branch tests (Phase 5): in-window enforces vs out-of-window PASS
       (before+after across the boundary); no-`sched` always-on; belongs-but-all-inactive ⇒
       PASS (not the all-Block default); dangling schedule ref ⇒ always-on.
 
-### Manual smoke (maintainer, on-box) — the multi-source part CI can't do
+### Out-of-CI validation (maintainer, on-box) — the multi-source part CI can't do
+
+Per CLAUDE.md "ADR acceptance — automated tests, not a manual sign-off", the items below are
+a **documented out-of-CI limitation, not an acceptance blocker**: acceptance is the automated
+CE+Plus fan-out above. (If Phase 7 manages source-bound queries in the harness, promote these
+to smoke cases and this section shrinks accordingly.)
 
 - [ ] Two client IPs in two groups with different alias subscriptions: a name in alias A
       (subscribed by group 1, not group 2) is **Blocked** for client 1 and **resolves** for

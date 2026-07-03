@@ -1,6 +1,6 @@
 ================================================================================
 PHASE 1 PROMPT — SPIKE: cross-client cache-bleed reproduction + scheme selection
-Target model: Claude Opus 4.x (research/judgement-heavy)
+Target model: the orchestrating higher model (Opus / Fable — research/judgement-heavy)
 ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS1.5, SS2.2, SS7 first)
 ================================================================================
 
@@ -21,8 +21,8 @@ problem, pick a scheme on evidence, set a kill-threshold — BEFORE any code is 
 
 REQUIRED READING
 - .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md  (esp. SS2.1 resolution model, SS2.2 spike, SS7).
-- src/usr/local/pkg/pfblockerng/pfb_unbound.py — operate() (~5001), get_q_ip() (~1637),
-  the legacy bypass path (~5201-5210), the block path + qstate.no_cache_store usage
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py — operate() (~6049), get_q_ip() (~2055),
+  the legacy bypass path (~6175-6195), the block path + qstate.no_cache_store usage
   (search "no_cache_store"), inplace_cb_reply* (~2476-2529).
 - docs/misc/architecture-notes.md — ADR-10 (zero-downtime swap), ADR-15 (decision cache).
 - .ADRs/ADR_15_Unified_Decision_Cache/ADR.md and .ADRs/ADR_04_VM_Smoke_Tests/ — how the

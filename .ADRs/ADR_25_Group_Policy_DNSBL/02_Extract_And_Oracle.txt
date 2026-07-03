@@ -21,9 +21,9 @@ REQUIRED READING
   (or reduce/reject). If it recommends REJECT, STOP and report. If it is missing, Phase 1 is
   not complete; STOP and report.
 - .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md
-- src/usr/local/pkg/pfblockerng/pfb_unbound.py — evaluate_domain (~4608), DnsblDecision
-  (~4293), operate() (~5001), get_q_ip (~1637), legacy bypass gpListDB load (~1042) + use
-  (~5201) + python_control add/removebypass (~5125).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py — evaluate_domain (~5588), DnsblDecision
+  (~5229), operate() (~6049), get_q_ip (~2055), legacy bypass gpListDB load (~1347) + use
+  (~6183) + python_control add/removebypass (~3000).
 - tests/ — existing ADR-06/07 golden/oracle tests (the style to mirror); tests/conftest.py
   (Unbound symbol injection).
 - CLAUDE.md — Python standards, Test coverage (branch + before/after + BDD).

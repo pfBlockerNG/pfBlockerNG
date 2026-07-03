@@ -60,13 +60,16 @@ CONSTRAINTS
 
 VERIFICATION (must all pass before the phase is done)
 - python -m pytest -> green (non-smoke suite).
-- The smoke case(s) pass on a live VM run (dispatch smoke.yml) OR are clearly gated/SKIPped
-  with the manual checklist covering the gap; diagnostics reviewed on any failure.
+- The smoke case(s) pass on the LIVE-VM FAN-OUT (CE + Plus — the default ADR-acceptance
+  validation per CLAUDE.md; a single leg is not the gate); anything CI genuinely cannot do
+  (multi-source-IP binding, if the harness extension fails) is recorded in ADR.md SS7 as a
+  documented out-of-CI limitation — NOT silently SKIPped as if covered; diagnostics reviewed
+  on any failure.
 - ruff / mypy tests/ / markdownlint -> clean; php -l / phpcs as relevant.
 
 EXPECTED RESULT
-End-to-end per-client DNSBL policy verified on a live VM (or via the documented manual smoke),
-docs updated, DoD + reject criteria resolved.
+End-to-end per-client DNSBL policy verified on the CE+Plus fan-out (out-of-CI residuals
+explicitly documented in SS7), docs updated, DoD + reject criteria resolved.
 
 COMMIT (single)
     pfblockerng: add group-policy smoke + docs; close ADR-25 DoD (ADR-25 P7)

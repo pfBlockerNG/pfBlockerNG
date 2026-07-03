@@ -43,9 +43,17 @@ ACTION PLAN (ordered)
    existing pfBlockerNG .priv.inc entries).
 4. Extract any non-trivial save/validate logic into a pure decider in pfblockerng.inc
    (testable off-appliance) rather than inline in the page controller.
-5. Tests: ADR-14 Tier A ui_render case for the new page (GET -> 200, body free of
+5. Ports lockstep (added 2026-07-03 — MANDATORY): every new shipped www/ file gets a
+   pkg-plist line + do-install entry in ALL THREE ports
+   (pfSense-pkg-pfBlockerNG{,-devel,-nightly} in the FreeBSD-ports fork) — the smoke .pkg is
+   built from the plist, so an unlisted page 404s Tier A on the live VM. Verify with
+   build-pkg-portable.py --dry-run (copy the invocation from build-pkg-linux.yml).
+6. Tests: ADR-14 Tier A ui_render case for the new page (GET -> 200, body free of
    Fatal/Parse/Warning/Notice/Uncaught, a page-specific marker present, no new php_error.log
-   line); PHPUnit for the extracted decider (valid/invalid group; before/after).
+   line — register the page in tests/smoke/ui/test_render_smoke.py PAGE_TABLE); PLUS Tier B
+   ui_e2e — REQUIRED per CLAUDE.md test principle 4 (new page + multi-step flow): create a
+   group -> save -> reload -> assert it persisted (fields intact), and the migrated-bypass
+   link path. PHPUnit for the extracted decider (valid/invalid group; before/after).
 
 CONSTRAINTS
 - PHP tabs; PHP 8.3; no die()/exit() in lib code; new pfSense fns stubbed + doubled.
