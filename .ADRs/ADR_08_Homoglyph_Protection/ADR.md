@@ -238,7 +238,10 @@ rework).
   before/after toggle transitions; whitelist-wins; decode-safe; non-IDN pays nothing).
 
 **FP/TP measurement (`python tests/fixtures/adr08_corpus/measure_fp_tp.py`, on-branch):
-GATE = GO.**
+GATE = GO.** *(Historical gate model, #723: the script is the Phase-1 3-tier/dict-lookup
+snapshot — the shipped analyzer adds the FLAGGED tier and uses `unicodedata.name()`, so the
+cost figure below measured the simplified model; production coverage lives in
+`tests/test_adr08_analyzer.py`.)*
 
 | metric | measured (on-branch) | kill-threshold | result |
 | --- | --- | --- | --- |
