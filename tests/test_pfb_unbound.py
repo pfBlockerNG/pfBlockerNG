@@ -1043,14 +1043,27 @@ class TestStoreQueryInCacheStubFidelity:
 
     def test_refuses_authoritative_reply(self) -> None:
         # Given a reply marked authoritative (PKT_AA message), When it is
-        # stored, Then the stub raises ValueError exactly like the pending
-        # PyErr the real box surfaces -- never a silent success.
+        # stored, Then the stub raises what the real box surfaces: the SWIG
+        # wrapper returns a valid result with the PyErr pending, so CPython's
+        # call-boundary check raises SystemError with the upstream ValueError
+        # chained as __cause__ -- never a silent success, and never a bare
+        # ValueError an over-narrow `except ValueError:` could catch off-box
+        # but miss on-box.
         qstate = make_qstate("example.com.")
         msg = DNSMessage("example.com.", RR_A, RR_CLASS_IN, PKT_QR | PKT_AA)
         assert msg.set_return_msg(qstate) is True
         assert qstate.return_msg.rep.authoritative == 1
-        with pytest.raises(ValueError, match="Authoritative answer can't be stored"):
+        with pytest.raises(SystemError, match="returned a result with an exception set") as excinfo:
             storeQueryInCache(qstate, qstate.qinfo, qstate.return_msg.rep, 0)
+        assert isinstance(excinfo.value.__cause__, ValueError)
+        assert str(excinfo.value.__cause__) == "Authoritative answer can't be stored"
+
+    def test_none_reply_is_silent_falsy_failure(self) -> None:
+        # Given a None msgrep, When it is stored, Then the stub returns False
+        # with no exception -- real storeQueryInCache checks NULL first and
+        # returns 0 silently, before the authoritative refusal.
+        qstate = make_qstate("example.com.")
+        assert storeQueryInCache(qstate, qstate.qinfo, None, 0) is False
 
     def test_stores_non_authoritative_reply(self) -> None:
         # Given a non-authoritative reply (no PKT_AA), When it is stored,
@@ -1647,7 +1660,16 @@ class TestSafeSearchCnameRedirect:
     @staticmethod
     def _spy_cache(monkeypatch: Any) -> dict[str, Any]:
         calls: dict[str, Any] = {"store": [], "invalidate": 0}
-        monkeypatch.setattr(builtins, "storeQueryInCache", lambda qs, qi, rep, ref: calls["store"].append(ref))
+
+        def store_spy(qs: Any, qi: Any, rep: Any, ref: int) -> bool:
+            # Delegate to the real stub FIRST so its fidelity checks (the
+            # authoritative-reply refusal, the None falsy failure -- issue
+            # #747) still guard these call sites; only then record the call.
+            result = storeQueryInCache(qs, qi, rep, ref)
+            calls["store"].append(ref)
+            return result
+
+        monkeypatch.setattr(builtins, "storeQueryInCache", store_spy)
         monkeypatch.setattr(
             builtins, "invalidateQueryInCache", lambda qs, qi: calls.update(invalidate=calls["invalidate"] + 1)
         )
