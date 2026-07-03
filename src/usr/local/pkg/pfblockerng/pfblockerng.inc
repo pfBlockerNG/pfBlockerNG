@@ -17469,13 +17469,12 @@ function pfblockerng_php_pre_deinstall_command() {
 		}
 	}
 
-	// Remove aliastables archive (.zst + .bz2) and earlyshellcmd if found.
-	@unlink_if_exists("{$pfb['aliasarchive']}.zst");
-	@unlink_if_exists("{$pfb['aliasarchive']}.bz2");
-
 	// #738 F7: marker must not survive uninstall (see pfb_deinstall_clear_pending_changes()).
 	pfb_deinstall_clear_pending_changes();
 
+	// Remove aliastables archive (.zst + .bz2) and earlyshellcmd if found.
+	@unlink_if_exists("{$pfb['aliasarchive']}.zst");
+	@unlink_if_exists("{$pfb['aliasarchive']}.bz2");
 	if (config_get_path('system/earlyshellcmd') !== null) {
 		$a_earlyshellcmd = config_get_path('system/earlyshellcmd', '');
 		if (preg_grep("/pfblockerng.sh aliastables/", $a_earlyshellcmd)) {
