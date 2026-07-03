@@ -351,6 +351,94 @@ def test_reject_invalid_script_leaves_config_unchanged(webui: WebUI, smoke_vm: h
         helpers.clear_update_hooks(vm)
 
 
+def test_reject_bad_description_leaves_config_unchanged(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """A control-char description is rejected on BOTH ways preg_match() can flag it (#756).
+
+    Validator branch (pfblockerng_hooks.php, the 'hook_description' case): the
+    check must fail CLOSED on either outcome that means "control characters
+    present" -- a real match (``preg_match()`` returns ``1``) AND an unparseable
+    subject (``preg_match()`` returns ``FALSE``, ``PREG_BAD_UTF8_ERROR``) -- so
+    the condition is ``!== 0``, not a bare truthiness test. A bare
+    ``if (preg_match(...))`` treats ``FALSE`` as falsy and lets a malformed-UTF-8
+    description sail into config.xml unfiltered (issue #756).
+
+    Two reject sub-cases, both leaving the seeded description intact:
+      (a) a REAL control character (BEL, ``\\x07``) -- ``preg_match()`` returns
+          ``1``. Green under BOTH the pre-fix and post-fix code (a truthy ``1``
+          rejects either way) -- the regression guard for existing behaviour.
+      (b) INVALID UTF-8 -- the two raw bytes ``0xC3 0x28`` (a UTF-8 lead byte
+          followed by a non-continuation byte) -- ``preg_match()`` returns
+          ``FALSE``. THIS is the red/green cell: only ``!== 0`` rejects a
+          ``FALSE`` return; the old bare truthiness check accepted it and saved
+          the malformed bytes. ``requests`` would re-encode a Python ``str`` as
+          valid UTF-8 (the two bytes above would become ``%C3%83%28``, itself
+          valid UTF-8, never triggering the ``FALSE`` path) -- so, mirroring
+          ``test_remove_to_empty_deletes_node``'s manual-POST escape hatch, the
+          request body is built and percent-encoded by hand to put the literal
+          invalid bytes on the wire. The rest of the row stays VALID so the
+          description is the ONLY thing deciding accept-vs-reject.
+    """
+    vm = smoke_vm
+    helpers.clear_update_hooks(vm)
+    _install_test_scripts(vm)
+    seed_description = "smoke-desc-756"
+    _seed_one_hook(vm, script=SCRIPT_POST, when="post", enabled="on", description=seed_description)
+    try:
+        # BEFORE: the seeded description is present.
+        assert helpers.config_get(vm, ROW0_DESCRIPTION) == seed_description, (
+            f"seed description missing before the reject flow: got {helpers.config_get(vm, ROW0_DESCRIPTION)!r}"
+        )
+
+        # (a) A real control character -- preg_match() returns 1 either way.
+        resp = webui.post(HOOKS_PAGE, {"hook_description-0": "smoke\x07desc"}, timeout=120.0)
+        assert not looks_like_login_page(resp.text), "control-char POST returned the login form"
+        assert helpers.config_get(vm, ROW0_DESCRIPTION) == seed_description, (
+            f"a real control character was NOT rejected -- expected {seed_description!r}, "
+            f"got {helpers.config_get(vm, ROW0_DESCRIPTION)!r}"
+        )
+
+        # (b) Invalid UTF-8 (0xC3 0x28) -- preg_match() returns FALSE. Build the
+        # raw percent-encoded body by hand (see docstring) so the literal invalid
+        # bytes reach the wire instead of a re-encoded valid-UTF-8 substitute.
+        from urllib.parse import quote
+
+        from .webui import extract_csrf_token
+
+        form = webui.get(HOOKS_PAGE)
+        assert not looks_like_login_page(form.text), "hooks GET returned the login form (session lost)"
+        token = extract_csrf_token(form.text)
+        body = "&".join(
+            [
+                f"hook_script-0={quote(SCRIPT_POST, safe='')}",
+                "hook_when-0=post",
+                "hook_timeout-0=",
+                "hook_enabled-0=on",
+                "hook_description-0=%C3%28",
+                f"__csrf_magic={quote(token, safe='')}",
+                "save=save",
+            ]
+        )
+        resp = webui.session.post(
+            webui.url(HOOKS_PAGE),
+            data=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            verify=False,
+            timeout=120.0,
+        )
+        assert not looks_like_login_page(resp.text), "invalid-UTF-8 POST returned the login form"
+
+        # AFTER (reject): the node still exists and the description is UNCHANGED
+        # -- on unfixed code (a bare `if (preg_match(...))`) this save would have
+        # gone through, overwriting the description with the malformed bytes.
+        assert _hooks_node_exists(vm), "hooks node deleted by a REJECTED invalid-UTF-8-description save"
+        assert helpers.config_get(vm, ROW0_DESCRIPTION) == seed_description, (
+            f"invalid UTF-8 in the description was NOT rejected -- expected {seed_description!r}, "
+            f"got {helpers.config_get(vm, ROW0_DESCRIPTION)!r}"
+        )
+    finally:
+        helpers.clear_update_hooks(vm)
+
+
 def test_reject_bad_when_leaves_config_unchanged(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
     """A 'When' value outside {pre,post} is rejected; config stays unchanged.
 
