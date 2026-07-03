@@ -3405,6 +3405,20 @@ function pfb_pending_changes(): bool {
 }
 
 /*
+ * #738 F7: the deinstall-side counterpart of the clear above. The update-end guard
+ * (pfb_clear_pending_changes(), just above) is gated on `!$pfb['save']`, and the pre-deinstall
+ * disable pass always sets $pfb['save'] = TRUE before its sync_package_pfblockerng() call, so
+ * that guard never fires there -- nothing else unlinked the marker, so it survived `pkg delete`
+ * into any later reinstall and re-showed the banner before the first real Update. A thin,
+ * separately named wrapper (rather than inlining pfb_clear_pending_changes() at the deinstall
+ * call site) so the deinstall path stays a CLIENT of this module, not a second owner of the
+ * marker file.
+ */
+function pfb_deinstall_clear_pending_changes(): void {
+	pfb_clear_pending_changes();
+}
+
+/*
  * Print the "settings changed — apply on the next Update" info banner when there are pending
  * changes; no-op otherwise. Call immediately after display_top_tabs() on each pfBlockerNG page.
  * $on_update_page drops the redundant cross-link when already on the Update page.
@@ -17458,6 +17472,10 @@ function pfblockerng_php_pre_deinstall_command() {
 	// Remove aliastables archive (.zst + .bz2) and earlyshellcmd if found.
 	@unlink_if_exists("{$pfb['aliasarchive']}.zst");
 	@unlink_if_exists("{$pfb['aliasarchive']}.bz2");
+
+	// #738 F7: marker must not survive uninstall (see pfb_deinstall_clear_pending_changes()).
+	pfb_deinstall_clear_pending_changes();
+
 	if (config_get_path('system/earlyshellcmd') !== null) {
 		$a_earlyshellcmd = config_get_path('system/earlyshellcmd', '');
 		if (preg_grep("/pfblockerng.sh aliastables/", $a_earlyshellcmd)) {
