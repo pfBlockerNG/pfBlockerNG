@@ -911,3 +911,194 @@ if (!function_exists('get_dns_servers')) {
 		return $GLOBALS['pfb_test_dns_servers'] ?? [];
 	}
 }
+
+// --- ADR-53 P5 doubles: pure IPv6 CIDR set-subtraction engine ---
+//
+// pfb_cidr_subtract_v6()/pfb_suppress_file_v6() (pfblockerng_extra.inc) call the
+// REAL pfSense ip_range_to_subnet_array() on-appliance -- it is never redefined
+// in production code. Off-appliance it doesn't exist, so it needs a faithful
+// double here.
+//
+// Upstream body verified BYTE-IDENTICAL at three dated refs on the public
+// pfsense/pfsense mirror (src/etc/inc/util.inc; CLAUDE.md "Resolve pfSense-
+// provided PHP functions from upstream"):
+//   - CE 2.8.0 (min supported)  -- ed6c2eb84595aab998c3b3efaf16d226bd62c38d,
+//     the youngest master commit at/before the 2025-05-28 release.
+//   - CE 2.8.1 (latest released) -- 97f9eb5c819fd7f0c5f232d2581e5080be1cb18a,
+//     the youngest master commit at/before the 2025-09-04 release.
+//   - master tip -- 9363ac5b8651a1c7a333180425ce7719070f95f9 (2026-03-31).
+// ip_range_to_subnet_array()'s body below is VENDORED VERBATIM from that
+// source (its own doc comment kept intact). Its two callees --
+// ip6_to_bin()/bin_to_compressed_ip6() -- use PEAR's Net_IPv6
+// (Uncompress()/compress()) upstream, which doesn't exist off-appliance (the
+// same "no PEAR off-appliance" constraint as is_ipaddrv6() above), so those two
+// are faithful REIMPLEMENTATIONS using PHP's builtin inet_pton()/inet_ntop():
+// packing/unpacking the same 128-bit value produces byte-identical
+// binary-string / canonical-compressed output to the PEAR routines for any
+// address inet_pton() itself accepts (RFC 5952 compression is exactly what
+// inet_ntop() already implements).
+
+if (!function_exists('ip6_to_bin')) {
+	// FAITHFUL REIMPLEMENTATION (no PEAR off-appliance): pack the address with
+	// inet_pton() and expand every byte to 8 bits, producing the same 128-char
+	// '0'/'1' string upstream's Net_IPv6::Uncompress()+base_convert() loop does.
+	function ip6_to_bin($ip) {
+		// Mirror Net_IPv6::removeNetmaskSpec(): drop a trailing "/prefix" if present.
+		$slash = strpos($ip, '/');
+		if ($slash !== false) {
+			$ip = substr($ip, 0, $slash);
+		}
+		$packed = @inet_pton($ip);
+		if ($packed === false) {
+			return '';
+		}
+		$bin = '';
+		foreach (str_split($packed) as $byte) {
+			$bin .= sprintf('%08b', ord($byte));
+		}
+		return $bin;
+	}
+}
+
+if (!function_exists('bin_to_compressed_ip6')) {
+	// FAITHFUL REIMPLEMENTATION (no PEAR off-appliance): pack the 128-bit binary
+	// string back into 16 raw bytes and let inet_ntop() render the canonical
+	// (RFC 5952) compressed form -- the same output Net_IPv6::compress() gives.
+	function bin_to_compressed_ip6($bin) {
+		$bin = str_pad($bin, 128, '0', STR_PAD_LEFT);
+		$packed = '';
+		foreach (str_split($bin, 8) as $byte_bin) {
+			$packed .= chr(bindec($byte_bin));
+		}
+		return inet_ntop($packed);
+	}
+}
+
+if (!function_exists('ip_range_to_subnet_array')) {
+	/*
+	 * Convert an IPv4 or IPv6 IP range to an array of subnets which can contain the range.
+	 * Algorithm and embodying code PD'ed by Stilez - enjoy as you like :-)
+	 *
+	 * Documented on pfsense dev list 19-20 May 2013. Summary:
+	 *
+	 * The algorithm looks at patterns of 0's and 1's in the least significant bit(s), whether IPv4 or IPv6.
+	 * These are all that needs checking to identify a _guaranteed_ correct, minimal and optimal subnet array.
+	 *
+	 * As a result, string/binary pattern matching of the binary IP is very efficient. It uses just 2 pattern-matching rules
+	 * to chop off increasingly larger subnets at both ends that can't be part of larger subnets, until nothing's left.
+	 *
+	 * (a) If any range has EITHER low bit 1 (in startip) or 0 (in endip), that end-point is _always guaranteed_ to be optimally
+	 * represented by its own 'single IP' CIDR; the remaining range then shrinks by one IP up or down, causing the new end-point's
+	 * low bit to change from 1->0 (startip) or 0->1 (endip). Only one edge case needs checking: if a range contains exactly 2
+	 * adjacent IPs of this format, then the two IPs themselves are required to span it, and we're done.
+	 * Once this rule is applied, the remaining range is _guaranteed_ to end in 0's and 1's so rule (b) can now be used, and its
+	 * low bits can now be ignored.
+	 *
+	 * (b) If any range has BOTH startip and endip ending in some number of 0's and 1's respectively, these low bits can
+	 * *always* be ignored and "bit-shifted" for subnet spanning. So provided we remember the bits we've place-shifted, we can
+	 * _always_ right-shift and chop off those bits, leaving a smaller range that has EITHER startip ending in 1 or endip ending
+	 * in 0 (ie can now apply (a) again) or the entire range has vanished and we're done.
+	 * We then loop to redo (a) again on the remaining (place shifted) range until after a few loops, the remaining (place shifted)
+	 * range 'vanishes' by meeting the exit criteria of (a) or (b), and we're done.
+	 *
+	 * VENDORED VERBATIM from pfSense util.inc -- see the doubles-file-header
+	 * attribution above for the three dated refs this was diffed byte-identical
+	 * against.
+	 */
+	function ip_range_to_subnet_array($ip1, $ip2) {
+
+		if (is_ipaddrv4($ip1) && is_ipaddrv4($ip2)) {
+			$proto = 'ipv4';  // for clarity
+			$bits = 32;
+			$ip1bin = decbin(ip2long32($ip1));
+			$ip2bin = decbin(ip2long32($ip2));
+		} elseif (is_ipaddrv6($ip1) && is_ipaddrv6($ip2)) {
+			$proto = 'ipv6';
+			$bits = 128;
+			$ip1bin = ip6_to_bin($ip1);
+			$ip2bin = ip6_to_bin($ip2);
+		} else {
+			return array();
+		}
+
+		// it's *crucial* that binary strings are guaranteed the expected length;  do this for certainty even though for IPv6 it's redundant
+		$ip1bin = str_pad($ip1bin, $bits, '0', STR_PAD_LEFT);
+		$ip2bin = str_pad($ip2bin, $bits, '0', STR_PAD_LEFT);
+
+		if ($ip1bin == $ip2bin) {
+			return array($ip1 . '/' . $bits); // exit if ip1=ip2 (trivial case)
+		}
+
+		if ($ip1bin > $ip2bin) {
+			list ($ip1bin, $ip2bin) = array($ip2bin, $ip1bin);  // swap if needed (ensures ip1 < ip2)
+		}
+
+		$rangesubnets = array();
+		$netsize = 0;
+
+		do {
+			// at loop start, $ip1 is guaranteed strictly less than $ip2 (important for edge case trapping and preventing accidental binary wrapround)
+			// which means the assignments $ip1 += 1 and $ip2 -= 1 will always be "binary-wrapround-safe"
+
+			// step #1 if start ip (as shifted) ends in any '1's, then it must have a single cidr to itself (any cidr would include the '0' below it)
+
+			if (substr($ip1bin, -1, 1) == '1') {
+				// the start ip must be in a separate one-IP cidr range
+				$new_subnet_ip = substr($ip1bin, $netsize, $bits - $netsize) . str_repeat('0', $netsize);
+				$rangesubnets[$new_subnet_ip] = $bits - $netsize;
+				$n = strrpos($ip1bin, '0');  //can't be all 1's
+				$ip1bin = ($n == 0 ? '' : substr($ip1bin, 0, $n)) . '1' . str_repeat('0', $bits - $n - 1);  // BINARY VERSION OF $ip1 += 1
+			}
+
+			// step #2, if end ip (as shifted) ends in any zeros then that must have a cidr to itself (as cidr cant span the 1->0 gap)
+
+			if (substr($ip2bin, -1, 1) == '0') {
+				// the end ip must be in a separate one-IP cidr range
+				$new_subnet_ip = substr($ip2bin, $netsize, $bits - $netsize) . str_repeat('0', $netsize);
+				$rangesubnets[$new_subnet_ip] = $bits - $netsize;
+				$n = strrpos($ip2bin, '1');  //can't be all 0's
+				$ip2bin = ($n == 0 ? '' : substr($ip2bin, 0, $n)) . '0' . str_repeat('1', $bits - $n - 1);  // BINARY VERSION OF $ip2 -= 1
+				// already checked for the edge case where end = start+1 and start ends in 0x1, above, so it's safe
+			}
+
+			// this is the only edge case arising from increment/decrement.
+			// it happens if the range at start of loop is exactly 2 adjacent ips, that spanned the 1->0 gap. (we will have enumerated both by now)
+
+			if ($ip2bin < $ip1bin) {
+				continue;
+			}
+
+			// step #3 the start and end ip MUST now end in '0's and '1's respectively
+			// so we have a non-trivial range AND the last N bits are no longer important for CIDR purposes.
+
+			$shift = $bits - max(strrpos($ip1bin, '0'), strrpos($ip2bin, '1'));  // num of low bits which are '0' in ip1 and '1' in ip2
+			$ip1bin = str_repeat('0', $shift) . substr($ip1bin, 0, $bits - $shift);
+			$ip2bin = str_repeat('0', $shift) . substr($ip2bin, 0, $bits - $shift);
+			$netsize += $shift;
+			if ($ip1bin == $ip2bin) {
+				// we're done.
+				$new_subnet_ip = substr($ip1bin, $netsize, $bits - $netsize) . str_repeat('0', $netsize);
+				$rangesubnets[$new_subnet_ip] = $bits - $netsize;
+				continue;
+			}
+
+			// at this point there's still a remaining range, and either startip ends with '1', or endip ends with '0'. So repeat cycle.
+		} while ($ip1bin < $ip2bin);
+
+		// subnets are ordered by bit size. Re sort by IP ("naturally") and convert back to IPv4/IPv6
+
+		ksort($rangesubnets, SORT_STRING);
+		$out = array();
+
+		foreach ($rangesubnets as $ip => $netmask) {
+			if ($proto == 'ipv4') {
+				$i = str_split($ip, 8);
+				$out[] = implode('.', array(bindec($i[0]), bindec($i[1]), bindec($i[2]), bindec($i[3]))) . '/' . $netmask;
+			} else {
+				$out[] = bin_to_compressed_ip6($ip) . '/' . $netmask;
+			}
+		}
+
+		return $out;
+	}
+}
