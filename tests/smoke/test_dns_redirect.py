@@ -304,13 +304,15 @@ def _redir_match_report(vm: SmokeVM, iface: str, *, expected_present: bool, time
         actual = [f"<pfctl -sn failed: rc={result.returncode} {result.stderr.strip()}>"]
     else:
         actual = [ln.strip() for ln in result.stdout.splitlines() if "rdr" in ln and dev and dev in ln]
-    want = "PRESENT" if expected_present else "ABSENT"
+    want = "PRESENT (both protocols)" if expected_present else "ABSENT (no protocol)"
+    matched = _pfctl_sn_redir_protos(vm, iface, timeout=timeout)
     body = "\n".join(f"      {ln}" for ln in actual) if actual else "      (no rdr rules on this device)"
     return (
         f"  Expecting a pfBlockerNG DNS-redirect rdr rule to be {want} in the live nat ruleset:\n"
         f"    device      : {dev}  (config iface {iface!r})\n"
         f"    destination : ! (self)\n"
         f"    dest port   : domain (53)\n"
+        f"    protocols   : expected {{'tcp', 'udp'}} both rendered — matched {matched or '{}'}\n"
         f"  Actual rdr rules on {dev} (pfctl -sn):\n"
         f"{body}"
     )
