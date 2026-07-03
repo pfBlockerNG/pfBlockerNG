@@ -41,10 +41,16 @@ ACTION PLAN (tests FIRST)
      clean `<url>`, a row whose `<url>` has `?token=…&key=…`, and a row whose
      `<url>` is `https://user:pass@host/…` ; a `pfblockerngsync` section with
      `<varsyncpassword>` and a peer address ; a `pfblockerng` section with a
-     `hooks/row` whose command embeds `Authorization: Bearer …` ; generic
+     `hooks/row` whose command embeds `Authorization: Bearer …` ; an `<asn_token>`
+     (real IPinfo field, same ipsettings section) ; generic
      `<password>`/`<secret>`/`<apikey>`/`<sometoken>` tags ; AND a NON-pfblockerng
      `installedpackages` section (e.g. `<openvpn>`) plus a non-secret to prove
      scope.
+     CRITICAL — seed each secret in BOTH serialized forms: plain entity-escaped
+     text AND the pfSense `$cdata_fields` CDATA form
+     (`<password><![CDATA[s3cret]]></password>`, a CDATA `<url>` with
+     `?token=a&key=b`). pfSense's xmlparse.inc writes password-prefixed fields as
+     CDATA; a text-only fixture goes green while the real on-disk form leaks.
    - Assert (branch-covered): every seeded SECRET VALUE is ABSENT from the output;
      every expected NON-SECRET (alias names, formats, `maxmind_locale`, the feed
      URL host+path) is PRESENT; `pfblockerngsync` and the `hooks` subtree are
@@ -63,11 +69,16 @@ ACTION PLAN (tests FIRST)
      `pfblockerng`; remove `pfblockerngsync` node(s) and any `hooks` subtree under
      the `pfblockerng` section; serialize the survivors wrapped in
      `<pfblockerng_sanitized_export>…</pfblockerng_sanitized_export>`.
-   - `pfb_diag_redact(string $xml): string` — preg_replace: (a) tag-name suffix
-     pass, case-insensitive, optional trailing `s`, word-set ⊇ the harness set;
-     (b) explicit `<maxmind_account>`; (c) `<url>` whole-query strip
-     (`?…`->`?REDACTED`) and `://user:pass@`->`://REDACTED@`. SETTLE the URL
-     granularity here (default: strip the entire query + userinfo) and pin it.
+   - `pfb_diag_redact(string $xml): string` — DOM-WALK, NOT preg_replace over the
+     serialized text (a regex `(<tag>)[^<]*` matches empty before `<![CDATA[` and
+     lets the CDATA form leak — the reason the harness-scrubber pattern is NOT
+     reused here): (a) traverse the DOMDocument; for any element whose tag-name
+     suffix matches the word-set (case-insensitive, optional trailing `s`,
+     word-set ⊇ the harness set), replace its text AND CDATA children with
+     REDACTED; (b) explicit `<maxmind_account>`; (c) `<url>` whole-query strip
+     (`?…`->`?REDACTED`) and `://user:pass@`->`://REDACTED@`, applied to text and
+     CDATA values alike. SETTLE the URL granularity here (default: strip the
+     entire query + userinfo) and pin it.
    - `pfb_diag_export_sanitized_config(string $path = '/conf/config.xml'): string`
      — read the file, extract, redact, return. Pure read; mutates nothing.
    - Uppercase TRUE/FALSE; tabs; no die()/exit() in the engine (return/throw).

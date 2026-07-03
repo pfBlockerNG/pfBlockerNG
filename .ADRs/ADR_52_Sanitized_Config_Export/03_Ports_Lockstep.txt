@@ -42,8 +42,11 @@ ACTION PLAN
      sibling `.inc`/`.php` files are installed; the target dirs already exist via
      existing MKDIR — only add MKDIR if a new dir is introduced, which it is not).
 2. Run the package-side drift check against the fork checkout:
-   `python scripts/build-pkg-portable.py --dry-run` (point it at the branch +
-   ports per its existing invocation) — it MUST pass with the two files staged.
+   `python scripts/build-pkg-portable.py --dry-run` — copy the exact invocation
+   (the `--abi/--py-flavor/--php` + ports-tree/port-dir args) from the existing
+   caller in .github/workflows/build-pkg-linux.yml (or the arg parser near the
+   bottom of build-pkg-portable.py); do NOT invent flags. It MUST pass with the
+   two files staged.
 
 CONSTRAINTS
 - Change ONLY the plist + do-install for these two files; do not bump versions or

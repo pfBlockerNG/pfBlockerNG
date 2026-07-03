@@ -23,11 +23,12 @@ Bug reports rarely include enough of the user's pfBlockerNG configuration to rep
 because pasting the raw config means pasting secrets. The config carries, at minimum:
 
 - the **MaxMind license key** and **account ID** (`installedpackages/pfblockerngipsettings/config/0`
-  — `maxmind_key`, `maxmind_account`; see `pfblockerng_install.inc:683`);
+  — `maxmind_key`, `maxmind_account`; see the maxmind block in `pfblockerng_install.inc` ~:703)
+  and the **IPinfo token** (`asn_token`, same section — set via `pfblockerng_ip.php`);
 - **feed-URL credentials** — many feeds authenticate via a **token in the URL query string**
   (`<url>https://host/list.txt?token=…</url>`) or HTTP basic-auth userinfo
   (`https://user:pass@host/…`). Feed URLs are stored per row under the `pfblockerng*` list sections
-  (`<url>`, e.g. `pfblockerng.inc:265`/`:290`);
+  (`<url>` per feed row — `config/{key}/row/{hkey}` handling in `pfblockerng.inc`, ~:13600);
 - the **cluster sync password** and the addresses of the user's other firewalls
   (`installedpackages/pfblockerngsync`);
 - **update-hook commands** (ADR-12) — free-text shell stored under
@@ -57,7 +58,7 @@ and the exact thing this ADR removes the need for.
   Pinned off-appliance by `tests/test_smoke_diag_redaction.py`.
 - **The tab bar is per-page.** Each main `www/` page builds its own `$tab_array` inline (General /
   IP / DNSBL / Update / Reports / Feeds / Logs / Sync) and calls `pfb_software_add_tab()`
-  (`pfblockerng.inc:3152`) then `display_top_tabs()`. There is **no** shared tab list — adding a
+  (`pfblockerng.inc`, ~:3448) then `display_top_tabs()`. There is **no** shared tab list — adding a
   tab edits each page that renders the bar.
 - **The ACL is a per-page match list, not a wildcard.** `pfblockerng.priv.inc` defines one priv,
   `page-firewall-pfblockerng`, with an explicit `match[]` entry per page. A new page is reachable
@@ -103,8 +104,8 @@ bug report.
 | Engine location | new `pfblockerng_diagnostics.inc` (pure functions; keeps logic out of the 14k-line core and is the shared home ADR-34 also targets) |
 | Extraction | `pfb_diag_extract_pfb_xml($config_xml)` → `DOMDocument`/`DOMXPath` select `//installedpackages/*` whose node name starts with `pfblockerng`; serialize those nodes. Operates on the **stored XML text** (preserves the on-disk form), not a config-array round-trip |
 | Wholesale drops (hybrid) | before redaction, **remove entire** `pfblockerngsync` node(s) (sync password + peer addresses) and the `hooks` subtree under `pfblockerng/config` (free-text shell that can embed credentials) |
-| Redaction — tag-name pass | `preg_replace` the inner text of any element whose tag ends in one of the sensitive words (the `_SENSITIVE_TAG_WORDS` set, **case-insensitive**, optional trailing plural `s`) → `REDACTED`. Catches `maxmind_key`, `varsyncpassword` (if ever kept), etc. Over-redaction is safe; under-redaction is not |
-| Redaction — explicit | `maxmind_account` → `REDACTED` (not caught by the word set) |
+| Redaction — tag-name pass | **DOM-walk, not regex-over-text**: traverse the already-built `DOMDocument` and, for any element whose tag ends in one of the sensitive words (the `_SENSITIVE_TAG_WORDS` set, **case-insensitive**, optional trailing plural `s`), replace its **text AND CDATA** children with `REDACTED`. A `preg_replace` over the serialized XML (the harness-scrubber pattern) misses pfSense's `$cdata_fields` serialization — `<password><![CDATA[…]]></password>` survives `(<tag>)[^<]*` because `[^<]*` matches empty before `<![CDATA[` — so the regex form is **rejected**. Catches `maxmind_key`, `varsyncpassword` (if ever kept), etc. Over-redaction is safe; under-redaction is not |
+| Redaction — explicit | `maxmind_account` → `REDACTED` (not caught by the word set). NOTE the lesson: the suffix heuristic misses innocuously-named secrets — a **recommended** hardening (maintainer's call, adds an allowlist to maintain) is a fail-closed inventory test that walks `pfb_cfg_registry()` + the known section keys and fails CI when a field is neither explicitly known-non-secret nor provably redacted |
 | Redaction — feed URLs | in `<url>` values, strip the **entire query string** (`?…` → `?REDACTED`) and any `user:pass@` userinfo (`://…@` → `://REDACTED@`). Conservative default — a secret query param can't be reliably distinguished from a benign one. **Exact granularity is a TBD for implementation** (see §6 Phase 1) |
 | Output | `pfb_diag_export_sanitized_config($path='/conf/config.xml')` → the extracted-then-redacted XML string. Wrapped in a single `<pfblockerng_sanitized_export>` root for valid standalone XML |
 | Download | `pfblockerng_diagnostics.php` POST handler streams the string via the `pfblockerng_log.php:331-333` `Content-Disposition` pattern; filename `pfblockerng-config-sanitized.xml` |
@@ -114,10 +115,13 @@ bug report.
 ### 2.2 Semantics that MUST be preserved / guaranteed (pin with tests before shipping)
 
 - **No known secret class survives the export.** For a config fixture seeded with every known
-  secret — `maxmind_key`, `maxmind_account`, a feed `<url>` with `?token=…`, a basic-auth feed
-  `<url>`, `varsyncpassword`, an update-hook with an `Authorization` header, and generic
-  `<password>`/`<secret>`/`<apikey>`/`<…token>` tags — **none** appears in the output. This is the
-  acceptance core and the reject criterion.
+  secret — `maxmind_key`, `maxmind_account`, `asn_token`, a feed `<url>` with `?token=…`, a
+  basic-auth feed `<url>`, `varsyncpassword`, an update-hook with an `Authorization` header, and
+  generic `<password>`/`<secret>`/`<apikey>`/`<…token>` tags — **none** appears in the output.
+  The fixture seeds each secret in **both** serialized forms: plain entity-escaped text AND the
+  pfSense `$cdata_fields` CDATA form (`<password><![CDATA[…]]></password>`, a CDATA feed `<url>`
+  with `?token=a&key=b`) — the CDATA form is the false-confidence trap a text-only fixture
+  misses. This is the acceptance core and the reject criterion.
 - **Useful non-secret data is preserved.** Feed alias names, formats, actions, list/mode settings,
   `maxmind_locale`, and the feed-URL **host+path** survive (only the query/userinfo is stripped) —
   otherwise the export does not help reproduce anything.
@@ -200,14 +204,18 @@ Prompt: `01_Engine_Redaction.txt`
   - `pfb_diag_extract_pfb_xml(string $config_xml): string` — DOM/XPath select `pfblockerng*`
     nodes; apply the wholesale drops (`pfblockerngsync`, `hooks` subtree); return the concatenated
     node XML wrapped in `<pfblockerng_sanitized_export>`.
-  - `pfb_diag_redact(string $xml): string` — the tag-name pass + explicit `maxmind_account` +
-    feed-`<url>` query/userinfo stripping. **Settle the URL-stripping granularity here** (default:
+  - `pfb_diag_redact(string $xml): string` — the tag-name pass (**DOM-walk over matching-named
+    elements, replacing text AND CDATA children** — see the §2.1 table; never a second
+    `preg_replace` over the serialized text) + explicit `maxmind_account` + feed-`<url>`
+    query/userinfo stripping. **Settle the URL-stripping granularity here** (default:
     strip the whole query string + userinfo) and pin it with tests.
   - `pfb_diag_export_sanitized_config(string $path = '/conf/config.xml'): string` — extract→redact.
 - Wire the new `.inc` into the PHPUnit bootstrap (`tests/php/bootstrap.php`) so the engine loads
   off-appliance.
 - **Tests FIRST (red→green):**
-  - `tests/php/DiagnosticsExportTest.php` — an all-secrets config fixture; assert every seeded
+  - `tests/php/DiagnosticsExportTest.php` — an all-secrets config fixture seeding each secret in
+    **both plain-text and CDATA form** (§2.2) and using the **real field names**
+    (`maxmind_key`, `maxmind_account`, `asn_token`, `varsyncpassword`); assert every seeded
     secret value is absent from the output AND every expected non-secret field is present; branch
     coverage (each redaction rule has a positive case that is redacted AND a near-miss that is
     kept, e.g. `<maxmind_locale>` kept vs `<maxmind_account>` redacted; a clean `<url>` intact vs a
@@ -262,9 +270,10 @@ Prompt: `04_Docs_DoD.txt`
   feed URL, a configured sync peer, and an update hook: click Export, open the file, confirm the key,
   account, feed token, sync password/peers, and hook command are all gone and the feed lists / settings
   are present and useful.
-- Flips to **Accepted** on the green CE+Plus Tier A/B fan-out + the maintainer manual check (the
-  redaction completeness is the one thing a render test cannot fully assert — the manual check is the
-  documented out-of-CI confirmation).
+- Flips to **Accepted** on the green CE+Plus Tier A/B fan-out alone (per CLAUDE.md "ADR
+  acceptance — automated tests, not a manual sign-off": the adversarial fixture + the Tier B
+  downloaded-body assertion automate the redaction proof). The maintainer manual check above is a
+  **documented out-of-CI confirmation**, not an acceptance gate.
 - **Reject/revisit criteria:** if Phase 1 shows a known secret class cannot be reliably removed
   (neither pattern-redacted nor safely dropped wholesale) without gutting the export's usefulness,
   **do not ship** the button — a leaky "sanitized" export is worse than none. Fall back to the

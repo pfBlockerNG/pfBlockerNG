@@ -54,12 +54,18 @@ ACTION PLAN
 3. Add `pfblockerng/pfblockerng_diagnostics.php` to the
    `page-firewall-pfblockerng` match[] list in pfblockerng.priv.inc.
 4. Tests under tests/smoke/ui/:
-   - Tier A: GET the Diagnostics page -> 200, a page-specific marker present, body
-     free of Fatal/Parse/Warning/Notice/Uncaught, no new on-box php_error.log
-     line; assert the Diagnostics tab is present on a couple of other pages too.
-   - Tier B: authenticated POST to the export -> assert Content-Disposition header
-     and that the downloaded body contains a known NON-secret marker and NOT a
-     seeded secret (set up via the harness config, mirroring ensure_* fixtures).
+   - Tier A: register the new page in tests/smoke/ui/test_render_smoke.py
+     PAGE_TABLE (the mechanical Tier A registry — a page absent from it is never
+     rendered); GET the Diagnostics page -> 200, a page-specific marker present,
+     body free of Fatal/Parse/Warning/Notice/Uncaught, no new on-box
+     php_error.log line; assert the Diagnostics tab is present on a couple of
+     other pages too.
+   - Tier B: seed the secrets ON-BOX first via `h.php_eval` +
+     `config_set_path('installedpackages/pfblockerngipsettings/config/0/maxmind_key', …)`
+     (+ a token-bearing feed url row) + `write_config()` — the ensure_* fixture
+     pattern; then authenticated POST to the export -> assert Content-Disposition
+     header and that the downloaded body contains a known NON-secret marker and
+     NOT any seeded secret value.
 
 CONSTRAINTS
 - No new download/redaction logic in the page — call the Phase 1 engine.
