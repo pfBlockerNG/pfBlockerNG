@@ -221,7 +221,7 @@ class TestConvertOther:
     # (>63 -- e.g. a compression pointer, forbidden in an uncompressed dname) or one
     # that overruns the remaining buffer is fail-safe: the "Unknown" sentinel, the same
     # one used for a genuinely empty name -- never scraped junk. The CNAME walk's
-    # `!= "Unknown"` guard (pfb_unbound.py:6144) depends on that to skip a bad decode
+    # `!= "Unknown"` guard (the DNSBL CNAME walk in operate()) depends on that to skip a bad decode
     # rather than DNSBL-evaluate garbage.
 
     def test_interior_16char_label_decodes_whole_name(self) -> None:
@@ -289,8 +289,25 @@ class TestConvertOther:
     def test_none_returns_unknown(self) -> None:
         assert convert_other(None) == "Unknown"
 
+    def test_63_char_label_is_the_valid_maximum(self) -> None:
+        # RFC 1035 SS2.3.4 caps a label at 63 octets: exactly 63 decodes whole...
+        name = "www." + "a" * 63 + ".com"
+        assert convert_other(_rr_dname(name)) == name
+
+    def test_64_char_label_is_malformed_without_overrun(self) -> None:
+        # ...and 64 is malformed on the length octet ALONE -- the buffer holds enough
+        # bytes that no overrun occurs, isolating the >63 branch from the overrun branch.
+        wire = bytes([3]) + b"www" + bytes([64]) + b"a" * 64 + bytes([3]) + b"com" + b"\x00"
+        x = len(wire).to_bytes(2, "big") + wire
+        assert convert_other(x) == "Unknown"
+
+    def test_truthy_input_with_empty_body_is_unknown(self) -> None:
+        # A 2-byte rr_data (just the length prefix, no dname bytes at all) is truthy
+        # yet decodes to the empty name -- distinct from the b""/None short-circuits.
+        assert convert_other(bytes([0, 5])) == "Unknown"
+
     def test_txt_character_string_without_root_terminator_decodes(self) -> None:
-        # The reply logger (pfb_unbound.py:2771) feeds TXT rdata through this same
+        # The reply logger (the non-A/AAAA branch of get_details_reply's rrset loop) feeds TXT rdata through this same
         # function; a length-prefixed character-string carries no trailing root octet
         # (that terminator is a dname-only construct), so the decoder must still return
         # a defined shape -- the buffer simply ends when the label's content is
@@ -303,7 +320,7 @@ class TestConvertOther:
         # before its dname, which convert_other() has no way to know to skip -- the
         # preference field's leading zero octet (b"\x00\x0a") reads as a zero-length
         # root label, so the decode is the empty name ("Unknown"). Only the cosmetic
-        # reply logger (:2771) ever feeds MX rdata through convert_other(); the DNSBL
+        # reply logger ever feeds MX rdata through convert_other(); the DNSBL
         # CNAME walk only ever passes CNAME rdata, which has no such leading field.
         x = bytes([0, 11]) + b"\x00\x0a" + bytes([3]) + b"foo" + bytes([3]) + b"com" + b"\x00"
         assert convert_other(x) == "Unknown"

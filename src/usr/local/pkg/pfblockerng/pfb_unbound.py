@@ -2218,7 +2218,7 @@ def convert_other(x: Any) -> str:
             if length > 63 or pos + length > len(buf):
                 malformed = True
                 break
-            labels.append("".join(chr(b) for b in buf[pos : pos + length]))
+            labels.append(buf[pos : pos + length].decode("latin-1"))
             pos += length
         if not malformed and (labels or rooted):
             final = ".".join(labels)
