@@ -1,3 +1,7 @@
+HISTORICAL — EXECUTED 2026-06-17/18; DO NOT RE-RUN. Every phase below already landed on devel
+(ADR-28 is Accepted; see ADR.md Status). Line anchors are stale and the "hard-freeze /
+byte-identical storage" doctrine in this prompt was superseded by the behaviour-not-bytes rule in CLAUDE.md.
+
 ================================================================================
 PHASE 8 PROMPT — Python conventions (pfb_unbound.py)
 Target model: Claude Sonnet 4.6

@@ -1,6 +1,14 @@
 # ADR-28: Code-Quality Conventions (enums, short-circuiting, literals, string-ops)
 
-- **Status:** **Proposed** (2026-06-17)
+- **Status:** **Accepted** (2026-06-18; proposed 2026-06-17) — all 11 phases landed on `devel`; the
+  live-VM fan-out (CE + Plus) + UI tiers ran green (see `RESULTS/11_Results.txt` §0). The Phase 11
+  upgrade-contract smoke case was **removed** after failing on an **orthogonal** forged-upgrade
+  config-section-loss bug and its proof was deferred to issue **#281 (now closed)** — see the §7
+  note. Two later evolutions supersede details of this text: the Phase 4 `pfb_idn` exclusion was
+  **reversed** under ADR-29 (`PfbIdnMode` with legacy-token reuse `All = 'on'` — see
+  `docs/misc/config-gateway.md`), and the §2.2 "hard-freeze / byte-identical" doctrine was
+  reconciled to the **behaviour-not-bytes** rule now in `CLAUDE.md` (the policy of record). The
+  phase prompts are **historical** — do not re-run them.
 - **Date:** 2026-06-17
 - **Branch:** `adr/28-code-quality-conventions` (off `devel`; `{slug}` per CLAUDE.md "Branch naming")
 - **Component(s):**
@@ -298,6 +306,11 @@ Prompt: `11_Smoke_And_Validation.txt` — the acceptance gate.
 - **Dispatch the live-VM validation:** `smoke-fanout.yml` (ADR-04 suite, **CE + Plus**, AND-gated)
   and the **UI tiers** (`ui_render` is the PR gate; dispatch `ui_e2e`/`ui_browser` too). Record the
   green run links. Confirm the full DoD (§7).
+- **Outcome (2026-06-18):** the fan-out + UI tiers ran green. The upgrade-contract case itself was
+  **removed** — it failed on an orthogonal forged-upgrade config-section-loss bug, not an adapter
+  regression — and the contract proof was deferred to issue **#281**, since **closed**. The
+  off-appliance round-trip suites (`CfgAdaptersTest`, `RollbackContractTest`) remain the standing
+  contract pins.
 
 ## 7. Definition of done
 
@@ -311,7 +324,9 @@ Prompt: `11_Smoke_And_Validation.txt` — the acceptance gate.
   preserved** (canonical tokens round-trip; legacy tokens read to the correct runtime value and write
   to a behaviour-equivalent canonical token) and a representative runtime behaviour (blocked DNSBL
   name, IP block) is unchanged. This automates the contract proof — **no manual sign-off** (CLAUDE.md
-  "ADR acceptance").
+  "ADR acceptance"). **Resolution:** the case was removed (it failed on an orthogonal forged-upgrade
+  config-section-loss bug) and the proof deferred to issue **#281 — closed**; this DoD item is
+  discharged by the round-trip suites + #281, not by an in-tree smoke case.
 - **Smoke fan-out (CE + Plus) + UI tiers green** — `smoke-fanout.yml` AND-gate passes; `ui_render`
   PR gate green; `ui_e2e`/`ui_browser` dispatched green.
 - **Residual manual check (owner: maintainer, out-of-CI):** true *visual* GUI correctness only — a
