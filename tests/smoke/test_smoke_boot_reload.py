@@ -113,9 +113,14 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
         try:
             h.set_ramdisk(smoke_vm, False)
             h.reload(smoke_vm, "update")
-            h.reboot_vm(smoke_vm)
         except Exception as exc:  # noqa: BLE001 -- teardown cleanup, never mask the test result
             print(f"[smoke] ramdisk-off teardown failed (non-fatal): {exc}")
+        # Own try: a flaky reload above must not skip the reboot — with the flag already
+        # flipped off, the reboot alone completes the MFS-to-disk transition.
+        try:
+            h.reboot_vm(smoke_vm)
+        except Exception as exc:  # noqa: BLE001 -- teardown cleanup, never mask the test result
+            print(f"[smoke] ramdisk-off teardown reboot failed (non-fatal): {exc}")
 
 
 @pytest.fixture(scope="module", params=[False, True], ids=["standard", "ramdisk"])
