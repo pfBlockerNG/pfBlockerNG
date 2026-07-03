@@ -201,59 +201,86 @@ class TestConvertIPv6:
         assert convert_ipv6(None) == "Unknown"
 
 
+def _rr_dname(name: str) -> bytes:
+    """Build an rr_data-shaped payload: the 2-byte RDATA length prefix (x[0:2])
+    followed by an uncompressed RFC 1035 SS3.3.1 wire-format dname -- each label a
+    1-63 length octet plus that many raw bytes, terminated by the zero-length root
+    label. Shared by TestConvertOther and the operate()-level CNAME test below.
+    """
+    wire = b"".join(len(lbl).to_bytes(1, "big") + lbl.encode("latin-1") for lbl in name.split(".")) + b"\x00"
+    return len(wire).to_bytes(2, "big") + wire
+
+
 class TestConvertOther:
-    # x[0:3] are ignored; x[3:] is the payload
-    # Encoding rules:
-    #   val == 0          → '|'
-    #   1 <= val <= 12    → '.'
-    #   val == 13         → stop
-    #   val == 32         → ' '
-    #   val == 58         → ':'
-    #   val <= 33 or > 126 → skip
-    #   else              → chr(val)
-    # Leading/trailing '.' and '|' are stripped from the result.
+    # rr_data for a CNAME/NS/PTR-class record is a 2-byte RDATA length prefix (x[0:2])
+    # followed by an UNCOMPRESSED wire-format domain name (RFC 1035 SS3.3.1): each label
+    # is a 1-63 length octet followed by that many raw content bytes, terminated by a
+    # zero-length root label. convert_other() must walk that structure -- not scrape
+    # x[3:] byte-by-byte guessing at dot/space/pipe punctuation from the octet VALUE
+    # (the old contract this class used to pin). A malformed/out-of-range length octet
+    # (>63 -- e.g. a compression pointer, forbidden in an uncompressed dname) or one
+    # that overruns the remaining buffer is fail-safe: the "Unknown" sentinel, the same
+    # one used for a genuinely empty name -- never scraped junk. The CNAME walk's
+    # `!= "Unknown"` guard (pfb_unbound.py:6144) depends on that to skip a bad decode
+    # rather than DNSBL-evaluate garbage.
 
-    def test_printable_ascii(self) -> None:
-        x = bytes([0, 0, 0, ord("A"), ord("B"), ord("C")])
-        assert convert_other(x) == "ABC"
+    def test_interior_16char_label_decodes_whole_name(self) -> None:
+        # A label longer than the old scrape's accidental 1..12 "dot" window must NOT
+        # merge with its neighbour. RED today: the 16-char label yields "wwwgoogleadservices.com".
+        x = _rr_dname("www.googleadservices.com")
+        assert convert_other(x) == "www.googleadservices.com"
 
-    def test_null_becomes_pipe(self) -> None:
-        x = bytes([0, 0, 0, ord("A"), 0, ord("B")])
-        assert convert_other(x) == "A|B"
+    def test_interior_13char_label_decodes_whole_name(self) -> None:
+        # The old scrape treated the length octet 13 as a "carriage return" that stops
+        # decoding entirely. RED today: truncates to "www".
+        x = _rr_dname("www.thirteenchars.com")
+        assert convert_other(x) == "www.thirteenchars.com"
 
-    def test_low_byte_becomes_dot(self) -> None:
-        x = bytes([0, 0, 0, ord("A"), 1, ord("B")])
-        assert convert_other(x) == "A.B"
+    def test_interior_40char_label_decodes_whole_name(self) -> None:
+        # A 34-63 length octet fell into the old scrape's `else: chr(val)` branch and was
+        # emitted as a stray punctuation character. RED today: "www(aaaa...aaa.com" (the
+        # "(" is chr(40), the label's own length octet leaking into the output).
+        label = "a" * 40
+        x = _rr_dname(f"www.{label}.com")
+        assert convert_other(x) == f"www.{label}.com"
 
-    def test_carriage_return_stops_processing(self) -> None:
-        x = bytes([0, 0, 0, ord("A"), 13, ord("B")])
-        assert convert_other(x) == "A"
+    def test_label_content_byte_above_126_is_preserved(self) -> None:
+        # Label content is arbitrary binary (RFC 2181 SS11) -- a byte > 126 is part of
+        # the name, not a control code to drop. RED today: the old scrape's
+        # `val <= 33 or val > 126: continue` silently dropped it ("ab" instead of "a\xe9b").
+        wire = bytes([3]) + b"www" + bytes([3]) + bytes([ord("a"), 0xE9, ord("b")]) + bytes([3]) + b"com" + b"\x00"
+        x = bytes([0, len(wire)]) + wire
+        assert convert_other(x) == "www.a\xe9b.com"
 
-    def test_space_preserved(self) -> None:
-        x = bytes([0, 0, 0, ord("A"), 32, ord("B")])
-        assert convert_other(x) == "A B"
+    def test_plain_two_label_name_decodes_unchanged(self) -> None:
+        # No regression on the short-label path: every label here already fit inside the
+        # old scrape's accidental 1..12 "dot" window, so this is green both before and
+        # after the decoder rewrite.
+        x = _rr_dname("example.com")
+        assert convert_other(x) == "example.com"
 
-    def test_colon_preserved(self) -> None:
-        x = bytes([0, 0, 0, ord("h"), 58, ord("1")])
-        assert convert_other(x) == "h:1"
+    def test_root_only_dname_is_unknown(self) -> None:
+        # A bare zero-length root label (no preceding labels) is the empty name --
+        # decodes to the "Unknown" sentinel, not an empty string. Also covers the old
+        # "empty payload" case (b"\x00\x00\x00"), which meant something different under
+        # the retired x[3:]-scrape contract; this is its wire-format-shaped replacement.
+        x = bytes([0, 1, 0])
+        assert convert_other(x) == "Unknown"
 
-    def test_control_chars_skipped(self) -> None:
-        # val 14..31 (excluding 13) and 33 are skipped
-        x = bytes([0, 0, 0, ord("A"), 14, ord("B")])
-        assert convert_other(x) == "AB"
+    def test_length_octet_over_63_is_malformed(self) -> None:
+        # A length octet with the top two bits set (>63 -- e.g. the DNS compression-
+        # pointer marker 0xC0) is invalid in an uncompressed dname; fail safe to
+        # "Unknown" rather than decode the pointer's bytes as label content. RED today:
+        # the old scrape read past it and emitted "*" (chr(42) from the pointer's low
+        # offset byte).
+        x = bytes([0, 2, 0xC0, 0x2A])
+        assert convert_other(x) == "Unknown"
 
-    def test_high_bytes_skipped(self) -> None:
-        x = bytes([0, 0, 0, ord("A"), 200, ord("B")])
-        assert convert_other(x) == "AB"
-
-    def test_leading_trailing_stripped(self) -> None:
-        # Result '.A.' → strip('.|') → 'A'
-        x = bytes([0, 0, 0, ord("."), ord("A"), ord(".")])
-        assert convert_other(x) == "A"
-
-    def test_empty_payload_returns_unknown(self) -> None:
-        # x[3:] is empty
-        x = bytes([0, 0, 0])
+    def test_label_length_overrunning_buffer_is_malformed(self) -> None:
+        # A length octet claiming more bytes than remain in the buffer is malformed;
+        # fail safe to "Unknown". RED today: the old scrape ignored the claimed length
+        # entirely and just echoed the leftover bytes ("ab").
+        x = bytes([0, 3, 10, ord("a"), ord("b")])
         assert convert_other(x) == "Unknown"
 
     def test_empty_bytes_returns_unknown(self) -> None:
@@ -261,6 +288,25 @@ class TestConvertOther:
 
     def test_none_returns_unknown(self) -> None:
         assert convert_other(None) == "Unknown"
+
+    def test_txt_character_string_without_root_terminator_decodes(self) -> None:
+        # The reply logger (pfb_unbound.py:2771) feeds TXT rdata through this same
+        # function; a length-prefixed character-string carries no trailing root octet
+        # (that terminator is a dname-only construct), so the decoder must still return
+        # a defined shape -- the buffer simply ends when the label's content is
+        # exhausted, with no explicit terminator required. Green both before and after.
+        x = b"\x00\x06" + b"\x05hello"
+        assert convert_other(x) == "hello"
+
+    def test_mx_style_rdata_reads_as_root_and_is_unknown(self) -> None:
+        # ACCEPTED logging-only change: MX rdata carries a 2-byte preference field
+        # before its dname, which convert_other() has no way to know to skip -- the
+        # preference field's leading zero octet (b"\x00\x0a") reads as a zero-length
+        # root label, so the decode is the empty name ("Unknown"). Only the cosmetic
+        # reply logger (:2771) ever feeds MX rdata through convert_other(); the DNSBL
+        # CNAME walk only ever passes CNAME rdata, which has no such leading field.
+        x = bytes([0, 11]) + b"\x00\x0a" + bytes([3]) + b"foo" + bytes([3]) + b"com" + b"\x00"
+        assert convert_other(x) == "Unknown"
 
 
 class TestPythonControlDuration:
@@ -1390,6 +1436,44 @@ class TestOperateDnsbl:
         assert not _is_block(pfb_unbound.decisionDB.get("evil-cname.com"))
         answers = DNSMessage.instances[-1].answer
         assert any(a.startswith("orig.com. ") for a in answers)
+
+    def test_cname_target_with_long_interior_label_blocks_without_decoder_stub(self, monkeypatch: Any) -> None:
+        # End-to-end proof that operate()'s CNAME walk feeds the REAL convert_other()
+        # decoder -- unlike the sibling tests above, convert_other is NOT monkeypatched
+        # here. A CNAME target whose interior label is long enough to break the old
+        # byte-scrape (16 chars, the real-world googleadservices.com cloak shape) must
+        # still resolve to the exact blocked name and block. RED today (#717): the old
+        # scrape misdecodes "www.googleadservices.com" to "wwwgoogleadservices.com",
+        # which misses the blocklist entry entirely, so the chain falls through to the
+        # resolver instead of blocking (ext_state stays MODULE_WAIT_MODULE).
+        self._enable(monkeypatch)
+        pfb_unbound.pfb["python_cname"] = True
+        monkeypatch.setattr(pfb_unbound, "get_details_dnsbl", lambda *a, **k: None)
+        add_data("www.googleadservices.com", log="1", index=0)
+        set_feed_group(0, "F", "G")
+
+        cname_rrset = types.SimpleNamespace(
+            rk=types.SimpleNamespace(type_str="CNAME"),
+            entry=types.SimpleNamespace(
+                data=types.SimpleNamespace(count=1, rr_data=[_rr_dname("www.googleadservices.com")])
+            ),
+        )
+        a_rrset = types.SimpleNamespace(
+            rk=types.SimpleNamespace(type_str="A"),
+            entry=types.SimpleNamespace(data=types.SimpleNamespace(count=1, rr_data=[b"\x00"])),
+        )
+        return_msg = types.SimpleNamespace(
+            rep=types.SimpleNamespace(security=0, an_numrrsets=2, rrsets=[a_rrset, cname_rrset]),
+            qinfo=types.SimpleNamespace(qname_str="orig.com.", qname_list="orig.com".split(".")),
+        )
+
+        qstate = make_qstate("orig.com.", qtype=RR_A, return_msg=return_msg)
+        rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert rcd is True
+        assert qstate.ext_state[0] == MODULE_FINISHED
+        entry = pfb_unbound.decisionDB.get("orig.com")
+        assert entry is not None
+        assert entry.dnsbl.b_type == "DNSBL_CNAME"
 
     def test_cname_disabled_original_not_blocked(self, monkeypatch: Any) -> None:
         # CNAME validation OFF (the default): the SAME setup -- A (orig.com) CNAMEs to
