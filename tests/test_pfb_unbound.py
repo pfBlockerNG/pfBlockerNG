@@ -663,8 +663,15 @@ class TestGetRepTtl:
     def test_none_rep_returns_unk(self) -> None:
         assert pfb_unbound.get_rep_ttl(None) == "Unk"
 
-    def test_falsy_ttl_returns_unk(self) -> None:
+    def test_zero_ttl_reported_as_zero(self) -> None:
+        # TTL 0 is a real, meaningful value (RFC 2181 s8: deliverable, non-cacheable)
+        # -- it must reach the DNS-reply log as "0", never masked as unknown (#723).
         rep = types.SimpleNamespace(ttl=0)
+        assert pfb_unbound.get_rep_ttl(rep) == "0"
+
+    def test_absent_ttl_returns_unk(self) -> None:
+        # Only a genuinely missing TTL (no value on the reply) is unknown.
+        rep = types.SimpleNamespace(ttl=None)
         assert pfb_unbound.get_rep_ttl(rep) == "Unk"
 
 
