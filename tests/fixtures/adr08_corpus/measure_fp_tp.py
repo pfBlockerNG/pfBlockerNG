@@ -16,6 +16,15 @@ replace this embedded map with the full range tables; here it only needs to
 reproduce the resolved set for the corpus labels so the numbers are real.
 
 Run:  python tests/fixtures/adr08_corpus/measure_fp_tp.py
+
+HISTORICAL MODEL (#723): this instrument is the Phase-1 GO-gate snapshot and
+deliberately does NOT track the shipped analyzer. The production TR39 analyzer
+(pfb_unbound.py) has a FLAGGED tier this script lacks (3 tiers here vs 4
+shipped) and derives scripts via unicodedata.name(), while this script times
+its own scoped-dict lookup -- so the ~0.70us cost figure and the tier model
+cited by ADR-08 describe THIS simplified model, not production. Production
+FP/TP behaviour is re-proven by tests/test_adr08_analyzer.py; do not re-run
+this script expecting production numbers.
 """
 
 from __future__ import annotations
