@@ -268,8 +268,10 @@ def _dot_block_match_report(vm: SmokeVM, *, expected_present: bool, timeout: flo
         actual = [f"<pfctl -sr failed: rc={result.returncode} {result.stderr.strip()}>"]
     else:
         actual = [ln.strip() for ln in result.stdout.splitlines() if _is_block_853_line(ln)]
-    want = "PRESENT" if expected_present else "ABSENT"
+    want = "PRESENT (both protocols)" if expected_present else "ABSENT (no protocol)"
+    matched = _pfctl_sr_block_853_protos(vm, timeout=timeout)
     body = "\n".join(f"      {ln}" for ln in actual) if actual else "      (no block rule for port 853 / domain-s)"
+    body = f"      protocols matched: {matched or '{}'} — positive gate needs {{'tcp', 'udp'}}\n" + body
     return (
         f"  Expecting a pfBlockerNG DoT/DoQ block rule to be {want} in the live filter ruleset:\n"
         f"    destination : ! (self)\n"
