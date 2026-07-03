@@ -2567,6 +2567,301 @@ function pfb_validate_suppression_line(string $line, string $family): ?string
 	return NULL;
 }
 
+// ---------------------------------------------------------------------------
+// ADR-53 P5 — pure IPv6 CIDR set-subtraction engine
+// ---------------------------------------------------------------------------
+//
+// IPv6 suppression can't carve by host enumeration (a /64 minus a /128 hole is
+// 2^64 hosts -- ADR-53 §1.2) and `iprange` mangles v6 input outright (it parses
+// a v6 literal as a hostname). Unlike the v4 engine (Phase 3's `iprange
+// --except`), this is a pure-PHP set subtraction over fixed-width 128-bit
+// binary-string ranges, emitting the minimal covering-CIDR remainder via
+// pfSense's own ip_range_to_subnet_array() -- the REAL on-appliance function
+// (never redefined here; a faithful double stands in for it under PHPUnit,
+// see tests/php/pfsense_doubles.php).
+//
+// Every binary-string comparison below goes through strcmp(), NEVER the bare
+// <, >, <=, >=, min(), max() operators: a 128-char string of '0'/'1' digits is
+// a PHP "numeric string", and comparing two of those the normal way risks a
+// silent (lossy, float-precision) numeric coercion for a string this long.
+// strcmp() is the only byte-exact comparison for a fixed-width digit string.
+
+/**
+ * pfb_v6_cidr_to_range — parse one IPv6 CIDR token ('addr/bits') into its
+ * [start, end] 128-bit binary-string range (fixed-width '0'/'1' strings,
+ * lexically ordered exactly like the address's numeric value).
+ *
+ * A blank line or a '#'-led comment (the same tolerance
+ * pfb_validate_suppression_line() applies to the persisted suppression file)
+ * parses to NULL with $is_blank = TRUE -- a silent no-op, never an error. Any
+ * other syntactically invalid token (no '/', out-of-range mask, unparseable
+ * address) also returns NULL, but with $is_blank = FALSE so the caller
+ * reports it.
+ *
+ * PURE.
+ *
+ * @param  string     $token     One raw CIDR line, untrimmed.
+ * @param  bool|null &$is_blank  Set TRUE for a comment/blank no-op, FALSE otherwise.
+ * @return array{0:string,1:string}|null [start_bin, end_bin], or NULL when unparseable.
+ */
+function pfb_v6_cidr_to_range(string $token, ?bool &$is_blank = null): ?array
+{
+	$is_blank = FALSE;
+	$token = trim($token);
+	if ($token === '' || str_starts_with($token, '#')) {
+		$is_blank = TRUE;
+		return NULL;
+	}
+
+	if (!is_subnetv6($token)) {
+		return NULL;
+	}
+
+	[$addr, $bits_raw] = explode('/', $token, 2);
+	$bits = (int) $bits_raw;
+
+	$packed = @inet_pton($addr);
+	if ($packed === FALSE || strlen($packed) !== 16) {
+		return NULL;
+	}
+	$addr_bin = '';
+	foreach (str_split($packed) as $byte) {
+		$addr_bin .= sprintf('%08b', ord($byte));
+	}
+
+	$host_len = 128 - $bits;
+	$start    = substr($addr_bin, 0, $bits) . str_repeat('0', $host_len);
+	$end      = substr($addr_bin, 0, $bits) . str_repeat('1', $host_len);
+
+	return [$start, $end];
+}
+
+/**
+ * pfb_v6_bin_inc — increment a 128-bit binary string by one address.
+ *
+ * PURE.
+ *
+ * @return string|null The incremented string, or NULL on overflow (input was
+ *                      all '1's -- ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff).
+ */
+function pfb_v6_bin_inc(string $bin): ?string
+{
+	$pos = strrpos($bin, '0');
+	if ($pos === FALSE) {
+		return NULL;
+	}
+	return substr($bin, 0, $pos) . '1' . str_repeat('0', strlen($bin) - $pos - 1);
+}
+
+/**
+ * pfb_v6_bin_dec — decrement a 128-bit binary string by one address.
+ *
+ * PURE.
+ *
+ * @return string|null The decremented string, or NULL on underflow (input was
+ *                      all '0's -- ::).
+ */
+function pfb_v6_bin_dec(string $bin): ?string
+{
+	$pos = strrpos($bin, '1');
+	if ($pos === FALSE) {
+		return NULL;
+	}
+	return substr($bin, 0, $pos) . '0' . str_repeat('1', strlen($bin) - $pos - 1);
+}
+
+/**
+ * pfb_v6_bin_to_addr — pack a 128-bit binary string back into a textual IPv6
+ * address. Any valid textual form works: ip_range_to_subnet_array() re-derives
+ * its own binary representation from whatever is passed in, so the specific
+ * notation returned here is not load-bearing.
+ *
+ * PURE.
+ */
+function pfb_v6_bin_to_addr(string $bin): string
+{
+	$bin    = str_pad($bin, 128, '0', STR_PAD_LEFT);
+	$packed = '';
+	foreach (str_split($bin, 8) as $byte_bin) {
+		$packed .= chr(bindec($byte_bin));
+	}
+	return inet_ntop($packed);
+}
+
+/**
+ * pfb_v6_emit_covering_cidrs — the minimal covering-CIDR set for one
+ * [start, end] binary-string range, via pfSense's ip_range_to_subnet_array().
+ *
+ * @return string[] CIDR strings ('addr/bits').
+ */
+function pfb_v6_emit_covering_cidrs(string $start_bin, string $end_bin): array
+{
+	return ip_range_to_subnet_array(pfb_v6_bin_to_addr($start_bin), pfb_v6_bin_to_addr($end_bin));
+}
+
+/**
+ * pfb_cidr_subtract_v6 — set-subtract $holes from $cidrs (both IPv6 CIDR
+ * arrays), returning the minimal covering-CIDR remainder (ADR-53 §2.1 v6
+ * engine).
+ *
+ * Each entry in $cidrs is carved independently: every hole that intersects it
+ * is removed (fully, partially, or not at all), so a hole spanning multiple
+ * entries subtracts from each in turn; a hole containing an entry removes it
+ * entirely; an entry with no intersecting hole re-emits unchanged (still
+ * routed through ip_range_to_subnet_array() so notation/merging stays
+ * consistent with the carved path -- ADR-53 §2.3 fork 4). An
+ * entirely-suppressed input legitimately returns [] (ADR-53 §2.2
+ * empty-is-legit).
+ *
+ * A malformed token in EITHER array is skipped -- never a throw that aborts
+ * the whole file -- and appended to $errors verbatim; a blank/'#'-comment
+ * line is a silent no-op and never reported.
+ *
+ * PURE -- no config access, no I/O.
+ *
+ * @param  string[]       $cidrs    Feed/member CIDR lines to carve.
+ * @param  string[]       $holes    Suppression CIDR lines to carve out.
+ * @param  string[]|null &$errors   By-ref out param: the raw malformed tokens
+ *                                  skipped from either array (both sides pooled).
+ * @return string[] The covering-CIDR remainder (no particular guaranteed order).
+ */
+function pfb_cidr_subtract_v6(array $cidrs, array $holes, ?array &$errors = null): array
+{
+	$errors = [];
+
+	$entries = [];
+	foreach ($cidrs as $token) {
+		$is_blank = FALSE;
+		$range    = pfb_v6_cidr_to_range((string) $token, $is_blank);
+		if ($range === NULL) {
+			if (!$is_blank) {
+				$errors[] = (string) $token;
+			}
+			continue;
+		}
+		$entries[] = $range;
+	}
+
+	$hole_ranges = [];
+	foreach ($holes as $token) {
+		$is_blank = FALSE;
+		$range    = pfb_v6_cidr_to_range((string) $token, $is_blank);
+		if ($range === NULL) {
+			if (!$is_blank) {
+				$errors[] = (string) $token;
+			}
+			continue;
+		}
+		$hole_ranges[] = $range;
+	}
+
+	// Sort once, up front (not per entry): the per-entry filter below preserves
+	// this order, so no repeated sort is needed.
+	usort($hole_ranges, static function (array $a, array $b): int {
+		return strcmp($a[0], $b[0]);
+	});
+
+	$out = [];
+	foreach ($entries as [$estart, $eend]) {
+		// Clip every hole that intersects this entry to the entry's own bounds.
+		$intersecting = [];
+		foreach ($hole_ranges as [$hstart, $hend]) {
+			if (strcmp($hstart, $eend) > 0 || strcmp($hend, $estart) < 0) {
+				continue; // no overlap with this entry
+			}
+			$intersecting[] = [
+				strcmp($hstart, $estart) > 0 ? $hstart : $estart, // clipped start
+				strcmp($hend, $eend) < 0 ? $hend : $eend,         // clipped end
+			];
+		}
+
+		if (empty($intersecting)) {
+			// array_push(...$x) appends in place (amortised O(k) for k new
+			// elements) -- NEVER `$out = array_merge($out, $x)` here, which would
+			// recopy the whole accumulated $out on every one of up to ~100k
+			// entries (an O(n^2) blowup measured at 22s for a 100k-line file;
+			// this form measured well under a second for the same input).
+			array_push($out, ...pfb_v6_emit_covering_cidrs($estart, $eend));
+			continue;
+		}
+
+		// Walk the (already sorted) intersecting holes, emitting the gap before
+		// each one, then advancing the cursor past it; a final gap after the
+		// last hole (if any) closes out the entry.
+		$cursor = $estart;
+		foreach ($intersecting as [$hstart, $hend]) {
+			if ($cursor === NULL) {
+				break; // already carved to the top of the address space
+			}
+			if (strcmp($hstart, $cursor) > 0) {
+				$gap_end = pfb_v6_bin_dec($hstart);
+				if ($gap_end !== NULL) {
+					array_push($out, ...pfb_v6_emit_covering_cidrs($cursor, $gap_end));
+				}
+			}
+			if (strcmp($hend, $cursor) >= 0) {
+				$cursor = pfb_v6_bin_inc($hend);
+			}
+		}
+		if ($cursor !== NULL && strcmp($cursor, $eend) <= 0) {
+			array_push($out, ...pfb_v6_emit_covering_cidrs($cursor, $eend));
+		}
+	}
+
+	return $out;
+}
+
+/**
+ * pfb_suppress_file_v6 — set-subtract $suppfile's IPv6 suppression entries
+ * from $file's member-list CIDR lines and publish the covering-CIDR
+ * remainder, atomically.
+ *
+ * Fail-safe (ADR-53 §2.2): either input missing/unreadable -> FALSE, $file is
+ * left untouched -- never a truncated publish on error. On success, publishes
+ * via a same-directory tmp+rename (an atomic POSIX rename, so no reader ever
+ * observes a partial file); a legitimately-empty remainder (everything
+ * suppressed) still publishes an empty file, never a stale one. A non-CIDR
+ * line in either input is dropped and logged (pfb_logger), never fatal.
+ *
+ * PURE aside from the single target-file write (+ its companion log lines).
+ *
+ * @param  string $file     Member/deny CIDR list to carve (rewritten in place).
+ * @param  string $suppfile Suppression CIDR list (the holes).
+ * @return bool TRUE on a successful publish (including an empty one), FALSE
+ *              on any fail-safe path (previous $file left intact).
+ */
+function pfb_suppress_file_v6(string $file, string $suppfile): bool
+{
+	if (!is_readable($file) || !is_readable($suppfile)) {
+		return FALSE;
+	}
+
+	$cidrs = @file($file, FILE_IGNORE_NEW_LINES);
+	$holes = @file($suppfile, FILE_IGNORE_NEW_LINES);
+	if ($cidrs === FALSE || $holes === FALSE) {
+		return FALSE;
+	}
+
+	$errors = [];
+	$result = pfb_cidr_subtract_v6($cidrs, $holes, $errors);
+
+	foreach ($errors as $bad_token) {
+		pfb_logger("IPv6 Suppression: dropping malformed entry [ {$bad_token} ]", 2);
+	}
+
+	$tmp  = $file . '.tmp';
+	$body = empty($result) ? '' : implode(PHP_EOL, $result) . PHP_EOL;
+	if (@file_put_contents($tmp, $body, LOCK_EX) === FALSE) {
+		return FALSE;
+	}
+	if (!@rename($tmp, $file)) {
+		@unlink($tmp);
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
 // logger() and localize_text() are pfSense-core helpers (src/etc/inc/util.inc)
 // on pfSense Plus / master, but absent from released pfSense CE <= 2.8.1. Define
 // fallbacks ONLY when core does not provide them, so this package runs on both:
