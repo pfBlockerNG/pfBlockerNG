@@ -24,12 +24,11 @@ import builtins
 import types
 from typing import Any
 
-from unboundmodule import DNSMessage
+from unboundmodule import MODULE_EVENT_NEW, DNSMessage
 
 import pfb_unbound as P
 
 RR_TXT = 16
-MODULE_EVENT_NEW = 0
 
 
 def _txt_control_qstate(qname: str, q_ip: str = "127.0.0.1") -> types.SimpleNamespace:
