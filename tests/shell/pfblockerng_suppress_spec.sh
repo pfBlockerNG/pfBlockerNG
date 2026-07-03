@@ -1,75 +1,115 @@
 #shellcheck shell=sh
-# suppress() oracle (ADR-53 Phase 1) -- pins TODAY's IP-suppression semantics,
-# including its known containing-entry defect, as a regression baseline for
-# Phase 3's iprange --except rewrite. This spec is BEHAVIOUR-PRESERVING: it
-# adds no src/ change and must stay green before and after this phase; Phase 3
-# flips exactly the "containing-entry silent no-op" assertion below (§2) from
-# a no-op pin to a real-carve assertion, red on pre-Phase-3 code, green after.
+# suppress() spec (ADR-53). Phase 1 pinned TODAY's IP-suppression semantics
+# (including the containing-entry defect) as a behaviour-preserving oracle.
+# Phase 3 (this revision) flips that oracle red->green against the REWRITTEN
+# suppress(): the grep -F /24-explode + dupfile dedup + `grepcidr -vf`
+# whole-token pass are GONE, replaced by a single `iprange --except` set
+# subtraction (ADR-53 §2.1) -- true CIDR set-subtraction with a minimal
+# covering-CIDR remainder, so a suppressed host is now carved out of ANY
+# containing entry, not just the exact /24 the old explode required.
 #
 # suppress() (pfblockerng.sh) carves suppression-list entries out of a deny
 # member file (${max}/${alias}.txt), gated on a non-empty ${pfbsuppression}
-# file. Per suppression entry (always a /32 or /24 today -- pfblockerng_ip.php
-# validation): a bare-host member token is removed by the trailing
-# `grepcidr -vf` whole-token pass; a member token that is the EXACT containing
-# /24 of a /32 suppression entry is exploded into 255 individual hosts (a
-# literal grep -F string match against "<prefix>.0/24", entirely independent
-# of grepcidr) minus the suppressed octet, deduped via ${dupfile} so a second
-# /32 inside the same /24 does not re-explode; but a member token WIDER than
-# /24 (a /16, say) containing the suppressed host is a SILENT NO-OP -- ADR-53
-# §1.2 proved live that grepcidr does not split/pierce a containing CIDR, so
-# the suppressed host stays blocked with no warning. That defect is pinned
-# below as today's oracle, not fixed here.
+# file. Both inputs are pre-filtered to strict IPv4 host/CIDR token shape
+# before either reaches iprange (ADR-53 §1.2's DNS-resolution hazard: a
+# malformed token is not rejected by iprange -- it is silently treated as a
+# HOSTNAME and DNS-resolved, rc=0, no opt-out flag). Cases (a, b, f, g) use a
+# lightweight iprange-shaped STUB (address-equality removal -- the only shape
+# suppress()'s own wiring/gating logic needs to prove itself); cases (c, d, j)
+# assert something about iprange's OWN empirically-proven behaviour (the
+# covering-CIDR carve math, rc=0-on-empty) and so need the REAL binary,
+# skip-if-absent locally (house pattern: CI installs it and is the hard
+# gate -- see ADR-53 §1.2 for the measured covering-CIDR counts this pins).
 #
-# Note: tests/shell/pfblockerng_fail_open_redirect_spec.sh already pins
-# suppress()'s #713 fail-open rc-gating (grepcidr rc>=2 keep-previous; the
-# dedup="on" masterfile awk redirect) as part of a cross-function "fail-open
-# redirect" family (it also covers duplicate()/remove()/process255()/
-# reputation_max()). This file is the dedicated, comprehensive suppress()
-# semantics pin (bare-token removal, the /24 explode + dupfile dedup guard,
-# the containing-entry defect, absent/empty gating, the stats table) and
-# re-asserts the #713 rc gating here too so it is self-contained -- the two
-# files' fail-safe cases are deliberately redundant, not duplicative (each
-# proves it from its own file's narrative).
+# Note: tests/shell/pfblockerng_fail_open_redirect_spec.sh's suppress()
+# Describe blocks (Class A/B) also switched from the grepcidr-rc gate to the
+# iprange-rc gate in this same phase -- see that file's header. The two
+# files' fail-safe cases stay deliberately redundant, not duplicative: each
+# proves the rc-gating contract from its own file's self-contained narrative.
 
 Describe 'suppress() (ADR-53 Phase 1 oracle)'
   BeforeAll 'pfb_source'
 
-  # ---- grepcidr shim ----
-  # Fake grepcidr -vf <filter> <target> for the suppress() oracle.
+  # Real iprange --except performs actual CIDR set-subtraction with a minimal
+  # covering-CIDR remainder (ADR-53 §1.2) -- a stub cannot fake that math, so
+  # cases (c, d, j) below need the real binary. CI installs it (test.yml);
+  # locally, absent = skip (house pattern: missing tool reported + skipped,
+  # CI is the hard gate).
+  # spec_helper.sh prepends PFB_SHIMS onto PATH with its OWN `iprange` stand-in
+  # (a bare `sort -u` passthrough built for the AWS pre-script tests -- no
+  # --except/aggregation semantics), so a bare `command -v iprange` would
+  # resolve to THAT, not the real binary. Search past it explicitly.
+  pfb_real_iprange() {
+    ( PATH="$(printf '%s\n' "${PATH}" | sed "s#${PFB_SHIMS}:##")"; command -v iprange 2>/dev/null )
+  }
+  have_iprange() { [ -n "$(pfb_real_iprange)" ]; }
+  # `Skip if` runs its condition as a simple command -- a leading `!` is not
+  # a command in POSIX sh, so wrap the negation in a function.
+  no_iprange() { ! have_iprange; }
+
+  # ---- iprange stub (address-equality) ----
+  # Fake `<shim> <haystack-file> --except <except-file>` (iprange's own CLI
+  # shape -- see --help) for cases that pin suppress()'s OWN wiring/gating
+  # logic rather than iprange's covering-CIDR carve math itself (that needs
+  # the REAL binary -- see cases c/d/j further down).
   #
   # Default mode performs plain ADDRESS-EQUALITY filtering with the mask
   # stripped from both sides: every suppression entry the UI accepts today is
   # a /32 host (mask enforcement at pfblockerng_ip.php:159), so real
-  # grepcidr's CIDR-containment test ("is this target line's range a subset
-  # of a filter CIDR") collapses to "is this target line's address exactly
-  # the suppressed host". A bare host, or a target line written as that exact
-  # /32, is REMOVED -- grepcidr's proven whole-token/host removal (ADR-53
-  # §1.2, both address families). Any WIDER target CIDR (a /16 or /24 line)
-  # can never equal a single suppressed host address, so it survives
-  # completely untouched -- the exact containing-entry silent no-op ADR-53
-  # §1.2 proved live and this suite pins as today's oracle.
+  # iprange's exact CIDR-set subtraction collapses to "is this haystack
+  # line's address exactly a suppressed host". A bare host, or a line written
+  # as that exact /32, is REMOVED -- iprange's proven whole-token/host
+  # removal (ADR-53 §1.2, empirically verified). This stub does NOT attempt
+  # covering-CIDR carve math (a wider haystack CIDR is left untouched by this
+  # fake) -- cases needing that assert against the real binary instead.
   #
-  # GREPCIDR_MODE overrides the default for the #713 fail-safe rc-gating
-  # cases: empty -> a LEGITIMATE "everything suppressed" empty result, rc 1;
-  # error -> a real grepcidr error (e.g. malformed filter file), rc 2.
-  write_grepcidr_shim() {
+  # IPRANGE_MODE=error overrides the default for the #713-equivalent
+  # fail-safe rc-gating case: simulates a real iprange error (rc!=0, e.g. a
+  # missing/unloadable ipset file).
+  write_pathaggregate_shim() {
     cat > "$1" <<'SHIM'
 #!/bin/sh
-case "${GREPCIDR_MODE:-}" in
-	empty) exit 1 ;;
-	error) echo 'grepcidr: simulated malformed filter' >&2; exit 2 ;;
+case "${IPRANGE_MODE:-}" in
+	error) echo 'iprange: simulated error (missing/unloadable ipset)' >&2; exit 1 ;;
 esac
 
-filter="$2"
-target="$3"
-faddrs="$(sed 's#/.*##' "${filter}")"
+haystack="$1"
+except="$3"
+faddrs="$(sed 's#/.*##' "${except}")"
 while IFS= read -r line; do
 	[ -z "${line}" ] && continue
 	addr="${line%%/*}"
 	if ! printf '%s\n' "${faddrs}" | grep -qxF "${addr}"; then
 		printf '%s\n' "${line}"
 	fi
-done < "${target}"
+done < "${haystack}"
+SHIM
+    chmod +x "$1"
+  }
+
+  # ---- iprange stub (identity pass-through) ----
+  # Ignores --except entirely and echoes the haystack file back unchanged.
+  # Used only where the assertion targets something OTHER than the published
+  # member-file content (e.g. case h's pre-filter-drop check) and a fixed,
+  # always-succeeding binary is all that's needed to satisfy suppress()'s
+  # executable guard + rc-gated publish.
+  write_pathaggregate_identity_shim() {
+    cat > "$1" <<'SHIM'
+#!/bin/sh
+cat "$1"
+SHIM
+    chmod +x "$1"
+  }
+
+  # ---- iprange stub (always fails) ----
+  # Simulates a real iprange error (rc!=0) unconditionally -- the #713-style
+  # fail-safe gate (case i): suppress() must keep the previous list and log,
+  # never truncate/publish on a real engine error.
+  write_pathaggregate_fail_shim() {
+    cat > "$1" <<'SHIM'
+#!/bin/sh
+echo 'iprange: simulated error (missing/unloadable ipset)' >&2
+exit 1
 SHIM
     chmod +x "$1"
   }
@@ -85,8 +125,8 @@ SHIM
       : > "${masterfile}"
       dedup='off'
       errorlog="${work}/error.log"; : > "${errorlog}"
-      pathgrepcidr="${work}/grepcidr"
-      write_grepcidr_shim "${pathgrepcidr}"
+      pathaggregate="${work}/iprange"
+      write_pathaggregate_shim "${pathaggregate}"
       member="${work}/${alias}.txt"
       printf '203.0.113.5\n' > "${member}"
     }
@@ -122,8 +162,8 @@ SHIM
       : > "${masterfile}"
       dedup='off'
       errorlog="${work}/error.log"; : > "${errorlog}"
-      pathgrepcidr="${work}/grepcidr"
-      write_grepcidr_shim "${pathgrepcidr}"
+      pathaggregate="${work}/iprange"
+      write_pathaggregate_shim "${pathaggregate}"
       member="${work}/${alias}.txt"
       printf '203.0.113.5\n203.0.113.7\n203.0.113.9\n' > "${member}"
     }
@@ -138,7 +178,7 @@ SHIM
     End
   End
 
-  Describe 'c — exact-/24 explode: a /32 suppression inside a containing /24 member entry'
+  Describe 'c — exact-/24 carve: a /32 suppression inside a containing /24 member entry (real iprange)'
     setup() {
       work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pfbsuppc.XXXXXX")"
       max="${work}"
@@ -149,8 +189,7 @@ SHIM
       : > "${masterfile}"
       dedup='off'
       errorlog="${work}/error.log"; : > "${errorlog}"
-      pathgrepcidr="${work}/grepcidr"
-      write_grepcidr_shim "${pathgrepcidr}"
+      pathaggregate="$(pfb_real_iprange)"
       member="${work}/${alias}.txt"
       printf '10.9.8.0/24\n' > "${member}"
     }
@@ -158,7 +197,8 @@ SHIM
     Before 'setup'
     After 'cleanup'
 
-    It 'explodes the /24 line into its 254 non-suppressed host lines (the /24 line itself is gone)'
+    It 'carves the /32 hole out of the /24, publishing the 8 minimal covering CIDRs -- NEVER a host explosion (Phase 3: was 254 host lines pre-rewrite)'
+      Skip if 'needs the real iprange binary (apt-get install iprange in CI; absent locally)' no_iprange
       printf '10.9.8.4/32\n' > "${pfbsuppression}"
       When call silently suppress
       The status should be success
@@ -168,20 +208,23 @@ SHIM
       # so a legitimate zero-match (grep rc=1) doesn't abort the example.
       has4="$(grep -c '^10\.9\.8\.4$' "${member}" || true)"
       The variable has4 should equal 0
-      has1="$(grep -c '^10\.9\.8\.1$' "${member}" || true)"
-      The variable has1 should equal 1
-      has255="$(grep -c '^10\.9\.8\.255$' "${member}" || true)"
-      The variable has255 should equal 1
-      # seq 255 walks octets 1..255 (255 values); excluding the one suppressed
-      # octet (.4) leaves 254 -- verified empirically against the real function.
-      hostcount="$(grep -c ^ "${member}")"
-      The variable hostcount should equal 254
+      # /24 - /32 = 8 minimal covering CIDRs (empirically pinned, ADR-53 §1.2) --
+      # never the old 254-host explosion.
+      linecount="$(grep -c ^ "${member}")"
+      The variable linecount should equal 8
+      # Representative samples of the expected covering-CIDR remainder --
+      # asserting PRESENCE (not just the hole's absence) so a "carve away
+      # everything" bug can't false-pass.
+      The contents of file "${member}" should include '10.9.8.5'
+      The contents of file "${member}" should include '10.9.8.128/25'
     End
 
-    It 'a SECOND /32 suppression inside the same containing /24 does not re-explode (dupfile dedup): both hosts gone, no duplicate lines'
+    It 'a SECOND /32 suppression inside the same containing /24 is carved in the SAME iprange call (no dedup bookkeeping needed): both holes gone, minimal cover, no duplicates'
+      Skip if 'needs the real iprange binary (apt-get install iprange in CI; absent locally)' no_iprange
       # Given: two DIFFERENT /32 holes that both map to the same containing
-      # /24 -- the dupfile guard (suppress()'s "dcheck" check) must fire only
-      # once, or the explode loop would run twice and duplicate all 254 hosts.
+      # /24 -- iprange --except subtracts every hole in ONE pass, so there is
+      # no per-hole dedup guard left to prove (the old dupfile/"dcheck" check
+      # is gone).
       printf '10.9.8.4/32\n10.9.8.55/32\n' > "${pfbsuppression}"
       When call silently suppress
       The status should be success
@@ -190,18 +233,18 @@ SHIM
       The variable has4 should equal 0
       has55="$(grep -c '^10\.9\.8\.55$' "${member}" || true)"
       The variable has55 should equal 0
-      # 254 - the second suppressed host (.55, removed by the trailing
-      # grepcidr pass since the single explode run already included it).
-      hostcount="$(grep -c ^ "${member}")"
-      The variable hostcount should equal 253
-      # Then: no line was doubled by a second explode pass -- a real double
-      # explode would leave every non-suppressed host appearing twice.
+      # 12 minimal covering CIDRs for two /32 holes in one /24 (empirically
+      # verified against the real binary).
+      linecount="$(grep -c ^ "${member}")"
+      The variable linecount should equal 12
+      # Then: no line is duplicated -- a real double-explode would leave every
+      # non-suppressed host appearing twice.
       dupcount="$(sort "${member}" | uniq -d | grep -c ^ || true)"
       The variable dupcount should equal 0
     End
   End
 
-  Describe 'd — containing-entry silent no-op: the DEFECT, pinned as todays oracle (Phase 3 flips this)'
+  Describe 'd — containing-entry carve: the DEFECT FIXED (Phase 3) -- a wider containing block is genuinely carved (real iprange)'
     setup() {
       work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pfbsuppd.XXXXXX")"
       max="${work}"
@@ -213,58 +256,36 @@ SHIM
       : > "${masterfile}"
       dedup='off'
       errorlog="${work}/error.log"; : > "${errorlog}"
-      pathgrepcidr="${work}/grepcidr"
-      write_grepcidr_shim "${pathgrepcidr}"
+      pathaggregate="$(pfb_real_iprange)"
       member="${work}/${alias}.txt"
-      # A /16 member entry containing the suppressed /32 host, but NOT the
-      # exact /24 the explode branch's literal grep -F match requires.
+      # A /16 member entry containing the suppressed /32 host -- the OLD
+      # engine's literal grep -F match only ever fired for the EXACT
+      # containing /24, so this survived byte-identical (Phase 1's pinned
+      # oracle). iprange --except subtracts it regardless of the containing
+      # prefix length.
       printf '10.0.0.0/16\n' > "${member}"
     }
     cleanup() { rm -rf "${work}"; }
     Before 'setup'
     After 'cleanup'
 
-    It 'SURVIVES the containing /16 line unchanged -- the suppressed host stays blocked, ADR-53 §1.2 (Phase 3 flips this to a carve)'
+    It 'CARVES the suppressed host out of the containing /16 (was a silent no-op pre-Phase-3, ADR-53 §1.2) -- 16 covering CIDRs, suppressed host gone, siblings still covered'
+      Skip if 'needs the real iprange binary (apt-get install iprange in CI; absent locally)' no_iprange
       When call silently suppress
       The status should be success
-      The contents of file "${member}" should equal '10.0.0.0/16'
-    End
-  End
-
-  Describe 'e — grepcidr fail-safe publish gating (#713), re-asserted here for a self-contained oracle'
-    setup() {
-      work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pfbsuppe.XXXXXX")"
-      max="${work}"
-      alias='TestList_v4'
-      pfbsuppression="${work}/suppression.txt"
-      printf '203.0.113.7/32\n' > "${pfbsuppression}"
-      tempfile="${work}/t1"; tempfile2="${work}/t2"; dupfile="${work}/t3"; dedupfile="${work}/t4"
-      masterfile="${work}/master"; mastercat="${work}/mastercat"
-      : > "${masterfile}"
-      dedup='off'
-      errorlog="${work}/error.log"; : > "${errorlog}"
-      pathgrepcidr="${work}/grepcidr"
-      write_grepcidr_shim "${pathgrepcidr}"
-      member="${work}/${alias}.txt"
-      printf '203.0.113.5\n203.0.113.7\n203.0.113.9\n' > "${member}"
-    }
-    cleanup() { rm -rf "${work}"; }
-    Before 'setup'
-    After 'cleanup'
-
-    It 'keeps the PRIOR member list unchanged when grepcidr errors (rc>=2), and logs the error'
-      GREPCIDR_MODE='error'; export GREPCIDR_MODE
-      When call silently suppress
-      The status should be success
-      The contents of file "${member}" should equal "$(printf '203.0.113.5\n203.0.113.7\n203.0.113.9')"
-      The contents of file "${errorlog}" should include 'grepcidr error'
-    End
-
-    It 'publishes an EMPTY member list on grepcidr rc=1 (a legitimate "everything suppressed" outcome)'
-      GREPCIDR_MODE='empty'; export GREPCIDR_MODE
-      When call silently suppress
-      The status should be success
-      The contents of file "${member}" should equal ''
+      # Before Phase 3, this line was pinned BYTE-IDENTICAL '10.0.0.0/16' --
+      # today's defect. After the carve, the /16 line itself is gone,
+      # replaced by its minimal covering-CIDR remainder.
+      The contents of file "${member}" should not include '10.0.0.0/16'
+      # /16 - /32 = 16 minimal covering CIDRs (empirically pinned, ADR-53 §1.2).
+      linecount="$(grep -c ^ "${member}")"
+      The variable linecount should equal 16
+      has_host="$(grep -c '^10\.0\.3\.4$' "${member}" || true)"
+      The variable has_host should equal 0
+      # Representative samples either side of the hole -- proves the
+      # remainder genuinely covers the siblings, not an over-carve.
+      The contents of file "${member}" should include '10.0.0.0/23'
+      The contents of file "${member}" should include '10.0.128.0/17'
     End
   End
 
@@ -282,8 +303,8 @@ SHIM
       printf 'DedupList_v4 PRIOR-1\nDedupList_v4 PRIOR-2\nOtherList_v4 198.51.100.5\n' > "${masterfile}"
       dedup='on'
       errorlog="${work}/error.log"; : > "${errorlog}"
-      pathgrepcidr="${work}/grepcidr"
-      write_grepcidr_shim "${pathgrepcidr}"
+      pathaggregate="${work}/iprange"
+      write_pathaggregate_shim "${pathaggregate}"
       member="${work}/${alias}.txt"
       printf '203.0.113.5\n203.0.113.7\n203.0.113.9\n' > "${member}"
     }
@@ -314,8 +335,8 @@ SHIM
       : > "${masterfile}"
       dedup='off'
       errorlog="${work}/error.log"; : > "${errorlog}"
-      pathgrepcidr="${work}/grepcidr"
-      write_grepcidr_shim "${pathgrepcidr}"
+      pathaggregate="${work}/iprange"
+      write_pathaggregate_shim "${pathaggregate}"
       alias='StatsList_v4'
       member="${work}/${alias}.txt"
       printf '203.0.113.5\n203.0.113.7\n203.0.113.9\n' > "${member}"
@@ -341,6 +362,102 @@ SHIM
       The stdout should include 'StatsList_v4'
       # Pre = 3 (member file before this call); Suppress = 2 (one host removed).
       The stdout should match pattern "*StatsList_v4*3*2*0*"
+    End
+  End
+
+  Describe 'h — iprange DNS-resolution hazard (ADR-53 §1.2): a hostname-shaped suppression token is dropped BEFORE it ever reaches iprange'
+    setup() {
+      work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pfbsupph.XXXXXX")"
+      max="${work}"
+      alias='TestList_v4'
+      pfbsuppression="${work}/suppression.txt"
+      tempfile="${work}/t1"; tempfile2="${work}/t2"; dupfile="${work}/t3"; dedupfile="${work}/t4"
+      masterfile="${work}/master"; mastercat="${work}/mastercat"
+      : > "${masterfile}"
+      dedup='off'
+      errorlog="${work}/error.log"; : > "${errorlog}"
+      pathaggregate="${work}/iprange"
+      write_pathaggregate_identity_shim "${pathaggregate}"
+      member="${work}/${alias}.txt"
+      printf '203.0.113.5\n203.0.113.7\n203.0.113.9\n' > "${member}"
+    }
+    cleanup() { rm -rf "${work}"; }
+    Before 'setup'
+    After 'cleanup'
+
+    It 'never reaches iprange: dropped from the filtered suppression scratch file before the call, and logged'
+      # A hostname-shaped token in the suppression list -- ADR-53 §1.2 proved
+      # iprange treats a malformed token as a HOSTNAME and DNS-resolves it
+      # (rc=0, no opt-out flag): a silent mid-update DNS lookup that, if it
+      # resolved, would subtract the resolved IPs as if they were a real
+      # suppression entry. The pre-filter must drop it before iprange ever
+      # sees it -- proven here by inspecting suppress()'s OWN filtered
+      # scratch file (${dupfile}) directly, not merely that the published
+      # result "looks right".
+      printf '203.0.113.7/32\nevil.example.com\n' > "${pfbsuppression}"
+      When call silently suppress
+      The status should be success
+      The contents of file "${dupfile}" should not include 'evil.example.com'
+      The contents of file "${dupfile}" should include '203.0.113.7/32'
+      The contents of file "${errorlog}" should include 'dropping malformed suppression entry'
+    End
+  End
+
+  Describe 'i — iprange fail-safe publish gating (#713-equivalent): a real engine error keeps the previous list'
+    setup() {
+      work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pfbsuppi.XXXXXX")"
+      max="${work}"
+      alias='TestList_v4'
+      pfbsuppression="${work}/suppression.txt"
+      printf '203.0.113.7/32\n' > "${pfbsuppression}"
+      tempfile="${work}/t1"; tempfile2="${work}/t2"; dupfile="${work}/t3"; dedupfile="${work}/t4"
+      masterfile="${work}/master"; mastercat="${work}/mastercat"
+      : > "${masterfile}"
+      dedup='off'
+      errorlog="${work}/error.log"; : > "${errorlog}"
+      pathaggregate="${work}/iprange"
+      write_pathaggregate_fail_shim "${pathaggregate}"
+      member="${work}/${alias}.txt"
+      printf '203.0.113.5\n203.0.113.7\n203.0.113.9\n' > "${member}"
+    }
+    cleanup() { rm -rf "${work}"; }
+    Before 'setup'
+    After 'cleanup'
+
+    It 'keeps the PRIOR member list unchanged when iprange errors (rc!=0, e.g. a missing/unloadable ipset file), and logs the error'
+      When call silently suppress
+      The status should be success
+      The contents of file "${member}" should equal "$(printf '203.0.113.5\n203.0.113.7\n203.0.113.9')"
+      The contents of file "${errorlog}" should include 'iprange error'
+    End
+  End
+
+  Describe 'j — full suppression: the suppression set exactly equals the member set (real iprange)'
+    setup() {
+      work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pfbsuppj.XXXXXX")"
+      max="${work}"
+      alias='TestList_v4'
+      pfbsuppression="${work}/suppression.txt"
+      printf '203.0.113.7/32\n' > "${pfbsuppression}"
+      tempfile="${work}/t1"; tempfile2="${work}/t2"; dupfile="${work}/t3"; dedupfile="${work}/t4"
+      masterfile="${work}/master"; mastercat="${work}/mastercat"
+      : > "${masterfile}"
+      dedup='off'
+      errorlog="${work}/error.log"; : > "${errorlog}"
+      pathaggregate="$(pfb_real_iprange)"
+      member="${work}/${alias}.txt"
+      printf '203.0.113.7\n' > "${member}"
+    }
+    cleanup() { rm -rf "${work}"; }
+    Before 'setup'
+    After 'cleanup'
+
+    It 'publishes an EMPTY member list when suppression removes every entry -- a LEGITIMATE outcome (iprange rc=0 either way; no grepcidr-style rc=1 quirk to special-case)'
+      Skip if 'needs the real iprange binary (apt-get install iprange in CI; absent locally)' no_iprange
+      When call silently suppress
+      The status should be success
+      The contents of file "${member}" should equal ''
+      The contents of file "${errorlog}" should equal ''
     End
   End
 End

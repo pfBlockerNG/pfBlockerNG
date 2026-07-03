@@ -230,6 +230,14 @@ jobs:
         # jq drives the ip_pre_AWS_*.sh region filters (required).
         run: sudo apt-get update && sudo apt-get install -y jq
 
+      - name: Install iprange
+        # Real `iprange --except` set-subtraction (ADR-53 P3): the same
+        # FireHOL iprange tool pfblockerng.sh's pathaggregate assumes at
+        # /usr/local/bin/iprange on the appliance. Locally the shellspec
+        # cases needing it skip when absent (house pattern); here it must be
+        # present so they actually run.
+        run: sudo apt-get update && sudo apt-get install -y iprange
+
       - name: Install shellspec
         # Pinned release tarball; the executable runs from its extracted tree.
         run: |

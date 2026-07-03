@@ -110,10 +110,11 @@ Describe 'ADR-26 — pfblockerng.sh locale/portability source invariants (Phases
     When call lacks '/usr/bin/jot'
     The status should be success
   End
-  It 'uses a portable seq for the 1..255 range'
-    When call has 'seq 255'
-    The status should be success
-  End
+  # The portable `seq 255` this gate once pinned lived ONLY in suppress()'s
+  # /24-host-explode loop -- ADR-53 Phase 3 deleted that loop entirely
+  # (replaced by `iprange --except` set-subtraction), so the call site the
+  # jot->seq portability fix protected is gone, not reverted. `seq` no longer
+  # appears anywhere in the script; nothing left to pin here.
 End
 
 Describe 'ADR-26 — LC_ALL=C dedup is byte-exact (§2.1 guarantee)'
