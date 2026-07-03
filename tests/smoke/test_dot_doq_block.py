@@ -214,12 +214,30 @@ def _is_block_853_line(line: str) -> bool:
     return "block" in line and ("853" in line or "domain-s" in line)
 
 
-def _pfctl_sr_has_block_853(vm: SmokeVM, *, timeout: float = 30.0) -> bool:
-    """True iff ``pfctl -sr`` output contains a block rule for port 853."""
+def _pfctl_sr_block_853_protos(vm: SmokeVM, *, timeout: float = 30.0) -> set[str]:
+    """The protocols ({"tcp","udp"}) with a loaded block rule for port 853 (#723).
+
+    pf expands the config-level ``tcp/udp`` block into per-protocol rules; returning the
+    set lets the positive gate require BOTH (a lost UDP-853/DoQ leg with TCP-853/DoT kept
+    must fail) while absence checks use the empty set.
+    """
     result = vm.ssh(h.PFCTL, "-sr", timeout=timeout)
+    protos: set[str] = set()
     if result.returncode != 0:
-        return False
-    return any(_is_block_853_line(line) for line in result.stdout.splitlines())
+        return protos
+    for line in result.stdout.splitlines():
+        if not _is_block_853_line(line):
+            continue
+        if " proto tcp " in line:
+            protos.add("tcp")
+        if " proto udp " in line:
+            protos.add("udp")
+    return protos
+
+
+def _pfctl_sr_has_block_853(vm: SmokeVM, *, timeout: float = 30.0) -> bool:
+    """Positive render gate: BOTH protocols of the 853 block are loaded (#723)."""
+    return {"tcp", "udp"} <= _pfctl_sr_block_853_protos(vm, timeout=timeout)
 
 
 def _pfctl_sr_block_853_has_self_exempt(vm: SmokeVM, *, timeout: float = 30.0) -> bool:
@@ -495,7 +513,7 @@ def test_dot_doq_block_rule_appears_on_enable(deployed_vm: SmokeVM, primary_ifac
         assert _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX) == 0, (
             "pfB_DoT_Block_* filter/rule entries present before enable — before-state not clean"
         )
-        assert not _pfctl_sr_has_block_853(vm), (
+        assert not _pfctl_sr_block_853_protos(vm), (
             "pfctl -sr shows a port-853 block rule before enable — before-state not clean\n"
             + _dot_block_match_report(vm, expected_present=False)
         )
@@ -699,7 +717,7 @@ def test_dot_doq_block_rule_removed_on_disable(deployed_vm: SmokeVM, primary_ifa
         )
 
         # THEN — pfctl -sr must show no port-853 block rule.
-        assert not _pfctl_sr_has_block_853(vm), (
+        assert not _pfctl_sr_block_853_protos(vm), (
             "pfctl -sr still shows port-853 block rule after disable\n"
             + _dot_block_match_report(vm, expected_present=False)
         )
@@ -1061,7 +1079,7 @@ def test_self_exempt_guard_in_pfctl_output(deployed_vm: SmokeVM, primary_iface: 
         h.reload(vm, "update", wait_unbound=False)
         h.apply_filter_sync(vm)
 
-        assert not _pfctl_sr_has_block_853(vm), (
+        assert not _pfctl_sr_block_853_protos(vm), (
             "pfctl -sr shows a port-853 block rule before enable — before-state not clean\n"
             + _dot_block_match_report(vm, expected_present=False)
         )
@@ -1153,7 +1171,7 @@ def test_dot_block_master_disable_removes_rules_despite_toggle_on(deployed_vm: S
         )
 
         # THEN — pfctl confirms no port-853 block.
-        assert not _pfctl_sr_has_block_853(vm), (
+        assert not _pfctl_sr_block_853_protos(vm), (
             "pfctl -sr still shows a port-853 block rule after master-disable\n"
             + _dot_block_match_report(vm, expected_present=False)
         )
@@ -1223,7 +1241,7 @@ def test_dot_block_dnsbl_disable_removes_rules_despite_toggle_on(deployed_vm: Sm
         )
 
         # THEN — pfctl confirms no port-853 block.
-        assert not _pfctl_sr_has_block_853(vm), (
+        assert not _pfctl_sr_block_853_protos(vm), (
             "pfctl -sr still shows a port-853 block rule after DNSBL-disable\n"
             + _dot_block_match_report(vm, expected_present=False)
         )
