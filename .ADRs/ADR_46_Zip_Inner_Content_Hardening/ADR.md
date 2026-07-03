@@ -1,6 +1,6 @@
 # ADR-46: ZIP inner-content validation consistency and extraction-path hardening
 
-- **Status:** **Proposed** (2026-06-28) — defense-in-depth; lower priority than ADR-45 (most of the original "re-enable the inner check" ask is already satisfied — see §1)
+- **Status:** **Proposed** (2026-06-28; facts refreshed 2026-07-03 against `devel` — the §1 extraction inventory was corrected to THREE disk-writing sites, and the guard-scope question in §2.3 is an open fork; phase prompts not yet authored) — defense-in-depth; lower priority than ADR-45 (most of the original "re-enable the inner check" ask is already satisfied — see §1)
 - **Date:** 2026-06-28
 - **Branch:** `adr/46-zip-inner-content-hardening` (off `devel`) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfblockerng.inc`
 - **Target runtime:** PHP 8.3, FreeBSD / pfSense; `bsdtar` (libarchive)
@@ -18,9 +18,9 @@ spec, two of the three are already handled or infeasible:
 
 - **ZIP inner-content validation is already active** — after `tar -xOf` extraction the
   ZIP branch **re-runs `PFB_FILTER_FILE_MIME` on the extracted payload**
-  (`pfblockerng.inc` ~line 8389). So a ZIP whose *contents* are not an allow-listed type
-  is already rejected. The source review itself noted this post-extraction check "is
-  actually quite good."
+  (`pfb_download()` in `pfblockerng.inc`, ~:9209). So a ZIP whose *contents* are not an
+  allow-listed type is already rejected. The source review itself noted this
+  post-extraction check "is actually quite good."
 - **The `file -bZ` `_COMPRESSED` check cannot be re-enabled for ZIP.** libmagic's `-Z`
   decompresses a *single compressed stream* (gzip/bzip2/xz) and classifies the inner
   bytes; a **ZIP is a multi-member container**, not a single stream, so `-Z` does not
@@ -30,9 +30,13 @@ spec, two of the three are already handled or infeasible:
   post-extraction MIME re-check is the correct ZIP equivalent.
 - **Path traversal on the main path is already neutralised.** The primary ZIP path extracts
   with `tar -xOf` (to **stdout**, piped through `sed`/`tr`) — member names never reach the
-  filesystem, so a `../`-laden member cannot escape. The **only** disk-writing extraction
-  is the trusted GeoIP/top-1M branch (`tar -xf --strip=1 -C <dir>`), which handles MaxMind
-  / top-1M archives, not arbitrary user feeds.
+  filesystem, so a `../`-laden member cannot escape. There are **THREE** disk-writing
+  extractions in `pfb_download()` (corrected 2026-07-03 — the original text claimed one):
+  the gzip GeoIP branch (`tar -xzf --strip=1 -C {geoipshare}`, ~:9088), the **UT1/blacklist
+  branch** (`tar -xf --include='*domains' … -C {dbdir}/…`, ~:9114 — a **third-party**
+  archive from ut-capitole.fr whose member names feed on-disk filenames), and the ZIP
+  GeoIP/top-1M branch (`tar -xf --strip=1 -C`, ~:9172). Only the last handles MaxMind /
+  top-1M; the UT1 branch is not maintainer-trusted infrastructure.
 
 So the residual, genuinely-new value is narrow and defense-in-depth:
 
@@ -40,10 +44,13 @@ So the residual, genuinely-new value is narrow and defense-in-depth:
    post-extraction MIME re-check as *the* ZIP inner-content gate, and document why `-bZ`
    stays off, so a future maintainer does not re-open the "re-enable the inner check"
    rabbit hole.
-2. **Add an explicit member-name guard before any disk-writing extraction** (the
-   `tar -xf -C` GeoIP/top-1M path) — reject an archive containing a member whose name is
-   absolute (`/…`), contains a `..` path component, or is implausibly long, *before*
-   extracting to disk. Cheap insurance even though those feeds are trusted.
+2. **Add an explicit member-name guard before any disk-writing extraction** — reject an
+   archive containing a member whose name is absolute (`/…`), contains a `..` path
+   component, or is implausibly long, *before* extracting to disk. **Open fork
+   (guard scope):** the lazy root-cause is one guard call before **all three** `-C`
+   extraction sites (§1) — the UT1 branch is the least-trusted of the three; if any site is
+   deliberately excluded, the ADR must say why. Maintainer's call before the phase prompts
+   are authored.
 
 **Out of scope (own ADRs):** outer MIME normalisation (ADR-44, done); structural integrity
 probes + octet-stream recovery (ADR-45); standardised reject logging (ADR-48); plain-text
@@ -57,18 +64,30 @@ path is unchanged; the GeoIP/top-1M extraction still works for legitimate archiv
 ## 2. Decision
 
 1. **`pfb_zip_member_names(string $file): array`** — list archive members (`bsdtar -tf`,
-   the listing already used for the xlsx probe), returned as a PHP array. Thin, but isolates
-   the `exec` for testing the guard logic against captured listings.
+   the listing already used for the xlsx probe), returned as a PHP array. **Must filter
+   bsdtar warning/noise lines** — the same listing path already special-cases a
+   `tar: Failed to set default locale` first line (see the existing handling near the ZIP
+   listing, ~:9168); a lister that returns warning lines as "member names" triggers exactly
+   the false-reject risk §3 names. Thin, but isolates the `exec` for testing the guard
+   logic against captured listings.
 
 2. **`pfb_archive_members_safe(array $names): bool`** — a **pure** predicate: `FALSE` if any
    member name is absolute, contains a `..` component (split on `/`), or exceeds a sane length
-   cap; `TRUE` otherwise. Unit-tested against the full matrix of hostile and benign names.
+   cap (**cap value settled in Phase 1 and pinned by its tests** — it is currently
+   unspecified); `TRUE` otherwise. Unit-tested against the full matrix of hostile and benign
+   names.
 
-3. **Wire the guard before disk extraction.** In the GeoIP/top-1M branch, before
-   `tar -xf --strip=1 -C`, call the guard on the member list; on `FALSE`, log (format per
-   ADR-48) + `unlink_if_exists()` + `return FALSE`. The `-xOf` stdout path is left unchanged
-   (no disk write, no traversal surface) but gains a one-line comment recording why no guard
-   is needed there.
+3. **Wire the guard before disk extraction** (sites per the §1.2 guard-scope fork). Before
+   each guarded `tar … -C`, call the guard on the member list; on `FALSE`, log via plain
+   `pfb_logger()` matching the ADR-45 reject-line style (**ADR-48 is still Proposed — do not
+   depend on it; restyle to its format when it lands**) + `unlink_if_exists()` +
+   `return FALSE`. **Red-test observable:** the pre-change behaviour on a hostile archive is
+   **silent partial success** — extraction errors are discarded (`>/dev/null 2>&1`) and the
+   branch returns `TRUE` unconditionally (bsdtar's default refusal of `..` members just
+   skips them) — so the failing-before test must assert the explicit reject log + `FALSE`
+   return + no partial extraction, never a generic "import fails". The `-xOf` stdout path is
+   left unchanged (no disk write, no traversal surface) but gains a one-line comment
+   recording why no guard is needed there.
 
 4. **Formalise the inner-content comment.** Replace the disabled `_COMPRESSED` block's prose
    with a precise statement: ZIP inner-content validation **is** the post-extraction
@@ -83,7 +102,7 @@ path is unchanged; the GeoIP/top-1M extraction still works for legitimate archiv
 | ZIP inner-content gate | Keep the post-extraction `PFB_FILTER_FILE_MIME` re-check; document it as the gate |
 | `file -bZ` for ZIP | Stays off — `-Z` cannot classify a multi-member container (documented, not deferred) |
 | `tar -xOf` main path | Unchanged (stdout — no traversal surface); comment why |
-| `tar -xf -C` GeoIP/top-1M path | Add `pfb_archive_members_safe()` guard before extraction |
+| `tar … -C` disk-writing paths (gzip GeoIP, UT1/blacklist, ZIP GeoIP/top-1M) | Add `pfb_archive_members_safe()` guard before extraction (scope per the §1.2 open fork) |
 | `pfb_archive_members_safe()` | New pure predicate: reject absolute / `..` / over-long member names |
 
 ---
@@ -148,8 +167,18 @@ archive is rejected; a legitimate multi-file archive still imports.
 
 **Prompt:** `03_Smoke_And_Accept.txt`
 
-Add the hostile-member + legitimate-multi-file fixtures to `tests/smoke/test_smoke_feeds.py`;
-green CE + Plus fan-out flips the ADR to Accepted.
+Add the hostile-member + legitimate-multi-file fixtures and cases; green CE + Plus fan-out
+flips the ADR to Accepted. Mechanics pinned in advance (they are not the `test_smoke_feeds.py`
+default path):
+
+- The GeoIP/top-1M URLs are **hardcoded** in `pfblockerng.php`, so `mock_feeds.feed_url()`
+  cannot reach that branch via feed config — drive `pfb_download()` **directly** via
+  `h.php_eval` pointed at the mock server (the `tests/smoke/test_smoke_714_asn_geoip.py`
+  pattern).
+- A `../`-member archive cannot be created by stock `zip`/`bsdtar` (they refuse) — craft it
+  as **raw bytes** (e.g. Python `zipfile` on the dev box), commit it to
+  `tests/smoke/fixtures/` with a README entry, and verify its on-FreeBSD classification per
+  that README's FreeBSD-verified-corpus convention (the ADR-45 libmagic-divergence lesson).
 
 ---
 
