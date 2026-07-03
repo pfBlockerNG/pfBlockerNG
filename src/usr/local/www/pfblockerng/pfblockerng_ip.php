@@ -67,7 +67,10 @@ $pconfig['pass_order']		= $pfb['iconfig']['pass_order']				?: 'order_0';
 $pconfig['autorule_suffix']	= $pfb['iconfig']['autorule_suffix']			?: 'autorule';
 $pconfig['killstates']		= $pfb['iconfig']['killstates']				?: '';
 $pconfig['v4suppression']	= base64_decode($pfb['iconfig']['v4suppression'])	?: '';
-$pconfig['v6suppression']	= base64_decode($pfb['iconfig']['v6suppression'])	?: '';
+// ADR-53 review finding B: '?? ""' on the array read -- v6suppression (unlike
+// v4suppression) is NEVER install-migrated, so it is absent from config.xml
+// on every install until this page's first post-upgrade save.
+$pconfig['v6suppression']	= base64_decode($pfb['iconfig']['v6suppression'] ?? '')	?: '';
 
 // Select array options
 $options_asn_reporting 		= [	'disabled'	=> 'Disabled',

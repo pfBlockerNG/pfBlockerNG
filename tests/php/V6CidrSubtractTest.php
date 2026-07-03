@@ -27,6 +27,8 @@ use PHPUnit\Framework\TestCase;
  */
 #[CoversFunction('pfb_cidr_subtract_v6')]
 #[CoversFunction('pfb_suppress_file_v6')]
+#[CoversFunction('pfb_v6_bin_inc')]
+#[CoversFunction('pfb_v6_bin_dec')]
 final class V6CidrSubtractTest extends TestCase
 {
 	// =========================================================================
@@ -434,6 +436,26 @@ final class V6CidrSubtractTest extends TestCase
 	}
 
 	// =========================================================================
+	// pfb_v6_bin_inc / pfb_v6_bin_dec -- overflow/underflow edges (ADR-53
+	// review finding H2; the binary-string increment/decrement helpers the
+	// subtraction engine walks addresses with, uncovered until now)
+	// =========================================================================
+
+	public function testBinIncOverflowAllOnesReturnsNull(): void
+	{
+		// ffff:ffff:...:ffff (all-ones, the highest representable v6 address)
+		// has no next address -- must overflow to NULL, never wrap to all-zeros.
+		$this->assertNull(pfb_v6_bin_inc(str_repeat('1', 128)));
+	}
+
+	public function testBinDecUnderflowAllZeroesReturnsNull(): void
+	{
+		// :: (all-zeros, the lowest representable v6 address) has no prior
+		// address -- must underflow to NULL, never wrap to all-ones.
+		$this->assertNull(pfb_v6_bin_dec(str_repeat('0', 128)));
+	}
+
+	// =========================================================================
 	// pfb_suppress_file_v6 -- file-level, fail-safe publish
 	// =========================================================================
 
@@ -573,5 +595,43 @@ final class V6CidrSubtractTest extends TestCase
 
 		$this->assertTrue($ok);
 		$this->assertFileDoesNotExist($file . '.tmp', 'the tmp+rename publish must never leave a stray .tmp file behind');
+	}
+
+	/**
+	 * ADR-53 review finding H1: a file_put_contents() FAILURE on the .tmp path
+	 * (not the rename step -- that branch already unlinked) must not leave a
+	 * stray .tmp file behind either.
+	 *
+	 * Deterministic trick: pre-create the .tmp path (simulating debris left by
+	 * a prior crashed run) and strip its write permission -- file_put_contents()
+	 * fails to open it for writing (its own internal fopen()), so it returns
+	 * FALSE without ever touching the pre-existing file's content. The FIX
+	 * must still unlink it on that failure branch.
+	 */
+	public function testFilePutContentsFailureUnlinksStrayTmpFile(): void
+	{
+		if (function_exists('posix_getuid') && posix_getuid() === 0) {
+			$this->markTestSkipped('running as root -- permission-based failure injection cannot be simulated');
+		}
+
+		$file     = $this->makeTempFile("2001:db8::/64\n");
+		$suppfile = $this->makeTempFile("2001:db8::5353/128\n");
+
+		$tmp = $file . '.tmp';
+		file_put_contents($tmp, 'stale debris from a prior crashed run');
+		chmod($tmp, 0444);
+		$this->tmpfiles[] = $tmp;
+
+		try {
+			$ok = pfb_suppress_file_v6($file, $suppfile);
+
+			$this->assertFalse($ok, 'a file_put_contents() failure on the tmp path must fail safe (FALSE)');
+			$this->assertFileDoesNotExist(
+				$tmp,
+				'a stray .tmp must not survive a file_put_contents() failure -- it must be unlinked on that branch too'
+			);
+		} finally {
+			@chmod($tmp, 0644); // restore writability so tearDown's cleanup can remove it if still present
+		}
 	}
 }

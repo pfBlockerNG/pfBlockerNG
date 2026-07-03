@@ -4676,6 +4676,31 @@ function pfb_cross_list_scope(bool $dup_on, bool $rep_on): bool {
 	return $dup_on || $rep_on;
 }
 
+/**
+ * pfb_supp_update_active — whether this pass should flip $pfb['supp_update']
+ * TRUE, unlocking BOTH families' suppression sub-pass this reload (ADR-53
+ * review finding A).
+ *
+ * $pfb['supp_update'] gates the v4 AND v6 suppression sub-passes alike
+ * (pfblockerng.inc's alias-build loop checks it for both '_v4' and '_v6'
+ * vtype passes). Before this fix it was set TRUE only inside the v4-only
+ * dedup/reputation block (`$pfbadv && $list['vtype'] == '_v4'`), so a
+ * deployment with ONLY v6 Deny aliases configured never flipped it and the
+ * v6 suppress pass could never fire, even with v6suppression populated. The
+ * fix is family-agnostic: any feed-changed DENY-folder alias (v4 or v6)
+ * unlocks suppression for this reload, mirroring the scope suppression
+ * itself already applies (Deny_* + Alias_Deny only, both families,
+ * ADR-53 §2.1 "Scope of application"). Dedup/reputation bookkeeping stays
+ * v4-only (ADR-53 §1.2) — that gate is untouched, only this one is split out.
+ *
+ * @param bool $pfbadv       TRUE for a Deny-folder alias (adv => TRUE).
+ * @param bool $supp_enabled TRUE when the master "Enable Suppression" toggle is on.
+ * @return bool TRUE = flip $pfb['supp_update'] TRUE for this reload.
+ */
+function pfb_supp_update_active(bool $pfbadv, bool $supp_enabled): bool {
+	return $pfbadv && $supp_enabled;
+}
+
 // ---------------------------------------------------------------------------
 // ADR-40 Phase 4 — forward-delta alias-table apply
 // ---------------------------------------------------------------------------
@@ -4959,7 +4984,12 @@ function pfb_build_if_list($show_wan=FALSE, $show_groups=FALSE) {
 function pfb_create_suppression_file() {
 	global $pfb;
 
-	$v4suppression = pfbng_text_area_decode($pfb['ipconfig']['v4suppression'], FALSE, TRUE);
+	// ADR-53 review finding B: '?? ""' -- both keys are absent from config.xml
+	// on every install until its first IP-settings save post-upgrade (the
+	// install migration only seeds v4suppression when a legacy
+	// pfBlockerNGSuppress alias existed; v6suppression is never migrated), so
+	// a direct array read here throws a PHP8 "undefined array key" warning.
+	$v4suppression = pfbng_text_area_decode($pfb['ipconfig']['v4suppression'] ?? '', FALSE, TRUE);
 	if (!empty($v4suppression)) {
 		@file_put_contents("{$pfb['supptxt']}", $v4suppression, LOCK_EX);
 	} else {
@@ -4967,7 +4997,7 @@ function pfb_create_suppression_file() {
 	}
 
 	// ADR-53 P6: v6 sibling -- same decode/write/unlink-when-empty shape as v4 above.
-	$v6suppression = pfbng_text_area_decode($pfb['ipconfig']['v6suppression'], FALSE, TRUE);
+	$v6suppression = pfbng_text_area_decode($pfb['ipconfig']['v6suppression'] ?? '', FALSE, TRUE);
 	if (!empty($v6suppression)) {
 		@file_put_contents("{$pfb['supptxt_v6']}", $v6suppression, LOCK_EX);
 	} else {
@@ -10196,8 +10226,11 @@ function pfb_remove_states() {
 	// '/24' materialisation -- which could only express a bare host or an exact '/24';
 	// any other containing mask (v4 '/8'-'/23', any v6 mask) silently stayed
 	// unsuppressed (ADR-53 §1.2/§2.2 -- a correctness strengthening).
-	$v4suppression = pfbng_text_area_decode($pfb['ipconfig']['v4suppression'], TRUE, FALSE);
-	$v6suppression = pfbng_text_area_decode($pfb['ipconfig']['v6suppression'], TRUE, FALSE);
+	// ADR-53 review finding B: '?? ""' -- same absent-key guard as
+	// pfb_create_suppression_file() (both keys are absent from config.xml
+	// until their first save on an upgraded or fresh install).
+	$v4suppression = pfbng_text_area_decode($pfb['ipconfig']['v4suppression'] ?? '', TRUE, FALSE);
+	$v6suppression = pfbng_text_area_decode($pfb['ipconfig']['v6suppression'] ?? '', TRUE, FALSE);
 
 	// Collect Interface list that have pfB Rules assigned
 	$data		= pfb_filterrules();
@@ -16556,13 +16589,17 @@ function sync_package_pfblockerng($cron='') {
 								$pfb_alias_lists[] = "{$alias}";
 
 								if ($pfbadv && $list['vtype'] == '_v4') {
-									// Execute Reputation functions, when changes are found.
+									// Execute Reputation functions, when changes are found
+									// (v4-only: dedup/reputation bookkeeping is v4-only,
+									// ADR-53 §1.2).
 									$pfb['repcheck'] = TRUE;
+								}
 
-									// Enable suppression process due to updates
-									if ($pfb['supp'] == 'on') {
-										$pfb['supp_update'] = TRUE;
-									}
+								// Enable suppression process due to updates -- BOTH families
+								// (ADR-53 review finding A): a v6-only Deny alias must also be
+								// able to unlock the v6 suppress pass below, not just v4's.
+								if (pfb_supp_update_active($pfbadv, $pfb['supp'] == 'on')) {
+									$pfb['supp_update'] = TRUE;
 								}
 							} else {
 								if (!$custom) {

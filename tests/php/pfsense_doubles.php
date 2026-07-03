@@ -590,8 +590,25 @@ if (!function_exists('ip_in_subnet')) {
 		if (strpos($subnet, '/') === false) {
 			return false;
 		}
-		[$net_addr, $bits] = explode('/', $subnet, 2);
-		$bits = (int) $bits;
+		[$net_addr, $bits_raw] = explode('/', $subnet, 2);
+
+		// ADR-53 review finding H3: real pfSense gates ip_in_subnet() on
+		// is_subnetv4()/is_subnetv6(), whose shared is_subnet() (util.inc)
+		// requires the mask to match `\d{1,3}` (digits only -- no sign, no
+		// decimal point) and be <= 32 (v4) / <= 128 (v6). The previous version
+		// of this double coerced the mask via a bare (int) cast with no range
+		// check, so a malformed mask silently fell through as either an exact-
+		// host match (an out-of-range mask like '/33') or "matches EVERY
+		// address" (a non-numeric mask like '/abc', which (int) coerces to 0)
+		// -- real pfSense rejects both outright (always FALSE). This matters
+		// because pfb_ip_suppressed()/pfb_live_punch_plan() lean on this
+		// double under PHPUnit; a lying double could hide a real suppression
+		// over-match. Pinned by KillstatesSuppressionTest.php's
+		// "OutOfRangeMask"/"NonNumericMask" vectors.
+		if (!preg_match('/^\d{1,3}$/', $bits_raw)) {
+			return false;
+		}
+		$bits = (int) $bits_raw;
 
 		$addr_packed = @inet_pton((string) $addr);
 		$net_packed  = @inet_pton((string) $net_addr);
@@ -601,6 +618,10 @@ if (!function_exists('ip_in_subnet')) {
 		$len = strlen($addr_packed);
 		if ($len !== strlen($net_packed)) {
 			// Different address families.
+			return false;
+		}
+		if ($bits > $len * 8) {
+			// Out-of-range mask for this family (e.g. v4 '/33', v6 '/129').
 			return false;
 		}
 		// Compare $bits leading bits.

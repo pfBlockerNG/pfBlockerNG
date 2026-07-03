@@ -16,15 +16,16 @@ Two independent mechanisms exist for the same set-subtraction invariant:
 This module covers the FIRST mechanism only -- config -> reload -> engine ->
 pf table -- so it does not duplicate Phase 8's UI e2e coverage.
 
-Non-obvious wiring fact this module's Scenario B works around (and flags for
-the maintainer): ``$pfb['supp_update']`` -- the flag that unlocks BOTH the v4
-AND v6 suppression sub-passes for a given reload -- is set TRUE only by a v4
-Deny alias's own genuine reparse (``pfblockerng.inc`` ~16550-16558, inside
-``if ($pfbadv && $list['vtype'] == '_v4')``). An install with ONLY v6 Deny
-lists configured would never flip it, so v6 suppression would never fire in
-isolation. Scenario B injects a trivial companion v4 Deny alias alongside the
-v6 target for exactly this reason -- exercising the wiring as shipped, the
-way a production box with both families configured would.
+``$pfb['supp_update']`` unlocks BOTH the v4 AND v6 suppression sub-passes for
+a given reload. An adversarial-review pass on this ADR (finding A) caught that
+it was originally flipped TRUE only from inside a v4-only dedup/reputation
+block (``pfblockerng.inc`` ~16550-16558), so a v6-only Deny deployment could
+never fire v6 suppression in isolation -- fixed via the pure
+``pfb_supp_update_active()`` helper (family-agnostic: any feed-changed
+Deny-folder alias unlocks it), pinned by ``AliasContentGateTest.php``'s
+Scenario H. Scenario B below still injects a companion v4 Deny alias alongside
+the v6 target -- now exercising the MIXED-family case (both families active
+in the same pass), not working around the fixed bug.
 
 DESELECTED from the default ``python -m pytest`` (``--ignore=tests/smoke`` in
 pyproject.toml). Run via the smoke workflow or locally::
@@ -132,20 +133,6 @@ def _clean_suppression(deployed_vm: SmokeVM) -> Iterator[None]:
     h.reset(deployed_vm)
 
 
-def _pfctl_test(vm: SmokeVM, table: str, ip: str) -> tuple[bool, str]:
-    """Run ``pfctl -t <table> -T test <ip>`` ONCE; return (matched, raw output).
-
-    Same "1/1 addresses match" substring test as ``helpers.pfctl_table_test``,
-    but also returns pf's own rendered output so a failing assertion can print
-    it (CLAUDE.md "expected vs actual" -- never a bare derived boolean).
-    ``pfctl -T test`` prints the match line on STDERR (verified live on
-    FreeBSD), so both streams are combined -- stdout alone is always empty.
-    """
-    result = vm.ssh(h.PFCTL, "-t", table, "-T", "test", ip)
-    raw = (result.stdout + result.stderr).strip()
-    return "1/1 addresses match" in raw, raw
-
-
 def _member_lines(vm: SmokeVM, on_disk_header: str) -> list[str]:
     """Non-blank lines of a deny-folder member file (the post-suppression content)."""
     result = vm.ssh("cat", f"{DENYDIR}/{on_disk_header}.txt")
@@ -219,9 +206,9 @@ def test_suppression_v4_carves_containing_range_spares_sibling(deployed_vm: Smok
     # BEFORE: both addresses match the freshly-loaded, UNSUPPRESSED table.
     members = h.wait_pfctl_table(deployed_vm, spec.alias)
     assert members, f"pf table {spec.alias} never populated after the settling update"
-    matched, raw = _pfctl_test(deployed_vm, spec.alias, target)
+    matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, target)
     assert matched, f"expected {target} to MATCH {spec.alias} before suppression; pfctl said: {raw!r}"
-    matched, raw = _pfctl_test(deployed_vm, spec.alias, sibling)
+    matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, sibling)
     assert matched, f"expected {sibling} to MATCH {spec.alias} before suppression; pfctl said: {raw!r}"
 
     # WHEN: configure suppression for the target host only, then re-run.
@@ -229,9 +216,9 @@ def test_suppression_v4_carves_containing_range_spares_sibling(deployed_vm: Smok
     h.reload(deployed_vm, "updateip", wait_unbound=False)
 
     # THEN: the target is carved out; the sibling -- an unrelated feed entry -- is untouched.
-    matched, raw = _pfctl_test(deployed_vm, spec.alias, target)
+    matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, target)
     assert not matched, f"expected {target} to NO LONGER match {spec.alias} after suppression; pfctl said: {raw!r}"
-    matched, raw = _pfctl_test(deployed_vm, spec.alias, sibling)
+    matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, sibling)
     assert matched, f"expected {sibling} to STILL match {spec.alias} after suppression; pfctl said: {raw!r}"
 
     # AND: the member file holds covering CIDRs, never a host explosion.
@@ -257,8 +244,9 @@ def test_suppression_v6_carves_containing_range_spares_sibling(deployed_vm: Smok
     set-diff) carves a live-loaded /64 down to covering CIDRs -- v6 had NO
     carve mechanism at all before ADR-53.
 
-    A trivial companion v4 Deny alias is injected alongside the v6 target: see
-    the module docstring for why ($pfb['supp_update'] is a v4-only trigger).
+    A trivial companion v4 Deny alias is injected alongside the v6 target to
+    exercise the mixed-family case (see the module docstring: this used to be a
+    workaround for a v6-only $pfb['supp_update'] gating bug, now fixed).
 
     Given: the v6 fixture feed (``2001:db8:53::/64`` + two bare hosts) is
     loaded as a Deny list, alongside the v4 companion; suppression enabled but
@@ -290,19 +278,21 @@ def test_suppression_v6_carves_containing_range_spares_sibling(deployed_vm: Smok
 
     members = h.wait_pfctl_table(deployed_vm, v6spec.alias)
     assert members, f"pf table {v6spec.alias} never populated after the settling update"
-    matched, raw = _pfctl_test(deployed_vm, v6spec.alias, target)
+    matched, raw = h.pfctl_table_test_raw(deployed_vm, v6spec.alias, target)
     assert matched, f"expected {target} to MATCH {v6spec.alias} before suppression; pfctl said: {raw!r}"
-    matched, raw = _pfctl_test(deployed_vm, v6spec.alias, sibling)
+    matched, raw = h.pfctl_table_test_raw(deployed_vm, v6spec.alias, sibling)
     assert matched, f"expected {sibling} to MATCH {v6spec.alias} before suppression; pfctl said: {raw!r}"
 
-    # WHEN: configure v6 suppression, then re-run BOTH aliases -- the
-    # companion's own re-parse is what flips $pfb['supp_update'] this pass.
+    # WHEN: configure v6 suppression, then re-run BOTH aliases -- the v6
+    # alias's own re-parse now flips $pfb['supp_update'] on its own (fixed);
+    # the companion v4 alias re-parses alongside it, exercising the
+    # mixed-family case in the same pass.
     _set_suppression(deployed_vm, v6=[host_entry])
     h.reload(deployed_vm, "updateip", wait_unbound=False)
 
-    matched, raw = _pfctl_test(deployed_vm, v6spec.alias, target)
+    matched, raw = h.pfctl_table_test_raw(deployed_vm, v6spec.alias, target)
     assert not matched, f"expected {target} to NO LONGER match {v6spec.alias} after suppression; pfctl said: {raw!r}"
-    matched, raw = _pfctl_test(deployed_vm, v6spec.alias, sibling)
+    matched, raw = h.pfctl_table_test_raw(deployed_vm, v6spec.alias, sibling)
     assert matched, f"expected {sibling} to STILL match {v6spec.alias} after suppression; pfctl said: {raw!r}"
 
     lines = _member_lines(deployed_vm, f"{v6spec.header}_v6")
@@ -351,17 +341,17 @@ def test_suppression_v4_bare_host_removed(deployed_vm: SmokeVM) -> None:
     members = h.wait_pfctl_table(deployed_vm, spec.alias)
     assert members, f"pf table {spec.alias} never populated after the settling update"
     for ip in (inside_16, removed_host, kept_host):
-        matched, raw = _pfctl_test(deployed_vm, spec.alias, ip)
+        matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, ip)
         assert matched, f"expected {ip} to MATCH {spec.alias} before suppression; pfctl said: {raw!r}"
 
     _set_suppression(deployed_vm, v4=[host_entry])
     h.reload(deployed_vm, "updateip", wait_unbound=False)
 
-    matched, raw = _pfctl_test(deployed_vm, spec.alias, removed_host)
+    matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, removed_host)
     assert not matched, f"expected {removed_host} to be REMOVED from {spec.alias}; pfctl said: {raw!r}"
-    matched, raw = _pfctl_test(deployed_vm, spec.alias, kept_host)
+    matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, kept_host)
     assert matched, f"expected {kept_host} to still match {spec.alias}; pfctl said: {raw!r}"
-    matched, raw = _pfctl_test(deployed_vm, spec.alias, inside_16)
+    matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, inside_16)
     assert matched, (
         f"expected {inside_16} (inside the untouched /16) to STILL match {spec.alias} -- "
         f"a bare-host suppression must never touch an unrelated /16 entry; pfctl said: {raw!r}"
@@ -403,17 +393,17 @@ def test_suppression_v4_subnet_mask_carves_at_granularity(deployed_vm: SmokeVM) 
     members = h.wait_pfctl_table(deployed_vm, spec.alias)
     assert members, f"pf table {spec.alias} never populated after the settling update"
     for ip in (hole_ip, sibling_ip):
-        matched, raw = _pfctl_test(deployed_vm, spec.alias, ip)
+        matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, ip)
         assert matched, f"expected {ip} to MATCH {spec.alias} before suppression; pfctl said: {raw!r}"
 
     _set_suppression(deployed_vm, v4=[hole_subnet])
     h.reload(deployed_vm, "updateip", wait_unbound=False)
 
-    matched, raw = _pfctl_test(deployed_vm, spec.alias, hole_ip)
+    matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, hole_ip)
     assert not matched, (
         f"expected {hole_ip} (inside the suppressed /24) to NO LONGER match {spec.alias}; pfctl said: {raw!r}"
     )
-    matched, raw = _pfctl_test(deployed_vm, spec.alias, sibling_ip)
+    matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, sibling_ip)
     assert matched, f"expected {sibling_ip} (a different /24) to STILL match {spec.alias}; pfctl said: {raw!r}"
 
     lines = _member_lines(deployed_vm, f"{spec.header}_v4")
