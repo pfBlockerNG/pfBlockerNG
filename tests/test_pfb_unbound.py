@@ -6,6 +6,8 @@ from collections import defaultdict
 from configparser import ConfigParser
 from typing import Any
 
+import pytest
+
 # Unbound injects these as module-level globals at runtime; conftest copies them
 # from the unboundmodule stub onto builtins so pfb_unbound (which references them
 # as bare globals) imports cleanly. Bind the same stub objects locally for the
@@ -26,6 +28,7 @@ from unboundmodule import (
     RR_CLASS_IN,
     DNSMessage,
     sec_status_insecure,
+    storeQueryInCache,
 )
 
 import pfb_unbound
@@ -1028,6 +1031,35 @@ class TestSetReturnMsgStubFidelity:
         msg_no_aa = DNSMessage("example.com.", RR_A, RR_CLASS_IN, PKT_QR)
         msg_no_aa.set_return_msg(qstate_no_aa)
         assert qstate_no_aa.return_msg.rep.authoritative == 0
+
+
+class TestStoreQueryInCacheStubFidelity:
+    """storeQueryInCache() must model real Unbound's refusal to cache an
+    authoritative reply (pythonmod_utils.c: PyErr_SetString(ValueError,
+    "Authoritative answer can't be stored") + return 0). Without it, a
+    production path that cached a PKT_AA reply would stay green off-appliance
+    while the real box fails the store (issue #747).
+    """
+
+    def test_refuses_authoritative_reply(self) -> None:
+        # Given a reply marked authoritative (PKT_AA message), When it is
+        # stored, Then the stub raises ValueError exactly like the pending
+        # PyErr the real box surfaces -- never a silent success.
+        qstate = make_qstate("example.com.")
+        msg = DNSMessage("example.com.", RR_A, RR_CLASS_IN, PKT_QR | PKT_AA)
+        assert msg.set_return_msg(qstate) is True
+        assert qstate.return_msg.rep.authoritative == 1
+        with pytest.raises(ValueError, match="Authoritative answer can't be stored"):
+            storeQueryInCache(qstate, qstate.qinfo, qstate.return_msg.rep, 0)
+
+    def test_stores_non_authoritative_reply(self) -> None:
+        # Given a non-authoritative reply (no PKT_AA), When it is stored,
+        # Then the store succeeds -- the refusal branch must not over-reach.
+        qstate = make_qstate("example.com.")
+        msg = DNSMessage("example.com.", RR_A, RR_CLASS_IN, PKT_QR)
+        assert msg.set_return_msg(qstate) is True
+        assert qstate.return_msg.rep.authoritative == 0
+        assert storeQueryInCache(qstate, qstate.qinfo, qstate.return_msg.rep, 0) is True
 
 
 class TestOperateNoAAAA:
