@@ -2,8 +2,9 @@
 
 Proves the **full Adblock-Plus DNS decision logic** (``@@`` exceptions, cross-feed
 ``@@``, deep-anchor subdomain coverage (#718), ``$important`` / ``$badfilter``
-precedence, regex block/allow + admitted count, whitelist sovereignty, and the
-opt-in regex static cap) holds END-TO-END on
+precedence, regex block/allow + admitted count, whitelist sovereignty, the
+opt-in regex static cap, and CNAME-chain validation incl. a deep (3-label) target
+whose long label is INTERIOR to the wire format (#717)) holds END-TO-END on
 a real resolver — what the pure ADR-07 unit oracle (``tests/test_adr07_*``) cannot:
 it models ``decide()`` in Python, but only a live Unbound + ``pfb_unbound.py`` loader
 proves the manifest build + matcher agree with that model on the box.
@@ -564,6 +565,59 @@ def test_cname_validation_on_off(
             h.flush_unbound_cache(deployed_vm)
             ans_tgt = h.dns_probe_client(client_vm, tgt, "A")
             assert h.is_vip(ans_tgt), f"listed target {tgt} expected VIP block (validation ON), got {ans_tgt}"
+    finally:
+        stub_dns.clear_cname()
+
+
+def test_cname_deep_target_long_interior_label_blocks(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer, stub_dns: _StubDnsServer
+) -> None:
+    """A 3-label CNAME target with a long INTERIOR label blocks with validation ON (#717).
+
+    ``test_cname_validation_on_off`` above only exercises a 2-label target
+    (``<uuid-label>.com``), whose long label is the FIRST one in the wire-format
+    dname — the pre-#717 ``convert_other`` scrape skipped the first length octet
+    unconditionally, so a 2-label target happened to decode fine and this bug
+    never tripped on the live suite. Here the target is 3 labels
+    (``ads.<uuid-label>.com``), so the long (>12 char) uuid label sits in the
+    MIDDLE of the wire format — exactly the interior-label shape #717 fixed: the
+    old decoder dropped the dot / truncated / emitted a junk char at that length
+    octet, mangling the target so the DNSBL CNAME walk missed the feed entry
+    entirely and the chain resolved instead of blocking.
+
+    Given a feed listing the 3-label target and CNAME validation ON, When the
+    client resolves the source name (whose chain CNAMEs to that target), Then
+    the source is VIP-blocked via the correctly decoded target. Red on the
+    pre-fix decoder (the chain resolved to the target's own address instead);
+    green with the wire-format decode fixed.
+    """
+    src = h.unique_domain("cnamedsrc")  # A — resolves CNAME→target via the stub
+    base = h.unique_domain("cnamedtgt")
+    tgt = f"ads.{base}"  # 3-label target; base's uuid label (>12 chars) is INTERIOR, not first
+    tgt_ip = "198.51.100.43"  # target's own address (distinct from the sibling test's sentinel)
+    stub_dns.register_a(tgt, tgt_ip)
+    stub_dns.register_cname(src, tgt)
+    feed_url = h.write_local_feed(deployed_vm, "smoke_cname_deep.txt", f"{tgt}\n")
+    try:
+        spec = h.DnsblCase(
+            aliasname="smokecnamedeep",
+            feed_url=feed_url,
+            header="smokecnamedeep",
+            mode=h.DnsblMode.VIP,
+            cname_validation=True,
+        )
+        with h.CaseContext(deployed_vm, spec):
+            h.flush_unbound_cache(deployed_vm)
+            ans_src = h.dns_probe_client(client_vm, src, "A")
+            assert h.is_vip(ans_src), (
+                f"CNAME validation ON: {src} must be VIP-blocked via its deep target {tgt} "
+                f"(long interior label decode, #717), got {ans_src}"
+            )
+            # Sanity leg: the target itself is feed-blocked directly, so a failing
+            # src assertion above isolates the decoder/walk rather than feed loading.
+            h.flush_unbound_cache(deployed_vm)
+            ans_tgt = h.dns_probe_client(client_vm, tgt, "A")
+            assert h.is_vip(ans_tgt), f"listed deep target {tgt} expected VIP block, got {ans_tgt}"
     finally:
         stub_dns.clear_cname()
 
