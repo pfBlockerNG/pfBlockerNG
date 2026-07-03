@@ -270,11 +270,18 @@ def storeQueryInCache(qstate: Any, qinfo: Any, msgrep: Any, is_referral: int) ->
     :data:`MODULE_RESTART_NEXT`) chases the target itself — working around
     NLnetLabs/unbound #976 (a module-injected CNAME is not chased).
 
-    Mirrors real Unbound's refusal to cache an authoritative reply
-    (pythonmod/pythonmod_utils.c: ``PyErr_SetString(PyExc_ValueError,
-    "Authoritative answer can't be stored")`` + return 0) — the pending
-    exception surfaces as a ``ValueError`` in the Python caller, so the stub
-    raises it directly.
+    Mirrors real Unbound's failure modes (pythonmod/pythonmod_utils.c):
+
+    - A NULL ``msgrep`` is a silent falsy failure (``return 0``, no error) —
+      checked FIRST, before the authoritative refusal, same as the C order.
+    - An authoritative reply is refused: ``PyErr_SetString(PyExc_ValueError,
+      "Authoritative answer can't be stored")`` + return 0. The SWIG wrapper
+      has no ``%exception`` handler, so it still returns a valid result with
+      the error pending, and CPython's call-boundary check raises
+      ``SystemError("... returned a result with an exception set")`` with the
+      ``ValueError`` chained as ``__cause__`` — that SystemError is the
+      surface the Python caller actually sees, so the stub reproduces the
+      chain rather than raising the ValueError bare.
 
     Args:
         qstate:      The :class:`module_qstate`.
@@ -284,14 +291,20 @@ def storeQueryInCache(qstate: Any, qinfo: Any, msgrep: Any, is_referral: int) ->
                      chase), 0 to store as a final answer.
 
     Returns:
-        True on success.
+        True on success; False for a ``None`` ``msgrep`` (silent failure,
+        as on the real box).
 
     Raises:
-        ValueError: If ``msgrep`` is marked authoritative (real Unbound
-            refuses the store).
+        SystemError: If ``msgrep`` is marked authoritative (real Unbound
+            refuses the store); the upstream ``ValueError`` rides as
+            ``__cause__``.
     """
+    if msgrep is None:
+        return False
     if getattr(msgrep, "authoritative", 0):
-        raise ValueError("Authoritative answer can't be stored")
+        raise SystemError(
+            "<built-in function storeQueryInCache> returned a result with an exception set"
+        ) from ValueError("Authoritative answer can't be stored")
     return True
 
 
