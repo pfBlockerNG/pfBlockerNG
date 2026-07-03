@@ -50,6 +50,14 @@ final class PfbFilterContractTest extends TestCase
 			'leading-dot wildcard'    => ['.example.com'],   // suppression wildcard form
 			'63-char label boundary'  => [str_repeat('a', 63) . '.com'],
 			'253-char total boundary' => [$longest],
+			// 254 chars is DELIBERATELY accepted (issue #724): the `< 255` bound
+			// admits the longest legal name in trailing-root-dot presentation
+			// (253 chars + '.'), and a 254-char name without the dot exceeds the
+			// DNS wire cap so it can never be queried — inert either way. The
+			// length check is a sanity cap; the charset regex and '..' exclusion
+			// are the PFBL-01 security layer. Do not tighten to `<= 253`.
+			'254-char max FQDN + root dot' => [$longest . '.'],
+			'254-char total (lenient cap)' => [str_repeat('a', 63) . '.' . str_repeat('b', 63) . '.' . str_repeat('c', 63) . '.' . str_repeat('d', 62)],
 		];
 	}
 
