@@ -82,6 +82,47 @@ final class V6CidrSubtractTest extends TestCase
 		$this->assertSame([], $errors);
 	}
 
+	/**
+	 * A BARE v6 host token (no /mask -- the dominant feed-member shape) is a valid
+	 * /128 entry, NOT a malformed token: it must survive the pass verbatim when no
+	 * hole covers it. Pinned after the live smoke caught the parser dropping every
+	 * bare host from the member file (fail-open: hosts silently unblocked).
+	 */
+	public function testBareHostEntryTreatedAsSlash128NotMalformed(): void
+	{
+		$errors = null;
+		$result = pfb_cidr_subtract_v6(['2001:db8::/64', '2001:db8:99::10'], ['2001:db8::5353/128'], $errors);
+
+		$this->assertSame([], $errors, 'a bare v6 host is a legitimate /128 entry, never a malformed-token report');
+		// The engine re-emits every entry in canonical covering-CIDR form, so the
+		// surviving bare host publishes as its /128 — set-equivalent for every
+		// consumer (the smoke _has_entry oracle tolerates both notations).
+		$this->assertContains('2001:db8:99::10/128', $result, 'the un-carved bare host must survive (canonical /128 form)');
+		$this->assertCount(65, $result, '64 covering CIDRs for the carved /64 + the untouched bare host');
+		$this->assertFalse($this->anyCidrContains($result, '2001:db8::5353'));
+	}
+
+	/** A bare host entry fully covered by a hole is removed like any other entry. */
+	public function testBareHostEntryRemovedWhenHoleCoversIt(): void
+	{
+		$errors = null;
+		$result = pfb_cidr_subtract_v6(['2001:db8:99::10'], ['2001:db8:99::/64'], $errors);
+
+		$this->assertSame([], $result);
+		$this->assertSame([], $errors);
+	}
+
+	/** A bare host HOLE token carves exactly like its explicit /128 form. */
+	public function testBareHostHoleTreatedAsSlash128(): void
+	{
+		$errors = null;
+		$result = pfb_cidr_subtract_v6(['2001:db8::/64'], ['2001:db8::5353'], $errors);
+
+		$this->assertCount(64, $result, 'a bare-host hole must carve identically to its /128 form');
+		$this->assertSame([], $errors);
+		$this->assertFalse($this->anyCidrContains($result, '2001:db8::5353'));
+	}
+
 	/** Two adjacent /128 holes in the same entry both carve out (63 covering CIDRs), siblings on either side stay covered. */
 	public function testTwoAdjacentHolesInOneEntry(): void
 	{
@@ -492,6 +533,20 @@ final class V6CidrSubtractTest extends TestCase
 
 		$this->assertTrue($ok, 'a legitimate full suppression must still return TRUE (a real publish), not FALSE');
 		$this->assertSame('', file_get_contents($file), 'the published file must be empty, not left stale');
+	}
+
+	/** File level: a bare v6 host line (the dominant feed shape) publishes unchanged — never dropped as malformed. */
+	public function testBareHostMemberLineSurvivesFilePass(): void
+	{
+		$file     = $this->makeTempFile("2001:db8:53::/64\n2001:db8:99::10\n");
+		$suppfile = $this->makeTempFile("2001:db8:53::42/128\n");
+
+		$ok = pfb_suppress_file_v6($file, $suppfile);
+
+		$this->assertTrue($ok);
+		$lines = file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+		$this->assertContains('2001:db8:99::10/128', $lines, 'the bare host line must survive the suppress pass (canonical /128 form)');
+		$this->assertCount(65, $lines, '64 covering CIDRs + the untouched bare host');
 	}
 
 	public function testMalformedMemberLineDroppedAndLogged(): void

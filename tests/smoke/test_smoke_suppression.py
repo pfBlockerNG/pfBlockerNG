@@ -133,14 +133,17 @@ def _clean_suppression(deployed_vm: SmokeVM) -> Iterator[None]:
 
 
 def _pfctl_test(vm: SmokeVM, table: str, ip: str) -> tuple[bool, str]:
-    """Run ``pfctl -t <table> -T test <ip>`` ONCE; return (matched, raw stdout).
+    """Run ``pfctl -t <table> -T test <ip>`` ONCE; return (matched, raw output).
 
     Same "1/1 addresses match" substring test as ``helpers.pfctl_table_test``,
     but also returns pf's own rendered output so a failing assertion can print
     it (CLAUDE.md "expected vs actual" -- never a bare derived boolean).
+    ``pfctl -T test`` prints the match line on STDERR (verified live on
+    FreeBSD), so both streams are combined -- stdout alone is always empty.
     """
     result = vm.ssh(h.PFCTL, "-t", table, "-T", "test", ip)
-    return "1/1 addresses match" in result.stdout, result.stdout.strip()
+    raw = (result.stdout + result.stderr).strip()
+    return "1/1 addresses match" in raw, raw
 
 
 def _member_lines(vm: SmokeVM, on_disk_header: str) -> list[str]:

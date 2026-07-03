@@ -765,8 +765,14 @@ if (isset($_POST) && !empty($_POST)) {
 	// (Phases 3/5).
 	elseif (isset($_POST['addsuppress']) && !empty($_POST['addsuppress'])) {
 
-		$ip	= pfb_filter($_POST['ip'], PFB_FILTER_IP, 'alerts addsuppress', '', TRUE);
-		$table	= pfb_filter($_POST['table'], PFB_FILTER_WORD, 'alerts addsuppress', '', TRUE);
+		// NOTE: no $escape flag — pfb_filter(..., TRUE) returns an escapeshellarg()'d
+		// token (quotes included), which the legacy flow interpolated into exec()
+		// directly. This flow escapes at each exec sink instead, and $ip feeds
+		// non-shell consumers (the punch plan, the stored customlist entry) that
+		// must see the raw address — the quoted form corrupted the stored config
+		// entry ('1.2.3.4'/32), caught live by the Tier B addsuppress e2e.
+		$ip	= pfb_filter($_POST['ip'], PFB_FILTER_IP, 'alerts addsuppress');
+		$table	= pfb_filter($_POST['table'], PFB_FILTER_WORD, 'alerts addsuppress');
 
 		// If IP is not valid or Table not valid, exit.
 		if (empty($ip) || empty($table)) {

@@ -3731,10 +3731,13 @@ def pfctl_table_test(vm: SmokeVM, alias: str, ip: str, *, timeout: float = 30.0)
     answers "is this address COVERED by the table", the authoritative oracle for
     the Alerts "+" live-punch e2e (ADR-53 §2.1). ``pfctl`` prints
     ``"1/1 addresses match."`` on a hit and ``"0/1 addresses match."`` on a miss
-    (rc is 0 either way for a well-formed query against an existing table).
+    (rc is 0 either way for a well-formed query against an existing table) —
+    on STDERR, not stdout (verified live on FreeBSD; the PHP-side
+    ``pfb_pfctl_test_match_count()`` call sites append ``2>&1`` for the same
+    reason), so the check must read both streams.
     """
     result = vm.ssh(PFCTL, "-t", alias, "-T", "test", ip, timeout=timeout)
-    return "1/1 addresses match" in result.stdout
+    return "1/1 addresses match" in (result.stdout + result.stderr)
 
 
 def pfctl_tables(vm: SmokeVM, *, timeout: float = 30.0) -> list[str]:
