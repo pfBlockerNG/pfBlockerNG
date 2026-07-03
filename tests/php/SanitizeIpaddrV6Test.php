@@ -57,8 +57,24 @@ final class SanitizeIpaddrV6Test extends TestCase
 	public function testSuppressionKeepsPublicIp(): void
 	{
 		$GLOBALS['pfb']['supp'] = 'on';
-		// Routable address (Cloudflare resolver) — NOT 2001:db8::/32 (reserved).
+		// Routable address (Cloudflare resolver) — genuinely public space, so
+		// it must survive independently of the flag-coverage question below.
 		$this->assertSame('2606:4700:4700::1111', sanitize_ipaddr_v6('2606:4700:4700::1111', false));
+	}
+
+	// --- Classes the PHP filter flags do NOT drop (issue #760) ---------------
+
+	// FILTER_FLAG_NO_PRIV_RANGE|NO_RES_RANGE keep documentation
+	// (2001:db8::/32), multicast (ff00::/8) and NAT64 (64:ff9b::/96) space —
+	// the same permissiveness as the v4 flags (192.0.2.0/24 and 224.0.0.0/4
+	// are kept too). This pins today's behaviour; dropping these classes is a
+	// policy decision tracked in issue #760 and would flip this test.
+	public function testSuppressionKeepsClassesOutsideFlagCoverage(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
+		$this->assertSame('2001:db8::1', sanitize_ipaddr_v6('2001:db8::1', false), 'documentation (RFC 3849) is kept');
+		$this->assertSame('ff02::1', sanitize_ipaddr_v6('ff02::1', false), 'multicast (ff00::/8) is kept');
+		$this->assertSame('64:ff9b::1', sanitize_ipaddr_v6('64:ff9b::1', false), 'NAT64 (RFC 6052) is kept');
 	}
 
 	// --- Suppression toggle is the cause (assert before-state, then flip) ----
