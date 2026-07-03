@@ -2175,26 +2175,53 @@ def convert_ipv6(x: Any) -> str:
 
 
 def convert_other(x: Any) -> str:
+    """Decode an rr_data payload shaped like an uncompressed RFC 1035 SS3.3.1 wire-format
+    domain name: a 2-byte RDATA-length prefix (x[0:2], the same convention as
+    convert_ipv4()/convert_ipv6()) followed by one or more labels -- each a 1-63 length
+    octet plus that many raw content bytes -- terminated by a zero-length root label.
+
+    Consumers: the DNSBL CNAME walk and the SafeSearch CNAME check (_ss_answer_has_cname_to)
+    feed CNAME rdata through this to compare the decoded target against feed/target names;
+    the reply logger renders other rrtypes (TXT, MX, ...) through it best-effort for logging.
+
+    A malformed length octet -- >63 (e.g. a DNS compression-pointer marker, invalid in an
+    uncompressed dname) or one that would overrun the remaining buffer -- fails safe to the
+    "Unknown" sentinel rather than decoding junk; callers that guard on `!= "Unknown"` (the
+    CNAME walk) skip it instead of DNSBL-evaluating garbage. A bare root label with no
+    preceding labels also decodes to "Unknown" (the empty name).
+
+    Lenient case: a length-prefixed character-string (TXT rdata) carries no root
+    terminator, since that terminator is a dname-only construct -- when the buffer is
+    exhausted mid-walk with no explicit zero octet, the labels parsed so far are still
+    returned joined by ".", not "Unknown".
+
+    Accepted logging-only change (#717): MX/SRV-style rdata carries a leading fixed field
+    (e.g. MX's 2-byte preference) before its dname, which this decoder has no way to know
+    to skip -- that field's leading zero byte reads as a zero-length root label, so the
+    decode is the empty name ("Unknown") rather than the old scrape's accidental
+    "foo.com". Only the cosmetic reply logger ever feeds MX/SRV rdata through here; the
+    DNSBL CNAME walk only ever passes CNAME rdata, which has no such leading field.
+    """
     final = ""
     if x:
-        for i in x[3:]:
-            val = i
-            if val == 0:
-                i = "|"
-            elif 1 <= val <= 12:
-                i = "."
-            elif val == 13:
+        labels = []
+        buf = x[2:]
+        pos = 0
+        malformed = False
+        rooted = False
+        while pos < len(buf):
+            length = buf[pos]
+            pos += 1
+            if length == 0:
+                rooted = True
                 break
-            elif val == 32:
-                i = " "
-            elif val == 58:
-                i = ":"
-            elif val <= 33 or val > 126:
-                continue
-            else:
-                i = chr(i)
-            final += i
-        final = final.strip(".|")
+            if length > 63 or pos + length > len(buf):
+                malformed = True
+                break
+            labels.append("".join(chr(b) for b in buf[pos : pos + length]))
+            pos += length
+        if not malformed and (labels or rooted):
+            final = ".".join(labels)
     return is_unknown(final)
 
 
