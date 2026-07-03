@@ -74,6 +74,24 @@ libmagic/libarchive (or the 7z build) behaviour ever shifts; the tests read each
 exact bytes for the on-box `file(1)` guard (`_fixture_bytes`), so the served feed and the
 guard never drift.
 
+## IP suppression carve fixtures (ADR-53, `IpCase`, `test_smoke_suppression.py`)
+
+Delivered via `write_local_feed` (a committed, documented fixture body copied onto the guest
+as a local file), not the HTTP `mock_feeds` path -- these tests exercise the persisted
+suppression engine (`pfblockerng.sh suppress()` for v4, `pfb_suppress_file_v6()` for v6), not
+the HTTP-fetch contract Part C already covers.
+
+| File | Contents | Purpose |
+| --- | --- | --- |
+| `ip_suppress_v4.txt` | `198.18.0.0/16` (RFC 2544) + two well-separated RFC 5737 bare hosts (`203.0.113.60`, `198.51.100.77`) | Containing-range carve (a `/32`/`/24` suppression carves the `/16`), plus whole-token bare-host removal |
+| `ip_suppress_v6.txt` | `2001:db8:53::/64` (RFC 3849) + two well-separated RFC 3849 bare hosts (`2001:db8:99::10`, `2001:db8:aa::20`) | Same shape, IPv6 (`/128` suppression carves the `/64`) |
+
+The bare hosts are deliberately non-adjacent to each other and to the CIDR block: iprange's
+minimal-CIDR aggregation would otherwise merge two adjacent addresses into one covering entry,
+which would throw off the exact covering-CIDR-count assertions (`/16 - /32 = 16`,
+`/64 - /128 = 64`, `/16 - /24 = 8` -- ADR-53 §1.2, mathematically invariant regardless of the
+hole's exact position within its container).
+
 ## Omitted formats (and why)
 
 CSV/iblocklist, regex, and the ABP IP-anchor (`||1.2.3.4^`) variants are out of the
