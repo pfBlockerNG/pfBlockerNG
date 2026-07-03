@@ -75,6 +75,17 @@ pytestmark = pytest.mark.repo
 _KEEP_LIVE_LINE = "Keeping pfBlockerNG active across the package"
 _TEARDOWN_LINE = "Removing pfBlockerNG..."
 
+# #738 F7: the deferred-settings marker the deinstall teardown must clear (and a
+# keep-live reinstall must NOT touch). Host path — the marker lives outside the
+# Unbound chroot, plain /bin/sh access.
+_PENDING_MARKER = "/usr/local/etc/pfb_pending_changes"
+
+
+def _marker_exists(vm: SmokeVM) -> bool:
+    """TRUE iff the pending-changes marker file exists on the box."""
+    probe = vm.ssh("/bin/sh", "-c", f"test -f {_PENDING_MARKER} && echo YES || echo NO")
+    return probe.stdout.strip() == "YES"
+
 
 def _enable_dnsbl(vm: SmokeVM) -> None:
     """Set the DNSBL master enable chain (enable_cb + pfb_dnsbl) in config.xml.
@@ -178,6 +189,12 @@ def test_pkg_reinstall_keeps_live_delete_tears_down(repo_vm: SmokeVM) -> None:
             f"got rcode={given.rcode!r} records={given.records!r}"
         )
 
+        # AND: a deferred-settings "pending changes" marker exists (#738 F7). The
+        # reinstall leg must KEEP it (pending changes stay valid across an upgrade,
+        # the #697 keep-live branch); the delete leg below must CLEAR it.
+        vm.ssh("/bin/sh", "-c", f"touch {_PENDING_MARKER}")
+        assert _marker_exists(vm), f"setup: could not create {_PENDING_MARKER} on the box"
+
         # ---- WHEN (1): forced reinstall (op 'reinstall') ----------------------- #
         proc = pkg_reinstall_force(vm)
         combined = proc.stdout + proc.stderr
@@ -201,6 +218,13 @@ def test_pkg_reinstall_keeps_live_delete_tears_down(repo_vm: SmokeVM) -> None:
             f"got rcode={after_reinstall.rcode!r} records={after_reinstall.records!r}"
         )
 
+        # ... and the pending-changes marker SURVIVED the reinstall (#738 F7: the clear
+        # sits past the #697 early return, so an upgrade keeps a genuinely-pending change).
+        assert _marker_exists(vm), (
+            f"AFTER `pkg install -f`: {_PENDING_MARKER} was cleared — the deinstall-side marker "
+            "clear must not run on a keep-live (reinstall/upgrade) pass"
+        )
+
         # ---- WHEN (2): real uninstall (op 'delete') ---------------------------- #
         del_proc = pkg_delete_capture(vm)
         del_combined = del_proc.stdout + del_proc.stderr
@@ -222,5 +246,13 @@ def test_pkg_reinstall_keeps_live_delete_tears_down(repo_vm: SmokeVM) -> None:
             f"AFTER `pkg delete`: {domain!r} still resolved to the DNSBL VIP — teardown did not remove "
             f"the DNSBL block; got rcode={after_delete.rcode!r} records={after_delete.records!r}"
         )
+
+        # AND: the pending-changes marker is GONE (#738 F7: a genuine uninstall clears it,
+        # so a later reinstall shows no false "pending changes" banner).
+        assert not _marker_exists(vm), (
+            f"AFTER `pkg delete`: {_PENDING_MARKER} survived the uninstall — the pre-deinstall "
+            "teardown must clear the deferred-settings marker (#738 F7)"
+        )
     finally:
+        vm.ssh("/bin/sh", "-c", f"rm -f {_PENDING_MARKER}")
         pkg_delete(vm)
