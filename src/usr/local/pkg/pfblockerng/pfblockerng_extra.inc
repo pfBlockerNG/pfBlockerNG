@@ -2641,12 +2641,21 @@ function pfb_v6_cidr_to_range(string $token, ?bool &$is_blank = null): ?array
 		return NULL;
 	}
 
-	if (!is_subnetv6($token)) {
+	// A bare address (no /mask) is the dominant member-file shape a feed
+	// emits -- treat it as its own /128, never as a malformed token (dropping
+	// it would silently UNBLOCK the host; caught live by the ADR-53 v6 smoke).
+	if (strpos($token, '/') === FALSE) {
+		if (!is_ipaddrv6($token)) {
+			return NULL;
+		}
+		$addr = $token;
+		$bits = 128;
+	} elseif (!is_subnetv6($token)) {
 		return NULL;
+	} else {
+		[$addr, $bits_raw] = explode('/', $token, 2);
+		$bits = (int) $bits_raw;
 	}
-
-	[$addr, $bits_raw] = explode('/', $token, 2);
-	$bits = (int) $bits_raw;
 
 	$packed = @inet_pton($addr);
 	if ($packed === FALSE || strlen($packed) !== 16) {

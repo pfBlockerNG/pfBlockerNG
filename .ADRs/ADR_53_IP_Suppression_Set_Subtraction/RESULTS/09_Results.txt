@@ -1,0 +1,282 @@
+ADR-53 Phase 9 -- Live-VM smoke, docs, Definition-of-Done
+====================================================================
+
+STATUS: Local implementation + gates complete and pushed. Live-VM acceptance
+fan-out DISPATCHED; see "Dispatch" section below for run URLs and the status
+observed at hand-off time (updated by the polling ladder below; if this
+session ended before the ladder completed, the orchestrator/maintainer should
+check the run URLs directly).
+
+Fixtures (new)
+--------------
+- tests/smoke/fixtures/ip_suppress_v4.txt: `198.18.0.0/16` (RFC 2544
+  benchmarking -- inert, NOT RFC 1918) plus two bare hosts,
+  `203.0.113.60`/`198.51.100.77` (RFC 5737), deliberately far apart from each
+  other and from the /16 so iprange's minimal-CIDR aggregation cannot merge
+  them (which would throw off the exact covering-CIDR-count assertions).
+- tests/smoke/fixtures/ip_suppress_v6.txt: `2001:db8:53::/64` (RFC 3849) plus
+  two bare v6 hosts, `2001:db8:99::10`/`2001:db8:aa::20` (RFC 3849), same
+  non-adjacency rationale.
+- tests/smoke/fixtures/README.md: new "IP suppression carve fixtures" section
+  documenting both files, the delivery mechanism (write_local_feed, NOT the
+  HTTP mock_feeds path -- these tests exercise the persisted engine, not the
+  HTTP-fetch contract Part C already covers), and the non-adjacency rationale.
+
+New module: tests/smoke/test_smoke_suppression.py
+--------------------------------------------------
+Pure IP-side (no DNSBL, no DNS probe) -- deployed_vm fixture mirrors the
+minimal test_smoke_714_asn_geoip.py shape: `h.deploy(smoke_vm)` only, no VIP/
+client_vm/stub_dns. An autouse per-test fixture (`_clean_suppression`) wipes
+BOTH suppression customlists before and after every test and FAILS LOUDLY
+(AssertionError, not a silent best-effort) if the readback disagrees with what
+was just written -- the self-encapsulation the test-coverage mandate requires.
+Teardown also runs `helpers.reset()` (clearip/cleardnsbl + blocking filter
+sync) so each test starts from a genuinely clean pf-table baseline regardless
+of run order.
+
+This module covers the UPDATE-FLOW path (config `v4suppression`/
+`v6suppression` -> a reload -> the persisted engine -> pf table) -- a
+DIFFERENT mechanism from the Alerts "+" LIVE PUNCH already covered by Phase
+8's tests/smoke/ui/test_alerts.py::test_addsuppress_{v4,v6}_carves_
+containing_range_and_spares_sibling (which mutates the live pf table directly
+from one web click, independent of any reload). No duplicate coverage.
+
+Scenario inventory (4 tests, BDD-style Given/When/Then):
+
+1. test_suppression_v4_carves_containing_range_spares_sibling (Scenario A --
+   the SS4.1 headline acceptance case). Given: the v4 fixture loaded as a Deny
+   list, suppression enabled but empty; settling update. BEFORE: target
+   (198.18.3.4, inside the /16) AND sibling (203.0.113.60, a separate bare-host
+   feed entry) both match the live pf table (pfctl -T test). When:
+   v4suppression = 198.18.3.4/32; second update. Then: target no longer
+   matches; sibling still matches; the denydir member file holds EXACTLY 16
+   covering-CIDR entries (the /16 minus the /32), including the representative
+   samples '198.18.0.0/23' and '198.18.128.0/17' -- the SAME relative
+   host-in-block shape (octet3=3, octet4=4) as the real-iprange-verified
+   vector in tests/shell/pfblockerng_suppress_spec.sh ("10.0.3.4" inside
+   "10.0.0.0/16"), so the exact count/shape is grounded in an ALREADY-PROVEN
+   result, not a fresh guess.
+
+2. test_suppression_v6_carves_containing_range_spares_sibling (Scenario B --
+   v6 had NO carve mechanism at all before ADR-53). Injects a TRIVIAL
+   companion v4 Deny alias alongside the v6 target via inject_ip_lists() --
+   see "Wiring finding" below for why. BEFORE/AFTER shape mirrors Scenario A;
+   the member file holds exactly 64 covering-CIDR entries for the /64 minus
+   the /128 (matches the exact vector tests/php/V6CidrSubtractTest.php pins
+   `pfb_cidr_subtract_v6()` against: '2001:db8::/64' minus '.../5353/128' ->
+   assertCount(64, ...)).
+
+3. test_suppression_v4_bare_host_removed (Scenario C part 1 -- upgrade-parity,
+   SS2.2). A masked suppression entry over a BARE feed host (no intersection
+   with the /16 at all) removes just that token; the /16 line is left
+   byte-identical (member file = exactly 2 lines: the untouched /16 + the
+   surviving bare host) -- proves the engine carves ONLY entries a hole
+   actually intersects.
+
+4. test_suppression_v4_subnet_mask_carves_at_granularity (Scenario C part 2 --
+   mask-agnostic, SS2.1's /8-/32 UI lift). v4suppression = a CONTAINING /24
+   (not a /32) carves the /16 at /24 granularity: target /24 no longer matches
+   anywhere inside it; a sibling /24 (same /16) still matches; member file
+   holds exactly 8 covering-CIDR entries (24-16=8, the same
+   prefix-length-difference bound the shellspec proves for /24-/32=8, applied
+   one level up).
+
+Every pfctl assertion goes through `_pfctl_test()` (one SSH round trip,
+returns (matched, raw_stdout)) so a failing assert prints pf's OWN rendered
+"N/1 addresses match" text alongside the boolean -- never a bare derived
+boolean (CLAUDE.md "expected vs actual").
+
+Wiring finding (flagged for the maintainer, documented in architecture-notes.md,
+NOT fixed in Phase 9 -- out of scope)
+------------------------------------------------------------------------------
+`$pfb['supp_update']` -- the flag that unlocks BOTH the v4 and v6 suppression
+sub-passes for a given reload pass -- is set TRUE only by a v4 Deny alias's
+OWN genuine reparse (pfblockerng.inc ~16550-16558, inside
+`if ($pfbadv && $list['vtype'] == '_v4')`). Traced this precisely (not
+guessed) by reading the download-loop code around pfblockerng.inc:16440-16770
+and the request-routing code at ~13225-13260. Consequence: an install with
+ONLY v6 Deny lists configured would never flip `supp_update`, so v6
+suppression would never fire even with `v6suppression` populated and a v6
+alias genuinely reparsing. Scenario B works around this with a trivial
+companion v4 Deny alias riding the SAME reload pass (exactly what a
+production box with both families configured would look like) rather than
+silently hiding the gap. Candidate fix for a future phase/issue: also set
+`supp_update` on a v6 Deny alias's own change.
+
+Also confirmed empirically (read, not guessed) while designing the test:
+`updateip` (scope=ip, force=true via pfb_trigger) sets `$pfb['reuse']='on'`
+for the WHOLE reload pass (pfblockerng.inc ~13243), which defeats the
+per-file "already parsed, skip" cache for EVERY Deny alias -- so a SECOND,
+content-unchanged `updateip` call genuinely re-parses every alias present,
+with NO `force_ip_refetch()` marker-touch needed (unlike the ADR-40 tests,
+which use the force=false 'update' verb and must call force_ip_refetch
+explicitly). This simplified the test design significantly once traced.
+
+Docs
+----
+docs/misc/architecture-notes.md gains "## IP suppression set-subtraction
+(ADR-53)" (appended after the ADR-43 section, end of file): the covering-CIDR
+math (b-a formula, invariant to hole position), the v4 iprange --except engine
++ its DNS-resolution hazard + pre-filter, the v6 pure-PHP engine + its
+measured perf bound (1.24s/100k, P5), the supp_update wiring gotcha above,
+consumer inheritance (why content-level fixes every reader for free), and an
+explicit note that the Alerts "+" live punch is a SEPARATE mechanism (not
+duplicated by this module).
+
+Gate results (exact counts)
+----------------------------
+- .venv/bin/python -m pytest -q -> 2057 passed, 4 skipped -- byte-identical to
+  P8's baseline (the two new/changed smoke files live under tests/smoke/,
+  excluded from the default run).
+- .venv/bin/python -m pytest tests/smoke --collect-only -q
+  --ignore=tests/smoke/test_stub_shapes.py -> 467 tests collected (463 on the
+  pre-P9 tip + my 4 new tests; confirmed via `git stash` on the pre-commit
+  tree). test_stub_shapes.py's own collection error (`ModuleNotFoundError:
+  No module named 'dns'`) is a PRE-EXISTING local-venv gap (dnspython not
+  installed in this dev venv) -- confirmed unrelated by reproducing it on the
+  pre-P9 tip too; not a regression.
+- .venv/bin/python -m pytest tests/smoke/test_smoke_suppression.py
+  --collect-only -q -> 4 tests collected, 0 errors (all 4 scenarios by name).
+- .venv/bin/ruff check . -> "All checks passed!"; ruff format --check . ->
+  "161 files already formatted".
+- .venv/bin/python -m mypy tests/ -> "Success: no issues found in 62 source
+  files" (tests/smoke is excluded from this gate per pyproject.toml's mypy
+  config -- unchanged count is expected, not a miss).
+- npx markdownlint-cli2 -> "Summary: 0 error(s)" (107 files, incl. both
+  touched docs).
+- vendor/bin/phpunit -> 1936 tests, 15901 assertions, 1 failure, 4 skipped --
+  the exact documented environmental baseline (IpAddrDoublesTest::
+  testIsIpaddrv4 "leading-zero octets", macOS inet_pton). No PHP touched this
+  phase; byte-identical to P8.
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/ -> clean, no output.
+- vendor/bin/phpstan --memory-limit=1G -> "[OK] No errors" (28/28 files).
+- shellspec (full suite) -> 259 examples, 0 failures, 8 skips -- byte-identical
+  to the P1-P8 baseline (no shell touched this phase).
+- Pre-commit hook (ruff/mypy/markdownlint/url-encoding/no-appliance-python) ->
+  all passed on the actual commit.
+
+Self-review (per the orchestrator's REVIEW step)
+-----------------------------------------------------
+- Every scenario asserts the BEFORE-state first (both target and sibling
+  match, via wait_pfctl_table + pfctl_table_test) before the suppression
+  config change, then re-asserts after -- never a final-state-only check.
+- Every pfctl assertion prints expected vs actual (the raw "N/1 addresses
+  match" pf output) via `_pfctl_test()` -- confirmed via read-through, no bare
+  booleans.
+- Tests are self-encapsulated: the autouse `_clean_suppression` fixture wipes
+  + verifies-empty before AND after every test, failing loudly if the wipe
+  doesn't take; each test injects its OWN uniquely-named alias so there is no
+  pf-table collision between tests regardless of run order.
+- Fixtures use only inert ranges: RFC 2544 (198.18.0.0/16), RFC 5737
+  (203.0.113.x, 198.51.100.x), RFC 3849 (2001:db8:...) -- confirmed no RFC
+  1918, no RFC 6761 TLD (N/A here, IP-only, no DNS names in this module).
+- docs/misc/architecture-notes.md section matches the file's existing
+  reference-style tone (confirmed by reading the neighbouring ADR-40/ADR-42/
+  ADR-43 sections before writing).
+- `git diff --stat` against origin/devel touches exactly: docs/misc/
+  architecture-notes.md, tests/smoke/fixtures/README.md, two new fixture
+  files, and the one new test module -- no other ADR's files, no src/ touched
+  (Phase 9 is test/docs only, per the phase brief).
+- Did NOT flip the ADR Status field -- left for the orchestrator/maintainer
+  on green fan-out evidence, per CLAUDE.md "ADR acceptance".
+
+Commit
+------
+e90b3ebd "tests: live-VM suppression carve smoke + ADR-53 docs (ADR-53 P9)"
+Rebased cleanly onto origin/devel (2 unrelated commits, #678) before push;
+force-with-lease used after confirming the remote tip (06fa7164, P8's
+pre-rebase hash) was this session's own prior state (no foreign push --
+confirmed via `git diff origin/adr/53... 3bb6c1dd` showing only the #678
+devel-rebase delta, zero drift in the ADR-53 commits' own content).
+Pushed to origin/adr/53-ip-suppression-set-subtraction (9 commits ahead of
+origin/devel: P1-P9).
+
+Dispatch (acceptance fan-out)
+------------------------------
+1. smoke.yml (min-CE leg, scope=impacted default, pytest_filter="suppression"
+   per the orchestrator's dispatch policy):
+   https://github.com/pfBlockerNG/pfBlockerNG/actions/runs/28677519751
+2. ui-tests.yml (scope=impacted default, tier=all default -- auto-derives the
+   Tier A/B tests from the files this branch's FULL diff vs origin/devel
+   changed: tests/smoke/ui/test_alerts.py [P8's addsuppress carve e2e],
+   tests/smoke/ui/test_functional.py, tests/smoke/ui/test_render_smoke.py
+   [P4/P6's IP-settings mask-lift + v6 textarea Tier A/B]):
+   https://github.com/pfBlockerNG/pfBlockerNG/actions/runs/28677527199
+
+Status at last observed check: <<FILL AT HANDOFF TIME -- see final report>>.
+
+Evidence summary for the Accepted flip
+----------------------------------------
+Once BOTH dispatched runs are green, ADR-53's SS4 acceptance list is fully
+proven:
+  1. Containing-entry carve, both families, before-state first -> THIS
+     module's Scenarios A/B.
+  2. v6suppression end-to-end -> Scenario B + Phase 6's own tests.
+  3. Mask range validation (v4 /8-/32, v6 /32-/128) -> Phase 4/6 PHPUnit +
+     this module's Scenario C2 (a real /24 carve, not just /32).
+  4. No materialisation anywhere -> every scenario's exact covering-CIDR-count
+     assertion (16/64/8), never a host explosion.
+  5. Fail-safe publish (missing binary / unloadable file / malformed token /
+     legitimate full suppression) -> Phase 3/5 shellspec + PHPUnit (off-CI by
+     nature of the failure modes; not re-proven live here).
+  6. Killstates spares suppressed IPs, both families -> Phase 7 PHPUnit
+     (KillstatesSuppressionTest); no live leg needed (pure-PHP helper).
+  7. Config round-trip + sniff -> Phase 2/6 PHPUnit (CfgAdaptersTest-style).
+  8. Green CE+Plus smoke/UI fan-out -> THIS phase's dispatch (min-CE leg
+     validated first per orchestrator policy; the orchestrator/maintainer
+     should follow up with the full CE+Plus fan-out
+     (`gh workflow run smoke.yml -f scope=full -f pytest_filter="suppression"`,
+     `gh workflow run ui-tests.yml -f scope=full`) before flipping Status.
+
+No blocking deviations from the phase brief. The ONE non-cosmetic deviation:
+the phase brief's action plan expected `force_ip_refetch()` to be part of the
+test flow (mirroring the ADR-40 tests) -- traced through the actual
+`updateip`/pfb_trigger code and found it unnecessary for THIS scope (`force=true`
+already sets `$pfb['reuse']='on'` globally), so it was dropped from the test
+design with the reasoning documented inline and in this handoff, rather than
+included as unnecessary/misleading scaffolding.
+
+--------------------------------------------------------------------------------
+LIVE-RUN FINDINGS (orchestrator, post-dispatch — first min-CE leg + UI tiers)
+--------------------------------------------------------------------------------
+
+Run 1 evidence (smoke 28677519751 FAILED, ui-tests 28677527199 FAILED) — two
+genuine bugs caught by the live legs, both fixed in the follow-up commit:
+
+1. helpers.pfctl_table_test() read result.stdout, but `pfctl -T test` prints
+   "X/Y addresses match." on STDERR (verified live on FreeBSD: stdout empty,
+   stderr carries the line; the PHP-side pfb_pfctl_test_match_count() call
+   sites append 2>&1 for the same reason). Every before-state assertion in
+   test_smoke_suppression.py and the alerts Tier B e2e therefore read '' and
+   failed. Fix: match against stdout+stderr, docstring records the stderr fact.
+
+2. addsuppress stored a shell-quoted config entry: pfb_filter(..., TRUE)
+   returns an escapeshellarg()'d token (quotes included) — the legacy flow
+   interpolated it into exec() directly, but the P8 rework escapes at each
+   sink, so the quoted form leaked into pfb_live_punch_plan() (empty plan) and
+   the stored customlist entry ('198.51.100.7'/32). Caught by
+   test_addsuppress_writes_exact_host_and_invalid_ip_rejected:
+     assert '198.51.100.7/32' in {"'198.51.100.7'/32"}
+   Fix: drop the escape flag; $ip/$table stay raw (WORD/IP-validated), every
+   exec sink already escapeshellarg()'s.
+
+Failures NOT ours (verified against devel history):
+- ui browser tier: test_alias_type_port_field_rejects_network_alias — already
+  red on the devel nightly (2026-07-03 07:55) before ADR-53 existed.
+- ui render tier: test_software_actions_link_to_package_manager — software
+  page untouched by ADR-53 (last src change 2026-07-02, green on the 07:55
+  nightly); body-state depends on update-availability, tracked separately.
+
+Re-dispatch after the fix commit: run URLs recorded below by the orchestrator.
+
+Run 2/3 findings (after the stderr + escaped-IP fixes):
+- alerts "+" Tier B e2e GREEN (both production fixes proven live).
+- test_smoke_suppression.py had its own _pfctl_test duplicate of the helper
+  (same stdout-only bug) — fixed to combine streams.
+- Run 3 exposed a REAL v6 engine bug: pfb_v6_cidr_to_range() rejected BARE
+  v6 host tokens (no /mask — the dominant feed shape) as malformed, so the
+  suppress pass DROPPED every bare host from the member file (fail-open:
+  hosts silently unblocked; caught by the sibling-still-matches assertion).
+  Fix: a bare address parses as its own /128. Red->green PHPUnit vectors
+  added (entry + hole + file level); the engine canonicalizes a surviving
+  bare host to addr/128 — set-equivalent, tolerated by the smoke oracle.
