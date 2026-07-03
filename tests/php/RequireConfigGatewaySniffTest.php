@@ -10,11 +10,11 @@ use PHPUnit\Framework\TestCase;
  * Pins both sides of every decision the sniff makes, driving the real `phpcs`
  * binary over fixture files under tests/phpcs/fixtures/:
  *
- *   VIOLATING (gateway_violation.php): three raw config_*_path calls each
- *   targeting a REGISTERED installedpackages/pfblockerng* key — the sniff
- *   MUST flag exactly those three lines (one config_get_path, one
- *   config_set_path, one config_del_path).  Every branch of the gated-function
- *   set is exercised.
+ *   VIOLATING (gateway_violation.php): raw config_*_path calls each targeting
+ *   a REGISTERED installedpackages/pfblockerng* key — the sniff MUST flag
+ *   every one (one config_get_path, one config_set_path, one config_del_path,
+ *   one comment-evasion attempt, and the ADR-53 v4suppression key).  Every
+ *   branch of the gated-function set is exercised.
  *
  *   COMPLIANT (gateway_compliant.php): foreign/unregistered keys, dynamic
  *   paths, pfSense-core sections, and section-level (not scalar-key) accesses
@@ -27,7 +27,9 @@ use PHPUnit\Framework\TestCase;
  *   - registered gen-section key flagged (config_get_path)
  *   - registered DNSBL-settings key flagged (config_set_path)
  *   - registered SafeSearch key flagged (config_del_path)
- *   - foreign section (pfblockerngipsettings) — silent
+ *   - registered v4suppression key flagged (ADR-53, config_get_path)
+ *   - foreign section (pfblockerngipsettings/enable_dup) — silent
+ *   - v4suppression accessed via PfbConfig (not raw config_*_path) — silent
  *   - dynamic per-row path ($row interpolation) — silent
  *   - pfSense-core section (aliases/alias) — silent
  *   - section-level read (path ends at /config/0, no key) — silent
@@ -92,9 +94,11 @@ final class RequireConfigGatewaySniffTest extends TestCase
 	}
 
 	/**
-	 * Violating fixture: four raw config_*_path calls on registered keys MUST
-	 * each be flagged — one per gated function (get / set / del) plus one where
-	 * an inline comment appears between '(' and the key (comment-evasion guard).
+	 * Violating fixture: five raw config_*_path calls on registered keys MUST
+	 * each be flagged — one per gated function (get / set / del), one where
+	 * an inline comment appears between '(' and the key (comment-evasion guard),
+	 * and one on the ADR-53 v4suppression key (proving the sniff picks up a
+	 * newly-registered key with no other change).
 	 *
 	 * Before/after proof: the exact same call patterns appear in the compliant
 	 * fixture but on FOREIGN keys — zero findings there proves the registered
@@ -105,22 +109,23 @@ final class RequireConfigGatewaySniffTest extends TestCase
 		$findings = $this->findingsFor('gateway_violation.php');
 
 		$this->assertCount(
-			4,
+			5,
 			$findings,
-			'exactly four raw registered-key calls must be flagged (get / set / del / comment-evasion)'
+			'exactly five raw registered-key calls must be flagged (get / set / del / comment-evasion / v4suppression)'
 		);
 
 		$lines = array_column($findings, 'line');
 		sort($lines);
 
-		// Line 20: config_get_path on pfb_keep (gen section)
-		// Line 23: config_set_path on pfb_dnsbl (DNSBL settings section)
-		// Line 26: config_del_path on safesearch_enable (SafeSearch section)
-		// Line 29: config_get_path with inline comment before the key (comment-evasion)
+		// Line 21: config_get_path on pfb_keep (gen section)
+		// Line 24: config_set_path on pfb_dnsbl (DNSBL settings section)
+		// Line 27: config_del_path on safesearch_enable (SafeSearch section)
+		// Line 30: config_get_path with inline comment before the key (comment-evasion)
+		// Line 38: config_get_path on v4suppression (ADR-53 -- IP settings section)
 		$this->assertSame(
-			[20, 23, 26, 29],
+			[21, 24, 27, 30, 38],
 			$lines,
-			'findings must land on the four raw registered-key call lines'
+			'findings must land on the five raw registered-key call lines'
 		);
 
 		foreach ($findings as $finding) {

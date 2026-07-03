@@ -321,6 +321,11 @@ function pfb_cfg_registry(): array
 	// -----------------------------------------------------------------------
 	$ss = 'installedpackages/pfblockerngsafesearch';
 
+	// -----------------------------------------------------------------------
+	// Section: installedpackages/pfblockerngipsettings/config/0
+	// -----------------------------------------------------------------------
+	$ip = 'installedpackages/pfblockerngipsettings/config/0';
+
 	$registry = [
 
 		// -------------------------------------------------------------------
@@ -1107,6 +1112,24 @@ function pfb_cfg_registry(): array
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 			'since'         => '2.0.0',
+		],
+
+		// -------------------------------------------------------------------
+		// IP settings section (pfblockerngipsettings/config/0)
+		// -------------------------------------------------------------------
+
+		// ADR-53: IPv4 suppression customlist -- CIDR/host carve-outs from the
+		// Deny alias set, stored as a base64-encoded newline-separated list
+		// (same shape as the DNSBL 'suppression' blob above). Registered so
+		// every call site routes through the gateway; this is a legacy key
+		// from the original addon (mirrors the '1.0.0' vintage of the sibling
+		// DNSBL blob fields). Default ''.
+		'v4suppression' => [
+			'section'       => $ip,
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'since'         => '1.0.0',
 		],
 	];
 

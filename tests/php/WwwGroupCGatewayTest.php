@@ -8,7 +8,8 @@ use PHPUnit\Framework\TestCase;
  * ADR-29 Phase 8 — www/ group C gateway routing tests.
  *
  * Covers the pages routed in Phase 8:
- *   - pfblockerng_alerts.php   (pfblockerngglobal: foreign section; suppression/tldexclusion/global_log: registered)
+ *   - pfblockerng_alerts.php   (pfblockerngglobal: foreign section; suppression/tldexclusion/global_log/
+ *                               v4suppression [ADR-53]: registered)
  *   - pfblockerng_sync.php     (pfblockerngsync/config/0: foreign section)
  *   - pfblockerng_software.php (pfb_software_check: registered)
  *   - pfblockerng_log.php      (no pfblockerng* config access — no routing work)
@@ -18,13 +19,16 @@ use PHPUnit\Framework\TestCase;
  * Test groups:
  *
  * A — LOAD DEFAULT PARITY
- *   Registered keys (pfb_software_check, global_log, suppression, tldexclusion):
+ *   Registered keys (pfb_software_check, global_log, suppression, tldexclusion,
+ *   v4suppression [ADR-53]):
  *     Assert PfbConfig::read($key) on an absent section returns the correct default
  *     (parity with prior page behaviour before routing).
  *
- *   Foreign keys (pfblockerngglobal widget-*, pfblockerngsync, pfblockerngipsettings/v4suppression):
+ *   Foreign keys (pfblockerngglobal widget-*, pfblockerngsync, pfblockerngipsettings/enable_dup):
  *     Assert registry lookup throws (proving they are NOT in the registry and must
- *     stay on direct config_*_path).
+ *     stay on direct config_*_path). v4suppression -- the ADR-53 sibling in the same
+ *     pfblockerngipsettings section -- is now registered; see group A's v4suppression
+ *     tests below rather than this foreign-key list.
  *
  * B — SAVE ROUND-TRIP IDENTITY (section blobs)
  *   For every section routed through PfbConfig::readSection/writeSection, assert that
@@ -199,6 +203,46 @@ final class WwwGroupCGatewayTest extends TestCase
 	}
 
 	/**
+	 * v4suppression: absent -> '' (registry default; ADR-53 P2 migrates the raw
+	 * pfblockerng_alerts.php call sites onto the gateway -- parity with the prior
+	 * page's `config_get_path(...) ?: ''` fallback).
+	 *
+	 * Red->green: before this phase, v4suppression was a foreign key and
+	 * PfbConfig::read('v4suppression') threw InvalidArgumentException (the former
+	 * testV4SuppressionIsNotInRegistry pin this test-pair replaces).
+	 */
+	public function testV4SuppressionAbsentDefaultIsEmptyString(): void
+	{
+		$path = 'installedpackages/pfblockerngipsettings/config/0/v4suppression';
+
+		// Before: key absent.
+		$this->assertNull(config_get_path($path), 'v4suppression must be absent before read');
+
+		// When: gateway read.
+		$result = PfbConfig::read('v4suppression');
+
+		// Then: '' — parity with prior page coalesce `?: ''`.
+		$this->assertSame('', $result, 'v4suppression absent -> "" (parity with prior page fallback)');
+	}
+
+	/**
+	 * v4suppression round-trip: write a base64 blob, read it back byte-identically.
+	 */
+	public function testV4SuppressionRoundTrips(): void
+	{
+		$blob = base64_encode("192.168.1.1/32\r\n192.168.1.2/32\r\n");
+
+		// Before: absent → ''.
+		$this->assertSame('', PfbConfig::read('v4suppression'), 'initial absent -> ""');
+
+		// When: write a base64 blob.
+		PfbConfig::write('v4suppression', $blob);
+
+		// Then: read back byte-identically.
+		$this->assertSame($blob, PfbConfig::read('v4suppression'), 'v4suppression after write round-trips byte-identically');
+	}
+
+	/**
 	 * Foreign section keys must NOT be in the registry.
 	 * widget-popup is a pfblockerngglobal widget key — registry lookup must throw.
 	 */
@@ -209,12 +253,14 @@ final class WwwGroupCGatewayTest extends TestCase
 	}
 
 	/**
-	 * v4suppression is a pfblockerngipsettings key (foreign section) — registry lookup must throw.
+	 * enable_dup is a pfblockerngipsettings key (foreign section) — registry lookup must
+	 * throw. (v4suppression, the ADR-53 sibling in this same section, is now registered
+	 * — see testV4SuppressionAbsentDefaultIsEmptyString / testV4SuppressionRoundTrips above.)
 	 */
-	public function testV4SuppressionIsNotInRegistry(): void
+	public function testEnableDupIsNotInRegistry(): void
 	{
 		$this->expectException(InvalidArgumentException::class);
-		PfbConfig::read('v4suppression');
+		PfbConfig::read('enable_dup');
 	}
 
 	// -----------------------------------------------------------------------

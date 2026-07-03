@@ -250,9 +250,7 @@ if (!$alert_summary) {
 		}
 	}
 
-	// foreign key: pfblockerngipsettings not in registry; write directly
-	config_set_path('installedpackages/pfblockerngipsettings/config/0/v4suppression',
-		config_get_path('installedpackages/pfblockerngipsettings/config/0/v4suppression') ?: '');
+	PfbConfig::write('v4suppression', PfbConfig::read('v4suppression') ?: '');
 
 	PfbConfig::write('suppression', PfbConfig::read('suppression') ?: '');
 
@@ -265,8 +263,7 @@ if (!$alert_summary) {
 		}
 
 		if ($key == 0) {
-			// foreign key: pfblockerngipsettings not in registry; read directly
-			$clists[$type]['base64'] = config_get_path('installedpackages/pfblockerngipsettings/config/0/v4suppression');
+			$clists[$type]['base64'] = PfbConfig::read('v4suppression');
 		} elseif ($key == 1) {
 			$clists[$type]['base64'] = PfbConfig::read('suppression');
 		} elseif ($key == 2) {
@@ -843,8 +840,7 @@ if (isset($_POST) && !empty($_POST)) {
 			}
 			$data .= "{$v4suppression_dat}\r\n";
 			$clists['ipsuppression']['base64'] = base64_encode($data);
-			// foreign key: pfblockerngipsettings not in registry; write directly
-			config_set_path('installedpackages/pfblockerngipsettings/config/0/v4suppression', $clists['ipsuppression']['base64']);
+			PfbConfig::write('v4suppression', $clists['ipsuppression']['base64']);
 			write_config("pfBlockerNG: Added {$ip} to the IPv4 Suppression customlist", FALSE);
 			pfb_create_suppression_file();	// Create pfbsuppression.txt
 		}
@@ -1327,8 +1323,7 @@ if (isset($_POST) && !empty($_POST)) {
 						$data .= "{$line}";
 					}
 					$clists['ipsuppression']['base64'] = base64_encode($data);
-					// foreign key: pfblockerngipsettings not in registry; write directly
-					config_set_path('installedpackages/pfblockerngipsettings/config/0/v4suppression', $clists['ipsuppression']['base64']);
+					PfbConfig::write('v4suppression', $clists['ipsuppression']['base64']);
 					$savemsg = "Removed [ {$ip_revert} ] from {$type} customlist and re-added it back into the aliastable [ {$table} ]";
 				}
 				else {

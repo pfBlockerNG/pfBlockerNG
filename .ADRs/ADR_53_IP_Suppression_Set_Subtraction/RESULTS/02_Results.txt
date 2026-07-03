@@ -1,0 +1,191 @@
+ADR-53 Phase 2 — Config-gateway prep: register v4suppression (behaviour-preserving)
+====================================================================================
+
+STATUS: Done. Registry + sniff + call-site migration + tests. Zero stored-byte
+or read-value change anywhere. Green before and after (mechanism migration,
+not a behaviour change).
+
+Registry entry (pfblockerng_extra.inc)
+---------------------------------------
+New "IP settings section (pfblockerngipsettings/config/0)" block in
+pfb_cfg_registry(), added right after the SafeSearch section (end of the
+array, minimal line churn):
+
+  $ip = 'installedpackages/pfblockerngipsettings/config/0';   // new section var
+
+  'v4suppression' => [
+      'section'       => $ip,
+      'default'       => '',
+      'read_adapter'  => NULL,
+      'write_adapter' => NULL,
+      'since'         => '1.0.0',
+  ],
+
+`since` = '1.0.0': v4suppression is a legacy key from the original addon (the
+IPv4 suppression feature predates the registry entirely), matching the exact
+vintage of its stated precedent -- the DNSBL 'suppression' blob (also plain,
+default '', since '1.0.0'). No other original-era IP-settings sibling exists
+in the registry to cross-check against (pfb_agg_types/pfb_alias_delta_mode
+live in the general $gen section and are newer ADR features), so the DNSBL
+'suppression' shape is the operative precedent per the phase prompt.
+
+Sniff update (tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php)
+------------------------------------------------------------------------------------
+Added 'installedpackages/pfblockerngipsettings/config/0/v4suppression' to
+$registeredPaths.
+
+Mechanical proof (per the phase prompt's step 3): ran phpcs with this sniff
+against the file's PRE-migration content (extracted via `git show HEAD:...`,
+HEAD = the Phase 1 commit) -- it flagged all 5 raw call sites (lines 254, 255,
+269, 847, 1331) that existed before migration. After migration, the same
+sniff run against the live file (and the full `src/` tree) is clean.
+
+Migrated call sites (src/usr/local/www/pfblockerng/pfblockerng_alerts.php)
+------------------------------------------------------------------------------
+Four raw config_*_path sites, all replaced with PfbConfig::read/write,
+mirroring the adjacent already-gatewayed 'suppression'/'tldexclusion' sibling
+lines in the same file (proves the migration reproduces an established,
+already-proven-safe pattern, not a new one):
+
+  1. Line 253 (was 254-255): self-sync write
+     Before: config_set_path(path, config_get_path(path) ?: '')
+     After:  PfbConfig::write('v4suppression', PfbConfig::read('v4suppression') ?: '')
+
+  2. Line 266 (was 269): read into $clists['ipsuppression']['base64']
+     Before: config_get_path(path)                    -- returns NULL if absent
+     After:  PfbConfig::read('v4suppression')          -- returns '' if absent
+     Byte-identical net effect verified: the only consumer is
+     `if (isset(...) && !empty(...))` two lines below -- NULL and '' both
+     fail `!empty()`, so the decode branch is skipped either way. This is the
+     EXACT same NULL-vs-'' non-issue already accepted for the pre-existing
+     'suppression'/'tldexclusion' PfbConfig::read() calls one/two lines below
+     in the identical if/elseif chain -- confirms the pattern is safe by the
+     project's own established precedent, not a new judgment call.
+
+  3. Line 843 (was 847): write in the addsuppress ($_POST['addsuppress']) handler
+     Before: config_set_path(path, $clists['ipsuppression']['base64'])
+     After:  PfbConfig::write('v4suppression', $clists['ipsuppression']['base64'])
+     write_config() on the next line is untouched -- PfbConfig::write() does
+     not persist (same contract as raw config_set_path), so timing is identical.
+
+  4. Line 1326 (was 1331): write in the delete_ip switch-case handler
+     Before: config_set_path(path, $clists['ipsuppression']['base64'])
+     After:  PfbConfig::write('v4suppression', $clists['ipsuppression']['base64'])
+     write_config() fires once, common to every switch-case, after the switch
+     (line ~1370) -- unaffected, same as case 3.
+
+Other v4suppression sites in src/ (grep -rn "v4suppression" src/) -- reviewed,
+NOT migrated (correctly out of scope):
+  - pfblockerng_ip.php (lines 69, 219, 241): already reads/writes through
+    $pfb['iconfig'] populated by PfbConfig::readSection/writeSection -- the
+    sanctioned section-level pattern, not a raw per-key config_*_path call.
+    No sniff finding, no change needed.
+  - pfblockerng.inc (4957-4959, 10178-10179), pfblockerng.widget.php (692):
+    read from the in-memory $pfb['ipconfig'] array (itself built via a
+    section-level config_get_path at pfblockerng.inc:2001) -- plain PHP
+    array-key access, never a config_*_path call. Untouched.
+  - pfblockerng_install.inc (494-519): the one-time pfBlockerNGSuppress-alias
+    migration. Uses PfbConfig::readSection/writeSection deliberately -- it
+    needs `isset($pfb_ip_cfg['v4suppression'])` to distinguish "key literally
+    absent" (never migrated) from "present but empty" (already migrated to an
+    empty list), a distinction PfbConfig::read()'s absent-default ('') cannot
+    express. Left the section-level access as-is (correct, allowed) and
+    updated the two comments that said "v4suppression is unregistered" (now
+    stale) to explain why section-level access remains correct even though
+    the key is registered.
+
+docs/misc/config-gateway.md
+------------------------------
+Removed the now-inaccurate 'pfblockerngipsettings/config/0/v4suppression' row
+from the foreign-key exclusion table (it was the literal source-of-truth
+comment for the old status).
+
+Tests
+-----
+tests/php/CfgGatewayTest.php (registry-level, group A/B):
+  - testV4SuppressionAbsentKeyReturnsDefaultEmptyString -- absent key -> ''
+    (red->green: pre-phase this threw InvalidArgumentException).
+  - testV4SuppressionRoundTrips -- seed a base64 blob, read, write back,
+    assert byte-identical (write(read(v)) == v).
+  - testInventoryCompletenessAllKnownKeysAccountedFor: moved 'v4suppression'
+    out of $out_of_scope (would now conflict with $registered_keys) and into
+    the registered section of $inventory; updated the docblock's
+    "pfblockerngipsettings sub-keys" bullet.
+
+tests/php/WwwGroupCGatewayTest.php (page-routing parity, the exact file whose
+scope is pfblockerng_alerts.php's gateway routing):
+  - testV4SuppressionAbsentDefaultIsEmptyString + testV4SuppressionRoundTrips
+    added alongside the existing suppression/tldexclusion/global_log parity
+    pairs (same shape).
+  - testV4SuppressionIsNotInRegistry (asserted PfbConfig::read('v4suppression')
+    throws) REPLACED by testEnableDupIsNotInRegistry -- v4suppression's
+    "foreign key throws" branch no longer holds (that's the whole point of
+    this phase), so the foreign-key-in-this-section coverage now uses a
+    genuinely-still-foreign ipsettings key (enable_dup) instead. This is the
+    one test whose PRE-phase assertion (throws) would now FAIL post-phase --
+    confirms the migration is real, not a no-op.
+  - Docblock updated (page/key inventory, foreign-key list).
+
+tests/phpcs fixtures + RequireConfigGatewaySniffTest.php:
+  - gateway_violation.php: new pfb_gateway_violation_v4suppression() function,
+    one config_get_path call on v4suppression -- must be flagged (line 38).
+  - gateway_compliant.php: the old "foreign section" example (v4suppression,
+    line 20) swapped for a still-foreign ipsettings key (enable_dup), since
+    v4suppression itself is no longer a valid "foreign" example. Added
+    pfb_gateway_compliant_v4suppression_via_gateway() demonstrating
+    PfbConfig::read/write access to the now-registered key stays silent
+    (neither call is one of the sniff's three gated function names).
+  - RequireConfigGatewaySniffTest::testFlagsRawRegisteredKeyAccess: count
+    4->5, expected lines [20,23,26,29] -> [21,24,27,30,38] (the pre-existing
+    4 lines shifted +1 because the docblock's "Flagged:" list grew one line;
+    verified against the actual file, not assumed).
+  - Docblocks updated throughout (class-level branch inventory, method-level
+    scenario comments).
+
+Gate results
+------------
+- php -l on every touched file (10 files)          -> clean, all files.
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/  -> clean (no output, exit 0).
+- vendor/bin/phpstan analyse --memory-limit=1G     -> "[OK] No errors" (the
+  bare `phpstan analyse` command crashes on this box's default 128M limit --
+  a pre-existing environment quirk, NOT a regression; CI's own invocation
+  (.github/workflows/test.yml:373) already passes --memory-limit=1G, so this
+  matches the real gate exactly).
+- vendor/bin/phpunit                               -> 1861 tests, 15478
+  assertions, 1 failure, 4 skipped. The 1 failure is the exact documented
+  environmental baseline (IpAddrDoublesTest::testIsIpaddrv4 "leading-zero
+  octets rejected", macOS inet_pton vs glibc) -- untouched by this phase, no
+  PHP-validation code changed. Filtered re-run of the three touched test
+  classes (CfgGatewayTest|WwwGroupCGatewayTest|RequireConfigGatewaySniffTest):
+  155 tests, 1725 assertions, 0 failures.
+- .venv/bin/python -m pytest -q                    -> 2042 passed, 4 skipped
+  (identical to Phase 1's recorded baseline; no Python touched this phase).
+- shellspec                                        -> 260 examples, 0
+  failures, 4 skips (identical to Phase 1's recorded baseline; no shell
+  touched this phase).
+
+Scope confirmation
+-------------------
+`git diff origin/devel...HEAD --stat` (pre-commit) showed only Phase 1's
+tests-only diff (branch was at the Phase 1 tip 7c393089, fast-forward from
+origin/devel). `git status --porcelain` showed exactly the 10 files listed
+above as Modified, nothing else. `git diff --stat` (working tree): 205
+insertions, 47 deletions across 10 files -- registry + sniff + one www/ page
++ one install-migration comment fix + doc fix + 4 test files. No src/ file
+outside pfblockerng_extra.inc / pfblockerng_install.inc / pfblockerng_alerts.php
+touched; no v6suppression key added (Phase 6's job); no pfblockerng.sh touched
+(Phase 3's job).
+
+Go-ahead for Phase 3
+---------------------
+Phase 2 is complete and green; v4suppression is now a registered, gateway-only
+key with zero behaviour change (config.xml bytes, page responses, and
+write_config timing all identical to before). Phase 3 (v4 engine swap:
+`iprange --except` in pfblockerng.sh's suppress()) can proceed independently
+-- it touches pfblockerng.sh + the Phase-1 shellspec oracle
+(tests/shell/pfblockerng_suppress_spec.sh), neither of which this phase
+touched. Per Phase 1's handoff, Phase 3 implementer must flip case (d)'s
+single assertion (containing-/16 survives unchanged -> the real covering-CIDR
+carve, 16 entries) and update case (c)'s host-count language to the
+covering-CIDR count (8 entries for /24 - /32), leaving a/b/e/f/g green
+unchanged.
