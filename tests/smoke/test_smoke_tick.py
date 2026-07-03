@@ -11,7 +11,8 @@ Tests:
     test_tick_dispatches_due_feed     — tick fires a due feed (ledger past)
     test_tick_skips_non_due_feed      — tick skips a feed whose next_due is future
     test_tick_wiped_ledger_jittered   — wiped ledger gives due-now but jittered next_due
-    test_tick_reboot_persists_ledger  — clean reboot keeps the schedule (ledger restored)
+    test_tick_reboot_persists_ledger  — clean reboot with MFS /var keeps the schedule
+                                        (ledger restored via the #468 earlyshellcmd)
 """
 
 import json
@@ -78,6 +79,14 @@ _LEDGER_DIR = "/var/db/pfblockerng"
 _PHP = "/usr/local/bin/php"
 _PFB_PHP = "/usr/local/www/pfblockerng/pfblockerng.php"
 _PFB_EXTRA = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
+_PFB_INC = "/usr/local/pkg/pfblockerng/pfblockerng.inc"
+
+# A throwaway marker dropped in /var right before the reboot in test_tick_reboot_persists_ledger.
+# Distinct from test_smoke_boot_reload.VAR_WIPE_SENTINEL — a different fixture, a different reboot.
+# Its disappearance after the reboot is direct, implementation-agnostic proof that /var actually
+# came up as a memory filesystem (MFS wipes /var on every boot); if it survived, use_mfs_tmpvar
+# never engaged and the whole scenario would be a false positive.
+_VAR_WIPE_SENTINEL = "/var/PFB_SMOKE_TICK_WIPE_SENTINEL"
 
 
 # ---------------------------------------------------------------------------
@@ -270,36 +279,114 @@ def test_tick_wiped_ledger_jittered(deployed_vm: SmokeVM):
     assert actual_next > now_ts, f"dcc next_due should be in the future; got {actual_next} now={now_ts}"
 
 
+@pytest.fixture
+def mfs_var(deployed_vm: SmokeVM) -> Iterator[SmokeVM]:
+    """Arrange test_tick_reboot_persists_ledger's documented Background: MFS /var.
+
+    ``set_ramdisk`` only flips the ``use_mfs_tmpvar`` config flag; the reload that follows
+    runs ``pfb_aliastables('conf')`` (pfblockerng.inc:13273, on every package sync), which
+    registers the aliastables-restore earlyshellcmd because the flag is now on. /var only
+    comes up as a memory filesystem after the REBOOT that follows — that is the state the
+    reboot-persists scenario needs, so this fixture reboots to actually engage it (not just
+    set the flag).
+
+    Function-scoped so no other test inherits MFS /var: issue #762 is exactly that leak —
+    a sibling module's ramdisk leg turns the flag off WITHOUT rebooting, so the previously
+    engaged MFS /var kept running underneath this test, which never arranged its own
+    Background and inherited whatever state came before it. Teardown reboots back to a
+    disk-backed /var so it never leaks forward either.
+    """
+    vm = deployed_vm
+    h.set_ramdisk(vm, True)
+    h.reload(vm, "update")
+    h.reboot_vm(vm)
+    try:
+        yield vm
+    finally:
+        # Best-effort, mirrors test_smoke_boot_reload's deployed_vm teardown: never mask
+        # the test result on cleanup failure. The reboot here is REQUIRED (not optional) —
+        # without it the running /var stays MFS and pollutes every module that runs next.
+        try:
+            h.set_ramdisk(vm, False)
+            h.reload(vm, "update")
+            h.reboot_vm(vm)
+        except Exception as exc:  # noqa: BLE001 -- teardown cleanup, never mask the test result
+            print(f"[smoke] mfs_var teardown reboot failed (non-fatal): {exc}")
+
+
 @pytest.mark.reboot
 @pytest.mark.tick
 # Unlike the boot_reload siblings (which reboot in a FIXTURE, exempt from the workflow's
-# 30s func-only body cap), this test reboots in its BODY: the 30s settle alone exhausts
+# 30s func-only body cap), this test reboots in its BODY too: the 30s settle alone exhausts
 # the default cap, so it could never pass a dispatch without its own budget (#738 F4
-# validation run). Reboot ~90-150s (settle + readiness gate) + ledger checks + margin.
+# validation run). Reboot ~90-150s (settle + readiness gate) + ledger checks + margin. The
+# mfs_var fixture reboots twice more (arrange + teardown) — exempt from the func-only cap,
+# same as boot_reload's fixture reboots — so the body still contains exactly ONE reboot.
 @pytest.mark.timeout(300)
-def test_tick_reboot_persists_ledger(deployed_vm: SmokeVM):
-    """A clean reboot keeps the due-ledger (restored via #468 earlyshellcmd).
+def test_tick_reboot_persists_ledger(mfs_var: SmokeVM):
+    """A clean reboot with MFS /var keeps the due-ledger (restored via #468 earlyshellcmd).
 
     Scenario:
-        Background: pfBlockerNG installed with MFS /var (use_mfs_tmpvar).
-            Given the ledger has a future cron next_due.
-            When the VM reboots cleanly.
-            Then the ledger is restored.
-            And  the cron next_due is still in the future (no spurious dispatch).
+        Background: pfBlockerNG installed with MFS /var engaged (the ``mfs_var`` fixture;
+            issue #762 — previously only claimed in this docstring, never arranged, so the
+            test silently rode whatever /var state a sibling module happened to leave behind).
+            Given the ledger has a future cron next_due, and the aliastables archive has been
+            refreshed to include it (the archiver is called directly: ``pfb_aliastables('update')``
+            is reached only on the rule-change or alias-content-change paths, and this module
+            configures no IP feeds, so a quiescent update pass would never archive the ledger).
+        When the VM reboots cleanly.
+        Then the /var sentinel is gone (MFS actually engaged this reboot),
+        And  the ledger is restored,
+        And  the cron next_due is still the value written before the reboot (no spurious dispatch).
     """
-    vm = deployed_vm
+    vm = mfs_var
 
     now_ts = int(vm.ssh("date +%s").stdout.strip())
     future = now_ts + 7200  # 2 hours out
 
     _write_ledger_entry(vm, "cron", now_ts, future)
 
-    # Reboot.
+    # Refresh the archive directly (see docstring: 'update' mode is change-gated and this
+    # module has no IP feeds to trip either gate).
+    snippet = f"require_once('{_PFB_INC}');pfb_global();pfb_aliastables('update');echo 'OK';"
+    result = h.php_eval(vm, snippet)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"pfb_aliastables('update') archive refresh failed: "
+            f"rc={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+
+    # --- Given (before reboot): archive refreshed, ledger holds the just-written entry ---
+    assert h.archive_exists(vm, h.ALIASARCHIVE), (
+        f"precondition: {h.ALIASARCHIVE}.{{zst,bz2}} must exist after the archive refresh"
+    )
+    before = _read_ledger(vm)
+    assert before.get("cron", {}).get("next_due") == future, (
+        f"precondition: cron next_due should be {future} before reboot; ledger={before}"
+    )
+
+    # Drop a /var sentinel so the post-reboot check can PROVE /var came up as a memory
+    # filesystem this reboot (the sentinel is wiped), not merely re-use a prior MFS mount.
+    vm.ssh("/usr/bin/touch", _VAR_WIPE_SENTINEL)
+    assert vm.ssh("test", "-e", _VAR_WIPE_SENTINEL).returncode == 0, (
+        f"precondition: {_VAR_WIPE_SENTINEL} must exist before reboot"
+    )
+
+    # When: reboot.
     h.reboot_vm(vm)
 
-    # After reboot: verify ledger was restored.
+    # Then: the sentinel is gone -- print the /var mount line so a not-engaged MFS is
+    # diagnosable rather than a bare boolean (the test-coverage mandate's expected-vs-actual rule).
+    var_mount = next(
+        (ln for ln in vm.ssh("/sbin/mount").stdout.splitlines() if " on /var " in ln),
+        "",
+    )
+    assert vm.ssh("test", "-e", _VAR_WIPE_SENTINEL).returncode != 0, (
+        f"/var sentinel survived the reboot -- MFS did not engage; /var mount line: {var_mount!r}"
+    )
+
     after = _read_ledger(vm)
     assert "cron" in after, f"cron ledger entry missing after reboot; ledger={after}"
     assert after["cron"]["next_due"] == future, (
-        f"cron next_due changed across reboot;\n  before={future} after={after['cron']['next_due']}"
+        f"cron next_due changed across reboot; expected={future} actual={after['cron']['next_due']}; ledger={after}"
     )
