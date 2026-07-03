@@ -1,0 +1,200 @@
+ADR-53 Phase 1 — suppress() oracle (shellspec, behaviour-preserving)
+=====================================================================
+
+STATUS: Done. Tests only; zero src/ changes. Green before and after (oracle).
+
+New file: tests/shell/pfblockerng_suppress_spec.sh
+
+Pre-check (action-plan step 1)
+-------------------------------
+Ran `grep -rl suppress tests/shell/` first. It matched 6 files, but none is a
+dedicated suppress() oracle:
+  - tests/shell/pfblockerng_fail_open_redirect_spec.sh -- DOES call suppress()
+    (Class A/B: the #713 grepcidr rc>=2 keep-previous gate, and the dedup="on"
+    masterfile awk redirect), but it is scoped to a cross-function "fail-open
+    redirect" family shared with duplicate()/remove()/process255()/
+    reputation_max() -- not a comprehensive suppress() semantics pin.
+  - the other 5 matches are incidental word hits (comments, unrelated
+    "suppress the false positive" ShellCheck notes, etc).
+Conclusion: no existing spec covers the full contract this phase needs
+(bare-token removal, the /24 explode + dupfile dedup guard, the containing-
+entry defect, absent/empty gating, the stats table) -- created the new
+dedicated file per the phase prompt, rather than extending the narrower one.
+The two files' fail-safe (#713) cases are deliberately redundant, not
+duplicative: each proves the rc-gating contract from its own file's
+self-contained narrative (see the new file's header-comment note).
+
+It-block inventory (letter -> Describe/It)
+-------------------------------------------
+a) 'a — suppression file absent or empty: early return, member file untouched'
+   - 'leaves the member file byte-identical when the suppression file does
+     not exist'        (the "-e" leg of the gate)
+   - 'leaves the member file byte-identical when the suppression file exists
+     but is empty'     (the "-s" leg of the gate)
+
+b) 'b — bare-host token + matching /32 suppression: token removed (the
+   working case)'
+   - 'removes the exact suppressed host, keeping its siblings'
+
+c) 'c — exact-/24 explode: a /32 suppression inside a containing /24 member
+   entry'
+   - 'explodes the /24 line into its 254 non-suppressed host lines (the /24
+     line itself is gone)' -- NOTE: empirically verified 254, NOT 255 (seq
+     255 walks octets 1..255 = 255 values; minus the one suppressed octet =
+     254). The phase-prompt's "255 host lines" figure was an off-by-one; the
+     assertion reflects the REAL function's output (verified by sourcing
+     pfblockerng.sh directly and running suppress() by hand before writing
+     the spec -- see "Empirical verification" below).
+   - 'a SECOND /32 suppression inside the same containing /24 does not
+     re-explode (dupfile dedup): both hosts gone, no duplicate lines' -- two
+     different /32 holes mapping to the same containing /24; proves the
+     dcheck/dupfile guard fires only once (253 lines, no duplicated host).
+
+d) 'd — containing-entry silent no-op: the DEFECT, pinned as todays oracle
+   (Phase 3 flips this)'
+   - 'SURVIVES the containing /16 line unchanged -- the suppressed host stays
+     blocked, ADR-53 §1.2 (Phase 3 flips this to a carve)' -- THE assertion
+     Phase 3 must flip red->green (currently pins the no-op as today's
+     truth).
+
+e) 'e — grepcidr fail-safe publish gating (#713), re-asserted here for a
+   self-contained oracle'
+   - 'keeps the PRIOR member list unchanged when grepcidr errors (rc>=2), and
+     logs the error'
+   - 'publishes an EMPTY member list on grepcidr rc=1 (a legitimate
+     "everything suppressed" outcome)'
+   (rc=0/default-mode "publish on success" is already exercised throughout
+   b/c/d/f — not re-tested here as a third redundant case.)
+
+f) 'f — masterfile resync under dedup="on" mirrors the post-suppression list'
+   - 'drops the stale alias rows, keeps the unrelated row, and appends the
+     post-suppression list'
+
+g) 'g — the Suppression Stats table'
+   - 'prints the header block when alias="suppressheader"'
+   - 'prints the per-alias Pre/Suppress/Master row shape on a normal call'
+
+11 It blocks total, mapping to the 7 lettered cases (a-g) from the phase
+prompt's action plan.
+
+How pfb_source works
+---------------------
+tests/shell/spec_helper.sh (loaded via .shellspec's `--require spec_helper`)
+defines `pfb_source()`: sets `PFB_SOURCED=1` then dot-sources
+src/usr/local/pkg/pfblockerng/pfblockerng.sh. The script's own top-of-file
+source guard (PFB_SOURCED set) makes it define every function and return
+before its normal top-level init / argv dispatch -- so `suppress()` etc.
+become plain shell functions callable directly from a spec, with every global
+variable it reads (max, alias, pfbsuppression, tempfile, tempfile2, dupfile,
+dedupfile, masterfile, mastercat, dedup, errorlog, pathgrepcidr) supplied by
+the spec's own setup(). Every nested Describe here follows the established
+per-file pattern (see pfblockerng_original_count_spec.sh /
+pfblockerng_fail_open_redirect_spec.sh): `BeforeAll 'pfb_source'` once at the
+top, then each Describe has its own `setup()`/`cleanup()` wired via
+`Before`/`After`, using a fresh mktemp workdir so no test shares state with
+another (self-encapsulated per the test-coverage mandate).
+
+The grepcidr stub contract
+----------------------------
+suppress() shells out to `${pathgrepcidr} -vf <suppression-file> <target>`.
+The new file's local `write_grepcidr_shim()` helper writes an executable
+POSIX-sh stub (same pattern as the sibling file's local `write_grepcidr_shim`
+-- these are per-file helpers by house convention, not shared via
+spec_helper.sh) implementing:
+
+  - DEFAULT mode: plain ADDRESS-EQUALITY filtering, mask stripped from both
+    sides. Every suppression entry the UI accepts today is a /32 host
+    (pfblockerng_ip.php:159), so real grepcidr's CIDR-containment test ("is
+    this target line's range a subset of a filter CIDR") collapses to "is
+    this target line's address exactly the suppressed host": a bare host or
+    an exact /32-written line at that address is removed (proven whole-token
+    removal, ADR-53 §1.2); a WIDER target CIDR (a /16 or /24 line) can never
+    equal a single suppressed host's address, so it survives completely
+    untouched -- this is EXACTLY the containing-entry silent no-op ADR-53
+    §1.2 proved live, and it falls out of the address-equality stub for free
+    (verified empirically -- see below), with no need for full CIDR-subset
+    arithmetic in the fake.
+  - GREPCIDR_MODE=empty -> exit 1 with no output (the #713 legitimate-empty
+    case).
+  - GREPCIDR_MODE=error -> exit 2 with a stderr message (the #713 real-error
+    case).
+
+Empirical verification (before writing final assertions)
+------------------------------------------------------------
+Per the "don't guess" working principle, every numeric assertion in the spec
+was checked by sourcing the REAL pfblockerng.sh in a throwaway script (with
+the same stub) and calling suppress() by hand BEFORE encoding it into
+shellspec, rather than trusting the phase prompt's stated counts verbatim.
+This caught the phase prompt's off-by-one ("255 host lines" -> actually 254)
+and confirmed: case (d)'s /16 line truly survives byte-identical; case (c)'s
+dupfile guard truly fires only once across two /32s in the same /24 (253
+final lines, no duplicates); case (a)'s early return really is rc=0 either
+way (POSIX `if false; then …; fi` with no else exits 0).
+
+One iteration bug fixed along the way: an initial `The contents of file …
+should not include '10.9.8.4'` assertion false-failed because '10.9.8.4' is
+a SUBSTRING of '10.9.8.40'..'10.9.8.49', which are legitimately still present
+in the exploded list. Fixed by switching every specific-host
+presence/absence check to an exact-line `grep -c '^host$'` captured into a
+plain variable, asserted via `The variable … should equal N` (mirroring the
+existing `c_count`/`merged` pattern in pfblockerng_adr26_locale_spec.sh) --
+substring "include"/"not include" is kept only where the string is
+unambiguous (the '/24' line, 'PRIOR-1'/'PRIOR-2', alias-prefixed masterfile
+rows). Also had to append `|| true` to every such grep/uniq -d capture:
+shellspec's example execution has `set -e` semantics, so a legitimate
+zero-match (grep rc=1) was aborting the example outright ("Example aborted")
+until guarded.
+
+Gate results
+------------
+- shellspec tests/shell/pfblockerng_suppress_spec.sh -> 11 examples, 0
+  failures.
+- shellspec (full suite)                              -> 260 examples,
+  0 failures, 4 skips (all 4 pre-existing/unrelated: two build-leg real-build
+  parity legs needing REAL_PORTS_DIR, one ADR-26 GNU-stat-only case, one
+  ADR-26 locale-merge case skipped because this libc's ca_AD.UTF-8 doesn't
+  collation-merge the sample).
+- sh -n tests/shell/pfblockerng_suppress_spec.sh -> clean.
+- shellcheck tests/shell/pfblockerng_suppress_spec.sh -> DEVIATION from the
+  literal phase-prompt gate ("shellcheck … -> clean"): it reports SC2329
+  ("function never invoked" on every setup()/cleanup(), which shellspec's
+  Before/After DSL strings invoke indirectly) and SC2034 ("var appears
+  unused" on globals consumed only by the sourced suppress()) -- the EXACT
+  SAME two warning classes the pre-existing, already-merged
+  pfblockerng_fail_open_redirect_spec.sh also triggers verbatim (verified by
+  running shellcheck on it too). This is NOT a gap: .githooks/pre-commit
+  explicitly scopes its shellcheck step to `find src scripts -name '*.sh'`
+  with the inline comment "tests/ shellspec specs trip SC2034
+  false-positives — tracked as a separate cleanup", and CI's shellcheck job
+  (test.yml:205) uses the identical `find src scripts` scope -- tests/shell/
+  is deliberately OUT of the enforced shellcheck gate for exactly this
+  reason. Treated as expected/tolerated, matching the established sibling
+  file's baseline, not a defect to chase.
+- .venv/bin/python -m pytest -q -> 2042 passed, 4 skipped (untouched;
+  sanity-only, this phase touches no Python).
+- vendor/bin/phpunit -> 1846 tests, 15443 assertions, 1 failure, 4 skipped --
+  the exact known environmental baseline (IpAddrDoublesTest::testIsIpaddrv4
+  "leading-zero octets rejected", macOS inet_pton accepts what glibc rejects).
+  No other failures; untouched by this phase (no PHP touched).
+
+Scope confirmation
+-------------------
+`git diff origin/devel...HEAD --stat` (pre-commit) showed nothing (branch was
+at origin/devel tip with only the new untracked file); `git status --porcelain`
+showed exactly one untracked file: tests/shell/pfblockerng_suppress_spec.sh.
+No src/ changes. Diff is tests-only, matching the phase's behaviour-preserving
+scope.
+
+Go-ahead for Phase 2
+---------------------
+Phase 1 is complete and green. Phase 2 (register `v4suppression` in the
+config gateway, behaviour-preserving) can proceed independently of this
+file -- it touches pfblockerng_extra.inc/pfblockerng_alerts.php, not
+pfblockerng.sh, so there is no ordering dependency on this oracle beyond it
+existing as the Phase 3 regression baseline. Phase 3 implementer: flip case
+(d)'s single assertion ('SURVIVES the containing /16 line unchanged…') to the
+real covering-CIDR carve assertion (16 entries, per ADR-53 §1.2's measured
+`/16 − /32` bound) and update case (c)'s "255 host lines" language (this
+spec already correctly encodes 254/253) to the covering-CIDR count (8 entries
+for `/24 − /32`) -- everything else in this file (a, b, e, f, g) must stay
+green unchanged through the Phase 3 rewrite.
