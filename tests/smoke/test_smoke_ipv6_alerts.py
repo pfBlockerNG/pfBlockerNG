@@ -33,12 +33,32 @@ fixtures skip cleanly when absent.
 
 from __future__ import annotations
 
+import ipaddress
 import os
 from collections.abc import Iterator
 
 import pytest
 
 from . import helpers as h
+
+
+def _ip_in(addr: str, pool: set[str] | list[str]) -> bool:
+    """By-VALUE membership for IP strings (#723): the repo convention compares IPs
+    by value (:: == ::0), but pfb_local carries verbatim PHP-rendered strings — an
+    equal-but-differently-rendered form must still count as present."""
+    try:
+        target = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    for cand in pool:
+        try:
+            if ipaddress.ip_address(cand) == target:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 from .conftest import SmokeVM
 
 pytestmark = pytest.mark.smoke
@@ -189,7 +209,7 @@ def test_collect_localip_recognises_ipv6_address_and_subnet(
         # ------------------------------------------------------------------
         # THEN: Local IPv6 is recognised.
         # ------------------------------------------------------------------
-        assert addr in after_local, (
+        assert _ip_in(addr, after_local), (
             f"THEN violated: {addr!r} NOT in pfb_local after set_interface_ipv6 — "
             f"fix for issue #361 not effective.  pfb_local={after_local!r}"
         )
@@ -217,7 +237,7 @@ def test_collect_localip_recognises_ipv6_address_and_subnet(
         assert lan_ipv4, (
             "AND violated: get_live_ipv4(lan) returned empty — the IPv6 pass may have broken IPv4 enumeration."
         )
-        assert lan_ipv4 in after_local, (
+        assert _ip_in(lan_ipv4, after_local), (
             f"AND violated: LAN IPv4 {lan_ipv4!r} NOT in pfb_local — "
             f"IPv4 enumeration broken after IPv6 change.  pfb_local={after_local!r}"
         )

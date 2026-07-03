@@ -21,7 +21,7 @@ set actually changed.
 Phase 4 — forward-delta apply
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 For a changed table, pfBlockerNG applies ``pfctl -t <t> -T add / -T delete``
-for small-churn changes (churn ratio < ``PFB_DELTA_CHURN_THRESHOLD`` = 0.20)
+for small-churn changes (churn ratio < ``PFB_DELTA_CHURN_THRESHOLD`` = 0.05)
 and falls back to ``pfctl -T replace`` for large-churn or when
 ``pfb_alias_delta_mode`` is forced to ``'replace'``.  The key invariant in
 both cases: ``pfctl -t <t> -T show`` membership equals the canonical desired
@@ -54,7 +54,7 @@ WHAT STAYS MANUAL / OUT OF SCOPE HERE:
   traffic on real hardware; not reproducible in CI.  Owner: maintainer manual
   smoke (ADR-40 §7).
 
-* **Large-churn replace fallback (auto mode)** — crossing the 20% threshold
+* **Large-churn replace fallback (auto mode)** — crossing the 5% threshold
   requires synthesising a large alias table in the smoke harness, which would
   dominate test time.  The churn-ratio logic is unit-pinned in
   ``AliasDeltaApplyTest::testLargeChurnFallsBackToReplace``.
