@@ -585,6 +585,16 @@ def test_regex_reducible_alt_anchor_is_wildcard() -> None:
     assert decide(rs, "badnxs.com").outcome == "pass"  # not a label boundary
 
 
+def test_regex_reducible_underscored_literal_reduces() -> None:
+    # Underscore rides the reducer too (#723): a regex literal containing '_' folds
+    # to a domain rule (zero per-query cost) exactly like its LDH siblings -- keeping
+    # _DNSBL_RX_DOMAIN_LITERAL in lockstep with _DNSBL_LABEL_CHARS.
+    rs = rules_from([r"/^_dmarc\.example\.com$/"])
+    d = decide(rs, "_dmarc.example.com")
+    assert d.outcome == "block"
+    assert decide(rs, "sub._dmarc.example.com").outcome == "pass"
+
+
 def test_regex_reducible_exact_equals_data() -> None:
     rs_regex = rules_from([r"/^pixel\.example\.com$/"])
     assert decide(rs_regex, "pixel.example.com").outcome == "block"

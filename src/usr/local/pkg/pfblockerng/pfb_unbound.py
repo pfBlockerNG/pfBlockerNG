@@ -4015,7 +4015,7 @@ def classify(domain: str, tlds: dict[str, dict[str, str]], exclusion: set[str]) 
 # reduce_pattern). A reducible ``/re/`` decides IDENTICALLY to a domain/wildcard
 # rule, so it folds to a domain Rule at zero per-query cost. ``D`` is a domain
 # literal: labels of [a-z0-9-] joined by ESCAPED dots (``\.``), no other metachar.
-_DNSBL_RX_DOMAIN_LITERAL = re.compile(r"^[a-z0-9-]+(?:\\\.[a-z0-9-]+)+$")
+_DNSBL_RX_DOMAIN_LITERAL = re.compile(r"^[a-z0-9_-]+(?:\\\.[a-z0-9_-]+)+$")  # underscore per #723
 # Prefixes that mean "domain + all subdomains" (-> wildcard zone after fold):
 _DNSBL_RX_WILDCARD_PREFIXES = (r"^(.+\.)?", r"(^|\.)", r"^(?:.+\.)?")
 # Prefix that means "exact domain only" (-> exact data after fold):
