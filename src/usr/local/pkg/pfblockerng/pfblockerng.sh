@@ -162,9 +162,10 @@ pfb_is_octet_prefix() {
 }
 
 # A CIDR token: digits/dots, then EXACTLY one '/', then a non-empty numeric mask
-# (e.g. '10.0.0.1/32'). The suppress() caller splits on '/' and compares the mask
-# with -eq, so a bare IP, an empty mask ('10.0.0.1/'), or a double slash
-# ('10.0.0.1//32') is rejected here and skipped rather than reaching that compare.
+# (e.g. '10.0.0.1/32'). suppress() (ADR-53) uses this to pre-filter the
+# suppression list -- always mask-annotated (pfblockerng_ip.php's validation)
+# -- before it reaches iprange: a bare IP, an empty mask ('10.0.0.1/'), or a
+# double slash ('10.0.0.1//32') is rejected here and skipped.
 pfb_is_cidr_token() {
 	case "${1}" in
 		''|*[!0-9./]*|*/*/*|/*|*/) return 1 ;;
@@ -172,6 +173,27 @@ pfb_is_cidr_token() {
 	[ "${1#*/}" = "${1}" ] && return 1   # must contain a slash
 	case "${1##*/}" in
 		''|*[!0-9]*) return 1 ;;          # mask must be non-empty digits
+	esac
+	return 0
+}
+
+# An IPv4 host-OR-CIDR token: either a bare host (digits/dots only, e.g.
+# '203.0.113.5') or a CIDR (digits/dots, EXACTLY one '/', non-empty numeric
+# mask, e.g. '10.9.8.0/24'). Unlike pfb_is_cidr_token (which REQUIRES the
+# mask), member/deny-list lines are a mix of bare hosts and CIDRs. suppress()
+# (ADR-53) uses this to pre-filter the deny member file before it reaches
+# iprange: iprange treats anything of the wrong shape as a HOSTNAME and
+# DNS-resolves it (rc=0, no opt-out flag) rather than rejecting it.
+pfb_is_ip_or_cidr_token() {
+	case "${1}" in
+		''|*[!0-9./]*|*/*/*|/*|*/) return 1 ;;
+	esac
+	case "${1}" in
+		*/*)
+			case "${1##*/}" in
+				''|*[!0-9]*) return 1 ;;  # mask must be non-empty digits
+			esac
+			;;
 	esac
 	return 0
 }
@@ -467,10 +489,15 @@ EOF
 	fi
 }
 
-# Process to remove suppressed entries.
+# Process to remove suppressed entries. Set-subtracts every suppression entry
+# from the deny member file via `iprange --except` (ADR-53): a single call
+# performs exact CIDR set subtraction and publishes the minimal covering-CIDR
+# remainder, so a suppressed host is carved out of ANY containing entry (not
+# just the exact /24 the old grep -F explode required) -- with no per-hole
+# dedup bookkeeping, since iprange subtracts every hole in one pass.
 suppress() {
-	if [ ! -x "${pathgrepcidr}" ]; then
-		log="Application [ grepcidr ] Not found. Cannot proceed."
+	if [ ! -x "${pathaggregate}" ]; then
+		log="Application [ iprange ] Not found. Cannot proceed."
 		echo "${log}" | tee -a "${errorlog}"
 		return
 	fi
@@ -487,72 +514,50 @@ suppress() {
 			fi
 
 			pfbfolder="${max}/"
-			counter=0; : > "${dupfile}"
 
 			if [ -n "${alias}" ]; then
 				countg="$(grep -c ^ "${pfbfolder}${alias}.txt")"
-				cp "${pfbfolder}${alias}.txt" "${tempfile}"
 
-				# Iterate the suppression entries safely (no IFS re-splitting) via a
-				# here-doc so the loop body stays in THIS shell -- it accumulates
-				# ${counter} and appends to ${dupfile}/${tempfile}, which a `while|read`
-				# subshell would discard. Validate each token to a CIDR shape
-				# (digits/dots/slashes) and skip a malformed one, so only literal
-				# octet text reaches the fixed-string greps below.
+				# Strict-shape pre-filter on BOTH inputs before either reaches iprange
+				# (ADR-53 §1.2): a malformed token is NOT rejected by iprange -- it is
+				# silently treated as a HOSTNAME and DNS-resolved (rc=0, no opt-out
+				# flag), so anything not a bare IPv4 host or IPv4 CIDR must never
+				# reach it. The suppression list is user free-text; the member file
+				# is already-sanitised feed data, filtered again here as
+				# defense-in-depth, not because it is expected to need it.
+				: > "${dupfile}"
 				while IFS= read -r ip; do
-					pfb_is_cidr_token "${ip}" || continue
-					found=''; dcheck='';
-					mask="${ip##*/}"
-					iptrim="${ip%.*}"
-					ip="${ip%%/*}"
-					# Fixed-string match: '${iptrim}.0/24' is a literal whole token,
-					# no anchor needed, so grep -F matches it exactly (the '.' is a
-					# literal dot, not a regex 'any char').
-					found="$(grep -F -m1 "${iptrim}.0/24" "${tempfile}")"
-
-					# If a suppression is '/32' and a blocklist has a full '/24' block, execute the following.
-					if [ -n "${found}" ] && [ "${mask}" -eq 32 ]; then
-						echo " Suppression ${alias}: ${iptrim}.0/24 (Excluding: ${ip}/32)"
-						octet4="${ip##*.}"
-						dcheck="$(grep -F "${iptrim}.0/24" "${dupfile}")"
-
-						if [ -z "${dcheck}" ]; then
-							echo "${iptrim}.0/24" >> "${dupfile}"
-							counter="$((counter + 1))"
-
-							# Add individual IP addresses from range excluding suppressed IP
-							for i in $(seq 255); do
-								if [ "${i}" != "${octet4}" ]; then
-									echo "${iptrim}.${i}" >> "${tempfile}"
-									counter="$((counter + 1))"
-								fi
-							done
-						fi
+					if pfb_is_cidr_token "${ip}"; then
+						echo "${ip}" >> "${dupfile}"
+					elif [ -n "${ip}" ]; then
+						log=" Suppression ${alias}: dropping malformed suppression entry [ ${ip} ]"
+						echo "${log}" | tee -a "${errorlog}"
 					fi
 				done <<EOF
 ${data}
 EOF
 
-				if [ -s "${dupfile}" ]; then
-					# Remove '/24' suppressed ranges
-					# #713: gate the publish on awk's own exit status (awk has no "empty
-					# result = rc 1" quirk -- non-zero is a real error) so a failed dedup
-					# can't truncate the working copy via an unconditional mv.
-					awk 'FNR==NR{a[$0];next}!($0 in a)' "${dupfile}" "${tempfile}" > "${tempfile2}" && mv -f "${tempfile2}" "${tempfile}"
-				fi
+				: > "${dedupfile}"
+				while IFS= read -r ip; do
+					pfb_is_ip_or_cidr_token "${ip}" || continue
+					echo "${ip}" >> "${dedupfile}"
+				done < "${pfbfolder}${alias}.txt"
 
-				# Remove all other suppressions from list. #713: redirect to a scratch
-				# temp and gate the publish on grepcidr's exit status -- rc 0 (matches
-				# removed) and rc 1 (everything suppressed, a LEGITIMATE empty result)
-				# both replace the live list; rc >= 2 is a real grepcidr error, so keep
-				# the previous list intact (no truncation) and warn instead.
-				"${pathgrepcidr}" -vf "${pfbsuppression}" "${tempfile}" > "${tempfile2}"
-				grc=$?
-				if [ "${grc}" -lt 2 ]; then
+				# iprange --except merges the files before it (ipset A, here the
+				# member file) and removes every IP found in the files after it
+				# (here the suppression file), printing the minimal covering-CIDR
+				# remainder. rc=0 is success -- INCLUDING a legitimately-empty
+				# result (everything suppressed; iprange has no grepcidr-style
+				# "rc=1 = empty" quirk to special-case). Any other rc is a real
+				# error (e.g. a missing/unloadable file): keep the previous list
+				# intact and log, mirroring the #713 fail-safe pattern.
+				"${pathaggregate}" "${dedupfile}" --except "${dupfile}" > "${tempfile2}"
+				irc=$?
+				if [ "${irc}" -eq 0 ]; then
 					mv -f "${tempfile2}" "${pfbfolder}${alias}.txt"
 				else
 					rm -f "${tempfile2}"
-					log="grepcidr error (rc=${grc}) suppressing [ ${alias} ]; keeping previous list"
+					log="iprange error (rc=${irc}) suppressing [ ${alias} ]; keeping previous list"
 					echo "${log}" | tee -a "${errorlog}"
 				fi
 
@@ -577,8 +582,7 @@ EOF
 
 				countk="$(grep -c ^ "${masterfile}")"
 				countx="$(grep -c ^ "${pfbfolder}${alias}.txt")"
-				counto="$((countx - counter))"
-				printf "%-20s %-10s %-10s %-10s\n" "${alias}" "${countg}" "${counto}" "${countk}"
+				printf "%-20s %-10s %-10s %-10s\n" "${alias}" "${countg}" "${countx}" "${countk}"
 			fi
 		fi
 	fi

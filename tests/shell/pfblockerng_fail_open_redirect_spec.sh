@@ -2,15 +2,17 @@
 # pfblockerng.sh fail-open feed-list redirects (issue #713 bug 8, family of 12
 # sites in two producer classes -- the original 9 plus 3 the initial fix missed:
 # suppress()'s dedup='on' masterfile block, process255(), and reputation_max()'s
-# ccblack='block' arm). A producer (grepcidr / awk dedup) was
-# redirected into a file consumed downstream with NO exit-status gating, so a
-# producer error truncated/overwrote the live list to empty/partial:
+# ccblack='block' arm). A producer (grepcidr / awk dedup, or -- since ADR-53
+# Phase 3 -- iprange for suppress() specifically) was redirected into a file
+# consumed downstream with NO exit-status gating, so a producer error
+# truncated/overwrote the live list to empty/partial:
 #
-#   Class A (grepcidr): rc 0 = matches removed, rc 1 = a LEGITIMATE "everything
-#   suppressed" empty result (must still replace the target), rc >= 2 = a real
-#   grepcidr error (must keep the previous target untouched). suppress() held
-#   the worst case -- a direct "grepcidr ... > livelist" redirect with no temp
-#   at all, truncating the live list before grepcidr even ran.
+#   Class A (grepcidr, or iprange for suppress() post-ADR-53): rc 0 = success
+#   (for iprange, INCLUDING a legitimately-empty result -- no grepcidr-style
+#   "rc 1 = empty" quirk); any other rc = a real engine error (must keep the
+#   previous target untouched). suppress() held the worst case -- a direct
+#   "<producer> ... > livelist" redirect with no temp at all, truncating the
+#   live list before the producer even ran.
 #
 #   Class B (awk dedup): awk has no "empty output = error" quirk -- rc 0 is
 #   always a legitimate result (including a genuinely empty dedup), non-zero is
@@ -19,6 +21,15 @@
 #
 # Each scenario asserts the BEFORE state (prior content) so a pass proves the
 # fix caused the preservation, not an accidental empty-target coincidence.
+#
+# suppress()'s OWN producer switched from grepcidr to iprange in ADR-53 Phase
+# 3 (tests/shell/pfblockerng_suppress_spec.sh is the dedicated, comprehensive
+# oracle for that engine swap) -- its Class A/B Describe blocks below follow
+# suit (pathaggregate/IPRANGE_MODE, not pathgrepcidr/GREPCIDR_MODE), staying
+# deliberately redundant with that file's own rc-gating cases, not duplicative
+# (each proves the contract from its own file's self-contained narrative).
+# duplicate()'s Class A stays on the REAL grepcidr producer -- untouched by
+# ADR-53, which only rewrites suppress().
 
 Describe 'pfblockerng.sh fail-open feed-list redirects (issue #713 bug 8)'
   BeforeAll 'pfb_source; SHELLSPEC_REAL_AWK="$(command -v awk)"; export SHELLSPEC_REAL_AWK'
@@ -35,6 +46,24 @@ case "${GREPCIDR_MODE:-}" in
 	empty) exit 1 ;;
 	error) echo 'grepcidr: malformed CIDR in filter file' >&2; exit 2 ;;
 	*) exit 2 ;;
+esac
+SHIM
+    chmod +x "$1"
+  }
+
+  # ---- iprange shim (suppress()'s producer post-ADR-53): exit code/output
+  # selected via IPRANGE_MODE ----
+  #   success -> two matches on stdout, rc 0
+  #   error   -> a real iprange error (e.g. a missing/unloadable ipset), rc 1
+  #              (unlike grepcidr, iprange has no separate "rc 1 = legitimate
+  #              empty" case to simulate -- rc 0 covers an empty result too)
+  write_pathaggregate_shim() {
+    cat > "$1" <<'SHIM'
+#!/bin/sh
+case "${IPRANGE_MODE:-}" in
+	success) printf '192.0.2.1\n192.0.2.2\n'; exit 0 ;;
+	error) echo 'iprange: simulated error (missing/unloadable ipset)' >&2; exit 1 ;;
+	*) exit 1 ;;
 esac
 SHIM
     chmod +x "$1"
@@ -83,8 +112,6 @@ SHIM
       max="${work}"
       alias='TestList_v4'
       pfbsuppression="${work}/suppression.txt"
-      # A plain /24 (not /32) suppression entry stays out of the awk/dupfile
-      # branch entirely, isolating the grepcidr producer for this test.
       printf '198.51.100.0/24\n' > "${pfbsuppression}"
       tmpdir="${work}"
       tempfile="${work}/t1"; tempfile2="${work}/t2"; dupfile="${work}/t3"; dedupfile="${work}/t4"
@@ -92,8 +119,8 @@ SHIM
       : > "${masterfile}"
       dedup='off'
       errorlog="${work}/error.log"; : > "${errorlog}"
-      pathgrepcidr="${work}/grepcidr"
-      write_grepcidr_shim "${pathgrepcidr}"
+      pathaggregate="${work}/iprange"
+      write_pathaggregate_shim "${pathaggregate}"
       livelist="${work}/${alias}.txt"
       printf 'PRIOR-1\nPRIOR-2\n' > "${livelist}"
     }
@@ -101,25 +128,18 @@ SHIM
     Before 'setup'
     After 'cleanup'
 
-    It 'keeps the live list UNCHANGED when grepcidr errors (rc>=2) -- pre-fix this truncated it to empty'
-      # When: grepcidr errors.
-      GREPCIDR_MODE='error'; export GREPCIDR_MODE
+    It 'keeps the live list UNCHANGED when iprange errors (rc!=0) -- pre-fix this truncated it to empty'
+      # When: iprange errors.
+      IPRANGE_MODE='error'; export IPRANGE_MODE
       When call silently suppress
       # Then: the prior content survives -- and the error is logged, not swallowed.
       The status should be success
       The contents of file "${livelist}" should equal "$(printf 'PRIOR-1\nPRIOR-2')"
-      The contents of file "${errorlog}" should include 'grepcidr error'
+      The contents of file "${errorlog}" should include 'iprange error'
     End
 
-    It 'replaces the live list with an EMPTY result on grepcidr rc=1 (a legitimate "everything suppressed" outcome)'
-      GREPCIDR_MODE='empty'; export GREPCIDR_MODE
-      When call silently suppress
-      The status should be success
-      The contents of file "${livelist}" should equal ''
-    End
-
-    It 'publishes the new content on grepcidr success'
-      GREPCIDR_MODE='success'; export GREPCIDR_MODE
+    It 'publishes the new content on iprange success'
+      IPRANGE_MODE='success'; export IPRANGE_MODE
       When call silently suppress
       The status should be success
       The contents of file "${livelist}" should equal "$(printf '192.0.2.1\n192.0.2.2')"
@@ -132,9 +152,6 @@ SHIM
       max="${work}"
       alias='DedupList_v4'
       pfbsuppression="${work}/suppression.txt"
-      # A plain /24 (not /32) suppression entry stays out of the earlier
-      # awk/dupfile branch (already gated), isolating the dedup='on' masterfile
-      # awk call at the end of suppress() for this test.
       printf '198.51.100.0/24\n' > "${pfbsuppression}"
       tmpdir="${work}"
       tempfile="${work}/t1"; tempfile2="${work}/t2"; dupfile="${work}/t3"; dedupfile="${work}/t4"
@@ -142,8 +159,8 @@ SHIM
       printf 'DedupList_v4 PRIOR-1\nDedupList_v4 PRIOR-2\nOtherList_v4 203.0.113.5\n' > "${masterfile}"
       dedup='on'
       errorlog="${work}/error.log"; : > "${errorlog}"
-      pathgrepcidr="${work}/grepcidr"
-      write_grepcidr_shim "${pathgrepcidr}"
+      pathaggregate="${work}/iprange"
+      write_pathaggregate_shim "${pathaggregate}"
       livelist="${work}/${alias}.txt"
       printf 'PRIOR-1\nPRIOR-2\n' > "${livelist}"
       awkshim="${work}/bin"
@@ -154,11 +171,11 @@ SHIM
     After 'cleanup'
 
     It 'keeps the PRIOR masterfile rows when awk errors -- pre-fix this truncated masterfile, losing them all (incl. the unrelated OtherList_v4 row)'
-      GREPCIDR_MODE='success'; AWK_MODE='error'; export GREPCIDR_MODE AWK_MODE
+      IPRANGE_MODE='success'; AWK_MODE='error'; export IPRANGE_MODE AWK_MODE
       PATH="${awkshim}:${PATH}"
       When call silently suppress
       The status should be success
-      # suppress()'s trailing sed always re-appends the (here: grepcidr-succeeded)
+      # suppress()'s trailing sed always re-appends the (here: iprange-succeeded)
       # fresh list content regardless of the dedup outcome -- pre-existing,
       # unrelated to this fix -- so the fix's proof is that NONE of the prior
       # rows are lost, not that the file is byte-identical to its pre-call state.
@@ -168,7 +185,7 @@ SHIM
     End
 
     It 'dedups masterfile (drops the stale alias rows, keeps the unrelated one, appends the fresh list) on awk success'
-      GREPCIDR_MODE='success'; AWK_MODE='real'; export GREPCIDR_MODE AWK_MODE
+      IPRANGE_MODE='success'; AWK_MODE='real'; export IPRANGE_MODE AWK_MODE
       PATH="${awkshim}:${PATH}"
       When call silently suppress
       The status should be success
