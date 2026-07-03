@@ -1528,6 +1528,12 @@ def _dump_vm_on_failure(request: pytest.FixtureRequest) -> Iterator[None]:
         for entry in stub.queries():
             print(f"  {entry['client']:>15}  {entry['type']:<5} {entry['name']}")
         print("========== END STUB DNS UPSTREAM ==========")
+    # A fixture (tick's mfs_var) may have already captured failure-time state pre-teardown,
+    # BEFORE its revert reboot wiped the MFS /var (issue #774). This autouse dump finalizes
+    # after that fixture, so a second dump here would show the post-reboot state and mislead
+    # the post-mortem — keep the (host-side) stub log above, skip the VM dump.
+    if getattr(request.node, "_pfb_failure_dumped", False):
+        return
     vm = request.node.funcargs.get("deployed_vm") or request.node.funcargs.get("smoke_vm")
     # Some deployed_vm fixtures yield a (pfSense, civm) tuple in the two-VM topology;
     # dump_diagnostics wants the pfSense SmokeVM, so unwrap to the first element.
