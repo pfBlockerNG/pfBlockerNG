@@ -1,6 +1,6 @@
 # ADR-53: Replace the IP-suppression host-explosion with CIDR set-subtraction (v4+v6 parity)
 
-- **Status:** **Proposed** (2026-07-03). Not yet implemented.
+- **Status:** **Accepted** (2026-07-03) — implemented via PR #768 (merged 2026-07-03); CE+Plus live fan-out green (smoke 28678906679, UI 28678907701; §7 evidence in `RESULTS/09_Results.txt`).
 - **Date:** 2026-07-03
 - **Branch:** `adr/53-ip-suppression-set-subtraction` (off **`devel`**; `{slug}` = sanitised
   ADR-title slug per CLAUDE.md "Branch naming"). / **Component(s):**
