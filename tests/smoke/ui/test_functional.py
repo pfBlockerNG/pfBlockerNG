@@ -680,6 +680,57 @@ def test_ip_v4suppression_mask_validation_base64_and_reject_unchanged(
         webui.post(IP_PAGE, {"v4suppression": restore}, timeout=SAVE_TIMEOUT)
 
 
+def test_ip_v6suppression_mask_validation_base64_and_reject_unchanged(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """``v6suppression`` accepts v6 masks /32-/128 (ADR-53 P6); out-of-range masks abort.
+
+    Textarea, one subnet per line -- the v6 sibling of v4suppression's Tier B just
+    above (this is the multi-step save->persist flow ADR-53 requires for the NEW v6
+    textarea -- CLAUDE.md's "front-end changes require Tier B" for a new field).
+    Validation (``pfb_validate_suppression_line()``, family='ipv6', ADR-53 P6): per
+    non-comment line, the mask must fall in [/32, /128] AND ``is_subnetv6`` must
+    pass; either failure -> ``$input_errors`` -> the WHOLE save aborts -> config
+    UNCHANGED. STORAGE IS BASE64, so the oracle compares config_get against base64
+    of the expected textarea content. A valid host mask '2001:db8::1/128' stores
+    base64('2001:db8::1/128'); a containing '2001:db8::/64' is ALSO valid (any mask
+    in the accepted range, not just /128) and stores base64 of its own textarea; a
+    '2001:db8::/31' is below the /32 floor -> rejected -> config unchanged. An empty
+    textarea stores base64('') = '' so clearing/restoring to empty is clean. NO
+    egress, NO reload.
+    """
+    import base64
+
+    vm = smoke_vm
+    cfg = "installedpackages/pfblockerngipsettings/config/0/v6suppression"
+    valid_text = "2001:db8::1/128"
+    valid_b64 = base64.b64encode(valid_text.encode()).decode()
+    original = helpers.config_get(vm, cfg)
+    try:
+        assert original != valid_b64, f"v6suppression already holds {valid_text!r} (base64) before the valid POST"
+        # VALID /128 host mask -> base64 of the textarea is stored.
+        assert _post_and_get(webui, vm, IP_PAGE, {"v6suppression": valid_text}, cfg) == valid_b64
+        # VALID /64 -- a containing block within the accepted /32-/128 range.
+        wide_text = "2001:db8::/64"
+        wide_b64 = base64.b64encode(wide_text.encode()).decode()
+        assert _post_and_get(webui, vm, IP_PAGE, {"v6suppression": wide_text}, cfg) == wide_b64
+        # Restore: an empty textarea stores base64('') = '' (clean clear).
+        got_clear = _post_and_get(webui, vm, IP_PAGE, {"v6suppression": ""}, cfg)
+        assert got_clear == "", f"clearing v6suppression should store '' (base64 of empty), got {got_clear!r}"
+        # REJECT: a /31 is below the /32 floor -> aborts the whole save -> config UNCHANGED (stays '').
+        got = _post_and_get(webui, vm, IP_PAGE, {"v6suppression": "2001:db8::/31"}, cfg)
+        assert got == "", f"below-floor /31 mask must leave v6suppression unchanged at '', got {got!r}"
+    finally:
+        restore = ""
+        if original:
+            try:
+                restore = base64.b64decode(original).decode()
+            except Exception:
+                restore = ""
+        webui.post(IP_PAGE, {"v6suppression": restore}, timeout=SAVE_TIMEOUT)
+
+
 def test_ip_asn_reporting_select_coerces_bogus_to_disabled(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,

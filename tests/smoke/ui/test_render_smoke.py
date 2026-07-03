@@ -72,10 +72,12 @@ PAGE_TABLE: tuple[Page, ...] = (
     Page("general", "/pfblockerng/pfblockerng_general.php", ("pfBlockerNG", "General Settings")),
     # "Aggregated Aliases" is the ADR-11 pfb_agg_types multi-select label (rendered
     # verbatim) — a third marker so the gate also proves that field renders on the IP page.
+    # "IPv6 Suppression" is the ADR-53 Phase 6 section title (the v6 sibling of the
+    # pre-existing "IPv4 Suppression" section) — proves the new section renders.
     Page(
         "ip",
         "/pfblockerng/pfblockerng_ip.php",
-        ("IP Configuration", "ASN configuration", "Aggregated Aliases", "Alias Table Apply Mode"),
+        ("IP Configuration", "ASN configuration", "Aggregated Aliases", "Alias Table Apply Mode", "IPv6 Suppression"),
     ),
     # "DNS Redirect" is the ADR-36 section title added to this page (Phase 3).
     # "DoT/DoQ Block" is the ADR-37 section title added to this page (Phase 3).
@@ -304,6 +306,23 @@ def test_ip_page_renders_aggregate_select(webui: WebUI) -> None:
     assert _AGG_HELP_CAVEAT in body, (
         f"pfb_agg_types help caveat {_AGG_HELP_CAVEAT!r} (the no-rule wording) not rendered on the IP page"
     )
+
+
+def test_ip_page_renders_v6_suppression_section(webui: WebUI) -> None:
+    """The IP page renders the new IPv6 Suppression section (ADR-53 Phase 6).
+
+    Hermetic (no network — the IP page renders from local config alone). GET the
+    page and assert: (1) the 'IPv6 Suppression' Form_Section title renders; (2) the
+    v6suppression textarea field is present. Pairs with the pre-existing 'IPv4
+    Suppression' section (also asserted here, unchanged by this phase) — proving the
+    v6 sibling section renders ALONGSIDE it, not instead of it.
+    """
+    resp = webui.get(_IP_PAGE)
+    assert resp.status_code == 200, f"GET {_IP_PAGE} -> HTTP {resp.status_code} (expected 200)"
+    body = resp.text
+    assert "IPv6 Suppression" in body, "IPv6 Suppression section title not rendered on the IP page"
+    assert 'name="v6suppression"' in body, "v6suppression textarea not rendered on the IP page"
+    assert "IPv4 Suppression" in body, "IPv4 Suppression section title (existing sibling) missing"
 
 
 _UPDATE_PAGE = "/pfblockerng/pfblockerng_update.php"

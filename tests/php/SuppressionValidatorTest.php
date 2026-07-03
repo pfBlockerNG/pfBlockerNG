@@ -17,6 +17,15 @@ use PHPUnit\Framework\TestCase;
  * floor is a fail-open-typo guard, not an engine limit). testSlash16NowValid()
  * and testSlash8FloorNowValid() are the red->green proof: both FAIL against the
  * old /32-or-/24 rule and PASS against the widened /8-/32 rule.
+ *
+ * BEHAVIOUR CHANGE (ADR-53 Phase 6): family='ipv6' now validates for real. Before
+ * this phase every v6 line was unconditionally rejected ("not yet supported" --
+ * Phase 4's deliberate placeholder, pinned by the since-removed
+ * testIpv6NotYetSupported()). Phase 6 wires the Phase 5 pure-PHP v6 set-diff
+ * engine end-to-end, so v6 accepts masks /32-/128 (the /32 floor is the same
+ * fail-open-typo guard as v4's /8 floor -- the engine itself is mask-agnostic).
+ * testSlash64NowValid() is the red->green proof: it FAILS against the pre-Phase-6
+ * "always reject" stub and PASSES once the real v6 validation lands.
  */
 #[CoversFunction('pfb_validate_suppression_line')]
 final class SuppressionValidatorTest extends TestCase
@@ -94,11 +103,69 @@ final class SuppressionValidatorTest extends TestCase
 		$this->assertNull(pfb_validate_suppression_line('# just a comment', 'ipv4'));
 	}
 
-	// --- v6: not yet implemented (Phase 6 flips this to green) ---
+	// --- v6: implemented in Phase 6 (masks /32-/128) -- the red->green proof ---
 
-	public function testIpv6NotYetSupported(): void
+	public function testSlash64NowValid(): void
 	{
-		$error = pfb_validate_suppression_line('2001:db8::1/64', 'ipv6');
-		$this->assertNotNull($error, 'ADR-53 Phase 6 implements v6 suppression -- until then every v6 line is rejected');
+		$this->assertNull(pfb_validate_suppression_line('2001:db8::/64', 'ipv6'), 'ADR-53 Phase 6: v6 suppression now validates -- FAILS against the pre-Phase-6 always-reject stub');
+	}
+
+	public function testSlash128HostMaskValid(): void
+	{
+		$this->assertNull(pfb_validate_suppression_line('2001:db8::1/128', 'ipv6'));
+	}
+
+	public function testSlash32FloorValid(): void
+	{
+		$this->assertNull(pfb_validate_suppression_line('2001:db8::/32', 'ipv6'));
+	}
+
+	// --- v6: out-of-range masks rejected, message names the accepted range ---
+
+	public function testSlash31BelowFloorRejected(): void
+	{
+		$error = pfb_validate_suppression_line('2001:db8::/31', 'ipv6');
+		$this->assertNotNull($error, '/31 is below the /32 floor -- must be rejected');
+		$this->assertStringContainsString('/32', $error);
+		$this->assertStringContainsString('/128', $error);
+	}
+
+	public function testSlash129AboveCeilingRejected(): void
+	{
+		$error = pfb_validate_suppression_line('2001:db8::1/129', 'ipv6');
+		$this->assertNotNull($error, '/129 is above the /128 ceiling -- must be rejected');
+		$this->assertStringContainsString('/32', $error);
+		$this->assertStringContainsString('/128', $error);
+	}
+
+	// --- v6: malformed input rejected (generic subnet message, not the range message) ---
+
+	public function testV6NonCidrGarbageRejected(): void
+	{
+		$error = pfb_validate_suppression_line('not-an-ipv6-address', 'ipv6');
+		$this->assertNotNull($error, 'non-CIDR garbage must be rejected');
+	}
+
+	public function testV6MissingMaskRejected(): void
+	{
+		$error = pfb_validate_suppression_line('2001:db8::1', 'ipv6');
+		$this->assertNotNull($error, 'a bare address with no mask must be rejected');
+	}
+
+	// --- v6: tolerated textarea shapes (same tolerance as v4) ---
+
+	public function testV6TrailingInlineCommentTolerated(): void
+	{
+		$this->assertNull(pfb_validate_suppression_line('2001:db8::1/128 # example.com', 'ipv6'));
+	}
+
+	public function testV6BlankLineSkipped(): void
+	{
+		$this->assertNull(pfb_validate_suppression_line('', 'ipv6'));
+	}
+
+	public function testV6CommentOnlyLineSkipped(): void
+	{
+		$this->assertNull(pfb_validate_suppression_line('# just a comment', 'ipv6'));
 	}
 }

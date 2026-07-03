@@ -1131,6 +1131,18 @@ function pfb_cfg_registry(): array
 			'write_adapter' => NULL,
 			'since'         => '1.0.0',
 		],
+
+		// ADR-53 P6: IPv6 suppression customlist -- the v4 blob's v6 sibling
+		// (same base64/newline-separated shape). Genuinely new (no pre-registry
+		// era to inherit from v4suppression's), so 'since' is the current
+		// development version rather than a legacy '1.0.0'. Default ''.
+		'v6suppression' => [
+			'section'       => $ip,
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'since'         => '4.0.0',
+		],
 	];
 
 	return $registry;
@@ -2525,11 +2537,12 @@ function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir): bool
  * by '#' (e.g. "10.0.0.1/32 # example.com") is stripped before validating the
  * address/mask. IPv4 accepts masks /8-/32 (ADR-53 §2.3 fork 1 — the /8 floor is
  * a fail-open-typo guard; the carve engine itself is mask-agnostic since Phase
- * 3's iprange --except swap). IPv6 is not yet implemented (Phase 6) — every
- * non-skipped v6 line is rejected so this stays a visible gap, not a silent
- * accept, until Phase 6 flips it.
+ * 3's iprange --except swap). IPv6 accepts masks /32-/128 (ADR-53 Phase 6 — the
+ * /32 floor is the same fail-open-typo guard; the Phase 5 pure-PHP set-diff
+ * engine is likewise mask-agnostic).
  *
- * PURE — no config access, no I/O; only the pfSense is_subnetv4() predicate.
+ * PURE — no config access, no I/O; only the pfSense is_subnetv4()/is_subnetv6()
+ * predicates.
  *
  * @param  string $line   One raw textarea line (as split on "\r\n"), untrimmed.
  * @param  string $family 'ipv4' or 'ipv6'.
@@ -2546,7 +2559,22 @@ function pfb_validate_suppression_line(string $line, string $family): ?string
 	$entry = $host[0];
 
 	if ($family === 'ipv6') {
-		return "IPv6 Suppression: IPv6 suppression is not yet supported [ {$entry} ].";
+		// Mask-range check runs BEFORE the general subnet-shape check so an
+		// out-of-range-but-otherwise-well-formed mask (/31, /129) gets the message
+		// naming the accepted range, rather than the generic malformed-input one.
+		$mask = strstr($entry, '/', FALSE);
+		if ($mask !== FALSE && ctype_digit(substr($mask, 1))) {
+			$mask_num = (int) substr($mask, 1);
+			if ($mask_num < 32 || $mask_num > 128) {
+				return "IPv6 Suppression: Invalid mask [ {$entry} ]. Mask must be between /32 and /128.";
+			}
+		}
+
+		if (!is_subnetv6($entry)) {
+			return "IPv6 Suppression: Invalid IPv6 subnet address defined [ {$entry} ]";
+		}
+
+		return NULL;
 	}
 
 	// Mask-range check runs BEFORE the general subnet-shape check so an

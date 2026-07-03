@@ -92,6 +92,7 @@ $pfb['dnsbl_parse_err']	= "{$pfb['logdir']}/dnsbl_parsed_error.log";
 
 $pfb['master']		= "{$pfb['dbdir']}/masterfile";
 $pfb['supptxt']		= "{$pfb['dbdir']}/pfbsuppression.txt";
+$pfb['supptxt_v6']	= "{$pfb['dbdir']}/pfbsuppression_v6.txt";	// ADR-53 P6: IPv6 suppression customlist
 $pfb['dnsbl_supptxt']	= "{$pfb['dbdir']}/pfbdnsblsuppression.txt";
 $pfb['geoip_isos']	= "{$pfb['dbdir']}/geoip.txt";
 $pfb['dnsbl_info']	= '/var/unbound/pfb_py_dnsbl.sqlite';
@@ -4954,7 +4955,7 @@ function pfb_build_if_list($show_wan=FALSE, $show_groups=FALSE) {
 }
 
 
-// Create suppression file from suppression list
+// Create suppression file(s) from the v4/v6 suppression lists
 function pfb_create_suppression_file() {
 	global $pfb;
 
@@ -4963,6 +4964,14 @@ function pfb_create_suppression_file() {
 		@file_put_contents("{$pfb['supptxt']}", $v4suppression, LOCK_EX);
 	} else {
 		unlink_if_exists("{$pfb['supptxt']}");
+	}
+
+	// ADR-53 P6: v6 sibling -- same decode/write/unlink-when-empty shape as v4 above.
+	$v6suppression = pfbng_text_area_decode($pfb['ipconfig']['v6suppression'], FALSE, TRUE);
+	if (!empty($v6suppression)) {
+		@file_put_contents("{$pfb['supptxt_v6']}", $v6suppression, LOCK_EX);
+	} else {
+		unlink_if_exists("{$pfb['supptxt_v6']}");
 	}
 }
 
@@ -12809,6 +12818,7 @@ function pfb_clear_contents() {
 	unlink_if_exists("{$pfb['dbdir']}/masterfile");
 	unlink_if_exists("{$pfb['dbdir']}/mastercat");
 	unlink_if_exists("{$pfb['supptxt']}");
+	unlink_if_exists("{$pfb['supptxt_v6']}");
 	unlink_if_exists("{$pfb['dnsbl_supptxt']}");
 	unlink_if_exists("{$pfb['dnsbl_info']}");
 	unlink_if_exists("{$pfb['dnsbl_resolver']}");
@@ -16745,6 +16755,34 @@ function sync_package_pfblockerng($cron='') {
 											exec("{$pfb['script']} suppress {$header_esc} {$pfbfolder} off {$elog}");
 										}
 									}
+
+									// ADR-53 P6: v6 sibling of the v4 suppression block above -- a direct
+									// PHP call (pfb_suppress_file_v6()), no shell round-trip (ADR-53 §2.1 v6
+									// wiring). No masterfile/dedup resync here: that bookkeeping is v4-only
+									// (§1.2). $pfbrunonce is reset TRUE at the top of EVERY vtype pass (see
+									// the "$pfbrunonce = TRUE;" above the alias loop), so it is still
+									// available -- untouched by the v4 branch above during a '_v6' pass --
+									// to gate this print-once header the same way v4 gates its own.
+									if ($pfbrunonce && $pfb['supp'] == 'on' && $vtype == '_v6' && $pfb['supp_update']) {
+										$supp_v6_header = "\n===[ Suppression Stats (v6) ]===============================\n\n"
+											. sprintf("%-20s %-10s %-10s\n", 'List', 'Pre', 'Suppress')
+											. "-------------------------------------------------------------\n";
+										@file_put_contents("{$pfb['log']}", $supp_v6_header, FILE_APPEND);
+										$pfbrunonce = FALSE;
+									}
+									if ($pfb['supp'] == 'on' && $vtype == '_v6' && $pfb['supp_update'] && $pfbadv
+									    && in_array($alias, $final_alias_old)
+									    && is_readable("{$pfb['supptxt_v6']}") && filesize("{$pfb['supptxt_v6']}") > 0) {
+										$member_file = "{$pfbfolder}/{$header}.txt";
+										$pre_count   = count(@file($member_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: []);
+										if (pfb_suppress_file_v6($member_file, "{$pfb['supptxt_v6']}")) {
+											$post_count = count(@file($member_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: []);
+											@file_put_contents("{$pfb['log']}", sprintf("%-20s %-10s %-10s\n", $header, $pre_count, $post_count), FILE_APPEND);
+										} else {
+											pfb_logger(" Suppression {$header}: v6 suppression failed; keeping previous list", 2);
+										}
+									}
+
 									$alias_ips .= file_get_contents("{$pfbfolder}/{$header}.txt");
 									$pfbupdate = TRUE;
 								}

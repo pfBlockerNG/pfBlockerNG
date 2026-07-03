@@ -67,6 +67,7 @@ $pconfig['pass_order']		= $pfb['iconfig']['pass_order']				?: 'order_0';
 $pconfig['autorule_suffix']	= $pfb['iconfig']['autorule_suffix']			?: 'autorule';
 $pconfig['killstates']		= $pfb['iconfig']['killstates']				?: '';
 $pconfig['v4suppression']	= base64_decode($pfb['iconfig']['v4suppression'])	?: '';
+$pconfig['v6suppression']	= base64_decode($pfb['iconfig']['v6suppression'])	?: '';
 
 // Select array options
 $options_asn_reporting 		= [	'disabled'	=> 'Disabled',
@@ -154,6 +155,17 @@ if ($_POST) {
 			}
 		}
 
+		// ADR-53 P6: v6 sibling of the v4 validation above. explode() always returns a
+		// non-empty array, so (unlike the v4 block above) this skips the vestigial
+		// !empty() wrapper -- avoids replicating the pre-existing PHPStan
+		// empty.variable finding baselined for v4suppression at the same call shape.
+		foreach (explode("\r\n", $_POST['v6suppression']) as $line) {
+			$suppression_error = pfb_validate_suppression_line($line, 'ipv6');
+			if ($suppression_error !== NULL) {
+				$input_errors[] = $suppression_error;
+			}
+		}
+
 		// Apply MaxMind locale changes if required
 		if (in_array($_POST['maxmind_locale'], array('en', 'fr', 'de', 'pt-BR', 'ja', 'zh-CN', 'es')) &&
 		    in_array($pconfig['maxmind_locale'], array('en', 'fr', 'de', 'pt-BR', 'ja', 'zh-CN', 'es'))) {
@@ -206,6 +218,7 @@ if ($_POST) {
 			$pfb['iconfig']['autorule_suffix']	= $_POST['autorule_suffix']					?: 'autorule';
 			$pfb['iconfig']['killstates']		= pfb_filter($_POST['killstates'], PFB_FILTER_ON_OFF, 'ip')	?: '';
 			$pfb['iconfig']['v4suppression']	= base64_encode($_POST['v4suppression'])			?: '';
+			$pfb['iconfig']['v6suppression']	= base64_encode($_POST['v6suppression'])			?: '';
 
 			// ADR-11: per-type aggregate aliases multi-select -> CSV scalar (sanitised to the
 			// known option keys; default none). Gateway-registered in the general section, so
@@ -355,7 +368,7 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	pfb_cfg_toggle_read($pconfig['suppression']) === PfbToggle::On,
 	'on'
-))->setHelp('Default enabled. This will prevent Selected IPs (and RFC1918/Loopback addresses) from being blocked. Only for IPv4 lists (/8 through /32).'
+))->setHelp('Default enabled. This will prevent Selected IPs (and RFC1918/Loopback addresses) from being blocked. For IPv4 lists (/8 through /32) and IPv6 lists (/32 through /128).'
 	. '<div class="infoblock">'
 	. 'GeoIP blocklist cannot be suppressed.<br /><br />'
 	. 'Alerts can be suppressed using the \'+\' icon in the Alerts tab and IPs are added to the IPv4 suppression custom list.<br />'
@@ -511,6 +524,32 @@ $section->addInput(new Form_Textarea(
   ->setAttribute('wrap', 'off')
   ->setAttribute('style', 'background:#fafafa; width: 100%')
   ->setHelp($suppression_text);
+
+$form->add($section);
+
+// Print Custom List TextArea section (ADR-53 P6: v6 sibling of the v4 section above)
+$section = new Form_Section('IPv6 Suppression', 'IPv6_Suppression_customlist', COLLAPSIBLE|SEC_CLOSED);
+$suppression_text_v6 = '<strong><u>This suppression list is for [ /32 through /128 ] IPv6 addresses only!</u></strong><br /><br />
+
+			When \'Suppression\' is enabled, all RFC1918 and loopback addresses are also filtered on feed download|Update|Reload.<br /><br />
+
+			Enter one &emsp; <strong>IPv6 address</strong>&emsp; per line<br />
+			You may use "<strong>#</strong>" after any address to add comments. &emsp;IE: (2001:db8::1/128 # example.com)<br /><br />
+
+			Note: When manually adding an IPv6 address <strong>[ /32 through /128 only! ]</strong> to this Suppression List,
+			you must run a <strong>"Force Reload - IP"</strong> for the changes to take effect.';
+
+$section->addInput(new Form_Textarea(
+	'v6suppression',
+	'',
+	$pconfig['v6suppression']
+))->removeClass('form-control')
+  ->addClass('row-fluid col-sm-12')
+  ->setAttribute('columns', '90')
+  ->setAttribute('rows', '15')
+  ->setAttribute('wrap', 'off')
+  ->setAttribute('style', 'background:#fafafa; width: 100%')
+  ->setHelp($suppression_text_v6);
 
 $form->add($section);
 
