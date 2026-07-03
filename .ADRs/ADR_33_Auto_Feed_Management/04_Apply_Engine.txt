@@ -25,7 +25,7 @@ REQUIRED READING
 - CLAUDE.md — PHP standards, PFBL-01, config freeze (schema), Test coverage.
 
 ACTION PLAN (ordered)
-1. Add an orchestrator: read feed_mgmt_mode; if off -> return (no scan). Else load catalog ->
+1. Add an orchestrator: read pfb_feed_mgmt_mode; if off -> return (no scan). Else load catalog ->
    index (P1) -> read user rows -> plan (P2).
 2. notify: emit file_notice + collect a structured change list for the UI; write NOTHING.
 3. auto: apply each action -- rewrite_url (validate via PFB_FILTER_URL before writing),

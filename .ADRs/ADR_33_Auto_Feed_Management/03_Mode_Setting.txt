@@ -1,5 +1,5 @@
 ================================================================================
-PHASE 3 PROMPT — Config: the feed_mgmt_mode setting (default off)
+PHASE 3 PROMPT — Config: the pfb_feed_mgmt_mode setting (default off)
 Target model: Claude Sonnet 5
 ADR: .ADRs/ADR_33_Auto_Feed_Management/ADR.md   (read SS2, SS5 first)
 ================================================================================
@@ -22,7 +22,7 @@ REQUIRED READING
 - tests/php/CfgGatewayTest.php for the round-trip test pattern; CLAUDE.md — ADR-28/29.
 
 ACTION PLAN (ordered)
-1. Register feed_mgmt_mode in pfb_cfg_registry() (section path + default stored string 'off';
+1. Register pfb_feed_mgmt_mode in pfb_cfg_registry() (section path + default stored string 'off';
    plain-string adapter NULL/NULL or a backed enum if you add one; vocabulary {off,notify,
    auto}). Set since-version to the current release.
 2. Add the full path to the RequireConfigGateway sniff $registeredPaths.
@@ -32,8 +32,9 @@ ACTION PLAN (ordered)
 
 CONSTRAINTS
 - PHP tabs; PHP 8.3; no die()/exit().
-- Registered key ONLY via PfbConfig; config.xml stored vocabulary frozen (off is the default
-  stored token).
+- Registered key ONLY via PfbConfig. Storage follows the ADR-28 behaviour-not-bytes rule
+  (canonical stored tokens 'off'/'notify'/'auto'; 'off' is the absent-default); back it with a
+  backed enum (the PfbIdnMode pattern) + a docs/misc/config-gateway.md inventory row.
 - Do NOT wire reconcile/triggers yet (Phase 4).
 
 VERIFICATION (must all pass before the phase is done)
@@ -41,11 +42,11 @@ VERIFICATION (must all pass before the phase is done)
 - python -m pytest -> green.
 
 EXPECTED RESULT
-feed_mgmt_mode is a registered, round-tripping setting defaulting to off; nothing consumes it
+pfb_feed_mgmt_mode is a registered, round-tripping setting defaulting to off; nothing consumes it
 yet.
 
 COMMIT (single)
-    pfblockerng: register feed_mgmt_mode setting (off/notify/auto) (ADR-33 P3)
+    pfblockerng: register pfb_feed_mgmt_mode setting (off/notify/auto) (ADR-33 P3)
 Push directly to adr/33-auto-feed-management; open a PR only if the direct push is rejected.
 
 HANDOFF — write .ADRs/ADR_33_Auto_Feed_Management/RESULTS/03_Results.txt (plain .txt)

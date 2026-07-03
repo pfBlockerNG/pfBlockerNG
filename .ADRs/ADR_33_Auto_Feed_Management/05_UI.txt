@@ -23,7 +23,7 @@ REQUIRED READING
 - CLAUDE.md — Naming (pfb_*/element ids), PHP standards, Web UI help text, Smoke (ui_render).
 
 ACTION PLAN (ordered)
-1. Add the feed_mgmt_mode selector (Off/Notify/Auto) reading/writing via PfbConfig; help text
+1. Add the pfb_feed_mgmt_mode selector (Off/Notify/Auto) reading/writing via PfbConfig; help text
    per neighbours explaining each mode + that custom feeds are never touched and discontinued
    feeds are disabled (not deleted).
 2. Add a "Recheck Feeds" action that calls the Phase-4 orchestrator and renders the change
