@@ -1825,6 +1825,29 @@ class TestSafeSearchCnameRedirect:
         assert qstate.ext_state[0] == MODULE_ERROR
         assert qstate.ext_state[0] != MODULE_RESTART_NEXT
 
+    def test_first_pass_store_failure_aaaa_falls_back_to_baked_v6(self, monkeypatch: Any) -> None:
+        # issue #749: the AAAA leg of the store-failure fallback -- the baked answer
+        # must come from the v6 column for an AAAA query.
+        self._enable()
+        self._spy_cache(monkeypatch, store_fails=True)
+        qstate = make_qstate("duckduckgo.com.", qtype=RR_AAAA, return_msg=None)
+        rcd = pfb_unbound.operate(0, MODULE_EVENT_MODDONE, qstate, None)
+        assert rcd is True
+        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert any("IN AAAA 2001:db8::7" in a for a in DNSMessage.instances[-1].answer)
+
+    def test_first_pass_store_failure_aaaa_without_baked_v6_errors(self, monkeypatch: Any) -> None:
+        # issue #749: family mismatch -- the entry has a baked v4 but the AAAA query
+        # can only use the (empty) v6 column, so the fallback declines and the query
+        # fails CLOSED (MODULE_ERROR), documenting the deliberate qtype-strict choice:
+        # SafeSearch never resolves unsafely just because the other family has an IP.
+        self._enable(v4="203.0.113.7", v6="")
+        self._spy_cache(monkeypatch, store_fails=True)
+        qstate = make_qstate("duckduckgo.com.", qtype=RR_AAAA, return_msg=None)
+        rcd = pfb_unbound.operate(0, MODULE_EVENT_MODDONE, qstate, None)
+        assert rcd is True
+        assert qstate.ext_state[0] == MODULE_ERROR
+
     def test_phase2_success_restamps_dnssec_and_finishes(self, monkeypatch: Any) -> None:
         # Phase 2 success (the AFTER of phase 1): the iterator chased our CNAME to an
         # address. Force rep.security to insecure (the synthesized hop is unsigned;
@@ -1863,10 +1886,11 @@ class TestSafeSearchCnameRedirect:
         assert qstate.ext_state[0] == MODULE_FINISHED
         assert qstate.return_rcode == RCODE_NOERROR
         assert qstate.return_msg.rep.security == sec_status_insecure
-        # The failable evidence: a warning was actually emitted for the failed re-cache
+        # The failable evidence: THE re-cache warning was actually emitted
         # (FINISHED/NOERROR/security alone are already true before the fix -- this store
-        # failure is otherwise silently swallowed).
-        assert any("duckduckgo.com" in msg for msg in log_calls)
+        # failure is otherwise silently swallowed). Match the warning text itself, not
+        # just the qname, so an unrelated future log line can't green this test.
+        assert any("failed to re-cache" in msg and "duckduckgo.com" in msg for msg in log_calls)
 
     def test_phase2_baked_fallback_when_chase_has_no_address_a(self, monkeypatch: Any) -> None:
         # #2 fallback (When the chase yields only a bare CNAME, no address): answer the
