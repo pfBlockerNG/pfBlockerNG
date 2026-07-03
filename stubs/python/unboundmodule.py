@@ -111,16 +111,22 @@ RCODE_NOERROR = 0  # No error; query answered successfully
 RCODE_NXDOMAIN = 3  # Non-existent domain; name does not exist
 
 # ---------------------------------------------------------------------------
-# Module events — passed as the ``event`` argument to operate()
+# Module events — passed as the ``event`` argument to operate().
+# Values are the C enum positions of util/module.h `enum module_ev` (new 0,
+# pass 1, reply 2, noreply 3, capsfail 4, moddone 5, error 6), which pythonmod
+# exposes via SWIG — the old stub's MODDONE=3 was really module_event_noreply.
 # ---------------------------------------------------------------------------
 MODULE_EVENT_NEW = 0  # New query arrived; first module to handle it
 MODULE_EVENT_PASS = 1  # Query passed from a previous module for further processing
-MODULE_EVENT_MODDONE = 3  # Downstream module finished; resume this module
+MODULE_EVENT_MODDONE = 5  # Downstream module finished; resume this module
 
 # ---------------------------------------------------------------------------
-# Module external states — set on qstate.ext_state[id] inside operate()
+# Module external states — set on qstate.ext_state[id] inside operate().
+# Values are the C enum positions of util/module.h `enum module_ext_state`
+# (initial 0, wait_reply 1, wait_module 2, restart_next 3, wait_subquery 4,
+# error 5, finished 6) — the old stub's FINISHED=4 collided with wait_subquery.
 # ---------------------------------------------------------------------------
-MODULE_FINISHED = 4  # Module completed successfully; pass to next module
+MODULE_FINISHED = 6  # Module completed successfully; pass to next module
 MODULE_WAIT_MODULE = 2  # Module is waiting for another module to finish
 MODULE_WAIT_SUBQUERY = 4  # Module is waiting for a sub-query it attached to finish
 MODULE_RESTART_NEXT = 3  # Restart the module chain at the next module (re-run iterator)

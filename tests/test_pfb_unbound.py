@@ -20,6 +20,7 @@ from unboundmodule import (
     MODULE_FINISHED,
     MODULE_RESTART_NEXT,
     MODULE_WAIT_MODULE,
+    MODULE_WAIT_SUBQUERY,
     PKT_AA,
     PKT_QR,
     PKT_RA,
@@ -1094,6 +1095,27 @@ def make_qstate(
 RR_A = 1
 RR_AAAA = 28
 RR_TXT = 16
+
+
+class TestModuleConstantsStubFidelity:
+    """The stub's module-event/state values must match util/module.h's C enums --
+    the vocabulary real pythonmod injects. Wrong values are latent until code
+    compares numerically; the collision pins below fail loudly if the stub
+    regresses to the pre-#723 values (FINISHED==WAIT_SUBQUERY, MODDONE==
+    RESTART_NEXT masked distinct states behind equal ints).
+    """
+
+    def test_event_moddone_is_module_h_position(self) -> None:
+        # util/module.h enum module_ev: moddone is position 5 (noreply is 3,
+        # which the old stub mislabeled as MODDONE).
+        assert MODULE_EVENT_MODDONE == 5
+        assert MODULE_EVENT_MODDONE != MODULE_RESTART_NEXT
+
+    def test_finished_is_module_h_position_and_distinct(self) -> None:
+        # util/module.h enum module_ext_state: finished is position 6;
+        # the old stub's 4 collided with wait_subquery.
+        assert MODULE_FINISHED == 6
+        assert MODULE_FINISHED != MODULE_WAIT_SUBQUERY
 
 
 class TestSetReturnMsgStubFidelity:
