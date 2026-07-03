@@ -15,7 +15,12 @@ handler is taken from the pages' own inline ``events.push`` scripts:
   php:286-308) and ``Force`` mode (``#pfb_force_none``/``#pfb_force_parse``/
   ``#pfb_force_download``/``#pfb_force_both``, php:316-323). Each group is a native
   radio set (shared ``name``), so selecting one unchecks its siblings -- there is no
-  custom show/hide JS in this revamp (the page's only script is layout/scroll).
+  custom show/hide JS in this revamp (the page's other scripts are layout/scroll and
+  the live-log poller, covered below).
+* Update page live-log poller (``pfblockerng_update.php`` php:564-610, issue #678):
+  the AJAX tail's sticky auto-follow (measure before append, re-pin only when already
+  at the bottom, php:590-592), driven end-to-end against a controlled stream -- a
+  daemon(8)+pidfile dummy run plus incremental run-log seeding over ssh.
 * Sync page (``pfblockerng_sync.php``): the ``XMLRPC Replication Targets`` section
   is a pfSense ``.repeatable`` rowhelper (php:236) with an ``#addrow`` Add button
   (php:303) and a per-row ``Delete`` button (php:292-297). Each row carries exactly
@@ -50,7 +55,7 @@ import pytest
 
 from .. import helpers
 from .conftest import mask_page_identity
-from .test_render_smoke import _PFB_RUNLOG, _seed_vm_file, software_panel_forced
+from .test_render_smoke import _seed_vm_file, software_panel_forced
 
 sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed (Tier-B browser dep)")
 expect = sync_api.expect
@@ -459,7 +464,7 @@ def _dummy_pfb_task_running(vm: SmokeVM) -> Iterator[None]:
     def _teardown() -> None:
         vm.ssh("pkill", "-F", _PFB_RUNNOW_PIDFILE)  # tolerated: no dummy running yet/anymore
         vm.ssh("/bin/rm", "-f", _PFB_RUNNOW_PIDFILE)
-        vm.ssh(f": > {_PFB_RUNLOG}")
+        vm.ssh(f": > {helpers.PFB_RUNLOG}")
 
     _teardown()  # clean slate first, in case a previous run of this test aborted mid-scenario
     # -f detaches the child's std fds to /dev/null: without it the daemonized sleep inherits the
@@ -491,12 +496,22 @@ def _wait_for_marker(page: Page, marker: str) -> None:
 
     Bounded ``wait_for_function`` (raises loudly on timeout) -- never a fixed sleep (#456). The
     poller's cadence is 1s, so 15s comfortably outlasts a few ticks without masking a real hang.
+    On timeout, re-raises with the expected marker next to the textarea's actual tail (CLAUDE.md
+    "print expected vs actual") -- distinguishing "seed never landed" from "poller never appended".
     """
-    page.wait_for_function(
-        "needle => document.forms[0].pfb_output.value.includes(needle)",
-        arg=marker,
-        timeout=15_000,
-    )
+    try:
+        page.wait_for_function(
+            "needle => document.forms[0].pfb_output.value.includes(needle)",
+            arg=marker,
+            timeout=15_000,
+        )
+    except sync_api.TimeoutError as exc:
+        actual = page.eval_on_selector('textarea[name="pfb_output"]', "el => el.value.slice(-600)")
+        raise AssertionError(
+            f"marker never arrived in pfb_output within 15s\n"
+            f"  expected to contain: {marker!r}\n"
+            f"  actual (last 600 chars): {actual!r}"
+        ) from exc
 
 
 @pytest.mark.ui_browser
@@ -539,22 +554,27 @@ def test_update_livelog_sticky_follow_scroll(
     helpers.wait_no_active_pfb_task(smoke_vm)
 
     with _dummy_pfb_task_running(smoke_vm):
-        _seed_vm_file(smoke_vm, _PFB_RUNLOG, seed)
+        # Known (narrow) flake vector: the tick cron stays installed, and a tick whose feed job
+        # comes due mid-test calls pfb_runlog_begin() -> truncates this run log, vanishing the
+        # seeded markers (the marker wait then reports expected-vs-actual for the diagnosis).
+        _seed_vm_file(smoke_vm, helpers.PFB_RUNLOG, seed)
 
         _open(page, webui, UPDATE_PAGE)
         page.locator('button[name="log_view"], #log_view').first.click()
         page.wait_for_load_state("load")  # View submits/reloads the page with the poller wired
         _wait_for_marker(page, seed_last)
 
-        # Given: the seed overflows the box AND starts pinned at the bottom.
+        # Given: the seed overflows the box AND starts pinned at the bottom. Overflow must exceed
+        # the poller's 16px at-bottom slack, else scrollTop=0 would still read as "at bottom" and
+        # phase 2 could fail against a correct poller.
         metrics = _scroll_metrics(page)
-        assert metrics["scrollHeight"] > metrics["clientHeight"], (
-            f"seed must overflow the textarea for the scroll assertions to mean anything, got {metrics}"
+        assert metrics["scrollHeight"] - metrics["clientHeight"] > 16, (
+            f"seed must overflow the textarea past the 16px pin slack, got {metrics}"
         )
         assert _is_pinned(metrics), f"expected pinned at the bottom right after the seed loaded, got {metrics}"
 
         # Phase 1 -- pinned follow: new lines arrive while at the bottom -> stays pinned.
-        _seed_vm_file(smoke_vm, _PFB_RUNLOG, f"{marker_a}\n")
+        _seed_vm_file(smoke_vm, helpers.PFB_RUNLOG, f"{marker_a}\n")
         _wait_for_marker(page, marker_a)
         metrics = _scroll_metrics(page)
         assert _is_pinned(metrics), f"expected still pinned at the bottom after batch A, got {metrics}"
@@ -564,7 +584,7 @@ def test_update_livelog_sticky_follow_scroll(
         metrics = _scroll_metrics(page)
         assert metrics["scrollTop"] == 0, f"expected scrollTop 0 right after scrolling to the top, got {metrics}"
 
-        _seed_vm_file(smoke_vm, _PFB_RUNLOG, f"{marker_b}\n")
+        _seed_vm_file(smoke_vm, helpers.PFB_RUNLOG, f"{marker_b}\n")
         _wait_for_marker(page, marker_b)
         metrics = _scroll_metrics(page)
         assert metrics["scrollTop"] == 0, (
@@ -576,7 +596,7 @@ def test_update_livelog_sticky_follow_scroll(
         metrics = _scroll_metrics(page)
         assert _is_pinned(metrics), f"expected pinned immediately after scrolling back to the bottom, got {metrics}"
 
-        _seed_vm_file(smoke_vm, _PFB_RUNLOG, f"{marker_c}\n")
+        _seed_vm_file(smoke_vm, helpers.PFB_RUNLOG, f"{marker_c}\n")
         _wait_for_marker(page, marker_c)
         metrics = _scroll_metrics(page)
         assert _is_pinned(metrics), f"expected still pinned at the bottom after batch C, got {metrics}"
