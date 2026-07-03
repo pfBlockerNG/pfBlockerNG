@@ -436,6 +436,63 @@ final class CfgGatewayTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
+	// ADR-53 P6 — v6suppression (plain base64 blob; IPv6 suppression customlist)
+	// -----------------------------------------------------------------------
+
+	/**
+	 * v6suppression absent key returns the registered default '' (empty customlist).
+	 *
+	 * Scenario:
+	 *   Background: v6suppression is a plain base64-blob field; default = '' --
+	 *     mirrors the v4suppression sibling shape (this section, above).
+	 *     Given no stored value.
+	 *     When PfbConfig::read('v6suppression').
+	 *     Then '' is returned (registered default).
+	 *
+	 * Red->green: before Phase 6, 'v6suppression' was not registered at all ->
+	 *   PfbConfig::read('v6suppression') threw InvalidArgumentException.
+	 */
+	public function testV6SuppressionAbsentKeyReturnsDefaultEmptyString(): void
+	{
+		$path = 'installedpackages/pfblockerngipsettings/config/0/v6suppression';
+
+		// Before: absent.
+		$this->assertNull(config_get_path($path), 'before: v6suppression must be absent');
+
+		// When/Then.
+		$this->assertSame('', PfbConfig::read('v6suppression'), 'v6suppression absent -> ""');
+	}
+
+	/**
+	 * v6suppression round-trips a base64 blob losslessly (write(read(v)) == v).
+	 *
+	 * Scenario:
+	 *   Background: v6suppression stores a base64-encoded CIDR customlist.
+	 *     Given stored = base64_encode("2001:db8::1/128\r\n").
+	 *     When PfbConfig::write('v6suppression', PfbConfig::read('v6suppression')).
+	 *     Then the stored string is unchanged (byte-identical round-trip).
+	 */
+	public function testV6SuppressionRoundTrips(): void
+	{
+		$path = 'installedpackages/pfblockerngipsettings/config/0/v6suppression';
+		$blob = base64_encode("2001:db8::1/128\r\n");
+
+		// Given: seed the blob.
+		$this->seedConfig($path, $blob);
+
+		// Before: raw stored value is the blob.
+		$this->assertSame($blob, config_get_path($path), 'before: v6suppression seed matches blob');
+
+		// When: read -> write.
+		$val = PfbConfig::read('v6suppression');
+		$this->assertSame($blob, $val, 'read: v6suppression round-trips the blob unchanged');
+
+		// After: write back produces the identical stored string.
+		PfbConfig::write('v6suppression', $val);
+		$this->assertSame($blob, config_get_path($path), 'write(read(blob))==blob for v6suppression');
+	}
+
+	// -----------------------------------------------------------------------
 	// ADR-43 — pfb_tick_interval (plain string; tick-cron dispatch interval)
 	// -----------------------------------------------------------------------
 
@@ -662,8 +719,9 @@ final class CfgGatewayTest extends TestCase
 	 *   - pfblockerngipsettings sub-keys (all section-level, handled together):
 	 *     maxmind_key, etc. (suppression key in ipsettings is a distinct concept
 	 *     from pfblockerngdnsblsettings/suppression which IS registered).
-	 *     ADR-53: v4suppression is now registered (see the registered inventory below) --
-	 *     it is the one ipsettings scalar NOT on this out-of-scope list.
+	 *     ADR-53: v4suppression + v6suppression are now registered (see the registered
+	 *     inventory below) -- they are the two ipsettings scalars NOT on this
+	 *     out-of-scope list.
 	 *   - pfblockerngreputation sub-keys: et_header
 	 *   - pfblockerngsync sub-keys: syncinterfaces, varsynconchanges, row/*
 	 *   - pfblockerngblacklist sub-keys: blacklist_enable, blacklist_freq,
@@ -859,8 +917,9 @@ final class CfgGatewayTest extends TestCase
 			'safesearch_doh',
 			'safesearch_doh_list',
 
-			// pfblockerngipsettings/config/0 scalar (ADR-53)
+			// pfblockerngipsettings/config/0 scalars (ADR-53)
 			'v4suppression',
+			'v6suppression',
 
 			// Out-of-scope keys (must also appear in $out_of_scope above)
 			'pfb_wizard_skip',
