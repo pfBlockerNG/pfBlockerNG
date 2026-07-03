@@ -1,6 +1,6 @@
 # ADR-49: Opt-in plain-text feed sanity scanning
 
-- **Status:** **Proposed** (2026-06-28) — heuristic, non-zero false-positive risk; ships **default-off** and stays Proposed until a live false-positive survey clears it
+- **Status:** **Proposed** (2026-06-28; facts refreshed + open forks recorded 2026-07-03 — see §2.1; phase prompts not yet authored, blocked on those forks) — heuristic, non-zero false-positive risk; ships **default-off** and stays Proposed until the §7 false-positive survey clears it
 - **Date:** 2026-06-28
 - **Branch:** `adr/49-plain-text-sanity-scan` (off `devel`) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfblockerng.inc`, `pfblockerng_extra.inc` (PfbConfig field)
 - **Target runtime:** PHP 8.3, FreeBSD / pfSense
@@ -12,12 +12,17 @@
 ## 1. Context
 
 The MIME allow-list is permissive for text (`text/plain`, `text/html`, `text/csv`,
-`application/json`, `application/x-ndjson`, plus the `octet-stream`/`text/x-asm` host
-exceptions). A feed URL that returns an **HTML error/captcha page**, a **truncated body**,
-or **binary garbage** therefore passes the gate and fails later — opaquely — during parsing,
-or silently imports a near-empty list. `pfb_filter()` already has a **control-character
-check** (`pfblockerng.inc` line ~685), but it does not catch a well-formed HTML error page or
-a body that is simply too small to be a real blocklist.
+`application/json`, `application/x-ndjson`, `inode/x-empty`, plus host exceptions — note
+plain `application/octet-stream` is **rejected** at the gate on current `devel` except the
+`ipinfo.io` host carve-out and the ADR-45 archive-recovery probe). A feed URL that returns an
+**HTML error/captcha page**, a **truncated body**, or **binary garbage** classified as an
+allow-listed text type therefore passes the gate and fails later — opaquely — during parsing,
+or silently imports a near-empty list. `pfb_filter()` has a **control-character check**
+(inside `pfb_filter()`, ~:880 — UTF-8-aware and fail-closed since commit `a13effe3`), but it
+runs over `pfb_filter()` **arguments** (paths/URLs/values), not the downloaded body — there
+is **no body-content check at the download stage today**, which is exactly the gap this ADR
+fills. It also would not catch a well-formed HTML error page or a body that is simply too
+small to be a real blocklist.
 
 A cheap **content sanity scan** on the first few KB closes the common cases:
 
@@ -44,6 +49,21 @@ logs *through* it); changing the existing control-char check (kept; this complem
    **reason token** (`nul_bytes` | `html_error_page` | `below_min_content`) if it does not.
    No I/O; the caller reads the sample and passes it in.
 
+   **Open forks (resolve BEFORE authoring the phase prompts — the heuristic is currently
+   unquantified, so its threshold-boundary unit tests cannot be enumerated):**
+
+   - **Parameters:** sample size ("first few KB" — how many bytes?), the non-blank/non-comment
+     line floor, the NUL/"excess binary" threshold, the "blocklist-shaped line" token regex and
+     its first-N-lines window.
+   - **MIME scope of "text branches":** enumerate the exact MIMEs scanned. Two known self-FPs
+     as currently sketched: a **minified one-line JSON feed** (`application/json` is
+     allow-listed) trips `below_min_content`; `inode/x-empty` (also allow-listed — an empty
+     200 body) reaches the text branch. Decide per-MIME exclusion or per-format rules.
+   - **Encoding/fail-mode:** byte-level or `/u` matching, and the verdict on an
+     invalid-UTF-8 sample (a chunk boundary can split a multibyte char and make `/u`
+     `preg_match` return FALSE). The sibling control-char check's precedent is fail-closed
+     (`a13effe3`); pin a stance either way.
+
 2. **One registered PfbConfig field (ADR-28/29): `pfb_feed_sanity`** — a `PfbToggle`,
    **default off**. When off, `pfb_text_sanity()` is never consulted (zero behaviour change —
    the existing matrix is byte-for-byte unchanged). When on, a non-`null` reason →
@@ -59,7 +79,7 @@ logs *through* it); changing the existing control-char check (kept; this complem
 |---|---|
 | `pfb_text_sanity()` | New pure scanner → `null` (ok) or a reason token |
 | `pfb_feed_sanity` PfbConfig field | New `PfbToggle`, **default off**; gates the scan |
-| Existing control-char check (line ~685) | **Kept** — this complements, does not replace it |
+| Existing control-char check (`pfb_filter()`, ~:880) | **Kept** — argument-level, not body-level; this complements, does not replace it |
 | Archive branches | Untouched |
 | Reject logging | Through ADR-48 (`stage=plaintext`) |
 
@@ -104,7 +124,16 @@ logs *through* it); changing the existing control-char check (kept; this complem
 - New registered field ⇒ follow `docs/misc/config-gateway.md` (registry, `since`, round-trip
   test, `$registeredPaths`); default-off preserves upgrade behaviour (absent-key = off = today).
 - Commit style `<scope>: <imperative summary> (ADR-49 PN)`; ADR text direct to `devel`,
-  implementation via worktree + rebase-only-PR. Depends on ADR-48 for the reject log helper.
+  implementation via worktree + rebase-only-PR. **Depends on ADR-48 for the reject-log helper —
+  ADR-48 is still Proposed**, so Phase 2 must either be hard-ordered after ADR-48 Phase 1
+  (the formatter) or emit an interim plain `pfb_logger()` line restyled when ADR-48 lands
+  (pick one when authoring the prompts).
+- **Smoke fixture platform check:** the MIME gate classifies via **on-box `file(1)`**, not the
+  HTTP `Content-Type` (the mock feed server serves everything `text/plain` anyway) — the
+  HTML-error-page fixture only reaches the text branch if FreeBSD libmagic calls it an
+  allow-listed text type. Verify the fixture's on-FreeBSD classification and record it in
+  `tests/smoke/fixtures/README.md` per the FreeBSD-verified-corpus convention (the ADR-45
+  libmagic-divergence lesson).
 
 ---
 
@@ -130,8 +159,12 @@ sample is rejected; with it off (default), unchanged. Round-trip test for the fi
 **Prompt:** `03_Smoke_And_Survey.txt`
 
 Smoke: flag-on rejects an HTML-error-page feed and still imports a healthy one; flag-off is a
-no-op. Document the live false-positive survey as the gate to flip Accepted / consider a
-default change — **not** done by green unit tests alone.
+no-op. The false-positive survey is **automated, not a manual sign-off** (per CLAUDE.md "ADR
+acceptance"): a dispatch-only script walks the **in-tree feed catalogue**
+(`src/usr/local/www/pfblockerng/pfblockerng_feeds.json`, ~295 `url` entries), fetches the
+first N KB of each reachable feed, runs it through `pfb_text_sanity()`, and asserts **zero
+non-`null` verdicts**; persist the run's results under `RESULTS/`. Live catalogue drift after
+the survey is the documented out-of-CI limitation.
 
 ---
 
@@ -143,8 +176,10 @@ default change — **not** done by green unit tests alone.
 - `tests/smoke/test_smoke_feeds.py` (CE + Plus): flag-on rejects an error-page feed
   (`stage=plaintext`) and imports a healthy text feed; flag-off reproduces today's behaviour.
 
-**Stays Proposed until:** a live false-positive survey across the real feed catalogue shows no
-legitimate feed is dropped. Only then → Accepted; a default-on change is a separate decision.
+**Stays Proposed until:** the automated catalogue survey (§6 Phase 3 — the in-tree
+`pfblockerng_feeds.json` URLs through `pfb_text_sanity()`, zero non-`null`, results persisted
+under `RESULTS/`) passes. Only then → Accepted; a default-on change is a separate decision.
+Post-survey catalogue drift is the documented out-of-CI limitation, not part of the gate.
 
 **Reject criteria:**
 
