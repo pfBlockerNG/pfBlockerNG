@@ -272,6 +272,11 @@ def test_tick_wiped_ledger_jittered(deployed_vm: SmokeVM):
 
 @pytest.mark.reboot
 @pytest.mark.tick
+# Unlike the boot_reload siblings (which reboot in a FIXTURE, exempt from the workflow's
+# 30s func-only body cap), this test reboots in its BODY: the 30s settle alone exhausts
+# the default cap, so it could never pass a dispatch without its own budget (#738 F4
+# validation run). Reboot ~90-150s (settle + readiness gate) + ledger checks + margin.
+@pytest.mark.timeout(300)
 def test_tick_reboot_persists_ledger(deployed_vm: SmokeVM):
     """A clean reboot keeps the due-ledger (restored via #468 earlyshellcmd).
 
