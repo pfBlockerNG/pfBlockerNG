@@ -17,7 +17,7 @@ REQUIRED READING
 - FIRST, read .ADRs/ADR_34_Triangulator_Tool/RESULTS/02_Results.txt AND 01_Results.txt. If
   missing, STOP and report.
 - .ADRs/ADR_34_Triangulator_Tool/ADR.md (SS2.1 dnsbl/ip rows, SS2.2 contract).
-- The Phase-1 classifier; pfb_dnsbl_parse (~9309); the exact data vs wildcard/TLD zone view;
+- The Phase-1 classifier; pfb_dnsbl_parse (~11703); the exact data vs wildcard/TLD zone view;
   pfctl -t <table> -T test pattern + the pfB_* urltable aliases (config_get_path aliases/alias)
   + alias dir files.
 - CLAUDE.md — PHP standards, PFBL-01, Test coverage.

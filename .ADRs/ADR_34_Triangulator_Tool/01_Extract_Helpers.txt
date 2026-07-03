@@ -16,9 +16,9 @@ first so the engine builds on a pinned oracle, not a copy that can drift.
 
 REQUIRED READING
 - .ADRs/ADR_34_Triangulator_Tool/ADR.md
-- src/usr/local/www/pfblockerng/pfblockerng_alerts.php — dnsbl_log_details (~1976),
+- src/usr/local/www/pfblockerng/pfblockerng_alerts.php — dnsbl_log_details (~1976, verified),
   dnsbl_whitelist_type (~2011), convert_dnsbl_log (~2162).
-- src/usr/local/pkg/pfblockerng/pfblockerng.inc — pfb_dnsbl_parse (~9309); the exact data vs
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — pfb_dnsbl_parse (~11703); the exact data vs
   wildcard/TLD zone distinction (unbound_py_data vs ..._zone).
 - tests/php/ for style; CLAUDE.md — PHP standards, Test coverage (branch + BDD).
 

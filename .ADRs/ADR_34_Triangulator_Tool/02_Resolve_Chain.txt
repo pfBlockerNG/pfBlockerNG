@@ -17,8 +17,11 @@ REQUIRED READING
 - FIRST, read .ADRs/ADR_34_Triangulator_Tool/RESULTS/01_Results.txt. If missing, STOP and
   report.
 - .ADRs/ADR_34_Triangulator_Tool/ADR.md (SS2.1 resolve row, SS2.2 contract).
-- src/usr/local/pkg/pfblockerng/pfblockerng.inc — pfb_ss_resolve_target (~3924), drill (~1491),
-  pfb['extdns'] (~1492/3914/3940); pfb_filter PFB_FILTER_DOMAIN usage.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — pfb_ss_resolve_target (~5467) and the drill
+  / pfb['extdns'] usage around it (~2125 for the extdns assignment); pfb_filter
+  PFB_FILTER_DOMAIN usage.
+- docs/misc/external-process-waits.md — MANDATORY before writing the timeout mechanics
+  (FreeBSD timeout(1) is a process reaper by default).
 - CLAUDE.md — PHP standards, PFBL-01 (validate before exec), Test coverage.
 
 ACTION PLAN (ordered)
