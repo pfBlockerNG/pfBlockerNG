@@ -2111,10 +2111,12 @@ def get_o_type(qstate: module_qstate | None, rep: reply_info | None) -> str:
 
 
 def get_rep_ttl(rep: reply_info | None) -> str:
-    ttl = ""
-    if rep and rep.ttl:
-        ttl = rep.ttl
-    return str(is_unknown(ttl)).replace("Unknown", "Unk")
+    # Presence, not truthiness: TTL 0 is a valid value (RFC 2181 s8 -- deliverable,
+    # non-cacheable), only a missing reply/TTL is unknown. Bypasses is_unknown(),
+    # whose falsy check would swallow 0 (#723).
+    if rep and rep.ttl is not None:
+        return str(rep.ttl)
+    return "Unk"
 
 
 def get_tld(qstate: module_qstate) -> str:
