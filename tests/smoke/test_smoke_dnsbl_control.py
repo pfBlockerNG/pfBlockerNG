@@ -35,6 +35,7 @@ client IP, which an on-box drill presents as 127.0.0.1.
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Iterator
 
 import pytest
@@ -229,9 +230,19 @@ def test_dnsbl_control_off_makes_cli_channel_inert(control_vm: tuple[SmokeVM, st
         # Restore the fixture baseline for the legacy tests below: Control back ON + reload
         # re-initialises python_blacklist (blocking on) and restarts the reader thread. Runs
         # unconditionally — pass, assertion failure, or any other exception (#738 F6).
-        h.set_dnsbl_control(vm, True)
-        h.reload(vm, "update")
-        h.assert_control_ini(vm, control=True, legacy=False)
+        # When the try body ALSO failed, keep that primary failure top-line (a restore error
+        # would otherwise replace it, #761 review) — but when the body passed, a failed
+        # restore MUST raise loudly: it is the only signal before the legacy tests inherit a
+        # broken baseline.
+        try:
+            h.set_dnsbl_control(vm, True)
+            h.reload(vm, "update")
+            h.assert_control_ini(vm, control=True, legacy=False)
+        except Exception as restore_exc:  # noqa: BLE001 -- deliberate: triage-order control
+            if sys.exc_info()[1] is not None:
+                print(f"[smoke] Control-OFF baseline restore ALSO failed (primary kept): {restore_exc!r}")
+            else:
+                raise
 
 
 def test_legacy_dns_txt_control_inert_by_default(control_vm: tuple[SmokeVM, str], client_vm: SmokeVM) -> None:
