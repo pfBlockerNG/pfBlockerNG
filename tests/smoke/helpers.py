@@ -2521,7 +2521,15 @@ def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT) -> None:
     # Fail FAST on an unreadable before-side: without it the proof is already lost, so
     # refusing to reboot saves the whole settle+readiness cycle and leaves the box up in
     # its pre-reboot state for diagnosis (#761 review).
-    before_read = vm.ssh(_BOOTTIME_SYSCTL, timeout=15.0)
+    try:
+        before_read = vm.ssh(_BOOTTIME_SYSCTL, timeout=15.0)
+    except subprocess.TimeoutExpired as exc:
+        # Route the timeout through the boot-proof diagnostics (#761 review): a hung read
+        # is the same "no before-side" failure as an empty one, just slower.
+        raise AssertionError(
+            f"reboot_vm: kern.boottime read timed out BEFORE the reboot ({exc}) -- refusing to "
+            "reboot without the before-side of the proof"
+        ) from exc
     before_boottime = before_read.stdout
     if not before_boottime.strip():
         raise AssertionError(
@@ -2571,7 +2579,13 @@ def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT) -> None:
     # still-up pre-reboot instance if shutdown outlasted the settle on a slow host. Compare
     # kern.boottime now that readiness is fully established -- this is the ONE extra guest round
     # trip, not a poll, so it never eats into the readiness budget.
-    after_boottime = vm.ssh(_BOOTTIME_SYSCTL, timeout=15.0).stdout
+    try:
+        after_boottime = vm.ssh(_BOOTTIME_SYSCTL, timeout=15.0).stdout
+    except subprocess.TimeoutExpired as exc:
+        raise AssertionError(
+            f"reboot_vm: kern.boottime read timed out AFTER the readiness gate ({exc}) -- the boot "
+            f"proof is incomplete (before={before_boottime.strip()!r}); treat the reboot as unproven"
+        ) from exc
     _assert_boottime_advanced(before_boottime, after_boottime)
 
 
