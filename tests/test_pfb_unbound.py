@@ -535,6 +535,90 @@ class TestDbSubsystem:
         con = pfb_unbound._db_conns[pfb_unbound.DB_RESOLVER]
         assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 10
 
+    # -- issue #771: _db_connect PRAGMA observability ----------------------------
+
+    def test_connect_wal_active_and_silent(self, tmp_path: Any, capsys: Any) -> None:
+        """Healthy connect: WAL is granted on a file db and nothing is logged --
+        the warning paths below are real branches, not always-on noise."""
+        self._resolver(tmp_path)
+        con = pfb_unbound._db_connect(pfb_unbound.DB_RESOLVER)
+        try:
+            mode = con.execute("PRAGMA journal_mode").fetchone()[0]
+        finally:
+            con.close()
+        err = capsys.readouterr().err
+        assert str(mode).lower() == "wal", f"expected journal_mode 'wal', got '{mode}'"
+        assert "[pfBlockerNG]" not in err, f"expected silent healthy connect, stderr was: {err!r}"
+
+    def test_connect_logs_pragma_failure_and_still_initialises(
+        self, tmp_path: Any, monkeypatch: Any, capsys: Any
+    ) -> None:
+        """A failing connection PRAGMA must be logged, never silently swallowed
+        (issue #771: the silent rollback-journal fallback was invisible), while the
+        connect itself still completes (tables created + seeded)."""
+        import sqlite3
+
+        self._resolver(tmp_path)
+        real_connect = sqlite3.connect
+
+        class _PragmaRefusingCon:
+            def __init__(self, real: Any) -> None:
+                self._real = real
+
+            def execute(self, sql: str, *args: Any) -> Any:
+                if sql.lstrip().upper().startswith("PRAGMA"):
+                    raise sqlite3.OperationalError("pragma refused by test")
+                return self._real.execute(sql, *args)
+
+            def __getattr__(self, name: str) -> Any:
+                return getattr(self._real, name)
+
+        monkeypatch.setattr(pfb_unbound.sqlite3, "connect", lambda *a, **k: _PragmaRefusingCon(real_connect(*a, **k)))
+        con = pfb_unbound._db_connect(pfb_unbound.DB_RESOLVER)
+        err = capsys.readouterr().err
+        try:
+            assert "PRAGMA setup failed" in err and "pragma refused by test" in err, (
+                f"expected a PRAGMA-failure log line with the exception text, stderr was: {err!r}"
+            )
+            # Connect survived the pragma failure: table created and seed row present.
+            assert con.execute("SELECT totalqueries FROM resolver WHERE row = 0").fetchone()[0] == 0
+        finally:
+            con.close()
+
+    def test_connect_warns_when_wal_not_granted(self, tmp_path: Any, monkeypatch: Any, capsys: Any) -> None:
+        """SQLite can decline WAL without raising -- PRAGMA journal_mode=WAL returns
+        the mode actually in effect. A non-'wal' result must produce a warning naming
+        the effective mode, so a lock-contention flake is diagnosable (issue #771)."""
+        import sqlite3
+
+        self._resolver(tmp_path)
+        real_connect = sqlite3.connect
+
+        class _RollbackJournalRow:
+            @staticmethod
+            def fetchone() -> tuple[str]:
+                return ("delete",)
+
+        class _NoWalCon:
+            def __init__(self, real: Any) -> None:
+                self._real = real
+
+            def execute(self, sql: str, *args: Any) -> Any:
+                if "journal_mode" in sql:
+                    return _RollbackJournalRow()
+                return self._real.execute(sql, *args)
+
+            def __getattr__(self, name: str) -> Any:
+                return getattr(self._real, name)
+
+        monkeypatch.setattr(pfb_unbound.sqlite3, "connect", lambda *a, **k: _NoWalCon(real_connect(*a, **k)))
+        con = pfb_unbound._db_connect(pfb_unbound.DB_RESOLVER)
+        con.close()
+        err = capsys.readouterr().err
+        assert "journal_mode is 'delete'" in err and "'wal'" in err, (
+            f"expected a non-WAL downgrade warning, stderr was: {err!r}"
+        )
+
 
 class TestDbConcurrencyAndPerf:
     """ADR-03 P3: validate WAL coexistence with a concurrent (PHP-style) writer and

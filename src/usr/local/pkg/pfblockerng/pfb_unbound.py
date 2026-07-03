@@ -2305,12 +2305,24 @@ def _db_create(db: int, cursor: Any) -> None:
 
 def _db_connect(db: int) -> Any:
     con = sqlite3.connect(_db_file(db), timeout=100000, check_same_thread=False)
+    # A silently-failed PRAGMA leaves the connection on SQLite defaults -- most
+    # importantly rollback-journal instead of WAL, where a writer's commit blocks
+    # concurrent readers (issue #771). The connection still works, so don't fail
+    # the connect -- but the fallback must be visible in the log.
     try:
-        con.execute("PRAGMA journal_mode=WAL")
+        # PRAGMA journal_mode=WAL returns the mode actually in effect; a non-'wal'
+        # result is a silent downgrade (no exception), so read it back and warn.
+        row = con.execute("PRAGMA journal_mode=WAL").fetchone()
         con.execute("PRAGMA busy_timeout=100000")
         con.execute("PRAGMA synchronous=NORMAL")
-    except Exception:
-        pass
+        mode = str(row[0]).lower() if row else ""
+        if mode != "wal":
+            sys.stderr.write(
+                "[pfBlockerNG]: sqlite journal_mode is '{}' (wanted 'wal') db {}:"
+                " concurrent readers may hit 'database is locked'\n".format(mode, _db_file(db))
+            )
+    except Exception as e:
+        sys.stderr.write("[pfBlockerNG]: sqlite PRAGMA setup failed db {}: {}\n".format(_db_file(db), e))
     _db_create(db, con.cursor())
     con.commit()
     return con
