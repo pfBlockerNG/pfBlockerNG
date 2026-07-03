@@ -10,7 +10,8 @@ use PHPUnit\Framework\TestCase;
  * $pfb['supp']=='on' and not a custom list, drop private (ULA fc00::/7),
  * link-local (fe80::/10), loopback (::1) and the reserved set (::/128) from
  * loaded block lists; keep a genuinely public address. Suppression off, or a
- * custom list, keeps the entry unchanged.
+ * custom list, keeps the entry unchanged. A downloaded feed's explicit /0 is
+ * clamped to a single host; a custom list's /0 is honored (issue #744).
  */
 #[CoversFunction('sanitize_ipaddr_v6')]
 final class SanitizeIpaddrV6Test extends TestCase
@@ -97,5 +98,23 @@ final class SanitizeIpaddrV6Test extends TestCase
 		$GLOBALS['pfb']['supp'] = 'on';
 		// A routable v6 CIDR survives unchanged (returned as-is, mask intact).
 		$this->assertSame('2606:4700:4700::/48', sanitize_ipaddr_v6('2606:4700:4700::/48', false));
+	}
+
+	// --- Explicit /0 masks (issue #744) ---------------------------------------
+
+	// A downloaded feed's /0 covers the entire IPv6 space and is never honored:
+	// it is clamped to a single host, so the address itself stays blocked
+	// instead of the line loading as a block-everything table entry.
+	public function testFeedSlashZeroClampedToSingleHost(): void
+	{
+		$this->assertSame('2606:4700:4700::1111', sanitize_ipaddr_v6('2606:4700:4700::1111/0', false));
+	}
+
+	// Custom-list entries are user-authored: an explicit /0 is honored as
+	// written (::/0 stays ::/0).
+	public function testCustomListSlashZeroHonored(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
+		$this->assertSame('::/0', sanitize_ipaddr_v6('::/0', true));
 	}
 }

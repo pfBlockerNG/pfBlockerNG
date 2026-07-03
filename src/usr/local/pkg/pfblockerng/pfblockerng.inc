@@ -7902,6 +7902,15 @@ function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 	if ($mask !== '' && (!ctype_digit($mask) || (int)$mask > 32)) {
 		return;
 	}
+
+	// An explicit /0 covers the entire IPv4 space and is never honored from a
+	// downloaded feed: clamp to a single host so the address itself stays
+	// blocked (issue #744). Custom-list entries are user-authored, so /0 is
+	// kept as written (e.g. 0.0.0.0/0 referenced by a manual rule).
+	if ($mask !== '' && (int)$mask === 0 && !$custom) {
+		pfb_logger("\n  Feed /0 CIDR clamped to single host: {$ipaddr}", 1);
+		$mask = '';
+	}
 	$iparr = explode('.', $subnet);
 
 	foreach ($iparr as $key => $octet) {
@@ -7948,7 +7957,9 @@ function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 		}
 	}
 
-	if (!empty($mask)) {
+	// '!== '' (not !empty()): empty('0') is TRUE, which silently collapsed a
+	// custom list's honored /0 to a bare host (issue #744).
+	if ($mask !== '') {
 		return "{$ip_final}/{$mask}";
 	}
 	return "{$ip_final}";
@@ -7956,16 +7967,28 @@ function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 
 
 // IPv6 sibling of sanitize_ipaddr(): exclude private/reserved/loopback IPv6
-// addresses from loaded block lists when Suppression is enabled. Returns the
-// entry unchanged when kept; returns nothing (drops it) when excluded.
+// addresses from loaded block lists when Suppression is enabled. A downloaded
+// feed's explicit /0 is clamped to a single host (issue #744); otherwise the
+// entry is returned unchanged when kept, nothing (dropped) when excluded.
 function sanitize_ipaddr_v6($ipaddr, $custom) {
 	global $pfb;
 
+	// Extract the address part (before '/' for a CIDR like 'fc00::/7')
+	$parts	= explode('/', $ipaddr);
+	$s_ip	= $parts[0];
+	$mask	= $parts[1] ?? '';
+
+	// An explicit /0 covers the entire IPv6 space and is never honored from a
+	// downloaded feed: clamp to a single host so the address itself stays
+	// blocked (issue #744). Custom-list entries are user-authored, so /0 is
+	// kept as written.
+	if ($mask !== '' && ctype_digit($mask) && (int)$mask === 0 && !$custom) {
+		pfb_logger("\n  Feed /0 CIDR clamped to single host: {$ipaddr}", 1);
+		$ipaddr = $s_ip;
+	}
+
 	// Exclude private/reserved IPs (bypass exclusion for custom lists)
 	if ($pfb['supp'] == 'on' && !$custom) {
-
-		// Extract the address part (before '/' for a CIDR like 'fc00::/7')
-		$s_ip = explode('/', $ipaddr)[0];
 
 		// Drop ULA (fc00::/7), link-local (fe80::/10), loopback (::1),
 		// IPv4-mapped and the reserved set (mirrors inc:7118-7119).
