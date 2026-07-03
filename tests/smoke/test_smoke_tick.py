@@ -298,8 +298,18 @@ def mfs_var(deployed_vm: SmokeVM) -> Iterator[SmokeVM]:
     """
     vm = deployed_vm
     h.set_ramdisk(vm, True)
-    h.reload(vm, "update")
-    h.reboot_vm(vm)
+    try:
+        h.reload(vm, "update")
+        h.reboot_vm(vm)
+    except Exception:
+        # Arrange failed AFTER the flag write: best-effort revert so the persisted
+        # use_mfs_tmpvar never outlives the failed arrange (the #762 leak class, relocated
+        # to the failure path). No reboot — the box is already failing; don't compound it.
+        try:
+            h.set_ramdisk(vm, False)
+        except Exception as exc:  # noqa: BLE001 -- cleanup on an already-failing path
+            print(f"[smoke] mfs_var arrange-failure revert failed (non-fatal): {exc}")
+        raise
     try:
         yield vm
     finally:
@@ -345,6 +355,15 @@ def test_tick_reboot_persists_ledger(mfs_var: SmokeVM):
     future = now_ts + 7200  # 2 hours out
 
     _write_ledger_entry(vm, "cron", now_ts, future)
+
+    # Wipe any stale archive a sibling module left behind (boot_reload's ramdisk legs write
+    # the same unscoped file), so archive_exists() below can only be true if THIS refresh
+    # wrote it — the archiver's exec() discards its output, so a silently-failed refresh
+    # would otherwise pass the precondition against the leftover.
+    vm.ssh("rm", "-f", f"{h.ALIASARCHIVE}.zst", f"{h.ALIASARCHIVE}.bz2")
+    assert not h.archive_exists(vm, h.ALIASARCHIVE), (
+        f"precondition: stale {h.ALIASARCHIVE}.{{zst,bz2}} survived the wipe"
+    )
 
     # Refresh the archive directly (see docstring: 'update' mode is change-gated and this
     # module has no IP feeds to trip either gate).
