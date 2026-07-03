@@ -3365,9 +3365,12 @@ RULE_TARGET_REGEX = "regex"
 RULE_PROV_USER = "user"
 RULE_PROV_FEED = "feed"
 
-# Lower-cased label alphabet for the domain-shape gate (mirrors PFB_FILTER_DOMAIN,
-# pfblockerng.inc:7995-8016: labels of [a-z0-9-], not edge-hyphenated, with a dot).
-_DNSBL_LABEL_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-")
+# Lower-cased label alphabet for the domain-shape gate (parity with PFB_FILTER_DOMAIN,
+# pfblockerng.inc:1138-1150, whose regex allows [a-zA-Z0-9_.-]). Underscore is deliberate:
+# DNS labels carry no protocol charset (RFC 2181 s11), underscored names are standardized
+# practice (RFC 8552) and appear on real blocklists -- this gates BLOCKLIST names matched
+# against QNAMEs, not hostnames, so strict LDH would be a coverage hole (#723).
+_DNSBL_LABEL_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-_")
 
 
 @dataclass(frozen=True)
@@ -3918,7 +3921,7 @@ def parse(format_hint: str, line: str) -> ParsedEntry | None:
 
 
 def normalise(value: str) -> str | None:
-    """Lower-case + PFB_FILTER_DOMAIN domain-shape gate (inc:7995-8016).
+    """Lower-case + PFB_FILTER_DOMAIN domain-shape gate (inc:1138-1150).
 
     Returns the validated, lower-cased domain or ``None`` when the token is not a
     valid domain (which is how stray non-domain entries -- including any IP that
