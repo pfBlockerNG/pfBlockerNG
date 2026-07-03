@@ -6,7 +6,8 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * pfb_remove_states() — the kill-states validation walk (issues #702 / #705).
+ * pfb_remove_states() — the kill-states validation walk (issues #702 / #705;
+ * ADR-53 Phase 7).
  *
  * The function reaches pfctl exclusively through $pfb['pfctl'], reads the state
  * dump from $pfb['states_tmp'], and takes every policy input from config — so
@@ -40,6 +41,26 @@ use PHPUnit\Framework\TestCase;
  *     'continue 2' is required to skip the state). Covered for bare-IP
  *     (/32-append branch) and explicit-CIDR entries, v4 and v6 list types, and
  *     the negative side (a 'Deny_*' custom list does NOT suppress).
+ *   * ADR-53 Phase 7 — red→green: the v4/v6 Suppression-textarea exclusion is
+ *     now prefix-aware (any mask, both families) via the pure
+ *     pfb_ip_suppressed() helper (KillstatesSuppressionTest.php covers it in
+ *     isolation), replacing the old exact-IP hashmap + subnetv4_expand() '/24'
+ *     materialisation, which could express only a bare host or an exact '/24'.
+ *     Investigating this swap also surfaced an UNRELATED pre-existing bug in
+ *     the $pfb_local plumbing this phase deletes for suppression: the "Remove
+ *     any duplicate IPs" step (`array_flip(array_unique($pfb_local))`, still
+ *     present, still governing local-IP/DNS-server exact-match — untouched,
+ *     out of this phase's scope) blindly re-flips whatever arrives already
+ *     hashmap-shaped, so any source that itself returns a pre-flipped IP=>key
+ *     map (the old suppression flip; pfb_collect_localip()'s own internal
+ *     flip) gets double-flipped back into a plain list — and array_unique()'s
+ *     value-based dedup silently drops collisions on the arbitrary
+ *     position-derived former index. Confirmed empirically (isolated php -r
+ *     traces, both empty and populated local-IP/DNS scenarios): the legacy
+ *     v4suppression exact '/32' match never reliably worked via $pfb_local.
+ *     test_v4_suppression_legacy_slash32_now_reliably_spares_state() is
+ *     therefore ALSO a red→green case, not a pure oracle — this swap fixes it
+ *     as a side effect by moving suppression off that plumbing entirely.
  */
 #[CoversFunction('pfb_remove_states')]
 final class PfbRemoveStatesTest extends TestCase
@@ -82,6 +103,7 @@ final class PfbRemoveStatesTest extends TestCase
 		$GLOBALS['pfb']['log']        = "{$this->root}/pfblockerng.log";
 		$GLOBALS['pfb']['errlog']     = "{$this->root}/error.log";
 		$GLOBALS['pfb']['ipconfig']['v4suppression'] = '';
+		$GLOBALS['pfb']['ipconfig']['v6suppression'] = '';
 		unset($GLOBALS['pfb']['runlog'], $GLOBALS['pfb']['runlog_active']);
 		$GLOBALS['pfb_test_dns_servers'] = [];
 
@@ -151,6 +173,18 @@ final class PfbRemoveStatesTest extends TestCase
 	private function seedTableMatches(string ...$ips): void
 	{
 		putenv('PFB_FAKE_MATCH=' . implode(' ', $ips));
+	}
+
+	/** Seed the IPv4 Suppression textarea config value (same encode shape the real page writes). */
+	private function seedV4Suppression(string ...$lines): void
+	{
+		$GLOBALS['pfb']['ipconfig']['v4suppression'] = base64_encode(implode("\r\n", $lines));
+	}
+
+	/** Seed the IPv6 Suppression textarea config value (same encode shape the real page writes). */
+	private function seedV6Suppression(string ...$lines): void
+	{
+		$GLOBALS['pfb']['ipconfig']['v6suppression'] = base64_encode(implode("\r\n", $lines));
 	}
 
 	/** A NAT-shaped (7-token) v4 state line whose kill-candidate IP is the DESTINATION. */
@@ -378,6 +412,157 @@ final class PfbRemoveStatesTest extends TestCase
 			self::V4_PERMIT,
 			$kills,
 			'a Deny-action custom list must NOT spare ' . self::V4_PERMIT . " — kill log was:\n{$kills}"
+		);
+	}
+
+	// --- ADR-53 P7 — suppression exclusion is prefix-aware, both families ---
+	//
+	// pfb_remove_states() previously excluded suppressed IPs via an exact-IP
+	// hashmap ('/32' entries verbatim + a subnetv4_expand() '/24' materialisation),
+	// which could only express a bare host or an exact '/24'. These scenarios
+	// prove the wiring itself (not just the pure pfb_ip_suppressed() helper,
+	// covered in isolation by KillstatesSuppressionTest.php): a state inside a
+	// containing suppression entry is spared, a sibling outside it is still
+	// killed.
+
+	/**
+	 * Scenario (ADR-53 P7, red->green) — a v4 '/16' suppression entry spares a
+	 * contained state; the old mechanism could only express '/32' or '/24'.
+	 *
+	 * Given: v4suppression = '198.51.0.0/16', a table-matched state inside it
+	 *        (198.51.100.9) and a table-matched sibling outside it
+	 *        (198.52.100.9).
+	 * When:  pfb_remove_states() runs.
+	 * Then:  198.51.100.9 survives (the suppression exclusion), 198.52.100.9 is
+	 *        killed (proves the pass still runs and is not over-suppressing).
+	 *        FAILS pre-Phase-7: the old exact-map/subnetv4_expand() block cannot
+	 *        express a '/16' entry, so 198.51.100.9 would have been killed too.
+	 */
+	public function test_v4_suppression_slash16_spares_contained_state_others_still_killed(): void
+	{
+		$contained = '198.51.100.9';
+		$outside   = '198.52.100.9';
+
+		$this->seedConfig();
+		$this->seedV4Suppression('198.51.0.0/16');
+		$this->seedStates($this->v4State($contained), $this->v4State($outside, 54322));
+		$this->seedTableMatches($contained, $outside);
+
+		$kills = $this->runRemoveStates();
+
+		$this->assertStringNotContainsString(
+			$contained,
+			$kills,
+			"{$contained} lies inside the suppressed 198.51.0.0/16 and must survive — kill log was:\n{$kills}"
+		);
+		$this->assertStringContainsString(
+			$outside,
+			$kills,
+			"{$outside} lies outside the suppressed range and must be killed — kill log was:\n{$kills}"
+		);
+	}
+
+	/**
+	 * Scenario (ADR-53 P7, red->green — an UNEXPECTED second bug this swap also
+	 * fixes) — a legacy exact '/32' v4 suppression entry spares its state.
+	 *
+	 * ADR-53 §2.2 asks Phase 7 to keep "existing /32 + /24 user entries...
+	 * working identically" -- expected to be a pure oracle (green both sides).
+	 * It is NOT: investigation traced a PRE-EXISTING, unrelated bug in the old
+	 * $pfb_local plumbing this phase deletes. The suppression foreach's own
+	 * array_flip() (old code, now removed) hands back a hashmap keyed by IP;
+	 * the LATER "Remove any duplicate IPs" step (`array_flip(array_unique(...))`,
+	 * untouched by this phase -- it still governs local-IP/DNS-server exact
+	 * match, out of scope) blindly re-flips that same array. Any hashmap-shaped
+	 * input arriving pre-flipped (suppression's own flip, and
+	 * pfb_collect_localip()'s own internal flip) gets double-flipped back into
+	 * a plain list, AND array_unique()'s value-based comparison silently drops
+	 * whichever entries collide on their (arbitrary, position-derived) former
+	 * index. Empirically confirmed off-appliance (php -r trace) with both empty
+	 * and populated local-IP/DNS data: v4suppression's own /32 exact-match
+	 * NEVER reliably worked via $pfb_local. This phase's swap moves suppression
+	 * off that fragile plumbing entirely onto the standalone pfb_ip_suppressed()
+	 * scan, incidentally fixing this too -- the local-IP/DNS half of the same
+	 * bug is untouched (still fragile, out of this phase's scope).
+	 *
+	 * Given: v4suppression = '198.51.100.55/32', a table-matched state for it
+	 *        and a table-matched sibling that is NOT suppressed.
+	 * When:  pfb_remove_states() runs.
+	 * Then:  198.51.100.55 survives, the sibling is killed. FAILS pre-Phase-7
+	 *        (the double-flip bug above), not merely pre-existing-and-still-broken.
+	 */
+	public function test_v4_suppression_legacy_slash32_now_reliably_spares_state(): void
+	{
+		$suppressed = '198.51.100.55';
+		$sibling    = '198.51.100.56';
+
+		$this->seedConfig();
+		$this->seedV4Suppression("{$suppressed}/32");
+		$this->seedStates($this->v4State($suppressed), $this->v4State($sibling, 54322));
+		$this->seedTableMatches($suppressed, $sibling);
+
+		$kills = $this->runRemoveStates();
+
+		$this->assertStringNotContainsString(
+			$suppressed,
+			$kills,
+			"the exactly-suppressed {$suppressed} must survive — kill log was:\n{$kills}"
+		);
+		$this->assertStringContainsString(
+			$sibling,
+			$kills,
+			"the non-suppressed sibling {$sibling} must be killed — kill log was:\n{$kills}"
+		);
+	}
+
+	/**
+	 * Scenario (ADR-53 P7, red->green) — a v6 '/64' suppression entry spares a
+	 * contained state. Before this phase, v6suppression was not read by
+	 * pfb_remove_states() AT ALL, so this is red for any v6 entry, not just a
+	 * containing mask.
+	 *
+	 * Given: v6suppression = '3fff:0:0:1::/64' (RFC 9637 documentation range —
+	 *        NOT 2001:db8::/32, which may validate as reserved under
+	 *        FILTER_FLAG_NO_RES_RANGE depending on PHP version, same rationale
+	 *        as V6_VICTIM/V6_PERMIT above), a table-matched state inside it
+	 *        (3fff:0:0:1::9) and a table-matched sibling outside it
+	 *        (3fff:0:0:2::9).
+	 * When:  pfb_remove_states() runs.
+	 * Then:  the contained state survives, the outside sibling is killed.
+	 *        FAILS pre-Phase-7: v6suppression was never consulted, so the
+	 *        contained state would have been killed too.
+	 */
+	public function test_v6_suppression_slash64_spares_contained_state_others_still_killed(): void
+	{
+		$contained = '3fff:0:0:1::9';
+		$outside   = '3fff:0:0:2::9';
+
+		// Precondition (not theater): both fixture addresses must validate as
+		// PUBLIC under this PHP's NO_PRIV/NO_RES flags, or the branch under test
+		// is never reached (same rationale as the class's V6_VICTIM precondition).
+		foreach ([$contained, $outside] as $addr) {
+			$this->assertNotFalse(
+				filter_var($addr, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE),
+				"{$addr} must validate as public IPv6 under NO_PRIV|NO_RES on this PHP — pick a different fixture address"
+			);
+		}
+
+		$this->seedConfig();
+		$this->seedV6Suppression('3fff:0:0:1::/64');
+		$this->seedStates($this->v6State($contained), $this->v6State($outside));
+		$this->seedTableMatches($contained, $outside);
+
+		$kills = $this->runRemoveStates();
+
+		$this->assertStringNotContainsString(
+			$contained,
+			$kills,
+			"{$contained} lies inside the suppressed 3fff:0:0:1::/64 and must survive — kill log was:\n{$kills}"
+		);
+		$this->assertStringContainsString(
+			$outside,
+			$kills,
+			"{$outside} lies outside the suppressed range and must be killed — kill log was:\n{$kills}"
 		);
 	}
 }

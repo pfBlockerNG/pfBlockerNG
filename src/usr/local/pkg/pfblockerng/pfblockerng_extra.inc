@@ -2890,6 +2890,56 @@ function pfb_suppress_file_v6(string $file, string $suppfile): bool
 	return TRUE;
 }
 
+// ---------------------------------------------------------------------------
+// ADR-53 P7 — prefix-aware killstates suppression exclusion
+// ---------------------------------------------------------------------------
+
+/**
+ * pfb_ip_suppressed — TRUE iff $ip falls inside any suppression CIDR in
+ * $entries (ADR-53 §2.2 killstates contract).
+ *
+ * Replaces the old exact-IP hashmap + subnetv4_expand() '/24' materialisation
+ * in pfb_remove_states(), which could only express a bare host or an exact
+ * '/24' entry -- any other containing mask (e.g. a v4 '/16', or any v6 mask)
+ * silently stayed unsuppressed (ADR-53 §1.2). Uses the same ip_in_subnet()
+ * loop shape pfb_local_ip() already applies to local subnets, so any mask is
+ * honoured natively -- no materialisation, no per-family branching needed
+ * here (ip_in_subnet() itself returns FALSE on a family mismatch).
+ *
+ * $entries are raw suppression-textarea lines (untrimmed; may carry a
+ * trailing '#' comment or be entirely blank/comment) -- the same tolerance
+ * pfb_validate_suppression_line() applies. A malformed entry (no '/', bad
+ * address) is silently skipped, never fatal.
+ *
+ * PURE -- no config reads; the caller passes the already-decoded suppression
+ * list(s).
+ *
+ * Cost: a linear scan of $entries per call. Suppression lists are small and
+ * user-authored, so this is fine at this scale.
+ * ponytail: an interval tree would be overkill here — revisit only if a
+ * suppression list ever grows into the thousands of entries.
+ *
+ * @param  string   $ip      The firewall-state IP to test (v4 or v6).
+ * @param  string[] $entries Decoded suppression lines (one family or mixed).
+ * @return bool TRUE when $ip is covered by any entry.
+ */
+function pfb_ip_suppressed(string $ip, array $entries): bool
+{
+	foreach ($entries as $entry) {
+		$entry = trim((string) $entry);
+		if ($entry === '' || str_starts_with($entry, '#')) {
+			continue;
+		}
+		// Strip a trailing inline '#' comment, same as pfbng_text_area_decode().
+		$entry = trim(strstr($entry, '#', TRUE) ?: $entry);
+
+		if (ip_in_subnet($ip, $entry)) {
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
 // logger() and localize_text() are pfSense-core helpers (src/etc/inc/util.inc)
 // on pfSense Plus / master, but absent from released pfSense CE <= 2.8.1. Define
 // fallbacks ONLY when core does not provide them, so this package runs on both:
