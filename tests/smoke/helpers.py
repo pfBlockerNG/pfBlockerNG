@@ -2457,32 +2457,74 @@ def reset_pfb_baseline(vm: SmokeVM, *, timeout: float = 300.0) -> None:
 
 # Fixed settle after issuing /sbin/reboot, before probing readiness: long enough that the box
 # is actually shutting down (so we never read the still-up pre-reboot sshd as "ready"), short
-# relative to the boot it precedes. A deliberate shutdown wait -- not concurrency coordination.
+# relative to the boot it precedes. A deliberate shutdown wait -- not concurrency coordination
+# (issue #456's exception: we are waiting out a real OS shutdown we cannot signal, not
+# coordinating two sides of our own async code).
 _REBOOT_SETTLE_SECS = 30
+
+_BOOTTIME_SYSCTL = "sysctl -n kern.boottime"
+
+
+def _assert_boottime_advanced(before: str, after: str) -> None:
+    """Raise AssertionError unless ``kern.boottime`` genuinely changed across a reboot (#738 F4).
+
+    Pure comparison, no VM I/O, so it is unit-testable off-VM. ``before``/``after`` are the raw
+    ``sysctl -n kern.boottime`` output captured immediately before issuing ``/sbin/reboot`` and
+    immediately after the readiness gate clears. An unchanged value means the readiness gate
+    answered on the PRE-reboot instance -- the guest never actually went down and back up. An
+    empty side means the sysctl read itself failed (e.g. a dropped SSH connection mid-boot),
+    which is just as fatal to the proof, so it raises too, naming which side was empty.
+    """
+    before_val = before.strip()
+    after_val = after.strip()
+    if not before_val:
+        raise AssertionError(
+            "reboot_vm: could not read kern.boottime BEFORE the reboot (empty output) -- cannot prove a reboot happened"
+        )
+    if not after_val:
+        raise AssertionError(
+            "reboot_vm: could not read kern.boottime AFTER the reboot (empty output) -- cannot prove a reboot happened"
+        )
+    if before_val == after_val:
+        raise AssertionError(
+            f"reboot_vm: kern.boottime unchanged (before={before_val!r} after={after_val!r}) -- "
+            "the guest never rebooted; the readiness gate answered on the PRE-reboot instance"
+        )
 
 
 def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT) -> None:
     """Reboot the guest OS and block until it is ready again, reusing the SAME readiness gate
     as the initial boot.
 
-      1. Issue ``/sbin/reboot`` -- best-effort: the command tears down our SSH session, so a
+      1. Read ``kern.boottime`` once, BEFORE issuing the reboot -- the "before" side of the
+         post-reboot proof (#738 F4).
+      2. Issue ``/sbin/reboot`` -- best-effort: the command tears down our SSH session, so a
          non-zero / dropped result is EXPECTED, not an error.
-      2. Sleep a fixed SETTLE so the box is actually DOWN before we probe; otherwise the
+      3. Sleep a fixed SETTLE so the box is actually DOWN before we probe; otherwise the
          still-up pre-reboot sshd answers and ``wait_ready.sh`` false-positives "ready" before
          the reboot has even happened. This replaces the previous ``kern.boottime``-change poll,
          which was fragile and consumed the readiness budget (timing out even when the box came
-         back fine).
-      3. Run the SAME readiness gate the initial boot uses (conftest ``boot_vm``): ``wait_ready.sh``
+         back fine). Deliberate shutdown wait, not concurrency coordination -- issue #456's
+         documented exception (no side of our own code to signal; we are waiting out a real OS
+         shutdown).
+      4. Run the SAME readiness gate the initial boot uses (conftest ``boot_vm``): ``wait_ready.sh``
          (QEMU pid + web port: nginx + PHP up) with the FULL budget, then ``wait_boot_complete``
          (``is_platform_booting()`` cleared, so a post-reboot pfBlockerNG sync cannot race boot --
          the #559 guard). THEN ``wait_unbound_ready`` so DNS assertions are safe immediately (the
          reboot tests probe DNS, which a bare boot does not).
+      5. Read ``kern.boottime`` once more, AFTER the full readiness gate completes, and compare
+         against the "before" reading (#738 F4) -- a SINGLE post-readiness check, so it consumes
+         no readiness budget (unlike the removed poll). If the value never changed (or either
+         side was unreadable), the readiness gate answered on the pre-reboot instance and this
+         raises loudly instead of letting the caller assert against stale state.
     """
+    before_boottime = vm.ssh(_BOOTTIME_SYSCTL, timeout=15.0).stdout
+
     # Issue the reboot; it drops our SSH connection, so a non-zero/dropped result is EXPECTED.
     vm.ssh("/sbin/reboot", timeout=30.0)
 
     # Settle: let the box shut down before we probe, so we never read the still-up pre-reboot
-    # sshd as "ready".
+    # sshd as "ready". Deliberate shutdown wait -- see the docstring's step 3.
     time.sleep(_REBOOT_SETTLE_SECS)
 
     # Full readiness via the SAME shell gate the initial boot uses. wait_ready.sh's positional
@@ -2515,6 +2557,13 @@ def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT) -> None:
     wait_boot_complete(vm)
     # Extra over a bare boot: the reboot tests probe DNS, so wait for Unbound to answer.
     wait_unbound_ready(vm)
+
+    # Single post-readiness proof (#738 F4): the readiness gate above can false-positive on the
+    # still-up pre-reboot instance if shutdown outlasted the settle on a slow host. Compare
+    # kern.boottime now that readiness is fully established -- this is the ONE extra guest round
+    # trip, not a poll, so it never eats into the readiness budget.
+    after_boottime = vm.ssh(_BOOTTIME_SYSCTL, timeout=15.0).stdout
+    _assert_boottime_advanced(before_boottime, after_boottime)
 
 
 # pfBlockerNG archives its IP aliastables + DNSBL DB here for RAMDISK installs; the
