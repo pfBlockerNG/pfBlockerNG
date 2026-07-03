@@ -1,0 +1,10 @@
+# ADR-53 smoke fixture: RFC 2544 benchmarking /16 -- the containing-range
+# carve target (tests/smoke/test_smoke_suppression.py). Never RFC 1918 (the
+# killstates/private-exclusion path would otherwise eat it).
+198.18.0.0/16
+# Bare hosts (RFC 5737 documentation ranges), deliberately far apart from each
+# other and from the /16 above -- iprange's minimal-CIDR aggregation would
+# merge two ADJACENT hosts into one covering CIDR, which would break the
+# exact covering-CIDR-count assertions these tests pin.
+203.0.113.60
+198.51.100.77

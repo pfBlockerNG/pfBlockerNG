@@ -832,3 +832,76 @@ persistence), `test_smoke_apply_on_change.py` (apply without Force; quiet-hours 
 `test_trigger_api.py` (new API + deprecation log + HA), and the Update-page Tier A/B in
 `tests/smoke/ui/`. Per CLAUDE.md "ADR acceptance", ADR-43 moves to Accepted on the green CE+Plus
 live-VM fan-out of those cases.
+
+## IP suppression set-subtraction (ADR-53)
+
+Replaces the IP-side **Suppression** feature's host-explosion mechanism with genuine CIDR set
+subtraction, in both families. Suppression stays **content-level** (it edits the deny member
+files feeding every consumer — pf tables, ADR-11 aggregates, HAProxy `.lst`, killstates, the
+Alerts/Reports view) rather than a pf rule/table-negation trick (rejected: it would bypass the
+user's own block rules and still kill the exempted host's states — see ADR-53 §1.4).
+
+**The covering-CIDR math.** Subtracting a `/b` hole from a containing `/a` block costs exactly
+`b − a` covering-CIDR entries — one per prefix-length step from the hole up to the container —
+**independent of the hole's exact position** (a standard property of binary CIDR decomposition).
+Measured/pinned: `/24 − /32 = 8`, `/16 − /32 = 16`, `/16 − /24 = 8`, `/64 − /128 = 64` (v6). For
+`k` holes in one block the bound is `k × (b − a)`. This is the entire fix: the old mechanism
+enumerated hosts (`/24 − /32` = 254 lines; a v6 `/64 − /128` would be 2⁶⁴ — impossible), when the
+minimal remainder was always a few dozen lines.
+
+**v4 engine — `iprange --except`** (`pfblockerng.sh suppress()`). `iprange` is already a hard
+dependency (ADR-11's `pathaggregate`). One call per feed-changed Deny member file:
+`${pathaggregate} <member> --except <suppfile>` replaces the old `grep -F` + `seq 255` + awk
+explode. `rc=0` publishes (including a legitimately-empty result — a fully-suppressed member is
+valid, unlike `grepcidr`'s `rc=1`-means-empty quirk); any other `rc` keeps the previous list and
+logs (the same #713 fail-safe shape). **DNS-resolution hazard**: `iprange` is IPv4-only, mangles
+v6 input (parses it as a hostname), and — worse — treats any non-IP token as a **hostname and
+DNS-resolves it** (`rc=0` regardless, no opt-out flag). Both the member file and the suppression
+list are pre-filtered to strict IPv4/CIDR token shape (`pfb_is_cidr_token` / `pfb_is_ip_or_cidr_token`)
+before either reaches `iprange`, so a malformed token is dropped and logged, never DNS-resolved.
+
+**v6 engine — pure PHP** (`pfb_cidr_subtract_v6()` + `pfb_suppress_file_v6()`). `iprange` cannot
+take v6 input at all, so v6 is a from-scratch fixed-width 128-bit binary-string set-diff, emitting
+the minimal covering-CIDR remainder via pfSense's own `ip_range_to_subnet_array()` (verified at
+the min-CE dated ref, faithful PHPUnit double). Every binary-string comparison uses `strcmp()`,
+never `<`/`>`/`min()`/`max()` — a 128-char `'0'`/`'1'` string is a PHP "numeric string", and the
+normal comparison operators risk silent float-precision coercion on a string that long. Streaming,
+atomic tmp+rename publish, same fail-safe-keep-previous contract as v4. Measured perf bound (P5):
+1.24 s / 100k lines on the CI runner — comfortably inside the §7 reject threshold (5 s).
+
+**Wiring gotcha (flagged for the maintainer, not fixed in Phase 9):** `$pfb['supp_update']` — the
+flag that unlocks BOTH the v4 and v6 suppression sub-passes for a given reload pass — is set
+`TRUE` only by a **v4** Deny alias's own genuine reparse (`pfblockerng.inc` ~16550-16558, inside
+`if ($pfbadv && $list['vtype'] == '_v4')`). An install with **only** v6 Deny lists configured
+would never flip it, so v6 suppression would never fire in isolation even with `v6suppression`
+non-empty and a v6 alias genuinely changing. `tests/smoke/test_smoke_suppression.py`'s v6 scenario
+works around this (a trivial companion v4 Deny alias rides the same reload pass) rather than
+hiding it — a production box with both families configured behaves the same way. Candidate fix:
+also set `supp_update` on a v6 Deny alias's change; out of ADR-53 Phase 9's scope (test/docs only).
+
+**Consumer inheritance.** Every downstream reader — pf tables (via the ADR-40 mirror/reload
+model), ADR-11 aggregate aliases, HAProxy `.lst` (ADR-12), the Alerts/Reports "is this IP blocked"
+view, the widget, and killstates — reads the post-suppression member files, so the content-level
+fix reaches all of them with zero consumer-side changes. Killstates' suppression exclusion is
+prefix-aware via `pfb_ip_suppressed()` (both families), replacing the old exact-IP hashmap +
+`subnetv4_expand` host-materialisation.
+
+**Alerts "+" live punch — a SEPARATE mechanism, not this engine.** `pfb_live_punch_plan()`
+(`pfblockerng_extra.inc`) mutates the LIVE pf table directly from a single web click (locate the
+containing table entr(y/ies) via the ADR-40 mirror/`pfctl -T show` fallback, `pfctl -T delete` +
+`-T add` the covering-CIDR difference), independent of any reload — the update-time engines above
+never run for it. Covered by `tests/smoke/ui/test_alerts.py`'s
+`test_addsuppress_{v4,v6}_carves_containing_range_and_spares_sibling`; the update-time proof lives
+in `tests/smoke/test_smoke_suppression.py` and is a genuinely different code path, not duplicate
+coverage.
+
+**Tests.** Off-appliance: `tests/shell/pfblockerng_suppress_spec.sh` (real-`iprange` shellspec —
+the exact `/16 − /32 = 16` / `/24 − /32 = 8` vectors the smoke module's assertions are grounded
+in), `tests/php/V6CidrSubtractTest.php` (the pure-PHP engine, incl. the `/64 − /128 = 64` vector),
+`tests/php/SuppressionValidatorTest.php` (mask floors: v4 `/8`–`/32`, v6 `/32`–`/128`),
+`tests/php/CreateSuppressionFileTest.php`, `tests/php/KillstatesSuppressionTest.php`,
+`tests/php/LivePunchPlanTest.php`. Live-VM (ADR-04, dispatch-only):
+`tests/smoke/test_smoke_suppression.py` (this section's headline acceptance proof — both families,
+before-state asserted first, plus the whole-token/mask-agnostic upgrade-parity scenarios) and the
+Alerts "+" Tier B e2e above. Per CLAUDE.md "ADR acceptance", ADR-53 moves to Accepted on the green
+CE+Plus live-VM fan-out of those cases.

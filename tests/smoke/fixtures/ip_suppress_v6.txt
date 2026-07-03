@@ -1,0 +1,8 @@
+# ADR-53 smoke fixture: RFC 3849 documentation /64 -- the containing-range
+# carve target (tests/smoke/test_smoke_suppression.py).
+2001:db8:53::/64
+# Bare v6 hosts (RFC 3849), in separate prefixes from the /64 above and from
+# each other -- avoids any iprange/engine-side adjacency merge so the
+# covering-CIDR-count assertions stay exact.
+2001:db8:99::10
+2001:db8:aa::20
