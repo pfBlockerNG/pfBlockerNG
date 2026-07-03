@@ -128,10 +128,20 @@ final class SanitizeIpaddrTest extends TestCase
 
 	// A downloaded feed's /0 covers the entire IPv4 space and is never honored:
 	// it is clamped to a single host, so the address itself stays blocked
-	// (dropping the whole line would under-block).
+	// (dropping the whole line would under-block). Regression PIN: the old code
+	// produced the same value by accident (empty('0') collapse); this pins it
+	// as intentional — the red→green evidence is the log + custom-honor tests.
 	public function testFeedSlashZeroClampedToSingleHost(): void
 	{
 		$this->assertSame('198.51.100.7', sanitize_ipaddr('198.51.100.7/0', false, 'Disabled'));
+	}
+
+	// The clamp keys on the numeric mask value, not the '0' literal — a
+	// multi-zero spelling (/00) is clamped the same way (previously it leaked
+	// through as 'ip/00' and the whole line was dropped by validation).
+	public function testFeedMultiZeroMaskClampedToSingleHost(): void
+	{
+		$this->assertSame('198.51.100.7', sanitize_ipaddr('198.51.100.7/00', false, 'Disabled'));
 	}
 
 	// The clamp is visible in the pfBlockerNG log — never a silent rewrite.
@@ -151,11 +161,21 @@ final class SanitizeIpaddrTest extends TestCase
 
 	// The /0 is clamped to a host up front, so under suppression it no longer
 	// slips past the Advanced CIDR floor as an "empty" mask — the result is
-	// the same single host, not an unclamped /0.
+	// the same single host, not an unclamped /0. Regression PIN (same
+	// accidental end-state as above, now deliberate).
 	public function testFeedSlashZeroUnderSuppressionCidrFloorStillSingleHost(): void
 	{
 		$GLOBALS['pfb']['supp'] = 'on';
 		$this->assertSame('198.51.100.7', sanitize_ipaddr('198.51.100.7/0', false, 24));
+	}
+
+	// Interaction PIN: a feed 0.0.0.0/0 under suppression is clamped to the
+	// host 0.0.0.0, which the pre-existing '0.0.0.0' exclusion then DROPS —
+	// the line yields nothing, it does not survive as a host entry.
+	public function testFeedZeroSlashZeroUnderSuppressionDropped(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
+		$this->assertNull(sanitize_ipaddr('0.0.0.0/0', false, 'Disabled'));
 	}
 
 	// Custom-list entries are user-authored: an explicit /0 is honored as

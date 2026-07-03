@@ -110,6 +110,21 @@ final class SanitizeIpaddrV6Test extends TestCase
 		$this->assertSame('2606:4700:4700::1111', sanitize_ipaddr_v6('2606:4700:4700::1111/0', false));
 	}
 
+	// Same clamp with suppression ON: the public address survives the
+	// reserved/private filter and is kept as a single host, not a /0.
+	public function testFeedSlashZeroUnderSuppressionClampedToSingleHost(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
+		$this->assertSame('2606:4700:4700::1111', sanitize_ipaddr_v6('2606:4700:4700::1111/0', false));
+	}
+
+	// The clamp keys on the numeric mask value, not the '0' literal — a
+	// multi-zero spelling (/00) is clamped the same way.
+	public function testFeedMultiZeroMaskClampedToSingleHost(): void
+	{
+		$this->assertSame('2606:4700:4700::1111', sanitize_ipaddr_v6('2606:4700:4700::1111/00', false));
+	}
+
 	// Custom-list entries are user-authored: an explicit /0 is honored as
 	// written (::/0 stays ::/0).
 	public function testCustomListSlashZeroHonored(): void

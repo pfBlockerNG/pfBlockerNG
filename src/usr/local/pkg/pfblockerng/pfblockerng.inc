@@ -7889,6 +7889,8 @@ function pfblockerng_top1m() {
 
 
 // Function to remove any leading zeros in octets and to exclude private/reserved addresses.
+// A downloaded feed's explicit /0 is clamped to a single host and logged (issue #744);
+// a custom list's /0 is honored as written.
 function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 	global $pfb;
 
@@ -7908,7 +7910,9 @@ function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 	// blocked (issue #744). Custom-list entries are user-authored, so /0 is
 	// kept as written (e.g. 0.0.0.0/0 referenced by a manual rule).
 	if ($mask !== '' && (int)$mask === 0 && !$custom) {
-		pfb_logger("\n  Feed /0 CIDR clamped to single host: {$ipaddr}", 1);
+		// Unlike the v6 sibling, callers reach this before validate_ipv4(), so
+		// $ipaddr is raw feed text — strip control chars to keep the log clean.
+		pfb_logger("\n  Feed /0 CIDR clamped to single host: " . preg_replace('/[[:cntrl:]]/', '', $ipaddr), 1);
 		$mask = '';
 	}
 	$iparr = explode('.', $subnet);
