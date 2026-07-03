@@ -73,6 +73,11 @@ def dnsbl_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]: 
     try:
         yield smoke_vm
     finally:
+        # Diagnostics FIRST: the revert reboot below wipes the MFS /var this module ran
+        # on, so a snapshot taken after it would show a fresh disk-backed /var instead
+        # of the module's (possibly failing) end-of-run state.
+        h.unblock_egress()
+        h.collect_host_diagnostics(smoke_vm)
         # The reboot is REQUIRED (issue #765): set_ramdisk only flips the config flag,
         # so without it the running /var stays MFS and every module that runs after this
         # one on the shared session VM inherits writes that vanish on the next reboot.
@@ -81,9 +86,7 @@ def dnsbl_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]: 
             h.reload(smoke_vm, "update")
             h.reboot_vm(smoke_vm)
         except Exception as exc:  # noqa: BLE001 -- teardown cleanup, never mask the result
-            print(f"[smoke] #468 teardown reload failed (non-fatal): {exc}")
-        h.unblock_egress()
-        h.collect_host_diagnostics(smoke_vm)
+            print(f"[smoke] #468 ramdisk-off teardown failed (non-fatal): {exc}")
 
 
 @pytest.fixture(scope="module")

@@ -100,6 +100,11 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     try:
         yield smoke_vm
     finally:
+        # Diagnostics FIRST: the revert reboot below wipes the MFS /var this module ran
+        # on, so a snapshot taken after it would show a fresh disk-backed /var instead
+        # of the module's (possibly failing) end-of-run state.
+        h.unblock_egress()
+        h.collect_host_diagnostics(smoke_vm)
         # Leave RAM disks OFF and rebuild the aliases the reboot may have dropped, so
         # the box is left in a known-good state. Best-effort — never mask the result.
         # The reboot is REQUIRED (issue #765): set_ramdisk only flips the config flag,
@@ -110,9 +115,7 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
             h.reload(smoke_vm, "update")
             h.reboot_vm(smoke_vm)
         except Exception as exc:  # noqa: BLE001 -- teardown cleanup, never mask the test result
-            print(f"[smoke] reboot teardown reload failed (non-fatal): {exc}")
-        h.unblock_egress()
-        h.collect_host_diagnostics(smoke_vm)
+            print(f"[smoke] ramdisk-off teardown failed (non-fatal): {exc}")
 
 
 @pytest.fixture(scope="module", params=[False, True], ids=["standard", "ramdisk"])
