@@ -5499,13 +5499,17 @@ function pfb_ss_resolve_target($target) {
 
 	$target_esc = escapeshellarg($filtered);
 	$extdns_esc = escapeshellarg("@{$pfb['extdns']}");
+	// Injectable resolver binary (#723): tests stub it so a unit run never emits real
+	// DNS traffic (a box with a loopback resolver made the real exec succeed and the
+	// off-appliance test fail). Production default unchanged.
+	$drill_esc = escapeshellarg($pfb['drill'] ?? '/usr/bin/drill');
 
 	$out4 = array();
-	exec("/usr/bin/drill A {$target_esc} {$extdns_esc} | /usr/bin/awk '/[ \\t]IN[ \\t]+A[ \\t]/ {print \$5; exit}'", $out4);
+	exec("{$drill_esc} A {$target_esc} {$extdns_esc} | /usr/bin/awk '/[ \\t]IN[ \\t]+A[ \\t]/ {print \$5; exit}'", $out4);
 	$v4 = filter_var(trim($out4[0] ?? ''), FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) ?: '';
 
 	$out6 = array();
-	exec("/usr/bin/drill AAAA {$target_esc} {$extdns_esc} | /usr/bin/awk '/[ \\t]IN[ \\t]+AAAA[ \\t]/ {print \$5; exit}'", $out6);
+	exec("{$drill_esc} AAAA {$target_esc} {$extdns_esc} | /usr/bin/awk '/[ \\t]IN[ \\t]+AAAA[ \\t]/ {print \$5; exit}'", $out6);
 	$v6 = filter_var(trim($out6[0] ?? ''), FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) ?: '';
 
 	return array($v4, $v6);

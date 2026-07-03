@@ -271,4 +271,25 @@ final class SafeSearchCnameTest extends TestCase
 		$this->assertSame(['', ''], $result);
 		$this->assertStringNotContainsString('failed validation', $this->logContents());
 	}
+
+	public function test_resolve_target_uses_injected_resolver_binary(): void
+	{
+		// Seam proof (#723): a stub resolver that EMITS a drill-shaped answer must have
+		// its answer consumed -- red on any build where the exec still hard-codes
+		// /usr/bin/drill (the stub is then dead code and this returns ['','']), on every
+		// platform, with or without a real resolver present.
+		$stub = tempnam(sys_get_temp_dir(), 'pfb_drill_stub_');
+		file_put_contents($stub, "#!/bin/sh\n[ \"\$1\" = \"A\" ] && printf 'stub.example.com.\\t300\\tIN\\tA\\t192.0.2.99\\n'\nexit 0\n");
+		chmod($stub, 0755);
+		$GLOBALS['pfb']['drill'] = $stub;
+		try {
+			$result = pfb_ss_resolve_target('safe.duckduckgo.com');
+		} finally {
+			unset($GLOBALS['pfb']['drill']);
+			@unlink($stub);
+		}
+
+		$this->assertSame(['192.0.2.99', ''], $result,
+			'expected: the stubbed resolver binary answers the A lookup (proving the exec uses $pfb[drill])');
+	}
 }
