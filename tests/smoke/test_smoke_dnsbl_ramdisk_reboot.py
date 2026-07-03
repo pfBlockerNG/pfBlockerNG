@@ -73,9 +73,13 @@ def dnsbl_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]: 
     try:
         yield smoke_vm
     finally:
+        # The reboot is REQUIRED (issue #765): set_ramdisk only flips the config flag,
+        # so without it the running /var stays MFS and every module that runs after this
+        # one on the shared session VM inherits writes that vanish on the next reboot.
         try:
             h.set_ramdisk(smoke_vm, False)
             h.reload(smoke_vm, "update")
+            h.reboot_vm(smoke_vm)
         except Exception as exc:  # noqa: BLE001 -- teardown cleanup, never mask the result
             print(f"[smoke] #468 teardown reload failed (non-fatal): {exc}")
         h.unblock_egress()

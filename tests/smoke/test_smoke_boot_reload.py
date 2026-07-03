@@ -102,9 +102,13 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     finally:
         # Leave RAM disks OFF and rebuild the aliases the reboot may have dropped, so
         # the box is left in a known-good state. Best-effort — never mask the result.
+        # The reboot is REQUIRED (issue #765): set_ramdisk only flips the config flag,
+        # so without it the running /var stays MFS and every module that runs after this
+        # one on the shared session VM inherits writes that vanish on the next reboot.
         try:
             h.set_ramdisk(smoke_vm, False)
             h.reload(smoke_vm, "update")
+            h.reboot_vm(smoke_vm)
         except Exception as exc:  # noqa: BLE001 -- teardown cleanup, never mask the test result
             print(f"[smoke] reboot teardown reload failed (non-fatal): {exc}")
         h.unblock_egress()
