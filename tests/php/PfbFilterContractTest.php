@@ -204,4 +204,142 @@ final class PfbFilterContractTest extends TestCase
 		$rejected = pfb_filter('feed;name', PFB_FILTER_WORD, 'PFBL-01 contract');
 		$this->assertEmpty($rejected);
 	}
+
+	// --- Unicode-aware control-character gate (issue #714 audit item c3) ----------
+	//
+	// pfb_filter()'s control-character check used bare `preg_match("/[\p{C}]+/", $x)`.
+	// Without the `/u` modifier, \p{C} classifies each raw BYTE as a Latin-1 codepoint:
+	// a valid multibyte UTF-8 character whose continuation byte falls in 0x80-0x9F was
+	// falsely flagged as a control character, while a genuinely invalid-UTF-8 subject
+	// was silently accepted. With `/u`, preg_match() returns FALSE (not 0) on invalid
+	// UTF-8, so the fixed call sites reject on `!== 0` to fail closed rather than open.
+
+	/** @return array<string, array{0: string}> label => valid multibyte UTF-8 the gate must accept */
+	public static function multibyteAcceptedProvider(): array
+	{
+		return [
+			// Byte-mode \p{C} misreads a continuation byte (0x82/0x97) as a Latin-1
+			// C1 control codepoint (0x80-0x9F) -- falsely rejected pre-fix; a real
+			// Unicode-aware match correctly sees a printable character.
+			'euro sign'     => ["\xE2\x82\xAC"],              // €
+			'kanji nihon'   => ["\xE6\x97\xA5\xE6\x9C\xAC"],  // 日本
+			// Contrast case: byte-mode happens to accept this one already (its
+			// continuation byte 0xA9 sits outside 0x80-0x9F) -- pins the
+			// already-working accept side, proving the fix doesn't just get lucky.
+			'e-acute'       => ["\xC3\xA9"],                  // é
+		];
+	}
+
+	#[DataProvider('multibyteAcceptedProvider')]
+	public function testScalarFilterAcceptsValidMultibyteUtf8(string $input): void
+	{
+		// Given valid multibyte UTF-8 text, When it passes the control-char gate,
+		// Then PFB_FILTER_HTML returns it unchanged (htmlspecialchars() is a no-op
+		// on these codepoints -- none are HTML-special).
+		$this->assertSame($input, pfb_filter($input, PFB_FILTER_HTML, 'PFBL-01 contract', 'DEF'));
+	}
+
+	public function testScalarFilterStillRejectsRealControlCharacters(): void
+	{
+		// A genuine control character must keep being rejected with /u applied --
+		// green both before and after the fix (the gate must not loosen).
+		$this->assertSame('DEF', pfb_filter("\x07", PFB_FILTER_HTML, 'ref', 'DEF'));
+		$this->assertSame('DEF', pfb_filter("abc\x07def", PFB_FILTER_HTML, 'ref', 'DEF'));
+	}
+
+	public function testScalarFilterRejectsZeroWidthSpaceAsFormatControl(): void
+	{
+		// U+200B (ZERO WIDTH SPACE, Unicode category Cf) is a genuine \p{C} member --
+		// a homoglyph/zero-width hardening pin, distinct from the false-positive fix.
+		$this->assertSame('DEF', pfb_filter("\xE2\x80\x8B", PFB_FILTER_HTML, 'ref', 'DEF'));
+	}
+
+	public function testScalarFilterRejectsInvalidUtf8FailClosed(): void
+	{
+		// With /u, preg_match() returns FALSE (not 0) on a malformed-UTF-8 subject.
+		// pfb_filter() is a PFBL-01 input-sanitisation gate, so a subject the regex
+		// cannot even parse must be rejected (fail-closed), never silently accepted.
+		$this->assertSame('DEF', pfb_filter("\xC3\x28", PFB_FILTER_HTML, 'ref', 'DEF'));
+	}
+
+	// --- Array-input branch: the same gate, applied per element --------------------
+
+	/**
+	 * Runs $exercise() with $pfb['errlog'] pointed at a fresh temp file and returns
+	 * its contents. PFB_FILTER_FILE_MIME_COMPARE forces $return_type to FALSE (see
+	 * pfb_filter()'s $return_type override for that constant), and its file_exists()
+	 * miss also returns FALSE -- so the return value alone can't tell an early
+	 * control-char reject apart from one that reached the MIME switch. The log line
+	 * ("Control characters found" vs "Invalid Mime-type (file missing)") can.
+	 */
+	private function errLogAfter(callable $exercise): string
+	{
+		$had  = array_key_exists('errlog', $GLOBALS['pfb'] ?? []);
+		$prev = $GLOBALS['pfb']['errlog'] ?? null;
+		$path = sys_get_temp_dir() . '/pfb_filter_contract_errlog_' . uniqid('', true);
+		$GLOBALS['pfb']['errlog'] = $path;
+		try {
+			$exercise();
+			return file_exists($path) ? (string) file_get_contents($path) : '';
+		} finally {
+			if ($had) {
+				$GLOBALS['pfb']['errlog'] = $prev;
+			} else {
+				unset($GLOBALS['pfb']['errlog']);
+			}
+			@unlink($path);
+		}
+	}
+
+	public function testArrayInputAcceptsValidMultibyteUtf8Element(): void
+	{
+		// Given an array element containing valid multibyte UTF-8 (the euro sign),
+		// When it passes the same per-element control-char loop as the scalar branch,
+		// Then it must NOT be rejected there -- the run reaches the MIME switch,
+		// whose own file_exists() miss on the (nonexistent) path logs a DIFFERENT
+		// message. Pre-fix, byte-mode \p{C} falsely matches and only the
+		// "Control characters found" line appears.
+		$log = $this->errLogAfter(function (): void {
+			pfb_filter(["/nonexistent/\xE2\x82\xAC-file", 'text/plain'], PFB_FILTER_FILE_MIME_COMPARE, 'PFBL-01 contract array');
+		});
+		$this->assertStringNotContainsString(
+			'Control characters found',
+			$log,
+			"expected no control-char rejection for a valid UTF-8 array element, but errlog was:\n{$log}"
+		);
+		$this->assertStringContainsString(
+			'Invalid Mime-type (file missing)',
+			$log,
+			"expected the run to reach the MIME file_exists() check, but errlog was:\n{$log}"
+		);
+	}
+
+	public function testArrayInputRejectsControlCharacterElement(): void
+	{
+		// A real control character in an array element must still be rejected at
+		// the per-element loop -- green before and after (no loosening).
+		$log = $this->errLogAfter(function (): void {
+			pfb_filter(["/nonexistent/abc\x07def-file", 'text/plain'], PFB_FILTER_FILE_MIME_COMPARE, 'PFBL-01 contract array');
+		});
+		$this->assertStringContainsString(
+			'Control characters found',
+			$log,
+			"expected a control-char rejection for an array element containing \\x07, but errlog was:\n{$log}"
+		);
+	}
+
+	public function testArrayInputRejectsInvalidUtf8ElementFailClosed(): void
+	{
+		// An invalid-UTF-8 array element must be rejected fail-closed post-fix
+		// (preg_match() returns FALSE on it, treated as a match by `!== 0`) -- the
+		// array-branch counterpart of the scalar fail-closed case above.
+		$log = $this->errLogAfter(function (): void {
+			pfb_filter(["/nonexistent/\xC3\x28-file", 'text/plain'], PFB_FILTER_FILE_MIME_COMPARE, 'PFBL-01 contract array');
+		});
+		$this->assertStringContainsString(
+			'Control characters found',
+			$log,
+			"expected a control-char rejection for an array element with invalid UTF-8, but errlog was:\n{$log}"
+		);
+	}
 }
