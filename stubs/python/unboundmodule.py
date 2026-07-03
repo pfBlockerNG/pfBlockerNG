@@ -270,6 +270,12 @@ def storeQueryInCache(qstate: Any, qinfo: Any, msgrep: Any, is_referral: int) ->
     :data:`MODULE_RESTART_NEXT`) chases the target itself — working around
     NLnetLabs/unbound #976 (a module-injected CNAME is not chased).
 
+    Mirrors real Unbound's refusal to cache an authoritative reply
+    (pythonmod/pythonmod_utils.c: ``PyErr_SetString(PyExc_ValueError,
+    "Authoritative answer can't be stored")`` + return 0) — the pending
+    exception surfaces as a ``ValueError`` in the Python caller, so the stub
+    raises it directly.
+
     Args:
         qstate:      The :class:`module_qstate`.
         qinfo:       The :class:`query_info` to key the cache entry on.
@@ -279,7 +285,13 @@ def storeQueryInCache(qstate: Any, qinfo: Any, msgrep: Any, is_referral: int) ->
 
     Returns:
         True on success.
+
+    Raises:
+        ValueError: If ``msgrep`` is marked authoritative (real Unbound
+            refuses the store).
     """
+    if getattr(msgrep, "authoritative", 0):
+        raise ValueError("Authoritative answer can't be stored")
     return True
 
 
