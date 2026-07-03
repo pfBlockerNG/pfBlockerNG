@@ -36,7 +36,7 @@ Phase 1 (``RESULTS/01_Results.txt``), with file:line anchors in the docstrings:
   * embedded-IP extraction -> firewall handoff set (generic bare-IP at
     ``inc:7962-7973`` and the csv:pon column-0 IP at ``inc:7824-7833``), with IP
     lines stripped from what the domain build receives;
-  * domain validation + lower-casing (``inc:7995-8016``);
+  * domain validation + lower-casing (``inc:1138-1150``);
   * data/zone classification via the public-suffix TLD master (``tld_analysis`` /
     ``tld_search``, ``inc:2805-2877``), incl. TLD blacklist (whole-TLD zone,
     ``inc:2740``) and TLD exclusion (force exact data, ``inc:2855``);
@@ -208,15 +208,16 @@ class ReferencePipeline:
 
     @staticmethod
     def _validate_domain(host: str) -> str | None:
-        """Lower-case + PFB_FILTER_DOMAIN shape gate (inc:7995-8016)."""
+        """Lower-case + PFB_FILTER_DOMAIN shape gate (inc:1138-1150)."""
         host = host.strip().strip(".").lower()
         if "." not in host:
             return None
-        # Representative domain-shape gate (labels of [a-z0-9-], not all-numeric).
+        # Representative domain-shape gate (labels of [a-z0-9_-], underscore per
+        # #723 — parity with PFB_FILTER_DOMAIN, pfblockerng.inc:1138-1150).
         for label in host.split("."):
             if not label or label[0] == "-" or label[-1] == "-":
                 return None
-            if any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in label):
+            if any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-_" for c in label):
                 return None
         return host
 

@@ -71,3 +71,5 @@ example.org#?#div:has(> .ad)
 ||frame.example^$subdocument
 ||csp.example^$csp=script-src
 ||domspecific.example^$domain=foo.com
+! underscore label (#723): DNS-legal, accepted by production and the oracle alike
+||_dmarc.underscore-corpus.com^

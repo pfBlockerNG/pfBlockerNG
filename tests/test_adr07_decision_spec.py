@@ -170,7 +170,9 @@ def _is_ipv4(token: str) -> bool:
     return True
 
 
-_DOMAIN_RE = re.compile(r"^[a-z0-9-]+(?:\.[a-z0-9-]+)+$")
+# Underscore allowed (#723): parity with production _DNSBL_LABEL_CHARS and PHP's
+# PFB_FILTER_DOMAIN — DNS labels carry no protocol charset (RFC 2181 s11).
+_DOMAIN_RE = re.compile(r"^[a-z0-9_-]+(?:\.[a-z0-9_-]+)+$")
 
 
 def _valid_domain(host: str) -> str | None:
@@ -187,7 +189,7 @@ def _valid_domain(host: str) -> str | None:
 # Regex reduction grammar (mirrors benchmarks/spike_adr07_regex.reduce_pattern).
 # A reducible /re/ decides IDENTICALLY to a domain/wildcard rule (ADR.md SS2).
 # --------------------------------------------------------------------------- #
-_DOMAIN_LITERAL = re.compile(r"^[a-z0-9-]+(?:\\\.[a-z0-9-]+)+$")
+_DOMAIN_LITERAL = re.compile(r"^[a-z0-9_-]+(?:\\\.[a-z0-9_-]+)+$")  # underscore per #723
 _WILDCARD_PREFIXES = (r"^(.+\.)?", r"(^|\.)", r"^(?:.+\.)?")
 _EXACT_PREFIXES = (r"^",)
 
