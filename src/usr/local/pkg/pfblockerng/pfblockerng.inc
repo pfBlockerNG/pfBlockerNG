@@ -877,17 +877,23 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 		}
 	}
 
-	// Check for control characters
+	// Check for control characters. The /u modifier is required: without it, \p{C}
+	// classifies each raw BYTE as a Latin-1 codepoint, so a valid multibyte UTF-8
+	// character (e.g. "€", "日") whose continuation byte falls in 0x80-0x9F is
+	// falsely rejected while other non-ASCII bytes pass through unexamined -- and a
+	// genuinely invalid-UTF-8 subject is silently accepted. With /u, preg_match()
+	// returns FALSE (not 0) on invalid UTF-8, so the check must reject on `!== 0`
+	// to fail closed (this is a PFBL-01 input-sanitisation gate) rather than open.
 	if (is_array($input)) {
 		foreach ($input as $vline) {
-			if (preg_match("/[\p{C}]+/", $vline)) {
-				pfb_logger("{$header} Control characters found [ " . htmlspecialchars($vline) . " ]", 6); 
+			if (preg_match("/[\p{C}]+/u", $vline) !== 0) {
+				pfb_logger("{$header} Control characters found [ " . htmlspecialchars($vline) . " ]", 6);
 				return $return_type;
 			}
 		}
 	}
 	else {
-		if (preg_match("/[\p{C}]+/", $input)) {
+		if (preg_match("/[\p{C}]+/u", $input) !== 0) {
 			pfb_logger("{$header} Control characters found [ " . htmlspecialchars($input) . " ]", 6);
 			return $return_type;
 		}
