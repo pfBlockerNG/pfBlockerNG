@@ -219,11 +219,20 @@ class TestNormalise:
     def test_rejects_edge_hyphen_and_bad_chars(self) -> None:
         assert pfb_unbound.normalise("-bad.com") is None
         assert pfb_unbound.normalise("bad-.com") is None
-        assert pfb_unbound.normalise("under_score.com") is None
         assert pfb_unbound.normalise("emp..ty") is None
+        assert pfb_unbound.normalise("sp ace.com") is None
 
     def test_accepts_valid_domain(self) -> None:
         assert pfb_unbound.normalise("deep.host.cleandata.com") == "deep.host.cleandata.com"
+
+    def test_accepts_underscore_labels(self) -> None:
+        # Underscore is DNS-legal (RFC 2181 s11) and standardized practice (RFC 8552:
+        # _dmarc, _domainkey, SRV _sip._tcp); PHP's PFB_FILTER_DOMAIN accepts it, so the
+        # Python build gate must too or feed entries silently vanish between the two
+        # halves of the pipeline (#723).
+        assert pfb_unbound.normalise("under_score.com") == "under_score.com"
+        assert pfb_unbound.normalise("_dmarc.example.com") == "_dmarc.example.com"
+        assert pfb_unbound.normalise("trailing_.example.com") == "trailing_.example.com"
 
 
 # --------------------------------------------------------------------------- #
