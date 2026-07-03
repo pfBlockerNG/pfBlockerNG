@@ -349,51 +349,91 @@ _CTR_OPEN = "<<<UPCTR>>>"
 _CTR_CLOSE = "<<<UPEND>>>"
 
 
-def _read_upstream_counter(vm: SmokeVM) -> int:
+def _parse_counter_output(out: str) -> tuple[int, str]:
+    """Parse ``_read_upstream_counter``'s delimited pfSsh.php output.
+
+    Issue #767: the on-box read must distinguish a genuinely ABSENT ``Upstream``
+    row from a READ ERROR (e.g. a transient ``SQLITE_BUSY`` while the chrooted
+    Python module holds the DB open in WAL mode) — collapsing both to the same
+    sentinel misdirects a failure straight at the Python DB-init seed.
+
+    Returns ``(value, detail)``:
+
+    * ``value == -1`` — the row is genuinely absent (``querySingle`` returned
+      ``NULL``); ``detail`` is empty.
+    * ``value == -2`` — the read ERRORED (a thrown exception, ``querySingle``
+      returning ``FALSE``, a missing/unparsable payload, or a non-integer
+      value); ``detail`` explains why, non-empty.
+    * ``value >= 0`` — the counter itself; ``detail`` is empty.
+    """
+    start = out.find(_CTR_OPEN)
+    end = out.find(_CTR_CLOSE)
+    if start == -1 or end == -1:
+        return -2, f"no delimited counter in pfSsh.php output: {out[-500:]!r}"
+    payload = out[start + len(_CTR_OPEN) : end]
+    if "|" not in payload:
+        return -2, f"unparsable counter payload (no '|' separator): {payload!r}"
+    value_str, _, message = payload.partition("|")
+    try:
+        value = int(value_str)
+    except ValueError:
+        return -2, f"non-integer counter value {value_str!r} in payload {payload!r}"
+    return value, message
+
+
+def _read_upstream_counter(vm: SmokeVM) -> tuple[int, str]:
     """Read the ``counter`` of the ``Upstream`` row from the on-box dnsbl SQLite DB.
 
     Uses pfSsh.php (PHP + the SQLite3 class the package itself runs on), NOT a python
     one-liner: the appliance ships ``python3.11`` with no ``python3`` symlink, so a
     ``python3 -c`` read is not portable. Reads the same ``/var/unbound/pfb_py_dnsbl.sqlite``
     the chrooted Python module writes. The value is delimited so pfSsh.php's startup
-    banner does not pollute it. Returns the integer counter, or -1 when the row is
-    absent or the DB/table cannot be read.
+    banner does not pollute it.
+
+    A transient ``SQLITE_BUSY`` (the chrooted Python module writes the same DB in
+    WAL mode with a 100 s busy_timeout — see ``pfb_unbound.py``) is absorbed by
+    SQLite's own bounded ``busyTimeout``, not a caller-side sleep loop; a lock held
+    past that timeout still surfaces, loudly, as a read error.
+
+    Returns ``(-1, "")`` when the row is genuinely absent, ``(-2, detail)`` when
+    the read errored, else ``(counter, "")``. See ``_parse_counter_output``.
     """
     snippet = (
-        "$__c = -1;\n"
+        "$__c = -1; $__m = '';\n"
         "try {\n"
         f"    $__db = new SQLite3('{_DNSBL_DB}');\n"
+        "    $__db->enableExceptions(TRUE);\n"
+        "    $__db->busyTimeout(15000);\n"
         "    $__r = $__db->querySingle(\"SELECT counter FROM dnsbl WHERE groupname = 'Upstream'\");\n"
-        "    $__c = ($__r === null || $__r === FALSE) ? -1 : (int) $__r;\n"
+        "    if ($__r === NULL) { $__c = -1; }\n"
+        "    elseif ($__r === FALSE) { $__c = -2; $__m = 'querySingle returned FALSE'; }\n"
+        "    else { $__c = (int) $__r; }\n"
         "    $__db->close();\n"
-        "} catch (Throwable $__e) { $__c = -1; }\n"
-        f"echo '{_CTR_OPEN}' . $__c . '{_CTR_CLOSE}';\n"
+        "} catch (Throwable $__e) { $__c = -2; $__m = $__e->getMessage(); }\n"
+        f"echo '{_CTR_OPEN}' . $__c . '|' . $__m . '{_CTR_CLOSE}';\n"
     )
     out = h.php_eval(vm, snippet).stdout or ""
-    start = out.find(_CTR_OPEN)
-    end = out.find(_CTR_CLOSE)
-    if start == -1 or end == -1:
-        return -1
-    try:
-        return int(out[start + len(_CTR_OPEN) : end])
-    except ValueError:
-        return -1
+    return _parse_counter_output(out)
 
 
-def _wait_for_counter_above(vm: SmokeVM, baseline: int, *, timeout_s: float = 30.0, poll_s: float = 2.0) -> int:
+def _wait_for_counter_above(
+    vm: SmokeVM, baseline: int, *, timeout_s: float = 30.0, poll_s: float = 2.0
+) -> tuple[int, str]:
     """Poll the on-box Upstream dnsbl counter until it exceeds ``baseline`` or the deadline expires.
 
     The counter is flushed by the async db_worker thread, so a freshly-logged block
     does not appear instantly.  Bounded polling matches the log-line polling pattern
-    used by ``_wait_for_upstream_block_lines``.
+    used by ``_wait_for_upstream_block_lines``. A transient read error (-2, e.g. a
+    lock race) is polled through like any other non-matching value — the deadline
+    already bounds it.
 
-    Returns the final observed counter value (may equal ``baseline`` on timeout).
+    Returns the final observed ``(value, detail)`` (may equal ``baseline`` on timeout).
     """
     deadline = time.monotonic() + timeout_s
-    current = baseline
+    current: tuple[int, str] = (baseline, "")
     while time.monotonic() < deadline:
         current = _read_upstream_counter(vm)
-        if current > baseline:
+        if current[0] > baseline:
             return current
         time.sleep(poll_s)
     return current
@@ -423,8 +463,14 @@ class TestUpstreamCounterIncrement:
         stub_dns.register_nxdomain(name)  # RA=0, AA=0 -> NXRA block
 
         # Before: record the baseline counter (row may already have a count from
-        # earlier tests in this session).
-        baseline = _read_upstream_counter(vm)
+        # earlier tests in this session). Issue #767: distinguish a READ ERROR
+        # (e.g. a transient SQLITE_BUSY lock race with the Python writer) from a
+        # genuinely ABSENT row — conflating the two misdirects the failure at the
+        # DB-init seed for what is most likely a transient lock/read error.
+        baseline, baseline_detail = _read_upstream_counter(vm)
+        assert baseline != -2, (
+            f"Upstream counter read ERRORED (NOT an absent row — do not blame the seed): {baseline_detail}"
+        )
         assert baseline >= 0, (
             "Upstream row not found in dnsbl table before probe — "
             "the Python DB-init seed (_db_create) did not create it. "
@@ -445,9 +491,9 @@ class TestUpstreamCounterIncrement:
         )
 
         # Then: wait for the async flush and assert strict increase.
-        final = _wait_for_counter_above(vm, baseline)
+        final, final_detail = _wait_for_counter_above(vm, baseline)
         assert final > baseline, (
             f"Upstream counter did not increase after NXRA block: "
-            f"baseline={baseline}, final={final}. "
+            f"baseline={baseline}, final={final} (detail={final_detail!r}). "
             f"Detection fired (log line present), so the enqueue or flush may be broken."
         )
