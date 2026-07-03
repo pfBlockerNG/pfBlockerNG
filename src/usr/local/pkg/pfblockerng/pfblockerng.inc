@@ -1436,7 +1436,7 @@ function pfb_resolve_list_script($name, $dirs = null) {
 		}
 		$real = realpath("{$dir}/{$name}");
 		if ($real !== FALSE && dirname($real) === $real_dir && is_file($real)) {
-			return "{$dir}/{$name}";	// ponytail: in-dir path; exec follows the (contained) link
+			return "{$dir}/{$name}";	// in-dir path; exec follows the (contained) link
 		}
 	}
 	return FALSE;

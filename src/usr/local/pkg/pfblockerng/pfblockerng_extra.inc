@@ -2397,7 +2397,7 @@ function pfb_tick_due_jobs(
 	int    $cron_interval,
 	int    $bl_interval
 ): array {
-	$jitter_max = 23 * 3600;	// ponytail: 82800 s mirrors the old rand(0,23)*3600 spread
+	$jitter_max = 23 * 3600;	// 82800 s mirrors the old rand(0,23)*3600 spread
 
 	return [
 		'cron' => pfb_due_ledger_is_due('cron', $cron_interval, $now, $seed, 0,           $dbdir),
