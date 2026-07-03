@@ -697,7 +697,7 @@ def test_important_allow_beats_feed_block() -> None:
     assert d.allow_prio == 4 and d.block_prio == 1
 
 
-def test_important_allow_loses_to_important_block() -> None:
+def test_important_allow_beats_important_block() -> None:
     rs = rules_from(["||z.example^$important", "@@||z.example^$important"])
     d = decide(rs, "z.example")
     # block(3) vs allow(4): allow wins (4>3) -- the higher band always wins.
