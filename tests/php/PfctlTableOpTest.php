@@ -125,21 +125,29 @@ final class PfctlTableOpTest extends TestCase
 	 *
 	 * Given: stderr is an empty string (pfctl exited non-zero with no output).
 	 * When:  pfb_pfctl_error_message() is called.
-	 * Then:  the returned message still contains table, op, rc, and is a
-	 *        non-empty string (does not degenerate to a bare colon).
+	 * Then:  the message ends at the rc — no trailing ": " artifact. (The header
+	 *        always claimed this; production emitted the dangling colon-space and
+	 *        the old assertions never checked it — #723.)
 	 */
 	public function testEmptyStderrProducesCleanMessage(): void
 	{
 		$msg = pfb_pfctl_error_message('pfB_Permit_v6', 'kill', 1, '');
 
-		$this->assertNotEmpty($msg,
-			'expected: non-empty message even with empty stderr');
-		$this->assertStringContainsString('pfB_Permit_v6', $msg,
-			"expected: table name present;\nactual: {$msg}");
-		$this->assertStringContainsString('kill', $msg,
-			"expected: op present;\nactual: {$msg}");
-		$this->assertStringContainsString('1', $msg,
-			"expected: rc present;\nactual: {$msg}");
+		$this->assertSame('[pfctl] op=kill table=pfB_Permit_v6 failed (rc=1)', $msg,
+			"expected: message ends at the rc with no trailing colon-space;\nactual: {$msg}");
+	}
+
+	/**
+	 * Scenario D counterpart — non-empty stderr keeps the ": <stderr>" suffix.
+	 */
+	public function testNonEmptyStderrKeepsSuffix(): void
+	{
+		$msg = pfb_pfctl_error_message('pfB_Permit_v6', 'kill', 1, 'pfctl: Table does not exist.');
+
+		$this->assertSame(
+			'[pfctl] op=kill table=pfB_Permit_v6 failed (rc=1): pfctl: Table does not exist.',
+			$msg,
+			"expected: stderr suffix preserved;\nactual: {$msg}");
 	}
 
 	// -----------------------------------------------------------------------
