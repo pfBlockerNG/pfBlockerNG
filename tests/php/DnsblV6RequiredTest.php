@@ -59,14 +59,43 @@ final class DnsblV6RequiredTest extends TestCase
 		$this->assertNotSame('IPv6 VIP required: the DNS Resolver is listening on IPv6', $err2);
 	}
 
-	public function testConfiguredV6VipStillValidatedNormally(): void
+	// --- pfb_validate_vips: a SUPPLIED v6 VIP is genuinely validated (#723) ---
+	//
+	// The previous form of this test passed interface 'lo0', so the doubled
+	// get_configured_vip_interface ('opt-double') failed the interface check before the
+	// per-VIP branches ever ran, and its assertions (a tautological bool check plus an
+	// assertNotSame against a message string that no longer exists) could not fail on a
+	// regression. These three pin each reachable branch with its exact outcome.
+
+	public function testSuppliedV6VipOnWrongInterfaceFailsInterfaceCheck(): void
 	{
-		// A v6 VIP that IS supplied is still validated (existence / interface / overlap):
-		// the validator continues into the per-VIP checks (which exercise the pfSense
-		// doubles). The assertion of interest: the failure, if any, is never a v6-required
-		// message — v6 is optional, not mandatory.
+		// Interface mismatch ('lo0' vs the double's 'opt-double') fails FIRST, with the
+		// v6 interface message -- the branch the old test hit by accident, now intended.
 		[$ok, $err] = pfb_validate_vips('lo0', '', '_vip_test_v6');
-		$this->assertNotSame('IPv6 VIP required: the DNS Resolver is listening on IPv6', $err);
-		$this->assertTrue($ok === false || $ok === true);
+		$this->assertFalse($ok);
+		$this->assertSame('IPv6 VIP not found on interface lo0', $err);
+	}
+
+	public function testSuppliedV6VipUnknownToVipListFailsExistence(): void
+	{
+		// Interface matches ('opt-double'), so the validator reaches the per-VIP checks;
+		// with no VIP list seeded the id is unknown -> the existence branch fires.
+		[$ok, $err] = pfb_validate_vips('opt-double', '', '_vip_test_v6');
+		$this->assertFalse($ok);
+		$this->assertSame('invalid IPv6 VIP', $err);
+	}
+
+	public function testSuppliedKnownV6VipPassesValidation(): void
+	{
+		// Full happy path: the seeded VIP list makes the id known (existence passes) and
+		// the default where_is_ipaddr_configured double reports no overlap -> [TRUE, null].
+		$GLOBALS['pfb_test_vip_list'] = ['_vip_test_v6' => '2001:db8::10'];
+		try {
+			[$ok, $err] = pfb_validate_vips('opt-double', '', '_vip_test_v6');
+			$this->assertTrue($ok);
+			$this->assertNull($err);
+		} finally {
+			unset($GLOBALS['pfb_test_vip_list']);
+		}
 	}
 }
