@@ -10,7 +10,7 @@ it introduces the seam but keeps MaxMind the only implementation, output byte-id
 commit, push directly.
 
 WHY THIS PHASE EXISTS
-A single normalized seam replaces the scattered vendor calls. Routing the four consumers
+A single normalized seam replaces the scattered vendor calls. Routing the five consumers
 through it with MaxMind behind it (no IPinfo yet, no new setting yet) de-risks the later
 IPinfo work: the Phase-1 oracle proves the seam changed nothing.
 
@@ -27,7 +27,7 @@ ACTION PLAN (ordered)
 2. DEFINE GeoipProvider + AsnProvider interfaces (lookup -> normalized record; country/
    continent map; capabilities).
 3. IMPLEMENT the MaxMind provider behind the interface, delegating to the Phase-1 functions;
-   route all four consumers through the seam. Output MUST stay byte-identical (oracle green).
+   route all five consumers through the seam. Output MUST stay byte-identical (oracle green).
 4. Tests: interface unit tests (MaxMind impl returns the expected normalized record for
    fixture inputs); the Phase-1 oracle stays green unchanged.
 
@@ -43,7 +43,7 @@ VERIFICATION (must all pass before the phase is done)
 - diff-read: consumers now call the seam; output identical.
 
 EXPECTED RESULT
-A normalized provider seam with a MaxMind implementation; all four consumers routed through
+A normalized provider seam with a MaxMind implementation; all five consumers routed through
 it; behaviour identical to today.
 
 COMMIT (single)

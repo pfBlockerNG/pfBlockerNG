@@ -10,7 +10,7 @@ devel if absent). Phase 1 is BEHAVIOUR-PRESERVING: it adds tests + extracts func
 changes NO observable output. One commit, push directly to the branch.
 
 WHY THIS PHASE EXISTS
-GeoIP/ASN data is reached by four independent consumers (GeoIP country build, firewall-log
+GeoIP/ASN data is reached by FIVE independent consumers (GeoIP country build, firewall-log
 enrichment, DNSBL-log enrichment, Reputation) plus the DB download/convert, each calling
 MaxMind/IPinfo directly. Before introducing a provider seam, freeze today's output as an
 oracle so later phases cannot silently regress MaxMind users.
@@ -19,14 +19,14 @@ REQUIRED READING
 - .ADRs/ADR_32_IPinfo_GeoIP/ADR.md
 - src/usr/local/www/pfblockerng/pfblockerng.php (GeoIP/Reputation/ASN build + per-continent
   option lists; geoname usage).
-- src/usr/local/pkg/pfblockerng/pfblockerng.inc — mmdblookup enrichment (~8839), ASN
-  (~9156), maxmind_key (~1348/12462/12495/12780), asn_token (~1416/12791).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — mmdblookup enrichment (~11129), ASN
+  (~9156), maxmind_key (~2042/12462/12495/12780), asn_token (~2038/12791).
 - src/usr/local/pkg/pfblockerng/pfblockerng.sh — GeoIP/ASN DB download + convert.
 - tests/php/ — bootstrap.php, pfsense_doubles.php; an existing manifest/UI decider test for
   style. CLAUDE.md — PHP standards, Test coverage (branch + before/after + BDD).
 
 ACTION PLAN (ordered — tests FIRST when behaviour-preserving)
-1. ENUMERATE every MaxMind/IPinfo call site (the four consumers + the DB build) with
+1. ENUMERATE every MaxMind/IPinfo call site (the five consumers + the DB build) with
    file:line; record the current output shape of each (option-list rows, enrichment strings,
    ASN fields, per-continent membership).
 2. EXTRACT the read/lookup pieces into named functions WITHOUT changing output (e.g. a

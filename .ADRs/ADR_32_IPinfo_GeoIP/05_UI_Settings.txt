@@ -16,7 +16,7 @@ REQUIRED READING
 - FIRST, read .ADRs/ADR_32_IPinfo_GeoIP/RESULTS/04_Results.txt AND 02_Results.txt. If missing,
   STOP and report.
 - .ADRs/ADR_32_IPinfo_GeoIP/ADR.md (SS2 decision, SS5 constraints).
-- src/usr/local/www/pfblockerng/pfblockerng.php — the IP-tab settings (maxmind_key, asn_token
+- src/usr/local/www/pfblockerng/pfblockerng_ip.php — the IP-tab settings FORM (corrected: pfblockerng.php is the CLI/cron worker) (maxmind_key, maxmind_account, asn_token
   fields) + Reputation page.
 - pfblockerng_extra.inc — PfbConfig + pfb_cfg_registry() (ADR-29); the RequireConfigGateway
   sniff registeredPaths.

@@ -24,7 +24,7 @@ REQUIRED READING
   Test coverage; PFBL-01 (validate before exec/path build).
 
 ACTION PLAN (ordered)
-1. POSIX-sh download of IPinfo's CIDR v4/v6 GeoIP DB (token-authenticated; honour the
+1. Fetch via the EXISTING extras pipeline per ADR.md §2.0 fork 2 ($pfb[extras] -> pfb_download() — ADR-42/44/45 gates + ADR-43 dcc scheduling), NOT a fresh downloader (token-authenticated; honour the
    URL-encoding gate). Validate inputs before any exec/path build (PFBL-01).
 2. Parse the CIDR DB into the normalized record; map IPinfo fields to the record; set
    capability flags (supports_locale=false; deprecated MaxMind flags absent).

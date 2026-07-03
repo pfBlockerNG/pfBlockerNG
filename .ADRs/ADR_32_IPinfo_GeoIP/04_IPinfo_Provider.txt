@@ -10,7 +10,7 @@ GeoipProvider/AsnProvider behind the Phase-2 seam. One commit, push directly.
 
 WHY THIS PHASE EXISTS
 With ingestion (Phase 3) producing the normalized record, the IPinfo provider can serve the
-four consumers (GeoIP country build, FW-log enrichment, DNSBL-log enrichment, Reputation) and
+five consumers (per ADR.md §1 — incl. the pfb_unbound.py + pfblockerng.sh readers) and
 ASN through the same seam MaxMind uses.
 
 REQUIRED READING

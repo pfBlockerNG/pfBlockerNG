@@ -36,7 +36,7 @@ ACTION PLAN (ordered)
    README if workflow changed; add stubs for any new pfSense fns; confirm PFBL-01
    scopeFunctions current.
 4. Re-confirm DoD + reject criteria: if the IPinfo CIDR DB blows the small-box RAM/time budget
-   or cannot serve the four consumers without un-normalizable regressions, record numbers and
+   or cannot serve the five consumers without un-normalizable regressions, record numbers and
    recommend reduce (ASN-only / enrichment-only) or reject the GeoIP half.
 
 CONSTRAINTS
