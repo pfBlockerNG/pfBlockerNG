@@ -41,18 +41,23 @@ module without it installed does not hard-error.
 
 from __future__ import annotations
 
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 
+from .. import helpers
 from .conftest import mask_page_identity
-from .test_render_smoke import _seed_vm_file, software_panel_forced
+from .test_render_smoke import _PFB_RUNLOG, _seed_vm_file, software_panel_forced
 
 sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed (Tier-B browser dep)")
 expect = sync_api.expect
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from playwright.sync_api import Page
 
     from ..conftest import SmokeVM
@@ -432,3 +437,146 @@ def test_onload_survives_hash_with_no_matching_element(
     # Same marker Tier A (test_render_smoke.py PAGE_TABLE) asserts for this page --
     # proves a real authenticated render, not a blank/errored page.
     assert "IP Configuration" in page.content(), "IP page did not render its 'IP Configuration' section after onload"
+
+
+# The real dispatch's pidfile (pfblockerng_update.php pfb_runnow()/pfb_runnow_forcecheck()):
+# `isvalidpid()` on this path is exactly what pfb_log_tail_payload() polls to decide `done`.
+_PFB_RUNNOW_PIDFILE = "/var/run/pfb_runnow.pid"
+
+
+@contextmanager
+def _dummy_pfb_task_running(vm: SmokeVM) -> Iterator[None]:
+    """Simulate an in-flight pfBlockerNG run so the live-log poller keeps polling.
+
+    Starts a ``daemon -p <pidfile> sleep 300`` survivor -- the same daemon(8)+pidfile contract
+    the real dispatch uses -- so ``isvalidpid('/var/run/pfb_runnow.pid')`` reports TRUE and
+    ``pfb_log_tail_payload()``'s ``done`` stays FALSE for as long as this context is open. The
+    run log is truncated (not deleted -- the poller reads it, and the file always exists after
+    install) both before starting and in ``finally``, so a prior aborted run's leftovers can
+    never leak into this test's overflow/marker assertions (self-encapsulated -- CLAUDE.md).
+    """
+
+    def _teardown() -> None:
+        vm.ssh("pkill", "-F", _PFB_RUNNOW_PIDFILE)  # tolerated: no dummy running yet/anymore
+        vm.ssh("/bin/rm", "-f", _PFB_RUNNOW_PIDFILE)
+        vm.ssh(f": > {_PFB_RUNLOG}")
+
+    _teardown()  # clean slate first, in case a previous run of this test aborted mid-scenario
+    # -f detaches the child's std fds to /dev/null: without it the daemonized sleep inherits the
+    # ssh capture pipe and subprocess.run blocks on EOF until its 60s timeout (the CLAUDE.md
+    # "external process waits" gotcha -- the pipe outlives the ssh command).
+    start = vm.ssh("/usr/sbin/daemon", "-f", "-p", _PFB_RUNNOW_PIDFILE, "/bin/sleep", "300")
+    assert start.returncode == 0, f"failed to start the dummy pfb-task daemon: {start.stderr!r}"
+    try:
+        yield
+    finally:
+        _teardown()
+
+
+def _scroll_metrics(page: Page) -> dict[str, float]:
+    """Read scrollTop/scrollHeight/clientHeight off the ``pfb_output`` textarea."""
+    return page.eval_on_selector(
+        'textarea[name="pfb_output"]',
+        "el => ({scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight})",
+    )
+
+
+def _is_pinned(metrics: dict[str, float]) -> bool:
+    """Mirror the poller's own bottom test (pfblockerng_update.php:590): within 16px of bottom."""
+    return (metrics["scrollHeight"] - metrics["scrollTop"] - metrics["clientHeight"]) <= 16
+
+
+def _wait_for_marker(page: Page, marker: str) -> None:
+    """Block until *marker* has arrived in the ``pfb_output`` textarea value.
+
+    Bounded ``wait_for_function`` (raises loudly on timeout) -- never a fixed sleep (#456). The
+    poller's cadence is 1s, so 15s comfortably outlasts a few ticks without masking a real hang.
+    """
+    page.wait_for_function(
+        "needle => document.forms[0].pfb_output.value.includes(needle)",
+        arg=marker,
+        timeout=15_000,
+    )
+
+
+@pytest.mark.ui_browser
+def test_update_livelog_sticky_follow_scroll(
+    smoke_vm: SmokeVM,
+    browser_page: Page,
+    webui: WebUI,
+) -> None:
+    """The live-log viewer sticky-follows the tail, but only while parked at the bottom (#678).
+
+    The auto-follow logic moved out of the unit-tested ``pfb_term_write_js()`` into the inline
+    poller JS in PR #674 (pfblockerng_update.php:590-592); the old unit tests were deleted with
+    it, leaving the contract unguarded. This pins it end-to-end against the real poll loop.
+
+    Scenario:
+      Given a dummy pfBlockerNG task is "running" (daemon(8)+pidfile, same contract as the real
+            dispatch) and its run log is seeded past the textarea's capacity,
+      When the Update page's View button wires the live-log poller and the seed arrives,
+      Then the view starts pinned at the bottom (overflow precondition asserted first, else the
+           scroll assertions below would be vacuous);
+
+      When further lines arrive while still pinned at the bottom (batch A),
+      Then it stays pinned -- sticky auto-follow;
+
+      When the user scrolls up to read (to the top) and more lines arrive (batch B),
+      Then the view does NOT get yanked back down -- follow is paused while reading;
+
+      When the user scrolls back down to the bottom and more lines arrive (batch C),
+      Then auto-follow resumes -- scrolling to the bottom re-arms the sticky behaviour.
+    """
+    page = browser_page
+    run_id = uuid.uuid4().hex[:8]
+    marker_a = f"pfb-678-{run_id}-a"
+    marker_b = f"pfb-678-{run_id}-b"
+    marker_c = f"pfb-678-{run_id}-c"
+    seed_last = f"pfb-678-{run_id}-seed-0150"
+    seed = "".join(f"pfb-678-{run_id}-seed-{i:04d} {'x' * 80}\n" for i in range(1, 151))
+
+    # Guard: don't collide with a real pfBlockerNG task using the same pidfile/run log.
+    helpers.wait_no_active_pfb_task(smoke_vm)
+
+    with _dummy_pfb_task_running(smoke_vm):
+        _seed_vm_file(smoke_vm, _PFB_RUNLOG, seed)
+
+        _open(page, webui, UPDATE_PAGE)
+        page.locator('button[name="log_view"], #log_view').first.click()
+        page.wait_for_load_state("load")  # View submits/reloads the page with the poller wired
+        _wait_for_marker(page, seed_last)
+
+        # Given: the seed overflows the box AND starts pinned at the bottom.
+        metrics = _scroll_metrics(page)
+        assert metrics["scrollHeight"] > metrics["clientHeight"], (
+            f"seed must overflow the textarea for the scroll assertions to mean anything, got {metrics}"
+        )
+        assert _is_pinned(metrics), f"expected pinned at the bottom right after the seed loaded, got {metrics}"
+
+        # Phase 1 -- pinned follow: new lines arrive while at the bottom -> stays pinned.
+        _seed_vm_file(smoke_vm, _PFB_RUNLOG, f"{marker_a}\n")
+        _wait_for_marker(page, marker_a)
+        metrics = _scroll_metrics(page)
+        assert _is_pinned(metrics), f"expected still pinned at the bottom after batch A, got {metrics}"
+
+        # Phase 2 -- follow paused when scrolled up: new lines must NOT yank the view down.
+        page.eval_on_selector('textarea[name="pfb_output"]', "el => { el.scrollTop = 0; }")
+        metrics = _scroll_metrics(page)
+        assert metrics["scrollTop"] == 0, f"expected scrollTop 0 right after scrolling to the top, got {metrics}"
+
+        _seed_vm_file(smoke_vm, _PFB_RUNLOG, f"{marker_b}\n")
+        _wait_for_marker(page, marker_b)
+        metrics = _scroll_metrics(page)
+        assert metrics["scrollTop"] == 0, (
+            f"batch B must NOT yank the scrolled-up-to-read view back to the bottom, got {metrics}"
+        )
+
+        # Phase 3 -- follow resumes at the bottom: scrolling back down re-arms auto-follow.
+        page.eval_on_selector('textarea[name="pfb_output"]', "el => { el.scrollTop = el.scrollHeight; }")
+        metrics = _scroll_metrics(page)
+        assert _is_pinned(metrics), f"expected pinned immediately after scrolling back to the bottom, got {metrics}"
+
+        _seed_vm_file(smoke_vm, _PFB_RUNLOG, f"{marker_c}\n")
+        _wait_for_marker(page, marker_c)
+        metrics = _scroll_metrics(page)
+        assert _is_pinned(metrics), f"expected still pinned at the bottom after batch C, got {metrics}"
