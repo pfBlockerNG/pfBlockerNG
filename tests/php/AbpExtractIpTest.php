@@ -17,6 +17,11 @@ final class AbpExtractIpTest extends TestCase
 	public static function provider(): array
 	{
 		return [
+			// Deliberate DNS/pf coarsening (#723): ABP '||' WITHOUT a trailing '^' is
+			// prefix-matching in ABP semantics (also matches 192.0.2.40), and
+			// $third-party is a page-context scope — neither is expressible in a pf
+			// IP table, so the extractor canonises both to the exact IP and drops the
+			// option. These rows PIN that coarsening as intended behaviour.
 			'abp anchor v4'            => ['||192.0.2.4^', '192.0.2.4'],
 			'abp anchor v4 + options'  => ['||192.0.2.4^$third-party', '192.0.2.4'],
 			'abp anchor v4 no caret'   => ['||192.0.2.4', '192.0.2.4'],
