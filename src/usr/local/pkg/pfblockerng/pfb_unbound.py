@@ -5957,11 +5957,18 @@ def safesearch_cname_redirect(id: int, qstate: module_qstate, q_type: Any, isSaf
       1. First pass: plant the synthetic ``orig -> CNAME -> target`` into
          Unbound's message cache as a REFERRAL and restart the iterator
          (MODULE_RESTART_NEXT) so the ITERATOR chases the target's A/AAAA itself.
+         If the plant fails to store (real Unbound's silent falsy failure --
+         issue #749), restarting would chase a referral that was never actually
+         cached, so this falls back to the baked target IP (#2) instead -- never
+         MODULE_RESTART_NEXT on a failed store.
       2. Post-restart pass (the answer now carries our CNAME): if the chase
          produced an address, force ``rep.security`` so the unsigned synthesized
          hop is not marked bogus (the historical DNSSEC blocker, issue #149),
-         re-cache as a final answer and finish; if it produced no address, fall
-         back to the baked target IP (#2).
+         re-cache as a final answer and finish -- a failure to re-cache here
+         (issue #749) only means the chased answer isn't cached, not that the
+         already-built, already-validated reply is invalid, so it still
+         finishes; if the chase produced no address, fall back to the baked
+         target IP (#2).
 
     Runs only for A/AAAA queries. Returns True if it took over the query (caller
     must ``return True``), False to let normal processing continue.
@@ -5979,7 +5986,12 @@ def safesearch_cname_redirect(id: int, qstate: module_qstate, q_type: Any, isSaf
             qstate.return_msg.rep.security = sec_status_insecure
             invalidateQueryInCache(qstate, qstate.qinfo)
             qstate.no_cache_store = 0
-            storeQueryInCache(qstate, qstate.qinfo, qstate.return_msg.rep, 0)
+            if not storeQueryInCache(qstate, qstate.qinfo, qstate.return_msg.rep, 0):
+                # A cache-store failure must not SERVFAIL an already-built, already-
+                # validated answer -- log it and finish anyway (issue #749).
+                log_info(
+                    "[pfBlockerNG]: SafeSearch: failed to re-cache chased answer for {}".format(qstate.qinfo.qname_str)
+                )
             qstate.ext_state[id] = MODULE_FINISHED
             return True
         # #1 chase yielded only a bare CNAME -> #2 baked fallback.
@@ -5993,7 +6005,15 @@ def safesearch_cname_redirect(id: int, qstate: module_qstate, q_type: Any, isSaf
         qstate.ext_state[id] = MODULE_ERROR
         return True
     invalidateQueryInCache(qstate, qstate.return_msg.qinfo)
-    storeQueryInCache(qstate, qstate.return_msg.qinfo, qstate.return_msg.rep, 1)
+    if not storeQueryInCache(qstate, qstate.return_msg.qinfo, qstate.return_msg.rep, 1):
+        # The planted referral isn't actually in cache -- restarting the iterator
+        # would chase nothing and fruitlessly loop back into this first pass
+        # (issue #749). Fall back to the baked target IP instead of restarting.
+        log_info("[pfBlockerNG]: SafeSearch: failed to store planted CNAME referral for {}".format(qname))
+        if _safesearch_baked_fallback(id, qstate, q_type, isSafeSearch):
+            return True
+        qstate.ext_state[id] = MODULE_ERROR
+        return True
     qstate.no_cache_store = 1
     qstate.ext_state[id] = MODULE_RESTART_NEXT
     return True

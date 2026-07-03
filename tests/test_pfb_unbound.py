@@ -1715,7 +1715,7 @@ class TestSafeSearchCnameRedirect:
         pfb_unbound.safeSearchDB["duckduckgo.com"] = entry
 
     @staticmethod
-    def _spy_cache(monkeypatch: Any) -> dict[str, Any]:
+    def _spy_cache(monkeypatch: Any, *, store_fails: bool = False) -> dict[str, Any]:
         calls: dict[str, Any] = {"store": [], "invalidate": 0}
 
         def store_spy(qs: Any, qi: Any, rep: Any, ref: int) -> bool:
@@ -1724,7 +1724,10 @@ class TestSafeSearchCnameRedirect:
             # #747) still guard these call sites; only then record the call.
             result = storeQueryInCache(qs, qi, rep, ref)
             calls["store"].append(ref)
-            return result
+            # store_fails simulates real Unbound's silent falsy failure (a NULL
+            # msgrep / dns_cache_store failure -- issue #749) without disturbing
+            # the fidelity checks the delegated call above still performed.
+            return False if store_fails else result
 
         monkeypatch.setattr(builtins, "storeQueryInCache", store_spy)
         monkeypatch.setattr(
@@ -1795,6 +1798,33 @@ class TestSafeSearchCnameRedirect:
         assert calls["invalidate"] == 1
         assert any("IN CNAME safe.duckduckgo.com" in a for a in DNSMessage.instances[-1].answer)
 
+    def test_first_pass_store_failure_falls_back_to_baked_ip(self, monkeypatch: Any) -> None:
+        # issue #749: When the phase-1 planted-referral store fails (real Unbound's
+        # silent falsy failure -- a NULL msgrep / dns_cache_store failure), Then the
+        # redirect must NOT restart the iterator on a referral that isn't actually in
+        # cache (a fruitless plant/restart cycle) -- it answers from the #2 baked IP
+        # instead, same as the phase-2 no-address fallback.
+        self._enable()
+        self._spy_cache(monkeypatch, store_fails=True)
+        qstate = make_qstate("duckduckgo.com.", qtype=RR_A, return_msg=None)
+        rcd = pfb_unbound.operate(0, MODULE_EVENT_MODDONE, qstate, None)
+        assert rcd is True
+        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert any("IN A 203.0.113.7" in a for a in DNSMessage.instances[-1].answer)
+
+    def test_first_pass_store_failure_without_baked_ip_errors(self, monkeypatch: Any) -> None:
+        # issue #749: the without-baked side of the pair above -- when the referral
+        # store fails AND there is no baked IP to fall back on, the query must end in
+        # MODULE_ERROR, NEVER MODULE_RESTART_NEXT (restarting on a referral that was
+        # never actually cached is the fruitless-loop failure mode being fixed).
+        self._enable(v4="", v6="")
+        self._spy_cache(monkeypatch, store_fails=True)
+        qstate = make_qstate("duckduckgo.com.", qtype=RR_A, return_msg=None)
+        rcd = pfb_unbound.operate(0, MODULE_EVENT_MODDONE, qstate, None)
+        assert rcd is True
+        assert qstate.ext_state[0] == MODULE_ERROR
+        assert qstate.ext_state[0] != MODULE_RESTART_NEXT
+
     def test_phase2_success_restamps_dnssec_and_finishes(self, monkeypatch: Any) -> None:
         # Phase 2 success (the AFTER of phase 1): the iterator chased our CNAME to an
         # address. Force rep.security to insecure (the synthesized hop is unsigned;
@@ -1814,6 +1844,29 @@ class TestSafeSearchCnameRedirect:
         assert qstate.return_msg.rep.security == sec_status_insecure
         assert calls["store"] == [0]  # is_referral=0 (final answer)
         assert calls["invalidate"] == 1
+
+    def test_phase2_recache_failure_still_finishes(self, monkeypatch: Any) -> None:
+        # issue #749: When the post-restart final-answer re-cache store fails, Then the
+        # already-built, already-validated reply must still be returned as-is -- a cache
+        # failure must not SERVFAIL a valid answer -- but a warning is logged so the
+        # failure is observable.
+        self._enable()
+        monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: self.TARGET)
+        self._spy_cache(monkeypatch, store_fails=True)
+        log_calls: list[str] = []
+        monkeypatch.setattr(builtins, "log_info", lambda msg: log_calls.append(str(msg)))
+        qstate = make_qstate(
+            "duckduckgo.com.", qtype=RR_A, return_msg=self._reply("duckduckgo.com.", cname=True, has_a=True)
+        )
+        rcd = pfb_unbound.operate(0, MODULE_EVENT_MODDONE, qstate, None)
+        assert rcd is True
+        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert qstate.return_rcode == RCODE_NOERROR
+        assert qstate.return_msg.rep.security == sec_status_insecure
+        # The failable evidence: a warning was actually emitted for the failed re-cache
+        # (FINISHED/NOERROR/security alone are already true before the fix -- this store
+        # failure is otherwise silently swallowed).
+        assert any("duckduckgo.com" in msg for msg in log_calls)
 
     def test_phase2_baked_fallback_when_chase_has_no_address_a(self, monkeypatch: Any) -> None:
         # #2 fallback (When the chase yields only a bare CNAME, no address): answer the
