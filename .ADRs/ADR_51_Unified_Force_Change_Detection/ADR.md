@@ -1,16 +1,17 @@
 # ADR-51: Unify the Force modes on sidecar-driven change detection (drop the reuse flag)
 
-- **Status:** **Proposed** (2026-06-29). Builds directly on the contained Force-mode work
-  shipped in PR #624 (Update-page `pfb_force_mode` = None/Parse/Download/Both) and on the
-  ADR-42 change-detector. Not yet implemented.
+- **Status:** **Proposed** (2026-06-29; anchors + facts refreshed 2026-07-03 against `devel` —
+  two design forks were found open, see §1.5, and they block phase-prompt authoring). Builds
+  directly on the contained Force-mode work shipped in PR #624 (Update-page `pfb_force_mode` =
+  None/Parse/Download/Both) and on the ADR-42 change-detector. Not yet implemented.
 - **Date:** 2026-06-29
 - **Branch:** `adr/51-unified-force-change-detection` (off **`devel`**; `{slug}` = sanitised
   ADR-title slug per CLAUDE.md "Branch naming"). / **Component(s):** the change-detector and the
   ingest reuse path — `src/usr/local/www/pfblockerng/pfblockerng.php`
-  (`pfb_update_check()`, the per-feed detector, ~`:401`), `src/usr/local/pkg/pfblockerng/pfblockerng.inc`
-  (the ingest re-download-vs-reuse gate in `sync_package_pfblockerng()`, ~`:13344`/`:13392`; the
-  ADR-42 sidecar helpers `pfb_hash_read`/`pfb_hash_write`, ~`:10006`/`:10045`; the force-dispatch
-  block, ~`:12177`–`:12204`), and the Update page (`pfblockerng_update.php` — the `Parse` dispatch).
+  (`pfb_update_check()`, the per-feed detector, ~`:418`), `src/usr/local/pkg/pfblockerng/pfblockerng.inc`
+  (the ingest re-download-vs-reuse gate in `sync_package_pfblockerng()`, ~`:14387`; the
+  ADR-42 sidecar helpers `pfb_hash_read`/`pfb_hash_write`, ~`:10755`/`:10815`; the force-dispatch
+  block, ~`:13190`–`:13217`), and the Update page (`pfblockerng_update.php` — the `Parse` dispatch).
 - **Target runtime:** PHP 8.3 (pfSense CE 2.8). No Python (the Python side hashes only its own
   state, ADR-42 policy — untouched here).
 - **Test suite:** `tests/php/` (PHPUnit — the detector's pure decision helpers + the sidecar
@@ -46,25 +47,36 @@ Parse rides a **separate internal flag** (`reuse=on`). The deprecated force verb
 The control is conceptually two systems bolted together. "Force" is a special-case flag for one
 of the four modes; the other two are sidecar-driven. A reader (and the deprecated-verb adapters)
 must hold both models. The goal of this ADR: make **every** Force mode "remove some sidecars, then
-run the detector (tick)", so the `force`/`reuse=on` flag disappears from the codebase entirely and
-there is **one** change-detection story.
+run the detector **immediately** (the `forcecheck`-style non-hour-gated invocation PR #624 added —
+NOT a ledger tick: a tick runs only _due_ jobs, so 'dispatch a tick' would be a no-op until the job
+comes due)", so the `force`/`reuse=on` flag disappears from the codebase entirely and there is
+**one** change-detection story.
 
 ### 1.3 Load-bearing facts (verified, not assumed)
 
-- A feed is re-ingested by `sync_package_pfblockerng()` iff (`pfblockerng.inc:13344`): `reuse=='on'`
+- A feed is re-ingested by `sync_package_pfblockerng()` iff (`pfblockerng.inc` ~`:14387`): `reuse=='on'`
   (reparse cached `.orig`, **no download**), OR a `{header}.update`/`.fail` marker exists
   (re-ingest **with** `pfb_download`), OR the parsed `.txt` is missing.
-- `{header}.update` markers are written **only** by the detector `pfb_update_check()`
-  (`pfblockerng.php:401`), and on the scheduled path that runs **only** inside the hour-gated
-  `pfblockerng_sync_cron()`. PR #624 added an on-demand, non-hour-gated invocation (`forcecheck`).
+- For **standard remote feeds**, `{header}.update` markers are written by the detector
+  `pfb_update_check()` (`pfblockerng.php` ~`:418`), on the scheduled path inside the hour-gated
+  `pfblockerng_sync_cron()`; PR #624 added an on-demand, non-hour-gated invocation (`forcecheck`).
+  **Correction (2026-07-03): "written only by the detector" is false for whole feed classes** —
+  the GeoIP/ASN/TLD-category/DNSBLIP `.update` markers are touched **inside the ingest itself**
+  (`pfblockerng.inc` — e.g. ~`:16059`, ~`:14200`, ~`:1538`), the **local-feed** branch decides via
+  `pfb_local_feed_changed()` (~`:10995` — which live-hashes the `.orig` as baseline when the
+  sidecar is missing, making hash-removal **inert** there), and the **rsync** format is always
+  "Update found". See the §1.5 fork.
 - **The detector's 304 branch returns "Update not required" before it ever reads the hash sidecar**
-  (`pfblockerng.php:551`). So removing the `.xxhash128` baseline while the `.etag`/`.lastmod`
+  (`pfblockerng.php` ~`:568`). So removing the `.xxhash128` baseline while the `.etag`/`.lastmod`
   validators are still present is **inert** for an unchanged remote feed: the server answers `304`
   and the detector bails. **This is exactly why Parse cannot be expressed as "remove the hash"
-  today** — and why Parse still needs `reuse=on`.
+  today** — and why Parse still needs `reuse=on`. Note also: `pfb_validator_write` never writes
+  empty sidecars, so a server that sends **no ETag/Last-Modified** can never produce a 304 — for
+  those feeds "Parse = remove hash" degrades to a **full re-download** (Both semantics), violating
+  this ADR's own "no re-download" contract. Part of the §1.5 fork.
 - `reuse=on` is the **only** lever that reparses cached lists **without** a (re)download. There is
   no sidecar state that means "reparse the cached `.orig`, do not re-fetch".
-- The hash sidecar is (re)written at **ingest** time inside `pfb_download` (`pfblockerng.inc:8526`),
+- The hash sidecar is (re)written at **ingest** time inside `pfb_download` (`pfblockerng.inc` ~`:9272`),
   not at detect time — a deliberate anti-staleness choice (ADR-42). The reuse-cached path **skips**
   `pfb_download`, so it does **not** currently re-write the hash.
 - The downstream apply is already change-gated independently of all this: ADR-40 reloads a pf table
@@ -81,6 +93,43 @@ there is **one** change-detection story.
   in that request is the thing this ADR removes; `trigger` and `scope` are unaffected.
 - **ADR-40/10** own apply. Untouched — they keep gating the actual firewall/DNSBL reload on set/data
   change.
+
+### 1.5 Open design forks (recorded 2026-07-03 — resolve BEFORE authoring phase prompts)
+
+1. **Force × feed-class decision table (the big one).** "Parse = remove hash sidecars" only
+   works for **remote feeds with conditional-GET validators**. Verified against `devel`, it
+   silently breaks the ADR's own "MUST be preserved" semantics elsewhere: **local feeds**
+   (`pfb_local_feed_changed()` live-hashes the `.orig` as baseline on a missing sidecar →
+   "unchanged" → Parse becomes **inert**, where `reuse=on` reparses them today), **remote feeds
+   without ETag/Last-Modified** (no validators are ever written → no 304 possible → Parse
+   degrades to a **full re-download**), **rsync-format** feeds (always "Update found" →
+   re-download), and **GeoIP/ASN/TLD-category/DNSBLIP** (their `.update` markers are touched
+   inside the ingest, and they carry no swept `.orig.xxhash128` — Parse-as-hash-removal skips
+   them, where `reuse=on` covers them today). The ADR must add a full decision table over
+   {remote+validators, remote−validators, local, rsync, GeoIP/ASN/category, DNSBLIP} and pick a
+   mechanism per class — or scope itself honestly to remote conditional-GET feeds and keep a
+   residual reuse mechanism for the rest.
+2. **`pfb_reuse`'s fate + grandfather analysis.** `pfb_reuse` is a **registered PfbConfig
+   field** (toggle, `pfblockerng_extra.inc` ~`:540`). Today `reuse=on` + cron means "never
+   download — reparse from cache every pass"; a sidecar re-expression cannot reproduce "never
+   download" for a feed whose remote changed. Per the ADR-28 storage rules, any semantic change
+   to an existing user's toggle on upgrade needs an explicit
+   existing-config-preserves-behaviour / grandfather decision — currently absent (§2.4 hedges
+   "if it survives as a setting").
+3. **Per-feed reuse-signal mechanism.** §2.2 needs the ingest to reuse cached `.orig`
+   "triggered per-feed by the detector's signal", but the ingest gate is a **global**
+   `$pfbreuse` + markers, and a `{header}.update` marker today means "re-download". The new
+   plumbing (e.g. a `{header}.reuse` marker vs an in-memory set) is unspecified.
+
+### 1.6 Existing pinned tests that MUST flip (inventory for the red→green plan)
+
+- `tests/smoke/ui/test_functional.py::test_force_mode_parse_keeps_sidecars` (~`:1599`) pins the
+  **exact opposite** of the new Parse ("Parse must NOT clear the sidecar — reuse=on path").
+- `tests/php/TriggerRequestTest.php` (14 tests) pins the `force=TRUE` request structs this ADR
+  deletes; `tests/php/TriggerAdaptersTest.php` similarly pins the deprecated-verb adapters.
+
+These are deliberate flips, not regressions — each phase prompt must name the tests it
+rewrites and why.
 
 ## 2. Decision
 
@@ -110,9 +159,11 @@ then express every Force mode as sidecar removal and delete the reuse flag.
 4. **Remove the `reuse`/`force` flag:** drop the `force` bool from the ADR-43 trigger request and
    the `$pfb['reuse']='on'` force-dispatch block; the deprecated force verbs
    (`updateip`/`updatednsbl`/`update`-force) become thin adapters that **remove the scoped hash
-   sidecars + dispatch a tick** (Parse semantics — behaviour-preserving for their "reparse cached,
-   no re-download" contract). The global **Reuse** setting (`pfb_reuse`, the user-facing "reload
-   without downloading" toggle), if it survives as a setting, is re-expressed the same way.
+   sidecars + run the detector immediately** (the `forcecheck`-style non-hour-gated invocation —
+   **not** a ledger tick, which runs only due jobs; Parse semantics — behaviour-preserving for
+   their "reparse cached, no re-download" contract). The global **Reuse** setting (`pfb_reuse`,
+   the user-facing "reload without downloading" toggle) is the **§1.5 fork 2** — its fate and the
+   grandfather analysis must be decided there, not defaulted.
 
 ### Semantics that MUST be preserved (pin with tests before changing)
 
