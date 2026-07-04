@@ -2405,7 +2405,7 @@ _BASELINE_DEL_SECTIONS = (
 )
 # Behaviour toggles a case writes into CFG_GLOBAL (config/0). Derived from every config/0
 # write-site in this module + the apply/tick tests: the IP master switch (enable_cb), the
-# ADR-38 syslog toggle (log_syslog), the cron knobs (pfb_dailystart/pfb_reuse), the
+# ADR-38 syslog toggle (log_syslog), the cron knobs (pfb_dailystart/pfb_reuse/pfb_interval), the
 # managed-objects keep flag (pfb_keep), the ADR-11 aggregate selector (pfb_agg_types) and
 # the ADR-43 PfbConfig knobs (pfb_quiet_hours/pfb_tick_interval). Unset (not section-
 # deleted) so the section's install defaults survive.
@@ -2418,6 +2418,10 @@ _BASELINE_GLOBAL_KEYS = (
     "pfb_agg_types",
     "pfb_quiet_hours",
     "pfb_tick_interval",
+    # Update Frequency: test_log_rotate writes 'Disabled' to gate the tick's feed-cron
+    # dispatch; leaked forward it silently disables dispatch for every later module
+    # (bit test_smoke_apply_on_change — issue #805).
+    "pfb_interval",
     # Feed-host SSRF-guard allowlist: a module that allowlists the SLIRP mock net
     # (test_trigger_api / test_smoke_feeds) must not leak the exemption forward, or a
     # later module runs with the default-ON guard effectively disabled (false-green).
