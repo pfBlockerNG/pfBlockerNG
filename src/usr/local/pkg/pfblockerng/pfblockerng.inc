@@ -974,6 +974,78 @@ function pfb_emit_entry_reject_stats(string $path): void {
 	}
 }
 
+// ADR-49 Phase 1: pure content-sanity scan over the first chunk of a downloaded
+// text feed. The caller reads up to 8 KiB and passes it in as $sample -- this
+// function does no I/O and has no notion of the cap: an 8 KiB read is a ceiling,
+// never a floor, so a feed shorter than that is a COMPLETE sample and is never
+// penalised for its size.
+//
+// Returns NULL when the sample looks like plausible blocklist text, else one of
+// three reason tokens naming why it does not. Evaluated in this order, first
+// hit wins:
+//   1. 'nul_bytes'         -- the sample contains ANY NUL byte. Unambiguous for
+//                             a text feed, so it is checked first.
+//   2. 'html_error_page'   -- the sample, left-trimmed of leading whitespace,
+//                             opens (case-insensitively) with "<!doctype html"
+//                             or "<html", AND none of its first 20 lines is
+//                             "blocklist-shaped" (an IPv4/IPv6 address or CIDR,
+//                             a hosts-style "IP<whitespace>domain" line, or a
+//                             bare/ABP-wrapped domain.tld token). This is the
+//                             false-positive guard: an HTML-ish feed that DOES
+//                             carry blocklist lines is not flagged.
+//   3. 'below_min_content' -- a LINE-count floor of 1, never a byte-size floor:
+//                             fires only when the sample has ZERO non-blank,
+//                             non-comment lines (a comment line begins with
+//                             '#' or '!' after trimming leading whitespace). A
+//                             single legitimate data line satisfies the floor.
+//   4. otherwise NULL.
+//
+// BYTE-LEVEL matching only -- no `/u` modifier anywhere. Every pattern above is
+// pure ASCII, so a chunk-truncated multibyte tail can never flip a verdict.
+// Pure: string in, ?string out, no I/O, no globals.
+function pfb_text_sanity(string $sample): ?string {
+	if (strpos($sample, "\x00") !== FALSE) {
+		return 'nul_bytes';
+	}
+
+	$lines = preg_split('/\r\n|\r|\n/', $sample);
+
+	$leading_trimmed = ltrim($sample);
+	$opens_as_html = stripos($leading_trimmed, '<!doctype html') === 0
+		|| stripos($leading_trimmed, '<html') === 0;
+
+	// Blocklist-shaped = an IPv4/IPv6 address or CIDR, OR a bare/ABP-wrapped
+	// domain.tld token -- a hosts-style "IP<ws>domain" line already satisfies
+	// the IP branch, so it needs no separate pattern.
+	$blocklist_shaped = '/(?:\d{1,3}\.){3}\d{1,3}(?:\/\d{1,2})?'
+		. '|(?:[0-9A-Fa-f]{1,4}:){3,7}[0-9A-Fa-f]{1,4}|[0-9A-Fa-f]*::[0-9A-Fa-f:]*'
+		. '|(?:\|\|)?[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?'
+		. '(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\.[A-Za-z]{2,}\^?/';
+
+	if ($opens_as_html) {
+		$has_blocklist_line = FALSE;
+		foreach (array_slice($lines, 0, 20) as $line) {
+			if (preg_match($blocklist_shaped, $line) === 1) {
+				$has_blocklist_line = TRUE;
+				break;
+			}
+		}
+		if (!$has_blocklist_line) {
+			return 'html_error_page';
+		}
+	}
+
+	foreach ($lines as $line) {
+		$content = ltrim($line);
+		if ($content === '' || $content[0] === '#' || $content[0] === '!') {
+			continue;
+		}
+		return NULL;    // at least one non-blank, non-comment line -- floor met
+	}
+
+	return 'below_min_content';
+}
+
 // Function to filter/sanitize user input
 //
 // ADR-48 Phase 2: $reject_detail is an optional by-ref out-param for the
