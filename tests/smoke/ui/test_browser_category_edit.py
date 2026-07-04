@@ -625,6 +625,9 @@ def test_alias_type_port_field_normalizes_network_alias_away(
         )
 
         # The wrong-type value was dropped -- normalized to '', not saved verbatim.
+        # config_get() reads absent and ''-valued keys identically, so this check alone
+        # cannot tell "normalized" from "rejected, row never written" -- the aliasname
+        # assert above is what rules the rejected case out. Keep it first.
         got_ports_in = helpers.config_get(vm, f"{base}/aliasports_in")
         assert got_ports_in == "", (
             f"expected the wrong-type alias to be normalized away\n"
