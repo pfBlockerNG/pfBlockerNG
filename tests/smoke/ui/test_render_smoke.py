@@ -827,7 +827,14 @@ def test_alerts_unified_log_colour_fields_render(
     plus its light-only help asymmetry (``'(Resolver only)'`` — the light help text differs from
     the dark help text only for this one row) — so a regression in the loop rewrite (a dropped
     row, a missing gate, or a lost help-text override) is caught at the render tier.
+
+    The config toggle alone is NOT enough: pfb_global force-disables the runtime
+    ``$pfb['dnsbl']`` ("DNSBL disabled: no VIP configured", pfblockerng.inc) when
+    ``pfb_validate_vips`` finds no sinkhole VIP, and the page's colour-field gate reads that
+    downgraded value — so without a VIP the gated ``unireply2`` row never renders and this
+    test fails on a bare image. Seed the VIP first (idempotent, the standard harness fixture).
     """
+    helpers.ensure_dnsbl_vip(smoke_vm)
     original = helpers.config_get(smoke_vm, CFG_PFB_DNSBL)
     helpers.php_eval(
         smoke_vm,
