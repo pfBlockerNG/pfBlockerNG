@@ -1113,6 +1113,40 @@ def set_safesearch_enabled(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> N
         )
 
 
+CFG_SAFESEARCH_DOH = "installedpackages/pfblockerngsafesearch/safesearch_doh"
+CFG_SAFESEARCH_DOH_LIST = "installedpackages/pfblockerngsafesearch/safesearch_doh_list"
+
+
+def set_safesearch_doh(vm: SmokeVM, on: bool, doh_list: str = "", *, timeout: float = 60.0) -> None:
+    """Toggle the #740 DoH/DoT/DoQ block (``safesearch_doh`` = 'Enable'/'Disable' + ``safesearch_doh_list``).
+
+    Also lives at the ``pfblockerngsafesearch`` config root (see
+    :func:`set_safesearch_enabled`). ``doh_list`` is a CSV of option keys (e.g.
+    ``"dns.yandex"``, the pfblockerng_dnsbl.php ``safesearch_doh_list`` multi-select
+    values) whose conf-line substrings get UNCOMMENTED in the shipped
+    ``pfb_dnsbl.doh.conf`` on the next reload (pfblockerng.inc ~14148) — every other
+    endpoint stays commented (inert). The next reload also detects the resulting
+    SafeSearch CSV (``pfb_py_ss.txt``) change and sets ``$safesearch_update``
+    (inc:14040), which forces ``$pfbpython = TRUE`` (inc:15856): the SafeSearch CSV
+    is loaded ONLY at python-module init (issue #149), so this routes the reload
+    through the RESTART path (never the ADR-10 zero-downtime data swap) —
+    ``reload(vm, "update")`` (the default ``wait_unbound_ready`` wait) is therefore
+    sufficient to observe the new NXDOMAIN entries; no raw Unbound bounce needed.
+    """
+    val = "Enable" if on else "Disable"
+    snippet = (
+        f"config_set_path({_php_str(CFG_SAFESEARCH_DOH)}, {_php_str(val)});\n"
+        f"config_set_path({_php_str(CFG_SAFESEARCH_DOH_LIST)}, {_php_str(doh_list)});\n"
+        "write_config('pfBlockerNG smoke: toggle safesearch_doh');\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"set_safesearch_doh({on}, {doh_list!r}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
 def marked_vip_subnet(vm: SmokeVM, descr: str = AUTO_VIP_DESCR_V4, *, timeout: float = 60.0) -> str:
     """Subnet (IP) of the first ``virtualip/vip`` entry whose ``descr`` == ``descr``, or '' if none.
 

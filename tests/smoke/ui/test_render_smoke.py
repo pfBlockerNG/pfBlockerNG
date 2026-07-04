@@ -707,6 +707,11 @@ def test_dnsbl_doh_list_select_is_bounded_scrollable(webui: WebUI, php_error_log
     (this fails), against the post-change page it is gone and the field renders with the
     bounded ``size="20"`` (this passes). ``php_error_log_guard`` enrolls this GET in the
     module-level no-growth sweep.
+
+    Also pins issue #740 (the malformed Yandex DoH entry): the option list must render the
+    FIXED ``dns.yandex`` key (the real Yandex DoH/DoT endpoints added in its place) and must
+    NOT still carry the dead ``yandex.dns`` token — a regression that reintroduced the
+    malformed key would fail this Tier-A check without needing a live-VM DNS probe.
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
@@ -718,6 +723,9 @@ def test_dnsbl_doh_list_select_is_bounded_scrollable(webui: WebUI, php_error_log
     # The oversized, unscrollable height is gone and replaced by the bounded one.
     assert 'size="140"' not in body, "DoH/DoT/DoQ Blocking List select still renders the oversized size='140'"
     assert 'size="20"' in body, "DoH/DoT/DoQ Blocking List select is missing the bounded scrollable size='20'"
+    # #740: the fixed Yandex option value renders, and the dead malformed token is gone.
+    assert 'value="dns.yandex"' in body, "DNSBL page is missing the fixed Yandex DoH/DoT option 'dns.yandex' (#740)"
+    assert "yandex.dns" not in body, "DNSBL page still renders the dead malformed 'yandex.dns' token (#740)"
 
 
 def test_dnsbl_encrypted_dns_sections_order(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
