@@ -61,6 +61,26 @@ The EXIT trap in `scripts/select-box.sh` releases the lease automatically (Ctrl-
 All images, ports, build, sysctl, and pytest run ON the box — the orchestrator only provides
 the bootstrap command string.
 
+### Sharded runs (issue #797)
+
+```sh
+# Lease 3 boxes concurrently, each running one module-level shard of the smoke suite:
+scripts/local-smoke.sh --shards 3
+```
+
+`--shards N` (default 1) leases N boxes at once, one `select-box.sh` invocation per shard,
+each forwarding `--shard I --shard-total N` down to `run-smoke.sh` (module round-robin via
+`scripts/shard-modules.sh` — the same splitter CI's `smoke.yml` uses, so local and CI sharding
+are the same mechanism). Logs land one-per-shard under a kept `mktemp` dir (path printed at
+start and end); the run exits non-zero iff any shard failed, and prints the summary plus each
+failed shard's last 25 log lines.
+
+Constraints: `--shards N>1` refuses `--filter` and any `--marker` other than the default
+`smoke` — a narrowed run can collect zero tests for a given shard, and pytest's exit 5 (no
+tests collected) would fail that shard spuriously. `N` should stay at or under the free
+`PFB_BOXES` pool; an oversized `N` just makes the excess shards fail loudly on
+`select-box.sh`'s own pool-exhaustion path rather than pre-counting the pool.
+
 ### How it works
 
 1. `local-smoke.sh` leases one box from `PFB_BOXES` via `select-box.sh -- <bootstrap>`.

@@ -10,7 +10,7 @@
 #
 # Usage:
 #   scripts/local-smoke.sh [--ref REF] [--abi ABI] [--marker M] [--filter EXPR]
-#                          [--no-two-vm]
+#                          [--no-two-vm] [--shards N]
 #
 # Required (env):
 #   PFB_BOXES   space-separated ssh targets, e.g. "root@10.0.0.23 root@10.0.0.24"
@@ -22,6 +22,20 @@
 #   --marker M  pytest -m marker (default: smoke); see also --filter
 #   --filter EXPR  pytest -k filter expression (optional)
 #   --no-two-vm skip civm image pull and LAN-client tests
+#   --shards N  lease N boxes CONCURRENTLY, each running one module-level shard
+#               (issue #797; see scripts/run-smoke.sh --shard/--shard-total).
+#               Default 1 (today's single-box flow, unchanged). N>1 REFUSES
+#               --filter and any --marker other than smoke (a narrowed run can
+#               collect zero tests per shard -- pytest exit 5 would fail the
+#               shard spuriously). N should be <= the free PFB_BOXES pool; an
+#               oversized N just makes the excess shards fail loudly on
+#               select-box.sh's own pool-exhaustion path -- this script does
+#               NOT pre-count the pool. Logs land in a kept mktemp dir printed
+#               at start/end; exits non-zero iff any shard failed.
+#
+# Test-only (env):
+#   PFB_SELECT_BOX  override the select-box.sh path (default: scripts/select-box.sh).
+#                   Used by tests/shell/local_smoke_spec.sh to inject a fake.
 #
 # The leased box runs scripts/smoke-on-box.sh, which:
 #   - checks out the requested ref
@@ -61,6 +75,7 @@ _ABI="FreeBSD:15:amd64"
 _MARKER="smoke"
 _FILTER=""
 _NO_TWO_VM=0
+_SHARDS=1
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -69,6 +84,7 @@ while [ "$#" -gt 0 ]; do
         --marker|-m) shift; _MARKER="$1"; shift ;;
         --filter)   shift; _FILTER="$1";      shift ;;
         --no-two-vm) _NO_TWO_VM=1;        shift ;;
+        --shards)   shift; _SHARDS="$1"; shift ;;
         --) shift; break ;;
         -*) printf 'local-smoke: unknown flag: %s\n' "$1" >&2; exit 2 ;;
         *)  break ;;  # extra positionals not supported in new model
@@ -78,6 +94,34 @@ if [ "$#" -gt 0 ]; then
     printf 'local-smoke: unexpected positional args (use --marker/--filter): %s\n' "$*" >&2
     exit 2
 fi
+
+# ── Validate --shards (positive integer; loud exit 2 on 0/negative/garbage) ── #
+case "$_SHARDS" in
+    ''|*[!0-9]*)
+        printf 'local-smoke: --shards must be a positive integer: %s\n' "$_SHARDS" >&2
+        exit 2
+        ;;
+esac
+if [ "$_SHARDS" -eq 0 ]; then
+    printf 'local-smoke: --shards must be >= 1: %s\n' "$_SHARDS" >&2
+    exit 2
+fi
+
+# ── --shards N>1 guards: a narrowed run must not shard (empty-slice hazard) ── #
+if [ "$_SHARDS" -gt 1 ]; then
+    if [ -n "$_FILTER" ]; then
+        printf 'local-smoke: --shards N>1 refuses --filter (a -k slice can collect zero tests -- pytest exit 5 would fail that shard spuriously); drop one of the two\n' >&2
+        exit 2
+    fi
+    if [ "$_MARKER" != "smoke" ]; then
+        printf 'local-smoke: --shards N>1 refuses --marker %s (non-default markers select few tests -- same empty-slice hazard; UI tiers must never be split, which smoke-on-box.sh enforces independently); drop one of the two\n' \
+            "$_MARKER" >&2
+        exit 2
+    fi
+fi
+
+# ── Testability seam: override select-box.sh path for the hermetic spec ────── #
+_SELECT_BOX="${PFB_SELECT_BOX:-scripts/select-box.sh}"
 
 # ── Resolve REF (default: current branch name, falls back to SHA) ─────────── #
 # A branch name is fetchable; a bare SHA is not (unless already pushed).
@@ -131,9 +175,78 @@ _bootstrap="cd /root/pfBlockerNG \
 printf 'local-smoke: leasing box (REF=%s marker=%s%s)\n' \
     "$_REF" "$_MARKER" "${_FILTER:+ filter=$_FILTER}" >&2
 
-# ── Lease a box and run the bootstrap on it ────────────────────────────────── #
+# ── Lease box(es) and run the bootstrap ─────────────────────────────────────── #
 # select-box.sh -- <cmd>: acquires a lease, runs <cmd> on the box over ssh,
 # releases the lease on EXIT/INT/TERM (automatic EXIT trap). The KEY=value
 # output goes to stdout (ignored here; we don't eval it).
-# shellcheck disable=SC2090  # expansion is intentional: _bootstrap is the remote command
-sh scripts/select-box.sh -- "$_bootstrap"
+if [ "$_SHARDS" -eq 1 ]; then
+    # N=1: today's flow, unchanged (only the select-box path now rides the seam).
+    # shellcheck disable=SC2090  # expansion is intentional: _bootstrap is the remote command
+    sh "$_SELECT_BOX" -- "$_bootstrap"
+    exit $?
+fi
+
+# ── N>1: concurrent multi-box module sharding (issue #797) ─────────────────── #
+# One select-box.sh lease PER SHARD, launched together, aggregated at the end.
+# Pool-sizing contract: N should be <= the free PFB_BOXES pool. We do NOT
+# pre-count the pool -- an oversized N just means the excess shards fail on
+# select-box.sh's own pool-exhaustion path (~6 jittered scans, PFB_MAX_RETRIES)
+# and show up as failed shards below: loud, not hung.
+_LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/pfb-local-smoke-shards.XXXXXX")"
+printf 'local-smoke: sharded run (--shards %s); logs: %s\n' "$_SHARDS" "$_LOG_DIR" >&2
+
+_PIDS=""
+# Forward Ctrl-C/TERM to every launched shard's select-box.sh process so its
+# own EXIT trap releases its lease -- no orphaned leases on an interrupted
+# fan-out. $_PIDS is expanded when the signal actually fires (single-quoted
+# trap body), so it always reflects whatever has been launched so far.
+trap 'kill $_PIDS 2>/dev/null' INT TERM
+
+_i=0
+while [ "$_i" -lt "$_SHARDS" ]; do
+    _shard_bootstrap="${_bootstrap} --shard '$(_sq "$_i")' --shard-total '$(_sq "$_SHARDS")'"
+    _shard_log="${_LOG_DIR}/shard-${_i}.log"
+    # shellcheck disable=SC2090  # expansion is intentional: _shard_bootstrap is the remote command
+    sh "$_SELECT_BOX" -- "$_shard_bootstrap" > "$_shard_log" 2>&1 &
+    _pid=$!
+    _PIDS="$_PIDS $_pid"
+    printf 'local-smoke: launched shard %s (pid=%s) -> %s\n' "$_i" "$_pid" "$_shard_log" >&2
+    _i=$((_i + 1))
+done
+
+# Wait for every shard IN LAUNCH ORDER -- deterministic blocking, no polling
+# (`wait <pid>` is the POSIX-sh sync primitive; no sleep-loop coordination).
+_RCS=""
+_FAILED=0
+for _pid in $_PIDS; do
+    if wait "$_pid"; then
+        _RCS="$_RCS 0"
+    else
+        _rc=$?
+        _RCS="$_RCS $_rc"
+        _FAILED=1
+    fi
+done
+
+printf 'local-smoke: shard summary (logs: %s):\n' "$_LOG_DIR" >&2
+_i=0
+for _rc in $_RCS; do
+    printf '  shard %s: rc=%s\n' "$_i" "$_rc" >&2
+    _i=$((_i + 1))
+done
+
+if [ "$_FAILED" -eq 1 ]; then
+    _i=0
+    for _rc in $_RCS; do
+        if [ "$_rc" -ne 0 ]; then
+            printf 'local-smoke: ---- shard %s FAILED (rc=%s); last 25 lines of %s ----\n' \
+                "$_i" "$_rc" "${_LOG_DIR}/shard-${_i}.log" >&2
+            tail -n 25 "${_LOG_DIR}/shard-${_i}.log" >&2
+            printf 'local-smoke: ---- end shard %s log ----\n' "$_i" >&2
+        fi
+        _i=$((_i + 1))
+    done
+    exit 1
+fi
+
+exit 0
