@@ -58,13 +58,8 @@ function getlogs($logdir, $log_extentions = array('log')) {
 	}
 
 	// Convert to filenames only
-	if (count($log_filenames) > 0) {
-		$log_totalfiles = count($log_filenames);
-		for ($cnt = 0; $cnt < $log_totalfiles; $cnt++) {
-			$log_filenames[$cnt] = basename($log_filenames[$cnt]);
-		}
-	}
-	
+	$log_filenames = array_map('basename', $log_filenames);
+
 	asort($log_filenames);
 	return $log_filenames;
 }
