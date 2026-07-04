@@ -8045,8 +8045,10 @@ function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 // prefix (RFC 6052), which the PHP filter flags leave routable (issue #760).
 // These are explicit prefix checks rather than another filter flag, so the
 // behaviour is independent of PHP's patch level (the RFC 6890 refactor in
-// PHP 8.3.16/8.4.3 moved 2001:db8::/32 between filter sets).
-function sanitize_ipaddr_v6($ipaddr, $custom) {
+// PHP 8.3.16/8.4.3 moved 2001:db8::/32 between filter sets). $pfbcidr is the
+// per-category Advanced "Suppression CIDR Limit" floor (issue #760 §3), the
+// v6 sibling of sanitize_ipaddr()'s $pfbcidr.
+function sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr = 'Disabled') {
 	global $pfb;
 
 	// Extract the address part (before '/' for a CIDR like 'fc00::/7')
@@ -8065,6 +8067,15 @@ function sanitize_ipaddr_v6($ipaddr, $custom) {
 
 	// Exclude private/reserved IPs (bypass exclusion for custom lists)
 	if ($pfb['supp'] == 'on' && !$custom) {
+
+		// Advanced IPv6 Tunable (Set CIDR Block size limit) (issue #760 §3).
+		// A /0 was already clamped above (mask stays '0', never > 0, so this
+		// guard never double-clamps it); a mask the guard doesn't match (e.g.
+		// an invalid >128 value) is left for validate_ipv6() downstream.
+		if ($pfbcidr != 'Disabled' && $mask !== '' && ctype_digit($mask) && (int)$mask > 0 && (int)$mask < (int)$pfbcidr) {
+			pfb_logger("\n  Suppression CIDR Limit: {$s_ip}/{$mask}", 1);
+			$ipaddr = $s_ip;
+		}
 
 		// Drop ULA (fc00::/7), link-local (fe80::/10), loopback (::1),
 		// IPv4-mapped and the reserved set (mirrors inc:7118-7119).
@@ -16175,7 +16186,13 @@ function sync_package_pfblockerng($cron='') {
 						if (isset($list['suppression_cidr']) && $list['suppression_cidr'] != 'Disabled' && is_numeric($list['suppression_cidr'])) {
 							$pfbcidr = "{$list['suppression_cidr']}";
 						}
-						
+
+						// IPv6 Advanced Tunables (issue #760 §3)
+						$pfbcidr_v6 = 'Disabled';
+						if (isset($list['suppression_cidr_v6']) && $list['suppression_cidr_v6'] != 'Disabled' && is_numeric($list['suppression_cidr_v6'])) {
+							$pfbcidr_v6 = "{$list['suppression_cidr_v6']}";
+						}
+
 						// cURL Source Interface (sets CURLOPT_INTERFACE)
 						$srcint = $list['srcint'] ?: FALSE;
 
@@ -16499,7 +16516,7 @@ function sync_package_pfblockerng($cron='') {
 												}
 
 												if (validate_ipv6($line)) {
-													$parsed = sanitize_ipaddr_v6($line, $custom);
+													$parsed = sanitize_ipaddr_v6($line, $custom, $pfbcidr_v6);
 													if (!empty($parsed)) {
 														$ip_data .= $parsed . "\n";
 													}
@@ -16520,7 +16537,7 @@ function sync_package_pfblockerng($cron='') {
 													foreach ($a_cidr as $cidr) {
 														if (!empty($cidr)) {
 															if (validate_ipv6($cidr)) {
-																$parsed = sanitize_ipaddr_v6($cidr, $custom);
+																$parsed = sanitize_ipaddr_v6($cidr, $custom, $pfbcidr_v6);
 																if (!empty($parsed)) {
 																	$ip_data .= $parsed . "\n";
 																}
@@ -16557,7 +16574,7 @@ function sync_package_pfblockerng($cron='') {
 												// Workaround to skip cloudflare error pages
 												if (strpos($oline, 'cf-footer-item') === FALSE) {
 													if (validate_ipv6($match)) {
-														$parsed = sanitize_ipaddr_v6($match, $custom);
+														$parsed = sanitize_ipaddr_v6($match, $custom, $pfbcidr_v6);
 														if (!empty($parsed)) {
 															$ip_data .= $parsed . "\n";
 														}

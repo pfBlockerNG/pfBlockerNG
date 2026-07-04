@@ -155,6 +155,10 @@ PAGE_TABLE: tuple[Page, ...] = (
     # category_edit.php: default IP view AND the DNSBL view; Form_Section('Advanced Tuneables') is unique to it.
     Page("category_edit_ip", "/pfblockerng/pfblockerng_category_edit.php?type=ipv4", ("Advanced Tuneables",)),
     Page("category_edit_dnsbl", "/pfblockerng/pfblockerng_category_edit.php?type=dnsbl", ("Advanced Tuneables",)),
+    # ?type=ipv6 renders the issue-#760 §3 "Suppression CIDR Limit" select block (gated
+    # `if ($gtype == 'ipv6')`, a code path the ipv4/dnsbl entries above never exercise) --
+    # this entry guards it against a PHP render regression.
+    Page("category_edit_ipv6", "/pfblockerng/pfblockerng_category_edit.php?type=ipv6", ("Advanced Tuneables",)),
     # threats.php REQUIRES a host/domain/port param -- with none it print_info_box()es and exit()s
     # before rendering $pgtitle. A syntactically-valid param renders the lookup page chrome; the
     # threat links it draws are <a href> only (no server-side network call), so it stays hermetic.

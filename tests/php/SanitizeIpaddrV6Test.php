@@ -179,4 +179,76 @@ final class SanitizeIpaddrV6Test extends TestCase
 		$GLOBALS['pfb']['supp'] = 'on';
 		$this->assertSame('::/0', sanitize_ipaddr_v6('::/0', true));
 	}
+
+	// --- Suppression CIDR floor (issue #760 §3) -------------------------------
+	//
+	// $pfbcidr is the per-category Advanced "Suppression CIDR Limit": under
+	// Suppression, a downloaded feed's CIDR narrower than the floor is clamped
+	// to a single host (bare address, no mask -- loads as /128), the v6 sibling
+	// of sanitize_ipaddr()'s Advanced IPv4 Tunable floor.
+
+	public function testAdvancedCidrFloorClampsToSingleHost(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
+		// mask 32 < floor 48 -> clamped to a bare host (public address survives
+		// the reserved/private filter).
+		$this->assertSame('2606:4700:4700::', sanitize_ipaddr_v6('2606:4700:4700::/32', false, 48));
+	}
+
+	// The paired branch: a mask AT OR ABOVE the floor is kept, mask intact --
+	// proves the floor is a real threshold, not an unconditional clamp.
+	public function testMaskAtOrAboveFloorKeptUnchanged(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
+		$this->assertSame('2606:4700:4700::/48', sanitize_ipaddr_v6('2606:4700:4700::/48', false, 48));
+		$this->assertSame('2606:4700:4700::/64', sanitize_ipaddr_v6('2606:4700:4700::/64', false, 48));
+	}
+
+	// Floor 'Disabled' (the default) never clamps, regardless of mask width.
+	public function testFloorDisabledKeepsWideMaskUnchanged(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
+		$this->assertSame('2606:4700:4700::/32', sanitize_ipaddr_v6('2606:4700:4700::/32', false, 'Disabled'));
+	}
+
+	// Suppression OFF bypasses the floor entirely, even when one is configured --
+	// the floor is a sub-clause of the Suppression block, not a standalone check.
+	public function testSuppressionOffBypassesFloor(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'off';
+		$this->assertSame('2606:4700:4700::/32', sanitize_ipaddr_v6('2606:4700:4700::/32', false, 48));
+	}
+
+	// A custom list bypasses the floor, same as every other Suppression sub-check.
+	public function testCustomListBypassesFloor(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
+		$this->assertSame('2606:4700:4700::/32', sanitize_ipaddr_v6('2606:4700:4700::/32', true, 48));
+	}
+
+	// --- Floor is the cause (assert before-state, then flip) ------------------
+
+	public function testFloorTogglesClampOfTheSameCidr(): void
+	{
+		// Given the floor Disabled, a narrow mask is KEPT (before-state).
+		$GLOBALS['pfb']['supp'] = 'on';
+		$this->assertSame('2606:4700:4700::/32', sanitize_ipaddr_v6('2606:4700:4700::/32', false, 'Disabled'));
+
+		// When a floor narrower than the mask is set, the SAME entry is now
+		// CLAMPED -- so green proves the floor caused the change.
+		$this->assertSame('2606:4700:4700::', sanitize_ipaddr_v6('2606:4700:4700::/32', false, 48));
+	}
+
+	// --- Interplay with the issue #760 documentation-range drop ---------------
+	//
+	// The floor clamp runs before the reserved/private filter, but it only
+	// rewrites $ipaddr -- the filter judges $s_ip (the address part), which is
+	// untouched by the clamp. So a documentation-range CIDR under a floor is
+	// still DROPPED entirely: the #760 drop wins over the floor clamp, it does
+	// not survive as a clamped single host.
+	public function testDocumentationRangeCidrStillDroppedUnderFloor(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
+		$this->assertNull(sanitize_ipaddr_v6('2001:db8::1/16', false, 24));
+	}
 }
