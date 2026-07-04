@@ -104,9 +104,8 @@ def make_pkg(
         tf2.size = len(payload)
         tf2.mode = 0o555
         tf.addfile(tf2, io.BytesIO(payload))
-    import pfb_pkg
 
-    path.write_bytes(pfb_pkg.zstd_compress(raw.getvalue(), brp.BuildRepoError, "zstd unavailable"))
+    path.write_bytes(brp.zstd_compress(raw.getvalue(), brp.BuildRepoError, "zstd unavailable"))
     return manifest
 
 
