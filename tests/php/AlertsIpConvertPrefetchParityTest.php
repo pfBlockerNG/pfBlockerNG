@@ -49,26 +49,10 @@ final class AlertsIpConvertPrefetchParityTest extends TestCase
 
 	public static function setUpBeforeClass(): void
 	{
-		// Load convert_ip_log() (+ its same-file helpers) off-appliance, exactly like
-		// WhitelistTrashIconTest / AlertsRowOutputEncodingTest: read the page source,
-		// strip its require_once() lines, and eval only the function-definition block
-		// (from the first `function` to the top-level `$pgtitle = ` render wiring).
-		if (function_exists('convert_ip_log')) {
-			return;
-		}
-		$src = file_get_contents(
-			dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_alerts.php'
-		);
-		if ($src === FALSE) {
-			throw new RuntimeException('failed to read pfblockerng_alerts.php');
-		}
-		$src = preg_replace('/^\s*require_once\(.*\);\s*$/m', '', $src);
-		$start = strpos($src, "\nfunction ");
-		$end   = strpos($src, "\n\$pgtitle = ");
-		if ($start === FALSE || $end === FALSE || $end <= $start) {
-			throw new RuntimeException('could not locate the function block in pfblockerng_alerts.php');
-		}
-		eval("\n" . substr($src, $start + 1, $end - $start - 1));
+		// See AlertsPageLoader.php for the off-appliance load mechanics (shared with
+		// WhitelistTrashIconTest / AlertsRowOutputEncodingTest).
+		require_once __DIR__ . '/AlertsPageLoader.php';
+		pfb_test_load_alerts_page_functions();
 	}
 
 	protected function setUp(): void
@@ -150,22 +134,9 @@ final class AlertsIpConvertPrefetchParityTest extends TestCase
 			}
 		}
 
-		$this->rrmdir($this->tmpDir);
-	}
-
-	private function rrmdir(string $dir): void
-	{
-		if (!is_dir($dir)) {
-			return;
-		}
-		foreach (scandir($dir) as $entry) {
-			if ($entry === '.' || $entry === '..') {
-				continue;
-			}
-			$path = "{$dir}/{$entry}";
-			is_dir($path) ? $this->rrmdir($path) : @unlink($path);
-		}
-		@rmdir($dir);
+		// rmdir_recursive() is the bootstrap-loaded pfsense_doubles.php double for
+		// pfSense's util.inc function of the same name (tests/php/pfsense_doubles.php:195).
+		rmdir_recursive($this->tmpDir);
 	}
 
 	/**

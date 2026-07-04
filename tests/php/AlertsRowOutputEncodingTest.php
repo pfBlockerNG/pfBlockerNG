@@ -44,32 +44,10 @@ final class AlertsRowOutputEncodingTest extends TestCase
 
     public static function setUpBeforeClass(): void
     {
-        // Load the alerts-page row-builder functions off-appliance: read the
-        // source, drop the top-of-file require_once() lines (the bootstrap has
-        // already loaded the real pfblockerng.inc + shims), and eval only the
-        // function definitions, skipping the page-render wiring. Mirrors the
-        // wizard-function load in bootstrap.php.
-        if (function_exists('convert_dnsbl_log')) {
-            return;
-        }
-        $src = file_get_contents(
-            dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_alerts.php'
-        );
-        if ($src === false) {
-            throw new RuntimeException('failed to read pfblockerng_alerts.php');
-        }
-        $src = preg_replace('/^\s*require_once\(.*\);\s*$/m', '', $src);
-        // The row-builder functions form one contiguous block; after them the
-        // page resumes top-level render wiring (the first such statement is the
-        // `$pgtitle = array(...)` line, which precedes include_once('head.inc')
-        // and display_top_tabs()). Eval only [first `function ` .. that line) so
-        // we define the builders without executing any page-render code.
-        $start = strpos($src, "\nfunction ");
-        $end = strpos($src, "\n\$pgtitle = ");
-        if ($start === false || $end === false || $end <= $start) {
-            throw new RuntimeException('could not locate the row-builder function block in pfblockerng_alerts.php');
-        }
-        eval("\n" . substr($src, $start + 1, $end - $start - 1));
+        // See AlertsPageLoader.php for the off-appliance load mechanics (shared with
+        // WhitelistTrashIconTest / AlertsIpConvertPrefetchParityTest).
+        require_once __DIR__ . '/AlertsPageLoader.php';
+        pfb_test_load_alerts_page_functions();
     }
 
     protected function setUp(): void
