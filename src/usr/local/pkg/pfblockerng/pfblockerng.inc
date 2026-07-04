@@ -5610,6 +5610,42 @@ function pfb_ss_refresh_lines(array $lines, callable $resolver) {
 	return array($out, $changed);
 }
 
+// #740 install/upgrade migration: pfBlockerNG shipped a malformed DoH-block conf entry
+// (local-zone: "yandex.dns" -- not a real hostname, so it never matched real Yandex
+// encrypted-DNS traffic) alongside its paired UI option key 'yandex.dns'. Both are now
+// replaced with the real endpoints under the 'dns.yandex' substring key. An existing
+// install with the dead 'yandex.dns' token still selected in its 'safesearch_doh_list'
+// CSV would silently lose that selection (the token now matches nothing in the
+// corrected conf), so this migrates it in place: replaces the CSV element 'yandex.dns'
+// with 'dns.yandex', preserving element order and de-duplicating against an
+// already-present 'dns.yandex'. $stored is the raw PfbConfig::read('safesearch_doh_list')
+// CSV string. Returns the rewritten CSV to persist, or NULL when there is nothing to
+// migrate (absent/empty/non-string input, or the legacy token is not present as a CSV
+// element).
+function pfb_ss_doh_list_yandex_migrate($stored) {
+
+	if (!is_string($stored) || $stored === '') {
+		return NULL;
+	}
+
+	$tokens = explode(',', $stored);
+	if (!in_array('yandex.dns', $tokens, TRUE)) {
+		return NULL;
+	}
+
+	$migrated = array();
+	foreach ($tokens as $token) {
+		if ($token === 'yandex.dns') {
+			$token = 'dns.yandex';
+		}
+		if (!in_array($token, $migrated, TRUE)) {
+			$migrated[] = $token;
+		}
+	}
+
+	return implode(',', $migrated);
+}
+
 // SafeSearch CNAME fallback freshness (issue #149). Light cron task: re-resolve each
 // CNAME target in the SafeSearch CSV and refresh its baked #2-fallback IPs in place.
 // On change, rewrite the CSV and touch the reload sentinel so pfb_unbound.py picks up
