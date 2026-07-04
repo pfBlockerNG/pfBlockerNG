@@ -2177,16 +2177,18 @@ def _fixture_bytes(name: str) -> bytes:
     return (FIXTURES_DIR / name).read_bytes()
 
 
-def _box_mime_type(vm: SmokeVM, data: bytes, remote_tmp: str = "/tmp/adr45_mime_probe.bin") -> str:
+def _box_mime_type(vm: SmokeVM, data: bytes, remote_tmp: str = "/tmp/adr45_mime_probe.bin", flag: str = "-b") -> str:
     """Upload ``data`` to ``remote_tmp`` on the guest via stdin, return ``file(1)`` MIME type.
 
     Used by the ADR-45 octet-stream guard tests to verify that the specific bytes
     actually trigger ``application/octet-stream`` on the box's ``file(1)`` before
-    asserting the recovery / rejection behaviour.  Cleans up the temp file afterwards.
+    asserting the recovery / rejection behaviour.  Pass ``flag="-bZ"`` for the
+    decompress-and-look verdict (the ADR-48 compressed-peek guard).  Cleans up
+    the temp file afterwards.
     """
     # Binary upload: subprocess.run without text=True accepts bytes as input.
     subprocess.run(vm.ssh_argv("tee", remote_tmp), input=data, capture_output=True, timeout=30.0, check=False)
-    result = vm.ssh("file", "-b", "--mime-type", remote_tmp)
+    result = vm.ssh("file", flag, "--mime-type", remote_tmp)
     vm.ssh("rm", "-f", remote_tmp)
     return result.stdout.strip()
 
@@ -2723,8 +2725,12 @@ def test_validate_log_structural_reject_line(deployed_vm: SmokeVM, mock_feeds: _
     rendered ``detected=`` value here is known without a fresh on-box probe.
     ``detected=`` is ``"{file_type} " . basename($file_download)``
     (RESULTS/02_Results.txt), and ``$file_download``'s basename is always
-    ``{header}.raw`` (pfb_download() builds ``$file_dwn = "{pfborig}/{header}"``
-    then appends ``.raw``) -- fully deterministic from the header we choose.
+    ``{header}_v4.raw`` -- the package suffixes the on-box feed header with the
+    address family (``_v4``/``_v6``), and pfb_download() builds
+    ``$file_dwn = "{pfborig}/{header}"`` then appends ``.raw`` -- fully
+    deterministic from the header + family we choose (proven live: the first
+    fan-out logged ``feed=adr48stc_v4 ... adr48stc_v4.raw`` while this marker
+    grepped the unsuffixed header and counted 0).
 
     Before ADR-48 Phase 2, this branch logged an ad-hoc "Corrupt or unreadable
     {type} archive"-style message via pfb_logger() directly, with no
@@ -2747,8 +2753,8 @@ def test_validate_log_structural_reject_line(deployed_vm: SmokeVM, mock_feeds: _
     feed_url = mock_feeds.feed_url("archive_corrupt.gz")
     spec = h.IpCase(aliasname=header, feed_url=feed_url, header=header, family="v4")
     marker = (
-        f"pfb_validate: REJECT feed={header} stage=structural reason=probe_failed "
-        f"detected=application/gzip {header}.raw"
+        f"pfb_validate: REJECT feed={header}_v4 stage=structural reason=probe_failed "
+        f"detected=application/gzip {header}_v4.raw"
     )
 
     # Given -- alias absent + delta baseline for this feed's canonical line.
@@ -2804,8 +2810,11 @@ def test_validate_log_mime_reject_line(deployed_vm: SmokeVM, mock_feeds: _MockFe
     fixture = "archive_junk_octet.bin"
     feed_url = mock_feeds.feed_url(fixture)
     spec = h.IpCase(aliasname=header, feed_url=feed_url, header=header, family="v4")
+    # feed= carries the on-box header, which the package suffixes with the
+    # address family (_v4) -- see the structural test's docstring.
     marker = (
-        f"pfb_validate: REJECT feed={header} stage=mime reason=mime_not_allowed detected=application/octet-stream rc=0"
+        f"pfb_validate: REJECT feed={header}_v4 stage=mime reason=mime_not_allowed "
+        f"detected=application/octet-stream rc=0"
     )
 
     # On-box guard: the mime-gate reject only fires this way when file(1) sees octet-stream
@@ -2840,79 +2849,83 @@ def test_validate_log_mime_reject_line(deployed_vm: SmokeVM, mock_feeds: _MockFe
 
 @pytest.mark.timeout(120)
 def test_validate_log_inner_reject_line(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
-    """ADR-48 P3: the ZIP post-extraction MIME re-run emits the canonical stage=inner line.
+    """ADR-48 P3: the gzip pre-extraction compressed peek emits the canonical stage=inner line.
 
-    Built INLINE (like the healthy test_zip_feed_imports / ADR-44 tests) rather
-    than a committed fixture: a valid zip is trivially cross-platform-portable
-    (any zipfile writer's output is a valid archive bsdtar reads fine), unlike
-    the FreeBSD-libmagic-sensitive CORRUPT/octet-stream corpus this ADR reuses
-    elsewhere. The zip wraps a single inert entry containing the exact
-    "%PDF-1.4\\n" byte string tests/php/PfbFilterRejectDetailTest.php already
-    uses off-appliance: file(1) reliably reports application/pdf for it via the
-    plain "%PDF-" text magic (no chunk/CRC structure needed) -- this repo has
-    already found a BARE PNG/EXE magic alone unreliable (reads as octet-stream
-    on at least one dev host; see that test's docblock), so the on-box guard
-    below re-confirms the verdict for these exact bytes rather than assuming it.
+    Forces the inner stage through the gz ``file -bZ`` COMPRESSED-PEEK sub-path
+    (reason=compressed_mime_not_allowed). The zip POST-EXTRACTION sub-path
+    cannot be forced live: the re-run probes ``$input[1]`` = the ORIGINAL
+    archive (the extracted file rides in the legacy-unused ``$input[0]``), so
+    it always passes for a valid zip -- a pre-existing no-op tracked in issue
+    #808 (probe-target fix = ADR-46 inner-content scope, not ADR-48's
+    message-only scope). The first fan-out proved it live: a valid zip wrapping
+    a PDF payload produced NO inner reject on either edition.
 
-    The entry contains no comma bytes, so pfb_download()'s extraction pipe
-    (``tar -xOf | sed 's/,[[:space:]]/; /g' | tr ',' '\\n'``) passes it through
-    byte-for-byte -- the post-extraction file(1) probe sees the same bytes
-    served. Exercises the POST-EXTRACTION inner sub-path specifically (the
-    pre-extraction compressed-peek sub-path only applies to the gz/bz2/7z
-    branches, not zip -- see RESULTS/02_Results.txt's caller map).
+    Built INLINE: a valid gzip stream is trivially portable (any gzip writer's
+    output passes ``gunzip -t``), unlike the FreeBSD-libmagic-sensitive
+    corrupt/octet-stream corpus this ADR reuses elsewhere. The gzip wraps the
+    exact "%PDF-1.4\\n" byte string tests/php/PfbFilterRejectDetailTest.php
+    already uses off-appliance: file(1) reliably reports application/pdf via
+    the plain "%PDF-" text magic -- and ``file -bZ`` (decompress-and-look) on
+    the gzip must yield the same inner verdict, which the on-box guard below
+    re-confirms for the exact served bytes rather than assuming it.
 
-    Before ADR-48 Phase 2, this branch logged an ad-hoc "[PFB_FILTER - 17]
-    Failed or invalid Mime Type: [...]" message with no "pfb_validate: REJECT"
+    Route on-box: outer MIME gate sees application/gzip (allow-listed), the
+    ADR-45 structural probe (``gunzip -t``) passes -- valid stream -- then the
+    pre-extraction ``file -bZ`` peek sees application/pdf, which is NOT in the
+    allow-list, and rejects with stage=inner.
+
+    Before ADR-48 Phase 2, this branch logged an ad-hoc "Failed or invalid
+    Mime Type Compressed: [...]" message with no "pfb_validate: REJECT"
     substring anywhere -- this test would FAIL on that pre-Phase-2 code.
 
     Given the alias is absent and no canonical inner-reject line for this
       feed's header exists yet (delta baseline).
-    When the case Force-Updates over the zip (the structural probe passes --
-      it is a valid zip -- extraction succeeds, then the post-extraction
-      MIME re-run rejects the PDF-signature payload),
+    When the case Force-Updates over the gzip (structural probe passes, the
+      compressed peek rejects the PDF inner content),
     Then the alias remains absent AND a NEW line matching "pfb_validate: REJECT
-      feed=<hdr> stage=inner reason=inner_mime_not_allowed detected=application/pdf
-      rc=0" appears in the pfB log.
+      feed=<hdr>_v4 stage=inner reason=compressed_mime_not_allowed
+      detected=application/pdf rc=0" appears in the pfB log.
     """
     header = "adr48inr"
     entry_bytes = b"%PDF-1.4\n"
+    gz_bytes = gzip.compress(entry_bytes)
 
-    # On-box guard: the inner post-extraction reject only fires this way when file(1)
-    # reports application/pdf for these exact bytes (mirrors the ADR-45 octet-stream
-    # guards' "probe file(1) on EXACTLY the served bytes" discipline).
-    box_mime = _box_mime_type(deployed_vm, entry_bytes)
-    if box_mime != "application/pdf":
+    # On-box guard: the compressed peek only rejects this way when file -bZ sees
+    # application/pdf inside the EXACT gzip bytes served (same probe-the-served-
+    # bytes discipline as the ADR-45 octet-stream guards).
+    box_inner_mime = _box_mime_type(deployed_vm, gz_bytes, flag="-bZ")
+    if box_inner_mime != "application/pdf":
         pytest.skip(
-            f"PDF-signature payload produced {box_mime!r} on this box (not application/pdf); "
-            f"the inner post-extraction reject branch is not exercised — test inconclusive"
+            f"gzip-wrapped PDF payload produced {box_inner_mime!r} on this box's file -bZ "
+            f"(not application/pdf); the compressed-peek reject branch is not exercised — test inconclusive"
         )
 
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("payload.bin", entry_bytes)
-    feed_url = mock_feeds.register("adr48_inner.zip", buf.getvalue())
+    feed_url = mock_feeds.register("adr48_inner.gz", gz_bytes)
     spec = h.IpCase(aliasname=header, feed_url=feed_url, header=header, family="v4")
+    # feed= carries the on-box header, which the package suffixes with the
+    # address family (_v4) -- see the structural test's docstring.
     marker = (
-        f"pfb_validate: REJECT feed={header} stage=inner reason=inner_mime_not_allowed detected=application/pdf rc=0"
+        f"pfb_validate: REJECT feed={header}_v4 stage=inner reason=compressed_mime_not_allowed "
+        f"detected=application/pdf rc=0"
     )
 
     # Given -- alias absent + delta baseline for this feed's canonical line.
-    assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the inner-reject zip feed"
+    assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the inner-reject gzip feed"
     before = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
 
     with h.CaseContext(deployed_vm, spec):
-        # When -- Force Update; the zip extracts fine but the post-extraction re-run rejects.
+        # When -- Force Update; the gzip is structurally valid but the peek rejects its inner type.
         tables_after = h.pfctl_tables(deployed_vm)
         assert spec.alias not in tables_after, (
-            f"expected {spec.alias!r} absent after the inner-reject zip (post-extraction "
-            f"MIME re-run must reject), found it present — tables: {tables_after}"
+            f"expected {spec.alias!r} absent after the inner-reject gzip (compressed peek "
+            f"must reject), found it present — tables: {tables_after}"
         )
         # Then -- a NEW canonical reject line was logged.
         after = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
         if not (after > before):
             raise AssertionError(
                 f"expected a NEW line matching {marker!r} in {h.PFB_LOG} after the inner-reject "
-                f"zip Force Update; count before={before} after={after}\n"
+                f"gzip Force Update; count before={before} after={after}\n"
                 f"recent pfb_validate lines actually in the log:\n{_recent_validate_lines(deployed_vm)}"
             )
 

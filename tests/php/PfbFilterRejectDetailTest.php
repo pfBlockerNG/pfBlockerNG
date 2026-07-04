@@ -135,6 +135,51 @@ final class PfbFilterRejectDetailTest extends TestCase
 		unlink($log);
 	}
 
+	/**
+	 * Scenario: the file-not-found reject path honours the SAME out-param contract
+	 * (adversarial-review fix, PR #807). Every reject path inside the FILE_MIME /
+	 * FILE_MIME_COMPRESSED cases must either fill the out-param (opted in) or write
+	 * the legacy message (not opted in) -- an opted-in caller that got FALSE with an
+	 * UNFILLED array would double-log and emit undefined-index warnings at the
+	 * pfb_download() call sites.
+	 *
+	 * Given  a path that does not exist
+	 * When   FILE_MIME (and _COMPRESSED) validate it, opted in and not
+	 * Then   opted-in: detail filled ('file-not-found', retval -1), NO legacy line;
+	 *        non-opted: the legacy "Downloaded file not found" line, unchanged.
+	 */
+	public function testFileNotFoundRejectHonoursOutParamContract(): void
+	{
+		$missing = $this->dir . '/never-created.bin';
+
+		foreach ([PFB_FILTER_FILE_MIME, PFB_FILTER_FILE_MIME_COMPRESSED] as $type) {
+			// Opted in: detail filled, legacy suppressed.
+			$log = $this->tempLog();
+			$GLOBALS['pfb']['log'] = $log;
+			$detail = array();
+			$result = pfb_filter(["'unused'", $missing, 'http://feed.example/'], $type, 'test', '', FALSE, $detail);
+			$this->assertFalse($result);
+			$this->assertSame('file-not-found', $detail['mime_raw'] ?? null, "type {$type}: mime_raw must mark the missing file");
+			$this->assertSame(-1, $detail['retval'] ?? null, "type {$type}: retval must be the no-exec sentinel -1");
+			$logged = (string) file_get_contents($log);
+			$this->assertSame('', $logged, "type {$type}: expected NO legacy message once opted in, got <{$logged}>");
+			unlink($log);
+
+			// Not opted in: byte-identical legacy behaviour.
+			$log = $this->tempLog();
+			$GLOBALS['pfb']['log'] = $log;
+			$result = pfb_filter(["'unused'", $missing, 'http://feed.example/'], $type, 'test');
+			$this->assertFalse($result);
+			$logged = (string) file_get_contents($log);
+			$this->assertStringContainsString(
+				'Downloaded file not found:',
+				$logged,
+				"type {$type}: expected legacy file-not-found message in <{$logged}>"
+			);
+			unlink($log);
+		}
+	}
+
 	// --- PFB_FILTER_FILE_MIME_COMPRESSED ------------------------------------
 
 	private function skipIfHostLacksDashZSemantics(): void
