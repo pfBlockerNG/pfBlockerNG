@@ -228,7 +228,7 @@ ZXRnYXRlLmNvbQ0K
 
 	// Selected Alias/Groups to add to default installation
 	$new = array();
-	$new['pfblockernglistsv4']		= $new['pfblockerngdnsbl'] = $new['pfblockerngdnsbl'] = array();
+	$new['pfblockernglistsv4']		= $new['pfblockerngdnsbl'] = array();
 	$new['pfblockernglistsv4']['PRI1']	= $feed_info_raw['ipv4']['PRI1'];
 	$new['pfblockerngdnsbl']['ADs_Basic']	= $feed_info_raw['dnsbl']['ADs_Basic'];
 
