@@ -12658,6 +12658,127 @@ function pfb_alerts_unified_scan_done($filterlogentries, $unified_count, $pfbent
 }
 
 
+// Pass-1 buffer-append rule for the DNSBL non-filter two-pass render
+// (pfblockerng_alerts.php, issue #809 Phase 3a). Extracted verbatim (issue #809 T2
+// review) so the compression arithmetic is unit-pinned by AlertsBufferReplayTest
+// instead of living only as inline page code with no committed coverage.
+//
+// A duplicate-marker line ('-') either extends the buffer's trailing int run (a
+// run-length counter) or opens a fresh one; a non-dup line is appended verbatim as
+// $row. The page passes $row = NULL when $is_dup is TRUE ($row is unused on that
+// branch). See pfb_alerts_dnsbl_replay_step() for the Pass-2 counterpart.
+function pfb_alerts_dnsbl_buffer_push(array &$buf, bool $is_dup, $row): void {
+	if ($is_dup) {
+		$last = count($buf) - 1;
+		if ($last >= 0 && is_int($buf[$last])) {
+			$buf[$last]++;
+		} else {
+			$buf[] = 1;
+		}
+		return;
+	}
+
+	$buf[] = $row;
+}
+
+
+// Pass-2 replay-decode counterpart to pfb_alerts_dnsbl_buffer_push(): tells the
+// DNSBL render loop what a buffered entry MEANS, so it never has to inspect the
+// buffer's storage shape itself.
+//
+//   int N       -> array('dup' => N)     -- a compressed dup run: accumulate N
+//                                            into $dup['DNSBL'] in one step,
+//                                            output-identical to N individual
+//                                            $dup['DNSBL']++ increments.
+//   $fields row -> array('render' => $fields) -- replay through the unchanged
+//                                            convert_dnsbl_log() call.
+function pfb_alerts_dnsbl_replay_step($entry): array {
+	if (is_int($entry)) {
+		return array('dup' => $entry);
+	}
+
+	return array('render' => $entry);
+}
+
+
+// Pass-1 buffer-append rule for the IP two-pass render's two COMPRESSIBLE line
+// kinds (pfblockerng_alerts.php, issue #809 Phase 3b). Extracted verbatim (issue
+// #809 T2 review) so the compression arithmetic is unit-pinned by
+// AlertsBufferReplayTest instead of living only as inline page code with no
+// committed coverage. The third buffer shape -- an ACCEPTED row, array($fields,
+// TRUE) -- is not compressible and stays appended inline by the page.
+//
+// $kind is 'dup' (a duplicate-marker '-' line) or 'reject' (a filter-rejected
+// line):
+//   'dup'    -- extend a trailing int run, extend a trailing gap marker's 'dup'
+//               counter, or open a fresh int run.
+//   'reject' -- zero a trailing gap marker's 'dup' counter (mirrors the streamed
+//               loop's `$dup[$rtype] = 0` on every reject), REPLACE a trailing
+//               pure int run with a fresh zero-dup gap (those dups precede the
+//               reject, so the reset makes them irrelevant), or open a fresh
+//               zero-dup gap. A reject's fields are deliberately never kept --
+//               convert_ip_log()'s filter-reject path has a CONSTANT,
+//               field-independent effect (`$dup[$rtype] = 0; return
+//               array(FALSE, '');`), so only the post-last-reject dup count
+//               needs to survive.
+// See pfb_alerts_ip_replay_step() for the Pass-2 counterpart.
+function pfb_alerts_ip_buffer_push(array &$buf, string $kind): void {
+	$last = count($buf) - 1;
+	$last_is_int = $last >= 0 && is_int($buf[$last]);
+	$last_is_gap = $last >= 0 && is_array($buf[$last]) && isset($buf[$last]['rej']);
+
+	if ($kind === 'dup') {
+		if ($last_is_int) {
+			$buf[$last]++;
+		} elseif ($last_is_gap) {
+			$buf[$last]['dup']++;
+		} else {
+			$buf[] = 1;
+		}
+		return;
+	}
+
+	// 'reject'
+	if ($last_is_gap) {
+		$buf[$last]['dup'] = 0;
+	} elseif ($last_is_int) {
+		$buf[$last] = array('rej' => TRUE, 'dup' => 0);
+	} else {
+		$buf[] = array('rej' => TRUE, 'dup' => 0);
+	}
+}
+
+
+// Pass-2 replay-decode counterpart to pfb_alerts_ip_buffer_push(): tells the IP
+// render loop what a buffered entry MEANS, so it never has to inspect the
+// buffer's storage shape itself.
+//
+//   int N                -> array('dup_add' => N) -- a pure dup run: one
+//                            accumulation into $dup[$rtype], output-identical to
+//                            N individual $dup[$rtype]++ increments.
+//   array('rej'=>...,
+//         'dup'=>N)      -> array('gap' => N) -- a mixed dup/reject run. The
+//                            caller must SET $dup[$rtype] = N (never +=) and
+//                            clear $p_query_port, exactly as a reject's
+//                            convert_ip_log() return does; N is the dup count
+//                            AFTER the last reject in the run (earlier dups
+//                            never reach the next rendered row's badge).
+//   array($fields, TRUE) -> array('render' => $fields) -- an accepted row,
+//                            replayed through the unchanged convert_ip_log()
+//                            call.
+function pfb_alerts_ip_replay_step($entry): array {
+	if (is_int($entry)) {
+		return array('dup_add' => $entry);
+	}
+	if (isset($entry['rej'])) {
+		return array('gap' => $entry['dup']);
+	}
+
+	list($fields, ) = $entry;
+	return array('render' => $fields);
+}
+
+
 // Page-scope prefetch store for pfb_dnsbl_parse_compute()'s data/zone grep sites (issue
 // #809 Phase 3a). NULL means "no prefetch ran" -- every consult site then falls straight
 // through to its normal per-row exec, so daemon mode (which never seeds this) and any

@@ -4473,7 +4473,10 @@ if (!$alert_summary):
 				// dup-heavy, so this is what bounds the buffer at <= ($pfbentries + 1)
 				// field arrays plus <= ($pfbentries + 2) integers regardless of log size,
 				// keeping this pass as O(rows-rendered) in memory as the streamed loop it
-				// replaces (which held one line at a time).
+				// replaces (which held one line at a time). The append rule itself is
+				// pfb_alerts_dnsbl_buffer_push() (pfblockerng.inc) -- the single source of
+				// this compression arithmetic, unit-pinned by AlertsBufferReplayTest
+				// (issue #809 T2).
 				$dnsbl_buffered	 = array();
 				$dnsbl_qdomains	 = array();
 				$dnsbl_nondup_seen = 0;
@@ -4482,16 +4485,11 @@ if (!$alert_summary):
 
 						// Run-length compress consecutive duplicate-marker lines.
 						if ($fields[9] == '-') {
-							$dnsbl_last = count($dnsbl_buffered) - 1;
-							if ($dnsbl_last >= 0 && is_int($dnsbl_buffered[$dnsbl_last])) {
-								$dnsbl_buffered[$dnsbl_last]++;
-							} else {
-								$dnsbl_buffered[] = 1;
-							}
+							pfb_alerts_dnsbl_buffer_push($dnsbl_buffered, TRUE, NULL);
 							continue;
 						}
 
-						$dnsbl_buffered[] = $fields;
+						pfb_alerts_dnsbl_buffer_push($dnsbl_buffered, FALSE, $fields);
 						$dnsbl_nondup_seen++;
 
 						// dnsbl_log_details() is cheap and pure w.r.t. the globals it reads;
@@ -4514,21 +4512,24 @@ if (!$alert_summary):
 				// pfb_dnsbl_parse_compute() call in pass 2 below transparently consults.
 				pfb_dnsbl_prefetch($dnsbl_qdomains);
 
-				// Pass 2 (render): replay the buffer in the same (reversed) order. An
-				// integer entry is a compressed dup run and replays as one accumulation --
-				// output-identical to the N individual $dup['DNSBL']++ increments the
-				// streamed loop performed for those N consecutive lines. An array entry
-				// runs today's exact loop body, verbatim (its dup-marker check can never
-				// fire for a buffered array -- dup lines were compressed to integers in
-				// pass 1 -- but keeping it keeps the body identical to the streamed
-				// loop's).
+				// Pass 2 (render): replay the buffer in the same (reversed) order, decoding
+				// each entry via pfb_alerts_dnsbl_replay_step() (pfblockerng.inc) -- the
+				// same single source the compression above appended through, unit-pinned
+				// by AlertsBufferReplayTest (issue #809 T2). A 'dup' step is a compressed
+				// dup run and replays as one accumulation -- output-identical to the N
+				// individual $dup['DNSBL']++ increments the streamed loop performed for
+				// those N consecutive lines. A 'render' step runs today's exact loop body,
+				// verbatim (its dup-marker check can never fire for a buffered row -- dup
+				// lines were compressed away in pass 1 -- but keeping it keeps the body
+				// identical to the streamed loop's).
 				foreach ($dnsbl_buffered as $dnsbl_entry) {
 
-					if (is_int($dnsbl_entry)) {
-						$dup['DNSBL'] += $dnsbl_entry;
+					$dnsbl_step = pfb_alerts_dnsbl_replay_step($dnsbl_entry);
+					if (isset($dnsbl_step['dup'])) {
+						$dup['DNSBL'] += $dnsbl_step['dup'];
 						continue;
 					}
-					$fields = $dnsbl_entry;
+					$fields = $dnsbl_step['render'];
 
 					// Remove and record duplicate entries
 					if ($fields[9] == '-') {
@@ -4690,23 +4691,19 @@ if (!$alert_summary):
 				// trailing int run with a gap; later dups/rejects mutate that same gap), so
 				// the buffer holds <= ($pfbentries + 1) field arrays plus <= ($pfbentries + 2)
 				// int/gap entries REGARDLESS of log size or filter selectivity -- O(rows
-				// rendered), never O(rows scanned).
+				// rendered), never O(rows scanned). The 'dup'/'reject' append rules
+				// themselves are pfb_alerts_ip_buffer_push() (pfblockerng.inc) -- the single
+				// source of this compression arithmetic, unit-pinned by
+				// AlertsBufferReplayTest (issue #809 T2).
 				$ip_buffered	  = array();
 				$ip_accepted_seen = 0;
 				if (($handle = @popen('/usr/bin/tail -r ' . escapeshellarg($pfb_log), 'r')) !== FALSE) {
 					while (($fields = @fgetcsv($handle)) !== FALSE) {
 						$last_fld = array_pop($fields);
-						$ip_last = count($ip_buffered) - 1;
 
 						// Duplicate-marker line: extend the current run.
 						if ($last_fld == '-') {
-							if ($ip_last >= 0 && is_int($ip_buffered[$ip_last])) {
-								$ip_buffered[$ip_last]++;
-							} elseif ($ip_last >= 0 && is_array($ip_buffered[$ip_last]) && isset($ip_buffered[$ip_last]['rej'])) {
-								$ip_buffered[$ip_last]['dup']++;
-							} else {
-								$ip_buffered[] = 1;
-							}
+							pfb_alerts_ip_buffer_push($ip_buffered, 'dup');
 							continue;
 						}
 
@@ -4721,20 +4718,10 @@ if (!$alert_summary):
 							$accepted = pfb_match_filter_field($ip_copy, $filterfieldsarray[0]);
 						}
 
-						// Rejected line: fold into a gap marker. A reject resets the dup
-						// count (mirroring the streamed loop's `$dup[$rtype] = 0`), so it
-						// zeroes an existing gap's trailing-dup count, REPLACES a trailing
-						// pure-dup int run (those dups precede the reject, so the reset
-						// makes them irrelevant), or opens a fresh gap. The row's fields are
+						// Rejected line: fold into a gap marker. The row's fields are
 						// deliberately NOT kept -- see the constant-effect argument above.
 						if (!$accepted) {
-							if ($ip_last >= 0 && is_array($ip_buffered[$ip_last]) && isset($ip_buffered[$ip_last]['rej'])) {
-								$ip_buffered[$ip_last]['dup'] = 0;
-							} elseif ($ip_last >= 0 && is_int($ip_buffered[$ip_last])) {
-								$ip_buffered[$ip_last] = array('rej' => TRUE, 'dup' => 0);
-							} else {
-								$ip_buffered[] = array('rej' => TRUE, 'dup' => 0);
-							}
+							pfb_alerts_ip_buffer_push($ip_buffered, 'reject');
 							continue;
 						}
 
@@ -4777,10 +4764,13 @@ if (!$alert_summary):
 				}
 				pfb_ip_prefetch($ip_prefetch_rows);
 
-				// Pass 2 (render): replay the buffer in the same (reversed) order.
-				// - int N: a pure dup run -- one accumulation, output-identical to the N
+				// Pass 2 (render): replay the buffer in the same (reversed) order, decoding
+				// each entry via pfb_alerts_ip_replay_step() (pfblockerng.inc) -- the same
+				// single source the compression above appended through, unit-pinned by
+				// AlertsBufferReplayTest (issue #809 T2).
+				// - 'dup_add' N: a pure dup run -- one accumulation, output-identical to the N
 				//   individual $dup[$rtype]++ increments the streamed loop performed.
-				// - gap marker: a mixed dup/reject run. The streamed loop's net effect for
+				// - 'gap' N: a mixed dup/reject run. The streamed loop's net effect for
 				//   [d1 dups][reject]...[last reject][d2 dups] is $dup[$rtype] === d2 (each
 				//   reject RESET the count, then d2 post-reject dups re-accumulated) and
 				//   $p_query_port === '' (every reject returns array(FALSE, '') and the
@@ -4788,7 +4778,7 @@ if (!$alert_summary):
 				//   marker's post-last-reject count and clears $p_query_port. Ordering
 				//   matters and is preserved: the pre-reject d1 dups never reach the next
 				//   rendered row's badge, exactly as in the streamed loop.
-				// - accepted array: today's exact loop body, unchanged, over the SAME
+				// - 'render' $fields: today's exact loop body, unchanged, over the SAME
 				//   post-dup-pop $fields the streaming loop would have handed
 				//   convert_ip_log() (which transparently consults the batched prefetch
 				//   above via pfb_ip_render_memos(), falling back to its own per-row exec
@@ -4798,16 +4788,17 @@ if (!$alert_summary):
 				// coalesce comment above for why PHPStan needs this spelled out anyway.
 				$rtype = $rtype ?? '';
 				foreach ($ip_buffered as $ip_entry) {
-					if (is_int($ip_entry)) {
-						$dup[$rtype] += $ip_entry;
+					$ip_step = pfb_alerts_ip_replay_step($ip_entry);
+					if (isset($ip_step['dup_add'])) {
+						$dup[$rtype] += $ip_step['dup_add'];
 						continue;
 					}
-					if (isset($ip_entry['rej'])) {
-						$dup[$rtype] = $ip_entry['dup'];
+					if (isset($ip_step['gap'])) {
+						$dup[$rtype] = $ip_step['gap'];
 						$p_query_port = '';
 						continue;
 					}
-					list($fields, ) = $ip_entry;
+					$fields = $ip_step['render'];
 
 					$convert_ip = convert_ip_log('non_unified', $fields, $p_query_port, $rtype);
 					if ($convert_ip[0]) {
