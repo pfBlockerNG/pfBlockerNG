@@ -1,6 +1,18 @@
 # ADR-41: Immutable user firewall rules in the IP autorule reconciliation
 
-- **Status:** **Implemented — 4-way restored (pending live-VM smoke)** (2026-06-25). PR #561
+- **Status:** **Accepted** (2026-07-04). The §7 live-VM acceptance gate is green: issue #812 /
+  PR #826 wired the live sweep (`tests/smoke/test_smoke_autorule_immutable.py` — module
+  un-skipped; `pass_order` set explicitly per test; config-order assertions scoped to the LAN
+  pf-group projection; civm-driven blocked-vs-allowed data-plane probes with pf state +
+  rule-packet-counter evidence) and it passed the CE + Plus fan-out (runs 28706678122/28707270396
+  CE, 28706678716 Plus). Per-order data-plane verdicts proven live: the pfB Permit overrides a
+  user Block on the same host (decisive for `order_0`/`order_4`, where pfB's Permit is the only
+  pass ahead of the prepended user Block); the Deny victim is blocked for
+  `order_0`/`order_3`/`order_4` (packet-counter delta) and legitimately reachable for
+  `order_1`/`order_2` (the broad user allow precedes pfB's Deny — documented user-first
+  semantics). Remaining out-of-CI items are documented limitations, not blockers (see
+  `RESULTS/04` completion section). History below.
+- **Previous status:** Implemented — 4-way restored (pending live-VM smoke) (2026-06-25). PR #561
   shipped a **flawed** binary-anchor design (Phase 3): its Phase-2 kill-gate (`RESULTS/02`) returned
   a **false GO** — its precedence reduction omitted the **pfB-Permit (pass) vs user-Block**
   interaction, so the single anchor broke that precedence for `order_1`/`order_2` (a pfB Permit list
