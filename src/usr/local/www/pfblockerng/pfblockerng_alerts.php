@@ -2232,26 +2232,20 @@ function convert_dnsbl_log($mode, $fields) {
 		return TRUE;
 	}
 
-	// Counter/limit gate (issue #809), hoisted ahead of the expensive render-time
-	// re-check below (pfb_dnsbl_parse() + the dnsbl_whitelist_type() calls): this gate
-	// is independent of that parse -- it only reads $counter/$pfbentries/
-	// $dnsblfilterlimitentries, none of which the parse produces -- so evaluating it
-	// here first is output-identical to evaluating it after the parse (see the
-	// "Ordering constraint" note ahead of the filter-MATCH gate below, which is NOT
-	// safe to hoist and stays in place). Once the row limit is reached, today's code
-	// still pays the full parse before discarding the row; this runs the identical
-	// check first and discards it up front -- same rows rendered, same point
-	// $dnsblfilterlimit ends up TRUE, just without paying for the discarded ones.
-	if ($pfb['filterlogentries']) {
-		if ($dnsblfilterlimitentries != 0 && $counter[$mode == 'Unified' && !$pfb['filterlogentries'] ? 'Unified' : 'DNSBL'] >= $dnsblfilterlimitentries) {
-			$dnsblfilterlimit = TRUE;
-			return TRUE;
-		}
-	} else {
-		if ($counter[$mode == 'Unified' && !$pfb['filterlogentries'] ? 'Unified' : 'DNSBL'] >= $pfbentries) {
-			$dnsblfilterlimit = TRUE;
-			return TRUE;
-		}
+	// Counter/limit gate (issue #809): only the NON-FILTER limit check is
+	// order-independent of the expensive render-time re-check below
+	// (pfb_dnsbl_parse() + the dnsbl_whitelist_type() calls) -- it only reads
+	// $counter/$pfbentries, neither of which the parse produces -- so it is hoisted
+	// here, output-identical to evaluating it after the parse. The filter-mode limit
+	// gate is NOT hoisted and stays after the filter-MATCH gate (restored ahead of the
+	// $counter[...]++ below): on origin/devel it only ever tripped on a row that
+	// PASSED the filter match, so hoisting it here changed the tfoot "Filter Limit"
+	// flag for a post-limit tail of rows that never match the filter (B1, PR #825
+	// review) -- see the "Ordering constraint" note ahead of that gate below.
+	if (!$pfb['filterlogentries'] &&
+		$counter[$mode == 'Unified' && !$pfb['filterlogentries'] ? 'Unified' : 'DNSBL'] >= $pfbentries) {
+		$dnsblfilterlimit = TRUE;
+		return TRUE;
 	}
 
 	/* dnsbl.log Fields Reference
@@ -2523,15 +2517,21 @@ function convert_dnsbl_log($mode, $fields) {
 	// Ordering constraint: this filter matches the CORRECTED fields ($pfbalertdnsbl is
 	// built from post-pfb_dnsbl_parse values), so the filter-MATCH gate cannot be
 	// hoisted above the parse without changing filter semantics — a feed-name filter
-	// matches the domain's current feed, not the stale logged one. The counter/limit
-	// gate is independent of the parse and now runs at the top of this function,
-	// before the parse (issue #809) — see the comment there.
+	// matches the domain's current feed, not the stale logged one. The filter-mode
+	// limit gate below shares that constraint: it only trips AFTER a row passes the
+	// match, so it stays here too (issue #809 only hoists the non-filter limit gate to
+	// the top of this function, since that one is parse-independent — see the comment
+	// there; B1, PR #825 review).
 	if ($pfb['filterlogentries']) {
 		if (empty($filterfieldsarray[1])) {
 			return TRUE;
 		}
 		if (!pfb_match_filter_field($pfbalertdnsbl, $filterfieldsarray[1])) {
 			return FALSE;
+		}
+		if ($dnsblfilterlimitentries != 0 && $counter[$mode == 'Unified' && !$pfb['filterlogentries'] ? 'Unified' : 'DNSBL'] >= $dnsblfilterlimitentries) {
+			$dnsblfilterlimit = TRUE;
+			return TRUE;
 		}
 	}
 	$counter[$mode == 'Unified' && !$pfb['filterlogentries'] ? 'Unified' : 'DNSBL']++;
@@ -4541,10 +4541,13 @@ if (!$alert_summary):
 					$dup['DNSBL'] = 0;
 				}
 
-				// Clear the prefetch store now that this table's render pass is done, so a
-				// later per-row consumer on this SAME page load (the Unified table, later in
-				// this same foreach over $logtype) sees no seeded store and runs pure
-				// per-row, exactly as before this phase.
+				// Clear the prefetch store now that this table's render pass is done.
+				// Defensive hygiene, not a live fix: the $alert_view switch above renders
+				// at most ONE pfb_dnsbl_parse-consuming table per request (each other
+				// $alert_view/$logtype combination hits `continue 2` before reaching this
+				// loop), so no later same-process consumer can actually see a stale seed
+				// today. The reset just guarantees that stays true if a future change adds
+				// a second consumer to this request.
 				pfb_dnsbl_prefetch_store(NULL);
 			}
 		}

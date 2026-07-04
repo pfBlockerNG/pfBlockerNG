@@ -12667,8 +12667,11 @@ function pfb_alerts_unified_scan_done($filterlogentries, $unified_count, $pfbent
 // Seed / reset value:   pfb_dnsbl_prefetch_store($arrayOrNull)  -- an explicit NULL
 //                        argument (func_num_args() > 0) resets to "no prefetch", which
 //                        is how the DNSBL table render pass (pfblockerng_alerts.php)
-//                        clears the store once it finishes, so a later per-row consumer
-//                        on the SAME page load (e.g. the Unified table) sees no seed.
+//                        clears the store once it finishes. Defensive hygiene, not a
+//                        live fix: that page renders at most one prefetch-consuming
+//                        table per request, so no later same-process consumer can
+//                        actually see a stale seed today -- the reset just guarantees
+//                        that stays true if a future change adds a second consumer.
 function pfb_dnsbl_prefetch_store(?array $seed = NULL): ?array {
 	static $store = NULL;
 
