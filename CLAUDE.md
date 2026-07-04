@@ -804,7 +804,9 @@ Non-obvious truths, each costly to relearn:
 - **Test domains MUST be `helpers.unique_domain()`** (`uuid-*.com`): never RFC 6761 TLDs
   (`.test`/`.example`/`.invalid`/…) — Unbound's built-in `local-zone`s shadow them
   (NXDOMAIN/NODATA) before DNSBL — and never HSTS-preload names (`pfb_hsts`, default ON, forces
-  a would-be VIP block to NULL).
+  a would-be VIP block to NULL). **Sole carve-out:** a byte-identity harness (captures must be
+  byte-comparable across two separate CI runs, e.g. `tests/smoke/ui/test_alerts_render_verify.py`)
+  uses fixed inert literals instead — the RFC 6761 and HSTS-preload prohibitions still apply.
 - **Block shapes (python mode):** NOERROR + VIP (`dnsbl_ipv4`) or NULL (`0.0.0.0`/`::`); NEVER
   NXDOMAIN for a feed match (NXDOMAIN is SafeSearch-only). Per-list `logging` selects VIP vs
   NULL and is a **LIST-level** field (`$list['logging']`), not per-row. Compare IPs **by value**
