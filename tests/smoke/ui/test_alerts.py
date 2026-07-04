@@ -649,6 +649,349 @@ def test_addsuppress_v4_already_covered_by_broader_entry_skips_duplicate(
 
 
 # --------------------------------------------------------------------------- #
+# entry_delete=delete_ip (alerts.php:1330 -- issue #422, ADR-53 parity follow-up):
+# un-suppress a customlist entry and restore the live block. Before this fix the
+# handler only recognised an exact '/32' customlist key or a containing '/24' --
+# any OTHER mask (e.g. a manually-added /28) made the lookup miss entirely (the
+# handler replied "not found", touching neither the customlist nor the pf table),
+# and the entry_delete VALIDATION GATE itself was PFB_FILTER_IPV4, so an IPv6
+# domain was rejected before ever reaching the handler. pfb_ip_suppressed_match()
+# (longest-prefix, any mask, either family) fixes both: it resolves the ALERTED
+# HOST to its covering customlist entry, removes that entry, and re-adds it to
+# the live pf table -- restoring exactly the coverage it had carved out.
+# --------------------------------------------------------------------------- #
+
+
+def test_delete_ip_v4_unsuppresses_broader_entry_and_restores_block(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """entry_delete=delete_ip un-suppresses a BROADER (/28) v4 entry, restoring the block.
+
+    Before #422 the handler only understood an exact '/32' or a containing '/24'
+    customlist key -- a manually-added /28 (or any other mask) made the lookup
+    MISS entirely: "not found", customlist and pf table both left untouched. The
+    longest-prefix pfb_ip_suppressed_match() fixes the lookup for any mask.
+
+    Given: a live Deny v4 pf table (built exactly like the addsuppress carve
+    tests -- inject a feed + Force IP Update) whose feed does NOT cover the
+    suppressed /28 hole, plus a manually-seeded v4suppression entry
+    '198.51.100.0/28' covering the host that will be "deleted".
+    When: entry_delete=delete_ip is posted for the ALERTED HOST (not the
+    customlist entry itself -- the handler must resolve host -> covering /28).
+    Then: the /28 entry is gone from v4suppression, and the host now matches the
+    pf table (the removed entry was re-added, restoring the block it carved out).
+    """
+    vm = smoke_vm
+    target = "198.51.100.5"  # inside the /28 hole below (RFC 5737 TEST-NET-2)
+    supp_entry = "198.51.100.0/28"  # broader than the retired /32|/24-only lookup
+    sibling = "198.51.100.200"  # outside the /28 -- feeds the table so it EXISTS
+
+    feed_url = helpers.write_local_feed(vm, "ui_unsupp4.txt", f"{sibling}/32\n")
+    spec = helpers.IpCase(aliasname="uiunsupp4", feed_url=feed_url, header="uiunsupp4")
+    table = spec.alias
+    original = helpers.config_get(vm, CFG_V4SUPPRESSION)
+
+    helpers.inject(vm, spec)
+    helpers.reload(vm, "updateip")
+    try:
+        # GIVEN: seed the broader manual suppression entry directly (mirrors a
+        # prior manual customlist edit, not one produced by addsuppress here).
+        supp_b64 = base64.b64encode(f"{supp_entry} # smoke-unsuppress\r\n".encode()).decode()
+        helpers.php_eval(
+            vm,
+            f"config_set_path('{CFG_V4SUPPRESSION}', '{supp_b64}');\n"
+            "write_config('pfBlockerNG smoke: seed v4suppression /28 for unsuppress');\n"
+            "echo 'OK';",
+        )
+
+        # BEFORE: the table exists (the sibling populated it) and does NOT cover
+        # the suppressed hole; the /28 entry is present in v4suppression.
+        members = helpers.wait_pfctl_table(vm, table)
+        assert members, f"pf table {table} never populated after the settling update"
+        assert supp_entry in _suppression_entries(vm, CFG_V4SUPPRESSION), (
+            f"{supp_entry} not present in v4suppression before the un-suppress POST"
+        )
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, target)
+        assert not matched, (
+            f"{target} unexpectedly matches pf table {table} before the un-suppress; pfctl said: {raw!r}"
+        )
+
+        # WHEN: entry_delete=delete_ip for the ALERTED HOST -- the handler must
+        # resolve host -> covering /28 itself via pfb_ip_suppressed_match().
+        resp = _post_action(webui, {"entry_delete": "delete_ip", "domain": target, "table": table})
+        assert not looks_like_login_page(resp.text), "delete_ip POST returned the login form (session lost)"
+
+        # THEN: the /28 entry is gone from v4suppression ...
+        entries = _suppression_entries(vm, CFG_V4SUPPRESSION)
+        assert supp_entry not in entries, (
+            f"{supp_entry} still present in v4suppression after entry_delete=delete_ip; entries={entries}"
+        )
+        # ... and the host now matches the pf table again -- the removed entry
+        # was re-added, restoring exactly the block it had carved out.
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, target)
+        assert matched, (
+            f"{target} does not match pf table {table} after un-suppressing the covering /28 -- "
+            f"the block was not restored; pfctl said: {raw!r}"
+        )
+    finally:
+        helpers.php_eval(
+            vm,
+            f"config_set_path('{CFG_V4SUPPRESSION}', '{original}');\n"
+            "write_config('pfBlockerNG smoke: restore v4suppression');\n"
+            "echo 'OK';",
+        )
+        helpers.reset(vm)
+
+
+def test_delete_ip_v6_unsuppresses_entry_and_restores_block(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """entry_delete=delete_ip un-suppresses a v6 entry -- IPv6 was REJECTED before #422.
+
+    Before #422 the entry_delete VALIDATION GATE was PFB_FILTER_IPV4, so ANY IPv6
+    domain was rejected outright (a savemsg, no config write) before ever reaching
+    the delete_ip handler -- there was no v6 branch at all. The gate is now
+    PFB_FILTER_IP (both families), and the handler routes an IPv6 host through
+    v6suppression + ``pfctl -t <table> -T add``.
+
+    Given: a live Deny v6 pf table, plus a manually-seeded v6suppression entry
+    '2001:db8:aa::/64' covering the host that will be "deleted".
+    When: entry_delete=delete_ip is posted for the host.
+    Then: the /64 entry is gone from v6suppression, and the host now matches the
+    pf table again (the block is restored).
+    """
+    vm = smoke_vm
+    target = "2001:db8:aa::5"  # inside the suppressed /64 (RFC 3849)
+    supp_entry = "2001:db8:aa::/64"
+    sibling = "2001:db8:bb::1"  # a SEPARATE /64 -- feeds the table so it EXISTS
+
+    feed_url = helpers.write_local_feed(vm, "ui_unsupp6.txt", f"{sibling}/128\n")
+    spec = helpers.IpCase(aliasname="uiunsupp6", feed_url=feed_url, header="uiunsupp6", family="v6")
+    table = spec.alias
+    original = helpers.config_get(vm, CFG_V6SUPPRESSION)
+
+    helpers.inject(vm, spec)
+    helpers.reload(vm, "updateip")
+    try:
+        supp_b64 = base64.b64encode(f"{supp_entry} # smoke-unsuppress\r\n".encode()).decode()
+        helpers.php_eval(
+            vm,
+            f"config_set_path('{CFG_V6SUPPRESSION}', '{supp_b64}');\n"
+            "write_config('pfBlockerNG smoke: seed v6suppression /64 for unsuppress');\n"
+            "echo 'OK';",
+        )
+
+        # BEFORE: the table exists (the sibling populated it) and does NOT cover
+        # the suppressed hole; the /64 entry is present in v6suppression.
+        members = helpers.wait_pfctl_table(vm, table)
+        assert members, f"pf table {table} never populated after the settling update"
+        assert supp_entry in _suppression_entries(vm, CFG_V6SUPPRESSION), (
+            f"{supp_entry} not present in v6suppression before the un-suppress POST"
+        )
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, target)
+        assert not matched, (
+            f"{target} unexpectedly matches pf table {table} before the un-suppress; pfctl said: {raw!r}"
+        )
+
+        # WHEN: entry_delete=delete_ip for the IPv6 host -- REJECTED outright
+        # before #422 (PFB_FILTER_IPV4 gate), so this POST alone is part of the
+        # regression this test pins.
+        resp = _post_action(webui, {"entry_delete": "delete_ip", "domain": target, "table": table})
+        assert not looks_like_login_page(resp.text), "delete_ip POST returned the login form (session lost)"
+
+        # THEN: the /64 entry is gone from v6suppression ...
+        entries = _suppression_entries(vm, CFG_V6SUPPRESSION)
+        assert supp_entry not in entries, (
+            f"{supp_entry} still present in v6suppression after entry_delete=delete_ip; entries={entries}"
+        )
+        # ... and the host now matches the pf table again.
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, target)
+        assert matched, (
+            f"{target} does not match pf table {table} after un-suppressing the covering /64 -- "
+            f"the block was not restored; pfctl said: {raw!r}"
+        )
+    finally:
+        helpers.php_eval(
+            vm,
+            f"config_set_path('{CFG_V6SUPPRESSION}', '{original}');\n"
+            "write_config('pfBlockerNG smoke: restore v6suppression');\n"
+            "echo 'OK';",
+        )
+        helpers.reset(vm)
+
+
+# --------------------------------------------------------------------------- #
+# Suppression-icon render eligibility (convert_ip_log, alerts.php:3057 -- issue
+# #422, ADR-53 follow-up). Before this fix the gate was
+# ``$pfb_ipv4 && !$pfb_geoip && $mask_suppression`` -- TRUE only for a v4 host
+# evaluated against an exact /32 or /24 mask. A v6 Block row, or a v4 row
+# evaluated against any OTHER mask, got NEITHER the "+" (add) nor the trash-can
+# (un-suppress) icon at all. The gate is now family/mask-agnostic
+# (``$rtype == 'Block' && !$pfb_geoip``), and the covered-vs-not lookup itself
+# is prefix-aware (pfb_ip_suppressed_match()), so a host covered by a BROADER
+# manual entry (not just an exact /32 or /24 key) now gets the trash-can too.
+# --------------------------------------------------------------------------- #
+
+
+def test_alerts_rows_render_suppress_icons_for_v6_and_broad_v4(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """Alerts render the Suppression icon for a v6 row and a broad-mask v4 row.
+
+    Scenario: suppress-icon render eligibility, any family/mask.
+
+    Background: three synthetic Block rows are appended directly to
+    ip_block.log (the same CSV-injection technique as issue #361's rendering
+    test), each exercising one branch the retired v4-only /32|/24 gate could
+    not reach: (a) a v6 host, (b) a v4 host evaluated against a broad /16 mask,
+    (c) a v4 host covered by a manually-seeded BROADER (/28) v4suppression
+    entry, with the master Suppression toggle forced ON.
+
+    Given: DNSBL is untouched; the three rows above are appended to
+        ip_block.log, none of their icon markers rendered beforehand.
+    When: the Alerts page is GET-ted (default view, which renders ip_block.log).
+    Then:
+        (a) and (b) render the "+" (``PFBIPSUP|add|<host>``) icon -- both rows
+            would have rendered NEITHER icon under the retired v4-only/32|/24 gate.
+        (c) renders the trash-can (``DNSBLWT|delete_ip|<host>``) icon -- the
+            prefix-aware match finds the covering /28, which an exact-/32|/24-only
+            lookup would have missed (the row would have gotten the "+" instead).
+
+    Cleanup: the appended log lines are truncated back off in ``finally``, and
+    the master Suppression toggle + v4suppression are restored to their
+    original values.
+    """
+    vm = smoke_vm
+
+    v6_host = helpers.IPV6_FOREIGN  # 2001:db8:dead:beef::1
+    v6_local = helpers.IPV6_LOCAL_HOST
+    v4_broad_host = "198.51.100.77"  # RFC 5737 TEST-NET-2, evaluated against a /16
+    v4_supp_host = "203.0.113.9"  # RFC 5737 TEST-NET-3, covered by the seeded /28
+    supp_entry = "203.0.113.0/28"
+
+    ts = time.strftime("%b %d %H:%M:%S")  # e.g. "Jun 18 12:00:00"
+    # ip_block.log CSV format (21 fields, see the issue #361 test above):
+    # ts,rule,real_iface,friendly_iface,action,ipv,proto_id,proto,
+    # src_ip,dst_ip,src_port,dst_port,dir,geoip,alias,ip_eval,feed,rhost,chost,asn,dup
+    csv_lines = (
+        # (a) v6, inbound -> $host = SRC = the foreign v6 address; ip_eval /48.
+        f"{ts},100,em0,WAN,block,6,58,ICMPV6,"
+        f"{v6_host},{v6_local},,"
+        f",in,US,pfB_Deny_v6,"
+        "2001:db8:dead::/48,pfB_TestFeed_v6,Unknown,Unknown,Unknown,+\n"
+        # (b) v4, inbound -> $host = SRC = the broad-mask host; ip_eval mask /16.
+        f"{ts},100,em0,WAN,block,4,6,TCP,"
+        f"{v4_broad_host},10.0.0.5,12345,443,"
+        "in,US,pfB_Deny_v4,"
+        "198.51.0.0/16,pfB_TestFeed_v4,Unknown,Unknown,Unknown,+\n"
+        # (c) v4, inbound -> $host covered by the seeded v4suppression /28.
+        f"{ts},100,em0,WAN,block,4,6,TCP,"
+        f"{v4_supp_host},10.0.0.6,12345,443,"
+        "in,US,pfB_Deny_v4,"
+        "203.0.113.0/28,pfB_TestFeed_v4,Unknown,Unknown,Unknown,+\n"
+    )
+
+    ip_block_log = helpers.IP_BLOCK_LOG
+    supp_master_path = "installedpackages/pfblockerngipsettings/config/0/suppression"
+    original_supp = helpers.config_get(vm, CFG_V4SUPPRESSION)
+    original_master = helpers.config_get(vm, supp_master_path)
+
+    # ip_block.log is created lazily -- guarantee it (and its dir) exist idempotently
+    # before appending (mirrors the issue #361 test's precondition handling).
+    log_dir = ip_block_log.rsplit("/", 1)[0]
+    ensure_result = vm.ssh(f"mkdir -p {log_dir} && touch {ip_block_log}", timeout=15)
+    assert ensure_result.returncode == 0, (
+        f"Failed to ensure {ip_block_log!r} exists before mutation: "
+        f"rc={ensure_result.returncode}, stderr={ensure_result.stderr!r}"
+    )
+    size_result = vm.ssh("stat", "-f", "%z", ip_block_log, timeout=15)
+    assert size_result.returncode == 0, (
+        f"Failed to stat {ip_block_log!r} before mutation: rc={size_result.returncode}, stderr={size_result.stderr!r}"
+    )
+    original_size = size_result.stdout.strip()
+
+    try:
+        # GIVEN: master Suppression forced ON + a /28 v4suppression entry covering (c).
+        supp_b64 = base64.b64encode(f"{supp_entry} # smoke-icon\r\n".encode()).decode()
+        helpers.php_eval(
+            vm,
+            f"config_set_path('{supp_master_path}', 'on');\n"
+            f"config_set_path('{CFG_V4SUPPRESSION}', '{supp_b64}');\n"
+            "write_config('pfBlockerNG smoke: seed suppression for icon test');\n"
+            "echo 'OK';",
+        )
+
+        # BEFORE (no false pass): none of the three icon markers are present yet.
+        pre = webui.get(ALERTS_PAGE)
+        assert not looks_like_login_page(pre.text), "alerts page GET returned login form before mutation (session lost)"
+        for marker in (
+            f"PFBIPSUP|add|{v6_host}",
+            f"PFBIPSUP|add|{v4_broad_host}",
+            f"DNSBLWT|delete_ip|{v4_supp_host}",
+        ):
+            assert marker not in pre.text, f"Precondition failed: {marker!r} already present before the synthetic rows"
+
+        # WHEN: append the synthetic rows and GET the Alerts page (default view).
+        append_result = subprocess.run(
+            vm.ssh_argv("tee", "-a", ip_block_log),
+            input=csv_lines,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        assert append_result.returncode == 0, (
+            f"Failed to append synthetic lines to {ip_block_log!r}: "
+            f"rc={append_result.returncode}, stderr={append_result.stderr!r}"
+        )
+
+        resp = webui.get(ALERTS_PAGE)
+        assert not looks_like_login_page(resp.text), (
+            "alerts page GET returned login form (session lost before icon render test)"
+        )
+        html_body = resp.text
+
+        # THEN (a): v6 Block row -> "+" icon (never rendered under the v4-only gate).
+        assert f"PFBIPSUP|add|{v6_host}" in html_body, (
+            f"'+' suppression icon missing for v6 host {v6_host!r} -- the retired v4-only gate "
+            "would have skipped this row entirely"
+        )
+        # THEN (b): v4 row evaluated against a broad /16 -> "+" icon (the retired
+        # gate required an exact /32 or /24 mask).
+        assert f"PFBIPSUP|add|{v4_broad_host}" in html_body, (
+            f"'+' suppression icon missing for v4 host {v4_broad_host!r} evaluated against a /16 "
+            "mask -- the retired mask_suppression gate only accepted /32 or /24"
+        )
+        # THEN (c): v4 row covered by a manual /28 -> trash-can icon (prefix-aware match).
+        assert f"DNSBLWT|delete_ip|{v4_supp_host}" in html_body, (
+            f"trash-can (un-suppress) icon missing for v4 host {v4_supp_host!r} covered by the "
+            f"broader {supp_entry!r} entry -- an exact-/32|/24-only lookup would have missed it"
+        )
+    finally:
+        truncate_result = subprocess.run(
+            vm.ssh_argv("/usr/bin/truncate", "-s", original_size, ip_block_log),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        assert truncate_result.returncode == 0, (
+            f"Failed to restore {ip_block_log!r} to size={original_size!r}: "
+            f"rc={truncate_result.returncode}, stderr={truncate_result.stderr!r}"
+        )
+        helpers.php_eval(
+            vm,
+            f"config_set_path('{supp_master_path}', '{original_master}');\n"
+            f"config_set_path('{CFG_V4SUPPRESSION}', '{original_supp}');\n"
+            "write_config('pfBlockerNG smoke: restore suppression for icon test');\n"
+            "echo 'OK';",
+        )
+
+
+# --------------------------------------------------------------------------- #
 # Upstream block rendering (issue #285): a synthetic Upstream_Block CSV line
 # appended to dnsbl.log must render with the cloud icon ($pfb_python override)
 # and the Group column must show "Upstream", NOT "Unknown".
