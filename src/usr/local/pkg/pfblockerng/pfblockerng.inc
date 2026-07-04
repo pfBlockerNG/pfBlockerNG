@@ -10530,7 +10530,11 @@ function pfb_collect_localip() {
 	}
 	if (!empty($pfb_alias_addrs)) {
 		foreach ($pfb_local as $cnt => $entry) {
-			if (!array_key_exists($entry, $pfb_alias_addrs)) {
+			// A malformed config value (e.g. an array-typed NAT target) must not
+			// abort the walk: array_key_exists() throws a TypeError on a non-scalar
+			// key under PHP 8. Leave it in place for the later array_flip() to
+			// warn-and-drop, matching pre-#782 tolerance.
+			if (!is_string($entry) || !array_key_exists($entry, $pfb_alias_addrs)) {
 				continue;
 			}
 			unset($pfb_local[$cnt]);
