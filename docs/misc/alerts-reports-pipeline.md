@@ -116,11 +116,39 @@ Phase 1's per-domain memo and shared SQLite handle, just not the batched grep.
 IP row (`convert_ip_log`):
 
 - validate: `find <feed dirs> | xargs grep '^<ip>'` (narrowed to the logged feed's file
-  in the common case; the whole dir for GeoIP/ET rows);
+  in the common case; the whole dir for GeoIP/ET rows) — **unless** the row was already
+  resolved by the batched prefetch pass below;
 - on a miss: `find_reported_header()` — an exact-IP grep across every file in the
   deny+native (or GeoIP) dirs, then a first-octet/prefix grep whose output PHP walks
   doing per-CIDR math — plus one more `find | xargs grep` across **all of
-  `/var/db/aliastables/*.txt`** (millions of lines with large/aggregated tables).
+  `/var/db/aliastables/*.txt`** (millions of lines with large/aggregated tables) — same
+  prefetch exception.
+
+**Batched prefetch (issue #809 Phase 3b), scope-limited:** the per-type Block/Permit/Match
+table (`convert_ip_log()` via the `Block`/`Permit`/`Match` branch in
+`pfblockerng_alerts.php`) runs a two-pass render whenever a **finite row bound** exists —
+non-filter mode, or filter mode with a real per-row limit (`$ipfilterlimitentries != 0`)
+*and* real filter fields set. Pass 1 buffers the rows the render will walk (run-length
+compressing `'-'` duplicate markers, exactly like Phase 3a); in filter mode it replays
+`pfb_match_filter_field()` on a copy and compresses each mixed run of dup-marker and
+REJECTED lines into one gap marker `(had-reject, dups-after-last-reject)` — sound because
+a rejected row's entire streamed-loop effect is constant and field-independent (the
+`$dup = 0` reset plus `$p_query_port = ''`), so only the dups after the run's last reject
+survive into the next rendered row's badge. That bounds the buffer at ≤ (limit + 1) field
+arrays plus ≤ (limit + 2) scalar/marker entries regardless of log size or filter
+selectivity — O(rows rendered), never O(rows scanned). Pass 1.5
+derives every accepted row's query (`pfb_ip_render_query()` — the SAME derivation
+`convert_ip_log()` itself uses) and hands them to `pfb_ip_prefetch()`, which runs, in a
+bounded number of `grep -f <patternfile>` passes: the validate round (grouped by the
+shared file-listing pipeline), the miss round (`pfb_find_reported_headers()`, a batched
+exact + prefix/CIDR sibling of `find_reported_header()` sharing `pfb_match_reported_cidr()`
+with it), and the aliastables round (one pass across every still-missing row). Pass 2
+replays the buffer through the unchanged per-row loop body, which transparently consults
+the seeded results (`pfb_ip_render_memos()`) instead of re-`exec`'ing. Filter mode with
+`$ipfilterlimitentries == 0` (genuinely unbounded — the log is scanned to EOF regardless)
+and the degenerate `empty($filterfieldsarray[0])` case both keep the single-pass streaming
+loop verbatim. The Unified table is untouched, same reasoning as the DNSBL Phase 3a
+carve-out (its own accept/skip decisions are converter-internal).
 
 Page level:
 

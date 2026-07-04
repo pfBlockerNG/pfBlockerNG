@@ -1154,3 +1154,21 @@ if (!function_exists('ip_range_to_subnet_array')) {
 		return $out;
 	}
 }
+
+if (!class_exists('Net_IPv6')) {
+	// PEAR Net_IPv6 -- a pfSense on-appliance dependency (pulled in via util.inc's PEAR
+	// includes), not installed off-appliance. pfblockerng.inc calls exactly ONE method,
+	// isInNetmask($ip, "$network/$bits"), inside find_reported_header()'s (and, since
+	// issue #809 Phase 3b, pfb_match_reported_cidr()'s) IPv6 CIDR-containment check —
+	// this double stands in for that ONE call. FAITHFUL, not a shortcut: it delegates to
+	// pfb_ip_in_cidr() (pfblockerng.inc), the package's own byte/bitmask packed-address
+	// containment test, already covered by its own suite (FeedHostAllowedTest) -- so this
+	// double carries no independent containment logic to get wrong. Guarded by
+	// class_exists() so a real PEAR install (never present off-appliance) is never
+	// shadowed.
+	class Net_IPv6 {
+		public static function isInNetmask($ip, $cidr) {
+			return pfb_ip_in_cidr($ip, $cidr);
+		}
+	}
+}
