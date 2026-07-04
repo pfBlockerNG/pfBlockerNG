@@ -567,37 +567,65 @@ final class PfbRemoveStatesTest extends TestCase
 	}
 
 	/**
-	 * Scenario (#769) — a local IP collected by pfb_collect_localip() spares its state.
+	 * Scenario (#769) — local IPs collected by pfb_collect_localip() spare their
+	 * states, both families.
 	 *
 	 * Given: a NAT rule whose target is the (public, otherwise-killable)
-	 *        198.51.100.44 — pfb_collect_localip() folds NAT targets into its
-	 *        IP-keyed local map — plus a table-matched victim state alongside it.
+	 *        198.51.100.44 and a bare-address v6 VIP 3fff::44 — pfb_collect_localip()
+	 *        folds both into its IP-keyed local map — plus a table-matched victim
+	 *        state per family.
 	 * When:  pfb_remove_states() runs.
-	 * Then:  the victim is killed (proves the pass ran) and the local IP is NOT.
-	 *        FAILS pre-fix: the "Remove any duplicate IPs" step re-flipped the
-	 *        already-flipped local map (array_flip(array_unique())), turning its
-	 *        IP keys back into integers, so isset($pfb_local[$s_ip]) never matched.
+	 * Then:  both victims are killed (proves the pass ran) and neither local IP is.
+	 *        FAILS pre-fix (both families): the "Remove any duplicate IPs" step
+	 *        re-flipped the already-flipped local map (array_flip(array_unique())),
+	 *        turning its IP keys back into integers, so isset($pfb_local[$s_ip])
+	 *        never matched.
 	 */
-	public function test_local_ip_from_collect_localip_spares_state_others_still_killed(): void
+	public function test_local_ips_from_collect_localip_spare_states_both_families_others_still_killed(): void
 	{
-		$local = '198.51.100.44';
+		$local4 = '198.51.100.44';
+		$local6 = '3fff::44';
+
+		// Precondition (not theater): the v6 fixture must be PUBLIC to this PHP's
+		// filter, or the v6 branch under test is never reached.
+		$this->assertNotFalse(
+			filter_var($local6, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE),
+			"{$local6} must validate as public IPv6 under NO_PRIV|NO_RES on this PHP — pick a different fixture address"
+		);
 
 		$this->seedConfig();
-		$GLOBALS['config']['nat']['rule'] = [['target' => $local]];
-		$this->seedStates($this->v4State($local), $this->v4State(self::V4_VICTIM, 54322));
-		$this->seedTableMatches($local, self::V4_VICTIM);
+		$GLOBALS['config']['nat']['rule'] = [['target' => $local4]];
+		// Bare-address VIP (no subnet_bits) rides pfb_collect_localip()'s is_ipaddr() branch.
+		$GLOBALS['config']['virtualip']['vip'] = [['subnet' => $local6]];
+		$this->seedStates(
+			$this->v4State($local4),
+			$this->v4State(self::V4_VICTIM, 54322),
+			$this->v6State($local6),
+			$this->v6State(self::V6_VICTIM)
+		);
+		$this->seedTableMatches($local4, self::V4_VICTIM, $local6, self::V6_VICTIM);
 
 		$kills = $this->runRemoveStates();
 
 		$this->assertStringContainsString(
 			self::V4_VICTIM,
 			$kills,
-			'the non-local ' . self::V4_VICTIM . " must be killed (proves the pass ran) — kill log was:\n{$kills}"
+			'the non-local ' . self::V4_VICTIM . " must be killed (proves the v4 pass ran) — kill log was:\n{$kills}"
+		);
+		$this->assertStringContainsString(
+			self::V6_VICTIM,
+			$kills,
+			'the non-local ' . self::V6_VICTIM . " must be killed (proves the v6 pass ran) — kill log was:\n{$kills}"
 		);
 		$this->assertStringNotContainsString(
-			$local,
+			$local4,
 			$kills,
-			"the pfb_collect_localip()-sourced {$local} must be excluded from clearing — kill log was:\n{$kills}"
+			"the pfb_collect_localip()-sourced {$local4} must be excluded from clearing — kill log was:\n{$kills}"
+		);
+		$this->assertStringNotContainsString(
+			$local6,
+			$kills,
+			"the pfb_collect_localip()-sourced {$local6} must be excluded from clearing — kill log was:\n{$kills}"
 		);
 	}
 
