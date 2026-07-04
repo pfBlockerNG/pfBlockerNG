@@ -44,21 +44,30 @@ $pfbmaxtable	= $pfb['aglobal']['pfbmaxtable']	!= ''	? $pfb['aglobal']['pfbmaxtab
 $pfbreplytypes	= explode(',', $pfb['aglobal']['pfbreplytypes'])?: array();
 $pfbreplyrec	= explode(',', $pfb['aglobal']['pfbreplyrec'])	?: array();
 
-// Unified Log - Light Theme
-$pfb['uniblock']	= $pfb['aglobal']['uniblock']		?: '#FFF9C4';
-$pfb['unipermit']	= $pfb['aglobal']['unipermit']		?: '#80CBC4';
-$pfb['unimatch']	= $pfb['aglobal']['unimatch']		?: '#B3E5FC';
-$pfb['unidnsbl']	= $pfb['aglobal']['unidnsbl']		?: '#EF9A9A';
-$pfb['uniupstream']	= ($pfb['aglobal']['uniupstream'] ?? '')	?: '#CE93D8';
-$pfb['unireply']	= $pfb['aglobal']['unireply']		?: '#E8E8E8';
+// Unified Log - Light/Dark Theme colour keys: one registry drives the read defaults, the
+// save loops, and the render loops below. 'upstream' reads with null-coalescing because it
+// was added after the rest -- an existing config predating it lacks the key, so a plain
+// `?:` would warn on the missing offset; the other keys have always been present.
+$uni_defaults = array(
+	'block'    => array('light_default' => '#FFF9C4', 'dark_default' => '#83791D', 'light_help' => 'IP Block Event color',       'dark_help' => 'IP Block Event color',       'gated' => FALSE, 'safe_read' => FALSE),
+	'permit'   => array('light_default' => '#80CBC4', 'dark_default' => '#3B8780', 'light_help' => 'IP Permit Event color',      'dark_help' => 'IP Permit Event color',      'gated' => FALSE, 'safe_read' => FALSE),
+	'match'    => array('light_default' => '#B3E5FC', 'dark_default' => '#42809D', 'light_help' => 'IP Match Event color',       'dark_help' => 'IP Match Event color',       'gated' => FALSE, 'safe_read' => FALSE),
+	'dnsbl'    => array('light_default' => '#EF9A9A', 'dark_default' => '#E84E4E', 'light_help' => 'DNSBL Block Event color',    'dark_help' => 'DNSBL Block Event color',    'gated' => TRUE,  'safe_read' => FALSE),
+	'upstream' => array('light_default' => '#CE93D8', 'dark_default' => '#9C27B0', 'light_help' => 'Upstream Block Event color', 'dark_help' => 'Upstream Block Event color', 'gated' => TRUE,  'safe_read' => TRUE),
+	'reply'    => array('light_default' => '#E8E8E8', 'dark_default' => '#54585E', 'light_help' => 'DNS Reply Event color (Resolver only)', 'dark_help' => 'DNS Reply Event color', 'gated' => TRUE, 'safe_read' => FALSE),
+);
 
-// Unified Log - Dark Theme
-$pfb['uniblock2']	= $pfb['aglobal']['uniblock2']		?: '#83791D';
-$pfb['unipermit2']	= $pfb['aglobal']['unipermit2']		?: '#3B8780';	
-$pfb['unimatch2']	= $pfb['aglobal']['unimatch2']		?: '#42809D';
-$pfb['unidnsbl2']	= $pfb['aglobal']['unidnsbl2']		?: '#E84E4E';
-$pfb['uniupstream2']	= ($pfb['aglobal']['uniupstream2'] ?? '')	?: '#9C27B0';
-$pfb['unireply2']	= $pfb['aglobal']['unireply2']		?: '#54585E';
+foreach ($uni_defaults as $u_type => $u_cfg) {
+	$u_light = "uni{$u_type}";
+	$u_dark  = "uni{$u_type}2";
+	if ($u_cfg['safe_read']) {
+		$pfb[$u_light]	= ($pfb['aglobal'][$u_light] ?? '')	?: $u_cfg['light_default'];
+		$pfb[$u_dark]	= ($pfb['aglobal'][$u_dark] ?? '')	?: $u_cfg['dark_default'];
+	} else {
+		$pfb[$u_light]	= $pfb['aglobal'][$u_light]		?: $u_cfg['light_default'];
+		$pfb[$u_dark]	= $pfb['aglobal'][$u_dark]		?: $u_cfg['dark_default'];
+	}
+}
 
 $pfbchartcnt	= $pfb['aglobal']['pfbchartcnt']		?: '24';
 $pfbchartstyle	= $pfb['aglobal']['pfbchartstyle']		?: 'twotone';
@@ -536,17 +545,15 @@ if (isset($_POST) && !empty($_POST)) {
 			}
 		}
 
-		// Unified Log - Light Theme Hex settings
-		foreach (array('uniblock' => '#FFF9C4', 'unipermit' => '#80CBC4', 'unimatch' => '#B3E5FC', 'unidnsbl' => '#EF9A9A', 'uniupstream' => '#CE93D8', 'unireply' => '#E8E8E8') as $h_type => $h_default) {
-			if (isset($_POST[$h_type]) && !empty($_POST[$h_type])) {
-				$pfb['aglobal'][$h_type] = pfb_filter($_POST[$h_type], PFB_FILTER_HEX_COLOR, 'alerts hex', $h_default);
-			} else {
-				$pfb['aglobal'][$h_type] = $h_default;
-			}
+		// Unified Log - Light/Dark Theme Hex settings
+		$uni_hex_fields = array();
+		foreach ($uni_defaults as $u_type => $u_cfg) {
+			$uni_hex_fields["uni{$u_type}"] = $u_cfg['light_default'];
 		}
-
-		// Unified Log - Dark Theme Hex settings
-		foreach (array('uniblock2' => '#83791D', 'unipermit2' => '#3B8780', 'unimatch2' => '#42809D', 'unidnsbl2' => '#E84E4E', 'uniupstream2' => '#9C27B0', 'unireply2' => '#54585E') as $h_type => $h_default) {
+		foreach ($uni_defaults as $u_type => $u_cfg) {
+			$uni_hex_fields["uni{$u_type}2"] = $u_cfg['dark_default'];
+		}
+		foreach ($uni_hex_fields as $h_type => $h_default) {
 			if (isset($_POST[$h_type]) && !empty($_POST[$h_type])) {
 				$pfb['aglobal'][$h_type] = pfb_filter($_POST[$h_type], PFB_FILTER_HEX_COLOR, 'alerts hex', $h_default);
 			} else {
@@ -3597,130 +3604,40 @@ if (pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On) {
 }
 $section->add($group);
 
+$uni_dnsbl_on = pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On;
+
 $group = new Form_Group('Unified Log: Light Background Theme. Enter \'none\' to disable.');
-$group->add(new Form_Input(
-	'uniblock',
-	'',
-	'text',
-	$pfb['uniblock'],
-	['placeholder' => '#FFF9C4']
-))->setHelp('IP Block Event color')
-  ->setAttribute('style', "background: {$pfb['uniblock']}")
-  ->setWidth(2);
-
-$group->add(new Form_Input(
-	'unipermit',
-	'',
-	'text',
-	$pfb['unipermit'],
-	['placeholder' => '#80CBC4']
-))->setHelp('IP Permit Event color')
-  ->setAttribute('style', "background: {$pfb['unipermit']}")
-  ->setWidth(2);
-
-$group->add(new Form_Input(
-	'unimatch',
-	'',
-	'text',
-	$pfb['unimatch'],
-	['placeholder' => '#B3E5FC']
-))->setHelp('IP Match Event color')
-  ->setAttribute('style', "background: {$pfb['unimatch']}")
-  ->setWidth(2);
-
-if (pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On) {
+foreach ($uni_defaults as $u_type => $u_cfg) {
+	if ($u_cfg['gated'] && !$uni_dnsbl_on) {
+		continue;
+	}
+	$u_key = "uni{$u_type}";
 	$group->add(new Form_Input(
-		'unidnsbl',
+		$u_key,
 		'',
 		'text',
-		$pfb['unidnsbl'],
-		['placeholder' => '#EF9A9A']
-	))->setHelp('DNSBL Block Event color')
-	  ->setAttribute('style', "background: {$pfb['unidnsbl']}")
-	  ->setWidth(2);
-
-	$group->add(new Form_Input(
-		'uniupstream',
-		'',
-		'text',
-		$pfb['uniupstream'],
-		['placeholder' => '#CE93D8']
-	))->setHelp('Upstream Block Event color')
-	  ->setAttribute('style', "background: {$pfb['uniupstream']}")
-	  ->setWidth(2);
-
-	$group->add(new Form_Input(
-		'unireply',
-		'',
-		'text',
-		$pfb['unireply'],
-		['placeholder' => '#E8E8E8']
-	))->setHelp('DNS Reply Event color (Resolver only)')
-	  ->setAttribute('style', "background: {$pfb['unireply']}")
+		$pfb[$u_key],
+		['placeholder' => $u_cfg['light_default']]
+	))->setHelp($u_cfg['light_help'])
+	  ->setAttribute('style', "background: {$pfb[$u_key]}")
 	  ->setWidth(2);
 }
 $section->add($group);
 
 $group = new Form_Group('Unified Log: Dark Background Theme. Enter \'none\' to disable.');
-$group->add(new Form_Input(
-	'uniblock2',
-	'',
-	'text',
-	$pfb['uniblock2'],
-	['placeholder' => '#83791D']
-))->setHelp('IP Block Event color')
-  ->setAttribute('style', "background: {$pfb['uniblock2']}; color: white;")
-  ->setWidth(2);
-
-$group->add(new Form_Input(
-	'unipermit2',
-	'',
-	'text',
-	$pfb['unipermit2'],
-	['placeholder' => '#3B8780']
-))->setHelp('IP Permit Event color')
-  ->setAttribute('style', "background: {$pfb['unipermit2']}; color: white;")
-  ->setWidth(2);
-
-$group->add(new Form_Input(
-	'unimatch2',
-	'',
-	'text',
-	$pfb['unimatch2'],
-	['placeholder' => '#42809D']
-))->setHelp('IP Match Event color')
-  ->setAttribute('style', "background: {$pfb['unimatch2']}; color: white;")
-  ->setWidth(2);
-
-if (pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On) {
+foreach ($uni_defaults as $u_type => $u_cfg) {
+	if ($u_cfg['gated'] && !$uni_dnsbl_on) {
+		continue;
+	}
+	$u_key = "uni{$u_type}2";
 	$group->add(new Form_Input(
-		'unidnsbl2',
+		$u_key,
 		'',
 		'text',
-		$pfb['unidnsbl2'],
-		['placeholder' => '#E84E4E']
-	))->setHelp('DNSBL Block Event color')
-	  ->setAttribute('style', "background: {$pfb['unidnsbl2']}; color: white;")
-	  ->setWidth(2);
-
-	$group->add(new Form_Input(
-		'uniupstream2',
-		'',
-		'text',
-		$pfb['uniupstream2'],
-		['placeholder' => '#9C27B0']
-	))->setHelp('Upstream Block Event color')
-	  ->setAttribute('style', "background: {$pfb['uniupstream2']}; color: white;")
-	  ->setWidth(2);
-
-	$group->add(new Form_Input(
-		'unireply2',
-		'',
-		'text',
-		$pfb['unireply2'],
-		['placeholder' => '#54585E']
-	))->setHelp('DNS Reply Event color')
-	  ->setAttribute('style', "background: {$pfb['unireply2']}; color: white;")
+		$pfb[$u_key],
+		['placeholder' => $u_cfg['dark_default']]
+	))->setHelp($u_cfg['dark_help'])
+	  ->setAttribute('style', "background: {$pfb[$u_key]}; color: white;")
 	  ->setWidth(2);
 }
 $section->add($group);
