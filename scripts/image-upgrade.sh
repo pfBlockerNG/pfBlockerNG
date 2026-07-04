@@ -159,11 +159,7 @@ KEEP=0
 FORCE=0
 
 # Proxmox SSH coordinates (env fallbacks; --proxmox overrides).
-PX_HOST="${PROXMOX_SSH_HOST:-}"
-PX_USER="${PROXMOX_SSH_USER:-root}"
-PX_PORT="${PROXMOX_SSH_PORT:-22}"
-PX_KEY="${PROXMOX_SSH_KEY:-}"
-REMOTE_TMPDIR="${PROXMOX_TMPDIR:-/tmp}"
+image_px_defaults
 
 # The non-interactive pfSense upgrade command. NOTE: confirm the exact flags for
 # the running CE release during the Phase-1 spike (ADR-04 §6 flags this) — `yes |`
@@ -176,6 +172,7 @@ UPGRADE_CMD='yes | /usr/local/sbin/pfSense-upgrade -d'
 HEALTH_TIMEOUT=300
 
 while [ $# -gt 0 ]; do
+    # shellcheck disable=SC2034 # PX_* are consumed by the sourced image-lib.sh helpers
     case "$1" in
         --proxmox)         PX_TARGET="$2"; shift 2 ;;
         --proxmox-port)    PX_PORT="$2"; shift 2 ;;
@@ -203,12 +200,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if [ -n "${PX_TARGET:-}" ]; then
-    case "$PX_TARGET" in
-        *@*) PX_USER="${PX_TARGET%@*}"; PX_HOST="${PX_TARGET#*@}" ;;
-        *)   PX_HOST="$PX_TARGET" ;;
-    esac
-fi
+image_px_target_split
 
 [ -n "$FROM" ] || die "missing --from <current-version>"
 [ -n "$GUEST_KEY" ] || die "missing --ssh-key (or set SMOKE_SSH_KEY)"
@@ -253,19 +245,7 @@ PX_REMOTE=0
 [ -n "$PX_HOST" ] && PX_REMOTE=1
 
 # ssh option words (intentionally unquoted at use; no spaces in port/key).
-PX_PORT_OPT=""; [ -n "$PX_PORT" ] && PX_PORT_OPT="-p $PX_PORT"
-PX_KEY_OPT="";  [ -n "$PX_KEY" ]  && PX_KEY_OPT="-i $PX_KEY"
-
-# px CMD — run CMD on the KVM host (over SSH, or locally); stdin/stdout stream.
-px() {
-    if [ "$PX_REMOTE" -eq 1 ]; then
-        # shellcheck disable=SC2086
-        ssh -o BatchMode=yes -o ConnectTimeout=10 $PX_PORT_OPT $PX_KEY_OPT \
-            "${PX_USER}@${PX_HOST}" "$1"
-    else
-        sh -c "$1"
-    fi
-}
+image_px_ssh_opts
 
 # ssh_guest — reach the VM's forwarded :22. When driving a remote Proxmox host we
 # jump THROUGH it (ProxyCommand -W), so the guest key stays on this machine and
@@ -318,10 +298,7 @@ QEMU_BIN=$(px "command -v qemu-system-x86_64 || command -v kvm" 2>/dev/null | he
 px "command -v qemu-img >/dev/null 2>&1" || die "qemu-img not found on the KVM host"
 px "test -e /dev/kvm" || warn "/dev/kvm not present on the KVM host — the guest will be very slow under TCG"
 
-if [ -n "${SMOKE_GHCR_TOKEN:-}" ] && [ -n "${SMOKE_GHCR_USER:-}" ]; then
-    log "logging in to ghcr.io as $SMOKE_GHCR_USER"
-    printf '%s' "$SMOKE_GHCR_TOKEN" | oras login ghcr.io -u "$SMOKE_GHCR_USER" --password-stdin
-fi
+image_ghcr_login
 
 LOCAL_DIR=$(mktemp -d)
 REMOTE_DIR=$(px "mkdir -p '$REMOTE_TMPDIR' && mktemp -d -p '$REMOTE_TMPDIR'" | tr -d '\r')

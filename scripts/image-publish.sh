@@ -121,13 +121,10 @@ DESCRIPTION=""
 QCOW_NAME=""
 
 # Proxmox SSH coordinates (env fallbacks; --proxmox overrides).
-PX_HOST="${PROXMOX_SSH_HOST:-}"
-PX_USER="${PROXMOX_SSH_USER:-root}"
-PX_PORT="${PROXMOX_SSH_PORT:-22}"
-PX_KEY="${PROXMOX_SSH_KEY:-}"
-REMOTE_TMPDIR="${PROXMOX_TMPDIR:-/tmp}"
+image_px_defaults
 
 while [ $# -gt 0 ]; do
+    # shellcheck disable=SC2034 # PX_* are consumed by the sourced image-lib.sh helpers
     case "$1" in
         --proxmox)         PX_TARGET="$2"; shift 2 ;;
         --proxmox-port)    PX_PORT="$2"; shift 2 ;;
@@ -154,12 +151,7 @@ while [ $# -gt 0 ]; do
 done
 
 # --proxmox [USER@]HOST splits an optional user from the host.
-if [ -n "${PX_TARGET:-}" ]; then
-    case "$PX_TARGET" in
-        *@*) PX_USER="${PX_TARGET%@*}"; PX_HOST="${PX_TARGET#*@}" ;;
-        *)   PX_HOST="$PX_TARGET" ;;
-    esac
-fi
+image_px_target_split
 
 # --print-identity needs only a VM id; a version tag is required for a real publish.
 [ "$PRINT_IDENTITY" -eq 1 ] || [ -n "$VERSION" ] || die "missing <version> (e.g. 2.8.1, or v1 for civm); or use --print-identity"
@@ -208,20 +200,7 @@ PX_REMOTE=0
 [ -n "$PX_HOST" ] && PX_REMOTE=1
 
 # ssh option words (intentionally unquoted at use; no spaces in port/key).
-PX_PORT_OPT=""; [ -n "$PX_PORT" ] && PX_PORT_OPT="-p $PX_PORT"
-PX_KEY_OPT="";  [ -n "$PX_KEY" ]  && PX_KEY_OPT="-i $PX_KEY"
-
-# px CMD — run CMD on the Proxmox host (over SSH, or locally). stdin/stdout pass
-# through, so it streams (e.g.  px "cat file" > local  and  ... | px "cat > f").
-px() {
-    if [ "$PX_REMOTE" -eq 1 ]; then
-        # shellcheck disable=SC2086
-        ssh -o BatchMode=yes -o ConnectTimeout=10 $PX_PORT_OPT $PX_KEY_OPT \
-            "${PX_USER}@${PX_HOST}" "$1"
-    else
-        sh -c "$1"
-    fi
-}
+image_px_ssh_opts
 
 # print_vm_identity QMCFG — print every NIC's MAC + the SMBIOS UUID from a
 # `qm config <vmid>` dump. These feed the fixed-MAC-series + SMBIOS-UUID secrets
@@ -265,10 +244,7 @@ if [ "$PRINT_IDENTITY" -eq 1 ]; then
 fi
 
 # Optional non-interactive GHCR login (local oras).
-if [ -n "${SMOKE_GHCR_TOKEN:-}" ] && [ -n "${SMOKE_GHCR_USER:-}" ]; then
-    log "logging in to ghcr.io as $SMOKE_GHCR_USER"
-    printf '%s' "$SMOKE_GHCR_TOKEN" | oras login ghcr.io -u "$SMOKE_GHCR_USER" --password-stdin
-fi
+image_ghcr_login
 
 # Refuse to clobber an existing tag unless --force (old tags are kept).
 if [ "$FORCE" -eq 0 ] && oras manifest fetch "${IMAGE}:${VERSION}" >/dev/null 2>&1; then
