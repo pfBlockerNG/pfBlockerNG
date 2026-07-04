@@ -10908,8 +10908,7 @@ function pfb_content_hash($path_or_data, $is_file = TRUE) {
 		if (!is_string($path_or_data) || !file_exists($path_or_data)) {
 			return FALSE;
 		}
-		$digest = @hash_file('xxh128', $path_or_data);
-		return ($digest !== FALSE) ? $digest : FALSE;
+		return @hash_file('xxh128', $path_or_data);
 	}
 	return hash('xxh128', (string) $path_or_data);
 }
