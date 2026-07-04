@@ -72,41 +72,25 @@ $pconfig['pfb_hour']			= $pfb['gconfig']['pfb_hour']				?: 0;
 $pconfig['pfb_dailystart']		= $pfb['gconfig']['pfb_dailystart']			?: 0;
 $pconfig['skipfeed']			= $pfb['gconfig']['skipfeed']				?: 0;
 
-$pconfig['log_max_log']			= $pfb['gconfig']['log_max_log']			?: 20000;
-$pconfig['log_max_errlog']		= $pfb['gconfig']['log_max_errlog']			?: 20000;
-$pconfig['log_max_extraslog']		= $pfb['gconfig']['log_max_extraslog']			?: 20000;
-$pconfig['log_max_ip_blocklog']		= $pfb['gconfig']['log_max_ip_blocklog']		?: 20000;
-$pconfig['log_max_ip_permitlog']	= $pfb['gconfig']['log_max_ip_permitlog']		?: 20000;
-$pconfig['log_max_ip_matchlog']		= $pfb['gconfig']['log_max_ip_matchlog']		?: 20000;
-$pconfig['log_max_dnslog']		= $pfb['gconfig']['log_max_dnslog']			?: 20000;
-$pconfig['log_max_dnsbl_parse_err']	= $pfb['gconfig']['log_max_dnsbl_parse_err']		?: 20000;
-$pconfig['log_max_dnsreplylog']		= $pfb['gconfig']['log_max_dnsreplylog']		?: 20000;
-$pconfig['log_max_unilog']		= $pfb['gconfig']['log_max_unilog']			?: 20000;
+// Flat list of per-log suffixes shared by the log_max_*/log_rotate_*/log_reset_keep_* key
+// families below (read here, saved further down) and their validation loops -- one source of
+// truth for the per-log key set, in the same order as $log_types further down the file.
+$log_suffixes = array('log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog', 'ip_matchlog', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog');
+
+foreach ($log_suffixes as $log_suffix) {
+	$pconfig['log_max_' . $log_suffix]	= $pfb['gconfig']['log_max_' . $log_suffix]	?: 20000;
+}
 
 // ADR-30: per-log rotation schedule. Read via PfbConfig::read so the registered
 // default ('off') is applied when the key is absent (new install / upgrade).
-$pconfig['log_rotate_log']		= PfbConfig::read('log_rotate_log');
-$pconfig['log_rotate_errlog']		= PfbConfig::read('log_rotate_errlog');
-$pconfig['log_rotate_extraslog']	= PfbConfig::read('log_rotate_extraslog');
-$pconfig['log_rotate_ip_blocklog']	= PfbConfig::read('log_rotate_ip_blocklog');
-$pconfig['log_rotate_ip_permitlog']	= PfbConfig::read('log_rotate_ip_permitlog');
-$pconfig['log_rotate_ip_matchlog']	= PfbConfig::read('log_rotate_ip_matchlog');
-$pconfig['log_rotate_dnslog']		= PfbConfig::read('log_rotate_dnslog');
-$pconfig['log_rotate_dnsbl_parse_err']	= PfbConfig::read('log_rotate_dnsbl_parse_err');
-$pconfig['log_rotate_dnsreplylog']	= PfbConfig::read('log_rotate_dnsreplylog');
-$pconfig['log_rotate_unilog']		= PfbConfig::read('log_rotate_unilog');
+foreach ($log_suffixes as $log_suffix) {
+	$pconfig['log_rotate_' . $log_suffix]	= PfbConfig::read('log_rotate_' . $log_suffix);
+}
 
 // ADR-30 amendment: lines to keep on scheduled reset. Default '0' (clear fully).
-$pconfig['log_reset_keep_log']			= PfbConfig::read('log_reset_keep_log');
-$pconfig['log_reset_keep_errlog']		= PfbConfig::read('log_reset_keep_errlog');
-$pconfig['log_reset_keep_extraslog']		= PfbConfig::read('log_reset_keep_extraslog');
-$pconfig['log_reset_keep_ip_blocklog']		= PfbConfig::read('log_reset_keep_ip_blocklog');
-$pconfig['log_reset_keep_ip_permitlog']		= PfbConfig::read('log_reset_keep_ip_permitlog');
-$pconfig['log_reset_keep_ip_matchlog']		= PfbConfig::read('log_reset_keep_ip_matchlog');
-$pconfig['log_reset_keep_dnslog']		= PfbConfig::read('log_reset_keep_dnslog');
-$pconfig['log_reset_keep_dnsbl_parse_err']	= PfbConfig::read('log_reset_keep_dnsbl_parse_err');
-$pconfig['log_reset_keep_dnsreplylog']		= PfbConfig::read('log_reset_keep_dnsreplylog');
-$pconfig['log_reset_keep_unilog']		= PfbConfig::read('log_reset_keep_unilog');
+foreach ($log_suffixes as $log_suffix) {
+	$pconfig['log_reset_keep_' . $log_suffix]	= PfbConfig::read('log_reset_keep_' . $log_suffix);
+}
 
 // ADR-38: syslog export toggle. Read via PfbConfig::read so registered default applies.
 // log_syslog uses the PfbToggle adapter — extract the scalar .value for pfb_cfg_toggle_read().
@@ -181,13 +165,8 @@ if ($_POST) {
 
 		// ADR-30: validate per-log rotation schedule selects. Handled separately to
 		// avoid extending the ${"options_$s_option"} lookup with unknown variable names.
-		$log_rotate_keys = array(
-			'log_rotate_log', 'log_rotate_errlog', 'log_rotate_extraslog',
-			'log_rotate_ip_blocklog', 'log_rotate_ip_permitlog', 'log_rotate_ip_matchlog',
-			'log_rotate_dnslog', 'log_rotate_dnsbl_parse_err',
-			'log_rotate_dnsreplylog', 'log_rotate_unilog',
-		);
-		foreach ($log_rotate_keys as $rkey) {
+		foreach ($log_suffixes as $log_suffix) {
+			$rkey = 'log_rotate_' . $log_suffix;
 			if (is_array($_POST[$rkey])) {
 				$_POST[$rkey] = 'off';
 			} elseif (!array_key_exists($_POST[$rkey], $options_log_rotate)) {
@@ -196,13 +175,8 @@ if ($_POST) {
 		}
 
 		// ADR-30 amendment: validate per-log keep-lines fields (non-negative integer string).
-		$log_reset_keep_keys = array(
-			'log_reset_keep_log', 'log_reset_keep_errlog', 'log_reset_keep_extraslog',
-			'log_reset_keep_ip_blocklog', 'log_reset_keep_ip_permitlog', 'log_reset_keep_ip_matchlog',
-			'log_reset_keep_dnslog', 'log_reset_keep_dnsbl_parse_err',
-			'log_reset_keep_dnsreplylog', 'log_reset_keep_unilog',
-		);
-		foreach ($log_reset_keep_keys as $kkey) {
+		foreach ($log_suffixes as $log_suffix) {
+			$kkey = 'log_reset_keep_' . $log_suffix;
 			$v = $_POST[$kkey] ?? '0';
 			if (is_array($v) || !ctype_digit((string) $v)) {
 				$_POST[$kkey] = '0';
@@ -240,42 +214,21 @@ if ($_POST) {
 				unset($pfb['gconfig']['log_maxlines']);
 			}
 
-			$pfb['gconfig']['log_max_log']			= $_POST['log_max_log']				?: 20000;
-			$pfb['gconfig']['log_max_errlog']		= $_POST['log_max_errlog']			?: 20000;
-			$pfb['gconfig']['log_max_extraslog']		= $_POST['log_max_extraslog']			?: 20000;
-			$pfb['gconfig']['log_max_ip_blocklog']		= $_POST['log_max_ip_blocklog']			?: 20000;
-			$pfb['gconfig']['log_max_ip_permitlog']		= $_POST['log_max_ip_permitlog']		?: 20000;
-			$pfb['gconfig']['log_max_ip_matchlog']		= $_POST['log_max_ip_matchlog']			?: 20000;
-			$pfb['gconfig']['log_max_dnslog']		= $_POST['log_max_dnslog']			?: 20000;
-			$pfb['gconfig']['log_max_dnsbl_parse_err']	= $_POST['log_max_dnsbl_parse_err']		?: 20000;
-			$pfb['gconfig']['log_max_dnsreplylog']		= $_POST['log_max_dnsreplylog']			?: 20000;
-			$pfb['gconfig']['log_max_unilog']		= $_POST['log_max_unilog']			?: 20000;
+			foreach ($log_suffixes as $log_suffix) {
+				$pfb['gconfig']['log_max_' . $log_suffix]	= $_POST['log_max_' . $log_suffix]	?: 20000;
+			}
 
 			// ADR-30: persist per-log rotation schedules. Values have already been validated
 			// above. Written into $pfb['gconfig'] so the writeSection() call below includes
 			// them in the section; PfbConfig::write would be overwritten by writeSection.
-			$pfb['gconfig']['log_rotate_log']		= $_POST['log_rotate_log']		?: 'off';
-			$pfb['gconfig']['log_rotate_errlog']		= $_POST['log_rotate_errlog']		?: 'off';
-			$pfb['gconfig']['log_rotate_extraslog']		= $_POST['log_rotate_extraslog']	?: 'off';
-			$pfb['gconfig']['log_rotate_ip_blocklog']	= $_POST['log_rotate_ip_blocklog']	?: 'off';
-			$pfb['gconfig']['log_rotate_ip_permitlog']	= $_POST['log_rotate_ip_permitlog']	?: 'off';
-			$pfb['gconfig']['log_rotate_ip_matchlog']	= $_POST['log_rotate_ip_matchlog']	?: 'off';
-			$pfb['gconfig']['log_rotate_dnslog']		= $_POST['log_rotate_dnslog']		?: 'off';
-			$pfb['gconfig']['log_rotate_dnsbl_parse_err']	= $_POST['log_rotate_dnsbl_parse_err']	?: 'off';
-			$pfb['gconfig']['log_rotate_dnsreplylog']	= $_POST['log_rotate_dnsreplylog']	?: 'off';
-			$pfb['gconfig']['log_rotate_unilog']		= $_POST['log_rotate_unilog']		?: 'off';
+			foreach ($log_suffixes as $log_suffix) {
+				$pfb['gconfig']['log_rotate_' . $log_suffix]	= $_POST['log_rotate_' . $log_suffix]	?: 'off';
+			}
 
 			// ADR-30 amendment: persist per-log keep-lines (validated above; default '0').
-			$pfb['gconfig']['log_reset_keep_log']			= $_POST['log_reset_keep_log']			?: '0';
-			$pfb['gconfig']['log_reset_keep_errlog']		= $_POST['log_reset_keep_errlog']		?: '0';
-			$pfb['gconfig']['log_reset_keep_extraslog']		= $_POST['log_reset_keep_extraslog']		?: '0';
-			$pfb['gconfig']['log_reset_keep_ip_blocklog']		= $_POST['log_reset_keep_ip_blocklog']		?: '0';
-			$pfb['gconfig']['log_reset_keep_ip_permitlog']		= $_POST['log_reset_keep_ip_permitlog']		?: '0';
-			$pfb['gconfig']['log_reset_keep_ip_matchlog']		= $_POST['log_reset_keep_ip_matchlog']		?: '0';
-			$pfb['gconfig']['log_reset_keep_dnslog']		= $_POST['log_reset_keep_dnslog']		?: '0';
-			$pfb['gconfig']['log_reset_keep_dnsbl_parse_err']	= $_POST['log_reset_keep_dnsbl_parse_err']	?: '0';
-			$pfb['gconfig']['log_reset_keep_dnsreplylog']		= $_POST['log_reset_keep_dnsreplylog']		?: '0';
-			$pfb['gconfig']['log_reset_keep_unilog']		= $_POST['log_reset_keep_unilog']		?: '0';
+			foreach ($log_suffixes as $log_suffix) {
+				$pfb['gconfig']['log_reset_keep_' . $log_suffix]	= $_POST['log_reset_keep_' . $log_suffix]	?: '0';
+			}
 
 			// ADR-38: persist syslog export toggle. Written into $pfb['gconfig'] so the
 			// writeSection() call below includes it; a bare PfbConfig::write() before
