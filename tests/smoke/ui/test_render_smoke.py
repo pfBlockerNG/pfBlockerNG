@@ -1043,7 +1043,8 @@ def test_software_actions_link_to_package_manager(
           actionable ``pkg_mgr_install.php?mode=reinstallpkg&pkg=…`` link — the href, not just CSS,
           is the gate (an anchor's ``disabled``/``aria-disabled`` are advisory only);
       And the page carries NO in-page pkg machinery — no ``?ajax=tail`` poller, no ``pfb_output``
-          textarea, no old ``pkg_mgr_installed.php`` redirect;
+          textarea (the old post-uninstall ``pkg_mgr_installed.php`` redirect was POST-only
+          machinery, so it has no GET-observable trace to assert on — see #791);
       And the clean render oracle (200, no Fatal/Warning/Notice, marker present) holds.
 
     Fail-before / pass-after: the pre-#684 page ran ``pkg`` from a detached daemon and tailed it via
@@ -1089,10 +1090,12 @@ def test_software_actions_link_to_package_manager(
             "Uninstall must NOT route through the removed ?do=uninstall handler (#697)"
         )
 
-        # The in-page pkg machinery is gone entirely.
+        # The in-page pkg machinery is gone entirely. Do NOT assert `/pkg_mgr_installed.php`
+        # absent from the body: pfSense's System menu (head.inc) always carries that href for an
+        # admin on EVERY page, and the old post-uninstall redirect it meant to catch was printed
+        # only on the POST uninstall-success path — never in a GET body (#791).
         assert "?ajax=tail" not in body, "Software page must no longer host the ?ajax=tail poller"
         assert 'name="pfb_output"' not in body, "Software page must no longer render the pfb_output textarea"
-        assert "/pkg_mgr_installed.php" not in body, "the old post-uninstall redirect target must be gone"
 
         # (B) Seed a newer cached 'latest' → update available → the Update href becomes the actionable
         #     reinstallpkg link (the ON branch of the availability gate). 99.0.0 > any real installed
