@@ -931,7 +931,6 @@ function pfBlockerNG_get_header($mode='') {
 // Update table contents
 function pfBlockerNG_get_table($mode='', $pfb_table) {
 	global $pfb;
-	$counter = 0; $dcounter = 1; $response = '';
 
 	if (!empty($pfb_table)) {
 
@@ -984,7 +983,7 @@ function pfBlockerNG_get_table($mode='', $pfb_table) {
 			}
 
 			if ($mode == 'js') {
-				print $response = "{$alias_html}||{$values['count']}||{$packets}||{$values['update']}||{$values['img']}\n";
+				print "{$alias_html}||{$values['count']}||{$packets}||{$values['update']}||{$values['img']}\n";
 			}
 			else {
 				print ("<tr>
