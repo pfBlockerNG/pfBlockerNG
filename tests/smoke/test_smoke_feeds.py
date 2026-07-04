@@ -3320,3 +3320,135 @@ def test_validate_log_healthy_abp_feed_no_entries_reject(
                 f"before={before} after={after}\n"
                 f"recent pfb_validate lines actually in the log:\n{_recent_validate_lines(deployed_vm)}"
             )
+
+
+# --------------------------------------------------------------------------- #
+# ADR-46: archive member-name guard before disk-writing extraction. The
+# GeoIP/top-1M URLs are hardcoded in pfblockerng.php, so these cases drive
+# pfb_download() DIRECTLY via h.php_eval pointed at the mock server (the
+# test_smoke_714_asn_geoip.py pattern) with type='top1m' to reach the ZIP
+# disk-writing branch (tar -xf --strip=1 -C <header>).
+# --------------------------------------------------------------------------- #
+
+_ADR46_WORKDIR = f"{h.PFB_DBDIR}/adr46_guard"
+
+
+def _adr46_download_zip(vm: SmokeVM, feed_url: str, file_dwn: str, target_dir: str) -> str:
+    """Run pfb_download(<feed_url>, <file_dwn>, ..., type='top1m') on the box; return stdout."""
+    snippet = (
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
+        "pfb_global();\n"
+        f"$ok = pfb_download({h._php_str(feed_url)}, {h._php_str(file_dwn)}, FALSE, "  # noqa: SLF001
+        f"{h._php_str(target_dir)}, '', 1, '', 60, 'top1m');\n"  # noqa: SLF001
+        "echo $ok ? 'PFB_DL_TRUE' : 'PFB_DL_FALSE';"
+    )
+    res = h.php_eval(vm, snippet, timeout=120.0)
+    return res.stdout
+
+
+@pytest.mark.timeout(120)
+def test_adr46_hostile_member_zip_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-46: an archive with a parent-dir-escaping member is rejected BEFORE disk extraction.
+
+    Fixture: archive_traversal.zip (committed raw bytes -- stock zip/bsdtar refuse to
+    create a '..' member; see fixtures/README.md). Two members steer the top-1M ZIP
+    branch into the disk-writing `tar -xf -C` path; the second member is
+    `../pfb_adr46_escape.txt`.
+
+    Pre-ADR-46 behaviour is SILENT PARTIAL SUCCESS -- bsdtar's default refusal just
+    skips the `..` member (extraction stderr is discarded) and the branch returns
+    TRUE -- so this test FAILS on pre-guard code (pfb_download returns TRUE, no
+    canonical line) and PASSES with the guard (explicit stage=member reject).
+
+    Given a clean work dir and the delta baseline for the stage=member line,
+    When  pfb_download() fetches the traversal ZIP as a top-1M extra,
+    Then  it returns FALSE, a canonical "stage=member reason=unsafe_member_name
+      detected=../pfb_adr46_escape.txt" line is logged, the downloaded archive is
+      unlinked, and NOTHING was extracted (no benign member, no escape file).
+    """
+    marker = "stage=member reason=unsafe_member_name detected=../pfb_adr46_escape.txt"
+    workdir = f"{_ADR46_WORKDIR}_hostile"
+    target = f"{workdir}/out"
+    escape_file = f"{h.PFB_DBDIR}/pfb_adr46_escape.txt"
+    try:
+        # Given -- clean slate + delta baseline.
+        deployed_vm.ssh(f"/bin/rm -rf {workdir} {escape_file} && /bin/mkdir -p {target}")
+        before = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+
+        # When -- drive the top-1M ZIP branch directly at the traversal fixture.
+        out = _adr46_download_zip(
+            deployed_vm, mock_feeds.feed_url("archive_traversal.zip"), f"{workdir}/dl.zip", target
+        )
+
+        # Then -- explicit reject, not silent partial success.
+        assert "PFB_DL_FALSE" in out, (
+            f"expected pfb_download to return FALSE on a '..'-member archive "
+            f"(pre-ADR-46 it silently returned TRUE); got stdout: {out!r}"
+        )
+        after = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+        if not (after > before):
+            raise AssertionError(
+                f"expected a NEW line matching {marker!r} in {h.PFB_LOG} after the traversal-zip "
+                f"download; count before={before} after={after}\n"
+                f"recent pfb_validate lines actually in the log:\n{_recent_validate_lines(deployed_vm)}"
+            )
+        leftovers = deployed_vm.ssh(
+            f"/bin/ls -A {target} 2>/dev/null; test -e {workdir}/dl.zip.raw && echo RAW-PRESENT; "
+            f"test -e {escape_file} && echo ESCAPE-PRESENT"
+        ).stdout.strip()
+        assert leftovers == "", (
+            f"expected no extraction artifacts after the member-guard reject (empty target dir, "
+            f"archive unlinked, no escape file); found: {leftovers!r}"
+        )
+    finally:
+        deployed_vm.ssh(f"/bin/rm -rf {workdir} {escape_file}")
+
+
+@pytest.mark.timeout(120)
+def test_adr46_legit_multifile_zip_still_imports(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-46: a legitimate multi-member archive still extracts -- the guard is a pass-through.
+
+    The ADR §7 reject criterion: a legitimate archive that imports today must not fail
+    after the guard. Built inline (a valid zip is portable; only hostile members need
+    the committed-fixture treatment).
+
+    Given a clean pre-created target dir (asserted empty) and the stage=member baseline,
+    When  pfb_download() fetches a benign two-member ZIP as a top-1M extra,
+    Then  it returns TRUE, both members land in the target dir (--strip=1 applied),
+      and NO stage=member line was added.
+    """
+    workdir = f"{_ADR46_WORKDIR}_legit"
+    target = f"{workdir}/out"
+    guard_marker = "stage=member reason=unsafe_member_name"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("d/adr46_a.csv", "192.0.2.21\n")  # inert RFC 5737 data
+        z.writestr("d/adr46_b.csv", "192.0.2.22\n")
+    feed_url = mock_feeds.register("adr46_legit.zip", buf.getvalue())
+    try:
+        # Given -- empty target (before-state: members absent).
+        deployed_vm.ssh(f"/bin/rm -rf {workdir} && /bin/mkdir -p {target}")
+        pre = deployed_vm.ssh(f"/bin/ls -A {target}").stdout.strip()
+        assert pre == "", f"target dir must start empty, found: {pre!r}"
+        before = h.count_log_marker(deployed_vm, h.PFB_LOG, guard_marker)
+
+        # When -- same driver, benign archive.
+        out = _adr46_download_zip(deployed_vm, feed_url, f"{workdir}/dl.zip", target)
+
+        # Then -- import succeeds and the guard stayed silent.
+        assert "PFB_DL_TRUE" in out, (
+            f"expected pfb_download to return TRUE for a benign multi-member zip "
+            f"(the guard must be a pass-through); got stdout: {out!r}"
+        )
+        extracted = deployed_vm.ssh(f"/bin/ls -A {target}").stdout.split()
+        assert sorted(extracted) == ["adr46_a.csv", "adr46_b.csv"], (
+            f"expected both members extracted with --strip=1 into {target}; found: {extracted!r}"
+        )
+        after = h.count_log_marker(deployed_vm, h.PFB_LOG, guard_marker)
+        assert after == before, (
+            f"expected NO NEW {guard_marker!r} line for a benign archive; "
+            f"count before={before} after={after}\n"
+            f"recent pfb_validate lines actually in the log:\n{_recent_validate_lines(deployed_vm)}"
+        )
+    finally:
+        deployed_vm.ssh(f"/bin/rm -rf {workdir}")

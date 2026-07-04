@@ -893,6 +893,53 @@ function pfb_reject_detail_summary(array $reject_detail): string {
 	return "{$reject_detail['mime_raw']} rc={$reject_detail['retval']}";
 }
 
+// ADR-46: list an archive's member names via bsdtar. Filters bsdtar noise lines
+// (e.g. "tar: Failed to set default locale") -- a noise line returned as a "member
+// name" would false-trip the member-name guard below. A listing failure returns
+// an empty array (fail-open): the archive already passed the ADR-45 structural
+// probe, and the subsequent tar extraction fails on its own exactly as before.
+function pfb_zip_member_names(string $file): array {
+	$output = array();
+	$retval = 1;
+	exec('/usr/bin/tar -tf ' . escapeshellarg($file) . ' 2>&1', $output, $retval);
+	if ($retval != 0 || !is_array($output)) {
+		return array();
+	}
+	return array_values(array_filter($output, static function (string $line): bool {
+		return $line !== '' && !str_starts_with($line, 'tar: ');
+	}));
+}
+
+// ADR-46: first archive member name unsafe to extract to DISK, or NULL when all are
+// safe. Unsafe = absolute path, a '..' path component (directory escape), a path
+// component over 255 bytes (FreeBSD NAME_MAX), or a total name over 1024 bytes
+// (PATH_MAX) -- names above the filesystem limits cannot extract anyway, so the caps
+// reject nothing legitimate. Pure: no I/O.
+function pfb_archive_unsafe_member(array $names): ?string {
+	foreach ($names as $name) {
+		if (!is_string($name) || $name === '') {
+			continue;
+		}
+		if ($name[0] === '/' || strlen($name) > 1024) {
+			return $name;
+		}
+		foreach (explode('/', $name) as $component) {
+			if ($component === '..' || strlen($component) > 255) {
+				return $name;
+			}
+		}
+	}
+	return NULL;
+}
+
+// ADR-46: pure predicate over pfb_archive_unsafe_member() -- TRUE iff every member
+// name is safe to extract to disk. Guards the disk-writing `tar ... -C` extraction
+// sites in pfb_download(); the `tar -xOf` stdout paths need no guard (member names
+// never reach the filesystem there).
+function pfb_archive_members_safe(array $names): bool {
+	return pfb_archive_unsafe_member($names) === NULL;
+}
+
 // ADR-48 Phase 4 (issue #789): reads the Python-emitted per-entry reject tally
 // artifact (pfb_py_reject_stats.json -- build()'s normalise() domain-shape rejects
 // and #753 wire-cap rejects, bucketed shape/wire_cap, per feed/group) and emits
@@ -9338,6 +9385,13 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			}
 			if ($type == 'geoip') {
 				// Extras - MaxMind downloads
+				// ADR-46: disk-writing extraction -- reject hostile member names first.
+				$unsafe_member = pfb_archive_unsafe_member(pfb_zip_member_names($file_download));
+				if ($unsafe_member !== NULL) {
+					pfb_validate_log($header, 'member', 'unsafe_member_name', $unsafe_member);
+					unlink_if_exists($file_download);
+					return FALSE;
+				}
 				exec("/usr/bin/tar -xzf {$file_dwn_esc} --strip=1 -C {$pfb['geoipshare']} >/dev/null 2>&1");
 				unlink_if_exists($file_dwn_esc);
 				return TRUE;
@@ -9360,6 +9414,15 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				if (!empty(pfb_filter($filename, PFB_FILTER_WORD, 'pfb_download category'))) {
 					rmdir_recursive("{$pfb['dbdir']}/{$filename}/");
 					safe_mkdir("{$pfb['dbdir']}/{$filename}/");
+
+					// ADR-46: disk-writing extraction of a THIRD-PARTY archive (member
+					// names feed on-disk filenames) -- reject hostile member names first.
+					$unsafe_member = pfb_archive_unsafe_member(pfb_zip_member_names($file_dwn));
+					if ($unsafe_member !== NULL) {
+						pfb_validate_log($header, 'member', 'unsafe_member_name', $unsafe_member);
+						unlink_if_exists($file_dwn);
+						return FALSE;
+					}
 
 					// Extract Blacklist categories from sub-folders into a single folder structure
 					$cmd = "--include='*domains' -s',.*/\\(.*\\)/\\(.*\\)/domains,{$filename}_\\1_\\2,' -s',.*/\\(.*\\)/domains,{$filename}_\\1,'";
@@ -9420,14 +9483,21 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 
 			// Extras - MaxMind/TOP1M downloads
 			if ($type == 'geoip' || $type == 'top1m') {
-				// Determine if Zip contains multiple files
-				exec("/usr/bin/tar -tf {$file_dwn_esc} 2>&1", $archive_count, $retval);
-				if ($archive_count[0] == 'tar: Failed to set default locale') {
-					unset($archive_count[0]);
-				}
-				if (count($archive_count) > 1) {
+				// Determine if Zip contains multiple files (ADR-46: the lister also
+				// filters bsdtar noise lines, e.g. "tar: Failed to set default locale").
+				$archive_members = pfb_zip_member_names($file_download);
+				if (count($archive_members) > 1) {
+					// ADR-46: disk-writing extraction -- reject hostile member names first.
+					$unsafe_member = pfb_archive_unsafe_member($archive_members);
+					if ($unsafe_member !== NULL) {
+						pfb_validate_log($header, 'member', 'unsafe_member_name', $unsafe_member);
+						unlink_if_exists($file_download);
+						return FALSE;
+					}
 					exec("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C {$header_esc} >/dev/null 2>&1");
 				} else {
+					// ADR-46: stdout extraction -- member names never reach the
+					// filesystem, so no member-name guard is needed here.
 					exec("/usr/bin/tar -xOf {$file_dwn_esc} > {$header_esc}");
 				}
 				return TRUE;
@@ -9462,6 +9532,8 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				// pipefail so a tar extraction failure is not masked by the trailing
 				// tr (issue #819); this exec runs on the appliance only -- FreeBSD sh
 				// supports `set -o pipefail`.
+				// ADR-46: stdout extraction (-xOf) -- member names never reach the
+				// filesystem, so no member-name guard is needed on this path.
 				exec("set -o pipefail; /usr/bin/tar -xOf {$file_dwn_esc} | /usr/bin/sed 's/,[[:space:]]/; /g' | /usr/bin/tr ',' '\n' > {$file_org_esc}", $output, $retval);
 			}
 
