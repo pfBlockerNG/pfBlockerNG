@@ -32,7 +32,13 @@ import pfb_unbound as P
 # --------------------------------------------------------------------------- #
 
 
-def _snapshot(*, data: dict[str, Any] | None = None, counts: int = 0, regex_count: int = 0) -> P.Snapshot:
+def _snapshot(
+    *,
+    data: dict[str, Any] | None = None,
+    counts: int = 0,
+    regex_count: int = 0,
+    rejects: P.RejectTally | None = None,
+) -> P.Snapshot:
     """A populated Snapshot with distinct identity + counts so the swap is observable."""
     return P.Snapshot(
         data_db=data if data is not None else {},
@@ -45,6 +51,7 @@ def _snapshot(*, data: dict[str, Any] | None = None, counts: int = 0, regex_coun
         important_rules=False,
         counts=counts,
         regex_count=regex_count,
+        rejects=rejects if rejects is not None else {},
     )
 
 
@@ -358,6 +365,50 @@ class TestEmitCountsToggle:
         assert P.rebuild_and_swap(lambda: new) is True
         assert emitted[P.pfb["pfb_py_count"]] == 99
         assert emitted[P.pfb["pfb_py_regex_count"]] == 5
+
+    def test_emit_counts_true_also_reemits_reject_stats_when_path_set(self, tmp_path: Any, monkeypatch: Any) -> None:
+        # ADR-48 Phase 4 (#789): a no-restart swap re-emits the reject-stats
+        # artifact from the FRESH snapshot too, exactly like the UI counts above.
+        # init_standard() sets the path (needs the live Unbound env, can't run
+        # here), so this test seeds it directly on the bare pfb dict.
+        P._snapshot = _snapshot(counts=1)
+        _seed_cache_row(str(tmp_path / "cache.sqlite"))
+        _set_count_paths(tmp_path)
+        P.pfb["pfb_py_reject_stats"] = str(tmp_path / "pfb_py_reject_stats.json")
+        monkeypatch.setattr(P, "dnsbl_emit_count", lambda *a, **k: True)
+        emitted_stats: dict[str, P.RejectTally] = {}
+        monkeypatch.setattr(
+            P,
+            "dnsbl_emit_reject_stats",
+            lambda path, rejects: emitted_stats.update({path: rejects}) or True,
+        )
+
+        new = _snapshot(counts=99, rejects={("F", "G"): {"shape": 1, "wire_cap": 2}})
+        assert P.rebuild_and_swap(lambda: new) is True
+
+        assert emitted_stats[P.pfb["pfb_py_reject_stats"]] == {("F", "G"): {"shape": 1, "wire_cap": 2}}
+
+    def test_emit_counts_true_skips_reject_stats_when_path_absent(self, tmp_path: Any, monkeypatch: Any) -> None:
+        # Contrast: a bare pfb dict without the key (every OTHER test in this
+        # module never seeds it) must NOT KeyError -- the caller guards with
+        # ``pfb.get(...)`` precisely because unit tests build a minimal pfb dict.
+        P._snapshot = _snapshot(counts=1)
+        _seed_cache_row(str(tmp_path / "cache.sqlite"))
+        _set_count_paths(tmp_path)
+        assert "pfb_py_reject_stats" not in P.pfb
+        monkeypatch.setattr(P, "dnsbl_emit_count", lambda *a, **k: True)
+        called: list[Any] = []
+
+        def _spy_emit_reject_stats(*a: Any, **k: Any) -> bool:
+            called.append((a, k))
+            return True
+
+        monkeypatch.setattr(P, "dnsbl_emit_reject_stats", _spy_emit_reject_stats)
+
+        new = _snapshot(counts=99, rejects={("F", "G"): {"shape": 1, "wire_cap": 0}})
+        assert P.rebuild_and_swap(lambda: new) is True
+
+        assert called == []
 
 
 # --------------------------------------------------------------------------- #

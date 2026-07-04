@@ -87,8 +87,12 @@ _TLDS: dict[str, dict[str, str]] = {
 _EXCLUSION: set[str] = set()
 
 
-def _reconcile(lines: list[str], provenance: str = P.RULE_PROV_FEED) -> P.ReconcileResult:
-    return P.reconcile(_production_rules(lines, provenance), _TLDS, _EXCLUSION)
+def _reconcile(
+    lines: list[str],
+    provenance: str = P.RULE_PROV_FEED,
+    tally: P.RejectTally | None = None,
+) -> P.ReconcileResult:
+    return P.reconcile(_production_rules(lines, provenance), _TLDS, _EXCLUSION, tally=tally)
 
 
 def _resolve(result: P.ReconcileResult, query: str) -> str:
@@ -268,15 +272,22 @@ class TestRegexReduction:
         # kept as a compiled regex (that would pay per-query cost for a pattern
         # that can never match).
         long_label = "a" * 64
+        tally: P.RejectTally = {}
         res = _reconcile(
             [
                 f"/^(.+\\.)?{long_label}\\.com$/",
                 f"@@/^{long_label}\\.net$/",
-            ]
+            ],
+            tally=tally,
         )
         assert res.block_domains == [] and res.allow_domains == []
         assert res.block_regex_irreducible == [] and res.allow_regex_irreducible == []
         assert res.reduced == 0
+        # ADR-48 Phase 4 (#789): the dropped fold now tallies 'wire_cap', attributed
+        # to the originating rule's own (feed, group) -- ("", "") here, since
+        # _production_rules() doesn't set feed/group. RED before this phase: there
+        # was no ``tally`` parameter at all, so this drop counted NOWHERE.
+        assert tally == {("", ""): {"shape": 0, "wire_cap": 2}}
 
     def test_reduction_matches_oracle_and_spike(self) -> None:
         spike = _spike()
