@@ -52,6 +52,7 @@ from .test_repo_install import (
     poll_catalog_served,
     read_compact_version,
     repo_priority,
+    restore_pages_hosts,
     reversion_pkg,
 )
 
@@ -376,35 +377,43 @@ def test_install_from_live_nightly_url(smoke_vm: SmokeVM) -> None:
 
     _ensure_egress_open()
 
+    # pkg(8) loads /usr/local/etc/pkg/repos/*.conf ALPHABETICALLY and, for two files
+    # naming the same repo, the LAST-loaded stanza wins. "pfb_nightly_smoke.conf" (the
+    # nightly_vm module fixture's file:// catalog, same NIGHTLY_REPO name) sorts AFTER
+    # "pfb_nightly_live_smoke.conf" (this test's conf, written below) — so a stale copy
+    # left by a fixture that errored mid-setup would silently win and this test would
+    # never actually touch the live HTTPS URL. Clear it unconditionally before proceeding.
+    smoke_vm.ssh("/bin/rm", "-f", CONF, timeout=60.0)
+
     # GIVEN: Pages IPs pinned (guest DNS is sandboxed), nightly package absent, our
     # nightly conf at the live URL above the Netgate pfSense repo.
-    pin_pages_hosts(smoke_vm, host)
-    pfsense_prio = repo_priority(smoke_vm, "pfSense")
-    pkg_delete(smoke_vm, NIGHTLY_NAME)
-
-    # Write the production nightly conf: pfblockerng-nightly, HTTPS live URL, NONE-signed.
-    # ${ABI} is a pkg(8) variable — must survive in the file as-is (not shell-expanded).
-    conf = (
-        f"{NIGHTLY_REPO}: {{\n"
-        f'  url: "{base_url}/${{ABI}}",\n'
-        "  mirror_type: none,\n"
-        "  signature_type: none,\n"
-        f"  priority: {pfsense_prio + 100},\n"
-        "  enabled: yes\n"
-        "}\n"
-    )
-    r = subprocess.run(
-        smoke_vm.ssh_argv("tee", NIGHTLY_LIVE_CONF),
-        input=conf,
-        capture_output=True,
-        text=True,
-        timeout=60.0,
-        check=False,
-    )
-    if r.returncode != 0:
-        raise RuntimeError(f"write nightly live conf failed: rc={r.returncode} {r.stderr!r}")
-
+    prior_hosts = pin_pages_hosts(smoke_vm, host)
     try:
+        pfsense_prio = repo_priority(smoke_vm, "pfSense")
+        pkg_delete(smoke_vm, NIGHTLY_NAME)
+
+        # Write the production nightly conf: pfblockerng-nightly, HTTPS live URL, NONE-signed.
+        # ${ABI} is a pkg(8) variable — must survive in the file as-is (not shell-expanded).
+        conf = (
+            f"{NIGHTLY_REPO}: {{\n"
+            f'  url: "{base_url}/${{ABI}}",\n'
+            "  mirror_type: none,\n"
+            "  signature_type: none,\n"
+            f"  priority: {pfsense_prio + 100},\n"
+            "  enabled: yes\n"
+            "}\n"
+        )
+        r = subprocess.run(
+            smoke_vm.ssh_argv("tee", NIGHTLY_LIVE_CONF),
+            input=conf,
+            capture_output=True,
+            text=True,
+            timeout=60.0,
+            check=False,
+        )
+        if r.returncode != 0:
+            raise RuntimeError(f"write nightly live conf failed: rc={r.returncode} {r.stderr!r}")
+
         # WHEN: pkg update reads the live nightly catalog.
         pkg_update(smoke_vm)
         assert not pkg_present(smoke_vm, NIGHTLY_NAME), "precondition: -nightly absent before live install"
@@ -418,3 +427,4 @@ def test_install_from_live_nightly_url(smoke_vm: SmokeVM) -> None:
     finally:
         pkg_delete(smoke_vm, NIGHTLY_NAME)
         smoke_vm.ssh("/bin/rm", "-f", NIGHTLY_LIVE_CONF, timeout=60.0)
+        restore_pages_hosts(smoke_vm, prior_hosts)

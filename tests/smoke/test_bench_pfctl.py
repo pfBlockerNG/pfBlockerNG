@@ -1057,6 +1057,7 @@ def test_pfctl_bench(
     smoke_vm: SmokeVM,
     lan_interface: SmokeVM,
     client_vm: SmokeVM,
+    request: pytest.FixtureRequest,
 ) -> None:
     """ADR-40 Phase 2: broad-matrix pfctl replace vs chunked delta + recompute.
 
@@ -1076,6 +1077,10 @@ def test_pfctl_bench(
 
     kv = _bench(smoke_vm, "raise_limits", "10000000")
     print(f"  pf table limit raised to: {kv.get('pf_table_limit')}")
+    # Guarantees the 1M-entry table + raised sysctl/pf limits are torn down even if a
+    # sweep iteration below throws — a bare end-of-function cleanup call never runs on
+    # a mid-sweep failure (issue #582). Runs during test teardown regardless of outcome.
+    request.addfinalizer(lambda: _bench(smoke_vm, "cleanup", timeout=30.0))
 
     for sz in _SIZES:
         kv = _bench(smoke_vm, "gen", str(sz), timeout=120.0)
@@ -1134,7 +1139,6 @@ def test_pfctl_bench(
         print(f"\n[bench] op=recompute size={row.size:,} wall_ms={row.wall_ms:,}")
 
     _print_summary(rows)
-    _bench(smoke_vm, "cleanup", timeout=30.0)
 
     assert rows, "expected at least one benchmark row"
 
@@ -1174,6 +1178,7 @@ def test_pfctl_knee_sweep(
     smoke_vm: SmokeVM,
     lan_interface: SmokeVM,
     client_vm: SmokeVM,
+    request: pytest.FixtureRequest,
 ) -> None:
     """ADR-40 production-calibrated batch-size knee sweep with pooled distributions.
 
@@ -1204,6 +1209,10 @@ def test_pfctl_knee_sweep(
 
     kv = _bench(smoke_vm, "raise_limits", "10000000")
     print(f"  pf table limit: {kv.get('pf_table_limit')}")
+    # Guarantees the 1M-entry table + raised sysctl/pf limits are torn down even if a
+    # sweep cell below throws — a bare end-of-function cleanup call never runs on a
+    # mid-sweep failure (issue #582). Runs during test teardown regardless of outcome.
+    request.addfinalizer(lambda: _bench(smoke_vm, "cleanup", timeout=30.0))
 
     # Generate all needed tables (gen is idempotent/cached).
     for sz in _KNEE_SIZES:
@@ -1363,8 +1372,6 @@ def test_pfctl_knee_sweep(
         f"\nBaseline addr block: 11.0.0.0/8; add block: 13.0.0.0/8 (disjoint)."
     )
 
-    _bench(smoke_vm, "cleanup", timeout=30.0)
-
     assert knee_stats, "expected at least one knee measurement"
 
 
@@ -1399,6 +1406,7 @@ def test_pfctl_reject_loop(
     smoke_vm: SmokeVM,
     lan_interface: SmokeVM,
     client_vm: SmokeVM,
+    request: pytest.FixtureRequest,
 ) -> None:
     """ADR-40 definitive data-plane bench: reject-based closed measurement loop.
 
@@ -1463,6 +1471,10 @@ def test_pfctl_reject_loop(
 
     kv = _bench(smoke_vm, "raise_limits", "10000000")
     print(f"  pf table limit: {kv.get('pf_table_limit')}")
+    # Guarantees the 1M-entry table + raised sysctl/pf limits are torn down even if a
+    # sweep cell below throws — a bare end-of-function cleanup call never runs on a
+    # mid-sweep failure (issue #582). Runs during test teardown regardless of outcome.
+    request.addfinalizer(lambda: _bench(smoke_vm, "cleanup", timeout=30.0))
 
     # Generate tables.
     for sz in sorted({s for s, _ in _REJECT_KNEE_CELLS} | set(_REJECT_KNEE_SIZES)):
@@ -1744,8 +1756,6 @@ def test_pfctl_reject_loop(
         f"\n{_REJECT_REPS} reps per cell | op-aligned windows (CR#12)."
     )
 
-    _bench(smoke_vm, "cleanup", timeout=30.0)
-
     assert verify_samples, "expected at least one TCP RST sample in verification"
 
 
@@ -1854,6 +1864,7 @@ def test_pfctl_replace_disruption_baseline(
     smoke_vm: SmokeVM,
     lan_interface: SmokeVM,
     client_vm: SmokeVM,
+    request: pytest.FixtureRequest,
 ) -> None:
     """ADR-40 follow-up: replace-only service-disruption baseline across table sizes.
 
@@ -1900,6 +1911,12 @@ def test_pfctl_replace_disruption_baseline(
 
     kv = _bench(smoke_vm, "raise_limits", "10000000")
     print(f"  pf table limit: {kv.get('pf_table_limit')}")
+    # Guarantees the 1M-entry table + raised sysctl/pf limits are torn down even if a
+    # sweep rep below throws — a bare end-of-function cleanup call never runs on a
+    # mid-sweep failure (issue #582). Runs during test teardown regardless of outcome
+    # (the explicit pre-skip cleanup calls below stay — this is the catch-all for
+    # everything past them: the main measurement loop had no cleanup at all before).
+    request.addfinalizer(lambda: _bench(smoke_vm, "cleanup", timeout=30.0))
 
     # Generate all needed tables (idempotent).
     for sz in _REPLACE_DISRUPT_SIZES:
@@ -2100,8 +2117,6 @@ def test_pfctl_replace_disruption_baseline(
         q_ps = quiet_stats[sz]
         print(f"{sz:>9,} {q_ps.n:>6} {q_ps.p50_ms:>8.2f} {q_ps.p95_ms:>8.2f} {q_ps.p99_ms:>8.2f} {q_ps.max_ms:>8.2f}")
 
-    _bench(smoke_vm, "cleanup", timeout=30.0)
-
     # Final assertions: data was collected.
     assert any(size_stats[sz].n > 0 for sz in _REPLACE_DISRUPT_SIZES), (
         "expected non-empty pooled samples for at least one size"
@@ -2146,6 +2161,7 @@ def test_pfctl_disruption_uncensored(
     smoke_vm: SmokeVM,
     lan_interface: SmokeVM,
     client_vm: SmokeVM,
+    request: pytest.FixtureRequest,
 ) -> None:
     """ADR-40 02c: uncensored disruption magnitudes — replace vs delta.
 
@@ -2209,6 +2225,10 @@ def test_pfctl_disruption_uncensored(
 
     kv = _bench(smoke_vm, "raise_limits", "10000000")
     print(f"  pf table limit: {kv.get('pf_table_limit')}")
+    # Guarantees the 1M-entry table + raised sysctl/pf limits are torn down even if a
+    # sweep rep below throws — a bare end-of-function cleanup call never runs on a
+    # mid-sweep failure (issue #582). Runs during test teardown regardless of outcome.
+    request.addfinalizer(lambda: _bench(smoke_vm, "cleanup", timeout=30.0))
 
     # Generate all needed tables.
     all_sizes = sorted(set(_UNCENSORED_REPLACE_SIZES) | {s for s, _, _, _ in _UNCENSORED_DELTA_CELLS})
@@ -2504,7 +2524,5 @@ def test_pfctl_disruption_uncensored(
         "\n  loss is pooled per RUN (not attributed to this start-time slice), by design."
         f"\n{_UNCENSORED_REPS} reps per cell | op-aligned."
     )
-
-    _bench(smoke_vm, "cleanup", timeout=30.0)
 
     assert any(replace_ps[sz].n > 0 for sz in _UNCENSORED_REPLACE_SIZES), "expected non-empty pooled replace samples"

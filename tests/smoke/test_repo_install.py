@@ -1139,14 +1139,22 @@ def poll_catalog_served(base_url: str, abi: str, *, attempts: int = 30, delay: f
     raise AssertionError(f"live catalog never served {base_url}/{abi}/ within budget; last error: {last_err}")
 
 
-def pin_pages_hosts(vm: SmokeVM, host: str, *, timeout: float = 60.0) -> None:
+def pin_pages_hosts(vm: SmokeVM, host: str, *, timeout: float = 60.0) -> str:
     """Pin GitHub Pages' anycast IPs for ``host`` in the guest ``/etc/hosts``.
 
     The smoke harness sandboxes guest DNS to a mock answering only ``uuid-*.com``,
     so the Pages host does not resolve on the box. A static ``/etc/hosts`` entry
     routes ``pkg``'s HTTPS fetch to Pages by IP while TLS SNI still presents ``host``
     (GitHub's *.github.io cert validates). Idempotent: the entry is removed first.
+
+    Returns the pre-pin ``/etc/hosts`` content — pass it to :func:`restore_pages_hosts`
+    in the caller's ``finally`` so the pin never outlives the test (issue #582: it
+    used to leak into every later test/module sharing the guest).
     """
+    prior = vm.ssh("cat", "/etc/hosts", timeout=timeout)
+    if prior.returncode != 0:
+        raise RuntimeError(f"pin_pages_hosts: reading /etc/hosts failed: rc={prior.returncode} {prior.stderr!r}")
+
     # Drop any prior line carrying this host as a whitespace-separated field (not
     # just a line-ending match, so stale aliases/comments don't survive), then pin
     # ALL the Pages IPs (resilient to a single-IP failure; pkg follows the cert).
@@ -1166,6 +1174,24 @@ def pin_pages_hosts(vm: SmokeVM, host: str, *, timeout: float = 60.0) -> None:
     )
     if result.returncode != 0:
         raise RuntimeError(f"pin_pages_hosts failed: rc={result.returncode} {result.stderr!r}")
+    return prior.stdout
+
+
+def restore_pages_hosts(vm: SmokeVM, prior_hosts: str, *, timeout: float = 60.0) -> None:
+    """Restore ``/etc/hosts`` to the content :func:`pin_pages_hosts` snapshotted.
+
+    Call from the caller's ``finally`` so the Pages-IP pin never survives the test.
+    """
+    result = subprocess.run(
+        vm.ssh_argv("tee", "/etc/hosts"),
+        input=prior_hosts,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"restore_pages_hosts failed: rc={result.returncode} {result.stderr!r}")
 
 
 def write_live_repo_conf(vm: SmokeVM, base_url: str, *, priority: int, timeout: float = 60.0) -> None:
@@ -1234,22 +1260,27 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
 
     # GIVEN: Pages IPs pinned (guest DNS is sandboxed), package absent, our conf at
     # the LIVE url above pfSense.
-    pin_pages_hosts(repo_vm, host)
-    pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
-    pkg_delete(repo_vm)
-    write_live_repo_conf(repo_vm, base_url, priority=pfsense_prio + 100)
+    prior_hosts = pin_pages_hosts(repo_vm, host)
+    try:
+        pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
+        pkg_delete(repo_vm)
+        write_live_repo_conf(repo_vm, base_url, priority=pfsense_prio + 100)
 
-    # WHEN: pkg update must ACCEPT the live HTTPS catalog (a rejected catalog — bad
-    # meta.conf, malformed packagesite, mismatched sum, or an unreachable URL — fails here).
-    pkg_update(repo_vm)
-    assert pkg_installed_version(repo_vm) is None, f"{PKG_NAME} unexpectedly present before the live-URL install"
+        # WHEN: pkg update must ACCEPT the live HTTPS catalog (a rejected catalog — bad
+        # meta.conf, malformed packagesite, mismatched sum, or an unreachable URL — fails here).
+        pkg_update(repo_vm)
+        assert pkg_installed_version(repo_vm) is None, f"{PKG_NAME} unexpectedly present before the live-URL install"
 
-    # THEN: install resolves from our LIVE repo, deps included, .pkg checksum validated.
-    proc = pkg_install_from_repo(repo_vm)
-    combined = proc.stdout + proc.stderr
-    assert "Missing dependency" not in combined, f"RUN_DEPENDS did not resolve from the live Pages catalog:\n{combined}"
-    origin = pkg_repo_origin(repo_vm)
-    assert origin == OURS_REPO_NAME, f"installed from {origin!r}, expected our repo {OURS_REPO_NAME!r}"
+        # THEN: install resolves from our LIVE repo, deps included, .pkg checksum validated.
+        proc = pkg_install_from_repo(repo_vm)
+        combined = proc.stdout + proc.stderr
+        assert "Missing dependency" not in combined, (
+            f"RUN_DEPENDS did not resolve from the live Pages catalog:\n{combined}"
+        )
+        origin = pkg_repo_origin(repo_vm)
+        assert origin == OURS_REPO_NAME, f"installed from {origin!r}, expected our repo {OURS_REPO_NAME!r}"
+    finally:
+        restore_pages_hosts(repo_vm, prior_hosts)
 
 
 # =========================================================================== #
@@ -2205,29 +2236,34 @@ def test_generate_hook_safety_absent_conf_exits_0(repo_vm: SmokeVM) -> None:
     Assert AFTER: both conf paths still do NOT exist; exit code 0.
     """
     _stage_generate_hook(repo_vm, guest_hook=GUEST_HOOK_PATH)
+    try:
+        absent_conf = f"{GENERATE_DIR}/nonexistent_pfblockerng.conf"
+        absent_nightly = f"{GENERATE_DIR}/nonexistent_pfblockerng_nightly.conf"
 
-    absent_conf = f"{GENERATE_DIR}/nonexistent_pfblockerng.conf"
-    absent_nightly = f"{GENERATE_DIR}/nonexistent_pfblockerng_nightly.conf"
+        # BEFORE: neither conf exists (a genuinely-absent nightly path, NOT /dev/null —
+        # so the orphan guard is exercised for real on both channels).
+        assert repo_vm.ssh("/bin/test", "-f", absent_conf).returncode != 0, (
+            f"BEFORE: release conf unexpectedly exists at {absent_conf}"
+        )
+        assert repo_vm.ssh("/bin/test", "-f", absent_nightly).returncode != 0, (
+            f"BEFORE: nightly conf unexpectedly exists at {absent_nightly}"
+        )
 
-    # BEFORE: neither conf exists (a genuinely-absent nightly path, NOT /dev/null —
-    # so the orphan guard is exercised for real on both channels).
-    assert repo_vm.ssh("/bin/test", "-f", absent_conf).returncode != 0, (
-        f"BEFORE: release conf unexpectedly exists at {absent_conf}"
-    )
-    assert repo_vm.ssh("/bin/test", "-f", absent_nightly).returncode != 0, (
-        f"BEFORE: nightly conf unexpectedly exists at {absent_nightly}"
-    )
+        # WHEN: run the hook with both conf paths non-existent.
+        _run_generate_hook(repo_vm, release_conf=absent_conf, nightly_conf=absent_nightly)
 
-    # WHEN: run the hook with both conf paths non-existent.
-    _run_generate_hook(repo_vm, release_conf=absent_conf, nightly_conf=absent_nightly)
-
-    # AFTER: both confs still absent; hook was a no-op (created no channel).
-    assert repo_vm.ssh("/bin/test", "-f", absent_conf).returncode != 0, (
-        f"AFTER: hook orphan guard FAILED — it created {absent_conf} when the conf was absent"
-    )
-    assert repo_vm.ssh("/bin/test", "-f", absent_nightly).returncode != 0, (
-        f"AFTER: hook orphan guard FAILED — it created {absent_nightly} when the conf was absent"
-    )
+        # AFTER: both confs still absent; hook was a no-op (created no channel).
+        assert repo_vm.ssh("/bin/test", "-f", absent_conf).returncode != 0, (
+            f"AFTER: hook orphan guard FAILED — it created {absent_conf} when the conf was absent"
+        )
+        assert repo_vm.ssh("/bin/test", "-f", absent_nightly).returncode != 0, (
+            f"AFTER: hook orphan guard FAILED — it created {absent_nightly} when the conf was absent"
+        )
+    finally:
+        # _stage_generate_hook copies to the PRODUCTION rc.d path — remove it so a
+        # staged hook never survives into a later module sharing this guest.
+        repo_vm.ssh("/bin/rm", "-f", GUEST_HOOK_PATH, timeout=60.0)
+        repo_vm.ssh("/bin/rm", "-rf", GENERATE_DIR, timeout=60.0)
 
 
 @pytest.mark.timeout(600)  # forge build + catalog gen + conf regen + pkg update/install > 30s cap.
@@ -2364,4 +2400,7 @@ def test_generate_hook_rewrites_stale_varver_and_resolves(repo_vm: SmokeVM, tmp_
     finally:
         pkg_delete(repo_vm)
         repo_vm.ssh("/bin/rm", "-rf", GENERATE_DIR, timeout=60.0)
+        # _stage_generate_hook copied this to the PRODUCTION rc.d path — remove it so a
+        # staged hook never survives into a later module sharing this guest.
+        repo_vm.ssh("/bin/rm", "-f", GUEST_HOOK_PATH, timeout=60.0)
         # REPO_CONF is cleaned by the repo_vm module fixture teardown.

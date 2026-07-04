@@ -21,6 +21,7 @@
 # Usage (each sub-command is called by the Python driver):
 #   bench_pfctl_tables.sh system_info
 #   bench_pfctl_tables.sh raise_limits [MAX]
+#   bench_pfctl_tables.sh restore_limits          (also run automatically by cleanup)
 #   bench_pfctl_tables.sh gen N
 #   bench_pfctl_tables.sh replace N
 #   bench_pfctl_tables.sh delta N CHURN BATCH  (BATCH=0 = single-giant-op)
@@ -39,6 +40,7 @@ PFCTL=/sbin/pfctl
 PERL=/usr/local/bin/perl
 TMP=/tmp/pfb_bench
 TABLE=pfb_bench_main
+LIMITS_SNAPSHOT="${TMP}/orig_limits.txt"
 
 mkdir -p "${TMP}"
 
@@ -124,12 +126,39 @@ do_system_info() {
 
 do_raise_limits() {
     _limit="${1:-10000000}"
+    # Snapshot the PRE-bench values exactly once: a test sweep calls raise_limits
+    # repeatedly (once per test body sharing this guest), and re-snapshotting on a
+    # later call would capture an already-raised value, so do_cleanup's restore
+    # would never actually return the box to its true baseline. First call wins.
+    if [ ! -f "${LIMITS_SNAPSHOT}" ]; then
+        _orig_maxcount=$(sysctl -n net.pf.request_maxcount 2>/dev/null || echo unknown)
+        _orig_table_entries=$("${PFCTL}" -sm 2>/dev/null | awk '/table-entries/{print $NF}')
+        [ -z "${_orig_table_entries}" ] && _orig_table_entries=unknown
+        printf 'orig_maxcount=%s\norig_table_entries=%s\n' "${_orig_maxcount}" "${_orig_table_entries}" \
+            > "${LIMITS_SNAPSHOT}"
+    fi
     sysctl "net.pf.request_maxcount=${_limit}" >/dev/null 2>&1 || true
     printf 'set limit table-entries %s\n' "${_limit}" | "${PFCTL}" -mf - 2>/dev/null || true
     printf 'raised_limit=%s\n' "${_limit}"
     _tl=$("${PFCTL}" -sm 2>/dev/null | awk '/table-entries/{print $NF}' || echo unknown)
     printf 'pf_table_limit=%s\n' "${_tl}"
     printf 'net_pf_request_maxcount=%s\n' "$(sysctl -n net.pf.request_maxcount 2>/dev/null || echo unknown)"
+}
+
+# Restore net.pf.request_maxcount + pf table-entries limit to the pre-raise_limits
+# baseline captured in LIMITS_SNAPSHOT. Idempotent no-op when nothing was ever raised
+# (snapshot absent) — do_cleanup calls this unconditionally.
+do_restore_limits() {
+    [ -f "${LIMITS_SNAPSHOT}" ] || return 0
+    _orig_maxcount=$(awk -F= '/^orig_maxcount=/{print $2}' "${LIMITS_SNAPSHOT}")
+    _orig_table_entries=$(awk -F= '/^orig_table_entries=/{print $2}' "${LIMITS_SNAPSHOT}")
+    if [ -n "${_orig_maxcount}" ] && [ "${_orig_maxcount}" != "unknown" ]; then
+        sysctl "net.pf.request_maxcount=${_orig_maxcount}" >/dev/null 2>&1 || true
+    fi
+    if [ -n "${_orig_table_entries}" ] && [ "${_orig_table_entries}" != "unknown" ]; then
+        printf 'set limit table-entries %s\n' "${_orig_table_entries}" | "${PFCTL}" -mf - 2>/dev/null || true
+    fi
+    printf 'restored_maxcount=%s restored_table_entries=%s\n' "${_orig_maxcount}" "${_orig_table_entries}"
 }
 
 # Generate N unique synthetic IPv4s into /tmp/pfb_bench/table_N.txt.
@@ -314,6 +343,8 @@ do_recompute() {
 
 do_cleanup() {
     "${PFCTL}" -t "${TABLE}" -T kill 2>/dev/null || true
+    # Restore BEFORE wiping TMP: the limits snapshot lives inside it.
+    do_restore_limits
     rm -rf "${TMP}"
     printf 'cleaned=ok\n'
 }
@@ -488,19 +519,20 @@ do_verify_reject() {
 # --------------------------------------------------------------------------- #
 
 case "${1:-}" in
-    system_info)    do_system_info ;;
-    raise_limits)   do_raise_limits "${2:-10000000}" ;;
-    gen)            do_gen "${2:?missing N}" ;;
-    replace)        do_replace "${2:?missing N}" ;;
-    delta)          do_delta "${2:?missing N}" "${3:?missing CHURN}" "${4:?missing BATCH}" ;;
-    recompute)      do_recompute "${2:?missing N}" ;;
-    get_interfaces) do_get_interfaces ;;
-    setup_rules)    do_setup_rules "${2:-floating}" ;;
-    teardown_rules) do_teardown_rules ;;
-    verify_reject)  do_verify_reject ;;
-    cleanup)        do_cleanup ;;
+    system_info)     do_system_info ;;
+    raise_limits)    do_raise_limits "${2:-10000000}" ;;
+    restore_limits)  do_restore_limits ;;
+    gen)             do_gen "${2:?missing N}" ;;
+    replace)         do_replace "${2:?missing N}" ;;
+    delta)           do_delta "${2:?missing N}" "${3:?missing CHURN}" "${4:?missing BATCH}" ;;
+    recompute)       do_recompute "${2:?missing N}" ;;
+    get_interfaces)  do_get_interfaces ;;
+    setup_rules)     do_setup_rules "${2:-floating}" ;;
+    teardown_rules)  do_teardown_rules ;;
+    verify_reject)   do_verify_reject ;;
+    cleanup)         do_cleanup ;;
     *)
-        printf 'usage: bench_pfctl_tables.sh <system_info|raise_limits [MAX]|gen N|replace N|delta N CHURN BATCH|recompute N|get_interfaces|setup_rules [lan_if|floating]|teardown_rules|verify_reject|cleanup>\n' >&2
+        printf 'usage: bench_pfctl_tables.sh <system_info|raise_limits [MAX]|restore_limits|gen N|replace N|delta N CHURN BATCH|recompute N|get_interfaces|setup_rules [lan_if|floating]|teardown_rules|verify_reject|cleanup>\n' >&2
         exit 2
         ;;
 esac
