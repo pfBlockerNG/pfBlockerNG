@@ -58,6 +58,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from pfb_pkg import zstd_compress
+
 # --------------------------------------------------------------------------- #
 # Small FreeBSD-ports Makefile evaluator
 #
@@ -1151,7 +1153,14 @@ def write_pkg(b: Build, out_path: Path, compression: str) -> None:
 
         out_path.write_bytes(lzma.compress(tar_bytes, preset=6))
     else:
-        out_path.write_bytes(_zstd_compress(tar_bytes))
+        out_path.write_bytes(
+            zstd_compress(
+                tar_bytes,
+                BuildError,
+                "zstd compression needs the `zstd` binary or the python `zstandard` "
+                "module (brew install zstd / apt install zstd), or pass --compression xz",
+            )
+        )
 
 
 def _add_meta(tf: tarfile.TarFile, name: str, data: bytes) -> None:
@@ -1162,23 +1171,6 @@ def _add_meta(tf: tarfile.TarFile, name: str, data: bytes) -> None:
     ti.uname, ti.gname = "root", "wheel"
     ti.mtime = 0
     tf.addfile(ti, io.BytesIO(data))
-
-
-def _zstd_compress(data: bytes) -> bytes:
-    try:
-        import zstandard
-
-        return zstandard.ZstdCompressor(level=19).compress(data)
-    except ImportError:
-        pass
-    zstd = shutil.which("zstd")
-    if not zstd:
-        raise BuildError(
-            "zstd compression needs the `zstd` binary or the python `zstandard` "
-            "module (brew install zstd / apt install zstd), or pass --compression xz"
-        )
-    p = subprocess.run([zstd, "-q", "-19", "-c"], input=data, stdout=subprocess.PIPE, check=True)
-    return p.stdout
 
 
 # --------------------------------------------------------------------------- #
