@@ -80,9 +80,16 @@ use PHPUnit\Framework\TestCase;
  *     J: referencing alias listed BEFORE the referenced one — order must not
  *        matter (the pre-#782 code resolved one level only in this ordering,
  *        by accident)
- *     K: a two-alias reference CYCLE terminates (depth cap) and still yields
+ *     K: a two-alias reference CYCLE terminates (visited set) and still yields
  *        both aliases' IP members
  *     L: a three-level chain resolves through every level
+ *
+ *   Cases M–N (visited-set walk, #786 adversarial review):
+ *     M: a chain DEEPER than the interim implementation's depth cap of 10
+ *        resolves fully — the visited set makes any cap unnecessary, so depth
+ *        is unbounded for legitimate chains (fails on the depth-capped code)
+ *     N: an alias that references ITSELF terminates immediately and still
+ *        yields its literal IP members
  */
 #[CoversFunction('pfb_collect_localip')]
 #[CoversFunction('pfb_local_ip')]
@@ -573,6 +580,79 @@ final class CollectLocalIpAliasTest extends TestCase
 			sprintf(
 				"Chain_L1 -> Chain_L2 -> Chain_L3 must resolve to the leaf IP.\n"
 				. "pfb_local keys: %s",
+				implode(', ', array_keys($pfb_local))
+			)
+		);
+	}
+
+	// -------------------------------------------------------------------------
+	// Case M — chain deeper than any depth cap resolves fully (#786 review:
+	// fails on the interim depth-capped implementation)
+	// -------------------------------------------------------------------------
+
+	public function testNestedAliasChainDeeperThanTenLevelsResolves(): void
+	{
+		// Given: a 12-level alias chain Deep_L1 -> ... -> Deep_L12 -> leaf IP.
+		// The visited-set walk expands each distinct alias exactly once, so
+		// legitimate depth is unbounded (a depth-capped walk truncated at 10
+		// and silently lost the leaf).
+		$chain = [];
+		for ($i = 1; $i < 12; $i++) {
+			$chain[] = ['name' => "Deep_L{$i}", 'address' => 'Deep_L' . ($i + 1)];
+		}
+		$chain[] = ['name' => 'Deep_L12', 'address' => '203.0.113.96'];
+		$GLOBALS['config']['aliases']['alias'] = array_merge(
+			$GLOBALS['config']['aliases']['alias'], $chain
+		);
+		$GLOBALS['config']['nat']['rule'] = [
+			['target' => 'Deep_L1'],
+		];
+
+		[$pfb_local, ] = pfb_collect_localip();
+
+		$this->assertArrayHasKey(
+			'203.0.113.96',
+			$pfb_local,
+			sprintf(
+				"A 12-level alias chain must resolve to the leaf IP — legitimate depth "
+				. "is unbounded under the visited-set walk.\npfb_local keys: %s",
+				implode(', ', array_keys($pfb_local))
+			)
+		);
+	}
+
+	// -------------------------------------------------------------------------
+	// Case N — direct self-reference terminates and keeps literal members (#786)
+	// -------------------------------------------------------------------------
+
+	public function testSelfReferencingAliasTerminatesAndKeepsLiteralMembers(): void
+	{
+		// Given: an alias whose address references its own name alongside a
+		// literal IP. The visited set (seeded with the outer entry) skips the
+		// self-edge immediately; reaching the assertions proves termination.
+		$GLOBALS['config']['aliases']['alias'][] = [
+			'name' => 'Self_Ref', 'address' => 'Self_Ref 203.0.113.97',
+		];
+		$GLOBALS['config']['nat']['rule'] = [
+			['target' => 'Self_Ref'],
+		];
+
+		[$pfb_local, ] = pfb_collect_localip();
+
+		$this->assertArrayHasKey(
+			'203.0.113.97',
+			$pfb_local,
+			sprintf(
+				"The self-referencing alias's literal IP member must still be collected.\n"
+				. "pfb_local keys: %s",
+				implode(', ', array_keys($pfb_local))
+			)
+		);
+		$this->assertArrayNotHasKey(
+			'Self_Ref',
+			$pfb_local,
+			sprintf(
+				"The alias NAME must never survive as a \$pfb_local key.\npfb_local keys: %s",
 				implode(', ', array_keys($pfb_local))
 			)
 		);
