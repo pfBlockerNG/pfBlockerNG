@@ -10236,7 +10236,11 @@ function pfb_remove_states() {
 	$data		= pfb_filterrules();
 	$pfb_int	= $data['int'] ?: array();
 
-	// Collect local IPs
+	// Collect local IPs. $pfb_local is an IP-keyed set (isset() lookups) END-TO-END:
+	// pfb_collect_localip() already returns that shape, and plain lists are folded in
+	// via array_fill_keys(). No trailing array_flip(array_unique()) dedup -- issue #769:
+	// re-flipping the already-flipped map turned its keys back into integers, so the
+	// isset($pfb_local[$s_ip]) exclusion below could never match those entries.
 	$data = pfb_collect_localip();
 	if (!empty($data[0])) {
 		$pfb_local = array_merge($pfb_local, $data[0]);
@@ -10246,12 +10250,7 @@ function pfb_remove_states() {
 	// Collect DNS servers to suppress
 	$pfb_dnsservers = get_dns_servers();
 	if (!empty($pfb_dnsservers)) {
-		$pfb_local = array_merge($pfb_local, $pfb_dnsservers);
-	}
-
-	// Remove any duplicate IPs
-	if (!empty($pfb_local)) {
-		$pfb_local = array_flip(array_unique($pfb_local));
+		$pfb_local = array_merge($pfb_local, array_fill_keys($pfb_dnsservers, 0));
 	}
 
 	// Collect any 'Permit' Customlist IPs to suppress
