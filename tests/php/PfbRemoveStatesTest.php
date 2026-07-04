@@ -565,4 +565,98 @@ final class PfbRemoveStatesTest extends TestCase
 			"{$outside} lies outside the suppressed range and must be killed — kill log was:\n{$kills}"
 		);
 	}
+
+	/**
+	 * Scenario (#769) — a local IP collected by pfb_collect_localip() spares its state.
+	 *
+	 * Given: a NAT rule whose target is the (public, otherwise-killable)
+	 *        198.51.100.44 — pfb_collect_localip() folds NAT targets into its
+	 *        IP-keyed local map — plus a table-matched victim state alongside it.
+	 * When:  pfb_remove_states() runs.
+	 * Then:  the victim is killed (proves the pass ran) and the local IP is NOT.
+	 *        FAILS pre-fix: the "Remove any duplicate IPs" step re-flipped the
+	 *        already-flipped local map (array_flip(array_unique())), turning its
+	 *        IP keys back into integers, so isset($pfb_local[$s_ip]) never matched.
+	 */
+	public function test_local_ip_from_collect_localip_spares_state_others_still_killed(): void
+	{
+		$local = '198.51.100.44';
+
+		$this->seedConfig();
+		$GLOBALS['config']['nat']['rule'] = [['target' => $local]];
+		$this->seedStates($this->v4State($local), $this->v4State(self::V4_VICTIM, 54322));
+		$this->seedTableMatches($local, self::V4_VICTIM);
+
+		$kills = $this->runRemoveStates();
+
+		$this->assertStringContainsString(
+			self::V4_VICTIM,
+			$kills,
+			'the non-local ' . self::V4_VICTIM . " must be killed (proves the pass ran) — kill log was:\n{$kills}"
+		);
+		$this->assertStringNotContainsString(
+			$local,
+			$kills,
+			"the pfb_collect_localip()-sourced {$local} must be excluded from clearing — kill log was:\n{$kills}"
+		);
+	}
+
+	/**
+	 * Scenario (#769, regression pin) — configured DNS servers spare their states,
+	 * both families.
+	 *
+	 * Given: get_dns_servers() returning a v4 and a v6 server (both public,
+	 *        table-matched, with live states), plus a table-matched victim per
+	 *        family.
+	 * When:  pfb_remove_states() runs.
+	 * Then:  both victims are killed, neither DNS server is. Deliberately green
+	 *        pre-fix too (the plain DNS list happened to survive the old re-flip
+	 *        with IP keys) — this pins the accidental-working side so the #769
+	 *        shape normalisation (array_fill_keys, no re-flip) cannot regress it.
+	 */
+	public function test_dns_server_states_spared_both_families_others_still_killed(): void
+	{
+		$dns4 = '198.51.100.53';
+		$dns6 = '3fff::53';
+
+		// Precondition (not theater): the v6 fixture must be PUBLIC to this PHP's
+		// filter, or the v6 branch under test is never reached.
+		$this->assertNotFalse(
+			filter_var($dns6, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE),
+			"{$dns6} must validate as public IPv6 under NO_PRIV|NO_RES on this PHP — pick a different fixture address"
+		);
+
+		$this->seedConfig();
+		$GLOBALS['pfb_test_dns_servers'] = [$dns4, $dns6];
+		$this->seedStates(
+			$this->v4State($dns4),
+			$this->v4State(self::V4_VICTIM, 54322),
+			$this->v6State($dns6),
+			$this->v6State(self::V6_VICTIM)
+		);
+		$this->seedTableMatches($dns4, self::V4_VICTIM, $dns6, self::V6_VICTIM);
+
+		$kills = $this->runRemoveStates();
+
+		$this->assertStringContainsString(
+			self::V4_VICTIM,
+			$kills,
+			'the non-DNS ' . self::V4_VICTIM . " must be killed (proves the v4 pass ran) — kill log was:\n{$kills}"
+		);
+		$this->assertStringContainsString(
+			self::V6_VICTIM,
+			$kills,
+			'the non-DNS ' . self::V6_VICTIM . " must be killed (proves the v6 pass ran) — kill log was:\n{$kills}"
+		);
+		$this->assertStringNotContainsString(
+			$dns4,
+			$kills,
+			"the configured DNS server {$dns4} must be excluded from clearing — kill log was:\n{$kills}"
+		);
+		$this->assertStringNotContainsString(
+			$dns6,
+			$kills,
+			"the configured DNS server {$dns6} must be excluded from clearing — kill log was:\n{$kills}"
+		);
+	}
 }
