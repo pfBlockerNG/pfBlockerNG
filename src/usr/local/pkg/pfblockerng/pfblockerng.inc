@@ -12744,23 +12744,21 @@ function convert_feeds_json() {
 function pfb_alerts_default_page() {
 	global $pfb;
 
+	$valid_views = [
+		'dnsbl_stat',
+		'dnsbl_reply_stat',
+		'ip_block_stat',
+		'ip_permit_stat',
+		'ip_match_stat',
+		'reply',
+		'unified'
+	];
+
 	if (isset($pfb['config_global']) &&
 	    isset($pfb['config_global']['pfbpageload'])) {
-		switch($pfb['config_global']['pfbpageload']) {
-			case 'dnsbl_stat':
-				return '?view=dnsbl_stat';
-			case 'dnsbl_reply_stat':
-				return '?view=dnsbl_reply_stat';
-			case 'ip_block_stat':
-				return '?view=ip_block_stat';
-			case 'ip_permit_stat':
-				return '?view=ip_permit_stat';
-			case 'ip_match_stat':
-				return '?view=ip_match_stat';
-			case 'reply':
-				return '?view=reply';
-			case 'unified':
-				return '?view=unified';
+		$view = $pfb['config_global']['pfbpageload'];
+		if (in_array($view, $valid_views, TRUE)) {
+			return "?view={$view}";
 		}
 	}
 	return '';
