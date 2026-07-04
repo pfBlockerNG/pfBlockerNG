@@ -27,6 +27,14 @@ Scenario H. Scenario B below still injects a companion v4 Deny alias alongside
 the v6 target -- now exercising the MIXED-family case (both families active
 in the same pass), not working around the fixed bug.
 
+Scenarios D and E cover a THIRD mechanism gated by the same Suppression checkbox
+(``$pfb['supp'] == 'on'``) but otherwise unrelated to the carve engines above --
+``sanitize_ipaddr()``/``sanitize_ipaddr_v6()``'s per-line reserved-class drop and
+the per-category IPv6 CIDR floor (issue #760 §1/§3). They reuse this module's
+``deployed_vm``/``_clean_suppression`` infra (the Suppression checkbox + the
+``IpCase``/``inject_ip_lists`` plumbing) rather than a new module, since that
+infra is exactly what they need and duplicating it would buy nothing.
+
 DESELECTED from the default ``python -m pytest`` (``--ignore=tests/smoke`` in
 pyproject.toml). Run via the smoke workflow or locally::
 
@@ -55,8 +63,18 @@ DENYDIR = f"{h.PFB_DBDIR}/deny"
 # The two bare hosts each fixture carries, in both notations iprange/the v6
 # engine may render a lone covering host (bare, or explicitly masked) -- used
 # to filter "untouched sibling" lines out of a covering-CIDR count.
-V4_BARE_HOSTS = ("203.0.113.60", "198.51.100.77")
-V6_BARE_HOSTS = ("2001:db8:99::10", "2001:db8:aa::20")
+#
+# NOTE (issue #760): these used to be RFC 5737/3849 documentation addresses, matching
+# the smoke-fixture convention (tests/smoke/fixtures/README.md). Every test in this
+# module runs with the global Suppression checkbox ON (``_set_suppression``), and
+# issue #760 §1 made ``sanitize_ipaddr()``/``sanitize_ipaddr_v6()`` drop documentation
+# space UNCONDITIONALLY whenever Suppression is on -- so RFC 5737/3849 fixture data
+# would now be silently dropped before ever reaching the pf table, breaking every
+# BEFORE-state assertion in this module. Switched to public, non-reserved space
+# (Cloudflare/Google/Quad9 exemplar addresses) instead; ``ip_suppress_v4.txt`` /
+# ``ip_suppress_v6.txt`` were updated to match (see their in-file comments).
+V4_BARE_HOSTS = ("9.9.9.9", "8.8.8.8")
+V6_BARE_HOSTS = ("2606:4700:99::10", "2606:4700:aa::20")
 
 
 @pytest.fixture(scope="module")
@@ -79,7 +97,7 @@ def deployed_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
 def _set_suppression(vm: SmokeVM, *, v4: list[str] | None = None, v6: list[str] | None = None) -> None:
     """Enable the master "Enable Suppression" toggle and set BOTH customlists.
 
-    ``v4``/``v6`` are raw textarea lines (e.g. ``"198.18.3.4/32"``) -- every
+    ``v4``/``v6`` are raw textarea lines (e.g. ``"1.1.3.4/32"``) -- every
     suppression line MUST carry an explicit mask: ``pfb_validate_suppression_line``
     rejects a bare host (``is_subnetv4()``/``is_subnetv6()`` both require
     ``/bits``). ``None``/empty clears that family's list. Same base64/CRLF
@@ -114,6 +132,27 @@ def _wipe_suppression(vm: SmokeVM) -> None:
         raise AssertionError(
             "wipe of v4suppression/v6suppression did not take -- expected both empty, "
             f"got v4suppression={v4_after!r} v6suppression={v6_after!r}"
+        )
+
+
+def _set_suppression_cidr_v6(vm: SmokeVM, value: str) -> None:
+    """Set the per-category ``suppression_cidr_v6`` floor (issue #760 §3) on the SINGLE
+    v6 list-group the module's own ``h.inject()``/``h.inject_ip_lists()`` just wrote
+    (index 0 -- both write a fresh single-element list-group array per family root, so
+    this always targets the right row without a lookup). ``value`` is a mask-width
+    string (``'1'``..``'64'``) or ``'Disabled'``.
+    """
+    snippet = (
+        f"$lists = config_get_path({h._php_str(h.CFG_IP_V6_LISTS)}, array());\n"
+        f"$lists[0]['suppression_cidr_v6'] = {h._php_str(value)};\n"
+        f"config_set_path({h._php_str(h.CFG_IP_V6_LISTS)}, $lists);\n"
+        "write_config('pfBlockerNG smoke: issue #760 v6 CIDR floor');\n"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"_set_suppression_cidr_v6 failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
         )
 
 
@@ -170,7 +209,7 @@ def test_suppression_v4_carves_containing_range_spares_sibling(deployed_vm: Smok
     live-loaded /16 down to covering CIDRs -- ADR-53 §4.1's headline acceptance
     requirement, proven via the update-time path.
 
-    Given: the v4 fixture feed (``198.18.0.0/16`` + two bare hosts) is loaded
+    Given: the v4 fixture feed (``1.1.0.0/16`` + two bare hosts) is loaded
     as a Deny list; suppression is enabled but empty; a settling update runs.
 
     When: v4suppression is set to the target host's exact /32 and a second
@@ -190,8 +229,8 @@ def test_suppression_v4_carves_containing_range_spares_sibling(deployed_vm: Smok
     # ("10.0.3.4" inside "10.0.0.0/16" -> 16 covering CIDRs incl. ".0.0/23" and
     # ".128.0/17") -- the covering-CIDR count/shape is invariant to the network
     # prefix, so this grounds the assertions below in an already-proven result.
-    target = "198.18.3.4"
-    sibling = "203.0.113.60"
+    target = "1.1.3.4"
+    sibling = "9.9.9.9"
     host_entry = f"{target}/32"
 
     h.inject(deployed_vm, spec)
@@ -228,8 +267,8 @@ def test_suppression_v4_carves_containing_range_spares_sibling(deployed_vm: Smok
         "expected 16 covering-CIDR entries for a /16 minus a /32 (ADR-53 §1.2's "
         f"measured bound); got {len(carved)}: {carved}\nfull member file ({len(lines)} lines): {lines}"
     )
-    assert "198.18.0.0/23" in carved and "198.18.128.0/17" in carved, (
-        "expected representative covering CIDRs '198.18.0.0/23' and '198.18.128.0/17' "
+    assert "1.1.0.0/23" in carved and "1.1.128.0/17" in carved, (
+        "expected representative covering CIDRs '1.1.0.0/23' and '1.1.128.0/17' "
         f"(the same relative shape as the real-iprange-verified 10.0.0.0/16-10.0.3.4 vector); got {carved}"
     )
 
@@ -248,7 +287,7 @@ def test_suppression_v6_carves_containing_range_spares_sibling(deployed_vm: Smok
     exercise the mixed-family case (see the module docstring: this used to be a
     workaround for a v6-only $pfb['supp_update'] gating bug, now fixed).
 
-    Given: the v6 fixture feed (``2001:db8:53::/64`` + two bare hosts) is
+    Given: the v6 fixture feed (``2606:4700:53::/64`` + two bare hosts) is
     loaded as a Deny list, alongside the v4 companion; suppression enabled but
     empty; a settling update runs.
 
@@ -266,11 +305,11 @@ def test_suppression_v6_carves_containing_range_spares_sibling(deployed_vm: Smok
     feed_url = h.write_local_feed(deployed_vm, "smoke_adr53_v6b.txt", feed_body)
     v6spec = h.IpCase(aliasname="adr53v6b", feed_url=feed_url, header="adr53v6b", family="v6")
 
-    companion_url = h.write_local_feed(deployed_vm, "smoke_adr53_v6companion.txt", "203.0.113.90\n")
+    companion_url = h.write_local_feed(deployed_vm, "smoke_adr53_v6companion.txt", "5.5.5.5\n")
     companion_spec = h.IpCase(aliasname="adr53v6bcompanion", feed_url=companion_url, header="adr53v6bcompanion")
 
-    target = "2001:db8:53::42"
-    sibling = "2001:db8:99::10"
+    target = "2606:4700:53::42"
+    sibling = "2606:4700:99::10"
     host_entry = f"{target}/128"
 
     h.inject_ip_lists(deployed_vm, [companion_spec, v6spec])
@@ -330,9 +369,9 @@ def test_suppression_v4_bare_host_removed(deployed_vm: SmokeVM) -> None:
     feed_body = (FIXTURES_DIR / "ip_suppress_v4.txt").read_text()
     feed_url = h.write_local_feed(deployed_vm, "smoke_adr53_v4c1.txt", feed_body)
     spec = h.IpCase(aliasname="adr53v4c1", feed_url=feed_url, header="adr53v4c1")
-    inside_16 = "198.18.3.4"
-    removed_host = "198.51.100.77"
-    kept_host = "203.0.113.60"
+    inside_16 = "1.1.3.4"
+    removed_host = "8.8.8.8"
+    kept_host = "9.9.9.9"
     host_entry = f"{removed_host}/32"
 
     h.inject(deployed_vm, spec)
@@ -359,7 +398,7 @@ def test_suppression_v4_bare_host_removed(deployed_vm: SmokeVM) -> None:
 
     lines = _member_lines(deployed_vm, f"{spec.header}_v4")
     assert len(lines) == 2, f"expected exactly 2 member-file lines (untouched /16 + surviving bare host); got {lines}"
-    assert "198.18.0.0/16" in lines, f"expected the untouched /16 line verbatim (never carved); got {lines}"
+    assert "1.1.0.0/16" in lines, f"expected the untouched /16 line verbatim (never carved); got {lines}"
     assert _has_entry(lines, kept_host), f"expected the surviving bare host {kept_host}; got {lines}"
     assert not _has_entry(lines, removed_host), f"expected {removed_host} removed; got {lines}"
 
@@ -383,9 +422,9 @@ def test_suppression_v4_subnet_mask_carves_at_granularity(deployed_vm: SmokeVM) 
     feed_body = (FIXTURES_DIR / "ip_suppress_v4.txt").read_text()
     feed_url = h.write_local_feed(deployed_vm, "smoke_adr53_v4c2.txt", feed_body)
     spec = h.IpCase(aliasname="adr53v4c2", feed_url=feed_url, header="adr53v4c2")
-    hole_ip = "198.18.5.9"
-    sibling_ip = "198.18.9.9"
-    hole_subnet = "198.18.5.0/24"
+    hole_ip = "1.1.5.9"
+    sibling_ip = "1.1.9.9"
+    hole_subnet = "1.1.5.0/24"
 
     h.inject(deployed_vm, spec)
     h.reload(deployed_vm, "updateip", wait_unbound=False)
@@ -413,3 +452,123 @@ def test_suppression_v4_subnet_mask_carves_at_granularity(deployed_vm: SmokeVM) 
         f"prefix-length-difference bound the shellspec proves for /24-/32=8); got {len(carved)}: {carved}\n"
         f"full member file ({len(lines)} lines): {lines}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Scenario D -- reserved-class entries never reach the pf table (issue #760 §1)
+# --------------------------------------------------------------------------- #
+
+
+def test_suppression_drops_reserved_classes_keeps_public(deployed_vm: SmokeVM) -> None:
+    """Under Suppression, a feed's RESERVED-CLASS entries (documentation, multicast,
+    NAT64, CGN) are dropped OUTRIGHT at parse time -- issue #760 §1's "IPv6
+    suppression is thinner" gap. Unlike Scenarios A-C, this is not the
+    suppression-LIST carve engine: ``sanitize_ipaddr()``/``sanitize_ipaddr_v6()``
+    (``pfblockerng.inc`` ~8018-8028 v4, ~8090-8097 v6) drop these classes
+    unconditionally whenever Suppression is on, with no suppression-list entry
+    needed.
+
+    Given: a v6 feed mixing one public (non-reserved) entry with a documentation
+    (2001:db8::1), a multicast (ff02::1) and a NAT64 (64:ff9b::1) entry, plus a
+    companion v4 feed mixing one public entry with a CGN (100.64.0.1) entry;
+    Suppression is enabled with both suppression lists empty (this module's
+    default) -- these are unconditional drops, not suppression-list carves.
+
+    When: a force update loads both feeds in one pass.
+
+    Then: each family's public entry IS in its pf table (proves the feed
+    genuinely loaded -- a false pass otherwise); every reserved-class entry is
+    ABSENT from its table.
+    """
+    v6_body = (FIXTURES_DIR / "ip_suppress_reserved_v6.txt").read_text()
+    v6_url = h.write_local_feed(deployed_vm, "smoke_issue760_reserved_v6.txt", v6_body)
+    v6spec = h.IpCase(aliasname="issue760resv6", feed_url=v6_url, header="issue760resv6", family="v6")
+
+    # Trivial inline v4 companion (not a committed fixture -- mirrors Scenario B's
+    # companion alias): pins the v4 side of the same drop (issue #760 §1) cheaply.
+    v4_url = h.write_local_feed(deployed_vm, "smoke_issue760_reserved_v4.txt", "1.1.1.1\n100.64.0.1\n")
+    v4spec = h.IpCase(aliasname="issue760resv4", feed_url=v4_url, header="issue760resv4")
+
+    public_v6 = "2606:4700:7777::1111"
+    dropped_v6 = ("2001:db8::1", "ff02::1", "64:ff9b::1")
+    public_v4 = "1.1.1.1"
+    dropped_v4 = "100.64.0.1"
+
+    h.inject_ip_lists(deployed_vm, [v4spec, v6spec])
+    h.reload(deployed_vm, "updateip", wait_unbound=False)
+
+    members_v6 = h.wait_pfctl_table(deployed_vm, v6spec.alias)
+    assert members_v6, f"pf table {v6spec.alias} never populated after the update"
+    members_v4 = h.wait_pfctl_table(deployed_vm, v4spec.alias)
+    assert members_v4, f"pf table {v4spec.alias} never populated after the update"
+
+    matched, raw = h.pfctl_table_test_raw(deployed_vm, v6spec.alias, public_v6)
+    assert matched, f"expected the public v6 entry {public_v6} to load into {v6spec.alias}; pfctl said: {raw!r}"
+    for ip in dropped_v6:
+        matched, raw = h.pfctl_table_test_raw(deployed_vm, v6spec.alias, ip)
+        assert not matched, f"expected reserved-class {ip} to be DROPPED from {v6spec.alias}; pfctl said: {raw!r}"
+
+    matched, raw = h.pfctl_table_test_raw(deployed_vm, v4spec.alias, public_v4)
+    assert matched, f"expected the public v4 entry {public_v4} to load into {v4spec.alias}; pfctl said: {raw!r}"
+    matched, raw = h.pfctl_table_test_raw(deployed_vm, v4spec.alias, dropped_v4)
+    assert not matched, f"expected CGN entry {dropped_v4} to be DROPPED from {v4spec.alias}; pfctl said: {raw!r}"
+
+
+# --------------------------------------------------------------------------- #
+# Scenario E -- v6 Suppression CIDR floor clamps a wide range (issue #760 §3)
+# --------------------------------------------------------------------------- #
+
+
+def test_suppression_cidr_v6_floor_clamps_wide_cidr_to_bare_host(deployed_vm: SmokeVM) -> None:
+    """The per-category IPv6 "Suppression CIDR Limit" (``suppression_cidr_v6``,
+    issue #760 §3) clamps a feed CIDR narrower than the floor down to a bare
+    host -- never a silent full-range load -- while an unrelated host entry is
+    left untouched.
+
+    Given: a v6 feed with a network-aligned /48 (``2606:4700:aaaa::/48``) and a
+    separate bare host (``2606:4700:bbbb::99``) in a different /48; Suppression
+    is enabled (module default) with ``suppression_cidr_v6`` left at its absent
+    default (``Disabled``) for the settling update.
+
+    When: BEFORE -- the floor is absent, so the /48 loads as-is (an address
+    inside it matches). AFTER -- ``suppression_cidr_v6`` is set to 56 (wider
+    than the feed's /48) and a second update runs.
+
+    Then: the address that matched inside the /48 no longer matches (the range
+    collapsed); the /48's own base address now matches as a BARE host (clamped,
+    no prefix span -- never a 2^80-host explosion); the sibling host is
+    unaffected throughout.
+    """
+    feed_body = (FIXTURES_DIR / "ip_suppress_cidr_floor_v6.txt").read_text()
+    feed_url = h.write_local_feed(deployed_vm, "smoke_issue760_cidrfloor_v6.txt", feed_body)
+    spec = h.IpCase(aliasname="issue760cidrv6", feed_url=feed_url, header="issue760cidrv6", family="v6")
+
+    inside_cidr = "2606:4700:aaaa::1234"
+    cidr_base = "2606:4700:aaaa::"
+    sibling = "2606:4700:bbbb::99"
+
+    h.inject(deployed_vm, spec)
+    h.reload(deployed_vm, "updateip", wait_unbound=False)
+
+    # BEFORE: the floor is absent (Disabled) -- the /48 loads unclamped.
+    members = h.wait_pfctl_table(deployed_vm, spec.alias)
+    assert members, f"pf table {spec.alias} never populated after the settling update"
+    matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, inside_cidr)
+    assert matched, f"expected {inside_cidr} (inside the un-floored /48) to MATCH {spec.alias}; pfctl said: {raw!r}"
+    matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, sibling)
+    assert matched, f"expected {sibling} to MATCH {spec.alias} before the floor is set; pfctl said: {raw!r}"
+
+    # WHEN: set the floor above the feed's /48, then re-run.
+    _set_suppression_cidr_v6(deployed_vm, "56")
+    h.reload(deployed_vm, "updateip", wait_unbound=False)
+
+    # THEN: the /48 collapsed to its bare base address -- the wide span no longer matches...
+    matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, inside_cidr)
+    assert not matched, (
+        f"expected {inside_cidr} to NO LONGER match {spec.alias} once the /48 is floor-clamped; pfctl said: {raw!r}"
+    )
+    # ...but the clamped bare host itself is still loaded (never silently dropped outright).
+    matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, cidr_base)
+    assert matched, f"expected the clamped bare host {cidr_base} to STILL match {spec.alias}; pfctl said: {raw!r}"
+    matched, raw = h.pfctl_table_test_raw(deployed_vm, spec.alias, sibling)
+    assert matched, f"expected {sibling} to remain unaffected by the CIDR floor; pfctl said: {raw!r}"

@@ -11,6 +11,15 @@ files use `uuid-<hex>.com` names. Per the smoke-domain rule, DNSBL fixtures NEVE
 use RFC-6761 TLDs (`.test`/`.example`/`.invalid` — Unbound's built-in local-zones
 shadow them) and NEVER HSTS-preload names (HSTS forces a VIP block to NULL).
 
+**Exception (issue #760):** a fixture exercised under the global Suppression
+checkbox ON (`tests/smoke/test_smoke_suppression.py`) must NOT use RFC
+5737/3849/2544/6598 (or any other reserved-class) address — `sanitize_ipaddr()`/
+`sanitize_ipaddr_v6()` drop those classes unconditionally whenever Suppression is
+on, which would silently empty the fixture before it ever reached the pf table.
+Those fixtures use public, non-reserved space instead (arbitrary octets/hextets
+under real resolver/GUA blocks, e.g. `9.9.9.9`, `2606:4700::/32` — chosen only as
+inert content, never dialed); see the "IP suppression..." sections below.
+
 Line shapes match the real parsers — IP `auto` in `pfblockerng.inc`
 (`~:10410-10560`), DNSBL plain/hosts/ABP in `pfb_unbound.py`
 (`parse` / `parse_abp`, `~:2675-2900`). A leading `#` (IP, DNSBL plain/hosts) or
@@ -83,14 +92,30 @@ the HTTP-fetch contract Part C already covers.
 
 | File | Contents | Purpose |
 | --- | --- | --- |
-| `ip_suppress_v4.txt` | `198.18.0.0/16` (RFC 2544) + two well-separated RFC 5737 bare hosts (`203.0.113.60`, `198.51.100.77`) | Containing-range carve (a `/32`/`/24` suppression carves the `/16`), plus whole-token bare-host removal |
-| `ip_suppress_v6.txt` | `2001:db8:53::/64` (RFC 3849) + two well-separated RFC 3849 bare hosts (`2001:db8:99::10`, `2001:db8:aa::20`) | Same shape, IPv6 (`/128` suppression carves the `/64`) |
+| `ip_suppress_v4.txt` | `1.1.0.0/16` (public, non-reserved) + two well-separated public bare hosts (`9.9.9.9`, `8.8.8.8`) | Containing-range carve (a `/32`/`/24` suppression carves the `/16`), plus whole-token bare-host removal |
+| `ip_suppress_v6.txt` | `2606:4700:53::/64` (public, non-reserved) + two well-separated public bare hosts (`2606:4700:99::10`, `2606:4700:aa::20`) | Same shape, IPv6 (`/128` suppression carves the `/64`) |
 
 The bare hosts are deliberately non-adjacent to each other and to the CIDR block: iprange's
 minimal-CIDR aggregation would otherwise merge two adjacent addresses into one covering entry,
 which would throw off the exact covering-CIDR-count assertions (`/16 - /32 = 16`,
 `/64 - /128 = 64`, `/16 - /24 = 8` -- ADR-53 §1.2, mathematically invariant regardless of the
-hole's exact position within its container).
+hole's exact position within its container). Public (not RFC 5737/3849/2544) space is used
+throughout, per the issue #760 exception above.
+
+## IP reserved-class / CIDR-floor fixtures (issue #760, `IpCase`, `test_smoke_suppression.py`)
+
+Scenarios D/E of the same module -- a THIRD Suppression-gated mechanism, distinct from the
+carve engine above: `sanitize_ipaddr()`/`sanitize_ipaddr_v6()`'s unconditional reserved-class
+drop (§1) and the per-category IPv6 CIDR floor `suppression_cidr_v6` (§3).
+
+| File | Contents | Purpose |
+| --- | --- | --- |
+| `ip_suppress_reserved_v6.txt` | One public entry (`2606:4700:7777::1111`) + one each of documentation (`2001:db8::1`), multicast (`ff02::1`), NAT64 (`64:ff9b::1`) | Proves the public entry loads while every reserved class is dropped outright |
+| `ip_suppress_cidr_floor_v6.txt` | A network-aligned public `/48` (`2606:4700:aaaa::/48`) + a separate bare host (`2606:4700:bbbb::99`) | Proves a floor narrower than the feed's mask clamps the `/48` to its bare base address, leaving the sibling host untouched |
+
+The v4 companion for the reserved-class test (`1.1.1.1` public + `100.64.0.1` CGN) is a
+two-line inline body written directly by the test (mirrors the Scenario B companion above) --
+not a committed fixture, since it needs no documentation beyond the test itself.
 
 ## Omitted formats (and why)
 

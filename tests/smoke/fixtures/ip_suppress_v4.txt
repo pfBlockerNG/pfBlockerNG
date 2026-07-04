@@ -1,10 +1,16 @@
-# ADR-53 smoke fixture: RFC 2544 benchmarking /16 -- the containing-range
-# carve target (tests/smoke/test_smoke_suppression.py). Never RFC 1918 (the
-# killstates/private-exclusion path would otherwise eat it).
-198.18.0.0/16
-# Bare hosts (RFC 5737 documentation ranges), deliberately far apart from each
-# other and from the /16 above -- iprange's minimal-CIDR aggregation would
-# merge two ADJACENT hosts into one covering CIDR, which would break the
-# exact covering-CIDR-count assertions these tests pin.
-203.0.113.60
-198.51.100.77
+# ADR-53 smoke fixture: the containing-range carve target
+# (tests/smoke/test_smoke_suppression.py). Never RFC 1918 (the
+# killstates/private-exclusion path would otherwise eat it) and, since issue
+# #760 (every test in this module runs with the global Suppression checkbox
+# ON), never RFC 5737/2544 documentation/benchmarking space either --
+# sanitize_ipaddr() now drops those unconditionally under Suppression, which
+# would silently empty this fixture before it ever reached the pf table. Public,
+# non-reserved space instead (arbitrary octets, chosen only as inert content --
+# never dialed).
+1.1.0.0/16
+# Bare hosts (public, non-reserved -- Quad9 / Google resolvers), deliberately
+# far apart from each other and from the /16 above -- iprange's minimal-CIDR
+# aggregation would merge two ADJACENT hosts into one covering CIDR, which
+# would break the exact covering-CIDR-count assertions these tests pin.
+9.9.9.9
+8.8.8.8

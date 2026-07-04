@@ -8013,7 +8013,7 @@ function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 		// multicast, CGN (RFC 6598), benchmarking (RFC 2544) and the deprecated
 		// 6to4 relay anycast prefix routable; explicit checks close that gap
 		// (issue #760). Judged on the address only, same as the filter above -
-		// the CIDR span is not inspected.
+		// the CIDR span is not inspected (issue #760 §4).
 		$long = ip2long($ip_final);
 		if ($long !== FALSE && (
 			($long & 0xffffff00) === 0xc0000200 ||	// 192.0.2.0/24 documentation
@@ -8086,7 +8086,9 @@ function sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr = 'Disabled') {
 
 		// The filter flags above keep documentation (2001:db8::/32), multicast
 		// (ff00::/8) and the NAT64 well-known prefix (64:ff9b::/96) routable;
-		// explicit prefix checks close that gap (issue #760).
+		// explicit prefix checks close that gap (issue #760). Judged on the
+		// address part only, same as the filter above -- the CIDR span is not
+		// inspected (issue #760 §4).
 		$bin = inet_pton($s_ip);
 		if ($bin !== FALSE && (
 			substr($bin, 0, 4) === "\x20\x01\x0d\xb8" ||					// 2001:db8::/32 documentation
