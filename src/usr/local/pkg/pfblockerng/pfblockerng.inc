@@ -441,6 +441,42 @@ function pfb_remove_managed_obj(string $section, string $marker, ?callable $guar
 	return $removed;
 }
 
+// Shared interface-allowlist + exception-alias validation for the DNSBL settings POST
+// forms — DNS Redirect and DoT/DoQ Block apply identical rules, differing only in the
+// $label prefix on each error message.
+// Returns an array of validation error messages (empty = all inputs valid).
+function pfb_validate_redirect_exclude_alias(
+	string $label,
+	array $posted_ifaces,
+	array $valid_iface_list,
+	string $posted_alias
+): array {
+	$errors = [];
+	foreach ($posted_ifaces as $iface) {
+		if (!in_array($iface, $valid_iface_list, TRUE)) {
+			$errors[] = "{$label}: Invalid interface selection: " .
+				htmlspecialchars((string) $iface, ENT_QUOTES);
+		}
+	}
+	if ($posted_alias !== '') {
+		if (!is_validaliasname($posted_alias)) {
+			$errors[] = "{$label}: Invalid exception alias name: " .
+				htmlspecialchars($posted_alias, ENT_QUOTES);
+		} elseif (str_starts_with($posted_alias, PFB_MANAGED_FILTER_PFX)) {
+			$errors[] = "{$label}: Exception alias must not be a pfBlockerNG-managed (" .
+				PFB_MANAGED_FILTER_PFX . '*) alias: ' . htmlspecialchars($posted_alias, ENT_QUOTES);
+		} elseif (pfb_alias_type($posted_alias) === NULL) {
+			$errors[] = "{$label}: Exception alias does not exist: " .
+				htmlspecialchars($posted_alias, ENT_QUOTES) .
+				' (create it under Firewall > Aliases first)';
+		} elseif (!pfb_exclude_alias_exists($posted_alias)) {
+			$errors[] = "{$label}: Exception alias must be an address alias usable in " .
+				'firewall rules (port aliases are not allowed): ' . htmlspecialchars($posted_alias, ENT_QUOTES);
+		}
+	}
+	return $errors;
+}
+
 // Validate the DNS-redirect fields submitted via the DNSBL settings POST form.
 // Each interface name is checked against the allow-list; the exception alias is
 // validated by is_validaliasname() when non-empty.
@@ -450,30 +486,7 @@ function pfb_validate_dns_redirect_post(
 	array $valid_iface_list,
 	string $posted_alias
 ): array {
-	$errors = [];
-	foreach ($posted_ifaces as $iface) {
-		if (!in_array($iface, $valid_iface_list, TRUE)) {
-			$errors[] = 'DNS Redirect: Invalid interface selection: ' .
-				htmlspecialchars((string) $iface, ENT_QUOTES);
-		}
-	}
-	if ($posted_alias !== '') {
-		if (!is_validaliasname($posted_alias)) {
-			$errors[] = 'DNS Redirect: Invalid exception alias name: ' .
-				htmlspecialchars($posted_alias, ENT_QUOTES);
-		} elseif (str_starts_with($posted_alias, PFB_MANAGED_FILTER_PFX)) {
-			$errors[] = 'DNS Redirect: Exception alias must not be a pfBlockerNG-managed (' .
-				PFB_MANAGED_FILTER_PFX . '*) alias: ' . htmlspecialchars($posted_alias, ENT_QUOTES);
-		} elseif (pfb_alias_type($posted_alias) === NULL) {
-			$errors[] = 'DNS Redirect: Exception alias does not exist: ' .
-				htmlspecialchars($posted_alias, ENT_QUOTES) .
-				' (create it under Firewall > Aliases first)';
-		} elseif (!pfb_exclude_alias_exists($posted_alias)) {
-			$errors[] = 'DNS Redirect: Exception alias must be an address alias usable in ' .
-				'firewall rules (port aliases are not allowed): ' . htmlspecialchars($posted_alias, ENT_QUOTES);
-		}
-	}
-	return $errors;
+	return pfb_validate_redirect_exclude_alias('DNS Redirect', $posted_ifaces, $valid_iface_list, $posted_alias);
 }
 
 // The two valid dispositions for a DoT/DoQ block rule. 'reject' is the default
@@ -499,29 +512,7 @@ function pfb_validate_dot_block_post(
 	string $posted_alias,
 	string $posted_action = PFB_DOT_BLOCK_ACTION_DEFAULT
 ): array {
-	$errors = [];
-	foreach ($posted_ifaces as $iface) {
-		if (!in_array($iface, $valid_iface_list, TRUE)) {
-			$errors[] = 'DoT/DoQ Block: Invalid interface selection: ' .
-				htmlspecialchars((string) $iface, ENT_QUOTES);
-		}
-	}
-	if ($posted_alias !== '') {
-		if (!is_validaliasname($posted_alias)) {
-			$errors[] = 'DoT/DoQ Block: Invalid exception alias name: ' .
-				htmlspecialchars($posted_alias, ENT_QUOTES);
-		} elseif (str_starts_with($posted_alias, PFB_MANAGED_FILTER_PFX)) {
-			$errors[] = 'DoT/DoQ Block: Exception alias must not be a pfBlockerNG-managed (' .
-				PFB_MANAGED_FILTER_PFX . '*) alias: ' . htmlspecialchars($posted_alias, ENT_QUOTES);
-		} elseif (pfb_alias_type($posted_alias) === NULL) {
-			$errors[] = 'DoT/DoQ Block: Exception alias does not exist: ' .
-				htmlspecialchars($posted_alias, ENT_QUOTES) .
-				' (create it under Firewall > Aliases first)';
-		} elseif (!pfb_exclude_alias_exists($posted_alias)) {
-			$errors[] = 'DoT/DoQ Block: Exception alias must be an address alias usable in ' .
-				'firewall rules (port aliases are not allowed): ' . htmlspecialchars($posted_alias, ENT_QUOTES);
-		}
-	}
+	$errors = pfb_validate_redirect_exclude_alias('DoT/DoQ Block', $posted_ifaces, $valid_iface_list, $posted_alias);
 	if (!in_array($posted_action, ['block', 'reject'], TRUE)) {
 		$errors[] = 'DoT/DoQ Block: Invalid rule action: ' .
 			htmlspecialchars($posted_action, ENT_QUOTES);
