@@ -40,7 +40,9 @@
 #     MULTIPLE leftmost pytest path args, in the exact spot the one path occupies
 #     today. An explicit passthrough path together with N>1 is a conflict (loud
 #     error, never a silent pick); the splitter's own errors (e.g. an empty slice)
-#     propagate as-is under `set -eu`.
+#     propagate as-is under `set -eu`. When N>1, pytest exit 5 ("no tests ran") is
+#     mapped to 0 — a shard whose modules carry no test matching the marker is a
+#     partition artifact, not a failure; unsharded runs keep exit 5 fatal.
 #
 # Env passthrough: RUN_ID / PFB_DIAG_DIR / SMOKE_LANE reach pytest by inheritance (no
 #   explicit forwarding needed — subprocess env-inherit covers it).
@@ -227,5 +229,24 @@ fi
 # never join the uploaded smoke-diag/. The unit suite runs plain pytest (not this script),
 # so PFB_DIAG_DIR stays unset there — timing is terminal-only, no stray file.
 export PFB_DIAG_DIR="${PFB_DIAG_DIR:-smoke-diag}"
+
+# Sharded runs (N>1): pytest exit 5 ("no tests ran") is a PARTITION ARTIFACT, not
+# a failure — a module slice can legitimately contain zero tests matching the
+# requested marker (e.g. a slice of only repo/reboot-marked modules under
+# -m smoke; first reachable at shards>=20 with today's marker density). The
+# partition is complete by construction (the union of all shards is the whole
+# run), so an empty shard is a benign no-op. Only exit 5 is mapped; every other
+# non-zero rc stays fatal. Unsharded runs keep the exec (byte-identical path)
+# where exit 5 still fails loudly — there it means a genuinely wrong invocation.
+if [ "$_SHARD_TOTAL" -gt 1 ]; then
+    _rc=0
+    "$PYTHON" -m pytest "$@" || _rc=$?
+    if [ "$_rc" -eq 5 ]; then
+        printf 'run-smoke: shard %s/%s selected no tests for this marker — empty slice is a partition artifact, treating as pass\n' \
+            "$_SHARD" "$_SHARD_TOTAL" >&2
+        exit 0
+    fi
+    exit "$_rc"
+fi
 
 exec "$PYTHON" -m pytest "$@"

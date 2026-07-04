@@ -144,7 +144,10 @@ jobs:
           SCOPE_INPUT: ${{ inputs.scope }}
           MARKER_INPUT: ${{ inputs.pytest_marker }}
           PYTEST_FILTER_INPUT: ${{ inputs.pytest_filter }}
-          SHARDS_INPUT: ${{ inputs.shards }}
+          # `schedule` events carry no inputs, so inputs.shards is empty there —
+          # default it explicitly or the nightly full run silently gets 1 shard
+          # (resolve-legs.sh's own conservative default), missing the policy.
+          SHARDS_INPUT: ${{ inputs.shards || '2' }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -eu
@@ -168,7 +171,7 @@ jobs:
           set -eu
           COUNT=$(printf '%s\n' "$CI_MATRIX" | jq 'length')
           echo "leg_count=${COUNT}" >> "$GITHUB_OUTPUT"
-          echo "Legs in CI matrix: ${COUNT}"
+          echo "Matrix entries (version legs x module shards): ${COUNT}"
 
           # CI GUARD: assert that every entry in the CI matrix has ci=true (ADR-24).
           # The channel is no longer asserted — Plus runs in CI from its private

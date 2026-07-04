@@ -264,11 +264,13 @@ fi
 _PATHS="$(pfb_smoke_tier_paths "$_MARKER")"
 _TIMEOUT="$(pfb_smoke_tier_timeout "$_MARKER")"
 
-# The UI tier (ADR-14) always runs as a single unit — sharding it is out of
-# scope for issue #797 (it is a small, non-module-fungible suite; the shard
-# split target is the live-VM tests/smoke tier).
-if [ "$_SHARD_TOTAL" != "1" ] && [ "$_PATHS" != "tests/smoke" ]; then
-    printf 'smoke-on-box: --shard-total %s is not supported for the UI tier (marker=%s maps to %s); the UI tier always runs as a single unit\n' \
+# Sharding is only supported for the default full-suite marker (issue #797):
+# the UI tier (ADR-14) always runs as a single unit (small, non-module-fungible
+# suite), and a non-smoke marker (repo/reboot/...) selects too few modules for
+# a slice to be meaningful — local-smoke.sh enforces the same policy at its own
+# entry point; this is the on-box defence-in-depth layer for direct invocations.
+if [ "$_SHARD_TOTAL" != "1" ] && { [ "$_PATHS" != "tests/smoke" ] || [ "$_MARKER" != "smoke" ]; }; then
+    printf 'smoke-on-box: --shard-total %s is only supported with marker=smoke on tests/smoke (got marker=%s paths=%s)\n' \
         "$_SHARD_TOTAL" "$_MARKER" "$_PATHS" >&2
     exit 1
 fi

@@ -196,20 +196,30 @@ _LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/pfb-local-smoke-shards.XXXXXX")"
 printf 'local-smoke: sharded run (--shards %s); logs: %s\n' "$_SHARDS" "$_LOG_DIR" >&2
 
 _PIDS=""
+_ABORT=0
 # Forward Ctrl-C/TERM to every launched shard's select-box.sh process so its
 # own EXIT trap releases its lease -- no orphaned leases on an interrupted
 # fan-out. $_PIDS is expanded when the signal actually fires (single-quoted
-# trap body), so it always reflects whatever has been launched so far.
-trap 'kill $_PIDS 2>/dev/null' INT TERM
+# trap body), so it always reflects whatever has been launched so far. The
+# _ABORT flag additionally STOPS the launch loop: a POSIX trap handler resumes
+# execution where it left off, so without the flag a signal delivered mid-loop
+# would kill the running shards and then keep leasing and launching the rest.
+trap '_ABORT=1; kill $_PIDS 2>/dev/null' INT TERM
 
 _i=0
-while [ "$_i" -lt "$_SHARDS" ]; do
+while [ "$_i" -lt "$_SHARDS" ] && [ "$_ABORT" -eq 0 ]; do
     _shard_bootstrap="${_bootstrap} --shard '$(_sq "$_i")' --shard-total '$(_sq "$_SHARDS")'"
     _shard_log="${_LOG_DIR}/shard-${_i}.log"
     # shellcheck disable=SC2090  # expansion is intentional: _shard_bootstrap is the remote command
     sh "$_SELECT_BOX" -- "$_shard_bootstrap" > "$_shard_log" 2>&1 &
     _pid=$!
     _PIDS="$_PIDS $_pid"
+    # Close the launch/signal race: if the signal landed between the fork above
+    # and this check, the trap's kill missed the just-recorded pid -- kill it now.
+    if [ "$_ABORT" -eq 1 ]; then
+        kill "$_pid" 2>/dev/null || true
+        break
+    fi
     printf 'local-smoke: launched shard %s (pid=%s) -> %s\n' "$_i" "$_pid" "$_shard_log" >&2
     _i=$((_i + 1))
 done

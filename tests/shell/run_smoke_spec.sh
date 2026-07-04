@@ -432,4 +432,64 @@ VENVEOF
     End
   End
 
+  # ── pytest exit 5 under sharding: a partition artifact, not a failure ─────── #
+  # A shard's module slice can legitimately select ZERO tests for the requested
+  # marker (e.g. a slice of only repo/reboot-marked modules under -m smoke) —
+  # pytest then exits 5 ("no tests ran"). Sharded runs must treat that as a pass
+  # (the union of all shards is still the whole run); every other rc stays fatal,
+  # and an UNSHARDED run keeps exit 5 fatal (there it means a wrong invocation).
+  #
+  # RED→GREEN: before run-smoke.sh mapped rc 5 under N>1, the first example
+  # failed (run-smoke propagated 5); after the mapping it passes.
+  make_rc_fake() {
+    # Fake python exiting with $1 after recording argv — drives the rc mapping.
+    cat > "${FAKE_BIN}/python-rc" << RCEOF
+#!/bin/sh
+printf '%s\n' "\$@" > "$ARGV_FILE"
+exit $1
+RCEOF
+    chmod +x "${FAKE_BIN}/python-rc"
+  }
+
+  run_sharded_pytest_exit5() {
+    make_shard_fixture
+    make_rc_fake 5
+    PYTHON="${FAKE_BIN}/python-rc" sh "$SCRIPT" --paths "${WORK}/mods" --shard 0 --shard-total 2
+  }
+
+  Describe 'sharded run whose slice selects no tests (pytest exit 5)'
+    It 'treats the empty slice as a pass -- a partition artifact, not a failure'
+      When run run_sharded_pytest_exit5
+      The status should be success
+      The stderr should include 'partition artifact'
+      The path "$ARGV_FILE" should be exist
+    End
+  End
+
+  run_sharded_pytest_exit1() {
+    make_shard_fixture
+    make_rc_fake 1
+    PYTHON="${FAKE_BIN}/python-rc" sh "$SCRIPT" --paths "${WORK}/mods" --shard 0 --shard-total 2
+  }
+
+  Describe 'sharded run with real test failures (pytest exit 1)'
+    It 'stays fatal -- only exit 5 is mapped, never a genuine failure'
+      When run run_sharded_pytest_exit1
+      The status should equal 1
+    End
+  End
+
+  run_unsharded_pytest_exit5() {
+    make_shard_fixture
+    make_rc_fake 5
+    PYTHON="${FAKE_BIN}/python-rc" sh "$SCRIPT" --paths "${WORK}/mods"
+  }
+
+  Describe 'unsharded run with pytest exit 5'
+    It 'keeps exit 5 fatal -- zero-selected without sharding means a wrong invocation'
+      When run run_unsharded_pytest_exit5
+      The status should equal 5
+    End
+  End
+
 End
