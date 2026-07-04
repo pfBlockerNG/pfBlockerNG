@@ -54,6 +54,10 @@ CFG_TLDEXCLUSION = "installedpackages/pfblockerngdnsblsettings/config/0/tldexclu
 CFG_V4SUPPRESSION = "installedpackages/pfblockerngipsettings/config/0/v4suppression"
 CFG_V6SUPPRESSION = "installedpackages/pfblockerngipsettings/config/0/v6suppression"
 
+# The dynamic per-row IPv4 alias list the alerts `$clists['ipwhitelist4']`
+# collection reads Permit aliases from (alerts.php:170-251).
+CFG_IPV4_LISTS = "installedpackages/pfblockernglistsv4/config"
+
 
 def _csrf(webui: WebUI) -> str:
     """GET the alerts page and return its freshly-injected ``__csrf_magic`` token.
@@ -1012,6 +1016,250 @@ def test_alerts_rows_render_suppress_icons_for_v6_and_broad_v4(
             f"config_set_path('{supp_master_path}', '{original_master}');\n"
             f"config_set_path('{CFG_V4SUPPRESSION}', '{original_supp}');\n"
             "write_config('pfBlockerNG smoke: restore suppression for icon test');\n"
+            "echo 'OK';",
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Issue #798 dedup oracle: convert_ip_log() renders the "Permit Whitelist icon"
+# via TWO byte-for-byte duplicated blocks -- the Suppression-icon gate's
+# whitelist sub-path (alerts.php:3072-3094, reached only for a Block row not
+# covered by any Suppression entry) and the standalone fallback gate a few
+# lines down (alerts.php:3157-3202, reached by every OTHER row -- Permit,
+# Match, GeoIP -- since a Block row is excluded from it per the comment at
+# alerts.php:3153-3156). Issue #798's step 2 extracts the shared "is $host in
+# a Permit alias -> trash-can, else '+'" logic into one helper; THIS test is
+# the behaviour-preserving ORACLE (CLAUDE.md test-mandate exception: pins the
+# CURRENT rendering, deliberately not red->green, and must stay green both
+# before and after the extraction).
+# --------------------------------------------------------------------------- #
+
+
+def _free_list_rowid(vm: helpers.SmokeVM, cfg_root: str) -> int:
+    """Return a free numeric index under a pfblockernglistsv{4,6}/config root.
+
+    Mirrors ``test_category_edit.py``'s ``_free_rowid``: ``max(existing numeric
+    keys) + 1`` via the config API, so the seeded alias slot never clobbers a
+    row another suite (or an earlier case) left behind.
+    """
+    pre = (
+        f"$c = config_get_path({helpers._php_str(cfg_root)}, array());\n"
+        "$max = -1;\n"
+        "foreach (array_keys($c) as $k) { if (is_numeric($k) && (int)$k > $max) { $max = (int)$k; } }\n"
+        "$free = $max + 1;"
+    )
+    return int(helpers._php_read_scalar(vm, pre, "$free"))
+
+
+def _del_list_row(vm: helpers.SmokeVM, cfg_root: str, rowid: int) -> None:
+    """Delete ``{cfg_root}/{rowid}`` -- cleanup of the alias slot this test created."""
+    snippet = (
+        f"config_del_path({helpers._php_str(f'{cfg_root}/{rowid}')});\n"
+        "write_config('pfBlockerNG smoke: drop #798 whitelist-icon oracle alias row');\n"
+        "echo 'OK';"
+    )
+    result = helpers.php_eval(vm, snippet)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_del_list_row({cfg_root}/{rowid}) failed: rc={result.returncode} {result.stdout!r}")
+
+
+def test_alerts_rows_render_whitelist_icons_oracle(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """Pin both duplicated Permit-Whitelist icon paths in convert_ip_log() (issue #798).
+
+    Scenario: refactor oracle for the #798 dedup -- both duplicated blocks must
+    keep rendering identically across the extraction.
+
+    Background: a Permit v4 alias (``Wlorc798``, action containing ``Permit``) has
+    one customlist host, ``203.0.113.77``. Master IP Suppression is ON and
+    ``203.0.113.77`` is in no Suppression list, so the Suppression-icon gate falls
+    into its whitelist sub-path (alerts.php:3072-3094). A second host,
+    ``203.0.113.88``, is NOT in the alias's customlist.
+
+    The fallback block's ``$supp_ip`` is only ever PRINTED for ``$rtype ==
+    'Block'`` rows (the icon assembly at alerts.php:3218-3234 drops it for
+    Permit/Match rows), so the only row class whose icons the fallback gate
+    (``!(Block && !geoip) && !$mask_suppression``) visibly renders is a
+    **GeoIP Block row** with an eval mask outside {/32, /24, /25-/31} -- that
+    is what pins path (b).
+
+    Given: neither icon marker is rendered before the synthetic rows exist.
+    When:
+        (a) a synthetic Block ``ip_block.log`` row for ``203.0.113.77`` (listed in
+            a deny-folder feed file, so it is never "Not listed!") is appended,
+            with master Suppression ON and the host in no Suppression list.
+        (b) a synthetic GeoIP Block ``ip_block.log`` row (alias ``pfB_Europe_v4``
+            -- the continent prefix makes ``$pfb_geoip`` TRUE, which excludes the
+            row from the Suppression-icon gate) for ``203.0.113.88``, evaluated
+            against a ``/23`` (so ``$mask_suppression``/``$mask_unlock`` are both
+            FALSE and the row reaches the FALLBACK gate), listed in a GeoIP
+            continent-folder feed file, is appended.
+    Then:
+        (a) the trash-can un-whitelist icon renders for ``203.0.113.77`` --
+            ``DNSBLWT|delete_ipwhitelist|203.0.113.77`` (the Suppression gate's
+            whitelist sub-path, alerts.php:3091-3093).
+        (b) the "+" whitelist icon renders for ``203.0.113.88`` --
+            ``PFBIPWHITE|203.0.113.88`` (the standalone fallback gate,
+            alerts.php:3197-3199).
+
+    Both id strings, and the condition each path needs (host present vs. absent
+    in a Permit alias's customlist), are exactly what step 2's helper extraction
+    must preserve for this test to stay green.
+
+    Cleanup (``finally``, order-independent): the log is truncated back to its
+    original size, the seeded deny/GeoIP feed files are removed, the seeded
+    Permit alias config row is deleted, and Suppression (master + v4 list) is
+    restored to its original value.
+    """
+    vm = smoke_vm
+
+    trash_host = "203.0.113.77"  # RFC 5737 TEST-NET-3 -- IN the seeded Permit alias
+    plus_host = "203.0.113.88"  # same block, NOT in the seeded Permit alias
+
+    ts = time.strftime("%b %d %H:%M:%S")  # e.g. "Jun 18 12:00:00"
+    # ip_block.log CSV format (21 fields, see the suppress-icon
+    # test above): ts,rule,real_iface,friendly_iface,action,ipv,proto_id,proto,
+    # src_ip,dst_ip,src_port,dst_port,dir,geoip,alias,ip_eval,feed,rhost,chost,asn,dup
+    block_csv = (
+        f"{ts},100,em0,WAN,block,4,6,TCP,"
+        f"{trash_host},10.0.0.10,12345,443,"
+        "in,US,pfB_798AliasDeny_v4,"
+        f"{trash_host}/32,pfB_798BlockFeed_v4,Unknown,Unknown,Unknown,+\n"
+    )
+    geo_csv = (
+        f"{ts},100,em0,WAN,block,4,6,TCP,"
+        f"{plus_host},10.0.0.11,12345,443,"
+        "in,US,pfB_Europe_v4,"
+        "203.0.113.0/23,798GeoFeed,Unknown,Unknown,Unknown,+\n"
+    )
+
+    ip_block_log = helpers.IP_BLOCK_LOG
+    deny_feed = "/var/db/pfblockerng/deny/pfB_798BlockFeed_v4.txt"
+    # GeoIP rows re-validate against $pfb['ccdir'] (alerts.php: $folder for
+    # $pfb_geoip), filtered by the row's feed column + '.txt'.
+    geo_feed = "/usr/local/share/GeoIP/cc/798GeoFeed.txt"
+    supp_master_path = "installedpackages/pfblockerngipsettings/config/0/suppression"
+
+    original_master = helpers.config_get(vm, supp_master_path)
+    original_v4supp = helpers.config_get(vm, CFG_V4SUPPRESSION)
+
+    rowid = _free_list_rowid(vm, CFG_IPV4_LISTS)
+    base = f"{CFG_IPV4_LISTS}/{rowid}"
+    permit_row = {
+        "aliasname": "Wlorc798",
+        "action": "Permit",
+        "custom": helpers._b64_textarea([trash_host]),
+    }
+
+    # ip_block.log is created lazily -- guarantee it (and its dir) exists
+    # idempotently before appending.
+    ensure_result = vm.ssh(f"mkdir -p {ip_block_log.rsplit('/', 1)[0]} && touch {ip_block_log}", timeout=15)
+    assert ensure_result.returncode == 0, (
+        f"Failed to ensure {ip_block_log!r} exists before mutation: "
+        f"rc={ensure_result.returncode}, stderr={ensure_result.stderr!r}"
+    )
+    block_size_result = vm.ssh("stat", "-f", "%z", ip_block_log, timeout=15)
+    assert block_size_result.returncode == 0, (
+        f"Failed to stat {ip_block_log!r} before mutation: rc={block_size_result.returncode}, "
+        f"stderr={block_size_result.stderr!r}"
+    )
+    original_block_size = block_size_result.stdout.strip()
+
+    try:
+        # GIVEN: master Suppression ON, host NOT in any Suppression list
+        # (v4suppression blanked so pfb_ip_suppressed_match() cannot accidentally
+        # cover trash_host), and one Permit alias whose ONLY customlist entry is
+        # trash_host.
+        setup_result = helpers.php_eval(
+            vm,
+            f"config_set_path('{supp_master_path}', 'on');\n"
+            f"config_set_path('{CFG_V4SUPPRESSION}', '');\n"
+            f"config_set_path({helpers._php_str(base)}, {helpers._php_kv_array(permit_row)});\n"
+            "write_config('pfBlockerNG smoke: seed #798 whitelist-icon oracle');\n"
+            "echo 'OK';",
+        )
+        assert setup_result.returncode == 0 and "OK" in setup_result.stdout, (
+            f"Failed to seed the #798 whitelist-icon oracle: rc={setup_result.returncode}, "
+            f"stdout={setup_result.stdout!r}"
+        )
+
+        # GIVEN: both rows' evaluated IPs exist in their folder feed files (the
+        # suppress-icon test's docstring NB applies here too: convert_ip_log()
+        # re-validates every row against the on-disk feeds and strips the icon
+        # from a "Not listed!" row; the GeoIP row validates against ccdir).
+        seed_result = vm.ssh(
+            f"mkdir -p /var/db/pfblockerng/deny /usr/local/share/GeoIP/cc && "
+            f"printf '{trash_host}/32\\n' > {deny_feed} && "
+            f"printf '203.0.113.0/23\\n' > {geo_feed}",
+            timeout=15,
+        )
+        assert seed_result.returncode == 0, (
+            f"Failed to seed deny/GeoIP feed files: rc={seed_result.returncode}, stderr={seed_result.stderr!r}"
+        )
+
+        # BEFORE (no false pass): neither icon marker is present yet.
+        pre = webui.get(ALERTS_PAGE)
+        assert not looks_like_login_page(pre.text), "alerts page GET returned login form before mutation (session lost)"
+        for marker in (f"DNSBLWT|delete_ipwhitelist|{trash_host}", f"PFBIPWHITE|{plus_host}"):
+            assert marker not in pre.text, f"Precondition failed: {marker!r} already present before the synthetic rows"
+
+        # WHEN: append the synthetic Block + GeoIP-Block rows and GET the
+        # Alerts page (both ride ip_block.log; the GeoIP row's alias prefix is
+        # what routes it to the fallback gate).
+        append_result = subprocess.run(
+            vm.ssh_argv("tee", "-a", ip_block_log),
+            input=block_csv + geo_csv,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        assert append_result.returncode == 0, (
+            f"Failed to append synthetic lines to {ip_block_log!r}: "
+            f"rc={append_result.returncode}, stderr={append_result.stderr!r}"
+        )
+
+        resp = webui.get(ALERTS_PAGE)
+        assert not looks_like_login_page(resp.text), (
+            "alerts page GET returned login form (session lost before whitelist-icon oracle)"
+        )
+        html_body = resp.text
+
+        # THEN (a): the Suppression-icon gate's whitelist sub-path
+        # (alerts.php:3072-3094) -- trash_host is covered by the Permit alias ->
+        # trash-can un-whitelist icon.
+        assert f"DNSBLWT|delete_ipwhitelist|{trash_host}" in html_body, (
+            f"trash-can un-whitelist icon missing for {trash_host!r} -- the Suppression-icon "
+            "gate's whitelist sub-path (alerts.php:3072-3094) did not render; "
+            f"nearby body excerpt: {html_body[:200]!r}"
+        )
+        # THEN (b): the standalone fallback gate (alerts.php:3157-3202) --
+        # plus_host is NOT covered by any Permit alias -> "+" whitelist icon.
+        assert f"PFBIPWHITE|{plus_host}" in html_body, (
+            f"'+' whitelist icon missing for {plus_host!r} -- the fallback gate "
+            f"(alerts.php:3157-3202) did not render; nearby body excerpt: {html_body[:200]!r}"
+        )
+    finally:
+        truncate_block = subprocess.run(
+            vm.ssh_argv("/usr/bin/truncate", "-s", original_block_size, ip_block_log),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        assert truncate_block.returncode == 0, (
+            f"Failed to restore {ip_block_log!r} to size={original_block_size!r}: "
+            f"rc={truncate_block.returncode}, stderr={truncate_block.stderr!r}"
+        )
+        vm.ssh(f"rm -f {deny_feed} {geo_feed}", timeout=15)
+        _del_list_row(vm, CFG_IPV4_LISTS, rowid)
+        helpers.php_eval(
+            vm,
+            f"config_set_path('{supp_master_path}', '{original_master}');\n"
+            f"config_set_path('{CFG_V4SUPPRESSION}', '{original_v4supp}');\n"
+            "write_config('pfBlockerNG smoke: restore suppression for #798 whitelist-icon oracle');\n"
             "echo 'OK';",
         )
 
