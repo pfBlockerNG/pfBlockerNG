@@ -67,6 +67,14 @@ _DOT_BLOCK_DESCR_PFX = "pfB_DoT_Block_"
 # Marker for the single floating DoT/DoQ-block rule (mirrors PFB_DOT_BLOCK_FLOATING_DESCR).
 _DOT_BLOCK_FLOATING_DESCR = "pfB_DoT_Block_Floating"
 
+# Rendered pf label anchor for a pfB-owned DoT/DoQ block rule (#813). Plain ``pfctl -sr``
+# (no ``-v`` needed) prints ``label "USER_RULE: <descr>"`` for every config filter/rule row
+# that carries a ``descr`` — pf labels are rule TEXT, emitted by ``print_rule()`` regardless
+# of verbosity (confirmed on a real CE 2.8 smoke-diagnostics guest, run 28704593724). Both
+# the per-interface descr (``pfB_DoT_Block_<iface>``) and the floating descr
+# (``pfB_DoT_Block_Floating``) share this prefix, so anchoring on the PREFIX covers both.
+_DOT_BLOCK_LABEL_ANCHOR = "USER_RULE: " + _DOT_BLOCK_DESCR_PFX
+
 # User filter rule descriptor seeded in Cases 3 and 6 to prove survival.
 _USER_FILTER_DESCR = "my-user-filter-dot-block-smoke"
 
@@ -206,10 +214,29 @@ def _filter_rule_present(vm: SmokeVM, descr: str, *, timeout: float = 60.0) -> b
 
 
 def _is_block_853_line(line: str) -> bool:
-    """True iff a ``pfctl -sr`` line is a block rule for port 853.
+    """True iff a ``pfctl -sr`` line is a pfBlockerNG-owned block rule for port 853.
 
     pfctl renders port 853 as the ``/etc/services`` name ``domain-s`` (DoT/DoQ), not the
     literal ``853`` — so a ``"853" in line`` test alone misses a correctly-loaded rule.
+
+    Anchored on the rendered pfB label, not just the 853/domain-s token (#813): without it,
+    a foreign port-853 block rule baked onto the smoke image (unrelated to pfBlockerNG)
+    could false-match the positive gate, and the ABSENT gate could false-fail on it instead
+    of asserting pfB-owned rules specifically are gone. See ``_DOT_BLOCK_LABEL_ANCHOR`` for
+    the evidence that plain ``pfctl -sr`` already renders this label with no ``-v`` needed.
+    """
+    return "block" in line and ("853" in line or "domain-s" in line) and _DOT_BLOCK_LABEL_ANCHOR in line
+
+
+def _is_block_853_line_loose(line: str) -> bool:
+    """True iff a ``pfctl -sr`` line is ANY block rule mentioning port 853 — pfB or not.
+
+    Diagnostic-only counterpart to :func:`_is_block_853_line`: drops the pfB label anchor
+    so :func:`_dot_block_match_report` can still show near-miss lines (e.g. a foreign
+    baked port-853 block rule) on a live failure, instead of under-reporting by filtering
+    on the same anchored token the gate itself asserts (CLAUDE.md "print expected vs
+    actual" — a diagnostic that filters by the anchor can hide exactly what a reader needs
+    to see when the anchor is the thing in question).
     """
     return "block" in line and ("853" in line or "domain-s" in line)
 
@@ -280,13 +307,20 @@ def _dot_block_match_report(vm: SmokeVM, *, expected_present: bool, timeout: flo
 
     The harness has no assertion framework, so a failing live-pf check must put the
     comparison on the terminal — what was EXPECTED next to what ``pfctl -sr`` ACTUALLY held.
-    Lists the live block rules that mention port 853 / ``domain-s`` verbatim.
+    Lists every LOOSE 853/domain-s block line (pfB-owned or not), each tagged ``[pfB]`` or
+    ``[other]`` by the anchored matcher — a near-miss (e.g. a foreign baked port-853 block
+    rule) must still show up here even though the gates themselves only count ``[pfB]``
+    lines (#813; filtering this listing by the same anchored token would under-report).
     """
     result = vm.ssh(h.PFCTL, "-sr", timeout=timeout)
     if result.returncode != 0:
         actual = [f"<pfctl -sr failed: rc={result.returncode} {result.stderr.strip()}>"]
     else:
-        actual = [ln.strip() for ln in result.stdout.splitlines() if _is_block_853_line(ln)]
+        actual = [
+            f"{'[pfB]  ' if _is_block_853_line(ln) else '[other]'} {ln.strip()}"
+            for ln in result.stdout.splitlines()
+            if _is_block_853_line_loose(ln)
+        ]
     want = "PRESENT (both protocols)" if expected_present else "ABSENT (no protocol)"
     # This report renders INSIDE a failing assert's message — a transient pfctl error on
     # this second read must fold into the report, not replace it with a bare RuntimeError.
