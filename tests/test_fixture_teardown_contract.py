@@ -62,12 +62,13 @@ def test_requested_fixture_finalizes_first_and_sees_the_failure_report(pytester:
 
     result = pytester.runpytest("-s", "-q")
 
-    out = result.stdout.str()
-    assert "MFS-TEARDOWN failed=True" in out, f"requested-fixture teardown did not see the failed report:\n{out}"
-    assert "AUTOUSE-TEARDOWN failed=True" in out, f"autouse teardown did not see the failed report:\n{out}"
-    mfs_pos = out.index("MFS-TEARDOWN failed=True")
-    autouse_pos = out.index("AUTOUSE-TEARDOWN failed=True")
-    assert mfs_pos < autouse_pos, (
-        "expected the requested fixture (mfs_var-style) to finalize BEFORE the autouse dump "
-        f"(reverse setup order); actual output order:\n{out}"
+    # fnmatch_lines asserts the lines occur IN THIS ORDER (with full-output diagnostics
+    # on mismatch): the requested fixture (mfs_var-style) finalizes before the autouse
+    # dump, and both saw failed=True — the two contracts under pin. Wildcards keep the
+    # match robust against pytest's progress-marker interleaving under -s.
+    result.stdout.fnmatch_lines(
+        [
+            "*MFS-TEARDOWN failed=True*",
+            "*AUTOUSE-TEARDOWN failed=True*",
+        ]
     )
