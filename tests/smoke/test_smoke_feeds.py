@@ -219,9 +219,15 @@ def test_feed_internal_filter_blocks_then_allowlist_exempts(deployed_vm: SmokeVM
     """
     feed_url = mock_feeds.feed_url("ip_plain_cidr.txt")
     spec = h.IpCase(aliasname="smokefiltergate", feed_url=feed_url, header="smokefiltergate", family="v4")
-    # pfb_download() logs IP-feed activity under the family-suffixed alias name
-    # ([ <aliasname>_<family> ]), not the row header (see the sibling p3spur200 case).
-    refused_marker = f"[ {spec.aliasname}_{spec.family} ] feed host resolves to a non-permitted address"
+    # The refusal fires at pfb_download()'s ENTRY URL vetting (pfb_filter PFB_FILTER_URL
+    # routes through pfb_feed_host_allowed, pfblockerng.inc:1067), NOT the later
+    # download-time gate at :8974 — that '[ header ] … — skipped' line is unreachable
+    # for an internal-host URL. The reason-bearing line lands in error.log (logtype 6):
+    #   "… Invalid URL (feed host resolves to a non-permitted address) [ <url> ]"
+    # Scope it by the reason AND this run's unique mock URL (host:port/fixture), so a
+    # sibling feed's failure can never satisfy it.
+    refused_marker = f"Invalid URL (feed host resolves to a non-permitted address) [ {feed_url} ]"
+    error_log = f"{h.PFB_LOGDIR}/error.log"
     # The mock fetch must be reachable across both updates (the SSRF filter, not egress,
     # is what we are exercising).
     h.unblock_egress()
@@ -233,7 +239,7 @@ def test_feed_internal_filter_blocks_then_allowlist_exempts(deployed_vm: SmokeVM
         # the "table not built" assertion reflects a fully settled reload, not a race.
         h.set_feed_internal_allowlist(deployed_vm, "")
         assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before any load"
-        refused_before = h.count_log_marker(deployed_vm, h.PFB_LOG, refused_marker)
+        refused_before = h.count_log_marker(deployed_vm, error_log, refused_marker)
         h.reload(deployed_vm, "update")
         h.reload(deployed_vm, "updateip")
         assert spec.alias not in h.pfctl_tables(deployed_vm), (
@@ -242,9 +248,9 @@ def test_feed_internal_filter_blocks_then_allowlist_exempts(deployed_vm: SmokeVM
         # A missing pf table alone is non-specific — a dead mock server would look identical.
         # Assert the actual refusal reason was logged, so this proves the SSRF guard fired,
         # not merely that nothing happened to load.
-        refused_after = h.count_log_marker(deployed_vm, h.PFB_LOG, refused_marker)
+        refused_after = h.count_log_marker(deployed_vm, error_log, refused_marker)
         assert refused_after > refused_before, (
-            f"Expected {refused_marker!r} in {h.PFB_LOG} after the filtered update "
+            f"Expected {refused_marker!r} in {error_log} after the filtered update "
             f"(before={refused_before}, after={refused_after}) — the pf table being empty does "
             "not by itself prove the SSRF guard refused the download"
         )
