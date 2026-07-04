@@ -319,4 +319,117 @@ VENVEOF
     End
   End
 
+  # ── shard slicing (issue #797): --shard/--shard-total teach run-smoke.sh to
+  # run a MODULE-level slice of a --paths dir via scripts/shard-modules.sh ──── #
+  #
+  # RED→GREEN evidence: before run-smoke.sh parses --shard/--shard-total, both
+  # flags fall through the Phase-1 loop's default case and STOP it (the `*)
+  # break` arm), so they land verbatim in the pytest passthrough instead of
+  # driving a splitter call — the round-robin assertions below see the whole
+  # --paths dir (not a module slice) and the error-path assertions see exit 0
+  # with the bogus flags forwarded to pytest. After implementation, the flags
+  # are consumed, the splitter runs, and the assertions flip to green.
+  make_shard_fixture() {
+    mkdir -p "${WORK}/mods"
+    for m in a b c d e; do
+      : > "${WORK}/mods/test_${m}.py"
+    done
+  }
+
+  run_shard0_of2() {
+    PYTHON="${FAKE_BIN}/python"
+    export PYTHON
+    make_shard_fixture
+    sh "$SCRIPT" --paths "${WORK}/mods" --shard 0 --shard-total 2
+    argv_joined
+  }
+
+  Describe 'N=2 shard 0: round-robin even-indexed modules (a, c, e)'
+    It 'replaces --paths with exactly the shard-0 module slice, in order, leftmost'
+      When call run_shard0_of2
+      The output should include "-m|pytest|${WORK}/mods/test_a.py|${WORK}/mods/test_c.py|${WORK}/mods/test_e.py|-m|smoke"
+    End
+  End
+
+  run_shard1_of2() {
+    PYTHON="${FAKE_BIN}/python"
+    export PYTHON
+    make_shard_fixture
+    sh "$SCRIPT" --paths "${WORK}/mods" --shard 1 --shard-total 2
+    argv_joined
+  }
+
+  Describe 'N=2 shard 1: round-robin odd-indexed modules (b, d)'
+    It 'replaces --paths with exactly the shard-1 module slice, in order, leftmost'
+      When call run_shard1_of2
+      The output should include "-m|pytest|${WORK}/mods/test_b.py|${WORK}/mods/test_d.py|-m|smoke"
+    End
+  End
+
+  # ── N=1 (default): backwards-compat pin — byte-identical to pre-#797 ──────── #
+  run_shard_default_over_paths_dir() {
+    PYTHON="${FAKE_BIN}/python"
+    export PYTHON
+    make_shard_fixture
+    sh "$SCRIPT" --paths "${WORK}/mods"
+    argv_joined
+  }
+
+  Describe 'N=1 (default) over a --paths dir: unchanged single-path argv'
+    It 'never calls the splitter -- the whole dir rides as ONE pytest path arg'
+      When call run_shard_default_over_paths_dir
+      The output should include "-m|pytest|${WORK}/mods|-m|smoke"
+    End
+  End
+
+  # ── N>1 + an explicit passthrough path: conflicting intents, loud error ──── #
+  run_shard_conflict_bare_path() {
+    PYTHON="${FAKE_BIN}/python"
+    export PYTHON
+    make_shard_fixture
+    sh "$SCRIPT" --shard-total 2 "${WORK}/mods/test_a.py"
+  }
+
+  Describe 'N>1 together with an explicit passthrough path'
+    It 'errors loudly and never invokes python (no argv file written)'
+      When run run_shard_conflict_bare_path
+      The status should be failure
+      The stderr should include 'conflict'
+      The path "$ARGV_FILE" should not be exist
+    End
+  End
+
+  # ── N > module count: the requested shard is empty; splitter error propagates ── #
+  run_shard_empty_slice() {
+    PYTHON="${FAKE_BIN}/python"
+    export PYTHON
+    make_shard_fixture
+    sh "$SCRIPT" --paths "${WORK}/mods" --shard 5 --shard-total 6
+  }
+
+  Describe 'shard-total large enough to leave the requested shard EMPTY'
+    It 'propagates the splitter error and never invokes python'
+      When run run_shard_empty_slice
+      The status should be failure
+      The stderr should include 'empty'
+      The path "$ARGV_FILE" should not be exist
+    End
+  End
+
+  # ── non-numeric --shard-total: rejected before the splitter ever runs ────── #
+  run_shard_total_non_numeric() {
+    PYTHON="${FAKE_BIN}/python"
+    export PYTHON
+    sh "$SCRIPT" --shard-total notanumber
+  }
+
+  Describe 'non-numeric --shard-total'
+    It 'is rejected with a non-zero exit and never invokes python'
+      When run run_shard_total_non_numeric
+      The status should be failure
+      The stderr should include 'shard-total'
+      The path "$ARGV_FILE" should not be exist
+    End
+  End
+
 End

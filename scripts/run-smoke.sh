@@ -13,10 +13,14 @@
 #   (Layer B, tests/timing.py) show on a PASSING run, not only on failure.
 #
 # Params + defaults (structured flags must precede passthrough):
-#   --paths P      default tests/smoke   (UI: tests/smoke/ui)
-#   -m/--marker M  default smoke         (CI smoke: smoke|repo; UI: ui_render|...)
-#   --timeout N    default 30            (UI: 300)
-#   --filter EXPR  optional; ONE arg, no word-split (passed to pytest as -k "expr")
+#   --paths P        default tests/smoke   (UI: tests/smoke/ui)
+#   -m/--marker M    default smoke         (CI smoke: smoke|repo; UI: ui_render|...)
+#   --timeout N      default 30            (UI: 300)
+#   --filter EXPR    optional; ONE arg, no word-split (passed to pytest as -k "expr")
+#   --shard I        default 0             (0-based shard index; issue #797)
+#   --shard-total N  default 1             (N=1: no-op, byte-identical to pre-#797
+#                                            behaviour; N>1: --paths is replaced by
+#                                            its module-level shard slice)
 #   trailing passthrough → forwarded to pytest verbatim
 #
 # AMENDMENTS:
@@ -31,6 +35,12 @@
 #   argv injection: passthrough args are assembled via successive set -- prepends —
 #     no eval, no numbered vars; shell metacharacters in passthrough args are
 #     never interpreted.
+#   shard slicing (issue #797): --shard-total N>1 hands the single --paths dir to
+#     scripts/shard-modules.sh and splices its newline-separated module list in as
+#     MULTIPLE leftmost pytest path args, in the exact spot the one path occupies
+#     today. An explicit passthrough path together with N>1 is a conflict (loud
+#     error, never a silent pick); the splitter's own errors (e.g. an empty slice)
+#     propagate as-is under `set -eu`.
 #
 # Env passthrough: RUN_ID / PFB_DIAG_DIR / SMOKE_LANE reach pytest by inheritance (no
 #   explicit forwarding needed — subprocess env-inherit covers it).
@@ -47,6 +57,8 @@ _MARKER="smoke"
 _TIMEOUT=30
 _FILTER=""
 _MARKER_EXPLICIT=0  # set to 1 when -m/--marker was given as a structured flag
+_SHARD=0       # 0-based shard index (issue #797)
+_SHARD_TOTAL=1 # N=1 = no sharding (default; byte-identical to pre-#797)
 
 # ── Phase 1: parse structured flags; remaining "$@" = passthrough ─────────── #
 # Structured flags must come before any passthrough args.
@@ -73,6 +85,16 @@ while [ "$#" -gt 0 ]; do
             _FILTER="${1:?run-smoke: --filter requires an argument}"
             shift
             ;;
+        --shard)
+            shift
+            _SHARD="${1:?run-smoke: --shard requires an argument}"
+            shift
+            ;;
+        --shard-total)
+            shift
+            _SHARD_TOTAL="${1:?run-smoke: --shard-total requires an argument}"
+            shift
+            ;;
         *)
             # First non-known arg: start of passthrough — stop consuming.
             break
@@ -80,6 +102,27 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 # "$@" is now the passthrough.
+
+# ── Phase 1b: validate --shard / --shard-total (cheap guard) ───────────────── #
+# Out-of-range index (I >= N) is the SPLITTER's job (Phase 4d propagates its
+# error); this only rejects non-numeric input and a total < 1 before anything
+# else runs.
+case "$_SHARD" in
+    '' | *[!0-9]*)
+        printf 'run-smoke: --shard must be a non-negative integer: %s\n' "$_SHARD" >&2
+        exit 1
+        ;;
+esac
+case "$_SHARD_TOTAL" in
+    '' | *[!0-9]*)
+        printf 'run-smoke: --shard-total must be a non-negative integer: %s\n' "$_SHARD_TOTAL" >&2
+        exit 1
+        ;;
+esac
+if [ "$_SHARD_TOTAL" -lt 1 ]; then
+    printf 'run-smoke: --shard-total must be >= 1: %s\n' "$_SHARD_TOTAL" >&2
+    exit 1
+fi
 
 # ── Phase 2: scan passthrough for the -m guard and bare-path guard ─────────── #
 # -m guard: if the passthrough already has -m, do NOT inject our default marker.
@@ -99,6 +142,15 @@ for _a in "$@"; do
         *) : ;;
     esac
 done
+
+# --shard-total N>1 and an explicit passthrough path are conflicting intents —
+# never silently prefer one (issue #797): a shard slice REPLACES --paths, so a
+# caller-given pytest target makes the request ambiguous.
+if [ "$_SHARD_TOTAL" -gt 1 ] && [ "$_CALLER_GAVE_PATH" -eq 1 ]; then
+    printf 'run-smoke: --shard-total %s conflicts with an explicit pytest path in the passthrough\n' \
+        "$_SHARD_TOTAL" >&2
+    exit 1
+fi
 
 # ── Phase 3: PYTHON resolution ─────────────────────────────────────────────── #
 # CI parity: when GITHUB_ACTIONS is set the runner has no .venv; use python3
@@ -142,9 +194,30 @@ if [ "$_MARKER_EXPLICIT" -eq 1 ] || [ "$_CALLER_GAVE_M" -eq 0 ]; then
     set -- -m "$_MARKER" "$@"
 fi
 
-# 4d. Prepend the path unless the passthrough already has a leading positional path.
+# 4d. Prepend the path(s) unless the passthrough already has a leading positional
+# path (the N>1 + caller-path conflict was already rejected above, so
+# _CALLER_GAVE_PATH is guaranteed 0 whenever _SHARD_TOTAL > 1 here).
 if [ "$_CALLER_GAVE_PATH" -eq 0 ]; then
-    set -- "$_PATHS" "$@"
+    if [ "$_SHARD_TOTAL" -eq 1 ]; then
+        set -- "$_PATHS" "$@"
+    else
+        # N>1: replace the single _PATHS dir with its module-level shard slice.
+        # A splitter failure (e.g. an empty slice) aborts HERE under `set -eu` —
+        # deliberate: only stdout is captured, so the splitter's stderr message
+        # still reaches the terminal.
+        _shard_modules="$(sh "${REPO_ROOT}/scripts/shard-modules.sh" "$_PATHS" "$_SHARD" "$_SHARD_TOTAL")"
+        # Re-split the newline-joined module list into positional words — no
+        # eval, no word-splitting of a blob (mirrors shard-modules.sh's own
+        # re-split trick): IFS=newline only, glob disabled via set -f.
+        _shard_oldifs="$IFS"
+        IFS='
+'
+        set -f
+        # shellcheck disable=SC2086  # intentional: re-split the newline-joined list
+        set -- $_shard_modules "$@"
+        set +f
+        IFS="$_shard_oldifs"
+    fi
 fi
 
 # issue #605: export the diagnostics dir so the pytest process (and tests/timing.py's

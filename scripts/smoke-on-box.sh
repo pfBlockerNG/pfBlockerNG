@@ -6,13 +6,19 @@
 #
 # USAGE (always via select-box.sh -- "... sh /root/pfBlockerNG/scripts/smoke-on-box.sh <flags>"):
 #   smoke-on-box.sh [--ref REF] [--abi ABI] [--marker M] [--filter EXPR] [--no-two-vm]
+#                   [--shard I] [--shard-total N]
 #
 # FLAGS:
-#   --ref REF      git ref to check out (default: current HEAD)
-#   --abi ABI      build ABI string (default: FreeBSD:15:amd64)
-#   --marker M     pytest -m marker (default: smoke)
-#   --filter EXPR  pytest -k filter expr (default: none)
-#   --no-two-vm    skip civm image pull and set NO_TWO_VM=1
+#   --ref REF        git ref to check out (default: current HEAD)
+#   --abi ABI        build ABI string (default: FreeBSD:15:amd64)
+#   --marker M       pytest -m marker (default: smoke)
+#   --filter EXPR    pytest -k filter expr (default: none)
+#   --no-two-vm      skip civm image pull and set NO_TWO_VM=1
+#   --shard I        0-based shard index, forwarded to run-smoke.sh (default: 0;
+#                     issue #797)
+#   --shard-total N  shard count, forwarded to run-smoke.sh (default: 1). N>1 is
+#                     REJECTED when the marker resolves to the UI tier
+#                     (tests/smoke/ui) — the UI suite always runs as one unit.
 #
 # ENV (set by the select-box.sh lease or inherited):
 #   SMOKE_LANE        lane index for port-striding (default 0; always 0 for local runs)
@@ -40,6 +46,8 @@ _ABI="FreeBSD:15:amd64"
 _MARKER="smoke"
 _FILTER=""
 _NO_TWO_VM=0
+_SHARD=0       # 0-based shard index, forwarded to run-smoke.sh (issue #797)
+_SHARD_TOTAL=1 # N=1 = no sharding (default)
 
 REPO_ROOT="/root/pfBlockerNG"
 
@@ -66,6 +74,8 @@ while [ "$#" -gt 0 ]; do
         --marker)   shift; _MARKER="$1"; shift ;;
         --filter)   shift; _FILTER="$1";      shift ;;
         --no-two-vm) _NO_TWO_VM=1;       shift ;;
+        --shard)       shift; _SHARD="$1";       shift ;;
+        --shard-total) shift; _SHARD_TOTAL="$1"; shift ;;
         *) printf 'smoke-on-box: unknown argument: %s\n' "$1" >&2; exit 1 ;;
     esac
 done
@@ -97,6 +107,8 @@ if [ "${PFB_ONBOX_REEXEC:-}" != "1" ]; then
     set -- --ref "$_REF" --abi "$_ABI" --marker "$_MARKER"
     [ -n "$_FILTER" ] && set -- "$@" --filter "$_FILTER"
     [ "$_NO_TWO_VM" -eq 1 ] && set -- "$@" --no-two-vm
+    [ "$_SHARD" != "0" ] && set -- "$@" --shard "$_SHARD"
+    [ "$_SHARD_TOTAL" != "1" ] && set -- "$@" --shard-total "$_SHARD_TOTAL"
     PFB_ONBOX_REEXEC=1 exec sh "$REPO_ROOT/scripts/smoke-on-box.sh" "$@"
 fi
 
@@ -251,9 +263,21 @@ fi
 # whole-suite tests/smoke + 30s default.
 _PATHS="$(pfb_smoke_tier_paths "$_MARKER")"
 _TIMEOUT="$(pfb_smoke_tier_timeout "$_MARKER")"
+
+# The UI tier (ADR-14) always runs as a single unit — sharding it is out of
+# scope for issue #797 (it is a small, non-module-fungible suite; the shard
+# split target is the live-VM tests/smoke tier).
+if [ "$_SHARD_TOTAL" != "1" ] && [ "$_PATHS" != "tests/smoke" ]; then
+    printf 'smoke-on-box: --shard-total %s is not supported for the UI tier (marker=%s maps to %s); the UI tier always runs as a single unit\n' \
+        "$_SHARD_TOTAL" "$_MARKER" "$_PATHS" >&2
+    exit 1
+fi
+
 printf 'smoke-on-box: running smoke (marker=%s paths=%s timeout=%s%s)\n' \
     "$_MARKER" "$_PATHS" "$_TIMEOUT" "${_FILTER:+ filter=$_FILTER}" >&2
 
 set -- --paths "$_PATHS" --marker "$_MARKER" --timeout "$_TIMEOUT"
 [ -n "$_FILTER" ] && set -- "$@" --filter "$_FILTER"
+[ "$_SHARD" != "0" ] && set -- "$@" --shard "$_SHARD"
+[ "$_SHARD_TOTAL" != "1" ] && set -- "$@" --shard-total "$_SHARD_TOTAL"
 exec sh scripts/run-smoke.sh "$@"
