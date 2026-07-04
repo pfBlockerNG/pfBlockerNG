@@ -256,4 +256,18 @@ final class SanitizeIpaddrTest extends TestCase
 		$GLOBALS['pfb']['supp'] = 'on';
 		$this->assertSame('0.0.0.0/0', sanitize_ipaddr('0.0.0.0/0', true, 24));
 	}
+
+	// --- Interplay with the issue #760 documentation-range drop ---------------
+	//
+	// The floor clamp runs before the reserved/private filter, but it only
+	// rewrites $mask -- the filter still judges the untouched address. So a
+	// documentation-range CIDR under a floor is DROPPED entirely, not survived
+	// as a clamped single host: the #760 drop wins over the floor clamp, same
+	// interplay as the v6 sibling (SanitizeIpaddrV6Test::
+	// testDocumentationRangeCidrStillDroppedUnderFloor).
+	public function testDocumentationRangeCidrStillDroppedUnderFloor(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
+		$this->assertNull(sanitize_ipaddr('192.0.2.0/24', false, 28));
+	}
 }

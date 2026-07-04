@@ -8070,8 +8070,10 @@ function sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr = 'Disabled') {
 
 		// Advanced IPv6 Tunable (Set CIDR Block size limit) (issue #760 §3).
 		// A /0 was already clamped above (mask stays '0', never > 0, so this
-		// guard never double-clamps it); a mask the guard doesn't match (e.g.
-		// an invalid >128 value) is left for validate_ipv6() downstream.
+		// guard never double-clamps it). All three feed call sites gate on
+		// validate_ipv6() BEFORE calling this function, so $mask is already
+		// 0-128 here; the ctype_digit()/range checks are defensive redundancy
+		// for any direct caller that skips that guard.
 		if ($pfbcidr != 'Disabled' && $mask !== '' && ctype_digit($mask) && (int)$mask > 0 && (int)$mask < (int)$pfbcidr) {
 			pfb_logger("\n  Suppression CIDR Limit: {$s_ip}/{$mask}", 1);
 			$ipaddr = $s_ip;

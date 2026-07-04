@@ -899,7 +899,7 @@ else {
 		$pconfig['agateway_out']	= $rowdata[$rowid]['agateway_out'];
 
 		$pconfig['suppression_cidr']	= $rowdata[$rowid]['suppression_cidr'];
-		$pconfig['suppression_cidr_v6']	= $rowdata[$rowid]['suppression_cidr_v6'];
+		$pconfig['suppression_cidr_v6']	= $rowdata[$rowid]['suppression_cidr_v6'] ?? 'Disabled';
 		$pconfig['whois_convert']	= $rowdata[$rowid]['whois_convert'];
 	}
 	else {
