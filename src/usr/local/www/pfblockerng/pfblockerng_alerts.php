@@ -4966,13 +4966,6 @@ if (pfb_cfg_toggle_read($alertrefresh) === PfbToggle::On) {
 	}
 }
 
-function pfb_cmp($a, $b) {
-	if ($a == $b) {
-		return 0;
-	}
-	return ($a < $b) ? 1 : -1;
-}
-
 function pie_block($summary, $stat_type, $sumlines, $numsegments, $segcolors) {
 
 ?>
@@ -4990,7 +4983,7 @@ var pieChart_<?=$stat_type?> = new d3pie("pieChart_<?=$stat_type?>", {
 		"sortOrder": "value-asc",
 		"content": [
 <?php
-	uasort($summary, 'pfb_cmp');
+	uasort($summary, fn($a, $b) => $b <=> $a);
 	$k = array_keys($summary);
 	$numentries = 0;
 	for ($i = 0; $i < ($numsegments-1); $i++) {
