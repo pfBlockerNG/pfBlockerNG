@@ -13045,15 +13045,15 @@ function pfb_dnsbl_prefetch(array $qdomains) {
 // destructures on a per-row hit) to the FIRST line seen for it. grep preserves the
 // file's original line order regardless of pattern order, so "first seen in this batched
 // pass" is exactly the per-row `-m1` result for that same domain/suffix. $patterns are
-// raw literal ",{domain-or-suffix},," strings (no regex escaping) -- see
-// pfb_dnsbl_prefetch()'s docblock for why -F fixed-string matching is equivalent to the
-// per-row escaped-BRE match here.
+// raw literal ",{domain-or-suffix},," strings (no regex escaping) -- the per-row sites
+// are `-F` fixed-string too (issue #837; see pfb_dnsbl_prefetch()'s docblock), so both
+// sides match identically by construction.
 //
 // Keying the map by field [1] relies on where a ",X,," pattern can match: in the
 // ",domain,,log_type,feed,group" line shape, the empty placeholder after the domain slot
 // is the only double comma a well-formed line contains, so a ",X,," fixed string can
 // only ever match with X in the domain slot -- field [1]. That is exactly what makes
-// "key by field [1]" select the same line the per-row `grep -shm1 ',X,,'` would.
+// "key by field [1]" select the same line the per-row `grep -shm1 -F ',X,,'` would.
 //
 // B3/R1 (issue #809 review): returns NULL -- distinct from a genuine empty-array
 // no-match result -- when the pattern file itself could not be created or fully written
