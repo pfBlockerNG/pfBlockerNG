@@ -3151,19 +3151,61 @@ function pfb_suppress_file_v6(string $file, string $suppfile): bool
  */
 function pfb_ip_suppressed(string $ip, array $entries): bool
 {
-	foreach ($entries as $entry) {
-		$entry = trim((string) $entry);
+	return pfb_ip_suppressed_match($ip, $entries) !== NULL;
+}
+
+/**
+ * pfb_ip_suppressed_match — same coverage test as pfb_ip_suppressed(), but
+ * returns the MOST SPECIFIC (longest-prefix) covering entry instead of a
+ * bool (issue #422, follow-up to ADR-53 P7/P8). Feeds two Alerts surfaces
+ * that need to act on the actual customlist line, not just a yes/no: the
+ * un-suppress ('delete_ip') handler (which entry to remove + re-add) and the
+ * suppressed-row icon detection in the Alerts render loop.
+ *
+ * Skip/strip/containment rules are bit-identical to pfb_ip_suppressed()
+ * (that function is now a one-line wrapper around this one) -- no new
+ * normalisation. When both a bare host and a broader containing CIDR cover
+ * $ip, the host-specific entry wins (mirrors the old /32-before-/24
+ * precedence); a tie in prefix length keeps the first-seen entry.
+ *
+ * PURE -- no config access, no I/O.
+ *
+ * @param  string   $ip      The IP to test (v4 or v6).
+ * @param  string[] $entries Decoded suppression lines (one family or mixed).
+ * @return string|null The RAW entry (as passed in $entries, comment intact)
+ *                      with the longest prefix, or NULL when none covers $ip.
+ */
+function pfb_ip_suppressed_match(string $ip, array $entries): ?string
+{
+	$best      = NULL;
+	$best_bits = -1;
+
+	foreach ($entries as $raw) {
+		$entry = trim((string) $raw);
 		if ($entry === '' || str_starts_with($entry, '#')) {
 			continue;
 		}
 		// Strip a trailing inline '#' comment, same as pfbng_text_area_decode().
-		$entry = trim(strstr($entry, '#', TRUE) ?: $entry);
+		$stripped = trim(strstr($entry, '#', TRUE) ?: $entry);
 
-		if (ip_in_subnet($ip, $entry)) {
-			return TRUE;
+		if (!ip_in_subnet($ip, $stripped)) {
+			continue;
+		}
+
+		// A bare host (no '/') ranks as an exact /32 or /128 match.
+		if (str_contains($stripped, '/')) {
+			$bits = (int) substr(strrchr($stripped, '/'), 1);
+		} else {
+			$bits = str_contains($stripped, ':') ? 128 : 32;
+		}
+
+		if ($bits > $best_bits) {
+			$best      = $raw;
+			$best_bits = $bits;
 		}
 	}
-	return FALSE;
+
+	return $best;
 }
 
 // ---------------------------------------------------------------------------
