@@ -533,24 +533,76 @@ def _seed_feed_files(vm: helpers.SmokeVM) -> None:
         assert result.returncode == 0, f"failed to write {path!r}: rc={result.returncode} stderr={result.stderr!r}"
 
 
+def _sqlite_open_guarded() -> str:
+    """PHP prologue: open the dnsblcache DB via the package's own opener, loudly.
+
+    Uses ``pfb_open_sqlite(4, ...)`` — the exact opener the Alerts page itself runs —
+    NOT a raw ``new SQLite3``: the package opener carries the ADR-03 WAL pragma, the
+    integrity-check + corrupt-DB self-heal, and the unbound chown, all of which a
+    home-rolled open skips. That skip bit runs 28721363021/28721822624: the first
+    sessions running this module AFTER test_alerts.py found the cache DB in a state
+    where every raw statement returned ``disk I/O error``, and the bare ``bindValue()
+    on false`` fatal carried zero diagnostic value. The opener alone is not enough
+    either (run 28722003668): in PHP's SQLite3 warnings mode its internal recovery
+    fails silently and it returns a handle whose writes still all fail — so the
+    handle is probed with ``BEGIN IMMEDIATE`` before use. An unusable handle triggers
+    a WAL-family quarantine (db + -wal + -shm — it is a query CACHE; the package
+    rebuilds it, and production's own recovery similarly recreates a corrupt DB) and
+    one retry; still failing → echo every attempt's lastErrorMsg() plus df/ls/fstat
+    context (CLAUDE.md "print expected vs actual") and exit non-zero.
+    """
+    db = helpers._php_str(DNSBL_CACHE_DB)
+    return (
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
+        "pfb_global();\n"
+        "global $pfb_smoke_err;\n"
+        "$pfb_smoke_err = [];\n"
+        # PHP's SQLite3 runs in warnings (not exceptions) mode here, so pfb_open_sqlite's
+        # internal integrity/recovery failures return FALSE silently and it can hand back
+        # a handle whose every WRITE still fails (run 28722003668). BEGIN IMMEDIATE is the
+        # usability probe: it must acquire the write lock and touch the WAL, so a broken
+        # handle fails HERE, not at the caller's first real statement.
+        "function pfb_smoke_cache_open($tag) {\n"
+        "\tglobal $pfb_smoke_err;\n"
+        "\t$db = pfb_open_sqlite(4, 'smoke render-verify ' . $tag);\n"
+        "\tif (empty($db)) { $pfb_smoke_err[] = $tag . ': open returned NULL'; return NULL; }\n"
+        "\tif ($db->exec('BEGIN IMMEDIATE;') === FALSE) {\n"
+        "\t\t$pfb_smoke_err[] = $tag . ': ' . $db->lastErrorMsg();\n"
+        "\t\t@$db->exec('ROLLBACK;');\n"
+        "\t\t$db->close();\n"
+        "\t\treturn NULL;\n"
+        "\t}\n"
+        "\t$db->exec('COMMIT;');\n"
+        "\treturn $db;\n"
+        "}\n"
+        "$db = pfb_smoke_cache_open('first');\n"
+        "if (empty($db)) {\n"
+        f"\tforeach ([{db}, {db} . '-wal', {db} . '-shm'] as $f) {{ @unlink($f); }}\n"
+        "\t$db = pfb_smoke_cache_open('after-reset');\n"
+        "}\n"
+        "if (empty($db)) {\n"
+        "\techo 'ERR open: ' . implode(' | ', $pfb_smoke_err) . ' || '\n"
+        f"\t\t. shell_exec('df -k /var/unbound; ls -l ' . {db} . '* 2>&1; fstat ' . {db} . ' 2>&1');\n"
+        "\texit(1);\n"
+        "}\n"
+    )
+
+
 def _seed_dnsbl_cache(vm: helpers.SmokeVM) -> None:
     """D1 cache-hit: pre-populate ``dnsblcache`` with a group/feed DIFFERENT from
     the logged line, so the render deterministically drifts (strikes the logged
     values, shows the cached ones)."""
     snippet = (
-        f"$db = new SQLite3({helpers._php_str(DNSBL_CACHE_DB)});\n"
-        "$db->busyTimeout(5000);\n"
-        '$db->exec("CREATE TABLE IF NOT EXISTS dnsblcache '
-        '( type TEXT, domain TEXT, groupname TEXT, final TEXT, feed TEXT );");\n'
-        "$stmt = $db->prepare("
+        _sqlite_open_guarded() + "$stmt = $db->prepare("
         "'INSERT INTO dnsblcache (type, domain, groupname, final, feed) "
         "VALUES (:type, :domain, :groupname, :final, :feed)');\n"
+        "if ($stmt === FALSE) { echo 'ERR prepare: ' . $db->lastErrorMsg(); exit(1); }\n"
         f"$stmt->bindValue(':type', {helpers._php_str('DNSBL')}, SQLITE3_TEXT);\n"
         f"$stmt->bindValue(':domain', {helpers._php_str(D1_DOMAIN)}, SQLITE3_TEXT);\n"
         f"$stmt->bindValue(':groupname', {helpers._php_str(D1_CACHE_GROUP)}, SQLITE3_TEXT);\n"
         f"$stmt->bindValue(':final', {helpers._php_str(D1_DOMAIN)}, SQLITE3_TEXT);\n"
         f"$stmt->bindValue(':feed', {helpers._php_str(D1_CACHE_FEED)}, SQLITE3_TEXT);\n"
-        "$stmt->execute();\n"
+        "if ($stmt->execute() === FALSE) { echo 'ERR execute: ' . $db->lastErrorMsg(); exit(1); }\n"
         "echo 'OK';"
     )
     result = helpers.php_eval(vm, snippet)
@@ -560,14 +612,17 @@ def _seed_dnsbl_cache(vm: helpers.SmokeVM) -> None:
 
 
 def _clear_dnsbl_cache(vm: helpers.SmokeVM) -> None:
+    # pfb_open_sqlite() guarantees the table exists (its db_create runs on open), so
+    # the DELETE can no longer silently no-op on a fresh VM the way the old raw
+    # new-SQLite3 + bare-DELETE snippet did.
     snippet = (
-        f"$db = new SQLite3({helpers._php_str(DNSBL_CACHE_DB)});\n"
-        "$db->exec(\"DELETE FROM dnsblcache WHERE domain LIKE 'rv809%'\");\n"
+        _sqlite_open_guarded() + "$del = $db->exec(\"DELETE FROM dnsblcache WHERE domain LIKE 'rv809%'\");\n"
+        "if ($del === FALSE) { echo 'ERR delete: ' . $db->lastErrorMsg(); exit(1); }\n"
         "echo 'OK';"
     )
     result = helpers.php_eval(vm, snippet)
     assert result.returncode == 0 and "OK" in result.stdout, (
-        f"FAILED to clear dnsblcache during teardown: rc={result.returncode} "
+        f"FAILED to clear dnsblcache: rc={result.returncode} "
         f"stdout={result.stdout!r} stderr={result.stderr!r} -- dnsblcache may be left polluted for sibling tests"
     )
 
