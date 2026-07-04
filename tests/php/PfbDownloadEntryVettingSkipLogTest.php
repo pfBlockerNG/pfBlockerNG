@@ -191,6 +191,62 @@ final class PfbDownloadEntryVettingSkipLogTest extends TestCase
 	}
 
 	/**
+	 * Entry vetting rejects the URL for an UNRELATED reason (a disallowed URL
+	 * scheme) while the host resolves INTERNALLY -- the combination that could
+	 * misattribute the rejection to the SSRF guard: pfb_filter() failed on the
+	 * scheme check (it never consulted the guard), yet a bare guard re-check
+	 * would also reject this host. The skip line must NOT appear -- the helper
+	 * only speaks for the guard when the URL would have reached it (the scheme
+	 * gate mirrors pfb_filter()'s allow-list).
+	 */
+	public function testEntryRejectionOnSchemeWithInternalHostLogsNoSkipLine(): void
+	{
+		// Given a host that resolves to a non-public, non-allowlisted address.
+		$GLOBALS['pfb_test_resolve_map']['internal.scheme.vet.'] = [
+			['type' => 'A', 'data' => '10.20.30.43'],
+		];
+		$log = $this->tempFile('pfb_download_entry_log_');
+		$GLOBALS['pfb']['log'] = $log;
+		$GLOBALS['pfb']['errlog'] = $this->tempFile('pfb_download_entry_errlog_');
+
+		// When pfb_download() is called with a disallowed scheme on that host --
+		// pfb_filter() rejects on the scheme check, never reaching the guard.
+		$response_meta = null;
+		$result = pfb_download(
+			'gopher://internal.scheme.vet/list.txt',
+			'/tmp/pfb_entry_vet_test3',
+			FALSE,
+			'entryvettest3',
+			'',
+			2,
+			'',
+			300,
+			'',
+			'',
+			'',
+			FALSE,
+			$response_meta
+		);
+
+		// Then the download is refused ...
+		$this->assertFalse($result, 'pfb_download must refuse an invalid-scheme URL');
+
+		// ... and the main log carries NO guard skip line even though the host
+		// is internal -- the guard was not why vetting failed.
+		$logged = (string) file_get_contents($log);
+		$this->assertStringNotContainsString(
+			'skipped',
+			$logged,
+			"expected NO guard skip line when the scheme check, not the guard, rejected; got <{$logged}>"
+		);
+		$this->assertStringContainsString(
+			'Failed',
+			$logged,
+			'the pre-existing bare failure line must still fire'
+		);
+	}
+
+	/**
 	 * Helper-direct (the #811 live fixup): pfb_log_feed_host_reject() is what
 	 * every entry-reject site calls -- including pfb_update_check() in the www
 	 * script the harness cannot load. An internal-resolving URL logs the exact

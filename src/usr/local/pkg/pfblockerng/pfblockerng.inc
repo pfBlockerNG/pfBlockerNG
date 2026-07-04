@@ -8801,6 +8801,15 @@ function pfb_log_feed_host_reject($list_url, $header, $logtype) {
 	if (!pfb_feed_filter_enabled()) {
 		return;
 	}
+	// Only speak for the guard when the URL would have REACHED the guard: pfb_filter()
+	// rejects a disallowed scheme before ever consulting pfb_feed_host_allowed(), so a
+	// bad-scheme URL whose host happens to resolve internally must NOT be attributed to
+	// the SSRF guard. Mirror pfb_filter()'s scheme allow-list (the host::module rsync
+	// form has no scheme and is covered by pfb_download()'s own rsync gate instead).
+	$entry_scheme = strtolower((string) (parse_url($list_url, PHP_URL_SCHEME) ?: ''));
+	if (!in_array($entry_scheme, array('http', 'https', 'rsync', 'ftp'), TRUE)) {
+		return;
+	}
 	$entry_host = parse_url($list_url, PHP_URL_HOST) ?: '';
 	if ($entry_host === '') {
 		return;
