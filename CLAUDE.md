@@ -194,8 +194,8 @@ Delegation is for non-trivial, multi-step `src/`/`tests/`/CI work.
   (investigate / "don't assume, read" / confirm ambiguity), code standards (style, naming,
   per-language rules), the test-coverage mandate, and how to work with the specific
   codes/frameworks/tests. The implementer is cheaper, not exempt.
-- **Run at effort High or better** when available — set as the session default in
-  `.claude/settings.json` (`effortLevel`).
+- **Run at effort xhigh or better** when available — set as the session default in
+  `.claude/settings.json` (`effortLevel: xhigh`).
 
 ---
 
