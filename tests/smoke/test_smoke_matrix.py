@@ -347,13 +347,15 @@ def test_dnsbl_idn_confusable_blocks_homoglyph_resolves_legit(
         Cyrillic mix → MALICIOUS → blocked as feed ``Homoglyph`` (log_type '1',
         not HSTS) → NOERROR + the DNSBL VIP.
       * ``xn--mnchen-3ya`` (münchen — single-script Latin) is legit → NO IDN action,
-        so it resolves to its control answer (the before-state: green proves the
-        analyzer is the cause of the block, not an always-block path).
+        so it resolves via the controlled stub upstream (the before-state: green
+        proves the analyzer is the cause of the block, not an always-block path).
     Probed on-box (``drill @127.0.0.1``); python-mode has no localhost exemption.
+    NOTE: no ``control_local_data`` override on ``legit`` — a host override is served
+    as local-data BEFORE the python module and would mask a broken analyzer as a
+    pass (#582); egress is unblocked so the legit probe reaches the stub for real.
     """
     homoglyph = "xn--pple-43d.com"  # аpple — Latin+Cyrillic confusable → MALICIOUS
     legit = "xn--mnchen-3ya.com"  # münchen — single-script Latin → legit
-    legit_ip = "198.51.100.60"
     feed_url = h.write_local_feed(deployed_vm, "smoke_idn_confusable.txt", f"{h.unique_domain('idnfiller')}\n")
     spec = h.DnsblCase(
         aliasname="smokeidn",
@@ -363,12 +365,13 @@ def test_dnsbl_idn_confusable_blocks_homoglyph_resolves_legit(
         idn_mode="confusable",
         idn_block_malicious=True,
         idn_escalate_suspicious=False,
-        control_local_data={legit: {"A": legit_ip}},
     )
     with h.CaseContext(deployed_vm, spec):
-        # Before-state: the legit single-script IDN is NOT blocked — it resolves.
+        # Before-state: the legit single-script IDN is NOT blocked — resolves via
+        # the stub (egress unblocked so the un-blocked probe reaches it).
+        h.unblock_egress()
         legit_ans = h.dns_probe_client(client_vm, legit, "A")
-        assert h.resolves_to(legit_ans, legit_ip), f"legit IDN {legit} should resolve to {legit_ip}, got {legit_ans}"
+        assert h.resolves_to(legit_ans, STUB_DNS_A), f"legit IDN {legit} should resolve via stub, got {legit_ans}"
         assert not h.is_vip(legit_ans), f"legit IDN {legit} must NOT be homoglyph-blocked (FALSE POSITIVE): {legit_ans}"
         # The confusable homograph blocks with the DNSBL VIP.
         blocked = h.dns_probe_client(client_vm, homoglyph, "A")
@@ -385,12 +388,14 @@ def test_dnsbl_idn_confusable_block_malicious_off_alerts_only(
 
     Same confusable ``xn--pple-43d`` (аpple) as the positive case, but with
     ``block_malicious`` OFF: ``idn_confusable_action`` maps MALICIOUS → ALERT, so
-    ``is_found`` stays False and the name resolves to its control answer. Paired with
-    the block-on case above (same input, toggle flipped) this proves it is the toggle,
-    not an always-resolve path.
+    ``is_found`` stays False and the name resolves via the controlled stub upstream.
+    Paired with the block-on case above (same input, toggle flipped) this proves it
+    is the toggle, not an always-resolve path. NOTE: no ``control_local_data``
+    override — it would be served as local-data BEFORE the python module and mask a
+    broken toggle as a pass (#582); egress is unblocked so the probe reaches the
+    stub for real.
     """
     homoglyph = "xn--pple-43d.com"  # аpple — MALICIOUS, but block_malicious is OFF
-    homoglyph_ip = "198.51.100.61"
     feed_url = h.write_local_feed(deployed_vm, "smoke_idn_alert.txt", f"{h.unique_domain('idnfiller')}\n")
     spec = h.DnsblCase(
         aliasname="smokeidnalert",
@@ -399,24 +404,24 @@ def test_dnsbl_idn_confusable_block_malicious_off_alerts_only(
         mode=h.DnsblMode.VIP,
         idn_mode="confusable",
         idn_block_malicious=False,  # malicious → ALERT only (no block)
-        control_local_data={homoglyph: {"A": homoglyph_ip}},
     )
     with h.CaseContext(deployed_vm, spec):
+        h.unblock_egress()
         ans = h.dns_probe_client(client_vm, homoglyph, "A")
-        assert h.resolves_to(ans, homoglyph_ip), (
-            f"block_malicious OFF: {homoglyph} should resolve to {homoglyph_ip}, got {ans}"
-        )
+        assert h.resolves_to(ans, STUB_DNS_A), f"block_malicious OFF: {homoglyph} should resolve via stub, got {ans}"
         assert not h.is_vip(ans), f"block_malicious OFF must NOT block the homograph (alert only): {ans}"
 
 
 def test_dnsbl_whitelist_passthrough(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """WHITELIST: a domain on the whitelist AND in the block feed RESOLVES.
 
-    ``suppression`` short-circuits before any block shape, so the name resolves
-    via its control ``local-data`` (a true pass) — NOT NXDOMAIN/null/VIP.
+    ``suppression`` short-circuits before any block shape, so the name resolves via
+    the controlled stub upstream (a true pass) — NOT NXDOMAIN/null/VIP. NOTE: no
+    ``control_local_data`` override — it would be served as local-data BEFORE the
+    python module and mask a broken suppression check as a pass (#582); egress is
+    unblocked so the probe reaches the stub for real.
     """
     domain = h.unique_domain("allowed")
-    pass_ip = "198.51.100.77"
     feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_white.txt", f"{domain}\n")
     spec = h.DnsblCase(
         aliasname="smokewhite",
@@ -424,11 +429,11 @@ def test_dnsbl_whitelist_passthrough(deployed_vm: SmokeVM, client_vm: SmokeVM, m
         header="smokewhite",
         mode=h.DnsblMode.VIP,
         whitelist=[domain],
-        control_local_data={domain: {"A": pass_ip}},
     )
     with h.CaseContext(deployed_vm, spec):
+        h.unblock_egress()
         answer = h.dns_probe_client(client_vm, domain, "A")
-        assert h.resolves_to(answer, pass_ip), f"whitelisted {domain} should resolve to {pass_ip}, got {answer}"
+        assert h.resolves_to(answer, STUB_DNS_A), f"whitelisted {domain} should resolve via stub, got {answer}"
         assert not h.is_vip(answer), f"whitelisted {domain} wrongly VIP-blocked: {answer}"
         assert not h.is_null_ip(answer), f"whitelisted {domain} wrongly null-IP: {answer}"
 
