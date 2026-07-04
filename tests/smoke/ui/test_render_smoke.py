@@ -748,6 +748,40 @@ def test_dnsbl_encrypted_dns_sections_order(webui: WebUI, php_error_log_guard: P
     )
 
 
+def test_dnsbl_group_policy_section_renders_above_dns_redirect(
+    webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """The collapsible DNSBL Group Policy panel renders ABOVE the DNS Redirect section.
+
+    The panel was moved up next to the DNSBL Configuration section (which holds its
+    enable checkbox) instead of sitting below the encrypted-DNS sections. This is a
+    structural/positional change, so the order of the section markup in the rendered
+    HTML is the oracle.
+
+    The oracle keys on the section's unique ``Python_Group_Policy`` id, NOT the
+    'DNSBL Group Policy' text — that text also appears as the enable-checkbox label
+    inside DNSBL Configuration (always above DNS Redirect), so matching it would pass
+    on the pre-change page too.
+
+    Pins the change: pre-change the Group Policy section markup appeared BELOW the
+    'DNS Redirect' section heading (so this assertion fails); post-change it appears
+    above it.
+    """
+    path = "/pfblockerng/pfblockerng_dnsbl.php"
+    resp = webui.get(path)
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Configuration",))
+    assert result.ok, f"DNSBL render oracle failed: {result.detail}"
+    body = resp.text
+    gp_pos = body.find("Python_Group_Policy")
+    redir_pos = body.find("DNS Redirect")
+    assert gp_pos != -1, "DNSBL page is missing the 'Python_Group_Policy' Group Policy section id"
+    assert redir_pos != -1, "DNSBL page is missing the 'DNS Redirect' section heading"
+    assert gp_pos < redir_pos, (
+        f"'DNSBL Group Policy' section (id 'Python_Group_Policy', pos {gp_pos}) must render "
+        f"above 'DNS Redirect' (pos {redir_pos})"
+    )
+
+
 def test_feeds_custom_panel_heading_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
     """The second Feeds panel — the one listing user-configured feeds that don't match the
     predefined catalog — is headed "Custom Feeds", not the former "Unknown user defined Feeds".
