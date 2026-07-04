@@ -2422,6 +2422,10 @@ _BASELINE_GLOBAL_KEYS = (
     # dispatch; leaked forward it silently disables dispatch for every later module
     # (bit test_smoke_apply_on_change — issue #805).
     "pfb_interval",
+    # ADR-40 apply-path mode: test_smoke_adr40 writes 'delta'/'auto'/'replace' via
+    # PfbConfig (General section, issue #804); unset so later modules read the
+    # box's own default (end-state is mode-invariant, but the apply path is not).
+    "pfb_alias_delta_mode",
     # Feed-host SSRF-guard allowlist: a module that allowlists the SLIRP mock net
     # (test_trigger_api / test_smoke_feeds) must not leak the exemption forward, or a
     # later module runs with the default-ON guard effectively disabled (false-green).

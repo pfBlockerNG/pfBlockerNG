@@ -327,14 +327,19 @@ def test_adr40_content_gate_fires_on_change(adr40_vm: SmokeVM) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# ADR-12 helper — set pfb_alias_delta_mode via CFG_IP_SETTINGS
+# ADR-40 helper — set pfb_alias_delta_mode via the config gateway
 # --------------------------------------------------------------------------- #
 
 
 def _set_delta_mode(vm: h.SmokeVM, mode: str, *, timeout: float = 60.0) -> None:
-    """Persist ``pfb_alias_delta_mode`` in the IP-settings config section.
+    """Persist ``pfb_alias_delta_mode`` through ``PfbConfig::write``.
 
     Mirrors the UI save path (pfblockerng_ip.php POST → PfbConfig::write).
+    The key is REGISTERED UNDER THE GENERAL SECTION (config/0), so the gateway
+    is the section-proof way to land it where ``PfbConfig::read`` looks: a
+    hand-rolled ``config_set_path`` into CFG_IP_SETTINGS wrote a value
+    production never read, so the apply path silently kept the box's own mode
+    — 'replace' on the grandfather-seeded smoke install (issue #804).
     Valid stored values: ``'auto'`` / ``'delta'`` / ``'replace'``.  An empty
     string is the absent-default for existing installs (reads to ``'auto'``
     via the PfbAliasDeltaMode adapter); the tests write the explicit token so
@@ -344,9 +349,8 @@ def _set_delta_mode(vm: h.SmokeVM, mode: str, *, timeout: float = 60.0) -> None:
     once per pass via ``PfbConfig::read('pfb_alias_delta_mode')``.
     """
     snippet = (
-        f"$ip = config_get_path({h._php_str(h.CFG_IP_SETTINGS)}, array());\n"
-        f"$ip['pfb_alias_delta_mode'] = {h._php_str(mode)};\n"
-        f"config_set_path({h._php_str(h.CFG_IP_SETTINGS)}, $ip);\n"
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');\n"
+        f"PfbConfig::write('pfb_alias_delta_mode', {h._php_str(mode)});\n"
         "write_config('pfBlockerNG smoke: set pfb_alias_delta_mode');\n"
         "echo 'OK';"
     )
