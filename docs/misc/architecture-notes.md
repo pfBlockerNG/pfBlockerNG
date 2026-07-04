@@ -245,6 +245,26 @@ can't map automatically. `-f scope=full` restores the every-ci:true-leg whole-ti
 only a bare `workflow_dispatch` is lean. Local runs are pytest-native: pass `--filter`/`-m`
 through (`scripts/local-smoke.sh` forwards them — `--filter` becomes pytest `-k` — and treats `-m smoke` as a default).
 
+**Module sharding (#797).** Orthogonal to selective dispatch (which narrows *which* tests run),
+sharding splits an already-selected, full-marker run across N parallel workers. CI's `smoke.yml`
+takes a `shards` input (default 2): a CE leg with the default `smoke` marker and no `-k` filter
+expands into `shards` matrix entries (`resolve-legs.sh legs`), each running one module-level
+slice; a Plus leg is always hard-capped at 1 shard (concurrent Netgate-licensed boots are
+unvalidated); the count is clamped to the leg's `test_*.py` module count; and a filtered
+(`pytest_filter` set) or non-`smoke`-marker leg collapses to 1 shard — the same empty-slice
+hazard `local-smoke.sh --shards` guards against (an N-way split can leave a shard with zero
+matching tests, and pytest's exit 5 would fail it spuriously). Locally, `scripts/local-smoke.sh
+--shards N` leases N boxes concurrently, one shard each. Both paths are the same mechanism by
+construction, not a parity re-implementation: `scripts/run-smoke.sh --shard I --shard-total N`
+hands its `--paths` dir to `scripts/shard-modules.sh` (deterministic round-robin over the dir's
+direct-child `test_*.py` modules) and splices the resulting slice in as the pytest path list;
+`smoke-on-box.sh` forwards `--shard`/`--shard-total` unchanged and independently refuses N>1 for
+the UI tier (a small, non-module-fungible suite that always runs as one unit). Diagnostics stay
+per-shard: CI names each leg's artifacts `smoke-diagnostics-<image_name>-<pfsense_version>-s<I>`
+and `pfBlockerNG-pkg-<image_name>-s<I>` (two shards of one leg each build their own `.pkg` —
+a shared cross-shard build is a deferred optimisation); local runs get one log file per shard
+under the `--shards` run's kept log dir.
+
 **CI as parallel dispatch (ADR-47 P5).** Workflows are thin dispatch wrappers; all step logic
 lives in shared scripts that run identically locally and in CI:
 
