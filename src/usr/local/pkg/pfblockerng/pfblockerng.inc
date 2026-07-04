@@ -12127,6 +12127,35 @@ function pfb_render_memo(array &$store, string $key, callable $resolver) {
 }
 
 
+// Predicate for the Unified-log render loop (pfblockerng_alerts.php): TRUE once no
+// converter (convert_dnsbl_log() / convert_dns_reply_log() / convert_ip_log()) can
+// possibly render another row, so the caller can break out of its fgetcsv() loop
+// instead of parsing the rest of the log for nothing (issue #809 Phase 2).
+//
+// Non-filter mode ($filterlogentries FALSE): all three converters share one counter
+// ($counter['Unified']) and one limit ($pfbentries) -- each converter's own
+// top-of-function gate is `$counter['Unified'] >= $pfbentries`, so once that holds,
+// every converter call from here on is a guaranteed no-op (its OWN early-return guard,
+// e.g. `if ($dnsblfilterlimit) return TRUE;`, trips before any side effect). Done is
+// therefore exactly `$unified_count >= $pfbentries`.
+//
+// Filter mode ($filterlogentries TRUE): each converter instead gates on its OWN
+// per-type counter/limit ($dnsblfilterlimitentries/$dnsfilterlimitentries/
+// $ipfilterlimitentries) and sets its OWN flag ($dnsblfilterlimit/$dnsfilterlimit/
+// $ipfilterlimit) once reached -- exactly mirroring the <tfoot> Unified summary's own
+// "Filter Limit setting reached" check (`$ipfilterlimit && $dnsblfilterlimit &&
+// $dnsfilterlimit`). Only once ALL THREE are TRUE can no type render anything more, so
+// done is `$ipfilterlimit && $dnsblfilterlimit && $dnsfilterlimit`. If any one knob is
+// 0 (unlimited), its flag never sets and this never returns TRUE -- the loop then
+// correctly runs to EOF exactly as before this change.
+function pfb_alerts_unified_scan_done($filterlogentries, $unified_count, $pfbentries, $ipfilterlimit, $dnsblfilterlimit, $dnsfilterlimit): bool {
+	if ($filterlogentries) {
+		return $ipfilterlimit && $dnsblfilterlimit && $dnsfilterlimit;
+	}
+	return $unified_count >= $pfbentries;
+}
+
+
 // Functon to find which DNSBL Feed/Groupname blocked this event
 //
 // issue #809 (Alerts page render-time performance): in 'alerts' mode ONLY, memoize the
