@@ -154,12 +154,6 @@ $pfb_logtypes = array(	'defaultlogs'	=> array('name'		=> 'Log Files',
 						'download'	=> TRUE,
 						'clear'		=> FALSE
 						),
-			'unbound'	=> array('name'		=> 'DNSBL Unbound mode',
-						'ext'		=> array('pfb_dnsbl.conf'),
-						'logdir'	=> "{$pfb['dnsbldir']}/",
-						'download'	=> TRUE,
-						'clear'		=> FALSE
-						),
 			'python'	=> array('name'		=> 'DNSBL mode',
 						'ext'		=> array('pfb_py*.txt'),
 						'logdir'	=> "{$pfb['dnsbldir']}/",
@@ -185,8 +179,6 @@ $pfb_logtypes = array(	'defaultlogs'	=> array('name'		=> 'Log Files',
 						'clear'		=> TRUE
 						)
 		);
-
-unset($pfb_logtypes['unbound']);
 
 // Dynamically add any configured DNSBL Categeory Feeds
 if ($pfb['blconfig'] &&
