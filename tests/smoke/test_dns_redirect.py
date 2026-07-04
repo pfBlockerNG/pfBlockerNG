@@ -312,7 +312,12 @@ def _redir_match_report(vm: SmokeVM, iface: str, *, expected_present: bool, time
     else:
         actual = [ln.strip() for ln in result.stdout.splitlines() if "rdr" in ln and dev and dev in ln]
     want = "PRESENT (both protocols)" if expected_present else "ABSENT (no protocol)"
-    matched = _pfctl_sn_redir_protos(vm, iface, timeout=timeout)
+    # This report renders INSIDE a failing assert's message — a transient pfctl error on
+    # this second read must fold into the report, not replace it with a bare RuntimeError.
+    try:
+        matched: set[str] | str = _pfctl_sn_redir_protos(vm, iface, timeout=timeout)
+    except RuntimeError as exc:
+        matched = f"<unreadable: {exc}>"
     body = "\n".join(f"      {ln}" for ln in actual) if actual else "      (no rdr rules on this device)"
     return (
         f"  Expecting a pfBlockerNG DNS-redirect rdr rule to be {want} in the live nat ruleset:\n"

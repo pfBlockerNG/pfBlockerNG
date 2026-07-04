@@ -1942,7 +1942,6 @@ def test_pfctl_replace_disruption_baseline(
     verify_samples_disrupt = _parse_tcp_probe_output(verify_result.stdout).samples
     if not verify_samples_disrupt:
         _bench(smoke_vm, "teardown_rules", timeout=30.0)
-        _bench(smoke_vm, "cleanup", timeout=30.0)
         pytest.skip(
             f"TCP RST probe returned no samples — reject loop not working. "
             f"stdout={verify_result.stdout!r} rc={verify_result.returncode}. STOP."
@@ -1955,7 +1954,6 @@ def test_pfctl_replace_disruption_baseline(
     )
     if verify_p99 > 100.0:
         _bench(smoke_vm, "teardown_rules", timeout=30.0)
-        _bench(smoke_vm, "cleanup", timeout=30.0)
         pytest.skip(f"RST p99={verify_p99:.1f}ms > 100ms — reject loop too slow. STOP.")
     print(f"  VERIFY PASSED: RST p99={verify_p99:.2f}ms")
 
@@ -1965,7 +1963,6 @@ def test_pfctl_replace_disruption_baseline(
         print("  SSH control path: ok")
     except Exception as exc:
         _bench(smoke_vm, "teardown_rules", timeout=30.0)
-        _bench(smoke_vm, "cleanup", timeout=30.0)
         pytest.skip(f"SSH to pfSense lost after loading reject rules: {exc} — STOP.")
 
     # ------------------------------------------------------------------ #
