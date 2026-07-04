@@ -2959,7 +2959,7 @@ def test_validate_log_zip_inner_reject_line(deployed_vm: SmokeVM, mock_feeds: _M
       feed=<hdr>_v4 stage=inner reason=inner_mime_not_allowed detected=application/pdf
       rc=0" appears in the pfB log.
     """
-    header = "iss808zin"
+    header = "issue808zin"
     entry_bytes = b"%PDF-1.4\n"
 
     buf = io.BytesIO()
@@ -2982,7 +2982,7 @@ def test_validate_log_zip_inner_reject_line(deployed_vm: SmokeVM, mock_feeds: _M
             f"the extracted-content probe would not reject — test inconclusive"
         )
 
-    feed_url = mock_feeds.register("iss808_zip_inner.zip", zip_bytes)
+    feed_url = mock_feeds.register("issue808_zip_inner.zip", zip_bytes)
     spec = h.IpCase(aliasname=header, feed_url=feed_url, header=header, family="v4")
     # feed= carries the on-box header, which the package suffixes with the
     # address family (_v4) -- see the structural test's docstring.
