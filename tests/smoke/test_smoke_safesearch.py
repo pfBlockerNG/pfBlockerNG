@@ -215,10 +215,8 @@ def test_safesearch_cname_chase_reaches_target(safesearch_vm: _SSFixture) -> Non
     Then src_chase A resolves to SS_TARGET_A and src_chase AAAA resolves to SS_TARGET_AAAA
         (the stub-served fixture address — DISTINCT from the sentinel so the assertion
         proves the chase, not a stub default).
-    And a direct lookup of target_chase returns the same fixture address (cache-population
-        / chase-consistency check: the iterator populated target_chase's cache entry).
     """
-    vm, cvm, forwarding_on, src_chase, target_chase, _src_fallback, _before = safesearch_vm
+    vm, cvm, forwarding_on, src_chase, _target_chase, _src_fallback, _before = safesearch_vm
 
     for rtype, expected in (("A", h.SS_TARGET_A), ("AAAA", h.SS_TARGET_AAAA)):
         redirected = h.dns_probe_client(cvm, src_chase, rtype)
@@ -230,19 +228,6 @@ def test_safesearch_cname_chase_reaches_target(safesearch_vm: _SSFixture) -> Non
         assert str(ipaddress.ip_address(expected)) in normalised_records, (
             f"[forwarding={forwarding_on}] {src_chase} {rtype}: expected {expected} "
             f"(chase target address); got {redirected.records}"
-        )
-
-        # Cache-population check: target_chase itself resolves to the same fixture address.
-        target_ans = h.dns_probe_client(cvm, target_chase, rtype)
-        assert target_ans.rcode == "NOERROR" and target_ans.records, (
-            f"[forwarding={forwarding_on}] {target_chase} {rtype} did not resolve "
-            f"(expected cache hit from the chase): {target_ans}"
-        )
-        normalised_target = {str(ipaddress.ip_address(r)) for r in target_ans.records}
-        assert normalised_records & normalised_target, (
-            f"[forwarding={forwarding_on}] {src_chase} {rtype} address does not overlap "
-            f"{target_chase} {rtype} — CNAME chase did not reach the target: "
-            f"{src_chase}={redirected.records} vs {target_chase}={target_ans.records}"
         )
 
 

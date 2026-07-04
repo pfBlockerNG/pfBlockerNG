@@ -130,11 +130,14 @@ def test_adr40_content_gate_idempotence(adr40_vm: SmokeVM) -> None:
     first load ran and the table is populated, so an empty ``PFB_CHANGED_IP_ALIASES``
     on the second pass cannot be explained by "the table never loaded".
 
-    **When** ``helpers.reload(vm, 'update')`` runs again over the SAME unchanged
-    feed content.
+    **When** ``force_ip_refetch`` defeats the download-reuse cache (so the SAME
+    unchanged feed content is genuinely re-read and re-parsed, not skipped) and
+    ``helpers.reload(vm, 'update')`` runs again.
 
     **Then** the post hook fires and ``PFB_CHANGED_IP_ALIASES`` does NOT contain
-    the alias — the content-gate short-circuited the reload.
+    the alias — ``pfb_alias_set_different()`` compared the freshly re-parsed
+    (identical) set against the mirror and returned FALSE; the content-gate, not
+    the reuse-cache skip, is what short-circuited the reload.
 
     **And** the pf table still holds the settled IP (confirming no phantom flush).
 
@@ -181,8 +184,14 @@ def test_adr40_content_gate_idempotence(adr40_vm: SmokeVM) -> None:
         f"before-state: pf table {ip_spec.alias} does not contain {fed_ip}: {members_before}"
     )
 
-    # Second update: SAME feed content, no changes.
-    # pfb_alias_set_different() must return FALSE → alias NOT added to $pfb_alias_lists.
+    # Second update: SAME feed content, no changes — but defeat the download-reuse
+    # cache first (issue #582): without this, an unchanged .txt with no .update/.fail
+    # marker takes the REUSE fork (inc:10211-10222), which never re-populates
+    # $pfb_alias_lists at all, so pfb_alias_set_different() is never even called — an
+    # empty PFB_CHANGED_IP_ALIASES would then prove nothing about the content gate.
+    # force_ip_refetch forces the re-download/re-parse fork on this SAME content so the
+    # gate is genuinely exercised and found FALSE.
+    h.force_ip_refetch(adr40_vm, f"{ip_spec.header}_{ip_spec.family}")
     h.clear_hook_markers(adr40_vm, token)
     h.reload(adr40_vm, "update")
     env_second = h.read_hook_env(adr40_vm, marker)
