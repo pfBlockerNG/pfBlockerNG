@@ -9439,8 +9439,10 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			   the allow-list gate. On a stock pfSense box, /usr/bin/file already returns
 			   application/zip for real ZIP bytes (no false rejections occur without it);
 			   normalisation is defensive — it handles custom magic databases and live
-			   epub+zip-style archive types. The post-extraction inner-content MIME check
-			   below stays disabled — ZIP inner-content validation is deferred to a future ADR.
+			   epub+zip-style archive types. This branch stays disabled because file -bZ
+			   cannot classify a multi-member container (-Z decompresses a single stream);
+			   the post-extraction PFB_FILTER_FILE_MIME re-check below is the ZIP
+			   inner-content gate (issue #808).
 			if (!pfb_filter(array("{$file_dwn_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download')) {
 				return FALSE;
 			}
@@ -9460,13 +9462,13 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				exec("/usr/bin/tar -xOf {$file_dwn_esc} | /usr/bin/sed 's/,[[:space:]]/; /g' | /usr/bin/tr ',' '\n' > {$file_org_esc}", $output, $retval);
 			}
 
-			// Post-extraction content validation: re-run the MIME gate on the extracted
-			// file (the outer-container variant handling is covered by ADR-44's
-			// pfb_mime_normalise()).
+			// ZIP inner-content gate (issue #808): probe the EXTRACTED payload
+			// (orig_download), not the outer archive -- the outer container is
+			// already covered by ADR-44's pfb_mime_normalise().
 			$reject_detail = array();
-			if (!pfb_filter(array("{$file_org_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME, 'pfb_download', '', FALSE, $reject_detail)) {
+			if (!pfb_filter(array("{$file_org_esc}", "{$orig_download}", "{$list_download}"), PFB_FILTER_FILE_MIME, 'pfb_download', '', FALSE, $reject_detail)) {
 				pfb_validate_log($header, 'inner', 'inner_mime_not_allowed', pfb_reject_detail_summary($reject_detail));
-				unlink_if_exists("{$file_org_esc}");
+				unlink_if_exists($file_download);
 				return FALSE;
 			}
 		}
