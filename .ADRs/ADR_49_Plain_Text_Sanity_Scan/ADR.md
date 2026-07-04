@@ -1,6 +1,6 @@
 # ADR-49: Opt-in plain-text feed sanity scanning
 
-- **Status:** **Proposed** (2026-06-28; facts refreshed 2026-07-03; §2.1 forks RESOLVED + phase prompts authored 2026-07-04) — heuristic, non-zero false-positive risk; ships **default-off** and stays Proposed until the §7 false-positive survey clears it. The survey harness + offline feed corpus already landed (PR #827: `scripts/fetch_feed_corpus.py`, `tests/fixtures/feed_corpus/`, `tests/php/FeedCorpusSurveyTest.php` — the survey test activates the moment `pfb_text_sanity()` exists).
+- **Status:** **Accepted** (2026-07-04; proposed 2026-06-28, §2.1 forks resolved + implemented 2026-07-04 in PR #829) — heuristic, non-zero false-positive risk, so it ships **default-off**. The §7 gate cleared: the offline `tests/php/FeedCorpusSurveyTest.php` returns **zero** false positives across the committed feed corpus (PR #827), and the live CE + Plus smoke fan-out is green. A default-on change stays a separate future decision. Follow-up #830 tracks an html_error_page precision refinement (the IPv6 `::` alternative over-matching CSS `::`).
 - **Date:** 2026-06-28
 - **Branch:** `adr/49-plain-text-sanity-scan` (off `devel`) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfblockerng.inc`, `pfblockerng_extra.inc` (PfbConfig field)
 - **Target runtime:** PHP 8.3, FreeBSD / pfSense
@@ -188,11 +188,13 @@ capture is the documented out-of-CI limitation; refresh the corpus by re-running
 - `tests/smoke/test_smoke_feeds.py` (CE + Plus): flag-on rejects an error-page feed
   (`stage=plaintext`) and imports a healthy text feed; flag-off reproduces today's behaviour.
 
-**Stays Proposed until:** the automated catalogue survey passes — the OFFLINE
-`tests/php/FeedCorpusSurveyTest.php` (§6 Phase 3) running the committed feed corpus (PR #827)
-through `pfb_text_sanity()` with **zero non-`null`** verdicts, results persisted under `RESULTS/`.
-Only then → Accepted; a default-on change is a separate decision. Post-capture catalogue drift is
-the documented out-of-CI limitation, not part of the gate.
+**Accepted (2026-07-04):** the automated catalogue survey passed — the OFFLINE
+`tests/php/FeedCorpusSurveyTest.php` (§6 Phase 3) ran the committed feed corpus (PR #827)
+through `pfb_text_sanity()` with **zero non-`null`** verdicts (five documented non-feed captures
+excluded as `KNOWN_NON_FEED`, each still asserted flagged so a resurrected feed fails loudly), and
+the live CE + Plus smoke fan-out is green. A default-on change is a separate decision. Post-capture
+catalogue drift is the documented out-of-CI limitation, not part of the gate. Follow-up: #830
+(html_error_page IPv6 `::` precision).
 
 **Reject criteria:**
 
