@@ -228,9 +228,11 @@ jobs:
         run: |
           set -eu
 
-          # Tier set the daily schedule runs (Tier B). DROP `browser` here to
-          # disable the nightly browser leg (§7 demote/drop one-liner).
-          DEFAULT_SCHEDULE_TIERS="functional browser"
+          # Tier set the daily schedule runs. DROP `browser` here to disable the
+          # nightly browser leg (§7 demote/drop one-liner). `render` rides along
+          # (issue #809 post-mortem): Tier A otherwise only runs on PR gates, so a
+          # red render tier on devel could sit unnoticed between PRs.
+          DEFAULT_SCHEDULE_TIERS="render functional browser"
 
           # Decide the tier set.
           if [ "${EVENT_NAME}" = "schedule" ]; then
