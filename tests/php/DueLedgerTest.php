@@ -20,6 +20,8 @@ use PHPUnit\Framework\TestCase;
  *                          string $seed, int $jitter_max, string $ledger_dir): bool
  *   pfb_due_ledger_mark_ran(string $job_key, int $interval, int $now,
  *                            string $seed, int $jitter_max, string $ledger_dir): void
+ *   pfb_due_ledger_mark_ran_anchored(string $job_key, int $interval, int $now,
+ *                            string $seed, int $jitter_max, string $ledger_dir): void
  *
  * Coverage mandate (CLAUDE.md §"Test coverage") — every branch:
  *   seeded_jitter:        max > 0 ⇒ [1, max]; max = 0 ⇒ 0; deterministic; different jobs differ.
@@ -28,6 +30,12 @@ use PHPUnit\Framework\TestCase;
  *   is_due / mark_ran:   absent ⇒ due with non-zero stable jitter; future ⇒ not due;
  *                         past ⇒ due (catch-up); missed window ⇒ exactly one due;
  *                         two jobs keep independent jitters.
+ *   mark_ran_anchored (issue #573 phase-creep fix): missed-by-a-fraction ⇒ anchors
+ *                         on the previous next_due (zero cumulative slip, contrasted
+ *                         against plain mark_ran's drift); absent entry / next_due=0
+ *                         placeholder / future next_due (skew guard) / catch-up
+ *                         (> 1 interval late) all fall back to base = now; jitter
+ *                         rides the anchored base.
  *
  * All tests use injected now/seed (never time()/rand()) — deterministic on any clock.
  *
@@ -679,5 +687,226 @@ final class DueLedgerTest extends TestCase
 		$this->assertSame(self::NOW + self::INTERVAL_DAILY, $entry['next_due'],
 			'next_due must be now + interval when jitter = 0; expected ' .
 			(self::NOW + self::INTERVAL_DAILY) . ' got ' . $entry['next_due']);
+	}
+
+	// -----------------------------------------------------------------------
+	// pfb_due_ledger_mark_ran_anchored — issue #573: cron phase-creep fix.
+	//
+	// Anchors next_due on the PREVIOUS next_due (not on $now) whenever that
+	// previous value represents an on-time or barely-missed occurrence, so a
+	// tick that fires a fraction of a second earlier than its predecessor does
+	// NOT slip the whole schedule forward by a tick interval.
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Anchored mark_ran locks the schedule phase across repeated "fires a bit
+	 * early" cycles — zero cumulative slip — while plain mark_ran drifts by
+	 * each cycle's epsilon (the defect issue #573 fixes).
+	 *
+	 * Scenario:
+	 *   Given a baseline entry anchored at t0 + I (as if one prior cycle already
+	 *   ran cleanly), and three further ticks that each fire an epsilon EARLY
+	 *   relative to the ideal boundary (ε = 0, 1, 899 s — all < I).
+	 *   When  mark_ran_anchored is called once per tick, chained (each call
+	 *         reads back the previous call's persisted next_due).
+	 *   Then  every resulting next_due lands EXACTLY on t0 + (k+1)*I — no
+	 *         cumulative drift, regardless of the epsilon each tick added.
+	 *   Contrast: the same epsilon sequence fed to plain mark_ran (unanchored)
+	 *   produces next_due = t0 + k*I + ε_k + I — each cycle's epsilon leaks
+	 *   straight into the stored schedule, which is exactly how issue #573's
+	 *   monotonic creep accumulates in production.
+	 */
+	public function testMarkRanAnchoredLocksPhaseAcrossCyclesUnlikePlainMarkRan(): void
+	{
+		$t0       = self::NOW;
+		$interval = self::INTERVAL_DAILY;
+		$epsilons = [0, 1, 899];	// all strictly < interval — the "fired a bit early" case
+
+		// Given: a baseline entry as if a prior cycle already anchored next_due to t0 + I.
+		pfb_due_ledger_write_entry('cron_anchor', [
+			'last_run' => $t0,
+			'next_due' => $t0 + $interval,
+			'jitter'   => 0,
+		], $this->dir);
+
+		foreach ($epsilons as $idx => $eps) {
+			$k   = $idx + 1;
+			$now = $t0 + ($k * $interval) + $eps;
+
+			pfb_due_ledger_mark_ran_anchored('cron_anchor', $interval, $now, self::SEED, 0, $this->dir);
+
+			$entry    = pfb_due_ledger_read_entry('cron_anchor', $this->dir);
+			$expected = $t0 + (($k + 1) * $interval);
+
+			$this->assertNotNull($entry, "cron_anchor entry must exist after cycle {$k}");
+			$this->assertSame($expected, $entry['next_due'],
+				"cycle {$k} (eps={$eps}): anchored next_due expected {$expected} (= t0 + " . ($k + 1)
+				. "*I, zero slip) got {$entry['next_due']}");
+		}
+
+		// Contrast: the SAME epsilon sequence fed to plain (unanchored) mark_ran
+		// drifts by exactly epsilon every cycle — the defect this fix targets.
+		foreach ($epsilons as $idx => $eps) {
+			$k   = $idx + 1;
+			$now = $t0 + ($k * $interval) + $eps;
+
+			pfb_due_ledger_mark_ran('cron_plain', $interval, $now, self::SEED, 0, $this->dir);
+
+			$entry    = pfb_due_ledger_read_entry('cron_plain', $this->dir);
+			$expected = $t0 + ($k * $interval) + $eps + $interval;
+
+			$this->assertNotNull($entry, "cron_plain entry must exist after cycle {$k}");
+			$this->assertSame($expected, $entry['next_due'],
+				"cycle {$k} (eps={$eps}): plain mark_ran next_due expected {$expected} (= now + I, "
+				. "drifts by eps) got {$entry['next_due']} — documents the phase-creep issue #573 fixes");
+		}
+	}
+
+	/**
+	 * A schedule missed by more than one full interval is a genuine catch-up,
+	 * not a boundary-rounding slip — the anchored variant re-phases from now
+	 * rather than dragging a stale anchor forward.
+	 *
+	 * Scenario:
+	 *   Given an entry whose next_due is more than one interval in the past
+	 *   (e.g. the box was offline across a whole missed cycle).
+	 *   When  mark_ran_anchored runs.
+	 *   Then  the new next_due = now + interval (base = now, NOT the stale entry).
+	 */
+	public function testMarkRanAnchoredCatchUpFromNowWhenMorePastThanOneInterval(): void
+	{
+		$staleNextDue = self::NOW - self::INTERVAL_DAILY - 100;	// > 1 interval late
+		pfb_due_ledger_write_entry('cron', [
+			'last_run' => $staleNextDue - self::INTERVAL_DAILY,
+			'next_due' => $staleNextDue,
+			'jitter'   => 0,
+		], $this->dir);
+
+		pfb_due_ledger_mark_ran_anchored('cron', self::INTERVAL_DAILY, self::NOW, self::SEED, 0, $this->dir);
+
+		$entry    = pfb_due_ledger_read_entry('cron', $this->dir);
+		$expected = self::NOW + self::INTERVAL_DAILY;
+
+		$this->assertNotNull($entry, 'cron entry must exist after mark_ran_anchored');
+		$this->assertSame($expected, $entry['next_due'],
+			"catch-up (missed by > 1 interval): expected next_due = now + interval ({$expected}), " .
+			"got {$entry['next_due']} — must re-anchor from now, not the stale next_due ({$staleNextDue})");
+	}
+
+	/**
+	 * An absent ledger entry has nothing to anchor to — behaves exactly like
+	 * plain mark_ran (base = now).
+	 *
+	 * Scenario:
+	 *   Given no ledger entry for the job.
+	 *   When  mark_ran_anchored runs.
+	 *   Then  next_due = now + interval.
+	 */
+	public function testMarkRanAnchoredAbsentEntryAnchorsFromNow(): void
+	{
+		pfb_due_ledger_mark_ran_anchored('cron', self::INTERVAL_DAILY, self::NOW, self::SEED, 0, $this->dir);
+
+		$entry    = pfb_due_ledger_read_entry('cron', $this->dir);
+		$expected = self::NOW + self::INTERVAL_DAILY;
+
+		$this->assertNotNull($entry, 'cron entry must exist after mark_ran_anchored');
+		$this->assertSame($expected, $entry['next_due'],
+			"absent entry: expected next_due = now + interval ({$expected}), got {$entry['next_due']}");
+	}
+
+	/**
+	 * A set_pending placeholder (next_due=0, no real prior schedule) has nothing
+	 * meaningful to anchor to — behaves exactly like plain mark_ran (base = now).
+	 *
+	 * Scenario:
+	 *   Given the job was set_pending with no prior real entry (placeholder
+	 *   next_due=0).
+	 *   When  mark_ran_anchored runs.
+	 *   Then  next_due = now + interval (base = now, not the 0 placeholder), and
+	 *         pending_apply is cleared (mark_ran_anchored writes a clean entry).
+	 */
+	public function testMarkRanAnchoredPendingPlaceholderAnchorsFromNow(): void
+	{
+		pfb_due_ledger_set_pending('cron', $this->dir);
+
+		// Before: the placeholder has next_due = 0 and pending_apply set.
+		$placeholder = pfb_due_ledger_read_entry('cron', $this->dir);
+		$this->assertNotNull($placeholder, 'placeholder entry must exist after set_pending');
+		$this->assertSame(0, $placeholder['next_due'],
+			"before: placeholder next_due must be 0, got {$placeholder['next_due']}");
+
+		pfb_due_ledger_mark_ran_anchored('cron', self::INTERVAL_DAILY, self::NOW, self::SEED, 0, $this->dir);
+
+		$entry    = pfb_due_ledger_read_entry('cron', $this->dir);
+		$expected = self::NOW + self::INTERVAL_DAILY;
+
+		$this->assertNotNull($entry, 'cron entry must exist after mark_ran_anchored');
+		$this->assertSame($expected, $entry['next_due'],
+			"pending placeholder: expected next_due = now + interval ({$expected}), got " .
+			"{$entry['next_due']} — must not anchor onto the 0 placeholder");
+		$this->assertArrayNotHasKey('pending_apply', $entry,
+			'mark_ran_anchored must clear pending_apply by writing a clean entry');
+	}
+
+	/**
+	 * next_due in the FUTURE relative to now is never anchored onto (clock skew
+	 * / an already-pending future entry) — base = now.
+	 *
+	 * Scenario:
+	 *   Given an entry with next_due 500 s in the future relative to now.
+	 *   When  mark_ran_anchored runs at now.
+	 *   Then  next_due = now + interval, NOT the future next_due + interval.
+	 */
+	public function testMarkRanAnchoredSkewGuardNeverAnchorsForward(): void
+	{
+		$futureNextDue = self::NOW + 500;
+		pfb_due_ledger_write_entry('cron', [
+			'last_run' => self::NOW - self::INTERVAL_DAILY,
+			'next_due' => $futureNextDue,
+			'jitter'   => 0,
+		], $this->dir);
+
+		pfb_due_ledger_mark_ran_anchored('cron', self::INTERVAL_DAILY, self::NOW, self::SEED, 0, $this->dir);
+
+		$entry    = pfb_due_ledger_read_entry('cron', $this->dir);
+		$expected = self::NOW + self::INTERVAL_DAILY;
+
+		$this->assertNotNull($entry, 'cron entry must exist after mark_ran_anchored');
+		$this->assertSame($expected, $entry['next_due'],
+			"future next_due ({$futureNextDue}) must NOT be anchored onto: expected next_due = " .
+			"now + interval ({$expected}), got {$entry['next_due']}");
+	}
+
+	/**
+	 * Jitter is added on top of the ANCHORED base, not recomputed from now —
+	 * proves the anchoring and jitter steps compose correctly.
+	 *
+	 * Scenario:
+	 *   Given a baseline entry anchored at NOW + I (a prior clean cycle), and a
+	 *   tick that fires 50 s early relative to the next boundary.
+	 *   When  mark_ran_anchored runs with jitter_max = MAX for job 'dcc'.
+	 *   Then  next_due = (NOW + I) + I + JITTER_DCC — jitter rides the anchored
+	 *         base, not a bare $now + I + jitter.
+	 */
+	public function testMarkRanAnchoredJitterRidesAnchoredBase(): void
+	{
+		pfb_due_ledger_write_entry('dcc', [
+			'last_run' => self::NOW,
+			'next_due' => self::NOW + self::INTERVAL_DAILY,
+			'jitter'   => 0,
+		], $this->dir);
+
+		$now = self::NOW + self::INTERVAL_DAILY + 50;	// fires 50s early vs. the *next* boundary
+		pfb_due_ledger_mark_ran_anchored('dcc', self::INTERVAL_DAILY, $now, self::SEED, self::MAX, $this->dir);
+
+		$entry    = pfb_due_ledger_read_entry('dcc', $this->dir);
+		$expected = (self::NOW + self::INTERVAL_DAILY) + self::INTERVAL_DAILY + self::JITTER_DCC;
+
+		$this->assertNotNull($entry, 'dcc entry must exist after mark_ran_anchored');
+		$this->assertSame(self::JITTER_DCC, $entry['jitter'],
+			'jitter must be JITTER_DCC; expected ' . self::JITTER_DCC . ' got ' . $entry['jitter']);
+		$this->assertSame($expected, $entry['next_due'],
+			"anchored + jittered next_due expected {$expected} (anchored base + interval + jitter), " .
+			"got {$entry['next_due']}");
 	}
 }
