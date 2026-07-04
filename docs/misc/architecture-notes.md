@@ -895,6 +895,17 @@ never run for it. Covered by `tests/smoke/ui/test_alerts.py`'s
 in `tests/smoke/test_smoke_suppression.py` and is a genuinely different code path, not duplicate
 coverage.
 
+**Alerts un-suppress + row icons (issue #422 follow-up).** The trash-can revert (`delete_ip`)
+matches the covering suppression entry prefix-aware via `pfb_ip_suppressed_match()`
+(`pfblockerng_extra.inc` — longest prefix wins; also drives the suppressed-row icon detection),
+removes exactly that entry (either family, any mask) and `pfctl -T add`s it back — the union of
+the re-added entry with any covering CIDRs a live punch left behind equals the original coverage,
+and the next reload rebuilds the canonical set. The legacy 255-sibling-host revert loop is gone
+(nothing produces exploded state any more; pre-ADR-53 leftovers self-heal on the next reload).
+The `entry_delete` gate validates `PFB_FILTER_IP` (both families), and the Alerts suppression
+icons render for any Block/non-GeoIP row — v6 and broader-than-`/24` v4 rows included; the
+unlock-icon eligibility is deliberately unchanged.
+
 **Tests.** Off-appliance: `tests/shell/pfblockerng_suppress_spec.sh` (real-`iprange` shellspec —
 the exact `/16 − /32 = 16` / `/24 − /32 = 8` vectors the smoke module's assertions are grounded
 in), `tests/php/V6CidrSubtractTest.php` (the pure-PHP engine, incl. the `/64 − /128 = 64` vector),

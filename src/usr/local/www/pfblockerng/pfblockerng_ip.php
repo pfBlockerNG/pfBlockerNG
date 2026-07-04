@@ -371,11 +371,11 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	pfb_cfg_toggle_read($pconfig['suppression']) === PfbToggle::On,
 	'on'
-))->setHelp('Default enabled. This will prevent Selected IPs (and RFC1918/Loopback addresses) from being blocked. For IPv4 lists (/8 through /32) and IPv6 lists (/32 through /128).'
+))->setHelp('Default enabled. This will prevent Selected IPs (and private/reserved addresses) from being blocked. For IPv4 lists (/8 through /32) and IPv6 lists (/32 through /128).'
 	. '<div class="infoblock">'
 	. 'GeoIP blocklist cannot be suppressed.<br /><br />'
-	. 'Alerts can be suppressed using the \'+\' icon in the Alerts tab and IPs are added to the IPv4 suppression custom list.<br />'
-	. 'For GeoIP/Blocked IPs in a CIDR broader than /8, will need a \'Whitelist alias\' w/ a List Action: \'Permit Outbound\' Firewall rule.<br />'
+	. 'Alerts can be suppressed using the \'+\' icon in the Alerts tab; the IP is added to the matching family\'s (IPv4/IPv6) Suppression custom list.<br />'
+	. 'For GeoIP, or Blocked IPs in a CIDR broader than the supported range (/8 IPv4, /32 IPv6), use a \'Whitelist alias\' w/ a List Action: \'Permit Outbound\' Firewall rule.<br />'
 	. 'Only \'Deny\' type Aliases can be suppressed!'
 	. '</div>'
 );
@@ -504,13 +504,14 @@ $form->add($section);
 $section = new Form_Section('IPv4 Suppression', 'IPv4_Suppression_customlist', COLLAPSIBLE|SEC_CLOSED);
 $suppression_text = '<strong><u>This suppression list is for [ /8 through /32 ] IPv4 addresses only!</u></strong><br /><br />
 
-			When \'Suppression\' is enabled, all RFC1918 and loopback addresses are also filtered on feed download|Update|Reload.<br /><br />
+			When \'Suppression\' is enabled, all RFC1918, loopback and reserved (documentation, multicast, CGN, benchmarking, 6to4)
+			addresses are also filtered on feed download|Update|Reload.<br /><br />
 
 			Enter one &emsp; <strong>IPv4 address</strong>&emsp; per line<br />
 			You may use "<strong>#</strong>" after any address to add comments. &emsp;IE: (x.x.x.x/32 # example.com)<br /><br />
 
 			To utilize this <strong>Suppression List</strong>, enable <strong>Suppression</strong> and click on the "+"
-			icon(s) in the Alerts tab to add the IPv4 addresses automatically to this Suppression list and immeditely
+			icon(s) in the Alerts tab to add the IPv4 addresses automatically to this Suppression list and immediately
 			remove the IPv4 address from the Deny aliastable.<br /><br />
 
 			Note: When manually adding an IPv4 address <strong>[ /8 through /32 only! ]</strong> to this Suppression List,
@@ -534,10 +535,15 @@ $form->add($section);
 $section = new Form_Section('IPv6 Suppression', 'IPv6_Suppression_customlist', COLLAPSIBLE|SEC_CLOSED);
 $suppression_text_v6 = '<strong><u>This suppression list is for [ /32 through /128 ] IPv6 addresses only!</u></strong><br /><br />
 
-			When \'Suppression\' is enabled, all RFC1918 and loopback addresses are also filtered on feed download|Update|Reload.<br /><br />
+			When \'Suppression\' is enabled, all ULA (fc00::/7), link-local, loopback and reserved (documentation, multicast, NAT64)
+			addresses are also filtered on feed download|Update|Reload.<br /><br />
 
 			Enter one &emsp; <strong>IPv6 address</strong>&emsp; per line<br />
 			You may use "<strong>#</strong>" after any address to add comments. &emsp;IE: (2001:db8::1/128 # example.com)<br /><br />
+
+			To utilize this <strong>Suppression List</strong>, enable <strong>Suppression</strong> and click on the "+"
+			icon(s) in the Alerts tab to add the IPv6 addresses automatically to this Suppression list and immediately
+			remove the IPv6 address from the Deny aliastable.<br /><br />
 
 			Note: When manually adding an IPv6 address <strong>[ /32 through /128 only! ]</strong> to this Suppression List,
 			you must run a <strong>"Force Reload - IP"</strong> for the changes to take effect.';
