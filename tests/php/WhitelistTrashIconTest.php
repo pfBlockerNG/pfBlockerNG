@@ -23,22 +23,10 @@ final class WhitelistTrashIconTest extends TestCase
 {
 	public static function setUpBeforeClass(): void
 	{
-		if (function_exists('pfb_whitelist_trash_icon')) {
-			return;
-		}
-		$src = file_get_contents(
-			dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_alerts.php'
-		);
-		if ($src === false) {
-			throw new RuntimeException('failed to read pfblockerng_alerts.php');
-		}
-		$src = preg_replace('/^\s*require_once\(.*\);\s*$/m', '', $src);
-		$start = strpos($src, "\nfunction ");
-		$end   = strpos($src, "\n\$pgtitle = ");
-		if ($start === false || $end === false || $end <= $start) {
-			throw new RuntimeException('could not locate the function block in pfblockerng_alerts.php');
-		}
-		eval("\n" . substr($src, $start + 1, $end - $start - 1));
+		// See AlertsPageLoader.php for the off-appliance load mechanics (shared with
+		// AlertsRowOutputEncodingTest / AlertsIpConvertPrefetchParityTest).
+		require_once __DIR__ . '/AlertsPageLoader.php';
+		pfb_test_load_alerts_page_functions();
 	}
 
 	/**
