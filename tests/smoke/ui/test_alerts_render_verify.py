@@ -703,9 +703,20 @@ def test_baseline_excludes_seed_tokens(render_diff_state: dict[str, dict[str, Ca
     CLAUDE.md before/after rule: a later "token present" assertion is only
     evidence the seeding CAUSED it if the token is provably absent beforehand.
     """
+    # A filter GET carries its filter value in the URL and the page echoes it back
+    # into the filter form field -- so THAT token legitimately appears in THAT
+    # baseline capture without any seeding. Exclude exactly those (key, token)
+    # pairs; every other combination must still be absent.
+    url_echoed = {
+        "alert_filterip": {S1_ALIAS},
+        "unified_filterip": {S1_ALIAS},
+        "alert_filterdnsbl": {D1_CACHE_GROUP},
+    }
     baseline = render_diff_state["baseline"]
     for key, cap in baseline.items():
-        for token in (D1_DOMAIN, S1_ALIAS, FEED_A_NAME, "rv809"):
+        for token in (D1_DOMAIN, S1_ALIAS, D1_CACHE_GROUP, FEED_A_NAME, "rv809"):
+            if token in url_echoed.get(key, set()):
+                continue
             assert token not in cap.body, (
                 f"baseline capture {key!r} already contains {token!r} before any seeding -- "
                 f"cannot prove a later assertion is caused by this module's seed"
@@ -845,20 +856,28 @@ def test_s10_et_feed_row_renders(render_diff_state: dict[str, dict[str, Capture]
 
 
 def test_permit_still_listed_and_delisted(render_diff_state: dict[str, dict[str, Capture]]) -> None:
-    """Permit log: one still-listed row, one de-listed row (branch coverage, permit side)."""
+    """Permit log: one still-listed row, one de-listed row (branch coverage, permit side).
+
+    Permit/Match rows carry no suppression '+' icon (that is Block-only), so there
+    is no ``host=<ip>`` marker -- locate the row by the bare IP (each P/M IP is
+    unique to its own log).
+    """
     body = render_diff_state["captures"]["alert"].body
-    listed = _row_containing(body, f"host={P1_IP}")
+    listed = _row_containing(body, P1_IP)
     assert "Not listed!" not in listed, f"Permit {P1_IP} (still-listed) wrongly rendered 'Not listed!': {listed!r}"
-    delisted = _row_containing(body, f"host={P2_IP}")
+    delisted = _row_containing(body, P2_IP)
     assert "Not listed!" in delisted, f"Permit {P2_IP} (de-listed) expected 'Not listed!': {delisted!r}"
 
 
 def test_match_still_listed_and_delisted(render_diff_state: dict[str, dict[str, Capture]]) -> None:
-    """Match log: one still-listed row, one de-listed row (branch coverage, match side)."""
+    """Match log: one still-listed row, one de-listed row (branch coverage, match side).
+
+    Same bare-IP row location as the permit test (no ``host=`` marker on Match rows).
+    """
     body = render_diff_state["captures"]["alert"].body
-    listed = _row_containing(body, f"host={M1_IP}")
+    listed = _row_containing(body, M1_IP)
     assert "Not listed!" not in listed, f"Match {M1_IP} (still-listed) wrongly rendered 'Not listed!': {listed!r}"
-    delisted = _row_containing(body, f"host={M2_IP}")
+    delisted = _row_containing(body, M2_IP)
     assert "Not listed!" in delisted, f"Match {M2_IP} (de-listed) expected 'Not listed!': {delisted!r}"
 
 
