@@ -2830,7 +2830,7 @@ function pfb_dnsbl_feed_group_cell(string $prev_feed, string $cur_feed, string $
  * flag as the caller's "not found" signal -- $pfb_found was left undefined
  * (PHP 8 E_WARNING on read) whenever $wlists was empty.
  */
-function pfb_whitelist_trash_icon($wlists, $host, $vtype, $h_host, $h_eval_ip) {
+function pfb_whitelist_trash_icon(array $wlists, string $host, int $vtype, string $h_host, string $h_eval_ip): ?string {
 	if (empty($wlists)) {
 		return NULL;
 	}

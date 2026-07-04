@@ -1021,17 +1021,17 @@ def test_alerts_rows_render_suppress_icons_for_v6_and_broad_v4(
 
 
 # --------------------------------------------------------------------------- #
-# Issue #798 dedup oracle: convert_ip_log() renders the "Permit Whitelist icon"
-# via TWO byte-for-byte duplicated blocks -- the Suppression-icon gate's
-# whitelist sub-path (alerts.php:3072-3094, reached only for a Block row not
-# covered by any Suppression entry) and the standalone fallback gate a few
-# lines down (alerts.php:3157-3202, reached by every OTHER row -- Permit,
-# Match, GeoIP -- since a Block row is excluded from it per the comment at
-# alerts.php:3153-3156). Issue #798's step 2 extracts the shared "is $host in
-# a Permit alias -> trash-can, else '+'" logic into one helper; THIS test is
-# the behaviour-preserving ORACLE (CLAUDE.md test-mandate exception: pins the
-# CURRENT rendering, deliberately not red->green, and must stay green both
-# before and after the extraction).
+# Issue #798 dedup oracle: convert_ip_log() rendered the "Permit Whitelist
+# icon" via TWO byte-for-byte duplicated blocks -- the Suppression-icon gate's
+# whitelist sub-path ("Check if host is in a Permit Whitelist Alias", reached
+# only for a Block row not covered by any Suppression entry) and the
+# standalone "IP Whitelist Icon" fallback block below it (reached by every
+# OTHER row -- Permit, Match, GeoIP -- since a Block/non-GeoIP row is excluded
+# from it per its own gate comment). Issue #798 extracts the shared "is $host
+# in a Permit alias -> trash-can" logic into pfb_whitelist_trash_icon(); THIS
+# test is the behaviour-preserving ORACLE (CLAUDE.md test-mandate exception:
+# pins the CURRENT rendering, deliberately not red->green, and must stay green
+# both before and after the extraction).
 # --------------------------------------------------------------------------- #
 
 
@@ -1075,11 +1075,11 @@ def test_alerts_rows_render_whitelist_icons_oracle(
     Background: a Permit v4 alias (``Wlorc798``, action containing ``Permit``) has
     one customlist host, ``203.0.113.77``. Master IP Suppression is ON and
     ``203.0.113.77`` is in no Suppression list, so the Suppression-icon gate falls
-    into its whitelist sub-path (alerts.php:3072-3094). A second host,
-    ``203.0.113.88``, is NOT in the alias's customlist.
+    into its whitelist sub-path. A second host, ``203.0.113.88``, is NOT in the
+    alias's customlist.
 
     The fallback block's ``$supp_ip`` is only ever PRINTED for ``$rtype ==
-    'Block'`` rows (the icon assembly at alerts.php:3218-3234 drops it for
+    'Block'`` rows (convert_ip_log()'s icon assembly drops it for
     Permit/Match rows), so the only row class whose icons the fallback gate
     (``!(Block && !geoip) && !$mask_suppression``) visibly renders is a
     **GeoIP Block row** with an eval mask outside {/32, /24, /25-/31} -- that
@@ -1099,10 +1099,9 @@ def test_alerts_rows_render_whitelist_icons_oracle(
     Then:
         (a) the trash-can un-whitelist icon renders for ``203.0.113.77`` --
             ``DNSBLWT|delete_ipwhitelist|203.0.113.77`` (the Suppression gate's
-            whitelist sub-path, alerts.php:3091-3093).
+            whitelist sub-path, via ``pfb_whitelist_trash_icon()``).
         (b) the "+" whitelist icon renders for ``203.0.113.88`` --
-            ``PFBIPWHITE|203.0.113.88`` (the standalone fallback gate,
-            alerts.php:3197-3199).
+            ``PFBIPWHITE|203.0.113.88`` (the fallback block's else-branch).
 
     Both id strings, and the condition each path needs (host present vs. absent
     in a Permit alias's customlist), are exactly what step 2's helper extraction
@@ -1227,19 +1226,18 @@ def test_alerts_rows_render_whitelist_icons_oracle(
         )
         html_body = resp.text
 
-        # THEN (a): the Suppression-icon gate's whitelist sub-path
-        # (alerts.php:3072-3094) -- trash_host is covered by the Permit alias ->
-        # trash-can un-whitelist icon.
+        # THEN (a): the Suppression-icon gate's whitelist sub-path -- trash_host
+        # is covered by the Permit alias -> trash-can un-whitelist icon.
         assert f"DNSBLWT|delete_ipwhitelist|{trash_host}" in html_body, (
             f"trash-can un-whitelist icon missing for {trash_host!r} -- the Suppression-icon "
-            "gate's whitelist sub-path (alerts.php:3072-3094) did not render; "
+            "gate's whitelist sub-path (pfb_whitelist_trash_icon()) did not render; "
             f"nearby body excerpt: {html_body[:200]!r}"
         )
-        # THEN (b): the standalone fallback gate (alerts.php:3157-3202) --
+        # THEN (b): the standalone 'IP Whitelist Icon' fallback block --
         # plus_host is NOT covered by any Permit alias -> "+" whitelist icon.
         assert f"PFBIPWHITE|{plus_host}" in html_body, (
-            f"'+' whitelist icon missing for {plus_host!r} -- the fallback gate "
-            f"(alerts.php:3157-3202) did not render; nearby body excerpt: {html_body[:200]!r}"
+            f"'+' whitelist icon missing for {plus_host!r} -- the IP Whitelist Icon fallback "
+            f"block did not render; nearby body excerpt: {html_body[:200]!r}"
         )
     finally:
         truncate_block = subprocess.run(
