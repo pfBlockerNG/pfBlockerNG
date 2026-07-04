@@ -13,23 +13,20 @@ this file covers the OTHER inline handlers, each gating a separate collapsible
 section by ``.show()``/``.hide()`` on the section's OUTER panel div (whose id is
 the second ``Form_Section`` constructor arg). The JS under test is READ-ONLY
 reference (no ``src/`` change); the exact selectors/behaviours are taken from the
-page's inline script (line numbers are pfblockerng_dnsbl.php):
+page's inline script — referenced symbolically (handler / checkbox / section id)
+so the references cannot rot as pfblockerng_dnsbl.php grows (issue #788):
 
-* ``enable_python_regex()`` (3099-3105, bound to ``#pfb_regex`` click at
-  3151-3154 and run on load at 3154): when ``#pfb_regex`` is CHECKED it
-  ``.show()``s the ``Python_regex_list`` section (``Form_Section`` id at 2502),
-  UNCHECKED it ``.hide()``s it.
-* ``enable_python_noaaaa()`` (3107-3113, bound at 3156-3159): ``#pfb_noaaaa``
-  gates the ``Python_noaaaa_list`` section (id at 2524).
-* ``enable_python_gp()`` (3115-3121, bound at 3161-3164): ``#pfb_gp`` gates the
-  ``Python_Group_Policy`` section (id at 2474).
-* ``enable_tld()`` (3067-3075, bound at 3136-3139): ``#pfb_tld`` gates BOTH the
-  ``TLD_Exclusion`` (id at 2802) and ``TLD_BW_list`` (id at 2827) sections at
-  once.
-* ``enable_dnsblip()`` (3123-3133, bound to ``#action`` click at 3166-3169): the
-  ``#action`` List-Action select being non-``Disabled`` ``.show()``s BOTH the
-  ``advinboundsettings`` and ``advoutboundsettings`` sections (ids built at
-  2909); ``Disabled`` ``.hide()``s them.
+* ``enable_python_regex()`` (bound to ``#pfb_regex`` click and run once on
+  load): when ``#pfb_regex`` is CHECKED it ``.show()``s the
+  ``Python_regex_list`` section, UNCHECKED it ``.hide()``s it.
+* ``enable_python_noaaaa()``: ``#pfb_noaaaa`` gates the ``Python_noaaaa_list``
+  section.
+* ``enable_python_gp()``: ``#pfb_gp`` gates the ``Python_Group_Policy`` section.
+* ``enable_tld()``: ``#pfb_tld`` gates BOTH the ``TLD_Exclusion`` and
+  ``TLD_BW_list`` sections at once.
+* ``enable_dnsblip()`` (bound to ``#action`` click): the ``#action`` List-Action
+  select being non-``Disabled`` ``.show()``s BOTH the ``advinboundsettings`` and
+  ``advoutboundsettings`` sections; ``Disabled`` ``.hide()``s them.
 
 All five gating controls default OFF on a fresh box (``pfb_regex``/``pfb_noaaaa``/
 ``pfb_gp``/``pfb_tld`` default ``''`` -> unchecked; ``action`` defaults
@@ -253,11 +250,11 @@ def test_action_select_toggles_advanced_firewall_sections(
 ) -> None:
     """`#action` != `Disabled` shows the Advanced In/Outbound firewall sections.
 
-    ``enable_dnsblip()`` (pfblockerng_dnsbl.php:3123-3133), bound to the
-    ``#action`` List-Action select's click (3166-3169) and run on load: a
-    non-``Disabled`` value ``.show()``s BOTH ``advinboundsettings`` and
-    ``advoutboundsettings``; ``Disabled`` ``.hide()``s them. The select defaults
-    ``Disabled`` (3124 / $pconfig default), so the on-load pass leaves both
+    ``enable_dnsblip()`` (pfblockerng_dnsbl.php), bound to the ``#action``
+    List-Action select's click and run on load: a non-``Disabled`` value
+    ``.show()``s BOTH ``advinboundsettings`` and ``advoutboundsettings``;
+    ``Disabled`` ``.hide()``s them. The select defaults ``Disabled``
+    ($pconfig default), so the on-load pass leaves both
     sections hidden -- the asserted BEFORE state. The handler reads the select
     VALUE, so we ``select_option`` then fire the bound ``click`` to run it (a
     ``<select>`` change does not raise ``click``); both branches are exercised.
