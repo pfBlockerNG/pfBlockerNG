@@ -1,101 +1,101 @@
 ================================================================================
 PHASE 5 PROMPT — Python per-client decision layer + Phase-1 cache scheme
-Target model: Claude Sonnet 5 (or Opus if the cache scheme is intricate)
-ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS2.1, SS2.2, SS2.3 first)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS0, SS2.1, SS2.2, SS2.3 first)
 ================================================================================
 
-ROLE
-Work in the per-ADR worktree on branch adr/25-group-policy-dnsbl. Phase 5 is the CORE
-behaviour change: per-client DNSBL verdicts. NOT behaviour-preserving (by design) WHEN group
-policy is ON; MUST stay byte-identical when OFF. One commit, push directly.
+REVISED 2026-07-04: semantics are the SS2.1 resolution LADDER (default + exceptions,
+most-permissive override), not the old membership-narrows model; the cache scheme is the
+Phase-1 verdict — expected to be divergence-gated no_cache_store (a').
 
-WHY THIS PHASE EXISTS
-This wires the pieces: client IP -> unioned group mask (Phase 2 resolver), domain alias
-bitmask (Phase 3), manifest groups (Phase 4), into the operate() decision with the SS2.3
-precedence and the Phase-1 cache scheme. This is where correctness across the C-cache, ADR-10
-swaps, and CNAME chains must hold.
+ROLE
+Implementer in the per-ADR worktree on branch adr/25-group-policy-dnsbl. Phase 5 is the CORE
+behaviour change: per-client DNSBL verdicts. NOT behaviour-preserving WHEN Client Groups
+exist; MUST stay byte-identical with zero CGs. One commit. No sub-agents.
+
+PRE-FLIGHT
+Read RESULTS/04_Results.txt (manifest keys), RESULTS/01_Results.txt (chosen cache scheme +
+kill-threshold), RESULTS/02_/03_. Any missing => STOP and report. If 01 recommended
+REJECT/reduce, STOP and report (the orchestrator re-scopes).
 
 REQUIRED READING
-- FIRST, read .ADRs/ADR_25_Group_Policy_DNSBL/RESULTS/04_Results.txt (manifest keys to read)
-  AND RESULTS/01_Results.txt (the CHOSEN cache scheme + kill-threshold) AND RESULTS/02_/03_.
-  If any is missing, STOP and report. If 01 recommended REJECT, STOP and report.
-- .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md (SS2.1 resolution, SS2.3 contract).
+- ADR SS2.1 (the ladder — every rung), SS2.2 (a') (divergent mask + the warm-name flush
+  caveat), SS2.3 (contract incl. legacy bypass staying live THROUGH this phase).
 - src/usr/local/pkg/pfblockerng/pfb_unbound.py — operate() (~6049), get_q_ip (~2055), legacy
-  bypass (~6183), the block path + no_cache_store, decisionDB + the ADR-10 swap/clear
-  (search "decisionDB.clear"), inplace_cb_reply* logging.
-- tests/ Phase 2 oracle + CIDR resolver + bypass tests; tests/conftest.py.
-- CLAUDE.md — Test coverage (branch + before/after + BDD), Python standards.
+  bypass (~6183; UNTOUCHED this phase — retirement is Phase 6), the block path +
+  no_cache_store, decisionDB + the ADR-10 swap/clear (search "decisionDB.clear"),
+  inplace_cb_reply* logging.
+- tests/ Phase 2 oracle + CG resolver + bypass tests; tests/conftest.py.
+- CLAUDE.md — Test coverage (branch + before/after + BDD), Python standards (incl. the
+  no-fixed-time-waits rule for any async test).
 
 ACTION PLAN (ordered — tests alongside)
-1. Load policy-groups + alias->bit + CIDR map + allow/deny + per-group SCHEDULE RANGES +
-   default policy from the manifest (Phase 4 shape) at build/reload; expose them on the live
-   snapshot like other matcher data.
-2. Build gpClientGroups: client IP -> the set of CIDR-matched groups (Phase-2 resolver), which
-   is TIME-INDEPENDENT -> cache per IP and clear only on the ADR-10 atomic swap (alongside
-   decisionDB). Do NOT bake the schedule into this cache.
-2b. Per query, derive the client's ACTIVE groups = gpClientGroups[ip] filtered by
-   schedule_active(group): "now" within a serialised range (no schedule => always active). Add
-   a stdlib schedule_active() that evaluates the Phase-4 ranges against local wall-clock time
-   (mind the chroot TZ trap, ADR SS3 — evaluate in the TZ the manifest encodes, not naive UTC).
-   From the active set compute the unioned subscribed mask, allow/deny refs, strictest tier.
-3. In operate(): after the group-agnostic base match (domain alias bitmask + allow/deny
-   membership), apply SS2.1 membership-vs-enforcement THEN SS2.3 precedence:
-   - belongs to ZERO groups by CIDR -> DEFAULT group (all aliases, Block);
-   - belongs to >=1 group but NONE active now -> PASS (NOT the default);
-   - else over the ACTIVE groups: allow-hit -> PASS; else deny-hit -> BLOCK; else
-     (domain_mask & client_mask) -> BLOCK or WARN (strictest tier); else PASS.
-   WARN = let Unbound resolve normally AND emit the DNSBL log/report line (would-be block),
-   reusing the existing logging path with pfb_addr.
-4. Apply the Phase-1 cache scheme so a pass/warn client cannot let a block client escape, AND
-   so an off-schedule resolution cannot let an on-schedule query escape (e.g. no_cache_store on
-   policy-relevant names when group policy is on -> re-evaluated per query, so both the client
-   axis and the schedule time-boundary are respected with no cache flush). Keep decisionDB
-   storing the GROUP-AGNOSTIC base match (domain-keyed) — only the per-client/per-time action
-   layer is client-dependent.
-5. Preserve OFF-state: group policy disabled -> the new layer is bypassed entirely; legacy
-   gpListDB bypass continues to work (now expressible as a migrated Bypass group, but the old
-   path must remain correct for un-migrated runtime state / python_control).
-6. Tests (every branch; assert before THEN after per CLAUDE.md):
-   - OFF-state parity (oracle byte-identical).
-   - allow-wins; deny-block; subscribed-alias BLOCK; subscribed-alias WARN (resolves + logs);
-     no-match PASS; default group (unmatched IP) = all-aliases Block.
-   - union across two groups (subscriptions OR'd; allow>block>warn merge).
-   - migrated legacy bypass = PASS for its IPs.
-   - SCHEDULE (inject/fake "now"): in-window group ENFORCES vs out-of-window group is inert
-     (assert before AND after across the boundary, per CLAUDE.md); no-schedule => always-on;
-     belongs-but-all-inactive => PASS (NOT the all-Block default); dangling schedule ref =>
-     always-on.
-   - CNAME-chain decided against the single snapshot; gpClientGroups + decisionDB cleared on
-     swap (stale verdict not re-served).
-   - the cache-scheme invariant: model BOTH hazards at unit level (a pass client's resolution
-     does not change a block client's verdict; an off-schedule resolution does not change the
-     on-schedule verdict).
+1. LOAD from the manifest (Phase 4 shape): gp_groups (bit map), gp_divergent_mask,
+   gp_clients, gp_domain_rules, gp_bindings (+ serialised schedule ranges) at build/reload;
+   expose on the live snapshot like other matcher data. ALL keys optional — absent => the
+   whole layer is off (zero-CG parity).
+2. gpClientGroups: client IP -> CG set (Phase-2 resolver over gp_clients), TIME-INDEPENDENT
+   -> cached per IP, cleared ONLY on the ADR-10 atomic swap (alongside decisionDB). Do NOT
+   bake schedules into this cache.
+3. schedule_active(binding): stdlib, side-effect-free, no per-query I/O — "now" within the
+   serialised ranges, evaluated in the TZ the manifest encodes (chroot-TZ trap, ADR SS2.4;
+   follow Phase 4's chosen strategy). No ranges => always active.
+4. In operate(), after the group-agnostic base match (domain bitmask, Phase 3), implement
+   the SS2.1 LADDER exactly:
+   1. global user-allow (whiteDB bands) -> PASS  [existing, unchanged — pin it]
+   2. CG allow_domains hit -> PASS
+   3. CG deny_domains hit -> BLOCK (default shape)
+   4. per matched group bit: the client's ACTIVE bindings -> MOST-PERMISSIVE override
+      (Bypass > Warn > Block); Bypass -> PASS; Warn -> resolve + log (existing logging path
+      with pfb_addr; no new shape); Block -> that group's block shape. policy_only group
+      with no active binding for this client -> contributes nothing.
+   5. matched group with a global default (non-policy_only) and no binding -> its default
+      shape (today's behaviour).
+   6. -> PASS.
+5. CACHE SCHEME per the Phase-1 verdict — expected (a'):
+   - uniform name (domain_mask & gp_divergent_mask == 0, no CG domain-rule hit) -> cache
+     exactly as today;
+   - divergent name -> qstate.no_cache_store on EVERY verdict incl. PASS/Warn (this is the
+     bleed fix);
+   - the warm-name caveat: policy applies ride the ADR-10 swap (which clears Unbound's
+     relevant state per the Phase-1 findings) — implement whatever targeted flush Phase 1
+     prescribed for schedule edges; document what is and is not covered.
+   decisionDB keeps storing the GROUP-AGNOSTIC base match only.
+6. ZERO-CG state: the new layer bypassed entirely; legacy gpListDB bypass CONTINUES TO WORK
+   UNCHANGED (its retirement is Phase 6, not here — both paths coexist this phase, legacy
+   first to preserve its exact semantics).
+7. TESTS (every rung + branch; assert before THEN after per CLAUDE.md):
+   - zero-CG parity (oracle byte-identical; nothing gated: no no_cache_store on any name);
+   - ladder: global-allow wins over a Block binding; CG allow; CG deny; Block binding on a
+     policy_only group (blocks ONLY the CG's clients — assert the other client resolves);
+     Warn (resolves + logs); Bypass; MOST-PERMISSIVE across two CGs (Bypass+Block ->
+     resolves; Warn+Block -> resolves+logs); rung-5 default for an unmatched client;
+     no-match PASS;
+   - SCHEDULE (inject/fake "now"): in-window Block enforces vs out-of-window inert (before
+     AND after across the boundary); no-sched always-on; dangling ref always-on;
+   - DIVERGENCE: divergent name -> no_cache_store set on PASS and BLOCK verdicts; uniform
+     name -> not set; mask composition from the manifest honored;
+   - legacy gpListDB bypass still green (existing Phase-2 pins untouched);
+   - CNAME-chain decided against one snapshot; gpClientGroups + decisionDB cleared on swap;
+   - cache-invariant unit models: pass-client resolution does not change a block client's
+     verdict; off-schedule resolution does not change the on-window verdict.
 
 CONSTRAINTS
 - stdlib-only; 4-space; type-hint new fns; no bare except; new injected Unbound symbols (if
   any) declared in stubs/python/unboundmodule.py.
-- Do NOT re-key decisionDB per client OR per time (that defeats SS2.1). Per-client membership
-  lives in gpClientGroups (time-independent); the active-now filter is computed per query.
-- schedule_active() must be cheap and side-effect-free (no I/O per query); evaluate the
-  pre-serialised ranges from the snapshot only.
-- Keep block shapes unchanged; WARN invents no new shape.
+- Do NOT re-key decisionDB per client or per time. Membership cache is time-independent;
+  the active-now filter is per query.
+- Keep block shapes unchanged; Warn invents no new shape.
 
-VERIFICATION (must all pass before the phase is done)
-- python -m pytest -> green (all branch + transition + swap/CNAME + cache-invariant tests).
-- ruff / mypy tests/ -> clean.
-- diff-read: OFF-state decision path unchanged; the per-client layer is cleanly gated.
-
-EXPECTED RESULT
-Per-client DNSBL verdicts per SS2.1/SS2.3, correct across the C-cache, swaps, and CNAMEs;
-OFF-state identical to today.
+VERIFICATION
+- python -m pytest green (all rung/branch/transition/swap/CNAME/divergence tests);
+  ruff + mypy tests/ clean; diff-read: zero-CG path unchanged, layer cleanly gated.
 
 COMMIT (single)
-    pfblockerng: per-client DNSBL group-policy decision layer (ADR-25 P5)
-Push directly to adr/25-group-policy-dnsbl; open a PR only if the direct push is rejected.
+    pfblockerng: per-client DNSBL decision layer + divergence-gated caching (ADR-25 P5)
+Push directly to adr/25-group-policy-dnsbl.
 
 HANDOFF — write .ADRs/ADR_25_Group_Policy_DNSBL/RESULTS/05_Results.txt (plain .txt)
-Record: gpClientGroups shape + eviction/clear points; the schedule_active() design + how the
-chroot TZ trap is handled; the operate() membership-vs-enforcement + precedence wiring; the
-cache scheme as implemented + how BOTH the C-cache and schedule-boundary hazards are closed;
-which tests cover which branch; any deviation from Phase 1's chosen scheme (with reason);
-verification numbers; go-ahead Phase 6.
+Record: snapshot shapes + clear points; schedule_active() design + TZ handling; the ladder
+wiring; the cache scheme as implemented + what the warm-name flush covers; per-rung test
+map; any deviation from Phase 1's scheme (with reason); go-ahead Phase 6.

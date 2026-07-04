@@ -1,0 +1,61 @@
+================================================================================
+PHASE 1 PROMPT — Client Group entity + pfB_CG_* alias materialization (inert)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_55_Client_Groups_Group_Policy/ADR.md   (read SS0, SS2.1, SS2.5, SS2.7)
+================================================================================
+
+ROLE
+Implementer in worktree adr/55-client-groups-group-policy (off latest devel; ADR-54 must be
+landed on devel first — verify, abort with a note if not). One commit. No sub-agents.
+
+WHY THIS PHASE EXISTS
+Give the redesign its WHO with zero enforcement: the Client Group section, validation, the
+pfB_CG_{name} pfSense alias materialization, and the Legacy_Bypass migration. Rules come in
+Phase 2; pages in Phase 3. Landing this inert keeps the diff reviewable and the oracles
+trivially green.
+
+REQUIRED READING
+- ADR SS2.1 (fields incl. the base64 addresses idiom), SS2.2 (binding rows — schema only
+  this phase), SS2.4 (dnsbl bindings stored/locked), SS2.5 (migration + legacy bypass stays
+  live), SS2.7 (contract).
+- pfblockerng.inc alias-reconcile region (search "aliases/alias" wholesale rewrite,
+  ~:16943-16961 at authoring time) — your pfB_CG_* writer plugs in here.
+- pfb_is_managed_obj()/pfb_remove_managed_obj() + the deinstall sweep — CG aliases are
+  managed objects (pfB_ prefix covers them; verify the sweep catches pfB_CG_*).
+- pfblockerng_extra.inc: pfb_gp/pfb_gp_bypass_list registry entries (PfbConfig-registered —
+  read via PfbConfig::read, never direct config_get_path) + pfbng_text_area_decode().
+- The 31-char pf table-name arithmetic: pfB_CG_ (7) + name <= 31 => name <= 24.
+
+ACTION PLAN (ordered)
+1. Schema helpers for installedpackages/pfblockerngclientgroups (section-level foreign
+   keys, direct config_*_path — mirror ADR-54's helper pattern; add the section to the
+   config-gateway.md foreign-key list).
+2. Validation library (pure functions, PHPUnit-friendly): name (PFB_FILTER_WORD, <=24,
+   unique), addresses (per-line sanitize_ipaddr, v4+v6), alias refs (exist, host/network
+   type, non-pfB_), (CG,FG) binding uniqueness, binding field vocabularies (accept dnsbl
+   tokens, they are stored-but-locked). PFBL-01: add the new input-handling function(s) to
+   the sniff's scopeFunctions + fixtures.
+3. Alias materialization: enabled CG -> pfB_CG_{name} network-type alias (inline addresses
+   + nested alias names) via the reconcile writer; disabled/deleted CG -> alias dropped by
+   the same reconcile pass; deinstall sweep proven to remove them.
+4. Legacy_Bypass migration per SS2.5: enabled+non-empty pfb_gp_bypass_list -> CG
+   'Legacy_Bypass' (addresses verbatim; one Bypass binding per dnsbl FG, stored/locked).
+   DO NOT touch the python gpListDB path, the ini writer, or the pfb_gp keys — the legacy
+   mechanism stays the live enforcement until ADR-25. Idempotent; absent -> no-op.
+5. TESTS (red->green for new behaviour):
+   - validation matrix (each rule, valid+invalid cases, expected-vs-actual printed);
+   - alias materialization: enabled -> alias present with exact address set; disable ->
+     alias gone; nested-alias member passes through by NAME (pf resolves it);
+   - migration fixtures (present/absent/idempotent);
+   - ORACLES: ADR-54 goldens green; a CG-with-bindings fixture produces ZERO rule/manifest
+     change (the inert proof).
+6. Gates: full phpunit + pytest + linters + PHPCS (new sniff scope green).
+
+KILL-GATES
+- Zero enforcement: diff contains no pfb_firewall_rule() call site change, no manifest
+  change (orchestrator greps).
+- pfb_gp read via PfbConfig only.
+- Alias reconcile keeps non-pfB user aliases untouched (existing invariant test extended).
+
+HANDOFF (RESULTS/01_Results.txt)
+Helper/validator names, sniff scope diff, migration hook site, test names, gate outputs.

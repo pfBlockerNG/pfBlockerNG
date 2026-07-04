@@ -1,8 +1,14 @@
 ================================================================================
-PHASE 3 PROMPT — Build: alias-membership bitmask (feature-flagged; OFF => identical)
-Target model: Claude Sonnet 5
-ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS2.1, SS2.3 first)
+PHASE 3 PROMPT — Build: group-membership bitmask (feature-flagged; OFF => identical)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS0, SS2.1, SS2.3 first)
 ================================================================================
+
+REVISED 2026-07-04 terminology note: post-ADR-54, "DNSBL alias" == dnsbl FEED GROUP (the
+manifest 'group' field = DNSBL_{feedgroup name}, unchanged in shape). Bits are assigned one
+per dnsbl Feed Group. Everywhere this prompt says "alias", read "Feed Group"; the mechanics
+below are otherwise unchanged. "Groups absent from the manifest => off" remains the gate
+(the Phase-4 manifest keys do not exist yet when this phase runs).
 
 ROLE
 Work in the per-ADR worktree on branch adr/25-group-policy-dnsbl. Phase 3 changes the BUILD

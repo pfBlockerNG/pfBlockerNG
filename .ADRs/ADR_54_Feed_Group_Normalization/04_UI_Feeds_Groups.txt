@@ -1,0 +1,62 @@
+================================================================================
+PHASE 4 PROMPT — UI: Feeds/Groups editors (splice the UI/ reference implementations)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_54_Feed_Group_Normalization/ADR.md   (read SS2.6 first)  +  UI/ directory
+================================================================================
+
+ROLE
+Implementer in the adr/54-feed-group-normalization worktree. One commit. No sub-agents.
+
+WHY THIS PHASE EXISTS
+Phases 2-3 changed storage and pipeline with zero UI change. This phase ships the operator
+surface: the FEED entity editor, the Member-Feeds group editor, and the Feeds-page rework —
+from the reviewed reference implementations in .ADRs/ADR_54_Feed_Group_Normalization/UI/.
+Those files are the AUTHORITATIVE DESIGN: splice them; adapt mechanically to code drift;
+NEVER redesign silently (a needed design change goes in the handoff for the orchestrator).
+
+REQUIRED READING
+- .ADRs/ADR_54_Feed_Group_Normalization/UI/ — all three artifacts + their header comments.
+- pfblockerng_category_edit.php and pfblockerng_feeds.php as they exist NOW (post Phase 2-3).
+- CLAUDE.md test principle 4 (front-end changes REQUIRE front-end tests; Tier A always,
+  Tier B for new pages/multi-step flows) and the ADR-14 tier definitions in
+  docs/misc/architecture-notes.md.
+- tests/smoke/ui/test_feeds.py — the existing ui_render/ui_e2e patterns to extend.
+
+ACTION PLAN (ordered)
+1. NEW PAGE src/usr/local/www/pfblockerng/pfblockerng_feed_edit.php from
+   UI/pfblockerng_feed_edit.php. Wire the save handler to the Phase 2 helpers; PFBL-01
+   validation (header PFB_FILTER_WORD, per-family uniqueness incl. the SWC fixture, URL
+   validation reusing the existing checks, enabled-orphan refusal).
+2. SPLICE UI/category_edit_member_feeds.inc.php into pfblockerng_category_edit.php:
+   Member-Feeds multi-select replaces the Source-Definitions row grid; Default Action
+   retitle + help append; DNSBL action select gains 'Unbound (Policy-only)'. The old
+   act=add/addgroup deep links now pre-select members (and pre-create FEED entities on
+   save) exactly as the reference's header comment specifies.
+3. APPLY UI/feeds_page_changes.md to pfblockerng_feeds.php and pfblockerng_category.php:
+   Feed Group(s) column, legend rewording, orphan text-danger rendering, Feed-Settings
+   section removal, Default Action retitle, Feeds/Policies count columns (Policies renders
+   em-dash until ADR-55 lands — the count source is gated behind a function_exists check
+   the reference specifies).
+4. PORTS LOCKSTEP: pkg-plist + do-install for pfblockerng_feed_edit.php in ALL THREE ports
+   (pfSense-pkg-pfBlockerNG{,-devel,-nightly}); verify with build-pkg-portable.py --dry-run.
+5. TESTS:
+   - Tier A ui_render for every touched/new page (marker present, no PHP errors, no new
+     php_error.log line — never HTTP 200 alone).
+   - Tier B ui_e2e: create group -> pick members -> save -> reload -> persisted; one feed
+     member of two groups renders on both; enabled-orphan save refused with the exact
+     input_errors text; feed_edit create-custom-feed flow.
+   - PHPUnit for any extracted page decider (uniqueness/orphan validators are pure
+     functions — extract + test them).
+6. Gates: full suite + linters + Tier A locally via
+   python -m pytest tests/smoke/ui -m ui_render --override-ini="addopts=" (documented env
+   caveats apply).
+
+KILL-GATES
+- Diff vs UI/ references: every intentional divergence listed in the handoff with a reason;
+  unlisted divergence = bounce.
+- No new JS widget / no external asset (stock components only).
+- Tier B flows actually assert the BEFORE state (e.g. member absent) then the AFTER.
+
+HANDOFF (RESULTS/04_Results.txt)
+Splice map (reference file -> target file:line ranges), divergence list, ports diff, test
+names, gate outputs.

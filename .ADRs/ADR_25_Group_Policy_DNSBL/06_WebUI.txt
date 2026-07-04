@@ -1,80 +1,75 @@
 ================================================================================
-PHASE 6 PROMPT — Web UI: policy-group management
-Target model: Claude Sonnet 5
-ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS2, SS4 first)
+PHASE 6 PROMPT — UI unlock (dnsbl bindings in the ADR-55 pages) + legacy bypass handover
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS0, SS2.1, SS6 Phase 6)
 ================================================================================
 
+RE-SCOPED 2026-07-04: the policy pages shipped with ADR-55 (pfblockerng_group_policy.php +
+pfblockerng_group_policy_edit.php, from that ADR's UI/ references). This phase UNLOCKS their
+dnsbl half — now that Phases 4-5 enforce it — and RETIRES the legacy bypass.
+
 ROLE
-Work in the per-ADR worktree on branch adr/25-group-policy-dnsbl. Phase 6 adds the Web UI for
-managing policy-groups. One commit, push directly.
+Implementer in the per-ADR worktree on branch adr/25-group-policy-dnsbl. PRE-FLIGHT: read
+RESULTS/05_Results.txt (decision layer landed + scheme). Missing => STOP. One commit. No
+sub-agents.
 
 WHY THIS PHASE EXISTS
-Phases 4-5 made the engine config-driven. Admins need a page to define groups (CIDRs, alias
-subscriptions, tier, allow/deny) and to see that the legacy bypass migrated. Must render
-cleanly (ADR-14 Tier A is the PR gate).
+ADR-55 deliberately locked dnsbl-family bindings out of its UI and generator so no control
+ever shipped that silently did nothing (ADR-55 SS2.4). With the decision layer live, the
+lock comes off — and two enforcement paths for the same feature (legacy gpListDB + the CG
+engine) must become one.
 
 REQUIRED READING
-- FIRST, read .ADRs/ADR_25_Group_Policy_DNSBL/RESULTS/05_Results.txt AND RESULTS/04_Results.txt
-  — the config.xml keys + group shape the page reads/writes. If missing, STOP and report.
-- .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md
-- src/usr/local/www/pfblockerng/ — pfblockerng_dnsbl.php (the legacy pfb_gp / bypass textarea
-  to replace/link), pfblockerng_category_edit.php and a list+edit page pair for the add/edit
-  pattern; the menu/tab wiring; pfblockerng.inc page deciders (pfb_wizard_* style) for any
-  extractable pure logic.
-- tests/smoke/ui/ — test_render_smoke.py (ADR-14 Tier A pattern); tests/php/ for an extracted
-  page decider test.
-- CLAUDE.md — Naming (pfb_*/gp* page element ids), PHP standards, Web UI help text rules,
-  Smoke tests (ui_render gate).
+- ADR-55 ADR.md SS2.2/SS2.4 (binding vocabulary + the lock) and its Phase-2 validator +
+  Phase-3 pages as landed (read the actual src/ files, not the UI/ references).
+- pfblockerng.inc: the legacy GP ini write ([GP_Bypass_List], ~:6980-6995 at original
+  authoring) + pfb_gp/pfb_gp_bypass_list registry entries (pfblockerng_extra.inc) + the
+  DNSBL-page pointer text ADR-55 left.
+- pfb_unbound.py: gpListDB load (~:1347-1357) + the python_control addbypass/removebypass
+  path (~:3000-3090) — the transient-bypass contract you must preserve observably.
+- docs/misc/config-gateway.md — registered-key retirement procedure (delete via PfbConfig;
+  registry entry disposition documented there).
+- CLAUDE.md — Web UI help text rules; test principles (red->green for the handover).
 
 ACTION PLAN (ordered)
-1. Add a policy-group LIST page + an ADD/EDIT page (or a section within the DNSBL settings,
-   matching the existing alias/category UI pattern): fields = name, enabled, client CIDRs,
-   subscribed DNSBL_ aliases (multiselect of existing aliases), action tier (Block|Warn),
-   allow-domains, deny-domains, and a SCHEDULE dropdown populated from the existing pfSense
-   Schedules (config <schedules>) with a "none = always on" default entry + a link to
-   Firewall > Schedules to create one. Validate inputs server-side via the Phase-4 validators
-   (a chosen schedule must name an existing Schedule).
-2. Replace the legacy single bypass textarea with the migrated Bypass group (or clearly link
-   to the new page), preserving the migration from Phase 4. Help text matches neighbours;
-   document the allow>block>warn precedence + union semantics + the schedule active-window
-   meaning (out-of-window => the group is inert; a client governed only by inactive groups
-   resolves freely) briefly.
-3. Wire the menu/tab + privileges (etc/inc/priv if a new page needs an ACL entry, following
-   existing pfBlockerNG .priv.inc entries).
-4. Extract any non-trivial save/validate logic into a pure decider in pfblockerng.inc
-   (testable off-appliance) rather than inline in the page controller.
-5. Ports lockstep (added 2026-07-03 — MANDATORY): every new shipped www/ file gets a
-   pkg-plist line + do-install entry in ALL THREE ports
-   (pfSense-pkg-pfBlockerNG{,-devel,-nightly} in the FreeBSD-ports fork) — the smoke .pkg is
-   built from the plist, so an unlisted page 404s Tier A on the live VM. Verify with
-   build-pkg-portable.py --dry-run (copy the invocation from build-pkg-linux.yml).
-6. Tests: ADR-14 Tier A ui_render case for the new page (GET -> 200, body free of
-   Fatal/Parse/Warning/Notice/Uncaught, a page-specific marker present, no new php_error.log
-   line — register the page in tests/smoke/ui/test_render_smoke.py PAGE_TABLE); PLUS Tier B
-   ui_e2e — REQUIRED per CLAUDE.md test principle 4 (new page + multi-step flow): create a
-   group -> save -> reload -> assert it persisted (fields intact), and the migrated-bypass
-   link path. PHPUnit for the extracted decider (valid/invalid group; before/after).
+1. UI UNLOCK in pfblockerng_group_policy_edit.php: the binding Feed-Group select now offers
+   dnsbl-family groups (family-prefixed labels as the ipv4/ipv6 ones); the override select
+   gains Block / 'Warn (log only)' / Bypass for them; the Phase-2 validator's vocabulary
+   matrix extended (dnsbl overrides valid on dnsbl groups only; IP overrides rejected there
+   — table-driven, red->green). CG allow_domains/deny_domains help text updated: now
+   enforced (drop any "stored, not yet enforced" wording). In
+   pfblockerng_category_edit.php: the 'Unbound (Policy-only)' help drops its inert note.
+2. LEGACY HANDOVER (one enforcement path):
+   - python_control addbypass/removebypass [duration]: rewire to a transient CG-equivalent
+     entry (same observable behaviour: exact-IP bypass, optional duration expiry) riding the
+     Phase-5 engine — the command interface is UNCHANGED for callers.
+   - The [GP_Bypass_List] ini section + gpListDB load path: removed AFTER the migrated
+     Legacy_Bypass CG (ADR-55 SS2.5) is confirmed equivalent (test first: same IP set
+     bypasses via rung 4 with the legacy path disabled).
+   - pfb_gp / pfb_gp_bypass_list: retired per the config-gateway registered-key procedure
+     (PfbConfig::delete at migration finalisation; registry entries updated/documented).
+   - The DNSBL-page pointer text updated (no longer "was migrated" future tense).
+3. TESTS (red->green for every behaviour change):
+   - validator vocabulary matrix (dnsbl x override tokens, cross-family rejection);
+   - handover: fixture with legacy keys -> after this phase exactly ONE enforcement path;
+     bypass IPs still bypass (assert BEFORE via legacy path on pre-change code, AFTER via
+     CG path); python_control addbypass round-trip incl. duration expiry;
+   - Tier A ui_render on both policy pages + category_edit + dnsbl page;
+   - Tier B ui_e2e (REQUIRED): dnsbl binding create -> save -> reload -> persisted; the
+     Warn/Bypass options render for a dnsbl group and NOT for an ipv4 group.
+4. Ports lockstep re-check (no new files expected — verify no plist change needed).
+5. Gates: full phpunit + pytest + linters + PHPCS; Tier A locally.
 
-CONSTRAINTS
-- PHP tabs; PHP 8.3; no die()/exit() in lib code; new pfSense fns stubbed + doubled.
-- New input-handling save fn -> PFBL-01 validator + add to PHPCS scopeFunctions.
-- ui_render asserts MORE than HTTP 200 (marker + no new php_error.log) — never 200 alone.
-
-VERIFICATION (must all pass before the phase is done)
-- vendor/bin/phpunit -> green; php -l changed files; PHPStan + phpcs clean.
-- python -m pytest -> green.
-- ADR-14 ui_render for the new page green (run with SMOKE_ADMIN_PASSWORD set; else it SKIPs).
-- diff-read: page renders; legacy bypass path migrated/linked, not orphaned.
-
-EXPECTED RESULT
-An admin can create/edit policy-groups in the UI; the page renders clean under ui_render; the
-legacy bypass is surfaced as the migrated group.
+KILL-GATES
+- Exactly one enforcement path after the phase (grep: no gpListDB ini writer left).
+- python_control interface observably unchanged (round-trip test incl. duration).
+- Validator cross-family rejection table-driven and red->green proven.
 
 COMMIT (single)
-    pfblockerng: add DNSBL group-policy management UI (ADR-25 P6)
-Push directly to adr/25-group-policy-dnsbl; open a PR only if the direct push is rejected.
+    pfblockerng: unlock dnsbl policy bindings + retire legacy bypass (ADR-25 P6)
+Push directly to adr/25-group-policy-dnsbl.
 
 HANDOFF — write .ADRs/ADR_25_Group_Policy_DNSBL/RESULTS/06_Results.txt (plain .txt)
-Record: the new page file(s) + element ids; the extracted decider name/signature; the privilege
-entry; the ui_render marker used; how the legacy bypass is surfaced; verification numbers;
+Record: UI diffs (files + controls), validator matrix, the handover disposition of every
+legacy artifact (keys, ini section, gpListDB, python_control), test names, gate outputs,
 go-ahead for Phase 7.

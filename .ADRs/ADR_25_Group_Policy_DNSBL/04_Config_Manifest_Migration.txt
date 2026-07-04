@@ -1,93 +1,84 @@
 ================================================================================
-PHASE 4 PROMPT — Config schema + manifest extension + legacy migration (PHP)
-Target model: Claude Sonnet 5
-ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS1.3, SS1.4, SS2.1, SS2.3, SS2.4)
+PHASE 4 PROMPT — Manifest emission: CGs, bindings, divergent mask, schedules (PHP)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS0, SS2.1, SS2.2 (a'), SS6 Phase 4)
 ================================================================================
 
+RE-SCOPED 2026-07-04: the config schema + migration this phase originally owned moved to
+ADR-54 (feeds/feed groups) and ADR-55 (Client Groups/bindings) — the entities already exist
+in config.xml when this phase runs. This phase EMITS them to the chroot: the manifest
+additions the Phase-5 python decision layer consumes.
+
 ROLE
-Work in the per-ADR worktree on branch adr/25-group-policy-dnsbl. Phase 4 is the PHP side:
-config.xml schema, manifest extension, and legacy migration. Migration MUST be idempotent
-and a no-op when no legacy keys exist (backward compatible). One commit, push directly.
+Implementer in the per-ADR worktree on branch adr/25-group-policy-dnsbl (off latest devel).
+PRE-FLIGHT: verify ADR-54 AND ADR-55 are landed on devel (their sections exist in the
+codebase) and read RESULTS/01_Results.txt (spike verdict) + RESULTS/03_Results.txt (bit
+assignment). Any missing => STOP and report. One commit. No sub-agents.
 
 WHY THIS PHASE EXISTS
-The Python decision layer (Phase 5) reads policy-groups from the manifest. This phase defines
-how groups are stored (config.xml), how the legacy single-bypass migrates into the new model,
-and how groups + the alias->bit map + per-group subscribed bitmask + client-CIDR->group map +
-allow/deny lists + per-group schedule ranges + default-group policy are published into the
-manifest the chroot reads.
+The python module is chrooted and stdlib-only: everything the decision layer needs must ride
+the manifest, resolved and validated on the PHP side — client sets as LITERAL IPs/CIDRs,
+bindings with schedule ranges serialised TZ-explicitly, and the (a') divergent mask computed
+at build time.
 
 REQUIRED READING
-- FIRST, read .ADRs/ADR_25_Group_Policy_DNSBL/RESULTS/03_Results.txt — confirm the alias->bit
-  rule + bitmask field the manifest must mirror. If missing, STOP and report.
-- .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md (esp. SS2.4 schedule scope + SS3 chroot-TZ trap).
-- pfblockerng.inc: the manifest writer pfb_unbound_python_sources* (~6485-6650; the
-  $manifest_feeds rows at ~:6568 — keys {raw, feed, group, format_hint, provenance, log_flag}
-  + optional mode:'permit'); legacy GP read $pfb['dnsbl_gp'] /
-  $pfb['dnsbl_gp_bypass_list'] (~2107) and ini write (~6980-6995); pfb_filter / sanitize_ipaddr
-  usage; pfb_unbound_py_atomic_write (atomic publish).
-- pfblockerng_extra.inc + docs/misc/config-gateway.md — PfbConfig + pfb_cfg_registry():
-  pfb_gp / pfb_gp_bypass_list are REGISTERED fields (~:861/:870). MANDATORY (added
-  2026-07-03; this prompt predates ADR-29): read/delete registered keys ONLY via PfbConfig
-  (the RequireConfigGateway sniff is a CI-blocking gate); every NEW scalar key gets a registry
-  entry + `since` + round-trip test + the sniff's $registeredPaths + the config-gateway.md
-  inventory row; group ROWS are structural — section helpers, items nested under a `row`
-  listtag (the pfSense config-list trap); pfb_gp_bypass_list is a base64 textarea — decode
-  via pfbng_text_area_decode() (see the ini write ~:6982).
-- pfSense schedules: the <schedules>/<schedule>/<timerange> config shape and
-  filter_get_time_based_rule_status() (resolve from pfSense source per CLAUDE.md "Resolve
-  pfSense-provided PHP functions") — the time-range fields you must serialise.
-- tests/php/ — bootstrap.php, pfsense_doubles.php, an existing manifest/config test
-  (e.g. the DNSBL settings or wizard tests) for style.
-- CLAUDE.md — PHP standards; PFBL-01 sniff (add new in-scope input-handling fn to
-  scopeFunctions); "Resolving pfSense-provided PHP functions" (stub real fns).
+- ADR SS2.1 (the ladder + what each rung consumes), SS2.2 (a') (divergent-mask definition
+  incl. the CG-domain-rule axis), SS2.4 (chroot-TZ trap).
+- pfblockerng.inc: pfb_unbound_python_sources() + the manifest top-level config block
+  (search "tld_blacklist" for the shape); the ADR-31 'mode' precedent for additive-optional
+  keys (absent => legacy default) — FOLLOW IT: every new manifest key must be optional so an
+  older python module ignores it safely; pfb_unbound_py_atomic_write (atomic publish).
+- ADR-55 schema + Phase-1 helpers: installedpackages/pfblockerngclientgroups (fields,
+  base64 textareas via pfbng_text_area_decode(), binding rows); ADR-54's
+  pfblockerngfeedgroups for the dnsbl group list + the policy_only token.
+- pfSense <schedules>/<schedule>/<timerange> config shape +
+  filter_get_time_based_rule_status() — resolve from pfSense source per CLAUDE.md "Resolve
+  pfSense-provided PHP functions" (the time-range fields you must serialise).
+- PfbConfig rules: pfb_gp/pfb_gp_bypass_list are REGISTERED (PfbConfig::read only; the
+  RequireConfigGateway sniff blocks direct access); the ADR-54/55 sections are structural
+  foreign keys (section helpers).
+- tests/php/ bootstrap + an existing manifest test for style.
 
 ACTION PLAN (ordered)
-1. config.xml schema: define a policy-groups section (follow existing pfblockerng config
-   nesting + pfb_*/gp* naming). Each group: name, enabled, client CIDR list, subscribed
-   DNSBL_ aliases, action tier (Block|Warn), allow-domain list, deny-domain list, and an
-   OPTIONAL schedule reference (a pfSense Schedule name, like a firewall rule's `sched`).
-   Define the DEFAULT group policy (all aliases, Block) for unmatched clients.
-2. Migration: convert legacy pfb_gp + pfb_gp_bypass_list into a Bypass policy-group (empty
-   alias subscription, no deny rules, no schedule => always-on PASS for its CIDRs). Idempotent;
-   absent legacy keys => no group created, output byte-identical to today. Keep the legacy keys
-   readable for one release if needed (decide + document).
-3. Manifest extension: add to the $manifest the groups, the alias->bit map (mirroring Phase 3
-   exactly), per-group subscribed bitmask, client-CIDR->group map, per-group allow/deny lists,
-   the per-group SERIALISED SCHEDULE TIME RANGES (resolved from the <schedules> section into a
-   form the chroot can evaluate; TZ-explicit per ADR SS3 so the wall-clock window is correct;
-   a missing/dangling schedule ref => "always in force"), and the default-group policy.
-   Validate every CIDR (sanitize_ipaddr / pfb_filter) and every domain rule before it enters
-   the manifest (PFBL-01). With no groups configured, the manifest must be byte-identical to
-   today (no new keys, or keys that the OFF path ignores).
-4. Tests (PHPUnit, in tests/php/): schema decode (incl. the schedule ref); migration (legacy
-   present -> Bypass group; ASSERT before-state then after-state; absent -> no-op); manifest
-   shape before/after a group exists; the alias->bit map matches Phase 3; schedule
-   serialisation (ranges emitted; dangling/removed ref -> always-on); invalid CIDR/domain
-   rejected.
+1. MANIFEST ADDITIONS (all additive-optional; absent => today's behaviour):
+   - 'gp_groups': dnsbl Feed-Group name -> bit index. MIRROR Phase 3's assignment — one
+     source of truth: emit the map the build derived, never recompute independently.
+   - 'gp_divergent_mask': int per SS2.2 (a') — union of bits of (i) groups referenced by any
+     binding with an override, (ii) policy_only groups, (iii) groups referenced by any
+     SCHEDULED binding.
+   - 'gp_clients': per enabled CG {name, cidrs: [literal v4/v6 addresses/CIDRs]} — alias
+     refs resolved via the pfSense aliases table at build time; nested aliases resolved
+     recursively with a depth guard; FQDN members EXCLUDED with one notice line.
+   - 'gp_domain_rules': per CG {allow: [...], deny: [...]} (decoded textareas, validated).
+   - 'gp_bindings': per CG, list of {group_bit, override: 'block'|'warn'|'bypass'|'',
+     sched_ranges: [...]} — ranges TZ-EXPLICIT (emit the resolved timezone identifier + the
+     raw ranges, or pre-resolved absolute windows; pick ONE strategy, justify it against the
+     chroot-TZ trap in the handoff — the Phase-1 spike notes may already dictate one).
+   - Dangling schedule ref => empty ranges = always in force (fail-open) + notice; dangling
+     Feed-Group ref => binding skipped + notice; disabled CG/binding => omitted entirely.
+2. PFBL-01: every emission input validated (pfb_filter / sanitize_ipaddr) BEFORE it enters
+   the manifest; the emission function joins the sniff's scopeFunctions if new.
+3. TESTS (PHPUnit; red->green mandatory for each addition):
+   - ZERO CGs => manifest BYTE-IDENTICAL to the pre-phase golden (load-bearing oracle);
+   - each new key's shape on a populated fixture;
+   - divergent-mask composition: override-only, policy_only-only, schedule-only, mixed;
+   - alias resolution: nested alias, FQDN exclusion (+notice), depth guard;
+   - schedule serialisation: ranges, dangling ref => always-on, TZ-explicitness;
+   - disabled CG/binding omission.
+4. pytest: pin that a manifest WITHOUT the new keys still loads unchanged in the python
+   loader (additive-optional proof), if not already pinned.
+5. Gates: vendor/bin/phpunit, php -l, PHPStan, phpcs (PFBL-01), python -m pytest, linters.
 
-CONSTRAINTS
-- PHP tabs; PHP 8.3; no die()/exit() in lib code; new pfSense fns stubbed + doubled.
-- All new exec/json_encode/path-build inside an in-scope fn MUST be preceded by a validator
-  (PFBL-01) and the fn added to the PHPCS scopeFunctions allow-list.
-- Manifest stays chroot-relative; atomic publish via the existing writer.
-
-VERIFICATION (must all pass before the phase is done)
-- vendor/bin/phpunit -> green (new manifest/migration tests).
-- php -l on changed files; PHPStan clean; vendor/bin/phpcs clean (PFBL-01).
-- python -m pytest -> still green.
-- diff-read: with no groups configured, the emitted manifest is unchanged vs base.
-
-EXPECTED RESULT
-config.xml carries policy-groups; legacy bypass migrates to a Bypass group; the manifest
-exposes groups + alias->bit map + masks + CIDR map + allow/deny + default policy; OFF-state
-manifest unchanged.
+KILL-GATES (the orchestrator verifies adversarially)
+- Zero-CG manifest byte-identity (goldens).
+- Every new key absent-safe for an older python module (test-pinned).
+- No schedule EVALUATION in PHP beyond serialisation (evaluation is Phase 5, in-chroot).
+- pfb_gp keys read via PfbConfig only; no direct config_*_path on registered keys.
 
 COMMIT (single)
-    pfblockerng: add DNSBL group-policy config + manifest + migration (ADR-25 P4)
-Push directly to adr/25-group-policy-dnsbl; open a PR only if the direct push is rejected.
+    pfblockerng: emit group-policy manifest (CGs, bindings, divergent mask) (ADR-25 P4)
+Push directly to adr/25-group-policy-dnsbl.
 
 HANDOFF — write .ADRs/ADR_25_Group_Policy_DNSBL/RESULTS/04_Results.txt (plain .txt)
-Record: the config.xml keys + nesting (incl. the schedule ref); the migration rule + legacy-key
-disposition; the exact manifest keys/shape the Python layer must read (groups, alias->bit,
-subscribed mask, CIDR map, allow/deny, SERIALISED SCHEDULE RANGES + TZ form + dangling-ref
-fallback, default policy); the validators used; verification numbers; go-ahead for Phase 5.
+Record: the manifest key inventory + exact shapes Phase 5 must read; the TZ strategy chosen
++ why; the notice inventory; validators used; test names; gate outputs; go-ahead for Phase 5.

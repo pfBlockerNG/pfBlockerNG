@@ -1,8 +1,15 @@
 ================================================================================
 PHASE 2 PROMPT — Prep: extract + pin current behaviour; CIDR resolver (behaviour-preserving)
-Target model: Claude Sonnet 5
-ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS1, SS2.1, SS2.3 first)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS0, SS1, SS2.1, SS2.3 first)
 ================================================================================
+
+REVISED 2026-07-04 terminology note: the resolver this phase adds maps a client IP to its
+set of CLIENT GROUPS (the ADR-55 entity) — where this prompt says "group-mask"/"policy
+group", read "Client Group set" (the mask/bit machinery is per dnsbl FEED GROUP and lives in
+Phase 3; the resolver here is IP -> CG set, pure, unwired). Mechanics otherwise unchanged.
+This phase runs AFTER ADR-54/55 land (SS0 order); it may run before or after Phase 1's spike
+verdict since it is behaviour-preserving either way.
 
 ROLE
 Work in the per-ADR worktree on branch adr/25-group-policy-dnsbl. Phase 2 is

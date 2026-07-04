@@ -1,0 +1,71 @@
+================================================================================
+PHASE 2 PROMPT — Scoped rule generation + dead-override validation
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_55_Client_Groups_Group_Policy/ADR.md   (read SS2.2-2.4, SS2.7)
+================================================================================
+
+ROLE
+Implementer in the adr/55-client-groups-group-policy worktree. One commit. No sub-agents.
+
+WHY THIS PHASE EXISTS
+Materialize the IP-side semantics: every enabled binding on an ipv4/ipv6 Feed Group emits
+rules scoped to the Client Group, riding the EXISTING seams — pfb_firewall_rule()'s custom
+src/dst parameters, ADR-41's bucket splice, the native rule `sched` field, the existing
+change gate. dnsbl bindings are ignored by the generator (SS2.4).
+
+REQUIRED READING
+- ADR SS2.3 (shapes, ordering, dead-override, conflicts=first-match, rule counts).
+- pfblockerng.inc: pfb_firewall_rule() (the $asrc_out/$adest_in/$anot_*/$agateway_* params
+  and each action case), the IPv4/v6 call-site loop (search "pfb_firewall_rule("), the
+  ORDER table + pfb_build_autorule_list() docblock, pfb_tracker() (descr-derived ids),
+  pfb_diff_managed_rules() (reconcile logging).
+- .ADRs/ADR_41_Immutable_User_Firewall_Rules/ADR.md SS0/SS2/SS3 + its RESULTS/05 — the
+  bucket contract you must not break.
+- tests/php/AutoruleListOracleTest.php — extend, do not fork.
+- pfSense schedules: rules carry `sched` (schedule name) evaluated by
+  filter_get_time_based_rule_status(); a rule with a dangling sched name — check pfSense
+  source behaviour and mirror it (we emit without sched on dangling ref, SS2.2).
+
+ACTION PLAN (ordered)
+1. GENERATOR: after the existing per-group rule emission, iterate enabled CGs x enabled
+   ipv4/ipv6 bindings: action = action_override ?: FG default_action; skip if resolved
+   action is Alias_*/Disabled and no override (policy-only FG with default-inherit binding
+   emits NOTHING — assert); build via pfb_firewall_rule() with:
+   - outbound shapes: asrc_out = pfB_CG_{cg} (invert flags NOT exposed on bindings),
+   - inbound shapes: adest_in = pfB_CG_{cg},
+   - log = log_override ?: group logging; gateway/ports/proto inherit the FG's Advanced
+     fields exactly as the default rules do (one code path, not a fork);
+   - rule descr: pfB_{fg}_CG_{cg}{$pfb['suffix']} (deterministic tracker; pfB_ prefix keeps
+     pfb_is_managed_obj() ownership; assert <= the descr length the tracker/UI tolerate);
+   - sched = binding sched when the named schedule exists, else omit + notice.
+   Binding rules append INTO the same accumulators (deny_inbound etc.) BEFORE that FG's
+   default rule is appended, so within-bucket order = edges before defaults (SS2.3).
+2. VALIDATOR (save-time, shared by Phase 3 UI): the dead-override matrix — resolved
+   Deny_* override on a Permit_*-default FG => input_errors with the EXACT SS2.3 message.
+   Permit-override-on-Deny-default is allowed (the carve-out case). Encode as a pure
+   function returning [ok|error, message]; table-driven.
+3. RULE-COUNT helper: pure function (config -> per-CG and total generated-rule counts,
+   accounting for Both = 2 shapes, families, float vs interface stamping) for the Phase 3
+   pages.
+4. CHANGE GATE: prove binding add/edit/remove flows through the existing
+   $orig_rules_nocreated != $new_rules_nocreated comparison -> filter_configure() flag;
+   no new filter_configure() call sites.
+5. TESTS (red->green each): the SS7 matrix — {Deny,Permit,Match} x {In,Out,Both} x {v4,v6}
+   x {override, inherit} x {sched,none}; policy-only FG + binding (only scoped rules
+   exist); disabled CG/binding emits nothing (before+after); dangling FG ref skipped with
+   notice; dangling sched emits unscheduled; ADR-41 oracle extended: binding rules land in
+   the correct buckets for order_0..4 and user rules stay immutable; first-match conflict
+   fixture: client in 2 CGs, Permit-override + Deny-default -> pass rule precedes (assert
+   final array order).
+6. Gates: full phpunit + linters; pytest untouched (prove no python/manifest diff).
+
+KILL-GATES
+- Scoped shapes reuse pfb_firewall_rule() — the orchestrator rejects a parallel rule
+  builder.
+- dnsbl bindings provably ignored (fixture with one -> zero rules).
+- Zero-CG fixture byte-identical to ADR-54 goldens.
+- Descr/tracker determinism: same config twice -> identical filter/rule array.
+
+HANDOFF (RESULTS/02_Results.txt)
+Generator location, validator + matrix table, rule-count helper, test names, gate outputs,
+any pfSense sched-behaviour findings (with source refs) that affected step 1.

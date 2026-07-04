@@ -1,0 +1,55 @@
+================================================================================
+PHASE 3 PROMPT — Group Policy pages (splice the UI/ reference implementations)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_55_Client_Groups_Group_Policy/ADR.md   (read SS2.6)  +  UI/ directory
+================================================================================
+
+ROLE
+Implementer in the adr/55-client-groups-group-policy worktree. One commit. No sub-agents.
+
+WHY THIS PHASE EXISTS
+Ship the operator surface for Phases 1-2 from the reviewed reference implementations in
+.ADRs/ADR_55_Client_Groups_Group_Policy/UI/. Those files are the AUTHORITATIVE DESIGN:
+splice/copy them; adapt mechanically to drift; never redesign silently — needed design
+changes go in the handoff for the orchestrator to approve.
+
+REQUIRED READING
+- UI/pfblockerng_group_policy.php, UI/pfblockerng_group_policy_edit.php,
+  UI/dnsbl_page_changes.md — including every header comment (they carry wiring notes).
+- ADR SS2.4 (dnsbl LOCKED: the FG select offers ipv4/ipv6 groups only this phase) and
+  SS2.3 (validator + rule-count helpers from Phase 2 — the pages CALL them, they do not
+  reimplement).
+- pfblockerng_category.php — the list-page pattern (panel, sortable table, AJAX quick-edit
+  save loop, pfb_print_pending_changes_box) your list page mirrors.
+- ADR-14 tiers in docs/misc/architecture-notes.md + tests/smoke/ui/ patterns.
+
+ACTION PLAN (ordered)
+1. Copy UI/pfblockerng_group_policy.php -> src/usr/local/www/pfblockerng/; wire the AJAX
+   enabled quick-edit to the Phase 1 helpers; rule-count footer from the Phase 2 helper.
+2. Copy UI/pfblockerng_group_policy_edit.php -> src/…; wire save to Phase 1 validators +
+   Phase 2 dead-override validator (server-side; the exact message surfaces as
+   input_errors); repeatable binding rows per the reference (stock row-helper only);
+   schedule options from config schedules/schedule + 'none (always)'.
+3. Apply UI/dnsbl_page_changes.md: replace the legacy Group Policy section with the pointer
+   StaticText; sweep EVERY page's $tab_array to add 'Group Policy' after 'Feeds' (grep for
+   "display_top_tabs" across www/pfblockerng/ — list all touched files in the handoff).
+4. Ports lockstep for BOTH new pages (three ports; build-pkg-portable.py --dry-run).
+5. TESTS:
+   - Tier A ui_render: both new pages + pfblockerng_dnsbl.php + one swept page (marker,
+     no PHP errors, no new php_error.log).
+   - Tier B ui_e2e: create CG (addresses + one alias) -> add binding -> save -> reload ->
+     persisted; dead-override attempt -> exact refusal text rendered; Legacy_Bypass
+     (migrated fixture) renders correctly; binding FG select contains NO dnsbl group.
+   - PHPUnit: any page-level pure deciders extracted (option-list builders, count
+     formatting).
+6. Gates: full suite + linters; Tier A run locally per CLAUDE.md.
+
+KILL-GATES
+- Diff vs UI/ references: every divergence listed+justified in the handoff; unlisted =
+  bounce.
+- No dnsbl FG reachable from the binding UI (Tier B asserts).
+- Stock components only; no new JS beyond what the references carry (which is none beyond
+  pfSense's own row-helper).
+
+HANDOFF (RESULTS/03_Results.txt)
+Splice/copy map, tab-sweep file list, divergences, ports diff, test names, gate outputs.

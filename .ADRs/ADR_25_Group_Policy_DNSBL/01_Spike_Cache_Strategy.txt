@@ -46,20 +46,38 @@ ACTION PLAN (ordered)
    or a manual flip of "active now") and confirm whether the chosen scheme closes it. The
    group-policy feature folds in DNSBL-blocking-by-schedule (issue #384), so the cache scheme
    must hold across BOTH the client axis and the time axis.
-2. EVALUATE candidate schemes from ADR SS2.2, each with a short written argument + a measured
-   number where feasible:
-   (a) no_cache_store on every policy-relevant name when group policy is on (listed names
-       re-enter operate() per query; non-listed cache normally).
-   (b) per-group-mask keying / selective store so identical group-masks share cache.
-   (c) Unbound `views` + `access-control-view` (client CIDR -> view, per-view local data) —
-       check feasibility AND memory at blocklist scale (this is why pfBlockerNG left
-       local-zones); most likely reject WITH measured/estimated evidence.
+2. EVALUATE candidate schemes from ADR SS2.2 (REVISED 2026-07-04 — re-read it first; the
+   candidate set changed), each with a short written argument + a measured number where
+   feasible:
+   (a') PREFERRED CANDIDATE: divergence-gated no_cache_store — only names whose verdict can
+        DIVERGE (across clients or time) skip the message cache; the build publishes a
+        divergent mask; zero Client Groups => byte-identical caching. THE central number of
+        this spike is (a')'s pass-path cost: a divergent listed name PASS-resolved per query
+        — how far does Unbound's rrset cache bound the repeat cost (local assembly vs a
+        network round-trip)? Also close the flush caveat: no_cache_store cannot evict an
+        already-warm name — confirm the ADR-10 swap clear covers the policy-apply path, and
+        prototype a targeted flush (unbound-control flush / flush_zone) for a schedule edge
+        on a warm name.
+   (a)  plain no_cache_store on every policy-relevant name — the degenerate simplicity
+        baseline; measure it to quantify what (a')'s gating buys.
+   (b)  LAST-RESORT FALLBACK (assess, do NOT build): a module-level RESOLUTION cache —
+        stash qstate.return_msg at MODDONE keyed (qname,qtype,qclass), TTL-expiring,
+        verdict-independent (per-client verdict applied on top at answer time). Enumerate
+        the real complexity with evidence: DNSSEC (RRSIGs/security status preservation vs
+        refuse-to-stash-validated), DO/CD flag variance in the key, re-running the
+        per-client CNAME walk when serving from the stash. Numbers only as far as needed to
+        judge whether it could rescue a failed (a').
+   (c)  Unbound `views` + `access-control-view` (client CIDR -> view, per-view local data) —
+        check feasibility AND memory at blocklist scale (this is why pfBlockerNG left
+        local-zones); most likely reject WITH measured/estimated evidence.
 3. BENCHMARK the viable candidate(s): warn/pass-client query latency on listed vs unlisted
-   names, and memory vs #groups/#aliases. Define METHODOLOGY (what is measured, how, sample
-   size) and a KILL-THRESHOLD (e.g. "median added latency on listed names > X ms, or memory
-   > Y MB at N groups => reduce/reject").
-4. DECIDE: pick the scheme Phases 3-7 will adopt, or recommend reducing scope (action-tier
-   only, no per-feed subsetting) or rejecting the ADR. State the decision and the numbers.
+   names (for (a'): divergent vs uniform vs unlisted), and memory vs #groups. Define
+   METHODOLOGY (what is measured, how, sample size) and a KILL-THRESHOLD (e.g. "median added
+   latency on divergent names > X ms, or memory > Y MB at N groups => fall back to (b) /
+   reduce / reject").
+4. DECIDE: pick the scheme Phases 3-7 will adopt, or recommend reducing scope (e.g.
+   Bypass-only overrides — the shapes the surviving scheme supports) or rejecting this ADR's
+   decision layer (ADR-54/55 stand regardless). State the decision and the numbers.
 
 CONSTRAINTS
 - No production code changes to src/ in this phase (a throwaway harness is fine; mark it

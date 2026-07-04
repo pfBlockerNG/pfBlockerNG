@@ -1,0 +1,78 @@
+================================================================================
+PHASE 3 PROMPT — Single-download + per-(feed,group) materialization (behaviour-preserving)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_54_Feed_Group_Normalization/ADR.md   (read SS2.3, SS2.5, SS2.7 first)
+================================================================================
+
+ROLE
+Implementer in the adr/54-feed-group-normalization worktree. One commit. No sub-agents.
+Phase 1 oracles green at the end (with the ONE documented exception below).
+
+WHY THIS PHASE EXISTS
+With storage normalized (Phase 2), make the pipeline honest about identity: download, hash
+(ADR-42 sidecars), and parse ONCE per feed; derive the per-(feed,group) class-folder files
+from the shared artifact. This kills the double-download and the same-header-collision
+class while keeping every downstream consumer (ADR-11 aggregates, ADR-53 suppression,
+ADR-40 gates, manifest) bit-stable.
+
+REQUIRED READING
+- ADR SS2.3 (derivation + cadence rule), SS2.5 (Blacklist emission), SS1.4 (consumers).
+- pfblockerng.inc: the download loop (per-row fetch + ADR-42 sidecar sites — search
+  "xxhash128" and pfb_update_check/pfb_download), pfb_determine_list_detail() (class-folder
+  routing), pfb_aggregate_member_list() (ADR-11 seam), the ADR-53 suppression rewrite
+  sites (deny folder), the Blacklist synthesis block (search "Add DNSBL Category").
+- docs/misc/architecture-notes.md — "Change detection / content hashing" (ADR-42 contract:
+  conditional-GET-first, sidecar tagging) and ADR-40 section (membership gate; the
+  filter_configure() prohibition on the content path).
+- pfblockerng.php cron path — where per-group cron/dow hour-gates run (the cadence rule
+  hooks in here: a feed is due iff ANY member group's cadence marks it due).
+
+ACTION PLAN (ordered)
+1. RAW ARTIFACT PER FEED: one fetch + one sidecar per fid (keyed by the feed's on-disk
+   header name, which Phase 2 made unique per family). The conditional-GET-first contract
+   and hash comparison are per-feed now — NOT per (group,row). Legacy sidecars for
+   duplicated rows: adopt the newest, log once.
+2. PER-(FEED,GROUP) DERIVATION: the class-folder member file for group G's feed F is
+   derived (copy/transform) from F's parsed artifact into G's default_action class folder.
+   A feed in a Deny-group AND a Permit-group lands in both folders from one artifact.
+   Preserve the existing per-file naming that ADR-11/53 glob/consume — resolve the exact
+   naming from pfb_determine_list_detail() and keep it.
+3. RE-SEAM CONSUMERS (no behaviour change):
+   - ADR-11: pfb_aggregate_member_list() reflects the derived per-(feed,group) files.
+   - ADR-53: suppression still rewrites deny-folder member files only; a shared feed's
+     PERMIT-folder copy is untouched (test this exact case).
+   - ADR-40: table membership derives from member unions; gates/mirrors keyed per table
+     name, unchanged.
+   - Manifest: one entry per (feed,group) edge (this is what today's per-row loop already
+     produced — assert byte-equality on the migrated fixture).
+4. CADENCE (SS2.3): a shared feed downloads at the most frequent member-group cadence;
+   rides the existing ADR-43 cron verb; NO new ledger jobs. Each group's rebuild still
+   rides its own ADR-40 gate.
+5. BLACKLIST EMISSION (SS2.5): the page's save reconciles feed entities
+   (managed_by=blacklist) + the provider default group instead of the update-time
+   synthesis; deselect-while-referenced-by-user-groups is refused with a listing. The
+   update-loop synthesis block is removed (its output now comes from the normal path).
+   Zero-config behaviour identical (oracle).
+6. TESTS (red->green for the new behaviours, oracle-green for the rest):
+   - single-download: duplicated-feed fixture fetches ONCE (count fetches via the test
+     double), both groups' folders populated; SWC-suffix fixture proves no collision.
+   - dual-class derivation: deny+permit shared feed -> both folders, suppression touches
+     deny copy only.
+   - cadence: 01hour+EveryDay groups sharing a feed -> feed due hourly; EveryDay group's
+     table rebuilds only when its membership changes (ADR-40 gate observed).
+   - Blacklist: emission reconcile fixtures (select/deselect/refusal), zero-config oracle.
+   ORACLE EXCEPTION: the Phase 1 golden that pinned duplicate rows as two fetches now
+   legitimately changes (one fetch, same downstream artifacts). Update THAT golden in the
+   SAME commit with an explicit note in the test explaining why — everything else stays
+   byte-identical.
+7. Gates: full phpunit + pytest + linters.
+
+KILL-GATES
+- Fetch-count assertions (1 per fid) — the core claim of the phase.
+- ADR-53 permit-copy-untouched test.
+- No filter_configure() introduced on the content-only path (grep the diff).
+- Manifest bytes unchanged for the migrated fixture.
+
+HANDOFF (RESULTS/03_Results.txt)
+Artifact layout (raw/parsed/per-edge paths), consumer re-seam inventory, the one golden
+update + why, gate outputs.

@@ -1,0 +1,61 @@
+================================================================================
+PHASE 1 PROMPT — Pin the zero-change oracles (behaviour-preserving)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_54_Feed_Group_Normalization/ADR.md   (read SS0, SS2.7, SS6 first)
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch
+adr/54-feed-group-normalization (off the latest devel; create if absent). One commit,
+pushed to the branch. You implement yourself with Read/Edit/Write/Bash — you NEVER spawn
+sub-agents. Follow CLAUDE.md in full (tabs in PHP, test principles, commit style).
+
+WHY THIS PHASE EXISTS
+ADR-54 restructures the feed/group storage that every download/parse/table/rule path reads.
+The ONLY safe way to do that is to first freeze today's observable outputs as machine-checked
+golden files, so Phases 2-3 can prove "byte-identical" instead of asserting it. This phase
+ships NO production change — tests/fixtures only.
+
+REQUIRED READING
+- .ADRs/ADR_54_Feed_Group_Normalization/ADR.md (SS1, SS2.7).
+- tests/php/README.md + tests/php/bootstrap.php + tests/php/pfsense_doubles.php — how the
+  real pfblockerng.inc is loaded off-appliance (shims + doubles; never require pfSense).
+- pfblockerng.inc: pfb_unbound_python_sources() (manifest builder), the DNSBL update loop
+  around the `$lists` assembly (search "Add DNSBL Category to '$lists array'"), the IPv4/v6
+  list loop feeding pfb_firewall_rule(), pfb_build_autorule_list(), pfb_determine_list_detail().
+  Resolve fresh line anchors yourself — do not trust stale numbers.
+- tests/php/AggregateMemberListTest.php and AutoruleListOracleTest.php — existing oracle
+  patterns to imitate (fixture config in, frozen expected artifact out).
+
+ACTION PLAN (ordered)
+1. Build a FIXTURE CONFIG (PHP array, tests/php/fixtures/) exercising every shape SS2.7
+   protects: >=2 IP groups (one Deny_*, one Permit_* with Adv in/outbound fields set, one
+   Alias_Native), >=2 DNSBL groups (different logging modes, one order=primary, one with a
+   per-row Permit feed [ADR-31], one custom list), a feed DUPLICATED across two groups
+   (same header+url), and a Blacklist provider selection (synthesized rows). Use inert data
+   (RFC 5737/3849 IPs, uuid-*.com domains).
+2. For that fixture, capture and FREEZE as golden files:
+   a. the manifest array pfb_unbound_python_sources() emits (JSON-normalized),
+   b. the per-group $lists assembly the DNSBL update loop produces,
+   c. the class-folder routing decisions (pfb_determine_list_detail() output per group),
+   d. the generated rule templates (the pfb_firewall_rule() accumulators) and the spliced
+      filter/rule array from pfb_build_autorule_list() for two pass_order values,
+   e. the pf alias definitions written to aliases/alias (names/urls only).
+   Where a builder is not extractable off-appliance without moving production code, capture
+   the NEAREST extractable boundary and document the residue (the smoke covers it live).
+3. Write PHPUnit tests asserting fixture -> golden equality, with AssertJ-style
+   expected-vs-actual diffs on failure (CLAUDE.md "On failure, print expected vs actual").
+4. Run every gate: vendor/bin/phpunit, php -l on touched files, PHPStan, PHPCS,
+   markdownlint (if docs touched). All green.
+
+KILL-GATES (the orchestrator verifies these adversarially — make them easy to check)
+- The oracle tests FAIL if any captured artifact changes by one byte (prove by mutating a
+  fixture field in a scratch run and watching red; revert).
+- No file under src/ is modified.
+- The duplicated-feed fixture appears in the goldens EXACTLY as today's duplication behaves
+  (two entries), NOT deduplicated — Phase 3 changes behaviour-internals, the goldens pin
+  today.
+
+HANDOFF (RESULTS/01_Results.txt, committed)
+State: fixture path, golden paths, what each golden pins, any non-extractable residue left
+to the smoke, and the exact commands to re-run the suite.
