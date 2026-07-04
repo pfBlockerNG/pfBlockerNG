@@ -17983,27 +17983,23 @@ function pfblockerng_sync_on_changes() {
 }
 
 
-/* Do the actual XMLRPC sync */
-function pfblockerng_do_xmlrpc_sync($sync_to_ip, $port, $protocol, $username, $password, $synctimeout) {
-	global $g;
-	$success = TRUE;
-
-	// Take care of IPv6 literal address
-	if (is_ipaddrv6($sync_to_ip)) {
-		$sync_to_ip = "[{$sync_to_ip}]";
-	}
-
+/*
+ * Bare 'installedpackages/*' section names synced between XMLRPC nodes.
+ * $include_interfaces adds the General/IP/DNSBL "Tab Customizations"
+ * sections ahead of the always-synced list.
+ */
+function pfblockerng_sync_sections($include_interfaces) {
 	$sections = [];
 
-	// If User Disabled, remove 'General/IP/DNSBL Tab Customizations' from Sync
-	if (config_get_path('installedpackages/pfblockerngsync/config/0/syncinterfaces') != 'on') {
+	if ($include_interfaces) {
 		$sections = array_merge($sections, [
 			'pfblockerng',
 			'pfblockerngipsettings',
 			'pfblockerngdnsblsettings'
 		]);
 	}
-	$sections = array_merge($sections, [
+
+	return array_merge($sections, [
 		'pfblockernglistsv4',
 		'pfblockernglistsv6',
 		'pfblockerngreputation',
@@ -18021,6 +18017,20 @@ function pfblockerng_do_xmlrpc_sync($sync_to_ip, $port, $protocol, $username, $p
 		'pfblockerngglobal',
 		'pfblockerngsafesearch'
 	]);
+}
+
+/* Do the actual XMLRPC sync */
+function pfblockerng_do_xmlrpc_sync($sync_to_ip, $port, $protocol, $username, $password, $synctimeout) {
+	global $g;
+	$success = TRUE;
+
+	// Take care of IPv6 literal address
+	if (is_ipaddrv6($sync_to_ip)) {
+		$sync_to_ip = "[{$sync_to_ip}]";
+	}
+
+	// If User Disabled, remove 'General/IP/DNSBL Tab Customizations' from Sync
+	$sections = pfblockerng_sync_sections(config_get_path('installedpackages/pfblockerngsync/config/0/syncinterfaces') != 'on');
 
 	/* xml will hold the sections to sync */
 	$xml = array();
@@ -18063,31 +18073,10 @@ function pfblockerng_plugin_xmlrpc_send() {
 		'installedpackages/pfblockerngsync/config/0/varsynconchanges'
 	];
 	// If User Disabled, remove 'General/IP/DNSBL Tab Customizations' from Sync
-	if (config_get_path('installedpackages/pfblockerngsync/config/0/syncinterfaces') != 'on') {
-		$section_paths_temp = array_merge($section_paths_temp, [
-			'installedpackages/pfblockerng',
-			'installedpackages/pfblockerngipsettings',
-			'installedpackages/pfblockerngdnsblsettings'
-		]);
+	$sections = pfblockerng_sync_sections(config_get_path('installedpackages/pfblockerngsync/config/0/syncinterfaces') != 'on');
+	foreach ($sections as $section) {
+		$section_paths_temp[] = "installedpackages/{$section}";
 	}
-	$section_paths_temp = array_merge($section_paths_temp, [
-		'installedpackages/pfblockernglistsv4',
-		'installedpackages/pfblockernglistsv6',
-		'installedpackages/pfblockerngreputation',
-		'installedpackages/pfblockerngtopspammers',
-		'installedpackages/pfblockerngafrica',
-		'installedpackages/pfblockerngantarctica',
-		'installedpackages/pfblockerngasia',
-		'installedpackages/pfblockerngeurope',
-		'installedpackages/pfblockerngnorthamerica',
-		'installedpackages/pfblockerngoceania',
-		'installedpackages/pfblockerngsouthamerica',
-		'installedpackages/pfblockerngproxyandsatellite',
-		'installedpackages/pfblockerngdnsbl',
-		'installedpackages/pfblockerngblacklist',
-		'installedpackages/pfblockerngglobal',
-		'installedpackages/pfblockerngsafesearch'
-	]);
 
 	$section_paths = [];
 	foreach ($section_paths_temp as $path) {
@@ -18106,27 +18095,10 @@ function pfblockerng_plugin_xmlrpc_recv($new_sections) {
 		return [];
 	}
 
-	$section_paths = [
-		'installedpackages/pfblockerng',
-		'installedpackages/pfblockerngipsettings',
-		'installedpackages/pfblockerngdnsblsettings',
-		'installedpackages/pfblockernglistsv4',
-		'installedpackages/pfblockernglistsv6',
-		'installedpackages/pfblockerngreputation',
-		'installedpackages/pfblockerngtopspammers',
-		'installedpackages/pfblockerngafrica',
-		'installedpackages/pfblockerngantarctica',
-		'installedpackages/pfblockerngasia',
-		'installedpackages/pfblockerngeurope',
-		'installedpackages/pfblockerngnorthamerica',
-		'installedpackages/pfblockerngoceania',
-		'installedpackages/pfblockerngsouthamerica',
-		'installedpackages/pfblockerngproxyandsatellite',
-		'installedpackages/pfblockerngdnsbl',
-		'installedpackages/pfblockerngblacklist',
-		'installedpackages/pfblockerngglobal',
-		'installedpackages/pfblockerngsafesearch'
-	];
+	$section_paths = [];
+	foreach (pfblockerng_sync_sections(TRUE) as $section) {
+		$section_paths[] = "installedpackages/{$section}";
+	}
 
 	$ret = [
 		'xmlrpc_recv_result' => FALSE
