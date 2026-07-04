@@ -53,6 +53,24 @@ use PHPUnit\Framework\TestCase;
  *   Case E (regression guard — entries that are not an alias name):
  *     Given a NAT rule target of a plain IP '192.0.2.7' (matches no alias name)
  *     Then  it passes through unchanged and is recognised as local
+ *
+ *   Case F (IPv6 members classify exactly like IPv4 ones):
+ *     Given alias 'V6_Hosts' = '2001:db8::1 2001:db8:1::/64'
+ *     Then  the plain IPv6 member is its own $pfb_local key and a host inside
+ *           the IPv6 CIDR member is recognised via $pfb_localsub
+ *
+ *   Case G (empty / whitespace-only alias address is dropped safely):
+ *     Given alias 'Empty_Alias' whose stored address is only whitespace
+ *     Then  pfb_collect_localip() returns without error and neither an empty
+ *           key nor the alias name itself survives in $pfb_local
+ *
+ *   Case H (malformed non-string entry must not fatal — MUST fail before the
+ *           is_string() guard, pass after):
+ *     Given a NAT rule whose 'target' is an ARRAY (corrupted / hand-edited
+ *           config.xml), a shape the pre-#782 code tolerated with only an
+ *           array_flip() warning
+ *     Then  pfb_collect_localip() completes without a TypeError and the other
+ *           collected entries are unaffected
  */
 #[CoversFunction('pfb_collect_localip')]
 #[CoversFunction('pfb_local_ip')]
@@ -79,6 +97,8 @@ final class CollectLocalIpAliasTest extends TestCase
 					['name' => 'Multi_Cidr',   'address' => '198.51.100.0/28 203.0.113.50'],
 					['name' => 'Multi_Bad',    'address' => 'example.org 8080'],
 					['name' => 'Single_Host',  'address' => '203.0.113.99'],
+					['name' => 'V6_Hosts',     'address' => '2001:db8::1 2001:db8:1::/64'],
+					['name' => 'Empty_Alias',  'address' => '   '],
 				],
 			],
 		];
@@ -264,6 +284,118 @@ final class CollectLocalIpAliasTest extends TestCase
 			sprintf(
 				"A NAT target IP matching no alias name must pass through unchanged and be "
 				. "recognised as local.\npfb_local keys: %s",
+				implode(', ', array_keys($pfb_local))
+			)
+		);
+	}
+
+	// -------------------------------------------------------------------------
+	// Case F — IPv6 alias members classify exactly like IPv4 ones
+	// -------------------------------------------------------------------------
+
+	public function testIpv6AliasMembersSplitAndClassifyLikeIpv4(): void
+	{
+		// Guards a future refactor that special-cases IPv4 (e.g. dotted-quad
+		// detection instead of the generic is_ipaddr()/is_subnet() calls): the
+		// split/classify path must stay address-family agnostic.
+		$GLOBALS['config']['nat']['rule'] = [
+			['target' => 'V6_Hosts'],
+		];
+
+		[$pfb_local, $pfb_localsub] = pfb_collect_localip();
+
+		$this->assertArrayHasKey(
+			'2001:db8::1',
+			$pfb_local,
+			sprintf(
+				"Plain IPv6 alias member 2001:db8::1 must be its own \$pfb_local key.\n"
+				. "pfb_local keys: %s",
+				implode(', ', array_keys($pfb_local))
+			)
+		);
+		$host = '2001:db8:1::abcd';
+		$this->assertTrue(
+			pfb_local_ip($host, $pfb_localsub),
+			sprintf(
+				"Host %s inside IPv6 alias CIDR member 2001:db8:1::/64 must be recognised "
+				. "as local via pfb_localsub.\npfb_localsub: %s",
+				$host,
+				implode(', ', $pfb_localsub)
+			)
+		);
+	}
+
+	// -------------------------------------------------------------------------
+	// Case G — empty / whitespace-only alias address dropped safely
+	// -------------------------------------------------------------------------
+
+	public function testWhitespaceOnlyAliasAddressIsDroppedWithoutError(): void
+	{
+		// Guards the empty-member skip in the split loop: a whitespace-only
+		// address must produce no key at all (not '', not the alias name).
+		$GLOBALS['config']['nat']['rule'] = [
+			['target' => 'Empty_Alias'],
+		];
+
+		[$pfb_local, $pfb_localsub] = pfb_collect_localip();
+
+		$this->assertArrayNotHasKey(
+			'',
+			$pfb_local,
+			sprintf(
+				"A whitespace-only alias address must never yield an empty \$pfb_local key.\n"
+				. "pfb_local keys: %s",
+				implode(', ', array_keys($pfb_local))
+			)
+		);
+		$this->assertArrayNotHasKey(
+			'Empty_Alias',
+			$pfb_local,
+			sprintf(
+				"The matched alias NAME must be consumed, not left behind as a key.\n"
+				. "pfb_local keys: %s",
+				implode(', ', array_keys($pfb_local))
+			)
+		);
+		$this->assertNotContains(
+			'',
+			$pfb_localsub,
+			"A whitespace-only alias address must not leak an empty \$pfb_localsub entry."
+		);
+	}
+
+	// -------------------------------------------------------------------------
+	// Case H — malformed non-string entry must not fatal (#461-style tolerance)
+	// -------------------------------------------------------------------------
+
+	public function testArrayTypedNatTargetDoesNotFatalTheAliasWalk(): void
+	{
+		// Scenario: array_key_exists() throws a TypeError on a non-scalar key
+		//           under PHP 8, so the alias walk must skip non-string entries.
+		//
+		// Given  a NAT rule whose 'target' is an ARRAY (corrupted / hand-edited
+		//        config.xml) alongside a well-formed alias-name target
+		// When   pfb_collect_localip() runs
+		// Then   it completes without a TypeError (pre-guard: uncaught TypeError
+		//        'Cannot access offset of type array on array' — FAILS)
+		//        AND the well-formed alias target still resolves normally.
+		$GLOBALS['config']['nat']['rule'] = [
+			['target' => ['192.0.2.1', '192.0.2.2']],
+			['target' => 'Single_Host'],
+		];
+
+		// When: a fatal TypeError would abort here (suppress the array_flip()
+		// warning the tolerated stray entry triggers, same as pre-#782 code).
+		[$pfb_local, ] = @pfb_collect_localip();
+
+		// Then: reaching the assertion proves no TypeError; the sibling
+		// well-formed alias target must still have been resolved.
+		$this->assertArrayHasKey(
+			'203.0.113.99',
+			$pfb_local,
+			sprintf(
+				"An array-typed NAT target must be skipped (pre-#782 tolerance), leaving "
+				. "the well-formed alias target resolved.\npfb_local keys: %s",
 				implode(', ', array_keys($pfb_local))
 			)
 		);
