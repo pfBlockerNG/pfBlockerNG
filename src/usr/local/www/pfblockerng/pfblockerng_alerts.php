@@ -2223,6 +2223,28 @@ function convert_dnsbl_log($mode, $fields) {
 		return TRUE;
 	}
 
+	// Counter/limit gate (issue #809), hoisted ahead of the expensive render-time
+	// re-check below (pfb_dnsbl_parse() + the dnsbl_whitelist_type() calls): this gate
+	// is independent of that parse -- it only reads $counter/$pfbentries/
+	// $dnsblfilterlimitentries, none of which the parse produces -- so evaluating it
+	// here first is output-identical to evaluating it after the parse (see the
+	// "Ordering constraint" note ahead of the filter-MATCH gate below, which is NOT
+	// safe to hoist and stays in place). Once the row limit is reached, today's code
+	// still pays the full parse before discarding the row; this runs the identical
+	// check first and discards it up front -- same rows rendered, same point
+	// $dnsblfilterlimit ends up TRUE, just without paying for the discarded ones.
+	if ($pfb['filterlogentries']) {
+		if ($dnsblfilterlimitentries != 0 && $counter[$mode == 'Unified' && !$pfb['filterlogentries'] ? 'Unified' : 'DNSBL'] >= $dnsblfilterlimitentries) {
+			$dnsblfilterlimit = TRUE;
+			return TRUE;
+		}
+	} else {
+		if ($counter[$mode == 'Unified' && !$pfb['filterlogentries'] ? 'Unified' : 'DNSBL'] >= $pfbentries) {
+			$dnsblfilterlimit = TRUE;
+			return TRUE;
+		}
+	}
+
 	/* dnsbl.log Fields Reference
 
 		[0]	= DNSBL prefix - Python mode: 'DNSBL-python' | Unbound Mode: 'DNSBL-Full', 'DNSBL-1x1' or 'DNSBL-HTTPS'
@@ -2273,6 +2295,10 @@ function convert_dnsbl_log($mode, $fields) {
 	// domain scans all of it), greps the zone file per label, and falls back to a live
 	// drill against the external DNS server — and the cache is wiped on every DNSBL
 	// swap, so post-update loads miss for most rows (alerts-reports-pipeline.md).
+	// issue #809: pfb_dnsbl_parse('alerts', ...) memoizes its full result per domain
+	// and reuses one open dnsblcache SQLite3 handle for the rest of this page load, so
+	// a repeated domain (or a warm cache) no longer pays per-row open/close -- only a
+	// genuinely new domain still runs the grep/zone/drill path above.
 	if (!$isPython && !$isUpstream && !$isWhitelist_found) {
 		$domain_details = pfb_dnsbl_parse('alerts', $qdomain, '', '');
 		$pfb_mode	= $domain_details['pfb_mode']	?: 'Unknown';
@@ -2481,26 +2507,17 @@ function convert_dnsbl_log($mode, $fields) {
 
 	// If alerts filtering is selected, process filters as required.
 	// Ordering constraint: this filter matches the CORRECTED fields ($pfbalertdnsbl is
-	// built from post-pfb_dnsbl_parse values), so the filter gate cannot be hoisted
-	// above the parse without changing filter semantics — a feed-name filter matches
-	// the domain's current feed, not the stale logged one. Only the counter/limit gate
-	// below is independent of the parse (issue #809).
+	// built from post-pfb_dnsbl_parse values), so the filter-MATCH gate cannot be
+	// hoisted above the parse without changing filter semantics — a feed-name filter
+	// matches the domain's current feed, not the stale logged one. The counter/limit
+	// gate is independent of the parse and now runs at the top of this function,
+	// before the parse (issue #809) — see the comment there.
 	if ($pfb['filterlogentries']) {
 		if (empty($filterfieldsarray[1])) {
 			return TRUE;
 		}
 		if (!pfb_match_filter_field($pfbalertdnsbl, $filterfieldsarray[1])) {
 			return FALSE;
-		}
-		if ($dnsblfilterlimitentries != 0 && $counter[$mode == 'Unified' && !$pfb['filterlogentries'] ? 'Unified' : 'DNSBL'] >= $dnsblfilterlimitentries) {
-			$dnsblfilterlimit = TRUE;
-			return TRUE;
-		}
-	}
-	else {
-		if ($counter[$mode == 'Unified' && !$pfb['filterlogentries'] ? 'Unified' : 'DNSBL'] >= $pfbentries) {
-			$dnsblfilterlimit = TRUE;
-			return TRUE;
 		}
 	}
 	$counter[$mode == 'Unified' && !$pfb['filterlogentries'] ? 'Unified' : 'DNSBL']++;
@@ -2895,6 +2912,16 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 		return array(TRUE, '');
 	}
 
+	// issue #809 page-scope memos (pfb_render_memo(), pfblockerng.inc): one page load
+	// = one process, so these persist for exactly one render.
+	// - $validate_memo: the "is the logged IP/CIDR still in its logged feed file"
+	//   validate exec below, keyed by the exact command about to run.
+	// - $ip_miss_memo: the "where does this host live NOW" miss path (find_reported_header()
+	//   plus the raw aliastables grep), keyed by host+folder -- see the comment at its
+	//   call site for what stays outside the memo.
+	static $validate_memo = array();
+	static $ip_miss_memo = array();
+
 	$alert_ip = $pfb_query = $pfb_matchtitle = '';
 	$src_icons = $dst_icons = $feed_new = $eval_new = $alias_new = '';
 
@@ -2997,6 +3024,13 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	$hostname['dst'] = pfb_hsc($hostname['dst']);
 
 	// Determine folder type
+	// $folder gets a definite default here (issue #809): it now feeds a memo key and a
+	// closure use() clause below, in addition to its pre-existing uses, so it must be
+	// provably defined for PHPStan at every use site -- none of the fields[3] values a
+	// real log line carries fail to match one of the branches below, so this default
+	// is unreachable in practice; it only formalises what PHP already coerced an
+	// undefined $folder to (empty string, with a notice) if that ever happened.
+	$folder		= '';
 	$query_prefix	= "|";
 	$query		= "{$pfb['grep']}";
 	$query_host	= "{$fields[15]}.txt";
@@ -3027,6 +3061,9 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	// only); a miss falls into find_reported_header() — full grep sweeps of the feed
 	// dirs — plus a whole-aliastables grep below, so after a feed update de-lists or
 	// moves entries, most rows take that path (alerts-reports-pipeline.md, issue #809).
+	// Memoized by the exact command about to run: two rows that would exec the
+	// byte-identical find|xargs-grep pipeline share one result for the rest of this
+	// page load.
 	$validate = '';
 	if ($fields[14] != 'Unknown' && $fields[15] != 'Unknown') {
 		$q_ip = str_replace('.', '\.', $fields[14]);
@@ -3035,7 +3072,10 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 		$query_host_esc	= escapeshellarg($query_host);
 		$q_ip_esc	= escapeshellarg("^{$q_ip}");
 
-		$validate	= exec("/usr/bin/find {$folder} -type f {$query_prefix} {$query_esc} {$query_host_esc} | xargs {$pfb['grep']} {$q_ip_esc} 2>&1");
+		$validate_cmd = "/usr/bin/find {$folder} -type f {$query_prefix} {$query_esc} {$query_host_esc} | xargs {$pfb['grep']} {$q_ip_esc} 2>&1";
+		$validate = pfb_render_memo($validate_memo, $validate_cmd, function () use ($validate_cmd) {
+			return exec($validate_cmd);
+		});
 	}
 
 	// ASN - Add to GeoIP column
@@ -3054,8 +3094,31 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	}
 
 	// Determine if a different IP/CIDR is now alerting on this host
+	// issue #809: find_reported_header($host, $folder) and the raw aliastables grep
+	// below are both pure functions of ($host, $folder) -- find_reported_header()'s
+	// result decides $eval_new, which is the only input to the aliastables grep -- so
+	// they are memoized together as one unit, keyed on "$host|$folder". Everything
+	// that depends on THIS row ($mask needs $pfb_ipv4, the post-processed $validate
+	// needs the ltrim/strrchr/strstr chain, and the $validate != $fields[13] compare)
+	// stays outside the memo and is recomputed every row from the cached raw values.
 	if (empty($validate)) {
-		$pfb_query = find_reported_header($host, $folder);
+		$miss_key = "{$host}|{$folder}";
+		list($pfb_query, $validate) = pfb_render_memo($ip_miss_memo, $miss_key, function () use ($host, $folder, $pfb) {
+			$pfb_query = find_reported_header($host, $folder);
+
+			// $eval_new here mirrors the outer derivation below exactly (including the
+			// 'Not listed!' substitution on an 'Unknown' match) because it is what
+			// builds the aliastables grep command -- the exec must stay byte-identical
+			// to today's regardless of which branch produced it.
+			$eval_new = ($pfb_query[1] == 'Unknown') ? 'Not listed!' : $pfb_query[1];
+
+			// Determine if IP is in a new Aliastable
+			$q_ip = str_replace('.', '\.', $eval_new);
+			$q_ip_esc = escapeshellarg("^{$q_ip}");
+			$raw_validate = exec("/usr/bin/find {$pfb['aliasdir']}/*.txt -type f | xargs {$pfb['grep']} {$q_ip_esc} 2>&1");
+
+			return array($pfb_query, $raw_validate);
+		});
 
 		if ($pfb_query[0] == 'Unknown') {
 			$feed_new	= 'Not listed!';
@@ -3076,10 +3139,6 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 			$eval_new	= $pfb_query[1];
 		}
 
-		// Determine if IP is in a new Aliastable
-		$q_ip = str_replace('.', '\.', $eval_new);
-		$q_ip_esc = escapeshellarg("^{$q_ip}");
-		$validate = exec("/usr/bin/find {$pfb['aliasdir']}/*.txt -type f | xargs {$pfb['grep']} {$q_ip_esc} 2>&1");
 		$validate = ltrim(strrchr(strstr(strstr($validate, ':', TRUE), '.txt', TRUE), '/'), '/');
 		if ($validate != $fields[13]) {
 			$alias_new = $validate;
