@@ -1138,19 +1138,46 @@ def _feed_log_count(vm: SmokeVM, header: str, phrase: str, *, timeout: float = 3
         return 0
 
 
-def _pin_cron_due(vm: SmokeVM) -> None:
-    """Set pfb_reuse='' and pfb_dailystart=date('G') on the guest so an EveryDay feed is due."""
+def _pin_cron_due(vm: SmokeVM) -> int:
+    """Set pfb_reuse='' and pfb_dailystart=date('G') on the guest so an EveryDay feed is due.
+
+    Returns the guest's wall-clock hour (0-23) pinned into ``pfb_dailystart``, echoed back
+    atomically with the write. Callers that later run ``cron`` should fast-guard against an
+    hour rollover between this pin and the cron run (see :func:`_guest_hour`) — if the
+    wall clock ticked over, the EveryDay feed is no longer due and a "not re-ingested"
+    assertion would misread that as a change-detector regression.
+    """
+    sentinel_open, sentinel_close = "<<<HOUR>>>", "<<<END>>>"
     snippet = (
         f"$g = config_get_path({h._php_str(h.CFG_GLOBAL)}, array());\n"  # noqa: SLF001
         "$g['pfb_reuse'] = '';\n"
-        "$g['pfb_dailystart'] = date('G');\n"
+        "$hour = date('G');\n"
+        "$g['pfb_dailystart'] = $hour;\n"
         f"config_set_path({h._php_str(h.CFG_GLOBAL)}, $g);\n"  # noqa: SLF001
         "write_config('pfBlockerNG smoke #538: due cron');\n"
-        "echo 'OK';"
+        f"echo 'OK' . '{sentinel_open}' . $hour . '{sentinel_close}';"
     )
     res = h.php_eval(vm, snippet)
-    if res.returncode != 0 or "OK" not in res.stdout:
+    if res.returncode != 0 or "OK" not in res.stdout or sentinel_open not in res.stdout:
         raise RuntimeError(f"_pin_cron_due failed: rc={res.returncode} {res.stderr!r} {res.stdout!r}")
+    raw = res.stdout.split(sentinel_open, 1)[1].split(sentinel_close, 1)[0]
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"_pin_cron_due: could not parse pinned hour from {res.stdout!r}") from exc
+
+
+def _guest_hour(vm: SmokeVM) -> int:
+    """Read the guest's CURRENT wall-clock hour (0-23) via ``date('G')``, delimited."""
+    sentinel_open, sentinel_close = "<<<HOUR>>>", "<<<END>>>"
+    res = h.php_eval(vm, f"echo '{sentinel_open}' . date('G') . '{sentinel_close}';")
+    if sentinel_open not in res.stdout or sentinel_close not in res.stdout:
+        raise RuntimeError(f"_guest_hour: no delimited value in output: {res.stdout!r} {res.stderr!r}")
+    raw = res.stdout.split(sentinel_open, 1)[1].split(sentinel_close, 1)[0]
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"_guest_hour: could not parse hour from {res.stdout!r}") from exc
 
 
 def _bump_feed_mtime(
@@ -1321,7 +1348,7 @@ def test_cron_skips_unchanged_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
         # No mtime manipulation is needed: detection is hash-based (ADR-42 Phase 2).
 
         # Pin pfb_reuse=off and dailystart=now.
-        _pin_cron_due(deployed_vm)
+        pinned_hour = _pin_cron_due(deployed_vm)
 
         # Capture baselines BEFORE cron. With an unchanged feed the cron takes the noupdates
         # path (sync feed-loop skipped), so the reliable positive signal is the DETECTOR verdict
@@ -1331,6 +1358,18 @@ def test_cron_skips_unchanged_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
 
         # WHEN — cron.
         h.reload(deployed_vm, "cron")
+
+        # THEN (fast guard) — the guest hour must still match the pinned hour. Unlike the
+        # changed-feed sibling (test_cron_detects_changed_local_feed), this unchanged/noupdates
+        # path logs no "[ header ]" marker to fast-guard on, so guard on the wall clock itself:
+        # a rollover between _pin_cron_due and this cron means the EveryDay feed was never due,
+        # and the "no re-ingest" assertions below would prove nothing about the change detector.
+        hour_after = _guest_hour(deployed_vm)
+        assert hour_after == pinned_hour, (
+            f"guest hour rolled over between _pin_cron_due ({pinned_hour}) and cron "
+            f"({hour_after}) — the EveryDay feed was not due this run; this proves nothing "
+            f"about the change detector, re-run"
+        )
 
         # THEN — no new "Downloading update" (reuse held — feed not re-ingested).
         dl_after = _feed_log_count(deployed_vm, header, "Downloading update")
@@ -1411,12 +1450,24 @@ def test_cron_skips_local_feed_with_bumped_mtime_but_same_content(deployed_vm: S
         _bump_feed_mtime(deployed_vm, feed_path, orig_path, advance="0200")
 
         # Pin pfb_reuse=off and dailystart=now (just before cron).
-        _pin_cron_due(deployed_vm)
+        pinned_hour = _pin_cron_due(deployed_vm)
         notreq_before = h.count_log_marker(deployed_vm, h.PFB_LOG, "Update not required")
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
 
         # WHEN — cron (the genuine detector path).
         h.reload(deployed_vm, "cron")
+
+        # THEN (fast guard) — the guest hour must still match the pinned hour. This
+        # unchanged-content path (like its `test_cron_skips_unchanged_local_feed` sibling) logs
+        # no "[ header ]" marker to fast-guard on, so guard on the wall clock itself: a rollover
+        # between _pin_cron_due and this cron means the EveryDay feed was never due, and the
+        # "Update not required" assertion below would prove nothing about the change detector.
+        hour_after = _guest_hour(deployed_vm)
+        assert hour_after == pinned_hour, (
+            f"guest hour rolled over between _pin_cron_due ({pinned_hour}) and cron "
+            f"({hour_after}) — the EveryDay feed was not due this run; this proves nothing "
+            f"about the change detector, re-run"
+        )
 
         # THEN — hash confirms no content change: "Update not required" appeared, no download.
         # (ADR-42 Phase 2: the old "mtime changed, content identical" marker no longer exists;
