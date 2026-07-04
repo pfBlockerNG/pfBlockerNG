@@ -220,11 +220,18 @@ def _pfctl_sr_block_853_protos(vm: SmokeVM, *, timeout: float = 30.0) -> set[str
     pf expands the config-level ``tcp/udp`` block into per-protocol rules; returning the
     set lets the positive gate require BOTH (a lost UDP-853/DoQ leg with TCP-853/DoT kept
     must fail) while absence checks use the empty set.
+
+    Raises ``RuntimeError`` when ``pfctl -sr`` itself fails (rc != 0) — an ERROR is NOT
+    the same as "no rule loaded", and collapsing the two previously made a broken pfctl
+    read false-green every negative/absence gate built on this function.
     """
     result = vm.ssh(h.PFCTL, "-sr", timeout=timeout)
-    protos: set[str] = set()
     if result.returncode != 0:
-        return protos
+        raise RuntimeError(
+            f"{h.PFCTL} -sr failed (rc={result.returncode}): stderr={result.stderr!r} — "
+            f"cannot determine the port-853 block rule state; NOT treating as absent"
+        )
+    protos: set[str] = set()
     for line in result.stdout.splitlines():
         if not _is_block_853_line(line):
             continue
@@ -251,10 +258,17 @@ def _pfctl_sr_block_853_has_self_exempt(vm: SmokeVM, *, timeout: float = 30.0) -
     pfSense renders the negated ``(self)`` destination as ``! (self)`` and port 853 as the
     service name ``domain-s``. We look for the negation indicator ``!`` and ``self`` on the
     same line as the block rule for port 853.
+
+    Raises ``RuntimeError`` when ``pfctl -sr`` itself fails (rc != 0) — an ERROR is NOT
+    "no self-exempt guard": returning False here false-greened the negative gate (#582),
+    same collapse as ``_pfctl_sr_block_853_protos`` before its fix.
     """
     result = vm.ssh(h.PFCTL, "-sr", timeout=timeout)
     if result.returncode != 0:
-        return False
+        raise RuntimeError(
+            f"{h.PFCTL} -sr failed (rc={result.returncode}): stderr={result.stderr!r} — "
+            f"cannot determine the self-exempt guard state; NOT treating as absent"
+        )
     for line in result.stdout.splitlines():
         if _is_block_853_line(line) and "self" in line and "!" in line:
             return True

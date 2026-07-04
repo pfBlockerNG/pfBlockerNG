@@ -259,12 +259,19 @@ def _pfctl_sn_redir_protos(vm: SmokeVM, iface: str, *, timeout: float = 30.0) ->
 
     so the redirect hallmark is the ``to ! (self)`` self-exemption on the resolved device,
     with the port rendered as ``domain`` (or numerically, defensively).
+
+    Raises ``RuntimeError`` when ``pfctl -sn`` itself fails (rc != 0) — an ERROR is NOT
+    the same as "no rule loaded", and collapsing the two previously made a broken pfctl
+    read false-green every negative/absence gate built on this function.
     """
     dev = _real_iface(vm, iface)
     result = vm.ssh(h.PFCTL, "-sn", timeout=timeout)
-    protos: set[str] = set()
     if result.returncode != 0:
-        return protos
+        raise RuntimeError(
+            f"{h.PFCTL} -sn failed (rc={result.returncode}): stderr={result.stderr!r} — "
+            f"cannot determine the redirect rule state on {iface!r}; NOT treating as absent"
+        )
+    protos: set[str] = set()
     for line in result.stdout.splitlines():
         # Match the redirect hallmark explicitly: an rdr `on <device>` whose destination is
         # the negated self (`to ! (self)`). The anchored ` on {dev} ` (not a bare substring)

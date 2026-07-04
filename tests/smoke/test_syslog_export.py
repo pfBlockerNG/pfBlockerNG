@@ -95,7 +95,9 @@ def deployed_vm(
     """Deploy the branch .pkg once; wire DNSBL + IP; reload with syslog OFF.
 
     Given: the smoke VM is booted and the branch .pkg is available.
-    When:  we deploy, wire DNSBL (unique blocked domain, VIP) + one IP block feed
+    When:  we deploy, wire DNSBL (TWO unique blocked domains, VIP — the syslog-toggle
+           test uses one per OFF/ON probe so it never has to rely on the SAME domain
+           re-triggering the python hook on a repeat query) + one IP block feed
            (RFC 5737), and do a full reload with syslog export OFF (the default).
            The reload runs sync_package_pfblockerng, which materializes the syslog
            routing drop-in (ADR-38) and (re)starts the filterlog daemon tailing
@@ -110,7 +112,8 @@ def deployed_vm(
     h.ensure_dnsbl_vip(smoke_vm)
 
     _dnsbl_domain = h.unique_domain("pfbsyslogdnsbl")
-    _dnsbl_feed_path = h.write_local_feed(smoke_vm, "pfb_syslog_dnsbl.txt", f"{_dnsbl_domain}\n")
+    _dnsbl_domain_on = h.unique_domain("pfbsyslogdnsbl2")
+    _dnsbl_feed_path = h.write_local_feed(smoke_vm, "pfb_syslog_dnsbl.txt", f"{_dnsbl_domain}\n{_dnsbl_domain_on}\n")
     h.inject(
         smoke_vm,
         h.DnsblCase(
@@ -167,6 +170,7 @@ def deployed_vm(
         )
 
     smoke_vm._pfb_dnsbl_domain = _dnsbl_domain  # type: ignore[attr-defined]
+    smoke_vm._pfb_dnsbl_domain_on = _dnsbl_domain_on  # type: ignore[attr-defined]
     smoke_vm._pfb_civm_ip = _civm_ip  # type: ignore[attr-defined]
     yield smoke_vm
 
@@ -384,29 +388,56 @@ def test_syslog_routing_and_rotation_registered(deployed_vm: SmokeVM) -> None:
 
 
 def test_syslog_on_dnsbl_event_exported(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
-    """ON ⇒ a pfblockerng record per DNSBL block in the dedicated file, host-side, no restart.
+    """OFF ⇒ no export record; ON ⇒ a pfblockerng record per DNSBL block, host-side, no restart.
 
-    Given: DNSBL blocking _dnsbl_domain (VIP); syslog export OFF (fixture default),
+    Given: DNSBL blocking TWO distinct domains (VIP); syslog export OFF (fixture default),
            so NO event line exists in pfblockerng_syslog.log yet.
-    When:  log_syslog is enabled (write_config ONLY — no restart) and the civm client
-           (192.168.1.10) resolves the blocked domain via pfSense (python writes
-           dnsbl.log, the host daemon tails it, re-reads the toggle live, and emits).
-    Then:  a NEW record appears in pfblockerng_syslog.log with act=dnsbl + the
-           queried name — proving the toggle took effect LIVE.
-    And:   the event did NOT leak into system.log; the CSV dnsbl.log was also written.
+    When:  domain_off is probed WHILE export is STILL OFF (no restart) — the DNSBL block
+           itself still fires (proven via the CSV dnsbl.log marker), but must export
+           nothing. THEN log_syslog is enabled (write_config ONLY — no restart) and the
+           civm client (192.168.1.10) resolves a SECOND, never-before-queried domain
+           (domain_on — dodges any residual Unbound/module state from the OFF-phase probe,
+           so the python hook is guaranteed to run fresh) via pfSense.
+    Then:  the OFF-phase probe produces NO new record in pfblockerng_syslog.log. The
+           ON-phase probe DOES produce a NEW record with act=dnsbl + the queried name —
+           proving the toggle took effect LIVE, and that OFF truly exported nothing (not
+           just "no probe happened yet").
+    And:   the event did NOT leak into system.log; the CSV dnsbl.log was written for BOTH probes.
     """
     vm = deployed_vm
-    domain: str = vm._pfb_dnsbl_domain  # type: ignore[attr-defined]
+    domain_off: str = vm._pfb_dnsbl_domain  # type: ignore[attr-defined]
+    domain_on: str = vm._pfb_dnsbl_domain_on  # type: ignore[attr-defined]
     civm_ip: str = vm._pfb_civm_ip  # type: ignore[attr-defined]
 
-    # Given: OFF before-state.
+    # Given: syslog export OFF (fixture default) — no event lines recorded yet.
     before = _pfb_event_lines(vm)
-    dnsbl_before = h.count_log_marker(vm, DNSBL_LOG, domain)
     sys_leak_before = len(_system_log_export_leaks(vm))
 
-    # When: enable LIVE (no restart) + probe from the civm client.
+    # Before: probe a blocked domain WHILE export is still OFF. The block itself must still
+    # fire (CSV assertion below) but must produce NO export line — the missing half of the
+    # toggle's before/after proof (CLAUDE.md: assert the before-state, not just the after).
+    dnsbl_off_before = h.count_log_marker(vm, DNSBL_LOG, domain_off)
+    ans_off = h.dns_probe_client(client_vm, domain_off, "A")
+    assert h.is_vip(ans_off), f"DNSBL block shape unexpected before enabling syslog: expected VIP, got {ans_off}"
+    time.sleep(FILTERLOG_SETTLE_SECS)
+
+    dnsbl_off_after = h.count_log_marker(vm, DNSBL_LOG, domain_off)
+    assert dnsbl_off_after > dnsbl_off_before, (
+        f"CSV dnsbl.log was NOT written for the OFF-phase probe (before {dnsbl_off_before}, after "
+        f"{dnsbl_off_after}) — the block itself must fire regardless of the syslog toggle"
+    )
+    after_off = _pfb_event_lines(vm)
+    assert len(after_off) == len(before), (
+        f"A pfblockerng export record appeared for {domain_off} while syslog export is OFF "
+        f"(before {len(before)} lines, after {len(after_off)}) — the OFF gate is not working.\n"
+        f"{syslog_export_state_snapshot(vm)}"
+    )
+
+    # When: enable LIVE (no restart) + probe a DIFFERENT, never-before-queried domain from
+    # the civm client (dodges any residual state from the OFF-phase probe above).
+    dnsbl_on_before = h.count_log_marker(vm, DNSBL_LOG, domain_on)
     _set_syslog_enabled(vm, on=True)
-    ans = h.dns_probe_client(client_vm, domain, "A")
+    ans = h.dns_probe_client(client_vm, domain_on, "A")
 
     # Then: DNSBL still blocks (additive).
     assert h.is_vip(ans), f"DNSBL block shape changed after enabling syslog: expected VIP, got {ans}"
@@ -414,10 +445,10 @@ def test_syslog_on_dnsbl_event_exported(deployed_vm: SmokeVM, client_vm: SmokeVM
     # Then: a NEW dedicated-file record (poll — tail/daemon latency). Match on
     # act=dnsbl + the queried name (qname=). NOTE: b_type is the MATCH type
     # ('DNSBL'/'TLD'/'Python'), NOT the sinkhole mode — there is no 'VIP' b_type.
-    line = _wait_for_event(vm, baseline_len=len(before), want=("act=dnsbl", f"qname={domain}", f"qip={civm_ip}"))
+    line = _wait_for_event(vm, baseline_len=len(after_off), want=("act=dnsbl", f"qname={domain_on}", f"qip={civm_ip}"))
     assert line, (
-        f"No new DNSBL export record after enabling export (LIVE, no restart) and probing {domain}.\n"
-        f"  expected a new line in {PFB_SYSLOG_LOG} with: act=dnsbl qname={domain} qip={civm_ip}\n"
+        f"No new DNSBL export record after enabling export (LIVE, no restart) and probing {domain_on}.\n"
+        f"  expected a new line in {PFB_SYSLOG_LOG} with: act=dnsbl qname={domain_on} qip={civm_ip}\n"
         f"  {syslog_export_state_snapshot(vm)}"
     )
 
@@ -427,11 +458,11 @@ def test_syslog_on_dnsbl_event_exported(deployed_vm: SmokeVM, client_vm: SmokeVM
         f"dedicated file ONLY.\n  leaks: {_system_log_export_leaks(vm)[-5:]!r}"
     )
 
-    # And: CSV dnsbl.log also written (additive).
-    dnsbl_after = h.count_log_marker(vm, DNSBL_LOG, domain)
-    assert dnsbl_after > dnsbl_before, (
-        f"CSV dnsbl.log was NOT written after enabling syslog (before {dnsbl_before}, after {dnsbl_after}) "
-        f"— export must be additive"
+    # And: CSV dnsbl.log also written for the ON-phase probe (additive).
+    dnsbl_on_after = h.count_log_marker(vm, DNSBL_LOG, domain_on)
+    assert dnsbl_on_after > dnsbl_on_before, (
+        f"CSV dnsbl.log was NOT written after enabling syslog (before {dnsbl_on_before}, after "
+        f"{dnsbl_on_after}) — export must be additive"
     )
 
 

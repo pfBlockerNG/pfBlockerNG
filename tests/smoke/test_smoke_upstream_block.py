@@ -451,8 +451,9 @@ class TestUpstreamCounterIncrement:
     db_worker flushes the enqueued ("dnsbl", "Upstream") task; the on-box
     ``counter`` column for the Upstream row increases.
 
-    Before/after: counter is read BEFORE the probe and AFTER, asserting a
-    strict increase so that the test fails if the counter is stuck.
+    Before/after: counter is read BEFORE the probe and AFTER, asserting an EXACT
+    +1 delta (not merely "some increase") so the test fails if the counter is
+    stuck OR if another probe's increment leaked into this window.
     """
 
     def test_upstream_counter_increments_on_nxra_block(
@@ -461,7 +462,7 @@ class TestUpstreamCounterIncrement:
         """
         Given: DNSBL active, forwarding to stub, dnsbl table seeded with Upstream row.
         When: stub answers NXDOMAIN (RA=0, AA=0) — an NXRA upstream block is logged.
-        Then: the on-box dnsbl counter for groupname='Upstream' strictly increases.
+        Then: the on-box dnsbl counter for groupname='Upstream' increases by EXACTLY 1.
         """
         vm, cvm = deployed_vm
         name = h.unique_domain("pfbsmoke-upstream-ctr")
@@ -495,16 +496,25 @@ class TestUpstreamCounterIncrement:
             f"Log excerpt:\n{_read_dnsbl_log(vm)[-2000:]}"
         )
 
-        # Then: wait for the async flush and assert strict increase. A read that is
-        # still ERRORED at the deadline is a read problem, not a stuck counter — keep
-        # the two failure modes distinct here too (mirrors the baseline assert).
+        # Then: wait for the async flush and assert an EXACT +1 delta, not merely "some
+        # increase". Only one NXRA probe happens in this test's window (asserted above via
+        # the log-line check), and the serial pytest run + PFB_DB_FLUSH_INTERVAL=1.0s mean
+        # every earlier test's increment (NXRA/EDE15/EDE17 above) is long since flushed into
+        # `baseline` by the time this test starts (the three control tests preceding this one
+        # each settle for _ABSENCE_SETTLE_S=8.0s, far past the 1s flush window). A bare
+        # `final > baseline` would also pass if some OTHER probe's increment leaked into this
+        # window — exact equality is the real proof this probe (and only this probe) counted.
+        # A read that is still ERRORED at the deadline is a read problem, not a stuck counter
+        # — keep the two failure modes distinct here too (mirrors the baseline assert).
         final, final_detail = _wait_for_counter_above(vm, baseline)
         assert final != -2, (
             f"Upstream counter read ERRORED while waiting for the increase "
             f"(NOT a stuck counter — do not blame the enqueue/flush): {final_detail!r}"
         )
-        assert final > baseline, (
-            f"Upstream counter did not increase after NXRA block: "
-            f"baseline={baseline}, final={final}. "
-            f"Detection fired (log line present), so the enqueue or flush may be broken."
+        delta = final - baseline
+        assert delta == 1, (
+            f"Upstream counter delta after NXRA block: expected=1 actual={delta} "
+            f"(baseline={baseline}, final={final}). Detection fired (log line present), so a "
+            f"delta other than exactly 1 means the counter is stuck (delta<=0) or another "
+            f"probe's increment leaked into this window (delta>1)."
         )
