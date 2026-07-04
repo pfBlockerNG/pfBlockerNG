@@ -904,12 +904,12 @@ function pfb_emit_entry_reject_stats(string $path): void {
 		return;
 	}
 	foreach ($stats as $entry) {
-		if (!is_array($entry) || !isset($entry['feed'])) {
+		if (!is_array($entry) || !isset($entry['feed']) || !is_scalar($entry['feed'])) {
 			continue;
 		}
 		$feed = (string) $entry['feed'];
 		foreach (array('shape', 'wire_cap') as $bucket) {
-			$count = isset($entry[$bucket]) ? (int) $entry[$bucket] : 0;
+			$count = (isset($entry[$bucket]) && is_scalar($entry[$bucket])) ? (int) $entry[$bucket] : 0;
 			if ($count > 0) {
 				pfb_validate_log($feed, 'entries', $bucket, (string) $count);
 			}
@@ -1294,7 +1294,14 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 			unset($retval);
 			unset($output);
 			if (!file_exists($input[1])) {
-				pfb_logger("{$header} Downloaded file not found: [" .  htmlspecialchars($input[0]) . "|" . htmlspecialchars($input[1]) . "]", 2);
+				// ADR-48 P2: honour the out-param contract on EVERY reject path — an
+				// opted-in caller emits the canonical line itself, so fill the detail
+				// and suppress the legacy message (mirrors the mime-reject branch).
+				if (is_array($reject_detail)) {
+					$reject_detail = array('mime_raw' => 'file-not-found', 'mime' => '', 'retval' => -1);
+				} else {
+					pfb_logger("{$header} Downloaded file not found: [" .  htmlspecialchars($input[0]) . "|" . htmlspecialchars($input[1]) . "]", 2);
+				}
 				return FALSE;
 			}
 			exec("/usr/bin/file -b --mime-type " . escapeshellarg($input[1]) . " 2>&1", $output, $retval);
@@ -1356,7 +1363,12 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 			unset($retval);
 			unset($output);
 			if (!file_exists($input[1])) {
-				pfb_logger("{$header} Downloaded file not found: [" .  htmlspecialchars($input[0]) . "|" . htmlspecialchars($input[1]) . "]", 2);
+				// ADR-48 P2: same out-param contract as the FILE_MIME branch above.
+				if (is_array($reject_detail)) {
+					$reject_detail = array('mime_raw' => 'file-not-found', 'mime' => '', 'retval' => -1);
+				} else {
+					pfb_logger("{$header} Downloaded file not found: [" .  htmlspecialchars($input[0]) . "|" . htmlspecialchars($input[1]) . "]", 2);
+				}
 				return FALSE;
 			}
 			exec("/usr/bin/file -bZ --mime-type " . escapeshellarg($input[1]) . " 2>&1", $output, $retval);

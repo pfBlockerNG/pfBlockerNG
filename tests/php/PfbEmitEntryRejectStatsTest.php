@@ -153,4 +153,31 @@ final class PfbEmitEntryRejectStatsTest extends TestCase
 
 		$this->assertSame('', file_get_contents($log), 'corrupt JSON must emit nothing, never throw');
 	}
+
+	public function testNonScalarFieldsAreSkippedSilently(): void
+	{
+		// Given: syntactically valid JSON whose values have hostile SHAPES -- an
+		// array where a scalar belongs. (string)/(int) casts on an array raise
+		// PHP warnings and stringify to "Array", so such entries must be skipped
+		// outright, and a non-scalar COUNT must read as 0, not emit
+		// (adversarial-review fix, PR #807). The doc contract is "corrupt
+		// artifact = silent no-op" -- warnings are not silent.
+		$log = $this->seedLogSinks();
+		$stats = $this->statsFile(json_encode([
+			['feed' => [1, 2], 'shape' => 5],                    // array feed -> whole entry skipped
+			['feed' => 'FeedOk', 'shape' => ['nested' => 1]],    // array count -> bucket reads 0
+			['feed' => 'FeedReal', 'wire_cap' => 3],             // sane sibling still emits
+		]));
+
+		pfb_emit_entry_reject_stats($stats);
+
+		$logContents = (string) file_get_contents($log);
+		$this->assertStringNotContainsString('feed=Array', $logContents, 'an array feed must never stringify into a line');
+		$this->assertStringNotContainsString('FeedOk', $logContents, 'a non-scalar count must read as 0 (no line)');
+		$this->assertStringContainsString(
+			pfb_validate_log_line('FeedReal', 'entries', 'wire_cap', '3'),
+			$logContents,
+			'a sane sibling entry must still emit despite hostile neighbours'
+		);
+	}
 }
