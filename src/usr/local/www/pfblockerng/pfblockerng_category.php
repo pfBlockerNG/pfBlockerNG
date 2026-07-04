@@ -315,11 +315,11 @@ if (!empty($action) && isset($gtype) && isset($rowid)) {
 	exit;
 }
 
-$pgtype = 'IP'; $l_pgtype = 'ip';
+$pgtype = 'IP';
 $pg_url = '/pfblockerng/pfblockerng_category.php?type=ipv4';
 
 if ($gtype == 'dnsbl') {
-	$pgtype = 'DNSBL'; $l_pgtype = 'dnsbl';
+	$pgtype = 'DNSBL';
 	$pg_url = '/pfblockerng/pfblockerng_dnsbl.php';
 }
 
