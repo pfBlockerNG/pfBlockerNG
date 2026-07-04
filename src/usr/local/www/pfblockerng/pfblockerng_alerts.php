@@ -2928,13 +2928,15 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 
 	// issue #809 page-scope memos (pfb_render_memo(), pfblockerng.inc): one page load
 	// = one process, so these persist for exactly one render.
-	// - $validate_memo: the "is the logged IP/CIDR still in its logged feed file"
+	// - $memos['validate']: the "is the logged IP/CIDR still in its logged feed file"
 	//   validate exec below, keyed by the exact command about to run.
-	// - $ip_miss_memo: the "where does this host live NOW" miss path (find_reported_header()
+	// - $memos['miss']: the "where does this host live NOW" miss path (find_reported_header()
 	//   plus the raw aliastables grep), keyed by host+folder -- see the comment at its
 	//   call site for what stays outside the memo.
-	static $validate_memo = array();
-	static $ip_miss_memo = array();
+	// issue #809 Phase 3b: promoted from two function-statics to the shared accessor
+	// pfb_ip_render_memos() so the batched prefetch pass (pfb_ip_prefetch(), called from
+	// this page's two-pass IP table render) can seed them from OUTSIDE this function.
+	$memos = &pfb_ip_render_memos();
 
 	$alert_ip = $pfb_query = $pfb_matchtitle = '';
 	$src_icons = $dst_icons = $feed_new = $eval_new = $alias_new = '';
@@ -3007,68 +3009,31 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 		$vtype = 4;
 	}
 
-	// GeoIP event
-	$pfb_geoip = FALSE;
-	if (isset($continents[ substr($fields[13], 0, -3) ])) {
-		$pfb_geoip = TRUE;
-	}
-
-	// Determine if Proofpoint IQRisk based Feed (Based on ':' in Feedname - Defines Feed Category)
-	$et_header = FALSE;
-	if (strpos($fields[15], ':') !== FALSE) {
-		$data = explode(':', $fields[15]);
-		$fields[15]	= $data[1];
-		$et_header	= TRUE;
-	}
-
-	// Inbound event
-	if ($fields[11] == 'in') {
-		$host		= $fields[7];
-		$hostname	= array( 'src' => $fields[16], 'dst' => $fields[17] );
-	}
-
-	// Outbound event
-	else {
-		$host		= $fields[8];
-		$hostname	= array( 'src' => $fields[17], 'dst' => $fields[16] );
-	}
-
-	// HTML-encode the resolved/DHCP hostnames before they are printed as cell text.
-	$hostname['src'] = pfb_hsc($hostname['src']);
-	$hostname['dst'] = pfb_hsc($hostname['dst']);
-
-	// Determine folder type
-	// $folder gets a definite default here (issue #809): it now feeds a memo key and a
-	// closure use() clause below, in addition to its pre-existing uses, so it must be
-	// provably defined for PHPStan at every use site -- none of the fields[3] values a
-	// real log line carries fail to match one of the branches below, so this default
-	// is unreachable in practice; it only formalises what PHP already coerced an
-	// undefined $folder to (empty string, with a notice) if that ever happened.
-	$folder		= '';
-	$query_prefix	= "|";
-	$query		= "{$pfb['grep']}";
-	$query_host	= "{$fields[15]}.txt";
-
-	if ($pfb_geoip) {
-		$folder = "{$pfb['ccdir']}/*.txt";
-	} elseif ($et_header) {
-		$folder		= "{$pfb['etdir']}/*.txt";
-		$query		= '';
-		$query_host	= '';
-		$query_prefix	= '';
-	} elseif ($fields[3] == 'block') {
-		$folder = "{$pfb['denydir']}/*.txt {$pfb['nativedir']}/*.txt";
-	} elseif ($fields[3] == 'pass') {
-		$folder = "{$pfb['permitdir']}/*.txt {$pfb['nativedir']}/*.txt";
-	} elseif ($fields[3] == 'match') {
-		$folder = "{$pfb['matchdir']}/*.txt {$pfb['nativedir']}/*.txt";
-	}
-
-	// IPv4 IP address mask
+	// IPv4 IP address mask -- relocated up from its original position (issue #809 Phase
+	// 3b): it depends only on $pfb_ipv4/$fields[14], neither of which the derivation below
+	// touches, and nothing between here and its original site reads $mask, so this is
+	// behaviour-identical.
 	$mask = '';
 	if ($pfb_ipv4) {
 		$mask = strstr($fields[14], '/', FALSE) ?: '/32';
 	}
+
+	// issue #809 Phase 3b: the GeoIP/host-selection/ET-header/folder/validate-command
+	// derivation is extracted to pfb_ip_render_query() (pfblockerng.inc) -- a verbatim-
+	// motion refactor so the batched prefetch pass (pfb_ip_prefetch(), called from this
+	// page's two-pass IP table render below) derives the IDENTICAL lookup groups from a
+	// copy of the same $fields, with no separate re-derivation to drift from this one.
+	$rq = pfb_ip_render_query($fields);
+
+	$host		= $rq['host'];
+	$hostname	= $rq['hostname'];
+	$pfb_geoip	= $rq['pfb_geoip'];
+	$fields[15]	= $rq['field15'];	// ET-header 'Category:Feed' prefix strip -- render-visible
+	$folder		= $rq['folder'];
+
+	// HTML-encode the resolved/DHCP hostnames before they are printed as cell text.
+	$hostname['src'] = pfb_hsc($hostname['src']);
+	$hostname['dst'] = pfb_hsc($hostname['dst']);
 
 	// Determine if event IP still exists in Feed Aliastable
 	// Per-row pipeline with no render-time cache (the daemon's ipcache is event-time
@@ -3077,17 +3042,15 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	// moves entries, most rows take that path (alerts-reports-pipeline.md, issue #809).
 	// Memoized by the exact command about to run: two rows that would exec the
 	// byte-identical find|xargs-grep pipeline share one result for the rest of this
-	// page load.
+	// page load. issue #809 Phase 3b: in non-filter mode (or bounded-filter mode) this
+	// key is usually pre-seeded by pfb_ip_prefetch()'s batched validate round, so the
+	// closure below never actually runs for a covered row -- it remains the per-row
+	// fallback for anything the prefetch pass did not cover (the Unified table; any row
+	// it missed).
 	$validate = '';
-	if ($fields[14] != 'Unknown' && $fields[15] != 'Unknown') {
-		$q_ip = str_replace('.', '\.', $fields[14]);
-
-		$query_esc	= escapeshellarg($query);
-		$query_host_esc	= escapeshellarg($query_host);
-		$q_ip_esc	= escapeshellarg("^{$q_ip}");
-
-		$validate_cmd = "/usr/bin/find {$folder} -type f {$query_prefix} {$query_esc} {$query_host_esc} | xargs {$pfb['grep']} {$q_ip_esc} 2>&1";
-		$validate = pfb_render_memo($validate_memo, $validate_cmd, function () use ($validate_cmd) {
+	if ($rq['validate_cmd'] !== NULL) {
+		$validate_cmd = $rq['validate_cmd'];
+		$validate = pfb_render_memo($memos['validate'], $validate_cmd, function () use ($validate_cmd) {
 			return exec($validate_cmd);
 		});
 	}
@@ -3117,7 +3080,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	// stays outside the memo and is recomputed every row from the cached raw values.
 	if (empty($validate)) {
 		$miss_key = "{$host}|{$folder}";
-		list($pfb_query, $validate) = pfb_render_memo($ip_miss_memo, $miss_key, function () use ($host, $folder, $pfb) {
+		list($pfb_query, $validate) = pfb_render_memo($memos['miss'], $miss_key, function () use ($host, $folder, $pfb) {
 			$pfb_query = find_reported_header($host, $folder);
 
 			// $eval_new here mirrors the outer derivation below exactly (including the
@@ -4650,15 +4613,198 @@ if (!$alert_summary):
 	<?php
 
 			$p_query_port = '';
-			if (($handle = @popen('/usr/bin/tail -r ' . escapeshellarg($pfb_log), 'r')) !== FALSE) {
-				while (($fields = @fgetcsv($handle)) !== FALSE) {
-					$last_fld = array_pop($fields);
 
-					// Remove and record duplicate entries
-					if ($last_fld == '-') {
-						$dup[$rtype]++;
+			// issue #809 Phase 3b scope guard: batching (below) only runs when a finite row
+			// bound exists -- non-filter mode (bound $pfbentries), or filter mode with a real
+			// per-row limit ($ipfilterlimitentries != 0) AND real filter fields set. Filter
+			// mode with $ipfilterlimitentries == 0 never trips convert_ip_log()'s own limit
+			// check (see its `if ($pfb['filterlogentries'])` branch), so the log is genuinely
+			// scanned to EOF -- an unbounded buffer is not safe to build -- and the degenerate
+			// empty($filterfieldsarray[0]) case (every row short-circuits immediately) both
+			// keep today's single-pass streaming loop verbatim. See
+			// docs/misc/alerts-reports-pipeline.md.
+			// $ipfilterlimitentries is always genuinely set by this point (the
+			// $aglobal_array dynamic ${"$type"} assignment near the top of this file) --
+			// PHPStan just cannot trace that dynamic assignment, so this coalesce is a
+			// runtime no-op that keeps every read below provably defined (same approach
+			// as the $pfbentries/$folder defaults elsewhere in this file, issue #809).
+			$ipfilterlimitentries = $ipfilterlimitentries ?? 0;
+			$ip_two_pass = !$pfb['filterlogentries'] || ($ipfilterlimitentries != 0 && !empty($filterfieldsarray[0]));
+
+			if (!$ip_two_pass) {
+				if (($handle = @popen('/usr/bin/tail -r ' . escapeshellarg($pfb_log), 'r')) !== FALSE) {
+					while (($fields = @fgetcsv($handle)) !== FALSE) {
+						$last_fld = array_pop($fields);
+
+						// Remove and record duplicate entries
+						if ($last_fld == '-') {
+							$dup[$rtype]++;
+							continue;
+						}
+
+						$convert_ip = convert_ip_log('non_unified', $fields, $p_query_port, $rtype);
+						if ($convert_ip[0]) {
+							break;
+						} else {
+							$p_query_port	= $convert_ip[1];
+						}
+					}
+				}
+				if ($handle) {
+					@pclose($handle);
+				}
+			} else {
+				// Two passes over the reversed log instead of one, so every buffered row's
+				// render-time IP lookups (validate / miss-header / aliastables) are batched
+				// into a bounded number of grep passes (pfb_ip_prefetch()) instead of one-to-
+				// three exec()s per row.
+				//
+				// Pass 1 (collect): buffer up to and including the row that trips today's
+				// counter/limit gate ($pfbentries + 1 ACCEPTED rows -- in filter mode
+				// "accepted" means it passes pfb_match_filter_field(); in non-filter mode
+				// every non-dup row counts). A buffer entry is one of exactly three shapes:
+				//
+				//   array($fields, TRUE)              -- an accepted row (replayed verbatim);
+				//   int N                             -- a pure run of N consecutive '-'
+				//                                        duplicate-marker lines (Phase 3a
+				//                                        style: content never read, only the
+				//                                        count feeds $dup[$rtype]);
+				//   array('rej' => TRUE, 'dup' => N)  -- a "gap": a mixed run of dup-marker
+				//                                        and REJECTED lines containing >= 1
+				//                                        reject, of which N dup lines came
+				//                                        AFTER the last reject.
+				//
+				// The gap compression is sound because a rejected row's entire effect in
+				// today's streamed loop is CONSTANT and field-independent: convert_ip_log()'s
+				// filter-reject path does exactly `$dup[$rtype] = 0; return array(FALSE, '');`
+				// (nothing else -- no counter, no output), and the caller then assigns
+				// $p_query_port = ''. So within any run between two accepted rows, each reject
+				// wipes whatever dup count preceded it, and only the dups AFTER the LAST
+				// reject survive into the next rendered row's "[N]" badge -- two numbers
+				// (had-a-reject; dups-since-last-reject) reproduce the run's entire effect.
+				// This is what bounds the buffer in FILTER mode too: at most one int-or-gap
+				// entry can sit between consecutive accepted entries (a reject REPLACES a
+				// trailing int run with a gap; later dups/rejects mutate that same gap), so
+				// the buffer holds <= ($pfbentries + 1) field arrays plus <= ($pfbentries + 2)
+				// int/gap entries REGARDLESS of log size or filter selectivity -- O(rows
+				// rendered), never O(rows scanned).
+				$ip_buffered	  = array();
+				$ip_accepted_seen = 0;
+				if (($handle = @popen('/usr/bin/tail -r ' . escapeshellarg($pfb_log), 'r')) !== FALSE) {
+					while (($fields = @fgetcsv($handle)) !== FALSE) {
+						$last_fld = array_pop($fields);
+						$ip_last = count($ip_buffered) - 1;
+
+						// Duplicate-marker line: extend the current run.
+						if ($last_fld == '-') {
+							if ($ip_last >= 0 && is_int($ip_buffered[$ip_last])) {
+								$ip_buffered[$ip_last]++;
+							} elseif ($ip_last >= 0 && is_array($ip_buffered[$ip_last]) && isset($ip_buffered[$ip_last]['rej'])) {
+								$ip_buffered[$ip_last]['dup']++;
+							} else {
+								$ip_buffered[] = 1;
+							}
+							continue;
+						}
+
+						// Filter-mode acceptance, replicated with the SAME function
+						// convert_ip_log() itself calls -- on a COPY, since Pass 2 must
+						// replay the buffered $fields UNMODIFIED (convert_ip_log() does this
+						// exact reorder itself, as its own first line).
+						$accepted = TRUE;
+						if ($pfb['filterlogentries']) {
+							$ip_copy = $fields;
+							$ip_copy[99] = array_shift($ip_copy);
+							$accepted = pfb_match_filter_field($ip_copy, $filterfieldsarray[0]);
+						}
+
+						// Rejected line: fold into a gap marker. A reject resets the dup
+						// count (mirroring the streamed loop's `$dup[$rtype] = 0`), so it
+						// zeroes an existing gap's trailing-dup count, REPLACES a trailing
+						// pure-dup int run (those dups precede the reject, so the reset
+						// makes them irrelevant), or opens a fresh gap. The row's fields are
+						// deliberately NOT kept -- see the constant-effect argument above.
+						if (!$accepted) {
+							if ($ip_last >= 0 && is_array($ip_buffered[$ip_last]) && isset($ip_buffered[$ip_last]['rej'])) {
+								$ip_buffered[$ip_last]['dup'] = 0;
+							} elseif ($ip_last >= 0 && is_int($ip_buffered[$ip_last])) {
+								$ip_buffered[$ip_last] = array('rej' => TRUE, 'dup' => 0);
+							} else {
+								$ip_buffered[] = array('rej' => TRUE, 'dup' => 0);
+							}
+							continue;
+						}
+
+						// Accepted row: buffered POST-dup-pop, PRE-reorder -- exactly the
+						// shape convert_ip_log() itself expects as input.
+						$ip_buffered[] = array($fields, TRUE);
+						$ip_accepted_seen++;
+
+						if ($ip_accepted_seen >= ($pfbentries + 1)) {
+							break;
+						}
+					}
+				}
+				if ($handle) {
+					@pclose($handle);
+				}
+
+				// Pass 1.5 (derive + batch): every ACCEPTED buffered row's lookups, via the
+				// SAME helper (pfb_ip_render_query()) convert_ip_log() itself calls in Pass 2
+				// -- so the two passes can never derive a different answer for the same row.
+				// int runs and gap markers carry no fields and are never looked up.
+				$ip_prefetch_rows = array();
+				foreach ($ip_buffered as $ip_entry) {
+					if (is_int($ip_entry) || isset($ip_entry['rej'])) {
 						continue;
 					}
+					list($ip_fields, ) = $ip_entry;
+
+					$ip_copy = $ip_fields;
+					$ip_copy[99] = array_shift($ip_copy);
+					$ip_rq = pfb_ip_render_query($ip_copy);
+
+					$ip_prefetch_rows[] = array(
+						'host'			=> $ip_rq['host'],
+						'folder'		=> $ip_rq['folder'],
+						'validate_file_cmd'	=> $ip_rq['validate_file_cmd'],
+						'validate_cmd'		=> $ip_rq['validate_cmd'],
+						'eval_ip_raw'		=> $ip_copy[14],
+					);
+				}
+				pfb_ip_prefetch($ip_prefetch_rows);
+
+				// Pass 2 (render): replay the buffer in the same (reversed) order.
+				// - int N: a pure dup run -- one accumulation, output-identical to the N
+				//   individual $dup[$rtype]++ increments the streamed loop performed.
+				// - gap marker: a mixed dup/reject run. The streamed loop's net effect for
+				//   [d1 dups][reject]...[last reject][d2 dups] is $dup[$rtype] === d2 (each
+				//   reject RESET the count, then d2 post-reject dups re-accumulated) and
+				//   $p_query_port === '' (every reject returns array(FALSE, '') and the
+				//   caller assigns it) -- so the replay SETS $dup[$rtype] (never +=) to the
+				//   marker's post-last-reject count and clears $p_query_port. Ordering
+				//   matters and is preserved: the pre-reject d1 dups never reach the next
+				//   rendered row's badge, exactly as in the streamed loop.
+				// - accepted array: today's exact loop body, unchanged, over the SAME
+				//   post-dup-pop $fields the streaming loop would have handed
+				//   convert_ip_log() (which transparently consults the batched prefetch
+				//   above via pfb_ip_render_memos(), falling back to its own per-row exec
+				//   for anything Pass 1.5 did not cover).
+				// $rtype is always genuinely set by the case 'alert': switch above (the
+				// only path that reaches this block) -- see the $ipfilterlimitentries
+				// coalesce comment above for why PHPStan needs this spelled out anyway.
+				$rtype = $rtype ?? '';
+				foreach ($ip_buffered as $ip_entry) {
+					if (is_int($ip_entry)) {
+						$dup[$rtype] += $ip_entry;
+						continue;
+					}
+					if (isset($ip_entry['rej'])) {
+						$dup[$rtype] = $ip_entry['dup'];
+						$p_query_port = '';
+						continue;
+					}
+					list($fields, ) = $ip_entry;
 
 					$convert_ip = convert_ip_log('non_unified', $fields, $p_query_port, $rtype);
 					if ($convert_ip[0]) {
@@ -4667,9 +4813,6 @@ if (!$alert_summary):
 						$p_query_port	= $convert_ip[1];
 					}
 				}
-			}
-			if ($handle) {
-				@pclose($handle);
 			}
 		}
 	?>

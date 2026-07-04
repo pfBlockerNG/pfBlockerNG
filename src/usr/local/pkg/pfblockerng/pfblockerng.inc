@@ -8345,52 +8345,456 @@ function find_reported_header($ip, $pfbfolder, $geoip=FALSE) {
 			exec("{$pfb['grep']} -s {$query_esc} {$pfb['ccdir']}/*.txt | {$pfb['grep']} -v '{$geoip_list}' 2>&1", $result);
 		}
 
-		$cidrs = array();
-		if (!empty($result)) {
-			foreach ($result as $line) {
-				$rx = pfb_parse_query($line);
-
-				// Collect all CIDRs for analysis if Alert is from a CIDR
-				if (strpos($rx[1], '/') !== FALSE) {
-					$cidrs[] = $rx;
-				}
-			}
-		}
-
+		// issue #809 Phase 3b: the CIDR-selection loop (collect CIDR-shaped candidates
+		// from $result, then walk them doing the v4 mask math / v6 gen_subnetv6 +
+		// Net_IPv6::isInNetmask() match) is extracted to pfb_match_reported_cidr() so the
+		// batched pfb_find_reported_headers() sibling below can reuse the EXACT same logic
+		// against a SHARED grep-output array. Same $result, same v4/v6 math, same
+		// "first CIDR containing $ip wins" order -- this function's own behaviour is
+		// unchanged.
+		$rx = pfb_match_reported_cidr($result, $ip, $v4_type);
 		unset($result);
-
-		// Determine which CIDR alerted the IP address
-		if (!empty($cidrs)) {
-			foreach ($cidrs as $line) {
-				$validate = FALSE;
-				if ($v4_type) {
-					list($addr, $mask) = explode('/', $line[1]);
-					$mask = (0xffffffff << (32 - $mask)) & 0xffffffff;
-					$validate = ((ip2long($ip) & $mask) == (ip2long($addr) & $mask));
-				}
-				else {
-					/* Normalize IPv6 prefix to its start address to avoid PHP errors
-					 * https://redmine.pfsense.org/issues/14256
-					 */
-					list($prefix, $length) = explode('/', $line[1]);
-					$prefix = gen_subnetv6($prefix, $length);
-					$subnet = "{$prefix}/{$length}";
-
-					$validate = (Net_IPv6::isInNetmask($ip, $subnet));
-				}
-
-				// Return header on CIDR match
-				if ($validate) {
-					unset($cidrs);
-					return $line;
-				}
-			}
-			unset($cidrs);
+		if ($rx !== NULL) {
+			return $rx;
 		}
 	}
 
 	unset($result);
 	return array('Unknown', 'Unknown');
+}
+
+
+// Shared CIDR-selection core of find_reported_header()'s prefix-match branch (issue #809
+// Phase 3b): given the RAW grep output lines already collected for a first-octet (v4) or
+// prefix (v6) query, parse out every CIDR-shaped candidate and return the first one
+// containing $ip, or NULL if none does. find_reported_header() calls this on its own
+// single-host $result array (behaviour unchanged); the batched pfb_find_reported_headers()
+// sibling calls it once per GROUP on a SHARED $result array (every still-unresolved host in
+// that group), once per host.
+function pfb_match_reported_cidr(array $result, string $ip, bool $v4_type): ?array {
+
+	$cidrs = array();
+	if (!empty($result)) {
+		foreach ($result as $line) {
+			$rx = pfb_parse_query($line);
+
+			// Collect all CIDRs for analysis if Alert is from a CIDR
+			if (strpos($rx[1], '/') !== FALSE) {
+				$cidrs[] = $rx;
+			}
+		}
+	}
+
+	if (!empty($cidrs)) {
+		foreach ($cidrs as $line) {
+			$validate = FALSE;
+			if ($v4_type) {
+				list($addr, $mask) = explode('/', $line[1]);
+				$mask = (0xffffffff << (32 - $mask)) & 0xffffffff;
+				$validate = ((ip2long($ip) & $mask) == (ip2long($addr) & $mask));
+			}
+			else {
+				/* Normalize IPv6 prefix to its start address to avoid PHP errors
+				 * https://redmine.pfsense.org/issues/14256
+				 */
+				list($prefix, $length) = explode('/', $line[1]);
+				$prefix = gen_subnetv6($prefix, $length);
+				$subnet = "{$prefix}/{$length}";
+
+				$validate = (Net_IPv6::isInNetmask($ip, $subnet));
+			}
+
+			// Return header on CIDR match
+			if ($validate) {
+				return $line;
+			}
+		}
+	}
+
+	return NULL;
+}
+
+
+// issue #809 Phase 3b: the exact per-row query derivation convert_ip_log()
+// (pfblockerng_alerts.php) needs before it can validate/re-locate a reported IP --
+// extracted VERBATIM (same order, same values) so the batched prefetch pass below
+// (pfb_ip_prefetch()) can derive the IDENTICAL lookup groups from a copy of the same
+// $fields, with no separate re-derivation to drift from convert_ip_log()'s own logic.
+// $fields must already be in convert_ip_log()'s POST-REORDER shape (called AFTER that
+// function's own `$fields[99] = array_shift($fields);` line) -- the reorder itself is not
+// part of what this derivation consumes, so it stays in the caller, unchanged.
+//
+// Returns:
+//   host              - the reported IP/CIDR host (SRC on inbound, DST on outbound)
+//   hostname          - array('src'=>.., 'dst'=>..), RAW (not yet htmlencoded)
+//   pfb_geoip         - TRUE iff the row's alias name is a GeoIP continent alias
+//   field15           - $fields[15], with any Proofpoint IQRisk 'Category:Feed' prefix
+//                        stripped (render-visible -- the caller must write this back)
+//   folder            - the feed-dir glob this row's IP is checked against
+//   validate_file_cmd - the "find <folder> -type f <prefix> <query> <query_host>" pipe
+//                        (no ip pattern yet) that GROUPS rows for the batched validate
+//                        round below, or NULL when this row never runs a validate exec at
+//                        all (mirrors the guard on validate_cmd)
+//   validate_cmd      - the exact validate command convert_ip_log() execs (and memoizes,
+//                        keyed by this string), or NULL under the same guard
+function pfb_ip_render_query(array $fields): array {
+	global $pfb, $continents;
+
+	// Inbound event
+	if ($fields[11] == 'in') {
+		$host		= $fields[7];
+		$hostname	= array( 'src' => $fields[16], 'dst' => $fields[17] );
+	}
+	// Outbound event
+	else {
+		$host		= $fields[8];
+		$hostname	= array( 'src' => $fields[17], 'dst' => $fields[16] );
+	}
+
+	// GeoIP event
+	$pfb_geoip = FALSE;
+	if (isset($continents[ substr($fields[13], 0, -3) ])) {
+		$pfb_geoip = TRUE;
+	}
+
+	// Determine if Proofpoint IQRisk based Feed (Based on ':' in Feedname - Defines Feed Category)
+	$et_header = FALSE;
+	if (strpos($fields[15], ':') !== FALSE) {
+		$data		= explode(':', $fields[15]);
+		$fields[15]	= $data[1];
+		$et_header	= TRUE;
+	}
+
+	// Determine folder type
+	$folder		= '';
+	$query_prefix	= "|";
+	$query		= "{$pfb['grep']}";
+	$query_host	= "{$fields[15]}.txt";
+
+	if ($pfb_geoip) {
+		$folder = "{$pfb['ccdir']}/*.txt";
+	} elseif ($et_header) {
+		$folder		= "{$pfb['etdir']}/*.txt";
+		$query		= '';
+		$query_host	= '';
+		$query_prefix	= '';
+	} elseif ($fields[3] == 'block') {
+		$folder = "{$pfb['denydir']}/*.txt {$pfb['nativedir']}/*.txt";
+	} elseif ($fields[3] == 'pass') {
+		$folder = "{$pfb['permitdir']}/*.txt {$pfb['nativedir']}/*.txt";
+	} elseif ($fields[3] == 'match') {
+		$folder = "{$pfb['matchdir']}/*.txt {$pfb['nativedir']}/*.txt";
+	}
+
+	// Determine if event IP still exists in Feed Aliastable -- builds the exact validate
+	// command convert_ip_log() execs (via its page-scope memo); NULL reproduces today's
+	// `$validate = '';` no-exec guard (an 'Unknown' evaluated IP or feed name never ran a
+	// validate exec at all).
+	$validate_file_cmd = NULL;
+	$validate_cmd	    = NULL;
+	if ($fields[14] != 'Unknown' && $fields[15] != 'Unknown') {
+		$q_ip = str_replace('.', '\.', $fields[14]);
+
+		$query_esc	= escapeshellarg($query);
+		$query_host_esc	= escapeshellarg($query_host);
+		$q_ip_esc	= escapeshellarg("^{$q_ip}");
+
+		$validate_file_cmd = "/usr/bin/find {$folder} -type f {$query_prefix} {$query_esc} {$query_host_esc}";
+		$validate_cmd	   = "{$validate_file_cmd} | xargs {$pfb['grep']} {$q_ip_esc} 2>&1";
+	}
+
+	return array(
+		'host'			=> $host,
+		'hostname'		=> $hostname,
+		'pfb_geoip'		=> $pfb_geoip,
+		'field15'		=> $fields[15],
+		'folder'		=> $folder,
+		'validate_file_cmd'	=> $validate_file_cmd,
+		'validate_cmd'		=> $validate_cmd,
+	);
+}
+
+
+// issue #809 Phase 3b: promotes convert_ip_log()'s two Phase-1 function-static memo stores
+// ($validate_memo / $ip_miss_memo, pfblockerng_alerts.php) to a reference-returning
+// accessor so the batched prefetch pass below (pfb_ip_prefetch()) can seed them from
+// OUTSIDE convert_ip_log(). Same one-page-load lifetime as before (a static local, just
+// declared here instead of inside convert_ip_log()). No reset is needed between the three
+// per-type IP tables rendered on one page load: every key is content-derived (the exact
+// validate command string, or "$host|$folder") and therefore stable regardless of which
+// table populated it first -- the same reasoning as the original Phase 1 memos.
+function &pfb_ip_render_memos(): array {
+	static $memos = array('validate' => array(), 'miss' => array());
+	return $memos;
+}
+
+
+// Run ONE batched `grep -f <patternfile>` pass (issue #809 Phase 3b), sharing the pattern-
+// file plumbing across every IP-table batched round (validate / miss-header / aliastables)
+// below. Returns every matched line (not a first-match map, unlike pfb_dnsbl_prefetch_grep())
+// since callers here attribute possibly-many lines per candidate themselves (see
+// pfb_ip_prefetch_last_match()). The pattern-file path is inserted between $cmd_prefix and
+// $cmd_suffix verbatim (no sprintf/format-string parsing of caller-supplied paths).
+function pfb_ip_prefetch_grep_lines(string $cmd_prefix, string $cmd_suffix, array $patterns): array {
+
+	$lines = array();
+	if (empty($patterns)) {
+		return $lines;
+	}
+
+	$pattern_file = tempnam(sys_get_temp_dir(), 'pfb_ip_prefetch_');
+	if ($pattern_file === FALSE) {
+		return $lines;
+	}
+
+	try {
+		if (file_put_contents($pattern_file, implode("\n", $patterns) . "\n") === FALSE) {
+			return $lines;
+		}
+
+		$pattern_file_esc = escapeshellarg($pattern_file);
+		exec("{$cmd_prefix} {$pattern_file_esc} {$cmd_suffix}", $lines);
+	} finally {
+		@unlink($pattern_file);
+	}
+
+	return $lines;
+}
+
+
+// Attribute the LAST line in $lines (grep's original file/line order is preserved
+// regardless of pattern order) that "belongs" to $raw_prefix -- reproducing the "last line
+// of output" semantics a per-row single-pattern exec() call gives (PHP's exec() without an
+// $output array returns only the last stdout line), from a batched multi-pattern grep pass
+// whose output interleaves every candidate's matches together (issue #809 Phase 3b).
+//
+// A line belongs to $raw_prefix under either shape grep can emit:
+//   - unprefixed (the `find` pipeline matched exactly one file): the line IS the file
+//     content, so a direct prefix match applies;
+//   - file-prefixed (more than one file matched): grep emits "path:content" -- a path never
+//     contains ':' and never starts with a digit/hex character, so the substring after the
+//     FIRST ':' is unambiguously the content, and that is what must carry the prefix.
+// This deliberately preserves grep's own prefix-match quirk (an anchored `^1\.2\.3\.4`
+// pattern also matches content beginning `1.2.3.45`) -- the per-row exec has the identical
+// quirk, so reproducing it (rather than an exact-match) is what keeps this behaviour-
+// identical to the code it replaces.
+function pfb_ip_prefetch_last_match(array $lines, string $raw_prefix): ?string {
+
+	$match = NULL;
+	foreach ($lines as $line) {
+		if (str_starts_with($line, $raw_prefix)) {
+			$match = $line;
+			continue;
+		}
+		$colon_pos = strpos($line, ':');
+		if ($colon_pos !== FALSE && str_starts_with(substr($line, $colon_pos + 1), $raw_prefix)) {
+			$match = $line;
+		}
+	}
+	return $match;
+}
+
+
+// Batched sibling of find_reported_header() (issue #809 Phase 3b): resolves every host in
+// $hosts against the SAME $pfbfolder/$geoip in at most TWO batched grep passes (Round A:
+// exact match; Round B: first-octet/prefix + CIDR match) instead of one-to-two exec() calls
+// PER host. Returns a map host => $pfb_query (['Unknown','Unknown'] on a total miss,
+// matching find_reported_header()'s own return shape).
+function pfb_find_reported_headers(array $hosts, $pfbfolder, $geoip = FALSE): array {
+	global $pfb;
+
+	$hosts = array_values(array_unique($hosts));
+	$out = array();
+	foreach ($hosts as $host) {
+		$out[$host] = array('Unknown', 'Unknown');
+	}
+	if (empty($hosts)) {
+		return $out;
+	}
+
+	// Round A (exact): same command shape as find_reported_header()'s exact-match exec,
+	// batched into one `-f patternfile` pass. pfb_ip_prefetch_last_match() recovers each
+	// host's own LAST matching line from the shared batched output, reproducing what a
+	// per-row `exec()` (last-line-of-output) call would have returned for that host alone.
+	$patterns = array();
+	foreach ($hosts as $host) {
+		$patterns[] = '^' . str_replace('.', '\.', $host);
+	}
+	$lines = pfb_ip_prefetch_grep_lines("{$pfb['grep']} -s -f", "{$pfbfolder} 2>&1", $patterns);
+
+	$missed = array();
+	foreach ($hosts as $host) {
+		$match = pfb_ip_prefetch_last_match($lines, $host);
+		if ($match !== NULL) {
+			$out[$host] = pfb_parse_query($match);
+		} else {
+			$missed[] = $host;
+		}
+	}
+
+	if (empty($missed)) {
+		return $out;
+	}
+
+	// Round B (prefix + CIDR): group the still-missing hosts by their IDENTICAL first-
+	// octet (v4) / prefix (v6) query string -- find_reported_header()'s own query for that
+	// host -- so hosts sharing one query run it exactly ONCE, then share pfb_match_
+	// reported_cidr()'s CIDR walk over that one shared grep-output array.
+	$groups = array();
+	foreach ($missed as $host) {
+		$v4_type = TRUE;
+		if (substr_count($host, ':') > 1) {
+			$query   = strstr($host, ':', TRUE);
+			$v4_type = FALSE;
+		} else {
+			$query = strstr($host, '.', TRUE);
+		}
+		if (!isset($groups[$query])) {
+			$groups[$query] = array('v4_type' => $v4_type, 'hosts' => array());
+		}
+		$groups[$query]['hosts'][] = $host;
+	}
+
+	foreach ($groups as $query => $group) {
+		if ($group['v4_type']) {
+			$query_esc = escapeshellarg("^{$query}\.");
+		} else {
+			$query_esc = escapeshellarg("^{$query}:");
+		}
+
+		$result = array();
+		if (!$geoip) {
+			exec("{$pfb['grep']} -s {$query_esc} {$pfbfolder} 2>&1", $result);
+		} else {
+			$geoip_list = "Africa\|Antarctica\|Asia\|Europe\|North_America\|South_America\|Oceania\|Proxy_and_Satellite\|Top_Spammers";
+			exec("{$pfb['grep']} -s {$query_esc} {$pfb['ccdir']}/*.txt | {$pfb['grep']} -v '{$geoip_list}' 2>&1", $result);
+		}
+
+		foreach ($group['hosts'] as $host) {
+			$rx = pfb_match_reported_cidr($result, $host, $group['v4_type']);
+			if ($rx !== NULL) {
+				$out[$host] = $rx;
+			}
+		}
+	}
+
+	return $out;
+}
+
+
+// Batch every buffered, filter-ACCEPTED row's render-time IP lookups ahead of the per-type
+// IP table's replay pass (issue #809 Phase 3b): the validate round (is the logged IP/CIDR
+// still in its logged feed file), the miss round (find_reported_header()'s exact + prefix/
+// CIDR search), and the aliastables round (which alias table now holds the resolved IP),
+// each collapsed from one exec() per row to at most one grep pass per distinct group.
+// Seeds pfb_ip_render_memos() -- convert_ip_log() (pfblockerng_alerts.php) transparently
+// consults the same memo stores via pfb_render_memo(), falling back to its own per-row exec
+// for anything this pass did not cover (an unseeded key, or when this function was never
+// called at all -- e.g. the Unified table, out of scope for this phase).
+//
+// $rows is one entry per buffered, filter-accepted row (pfblockerng_alerts.php's Pass 1.5)
+// -- keys: 'host', 'folder', 'eval_ip_raw' (the raw $fields[14] evaluated-IP literal), and
+// 'validate_file_cmd'/'validate_cmd' from pfb_ip_render_query() (both NULL when that row
+// never runs a validate exec at all).
+function pfb_ip_prefetch(array $rows): void {
+	global $pfb;
+
+	if (empty($rows)) {
+		return;
+	}
+
+	$memos = &pfb_ip_render_memos();
+
+	// --- Validate round: group by the shared file-listing pipeline -------------------
+	$validate_groups = array();
+	foreach ($rows as $row) {
+		if ($row['validate_cmd'] === NULL) {
+			continue;	// mirrors convert_ip_log()'s own no-exec guard -- never validated
+		}
+		if (array_key_exists($row['validate_cmd'], $memos['validate'])) {
+			continue;	// already resolved (this row, or an identical earlier one)
+		}
+		$key = $row['validate_file_cmd'];
+		if (!isset($validate_groups[$key])) {
+			$validate_groups[$key] = array('file_cmd' => $row['validate_file_cmd'], 'entries' => array());
+		}
+		$validate_groups[$key]['entries'][$row['validate_cmd']] = $row['eval_ip_raw'];
+	}
+
+	foreach ($validate_groups as $group) {
+		$patterns = array();
+		foreach ($group['entries'] as $raw_ip) {
+			$patterns[] = '^' . str_replace('.', '\.', $raw_ip);
+		}
+		$patterns = array_values(array_unique($patterns));
+
+		$lines = pfb_ip_prefetch_grep_lines("{$group['file_cmd']} | xargs {$pfb['grep']} -f", '2>&1', $patterns);
+
+		foreach ($group['entries'] as $cmd => $raw_ip) {
+			$memos['validate'][$cmd] = pfb_ip_prefetch_last_match($lines, $raw_ip) ?? '';
+		}
+	}
+
+	// --- Miss round: every row whose (seeded or guard-absent) validate is empty -------
+	$miss_rows = array();
+	foreach ($rows as $row) {
+		$seeded_validate = ($row['validate_cmd'] !== NULL) ? ($memos['validate'][$row['validate_cmd']] ?? '') : '';
+		if (!empty($seeded_validate)) {
+			continue;
+		}
+		$miss_key = "{$row['host']}|{$row['folder']}";
+		if (isset($memos['miss'][$miss_key]) || isset($miss_rows[$miss_key])) {
+			continue;	// already seeded (or a duplicate host+folder within this batch)
+		}
+		$miss_rows[$miss_key] = $row;
+	}
+
+	if (empty($miss_rows)) {
+		return;
+	}
+
+	// Round A/B (batched find_reported_header()), grouped by folder. NOTE -- quirk
+	// PRESERVED, not introduced by this phase: convert_ip_log()'s own miss-round call is
+	// `find_reported_header($host, $folder)`, no third argument, so it ALWAYS runs with
+	// $geoip=FALSE even for a GeoIP row (whose $folder already points at ccdir on its own,
+	// so the exact-match round is unaffected either way -- only the prefix round's
+	// continent-name exclusion differs). Reproduced verbatim: this call always passes
+	// FALSE too, matching today's Alerts-page behaviour exactly.
+	$hosts_by_folder = array();
+	foreach ($miss_rows as $row) {
+		$hosts_by_folder[$row['folder']][$row['host']] = TRUE;
+	}
+
+	$headers_by_host_folder = array();
+	foreach ($hosts_by_folder as $folder => $hosts) {
+		$headers = pfb_find_reported_headers(array_keys($hosts), $folder, FALSE);
+		foreach ($headers as $host => $pfb_query) {
+			$headers_by_host_folder["{$host}|{$folder}"] = $pfb_query;
+		}
+	}
+
+	// --- Aliastables round: ONE batched pass across every miss row --------------------
+	$alias_patterns  = array();
+	$eval_new_by_key = array();
+	foreach ($miss_rows as $miss_key => $row) {
+		$pfb_query = $headers_by_host_folder[$miss_key];
+		$eval_new = ($pfb_query[1] == 'Unknown') ? 'Not listed!' : $pfb_query[1];
+		$eval_new_by_key[$miss_key] = $eval_new;
+		$alias_patterns[] = '^' . str_replace('.', '\.', $eval_new);
+	}
+	$alias_patterns = array_values(array_unique($alias_patterns));
+
+	$alias_lines = pfb_ip_prefetch_grep_lines(
+		"/usr/bin/find {$pfb['aliasdir']}/*.txt -type f | xargs {$pfb['grep']} -f",
+		'2>&1',
+		$alias_patterns
+	);
+
+	foreach ($miss_rows as $miss_key => $row) {
+		$pfb_query    = $headers_by_host_folder[$miss_key];
+		$raw_validate = pfb_ip_prefetch_last_match($alias_lines, $eval_new_by_key[$miss_key]) ?? '';
+		$memos['miss'][$miss_key] = array($pfb_query, $raw_validate);
+	}
 }
 
 
