@@ -1,0 +1,167 @@
+[Adblock Plus 3.13]
+! Title: Adblock List for Finland
+! Description: Finnish adblock list
+! Expires: 4 days
+! Last modified: Tue, 30 Jun 2026 21:05:34 +0300
+! Homepage: https://github.com/finnish-easylist-addition/finnish-easylist-addition
+! License: https://unlicense.org/
+! Raportoi mainoksenestoon liittyvistä ongelmista tai estämättömistä mainoksista täällä / Please report adblocking related issues or unblocked ads at:
+! https://github.com/finnish-easylist-addition/finnish-easylist-addition/issues
+! Email (noreply): mainosesto (at-sign) fire.fundersclub.com
+!#include Finland_adb_uBO_extras.txt
+
+! -----GENERAL FILTERS-----
+
+/bannerCounter.php
+/js/spring.js
+/karuselli/js/AgAdCarousel
+/mainokset.
+/mainokset/*
+/mainokset_
+/mainos.
+/mainos/*
+/mainos_
+/mainosbanneri.
+/mainosbanneri/*
+/mainosbanneri_
+/mainosbannerit.
+/mainosbannerit/*
+/mainosbannerit_
+/mainoskaruselli.
+/mainoskaruselli/*
+/mainoskaruselli_yli
+/mainosmokkula/*$image
+/sponsorit.
+/sponsorit/*
+/sponsorit_
+/yhteistyokumppanit.
+/yhteistyokumppanit/*
+/yhteistyokumppanit_
+/yhteistyossa.
+/yhteistyossa/*
+/yhteistyossa_
+_mainos.
+_mainosnappi.
+
+###atwAdFrame
+###keskimainos
+###mainokset
+###mainokset_oikea
+###mainokset_vasen
+###mainokset_yla
+###mainos
+###mainosbanneri
+###mainosbannerit
+###mainoskaruselli
+###mainoslaatikko
+###mainospaikka
+###mainostila
+###natiivit
+###parade-container
+###sponsori
+###sponsorit
+###yhteistyokaruselli
+###yhteistyokumppanit
+###yhteistyossa
+###ylamainokset
+###ylamainos
+##.adbox_content
+##.card--native
+##.dfpBoxBottom
+##.dfpListNativeBanner
+##.diks-display-ad
+##.diks-native-ad
+##.etuovi-embed
+##.keskimainos
+##.mainokset
+##.mainokset_oikea
+##.mainokset_vasen
+##.mainokset_yla
+##.mainos
+##.mainosbanneri
+##.mainosbannerit
+##.mainoskaruselli
+##.mainoslaatikko
+##.mainosnosto
+##.mainospaikka
+##.mainostila
+##.sponsori
+##.sponsorit
+##.tdt-desktop-ad
+##.tdt-manager-element
+##.tdt-minilanding-button
+##.tdt-mobile-ad
+##.yhteistyokaruselli
+##.yhteistyokumppanit
+##.yhteistyossa
+##.ylamainokset
+##.ylamainos
+##[href="https://pikakasinoja.com"]
+##[href^="/artikkeli/kaupallinen-yhteistyo/"]
+##[href^="https://media.suomikasino.com/"]
+##[href^="https://www.nettikasinot.org"]
+##a[href*="/clickthrgh.asp?"]
+##a[href="https://kasinoseta.com/"]
+##a[href^="https://app.readpeak.com/ads"]
+##a[href^="https://www.kumiukko.fi/ostos?tt="]
+##div#commercial-carousel
+##div[class*=element--nativead]
+##div[class*=newsFrontAd]
+##div[class="ad container-right"]
+##div[class=AgAdCarousel_Container]
+##div[class=AgAdCarousel_LightBox]
+##div[id^=ads-content-bottom]
+
+! -----GENERAL FILTERS END-----
+! -----SPECIFIC FILTERS-----
+
+2pos.life##.ad2
+aamulehti.fi##article[class]:has(> a[href^="https://tilaa.sanoma.fi/al-digi"][href$=etusivu_flash])
+aamulehti.fi,hs.fi,jamsanseutu.fi,janakkalansanomat.fi,kankaanpaanseutu.fi,kmvlehti.fi,merikarvialehti.fi,nokianuutiset.fi,rannikkoseutu.fi,satakunnankansa.fi,suurkeuruu.fi,sydansatakunta.fi,tyrvaansanomat.fi,valkeakoskensanomat.fi##[data-testid|="laneitem"]:has(> .list a[href^="/mainos/"])
+aamulehti.fi,hs.fi,jamsanseutu.fi,janakkalansanomat.fi,kankaanpaanseutu.fi,kmvlehti.fi,merikarvialehti.fi,nokianuutiset.fi,rannikkoseutu.fi,satakunnankansa.fi,suurkeuruu.fi,sydansatakunta.fi,tyrvaansanomat.fi,valkeakoskensanomat.fi##.teaser-ad__background
+aamulehti.fi,hs.fi,jamsanseutu.fi,janakkalansanomat.fi,kankaanpaanseutu.fi,kmvlehti.fi,merikarvialehti.fi,nokianuutiset.fi,rannikkoseutu.fi,satakunnankansa.fi,suurkeuruu.fi,sydansatakunta.fi,tyrvaansanomat.fi,valkeakoskensanomat.fi##.ticker--promo-10
+aamulehti.fi,hs.fi,jamsanseutu.fi,janakkalansanomat.fi,kankaanpaanseutu.fi,kmvlehti.fi,merikarvialehti.fi,nokianuutiset.fi,rannikkoseutu.fi,satakunnankansa.fi,suurkeuruu.fi,sydansatakunta.fi,tyrvaansanomat.fi,valkeakoskensanomat.fi##div[class] > a[href^="https://tilaa.sanoma.fi/"]
+aamulehti.fi,jamsanseutu.fi,janakkalansanomat.fi,kankaanpaanseutu.fi,kmvlehti.fi,merikarvialehti.fi,nokianuutiset.fi,rannikkoseutu.fi,satakunnankansa.fi,suurkeuruu.fi,sydansatakunta.fi,tyrvaansanomat.fi,valkeakoskensanomat.fi#?#article[class="list bg-positive w-full mb-16"]:has-text(Mainos)
+aamulehti.fi,jamsanseutu.fi,janakkalansanomat.fi,kankaanpaanseutu.fi,kmvlehti.fi,merikarvialehti.fi,nokianuutiset.fi,rannikkoseutu.fi,satakunnankansa.fi,suurkeuruu.fi,sydansatakunta.fi,tyrvaansanomat.fi,valkeakoskensanomat.fi#?#div[class|="ab-test-laneitem"]:has(.list__heading:has-text(Mainos))
+aamuposti.fi,esaimaa.fi,ess.fi,forssanlehti.fi,hameensanomat.fi,hankasalmensanomat.fi,heinavedenlehti.fi,helsinginuutiset.fi,iisalmensanomat.fi,ita-savo.fi,itahame.fi,joroistenlehti.fi,joutsenolehti.fi,juvanlehti.fi,kaakonkulma.fi,kangasniemenlehti.fi,karkkilalainen.fi,keski-hame.fi,keski-uusimaa.fi,keskilaakso.fi,koillis-savo.fi,kouvolansanomat.fi,ksml.fi,kymensanomat.fi,lansi-savo.fi,lansi-uusimaa.fi,lansisaimaa.fi,lansivayla.fi,lappeenrannanuutiset.fi,laukaa-konnevesi.fi,lopenlehti.fi,loviisansanomat.fi,luumaenlehti.fi,mantsalanuutiset.fi,mattijaliisa.fi,miilu.fi,mikkelinkaupunkilehti.fi,nurmijarvenuutiset.fi,pieksamaenlehti.fi,pielavesi-keitele.fi,pitajalainen.fi,pitajanuutiset.fi,puruvesi.net,pyhtaanlehti.fi,sampolehti.fi,savonsanomat.fi,seutuneloset.fi,sipoonsanomat.fi,sisa-savolehti.fi,sisasuomenlehti.fi,sjl.fi,soisalonseutu.fi,tamperelainen.fi,tollotin.fi,turkulainen.fi,uusilahti.fi,uusimaa.fi,uutis-jousi.fi,uutisvuoksi.fi,vantaansanomat.fi,viikkosavo.fi,viispiikkinen.fi,viitasaarenseutu.fi,warkaudenlehti.fi##[data-info-container-text^="MAINOS"]
+aamuset.fi##div[class$=nativead]
+aasiakas.net##.jp_adsense_ad_container
+adressit.com###petition_page_top_ad
+aijaa.com##[href^="https://tc.tradetracker.net/"]
+aijaa.com##div.text-center.col-sm-6 > a[rel$=nofollow]
+aitiydenihme.fi,askelterveyteen.com,mielenihmeet.fi,myanimals.com##.bc--grey-neutral-50
+akaanseutu.fi##.kaupungin-tiedotteetsidebar:has(.mainossidebar)
+akaanseutu.fi,lvs.fi,orivedensanomat.fi,pirkkalainen.fi,shl.fi##.teivo-sidebar
+akaanseutu.fi,lvs.fi,orivedensanomat.fi,pirkkalainen.fi,shl.fi,ylojarvenuutiset.fi##.custom-category-posts-container:has(> .mainos-item)
+akaanseutu.fi,lvs.fi,orivedensanomat.fi,pirkkalainen.fi,shl.fi,ylojarvenuutiset.fi##.feedraviraportit:has(.mainosfeedravi)
+akaanseutu.fi,lvs.fi,orivedensanomat.fi,pirkkalainen.fi,shl.fi,ylojarvenuutiset.fi##.omamainos-product-xl
+akaanseutu.fi,lvs.fi,orivedensanomat.fi,pirkkalainen.fi,shl.fi,ylojarvenuutiset.fi##.omamainos-products
+akaanseutu.fi,lvs.fi,orivedensanomat.fi,pirkkalainen.fi,shl.fi,ylojarvenuutiset.fi##.omamainos-responsive
+akaanseutu.fi,lvs.fi,shl.fi,ylojarvenuutiset.fi##[href="/tilaa-lehti"]
+lvs.fi##.lempaalan-kunta-tiedotteetsidebar:has(.lempaalan-kunta-mainossidebar)
+orivedensanomat.fi##figure.wp-block-image:has(> a[href^="https"]:not([href^="https://orivedensanomat.fi"]))
+orivedensanomat.fi##figure.wp-block-image:has(> a[href^="https"]:not([href^="https://orivedensanomat.fi"])) + .wp-block-spacer
+aksa.fi##.vaihtuvamainos
+aksa.fi##div[class="w-full md:w-2/5 pt-6 md:pt-0 pl-0 md:pl-8"]
+aland.com###block-local-offers-widget-front
+aland.com##.optionset-imported-ads
+aland.com##.revive-block
+aland.com##.view-imported-ad-ams
+alandstidningen.ax###block-annonsblockx6
+alandstidningen.ax###block-bilwebbenmobileteaser
+alandstidningen.ax###block-googleaddesktopinsider
+alandstidningen.ax###block-marknadenmobileteaser
+alandstidningen.ax###block-stickyannons
+alandstidningen.ax###block-views-block-bilwebben-block-1
+alandstidningen.ax###block-views-block-company-ads-block-1
+alandstidningen.ax##.editorial-ad
+alandstidningen.ax##.views-element-container:has(a[href^="https://www.marknaden.ax/annons"])
+alandstidningen.ax##div[id|=block-googleadmaincontent]
+alandstidningen.ax#?#.views-element-container:has-text(Annonsnytt)
+alibi.fi###alibi-ad-popup
+alibi.fi##.box--full.grid__container.clearfix
+alibi.fi##.magazineorderwidget__content
+alibi.fi##.sidebar-block:has(img.awpo-lazy)
+alibi.fi##[href="https://alibi.fi/tilaa-lehti/"]
+alibi.fi#?#.article__body > p:has-text(/^\xA0$/)
+alibi.fi,ampparit.com,anna.fi,eralehti.fi,golfpiste.com,hymy.fi,kaksplus.fi,kipparilehti.fi,kotiliesi.fi,koululainen.fi,muropaketti.com,nettiauto.com,nettikaravaani.com,nettikone.com,nettimokki.com,nettimoto.com,nettivaraosa.com,nettivene.com,raken
