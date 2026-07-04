@@ -254,6 +254,39 @@ class TestNormalise:
         assert pfb_unbound.normalise(name_253 + ".") == name_253
 
 
+class TestNormaliseVerdictBucket:
+    """ADR-48 Phase 4 (#789): ``_normalise_verdict`` is the classified body
+    ``normalise()`` wraps -- every reject class ``TestNormalise`` above pins as
+    ``None`` here additionally pins WHICH of the two RESOLVED buckets ('shape' vs
+    'wire_cap') it tallies as, since build()/parse_abp()/reconcile() rely on that
+    split to avoid spamming a healthy feed's operator with the wrong reason.
+    """
+
+    def test_accept_returns_domain_and_no_bucket(self) -> None:
+        assert pfb_unbound._normalise_verdict(" Tracker.ORG. ") == ("tracker.org", None)
+
+    def test_no_dot_is_shape(self) -> None:
+        assert pfb_unbound._normalise_verdict("localhost") == (None, "shape")
+
+    def test_edge_hyphen_is_shape(self) -> None:
+        assert pfb_unbound._normalise_verdict("-bad.com") == (None, "shape")
+        assert pfb_unbound._normalise_verdict("bad-.com") == (None, "shape")
+
+    def test_empty_label_is_shape(self) -> None:
+        assert pfb_unbound._normalise_verdict("emp..ty") == (None, "shape")
+
+    def test_bad_char_is_shape(self) -> None:
+        assert pfb_unbound._normalise_verdict("sp ace.com") == (None, "shape")
+
+    def test_over_label_cap_is_wire_cap(self) -> None:
+        # #753: 64-char label -- well-shaped (a dot IS present) but unqueryable.
+        assert pfb_unbound._normalise_verdict("a" * 64 + ".com") == (None, "wire_cap")
+
+    def test_over_total_cap_is_wire_cap(self) -> None:
+        name_254 = ".".join(["b" * 61] * 4) + "." + "b" * 6
+        assert pfb_unbound._normalise_verdict(name_254) == (None, "wire_cap")
+
+
 # --------------------------------------------------------------------------- #
 # classify()
 # --------------------------------------------------------------------------- #
@@ -477,3 +510,106 @@ class TestBuildPurity:
         # And the returned structures are NOT the module globals.
         assert result.data_db is not pfb_unbound.dataDB
         assert result.zone_db is not pfb_unbound.zoneDB
+
+
+# --------------------------------------------------------------------------- #
+# ADR-48 Phase 4 (#789) -- build()'s per-entry reject tally.
+#
+# A synthetic in-memory manifest + line_reader (the ``_manifest``/``lambda raw:
+# [...]`` idiom already used by TestBuildBranches in test_branch_coverage_gaps.py)
+# gives EXACT control over how many shape/wire_cap rejects a feed carries -- the
+# golden-fixture-driven ``_run_build()`` helper above is deliberately NOT reused
+# here: its feed contents are tuned for the ADR-06 decision oracle, not for
+# pinning an exact reject count, and coupling this test to that fixture's byte
+# content would make it fragile to unrelated fixture edits.
+# --------------------------------------------------------------------------- #
+
+
+class TestEntryRejectTally:
+    """``build()`` tallies every domain-target entry the normalise() domain-shape
+    gate rejects (bucket 'shape' | 'wire_cap', ADR §2 item 4) so an operator can
+    explain a feed-size vs dict-size discrepancy from one grep instead of
+    guessing (issue #789). RED on pre-Phase-4 code: ``BuildResult`` carried no
+    ``rejects`` field at all (``AttributeError``).
+    """
+
+    def test_abp_feed_tallies_exact_shape_and_wire_cap_counts(self) -> None:
+        # Given: an ABP feed with EXACTLY 2 shape-rejectable entries (no-dot host,
+        # edge-hyphen label) and 2 wire-cap-rejectable entries (a 64-char label, a
+        # >253-char total name) among otherwise-healthy accepted entries.
+        long_label = "a" * 64
+        name_254 = ".".join(["b" * 61] * 4) + "." + "b" * 6
+        feed_row = {"feed": "RejFeed", "group": "RejGroup", "format_hint": "abp", "log_flag": "1", "raw": "r"}
+        lines = [
+            "||good.example.com^",  # accepted -- must not be counted
+            "||no-dot-host^",  # shape: no "." in host
+            "||-bad.example.com^",  # shape: edge-hyphen label
+            f"||{long_label}.com^",  # wire_cap: 64-char label
+            f"||{name_254}^",  # wire_cap: >253-char total
+        ]
+        # When: build() runs the feed through parse_abp() -> reconcile().
+        result = pfb_unbound.build(
+            {"feeds": [feed_row], "config": {}},
+            {},
+            line_reader=lambda raw: lines,
+        )
+        # Then: the tally holds EXACTLY the crafted counts, keyed (feed, group);
+        # the accepted entry landed in the block structures, not in the tally.
+        assert result.rejects == {("RejFeed", "RejGroup"): {"shape": 2, "wire_cap": 2}}
+        assert "good.example.com" in result.data_db or "good.example.com" in result.zone_db
+
+    def test_plain_feed_tallies_normalise_reject(self) -> None:
+        # Given: a plain (non-ABP) feed with exactly 1 shape-rejectable line --
+        # proves the plain build path (not just the ABP path) counts too.
+        feed_row = {"feed": "PlainFeed", "group": "PlainGroup", "format_hint": "plain", "log_flag": "1", "raw": "r"}
+        result = pfb_unbound.build(
+            {"feeds": [feed_row], "config": {}},
+            {},
+            line_reader=lambda raw: ["good.example.com", "no-dot-host"],
+        )
+        assert result.rejects == {("PlainFeed", "PlainGroup"): {"shape": 1, "wire_cap": 0}}
+
+
+class TestSkipClassesTallyZero:
+    """ADR-48 §7 reject-criterion pin: a deliberate ABP SKIP (comment, cosmetic/
+    element-hiding, path/wildcard anchor, IP-valued anchor, non-DNS $options,
+    $badfilter) is NOT a reject -- it must tally NOTHING, or a perfectly healthy
+    feed built entirely of such lines would log spurious REJECT lines. The lines
+    below are the deliberate-skip subset of tests/test_adr07_parser.py::TestSkip's
+    corpus (its test_skip_invalid_domain lines are EXCLUDED on purpose: those ARE
+    genuine normalise() shape rejects, not skips, and must tally -- reusing them
+    here would defeat the point of this test).
+    """
+
+    def test_skip_only_feed_tallies_nothing(self) -> None:
+        feed_row = {"feed": "SkipFeed", "group": "SkipGroup", "format_hint": "abp", "log_flag": "1", "raw": "r"}
+        skip_lines = [
+            "",
+            "   ",
+            "! Title: comment",
+            "[Adblock Plus 2.0]",
+            "# plain comment",
+            "example.com##.ad-banner",
+            "##.global-ad",
+            "example.net#@#.whitelisted-ad",
+            "example.org#?#div:has(> .ad)",
+            "example.com#%#//scriptlet('x')",
+            "example.com#$#body { color: red; }",
+            "||example.com/ads/*",
+            "||cdn.example.net/track.js",
+            "/banners/*.gif",
+            "||shop.example^/affiliate?id=",
+            "||wild.*^",
+            "not a domain at all",
+            "||203.0.113.7^",  # IP-valued anchor -> PHP firewall path
+            "||198.51.100.42^",
+            "0.0.0.0 203.0.113.99",
+            "127.0.0.1 10.0.0.1",
+            "||gone.example^$badfilter",  # parses to a Rule, pruned in reconcile()
+        ]
+        result = pfb_unbound.build(
+            {"feeds": [feed_row], "config": {}},
+            {},
+            line_reader=lambda raw: skip_lines,
+        )
+        assert result.rejects == {}

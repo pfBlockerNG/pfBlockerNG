@@ -128,6 +128,7 @@ $pfb['unbound_py_ss']	= '/var/unbound/pfb_py_ss.txt';
 $pfb['unbound_py_hsts']	= '/var/unbound/pfb_py_hsts.txt';	// SHIPPED file re-staged by dnsbl_cache_stage() cp -f; fingerprinted so a package update ships a new list and triggers a zero-downtime reload
 $pfb['unbound_py_count']= '/var/unbound/pfb_py_count';
 $pfb['unbound_py_regex_count']= '/var/unbound/pfb_py_regex_count';	// ADR-07 P8: Python-emitted ADMITTED (cap-filtered) feed+user regex total for the DNSBL_Regex alias
+$pfb['unbound_py_reject_stats']= '/var/unbound/pfb_py_reject_stats.json';	// ADR-48 P4: Python-emitted per-entry reject tally (issue #789), read by pfb_emit_entry_reject_stats()
 $pfb['unbound_py_sources']= '/var/unbound/pfb_py_sources.json';	// ADR-06: per-feed manifest consumed by pfb_unbound.py init
 $pfb['unbound_py_rawdir']= '/var/unbound/pfb_py_raw';		// ADR-06: per-feed IP-stripped raw feeds referenced by the manifest
 
@@ -883,6 +884,37 @@ function pfb_validate_log_line(string $feed, string $stage, string $reason, stri
 // (default 2 = pfB log + error log). One call site per rejection.
 function pfb_validate_log(string $feed, string $stage, string $reason, string $detail = '', int $level = 2): void {
 	pfb_logger(pfb_validate_log_line($feed, $stage, $reason, $detail), $level);
+}
+
+// ADR-48 Phase 4 (issue #789): reads the Python-emitted per-entry reject tally
+// artifact (pfb_py_reject_stats.json -- build()'s normalise() domain-shape rejects
+// and #753 wire-cap rejects, bucketed shape/wire_cap, per feed/group) and emits
+// ONE canonical stage=entries line per (feed, nonzero bucket) via pfb_validate_log().
+// Missing, unreadable, corrupt, or non-array JSON is a silent no-op -- a fresh boot
+// or an old python module that predates the artifact, never an error. Python only
+// WRITES the artifact; this is the sole place the line is EMITTED (sinks stay
+// PHP-only, ADR §2 item 2).
+function pfb_emit_entry_reject_stats(string $path): void {
+	$raw = @file_get_contents($path);
+	if ($raw === FALSE || $raw === '') {
+		return;
+	}
+	$stats = json_decode($raw, TRUE);
+	if (!is_array($stats)) {
+		return;
+	}
+	foreach ($stats as $entry) {
+		if (!is_array($entry) || !isset($entry['feed'])) {
+			continue;
+		}
+		$feed = (string) $entry['feed'];
+		foreach (array('shape', 'wire_cap') as $bucket) {
+			$count = isset($entry[$bucket]) ? (int) $entry[$bucket] : 0;
+			if ($count > 0) {
+				pfb_validate_log($feed, 'entries', $bucket, (string) $count);
+			}
+		}
+	}
 }
 
 // Function to filter/sanitize user input
@@ -7910,6 +7942,10 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython) {
 	$loaded_cnt = trim((string) @file_get_contents($pfb['unbound_py_count']));
 	$log = "\nDNSBL update [ feed lines: {$dnsbl_cnt} | loaded entries: {$loaded_cnt} ]... completed [ NOW ]";
 	pfb_logger("{$log}", 1);
+
+	// ADR-48 Phase 4 (issue #789): emit stage=entries reject lines for any feed
+	// with a nonzero per-entry tally, BEFORE clearing work files.
+	pfb_emit_entry_reject_stats($pfb['unbound_py_reject_stats']);
 
 	// Clear work files
 	pfb_unbound_clear_work_files();

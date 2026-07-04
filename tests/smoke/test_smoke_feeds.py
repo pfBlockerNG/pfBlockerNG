@@ -2963,3 +2963,156 @@ def test_validate_log_healthy_feed_no_spurious_reject(deployed_vm: SmokeVM, mock
                 f"validation reject)\n"
                 f"recent pfb_validate lines actually in the log:\n{_recent_validate_lines(deployed_vm)}"
             )
+
+
+# --------------------------------------------------------------------------- #
+# ADR-48 Phase 4 (issue #789): the Python-side per-entry reject tally surfaces
+# as the SAME canonical marker at stage=entries. Unlike Phases 1-3 (rejects
+# inside pfb_download()'s PHP-side MIME/structural gates), these entries are
+# rejected by Python's ABP parser (parse_abp/normalise, ADR-06/07) once the
+# feed content itself has already passed those PHP-side gates -- so the fixture
+# here is a plain ABP body (built inline, no FreeBSD-sensitive archive/MIME
+# concern), delivered via a DnsblCase reload (updatednsbl), not an IpCase.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.timeout(120)
+def test_validate_log_entries_reject_line(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
+    """ADR-48 P4: rejectable ABP entries tally + emit the canonical stage=entries line.
+
+    The feed carries THREE lines: one healthy block (proves the feed genuinely
+    loaded/parsed -- not merely "didn't crash") and one entry per RESOLVED
+    reject bucket -- a no-dot host ('shape') and a 64-char label ('wire_cap',
+    over the #753 63-char cap). Before this phase, pfb_unbound.py counted
+    neither rejection anywhere, so no 'pfb_validate: REJECT ... stage=entries'
+    line could ever appear -- this test FAILS on pre-Phase-4 code (the marker
+    cannot exist) and PASSES once build()'s tally + pfb_emit_entry_reject_stats()
+    wire it end-to-end.
+
+    Given the healthy member resolves before listing (no stale block from a
+      prior case) and no canonical entries-reject line for this feed's header
+      exists yet for either bucket (the delta baseline).
+    When the case Force-Updates (updatednsbl) over the ABP feed,
+    Then the healthy member is VIP-blocked (feed loaded) AND a NEW
+      'pfb_validate: REJECT feed=<hdr> stage=entries reason=shape detected=1'
+      line appears AND a NEW '... reason=wire_cap detected=1' line appears.
+    """
+    header = "adr48ent"
+    blocked_name = h.unique_domain("adr48ent")
+    shape_reject_host = "adr48noshapehost"  # no "." -> normalise() 'shape' reject
+    wire_cap_reject_host = "a" * 64 + ".example.com"  # 64-char label -> #753 'wire_cap' reject
+    body = h.abp_feed(
+        f"||{blocked_name}^",
+        f"||{shape_reject_host}^",
+        f"||{wire_cap_reject_host}^",
+    )
+    feed_url = mock_feeds.register("adr48_entries.txt", body)
+    spec = h.DnsblCase(aliasname=header, feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
+    shape_marker = f"pfb_validate: REJECT feed={header} stage=entries reason=shape detected=1"
+    wire_cap_marker = f"pfb_validate: REJECT feed={header} stage=entries reason=wire_cap detected=1"
+
+    # Given -- the healthy member resolves before listing + delta baseline for both markers.
+    before_probe = h.dns_probe_client(client_vm, blocked_name, "A")
+    assert h.resolves_to(before_probe, STUB_DNS_A), (
+        f"{blocked_name} should resolve via stub BEFORE listing, got {before_probe}"
+    )
+    assert not h.is_vip(before_probe), f"{blocked_name} unexpectedly VIP-blocked before any feed: {before_probe}"
+    before_shape = h.count_log_marker(deployed_vm, h.PFB_LOG, shape_marker)
+    before_wire_cap = h.count_log_marker(deployed_vm, h.PFB_LOG, wire_cap_marker)
+
+    with h.CaseContext(deployed_vm, spec):
+        # When -- Force Update; egress stays OPEN only to warm/flush the cache entry
+        # (the block itself resolves locally regardless).
+        h.unblock_egress()
+        h.flush_unbound_name(deployed_vm, blocked_name)
+        ans = h.dns_probe_client_until(client_vm, blocked_name, h.is_vip)
+        assert h.is_vip(ans), (
+            f"expected {blocked_name!r} VIP-blocked after the entries-reject feed (feed must have "
+            f"genuinely loaded/parsed), got {ans}"
+        )
+
+        # Then -- each rejectable entry tallied + emitted its OWN canonical line.
+        after_shape = h.count_log_marker(deployed_vm, h.PFB_LOG, shape_marker)
+        if not (after_shape > before_shape):
+            raise AssertionError(
+                f"expected a NEW line matching {shape_marker!r} in {h.PFB_LOG} after the "
+                f"entries-reject Force Update; count before={before_shape} after={after_shape}\n"
+                f"recent pfb_validate lines actually in the log:\n{_recent_validate_lines(deployed_vm)}"
+            )
+        after_wire_cap = h.count_log_marker(deployed_vm, h.PFB_LOG, wire_cap_marker)
+        if not (after_wire_cap > before_wire_cap):
+            raise AssertionError(
+                f"expected a NEW line matching {wire_cap_marker!r} in {h.PFB_LOG} after the "
+                f"entries-reject Force Update; count before={before_wire_cap} after={after_wire_cap}\n"
+                f"recent pfb_validate lines actually in the log:\n{_recent_validate_lines(deployed_vm)}"
+            )
+
+
+@pytest.mark.timeout(120)
+def test_validate_log_healthy_abp_feed_no_entries_reject(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
+    """ADR-48 P4 / §7 reject-criterion pin: a healthy ABP feed emits ZERO new
+    'stage=entries' lines, even with deliberate SKIP-class lines present.
+
+    The MUST-ACCOMPANY counterpart to ``test_validate_log_entries_reject_line``
+    above: reuses the deliberate-skip corpus (comment, cosmetic/element-hiding,
+    a tracking-script path anchor, an IP-valued anchor, a ``$badfilter`` rule on
+    an UNRELATED domain) that ``tests/test_adr06_build_module.py::
+    TestSkipClassesTallyZero`` already pins as tallying nothing at the unit
+    level -- this proves the same guarantee end-to-end on the live box: a feed
+    built entirely of skips (plus one healthy block, proving the feed loaded)
+    must never spam the operator with a spurious ``stage=entries`` line.
+
+    Given the healthy member resolves before listing and no 'stage=entries'
+      line for this feed's header exists yet (the delta baseline, module-wide
+      generic-marker style per the Phase-3 healthy-feed guard).
+    When the case Force-Updates over the skip-only + one-healthy-block feed,
+    Then the healthy member is VIP-blocked (feed genuinely loaded) AND the
+      'pfb_validate: REJECT ... feed=<hdr> stage=entries' marker count is
+      UNCHANGED -- no skip class was miscounted as a reject.
+    """
+    header = "adr48ehl"
+    blocked_name = h.unique_domain("adr48ehl")
+    body = h.abp_feed(
+        "! Title: a comment line",
+        "example.com##.ad-banner",
+        "||cdn.example.net/track.js",  # path anchor -> SKIP, not a reject
+        "||203.0.113.7^",  # IP-valued anchor -> firewall path, not a reject
+        "||gone.example.com^$badfilter",  # parses to a Rule, pruned in reconcile() -- unrelated domain
+        f"||{blocked_name}^",
+    )
+    feed_url = mock_feeds.register("adr48_healthy_abp.txt", body)
+    spec = h.DnsblCase(aliasname=header, feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
+    entries_marker = f"pfb_validate: REJECT feed={header} stage=entries"
+
+    # Given -- the healthy member resolves before listing + delta baseline.
+    before_probe = h.dns_probe_client(client_vm, blocked_name, "A")
+    assert h.resolves_to(before_probe, STUB_DNS_A), (
+        f"{blocked_name} should resolve via stub BEFORE listing, got {before_probe}"
+    )
+    assert not h.is_vip(before_probe), f"{blocked_name} unexpectedly VIP-blocked before any feed: {before_probe}"
+    before = h.count_log_marker(deployed_vm, h.PFB_LOG, entries_marker)
+
+    with h.CaseContext(deployed_vm, spec):
+        # When -- Force Update; the skip lines never reach a block dict, only the
+        # clean anchor does.
+        h.unblock_egress()
+        h.flush_unbound_name(deployed_vm, blocked_name)
+        ans = h.dns_probe_client_until(client_vm, blocked_name, h.is_vip)
+        assert h.is_vip(ans), (
+            f"expected {blocked_name!r} VIP-blocked after the healthy ABP feed (feed must have "
+            f"genuinely loaded/parsed), got {ans}"
+        )
+
+        # Then -- no NEW stage=entries line for this feed (the skip classes tallied nothing).
+        after = h.count_log_marker(deployed_vm, h.PFB_LOG, entries_marker)
+        if not (after == before):
+            raise AssertionError(
+                f"expected NO NEW {entries_marker!r} line in {h.PFB_LOG} after a healthy ABP feed "
+                f"load (a deliberate skip class must never tally as a reject); count "
+                f"before={before} after={after}\n"
+                f"recent pfb_validate lines actually in the log:\n{_recent_validate_lines(deployed_vm)}"
+            )

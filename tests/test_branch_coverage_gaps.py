@@ -58,6 +58,7 @@ from pfb_unbound import (
     classify_idn,
     dnsbl_build_from_manifest,
     dnsbl_emit_count,
+    dnsbl_emit_reject_stats,
     evaluate_domain,
     parse,
     parse_abp,
@@ -553,6 +554,55 @@ class TestManifestErrorBranches:
         out = tmp_path / "count.txt"
         assert dnsbl_emit_count(str(out), 7) is True
         assert out.read_text().strip() == "7"
+
+
+# --------------------------------------------------------------------------- #
+# ADR-48 Phase 4 (#789) -- dnsbl_emit_reject_stats() artifact writer.
+# --------------------------------------------------------------------------- #
+class TestEmitRejectStats:
+    def test_writes_only_nonzero_feeds_as_json(self, tmp_path: Path) -> None:
+        # Given: a tally with one all-zero row (never emitted by build() in
+        # practice, but the writer must not depend on that) and one nonzero row.
+        out = tmp_path / "pfb_py_reject_stats.json"
+        tally = {
+            ("ZeroFeed", "ZeroGroup"): {"shape": 0, "wire_cap": 0},
+            ("RejFeed", "RejGroup"): {"shape": 3, "wire_cap": 5},
+        }
+        # When: the artifact is written.
+        assert dnsbl_emit_reject_stats(str(out), tally) is True
+        # Then: valid JSON, only the nonzero feed present, exact counts.
+        written = json.loads(out.read_text())
+        assert written == [{"feed": "RejFeed", "group": "RejGroup", "shape": 3, "wire_cap": 5}]
+
+    def test_empty_tally_writes_empty_json_array(self, tmp_path: Path) -> None:
+        # PHP must distinguish "ran, zero rejects" ("[]") from "no artifact" (absent
+        # file, fresh boot / an old python module) -- an empty tally still writes.
+        out = tmp_path / "pfb_py_reject_stats.json"
+        assert dnsbl_emit_reject_stats(str(out), {}) is True
+        assert out.read_text() == "[]"
+
+    def test_atomic_write_leaves_no_stray_tmp_file(self, tmp_path: Path) -> None:
+        # The atomic temp+os.replace pattern (mirrors _reload_write_applied) must
+        # not leave a ".tmp" sibling behind on success.
+        out = tmp_path / "pfb_py_reject_stats.json"
+        assert dnsbl_emit_reject_stats(str(out), {("F", "G"): {"shape": 1, "wire_cap": 0}}) is True
+        assert out.exists()
+        assert not (tmp_path / "pfb_py_reject_stats.json.tmp").exists()
+
+    def test_returns_false_on_write_error(self) -> None:
+        # An unwritable path -> OSError caught -> False (never raises into the run).
+        assert dnsbl_emit_reject_stats("/no/such/dir/pfb_py_reject_stats.json", {}) is False
+
+    def test_reject_stats_path_key_is_chroot_relative(self) -> None:
+        # ADR §3 risk: init_standard() must set a bare filename (never a
+        # host-absolute path) -- a host-absolute path silently fails to load
+        # inside Unbound's chroot (the exact manifest-boundary bug class this repo
+        # already hit once). init_standard() needs the live Unbound env and can't
+        # run in this suite, so this pins the assignment directly in the source.
+        source = Path(pfb_unbound.__file__).read_text()
+        match = re.search(r'pfb\["pfb_py_reject_stats"\]\s*=\s*"([^"]+)"', source)
+        assert match is not None, "pfb['pfb_py_reject_stats'] assignment not found in pfb_unbound.py"
+        assert not match.group(1).startswith("/"), f"expected a chroot-relative bare name, got {match.group(1)!r}"
 
 
 # --------------------------------------------------------------------------- #

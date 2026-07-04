@@ -467,6 +467,7 @@ def _build_swap_snapshot() -> Snapshot | None:
         important_rules=bool(build_result.important_rules),
         counts=len(data_db) + len(zone_db),
         regex_count=len(regex_db) + len(allow_regex_db),
+        rejects=build_result.rejects,
     )
 
 
@@ -1058,6 +1059,11 @@ def init_standard(id: int, env: module_env) -> bool:
     # allowRegexDB AFTER both the user REGEX-ini load and the feed-regex merge, so
     # patterns the static cap dropped are excluded (value changes by design, ADR §2).
     pfb["pfb_py_regex_count"] = "pfb_py_regex_count"
+    # ADR-48 Phase 4 (#789): the per-entry reject tally artifact (BuildResult.rejects,
+    # a JSON array of nonzero-total {feed, group, shape, wire_cap} rows) -- PHP reads
+    # it after a DNSBL run and emits the canonical stage=entries line. Chroot-relative
+    # bare name, exactly like pfb_py_count above (the manifest-boundary discipline).
+    pfb["pfb_py_reject_stats"] = "pfb_py_reject_stats.json"
     pfb["pfb_py_dnsbl"] = "pfb_py_dnsbl.sqlite"
     pfb["pfb_py_cache"] = "pfb_py_cache.sqlite"
     pfb["pfb_py_resolver"] = "pfb_py_resolver.sqlite"
@@ -1401,6 +1407,10 @@ def init_standard(id: int, env: module_env) -> bool:
 
                 # Emit pfb_py_count (the LOADED total) for the UI (inc:3149).
                 dnsbl_emit_count(pfb["pfb_py_count"], build_result.counts)
+                # ADR-48 Phase 4 (#789): emit the per-entry reject tally artifact
+                # alongside the count -- PHP reads it after this run and emits
+                # stage=entries for any feed with a nonzero bucket.
+                dnsbl_emit_reject_stats(pfb["pfb_py_reject_stats"], build_result.rejects)
                 dnsbl_built = True
 
             # While reading 'data|zone' CSV files: Replace 'Feed/Group' pairs with an index value (Memory performance)
@@ -3463,6 +3473,10 @@ class BuildResult:
     regex). ``counts`` is the LOADED total (len(data_db) + len(zone_db)); init emits
     it as pfb_py_count (its value legitimately rises -- lists are un-pruned).
     ``regex_count`` is the ADMITTED feed-regex total for the DNSBL_Regex alias (UI).
+    ``rejects`` is the ADR-48 Phase 4 (#789) per-entry reject tally -- (feed, group)
+    -> {'shape': n, 'wire_cap': m} -- for every domain target a normalise-fail (or
+    the reconcile() wire-cap fold-drop) rejected; a diagnostic count, not consumed
+    by any decision.
     """
 
     data_db: dict[str, dict[str, Any]]
@@ -3474,6 +3488,7 @@ class BuildResult:
     allow_regex_db: dict[str, dict[str, Any]] = field(default_factory=dict)
     important_rules: bool = False
     regex_count: int = 0
+    rejects: RejectTally = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -3511,6 +3526,11 @@ class Snapshot:
     oracles): ``data_db``->dataDB, ``zone_db``->zoneDB, ``white_db``->whiteDB,
     ``regex_db``->regexDB, ``allow_regex_db``->allowRegexDB,
     ``feed_group_index_db``->feedGroupIndexDB, ``hsts_db``->hstsDB.
+
+    ``rejects`` (ADR-48 Phase 4, #789) rides alongside ``counts``/``regex_count`` as
+    a build-diagnostic passthrough -- NOT a per-query stratum (absent from
+    ``containers()``) -- so a no-restart swap can re-emit the reject-stats artifact
+    from the fresh ``BuildResult`` exactly as it re-emits the UI counts.
     """
 
     data_db: dict[str, Any]
@@ -3523,6 +3543,7 @@ class Snapshot:
     important_rules: bool = False
     counts: int = 0
     regex_count: int = 0
+    rejects: RejectTally = field(default_factory=dict)
 
     def containers(self) -> dict[str, Any]:
         """The per-query ``containers`` dict ``evaluate_domain`` reads (legacy keys).
@@ -3687,6 +3708,7 @@ def parse_abp(
     feed: str = "",
     group: str = "",
     log: str = "",
+    tally: RejectTally | None = None,
 ) -> Rule | None:
     """The full DNS-only ABP Stage-A parser: one raw ABP line -> a typed ``Rule``
     (or ``None`` to skip). PURE -- no Unbound symbol, no side effect; NOT wired into
@@ -3710,6 +3732,11 @@ def parse_abp(
     ``feed`` / ``group`` / ``log`` / ``provenance`` are plumbed through unchanged
     (the caller supplies them from the manifest row). Domain targets pass through
     ``normalise()`` (lower-case + shape gate); an invalid domain -> ``None``.
+
+    ``tally`` (ADR-48 Phase 4, issue #789): optional out-param -- when not ``None``,
+    a normalise-fail reject on a domain target (anchor/hosts/bare) is counted into
+    it (bucket 'shape' | 'wire_cap', keyed (feed, group)). Left ``None`` (the
+    default), this function is BYTE-IDENTICAL to before -- purity is test-pinned.
     """
     s = line.strip()
     if not s:
@@ -3762,8 +3789,10 @@ def parse_abp(
             return None
         if _dnsbl_is_ipv4(host):
             return None  # IP-anchored -> PHP firewall path; Python skips (no leak)
-        dom = normalise(host)
+        dom, bucket = _normalise_verdict(host)
         if dom is None:
+            if tally is not None and bucket is not None:
+                _tally_reject(tally, feed, group, bucket)
             return None
         if opts_str:
             classified = _dnsbl_classify_options(opts_str)
@@ -3797,8 +3826,10 @@ def parse_abp(
             return None  # not a hosts line (a real ABP line never has a bare space)
         if _dnsbl_is_ipv4(target):
             return None  # "<ip> <ip>" -> firewall path
-        dom = normalise(target)
+        dom, bucket = _normalise_verdict(target)
         if dom is None:
+            if tally is not None and bucket is not None:
+                _tally_reject(tally, feed, group, bucket)
             return None
         return Rule(
             kind=DNSBL_KIND_BLOCK,
@@ -3817,8 +3848,10 @@ def parse_abp(
     # ---- bare plain domain ---------------------------------------------- #
     if "/" in s or "*" in s:
         return None
-    dom = normalise(s)
+    dom, bucket = _normalise_verdict(s)
     if dom is None:
+        if tally is not None and bucket is not None:
+            _tally_reject(tally, feed, group, bucket)
         return None
     return Rule(
         kind=DNSBL_KIND_BLOCK,
@@ -3908,12 +3941,48 @@ def parse(format_hint: str, line: str) -> ParsedEntry | None:
     return ParsedEntry(kind=DNSBL_KIND_BLOCK, value=token, feed="", group="", log="")
 
 
+# ADR-48 Phase 4 (issue #789): the per-entry reject tally build()/parse_abp()/
+# reconcile() accumulate into, keyed (feed, group) -> {'shape': n, 'wire_cap': m}.
+# A plain dict (no class): the shape never grows past the two RESOLVED buckets
+# (ADR §2 item 4), so a helper that does the defaulting is all this needs.
+RejectTally = dict[tuple[str, str], dict[str, int]]
+
+
+def _tally_reject(tally: RejectTally, feed: str, group: str, bucket: str) -> None:
+    """Increment ``bucket`` ('shape' | 'wire_cap') for (feed, group) in ``tally``,
+    defaulting a fresh {'shape': 0, 'wire_cap': 0} row on first hit."""
+    counts = tally.setdefault((feed, group), {"shape": 0, "wire_cap": 0})
+    counts[bucket] += 1
+
+
 def _dnsbl_within_wire_caps(host: str) -> bool:
     """True iff ``host`` can be encoded in a DNS query (#753): <= 253 chars total
     (the RFC 1035 presentation cap, undotted) and every label <= 63. The domain
     charset is ASCII-only, so chars == octets. Shared by ``normalise()`` and the
     ``reconcile()`` regex fold so the caps live in one place."""
     return len(host) <= 253 and all(len(label) <= 63 for label in host.split("."))
+
+
+def _normalise_verdict(value: str) -> tuple[str | None, str | None]:
+    """The classified body of ``normalise()``: returns ``(domain, None)`` on
+    accept, or ``(None, bucket)`` on reject where ``bucket`` is ``'shape'`` (no
+    dot / edge hyphen / empty label / bad char -- a domain-SHAPE defect) or
+    ``'wire_cap'`` (the #753 length caps -- a well-shaped but unqueryable name).
+    Split out of ``normalise()`` so callers that need the #789 reject tally
+    (``build()`` / ``parse_abp()`` / ``reconcile()``) can bucket it; ``normalise()``
+    itself stays a pure ``str | None`` wrapper (public contract unchanged).
+    """
+    host = value.strip().strip(".").lower()
+    if "." not in host:
+        return None, "shape"
+    if not _dnsbl_within_wire_caps(host):
+        return None, "wire_cap"
+    for label in host.split("."):
+        if not label or label[0] == "-" or label[-1] == "-":
+            return None, "shape"
+        if any(c not in _DNSBL_LABEL_CHARS for c in label):
+            return None, "shape"
+    return host, None
 
 
 def normalise(value: str) -> str | None:
@@ -3933,16 +4002,12 @@ def normalise(value: str) -> str | None:
     encoded in a DNS query could never match a lookup -- rejecting it keeps
     unreachable dead weight out of the block dicts. The ``reconcile()`` regex
     fold applies the same caps to a domain-literal regex key.
+
+    Thin wrapper over ``_normalise_verdict()`` -- see there for the reject-bucket
+    classification (ADR-48 Phase 4, issue #789).
     """
-    host = value.strip().strip(".").lower()
-    if "." not in host or not _dnsbl_within_wire_caps(host):
-        return None
-    for label in host.split("."):
-        if not label or label[0] == "-" or label[-1] == "-":
-            return None
-        if any(c not in _DNSBL_LABEL_CHARS for c in label):
-            return None
-    return host
+    domain, _ = _normalise_verdict(value)
+    return domain
 
 
 def _dnsbl_load_tld_master(
@@ -4150,6 +4215,7 @@ def reconcile(
     rules: Iterable[Rule],
     tlds: dict[str, dict[str, str]],
     exclusion: set[str],
+    tally: RejectTally | None = None,
 ) -> ReconcileResult:
     """Stage-B: reconcile the typed ``Rule`` stream into the pre-emit rule sets.
 
@@ -4173,6 +4239,12 @@ def reconcile(
     kept for signature stability but no longer consulted: classify's registrable-
     parent rule is a plain/hosts-path concept (ADR-06) that must not demote an ABP
     anchor. Matches the Phase-2 oracle ``reconcile`` + ``decide`` precedence.
+
+    ``tally`` (ADR-48 Phase 4, issue #789): optional out-param -- when not ``None``,
+    the #753 wire-cap fold-drop (a reducible regex whose folded key is unqueryable)
+    is counted into it as 'wire_cap', attributed to the ORIGINATING rule's own
+    feed/group (each survivor is reconciled one rule at a time, before any
+    same-key merge, so there is no multi-feed key to disambiguate).
     """
     rule_list = list(rules)
 
@@ -4226,6 +4298,8 @@ def reconcile(
             # outright (keeping it as a compiled regex would pay per-query cost
             # for a pattern that can never match).
             if not _dnsbl_within_wire_caps(domain):
+                if tally is not None:
+                    _tally_reject(tally, r.feed, r.group, "wire_cap")
                 continue
             result.reduced += 1
         elif r.target == RULE_TARGET_DOMAIN:
@@ -4658,6 +4732,11 @@ def build(
     are simply overwritten last-wins by dict assignment (the documented attribution
     change, ADR.md SS2), and redundant subdomains stay because their parent zone still
     matches them.
+
+    ADR-48 Phase 4 (#789): every domain target a normalise-fail rejects (permit path,
+    plain path, both parse_abp() call sites) and the reconcile() wire-cap fold-drop
+    are tallied into ``BuildResult.rejects`` (bucket 'shape' | 'wire_cap', keyed
+    (feed, group)) -- accounting only, no gate DECISION changes.
     """
     suffix_lines = list(config.get("tld_master", []))
     tld_blacklist = list(config.get("tld_blacklist", []))
@@ -4675,6 +4754,8 @@ def build(
     feed_group_index_db: dict[int, dict[str, str]] = {}
     feed_group_db: dict[str, int] = {}
     next_index = 0
+    # ADR-48 Phase 4 (#789): the per-entry reject tally this build accumulates.
+    rejects: RejectTally = {}
 
     def index_for(feed: str, group: str) -> int:
         nonlocal next_index
@@ -4763,8 +4844,10 @@ def build(
                 entry = parse(fmt, stripped)
                 if entry is None:
                     continue
-                domain = normalise(entry.value)
+                domain, bucket = _normalise_verdict(entry.value)
                 if domain is None:
+                    if bucket is not None:
+                        _tally_reject(rejects, feed, group, bucket)
                     continue
                 # Insert as band-2 wildcard allow (@@||host^ shape) into whiteDB.
                 # Monotonic-widen on collision: never downgrade an existing higher band
@@ -4797,7 +4880,7 @@ def build(
         block_band = PRIO_USER_BLOCK if provenance == RULE_PROV_USER else PRIO_FEED_BLOCK
         if fmt == "abp":
             for raw_line in line_reader(feed_row["raw"]):
-                rule = parse_abp(raw_line, provenance=provenance, feed=feed, group=group, log=log_flag)
+                rule = parse_abp(raw_line, provenance=provenance, feed=feed, group=group, log=log_flag, tally=rejects)
                 if rule is not None:
                     abp_rules.append(rule)
             continue
@@ -4811,15 +4894,17 @@ def build(
             # for path/wildcard/IP anchors and non-DNS $options -> silently skipped.
             stripped = raw_line.strip()
             if stripped.startswith("||") or stripped.startswith("@@||"):
-                rule = parse_abp(stripped, provenance=provenance, feed=feed, group=group, log=log_flag)
+                rule = parse_abp(stripped, provenance=provenance, feed=feed, group=group, log=log_flag, tally=rejects)
                 if rule is not None:
                     abp_rules.append(rule)
                 continue
             entry = parse(fmt, raw_line)
             if entry is None:
                 continue
-            domain = normalise(entry.value)
+            domain, bucket = _normalise_verdict(entry.value)
             if domain is None:
+                if bucket is not None:
+                    _tally_reject(rejects, feed, group, bucket)
                 continue
             # Only BLOCK is produced by the lite path (ABP-ready seam; module header).
             if entry.kind != DNSBL_KIND_BLOCK:
@@ -4840,7 +4925,7 @@ def build(
     important_rules = permit_allow_inserted
     regex_count = 0
     if abp_rules:
-        result = reconcile(abp_rules, tlds, exclusion)
+        result = reconcile(abp_rules, tlds, exclusion, tally=rejects)
         important_rules = important_rules or result.important_rules
 
         # Domain blocks -> dataDB/zoneDB (carry band + $important).
@@ -4894,6 +4979,7 @@ def build(
         allow_regex_db=allow_regex_db,
         important_rules=important_rules,
         regex_count=regex_count,
+        rejects=rejects,
     )
 
 
@@ -5047,6 +5133,39 @@ def dnsbl_emit_count(count_path: str, count: int) -> bool:
         return False
 
 
+def dnsbl_emit_reject_stats(stats_path: str, rejects: RejectTally) -> bool:
+    """Write the ADR-48 Phase 4 (#789) per-entry reject tally to ``pfb_py_reject_stats``
+    as a JSON array of ``{"feed", "group", "shape", "wire_cap"}`` rows, one per
+    (feed, group) with a NONZERO bucket -- PHP reads it after a DNSBL run and emits
+    the canonical ``stage=entries`` line per nonzero bucket (Python never logs the
+    line itself; sinks stay PHP-only). An empty ``rejects`` still writes ``"[]"`` so
+    PHP can tell "ran, zero rejects" from "no artifact" (fresh boot / an old python
+    module that predates this file). Atomic temp + ``os.replace`` (mirrors
+    ``_reload_write_applied``): a partial write can never leave PHP reading a
+    truncated/corrupt artifact. Returns True on success.
+    """
+    entries = [
+        {"feed": feed, "group": group, "shape": counts["shape"], "wire_cap": counts["wire_cap"]}
+        for (feed, group), counts in sorted(rejects.items())
+        if counts["shape"] or counts["wire_cap"]
+    ]
+    tmp = "{}.tmp".format(stats_path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(entries, fh)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, stats_path)
+        return True
+    except OSError as e:
+        sys.stderr.write("[pfBlockerNG]: Failed to write DNSBL reject stats '{}': {}".format(stats_path, e))
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return False
+
+
 def rebuild_and_swap(build_snapshot: Callable[[], Snapshot | None], *, emit_counts: bool = True) -> bool:
     """ADR-10 P3: the single fail-closed build -> atomic-swap + cache-reset step.
 
@@ -5124,6 +5243,13 @@ def rebuild_and_swap(build_snapshot: Callable[[], Snapshot | None], *, emit_coun
     if emit_counts:
         dnsbl_emit_count(pfb["pfb_py_count"], new_snapshot.counts)
         dnsbl_emit_count(pfb["pfb_py_regex_count"], new_snapshot.regex_count)
+        # ADR-48 Phase 4 (#789): re-emit the reject-stats artifact from the new
+        # snapshot on a no-restart swap too, exactly like the UI counts above.
+        # ``.get()`` (not a bare index): unit tests build a bare ``pfb`` dict
+        # without this key and must not KeyError on an unrelated code path.
+        reject_stats_path = pfb.get("pfb_py_reject_stats")
+        if reject_stats_path:
+            dnsbl_emit_reject_stats(reject_stats_path, new_snapshot.rejects)
     return True
 
 
