@@ -320,6 +320,11 @@ def test_ip_page_renders_v6_suppression_section(webui: WebUI) -> None:
     v6suppression textarea field is present. Pairs with the pre-existing 'IPv4
     Suppression' section (also asserted here, unchanged by this phase) — proving the
     v6 sibling section renders ALONGSIDE it, not instead of it.
+
+    Also pins the corrected drop-set wording (issue #422): before that fix the v6
+    section wrongly claimed 'RFC1918' (a v4-only concept); it now names the actual
+    v6 drop set. The v4 section's own reserved-class wording (issue #760) is pinned
+    alongside it as a sibling text-content guard.
     """
     resp = webui.get(_IP_PAGE)
     assert resp.status_code == 200, f"GET {_IP_PAGE} -> HTTP {resp.status_code} (expected 200)"
@@ -327,6 +332,13 @@ def test_ip_page_renders_v6_suppression_section(webui: WebUI) -> None:
     assert "IPv6 Suppression" in body, "IPv6 Suppression section title not rendered on the IP page"
     assert 'name="v6suppression"' in body, "v6suppression textarea not rendered on the IP page"
     assert "IPv4 Suppression" in body, "IPv4 Suppression section title (existing sibling) missing"
+    assert "ULA (fc00::/7)" in body, (
+        "v6 Suppression help text missing the corrected 'ULA (fc00::/7)' drop-set wording "
+        "(issue #422) -- it previously wrongly claimed 'RFC1918', a v4-only concept"
+    )
+    assert "benchmarking" in body, (
+        "v4 Suppression help text missing the 'benchmarking' reserved-class wording (issue #760)"
+    )
 
 
 _UPDATE_PAGE = "/pfblockerng/pfblockerng_update.php"
