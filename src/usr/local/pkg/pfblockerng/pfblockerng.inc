@@ -12112,12 +12112,69 @@ function pfb_parse_query($line) {
 }
 
 
+// Page-scope memoisation helper (issue #809 -- Alerts page render-time performance).
+// A render request is one PHP process, so a $store passed in as a function-static
+// array lives for exactly one page load: the first call for a given $key runs
+// $resolver() and keeps the result; every later call with the same $key returns it
+// with zero extra work. array_key_exists() (never isset()) so a resolver returning
+// NULL/FALSE/''/0 is still cached -- those are valid resolved values, not "not yet
+// resolved".
+function pfb_render_memo(array &$store, string $key, callable $resolver) {
+	if (!array_key_exists($key, $store)) {
+		$store[$key] = $resolver();
+	}
+	return $store[$key];
+}
+
+
 // Functon to find which DNSBL Feed/Groupname blocked this event
+//
+// issue #809 (Alerts page render-time performance): in 'alerts' mode ONLY, memoize the
+// whole return value per $domain -- a render request is one PHP process, so a repeated
+// domain across rows on one page load costs zero further SQLite/grep/drill work (the
+// real work lives in pfb_dnsbl_parse_compute() below). 'daemon' mode (the long-running
+// filterlog/dnsbl daemons) is completely unchanged: it is never memoized (an unbounded
+// static store has no place in a process that runs for the life of the service) and
+// always calls straight through.
 function pfb_dnsbl_parse($mode='daemon', $domain, $src_ip, $req_agent) {
+	static $alerts_memo = array();
+
+	if ($mode == 'alerts') {
+		return pfb_render_memo($alerts_memo, $domain, function () use ($mode, $domain, $src_ip, $req_agent) {
+			return pfb_dnsbl_parse_compute($mode, $domain, $src_ip, $req_agent);
+		});
+	}
+
+	return pfb_dnsbl_parse_compute($mode, $domain, $src_ip, $req_agent);
+}
+
+
+// The actual DNSBL-parse work for pfb_dnsbl_parse() above -- factored out so the
+// alerts-mode memo there can wrap a plain function call instead of needing to
+// re-indent this whole body into a closure (issue #809).
+//
+// In 'alerts' mode ONLY, $alerts_db_handle keeps ONE dnsblcache SQLite3 connection
+// open for the rest of the page load, reused for both the SELECT and the INSERT
+// below, instead of the daemon's open/close per call. It is intentionally never
+// closed in alerts mode -- process exit does that, same as any other page-scoped
+// resource. A failed open is cached too (as FALSE), so it is attempted at most once
+// per page load and then degrades to the same "always a cache miss" slow path a
+// persistently-down DB gives today -- never retried mid-page, never fatal. 'daemon'
+// mode keeps its per-call open/close exactly as before.
+function pfb_dnsbl_parse_compute($mode, $domain, $src_ip, $req_agent) {
 	global $pfb;
 
+	static $alerts_db_handle = null;	// null = not yet opened; FALSE = open failed; else the SQLite3 handle
+
 	$dnsbl_cache = FALSE;
-	$db_handle = pfb_open_sqlite(4, 'Query cache');
+	if ($mode == 'alerts') {
+		if ($alerts_db_handle === null) {
+			$alerts_db_handle = pfb_open_sqlite(4, 'Query cache') ?: FALSE;
+		}
+		$db_handle = $alerts_db_handle;
+	} else {
+		$db_handle = pfb_open_sqlite(4, 'Query cache');
+	}
 	if ($db_handle) {
 		$db_update = "SELECT * FROM dnsblcache WHERE domain = :domain;";
 		$stmt = $db_handle->prepare($db_update);
@@ -12129,7 +12186,9 @@ function pfb_dnsbl_parse($mode='daemon', $domain, $src_ip, $req_agent) {
 			}
 		}
 	}
-	pfb_close_sqlite($db_handle);
+	if ($mode != 'alerts') {
+		pfb_close_sqlite($db_handle);
+	}
 
 	// If domain is not in DNSBL cache, query for blocked domain details
 	if (!$dnsbl_cache) {
@@ -12188,7 +12247,7 @@ function pfb_dnsbl_parse($mode='daemon', $domain, $src_ip, $req_agent) {
 							if (empty(pfb_filter($cname, PFB_FILTER_DOMAIN, 'pfb_dnsbl_parse'))) {
 								unset($cnames[$key]);
 								continue;
-							} 
+							}
                                                 }
 						$cname_cnt = count($cnames);
 					}
@@ -12218,7 +12277,11 @@ function pfb_dnsbl_parse($mode='daemon', $domain, $src_ip, $req_agent) {
 
 		// Save entry to DNSBL cache
 		$db_update = "INSERT into dnsblcache ( type, domain, groupname, final, feed ) VALUES ( :type, :domain, :groupname, :final, :feed )";
-		$db_handle = pfb_open_sqlite(4, 'Add to DNSBL cache');
+		if ($mode == 'alerts') {
+			$db_handle = $alerts_db_handle;
+		} else {
+			$db_handle = pfb_open_sqlite(4, 'Add to DNSBL cache');
+		}
 		if ($db_handle) {
 			$domain		= pfb_filter($domain, PFB_FILTER_HTML, 'pfb_dnsbl_parse');
 			$pfb_group	= pfb_filter($pfb_group, PFB_FILTER_HTML, 'pfb_dnsbl_parse');
@@ -12235,7 +12298,9 @@ function pfb_dnsbl_parse($mode='daemon', $domain, $src_ip, $req_agent) {
 				$stmt->execute();
 			}
 		}
-		pfb_close_sqlite($db_handle);
+		if ($mode != 'alerts') {
+			pfb_close_sqlite($db_handle);
+		}
 	}
 
 	// Use cached entries
