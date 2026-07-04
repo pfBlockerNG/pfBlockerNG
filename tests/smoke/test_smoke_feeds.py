@@ -2193,6 +2193,19 @@ def _box_mime_type(vm: SmokeVM, data: bytes, remote_tmp: str = "/tmp/adr45_mime_
     return result.stdout.strip()
 
 
+def _box_cmd_rc(vm: SmokeVM, data: bytes, remote_tmp: str, cmd: str) -> int:
+    """Upload ``data`` to ``remote_tmp`` via stdin, run the sh command ``cmd``, return its exit code.
+
+    Same upload discipline as ``_box_mime_type`` -- probes the EXACT served bytes rather
+    than a local guess. ``cmd`` is a full POSIX-sh command line referencing ``remote_tmp``.
+    Cleans up the temp file afterwards.
+    """
+    subprocess.run(vm.ssh_argv("tee", remote_tmp), input=data, capture_output=True, timeout=30.0, check=False)
+    result = vm.ssh(cmd)
+    vm.ssh("rm", "-f", remote_tmp)
+    return result.returncode
+
+
 @pytest.mark.timeout(120)  # full update + targeted reload + file-detect/decompress/re-validate > the 30s cap on slow CI
 def test_zip_feed_imports(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """ADR-44: a zip-compressed IP feed downloads, decompresses, and loads (application/zip path).
@@ -3009,6 +3022,100 @@ def test_validate_log_zip_inner_reject_line(deployed_vm: SmokeVM, mock_feeds: _M
                 f"expected a NEW line matching {marker!r} in {h.PFB_LOG} after the inner-reject "
                 f"zip Force Update; count before={before} after={after}\n"
                 f"recent pfb_validate lines actually in the log:\n{_recent_validate_lines(deployed_vm)}"
+            )
+
+
+@pytest.mark.timeout(120)
+def test_zip_extraction_failure_rejected_not_empty(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """Issue #819: a ZIP whose member DATA is corrupt is rejected as a decompression
+    failure, not silently imported as an empty feed.
+
+    Before the fix, the non-xlsx ZIP branch ran
+    ``tar -xOf {file} | sed 's/,[[:space:]]/; /g' | tr ',' '\\n' > {file_org}`` without
+    ``pipefail`` -- the ``sh -c`` exit status of a pipeline is its LAST command's, here
+    ``tr``, which always succeeds even when ``tar`` fails mid-stream on a CRC error. So
+    a tar extraction failure left ``$retval == 0``: the (empty) ``.orig`` file passed the
+    inner-content MIME gate (an empty file probes as the allow-listed ``inode/x-empty``)
+    and the feed imported as a silent, member-less "empty feed" with NO error logged.
+    This test FAILS on pre-fix code for exactly that reason -- no "Decompression Failed"
+    line ever appears. The fix (``set -o pipefail``) makes ``$retval`` reflect ``tar``'s
+    real exit status, routing the failure to the existing "Decompression Failed" reject
+    path instead.
+
+    Fixture: a valid single-member DEFLATE zip with one byte flipped a few bytes into
+    the compressed data stream (past the 30-byte local file header + filename). The
+    ADR-45 structural probe (``tar -tf``) reads only the central directory (at the
+    archive's tail) and stays intact, so it still PASSES -- the corruption is invisible
+    to the listing probe and only surfaces as a CRC failure when ``tar -xOf`` actually
+    decompresses the member. That is the live red-before-fix vector this test pins.
+
+    Given the alias is absent and a delta baseline of "Decompression Failed" lines in
+      the pfB log (module-wide, on purpose -- only the delta across THIS case's own
+      Force Update window is asserted).
+    When the case Force-Updates over the corrupt-payload zip (outer MIME gate sees
+      application/zip and the structural listing probe passes, but extraction itself
+      fails on the corrupted member),
+    Then the alias remains absent AND a NEW "Decompression Failed" line appears in the
+      pfB log -- the extraction error surfaced as an error, not a silent empty import.
+    """
+    member = "payload.txt"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as z:
+        z.writestr(member, "x" * 4096)
+    raw = bytearray(buf.getvalue())
+    # Local file header is 30 bytes + len(member); flip a byte a few bytes into the
+    # deflate stream so the CRC check fails on extraction while the central
+    # directory (at the tail, read by `tar -tf`) stays intact.
+    data_off = 30 + len(member) + 4
+    raw[data_off] ^= 0xFF
+    zip_bytes = bytes(raw)
+
+    remote_tmp = "/tmp/issue819_zip_extract_fail.zip"
+
+    # On-box guards (skip-if-inconclusive) -- probe the EXACT served bytes:
+    box_mime = _box_mime_type(deployed_vm, zip_bytes)
+    if box_mime != "application/zip":
+        pytest.skip(
+            f"corrupt-payload zip produced {box_mime!r} on this box's file -b (not application/zip); "
+            f"the outer gate would not route to the ZIP branch — test inconclusive"
+        )
+    listing_rc = _box_cmd_rc(deployed_vm, zip_bytes, remote_tmp, f"/usr/bin/tar -tf {remote_tmp}")
+    if listing_rc != 0:
+        pytest.skip(
+            f"tar -tf exited {listing_rc} on this box for the corrupt-payload zip (expected 0); "
+            f"the ADR-45 structural probe would reject first — the extraction path is never reached"
+        )
+    extract_rc = _box_cmd_rc(deployed_vm, zip_bytes, remote_tmp, f"/usr/bin/tar -xOf {remote_tmp} > /dev/null")
+    if extract_rc == 0:
+        pytest.skip(
+            "tar -xOf exited 0 on this box for the corrupt-payload zip (expected non-zero); "
+            "the corruption did not take -- extraction would succeed and the reject branch is never exercised"
+        )
+
+    header = "issue819zex"
+    feed_url = mock_feeds.register("issue819_zip_extract_fail.zip", zip_bytes)
+    spec = h.IpCase(aliasname=header, feed_url=feed_url, header=header, family="v4")
+
+    # Given -- alias absent + delta baseline of "Decompression Failed" lines.
+    assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the corrupt-payload zip feed"
+    before = h.count_log_marker(deployed_vm, h.PFB_LOG, "Decompression Failed")
+
+    with h.CaseContext(deployed_vm, spec):
+        # When -- Force Update; the outer gate + structural probe both pass, extraction fails.
+        tables_after = h.pfctl_tables(deployed_vm)
+        assert spec.alias not in tables_after, (
+            f"expected {spec.alias!r} absent after the corrupt-payload zip (extraction must fail), "
+            f"found it present — tables: {tables_after}"
+        )
+        # Then -- a NEW "Decompression Failed" line was logged (the error surfaced,
+        # rather than the feed silently importing as empty).
+        after = h.count_log_marker(deployed_vm, h.PFB_LOG, "Decompression Failed")
+        if not (after > before):
+            tail = h.read_log_file(deployed_vm, h.PFB_LOG).splitlines()[-20:]
+            raise AssertionError(
+                f"expected a NEW 'Decompression Failed' line in {h.PFB_LOG} after the corrupt-payload "
+                f"zip Force Update; count before={before} after={after}\n"
+                f"last 20 lines of {h.PFB_LOG}:\n" + "\n".join(tail)
             )
 
 

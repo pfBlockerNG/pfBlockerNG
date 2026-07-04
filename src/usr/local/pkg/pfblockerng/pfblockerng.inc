@@ -9459,7 +9459,10 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			} else {
 				pfb_logger('.', 1);
 				// Process ZIP file (SFS and hpHosts workaround)
-				exec("/usr/bin/tar -xOf {$file_dwn_esc} | /usr/bin/sed 's/,[[:space:]]/; /g' | /usr/bin/tr ',' '\n' > {$file_org_esc}", $output, $retval);
+				// pipefail so a tar extraction failure is not masked by the trailing
+				// tr (issue #819); this exec runs on the appliance only -- FreeBSD sh
+				// supports `set -o pipefail`.
+				exec("set -o pipefail; /usr/bin/tar -xOf {$file_dwn_esc} | /usr/bin/sed 's/,[[:space:]]/; /g' | /usr/bin/tr ',' '\n' > {$file_org_esc}", $output, $retval);
 			}
 
 			// ZIP inner-content gate (issue #808): probe the EXTRACTED payload
