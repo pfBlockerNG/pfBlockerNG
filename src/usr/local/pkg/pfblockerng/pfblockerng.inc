@@ -9472,7 +9472,6 @@ function pfb_download_failure($alias, $header, $pfbfolder, $list_url, $format, $
 			// Determine if Firewall/IPS/DNSBL is blocking download.
 			$data = parse_url("{$list_url}");
 
-			$validate_list = array();
 			if (is_ipaddr($data['host'])) {
 				$validate_list = array(array('type' => 'IP', 'data' => $data['host']));
 			} else {
