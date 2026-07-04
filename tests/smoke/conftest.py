@@ -1514,12 +1514,27 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
     setattr(item, f"_rep_{rep.when}", rep)
 
 
+def _failure_report(node: pytest.Item) -> pytest.TestReport | None:
+    """The report that proves this test failed, or None if it did not fail.
+
+    Call-phase report first; when absent, fall back to the setup report (issue #777):
+    a fixture that raises during arrange means the test never reaches its call phase,
+    so ``_rep_call`` is never stashed — without the fallback an arrange failure got no
+    diagnostics at all. A setup SKIP (e.g. SMOKE_PKG unset) has ``failed == False`` and
+    correctly returns None.
+    """
+    rep = getattr(node, "_rep_call", None)
+    if rep is None:
+        rep = getattr(node, "_rep_setup", None)
+    return rep if rep is not None and rep.failed else None
+
+
 @pytest.fixture(autouse=True)
 def _dump_vm_on_failure(request: pytest.FixtureRequest) -> Iterator[None]:
-    """If a VM-backed case failed, print pfSense/Unbound/pfBlockerNG state."""
+    """If a VM-backed case failed — in its body OR in a fixture arrange — print
+    pfSense/Unbound/pfBlockerNG state."""
     yield
-    rep = getattr(request.node, "_rep_call", None)
-    if rep is None or not rep.failed:
+    if _failure_report(request.node) is None:
         return
     # The mock DNS query log — what reached the upstream, READ not inferred.
     stub = request.node.funcargs.get("stub_dns")
