@@ -1242,11 +1242,11 @@ if (isset($_POST) && !empty($_POST)) {
 
 		$entry = '';
 
-		// IPv4 validation
-		if ($entry = pfb_filter($_POST['domain'], PFB_FILTER_IPV4, 'alerts entry_delete', '', TRUE)) {
+		// IPv4/IPv6 validation
+		if ($entry = pfb_filter($_POST['domain'], PFB_FILTER_IP, 'alerts entry_delete', '', TRUE)) {
 			$table = pfb_filter($_POST['table'], PFB_FILTER_WORD, 'alerts entry_delete', '', TRUE);
 			if (empty($entry) || empty($table)) {
-				$savemsg = "IPv4: [ {$entry} ] Table name is not valid and IP cannot be removed !";
+				$savemsg = "IP: [ {$entry} ] Table name is not valid and IP cannot be removed !";
 				header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$savemsg}");
 				exit;
 			}
@@ -1333,51 +1333,47 @@ if (isset($_POST) && !empty($_POST)) {
 				PfbConfig::write('tldexclusion', $clists['tldexclusion']['base64']);
 				break;
 			case 'delete_ip':
-				$type	= 'IPv4 Suppression';
-				$ix	= ip_explode(trim($entry, "'"));	// Explode IP into evaluation strings
+				// ADR-53 un-suppress rework (#422): the old flow only understood an
+				// exact '/32' or a containing '/24' customlist entry and "healed" a
+				// legacy exploded /24 block by re-adding up to 254 sibling hosts.
+				// ADR-53 tables hold covering CIDRs, not sibling explosions, so that
+				// loop no longer applies -- re-adding the removed suppression entry
+				// itself restores exactly the coverage it carved out, any mask,
+				// either family; any pre-ADR-53 exploded state self-heals on the
+				// next reload (the persisted engines rebuild the canonical set).
+				$ip	= trim($entry, "'");
+				$is_v6	= strpos($ip, ':') !== FALSE;
+				$family	= $is_v6 ? 6 : 4;
+				$type	= "IPv{$family} Suppression";
 
-				// Check if IP has 255 single entries (User suppressed /32 for a /24 Blocked IP)
-				$pfb_pfctl = array();
-				$ip_esc = escapeshellarg("{$ix[6]}");
-				$ip_cnt = exec("{$pfb['pfctl']} -t {$table} -T show | {$pfb['grep']} {$ip_esc} | {$pfb['grep']} -c ^ 2>&1");
+				$supp_key	= $is_v6 ? 'ipsuppression_v6' : 'ipsuppression';
+				$cfg_key	= $is_v6 ? 'v6suppression' : 'v4suppression';
 
-				$ip_revert = '';
-				// Remove /32 Suppressed IP in Suppression customlist and Re-Add /32 Blocked IP to Aliastable
-				if (isset($clists['ipsuppression']['data'][$ix[0] . '/32'])) {
-					unset($clists['ipsuppression']['data'][$ix[0] . '/32']);
+				// Longest-prefix pick: when both a '/32' and a broader entry cover
+				// the host, remove the most specific one -- deterministic, mirrors
+				// the old /32-before-/24 precedence.
+				$match = pfb_ip_suppressed_match($ip, array_keys($clists[$supp_key]['data']));
+				if ($match !== NULL) {
+					unset($clists[$supp_key]['data'][$match]);
 
-					$ip_revert = escapeshellarg("{$ix[0]}/32");
-					exec("{$pfb['pfctl']} -t {$table} -T add {$ip_revert} 2>&1");
+					exec("{$pfb['pfctl']} -t {$table} -T add " . escapeshellarg($match) . ' 2>&1');
 
-					// Remove 0-255 IP address from aliastable excluding single entry
-					if ($ip_cnt >= 255) {
-						for ($k=0; $k <= 255; $k++) {
-							if ($k != $ix[4]) {
-								$ip_esc = escapeshellarg("{$ix[6]}{$k}");
-								exec("{$pfb['pfctl']} -t {$table} -T delete {$ip_esc} 2>&1");
-							}
-						}
-					}
-				}
-
-				// Remove /24 Suppressed IP in Suppression customlist and Re-Add /24 Blocked IP to Aliastable
-				elseif (isset($clists['ipsuppression']['data'][$ix[5]])) {
-					unset($clists['ipsuppression']['data'][$ix[5]]);
-
-					$ip_revert = escapeshellarg("{$ix[5]}");
-					exec("{$pfb['pfctl']} -t {$table} -T add {$ip_revert} 2>&1");
-				}
-
-				if (!empty($ip_revert)) {
 					$data = '';
-					foreach ($clists['ipsuppression']['data'] as $line) {
+					foreach ($clists[$supp_key]['data'] as $line) {
 						$data .= "{$line}";
 					}
-					$clists['ipsuppression']['base64'] = base64_encode($data);
-					PfbConfig::write('v4suppression', $clists['ipsuppression']['base64']);
-					$savemsg = "Removed [ {$ip_revert} ] from {$type} customlist and re-added it back into the aliastable [ {$table} ]";
+					$clists[$supp_key]['base64'] = base64_encode($data);
+					PfbConfig::write($cfg_key, $clists[$supp_key]['base64']);
+
+					// Keep pfbsuppression(_v6).txt in step with the config edit --
+					// same in-memory refresh the addsuppress handler applies.
+					$pfb['ipconfig'][$cfg_key] = $clists[$supp_key]['base64'];
+					pfb_create_suppression_file();
+
+					$savemsg = "Removed [ {$match} ] from {$type} customlist and re-added it back into the aliastable [ {$table} ]";
 				}
 				else {
+					$pfb_found = FALSE;
 					$savemsg = "IP: [ {$entry} ] was not found in {$type} customlist!";
 				}
 				break;
@@ -1717,14 +1713,6 @@ if ($pfb['filterlogentries']) {
 
 // Define common variables and arrays for report tables
 $continents	= array_flip(array('pfB_Africa', 'pfB_Antarctica', 'pfB_Asia', 'pfB_Europe', 'pfB_NAmerica', 'pfB_Oceania', 'pfB_SAmerica', 'pfB_Top'));
-
-$supp_ip_txt	= "Clicking this Suppression Icon, will immediately remove the block."
-		. "\n\nNote:"
-		. "\n1) The Host will be added to the IPv4 Suppression custom list."
-		. "\n2) Only 32 or 24 CIDR IPs can be suppressed with the '+' icon."
-		. "\n3) Suppressing a /32 CIDR is better than suppressing the full /24"
-		. "\n4) Manual entries to the 'IPv4 Suppression' custom list will not immediately remove existing blocked hosts"
-		. "\n&emsp;and will require a Force Reload to remove the blocked hosts.";
 
 // Collect Interfaces
 $dnsbl_int = array();
@@ -3028,6 +3016,11 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 		}
 	}
 
+	// v4-only, /32|/24 vs /25-/31 -- since ADR-53 (issue #422) this feeds ONLY
+	// the Unlock-icon gate below and the legacy whitelist-fallback quirk gate;
+	// the Suppression-icon gate itself is now family/mask-agnostic and no
+	// longer reads $mask_suppression. Left exactly as-is, deliberately out of
+	// scope for this change.
 	$mask_suppression	= FALSE;
 	$mask_unlock		= FALSE;
 
@@ -3058,26 +3051,22 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	$alert_ip = '<a class="fa-solid fa-info icon-pointer" target="_blank" href="/pfblockerng/pfblockerng_threats.php?host=' .
 			$h_host . '" title="Click for Threat source IP Lookup for [ ' . $h_host . ' ]"></a>';
 
-	// Suppression Icon
+	// Suppression Icon -- any family, any mask (ADR-53 follow-up, issue #422).
+	// GeoIP rows stay excluded (maintainer constraint).
 	$supp_ip = $unlock_ip = '&nbsp;&nbsp;&nbsp;';
-	if ($rtype == 'Block' && $pfb_ipv4 && !$pfb_geoip && $mask_suppression) {
+	if ($rtype == 'Block' && !$pfb_geoip) {
 
-		$v4suppression32 = $v4suppression24 = FALSE; 
+		$supp_key = ($vtype == 6) ? 'ipsuppression_v6' : 'ipsuppression';
+		$supp_match = NULL;
 		if (pfb_cfg_toggle_read($pfb['supp']) === PfbToggle::On) {
-			if (isset($clists['ipsuppression']['data'][$host . '/32'])) {
-				$w_line = rtrim($clists['ipsuppression']['data'][$host . '/32'], "\x00..\x1F");
-				$v4suppression32 = TRUE;
-			}
-
-			$ix = ip_explode($host);
-			if (isset($clists['ipsuppression']['data'][$ix[5]])) {
-				$w_line = rtrim($clists['ipsuppression']['data'][$ix[5]], "\x00..\x1F");
-				$v4suppression24 = TRUE;
+			$supp_match = pfb_ip_suppressed_match($host, array_keys($clists[$supp_key]['data']));
+			if ($supp_match !== NULL) {
+				$w_line = rtrim($clists[$supp_key]['data'][$supp_match], "\x00..\x1F");
 			}
 		}
 
-		// Host is not in the Suppression List
-		if (!$v4suppression32 && !$v4suppression24) {
+		// Host is not covered by any Suppression entry
+		if ($supp_match === NULL) {
 
 			// Check if host is in a Permit Whitelist Alias
 			if ($clists['ipwhitelist' . $vtype]) {
@@ -3092,7 +3081,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 
 				// Host found in a Permit Whitelist Alias
 				if ($pfb_found) {
-					$supp_ip_txt = "Note:&emsp;The following IPv{$vtype} addresss is in a Permit Alias:\n\n"
+					$supp_ip_txt = "Note:&emsp;The following IPv{$vtype} address is in a Permit Alias:\n\n"
 							. "Permitted IP:&emsp;[ " . pfb_hsc($w_line) . " ]\n"
 							. "Evaluated IP:&emsp;[ {$h_eval_ip} ]\n"
 							. "IP Aliasname:&emsp;[ " . pfb_hsc($atype) . " ]\n\n"
@@ -3133,7 +3122,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 			}
 		}
 		else {
-			$supp_ip_txt = "Note:&emsp;The following IPv{$vtype} addresss is in a IP Suppression list:\n\n"
+			$supp_ip_txt = "Note:&emsp;The following IPv{$vtype} address is in a IP Suppression list:\n\n"
 					. "Suppressed IP:&emsp;[ " . pfb_hsc($w_line) . " ]\n"
 					. "Evaluated IP:&emsp;[ {$h_eval_ip} ]\n\n"
 
@@ -3161,8 +3150,11 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 		}
 	}
 
-	// IP Whitelist Icon
-	if (!$mask_suppression) {
+	// IP Whitelist Icon -- rows handled by the Suppression-icon gate above
+	// (Block, non-GeoIP) never reach this branch any more; the
+	// !$mask_suppression leg preserves today's behaviour unchanged for the
+	// rest (Match rows, GeoIP rows, Permit-alias rows).
+	if (!($rtype == 'Block' && !$pfb_geoip) && !$mask_suppression) {
 		if ($clists['ipwhitelist' . $vtype]) {
 
 			$pfb_found = FALSE;
@@ -3175,7 +3167,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 			}
 
 			if ($pfb_found) {
-				$supp_ip_txt = "Note:&emsp;The following IPv{$vtype} addresss is in a Permit Alias:\n\n"
+				$supp_ip_txt = "Note:&emsp;The following IPv{$vtype} address is in a Permit Alias:\n\n"
 						. "Permitted IP:&emsp;[ " . pfb_hsc($w_line) . " ]\n"
 						. "Evaluated IP:&emsp;[ {$h_eval_ip} ]\n"
 						. "IP Aliasname:&emsp;[ " . pfb_hsc($atype) . " ]\n\n"
