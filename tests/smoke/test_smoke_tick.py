@@ -320,9 +320,15 @@ def mfs_var(deployed_vm: SmokeVM, request: pytest.FixtureRequest) -> Iterator[Sm
         # flag the node so the autouse dump doesn't print a second, post-reboot snapshot.
         rep = getattr(request.node, "_rep_call", None)
         if rep is not None and rep.failed:
-            print("\n[smoke] mfs_var: failure-time diagnostics BEFORE the teardown reboot (issue #774)")
-            h.dump_diagnostics(vm)
-            request.node._pfb_failure_dumped = True  # type: ignore[attr-defined]
+            # Own try: dump_diagnostics is best-effort by contract, but a future probe
+            # that raises here would skip the ramdisk revert AND the reboot below — a
+            # worse leak than the one #774 fixes. Guard like the sibling steps.
+            try:
+                print("\n[smoke] mfs_var: failure-time diagnostics BEFORE the teardown reboot (issue #774)")
+                h.dump_diagnostics(vm)
+                request.node._pfb_failure_dumped = True  # type: ignore[attr-defined]
+            except Exception as exc:  # noqa: BLE001 -- pre-revert diagnostics, never mask the test result
+                print(f"[smoke] mfs_var pre-reboot diagnostics failed (non-fatal): {exc}")
         # Best-effort, mirrors test_smoke_boot_reload's deployed_vm teardown: never mask
         # the test result on cleanup failure.
         try:
