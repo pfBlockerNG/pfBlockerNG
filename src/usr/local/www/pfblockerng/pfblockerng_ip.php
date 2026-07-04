@@ -103,9 +103,7 @@ $input_errors = array();
 if ($_POST) {
 	if (isset($_POST['save'])) {
 
-		if (isset($savemsg)) {
-			unset($savemsg);
-		}
+		unset($savemsg);
 
 		// Validate Select field options
 		$select_options = array(	'asn_reporting'		=> 'disabled',

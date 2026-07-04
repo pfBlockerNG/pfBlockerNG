@@ -210,9 +210,7 @@ if ($_POST) {
 			$pfb['gconfig']['skipfeed']			= $_POST['skipfeed']				?: 0;
 
 			// Remove old Line Limit setting
-			if (isset($pfb['gconfig']['log_maxlines'])) {
-				unset($pfb['gconfig']['log_maxlines']);
-			}
+			unset($pfb['gconfig']['log_maxlines']);
 
 			foreach ($log_suffixes as $log_suffix) {
 				$pfb['gconfig']['log_max_' . $log_suffix]	= $_POST['log_max_' . $log_suffix]	?: 20000;
