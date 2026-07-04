@@ -158,7 +158,7 @@ def _seed_future_ledger_entry(vm: SmokeVM, job_key: str, *, timeout: float = 60.
     """
     snippet = (
         f"require_once('{_PFB_EXTRA_INC}');"
-        f"pfb_due_ledger_write_entry('{job_key}', array("
+        f"pfb_due_ledger_write_entry({h._php_str(job_key)}, array("
         "'last_run' => time(), 'next_due' => time() + 86400, 'jitter' => 0"
         f"), {h._php_str(PFB_DBDIR)});"
         "echo 'OK';"
