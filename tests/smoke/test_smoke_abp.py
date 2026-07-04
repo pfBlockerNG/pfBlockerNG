@@ -42,10 +42,14 @@ Every expected answer is pinned to the REAL semantics in
 
 HERMETIC PROBE NOTE (load-bearing, inherited from the ADR-04 matrix): during the
 per-case probe ``CaseContext`` blocks the runner's egress, so a name that is NOT
-blocked only answers if it has a control Host-Override (``control_local_data``);
-otherwise it would hang (no upstream). Every "resolves" expectation here therefore
-injects a control A record and asserts that exact pass IP — never a loose
-"not blocked".
+blocked needs either a control Host-Override (``control_local_data``) or an
+``h.unblock_egress()`` call to reach the controlled stub upstream (``STUB_DNS_A``);
+otherwise it would hang. A host override is served as ``local-data`` BEFORE the
+python module runs, so it would SHADOW a block on that same name — a "resolves"
+expectation whose name could plausibly be block-shadowed by its own case therefore
+unblocks egress and asserts the stub sentinel instead (#582); the rest keep the
+control-record + control-IP pattern. Every "resolves" expectation asserts an exact
+answer (a control IP or the stub sentinel) — never a loose "not blocked".
 
 These need the booted ``smoke_vm`` fixture, the branch ``.pkg`` (``SMOKE_PKG``),
 and the smoke deps; without them they skip cleanly.
@@ -65,7 +69,7 @@ from collections.abc import Iterator
 import pytest
 
 from . import helpers as h
-from .conftest import SmokeVM, _MockFeedServer, _StubDnsServer
+from .conftest import STUB_DNS_A, SmokeVM, _MockFeedServer, _StubDnsServer
 
 pytestmark = pytest.mark.smoke
 
@@ -120,9 +124,13 @@ def test_abp_exception_unblocks(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_f
 
     ``||base^`` is a wildcard block (zoneDB suffix; covers base + subdomains).
     ``@@||good.base^`` is a wildcard feed-allow (band 2). For ``good.base``:
-    block_band 1, allow_band 2 → ``1 > 2`` false → allow wins → resolves (to its
-    control IP). For ``base`` / ``bad.base``: no allow match → block stands → VIP.
-    Loading the feed ``@@`` sets ``important_rules`` so the numeric branch runs.
+    block_band 1, allow_band 2 → ``1 > 2`` false → allow wins → resolves via the
+    controlled stub upstream. For ``base`` / ``bad.base``: no allow match → block
+    stands → VIP. Loading the feed ``@@`` sets ``important_rules`` so the numeric
+    branch runs. NOTE: no ``control_local_data`` override on ``good`` — it would be
+    served as local-data BEFORE the python module and mask a broken exception as a
+    pass (#582); egress is unblocked for the whole body (the VIP probes are served
+    locally regardless).
     """
     base = h.unique_domain("abpexc")
     good = f"good.{base}"
@@ -134,15 +142,15 @@ def test_abp_exception_unblocks(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_f
         feed_url=feed_url,
         header="smokeabpexc",
         mode=h.DnsblMode.VIP,
-        control_local_data={good: {"A": PASS_IP}},
     )
     with h.CaseContext(deployed_vm, spec):
+        h.unblock_egress()
         ans_base = h.dns_probe_client(client_vm, base, "A")
         assert h.is_vip(ans_base), f"{base} expected VIP block, got {ans_base}"
         ans_bad = h.dns_probe_client(client_vm, bad, "A")
         assert h.is_vip(ans_bad), f"{bad} (non-exempt subdomain) expected VIP block, got {ans_bad}"
         ans_good = h.dns_probe_client(client_vm, good, "A")
-        assert h.resolves_to(ans_good, PASS_IP), f"exempted {good} should resolve to {PASS_IP}, got {ans_good}"
+        assert h.resolves_to(ans_good, STUB_DNS_A), f"exempted {good} should resolve via stub, got {ans_good}"
         assert not h.is_vip(ans_good), f"exempted {good} wrongly VIP-blocked: {ans_good}"
 
 
@@ -198,7 +206,11 @@ def test_abp_cross_feed_exception(deployed_vm: SmokeVM, client_vm: SmokeVM, mock
 
     The two feeds are two ROWS of ONE DNSBL group (each header-sniffed ABP
     independently); the Python build MERGES their rules. Cross-feed global ``@@`` is
-    intended ABP semantics (ADR.md): feed-allow band 2 ≥ feed-block band 1 → resolves.
+    intended ABP semantics (ADR.md): feed-allow band 2 ≥ feed-block band 1 → resolves
+    via the controlled stub upstream. NOTE: no ``control_local_data`` override — it
+    would be served as local-data BEFORE the python module and mask a broken
+    cross-feed merge as a pass (#582); egress is unblocked so the probe reaches the
+    stub for real.
     """
     base = h.unique_domain("abpxfeed")
     feed_a = h.write_local_feed(deployed_vm, "smoke_abp_xfeed_a.txt", h.abp_feed(f"||{base}^"))
@@ -209,11 +221,11 @@ def test_abp_cross_feed_exception(deployed_vm: SmokeVM, client_vm: SmokeVM, mock
         header="smokeabpxfa",
         mode=h.DnsblMode.VIP,
         extra_rows=[("smokeabpxfb", feed_b)],
-        control_local_data={base: {"A": PASS_IP}},
     )
     with h.CaseContext(deployed_vm, spec):
+        h.unblock_egress()
         ans = h.dns_probe_client(client_vm, base, "A")
-        assert h.resolves_to(ans, PASS_IP), f"cross-feed @@ should un-block {base} -> {PASS_IP}, got {ans}"
+        assert h.resolves_to(ans, STUB_DNS_A), f"cross-feed @@ should un-block {base} via stub, got {ans}"
         assert not h.is_vip(ans), f"{base} wrongly VIP-blocked despite cross-feed @@: {ans}"
 
 
@@ -244,8 +256,11 @@ def test_abp_badfilter_prunes_feed_block(deployed_vm: SmokeVM, client_vm: SmokeV
 
     ``$badfilter`` removes every FEED rule with the matching signature (``(y, ())``),
     including the badfilter rule itself — so y has no surviving block and resolves
-    (to its control IP). Sovereignty caveat is covered separately: a user rule's
-    signature is NOT pruned.
+    via the controlled stub upstream. Sovereignty caveat is covered separately: a
+    user rule's signature is NOT pruned. NOTE: no ``control_local_data`` override —
+    it would be served as local-data BEFORE the python module and mask a broken
+    prune as a pass (#582); egress is unblocked so the probe reaches the stub for
+    real.
     """
     y = h.unique_domain("abpbad")
     body = h.abp_feed(f"||{y}^", f"||{y}^$badfilter")
@@ -255,11 +270,11 @@ def test_abp_badfilter_prunes_feed_block(deployed_vm: SmokeVM, client_vm: SmokeV
         feed_url=feed_url,
         header="smokeabpbad",
         mode=h.DnsblMode.VIP,
-        control_local_data={y: {"A": PASS_IP}},
     )
     with h.CaseContext(deployed_vm, spec):
+        h.unblock_egress()
         ans = h.dns_probe_client(client_vm, y, "A")
-        assert h.resolves_to(ans, PASS_IP), f"$badfilter should prune the block on {y} -> {PASS_IP}, got {ans}"
+        assert h.resolves_to(ans, STUB_DNS_A), f"$badfilter should prune the block on {y} via stub, got {ans}"
         assert not h.is_vip(ans), f"{y} wrongly VIP-blocked despite $badfilter: {ans}"
 
 
@@ -275,7 +290,11 @@ def test_abp_regex_block_and_allow(deployed_vm: SmokeVM, client_vm: SmokeVM, moc
     Block ``/badword/`` (irreducible substring regex → compiled into regexDB, band 1,
     forced ``log_type='1'`` → VIP). Allow ``@@/goodword/`` (allowRegexDB, band 2). A
     name carrying ONLY ``badword`` is VIP-blocked; a name carrying BOTH matches the
-    allow (band 2 ≥ block band 1) → resolves.
+    allow (band 2 ≥ block band 1) → resolves via the controlled stub upstream. NOTE:
+    no ``control_local_data`` override on ``unblocked`` — it would be served as
+    local-data BEFORE the python module and mask a broken allow-regex as a pass
+    (#582); egress is unblocked for the whole body (the VIP block probe is served
+    locally regardless).
     """
     uid = h.unique_domain("abprx").split(".", 1)[0]  # the uuid label only
     blocked = f"xbadwordx-{uid}.com"
@@ -287,13 +306,13 @@ def test_abp_regex_block_and_allow(deployed_vm: SmokeVM, client_vm: SmokeVM, moc
         feed_url=feed_url,
         header="smokeabprx",
         mode=h.DnsblMode.VIP,
-        control_local_data={unblocked: {"A": PASS_IP}},
     )
     with h.CaseContext(deployed_vm, spec):
+        h.unblock_egress()
         ans_block = h.dns_probe_client(client_vm, blocked, "A")
         assert h.is_vip(ans_block), f"regex-matched {blocked} expected VIP, got {ans_block}"
         ans_allow = h.dns_probe_client(client_vm, unblocked, "A")
-        assert h.resolves_to(ans_allow, PASS_IP), f"@@ regex should un-block {unblocked} -> {PASS_IP}, got {ans_allow}"
+        assert h.resolves_to(ans_allow, STUB_DNS_A), f"@@ regex should un-block {unblocked} via stub, got {ans_allow}"
 
 
 def test_abp_regex_admitted_count(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
@@ -339,24 +358,32 @@ def test_abp_regex_admitted_count(deployed_vm: SmokeVM, mock_feeds: _MockFeedSer
     assert n_on < n_off, f"cap must shrink the admitted count: off={n_off} on={n_on}"
 
 
-def test_abp_catastrophic_regex_dropped(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+def test_abp_catastrophic_regex_dropped(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """A catastrophic-SHAPE user regex is dropped at load with the length cap OFF.
 
     The always-on shape gate is independent of the opt-in "Limit long/complex regex"
     setting: a nested-quantifier pattern (``(a+)+evil``) is never compiled into the
     regexDB even when ``regex_cap`` is OFF, while a benign sibling (``ads[0-9]+``) is
     admitted. Proves the SHAPE half of the decoupled gate is unconditional (the key
-    behaviour change) on the live box, not just in the unit suite.
+    behaviour change) on the live box, not just in the unit suite. The count alone
+    (``n == 1``) can't tell WHICH pattern survived — a regression that instead
+    admitted the catastrophic one and dropped the benign one would also read as
+    ``n == 1``; a DNS probe of a name matching the surviving ``ads[0-9]+`` pattern
+    (VIP-blocked) closes that gap (#582).
     """
     domain = h.unique_domain("abpcat")
     feed_url = h.write_local_feed(deployed_vm, "smoke_abp_cat.txt", f"{domain}\n")
     patterns = [r"ads[0-9]+", r"(a+)+evil"]
+    uid = h.unique_domain("abpcatrx").split(".", 1)[0]  # the uuid label only
+    ads_hit = f"ads1-{uid}.com"  # matches the benign ads[0-9]+ pattern only
 
     spec = h.DnsblCase(
         aliasname="smokeabpcat", feed_url=feed_url, header="smokeabpcat", mode=h.DnsblMode.VIP, user_regex=patterns
     )
     with h.CaseContext(deployed_vm, spec):
         n = h.regex_admitted_count(deployed_vm)
+        ans = h.dns_probe_client(client_vm, ads_hit, "A")
+        assert h.is_vip(ans), f"surviving ads[0-9]+ pattern should VIP-block {ads_hit}, got {ans}"
     assert n == 1, f"cap OFF: catastrophic shape dropped unconditionally, only benign admitted, expected 1, got {n!r}"
 
 
@@ -372,9 +399,12 @@ def test_abp_whitelist_sovereign_over_important(
 
     The settings whitelist (``suppression``) loads into whiteDB as a user allow
     (``important=True`` → band 6, ``_white_entry_band``). vs feed block+``$important``
-    band 3: allow_band 6 ≥ block_band 3 → resolves (to its control IP). The whitelist
-    is the ultimate override — it beats even a sovereign user regex (band 5), proven
-    by ``test_user_regex_beats_feed_important_allow`` below.
+    band 3: allow_band 6 ≥ block_band 3 → resolves via the controlled stub upstream.
+    The whitelist is the ultimate override — it beats even a sovereign user regex
+    (band 5), proven by ``test_user_regex_beats_feed_important_allow`` below. NOTE:
+    no ``control_local_data`` override — it would be served as local-data BEFORE the
+    python module and mask a broken sovereignty rule as a pass (#582); egress is
+    unblocked so the probe reaches the stub for real.
     """
     w = h.unique_domain("abpwl")
     body = h.abp_feed(f"||{w}^$important")
@@ -385,11 +415,11 @@ def test_abp_whitelist_sovereign_over_important(
         header="smokeabpwl",
         mode=h.DnsblMode.VIP,
         whitelist=[w],
-        control_local_data={w: {"A": PASS_IP}},
     )
     with h.CaseContext(deployed_vm, spec):
+        h.unblock_egress()
         ans = h.dns_probe_client(client_vm, w, "A")
-        assert h.resolves_to(ans, PASS_IP), f"whitelisted {w} must resolve to {PASS_IP} despite $important, got {ans}"
+        assert h.resolves_to(ans, STUB_DNS_A), f"whitelisted {w} must resolve via stub despite $important, got {ans}"
         assert not h.is_vip(ans), f"whitelisted {w} wrongly VIP-blocked: {ans}"
 
 
