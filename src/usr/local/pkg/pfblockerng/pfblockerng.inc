@@ -852,6 +852,39 @@ function pfb_archive_missing_tool(string $canonical_type, ?callable $checker = N
 	return $checker($argv[0]) ? NULL : $argv[0];
 }
 
+// ADR-48 Phase 1: pure formatter for the canonical download-validation reject line —
+// a single greppable line naming which feed/stage/reason caused a rejection and the
+// raw detected detail (e.g. file(1) output, a tool's exit code, an offending member
+// name). $stage is one of mime|structural|inner|member|plaintext|entries; this
+// formatter does not validate the token, callers own the vocabulary.
+//
+// Canonical shape (leading "\n" per the pfb_logger() caller convention -- pfb_logger()
+// itself emits no newline):
+//   \npfb_validate: REJECT feed=<feed> stage=<stage> reason=<reason> detected=<detail>
+//
+// Escaping is applied to EACH of the four values independently, in this order:
+//   1. every control byte in [\x00-\x1F\x7F] is replaced with a single space -- these
+//      values may carry attacker-influenced file(1) output, and a raw "\n"/"\r" would
+//      forge or split the greppable line;
+//   2. htmlspecialchars() (matching the escaping the existing reject messages use).
+// Pure: string in, string out, no I/O, no globals.
+function pfb_validate_log_line(string $feed, string $stage, string $reason, string $detail = ''): string {
+	[$feed, $stage, $reason, $detail] = array_map(
+		static function (string $value): string {
+			return htmlspecialchars(preg_replace('/[\x00-\x1F\x7F]/', ' ', $value) ?? '');
+		},
+		[$feed, $stage, $reason, $detail]
+	);
+	return "\npfb_validate: REJECT feed={$feed} stage={$stage} reason={$reason} detected={$detail}";
+}
+
+// ADR-48 Phase 1: thin emit wrapper -- builds the canonical reject line via
+// pfb_validate_log_line() and emits it through pfb_logger() at the reject level
+// (default 2 = pfB log + error log). One call site per rejection.
+function pfb_validate_log(string $feed, string $stage, string $reason, string $detail = '', int $level = 2): void {
+	pfb_logger(pfb_validate_log_line($feed, $stage, $reason, $detail), $level);
+}
+
 // Function to filter/sanitize user input
 function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FALSE) {
 	global $pfb;

@@ -1,0 +1,123 @@
+<?php
+
+declare(strict_types=1);
+
+use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\TestCase;
+
+/**
+ * pfb_validate_log() -- the thin emit wrapper for the canonical download-validation
+ * reject line (ADR-48 Phase 1). It must route through pfb_logger() at the caller's
+ * level: the default reject level (2) writes to BOTH the pfB log and the error log;
+ * level 1 writes to the pfB log only -- proving level routing, not just presence.
+ * Uses the sink-capture technique from PfbLoggerIsoTimestampTest: $GLOBALS['pfb']
+ * 'log'/'errlog' point at temp files so the real on-disk write is asserted.
+ */
+#[CoversFunction('pfb_validate_log')]
+final class PfbValidateLogTest extends TestCase
+{
+	/** @var string[] temp files to remove in tearDown */
+	private array $tmpfiles = [];
+
+	/** @var array<string,mixed> saved $GLOBALS['pfb'] keys (sentinel FALSE = was unset) */
+	private array $saved = [];
+
+	protected function setUp(): void
+	{
+		foreach (['log', 'errlog', 'pnow', 'runlog', 'runlog_active'] as $k) {
+			$this->saved[$k] = array_key_exists($k, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$k] : false;
+		}
+		// A stray 'runlog_active' from an earlier test must not mirror our writes
+		// into a third file this test never provisions.
+		unset($GLOBALS['pfb']['runlog'], $GLOBALS['pfb']['runlog_active']);
+	}
+
+	protected function tearDown(): void
+	{
+		foreach ($this->saved as $k => $prev) {
+			if ($prev === false) {
+				unset($GLOBALS['pfb'][$k]);
+			} else {
+				$GLOBALS['pfb'][$k] = $prev;
+			}
+		}
+		foreach ($this->tmpfiles as $f) {
+			if (is_file($f)) {
+				$this->assertTrue(unlink($f), "failed to remove temp file {$f}");
+			}
+		}
+		$this->tmpfiles = [];
+	}
+
+	private function tempFile(string $prefix): string
+	{
+		$path = tempnam(sys_get_temp_dir(), $prefix);
+		$this->assertNotFalse($path, "could not create temp file for {$prefix}");
+		$this->tmpfiles[] = $path;
+		return $path;
+	}
+
+	public function testDefaultLevelWritesBothPfbLogAndErrorLog(): void
+	{
+		// Given: two empty temp sinks.
+		$log    = $this->tempFile('pfb_validate_log_');
+		$errlog = $this->tempFile('pfb_validate_errlog_');
+		$GLOBALS['pfb']['log']    = $log;
+		$GLOBALS['pfb']['errlog'] = $errlog;
+
+		$this->assertSame('', file_get_contents($log), 'pfB log must start empty');
+		$this->assertSame('', file_get_contents($errlog), 'error log must start empty');
+
+		$expectedLine = pfb_validate_log_line('FeedX', 'mime', 'r', 'd');
+
+		// When: emitted at the default (reject) level.
+		pfb_validate_log('FeedX', 'mime', 'r', 'd');
+
+		// Then: the canonical line lands in BOTH sinks (level 2 semantics).
+		$logContents    = (string) file_get_contents($log);
+		$errlogContents = (string) file_get_contents($errlog);
+		$this->assertStringContainsString(
+			$expectedLine,
+			$logContents,
+			"expected pfB log to contain <{$expectedLine}>, got <{$logContents}>"
+		);
+		$this->assertStringContainsString(
+			$expectedLine,
+			$errlogContents,
+			"expected error log to contain <{$expectedLine}>, got <{$errlogContents}>"
+		);
+	}
+
+	public function testLevelOneWritesPfbLogOnlyNotErrorLog(): void
+	{
+		// Given: two empty temp sinks.
+		$log    = $this->tempFile('pfb_validate_log_');
+		$errlog = $this->tempFile('pfb_validate_errlog_');
+		$GLOBALS['pfb']['log']    = $log;
+		$GLOBALS['pfb']['errlog'] = $errlog;
+
+		$this->assertSame('', file_get_contents($log), 'pfB log must start empty');
+		$this->assertSame('', file_get_contents($errlog), 'error log must start empty');
+
+		$expectedLine = pfb_validate_log_line('FeedY', 'structural', 'r2', 'd2');
+
+		// When: emitted at level 1 (pfB log only -- not the reject default).
+		pfb_validate_log('FeedY', 'structural', 'r2', 'd2', 1);
+
+		// Then: the pfB log carries the line...
+		$logContents = (string) file_get_contents($log);
+		$this->assertStringContainsString(
+			$expectedLine,
+			$logContents,
+			"expected pfB log to contain <{$expectedLine}>, got <{$logContents}>"
+		);
+		// ...but the error log stays untouched -- proves level routing, not just
+		// that SOME write happened.
+		$errlogContents = (string) file_get_contents($errlog);
+		$this->assertSame(
+			'',
+			$errlogContents,
+			"expected error log to stay EMPTY at level 1, got <{$errlogContents}>"
+		);
+	}
+}
