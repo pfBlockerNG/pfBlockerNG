@@ -237,7 +237,8 @@ def _run_two_reload_cycle(
     """
     rules_before = _get_filter_rules(vm)
 
-    # Reload #1: build the alias.
+    # Reload #1: build the alias. apply_filter_sync() blocks until filter_configure()
+    # actually lands, so the read right after it is authoritative (no fixed-time guess).
     h.force_ip_refetch(vm, f"{FEED_HEADER}_v4")
     h.reload(vm, "update", timeout=timeout)
     h.apply_filter_sync(vm)

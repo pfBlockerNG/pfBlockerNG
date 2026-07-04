@@ -411,6 +411,27 @@ def _seed_user_filter(vm: SmokeVM, descr: str, *, timeout: float = 60.0) -> None
         raise RuntimeError(f"_seed_user_filter({descr!r}) failed: rc={result.returncode} {result.stderr!r}")
 
 
+def _remove_user_filter(vm: SmokeVM, descr: str, *, timeout: float = 60.0) -> None:
+    """Remove any ``filter/rule`` row with this descr — idempotent (no-op if already gone).
+
+    Counterpart to :func:`_seed_user_filter`: the seeded rule has no pfB marker, so no
+    lifecycle sweep ever removes it (that is the behaviour under test) — the caller must,
+    in a ``finally`` (issue #582).
+    """
+    snippet = (
+        "$rules = config_get_path('filter/rule', array());\n"
+        f"$kept = array_values(array_filter($rules, function ($r) {{\n"
+        f"  return ($r['descr'] ?? '') !== {h._php_str(descr)};\n"
+        "}));\n"
+        "config_set_path('filter/rule', $kept);\n"
+        "write_config('pfBlockerNG smoke: remove seeded user filter for DoT block test');\n"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_remove_user_filter({descr!r}) failed: rc={result.returncode} {result.stderr!r}")
+
+
 def _seed_pf_alias(vm: SmokeVM, name: str, cidr: str = "192.0.2.0/24", *, timeout: float = 60.0) -> None:
     """Create a pfSense network alias so pfctl can resolve 'from !<name>' without a syntax error.
 
@@ -850,6 +871,12 @@ def test_user_filter_rule_survives_disable_and_uninstall(deployed_vm: SmokeVM, p
         except Exception:
             pass
         raise
+    finally:
+        # The seeded user filter rule carries no pfB marker, so no lifecycle sweep
+        # (enable/disable/uninstall — the very thing under test) ever removes it;
+        # clean it up here or it leaks into config.xml for every later test/module
+        # sharing this guest (issue #582).
+        _remove_user_filter(vm, _USER_FILTER_DESCR)
 
 
 # --------------------------------------------------------------------------- #
@@ -1029,37 +1056,46 @@ def test_uninstall_sweep_removes_all_dot_block_rules(deployed_vm: SmokeVM, prima
     # that asserts sections-gone must set pfb_keep=off explicitly — see issue #484).
     h.set_pfb_keep(vm, False)
     # GIVEN — enable DoT block on the primary interface and seed a user filter rule.
+    # The seed is wrapped so the finally can remove it: it carries no pfB marker, so
+    # the uninstall sweep under test never touches it (that is the point being proved),
+    # and it would otherwise leak into config.xml for every later test/module sharing
+    # this guest (issue #582).
     _set_dot_block(vm, enabled=True, ifaces=[iface], exception="")
     h.reload(vm, "update", wait_unbound=False)
     h.apply_filter_sync(vm)
-    _seed_user_filter(vm, _USER_FILTER_DESCR)
+    try:
+        _seed_user_filter(vm, _USER_FILTER_DESCR)
 
-    # BEFORE-STATE: assert all objects are present before uninstall.
-    assert _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX + iface) == 1, (
-        f"pfB_DoT_Block_{iface} filter/rule entry absent before uninstall — setup failed"
-    )
-    assert _filter_rule_present(vm, _USER_FILTER_DESCR), "user filter rule absent before uninstall — seeding failed"
-    assert _pfb_sections_present(vm), "installedpackages/pfblockerng* absent before uninstall — unexpected clean state"
+        # BEFORE-STATE: assert all objects are present before uninstall.
+        assert _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX + iface) == 1, (
+            f"pfB_DoT_Block_{iface} filter/rule entry absent before uninstall — setup failed"
+        )
+        assert _filter_rule_present(vm, _USER_FILTER_DESCR), "user filter rule absent before uninstall — seeding failed"
+        assert _pfb_sections_present(vm), (
+            "installedpackages/pfblockerng* absent before uninstall — unexpected clean state"
+        )
 
-    # WHEN — uninstall pfBlockerNG (triggers pfblockerng_php_pre_deinstall_command →
-    # owned-object sweep before pfb_remove_config_settings).
-    _pkg_delete(vm)
+        # WHEN — uninstall pfBlockerNG (triggers pfblockerng_php_pre_deinstall_command →
+        # owned-object sweep before pfb_remove_config_settings).
+        _pkg_delete(vm)
 
-    # THEN — all pfB_DoT_Block_* entries are gone.
-    assert _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX) == 0, (
-        "pfB_DoT_Block_* filter/rule entries still present after uninstall — ADR-35/37 sweep did not run\n"
-        + h.deinstall_debug(vm)
-    )
+        # THEN — all pfB_DoT_Block_* entries are gone.
+        assert _filter_dot_block_count(vm, _DOT_BLOCK_DESCR_PFX) == 0, (
+            "pfB_DoT_Block_* filter/rule entries still present after uninstall — ADR-35/37 sweep did not run\n"
+            + h.deinstall_debug(vm)
+        )
 
-    # THEN — user filter rule survives.
-    assert _filter_rule_present(vm, _USER_FILTER_DESCR), (
-        "user filter rule was DELETED during uninstall — ADR-35 sweep incorrectly removed a user object"
-    )
+        # THEN — user filter rule survives.
+        assert _filter_rule_present(vm, _USER_FILTER_DESCR), (
+            "user filter rule was DELETED during uninstall — ADR-35 sweep incorrectly removed a user object"
+        )
 
-    # THEN — pfBlockerNG config sections are gone.
-    assert not _pfb_sections_present(vm), (
-        "installedpackages/pfblockerng* still present after uninstall — pfb_remove_config_settings did not run"
-    )
+        # THEN — pfBlockerNG config sections are gone.
+        assert not _pfb_sections_present(vm), (
+            "installedpackages/pfblockerng* still present after uninstall — pfb_remove_config_settings did not run"
+        )
+    finally:
+        _remove_user_filter(vm, _USER_FILTER_DESCR)
 
 
 # --------------------------------------------------------------------------- #
@@ -1354,3 +1390,6 @@ def test_dot_block_uninstall_keep_on_removes_rules_retains_sections(deployed_vm:
         # _cleanup_dot_block is internally best-effort: its config write turns the toggle off
         # even with the package uninstalled, and its reload no-ops when the package is gone.
         _cleanup_dot_block(vm)
+        # The seeded user filter rule carries no pfB marker, so the keep=on sweep under
+        # test never touches it — remove it here or it leaks into config.xml (issue #582).
+        _remove_user_filter(vm, _USER_FILTER_DESCR)

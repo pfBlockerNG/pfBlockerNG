@@ -202,6 +202,46 @@ def _seed_user_nat(vm: SmokeVM, descr: str, *, timeout: float = 60.0) -> None:
         raise RuntimeError(f"_seed_user_nat({descr!r}) failed: {result.returncode} {result.stderr!r}")
 
 
+def _remove_vip_by_descr(vm: SmokeVM, descr: str, *, timeout: float = 60.0) -> None:
+    """Remove any ``virtualip/vip`` row with this descr — idempotent (no-op if already gone).
+
+    Scenario C/D seed a USER (non-pfB-owned) VIP to prove the uninstall sweep leaves it
+    alone; that means the sweep never cleans it up, so the test must (issue #582).
+    """
+    snippet = (
+        "$vips = config_get_path('virtualip/vip', array());\n"
+        f"$kept = array_values(array_filter($vips, function ($v) {{\n"
+        f"  return ($v['descr'] ?? '') !== {h._php_str(descr)};\n"
+        "}));\n"
+        "config_set_path('virtualip/vip', $kept);\n"
+        "write_config('pfBlockerNG smoke: remove seeded user VIP');\n"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_remove_vip_by_descr({descr!r}) failed: {result.returncode} {result.stderr!r}")
+
+
+def _remove_nat_by_descr(vm: SmokeVM, descr: str, *, timeout: float = 60.0) -> None:
+    """Remove any ``nat/rule`` row with this descr — idempotent (no-op if already gone).
+
+    Scenario C/D seed a USER (non-pfB-owned) NAT rule to prove the uninstall sweep leaves
+    it alone; that means the sweep never cleans it up, so the test must (issue #582).
+    """
+    snippet = (
+        "$rules = config_get_path('nat/rule', array());\n"
+        f"$kept = array_values(array_filter($rules, function ($r) {{\n"
+        f"  return ($r['descr'] ?? '') !== {h._php_str(descr)};\n"
+        "}));\n"
+        "config_set_path('nat/rule', $kept);\n"
+        "write_config('pfBlockerNG smoke: remove seeded user NAT');\n"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_remove_nat_by_descr({descr!r}) failed: {result.returncode} {result.stderr!r}")
+
+
 def _seed_orphan_vip(vm: SmokeVM, descr: str, *, timeout: float = 60.0) -> None:
     """Inject an orphan VIP: carries the pfBlockerNG marker but pfb_dnsvip4 is cleared.
 
@@ -477,62 +517,73 @@ def test_managed_objects_uninstall_sweeps_orphan_preserves_user_objects(deployed
 
     # Seed the orphan VIP (pfB marker, but pfb_dnsvip4 cleared so the double-guard
     # in pfb_manage_dnsbl_vip would skip it — only the ADR-35 sweep catches it).
-    _seed_orphan_vip(vm, _AUTO_VIP_DESCR_V4)
+    # The USER VIP/NAT (below) are deliberately NOT pfB-owned, so the uninstall sweep
+    # never removes them (that is the behaviour under test) — everything from here on
+    # is wrapped so the finally can remove them itself; otherwise they leak into
+    # config.xml as permanent generic pfSense rows for every later test/module sharing
+    # this guest (issue #582).
+    try:
+        _seed_orphan_vip(vm, _AUTO_VIP_DESCR_V4)
 
-    # Seed user objects (no pfB marker — must survive uninstall).
-    _seed_user_vip(vm, _USER_VIP_DESCR)
-    _seed_user_nat(vm, _USER_NAT_DESCR)
+        # Seed user objects (no pfB marker — must survive uninstall).
+        _seed_user_vip(vm, _USER_VIP_DESCR)
+        _seed_user_nat(vm, _USER_NAT_DESCR)
 
-    # BEFORE-STATE: assert all three are present.
-    assert _vip_descr_present(vm, _AUTO_VIP_DESCR_V4), (
-        "orphan VIP (pfB_AUTO_VIP_v4) not present before uninstall — seeding failed"
-    )
-    assert _vip_descr_present(vm, _USER_VIP_DESCR), "user VIP not present before uninstall — seeding failed"
+        # BEFORE-STATE: assert all three are present.
+        assert _vip_descr_present(vm, _AUTO_VIP_DESCR_V4), (
+            "orphan VIP (pfB_AUTO_VIP_v4) not present before uninstall — seeding failed"
+        )
+        assert _vip_descr_present(vm, _USER_VIP_DESCR), "user VIP not present before uninstall — seeding failed"
 
-    # Check user NAT is present.
-    pre = (
-        "$found = FALSE;\n"
-        "foreach (config_get_path('nat/rule', array()) as $r) {\n"
-        f"  if (($r['descr'] ?? '') === {h._php_str(_USER_NAT_DESCR)}) {{ $found = TRUE; break; }}\n"
-        "}"
-    )
-    user_nat_before = h._php_read_scalar(vm, pre, "$found ? 'yes' : 'no'")
-    assert user_nat_before == "yes", "user NAT rule not present before uninstall — seeding failed"
+        # Check user NAT is present.
+        pre = (
+            "$found = FALSE;\n"
+            "foreach (config_get_path('nat/rule', array()) as $r) {\n"
+            f"  if (($r['descr'] ?? '') === {h._php_str(_USER_NAT_DESCR)}) {{ $found = TRUE; break; }}\n"
+            "}"
+        )
+        user_nat_before = h._php_read_scalar(vm, pre, "$found ? 'yes' : 'no'")
+        assert user_nat_before == "yes", "user NAT rule not present before uninstall — seeding failed"
 
-    # Assert installedpackages/pfblockerng* sections exist before uninstall.
-    assert _pfb_sections_present(vm), "installedpackages/pfblockerng* absent before uninstall — unexpected clean state"
+        # Assert installedpackages/pfblockerng* sections exist before uninstall.
+        assert _pfb_sections_present(vm), (
+            "installedpackages/pfblockerng* absent before uninstall — unexpected clean state"
+        )
 
-    # WHEN — uninstall pfBlockerNG (triggers pfblockerng_php_pre_deinstall_command →
-    # owned-object sweep before pfb_remove_config_settings).
-    _pkg_delete(vm)
+        # WHEN — uninstall pfBlockerNG (triggers pfblockerng_php_pre_deinstall_command →
+        # owned-object sweep before pfb_remove_config_settings).
+        _pkg_delete(vm)
 
-    # THEN — read config.xml state after uninstall.
-    # The orphan VIP must be swept by the owned-object sweep.
-    assert not _vip_descr_present(vm, _AUTO_VIP_DESCR_V4), (
-        "orphan pfB_AUTO_VIP_v4 still present after uninstall — ADR-35 sweep did not run"
-    )
+        # THEN — read config.xml state after uninstall.
+        # The orphan VIP must be swept by the owned-object sweep.
+        assert not _vip_descr_present(vm, _AUTO_VIP_DESCR_V4), (
+            "orphan pfB_AUTO_VIP_v4 still present after uninstall — ADR-35 sweep did not run"
+        )
 
-    # User VIP must survive (not a pfB marker — never swept).
-    assert _vip_descr_present(vm, _USER_VIP_DESCR), (
-        "user VIP was DELETED during uninstall — ADR-35 sweep incorrectly removed a user object"
-    )
+        # User VIP must survive (not a pfB marker — never swept).
+        assert _vip_descr_present(vm, _USER_VIP_DESCR), (
+            "user VIP was DELETED during uninstall — ADR-35 sweep incorrectly removed a user object"
+        )
 
-    # User NAT rule must survive.
-    post_nat = (
-        "$found = FALSE;\n"
-        "foreach (config_get_path('nat/rule', array()) as $r) {\n"
-        f"  if (($r['descr'] ?? '') === {h._php_str(_USER_NAT_DESCR)}) {{ $found = TRUE; break; }}\n"
-        "}"
-    )
-    user_nat_after = h._php_read_scalar(vm, post_nat, "$found ? 'yes' : 'no'")
-    assert user_nat_after == "yes", (
-        "user NAT rule was DELETED during uninstall — ADR-35 sweep incorrectly removed a user object"
-    )
+        # User NAT rule must survive.
+        post_nat = (
+            "$found = FALSE;\n"
+            "foreach (config_get_path('nat/rule', array()) as $r) {\n"
+            f"  if (($r['descr'] ?? '') === {h._php_str(_USER_NAT_DESCR)}) {{ $found = TRUE; break; }}\n"
+            "}"
+        )
+        user_nat_after = h._php_read_scalar(vm, post_nat, "$found ? 'yes' : 'no'")
+        assert user_nat_after == "yes", (
+            "user NAT rule was DELETED during uninstall — ADR-35 sweep incorrectly removed a user object"
+        )
 
-    # pfBlockerNG config sections must be gone.
-    assert not _pfb_sections_present(vm), (
-        "installedpackages/pfblockerng* still present after uninstall — pfb_remove_config_settings did not run"
-    )
+        # pfBlockerNG config sections must be gone.
+        assert not _pfb_sections_present(vm), (
+            "installedpackages/pfblockerng* still present after uninstall — pfb_remove_config_settings did not run"
+        )
+    finally:
+        _remove_vip_by_descr(vm, _USER_VIP_DESCR)
+        _remove_nat_by_descr(vm, _USER_NAT_DESCR)
 
 
 # --------------------------------------------------------------------------- #
@@ -573,57 +624,65 @@ def test_managed_objects_uninstall_keep_on_removes_orphan_retains_sections(deplo
     h.set_dnsvip_auto(vm, False)
     h.reload(vm, "update")
 
-    _seed_orphan_vip(vm, _AUTO_VIP_DESCR_V4)
-    _seed_user_vip(vm, _USER_VIP_DESCR)
-    _seed_user_nat(vm, _USER_NAT_DESCR)
+    # The USER VIP/NAT (seeded below) are deliberately NOT pfB-owned, so the uninstall
+    # sweep never removes them (that is the behaviour under test) — wrapped so the
+    # finally can remove them itself; otherwise they leak into config.xml as permanent
+    # generic pfSense rows for every later test/module sharing this guest (issue #582).
+    try:
+        _seed_orphan_vip(vm, _AUTO_VIP_DESCR_V4)
+        _seed_user_vip(vm, _USER_VIP_DESCR)
+        _seed_user_nat(vm, _USER_NAT_DESCR)
 
-    # BEFORE-STATE: assert all objects present.
-    assert _vip_descr_present(vm, _AUTO_VIP_DESCR_V4), (
-        "orphan VIP (pfB_AUTO_VIP_v4) not present before keep=on uninstall — seeding failed"
-    )
-    assert _vip_descr_present(vm, _USER_VIP_DESCR), "user VIP not present before keep=on uninstall — seeding failed"
+        # BEFORE-STATE: assert all objects present.
+        assert _vip_descr_present(vm, _AUTO_VIP_DESCR_V4), (
+            "orphan VIP (pfB_AUTO_VIP_v4) not present before keep=on uninstall — seeding failed"
+        )
+        assert _vip_descr_present(vm, _USER_VIP_DESCR), "user VIP not present before keep=on uninstall — seeding failed"
 
-    pre_nat = (
-        "$found = FALSE;\n"
-        "foreach (config_get_path('nat/rule', array()) as $r) {\n"
-        f"  if (($r['descr'] ?? '') === {h._php_str(_USER_NAT_DESCR)}) {{ $found = TRUE; break; }}\n"
-        "}"
-    )
-    assert h._php_read_scalar(vm, pre_nat, "$found ? 'yes' : 'no'") == "yes", (
-        "user NAT rule not present before keep=on uninstall — seeding failed"
-    )
-    assert _pfb_sections_present(vm), (
-        "installedpackages/pfblockerng* absent before keep=on uninstall — unexpected clean state"
-    )
+        pre_nat = (
+            "$found = FALSE;\n"
+            "foreach (config_get_path('nat/rule', array()) as $r) {\n"
+            f"  if (($r['descr'] ?? '') === {h._php_str(_USER_NAT_DESCR)}) {{ $found = TRUE; break; }}\n"
+            "}"
+        )
+        assert h._php_read_scalar(vm, pre_nat, "$found ? 'yes' : 'no'") == "yes", (
+            "user NAT rule not present before keep=on uninstall — seeding failed"
+        )
+        assert _pfb_sections_present(vm), (
+            "installedpackages/pfblockerng* absent before keep=on uninstall — unexpected clean state"
+        )
 
-    # WHEN — uninstall pfBlockerNG with pfb_keep=on.
-    _pkg_delete(vm)
+        # WHEN — uninstall pfBlockerNG with pfb_keep=on.
+        _pkg_delete(vm)
 
-    # THEN — orphan VIP is GONE (live-object sweep is unconditional, regardless of pfb_keep).
-    assert not _vip_descr_present(vm, _AUTO_VIP_DESCR_V4), (
-        "orphan pfB_AUTO_VIP_v4 still present after keep=on uninstall — "
-        "live-object teardown did not run unconditionally (the #484 bug: keep-gate blocked the sweep)\n"
-        + h.deinstall_debug(vm)
-    )
+        # THEN — orphan VIP is GONE (live-object sweep is unconditional, regardless of pfb_keep).
+        assert not _vip_descr_present(vm, _AUTO_VIP_DESCR_V4), (
+            "orphan pfB_AUTO_VIP_v4 still present after keep=on uninstall — "
+            "live-object teardown did not run unconditionally (the #484 bug: keep-gate blocked the sweep)\n"
+            + h.deinstall_debug(vm)
+        )
 
-    # THEN — user VIP survives (not a pfB marker — never swept).
-    assert _vip_descr_present(vm, _USER_VIP_DESCR), (
-        "user VIP was DELETED during keep=on uninstall — sweep incorrectly removed a user object"
-    )
+        # THEN — user VIP survives (not a pfB marker — never swept).
+        assert _vip_descr_present(vm, _USER_VIP_DESCR), (
+            "user VIP was DELETED during keep=on uninstall — sweep incorrectly removed a user object"
+        )
 
-    # THEN — user NAT rule survives.
-    post_nat = (
-        "$found = FALSE;\n"
-        "foreach (config_get_path('nat/rule', array()) as $r) {\n"
-        f"  if (($r['descr'] ?? '') === {h._php_str(_USER_NAT_DESCR)}) {{ $found = TRUE; break; }}\n"
-        "}"
-    )
-    assert h._php_read_scalar(vm, post_nat, "$found ? 'yes' : 'no'") == "yes", (
-        "user NAT rule was DELETED during keep=on uninstall — sweep incorrectly removed a user object"
-    )
+        # THEN — user NAT rule survives.
+        post_nat = (
+            "$found = FALSE;\n"
+            "foreach (config_get_path('nat/rule', array()) as $r) {\n"
+            f"  if (($r['descr'] ?? '') === {h._php_str(_USER_NAT_DESCR)}) {{ $found = TRUE; break; }}\n"
+            "}"
+        )
+        assert h._php_read_scalar(vm, post_nat, "$found ? 'yes' : 'no'") == "yes", (
+            "user NAT rule was DELETED during keep=on uninstall — sweep incorrectly removed a user object"
+        )
 
-    # THEN — pfblockerng* sections are STILL PRESENT (pfb_keep=on retains settings + data).
-    assert _pfb_sections_present(vm), (
-        "installedpackages/pfblockerng* GONE after keep=on uninstall — "
-        "pfb_keep=on should have retained settings sections (the #484 fix: keep gates only settings/data)"
-    )
+        # THEN — pfblockerng* sections are STILL PRESENT (pfb_keep=on retains settings + data).
+        assert _pfb_sections_present(vm), (
+            "installedpackages/pfblockerng* GONE after keep=on uninstall — "
+            "pfb_keep=on should have retained settings sections (the #484 fix: keep gates only settings/data)"
+        )
+    finally:
+        _remove_vip_by_descr(vm, _USER_VIP_DESCR)
+        _remove_nat_by_descr(vm, _USER_NAT_DESCR)
