@@ -6,7 +6,7 @@ transitions — and carries the ``repo`` marker (NOT ``smoke``), so
 ``pytest -m smoke`` never selects it. It reuses ``test_repo_install.py``'s
 hermetic ``file://`` catalog and ``repo_vm`` fixture machinery.
 
-TWO CASES:
+THREE CASES:
 
 ``test_pkg_upgrade_preserves_config_values`` — UPGRADE CONTRACT (issue #281)
   Config.xml user settings survive a ``pkg upgrade`` from a prior-release build
@@ -18,6 +18,17 @@ TWO CASES:
   the HIGHER build, writing representative settings, and then downgrading back to
   the LOWER build. Also proves the lower build reads sane values — a DNSBL-blocked
   unique_domain() name still returns the VIP block shape after downgrade.
+
+``test_pkg_install_applies_config_migrations`` — INSTALL-TIME MIGRATION CONTRACT
+  (issue #795) Proves the three ``pfblockerng_install.inc`` config migrations
+  (SafeSearch DoH rename, legacy Yandex DoH-list token rewrite, MaxMind key
+  relocation) actually run during a REAL ``pkg install`` against a pre-seeded
+  legacy config, not just at the pure-function level (``SsDohListYandexMigrateTest``
+  covers the decision logic in isolation). A legacy config is written directly with
+  raw ``config_get_path``/``config_set_path`` (the package is absent, so
+  ``PfbConfig`` does not exist on the box yet), the unmodified branch ``.pkg`` is
+  installed once, and every migrated field is asserted against its pre-migration
+  value.
 
 ROOT CAUSE (issue #281): on ``pkg upgrade``, pfSense fires the old pkg's
 ``custom_php_pre_deinstall_command`` -> ``pfblockerng_php_pre_deinstall_command()``.
@@ -478,3 +489,217 @@ def test_pkg_downgrade_preserves_config_values(repo_vm: SmokeVM, tmp_path: Path)
     finally:
         pkg_delete(repo_vm)
         repo_vm.ssh("/bin/rm", "-rf", UPGRADE_REPO_DIR, timeout=60.0)
+
+
+# --------------------------------------------------------------------------- #
+# Issue #795 — install-time config-migration contract                        #
+# --------------------------------------------------------------------------- #
+
+# SafeSearch is a FLAT section (no /config/0) — mirrors pfblockerng_extra.inc's
+# registry comment ("Section: installedpackages/pfblockerngsafesearch (flat, no /config/0)").
+_CFG_SAFESEARCH = "installedpackages/pfblockerngsafesearch"
+_CFG_IPSETTINGS = "installedpackages/pfblockerngipsettings/config/0"
+
+
+def _seed_legacy_migration_config(vm: SmokeVM) -> None:
+    """Seed a pre-migration legacy config directly via raw config_get_path/config_set_path.
+
+    The package is ABSENT when this runs, so ``PfbConfig`` (defined in
+    ``pfblockerng_extra.inc``) does not exist on the box yet — raw calls are the
+    only option, same as pfSense itself sees an existing user's config.xml before
+    the package (re)installs.
+
+    ``safesearch_firefoxdoh`` is seeded 'Disable', NOT 'Enable': the firefoxdoh
+    migration runs BEFORE the yandex-token migration in pfblockerng_install.inc, and
+    its 'Enable' branch overwrites 'safesearch_doh_list' wholesale with
+    'use-application-dns.net' — which would clobber the seeded legacy yandex token
+    and turn the yandex migration into a no-op before it ever runs.
+    """
+    snippet = (
+        # SafeSearch (flat section): legacy firefoxdoh key + a DoH list carrying the
+        # legacy 'yandex.dns' token alongside an unrelated sibling entry.
+        f"$ss = config_get_path({h._php_str(_CFG_SAFESEARCH)}, array());\n"
+        "$ss['safesearch_firefoxdoh'] = 'Disable';\n"
+        "$ss['safesearch_doh_list']   = 'dns.google,yandex.dns';\n"
+        f"config_set_path({h._php_str(_CFG_SAFESEARCH)}, $ss);\n"
+        # General section: MaxMind settings in their pre-migration (legacy) location.
+        f"$g = config_get_path({h._php_str(_CFG_GLOBAL)}, array());\n"
+        "$g['maxmind_key']    = 'SMOKE-MM-KEY-795';\n"
+        "$g['maxmind_locale'] = 'en';\n"
+        f"config_set_path({h._php_str(_CFG_GLOBAL)}, $g);\n"
+        # IP-settings section: no maxmind_key, so the move migration's gate condition
+        # (!isset($ip['maxmind_key'])) holds.
+        f"$ip = config_get_path({h._php_str(_CFG_IPSETTINGS)}, array());\n"
+        "unset($ip['maxmind_key']);\n"
+        f"config_set_path({h._php_str(_CFG_IPSETTINGS)}, $ip);\n"
+        "write_config('pfBlockerNG issue-795 smoke: seed legacy pre-migration config');\n"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet, timeout=60.0)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"_seed_legacy_migration_config failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
+def _cleanup_migration_config(vm: SmokeVM) -> None:
+    """Remove every key this test seeded/migrated, from BOTH possible locations.
+
+    Self-encapsulation (CLAUDE.md): a sibling test must never inherit leftover
+    SafeSearch/MaxMind state from this one. Deletes the whole (now package-owned)
+    SafeSearch section and strips the MaxMind keys from both the general and
+    ipsettings sections, regardless of which side the migration left them on.
+    """
+    snippet = (
+        f"config_del_path({h._php_str(_CFG_SAFESEARCH)});\n"
+        f"$g = config_get_path({h._php_str(_CFG_GLOBAL)}, array());\n"
+        "unset($g['maxmind_key'], $g['maxmind_locale']);\n"
+        f"config_set_path({h._php_str(_CFG_GLOBAL)}, $g);\n"
+        f"$ip = config_get_path({h._php_str(_CFG_IPSETTINGS)}, array());\n"
+        "unset($ip['maxmind_key'], $ip['maxmind_locale']);\n"
+        f"config_set_path({h._php_str(_CFG_IPSETTINGS)}, $ip);\n"
+        "write_config('pfBlockerNG issue-795 smoke: cleanup migration config');\n"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet, timeout=60.0)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"_cleanup_migration_config failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
+@pytest.mark.timeout(600)  # one pkg install cycle (no forged re-versioning) > the 30s default cap.
+def test_pkg_install_applies_config_migrations(repo_vm: SmokeVM) -> None:
+    """INSTALL-TIME MIGRATION CONTRACT (issue #795): the three config migrations in
+    ``pfblockerng_install.inc`` run PROCEDURALLY during a real ``pkg install`` against
+    a pre-seeded legacy config — not just at the pure-function level.
+    ``SsDohListYandexMigrateTest`` (PHPUnit) already pins the yandex-token decision in
+    isolation; this proves the full read-stored-value -> helper -> write ->
+    ``write_config()`` chain actually executes on a live box, for all three migrations:
+
+      1. SafeSearch DoH rename: 'safesearch_firefoxdoh' -> 'safesearch_doh' (key removed).
+      2. Legacy Yandex DoH-list token rewrite: 'yandex.dns' -> 'dns.yandex' in the CSV.
+      3. MaxMind key relocation: general section -> ipsettings section (removed from general).
+
+    Scenario: issue #795 — install-time migrations apply on a real pkg install.
+      Background: our NONE-signed file:// repo above the Netgate ``pfSense`` repo.
+
+    Given the package ABSENT, and a legacy config seeded directly via raw
+      config_get_path/config_set_path (safesearch_firefoxdoh='Disable',
+      safesearch_doh_list='dns.google,yandex.dns'; general maxmind_key/maxmind_locale
+      set; ipsettings maxmind_key absent),
+
+    When the UNMODIFIED branch ``.pkg`` is installed (a plain ``pkg install`` runs
+      ``rc.packages`` POST-INSTALL -> ``custom_php_install_command`` ->
+      ``pfblockerng_install.inc`` top-to-bottom -> the trailing ``write_config()``),
+
+    Then every migrated config.xml value reflects the post-migration state: the DoH
+      setting moved to 'safesearch_doh', the legacy key removed, the yandex token
+      rewritten with its sibling entry preserved, and the MaxMind settings moved from
+      general to ipsettings.
+    """
+    pkg = os.environ.get("SMOKE_PKG")
+    assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file — repo_vm already gated this"
+
+    pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
+
+    try:
+        # ------------------------------------------------------------------ #
+        # GIVEN: package absent; a pre-seeded legacy config on the bare box   #
+        # ------------------------------------------------------------------ #
+
+        pkg_delete(repo_vm)
+        assert pkg_installed_version(repo_vm) is None, (
+            "package unexpectedly present before the issue-795 migration-contract install"
+        )
+
+        _seed_legacy_migration_config(repo_vm)
+
+        # BEFORE state: assert the exact legacy values the migrations must transform.
+        before_firefoxdoh = h.config_get(repo_vm, _CFG_SAFESEARCH + "/safesearch_firefoxdoh")
+        assert before_firefoxdoh == "Disable", (
+            f"BEFORE: safesearch_firefoxdoh = {before_firefoxdoh!r}, expected 'Disable' (seed did not take)"
+        )
+        before_doh_list = h.config_get(repo_vm, _CFG_SAFESEARCH + "/safesearch_doh_list")
+        assert before_doh_list == "dns.google,yandex.dns", (
+            f"BEFORE: safesearch_doh_list = {before_doh_list!r}, expected 'dns.google,yandex.dns' (seed did not take)"
+        )
+        before_gen_key = h.config_get(repo_vm, _CFG_GLOBAL + "/maxmind_key")
+        assert before_gen_key == "SMOKE-MM-KEY-795", (
+            f"BEFORE: general maxmind_key = {before_gen_key!r}, expected 'SMOKE-MM-KEY-795' (seed did not take)"
+        )
+        before_gen_locale = h.config_get(repo_vm, _CFG_GLOBAL + "/maxmind_locale")
+        assert before_gen_locale == "en", (
+            f"BEFORE: general maxmind_locale = {before_gen_locale!r}, expected 'en' (seed did not take)"
+        )
+        before_ip_key = h.config_get(repo_vm, _CFG_IPSETTINGS + "/maxmind_key")
+        assert before_ip_key == "", (
+            f"BEFORE: ipsettings maxmind_key = {before_ip_key!r}, expected '' (absent) — "
+            "the move migration's gate condition requires this key to be unset"
+        )
+
+        # ------------------------------------------------------------------ #
+        # WHEN: install the UNMODIFIED branch .pkg from our file:// repo     #
+        # ------------------------------------------------------------------ #
+
+        build_guest_repo(repo_vm, UPGRADE_REPO_DIR, [Path(pkg)])
+        write_repo_conf(repo_vm, UPGRADE_REPO_DIR, ours_priority=pfsense_prio + 100)
+        pkg_update(repo_vm)
+        pkg_install_from_repo(repo_vm)
+
+        installed = pkg_installed_version(repo_vm)
+        expected_version = read_compact_version(Path(pkg))
+        assert installed == expected_version, (
+            f"expected the branch build {expected_version!r} installed, got {installed!r}"
+        )
+
+        # ------------------------------------------------------------------ #
+        # THEN: every migrated value reflects the post-migration state       #
+        # ------------------------------------------------------------------ #
+
+        after_doh = h.config_get(repo_vm, _CFG_SAFESEARCH + "/safesearch_doh")
+        assert after_doh == "Disable", (
+            f"AFTER: safesearch_doh = {after_doh!r}, expected 'Disable' (copied from safesearch_firefoxdoh) — "
+            "the SafeSearch DoH rename migration did not run"
+        )
+        after_firefoxdoh = h.config_get(repo_vm, _CFG_SAFESEARCH + "/safesearch_firefoxdoh")
+        assert after_firefoxdoh == "", (
+            f"AFTER: safesearch_firefoxdoh = {after_firefoxdoh!r}, expected '' (removed) — "
+            "the legacy key was not unset by the SafeSearch DoH rename migration"
+        )
+        after_doh_list = h.config_get(repo_vm, _CFG_SAFESEARCH + "/safesearch_doh_list")
+        assert after_doh_list == "dns.google,dns.yandex", (
+            f"AFTER: safesearch_doh_list = {after_doh_list!r}, expected 'dns.google,dns.yandex' "
+            "(legacy 'yandex.dns' token rewritten, sibling entry preserved) — "
+            "the Yandex DoH-list token migration did not run"
+        )
+        after_ip_key = h.config_get(repo_vm, _CFG_IPSETTINGS + "/maxmind_key")
+        assert after_ip_key == "SMOKE-MM-KEY-795", (
+            f"AFTER: ipsettings maxmind_key = {after_ip_key!r}, expected 'SMOKE-MM-KEY-795' (moved) — "
+            "the MaxMind key relocation migration did not run"
+        )
+        after_ip_locale = h.config_get(repo_vm, _CFG_IPSETTINGS + "/maxmind_locale")
+        assert after_ip_locale == "en", (
+            f"AFTER: ipsettings maxmind_locale = {after_ip_locale!r}, expected 'en' (moved) — "
+            "the MaxMind key relocation migration did not run"
+        )
+        after_gen_key = h.config_get(repo_vm, _CFG_GLOBAL + "/maxmind_key")
+        assert after_gen_key == "", (
+            f"AFTER: general maxmind_key = {after_gen_key!r}, expected '' (removed from old location) — "
+            "the MaxMind key relocation migration did not unset the source"
+        )
+        after_gen_locale = h.config_get(repo_vm, _CFG_GLOBAL + "/maxmind_locale")
+        assert after_gen_locale == "", (
+            f"AFTER: general maxmind_locale = {after_gen_locale!r}, expected '' (removed from old location) — "
+            "the MaxMind key relocation migration did not unset the source"
+        )
+
+    finally:
+        pkg_delete(repo_vm)
+        repo_vm.ssh("/bin/rm", "-rf", UPGRADE_REPO_DIR, timeout=60.0)
+        # Best-effort cleanup: never let a raised body assertion be masked — but still
+        # remove the seeded/migrated keys so a sibling test never inherits this state.
+        try:
+            _cleanup_migration_config(repo_vm)
+        except Exception as exc:  # noqa: BLE001 -- cleanup must not mask the real test outcome
+            print(f"[smoke] _cleanup_migration_config failed (non-fatal): {exc}")
