@@ -1004,7 +1004,11 @@ def test_safesearch_doh_list_multiselect_valid_and_bogus_clears(
     """
     vm = smoke_vm
     cfg = "installedpackages/pfblockerngsafesearch/safesearch_doh_list"
+    original = helpers.config_get(vm, cfg)
     try:
+        assert original != "dns.google", (
+            f"safesearch_doh_list already 'dns.google' before the valid POST (original={original!r})"
+        )
         # VALID single key -> stored verbatim (doh kept Disable so the guard is inert).
         got = _post_and_get(
             webui, vm, DNSBL_PAGE, {"safesearch_doh": "Disable", "safesearch_doh_list": "dns.google"}, cfg

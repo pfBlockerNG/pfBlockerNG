@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from typing import TYPE_CHECKING
 
 import pytest
@@ -229,15 +230,15 @@ def test_dnsbl_logging_select_valid_and_bogus_coerces_to_default(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """``logging`` stores a valid key, and a bogus value coerces to the default.
+    """``logging`` stores each of its FIVE valid keys, and a bogus value coerces to the default.
 
-    ``$options_logging`` keys are enabled / disabled / disabled_log. The
-    select-coercion loop replaces a non-key value with ``$select_options['logging']``
-    -- which is the literal ``'Enabled'`` (capital E; NOT itself a key of
-    ``$options_logging``), and the save SUCCEEDS storing that default. Branch
-    coverage: drive a valid 'enabled', then a valid 'disabled' (the distinct second
-    key), then a bogus 'bogus' that coerces to 'Enabled'. Transition: each step
-    asserts the value differs before it is driven.
+    ``$options_logging`` (category_edit.php:442-446) has FIVE keys: enabled,
+    disabled_log, disabled, nxdomain_log, nxdomain. The select-coercion loop
+    replaces a non-key value with ``$select_options['logging']`` -- which is the
+    literal ``'Enabled'`` (capital E; NOT itself a key of ``$options_logging``),
+    and the save SUCCEEDS storing that default. Branch coverage: drive all FIVE
+    valid keys in turn, then a bogus 'bogus' that coerces to 'Enabled'. Transition:
+    each step asserts the value differs before it is driven.
     """
     vm = smoke_vm
     rowid = _free_rowid(vm, CFG_DNSBL)
@@ -247,9 +248,11 @@ def test_dnsbl_logging_select_valid_and_bogus_coerces_to_default(
         # Create the alias with logging=enabled.
         _post_form(webui, _dnsbl_payload(rowid, "smokelog", logging="enabled"))
         assert helpers.config_get(vm, cfg) == "enabled", "logging not stored as 'enabled'"
-        # VALID second key -> stored verbatim (a real transition).
-        _post_form(webui, _dnsbl_payload(rowid, "smokelog", logging="disabled"))
-        assert helpers.config_get(vm, cfg) == "disabled", "logging not stored as 'disabled'"
+        # The remaining four valid keys, each a real transition from the previous value.
+        for key in ("disabled_log", "disabled", "nxdomain_log", "nxdomain"):
+            _post_form(webui, _dnsbl_payload(rowid, "smokelog", logging=key))
+            got = helpers.config_get(vm, cfg)
+            assert got == key, f"logging not stored as {key!r}, got {got!r}"
         # BOGUS -> coerced to the default 'Enabled' (save SUCCEEDS, value != bogus).
         _post_form(webui, _dnsbl_payload(rowid, "smokelog", logging="bogus"))
         got = helpers.config_get(vm, cfg)
@@ -389,31 +392,88 @@ def test_ipv4_alias_permit_any_guard_rejects_and_valid_persists(
 # --------------------------------------------------------------------------- #
 
 
+_ASN_CACHE = "/usr/local/www/pfblockerng/pfblockerng_asn.txt"
+
+
+def _seed_file(vm: helpers.SmokeVM, path: str, content: str, *, timeout: float = 30.0) -> None:
+    """Overwrite (not append) ``path`` on the guest with ``content`` via ``tee``."""
+    result = subprocess.run(
+        vm.ssh_argv("tee", path),
+        input=content,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    assert result.returncode == 0, f"_seed_file({path!r}) failed: rc={result.returncode} {result.stderr!r}"
+
+
 def test_asn_autocomplete_term_returns_json_list(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """The ASN autocomplete (``isAjax`` + ``?term=...``) returns a JSON array.
+    """The ASN autocomplete (``isAjax`` + ``?term=...``) returns the cached rows that match.
 
     The page's top branch (lines 34-66) serves an AJAX JSON list when
     ``isAjax()`` AND ``$_GET['term']`` has length > 2: it filters the cached ASN
-    list (``pfblockerng_asn.txt``) by the term and ``echo json_encode($result)``;
-    when the file is absent the cache is ``[]`` -> an empty JSON array. Either way
-    the RESPONSE SHAPE is a JSON list -- this is read-only (no config write), so
-    it is safe to assert directly. ``isAjax()`` keys on the
-    ``X-Requested-With: XMLHttpRequest`` header, which we send.
+    list (``pfblockerng_asn.txt``) by the term and ``echo json_encode($result)``.
+    Without seeding the cache file, "returns a JSON list" is vacuously true on the
+    empty ``[]`` fallback -- this seeds the file with real rows and asserts a
+    matching ``?term=`` returns the seeded entry, and separately proves the
+    length gate: a 1-char term must NOT hit the AJAX branch at all (falls through
+    to the normal HTML page render, line 34's ``mb_strlen(...) > 2`` guard).
+
+    GOTCHA: the ASN list is cached in ``$_SESSION['pfb_asn_list_data']`` and
+    cleared on any PLAIN (non-AJAX) page GET (lines 67-71) -- so the seeded file
+    is only actually re-read once that cache has been invalidated. Seed, do ONE
+    plain GET, THEN issue the ``?term=`` request.
     """
-    resp = webui.get(
-        CATEGORY_PAGE,
-        params={"term": "AS3"},
-        headers={"X-Requested-With": "XMLHttpRequest"},
-    )
-    assert resp.status_code == 200, f"ASN autocomplete -> HTTP {resp.status_code} (expected 200)"
-    assert not looks_like_login_page(resp.text), "ASN autocomplete returned the login form (session lost)"
-    parsed = json.loads(resp.text)
-    assert isinstance(parsed, list), f"ASN autocomplete must return a JSON list, got {type(parsed).__name__}"
-    # Each returned entry (if any) is a string ASN line from the cached list.
-    assert all(isinstance(item, str) for item in parsed), "ASN autocomplete list entries must be strings"
+    vm = smoke_vm
+    had_file = vm.ssh("test", "-f", _ASN_CACHE).returncode == 0
+    original = helpers.read_log_file(vm, _ASN_CACHE) if had_file else ""
+    try:
+        _seed_file(vm, _ASN_CACHE, "AS3320  Deutsche Telekom AG\nAS16509 Amazon.com, Inc.\n")
+
+        # Invalidate the per-session cache (a plain, non-AJAX GET) so the NEXT
+        # ?term= request re-reads our seeded file instead of a stale session cache.
+        plain = webui.get(CATEGORY_PAGE, params={"type": "ipv4"})
+        assert not looks_like_login_page(plain.text), "plain GET returned the login form (session lost)"
+
+        resp = webui.get(
+            CATEGORY_PAGE,
+            params={"term": "AS3320"},
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+        assert resp.status_code == 200, f"ASN autocomplete -> HTTP {resp.status_code} (expected 200)"
+        assert not looks_like_login_page(resp.text), "ASN autocomplete returned the login form (session lost)"
+        parsed = json.loads(resp.text)
+        assert isinstance(parsed, list), f"ASN autocomplete must return a JSON list, got {type(parsed).__name__}"
+        assert all(isinstance(item, str) for item in parsed), "ASN autocomplete list entries must be strings"
+        assert any("AS3320" in item for item in parsed), (
+            f"expected the seeded 'AS3320' row in the ?term= result, got {parsed!r}"
+        )
+
+        # BRANCH: a term of length <= 2 must NOT hit the AJAX JSON branch (line 34's
+        # `mb_strlen($_GET['term']) > 2` gate) -- it renders the normal HTML page instead.
+        short = webui.get(
+            CATEGORY_PAGE,
+            params={"type": "ipv4", "term": "A"},
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+        assert not looks_like_login_page(short.text), "short-term GET returned the login form (session lost)"
+        short_is_json = True
+        try:
+            json.loads(short.text)
+        except json.JSONDecodeError:
+            short_is_json = False
+        assert not short_is_json, (
+            f"a 1-char ?term= must NOT return the JSON autocomplete list, got: {short.text[:200]!r}"
+        )
+    finally:
+        if had_file:
+            _seed_file(vm, _ASN_CACHE, original)
+        else:
+            vm.ssh("rm", "-f", _ASN_CACHE)
 
 
 # --------------------------------------------------------------------------- #
@@ -529,9 +589,12 @@ def test_ipv4_advanced_inout_full_save_persists_and_reloads(
     rowid = _free_rowid(vm, CFG_IPV4)
     base = f"{CFG_IPV4}/{rowid}"
 
-    _mk_alias(vm, port_alias, "port", _PORT_ALIAS_ADDR)
-    _mk_alias(vm, net_alias, "network", _NET_ALIAS_CIDR)
     try:
+        # Both aliases are created INSIDE the try: a failure creating the second
+        # must not leak the first -- the finally below removes both unconditionally.
+        _mk_alias(vm, port_alias, "port", _PORT_ALIAS_ADDR)
+        _mk_alias(vm, net_alias, "network", _NET_ALIAS_CIDR)
+
         # BEFORE: all advanced keys at the free slot read '' (POST must CAUSE them).
         for key in (
             "autoproto_in",
