@@ -3162,11 +3162,19 @@ function pfb_ip_suppressed(string $ip, array $entries): bool
  * un-suppress ('delete_ip') handler (which entry to remove + re-add) and the
  * suppressed-row icon detection in the Alerts render loop.
  *
- * Skip/strip/containment rules are bit-identical to pfb_ip_suppressed()
- * (that function is now a one-line wrapper around this one) -- no new
- * normalisation. When both a bare host and a broader containing CIDR cover
- * $ip, the host-specific entry wins (mirrors the old /32-before-/24
- * precedence); a tie in prefix length keeps the first-seen entry.
+ * Skip/strip rules are identical to the pre-#422 pfb_ip_suppressed() (that
+ * function is now a one-line wrapper around this one). One deliberate
+ * tolerance on top: a bare host (no '/') is normalised to /32 (v4) or /128
+ * (v6) before the ip_in_subnet() containment test -- ip_in_subnet() itself
+ * requires a mask (a bare token never matches anything), while BOTH carve
+ * engines treat a bare suppression hole as a single host (iprange for v4;
+ * pfb_v6_cidr_to_range() for v6), so without the normalisation a hand-edited
+ * bare entry would suppress at update time yet read as "not suppressed"
+ * here (killstates would keep cutting the host's states; the Alerts
+ * un-suppress could never resolve it). When both a host-exact and a broader
+ * containing CIDR cover $ip, the host-specific entry wins (mirrors the old
+ * /32-before-/24 precedence); a tie in prefix length keeps the first-seen
+ * entry.
  *
  * PURE -- no config access, no I/O.
  *
@@ -3188,16 +3196,18 @@ function pfb_ip_suppressed_match(string $ip, array $entries): ?string
 		// Strip a trailing inline '#' comment, same as pfbng_text_area_decode().
 		$stripped = trim(strstr($entry, '#', TRUE) ?: $entry);
 
+		// Bare host -> exact single-host CIDR BEFORE the containment test:
+		// ip_in_subnet() requires a mask, but the carve engines suppress a
+		// bare hole as a single host -- the predicate must agree with them.
+		if (!str_contains($stripped, '/')) {
+			$stripped .= str_contains($stripped, ':') ? '/128' : '/32';
+		}
+
 		if (!ip_in_subnet($ip, $stripped)) {
 			continue;
 		}
 
-		// A bare host (no '/') ranks as an exact /32 or /128 match.
-		if (str_contains($stripped, '/')) {
-			$bits = (int) substr(strrchr($stripped, '/'), 1);
-		} else {
-			$bits = str_contains($stripped, ':') ? 128 : 32;
-		}
+		$bits = (int) substr(strrchr($stripped, '/'), 1);
 
 		if ($bits > $best_bits) {
 			$best      = $raw;
