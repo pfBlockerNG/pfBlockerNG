@@ -960,7 +960,6 @@ def init_standard(id: int, env: module_env) -> bool:
     pfb["regex_cap"] = False
     pfb["regex_warn_ms"] = REGEX_WARN_MS_DEFAULT
     pfb["regex_evict_ms"] = REGEX_EVICT_MS_DEFAULT
-    pfb["whiteDB"] = False
     pfb["gpListDB"] = False
     pfb["noAAAADB"] = False
     pfb["python_idn"] = False
