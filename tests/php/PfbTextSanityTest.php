@@ -9,12 +9,14 @@ use PHPUnit\Framework\TestCase;
  * Unit tests for pfb_text_sanity() — ADR-49 Phase 1.
  *
  * pfb_text_sanity(string $sample): ?string is a PURE content-sanity scanner over
- * the first chunk (up to 8 KiB, a read cap never a floor) of a downloaded text
- * feed. It returns NULL when the sample looks like plausible blocklist text, or
- * one of three reason tokens otherwise. Verdict order (first hit wins):
+ * the first chunk (up to 64 KiB at the pfb_download() gate, a read cap never a
+ * floor) of a downloaded text feed. It returns NULL when the sample looks like
+ * plausible blocklist text, or one of three reason tokens otherwise. Verdict
+ * order (first hit wins):
  *   1. 'nul_bytes'         — any \x00 byte anywhere in the sample.
  *   2. 'html_error_page'   — opens with <!doctype html>/<html> AND carries no
- *                            blocklist-shaped line in its first 20 lines.
+ *                            blocklist-shaped line anywhere in the sample
+ *                            (IP/CIDR substring; domain.tld only as a whole line).
  *   3. 'below_min_content' — zero non-blank, non-comment lines (floor = 1).
  * All matching is BYTE-LEVEL (no `/u` modifier) — every pattern is pure ASCII,
  * so a chunk-truncated multibyte tail can never flip a verdict.
@@ -51,7 +53,7 @@ final class PfbTextSanityTest extends TestCase
 
 	public function test_tiny_few_byte_feed_is_not_size_penalised(): void
 	{
-		// A short body (well under the 8 KiB read cap) is a complete sample, never
+		// A short body (well under the read cap) is a complete sample, never
 		// penalised for its size — no "too small" heuristic exists.
 		$this->assertNull(pfb_text_sanity("1.2.3.4\n"));
 	}
@@ -115,9 +117,123 @@ final class PfbTextSanityTest extends TestCase
 	public function test_html_body_with_a_blocklist_line_is_not_flagged(): void
 	{
 		// The false-positive guard: an HTML-ish feed that DOES carry a
-		// blocklist-shaped line within its first 20 lines must NOT be flagged.
+		// blocklist-shaped line must NOT be flagged.
 		$sample = "<html><body>\n0.0.0.0 ads.example.org\n</body></html>\n";
 		$this->assertNull(pfb_text_sanity($sample));
+	}
+
+	public function test_html_body_with_a_bare_domain_line_is_not_flagged(): void
+	{
+		// Guard variant: a whole line that IS one bare domain token still counts
+		// as blocklist-shaped inside an HTML-opening body.
+		$sample = "<html>\nads.example.org\n</html>\n";
+		$this->assertNull(pfb_text_sanity($sample));
+	}
+
+	public function test_html_body_with_an_abp_line_is_not_flagged(): void
+	{
+		// Guard variant: a whole line that IS one ABP-wrapped domain token still
+		// counts as blocklist-shaped inside an HTML-opening body.
+		$sample = "<html>\n||ads.example.org^\n</html>\n";
+		$this->assertNull(pfb_text_sanity($sample));
+	}
+
+	public function test_html_wrapped_ipv4_feed_is_not_flagged(): void
+	{
+		// Behaviour pin: real catalogue feeds (ProjectHoneypot, cybercrime-tracker)
+		// serve IPs EMBEDDED in HTML markup -- an IPv4 substring inside a markup
+		// line must keep suppressing the verdict (never whole-line-anchor the IPs).
+		$sample = "<html>\n<body>\n<td>192.0.2.1</td>\n</body>\n</html>\n";
+		$this->assertNull(pfb_text_sanity($sample));
+	}
+
+	public function test_html_wrapped_ipv6_feed_is_not_flagged(): void
+	{
+		// Same pin for a compressed IPv6 address inside markup.
+		$sample = "<html>\n<body>\n<td>2001:db8::1</td>\n</body>\n</html>\n";
+		$this->assertNull(pfb_text_sanity($sample));
+	}
+
+	public function test_html_wrapped_feed_with_late_first_ip_is_not_flagged(): void
+	{
+		// The guard scans EVERY sampled line, not a fixed head window: an
+		// HTML-wrapped feed whose first IP appears only after hundreds of
+		// boilerplate lines (ProjectHoneypot ~line 92, cybercrime-tracker ~12 KiB
+		// in) must still suppress the verdict.
+		$sample = "<html>\n<body>\n"
+			. str_repeat("<p>filler markup text</p>\n", 300)
+			. "<td>198.51.100.7</td>\n</body>\n</html>\n";
+		$this->assertNull(pfb_text_sanity($sample));
+	}
+
+	// -- 'html_error_page' guard precision: embedded domain tokens are NOT blocklist lines --
+
+	public function test_xhtml_error_page_with_dtd_url_is_flagged(): void
+	{
+		// A legacy XHTML error page's DOCTYPE/xmlns lines embed w3.org URLs. Those
+		// are markup, not blocklist entries -- the guard must not read them as
+		// blocklist-shaped lines, so the page is still flagged html_error_page.
+		$sample = "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\""
+			. " \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">\n"
+			. "<html xmlns=\"http://www.w3.org/1999/xhtml\">\n"
+			. "<head><title>403 Forbidden</title></head>\n"
+			. "<body><h1>Forbidden</h1><p>You don't have permission to access this resource</p></body>\n"
+			. "</html>\n";
+		$this->assertSame('html_error_page', pfb_text_sanity($sample));
+	}
+
+	public function test_html_error_page_with_asset_hrefs_is_flagged(): void
+	{
+		// favicon.ico / *.css hrefs and CDN links are domain/filename-shaped
+		// substrings inside markup -- typical of virtually every real error page.
+		// They must not suppress the html_error_page verdict.
+		$sample = "<!doctype html>\n"
+			. "<html>\n"
+			. "<head>\n"
+			. "<meta charset=\"utf-8\">\n"
+			. "<title>Access denied</title>\n"
+			. "<link rel=\"icon\" href=\"/favicon.ico\">\n"
+			. "<link rel=\"stylesheet\" href=\"https://cdnjs.cloudflare.com/ajax/libs/normalize/8.0.1/normalize.min.css\">\n"
+			. "</head>\n"
+			. "<body><h1>Access denied</h1><p>The owner of this website has banned your IP address</p></body>\n"
+			. "</html>\n";
+		$this->assertSame('html_error_page', pfb_text_sanity($sample));
+	}
+
+	public function test_html_error_page_with_css_pseudo_elements_is_flagged(): void
+	{
+		// A '::' CSS pseudo-element (or a "403 :: Forbidden" separator) is not an
+		// IPv6 address -- an error page's inline styles must not suppress the
+		// verdict.
+		$sample = "<!doctype html>\n"
+			. "<html>\n"
+			. "<head>\n"
+			. "<style>\n"
+			. "h1::before { content: \"\" }\n"
+			. "a::hover { color: red }\n"
+			. "</style>\n"
+			. "</head>\n"
+			. "<body><h1>Service Unavailable</h1><p>Try again later</p></body>\n"
+			. "</html>\n";
+		$this->assertSame('html_error_page', pfb_text_sanity($sample));
+	}
+
+	// -- UTF-8 BOM handling ----------------------------------------------------------------
+
+	public function test_bom_prefixed_html_error_page_is_flagged(): void
+	{
+		// A UTF-8 BOM is encoding metadata, not content: it must not defeat the
+		// '<!doctype html'/'<html' opening-tag detection (ltrim strips no BOM).
+		$sample = "\xEF\xBB\xBF<!doctype html>\n<html><body><h1>404 Not Found</h1></body></html>\n";
+		$this->assertSame('html_error_page', pfb_text_sanity($sample));
+	}
+
+	public function test_bom_prefixed_comment_only_body_is_below_min_content(): void
+	{
+		// The BOM must not make the first comment line read as a data line in the
+		// content floor either.
+		$sample = "\xEF\xBB\xBF# generated header\n! nothing else\n";
+		$this->assertSame('below_min_content', pfb_text_sanity($sample));
 	}
 
 	// -- 'below_min_content' --------------------------------------------------------------
@@ -163,8 +279,8 @@ final class PfbTextSanityTest extends TestCase
 
 	public function test_truncated_mid_token_line_is_the_sole_floor_candidate(): void
 	{
-		// 8180 bytes of comments, then a data line cut mid-token by the 8 KiB read
-		// cap. The truncated "0.0.0.0 fill" is the ONLY non-comment line, so NULL
+		// 8180 bytes of comments, then a data line cut mid-token by a read cap.
+		// The truncated "0.0.0.0 fill" is the ONLY non-comment line, so NULL
 		// proves the floor loop counted the truncated tail as content; a mis-split
 		// of it would flip the verdict to below_min_content.
 		$header = str_repeat("# c\n", 2045);                              // 8180 bytes, all comments

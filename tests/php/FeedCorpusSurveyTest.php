@@ -145,6 +145,18 @@ final class FeedCorpusSurveyTest extends TestCase
 		'MPatrol'          => 'API-key gated — the catalogue url is an _API_KEY_ template; the capture hit the "access denied" auth wall, not the feed (below_min_content)',
 	];
 
+	/**
+	 * Corpus samples whose feed is REAL but whose 8 KiB capture is all leading HTML
+	 * boilerplate — the data starts past the capture cap, so a non-null verdict on
+	 * the TRUNCATED sample is expected and NOT representative of production, where
+	 * pfb_download() samples up to 64 KiB and sees the data. Same stay-flagged +
+	 * completeness guards as KNOWN_NON_FEED: an entry that starts passing means the
+	 * capture (or the scanner) changed and the entry must be re-checked/removed.
+	 */
+	private const KNOWN_TRUNCATED_FEED = [
+		'CCT_IP' => 'HTML-wrapped IP feed; first IP ~12 KiB into a 650+ KiB page (verified live 2026-07-04), past the 8 KiB corpus capture',
+	];
+
 	public function testCatalogueSurveyHasZeroFalsePositives(): void
 	{
 		if (!function_exists('pfb_text_sanity')) {
@@ -160,15 +172,16 @@ final class FeedCorpusSurveyTest extends TestCase
 		$flagged = [];
 		$stale = [];
 		$matched = [];
+		$exclusions = self::KNOWN_NON_FEED + self::KNOWN_TRUNCATED_FEED;
 		foreach (self::textSamples() as $feed) {
 			$sample = (string) file_get_contents(self::CORPUS_DIR . '/' . $feed['sample_file']);
 			$verdict = pfb_text_sanity($sample);
-			if (isset(self::KNOWN_NON_FEED[$feed['header']])) {
+			if (isset($exclusions[$feed['header']])) {
 				$matched[$feed['header']] = TRUE;
-				// A known non-feed sample MUST stay flagged: if it now passes, the feed
-				// came back or the capture changed, so the exclusion is stale.
+				// An excluded sample MUST stay flagged: if it now passes, the feed came
+				// back (or the capture/scanner changed), so the exclusion is stale.
 				if ($verdict === NULL) {
-					$stale[] = "{$feed['header']} — now passes pfb_text_sanity(); re-check the feed and drop it from KNOWN_NON_FEED";
+					$stale[] = "{$feed['header']} — now passes pfb_text_sanity(); re-check the feed and drop its exclusion entry";
 				}
 				continue;
 			}
@@ -185,19 +198,19 @@ final class FeedCorpusSurveyTest extends TestCase
 		$this->assertSame(
 			[],
 			$stale,
-			"KNOWN_NON_FEED exclusions that are no longer flagged (stale — re-check the feed and remove the entry):\n"
+			"exclusions (KNOWN_NON_FEED / KNOWN_TRUNCATED_FEED) that are no longer flagged (stale — re-check the feed and remove the entry):\n"
 			. implode("\n", $stale)
 		);
-		// Completeness: every KNOWN_NON_FEED key must have been encountered in the corpus.
+		// Completeness: every exclusion key must have been encountered in the corpus.
 		// A feed dropped/renamed in the catalogue makes its exclusion inert (visited by
 		// neither the flagged nor the stale branch), so a dead entry would rot undetected
 		// while reading as "still validated" — fail loudly instead, mirroring the reverse-
 		// coherence orphan guard in testCorpusIsPresentAndCoherent.
-		$dead = array_values(array_diff(array_keys(self::KNOWN_NON_FEED), array_keys($matched)));
+		$dead = array_values(array_diff(array_keys($exclusions), array_keys($matched)));
 		$this->assertSame(
 			[],
 			$dead,
-			"KNOWN_NON_FEED entries no longer present in the corpus (dropped/renamed feed — remove them or refresh the corpus):\n"
+			"exclusion entries no longer present in the corpus (dropped/renamed feed — remove them or refresh the corpus):\n"
 			. implode("\n", $dead)
 		);
 	}
