@@ -10513,15 +10513,35 @@ function pfb_collect_localip() {
 		$pfb_local[] = $onetoone['source']['address'];
 	}
 
-	// Convert any 'Firewall Aliases' to IP address format
-	$aliases = config_get_path('aliases/alias', []);
-	if (is_array($aliases)) {
-		for ($cnt = 0; $cnt <= count($pfb_local); $cnt++) {
-			foreach ($aliases as $i=> $alias) {
-				if (isset($alias['name']) && isset($pfb_local[$cnt])) {
-					if ($alias['name'] == $pfb_local[$cnt]) {
-						$pfb_local[$cnt] = $alias['address'];
-					}
+	// Convert any 'Firewall Aliases' to IP address format.
+	// A multi-entry alias's stored 'address' is a SPACE-SEPARATED string (e.g.
+	// '10.0.0.1 10.0.0.2') -- replacing the matched $pfb_local entry with that
+	// string verbatim leaves ONE unmatchable compound key once $pfb_local is
+	// array_flip()ed below (#782). Split each matched alias's address and
+	// classify every member individually: a plain IP becomes its own entry (so
+	// it gets its own flipped key), a CIDR goes to $pfb_localsub (matched via
+	// pfb_local_ip()), and anything else (hostname, port, nested alias name) is
+	// dropped silently.
+	$pfb_alias_addrs = array();
+	foreach (config_get_path('aliases/alias', []) as $alias) {
+		if (is_array($alias) && isset($alias['name'])) {
+			$pfb_alias_addrs[$alias['name']] = (string) ($alias['address'] ?? '');
+		}
+	}
+	if (!empty($pfb_alias_addrs)) {
+		foreach ($pfb_local as $cnt => $entry) {
+			if (!array_key_exists($entry, $pfb_alias_addrs)) {
+				continue;
+			}
+			unset($pfb_local[$cnt]);
+			foreach (preg_split('/\s+/', trim($pfb_alias_addrs[$entry])) as $member) {
+				if ($member === '') {
+					continue;
+				}
+				if (is_ipaddr($member)) {
+					$pfb_local[] = $member;
+				} elseif (is_subnet($member)) {
+					$pfb_localsub[] = $member;
 				}
 			}
 		}
