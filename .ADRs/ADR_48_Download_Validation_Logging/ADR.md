@@ -1,11 +1,11 @@
 # ADR-48: Standardised download-validation rejection logging
 
-- **Status:** **Proposed** (2026-06-28; facts + scope refreshed 2026-07-03 against `devel` — ADR-45 landed, so its four structural reject sites are now in Phase 2's scope; one design fork remains open, see §2.1)
+- **Status:** **Proposed** (2026-06-28; facts + scope refreshed 2026-07-03 against `devel` — ADR-45 landed, so its four structural reject sites are now in Phase 2's scope; one design fork remains open, see §2.1. Extended 2026-07-04 with Phase 4: Python-side entry-reject accounting, issue #789)
 - **Date:** 2026-06-28
-- **Branch:** `adr/48-download-validation-logging` (off `devel`) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfblockerng.inc`
-- **Target runtime:** PHP 8.3, FreeBSD / pfSense
-- **Test suite:** `vendor/bin/phpunit` (pure formatter), `tests/smoke/test_smoke_feeds.py` (ADR-04)
-- **Origin:** issue #581 (BBcan177) — "always log the raw `file` output along with which validation step caused a rejection." Sibling of ADR-44 (MIME), ADR-45 (structural), ADR-46 (ZIP hardening), ADR-49 (plain-text). This ADR is the **observability layer** the other three log *through*.
+- **Branch:** `adr/48-download-validation-logging` (off `devel`) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfblockerng.inc`, `src/usr/local/pkg/pfblockerng/pfb_unbound.py` (Phase 4)
+- **Target runtime:** PHP 8.3, FreeBSD / pfSense; Python 3.11 (Unbound embedded, Phase 4)
+- **Test suite:** `vendor/bin/phpunit` (pure formatter), `python -m pytest` (Phase 4 tallies), `tests/smoke/test_smoke_feeds.py` (ADR-04)
+- **Origin:** issue #581 (BBcan177) — "always log the raw `file` output along with which validation step caused a rejection." Sibling of ADR-44 (MIME), ADR-45 (structural), ADR-46 (ZIP hardening), ADR-49 (plain-text). This ADR is the **observability layer** the other three log *through*. Phase 4 extends it to the Python entry gates (issue #789, out of #753 / PR #781).
 
 ---
 
@@ -25,9 +25,20 @@ the **detected detail** (the raw `file` string, the failing tool's exit code, th
 member name). #581 asks for exactly this: "log the raw output from `file` along with which
 validation step caused a rejection."
 
+A second blind spot sits one level below the feed-level rejects above: **per-entry** rejects.
+The PHP plain/CSV path counts each dropped line (`pfb_parsed_fail()` after
+`pfb_filter($line, PFB_FILTER_DOMAIN, 'DNSBL_Download')`), but ABP feeds and inline
+`||`/`@@||` lines reach Python **verbatim** (ADR-06/07: `parse_abp()` is the single ABP
+parser), and every entry the Python gates drop — a malformed host in `normalise()`, an
+unqueryable name under the #753 wire caps (>63-char label / >253 total, incl. the
+`reconcile()` regex-fold drop, PR #781) — is counted **nowhere** (issue #789). Guarding those
+lines in PHP is a non-fix (a second ABP parser = the drift ADR-06/07 eliminated); the gap is
+accounting, and it belongs to this ADR's observability layer (§2 item 4 / Phase 4).
+
 **Out of scope:** changing log *sinks* or levels; the per-stage *logic* (owned by ADR-44/45/46/49).
-This ADR only standardises the **message** the existing rejection sites emit, and gives the
-sibling ADRs one helper to call.
+This ADR only standardises the **message** the existing rejection sites emit, gives the
+sibling ADRs one helper to call, and (Phase 4) surfaces the Python entry-reject tallies
+through that same message format.
 
 ---
 
@@ -40,7 +51,8 @@ sibling ADRs one helper to call.
    pfb_validate: REJECT feed=<header> stage=<stage> reason=<reason> detected=<detail>
    ```
 
-   `stage` ∈ `mime` | `structural` | `inner` | `member` | `plaintext`. Values are
+   `stage` ∈ `mime` | `structural` | `inner` | `member` | `plaintext` | `entries` (Phase 4,
+   §2 item 4). Values are
    `htmlspecialchars()`-escaped **and control-character/newline-neutralised** (these strings
    include attacker-influenced `file` output; `htmlspecialchars()` alone passes `\n`/control
    bytes, which would let a hostile `detail` forge or split the greppable line — violating the
@@ -79,6 +91,22 @@ sibling ADRs one helper to call.
    is a system/tooling failure, not a content-validation verdict; the canonical line should
    only ever mean "this feed's content was rejected".*
 
+4. **Python-side entry-reject accounting (Phase 4, issue #789).** **Count, don't guard**: the
+   Python gates stay the sole filter for verbatim ABP content (a PHP-side ABP guard would mean
+   a second ABP parser — the drift ADR-06/07 eliminated), and they start *counting* what they
+   drop. Python's `build()` tallies **rejects** per feed/group, bucketed by reason —
+   `shape` (a `normalise()` domain-shape reject) and `wire_cap` (the #753 caps, incl. the
+   `reconcile()` fold drop) — and writes them into a small stats artifact next to the built
+   DBs (chroot-relative path, stdlib-only, same discipline as the manifest boundary). The PHP
+   side reads the artifact after a DNSBL run and emits **one canonical line per feed with a
+   nonzero tally** via `pfb_validate_log()`: `stage=entries`, `reason=<bucket>`,
+   `detected=<count>`. Python never logs the line itself — sinks stay PHP-only, consistent
+   with item 2. **Deliberate line-class SKIPS are not rejects** and stay uncounted: comments,
+   cosmetic/element-hiding rules, path/wildcard anchors, IP-valued anchors (the PHP firewall
+   path by design), non-DNS `$options`, `$badfilter` rules. *Recommended (2026-07-04,
+   non-binding): exactly the two buckets `shape` + `wire_cap` at first — a per-skip-class
+   census is a debugging tool, not an operator signal.*
+
 ### Per-area decision table
 
 | Area | Decision |
@@ -90,6 +118,7 @@ sibling ADRs one helper to call.
 | ADR-45 structural rejects (landed) | The four `pfb_download()` corrupt-archive sites — `stage=structural` |
 | `pfb_logger` sinks / levels | **No change** — same sinks, standardised message only |
 | Sibling ADRs (46/49) | Call `pfb_validate_log()` instead of ad-hoc strings when they land |
+| Python entry gates (ABP path) | Tally rejects per feed (`shape`/`wire_cap`) → stats artifact → PHP emits `stage=entries` (Phase 4, issue #789) |
 
 ---
 
@@ -101,6 +130,8 @@ sibling ADRs one helper to call.
   inline — the diagnosability #581 asked for.
 - The sibling ADRs get a single, consistent way to report a rejection — no format drift.
 - Pure formatter ⇒ fully unit-testable; no live box needed for the format contract.
+- Phase 4 closes the ABP accounting blind spot (#789): feed-size vs dict-size discrepancies
+  become explainable from one grep, without a second ABP parser.
 
 ### Negative / Risks
 
@@ -112,6 +143,11 @@ sibling ADRs one helper to call.
   *inside* `pfb_filter()` are **not** one-line swaps — they need the context plumbing decided
   by the §2 open fork. No test pins the current ad-hoc strings (smoke asserts alias absence,
   not log text), so rewording breaks nothing.
+- **Risk (Phase 4):** the stats artifact is a new file at the manifest boundary — a
+  host-absolute path would silently break inside Unbound's chroot (the exact bug class the
+  manifest already hit). **Mitigation:** chroot-relative path, written next to the built DBs,
+  pinned by a unit test on the path shape. A miscounted *skip* class would spam healthy ABP
+  feeds with REJECT lines — the skip/reject boundary is pinned by the Phase 4 tally oracle.
 
 ---
 
@@ -122,6 +158,9 @@ sibling ADRs one helper to call.
 - A forced rejection at each wired stage emits the canonical line to the pfB/error log
   (smoke/diagnostic grep).
 - No existing rejection silently loses its log entry.
+- Phase 4: a feed with N shape-rejectable + M over-cap entries tallies exactly
+  `{shape: N, wire_cap: M}` (pytest oracle); deliberate skip classes tally zero; the PHP side
+  emits `stage=entries` per nonzero bucket after a run.
 - `vendor/bin/phpunit` green.
 
 ---
@@ -162,7 +201,21 @@ forced rejection.
 **Prompt:** `03_Smoke_And_Accept.txt`
 
 Force a rejection per wired stage on the live VM; assert the canonical greppable line in the
-pfB/error log. Green CE + Plus flips the ADR to Accepted.
+pfB/error log. Green CE + Plus flips the ADR to Accepted (Phases 1–3; Phase 4 carries its own
+smoke leg below and may land after acceptance of the PHP layer).
+
+### Phase 4 — Python-side entry-reject accounting (issue #789)
+
+**Prompt:** `04_Python_Reject_Accounting.txt`
+
+Tally rejects at the Python gates — `normalise()` domain-shape rejects (`shape`) and #753
+wire-cap rejects incl. the `reconcile()` fold drop (`wire_cap`) — per feed/group during
+`build()`; write the chroot-relative stats artifact next to the built DBs; PHP reads it after
+a DNSBL run and emits the canonical `stage=entries` line per feed with a nonzero bucket.
+Gates: pytest pins the tally oracle (exact `{shape: N, wire_cap: M}` for a crafted feed, zero
+for every deliberate skip class); PHPUnit pins the `entries` formatter output; smoke runs a
+fixture feed carrying rejectable entries and asserts the line in the pfB log — and that a
+healthy feed emits **no** `stage=entries` line.
 
 ---
 
@@ -173,9 +226,13 @@ pfB/error log. Green CE + Plus flips the ADR to Accepted.
 - `vendor/bin/phpunit` green incl. the formatter oracle.
 - `tests/smoke/test_smoke_feeds.py` (CE + Plus): a forced MIME / inner rejection emits the
   canonical line with the raw `file` output; no healthy feed logs a spurious REJECT.
+- Phase 4: `python -m pytest` green incl. the tally oracle; smoke asserts the `stage=entries`
+  line for a rejectable fixture feed and its absence for a healthy one.
 
 **Reject criteria:**
 
 - A rejection that logged before now logs nothing.
 - A log sink or level changes (this ADR is message-only).
 - An unescaped attacker-controlled `file` string reaches the log.
+- Phase 4: a deliberate skip class counted as a reject (healthy ABP feeds would log spurious
+  REJECT lines), or Python emitting log lines itself (sinks stay PHP-only).
