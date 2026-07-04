@@ -69,6 +69,13 @@ from .conftest import (
 # Paths / constants
 # --------------------------------------------------------------------------- #
 
+# Diagnostics dir, RELATIVE to the workspace cwd (where pytest runs) unless
+# PFB_DIAG_DIR is absolute. The smoke workflow's "Upload diagnostics" step globs
+# ``smoke-diag/**`` -- so anything dropped here is uploaded.
+# ponytail: `or "smoke-diag"` guards an exported-empty PFB_DIAG_DIR (Path("") == cwd,
+# which escapes the CI upload globs); the `or` treats both None and "" as absent.
+DIAG_DIR = Path(os.environ.get("PFB_DIAG_DIR") or "smoke-diag")
+
 INSTALL_PKG_SH = SMOKE_DIR.parent.parent / "scripts" / "install-pkg.sh"
 PHP_BIN = "/usr/local/bin/php"
 # pfSense developer shell — runs PHP in the fully-bootstrapped env (config

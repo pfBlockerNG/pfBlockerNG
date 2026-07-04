@@ -51,13 +51,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import subprocess
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
@@ -65,7 +63,7 @@ import pytest
 
 from .. import helpers
 from .render_oracle import evaluate_render
-from .webui import looks_like_login_page
+from .webui import looks_like_login_page, row_containing
 
 if TYPE_CHECKING:
     from .webui import WebUI
@@ -169,7 +167,7 @@ M1_ALIAS, M2_ALIAS = "RVAliasM1", "RVAliasM2"
 FEED_PERMIT_NAME = "RVPermitFeed"
 FEED_MATCH_NAME = "RVMatchFeed"
 
-# --- dnsbl.log / unified.log scenarios (D1-D7) ---
+# --- dnsbl.log / unified.log scenarios (D1-D8) ---
 D1_DOMAIN = "rv809-c1.com"
 D2_DOMAIN = "rv809-d1.com"
 D3_DOMAIN = "sub.rv809-z1.com"
@@ -181,7 +179,12 @@ D5_DOMAIN = "rv809-up1.com"
 # pfb_dnsbl_parse_compute()'s per-row fallback instead of the batched grep. NB the
 # brief's own suggestion of an underscore does NOT trigger this: PFB_FILTER_DOMAIN's
 # charset explicitly includes '_', so an underscore domain WOULD be covered/batched.
+# D7 is nowhere on disk (total miss -> Unknown); D8 below is its positive counterpart
+# (present verbatim in pfb_py_data.txt -- proves issue #837's per-row fixed-string
+# fallback actually FINDS a covered metachar domain, not just that an uncovered one
+# renders the same 'Unknown' shape as a covered total miss).
 D7_DOMAIN = "rv809*m1.com"
+D8_DOMAIN = "rv809*p1.com"
 
 D1_CACHE_GROUP, D1_CACHE_FEED = "RVCacheGroup", "RVCacheFeed"
 D1_LOGGED_GROUP, D1_LOGGED_FEED = "RVLoggedGroup1", "RVLoggedFeed1"
@@ -190,6 +193,8 @@ D2_LOGGED_GROUP, D2_LOGGED_FEED = "RVLoggedGroupD2", "RVLoggedFeedD2"
 D3_GROUP, D3_FEED = "RVGroupZ3", "RVFeedZ3"  # SAME logged + zone value -- isolates mode+domain drift
 D4_LOGGED_GROUP, D4_LOGGED_FEED = "RVLoggedGroupD4", "RVLoggedFeedD4"
 D7_LOGGED_GROUP, D7_LOGGED_FEED = "RVLoggedGroupD7", "RVLoggedFeedD7"
+D8_DATA_GROUP, D8_DATA_FEED = "RVGroupMeta", "RVFeedMeta"
+D8_LOGGED_GROUP, D8_LOGGED_FEED = "RVLoggedGroupMeta", "RVLoggedFeedMeta"
 FILLER_DNSBL_GROUP, FILLER_DNSBL_FEED = "RVFillerGroup", "RVFillerFeed"
 
 FILLER_DNSBL_DOMAINS = [f"rv809-f{i}.com" for i in range(30)]
@@ -341,7 +346,7 @@ def _match_lines() -> list[str]:
 
 
 def _dnsbl_scenarios() -> list[str]:
-    """D1-D7 (+ D6, the dup marker for D1) -- see the module docstring's scenario table."""
+    """D1-D8 (+ D6, the dup marker for D1) -- see the module docstring's scenario table."""
     return [
         _dnsbl_line(domain=D1_DOMAIN, group=D1_LOGGED_GROUP, feed=D1_LOGGED_FEED),
         # D6: dup of D1, appended immediately after (same reverse-read reasoning as S7).
@@ -351,6 +356,7 @@ def _dnsbl_scenarios() -> list[str]:
         _dnsbl_line(domain=D4_DOMAIN, group=D4_LOGGED_GROUP, feed=D4_LOGGED_FEED),
         f"DNSBL-python,{FIXED_TS},{D5_DOMAIN},127.0.0.1,Python,Upstream_Block,Upstream,NXRA,Quad9,+,A\n",
         _dnsbl_line(domain=D7_DOMAIN, group=D7_LOGGED_GROUP, feed=D7_LOGGED_FEED),
+        _dnsbl_line(domain=D8_DOMAIN, group=D8_LOGGED_GROUP, feed=D8_LOGGED_FEED),
     ]
 
 
@@ -388,7 +394,7 @@ def _unified_lines() -> list[str]:
 
 
 def _py_data_appendix() -> str:
-    lines = [f"x,{D2_DOMAIN},,A,{D2_DATA_FEED},{D2_DATA_GROUP}"]
+    lines = [f"x,{D2_DOMAIN},,A,{D2_DATA_FEED},{D2_DATA_GROUP}", f"x,{D8_DOMAIN},,A,{D8_DATA_FEED},{D8_DATA_GROUP}"]
     lines += [f"x,{d},,A,{FILLER_DNSBL_FEED},{FILLER_DNSBL_GROUP}" for d in FILLER_DNSBL_DOMAINS]
     return "\n".join(lines) + "\n"
 
@@ -406,7 +412,6 @@ def _py_zone_appendix() -> str:
 class Capture:
     """One GET's captured response + wall-clock timing."""
 
-    key: str
     status: int
     body: str
     elapsed: float
@@ -440,28 +445,6 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _row_containing(body: str, needle: str) -> str:
-    """Return the single ``<tr ...>...</tr>`` block containing ``needle`` (row-isolated).
-
-    Mirrors ``test_alerts.py``'s ``_row_containing``: a byte-distance window can
-    straddle a neighbouring row when rows are dense; isolating by the enclosing
-    ``<tr>`` avoids false-matching (or false-missing) a marker that belongs to a
-    sibling row.
-    """
-    idx = body.find(needle)
-    assert idx != -1, f"{needle!r} not found anywhere in the rendered body"
-    tr_start = body.rfind("<tr", 0, idx)
-    assert tr_start != -1, f"no opening <tr found before {needle!r}"
-    tr_end = body.find("</tr>", idx)
-    assert tr_end != -1, f"no closing </tr> found after {needle!r}"
-    return body[tr_start : tr_end + len("</tr>")]
-
-
-def _diag_dir() -> Path:
-    """Mirrors tests/smoke/conftest.py's DIAG_DIR resolution exactly (PFB_DIAG_DIR, default 'smoke-diag')."""
-    return Path(os.environ.get("PFB_DIAG_DIR") or "smoke-diag") / "renderdiff"
-
-
 def _write_diagnostics(baseline: dict[str, Capture], captures: dict[str, Capture]) -> None:
     """Persist every capture's full body, its ``<tbody>`` regions (+ SHA-256), and per-GET timings.
 
@@ -472,7 +455,7 @@ def _write_diagnostics(baseline: dict[str, Capture], captures: dict[str, Capture
         manifest.json                              -- [{get_key, region_index, sha256, byte_len}, ...]
         timings.json                                -- {"<baseline|main>_<key>": seconds, ...}
     """
-    diag_dir = _diag_dir()
+    diag_dir = helpers.DIAG_DIR / "renderdiff"
     bodies_dir = diag_dir / "bodies"
     regions_dir = diag_dir / "regions"
     bodies_dir.mkdir(parents=True, exist_ok=True)
@@ -645,7 +628,7 @@ def render_diff_state(smoke_vm: helpers.SmokeVM, webui: WebUI) -> Iterator[dict[
             resp = webui.get(path)
             elapsed = time.perf_counter() - t0
             assert not looks_like_login_page(resp.text), f"baseline GET {path!r} returned the login form"
-            baseline[key] = Capture(key=key, status=resp.status_code, body=resp.text, elapsed=elapsed)
+            baseline[key] = Capture(status=resp.status_code, body=resp.text, elapsed=elapsed)
 
         # (2) SEED every log/file/cache row this module's scenarios need.
         _seed_feed_files(vm)
@@ -667,7 +650,7 @@ def render_diff_state(smoke_vm: helpers.SmokeVM, webui: WebUI) -> Iterator[dict[
             resp = webui.get(path)
             elapsed = time.perf_counter() - t0
             assert not looks_like_login_page(resp.text), f"GET {path!r} returned the login form"
-            captures[key] = Capture(key=key, status=resp.status_code, body=resp.text, elapsed=elapsed)
+            captures[key] = Capture(status=resp.status_code, body=resp.text, elapsed=elapsed)
 
         _write_diagnostics(baseline, captures)
 
@@ -753,7 +736,7 @@ def test_s1_still_listed_renders_without_strike(render_diff_state: dict[str, dic
     the row shows its logged feed/eval verbatim, with no <s> strike anywhere.
     """
     body = render_diff_state["captures"]["alert"].body
-    row = _row_containing(body, f"host={S1_IP}")
+    row = row_containing(body, f"host={S1_IP}")
     assert "<s>" not in row, f"S1 ({S1_IP}) row unexpectedly struck (still-listed row should render clean): {row!r}"
     assert "Not listed!" not in row, f"S1 ({S1_IP}) row wrongly rendered 'Not listed!': {row!r}"
 
@@ -766,7 +749,7 @@ def test_s2_delisted_renders_not_listed(render_diff_state: dict[str, dict[str, C
     and evaluated-IP cells substitute 'Not listed!' (struck old value first).
     """
     body = render_diff_state["captures"]["alert"].body
-    row = _row_containing(body, f"host={S2_IP}")
+    row = row_containing(body, f"host={S2_IP}")
     assert "Not listed!" in row, f"S2 ({S2_IP}) expected 'Not listed!' -- row: {row!r}"
     assert "<s>" in row, f"S2 ({S2_IP}) expected a struck old feed/IP -- row: {row!r}"
 
@@ -779,7 +762,7 @@ def test_s3_moved_feed_renders_strike(render_diff_state: dict[str, dict[str, Cap
     the old feed name and displays the new one.
     """
     body = render_diff_state["captures"]["alert"].body
-    row = _row_containing(body, f"host={S3_IP}")
+    row = row_containing(body, f"host={S3_IP}")
     assert f"<s>{FEED_A_NAME}</s>" in row, f"S3 ({S3_IP}) expected the old feed {FEED_A_NAME!r} struck: {row!r}"
     assert FEED_B_NAME in row, f"S3 ({S3_IP}) expected the new feed {FEED_B_NAME!r} present: {row!r}"
 
@@ -793,7 +776,7 @@ def test_s4_cidr_renders_evaluated_cell(render_diff_state: dict[str, dict[str, C
     appears as the row's (re-)evaluated match.
     """
     body = render_diff_state["captures"]["alert"].body
-    row = _row_containing(body, f"host={S4_IP}")
+    row = row_containing(body, f"host={S4_IP}")
     assert "203.0.113.0/24" in row, f"S4 ({S4_IP}) expected the covering CIDR 203.0.113.0/24 in its cell: {row!r}"
 
 
@@ -805,7 +788,7 @@ def test_s5_geoip_row_renders(render_diff_state: dict[str, dict[str, Capture]]) 
     Then: the row renders with no strike/miss (the GeoIP folder validate succeeds).
     """
     body = render_diff_state["captures"]["alert"].body
-    row = _row_containing(body, f"host={S5_IP}")
+    row = row_containing(body, f"host={S5_IP}")
     assert "Not listed!" not in row, f"S5 ({S5_IP}) GeoIP row wrongly rendered 'Not listed!': {row!r}"
 
 
@@ -817,7 +800,7 @@ def test_s6_ipv6_row_renders(render_diff_state: dict[str, dict[str, Capture]]) -
     unlike the SRC/DST table cells which wrap it in [...] with zero-width spaces).
     """
     body = render_diff_state["captures"]["alert"].body
-    row = _row_containing(body, f"host={S6_IP}")
+    row = row_containing(body, f"host={S6_IP}")
     assert "<s>" not in row, f"S6 ({S6_IP}) IPv6 row unexpectedly struck: {row!r}"
 
 
@@ -830,7 +813,7 @@ def test_s7_dup_badge_renders_on_s1_row(render_diff_state: dict[str, dict[str, C
     Then: S1's row carries the ' [1]' duplicate-count badge.
     """
     body = render_diff_state["captures"]["alert"].body
-    row = _row_containing(body, f"host={S1_IP}")
+    row = row_containing(body, f"host={S1_IP}")
     assert "[1]" in row, f"S1 row missing the dup-count badge '[1]' expected from S7's dup marker: {row!r}"
 
 
@@ -844,7 +827,7 @@ def test_s8_alias_changed_cell_renders(render_diff_state: dict[str, dict[str, Ca
     Rule column struck-shows the old alias name, then the new one.
     """
     body = render_diff_state["captures"]["alert"].body
-    row = _row_containing(body, f"host={S8_IP}")
+    row = row_containing(body, f"host={S8_IP}")
     assert f"<s>{S8_ALIAS_LOGGED}</s>" in row, f"S8 ({S8_IP}) expected the stale alias struck: {row!r}"
     assert "pfB_RVOther_v4" in row, f"S8 ({S8_IP}) expected the new alias table name pfB_RVOther_v4: {row!r}"
 
@@ -858,7 +841,7 @@ def test_s9_outbound_direction_still_listed(render_diff_state: dict[str, dict[st
     branch is exercised (S1 already covers the inbound branch).
     """
     body = render_diff_state["captures"]["alert"].body
-    row = _row_containing(body, f"host={S9_IP}")
+    row = row_containing(body, f"host={S9_IP}")
     assert "Not listed!" not in row, f"S9 ({S9_IP}) outbound row wrongly rendered 'Not listed!': {row!r}"
     assert "<s>" not in row, f"S9 ({S9_IP}) outbound row unexpectedly struck: {row!r}"
 
@@ -872,7 +855,7 @@ def test_s10_et_feed_row_renders(render_diff_state: dict[str, dict[str, Capture]
     folder-selection branch.
     """
     body = render_diff_state["captures"]["alert"].body
-    row = _row_containing(body, f"host={S10_IP}")
+    row = row_containing(body, f"host={S10_IP}")
     assert "Not listed!" not in row, f"S10 ({S10_IP}) ET-feed row wrongly rendered 'Not listed!': {row!r}"
 
 
@@ -884,9 +867,9 @@ def test_permit_still_listed_and_delisted(render_diff_state: dict[str, dict[str,
     unique to its own log).
     """
     body = render_diff_state["captures"]["alert"].body
-    listed = _row_containing(body, P1_IP)
+    listed = row_containing(body, P1_IP)
     assert "Not listed!" not in listed, f"Permit {P1_IP} (still-listed) wrongly rendered 'Not listed!': {listed!r}"
-    delisted = _row_containing(body, P2_IP)
+    delisted = row_containing(body, P2_IP)
     assert "Not listed!" in delisted, f"Permit {P2_IP} (de-listed) expected 'Not listed!': {delisted!r}"
 
 
@@ -896,9 +879,9 @@ def test_match_still_listed_and_delisted(render_diff_state: dict[str, dict[str, 
     Same bare-IP row location as the permit test (no ``host=`` marker on Match rows).
     """
     body = render_diff_state["captures"]["alert"].body
-    listed = _row_containing(body, M1_IP)
+    listed = row_containing(body, M1_IP)
     assert "Not listed!" not in listed, f"Match {M1_IP} (still-listed) wrongly rendered 'Not listed!': {listed!r}"
-    delisted = _row_containing(body, M2_IP)
+    delisted = row_containing(body, M2_IP)
     assert "Not listed!" in delisted, f"Match {M2_IP} (de-listed) expected 'Not listed!': {delisted!r}"
 
 
@@ -912,7 +895,7 @@ def test_d1_cache_hit_drift_renders_cache_groupname(render_diff_state: dict[str,
     the logged group/feed and displays the cached ones.
     """
     body = render_diff_state["captures"]["alert"].body
-    row = _row_containing(body, D1_DOMAIN)
+    row = row_containing(body, D1_DOMAIN)
     assert f"<s>{D1_LOGGED_GROUP}</s>" in row, f"D1 expected the logged group struck: {row!r}"
     assert D1_CACHE_GROUP in row, f"D1 expected the cached group {D1_CACHE_GROUP!r} present: {row!r}"
     assert f"<s>{D1_LOGGED_FEED}</s>" in row, f"D1 expected the logged feed struck: {row!r}"
@@ -928,7 +911,7 @@ def test_d2_data_hit_drift_renders_data_feed(render_diff_state: dict[str, dict[s
     struck-shows the logged values, displaying the data-file ones.
     """
     body = render_diff_state["captures"]["alert"].body
-    row = _row_containing(body, D2_DOMAIN)
+    row = row_containing(body, D2_DOMAIN)
     assert f"<s>{D2_LOGGED_GROUP}</s>" in row, f"D2 expected the logged group struck: {row!r}"
     assert D2_DATA_GROUP in row, f"D2 expected the data-file group {D2_DATA_GROUP!r} present: {row!r}"
     assert f"<s>{D2_LOGGED_FEED}</s>" in row, f"D2 expected the logged feed struck: {row!r}"
@@ -945,7 +928,7 @@ def test_d3_zone_hit_renders_tld_mode(render_diff_state: dict[str, dict[str, Cap
     stripped parent -- both struck against the originally-logged values.
     """
     body = render_diff_state["captures"]["alert"].body
-    row = _row_containing(body, D3_DOMAIN)
+    row = row_containing(body, D3_DOMAIN)
     assert '<s title="Previous Blocking Mode">DNSBL</s>' in row, f"D3 expected the logged mode struck: {row!r}"
     assert "TLD" in row, f"D3 expected the corrected mode 'TLD' present: {row!r}"
     # NB: D3_PARENT ("rv809-z1.com") is a trailing substring of D3_DOMAIN
@@ -973,7 +956,7 @@ def test_d4_delisted_renders_unknown(render_diff_state: dict[str, dict[str, Capt
     struck against the logged (fabricated) values.
     """
     body = render_diff_state["captures"]["alert"].body
-    row = _row_containing(body, D4_DOMAIN)
+    row = row_containing(body, D4_DOMAIN)
     assert f"<s>{D4_LOGGED_GROUP}</s>" in row, f"D4 expected the logged group struck: {row!r}"
     assert "Unknown" in row, f"D4 expected 'Unknown' (total miss) present: {row!r}"
 
@@ -985,7 +968,7 @@ def test_d5_upstream_renders_cloud_icon_and_group(render_diff_state: dict[str, d
     test_upstream_block_renders_cloud_icon_and_correct_group precedent.
     """
     body = render_diff_state["captures"]["alert"].body
-    row = _row_containing(body, D5_DOMAIN)
+    row = row_containing(body, D5_DOMAIN)
     assert "fa-cloud" in row, f"D5 upstream row missing the cloud-icon override: {row!r}"
     assert "Upstream" in row, f"D5 upstream row missing the preserved 'Upstream' group: {row!r}"
     assert "Unknown" not in row, f"D5 upstream row wrongly ran the stale-entry correction ('Unknown' present): {row!r}"
@@ -999,13 +982,42 @@ def test_d7_uncovered_metachar_domain_renders_unknown(render_diff_state: dict[st
     its 'covered' set, so pfb_dnsbl_parse_compute() takes its UNBATCHED per-row
     exec fallback for every consult site (identical to how #825's predecessor
     behaved for every domain).
-    Then: it renders 'Unknown' (nowhere found) exactly like D4 -- proving the
-    uncovered/fallback path produces the SAME output as the covered/batched one.
+    Then: it renders 'Unknown' (nowhere found) exactly like D4 -- SAME shape as
+    the covered/batched total-miss path. This is a NEGATIVE-only proof (a
+    domain absent everywhere renders 'Unknown' whether or not the per-row
+    fallback works at all); D8 below is the positive counterpart that actually
+    discriminates a working per-row fallback from a broken one (issue #837).
     """
     body = render_diff_state["captures"]["alert"].body
-    row = _row_containing(body, D7_DOMAIN)
+    row = row_containing(body, D7_DOMAIN)
     assert f"<s>{D7_LOGGED_GROUP}</s>" in row, f"D7 expected the logged group struck: {row!r}"
     assert "Unknown" in row, f"D7 expected 'Unknown' (uncovered total miss) present: {row!r}"
+
+
+def test_d8_covered_metachar_domain_found_via_per_row_fallback(
+    render_diff_state: dict[str, dict[str, Capture]],
+) -> None:
+    """D8: a metachar domain the per-row fallback CAN find, unlike D7's total miss.
+
+    Given: 'rv809*p1.com' contains '*' so it also fails PFB_FILTER_DOMAIN and is
+    excluded from the batched prefetch, exactly like D7 -- but unlike D7 it IS
+    present verbatim in pfb_py_data.txt.
+    When: the alert view renders.
+    Then: pfb_dnsbl_parse_compute()'s per-row fixed-string fallback (issue #837:
+    `grep -F` on the raw domain, not a hand-escaped BRE) actually FINDS its own
+    entry -- the row struck-shows the logged group/feed and displays the
+    data-file ones, never 'Unknown'. Red on a pre-#837 package (the per-row BRE
+    mis-escapes the '*' and misses the domain's own data-file line -> Unknown),
+    green post-fix; the offline red->green proof is
+    tests/php/DnsblParseComputeMetacharTest.php.
+    """
+    body = render_diff_state["captures"]["alert"].body
+    row = row_containing(body, D8_DOMAIN)
+    assert f"<s>{D8_LOGGED_GROUP}</s>" in row, f"D8 expected the logged group struck: {row!r}"
+    assert D8_DATA_GROUP in row, f"D8 expected the data-file group {D8_DATA_GROUP!r} present: {row!r}"
+    assert f"<s>{D8_LOGGED_FEED}</s>" in row, f"D8 expected the logged feed struck: {row!r}"
+    assert D8_DATA_FEED in row, f"D8 expected the data-file feed {D8_DATA_FEED!r} present: {row!r}"
+    assert "Unknown" not in row, f"D8 covered metachar domain wrongly rendered 'Unknown': {row!r}"
 
 
 def test_ip_block_nonfilter_cap_enforced(render_diff_state: dict[str, dict[str, Capture]]) -> None:
@@ -1040,7 +1052,7 @@ def test_ip_block_nonfilter_cap_enforced(render_diff_state: dict[str, dict[str, 
 def test_dnsbl_nonfilter_cap_enforced(render_diff_state: dict[str, dict[str, Capture]]) -> None:
     """The default alert view never renders more than pfbdnscnt=25 DNSBL Python rows.
 
-    Given: 36 non-dup DNSBL rows were fed (30 filler + 6 scenarios -- D6 is a
+    Given: 37 non-dup DNSBL rows were fed (30 filler + 7 scenarios -- D6 is a
     dup marker, not its own row).
     Then: the DNSBL Python panel's <tbody> (region 1, see the ordering note on
     the Block-cap test above) renders AT MOST 25 rows.
@@ -1057,7 +1069,7 @@ def test_dnsbl_nonfilter_cap_enforced(render_diff_state: dict[str, dict[str, Cap
     dnsbl_rows = len(_TR_RE.findall(regions[1]))
     assert dnsbl_rows <= 25, (
         f"DNSBL Python panel rendered {dnsbl_rows} rows -- expected <= 25 (pfbdnscnt default); "
-        f"36 non-dup rows were fed, so the cap must have truncated"
+        f"37 non-dup rows were fed, so the cap must have truncated"
     )
 
 
@@ -1151,7 +1163,7 @@ def test_alert_view_stable_across_cache_populate_rerender(render_diff_state: dic
     """GET #12 (post-cache-populate re-render) reproduces GET #1's tbody hashes byte-for-byte.
 
     Scenario: dnsblcache round-trip stability.
-    Given: GET #1 (alert view) computed D1-D7's DNSBL attribution fresh (a
+    Given: GET #1 (alert view) computed D1-D8's DNSBL attribution fresh (a
         cache hit for D1, data/zone/drill fallbacks for the rest) and INSERTed
         each newly-computed result into dnsblcache.
     When: the SAME view is GET-ted again (GET #12) with no log/file mutation in

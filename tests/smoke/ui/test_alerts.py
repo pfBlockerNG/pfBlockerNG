@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from .. import helpers
-from .webui import extract_csrf_token, looks_like_login_page
+from .webui import extract_csrf_token, looks_like_login_page, row_containing
 
 if TYPE_CHECKING:
     import requests
@@ -1295,24 +1295,6 @@ def test_alerts_rows_render_whitelist_icons_oracle(
 # --------------------------------------------------------------------------- #
 
 
-def _row_containing(html_body: str, needle: str) -> str:
-    """Return the single ``<tr ...>...</tr>`` block containing ``needle``.
-
-    ``convert_dnsbl_log()`` prints one ``<tr>`` per event row (alerts.php:2571 /
-    2593) with the domain, group, and icons all inside it. A fixed byte-distance
-    window around a match can straddle the PREVIOUS or NEXT table row when rows
-    are dense, false-matching (or false-missing) a marker that belongs to a
-    neighbour -- row-isolating avoids that entirely.
-    """
-    idx = html_body.find(needle)
-    assert idx != -1, f"{needle!r} not found in rendered HTML"
-    tr_start = html_body.rfind("<tr", 0, idx)
-    assert tr_start != -1, f"no opening <tr found before {needle!r}"
-    tr_end = html_body.find("</tr>", idx)
-    assert tr_end != -1, f"no closing </tr> found after {needle!r}"
-    return html_body[tr_start : tr_end + len("</tr>")]
-
-
 def test_upstream_block_renders_cloud_icon_and_correct_group(
     webui: "WebUI",
     smoke_vm: helpers.SmokeVM,
@@ -1402,7 +1384,7 @@ def test_upstream_block_renders_cloud_icon_and_correct_group(
 
         # Row-isolate: the domain's OWN <tr>, not a byte-distance window that can
         # straddle a neighbouring row.
-        row = _row_containing(html_body, domain)
+        row = row_containing(html_body, domain)
 
         # THEN (a): the cloud icon class is present in the domain's OWN row (Edit D step 9).
         assert "fa-cloud" in row, (

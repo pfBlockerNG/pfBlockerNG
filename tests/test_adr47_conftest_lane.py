@@ -3,7 +3,8 @@
 Pins the TOCTOU-fix changes made to tests/smoke/conftest.py:
   1. _validate_lane ceiling: 12340 (LAN socket, new highest base) → max lane 5319.
   2. DEFAULT_LAN_SOCKET_PORT: deterministic, lane-strided from 12340.
-  3. DIAG_DIR: empty PFB_DIAG_DIR falls back to "smoke-diag" (not Path("")).
+  3. DIAG_DIR (tests.smoke.helpers -- PR #835 review moved it off conftest, issue #837):
+     empty PFB_DIAG_DIR falls back to "smoke-diag" (not Path("")).
   4. _validate_lane reads SMOKE_LAN_SOCKET_PORT: ceiling shifts with the base.
   5. Cross-port disjointness: the five port series share no host port across 33 lanes.
 
@@ -32,8 +33,9 @@ import types
 import pytest
 
 # ---------------------------------------------------------------------------
-# Helpers — load conftest in an isolated environment with a controlled SMOKE_LANE
-# and PFB_DIAG_DIR so we can vary them per test without cross-contamination.
+# Helpers — load conftest (or helpers) in an isolated environment with a
+# controlled SMOKE_LANE / PFB_DIAG_DIR so we can vary them per test without
+# cross-contamination.
 # ---------------------------------------------------------------------------
 
 # All env vars that conftest reads or writes at import time.
@@ -44,16 +46,15 @@ _CONFTEST_ENV_KEYS: tuple[str, ...] = (
     "SMOKE_WEB_HOSTPORT",
     "SMOKE_CLIENT_SSH_HOSTPORT",
     "SMOKE_LAN_SOCKET_PORT",
-    "PFB_DIAG_DIR",
 )
 
 
-def _load_conftest(lane: int = 0, diag_dir: str | None = None) -> types.ModuleType:
+def _load_conftest(lane: int = 0) -> types.ModuleType:
     """Import tests.smoke.conftest with SMOKE_LANE=lane.
 
     Uses importlib.import_module after patching os.environ so the module's
-    top-level assignments (DEFAULT_* ports, DIAG_DIR) pick up the right values.
-    The module is freshly loaded each call via sys.modules manipulation.
+    top-level assignments (DEFAULT_* ports) pick up the right values. The
+    module is freshly loaded each call via sys.modules manipulation.
 
     Saves and restores all conftest-side-effected env vars (_CONFTEST_ENV_KEYS) in
     the finally block so tests are isolated from one another.  The env state written
@@ -63,10 +64,6 @@ def _load_conftest(lane: int = 0, diag_dir: str | None = None) -> types.ModuleTy
     saved = {k: os.environ.get(k) for k in _CONFTEST_ENV_KEYS}
 
     os.environ["SMOKE_LANE"] = str(lane)
-    if diag_dir is None:
-        os.environ.pop("PFB_DIAG_DIR", None)
-    else:
-        os.environ["PFB_DIAG_DIR"] = diag_dir
 
     # Force a fresh import by removing any cached module and all conftest deps that
     # cache the lane at import time.
@@ -87,6 +84,33 @@ def _load_conftest(lane: int = 0, diag_dir: str | None = None) -> types.ModuleTy
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+
+
+def _load_helpers(diag_dir: str | None = None) -> types.ModuleType:
+    """Import tests.smoke.helpers with PFB_DIAG_DIR set, forcing a fresh DIAG_DIR read.
+
+    DIAG_DIR moved off tests.smoke.conftest onto tests.smoke.helpers (PR #835
+    review, issue #837) -- shared with the render-diff UI harness
+    (test_alerts_render_verify.py). Mirrors _load_conftest's env-patch-then-
+    reimport shape for that one name.
+    """
+    saved = os.environ.get("PFB_DIAG_DIR")
+    if diag_dir is None:
+        os.environ.pop("PFB_DIAG_DIR", None)
+    else:
+        os.environ["PFB_DIAG_DIR"] = diag_dir
+
+    for key in list(sys.modules):
+        if "smoke.helpers" in key or key == "tests.smoke.helpers":
+            del sys.modules[key]
+
+    try:
+        return importlib.import_module("tests.smoke.helpers")
+    finally:
+        if saved is None:
+            os.environ.pop("PFB_DIAG_DIR", None)
+        else:
+            os.environ["PFB_DIAG_DIR"] = saved
 
 
 # ---------------------------------------------------------------------------
@@ -217,11 +241,11 @@ class TestDefaultLanSocketPort:
 
 
 class TestDiagDir:
-    """DIAG_DIR falls back to 'smoke-diag' when PFB_DIAG_DIR is absent or empty."""
+    """helpers.DIAG_DIR falls back to 'smoke-diag' when PFB_DIAG_DIR is absent or empty."""
 
     def test_absent_env_uses_default(self) -> None:
         """PFB_DIAG_DIR not set → Path('smoke-diag')."""
-        mod = _load_conftest(diag_dir=None)
+        mod = _load_helpers(diag_dir=None)
         assert mod.DIAG_DIR.name == "smoke-diag", f"expected 'smoke-diag'; got {mod.DIAG_DIR}"
 
     def test_empty_env_uses_default(self) -> None:
@@ -233,7 +257,7 @@ class TestDiagDir:
           Path('smoke-diag') — correct relative path.
         This is the red→green assertion: old code → Path('') → assertion FAILS.
         """
-        mod = _load_conftest(diag_dir="")
+        mod = _load_helpers(diag_dir="")
         assert mod.DIAG_DIR.name == "smoke-diag", (
             f"PFB_DIAG_DIR='' must fall back to 'smoke-diag'; got {mod.DIAG_DIR!r}"
         )
@@ -241,7 +265,7 @@ class TestDiagDir:
 
     def test_explicit_env_is_honoured(self) -> None:
         """PFB_DIAG_DIR=/some/path → Path('/some/path')."""
-        mod = _load_conftest(diag_dir="/some/diags")
+        mod = _load_helpers(diag_dir="/some/diags")
         assert str(mod.DIAG_DIR) == "/some/diags", f"expected '/some/diags'; got {mod.DIAG_DIR!r}"
 
 
