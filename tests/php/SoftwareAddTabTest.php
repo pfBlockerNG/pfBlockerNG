@@ -18,6 +18,12 @@ use PHPUnit\Framework\TestCase;
  * off-box). The privilege gate has no seam — every case goes through the real isAllowedPage()
  * call, controlled by its double via $GLOBALS['pfb_test_allowed_pages'] (absent key = allowed),
  * so the tests prove the production code actually calls isAllowedPage().
+ *
+ * Documented out-of-CI limitation: the live restricted-user leg (a GUI session holding the
+ * pfBlockerNG priv but not pkg_mgr_installed, asserting the tab absent) is not automatable —
+ * the WebUI harness logs in as admin only (uid-0 short-circuits isAllowedPage), and building
+ * non-admin user provisioning/login is disproportionate here. This class pins the branch
+ * off-box; the admin-visible/provenance tab behaviour stays pinned by the Tier-A UI tests.
  */
 #[CoversFunction('pfb_software_add_tab')]
 final class SoftwareAddTabTest extends TestCase
@@ -63,7 +69,10 @@ final class SoftwareAddTabTest extends TestCase
 	 * "Installed" privilege (isAllowedPage('pkg_mgr_installed.php') === false via its double),
 	 * When the tab is built,
 	 * Then the Software tab is NOT appended — it must never dead-end at /index.php.
-	 * FAILS on pre-fix code (provenance alone used to be sufficient).
+	 * Red/green evidence: with the $provenance_ok seam in place, removing the isAllowedPage()
+	 * clause makes this test FAIL (proven at the gate). Against the literal pre-fix two-param
+	 * signature the extra arg is ignored and the off-box provenance predicate already withholds
+	 * the tab, so there the pre-fix red is carried by testProvenanceOkAndPageAllowedAppendsTab.
 	 */
 	public function testProvenanceOkButPageNotAllowedDoesNotAppendTab(): void
 	{
