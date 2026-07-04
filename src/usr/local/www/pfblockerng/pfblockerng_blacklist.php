@@ -382,8 +382,7 @@ $section->addInput(new Form_Select(
 	'blacklist_lang',
 	gettext('Language'),
 	$pconfig['blacklist_lang'],
-	['EN' => 'English', 'DE' => 'German', 'FR' => 'French', 'IT' => 'Italian',
-	'NL' => 'Dutch', 'PT' => 'Portuguese', 'ES' => 'Spanish', 'RU' => 'Russian']
+	$options_blacklist_lang
 ))->setHelp('Default: <strong>English</strong><br />
 	Select the language setting. Not all languages have been fully translated.')
   ->setAttribute('style', 'width: auto');
@@ -392,7 +391,7 @@ $section->addInput(new Form_Select(
 	'blacklist_freq',
 	gettext('Update Frequency'),
 	$pconfig['blacklist_freq'],
-	['Never' => 'Never', 'EveryDay' => 'Once a day (Random hour)', 'Weekly' => 'Weekly (Sunday)']
+	$options_blacklist_freq
 ))->setHelp('Default: <strong>Never</strong><br />
 	Select how often the Blacklist database(s) will be downloaded.')
   ->setAttribute('style', 'width: auto');
@@ -401,7 +400,7 @@ $section->addInput(new Form_Select(
 	'blacklist_logging',
 	'Logging',
 	$pconfig['blacklist_logging'],
-	['enabled' => 'Enabled', 'disabled' => 'Disabled']
+	$options_blacklist_logging
 ))->setHelp("Default: <strong>Enabled</strong><br />
 	When 'Enabled', Domains are sinkholed to the DNSBL VIP and logged via the DNSBL Web Server.<br />
 	When 'Disabled', '0.0.0.0' will be used instead of the DNSBL VIP.<br />
