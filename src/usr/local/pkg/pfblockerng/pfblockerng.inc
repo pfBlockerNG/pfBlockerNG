@@ -12156,6 +12156,144 @@ function pfb_alerts_unified_scan_done($filterlogentries, $unified_count, $pfbent
 }
 
 
+// Page-scope prefetch store for pfb_dnsbl_parse_compute()'s data/zone grep sites (issue
+// #809 Phase 3a). NULL means "no prefetch ran" -- every consult site then falls straight
+// through to its normal per-row exec, so daemon mode (which never seeds this) and any
+// alerts-mode call outside a batched render pass are completely unaffected.
+//
+// Read current value:   pfb_dnsbl_prefetch_store()
+// Seed / reset value:   pfb_dnsbl_prefetch_store($arrayOrNull)  -- an explicit NULL
+//                        argument (func_num_args() > 0) resets to "no prefetch", which
+//                        is how the DNSBL table render pass (pfblockerng_alerts.php)
+//                        clears the store once it finishes, so a later per-row consumer
+//                        on the SAME page load (e.g. the Unified table) sees no seed.
+function pfb_dnsbl_prefetch_store(?array $seed = NULL): ?array {
+	static $store = NULL;
+
+	if (func_num_args() > 0) {
+		$store = $seed;
+	}
+
+	return $store;
+}
+
+
+// Batch the DNSBL/TLD render-time grep lookups for a set of domains ahead of a page
+// render pass (issue #809 Phase 3a). Reproduces, in at most one grep pass per file, the
+// per-row match pfb_dnsbl_parse_compute() would otherwise run separately for each of
+// $qdomains:
+//
+//   - data file ($pfb['unbound_py_data']): the per-row site matches the escaped-regex
+//     literal ",{$domainparse},," (dots backslash-escaped) with `grep -shm1`. Escaping
+//     the dots exists only to neutralise BRE's any-character '.' metacharacter --
+//     domains carry no other BRE-special character -- so the escaped-regex match and a
+//     plain fixed-string match of ",{domain},," select exactly the same lines. Batched
+//     here as a single `grep -shF -f <patternfile>` pass with the RAW (unescaped)
+//     literal patterns.
+//   - zone file ($pfb['unbound_py_zone']): the per-row site walks the domain's labels
+//     longest-first (full domain, then each suffix with the leftmost label stripped,
+//     down to the bare TLD), matching each step the same way. Batched by collecting
+//     every suffix of every domain and running ONE fixed-string pass over the zone file.
+//
+// Negative results are recorded too ('covered'/'zone_covered' with no matching
+// 'data'/'zone' entry): a domain/suffix this prefetch pass covered but did not find is a
+// genuine miss, and the consult sites must serve that cached '' rather than falling back
+// to a per-row exec (which would just re-run the identical grep for the same answer).
+//
+// Seeds pfb_dnsbl_prefetch_store(); the caller (pfblockerng_alerts.php's DNSBL table
+// branch) is responsible for resetting the store once its render pass is done.
+function pfb_dnsbl_prefetch(array $qdomains) {
+	global $pfb;
+
+	$qdomains = array_values(array_unique($qdomains));
+
+	$covered = array();
+	$data_patterns = array();
+	foreach ($qdomains as $domain) {
+		$covered[$domain] = TRUE;
+		$data_patterns[] = ",{$domain},,";
+	}
+
+	// Label-walk suffixes for every prefetched domain -- same longest-first walk as the
+	// per-row zone-grep loop in pfb_dnsbl_parse_compute() (full domain, then each suffix
+	// with the leftmost label stripped, down to the bare TLD). Suffixes shared by
+	// multiple domains are deduplicated (a single pattern/store entry serves them all).
+	$zone_covered = array();
+	$zone_patterns = array();
+	foreach ($qdomains as $domain) {
+		$dparts = explode('.', $domain);
+		$dcnt = count($dparts);
+		for ($i = 0; $i < $dcnt; $i++) {
+			$suffix = implode('.', $dparts);
+			if (!isset($zone_covered[$suffix])) {
+				$zone_covered[$suffix] = TRUE;
+				$zone_patterns[] = ",{$suffix},,";
+			}
+			unset($dparts[$i]);
+		}
+	}
+
+	pfb_dnsbl_prefetch_store(array(
+		'covered'      => $covered,
+		'data'         => pfb_dnsbl_prefetch_grep($data_patterns, $pfb['unbound_py_data']),
+		'zone_covered' => $zone_covered,
+		'zone'         => pfb_dnsbl_prefetch_grep($zone_patterns, $pfb['unbound_py_zone']),
+	));
+}
+
+
+// One `grep -shF -f <patternfile>` pass over $file, returning a map of the matched
+// domain/suffix (each line's field [1] -- the same position pfb_dnsbl_parse_compute()
+// destructures on a per-row hit) to the FIRST line seen for it. grep preserves the
+// file's original line order regardless of pattern order, so "first seen in this batched
+// pass" is exactly the per-row `-m1` result for that same domain/suffix. $patterns are
+// raw literal ",{domain-or-suffix},," strings (no regex escaping) -- see
+// pfb_dnsbl_prefetch()'s docblock for why -F fixed-string matching is equivalent to the
+// per-row escaped-BRE match here.
+//
+// Keying the map by field [1] relies on where a ",X,," pattern can match: in the
+// ",domain,,log_type,feed,group" line shape, the empty placeholder after the domain slot
+// is the only double comma a well-formed line contains, so a ",X,," fixed string can
+// only ever match with X in the domain slot -- field [1]. That is exactly what makes
+// "key by field [1]" select the same line the per-row `grep -shm1 ',X,,'` would.
+function pfb_dnsbl_prefetch_grep(array $patterns, string $file): array {
+	global $pfb;
+
+	$result = array();
+	if (empty($patterns) || !is_file($file)) {
+		return $result;
+	}
+
+	$pattern_file = tempnam(sys_get_temp_dir(), 'pfb_dnsbl_prefetch_');
+	if ($pattern_file === FALSE) {
+		return $result;
+	}
+
+	try {
+		if (file_put_contents($pattern_file, implode("\n", $patterns) . "\n") === FALSE) {
+			return $result;
+		}
+
+		$pattern_file_esc	= escapeshellarg($pattern_file);
+		$file_esc		= escapeshellarg($file);
+		$lines = array();
+		exec("{$pfb['grep']} -shF -f {$pattern_file_esc} {$file_esc} 2>&1", $lines);
+
+		foreach ($lines as $line) {
+			$fields = explode(',', $line);
+			$key = $fields[1] ?? NULL;
+			if ($key !== NULL && !isset($result[$key])) {
+				$result[$key] = $line;
+			}
+		}
+	} finally {
+		@unlink($pattern_file);
+	}
+
+	return $result;
+}
+
+
 // Functon to find which DNSBL Feed/Groupname blocked this event
 //
 // issue #809 (Alerts page render-time performance): in 'alerts' mode ONLY, memoize the
@@ -12223,11 +12361,25 @@ function pfb_dnsbl_parse_compute($mode, $domain, $src_ip, $req_agent) {
 	if (!$dnsbl_cache) {
 		$o_domain = $domain; // Store original domain for CNAME query
 
+		// issue #809 Phase 3a: NULL unless the Alerts page's DNSBL table render pass
+		// seeded it via pfb_dnsbl_prefetch() -- read once here and reused at both grep
+		// sites below (data + zone) for every iteration of the CNAME while(TRUE) loop.
+		$prefetch_store = pfb_dnsbl_prefetch_store();
+
 		while (TRUE) {
 
 			$domainparse = str_replace('.', '\.', $domain);
-			$dquery_esc	= escapeshellarg(",{$domainparse},,");
-			$pfb_feed	= exec("{$pfb['grep']} -shm1 {$dquery_esc} {$pfb['unbound_py_data']} 2>&1");
+
+			// A covered domain reuses the batched grep's answer (a covered miss is a
+			// cached '', never re-exec'd here); an uncovered one -- no store seeded, or
+			// a CNAME-chain domain the prefetch pass never saw -- falls straight through
+			// to today's per-row exec, unchanged.
+			if ($prefetch_store !== NULL && isset($prefetch_store['covered'][$domain])) {
+				$pfb_feed = $prefetch_store['data'][$domain] ?? '';
+			} else {
+				$dquery_esc	= escapeshellarg(",{$domainparse},,");
+				$pfb_feed	= exec("{$pfb['grep']} -shm1 {$dquery_esc} {$pfb['unbound_py_data']} 2>&1");
+			}
 			$pfb_group = $pfb_mode = $pfb_final = 'Unknown';
 
 			// Exact Domain match found
@@ -12245,9 +12397,16 @@ function pfb_dnsbl_parse_compute($mode, $domain, $src_ip, $req_agent) {
 				for ($i=0; $i < $dcnt; $i++) {
 
 					$domainparse	= str_replace('.', '\.', implode('.', $dparts));
+					$suffix		= implode('.', $dparts);
 
-					$dquery_esc	= escapeshellarg(",{$domainparse},,");
-					$pfb_feed	= exec("{$pfb['grep']} -shm1 {$dquery_esc} {$pfb['unbound_py_zone']} 2>&1");
+					// Same prefetch consult as the data-grep site above, keyed by this
+					// label-walk suffix rather than the whole domain.
+					if ($prefetch_store !== NULL && isset($prefetch_store['zone_covered'][$suffix])) {
+						$pfb_feed = $prefetch_store['zone'][$suffix] ?? '';
+					} else {
+						$dquery_esc	= escapeshellarg(",{$domainparse},,");
+						$pfb_feed	= exec("{$pfb['grep']} -shm1 {$dquery_esc} {$pfb['unbound_py_zone']} 2>&1");
+					}
 
 					// Collect Alias Group name
 					if (!empty($pfb_feed)) {

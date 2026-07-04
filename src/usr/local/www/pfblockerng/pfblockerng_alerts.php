@@ -2307,7 +2307,12 @@ function convert_dnsbl_log($mode, $fields) {
 	// issue #809: pfb_dnsbl_parse('alerts', ...) memoizes its full result per domain
 	// and reuses one open dnsblcache SQLite3 handle for the rest of this page load, so
 	// a repeated domain (or a warm cache) no longer pays per-row open/close -- only a
-	// genuinely new domain still runs the grep/zone/drill path above.
+	// genuinely new domain still runs the grep/zone/drill path above. issue #809 Phase
+	// 3a additionally batches the grep/zone lookups themselves: in non-filter mode the
+	// DNSBL table branch prefetches every displayed row's domain in ONE grep pass per
+	// file (pfb_dnsbl_prefetch()) before this loop runs, so a dnsblcache miss here
+	// consults that seeded result instead of re-executing grep -- the drill fallback
+	// is untouched (still per-domain, only reached on a genuine miss).
 	if (!$isPython && !$isUpstream && !$isWhitelist_found) {
 		$domain_details = pfb_dnsbl_parse('alerts', $qdomain, '', '');
 		$pfb_mode	= $domain_details['pfb_mode']	?: 'Unknown';
@@ -4464,8 +4469,103 @@ if (!$alert_summary):
 			</thead>
 			<tbody>
 	<?php
-			if (($handle = @popen('/usr/bin/tail -r ' . escapeshellarg($pfb_log), 'r')) !== FALSE) {
-				while (($fields = @fgetcsv($handle)) !== FALSE) {
+			// issue #809 Phase 3a scope guard: batching (below) only ever applies in
+			// non-filter mode. Filtered mode keeps today's single-pass streaming loop --
+			// the Alert-filter match runs against the CORRECTED fields (post
+			// pfb_dnsbl_parse()), so a row can't be pre-collected without parsing it
+			// first; see the "Ordering constraint" note in convert_dnsbl_log() and
+			// docs/misc/alerts-reports-pipeline.md.
+			if ($pfb['filterlogentries']) {
+				if (($handle = @popen('/usr/bin/tail -r ' . escapeshellarg($pfb_log), 'r')) !== FALSE) {
+					while (($fields = @fgetcsv($handle)) !== FALSE) {
+
+						// Remove and record duplicate entries
+						if ($fields[9] == '-') {
+							$dup['DNSBL']++;
+							continue;
+						}
+						if (convert_dnsbl_log('non_unified', $fields)) {
+							break;
+						}
+						$dup['DNSBL'] = 0;
+					}
+				}
+				if ($handle) {
+					@pclose($handle);
+				}
+			} else {
+				// Non-filter mode: two passes over the reversed log instead of one, so the
+				// DNSBL data/zone-file lookups for every row this render will walk are
+				// batched into at most one grep pass each (pfb_dnsbl_prefetch()) instead of
+				// one exec per row.
+				//
+				// Pass 1 (collect): buffer until $pfbentries + 1 NON-dup lines are seen or
+				// EOF. That "+1" line is exactly the one whose convert_dnsbl_log() call
+				// trips the counter/limit gate and breaks today's loop, so buffering stops
+				// there; lines beyond it are unreachable today too. The '-' duplicate lines
+				// are run-length compressed: their field content is never read anywhere in
+				// the render loop -- only their COUNT feeds the $dup['DNSBL'] badge
+				// accumulator -- so a buffer entry is either a $fields array (non-dup line)
+				// or an integer (length of a consecutive dup run). Real dnsbl.logs are
+				// dup-heavy, so this is what bounds the buffer at <= ($pfbentries + 1)
+				// field arrays plus <= ($pfbentries + 2) integers regardless of log size,
+				// keeping this pass as O(rows-rendered) in memory as the streamed loop it
+				// replaces (which held one line at a time).
+				$dnsbl_buffered	 = array();
+				$dnsbl_qdomains	 = array();
+				$dnsbl_nondup_seen = 0;
+				if (($handle = @popen('/usr/bin/tail -r ' . escapeshellarg($pfb_log), 'r')) !== FALSE) {
+					while (($fields = @fgetcsv($handle)) !== FALSE) {
+
+						// Run-length compress consecutive duplicate-marker lines.
+						if ($fields[9] == '-') {
+							$dnsbl_last = count($dnsbl_buffered) - 1;
+							if ($dnsbl_last >= 0 && is_int($dnsbl_buffered[$dnsbl_last])) {
+								$dnsbl_buffered[$dnsbl_last]++;
+							} else {
+								$dnsbl_buffered[] = 1;
+							}
+							continue;
+						}
+
+						$dnsbl_buffered[] = $fields;
+						$dnsbl_nondup_seen++;
+
+						// dnsbl_log_details() is cheap and pure w.r.t. the globals it reads;
+						// index [5] is its $qdomain return slot. A superset domain set is fine
+						// here (python/upstream/whitelist rows' domains ride along too) --
+						// convert_dnsbl_log() below simply won't consult the prefetch for a
+						// row it skips for its own reasons.
+						$dnsbl_qdomains[] = dnsbl_log_details($fields)[5];
+
+						if ($dnsbl_nondup_seen >= ($pfbentries + 1)) {
+							break;
+						}
+					}
+				}
+				if ($handle) {
+					@pclose($handle);
+				}
+
+				// Prefetch (between passes): seed the page-scope store every
+				// pfb_dnsbl_parse_compute() call in pass 2 below transparently consults.
+				pfb_dnsbl_prefetch($dnsbl_qdomains);
+
+				// Pass 2 (render): replay the buffer in the same (reversed) order. An
+				// integer entry is a compressed dup run and replays as one accumulation --
+				// output-identical to the N individual $dup['DNSBL']++ increments the
+				// streamed loop performed for those N consecutive lines. An array entry
+				// runs today's exact loop body, verbatim (its dup-marker check can never
+				// fire for a buffered array -- dup lines were compressed to integers in
+				// pass 1 -- but keeping it keeps the body identical to the streamed
+				// loop's).
+				foreach ($dnsbl_buffered as $dnsbl_entry) {
+
+					if (is_int($dnsbl_entry)) {
+						$dup['DNSBL'] += $dnsbl_entry;
+						continue;
+					}
+					$fields = $dnsbl_entry;
 
 					// Remove and record duplicate entries
 					if ($fields[9] == '-') {
@@ -4477,9 +4577,12 @@ if (!$alert_summary):
 					}
 					$dup['DNSBL'] = 0;
 				}
-			}
-			if ($handle) {
-				@pclose($handle);
+
+				// Clear the prefetch store now that this table's render pass is done, so a
+				// later per-row consumer on this SAME page load (the Unified table, later in
+				// this same foreach over $logtype) sees no seeded store and runs pure
+				// per-row, exactly as before this phase.
+				pfb_dnsbl_prefetch_store(NULL);
 			}
 		}
 

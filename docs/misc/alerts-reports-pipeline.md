@@ -88,13 +88,30 @@ Two asymmetries worth knowing:
 
 DNSBL row, `pfb_dnsbl_parse('alerts', …)` on a cache miss:
 
-- SQLite open/SELECT/close, then open/INSERT/close (per call);
+- SQLite SELECT, then INSERT — one open/close pair for the whole page load (issue #809
+  Phase 1: `pfb_dnsbl_parse()` memoizes its result per domain and reuses a single
+  dnsblcache handle across the page), not per row;
 - `grep -shm1` over the whole DNSBL data file (`unbound_py_data`) — a de-listed domain
-  scans all of it;
-- one `grep` of the TLD zone file per domain label;
+  scans all of it — **unless** the row's domain was already resolved by the batched
+  prefetch pass below;
+- one `grep` of the TLD zone file per domain label — same prefetch exception;
 - a live `drill` to the external DNS server (`pfbextdns`, default 8.8.8.8) to chase
   CNAMEs when the domain itself is not found — network round-trip, per domain, with
-  drill's retry/timeout behaviour when the upstream is slow.
+  drill's retry/timeout behaviour when the upstream is slow. The prefetch pass never
+  touches this: a CNAME target is only known after the data/zone lookup runs, so it
+  cannot be pre-collected.
+
+**Batched prefetch (issue #809 Phase 3a), scope-limited:** the per-type DNSBL table
+(`convert_dnsbl_log()` via the `DNSBL Block`/`DNSBL Python` branch in
+`pfblockerng_alerts.php`) runs a two-pass render **only when `!$pfb['filterlogentries']`**
+— buffer every row this render will walk, `pfb_dnsbl_prefetch()` the distinct domain set
+in ONE `grep -F` pass per file (data + zone), then replay the normal per-row loop, which
+transparently consults the seeded result instead of re-`exec`'ing. Filtered mode is
+untouched (the Alert-filter match runs against the *corrected*, post-parse fields, so a
+row can't be pre-collected without parsing it first — see "Ordering constraint" above).
+The Unified table is untouched too (its own accept/skip decisions are converter-internal,
+so an exact pre-collection can't be proven equivalent there); it still benefits from
+Phase 1's per-domain memo and shared SQLite handle, just not the batched grep.
 
 IP row (`convert_ip_log`):
 
