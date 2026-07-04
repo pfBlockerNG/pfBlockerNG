@@ -53,6 +53,7 @@ lazily via ``importorskip`` so collecting this module without it does not error.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import quote
@@ -382,24 +383,46 @@ def test_addrow_clones_a_source_row_and_renumbers(
 
 
 # --------------------------------------------------------------------------- #
-# Alias-type validation (#356): wrong alias type in a port/address field is
-# rejected by the server with the expected error string.
+# Alias-type normalization (#802, sibling of #676/#636): a wrong-type alias
+# submitted to a port/address field is silently normalized away, not rejected.
 #
-# Implementation note: the alias-type check (``pfb_alias_field_type_ok``) fires
-# on the SAVE round-trip (a PHP server validation), not purely in JS.  Driving
-# it through a Playwright browser would require navigating away from the page on
-# submit (the error page replaces the form page) and then back — a brittle,
-# slow flow that is harder to reason about than a direct HTTP POST.  The HTTP
-# approach (webui.session.post) is the same mechanism ``test_category_edit.py``
-# uses for every save flow and is the accepted pattern in this suite.  We use
-# ``webui`` here (its session is already authenticated, shared, and correct) with
-# a fresh CSRF token harvested from a real GET — the same pattern as
-# ``_post_form`` in ``test_category_edit.py``.
+# The save round-trip's "Validate Select field options" whitelist sanitiser
+# (pfblockerng_category_edit.php ~479-513) resets any field whose submitted
+# value is not a key in its type-specific options dropdown to '' BEFORE
+# ``pfb_adv_alias_field_errors()`` (~620) ever runs -- so a wrong-type alias
+# name never reaches validation as an error, it is dropped. This is the same
+# normalize-before-validate contract already pinned for the sibling IP-settings
+# page by ``tests/php/IpSettingsAdvAliasValidationTest.php``.
+#
+# Implementation note: driving the save through a Playwright browser would
+# require navigating away from the page on submit (the response page replaces
+# the form page) and then back — a brittle, slow flow that is harder to reason
+# about than a direct HTTP POST. The HTTP approach (webui.session.post) is the
+# same mechanism ``test_category_edit.py`` uses for every save flow and is the
+# accepted pattern in this suite. We use ``webui`` here (its session is already
+# authenticated, shared, and correct) with a fresh CSRF token harvested from a
+# real GET — the same pattern as ``_post_form`` in ``test_category_edit.py``.
 # --------------------------------------------------------------------------- #
 
 _CATEGORY_PAGE = "/pfblockerng/pfblockerng_category_edit.php"
 _SAVE_TIMEOUT = 120.0
 _CFG_IPV4 = "installedpackages/pfblockernglistsv4/config"
+
+# pfSense's print_input_errors() (guiconfig.inc) renders one non-nested
+# <div class="alert alert-danger input-errors">...</div> per response.
+_INPUT_ERRORS_RE = re.compile(r"<div[^>]*\binput-errors\b[^>]*>.*?</div>", re.DOTALL)
+
+
+def _input_errors_block(body: str) -> str:
+    """Extract pfSense's ``print_input_errors()`` alert block from a save-response body.
+
+    Pulling just that block out of the full page keeps failure diagnostics readable
+    (CLAUDE.md "On failure, print expected vs actual"). Absent the div -- the save carried
+    no validation error -- returns an explicit marker so a diagnostic never reads as "the
+    response was empty".
+    """
+    match = _INPUT_ERRORS_RE.search(body)
+    return match.group(0) if match else "<no input-errors block in response>"
 
 
 def _post_ipv4_form(webui: WebUI, payload: dict[str, str]) -> str:
@@ -511,49 +534,53 @@ def _ipv4_payload(rowid: int, aliasname: str, **overrides: str) -> dict[str, str
     return payload
 
 
-def test_alias_type_port_field_rejects_network_alias(
+def test_alias_type_port_field_normalizes_network_alias_away(
     webui: "WebUI",
     smoke_vm: helpers.SmokeVM,
     browser_page: "Page",  # noqa: ARG001
     screenshot_dir: Path,  # noqa: ARG001
 ) -> None:
-    """Saving a network alias in ``aliasports_in`` (a port field) is rejected.
+    """Saving a network alias into ``aliasports_in`` is silently normalized away, not rejected.
 
-    Scenario: ``pfb_alias_field_type_ok()`` validates that port alias fields
-    only accept port-type aliases. Supplying a network alias produces the error
-    ``Must use a Port-type alias`` in the response; a valid port alias in the
-    same field is accepted.
+    Scenario: the category_edit save round-trip runs TWO steps in order -- first a "Validate
+    Select field options" whitelist sanitiser (pfblockerng_category_edit.php ~479-513), then
+    ``pfb_adv_alias_field_errors($_POST)`` (~620). ``$options_aliasports_in`` is built from
+    PORT-type aliases only (~419-426), so a NETWORK-type alias name is never a key in it: the
+    whitelist step resets ``$_POST['aliasports_in']`` to ``''`` BEFORE the validator ever runs,
+    so ``pfb_adv_alias_field_errors()`` sees an empty field and emits nothing -- the save
+    proceeds and the wrong-type value is dropped, not rejected.
 
     Background:
-        Issue #356 added ``pfb_alias_field_type_ok()`` which returns FALSE when
-        an address-type alias (``alias_get_type() === 'network'``) is passed to
-        a port field (``aliasports_*``). The save handler converts that to an
-        ``$input_errors`` entry whose text matches ``'Must use a Port-type alias'``.
-        A browser form-submit round-trip would navigate away from the page, making
-        it fragile to drive with Playwright; the server-side validation is
-        equivalently exercised through the authenticated HTTP session (the same
-        mechanism ``test_category_edit.py`` uses for all save flows).
+        This is the same two-step, normalize-before-validate contract already pinned for the
+        sibling IP-settings page by ``tests/php/IpSettingsAdvAliasValidationTest.php`` (#676,
+        sibling of #636): "a non-existent or wrong-type value never reaches validation as an
+        error -- it is reset to '' and saved empty". Issue #802 is this same behaviour on
+        category_edit's own save round-trip: the old oracle here expected a loud
+        ``'Must use a Port-type alias'`` rejection that the page, by this design, never emits
+        on this path -- it never passed against a live VM.
 
     Given:
         - A network alias ``smkbwtypenet`` exists in the firewall config.
         - A port alias ``smkbwtypeport`` exists in the firewall config.
-        - The target IPv4 rowid is free.
-    When (reject):
-        POST the IPv4 save with ``aliasports_in=smkbwtypenet`` (network alias
-        in a port field) and ``autoports_in=on``, ``autoproto_in=tcp``.
-    Then (reject):
-        - The response body contains ``Must use a Port-type alias``
-          (server validation error — the config is NOT written).
+        - The target IPv4 rowid is free (no ``aliasports_in`` set yet).
+    When (normalize):
+        POST the IPv4 save with ``aliasports_in=smkbwtypenet`` (a network alias in a port
+        field), ``autoports_in=on``, ``autoproto_in=tcp``.
+    Then (normalize):
+        - The response contains NEITHER ``Must use a Port-type alias`` NOR
+          ``Must use an existing Alias`` -- the value never reaches validation as an error.
+        - The save WENT THROUGH: ``aliasname`` is written (a rejected save writes nothing).
+        - The wrong-type value was dropped: ``aliasports_in`` reads back as ``''``.
     When (accept):
-        POST the same payload with ``aliasports_in=smkbwtypeport`` (correct
-        port alias in the port field).
+        POST the same payload with ``aliasports_in=smkbwtypeport`` (a correct port alias).
     Then (accept):
-        - The response body does NOT contain ``Must use a Port-type alias``.
-        - config.xml stores ``aliasports_in='smkbwtypeport'``.
+        - The response contains no alias-type error.
+        - ``aliasports_in`` reads back as ``smkbwtypeport``.
     """
     vm = smoke_vm
     net_alias = "smkbwtypenet"
     port_alias = "smkbwtypeport"
+    aliasname = "smkbwtype"
     rowid = _free_rowid_ipv4(vm)
     base = f"{_CFG_IPV4}/{rowid}"
 
@@ -569,42 +596,62 @@ def test_alias_type_port_field_rejects_network_alias(
             f"precondition: rowid {rowid} not free (aliasports_in already set)"
         )
 
-        # REJECT: network alias supplied to a port field -> server validation error.
-        reject_body = _post_ipv4_form(
+        # NORMALIZE: a network alias in a port field is silently dropped, not rejected.
+        norm_body = _post_ipv4_form(
             webui,
             _ipv4_payload(
                 rowid,
-                "smkbwtype",
+                aliasname,
                 autoports_in="on",
                 autoproto_in="tcp",
                 aliasports_in=net_alias,
             ),
         )
-        assert "Must use a Port-type alias" in reject_body, (
-            f"expected 'Must use a Port-type alias' error in response when a network alias "
-            f"is used in a port field, but it was absent (first 500 chars: {reject_body[:500]!r})"
-        )
-        # Config must NOT have been written (the error aborted the save).
-        assert helpers.config_get(vm, f"{base}/aliasports_in") == "", (
-            "aliasports_in must not be written when the save is rejected by alias-type validation"
+        for error in ("Must use a Port-type alias", "Must use an existing Alias"):
+            assert error not in norm_body, (
+                f"expected NO {error!r} error -- the whitelist sanitiser resets a wrong-type "
+                f"alias to '' before pfb_adv_alias_field_errors() ever runs, so this value "
+                f"never reaches validation as an error.\n"
+                f"  response input-errors block: {_input_errors_block(norm_body)}"
+            )
+
+        # The save WENT THROUGH -- a rejected save would write nothing at all.
+        got_aliasname = helpers.config_get(vm, f"{base}/aliasname")
+        assert got_aliasname == aliasname, (
+            f"expected the save to go through (a rejected save writes nothing)\n"
+            f"  expected aliasname: {aliasname!r}\n"
+            f"  actual aliasname  : {got_aliasname!r}\n"
+            f"  response input-errors block: {_input_errors_block(norm_body)}"
         )
 
-        # ACCEPT: correct port alias in the port field -> no error, config written.
+        # The wrong-type value was dropped -- normalized to '', not saved verbatim.
+        got_ports_in = helpers.config_get(vm, f"{base}/aliasports_in")
+        assert got_ports_in == "", (
+            f"expected the wrong-type alias to be normalized away\n"
+            f"  expected aliasports_in: ''\n"
+            f"  actual aliasports_in  : {got_ports_in!r}"
+        )
+
+        # ACCEPT: a correct port alias in the port field is saved as-is (unchanged semantics).
         accept_body = _post_ipv4_form(
             webui,
             _ipv4_payload(
                 rowid,
-                "smkbwtype",
+                aliasname,
                 autoports_in="on",
                 autoproto_in="tcp",
                 aliasports_in=port_alias,
             ),
         )
         assert "Must use a Port-type alias" not in accept_body, (
-            "expected no alias-type error when a port alias is used in a port field"
+            f"expected no alias-type error when a port alias is used in a port field\n"
+            f"  response input-errors block: {_input_errors_block(accept_body)}"
         )
-        assert helpers.config_get(vm, f"{base}/aliasports_in") == port_alias, (
-            f"aliasports_in was not written after a valid save with port alias {port_alias!r}"
+        got_accept_ports_in = helpers.config_get(vm, f"{base}/aliasports_in")
+        assert got_accept_ports_in == port_alias, (
+            f"expected aliasports_in to be written after a valid save\n"
+            f"  expected aliasports_in: {port_alias!r}\n"
+            f"  actual aliasports_in  : {got_accept_ports_in!r}"
         )
     finally:
         _del_rowid_ipv4(vm, rowid)
