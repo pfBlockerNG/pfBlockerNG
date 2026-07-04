@@ -46,6 +46,7 @@ require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
 global $pfb;
 pfb_global();
 
+$input_errors = array();
 $family = 'ipv4';
 $fid = '';
 

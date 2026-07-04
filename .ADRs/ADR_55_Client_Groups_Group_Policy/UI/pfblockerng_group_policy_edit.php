@@ -48,6 +48,7 @@ require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
 global $pfb;
 pfb_global();
 
+$input_errors = array();
 $rowid = 0;
 if (isset($_REQUEST['rowid'])) {
 	$temp_value = pfb_filter($_REQUEST['rowid'], PFB_FILTER_NUM, 'Group Policy Edit');
