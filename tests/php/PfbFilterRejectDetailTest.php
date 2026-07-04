@@ -180,6 +180,41 @@ final class PfbFilterRejectDetailTest extends TestCase
 		}
 	}
 
+	/**
+	 * Scenario: the PRE-SWITCH control-character early return honours the out-param
+	 * contract too (CodeRabbit finding, PR #807). That gate runs before the switch
+	 * and rejects the FILE_MIME types with $return_type = FALSE -- an opted-in
+	 * caller must get a filled detail there as well, or its canonical-line
+	 * interpolation emits undefined-index warnings.
+	 *
+	 * Given  an input whose URL element carries a control character
+	 * When   FILE_MIME validates it with the out-param bound
+	 * Then   pfb_filter() rejects and the detail marks 'control-characters'
+	 *        (retval -1, the no-exec sentinel).
+	 */
+	public function testControlCharacterRejectFillsDetailForOptedInCaller(): void
+	{
+		// The control-char gate logs at level 6 (errlog only) -- provision that
+		// sink so the diagnostic write has somewhere real to land.
+		$errlog = $this->tempLog();
+		$GLOBALS['pfb']['errlog'] = $errlog;
+
+		$detail = array();
+		$result = pfb_filter(
+			["'unused'", $this->pdfPath, "http://feed.example/\x01"],
+			PFB_FILTER_FILE_MIME,
+			'test',
+			'',
+			FALSE,
+			$detail
+		);
+
+		$this->assertFalse($result);
+		$this->assertSame('control-characters', $detail['mime_raw'] ?? null, 'mime_raw must mark the control-char reject');
+		$this->assertSame(-1, $detail['retval'] ?? null, 'retval must be the no-exec sentinel -1');
+		unlink($errlog);
+	}
+
 	// --- PFB_FILTER_FILE_MIME_COMPRESSED ------------------------------------
 
 	private function skipIfHostLacksDashZSemantics(): void

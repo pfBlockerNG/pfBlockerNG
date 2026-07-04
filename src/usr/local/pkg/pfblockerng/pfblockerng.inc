@@ -886,6 +886,13 @@ function pfb_validate_log(string $feed, string $stage, string $reason, string $d
 	pfb_logger(pfb_validate_log_line($feed, $stage, $reason, $detail), $level);
 }
 
+// ADR-48 P2: the one formatter for the detected= summary built from pfb_filter()'s
+// $reject_detail out-param -- every wired pfb_download() call site uses it, so the
+// shape has a single place to change.
+function pfb_reject_detail_summary(array $reject_detail): string {
+	return "{$reject_detail['mime_raw']} rc={$reject_detail['retval']}";
+}
+
 // ADR-48 Phase 4 (issue #789): reads the Python-emitted per-entry reject tally
 // artifact (pfb_py_reject_stats.json -- build()'s normalise() domain-shape rejects
 // and #753 wire-cap rejects, bucketed shape/wire_cap, per feed/group) and emits
@@ -955,6 +962,13 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 		foreach ($input as $vline) {
 			if (preg_match("/[\p{C}]+/u", $vline) !== 0) {
 				pfb_logger("{$header} Control characters found [ " . htmlspecialchars($vline) . " ]", 6);
+				// ADR-48 P2: this early return precedes the switch, so it also rejects
+				// the FILE_MIME types -- fill the out-param for an opted-in caller
+				// (keep the level-6 diagnostic; it is errlog-only, not the legacy
+				// reject message the contract suppresses).
+				if (is_array($reject_detail)) {
+					$reject_detail = array('mime_raw' => 'control-characters', 'mime' => '', 'retval' => -1);
+				}
 				return $return_type;
 			}
 		}
@@ -962,6 +976,9 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 	else {
 		if (preg_match("/[\p{C}]+/u", $input) !== 0) {
 			pfb_logger("{$header} Control characters found [ " . htmlspecialchars($input) . " ]", 6);
+			if (is_array($reject_detail)) {
+				$reject_detail = array('mime_raw' => 'control-characters', 'mime' => '', 'retval' => -1);
+			}
 			return $return_type;
 		}
 	}
@@ -9288,7 +9305,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 		$reject_detail = array();
 		$file_type = pfb_filter(array("{$file_dwn_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME, 'pfb_download', '', FALSE, $reject_detail);
 		if (!$file_type) {
-			pfb_validate_log($header, 'mime', 'mime_not_allowed', "{$reject_detail['mime_raw']} rc={$reject_detail['retval']}");
+			pfb_validate_log($header, 'mime', 'mime_not_allowed', pfb_reject_detail_summary($reject_detail));
 			return FALSE;
 		}
 
@@ -9373,7 +9390,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			else {
 				$reject_detail = array();
 				if (!pfb_filter(array("{$file_dwn_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download', '', FALSE, $reject_detail)) {
-					pfb_validate_log($header, 'inner', 'compressed_mime_not_allowed', "{$reject_detail['mime_raw']} rc={$reject_detail['retval']}");
+					pfb_validate_log($header, 'inner', 'compressed_mime_not_allowed', pfb_reject_detail_summary($reject_detail));
 					return FALSE;
 				}
 				pfb_logger('.', 1);
@@ -9388,7 +9405,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			}
 			$reject_detail = array();
 			if (!pfb_filter(array("{$file_dwn_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download', '', FALSE, $reject_detail)) {
-				pfb_validate_log($header, 'inner', 'compressed_mime_not_allowed', "{$reject_detail['mime_raw']} rc={$reject_detail['retval']}");
+				pfb_validate_log($header, 'inner', 'compressed_mime_not_allowed', pfb_reject_detail_summary($reject_detail));
 				return FALSE;
 			}
 			pfb_logger('.', 1);
@@ -9448,7 +9465,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			// pfb_mime_normalise()).
 			$reject_detail = array();
 			if (!pfb_filter(array("{$file_org_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME, 'pfb_download', '', FALSE, $reject_detail)) {
-				pfb_validate_log($header, 'inner', 'inner_mime_not_allowed', "{$reject_detail['mime_raw']} rc={$reject_detail['retval']}");
+				pfb_validate_log($header, 'inner', 'inner_mime_not_allowed', pfb_reject_detail_summary($reject_detail));
 				unlink_if_exists("{$file_org_esc}");
 				return FALSE;
 			}
@@ -9470,7 +9487,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			}
 			$reject_detail = array();
 			if (!pfb_filter(array("{$file_dwn_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download', '', FALSE, $reject_detail)) {
-				pfb_validate_log($header, 'inner', 'compressed_mime_not_allowed', "{$reject_detail['mime_raw']} rc={$reject_detail['retval']}");
+				pfb_validate_log($header, 'inner', 'compressed_mime_not_allowed', pfb_reject_detail_summary($reject_detail));
 				return FALSE;
 			}
 			pfb_logger('.', 1);
