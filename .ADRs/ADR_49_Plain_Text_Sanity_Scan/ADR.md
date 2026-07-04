@@ -73,6 +73,25 @@ logs *through* it); changing the existing control-char check (kept; this complem
      fail-open/fail-closed question entirely (a truncated UTF-8 tail is simply bytes that match
      or don't).
 
+   **Post-merge review revisions (2026-07-04 — PR #829 adversarial-review follow-up):**
+
+   - **UTF-8 BOM:** stripped up front (encoding metadata, not content) — a BOM-prefixed
+     `<!doctype html`/`<html` page is still detected, and a BOM-prefixed comment line no longer
+     counts as data toward the floor.
+   - **Blocklist-shaped, per branch:** IPv4/CIDR stays a **substring** match (ProjectHoneypot /
+     cybercrime-tracker serve real IPs embedded in HTML markup); IPv6 is substring but
+     **bounded** (a CSS `::before` or a `403 :: Forbidden` separator is not an address); the
+     `domain.tld` (bare/ABP) token must be the **whole line** — real error pages embed
+     domain-shaped tokens in markup (DOCTYPE DTD URLs, favicon/CSS hrefs, CDN links) and those
+     must not suppress the verdict.
+   - **Guard window:** the `html_error_page` guard scans **every sampled line**, not the first
+     20 — HTML-wrapped real feeds carry their first IP only after ~90+ lines of boilerplate.
+   - **Sample cap:** **64 KiB** (was 8 KiB) — cybercrime-tracker's first IP sits ~12 KiB into a
+     650+ KiB page; the cap stays a ceiling, never a floor. The offline survey keeps its 8 KiB
+     corpus captures; `CCT_IP` is documented there as `KNOWN_TRUNCATED_FEED`.
+   - **MIME scope:** `application/csv` rides with `text/csv` (same body, different libmagic
+     verdict; added by the in-PR review fixes, commit 6ddfa1ee).
+
 2. **One registered PfbConfig field (ADR-28/29): `pfb_feed_sanity`** — a `PfbToggle`,
    **default off**. When off, `pfb_text_sanity()` is never consulted (zero behaviour change —
    the existing matrix is byte-for-byte unchanged). When on, a non-`null` reason →

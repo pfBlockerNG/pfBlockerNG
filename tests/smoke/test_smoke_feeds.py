@@ -3321,7 +3321,8 @@ def test_validate_log_healthy_abp_feed_no_entries_reject(
 # (a real branch, not an always-reject path).
 # --------------------------------------------------------------------------- #
 
-_SANITY_SCANNED_MIME_TYPES = ("text/plain", "text/html", "text/csv")
+# Mirrors the gate's in_array() list in pfblockerng.inc pfb_download() -- keep in sync.
+_SANITY_SCANNED_MIME_TYPES = ("text/plain", "text/html", "text/csv", "application/csv")
 
 
 @pytest.mark.timeout(180)

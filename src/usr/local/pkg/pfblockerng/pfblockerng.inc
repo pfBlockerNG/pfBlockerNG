@@ -975,10 +975,10 @@ function pfb_emit_entry_reject_stats(string $path): void {
 }
 
 // ADR-49 Phase 1: pure content-sanity scan over the first chunk of a downloaded
-// text feed. The caller reads up to 8 KiB and passes it in as $sample -- this
-// function does no I/O and has no notion of the cap: an 8 KiB read is a ceiling,
-// never a floor, so a feed shorter than that is a COMPLETE sample and is never
-// penalised for its size.
+// text feed. The caller reads a capped head sample (64 KiB at the pfb_download()
+// gate) and passes it in as $sample -- this function does no I/O and has no
+// notion of the cap: the read is a ceiling, never a floor, so a feed shorter
+// than the cap is a COMPLETE sample and is never penalised for its size.
 //
 // Returns NULL when the sample looks like plausible blocklist text, else one of
 // three reason tokens naming why it does not. Evaluated in this order, first
@@ -987,12 +987,18 @@ function pfb_emit_entry_reject_stats(string $path): void {
 //                             a text feed, so it is checked first.
 //   2. 'html_error_page'   -- the sample, left-trimmed of leading whitespace,
 //                             opens (case-insensitively) with "<!doctype html"
-//                             or "<html", AND none of its first 20 lines is
-//                             "blocklist-shaped" (an IPv4/IPv6 address or CIDR,
-//                             a hosts-style "IP<whitespace>domain" line, or a
-//                             bare/ABP-wrapped domain.tld token). This is the
-//                             false-positive guard: an HTML-ish feed that DOES
-//                             carry blocklist lines is not flagged.
+//                             or "<html", AND no line of the sample is
+//                             "blocklist-shaped": an IPv4/IPv6 address or CIDR
+//                             anywhere in the line (real feeds -- ProjectHoneypot,
+//                             cybercrime-tracker -- embed IPs inside HTML markup),
+//                             or a WHOLE line that is one bare/ABP-wrapped
+//                             domain.tld token. The domain token must BE the
+//                             line, never a substring: real error pages embed
+//                             domain-shaped tokens in markup (a DOCTYPE's w3.org
+//                             DTD URL, favicon.ico / *.css hrefs, CDN links),
+//                             and those must not suppress the verdict. This is
+//                             the false-positive guard: an HTML-ish feed that
+//                             DOES carry blocklist lines is not flagged.
 //   3. 'below_min_content' -- a LINE-count floor of 1, never a byte-size floor:
 //                             fires only when the sample has ZERO non-blank,
 //                             non-comment lines (a comment line begins with
@@ -1004,6 +1010,13 @@ function pfb_emit_entry_reject_stats(string $path): void {
 // pure ASCII, so a chunk-truncated multibyte tail can never flip a verdict.
 // Pure: string in, ?string out, no I/O, no globals.
 function pfb_text_sanity(string $sample): ?string {
+	// Strip a UTF-8 BOM up front -- encoding metadata, not content. Left in place
+	// it defeats the '<!doctype html'/'<html' opening-tag check (ltrim strips no
+	// BOM) AND lets a BOM-prefixed comment line count as data in the content floor.
+	if (strncmp($sample, "\xEF\xBB\xBF", 3) === 0) {
+		$sample = substr($sample, 3);
+	}
+
 	if (strpos($sample, "\x00") !== FALSE) {
 		return 'nul_bytes';
 	}
@@ -1014,18 +1027,39 @@ function pfb_text_sanity(string $sample): ?string {
 	$opens_as_html = stripos($leading_trimmed, '<!doctype html') === 0
 		|| stripos($leading_trimmed, '<html') === 0;
 
-	// Blocklist-shaped = an IPv4/IPv6 address or CIDR, OR a bare/ABP-wrapped
-	// domain.tld token -- a hosts-style "IP<ws>domain" line already satisfies
-	// the IP branch, so it needs no separate pattern.
-	$blocklist_shaped = '/(?:\d{1,3}\.){3}\d{1,3}(?:\/\d{1,2})?'
-		. '|(?:[0-9A-Fa-f]{1,4}:){3,7}[0-9A-Fa-f]{1,4}|[0-9A-Fa-f]*::[0-9A-Fa-f:]*'
-		. '|(?:\|\|)?[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?'
-		. '(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\.[A-Za-z]{2,}\^?/';
+	// Blocklist-shaped, per branch:
+	//   - IPv4/CIDR: SUBSTRING match, deliberately -- real catalogue feeds
+	//     (ProjectHoneypot, cybercrime-tracker) serve their IPs embedded in HTML
+	//     markup, and those pages must keep suppressing the verdict.
+	//   - IPv6: substring too, but bounded (lookarounds + at least one hex group)
+	//     so a CSS pseudo-element ("h1::before" in an error page's inline styles)
+	//     or a "403 :: Forbidden" separator cannot suppress it.
+	//   - domain.tld (bare/ABP): the token must BE the whole line. A substring
+	//     match here lets the domain-shaped tokens of real error-page markup
+	//     (a DOCTYPE's w3.org DTD URL, favicon.ico / *.css hrefs, CDN links)
+	//     suppress the verdict -- and genuine domain feeds are one-token-per-line
+	//     formats anyway.
+	$ipv4_shaped = '/(?:\d{1,3}\.){3}\d{1,3}(?:\/\d{1,2})?/';
+	$ipv6_shaped = '/(?<![A-Za-z0-9:])(?:(?:[0-9A-Fa-f]{1,4}:){3,7}[0-9A-Fa-f]{1,4}'
+		. '|[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4})*::(?:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4})*)?'
+		. '|::[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4})*)(?![A-Za-z0-9:])/';
+	$domain_only_line = '/^(?:\|\|)?[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?'
+		. '(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\.[A-Za-z]{2,}\^?$/';
 
+	// The guard scans EVERY line of the sample (already capped at 64 KiB by the
+	// caller), not a fixed head window: HTML-wrapped real feeds (ProjectHoneypot)
+	// carry their first IP only after ~90 lines of boilerplate, while a genuine
+	// error page has no blocklist-shaped line anywhere.
 	if ($opens_as_html) {
 		$has_blocklist_line = FALSE;
-		foreach (array_slice($lines, 0, 20) as $line) {
-			if (preg_match($blocklist_shaped, $line) === 1) {
+		foreach ($lines as $line) {
+			$line = trim($line);
+			if ($line === '') {
+				continue;
+			}
+			if (preg_match($ipv4_shaped, $line) === 1
+				|| preg_match($ipv6_shaped, $line) === 1
+				|| preg_match($domain_only_line, $line) === 1) {
 				$has_blocklist_line = TRUE;
 				break;
 			}
@@ -9995,8 +10029,11 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 		// libmagic verdict (both are allow-listed synonyms; see pfb_filter FILE_MIME).
 		if (PfbConfig::read('pfb_feed_sanity') === PfbToggle::On &&
 			in_array($file_type, array('text/plain', 'text/html', 'text/csv', 'application/csv'), TRUE)) {
-			// Read UP TO 8 KiB -- a cap, not a minimum; a shorter feed is read whole.
-			$pfb_sanity_sample = @file_get_contents($file_download, FALSE, NULL, 0, 8192);
+			// Read UP TO 64 KiB -- a cap, not a minimum; a shorter feed is read whole.
+			// 64 KiB (raised from 8 KiB) because HTML-wrapped real feeds bury their
+			// first data token behind boilerplate (cybercrime-tracker's first IP sits
+			// ~12 KiB in) and the html_error_page guard must be able to see it.
+			$pfb_sanity_sample = @file_get_contents($file_download, FALSE, NULL, 0, 65536);
 			// A read error (FALSE) is NOT an empty feed: skip the scan (fail-open) so a
 			// transient I/O glitch is not mislogged as below_min_content and the feed --
 			// already MIME-validated -- proceeds instead of being wrongly dropped. A truly
