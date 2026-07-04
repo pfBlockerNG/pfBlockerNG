@@ -657,11 +657,22 @@ def block_egress() -> None:
 
 @timed_step("unblock_egress")
 def unblock_egress() -> None:
-    """Restore egress (teardown counterpart of :func:`block_egress`)."""
+    """Restore egress (teardown counterpart of :func:`block_egress`). Never raises.
+
+    Call sites put this at the head of teardown/``finally`` blocks, ahead of must-run
+    cleanup (the ramdisk revert + reboot, ``clear_dnsbl_settings``, diagnostics
+    collection). ``check=False`` only suppresses a nonzero exit — ``TimeoutExpired``
+    (iptables/xtables lock contention on a loaded runner) would still raise and abort
+    the whole block, so it is swallowed here, once, for every caller. The autouse
+    ``_restore_egress`` fixture retries after every test anyway.
+    """
     if not os.environ.get("SMOKE_BLOCK_EGRESS"):
         return
-    subprocess.run(["sudo", "iptables", "-P", "OUTPUT", "ACCEPT"], check=False, timeout=30)
-    subprocess.run(["sudo", "iptables", "-F", "OUTPUT"], check=False, timeout=30)
+    try:
+        subprocess.run(["sudo", "iptables", "-P", "OUTPUT", "ACCEPT"], check=False, timeout=30)
+        subprocess.run(["sudo", "iptables", "-F", "OUTPUT"], check=False, timeout=30)
+    except Exception as exc:  # noqa: BLE001 -- best-effort teardown, never mask the caller's cleanup
+        print(f"[smoke] unblock_egress failed (non-fatal): {exc}")
 
 
 # --------------------------------------------------------------------------- #
