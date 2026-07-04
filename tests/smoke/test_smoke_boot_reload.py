@@ -42,6 +42,7 @@ smoke deps; without them it skips cleanly.
 
 from __future__ import annotations
 
+import contextlib
 import os
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -103,7 +104,11 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
         # Diagnostics FIRST: the revert reboot below wipes the MFS /var this module ran
         # on, so a snapshot taken after it would show a fresh disk-backed /var instead
         # of the module's (possibly failing) end-of-run state.
-        h.unblock_egress()
+        # Suppressed so a raise (iptables TimeoutExpired) can never abort this finally
+        # block before the ramdisk revert below; conftest's autouse _restore_egress
+        # already force-unblocks after every test, this call is belt-and-braces.
+        with contextlib.suppress(Exception):
+            h.unblock_egress()
         h.collect_host_diagnostics(smoke_vm)
         # Leave RAM disks OFF and rebuild the aliases the reboot may have dropped, so
         # the box is left in a known-good state. Best-effort — never mask the result.
