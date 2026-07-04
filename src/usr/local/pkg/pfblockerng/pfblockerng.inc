@@ -10521,9 +10521,10 @@ function pfb_collect_localip() {
 	// classify every member individually: a plain IP becomes its own entry (so
 	// it gets its own flipped key), a CIDR goes to $pfb_localsub (matched via
 	// pfb_local_ip()), a member that is itself an alias NAME expands in place
-	// (pfSense nested aliases, #784 -- breadth-first, depth-capped so a
-	// reference cycle terminates), and anything else (hostname, port) is
-	// dropped silently.
+	// (pfSense nested aliases, #784 -- visited-set walk: each distinct alias
+	// expands at most once, so cycles/self-references terminate and a wide
+	// alias-of-aliases tree costs work linear in config size), and anything
+	// else (hostname, port) is dropped silently.
 	$pfb_alias_addrs = array();
 	foreach (config_get_path('aliases/alias', []) as $alias) {
 		if (is_array($alias) && isset($alias['name'])) {
@@ -10540,26 +10541,23 @@ function pfb_collect_localip() {
 				continue;
 			}
 			unset($pfb_local[$cnt]);
+			$pfb_alias_seen = array($entry => TRUE);
 			$members = preg_split('/\s+/', trim($pfb_alias_addrs[$entry]));
-			// Depth 10 >> the pfSense GUI's practical nesting; a cycle just
-			// re-expands until the cap and dedups in the final array_flip().
-			for ($depth = 0; !empty($members) && $depth < 10; $depth++) {
-				$nested = array();
-				foreach ($members as $member) {
-					if ($member === '') {
-						continue;
-					}
-					if (is_ipaddr($member)) {
-						$pfb_local[] = $member;
-					} elseif (is_subnet($member)) {
-						$pfb_localsub[] = $member;
-					} elseif (array_key_exists($member, $pfb_alias_addrs)) {
-						$nested = array_merge(
-							$nested, preg_split('/\s+/', trim($pfb_alias_addrs[$member]))
-						);
+			while (!empty($members)) {
+				$member = array_shift($members);
+				if ($member === '') {
+					continue;
+				}
+				if (is_ipaddr($member)) {
+					$pfb_local[] = $member;
+				} elseif (is_subnet($member)) {
+					$pfb_localsub[] = $member;
+				} elseif (array_key_exists($member, $pfb_alias_addrs) && !isset($pfb_alias_seen[$member])) {
+					$pfb_alias_seen[$member] = TRUE;
+					foreach (preg_split('/\s+/', trim($pfb_alias_addrs[$member])) as $sub_member) {
+						$members[] = $sub_member;
 					}
 				}
-				$members = $nested;
 			}
 		}
 	}
