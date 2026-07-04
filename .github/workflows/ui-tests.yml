@@ -20,7 +20,8 @@ name: UI tests fan-out (all CI legs, live pfSense VM)
 #   * Tier A (render) is the cheap/hermetic PR gate — test.yml runs it per-PR on
 #     PHP/JS changes and folds it into the "All tests passed" aggregate.
 #   * Tier B (functional + browser) is daily/on-demand and NEVER gates a PR:
-#     the `schedule` (daily) + `workflow_dispatch` triggers here, plus the
+#     the `schedule` (daily; it also rides a Tier A render leg — see
+#     DEFAULT_SCHEDULE_TIERS below) + `workflow_dispatch` triggers here, plus the
 #     marker being off the default collection, keep it non-blocking by
 #     construction (RESULTS/04 §6). The browser leg's §7 demote/drop is a
 #     ONE-LINE switch: drop `browser` from DEFAULT_SCHEDULE_TIERS below to stop
@@ -140,7 +141,8 @@ on:
         description: "FreeBSD-ports branch (blank = build-pkg-linux default pfblockerng/use-github)."
         required: false
         default: ""
-  # Daily Tier-B run (functional + browser). Non-PR-blocking by construction.
+  # Daily run: Tier A render + Tier B (functional + browser). Non-PR-blocking
+  # by construction.
   # The `prepare` job guards it to SKIP when there were no commits in the last
   # day (mirrors a smoke-style nightly guard) so an idle repo does not boot a VM.
   schedule:
@@ -214,7 +216,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           # For a dispatch/call the tier input narrows the matrix; the schedule
-          # ignores it and always runs the daily Tier-B set.
+          # ignores it and always runs the full DEFAULT_SCHEDULE_TIERS set.
           TIER_INPUT: ${{ inputs.tier }}
           # Optional narrow-to-one filter: a pfsense_version (e.g. "2.8"). Blank =
           # scope decides (min CE for impacted, all legs for full).
