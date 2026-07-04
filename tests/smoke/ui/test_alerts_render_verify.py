@@ -116,8 +116,13 @@ FEED_MATCH = f"{MATCH_DIR}/RVMatchFeed.txt"
 FEED_ET = f"{ET_DIR}/RVFeedS10.txt"
 FEED_GEO = f"{GEOIP_CC_DIR}/RVGeoFeed.txt"
 ALIAS_OTHER = f"{ALIASTABLES_DIR}/pfB_RVOther_v4.txt"
+# Decoy so the aliastables dir holds >= 2 .txt files: grep only emits "path:content"
+# filename prefixes with two or more file arguments, and S8's alias-changed cell can
+# only derive the NEW alias name from that path prefix (single-file output is the
+# pre-existing unprefixed quirk tracked in issue #833 -- deliberately not exercised).
+ALIAS_DECOY = f"{ALIASTABLES_DIR}/pfB_RVDecoy_v4.txt"
 
-SEEDED_FILES = (FEED_A, FEED_B, FEED_PERMIT, FEED_MATCH, FEED_ET, FEED_GEO, ALIAS_OTHER)
+SEEDED_FILES = (FEED_A, FEED_B, FEED_PERMIT, FEED_MATCH, FEED_ET, FEED_GEO, ALIAS_OTHER, ALIAS_DECOY)
 
 # --- ip_block.log scenarios (S1-S10) -- RFC 5737/3849 addresses. Chosen so no
 # value is a textual PREFIX of another (a short IP's exact-match grep pattern is
@@ -536,6 +541,7 @@ def _seed_feed_files(vm: helpers.SmokeVM) -> None:
         FEED_ET: f"{S10_IP}\n",
         FEED_GEO: f"{S5_IP}\n",
         ALIAS_OTHER: f"{S8_IP}\n",
+        ALIAS_DECOY: "203.0.113.250\n",
     }
     for path, content in files.items():
         result = subprocess.run(
@@ -608,9 +614,14 @@ def render_diff_state(smoke_vm: helpers.SmokeVM, webui: WebUI) -> Iterator[dict[
         )
     }
 
-    # DNSBL must be enabled for the 'alert'/'unified' views' DNSBL Python panel to
-    # appear at all (pfblockerng_alerts.php gates it on pfb_dnsbl -- the Block/
-    # Permit/Match panels are NOT gated by this toggle).
+    # DNSBL must be EFFECTIVELY enabled for the alert view's DNSBL Python panel to
+    # render at all: the panel gate reads the runtime $pfb['dnsbl'], which pfb_global
+    # force-disables ("DNSBL disabled: no VIP configured") when no sinkhole VIP
+    # exists -- the config toggle alone is not enough (first live run proved it:
+    # every D-scenario row was absent). Seed the VIP first (idempotent, the standard
+    # harness fixture), then flip the toggle. The Block/Permit/Match panels are NOT
+    # gated by this toggle.
+    helpers.ensure_dnsbl_vip(vm)
     helpers.set_dnsbl_enabled(vm, True)
 
     baseline: dict[str, Capture] = {}
