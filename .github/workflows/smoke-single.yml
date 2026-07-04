@@ -76,6 +76,14 @@ on:
         description: "pytest -k selector to run only a subset of the marker's tests (e.g. 'test_dns_redirect' or 'redirect and not browser'). Blank = the whole marker."
         required: false
         default: ""
+      shard:
+        description: "0-based module-shard index for this leg (issue #797). The fan-out passes matrix.shard; a bare dispatch stays 0 (no-op)."
+        required: false
+        default: "0"
+      shard_total:
+        description: "Module-shard count for this leg (issue #797). The fan-out passes matrix.shard_total; 1 = no sharding (byte-identical to pre-#797)."
+        required: false
+        default: "1"
       smoke_nightly_live_url:
         description: "Live nightly Pages base URL for test_install_from_live_nightly_url (e.g. https://pfblockerng.github.io/pkg/nightly). Blank -> SKIP."
         required: false
@@ -135,6 +143,16 @@ on:
         required: false
         type: string
         default: ""
+      shard:
+        description: "0-based module-shard index for this leg (issue #797). The fan-out passes matrix.shard; a bare dispatch stays 0 (no-op)."
+        required: false
+        type: string
+        default: "0"
+      shard_total:
+        description: "Module-shard count for this leg (issue #797). The fan-out passes matrix.shard_total; 1 = no sharding (byte-identical to pre-#797)."
+        required: false
+        type: string
+        default: "1"
       smoke_nightly_live_url:
         description: "Live nightly Pages base URL for test_install_from_live_nightly_url. Blank -> SKIP."
         required: false
@@ -181,7 +199,11 @@ jobs:
       # Per-leg artifact name: the fan-out builds a CE and a Plus .pkg in ONE run,
       # so a shared name would collide / cross-feed. Keying on image_name keeps each
       # leg's artifact distinct (and the download below follows build-pkg.outputs.artifact).
-      artifact_name: pfBlockerNG-pkg-${{ inputs.image_name }}
+      # The `-s<shard>` suffix (issue #797) keys it further: two shards of the SAME
+      # leg each build their own .pkg (a shared cross-shard build is a deferred
+      # optimization, not implemented here) — without it the name-based artifact
+      # download would collide across shards of one leg.
+      artifact_name: pfBlockerNG-pkg-${{ inputs.image_name }}-s${{ inputs.shard }}
       # Optional Option-A validation: point the .pkg build at a FreeBSD-ports branch
       # carrying a new plist entry. Blank -> build-pkg-linux's own defaults
       # (pfBlockerNG/FreeBSD-ports @ pfblockerng/use-github), so a normal run is unchanged.
@@ -478,6 +500,10 @@ jobs:
           # Optional -k selector to run only a subset of the marker's tests
           # (blank = the whole marker). Lets a dispatcher fire a specific set.
           PYTEST_FILTER: ${{ inputs.pytest_filter }}
+          # Module-shard identity (issue #797): forwarded verbatim to
+          # run-smoke.sh; shard_total=1 (the default) is a byte-identical no-op.
+          SHARD: ${{ inputs.shard }}
+          SHARD_TOTAL: ${{ inputs.shard_total }}
           # SMOKE_IMAGE_DIR points the fixture at the ALREADY-PULLED qcow2 so the
           # boot needs no network. SMOKE_IMAGE_REF is kept for provenance/logs.
           SMOKE_IMAGE_DIR: ${{ github.workspace }}/image
@@ -549,6 +575,7 @@ jobs:
           # multi-token expression like "a and not b" would break pytest matching).
           set -- --paths tests/smoke -m "${PYTEST_MARKER}" --timeout 30
           [ -n "${PYTEST_FILTER:-}" ] && set -- "$@" --filter "${PYTEST_FILTER}"
+          set -- "$@" --shard "${SHARD}" --shard-total "${SHARD_TOTAL}"
           sh scripts/run-smoke.sh "$@"
 
       # ADR-24 / ADR-47 P5: runner-side scrub delegated to the shared script.
@@ -569,7 +596,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: smoke-diagnostics
+          # Per-leg-per-shard name (issue #797) — also fixes the pre-existing
+          # wart where every leg of a fan-out run uploaded the SAME bare
+          # "smoke-diagnostics" name (a green nightly produced N artifacts all
+          # named identically; only the run UI's per-job grouping told them apart).
+          name: smoke-diagnostics-${{ inputs.image_name }}-${{ inputs.pfsense_version }}-s${{ inputs.shard }}
           path: |
             **/vm*.log
             **/screen-*.png

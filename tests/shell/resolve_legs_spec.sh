@@ -228,6 +228,149 @@ Describe 'resolve-legs.sh legs — -k derivation'
 
 End
 
+Describe 'resolve-legs.sh legs — shard expansion (issue #797)'
+
+    # One CE + one Plus leg (mirrors the FIXTURE_MATRIX style above).
+    ONE_CE_ONE_PLUS='[{"pfsense_version":"2.8","channel":"CE","ci":true,"image_name":"pfsense-ce","mac":"","freebsd_major":"15","php_version":"8.3","py_flavor":"py311","abi":"FreeBSD:15:amd64"},{"pfsense_version":"26.03","channel":"Plus","ci":true,"image_name":"pfsense-plus","mac":"","freebsd_major":"16","php_version":"8.5","py_flavor":"py312","abi":"FreeBSD:16:amd64"}]'
+
+    # 3 known test_*.py modules — --test-dir clamp target (PFB_FIXTURES/shard-modules).
+    SHARD_DIR="${PFB_FIXTURES}/shard-modules"
+
+    setup() {
+        scrub_git_env
+        unset SCOPE_INPUT VERSION_INPUT PYTEST_FILTER_INPUT MARKER_INPUT SHARDS_INPUT GITHUB_OUTPUT GITHUB_ENV PFB_BASE_REF
+    }
+    BeforeEach 'setup'
+
+    It 'SHARDS_INPUT=2, no -k, marker smoke -> CE expands to 2 shards, Plus stays 1, total 3 legs'
+        # Given: full scope (no -k), default marker, a 3-module test-dir (>= 2 shards).
+        # When: legs runs with SHARDS_INPUT=2.
+        # Then: the CE leg becomes 2 entries (shard 0/1 of 2); Plus stays exactly 1
+        #       entry (shard 0 of 1); the array carries 3 legs total.
+        When run env \
+            CI_MATRIX="$ONE_CE_ONE_PLUS" \
+            EVENT_NAME="workflow_dispatch" \
+            SCOPE_INPUT="full" \
+            SHARDS_INPUT="2" \
+            sh "$SCRIPT" legs --test-dir "$SHARD_DIR" --label marker
+        The status should be success
+        The output should include '"channel":"CE"'
+        The output should include '"shard":"0","shard_total":"2"'
+        The output should include '"shard":"1","shard_total":"2"'
+        The output should include '"channel":"Plus"'
+        The output should include '"shard":"0","shard_total":"1"'
+        The error should include 'legs=3'
+    End
+
+    It 'SHARDS_INPUT=2 + PYTEST_FILTER_INPUT set -> collapses to 1 (no expansion)'
+        # Given: an explicit -k narrows the run.
+        # When: SHARDS_INPUT=2 is also requested.
+        # Then: a -k'd run must never fan out to shards that may not contain the
+        #       selected tests -- every leg stays shard_total "1".
+        When run env \
+            CI_MATRIX="$ONE_CE_ONE_PLUS" \
+            EVENT_NAME="workflow_dispatch" \
+            SCOPE_INPUT="full" \
+            SHARDS_INPUT="2" \
+            PYTEST_FILTER_INPUT="test_foo" \
+            sh "$SCRIPT" legs --test-dir "$SHARD_DIR" --label marker
+        The status should be success
+        The output should include '"shard":"0","shard_total":"1"'
+        The output should not include 'shard_total":"2"'
+        The error should include 'legs=2'
+    End
+
+    It 'SHARDS_INPUT=2 + MARKER_INPUT=repo -> collapses to 1 (no expansion)'
+        # Given: a non-default marker (few tests -- a shard slice can collect zero).
+        # When: SHARDS_INPUT=2 is also requested.
+        # Then: every leg stays shard_total "1".
+        When run env \
+            CI_MATRIX="$ONE_CE_ONE_PLUS" \
+            EVENT_NAME="workflow_dispatch" \
+            SCOPE_INPUT="full" \
+            SHARDS_INPUT="2" \
+            MARKER_INPUT="repo" \
+            sh "$SCRIPT" legs --test-dir "$SHARD_DIR" --label marker
+        The status should be success
+        The output should include '"shard":"0","shard_total":"1"'
+        The output should not include 'shard_total":"2"'
+        The error should include 'legs=2'
+    End
+
+    It 'SHARDS_INPUT=5 over a 3-module test-dir -> clamped to 3 CE entries'
+        # Given: a fixture dir with exactly 3 test_*.py modules.
+        # When: SHARDS_INPUT requests more shards than modules exist.
+        # Then: the CE leg is clamped to 3 shards (0/1/2 of 3), never 5.
+        When run env \
+            CI_MATRIX="$ONE_CE_ONE_PLUS" \
+            EVENT_NAME="workflow_dispatch" \
+            SCOPE_INPUT="full" \
+            SHARDS_INPUT="5" \
+            sh "$SCRIPT" legs --test-dir "$SHARD_DIR" --label marker
+        The status should be success
+        The output should include '"shard":"0","shard_total":"3"'
+        The output should include '"shard":"1","shard_total":"3"'
+        The output should include '"shard":"2","shard_total":"3"'
+        The output should not include 'shard_total":"5"'
+        The error should include 'legs=4'
+    End
+
+    It 'SHARDS_INPUT unset/empty -> 1 (uniform fields still present)'
+        When run env \
+            CI_MATRIX="$ONE_CE_ONE_PLUS" \
+            EVENT_NAME="workflow_dispatch" \
+            SCOPE_INPUT="full" \
+            sh "$SCRIPT" legs --test-dir "$SHARD_DIR" --label marker
+        The status should be success
+        The output should include '"shard":"0","shard_total":"1"'
+        The output should not include 'shard_total":"2"'
+        The error should include 'legs=2'
+    End
+
+    Context 'shard-count parsing errors'
+        # Parameters scopes to Examples within THIS Context only (it leaks to
+        # every sibling It in the enclosing scope otherwise).
+        Parameters
+            "abc"
+            "0"
+            "-1"
+        End
+        It "SHARDS_INPUT garbage ('$1') -> 1"
+            When run env \
+                CI_MATRIX="$ONE_CE_ONE_PLUS" \
+                EVENT_NAME="workflow_dispatch" \
+                SCOPE_INPUT="full" \
+                SHARDS_INPUT="$1" \
+                sh "$SCRIPT" legs --test-dir "$SHARD_DIR" --label marker
+            The status should be success
+            The output should include '"shard":"0","shard_total":"1"'
+            The output should not include 'shard_total":"2"'
+            The error should include 'legs=2'
+        End
+    End
+
+    It 'emitted shard/shard_total are JSON STRINGS, not bare numbers'
+        # Given: workflow_call inputs are typed string -- a bare JSON number would
+        #        need coercion at every consumer.
+        # When: legs runs with shards.
+        # Then: the JSON carries "0"/"2" (quoted strings), never bare 0/2.
+        When run env \
+            CI_MATRIX="$ONE_CE_ONE_PLUS" \
+            EVENT_NAME="workflow_dispatch" \
+            SCOPE_INPUT="full" \
+            SHARDS_INPUT="2" \
+            sh "$SCRIPT" legs --test-dir "$SHARD_DIR" --label marker
+        The status should be success
+        The output should include '"shard":"0"'
+        The output should include '"shard_total":"2"'
+        The output should not include '"shard":0,'
+        The output should not include '"shard_total":2,'
+        The output should not include '"shard_total":2}'
+        The error should include 'legs=3'
+    End
+
+End
+
 Describe 'resolve-legs.sh image-ref'
 
     setup() {
