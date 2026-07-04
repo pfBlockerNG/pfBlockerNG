@@ -721,4 +721,83 @@ final class IpPrefetchTest extends TestCase
 			}
 		}
 	}
+
+	// ------------------------------------------------------------------------------
+	// issue #831: a single-.txt folder must never fatal the batched prefetch
+	// ------------------------------------------------------------------------------
+
+	/**
+	 * Scenario: a miss-path row whose folder is a SINGLE glob token expanding to
+	 * exactly ONE .txt file (a GeoIP row's ccdir here; an ET row's etdir is the
+	 * other in-tree shape).
+	 *
+	 * Given: with exactly one file argument grep emits its match UNPREFIXED (no
+	 * "path:" part), so pfb_parse_query() returns a one-element array with no
+	 * [1]. (The Block/Permit/Match folders are immune: their two-token
+	 * "<dir>/*.txt <nativedir>/*.txt" list always hands grep a second argument
+	 * -- even an unexpanded literal counts -- forcing filename prefixes.)
+	 * When: pfb_ip_prefetch() runs its miss + aliastables rounds for that row.
+	 * Then: the prefetch completes WITHOUT the issue #831 TypeError (NULL into
+	 * the strict-typed pfb_ip_prefetch_last_match()), and the row is left
+	 * UNSEEDED -- convert_ip_log()'s per-row fallback then reproduces the
+	 * legacy (pre-batching) rendering for it, single-file quirk (#833) and all.
+	 */
+	public function test_single_file_folder_miss_row_is_left_unseeded_instead_of_fataling(): void
+	{
+		// Given: a GeoIP cc dir holding exactly ONE feed file that contains the host.
+		$tmp = sys_get_temp_dir() . '/pfb_831_' . getmypid();
+		mkdir("{$tmp}/cc", 0777, true);
+		file_put_contents("{$tmp}/cc/LoneFeed.txt", "192.0.2.201\n");
+		$GLOBALS['pfb']['ccdir'] = "{$tmp}/cc";
+
+		try {
+			// Given: a GeoIP-aliased row (continent alias routes folder=ccdir) whose
+			// logged feed name has no on-disk file, so the validate round misses and
+			// the row enters the miss round against the single-token cc glob.
+			$fields     = $this->buildBlockFields('192.0.2.201');
+			$fields[13] = 'pfB_Top_v4';
+			$fields[15] = 'GoneFeed';
+			$rq         = pfb_ip_render_query($fields);
+
+			$rows = [[
+				'host'              => $rq['host'],
+				'folder'            => $rq['folder'],
+				'validate_file_cmd' => $rq['validate_file_cmd'],
+				'validate_cmd'      => $rq['validate_cmd'],
+				'eval_ip_raw'       => $fields[14],
+			]];
+
+			// When: the batched prefetch runs. Pre-fix this fataled with
+			// "pfb_ip_prefetch_last_match(): Argument #2 ($raw_prefix) must be of
+			// type string, null given" -- reaching the assertions below IS the fix.
+			pfb_ip_prefetch($rows);
+			$memos = &pfb_ip_render_memos();
+
+			// Then: the validate round itself seeded normally (its miss is genuine).
+			$this->assertSame(
+				'',
+				$memos['validate'][$rq['validate_cmd']] ?? 'MISSING',
+				"expected the validate round to seed '' for the single-file row, got "
+					. var_export($memos['validate'][$rq['validate_cmd']] ?? 'MISSING', true)
+			);
+
+			// Then: the miss round left the row UNSEEDED (per-row fallback territory),
+			// never a seeded entry fabricated from the one-element pfb_parse_query().
+			$missKey = "{$rq['host']}|{$rq['folder']}";
+			$this->assertArrayNotHasKey(
+				$missKey,
+				$memos['miss'],
+				"expected miss key '{$missKey}' to stay unseeded for the unprefixed single-file match, got "
+					. var_export($memos['miss'][$missKey] ?? null, true)
+			);
+		} finally {
+			foreach (["{$tmp}/cc/LoneFeed.txt", "{$tmp}/cc", $tmp] as $path) {
+				if (is_file($path)) {
+					unlink($path);
+				} elseif (is_dir($path)) {
+					rmdir($path);
+				}
+			}
+		}
+	}
 }

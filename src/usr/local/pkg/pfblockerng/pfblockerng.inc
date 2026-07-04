@@ -8943,6 +8943,16 @@ function pfb_ip_prefetch(array $rows): void {
 			continue;
 		}
 		$pfb_query = $headers_by_host_folder[$miss_key];
+		if (!array_key_exists(1, $pfb_query)) {
+			// issue #831: a folder glob matching exactly ONE .txt file makes grep emit
+			// its match UNPREFIXED (no "path:" part), so pfb_parse_query() returns a
+			// one-element array. Seeding from it would hand a NULL to the strict-typed
+			// pfb_ip_prefetch_last_match() below and fatal the whole page render. Leave
+			// the row unseeded instead -- convert_ip_log()'s per-row fallback then
+			// reproduces the legacy (pre-batching) rendering for it byte-for-byte,
+			// including the pre-existing single-file quirk tracked in issue #833.
+			continue;
+		}
 		$eval_new = ($pfb_query[1] == 'Unknown') ? 'Not listed!' : $pfb_query[1];
 		$eval_new_by_key[$miss_key] = $eval_new;
 		$alias_patterns[] = '^' . str_replace('.', '\.', $eval_new);
