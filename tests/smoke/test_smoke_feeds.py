@@ -2682,3 +2682,284 @@ def test_7z_missing_binary_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedS
     finally:
         if hidden:
             deployed_vm.ssh(f"mv {stash} {_SEVENZIP_BIN}")
+
+
+# --------------------------------------------------------------------------- #
+# ADR-48: canonical 'pfb_validate: REJECT' log line per wired download-
+# validation stage. Phases 1-2 landed pfb_validate_log_line() /
+# pfb_validate_log() and wired every LIVE reject site through it (see
+# RESULTS/01_Results.txt, RESULTS/02_Results.txt for the exact rendered
+# templates these tests grep). Before Phase 2, pfb_download() logged an
+# ad-hoc, per-site message with no common shape and no "pfb_validate: REJECT"
+# substring anywhere -- so every assertion below FAILS on pre-Phase-2 code
+# (the marker cannot exist) and PASSES post-Phase-2. Delta-based (count
+# BEFORE vs AFTER each case's own Force Update, computed INSIDE its
+# CaseContext block) so a test never rides another test's leftover log lines
+# -- self-encapsulated per the CLAUDE.md ordering-independence mandate.
+# --------------------------------------------------------------------------- #
+
+
+def _recent_validate_lines(vm: SmokeVM, limit: int = 5) -> str:
+    """Return up to the last ``limit`` 'pfb_validate:' lines from the pfB log.
+
+    Diagnostic-only, called ONLY from inside a failing branch below (never
+    unconditionally in an ``assert`` message, which Python would evaluate even
+    on the passing path) -- a bare count tells you a line was missing, not
+    what WAS actually logged instead. Feeds the CLAUDE.md expected-vs-actual
+    mandate: the failure message shows the REAL log excerpt, not just a number.
+    """
+    text = h.read_log_file(vm, h.PFB_LOG)
+    lines = [ln for ln in text.splitlines() if "pfb_validate:" in ln]
+    return "\n".join(lines[-limit:]) if lines else "(no 'pfb_validate:' line found in the log)"
+
+
+@pytest.mark.timeout(120)
+def test_validate_log_structural_reject_line(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-48 P3: a structural-probe reject emits the canonical stage=structural line.
+
+    Reuses the FreeBSD-verified ADR-45 corpus fixture (fixtures/archive_corrupt.gz;
+    see fixtures/README.md "Archive corpus") -- a truncated gzip whose on-box
+    file(1) verdict is the already-confirmed ``application/gzip``, so the
+    rendered ``detected=`` value here is known without a fresh on-box probe.
+    ``detected=`` is ``"{file_type} " . basename($file_download)``
+    (RESULTS/02_Results.txt), and ``$file_download``'s basename is always
+    ``{header}.raw`` (pfb_download() builds ``$file_dwn = "{pfborig}/{header}"``
+    then appends ``.raw``) -- fully deterministic from the header we choose.
+
+    Before ADR-48 Phase 2, this branch logged an ad-hoc "Corrupt or unreadable
+    {type} archive"-style message via pfb_logger() directly, with no
+    "pfb_validate: REJECT" substring anywhere -- this test would FAIL on that
+    pre-Phase-2 code (no line ever matches the canonical marker) and PASSES
+    once pfb_validate_log() wires the site.
+
+    Given the alias is absent and no canonical structural-reject line for this
+      feed's header exists yet (the delta baseline, captured before the Force
+      Update -- not asserted as a global zero, per the no-false-pass-from-a-
+      sibling-test rule).
+    When the case Force-Updates over the truncated gzip (the structural probe
+      -- gunzip -t -- rejects it, same as ADR-45's test_corrupt_gzip_rejected),
+    Then the alias remains absent (ADR-45's existing pin) AND a NEW line
+      matching "pfb_validate: REJECT feed=<hdr> stage=structural
+      reason=probe_failed detected=application/gzip <hdr>.raw" appears in the
+      pfB log.
+    """
+    header = "adr48stc"
+    feed_url = mock_feeds.feed_url("archive_corrupt.gz")
+    spec = h.IpCase(aliasname=header, feed_url=feed_url, header=header, family="v4")
+    marker = (
+        f"pfb_validate: REJECT feed={header} stage=structural reason=probe_failed "
+        f"detected=application/gzip {header}.raw"
+    )
+
+    # Given -- alias absent + delta baseline for this feed's canonical line.
+    assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the corrupt-gzip feed"
+    before = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+
+    with h.CaseContext(deployed_vm, spec):
+        # When -- Force Update; the structural probe (gunzip -t) rejects the truncated stream.
+        tables_after = h.pfctl_tables(deployed_vm)
+        assert spec.alias not in tables_after, (
+            f"expected {spec.alias!r} absent after corrupt gzip (structural probe must reject), "
+            f"found it present — tables: {tables_after}"
+        )
+        # Then -- a NEW canonical reject line was logged (proves the ADR-48 wiring
+        # fired, not merely that the reject happened -- ADR-45 already pins the latter).
+        after = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+        if not (after > before):
+            raise AssertionError(
+                f"expected a NEW line matching {marker!r} in {h.PFB_LOG} after the corrupt-gzip "
+                f"Force Update; count before={before} after={after}\n"
+                f"recent pfb_validate lines actually in the log:\n{_recent_validate_lines(deployed_vm)}"
+            )
+
+
+@pytest.mark.timeout(120)
+def test_validate_log_mime_reject_line(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-48 P3: an outer MIME-gate reject emits the canonical stage=mime line.
+
+    Reuses the FreeBSD-verified ADR-45 corpus fixture (fixtures/archive_junk_octet.bin;
+    see fixtures/README.md) -- pure NUL/control bytes that file(1) reports as
+    application/octet-stream, for which pfb_octet_recover_type() finds no
+    archive type that passes -- the reject falls through to the OUTER MIME
+    gate (stage=mime, reason=mime_not_allowed) with
+    mime_raw=application/octet-stream, rc=0 (file(1) itself succeeds; it is
+    the allow-list check that fails -- RESULTS/02_Results.txt's rendered
+    template).
+
+    Before ADR-48 Phase 2, this branch logged an ad-hoc "[PFB_FILTER - 17]
+    Failed or invalid Mime Type: [...]" message with no "pfb_validate: REJECT"
+    substring anywhere -- this test would FAIL on that pre-Phase-2 code.
+
+    Given the alias is absent and no canonical mime-reject line for this feed's
+      header exists yet (delta baseline).
+    When the case Force-Updates over the junk octet-stream blob (same fixture
+      as ADR-45's test_junk_octet_stream_rejected; skipped, not failed, if this
+      box's file(1) does not report octet-stream for it -- the reject branch
+      would then not be exercised, matching that sibling test's own guard),
+    Then the alias remains absent AND a NEW line matching "pfb_validate: REJECT
+      feed=<hdr> stage=mime reason=mime_not_allowed
+      detected=application/octet-stream rc=0" appears in the pfB log.
+    """
+    header = "adr48mim"
+    fixture = "archive_junk_octet.bin"
+    feed_url = mock_feeds.feed_url(fixture)
+    spec = h.IpCase(aliasname=header, feed_url=feed_url, header=header, family="v4")
+    marker = (
+        f"pfb_validate: REJECT feed={header} stage=mime reason=mime_not_allowed detected=application/octet-stream rc=0"
+    )
+
+    # On-box guard: the mime-gate reject only fires this way when file(1) sees octet-stream
+    # for these exact bytes (mirrors test_junk_octet_stream_rejected's guard for the same fixture).
+    box_mime = _box_mime_type(deployed_vm, _fixture_bytes(fixture))
+    if box_mime != "application/octet-stream":
+        pytest.skip(
+            f"junk blob produced {box_mime!r} on this box (not application/octet-stream); "
+            f"the mime-gate reject branch is not exercised — test inconclusive"
+        )
+
+    # Given -- alias absent + delta baseline for this feed's canonical line.
+    assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the junk-blob feed"
+    before = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+
+    with h.CaseContext(deployed_vm, spec):
+        # When -- Force Update; the outer MIME gate rejects (no archive type recovers).
+        tables_after = h.pfctl_tables(deployed_vm)
+        assert spec.alias not in tables_after, (
+            f"expected {spec.alias!r} absent after junk octet-stream (mime gate must reject), "
+            f"found it present — tables: {tables_after}"
+        )
+        # Then -- a NEW canonical reject line was logged.
+        after = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+        if not (after > before):
+            raise AssertionError(
+                f"expected a NEW line matching {marker!r} in {h.PFB_LOG} after the junk-blob "
+                f"Force Update; count before={before} after={after}\n"
+                f"recent pfb_validate lines actually in the log:\n{_recent_validate_lines(deployed_vm)}"
+            )
+
+
+@pytest.mark.timeout(120)
+def test_validate_log_inner_reject_line(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-48 P3: the ZIP post-extraction MIME re-run emits the canonical stage=inner line.
+
+    Built INLINE (like the healthy test_zip_feed_imports / ADR-44 tests) rather
+    than a committed fixture: a valid zip is trivially cross-platform-portable
+    (any zipfile writer's output is a valid archive bsdtar reads fine), unlike
+    the FreeBSD-libmagic-sensitive CORRUPT/octet-stream corpus this ADR reuses
+    elsewhere. The zip wraps a single inert entry containing the exact
+    "%PDF-1.4\\n" byte string tests/php/PfbFilterRejectDetailTest.php already
+    uses off-appliance: file(1) reliably reports application/pdf for it via the
+    plain "%PDF-" text magic (no chunk/CRC structure needed) -- this repo has
+    already found a BARE PNG/EXE magic alone unreliable (reads as octet-stream
+    on at least one dev host; see that test's docblock), so the on-box guard
+    below re-confirms the verdict for these exact bytes rather than assuming it.
+
+    The entry contains no comma bytes, so pfb_download()'s extraction pipe
+    (``tar -xOf | sed 's/,[[:space:]]/; /g' | tr ',' '\\n'``) passes it through
+    byte-for-byte -- the post-extraction file(1) probe sees the same bytes
+    served. Exercises the POST-EXTRACTION inner sub-path specifically (the
+    pre-extraction compressed-peek sub-path only applies to the gz/bz2/7z
+    branches, not zip -- see RESULTS/02_Results.txt's caller map).
+
+    Before ADR-48 Phase 2, this branch logged an ad-hoc "[PFB_FILTER - 17]
+    Failed or invalid Mime Type: [...]" message with no "pfb_validate: REJECT"
+    substring anywhere -- this test would FAIL on that pre-Phase-2 code.
+
+    Given the alias is absent and no canonical inner-reject line for this
+      feed's header exists yet (delta baseline).
+    When the case Force-Updates over the zip (the structural probe passes --
+      it is a valid zip -- extraction succeeds, then the post-extraction
+      MIME re-run rejects the PDF-signature payload),
+    Then the alias remains absent AND a NEW line matching "pfb_validate: REJECT
+      feed=<hdr> stage=inner reason=inner_mime_not_allowed detected=application/pdf
+      rc=0" appears in the pfB log.
+    """
+    header = "adr48inr"
+    entry_bytes = b"%PDF-1.4\n"
+
+    # On-box guard: the inner post-extraction reject only fires this way when file(1)
+    # reports application/pdf for these exact bytes (mirrors the ADR-45 octet-stream
+    # guards' "probe file(1) on EXACTLY the served bytes" discipline).
+    box_mime = _box_mime_type(deployed_vm, entry_bytes)
+    if box_mime != "application/pdf":
+        pytest.skip(
+            f"PDF-signature payload produced {box_mime!r} on this box (not application/pdf); "
+            f"the inner post-extraction reject branch is not exercised — test inconclusive"
+        )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("payload.bin", entry_bytes)
+    feed_url = mock_feeds.register("adr48_inner.zip", buf.getvalue())
+    spec = h.IpCase(aliasname=header, feed_url=feed_url, header=header, family="v4")
+    marker = (
+        f"pfb_validate: REJECT feed={header} stage=inner reason=inner_mime_not_allowed detected=application/pdf rc=0"
+    )
+
+    # Given -- alias absent + delta baseline for this feed's canonical line.
+    assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the inner-reject zip feed"
+    before = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+
+    with h.CaseContext(deployed_vm, spec):
+        # When -- Force Update; the zip extracts fine but the post-extraction re-run rejects.
+        tables_after = h.pfctl_tables(deployed_vm)
+        assert spec.alias not in tables_after, (
+            f"expected {spec.alias!r} absent after the inner-reject zip (post-extraction "
+            f"MIME re-run must reject), found it present — tables: {tables_after}"
+        )
+        # Then -- a NEW canonical reject line was logged.
+        after = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+        if not (after > before):
+            raise AssertionError(
+                f"expected a NEW line matching {marker!r} in {h.PFB_LOG} after the inner-reject "
+                f"zip Force Update; count before={before} after={after}\n"
+                f"recent pfb_validate lines actually in the log:\n{_recent_validate_lines(deployed_vm)}"
+            )
+
+
+@pytest.mark.timeout(120)
+def test_validate_log_healthy_feed_no_spurious_reject(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-48 P3: a healthy feed load emits ZERO new 'pfb_validate: REJECT' lines.
+
+    The MUST-ACCOMPANY counterpart to the three reject-line tests above --
+    together they prove the canonical marker is a REAL reject signal tied to
+    an actual validation failure, not something pfb_download() logs on every
+    run regardless of outcome (the ADR §7 / RESULTS/03 reject criterion: "no
+    healthy feed logs a spurious REJECT"). Reuses the Phase-4 ip_plain_cidr.txt
+    fixture (already the KILL-GATE healthy-load fixture for
+    test_ip_http_feed_loads).
+
+    Given the alias is absent and a delta baseline of every 'pfb_validate:
+      REJECT' line already in the pfB log (module-wide, on purpose: whatever
+      an earlier test in this module already wrote is irrelevant here -- only
+      the delta across THIS case's own Force Update window is asserted, so
+      this test never depends on run order).
+    When the case Force-Updates over the healthy plain-IP+CIDR feed,
+    Then the listed member loads (the feed genuinely succeeded, not merely
+      "didn't crash") AND the REJECT-marker count is UNCHANGED -- no spurious
+      REJECT line was logged for a feed that never failed validation.
+    """
+    header = "adr48hlt"
+    feed_url = mock_feeds.feed_url("ip_plain_cidr.txt")
+    spec = h.IpCase(aliasname=header, feed_url=feed_url, header=header, family="v4")
+    member_host = "203.0.113.5"  # the plain listed host (fixtures/README.md)
+
+    # Given -- alias absent + delta baseline of ANY reject marker.
+    assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the healthy feed was loaded"
+    before = h.count_log_marker(deployed_vm, h.PFB_LOG, "pfb_validate: REJECT")
+
+    with h.CaseContext(deployed_vm, spec):
+        # When -- Force Update loads the healthy feed successfully.
+        members = h.wait_pfctl_table(deployed_vm, spec.alias)
+        assert h.member_present(members, member_host), (
+            f"expected {member_host!r} in {spec.alias} after the healthy feed load, got: {members}"
+        )
+        # Then -- no NEW canonical REJECT line was logged for this successful load.
+        after = h.count_log_marker(deployed_vm, h.PFB_LOG, "pfb_validate: REJECT")
+        if not (after == before):
+            raise AssertionError(
+                f"expected NO NEW 'pfb_validate: REJECT' line in {h.PFB_LOG} after a healthy feed "
+                f"load; count before={before} after={after} (a healthy feed must never emit a "
+                f"validation reject)\n"
+                f"recent pfb_validate lines actually in the log:\n{_recent_validate_lines(deployed_vm)}"
+            )
