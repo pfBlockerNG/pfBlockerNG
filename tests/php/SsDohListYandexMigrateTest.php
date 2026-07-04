@@ -60,4 +60,10 @@ final class SsDohListYandexMigrateTest extends TestCase
 	{
 		$this->assertSame('dns.yandex', pfb_ss_doh_list_yandex_migrate('dns.yandex,yandex.dns'));
 	}
+
+	public function testLegacyBeforeCorrectedTokenAlsoDeduplicates(): void
+	{
+		// Reverse order of the case above — dedup must be order-independent.
+		$this->assertSame('dns.yandex', pfb_ss_doh_list_yandex_migrate('yandex.dns,dns.yandex'));
+	}
 }
