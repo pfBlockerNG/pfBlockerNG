@@ -3445,22 +3445,6 @@ class ParsedEntry:
 
 
 @dataclass
-class DnsblEntry:
-    """A normalised, classified blocklist entry ready to load into the matcher dicts.
-
-    ``cls`` is ``DNSBL_CLASS_DATA`` (exact) or ``DNSBL_CLASS_ZONE`` (wildcard); ``key``
-    is the registrable parent for a ZONE or the exact domain for DATA.
-    """
-
-    kind: str
-    cls: str
-    key: str
-    feed: str
-    group: str
-    log: str
-
-
-@dataclass
 class BuildResult:
     """The structure-set build() returns -- decision-equivalent to the loader
     contract (RESULTS/01_Results.txt SS1f). All dicts are FRESH (no module global
