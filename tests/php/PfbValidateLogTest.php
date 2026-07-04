@@ -120,4 +120,44 @@ final class PfbValidateLogTest extends TestCase
 			"expected error log to stay EMPTY at level 1, got <{$errlogContents}>"
 		);
 	}
+
+	/**
+	 * ADR-48 Phase 2: the four ADR-45 structural-probe call sites in pfb_download()
+	 * build detail as `"{$file_type} " . basename($file_download)` and pass it
+	 * RAW (no pre-htmlspecialchars) to pfb_validate_log($header, 'structural',
+	 * 'probe_failed', $detail) -- pfb_download() itself is not off-appliance
+	 * unit-testable (curl/exec), so this pins the exact call-site detail SHAPE and
+	 * proves it is escaped exactly ONCE at the sink (never pre-escaped by the
+	 * caller then escaped again by the formatter). Phase 3 smoke covers the true
+	 * end-to-end four lines on the live VM.
+	 */
+	public function testStructuralStageCallSiteShapeIsSinglyEscapedInSink(): void
+	{
+		// Given: an empty sink and the exact detail-construction expression used
+		// at the call sites, fed a raw (unescaped) '&' -- as file(1) output could
+		// carry one.
+		$log = $this->tempFile('pfb_validate_structural_log_');
+		$GLOBALS['pfb']['log'] = $log;
+		$this->assertSame('', file_get_contents($log), 'pfB log must start empty');
+
+		$file_type     = 'application/x-gzip&evil';
+		$file_download = '/tmp/pfB_Feed7.gz';
+		$detail        = "{$file_type} " . basename($file_download);
+
+		// When: the call-site swap emits through pfb_validate_log().
+		pfb_validate_log('pfB_Feed7', 'structural', 'probe_failed', $detail);
+
+		// Then: the sink carries the canonical line, with '&' escaped EXACTLY
+		// once ("&amp;", never "&amp;amp;") -- the call site passes the raw
+		// value straight through; pfb_validate_log_line() is the sole escaper.
+		$expectedLine = pfb_validate_log_line('pfB_Feed7', 'structural', 'probe_failed', $detail);
+		$logged       = (string) file_get_contents($log);
+		$this->assertStringContainsString($expectedLine, $logged);
+		$this->assertStringContainsString('application/x-gzip&amp;evil', $logged);
+		$this->assertStringNotContainsString(
+			'&amp;amp;',
+			$logged,
+			"detail was double-escaped in <{$logged}>"
+		);
+	}
 }
