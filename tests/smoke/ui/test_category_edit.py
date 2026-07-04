@@ -53,6 +53,7 @@ CATEGORY_PAGE = "/pfblockerng/pfblockerng_category_edit.php"
 # config roots the save handler writes (mirrors $conf_type in the PHP).
 CFG_DNSBL = "installedpackages/pfblockerngdnsbl/config"
 CFG_IPV4 = "installedpackages/pfblockernglistsv4/config"
+CFG_IPV6 = "installedpackages/pfblockernglistsv6/config"
 
 # Generous POST timeout: the save only write_config()s (no reload / no egress),
 # but pfSsh.php-backed config reads around it can run long on a busy box.
@@ -710,6 +711,123 @@ def test_ipv4_invert_toggles_persist_with_alias_native(
 
     finally:
         _del_rowid(vm, CFG_IPV4, rowid)
+
+
+# --------------------------------------------------------------------------- #
+# IPv6 alias: the issue-#760 §3 "Suppression CIDR Limit" select persists and
+# reloads, and is genuinely gtype-gated (v6-only, never rendered on the v4 page;
+# the v4-only sibling field never rendered on the v6 page).
+# --------------------------------------------------------------------------- #
+
+
+def _ipv6_payload(rowid: int, aliasname: str, **overrides: str) -> dict[str, str]:
+    """A complete IPv6 alias save payload (one Disabled placeholder row).
+
+    Mirrors ``_ipv4_payload``: IPv6 shares the same Advanced In/Out fields (the
+    save handler's ``if ($gtype == 'ipv4' || $gtype == 'ipv6')`` block writes
+    both ``suppression_cidr`` -- unconditionally, the v4-only field -- and the
+    new issue-#760 §3 ``suppression_cidr_v6`` -- gated ``if ($gtype ==
+    'ipv6')``). Both are supplied here, same "every field the handler reads
+    gets a value" convention as ``_ipv4_payload``'s own placeholder-row fields.
+    """
+    payload = {
+        "type": "ipv6",
+        "rowid": str(rowid),
+        "aliasname": aliasname,
+        "description": "smoke ipv6 category-edit",
+        "action": "Deny_Both",
+        "cron": "Never",
+        "dow": "",
+        "sort": "sort",
+        "aliaslog": "enabled",
+        "stateremoval": "enabled",
+        "autoproto_in": "any",
+        "agateway_in": "default",
+        "autoproto_out": "any",
+        "agateway_out": "default",
+        "suppression_cidr": "Disabled",
+        "suppression_cidr_v6": "Disabled",
+        "srcint": "",
+        "script_pre": "",
+        "script_post": "",
+        "custom": "",
+        "format-0": "auto",
+        "state-0": "Disabled",
+        "url-0": "",
+        "header-0": "",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_ipv6_suppression_cidr_select_persists_and_reloads(
+    webui: "WebUI",
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """The issue-#760 §3 IPv6 Suppression CIDR Limit select round-trips.
+
+    Scenario: saving an IPv6 alias with ``suppression_cidr_v6`` at its
+    documented default persists it, flipping to a numeric floor persists AND
+    reloads selected, and restoring to the default round-trips back. The field
+    is v6-only (gtype-gated in render/validation/save), so the reloaded v6 page
+    must never render the v4-only ``suppression_cidr`` select, and the v4 page
+    must never render this new v6-only select.
+
+    Given:
+        The target IPv6 rowid is free (``suppression_cidr_v6`` reads '').
+    When:
+        A valid Deny_Both alias is saved with ``suppression_cidr_v6='Disabled'``
+        (the documented default, asserted first), then re-saved with
+        ``suppression_cidr_v6='32'`` (a real transition), then restored to
+        ``'Disabled'`` (the reverse transition).
+    Then:
+        - config.xml holds each value in turn -- each POST CAUSED the change.
+        - The reloaded v6 edit page renders '32' as the selected option.
+        - The v6 page never renders a 'suppression_cidr' <select> (v4-only);
+          the v4 page never renders a 'suppression_cidr_v6' <select> (v6-only)
+          -- the gating is real, not accidental.
+    """
+    vm = smoke_vm
+    rowid = _free_rowid(vm, CFG_IPV6)
+    cfg = f"{CFG_IPV6}/{rowid}/suppression_cidr_v6"
+    try:
+        # BEFORE: free slot, no value stored (the save must CAUSE it).
+        assert helpers.config_get(vm, cfg) == "", f"ipv6 rowid {rowid} not free (suppression_cidr_v6 already set)"
+
+        # Create the alias at the documented default.
+        _post_form(webui, _ipv6_payload(rowid, "smokeip6cidr", suppression_cidr_v6="Disabled"))
+        assert helpers.config_get(vm, cfg) == "Disabled", "suppression_cidr_v6 not stored as 'Disabled'"
+
+        # WHEN: a real transition to a numeric floor.
+        _post_form(webui, _ipv6_payload(rowid, "smokeip6cidr", suppression_cidr_v6="32"))
+        assert helpers.config_get(vm, cfg) == "32", "suppression_cidr_v6 not persisted as '32'"
+
+        # THEN: the reloaded v6 edit page renders '32' selected, and the field
+        # is genuinely gtype-gated both ways.
+        reload_resp = webui.get(CATEGORY_PAGE, params={"type": "ipv6", "rowid": str(rowid)})
+        assert not looks_like_login_page(reload_resp.text), (
+            "category GET (reload) returned the login form (session lost)"
+        )
+        body = reload_resp.text
+        assert 'name="suppression_cidr_v6"' in body, "reloaded v6 form has no suppression_cidr_v6 select"
+        assert _option_selected(body, "32"), (
+            "reloaded v6 form did not render suppression_cidr_v6 option '32' as selected"
+        )
+        assert 'name="suppression_cidr"' not in body, (
+            "v6 edit page must not render the v4-only 'suppression_cidr' select"
+        )
+
+        v4_resp = webui.get(CATEGORY_PAGE, params={"type": "ipv4"})
+        assert not looks_like_login_page(v4_resp.text), "v4 category GET returned the login form (session lost)"
+        assert 'name="suppression_cidr_v6"' not in v4_resp.text, (
+            "v4 edit page must not render the v6-only 'suppression_cidr_v6' select"
+        )
+
+        # Restore to the default (the reverse transition).
+        _post_form(webui, _ipv6_payload(rowid, "smokeip6cidr", suppression_cidr_v6="Disabled"))
+        assert helpers.config_get(vm, cfg) == "Disabled", "suppression_cidr_v6 not restored to 'Disabled'"
+    finally:
+        _del_rowid(vm, CFG_IPV6, rowid)
 
 
 # --------------------------------------------------------------------------- #
