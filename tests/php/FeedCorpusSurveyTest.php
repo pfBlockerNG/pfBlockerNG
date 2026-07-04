@@ -81,7 +81,37 @@ final class FeedCorpusSurveyTest extends TestCase
 				filesize($path),
 				"sample size drifted from the manifest for {$feed['url']} — re-run scripts/fetch_feed_corpus.py"
 			);
+			// The corpus feeds byte-exact bytes to a byte-sensitive scanner, so verify the
+			// content, not merely its length: a length-preserving corruption (a byte flip, or
+			// an EOL rewrite that keeps the byte count) passes the size check but silently
+			// changes what the survey scans. sha256 also catches accidental EOL normalisation
+			// on a checkout that ignores the .gitattributes pin.
+			$this->assertSame(
+				$feed['sample_sha256'],
+				hash_file('sha256', $path),
+				"sample content drifted from the manifest for {$feed['url']} — re-run scripts/fetch_feed_corpus.py"
+			);
 			$fetched++;
+		}
+		// Reverse coherence: every on-disk sample must be named by the manifest. The loop
+		// above only walks manifest→disk, so a stale sample orphaned by a catalogue rename
+		// (the fetch now wipes samples/ to prevent this) would otherwise go uncaught and
+		// bloat the committed corpus.
+		$named = [];
+		foreach ($manifest['feeds'] as $feed) {
+			if (isset($feed['sample_file'])) {
+				$named[basename($feed['sample_file'])] = TRUE;
+			}
+		}
+		foreach (scandir(self::CORPUS_DIR . '/samples') as $entry) {
+			if ($entry === '.' || $entry === '..') {
+				continue;
+			}
+			$this->assertArrayHasKey(
+				$entry,
+				$named,
+				"orphan sample samples/{$entry} is not named by the manifest — re-run scripts/fetch_feed_corpus.py"
+			);
 		}
 		// The catalogue has ~295 url entries; a healthy fetch reaches the large
 		// majority. A collapse below this floor means the corpus (or the fetch)

@@ -38,5 +38,9 @@ changes materially; day-to-day feed-content drift is the documented out-of-CI li
 - **Not shipped.** `tests/` is dev-only; release archives contain `src/` only.
 - **Not authoritative feed data.** These are inert first-bytes snapshots for testing the
   scanner heuristic, not a blocklist source.
+- **Verbatim public bytes.** Samples are the raw first bytes of public spam/abuse
+  blocklists exactly as served — they can contain third-party contact or spammer email
+  addresses that are already public in those feeds. No credentials or private data (the
+  feeds carry none); the `binary` pin in `.gitattributes` keeps every byte intact.
 
 Consumed by `tests/php/FeedCorpusSurveyTest.php`.

@@ -28,6 +28,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import ssl
 import sys
 import time
@@ -52,7 +53,9 @@ def _slug(header: str, taken: set[str]) -> str:
     # only in case would clobber each other's sample here yet stay two records in the
     # manifest -- coherent on macOS, broken on case-sensitive Linux CI. Keying `taken`
     # on the lowercased slug forces distinct on-disk names on every filesystem.
-    base = re.sub(r"[^A-Za-z0-9_.-]+", "_", header).strip("_") or "feed"
+    # strip leading/trailing "._-" so a slug can never become a dotfile (a leading dot
+    # would hide the sample from glob("*.bin") and from the orphan check downstream).
+    base = re.sub(r"[^A-Za-z0-9_.-]+", "_", header).strip("._-") or "feed"
     slug = base
     n = 2
     while slug.lower() in taken:
@@ -97,7 +100,13 @@ def main() -> int:
     for section in ("ipv4", "ipv6", "dnsbl"):
         _walk(catalogue.get(section, {}), section, entries)
 
+    # Wipe first so regeneration is idempotent: a header renamed/removed in the catalogue
+    # must not leave its stale sample orphaned on disk (the manifest would no longer name
+    # it, silently bloating the committed corpus). FeedCorpusSurveyTest also asserts the
+    # reverse — every on-disk sample appears in the manifest — so an orphan fails loudly.
     samples_dir = CORPUS_DIR / "samples"
+    if samples_dir.exists():
+        shutil.rmtree(samples_dir)
     samples_dir.mkdir(parents=True, exist_ok=True)
 
     taken: set[str] = set()
