@@ -2201,8 +2201,10 @@ def _box_cmd_rc(vm: SmokeVM, data: bytes, remote_tmp: str, cmd: str) -> int:
     Cleans up the temp file afterwards.
     """
     subprocess.run(vm.ssh_argv("tee", remote_tmp), input=data, capture_output=True, timeout=30.0, check=False)
-    result = vm.ssh(cmd)
-    vm.ssh("rm", "-f", remote_tmp)
+    try:
+        result = vm.ssh(cmd)
+    finally:
+        vm.ssh("rm", "-f", remote_tmp)
     return result.returncode
 
 
