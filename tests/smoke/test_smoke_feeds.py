@@ -212,12 +212,16 @@ def test_feed_internal_filter_blocks_then_allowlist_exempts(deployed_vm: SmokeVM
     Scenario:
       Given the filter ON and the allowlist EMPTY (so 192.168.89.2 is not exempt),
       When  the mock IP feed is Force-Updated,
-      Then  the download is REFUSED and the pf table is never built (the block branch).
+      Then  the download is REFUSED (the refusal reason is logged) and the pf table
+            is never built (the block branch).
       When  the SLIRP net 192.168.89.0/24 is then allowlisted and re-updated,
       Then  the SAME feed downloads and its pf table IS built (the exempt branch).
     """
     feed_url = mock_feeds.feed_url("ip_plain_cidr.txt")
     spec = h.IpCase(aliasname="smokefiltergate", feed_url=feed_url, header="smokefiltergate", family="v4")
+    # pfb_download() logs IP-feed activity under the family-suffixed alias name
+    # ([ <aliasname>_<family> ]), not the row header (see the sibling p3spur200 case).
+    refused_marker = f"[ {spec.aliasname}_{spec.family} ] feed host resolves to a non-permitted address"
     # The mock fetch must be reachable across both updates (the SSRF filter, not egress,
     # is what we are exercising).
     h.unblock_egress()
@@ -229,10 +233,20 @@ def test_feed_internal_filter_blocks_then_allowlist_exempts(deployed_vm: SmokeVM
         # the "table not built" assertion reflects a fully settled reload, not a race.
         h.set_feed_internal_allowlist(deployed_vm, "")
         assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before any load"
+        refused_before = h.count_log_marker(deployed_vm, h.PFB_LOG, refused_marker)
         h.reload(deployed_vm, "update")
         h.reload(deployed_vm, "updateip")
         assert spec.alias not in h.pfctl_tables(deployed_vm), (
             "filter ON + empty allowlist must BLOCK the internal mock feed (pf table not built)"
+        )
+        # A missing pf table alone is non-specific — a dead mock server would look identical.
+        # Assert the actual refusal reason was logged, so this proves the SSRF guard fired,
+        # not merely that nothing happened to load.
+        refused_after = h.count_log_marker(deployed_vm, h.PFB_LOG, refused_marker)
+        assert refused_after > refused_before, (
+            f"Expected {refused_marker!r} in {h.PFB_LOG} after the filtered update "
+            f"(before={refused_before}, after={refused_after}) — the pf table being empty does "
+            "not by itself prove the SSRF guard refused the download"
         )
 
         # EXEMPT branch: allowlist the SLIRP net => the SAME feed now downloads + loads.
@@ -1791,6 +1805,10 @@ def test_cron_200_reingest_changed_remote_feed(
         _pin_cron_due(deployed_vm)
         hdr_before = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
+        # "( content changed )" is the Phase-3 hash-compare verdict itself (not merely its
+        # re-ingest side effect) — the docstring's RED premise (a status-only impl that skips
+        # the hash compare) would still log "Downloading update" without ever logging this.
+        chg_before = h.count_log_marker(deployed_vm, h.PFB_LOG, "content changed")
 
         h.reload(deployed_vm, "cron")
 
@@ -1802,6 +1820,13 @@ def test_cron_200_reingest_changed_remote_feed(
         assert dl_after > dl_before, (
             f"Expected '[ {header} ] ... Downloading update' after changed-feed cron "
             f"(before={dl_before}, after={dl_after}) — detector did not detect the change"
+        )
+
+        # THEN — the hash-compare verdict itself fired: "( content changed )".
+        chg_after = h.count_log_marker(deployed_vm, h.PFB_LOG, "content changed")
+        assert chg_after > chg_before, (
+            f"Expected '( content changed )' verdict after the ETag bump + body change "
+            f"(before={chg_before}, after={chg_after}) — hash-compare path not taken"
         )
 
         # THEN — dom_new becomes blocked.

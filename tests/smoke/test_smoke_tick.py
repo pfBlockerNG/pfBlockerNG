@@ -127,6 +127,75 @@ def _run_tick(vm) -> str:
     return vm.ssh(f"{_PHP} {_PFB_PHP} tick 2>&1").stdout
 
 
+_SS_EXTDNS_STUB = "192.168.89.2"  # WAN SLIRP host alias -> the stub_dns fixture
+_SS_EXTDNS_DEFAULT = "8.8.8.8"  # pfb_global()'s documented absent-default
+
+
+def _seed_ss_refresh_positive_control(vm, target: str, stale_v4: str) -> str:
+    """Point ss_refresh's resolver at the stub DNS and seed a CNAME row baked STALE.
+
+    pfblockerng_ss_refresh() re-resolves each SafeSearch CNAME row's target and rewrites
+    the CSV IFF the freshly resolved address differs from the row's baked one
+    (pfb_ss_refresh_lines). Pointing 'pfbextdns' — pfb_ss_resolve_target's resolver,
+    default 8.8.8.8 — at the hermetic stub instead, and baking the row with an address the
+    stub will not repeat, makes THIS tick's ss_refresh deterministically detect a change.
+
+    Returns the seeded row's source domain so the caller can remove the row again
+    (`_remove_ss_row`) — a leftover row would make every later tick in this module
+    re-resolve a dead uuid target against the restored default resolver.
+    """
+    domain = h.unique_domain("tickssrefreshsrc")
+    row = f"{domain},cname,{target},{stale_v4},\n"
+    snippet = (
+        "$g = config_get_path('installedpackages/pfblockerngglobal', array());"
+        f"$g['pfbextdns'] = {h._php_str(_SS_EXTDNS_STUB)};"
+        "config_set_path('installedpackages/pfblockerngglobal', $g);"
+        "write_config('pfBlockerNG smoke: point ss_refresh at the stub DNS');"
+        f"file_put_contents({h._php_str(h.UNBOUND_PY_SS_FILE)}, {h._php_str(row)}, FILE_APPEND | LOCK_EX);"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"_seed_ss_refresh_positive_control failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+    return domain
+
+
+def _remove_ss_row(vm, domain: str) -> None:
+    """Strip the seeded SafeSearch CSV row again (issue #582 cleanup).
+
+    Matched by the row's unique source domain — ss_refresh may have rewritten the
+    baked IP by the time this runs, but the domain field is stable.
+    """
+    snippet = (
+        f"$f = {h._php_str(h.UNBOUND_PY_SS_FILE)};"
+        "if (file_exists($f)) {"
+        "  $lines = file($f, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);"
+        f"  $keep = array_filter($lines, fn($l) => strpos($l, {h._php_str(domain)}) === FALSE);"
+        '  file_put_contents($f, implode("\\n", $keep) . (empty($keep) ? \'\' : "\\n"), LOCK_EX);'
+        "}"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_remove_ss_row failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+
+
+def _reset_ss_extdns(vm) -> None:
+    """Restore the 'pfbextdns' general setting to its documented default (issue #582 cleanup)."""
+    snippet = (
+        "$g = config_get_path('installedpackages/pfblockerngglobal', array());"
+        f"$g['pfbextdns'] = {h._php_str(_SS_EXTDNS_DEFAULT)};"
+        "config_set_path('installedpackages/pfblockerngglobal', $g);"
+        "write_config('pfBlockerNG smoke: restore pfbextdns default');"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_reset_ss_extdns failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -194,24 +263,34 @@ def test_tick_dispatches_due_feed(deployed_vm: SmokeVM):
 @pytest.mark.smoke
 @pytest.mark.tick
 @pytest.mark.timeout(150)  # drain + bounded no-dispatch poll can exceed the 30s body cap
-def test_tick_skips_non_due_feed(deployed_vm: SmokeVM):
-    """Tick does NOT dispatch a feed sync when the cron ledger entry is not yet due.
+def test_tick_skips_non_due_feed(deployed_vm: SmokeVM, stub_dns: _StubDnsServer):
+    """Tick does NOT dispatch a feed sync when the cron ledger entry is not yet due —
+    yet the tick itself genuinely ran (issue #582 positive control).
 
     The tick logs to syslog (not stdout), so observe the NON-dispatch via the
     ' CRON  PROCESS  START' marker (logged only by pfblockerng_sync_cron): a non-due cron
     must produce NO new marker. Drain any in-flight cron from a prior tick test first so the
     marker baseline is stable. This is marker-based (not ledger-value-based) so it is immune
     to a prior test's mark_ran overwriting the cron entry — both values stay 'future' anyway.
-    (Positive-control hardening — proving the tick itself ran — is tracked in #582.)
+
+    On its own, "no CRON PROCESS marker" cannot distinguish "tick correctly skipped the
+    non-due cron" from "tick never ran at all" — both look identical. The positive control:
+    ss_refresh rides every tick unconditionally (pfblockerng_tick calls it regardless of what
+    is due), so a SafeSearch CNAME row seeded with a STALE baked IP and a resolver (the
+    'pfbextdns' setting) pointed at the hermetic stub DNS makes THIS tick's ss_refresh
+    deterministically detect a change and log its own marker — proving the tick executed.
 
     Scenario:
         Background: pfBlockerNG installed.
-            Given the 'cron' ledger entry has next_due = now + 1 hour.
+            Given the 'cron' ledger entry has next_due = now + 1 hour, and a SafeSearch
+                CNAME row is seeded with a baked IP the stub will not repeat.
             When pfblockerng.php tick runs.
-            Then NO new ' CRON  PROCESS  START' marker appears (the cron was skipped).
+            Then NO new ' CRON  PROCESS  START' marker appears (the cron was skipped),
+            And  the ss_refresh marker DOES appear (the tick still ran).
     """
     vm = deployed_vm
     marker = "CRON  PROCESS  START"
+    ss_marker = "SafeSearch CNAME fallback IPs refreshed"
 
     # Drain any in-flight backgrounded cron from a prior tick test so the marker baseline
     # is stable (a still-running prior cron would log a marker unrelated to this tick).
@@ -227,17 +306,35 @@ def test_tick_skips_non_due_feed(deployed_vm: SmokeVM):
     _write_ledger_entry(vm, "cron", now_ts - 86400, now_ts + 3600)
     before = h.count_log_marker(vm, h.PFB_LOG, marker)
 
-    # When: tick fires — cron is not due.
-    _run_tick(vm)
+    # Positive control: a resolvable CNAME target the stub answers, baked stale in the CSV.
+    target = h.unique_domain("tickssrefresh")
+    stub_dns.set_records(target, a=(h.SS_TARGET_A,))
+    src_domain = _seed_ss_refresh_positive_control(vm, target, h.SS_BAKED_A)
+    ss_before = h.count_log_marker(vm, h.PFB_LOG, ss_marker)
 
-    # Then: no new CRON PROCESS pass appeared (cron skipped). The bounded poll gives any
-    # erroneous late dispatch a window to show; wait_until returns False (good) when the
-    # count never rises.
-    assert not h.wait_until(
-        lambda: h.count_log_marker(vm, h.PFB_LOG, marker) > before,
-        timeout=20,
-        interval=4,
-    ), f"tick dispatched a cron for a NON-due feed — ' {marker}' marker count rose from {before}"
+    try:
+        # When: tick fires — cron is not due, but ss_refresh always runs.
+        _run_tick(vm)
+
+        # Then: no new CRON PROCESS pass appeared (cron skipped). The bounded poll gives any
+        # erroneous late dispatch a window to show; wait_until returns False (good) when the
+        # count never rises.
+        assert not h.wait_until(
+            lambda: h.count_log_marker(vm, h.PFB_LOG, marker) > before,
+            timeout=20,
+            interval=4,
+        ), f"tick dispatched a cron for a NON-due feed — ' {marker}' marker count rose from {before}"
+
+        # Then: the ss_refresh marker DID appear — the tick genuinely ran; this is what
+        # distinguishes "skipped correctly" from "never ran" above.
+        ss_after = h.count_log_marker(vm, h.PFB_LOG, ss_marker)
+        assert ss_after > ss_before, (
+            f"tick did not run ss_refresh (before={ss_before}, after={ss_after}) — cannot tell "
+            "'cron correctly skipped' from 'the tick itself never ran'"
+        )
+    finally:
+        _remove_ss_row(vm, src_domain)
+        _reset_ss_extdns(vm)
 
 
 @pytest.mark.smoke
@@ -266,16 +363,17 @@ def test_tick_wiped_ledger_jittered(deployed_vm: SmokeVM):
     )
     ledger = _read_ledger(vm)
 
-    # dcc should have run and have a non-zero jitter.
+    # dcc should have run and have a non-zero jitter. Read the ledger's own 'jitter' field
+    # directly (the entry schema carries it — see _write_ledger_entry) rather than inferring
+    # jitter from next_due != last_run+86400: that derivation is fragile — a *coincidental*
+    # jitter draw of exactly 86400 would make a genuinely-jittered entry look unjittered.
     assert "dcc" in ledger, f"dcc ledger entry missing after wiped-ledger tick; ledger={ledger}"
     now_ts = int(vm.ssh("date +%s").stdout.strip())
-    no_jitter_next_due = ledger["dcc"]["last_run"] + 86400
-    actual_next = ledger["dcc"]["next_due"]
-    assert actual_next != no_jitter_next_due, (
-        f"dcc next_due should differ from last_run+86400 (jitter expected);\n"
-        f"  next_due={actual_next} last_run={ledger['dcc']['last_run']} "
-        f"no-jitter={no_jitter_next_due}"
+    actual_jitter = ledger["dcc"]["jitter"]
+    assert actual_jitter != 0, (
+        f"dcc ledger entry should carry non-zero jitter; got jitter={actual_jitter} ledger={ledger}"
     )
+    actual_next = ledger["dcc"]["next_due"]
     assert actual_next > now_ts, f"dcc next_due should be in the future; got {actual_next} now={now_ts}"
 
 
