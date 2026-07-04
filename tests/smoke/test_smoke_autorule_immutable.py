@@ -797,6 +797,13 @@ def test_pfb_permit_precedes_user_block_every_order(
             f"{_probe_diag(vm, DENY_VICTIM)}"
         )
         pkts_after = _rule_block_packets(vm, DENY_ALIAS_TABLE)
+        # A -1 read is "counter unreadable", not a packet count — surface it as a distinct
+        # read failure instead of letting it masquerade as a precedence failure below.
+        assert pkts_before >= 0 and pkts_after >= 0, (
+            f"{pass_order}: could not READ the Deny rule's pf packet counter (before="
+            f"{pkts_before}, after={pkts_after}; -1 = unreadable) — cannot judge the block "
+            f"delta; check the pfctl -sr -vv output format.\n{_probe_diag(vm, DENY_VICTIM)}"
+        )
         assert pkts_after > pkts_before, (
             f"{pass_order}: the Deny rule's pf packet counter did not increase (before="
             f"{pkts_before}, after={pkts_after}) — absence of a state is not proof of an "
