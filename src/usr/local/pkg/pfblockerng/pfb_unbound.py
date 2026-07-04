@@ -31,6 +31,7 @@ import select
 import sys
 import time
 from collections.abc import Callable, Iterable, Iterator
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -2238,18 +2239,10 @@ def is_unknown(x: Any) -> Any:
     return x
 
 
-class _NullLock:
-    def __enter__(self) -> Any:
-        return self
-
-    def __exit__(self, *exc: Any) -> bool:
-        return False
-
-
 # All connection access is serialized by _db_lock; connections are opened with
 # check_same_thread=False so the DB worker and the synchronous fallback (init,
 # tests) can share them safely under the lock.
-_db_lock: Any = threading.Lock() if pfb.get("mod_threading") else _NullLock()
+_db_lock: Any = threading.Lock() if pfb.get("mod_threading") else nullcontext()
 _db_conns: dict[int, Any] = {}
 
 PFB_DB_QUEUE_MAXSIZE = 5000
@@ -5336,7 +5329,7 @@ class _LruCache:
     def __init__(self, maxsize: int = 0) -> None:
         self.maxsize = maxsize
         self._d: OrderedDict[str, Any] = OrderedDict()
-        self._lock: Any = threading.Lock() if pfb.get("mod_threading") else _NullLock()
+        self._lock: Any = threading.Lock() if pfb.get("mod_threading") else nullcontext()
 
     def get(self, key: str, default: Any = None) -> Any:
         with self._lock:
