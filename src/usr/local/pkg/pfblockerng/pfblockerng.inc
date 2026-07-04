@@ -6736,10 +6736,10 @@ function pfb_unbound_python_sources($feeds) {
 }
 
 
-// ADR-06: Update only the manifest's config.user_whitelist in place (used by the
-// alerts "add to whitelist" button, which changes the suppression config without a
-// full feed re-enumeration). The query-time whiteDB is rebuilt from this on reload.
-function pfb_unbound_python_sources_whitelist() {
+// ADR-06: patch a single scalar key of the manifest's config section in place
+// (shared by the whitelist/unlock in-place patchers below), without a full
+// feed re-enumeration. The query-time whiteDB is rebuilt from this on reload.
+function pfb_unbound_python_sources_patch($key, $values) {
 	global $pfb;
 
 	if (!file_exists($pfb['unbound_py_sources'])) {
@@ -6759,7 +6759,7 @@ function pfb_unbound_python_sources_whitelist() {
 	if (!isset($manifest['config']) || !is_array($manifest['config'])) {
 		$manifest['config'] = array();
 	}
-	$manifest['config']['user_whitelist'] = pfb_dnsbl_whitelist_lines();
+	$manifest['config'][$key] = $values;
 
 	$json = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
 	if ($json !== FALSE) {
@@ -6771,6 +6771,14 @@ function pfb_unbound_python_sources_whitelist() {
 }
 
 
+// ADR-06: Update only the manifest's config.user_whitelist in place (used by the
+// alerts "add to whitelist" button, which changes the suppression config without a
+// full feed re-enumeration). The query-time whiteDB is rebuilt from this on reload.
+function pfb_unbound_python_sources_whitelist() {
+	return pfb_unbound_python_sources_patch('user_whitelist', pfb_dnsbl_whitelist_lines());
+}
+
+
 // ADR-06 (#51): update ONLY the manifest's config.user_unlock in place, recomputed
 // from the live temporary-unlock store (pfb_dnsbl_unlock_lines). Mirrors
 // pfb_unbound_python_sources_whitelist(): the alerts Lock/Unlock icon toggles the
@@ -6779,34 +6787,7 @@ function pfb_unbound_python_sources_whitelist() {
 // reload (pfb_reload_unbound) does NOT delete the store, so store and manifest stay in
 // step; a full update/Force/Cron is the only thing that clears both.
 function pfb_unbound_python_sources_unlock() {
-	global $pfb;
-
-	if (!file_exists($pfb['unbound_py_sources'])) {
-		return FALSE;
-	}
-
-	$json = @file_get_contents($pfb['unbound_py_sources']);
-	if ($json === FALSE) {
-		return FALSE;
-	}
-
-	$manifest = json_decode($json, TRUE);
-	if (!is_array($manifest)) {
-		return FALSE;
-	}
-
-	if (!isset($manifest['config']) || !is_array($manifest['config'])) {
-		$manifest['config'] = array();
-	}
-	$manifest['config']['user_unlock'] = pfb_dnsbl_unlock_lines();
-
-	$json = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-	if ($json !== FALSE) {
-		// ADR-10 P5: atomic publish (the sentinel flip is driven by the reload).
-		return pfb_unbound_py_atomic_write($pfb['unbound_py_sources'], $json);
-	}
-
-	return FALSE;
+	return pfb_unbound_python_sources_patch('user_unlock', pfb_dnsbl_unlock_lines());
 }
 
 
