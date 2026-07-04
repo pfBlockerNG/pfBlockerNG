@@ -2852,13 +2852,13 @@ def test_validate_log_inner_reject_line(deployed_vm: SmokeVM, mock_feeds: _MockF
     """ADR-48 P3: the gzip pre-extraction compressed peek emits the canonical stage=inner line.
 
     Forces the inner stage through the gz ``file -bZ`` COMPRESSED-PEEK sub-path
-    (reason=compressed_mime_not_allowed). The zip POST-EXTRACTION sub-path
-    cannot be forced live: the re-run probes ``$input[1]`` = the ORIGINAL
-    archive (the extracted file rides in the legacy-unused ``$input[0]``), so
-    it always passes for a valid zip -- a pre-existing no-op tracked in issue
-    #808 (probe-target fix = ADR-46 inner-content scope, not ADR-48's
-    message-only scope). The first fan-out proved it live: a valid zip wrapping
-    a PDF payload produced NO inner reject on either edition.
+    (reason=compressed_mime_not_allowed). The zip POST-EXTRACTION sub-path is
+    covered separately by ``test_validate_log_zip_inner_reject_line`` below --
+    before issue #808's fix the re-run probed ``$input[1]`` = the ORIGINAL
+    archive (the extracted file rode in the legacy-unused ``$input[0]``), so it
+    always passed for a valid zip; the first fan-out proved that no-op live (a
+    valid zip wrapping a PDF payload produced NO inner reject on either
+    edition). The fix repoints the probe at the extracted payload.
 
     Built INLINE: a valid gzip stream is trivially portable (any gzip writer's
     output passes ``gunzip -t``), unlike the FreeBSD-libmagic-sensitive
@@ -2926,6 +2926,88 @@ def test_validate_log_inner_reject_line(deployed_vm: SmokeVM, mock_feeds: _MockF
             raise AssertionError(
                 f"expected a NEW line matching {marker!r} in {h.PFB_LOG} after the inner-reject "
                 f"gzip Force Update; count before={before} after={after}\n"
+                f"recent pfb_validate lines actually in the log:\n{_recent_validate_lines(deployed_vm)}"
+            )
+
+
+@pytest.mark.timeout(120)
+def test_validate_log_zip_inner_reject_line(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """Issue #808: the ZIP post-extraction re-check now probes the EXTRACTED payload, not the archive.
+
+    Before the fix, the ZIP inner-content re-check called ``pfb_filter(array($file_org_esc,
+    $file_download, ...), PFB_FILTER_FILE_MIME, ...)`` -- ``$input[1]`` was
+    ``$file_download``, the ORIGINAL zip archive (already outer-MIME-allow-listed as
+    application/zip), never the extracted file. So a zip wrapping a disallowed inner
+    payload sailed through with NO inner reject -- a pure no-op observed LIVE by the
+    ADR-48 fan-out (run 28700531268) on both CE 2.8 and Plus 26.03. The fix repoints the
+    probe at ``$orig_download`` (the extracted file), so this canonical stage=inner line
+    now fires for real.
+
+    Built INLINE: a single-member zip wrapping the same "%PDF-1.4\\n" byte string the
+    sibling gzip inner-reject test uses (also tests/php/PfbFilterRejectDetailTest.php's
+    fixture) -- file(1) reliably reports application/pdf for it via the plain "%PDF-"
+    text magic. The member name avoids ".xlsx" (would route to the xlsx-extraction
+    branch instead) and the payload has no commas (the tar|sed|tr extraction pipeline
+    must pass it through byte-intact for the re-probe to see the same PDF bytes).
+
+    Given the alias is absent and no canonical inner-reject line for this feed's header
+      exists yet (delta baseline).
+    When the case Force-Updates over the zip (outer MIME gate + structural probe both
+      pass -- valid application/zip -- extraction succeeds, then the post-extraction
+      re-check probes the extracted PDF payload and rejects it),
+    Then the alias remains absent AND a NEW line matching "pfb_validate: REJECT
+      feed=<hdr>_v4 stage=inner reason=inner_mime_not_allowed detected=application/pdf
+      rc=0" appears in the pfB log.
+    """
+    header = "iss808zin"
+    entry_bytes = b"%PDF-1.4\n"
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("payload.pdf", entry_bytes)
+    zip_bytes = buf.getvalue()
+
+    # On-box guards (skip-if-inconclusive): the outer gate must route to the ZIP
+    # branch at all, and the extracted-content probe must actually see application/pdf.
+    box_outer_mime = _box_mime_type(deployed_vm, zip_bytes)
+    if box_outer_mime != "application/zip":
+        pytest.skip(
+            f"zip bytes produced {box_outer_mime!r} on this box's file -b (not application/zip); "
+            f"the outer gate would not route to the ZIP branch — test inconclusive"
+        )
+    box_inner_mime = _box_mime_type(deployed_vm, entry_bytes)
+    if box_inner_mime != "application/pdf":
+        pytest.skip(
+            f"PDF payload produced {box_inner_mime!r} on this box's file -b (not application/pdf); "
+            f"the extracted-content probe would not reject — test inconclusive"
+        )
+
+    feed_url = mock_feeds.register("iss808_zip_inner.zip", zip_bytes)
+    spec = h.IpCase(aliasname=header, feed_url=feed_url, header=header, family="v4")
+    # feed= carries the on-box header, which the package suffixes with the
+    # address family (_v4) -- see the structural test's docstring.
+    marker = (
+        f"pfb_validate: REJECT feed={header}_v4 stage=inner reason=inner_mime_not_allowed detected=application/pdf rc=0"
+    )
+
+    # Given -- alias absent + delta baseline for this feed's canonical line.
+    assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the inner-reject zip feed"
+    before = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+
+    with h.CaseContext(deployed_vm, spec):
+        # When -- Force Update; the zip is structurally valid but the extracted-payload
+        # re-check rejects its inner PDF content.
+        tables_after = h.pfctl_tables(deployed_vm)
+        assert spec.alias not in tables_after, (
+            f"expected {spec.alias!r} absent after the inner-reject zip (post-extraction "
+            f"re-check must reject), found it present — tables: {tables_after}"
+        )
+        # Then -- a NEW canonical reject line was logged.
+        after = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+        if not (after > before):
+            raise AssertionError(
+                f"expected a NEW line matching {marker!r} in {h.PFB_LOG} after the inner-reject "
+                f"zip Force Update; count before={before} after={after}\n"
                 f"recent pfb_validate lines actually in the log:\n{_recent_validate_lines(deployed_vm)}"
             )
 
