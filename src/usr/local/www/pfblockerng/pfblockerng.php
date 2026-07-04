@@ -698,11 +698,7 @@ function pfblockerng_download_extras($timeout=600, $type='') {
 	if ($type == 'blacklist') {
 		print "{$pfb_return}";
 	} else {
-		if ($pfb_error) {
-			return FALSE;
-		} else {
-			return TRUE;
-		}
+		return !$pfb_error;
 	}
 }
 
