@@ -1218,11 +1218,22 @@ def test_log_settings_section_redesign_render(webui: WebUI, php_error_log_guard:
       (ABSENT: old design, before/after evidence). ``php_error_log_guard`` enrolls this GET
       in the module-level no-growth sweep.
 
-    Source-inspection proof of fail-before/pass-after:
+    Source-inspection proof of fail-before/pass-after (verified against
+    ``pfblockerng_general.php`` ~lines 445-478 in this worktree):
     - PRESENT markers ("rolling cap", "discards that period", "cushion for remote log
-      shippers", ">Max lines<", ">Schedule<", ">Keep lines<") exist ONLY in the new
-      PHP code (the intro ``Form_StaticText`` and header ``Form_Group`` rows); they are
-      absent from ``origin/devel``, so the test FAILS on the old code and PASSES after.
+      shippers") come from the intro ``Form_StaticText`` — one column-purpose ``<ul>``,
+      absent from ``origin/devel``.
+    - PRESENT markers (the full header-cell markup
+      ``form-control-static hidden-xs"><strong>Max lines</strong>`` / Schedule / Keep
+      lines) come ONLY from the per-category header ``Form_Group`` rows
+      (``Form_StaticText('', '<p class="form-control-static hidden-xs"><strong>...
+      </strong></p>')``). A bare ``>Max lines<`` substring is NOT sufficient: the intro
+      ``<ul>`` also renders ``<li><strong>Max lines</strong> &mdash; ...`` (no
+      ``hidden-xs``, no ``form-control-static``), so it satisfies the old bare needle
+      even with every header row deleted — the full markup needle only matches the
+      header cell. (The ``pfb-loghdr`` class is NOT asserted for the same reason: its
+      name also appears in the intro's ``<style>`` block, so it can't prove a header
+      row rendered.)
     - ABSENT markers ("</strong> Log", "Unified Log") exist ONLY in the old
       ``setHelp("Default: <strong>20000<br />{$descr}</strong> Log")`` calls and the old
       ``'Unified Log'`` key; they are absent from the new code, so the test PASSES after
@@ -1241,9 +1252,17 @@ def test_log_settings_section_redesign_render(webui: WebUI, php_error_log_guard:
     ):
         assert needle in body, f"Log Settings intro wording {needle!r} missing — redesign intro not rendered"
 
-    # PRESENT: column headers (emitted by the per-category header Form_Group rows).
-    for needle in (">Max lines<", ">Schedule<", ">Keep lines<"):
-        assert needle in body, f"Log Settings column header {needle!r} missing — header rows not rendered"
+    # PRESENT: the per-category header Form_Group rows. A bare ">Max lines<" substring is
+    # ALSO satisfied by the intro <ul> ("<li><strong>Max lines</strong> ...") — dropping every
+    # header row entirely would still pass that needle. Assert the full header-cell HTML
+    # instead — the intro carries neither "hidden-xs" nor "form-control-static". (Don't
+    # assert the "pfb-loghdr" class: its name also appears in the intro's <style> block.)
+    for needle in (
+        'form-control-static hidden-xs"><strong>Max lines</strong>',
+        'form-control-static hidden-xs"><strong>Schedule</strong>',
+        'form-control-static hidden-xs"><strong>Keep lines</strong>',
+    ):
+        assert needle in body, f"Log Settings header cell {needle!r} missing — header rows not rendered"
 
     # PRESENT: field names spanning all four categories — no control dropped.
     for field_name in (
