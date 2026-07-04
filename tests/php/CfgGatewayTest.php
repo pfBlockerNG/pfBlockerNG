@@ -75,6 +75,7 @@ final class CfgGatewayTest extends TestCase
 			'pfb_dnsbl_nonat'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_nonat',
 			'pfb_reuse'        => 'installedpackages/pfblockerng/config/0/pfb_reuse',
 			'pfb_hsts'         => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts',
+			'pfb_feed_sanity'  => 'installedpackages/pfblockerng/config/0/pfb_feed_sanity',
 		];
 
 		foreach ($toggle_fields as $key => $path) {
@@ -104,6 +105,7 @@ final class CfgGatewayTest extends TestCase
 			'pfb_dnsbl_nonat'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_nonat',
 			'pfb_reuse'        => 'installedpackages/pfblockerng/config/0/pfb_reuse',
 			'pfb_hsts'         => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts',
+			'pfb_feed_sanity'  => 'installedpackages/pfblockerng/config/0/pfb_feed_sanity',
 		];
 
 		foreach ($toggle_fields as $key => $path) {
@@ -272,6 +274,27 @@ final class CfgGatewayTest extends TestCase
 		// When/Then: returns Off (default '').
 		$result = PfbConfig::read('enable_cb');
 		$this->assertSame(PfbToggle::Off, $result, 'enable_cb absent -> Off (default)');
+	}
+
+	/**
+	 * ADR-49: pfb_feed_sanity absent key returns Off — proves the scan is
+	 * unreachable (never consulted) on an existing install that predates the
+	 * feature, exactly like a brand-new install (no grandfather seed needed).
+	 *
+	 * Scenario:
+	 *   Background: config[.../pfb_feed_sanity] is unset (feature is new).
+	 *     Given no seed.
+	 *     When PfbConfig::read('pfb_feed_sanity').
+	 *     Then PfbToggle::Off is returned (default '').
+	 */
+	public function testReadReturnsRegisteredDefaultForPfbFeedSanityAbsentKey(): void
+	{
+		// Before: key absent.
+		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/pfb_feed_sanity'));
+
+		// When/Then: returns Off (default '').
+		$result = PfbConfig::read('pfb_feed_sanity');
+		$this->assertSame(PfbToggle::Off, $result, 'pfb_feed_sanity absent -> Off (default)');
 	}
 
 	public function testReadReturnsRegisteredDefaultForPfbKeepAbsentKey(): void
@@ -848,6 +871,8 @@ final class CfgGatewayTest extends TestCase
 			'pfb_software_check',
 			'pfb_feed_internal_filter',
 			'pfb_feed_internal_allowlist',
+			// ADR-49: opt-in plain-text feed sanity scan toggle
+			'pfb_feed_sanity',
 			'pfb_reuse',
 			// ADR-40: alias-table apply mode + batch size
 			'pfb_alias_delta_mode',

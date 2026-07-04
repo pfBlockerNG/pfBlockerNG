@@ -101,6 +101,8 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerng/config/0/pfb_software_check',
 		'installedpackages/pfblockerng/config/0/pfb_feed_internal_filter',
 		'installedpackages/pfblockerng/config/0/pfb_feed_internal_allowlist',
+		// ADR-49: opt-in plain-text feed sanity scan toggle
+		'installedpackages/pfblockerng/config/0/pfb_feed_sanity',
 		'installedpackages/pfblockerng/config/0/pfb_reuse',
 		// ADR-40: alias-table apply mode + batch size
 		'installedpackages/pfblockerng/config/0/pfb_alias_delta_mode',

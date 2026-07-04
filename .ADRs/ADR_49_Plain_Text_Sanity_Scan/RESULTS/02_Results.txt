@@ -1,0 +1,194 @@
+================================================================================
+PHASE 2 RESULTS — pfb_feed_sanity PfbConfig field + wire the gate (default-off)
+================================================================================
+
+REGISTRY ENTRY (pfblockerng_extra.inc, pfb_cfg_registry(), $gen section)
+--------------------------------------------------------------------------
+Inserted grouped with the other pfb_feed_* toggles (after pfb_feed_internal_
+allowlist, before pfb_reuse):
+
+    // ADR-49: opt-in plain-text feed sanity scan. Checkbox 'on'|''(off).
+    // Default off (absent = off = today's behaviour: the scan never runs).
+    'pfb_feed_sanity' => [
+        'section'       => $gen,
+        'default'       => '',                       // absent -> Off (new-install default too)
+        'read_adapter'  => 'pfb_cfg_toggle_read',
+        'write_adapter' => 'pfb_cfg_toggle_write',
+        'since'         => '4.0.0',
+    ],
+
+No grandfather seed: the scan is new behaviour, so an absent key ⇒ Off is
+identical for an existing install AND a brand-new one (unlike
+pfb_alias_delta_mode's ADR-40 seed, which had to diverge new-install vs
+upgrade defaults).
+
+$registeredPaths (tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php):
+added 'installedpackages/pfblockerng/config/0/pfb_feed_sanity' next to the
+sibling pfb_feed_* entries.
+
+$inventory (tests/php/CfgGatewayTest.php, testInventoryCompletenessAllKnown
+KeysAccountedFor): added 'pfb_feed_sanity' next to the sibling pfb_feed_*
+keys (config-gateway.md checklist step 5).
+
+WIRE LOCATION
+-------------
+src/usr/local/pkg/pfblockerng/pfblockerng.inc, inside pfb_download(),
+immediately after the FILE_MIME accept block (post-Phase-1 line numbers:
+accept block at 9471-9475; gate inserted at 9477-9491, right before the
+"Create update file markers" comment):
+
+    $file_type = pfb_filter(array(...), PFB_FILTER_FILE_MIME, 'pfb_download', '', FALSE, $reject_detail);
+    if (!$file_type) {
+        pfb_validate_log($header, 'mime', 'mime_not_allowed', pfb_reject_detail_summary($reject_detail));
+        return FALSE;
+    }
+
+    // ADR-49: opt-in plain-text sanity scan on accepted text feeds. Flag check
+    // FIRST -- default-off short-circuits before the MIME check and the file
+    // read, so an off install is byte-for-byte unchanged (ADR-28 conv 2).
+    if (PfbConfig::read('pfb_feed_sanity') === PfbToggle::On &&
+        in_array($file_type, array('text/plain', 'text/html', 'text/csv'), TRUE)) {
+        // Read UP TO 8 KiB -- a cap, not a minimum; a shorter feed is read whole.
+        $pfb_sanity_sample = (string) @file_get_contents($file_download, FALSE, NULL, 0, 8192);
+        $pfb_sanity = pfb_text_sanity($pfb_sanity_sample);
+        if ($pfb_sanity !== NULL) {
+            pfb_validate_log($header, 'plaintext', $pfb_sanity, basename($file_download));
+            unlink_if_exists($file_download);
+            return FALSE;
+        }
+    }
+
+    // Create update file markers on new downloads available
+
+Sampled var: $file_download. Confirmed by reading the surrounding code —
+this is the branch entered only when `file_exists($file_download) &&
+$http_status in {200,221,226}` (the just-downloaded, accepted body); the
+gzip/x-bzip2/zip/7z decompression branches are `elseif ($file_type ==
+'application/...')` arms further down (line ~9498+), all mutually exclusive
+with the text/plain|html|csv values this gate matches on. So for every
+$file_type this gate can see, $file_download IS the final on-disk text body
+-- nothing downstream re-decodes it first.
+
+Left-to-right && short-circuit: the flag comparison is the FIRST operand,
+so `PfbConfig::read('pfb_feed_sanity') === PfbToggle::On` is evaluated
+before the `in_array($file_type, ...)` MIME check and long before the
+`file_get_contents()` read -- with the flag off (default), neither the MIME
+membership test nor the file read nor pfb_text_sanity() ever executes.
+This satisfies the ADR §7 reject criterion verbatim ("the scan ever runs
+with pfb_feed_sanity off").
+
+MIME scope is exactly {'text/plain', 'text/html', 'text/csv'} -- no
+application/json, application/x-ndjson, or inode/x-empty. The 8192 in the
+file_get_contents() call is the ONLY size literal in the gate and is a cap
+(4th param = length); no minimum-size check was added.
+
+Reject stage is the literal string 'plaintext' (ADR-48's stage vocabulary),
+mirroring the existing 'mime'/'structural'/'member' stage call sites already
+in pfb_download(). No new log format invented.
+
+CFGGATEWAYTEST RED -> GREEN EVIDENCE
+--------------------------------------
+Round-trip: pfb_feed_sanity was folded into the existing table-driven
+testToggleFieldsRoundTripOn()/Off() (added to the shared $toggle_fields
+map) alongside its sibling PfbToggle fields -- same 'on'/'' round-trip
+proof, no new test method needed for that half.
+
+Default-absent: a NEW dedicated test, matching the house style of
+testReadReturnsRegisteredDefaultForToggleAbsentKey():
+
+    testReadReturnsRegisteredDefaultForPfbFeedSanityAbsentKey()
+        Given: config_get_path(.../pfb_feed_sanity) is NULL (absent).
+        When:  PfbConfig::read('pfb_feed_sanity').
+        Then:  PfbToggle::Off is returned.
+
+RED proof (registry entry temporarily stashed via
+`git stash push -- .../pfblockerng_extra.inc`, pre-change code):
+
+    $ vendor/bin/phpunit --filter 'FeedSanity|ToggleFieldsRoundTrip'
+    EEE                                                        3 / 3 (100%)
+    There were 3 errors:
+    1) CfgGatewayTest::testToggleFieldsRoundTripOn
+    InvalidArgumentException: PfbConfig: key 'pfb_feed_sanity' is not in
+    the field registry. Use config_get_path() directly for foreign/
+    unregistered keys.
+    2) CfgGatewayTest::testToggleFieldsRoundTripOff  -- same error
+    3) CfgGatewayTest::testReadReturnsRegisteredDefaultForPfbFeedSanityAbsentKey -- same error
+    ERRORS!
+    Tests: 3, Assertions: 39, Errors: 3.
+
+All 3 failed for the exact reason the change addresses (unregistered key ->
+InvalidArgumentException, the ADR-29 gateway contract). Registry entry
+restored (`git stash pop`) -> GREEN:
+
+    $ vendor/bin/phpunit --filter 'FeedSanity|ToggleFieldsRoundTrip'
+    ...                                                         3 / 3 (100%)
+    OK (3 tests, 44 assertions)
+
+WIRING PROOF -- DEFERRED TO PHASE 3 (documented split, not coverage theater)
+------------------------------------------------------------------------------
+pfb_download() runs shell/exec (touch/exec/rename/tar/etc.) and is NOT
+off-appliance unit-testable -- same split as ADR-42/45/48. The wiring's own
+red->green (flag-on rejects an HTML-error text feed with stage=plaintext;
+flag-off/default imports it unchanged; a healthy text feed still imports
+with the flag on) is Phase 3's live-VM smoke, per ADR-49 §6 Phase 3 /
+CLAUDE.md's test-coverage mandate. What IS covered here is Phase 2's own
+unit-testable surface: the field's registration, round-trip, and default-
+absent contract (above) -- no pfb_download() unit test was faked.
+
+PHPUNIT / PHPSTAN / PHPCS SUMMARIES
+------------------------------------
+$ vendor/bin/phpunit
+    Tests: 2151, Assertions: 17835, Skipped: 4 (pre-existing, unrelated --
+    e.g. FileMtimeTest's macOS VFS-staleness skip). FeedCorpusSurveyTest is
+    green (the 5 non-feed corpus samples were already excluded in the P1
+    commit b2d87b29, which is the base of this phase's work).
+
+$ php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+$ php -l src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+    No syntax errors detected (same pre-existing PHP-8.5-vs-8.3 deprecation
+    notices for unrelated legacy functions, unchanged by this diff).
+
+$ vendor/bin/phpstan analyse --memory-limit=1G
+    [OK] No errors.
+
+$ vendor/bin/phpcs --standard=phpcs.xml.dist src/
+    Clean (no output) -- RequireConfigGateway passes: pfb_feed_sanity is
+    registered, present in $registeredPaths, and read exclusively via
+    PfbConfig::read() in pfb_download().
+
+DIFF SCOPE
+----------
+$ git diff --stat
+    src/usr/local/pkg/pfblockerng/pfblockerng.inc                          | 15 +++++++++++++
+    src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc                    | 10 +++++++++
+    tests/php/CfgGatewayTest.php                                          | 25 ++++++++++++++++++++++
+    tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php   |  2 ++
+    4 files changed, 52 insertions(+)
+Exactly the four scoped files. No www/ or GUI change.
+
+FOR PHASE 3 SMOKE
+-----------------
+- Reject shape to grep (ADR-48 canonical RENDERED line, from
+  pfb_validate_log_line()):
+      pfb_validate: REJECT feed=<header>_v4 stage=plaintext reason=<token> detected=<basename>
+  Family-suffix gotcha (per the ADR-48 handoff): the on-box log line renders
+  the header with its family suffix (e.g. "_v4"), not the bare feed name --
+  grep for "_v4" (or "_v6"), not the raw config header string. The line is
+  htmlspecialchars()-escaped (control bytes -> space, then htmlspecialchars);
+  a plain grep for literal text is fine, but a value containing HTML-special
+  chars (unlikely for <token>/<basename>) would render escaped.
+  <token> is one of: nul_bytes | html_error_page | below_min_content
+  (pfb_text_sanity()'s verdict, Phase 1). <basename> is basename($file_download).
+- The flag is config-only, no GUI: smoke sets it directly via
+  PfbConfig::write('pfb_feed_sanity', PfbToggle::On) (or the raw config.xml
+  'on' token) -- there is no www/ checkbox to click.
+- Confirm on-FreeBSD file(1) classification of whatever HTML-error-page
+  fixture Phase 3 introduces actually lands in {text/plain, text/html,
+  text/csv} (the MIME gate classifies via on-box file(1), not the mock
+  server's Content-Type header) -- per ADR-49 §5's "Smoke fixture platform
+  check" constraint.
+
+COMMIT / PUSH
+-------------
+Commit: pfblockerng: wire opt-in plain-text sanity scan on text feeds (ADR-49 P2)
+Pushed directly to adr/49-plain-text-sanity-scan.

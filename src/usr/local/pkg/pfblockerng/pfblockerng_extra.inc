@@ -541,6 +541,16 @@ function pfb_cfg_registry(): array
 			'since'         => '3.1.0',
 		],
 
+		// ADR-49: opt-in plain-text feed sanity scan. Checkbox 'on'|''(off).
+		// Default off (absent = off = today's behaviour: the scan never runs).
+		'pfb_feed_sanity' => [
+			'section'       => $gen,
+			'default'       => '',                       // absent -> Off (new-install default too)
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'since'         => '4.0.0',
+		],
+
 		// Reuse blocklists across updates: 'on' | '' (checkbox). Default ''.
 		'pfb_reuse' => [
 			'section'       => $gen,
