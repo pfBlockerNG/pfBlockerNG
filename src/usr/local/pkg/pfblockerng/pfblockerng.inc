@@ -9440,7 +9440,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 					return FALSE;
 				}
 				exec("/usr/bin/tar -xzf {$file_dwn_esc} --strip=1 -C {$pfb['geoipshare']} >/dev/null 2>&1");
-				unlink_if_exists($file_dwn_esc);
+				unlink_if_exists($file_download);
 				return TRUE;
 			}
 			elseif ($type == 'asn') {
@@ -9449,7 +9449,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				// Update ASN Lookup table definitions
 				exec("{$pfb['script']} asn_table {$elog}");
 
-				unlink_if_exists($file_dwn_esc);
+				unlink_if_exists($file_download);
 				return TRUE;
 			}
 			elseif ($type == 'blacklist') {
