@@ -8529,13 +8529,45 @@ function &pfb_ip_render_memos(): array {
 }
 
 
+// Test-only reset hook for pfb_ip_render_memos()'s function-static store (issue #809
+// review, T1). Production never needs this (see the docblock above -- a page render is
+// one PHP process, and every memo key is content-derived, so cross-table reuse within
+// that one load is correct by design). PHPUnit, though, runs every test method in ONE
+// process, so without an explicit per-test reset a later test can silently inherit an
+// earlier test's seeded memo entries -- a sibling-order leak that made a "covered rows
+// survive the backing dirs disappearing" test a no-op (it reused a prior test's seed
+// instead of exercising its own pfb_ip_prefetch() call). Mirrors
+// pfb_dnsbl_prefetch_store(NULL)'s reset contract for the DNSBL-side store.
+function pfb_ip_render_memos_reset(): void {
+	$memos = &pfb_ip_render_memos();
+	$memos = array('validate' => array(), 'miss' => array());
+}
+
+
+// Shared write-outcome check for a batched-prefetch pattern-file write (issue #809
+// review, B3/R1). file_put_contents() returns FALSE on total failure, or the number of
+// bytes actually written -- a partial write (e.g. a full disk) returns a SHORT byte
+// count, not FALSE, so a bare `=== FALSE` check alone misses it. Comparing the return
+// value against strlen($data) catches both failure shapes; only an exact full-length
+// write counts as complete. Shared by pfb_ip_prefetch_grep_lines() and
+// pfb_dnsbl_prefetch_grep() so both pattern-file writers apply the identical rule.
+function pfb_prefetch_pattern_file_write_ok($written, string $data): bool {
+	return $written !== FALSE && $written === strlen($data);
+}
+
+
 // Run ONE batched `grep -f <patternfile>` pass (issue #809 Phase 3b), sharing the pattern-
 // file plumbing across every IP-table batched round (validate / miss-header / aliastables)
 // below. Returns every matched line (not a first-match map, unlike pfb_dnsbl_prefetch_grep())
 // since callers here attribute possibly-many lines per candidate themselves (see
 // pfb_ip_prefetch_last_match()). The pattern-file path is inserted between $cmd_prefix and
 // $cmd_suffix verbatim (no sprintf/format-string parsing of caller-supplied paths).
-function pfb_ip_prefetch_grep_lines(string $cmd_prefix, string $cmd_suffix, array $patterns): array {
+//
+// B3/R1 (issue #809 review): returns NULL -- distinct from a genuine empty-array no-match
+// result -- when the pattern file itself could not be created or fully written (a full or
+// read-only temp dir). Every caller must treat NULL as "this batched pass did not run" and
+// leave the rows it would have covered UNSEEDED, never seed a false negative from it.
+function pfb_ip_prefetch_grep_lines(string $cmd_prefix, string $cmd_suffix, array $patterns): ?array {
 
 	$lines = array();
 	if (empty($patterns)) {
@@ -8544,12 +8576,14 @@ function pfb_ip_prefetch_grep_lines(string $cmd_prefix, string $cmd_suffix, arra
 
 	$pattern_file = tempnam(sys_get_temp_dir(), 'pfb_ip_prefetch_');
 	if ($pattern_file === FALSE) {
-		return $lines;
+		return NULL;
 	}
 
 	try {
-		if (file_put_contents($pattern_file, implode("\n", $patterns) . "\n") === FALSE) {
-			return $lines;
+		$data = implode("\n", $patterns) . "\n";
+		$written = file_put_contents($pattern_file, $data);
+		if (!pfb_prefetch_pattern_file_write_ok($written, $data)) {
+			return NULL;
 		}
 
 		$pattern_file_esc = escapeshellarg($pattern_file);
@@ -8571,13 +8605,21 @@ function pfb_ip_prefetch_grep_lines(string $cmd_prefix, string $cmd_suffix, arra
 // A line belongs to $raw_prefix under either shape grep can emit:
 //   - unprefixed (the `find` pipeline matched exactly one file): the line IS the file
 //     content, so a direct prefix match applies;
-//   - file-prefixed (more than one file matched): grep emits "path:content" -- a path never
-//     contains ':' and never starts with a digit/hex character, so the substring after the
-//     FIRST ':' is unambiguously the content, and that is what must carry the prefix.
+//   - file-prefixed (more than one file matched): grep emits "path:content", where the
+//     path is one of THIS module's own absolute glob results -- always containing '/' --
+//     so the substring after the FIRST ':' is unambiguously the content, and that is what
+//     must carry the prefix.
 // This deliberately preserves grep's own prefix-match quirk (an anchored `^1\.2\.3\.4`
 // pattern also matches content beginning `1.2.3.45`) -- the per-row exec has the identical
 // quirk, so reproducing it (rather than an exact-match) is what keeps this behaviour-
 // identical to the code it replaces.
+//
+// N1 (issue #809 review): the colon-fallback used to apply on ANY ':' in the line, which
+// misattributed an UNPREFIXED IPv6 content line (its OWN ':' is part of the address, not a
+// path separator) whenever the tail after that first ':' happened to equal $raw_prefix.
+// Guarded now by requiring the segment BEFORE that ':' to look like a path (contain '/') --
+// true of every real "path:content" line this module ever greps, and never true of a bare
+// IPv6 literal.
 function pfb_ip_prefetch_last_match(array $lines, string $raw_prefix): ?string {
 
 	$match = NULL;
@@ -8587,7 +8629,9 @@ function pfb_ip_prefetch_last_match(array $lines, string $raw_prefix): ?string {
 			continue;
 		}
 		$colon_pos = strpos($line, ':');
-		if ($colon_pos !== FALSE && str_starts_with(substr($line, $colon_pos + 1), $raw_prefix)) {
+		if ($colon_pos !== FALSE &&
+		    strpos(substr($line, 0, $colon_pos), '/') !== FALSE &&
+		    str_starts_with(substr($line, $colon_pos + 1), $raw_prefix)) {
 			$match = $line;
 		}
 	}
@@ -8596,14 +8640,30 @@ function pfb_ip_prefetch_last_match(array $lines, string $raw_prefix): ?string {
 
 
 // Batched sibling of find_reported_header() (issue #809 Phase 3b): resolves every host in
-// $hosts against the SAME $pfbfolder/$geoip in at most TWO batched grep passes (Round A:
-// exact match; Round B: first-octet/prefix + CIDR match) instead of one-to-two exec() calls
-// PER host. Returns a map host => $pfb_query (['Unknown','Unknown'] on a total miss,
-// matching find_reported_header()'s own return shape).
-function pfb_find_reported_headers(array $hosts, $pfbfolder, $geoip = FALSE): array {
+// $hosts against the SAME $pfbfolder/$geoip via one exact-match Round-A pass over ALL
+// hosts, followed -- for any host Round A missed -- by Round B: one grep per DISTINCT
+// first-octet (v4) / prefix (v6) group among the still-missing hosts (issue #809 review,
+// R3: best case one shared pass when every miss shares a prefix, worst case one PER HOST
+// under fully-diverse prefixes -- corrects an earlier "at most two batched grep passes"
+// docblock, which did not account for Round B's per-group multiplicity). At most two
+// batched exec()s touch any ONE host (its Round-A pass, and -- if missed -- its own
+// Round-B group's pass), replacing one-to-two exec() calls run independently per host.
+// Returns a map host => $pfb_query (['Unknown','Unknown'] on a total miss, matching
+// find_reported_header()'s own return shape).
+//
+// B3 (issue #809 review): Round A's batched pattern-file grep
+// (pfb_ip_prefetch_grep_lines()) can fail (its pattern file could not be created/written)
+// -- a NULL sentinel distinct from a genuine zero-hit round. On that failure this function
+// does NOT run Round B for any host in $hosts (a failed batching layer means "could not
+// resolve", never "resolved to nothing") and reports every host via the $grep_failed
+// out-parameter (keyed by host, value TRUE) so the caller (pfb_ip_prefetch()) can leave
+// them entirely UNSEEDED rather than caching this function's placeholder Unknown/Unknown
+// as a false negative.
+function pfb_find_reported_headers(array $hosts, $pfbfolder, $geoip = FALSE, ?array &$grep_failed = NULL): array {
 	global $pfb;
 
 	$hosts = array_values(array_unique($hosts));
+	$grep_failed = array();
 	$out = array();
 	foreach ($hosts as $host) {
 		$out[$host] = array('Unknown', 'Unknown');
@@ -8621,6 +8681,11 @@ function pfb_find_reported_headers(array $hosts, $pfbfolder, $geoip = FALSE): ar
 		$patterns[] = '^' . str_replace('.', '\.', $host);
 	}
 	$lines = pfb_ip_prefetch_grep_lines("{$pfb['grep']} -s -f", "{$pfbfolder} 2>&1", $patterns);
+
+	if ($lines === NULL) {
+		$grep_failed = array_fill_keys($hosts, TRUE);
+		return $out;
+	}
 
 	$missed = array();
 	foreach ($hosts as $host) {
@@ -8640,6 +8705,15 @@ function pfb_find_reported_headers(array $hosts, $pfbfolder, $geoip = FALSE): ar
 	// octet (v4) / prefix (v6) query string -- find_reported_header()'s own query for that
 	// host -- so hosts sharing one query run it exactly ONCE, then share pfb_match_
 	// reported_cidr()'s CIDR walk over that one shared grep-output array.
+	//
+	// B4 (issue #809 review): the group key is qualified by address family ('4|'/'6|'
+	// prefix) -- a bare $query alone (e.g. "10") collides between a v4 host ("10.0.0.5")
+	// and an unrelated v6 host ("10::1"): both would fall into ONE shared group keyed
+	// "10", and whichever host's entry created that group silently handed its
+	// v4_type/grep pattern to the OTHER family's host too. 'query'/'v4_type' are stored IN
+	// the group array and read back from there (never re-derived from the qualified key),
+	// which also sidesteps strstr()'s FALSE-return being coerced to an int-0 array key for
+	// a segmentless host.
 	$groups = array();
 	foreach ($missed as $host) {
 		$v4_type = TRUE;
@@ -8649,17 +8723,18 @@ function pfb_find_reported_headers(array $hosts, $pfbfolder, $geoip = FALSE): ar
 		} else {
 			$query = strstr($host, '.', TRUE);
 		}
-		if (!isset($groups[$query])) {
-			$groups[$query] = array('v4_type' => $v4_type, 'hosts' => array());
+		$gkey = ($v4_type ? '4|' : '6|') . $query;
+		if (!isset($groups[$gkey])) {
+			$groups[$gkey] = array('v4_type' => $v4_type, 'query' => $query, 'hosts' => array());
 		}
-		$groups[$query]['hosts'][] = $host;
+		$groups[$gkey]['hosts'][] = $host;
 	}
 
-	foreach ($groups as $query => $group) {
+	foreach ($groups as $group) {
 		if ($group['v4_type']) {
-			$query_esc = escapeshellarg("^{$query}\.");
+			$query_esc = escapeshellarg("^{$group['query']}\.");
 		} else {
-			$query_esc = escapeshellarg("^{$query}:");
+			$query_esc = escapeshellarg("^{$group['query']}:");
 		}
 
 		$result = array();
@@ -8729,6 +8804,12 @@ function pfb_ip_prefetch(array $rows): void {
 		$patterns = array_values(array_unique($patterns));
 
 		$lines = pfb_ip_prefetch_grep_lines("{$group['file_cmd']} | xargs {$pfb['grep']} -f", '2>&1', $patterns);
+		if ($lines === NULL) {
+			// B3 (issue #809 review): this group's pattern file could not be created/
+			// written -- leave every row in it UNSEEDED (never cache a false ''/no-hit)
+			// so convert_ip_log()'s own per-row exec fallback runs for them instead.
+			continue;
+		}
 
 		foreach ($group['entries'] as $cmd => $raw_ip) {
 			$memos['validate'][$cmd] = pfb_ip_prefetch_last_match($lines, $raw_ip) ?? '';
@@ -8765,18 +8846,30 @@ function pfb_ip_prefetch(array $rows): void {
 		$hosts_by_folder[$row['folder']][$row['host']] = TRUE;
 	}
 
+	// B3 (issue #809 review): a host whose Round-A batching failed for its folder-group
+	// is reported via $grep_failed and excluded here entirely -- it never enters
+	// $headers_by_host_folder, so it is skipped by BOTH rounds below and stays unseeded.
 	$headers_by_host_folder = array();
 	foreach ($hosts_by_folder as $folder => $hosts) {
-		$headers = pfb_find_reported_headers(array_keys($hosts), $folder, FALSE);
+		$headers = pfb_find_reported_headers(array_keys($hosts), $folder, FALSE, $grep_failed);
 		foreach ($headers as $host => $pfb_query) {
+			if (isset($grep_failed[$host])) {
+				continue;
+			}
 			$headers_by_host_folder["{$host}|{$folder}"] = $pfb_query;
 		}
 	}
 
-	// --- Aliastables round: ONE batched pass across every miss row --------------------
+	// --- Aliastables round: ONE batched pass across every STILL-resolved miss row -----
+	// A miss_key absent from $headers_by_host_folder (its find_reported_headers() call
+	// failed above) is dropped from this round too -- left unseeded rather than seeded
+	// with a wrong/placeholder value.
 	$alias_patterns  = array();
 	$eval_new_by_key = array();
 	foreach ($miss_rows as $miss_key => $row) {
+		if (!array_key_exists($miss_key, $headers_by_host_folder)) {
+			continue;
+		}
 		$pfb_query = $headers_by_host_folder[$miss_key];
 		$eval_new = ($pfb_query[1] == 'Unknown') ? 'Not listed!' : $pfb_query[1];
 		$eval_new_by_key[$miss_key] = $eval_new;
@@ -8789,10 +8882,15 @@ function pfb_ip_prefetch(array $rows): void {
 		'2>&1',
 		$alias_patterns
 	);
+	if ($alias_lines === NULL) {
+		// B3: the aliastables pattern file could not be created/written -- leave every
+		// remaining row unseeded (per-row fallback fires for all of them).
+		return;
+	}
 
-	foreach ($miss_rows as $miss_key => $row) {
+	foreach ($eval_new_by_key as $miss_key => $eval_new) {
 		$pfb_query    = $headers_by_host_folder[$miss_key];
-		$raw_validate = pfb_ip_prefetch_last_match($alias_lines, $eval_new_by_key[$miss_key]) ?? '';
+		$raw_validate = pfb_ip_prefetch_last_match($alias_lines, $eval_new) ?? '';
 		$memos['miss'][$miss_key] = array($pfb_query, $raw_validate);
 	}
 }
@@ -12604,6 +12702,18 @@ function pfb_dnsbl_prefetch_store(?array $seed = NULL): ?array {
 // genuine miss, and the consult sites must serve that cached '' rather than falling back
 // to a per-row exec (which would just re-run the identical grep for the same answer).
 //
+// B2 (issue #809 review): a domain is only added to 'covered' (and only contributes data/
+// zone patterns) when it VALIDATES as PFB_FILTER_DOMAIN. That filter's charset
+// ([a-zA-Z0-9_.-]) carries no live BRE metacharacter besides '.' -- the ONLY character the
+// per-row site escapes (str_replace('.', '\.', $domain)) -- and no embedded control
+// character (a fgetcsv()'d quoted field can carry a literal \r/\n). Under those
+// constraints an exact `-F` fixed-string match and the per-row escaped-BRE match select
+// the IDENTICAL lines, so batched == per-row for every covered domain. A domain that
+// fails this filter is left UNCOVERED entirely, so it falls straight through to the
+// unchanged per-row exec at pfb_dnsbl_parse_compute()'s consult sites -- exactly where a
+// domain carrying a live BRE metacharacter (which could false-match a DIFFERENT literal
+// domain under the per-row BRE, something a batched `-F` match never would) belongs.
+//
 // Seeds pfb_dnsbl_prefetch_store(); the caller (pfblockerng_alerts.php's DNSBL table
 // branch) is responsible for resetting the store once its render pass is done.
 function pfb_dnsbl_prefetch(array $qdomains) {
@@ -12613,18 +12723,21 @@ function pfb_dnsbl_prefetch(array $qdomains) {
 
 	$covered = array();
 	$data_patterns = array();
-	foreach ($qdomains as $domain) {
-		$covered[$domain] = TRUE;
-		$data_patterns[] = ",{$domain},,";
-	}
-
-	// Label-walk suffixes for every prefetched domain -- same longest-first walk as the
-	// per-row zone-grep loop in pfb_dnsbl_parse_compute() (full domain, then each suffix
-	// with the leftmost label stripped, down to the bare TLD). Suffixes shared by
-	// multiple domains are deduplicated (a single pattern/store entry serves them all).
 	$zone_covered = array();
 	$zone_patterns = array();
 	foreach ($qdomains as $domain) {
+		if (empty(pfb_filter($domain, PFB_FILTER_DOMAIN, 'pfb_dnsbl_prefetch'))) {
+			continue;
+		}
+
+		$covered[$domain] = TRUE;
+		$data_patterns[] = ",{$domain},,";
+
+		// Label-walk suffixes for this domain -- same longest-first walk as the per-row
+		// zone-grep loop in pfb_dnsbl_parse_compute() (full domain, then each suffix
+		// with the leftmost label stripped, down to the bare TLD). Suffixes shared by
+		// multiple domains are deduplicated (a single pattern/store entry serves them
+		// all).
 		$dparts = explode('.', $domain);
 		$dcnt = count($dparts);
 		for ($i = 0; $i < $dcnt; $i++) {
@@ -12637,11 +12750,25 @@ function pfb_dnsbl_prefetch(array $qdomains) {
 		}
 	}
 
+	$data = pfb_dnsbl_prefetch_grep($data_patterns, $pfb['unbound_py_data']);
+	$zone = pfb_dnsbl_prefetch_grep($zone_patterns, $pfb['unbound_py_zone']);
+
+	// B3/R1 (issue #809 review): either grep pass can fail (its pattern file could not be
+	// created/written -- a full/read-only temp dir), returning NULL rather than a genuine
+	// empty-array no-match result. Seeding only the successful half would still
+	// false-miss every domain the FAILED half was supposed to cover, so on ANY failure
+	// the store is left NULL entirely -- every consult site then falls straight through
+	// to its unchanged per-row exec, exactly as if this prefetch pass had never run.
+	if ($data === NULL || $zone === NULL) {
+		pfb_dnsbl_prefetch_store(NULL);
+		return;
+	}
+
 	pfb_dnsbl_prefetch_store(array(
 		'covered'      => $covered,
-		'data'         => pfb_dnsbl_prefetch_grep($data_patterns, $pfb['unbound_py_data']),
+		'data'         => $data,
 		'zone_covered' => $zone_covered,
-		'zone'         => pfb_dnsbl_prefetch_grep($zone_patterns, $pfb['unbound_py_zone']),
+		'zone'         => $zone,
 	));
 }
 
@@ -12660,7 +12787,13 @@ function pfb_dnsbl_prefetch(array $qdomains) {
 // is the only double comma a well-formed line contains, so a ",X,," fixed string can
 // only ever match with X in the domain slot -- field [1]. That is exactly what makes
 // "key by field [1]" select the same line the per-row `grep -shm1 ',X,,'` would.
-function pfb_dnsbl_prefetch_grep(array $patterns, string $file): array {
+//
+// B3/R1 (issue #809 review): returns NULL -- distinct from a genuine empty-array
+// no-match result -- when the pattern file itself could not be created or fully written
+// (a full or read-only temp dir). pfb_dnsbl_prefetch() must treat NULL as "this batched
+// pass did not run" and leave its store unseeded entirely, never seed a false negative
+// from it.
+function pfb_dnsbl_prefetch_grep(array $patterns, string $file): ?array {
 	global $pfb;
 
 	$result = array();
@@ -12670,12 +12803,14 @@ function pfb_dnsbl_prefetch_grep(array $patterns, string $file): array {
 
 	$pattern_file = tempnam(sys_get_temp_dir(), 'pfb_dnsbl_prefetch_');
 	if ($pattern_file === FALSE) {
-		return $result;
+		return NULL;
 	}
 
 	try {
-		if (file_put_contents($pattern_file, implode("\n", $patterns) . "\n") === FALSE) {
-			return $result;
+		$data = implode("\n", $patterns) . "\n";
+		$written = file_put_contents($pattern_file, $data);
+		if (!pfb_prefetch_pattern_file_write_ok($written, $data)) {
+			return NULL;
 		}
 
 		$pattern_file_esc	= escapeshellarg($pattern_file);
@@ -12735,11 +12870,11 @@ function pfb_dnsbl_parse($mode='daemon', $domain, $src_ip, $req_agent) {
 function pfb_dnsbl_parse_compute($mode, $domain, $src_ip, $req_agent) {
 	global $pfb;
 
-	static $alerts_db_handle = null;	// null = not yet opened; FALSE = open failed; else the SQLite3 handle
+	static $alerts_db_handle = NULL;	// NULL = not yet opened; FALSE = open failed; else the SQLite3 handle
 
 	$dnsbl_cache = FALSE;
 	if ($mode == 'alerts') {
-		if ($alerts_db_handle === null) {
+		if ($alerts_db_handle === NULL) {
 			$alerts_db_handle = pfb_open_sqlite(4, 'Query cache') ?: FALSE;
 		}
 		$db_handle = $alerts_db_handle;

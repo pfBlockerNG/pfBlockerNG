@@ -52,10 +52,32 @@ use PHPUnit\Framework\TestCase;
  *     seeded memo entries must still resolve correctly (pfb_render_memo() consults the
  *     cache, never re-execs) -- against the now-missing directories, a genuine re-exec
  *     could only return empty/'Unknown', never the correct answer asserted here.
+ *
+ *   Scenario: N1 -- pfb_ip_prefetch_last_match()'s colon-fallback false IPv6 attribution
+ *     An UNPREFIXED IPv6 content line has ':' inside the address itself, not a grep
+ *     "path:content" separator -- the fallback must not misattribute it merely because
+ *     the tail after its first ':' happens to equal some host's raw_prefix.
+ *
+ *   Scenario: B3 -- a failed batched grep pass must never seed a false negative
+ *     A child `php` process with `open_basedir` whitelisting only the repo tree (so
+ *     sys_get_temp_dir()'s real system temp dir is off-limits) genuinely fails
+ *     tempnam() -- the exact pattern-file-creation failure pfb_ip_prefetch_grep_lines()
+ *     can hit in production. pfb_ip_prefetch() must leave the affected rows entirely
+ *     UNSEEDED rather than caching a wrong/placeholder result.
+ *
+ *   Scenario: B4 -- a v4 host and a v6 host must not collide in Round-B grouping
+ *     Two hosts (one v4, one v6) whose Round-B grouping key -- strstr() up to the first
+ *     '.' or ':' -- is the textually IDENTICAL bare string must each still resolve to
+ *     their OWN family's real CIDR match, matching the per-row oracle.
+ *
+ *   R4: after a prefetch pass, no pfb_ip_prefetch_* pattern-file temp file remains --
+ *   guards the try/finally cleanup against a future regression.
  */
 #[CoversFunction('pfb_match_reported_cidr')]
 #[CoversFunction('pfb_ip_render_query')]
 #[CoversFunction('pfb_ip_render_memos')]
+#[CoversFunction('pfb_ip_render_memos_reset')]
+#[CoversFunction('pfb_prefetch_pattern_file_write_ok')]
 #[CoversFunction('pfb_ip_prefetch_grep_lines')]
 #[CoversFunction('pfb_ip_prefetch_last_match')]
 #[CoversFunction('pfb_find_reported_headers')]
@@ -96,10 +118,28 @@ final class IpPrefetchTest extends TestCase
 			'pfB_Africa', 'pfB_Antarctica', 'pfB_Asia', 'pfB_Europe',
 			'pfB_NAmerica', 'pfB_Oceania', 'pfB_SAmerica', 'pfB_Top',
 		));
+
+		// T1 (issue #809 review): pfb_ip_render_memos()'s function-static store has NO
+		// production reset by design (a page render is one PHP process, and every key is
+		// content-derived, so cross-table reuse within that one load is correct -- see
+		// its own docblock). PHPUnit, though, runs every test method in ONE process, so
+		// without an explicit per-test reset a later test can silently inherit an
+		// earlier test's seeded memo entries -- a sibling-order leak that made
+		// test_covered_rows_resolve_without_reexecuting_after_the_backing_dirs_disappear()
+		// below a no-op: it reused a PRIOR test's seed for the identical row instead of
+		// exercising its own pfb_ip_prefetch() call. Also resets the DNSBL-side store
+		// (unused by these tests, reset here purely for a clean, uniform per-test
+		// baseline) so every test starts from a known-empty baseline regardless of
+		// execution order.
+		pfb_ip_render_memos_reset();
+		pfb_dnsbl_prefetch_store(NULL);
 	}
 
 	protected function tearDown(): void
 	{
+		pfb_ip_render_memos_reset();
+		pfb_dnsbl_prefetch_store(NULL);
+
 		foreach (['pfb', 'continents'] as $g) {
 			if ($this->savedGlobals[$g] === null) {
 				unset($GLOBALS[$g]);
@@ -177,10 +217,13 @@ final class IpPrefetchTest extends TestCase
 
 	public function test_last_match_file_prefixed_multi_file_shape(): void
 	{
-		$lines = ['DenyFeedA.txt:203.0.113.0/28', 'DenyFeedB.txt:198.51.100.16/28'];
+		// Realistic grep multi-file output: an ABSOLUTE path (every folder this module
+		// greps is an absolute glob) before the ':' separator -- see N1's docblock for
+		// why the '/' matters.
+		$lines = ['/var/db/pfblockerng/deny/DenyFeedA.txt:203.0.113.0/28', '/var/db/pfblockerng/deny/DenyFeedB.txt:198.51.100.16/28'];
 		$match = pfb_ip_prefetch_last_match($lines, '198.51.100.16');
 		$this->assertSame(
-			'DenyFeedB.txt:198.51.100.16/28',
+			'/var/db/pfblockerng/deny/DenyFeedB.txt:198.51.100.16/28',
 			$match,
 			'expected the file-prefixed line (content after the first colon) to be attributed, got ' . var_export($match, true)
 		);
@@ -206,9 +249,10 @@ final class IpPrefetchTest extends TestCase
 			'expected the quirk to attribute an unprefixed longer-suffix line, got ' . var_export($unprefixed, true)
 		);
 
-		$prefixed = pfb_ip_prefetch_last_match(['DenyFeed.txt:203.0.113.45/32'], '203.0.113.4');
+		// Realistic grep multi-file output: an ABSOLUTE path before the ':' separator.
+		$prefixed = pfb_ip_prefetch_last_match(['/var/db/pfblockerng/deny/DenyFeed.txt:203.0.113.45/32'], '203.0.113.4');
 		$this->assertSame(
-			'DenyFeed.txt:203.0.113.45/32',
+			'/var/db/pfblockerng/deny/DenyFeed.txt:203.0.113.45/32',
 			$prefixed,
 			'expected the quirk to attribute a file-prefixed longer-suffix line, got ' . var_export($prefixed, true)
 		);
@@ -217,6 +261,38 @@ final class IpPrefetchTest extends TestCase
 		// match (proves this is a real prefix test, not "contains").
 		$noHit = pfb_ip_prefetch_last_match(['203.0.113.99/32'], '203.0.113.4');
 		$this->assertNull($noHit, 'expected a non-leading occurrence NOT to match, got ' . var_export($noHit, true));
+	}
+
+	/**
+	 * N1 (issue #809 review): the colon-fallback used to fire on ANY ':' in the line,
+	 * which misattributes an UNPREFIXED IPv6 content line (its OWN ':' is part of the
+	 * address, not a "path:content" separator) whenever the tail after that first ':'
+	 * happens to equal $raw_prefix. Guarded now by requiring the segment before that ':'
+	 * to look like a path (contain '/') -- true of every real grep path here, never true
+	 * of a bare IPv6 literal.
+	 */
+	public function test_last_match_does_not_misattribute_an_unprefixed_ipv6_content_line_via_the_colon_fallback(): void
+	{
+		// Given: an unprefixed IPv6 content line whose tail-after-first-colon equals a
+		// host's raw_prefix.
+		// When/Then: it must NOT be attributed via the colon-fallback.
+		$unprefixed = pfb_ip_prefetch_last_match(['2001:db8::1'], 'db8::1');
+		$this->assertNull(
+			$unprefixed,
+			'expected an unprefixed IPv6 content line NOT to be misattributed via the colon-fallback, got '
+				. var_export($unprefixed, true)
+		);
+
+		// Given: a GENUINELY file-prefixed line (a real grep path, which always contains
+		// '/') for the SAME raw_prefix.
+		// When/Then: it still attributes correctly through the identical colon-fallback --
+		// proves the '/' guard does not break the real path-prefixed shape.
+		$prefixed = pfb_ip_prefetch_last_match(['/path/to/feed.txt:2001:db8::1'], '2001:db8::1');
+		$this->assertSame(
+			'/path/to/feed.txt:2001:db8::1',
+			$prefixed,
+			'expected a genuinely path-prefixed line to still attribute correctly, got ' . var_export($prefixed, true)
+		);
 	}
 
 	// ------------------------------------------------------------------------------
@@ -307,6 +383,31 @@ final class IpPrefetchTest extends TestCase
 		];
 
 		$this->assertBatchedHeadersMatchPerRow($hosts, $folder, TRUE, $expected, 'geoip fixture, geoip=TRUE');
+	}
+
+	/**
+	 * B4 (issue #809 review): Round B's grouping key used to be the bare strstr() prefix
+	 * (e.g. "10"), which collides between a v4 host ("10.0.0.5") and an unrelated v6 host
+	 * ("10::1") -- both fall into ONE shared group, and whichever host's entry created it
+	 * silently hands its v4_type/grep pattern to the OTHER family's host too. Qualifying
+	 * the key by address family ('4|'/'6|') fixes this. RED before the fix (the v6 host
+	 * mis-resolves to Unknown/Unknown via the wrong family's CIDR math), GREEN after.
+	 */
+	public function test_v4_and_v6_hosts_sharing_a_first_segment_do_not_collide_in_round_b_grouping(): void
+	{
+		// Given: a v4 host and a v6 host whose Round-B grouping key -- strstr() up to the
+		// first '.' or ':' -- is the textually IDENTICAL bare string "10", each with a
+		// REAL CIDR match in the fixture (fixtures/ip_prefetch/reports/ReportsFeedC.txt).
+		$folder = "{$this->fixturesDir}/reports/*.txt";
+		$hosts = ['10.0.0.5', '10::1'];
+		$expected = [
+			'10.0.0.5' => ['ReportsFeedC', '10.0.0.0/24'],
+			'10::1'    => ['ReportsFeedC', '10::/32'],
+		];
+
+		// When/Then: both the per-row oracle AND the batched result must resolve each
+		// host to its OWN family's real CIDR match.
+		$this->assertBatchedHeadersMatchPerRow($hosts, $folder, FALSE, $expected, 'v4/v6 first-segment collision ("10")');
 	}
 
 	// ------------------------------------------------------------------------------
@@ -412,6 +513,143 @@ final class IpPrefetchTest extends TestCase
 			[['Unknown', 'Unknown'], ''],
 			$memos['miss'][$missKey] ?? 'MISSING',
 			'expected [Unknown/Unknown, \'\'] on a genuine total miss, got ' . var_export($memos['miss'][$missKey] ?? 'MISSING', true)
+		);
+	}
+
+	// ------------------------------------------------------------------------------
+	// B3 (issue #809 review): a failed batched grep pass must never seed a false
+	// negative.
+	// ------------------------------------------------------------------------------
+
+	/**
+	 * Run a PHP body in a genuinely restricted CHILD process (issue #809 review, B3/R1)
+	 * -- see DnsblPrefetchTest::runInRestrictedTempDirSandbox() for the full rationale
+	 * (why a child process, why `open_basedir` is the only reliable lever: TMPDIR is
+	 * ignored once sys_get_temp_dir() is cached, and tempnam() silently substitutes the
+	 * real system temp dir for an invalid hint directory). $phpBody runs AFTER the real
+	 * bootstrap.php has loaded the production include; it must `echo json_encode(...)`
+	 * its result.
+	 *
+	 * @return array<string, mixed> the JSON-decoded child-process output
+	 */
+	private function runInRestrictedTempDirSandbox(string $phpBody): array
+	{
+		$repo = dirname(__DIR__, 2);
+		$cacheDir = "{$repo}/.phpunit.cache";
+		@mkdir($cacheDir, 0777, true);
+		$probe = tempnam($cacheDir, 'pfb_sandbox_probe_');
+		$this->assertNotFalse($probe, 'precondition: failed to create the sandbox probe script');
+
+		try {
+			$code = "<?php\nrequire " . var_export("{$repo}/tests/php/bootstrap.php", true) . ";\n" . $phpBody;
+			file_put_contents($probe, $code);
+
+			$cmd = 'php -d open_basedir=' . escapeshellarg($repo) . ' ' . escapeshellarg($probe) . ' 2>/dev/null';
+			$output = shell_exec($cmd);
+		} finally {
+			@unlink($probe);
+		}
+
+		$decoded = json_decode((string) $output, true);
+		$this->assertIsArray(
+			$decoded,
+			'expected the sandboxed child process to emit valid JSON, got ' . var_export($output, true)
+		);
+		return $decoded;
+	}
+
+	public function test_grep_lines_returns_null_when_the_pattern_file_cannot_be_created(): void
+	{
+		$body = '$lines = pfb_ip_prefetch_grep_lines(\'/bin/echo\', \'\', [\'^192\\\\.0\\\\.2\\\\.10\']);'
+			. 'echo json_encode([\'lines\' => $lines]);';
+
+		$decoded = $this->runInRestrictedTempDirSandbox($body);
+
+		$this->assertArrayHasKey('lines', $decoded);
+		$this->assertNull(
+			$decoded['lines'],
+			'expected pfb_ip_prefetch_grep_lines() to return NULL under a genuinely restricted temp dir, got '
+				. var_export($decoded['lines'], true)
+		);
+	}
+
+	/**
+	 * RED before the fix: old code could not distinguish Round A's grep-lines failure
+	 * from a genuine no-match, so it fell through to Round B -- which can ONLY find
+	 * CIDR-shaped candidates (pfb_match_reported_cidr() discards non-CIDR lines), so an
+	 * EXACT match unreachable via Round A silently resolved to Unknown/Unknown and was
+	 * then CACHED as a definitive miss, a true false negative for a host that DOES have
+	 * a real match. GREEN after: the miss round leaves the row entirely unseeded so
+	 * convert_ip_log()'s per-row fallback (unaffected by the sandbox -- it never uses a
+	 * pattern file) resolves it live instead.
+	 */
+	public function test_prefetch_leaves_the_miss_round_unseeded_when_round_a_pattern_file_cannot_be_created(): void
+	{
+		// Given: a host with a REAL EXACT match in the reports fixture, reachable ONLY
+		// via Round A (Round B's CIDR walk ignores non-CIDR lines entirely) -- and the
+		// per-row oracle proves that match still exists (it depends on no pattern file).
+		$folder = "{$this->fixturesDir}/reports/*.txt";
+		$oracle = find_reported_header('192.0.2.10', $folder);
+		$this->assertSame(
+			['ReportsFeedA', '192.0.2.10'],
+			$oracle,
+			'precondition: the per-row oracle must find a real exact match, got ' . var_export($oracle, true)
+		);
+
+		// When: the batched prefetch runs for this SAME row inside the restricted-
+		// temp-dir sandbox.
+		$body = ''
+			. '$GLOBALS[\'pfb\'][\'grep\'] = \'/usr/bin/grep\';'
+			. '$GLOBALS[\'pfb\'][\'denydir\'] = ' . var_export("{$this->fixturesDir}/deny", true) . ';'
+			. '$GLOBALS[\'pfb\'][\'nativedir\'] = ' . var_export("{$this->fixturesDir}/native", true) . ';'
+			. '$GLOBALS[\'pfb\'][\'ccdir\'] = ' . var_export("{$this->fixturesDir}/geoip", true) . ';'
+			. '$GLOBALS[\'pfb\'][\'aliasdir\'] = ' . var_export("{$this->fixturesDir}/alias", true) . ';'
+			. '$folder = ' . var_export($folder, true) . ';'
+			. '$rows = [[\'host\' => \'192.0.2.10\', \'folder\' => $folder, \'validate_file_cmd\' => NULL, \'validate_cmd\' => NULL, \'eval_ip_raw\' => \'192.0.2.10\']];'
+			. 'pfb_ip_prefetch($rows);'
+			. '$memos = &pfb_ip_render_memos();'
+			. '$missKey = \'192.0.2.10|\' . $folder;'
+			. 'echo json_encode(['
+			. '\'missSeeded\' => array_key_exists($missKey, $memos[\'miss\']),'
+			. '\'missVal\' => $memos[\'miss\'][$missKey] ?? null,'
+			. ']);';
+
+		$decoded = $this->runInRestrictedTempDirSandbox($body);
+
+		// Then: the miss round leaves this row entirely UNSEEDED -- never a cached
+		// false Unknown/'' miss for a host with a real exact match.
+		$this->assertArrayHasKey('missSeeded', $decoded);
+		$this->assertFalse(
+			$decoded['missSeeded'],
+			'expected the miss round to leave this row unseeded when Round A\'s pattern file could not be created, got '
+				. var_export($decoded['missVal'], true)
+		);
+	}
+
+	/**
+	 * R4: guards the try/finally pattern-file cleanup in pfb_ip_prefetch_grep_lines()
+	 * against a future regression reintroducing a temp-file leak.
+	 */
+	public function test_prefetch_leaves_no_temp_pattern_files_behind(): void
+	{
+		$fields = $this->buildBlockFields('192.0.2.77');
+		$rq     = pfb_ip_render_query($fields);
+
+		$rows = [[
+			'host'              => $rq['host'],
+			'folder'            => $rq['folder'],
+			'validate_file_cmd' => $rq['validate_file_cmd'],
+			'validate_cmd'      => $rq['validate_cmd'],
+			'eval_ip_raw'       => $fields[14],
+		]];
+
+		pfb_ip_prefetch($rows);
+
+		$leftover = glob(sys_get_temp_dir() . '/pfb_ip_prefetch_*') ?: [];
+		$this->assertSame(
+			[],
+			$leftover,
+			'expected no pfb_ip_prefetch_* temp files to remain, found ' . var_export($leftover, true)
 		);
 	}
 

@@ -36,11 +36,27 @@ use PHPUnit\Framework\TestCase;
  *   that do not exist, and assert the seeded domains STILL resolve correctly -- a
  *   covered domain must never fall through to a per-row exec, which against a missing
  *   file can only return empty/'Unknown', never the correct non-'Unknown' answer.
+ *
+ *   B2 (issue #809 review): a domain carrying a live BRE metacharacter (anything besides
+ *   '.') is excluded from prefetch coverage entirely -- the per-row site's BRE only ever
+ *   escapes '.', so such a domain can false-match a DIFFERENT literal line under the
+ *   per-row exec that a batched `-F` fixed-string match never would. Proven by a
+ *   differential: the unseeded AND "seeded" (never actually covered) lookups must agree,
+ *   both landing on the per-row BRE path.
+ *
+ *   B3/R1 (issue #809 review): a batched grep pass whose pattern file cannot be created
+ *   or fully written returns a NULL sentinel -- distinct from a genuine empty-array
+ *   no-match result -- and pfb_dnsbl_prefetch() must leave its store entirely unseeded
+ *   on that failure (never seed a false negative from a partial/failed batch).
+ *
+ *   R4: after a prefetch pass, no pfb_dnsbl_prefetch_* pattern-file temp file remains --
+ *   guards the try/finally cleanup against a future regression.
  */
 #[CoversFunction('pfb_dnsbl_prefetch')]
 #[CoversFunction('pfb_dnsbl_prefetch_grep')]
 #[CoversFunction('pfb_dnsbl_prefetch_store')]
 #[CoversFunction('pfb_dnsbl_parse_compute')]
+#[CoversFunction('pfb_prefetch_pattern_file_write_ok')]
 final class DnsblPrefetchTest extends TestCase
 {
 	private string $dataFile;
@@ -356,5 +372,189 @@ final class DnsblPrefetchTest extends TestCase
 		// clears the store once its DNSBL table render pass finishes.
 		pfb_dnsbl_prefetch_store(NULL);
 		$this->assertNull(pfb_dnsbl_prefetch_store(), 'expected an explicit NULL argument to reset the store to "no prefetch ran"');
+	}
+
+	/**
+	 * B2 (issue #809 review): a domain outside PFB_FILTER_DOMAIN's charset carries a live
+	 * BRE metacharacter into the per-row site's regex (which escapes ONLY '.'), so it can
+	 * false-match a DIFFERENT literal data-file line under the per-row BRE that a batched
+	 * `-F` fixed-string match never would. Excluding such a domain from prefetch coverage
+	 * entirely means BOTH the unseeded and "seeded" lookups fall through to the identical
+	 * per-row BRE path and therefore agree -- RED before the fix (the seeded consult
+	 * diverged to Unknown while the per-row BRE false-matched RealFeed/RealGroup), GREEN
+	 * after.
+	 */
+	public function test_a_domain_with_a_live_bre_metacharacter_is_excluded_from_prefetch_coverage(): void
+	{
+		$domain = 'evil.[0-9].example.com';
+
+		$this->assertPrefetchMatchesPerRow($domain, [
+			'pfb_mode'  => 'DNSBL',
+			'pfb_group' => 'RealGroup',
+			'pfb_final' => 'evil.5.example.com',
+			'pfb_feed'  => 'RealFeed',
+		], 'BRE metacharacter domain false-matches a different literal domain via the per-row BRE path');
+	}
+
+	/**
+	 * Run a PHP body in a genuinely restricted CHILD process (issue #809 review, B3/R1).
+	 *
+	 * Why a child process: `sys_get_temp_dir()` caches its resolved value for the life
+	 * of a PHP process (a real engine behaviour, confirmed empirically -- a bad TMPDIR
+	 * set via putenv() AFTER anything has already called sys_get_temp_dir() once, which
+	 * PHPUnit's own bootstrap does, is silently ignored). And even freshly, tempnam()
+	 * silently substitutes the real system temp dir for an invalid hint directory, so
+	 * neither lever can force a genuine failure once a real writable temp dir exists.
+	 * The one remaining, fully deterministic lever: `open_basedir`, set via the `php`
+	 * CLI's `-d` flag BEFORE the interpreter starts, whitelisting ONLY the repo tree --
+	 * excluding sys_get_temp_dir()'s real system temp directory -- so
+	 * tempnam(sys_get_temp_dir(), ...) genuinely fails inside it. This MUST run in a
+	 * separate `php` invocation, never inline in this PHPUnit process: `open_basedir`
+	 * can only ever be NARROWED for the life of a process, never widened back, so
+	 * setting it here would permanently break every following test in this same
+	 * PHPUnit run. $phpBody runs AFTER the real bootstrap.php has loaded the production
+	 * include; it must `echo json_encode(...)` its result.
+	 *
+	 * @return array<string, mixed> the JSON-decoded child-process output
+	 */
+	private function runInRestrictedTempDirSandbox(string $phpBody): array
+	{
+		$repo = dirname(__DIR__, 2);
+		$cacheDir = "{$repo}/.phpunit.cache";
+		@mkdir($cacheDir, 0777, true);
+		$probe = tempnam($cacheDir, 'pfb_sandbox_probe_');
+		$this->assertNotFalse($probe, 'precondition: failed to create the sandbox probe script');
+
+		try {
+			$code = "<?php\nrequire " . var_export("{$repo}/tests/php/bootstrap.php", true) . ";\n" . $phpBody;
+			file_put_contents($probe, $code);
+
+			$cmd = 'php -d open_basedir=' . escapeshellarg($repo) . ' ' . escapeshellarg($probe) . ' 2>/dev/null';
+			$output = shell_exec($cmd);
+		} finally {
+			@unlink($probe);
+		}
+
+		$decoded = json_decode((string) $output, true);
+		$this->assertIsArray(
+			$decoded,
+			'expected the sandboxed child process to emit valid JSON, got ' . var_export($output, true)
+		);
+		return $decoded;
+	}
+
+	/**
+	 * Given: a domain that WOULD hit the real data-file fixture (a genuine positive,
+	 * proving this pins a false-negative regression and is not a tautology).
+	 * When: the pattern-file grep helper -- and then the whole prefetch pass -- run
+	 * inside the restricted-temp-dir sandbox.
+	 * Then: the helper signals failure via the NULL sentinel (not an empty-array
+	 * "no match"), and pfb_dnsbl_prefetch() leaves its store entirely unseeded rather
+	 * than caching a false negative for a domain that DOES have a real hit. RED before
+	 * the fix (verified directly: the pre-fix code returns `[]` from the grep helper
+	 * and seeds the store with 'covered' => TRUE / empty 'data' -- a real false
+	 * negative), GREEN after.
+	 */
+	public function test_prefetch_leaves_the_store_unseeded_when_a_grep_pass_pattern_file_cannot_be_created(): void
+	{
+		$domain = 'uuid-exact-hit-8f2a.example.com';
+
+		$body = ''
+			. '$GLOBALS[\'pfb\'][\'grep\'] = \'/usr/bin/grep\';'
+			. '$GLOBALS[\'pfb\'][\'unbound_py_data\'] = ' . var_export($this->dataFile, true) . ';'
+			. '$GLOBALS[\'pfb\'][\'unbound_py_zone\'] = ' . var_export($this->zoneFile, true) . ';'
+			. '$domain = ' . var_export($domain, true) . ';'
+			. '$direct = pfb_dnsbl_prefetch_grep([\',\' . $domain . \',,\'], $GLOBALS[\'pfb\'][\'unbound_py_data\']);'
+			. 'pfb_dnsbl_prefetch([$domain]);'
+			. '$store = pfb_dnsbl_prefetch_store();'
+			. 'echo json_encode([\'direct\' => $direct, \'store\' => $store]);';
+
+		$decoded = $this->runInRestrictedTempDirSandbox($body);
+
+		$this->assertArrayHasKey('direct', $decoded);
+		$this->assertNull(
+			$decoded['direct'],
+			'expected pfb_dnsbl_prefetch_grep() to return NULL under a genuinely restricted temp dir, got '
+				. var_export($decoded['direct'], true)
+		);
+		$this->assertArrayHasKey('store', $decoded);
+		$this->assertNull(
+			$decoded['store'],
+			'expected pfb_dnsbl_prefetch() to leave the store NULL when a grep pass fails, got '
+				. var_export($decoded['store'], true)
+		);
+	}
+
+	/**
+	 * R1: the write-outcome predicate must flag a SHORT (partial, non-FALSE) write as
+	 * incomplete -- not just a bare `=== FALSE` failure. A genuine disk-full short write
+	 * cannot be forced deterministically/portably in a unit test (verified: `open_basedir`
+	 * fails the CREATE step, never a partial WRITE), so this pins the extracted decision
+	 * predicate directly with fabricated byte counts -- exactly the "testable shape"
+	 * fallback for an unforceable OS failure. The predicate is new code: it does not
+	 * exist pre-fix (calling it errors on the old source), so red<->green here is "did
+	 * not exist / wrong verdict" -> "exists and rules correctly" for every input shape.
+	 */
+	public function test_write_complete_helper_flags_a_short_write_as_incomplete(): void
+	{
+		$data = "line-one\nline-two\n";
+
+		$short = pfb_prefetch_pattern_file_write_ok(strlen($data) - 3, $data);
+		$this->assertFalse($short, 'expected a short byte count to be flagged as an incomplete write');
+
+		$failed = pfb_prefetch_pattern_file_write_ok(FALSE, $data);
+		$this->assertFalse($failed, 'expected FALSE to be flagged as an incomplete write');
+
+		$complete = pfb_prefetch_pattern_file_write_ok(strlen($data), $data);
+		$this->assertTrue($complete, 'expected an exact full-length write to be flagged as complete');
+	}
+
+	/**
+	 * B3 regression guard: a genuine total miss (real files, zero grep hits -- NOT a
+	 * pattern-file failure) must still SEED the store, marking the domain covered with an
+	 * empty 'data' entry. Distinguishes the real "ran successfully, found nothing" state
+	 * from the NULL "did not run at all" sentinel the B3 fix introduces -- pins existing
+	 * behaviour, so this stays green both before and after that fix.
+	 */
+	public function test_prefetch_still_seeds_a_genuine_total_miss_domain_as_covered(): void
+	{
+		$domain = 'uuid-totalmiss-8f2a.example.com';
+		pfb_dnsbl_prefetch_store(NULL);
+
+		pfb_dnsbl_prefetch([$domain]);
+
+		$store = pfb_dnsbl_prefetch_store();
+		$this->assertNotNull($store, 'expected a successful prefetch pass (even with zero hits) to seed a non-NULL store');
+		$this->assertArrayHasKey($domain, $store['covered'], "expected '{$domain}' to be marked covered despite the total miss");
+		$this->assertArrayNotHasKey(
+			$domain,
+			$store['data'],
+			"expected no 'data' entry for a genuine miss, found " . var_export($store['data'][$domain] ?? null, true)
+		);
+
+		pfb_dnsbl_prefetch_store(NULL);
+	}
+
+	/**
+	 * R4: guards the try/finally pattern-file cleanup in pfb_dnsbl_prefetch_grep() against
+	 * a future regression reintroducing a temp-file leak.
+	 */
+	public function test_prefetch_leaves_no_temp_pattern_files_behind(): void
+	{
+		pfb_dnsbl_prefetch_store(NULL);
+		pfb_dnsbl_prefetch(['uuid-exact-hit-8f2a.example.com']);
+
+		// is_file() filters out this class's OWN per-process sandbox directories
+		// (setUp()'s "pfb_dnsbl_prefetch_test_<pid>", never cleaned up by design -- a
+		// stable-per-process path, not a pattern-file leak) -- only a REGULAR FILE
+		// under this prefix can be a leaked tempnam() pattern file.
+		$leftover = array_values(array_filter(glob(sys_get_temp_dir() . '/pfb_dnsbl_prefetch_*') ?: [], 'is_file'));
+		$this->assertSame(
+			[],
+			$leftover,
+			'expected no pfb_dnsbl_prefetch_* temp files to remain, found ' . var_export($leftover, true)
+		);
+
+		pfb_dnsbl_prefetch_store(NULL);
 	}
 }
