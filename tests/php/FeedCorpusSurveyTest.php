@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -20,8 +19,12 @@ use PHPUnit\Framework\TestCase;
  *   positive on the live catalogue blocks the ADR's acceptance (its §7 gate).
  *   Archive-typed samples (gzip/zip/bz2/7z magics) are not text feeds and are
  *   excluded; unreachable-at-fetch-time feeds have no sample to judge.
+ *
+ * No #[CoversFunction] here: pfb_text_sanity() does not exist until ADR-49 Phase 1,
+ * and a covers-target for an undefined function is a PHPUnit warning that the CI
+ * suite (run with --fail-on-warning) turns into a failure. The survey test guards on
+ * function_exists() instead; add the covers attribute when the scanner lands.
  */
-#[CoversFunction('pfb_text_sanity')]
 final class FeedCorpusSurveyTest extends TestCase
 {
 	private const CORPUS_DIR = __DIR__ . '/../fixtures/feed_corpus';
