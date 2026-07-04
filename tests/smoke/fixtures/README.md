@@ -51,6 +51,17 @@ DNSBL assertion: `dns_probe` block-shape on the box (NOERROR + VIP, or NULL per 
 list's `logging`); the non-member (and the ABP allow-exception, where a feed `@@`
 allow band 2 beats the `||` block band 1) must RESOLVE, not block.
 
+## Plain-text sanity scan fixture (ADR-49, `IpCase`, `test_smoke_feeds.py`)
+
+| File | on-box `file(1)` | Purpose |
+| --- | --- | --- |
+| `html_error_page.html` | expected `text/html` (verify on first live run) | A realistic 403/error-page body (`<!doctype html>...403 Forbidden...</html>`) carrying NO blocklist-shaped line (no IP/CIDR, no `domain.tld` token, no `#`/`!` comment) anywhere, so `pfb_text_sanity()` returns `html_error_page` when the ADR-49 `pfb_feed_sanity` scan is ON. Its on-box MIME classification is asserted at test time (`file -b --mime-type`, per the ADR-45 libmagic-divergence lesson) before the reject is asserted, so a libmagic surprise fails loudly with the actual verdict rather than silently not exercising the gate. |
+
+The scan's healthy-feed control reuses the already-verified `ip_plain_cidr.txt` (IP
+feeds) / `dnsbl_plain.txt` (DNSBL feeds) above — both are plain `text/plain` bodies
+that load successfully today, proving `pfb_feed_sanity=on` is a real branch (rejects
+the error page, not every text feed).
+
 ## Archive corpus (ADR-45 — structural integrity)
 
 Binary fixtures for the ADR-45 structural-probe + octet-stream-recovery smoke cases

@@ -3312,6 +3312,160 @@ def test_validate_log_healthy_abp_feed_no_entries_reject(
 
 
 # --------------------------------------------------------------------------- #
+# ADR-49: opt-in plain-text sanity scan (pfb_feed_sanity, default OFF). Live-VM
+# proof that the config-only gate wired in Phase 2 (pfblockerng.inc's pfb_download,
+# right after the MIME accept) genuinely runs: OFF is a no-op on an HTML-error-page
+# feed that would otherwise sail through the MIME allow-list; ON rejects it
+# (stage=plaintext) via the same ADR-48 canonical line the mime/structural/inner
+# stages already use; and a real blocklist feed still imports with the scan ON
+# (a real branch, not an always-reject path).
+# --------------------------------------------------------------------------- #
+
+_SANITY_SCANNED_MIME_TYPES = ("text/plain", "text/html", "text/csv")
+
+
+@pytest.mark.timeout(180)
+def test_feed_sanity_flag_gates_html_error_page_reject(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-49: pfb_feed_sanity OFF (default) never rejects; ON rejects an HTML-error-page feed.
+
+    Two DISTINCT, never-before-fetched headers over the SAME served fixture
+    (``html_error_page.html``) -- not one header Force-Updated twice -- because
+    pfb_download()'s own per-list "reuse" shortcut (pfblockerng.inc: once a header's
+    ``{header}.orig``/``.txt`` already exists, a later pass can skip straight to
+    reusing it without calling pfb_download() again) means re-running the SAME
+    header a second time is not guaranteed to re-invoke the gate at all. A header
+    pfBlockerNG has never fetched before has no such shortcut available -- the first
+    fetch of ANY header always calls pfb_download() -- so using two fresh headers
+    isolates the flag as the only variable that differs between the OFF and ON legs.
+
+    Given the scan OFF (explicit + the registered default) and a fresh header with
+      no pre-existing reject line,
+    When Force-Updating the HTML-error-page feed under that header,
+    Then NO 'stage=plaintext' reject line appears for it (the before-state proving
+      an off install is unaffected).
+    Given the scan then flipped ON and a SECOND fresh header over the SAME feed body,
+    When Force-Updating it,
+    Then a NEW 'pfb_validate: REJECT ... stage=plaintext reason=html_error_page ...'
+      line appears for THAT header, and its alias table stays absent -- the flag
+      (not the feed content, which is identical in both legs) caused the reject.
+    """
+    fixture = "html_error_page.html"
+    feed_url = mock_feeds.feed_url(fixture)
+
+    # On-box guard (ADR-49 §5 / the ADR-45 libmagic-divergence lesson): ASSERT, never
+    # skip, so a libmagic surprise fails LOUDLY with the real verdict -- the plaintext
+    # gate only ever sees this fixture at all if FreeBSD file(1) calls it an
+    # allow-listed text type.
+    box_mime = _box_mime_type(deployed_vm, _fixture_bytes(fixture))
+    assert box_mime in _SANITY_SCANNED_MIME_TYPES, (
+        f"expected {fixture} on-box file(1) verdict in {_SANITY_SCANNED_MIME_TYPES}, "
+        f"got {box_mime!r} -- the plaintext gate would never see this fixture at all "
+        f"(adjust the fixture bytes until it lands on a scanned text type)"
+    )
+
+    header_off = "adr49sanoff"
+    header_on = "adr49sanon"
+    # feed= carries the on-box header with its family suffix (see the ADR-48
+    # structural-reject test's docstring); detected= is basename($file_download),
+    # always "<header>_v4.raw".
+    marker_off = f"pfb_validate: REJECT feed={header_off}_v4 stage=plaintext"
+    marker_on = (
+        f"pfb_validate: REJECT feed={header_on}_v4 stage=plaintext reason=html_error_page detected={header_on}_v4.raw"
+    )
+
+    try:
+        # Given -- flag OFF (explicit; also the registered default) + a fresh header.
+        h.set_feed_sanity(deployed_vm, False)
+        before_off = h.count_log_marker(deployed_vm, h.PFB_LOG, marker_off)
+        assert before_off == 0, f"{marker_off!r} must not pre-exist for a brand-new header, got {before_off}"
+
+        spec_off = h.IpCase(aliasname=header_off, feed_url=feed_url, header=header_off, family="v4")
+        with h.CaseContext(deployed_vm, spec_off):
+            # Then -- the scan never ran: no reject line for this header (the before-state).
+            after_off = h.count_log_marker(deployed_vm, h.PFB_LOG, marker_off)
+            if not (after_off == before_off == 0):
+                raise AssertionError(
+                    f"flag OFF must be a no-op: expected NO {marker_off!r} line in {h.PFB_LOG} "
+                    f"(before={before_off}), got after={after_off} -- the scan ran with "
+                    f"pfb_feed_sanity off\n"
+                    f"recent pfb_validate lines actually in the log:\n{_recent_validate_lines(deployed_vm)}"
+                )
+
+        # When -- flip the SAME feed body's flag ON, fetched under a FRESH header.
+        h.set_feed_sanity(deployed_vm, True)
+        before_on = h.count_log_marker(deployed_vm, h.PFB_LOG, marker_on)
+        assert before_on == 0, f"{marker_on!r} must not pre-exist for a brand-new header, got {before_on}"
+
+        spec_on = h.IpCase(aliasname=header_on, feed_url=feed_url, header=header_on, family="v4")
+        with h.CaseContext(deployed_vm, spec_on):
+            # Then -- a NEW canonical reject line appears; the flag CAUSED the reject
+            # (the flag-off leg above is the before-state proving causation, not merely
+            # "a line exists somewhere").
+            after_on = h.count_log_marker(deployed_vm, h.PFB_LOG, marker_on)
+            if not (after_on > before_on):
+                raise AssertionError(
+                    f"expected a NEW line matching {marker_on!r} in {h.PFB_LOG} after enabling "
+                    f"pfb_feed_sanity and Force-Updating the error-page feed; count "
+                    f"before={before_on} after={after_on}\n"
+                    f"recent pfb_validate lines actually in the log:\n{_recent_validate_lines(deployed_vm)}"
+                )
+            tables_on = h.pfctl_tables(deployed_vm)
+            assert spec_on.alias not in tables_on, (
+                f"expected {spec_on.alias!r} absent after a rejected download (stage=plaintext "
+                f"must reject before any table build), found it present — tables: {tables_on}"
+            )
+    finally:
+        h.set_feed_sanity(deployed_vm, False)
+
+
+@pytest.mark.timeout(120)
+def test_feed_sanity_flag_on_still_imports_healthy_feed(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-49: pfb_feed_sanity ON still imports a genuinely healthy text feed.
+
+    The MUST-ACCOMPANY counterpart to the reject-line test above -- proves the scan
+    is a REAL branch (rejects the error page, not every text/plain|html|csv feed) by
+    reusing the already-verified healthy ``ip_plain_cidr.txt`` fixture (the Part-C
+    kill-gate fixture for ``test_ip_http_feed_loads``) with the scan explicitly ON.
+
+    Given the scan ON and the alias absent (a fresh header, no pre-existing reject
+      line),
+    When Force-Updating the healthy plain-IP+CIDR feed,
+    Then the listed member loads into the pf table (genuinely imported, not merely
+      "didn't crash") AND no NEW 'stage=plaintext' reject line was logged for it.
+    """
+    header = "adr49sanhlt"
+    feed_url = mock_feeds.feed_url("ip_plain_cidr.txt")
+    spec = h.IpCase(aliasname=header, feed_url=feed_url, header=header, family="v4")
+    member_host = "203.0.113.5"  # the plain listed host (fixtures/README.md)
+    reject_marker = f"pfb_validate: REJECT feed={header}_v4 stage=plaintext"
+
+    try:
+        # Given -- scan ON, alias absent, no pre-existing reject line for this fresh header.
+        h.set_feed_sanity(deployed_vm, True)
+        assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the healthy feed was loaded"
+        before = h.count_log_marker(deployed_vm, h.PFB_LOG, reject_marker)
+
+        with h.CaseContext(deployed_vm, spec):
+            # When -- Force Update loads the healthy feed with the scan ON.
+            members = h.wait_pfctl_table(deployed_vm, spec.alias)
+            assert h.member_present(members, member_host), (
+                f"expected {member_host!r} in {spec.alias} after the healthy feed load with "
+                f"pfb_feed_sanity ON, got: {members}"
+            )
+            # Then -- no NEW reject line: the scan is a real branch, not an always-reject path.
+            after = h.count_log_marker(deployed_vm, h.PFB_LOG, reject_marker)
+            if not (after == before):
+                raise AssertionError(
+                    f"expected NO NEW {reject_marker!r} line in {h.PFB_LOG} after a healthy feed "
+                    f"load with pfb_feed_sanity ON; count before={before} after={after} (a healthy "
+                    f"feed must never be misclassified as an error page)\n"
+                    f"recent pfb_validate lines actually in the log:\n{_recent_validate_lines(deployed_vm)}"
+                )
+    finally:
+        h.set_feed_sanity(deployed_vm, False)
+
+
+# --------------------------------------------------------------------------- #
 # ADR-46: archive member-name guard before disk-writing extraction. The
 # GeoIP/top-1M/blacklist URLs are hardcoded in pfblockerng.php, so these cases
 # drive pfb_download() DIRECTLY via h.php_eval pointed at the mock server (the
