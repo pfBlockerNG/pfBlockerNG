@@ -1810,6 +1810,14 @@ if ($alert_summary) {
 		$stat_hidden = array_flip($stat_hidden);
 	}
 
+	// Total entry count for this view is constant across every $stat_info
+	// iteration (the log doesn't change mid-loop), so compute it once here
+	// instead of once per iteration (issue #809 Phase 2). The per-iteration
+	// assignment below stays IN the loop body -- if every stat type is hidden
+	// the loop body never runs, so $alert_stats['count'] must stay unset for
+	// this view exactly as it does today.
+	$alert_log_total_count = file_exists($alert_log) ? (exec("{$pfb['grep']} -c ^ {$alert_log} 2>&1") ?: 0) : 0;
+
 	foreach ($stat_info as $stat_type => $column) {
 		if (isset($stat_hidden[$stat_type])) {
 			continue;
@@ -1912,9 +1920,10 @@ if ($alert_summary) {
 					$alert_stats[$alert_view]['dnsblgpblock'] = array();
 				}
 			}
-			// Recomputed on every $stat_info iteration though the log is constant
-			// for the whole view — hoist candidate (issue #809 Phase 2).
-			$alert_stats['count'][$alert_view] = exec("{$pfb['grep']} -c ^ {$alert_log} 2>&1") ?: 0;
+			// The exec is hoisted above the loop (issue #809 Phase 2); this
+			// assignment stays here so an all-hidden $stat_info leaves
+			// $alert_stats['count'] unset for this view, exactly as before.
+			$alert_stats['count'][$alert_view] = $alert_log_total_count;
 		}
 		else {
 			$alert_stats[$alert_view][$stat_type]	= array();
@@ -4269,6 +4278,14 @@ if (!$alert_summary):
 				'Match'		=> "{$pfb['ip_matchlog']}",
 				'Unified'	=> "{$pfb['unilog']}") as $logtype => $pfb_log ):
 
+		// $pfbentries gets a definite default here (issue #809 Phase 2, same
+		// approach as $folder above): every reachable path below overwrites it
+		// before the post-switch reads (the "Skip table output" gate, the Unified
+		// early-exit call, the <tfoot> message); the only paths that skip those
+		// reads are the `continue 2`s, which never reach them either. The default
+		// makes that provable to PHPStan instead of relying on it to trace the
+		// switch/if/continue control flow.
+		$pfbentries = 0;
 
 		// Validate Alert view and Log type
 		switch ($alert_view) {
@@ -4373,13 +4390,19 @@ if (!$alert_summary):
 			</thead>
 			<tbody>
 	<?php
-			// This loop reads the reversed log to EOF: the converters' limit-reached
-			// return value is deliberately ignored here (unlike the per-type views
-			// below, which break on it). Past the limits the converters no-op, but
-			// fgetcsv still parses every remaining line (issue #809 Phase 2).
-			exec("/usr/bin/tail -r {$pfb_log} > {$pfb_log}.rev 2>&1");
-			if (($handle = @fopen("{$pfb_log}.rev", 'r')) !== FALSE) {
+			// This loop reads the reversed log via a popen() stream (no on-disk .rev
+			// copy, issue #809 Phase 2) and breaks as soon as
+			// pfb_alerts_unified_scan_done() determines no converter
+			// (convert_dnsbl_log() / convert_dns_reply_log() / convert_ip_log()) can
+			// render another row -- see that helper for the exact non-filter/filter
+			// mode conditions. If any per-type filter-limit knob is 0 (unlimited) its
+			// flag never sets and this still scans to EOF, exactly as before.
+			if (($handle = @popen('/usr/bin/tail -r ' . escapeshellarg($pfb_log), 'r')) !== FALSE) {
 				while (($fields = @fgetcsv($handle)) !== FALSE) {
+
+					if (pfb_alerts_unified_scan_done($pfb['filterlogentries'], $counter['Unified'], $pfbentries, $ipfilterlimit, $dnsblfilterlimit, $dnsfilterlimit)) {
+						break;
+					}
 
 					// Filter Unified Log for specific Log Types
 					if ($pfb['filterlogentries'] && !isset($filter_unified[$fields[0]])) {
@@ -4421,7 +4444,9 @@ if (!$alert_summary):
 					}
 				}
 			}
-			unlink_if_exists("{$pfb_log}.rev");
+			if ($handle) {
+				@pclose($handle);
+			}
 		}
 
 		// Process dns array for DNSBL and generate output
@@ -4439,8 +4464,7 @@ if (!$alert_summary):
 			</thead>
 			<tbody>
 	<?php
-			exec("/usr/bin/tail -r {$pfb_log} > {$pfb_log}.rev 2>&1");
-			if (($handle = @fopen("{$pfb_log}.rev", 'r')) !== FALSE) {
+			if (($handle = @popen('/usr/bin/tail -r ' . escapeshellarg($pfb_log), 'r')) !== FALSE) {
 				while (($fields = @fgetcsv($handle)) !== FALSE) {
 
 					// Remove and record duplicate entries
@@ -4455,9 +4479,8 @@ if (!$alert_summary):
 				}
 			}
 			if ($handle) {
-				@fclose($handle);
+				@pclose($handle);
 			}
-			unlink_if_exists("{$pfb_log}.rev");
 		}
 
 		// Process DNS Reply log and generate output
@@ -4479,8 +4502,7 @@ if (!$alert_summary):
 			</thead>
 			<tbody>
 	<?php
-			exec("/usr/bin/tail -r {$pfb_log} > {$pfb_log}.rev 2>&1");
-			if (($handle = @fopen("{$pfb_log}.rev", 'r')) !== FALSE) {
+			if (($handle = @popen('/usr/bin/tail -r ' . escapeshellarg($pfb_log), 'r')) !== FALSE) {
 				while (($fields = @fgetcsv($handle)) !== FALSE) {
 
 					// Suppress user-defined reply types
@@ -4499,9 +4521,8 @@ if (!$alert_summary):
 				}
 			}
 			if ($handle) {
-				@fclose($handle);
+				@pclose($handle);
 			}
-			unlink_if_exists("{$pfb_log}.rev");
 		}
 
 		// Process Deny/Permit/Match and generate output
@@ -4526,8 +4547,7 @@ if (!$alert_summary):
 	<?php
 
 			$p_query_port = '';
-			exec("/usr/bin/tail -r {$pfb_log} > {$pfb_log}.rev 2>&1");
-			if (($handle = @fopen("{$pfb_log}.rev", 'r')) !== FALSE) {
+			if (($handle = @popen('/usr/bin/tail -r ' . escapeshellarg($pfb_log), 'r')) !== FALSE) {
 				while (($fields = @fgetcsv($handle)) !== FALSE) {
 					$last_fld = array_pop($fields);
 
@@ -4546,9 +4566,8 @@ if (!$alert_summary):
 				}
 			}
 			if ($handle) {
-				@fclose($handle);
+				@pclose($handle);
 			}
-			unlink_if_exists("{$pfb_log}.rev");
 		}
 	?>
 		</tbody>
