@@ -263,10 +263,15 @@ class _Harness:
         # P._snapshot may not be swapped yet. The swap is done by production code on a
         # module-level variable we cannot signal from here, so this stays a poll -- but
         # with a loud timeout assertion (safety-guard, never a silent return; issue #456).
+        # Check-then-deadline order (#729/#551): the swap may land during the final sleep,
+        # after the last check but before the deadline expires -- always re-check once more
+        # right before giving up, or that in-flight swap reads as a false "never swapped".
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
+        while True:
             if P._snapshot is not old:
                 return
+            if time.monotonic() >= deadline:
+                break
             time.sleep(0.005)
         raise AssertionError(
             "wait_snapshot_changed timed out after {:.1f}s: P._snapshot was never swapped "
@@ -304,6 +309,18 @@ class TestHarnessWaiterDiagnostics:
         P._snapshot = old
         with pytest.raises(AssertionError, match=r"wait_snapshot_changed timed out"):
             h.wait_snapshot_changed(old, timeout=0.1)
+
+    def test_wait_snapshot_changed_returns_when_swap_lands_at_deadline(self, tmp_path: Any, monkeypatch: Any) -> None:
+        # #729/#551: a swap that lands during the FINAL sleep (after the last check, before
+        # the deadline expires) must still be observed, not read as a false "never swapped".
+        # timeout=0.0 makes the deadline already-expired at call time, so the loop's ONLY
+        # chance to see the swap is the check-before-give-up -- this is what the old
+        # check-then-sleep-then-recheck-deadline ordering skipped.
+        h = _Harness(tmp_path, monkeypatch)
+        old = _snapshot(tag="old.example.com", counts=0)
+        new = _snapshot(tag="new.example.com", counts=1)
+        P._snapshot = new  # the swap already landed before the waiter is even called.
+        h.wait_snapshot_changed(old, timeout=0.0)  # must return, not raise.
 
 
 class TestWatcherLoop:
