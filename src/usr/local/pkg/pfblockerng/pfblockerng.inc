@@ -10520,7 +10520,9 @@ function pfb_collect_localip() {
 	// array_flip()ed below (#782). Split each matched alias's address and
 	// classify every member individually: a plain IP becomes its own entry (so
 	// it gets its own flipped key), a CIDR goes to $pfb_localsub (matched via
-	// pfb_local_ip()), and anything else (hostname, port, nested alias name) is
+	// pfb_local_ip()), a member that is itself an alias NAME expands in place
+	// (pfSense nested aliases, #784 -- breadth-first, depth-capped so a
+	// reference cycle terminates), and anything else (hostname, port) is
 	// dropped silently.
 	$pfb_alias_addrs = array();
 	foreach (config_get_path('aliases/alias', []) as $alias) {
@@ -10538,15 +10540,26 @@ function pfb_collect_localip() {
 				continue;
 			}
 			unset($pfb_local[$cnt]);
-			foreach (preg_split('/\s+/', trim($pfb_alias_addrs[$entry])) as $member) {
-				if ($member === '') {
-					continue;
+			$members = preg_split('/\s+/', trim($pfb_alias_addrs[$entry]));
+			// Depth 10 >> the pfSense GUI's practical nesting; a cycle just
+			// re-expands until the cap and dedups in the final array_flip().
+			for ($depth = 0; !empty($members) && $depth < 10; $depth++) {
+				$nested = array();
+				foreach ($members as $member) {
+					if ($member === '') {
+						continue;
+					}
+					if (is_ipaddr($member)) {
+						$pfb_local[] = $member;
+					} elseif (is_subnet($member)) {
+						$pfb_localsub[] = $member;
+					} elseif (array_key_exists($member, $pfb_alias_addrs)) {
+						$nested = array_merge(
+							$nested, preg_split('/\s+/', trim($pfb_alias_addrs[$member]))
+						);
+					}
 				}
-				if (is_ipaddr($member)) {
-					$pfb_local[] = $member;
-				} elseif (is_subnet($member)) {
-					$pfb_localsub[] = $member;
-				}
+				$members = $nested;
 			}
 		}
 	}
