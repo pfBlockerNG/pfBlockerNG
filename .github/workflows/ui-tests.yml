@@ -508,7 +508,17 @@ jobs:
           # Build argv via set -- so --filter rides as ONE quoted arg.
           set -- --paths tests/smoke/ui -m "${MARKER}" --timeout 300
           [ -n "${PYTEST_FILTER:-}" ] && set -- "$@" --filter "${PYTEST_FILTER}"
-          sh scripts/run-smoke.sh "$@"
+          rc=0
+          sh scripts/run-smoke.sh "$@" || rc=$?
+          # pytest exit 5 = the impacted/-k selection contains no test carrying
+          # this tier's marker — an empty (valid) selection, not a failure. An
+          # impacted dispatch whose changed modules hold only e2e tests would
+          # otherwise fail every browser-tier leg on "no tests ran".
+          if [ "$rc" -eq 5 ]; then
+            echo "No tests selected for marker ${MARKER} under this scope/filter — empty selection, success."
+            rc=0
+          fi
+          exit "$rc"
 
       # ADR-24: runner-side scrub of the Plus secret identity from the diagnostics
       # BEFORE upload. For a non-CE (Plus) image: drop ONLY the QEMU CONSOLE

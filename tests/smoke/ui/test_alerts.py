@@ -860,9 +860,16 @@ def test_alerts_rows_render_suppress_icons_for_v6_and_broad_v4(
             prefix-aware match finds the covering /28, which an exact-/32|/24-only
             lookup would have missed (the row would have gotten the "+" instead).
 
-    Cleanup: the appended log lines are truncated back off in ``finally``, and
-    the master Suppression toggle + v4suppression are restored to their
-    original values.
+    Cleanup: the appended log lines are truncated back off in ``finally``, the
+    master Suppression toggle + v4suppression are restored to their original
+    values, and the seeded deny-folder feed files are removed.
+
+    NB: each row's evaluated IP must exist (line-start match) in a deny-folder
+    feed file named after the row's feed column -- convert_ip_log() re-validates
+    every row against the on-disk feeds and STRIPS the suppression icon from a
+    "Not listed!" row (alerts.php, "Remove Suppression Icon for 'Not Listed'
+    events"), so without the seeded feed files every assert here fails for the
+    wrong reason.
     """
     vm = smoke_vm
 
@@ -899,6 +906,12 @@ def test_alerts_rows_render_suppress_icons_for_v6_and_broad_v4(
     original_supp = helpers.config_get(vm, CFG_V4SUPPRESSION)
     original_master = helpers.config_get(vm, supp_master_path)
 
+    # The deny-folder feed files that make the three rows "listed" (see the
+    # docstring NB): file name = the CSV feed column + .txt, line-start match
+    # on the evaluated IP.
+    deny_feed_v4 = "/var/db/pfblockerng/deny/pfB_TestFeed_v4.txt"
+    deny_feed_v6 = "/var/db/pfblockerng/deny/pfB_TestFeed_v6.txt"
+
     # ip_block.log is created lazily -- guarantee it (and its dir) exist idempotently
     # before appending (mirrors the issue #361 test's precondition handling).
     log_dir = ip_block_log.rsplit("/", 1)[0]
@@ -922,6 +935,17 @@ def test_alerts_rows_render_suppress_icons_for_v6_and_broad_v4(
             f"config_set_path('{CFG_V4SUPPRESSION}', '{supp_b64}');\n"
             "write_config('pfBlockerNG smoke: seed suppression for icon test');\n"
             "echo 'OK';",
+        )
+
+        # GIVEN: the rows' evaluated IPs exist in their deny-folder feed files,
+        # so convert_ip_log()'s feed re-validation keeps the icons (docstring NB).
+        seed_result = vm.ssh(
+            f"printf '198.51.0.0/16\\n203.0.113.0/28\\n' > {deny_feed_v4} && "
+            f"printf '2001:db8:dead::/48\\n' > {deny_feed_v6}",
+            timeout=15,
+        )
+        assert seed_result.returncode == 0, (
+            f"Failed to seed deny-folder feed files: rc={seed_result.returncode}, stderr={seed_result.stderr!r}"
         )
 
         # BEFORE (no false pass): none of the three icon markers are present yet.
@@ -982,6 +1006,7 @@ def test_alerts_rows_render_suppress_icons_for_v6_and_broad_v4(
             f"Failed to restore {ip_block_log!r} to size={original_size!r}: "
             f"rc={truncate_result.returncode}, stderr={truncate_result.stderr!r}"
         )
+        vm.ssh(f"rm -f {deny_feed_v4} {deny_feed_v6}", timeout=15)
         helpers.php_eval(
             vm,
             f"config_set_path('{supp_master_path}', '{original_master}');\n"
