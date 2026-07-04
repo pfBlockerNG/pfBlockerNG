@@ -208,54 +208,6 @@ if ($_POST) {
 }
 
 
-// Sort widget table according to user configuration
-function pfbsort(&$array, $subkey, $sort_ascending) {
-	if (empty($array)) {
-		return;
-	}
-
-	if (count($array)) {
-		$temp_array[key($array)] = array_shift($array);
-	}
-
-	foreach ($array as $key => $val) {
-		$offset = 0;
-		$found = FALSE;
-
-		foreach ($temp_array as $tmp_key => $tmp_val) {
-			if (!$found) {
-				switch($subkey) {
-					case 'alias':
-						(strtolower($key) > strtolower($tmp_key)) ? $found = TRUE : $found = FALSE;
-						break;
-					case 'update':
-						(strtotime($val[$subkey]) > strtotime($tmp_val[$subkey])) ? $found = TRUE : $found = FALSE;
-						break;
-					default:
-						(strtolower($val[$subkey]) > strtolower($tmp_val[$subkey])) ? $found = TRUE : $found = FALSE;
-						break;
-				}
-			}
-			if ($found) {
-				$temp_array = array_merge((array)array_slice($temp_array, 0, $offset), array($key => $val), array_slice($temp_array, $offset));
-			}
-			$offset++;
-		}
-
-		if (!$found) {
-			$temp_array = array_merge($temp_array, array($key => $val));
-		}
-	}
-
-	if (!$sort_ascending) {
-		$array = array_reverse($temp_array);
-	} else {
-		$array = $temp_array;
-	}
-	return;
-}
-
-
 // Decide whether a pfB alias must be hidden from the dashboard widget.
 //
 //   - pfB_DNSBL_VIPs       : the DNSBL sinkhole VIP table, not a feed list.
@@ -453,22 +405,33 @@ function pfBlockerNG_update_table() {
 
 	// Sort tables per sort customization
 	if ($pfb['sortcolumn'] != 'none') {
-		if ($pfb['sortdir'] == 'asc') {
-			if ($pfb['sortmix'] == 'on') {
-				$pfb_table = array_merge($pfb_table, $pfb_dtable);
-				pfbsort($pfb_table, $pfb['sortcolumn'], FALSE);
-			} else {
-				pfbsort($pfb_table, $pfb['sortcolumn'], FALSE);
-				pfbsort($pfb_dtable, $pfb['sortcolumn'], FALSE);
+		$sortkey = $pfb['sortcolumn'];
+		$ascending = ($pfb['sortdir'] == 'asc');
+
+		// Descending compare (by key for 'alias', else by the $sortkey value column);
+		// ascending is simply the reverse -- string keys survive array_reverse() untouched.
+		$sort_table = static function (&$table) use ($sortkey, $ascending) {
+			if (empty($table)) {
+				return;
 			}
+			if ($sortkey === 'alias') {
+				uksort($table, fn($a, $b) => strtolower($b) <=> strtolower($a));
+			} elseif ($sortkey === 'update') {
+				uasort($table, fn($a, $b) => strtotime($b[$sortkey]) <=> strtotime($a[$sortkey]));
+			} else {
+				uasort($table, fn($a, $b) => strtolower($b[$sortkey]) <=> strtolower($a[$sortkey]));
+			}
+			if ($ascending) {
+				$table = array_reverse($table);
+			}
+		};
+
+		if ($pfb['sortmix'] == 'on') {
+			$pfb_table = array_merge($pfb_table, $pfb_dtable);
+			$sort_table($pfb_table);
 		} else {
-			if ($pfb['sortmix'] == 'on') {
-				$pfb_table = array_merge($pfb_table, $pfb_dtable);
-				pfbsort($pfb_table, $pfb['sortcolumn'], TRUE);
-			} else {
-				pfbsort($pfb_table, $pfb['sortcolumn'], TRUE);
-				pfbsort($pfb_dtable, $pfb['sortcolumn'], TRUE);
-			}
+			$sort_table($pfb_table);
+			$sort_table($pfb_dtable);
 		}
 	}
 
