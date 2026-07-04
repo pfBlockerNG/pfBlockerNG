@@ -61,6 +61,25 @@ final class IpSuppressedMatchTest extends TestCase
 		);
 	}
 
+	/**
+	 * Scenario: two covering entries share the SAME prefix length -- the tie
+	 * keeps the first-seen entry (stable), separating the tie contract from
+	 * the longest-prefix contract pinned above. Same-CIDR lines that differ
+	 * only in their inline comment are the realistic tie shape (a customlist
+	 * duplicate); the RAW line identifies which one won.
+	 */
+	public function testEqualPrefixTieKeepsFirstSeenEntry(): void
+	{
+		// Given two lines with the same covering /24, distinguishable by comment
+		$a = '10.0.5.0/24 # first';
+		$b = '10.0.5.0/24 # second';
+
+		// When matching against either ordering
+		// Then the FIRST-SEEN line wins each time
+		$this->assertSame($a, pfb_ip_suppressed_match('10.0.5.9', [$a, $b]));
+		$this->assertSame($b, pfb_ip_suppressed_match('10.0.5.9', [$b, $a]));
+	}
+
 	// --- v6 ---
 
 	public function testV6Slash128BeatsACoveringSlash64(): void
@@ -77,6 +96,35 @@ final class IpSuppressedMatchTest extends TestCase
 			'2001:db8::/64',
 			pfb_ip_suppressed_match('2001:db8::9', ['2001:db8::/64', '2001:db8::1/128'])
 		);
+	}
+
+	// --- bare-host tolerance (parity with the carve engines) ---
+
+	/**
+	 * Scenario: a customlist line with NO mask (hand-edited config; the UI
+	 * validator normally enforces one). Both carve engines treat a bare hole
+	 * as a single host (iprange: /32; pfb_v6_cidr_to_range(): /128), so the
+	 * predicates must agree -- an entry the engine suppresses with must also
+	 * read as "suppressed" here (killstates) and resolve for un-suppress.
+	 * Before issue #422 a bare entry never matched (ip_in_subnet() requires
+	 * a mask), silently diverging from the engines.
+	 */
+	public function testBareHostEntryMatchesItsExactIpBothFamilies(): void
+	{
+		$this->assertSame(
+			'198.51.100.7',
+			pfb_ip_suppressed_match('198.51.100.7', ['198.51.100.7'])
+		);
+		$this->assertTrue(pfb_ip_suppressed('198.51.100.7', ['198.51.100.7']));
+
+		$this->assertSame(
+			'2001:db8::7',
+			pfb_ip_suppressed_match('2001:db8::7', ['2001:db8::7'])
+		);
+		$this->assertTrue(pfb_ip_suppressed('2001:db8::7', ['2001:db8::7']));
+
+		// A DIFFERENT host is still not covered by a bare-host entry.
+		$this->assertNull(pfb_ip_suppressed_match('198.51.100.8', ['198.51.100.7']));
 	}
 
 	// --- comment tolerance ---
