@@ -1,0 +1,252 @@
+================================================================================
+PHASE 3 RESULTS — Smoke + the offline false-positive survey (acceptance gate)
+================================================================================
+
+SCOPE NOTE (per the orchestrator's brief)
+------------------------------------------
+This phase authored the smoke fixture + cases (verifiable off-box: collect,
+lint, static review) and ran the OFFLINE survey. The live CE+Plus smoke
+fan-out itself is a ~30 min GH dispatch that is the ORCHESTRATOR's acceptance
+step, not run here. ADR-49 stays "Implemented (pending smoke)" until that
+fan-out is green (see "REMAINING STEP" below).
+
+FIXTURE
+-------
+tests/smoke/fixtures/html_error_page.html (new) — a realistic 403 error page:
+
+    <!doctype html>
+    <html>
+    <head><title>403 Forbidden</title></head>
+    <body>
+    <h1>403 Forbidden</h1>
+    <p>Access to this resource on this server is denied</p>
+    <p>You do not have permission to view this page using the credentials supplied</p>
+    <p>Please contact the site administrator if you believe this is an error</p>
+    <p>Reference id 7f3a9c21e04b</p>
+    </body>
+    </html>
+
+Deliberately carries ZERO periods anywhere (the body avoids "word.word"
+constructs entirely) and no colons -- pfb_text_sanity()'s blocklist-shaped
+regex fires on ANY IPv4/CIDR, ANY "::" substring, or ANY "label.label"-shaped
+token (a bare domain.tld look-alike, e.g. even "index.html" written inline
+would match) -- so this fixture is unambiguous html_error_page bait with no
+accidental false-negative path.
+
+Verified LOCALLY (pure PHP, no FreeBSD needed -- pfb_text_sanity() is pure):
+    $ php -r 'require_once "tests/php/bootstrap.php";
+              var_dump(pfb_text_sanity(file_get_contents("tests/smoke/fixtures/html_error_page.html")));'
+    string(15) "html_error_page"
+Also verified the two healthy control fixtures reused for branch (c) both
+return NULL: ip_plain_cidr.txt, dnsbl_plain.txt.
+
+on-box file(1) verdict: EXPECTED text/html (verify on first live run) —
+documented that way in fixtures/README.md per the ADR-45 libmagic-divergence
+lesson (macOS `file --mime-type` locally reports text/html for this exact
+file -- informational only, NOT authoritative for FreeBSD/libmagic). The new
+smoke case asserts (never skips) the on-box `file -b --mime-type` verdict is
+one of {text/plain, text/html, text/csv} BEFORE asserting the reject, so a
+libmagic surprise fails LOUDLY with the real verdict rather than the reject
+assertion silently passing for the wrong reason (or silently not exercising
+the gate at all).
+
+fixtures/README.md: added a "Plain-text sanity scan fixture (ADR-49...)"
+section documenting the fixture + its expected verdict + which existing
+fixtures serve as the healthy control (ip_plain_cidr.txt / dnsbl_plain.txt).
+
+SMOKE CASES (tests/smoke/test_smoke_feeds.py, marker `smoke`)
+--------------------------------------------------------------
+Two new tests, inserted right after the ADR-48 healthy-ABP-feed test (before
+the ADR-46 section), following the ADR-48 stage-reject house style
+(CaseContext, h.count_log_marker on h.PFB_LOG, _recent_validate_lines on
+failure):
+
+1. test_feed_sanity_flag_gates_html_error_page_reject (branch a+b, the
+   transition test) — @pytest.mark.timeout(180).
+
+   DESIGN NOTE (deviation from the literal "one Force-Update-twice" shape in
+   the phase prompt, documented in the test's own docstring): pfb_download()'s
+   own per-list "reuse" shortcut in pfblockerng.inc (once a header's
+   `{header}.orig`/`.txt` already exists from a prior successful download, a
+   later pass with `updateip`'s force=TRUE/reuse='on' CAN skip straight to
+   reusing the cached body without calling pfb_download() again) means
+   re-Force-Updating the SAME header a second time is not guaranteed to
+   re-invoke the scan at all -- verified by reading the exact IP-download-loop
+   code (pfblockerng.inc ~16571-16630): the "already exists" skip requires the
+   `.orig`/`.txt` to ALREADY exist, which is false on any header's first-ever
+   fetch regardless of the reuse setting. So this test uses TWO DISTINCT,
+   never-before-fetched headers over the SAME served fixture (adr49sanoff for
+   the OFF leg, adr49sanon for the ON leg) -- each header's first fetch is
+   GUARANTEED to invoke pfb_download() fresh, isolating the flag as the only
+   variable that differs between the two legs. This is stricter than a
+   same-header re-fetch, not weaker: the feed BODY is byte-identical in both
+   legs (same fixture file), only pfb_feed_sanity differs.
+
+   Given the scan OFF (explicit + the registered default) + a fresh header
+     (adr49sanoff) with no pre-existing reject line for it (before=0,
+     asserted),
+   When Force-Updating (via CaseContext -> a single targeted `updateip`,
+     per issue #611 / the CaseContext docstring) the HTML-error-page feed
+     under that header,
+   Then NO 'stage=plaintext' line for that header appears (after==before==0)
+     -- the before-state proving an off install is byte-for-byte unaffected.
+   Given the scan flipped ON + a SECOND fresh header (adr49sanon) over the
+     SAME feed body (before=0, asserted),
+   When Force-Updating it,
+   Then a NEW canonical line appears (after > before) AND the alias stays
+     absent from `pfctl_tables()` -- the flag (not the content, identical in
+     both legs) caused the reject.
+
+   Exact reject marker grepped (ADR-48 canonical rendered line, `_v4` family
+   suffix per RESULTS/02's handoff, htmlspecialchars-escaped form -- none of
+   this marker's literal chars need escaping):
+
+       pfb_validate: REJECT feed=adr49sanon_v4 stage=plaintext reason=html_error_page detected=adr49sanon_v4.raw
+
+   `detected=` = basename($file_download), always "{header}_v4.raw" (the
+   package suffixes the header with the family, pfb_download() then appends
+   ".raw" to $file_dwn -- confirmed by reading pfb_download()'s
+   $file_dwn_esc/$file_download construction directly).
+
+   On-box guard: `_box_mime_type(deployed_vm, _fixture_bytes(fixture))` must
+   be in {text/plain, text/html, text/csv} -- asserted (not skipped) up front,
+   per the ADR-45 lesson (a libmagic surprise must fail loudly with the real
+   verdict).
+
+2. test_feed_sanity_flag_on_still_imports_healthy_feed (branch c, the
+   real-branch proof) — @pytest.mark.timeout(120).
+
+   Reuses the already-verified healthy ip_plain_cidr.txt fixture (the Part-C
+   kill-gate fixture for test_ip_http_feed_loads) with pfb_feed_sanity
+   explicitly ON.
+
+   Given the scan ON + the alias absent + no pre-existing 'stage=plaintext'
+     line for a fresh header (adr49sanhlt),
+   When Force-Updating the healthy plain-IP+CIDR feed,
+   Then the listed member (203.0.113.5) loads into the pf table (genuinely
+     imported, via h.wait_pfctl_table + h.member_present) AND the
+     'stage=plaintext' marker count for this header is UNCHANGED (no NEW
+     line) -- proves pfb_text_sanity() is a real branch (rejects the error
+     page, not every text/plain|html|csv feed).
+
+Both tests restore pfb_feed_sanity to OFF in a `finally` (CaseContext's own
+__exit__ already resets pf/derived state per leg; it does not touch
+config/0 keys, so the flag itself needed its own explicit restore, same
+shape as the sibling test_feed_internal_filter_blocks_then_allowlist_exempts).
+
+CONFIG HELPER (tests/smoke/helpers.py)
+-----------------------------------------
+Added `set_feed_sanity(vm, on)`: writes through the ADR-29 gateway exactly as
+the phase prompt specified --
+
+    require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');
+    PfbConfig::write('pfb_feed_sanity', PfbToggle::On|PfbToggle::Off);
+    write_config('pfBlockerNG smoke: set pfb_feed_sanity');
+
+Mirrors the existing `_set_delta_mode` (test_smoke_adr40.py) / `_set_quiet_hours`
+(test_smoke_apply_on_change.py) PfbConfig::write call shape -- the established
+pattern for a config-only PfbConfig-gated field with no www/ checkbox.
+
+Also added `pfb_feed_sanity` to `_BASELINE_GLOBAL_KEYS` (helpers.py) so the
+module-boundary `reset_pfb_baseline()` unsets it between smoke modules --
+same treatment as the sibling `pfb_alias_delta_mode` (ADR-40) and
+`pfb_feed_internal_allowlist` config/0 toggles a test flips, preventing a
+leaked-ON flag from spuriously rejecting a later module's own text/html-ish
+fixture.
+
+PHP: #[CoversFunction] RE-ADDED (tests/php/FeedCorpusSurveyTest.php)
+------------------------------------------------------------------------
+Added `use PHPUnit\Framework\Attributes\CoversFunction;` +
+`#[CoversFunction('pfb_text_sanity')]` on the class (removed in PR #827 while
+the function did not exist yet -- an undefined covers-target is a PHPUnit
+warning the CI suite's --fail-on-warning turns into a failure). Confirmed NO
+warning now that the function exists:
+
+    $ vendor/bin/phpunit --filter FeedCorpusSurveyTest --testdox
+    ..                                                                  2 / 2 (100%)
+    Time: 00:00.070, Memory: 30.00 MB
+    Feed Corpus Survey
+     ✔ Corpus is present and coherent
+     ✔ Catalogue survey has zero false positives
+    OK (2 tests, 1441 assertions)
+
+OFFLINE SURVEY (ADR-49 §7 acceptance gate) — PASS
+----------------------------------------------------
+    $ vendor/bin/phpunit --filter FeedCorpusSurveyTest
+    OK (2 tests, 1441 assertions)
+
+ZERO false positives over the ~150+ committed catalogue text samples (the 5
+KNOWN_NON_FEED exclusions from Phase 1 -- MaxMind_BD_Proxy, Abuse_SSLBL,
+Abuse_SSLBL_Agr, Darklist, MPatrol -- are asserted to STILL be flagged, i.e.
+not stale). Full output persisted at RESULTS/03_Survey.txt. No network at
+test time (offline corpus, per PR #827).
+
+PHPUNIT / PHPSTAN / PHPCS / RUFF / COLLECT SUMMARIES
+--------------------------------------------------------
+$ vendor/bin/phpunit
+    Tests: 2151, Assertions: 17835, Skipped: 4 (same 4 pre-existing, unrelated
+    skips as Phase 2's baseline -- e.g. FileMtimeTest's macOS VFS-staleness
+    skip). FeedCorpusSurveyTest green with the covers attribute restored, no
+    warnings.
+
+$ vendor/bin/phpstan analyse --memory-limit=1G
+    [OK] No errors.
+
+$ vendor/bin/phpcs --standard=phpcs.xml.dist src/
+    Clean (no output) -- no src/ PHP touched this phase.
+
+$ php -l tests/php/FeedCorpusSurveyTest.php
+    No syntax errors detected.
+
+$ python -m pytest --collect-only tests/smoke/test_smoke_feeds.py --override-ini="addopts=" -q
+    48 tests collected (46 baseline + the 2 new ADR-49 cases); both new test
+    names present in the collected list. Only pre-existing
+    PytestUnknownMarkWarning noise from stripping addopts (every
+    @pytest.mark.timeout-decorated test in the file produces the same
+    warning under this override -- unrelated to this diff).
+
+$ ruff check tests/smoke/test_smoke_feeds.py tests/smoke/helpers.py
+    All checks passed!
+$ ruff format --check tests/smoke/test_smoke_feeds.py tests/smoke/helpers.py
+    2 files already formatted (ran `ruff format` once to fix a single
+    over-length f-string before this final check).
+
+DIFF SCOPE
+----------
+$ git diff --stat
+    tests/php/FeedCorpusSurveyTest.php |   9 ++-
+    tests/smoke/fixtures/README.md     |  11 +++
+    tests/smoke/helpers.py             |  27 +++++++
+    tests/smoke/test_smoke_feeds.py    | 154 +++++++++++++++++++++++++++++++++++++
+    4 files changed, 197 insertions(+), 4 deletions(-)
+plus two new untracked files: tests/smoke/fixtures/html_error_page.html and
+this RESULTS/03_Survey.txt. Exactly the scoped surface (test_smoke_feeds.py +
+its fixture + fixtures/README.md + FeedCorpusSurveyTest.php + RESULTS/); no
+src/ PHP, no www/, no config-schema change.
+
+REMAINING STEP — live CE+Plus smoke fan-out (orchestrator's acceptance step)
+---------------------------------------------------------------------------
+NOT run by this phase (out of scope per the brief: "the LIVE CE+Plus smoke
+fan-out is NOT yours to run"). Per CLAUDE.md "ADR acceptance": ADR-49 flips
+to Accepted once (a) this offline survey is green (DONE, above) AND (b) the
+smoke fan-out (CE + Plus) is green for both new cases +
+test_validate_log_healthy_feed_no_spurious_reject-style regression coverage.
+Until the fan-out runs and is confirmed green, ADR-49 stays "Implemented
+(pending smoke)" -- do not flip Status to Accepted based on this phase alone.
+
+Dispatch command (selective, per CLAUDE.md "Selective dispatch"):
+    gh workflow run smoke.yml -f scope=impacted \
+      -f pytest_filter="test_feed_sanity_flag_gates_html_error_page_reject or test_feed_sanity_flag_on_still_imports_healthy_feed"
+(or `-f scope=full` for the every-leg run before flipping to Accepted).
+
+OUT OF SCOPE (explicitly, per ADR §7 / the phase brief)
+-----------------------------------------------------------
+The default-on decision for pfb_feed_sanity is a SEPARATE decision (a
+follow-up ADR/PR), not part of this phase or this ADR's acceptance gate.
+pfb_feed_sanity remains registered default OFF; nothing in this phase changes
+that default.
+
+COMMIT / PUSH
+-------------
+Commit: pfblockerng: smoke + zero-FP survey for plain-text sanity scan (ADR-49 P3)
+Pushed directly to adr/49-plain-text-sanity-scan.

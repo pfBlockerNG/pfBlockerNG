@@ -1250,6 +1250,29 @@ def set_feed_internal_allowlist(vm: SmokeVM, value: str, *, timeout: float = 60.
         )
 
 
+def set_feed_sanity(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
+    """Set the ADR-49 opt-in plain-text feed sanity scan (``pfb_feed_sanity``, default OFF).
+
+    Config-only knob (no www/ checkbox) -- written through the ADR-29 gateway
+    (``PfbConfig::write``), the same call a future UI save path would make. Gates
+    ``pfb_text_sanity()`` inside ``pfb_download()`` on accepted ``text/plain`` /
+    ``text/html`` / ``text/csv`` feeds: ON rejects a feed whose sampled body looks
+    like an HTML error page / NUL-laden / near-empty (``stage=plaintext``); OFF
+    (the default) never calls the scanner. Call BEFORE the reload under test --
+    ``pfb_download()`` reads the flag once per fetch.
+    """
+    value = "PfbToggle::On" if on else "PfbToggle::Off"
+    snippet = (
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');\n"
+        f"PfbConfig::write('pfb_feed_sanity', {value});\n"
+        "write_config('pfBlockerNG smoke: set pfb_feed_sanity');\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"set_feed_sanity({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+
+
 @timed_step("use_system_dns_upstream")
 def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     """Point pfSense at the runner-side mock via its REAL System-DNS path (no custom zone).
@@ -2430,6 +2453,10 @@ _BASELINE_GLOBAL_KEYS = (
     # (test_trigger_api / test_smoke_feeds) must not leak the exemption forward, or a
     # later module runs with the default-ON guard effectively disabled (false-green).
     "pfb_feed_internal_allowlist",
+    # ADR-49 opt-in plain-text sanity scan: test_smoke_feeds flips this ON to prove the
+    # reject branch; unset so a later module's healthy text/html-ish feed is not
+    # spuriously rejected by a leaked-forward flag (default is OFF).
+    "pfb_feed_sanity",
 )
 
 
