@@ -11,15 +11,15 @@ use PHPUnit\Framework\TestCase;
  * `tar ... -C` extraction in pfb_download(). pfb_archive_unsafe_member() returns
  * the FIRST member name unsafe to extract to disk (absolute path, a '..' path
  * component, a component over 255 bytes = FreeBSD NAME_MAX, or a total name over
- * 1024 bytes = PATH_MAX) or NULL when all are safe; pfb_archive_members_safe() is
- * the boolean predicate over it. Both are pure -- the full hostile/benign matrix
- * is pinned off-appliance. pfb_zip_member_names() is the thin bsdtar lister the
- * call sites feed them from; its noise-line filtering is pinned against a real
- * archive (a noise line returned as a "member name" would false-trip the guard).
+ * 1024 bytes = PATH_MAX), a fail-closed sentinel for a NULL (unlistable) list, or
+ * NULL when all are safe. Pure -- the full hostile/benign matrix is pinned
+ * off-appliance. pfb_archive_member_names() is the thin bsdtar lister the call
+ * sites feed it from; it returns NULL on a listing failure (rc != 0) so a caller
+ * fails closed, and it must NOT drop a member merely because its name begins with
+ * "tar: " (stderr is discarded, never merged into the member list).
  */
 #[CoversFunction('pfb_archive_unsafe_member')]
-#[CoversFunction('pfb_archive_members_safe')]
-#[CoversFunction('pfb_zip_member_names')]
+#[CoversFunction('pfb_archive_member_names')]
 final class ArchiveMemberSafetyTest extends TestCase
 {
 	// --- pure decision matrix ------------------------------------------------
@@ -29,7 +29,9 @@ final class ArchiveMemberSafetyTest extends TestCase
 	{
 		$longComponent = str_repeat('a', 256);           // NAME_MAX is 255
 		$okComponent   = str_repeat('a', 255);
-		// 5 x 200 chars + 4 separators = 1004 bytes total, every component legal.
+		// 5x200 'b' + 100 'c' + 5 separators = 1105 bytes total (> PATH_MAX 1024),
+		// while every individual component stays legal (<= 255) -- isolates the
+		// total-length cap from the per-component cap.
 		$longPath = implode('/', array_fill(0, 5, str_repeat('b', 200))) . '/' . str_repeat('c', 100);
 
 		return [
@@ -48,6 +50,13 @@ final class ArchiveMemberSafetyTest extends TestCase
 			'over-long total path'        => [[$longPath], $longPath],
 			'first unsafe wins'           => [['ok.txt', '/abs', '../esc'], '/abs'],
 			'hostile after benign'        => [['a/b', 'c/../../d'], 'c/../../d'],
+			// A member whose NAME begins with "tar: " must be judged on its content,
+			// never dropped as tool noise -- this is the guard-bypass regression pin.
+			// ("tar: ../x" splits to ['tar: ..', 'x'] -- 'tar: ..' is a literal dir, NOT
+			// a bare '..', so it is genuinely benign; the real escape needs a bare '..'
+			// component, exactly the reviewer's "tar: ../../x" bypass shape.)
+			'tar-prefixed benign name'    => [['tar: ../notes.txt'], null],
+			'tar-prefixed hostile name'   => [['tar: ../../escape'], 'tar: ../../escape'],
 		];
 	}
 
@@ -64,44 +73,53 @@ final class ArchiveMemberSafetyTest extends TestCase
 		);
 	}
 
-	/** @param list<string> $names */
-	#[DataProvider('memberMatrix')]
-	public function testSafePredicateAgreesWithUnsafeMember(array $names, ?string $expected): void
+	public function testNullMemberListFailsClosed(): void
 	{
-		// The predicate is definitionally the NULL-check over the finder -- pin the
-		// agreement so the two cannot drift apart.
-		$this->assertSame($expected === NULL, pfb_archive_members_safe($names));
+		// A NULL list (the lister could not read the archive) is unsafe -- the finder
+		// returns a sentinel so every disk-writing caller rejects rather than fail-open
+		// extracting an archive the ADR-45 gzip probe never structurally validated.
+		$this->assertSame('unlistable-archive', pfb_archive_unsafe_member(NULL));
 	}
 
 	// --- bsdtar lister (real-tool wiring, skip-guarded) ----------------------
 
-	public function testMemberNamesListsRealZipWithoutNoiseLines(): void
+	public function testMemberNamesListsRealArchiveAndKeepsTarPrefixedMember(): void
 	{
-		if (!class_exists('ZipArchive')) {
-			$this->markTestSkipped('ZipArchive extension unavailable on this host');
-		}
-		$path = tempnam(sys_get_temp_dir(), 'pfb_members_') . '.zip';
-		$zip = new ZipArchive();
-		$this->assertTrue($zip->open($path, ZipArchive::CREATE | ZipArchive::OVERWRITE));
-		$zip->addFromString('one.txt', "inert\n");
-		$zip->addFromString('dir/two.txt', "inert\n");
-		$zip->close();
+		// A plain .tar, NOT a zip: the CI host's /usr/bin/tar is GNU tar, which cannot
+		// read zip (the known FreeBSD-vs-dev-host tool divergence -- on the appliance
+		// /usr/bin/tar is always bsdtar and reads both). A .tar pins the same lister
+		// behaviour on every host; the zip leg is live-proven by the ADR-46 smoke cases.
+		// A member literally named "tar: keep.txt" must survive -- stderr is discarded,
+		// so a member name can never be confused with a bsdtar diagnostic.
+		$dir  = sys_get_temp_dir() . '/pfb_members_' . uniqid('', TRUE);
+		$path = "{$dir}/members.tar";
+		mkdir($dir);
+		$tar = new PharData($path);
+		$tar->addFromString('one.txt', "inert\n");
+		$tar->addFromString('dir/two.txt', "inert\n");
+		$tar->addFromString('tar: keep.txt', "inert\n");
+		unset($tar);
 
-		$members = pfb_zip_member_names($path);
+		$members = pfb_archive_member_names($path);
 		@unlink($path);
+		@rmdir($dir);
 
-		sort($members);
-		$this->assertSame(['dir/two.txt', 'one.txt'], $members, 'expected exactly the archive members, no bsdtar noise lines');
-		foreach ($members as $m) {
-			$this->assertStringStartsNotWith('tar: ', $m, "bsdtar noise line leaked into the member list: <{$m}>");
-		}
+		$this->assertNotNull($members, 'a readable archive must list, not fail closed');
+		$real = array_values(array_filter($members, static fn (string $m): bool => !str_ends_with($m, '/')));
+		sort($real);
+		$this->assertSame(
+			['dir/two.txt', 'one.txt', 'tar: keep.txt'],
+			$real,
+			'expected exactly the members incl. the "tar: "-prefixed one (never dropped as noise)'
+		);
 	}
 
-	public function testMemberNamesOnUnreadableArchiveIsEmptyFailOpen(): void
+	public function testMemberNamesOnUnreadableArchiveIsNullFailClosed(): void
 	{
-		// Listing failure returns [] (guard passes): the archive already passed the
-		// ADR-45 structural probe, and the extraction itself fails as before -- the
-		// guard must never turn a listing hiccup into a new reject class.
-		$this->assertSame([], pfb_zip_member_names(sys_get_temp_dir() . '/pfb_members_does_not_exist.zip'));
+		// Listing failure returns NULL so the caller fails CLOSED -- for the gzip/UT1
+		// sites the ADR-45 probe is only `gunzip -t` (stream integrity, not the inner
+		// tar), so a corrupt-inner archive that passed the probe must be rejected here,
+		// never fail-open extracted.
+		$this->assertNull(pfb_archive_member_names(sys_get_temp_dir() . '/pfb_members_does_not_exist.tar'));
 	}
 }
