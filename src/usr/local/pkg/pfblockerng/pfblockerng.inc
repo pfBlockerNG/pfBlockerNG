@@ -9976,6 +9976,21 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			return FALSE;
 		}
 
+		// ADR-49: opt-in plain-text sanity scan on accepted text feeds. Flag check
+		// FIRST -- default-off short-circuits before the MIME check and the file
+		// read, so an off install is byte-for-byte unchanged (ADR-28 conv 2).
+		if (PfbConfig::read('pfb_feed_sanity') === PfbToggle::On &&
+			in_array($file_type, array('text/plain', 'text/html', 'text/csv'), TRUE)) {
+			// Read UP TO 8 KiB -- a cap, not a minimum; a shorter feed is read whole.
+			$pfb_sanity_sample = (string) @file_get_contents($file_download, FALSE, NULL, 0, 8192);
+			$pfb_sanity = pfb_text_sanity($pfb_sanity_sample);
+			if ($pfb_sanity !== NULL) {
+				pfb_validate_log($header, 'plaintext', $pfb_sanity, basename($file_download));
+				unlink_if_exists($file_download);
+				return FALSE;
+			}
+		}
+
 		// Create update file markers on new downloads available
 		switch($type) {
 			case 'geoip':
