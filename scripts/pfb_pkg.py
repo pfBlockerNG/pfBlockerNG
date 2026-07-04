@@ -46,6 +46,22 @@ def zstd_decompress(data: bytes) -> bytes:
         return subprocess.run([zstd, "-dc"], input=data, stdout=subprocess.PIPE, check=True).stdout
 
 
+def zstd_compress(data: bytes, err_cls: type[Exception], err_msg: str) -> bytes:
+    """Compress a zstd frame at level 19. Prefers the `zstandard` module, falls
+    back to the `zstd` binary; raises err_cls(err_msg) if neither is available
+    (each caller owns its own error class + message)."""
+    try:
+        import zstandard
+
+        return zstandard.ZstdCompressor(level=19).compress(data)
+    except ImportError:
+        pass
+    zstd = shutil.which("zstd")
+    if not zstd:
+        raise err_cls(err_msg)
+    return subprocess.run([zstd, "-q", "-19", "-c"], input=data, stdout=subprocess.PIPE, check=True).stdout
+
+
 def read_compact_manifest(pkg_path: str | Path) -> dict:
     """Return the +COMPACT_MANIFEST JSON object of a .pkg (pure Python, no libpkg)."""
     pkg_path = Path(pkg_path)

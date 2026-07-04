@@ -105,7 +105,7 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
-from pfb_pkg import PkgError, pkg_version_sort_key, read_compact_manifest
+from pfb_pkg import PkgError, pkg_version_sort_key, read_compact_manifest, zstd_compress
 
 # --------------------------------------------------------------------------- #
 # Catalog descriptor (meta.conf / meta) — byte-identical to real `pkg repo`.
@@ -243,22 +243,6 @@ def _data_blob(objs: list[dict]) -> bytes:
 # --------------------------------------------------------------------------- #
 
 
-def _zstd_compress(data: bytes) -> bytes:
-    try:
-        import zstandard
-
-        return zstandard.ZstdCompressor(level=19).compress(data)
-    except ImportError:
-        pass
-    zstd = shutil.which("zstd")
-    if not zstd:
-        raise BuildRepoError(
-            "zstd compression needs the `zstd` binary or the python `zstandard` module "
-            "(brew install zstd / apt install zstd)"
-        )
-    return subprocess.run([zstd, "-q", "-19", "-c"], input=data, stdout=subprocess.PIPE, check=True).stdout
-
-
 def _tar_one(member_name: str, data: bytes) -> bytes:
     raw = io.BytesIO()
     with tarfile.open(fileobj=raw, mode="w", format=tarfile.USTAR_FORMAT) as tf:
@@ -274,7 +258,14 @@ def _tar_one(member_name: str, data: bytes) -> bytes:
 
 
 def write_zstd_tar(member_name: str, data: bytes, out_path: Path) -> None:
-    out_path.write_bytes(_zstd_compress(_tar_one(member_name, data)))
+    out_path.write_bytes(
+        zstd_compress(
+            _tar_one(member_name, data),
+            BuildRepoError,
+            "zstd compression needs the `zstd` binary or the python `zstandard` module "
+            "(brew install zstd / apt install zstd)",
+        )
+    )
 
 
 # --------------------------------------------------------------------------- #
