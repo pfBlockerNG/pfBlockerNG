@@ -2525,6 +2525,137 @@ function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir): bool
 	return $entry !== NULL && !empty($entry['pending_apply']);
 }
 
+/**
+ * pfblockerng_tick — ADR-43 P5: apply-on-change due-ledger tick dispatcher.
+ *
+ * Reads the ledger, dispatches each job that is due (feeds, dcc, bl) via exec() as a
+ * separate process, then marks each as ran. ss_refresh and the scheduled log
+ * maintenance (pfb_log_mgmt/pfb_log_reset) are called directly every tick.
+ *
+ * Lives here (not in the www/ dispatcher script) rather than the reverse so the
+ * PHPUnit bootstrap can load and call the real entrypoint off-appliance: the www
+ * script is never require()'d by the test suite, so before this move the tick had
+ * zero off-box coverage (review finding ADR43-5). The www dispatch
+ * (`pfblockerng.php tick`) still just calls this function.
+ *
+ * Apply-on-change (ADR-40 IP / ADR-10 DNSBL): a due job dispatches pfb_trigger, which
+ * calls sync_package_pfblockerng() — ADR-40 gates alias apply on pfb_alias_set_different()
+ * and ADR-10 uses zero-downtime swap for DNSBL; no apply happens when nothing changed.
+ *
+ * Optional quiet-hours window (pfb_quiet_hours): when set and the current time is OUTSIDE
+ * the window, a due job is deferred (pending_apply recorded in the ledger); the next tick
+ * inside the window applies it. Default '' = apply immediately on every due tick.
+ *
+ * Cadence seeding from legacy knobs (§2.G — no config.xml migration):
+ *   feed cron : PfbConfig::read('pfb_interval') hours; skip when 'Disabled'.
+ *   dcc       : 86400 s daily, jitter = seeded_jitter (stable per install).
+ *   bl        : 86400 or 604800 s, jitter = seeded_jitter (stable per install).
+ *
+ * Scheduled log maintenance (pfb_log_mgmt/pfb_log_reset) runs unconditionally at the
+ * end of every tick, independent of the feed-cron cadence above (issue #573: with
+ * pfb_interval='Disabled' the feed cron never dispatches, so log maintenance can no
+ * longer ride its tail the way it used to inside pfblockerng_sync_cron()).
+ */
+function pfblockerng_tick(): void
+{
+	global $pfb;
+
+	$now   = time();
+	$seed  = pfb_tick_seed();
+	$dbdir = $pfb['dbdir'];
+
+	// --- Cadence from legacy knobs ---
+	$raw_interval  = PfbConfig::read('pfb_interval');
+	$cron_disabled = ($raw_interval === 'Disabled');
+	$cron_secs     = $cron_disabled ? 0 : (max(1, (int)$raw_interval) * 3600);
+
+	$bl_secs = 86400;
+	if (!empty($pfb['blconfig']['blacklist_freq']) && $pfb['blconfig']['blacklist_freq'] === 'Weekly') {
+		$bl_secs = 604800;
+	}
+
+	// --- Due check ---
+	$due = pfb_tick_due_jobs($now, $seed, $dbdir, $cron_secs, $bl_secs);
+
+	// --- Apply-on-change window (ADR-43 P5) ---
+	// Empty window = apply immediately (default). Non-empty = defer outside window.
+	$window = (string) PfbConfig::read('pfb_quiet_hours');
+	$in_win = pfb_quiet_hours_in_window($now, $window);
+
+	// --- Dispatch due (or pending) jobs; defer when outside the apply window ---
+
+	// Feed cron: dispatch the `cron` verb (-> pfblockerng_sync_cron), NOT pfb_trigger
+	// directly.  pfblockerng_sync_cron applies each feed's per-list Update Frequency
+	// ($list['cron']: EveryDay/Weekly/NNhour) before its final sync_package_pfblockerng('cron'),
+	// and runs the ADR-19 software-update check at the end -- both of which a bare
+	// `pfb_trigger scope=both` skips (it would poll every feed every tick and never
+	// run the once-per-pass update check). Apply-on-change still happens via ADR-40
+	// (IP) + ADR-10 (DNSBL) inside that final sync. Backgrounded so the tick stays
+	// fast. The scheduled log trim + reset no longer ride this dispatch (issue
+	// #573) -- see pfb_log_mgmt()/pfb_log_reset() at the end of this function.
+	if (!$cron_disabled && ($due['cron'] || pfb_due_ledger_is_pending('cron', $dbdir))) {
+		if ($in_win) {
+			logger(LOG_NOTICE, localize_text('Tick: dispatching feed cron.'), LOG_PREFIX_PKG_PFBLOCKERNG);
+			exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron >> {$pfb['runlog']} 2>&1 &");
+			pfb_due_ledger_mark_ran('cron', $cron_secs, $now, $seed, 0, $dbdir);
+		} else {
+			logger(LOG_INFO, localize_text('Tick: feed cron deferred (outside apply window).'), LOG_PREFIX_PKG_PFBLOCKERNG);
+			pfb_due_ledger_set_pending('cron', $dbdir);
+		}
+	}
+
+	// MaxMind/TOP1M/ASN: daily, jittered.
+	if ($due['dcc'] || pfb_due_ledger_is_pending('dcc', $dbdir)) {
+		if ($in_win) {
+			logger(LOG_NOTICE, localize_text('Tick: dispatching dcc.'), LOG_PREFIX_PKG_PFBLOCKERNG);
+			exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php dcc >> {$pfb['extraslog']} 2>&1 &");
+			pfb_due_ledger_mark_ran('dcc', 86400, $now, $seed, 23 * 3600, $dbdir);
+		} else {
+			logger(LOG_INFO, localize_text('Tick: dcc deferred (outside apply window).'), LOG_PREFIX_PKG_PFBLOCKERNG);
+			pfb_due_ledger_set_pending('dcc', $dbdir);
+		}
+	}
+
+	// Blacklist: daily or weekly, jittered. Build bl_string from blconfig.
+	if (($due['bl'] || pfb_due_ledger_is_pending('bl', $dbdir)) && $pfb['enable'] == 'on' &&
+	    !empty($pfb['blconfig']) &&
+	    !empty($pfb['blconfig']['blacklist_enable']) && $pfb['blconfig']['blacklist_enable'] != 'Disable' &&
+	    !empty($pfb['blconfig']['blacklist_selected']) && isset($pfb['blconfig']['item'])) {
+
+		if ($in_win) {
+			$bl_str = '';
+			$bl_sel = array_flip(explode(',', $pfb['blconfig']['blacklist_selected'])) ?: [];
+			foreach ($pfb['blconfig']['item'] as $bl_item) {
+				if (isset($bl_sel[$bl_item['xml']]) && !empty($bl_item['selected'])) {
+					$bl_str .= ",{$bl_item['xml']}";
+				}
+			}
+			$bl_str = pfb_filter(ltrim($bl_str, ','), PFB_FILTER_CSV, 'Tick bl dispatch');
+
+			if (!empty($bl_str)) {
+				logger(LOG_NOTICE, localize_text('Tick: dispatching bl.'), LOG_PREFIX_PKG_PFBLOCKERNG);
+				exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php bl " . escapeshellarg($bl_str) . " >> {$pfb['extraslog']} 2>&1 &");
+				pfb_due_ledger_mark_ran('bl', $bl_secs, $now, $seed, 23 * 3600, $dbdir);
+			}
+		} else {
+			logger(LOG_INFO, localize_text('Tick: bl deferred (outside apply window).'), LOG_PREFIX_PKG_PFBLOCKERNG);
+			pfb_due_ledger_set_pending('bl', $dbdir);
+		}
+	}
+
+	// SafeSearch CNAME freshness: every tick (cheap DNS re-resolution).
+	pfblockerng_ss_refresh();
+
+	// Scheduled log maintenance (issue #573): unconditional every tick, independent
+	// of the feed-cron gate above -- pfb_interval='Disabled' must not silently stop
+	// log upkeep. Both self-gate by their own configured schedule/caps (per-log line
+	// cap for pfb_log_mgmt, per-log calendar boundary for pfb_log_reset), so calling
+	// them every tick is safe: most calls are a no-op. Trim (line-cap) runs before
+	// reset (calendar boundary), same ordering as the prior sync_cron tail.
+	pfb_log_mgmt();
+	pfb_log_reset();
+}
+
 // ---------------------------------------------------------------------------
 // ADR-53 P4 — pure suppression-line validator (v4 mask lift /8-/32)
 // ---------------------------------------------------------------------------
