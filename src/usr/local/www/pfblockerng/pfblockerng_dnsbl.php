@@ -2795,6 +2795,29 @@ $section->addInput(new Form_Checkbox(
 
 $form->add($section);
 
+// DNSBL Group Policy section — placed directly below DNSBL Configuration (which holds
+// its enable checkbox) and above the encrypted-DNS sections. The pfb_gp checkbox JS
+// toggles this section's visibility by its 'Python_Group_Policy' id.
+$section = new Form_Section('DNSBL Group Policy', 'Python_Group_Policy', COLLAPSIBLE|SEC_CLOSED);
+$section->addInput(new Form_StaticText(
+	NULL,
+	'This is a preliminary DNSBL Group Policy configuration that will bypass DNSBL for the defined LAN IPs. (No Subnets allowed)'));
+
+$section->addInput(new Form_Textarea(
+	'pfb_gp_bypass_list',
+	'Bypass IPs',
+	$pconfig['pfb_gp_bypass_list']
+))->removeClass('form-control')
+  ->addClass('row-fluid col-sm-12')
+  ->setAttribute('columns', '90')
+  ->setAttribute('rows', '15')
+  ->setAttribute('wrap', 'off')
+  ->setAttribute('style', 'background:#fafafa; width: 100%')
+  ->setHelp('Enter the Local LAN IPs (one per line) that will bypass DNSBL Blocking.<br />'
+		. 'Changes to this option will require a Force Update to take effect.');
+
+$form->add($section);
+
 // [ ADR-36 ] DNS Redirect section — placed above the DoH/DoT/DoQ Blocking section.
 // Redirects outbound port-53 DNS traffic on the selected interfaces to the
 // firewall's own resolver. DoH/DoT bypass is NOT covered.
@@ -2960,26 +2983,6 @@ $section->addInput(new Form_Select(
 ))->setHelp('Select the DoH/DoT/DoQ providers to block.')
   ->setAttribute('style', 'width: auto')
   ->setAttribute('size', '20');
-
-$form->add($section);
-
-$section = new Form_Section('DNSBL Group Policy', 'Python_Group_Policy', COLLAPSIBLE|SEC_CLOSED);
-$section->addInput(new Form_StaticText(
-	NULL,
-	'This is a preliminary DNSBL Group Policy configuration that will bypass DNSBL for the defined LAN IPs. (No Subnets allowed)'));
-
-$section->addInput(new Form_Textarea(
-	'pfb_gp_bypass_list',
-	'Bypass IPs',
-	$pconfig['pfb_gp_bypass_list']
-))->removeClass('form-control')
-  ->addClass('row-fluid col-sm-12')
-  ->setAttribute('columns', '90')
-  ->setAttribute('rows', '15')
-  ->setAttribute('wrap', 'off')
-  ->setAttribute('style', 'background:#fafafa; width: 100%')
-  ->setHelp('Enter the Local LAN IPs (one per line) that will bypass DNSBL Blocking.<br />'
-		. 'Changes to this option will require a Force Update to take effect.');
 
 $form->add($section);
 
