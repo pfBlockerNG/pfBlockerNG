@@ -1,6 +1,6 @@
 # ADR-46: ZIP inner-content validation consistency and extraction-path hardening
 
-- **Status:** **Proposed** (2026-06-28; facts refreshed 2026-07-03 against `devel` — the §1 extraction inventory was corrected to THREE disk-writing sites, and the guard-scope question in §2.3 is an open fork; phase prompts not yet authored) — defense-in-depth; lower priority than ADR-45 (most of the original "re-enable the inner check" ask is already satisfied — see §1)
+- **Status:** **Proposed** (2026-06-28; facts refreshed 2026-07-03 against `devel` — the §1 extraction inventory was corrected to THREE disk-writing sites, and the guard-scope question in §2.3 is an open fork; phase prompts not yet authored) — defense-in-depth; lower priority than ADR-45 (most of the original "re-enable the inner check" ask is already satisfied — see §1) — **(facts refreshed 2026-07-04: the §1 "inner validation already active" premise was wrong — issue #808; the probe-target fix landed independently, narrowing this ADR to the member-name guard)**
 - **Date:** 2026-06-28
 - **Branch:** `adr/46-zip-inner-content-hardening` (off `devel`) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfblockerng.inc`
 - **Target runtime:** PHP 8.3, FreeBSD / pfSense; `bsdtar` (libarchive)
@@ -16,11 +16,13 @@ The source review proposed three things for the ZIP path: **re-enable the inner-
 defences.** Reading the *current* `pfb_download()` rather than the pre-implementation
 spec, two of the three are already handled or infeasible:
 
-- **ZIP inner-content validation is already active** — after `tar -xOf` extraction the
-  ZIP branch **re-runs `PFB_FILTER_FILE_MIME` on the extracted payload**
-  (`pfb_download()` in `pfblockerng.inc`, ~:9209). So a ZIP whose *contents* are not an
-  allow-listed type is already rejected. The source review itself noted this
-  post-extraction check "is actually quite good."
+- **ZIP inner-content validation is now real — it was a no-op until issue #808's fix.** After
+  `tar -xOf` extraction the ZIP branch **re-runs `PFB_FILTER_FILE_MIME`**
+  (`pfb_download()` in `pfblockerng.inc`, ~:9469), but until issue #808 the re-check probed
+  `$input[1]` = `$file_download`, the ORIGINAL archive (already outer-MIME-allow-listed as
+  `application/zip`), never the extracted payload — a pure no-op, live-confirmed by the
+  ADR-48 fan-out. Issue #808's fix (landed on `devel`) repoints the probe at the extracted
+  file, so a ZIP whose *contents* are not an allow-listed type is now genuinely rejected.
 - **The `file -bZ` `_COMPRESSED` check cannot be re-enabled for ZIP.** libmagic's `-Z`
   decompresses a *single compressed stream* (gzip/bzip2/xz) and classifies the inner
   bytes; a **ZIP is a multi-member container**, not a single stream, so `-Z` does not
@@ -91,18 +93,18 @@ path is unchanged; the GeoIP/top-1M extraction still works for legitimate archiv
    left unchanged (no disk write, no traversal surface) but gains a one-line comment
    recording why no guard is needed there.
 
-4. **Formalise the inner-content comment.** Replace the disabled `_COMPRESSED` block's prose
-   with a precise statement: ZIP inner-content validation **is** the post-extraction
-   `PFB_FILTER_FILE_MIME` re-check; `file -bZ` is not used for ZIP because `-Z` does not
-   classify multi-member containers. Remove the "deferred to a future ADR" wording (this ADR
-   *is* that resolution).
+4. **Formalise the inner-content comment — SATISFIED by issue #808's fix, outside this ADR.**
+   The in-code comment above the post-extraction re-check now documents it as the ZIP
+   inner-content gate and explains why `-bZ` stays off (multi-member containers); no
+   "deferred to a future ADR" wording remains. This ADR's residual scope is items 1–3 (the
+   member-name guard) only.
 
 ### Per-area decision table
 
 | Area | Decision |
 |---|---|
-| ZIP inner-content gate | Keep the post-extraction `PFB_FILTER_FILE_MIME` re-check; document it as the gate |
-| `file -bZ` for ZIP | Stays off — `-Z` cannot classify a multi-member container (documented, not deferred) |
+| ZIP inner-content gate | **Satisfied (issue #808)** — post-extraction `PFB_FILTER_FILE_MIME` re-check now probes the extracted payload and is documented as the gate |
+| `file -bZ` for ZIP | **Satisfied (issue #808)** — stays off, now documented in-code: `-Z` cannot classify a multi-member container |
 | `tar -xOf` main path | Unchanged (stdout — no traversal surface); comment why |
 | `tar … -C` disk-writing paths (gzip GeoIP, UT1/blacklist, ZIP GeoIP/top-1M) | Add `pfb_archive_members_safe()` guard before extraction (scope per the §1.2 open fork) |
 | `pfb_archive_members_safe()` | New pure predicate: reject absolute / `..` / over-long member names |
@@ -157,12 +159,13 @@ path is unchanged; the GeoIP/top-1M extraction still works for legitimate archiv
 Add the pure predicate and pin its decision matrix (absolute / `..` / over-long → reject;
 benign → accept). No call-site change.
 
-### Phase 2 — Wire the guard before disk extraction + formalise the inner-content comment
+### Phase 2 — Wire the guard before disk extraction
 
 **Prompt:** `02_Wire_Guard_And_Document.txt`
 
-Call the guard before the GeoIP/top-1M `tar -xf -C`; reject on failure. Replace the disabled
-`_COMPRESSED` prose with the precise inner-validation statement. Smoke: a malicious-member
+Call the guard before the GeoIP/top-1M `tar -xf -C`; reject on failure. (The inner-content
+comment formalisation originally scoped here was satisfied by issue #808 — see §2 item 4;
+Phase 2 is now the guard-wiring only.) Smoke: a malicious-member
 archive is rejected; a legitimate multi-file archive still imports.
 
 ### Phase 3 — Smoke + accept
