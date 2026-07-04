@@ -240,6 +240,17 @@ human decision. The Sonnet 5 review is **mandatory** — never merge without its
 even when CodeRabbit came back clean. If a finding is unresolved, contested, or needs the user,
 **stop here and report** — do not merge.
 
+**Catch-all sweep (last thing before merging):** "every review received" means every review on
+the PR, not just the handles you waited on. Reviewers you did not arm a wait for — **GitHub
+Copilot** (`copilot-pull-request-reviewer[bot]`), another bot, a human — can post at any moment,
+including seconds before the merge. Immediately before invoking `pr-merge`, list ALL reviews and
+their inline comments (`gh api repos/OWNER/REPO/pulls/N/reviews --paginate` +
+`.../pulls/N/comments --paginate`, no login filter) and triage anything not yet handled with the
+usual APPLY / SKIP / DEFER + reply. A summary-only review with no findings (e.g. Copilot's
+"generated no comments") just gets noted in the audit trail. This sweep caught nothing being
+lost once (PR #778 — Copilot reviewed 2 min pre-merge, clean pass) but exists because next time
+it may not be clean.
+
 ## Step 2 — Land it (`/pr-merge N`)
 
 - Invoke the **pr-merge** skill with `N`. It rebases the head onto the live base,
