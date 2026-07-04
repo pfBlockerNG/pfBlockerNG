@@ -260,6 +260,24 @@ class TestRegexReduction:
         assert len(res.allow_regex_irreducible) == 1
         assert res.block_regex_irreducible == []
 
+    def test_unqueryable_folded_key_is_dropped(self) -> None:
+        # #753: a reducible regex folds to an exact/wildcard match KEY, so the
+        # wire caps apply to the folded key exactly as normalise() applies them
+        # to its ||host^ twin -- an over-cap key (>63-char label / >253 total)
+        # can never match a queryable qname. The rule is dropped outright, NOT
+        # kept as a compiled regex (that would pay per-query cost for a pattern
+        # that can never match).
+        long_label = "a" * 64
+        res = _reconcile(
+            [
+                f"/^(.+\\.)?{long_label}\\.com$/",
+                f"@@/^{long_label}\\.net$/",
+            ]
+        )
+        assert res.block_domains == [] and res.allow_domains == []
+        assert res.block_regex_irreducible == [] and res.allow_regex_irreducible == []
+        assert res.reduced == 0
+
     def test_reduction_matches_oracle_and_spike(self) -> None:
         spike = _spike()
         for inner in (

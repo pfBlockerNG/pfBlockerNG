@@ -3932,15 +3932,34 @@ def parse(format_hint: str, line: str) -> ParsedEntry | None:
     return ParsedEntry(kind=DNSBL_KIND_BLOCK, value=token, feed="", group="", log="")
 
 
+def _dnsbl_within_wire_caps(host: str) -> bool:
+    """True iff ``host`` can be encoded in a DNS query (#753): <= 253 chars total
+    (the RFC 1035 presentation cap, undotted) and every label <= 63. The domain
+    charset is ASCII-only, so chars == octets. Shared by ``normalise()`` and the
+    ``reconcile()`` regex fold so the caps live in one place."""
+    return len(host) <= 253 and all(len(label) <= 63 for label in host.split("."))
+
+
 def normalise(value: str) -> str | None:
     """Lower-case + PFB_FILTER_DOMAIN domain-shape gate (inc:1138-1150).
 
     Returns the validated, lower-cased domain or ``None`` when the token is not a
     valid domain (which is how stray non-domain entries -- including any IP that
     slipped past parse() -- are dropped without ever reaching the dicts).
+
+    Length caps mirror the PHP gate at the queryable bound (#753): every label
+    <= 63 chars, whole name <= 253 chars (``_dnsbl_within_wire_caps``; the RFC
+    1035 presentation cap, applied after the trailing dot is stripped -- the
+    same names PHP's ``strlen < 255`` accepts in dotted form, PR #752). PHP also
+    tolerates a bare 254-char undotted name (an inert sanity-cap artefact,
+    pinned by PR #752); this gate rejects it as unqueryable. Every entry gated
+    here becomes an exact or wildcard match key, and a name that cannot be
+    encoded in a DNS query could never match a lookup -- rejecting it keeps
+    unreachable dead weight out of the block dicts. The ``reconcile()`` regex
+    fold applies the same caps to a domain-literal regex key.
     """
     host = value.strip().strip(".").lower()
-    if "." not in host:
+    if "." not in host or not _dnsbl_within_wire_caps(host):
         return None
     for label in host.split("."):
         if not label or label[0] == "-" or label[-1] == "-":
@@ -4224,8 +4243,15 @@ def reconcile(
                     result.block_regex_irreducible.append(regex_rule)
                 continue
             # Reducible -> fold to a domain rule (zero per-query cost).
-            result.reduced += 1
             wildcard, domain = reduced
+            # #753: the folded literal is an exact/wildcard match KEY -- apply
+            # the same wire caps normalise() applies to its ||host^ twin. An
+            # over-cap key can never match a queryable qname, so drop the rule
+            # outright (keeping it as a compiled regex would pay per-query cost
+            # for a pattern that can never match).
+            if not _dnsbl_within_wire_caps(domain):
+                continue
+            result.reduced += 1
         elif r.target == RULE_TARGET_DOMAIN:
             wildcard, domain = r.wildcard, r.key_or_pattern
         else:  # pragma: no cover - defensive; parse_abp only emits domain/regex

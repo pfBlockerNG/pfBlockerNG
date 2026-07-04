@@ -234,6 +234,25 @@ class TestNormalise:
         assert pfb_unbound.normalise("_dmarc.example.com") == "_dmarc.example.com"
         assert pfb_unbound.normalise("trailing_.example.com") == "trailing_.example.com"
 
+    def test_length_caps_reject_unqueryable_names(self) -> None:
+        # #753: normalise() enforces the PHP PFB_FILTER_DOMAIN length caps at the
+        # queryable bound. Every entry it gates becomes an exact or wildcard match
+        # key, and a name with a >63-char label or >253 chars total cannot be
+        # encoded in a DNS query -- it could never match a lookup, so rejecting it
+        # keeps unreachable dead weight out of the block dicts.
+        # Label cap: 63 is the longest legal label; 64 is unencodable.
+        assert pfb_unbound.normalise("a" * 63 + ".com") == "a" * 63 + ".com"
+        assert pfb_unbound.normalise("a" * 64 + ".com") is None
+        # Total cap: 253 is the longest queryable presentation; 254 is not.
+        name_253 = ".".join(["b" * 61] * 4) + "." + "b" * 5
+        name_254 = ".".join(["b" * 61] * 4) + "." + "b" * 6
+        assert (len(name_253), len(name_254)) == (253, 254)
+        assert pfb_unbound.normalise(name_253) == name_253
+        assert pfb_unbound.normalise(name_254) is None
+        # Dotted (FQDN) form of a max-length name still passes: the trailing dot
+        # is stripped BEFORE the cap, mirroring PHP's 254-char dotted accept (#752).
+        assert pfb_unbound.normalise(name_253 + ".") == name_253
+
 
 # --------------------------------------------------------------------------- #
 # classify()
