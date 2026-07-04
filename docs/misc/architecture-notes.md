@@ -267,6 +267,22 @@ lives in shared scripts that run identically locally and in CI:
 
 ---
 
+## Alerts/Reports render pipeline — `pfblockerng_alerts.php`
+
+Reported events are attributed **twice**: once at event time by the log writers
+(`pfb_unbound.py` for `dnsbl.log`/`dns_reply.log`; the filterlog daemon for the `ip_*` +
+`unified` logs, incl. feed match, GeoIP, rDNS, ASN), and again at render time by the
+Alerts page, which re-validates each displayed row against the *current* feed/DNSBL state
+to show drift (the "Previous Feed:" strikethrough) and pick action icons. The render-time
+pass is per-row shell pipelines + per-row SQLite cycles and dominates page load time; the
+`dnsblcache` report cache is wiped on every DNSBL swap (ADR-10 P3), and the IP render path
+has no cache at all. Full model, cost table, ordering constraints (the DNSBL filter gate
+matches *corrected* fields and cannot be hoisted), and the day-to-day variability
+mechanics: [`alerts-reports-pipeline.md`](alerts-reports-pipeline.md). Perf work:
+issue #809.
+
+---
+
 ## HTTP mock-feed load smoke (ADR-16 Part C) — `tests/smoke/test_smoke_feeds.py`
 
 `test_smoke_feeds.py` (marker `smoke`) is the **only suite file that drives the real HTTP fetch
