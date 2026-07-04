@@ -233,6 +233,29 @@ def scrape_form_fields(page_html: str) -> dict[str, str]:
     return fields
 
 
+# --------------------------------------------------------------------------- #
+# Row isolation -- locate the single <tr>...</tr> block around a marker
+# --------------------------------------------------------------------------- #
+
+
+def row_containing(html_body: str, needle: str) -> str:
+    """Return the single ``<tr ...>...</tr>`` block containing ``needle`` (row-isolated).
+
+    Alert-page renderers (e.g. ``convert_dnsbl_log()``, alerts.php:2571/2593) print one
+    ``<tr>`` per event row with every cell/icon inside it. A fixed byte-distance window
+    around a match can straddle a neighbouring row when rows are dense, false-matching
+    (or false-missing) a marker that belongs to a different row -- isolating by the
+    enclosing ``<tr>`` avoids that entirely.
+    """
+    idx = html_body.find(needle)
+    assert idx != -1, f"{needle!r} not found in rendered HTML"
+    tr_start = html_body.rfind("<tr", 0, idx)
+    assert tr_start != -1, f"no opening <tr found before {needle!r}"
+    tr_end = html_body.find("</tr>", idx)
+    assert tr_end != -1, f"no closing </tr> found after {needle!r}"
+    return html_body[tr_start : tr_end + len("</tr>")]
+
+
 class WebUI:
     """An authenticated webConfigurator HTTP session for the smoke VM.
 

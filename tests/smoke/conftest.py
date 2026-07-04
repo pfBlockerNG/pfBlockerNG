@@ -453,16 +453,16 @@ def _tail(path: Path, lines: int = 40) -> str:
     return "\n".join(text.splitlines()[-lines:])
 
 
-# Diagnostics for a wedged boot are written here, RELATIVE to the workspace cwd
-# (where pytest runs). The smoke workflow's "Upload diagnostics" step globs
-# ``smoke-diag/**`` + ``**/screen-*.png`` — so anything dropped here is uploaded.
-# This is the ONLY window into a setup-time boot failure: the session VM fixture
-# errors before any test runs, so the on-failure ``_dump_vm_on_failure`` hook
-# (which needs SSH) never fires, and the boot log otherwise lives under pytest's
-# tmp dir (outside the artifact globs).
-# ponytail: `or "smoke-diag"` guards an exported-empty PFB_DIAG_DIR (Path("") == cwd,
-# which escapes the CI upload globs); the `or` treats both None and "" as absent.
-DIAG_DIR = Path(os.environ.get("PFB_DIAG_DIR") or "smoke-diag")
+# Diagnostics for a wedged boot are written under helpers.DIAG_DIR, RELATIVE to
+# the workspace cwd (where pytest runs). The smoke workflow's "Upload
+# diagnostics" step globs ``smoke-diag/**`` + ``**/screen-*.png`` — so anything
+# dropped there is uploaded. This is the ONLY window into a setup-time boot
+# failure: the session VM fixture errors before any test runs, so the
+# on-failure ``_dump_vm_on_failure`` hook (which needs SSH) never fires, and
+# the boot log otherwise lives under pytest's tmp dir (outside the artifact
+# globs). DIAG_DIR itself lives in helpers.py (shared with the render-diff UI
+# harness); ``_capture_boot_failure`` below local-imports ``helpers`` for it
+# (the usual conftest<->helpers cycle guard).
 
 
 def _qmp_sock_path(tag: str) -> str:
@@ -490,14 +490,16 @@ def _capture_boot_failure(tag: str, qmp_sock: str | None, log_path: Path, proces
 
     MUST run BEFORE the qemu process is killed — QMP needs the process alive.
     """
+    from . import helpers  # local import: helpers imports from conftest (avoid cycle)
+
     with contextlib.suppress(Exception):
-        DIAG_DIR.mkdir(parents=True, exist_ok=True)
+        helpers.DIAG_DIR.mkdir(parents=True, exist_ok=True)
     with contextlib.suppress(Exception):
-        shutil.copyfile(log_path, DIAG_DIR / f"boot-{tag}.log")
+        shutil.copyfile(log_path, helpers.DIAG_DIR / f"boot-{tag}.log")
     if qmp_sock and process.poll() is None and Path(qmp_sock).exists():
         with contextlib.suppress(Exception):
             subprocess.run(
-                ["python3", str(SMOKE_DIR / "screendump.py"), qmp_sock, str(DIAG_DIR / f"screen-{tag}.png")],
+                ["python3", str(SMOKE_DIR / "screendump.py"), qmp_sock, str(helpers.DIAG_DIR / f"screen-{tag}.png")],
                 capture_output=True,
                 text=True,
                 timeout=60,
