@@ -19,6 +19,13 @@ pyproject.toml). Run only by the smoke workflow::
 Needs the booted ``smoke_vm`` fixture and the branch ``.pkg`` (``SMOKE_PKG``);
 without them all cases skip cleanly.  No live DNS or feed server is required:
 this feature is purely log-file + marker-file I/O, not DNSBL.
+
+Since PR #790 (issue #573 phase 2) ``pfb_log_mgmt()``/``pfb_log_reset()`` moved from the
+tail of ``pfblockerng_sync_cron()`` into ``pfblockerng_tick()``, and now run only on an
+IDLE tick (no update pass dispatched this tick or still running from an earlier one — see
+``pfb_update_pass_running()`` in ``pfblockerng.inc``). This suite drives the ``tick`` verb
+(not ``cron``); the ``deployed_vm`` fixture makes every tick idle-only (Disabled feed cron +
+not-due dcc/bl) so the tick under test exercises exactly the ADR-30 reset/trim.
 """
 
 from __future__ import annotations
@@ -39,6 +46,10 @@ pytestmark = pytest.mark.smoke
 
 PFB_LOGDIR = "/var/log/pfblockerng"
 PFB_DBDIR = "/var/db/pfblockerng"
+
+# require_once target for the due-ledger API (pfSsh.php does not auto-load pfBlockerNG
+# includes — mirrors test_smoke_tick._PFB_EXTRA).
+_PFB_EXTRA_INC = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
 
 # Host-side (non-chrooted) log files
 LOG_IP_BLOCKLOG = f"{PFB_LOGDIR}/ip_block.log"
@@ -65,24 +76,30 @@ CFG_GENERAL = "installedpackages/pfblockerng/config/0"
 def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:  # noqa: ARG001
     """Deploy the branch .pkg once for this module and set up the base state.
 
-    Log rotation does not require DNSBL to be active — it runs from
-    ``pfblockerng_sync_cron()``, driven here directly via ``helpers.reload(vm, 'cron')``.
-    The scheduled reset (``pfb_log_reset()``) and the line-cap trim (``pfb_log_mgmt()``)
-    live in ``pfblockerng_sync_cron()``.  On a live appliance that function is reached by
-    the scheduled tick, which dispatches the ``cron`` verb (issue #570: the tick routes
-    through ``pfblockerng_sync_cron`` — a bare ``pfb_trigger`` would skip both); the
-    end-to-end tick path is pinned by ``test_smoke_tick.test_tick_feed_cron_routes_through_sync_cron``.
-    These cases drive the ``cron`` verb directly to exercise the reset LOGIC without
-    waiting on the tick cadence.  We still need pfBlockerNG installed and ``enable_cb=on``
-    so the cron function body executes.  The DNSBL VIP and feed infrastructure are NOT
-    needed for these cases.
+    Log rotation does not require DNSBL to be active — it runs from ``pfblockerng_tick()``
+    (PR #790 re-homed ``pfb_log_mgmt()``/``pfb_log_reset()`` there from the tail of
+    ``pfblockerng_sync_cron()``), driven here via ``helpers.reload(vm, 'tick')``. The tick
+    only runs log maintenance on an IDLE tick — no update pass dispatched this tick or still
+    running from an earlier one (``pfb_update_pass_running()`` in ``pfblockerng.inc``) — so
+    this fixture makes every tick in this module idle-only: ``pfb_interval='Disabled'``
+    (the feed cron never dispatches) plus ``dcc``/``bl`` seeded not-due. That exercises
+    exactly the ADR-30 reset/trim LOGIC under test, and also live-validates the issue #573
+    fix itself (log maintenance surviving a Disabled Update Frequency). We still need
+    pfBlockerNG installed and ``enable_cb=on`` so the tick's function bodies execute. The
+    DNSBL VIP and feed infrastructure are NOT needed for these cases.
     """
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
-    # Enable pfBlockerNG so the cron body runs (enable_cb=on required by
+    # Enable pfBlockerNG so the tick body runs (enable_cb=on required by
     # inc:793; the IP/DNSBL subsystems can stay disabled for this test).
     _set_enable_cb(smoke_vm)
+    # Make every tick in this module idle-only (see docstring above): Disabled feed cron +
+    # not-due dcc/bl, so pfb_update_pass_running()'s "nothing dispatched" gate stays open and
+    # pfb_log_mgmt()/pfb_log_reset() run on every 'tick' call below.
+    _set_pfb_interval_disabled(smoke_vm)
+    _seed_future_ledger_entry(smoke_vm, "dcc")
+    _seed_future_ledger_entry(smoke_vm, "bl")
     # Ensure the log dir exists on the guest (normally created by a first full
     # reload; create it explicitly so seed writes don't fail before that).
     smoke_vm.ssh("/bin/mkdir", "-p", PFB_LOGDIR, timeout=30)
@@ -107,6 +124,50 @@ def _set_enable_cb(vm: SmokeVM, *, timeout: float = 60.0) -> None:
     result = h.php_eval(vm, snippet, timeout=timeout)
     if result.returncode != 0 or "OK" not in result.stdout:
         raise RuntimeError(f"_set_enable_cb failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+
+
+def _set_pfb_interval_disabled(vm: SmokeVM, *, timeout: float = 60.0) -> None:
+    """Set pfb_interval='Disabled' so the tick's feed-cron branch never dispatches.
+
+    Part of making every tick in this module idle-only (see the ``deployed_vm`` fixture
+    docstring) — this is also the exact setting issue #573 fixed (log maintenance used to
+    silently stop with a Disabled Update Frequency), so this module doubles as its live
+    validation.
+    """
+    snippet = (
+        f"$g = config_get_path({h._php_str(CFG_GENERAL)}, array());\n"
+        "$g['pfb_interval'] = 'Disabled';\n"
+        f"config_set_path({h._php_str(CFG_GENERAL)}, $g);\n"
+        "write_config('pfBlockerNG smoke: pfb_interval Disabled');\n"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"_set_pfb_interval_disabled failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
+def _seed_future_ledger_entry(vm: SmokeVM, job_key: str, *, timeout: float = 60.0) -> None:
+    """Seed a due-ledger entry for ``job_key`` whose next_due is far in the future.
+
+    Drives the box via PHP (CLAUDE.md hard constraint: no appliance python) —
+    ``pfb_due_ledger_write_entry()`` is the package's own ledger writer (mirrors
+    ``test_smoke_tick._write_ledger_entry``). Keeps 'dcc'/'bl' from dispatching on the
+    'tick' verb so every tick in this module is maintenance-only.
+    """
+    snippet = (
+        f"require_once('{_PFB_EXTRA_INC}');"
+        f"pfb_due_ledger_write_entry('{job_key}', array("
+        "'last_run' => time(), 'next_due' => time() + 86400, 'jitter' => 0"
+        f"), {h._php_str(PFB_DBDIR)});"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"_seed_future_ledger_entry({job_key!r}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
 
 
 def _set_log_rotate_schedule(
@@ -322,7 +383,8 @@ def test_boundary_reset_inode_preserved_and_per_log_independence(
       - Both logs seeded with inert content.
       - Inode of ``ip_blocklog`` captured before the cron runs.
 
-    When: the cron entry runs (``pfblockerng.php cron`` -> ``pfblockerng_sync_cron()``).
+    When: the tick entry runs (``pfblockerng.php tick`` -> ``pfblockerng_tick()``), idle (see the
+          ``deployed_vm`` fixture -- Disabled feed cron + not-due dcc/bl).
 
     Then:
       - ``ip_blocklog`` is EMPTY (reset occurred).
@@ -356,8 +418,8 @@ def test_boundary_reset_inode_preserved_and_per_log_independence(
     assert "ip_permitlog" not in marker_before, "BEFORE: marker should have no ip_permitlog entry (schedule is off)"
 
     # --- When ---
-    # Trigger the cron entry point; pfb_log_reset() runs inside pfblockerng_sync_cron().
-    h.reload(vm, "cron")
+    # Trigger the (idle) tick; pfb_log_reset() now runs inside pfblockerng_tick().
+    h.reload(vm, "tick")
 
     # --- Then ---
     content_after_block = _read_file(vm, LOG_IP_BLOCKLOG)
@@ -403,7 +465,7 @@ def test_same_period_is_idempotent(deployed_vm: SmokeVM) -> None:
       - ``ip_blocklog`` schedule = daily, marker entry = today's key (current period).
       - Log seeded AFTER the marker write (simulating content that arrived after a reset).
 
-    When: the cron entry runs.
+    When: the (idle) tick entry runs.
 
     Then:
       - ``ip_blocklog`` is NOT emptied (still contains the seed content).
@@ -426,7 +488,7 @@ def test_same_period_is_idempotent(deployed_vm: SmokeVM) -> None:
     )
 
     # --- When ---
-    h.reload(vm, "cron")
+    h.reload(vm, "tick")
 
     # --- Then ---
     content_after = _read_file(vm, LOG_IP_BLOCKLOG)
@@ -434,7 +496,7 @@ def test_same_period_is_idempotent(deployed_vm: SmokeVM) -> None:
         "AFTER: ip_blocklog should NOT be emptied (same period, idempotent no-op), "
         "got empty content — second reset occurred unexpectedly"
     )
-    # Content should be unchanged (the cron only called pfb_log_mgmt line-cap, not reset).
+    # Content should be unchanged (the tick only called pfb_log_mgmt line-cap, not reset).
     # The line-cap default (20000 lines) won't trim our 2-line file.
     assert content_after == content_before, (
         f"AFTER: ip_blocklog content changed unexpectedly — expected no-op: "
@@ -476,7 +538,7 @@ def test_chrooted_python_log_reset_preserves_inode_and_ownership(
       - File owned by unbound (to mirror the production state).
       - Inode captured before the cron runs.
 
-    When: the cron entry runs.
+    When: the (idle) tick entry runs.
 
     Then:
       - dnslog is EMPTY.
@@ -523,7 +585,7 @@ def test_chrooted_python_log_reset_preserves_inode_and_ownership(
     )
 
     # --- When ---
-    h.reload(vm, "cron")
+    h.reload(vm, "tick")
 
     # --- Then ---
     content_after = _read_file(vm, dnslog_path)
@@ -563,7 +625,7 @@ def test_all_off_no_log_emptied(deployed_vm: SmokeVM) -> None:
       - ip_blocklog and ip_permitlog seeded with inert content.
       - Marker entries for both set to yesterday (would trigger a reset if enabled).
 
-    When: the cron entry runs.
+    When: the (idle) tick entry runs.
 
     Then:
       - ip_blocklog is UNTOUCHED (content identical to before).
@@ -605,7 +667,7 @@ def test_all_off_no_log_emptied(deployed_vm: SmokeVM) -> None:
     assert marker_before.get("ip_permitlog") == stale_key, f"BEFORE: marker ip_permitlog should be {stale_key!r}"
 
     # --- When ---
-    h.reload(vm, "cron")
+    h.reload(vm, "tick")
 
     # --- Then ---
     content_after_block = _read_file(vm, LOG_IP_BLOCKLOG)
@@ -656,7 +718,7 @@ def test_retention_buffer_plain_log_keeps_last_k_lines(deployed_vm: SmokeVM) -> 
       - Inode captured before the cron runs.
       - Content asserted non-empty (N lines) BEFORE cron.
 
-    When: the cron entry runs (``pfblockerng.php cron`` → ``pfblockerng_sync_cron()``).
+    When: the tick entry runs (``pfblockerng.php tick`` → ``pfblockerng_tick()``), idle.
 
     Then:
       - ``ip_blocklog`` holds EXACTLY the last 3 seeded lines (lines 4–6), in order.
@@ -688,7 +750,7 @@ def test_retention_buffer_plain_log_keeps_last_k_lines(deployed_vm: SmokeVM) -> 
         )
 
         # --- When ---
-        h.reload(vm, "cron")
+        h.reload(vm, "tick")
 
         # --- Then ---
         content_after = _read_file(vm, LOG_IP_BLOCKLOG)
@@ -740,7 +802,7 @@ def test_retention_buffer_chrooted_dns_log_keeps_last_k_lines_and_ownership(
       - Inode captured before the cron runs.
       - Content asserted non-empty (N lines) and owner = unbound BEFORE cron.
 
-    When: the cron entry runs.
+    When: the (idle) tick entry runs.
 
     Then:
       - dnslog holds EXACTLY the last 3 seeded lines (lines 4–6), in order.
@@ -788,7 +850,7 @@ def test_retention_buffer_chrooted_dns_log_keeps_last_k_lines_and_ownership(
         )
 
         # --- When ---
-        h.reload(vm, "cron")
+        h.reload(vm, "tick")
 
         # --- Then ---
         content_after = _read_file(vm, dnslog_path)

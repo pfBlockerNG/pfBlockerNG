@@ -2593,8 +2593,8 @@ function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir): bool
  * pfblockerng_tick — ADR-43 P5: apply-on-change due-ledger tick dispatcher.
  *
  * Reads the ledger, dispatches each job that is due (feeds, dcc, bl) via exec() as a
- * separate process, then marks each as ran. ss_refresh and the scheduled log
- * maintenance (pfb_log_mgmt/pfb_log_reset) are called directly every tick.
+ * separate process, then marks each as ran. ss_refresh runs every tick; the scheduled
+ * log maintenance (pfb_log_mgmt/pfb_log_reset) runs only on an idle tick (see below).
  *
  * Lives here (not in the www/ dispatcher script) rather than the reverse so the
  * PHPUnit bootstrap can load and call the real entrypoint off-appliance: the www
@@ -2615,10 +2615,15 @@ function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir): bool
  *   dcc       : 86400 s daily, jitter = seeded_jitter (stable per install).
  *   bl        : 86400 or 604800 s, jitter = seeded_jitter (stable per install).
  *
- * Scheduled log maintenance (pfb_log_mgmt/pfb_log_reset) runs unconditionally at the
- * end of every tick, independent of the feed-cron cadence above (issue #573: with
- * pfb_interval='Disabled' the feed cron never dispatches, so log maintenance can no
- * longer ride its tail the way it used to inside pfblockerng_sync_cron()).
+ * Scheduled log maintenance (pfb_log_mgmt/pfb_log_reset) runs at the end of every tick,
+ * independent of the feed-cron cadence above (issue #573: with pfb_interval='Disabled'
+ * the feed cron never dispatches, so log maintenance can no longer ride its tail the way
+ * it used to inside pfblockerng_sync_cron()) -- but ONLY on an IDLE tick: skipped when
+ * this tick just dispatched an update pass (cron/dcc/bl) or one from an earlier tick is
+ * still running (pfb_update_pass_running()). Both dispatch and a backgrounded pass append
+ * to $pfb['log']/$pfb['extraslog'] for potentially minutes; pfb_log_mgmt()'s
+ * tail-to-temp-then-cat-over trim is a read/truncate/rewrite window that would lose any
+ * lines the concurrent writer appends during it.
  */
 function pfblockerng_tick(): void
 {
@@ -2627,6 +2632,9 @@ function pfblockerng_tick(): void
 	$now   = time();
 	$seed  = pfb_tick_seed();
 	$dbdir = $pfb['dbdir'];
+	// Set TRUE by any branch below that actually dispatches (exec()s) an update pass
+	// this tick -- gates the log-maintenance race guard at the tail of this function.
+	$dispatched = FALSE;
 
 	// --- Cadence from legacy knobs ---
 	$raw_interval  = PfbConfig::read('pfb_interval');
@@ -2662,6 +2670,7 @@ function pfblockerng_tick(): void
 			logger(LOG_NOTICE, localize_text('Tick: dispatching feed cron.'), LOG_PREFIX_PKG_PFBLOCKERNG);
 			exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron >> {$pfb['runlog']} 2>&1 &");
 			pfb_due_ledger_mark_ran_anchored('cron', $cron_secs, $now, $seed, 0, $dbdir);
+			$dispatched = TRUE;
 		} else {
 			logger(LOG_INFO, localize_text('Tick: feed cron deferred (outside apply window).'), LOG_PREFIX_PKG_PFBLOCKERNG);
 			pfb_due_ledger_set_pending('cron', $dbdir);
@@ -2674,6 +2683,7 @@ function pfblockerng_tick(): void
 			logger(LOG_NOTICE, localize_text('Tick: dispatching dcc.'), LOG_PREFIX_PKG_PFBLOCKERNG);
 			exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php dcc >> {$pfb['extraslog']} 2>&1 &");
 			pfb_due_ledger_mark_ran('dcc', 86400, $now, $seed, 23 * 3600, $dbdir);
+			$dispatched = TRUE;
 		} else {
 			logger(LOG_INFO, localize_text('Tick: dcc deferred (outside apply window).'), LOG_PREFIX_PKG_PFBLOCKERNG);
 			pfb_due_ledger_set_pending('dcc', $dbdir);
@@ -2700,6 +2710,7 @@ function pfblockerng_tick(): void
 				logger(LOG_NOTICE, localize_text('Tick: dispatching bl.'), LOG_PREFIX_PKG_PFBLOCKERNG);
 				exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php bl " . escapeshellarg($bl_str) . " >> {$pfb['extraslog']} 2>&1 &");
 				pfb_due_ledger_mark_ran('bl', $bl_secs, $now, $seed, 23 * 3600, $dbdir);
+				$dispatched = TRUE;
 			}
 		} else {
 			logger(LOG_INFO, localize_text('Tick: bl deferred (outside apply window).'), LOG_PREFIX_PKG_PFBLOCKERNG);
@@ -2710,14 +2721,20 @@ function pfblockerng_tick(): void
 	// SafeSearch CNAME freshness: every tick (cheap DNS re-resolution).
 	pfblockerng_ss_refresh();
 
-	// Scheduled log maintenance (issue #573): unconditional every tick, independent
-	// of the feed-cron gate above -- pfb_interval='Disabled' must not silently stop
-	// log upkeep. Both self-gate by their own configured schedule/caps (per-log line
-	// cap for pfb_log_mgmt, per-log calendar boundary for pfb_log_reset), so calling
-	// them every tick is safe: most calls are a no-op. Trim (line-cap) runs before
-	// reset (calendar boundary), same ordering as the prior sync_cron tail.
-	pfb_log_mgmt();
-	pfb_log_reset();
+	// Scheduled log maintenance (issue #573): runs on every IDLE tick, independent of
+	// the feed-cron gate above -- pfb_interval='Disabled' must not silently stop log
+	// upkeep. Both self-gate by their own configured schedule/caps (per-log line cap
+	// for pfb_log_mgmt, per-log calendar boundary for pfb_log_reset), so calling them
+	// on every idle tick is safe: most calls are a no-op. Trim (line-cap) runs before
+	// reset (calendar boundary), same ordering as the prior sync_cron tail. Skipped
+	// when THIS tick dispatched an update pass ($dispatched) or an earlier one is
+	// still running (pfb_update_pass_running()) -- both append to the same log files
+	// pfb_log_mgmt()'s tail-to-temp-then-cat-over trim reads/truncates/rewrites, and
+	// racing that window against a live writer loses whatever it appends meanwhile.
+	if (!$dispatched && !pfb_update_pass_running()) {
+		pfb_log_mgmt();
+		pfb_log_reset();
+	}
 }
 
 // ---------------------------------------------------------------------------

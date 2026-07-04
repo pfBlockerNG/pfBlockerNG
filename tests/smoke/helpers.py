@@ -2236,9 +2236,12 @@ def reload(
     ``scope`` maps to an explicit trigger request (ADR-43 Phase 3, via ``pfb_trigger``):
     ``update`` (scope=both force=false trigger=cron — full update, respects change detector),
     ``updateip`` (scope=ip force=true trigger=force — IP-side force reload),
-    ``updatednsbl`` (scope=dnsbl force=true trigger=force — DNSBL-side force reload), or
-    ``cron`` (the scheduled cron tick via ``pfblockerng_sync_cron()``, the ONLY path that
-    runs ADR-30 per-log scheduled reset; ``update`` bypasses it).
+    ``updatednsbl`` (scope=dnsbl force=true trigger=force — DNSBL-side force reload),
+    ``cron`` (the legacy feed-cron pass via ``pfblockerng_sync_cron()`` — since PR #790 this
+    verb no longer runs the ADR-30 log reset/trim), or ``tick`` (the scheduled tick via
+    ``pfblockerng_tick()`` — NOW the only path that runs ``pfb_log_mgmt()``/``pfb_log_reset()``,
+    and only on an IDLE tick: skipped when this tick dispatches an update pass or one from an
+    earlier tick is still running, see ``pfb_update_pass_running()`` in ``pfblockerng.inc``).
 
     READINESS depends on whether a restart is expected (ADR-10):
 
@@ -2264,12 +2267,12 @@ def reload(
     ruleset is authoritative on the next read. The ``data_path=True`` path ignores this flag:
     it must wait on the zero-downtime swap signal regardless.
     """
-    if scope not in _SCOPE_TO_PFBTRIGGER and scope != "cron":
-        raise ValueError(f"reload scope must be update/updateip/updatednsbl/cron, got {scope!r}")
+    if scope not in _SCOPE_TO_PFBTRIGGER and scope not in ("cron", "tick"):
+        raise ValueError(f"reload scope must be update/updateip/updatednsbl/cron/tick, got {scope!r}")
     swap_before = count_log_marker(vm, PFB_LOG, SWAP_LOG_MARKER) if data_path else 0
     deadline = time.monotonic() + timeout
-    if scope == "cron":
-        result = vm.ssh(PHP_BIN, PFB_CLI, "cron", timeout=timeout)
+    if scope in ("cron", "tick"):
+        result = vm.ssh(PHP_BIN, PFB_CLI, scope, timeout=timeout)
     else:
         s, f, t = _SCOPE_TO_PFBTRIGGER[scope]
         result = vm.ssh(PHP_BIN, PFB_CLI, "pfb_trigger", f"scope={s}", f"force={f}", f"trigger={t}", timeout=timeout)

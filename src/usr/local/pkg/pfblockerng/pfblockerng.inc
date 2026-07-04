@@ -12484,6 +12484,23 @@ function pfb_feed_task_running(): bool {
 }
 
 
+// TRUE when a pfBlockerNG UPDATE pass (cron/update/pfb_trigger/forcecheck/dcc/bl) is
+// currently running -- deliberately narrower than pfb_feed_task_running() above:
+//   - EXCLUDES 'tick': the only caller is pfblockerng_tick() itself (the scheduled log
+//     maintenance gate at its tail), and a tick always sees its OWN process in `ps` --
+//     including it here would make the gate permanently closed.
+//   - INCLUDES 'dcc'/'bl': both append to $pfb['extraslog'] for potentially minutes,
+//     the same log pfb_log_mgmt()'s tail-to-temp-then-cat-over trim can race and lose
+//     lines from, so a due-ledger-dispatched dcc/bl pass must also hold this gate closed.
+// $ps_lines is injectable (bypasses exec()) so this is unit-testable off-appliance.
+function pfb_update_pass_running(?array $ps_lines = NULL): bool {
+	if ($ps_lines === NULL) {
+		exec('/bin/ps -wax', $ps_lines);
+	}
+	return (bool) preg_grep('/pfblockerng[.]php\s+?(cron|update(ip|dnsbl)?|pfb_trigger|forcecheck|dcc|bl)\b/', $ps_lines);
+}
+
+
 // Decide whether a plain Update-page load should AUTO-TAIL an in-progress update (stream it
 // live like the View button) instead of pre-filling the last-run log tail. TRUE iff a
 // pfBlockerNG feed task is running AND this request is neither a Run-Now/wizard dispatch
