@@ -55,6 +55,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import quote
 
 import pytest
 
@@ -242,11 +243,13 @@ def test_chgstate_button_click_sets_enable_all_value(
     signal (category_edit.php:142-143). The source-row ``state-*`` selects flip
     only after the resulting submit/round-trip, so they are NOT asserted here.
 
-    Before->after: the button is rendered with its default value, and the click
-    sets it to ``Enable All``. The pre-click value comes from the Form_Button
-    label ("Enable All") -- the assertion is the change is CAUSED by the click, so
-    drive it through the .value DOM property (which a plain rendered button leaves
-    as its label) and prove the handler ran.
+    Before->after: the button's OWN rendered label is already "Enable All"
+    (``Form_Button('chgstate', 'Enable All', ...)``), so capturing the DOM value
+    before the click and comparing it to the post-click value is not a real
+    transition -- before == after even if the click handler were deleted
+    entirely. Seed a sentinel value into the button via JS FIRST, then click, and
+    assert the value became 'Enable All' -- only the handler running can cause
+    that flip.
     """
     page = browser_page
     _open(page, webui, ADVANCED_IP_EDITOR)
@@ -254,8 +257,12 @@ def test_chgstate_button_click_sets_enable_all_value(
     btn = page.locator("#chgstate")
     expect(btn).to_be_attached(timeout=JS_TIMEOUT_MS)
 
-    # BEFORE: the handler has not run; capture the rendered value via the DOM.
+    # BEFORE: seed a sentinel so the post-click value can only come from the
+    # handler -- the button's rendered label already equals 'Enable All', so a
+    # bare pre-click read would prove nothing (before == after with no handler).
+    btn.evaluate("el => el.value = '__pre__'")
     before_value = btn.evaluate("el => el.value")
+    assert before_value == "__pre__", f"sentinel seed did not take, got {before_value!r}"
     _shot(page, screenshot_dir, "chgstate_before")
 
     # Fire the bound jQuery click handler. The button is in the (visible) Source
@@ -263,13 +270,73 @@ def test_chgstate_button_click_sets_enable_all_value(
     # value-set runs without submitting the form away from the page under test.
     btn.dispatch_event("click")
 
-    # AFTER: the handler set the button value to 'Enable All'.
+    # AFTER: the handler set the button value to 'Enable All' -- the sentinel is gone.
     expect(btn).to_have_js_property("value", "Enable All", timeout=JS_TIMEOUT_MS)
     after_value = btn.evaluate("el => el.value")
     assert after_value == "Enable All", (
         f"expected 'Enable All' after click, got {after_value!r} (before {before_value!r})"
     )
     _shot(page, screenshot_dir, "chgstate_after")
+
+
+def test_chgstate_click_populates_act_atype_when_present(
+    browser_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """`#chgstate` click also writes `#act`/`#atype` when the page carried them (zero prior coverage).
+
+    The click handler (pfBlockerNG.js:172-181) has TWO guarded arms above the
+    unconditional value-set proven by the sibling test:
+    ``if (action.length > 0) { $('#act').val(action); }`` and the ``atype``
+    analog. The sibling test opens the editor with no ``?act``/``?atype`` GET
+    params, so both JS locals are '' and NEITHER guard ever fires -- this test
+    is the only coverage of that branch.
+
+    A real, legitimate combo that makes both non-empty: the Reports page's
+    "add to Whitelist" redirect (pfblockerng_alerts.php:1587) navigates here
+    with ``act=addgroup&atype=Whitelist|<ip>|<descr>`` -- validated server-side
+    by ``pfb_filter_whitelist_atype()`` (pfblockerng.inc:738-746) -- which also
+    makes the server pre-render the hidden inputs ``#act``/``#atype``
+    (``Form_Input('atype', 'atype', 'hidden', ...)`` /
+    ``Form_Input('act', 'act', 'hidden', ...)``, category_edit.php:1012,1015)
+    at those SAME values.
+
+    Before->after: because the server ALSO pre-renders ``#act``/``#atype`` at
+    the values the click handler would write, a bare pre-click DOM read is
+    already correct -- the same false-transition trap as the sibling test.
+    Seed a sentinel into both hidden fields via JS FIRST (mirrors the fix
+    above), then click, and assert they flip to the real ``act``/``atype``
+    values -- only the guarded arms running can cause that.
+    """
+    page = browser_page
+    ip = "192.0.2.55"  # RFC 5737 TEST-NET-1 -- inert, never routed
+    descr = "smoke-chgstate-atype"
+    atype_value = f"Whitelist|{ip}|{descr}"
+    path = f"{ADVANCED_IP_EDITOR}&act=addgroup&atype={quote(atype_value, safe='')}"
+    _open(page, webui, path)
+
+    act = page.locator("#act")
+    atype = page.locator("#atype")
+    btn = page.locator("#chgstate")
+    expect(act).to_be_attached(timeout=JS_TIMEOUT_MS)
+    expect(atype).to_be_attached(timeout=JS_TIMEOUT_MS)
+    expect(btn).to_be_attached(timeout=JS_TIMEOUT_MS)
+
+    # BEFORE: seed a sentinel into both hidden fields -- the server already
+    # pre-rendered them at the SAME values the click handler would write, so a
+    # bare pre-click read would prove nothing about the click handler.
+    act.evaluate("el => el.value = '__pre__'")
+    atype.evaluate("el => el.value = '__pre__'")
+    _shot(page, screenshot_dir, "chgstate_atype_before")
+
+    btn.dispatch_event("click")
+
+    # AFTER: both guarded arms fired -- the sentinels are replaced by the real
+    # action/atype JS locals (pfBlockerNG.js:174-179), proving the branch ran.
+    expect(act).to_have_js_property("value", "addgroup", timeout=JS_TIMEOUT_MS)
+    expect(atype).to_have_js_property("value", atype_value, timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "chgstate_atype_after")
 
 
 def test_addrow_clones_a_source_row_and_renumbers(
@@ -490,9 +557,13 @@ def test_alias_type_port_field_rejects_network_alias(
     rowid = _free_rowid_ipv4(vm)
     base = f"{_CFG_IPV4}/{rowid}"
 
-    _mk_alias(vm, net_alias, "network", "192.0.2.0/24")
-    _mk_alias(vm, port_alias, "port", "8080")
     try:
+        # Both aliases are created INSIDE the try: a failure creating the second
+        # (e.g. the network alias) must not leak the first -- the finally below
+        # removes both unconditionally.
+        _mk_alias(vm, net_alias, "network", "192.0.2.0/24")
+        _mk_alias(vm, port_alias, "port", "8080")
+
         # BEFORE: rowid is free (no aliasports_in set yet).
         assert helpers.config_get(vm, f"{base}/aliasports_in") == "", (
             f"precondition: rowid {rowid} not free (aliasports_in already set)"

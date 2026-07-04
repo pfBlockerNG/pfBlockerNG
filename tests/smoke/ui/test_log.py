@@ -38,12 +38,27 @@ Every flow is a TRUE transition test (CLAUDE.md transition-test rule):
 Each flow RESTORES the box (removes the seeded file / leaves the cleared file
 gone) in a ``finally`` so a mid-test failure cannot poison the session-scoped VM
 for the sibling flows.
+
+THROWAWAY filenames, never the real production logs: ``pfb_validate_filepath()``
+(pfblockerng_log.php:207-222) validates only the DIRECTORY (``pathinfo(...,
+PATHINFO_DIRNAME)``), never the basename -- so ANY file directly under
+``/var/log/pfblockerng`` passes. These flows used to seed/clear the box's REAL
+``pfblockerng.log`` / ``error.log`` / ``ip_block.log`` / ``py_error.log`` /
+``dnsbl.log`` directly, clobbering real content a live box would have
+accumulated. Every target is now a unique, uuid-prefixed basename under the same
+allowed directory instead (:func:`_throwaway_log`). The clear handler's
+py_error.log/dnsbl.log special cases are themselves SUBSTRING matches
+(``strpos($s_logfile, 'py_error.log')`` etc., :308,315-317), so a suffix-preserving
+throwaway name (e.g. ``<uuid>-py_error.log``) still exercises the exact same
+branch without ever touching the real file.
 """
 
 from __future__ import annotations
 
 import base64
+import os
 import subprocess
+import uuid
 from typing import TYPE_CHECKING
 
 import pytest
@@ -173,6 +188,18 @@ def _rm(vm: helpers.SmokeVM, path: str) -> None:
     vm.ssh("/bin/rm", "-f", path)
 
 
+def _throwaway_log(basename_suffix: str) -> str:
+    """A collision-proof ``LOG_DIR`` path that still ends in ``basename_suffix``.
+
+    ``pfb_validate_filepath`` admits every file under ``LOG_DIR`` regardless of
+    basename, and the clear handler's special-case branches key on a SUBSTRING
+    match of the basename (``strpos($s_logfile, 'py_error.log')`` / ``'dnsbl.log'``
+    / ...). Keeping the interesting suffix means a throwaway name still hits the
+    SAME branch as the real production log -- without ever touching it.
+    """
+    return f"{LOG_DIR}/{uuid.uuid4().hex[:12]}-{basename_suffix}"
+
+
 def _decode_load_body(body: str) -> tuple[str, str]:
     """Parse the ``|code|info|base64|`` AJAX envelope -> ``(code, decoded_text)``.
 
@@ -206,7 +233,7 @@ def test_load_returns_real_file_content(webui: WebUI, smoke_vm: helpers.SmokeVM)
     removing the seed file in finally.
     """
     vm = smoke_vm
-    target = f"{LOG_DIR}/pfblockerng.log"
+    target = _throwaway_log("pfblockerng.log")
     marker = f"pfb-ui-load-{helpers.unique_domain('load')}"
     expected = f"{marker}\n"
     _seed_file(vm, target, expected)
@@ -264,7 +291,7 @@ def test_download_streams_file_with_attachment_header(webui: WebUI, smoke_vm: he
     basename as an attachment. Restored in finally.
     """
     vm = smoke_vm
-    target = f"{LOG_DIR}/error.log"
+    target = _throwaway_log("error.log")
     payload = f"pfb-ui-download-{helpers.unique_domain('dl')}\n"
     _seed_file(vm, target, payload)
     try:
@@ -275,9 +302,10 @@ def test_download_streams_file_with_attachment_header(webui: WebUI, smoke_vm: he
         assert not looks_like_login_page(resp.text), "download POST returned the login form (session lost)"
         # AFTER (oracle): the streamed body equals the on-box file content.
         assert resp.text == _cat(vm, target), f"download body {resp.text!r} != on-box file {_cat(vm, target)!r}"
-        # The attachment header names the file's basename (source: header() call).
+        # The attachment header names the file's OWN basename (source: header() call).
         disp = resp.headers.get("Content-Disposition", "")
-        assert 'attachment; filename="error.log"' in disp, f"unexpected Content-Disposition: {disp!r}"
+        expected_name = os.path.basename(target)
+        assert f'attachment; filename="{expected_name}"' in disp, f"unexpected Content-Disposition: {disp!r}"
         # The file is read-only on download -- it must remain on the box, unchanged.
         assert _cat(vm, target) == payload, "download altered the source file (must be read-only)"
     finally:
@@ -320,7 +348,7 @@ def test_clear_plain_log_unlinks_file(webui: WebUI, smoke_vm: helpers.SmokeVM) -
     POST clear, assert the file is now ABSENT (AFTER). Restore: ensure it's gone.
     """
     vm = smoke_vm
-    target = f"{LOG_DIR}/ip_block.log"
+    target = _throwaway_log("ip_block.log")
     _seed_file(vm, target, f"pfb-ui-clear-plain-{helpers.unique_domain('clr')}\n")
     try:
         # BEFORE: present and non-empty.
@@ -348,7 +376,7 @@ def test_clear_py_error_truncates_in_place(webui: WebUI, smoke_vm: helpers.Smoke
     size 0 (AFTER) -- proving truncate, not unlink. Restore: remove the file.
     """
     vm = smoke_vm
-    target = f"{LOG_DIR}/py_error.log"
+    target = _throwaway_log("py_error.log")
     _seed_file(vm, target, f"pfb-ui-clear-py-{helpers.unique_domain('py')}\n")
     try:
         assert _exists(vm, target), "seeded py_error.log missing before clear"
@@ -378,7 +406,7 @@ def test_clear_dnsbl_log_unlinks_then_retouches_empty(webui: WebUI, smoke_vm: he
     Restore: remove the file.
     """
     vm = smoke_vm
-    target = f"{LOG_DIR}/dnsbl.log"
+    target = _throwaway_log("dnsbl.log")
     _seed_file(vm, target, f"pfb-ui-clear-dnsbl-{helpers.unique_domain('dns')}\n")
     try:
         assert _exists(vm, target), "seeded dnsbl.log missing before clear"

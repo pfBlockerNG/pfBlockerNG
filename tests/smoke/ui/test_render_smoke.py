@@ -1244,9 +1244,18 @@ def test_software_page_hidden_when_override_forces_off(
     """Forcing the override 'off' hides the page DETERMINISTICALLY — independent of install %R.
 
     The 'off' branch must win even on a box that WOULD auto-detect as our-build, so support can
-    force the page away. GET (redirects not followed) -> the guard's 3xx to /index.php, marker
-    absent — the explicit negative branch paired with the forced-on positive above.
+    force the page away. This Tier-A deploy is a SIDELOAD (%R empty), so the provenance gate
+    already hides the page by DEFAULT (the tests above) — forcing 'off' alone would be
+    indistinguishable from that default no-op. Force 'on' FIRST and assert the page IS visible
+    (the sibling positive branch, re-proven here as the before-state), THEN force 'off' on the
+    SAME box and assert it becomes hidden again — a real transition proving 'off' is what caused
+    the hide, not the deploy's own default state.
     """
+    with software_panel_forced(smoke_vm, "on"):
+        resp = webui.get(_SOFTWARE_PAGE)
+        result = evaluate_render(_SOFTWARE_PAGE, resp.status_code, resp.text, (_SOFTWARE_PANEL_MARKER,))
+        assert result.ok, f"forced-on Software page render failed (precondition): {result.detail}"
+
     with software_panel_forced(smoke_vm, "off"):
         resp = webui.get(_SOFTWARE_PAGE, allow_redirects=False)
         assert resp.status_code in (301, 302, 303, 307, 308), (

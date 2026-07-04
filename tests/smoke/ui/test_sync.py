@@ -37,10 +37,12 @@ below depend on these; they are not guessed):
 
 Every flow is a TRUE transition test (CLAUDE.md): it seeds + asserts the BEFORE
 state, drives the CSRF POST, asserts the AFTER state via the config.xml oracle,
-then RESTORES the box (asserting the reverse where it applies) so the
-session-scoped VM is left clean for sibling flows. The sync config node is
-snapshotted and force-restored in ``finally`` so a mid-test failure cannot poison
-Tier A or the other flows.
+then RESETS the sync config node to a FIXED, deterministic baseline in
+``finally`` (:func:`_seed_sync` -- disabled/150/no rows; NOT a snapshot of
+whatever was there before the test) so a mid-test failure cannot poison Tier A
+or the other flows. Every flow calls the same ``_seed_sync`` both before and
+after, so no flow depends on -- or needs to restore -- another's leftover
+CFG_SYNC state.
 
 This page is a plain form handler gating on the ``save`` button, but its rendered
 form ALWAYS includes a placeholder Target row whose empty ``varsyncipaddress-0``

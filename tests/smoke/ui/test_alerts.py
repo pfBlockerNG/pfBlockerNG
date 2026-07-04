@@ -58,6 +58,12 @@ CFG_V6SUPPRESSION = "installedpackages/pfblockerngipsettings/config/0/v6suppress
 # collection reads Permit aliases from (alerts.php:170-251).
 CFG_IPV4_LISTS = "installedpackages/pfblockernglistsv4/config"
 
+# The temporary Lock/Unlock state store ($pfb['dnsbl_unlock'], pfblockerng.inc:150).
+# Written SYNCHRONOUSLY by pfb_unlock() -- unlike the DNS-visible effect (an async
+# manifest patch + Unbound reload), so it is the reliable oracle for "this POST did
+# NOT touch the unlock state" (no swap-timing race to poll around).
+DNSBL_UNLOCK_STORE = "/tmp/dnsbl_unlock"
+
 
 def _csrf(webui: WebUI) -> str:
     """GET the alerts page and return its freshly-injected ``__csrf_magic`` token.
@@ -205,9 +211,13 @@ def test_dnsbl_remove_rejects_missing_type(
 
     Branch coverage for the validator's REJECT side (the accept side is the marquee
     lifecycle above): the handler exits with a savemsg and never toggles the unlock
-    store when ``dnsbl_type`` is empty (alerts.php:1380). The transition oracle is the
-    DNS shape: a feed-blocked domain stays VIP-blocked across the rejected POST (the
-    block is the before-state AND the after-state -- proving the POST did NOT unlock).
+    store when ``dnsbl_type`` is empty (alerts.php:1444-1448 -- BEFORE the
+    ``pfb_unlock()`` call at :1468). The primary oracle is the unlock store itself
+    (``$pfb['dnsbl_unlock']``, pfblockerng.inc:150): it is written SYNCHRONOUSLY by
+    ``pfb_unlock()``, so comparing its content before/after proves the handler did
+    NOT run that far -- a single un-polled DNS probe right after the POST cannot
+    rule out the async swap simply not having landed yet (a false pass). The DNS
+    shape is kept as a corroborating check (still VIP-blocked).
     """
     vm = smoke_vm
     domain = helpers.unique_domain("uireject")
@@ -219,15 +229,23 @@ def test_dnsbl_remove_rejects_missing_type(
     helpers.inject(vm, spec)
     helpers.reload(vm, "update")
     try:
-        # BEFORE: VIP-blocked.
+        # BEFORE: VIP-blocked, and the (synchronous) unlock store at its pre-POST content.
         before = helpers.dns_probe(vm, domain, "A")
         assert helpers.is_vip(before), f"{domain} expected VIP block before the rejected POST, got {before}"
+        store_before = helpers.read_log_file(vm, DNSBL_UNLOCK_STORE)
 
         # Reject: empty dnsbl_type. The handler must exit before toggling the store.
         resp = _post_action(webui, {"dnsbl_remove": "unlock", "domain": domain, "dnsbl_type": ""})
         assert not looks_like_login_page(resp.text), "rejected POST returned the login form (session lost)"
 
-        # AFTER: still VIP-blocked -- the rejected unlock did not lift the sinkhole.
+        # AFTER (real oracle): the synchronous unlock store is byte-for-byte unchanged --
+        # no swap-timing race, unlike a bare DNS probe right after the POST.
+        store_after = helpers.read_log_file(vm, DNSBL_UNLOCK_STORE)
+        assert store_after == store_before, (
+            f"dnsbl_unlock store changed after a REJECTED unlock POST: before={store_before!r} after={store_after!r}"
+        )
+
+        # Corroborating: still VIP-blocked.
         after = helpers.dns_probe(vm, domain, "A")
         assert helpers.is_vip(after), f"{domain} no longer VIP-blocked after a REJECTED unlock POST: {after}"
     finally:
@@ -1277,6 +1295,24 @@ def test_alerts_rows_render_whitelist_icons_oracle(
 # --------------------------------------------------------------------------- #
 
 
+def _row_containing(html_body: str, needle: str) -> str:
+    """Return the single ``<tr ...>...</tr>`` block containing ``needle``.
+
+    ``convert_dnsbl_log()`` prints one ``<tr>`` per event row (alerts.php:2571 /
+    2593) with the domain, group, and icons all inside it. A fixed byte-distance
+    window around a match can straddle the PREVIOUS or NEXT table row when rows
+    are dense, false-matching (or false-missing) a marker that belongs to a
+    neighbour -- row-isolating avoids that entirely.
+    """
+    idx = html_body.find(needle)
+    assert idx != -1, f"{needle!r} not found in rendered HTML"
+    tr_start = html_body.rfind("<tr", 0, idx)
+    assert tr_start != -1, f"no opening <tr found before {needle!r}"
+    tr_end = html_body.find("</tr>", idx)
+    assert tr_end != -1, f"no closing </tr> found after {needle!r}"
+    return html_body[tr_start : tr_end + len("</tr>")]
+
+
 def test_upstream_block_renders_cloud_icon_and_correct_group(
     webui: "WebUI",
     smoke_vm: helpers.SmokeVM,
@@ -1292,20 +1328,22 @@ def test_upstream_block_renders_cloud_icon_and_correct_group(
         Both are tested by injecting a synthetic ``Upstream_Block`` CSV line directly
         into ``dnsbl.log`` and asserting the rendered HTML.
 
-    Given: DNSBL is enabled (required for the DNSBL Python tab to appear); a
-        synthetic ``Upstream_Block`` line for a unique domain is appended to
-        ``/var/log/pfblockerng/dnsbl.log``.
+    Given: DNSBL is enabled (required for the DNSBL Python tab to appear); the
+        Alerts page GET BEFORE the seed shows neither the fresh domain nor the
+        cloud icon (before-state -- no false pass); a synthetic ``Upstream_Block``
+        line for a unique domain is appended to ``/var/log/pfblockerng/dnsbl.log``.
 
-    When: the Reports/Alerts page is GET-ted (default ``alert`` view, which renders
-        the ``DNSBL Python`` tab from ``dnsbl.log``).
+    When: the Reports/Alerts page is GET-ted again (default ``alert`` view, which
+        renders the ``DNSBL Python`` tab from ``dnsbl.log``).
 
-    Then:
-        (a) ``fa-cloud`` is present in the rendered HTML for that domain's row —
-            proving the bolt-icon override fired (Edit D step 9).
-        (b) the text ``Upstream`` appears near the domain and the text ``Unknown``
-            does NOT appear near it — proving the stale-entry correction was skipped
-            (Edit D step 8); without the skip, pfb_dnsbl_parse would rewrite the
-            group to 'Unknown'.
+    Then, all scoped to the domain's OWN ``<tr>`` row (never a byte-distance
+    window, which can straddle a neighbouring row):
+        (a) ``fa-cloud`` is present in that row — proving the bolt-icon override
+            fired (Edit D step 9).
+        (b) the text ``Upstream`` appears in that row and the text ``Unknown``
+            does NOT — proving the stale-entry correction was skipped (Edit D
+            step 8); without the skip, pfb_dnsbl_parse would rewrite the group to
+            'Unknown'.
 
     Cleanup: the appended log line is removed in ``finally`` (truncate the file back
         to its original size) so the session VM is clean for sibling tests.
@@ -1331,8 +1369,17 @@ def test_upstream_block_renders_cloud_icon_and_correct_group(
 
     helpers.set_dnsbl_enabled(vm, True)
 
+    # GIVEN (before-state): the fresh, never-before-seen domain is absent before
+    # the seed, so a later "present" assertion proves THIS row caused it.
+    pre = webui.get(ALERTS_PAGE)
+    assert not looks_like_login_page(pre.text), "alerts page GET returned login form before mutation (session lost)"
+    assert domain not in pre.text, (
+        f"Precondition failed: synthetic domain {domain!r} already present before the "
+        f"synthetic row was seeded — cannot prove causation."
+    )
+
     try:
-        # GIVEN: append the synthetic upstream-block line via SSH tee -a.
+        # WHEN: append the synthetic upstream-block line via SSH tee -a.
         append_result = subprocess.run(
             vm.ssh_argv("tee", "-a", dnsbl_log),
             input=csv_line,
@@ -1353,26 +1400,25 @@ def test_upstream_block_renders_cloud_icon_and_correct_group(
         )
         html_body = resp.text
 
-        # THEN (a): the cloud icon class is present in the page (Edit D step 9).
-        assert "fa-cloud" in html_body, (
-            f"fa-cloud icon class absent from the rendered Alerts page — "
-            f"the upstream-block icon override (Edit D step 9) did not fire for {domain!r}"
+        # Row-isolate: the domain's OWN <tr>, not a byte-distance window that can
+        # straddle a neighbouring row.
+        row = _row_containing(html_body, domain)
+
+        # THEN (a): the cloud icon class is present in the domain's OWN row (Edit D step 9).
+        assert "fa-cloud" in row, (
+            f"fa-cloud icon class absent from {domain!r}'s row — "
+            f"the upstream-block icon override (Edit D step 9) did not fire: {row!r}"
         )
 
-        # THEN (b): the domain appears and its row shows group 'Upstream', not 'Unknown'.
-        # We find the domain in the rendered HTML and inspect a window around it.
-        dom_idx = html_body.find(domain)
-        assert dom_idx != -1, f"synthetic upstream-block domain {domain!r} not found in the rendered Alerts page HTML"
-        # Look in a 2 kB window around the domain occurrence for the Group value.
-        window = html_body[max(0, dom_idx - 1024) : dom_idx + 1024]
-        assert "Upstream" in window, (
-            f"Group 'Upstream' not found near domain {domain!r} in rendered HTML — "
-            f"stale-entry correction may have overwritten it (Edit D step 8 check failed)"
+        # THEN (b): the row shows group 'Upstream', not 'Unknown'.
+        assert "Upstream" in row, (
+            f"Group 'Upstream' not found in {domain!r}'s row — "
+            f"stale-entry correction may have overwritten it (Edit D step 8 check failed): {row!r}"
         )
-        assert "Unknown" not in window, (
-            f"Group 'Unknown' found near domain {domain!r} in rendered HTML — "
+        assert "Unknown" not in row, (
+            f"Group 'Unknown' found in {domain!r}'s row — "
             f"pfb_dnsbl_parse rewrote the group, meaning $isUpstream guard did not fire "
-            f"(Edit D step 8 regression)"
+            f"(Edit D step 8 regression): {row!r}"
         )
     finally:
         # Truncate dnsbl.log back to its pre-test size to remove the appended line.

@@ -386,7 +386,7 @@ def test_blacklist_lang_autosubmit_persists_without_save(
     original = helpers.config_get(vm, CFG_LANG)
     restore = original or "EN"
     try:
-        assert restore != "DE" or original == "DE", "baseline sanity for blacklist_lang"
+        assert original != "DE", f"blacklist_lang already 'DE' before the valid POST (original={original!r})"
         # VALID 'DE' via the no-save path.
         _direct_post(webui, {"blacklist_lang": "DE"})
         assert helpers.config_get(vm, CFG_LANG) == "DE", "blacklist_lang did not persist 'DE' (no-save path)"
