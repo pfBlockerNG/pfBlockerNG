@@ -2835,9 +2835,12 @@ $group->add(new Form_Checkbox(
 		. 'Keeps clients on the local DNS resolver so DNSBL stays effective.<br />'
 		. 'The firewall itself is always exempt. Does not cover DoH/DoT/DoQ traffic (use the DoH/DoT/DoQ Blocking section below for that).');
 
-// [ ADR-36 ] Build the quick-fill interface union (inbound + outbound from IP settings).
-// These are the pfBlockerNG firewall-rule interfaces; the quick-fill populates the
-// DNS Redirect select to match that set with one click.
+// [ ADR-36/37 ] Build the quick-fill interface union (inbound + outbound from IP settings).
+// These are the pfBlockerNG firewall-rule interfaces; the quick-fill populates the DNS
+// Redirect AND DoT/DoQ Block selects to match that set with one click. $options_dnsbl_redir_int
+// and $options_dnsbl_dot_block_int are both aliases of $options_dnsbl_interface (identical
+// interface list), so this one computed set/JSON serves both sections -- see the DoT/DoQ
+// Block section below, which reuses it via a JS alias instead of recomputing it.
 $pfb_ipconfig_raw = config_get_path('installedpackages/pfblockerngipsettings/config/0', []);
 $pfb_redir_fill_ifaces = array_unique(array_filter(array_merge(
 	array_filter(array_map('trim', explode(',', $pfb_ipconfig_raw['inbound_interface'] ?? ''))),
@@ -2873,7 +2876,7 @@ $group->add(new Form_Select(
 	TRUE
 ))->setAttribute('style', 'width: auto')
   ->setAttribute('size', $options_dnsbl_interface_cnt);
-$group->setHelp('<a href="#" id="pfb_redir_fill" onclick="pfb_redir_fill_interfaces(); return false;">'
+$group->setHelp('<a href="#" id="pfb_redir_fill" onclick="pfb_fill_interfaces(\'dnsbl_redir_int\', pfb_redir_fill_ifaces); return false;">'
 	. 'Fill from IP Interfaces</a> — select the union of pfBlockerNG Inbound + Outbound interfaces.');
 $section->add($group);
 
@@ -2908,16 +2911,9 @@ $group->add(new Form_Checkbox(
 		. 'The exception alias must exist at '
 		. '<a href="/firewall_aliases.php" target="_blank">Firewall &gt; Aliases</a> before use.');
 
-// [ ADR-37 ] Build the quick-fill interface union (inbound + outbound from IP settings).
-// Reuses the same $pfb_ipconfig_raw already fetched for the ADR-36 DNS Redirect block above.
-$pfb_dot_block_fill_ifaces = array_unique(array_filter(array_merge(
-	array_filter(array_map('trim', explode(',', $pfb_ipconfig_raw['inbound_interface'] ?? ''))),
-	array_filter(array_map('trim', explode(',', $pfb_ipconfig_raw['outbound_interface'] ?? '')))
-)));
-// Restrict to only interfaces present in the DoT/DoQ Block option list.
-$pfb_dot_block_fill_ifaces = array_values(array_intersect($pfb_dot_block_fill_ifaces, array_keys($options_dnsbl_dot_block_int)));
-$pfb_dot_block_fill_json   = json_encode($pfb_dot_block_fill_ifaces);
-
+// [ ADR-37 ] Quick-fill interface union -- identical to the ADR-36 DNS Redirect fill above
+// ($options_dnsbl_dot_block_int is the same interface list as $options_dnsbl_redir_int), so
+// this section's "Fill" button reuses that already-computed set via a JS alias (see below).
 $group->add(new Form_Select(
 	'dnsbl_dot_block_int',
 	NULL,
@@ -2926,7 +2922,7 @@ $group->add(new Form_Select(
 	TRUE
 ))->setAttribute('style', 'width: auto')
   ->setAttribute('size', $options_dnsbl_interface_cnt);
-$group->setHelp('<a href="#" id="pfb_dot_block_fill" onclick="pfb_dot_block_fill_interfaces(); return false;">'
+$group->setHelp('<a href="#" id="pfb_dot_block_fill" onclick="pfb_fill_interfaces(\'dnsbl_dot_block_int\', pfb_dot_block_fill_ifaces); return false;">'
 	. 'Fill from IP Interfaces</a> — select the union of pfBlockerNG Inbound + Outbound interfaces.');
 $section->add($group);
 
@@ -3549,28 +3545,19 @@ function pfb_redir_exclude_autocomplete() {
 		.on('focus', function() { $(this).autocomplete('search', $(this).val()); });
 }
 
-// [ ADR-36 ] DNS Redirect quick-fill: union of pfBlockerNG Inbound + Outbound interfaces.
-// When clicked, selects those interfaces in the dnsbl_redir_int multi-select.
+// [ ADR-36/37 ] Quick-fill: union of pfBlockerNG Inbound + Outbound interfaces, shared by the
+// DNS Redirect and DoT/DoQ Block sections (same underlying interface list -- ADR-37 aliases
+// the ADR-36 set here rather than recomputing it server-side).
 var pfb_redir_fill_ifaces = <?=$pfb_redir_fill_json?>;
+var pfb_dot_block_fill_ifaces = pfb_redir_fill_ifaces;
 
-function pfb_redir_fill_interfaces() {
+function pfb_fill_interfaces(selectName, fillSet) {
 	// Set the multi-select to exactly the fill set (deselects the rest). .val([...]) is the
 	// reliable jQuery idiom for a <select multiple>; trigger('change') notifies any listeners.
 	// NOTE: a pfSense multi-select renders id (and name) as "<field>[]", so the bracket-free
-	// id selector "#dnsbl_redir_int" matches nothing — target it by name instead (this is why
-	// the button previously appeared to do nothing).
-	$('select[name="dnsbl_redir_int[]"]').val(pfb_redir_fill_ifaces).trigger('change');
-}
-
-// [ ADR-37 ] DoT/DoQ Block quick-fill: union of pfBlockerNG Inbound + Outbound interfaces.
-// When clicked, selects those interfaces in the dnsbl_dot_block_int multi-select.
-var pfb_dot_block_fill_ifaces = <?=$pfb_dot_block_fill_json?>;
-
-function pfb_dot_block_fill_interfaces() {
-	// Set the multi-select to exactly the fill set (deselects the rest). .val([...]) is the
-	// reliable jQuery idiom for a <select multiple>; trigger('change') notifies any listeners.
-	// Same bracketed-id caveat as the DNS Redirect fill above — select by name, not "#id".
-	$('select[name="dnsbl_dot_block_int[]"]').val(pfb_dot_block_fill_ifaces).trigger('change');
+	// id selector "#<field>" matches nothing — target it by name instead (this is why the
+	// button previously appeared to do nothing).
+	$('select[name="' + selectName + '[]"]').val(fillSet).trigger('change');
 }
 
 // [ ADR-13 ] Address(es) the package would auto-create for the selected interface, so
