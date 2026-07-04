@@ -1853,30 +1853,38 @@ function pfb_syslog_format_ip(array $fields): string
 
 	$parts = [];
 
-	// Required fields — always emitted.
-	$parts[] = 'act='   . pfb_syslog_escape($fields['act'] ?? '');
-	$parts[] = 'dir='   . pfb_syslog_escape($fields['dir'] ?? '');
-	$parts[] = 'if='    . pfb_syslog_escape($fields['if'] ?? '');
-	$parts[] = 'proto=' . pfb_syslog_escape($fields['proto'] ?? '');
-	$parts[] = 'src='   . pfb_syslog_escape($fields['src'] ?? '');
-	$parts[] = 'dst='   . pfb_syslog_escape($fields['dst'] ?? '');
+	// Required fields — always emitted. Cast to string: a caller may pass a
+	// non-string scalar (e.g. FALSE), and pfb_syslog_escape()'s string param
+	// would silently coerce it at the call boundary anyway — cast here too
+	// for uniformity with the optional-field sites below.
+	$parts[] = 'act='   . pfb_syslog_escape((string) ($fields['act'] ?? ''));
+	$parts[] = 'dir='   . pfb_syslog_escape((string) ($fields['dir'] ?? ''));
+	$parts[] = 'if='    . pfb_syslog_escape((string) ($fields['if'] ?? ''));
+	$parts[] = 'proto=' . pfb_syslog_escape((string) ($fields['proto'] ?? ''));
+	$parts[] = 'src='   . pfb_syslog_escape((string) ($fields['src'] ?? ''));
+	$parts[] = 'dst='   . pfb_syslog_escape((string) ($fields['dst'] ?? ''));
 
-	// Optional integer-ish fields — omit when empty.
-	$sport = $fields['sport'] ?? '';
+	// Optional integer-ish fields — omit when empty. Cast BEFORE the '' check
+	// so a non-string scalar (e.g. FALSE) compares/escapes as its coerced
+	// string form, not its raw type.
+	$sport = (string) ($fields['sport'] ?? '');
 	if ($sport !== '') {
 		$parts[] = 'sport=' . pfb_syslog_escape($sport);
 	}
-	$dport = $fields['dport'] ?? '';
+	$dport = (string) ($fields['dport'] ?? '');
 	if ($dport !== '') {
 		$parts[] = 'dport=' . pfb_syslog_escape($dport);
 	}
 
 	// Required IP version.
-	$parts[] = 'ipver=' . pfb_syslog_escape($fields['ipver'] ?? '');
+	$parts[] = 'ipver=' . pfb_syslog_escape((string) ($fields['ipver'] ?? ''));
 
 	// Optional enrichment fields — omit when empty or a known absent-sentinel.
+	// Cast BEFORE the in_array() sentinel check: a non-string scalar (e.g.
+	// FALSE) must coerce to '' first so it matches the '' sentinel, exactly
+	// as the retired $get() closure's `: string` return type did.
 	foreach (['geoip', 'alias', 'feed', 'host', 'asn'] as $key) {
-		$val = $fields[$key] ?? '';
+		$val = (string) ($fields[$key] ?? '');
 		if (!in_array($val, $absent_sentinels, TRUE)) {
 			$parts[] = $key . '=' . pfb_syslog_escape($val);
 		}
@@ -1927,24 +1935,28 @@ function pfb_syslog_format_ip(array $fields): string
  */
 function pfb_syslog_format_dnsbl(array $fields): string
 {
+	// Cast every extraction to string: a caller may pass a non-string scalar
+	// (e.g. FALSE), and the '' emptiness check below must see its coerced
+	// string form — exactly as the retired $get() closure's `: string`
+	// return type did.
 	$parts   = [];
 	$parts[] = 'act=dnsbl';
-	$parts[] = 'qname='  . pfb_syslog_escape($fields['q_name'] ?? '');
-	$parts[] = 'qip='    . pfb_syslog_escape($fields['q_ip'] ?? '');
-	$parts[] = 'qtype='  . pfb_syslog_escape($fields['q_type'] ?? '');
+	$parts[] = 'qname='  . pfb_syslog_escape((string) ($fields['q_name'] ?? ''));
+	$parts[] = 'qip='    . pfb_syslog_escape((string) ($fields['q_ip'] ?? ''));
+	$parts[] = 'qtype='  . pfb_syslog_escape((string) ($fields['q_type'] ?? ''));
 
 	// Optional fields — omit the token entirely when the value is ''.
-	$group = $fields['group'] ?? '';
+	$group = (string) ($fields['group'] ?? '');
 	if ($group !== '') {
 		$parts[] = 'group=' . pfb_syslog_escape($group);
 	}
-	$feed = $fields['feed'] ?? '';
+	$feed = (string) ($fields['feed'] ?? '');
 	if ($feed !== '') {
 		$parts[] = 'feed=' . pfb_syslog_escape($feed);
 	}
 
-	$parts[] = 'btype=' . pfb_syslog_escape($fields['b_type'] ?? '');
-	$parts[] = 'eval='  . pfb_syslog_escape($fields['b_eval'] ?? '');
+	$parts[] = 'btype=' . pfb_syslog_escape((string) ($fields['b_type'] ?? ''));
+	$parts[] = 'eval='  . pfb_syslog_escape((string) ($fields['b_eval'] ?? ''));
 
 	return implode(' ', $parts);
 }
