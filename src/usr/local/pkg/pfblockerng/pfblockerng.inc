@@ -6203,6 +6203,35 @@ function pfb_unbound_py_flip_sentinel() {
 }
 
 
+// Poll (bounded) an applied-generation/sequence marker file until its first line
+// parses as an integer >= $target, or $timeout_s elapses. Shared by
+// pfb_unbound_py_wait_applied() (the ADR-10 reload-watcher handshake) and
+// pfb_unbound_py_wait_control_applied() (the control-channel watcher). 200 ms
+// poll interval; returns TRUE once applied, FALSE on timeout.
+function pfb_unbound_py_wait_marker($path, $target, $timeout_s) {
+	$target = (int) $target;
+	$deadline = microtime(TRUE) + (float) $timeout_s;
+
+	do {
+		if (file_exists($path)) {
+			$raw = @file_get_contents($path);
+			if ($raw !== FALSE) {
+				$first = strtok($raw, "\n");
+				if ($first !== FALSE) {
+					$first = trim($first);
+					if ($first !== '' && ctype_digit($first) && (int) $first >= $target) {
+						return TRUE;
+					}
+				}
+			}
+		}
+		usleep(200000);	// 200 ms between polls
+	} while (microtime(TRUE) < $deadline);
+
+	return FALSE;
+}
+
+
 // ADR-10: wait (bounded) for the reload-watcher to APPLY a published generation.
 // After flipping the sentinel to $gen, PHP blocks here until the watcher writes a value
 // >= $gen to the applied marker (/var/unbound/pfb_py_reload.applied), so the data fast
@@ -6216,27 +6245,7 @@ function pfb_unbound_py_flip_sentinel() {
 function pfb_unbound_py_wait_applied($gen, $timeout_s = 30) {
 	global $pfb;
 
-	$gen = (int) $gen;
-	$applied = "{$pfb['dnsbldir']}/pfb_py_reload.applied";
-	$deadline = microtime(TRUE) + (float) $timeout_s;
-
-	do {
-		if (file_exists($applied)) {
-			$raw = @file_get_contents($applied);
-			if ($raw !== FALSE) {
-				$first = strtok($raw, "\n");
-				if ($first !== FALSE) {
-					$first = trim($first);
-					if ($first !== '' && ctype_digit($first) && (int) $first >= $gen) {
-						return TRUE;
-					}
-				}
-			}
-		}
-		usleep(200000);	// 200 ms between polls
-	} while (microtime(TRUE) < $deadline);
-
-	return FALSE;
+	return pfb_unbound_py_wait_marker("{$pfb['dnsbldir']}/pfb_py_reload.applied", $gen, $timeout_s);
 }
 
 
@@ -6248,27 +6257,7 @@ function pfb_unbound_py_wait_applied($gen, $timeout_s = 30) {
 function pfb_unbound_py_wait_control_applied($seq, $timeout_s = 5) {
 	global $pfb;
 
-	$seq     = (int) $seq;
-	$applied  = "{$pfb['dnsbldir']}/pfb_py_control.applied";
-	$deadline = microtime(TRUE) + (float) $timeout_s;
-
-	do {
-		if (file_exists($applied)) {
-			$raw = @file_get_contents($applied);
-			if ($raw !== FALSE) {
-				$first = strtok($raw, "\n");
-				if ($first !== FALSE) {
-					$first = trim($first);
-					if ($first !== '' && ctype_digit($first) && (int) $first >= $seq) {
-						return TRUE;
-					}
-				}
-			}
-		}
-		usleep(200000);	// 200 ms between polls
-	} while (microtime(TRUE) < $deadline);
-
-	return FALSE;
+	return pfb_unbound_py_wait_marker("{$pfb['dnsbldir']}/pfb_py_control.applied", $seq, $timeout_s);
 }
 
 
