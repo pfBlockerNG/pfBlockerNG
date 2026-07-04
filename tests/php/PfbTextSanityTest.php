@@ -154,23 +154,46 @@ final class PfbTextSanityTest extends TestCase
 	}
 
 	// -- Byte-level (no /u) truncation cases ----------------------------------------------
+	//
+	// Each makes the truncated/multibyte tail the SOLE floor candidate (a comment
+	// header precedes it), so NULL genuinely depends on the scanner reaching and
+	// correctly handling that tail -- not short-circuiting on an earlier data line.
+	// That is what makes them fail on a byte-level regression rather than pass
+	// vacuously on any implementation of the floor loop.
 
-	public function test_truncated_mid_token_line_does_not_change_a_valid_verdict(): void
+	public function test_truncated_mid_token_line_is_the_sole_floor_candidate(): void
 	{
-		// An 8 KiB sample whose final line is cut mid-token is still a valid
-		// blocklist body — the earlier complete lines already satisfy the floor,
-		// and a truncated trailing token is not itself NUL/HTML/empty.
-		$body = str_repeat("0.0.0.0 filler.example.org\n", 400); // well over 8 KiB
-		$sample = substr($body . '0.0.0.0 trunc', 0, 8192);
-		$this->assertNull(pfb_text_sanity($sample));
+		// 8180 bytes of comments, then a data line cut mid-token by the 8 KiB read
+		// cap. The truncated "0.0.0.0 fill" is the ONLY non-comment line, so NULL
+		// proves the floor loop counted the truncated tail as content; a mis-split
+		// of it would flip the verdict to below_min_content.
+		$header = str_repeat("# c\n", 2045);                              // 8180 bytes, all comments
+		$sample = substr($header . "0.0.0.0 filler.example.org\n", 0, 8192);
+		$lines  = explode("\n", $sample);
+		// Guard the construction: the deciding line really is the mid-token cut, not
+		// a line dropped past the cap -- else the test would silently retest comments.
+		$this->assertSame('0.0.0.0 fill', end($lines), 'setup drift: final line must be the mid-token cut');
+		$this->assertNull(pfb_text_sanity($sample), 'a truncated sole data line still meets the content floor');
 	}
 
-	public function test_dangling_partial_multibyte_tail_does_not_change_verdict(): void
+	public function test_dangling_partial_multibyte_tail_stays_byte_level(): void
 	{
-		// Byte-level matching: a split multibyte UTF-8 character at the very end
-		// (here, the lead byte of a 2-byte sequence with no continuation byte)
-		// must not flip an otherwise-valid blocklist body away from NULL.
-		$sample = "0.0.0.0 x.example\n0.0.0.0 y.example\n" . "\xC3"; // dangling lead byte
-		$this->assertNull(pfb_text_sanity($sample));
+		// A split multibyte UTF-8 char (lead byte 0xC3, no continuation) ends the
+		// SOLE data line. A /u regression on the preg_split would make PCRE reject
+		// the invalid-UTF-8 subject -> FALSE -> zero lines -> below_min_content, so
+		// NULL proves the split stayed byte-level AND the tailed line was reached.
+		$sample = str_repeat("# c\n", 2045) . "0.0.0.0 x.example\xC3";
+		$this->assertNull(pfb_text_sanity($sample), 'a dangling multibyte tail must not flip the verdict');
+	}
+
+	public function test_html_opening_with_multibyte_tailed_blocklist_line_stays_byte_level(): void
+	{
+		// The html branch runs preg_match($blocklist_shaped) per line. An html-opening
+		// body whose only blocklist-shaped line ends in a dangling multibyte byte must
+		// still match byte-level and yield NULL -- NOT html_error_page. A /u regression
+		// on $blocklist_shaped would make preg_match reject the invalid-UTF-8 subject,
+		// find no blocklist line, and wrongly return html_error_page (test flips red).
+		$sample = "<html>\n0.0.0.0 real.example\xC3\n";
+		$this->assertNull(pfb_text_sanity($sample), 'byte-level blocklist match must survive a multibyte tail');
 	}
 }

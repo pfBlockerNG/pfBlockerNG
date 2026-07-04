@@ -109,7 +109,7 @@ stale/broken:
 None of the 5 is a plain, healthy blocklist body misclassified by the
 heuristic; each reflects a stale corpus snapshot (deprecated/gated/wrong-
 URL feed) captured by PR #827's one-time fetch. STOPPING here per the
-brief — the acceptance decision (refresh the corpus, exclude these 4 known-
+brief — the acceptance decision (refresh the corpus, exclude these 5 known-
 stale/misconfigured catalogue entries, or something else) is Phase 3's /
 the maintainer's call, not this phase's. The scanner logic is unchanged
 from the spec and must stay that way pending that decision.
