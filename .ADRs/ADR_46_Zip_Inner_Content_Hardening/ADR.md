@@ -48,11 +48,10 @@ So the residual, genuinely-new value is narrow and defense-in-depth:
    rabbit hole.
 2. **Add an explicit member-name guard before any disk-writing extraction** — reject an
    archive containing a member whose name is absolute (`/…`), contains a `..` path
-   component, or is implausibly long, *before* extracting to disk. **Open fork
-   (guard scope):** the lazy root-cause is one guard call before **all three** `-C`
-   extraction sites (§1) — the UT1 branch is the least-trusted of the three; if any site is
-   deliberately excluded, the ADR must say why. Maintainer's call before the phase prompts
-   are authored.
+   component, or is implausibly long, *before* extracting to disk. **Fork (RESOLVED
+   2026-07-04 — maintainer's call): all three `-C` extraction sites get the guard** (gzip
+   GeoIP, UT1/blacklist, ZIP GeoIP/top-1M) — one guard call per site, no exclusions; the
+   UT1 branch is the least-trusted of the three.
 
 **Out of scope (own ADRs):** outer MIME normalisation (ADR-44, done); structural integrity
 probes + octet-stream recovery (ADR-45); standardised reject logging (ADR-48); plain-text
@@ -81,11 +80,11 @@ path is unchanged; the GeoIP/top-1M extraction still works for legitimate archiv
    extract anyway, so they reject nothing legitimate*); `TRUE` otherwise. Unit-tested against the full matrix of hostile and benign
    names.
 
-3. **Wire the guard before disk extraction** (sites per the §1.2 guard-scope fork). Before
-   each guarded `tar … -C`, call the guard on the member list; on `FALSE`, log via plain
-   `pfb_logger()` matching the ADR-45 reject-line style (**ADR-48 is still Proposed — do not
-   depend on it; restyle to its format when it lands**) + `unlink_if_exists()` +
-   `return FALSE`. **Red-test observable:** the pre-change behaviour on a hostile archive is
+3. **Wire the guard before disk extraction** (all three sites per the resolved §1.2 fork).
+   Before each guarded `tar … -C`, call the guard on the member list; on `FALSE`, log via
+   `pfb_validate_log($header, 'member', …)` (**ADR-48 landed 2026-07-04** — `member` is a
+   reserved token in its canonical `stage` vocabulary; the offending member name rides
+   `detected=`) + `unlink_if_exists()` + `return FALSE`. **Red-test observable:** the pre-change behaviour on a hostile archive is
    **silent partial success** — extraction errors are discarded (`>/dev/null 2>&1`) and the
    branch returns `TRUE` unconditionally (bsdtar's default refusal of `..` members just
    skips them) — so the failing-before test must assert the explicit reject log + `FALSE`
