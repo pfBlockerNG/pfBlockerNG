@@ -1819,6 +1819,25 @@ function pfb_log_should_reset(string $schedule, string $last_key, int $now_ts): 
 // ---------------------------------------------------------------------------
 
 /**
+ * pfb_syslog_escape — escape a single value for syslog key=value emission:
+ * strip newlines, then quote if needed. Shared by pfb_syslog_format_ip() and
+ * pfb_syslog_format_dnsbl() (ADR-38).
+ *
+ * @param string $v  Raw value.
+ * @return string    Escaped/quoted value.
+ */
+function pfb_syslog_escape(string $v): string
+{
+	// Strip embedded newlines to keep the message single-line.
+	$v = str_replace(["\r\n", "\r", "\n"], ' ', $v);
+	// Quote if the value contains space, '=', or '"'.
+	if (strpos($v, ' ') !== FALSE || strpos($v, '=') !== FALSE || strpos($v, '"') !== FALSE) {
+		$v = '"' . str_replace('"', '\\"', $v) . '"';
+	}
+	return $v;
+}
+
+/**
  * pfb_syslog_format_ip — format an IP security event as a key=value string.
  *
  * @param array<string,string> $fields  Associative array of event fields.
@@ -1832,54 +1851,34 @@ function pfb_syslog_format_ip(array $fields): string
 	// Sentinels treated as "absent" for optional fields.
 	static $absent_sentinels = ['', 'Unknown', 'Unk', 'null'];
 
-	/**
-	 * Escape a single value: strip newlines, then quote if needed.
-	 *
-	 * @param string $v  Raw value.
-	 * @return string    Escaped/quoted value.
-	 */
-	$escape = static function (string $v): string {
-		// Strip embedded newlines to keep the message single-line.
-		$v = str_replace(["\r\n", "\r", "\n"], ' ', $v);
-		// Quote if the value contains space, '=', or '"'.
-		if (strpos($v, ' ') !== FALSE || strpos($v, '=') !== FALSE || strpos($v, '"') !== FALSE) {
-			$v = '"' . str_replace('"', '\\"', $v) . '"';
-		}
-		return $v;
-	};
-
-	$get = static function (string $key) use ($fields): string {
-		return $fields[$key] ?? '';
-	};
-
 	$parts = [];
 
 	// Required fields — always emitted.
-	$parts[] = 'act='   . $escape($get('act'));
-	$parts[] = 'dir='   . $escape($get('dir'));
-	$parts[] = 'if='    . $escape($get('if'));
-	$parts[] = 'proto=' . $escape($get('proto'));
-	$parts[] = 'src='   . $escape($get('src'));
-	$parts[] = 'dst='   . $escape($get('dst'));
+	$parts[] = 'act='   . pfb_syslog_escape($fields['act'] ?? '');
+	$parts[] = 'dir='   . pfb_syslog_escape($fields['dir'] ?? '');
+	$parts[] = 'if='    . pfb_syslog_escape($fields['if'] ?? '');
+	$parts[] = 'proto=' . pfb_syslog_escape($fields['proto'] ?? '');
+	$parts[] = 'src='   . pfb_syslog_escape($fields['src'] ?? '');
+	$parts[] = 'dst='   . pfb_syslog_escape($fields['dst'] ?? '');
 
 	// Optional integer-ish fields — omit when empty.
-	$sport = $get('sport');
+	$sport = $fields['sport'] ?? '';
 	if ($sport !== '') {
-		$parts[] = 'sport=' . $escape($sport);
+		$parts[] = 'sport=' . pfb_syslog_escape($sport);
 	}
-	$dport = $get('dport');
+	$dport = $fields['dport'] ?? '';
 	if ($dport !== '') {
-		$parts[] = 'dport=' . $escape($dport);
+		$parts[] = 'dport=' . pfb_syslog_escape($dport);
 	}
 
 	// Required IP version.
-	$parts[] = 'ipver=' . $escape($get('ipver'));
+	$parts[] = 'ipver=' . pfb_syslog_escape($fields['ipver'] ?? '');
 
 	// Optional enrichment fields — omit when empty or a known absent-sentinel.
 	foreach (['geoip', 'alias', 'feed', 'host', 'asn'] as $key) {
-		$val = $get($key);
+		$val = $fields[$key] ?? '';
 		if (!in_array($val, $absent_sentinels, TRUE)) {
-			$parts[] = $key . '=' . $escape($val);
+			$parts[] = $key . '=' . pfb_syslog_escape($val);
 		}
 	}
 
@@ -1928,44 +1927,24 @@ function pfb_syslog_format_ip(array $fields): string
  */
 function pfb_syslog_format_dnsbl(array $fields): string
 {
-	/**
-	 * Escape a single value: strip newlines, then quote if needed.
-	 *
-	 * @param string $v  Raw value.
-	 * @return string    Escaped/quoted value.
-	 */
-	$escape = static function (string $v): string {
-		// Strip embedded newlines to keep the message single-line.
-		$v = str_replace(["\r\n", "\r", "\n"], ' ', $v);
-		// Quote if the value contains space, '=', or '"'.
-		if (strpos($v, ' ') !== FALSE || strpos($v, '=') !== FALSE || strpos($v, '"') !== FALSE) {
-			$v = '"' . str_replace('"', '\\"', $v) . '"';
-		}
-		return $v;
-	};
-
-	$get = static function (string $key) use ($fields): string {
-		return $fields[$key] ?? '';
-	};
-
 	$parts   = [];
 	$parts[] = 'act=dnsbl';
-	$parts[] = 'qname='  . $escape($get('q_name'));
-	$parts[] = 'qip='    . $escape($get('q_ip'));
-	$parts[] = 'qtype='  . $escape($get('q_type'));
+	$parts[] = 'qname='  . pfb_syslog_escape($fields['q_name'] ?? '');
+	$parts[] = 'qip='    . pfb_syslog_escape($fields['q_ip'] ?? '');
+	$parts[] = 'qtype='  . pfb_syslog_escape($fields['q_type'] ?? '');
 
 	// Optional fields — omit the token entirely when the value is ''.
-	$group = $get('group');
+	$group = $fields['group'] ?? '';
 	if ($group !== '') {
-		$parts[] = 'group=' . $escape($group);
+		$parts[] = 'group=' . pfb_syslog_escape($group);
 	}
-	$feed = $get('feed');
+	$feed = $fields['feed'] ?? '';
 	if ($feed !== '') {
-		$parts[] = 'feed=' . $escape($feed);
+		$parts[] = 'feed=' . pfb_syslog_escape($feed);
 	}
 
-	$parts[] = 'btype=' . $escape($get('b_type'));
-	$parts[] = 'eval='  . $escape($get('b_eval'));
+	$parts[] = 'btype=' . pfb_syslog_escape($fields['b_type'] ?? '');
+	$parts[] = 'eval='  . pfb_syslog_escape($fields['b_eval'] ?? '');
 
 	return implode(' ', $parts);
 }
