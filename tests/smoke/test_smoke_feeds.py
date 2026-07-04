@@ -219,15 +219,20 @@ def test_feed_internal_filter_blocks_then_allowlist_exempts(deployed_vm: SmokeVM
     """
     feed_url = mock_feeds.feed_url("ip_plain_cidr.txt")
     spec = h.IpCase(aliasname="smokefiltergate", feed_url=feed_url, header="smokefiltergate", family="v4")
-    # The refusal fires at pfb_download()'s ENTRY URL vetting (pfb_filter PFB_FILTER_URL
-    # routes through pfb_feed_host_allowed, pfblockerng.inc:1067), NOT the later
-    # download-time gate at :8974 — that '[ header ] … — skipped' line is unreachable
-    # for an internal-host URL. The reason-bearing line lands in error.log (logtype 6):
-    #   "… Invalid URL (feed host resolves to a non-permitted address) [ <url> ]"
-    # Scope it by the reason AND this run's unique mock URL (host:port/fixture), so a
-    # sibling feed's failure can never satisfy it.
-    refused_marker = f"Invalid URL (feed host resolves to a non-permitted address) [ {feed_url} ]"
-    error_log = f"{h.PFB_LOGDIR}/error.log"
+    # The refusal fires at pfb_download()'s entry vetting during the IP download pass
+    # (pfb_filter PFB_FILTER_URL routes through pfb_feed_host_allowed; observed live in
+    # run 28706678122 — the error.log reject carries the 'pfb_download_failure' reference).
+    # pfb_filter's reason-free "… Invalid URL (…) [ <url> ]" error.log line (logtype 6)
+    # is untouched by #811 — but every entry-reject site now also calls
+    # pfb_log_feed_host_reject() (#811), so a header-scoped, reason-bearing
+    # "[ header ] <reason> — skipped" line lands in the MAIN log, making the cause
+    # visible without digging through error.log. Assert THAT line: scope it by header
+    # AND the exact guard reason, so a sibling feed's failure can never satisfy it.
+    # NOTE: the download pipeline's on-box header carries the family suffix
+    # ("smokefiltergate_v4"), so the marker anchors on that rendered form, not the bare
+    # alias name (run 28706678122: the line logged as "[ smokefiltergate_v4 ] … — skipped").
+    refused_marker = f"[ {spec.header}_v4 ] feed host resolves to a non-permitted address — skipped"
+    main_log = h.PFB_LOG
     # The mock fetch must be reachable across both updates (the SSRF filter, not egress,
     # is what we are exercising).
     h.unblock_egress()
@@ -239,7 +244,7 @@ def test_feed_internal_filter_blocks_then_allowlist_exempts(deployed_vm: SmokeVM
         # the "table not built" assertion reflects a fully settled reload, not a race.
         h.set_feed_internal_allowlist(deployed_vm, "")
         assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before any load"
-        refused_before = h.count_log_marker(deployed_vm, error_log, refused_marker)
+        refused_before = h.count_log_marker(deployed_vm, main_log, refused_marker)
         h.reload(deployed_vm, "update")
         h.reload(deployed_vm, "updateip")
         assert spec.alias not in h.pfctl_tables(deployed_vm), (
@@ -248,9 +253,9 @@ def test_feed_internal_filter_blocks_then_allowlist_exempts(deployed_vm: SmokeVM
         # A missing pf table alone is non-specific — a dead mock server would look identical.
         # Assert the actual refusal reason was logged, so this proves the SSRF guard fired,
         # not merely that nothing happened to load.
-        refused_after = h.count_log_marker(deployed_vm, error_log, refused_marker)
+        refused_after = h.count_log_marker(deployed_vm, main_log, refused_marker)
         assert refused_after > refused_before, (
-            f"Expected {refused_marker!r} in {error_log} after the filtered update "
+            f"Expected {refused_marker!r} in {main_log} after the filtered update "
             f"(before={refused_before}, after={refused_after}) — the pf table being empty does "
             "not by itself prove the SSRF guard refused the download"
         )
@@ -1703,38 +1708,31 @@ def test_cron_304_skips_unchanged_remote_feed(
         ans_before = h.dns_probe_client_until(client_vm, dom, h.is_vip)
         assert h.is_vip(ans_before), f"BEFORE: {dom} must be VIP-blocked after initial ingest, got {ans_before}"
 
-        # Feed unchanged; ETag still matches. The "( 304 not modified )" verdict line is
-        # logged WITHOUT the "[ header ]" prefix (pfblockerng.php:553, pfb_logger writes it
-        # verbatim), so it is not header-scopable — count it globally over the cron window.
-        # This test is the only feed set up with a matching ETag, so the before/after delta
-        # isolates its conditional GET.
+        # Feed unchanged; ETag still matches. #811 header-scopes the "( 304 not modified )"
+        # verdict line itself (pfblockerng.php's pfb_update_check now prefixes it "[ header ] ",
+        # matching the fetch-time gates' format), so the marker below is scoped by header AND
+        # verdict — no separate global count + "fast guard" needed.
         _pin_cron_due(deployed_vm)
-        not_mod_before = h.count_log_marker(deployed_vm, h.PFB_LOG, "304 not modified")
+        not_mod_marker = f"[ {header} ] ( 304 not modified )"
+        not_mod_before = h.count_log_marker(deployed_vm, h.PFB_LOG, not_mod_marker)
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
-        hdr_before = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
 
         # WHEN — the conditional-GET 304 needs the validator PERSISTED first, then READ on a
         # later probe. The validator is written by the cron detector (pfb_update_check) on a
         # 200, NOT by the updatednsbl Force ingest above, and only once a {header}.orig baseline
         # exists — so the store-then-read can span a couple of cron passes. Run cron until
-        # "304 not modified" appears (the #572 fix aligned the read base to {header}.orig),
-        # capped so a genuine failure still surfaces.
+        # the marker appears (the #572 fix aligned the read base to {header}.orig), capped so
+        # a genuine failure still surfaces.
         for _pass in range(4):
             h.reload(deployed_vm, "cron")
-            if h.count_log_marker(deployed_vm, h.PFB_LOG, "304 not modified") > not_mod_before:
+            if h.count_log_marker(deployed_vm, h.PFB_LOG, not_mod_marker) > not_mod_before:
                 break
 
-        # Fast guard — the feed was evaluated at least once.
-        hdr_after = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
-        assert hdr_after > hdr_before, (
-            f"cron did not evaluate [ {header} ] (before={hdr_before}, after={hdr_after}) — "
-            f"EveryDay feed not due (hour rollover?); re-run"
-        )
-
-        # THEN — "304 not modified" appeared within the cap (Phase-3 code-path proof).
-        not_mod_after = h.count_log_marker(deployed_vm, h.PFB_LOG, "304 not modified")
+        # THEN — "[ header ] ( 304 not modified )" appeared within the cap (Phase-3 code-path
+        # proof, now also proving the SAME cron pass evaluated THIS feed's header).
+        not_mod_after = h.count_log_marker(deployed_vm, h.PFB_LOG, not_mod_marker)
         assert not_mod_after > not_mod_before, (
-            f"Expected '( 304 not modified )' (Phase-3 conditional GET proof) within 4 cron "
+            f"Expected {not_mod_marker!r} (Phase-3 conditional GET proof) within 4 cron "
             f"passes (before={not_mod_before}, after={not_mod_after}) — 304 path not taken"
         )
 
@@ -1809,17 +1807,16 @@ def test_cron_200_reingest_changed_remote_feed(
         mock_feeds.set_content(feed_name, dom_old + "\n" + dom_new + "\n", etag=etag_v2)
 
         _pin_cron_due(deployed_vm)
-        hdr_before = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
-        # "( content changed )" is the Phase-3 hash-compare verdict itself (not merely its
-        # re-ingest side effect) — the docstring's RED premise (a status-only impl that skips
-        # the hash compare) would still log "Downloading update" without ever logging this.
-        chg_before = h.count_log_marker(deployed_vm, h.PFB_LOG, "content changed")
+        # "[ header ] ( content changed )" is the Phase-3 hash-compare verdict itself (not
+        # merely its re-ingest side effect), header-scoped by #811 — the docstring's RED
+        # premise (a status-only impl that skips the hash compare) would still log
+        # "Downloading update" without ever logging this, and a header-scoped count also
+        # proves THIS feed (not a sibling) was the one evaluated.
+        chg_marker = f"[ {header} ] ( content changed )"
+        chg_before = h.count_log_marker(deployed_vm, h.PFB_LOG, chg_marker)
 
         h.reload(deployed_vm, "cron")
-
-        hdr_after = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
-        assert hdr_after > hdr_before, f"cron did not evaluate [ {header} ] — EveryDay feed not due; re-run"
 
         # THEN — "Downloading update" appeared (feed was re-ingested).
         dl_after = _feed_log_count(deployed_vm, header, "Downloading update")
@@ -1828,10 +1825,10 @@ def test_cron_200_reingest_changed_remote_feed(
             f"(before={dl_before}, after={dl_after}) — detector did not detect the change"
         )
 
-        # THEN — the hash-compare verdict itself fired: "( content changed )".
-        chg_after = h.count_log_marker(deployed_vm, h.PFB_LOG, "content changed")
+        # THEN — the hash-compare verdict itself fired: "[ header ] ( content changed )".
+        chg_after = h.count_log_marker(deployed_vm, h.PFB_LOG, chg_marker)
         assert chg_after > chg_before, (
-            f"Expected '( content changed )' verdict after the ETag bump + body change "
+            f"Expected {chg_marker!r} verdict after the ETag bump + body change "
             f"(before={chg_before}, after={chg_after}) — hash-compare path not taken"
         )
 
@@ -1902,21 +1899,21 @@ def test_cron_no_validator_download_hash_decides(
         ans_before = h.dns_probe_client_until(client_vm, dom, h.is_vip)
         assert h.is_vip(ans_before), f"BEFORE: {dom} must be VIP-blocked after initial ingest, got {ans_before}"
 
-        # Feed unchanged; no If-None-Match will be sent (no stored ETag).
+        # Feed unchanged; no If-None-Match will be sent (no stored ETag). #811 header-scopes
+        # the "( content unchanged )" verdict line, so the marker below proves BOTH the
+        # verdict and that THIS feed's header was evaluated.
         _pin_cron_due(deployed_vm)
-        not_unch_before = h.count_log_marker(deployed_vm, h.PFB_LOG, "content unchanged")
+        not_unch_marker = f"[ {header} ] ( content unchanged )"
+        not_unch_before = h.count_log_marker(deployed_vm, h.PFB_LOG, not_unch_marker)
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
-        hdr_before = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
 
         h.reload(deployed_vm, "cron")
 
-        hdr_after = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
-        assert hdr_after > hdr_before, f"cron did not evaluate [ {header} ] — EveryDay feed not due; re-run"
-
-        # THEN — "content unchanged" appeared (full download + hash comparison taken).
-        not_unch_after = h.count_log_marker(deployed_vm, h.PFB_LOG, "content unchanged")
+        # THEN — "[ header ] ( content unchanged )" appeared (full download + hash comparison
+        # taken for THIS feed).
+        not_unch_after = h.count_log_marker(deployed_vm, h.PFB_LOG, not_unch_marker)
         assert not_unch_after > not_unch_before, (
-            f"Expected 'content unchanged' log line after no-validator cron "
+            f"Expected {not_unch_marker!r} log line after no-validator cron "
             f"(before={not_unch_before}, after={not_unch_after}) — download+hash path not taken"
         )
 
@@ -1986,22 +1983,22 @@ def test_cron_spurious_200_same_bytes_no_reingest(
                 f"BEFORE: {member_ip} must be in {spec.alias}: {members_before}"
             )
 
-            # Pin cron due (inside CaseContext so config is active).
+            # Pin cron due (inside CaseContext so config is active). #811 header-scopes the
+            # "( content unchanged )" verdict, so the marker below proves both the verdict
+            # and that THIS feed's marker (aliasname_family) was the one evaluated.
             _pin_cron_due(deployed_vm)
-            not_unch_before = h.count_log_marker(deployed_vm, h.PFB_LOG, "content unchanged")
+            not_unch_marker = f"[ {feed_marker} ] ( content unchanged )"
+            not_unch_before = h.count_log_marker(deployed_vm, h.PFB_LOG, not_unch_marker)
             dl_before = _feed_log_count(deployed_vm, feed_marker, "Downloading update")
-            hdr_before = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {feed_marker} ]")
 
             # WHEN — cron; server returns 200 (no ETag → no If-None-Match → plain 200).
             h.reload(deployed_vm, "cron")
 
-            hdr_after = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {feed_marker} ]")
-            assert hdr_after > hdr_before, f"cron did not evaluate [ {feed_marker} ] — EveryDay feed not due; re-run"
-
-            # THEN — "content unchanged" appeared (spurious 200 detected by hash).
-            not_unch_after = h.count_log_marker(deployed_vm, h.PFB_LOG, "content unchanged")
+            # THEN — "[ feed_marker ] ( content unchanged )" appeared (spurious 200 detected
+            # by hash, for THIS feed).
+            not_unch_after = h.count_log_marker(deployed_vm, h.PFB_LOG, not_unch_marker)
             assert not_unch_after > not_unch_before, (
-                f"Expected 'content unchanged' after spurious-200 cron "
+                f"Expected {not_unch_marker!r} after spurious-200 cron "
                 f"(before={not_unch_before}, after={not_unch_after}) — hash compare not applied"
             )
 
@@ -2082,36 +2079,28 @@ def test_cron_lastmod_304_skips_unchanged_feed(
         ans_before = h.dns_probe_client_until(client_vm, dom, h.is_vip)
         assert h.is_vip(ans_before), f"BEFORE: {dom} must be VIP-blocked after initial ingest, got {ans_before}"
 
-        # Feed unchanged; the stored Last-Modified validator still matches. Same global-count
-        # rationale as case (a): "( 304 not modified )" is logged without a "[ header ]" prefix,
-        # so count it globally over the cron window. No other feed in this run stores a
-        # Last-Modified-only validator that the server actually honours, so the delta isolates
-        # this feed's conditional GET.
+        # Feed unchanged; the stored Last-Modified validator still matches. #811 header-scopes
+        # the "( 304 not modified )" verdict line itself, so the marker below is scoped by
+        # header AND verdict — no separate global count + "fast guard" needed.
         _pin_cron_due(deployed_vm)
-        not_mod_before = h.count_log_marker(deployed_vm, h.PFB_LOG, "304 not modified")
+        not_mod_marker = f"[ {header} ] ( 304 not modified )"
+        not_mod_before = h.count_log_marker(deployed_vm, h.PFB_LOG, not_mod_marker)
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
-        hdr_before = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
 
         # WHEN — same store-then-read span as case (a): the .lastmod validator is written by
         # the cron detector (pfb_update_check) on its first 200, not by the updatednsbl Force
-        # ingest above. Run cron until "304 not modified" appears, capped so a genuine failure
-        # still surfaces.
+        # ingest above. Run cron until the marker appears, capped so a genuine failure still
+        # surfaces.
         for _pass in range(4):
             h.reload(deployed_vm, "cron")
-            if h.count_log_marker(deployed_vm, h.PFB_LOG, "304 not modified") > not_mod_before:
+            if h.count_log_marker(deployed_vm, h.PFB_LOG, not_mod_marker) > not_mod_before:
                 break
 
-        # Fast guard — the feed was evaluated at least once.
-        hdr_after = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
-        assert hdr_after > hdr_before, (
-            f"cron did not evaluate [ {header} ] (before={hdr_before}, after={hdr_after}) — "
-            f"EveryDay feed not due (hour rollover?); re-run"
-        )
-
-        # THEN — "304 not modified" appeared within the cap (CURLOPT_TIMECONDITION proof).
-        not_mod_after = h.count_log_marker(deployed_vm, h.PFB_LOG, "304 not modified")
+        # THEN — "[ header ] ( 304 not modified )" appeared within the cap
+        # (CURLOPT_TIMECONDITION proof, now also proving THIS feed's header was evaluated).
+        not_mod_after = h.count_log_marker(deployed_vm, h.PFB_LOG, not_mod_marker)
         assert not_mod_after > not_mod_before, (
-            f"Expected '( 304 not modified )' (Last-Modified/CURLOPT_TIMECONDITION 304 proof) "
+            f"Expected {not_mod_marker!r} (Last-Modified/CURLOPT_TIMECONDITION 304 proof) "
             f"within 4 cron passes (before={not_mod_before}, after={not_mod_after}) — "
             f"the no-ETag conditional-GET fallback did not reach a 304"
         )

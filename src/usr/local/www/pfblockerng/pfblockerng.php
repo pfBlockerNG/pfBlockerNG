@@ -464,6 +464,11 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 		}
 	}
 	elseif (!pfb_filter($list_url, PFB_FILTER_URL, 'php')) {
+		// Issue #811: in the update flow this reject fires BEFORE any download is
+		// scheduled, so pfb_download()'s entry/fetch gates never run — land the
+		// header-scoped feed-host skip line here too (no-op unless the guard is
+		// why vetting failed). The line below stays for non-guard rejects.
+		pfb_log_feed_host_reject($list_url, $header, 1);
 		pfb_logger("\n Invalid URL. Terminating Download! [ {$list_url} ]\n", 1);
 		return;
 	}
@@ -526,7 +531,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 			// to xxh128 there without touching this call site).
 			$pfb['cron_update'] = pfb_local_feed_changed($list_download, $local_file);
 			if (!$pfb['cron_update']) {
-				$log = "  ( local feed unchanged )\tUpdate not required\n";
+				$log = "[ {$header} ] ( local feed unchanged )\tUpdate not required\n";
 				pfb_logger("{$log}", 1);
 			}
 		}
@@ -567,7 +572,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 
 			if ($probe_status === '304') {
 				// Server confirmed not-modified via conditional GET → no re-ingest needed.
-				$log = "\n\t\t\t\t( 304 not modified )\tUpdate not required\n";
+				$log = "\n[ {$header} ] ( 304 not modified )\tUpdate not required\n";
 				pfb_logger("{$log}", 1);
 				unlink_if_exists("{$pfborig}/{$header}.md5.raw");
 				// Persist any refreshed validators from the 304 response.
@@ -588,7 +593,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 				$changed = pfb_conditional_get_decision($probe_status, $body_hash, $persisted_hash);
 
 				if ($changed) {
-					$log = "\n\t\t\t\t( content changed )\tUpdate found\n";
+					$log = "\n[ {$header} ] ( content changed )\tUpdate found\n";
 					pfb_logger("{$log}", 1);
 					// Persist the validators from this 200 response so the next run
 					// can send a conditional GET.
@@ -598,7 +603,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 					return;
 				}
 				else {
-					$log = "\n\t\t\t\t( content unchanged )\tUpdate not required\n";
+					$log = "\n[ {$header} ] ( content unchanged )\tUpdate not required\n";
 					pfb_logger("{$log}", 1);
 					unlink_if_exists("{$pfborig}/{$header}.md5.raw");
 					// Refresh validators even on a spurious 200 so the next run can

@@ -8790,6 +8790,30 @@ function pfb_feed_host_allowed($host, &$reason, &$pinned) {
 }
 
 
+// Issue #811: shared entry-reject logger. When a feed URL fails PFB_FILTER_URL vetting,
+// pfb_filter() logs its reject to error.log only — so when the CAUSE is the feed-host
+// guard (an internal-resolving host), the reason never reaches the main log. Every
+// entry-reject site calls this to re-run the guard and, iff the guard is why vetting
+// failed, land the same header-scoped "[ header ] <reason> — skipped" line the
+// fetch-time gates in pfb_download() emit. Any other rejection reason logs nothing here.
+function pfb_log_feed_host_reject($list_url, $header, $logtype) {
+
+	if (!pfb_feed_filter_enabled()) {
+		return;
+	}
+	$entry_host = parse_url($list_url, PHP_URL_HOST) ?: '';
+	if ($entry_host === '') {
+		return;
+	}
+	$entry_reason = '';
+	$entry_pinned = '';
+	if (!pfb_feed_host_allowed($entry_host, $entry_reason, $entry_pinned)) {
+		$log = "\n[ {$header} ] {$entry_reason} \xe2\x80\x94 skipped\n";
+		pfb_logger("{$log}", "{$logtype}");
+	}
+}
+
+
 // Resolve a (possibly relative) HTTP redirect Location against the URL it was
 // returned from, then re-run the feed-host guard on the redirect target so a
 // redirect cannot send the fetch to a non-permitted address. Returns FALSE when
@@ -8969,6 +8993,10 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 		}
 	}
 	elseif (!pfb_filter($list_url, PFB_FILTER_URL, 'pfb_download_failure')) {
+		// Issue #811: land the header-scoped, reason-bearing skip line in the main log
+		// when the feed-host guard is why entry vetting failed (pfb_filter's own reject
+		// line goes to error.log only). See pfb_log_feed_host_reject().
+		pfb_log_feed_host_reject($list_url, $header, $logtype);
 		pfb_logger("\n Failed", 2);
 		return FALSE;
 	}
@@ -9092,6 +9120,12 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			$feed_scheme	= strtolower($url_parts['scheme'] ?? '');
 			$feed_reason	= '';
 			$feed_pinned	= '';
+			// Fetch-time rebind (DNS-rebind/TOCTOU) re-check: entry vetting already ran
+			// this same guard (pfb_filter -> pfb_feed_host_allowed) before the download
+			// was scheduled. Re-resolving here and pinning to THIS verdict's IP is what
+			// catches a host whose resolution changed since -- statically unreachable
+			// otherwise, since a host still resolving the same way was already rejected
+			// at entry and never gets here.
 			if ($feed_filter &&
 			    !pfb_feed_host_allowed($feed_host, $feed_reason, $feed_pinned)) {
 				$log = "\n[ {$header} ] {$feed_reason} \xe2\x80\x94 skipped\n";
