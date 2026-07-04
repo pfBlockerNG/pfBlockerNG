@@ -628,6 +628,16 @@ def render_diff_state(smoke_vm: helpers.SmokeVM, webui: WebUI) -> Iterator[dict[
     captures: dict[str, Capture] = {}
 
     try:
+        # A prior hard-killed run (VM SIGKILL mid-module) can leave rv809% rows in the
+        # persistent dnsblcache and seeded feed/aliastable files on disk -- teardown
+        # never ran. Clear both FIRST so the baseline before-state is provably clean
+        # and symmetric with teardown. (Appended log lines from such a crash cannot be
+        # excised without the lost original sizes; the baseline token assertion below
+        # stays the loud guard for that case.)
+        _clear_dnsbl_cache(vm)
+        rm = vm.ssh("rm -f " + " ".join(SEEDED_FILES), timeout=15)
+        assert rm.returncode == 0, f"pre-baseline cleanup of seeded files failed: {rm.stderr!r}"
+
         # (1) BASELINE -- pre-seed captures, same fixed order, so "no rv809 tokens
         # yet" is PROVEN, not assumed (CLAUDE.md transition-test rule).
         for key, path in GET_MATRIX:
@@ -1009,6 +1019,15 @@ def test_ip_block_nonfilter_cap_enforced(render_diff_state: dict[str, dict[str, 
     renders AT MOST 25 rows.
     """
     body = render_diff_state["captures"]["alert"].body
+    # The positional region indexing below assumes the "Unlocked IP(s) & Domain(s)"
+    # panel is ABSENT (this module never unlocks anything) -- but that panel is gated
+    # on process-external unlock state a misbehaving sibling module could leave behind.
+    # Assert the assumption instead of trusting it, so a polluted VM fails loudly here
+    # rather than silently shifting every region index.
+    assert "Unlocked IP(s)" not in body, (
+        "alert view unexpectedly shows the Unlocked IP(s) & Domain(s) panel -- foreign unlock "
+        "state left by another module; region indexes below would be shifted"
+    )
     regions = _extract_tbody_regions(body)
     assert regions, "alert view rendered no <tbody> regions at all"
     block_rows = len(_TR_RE.findall(regions[0]))
@@ -1027,6 +1046,12 @@ def test_dnsbl_nonfilter_cap_enforced(render_diff_state: dict[str, dict[str, Cap
     the Block-cap test above) renders AT MOST 25 rows.
     """
     body = render_diff_state["captures"]["alert"].body
+    # Same foreign-unlock-state guard as the Block-cap test above: positional region
+    # indexing is only valid while the Unlocked panel is absent.
+    assert "Unlocked IP(s)" not in body, (
+        "alert view unexpectedly shows the Unlocked IP(s) & Domain(s) panel -- foreign unlock "
+        "state left by another module; region indexes below would be shifted"
+    )
     regions = _extract_tbody_regions(body)
     assert len(regions) >= 2, f"expected >= 2 <tbody> regions (Block, DNSBL Python, ...); got {len(regions)}"
     dnsbl_rows = len(_TR_RE.findall(regions[1]))
