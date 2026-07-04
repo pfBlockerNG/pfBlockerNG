@@ -37,12 +37,13 @@ use PHPUnit\Framework\TestCase;
  *   covered domain must never fall through to a per-row exec, which against a missing
  *   file can only return empty/'Unknown', never the correct non-'Unknown' answer.
  *
- *   B2 (issue #809 review): a domain carrying a live BRE metacharacter (anything besides
- *   '.') is excluded from prefetch coverage entirely -- the per-row site's BRE only ever
- *   escapes '.', so such a domain can false-match a DIFFERENT literal line under the
- *   per-row exec that a batched `-F` fixed-string match never would. Proven by a
- *   differential: the unseeded AND "seeded" (never actually covered) lookups must agree,
- *   both landing on the per-row BRE path.
+ *   B2 (issue #809 review; revised for issue #837): a domain outside PFB_FILTER_DOMAIN's
+ *   charset is excluded from prefetch coverage on validation grounds (an embedded control
+ *   character reaching the pattern file), not to dodge a per-row BRE false-match -- issue
+ *   #837 made the per-row sites `-F` fixed-string too, so batched == per-row by
+ *   construction for every domain. Proven by a differential: the unseeded AND "seeded"
+ *   (never actually covered) lookups must agree, both landing on the per-row fixed-string
+ *   path, on the CORRECT answer.
  *
  *   B3/R1 (issue #809 review): a batched grep pass whose pattern file cannot be created
  *   or fully written returns a NULL sentinel -- distinct from a genuine empty-array
@@ -375,25 +376,25 @@ final class DnsblPrefetchTest extends TestCase
 	}
 
 	/**
-	 * B2 (issue #809 review): a domain outside PFB_FILTER_DOMAIN's charset carries a live
-	 * BRE metacharacter into the per-row site's regex (which escapes ONLY '.'), so it can
-	 * false-match a DIFFERENT literal data-file line under the per-row BRE that a batched
-	 * `-F` fixed-string match never would. Excluding such a domain from prefetch coverage
-	 * entirely means BOTH the unseeded and "seeded" lookups fall through to the identical
-	 * per-row BRE path and therefore agree -- RED before the fix (the seeded consult
-	 * diverged to Unknown while the per-row BRE false-matched RealFeed/RealGroup), GREEN
-	 * after.
+	 * B2 (issue #809 review; revised for issue #837): a domain outside PFB_FILTER_DOMAIN's
+	 * charset is excluded from prefetch coverage on validation grounds alone (an embedded
+	 * control character reaching the pattern file) -- not, any more, to dodge a per-row BRE
+	 * false-match. Since issue #837 made the per-row sites `-F` fixed-string too, the
+	 * unseeded and "seeded" (never actually covered) lookups fall through to the identical
+	 * per-row fixed-string path and agree on the CORRECT answer: no match, despite a
+	 * same-length literal domain ('evil.5.example.com') sitting in the data file. RED
+	 * before #837 (the per-row BRE false-matched RealFeed/RealGroup), GREEN after.
 	 */
 	public function test_a_domain_with_a_live_bre_metacharacter_is_excluded_from_prefetch_coverage(): void
 	{
 		$domain = 'evil.[0-9].example.com';
 
 		$this->assertPrefetchMatchesPerRow($domain, [
-			'pfb_mode'  => 'DNSBL',
-			'pfb_group' => 'RealGroup',
-			'pfb_final' => 'evil.5.example.com',
-			'pfb_feed'  => 'RealFeed',
-		], 'BRE metacharacter domain false-matches a different literal domain via the per-row BRE path');
+			'pfb_mode'  => 'Unknown',
+			'pfb_group' => 'Unknown',
+			'pfb_final' => 'Unknown',
+			'pfb_feed'  => 'Unknown',
+		], 'BRE metacharacter domain no longer false-matches a different literal domain -- both per-row sites are fixed-string (issue #837)');
 	}
 
 	/**
