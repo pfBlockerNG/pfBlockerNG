@@ -468,12 +468,6 @@ $form->addGlobal(new Form_Input('action', 'action', 'hidden', ''));
 $form->addGlobal(new Form_Input('load', 'load', 'hidden', ''));
 $form->addGlobal(new Form_Input('file', 'file', 'hidden', ''));
 
-$form->addGlobal(new Form_Input('fileStatus', 'fileStatus', 'hidden', ''));
-$form->addGlobal(new Form_Input('fileStatusBox', 'fileStatusBox', 'hidden', ''));
-$form->addGlobal(new Form_Input('filePathBox', 'filePathBox', 'hidden', ''));
-$form->addGlobal(new Form_Input('fbTarget', 'fbTarget', 'hidden', ''));
-$form->addGlobal(new Form_Input('fileRefreshBtn', 'fileRefreshBtn', 'hidden', ''));
-
 print($form);
 ?>
 
