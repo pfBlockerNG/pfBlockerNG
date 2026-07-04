@@ -172,6 +172,13 @@ final class FeedCorpusSurveyTest extends TestCase
 		$flagged = [];
 		$stale = [];
 		$matched = [];
+		// '+' keeps the LEFT value on a key collision with no error -- assert the
+		// classes stay disjoint so a duplicated header fails loudly instead.
+		$this->assertSame(
+			[],
+			array_intersect_key(self::KNOWN_NON_FEED, self::KNOWN_TRUNCATED_FEED),
+			'a feed header must appear in only ONE exclusion class'
+		);
 		$exclusions = self::KNOWN_NON_FEED + self::KNOWN_TRUNCATED_FEED;
 		foreach (self::textSamples() as $feed) {
 			$sample = (string) file_get_contents(self::CORPUS_DIR . '/' . $feed['sample_file']);
