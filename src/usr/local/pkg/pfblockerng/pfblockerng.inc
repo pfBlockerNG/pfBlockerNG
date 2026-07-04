@@ -12957,13 +12957,11 @@ function pfb_dnsbl_prefetch_store(?array $seed = NULL): ?array {
 // per-row match pfb_dnsbl_parse_compute() would otherwise run separately for each of
 // $qdomains:
 //
-//   - data file ($pfb['unbound_py_data']): the per-row site matches the escaped-regex
-//     literal ",{$domainparse},," (dots backslash-escaped) with `grep -shm1`. Escaping
-//     the dots exists only to neutralise BRE's any-character '.' metacharacter --
-//     domains carry no other BRE-special character -- so the escaped-regex match and a
-//     plain fixed-string match of ",{domain},," select exactly the same lines. Batched
-//     here as a single `grep -shF -f <patternfile>` pass with the RAW (unescaped)
-//     literal patterns.
+//   - data file ($pfb['unbound_py_data']): the per-row site matches the fixed-string
+//     literal ",{domain},," with `grep -shm1 -F` (issue #837 -- previously an escaped-BRE
+//     match that hand-escaped only the dot, so any OTHER BRE metacharacter in the domain
+//     rode into the regex live). Batched here as a single `grep -shF -f <patternfile>`
+//     pass with the same RAW literal patterns.
 //   - zone file ($pfb['unbound_py_zone']): the per-row site walks the domain's labels
 //     longest-first (full domain, then each suffix with the leftmost label stripped,
 //     down to the bare TLD), matching each step the same way. Batched by collecting
@@ -12974,17 +12972,14 @@ function pfb_dnsbl_prefetch_store(?array $seed = NULL): ?array {
 // genuine miss, and the consult sites must serve that cached '' rather than falling back
 // to a per-row exec (which would just re-run the identical grep for the same answer).
 //
-// B2 (issue #809 review): a domain is only added to 'covered' (and only contributes data/
-// zone patterns) when it VALIDATES as PFB_FILTER_DOMAIN. That filter's charset
-// ([a-zA-Z0-9_.-]) carries no live BRE metacharacter besides '.' -- the ONLY character the
-// per-row site escapes (str_replace('.', '\.', $domain)) -- and no embedded control
-// character (a fgetcsv()'d quoted field can carry a literal \r/\n). Under those
-// constraints an exact `-F` fixed-string match and the per-row escaped-BRE match select
-// the IDENTICAL lines, so batched == per-row for every covered domain. A domain that
-// fails this filter is left UNCOVERED entirely, so it falls straight through to the
-// unchanged per-row exec at pfb_dnsbl_parse_compute()'s consult sites -- exactly where a
-// domain carrying a live BRE metacharacter (which could false-match a DIFFERENT literal
-// domain under the per-row BRE, something a batched `-F` match never would) belongs.
+// B2 (issue #809 review; revised for issue #837): a domain is only added to 'covered'
+// (and only contributes data/zone patterns) when it VALIDATES as PFB_FILTER_DOMAIN --
+// guards against an embedded control character (a fgetcsv()'d quoted field can carry a
+// literal \r/\n) reaching the pattern file. Since the per-row sites are now ALSO `-F`
+// fixed-string (issue #837), batched == per-row by construction for every domain, not
+// only ones passing this filter; a domain that fails it is simply left UNCOVERED and
+// falls straight through to the unchanged (and, post-#837, equally fixed-string) per-row
+// exec at pfb_dnsbl_parse_compute()'s consult sites.
 //
 // Seeds pfb_dnsbl_prefetch_store(); the caller (pfblockerng_alerts.php's DNSBL table
 // branch) is responsible for resetting the store once its render pass is done.
@@ -13179,8 +13174,6 @@ function pfb_dnsbl_parse_compute($mode, $domain, $src_ip, $req_agent) {
 
 		while (TRUE) {
 
-			$domainparse = str_replace('.', '\.', $domain);
-
 			// A covered domain reuses the batched grep's answer (a covered miss is a
 			// cached '', never re-exec'd here); an uncovered one -- no store seeded, or
 			// a CNAME-chain domain the prefetch pass never saw -- falls straight through
@@ -13188,8 +13181,12 @@ function pfb_dnsbl_parse_compute($mode, $domain, $src_ip, $req_agent) {
 			if ($prefetch_store !== NULL && isset($prefetch_store['covered'][$domain])) {
 				$pfb_feed = $prefetch_store['data'][$domain] ?? '';
 			} else {
-				$dquery_esc	= escapeshellarg(",{$domainparse},,");
-				$pfb_feed	= exec("{$pfb['grep']} -shm1 {$dquery_esc} {$pfb['unbound_py_data']} 2>&1");
+				// issue #837: fixed-string match on the raw domain -- no regex escaping,
+				// so no BRE metacharacter (besides the dot this used to hand-escape) can
+				// false-match a different literal line, nor make the domain's own entry
+				// unfindable. Same shape as the batched prefetch grep.
+				$dquery_esc	= escapeshellarg(",{$domain},,");
+				$pfb_feed	= exec("{$pfb['grep']} -shm1 -F {$dquery_esc} {$pfb['unbound_py_data']} 2>&1");
 			}
 			$pfb_group = $pfb_mode = $pfb_final = 'Unknown';
 
@@ -13207,7 +13204,6 @@ function pfb_dnsbl_parse_compute($mode, $domain, $src_ip, $req_agent) {
 
 				for ($i=0; $i < $dcnt; $i++) {
 
-					$domainparse	= str_replace('.', '\.', implode('.', $dparts));
 					$suffix		= implode('.', $dparts);
 
 					// Same prefetch consult as the data-grep site above, keyed by this
@@ -13215,15 +13211,16 @@ function pfb_dnsbl_parse_compute($mode, $domain, $src_ip, $req_agent) {
 					if ($prefetch_store !== NULL && isset($prefetch_store['zone_covered'][$suffix])) {
 						$pfb_feed = $prefetch_store['zone'][$suffix] ?? '';
 					} else {
-						$dquery_esc	= escapeshellarg(",{$domainparse},,");
-						$pfb_feed	= exec("{$pfb['grep']} -shm1 {$dquery_esc} {$pfb['unbound_py_zone']} 2>&1");
+						// issue #837: fixed-string match -- see the data-grep site above.
+						$dquery_esc	= escapeshellarg(",{$suffix},,");
+						$pfb_feed	= exec("{$pfb['grep']} -shm1 -F {$dquery_esc} {$pfb['unbound_py_zone']} 2>&1");
 					}
 
 					// Collect Alias Group name
 					if (!empty($pfb_feed)) {
 						list($dummy, $d_found, $empty_placeholder, $log_type, $pfb_feed, $pfb_group) = explode(',', $pfb_feed);
 
-						$pfb_final = str_replace('\.', '.', $domainparse);
+						$pfb_final = $suffix;
 						$pfb_mode = 'TLD';
 						if ($pfb_feed == 'DNSBL_TLD') {
 							$pfb_mode = 'DNSBL_TLD';
