@@ -157,12 +157,17 @@ def _seed_existing_install_config(vm: SmokeVM) -> None:
     non-empty-section guard treats an empty General section as a fresh install and
     seeds nothing. Without this pre-seed the test only passed when a sibling repo
     test had already populated the section (an order dependence, CLAUDE.md
-    "Self-encapsulated — never order-dependent"). pfb_keep is intentionally NOT
-    set — its absence is the exact issue-#281 bug condition the migration handles.
+    "Self-encapsulated — never order-dependent"). pfb_keep is intentionally
+    UNSET — its absence is the exact issue-#281 bug condition the migration
+    handles, and a prior case in this module can leave it 'on' (the keep-gate
+    retains the General section across that case's teardown ``pkg delete``), so
+    without the unset a later case's seed assert would pass on inherited state
+    instead of proving the migration fired.
     """
     snippet = (
         f"$g = config_get_path({h._php_str(_CFG_GLOBAL)}, array());\n"
         "$g['enable_cb'] = 'on';\n"
+        "unset($g['pfb_keep']);\n"
         f"config_set_path({h._php_str(_CFG_GLOBAL)}, $g);\n"
         "write_config('pfBlockerNG upgrade-config-stability smoke: seed existing-install config');\n"
         "echo 'OK';"
@@ -178,7 +183,8 @@ def _write_representative_config(vm: SmokeVM) -> None:
     """Plant the DNSBL-section canary fields into config.xml.
 
     MUST run AFTER the last harness write to the DNSBL-settings section
-    (``ensure_dnsbl_vip`` / ``inject`` / ``reload``): ``inject`` REPLACES that
+    (``ensure_dnsbl_vip`` / ``inject``; ``reload`` itself writes no settings but
+    rides with them in the arrange block): ``inject`` REPLACES that
     section keeping only the VIP/port infrastructure keys
     (``helpers._dnsbl_settings_replace_php``, per-case isolation by design), so a
     canary planted before it is silently destroyed by the harness itself and the
