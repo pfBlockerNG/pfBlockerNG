@@ -494,8 +494,10 @@ def test_syslog_on_ip_block_event_exported(deployed_vm: SmokeVM, client_vm: Smok
            behind the firewall.
     When:  the civm client curls the blocked WAN IP (pass-through traffic pf blocks
            + logs on WAN-out — NOT pfSense's own traffic, which the rule misses).
-    Then:  a new pfblockerng record appears in the dedicated file with an IP action
-           token (act=block/pass/match).
+    Then:  a new pfblockerng record appears in the dedicated file that references the
+           victim dst IP (TEST_IP_BLOCK_DST) LITERALLY and carries an IP action token
+           (act=block/pass/match) — not merely any new pfB event (#814: a resolved
+           hostname in place of the literal dst would previously slip past this assert).
     And:   the CSV ip_block.log is also written (additive).
     """
     vm = deployed_vm
@@ -508,12 +510,23 @@ def test_syslog_on_ip_block_event_exported(deployed_vm: SmokeVM, client_vm: Smok
 
     _trigger_ip_block(client_vm)
 
-    line = _wait_for_event(vm, baseline_len=len(before), want=(), any_of=IP_ACT_TOKENS)
+    line = _wait_for_event(vm, baseline_len=len(before), want=(TEST_IP_BLOCK_DST,), any_of=IP_ACT_TOKENS)
     if not line:
         ps = vm.ssh("/bin/ps", "-wax", timeout=30)
         daemon_running = "pfblockerng.inc filterlog" in ps.stdout
         pfctl = vm.ssh("/sbin/pfctl", "-t", "pfB_pfb_syslog_iptest_v4", "-T", "show", timeout=30)
         alias_populated = TEST_IP_BLOCK_DST in pfctl.stdout
+        # #814 near-miss diagnostic: the OLD (loose) match was "any new pfB act= event" —
+        # any_of=IP_ACT_TOKENS with no want. If that loose condition WOULD have matched but the
+        # tightened want=(TEST_IP_BLOCK_DST,) did not, the daemon IS exporting IP-block events,
+        # just not ones that reference the victim dst literally (e.g. a resolved hostname in
+        # its place) — the exact evidence needed to tell "nothing exported" apart from "exported,
+        # but not the literal IP".
+        new_lines = _pfb_event_lines(vm)[len(before) :]
+        near_misses = [
+            ln for ln in new_lines if any(tok in ln for tok in IP_ACT_TOKENS) and TEST_IP_BLOCK_DST not in ln
+        ]
+        near_miss_report = "\n    ".join(near_misses[-5:]) if near_misses else "(none)"
         # An unpopulated alias or a dead filterlog daemon are NOT benign preconditions to skip
         # past -- this un-xfailed leg (ADR-38 A2.4) exists specifically to catch those two
         # regression classes (a failed IP feed reload / a crashed export daemon), so both fold
@@ -525,12 +538,19 @@ def test_syslog_on_ip_block_event_exported(deployed_vm: SmokeVM, client_vm: Smok
             )
         elif not daemon_running:
             precondition = "filterlog daemon not running — the pfBlockerNG export daemon died"
+        elif near_misses:
+            precondition = (
+                f"a new pfB IP event fired but did not reference {TEST_IP_BLOCK_DST} literally — "
+                "see the near-miss lines below (possibly a resolved hostname instead of the dst IP)"
+            )
         else:
             precondition = "none — daemon running and alias populated"
         raise AssertionError(
-            f"No new IP-block export record after connection to {TEST_IP_BLOCK_DST}.\n"
-            f"  expected a new line in {PFB_SYSLOG_LOG} with one of {list(IP_ACT_TOKENS)!r}\n"
+            f"No new IP-block export record referencing {TEST_IP_BLOCK_DST} after connection to it.\n"
+            f"  expected a new line in {PFB_SYSLOG_LOG} with {TEST_IP_BLOCK_DST!r} and one of {list(IP_ACT_TOKENS)!r}\n"
             f"  actual:   no matching line found\n"
+            f"  new pfB events that did NOT reference the victim dst (last {min(len(near_misses), 5)}):\n"
+            f"    {near_miss_report}\n"
             f"  daemon_running={daemon_running} alias_populated={alias_populated}\n"
             f"  precondition broken: {precondition}\n"
             f"  ps: {ps.stdout[:400]!r}\n"
