@@ -1315,7 +1315,6 @@ $section->addInput(new Form_StaticText(
 ));
 
 // Add 'Change state' and 'Add Row' buttons
-$btnadd = '';
 $btnadd = new Form_Button(
 	'addrow',
 	'Add',
@@ -1609,7 +1608,6 @@ $section->addInput(new Form_StaticText(
 
 if ($gtype == 'ipv4') {
 
-	$list = array('Disabled' => 'Disabled') + array_combine(range(1, 17, 1), range(1, 17, 1));
 	$section->addInput(new Form_Select(
 		'suppression_cidr',
 		'Suppression CIDR Limit',
