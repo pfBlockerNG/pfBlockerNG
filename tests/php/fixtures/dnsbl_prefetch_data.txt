@@ -1,0 +1,3 @@
+,uuid-exact-hit-8f2a.example.com,,DNSBL,ExactFeed,ExactGroup
+,uuid-firsthit-8f2a.example.com,,DNSBL,FirstFeed,FirstGroup
+,uuid-firsthit-8f2a.example.com,,DNSBL,SecondFeed,SecondGroup
