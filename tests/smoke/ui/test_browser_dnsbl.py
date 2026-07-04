@@ -583,13 +583,13 @@ def test_fill_buttons_populate_interface_selects(
     interface multi-selects from the Inbound∪Outbound union — the reported "clicking
     Fill did nothing" bug, on both mirrored sections.
 
-    ``pfb_redir_fill_interfaces()`` / ``pfb_dot_block_fill_interfaces()``
-    (pfblockerng_dnsbl.php) set the multi-select via ``.val(fill_set).trigger('change')``,
-    targeting it **by name** (``select[name="…[]"]``) because a pfSense multi-select's id
-    carries the ``[]`` suffix — the bracket-free ``#id`` the code used before matched
-    nothing, which is why the button did nothing. Seeds inbound/outbound = lan so both
-    fill unions are the non-empty set {lan}; restores the original interface config in
-    teardown.
+    The shared ``pfb_fill_interfaces(selectName, fillSet)`` helper (pfblockerng_dnsbl.php),
+    called by both buttons' ``onclick`` with their own select name + fill-set variable, sets
+    the multi-select via ``.val(fillSet).trigger('change')``, targeting it **by name**
+    (``select[name="…[]"]``) because a pfSense multi-select's id carries the ``[]`` suffix —
+    the bracket-free ``#id`` the code used before matched nothing, which is why the button did
+    nothing. Seeds inbound/outbound = lan so both fill unions are the non-empty set {lan};
+    restores the original interface config in teardown.
     """
     page = browser_page
 

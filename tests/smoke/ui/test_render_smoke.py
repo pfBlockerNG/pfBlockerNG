@@ -696,12 +696,15 @@ def test_dnsbl_redir_exception_and_fill_fields_render(webui: WebUI, php_error_lo
         'name="dnsbl_dot_block_exclude"',
         "pfb_redir_exclude_autocomplete",
         "pfb_alias_names",
-        # (3) The fill rewrite — the canonical .val([...]) form (not the old .prop() loop),
-        # AND the bracketed-name selectors: a pfSense multi-select renders id/name as
-        # "<field>[]", so the fill must target it by name, not the broken bracket-free "#id".
-        ".val(pfb_redir_fill_ifaces)",
-        'select[name="dnsbl_redir_int[]"]',
-        'select[name="dnsbl_dot_block_int[]"]',
+        # (3) The fill rewrite — now a single shared pfb_fill_interfaces(selectName, fillSet)
+        # helper: the canonical .val([...]).trigger('change') form (not the old .prop() loop),
+        # the bracketed-name selector built from the passed-in selectName (a pfSense
+        # multi-select renders id/name as "<field>[]", so the fill must target it by name, not
+        # the broken bracket-free "#id"), and both onclick call sites wiring the two buttons.
+        ".val(fillSet).trigger('change')",
+        "select[name=\"' + selectName + '[]\"]",
+        "pfb_fill_interfaces('dnsbl_redir_int', pfb_redir_fill_ifaces)",
+        "pfb_fill_interfaces('dnsbl_dot_block_int', pfb_dot_block_fill_ifaces)",
     ):
         assert needle in body, f"DNSBL page is missing the redirect/fill marker {needle!r}"
 
@@ -804,6 +807,54 @@ def test_dnsbl_group_policy_section_renders_above_dns_redirect(
         f"'DNSBL Group Policy' section (id 'Python_Group_Policy', pos {gp_pos}) must render "
         f"above 'DNS Redirect' (pos {redir_pos})"
     )
+
+
+# The DNSBL master-enable toggle -- gates the 'dnsbl'/'upstream'/'reply' rows of the alerts
+# page's $uni_defaults Unified-Log colour registry (pfblockerng_alerts.php). Off by default on
+# a fresh install, so test_alerts_unified_log_colour_fields_render turns it on for its GET (and
+# always restores whatever it read first, so a pre-existing 'on' round-trips as a no-op).
+CFG_PFB_DNSBL = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl"
+
+
+def test_alerts_unified_log_colour_fields_render(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """The Alerts page's Unified-Log colour fields — built by looping over the $uni_defaults
+    registry (one pass per light/dark theme) — render cleanly, including the DNSBL-gated rows.
+
+    Asserts the always-present 'block' row (``name="uniblock"``/``"uniblock2"``) AND, with the
+    DNSBL master toggle turned on for this GET, the gated 'reply' row (``name="unireply2"``)
+    plus its light-only help asymmetry (``'(Resolver only)'`` — the light help text differs from
+    the dark help text only for this one row) — so a regression in the loop rewrite (a dropped
+    row, a missing gate, or a lost help-text override) is caught at the render tier.
+    """
+    original = helpers.config_get(smoke_vm, CFG_PFB_DNSBL)
+    helpers.php_eval(
+        smoke_vm,
+        f"config_set_path('{CFG_PFB_DNSBL}', 'on');\n"
+        "write_config('pfBlockerNG smoke: enable DNSBL for the alerts unified-log render check');\n"
+        "echo 'OK';",
+    )
+    try:
+        path = "/pfblockerng/pfblockerng_alerts.php"
+        resp = webui.get(path)
+        result = evaluate_render(path, resp.status_code, resp.text, ("Alert Settings",))
+        assert result.ok, f"Alerts render oracle failed: {result.detail}"
+        body = resp.text
+        for needle in (
+            'name="uniblock"',
+            'name="uniblock2"',
+            'name="unireply2"',
+            "(Resolver only)",
+        ):
+            assert needle in body, f"Alerts page is missing the unified-log colour marker {needle!r}"
+    finally:
+        helpers.php_eval(
+            smoke_vm,
+            f"config_set_path('{CFG_PFB_DNSBL}', '{original}');\n"
+            "write_config('pfBlockerNG smoke: restore DNSBL toggle');\n"
+            "echo 'OK';",
+        )
 
 
 def test_feeds_custom_panel_heading_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
