@@ -1912,6 +1912,8 @@ if ($alert_summary) {
 					$alert_stats[$alert_view]['dnsblgpblock'] = array();
 				}
 			}
+			// Recomputed on every $stat_info iteration though the log is constant
+			// for the whole view — hoist candidate (issue #809 Phase 2).
 			$alert_stats['count'][$alert_view] = exec("{$pfb['grep']} -c ^ {$alert_log} 2>&1") ?: 0;
 		}
 		else {
@@ -2012,6 +2014,19 @@ function pfb_match_filter_field($flent, $fields) {
 	}
 	return TRUE;
 }
+
+/* Render-time attribution model (docs/misc/alerts-reports-pipeline.md; perf: issue #809)
+
+   The logs already carry full event-time attribution: pfb_unbound.py writes the DNSBL/
+   DNS-reply verdicts, and the filterlog daemon (pfb_daemon_filterlog) resolves the bare
+   pf event into rule/feed/GeoIP/rDNS/ASN once, at event time, caching in its ipcache.
+   The converters below do NOT need lookups to render a complete table — every external
+   query they make is the freshness re-check: is the logged attribution still true against
+   the CURRENT feed/DNSBL state (drift strikethrough + icon decisions). That re-check is
+   per-row (shell pipelines, SQLite cycles, a drill fallback) and dominates page load
+   time; the dnsblcache in front of it is wiped on every DNSBL swap (ADR-10 P3), and the
+   IP path has no render-time cache at all. See the doc before changing lookup ordering
+   or caching here. */
 
 // Function to collect DNSBL Log event details based on Blocking mode field
 function dnsbl_log_details($fields) {
@@ -2254,6 +2269,10 @@ function convert_dnsbl_log($mode, $fields) {
 	// Collect current details about domain
 	// Skip for upstream blocks: the domain is not in a local feed, so pfb_dnsbl_parse()
 	// would rewrite group/feed/mode to 'Unknown', corrupting the row.
+	// Cost: on a dnsblcache miss this greps the whole DNSBL data file (a de-listed
+	// domain scans all of it), greps the zone file per label, and falls back to a live
+	// drill against the external DNS server — and the cache is wiped on every DNSBL
+	// swap, so post-update loads miss for most rows (alerts-reports-pipeline.md).
 	if (!$isPython && !$isUpstream && !$isWhitelist_found) {
 		$domain_details = pfb_dnsbl_parse('alerts', $qdomain, '', '');
 		$pfb_mode	= $domain_details['pfb_mode']	?: 'Unknown';
@@ -2461,6 +2480,11 @@ function convert_dnsbl_log($mode, $fields) {
 	$pfbalertdnsbl[99]	= pfb_hsc($fields[1]);	// Timestamp
 
 	// If alerts filtering is selected, process filters as required.
+	// Ordering constraint: this filter matches the CORRECTED fields ($pfbalertdnsbl is
+	// built from post-pfb_dnsbl_parse values), so the filter gate cannot be hoisted
+	// above the parse without changing filter semantics — a feed-name filter matches
+	// the domain's current feed, not the stale logged one. Only the counter/limit gate
+	// below is independent of the parse (issue #809).
 	if ($pfb['filterlogentries']) {
 		if (empty($filterfieldsarray[1])) {
 			return TRUE;
@@ -2999,6 +3023,10 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	}
 
 	// Determine if event IP still exists in Feed Aliastable
+	// Per-row pipeline with no render-time cache (the daemon's ipcache is event-time
+	// only); a miss falls into find_reported_header() — full grep sweeps of the feed
+	// dirs — plus a whole-aliastables grep below, so after a feed update de-lists or
+	// moves entries, most rows take that path (alerts-reports-pipeline.md, issue #809).
 	$validate = '';
 	if ($fields[14] != 'Unknown' && $fields[15] != 'Unknown') {
 		$q_ip = str_replace('.', '\.', $fields[14]);
@@ -4286,6 +4314,10 @@ if (!$alert_summary):
 			</thead>
 			<tbody>
 	<?php
+			// This loop reads the reversed log to EOF: the converters' limit-reached
+			// return value is deliberately ignored here (unlike the per-type views
+			// below, which break on it). Past the limits the converters no-op, but
+			// fgetcsv still parses every remaining line (issue #809 Phase 2).
 			exec("/usr/bin/tail -r {$pfb_log} > {$pfb_log}.rev 2>&1");
 			if (($handle = @fopen("{$pfb_log}.rev", 'r')) !== FALSE) {
 				while (($fields = @fgetcsv($handle)) !== FALSE) {
