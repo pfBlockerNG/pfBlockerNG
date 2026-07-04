@@ -782,10 +782,15 @@ def test_ipv6_suppression_cidr_select_persists_and_reloads(
         ``'Disabled'`` (the reverse transition).
     Then:
         - config.xml holds each value in turn -- each POST CAUSED the change.
-        - The reloaded v6 edit page renders '32' as the selected option.
+        - The reloaded v6 edit page renders '32' as the selected option, with no
+          PHP error in the body.
         - The v6 page never renders a 'suppression_cidr' <select> (v4-only);
-          the v4 page never renders a 'suppression_cidr_v6' <select> (v6-only)
-          -- the gating is real, not accidental.
+          the v4 page (re-opened on an EXISTING row, so the shared GET-render
+          block actually reads that row's absent 'suppression_cidr_v6' key)
+          never renders a 'suppression_cidr_v6' <select> (v6-only) and stays
+          free of PHP errors -- pins the review fix for the undefined-array-key
+          Warning that an unguarded read of a v6-only key would raise on a v4
+          row (`?? 'Disabled'` in the GET-render block).
     """
     vm = smoke_vm
     rowid = _free_rowid(vm, CFG_IPV6)
@@ -809,6 +814,8 @@ def test_ipv6_suppression_cidr_select_persists_and_reloads(
             "category GET (reload) returned the login form (session lost)"
         )
         body = reload_resp.text
+        for bad in ("Fatal error", "Parse error", "Warning", "Notice", "Uncaught"):
+            assert bad not in body, f"reloaded v6 edit page contains PHP error: {bad!r}"
         assert 'name="suppression_cidr_v6"' in body, "reloaded v6 form has no suppression_cidr_v6 select"
         assert _option_selected(body, "32"), (
             "reloaded v6 form did not render suppression_cidr_v6 option '32' as selected"
@@ -817,11 +824,24 @@ def test_ipv6_suppression_cidr_select_persists_and_reloads(
             "v6 edit page must not render the v4-only 'suppression_cidr' select"
         )
 
-        v4_resp = webui.get(CATEGORY_PAGE, params={"type": "ipv4"})
-        assert not looks_like_login_page(v4_resp.text), "v4 category GET returned the login form (session lost)"
-        assert 'name="suppression_cidr_v6"' not in v4_resp.text, (
-            "v4 edit page must not render the v6-only 'suppression_cidr_v6' select"
-        )
+        # v4-page symmetry: re-open an EXISTING v4 row (not a blank/new-row
+        # form) so the shared GET-render block actually reads that row's
+        # 'suppression_cidr_v6' key -- absent on every v4 row, since the save
+        # handler only ever writes it for gtype=='ipv6'. Pre-fix, this read
+        # was unconditional (no `?? 'Disabled'`), so PHP emits an undefined-
+        # array-key Warning on every existing-row v4 edit.
+        v4_rowid = _free_rowid(vm, CFG_IPV4)
+        try:
+            _post_form(webui, _ipv4_payload(v4_rowid, "smokeip4sym", action="Deny_Both"))
+            v4_resp = webui.get(CATEGORY_PAGE, params={"type": "ipv4", "rowid": str(v4_rowid)})
+            assert not looks_like_login_page(v4_resp.text), "v4 category GET returned the login form (session lost)"
+            for bad in ("Fatal error", "Parse error", "Warning", "Notice", "Uncaught"):
+                assert bad not in v4_resp.text, f"existing-row v4 edit page contains PHP error: {bad!r}"
+            assert 'name="suppression_cidr_v6"' not in v4_resp.text, (
+                "v4 edit page must not render the v6-only 'suppression_cidr_v6' select"
+            )
+        finally:
+            _del_rowid(vm, CFG_IPV4, v4_rowid)
 
         # Restore to the default (the reverse transition).
         _post_form(webui, _ipv6_payload(rowid, "smokeip6cidr", suppression_cidr_v6="Disabled"))

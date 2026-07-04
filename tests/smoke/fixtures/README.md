@@ -16,9 +16,11 @@ checkbox ON (`tests/smoke/test_smoke_suppression.py`) must NOT use RFC
 5737/3849/2544/6598 (or any other reserved-class) address — `sanitize_ipaddr()`/
 `sanitize_ipaddr_v6()` drop those classes unconditionally whenever Suppression is
 on, which would silently empty the fixture before it ever reached the pf table.
-Those fixtures use public, non-reserved space instead (arbitrary octets/hextets
-under real resolver/GUA blocks, e.g. `9.9.9.9`, `2606:4700::/32` — chosen only as
-inert content, never dialed); see the "IP suppression..." sections below.
+Those fixtures use public, non-reserved space instead — arbitrary octets/hextets
+(e.g. `81.169.0.0/16`, `2606:4700::/32`), chosen only as inert content, never
+dialed, and never a literal with harness meaning elsewhere in this suite (e.g.
+`1.1.1.1`/`1.0.0.1`, the smoke image's baked DNS-forwarder default) or a
+well-known public resolver address; see the "IP suppression..." sections below.
 
 Line shapes match the real parsers — IP `auto` in `pfblockerng.inc`
 (`~:10410-10560`), DNSBL plain/hosts/ABP in `pfb_unbound.py`
@@ -92,7 +94,7 @@ the HTTP-fetch contract Part C already covers.
 
 | File | Contents | Purpose |
 | --- | --- | --- |
-| `ip_suppress_v4.txt` | `1.1.0.0/16` (public, non-reserved) + two well-separated public bare hosts (`9.9.9.9`, `8.8.8.8`) | Containing-range carve (a `/32`/`/24` suppression carves the `/16`), plus whole-token bare-host removal |
+| `ip_suppress_v4.txt` | `81.169.0.0/16` (public, non-reserved) + two well-separated public bare hosts (`83.246.7.7`, `82.165.5.5`) | Containing-range carve (a `/32`/`/24` suppression carves the `/16`), plus whole-token bare-host removal |
 | `ip_suppress_v6.txt` | `2606:4700:53::/64` (public, non-reserved) + two well-separated public bare hosts (`2606:4700:99::10`, `2606:4700:aa::20`) | Same shape, IPv6 (`/128` suppression carves the `/64`) |
 
 The bare hosts are deliberately non-adjacent to each other and to the CIDR block: iprange's
@@ -113,7 +115,7 @@ drop (§1) and the per-category IPv6 CIDR floor `suppression_cidr_v6` (§3).
 | `ip_suppress_reserved_v6.txt` | One public entry (`2606:4700:7777::1111`) + one each of documentation (`2001:db8::1`), multicast (`ff02::1`), NAT64 (`64:ff9b::1`) | Proves the public entry loads while every reserved class is dropped outright |
 | `ip_suppress_cidr_floor_v6.txt` | A network-aligned public `/48` (`2606:4700:aaaa::/48`) + a separate bare host (`2606:4700:bbbb::99`) | Proves a floor narrower than the feed's mask clamps the `/48` to its bare base address, leaving the sibling host untouched |
 
-The v4 companion for the reserved-class test (`1.1.1.1` public + `100.64.0.1` CGN) is a
+The v4 companion for the reserved-class test (`82.165.5.5` public + `100.64.0.1` CGN) is a
 two-line inline body written directly by the test (mirrors the Scenario B companion above) --
 not a committed fixture, since it needs no documentation beyond the test itself.
 

@@ -71,9 +71,14 @@ DENYDIR = f"{h.PFB_DBDIR}/deny"
 # space UNCONDITIONALLY whenever Suppression is on -- so RFC 5737/3849 fixture data
 # would now be silently dropped before ever reaching the pf table, breaking every
 # BEFORE-state assertion in this module. Switched to public, non-reserved space
-# (Cloudflare/Google/Quad9 exemplar addresses) instead; ``ip_suppress_v4.txt`` /
-# ``ip_suppress_v6.txt`` were updated to match (see their in-file comments).
-V4_BARE_HOSTS = ("9.9.9.9", "8.8.8.8")
+# instead; ``ip_suppress_v4.txt`` / ``ip_suppress_v6.txt`` were updated to match (see
+# their in-file comments). The v4 side was migrated a SECOND time off
+# ``1.1.0.0/16``/``1.1.1.1``/``8.8.8.8``/``9.9.9.9`` -- 1.1.1.1/1.0.0.1 is the smoke
+# image's baked DNS-forwarder default (``helpers.py``'s ``set_unbound_forwarding``), a
+# self-inflicted landmine for a module that sets real Deny_Both rules against that
+# space -- to boring RIPE-block addresses with no harness meaning and no well-known-
+# resolver overlap.
+V4_BARE_HOSTS = ("83.246.7.7", "82.165.5.5")
 V6_BARE_HOSTS = ("2606:4700:99::10", "2606:4700:aa::20")
 
 
@@ -97,7 +102,7 @@ def deployed_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
 def _set_suppression(vm: SmokeVM, *, v4: list[str] | None = None, v6: list[str] | None = None) -> None:
     """Enable the master "Enable Suppression" toggle and set BOTH customlists.
 
-    ``v4``/``v6`` are raw textarea lines (e.g. ``"1.1.3.4/32"``) -- every
+    ``v4``/``v6`` are raw textarea lines (e.g. ``"81.169.3.4/32"``) -- every
     suppression line MUST carry an explicit mask: ``pfb_validate_suppression_line``
     rejects a bare host (``is_subnetv4()``/``is_subnetv6()`` both require
     ``/bits``). ``None``/empty clears that family's list. Same base64/CRLF
@@ -209,7 +214,7 @@ def test_suppression_v4_carves_containing_range_spares_sibling(deployed_vm: Smok
     live-loaded /16 down to covering CIDRs -- ADR-53 §4.1's headline acceptance
     requirement, proven via the update-time path.
 
-    Given: the v4 fixture feed (``1.1.0.0/16`` + two bare hosts) is loaded
+    Given: the v4 fixture feed (``81.169.0.0/16`` + two bare hosts) is loaded
     as a Deny list; suppression is enabled but empty; a settling update runs.
 
     When: v4suppression is set to the target host's exact /32 and a second
@@ -229,8 +234,8 @@ def test_suppression_v4_carves_containing_range_spares_sibling(deployed_vm: Smok
     # ("10.0.3.4" inside "10.0.0.0/16" -> 16 covering CIDRs incl. ".0.0/23" and
     # ".128.0/17") -- the covering-CIDR count/shape is invariant to the network
     # prefix, so this grounds the assertions below in an already-proven result.
-    target = "1.1.3.4"
-    sibling = "9.9.9.9"
+    target = "81.169.3.4"
+    sibling = "83.246.7.7"
     host_entry = f"{target}/32"
 
     h.inject(deployed_vm, spec)
@@ -267,8 +272,8 @@ def test_suppression_v4_carves_containing_range_spares_sibling(deployed_vm: Smok
         "expected 16 covering-CIDR entries for a /16 minus a /32 (ADR-53 §1.2's "
         f"measured bound); got {len(carved)}: {carved}\nfull member file ({len(lines)} lines): {lines}"
     )
-    assert "1.1.0.0/23" in carved and "1.1.128.0/17" in carved, (
-        "expected representative covering CIDRs '1.1.0.0/23' and '1.1.128.0/17' "
+    assert "81.169.0.0/23" in carved and "81.169.128.0/17" in carved, (
+        "expected representative covering CIDRs '81.169.0.0/23' and '81.169.128.0/17' "
         f"(the same relative shape as the real-iprange-verified 10.0.0.0/16-10.0.3.4 vector); got {carved}"
     )
 
@@ -369,9 +374,9 @@ def test_suppression_v4_bare_host_removed(deployed_vm: SmokeVM) -> None:
     feed_body = (FIXTURES_DIR / "ip_suppress_v4.txt").read_text()
     feed_url = h.write_local_feed(deployed_vm, "smoke_adr53_v4c1.txt", feed_body)
     spec = h.IpCase(aliasname="adr53v4c1", feed_url=feed_url, header="adr53v4c1")
-    inside_16 = "1.1.3.4"
-    removed_host = "8.8.8.8"
-    kept_host = "9.9.9.9"
+    inside_16 = "81.169.3.4"
+    removed_host = "82.165.5.5"
+    kept_host = "83.246.7.7"
     host_entry = f"{removed_host}/32"
 
     h.inject(deployed_vm, spec)
@@ -398,7 +403,7 @@ def test_suppression_v4_bare_host_removed(deployed_vm: SmokeVM) -> None:
 
     lines = _member_lines(deployed_vm, f"{spec.header}_v4")
     assert len(lines) == 2, f"expected exactly 2 member-file lines (untouched /16 + surviving bare host); got {lines}"
-    assert "1.1.0.0/16" in lines, f"expected the untouched /16 line verbatim (never carved); got {lines}"
+    assert "81.169.0.0/16" in lines, f"expected the untouched /16 line verbatim (never carved); got {lines}"
     assert _has_entry(lines, kept_host), f"expected the surviving bare host {kept_host}; got {lines}"
     assert not _has_entry(lines, removed_host), f"expected {removed_host} removed; got {lines}"
 
@@ -422,9 +427,9 @@ def test_suppression_v4_subnet_mask_carves_at_granularity(deployed_vm: SmokeVM) 
     feed_body = (FIXTURES_DIR / "ip_suppress_v4.txt").read_text()
     feed_url = h.write_local_feed(deployed_vm, "smoke_adr53_v4c2.txt", feed_body)
     spec = h.IpCase(aliasname="adr53v4c2", feed_url=feed_url, header="adr53v4c2")
-    hole_ip = "1.1.5.9"
-    sibling_ip = "1.1.9.9"
-    hole_subnet = "1.1.5.0/24"
+    hole_ip = "81.169.5.9"
+    sibling_ip = "81.169.9.9"
+    hole_subnet = "81.169.5.0/24"
 
     h.inject(deployed_vm, spec)
     h.reload(deployed_vm, "updateip", wait_unbound=False)
@@ -486,12 +491,12 @@ def test_suppression_drops_reserved_classes_keeps_public(deployed_vm: SmokeVM) -
 
     # Trivial inline v4 companion (not a committed fixture -- mirrors Scenario B's
     # companion alias): pins the v4 side of the same drop (issue #760 §1) cheaply.
-    v4_url = h.write_local_feed(deployed_vm, "smoke_issue760_reserved_v4.txt", "1.1.1.1\n100.64.0.1\n")
+    v4_url = h.write_local_feed(deployed_vm, "smoke_issue760_reserved_v4.txt", "82.165.5.5\n100.64.0.1\n")
     v4spec = h.IpCase(aliasname="issue760resv4", feed_url=v4_url, header="issue760resv4")
 
     public_v6 = "2606:4700:7777::1111"
     dropped_v6 = ("2001:db8::1", "ff02::1", "64:ff9b::1")
-    public_v4 = "1.1.1.1"
+    public_v4 = "82.165.5.5"
     dropped_v4 = "100.64.0.1"
 
     h.inject_ip_lists(deployed_vm, [v4spec, v6spec])
