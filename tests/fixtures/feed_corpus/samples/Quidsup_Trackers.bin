@@ -1,0 +1,218 @@
+# Title: NoTrack Tracker Blocklist
+# Description: Domains classified as tracking or advertising
+# Author: QuidsUp
+# License: GNU General Public License v3.0
+# Home: https://quidsup.net/notrack/blocklist.php
+# @ GitLab : https://gitlab.com/quidsup/notrack-blocklists
+# Updated: 01 Jul 2026
+# LatestVersion 24.01
+# Domain Count: 15439
+#===============================================================
+
+1010data.com #1010data - Tracker
+1push.io #RollerAds - Advertising
+1rx.io #Tremor International - Tracker
+207.net #Adobe - Tracker
+247-inc.com #247 Engagement Cloud - Tracker
+247-inc.net #247 Engagement Cloud - Tracker
+247.ai #247 Engagement Cloud - Tracker
+24support.cc #Unknown - Advertising
+2mdn.net #Google - Advertising
+2o7.net #Adobe - Tracker
+33across.com #33Across - Tracker
+360yield.com #360 Polaris - Tracker
+3lift.com #TripleLift - Advertising
+4armn.com #RollerAds - Advertising
+4dex.io #Adagio - Advertising
+4info.com #4INFO - Advertising
+4strokemedia.com #4Stroke Media - Advertising
+51.la #Unknown - Tracker
+6sc.co #Unknown - Tracker
+6sense.com #6sense - Tracker
+7eer.net #Impact Radius - Tracker
+a-ads.com #Anonymous Ads - Advertising
+a-mo.net #Unknown - Advertising
+a1.api.bbc.co.uk #BBC - Tracker
+a3cloud.net #a3cloud - Tracker
+a8723.com #Admedo - Advertising
+aa-metrics.airrsv.net #First Party - Tracker
+aa-metrics.beauty.hotpepper.jp #First Party - Tracker
+aa-metrics.golf-jalan.net #First Party - Tracker
+aa-metrics.hotpepper.jp #First Party - Tracker
+aa-metrics.jalan.net #First Party - Tracker
+aarth.net #Aarth - Advertising
+aatkit.com #AddApptr - Advertising
+aax-us-iad.amazon.com #Amazon - Advertising
+aaxads.com #Acceptable Ads - Tracker
+ab1n.net #First Party - Advertising
+abmr.net #Unknown - Advertising
+abtasty.com #AB Tasty - Tracker
+ac24horas.com #Revive Adserver - Advertising
+acacdn.com #Unknown - Advertising
+academyblocked.com #AdMeasures - Advertising
+accscdn.m.taobao.com #Taobao - Advertising
+acexedge.com #WhiteOps - Advertising
+acscdn.com #Unknown - Advertising
+active-agent.com #Active Agent - Tracker
+activeconversion.com #Active Conversion - Tracker
+acuityplatform.com #Acuityads - Advertising
+acxiom-online.com #Acxiom - Tracker
+ad-delivery.net #Ad Delivery - Advertising
+ad-optima.com #Unknown - Advertising
+ad-plus.com.tr #AdPlus - Advertising
+ad-score.com #Adscore - Advertising
+ad-stir.com #Ad Stir - Advertising
+ad.10010.com #Unknown - Advertising
+ad.daum.net #Daum - Advertising
+ad.ettoday.net #ETtoday - Advertising
+ad.gt #Unknown - Advertising
+ad.mail.ru #First Party - Advertising
+ad.ng.ru #First Party - Advertising
+ad.particlenews.com #First Party - Advertising
+ad.plus #Ad Plus - Advertising
+ad.popin.cc #First Party - Advertising
+ad.rosszlanyok.hu #Revive Adserver - Advertising
+ad.rus.xiaomi.com #Xiaomi - Tracker
+ad.weplayer.cc #Unknown - Advertising
+ad1.ettoday.net #First Party - Advertising
+ad2.ettoday.net #First Party - Tracker
+ad4.on.cc #Oriental Press Group - Advertising
+ad4game.com #Ad4Game - Advertising
+ad4m.at #AdScale - Tracker
+ad4mat.net #Ad4mat - Advertising
+ad5.on.cc #Oriental Press Group - Advertising
+ad6.on.cc #Oriental Press Group - Advertising
+ad6media.fr #Ad6Media - Advertising
+ad7.on.cc #Oriental Press Group - Advertising
+adabdapi.ldmnq.com #First Party - Tracker
+adacado.com #Adacado - Advertising
+adactive.cz #AdActive - Advertising
+adadapted.com #AdAdapted - Advertising
+adadvisor.net #Neustar - Advertising
+adage.com #Ad Age - Advertising
+adalliance.io #Ad Alliance - Advertising
+adalyser.com #Adalyser - Advertising
+adap.tv #AOL - Advertising
+adashx.m.taobao.com #Taobao - Tracker
+adashx4ae.ut.taobao.com #Taobao - Advertising
+adblade.com #Adblade - Advertising
+adbrix.io #Adbrix - Advertising
+adbrn.com #Adbrain - Advertising
+adbro.me #Adbro - Advertising
+adbutter.net #Adbutler - Advertising
+adcash.com #Adcash - Advertising
+adcolony.com #AdColony - Advertising
+addeluxe.jp #AdDeluxe - Advertising
+addresseepaper.com #AdMeasures - Advertising
+addthis.com #Oracle - Tracker
+addthisedge.com #Oracle - Tracker
+addtoany.com #AddToAny - Advertising
+ade.clmbtech.com #Times Internet - Advertising
+adelphic.net #Adelphic - Advertising
+adentifi.com #Adtheorent - Tracker
+adeventtracker.spotify.com #Spotify - Tracker
+adexpert.cz #AdExpert - Advertising
+adfinis-sygroup.ch #Adfinis SyGroup - Advertising
+adform.com #Adform - Advertising
+adform.net #Adform - Advertising
+adformdsp.net #Adform - Advertising
+adfox.ru #AdTech - Advertising
+adgibbon.com #AdGibbon - Advertising
+adglare.net #Unknown - Advertising
+adgrid.io #AdGrid - Advertising
+adgrx.com #AdGear - Advertising
+adhacker.online #Unknown - Advertising
+adhese.com #Adhese - Advertising
+adhigh.net #Getintent - Advertising
+adhitzads.com #Unknown - Advertising
+adingo.jp #Voyage Group - Advertising
+adinplay.com #AdinPlay - Advertising
+adition.com #Adition Technologies - Advertising
+adjoe.zone #Adjoe - Advertising
+adjust.com #Adjust - Tracker
+adjust.net.in #Adjust - Tracker
+adjust.world #Adjust - Tracker
+adkernel.com #AdKernel - Advertising
+adkmob.com #Unknown - Advertising
+adkontekst.pl #Adkontekst - Advertising
+adlabsnetworks.com #AdLabs - Advertising
+adlightning.com #Ad Lightning - Advertising
+adlook.me #Adlook - Advertising
+adlooxtracking.com #Adloox - Advertising
+adlooxtracking.ru #Unknown - Tracker
+adlucent.com #Adlucent - Advertising
+admailtiser.com #Admailtiser - Advertising
+admanmedia.com #ADman Media - Advertising
+admantx.com #ADmantX - Advertising
+admarketplace.net #adMarketplace - Advertising
+admatic.com.tr #AdMatic - Advertising
+admedia.com #AdMedia - Advertising
+admedo.com #Admedo - Advertising
+admeld.com #Google - Advertising
+admetricspro.com #AdMetricsPro - Advertising
+admicro.vn #Admicro - Advertising
+admixer.co.kr #Admixer - Advertising
+admixer.com #Admixer - Advertising
+admixer.net #Admixer - Advertising
+admjmp.com #Unknown - Advertising
+admo.tv #Clickon - Advertising
+admob.com #AdMob - Advertising
+admobile.top #Unknown - Advertising
+adnami.io #Adnami - Advertising
+adnet.de #Unknown - Advertising
+adnexus.net #AppNexus Inc - Tracker
+adnico.jp #Ad Nico - Advertising
+adnium.com #Adnium - Advertising
+adnow.com #AdNow - Advertising
+adnxs.com #AppNexus Inc - Tracker
+adnxs.net #AppNexus Inc - Tracker
+adnxtr.com #WhiteOps - Advertising
+adobedtm.com #Adobe - Tracker
+adobetag.com #Adobe - Tracker
+adocean.pl #AdOcean - Advertising
+adomik.com #Adomik - Advertising
+adoric-om.com #Unknown - Advertising
+adotmob.com #Adotmob - Advertising
+adpartner.pro #Unknown - Advertising
+adpod.in #Unknown - Tracker
+adpone.com #Adpone - Advertising
+adpushup.com #AdPushup - Advertising
+adready.com #CPXi - Advertising
+adrecover.com #AdRecover - Advertising
+adreq.vivo.com.cn #Vivo - Tracker
+adriver.ru #Adriver - Advertising
+adroll.com #AdRoll - Advertising
+adrta.com #Pixalate - Advertising
+adrunnr.com #Unknown - Advertising
+ads-d.viber.com #Viber - Advertising
+ads-marketing-vivofs.vivo.com.cn #Vivo - Advertising
+ads-twitter.com #Twitter - Advertising
+ads.appsgeyser.com #Apps Geyser - Tracker
+ads.brave.com #First Party - Advertising
+ads.chaturbate.com #Chaturbate - Advertising
+ads.digitalcaramel.com #First Party - Advertising
+ads.dreamteamfc.com #First Party - Advertising
+ads.ebay.com #eBay - Advertising
+ads.fakulteti.mk #Revive Adserver - Advertising
+ads.financialcontent.com #Revive Adserver - Advertising
+ads.glasove.com #First Party - Advertising
+ads.linkedin.com #LinkedIn - Advertising
+ads.mindfactory.de #First Party - Advertising
+ads.msn.com #Microsoft - Advertising
+ads.newsbook.com.mt #First Party - Advertising
+ads.pinger.com #First Party - Advertising
+ads.platform.zalo.me #First Party - Advertising
+ads.roblox.com #First Party - Advertising
+ads.roku.com #First Party - Advertising
+ads.samba.tv #Samba - Advertising
+ads.securityweek.com #First Party - Advertising
+ads.sportradar.com #First Party - Advertising
+ads.sportslocalmedia.com #First Party - Advertising
+ads.superawesome.tv #SuperAwesome Kids - Advertising
+ads.the-sun.com #First Party - Advertising
+ads.thescottishsun.co.uk #First Party - Advertising
+ads.thesun.co.uk #First Party - Advertising
+ads.thesun.ie #First Party - Advertising
+ads.twitter.com #Twitter - Advertising
+ads.viber.com #Viber - Advertising
+ads.viralize.tv #First Party - Advertisi

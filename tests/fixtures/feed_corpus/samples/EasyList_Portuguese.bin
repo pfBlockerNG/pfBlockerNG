@@ -1,0 +1,280 @@
+[Adblock Plus 2.0]
+! Checksum: lRDBf+/leCSor83tBoFXzg
+! Version: 202607041212
+! Title: EasyList Portuguese
+! Last modified: 04 Jul 2026 12:12 UTC
+! Expires: 1 days (update frequency)
+! Homepage: https://easylist.to/
+! Licence: https://easylist.to/pages/licence.html
+!
+! Please report any unblocked adverts or problems
+! in the forums (https://forums.lanik.us/viewforum.php?f=109)
+! or via e-mail (easylistportuguese@protonmail.com)
+!
+!-----------------------General advert blocking filters-----------------------!
+! *** easylistportuguese:easylistportuguese/easylistportuguese_general_block.txt ***
+/ads/anuncio.
+/ane-conteudo-exclusivo.js
+!
+-publicidade.
+/publicidade-
+/publicidade_
+_publicidade_
+! *** easylistportuguese:easylistportuguese/easylistportuguese_general_block_dimensions.txt ***
+! *** easylistportuguese:easylistportuguese/easylistportuguese_general_block_popup.txt ***
+!------------------------General element hiding rules-------------------------!
+! *** easylistportuguese:easylistportuguese/easylistportuguese_general_hide.txt ***
+###ads-foda-fx
+###ads-recentes-home
+###ads-recentes-home-2
+###article-bloco-ads-botton
+###article-bloco-ads-top
+###desk-bloco-ads-2
+###desk-bloco-ads-3
+###desk-bloco-ads-4
+###desk-bloco-ads-footer
+###publi-bottom
+###publicidades-footer
+###publicidades-topo
+###taboola-below-article-thumbnails-recos-reel
+###taboola-home-page
+##.ad-container-m1
+##.ad-rotate-anuncio
+##.ad-teste
+##.ad-titulo
+##.ad-varejo-container
+##.ads-colunistas-down-2
+##.ads-eventos
+##.ads-fixo
+##.ads-minuto-content
+##.ads-noticia-main
+##.ads-oferecimento
+##.ads-rodape
+##.adsNoticiaRodape
+##.ads__painel
+##.ads_uol_300x250
+##.ads_uol_728x90
+##.ads_uol_970x250
+##.advads-banner-conteudo
+##.area_publicidade_container
+##.bloco-publicidade
+##.container-publicidade-mrec1
+##.imagem-publicidade-header
+##.mw-desk-bloco-ads-1
+##.mw-desk-bloco-ads-2
+##.mw-desk-bloco-ads-5
+##.pos-ads-texto
+##.publicidade-728
+##.publicidade-ancorads
+##.publicidade-cima-container
+##.publicidade-info-mobile
+##.publicidade-lateral
+##.publicidade-mob2
+##.publicidade-pequena
+##.publicidade-rodape
+##.publicidade-title
+##.publicidade300x250
+##.publicidade_artigo_mobile
+##.publicidadefixa
+##.textPublicidade
+##.tgad-card
+##.tgad-top
+##.tgads-center
+##a[href^="http://mon.net.br/"] > img
+##a[href^="https://ads.impulsosocial.online/"]
+##a[href^="https://app.monetizze.com.br/"] > img
+##a[href^="https://clickadsxxx.com/"]
+##a[href^="https://cliente.storehosting.com.br/aff.php?aff="]
+##a[href^="https://externo.x-power-gel.com/"]
+##a[href^="https://go.aff.esportesdasorte.com/"]
+##a[href^="https://go.hotmart.com/"]
+##a[href^="https://grupoxxx.com/"]
+##a[href^="https://static.maxfullad.com/banners/"]
+##a[href^="https://timbet999.xyz/"]
+##a[href^="https://www.e-consulters.com.br/sac/aff.php?aff="]
+!
+###Publicidade
+###ad-video-inread--wrapper
+###ad_mrec_destaque
+###ad_mrec_esporte
+###ads-square
+###barraPublicidade
+###bx-publ-capa
+###liBannerDireita
+###liPublicidadeAdsense
+###pub-flutuante-1
+###pub-flutuante-2
+###pubCofinaFotogaleria
+###pubMastHead
+###publ-capa
+###publ_super
+###publat1
+###publat_local
+###publicidade-topo
+###publicidadeIsland
+###publicidade_not
+###publicidades_top
+###pubpc
+###relAds
+###topopublicidade
+###vAds
+###zaz-nb-plugin-ad
+##.Publicidade
+##.PublicidadeHorizontal
+##.PublicidadeQuadrada
+##.PublicidadeSidebarSuperior
+##.ad-topstories
+##.adCabecalho
+##.ad_300_300
+##.add_full
+##.ads20
+##.ads30
+##.adsLateral
+##.adstopo
+##.anuncio-728
+##.anuncio-sidebar
+##.banner-dfp-retangulo
+##.banner-publicitario-meio
+##.banner_publicidade_hp
+##.box-admotion
+##.box-publicidade-topo
+##.box_publ_not
+##.br-grid-1-publicidade
+##.c-publi
+##.clic-advertising
+##.contemPublicidade
+##.detalheAds
+##.dfp-section
+##.div-publicidade
+##.footer-adv
+##.h_add
+##.herald_adsense_widget
+##.m-advertising
+##.m-rec_pub
+##.mod-publicity
+##.nzn-ads-rectangle
+##.pub-bloco
+##.pubLabel
+##.pub_first
+##.pub_insert_content
+##.pub_insert_content_titulo
+##.pub_mrec
+##.pubfield
+##.publicidade-abre_padrao
+##.publicidade-content
+##.publicidade-newsletter
+##.publicidade-wide
+##.publicidade_superbanner
+##.publicidades
+##.publicity-leaderboard
+##.section-pbl
+##.sideBarAds
+##.vip-section-advertising
+! *** easylistportuguese:easylistportuguese/easylistportuguese_allowlist_general_hide.txt ***
+poder360.com.br#@#.box-advertising
+renovagatronomia.com#@#[id^="div-gpt-ad"]
+drogasil.com.br#@#[name^="google_ads_iframe"]
+magazineluiza.com.br#@#a[href^="https://adclick.g.doubleclick.net/"]
+uol.com.br#@#div[data-adunit]
+renovagatronomia.com#@#div[id^="div-gpt-"]
+!---------------------------Third-party advertisers---------------------------!
+! *** easylistportuguese:easylistportuguese/easylistportuguese_adservers.txt ***
+||adsmaster.dev^
+||adspublicidades.agency^
+||igoal-ads.com.br^
+||lzrikate.com^
+||n10.xyz^
+||nsmedia-advertising.com^
+||nsn-azert.xyz^
+||nsn-server.xyz^
+||solution-solutions.com^
+||tech-solution-blog.com^
+||tradertimerz.media^
+!
+||admasters.media^$third-party
+||adsblue.net^$third-party
+||adseleto.com^$third-party
+||adzep.com.br^$third-party
+||cazamba.com^$third-party
+||cuponei.xyz^$third-party
+||denakop.com^$third-party
+||grumft.com^$third-party
+||igaming-service.io^$third-party
+||joinads.me^$third-party
+||juicebarads.com^$third-party
+||nobeta.com.br^$third-party
+||premiumads.com.br^$third-party
+||r4you.co^$third-party
+||simpleads.com.br^$third-party
+||solution.coupons^$third-party
+||upeex.com.br^$third-party
+! *** easylistportuguese:easylistportuguese/easylistportuguese_adservers_popup.txt ***
+||adspublicidades.agency^$popup
+! *** easylistportuguese:easylistportuguese_adult/adult_adservers.txt ***
+||anunciad.com.br^$third-party
+||busktraffic.com^$third-party
+||clickadsxxx.com^$third-party
+||dopub.site^
+||eutesalvo.com^$third-party
+||geralinks.com.br^$third-party
+||grupoxxx.com^$third-party
+||kyotraffic.com^$third-party
+||linkgp.com.br^$third-party
+||maxfullad.com^$third-party
+||webpsts.com^
+||xpowergel.com^$third-party
+||xtraffix.com^$third-party
+! *** easylistportuguese:easylistportuguese_adult/adult_adservers_popup.txt ***
+!-----------------------------Third-party adverts-----------------------------!
+! *** easylistportuguese:easylistportuguese/easylistportuguese_thirdparty.txt ***
+||ad.lomadee.com^$third-party
+||ads-query.luizalabs.com^
+||azioncdn.net/ads_videos/$domain=letras.mus.br
+||aziume.com.br/banner/
+||cworks.cloud/fileadmin/scripts/r7AdControl.js$domain=tnh1.com.br
+||cworks.cloud/fileadmin/scripts/r7PubliDesktop.js$domain=tnh1.com.br
+||dino.com.br/widget/$third-party
+||formulanegocioonline.digital/marca-trafego/$third-party
+||go.hotmart.com^$third-party
+||iili.io^$domain=politicosdosuldabahia.com.br
+||imgur.com^$domain=politicosdosuldabahia.com.br|zonadoguaxinim.com.br
+||juniortavares.com/banners/
+||ljii.github.io^$third-party
+||melhorplano.net/plugin-search-broadband-plans?$domain=minhaconexao.com.br
+||outbrain.com^$domain=visortmo.com
+||piscapisca.pt/i/$third-party
+||postimg.cc^$domain=barbacenamais.com.br
+||publyads.jstag.space^
+||pubs.xl.pt^
+||storehosting.com.br/banner/
+||sunoresearch.com.br/ads-manager/$third-party
+||supercasa.pt/mrec$third-party
+||t.co^$domain=souapenasumsitenormal.com
+||tediado.com.br/banner/
+||telco-api.melhorplano.net/api/search/get-recommended-plans/$domain=minhaconexao.com.br
+||thingle.io/iframe-content.php$third-party
+||upee.online/adsupee.js$third-party
+||x2n.com.br/media/$third-party
+! *** easylistportuguese:easylistportuguese/easylistportuguese_thirdparty_popup.txt ***
+||affiliate.fazobetai.com^$popup
+||afiliados.esportiva.bet^$popup
+||apostasbrasil.com^$popup
+||bonusesportivo.com^$popup
+||esportbono.com^$popup
+||t.co^$popup,domain=cdstops.com
+||vulpix.bet/?ref=$popup,third-party
+! *** easylistportuguese:easylistportuguese_adult/adult_thirdparty.txt ***
+||cameraprive.com^$subdocument,third-party
+||externo.x-power-gel.com^$third-party
+||hqporno.com.br/delivery/
+||integracao.gofans.com.br^$third-party
+||mangayaoi.net/banner/
+||mundomais.com.br/frames?$third-party
+||photoacompanhantes.com/embedfeed/$third-party
+||safadacaseira.xyz/ads/
+||sexshopboys.com/idevaffiliate/$third-party
+||xis-videos.blogspot.com^$third-party
+||xtubehentai.com/pophqe/
+||xvideossexo.net/ads/pop.php?
+!
+||advertis

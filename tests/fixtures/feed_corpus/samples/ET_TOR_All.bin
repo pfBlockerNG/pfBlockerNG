@@ -1,0 +1,57 @@
+#
+# Emerging Threats Tor rules.
+#
+# These will tell you if someone using Tor for source anonymization is communicating with your network.
+#
+# Tor in itself isn't inherently hostile. In many environments that may be a very suspicious way
+#  to communicate.
+#
+# The original content is located at:
+#    - https://check.torproject.org/torbulkexitlist
+#    - https://www.dan.me.uk/torlist/
+#
+# Please submit any custom rules or ideas to our ET Community site at https://community.emergingthreats.net, or
+# email us at support@emergingthreats.net.
+#
+#*************************************************************
+#
+#  Copyright (c) 2003-2026, Emerging Threats
+#  All rights reserved.
+#  
+#  Redistribution and use in source and binary forms, with or without modification, are permitted provided that the 
+#  following conditions are met:
+#  
+#  * Redistributions of source code must retain the above copyright notice, this list of conditions and the following 
+#    disclaimer.
+#  * Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the 
+#    following disclaimer in the documentation and/or other materials provided with the distribution.
+#  * Neither the name of the nor the names of its contributors may be used to endorse or promote products derived 
+#    from this software without specific prior written permission.
+#  
+#  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS AS IS AND ANY EXPRESS OR IMPLIED WARRANTIES, 
+#  INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE 
+#  DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, 
+#  SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR 
+#  SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, 
+#  WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE 
+#  USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
+#
+#
+
+
+
+#  VERSION 6303
+
+#  Updated 2026-07-02 00:30:02
+
+alert tcp [102.130.117.167,102.130.127.117,102.211.56.112,102.211.56.20,103.109.101.105,103.109.187.71,103.146.203.11,103.146.203.120,103.146.203.14,103.164.54.199] any -> $HOME_NET any (msg:"ET TOR Known Tor Exit Node TCP Traffic group 1"; flags:S; reference:url,check.torproject.org/torbulkexitlist; threshold: type limit, track by_src, seconds 60, count 1; classtype:misc-attack; flowbits:set,ET.TorIP; sid:2520000; rev:6303; metadata:affected_product Any, attack_target Any, deployment Perimeter, tag TOR, signature_severity Informational, created_at 2008_12_01, updated_at 2026_07_02;)
+alert tcp [103.193.179.213,103.193.179.22,103.193.179.233,103.20.241.102,103.253.24.18,103.28.52.93,103.91.65.44,104.167.241.4,104.167.242.117,104.167.242.118] any -> $HOME_NET any (msg:"ET TOR Known Tor Exit Node TCP Traffic group 2"; flags:S; reference:url,check.torproject.org/torbulkexitlist; threshold: type limit, track by_src, seconds 60, count 1; classtype:misc-attack; flowbits:set,ET.TorIP; sid:2520001; rev:6303; metadata:affected_product Any, attack_target Any, deployment Perimeter, tag TOR, signature_severity Informational, created_at 2008_12_01, updated_at 2026_07_02;)
+alert tcp [104.192.3.74,104.219.236.100,104.223.84.121,104.223.84.84,104.244.72.132,104.244.73.136,104.244.73.14,104.244.73.190,104.244.73.193,104.244.73.43] any -> $HOME_NET any (msg:"ET TOR Known Tor Exit Node TCP Traffic group 3"; flags:S; reference:url,check.torproject.org/torbulkexitlist; threshold: type limit, track by_src, seconds 60, count 1; classtype:misc-attack; flowbits:set,ET.TorIP; sid:2520002; rev:6303; metadata:affected_product Any, attack_target Any, deployment Perimeter, tag TOR, signature_severity Informational, created_at 2008_12_01, updated_at 2026_07_02;)
+alert tcp [104.244.74.51,104.244.74.97,104.244.75.140,104.244.75.74,104.244.76.121,104.244.76.237,104.244.77.208,104.244.78.232,104.244.78.233,104.244.79.44] any -> $HOME_NET any (msg:"ET TOR Known Tor Exit Node TCP Traffic group 4"; flags:S; reference:url,check.torproject.org/torbulkexitlist; threshold: type limit, track by_src, seconds 60, count 1; classtype:misc-attack; flowbits:set,ET.TorIP; sid:2520003; rev:6303; metadata:affected_product Any, attack_target Any, deployment Perimeter, tag TOR, signature_severity Informational, created_at 2008_12_01, updated_at 2026_07_02;)
+alert tcp [104.244.79.50,104.244.79.61,107.172.125.210,107.174.146.5,107.189.10.175,107.189.11.111,107.189.1.160,107.189.1.175,107.189.12.157,107.189.12.3] any -> $HOME_NET any (msg:"ET TOR Known Tor Exit Node TCP Traffic group 5"; flags:S; reference:url,check.torproject.org/torbulkexitlist; threshold: type limit, track by_src, seconds 60, count 1; classtype:misc-attack; flowbits:set,ET.TorIP; sid:2520004; rev:6303; metadata:affected_product Any, attack_target Any, deployment Perimeter, tag TOR, signature_severity Informational, created_at 2008_12_01, updated_at 2026_07_02;)
+alert tcp [107.189.13.180,107.189.13.253,107.189.13.254,107.189.14.4,107.189.1.9,107.189.27.145,107.189.29.184,107.189.29.8,107.189.30.236,107.189.30.49] any -> $HOME_NET any (msg:"ET TOR Known Tor Exit Node TCP Traffic group 6"; flags:S; reference:url,check.torproject.org/torbulkexitlist; threshold: type limit, track by_src, seconds 60, count 1; classtype:misc-attack; flowbits:set,ET.TorIP; sid:2520005; rev:6303; metadata:affected_product Any, attack_target Any, deployment Perimeter, tag TOR, signature_severity Informational, created_at 2008_12_01, updated_at 2026_07_02;)
+alert tcp [107.189.30.69,107.189.3.11,107.189.31.187,107.189.31.33,107.189.3.148,107.189.31.52,107.189.3.94,107.189.4.12,107.189.4.209,107.189.5.121] any -> $HOME_NET any (msg:"ET TOR Known Tor Exit Node TCP Traffic group 7"; flags:S; reference:url,check.torproject.org/torbulkexitlist; threshold: type limit, track by_src, seconds 60, count 1; classtype:misc-attack; flowbits:set,ET.TorIP; sid:2520006; rev:6303; metadata:affected_product Any, attack_target Any, deployment Perimeter, tag TOR, signature_severity Informational, created_at 2008_12_01, updated_at 2026_07_02;)
+alert tcp [107.189.5.249,107.189.5.7,107.189.6.124,107.189.6.232,107.189.7.141,107.189.7.144,107.189.7.168,107.189.8.133,107.189.8.16,107.189.8.181] any -> $HOME_NET any (msg:"ET TOR Known Tor Exit Node TCP Traffic group 8"; flags:S; reference:url,check.torproject.org/torbulkexitlist; threshold: type limit, track by_src, seconds 60, count 1; classtype:misc-attack; flowbits:set,ET.TorIP; sid:2520007; rev:6303; metadata:affected_product Any, attack_target Any, deployment Perimeter, tag TOR, signature_severity Informational, created_at 2008_12_01, updated_at 2026_07_02;)
+alert tcp [107.189.8.226,107.189.8.56,107.189.8.65,107.189.8.70,108.59.12.41,108.61.189.136,109.169.33.163,109.228.160.190,109.237.27.11,109.69.67.17] any -> $HOME_NET any (msg:"ET TOR Known Tor Exit Node TCP Traffic group 9"; flags:S; reference:url,check.torproject.org/torbulkexitlist; threshold: type limit, track by_src, seconds 60, count 1; classtype:misc-attack; flowbits:set,ET.TorIP; sid:2520008; rev:6303; metadata:affected_product Any, attack_target Any, deployment Perimeter, tag TOR, signature_severity Informational, created_at 2008_12_01, updated_at 2026_07_02;)
+alert tcp [109.70.100.1,109.70.100.10,109.70.100.11,109.70.100.12,109.70.100.13,109.70.100.14,109.70.100.15,109.70.100.2,109.70.100.3,109.70.100.4] any -> $HOME_NET any (msg:"ET TOR Known Tor Exit Node TCP Traffic group 10"; flags:S; reference:url,check.torproject.org/torbulkexitlist; threshold: type limit, track by_src, seconds 60, count 1; classtype:misc-attack; flowbits:set,ET.TorIP; sid:2520009; rev:6303; metadata:affected_product Any, attack_target Any, deployment Perimeter, tag TOR, signature_severity Informational, created_at 2008_12_01, updated_at 2026_07_02;)
+alert tcp [109.70.100.5,109.70.100.6,109.70.100.7,109.70.100.8,109.70.100.9,109.71.252.182,109.71.252.88,109.71.252.97,114.35.245.150,116.202.158.119] any -> $HOME_NET any 

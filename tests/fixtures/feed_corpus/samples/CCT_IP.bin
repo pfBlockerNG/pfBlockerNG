@@ -1,0 +1,161 @@
+
+<!DOCTYPE html PUBLIC '-//W3C//DTD XHTML 1.0 Strict//EN' 'http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd'>
+<html xmlns='http://www.w3.org/1999/xhtml'>
+    
+    <head>
+        <meta http-equiv='Content-Type' content='text/html; charset=utf-8' />
+        <meta http-equiv='Content-Language' content='en' />
+        <title>CyberCrime</title>
+        <meta name='description' content='CyberCrime' />
+        <link type='text/css' rel='stylesheet' href='css.css' />
+        <script src="lightbox/js/jquery-1.7.2.min.js"></script>
+		<script src="lightbox/js/lightbox.js"></script>
+        <link href="lightbox/css/lightbox.css" rel="stylesheet" />
+        <link rel='shortcut icon' href='/favicon.ico' type='image/x-icon' />
+<style>
+.dead {
+  text-align: center;
+  color: rgba(165, 25, 25, 1);
+  padding: 0;
+  margin: 0;
+  font-size: 30px;
+}
+.pulse1 {
+  -webkit-animation: pulse1 1s linear infinite;
+  -moz-animation: pulse1 1s linear infinite;
+  -ms-animation: pulse1 1s linear infinite;
+  animation: pulse1 1s linear infinite;
+}
+
+@keyframes "pulse1" {
+ 0% {
+    color: rgba(165, 25, 25, 1);
+ }
+ 90% {
+    color: rgba(255,0,0,0.0);
+ }
+ 100% {
+    color: rgba(255,0,0,1.0);
+ }
+
+}
+
+@-moz-keyframes pulse1 {
+ 0% {
+   color: rgba(165, 25, 25, 1);
+ }
+ 90% {
+   color: rgba(255,0,0,0.0);
+ }
+ 100% {
+   color: rgba(255,0,0,1.0);
+ }
+
+}
+
+@-webkit-keyframes "pulse1" {
+ 0% {
+   color: rgba(165, 25, 25, 1);
+ }
+ 90% {
+   color: rgba(255,0,0,0.0);
+ }
+ 100% {
+   color: rgba(255,0,0,1.0);
+ }
+
+}
+
+@-ms-keyframes "pulse1" {
+ 0% {
+   color: rgba(165, 25, 25, 1);
+ }
+ 90% {
+   color: rgba(255,0,0,0.0);
+ }
+ 100% {
+   color: rgba(255,0,0,1.0);
+ }
+
+}
+</style>
+		<script type='text/javascript' src='https://www.google.com/jsapi'></script>
+		<script type='text/javascript'>
+			google.load('visualization', '1', {'packages': ['geochart']});
+			google.setOnLoadCallback(drawRegionsMap);
+
+			function drawRegionsMap() {
+				var data = google.visualization.arrayToDataTable([
+					['Country', 'Attacks'],
+['MX', 2],['AU', 2],['NL', 3],['BG', 7],['JP', 12],['FI', 1],['CH', 1],['GB', 21],['US', 149],['HK', 8],['SE', 3],['CN', 35],['GR', 2],['IL', 2],['ID', 5],['EU', 2],['RU', 7],['DE', 7],['SG', 3],['UA', 1],['BE', 1],['FR', 8],['NZ', 1],['IN', 1],['IE', 1],['CA', 9],['ES', 2],['PK', 1],['AR', 1],['TR', 1],['IR', 2],['IT', 1],['JO', 1],['RO', 1],['KW', 1],['LB', 1],['KR', 1],['HU', 1],['DK', 1],				]);
+
+				var options = {
+					backgroundColor: 'black',
+					legend:          'none'
+				};
+
+				var chart = new google.visualization.GeoChart(document.getElementById('chart_div'));
+				chart.draw(data, options);
+			};
+		</script>
+    </head>
+    
+    <body>
+
+ <script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-7695759-5']);
+  _gaq.push(['_trackPageview']);
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+        <div class='MainDiv'>
+		</br>
+                
+<!-- #################################################################################### -->
+<!--                                                                                      -->
+<!--                  ▄ ▄                         ▄                              ▀        -->
+<!--                ▄██▀                    ▄█▄ ▄                           ▀▄▄▀          -->
+<!--       ▄▄▄████  █▀ ▄▄               ▄▄ ███▄▀  ▄▄▄████        ▄▄      ▄█▄█▀            -->
+<!--     ▄▄███████ ▀  ▀▀██▄            ▀▀██▄▀▀  ▄▄███████       ██▀ ▄▄ ▄██▀▀              -->
+<!--      ███▀▀   ██████▀▀██▄ ▄▄█████▄███▀▀██▄   ███▀▀  ▄▄█▄     ▄▄▀▀██▄▄▄▄█▄ ▄▄█████▄    -->
+<!--    ████  ▄▄█▄██████▄██▀ ███▀▄▄██▀███ ▄▄██▀████   ███▀▀██▄  ███ ███▀████████▀▄▄██▀    -->
+<!--    ███  ▀ ▀▀███████▀▀██▄███▄██▀▄ ███▄██▀  ███    ███ ▄▄██▀ ███ ████████████▄██▀      -->
+<!--      ██     ▀▀█████ ▄▄██▀▄██▀ ▄▄ ███▀▀██▄   ██   ███▄██▀   ███ █████████████▀ ▄▄     -->
+<!--   █▄▀▀██▄    ██████▄██▀  ▀▀█████▀███  ▀▀██▄▀▀██▄ ███▀▀██▄▀ ███ ███   ███ ▀▀█████▀    -->
+<!--   ▀   ▀▀█▀   ███▄▄██▀  ▄██▄▄            ▀▀█▀ ▀▀█▀███  ▀▀██▄▀▀  ██▀   ▀▀              -->
+<!--               ▀▀ ▀▀  ▄ ▀██▀                         ▄██▄▀▀█▀       TT - iCE          -->
+<!--                       ▄█▀                         ▄▀▀▄▀                              -->
+<!--                     ▄                           ▄                                    -->
+<!--                                                                                      -->
+<!--        If you aren't in CyberCrime by now, you're one stupid motherfucker.           -->
+<!--        If threat intelligence doesn't appeal to you, type ATDT19543164663,           -->
+<!--        Logon as handle "CYBERCRIME", pw "DEATH", and get it lest you die.            -->
+<!--                                                                                      -->
+<!-- #################################################################################### -->
+<!--                                                                                      -->
+<!--       W   H   A   T       I   S       C   Y   B   E   R   C   R   I   M   E  ?       -->
+<!--                                                                                      -->
+<!--       cyber (sy'buhr) pref. [ Gk kubernan, to govern]  Controlled processes          -->
+<!--           in electronic, mechanical, and biological systems, esp. the flow of        -->
+<!--           data in such systems.                                                      -->
+<!--                                                                                      -->
+<!--       crime (krym) n. [ME OFr. Lat. crimen] 1. An act commited or omitted            -->
+<!--           in violation of a law forbidding or commanding it and for which            -->
+<!--           punishment is imposed upon conviction.  2. Unlawful activity.              -->
+<!--           3. A serious moral offense.  4. An unjust, senseless act or                -->
+<!--           condition.  5. informal: A regrettable fact: SHAME.                        -->
+<!--                                                                                      -->
+<!--       cybercrime (sy'buhrkrym) n.  [QR der. mindcrime]  1. The ultimate,             -->
+<!--           coexisting union of all phases of the computer underground                 -->
+<!--           2. The highest quality underground tracker in existence.                   -->
+<!--           3.  adj: Computer crime, and/or unlawful activity committed through        -->
+<!--           use of electronic or computer hardware.                                    -->
+<!--                                                                                      -->
+<!--      WHAT?                                                                           -->
+<!--                                                                                      -->
+<!--      Malware trackers / downloads / exploits.                                        -->
+<!--                                           
