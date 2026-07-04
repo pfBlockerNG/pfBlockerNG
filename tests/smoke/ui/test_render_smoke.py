@@ -1043,8 +1043,8 @@ def test_software_actions_link_to_package_manager(
           actionable ``pkg_mgr_install.php?mode=reinstallpkg&pkg=…`` link — the href, not just CSS,
           is the gate (an anchor's ``disabled``/``aria-disabled`` are advisory only);
       And the page carries NO in-page pkg machinery — no ``?ajax=tail`` poller, no ``pfb_output``
-          textarea (the old post-uninstall ``pkg_mgr_installed.php`` redirect was POST-only
-          machinery, so it has no GET-observable trace to assert on — see #791);
+          textarea (the historical post-uninstall redirects were POST-only machinery, so they
+          left no GET-observable trace to assert on — see #791);
       And the clean render oracle (200, no Fatal/Warning/Notice, marker present) holds.
 
     Fail-before / pass-after: the pre-#684 page ran ``pkg`` from a detached daemon and tailed it via
@@ -1092,8 +1092,8 @@ def test_software_actions_link_to_package_manager(
 
         # The in-page pkg machinery is gone entirely. Do NOT assert `/pkg_mgr_installed.php`
         # absent from the body: pfSense's System menu (head.inc) always carries that href for an
-        # admin on EVERY page, and the old post-uninstall redirect it meant to catch was printed
-        # only on the POST uninstall-success path — never in a GET body (#791).
+        # admin on EVERY page, and no pfBlockerNG GET body ever carried that string — the
+        # historical post-uninstall redirects were POST-only machinery (#791).
         assert "?ajax=tail" not in body, "Software page must no longer host the ?ajax=tail poller"
         assert 'name="pfb_output"' not in body, "Software page must no longer render the pfb_output textarea"
 
