@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -31,8 +30,13 @@ use PHPUnit\Framework\TestCase;
  * sort directions), the 'alias' key-sort branch (case-insensitive, both
  * directions), the 'update' strtotime branch (incl. one malformed date), and
  * the empty/single-element edge cases.
+ *
+ * No #[CoversFunction] attribute: the sort closure lives inside
+ * pfBlockerNG_update_table() in the widget file, which the PHPUnit bootstrap
+ * never loads — the tests exercise a source-extracted copy of the closure, so
+ * there is no loadable coverage target (an attribute here fails the CI
+ * --coverage-text run with "not a valid target for code coverage").
  */
-#[CoversFunction('pfBlockerNG_update_table')]
 final class WidgetSortTableTest extends TestCase
 {
 	// Copied VERBATIM from `git show origin/devel:src/usr/local/www/widgets/widgets/pfblockerng.widget.php`
