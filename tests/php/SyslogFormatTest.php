@@ -394,6 +394,38 @@ final class SyslogFormatTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
+	// Non-string scalar input — coerced before the sentinel check
+	// -----------------------------------------------------------------------
+
+	/**
+	 * A non-string scalar (FALSE) for an optional enrichment field must be
+	 * coerced to '' BEFORE the absent-sentinel check, so it is treated as
+	 * empty and the key is omitted entirely — never emitted as 'geoip='.
+	 *
+	 * Scenario:
+	 *   Given geoip = FALSE (not a string).
+	 *   When  pfb_syslog_format_ip($fields).
+	 *   Then  the output contains no 'geoip=' token at all.
+	 */
+	public function testGeoipFalseBooleanIsCoercedAndOmitted(): void
+	{
+		$fields = [
+			'act'   => 'block',
+			'dir'   => 'in',
+			'if'    => 'em0',
+			'proto' => 'TCP',
+			'src'   => '198.51.100.30',
+			'dst'   => '10.0.0.30',
+			'ipver' => '4',
+			'geoip' => FALSE,
+		];
+
+		$result = pfb_syslog_format_ip($fields);
+
+		$this->assertStringNotContainsString('geoip=', $result, "geoip=FALSE must coerce to '' and be omitted");
+	}
+
+	// -----------------------------------------------------------------------
 	// Key order is fixed
 	// -----------------------------------------------------------------------
 

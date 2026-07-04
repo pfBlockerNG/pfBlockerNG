@@ -150,6 +150,33 @@ final class UnifiedFormatTest extends TestCase
 	}
 
 	/**
+	 * A non-string scalar (FALSE) for 'group' must be coerced to '' BEFORE
+	 * the '' emptiness check, so it is treated as empty and omitted entirely
+	 * — never emitted as 'group='.
+	 *
+	 * Scenario:
+	 *   Given group = FALSE (not a string).
+	 *   When  pfb_syslog_format_dnsbl($fields).
+	 *   Then  the output contains no 'group=' token at all.
+	 */
+	public function testDnsblGroupFalseBooleanIsCoercedAndOmitted(): void
+	{
+		$fields = [
+			'q_name' => 'ads.example.com',
+			'q_ip'   => '10.0.0.5',
+			'q_type' => 'A',
+			'group'  => FALSE,
+			'feed'   => 'EasyList',
+			'b_type' => 'VIP',
+			'b_eval' => 'ads.example.com',
+		];
+
+		$result = pfb_syslog_format_dnsbl($fields);
+
+		$this->assertStringNotContainsString('group=', $result, "group=FALSE must coerce to '' and be omitted");
+	}
+
+	/**
 	 * A value containing a space is double-quoted.
 	 *
 	 * Scenario:
