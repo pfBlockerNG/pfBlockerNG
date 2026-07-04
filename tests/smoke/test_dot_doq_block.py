@@ -288,7 +288,12 @@ def _dot_block_match_report(vm: SmokeVM, *, expected_present: bool, timeout: flo
     else:
         actual = [ln.strip() for ln in result.stdout.splitlines() if _is_block_853_line(ln)]
     want = "PRESENT (both protocols)" if expected_present else "ABSENT (no protocol)"
-    matched = _pfctl_sr_block_853_protos(vm, timeout=timeout)
+    # This report renders INSIDE a failing assert's message — a transient pfctl error on
+    # this second read must fold into the report, not replace it with a bare RuntimeError.
+    try:
+        matched: set[str] | str = _pfctl_sr_block_853_protos(vm, timeout=timeout)
+    except RuntimeError as exc:
+        matched = f"<unreadable: {exc}>"
     body = "\n".join(f"      {ln}" for ln in actual) if actual else "      (no block rule for port 853 / domain-s)"
     body = f"      protocols matched: {matched or '{}'} — positive gate needs {{'tcp', 'udp'}}\n" + body
     return (
