@@ -909,4 +909,51 @@ final class DueLedgerTest extends TestCase
 			"anchored + jittered next_due expected {$expected} (anchored base + interval + jitter), " .
 			"got {$entry['next_due']}");
 	}
+
+	/**
+	 * A REAL prior entry (genuine last_run/next_due, not the next_due=0 placeholder
+	 * covered by testMarkRanAnchoredPendingPlaceholderAnchorsFromNow above) that was
+	 * deferred by set_pending (quiet-hours window) still anchors normally on ITS
+	 * next_due — set_pending must not collapse a real schedule into the "nothing to
+	 * anchor to" placeholder case.
+	 *
+	 * Scenario:
+	 *   Given a real entry (last_run>0, next_due>0) from a prior clean cycle, then
+	 *   deferred by set_pending (pending_apply=TRUE, next_due left UNCHANGED).
+	 *   When  mark_ran_anchored runs at a now where 0 ≤ now - next_due < interval
+	 *         (the ordinary boundary-slip case).
+	 *   Then  next_due anchors on the entry's PREVIOUS next_due (not now), exactly
+	 *         like an undeferred real entry — AND pending_apply is cleared.
+	 */
+	public function testMarkRanAnchoredRealPendingEntryAnchorsOnPreviousNextDue(): void
+	{
+		$priorNextDue = self::NOW;
+		pfb_due_ledger_write_entry('cron', [
+			'last_run' => self::NOW - self::INTERVAL_DAILY,
+			'next_due' => $priorNextDue,
+			'jitter'   => 0,
+		], $this->dir);
+
+		// Deferred by quiet-hours: pending_apply set, next_due left untouched.
+		pfb_due_ledger_set_pending('cron', $this->dir);
+
+		$pending = pfb_due_ledger_read_entry('cron', $this->dir);
+		$this->assertNotNull($pending, 'pending entry must exist after set_pending');
+		$this->assertSame($priorNextDue, $pending['next_due'],
+			"before: set_pending must not touch next_due, expected {$priorNextDue} got {$pending['next_due']}");
+		$this->assertTrue($pending['pending_apply'] ?? FALSE, 'before: pending_apply must be set');
+
+		$now = $priorNextDue + 10;	// missed the boundary by 10 s -- the ordinary case
+		pfb_due_ledger_mark_ran_anchored('cron', self::INTERVAL_DAILY, $now, self::SEED, 0, $this->dir);
+
+		$entry    = pfb_due_ledger_read_entry('cron', $this->dir);
+		$expected = $priorNextDue + self::INTERVAL_DAILY;
+
+		$this->assertNotNull($entry, 'cron entry must exist after mark_ran_anchored');
+		$this->assertSame($expected, $entry['next_due'],
+			"real pending entry: expected next_due = previous next_due + interval ({$expected}), got " .
+			"{$entry['next_due']} -- set_pending must not prevent anchoring on a REAL prior schedule");
+		$this->assertArrayNotHasKey('pending_apply', $entry,
+			'mark_ran_anchored must clear pending_apply by writing a clean entry');
+	}
 }

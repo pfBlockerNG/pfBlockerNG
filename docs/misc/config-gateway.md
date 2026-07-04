@@ -129,3 +129,16 @@ registered path set). Each annotation is committed in the relevant source file.
 | `pfblockerngdnsblsettings/config/0/dnsbl_webpage` | Out-of-scope foreign key (ADR-29 §2.5); written directly by `pfblockerng_dnsbl.php`, read via `pfb_dnsbl_webpage()` (issue #713 removed the never-written `dnsblwebpage` registry mis-spelling) |
 | `pfblockerngdnsbl` / `pfblockernglistsv4/v6` (section-level reads) | Dynamic list sections |
 | `aliases/alias`, `filter/rule`, `system/*`, `interfaces`, `unbound/*` | pfSense core sections |
+
+## Sniff file-scope exclusion — `pfblockerng_extra.inc` / `pfblockerng_migrate.inc`
+
+Distinct from the per-path foreign-key list above: `RequireConfigGatewaySniff` excludes these two
+**whole files** from its scan (see the PHPCS sniff entry in `CLAUDE.md` → "Code standards → PHP"),
+originally because `pfblockerng_extra.inc` hosts `PfbConfig` itself (the gateway can't call
+through itself) and `pfblockerng_migrate.inc` predates the registry. `pfblockerng_extra.inc` has
+since grown well beyond the gateway — it also hosts real dispatch/scheduling logic (e.g. the
+ADR-43 due-ledger API and `pfblockerng_tick()`). That code is registered-field-adjacent (it reads
+`pfb_interval`/`pfb_quiet_hours`/`pfb_tick_interval` via `PfbConfig::read()` already) but the sniff
+cannot enforce it there — any new code landing in this file must self-police `PfbConfig` usage for
+registered keys (direct `config_get_path`/`config_set_path` on one is a rule violation the sniff
+will not catch); rely on manual review, not the mechanical gate.
