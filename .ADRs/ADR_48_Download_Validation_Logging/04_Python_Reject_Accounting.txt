@@ -1,0 +1,206 @@
+================================================================================
+PHASE 4 PROMPT — Python-side per-entry reject accounting (issue #789)
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_48_Download_Validation_Logging/ADR.md   (read §1 second para,
+     §2 item 4 + resolved buckets, §3 Phase-4 risk, §4, §7)
+================================================================================
+
+Run /ponytail:ponytail full
+
+ROLE
+Branch: adr/48-download-validation-logging (off devel)
+Phase 4 of 4 — behaviour-ADDING (counting + one artifact + PHP emission; the
+Python gates' accept/reject DECISIONS are untouched).
+Work ENTIRELY inside the worktree (`git -C <worktree> ...`). One commit, push.
+
+WHY THIS PHASE EXISTS
+ABP feeds reach Python verbatim (ADR-06/07); every entry the Python gates
+drop — a malformed host in normalise(), an unqueryable name under the #753
+wire caps — is counted NOWHERE (issue #789). Count, don't guard: Python
+tallies rejects per feed, writes a stats artifact next to the built DBs, and
+PHP emits the canonical stage=entries line. Buckets are RESOLVED: exactly
+`shape` + `wire_cap`. Deliberate skip classes are NOT rejects and tally zero.
+Python never logs the line itself — sinks stay PHP-only.
+
+REQUIRED READING
+- Prior handoffs RESULTS/01..03_Results.txt (canonical line + rendered form).
+- ADR.md §2 item 4 (binding, incl. the resolved two-bucket rule) + §3 the
+  chroot-path risk + §7 Phase-4 reject criteria.
+- CLAUDE.md — Python standards (stdlib-only in pfb_unbound.py, 4-space,
+  type hints, no bare except), chroot discipline, Test coverage mandates.
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py anchors (verify before edit):
+    * normalise() L3943-3969 — rejects: no-dot OR wire-cap fail L3962,
+      edge-hyphen/empty label L3965, bad char L3967. The L3962 test mixes the
+      two buckets: `"." not in host` = shape; _dnsbl_within_wire_caps fail =
+      wire_cap; L3965/L3967 = shape.
+    * _dnsbl_within_wire_caps() L3935-3940 (the single shared cap).
+    * reconcile() regex-fold wire-cap drop L4252-4253 (dropped BEFORE
+      result.reduced increments — the only wire-cap drop outside normalise).
+    * parse_abp() L3707-3859 — normalise-fail rejects at L3791 (anchor),
+      L3826 (hosts), L3846 (bare domain). ALL other None returns are
+      DELIBERATE SKIPS (blank/comment L3739-3746, cosmetic L3748, non-DNS
+      $options L3757/L3794, path/wildcard L3785, IPv4-valued L3787, hosts
+      non-IP first token L3820, ip-ip L3822, bare with '/'/'*' L3842) — these
+      must tally ZERO. $badfilter is pruned in reconcile() (counted
+      skipped_badfilter) — also NOT a reject.
+    * build() L4661-4921 — per-feed loop L4765 (feed/group at L4766-4769);
+      ABP calls parse_abp(..., feed=, group=, ...) L4824/L4838; permit path
+      normalise L4790-4792; plain path normalise L4845-4846; returns
+      BuildResult L4911-4921 (in-memory; DBs are not files).
+    * Existing count artifact: dnsbl_emit_count() L5055-5071 (pfb_py_count),
+      called at init ~L1403 and reload ~L5149. Chroot-relative BARE names set
+      in init_standard (pfb_py_count L1055, pfb_py_regex_count L1060) — the
+      new artifact follows this exact pattern.
+    * Atomic write pattern TO COPY: write_applied_generation L356-374
+      (tmp -> write -> flush -> fsync -> os.replace, except OSError ->
+      sys.stderr).
+    * ReconcileResult counters L4168-4170 — precedent for counting shape;
+      note build() currently discards them.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc anchors:
+    * $pfb['unbound_py_count'] = '/var/unbound/pfb_py_count' L129 (host-side
+      absolute twin of the chroot-relative name; add the new artifact's twin
+      beside it).
+    * pfb_update_unbound() L7789; PHP already reads the Python count artifact
+      at L7899; completion log L7900-7901 — the stats read + stage=entries
+      emission slots right there, BEFORE pfb_unbound_clear_work_files()
+      (L7904) in case that helper is extended later.
+- tests/conftest.py (reset_pfb_globals seeds chroot-relative bare names,
+  L117-125), tests/test_adr06_build_module.py (TestNormalise L204,
+  _run_build helpers L62-110), tests/test_adr07_parser.py (TestSkip L300,
+  TestPurity L380), tests/test_adr07_reconcile.py
+  (test_unqueryable_folded_key_is_dropped L263).
+
+ACTION PLAN (ordered)
+
+1. Classified normalise verdict (public contract UNCHANGED):
+   - Extract the body into _normalise_verdict(value: str) -> tuple[str | None, str | None]
+     returning (domain, None) on accept, (None, 'shape') or (None, 'wire_cap')
+     on reject per the bucket mapping above (split the L3962 compound test).
+   - normalise() becomes a thin wrapper returning only the domain — every
+     existing caller and test stays green (this is the behaviour-preserving
+     half; the existing TestNormalise suite is the oracle).
+
+2. Tally plumbing (explicit param — parse_abp PURITY is test-pinned, no
+   module-global counter):
+   - A tally is a plain dict[tuple[str, str], dict[str, int]] keyed
+     (feed, group) with bucket keys 'shape'/'wire_cap' (helper
+     _tally_reject(tally, feed, group, bucket) — one place that does the
+     defaulting; no class unless you genuinely need one).
+   - parse_abp(..., tally=None): at its three normalise-fail sites use
+     _normalise_verdict and, when tally is not None, count the bucket.
+     tally=None => byte-identical behaviour (purity tests untouched).
+   - build(): create the tally; pass it to both parse_abp call sites; count
+     at the plain path (L4845-4846) and permit path (L4790-4792) via
+     _normalise_verdict.
+   - reconcile(..., tally=None): the fold-drop at L4252-4253 counts
+     'wire_cap' attributed to the originating rule's feed/group (inspect
+     what provenance is in scope at that line; if the folded key genuinely
+     aggregates rules from several feeds, attribute to each contributing
+     rule — document the choice in the handoff).
+   - BuildResult gains the tally (a `rejects` field); build() returns it.
+
+3. Stats artifact:
+   - New chroot-relative bare name in init_standard beside pfb_py_count:
+     pfb['pfb_py_reject_stats'] = "pfb_py_reject_stats.json".
+   - dnsbl_emit_reject_stats(path, rejects) sibling of dnsbl_emit_count():
+     atomic pattern (copy L356-374) + json.dump of a LIST of objects
+     [{"feed": f, "group": g, "shape": n, "wire_cap": m}, ...] containing
+     ONLY nonzero-total feeds, sorted (stable output for tests). An empty
+     tally writes "[]" (PHP must distinguish "ran, zero rejects" from "no
+     artifact").
+   - Call it at BOTH dnsbl_emit_count call sites (init ~L1403, reload
+     ~L5149). Python writes the artifact; it NEVER emits the log line.
+
+4. PHP emission:
+   - $pfb['unbound_py_reject_stats'] = '/var/unbound/pfb_py_reject_stats.json'
+     beside L129.
+   - New small function pfb_emit_entry_reject_stats(string $path): void in
+     pfblockerng.inc: @file_get_contents; json_decode; on missing/unreadable/
+     invalid/non-array -> return silently (fresh boot / old python module);
+     else per entry, per bucket with count > 0:
+       pfb_validate_log($feed, 'entries', $bucket, (string) $count);
+   - Call it in pfb_update_unbound() right after the L7899 count read.
+
+TEST COVERAGE (five non-negotiables)
+
+Python (pytest):
+- Tally oracle (BDD-style; extend test_adr06_build_module.py using its
+  _run_build helpers): a crafted ABP feed with EXACTLY N shape-rejectable
+  entries (no-dot host, edge-hyphen label, bad char) + M wire-cap entries
+  (64-char label, >253 total) => build().rejects == {(feed, group):
+  {'shape': N, 'wire_cap': M}}. A plain-format feed case too (plain path
+  counts). Red->green: this test FAILS on pre-change code (no rejects
+  field / zero tally). Record the red run.
+- Skip-classes tally ZERO: feed of ONLY deliberate-skip lines (reuse the
+  TestSkip corpus lines incl. $badfilter, cosmetic, options, IPv4 anchor,
+  comments) => rejects empty. This is the §7 reject-criterion pin (a healthy
+  ABP feed must never gain spurious REJECT lines).
+- Fold-drop: extend test_unqueryable_folded_key_is_dropped — the dropped fold
+  now tallies wire_cap (before-state: it currently tallies nothing).
+- normalise() contract preservation: existing TestNormalise green untouched;
+  add direct _normalise_verdict bucket assertions (shape vs wire_cap for
+  each reject class — branch coverage per CLAUDE.md).
+- Artifact: dnsbl_emit_reject_stats to a tmp_path — valid JSON, only nonzero
+  feeds, empty tally -> "[]", tmp file replaced (no stray .tmp left). Path-shape
+  pin: assert pfb['pfb_py_reject_stats'] has no leading '/' (chroot-relative
+  — the §3 risk).
+
+PHP (PHPUnit, sink-capture technique from P1/P2):
+- pfb_emit_entry_reject_stats(): tmp JSON with nonzero buckets -> canonical
+  stage=entries lines in the sink (one per nonzero bucket, exact string);
+  zero-count buckets, empty [], absent file, corrupt JSON -> ZERO lines.
+  Red->green (function absent before).
+
+Smoke (tests/smoke/test_smoke_feeds.py, same rules as Phase 3):
+- A mock ABP fixture feed carrying known-rejectable entries => after update,
+  the pfB log gains 'pfb_validate: REJECT feed=<hdr> stage=entries' (delta
+  assertion with before-state).
+- The Phase-3 healthy-feed guard already asserts zero REJECT lines for a
+  clean feed — extend/confirm it covers a healthy ABP feed (skip classes
+  present, no stage=entries line).
+
+CONSTRAINTS
+- pfb_unbound.py: stdlib only; no new deps; no hashing; Python never writes
+  to the pfB log or names the canonical line.
+- Gate DECISIONS unchanged — same entries accepted/dropped as before; this
+  phase only counts. (ReconcileResult.pruned/reduced semantics untouched.)
+- Artifact path chroot-relative on the Python side, host-absolute twin on
+  the PHP side (the manifest-boundary bug class, ADR §3).
+- from __future__ import annotations if the file predates it — match the
+  module's existing convention; ruff + mypy tests/ clean.
+- PHP 8.3; tabs; uppercase TRUE/FALSE; phpcs clean.
+
+VERIFICATION
+- python -m pytest -> green (existing + new)
+- ruff check . && ruff format --check . -> clean; mypy tests/ -> clean
+- vendor/bin/phpunit -> green; php -l + phpstan + phpcs -> clean
+- python -m pytest tests/smoke/test_smoke_feeds.py --collect-only
+  --override-ini="addopts=" -> new smoke test collected
+- git diff --stat -> pfb_unbound.py, pfblockerng.inc, tests only
+
+SELF-REVIEW BEFORE THE HANDOFF
+Read your own `git diff`. Confirm: normalise() public contract untouched;
+tally rides explicit params (purity tests green); ONLY the two buckets exist;
+every deliberate skip class tallies zero (run the skip-class test and read
+it); artifact atomic + chroot-relative + "[]"-on-empty; PHP emits one line
+per nonzero bucket and stays silent on absent/corrupt; smoke deltas have
+before-states. Fix and re-verify if off.
+
+EXPECTED RESULT
+- A feed with N shape + M wire-cap rejects yields exactly {shape: N,
+  wire_cap: M}; skip classes yield zero; PHP emits stage=entries per nonzero
+  bucket after a DNSBL run; healthy ABP feeds emit nothing new.
+
+COMMIT (single)
+    pfb_unbound: tally per-entry rejects, emit stage=entries via PHP (ADR-48 P4)
+Push directly to adr/48-download-validation-logging.
+
+HANDOFF — write RESULTS/04_Results.txt
+Include:
+- The tally plumbing map (which gate site counts which bucket, incl. the
+  fold-drop provenance choice), the artifact schema + paths (both sides).
+- Red->green evidence (tally oracle + PHP reader).
+- Full gate results; commit hash + push confirmation.
+- The pytest -k filter for the new smoke test (orchestrator dispatch).
+- Note: Phase-4 acceptance rides its own smoke leg (stage=entries line
+  present for the rejectable fixture, absent for healthy) on CE + Plus.

@@ -1,6 +1,6 @@
 # ADR-48: Standardised download-validation rejection logging
 
-- **Status:** **Proposed** (2026-06-28; facts + scope refreshed 2026-07-03 against `devel` — ADR-45 landed, so its four structural reject sites are now in Phase 2's scope; one design fork remains open, see §2.1. Extended 2026-07-04 with Phase 4: Python-side entry-reject accounting, issue #789)
+- **Status:** **Proposed** (2026-06-28; facts + scope refreshed 2026-07-03 against `devel` — ADR-45 landed, so its four structural reject sites are now in Phase 2's scope. Extended 2026-07-04 with Phase 4: Python-side entry-reject accounting, issue #789. **Forks resolved 2026-07-04** — §2.1 = option (a), 7z missing-tool = out of the `stage` vocabulary, Phase 4 buckets = `shape` + `wire_cap` only; phase prompts authored)
 - **Date:** 2026-06-28
 - **Branch:** `adr/48-download-validation-logging` (off `devel`) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfblockerng.inc`, `src/usr/local/pkg/pfblockerng/pfb_unbound.py` (Phase 4)
 - **Target runtime:** PHP 8.3, FreeBSD / pfSense; Python 3.11 (Unbound embedded, Phase 4)
@@ -60,7 +60,7 @@ through that same message format.
    `pfb_logger` messages carry a leading `"\n"`); the oracle test includes a `\n`-bearing
    hostile `detail`. No I/O — string in, string out — so it is fully unit-testable.
 
-   **Open fork (resolve before authoring the phase prompts):** the two reject sites *inside*
+   **Fork (RESOLVED 2026-07-04 — option (a), maintainer's call):** the two reject sites *inside*
    `pfb_filter()` (the `PFB_FILTER_FILE_MIME` branch) cannot emit the canonical line as-is —
    `pfb_filter()` never receives the feed header (only `$reference`), the same branch serves
    both the outer MIME gate (`stage=mime`) and the ZIP post-extraction re-check (`stage=inner`)
@@ -70,6 +70,13 @@ through that same message format.
    contract change); (b) extend the `pfb_filter()` `$input`/signature to carry feed+stage
    (PFBL-01-sensitive surface); (c) downgrade `feed=` to the URL (`$input[2]` is available
    inside). The choice changes the public log format — maintainer's call.
+   **Resolution:** option (a) — `pfb_filter()` gains an optional by-ref out-param that carries
+   the raw detail (raw `file` output + exit code); an opted-in caller pre-sets it to an array,
+   `pfb_filter()` fills it and suppresses its own legacy level-2 message, and the
+   `pfb_download()` call site emits the canonical line with `$header` and the correct stage
+   (`mime` for the outer gate, `inner` for the ZIP post-extraction re-run). Callers that do
+   not opt in keep the legacy in-filter message unchanged (no rejection ever loses its log
+   entry).
 
 2. **`pfb_validate_log(string $feed, string $stage, string $reason, string $detail = '', int $level = 2): void`**
    — builds the line via the formatter and emits it through `pfb_logger()` at the reject
@@ -85,11 +92,10 @@ through that same message format.
    archive"` messages in `pfb_download()`, `stage=structural`; the feed `$header` is in scope
    at those call sites). Still future: the ADR-46 member guard and the ADR-49 plain-text scan —
    each sibling ADR calls `pfb_validate_log()` rather than coining its own message.
-   **Open sub-question:** the 7z missing-tool rejection in `pfb_download()` is a
-   download-validation reject outside the `stage` vocabulary — decide in (new `stage` token) or
-   out (leave its ad-hoc message). *Recommended (2026-07-03, non-binding): OUT — a missing tool
-   is a system/tooling failure, not a content-validation verdict; the canonical line should
-   only ever mean "this feed's content was rejected".*
+   **Sub-question (RESOLVED 2026-07-04 — OUT):** the 7z missing-tool rejection in
+   `pfb_download()` stays on its ad-hoc message — a missing tool is a system/tooling failure,
+   not a content-validation verdict; the canonical line only ever means "this feed's content
+   was rejected".
 
 4. **Python-side entry-reject accounting (Phase 4, issue #789).** **Count, don't guard**: the
    Python gates stay the sole filter for verbatim ABP content (a PHP-side ABP guard would mean
@@ -103,9 +109,9 @@ through that same message format.
    `detected=<count>`. Python never logs the line itself — sinks stay PHP-only, consistent
    with item 2. **Deliberate line-class SKIPS are not rejects** and stay uncounted: comments,
    cosmetic/element-hiding rules, path/wildcard anchors, IP-valued anchors (the PHP firewall
-   path by design), non-DNS `$options`, `$badfilter` rules. *Recommended (2026-07-04,
-   non-binding): exactly the two buckets `shape` + `wire_cap` at first — a per-skip-class
-   census is a debugging tool, not an operator signal.*
+   path by design), non-DNS `$options`, `$badfilter` rules. *Buckets (RESOLVED 2026-07-04):
+   exactly the two buckets `shape` + `wire_cap` — a per-skip-class census is a debugging
+   tool, not an operator signal.*
 
 ### Per-area decision table
 
