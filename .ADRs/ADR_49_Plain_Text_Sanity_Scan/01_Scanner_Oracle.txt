@@ -1,0 +1,157 @@
+================================================================================
+PHASE 1 PROMPT — Pure pfb_text_sanity() scanner + oracle tests
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_49_Plain_Text_Sanity_Scan/ADR.md   (read §1, §2 item 1 + §2.1 RESOLVED, §4, §7)
+================================================================================
+
+Run /ponytail:ponytail full
+
+ROLE
+Branch: adr/49-plain-text-sanity-scan (off devel)
+Phase 1 of 3 — behaviour-ADDING (one new pure helper; no call-site change).
+Work ENTIRELY inside the worktree you were given (`git -C <worktree> ...`).
+Do NOT touch the main checkout. One commit, push directly.
+
+WHY THIS PHASE EXISTS
+A feed URL that returns an HTML error/captcha page, a truncated body, or binary
+garbage can be classified as an allow-listed text type and pass the MIME gate,
+then fail opaquely during parsing or silently import a near-empty list (#581).
+This phase lands a pure content-sanity scanner, fully unit-tested. Phase 2 adds
+the config field and wires it; Phase 3 does smoke + the false-positive survey.
+This phase changes NO behaviour on its own (the function is added, unused).
+
+REQUIRED READING
+- .ADRs/ADR_49_Plain_Text_Sanity_Scan/ADR.md — §2 item 1 + §2.1 (RESOLVED) are
+  the binding spec. §7 reject criteria.
+- CLAUDE.md — Test coverage non-negotiables; PHP standards (tabs, uppercase
+  TRUE/FALSE, PHP 8.3, no die/exit in library code).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc:
+    * pure-helper block — pfb_octet_recover_type (L830), pfb_archive_missing_tool
+      (L845), pfb_validate_log_line (L872), pfb_validate_log (L885). The new
+      scanner goes at the END of this block, right after pfb_validate_log and
+      BEFORE pfb_filter (L988), same doc-comment style as its siblings.
+    * The existing control-char check inside pfb_filter (L1004-1043) — this ADR
+      COMPLEMENTS it (argument-level vs body-level); do NOT touch it.
+- tests/php/PfbMimeNormaliseTest.php — the oracle-test house style to copy:
+  declare(strict_types=1); #[CoversFunction('...')]; final class <X>Test.
+- tests/php/bootstrap.php — loads the REAL pfblockerng.inc off-appliance; no
+  pfSense required.
+
+ACTION PLAN (ordered)
+
+1. Add the pure scanner to pfblockerng.inc (end of the pure-helper block):
+
+       function pfb_text_sanity(string $sample): ?string
+
+   Returns NULL if the sample looks like plausible blocklist text, else a short
+   reason token. PURE: string in, ?string out, no I/O, no globals. BYTE-LEVEL
+   matching only — NO `/u` modifier anywhere (every pattern below is ASCII; byte
+   matching cannot be flipped by a chunk-truncated multibyte tail — §2.1).
+
+   Evaluate in THIS order, first hit wins:
+
+   a) 'nul_bytes' — if the sample contains ANY NUL byte
+      (strpos($sample, "\x00") !== FALSE). NUL in a text feed is unambiguous.
+
+   b) 'html_error_page' — if the sample, left-trimmed of leading whitespace,
+      begins (case-insensitive) with "<!doctype html" OR "<html", AND NONE of the
+      first 20 lines is a "blocklist-shaped" line. Blocklist-shaped = any ONE of:
+        - an IPv4/IPv6 address or CIDR;
+        - a hosts-style line: an IP, whitespace, then a domain token;
+        - a bare or ABP-wrapped domain.tld token (e.g. `example.org`,
+          `||example.org^`).
+      (This is the false-positive guard: an HTML-ish feed that DOES carry
+      blocklist lines is NOT flagged.)
+
+   c) 'below_min_content' — floor = 1: if the sample has ZERO non-blank,
+      non-comment lines. A comment line begins with '#' or '!' after trimming
+      leading whitespace. A legitimate single data line passes.
+      This is a LINE-count floor, NEVER a byte-size floor: a short feed (well
+      under 8 KiB, even a few bytes) is a COMPLETE sample, not a truncated one —
+      do NOT add any "sample too small / too short" heuristic. The 8 KiB is only
+      the read cap Phase 2 applies; the scanner receives whatever bytes exist.
+
+   d) otherwise NULL.
+
+   Doc-comment states the three tokens, the verdict order, and the byte-level /
+   default-off contract (professional grammar). The scanner does NOT know the
+   MIME or the flag — Phase 2 owns the gating (MIME scope + pfb_feed_sanity).
+
+2. NO call-site changes. NO config field (Phase 2). NO GUI.
+
+TEST COVERAGE (five non-negotiables; this phase ADDS behaviour — red->green)
+
+New file tests/php/PfbTextSanityTest.php (#[CoversFunction('pfb_text_sanity')]).
+BRANCH COVERAGE — every verdict AND its guard, each an intent-named test:
+- Real blocklist samples -> NULL: a plain IPv4/CIDR list; a hosts-style
+  `0.0.0.0 domain` list; an ABP `||domain^` list; a single legitimate data line
+  (proves floor=1 passes one line); a TINY feed of just a few bytes (e.g.
+  "1.2.3.4\n") -> NULL (proves a short body is complete, NOT size-penalised); a
+  comment-header-then-data body (`# license\n# ...\n0.0.0.0 x.example`) -> NULL
+  (comments don't count against the floor but the data line satisfies it).
+- 'nul_bytes': a sample with an embedded "\x00" -> 'nul_bytes', INCLUDING a
+  sample that is otherwise valid blocklist text (proves NUL wins first).
+- 'html_error_page': "<!doctype html>...</html>" with no blocklist token -> the
+  token; "<html>" lower/upper/mixed case + leading whitespace/newlines -> still
+  fires (case + leading-whitespace tolerance). GUARD: an HTML body that ALSO
+  contains a blocklist-shaped line in the first 20 -> NULL (not flagged).
+- 'below_min_content': empty string -> 'below_min_content'; whitespace-only ->
+  same; comment-only body (`# a\n! b\n`) -> same (zero non-comment lines).
+- Order proof: a NUL-bearing HTML error page -> 'nul_bytes' (a->b), and an
+  all-comment HTML-less body -> 'below_min_content'.
+- Truncation: an 8 KiB sample whose final line is cut mid-token, and a sample
+  whose last bytes are a split multibyte UTF-8 char -> the multibyte tail does
+  NOT change the verdict (byte-level; construct one valid-blocklist case that
+  stays NULL with a dangling partial multibyte byte appended).
+
+Red->green evidence: run PfbTextSanityTest against the PRE-change code (before
+adding the function, or stash the inc edit) — it MUST FAIL (undefined function).
+Record the red output in the handoff; then show green post-change.
+
+CONSTRAINTS
+- Exactly ONE new function; do NOT touch pfb_filter(), pfb_download(), the
+  control-char check, or any call site. No config field, no www/ change.
+- PHP 8.3; tabs; uppercase TRUE/FALSE literals (phpcs sniff enforces).
+- BYTE-LEVEL only — reject any `/u` modifier. No mb_* needed.
+- No enum/validation layer for the token (ponytail: siblings return plain
+  strings; the three tokens are a fixed vocabulary owned here).
+
+VERIFICATION
+- vendor/bin/phpunit -> green (existing + PfbTextSanityTest)
+- php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc -> clean
+- vendor/bin/phpstan analyse (repo config) -> no new errors
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/ -> clean
+- git -C <worktree> diff --stat -> pfblockerng.inc + 1 new test file only
+
+SELF-REVIEW BEFORE THE HANDOFF
+Read your own `git diff`. Confirm: the scanner is pure (no I/O/globals); every
+verdict token has an oracle AND its guard (the html-with-blocklist-line NULL
+case, the single-line NULL case); the order (nul -> html -> below_min) is proven;
+byte-level (no `/u`); the red->green evidence is real. Fix and re-verify if off.
+
+EXPECTED RESULT
+- pfb_text_sanity() exists, unused as yet, fully oracle-pinned.
+- Zero behaviour change for any existing code path.
+- tests/php/FeedCorpusSurveyTest.php's survey test (from PR #827) now ACTIVATES
+  automatically (function_exists becomes TRUE): confirm `vendor/bin/phpunit
+  --filter FeedCorpusSurveyTest` no longer skips the survey, and it PASSES
+  (zero false positives on the committed corpus). If it FAILS, a real feed
+  tripped the heuristic — that is the survey doing its job: report the flagged
+  feeds in the handoff (Phase 3 owns the acceptance decision; do NOT loosen the
+  scanner just to make the survey green without analysis).
+
+COMMIT (single)
+    pfblockerng: add pure plain-text feed sanity scanner (ADR-49 P1)
+Push directly to adr/49-plain-text-sanity-scan.
+
+HANDOFF — write RESULTS/01_Results.txt
+Include:
+- pfb_text_sanity() signature + line number; the three tokens + verdict order.
+- Red->green evidence (the pre-change failure output).
+- The FeedCorpusSurveyTest survey result (now un-skipped): PASS, or the list of
+  flagged feeds if any — Phase 3 needs this.
+- PHPUnit/phpstan/phpcs summaries; commit hash + push confirmation.
+- Watch-out for Phase 2: the wire point is pfb_download after the FILE_MIME
+  accept (pfblockerng.inc ~L9399-9403); scan ONLY text/plain|text/html|text/csv,
+  ONLY when pfb_feed_sanity is on; reject via pfb_validate_log(header,
+  'plaintext', reason, ...).

@@ -1,6 +1,6 @@
 # ADR-49: Opt-in plain-text feed sanity scanning
 
-- **Status:** **Proposed** (2026-06-28; facts refreshed + open forks recorded 2026-07-03 — see §2.1; phase prompts not yet authored, blocked on those forks) — heuristic, non-zero false-positive risk; ships **default-off** and stays Proposed until the §7 false-positive survey clears it
+- **Status:** **Proposed** (2026-06-28; facts refreshed 2026-07-03; §2.1 forks RESOLVED + phase prompts authored 2026-07-04) — heuristic, non-zero false-positive risk; ships **default-off** and stays Proposed until the §7 false-positive survey clears it. The survey harness + offline feed corpus already landed (PR #827: `scripts/fetch_feed_corpus.py`, `tests/fixtures/feed_corpus/`, `tests/php/FeedCorpusSurveyTest.php` — the survey test activates the moment `pfb_text_sanity()` exists).
 - **Date:** 2026-06-28
 - **Branch:** `adr/49-plain-text-sanity-scan` (off `devel`) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfblockerng.inc`, `pfblockerng_extra.inc` (PfbConfig field)
 - **Target runtime:** PHP 8.3, FreeBSD / pfSense
@@ -49,35 +49,29 @@ logs *through* it); changing the existing control-char check (kept; this complem
    **reason token** (`nul_bytes` | `html_error_page` | `below_min_content`) if it does not.
    No I/O; the caller reads the sample and passes it in.
 
-   **Open forks (resolve BEFORE authoring the phase prompts — the heuristic is currently
-   unquantified, so its threshold-boundary unit tests cannot be enumerated):**
+   **Forks RESOLVED (2026-07-04 — all three settled on the recommended defaults; these are now
+   the binding spec for the phase prompts):**
 
-   - **Parameters:** sample size ("first few KB" — how many bytes?), the non-blank/non-comment
-     line floor, the NUL/"excess binary" threshold, the "blocklist-shaped line" token regex and
-     its first-N-lines window. *Recommended (2026-07-03, non-binding): sample = first 8 KiB;
-     `nul_bytes` = ANY `\x00` in the sample (NUL in a text feed is unambiguous — no ratio
-     heuristic); `below_min_content` floor = 1 (fires only on zero non-blank, non-comment
-     lines — a legitimate single-line feed passes, which is the ADR's own stated FP guard);
-     `html_error_page` = sample opens with `<!doctype html`/`<html` (case-insensitive,
-     leading-whitespace-tolerant) AND zero blocklist-shaped lines in the first 20 lines, where
-     blocklist-shaped = an IP/CIDR, or a hosts-style `IP<ws>domain`, or a bare/ABP-wrapped
-     `domain.tld` token.*
-   - **MIME scope of "text branches":** enumerate the exact MIMEs scanned. Two known self-FPs
-     as currently sketched: a **minified one-line JSON feed** (`application/json` is
-     allow-listed) trips `below_min_content`; `inode/x-empty` (also allow-listed — an empty
-     200 body) reaches the text branch. Decide per-MIME exclusion or per-format rules.
-     *Recommended (2026-07-03, non-binding): scan `text/plain`, `text/html`, `text/csv` only;
-     exclude `application/json`/`application/x-ndjson` (structured formats — a parse failure
-     is already loud, and line-count heuristics are meaningless for minified JSON) and
-     `inode/x-empty` (an empty body is its own signal; rejecting it is a behaviour change
-     beyond this ADR's scope).*
-   - **Encoding/fail-mode:** byte-level or `/u` matching, and the verdict on an
-     invalid-UTF-8 sample (a chunk boundary can split a multibyte char and make `/u`
-     `preg_match` return FALSE). The sibling control-char check's precedent is fail-closed
-     (`a13effe3`); pin a stance either way. *Recommended (2026-07-03, non-binding):
-     byte-level (no `/u`) — every pattern above is pure ASCII, byte matching cannot be flipped
-     by a chunk-truncated multibyte char, and it sidesteps the fail-open/fail-closed question
-     entirely (a truncated UTF-8 tail is simply bytes that match or don't).*
+   - **Parameters:** sample = **up to the first 8 KiB** — a read **cap, NOT a minimum**. A feed
+     shorter than 8 KiB is read whole; its sample is complete, not truncated, and is **never
+     penalised for its size**. `nul_bytes` = **ANY `\x00`** in the sample (NUL in a text feed is
+     unambiguous — no ratio heuristic; checked first). `below_min_content` floor = **1** — a
+     **line-count** floor, never a byte-size threshold: fires only on **zero** non-blank,
+     non-comment lines (a comment line begins with `#` or `!` after trimming); a legitimate
+     single-line — even single-byte — feed passes, which is the ADR's own stated FP guard. `html_error_page`
+     = the sample, left-trimmed of whitespace, **opens (case-insensitive) with `<!doctype html`
+     or `<html`** AND has **zero blocklist-shaped lines in the first 20 lines**, where
+     blocklist-shaped = an IP/CIDR, a hosts-style `IP<ws>domain`, or a bare/ABP-wrapped
+     `domain.tld` token. Verdict order: `nul_bytes` → `html_error_page` → `below_min_content` → `null`.
+   - **MIME scope of "text branches":** scan **`text/plain`, `text/html`, `text/csv` only**.
+     Exclude `application/json`/`application/x-ndjson` (structured formats — a parse failure is
+     already loud, and line-count heuristics are meaningless for minified JSON) and
+     `inode/x-empty` (an empty body is its own signal; rejecting it is a behaviour change beyond
+     this ADR's scope).
+   - **Encoding/fail-mode:** **byte-level (no `/u`)** — every pattern above is pure ASCII, byte
+     matching cannot be flipped by a chunk-truncated multibyte char, and it sidesteps the
+     fail-open/fail-closed question entirely (a truncated UTF-8 tail is simply bytes that match
+     or don't).
 
 2. **One registered PfbConfig field (ADR-28/29): `pfb_feed_sanity`** — a `PfbToggle`,
    **default off**. When off, `pfb_text_sanity()` is never consulted (zero behaviour change —
@@ -175,11 +169,14 @@ sample is rejected; with it off (default), unchanged. Round-trip test for the fi
 
 Smoke: flag-on rejects an HTML-error-page feed and still imports a healthy one; flag-off is a
 no-op. The false-positive survey is **automated, not a manual sign-off** (per CLAUDE.md "ADR
-acceptance"): a dispatch-only script walks the **in-tree feed catalogue**
-(`src/usr/local/www/pfblockerng/pfblockerng_feeds.json`, ~295 `url` entries), fetches the
-first N KB of each reachable feed, runs it through `pfb_text_sanity()`, and asserts **zero
-non-`null` verdicts**; persist the run's results under `RESULTS/`. Live catalogue drift after
-the survey is the documented out-of-CI limitation.
+acceptance") and now runs **OFFLINE** against a committed corpus rather than fetching live:
+PR #827 already captured the catalogue once (`scripts/fetch_feed_corpus.py` → the 8 KiB samples
+in `tests/fixtures/feed_corpus/`), and `tests/php/FeedCorpusSurveyTest.php` runs every non-archive
+text sample through `pfb_text_sanity()` asserting **zero non-`null` verdicts**. That survey test
+is `markTestSkipped` until `pfb_text_sanity()` exists (Phase 1), then activates automatically —
+so once the scanner lands the survey is a normal `vendor/bin/phpunit` gate, no network, no
+dispatch. Persist the passing run's output under `RESULTS/`. Live catalogue drift after the
+capture is the documented out-of-CI limitation; refresh the corpus by re-running the fetch script.
 
 ---
 
@@ -191,10 +188,11 @@ the survey is the documented out-of-CI limitation.
 - `tests/smoke/test_smoke_feeds.py` (CE + Plus): flag-on rejects an error-page feed
   (`stage=plaintext`) and imports a healthy text feed; flag-off reproduces today's behaviour.
 
-**Stays Proposed until:** the automated catalogue survey (§6 Phase 3 — the in-tree
-`pfblockerng_feeds.json` URLs through `pfb_text_sanity()`, zero non-`null`, results persisted
-under `RESULTS/`) passes. Only then → Accepted; a default-on change is a separate decision.
-Post-survey catalogue drift is the documented out-of-CI limitation, not part of the gate.
+**Stays Proposed until:** the automated catalogue survey passes — the OFFLINE
+`tests/php/FeedCorpusSurveyTest.php` (§6 Phase 3) running the committed feed corpus (PR #827)
+through `pfb_text_sanity()` with **zero non-`null`** verdicts, results persisted under `RESULTS/`.
+Only then → Accepted; a default-on change is a separate decision. Post-capture catalogue drift is
+the documented out-of-CI limitation, not part of the gate.
 
 **Reject criteria:**
 

@@ -1,0 +1,133 @@
+================================================================================
+PHASE 3 PROMPT — Live-VM smoke + the offline false-positive survey (acceptance gate)
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_49_Plain_Text_Sanity_Scan/ADR.md   (read §2.1, §5, §6 Phase 3, §7)
+================================================================================
+
+Run /ponytail:ponytail full
+
+ROLE
+Branch: adr/49-plain-text-sanity-scan (off devel) — CONTINUES Phases 1-2.
+Phase 3 of 3 — behaviour-VERIFYING (smoke proves the wired gate; the survey is
+the acceptance gate). Work ENTIRELY inside the worktree. One commit, push.
+FIRST: read RESULTS/01_Results.txt + RESULTS/02_Results.txt. They give the
+scanner tokens, the reject shape to grep, and the config knob. If either is
+missing, STOP and report.
+
+WHY THIS PHASE EXISTS
+Phase 1 added the scanner (unit-pinned), Phase 2 wired it default-off. Live
+pfb_download() runs shell/exec, so its gate is only provable on a real VM
+(ADR-04). This phase proves flag-on rejects an HTML-error text feed and flag-off
+is a no-op, and runs the OFFLINE false-positive survey that gates the ADR's flip
+to Accepted (§7).
+
+REQUIRED READING
+- .ADRs/ADR_49_Plain_Text_Sanity_Scan/ADR.md — §5 (smoke fixture platform check:
+  the MIME gate uses on-box file(1), NOT HTTP Content-Type), §6 Phase 3, §7.
+- CLAUDE.md — "Smoke tests (ADR-04)" (probe on-box, block shapes, tcsh->/bin/sh,
+  fixtures = inert RFC5737/3849 + uuid-*.com, never RFC6761/HSTS); Test coverage
+  (branch coverage + assert the before-state).
+- tests/smoke/test_smoke_feeds.py — the house style. Closest analog:
+  test_feed_internal_filter_blocks_then_allowlist_exempts (~L204) — a
+  pfb_download() entry-vetting reject asserted via h.count_log_marker on
+  h.PFB_LOG, before/after. Reuse: mock_feeds.feed_url("<name>"), h.IpCase, the
+  deployed_vm fixture.
+- tests/smoke/fixtures/README.md — the FreeBSD-verified-corpus convention (record
+  each fixture's on-box file(1) verdict).
+- tests/php/FeedCorpusSurveyTest.php (PR #827) — the survey. Its
+  testCatalogueSurveyHasZeroFalsePositives activates the moment pfb_text_sanity()
+  exists (Phase 1). Its #[CoversFunction] was removed in #827 to avoid a
+  coverage warning on the then-undefined function — RE-ADD it now that the
+  function exists (import PHPUnit\Framework\Attributes\CoversFunction and
+  #[CoversFunction('pfb_text_sanity')] on the class) and confirm no warning.
+
+ACTION PLAN (ordered)
+
+1. Add an HTML-error-page fixture: tests/smoke/fixtures/html_error_page.html
+   (or .txt — pick the extension that makes FreeBSD file(1) call it an
+   ALLOW-LISTED text type; the gate classifies by bytes). Contents: a realistic
+   error/captcha page — `<!doctype html><html>...403 Forbidden...</html>` — with
+   NO blocklist-shaped line anywhere (no IP, no CIDR, no domain.tld token), so
+   pfb_text_sanity() returns 'html_error_page'. Inert only (no real hosts).
+   VERIFY its on-box classification on a live CE box (`file -b --mime-type` over
+   SSH via /bin/sh) is one of text/plain|text/html|text/csv — if libmagic calls
+   it something else (the ADR-45 lesson), adjust the fixture until it lands on a
+   scanned text type. Record the verdict in fixtures/README.md.
+   Add a healthy control fixture too if none fits: a plain text feed that MUST
+   pass the scan (e.g. reuse ip_plain_cidr.txt / dnsbl_plain.txt).
+
+2. Add smoke cases to test_smoke_feeds.py (marker `smoke`). Set the knob via the
+   same config path Phase 2 registered — pfb_feed_sanity — written through
+   PfbConfig on-box (php_eval: PfbConfig::write('pfb_feed_sanity', ...) +
+   write_config), default OFF. Drive pfb_download() over mock_feeds.feed_url the
+   way the sibling feed tests do.
+
+   BRANCH COVERAGE + assert-the-before-state (one transition test is cleanest):
+   a) flag OFF (default): update the HTML-error feed -> it is NOT rejected for
+      plaintext (no stage=plaintext line appears; count_log_marker == 0). This is
+      the before-state that proves the flag CAUSES the change.
+   b) flag ON: re-run the SAME feed -> rejected with the ADR-48 canonical line
+      stage=plaintext (count_log_marker goes 0 -> >=1). Grep the RENDERED line
+      `pfb_validate: REJECT feed=<header>_v4 ... stage=plaintext reason=html_error_page`
+      — mind the on-box `_v4` family suffix and the htmlspecialchars-escaped form
+      (per the Phase 2 / ADR-48 handoff). Print expected-vs-actual on failure.
+   c) flag ON + a HEALTHY text feed -> still imports (NOT rejected); proves the
+      scan is a real branch, not an always-reject path.
+   Follow the count-before / act / count-after shape of the internal_filter test.
+
+3. Run the OFFLINE survey (the acceptance gate):
+   `vendor/bin/phpunit --filter FeedCorpusSurveyTest` — the survey must PASS with
+   ZERO false positives over the committed corpus. If ANY real feed is flagged,
+   that is the survey doing its job: STOP and report the flagged feeds + their
+   verdict tokens in the handoff. Do NOT loosen the scanner to force a green
+   survey — a genuine false positive is a design decision for the maintainer
+   (it may mean a threshold needs revisiting, which is a scanner change, not a
+   survey edit). Persist the passing survey output under
+   RESULTS/03_Survey.txt (the §7 "results persisted under RESULTS/" requirement).
+
+CONSTRAINTS
+- Fixtures inert: RFC5737/3849 IPs, uuid-*.com only; never RFC6761 TLDs or
+  HSTS-preload names (though the error-page fixture should carry NO feed hosts at
+  all).
+- Drive the guest via /bin/sh (root's login shell is tcsh); probe/inspect on-box.
+- No www/ change (config-only knob) ⇒ no ADR-14 UI tier required.
+- The survey is offline (no network at test time); do NOT reintroduce a live
+  catalogue fetch.
+
+VERIFICATION
+- vendor/bin/phpunit -> green incl. FeedCorpusSurveyTest survey (zero FP) with
+  the #[CoversFunction] re-added and NO coverage warning.
+- The smoke module imports cleanly (python -m pytest --collect-only
+  tests/smoke/test_smoke_feeds.py); ruff clean.
+- The live legs (flag-on reject, flag-off no-op, healthy import) — run them on a
+  box you can reach, or dispatch the smoke fan-out (CE + Plus) per CLAUDE.md
+  selective-dispatch; record the run URL + result in the handoff. Per CLAUDE.md
+  "ADR acceptance", green CE+Plus smoke + the survey are the acceptance evidence
+  (no separate manual sign-off).
+
+SELF-REVIEW BEFORE THE HANDOFF
+Confirm: the fixture's on-box file(1) verdict is a scanned text type (recorded in
+README); the smoke asserts the before-state (flag-off no reject) AND the after
+(flag-on reject) AND the healthy-import branch; the survey passed zero-FP with the
+covers attribute restored and no warning; failure diagnostics print expected-vs-
+actual. Fix and re-verify if off.
+
+EXPECTED RESULT
+- Live smoke proves the opt-in gate: default-off imports the error page; on
+  rejects it (stage=plaintext) and still imports a healthy feed.
+- The offline survey passes zero-FP over the real catalogue corpus.
+- ADR-49 is ready to flip to Accepted on green CE+Plus smoke + the survey.
+
+COMMIT (single)
+    pfblockerng: smoke + zero-FP survey for plain-text sanity scan (ADR-49 P3)
+Push directly to adr/49-plain-text-sanity-scan.
+
+HANDOFF — write RESULTS/03_Results.txt
+Include:
+- The fixture(s) added + each one's on-box file(1) verdict.
+- The smoke cases + the exact reject marker grepped; the before/after counts.
+- The survey result (PASS / flagged feeds) + the path RESULTS/03_Survey.txt.
+- The live smoke run URL(s) + CE/Plus result, or why it could not run.
+- Whether ADR-49 can flip to Accepted (survey green + smoke green) — and the
+  remaining default-on decision is explicitly OUT of scope (a separate ADR/PR).
+- PHPUnit/ruff summaries; commit hash + push confirmation.
