@@ -153,12 +153,18 @@ final class FeedCorpusSurveyTest extends TestCase
 				. 'and gates the ADR\'s flip to Accepted (§7)'
 			);
 		}
+		// Self-encapsulated floor: the zero-FP assertion must never pass vacuously on a
+		// degraded/emptied corpus (e.g. this test run alone via --filter). Don't lean on
+		// the sibling coherence test's >100 count to establish there is anything to survey.
+		$this->assertNotEmpty(self::textSamples(), 'no text samples to survey — the corpus is degraded');
 		$flagged = [];
 		$stale = [];
+		$matched = [];
 		foreach (self::textSamples() as $feed) {
 			$sample = (string) file_get_contents(self::CORPUS_DIR . '/' . $feed['sample_file']);
 			$verdict = pfb_text_sanity($sample);
 			if (isset(self::KNOWN_NON_FEED[$feed['header']])) {
+				$matched[$feed['header']] = TRUE;
 				// A known non-feed sample MUST stay flagged: if it now passes, the feed
 				// came back or the capture changed, so the exclusion is stale.
 				if ($verdict === NULL) {
@@ -181,6 +187,18 @@ final class FeedCorpusSurveyTest extends TestCase
 			$stale,
 			"KNOWN_NON_FEED exclusions that are no longer flagged (stale — re-check the feed and remove the entry):\n"
 			. implode("\n", $stale)
+		);
+		// Completeness: every KNOWN_NON_FEED key must have been encountered in the corpus.
+		// A feed dropped/renamed in the catalogue makes its exclusion inert (visited by
+		// neither the flagged nor the stale branch), so a dead entry would rot undetected
+		// while reading as "still validated" — fail loudly instead, mirroring the reverse-
+		// coherence orphan guard in testCorpusIsPresentAndCoherent.
+		$dead = array_values(array_diff(array_keys(self::KNOWN_NON_FEED), array_keys($matched)));
+		$this->assertSame(
+			[],
+			$dead,
+			"KNOWN_NON_FEED entries no longer present in the corpus (dropped/renamed feed — remove them or refresh the corpus):\n"
+			. implode("\n", $dead)
 		);
 	}
 }

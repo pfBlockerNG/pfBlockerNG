@@ -3442,7 +3442,10 @@ def test_feed_sanity_flag_on_still_imports_healthy_feed(deployed_vm: SmokeVM, mo
     try:
         # Given -- scan ON, alias absent, no pre-existing reject line for this fresh header.
         h.set_feed_sanity(deployed_vm, True)
-        assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the healthy feed was loaded"
+        tables_before = h.pfctl_tables(deployed_vm)
+        assert spec.alias not in tables_before, (
+            f"{spec.alias} present before the healthy feed was loaded; pfctl tables: {tables_before}"
+        )
         before = h.count_log_marker(deployed_vm, h.PFB_LOG, reject_marker)
 
         with h.CaseContext(deployed_vm, spec):

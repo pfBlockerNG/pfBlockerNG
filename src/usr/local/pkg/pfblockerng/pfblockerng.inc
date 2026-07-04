@@ -9976,18 +9976,28 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			return FALSE;
 		}
 
-		// ADR-49: opt-in plain-text sanity scan on accepted text feeds. Flag check
-		// FIRST -- default-off short-circuits before the MIME check and the file
-		// read, so an off install is byte-for-byte unchanged (ADR-28 conv 2).
+		// ADR-49: opt-in plain-text sanity scan on accepted text feeds. The flag is
+		// checked FIRST -- when default-off it short-circuits before THIS scan's own
+		// MIME-scope check (the in_array below) and the sample read, so an off install
+		// adds no work here (ADR-28 conv 2). ($file_type was already produced by the
+		// upstream FILE_MIME check above; this gate only narrows to the text types.)
+		// 'application/csv' rides with 'text/csv' -- same CSV body, just a different
+		// libmagic verdict (both are allow-listed synonyms; see pfb_filter FILE_MIME).
 		if (PfbConfig::read('pfb_feed_sanity') === PfbToggle::On &&
-			in_array($file_type, array('text/plain', 'text/html', 'text/csv'), TRUE)) {
+			in_array($file_type, array('text/plain', 'text/html', 'text/csv', 'application/csv'), TRUE)) {
 			// Read UP TO 8 KiB -- a cap, not a minimum; a shorter feed is read whole.
-			$pfb_sanity_sample = (string) @file_get_contents($file_download, FALSE, NULL, 0, 8192);
-			$pfb_sanity = pfb_text_sanity($pfb_sanity_sample);
-			if ($pfb_sanity !== NULL) {
-				pfb_validate_log($header, 'plaintext', $pfb_sanity, basename($file_download));
-				unlink_if_exists($file_download);
-				return FALSE;
+			$pfb_sanity_sample = @file_get_contents($file_download, FALSE, NULL, 0, 8192);
+			// A read error (FALSE) is NOT an empty feed: skip the scan (fail-open) so a
+			// transient I/O glitch is not mislogged as below_min_content and the feed --
+			// already MIME-validated -- proceeds instead of being wrongly dropped. A truly
+			// empty (0-byte) feed reads as '' (not FALSE), so below_min_content still fires.
+			if ($pfb_sanity_sample !== FALSE) {
+				$pfb_sanity = pfb_text_sanity($pfb_sanity_sample);
+				if ($pfb_sanity !== NULL) {
+					pfb_validate_log($header, 'plaintext', $pfb_sanity, basename($file_download));
+					unlink_if_exists($file_download);
+					return FALSE;
+				}
 			}
 		}
 
