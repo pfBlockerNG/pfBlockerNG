@@ -59,7 +59,9 @@ final class SanitizeIpaddrTest extends TestCase
 	public function testSuppressionKeepsPublicIp(): void
 	{
 		$GLOBALS['pfb']['supp'] = 'on';
-		$this->assertSame('192.0.2.5', sanitize_ipaddr('192.0.2.5/32', false, 'Disabled'));
+		// 192.0.2.5 (RFC 5737 documentation space) no longer qualifies as
+		// "public" under issue #760 — use a genuinely routable address.
+		$this->assertSame('1.1.1.1', sanitize_ipaddr('1.1.1.1/32', false, 'Disabled'));
 	}
 
 	public function testSuppressionDropsPrivateIp(): void
@@ -84,8 +86,70 @@ final class SanitizeIpaddrTest extends TestCase
 	public function testAdvancedCidrFloorClampsToSlash32(): void
 	{
 		$GLOBALS['pfb']['supp'] = 'on';
-		// mask 8 < floor 24 -> clamped to /32 (public TEST-NET-2 survives the filter).
-		$this->assertSame('198.51.100.0/32', sanitize_ipaddr('198.51.100.0/8', false, 24));
+		// mask 8 < floor 24 -> clamped to /32 (public address survives the filter).
+		// 198.51.100.0 (TEST-NET-2) would no longer survive under issue #760, so
+		// this exemplar uses a genuinely routable /8.
+		$this->assertSame('1.1.1.0/32', sanitize_ipaddr('1.1.1.0/8', false, 24));
+	}
+
+	// --- Additional reserved classes dropped under Suppression (issue #760) ---
+	//
+	// FILTER_FLAG_NO_PRIV_RANGE|NO_RES_RANGE keep documentation, multicast,
+	// CGN, benchmarking and the deprecated 6to4 relay anycast prefix
+	// routable; sanitize_ipaddr() explicitly drops these under Suppression,
+	// judged on the address part only — the CIDR span is not inspected.
+
+	public function testSuppressionDropsDocumentationRange(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
+		$this->assertNull(sanitize_ipaddr('192.0.2.5/32', false, 'Disabled'), 'documentation (RFC 5737) is dropped');
+	}
+
+	// CIDR-form pin: the network address of a documentation /24 is judged the
+	// same as a bare host — the mask itself is never inspected.
+	public function testSuppressionDropsDocumentationRangeCidr(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
+		$this->assertNull(sanitize_ipaddr('198.51.100.0/24', false, 'Disabled'), 'documentation (RFC 5737) is dropped');
+	}
+
+	public function testSuppressionDropsMulticastRange(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
+		$this->assertNull(sanitize_ipaddr('224.0.0.1/32', false, 'Disabled'), 'multicast (224.0.0.0/4) is dropped');
+	}
+
+	public function testSuppressionDropsCgnRange(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
+		$this->assertNull(sanitize_ipaddr('100.64.0.1/32', false, 'Disabled'), 'CGN (RFC 6598) is dropped');
+	}
+
+	public function testSuppressionDropsBenchmarkingRange(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
+		$this->assertNull(sanitize_ipaddr('198.18.0.1/32', false, 'Disabled'), 'benchmarking (RFC 2544) is dropped');
+	}
+
+	public function testSuppressionDrops6to4RelayRange(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
+		$this->assertNull(sanitize_ipaddr('192.88.99.1/32', false, 'Disabled'), '6to4 relay anycast (deprecated) is dropped');
+	}
+
+	// Suppression off keeps the same documentation-range address — proves the
+	// new drop is gated on Suppression, not an unconditional block.
+	public function testSuppressionOffKeepsDocumentationRange(): void
+	{
+		$this->assertSame('192.0.2.5', sanitize_ipaddr('192.0.2.5/32', false, 'Disabled'));
+	}
+
+	// A custom list bypasses the new drop, same as every other suppressed
+	// class.
+	public function testCustomListBypassesSuppressionForDocumentationRange(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
+		$this->assertSame('192.0.2.5', sanitize_ipaddr('192.0.2.5/32', true, 'Disabled'));
 	}
 
 	// --- RFC 4632-invalid prefix lengths are dropped, never rewritten (#719) ---
@@ -162,11 +226,12 @@ final class SanitizeIpaddrTest extends TestCase
 	// The /0 is clamped to a host up front, so under suppression it no longer
 	// slips past the Advanced CIDR floor as an "empty" mask — the result is
 	// the same single host, not an unclamped /0. Regression PIN (same
-	// accidental end-state as above, now deliberate).
+	// accidental end-state as above, now deliberate). Uses a genuinely
+	// routable address (198.51.100.x would now be dropped under issue #760).
 	public function testFeedSlashZeroUnderSuppressionCidrFloorStillSingleHost(): void
 	{
 		$GLOBALS['pfb']['supp'] = 'on';
-		$this->assertSame('198.51.100.7', sanitize_ipaddr('198.51.100.7/0', false, 24));
+		$this->assertSame('1.1.1.7', sanitize_ipaddr('1.1.1.7/0', false, 24));
 	}
 
 	// Interaction PIN: a feed 0.0.0.0/0 under suppression is clamped to the

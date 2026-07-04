@@ -65,31 +65,47 @@ final class SanitizeIpaddrV6Test extends TestCase
 	// --- Classes the PHP filter flags do NOT drop (issue #760) ---------------
 	//
 	// FILTER_FLAG_NO_PRIV_RANGE|NO_RES_RANGE keep documentation
-	// (2001:db8::/32), multicast (ff00::/8) and NAT64 (64:ff9b::/96) space —
-	// the same permissiveness as the v4 flags (192.0.2.0/24 and 224.0.0.0/4
-	// are kept too). These pin today's behaviour; dropping these classes is a
-	// policy decision tracked in issue #760 and would flip these tests.
+	// (2001:db8::/32), multicast (ff00::/8) and NAT64 (64:ff9b::/96) space
+	// routable — the same permissiveness as the v4 flags (192.0.2.0/24 and
+	// 224.0.0.0/4 are kept too). Issue #760 resolved the policy: sanitize_
+	// ipaddr_v6() now drops these classes explicitly under Suppression via
+	// direct prefix checks rather than another filter flag, so the behaviour
+	// is independent of PHP's patch level (the RFC 6890 refactor in PHP
+	// 8.3.16/8.4.3 moved 2001:db8::/32 between filter sets — irrelevant here
+	// since these prefixes are no longer judged through filter_var()).
 
-	// 2001:db8::/32 is non-reserved only since PHP 8.3.16/8.4.3 (php-src
-	// GH-16944, the RFC 6890 range refactor); an older 8.3.x patch level
-	// DROPS it — a failure here on a stale toolchain is a PHP patch-floor
-	// problem, not a #760 policy change.
-	public function testSuppressionKeepsDocumentationRange(): void
+	public function testSuppressionDropsDocumentationRange(): void
 	{
 		$GLOBALS['pfb']['supp'] = 'on';
-		$this->assertSame('2001:db8::1', sanitize_ipaddr_v6('2001:db8::1', false), 'documentation (RFC 3849) is kept');
+		$this->assertNull(sanitize_ipaddr_v6('2001:db8::1', false), 'documentation (RFC 3849) is dropped');
 	}
 
-	public function testSuppressionKeepsMulticastRange(): void
+	public function testSuppressionDropsMulticastRange(): void
 	{
 		$GLOBALS['pfb']['supp'] = 'on';
-		$this->assertSame('ff02::1', sanitize_ipaddr_v6('ff02::1', false), 'multicast (ff00::/8) is kept');
+		$this->assertNull(sanitize_ipaddr_v6('ff02::1', false), 'multicast (ff00::/8) is dropped');
 	}
 
-	public function testSuppressionKeepsNat64Range(): void
+	public function testSuppressionDropsNat64Range(): void
 	{
 		$GLOBALS['pfb']['supp'] = 'on';
-		$this->assertSame('64:ff9b::1', sanitize_ipaddr_v6('64:ff9b::1', false), 'NAT64 (RFC 6052) is kept');
+		$this->assertNull(sanitize_ipaddr_v6('64:ff9b::1', false), 'NAT64 (RFC 6052) is dropped');
+	}
+
+	// Suppression off keeps the same documentation-range address — proves the
+	// new drop is gated on Suppression, not an unconditional block.
+	public function testSuppressionOffKeepsDocumentationRange(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'off';
+		$this->assertSame('2001:db8::1', sanitize_ipaddr_v6('2001:db8::1', false));
+	}
+
+	// A custom list bypasses the new drop, same as every other suppressed
+	// class.
+	public function testCustomListBypassesSuppressionForDocumentationRange(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
+		$this->assertSame('2001:db8::1', sanitize_ipaddr_v6('2001:db8::1', true));
 	}
 
 	// --- Suppression toggle is the cause (assert before-state, then flip) ----
