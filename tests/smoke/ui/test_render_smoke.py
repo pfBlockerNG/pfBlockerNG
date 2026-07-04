@@ -753,15 +753,15 @@ def test_dnsbl_group_policy_section_renders_above_dns_redirect(
 ) -> None:
     """The collapsible DNSBL Group Policy panel renders ABOVE the DNS Redirect section.
 
-    The panel was moved up next to the DNSBL Configuration section (which holds its
+    The panel was moved up next to the main 'DNSBL' section (which holds its pfb_gp
     enable checkbox) instead of sitting below the encrypted-DNS sections. This is a
     structural/positional change, so the order of the section markup in the rendered
     HTML is the oracle.
 
     The oracle keys on the section's unique ``Python_Group_Policy`` id, NOT the
     'DNSBL Group Policy' text — that text also appears as the enable-checkbox label
-    inside DNSBL Configuration (always above DNS Redirect), so matching it would pass
-    on the pre-change page too.
+    inside the main 'DNSBL' section (which is always above DNS Redirect), so matching
+    it would pass on the pre-change page too.
 
     Pins the change: pre-change the Group Policy section markup appeared BELOW the
     'DNS Redirect' section heading (so this assertion fails); post-change it appears
