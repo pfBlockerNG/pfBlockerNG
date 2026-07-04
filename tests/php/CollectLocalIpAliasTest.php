@@ -71,6 +71,18 @@ use PHPUnit\Framework\TestCase;
  *           array_flip() warning
  *     Then  pfb_collect_localip() completes without a TypeError and the other
  *           collected entries are unaffected
+ *
+ *   Cases I–L (nested alias references resolve transitively, issue #784 —
+ *              I/J/K/L MUST fail before the transitive expansion, pass after):
+ *     I: referenced alias listed BEFORE the referencing one (pfSense's typical
+ *        config.xml order) — members behind the nested name are collected,
+ *        including a CIDR member routed to $pfb_localsub
+ *     J: referencing alias listed BEFORE the referenced one — order must not
+ *        matter (the pre-#782 code resolved one level only in this ordering,
+ *        by accident)
+ *     K: a two-alias reference CYCLE terminates (depth cap) and still yields
+ *        both aliases' IP members
+ *     L: a three-level chain resolves through every level
  */
 #[CoversFunction('pfb_collect_localip')]
 #[CoversFunction('pfb_local_ip')]
@@ -99,6 +111,20 @@ final class CollectLocalIpAliasTest extends TestCase
 					['name' => 'Single_Host',  'address' => '203.0.113.99'],
 					['name' => 'V6_Hosts',     'address' => '2001:db8::1 2001:db8:1::/64'],
 					['name' => 'Empty_Alias',  'address' => '   '],
+					// #784 nested-alias fixtures. Referenced-first order (pfSense's
+					// typical config.xml layout):
+					['name' => 'Inner_Hosts',  'address' => '203.0.113.60 198.51.100.32/28'],
+					['name' => 'Outer_Ref',    'address' => 'Inner_Hosts 203.0.113.70'],
+					// Referencing-first order:
+					['name' => 'Outer_First',  'address' => 'Inner_Last'],
+					['name' => 'Inner_Last',   'address' => '203.0.113.80'],
+					// Reference cycle:
+					['name' => 'Cycle_A',      'address' => 'Cycle_B 203.0.113.90'],
+					['name' => 'Cycle_B',      'address' => 'Cycle_A 203.0.113.91'],
+					// Three-level chain:
+					['name' => 'Chain_L1',     'address' => 'Chain_L2'],
+					['name' => 'Chain_L2',     'address' => 'Chain_L3'],
+					['name' => 'Chain_L3',     'address' => '203.0.113.95'],
 				],
 			],
 		];
@@ -396,6 +422,157 @@ final class CollectLocalIpAliasTest extends TestCase
 			sprintf(
 				"An array-typed NAT target must be skipped (pre-#782 tolerance), leaving "
 				. "the well-formed alias target resolved.\npfb_local keys: %s",
+				implode(', ', array_keys($pfb_local))
+			)
+		);
+	}
+
+	// -------------------------------------------------------------------------
+	// Case I — nested alias, referenced-first ordering (#784: fails before fix)
+	// -------------------------------------------------------------------------
+
+	public function testNestedAliasReferencedFirstResolvesMembersAndCidr(): void
+	{
+		$GLOBALS['config']['nat']['rule'] = [
+			['target' => 'Outer_Ref'],
+		];
+
+		[$pfb_local, $pfb_localsub] = pfb_collect_localip();
+
+		$this->assertArrayHasKey(
+			'203.0.113.60',
+			$pfb_local,
+			sprintf(
+				"IP member behind nested alias 'Inner_Hosts' must be collected as local.\n"
+				. "pfb_local keys: %s",
+				implode(', ', array_keys($pfb_local))
+			)
+		);
+		$host = '198.51.100.35';
+		$this->assertTrue(
+			pfb_local_ip($host, $pfb_localsub),
+			sprintf(
+				"Host %s inside nested alias CIDR member 198.51.100.32/28 must be recognised "
+				. "via pfb_localsub.\npfb_localsub: %s",
+				$host,
+				implode(', ', $pfb_localsub)
+			)
+		);
+		$this->assertArrayHasKey(
+			'203.0.113.70',
+			$pfb_local,
+			sprintf(
+				"The referencing alias's own direct IP member must still be collected.\n"
+				. "pfb_local keys: %s",
+				implode(', ', array_keys($pfb_local))
+			)
+		);
+		$this->assertArrayNotHasKey(
+			'Inner_Hosts',
+			$pfb_local,
+			sprintf(
+				"The nested alias NAME must be consumed by expansion, never left as a key.\n"
+				. "pfb_local keys: %s",
+				implode(', ', array_keys($pfb_local))
+			)
+		);
+	}
+
+	// -------------------------------------------------------------------------
+	// Case J — nested alias, referencing-first ordering (#784: fails before fix)
+	// -------------------------------------------------------------------------
+
+	public function testNestedAliasReferencingFirstResolvesRegardlessOfOrder(): void
+	{
+		$GLOBALS['config']['nat']['rule'] = [
+			['target' => 'Outer_First'],
+		];
+
+		[$pfb_local, ] = pfb_collect_localip();
+
+		$this->assertArrayHasKey(
+			'203.0.113.80',
+			$pfb_local,
+			sprintf(
+				"Nested resolution must not depend on aliases/alias ordering: 'Outer_First' "
+				. "is stored before the 'Inner_Last' it references.\npfb_local keys: %s",
+				implode(', ', array_keys($pfb_local))
+			)
+		);
+		$this->assertArrayNotHasKey(
+			'Inner_Last',
+			$pfb_local,
+			sprintf(
+				"The nested alias NAME must be consumed by expansion, never left as a key.\n"
+				. "pfb_local keys: %s",
+				implode(', ', array_keys($pfb_local))
+			)
+		);
+	}
+
+	// -------------------------------------------------------------------------
+	// Case K — reference cycle terminates, both members collected (#784)
+	// -------------------------------------------------------------------------
+
+	public function testNestedAliasCycleTerminatesAndCollectsBothMembers(): void
+	{
+		// Given: Cycle_A references Cycle_B and vice versa. The depth cap must
+		// terminate the expansion (reaching the assertions proves it) while both
+		// aliases' IP members are still collected.
+		$GLOBALS['config']['nat']['rule'] = [
+			['target' => 'Cycle_A'],
+		];
+
+		[$pfb_local, ] = pfb_collect_localip();
+
+		$this->assertArrayHasKey(
+			'203.0.113.90',
+			$pfb_local,
+			sprintf(
+				"Cycle_A's direct IP member must be collected.\npfb_local keys: %s",
+				implode(', ', array_keys($pfb_local))
+			)
+		);
+		$this->assertArrayHasKey(
+			'203.0.113.91',
+			$pfb_local,
+			sprintf(
+				"Cycle_B's IP member (reachable only through the cycle edge) must be "
+				. "collected.\npfb_local keys: %s",
+				implode(', ', array_keys($pfb_local))
+			)
+		);
+		foreach (['Cycle_A', 'Cycle_B'] as $name) {
+			$this->assertArrayNotHasKey(
+				$name,
+				$pfb_local,
+				sprintf(
+					"Alias NAME '%s' must never survive as a \$pfb_local key.\npfb_local keys: %s",
+					$name,
+					implode(', ', array_keys($pfb_local))
+				)
+			);
+		}
+	}
+
+	// -------------------------------------------------------------------------
+	// Case L — three-level chain resolves through every level (#784)
+	// -------------------------------------------------------------------------
+
+	public function testNestedAliasThreeLevelChainResolves(): void
+	{
+		$GLOBALS['config']['nat']['rule'] = [
+			['target' => 'Chain_L1'],
+		];
+
+		[$pfb_local, ] = pfb_collect_localip();
+
+		$this->assertArrayHasKey(
+			'203.0.113.95',
+			$pfb_local,
+			sprintf(
+				"Chain_L1 -> Chain_L2 -> Chain_L3 must resolve to the leaf IP.\n"
+				. "pfb_local keys: %s",
 				implode(', ', array_keys($pfb_local))
 			)
 		);
