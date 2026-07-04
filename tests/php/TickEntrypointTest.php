@@ -30,6 +30,10 @@ use PHPUnit\Framework\TestCase;
  *   Case B — pfb_interval numeric + feed cron NOT due (future ledger entry):
  *            log maintenance still runs -- proving it is unconditional, not
  *            merely re-homed behind the same due-job gate.
+ *   Case C — issue #573 phase 2: the feed-cron next_due anchors to its own
+ *            previous next_due (via pfb_due_ledger_mark_ran_anchored), not to
+ *            wall-clock time(), so a tick that fires a fraction of a second
+ *            early does not slip the schedule a full tick interval late.
  */
 final class TickEntrypointTest extends TestCase
 {
@@ -337,5 +341,69 @@ final class TickEntrypointTest extends TestCase
 		$this->assertSame(0, filesize($errlogPath),
 			"After tick with feed cron NOT due: expected 'errlog' still fully cleared, got "
 			. filesize($errlogPath) . ' bytes');
+	}
+
+	// -----------------------------------------------------------------------
+	// issue #573 (phase 2) -- the feed-cron next_due must anchor to its own
+	// PREVIOUS next_due, not to wall-clock $now, so a tick that starts a hair
+	// earlier than its predecessor does not push the whole schedule one full
+	// tick interval late (cron phase creep).
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Red->green: before pfblockerng_tick() dispatched the feed cron via
+	 * pfb_due_ledger_mark_ran_anchored(), a due job's next_due was always
+	 * tick_start + interval -- so a ledger entry missed by a few seconds (a
+	 * completely ordinary boundary fluctuation, not a real catch-up) produced
+	 * a next_due that was ALSO a few seconds late, repeating every cycle
+	 * (issue #573's monotonic phase creep -- eventually crossing a
+	 * calendar-hour boundary and silently skipping an EveryDay/Weekly
+	 * per-feed schedule gated on that hour). This test drives the REAL
+	 * pfblockerng_tick() entrypoint and pins that the cron next_due instead
+	 * advances by EXACTLY $interval from its OWN previous value, never from
+	 * $now.
+	 *
+	 * Scenario:
+	 *   Given pfb_interval='24' (interval = 86400 s) and a 'cron' ledger entry
+	 *   whose next_due is 10 s in the past (missed the boundary by a few
+	 *   seconds -- the ordinary case, not a real catch-up); dcc/bl are NOT due.
+	 *   When  pfblockerng_tick() runs (the real entrypoint, not the pure
+	 *         helper covered elsewhere).
+	 *   Then  the new cron next_due = the OLD next_due + 86400 EXACTLY --
+	 *         not time() + 86400 (which would land seconds later and, over
+	 *         many cycles, eventually cross a calendar-hour boundary).
+	 */
+	public function testCronNextDueAnchorsToPreviousNextDueNotWallClock(): void
+	{
+		$this->seedTickPrereqs('24');
+		// Mirrors src/usr/local/www/pfblockerng/pfblockerng.php:63 -- see Case A.
+		pfb_global();
+		$this->ensureLogDir();
+
+		$now         = time();
+		$interval    = 86400;	// pfb_interval='24' hours
+		$oldNextDue  = $now - 10;	// missed the boundary by 10 s -- the ordinary case
+
+		pfb_due_ledger_write_entry('cron', [
+			'last_run' => $oldNextDue - $interval,
+			'next_due' => $oldNextDue,
+			'jitter'   => 0,
+		], $GLOBALS['pfb']['dbdir']);
+
+		// Prevent a real exec() dispatch for dcc/bl.
+		$this->seedFutureLedgerEntry('dcc', $now);
+		$this->seedFutureLedgerEntry('bl',  $now);
+
+		// Act.
+		pfblockerng_tick();
+
+		$cronEntry = pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']);
+		$expected  = $oldNextDue + $interval;
+
+		$this->assertNotNull($cronEntry, 'cron ledger entry must exist after the tick');
+		$this->assertSame($expected, $cronEntry['next_due'],
+			"cron next_due: expected old_next_due + interval ({$expected} = {$oldNextDue} + {$interval}), "
+			. "got {$cronEntry['next_due']} -- pfblockerng_tick() must anchor the feed-cron next_due to "
+			. 'its own previous schedule, not to wall-clock time() (issue #573 phase creep)');
 	}
 }

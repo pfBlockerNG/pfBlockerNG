@@ -2355,6 +2355,70 @@ function pfb_due_ledger_mark_ran(
 }
 
 /**
+ * pfb_due_ledger_mark_ran_anchored — record a run and schedule the next occurrence,
+ * anchored to the PREVIOUS next_due instead of "now" (issue #573: cron phase creep).
+ *
+ * pfb_due_ledger_mark_ran() anchors on $now (tick-start wall clock), so
+ * next_due = tick_start + interval. Whenever the NEXT tick happens to start even a
+ * fraction of a second faster than the previous one did, next_due misses it by that
+ * fraction and the pass slips a full tick interval late. Repeated across ticks the
+ * phase creeps monotonically forward; once it crosses a calendar-hour boundary, any
+ * per-feed EveryDay/Weekly schedule whose configured hour lands on the now-skipped
+ * hour silently misses its window (their gates in pfblockerng_sync_cron() are
+ * hour-equality checks, so a skipped hour is a skipped run, not a late one).
+ *
+ * This variant re-anchors on the entry's PREVIOUS next_due instead of $now whenever
+ * that base represents an on-time (or barely-missed) occurrence, so the cadence
+ * locks to its original phase with zero cumulative slip. Falls back to plain
+ * catch-up-from-now in every other case:
+ *   - entry NULL (no prior run), or next_due == 0 (a set_pending placeholder with
+ *     nothing meaningful to anchor to)             ⇒ base = $now.
+ *   - next_due in the future relative to $now (clock skew, or an already-pending
+ *     future entry)                                ⇒ base = $now (never anchor
+ *     forward).
+ *   - next_due more than one $interval in the past (a real catch-up: offline box,
+ *     or the schedule was gated off for a long stretch) ⇒ base = $now, so the
+ *     schedule re-phases from this catch-up run rather than firing every tick
+ *     until a stale anchor drags current.
+ *   - otherwise — 0 ≤ ($now - next_due) < $interval, the ordinary "missed the
+ *     boundary by a fraction of a tick" case this fix targets ⇒ base = the entry's
+ *     next_due, so the new next_due advances by exactly $interval every cycle.
+ *
+ * @param string $job_key     Job identifier (e.g. 'cron').
+ * @param int    $interval    Job cadence in seconds.
+ * @param int    $now         Current epoch timestamp (injectable in tests).
+ * @param string $seed        Per-install seed.
+ * @param int    $jitter_max  Max jitter in seconds (0 = no jitter).
+ * @param string $ledger_dir  Directory that contains pfb_due_ledger.json.
+ * @return void
+ */
+function pfb_due_ledger_mark_ran_anchored(
+	string $job_key,
+	int    $interval,
+	int    $now,
+	string $seed,
+	int    $jitter_max,
+	string $ledger_dir
+): void {
+	$entry = pfb_due_ledger_read_entry($job_key, $ledger_dir);
+
+	$base = $now;
+	if ($entry !== NULL
+		&& $entry['next_due'] > 0
+		&& $now >= $entry['next_due']
+		&& ($now - $entry['next_due']) < $interval) {
+		$base = $entry['next_due'];
+	}
+
+	$jitter = pfb_due_ledger_seeded_jitter($job_key, $seed, $jitter_max);
+	pfb_due_ledger_write_entry($job_key, [
+		'last_run' => $now,
+		'next_due' => $base + $interval + $jitter,
+		'jitter'   => $jitter,
+	], $ledger_dir);
+}
+
+/**
  * pfb_tick_interval_clamp — clamp a raw pfb_tick_interval config value to a valid cron minute.
  *
  * Accepts the raw string from PfbConfig::read('pfb_tick_interval') and returns an int
@@ -2597,7 +2661,7 @@ function pfblockerng_tick(): void
 		if ($in_win) {
 			logger(LOG_NOTICE, localize_text('Tick: dispatching feed cron.'), LOG_PREFIX_PKG_PFBLOCKERNG);
 			exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron >> {$pfb['runlog']} 2>&1 &");
-			pfb_due_ledger_mark_ran('cron', $cron_secs, $now, $seed, 0, $dbdir);
+			pfb_due_ledger_mark_ran_anchored('cron', $cron_secs, $now, $seed, 0, $dbdir);
 		} else {
 			logger(LOG_INFO, localize_text('Tick: feed cron deferred (outside apply window).'), LOG_PREFIX_PKG_PFBLOCKERNG);
 			pfb_due_ledger_set_pending('cron', $dbdir);
