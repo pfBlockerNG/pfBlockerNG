@@ -2795,9 +2795,9 @@ $section->addInput(new Form_Checkbox(
 
 $form->add($section);
 
-// DNSBL Group Policy section — placed directly below DNSBL Configuration (which holds
-// its enable checkbox) and above the encrypted-DNS sections. The pfb_gp checkbox JS
-// toggles this section's visibility by its 'Python_Group_Policy' id.
+// DNSBL Group Policy section — placed directly below the main 'DNSBL' section (which
+// holds its pfb_gp enable checkbox) and above the encrypted-DNS sections. The pfb_gp
+// checkbox JS toggles this section's visibility by its 'Python_Group_Policy' id.
 $section = new Form_Section('DNSBL Group Policy', 'Python_Group_Policy', COLLAPSIBLE|SEC_CLOSED);
 $section->addInput(new Form_StaticText(
 	NULL,
