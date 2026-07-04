@@ -483,17 +483,27 @@ def test_syslog_on_ip_block_event_exported(deployed_vm: SmokeVM, client_vm: Smok
         daemon_running = "pfblockerng.inc filterlog" in ps.stdout
         pfctl = vm.ssh("/sbin/pfctl", "-t", "pfB_pfb_syslog_iptest_v4", "-T", "show", timeout=30)
         alias_populated = TEST_IP_BLOCK_DST in pfctl.stdout
+        # An unpopulated alias or a dead filterlog daemon are NOT benign preconditions to skip
+        # past -- this un-xfailed leg (ADR-38 A2.4) exists specifically to catch those two
+        # regression classes (a failed IP feed reload / a crashed export daemon), so both fold
+        # into the same hard failure instead of turning a target regression into a green skip.
         if not alias_populated:
-            pytest.skip(
+            precondition = (
                 f"IP block alias pfB_pfb_syslog_iptest_v4 not populated with {TEST_IP_BLOCK_RANGE} "
-                f"— IP feed reload may have failed. pfctl: {pfctl.stdout!r}"
+                "— IP feed reload likely failed"
             )
-        if not daemon_running:
-            pytest.skip(f"filterlog daemon not running — cannot exercise the IP syslog path (ps: {ps.stdout[:400]!r})")
+        elif not daemon_running:
+            precondition = "filterlog daemon not running — the pfBlockerNG export daemon died"
+        else:
+            precondition = "none — daemon running and alias populated"
         raise AssertionError(
             f"No new IP-block export record after connection to {TEST_IP_BLOCK_DST}.\n"
             f"  expected a new line in {PFB_SYSLOG_LOG} with one of {list(IP_ACT_TOKENS)!r}\n"
+            f"  actual:   no matching line found\n"
             f"  daemon_running={daemon_running} alias_populated={alias_populated}\n"
+            f"  precondition broken: {precondition}\n"
+            f"  ps: {ps.stdout[:400]!r}\n"
+            f"  pfctl: {pfctl.stdout!r}\n"
             f"  {syslog_export_state_snapshot(vm)}"
         )
 
