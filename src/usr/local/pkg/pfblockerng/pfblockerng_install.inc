@@ -699,6 +699,23 @@ if ($ufound) {
 	update_status(" no changes required ... done.\n");
 }
 
+// #740: migrate the legacy 'yandex.dns' DoH-list token (malformed conf entry that never
+// matched real traffic) to the corrected 'dns.yandex' substring key.
+update_status(" Migrating legacy Yandex DoH token...");
+$ufound = FALSE;
+
+$doh_list_migrated = pfb_ss_doh_list_yandex_migrate(PfbConfig::read('safesearch_doh_list'));
+if ($doh_list_migrated !== NULL) {
+	$ufound = TRUE;
+	PfbConfig::write('safesearch_doh_list', $doh_list_migrated);
+}
+
+if ($ufound) {
+	update_status(" saving new changes ... done.\n");
+} else {
+	update_status(" no changes required ... done.\n");
+}
+
 // Move MaxMind Key to new configuration location
 update_status(" MaxMind License Key configuration setting...");
 $ufound = FALSE;
