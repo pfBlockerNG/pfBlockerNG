@@ -73,7 +73,9 @@ logs *through* it); changing the existing control-char check (kept; this complem
      fail-open/fail-closed question entirely (a truncated UTF-8 tail is simply bytes that match
      or don't).
 
-   **Post-merge review revisions (2026-07-04 — PR #829 adversarial-review follow-up):**
+   **Post-merge review revisions (2026-07-04 — PR #829 adversarial-review follow-up). Where a
+   bullet below conflicts with the resolved-fork bullets above (8 KiB cap, first-20-lines guard
+   window, 3-type MIME scope), the revision below SUPERSEDES the earlier text:**
 
    - **UTF-8 BOM:** stripped up front (encoding metadata, not content) — a BOM-prefixed
      `<!doctype html`/`<html` page is still detected, and a BOM-prefixed comment line no longer

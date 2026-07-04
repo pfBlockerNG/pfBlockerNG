@@ -138,6 +138,14 @@ final class PfbTextSanityTest extends TestCase
 		$this->assertNull(pfb_text_sanity($sample));
 	}
 
+	public function test_html_body_with_wildcard_and_fqdn_domain_lines_is_not_flagged(): void
+	{
+		// Guard variants: a wildcard label and a trailing-dot FQDN are still
+		// one-token-per-line domain entries.
+		$this->assertNull(pfb_text_sanity("<html>\n*.tracker.example\n</html>\n"));
+		$this->assertNull(pfb_text_sanity("<html>\nads.example.org.\n</html>\n"));
+	}
+
 	public function test_html_wrapped_ipv4_feed_is_not_flagged(): void
 	{
 		// Behaviour pin: real catalogue feeds (ProjectHoneypot, cybercrime-tracker)

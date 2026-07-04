@@ -1034,17 +1034,21 @@ function pfb_text_sanity(string $sample): ?string {
 	//   - IPv6: substring too, but bounded (lookarounds + at least one hex group)
 	//     so a CSS pseudo-element ("h1::before" in an error page's inline styles)
 	//     or a "403 :: Forbidden" separator cannot suppress it.
-	//   - domain.tld (bare/ABP): the token must BE the whole line. A substring
-	//     match here lets the domain-shaped tokens of real error-page markup
-	//     (a DOCTYPE's w3.org DTD URL, favicon.ico / *.css hrefs, CDN links)
-	//     suppress the verdict -- and genuine domain feeds are one-token-per-line
-	//     formats anyway.
+	//   - domain.tld (bare/ABP/wildcard/FQDN): the token must BE the whole line.
+	//     A substring match here lets the domain-shaped tokens of real error-page
+	//     markup (a DOCTYPE's w3.org DTD URL, favicon.ico / *.css hrefs, CDN
+	//     links) suppress the verdict -- and genuine domain feeds are
+	//     one-token-per-line formats anyway.
+	// ponytail: the {3,7}-group IPv6 branch also matches MAC-like / timestamp
+	// hex-colon runs -- acceptable ceiling: a spurious suppression only defers to
+	// downstream parsing (today's behaviour); tighten to real address shapes if
+	// it ever misfires in practice.
 	$ipv4_shaped = '/(?:\d{1,3}\.){3}\d{1,3}(?:\/\d{1,2})?/';
 	$ipv6_shaped = '/(?<![A-Za-z0-9:])(?:(?:[0-9A-Fa-f]{1,4}:){3,7}[0-9A-Fa-f]{1,4}'
 		. '|[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4})*::(?:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4})*)?'
 		. '|::[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4})*)(?![A-Za-z0-9:])/';
-	$domain_only_line = '/^(?:\|\|)?[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?'
-		. '(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\.[A-Za-z]{2,}\^?$/';
+	$domain_only_line = '/^(?:\|\|)?(?:\*\.)?[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?'
+		. '(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\.[A-Za-z]{2,}\.?\^?$/';
 
 	// The guard scans EVERY line of the sample (already capped at 64 KiB by the
 	// caller), not a fixed head window: HTML-wrapped real feeds (ProjectHoneypot)
