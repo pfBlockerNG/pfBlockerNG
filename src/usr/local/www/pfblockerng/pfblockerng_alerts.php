@@ -2820,6 +2820,41 @@ function pfb_dnsbl_feed_group_cell(string $prev_feed, string $cur_feed, string $
 	return "{$cur_feed}<br /><small>{$cur_group}</small>";
 }
 
+/**
+ * Render the Permit-Whitelist trash-can icon markup when $host is covered by
+ * one of the given ipwhitelist alias lists, else return NULL.
+ *
+ * Shared by both Alerts icon call sites that need this lookup (issue #798):
+ * the Suppression-icon gate's whitelist sub-path, and the standalone IP
+ * Whitelist Icon fallback. The NULL return also replaces the old $pfb_found
+ * flag as the caller's "not found" signal -- $pfb_found was left undefined
+ * (PHP 8 E_WARNING on read) whenever $wlists was empty.
+ */
+function pfb_whitelist_trash_icon($wlists, $host, $vtype, $h_host, $h_eval_ip) {
+	if (empty($wlists)) {
+		return NULL;
+	}
+
+	foreach ($wlists as $atype => $permit_list) {
+		if (!isset($permit_list['data'][$host])) {
+			continue;
+		}
+
+		$w_line = rtrim($permit_list['data'][$host], "\x00..\x1F");
+		$supp_ip_txt = "Note:&emsp;The following IPv{$vtype} address is in a Permit Alias:\n\n"
+				. "Permitted IP:&emsp;[ " . pfb_hsc($w_line) . " ]\n"
+				. "Evaluated IP:&emsp;[ {$h_eval_ip} ]\n"
+				. "IP Aliasname:&emsp;[ " . pfb_hsc($atype) . " ]\n\n"
+
+				. "To remove this IP from the Whitelist, press 'OK'";
+
+		return '<i class="fa-solid fa-trash-can no-confirm icon-pointer" id="DNSBLWT|' . 'delete_ipwhitelist|' . $h_host
+				. '|' . pfb_hsc($atype) . '" title="' . $supp_ip_txt . '"></i>';
+	}
+
+	return NULL;
+}
+
 
 // Function to convert IP Logs (ip_block, ip_permit and ip_match).log -> Reports Tab
 function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
@@ -3069,32 +3104,15 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 		if ($supp_match === NULL) {
 
 			// Check if host is in a Permit Whitelist Alias
-			if ($clists['ipwhitelist' . $vtype]) {
-				$pfb_found = FALSE;
-				foreach ($clists['ipwhitelist' . $vtype] as $atype => $permit_list) {
-					if (isset($permit_list['data'][$host])) {
-						$w_line = rtrim($permit_list['data'][$host], "\x00..\x1F");
-						$pfb_found = TRUE;
-						break;
-					}
-				}
+			$supp_ip_wl = pfb_whitelist_trash_icon($clists['ipwhitelist' . $vtype], $host, $vtype, $h_host, $h_eval_ip);
 
-				// Host found in a Permit Whitelist Alias
-				if ($pfb_found) {
-					$supp_ip_txt = "Note:&emsp;The following IPv{$vtype} address is in a Permit Alias:\n\n"
-							. "Permitted IP:&emsp;[ " . pfb_hsc($w_line) . " ]\n"
-							. "Evaluated IP:&emsp;[ {$h_eval_ip} ]\n"
-							. "IP Aliasname:&emsp;[ " . pfb_hsc($atype) . " ]\n\n"
-
-							. "To remove this IP from the Whitelist, press 'OK'";
-
-					$supp_ip = '<i class="fa-solid fa-trash-can no-confirm icon-pointer" id="DNSBLWT|' . 'delete_ipwhitelist|' . $h_host
-							. '|' . pfb_hsc($atype) . '" title="' . $supp_ip_txt . '"></i>';
-				}
+			// Host found in a Permit Whitelist Alias
+			if ($supp_ip_wl !== NULL) {
+				$supp_ip = $supp_ip_wl;
 			}
 
 			// Add Suppression/Whitelist Icon
-			if (!$pfb_found) {
+			if ($supp_ip_wl === NULL) {
 				$permit_option = '';
 				if ($clists['ipwhitelist' . $vtype]) {
 					$permit_option = '|' . implode('|', $clists['ipwhitelist' . $vtype]['options']);
@@ -3157,25 +3175,10 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	if (!($rtype == 'Block' && !$pfb_geoip) && !$mask_suppression) {
 		if ($clists['ipwhitelist' . $vtype]) {
 
-			$pfb_found = FALSE;
-			foreach ($clists['ipwhitelist' . $vtype] as $atype => $permit_list) {
-				if (isset($permit_list['data'][$host])) {
-					$w_line = rtrim($permit_list['data'][$host], "\x00..\x1F");
-					$pfb_found = TRUE;
-					break;
-				}
-			}
+			$supp_ip_wl = pfb_whitelist_trash_icon($clists['ipwhitelist' . $vtype], $host, $vtype, $h_host, $h_eval_ip);
 
-			if ($pfb_found) {
-				$supp_ip_txt = "Note:&emsp;The following IPv{$vtype} address is in a Permit Alias:\n\n"
-						. "Permitted IP:&emsp;[ " . pfb_hsc($w_line) . " ]\n"
-						. "Evaluated IP:&emsp;[ {$h_eval_ip} ]\n"
-						. "IP Aliasname:&emsp;[ " . pfb_hsc($atype) . " ]\n\n"
-
-						. "To remove this IP from the Whitelist, press 'OK'";
-
-				$supp_ip = '<i class="fa-solid fa-trash-can no-confirm icon-pointer" id="DNSBLWT|' . 'delete_ipwhitelist|' . $h_host
-						. '|' . pfb_hsc($atype) . '" title="' . $supp_ip_txt . '"></i>';
+			if ($supp_ip_wl !== NULL) {
+				$supp_ip = $supp_ip_wl;
 			}
 			else {
 				$supp_ip_txt  = "Note:&emsp;The following IPv{$vtype} was blocked:\n\n"
