@@ -24,12 +24,40 @@ final class EscapedPathFilesystemCallTest extends TestCase
 {
 	/**
 	 * Filesystem calls that take a path argument. Shell-exec functions are
-	 * deliberately absent — _esc is correct there.
+	 * deliberately absent — _esc is correct there. rename()/copy() get a
+	 * second alternative for their destination-path (second) argument.
 	 */
 	private const FS_CALL_PATTERN =
 		'/\b(?:unlink_if_exists|unlink|file_exists|is_file|is_dir|is_link|touch|rename|copy'
 		. '|filesize|filemtime|file_get_contents|file_put_contents|readfile|fopen|mkdir|rmdir'
-		. '|rmdir_recursive|safe_mkdir)\s*\(\s*\$[A-Za-z0-9_]*_esc\b/';
+		. '|rmdir_recursive|safe_mkdir)\s*\(\s*\$[A-Za-z0-9_]*_esc\b'
+		. '|\b(?:rename|copy)\s*\([^,)]*,\s*\$[A-Za-z0-9_]*_esc\b/';
+
+	/**
+	 * Scenario: the pattern catches an _esc path in either path argument
+	 *
+	 * Given  representative call shapes — an _esc first argument, an _esc
+	 *        destination (second) argument of rename()/copy(), and a
+	 *        legitimate shell-exec interpolation
+	 * When   each is matched against FS_CALL_PATTERN
+	 * Then   the filesystem calls match and the shell-exec line does not —
+	 *        so the src/ scan below cannot silently under-detect.
+	 */
+	public function test_pattern_catches_escaped_path_in_either_argument(): void
+	{
+		$mustMatch = [
+			'unlink_if_exists($file_dwn_esc);',
+			"unlink_if_exists(\n\t\$file_dwn_esc\n);",
+			'rename($src, $dst_esc);',
+			'copy("/tmp/a", $dst_esc);',
+		];
+		foreach ($mustMatch as $snippet) {
+			$this->assertSame(1, preg_match(self::FS_CALL_PATTERN, $snippet),
+				"FS_CALL_PATTERN must match: {$snippet}");
+		}
+		$this->assertSame(0, preg_match(self::FS_CALL_PATTERN, 'exec("/usr/bin/tar -xzf {$file_dwn_esc}");'),
+			'Shell-exec interpolation is the legitimate use of _esc and must not match');
+	}
 
 	/**
 	 * Scenario: no shipped PHP passes an escapeshellarg()-quoted variable to a
@@ -55,7 +83,10 @@ final class EscapedPathFilesystemCallTest extends TestCase
 			}
 			$source = file_get_contents($file->getPathname());
 			$this->assertNotFalse($source, "Failed to read {$file->getPathname()}");
-			if (preg_match_all(self::FS_CALL_PATTERN, $source, $m, PREG_OFFSET_CAPTURE)) {
+			$count = preg_match_all(self::FS_CALL_PATTERN, $source, $m, PREG_OFFSET_CAPTURE);
+			// FALSE = regex-engine error, which must fail loud — not read as "no match".
+			$this->assertNotFalse($count, "preg_match_all failed on {$file->getPathname()}");
+			if ($count) {
 				foreach ($m[0] as [$match, $offset]) {
 					$line = substr_count($source, "\n", 0, $offset) + 1;
 					$rel  = substr($file->getPathname(), strlen($root) + 1);
