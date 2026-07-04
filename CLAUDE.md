@@ -24,9 +24,11 @@ a rule about *this package's mechanics* is local; a rule about *how we work* is 
 
 ## Communication
 
-**Mandatory at the start of every session — this step CANNOT be skipped:** if the `ponytail`
-plugin is installed, activation of its **full** mode is mandatory (run `/ponytail:ponytail
-full`); otherwise, run the `/caveman` skill (terse, no filler, full technical accuracy).
+**Mandatory at the start of every session — this step CANNOT be skipped:** activate **BOTH**
+modes when available — if the `ponytail` plugin is installed, run `/ponytail:ponytail full`
+(laziest working solution), **and** if the `caveman` plugin/skill is available, run `/caveman`
+(terse, no filler, full technical accuracy). They are complementary (ponytail governs what you
+build, caveman how you talk); when only one is available, activate that one alone.
 Enforced by a `SessionStart` hook in `.claude/settings.json` (project, shared) and
 `~/.claude/settings.json` (user); the hook is the mechanism, this line is the rule.
 
