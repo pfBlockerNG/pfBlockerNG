@@ -52,17 +52,17 @@ WHAT THE CASE PROVES (issue #281 contract):
   byte-identical after a ``pkg upgrade`` from the prior-release build (``<V>_1``)
   to the branch build (``<V>_9``). The test asserts:
 
-    (1) BEFORE state: representative config written and read back correctly on the
-        LOWER build. pfb_keep is NOT set by the test (its absence is the bug
-        condition the fix handles). After the lower build installs, the
-        install-time seed migration writes pfb_keep='on' into config.xml
-        automatically — the test asserts this seeded value is present.
-        Representative config fields verified before upgrade:
-          - ``dnsbl_lenient='on'``    (PfbLenient-adapted field)
-          - ``dnsbl_vip_auto='on'``   (PfbToggle-adapted field)
-          - ``pfb_dnsbl='on'``        (CONTROL field — not ADR-28-adapted here)
-          - ``pfb_idn='all'``         (excluded field — kept as raw string; proves
-                                       'all' is preserved, not "both empty")
+    (1) BEFORE state: a pre-install General-section seed simulates an existing
+        install (so ``pfb_keep_migrate`` fires without sibling-test help), the
+        LOWER build installs, the DNSBL feed/VIP go live, and ONLY THEN are the
+        canary fields planted and snapshotted. pfb_keep is NOT set by the test
+        (its absence is the bug condition the fix handles) — the install-time
+        seed migration writes pfb_keep='on' automatically and the test asserts it.
+        Canary fields verified before upgrade:
+          - ``dnsbl_lenient='on'``    (deliberately package-UNKNOWN key)
+          - ``dnsbl_vip_auto='on'``   (deliberately package-UNKNOWN key)
+          - ``pfb_dnsbl='on'``        (real control field)
+          - ``pfb_idn='all'``         (real registered field, canonical token)
           - ``pfb_keep='on'``         (seeded by install migration — the fix output)
         BEFORE runtime behaviour: a DNSBL-blocked ``unique_domain()`` name returns
         the VIP block shape on-box (proves DNSBL is live before the upgrade).
@@ -73,6 +73,16 @@ WHAT THE CASE PROVES (issue #281 contract):
     (3) THEN every snapshotted config.xml value is byte-identical (same raw stored
         string, no loss or mutation), AND the DNSBL probe still returns the same VIP
         block shape on the same domain (runtime contract unchanged).
+
+ORDERING HAZARD (issue #820 — the false positive that kept repo-install red daily
+from 2026-06-26): the harness's ``inject``/``inject_dnsbl_lists`` REPLACE the
+DNSBL-settings section, preserving only the VIP/port infrastructure keys
+(``helpers._dnsbl_settings_replace_php`` — deliberate per-case isolation). Any
+canary planted in that section BEFORE the last harness settings write is destroyed
+by the harness itself, and the preservation assert then wrongly blames the pkg
+transition. Both cases therefore arrange strictly as: harness DNSBL setup first,
+canaries + snapshot last, with NO harness config write between snapshot and the
+pkg transition.
 
 DESELECTED from the default ``python -m pytest``
 (``--ignore=tests/smoke`` in pyproject.toml).
@@ -127,10 +137,10 @@ _CFG_DNSBL = "installedpackages/pfblockerngdnsblsettings/config/0"
 # seeded value after lower-build install (the fix output), then included in the
 # before snapshot so we verify it survives the upgrade unchanged.
 _SNAPSHOT_FIELDS: list[tuple[str, str]] = [
-    (_CFG_DNSBL + "/dnsbl_lenient", "on"),  # PfbLenient::On
-    (_CFG_DNSBL + "/dnsbl_vip_auto", "on"),  # PfbToggle::On (dnsbl-settings side)
-    (_CFG_DNSBL + "/pfb_dnsbl", "on"),  # control field
-    (_CFG_DNSBL + "/pfb_idn", "all"),  # excluded field — canonical stored value
+    (_CFG_DNSBL + "/dnsbl_lenient", "on"),  # deliberately package-UNKNOWN key (wholesale-preservation canary)
+    (_CFG_DNSBL + "/dnsbl_vip_auto", "on"),  # deliberately package-UNKNOWN key (wholesale-preservation canary)
+    (_CFG_DNSBL + "/pfb_dnsbl", "on"),  # real control field (harness sets it too)
+    (_CFG_DNSBL + "/pfb_idn", "all"),  # real registered field, canonical stored value
     (_CFG_GLOBAL + "/pfb_keep", "on"),  # seeded by pfb_keep_migrate (the fix)
 ]
 
@@ -139,20 +149,51 @@ _FEED_CONTENT = "uuid-9f3c1e8a2b47.com\n"
 _BLOCKED_DOMAIN = "uuid-9f3c1e8a2b47.com"
 
 
-def _write_representative_config(vm: SmokeVM) -> None:
-    """Write representative config into config.xml on the lower build.
+def _seed_existing_install_config(vm: SmokeVM) -> None:
+    """Populate the General config section BEFORE the package installs.
 
-    Sets the minimum DNSBL enable chain and the four representative fields so
-    the before-state DNS probe works. pfb_keep is intentionally NOT set here —
-    its absence on a real user's box is the bug condition the fix handles.
-    The install-time migration (pfb_keep_migrate) is responsible for seeding it.
+    Simulates an EXISTING user's box (a populated ``installedpackages/pfblockerng``
+    section) so the install-time ``pfb_keep_migrate`` fires deterministically — its
+    non-empty-section guard treats an empty General section as a fresh install and
+    seeds nothing. Without this pre-seed the test only passed when a sibling repo
+    test had already populated the section (an order dependence, CLAUDE.md
+    "Self-encapsulated — never order-dependent"). pfb_keep is intentionally NOT
+    set — its absence is the exact issue-#281 bug condition the migration handles.
     """
     snippet = (
-        # Global block: master switch on (pfb_keep intentionally omitted here)
         f"$g = config_get_path({h._php_str(_CFG_GLOBAL)}, array());\n"
         "$g['enable_cb'] = 'on';\n"
         f"config_set_path({h._php_str(_CFG_GLOBAL)}, $g);\n"
-        # DNSBL-settings block: the representative fields
+        "write_config('pfBlockerNG upgrade-config-stability smoke: seed existing-install config');\n"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet, timeout=60.0)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"_seed_existing_install_config failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
+def _write_representative_config(vm: SmokeVM) -> None:
+    """Plant the DNSBL-section canary fields into config.xml.
+
+    MUST run AFTER the last harness write to the DNSBL-settings section
+    (``ensure_dnsbl_vip`` / ``inject`` / ``reload``): ``inject`` REPLACES that
+    section keeping only the VIP/port infrastructure keys
+    (``helpers._dnsbl_settings_replace_php``, per-case isolation by design), so a
+    canary planted before it is silently destroyed by the harness itself and the
+    preservation assert then blames the pkg transition — the exact false positive
+    that kept repo-install red daily from 2026-06-26 (issue #820). This helper's
+    read-modify-write preserves whatever the harness set.
+
+    Canary choice: ``dnsbl_lenient`` and ``dnsbl_vip_auto`` are deliberately
+    package-UNKNOWN keys (no code reads or writes them) — they prove the pkg
+    transition preserves the section wholesale, not merely the fields the package
+    happens to rewrite. ``pfb_idn`` is a real registered field at its canonical
+    'all'; ``pfb_dnsbl`` is a real control field the harness also sets.
+    """
+    snippet = (
+        # DNSBL-settings block: read-modify-write — preserve the harness's keys.
         f"$s = config_get_path({h._php_str(_CFG_DNSBL)}, array());\n"
         "$s['pfb_dnsbl']      = 'on';\n"
         "$s['dnsbl_vip_auto'] = 'on';\n"
@@ -261,8 +302,13 @@ def test_pkg_upgrade_preserves_config_values(repo_vm: SmokeVM, tmp_path: Path) -
         # GIVEN: prior-release build installed; representative config written #
         # ------------------------------------------------------------------ #
 
-        # Install the LOWER (prior-release) build from our file:// repo.
+        # Seed the General section BEFORE the install — simulates an existing
+        # user's box so pfb_keep_migrate's non-empty-section guard fires (no
+        # reliance on a sibling test having populated it first).
         pkg_delete(repo_vm)
+        _seed_existing_install_config(repo_vm)
+
+        # Install the LOWER (prior-release) build from our file:// repo.
         build_guest_repo(repo_vm, UPGRADE_REPO_DIR, [low_pkg])
         write_repo_conf(repo_vm, UPGRADE_REPO_DIR, ours_priority=pfsense_prio + 100)
         pkg_update(repo_vm)
@@ -274,12 +320,30 @@ def test_pkg_upgrade_preserves_config_values(repo_vm: SmokeVM, tmp_path: Path) -
             f"expected lower build {low_version!r} installed, got {pkg_installed_version(repo_vm)!r}"
         )
 
-        # Write representative config fields into config.xml (pfb_keep intentionally omitted).
+        # Set up the DNSBL feed and ensure_dnsbl_vip so the DNS probe can run,
+        # and make DNSBL live — BEFORE planting the canaries: inject REPLACES the
+        # DNSBL-settings section (per-case isolation), so every harness settings
+        # write must precede the canary plant or it destroys the canaries and the
+        # preservation assert blames the upgrade (issue #820's false positive).
+        h.ensure_dnsbl_vip(repo_vm)
+        _setup_dnsbl_feed(repo_vm)
+        h.reload(repo_vm, "updatednsbl")
+
+        # BEFORE state DNS probe: the blocked domain must return NOERROR + VIP.
+        before_answer = h.dns_probe(repo_vm, _BLOCKED_DOMAIN, "A")
+        assert h.is_vip(before_answer), (
+            f"BEFORE upgrade: expected VIP block for {_BLOCKED_DOMAIN!r}; "
+            f"got rcode={before_answer.rcode!r} records={before_answer.records!r}. "
+            f"DNSBL was not live on the lower build."
+        )
+
+        # Plant the canary fields LAST (nothing harness-side touches the section
+        # between here and the upgrade).
         _write_representative_config(repo_vm)
 
         # Assert the install-time migration seeded pfb_keep='on' into config.xml.
         # This proves pfb_keep_migrate() ran during install and the fix is in effect.
-        # pfb_keep was NOT written by _write_representative_config; only the migration seeds it.
+        # pfb_keep was NOT written by the seed/canary helpers; only the migration seeds it.
         seeded_keep = h.config_get(repo_vm, _CFG_GLOBAL + "/pfb_keep")
         assert seeded_keep == "on", (
             f"install-time migration did not seed pfb_keep: got {seeded_keep!r}, expected 'on'. "
@@ -293,21 +357,6 @@ def test_pkg_upgrade_preserves_config_values(repo_vm: SmokeVM, tmp_path: Path) -
         for path, expected in _SNAPSHOT_FIELDS:
             actual = before_snapshot[path]
             assert actual == expected, f"BEFORE: config.xml {path!r} = {actual!r}, expected {expected!r}"
-
-        # Set up the DNSBL feed and ensure_dnsbl_vip so the DNS probe can run.
-        h.ensure_dnsbl_vip(repo_vm)
-        _setup_dnsbl_feed(repo_vm)
-
-        # Reload (the full DNSBL pass) to make the DNSBL live.
-        h.reload(repo_vm, "updatednsbl")
-
-        # BEFORE state DNS probe: the blocked domain must return NOERROR + VIP.
-        before_answer = h.dns_probe(repo_vm, _BLOCKED_DOMAIN, "A")
-        assert h.is_vip(before_answer), (
-            f"BEFORE upgrade: expected VIP block for {_BLOCKED_DOMAIN!r}; "
-            f"got rcode={before_answer.rcode!r} records={before_answer.records!r}. "
-            f"DNSBL was not live on the lower build."
-        )
 
         # ------------------------------------------------------------------ #
         # WHEN: branch build installed over the lower build via pkg upgrade   #
@@ -405,8 +454,12 @@ def test_pkg_downgrade_preserves_config_values(repo_vm: SmokeVM, tmp_path: Path)
         # GIVEN: higher (branch) build installed; representative config written#
         # ------------------------------------------------------------------ #
 
-        # Install the HIGHER build from our file:// repo.
+        # Seed the General section BEFORE the install (existing-install simulation;
+        # see the upgrade case — makes pfb_keep_migrate fire without sibling-test help).
         pkg_delete(repo_vm)
+        _seed_existing_install_config(repo_vm)
+
+        # Install the HIGHER build from our file:// repo.
         build_guest_repo(repo_vm, UPGRADE_REPO_DIR, [high_pkg])
         write_repo_conf(repo_vm, UPGRADE_REPO_DIR, ours_priority=pfsense_prio + 100)
         pkg_update(repo_vm)
@@ -418,8 +471,21 @@ def test_pkg_downgrade_preserves_config_values(repo_vm: SmokeVM, tmp_path: Path)
             f"expected higher build {high_version!r} installed, got {pkg_installed_version(repo_vm)!r}"
         )
 
-        # Write representative config fields into config.xml on the HIGHER build.
-        # pfb_keep is intentionally omitted — the install migration seeds it.
+        # Set up DNSBL feed + VIP and make DNSBL live — BEFORE planting the
+        # canaries (inject replaces the DNSBL-settings section; issue #820).
+        h.ensure_dnsbl_vip(repo_vm)
+        _setup_dnsbl_feed(repo_vm)
+        h.reload(repo_vm, "updatednsbl")
+
+        # BEFORE state DNS probe: the blocked domain must return NOERROR + VIP.
+        before_answer = h.dns_probe(repo_vm, _BLOCKED_DOMAIN, "A")
+        assert h.is_vip(before_answer), (
+            f"BEFORE downgrade: expected VIP block for {_BLOCKED_DOMAIN!r}; "
+            f"got rcode={before_answer.rcode!r} records={before_answer.records!r}. "
+            f"DNSBL was not live on the higher build."
+        )
+
+        # Plant the canary fields LAST, then assert the seed + snapshot.
         _write_representative_config(repo_vm)
 
         # Assert the install-time migration seeded pfb_keep='on' into config.xml.
@@ -435,21 +501,6 @@ def test_pkg_downgrade_preserves_config_values(repo_vm: SmokeVM, tmp_path: Path)
         for path, expected in _SNAPSHOT_FIELDS:
             actual = before_snapshot[path]
             assert actual == expected, f"BEFORE (higher build): config.xml {path!r} = {actual!r}, expected {expected!r}"
-
-        # Set up DNSBL feed and VIP so the DNS probe can run.
-        h.ensure_dnsbl_vip(repo_vm)
-        _setup_dnsbl_feed(repo_vm)
-
-        # Reload to make the DNSBL live on the HIGHER build.
-        h.reload(repo_vm, "updatednsbl")
-
-        # BEFORE state DNS probe: the blocked domain must return NOERROR + VIP.
-        before_answer = h.dns_probe(repo_vm, _BLOCKED_DOMAIN, "A")
-        assert h.is_vip(before_answer), (
-            f"BEFORE downgrade: expected VIP block for {_BLOCKED_DOMAIN!r}; "
-            f"got rcode={before_answer.rcode!r} records={before_answer.records!r}. "
-            f"DNSBL was not live on the higher build."
-        )
 
         # ------------------------------------------------------------------ #
         # WHEN: downgrade to lower build (pkg delete + reinstall lower version)#
