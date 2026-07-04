@@ -7937,7 +7937,9 @@ function pfblockerng_top1m() {
 
 // Function to remove any leading zeros in octets and to exclude private/reserved addresses.
 // A downloaded feed's explicit /0 is clamped to a single host and logged (issue #744);
-// a custom list's /0 is honored as written.
+// a custom list's /0 is honored as written. Under Suppression, also drops documentation
+// (RFC 5737), multicast, CGN (RFC 6598), benchmarking (RFC 2544) and the deprecated 6to4
+// relay anycast space that PHP's filter flags leave routable (issue #760).
 function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 	global $pfb;
 
@@ -8006,6 +8008,24 @@ function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 		if (!filter_var($ip_final, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== FALSE) {
 			return;
 		}
+
+		// FILTER_FLAG_NO_PRIV_RANGE|NO_RES_RANGE keep documentation (RFC 5737),
+		// multicast, CGN (RFC 6598), benchmarking (RFC 2544) and the deprecated
+		// 6to4 relay anycast prefix routable; explicit checks close that gap
+		// (issue #760). Judged on the address only, same as the filter above -
+		// the CIDR span is not inspected.
+		$long = ip2long($ip_final);
+		if ($long !== FALSE && (
+			($long & 0xffffff00) === 0xc0000200 ||	// 192.0.2.0/24 documentation
+			($long & 0xffffff00) === 0xc6336400 ||	// 198.51.100.0/24 documentation
+			($long & 0xffffff00) === 0xcb007100 ||	// 203.0.113.0/24 documentation
+			($long & 0xf0000000) === 0xe0000000 ||	// 224.0.0.0/4 multicast
+			($long & 0xffc00000) === 0x64400000 ||	// 100.64.0.0/10 CGN
+			($long & 0xfffe0000) === 0xc6120000 ||	// 198.18.0.0/15 benchmarking
+			($long & 0xffffff00) === 0xc0586300	// 192.88.99.0/24 6to4 relay anycast
+		)) {
+			return;
+		}
 	}
 
 	// '!== '' (not !empty()): empty('0') is TRUE, which silently collapsed a
@@ -8021,6 +8041,11 @@ function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 // addresses from loaded block lists when Suppression is enabled. A downloaded
 // feed's explicit /0 is clamped to a single host (issue #744); otherwise the
 // entry is returned unchanged when kept, nothing (dropped) when excluded.
+// Also drops documentation (RFC 3849), multicast and the NAT64 well-known
+// prefix (RFC 6052), which the PHP filter flags leave routable (issue #760).
+// These are explicit prefix checks rather than another filter flag, so the
+// behaviour is independent of PHP's patch level (the RFC 6890 refactor in
+// PHP 8.3.16/8.4.3 moved 2001:db8::/32 between filter sets).
 function sanitize_ipaddr_v6($ipaddr, $custom) {
 	global $pfb;
 
@@ -8045,6 +8070,18 @@ function sanitize_ipaddr_v6($ipaddr, $custom) {
 		// IPv4-mapped and the reserved set (mirrors inc:7118-7119).
 		if (!filter_var($s_ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) ||
 		    !filter_var($s_ip, FILTER_CALLBACK, array('options' => 'FILTER_FLAG_NO_LOOPBACK_RANGE'))) {
+			return;
+		}
+
+		// The filter flags above keep documentation (2001:db8::/32), multicast
+		// (ff00::/8) and the NAT64 well-known prefix (64:ff9b::/96) routable;
+		// explicit prefix checks close that gap (issue #760).
+		$bin = inet_pton($s_ip);
+		if ($bin !== FALSE && (
+			substr($bin, 0, 4) === "\x20\x01\x0d\xb8" ||					// 2001:db8::/32 documentation
+			substr($bin, 0, 1) === "\xff" ||								// ff00::/8 multicast
+			substr($bin, 0, 12) === "\x00\x64\xff\x9b" . str_repeat("\x00", 8)	// 64:ff9b::/96 NAT64
+		)) {
 			return;
 		}
 	}
