@@ -456,6 +456,18 @@ if (!function_exists('get_dnsavailable')) {
 	}
 }
 
+if (!function_exists('isAllowedPage')) {
+	// pfSense pfsense-utils.inc: TRUE when the current user may reach $page (honours the
+	// admin uid-0 short-circuit + 'page-all' wildcard — see pfblockerng_software.php's
+	// SECONDARY PRIVILEGE GATE comment, issue #485). Tests seed
+	// $GLOBALS['pfb_test_allowed_pages'] (page => bool); an absent key defaults to TRUE so
+	// every pre-existing test (none of which cares about this priv) is unaffected.
+	function isAllowedPage($page) {
+		$map = $GLOBALS['pfb_test_allowed_pages'] ?? [];
+		return (bool) ($map[$page] ?? true);
+	}
+}
+
 // --- pfb_collect_localip() doubles ---
 //
 // These support testing the local-IP collection logic off-appliance.
