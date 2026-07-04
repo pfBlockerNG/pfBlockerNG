@@ -1197,12 +1197,8 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 		case PFB_FILTER_FILE_MIME_COMPARE:
 			// Validate mime-type
 			// $input [0] path/file, [1] mime-type to be validated against
-			if (isset($retval)) {
-				unset($retval);
-			}
-			if (isset($output)) {
-				unset($output);
-			}
+			unset($retval);
+			unset($output);
 			if (!file_exists($input[0])) {
 				pfb_logger("{$header} Invalid Mime-type (file missing): [" .  htmlspecialchars($input[0]) . "|" . htmlspecialchars($input[1]) . "]", 2);
 				return FALSE;
@@ -1220,12 +1216,8 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 			// The probed path ($input[1]) is escapeshellarg()'d at the sink below,
 			// so callers need not pre-escape it.
 
-			if (isset($retval)) {
-				unset($retval);
-			}
-			if (isset($output)) {
-				unset($output);
-			}
+			unset($retval);
+			unset($output);
 			if (!file_exists($input[1])) {
 				pfb_logger("{$header} Downloaded file not found: [" .  htmlspecialchars($input[0]) . "|" . htmlspecialchars($input[1]) . "]", 2);
 				return FALSE;
@@ -1276,12 +1268,8 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 			// $input [0] path/file (legacy, unused), [1] path/file [2] URL
 			// The probed path ($input[1]) is escapeshellarg()'d at the sink below,
 			// so callers need not pre-escape it.
-			if (isset($retval)) {
-				unset($retval);
-			}
-			if (isset($output)) {
-				unset($output);
-			}
+			unset($retval);
+			unset($output);
 			if (!file_exists($input[1])) {
 				pfb_logger("{$header} Downloaded file not found: [" .  htmlspecialchars($input[0]) . "|" . htmlspecialchars($input[1]) . "]", 2);
 				return FALSE;
@@ -8192,9 +8180,7 @@ function find_reported_header($ip, $pfbfolder, $geoip=FALSE) {
 			}
 		}
 
-		if (isset($result)) {
-			unset($result);
-		}
+		unset($result);
 
 		// Determine which CIDR alerted the IP address
 		if (!empty($cidrs)) {
@@ -8226,9 +8212,7 @@ function find_reported_header($ip, $pfbfolder, $geoip=FALSE) {
 		}
 	}
 
-	if (isset($result)) {
-		unset($result);
-	}
+	unset($result);
 	return array('Unknown', 'Unknown');
 }
 
@@ -9188,9 +9172,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 
 	if (file_exists($file_download) && ($http_status == '200' || $http_status == '221' || $http_status == '226')) {
 
-		if (isset($retval)) {
-			unset($retval);
-		}
+		unset($retval);
 
 		// Validate File Mime-type
 		$file_type = pfb_filter(array("{$file_dwn_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME, 'pfb_download');
@@ -12433,13 +12415,8 @@ function pfb_dnsbl_lastevent($p_group, $p_entry, $p_details) {
 	// Collect or update existing row
 	if (!empty($final)) {
 
-		// Only collect lastevent entry
-		if (empty($p_group)) {
-			;
-		}
-
-		// Update lastevent entry
-		else {
+		// Update lastevent entry (no-op when $p_group is empty -- only collect lastevent entry)
+		if (!empty($p_group)) {
 			$db_update = "UPDATE lastevent SET groupname=:p_group, entry=:p_entry, details=:p_details WHERE row = 0";
 		}
 	}
