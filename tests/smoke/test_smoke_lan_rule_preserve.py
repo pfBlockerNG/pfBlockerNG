@@ -42,7 +42,6 @@ from __future__ import annotations
 
 import json
 import os
-import time
 from collections.abc import Iterator
 
 import pytest
@@ -72,9 +71,6 @@ DUMMY_IP = "203.0.113.200"  # RFC 5737 TEST-NET-3, always-in alias so the rule i
 
 # The user LAN pass rule description pfSense bakes into fresh images.
 DEFAULT_ALLOW_LAN_DESCR = "Default allow LAN to any"
-
-# Brief settle after reload for pf table + filter state to stabilise.
-SETTLE_SECS = 2.0
 
 
 # --------------------------------------------------------------------------- #
@@ -232,6 +228,11 @@ def _run_two_reload_cycle(
     are dropped during the cycle (the pass_order bug, observable as early as reload #1 depending
     on install-time syncs); after the fix they survive both snapshots.
 
+    ``reload()`` triggers ``filter_configure()`` ASYNCHRONOUSLY (``send_event``), so a one-shot
+    config.xml/pfctl read right after it races the apply (same class as #483's misdiagnosis).
+    ``h.apply_filter_sync()`` blocks on the synchronous rc entrypoint instead, so the read that
+    follows is authoritative.
+
     Returns three rule snapshots for the caller's assertions.
     """
     rules_before = _get_filter_rules(vm)
@@ -239,13 +240,13 @@ def _run_two_reload_cycle(
     # Reload #1: build the alias.
     h.force_ip_refetch(vm, f"{FEED_HEADER}_v4")
     h.reload(vm, "update", timeout=timeout)
-    time.sleep(SETTLE_SECS)
+    h.apply_filter_sync(vm)
     rules_after_r1 = _get_filter_rules(vm)
 
     # Reload #2: this is when the pre-fix code drops user LAN rules.
     h.force_ip_refetch(vm, f"{FEED_HEADER}_v4")
     h.reload(vm, "update", timeout=timeout)
-    time.sleep(SETTLE_SECS)
+    h.apply_filter_sync(vm)
     rules_after_r2 = _get_filter_rules(vm)
 
     return rules_before, rules_after_r1, rules_after_r2
