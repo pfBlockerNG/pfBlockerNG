@@ -5,7 +5,16 @@
 # smoke.yml / smoke-single.yml / ui-tests.yml:
 #
 #   legs        [--test-dir DIR] [--label LABEL]
-#                 Resolve scope ladder + THREE-WAY jq + -k derivation.
+#                 Resolve scope ladder + THREE-WAY jq + -k derivation, then
+#                 expand each leg into its module shards (issue #797): reads
+#                 SHARDS_INPUT (script default 1 — the workflow's policy
+#                 default of 2 lives in the caller's input, not here) and
+#                 MARKER_INPUT (default smoke). Shard count collapses to 1
+#                 unless the derived -k is EMPTY and the marker is exactly
+#                 "smoke", and is clamped to the --test-dir's direct-child
+#                 test_*.py module count. Every FILTERED entry gets `shard` /
+#                 `shard_total` STRING fields (CE: 0..S-1 / S; Plus is
+#                 hard-capped at 1 — parallel Plus boots are untested).
 #                 Prints the filtered legs JSON to stdout.
 #                 Writes scope= / ci_matrix= / pytest_filter= to $GITHUB_OUTPUT.
 #
@@ -112,6 +121,50 @@ _rl_legs() {
                 "$_l_label" "$_l_base" "$_l_label" >&2
         fi
     fi
+
+    # ── SHARD expansion (issue #797) ──────────────────────────────────────── #
+    # S from SHARDS_INPUT: empty/unset/non-numeric or <1 -> 1. This SCRIPT's
+    # default is 1 (conservative standalone behaviour); the policy default of
+    # 2 lives in the WORKFLOW input (smoke.yml), not here.
+    case "${SHARDS_INPUT:-}" in
+        '' | *[!0-9]*) S=1 ;;
+        *) S="$SHARDS_INPUT" ;;
+    esac
+    [ "$S" -ge 1 ] || S=1
+
+    # Collapse to 1 unless BOTH hold: the effective -k (K) is EMPTY (a
+    # filtered/impacted run must never fan out to shards that may not contain
+    # the selected tests) AND the marker is exactly "smoke" (a narrow marker
+    # like repo/reboot selects few tests — a shard slice can collect zero and
+    # pytest exit-5-fails the leg).
+    _l_marker="${MARKER_INPUT:-smoke}"
+    if [ -n "$K" ] || [ "$_l_marker" != "smoke" ]; then
+        S=1
+    fi
+
+    # Clamp to the direct-child test_*.py module count under --test-dir (same
+    # non-recursive glob as shard-modules.sh); an empty dir can't be sharded.
+    _l_mod_count=0
+    for _l_mod in "${_l_test_dir%/}"/test_*.py; do
+        [ -e "$_l_mod" ] || continue
+        _l_mod_count=$((_l_mod_count + 1))
+    done
+    if [ "$_l_mod_count" -eq 0 ]; then
+        S=1
+    elif [ "$S" -gt "$_l_mod_count" ]; then
+        S="$_l_mod_count"
+    fi
+
+    # Expand ALWAYS (even at S=1) so every matrix entry uniformly carries
+    # shard/shard_total as STRINGS (workflow_call inputs are typed string;
+    # avoid number/string coercion surprises). CE gets S copies; Plus is
+    # HARD-CAPPED at 1 shard — #797's constraint: concurrent Netgate-side
+    # check-ins from parallel Plus boots are untested.
+    FILTERED="$(printf '%s\n' "$FILTERED" | jq -c --argjson s "$S" \
+        '[ .[] | . as $e
+           | (if $e.channel == "CE" then $s else 1 end) as $n
+           | range(0; $n) as $i
+           | $e + {shard: ($i | tostring), shard_total: ($n | tostring)} ]')"
 
     printf 'scope=%s  legs=%s  -k=[%s]\n' "$SCOPE" \
         "$(printf '%s' "$FILTERED" | jq 'length')" "$K" >&2
