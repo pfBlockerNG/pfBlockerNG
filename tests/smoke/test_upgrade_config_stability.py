@@ -528,8 +528,13 @@ def _seed_legacy_migration_config(vm: SmokeVM) -> None:
         "$g['maxmind_locale'] = 'en';\n"
         f"config_set_path({h._php_str(_CFG_GLOBAL)}, $g);\n"
         # IP-settings section: no maxmind_key, so the move migration's gate condition
-        # (!isset($ip['maxmind_key'])) holds.
+        # (!isset($ip['maxmind_key'])) holds. The section itself is kept NON-empty
+        # (marker key 'enable_dup'): the older, unrelated "General Tab -> IP Tab"
+        # migration (pfblockerng_install.inc ~L447) fires when this section is empty
+        # and would move 'maxmind_locale' FIRST — making the locale assertions pass
+        # for the wrong reason instead of pinning the targeted MaxMind relocation.
         f"$ip = config_get_path({h._php_str(_CFG_IPSETTINGS)}, array());\n"
+        "$ip['enable_dup'] = $ip['enable_dup'] ?? '';\n"
         "unset($ip['maxmind_key']);\n"
         f"config_set_path({h._php_str(_CFG_IPSETTINGS)}, $ip);\n"
         "write_config('pfBlockerNG issue-795 smoke: seed legacy pre-migration config');\n"
@@ -548,7 +553,8 @@ def _cleanup_migration_config(vm: SmokeVM) -> None:
     Self-encapsulation (CLAUDE.md): a sibling test must never inherit leftover
     SafeSearch/MaxMind state from this one. Deletes the whole (now package-owned)
     SafeSearch section and strips the MaxMind keys from both the general and
-    ipsettings sections, regardless of which side the migration left them on.
+    ipsettings sections, regardless of which side the migration left them on —
+    plus the 'enable_dup' non-empty marker the seed added to ipsettings.
     """
     snippet = (
         f"config_del_path({h._php_str(_CFG_SAFESEARCH)});\n"
@@ -556,7 +562,7 @@ def _cleanup_migration_config(vm: SmokeVM) -> None:
         "unset($g['maxmind_key'], $g['maxmind_locale']);\n"
         f"config_set_path({h._php_str(_CFG_GLOBAL)}, $g);\n"
         f"$ip = config_get_path({h._php_str(_CFG_IPSETTINGS)}, array());\n"
-        "unset($ip['maxmind_key'], $ip['maxmind_locale']);\n"
+        "unset($ip['maxmind_key'], $ip['maxmind_locale'], $ip['enable_dup']);\n"
         f"config_set_path({h._php_str(_CFG_IPSETTINGS)}, $ip);\n"
         "write_config('pfBlockerNG issue-795 smoke: cleanup migration config');\n"
         "echo 'OK';"
