@@ -12770,16 +12770,6 @@ function pfBlockerNG_clearip() {
 	global $pfb;
 
 	exec("{$pfb['pfctl']} -z 2>&1");
-
-	/* TODO: Clear only pfB counters
-	$pfb_tables = array();
-	exec("{$pfb['pfctl']} -sTables | {$pfb['grep']} 'pfB_' 2>&1", $pfb_tables);
-	if (!empty($pfb_tables)) {
-		foreach ($pfb_tables as $table) {
-			exec("{$pfb['pfctl']} -t {$table} -T zero");
-		}
-	}
-	*/
 }
 
 
