@@ -893,29 +893,40 @@ function pfb_reject_detail_summary(array $reject_detail): string {
 	return "{$reject_detail['mime_raw']} rc={$reject_detail['retval']}";
 }
 
-// ADR-46: list an archive's member names via bsdtar. Filters bsdtar noise lines
-// (e.g. "tar: Failed to set default locale") -- a noise line returned as a "member
-// name" would false-trip the member-name guard below. A listing failure returns
-// an empty array (fail-open): the archive already passed the ADR-45 structural
-// probe, and the subsequent tar extraction fails on its own exactly as before.
-function pfb_zip_member_names(string $file): array {
+// ADR-46: list an archive's member names via bsdtar. stderr goes to /dev/null so a
+// bsdtar diagnostic (e.g. "tar: Failed to set default locale") can NEVER be mistaken
+// for a member name -- merging streams and prefix-filtering would let a member
+// literally named "tar: ../x" be silently dropped, bypassing the guard. Returns NULL
+// on a listing failure (rc != 0) so every DISK-writing caller fails CLOSED: the
+// gzip/UT1 sites' ADR-45 probe is only `gunzip -t` (gzip-stream integrity, not the
+// inner tar), so a valid-gzip / corrupt-inner-tar archive lists rc != 0 here and must
+// be rejected, not fail-open extracted. A genuinely intact archive always lists rc 0,
+// so this rejects nothing legitimate.
+function pfb_archive_member_names(string $file): ?array {
 	$output = array();
 	$retval = 1;
-	exec('/usr/bin/tar -tf ' . escapeshellarg($file) . ' 2>&1', $output, $retval);
-	if ($retval != 0 || !is_array($output)) {
-		return array();
+	exec('/usr/bin/tar -tf ' . escapeshellarg($file) . ' 2>/dev/null', $output, $retval);
+	if ($retval != 0) {
+		return NULL;
 	}
 	return array_values(array_filter($output, static function (string $line): bool {
-		return $line !== '' && !str_starts_with($line, 'tar: ');
+		return $line !== '';
 	}));
 }
 
-// ADR-46: first archive member name unsafe to extract to DISK, or NULL when all are
-// safe. Unsafe = absolute path, a '..' path component (directory escape), a path
-// component over 255 bytes (FreeBSD NAME_MAX), or a total name over 1024 bytes
-// (PATH_MAX) -- names above the filesystem limits cannot extract anyway, so the caps
-// reject nothing legitimate. Pure: no I/O.
-function pfb_archive_unsafe_member(array $names): ?string {
+// ADR-46: the first archive member name unsafe to extract to DISK, or NULL when all
+// are safe. A NULL $names (the lister could not read the archive) is itself unsafe --
+// fail closed with a sentinel reason. Unsafe = absolute path, a '..' path component
+// (directory escape), a path component over 255 bytes (FreeBSD NAME_MAX), or a total
+// name over 1024 bytes (PATH_MAX) -- names above the filesystem limits cannot extract
+// anyway, so the caps reject nothing legitimate. Known limit: the check is NAME-only,
+// so a symlink member pointing outside -C plus a write-through entry is invisible to
+// it; libarchive's own "Cannot extract through symlink" default covers that vector.
+// Pure: no I/O.
+function pfb_archive_unsafe_member(?array $names): ?string {
+	if ($names === NULL) {
+		return 'unlistable-archive';
+	}
 	foreach ($names as $name) {
 		if (!is_string($name) || $name === '') {
 			continue;
@@ -930,14 +941,6 @@ function pfb_archive_unsafe_member(array $names): ?string {
 		}
 	}
 	return NULL;
-}
-
-// ADR-46: pure predicate over pfb_archive_unsafe_member() -- TRUE iff every member
-// name is safe to extract to disk. Guards the disk-writing `tar ... -C` extraction
-// sites in pfb_download(); the `tar -xOf` stdout paths need no guard (member names
-// never reach the filesystem there).
-function pfb_archive_members_safe(array $names): bool {
-	return pfb_archive_unsafe_member($names) === NULL;
 }
 
 // ADR-48 Phase 4 (issue #789): reads the Python-emitted per-entry reject tally
@@ -9385,8 +9388,9 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			}
 			if ($type == 'geoip') {
 				// Extras - MaxMind downloads
-				// ADR-46: disk-writing extraction -- reject hostile member names first.
-				$unsafe_member = pfb_archive_unsafe_member(pfb_zip_member_names($file_download));
+				// ADR-46: disk-writing extraction -- reject hostile member names first
+				// (a NULL member list = unlistable archive rejects too, fail-closed).
+				$unsafe_member = pfb_archive_unsafe_member(pfb_archive_member_names($file_download));
 				if ($unsafe_member !== NULL) {
 					pfb_validate_log($header, 'member', 'unsafe_member_name', $unsafe_member);
 					unlink_if_exists($file_download);
@@ -9416,8 +9420,9 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 					safe_mkdir("{$pfb['dbdir']}/{$filename}/");
 
 					// ADR-46: disk-writing extraction of a THIRD-PARTY archive (member
-					// names feed on-disk filenames) -- reject hostile member names first.
-					$unsafe_member = pfb_archive_unsafe_member(pfb_zip_member_names($file_dwn));
+					// names feed on-disk filenames) -- reject hostile member names first
+					// (a NULL member list = unlistable archive rejects too, fail-closed).
+					$unsafe_member = pfb_archive_unsafe_member(pfb_archive_member_names($file_dwn));
 					if ($unsafe_member !== NULL) {
 						pfb_validate_log($header, 'member', 'unsafe_member_name', $unsafe_member);
 						unlink_if_exists($file_dwn);
@@ -9483,10 +9488,11 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 
 			// Extras - MaxMind/TOP1M downloads
 			if ($type == 'geoip' || $type == 'top1m') {
-				// Determine if Zip contains multiple files (ADR-46: the lister also
-				// filters bsdtar noise lines, e.g. "tar: Failed to set default locale").
-				$archive_members = pfb_zip_member_names($file_download);
-				if (count($archive_members) > 1) {
+				// Determine if the Zip contains multiple files. A NULL list (unlistable)
+				// falls through to the stdout branch below -- no disk write, no traversal
+				// surface -- and the extraction fails on its own exactly as before.
+				$archive_members = pfb_archive_member_names($file_download);
+				if ($archive_members !== NULL && count($archive_members) > 1) {
 					// ADR-46: disk-writing extraction -- reject hostile member names first.
 					$unsafe_member = pfb_archive_unsafe_member($archive_members);
 					if ($unsafe_member !== NULL) {

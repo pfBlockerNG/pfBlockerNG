@@ -3324,22 +3324,28 @@ def test_validate_log_healthy_abp_feed_no_entries_reject(
 
 # --------------------------------------------------------------------------- #
 # ADR-46: archive member-name guard before disk-writing extraction. The
-# GeoIP/top-1M URLs are hardcoded in pfblockerng.php, so these cases drive
-# pfb_download() DIRECTLY via h.php_eval pointed at the mock server (the
-# test_smoke_714_asn_geoip.py pattern) with type='top1m' to reach the ZIP
-# disk-writing branch (tar -xf --strip=1 -C <header>).
+# GeoIP/top-1M/blacklist URLs are hardcoded in pfblockerng.php, so these cases
+# drive pfb_download() DIRECTLY via h.php_eval pointed at the mock server (the
+# test_smoke_714_asn_geoip.py pattern). One hostile case per guarded site --
+# the ZIP GeoIP/top-1M branch, the gzip GeoIP branch, and the UT1/blacklist
+# branch -- plus the benign pass-through regression pin.
 # --------------------------------------------------------------------------- #
 
 _ADR46_WORKDIR = f"{h.PFB_DBDIR}/adr46_guard"
 
 
-def _adr46_download_zip(vm: SmokeVM, feed_url: str, file_dwn: str, target_dir: str) -> str:
-    """Run pfb_download(<feed_url>, <file_dwn>, ..., type='top1m') on the box; return stdout."""
+def _adr46_download(vm: SmokeVM, feed_url: str, file_dwn: str, header: str, dl_type: str) -> str:
+    """Run pfb_download(<feed_url>, <file_dwn>, ..., type=<dl_type>) on the box; return stdout.
+
+    ``header`` is pfb_download()'s 4th arg: the ``tar -C`` extraction target for the
+    ZIP geoip/top1m branch, and the ``feed=`` token of the canonical reject line at
+    every wired site.
+    """
     snippet = (
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
         "pfb_global();\n"
         f"$ok = pfb_download({h._php_str(feed_url)}, {h._php_str(file_dwn)}, FALSE, "  # noqa: SLF001
-        f"{h._php_str(target_dir)}, '', 1, '', 60, 'top1m');\n"  # noqa: SLF001
+        f"{h._php_str(header)}, '', 1, '', 60, {h._php_str(dl_type)});\n"  # noqa: SLF001
         "echo $ok ? 'PFB_DL_TRUE' : 'PFB_DL_FALSE';"
     )
     res = h.php_eval(vm, snippet, timeout=120.0)
@@ -3376,8 +3382,8 @@ def test_adr46_hostile_member_zip_rejected(deployed_vm: SmokeVM, mock_feeds: _Mo
         before = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
 
         # When -- drive the top-1M ZIP branch directly at the traversal fixture.
-        out = _adr46_download_zip(
-            deployed_vm, mock_feeds.feed_url("archive_traversal.zip"), f"{workdir}/dl.zip", target
+        out = _adr46_download(
+            deployed_vm, mock_feeds.feed_url("archive_traversal.zip"), f"{workdir}/dl.zip", target, "top1m"
         )
 
         # Then -- explicit reject, not silent partial success.
@@ -3433,7 +3439,7 @@ def test_adr46_legit_multifile_zip_still_imports(deployed_vm: SmokeVM, mock_feed
         before = h.count_log_marker(deployed_vm, h.PFB_LOG, guard_marker)
 
         # When -- same driver, benign archive.
-        out = _adr46_download_zip(deployed_vm, feed_url, f"{workdir}/dl.zip", target)
+        out = _adr46_download(deployed_vm, feed_url, f"{workdir}/dl.zip", target, "top1m")
 
         # Then -- import succeeds and the guard stayed silent.
         assert "PFB_DL_TRUE" in out, (
@@ -3452,3 +3458,123 @@ def test_adr46_legit_multifile_zip_still_imports(deployed_vm: SmokeVM, mock_feed
         )
     finally:
         deployed_vm.ssh(f"/bin/rm -rf {workdir}")
+
+
+@pytest.mark.timeout(120)
+def test_adr46_hostile_member_geoip_gz_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-46: the gzip GeoIP branch rejects a hostile-member tar.gz BEFORE extraction.
+
+    Site-specific wiring pin for `tar -xzf --strip=1 -C {geoipshare}` -- its ADR-45
+    probe is only `gunzip -t` (gzip-stream integrity), so the member guard is the
+    ONLY inner-tar inspection on this path. Fixture archive_traversal.tar.gz (see
+    fixtures/README.md): benign `cat/domains` + hostile `../pfb_adr46_escape.txt`.
+    Deliberately hostile-only: a benign geoip run would extract into the REAL
+    /usr/local/share/GeoIP; the benign pass-through is pinned on the ZIP site's
+    test_adr46_legit_multifile_zip_still_imports instead.
+
+    Given a clean work dir, no escape file beside the geoipshare dir, and the
+      stage=member delta baseline,
+    When  pfb_download() fetches the traversal tar.gz as type='geoip',
+    Then  it returns FALSE, the canonical stage=member line names the hostile
+      member, the archive is unlinked, and no escape file appeared.
+    """
+    marker = "stage=member reason=unsafe_member_name detected=../pfb_adr46_escape.txt"
+    workdir = f"{_ADR46_WORKDIR}_geoipgz"
+    # --strip=1 -C /usr/local/share/GeoIP + a '../' member would land here:
+    escape_file = "/usr/local/share/pfb_adr46_escape.txt"
+    try:
+        # Given -- clean slate + delta baseline.
+        deployed_vm.ssh(f"/bin/rm -rf {workdir} {escape_file} && /bin/mkdir -p {workdir}")
+        before = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+
+        # When -- drive the gzip GeoIP branch directly at the traversal fixture.
+        out = _adr46_download(
+            deployed_vm,
+            mock_feeds.feed_url("archive_traversal.tar.gz"),
+            f"{workdir}/dl.tgz",
+            "adr46geo",
+            "geoip",
+        )
+
+        # Then -- explicit reject before any disk write.
+        assert "PFB_DL_FALSE" in out, (
+            f"expected pfb_download to return FALSE on a '..'-member tar.gz via the gzip GeoIP "
+            f"branch (pre-guard it silently returned TRUE); got stdout: {out!r}"
+        )
+        after = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+        if not (after > before):
+            raise AssertionError(
+                f"expected a NEW line matching {marker!r} in {h.PFB_LOG} after the geoip tar.gz "
+                f"download; count before={before} after={after}\n"
+                f"recent pfb_validate lines actually in the log:\n{_recent_validate_lines(deployed_vm)}"
+            )
+        leftovers = deployed_vm.ssh(
+            f"test -e {workdir}/dl.tgz.raw && echo RAW-PRESENT; test -e {escape_file} && echo ESCAPE-PRESENT"
+        ).stdout.strip()
+        assert leftovers == "", (
+            f"expected the archive unlinked and no escape file beside geoipshare after the "
+            f"member-guard reject; found: {leftovers!r}"
+        )
+    finally:
+        deployed_vm.ssh(f"/bin/rm -rf {workdir} {escape_file}")
+
+
+@pytest.mark.timeout(120)
+def test_adr46_hostile_member_blacklist_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """ADR-46: the UT1/blacklist branch rejects a hostile-member tar.gz BEFORE extraction.
+
+    Site-specific wiring pin for the least-trusted extraction (a THIRD-PARTY archive
+    whose member names feed on-disk filenames): the blacklist branch renames the
+    download (strips `.raw`), derives the category dir from the file name, then
+    extracts with `tar -xf … -C {dbdir}/<name>/`. The guard must list the RENAMED
+    path ($file_dwn) and unlink IT on reject -- exactly the variable plumbing a
+    generic predicate test cannot see. Same fixture as the geoip case.
+
+    Given a clean work dir and category dir, and the stage=member delta baseline,
+    When  pfb_download() fetches the traversal tar.gz as type='blacklist' with a
+      file_dwn ending .tar.gz (the branch's naming contract),
+    Then  it returns FALSE, the canonical stage=member line is logged, the renamed
+      archive is unlinked, and the category dir contains no extracted files.
+    """
+    marker = "stage=member reason=unsafe_member_name detected=../pfb_adr46_escape.txt"
+    workdir = f"{_ADR46_WORKDIR}_ut1"
+    category_dir = f"{h.PFB_DBDIR}/adr46ut1"
+    escape_file = f"{h.PFB_DBDIR}/pfb_adr46_escape.txt"
+    try:
+        # Given -- clean slate + delta baseline.
+        deployed_vm.ssh(f"/bin/rm -rf {workdir} {category_dir} {escape_file} && /bin/mkdir -p {workdir}")
+        before = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+
+        # When -- drive the blacklist branch; file_dwn must end .tar.gz (category name source).
+        out = _adr46_download(
+            deployed_vm,
+            mock_feeds.feed_url("archive_traversal.tar.gz"),
+            f"{workdir}/adr46ut1.tar.gz",
+            "adr46ut1",
+            "blacklist",
+        )
+
+        # Then -- explicit reject; the renamed archive is gone; nothing extracted.
+        assert "PFB_DL_FALSE" in out, (
+            f"expected pfb_download to return FALSE on a '..'-member tar.gz via the blacklist "
+            f"branch (pre-guard it silently returned TRUE); got stdout: {out!r}"
+        )
+        after = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+        if not (after > before):
+            raise AssertionError(
+                f"expected a NEW line matching {marker!r} in {h.PFB_LOG} after the blacklist tar.gz "
+                f"download; count before={before} after={after}\n"
+                f"recent pfb_validate lines actually in the log:\n{_recent_validate_lines(deployed_vm)}"
+            )
+        leftovers = deployed_vm.ssh(
+            f"/bin/ls -A {category_dir} 2>/dev/null; "
+            f"test -e {workdir}/adr46ut1.tar.gz && echo RENAMED-ARCHIVE-PRESENT; "
+            f"test -e {workdir}/adr46ut1.tar.gz.raw && echo RAW-PRESENT; "
+            f"test -e {escape_file} && echo ESCAPE-PRESENT"
+        ).stdout.strip()
+        assert leftovers == "", (
+            f"expected an empty category dir, the renamed archive unlinked, and no escape file "
+            f"after the member-guard reject; found: {leftovers!r}"
+        )
+    finally:
+        deployed_vm.ssh(f"/bin/rm -rf {workdir} {category_dir} {escape_file}")
