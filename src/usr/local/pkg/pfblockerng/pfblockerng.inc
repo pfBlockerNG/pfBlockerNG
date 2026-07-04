@@ -3441,13 +3441,18 @@ function pfb_print_pending_changes_box(bool $on_update_page = FALSE): void {
 }
 
 /*
- * Append the "Software" tab to a page's $tab_array — ONLY on an our-repo build
- * (pfb_software_provenance_ok()). Shared by every pfBlockerNG page so the tab is
- * consistently present (our build) or absent (Netgate build) across the GUI.
- * Call immediately before display_top_tabs(); $active marks it the current tab.
+ * Append the "Software" tab to a page's $tab_array — ONLY when BOTH hold: an our-repo build
+ * (pfb_software_provenance_ok()) AND the viewer holds the Package Manager "Installed" privilege
+ * (isAllowedPage('pkg_mgr_installed.php')) — the SAME secondary gate pfblockerng_software.php
+ * itself enforces (issue #485), so a user without that priv never sees a tab that dead-ends at
+ * /index.php. $provenance_ok is injectable for off-box unit tests (the real predicate reads
+ * on-appliance state); NULL (the production default) reads it. Shared by every pfBlockerNG page
+ * so the tab is consistently present or absent across the GUI. Call immediately before
+ * display_top_tabs(); $active marks it the current tab.
  */
-function pfb_software_add_tab(array &$tab_array, bool $active = FALSE): void {
-	if (pfb_software_provenance_ok()) {
+function pfb_software_add_tab(array &$tab_array, bool $active = FALSE, ?bool $provenance_ok = null): void {
+	$provenance_ok = $provenance_ok ?? pfb_software_provenance_ok();
+	if ($provenance_ok && isAllowedPage('pkg_mgr_installed.php')) {
 		$tab_array[] = array(gettext('Software'), $active, '/pfblockerng/pfblockerng_software.php');
 	}
 }
