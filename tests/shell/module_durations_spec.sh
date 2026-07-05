@@ -133,6 +133,31 @@ Describe 'module-durations.sh'
     End
   End
 
+  Describe 'a parametrized nodeid containing a space (issue #861 nitpick)'
+    # pytest node ids from string params may embed a literal space (e.g.
+    # test_x.py::test_foo[hello world]) -- capturing "the next token" instead
+    # of "to end of line" would truncate the row at that space, corrupting
+    # both the key (silently dropping "world]") and, downstream, whatever
+    # reads the table by a fixed field position.
+    setup_spaced() {
+      log_spaced="$(mktemp "${SHELLSPEC_TMPBASE:-/tmp}/module-durations-spaced.XXXXXX")"
+      ci_line '12.30s' call 'tests/smoke/test_sp.py::test_foo[hello world]' > "$log_spaced"
+    }
+    cleanup_spaced() { rm -f "$log_spaced"; }
+    BeforeEach 'setup_spaced'
+    AfterEach 'cleanup_spaced'
+
+    It 'keeps the full bracketed id, space included, in the per-test row'
+      When call rows "$log_spaced"
+      The output should include 'test_sp.py::test_foo[hello world] 12.30'
+    End
+
+    It 'sums the same spaced id into the module row too'
+      When call rows "$log_spaced"
+      The output should include 'test_sp.py 12.30'
+    End
+  End
+
   Describe 'sort order (LC_ALL=C by module name, module row before its own test rows)'
     It 'emits module sums and per-test rows interleaved: alpha (+2 tests), beta (+1 test), gamma (+1 test)'
       When call rows "$log_a" "$log_b"
@@ -143,6 +168,30 @@ test_beta.py 4.00
 test_beta.py::test_two 4.00
 test_gamma.py 1.11
 test_gamma.py::TestFoo::test_bar 1.11"
+    End
+  End
+
+  Describe 'locale independence (issue #861 nitpick: LC_ALL=C on the awk stage)'
+    # Best-effort, never-flaky demonstration (mirrors
+    # pfblockerng_adr26_locale_spec.sh's pattern): a comma-decimal locale's
+    # printf "%.2f" emits "4,00" instead of "4.00" unless the awk stage pins
+    # LC_ALL=C itself -- skip (never fail) if this libc has none installed.
+    comma_decimal_locale() {
+      for loc in de_DE.UTF-8 fr_FR.UTF-8 es_ES.UTF-8 it_IT.UTF-8 pt_BR.UTF-8; do
+        if LC_ALL="$loc" awk 'BEGIN { printf "%.2f", 1.5 }' 2>/dev/null | grep -q ','; then
+          printf '%s' "$loc"
+          return 0
+        fi
+      done
+      return 1
+    }
+
+    It 'keeps dotted-decimal output even under an ambient comma-decimal locale'
+      loc="$(comma_decimal_locale)"
+      Skip if 'no comma-decimal locale installed on this box to demonstrate the guard' [ -z "$loc" ]
+      When call env LC_ALL="$loc" sh "$SCRIPT" "$log_a"
+      The output should include 'test_alpha.py 4.00'
+      The output should not include ','
     End
   End
 

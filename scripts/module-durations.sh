@@ -58,13 +58,19 @@ done
 # test_x.py::TestFoo::test_bar), so split on the FIRST `::` only (`index`/
 # `substr`, not `split`) and keep the remainder verbatim as the test id --
 # never rely on the LAST `::` (a greedy `[^ \t]+::` would match through it).
-durations="$(awk '
-	match($0, /[0-9]+\.[0-9]+s[ \t]+(setup|call|teardown)[ \t]+[^ \t]+/) {
-		line = substr($0, RSTART, RLENGTH)
-		split(line, parts, /[ \t]+/)
-		dur = parts[1]
-		sub(/s$/, "", dur)
-		nodeid = parts[3]
+# The match itself is anchored to the phase keyword's trailing whitespace,
+# NOT the next whitespace-delimited token: a parametrized nodeid can carry
+# its OWN space (e.g. test_x.py::test_foo[hello world]), and capturing only
+# "the next token" would silently truncate it there, corrupting the row
+# (issue #861 nitpick) -- the nodeid is instead everything from that point to
+# end of line, trimmed of trailing whitespace.
+durations="$(LC_ALL=C awk '
+	match($0, /[0-9]+\.[0-9]+s[ \t]+(setup|call|teardown)[ \t]+/) {
+		hdr = substr($0, RSTART, RLENGTH)
+		dur = hdr
+		sub(/s[ \t].*/, "", dur)
+		nodeid = substr($0, RSTART + RLENGTH)
+		sub(/[ \t]+$/, "", nodeid)
 		sep = index(nodeid, "::")
 		modpath = (sep > 0) ? substr(nodeid, 1, sep - 1) : nodeid
 		sub(/^.*\//, "", modpath)

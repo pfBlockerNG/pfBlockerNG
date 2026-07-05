@@ -104,7 +104,11 @@ jobs:
 
       - name: Install test dependencies
         # pytest-cov drives the informational branch-coverage report below.
-        run: pip install pytest pytest-cov
+        # dnspython (pinned to tests/smoke/requirements.txt's version) is the sole
+        # import-time dep tests/test_shard_union.py needs to actually run here
+        # instead of importorskip-skipping (issue #861) -- it's the splitter's
+        # sole end-to-end correctness gate, so it must execute in this job.
+        run: pip install pytest pytest-cov dnspython==2.8.0
 
       - name: Run tests
         # testpaths and addopts are configured in pyproject.toml

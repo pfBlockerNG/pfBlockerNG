@@ -2281,9 +2281,11 @@ def _db_seed_upstream_row(cursor: Any) -> None:
     # ... WHERE NOT EXISTS is atomic (vs a check-then-insert): a no-op once the row is
     # present, so it is idempotent and preserves any accumulated counter. Shared by
     # _db_create (seed at connect) and _db_flush_dnsbl (issue #858: self-heal at
-    # write -- a mid-connection table clear, e.g. a baseline reset or a GUI report
-    # clear, leaves the row absent and the bare counter UPDATE silently no-ops on it
-    # until the next Unbound restart re-runs _db_create).
+    # write -- a mid-connection TABLE REBUILD, e.g. dnsbl_save_stats()'s empty-stats
+    # DROP TABLE or pfb_open_sqlite's corrupt-DB recovery, leaves the row absent and
+    # the bare counter UPDATE silently no-ops on it until the next Unbound restart
+    # re-runs _db_create. A cleardnsbl/report-clear reset is NOT this case -- it only
+    # runs UPDATE dnsbl SET counter = 0 and keeps every row).
     cursor.execute(
         "INSERT INTO dnsbl ( groupname, timestamp, entries, counter ) "
         "SELECT 'Upstream', ?, 0, 0 "

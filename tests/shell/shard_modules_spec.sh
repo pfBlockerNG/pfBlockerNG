@@ -399,6 +399,20 @@ ${space_dir}/test_c.py"
         'test_b.py 5.00' 'test_c.py 5.00' 'test_d.py 5.00' 'test_e.py 5.00'
     }
 
+    # Real callers (run-smoke.sh, tests/test_shard_union.py) always pass a
+    # test-dir RELATIVE to pytest's rootdir -- an absolute one disables the
+    # per-test split entirely (see the dedicated Describe below, which pins
+    # that guard). Shadow the outer shard() so every It in this Describe
+    # (nested ones included) invokes the script the same relative way a real
+    # caller does; fixture_dir itself stays absolute (needed for the direct
+    # file writes above and elsewhere in this file), so rel() gives its
+    # basename for use in expected output -- recomputed per It since
+    # fixture_dir is per-example (BeforeEach 'setup').
+    shard() {
+      (cd "$(dirname "$fixture_dir")" && sh "$SCRIPT" "$(basename "$fixture_dir")" "$1" "$2")
+    }
+    rel() { basename "$fixture_dir"; }
+
     Describe 'oversized module (a) beats target and gets test-level LPT'
       # wsum = 100 (a) + 4*5 (b,c,d,e) = 120; target = 60. a=100 > 60 and has
       # 3 per-test rows -> oversized+splittable. LPT order: a::test_1(40),
@@ -410,20 +424,22 @@ ${space_dir}/test_c.py"
       # (test_2+test_3) -> shard1 is the carrier (60 > 40).
       It 'gives the non-carrier shard (0) the light whole modules plus ONE node ID (test_1)'
         write_hybrid_table
+        r="$(rel)"
         When call shard 0 2
-        The output should equal "${fixture_dir}/test_b.py
-${fixture_dir}/test_c.py
-${fixture_dir}/test_d.py
-${fixture_dir}/test_e.py
-${fixture_dir}/test_a.py::test_1"
+        The output should equal "${r}/test_b.py
+${r}/test_c.py
+${r}/test_d.py
+${r}/test_e.py
+${r}/test_a.py::test_1"
       End
 
       It 'gives the carrier shard (1) the module PATH plus a --deselect pair for the test that rode elsewhere'
         write_hybrid_table
+        r="$(rel)"
         When call shard 1 2
-        The output should equal "${fixture_dir}/test_a.py
+        The output should equal "${r}/test_a.py
 --deselect
-${fixture_dir}/test_a.py::test_1"
+${r}/test_a.py::test_1"
       End
 
       It 'produces byte-identical output across two invocations (determinism)'
@@ -441,6 +457,67 @@ ${fixture_dir}/test_a.py::test_1"
         The status should be failure
         The stderr should include 'empty'
       End
+
+      It 'takes the LAST row when the table lists the same per-test id twice (last-wins, issue #861 nitpick)'
+        # A duplicated per-test row used to APPEND a second LPT unit for the
+        # same test id (module rows were already last-wins; per-test rows
+        # were not) -- two units sharing one node ID can land on DIFFERENT
+        # shards, double-running the test with every shard green. The early,
+        # would-be-different test_1=1.00 row must be fully superseded by the
+        # later test_1=40.00 row, reproducing the exact write_hybrid_table
+        # split (a single test_1 unit at weight 40).
+        write_table 'test_a.py 100.00' 'test_a.py::test_1 1.00' \
+          'test_a.py::test_2 30.00' 'test_a.py::test_3 30.00' \
+          'test_b.py 5.00' 'test_c.py 5.00' 'test_d.py 5.00' 'test_e.py 5.00' \
+          'test_a.py::test_1 40.00'
+        r="$(rel)"
+        s0="$(shard 0 2)"
+        s1="$(shard 1 2)"
+        When call printf '%s\n---\n%s' "$s0" "$s1"
+        The output should equal "${r}/test_b.py
+${r}/test_c.py
+${r}/test_d.py
+${r}/test_e.py
+${r}/test_a.py::test_1
+---
+${r}/test_a.py
+--deselect
+${r}/test_a.py::test_1"
+      End
+    End
+
+    Describe 'a per-test row whose id contains a space (issue #861 nitpick, table parser)'
+      # A parametrized nodeid can carry its own space (e.g.
+      # test_foo[hello world], from scripts/module-durations.sh's matching
+      # end-of-line fix). The table reader must treat the WEIGHT as the last
+      # whitespace field and rejoin everything before it as the key -- a
+      # fixed f[1]/f[2] split would take "world]" as the weight (clamped to
+      # the 0.01 epsilon) and truncate the key, corrupting the split. Same
+      # weights as the headline case above (40/30/30), just test_1 renamed,
+      # so the expected assignment is identical.
+      It 'places the spaced-id test correctly (weight honored, id untruncated) on the non-carrier shard'
+        write_table 'test_a.py 100.00' 'test_a.py::test_foo[hello world] 40.00' \
+          'test_a.py::test_2 30.00' 'test_a.py::test_3 30.00' \
+          'test_b.py 5.00' 'test_c.py 5.00' 'test_d.py 5.00' 'test_e.py 5.00'
+        r="$(rel)"
+        When call shard 0 2
+        The output should equal "${r}/test_b.py
+${r}/test_c.py
+${r}/test_d.py
+${r}/test_e.py
+${r}/test_a.py::test_foo[hello world]"
+      End
+
+      It 'deselects the spaced-id test, whole and untruncated, from the carrier shard'
+        write_table 'test_a.py 100.00' 'test_a.py::test_foo[hello world] 40.00' \
+          'test_a.py::test_2 30.00' 'test_a.py::test_3 30.00' \
+          'test_b.py 5.00' 'test_c.py 5.00' 'test_d.py 5.00' 'test_e.py 5.00'
+        r="$(rel)"
+        When call shard 1 2
+        The output should equal "${r}/test_a.py
+--deselect
+${r}/test_a.py::test_foo[hello world]"
+      End
     End
 
     It "rides an oversized module WHOLE when it has no per-test rows (can't split what isn't measured per-test)"
@@ -449,8 +526,9 @@ ${fixture_dir}/test_a.py::test_1"
       # must stay a single whole-module unit, never emitting a nodeid/deselect
       # for it. e + the epsilon trio balance onto the other shard.
       write_table 'test_d.py 100.00' 'test_e.py 5.00'
+      r="$(rel)"
       When call shard 0 2
-      The output should equal "${fixture_dir}/test_d.py"
+      The output should equal "${r}/test_d.py"
     End
 
     Describe 'prefix-safety fixup: a deselected test id must never be a STRING PREFIX of a surviving sibling'
@@ -473,40 +551,122 @@ ${fixture_dir}/test_a.py::test_1"
 
       It 'deselects BOTH the short prefix test AND its longer sibling from the carrier (shard 0)'
         write_prefix_table
+        r="$(rel)"
         When call shard 0 2
-        The output should equal "${fixture_dir}/test_a.py
+        The output should equal "${r}/test_a.py
 --deselect
-${fixture_dir}/test_a.py::test_x
+${r}/test_a.py::test_x
 --deselect
-${fixture_dir}/test_a.py::test_xy"
+${r}/test_a.py::test_xy"
       End
 
       It 'gives the recipient shard (1) BOTH tests as explicit node IDs -- the longer one never silently vanishes'
         write_prefix_table
+        r="$(rel)"
         When call shard 1 2
-        The output should equal "${fixture_dir}/test_b.py
-${fixture_dir}/test_c.py
-${fixture_dir}/test_d.py
-${fixture_dir}/test_e.py
-${fixture_dir}/test_a.py::test_x
-${fixture_dir}/test_a.py::test_xy"
+        The output should equal "${r}/test_b.py
+${r}/test_c.py
+${r}/test_d.py
+${r}/test_e.py
+${r}/test_a.py::test_x
+${r}/test_a.py::test_xy"
       End
     End
 
     It 'honors SHARD_DURATIONS_FILE to hybrid-split from an injected table even with no on-disk module-durations.txt (test-only override)'
       # The fixture dir has NO module-durations.txt (round-robin's trigger
       # condition), yet the override must force the hybrid LPT path -- proof
-      # the override, not the default path, decides the mode.
+      # the override, not the default path, decides the mode. Invoked the
+      # same relative way as shard() above (this Describe's opening comment);
+      # SHARD_DURATIONS_FILE itself may stay absolute -- only the test-dir
+      # ARG is what the absolute-dir guard checks.
       ext_table="$(mktemp "${SHELLSPEC_TMPBASE:-/tmp}/shard-modules-ext.XXXXXX")"
       printf '%s\n' 'test_a.py 100.00' 'test_a.py::test_1 40.00' \
         'test_a.py::test_2 30.00' 'test_a.py::test_3 30.00' \
         'test_b.py 5.00' 'test_c.py 5.00' 'test_d.py 5.00' 'test_e.py 5.00' \
         > "$ext_table"
-      When call env SHARD_DURATIONS_FILE="$ext_table" sh "$SCRIPT" "${fixture_dir}" 1 2
-      The output should equal "${fixture_dir}/test_a.py
+      r="$(rel)"
+      # shellcheck disable=SC2016  # intentional: expanded by the child sh -c, not this shell
+      When call sh -c 'cd "$1" && SHARD_DURATIONS_FILE="$2" sh "$3" "$4" "$5" "$6"' -- \
+        "$(dirname "$fixture_dir")" "$ext_table" "$SCRIPT" "$r" 1 2
+      The output should equal "${r}/test_a.py
 --deselect
-${fixture_dir}/test_a.py::test_1"
+${r}/test_a.py::test_1"
       rm -f "$ext_table"
+    End
+  End
+
+  Describe 'absolute test-dir (issue #861 nitpick): an oversized module rides WHOLE, never split'
+    # pytest's --deselect matches by nodeid PREFIX against ROOTDIR-RELATIVE
+    # ids; an absolute dir's carrier --deselect would never match, silently
+    # double-running the deselected test. shard-modules.sh guards this by
+    # treating an oversized module as unsplittable (ride whole) whenever the
+    # test-dir arg is absolute -- exactly like the no-per-test-rows case.
+    # fixture_dir (from the outer BeforeEach) is already absolute, so the
+    # OUTER shard() (plain "sh $SCRIPT $fixture_dir ...") is what we want
+    # here -- no override needed in this Describe.
+    write_oversized_table() {
+      : > "${fixture_dir}/module-durations.txt"
+      printf '%s\n' 'test_a.py 100.00' 'test_a.py::test_1 40.00' \
+        'test_a.py::test_2 30.00' 'test_a.py::test_3 30.00' \
+        'test_b.py 5.00' 'test_c.py 5.00' 'test_d.py 5.00' 'test_e.py 5.00' \
+        >> "${fixture_dir}/module-durations.txt"
+    }
+
+    It 'rides the oversized module (a) WHOLE on its assignment shard -- no node ID, no --deselect'
+      write_oversized_table
+      When call shard 0 2
+      The output should equal "${fixture_dir}/test_a.py"
+    End
+
+    It 'never emits a bare node ID or --deselect for the oversized module on any other shard'
+      write_oversized_table
+      When call shard 1 2
+      The output should equal "${fixture_dir}/test_b.py
+${fixture_dir}/test_c.py
+${fixture_dir}/test_d.py
+${fixture_dir}/test_e.py"
+    End
+  End
+
+  Describe 'locale independence (issue #861 nitpick: LC_ALL=C on every awk stage)'
+    # Best-effort, never-flaky demonstration (mirrors
+    # pfblockerng_adr26_locale_spec.sh's pattern): a comma-decimal locale's
+    # printf "%.6f" and numeric coercion ("40,00"+0) would otherwise corrupt
+    # weights/tie-breaks unless every awk stage pins LC_ALL=C itself -- skip
+    # (never fail) if this libc has none installed.
+    write_table() {
+      : > "${fixture_dir}/module-durations.txt"
+      for line in "$@"; do
+        printf '%s\n' "$line" >> "${fixture_dir}/module-durations.txt"
+      done
+    }
+    comma_decimal_locale() {
+      for loc in de_DE.UTF-8 fr_FR.UTF-8 es_ES.UTF-8 it_IT.UTF-8 pt_BR.UTF-8; do
+        if LC_ALL="$loc" awk 'BEGIN { printf "%.2f", 1.5 }' 2>/dev/null | grep -q ','; then
+          printf '%s' "$loc"
+          return 0
+        fi
+      done
+      return 1
+    }
+
+    It 'produces the SAME split under an ambient comma-decimal locale as under C'
+      # Weights carry a fractional part that MATTERS to the tie-break: under
+      # a comma-decimal locale, an unguarded awk's string-to-number coercion
+      # truncates a dotted-decimal table value at the '.' (verified live:
+      # "100.51" + 0 reads as 100 under de_DE.UTF-8's LC_NUMERIC), which would
+      # tie test_a.py/test_b.py at weight 50 and flip their assignment order
+      # (untruncated: b(50.99) beats a(50.01), b->shard0; truncated tie:
+      # path-ASC tiebreak puts a->shard0 instead) -- the LC_ALL=C awk fix
+      # keeps the table's real C-locale values intact regardless of the
+      # ambient locale, so shard 0's winner must be identical either way.
+      write_table 'test_a.py 50.01' 'test_b.py 50.99'
+      loc="$(comma_decimal_locale)"
+      Skip if 'no comma-decimal locale installed on this box to demonstrate the guard' [ -z "$loc" ]
+      baseline="$(shard 0 2)"
+      When call env LC_ALL="$loc" sh "$SCRIPT" "${fixture_dir}" 0 2
+      The output should equal "$baseline"
     End
   End
 End

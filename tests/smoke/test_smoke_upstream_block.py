@@ -21,9 +21,12 @@ When triggered, a ``DNSBL-python``-source CSV line is written to
 ``Upstream_Block``, ``group`` ``Upstream``, and ``b_eval`` equal to the
 classifier label (``"NXRA"``, ``"EDE15 (Blocked)"``, etc.).
 
-The ``Upstream`` groupname row in the SQLite ``dnsbl`` table is seeded by
-``dnsbl_save_stats()`` in PHP and its ``counter`` column is incremented by
-Python on each upstream block — the same pattern as per-feed DNSBL counters.
+The ``Upstream`` groupname row in the SQLite ``dnsbl`` table is synthetic --
+``dnsbl_save_stats()`` in PHP only ever iterates real feed groups, so it never
+creates this row. Python seeds it instead (``_db_create`` at connect, self-healed
+at flush by ``_db_seed_upstream_row`` if a mid-connection table rebuild ever
+clears it -- issue #858), and its ``counter`` column is incremented by Python on
+each upstream block — the same pattern as per-feed DNSBL counters.
 
 These tests are DESELECTED from the default ``python -m pytest`` run. Run via::
 
@@ -479,10 +482,12 @@ class TestUpstreamCounterIncrement:
         )
         # Issue #858: _db_flush_dnsbl now self-heals an absent 'Upstream' row at the
         # next flush, so an absent row (-1) here is no longer a defect — it just means
-        # no upstream block has flushed since the dnsbl table was last cleared (e.g.
-        # this module ran right after a cross-module baseline reset with no
-        # intervening block/restart). Treat it as a legitimate baseline of 0 instead of
-        # failing; a read ERROR (-2) above is still a hard failure.
+        # no upstream block has flushed since a mid-connection table rebuild (e.g.
+        # dnsbl_save_stats()'s empty-stats DROP TABLE, or pfb_open_sqlite's corrupt-DB
+        # recovery) last cleared it -- a baseline reset (cleardnsbl) only zeroes
+        # counters and keeps the row, so it is NOT what would produce this case.
+        # Treat an absent row as a legitimate baseline of 0 instead of failing; a read
+        # ERROR (-2) above is still a hard failure.
         baseline = 0 if baseline_raw == -1 else baseline_raw
 
         # When: trigger a block (first response is authoritative — assert it arrived).

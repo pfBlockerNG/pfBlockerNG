@@ -11,21 +11,38 @@ equals a plain unsharded collection of the same tree -- with NO test collected b
 more than one shard (a ``--deselect``ed test double-running would be silently
 invisible otherwise).
 
-Runs entirely off-appliance (collection only, no SMOKE_PKG / live VM needed). It
-targets `tests/smoke` directly with a SYNTHETIC per-test duration table (via the
+Runs entirely off-appliance (collection only, no SMOKE_PKG / live VM needed). The
+parametrized ``test_shard_union_covers_every_test_exactly_once`` targets
+`tests/smoke` with a SYNTHETIC per-test duration table (via the
 `SHARD_DURATIONS_FILE` test-only env override -- see shard-modules.sh's header)
-built from a REAL `--collect-only` pass, so it exercises the hybrid path today even
-though the checked-in `tests/smoke/module-durations.txt` has no per-test rows yet
-(that regeneration is issue #855's Step 2). No module name is hardcoded: the
-"oversized" module is whichever one actually collects the most `-m smoke` tests.
+built from a REAL `--collect-only` pass, forcing the hybrid split deterministically
+regardless of what the CHECKED-IN table's own targets happen to be (which module is
+oversized there depends on measured CI timings, not something a test should
+hardcode). No module name is hardcoded: the "oversized" module is whichever one
+actually collects the most `-m smoke` tests.
+
+The synthetic table proves the split ALGORITHM never drops/duplicates a test, but
+it always synthesizes a row for every collected test, so it structurally cannot see
+the one failure mode that comes from the CHECKED-IN `tests/smoke/module-durations.txt`
+itself going stale (issue #861): a per-test row surviving a test rename/removal
+becomes a bare, nonexistent node-id arg on whichever shard it lands on (pytest exits
+4 there); and a NEW test whose nodeid is a strict string EXTENSION of an off-carrier
+known row id is silently stripped by that carrier's `--deselect` prefix match and
+runs on NO shard. `test_committed_table_rows_exist_in_the_live_collection` and
+`test_committed_table_has_no_prefix_blind_spot` below check the COMMITTED table
+itself against the live collection to close that gap -- a drift the synthetic-table
+tests above can never surface.
 
 Guarded by `pytest.importorskip("dns")`: collecting the whole `tests/smoke` tree
 imports every module in it, and `test_stub_shapes.py` needs the optional
-`dnspython` dependency (`tests/smoke/requirements.txt`) that the plain
-`python -m pytest` unit job does NOT install (pyproject.toml's default addopts
-`--ignore=tests/smoke` means this is normally never imported at all). Skips, never
-fails, on a checkout without it -- exactly like the ADR-14 browser tier's
-`importorskip("playwright...")` precedent.
+`dnspython` dependency (`tests/smoke/requirements.txt`) that a BARE local
+`python -m pytest` does not install (pyproject.toml's default addopts
+`--ignore=tests/smoke` only skips *collecting* tests/smoke directly -- this file
+lives in tests/ and still imports `dns` itself at module scope).
+`.github/workflows/test.yml`'s unit job installs `dnspython` precisely so this
+module -- the splitter's sole correctness gate -- actually runs in CI instead of
+skipping (issue #861). Skips, never fails, on a checkout without it -- exactly like
+the ADR-14 browser tier's `importorskip("playwright...")` precedent.
 """
 
 from __future__ import annotations
@@ -46,6 +63,7 @@ _SMOKE_DIR = _REPO_ROOT / "tests" / "smoke"  # filesystem enumeration only (glob
 _SMOKE_DIR_REL = "tests/smoke"  # the arg every subprocess call below actually uses (see the note below)
 _SYNTHETIC_MODULE_WEIGHT = "100000.00"  # guarantees the chosen module clears any target
 _SMALL_WEIGHT = "1.00"  # every other module + every per-test row: never oversized on its own
+_COMMITTED_DURATIONS_FILE = _SMOKE_DIR / "module-durations.txt"
 
 
 def _collect(args: list[str]) -> set[str]:
@@ -170,3 +188,104 @@ def test_shard_union_covers_every_test_exactly_once(
         f"  actual (distinct union count):      {len(union)}\n"
         f"  per-shard counts: {[len(s) for s in shard_sets]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Committed-table drift gate (issue #861) -- unlike the synthetic-table test
+# above, these check tests/smoke/module-durations.txt AS COMMITTED, which the
+# synthetic table can never drift-check (it always synthesizes a fresh row for
+# every collected test).
+# ---------------------------------------------------------------------------
+
+
+def _parse_duration_table(path: Path) -> dict[str, float]:
+    """Parse a module-durations.txt-shaped table into {row_id: weight}, mirroring
+    scripts/shard-modules.sh's table reader: comment/blank lines are skipped, and
+    the WEIGHT is always the LAST whitespace-delimited field so a parametrized
+    test id containing its own space round-trips intact (issue #861's table-parser
+    fix -- the key is everything before that last field, rejoined verbatim)."""
+    rows: dict[str, float] = {}
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.rsplit(None, 1)
+        if len(parts) != 2:
+            continue
+        key, weight = parts
+        rows[key] = float(weight)
+    return rows
+
+
+def _basename_nodeid(nid: str) -> str:
+    """Convert a collected `tests/smoke/test_x.py::test_y` node id to the
+    `test_x.py::test_y` BASENAME form module-durations.txt rows actually use
+    (scripts/module-durations.sh strips the directory prefix when it writes the
+    table)."""
+    module, rest = nid.split("::", 1)
+    return f"{module.rsplit('/', 1)[-1]}::{rest}"
+
+
+def _per_test_row_ids(table: dict[str, float]) -> set[str]:
+    """Row keys that are per-test rows (`module::test`), excluding module-sum rows."""
+    return {key for key in table if "::" in key}
+
+
+def _assert_committed_table_rows_exist(table_path: Path, oracle_ids: set[str]) -> None:
+    """Every per-test row nodeid in table_path must exist in the live -m smoke
+    collection -- a stale row (a renamed/removed test) becomes a bare, nonexistent
+    node-id argument on whichever shard it lands on, and pytest exits 4 there
+    (issue #861 blocking findings on shard-modules.sh:46/346: run-smoke.sh maps
+    only exit 5 to a benign empty-shard pass, so exit 4 fails the whole leg)."""
+    table = _parse_duration_table(table_path)
+    live_ids = {_basename_nodeid(nid) for nid in oracle_ids}
+    stale = _per_test_row_ids(table) - live_ids
+    assert not stale, (
+        f"stale per-test row(s) in {table_path} -- no matching live -m smoke test.\n"
+        f"  regenerate tests/smoke/module-durations.txt (scripts/module-durations.sh)\n"
+        f"  stale row(s): {sorted(stale)}"
+    )
+
+
+def _assert_committed_table_has_no_prefix_blind_spot(table_path: Path, oracle_ids: set[str]) -> None:
+    """A collected test in a module that HAS per-test rows, itself lacking a row, is
+    a blind spot IFF its nodeid is a strict string PREFIX EXTENSION of some other
+    row in that same module: pytest's `--deselect` matches by prefix, so the
+    carrier's deselect for the shorter known id also silently strips the longer
+    unknown one, and it then runs on NO shard (issue #861 blocking finding on
+    shard-modules.sh:49)."""
+    table = _parse_duration_table(table_path)
+    row_ids = _per_test_row_ids(table)
+    modules_with_rows = {row_id.split("::", 1)[0] for row_id in row_ids}
+    blind_spots = set()
+    for nid in oracle_ids:
+        bid = _basename_nodeid(nid)
+        module = bid.split("::", 1)[0]
+        if module not in modules_with_rows or bid in row_ids:
+            continue
+        if any(other != bid and bid.startswith(other) for other in row_ids if other.split("::", 1)[0] == module):
+            blind_spots.add(bid)
+    assert not blind_spots, (
+        f"collected test(s) string-extend a known per-test row id with no row of their own -- "
+        f"the carrier's --deselect for the shorter id would also strip these.\n"
+        f"  regenerate tests/smoke/module-durations.txt (scripts/module-durations.sh)\n"
+        f"  blind spot(s): {sorted(blind_spots)}"
+    )
+
+
+def test_committed_table_rows_exist_in_the_live_collection(oracle_ids: set[str]) -> None:
+    """The COMMITTED tests/smoke/module-durations.txt must not carry a per-test row
+    for a test that no longer collects -- a rename/removal without regenerating the
+    table turns that row into a bare, nonexistent pytest node-id argument on some
+    shard, failing the leg with pytest exit 4 (issue #861)."""
+    _assert_committed_table_rows_exist(_COMMITTED_DURATIONS_FILE, oracle_ids)
+
+
+def test_committed_table_has_no_prefix_blind_spot(oracle_ids: set[str]) -> None:
+    """A NEW test added to a module the COMMITTED table already splits at test
+    granularity must get its OWN row before it ships, whenever its nodeid string-
+    extends an existing off-carrier row -- otherwise the carrier's `--deselect` for
+    the shorter id silently strips it too and it runs on NO shard (issue #861; the
+    in-tree test_cron_detects_changed_local_feed / ..._same_second pair is exactly
+    this shape)."""
+    _assert_committed_table_has_no_prefix_blind_spot(_COMMITTED_DURATIONS_FILE, oracle_ids)

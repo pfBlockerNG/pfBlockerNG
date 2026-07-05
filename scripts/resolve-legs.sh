@@ -6,9 +6,9 @@
 #
 #   legs        [--test-dir DIR] [--label LABEL]
 #                 Resolve scope ladder + THREE-WAY jq + -k derivation, then
-#                 expand each leg into its module shards (issue #797): reads
+#                 expand each leg into its shards (issue #797): reads
 #                 SHARDS_INPUT (script default 1 — the workflow's policy
-#                 default of 2 lives in the caller's input, not here) and
+#                 default of 3 lives in the caller's input, not here) and
 #                 MARKER_INPUT (default smoke). Shard count collapses to 1
 #                 unless the derived -k is EMPTY and the marker is exactly
 #                 "smoke", and is clamped to the --test-dir's direct-child
@@ -126,7 +126,7 @@ _rl_legs() {
     # ── SHARD expansion (issue #797) ──────────────────────────────────────── #
     # S from SHARDS_INPUT: empty/unset/non-numeric or <1 -> 1. This SCRIPT's
     # default is 1 (conservative standalone behaviour); the policy default of
-    # 2 lives in the WORKFLOW input (smoke.yml), not here.
+    # 3 lives in the WORKFLOW input (smoke.yml), not here.
     case "${SHARDS_INPUT:-}" in
         '' | *[!0-9]*) S=1 ;;
         *) S="$SHARDS_INPUT" ;;
