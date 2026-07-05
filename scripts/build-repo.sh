@@ -26,8 +26,8 @@
 # differing in php/py flavor (their `php*`/`py*-*` dependency names) CANNOT
 # coexist in one catalog — the second would silently shadow the first. We FAIL
 # LOUD rather than drop a build. Whether a colliding combo exists depends on the
-# ci-metadata version matrix (two entries sharing a FreeBSD major with different
-# php/py flavors); when one ever arises, the fix is a flavored layout
+# ci-metadata version matrix (two entries sharing a full ABI — FreeBSD major AND
+# arch — with different php/py flavors); when one ever arises, the fix is a flavored layout
 # `<out>/<ABI>-<php><py>/` (add-repo.sh would then detect + pin the box's flavor).
 # That split is intentionally NOT implemented here — see the guard below.
 #
