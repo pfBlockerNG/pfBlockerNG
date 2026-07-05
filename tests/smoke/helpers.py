@@ -800,9 +800,24 @@ def php_error_log_path(vm: SmokeVM, *, timeout: float = 30.0) -> str:
     return res.stdout.strip()
 
 
+def php_ini_int(vm: SmokeVM, key: str, *, timeout: float = 30.0) -> int:
+    """The guest's EFFECTIVE integer value for a php.ini directive (bare ``php -r`` ``ini_get``)."""
+    res = vm.ssh(PHP_BIN, "-r", f"echo (int)ini_get({_php_str(key)});", timeout=timeout)
+    if res.returncode != 0:
+        raise RuntimeError(f"reading guest php.ini {key} failed: {(res.stderr or res.stdout).strip()!r}")
+    return int(res.stdout.strip())
+
+
 def guest_file_contains(vm: SmokeVM, path: str, needle: str, *, timeout: float = 30.0) -> bool:
-    """True iff the guest file at ``path`` contains the fixed string ``needle`` (``grep -F -q``)."""
+    """True iff the guest file at ``path`` contains the fixed string ``needle`` (``grep -F -q``).
+
+    grep exits 0 (match) / 1 (no match, including a not-yet-created log) / >1 (other). Only an
+    ssh transport failure (rc 255) is a real read fault worth raising — mirror PhpErrorLogGuard:
+    a missing file legitimately means "does not contain needle", so 1 and 2 both read as absent.
+    """
     res = vm.ssh("/usr/bin/grep", "-F", "-q", "--", needle, path, timeout=timeout)
+    if res.returncode == 255:
+        raise RuntimeError(f"ssh failed grepping guest {path!r}: {(res.stderr or res.stdout).strip()!r}")
     return res.returncode == 0
 
 
@@ -810,17 +825,20 @@ _FPM_PROBE_FILE = "/usr/local/www/pfb_smoke_er_probe.php"
 _FPM_PROBE_URL = "/pfb_smoke_er_probe.php"
 
 
-def php_fpm_effective_error_reporting(vm: SmokeVM, get: Callable[[str], Any], *, timeout: float = 30.0) -> int:
-    """The php-fpm (GUI SAPI) EFFECTIVE ``error_reporting``, via a throwaway webroot probe.
+def php_fpm_probe(vm: SmokeVM, get: Callable[[str], Any], *, warn_tag: str, timeout: float = 30.0) -> int:
+    """Execute a probe through php-fpm: echo the effective ``error_reporting`` AND fire a tagged
+    ``E_USER_WARNING``, so a diagnostic is logged via the REAL GUI SAPI at the box's configured
+    level. Returns the FPM ``error_reporting`` bitmask; the caller asserts the level AND that
+    ``warn_tag`` landed in a watched log candidate — the two facts the render sweep depends on but
+    a bare ``php -r`` cannot show (workers strict; FPM logs where the guard looks).
 
-    A bare ``php -r`` proves only the CLI SAPI; the render tier depends on php-fpm
-    WORKERS running at the raised level, which the reload could miss. Drop a one-line PHP
-    probe into the webroot, GET it (nginx → php-fpm executes it in a WORKER), read the
-    level, then remove the probe. ``get`` is an authenticated ``WebUI.get`` bound method
-    (its request rides the fpm path). The probe is inert (echoes an int) and lives only
-    for the GET on the throwaway smoke VM.
+    ``get`` is an authenticated ``WebUI.get`` bound method (its request rides the fpm path). With
+    ``display_errors=off`` the warning goes to the log, not the body, so the body is just the int.
+    The probe is inert (an int + a tagged warning) and removed after; a failed removal is surfaced
+    loudly rather than leaving a stray webroot file silently.
     """
-    write = vm.ssh(f"printf '%s' '<?php echo error_reporting();' > {_FPM_PROBE_FILE}", timeout=timeout)
+    probe = f"<?php echo error_reporting(); trigger_error({_php_str(warn_tag)}, E_USER_WARNING);"
+    write = vm.ssh(f"printf '%s' {shlex.quote(probe)} > {_FPM_PROBE_FILE}", timeout=timeout)
     if write.returncode != 0:
         raise RuntimeError(f"writing fpm probe {_FPM_PROBE_FILE} failed: {(write.stderr or write.stdout).strip()!r}")
     try:
@@ -833,7 +851,12 @@ def php_fpm_effective_error_reporting(vm: SmokeVM, get: Callable[[str], Any], *,
         except ValueError as exc:
             raise RuntimeError(f"fpm probe returned a non-int error_reporting: {body!r}") from exc
     finally:
-        vm.ssh("/bin/rm", "-f", _FPM_PROBE_FILE, timeout=timeout)
+        rm = vm.ssh("/bin/rm", "-f", _FPM_PROBE_FILE, timeout=timeout)
+        if rm.returncode != 0:
+            print(
+                f"[smoke] WARNING: failed to remove fpm probe {_FPM_PROBE_FILE} "
+                f"(rc={rm.returncode}): {(rm.stderr or rm.stdout).strip()!r} — stray file left in webroot"
+            )
 
 
 def php_trigger_user_warning(vm: SmokeVM, *, level: str, tag: str, timeout: float = 30.0) -> None:
@@ -912,6 +935,13 @@ def enable_strict_php_error_reporting(vm: SmokeVM, *, timeout: float = 30.0) -> 
             f"  expected: {expected} ({STRICT_PHP_ERROR_REPORTING})\n"
             f"  actual:   {actual}\n"
             f"  php.ini:  {_GUEST_PHP_INI}"
+        )
+    # Assert the arg-rich-traces directive took too (the second sed edit) — verify the
+    # EFFECTIVE value, so a silently no-op'd substitution (e.g. an unmatched line) is caught.
+    ignore_args = php_ini_int(vm, "zend.exception_ignore_args", timeout=timeout)
+    if ignore_args != 0:
+        raise AssertionError(
+            f"guest zend.exception_ignore_args did not take: expected 0, got {ignore_args} ({_GUEST_PHP_INI})"
         )
 
 
