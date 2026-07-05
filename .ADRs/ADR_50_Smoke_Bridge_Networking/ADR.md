@@ -174,7 +174,8 @@ smoke image on a bridge and asserted boot + DHCP + SSH + guest→runner HTTP.
 - **Local LXC box (10.0.0.31): PASS** — WAN `192.168.89.37`, MGMT `192.168.43.45`, `SSH_OK`,
   guest→runner HTTP OK. Harness: `bridge-derisk.sh` (kept in the session scratchpad).
 - **GH-hosted runner: PASS (~1 min)** — run `28352290881`; same checks green. (The throwaway
-  `bridge-derisk.yml` that drove it was removed from the branch after; evidence is in run history.)
+  `bridge-derisk.yml` that drove it, and its runs, have since been removed — the derisk is captured
+  here, not in run history.)
 
 Gotchas found + resolved (each folded into §5):
 
