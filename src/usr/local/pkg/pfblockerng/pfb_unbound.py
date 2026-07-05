@@ -2273,11 +2273,29 @@ def _db_file(db: int) -> str:
     return ""
 
 
+def _db_seed_upstream_row(cursor: Any) -> None:
+    # Issue #285 / #858: seed the synthetic 'Upstream' group row so the per-block
+    # counter UPDATE in _db_flush_dnsbl always has a row to increment -- the upstream
+    # block is not a feed, so dnsbl_save_stats() never creates it. The single INSERT
+    # ... WHERE NOT EXISTS is atomic (vs a check-then-insert): a no-op once the row is
+    # present, so it is idempotent and preserves any accumulated counter. Shared by
+    # _db_create (seed at connect) and _db_flush_dnsbl (issue #858: self-heal at
+    # write -- a mid-connection table clear, e.g. a baseline reset or a GUI report
+    # clear, leaves the row absent and the bare counter UPDATE silently no-ops on it
+    # until the next Unbound restart re-runs _db_create).
+    cursor.execute(
+        "INSERT INTO dnsbl ( groupname, timestamp, entries, counter ) "
+        "SELECT 'Upstream', ?, 0, 0 "
+        "WHERE NOT EXISTS (SELECT 1 FROM dnsbl WHERE groupname = 'Upstream')",
+        (make_timestamp(),),
+    )
+
+
 def _db_create(db: int, cursor: Any) -> None:
     if db == DB_RESOLVER:
         cursor.execute("CREATE TABLE IF NOT EXISTS resolver (row integer, totalqueries integer, queries integer)")
-        # Seed row 0 atomically (no-op once present) -- same singleton-seed shape as the
-        # dnsbl 'Upstream' row below: INSERT ... WHERE NOT EXISTS avoids a check-then-insert
+        # Seed row 0 atomically (no-op once present) -- same singleton-seed shape as
+        # _db_seed_upstream_row: INSERT ... WHERE NOT EXISTS avoids a check-then-insert
         # race and is idempotent (preserves accumulated totals across a re-init/reconnect).
         cursor.execute(
             "INSERT INTO resolver ( row, totalqueries, queries ) "
@@ -2287,18 +2305,7 @@ def _db_create(db: int, cursor: Any) -> None:
         cursor.execute(
             "CREATE TABLE IF NOT EXISTS dnsbl ( groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER )"
         )
-        # Seed the synthetic 'Upstream' group row (issue #285) so the per-block counter
-        # UPDATE in _db_flush_dnsbl has a row to increment -- the upstream block is not a
-        # feed, so dnsbl_save_stats() never creates it. The single INSERT ... WHERE NOT
-        # EXISTS is atomic (vs a check-then-insert): it stays a no-op once the row is
-        # present, so it is idempotent and preserves any accumulated counter across a
-        # re-init/reconnect, and cannot duplicate the row if another opener races it.
-        cursor.execute(
-            "INSERT INTO dnsbl ( groupname, timestamp, entries, counter ) "
-            "SELECT 'Upstream', ?, 0, 0 "
-            "WHERE NOT EXISTS (SELECT 1 FROM dnsbl WHERE groupname = 'Upstream')",
-            (make_timestamp(),),
-        )
+        _db_seed_upstream_row(cursor)
     elif db == DB_CACHE:
         cursor.execute(
             "CREATE TABLE IF NOT EXISTS dnsblcache ( type TEXT, domain TEXT, groupname TEXT, final TEXT, feed TEXT );"
@@ -2382,9 +2389,16 @@ def _db_flush_dnsbl(deltas: dict[str, int]) -> bool:
     if not deltas or not pfb["sqlite3_dnsbl_con"]:
         return True
     rows = [(d, g) for g, d in deltas.items()]
-    return _db_run(
-        DB_DNSBL, lambda con: con.executemany("UPDATE dnsbl SET counter = counter + ? WHERE groupname = ?", rows)
-    )
+
+    def _flush(con: Any) -> None:
+        if "Upstream" in deltas:
+            # Issue #858: re-seed a mid-connection-cleared 'Upstream' row before the
+            # UPDATE below, so the increment is never silently dropped. Gated on an
+            # actual Upstream delta so a feed-only flush doesn't pay for it.
+            _db_seed_upstream_row(con.cursor())
+        con.executemany("UPDATE dnsbl SET counter = counter + ? WHERE groupname = ?", rows)
+
+    return _db_run(DB_DNSBL, _flush)
 
 
 def _db_flush_cache(rows: list[Any]) -> bool:

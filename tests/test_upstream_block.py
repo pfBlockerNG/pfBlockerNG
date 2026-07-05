@@ -12,6 +12,7 @@ All tests are pure off-box — no Unbound API calls, no fixtures, no I/O.
 from __future__ import annotations
 
 import sqlite3
+from typing import Any
 
 import pytest
 from unboundmodule import RCODE_NOERROR, RCODE_NXDOMAIN
@@ -24,6 +25,7 @@ from pfb_unbound import (
     EDNS_OPT_CODE_EDE,
     UpstreamBlock,
     _db_create,
+    _db_flush_dnsbl,
     _log_upstream_block,
     _parse_ede_options,
     classify_upstream_block,
@@ -488,3 +490,82 @@ class TestDnsblDbSeedsUpstreamRow:
 
         # Then: still a single row, counter PRESERVED (not reset, not duplicated).
         assert self._counter_rows(con) == [(5,)], "re-create must not reset or duplicate the Upstream row"
+
+
+# ---------------------------------------------------------------------------
+# _db_flush_dnsbl — self-heals a mid-connection-cleared 'Upstream' row (#858)
+# ---------------------------------------------------------------------------
+
+
+class TestDnsblFlushSelfHealsUpstreamRow:
+    """Scenario: _db_flush_dnsbl re-seeds the 'Upstream' row if it goes missing
+    mid-connection, so the counter increment is never a silent no-op.
+
+    Background:
+        _db_create only seeds 'Upstream' at DB *connect* time. With ADR-10's
+        zero-downtime swaps, Unbound's Python module can hold one connection
+        across many reloads, so anything that empties the dnsbl table
+        mid-connection (the smoke suite's cross-module baseline reset; a GUI
+        report clear) leaves the row absent -- and the bare ``UPDATE dnsbl SET
+        counter = counter + ? WHERE groupname = ?`` silently no-ops on a
+        missing row until the next Unbound restart re-runs _db_create. The fix
+        re-seeds the row inside the flush itself, gated on an actual
+        'Upstream' delta so a feed-only flush does not pay for it.
+
+    Given:
+        A connected dnsbl DB (via pfb_db_validate, which runs _db_create) whose
+        table is then emptied mid-connection (simulating a baseline reset with
+        no intervening reconnect/restart).
+    """
+
+    @staticmethod
+    def _connect(tmp_path: Any) -> sqlite3.Connection:
+        db = str(tmp_path / "dnsbl.sqlite")
+        pfb_unbound.pfb["pfb_py_dnsbl"] = db
+        pfb_unbound.pfb["sqlite3_dnsbl_con"] = True
+        pfb_unbound.pfb_db_validate(DB_DNSBL)  # connects + seeds via _db_create
+        return pfb_unbound._db_conns[DB_DNSBL]
+
+    def test_flush_recreates_absent_upstream_row_with_the_delta(self, tmp_path: Any) -> None:
+        """
+        When: the dnsbl table is cleared mid-connection and a flush carrying an
+        'Upstream' delta then runs.
+        Then: the row exists again with counter == the delta, proving the
+        flush self-heals rather than letting the UPDATE silently no-op.
+
+        RED on the unfixed code: the bare UPDATE has no row to match, the row
+        stays absent, and the final assertion fails on `row is None`.
+        """
+        con = self._connect(tmp_path)
+
+        # Before: the connect-time seed left a row at 0.
+        assert con.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchone() == (0,)
+
+        # Given: a mid-connection clear (baseline reset) -- row now absent.
+        con.execute("DELETE FROM dnsbl")
+        con.commit()
+        assert con.execute("SELECT * FROM dnsbl WHERE groupname = 'Upstream'").fetchone() is None
+
+        # When: a flush carrying an Upstream delta runs.
+        assert _db_flush_dnsbl({"Upstream": 3})
+
+        # Then: the row exists again with the flushed delta -- not silently dropped.
+        row = con.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchone()
+        assert row == (3,), f"Upstream row not self-healed at flush: {row!r}"
+
+    def test_feed_only_flush_does_not_create_the_upstream_row(self, tmp_path: Any) -> None:
+        """
+        Branch coverage of the 'Upstream' in deltas guard: a flush carrying
+        only a feed delta (no 'Upstream' key) must not seed the row. Proves
+        the self-heal is scoped to an actual Upstream write, not a blanket
+        seed-on-every-flush.
+        """
+        con = self._connect(tmp_path)
+        con.execute("DELETE FROM dnsbl")
+        con.commit()
+
+        assert _db_flush_dnsbl({"SomeFeed": 1})
+
+        assert con.execute("SELECT * FROM dnsbl WHERE groupname = 'Upstream'").fetchone() is None, (
+            "a feed-only flush (no 'Upstream' delta) must not seed the Upstream row"
+        )
