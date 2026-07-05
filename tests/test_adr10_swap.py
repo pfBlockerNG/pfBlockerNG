@@ -514,6 +514,7 @@ class TestSwapOpensDnsblStatsDb:
         """
         _set_count_paths(tmp_path)
         monkeypatch.setattr(P, "dnsbl_emit_count", lambda *a, **k: True)
+        P.pfb["mod_sqlite3"] = True  # pin every guard input so "closed" is provably the predicate, not sqlite off
         P.pfb["pfb_py_dnsbl"] = str(tmp_path / "dnsbl.sqlite")
 
         # ---- BEFORE: boot state where stats were NOT wanted -> init left the DB closed.
@@ -546,6 +547,7 @@ class TestSwapOpensDnsblStatsDb:
         """
         _set_count_paths(tmp_path)
         monkeypatch.setattr(P, "dnsbl_emit_count", lambda *a, **k: True)
+        P.pfb["mod_sqlite3"] = True  # pin every guard input so "closed" is provably the predicate, not sqlite off
         P.pfb["pfb_py_dnsbl"] = str(tmp_path / "dnsbl.sqlite")
 
         # ---- BEFORE: forwarding on, but the DB somehow closed (DB never opened).
@@ -567,6 +569,7 @@ class TestSwapOpensDnsblStatsDb:
         a swap that actually enables stats, not a blanket open-on-every-swap."""
         _set_count_paths(tmp_path)
         monkeypatch.setattr(P, "dnsbl_emit_count", lambda *a, **k: True)
+        P.pfb["mod_sqlite3"] = True  # pin every guard input so "closed" is provably the predicate, not sqlite off
         P.pfb["pfb_py_dnsbl"] = str(tmp_path / "dnsbl.sqlite")
         P.pfb["python_blacklist"] = False
         P.pfb["forwarding"] = False
@@ -584,6 +587,7 @@ class TestSwapOpensDnsblStatsDb:
         the existing connection (and its accumulated counter) is preserved."""
         _set_count_paths(tmp_path)
         monkeypatch.setattr(P, "dnsbl_emit_count", lambda *a, **k: True)
+        P.pfb["mod_sqlite3"] = True  # pin every guard input so "closed" is provably the predicate, not sqlite off
         P.pfb["pfb_py_dnsbl"] = str(tmp_path / "dnsbl.sqlite")
 
         # ---- BEFORE: the DB is already open with an accumulated Upstream counter.
