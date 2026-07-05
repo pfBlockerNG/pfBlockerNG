@@ -67,13 +67,17 @@ _DOT_BLOCK_DESCR_PFX = "pfB_DoT_Block_"
 # Marker for the single floating DoT/DoQ-block rule (mirrors PFB_DOT_BLOCK_FLOATING_DESCR).
 _DOT_BLOCK_FLOATING_DESCR = "pfB_DoT_Block_Floating"
 
-# Rendered pf label anchor for a pfB-owned DoT/DoQ block rule (#813). Plain ``pfctl -sr``
-# (no ``-v`` needed) prints ``label "USER_RULE: <descr>"`` for every config filter/rule row
-# that carries a ``descr`` — pf labels are rule TEXT, emitted by ``print_rule()`` regardless
-# of verbosity (confirmed on a real CE 2.8 smoke-diagnostics guest, run 28704593724). Both
-# the per-interface descr (``pfB_DoT_Block_<iface>``) and the floating descr
-# (``pfB_DoT_Block_Floating``) share this prefix, so anchoring on the PREFIX covers both.
-_DOT_BLOCK_LABEL_ANCHOR = "USER_RULE: " + _DOT_BLOCK_DESCR_PFX
+# Rendered pf label anchoring for a pfB-owned DoT/DoQ block rule (#813, #849). Plain
+# ``pfctl -sr`` (no ``-v`` needed) prints the config row's ``descr`` as rule TEXT — pf labels
+# are emitted by ``print_rule()`` regardless of verbosity — but the label SHAPE differs by
+# edition: CE 2.8 renders one ``label "USER_RULE: <descr>"`` clause (confirmed on a live CE
+# guest, run 28704593724), while Plus 26.03 renders split labels with no ``USER_RULE:``
+# prefix — ``label "id=<N>" label "tags=user_rule" label "descr=<descr>"`` (confirmed on the
+# live Plus leg of run 28733176915, where the CE-only ``USER_RULE: `` anchor missed every
+# loaded rule). The one token present in BOTH renders is the descr itself, and both the
+# per-interface descr (``pfB_DoT_Block_<iface>``) and the floating descr
+# (``pfB_DoT_Block_Floating``) share the ``_DOT_BLOCK_DESCR_PFX`` prefix — so the matcher
+# anchors on that bare prefix (no foreign rule carries it; see the #813 false-match concern).
 
 # User filter rule descriptor seeded in Cases 3 and 6 to prove survival.
 _USER_FILTER_DESCR = "my-user-filter-dot-block-smoke"
@@ -219,13 +223,15 @@ def _is_block_853_line(line: str) -> bool:
     pfctl renders port 853 as the ``/etc/services`` name ``domain-s`` (DoT/DoQ), not the
     literal ``853`` — so a ``"853" in line`` test alone misses a correctly-loaded rule.
 
-    Anchored on the rendered pfB label, not just the 853/domain-s token (#813): without it,
-    a foreign port-853 block rule baked onto the smoke image (unrelated to pfBlockerNG)
-    could false-match the positive gate, and the ABSENT gate could false-fail on it instead
-    of asserting pfB-owned rules specifically are gone. See ``_DOT_BLOCK_LABEL_ANCHOR`` for
-    the evidence that plain ``pfctl -sr`` already renders this label with no ``-v`` needed.
+    Anchored on the rendered pfB descr prefix, not just the 853/domain-s token (#813):
+    without it, a foreign port-853 block rule baked onto the smoke image (unrelated to
+    pfBlockerNG) could false-match the positive gate, and the ABSENT gate could false-fail
+    on it instead of asserting pfB-owned rules specifically are gone. The BARE descr prefix
+    (not a composed ``USER_RULE: <descr>`` label) is deliberate: CE and Plus render the
+    label differently and only the descr text appears in both (#849) — see the
+    ``_DOT_BLOCK_DESCR_PFX`` anchoring comment for the per-edition render evidence.
     """
-    return "block" in line and ("853" in line or "domain-s" in line) and _DOT_BLOCK_LABEL_ANCHOR in line
+    return "block" in line and ("853" in line or "domain-s" in line) and _DOT_BLOCK_DESCR_PFX in line
 
 
 def _is_block_853_line_loose(line: str) -> bool:
