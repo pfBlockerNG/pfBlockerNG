@@ -601,6 +601,12 @@ def smoke_vm(
         log_path=work / "vm.log",
         boot_timeout=DEFAULT_BOOT_TIMEOUT,
     )
+    # BBcan177: run the VM at the strict PHP error level Netgate uses on its betas,
+    # so smoke + UI tests surface every latent notice / warning / deprecated. One-time,
+    # session-wide (every VM test inherits it); raises loudly if the level doesn't take.
+    from . import helpers
+
+    helpers.enable_strict_php_error_reporting(handle.vm)
     request.session.stash[SMOKE_VM_KEY] = handle.vm
     try:
         yield handle.vm

@@ -43,8 +43,10 @@ if TYPE_CHECKING:
 # real diagnostic SHAPE (see _PHP_DIAGNOSTIC_RE) -- never as a bare word: pages
 # carry the level words in legitimate copy ("a pfSense Notice message", the
 # "Warning: ..." input-error strings on pfblockerng_ip.php), so a bare-substring
-# match false-positives. pfSense renders display_errors into the HTML, so a real
-# Warning/Notice/Fatal still bleeds into the body in one of the shapes below --
+# match false-positives. NOTE: pfSense sets display_errors=off (errors are LOGGED,
+# not echoed -- rc.php_ini_setup), so a diagnostic reaches the body only when app
+# code or pfSense's own handler prints it; the sweep-level log guard (condition (d),
+# PhpErrorLogGuard) is the source-of-truth catch for a logged-but-not-echoed error --
 # exactly the regression class Tier A exists to catch.
 PHP_ERROR_LEVELS: tuple[str, ...] = (
     "Fatal error",
@@ -141,12 +143,15 @@ def evaluate_render(path: str, status_code: int, body: str, markers: tuple[str, 
     return RenderResult(path=path, status_code=status_code, ok=not reasons, reasons=tuple(reasons))
 
 
-# php_error.log candidates, in pfSense preference order. pfSense's webConfigurator
-# FPM pool sets error_log to /var/log/php_error.log; php-fpm.log is the daemon's
-# own log on some builds. We snapshot whichever exist so the guard is robust to
-# the image's exact wiring (confirmed on-box at run time via stat -- CLAUDE.md:
-# don't assume a path, read the effective state).
+# php_error.log candidates, in pfSense preference order. rc.php_ini_setup points
+# php.ini's error_log at /tmp/PHP_errors.log (CLI + php-fpm APPLICATION errors); the
+# webConfigurator FPM pool and some builds also write /var/log/php_error.log /
+# /var/log/php-fpm.log. We snapshot whichever EXIST so the guard is robust to the
+# image's exact wiring -- and the strict-error smoke test pins that the guest's
+# effective ini_get('error_log') is one of these (CLAUDE.md: don't assume a path,
+# read the effective state).
 PHP_ERROR_LOG_CANDIDATES: tuple[str, ...] = (
+    "/tmp/PHP_errors.log",
     "/var/log/php_error.log",
     "/var/log/php-fpm.log",
 )
