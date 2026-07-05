@@ -7,8 +7,13 @@ Covers:
 - ``_log_upstream_block`` counter enqueue branch (sqlite3_dnsbl_con guard)
 - ``_dnsbl_stats_wanted`` init-time DB-open gate (issue #860: forwarding-mode-only
   installs must open the dnsbl stats DB too, not just blacklist-loaded ones)
+- ``_db_flush_dnsbl`` self-healing the 'Upstream' row when it goes missing
+  mid-connection (issue #858)
 
-All tests are pure off-box — no Unbound API calls, no fixtures, no I/O.
+All tests are off-box — no Unbound API calls, no live VM. Most are pure
+(no fixtures, no I/O); the sqlite-backed classes (``TestDnsblFlushSelfHealsUpstreamRow``,
+``TestDnsblDbOpensInForwardingMode``) use the ``tmp_path`` fixture and a real
+on-disk dnsbl.sqlite file.
 """
 
 from __future__ import annotations
@@ -508,18 +513,21 @@ class TestDnsblFlushSelfHealsUpstreamRow:
     Background:
         _db_create only seeds 'Upstream' at DB *connect* time. With ADR-10's
         zero-downtime swaps, Unbound's Python module can hold one connection
-        across many reloads, so anything that empties the dnsbl table
-        mid-connection (the smoke suite's cross-module baseline reset; a GUI
-        report clear) leaves the row absent -- and the bare ``UPDATE dnsbl SET
-        counter = counter + ? WHERE groupname = ?`` silently no-ops on a
-        missing row until the next Unbound restart re-runs _db_create. The fix
-        re-seeds the row inside the flush itself, gated on an actual
-        'Upstream' delta so a feed-only flush does not pay for it.
+        across many reloads, so a mid-connection TABLE REBUILD --
+        dnsbl_save_stats()'s empty-stats DROP TABLE, or pfb_open_sqlite's
+        corrupt-DB recovery -- leaves the row absent (a baseline reset / GUI
+        report clear does NOT: cleardnsbl only runs
+        ``UPDATE dnsbl SET counter = 0`` and keeps every row) -- and the bare
+        ``UPDATE dnsbl SET counter = counter + ? WHERE groupname = ?`` silently
+        no-ops on a missing row until the next Unbound restart re-runs
+        _db_create. The fix re-seeds the row inside the flush itself, gated on
+        an actual 'Upstream' delta so a feed-only flush does not pay for it.
 
     Given:
         A connected dnsbl DB (via pfb_db_validate, which runs _db_create) whose
-        table is then emptied mid-connection (simulating a baseline reset with
-        no intervening reconnect/restart).
+        table is then emptied mid-connection (simulating the empty-stats
+        DROP TABLE / corrupt-DB recovery path, never an intervening
+        reconnect/restart).
     """
 
     @staticmethod

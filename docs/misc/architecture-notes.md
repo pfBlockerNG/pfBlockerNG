@@ -247,26 +247,26 @@ through (`scripts/local-smoke.sh` forwards them — `--filter` becomes pytest `-
 
 **Module sharding (#797).** Orthogonal to selective dispatch (which narrows *which* tests run),
 sharding splits an already-selected, full-marker run across N parallel workers. CI's `smoke.yml`
-takes a `shards` input (default 2): a CE leg with the default `smoke` marker and no `-k` filter
-expands into `shards` matrix entries (`resolve-legs.sh legs`), each running one module-level
-slice; a Plus leg is always hard-capped at 1 shard (concurrent Netgate-licensed boots are
-unvalidated); the count is clamped to the leg's `test_*.py` module count; and a filtered
-(`pytest_filter` set) or non-`smoke`-marker leg collapses to 1 shard — the same empty-slice
-hazard `local-smoke.sh --shards` guards against (an N-way split can leave a shard with zero
-matching tests). The residual case — a plain `smoke`-marker slice made up entirely of
-repo/reboot-only modules, first reachable around `shards=20` with today's marker density — is
-absorbed at the mechanism layer: under `--shard-total` > 1, `run-smoke.sh` maps pytest exit 5
-("no tests ran") to success as a partition artifact (the shard union is still the whole run);
-every other non-zero rc stays fatal, and unsharded runs keep exit 5 fatal. Locally,
-`scripts/local-smoke.sh --shards N` leases N boxes concurrently, one shard each. Both paths are
-the same mechanism by construction, not a parity re-implementation:
-`scripts/run-smoke.sh --shard I --shard-total N` hands its `--paths` dir to
+takes a `shards` input (default 3): a CE leg with the default `smoke` marker and no `-k` filter
+expands into `shards` matrix entries (`resolve-legs.sh legs`), each running one shard's slice —
+module-level, or test-level for an oversized module (issue #855's hybrid split, below); a Plus leg
+is always hard-capped at 1 shard (concurrent Netgate-licensed boots are unvalidated); the count is
+clamped to the leg's `test_*.py` module count; and a filtered (`pytest_filter` set) or
+non-`smoke`-marker leg collapses to 1 shard — the same empty-slice hazard `local-smoke.sh --shards`
+guards against (an N-way split can leave a shard with zero matching tests). The residual case — a
+plain `smoke`-marker slice made up entirely of repo/reboot-only modules, first reachable around
+`shards=20` with today's marker density — is absorbed at the mechanism layer: under
+`--shard-total` > 1, `run-smoke.sh` maps pytest exit 5 ("no tests ran") to success as a partition
+artifact (the shard union is still the whole run); every other non-zero rc stays fatal, and
+unsharded runs keep exit 5 fatal. Locally, `scripts/local-smoke.sh --shards N` leases N boxes
+concurrently, one shard each. Both paths are the same mechanism by construction, not a parity
+re-implementation: `scripts/run-smoke.sh --shard I --shard-total N` hands its `--paths` dir to
 `scripts/shard-modules.sh` over the dir's direct-child `test_*.py` modules (see "Duration-balanced
-module sharding (#816)" below for its two assignment modes) and splices the resulting slice in as
-the pytest path list; `smoke-on-box.sh` forwards `--shard`/`--shard-total` unchanged and
-independently refuses N>1 for any non-`smoke` marker, including the UI tier (a small,
-non-module-fungible suite that always runs as one unit). Diagnostics stay per-shard: CI names each
-leg's artifacts `smoke-diagnostics-<image_name>-<pfsense_version>-s<I>` and
+module sharding (#816)" and "Hybrid test-level split (#855)" below) and splices the resulting
+slice in as the leftmost pytest args; `smoke-on-box.sh` forwards `--shard`/`--shard-total`
+unchanged and independently refuses N>1 for any non-`smoke` marker, including the UI tier (a
+small, non-module-fungible suite that always runs as one unit). Diagnostics stay per-shard: CI
+names each leg's artifacts `smoke-diagnostics-<image_name>-<pfsense_version>-s<I>` and
 `pfBlockerNG-pkg-<image_name>-s<I>` (two shards of one leg each build their own `.pkg` — a shared
 cross-shard build is a deferred optimisation); local runs get one log file per shard under the
 `--shards` run's kept log dir.
@@ -274,20 +274,40 @@ cross-shard build is a deferred optimisation); local runs get one log file per s
 **Duration-balanced module sharding (#816).** `shard-modules.sh` splits by measured LOAD, not
 blind position, when it can: if `<test-dir>/module-durations.txt` exists it assigns modules by
 greedy LPT (longest processing time first) — order the dir's modules by table weight DESC then
-path ASC under `LC_ALL=C`, and place each in turn into the currently least-loaded shard (ties break
-to the lowest shard index) — else it falls back to the original deterministic round-robin (the
-fallback `tests/smoke/ui/` and any table-less dir still rides). A module missing from the table, or
-carrying a row `<= 0`, is clamped to a 0.01s epsilon weight rather than 0 — the minimum every
-module needs so it always adds load, which is what keeps the first `min(module-count,
-shard-total)` LPT assignments landing on that many *distinct* shards (same empty-shard condition as
-round-robin: only reachable when module-count < shard-total). A stale table row for a module no
-longer in the dir is simply never looked up — harmless. The table itself is generated by
-`scripts/module-durations.sh` from a full `-m smoke` run's pytest `--durations=0` CI logs (sum
-setup+call+teardown per module basename; regenerate via `scripts/module-durations.sh
-<shard-log>... > tests/smoke/module-durations.txt`, feeding every shard log of exactly one run).
-Both assignment modes are deterministic (same inputs -> byte-identical output) and end by printing
-the requested shard's module paths sorted `LC_ALL=C` by path — the same output contract regardless
-of which mode ran.
+path/nodeid ASC under `LC_ALL=C`, and place each in turn into the currently least-loaded shard
+(ties break to the lowest shard index) — else it falls back to the original deterministic
+round-robin (the fallback `tests/smoke/ui/` and any table-less dir still rides). A module missing
+from the table, or carrying a row `<= 0`, is clamped to a 0.01s epsilon weight rather than 0 — the
+minimum every module needs so it always adds load, which is what keeps the first
+`min(module-count, shard-total)` LPT assignments landing on that many *distinct* shards (same
+empty-shard condition as round-robin: only reachable when module-count < shard-total). A stale
+table row for a module no longer in the dir is simply never looked up — harmless. The table has
+TWO row granularities (issue #855): a module-BASENAME sum row (`<module> <seconds>`) and one
+per-test row (`<module>::<test> <seconds>`); `scripts/shard-modules.sh` reads the per-test rows to
+decide the hybrid split below. Generated by `scripts/module-durations.sh` from pytest
+`--durations=0` CI logs (sum setup+call+teardown at both granularities); regenerate via
+`scripts/module-durations.sh <shard-log>... > tests/smoke/module-durations.txt`, feeding the
+DISJOINT CE shard logs of exactly ONE leg-version's full run — never a Plus leg (it re-runs the
+whole suite, so it is not disjoint and double-counts every test) or a repeated/mixed log.
+
+**Hybrid test-level split for oversized modules (#855).** A module whose table weight exceeds the
+per-shard target (`total-weight / shard-total`) AND carries per-test rows is split at TEST
+granularity instead of riding whole on one shard (a module lacking per-test rows, or a table-less
+dir, still rides whole). The shard with that module's largest summed test weight becomes its
+CARRIER: it gets the module's path plus a `--deselect <nodeid>` pair per test assigned elsewhere;
+every other shard holding some of its tests gets plain node-ID lines. Because pytest's
+`--deselect` matches by nodeid PREFIX (not exact equality), a naive deselect can also strip an
+unrelated LONGER sibling id (e.g. `test_cron_detects_changed_local_feed` is a literal prefix of
+`..._same_second`) — a prefix-safety fixpoint promotes any such sibling onto the shorter test's
+shard before printing. Two residual gaps this can't close, both requiring a stale/incomplete
+**committed** table: a test added after the last regen whose id string-extends an off-carrier
+known id still runs on no shard (the carrier's deselect strips it too), and a renamed/removed
+test's stale row becomes a bare nonexistent node-id arg (pytest exit 4). `tests/test_shard_union.py`
+carries a committed-table drift gate for both cases — run it after any table regen or before
+adding a test to an oversized module. Both assignment modes are deterministic (same inputs ->
+byte-identical output) and end by printing the requested shard's assigned lines — module paths,
+bare node IDs, and `--deselect`/node-ID pairs — sorted `LC_ALL=C`, a `--deselect` line always
+immediately followed by its node-ID value.
 
 **CI as parallel dispatch (ADR-47 P5).** Workflows are thin dispatch wrappers; all step logic
 lives in shared scripts that run identically locally and in CI:

@@ -31,7 +31,12 @@
 #     OVERSIZED: it is split into one LPT unit per KNOWN test instead of one
 #     lump unit for the whole module (same 0.01 epsilon clamp, per test). A
 #     module that qualifies but has NO per-test rows (an old table predating
-#     this feature) cannot be split and rides whole, same as before. All
+#     this feature) cannot be split and rides whole, same as before — and so
+#     does one that DOES have per-test rows when `<test-dir>` is itself an
+#     ABSOLUTE path (issue #861 nitpick): pytest's `--deselect` matches by
+#     PREFIX against ROOTDIR-RELATIVE node IDs, so an absolute-path carrier
+#     deselect would silently never match and the deselected test would
+#     double-run. All
 #     units — normal modules and oversized modules' individual tests — are
 #     processed together: weight DESC, then path/nodeid ASC under `LC_ALL=C`
 #     (ties), each going to the currently least-loaded shard (ties -> lowest
@@ -45,9 +50,21 @@
 #     lines for its own tests only. Why the path+deselect carrier and not
 #     node IDs everywhere: a test added or renamed after the last table
 #     regeneration has NO row, so it can never be individually assigned or
-#     deselected — it always rides the carrier's whole-module collection,
-#     which keeps overall coverage complete by construction even for a test
-#     the table has never seen. run-smoke.sh splices this script's stdout
+#     deselected — it rides the carrier's whole-module collection instead.
+#     That keeps coverage complete UNLESS the new/renamed test's nodeid is a
+#     STRICT STRING EXTENSION of a known test's id assigned OFF the carrier:
+#     pytest's `--deselect` matches by PREFIX, not exact id (see below), so
+#     the carrier's deselect for the shorter known id also strips the longer
+#     unknown one — it then runs on NO shard, coverage is NOT complete by
+#     construction for that case. A stale row for a RENAMED/REMOVED test is
+#     the mirror failure: it becomes a bare nonexistent node-id arg on
+#     whichever shard it lands on, and pytest exits 4 there. Both are
+#     CI-blocking regressions, not hypotheticals: tests/test_shard_union.py's
+#     committed-table drift gate (issue #861) checks the COMMITTED
+#     tests/smoke/module-durations.txt against a live `--collect-only` pass
+#     for exactly these two cases — regenerate the table
+#     (scripts/module-durations.sh) whenever it fires. run-smoke.sh splices
+#     this script's stdout
 #     newline-split straight into pytest's argv, one line = one argv word
 #     (scripts/run-smoke.sh's shard-splice step), so a `--deselect` line and
 #     its node-ID value are always emitted as two ADJACENT lines, in that
@@ -118,6 +135,15 @@ is_uint "$total" || {
 	exit 1
 }
 dir="${dir%/}"
+
+# An absolute test-dir defeats pytest's --deselect (nodeid PREFIX match
+# against ROOTDIR-RELATIVE ids) for the LPT hybrid split's carrier — computed
+# once here; the durfile-present branch below gates oversized-module
+# splitting on it (issue #861 nitpick).
+case "$dir" in
+	/*) dir_abs=1 ;;
+	*) dir_abs=0 ;;
+esac
 
 # Direct children only: the glob never descends into a subdirectory such as
 # ui/. An unmatched glob stays literal in POSIX sh, hence the -e check below.
@@ -210,19 +236,36 @@ if [ -f "$durfile" ]; then
 	# records, never a flag separately from its value.
 	tab="$(printf '\t')"
 	units="$(
-		printf '%s\n' "$modules" | awk -v durfile="$durfile" -v stotal="$total" '
+		printf '%s\n' "$modules" | LC_ALL=C awk -v durfile="$durfile" -v stotal="$total" -v dirabs="$dir_abs" '
 			BEGIN {
 				while ((getline line < durfile) > 0) {
 					if (line ~ /^[ \t]*#/ || line ~ /^[ \t]*$/) continue
 					n = split(line, f)
 					if (n < 2) continue
+					# Weight is always the LAST whitespace field -- a
+					# parametrized test id can itself contain a space (issue
+					# #861 nitpick), so the key is fields 1..n-1 rejoined,
+					# never a fixed f[1]/f[2].
+					w = f[n] + 0
 					key = f[1]
-					w = f[2] + 0
+					for (i = 2; i < n; i++) key = key " " f[i]
 					sep = index(key, "::")
 					if (sep > 0) {
 						base = substr(key, 1, sep - 1)
-						cnt = ++tcount[base]
-						tid[base, cnt] = substr(key, sep + 2)
+						testid = substr(key, sep + 2)
+						# Per-test rows are last-wins, same as the module
+						# rows below (dur[key] = w plainly overwrites) -- a
+						# duplicated row must overwrite its existing slot,
+						# not append a second LPT unit for the same test
+						# (issue #861 nitpick: a dupe would otherwise place
+						# one test on two shards, double-running it).
+						if ((base, testid) in tpos) {
+							cnt = tpos[base, testid]
+						} else {
+							cnt = ++tcount[base]
+							tpos[base, testid] = cnt
+							tid[base, cnt] = testid
+						}
 						tw[base, cnt] = w
 					} else {
 						dur[key] = w
@@ -246,7 +289,7 @@ if [ -f "$durfile" ]; then
 				for (i = 1; i <= n_modules; i++) {
 					base = mbase[i]
 					w = mweight[i]
-					if (w > target && (base in tcount)) {
+					if (w > target && (base in tcount) && dirabs == 0) {
 						for (t = 1; t <= tcount[base]; t++) {
 							tv = (tw[base, t] > 0) ? tw[base, t] : 0.01
 							nodeid = mpath[i] "::" tid[base, t]
@@ -257,7 +300,7 @@ if [ -f "$durfile" ]; then
 					}
 				}
 			}
-		' | LC_ALL=C sort -t "$tab" -k2,2rn -k1,1 | awk -F '\t' -v total="$total" -v want="$index" '
+		' | LC_ALL=C sort -t "$tab" -k2,2rn -k1,1 | LC_ALL=C awk -F '\t' -v total="$total" -v want="$index" '
 			BEGIN {
 				for (i = 0; i < total; i++) load[i] = 0
 			}
@@ -348,7 +391,7 @@ if [ -f "$durfile" ]; then
 					}
 				}
 			}
-		' | LC_ALL=C sort -t "$tab" -k1,1 -k2,2 | awk -F '\t' '{
+		' | LC_ALL=C sort -t "$tab" -k1,1 -k2,2 | LC_ALL=C awk -F '\t' '{
 			if ($3 == "pair") {
 				print "--deselect"
 				print $4

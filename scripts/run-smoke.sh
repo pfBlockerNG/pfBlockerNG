@@ -20,7 +20,9 @@
 #   --shard I        default 0             (0-based shard index; issue #797)
 #   --shard-total N  default 1             (N=1: no-op, byte-identical to pre-#797
 #                                            behaviour; N>1: --paths is replaced by
-#                                            its module-level shard slice)
+#                                            its shard slice -- a pytest argv
+#                                            fragment, module-level or, for an
+#                                            oversized module, test-level, issue #855)
 #   trailing passthrough → forwarded to pytest verbatim
 #
 # AMENDMENTS:
@@ -35,13 +37,15 @@
 #   argv injection: passthrough args are assembled via successive set -- prepends —
 #     no eval, no numbered vars; shell metacharacters in passthrough args are
 #     never interpreted.
-#   shard slicing (issue #797): --shard-total N>1 hands the single --paths dir to
-#     scripts/shard-modules.sh and splices its newline-separated module list in as
-#     MULTIPLE leftmost pytest path args, in the exact spot the one path occupies
+#   shard slicing (issue #797, hybrid test-level split issue #855): --shard-total
+#     N>1 hands the single --paths dir to scripts/shard-modules.sh and splices its
+#     newline-separated stdout -- a pytest ARGV FRAGMENT (module paths, bare node
+#     IDs, and adjacent `--deselect`/node-ID pairs, one argv word per line) -- in
+#     as MULTIPLE leftmost pytest args, in the exact spot the one path occupies
 #     today. An explicit passthrough path together with N>1 is a conflict (loud
 #     error, never a silent pick); the splitter's own errors (e.g. an empty slice)
 #     propagate as-is under `set -eu`. When N>1, pytest exit 5 ("no tests ran") is
-#     mapped to 0 — a shard whose modules carry no test matching the marker is a
+#     mapped to 0 — a shard whose slice carries no test matching the marker is a
 #     partition artifact, not a failure; unsharded runs keep exit 5 fatal.
 #
 # Env passthrough: RUN_ID / PFB_DIAG_DIR / SMOKE_LANE reach pytest by inheritance (no
@@ -203,14 +207,18 @@ if [ "$_CALLER_GAVE_PATH" -eq 0 ]; then
     if [ "$_SHARD_TOTAL" -eq 1 ]; then
         set -- "$_PATHS" "$@"
     else
-        # N>1: replace the single _PATHS dir with its module-level shard slice.
-        # A splitter failure (e.g. an empty slice) aborts HERE under `set -eu` —
-        # deliberate: only stdout is captured, so the splitter's stderr message
-        # still reaches the terminal.
+        # N>1: replace the single _PATHS dir with its shard slice -- a pytest argv
+        # FRAGMENT (module paths, bare node IDs, adjacent `--deselect`/node-ID
+        # pairs; one argv word per line, issue #855's hybrid test-level split for
+        # an oversized module). A splitter failure (e.g. an empty slice) aborts
+        # HERE under `set -eu` — deliberate: only stdout is captured, so the
+        # splitter's stderr message still reaches the terminal.
         _shard_modules="$(sh "${REPO_ROOT}/scripts/shard-modules.sh" "$_PATHS" "$_SHARD" "$_SHARD_TOTAL")"
-        # Re-split the newline-joined module list into positional words — no
+        # Re-split the newline-joined argv fragment into positional words — no
         # eval, no word-splitting of a blob (mirrors shard-modules.sh's own
-        # re-split trick): IFS=newline only, glob disabled via set -f.
+        # re-split trick): IFS=newline only, glob disabled via set -f. A
+        # `--deselect` line and its node-ID value are always two ADJACENT lines
+        # (the splitter's own contract), so this re-split never separates them.
         _shard_oldifs="$IFS"
         IFS='
 '

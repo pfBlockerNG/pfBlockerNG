@@ -15,13 +15,15 @@ name: Smoke fan-out (all CI legs, live pfSense VM)
 #                       gating job needs: all legs (AND gate).
 #
 # SHARD dimension (issue #797): resolve-legs.sh's `legs` subcommand further
-# expands the matrix to legs x module-shards — a CE leg with a full-marker,
-# un-filtered run splits into `shards` parallel module slices (default 2),
-# each booting its own VM; a -k-narrowed run or a non-'smoke' marker collapses
-# back to 1 shard, and a Plus leg is always hard-capped at 1 (concurrent
-# Netgate-side check-ins from parallel Plus boots are untested). The AND-gate
-# below is unaffected: needs.smoke.result already aggregates the WHOLE
-# expanded matrix, shard entries included.
+# expands the matrix to legs x shards — a CE leg with a full-marker,
+# un-filtered run splits into `shards` parallel slices (default 3), each
+# booting its own VM; a slice is module-level or, for an oversized module,
+# test-level (issue #855's hybrid split via scripts/shard-modules.sh). A
+# -k-narrowed run or a non-'smoke' marker collapses back to 1 shard, and a
+# Plus leg is always hard-capped at 1 (concurrent Netgate-side check-ins from
+# parallel Plus boots are untested). The AND-gate below is unaffected:
+# needs.smoke.result already aggregates the WHOLE expanded matrix, shard
+# entries included.
 #
 # AND-gate semantics (GitHub Actions needs.*.result):
 #   - All legs pass  → smoke job result = 'success' → gate = green
