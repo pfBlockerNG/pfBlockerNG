@@ -19,9 +19,9 @@ name: Smoke fan-out (all CI legs, live pfSense VM)
 # un-filtered run splits into `shards` parallel slices (default 3), each
 # booting its own VM; a slice is module-level or, for an oversized module,
 # test-level (issue #855's hybrid split via scripts/shard-modules.sh). A
-# -k-narrowed run or a non-'smoke' marker collapses back to 1 shard, and a
-# Plus leg is capped at 1 unless the plus_shards opt-in is set (issue #856:
-# same-identity parallel Plus boots). The AND-gate below is unaffected:
+# -k-narrowed run or a non-'smoke' marker collapses back to 1 shard. Plus
+# legs shard exactly like CE — same `shards` count and defaults (issue #856
+# validated same-identity parallel Plus boots). The AND-gate below is unaffected:
 # needs.smoke.result already aggregates the WHOLE expanded matrix, shard
 # entries included.
 #
@@ -70,14 +70,9 @@ on:
         required: false
         default: ""
       shards:
-        description: "Number of parallel module shards per CE leg for full-marker, un-filtered runs (issue #797). Collapses to 1 when pytest_filter is set or pytest_marker != smoke. Plus legs are capped at 1 shard unless plus_shards is set. Clamped to the leg's test-module count."
+        description: "Number of parallel module shards per leg — CE and Plus alike (issues #797/#856) — for full-marker, un-filtered runs. Collapses to 1 when pytest_filter is set or pytest_marker != smoke. Clamped to the leg's test-module count."
         required: false
         default: "3"
-      plus_shards:
-        description: "Opt-in (issue #856): shard the Plus leg too, at the same `shards` count — N concurrent Plus boots under the single SMOKE_PLUS_* identity. Default off: Plus stays at 1 shard."
-        required: false
-        type: boolean
-        default: false
   # Called by other workflows. Defaults to the FULL suite so existing callers
   # that pass nothing are unchanged (workflow_call -> scope=full by default).
   workflow_call:
@@ -103,7 +98,7 @@ on:
         type: string
         default: ""
       shards:
-        description: "Number of parallel module shards per CE leg for full-marker, un-filtered runs (issue #797). Collapses to 1 when pytest_filter is set or pytest_marker != smoke. Plus legs are always capped at 1 shard on a call (the plus_shards opt-in is dispatch-only). Clamped to the leg's test-module count."
+        description: "Number of parallel module shards per leg — CE and Plus alike (issues #797/#856) — for full-marker, un-filtered runs. Collapses to 1 when pytest_filter is set or pytest_marker != smoke. Clamped to the leg's test-module count."
         required: false
         type: string
         default: "3"
@@ -157,9 +152,6 @@ jobs:
           # 3 since #855: the hybrid splitter breaks the test_smoke_feeds ceiling,
           # so a third CE shard now buys real wall-clock (~11 min legs).
           SHARDS_INPUT: ${{ inputs.shards || '3' }}
-          # Dispatch-only #856 opt-in; empty on schedule/workflow_call, so the
-          # Plus leg stays capped at 1 shard on every non-dispatch path.
-          PLUS_SHARDS_INPUT: ${{ inputs.plus_shards }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -eu
@@ -250,9 +242,8 @@ jobs:
       pytest_marker: ${{ needs.prepare.outputs.pytest_marker || 'smoke' }}
       pytest_filter: ${{ needs.prepare.outputs.pytest_filter }}
       # Module-shard identity (issue #797): resolve-legs.sh stamped these onto
-      # every expanded matrix entry (CE: 0..shards-1 of `shards`; Plus "0" of
-      # "1" unless the plus_shards opt-in lifted the cap, issue #856). N=1 is
-      # a byte-identical no-op in run-smoke.sh.
+      # every expanded matrix entry (0..shards-1 of `shards`, CE and Plus
+      # alike — issue #856). N=1 is a byte-identical no-op in run-smoke.sh.
       shard: ${{ matrix.shard }}
       shard_total: ${{ matrix.shard_total }}
     secrets: inherit

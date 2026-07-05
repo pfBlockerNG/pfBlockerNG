@@ -238,16 +238,18 @@ Describe 'resolve-legs.sh legs — shard expansion (issue #797)'
 
     setup() {
         scrub_git_env
-        unset SCOPE_INPUT VERSION_INPUT PYTEST_FILTER_INPUT MARKER_INPUT SHARDS_INPUT PLUS_SHARDS_INPUT GITHUB_OUTPUT GITHUB_ENV PFB_BASE_REF
+        unset SCOPE_INPUT VERSION_INPUT PYTEST_FILTER_INPUT MARKER_INPUT SHARDS_INPUT GITHUB_OUTPUT GITHUB_ENV PFB_BASE_REF
     }
     BeforeEach 'setup'
 
-    It 'SHARDS_INPUT=2, no -k, marker smoke -> CE expands to 2 shards, Plus stays 1, total 3 legs'
+    It 'SHARDS_INPUT=2, no -k, marker smoke -> EVERY leg expands to 2 shards (CE and Plus alike), total 4 legs'
         # Given: full scope (no -k), default marker, a 3-module test-dir (>= 2 shards).
         # When: legs runs with SHARDS_INPUT=2.
-        # Then: the CE leg becomes 2 entries (0-based shard 0/1 of 2, 1-based
-        #       display labels 1/2 and 2/2); Plus stays exactly 1 entry (label 1/1);
-        #       the array carries 3 legs total.
+        # Then: one `shards` value drives every channel — CE and Plus each
+        #       become 2 entries (0-based shard 0/1 of 2, display labels 1/2 and
+        #       2/2); no entry keeps a capped shard_total "1" (issue #856
+        #       validated same-identity parallel Plus boots, so Plus is no
+        #       longer special-cased); the array carries 4 legs total.
         When run env \
             CI_MATRIX="$ONE_CE_ONE_PLUS" \
             EVENT_NAME="workflow_dispatch" \
@@ -259,8 +261,8 @@ Describe 'resolve-legs.sh legs — shard expansion (issue #797)'
         The output should include '"shard":"0","shard_label":"1","shard_total":"2"'
         The output should include '"shard":"1","shard_label":"2","shard_total":"2"'
         The output should include '"channel":"Plus"'
-        The output should include '"shard":"0","shard_label":"1","shard_total":"1"'
-        The error should include 'legs=3'
+        The output should not include '"shard_total":"1"'
+        The error should include 'legs=4'
     End
 
     It 'SHARDS_INPUT=2 + PYTEST_FILTER_INPUT set -> collapses to 1 (no expansion)'
@@ -298,10 +300,11 @@ Describe 'resolve-legs.sh legs — shard expansion (issue #797)'
         The error should include 'legs=2'
     End
 
-    It 'SHARDS_INPUT=5 over a 3-module test-dir -> clamped to 3 CE entries'
+    It 'SHARDS_INPUT=5 over a 3-module test-dir -> BOTH legs clamped to 3 shards'
         # Given: a fixture dir with exactly 3 test_*.py modules.
         # When: SHARDS_INPUT requests more shards than modules exist.
-        # Then: the CE leg is clamped to 3 shards (0/1/2 of 3), never 5.
+        # Then: every leg (CE and Plus) is clamped to 3 shards (0/1/2 of 3),
+        #       never 5 — 6 legs total.
         When run env \
             CI_MATRIX="$ONE_CE_ONE_PLUS" \
             EVENT_NAME="workflow_dispatch" \
@@ -313,7 +316,8 @@ Describe 'resolve-legs.sh legs — shard expansion (issue #797)'
         The output should include '"shard":"1","shard_label":"2","shard_total":"3"'
         The output should include '"shard":"2","shard_label":"3","shard_total":"3"'
         The output should not include 'shard_total":"5"'
-        The error should include 'legs=4'
+        The output should not include '"shard_total":"1"'
+        The error should include 'legs=6'
     End
 
     It 'SHARDS_INPUT unset/empty -> 1 (uniform fields still present)'
@@ -326,68 +330,6 @@ Describe 'resolve-legs.sh legs — shard expansion (issue #797)'
         The output should include '"shard":"0","shard_label":"1","shard_total":"1"'
         The output should not include 'shard_total":"2"'
         The error should include 'legs=2'
-    End
-
-    It 'PLUS_SHARDS_INPUT=true + SHARDS_INPUT=2 -> Plus expands to 2 shards too (issue #856 opt-in)'
-        # Given: the #856 opt-in — same-identity parallel Plus boots validated,
-        #        so the Plus 1-shard cap may be lifted on explicit request.
-        # When: legs runs with SHARDS_INPUT=2 and PLUS_SHARDS_INPUT=true.
-        # Then: BOTH legs expand to 2 shards (4 legs total); no entry keeps
-        #       the capped shard_total "1".
-        When run env \
-            CI_MATRIX="$ONE_CE_ONE_PLUS" \
-            EVENT_NAME="workflow_dispatch" \
-            SCOPE_INPUT="full" \
-            SHARDS_INPUT="2" \
-            PLUS_SHARDS_INPUT="true" \
-            sh "$SCRIPT" legs --test-dir "$SHARD_DIR" --label marker
-        The status should be success
-        The output should include '"channel":"Plus"'
-        The output should include '"shard":"1","shard_label":"2","shard_total":"2"'
-        The output should not include '"shard_total":"1"'
-        The error should include 'legs=4'
-    End
-
-    It 'PLUS_SHARDS_INPUT=true + PYTEST_FILTER_INPUT set -> still collapses ALL legs to 1'
-        # Given: the Plus opt-in AND an explicit -k.
-        # When: legs runs.
-        # Then: the -k collapse wins — the opt-in never resurrects sharding
-        #       for a filtered run (a shard slice may not contain the tests).
-        When run env \
-            CI_MATRIX="$ONE_CE_ONE_PLUS" \
-            EVENT_NAME="workflow_dispatch" \
-            SCOPE_INPUT="full" \
-            SHARDS_INPUT="2" \
-            PLUS_SHARDS_INPUT="true" \
-            PYTEST_FILTER_INPUT="test_foo" \
-            sh "$SCRIPT" legs --test-dir "$SHARD_DIR" --label marker
-        The status should be success
-        The output should include '"shard":"0","shard_label":"1","shard_total":"1"'
-        The output should not include 'shard_total":"2"'
-        The error should include 'legs=2'
-    End
-
-    Context 'PLUS_SHARDS_INPUT non-true values keep the Plus cap'
-        # Only the literal "true" lifts the cap — anything else (the workflow's
-        # rendered boolean "false" included) fails closed to 1 Plus shard.
-        Parameters
-            "false"
-            "1"
-            "yes"
-        End
-        It "PLUS_SHARDS_INPUT='$1' -> CE expands, Plus stays 1 shard"
-            When run env \
-                CI_MATRIX="$ONE_CE_ONE_PLUS" \
-                EVENT_NAME="workflow_dispatch" \
-                SCOPE_INPUT="full" \
-                SHARDS_INPUT="2" \
-                PLUS_SHARDS_INPUT="$1" \
-                sh "$SCRIPT" legs --test-dir "$SHARD_DIR" --label marker
-            The status should be success
-            The output should include '"channel":"Plus"'
-            The output should include '"shard":"0","shard_label":"1","shard_total":"1"'
-            The error should include 'legs=3'
-        End
     End
 
     Context 'shard-count parsing errors'
@@ -431,7 +373,7 @@ Describe 'resolve-legs.sh legs — shard expansion (issue #797)'
         The output should not include '"shard_label":1,'
         The output should not include '"shard_total":2,'
         The output should not include '"shard_total":2}'
-        The error should include 'legs=3'
+        The error should include 'legs=4'
     End
 
 End
