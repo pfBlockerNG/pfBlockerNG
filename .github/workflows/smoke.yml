@@ -147,7 +147,9 @@ jobs:
           # `schedule` events carry no inputs, so inputs.shards is empty there —
           # default it explicitly or the nightly full run silently gets 1 shard
           # (resolve-legs.sh's own conservative default), missing the policy.
-          SHARDS_INPUT: ${{ inputs.shards || '2' }}
+          # 3 since #855: the hybrid splitter breaks the test_smoke_feeds ceiling,
+          # so a third CE shard now buys real wall-clock (~11 min legs).
+          SHARDS_INPUT: ${{ inputs.shards || '3' }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -eu
