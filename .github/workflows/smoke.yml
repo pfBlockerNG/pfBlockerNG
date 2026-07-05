@@ -1,5 +1,15 @@
 name: Smoke fan-out (all CI legs, live pfSense VM)
 
+# run-name surfaces a narrowed dispatch in the Actions run list (issue #853): a
+# scope=full run WITH a pytest_filter (or a non-'smoke' pytest_marker) selects
+# only a subset yet every leg still runs, so it otherwise looks identical to a
+# genuine unfiltered full fan-out. Mirror `name:` verbatim (run-name has no
+# context for the workflow's own name), then append the filter/marker ONLY when
+# set — an unfiltered, default-marker run renders byte-identically to before.
+# Only dispatch/call inputs are visible here; the per-leg job name below also
+# surfaces the impacted scope's auto-derived -k (that needs the prepare output).
+run-name: "Smoke fan-out (all CI legs, live pfSense VM)${{ inputs.pytest_filter && format(' [-k {0}]', inputs.pytest_filter) || '' }}${{ (inputs.pytest_marker && inputs.pytest_marker != 'smoke') && format(' [marker: {0}]', inputs.pytest_marker) || '' }}"
+
 # Fan the ADR-04 smoke suite across every ci:true image in parallel — CE and
 # Plus alike (ADR-24). Each leg carries its own image_name + mac from the matrix;
 # the Plus image is private (Netgate-licensed) — CI pulls it, never publishes it.
@@ -252,7 +262,11 @@ jobs:
   # passed for smoke-single.yml's build-if-absent fallback (a bare dispatch or
   # repo-install.yml's direct call, neither of which sets pkg_artifact).
   smoke:
-    name: Smoke (${{ matrix.channel }} ${{ matrix.pfsense_version }} shard ${{ matrix.shard_label }}/${{ matrix.shard_total }})
+    # Append the effective -k (and a non-'smoke' marker) so a filtered leg is
+    # visually distinct from a full unfiltered one (issue #853). Uses the RESOLVED
+    # prepare output, so it also surfaces the impacted scope's auto-derived -k, not
+    # just an explicit input. Empty filter + 'smoke' marker → no suffix, byte-identical.
+    name: "Smoke (${{ matrix.channel }} ${{ matrix.pfsense_version }} shard ${{ matrix.shard_label }}/${{ matrix.shard_total }})${{ needs.prepare.outputs.pytest_filter && format(' [-k {0}]', needs.prepare.outputs.pytest_filter) || '' }}${{ (needs.prepare.outputs.pytest_marker && needs.prepare.outputs.pytest_marker != 'smoke') && format(' [marker: {0}]', needs.prepare.outputs.pytest_marker) || '' }}"
     needs: [prepare, build-pkg]
     # Run even if prepare had warnings; skip only if prepare hard-failed. No
     # status function here, so Actions implicitly ANDs in success() — a
