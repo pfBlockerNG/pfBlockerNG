@@ -46,9 +46,16 @@ PFB_LIST_SCRIPT_GLOBS='ip_pre_*.sh ip_pre_*.py ip_post_*.sh ip_post_*.py dnsbl_p
 # package root (moving a shipped file would leave a stray duplicate the downgrade's
 # `pkg delete` cannot account for). pfBlockerNG ships only the AWS region wrappers
 # and aws_region_prefixes.sh in list_scripts/, so a name gate is sufficient and needs
-# no pkg query. Caveat: a user script named exactly like a shipped wrapper
-# (ip_pre_AWS_*.sh) is treated as shipped and left in place — the shipped namespace is
-# reserved, so this is an accepted, documented edge.
+# no pkg query.
+#
+# This gate is a NAME SNAPSHOT of the shipped list_scripts/ contents. Two consequences,
+# both accepted for a dev/ops tool:
+#   - A user script named exactly like a shipped wrapper (ip_pre_AWS_*.sh) is treated
+#     as shipped and left in place — the shipped namespace is reserved.
+#   - If a FUTURE release ships a new list script under a different name, this gate
+#     would move it to the root. MAINTENANCE: keep the patterns below in sync with the
+#     shipped src/usr/local/pkg/pfblockerng/list_scripts/ contents, and run the tool
+#     version that matches the pfBlockerNG version installed on the box.
 pfb_is_shipped_list_script() {
 	case "$(basename "$1")" in
 		ip_pre_AWS_*.sh|aws_region_prefixes.sh) return 0 ;;
@@ -59,9 +66,12 @@ pfb_is_shipped_list_script() {
 # pfb_restore_list_scripts
 # Move a user's custom list scripts from list_scripts/ back to the package root,
 # skipping shipped scripts and never clobbering a same-named file already at the root.
-# Prints the number restored to stdout; diagnostics go to stderr.
+# Prints the number restored to stdout; diagnostics go to stderr. Returns non-zero if
+# any `mv` failed (so the caller can surface a partial failure), zero otherwise. A
+# deliberate no-clobber skip is NOT a failure.
 pfb_restore_list_scripts() {
 	_restored=0
+	_rc=0
 	[ -d "$PFB_LISTDIR" ] || { echo "$_restored"; return 0; }
 	# shellcheck disable=SC2086  # deliberate word-split: PFB_LIST_SCRIPT_GLOBS is a list of patterns.
 	for _glob in $PFB_LIST_SCRIPT_GLOBS; do
@@ -83,10 +93,12 @@ pfb_restore_list_scripts() {
 				_restored=$((_restored + 1))
 			else
 				echo "pfb-downgrade-prep: failed to move ${_src} -> ${_dest}" >&2
+				_rc=1
 			fi
 		done
 	done
 	echo "$_restored"
+	return "$_rc"
 }
 
 # pfb_remove_tick_cron
@@ -101,7 +113,9 @@ pfb_remove_tick_cron() {
 	fi
 	# Heredoc is quoted ('PHP') so the shell passes the PHP through verbatim. The
 	# trailing `exec`/`exit` are pfSsh.php's run-buffer / quit protocol, not PHP.
-	_out=$("$PFB_PFSSH" <<'PHP'
+	# Bounded with timeout(1): pfSsh.php loads AND LOCKS the config, so a concurrent
+	# holder (a sync in progress, a GUI save) could otherwise block us indefinitely.
+	_out=$(timeout 120 "$PFB_PFSSH" <<'PHP'
 $present = FALSE;
 foreach (config_get_path('cron/item', array()) as $i) {
 	if (strpos($i['command'] ?? '', 'pfblockerng.php tick') !== FALSE) { $present = TRUE; break; }
@@ -112,6 +126,11 @@ exec
 exit
 PHP
 	)
+	_tick_rc=$?
+	if [ "$_tick_rc" -eq 124 ]; then
+		echo "pfb-downgrade-prep: pfSsh.php timed out removing the tick cron (config locked by another process?)" >&2
+		return 1
+	fi
 	case "$_out" in
 		*PFB_TICK_REMOVED*) echo removed ; return 0 ;;
 		*PFB_TICK_ABSENT*)  echo absent  ; return 0 ;;
@@ -123,22 +142,28 @@ PHP
 }
 
 # pfb_downgrade_prep_main — orchestrate both reversals and report.
+# Returns non-zero if EITHER reversal failed, so an operator chaining this with the
+# downgrade (`sh pfb-downgrade-prep.sh && pkg delete ... && pkg install <older>`) does
+# NOT proceed on a silent failure (e.g. a tick cron that was never removed).
 pfb_downgrade_prep_main() {
 	if [ "$(id -u 2>/dev/null)" != '0' ]; then
 		echo "pfb-downgrade-prep: must run as root (it moves package files and edits config.xml)" >&2
 		return 1
 	fi
 
-	_restored=$(pfb_restore_list_scripts)
+	_rc=0
+	_restored=$(pfb_restore_list_scripts) || _rc=1
 	if _tick=$(pfb_remove_tick_cron); then
 		:
 	else
 		_tick='ERROR (see stderr)'
+		_rc=1
 	fi
 
 	echo "pfBlockerNG downgrade preparation:"
 	echo "  Custom list scripts restored to package root: ${_restored}"
 	echo "  ADR-43 tick cron entry: ${_tick}"
+	return "$_rc"
 }
 
 # Run main only when executed directly; a shellspec source sets PFB_DOWNGRADE_PREP_SOURCED

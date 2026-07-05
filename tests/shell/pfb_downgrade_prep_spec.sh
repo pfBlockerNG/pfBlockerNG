@@ -24,6 +24,29 @@ Describe 'pfb-downgrade-prep.sh'
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
+  # A fake pfSsh.php: consumes stdin (the PHP snippet) and prints a fixed marker.
+  # Exercises the tick-cron parse/aggregation branches without a live box.
+  fake_pfssh() {
+    _fp="${PFBDG_WORK}/pfssh_$1"
+    cat > "${_fp}" <<EOF
+#!/bin/sh
+cat >/dev/null
+echo "$2"
+EOF
+    chmod +x "${_fp}"
+    echo "${_fp}"
+  }
+
+  # Prepend a fake \`id\` on PATH that prints $1 as the uid, so the tool's root guard
+  # can be driven deterministically on a non-root CI host.
+  shim_id() {
+    _bin="${PFBDG_WORK}/bin"
+    mkdir -p "${_bin}"
+    printf '#!/bin/sh\necho %s\n' "$1" > "${_bin}/id"
+    chmod +x "${_bin}/id"
+    PATH="${_bin}:${PATH}"
+  }
+
   Describe 'pfb_is_shipped_list_script (shipped-name gate)'
     It 'treats an AWS region wrapper as shipped'
       When call pfb_is_shipped_list_script "${PFB_LISTDIR}/ip_pre_AWS_US.sh"
@@ -100,19 +123,6 @@ Describe 'pfb-downgrade-prep.sh'
   End
 
   Describe 'pfb_remove_tick_cron (output parsing)'
-    # A fake pfSsh.php: consumes stdin (the PHP snippet) and prints a fixed marker.
-    # Exercises the parse branches without a live box.
-    fake_pfssh() {
-      _fp="${PFBDG_WORK}/pfssh_$1"
-      cat > "${_fp}" <<EOF
-#!/bin/sh
-cat >/dev/null
-echo "$2"
-EOF
-      chmod +x "${_fp}"
-      echo "${_fp}"
-    }
-
     It 'reports "removed" when pfSsh.php signals removal'
       PFB_PFSSH="$(fake_pfssh removed PFB_TICK_REMOVED)"
       When call pfb_remove_tick_cron
@@ -139,6 +149,38 @@ EOF
       When call pfb_remove_tick_cron
       The status should be failure
       The stderr should include 'pfSsh.php not found'
+    End
+  End
+
+  Describe 'pfb_downgrade_prep_main (orchestration + exit status)'
+    It 'refuses to run as non-root'
+      shim_id 1000
+      When call pfb_downgrade_prep_main
+      The status should be failure
+      The stderr should include 'must run as root'
+    End
+
+    It 'succeeds (exit 0) when both reversals succeed and reports them'
+      shim_id 0
+      touch "${PFB_LISTDIR}/ip_pre_custom.sh"
+      PFB_PFSSH="$(fake_pfssh ok PFB_TICK_REMOVED)"
+      When call pfb_downgrade_prep_main
+      The status should be success
+      The output should include 'restored to package root: 1'
+      The output should include 'tick cron entry: removed'
+      The path "${PFB_PKGDIR}/ip_pre_custom.sh" should be file
+    End
+
+    It 'fails (non-zero exit) when the tick-cron removal fails — so a chained downgrade stops'
+      shim_id 0
+      touch "${PFB_LISTDIR}/ip_pre_custom.sh"
+      PFB_PFSSH="${PFBDG_WORK}/nonexistent-pfSsh.php"   # pfSsh.php missing -> tick removal fails
+      When call pfb_downgrade_prep_main
+      The status should be failure
+      The output should include 'tick cron entry: ERROR'
+      The stderr should include 'pfSsh.php not found'
+      # The script restore still happened; only the exit status signals the partial failure.
+      The path "${PFB_PKGDIR}/ip_pre_custom.sh" should be file
     End
   End
 End
