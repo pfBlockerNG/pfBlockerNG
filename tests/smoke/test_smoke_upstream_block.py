@@ -473,15 +473,17 @@ class TestUpstreamCounterIncrement:
         # (e.g. a transient SQLITE_BUSY lock race with the Python writer) from a
         # genuinely ABSENT row — conflating the two misdirects the failure at the
         # DB-init seed for what is most likely a transient lock/read error.
-        baseline, baseline_detail = _read_upstream_counter(vm)
-        assert baseline != -2, (
+        baseline_raw, baseline_detail = _read_upstream_counter(vm)
+        assert baseline_raw != -2, (
             f"Upstream counter read ERRORED (NOT an absent row — do not blame the seed): {baseline_detail!r}"
         )
-        assert baseline >= 0, (
-            "Upstream row not found in dnsbl table before probe — "
-            "the Python DB-init seed (_db_create) did not create it. "
-            f"DB: {_DNSBL_DB!r}"
-        )
+        # Issue #858: _db_flush_dnsbl now self-heals an absent 'Upstream' row at the
+        # next flush, so an absent row (-1) here is no longer a defect — it just means
+        # no upstream block has flushed since the dnsbl table was last cleared (e.g.
+        # this module ran right after a cross-module baseline reset with no
+        # intervening block/restart). Treat it as a legitimate baseline of 0 instead of
+        # failing; a read ERROR (-2) above is still a hard failure.
+        baseline = 0 if baseline_raw == -1 else baseline_raw
 
         # When: trigger a block (first response is authoritative — assert it arrived).
         ans = h.dns_probe_client(cvm, name, "A")
