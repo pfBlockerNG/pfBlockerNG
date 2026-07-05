@@ -139,16 +139,13 @@ final class DnsblPrefetchTest extends TestCase
 	}
 
 	/**
-	 * Call pfb_dnsbl_parse_compute('alerts', ...) for $domain. A genuine total-miss
-	 * domain falls through to the CNAME/drill chase, which has a pre-existing (Phase
-	 * 3a out-of-scope) "Undefined variable $cname_cnt" notice when drill is absent
-	 * (true of this environment) and no CNAME is found -- @ keeps that unrelated
-	 * legacy noise out of this phase's test output without masking the return value
-	 * under test.
+	 * Call pfb_dnsbl_parse_compute('alerts', ...) for $domain. No error suppression:
+	 * the total-miss "Undefined variable $cname_cnt" notice this used to @-silence
+	 * is fixed (issue #834), so a regression now fails loudly here too.
 	 */
 	private function parse(string $domain): array
 	{
-		return @pfb_dnsbl_parse_compute('alerts', $domain, '', '');
+		return pfb_dnsbl_parse_compute('alerts', $domain, '', '');
 	}
 
 	/**
