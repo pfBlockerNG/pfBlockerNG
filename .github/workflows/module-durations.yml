@@ -1,0 +1,104 @@
+name: Module-durations table refresh
+
+# Rebuild the smoke-suite module-duration table (tests/smoke/module-durations.txt,
+# issue #816) from CI and commit it when it drifts, so scripts/shard-modules.sh
+# keeps balancing the live-VM smoke shards by measured LOAD instead of going stale.
+#
+# WHY a separate workflow (not a step in smoke.yml): smoke.yml's standing
+# invariant is that it NEVER writes any branch. So the aggregate-and-commit runs
+# here, downstream, gated on that run finishing GREEN.
+#
+# Triggered by `workflow_run` after the smoke fan-out completes, but only for the
+# nightly `schedule` run — that is the one guaranteed to be a FULL fan-out (every
+# ci:true leg, whole marker, all module shards). A selective/impacted dispatch
+# runs a subset and would drop rows from the table, so those are ignored. A
+# maintainer can still refresh off-cycle via workflow_dispatch with a run id.
+#
+# SCOPE: this table balances the direct-child tests/smoke/test_*.py modules only.
+# The UI tiers (tests/smoke/ui) are sharded as a unit and are intentionally NOT
+# part of this table (see scripts/shard-modules.sh), so ui-tests.yml is unrelated.
+
+on:
+  workflow_run:
+    workflows: ["Smoke fan-out (all CI legs, live pfSense VM)"]
+    types: [completed]
+  # Manual refresh from a specific, already-finished FULL smoke fan-out.
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Run ID of a completed FULL smoke fan-out whose logs to aggregate."
+        required: true
+
+permissions:
+  contents: write   # commit the refreshed table to devel
+  actions: read     # download the smoke run's artifacts (cross-run)
+
+# One refresh at a time; a newer run supersedes an in-flight one.
+concurrency:
+  group: module-durations-refresh
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    name: Rebuild + commit module-durations.txt
+    runs-on: ubuntu-latest
+    # workflow_run: only the nightly (schedule) full run, and only if it passed.
+    # workflow_dispatch: the operator vouches the given run was a full fan-out.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'schedule')
+    steps:
+      - name: Checkout devel
+        uses: actions/checkout@v6
+        with:
+          ref: devel
+          fetch-depth: 0   # full history so the pre-push rebase can replay cleanly
+
+      - name: Download the smoke run's diagnostics artifacts
+        uses: actions/download-artifact@v8
+        with:
+          run-id: ${{ github.event.workflow_run.id || inputs.run_id }}
+          github-token: ${{ github.token }}
+          pattern: smoke-diagnostics-*
+          path: smoke-artifacts
+
+      - name: Rebuild the module-durations table
+        run: |
+          set -eu
+          # Feed every leg/shard's captured pytest --durations log. module-durations.sh
+          # sums per module BASENAME across all inputs, so input order is irrelevant and
+          # the union of the shards covers the whole suite (issue #816).
+          LOGS=$(find smoke-artifacts -name pytest-durations.log | LC_ALL=C sort)
+          if [ -z "$LOGS" ]; then
+            echo "::error::no pytest-durations.log found in the smoke artifacts — nothing to aggregate."
+            exit 1
+          fi
+          echo "Aggregating these shard logs:"
+          printf '  %s\n' $LOGS
+          # shellcheck disable=SC2086  # deliberate word-split: one arg per log path (all ASCII)
+          sh scripts/module-durations.sh $LOGS > tests/smoke/module-durations.txt
+          echo "=== refreshed table ==="
+          cat tests/smoke/module-durations.txt
+
+      - name: Commit the refreshed table (only if it changed)
+        run: |
+          set -eu
+          if git diff --quiet -- tests/smoke/module-durations.txt; then
+            echo "module-durations.txt unchanged — nothing to commit."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add tests/smoke/module-durations.txt
+          git commit -m "tests/smoke: refresh module-durations table from nightly smoke run"
+          # devel can advance between the nightly smoke start and now — rebase onto the
+          # live tip and retry the push a few times to absorb a concurrent landing.
+          n=0
+          until git push origin HEAD:devel; do
+            n=$((n + 1))
+            [ "$n" -le 5 ] || { echo "::error::push failed after $n rebase attempts."; exit 1; }
+            echo "push rejected — rebasing onto origin/devel (attempt $n) and retrying."
+            git pull --rebase origin devel
+          done
+          echo "Committed refreshed module-durations.txt to devel."
