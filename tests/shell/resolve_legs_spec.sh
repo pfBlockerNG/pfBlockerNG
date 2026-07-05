@@ -245,8 +245,9 @@ Describe 'resolve-legs.sh legs — shard expansion (issue #797)'
     It 'SHARDS_INPUT=2, no -k, marker smoke -> CE expands to 2 shards, Plus stays 1, total 3 legs'
         # Given: full scope (no -k), default marker, a 3-module test-dir (>= 2 shards).
         # When: legs runs with SHARDS_INPUT=2.
-        # Then: the CE leg becomes 2 entries (shard 0/1 of 2); Plus stays exactly 1
-        #       entry (shard 0 of 1); the array carries 3 legs total.
+        # Then: the CE leg becomes 2 entries (0-based shard 0/1 of 2, 1-based
+        #       display labels 1/2 and 2/2); Plus stays exactly 1 entry (label 1/1);
+        #       the array carries 3 legs total.
         When run env \
             CI_MATRIX="$ONE_CE_ONE_PLUS" \
             EVENT_NAME="workflow_dispatch" \
@@ -255,10 +256,10 @@ Describe 'resolve-legs.sh legs — shard expansion (issue #797)'
             sh "$SCRIPT" legs --test-dir "$SHARD_DIR" --label marker
         The status should be success
         The output should include '"channel":"CE"'
-        The output should include '"shard":"0","shard_total":"2"'
-        The output should include '"shard":"1","shard_total":"2"'
+        The output should include '"shard":"0","shard_label":"1","shard_total":"2"'
+        The output should include '"shard":"1","shard_label":"2","shard_total":"2"'
         The output should include '"channel":"Plus"'
-        The output should include '"shard":"0","shard_total":"1"'
+        The output should include '"shard":"0","shard_label":"1","shard_total":"1"'
         The error should include 'legs=3'
     End
 
@@ -275,7 +276,7 @@ Describe 'resolve-legs.sh legs — shard expansion (issue #797)'
             PYTEST_FILTER_INPUT="test_foo" \
             sh "$SCRIPT" legs --test-dir "$SHARD_DIR" --label marker
         The status should be success
-        The output should include '"shard":"0","shard_total":"1"'
+        The output should include '"shard":"0","shard_label":"1","shard_total":"1"'
         The output should not include 'shard_total":"2"'
         The error should include 'legs=2'
     End
@@ -292,7 +293,7 @@ Describe 'resolve-legs.sh legs — shard expansion (issue #797)'
             MARKER_INPUT="repo" \
             sh "$SCRIPT" legs --test-dir "$SHARD_DIR" --label marker
         The status should be success
-        The output should include '"shard":"0","shard_total":"1"'
+        The output should include '"shard":"0","shard_label":"1","shard_total":"1"'
         The output should not include 'shard_total":"2"'
         The error should include 'legs=2'
     End
@@ -308,9 +309,9 @@ Describe 'resolve-legs.sh legs — shard expansion (issue #797)'
             SHARDS_INPUT="5" \
             sh "$SCRIPT" legs --test-dir "$SHARD_DIR" --label marker
         The status should be success
-        The output should include '"shard":"0","shard_total":"3"'
-        The output should include '"shard":"1","shard_total":"3"'
-        The output should include '"shard":"2","shard_total":"3"'
+        The output should include '"shard":"0","shard_label":"1","shard_total":"3"'
+        The output should include '"shard":"1","shard_label":"2","shard_total":"3"'
+        The output should include '"shard":"2","shard_label":"3","shard_total":"3"'
         The output should not include 'shard_total":"5"'
         The error should include 'legs=4'
     End
@@ -322,7 +323,7 @@ Describe 'resolve-legs.sh legs — shard expansion (issue #797)'
             SCOPE_INPUT="full" \
             sh "$SCRIPT" legs --test-dir "$SHARD_DIR" --label marker
         The status should be success
-        The output should include '"shard":"0","shard_total":"1"'
+        The output should include '"shard":"0","shard_label":"1","shard_total":"1"'
         The output should not include 'shard_total":"2"'
         The error should include 'legs=2'
     End
@@ -343,7 +344,7 @@ Describe 'resolve-legs.sh legs — shard expansion (issue #797)'
                 SHARDS_INPUT="$1" \
                 sh "$SCRIPT" legs --test-dir "$SHARD_DIR" --label marker
             The status should be success
-            The output should include '"shard":"0","shard_total":"1"'
+            The output should include '"shard":"0","shard_label":"1","shard_total":"1"'
             The output should not include 'shard_total":"2"'
             The error should include 'legs=2'
         End
@@ -362,8 +363,10 @@ Describe 'resolve-legs.sh legs — shard expansion (issue #797)'
             sh "$SCRIPT" legs --test-dir "$SHARD_DIR" --label marker
         The status should be success
         The output should include '"shard":"0"'
+        The output should include '"shard_label":"1"'
         The output should include '"shard_total":"2"'
         The output should not include '"shard":0,'
+        The output should not include '"shard_label":1,'
         The output should not include '"shard_total":2,'
         The output should not include '"shard_total":2}'
         The error should include 'legs=3'
