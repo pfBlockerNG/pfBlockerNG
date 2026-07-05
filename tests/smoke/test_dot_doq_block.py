@@ -61,23 +61,19 @@ pytestmark = pytest.mark.smoke
 # Package name on the devel channel (matches test_dns_redirect.py).
 _PKG_NAME = "pfSense-pkg-pfBlockerNG-devel"
 
-# Marker prefix for DoT/DoQ-block owned rules (mirrors PFB_DOT_BLOCK_DESCR_PFX).
+# Marker prefix for DoT/DoQ-block owned rules (mirrors PFB_DOT_BLOCK_DESCR_PFX). Doubles as
+# the ``_is_block_853_line`` ownership anchor in ``pfctl -sr`` output (#813, #849): plain
+# ``pfctl -sr`` prints the config row's ``descr`` as rule TEXT, but the label SHAPE differs by
+# edition — CE 2.8 renders one ``label "USER_RULE: <descr>"`` clause (live CE guest, run
+# 28704593724), Plus 26.03 renders split labels with no ``USER_RULE:`` prefix —
+# ``label "id=<N>" label "tags=user_rule" label "descr=<descr>"`` (live Plus leg of run
+# 28733176915, where a CE-only ``USER_RULE: `` anchor missed every loaded rule). The descr
+# text is the one token present in BOTH renders, so the matcher anchors on this bare prefix
+# (shared by the per-interface and floating descrs; no foreign rule carries it).
 _DOT_BLOCK_DESCR_PFX = "pfB_DoT_Block_"
 
 # Marker for the single floating DoT/DoQ-block rule (mirrors PFB_DOT_BLOCK_FLOATING_DESCR).
 _DOT_BLOCK_FLOATING_DESCR = "pfB_DoT_Block_Floating"
-
-# Rendered pf label anchoring for a pfB-owned DoT/DoQ block rule (#813, #849). Plain
-# ``pfctl -sr`` (no ``-v`` needed) prints the config row's ``descr`` as rule TEXT — pf labels
-# are emitted by ``print_rule()`` regardless of verbosity — but the label SHAPE differs by
-# edition: CE 2.8 renders one ``label "USER_RULE: <descr>"`` clause (confirmed on a live CE
-# guest, run 28704593724), while Plus 26.03 renders split labels with no ``USER_RULE:``
-# prefix — ``label "id=<N>" label "tags=user_rule" label "descr=<descr>"`` (confirmed on the
-# live Plus leg of run 28733176915, where the CE-only ``USER_RULE: `` anchor missed every
-# loaded rule). The one token present in BOTH renders is the descr itself, and both the
-# per-interface descr (``pfB_DoT_Block_<iface>``) and the floating descr
-# (``pfB_DoT_Block_Floating``) share the ``_DOT_BLOCK_DESCR_PFX`` prefix — so the matcher
-# anchors on that bare prefix (no foreign rule carries it; see the #813 false-match concern).
 
 # User filter rule descriptor seeded in Cases 3 and 6 to prove survival.
 _USER_FILTER_DESCR = "my-user-filter-dot-block-smoke"
