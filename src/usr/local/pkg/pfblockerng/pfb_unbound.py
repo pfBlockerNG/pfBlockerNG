@@ -5269,6 +5269,29 @@ def rebuild_and_swap(build_snapshot: Callable[[], Snapshot | None], *, emit_coun
     # a reload that brings lists legitimately re-enables blocking, exactly as init does.)
     if new_snapshot.data_db or new_snapshot.zone_db or new_snapshot.regex_db or new_snapshot.allow_regex_db:
         pfb["python_blacklist"] = True
+    # Issue #862 (sibling of #860): init opens the dnsbl stats DB only when
+    # _dnsbl_stats_wanted() held at boot. A swap that NEWLY satisfies the predicate here
+    # -- python_blacklist just flipped True above (feeds added post-boot, no Unbound
+    # restart) -- must open the DB init skipped, or every per-feed and Upstream counter
+    # increment silently no-ops (both _db_flush_dnsbl and _log_upstream_block gate on
+    # sqlite3_dnsbl_con) until the next full restart. Off the DNS fast path: this runs on
+    # the watcher thread, and pfb_db_validate -> _db_run is _db_lock-serialized with a
+    # check_same_thread=False connection, so it is safe beside the query threads. Same
+    # mod_sqlite3 gate + two-attempt retry shape as init_standard's "Enable DNSBL
+    # statistics" block; the not-sqlite3_dnsbl_con guard keeps it idempotent (the
+    # synchronous init swap, where init already opened the DB, is a no-op).
+    if pfb["mod_sqlite3"] and not pfb["sqlite3_dnsbl_con"] and _dnsbl_stats_wanted():
+        for i in range(2):
+            try:
+                if pfb_db_validate(DB_DNSBL):
+                    pfb["sqlite3_dnsbl_con"] = True
+                    break
+            except Exception as e:
+                sys.stderr.write(
+                    "[pfBlockerNG]: Failed to open pfb_py_dnsbl.sqlite database (Attempt: {}/2): {}".format(i + 1, e)
+                )
+                if os.path.isfile(pfb["pfb_py_dnsbl"]):
+                    os.remove(pfb["pfb_py_dnsbl"])
     if emit_counts:
         dnsbl_emit_count(pfb["pfb_py_count"], new_snapshot.counts)
         dnsbl_emit_count(pfb["pfb_py_regex_count"], new_snapshot.regex_count)

@@ -26,6 +26,7 @@ import threading
 from typing import Any
 
 import pfb_unbound as P
+from pfb_unbound import _db_flush_dnsbl, _dnsbl_stats_wanted
 
 # --------------------------------------------------------------------------- #
 # Helpers
@@ -476,6 +477,130 @@ class TestSwapGatesFromSnapshot:
             'pfb["hstsDB"]',
         ):
             assert stale not in code, f"operate() must not read the stale {stale} gate (swap-invisible)"
+
+
+# --------------------------------------------------------------------------- #
+# Issue #862 (sibling of #860): a swap that NEWLY wants DNSBL stats opens the
+# stats DB init skipped at boot -- else per-feed/Upstream counters no-op forever.
+# --------------------------------------------------------------------------- #
+
+
+class TestSwapOpensDnsblStatsDb:
+    """Scenario: an ADR-10 swap that newly satisfies ``_dnsbl_stats_wanted()`` opens the
+    dnsbl stats DB that init left closed at boot, so a subsequent counter flush lands.
+
+    Background:
+        init_standard opens ``sqlite3_dnsbl_con`` only when ``_dnsbl_stats_wanted()``
+        (python_blacklist OR forwarding -- issue #860) holds AT INIT. A forwarding-off /
+        no-feeds boot leaves it False. A later zero-downtime swap raises
+        ``python_blacklist`` (feeds added post-boot, no Unbound restart), but pre-fix
+        rebuild_and_swap never re-opened the DB -- so ``_db_flush_dnsbl``'s
+        ``sqlite3_dnsbl_con`` guard (and ``_log_upstream_block``'s enqueue) silently
+        dropped every increment until a full restart. Same silent-loss class #860 fixed
+        for the forwarding-only init; this pins the swap path.
+
+    Every test asserts the BEFORE-state (DB closed) first, then swaps, so a green proves
+    the swap CAUSED the open. All three branches of the ``_dnsbl_stats_wanted()`` guard
+    inside the new open are covered: blacklist-flip opens it, forwarding-only opens it,
+    neither leaves it closed.
+    """
+
+    def test_swap_enabling_blacklist_opens_db_and_flush_lands_counter(self, tmp_path: Any, monkeypatch: Any) -> None:
+        """A swap that loads feeds (flips python_blacklist True) opens the stats DB and a
+        counter flush then lands -- the exact effect the bug silently lost.
+
+        RED pre-fix: rebuild_and_swap raised python_blacklist but left sqlite3_dnsbl_con
+        False, so the ``assert ... sqlite3_dnsbl_con`` below fails.
+        """
+        _set_count_paths(tmp_path)
+        monkeypatch.setattr(P, "dnsbl_emit_count", lambda *a, **k: True)
+        P.pfb["pfb_py_dnsbl"] = str(tmp_path / "dnsbl.sqlite")
+
+        # ---- BEFORE: boot state where stats were NOT wanted -> init left the DB closed.
+        P.pfb["python_blacklist"] = False
+        P.pfb["forwarding"] = False
+        P._snapshot = _snapshot(counts=0)
+        assert not P.pfb["sqlite3_dnsbl_con"]
+        assert not _dnsbl_stats_wanted()
+
+        # ---- act: a swap loads a data-stratum feed -> flips the master gate True.
+        new = _snapshot(data={"blocked.example.com": {"log": "1", "index": 0, "important": False}}, counts=5)
+        assert P.rebuild_and_swap(lambda: new) is True
+
+        # ---- AFTER: the gate flipped AND the stats DB is now open.
+        assert P.pfb["python_blacklist"] is True
+        assert P.pfb["sqlite3_dnsbl_con"], "a swap that newly wants stats must open the dnsbl DB (issue #862)"
+
+        # ---- and a counter flush actually lands now (pre-fix: guarded no-op).
+        assert _db_flush_dnsbl({"Upstream": 1})
+        con = P._db_conns[P.DB_DNSBL]
+        row = con.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchone()
+        assert row == (1,), f"Upstream counter not incremented after the swap opened the DB: {row!r}"
+
+    def test_forwarding_only_swap_opens_db_even_with_empty_snapshot(self, tmp_path: Any, monkeypatch: Any) -> None:
+        """Other truthy branch of the guard: forwarding alone (no blacklist) wants stats
+        too (#860 predicate), so a swap opens the DB even when the snapshot has no lists --
+        the Upstream-counter path -- WITHOUT spuriously flipping python_blacklist.
+
+        RED pre-fix: sqlite3_dnsbl_con stays False across the swap.
+        """
+        _set_count_paths(tmp_path)
+        monkeypatch.setattr(P, "dnsbl_emit_count", lambda *a, **k: True)
+        P.pfb["pfb_py_dnsbl"] = str(tmp_path / "dnsbl.sqlite")
+
+        # ---- BEFORE: forwarding on, but the DB somehow closed (DB never opened).
+        P.pfb["python_blacklist"] = False
+        P.pfb["forwarding"] = True
+        P._snapshot = _snapshot(counts=0)
+        assert not P.pfb["sqlite3_dnsbl_con"]
+
+        assert P.rebuild_and_swap(lambda: _snapshot(counts=0)) is True
+
+        # ---- AFTER: an empty snapshot leaves python_blacklist False, but forwarding still
+        # wants stats -> the DB opens.
+        assert P.pfb["python_blacklist"] is False
+        assert P.pfb["sqlite3_dnsbl_con"], "forwarding-only swap must open the dnsbl stats DB (issue #862/#860)"
+
+    def test_empty_swap_no_forwarding_leaves_db_closed(self, tmp_path: Any, monkeypatch: Any) -> None:
+        """Guard-intact branch: a swap that does NOT newly want stats (empty snapshot, no
+        forwarding, gate stays False) must NOT open the DB -- proving the open is scoped to
+        a swap that actually enables stats, not a blanket open-on-every-swap."""
+        _set_count_paths(tmp_path)
+        monkeypatch.setattr(P, "dnsbl_emit_count", lambda *a, **k: True)
+        P.pfb["pfb_py_dnsbl"] = str(tmp_path / "dnsbl.sqlite")
+        P.pfb["python_blacklist"] = False
+        P.pfb["forwarding"] = False
+        P._snapshot = _snapshot(counts=0)
+
+        assert P.rebuild_and_swap(lambda: _snapshot(counts=0)) is True
+
+        assert P.pfb["python_blacklist"] is False
+        assert not P.pfb["sqlite3_dnsbl_con"]
+        assert P.DB_DNSBL not in P._db_conns, "an empty swap that does not want stats must not open the dnsbl DB"
+
+    def test_swap_does_not_reopen_an_already_open_db(self, tmp_path: Any, monkeypatch: Any) -> None:
+        """Idempotency: when the stats DB is already open (init opened it), a later swap
+        must NOT reconnect -- the not-sqlite3_dnsbl_con guard makes the open a no-op, so
+        the existing connection (and its accumulated counter) is preserved."""
+        _set_count_paths(tmp_path)
+        monkeypatch.setattr(P, "dnsbl_emit_count", lambda *a, **k: True)
+        P.pfb["pfb_py_dnsbl"] = str(tmp_path / "dnsbl.sqlite")
+
+        # ---- BEFORE: the DB is already open with an accumulated Upstream counter.
+        P.pfb["python_blacklist"] = True
+        P.pfb["sqlite3_dnsbl_con"] = True
+        assert _db_flush_dnsbl({"Upstream": 7})
+        first_con = P._db_conns[P.DB_DNSBL]
+        assert first_con.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchone() == (7,)
+
+        P._snapshot = _snapshot(counts=0)
+        new = _snapshot(data={"blocked.example.com": {"log": "1", "index": 0, "important": False}}, counts=5)
+        assert P.rebuild_and_swap(lambda: new) is True
+
+        # ---- AFTER: same connection object (no reconnect), counter preserved.
+        assert P.pfb["sqlite3_dnsbl_con"]
+        assert P._db_conns[P.DB_DNSBL] is first_con, "an already-open stats DB must not be reconnected by the swap"
+        assert first_con.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchone() == (7,)
 
 
 # --------------------------------------------------------------------------- #
