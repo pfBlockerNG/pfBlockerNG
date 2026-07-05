@@ -219,6 +219,41 @@ final class IpPrefetchTest extends TestCase
 		$this->assertNull($result, 'expected an empty $result array to yield NULL, got ' . var_export($result, true));
 	}
 
+	public function test_cidr_helper_skips_stderr_shaped_lines_without_warning(): void
+	{
+		// Given: $result mixes a non-".txt:"-shaped stderr line (issue #843 -- e.g. a
+		// grep stderr message captured via 2>&1; "grep -s" only silences "no such
+		// file", not e.g. "Binary file X matches") with a real filename-prefixed match.
+		// pfb_parse_query()'s explode('.txt:', $line) yields a 1-element array for the
+		// stderr line, so $rx[1] is undefined for it.
+		$result = [
+			'grep: warning: recursive search of stdin',
+			'/var/db/pfblockerng/deny/DenyFeed.txt:203.0.113.0/28',
+		];
+
+		// A bare E_WARNING is not fatal to PHPUnit by default, so pre-fix this test
+		// would pass despite the Undefined array key 1 warning going unnoticed.
+		// Escalating it to an exception is what makes the missing-guard regression
+		// deterministically red.
+		set_error_handler(static function (int $errno, string $errstr): bool {
+			throw new \ErrorException($errstr, 0, $errno);
+		}, E_WARNING);
+
+		try {
+			// When: matching against the real CIDR's host.
+			$match = pfb_match_reported_cidr($result, '203.0.113.5', TRUE);
+		} finally {
+			restore_error_handler();
+		}
+
+		// Then: the stderr line is skipped silently and the real match is still found.
+		$this->assertSame(
+			['DenyFeed', '203.0.113.0/28'],
+			$match,
+			'expected the stderr-shaped line to be skipped and DenyFeed\'s /28 to still match, got ' . var_export($match, true)
+		);
+	}
+
 	// ------------------------------------------------------------------------------
 	// pfb_ip_prefetch_last_match()
 	// ------------------------------------------------------------------------------
