@@ -52,7 +52,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from ..timing import step_min_seconds, timed, timed_step  # issue #605 — per-step timing (PFB_TIMING)
 from .conftest import (
@@ -746,6 +746,173 @@ def _php_kv_array(data: dict[str, str]) -> str:
     """Render a flat dict as a PHP associative-array literal."""
     items = ", ".join(f"{_php_str(k)} => {_php_str(v)}" for k, v in data.items())
     return f"array({items})"
+
+
+# --------------------------------------------------------------------------- #
+# Strict PHP error reporting (BBcan177) — run the VM the way Netgate runs betas
+# --------------------------------------------------------------------------- #
+
+# pfSense's rc.php_ini_setup selects error_reporting by build channel: the low
+# ``E_ERROR | E_PARSE`` on ``-RELEASE`` images (our smoke base) vs the wider
+# ``E_ALL ^ (E_WARNING | E_NOTICE | E_DEPRECATED)`` on beta/dev builds. Netgate raises it
+# on their betas to surface latent PHP issues; we run the smoke + UI VM at that SAME beta
+# level (BBcan177) so a page or reload emitting a structural diagnostic (E_STRICT /
+# E_RECOVERABLE / E_CORE_* / E_COMPILE_* / E_USER_*) trips the guard, plus arg-rich traces
+# (zend.exception_ignore_args=0). It deliberately KEEPS Netgate's mask of the runtime
+# E_WARNING / E_NOTICE / E_DEPRECATED: a plain E_ALL would also flag the pre-existing
+# undefined-array-key / deprecated lines in pfBlockerNG (``?:`` on absent keys) and pfSense
+# core, reddening the gate on issues out of scope for this change.
+_GUEST_PHP_INI = "/usr/local/etc/php.ini"
+# The exact error_reporting Netgate's beta php.ini uses (a PHP ini expression).
+STRICT_PHP_ERROR_REPORTING = "E_ALL ^ (E_WARNING | E_NOTICE | E_DEPRECATED)"
+
+
+def php_effective_error_reporting(vm: SmokeVM, *, timeout: float = 30.0) -> int:
+    """The guest's EFFECTIVE ``error_reporting`` bitmask, read with a bare ``php -r``.
+
+    Bare ``php -r`` — NOT ``pfSsh.php`` — so no pfSense bootstrap can override the
+    level; the returned value reflects ``/usr/local/etc/php.ini`` verbatim, and the
+    output is a plain int with no banner to strip.
+    """
+    res = vm.ssh(PHP_BIN, "-r", "echo error_reporting();", timeout=timeout)
+    if res.returncode != 0:
+        raise RuntimeError(f"reading guest error_reporting failed: {(res.stderr or res.stdout).strip()!r}")
+    return int(res.stdout.strip())
+
+
+def php_constant(vm: SmokeVM, name: str, *, timeout: float = 30.0) -> int:
+    """The guest PHP's value for an integer constant (e.g. ``E_ALL``).
+
+    ``E_ALL`` differs across PHP versions (CE vs Plus), so resolve it ON the box
+    rather than hardcoding a magic int the two editions would disagree on.
+    """
+    res = vm.ssh(PHP_BIN, "-r", f"echo (int)({name});", timeout=timeout)
+    if res.returncode != 0:
+        raise RuntimeError(f"reading guest PHP constant {name} failed: {(res.stderr or res.stdout).strip()!r}")
+    return int(res.stdout.strip())
+
+
+def php_error_log_path(vm: SmokeVM, *, timeout: float = 30.0) -> str:
+    """The guest php.ini ``error_log`` target — where ``log_errors`` writes."""
+    res = vm.ssh(PHP_BIN, "-r", "echo ini_get('error_log');", timeout=timeout)
+    if res.returncode != 0:
+        raise RuntimeError(f"reading guest php error_log path failed: {(res.stderr or res.stdout).strip()!r}")
+    return res.stdout.strip()
+
+
+def guest_file_contains(vm: SmokeVM, path: str, needle: str, *, timeout: float = 30.0) -> bool:
+    """True iff the guest file at ``path`` contains the fixed string ``needle`` (``grep -F -q``)."""
+    res = vm.ssh("/usr/bin/grep", "-F", "-q", "--", needle, path, timeout=timeout)
+    return res.returncode == 0
+
+
+_FPM_PROBE_FILE = "/usr/local/www/pfb_smoke_er_probe.php"
+_FPM_PROBE_URL = "/pfb_smoke_er_probe.php"
+
+
+def php_fpm_effective_error_reporting(vm: SmokeVM, get: Callable[[str], Any], *, timeout: float = 30.0) -> int:
+    """The php-fpm (GUI SAPI) EFFECTIVE ``error_reporting``, via a throwaway webroot probe.
+
+    A bare ``php -r`` proves only the CLI SAPI; the render tier depends on php-fpm
+    WORKERS running at the raised level, which the reload could miss. Drop a one-line PHP
+    probe into the webroot, GET it (nginx → php-fpm executes it in a WORKER), read the
+    level, then remove the probe. ``get`` is an authenticated ``WebUI.get`` bound method
+    (its request rides the fpm path). The probe is inert (echoes an int) and lives only
+    for the GET on the throwaway smoke VM.
+    """
+    write = vm.ssh(f"printf '%s' '<?php echo error_reporting();' > {_FPM_PROBE_FILE}", timeout=timeout)
+    if write.returncode != 0:
+        raise RuntimeError(f"writing fpm probe {_FPM_PROBE_FILE} failed: {(write.stderr or write.stdout).strip()!r}")
+    try:
+        resp = get(_FPM_PROBE_URL)
+        if resp.status_code != 200:
+            raise RuntimeError(f"fpm probe GET {_FPM_PROBE_URL} -> HTTP {resp.status_code}")
+        body = resp.text.strip()
+        try:
+            return int(body)
+        except ValueError as exc:
+            raise RuntimeError(f"fpm probe returned a non-int error_reporting: {body!r}") from exc
+    finally:
+        vm.ssh("/bin/rm", "-f", _FPM_PROBE_FILE, timeout=timeout)
+
+
+def php_trigger_user_warning(vm: SmokeVM, *, level: str, tag: str, timeout: float = 30.0) -> None:
+    """Fire one ``E_USER_WARNING`` under a chosen ``error_reporting`` level (bare ``php``).
+
+    Proves the level GATES logging: the same trigger is suppressed under the minimal
+    ``E_ERROR | E_PARSE`` and logged under ``E_ALL`` (``log_errors=on`` → ``error_log``).
+    ``level`` is a PHP ini value (``"E_ALL"`` / ``"E_ERROR | E_PARSE"``) applied via
+    ``php -d error_reporting=<level>`` at INI-LOAD — NOT a runtime ``error_reporting()``
+    call — so the process has no E_ALL startup window that could log unrelated startup
+    noise before a runtime downgrade takes effect (the box php.ini is now E_ALL). ``tag``
+    is the logged message, so a caller can grep the log for exactly this trigger.
+    """
+    code = f"trigger_error({_php_str(tag)}, E_USER_WARNING);"
+    res = vm.ssh(PHP_BIN, "-d", f"error_reporting={level}", "-r", code, timeout=timeout)
+    # php exits 0 even after emitting a warning; a nonzero code is a real invocation
+    # failure (bad binary / syntax), not the warning itself — surface it.
+    if res.returncode != 0:
+        raise RuntimeError(f"php user-warning trigger failed: {(res.stderr or res.stdout).strip()!r}")
+
+
+def enable_strict_php_error_reporting(vm: SmokeVM, *, timeout: float = 30.0) -> None:
+    """Set ``error_reporting`` to Netgate's beta mask in the guest php.ini and reload php-fpm.
+
+    Called ONCE per session from the ``smoke_vm`` fixture, before any test, so both
+    the CLI / ``pfSsh.php`` paths AND the webConfigurator (php-fpm) run at the strict
+    level — the way Netgate runs their betas. Fails LOUDLY (expected vs actual) if the
+    level does not take, so the suite never runs believing it is strict when it is not.
+
+    ponytail: ``rc.php_ini_setup`` regenerates php.ini only at BOOT, so this single
+    edit survives the session (deploy / reload never re-run it). If some future path
+    re-runs it mid-session, ``test_smoke_vm_php_error_reporting_is_strict`` fails loud
+    (it re-reads the level post-deploy) — move this to a post-deploy re-apply then.
+    """
+    # Rewrite the two channel-conditional lines rc.php_ini_setup emits (the only ones that
+    # differ RELEASE vs beta): error_reporting -> the beta mask, and zend.exception_ignore_args
+    # -> 0 (arg-rich traces). BSD sed (FreeBSD) needs the empty ``-i ''`` backup arg. Passed as
+    # one sh command line (SmokeVM.ssh routes it through /bin/sh -c), so tcsh never sees the
+    # metachars; the mask's ^ ( ) | are literal in a sed REPLACEMENT and the value carries no '/'.
+    sed = (
+        f"/usr/bin/sed -i '' -E "
+        f"-e 's/^error_reporting[[:space:]]*=.*/error_reporting = {STRICT_PHP_ERROR_REPORTING}/' "
+        f"-e 's/^zend.exception_ignore_args[[:space:]]*=.*/zend.exception_ignore_args=0/' "
+        f"{_GUEST_PHP_INI}"
+    )
+    edit = vm.ssh(sed, timeout=timeout)
+    if edit.returncode != 0:
+        raise RuntimeError(
+            f"setting php error_reporting in {_GUEST_PHP_INI} failed: {(edit.stderr or edit.stdout).strip()!r}"
+        )
+
+    # php-fpm workers cache php.ini at start — SIGUSR2 makes the master gracefully
+    # re-exec (``execvp`` with its original ``-c /usr/local/etc/php.ini`` argv) and
+    # respawn workers at the new level, so the GUI (webConfigurator) picks it up too.
+    # Signal the MASTER only — via its pidfile, else by its ``php-fpm: master`` argv —
+    # NOT ``killall php-fpm`` (that also SIGUSR2s workers, whose default USR2 action is
+    # terminate). FATAL if neither lands: a silently-unreloaded fpm would leave the GUI
+    # at the stale RELEASE level with the render sweep catching nothing (false green).
+    # Never use rc.php-fpm_restart — it re-runs rc.php_ini_setup, which regenerates
+    # php.ini and REVERTS this raise on a RELEASE image.
+    reload_fpm = vm.ssh("/usr/bin/pkill", "-USR2", "-F", "/var/run/php-fpm.pid", timeout=timeout)
+    if reload_fpm.returncode != 0:
+        reload_fpm = vm.ssh("/usr/bin/pkill", "-USR2", "-f", "php-fpm: master", timeout=timeout)
+    if reload_fpm.returncode != 0:
+        raise RuntimeError(
+            f"php-fpm SIGUSR2 reload failed (rc={reload_fpm.returncode}): "
+            f"{(reload_fpm.stderr or reload_fpm.stdout).strip()!r} — the GUI would run at the stale level"
+        )
+
+    # Assert the CLI effective level actually took — source of truth is the box.
+    expected = php_constant(vm, STRICT_PHP_ERROR_REPORTING, timeout=timeout)
+    actual = php_effective_error_reporting(vm, timeout=timeout)
+    if actual != expected:
+        raise AssertionError(
+            "guest php error_reporting did not take:\n"
+            f"  expected: {expected} ({STRICT_PHP_ERROR_REPORTING})\n"
+            f"  actual:   {actual}\n"
+            f"  php.ini:  {_GUEST_PHP_INI}"
+        )
 
 
 def _b64_textarea(lines: list[str]) -> str:
