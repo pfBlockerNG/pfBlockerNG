@@ -560,7 +560,9 @@ jobs:
         run: |
           # pipefail is REQUIRED: run-smoke.sh's output is teed to a log below, so
           # its exit status must survive the pipe or a genuine smoke failure would
-          # read green. GitHub's default shell already sets it; make it explicit.
+          # read green. This step leaves `shell:` unset, so the runner uses `bash -e`
+          # WITHOUT pipefail (only an explicit `shell: bash` implies `-o pipefail`) —
+          # this `set -o pipefail` is what actually turns it on.
           set -euo pipefail
           # pfSense's System DNS is 10.0.2.2 (libslirp's host alias); libslirp NATs
           # guest->10.0.2.2:53 to the runner's 127.0.0.1:53 (the mock), the SAME host-alias

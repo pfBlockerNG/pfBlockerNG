@@ -9,10 +9,14 @@ name: Module-durations table refresh
 # here, downstream, gated on that run finishing GREEN.
 #
 # Triggered by `workflow_run` after the smoke fan-out completes, but only for the
-# nightly `schedule` run — that is the one guaranteed to be a FULL fan-out (every
-# ci:true leg, whole marker, all module shards). A selective/impacted dispatch
-# runs a subset and would drop rows from the table, so those are ignored. A
-# maintainer can still refresh off-cycle via workflow_dispatch with a run id.
+# nightly `schedule` run — that is the one whose EVENT is unambiguously a FULL
+# fan-out (every ci:true leg, whole marker, all module shards). Other full runs
+# exist (e.g. version-tracker.yml dispatches `scope=full` after a version bump),
+# but at the workflow_run level a `scope=full` dispatch is indistinguishable from
+# a bare/`impacted` dispatch (both are `event == 'workflow_dispatch'`), and an
+# impacted run covers only a subset and would drop rows. So the AUTO refresh is
+# restricted to the nightly; refresh any other full run on demand via
+# workflow_dispatch with its run id (or just let the next nightly reconcile it).
 #
 # SCOPE: this table balances the direct-child tests/smoke/test_*.py modules only.
 # The UI tiers (tests/smoke/ui) are sharded as a unit and are intentionally NOT
@@ -54,6 +58,24 @@ jobs:
         with:
           ref: devel
           fetch-depth: 0   # full history so the pre-push rebase can replay cleanly
+
+      - name: Verify the source smoke run finished green
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
+        run: |
+          set -eu
+          # The workflow_run auto-trigger is already gated on conclusion=='success'
+          # in the job `if:`, but a manual workflow_dispatch names an ARBITRARY
+          # run_id (completed, not necessarily green). Refuse a partial/failed run
+          # here rather than aggregate its incomplete logs into a row-dropped table
+          # and commit it to devel.
+          conc=$(gh run view "$RUN_ID" --json conclusion -q .conclusion)
+          echo "source smoke run $RUN_ID conclusion: $conc"
+          [ "$conc" = success ] || {
+            echo "::error::source run $RUN_ID concluded '$conc', not success — refusing to aggregate."
+            exit 1
+          }
 
       - name: Download the smoke run's diagnostics artifacts
         uses: actions/download-artifact@v8
