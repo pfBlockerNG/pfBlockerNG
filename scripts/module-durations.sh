@@ -37,10 +37,10 @@ usage() {
 [ "$#" -ge 1 ] || usage
 
 for f in "$@"; do
-	[ -f "$f" ] && [ -r "$f" ] || {
+	if [ ! -f "$f" ] || [ ! -r "$f" ]; then
 		printf 'module-durations: cannot read input file: %s\n' "$f" >&2
 		exit 1
-	}
+	fi
 done
 
 # One-pass awk: for each duration line, sum the phase seconds into a
