@@ -21,6 +21,16 @@
 # table-less examples above stayed green throughout, unchanged, proving the
 # round-robin fallback is untouched by the LPT addition.
 #
+# RED->GREEN evidence (#855): the "hybrid test-level split for oversized
+# modules" Describe block below was run against the PRE-#855 (whole-module-only
+# LPT) script and failed every split-sensitive assertion — the old script has
+# no concept of a per-test row or a target threshold, so an oversized module
+# always lands whole on one shard (e.g. the headline case put ALL of test_a.py
+# on shard 1, never splitting it into node IDs + a deselect-carrier). Every
+# other Describe block in this file (round-robin, plain LPT, error handling)
+# stayed green throughout, proving the hybrid addition doesn't disturb the
+# non-oversized paths.
+#
 # No git operations here (pure filesystem + text), so no scrub_git_env is
 # needed — see tests/shell/README.md / git-env-scrub-guard.sh clause 2.
 
@@ -362,6 +372,141 @@ ${fixture_dir}/test_e.py"
         The output should equal "${space_dir}/test_b.py
 ${space_dir}/test_c.py"
       End
+    End
+  End
+
+  Describe 'hybrid test-level split for oversized modules (issue #855)'
+    # A module whose table weight exceeds the ideal per-shard load
+    # (total-weight / shard-total) AND carries per-test rows is split at TEST
+    # granularity instead of riding whole on one shard -- the fix for the
+    # "one module dominates the shard floor" problem (test_smoke_feeds.py's
+    # 789.6s of a 2015s table). All hand-traced against the documented greedy
+    # LPT + carrier-selection algorithm before being pinned here.
+    #
+    # write_table (defined here, at the Describe level, so every It below --
+    # nested or direct -- shares it) overwrites/rewrites module-durations.txt
+    # in the fixture dir; every It calls it itself right before shard(), so
+    # no example depends on another's table content.
+    write_table() {
+      : > "${fixture_dir}/module-durations.txt"
+      for line in "$@"; do
+        printf '%s\n' "$line" >> "${fixture_dir}/module-durations.txt"
+      done
+    }
+    write_hybrid_table() {
+      write_table 'test_a.py 100.00' 'test_a.py::test_1 40.00' \
+        'test_a.py::test_2 30.00' 'test_a.py::test_3 30.00' \
+        'test_b.py 5.00' 'test_c.py 5.00' 'test_d.py 5.00' 'test_e.py 5.00'
+    }
+
+    Describe 'oversized module (a) beats target and gets test-level LPT'
+      # wsum = 100 (a) + 4*5 (b,c,d,e) = 120; target = 60. a=100 > 60 and has
+      # 3 per-test rows -> oversized+splittable. LPT order: a::test_1(40),
+      # a::test_2(30), a::test_3(30, tie->sortkey ASC after test_2), then
+      # b,c,d,e(5 each, tie->path ASC). Greedy over 2 shards: test_1->0
+      # (load 40), test_2->1 (load 30), test_3->1 (load 60, beats shard0's
+      # 40), then b,c,d,e all go to shard0 (lighter: 40->45->50->55->60).
+      # Final per-a-test weight on shard0=40 (test_1 only), on shard1=60
+      # (test_2+test_3) -> shard1 is the carrier (60 > 40).
+      It 'gives the non-carrier shard (0) the light whole modules plus ONE node ID (test_1)'
+        write_hybrid_table
+        When call shard 0 2
+        The output should equal "${fixture_dir}/test_b.py
+${fixture_dir}/test_c.py
+${fixture_dir}/test_d.py
+${fixture_dir}/test_e.py
+${fixture_dir}/test_a.py::test_1"
+      End
+
+      It 'gives the carrier shard (1) the module PATH plus a --deselect pair for the test that rode elsewhere'
+        write_hybrid_table
+        When call shard 1 2
+        The output should equal "${fixture_dir}/test_a.py
+--deselect
+${fixture_dir}/test_a.py::test_1"
+      End
+
+      It 'produces byte-identical output across two invocations (determinism)'
+        write_hybrid_table
+        first="$(shard 1 2)"
+        When call shard 1 2
+        The output should equal "$first"
+      End
+
+      It 'still rejects a shard-total large enough to leave the requested shard EMPTY (guard survives the split)'
+        write_hybrid_table
+        # 7 LPT units total (3 a-tests + b,c,d,e) can't fill 8 shards -> shard
+        # 7 is empty.
+        When run shard 7 8
+        The status should be failure
+        The stderr should include 'empty'
+      End
+    End
+
+    It "rides an oversized module WHOLE when it has no per-test rows (can't split what isn't measured per-test)"
+      # wsum = 100 (d) + 5 (e) + 3*0.01 (a,b,c epsilon, absent from table) =
+      # 105.03; target ~= 52.5. d=100 > target but carries NO per-test row ->
+      # must stay a single whole-module unit, never emitting a nodeid/deselect
+      # for it. e + the epsilon trio balance onto the other shard.
+      write_table 'test_d.py 100.00' 'test_e.py 5.00'
+      When call shard 0 2
+      The output should equal "${fixture_dir}/test_d.py"
+    End
+
+    Describe 'prefix-safety fixup: a deselected test id must never be a STRING PREFIX of a surviving sibling'
+      # pytest's own --deselect matches by NODE-ID PREFIX, not exact equality
+      # (_pytest.main.pytest_collection_modifyitems: `nodeid.startswith(...)`),
+      # confirmed for real against this repo's OWN test_smoke_feeds.py, where
+      # `test_cron_detects_changed_local_feed` is a literal prefix of the
+      # sibling `test_cron_detects_changed_local_feed_same_second` --
+      # tests/test_shard_union.py's union oracle caught it. This is the
+      # minimal reproduction: test_x (short, light) lands elsewhere; test_xy
+      # (long -- literally "test_x"+"y", heavy) naturally stays on the
+      # carrier. Deselecting test_x alone would ALSO silently strip test_xy
+      # from the carrier's whole-module collection (real pytest behavior) --
+      # test_xy must instead be PROMOTED onto test_x's shard too.
+      write_prefix_table() {
+        write_table 'test_a.py 100.00' 'test_a.py::test_x 1.00' \
+          'test_a.py::test_xy 50.00' 'test_b.py 5.00' 'test_c.py 5.00' \
+          'test_d.py 5.00' 'test_e.py 5.00'
+      }
+
+      It 'deselects BOTH the short prefix test AND its longer sibling from the carrier (shard 0)'
+        write_prefix_table
+        When call shard 0 2
+        The output should equal "${fixture_dir}/test_a.py
+--deselect
+${fixture_dir}/test_a.py::test_x
+--deselect
+${fixture_dir}/test_a.py::test_xy"
+      End
+
+      It 'gives the recipient shard (1) BOTH tests as explicit node IDs -- the longer one never silently vanishes'
+        write_prefix_table
+        When call shard 1 2
+        The output should equal "${fixture_dir}/test_b.py
+${fixture_dir}/test_c.py
+${fixture_dir}/test_d.py
+${fixture_dir}/test_e.py
+${fixture_dir}/test_a.py::test_x
+${fixture_dir}/test_a.py::test_xy"
+      End
+    End
+
+    It 'honors SHARD_DURATIONS_FILE to hybrid-split from an injected table even with no on-disk module-durations.txt (test-only override)'
+      # The fixture dir has NO module-durations.txt (round-robin's trigger
+      # condition), yet the override must force the hybrid LPT path -- proof
+      # the override, not the default path, decides the mode.
+      ext_table="$(mktemp "${SHELLSPEC_TMPBASE:-/tmp}/shard-modules-ext.XXXXXX")"
+      printf '%s\n' 'test_a.py 100.00' 'test_a.py::test_1 40.00' \
+        'test_a.py::test_2 30.00' 'test_a.py::test_3 30.00' \
+        'test_b.py 5.00' 'test_c.py 5.00' 'test_d.py 5.00' 'test_e.py 5.00' \
+        > "$ext_table"
+      When call env SHARD_DURATIONS_FILE="$ext_table" sh "$SCRIPT" "${fixture_dir}" 1 2
+      The output should equal "${fixture_dir}/test_a.py
+--deselect
+${fixture_dir}/test_a.py::test_1"
+      rm -f "$ext_table"
     End
   End
 End

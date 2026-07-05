@@ -16,13 +16,20 @@
 # start):
 #   ...	2026-07-04T08:16:37.4994425Z 95.01s call     tests/smoke/test_x.py::test_y
 #
-# All three phases (setup/call/teardown) are summed per module BASENAME
-# (`tests/smoke/test_x.py` -> `test_x.py`); pytest hides durations < 0.005s,
-# negligible for sharding. Output: a short generated-by header (no
+# All three phases (setup/call/teardown) are summed, at TWO granularities,
+# from the same lines (issue #855): per module BASENAME (`tests/smoke/test_x.py`
+# -> `test_x.py`), AND per individual test (`test_x.py::test_y`, keeping
+# everything after the module filename verbatim -- including a class-based
+# nodeid's extra `::` segment, e.g. `test_x.py::TestFoo::test_bar`). Output is
+# ONE table with both row kinds: a short generated-by header (no
 # timestamps/run-ids, so re-running on the same input is byte-identical),
-# then one `<module> <seconds>` line per module (%.2f), sorted under
-# `LC_ALL=C` for determinism (ADR-26). The committed table lives at
-# tests/smoke/module-durations.txt.
+# then `<module> <seconds>` lines (module sums) interleaved with
+# `<module>::<test> <seconds>` lines (per-test sums), all sorted under
+# `LC_ALL=C` (ADR-26) -- which incidentally clusters each module's own sum
+# line directly ahead of its per-test lines (`' '` < `':'`). pytest hides
+# durations < 0.005s, negligible for sharding. The committed table lives at
+# tests/smoke/module-durations.txt; scripts/shard-modules.sh reads the
+# per-test rows to split an oversized module at test granularity (issue #855).
 #
 # Errors loudly (non-zero exit, one-line stderr message) on: no args; an
 # unreadable input file; or zero duration lines found across all inputs.
@@ -44,9 +51,10 @@ for f in "$@"; do
 done
 
 # One-pass awk: for each duration line, sum the phase seconds into a
-# per-module-basename table. A nodeid can itself contain further `::`
-# (class-based tests, e.g. test_x.py::TestFoo::test_bar), so split the
-# matched token on `::` and keep only the first piece (the module path) --
+# per-module-basename table AND a per-(module,test) table. A nodeid can
+# itself contain further `::` (class-based tests, e.g.
+# test_x.py::TestFoo::test_bar), so split on the FIRST `::` only (`index`/
+# `substr`, not `split`) and keep the remainder verbatim as the test id --
 # never rely on the LAST `::` (a greedy `[^ \t]+::` would match through it).
 durations="$(awk '
 	match($0, /[0-9]+\.[0-9]+s[ \t]+(setup|call|teardown)[ \t]+[^ \t]+/) {
@@ -54,15 +62,24 @@ durations="$(awk '
 		split(line, parts, /[ \t]+/)
 		dur = parts[1]
 		sub(/s$/, "", dur)
-		split(parts[3], pieces, "::")
-		modpath = pieces[1]
+		nodeid = parts[3]
+		sep = index(nodeid, "::")
+		modpath = (sep > 0) ? substr(nodeid, 1, sep - 1) : nodeid
 		sub(/^.*\//, "", modpath)
 		sum[modpath] += dur
+		if (sep > 0) {
+			testid = substr(nodeid, sep + 2)
+			tsum[modpath, testid] += dur
+		}
 		found = 1
 	}
 	END {
 		if (!found) exit 2
 		for (m in sum) printf "%s %.2f\n", m, sum[m]
+		for (combined in tsum) {
+			split(combined, kk, SUBSEP)
+			printf "%s::%s %.2f\n", kk[1], kk[2], tsum[combined]
+		}
 	}
 ' "$@")" || {
 	status=$?

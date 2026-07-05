@@ -13,6 +13,13 @@
 # After implementing the script, all 11 examples pass with no other change
 # to this file.
 #
+# RED->GREEN evidence (#855): the "per-test duration rows" Describe block
+# below was run against the PRE-#855 script (module sums only) and failed --
+# the old script never emitted a `module::test` line at all, so every
+# per-test assertion missed. After adding per-test rows (same source lines,
+# no new log format), the examples pass with the module-sum examples above
+# unchanged (same line numbers/values), proving the addition is additive.
+#
 # No git operations here (pure filesystem + text), so no scrub_git_env is
 # needed -- see tests/shell/README.md / git-env-scrub-guard.sh clause 2.
 
@@ -65,41 +72,77 @@ Describe 'module-durations.sh'
   # test here) so these assertions pin the TABLE contract, not the wording.
   rows() { gen "$@" | grep -v '^#'; }
 
+  # These assert by "should include" rather than a positional "line N", since
+  # #855 interleaves each module's per-test rows directly after its own sum
+  # row (see the "per-test duration rows" + "sort order" Describes below) --
+  # a positional check would break on the interleaving alone, not on a real
+  # regression in the summed value.
   Describe 'per-module duration sums (single file)'
     It 'sums setup+call+teardown into one total for test_alpha.py'
       When call rows "$log_a"
-      The line 1 of output should equal 'test_alpha.py 4.00'
+      The output should include 'test_alpha.py 4.00'
     End
 
     It 'sums the single call phase for test_beta.py'
       When call rows "$log_a"
-      The line 2 of output should equal 'test_beta.py 3.25'
+      The output should include 'test_beta.py 3.25'
     End
 
     It 'attributes a class-based nodeid (module::Class::test) to its MODULE, not the class'
       When call rows "$log_a"
-      The line 3 of output should equal 'test_gamma.py 1.11'
+      The output should include 'test_gamma.py 1.11'
     End
   End
 
   Describe 'multi-file input sums across files'
     It 'adds the second file test_alpha.py call onto the first file total'
       When call rows "$log_a" "$log_b"
-      The line 1 of output should equal 'test_alpha.py 4.50'
+      The output should include 'test_alpha.py 4.50'
     End
 
     It 'adds the second file test_beta.py teardown onto the first file total'
       When call rows "$log_a" "$log_b"
-      The line 2 of output should equal 'test_beta.py 4.00'
+      The output should include 'test_beta.py 4.00'
     End
   End
 
-  Describe 'sort order (LC_ALL=C by module name)'
-    It 'emits modules alphabetically: alpha, beta, gamma'
+  Describe 'per-test duration rows (issue #855)'
+    # log_a + log_b together give test_alpha.py TWO distinct tests
+    # (test_one, test_other) and test_beta.py the SAME test (test_two) split
+    # across both files -- the per-test row must sum across files exactly
+    # like the module row does, and a class-based nodeid's test id keeps its
+    # own embedded `::` verbatim.
+    It 'emits a per-test row for test_alpha.py::test_one, summed within one file'
+      When call rows "$log_a" "$log_b"
+      The output should include 'test_alpha.py::test_one 4.00'
+    End
+
+    It 'emits a separate per-test row for the second test in the same module (test_other)'
+      When call rows "$log_a" "$log_b"
+      The output should include 'test_alpha.py::test_other 0.50'
+    End
+
+    It 'sums test_beta.py::test_two across BOTH files into one per-test row'
+      When call rows "$log_a" "$log_b"
+      The output should include 'test_beta.py::test_two 4.00'
+    End
+
+    It 'keeps the class-based nodeid test id verbatim (TestFoo::test_bar)'
+      When call rows "$log_a" "$log_b"
+      The output should include 'test_gamma.py::TestFoo::test_bar 1.11'
+    End
+  End
+
+  Describe 'sort order (LC_ALL=C by module name, module row before its own test rows)'
+    It 'emits module sums and per-test rows interleaved: alpha (+2 tests), beta (+1 test), gamma (+1 test)'
       When call rows "$log_a" "$log_b"
       The output should equal "test_alpha.py 4.50
+test_alpha.py::test_one 4.00
+test_alpha.py::test_other 0.50
 test_beta.py 4.00
-test_gamma.py 1.11"
+test_beta.py::test_two 4.00
+test_gamma.py 1.11
+test_gamma.py::TestFoo::test_bar 1.11"
     End
   End
 
