@@ -210,7 +210,7 @@ jobs:
   # pkg add refuses a cross-major .pkg, so a CE FreeBSD:15 .pkg cannot install on the
   # Plus FreeBSD:16 base — each leg must build its own ABI-matched package.
   smoke:
-    name: Smoke (${{ matrix.channel }} ${{ matrix.pfsense_version }} shard ${{ matrix.shard }}/${{ matrix.shard_total }})
+    name: Smoke (${{ matrix.channel }} ${{ matrix.pfsense_version }} shard ${{ matrix.shard_label }}/${{ matrix.shard_total }})
     needs: prepare
     # Run even if prepare had warnings; skip only if prepare hard-failed.
     if: needs.prepare.outputs.leg_count != '0'
