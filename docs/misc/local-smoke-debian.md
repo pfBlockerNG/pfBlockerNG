@@ -47,8 +47,8 @@ scripts/local-smoke.sh --marker ui_render
 A UI-tier marker auto-scopes the run to `tests/smoke/ui` with the 300s per-test ceiling
 (matching `ui-tests.yml`); `ui_browser` additionally installs the headless Chromium binary on
 the box. **The webConfigurator admin password must be on the box** — the UI fixtures log in over
-the CSRF form, so an unset `SMOKE_ADMIN_PASSWORD` SKIPS the whole tier off-CI (a false-green of
-all-skips). Put it (and an optional `SMOKE_ADMIN_USER`, default `admin`) in the box's
+the CSRF form, so an unset `SMOKE_ADMIN_PASSWORD` FAILS the whole tier (never skips — a skipped
+tier would be a false green). Put it (and an optional `SMOKE_ADMIN_USER`, default `admin`) in the box's
 `~/.ssh/environment` (needs `PermitUserEnvironment yes`) so the on-box pytest inherits it; it
 must match the password baked into the pfSense image the box pulls.
 
