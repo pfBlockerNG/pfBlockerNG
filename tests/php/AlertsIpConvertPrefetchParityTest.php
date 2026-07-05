@@ -220,8 +220,12 @@ final class AlertsIpConvertPrefetchParityTest extends TestCase
 	/**
 	 * Given/When/Then core shared by every scenario below: prefetch-seed then render,
 	 * reset-then-render cold, and assert the two renders are byte-identical.
+	 *
+	 * @return string the (identical) rendered HTML -- callers needing to assert its
+	 *                 CONTENT (not just that both renders agree) reuse this instead of
+	 *                 re-driving convert_ip_log() themselves.
 	 */
-	private function assertParity(array $fields, string $rtype, string $scenario): void
+	private function assertParity(array $fields, string $rtype, string $scenario): string
 	{
 		// Given: the batched prefetch pass seeds pfb_ip_render_memos() from the SAME
 		// row-derivation the page's Pass 1.5 uses.
@@ -274,6 +278,8 @@ final class AlertsIpConvertPrefetchParityTest extends TestCase
 				. "and cold render.\n--- cold (expected) ---\n{$htmlCold}\n"
 				. "--- prefetch-seeded (actual) ---\n{$htmlSeeded}"
 		);
+
+		return $htmlCold;
 	}
 
 	/**
@@ -410,5 +416,47 @@ final class AlertsIpConvertPrefetchParityTest extends TestCase
 		]);
 
 		$this->assertParity($fields, 'Block', 'ET-header feed');
+	}
+
+	/**
+	 * Case 9 -- aliastable-changed, TRULY single-file aliasdir (issue #833).
+	 *
+	 * Case 7 above keeps aliasdir's setUp()-provided placeholder file precisely so
+	 * grep already has >1 file and emits a "path:" prefix (see the class-level
+	 * comment at setUp() explaining why that placeholder exists at all). This case
+	 * removes it -- aliasdir holds ONLY the new alias's file, the exact shape issue
+	 * #833 reports as broken.
+	 *
+	 * Given: pre-fix, `find aliasdir/*.txt | xargs grep` hands grep a single file,
+	 * so its match comes back UNPREFIXED; convert_ip_log()'s alias-name parse chain
+	 * (pfblockerng_alerts.php ltrim(strrchr(strstr(strstr(...))))) requires the
+	 * "path:content" shape and silently collapses to '' without it -- the rendered
+	 * row would show NO "moved to a new alias" cell at all, even though the IP
+	 * genuinely moved.
+	 * When: convert_ip_log() renders, both prefetch-seeded and cold.
+	 * Then: parity holds (both paths went through the SAME now-fixed grep shape),
+	 * AND the rendered HTML shows the REAL new alias name -- not a blank cell.
+	 */
+	public function test_aliastable_changed_single_file_aliasdir_renders_the_real_alias_name(): void
+	{
+		unlink("{$this->aliasdir}/AliasPlaceholder.txt");	// truly single-file aliasdir
+
+		file_put_contents("{$this->denydir}/DenyFeedNewH.txt", "192.0.2.88\n");
+		file_put_contents("{$this->aliasdir}/pfB_LoneNewAlias_v4.txt", "192.0.2.88\n");
+
+		$fields = $this->rawFields([
+			8 => '192.0.2.88', 15 => '192.0.2.88',
+			14 => 'pfB_OldAlias_v4', 16 => 'DenyFeedOldH',
+		]);
+
+		$html = $this->assertParity($fields, 'Block', 'aliastable-changed, single-file aliasdir');
+
+		// And: the rendered HTML shows the REAL new alias name, not a blank cell --
+		// the actual issue #833 symptom this case targets.
+		$this->assertStringContainsString(
+			'pfB_LoneNewAlias_v4',
+			$html,
+			"expected the rendered row to show the real new alias name 'pfB_LoneNewAlias_v4', got:\n{$html}"
+		);
 	}
 }

@@ -72,6 +72,21 @@ use PHPUnit\Framework\TestCase;
  *
  *   R4: after a prefetch pass, no pfb_ip_prefetch_* pattern-file temp file remains --
  *   guards the try/finally cleanup against a future regression.
+ *
+ *   Scenario: issue #833 -- a single-.txt-file folder must resolve EXACT and CIDR
+ *             matches correctly, and the aliastables round must force the same
+ *             file-prefix output
+ *     Pre-fix, grep given exactly one file emits its match UNPREFIXED, so
+ *     pfb_parse_query() returns a 1-element array with no [1] -- every consumer
+ *     reading result[1] (find_reported_header()'s own return, pfb_match_reported_
+ *     cidr()'s CIDR-shape check) silently mishandles it, up to a genuinely
+ *     covering CIDR being dropped to Unknown/Unknown. Every find_reported_
+ *     header()/pfb_find_reported_headers() exec() (and the aliastables find|xargs
+ *     grep pipeline) now appends a trailing /dev/null, forcing grep to always be
+ *     given >=2 files -- it always emits the "path:" prefix. The issue #831
+ *     skip-seed guard (a defensive no-fatal patch, not a real fix) is now dead
+ *     code and removed; its regression test is updated to pin the row being
+ *     correctly SEEDED instead of merely left alone.
  */
 #[CoversFunction('pfb_match_reported_cidr')]
 #[CoversFunction('pfb_ip_render_query')]
@@ -411,6 +426,100 @@ final class IpPrefetchTest extends TestCase
 	}
 
 	// ------------------------------------------------------------------------------
+	// issue #833: a folder glob resolving to exactly ONE .txt file must resolve
+	// EXACT and CIDR matches correctly, not silently drop them
+	// ------------------------------------------------------------------------------
+
+	/**
+	 * Scenario: a single-file folder holding an EXACT match for the reported IP.
+	 *
+	 * Given: pre-fix, grep given exactly one file emits its match UNPREFIXED, so
+	 * pfb_parse_query() returns a 1-element array (no [1]) -- find_reported_
+	 * header()'s exact-match branch returns that 1-element array VERBATIM (it has
+	 * no Unknown/Unknown fallback of its own), corrupting every caller that reads
+	 * result[1] (e.g. convert_ip_log() builds a degenerate '^' aliastables
+	 * pattern from the resulting NULL).
+	 * When: the per-row AND batched lookups both run against the single-file
+	 * folder.
+	 * Then: both resolve the real (feed, ip) pair -- RED before the fix (a
+	 * 1-element array), GREEN after (grep's forced /dev/null file-prefix gives
+	 * pfb_parse_query() the 2-element shape).
+	 */
+	public function test_single_file_folder_exact_match_resolves_correctly_per_row_and_batched(): void
+	{
+		$tmp = sys_get_temp_dir() . '/pfb_833_exact_' . getmypid();
+		mkdir($tmp, 0777, true);
+		file_put_contents("{$tmp}/LoneFeed.txt", "192.0.2.201\n");
+		$folder = "{$tmp}/*.txt";
+
+		try {
+			$perRow = find_reported_header('192.0.2.201', $folder);
+			$this->assertSame(
+				['LoneFeed', '192.0.2.201'],
+				$perRow,
+				'expected the per-row find_reported_header() to resolve the exact match in the single-file folder, got '
+					. var_export($perRow, true)
+			);
+
+			$batched = pfb_find_reported_headers(['192.0.2.201'], $folder);
+			$this->assertSame(
+				['LoneFeed', '192.0.2.201'],
+				$batched['192.0.2.201'],
+				'expected the batched pfb_find_reported_headers() to resolve the exact match in the single-file folder, got '
+					. var_export($batched['192.0.2.201'], true)
+			);
+		} finally {
+			unlink("{$tmp}/LoneFeed.txt");
+			rmdir($tmp);
+		}
+	}
+
+	/**
+	 * Scenario: a single-file folder whose ONLY covering entry is a CIDR (no
+	 * exact-match line at all) -- the WORST pre-fix failure mode.
+	 *
+	 * Given: pre-fix, the exact-match round misses (the file has no line equal
+	 * to the host), so the prefix/CIDR round runs pfb_match_reported_cidr()
+	 * against the single-file $result. Each line goes through pfb_parse_query(),
+	 * which -- unprefixed -- returns a 1-element array with no [1]; `strpos($rx[1]
+	 * ?? NULL, '/')` then NEVER recognises the line as CIDR-shaped, so the
+	 * genuinely-covering CIDR is silently dropped and the host resolves to
+	 * Unknown/Unknown ("Not listed!") even though it IS still covered.
+	 * When: the per-row AND batched lookups both run against the single-file
+	 * folder.
+	 * Then: both resolve the real CIDR header -- RED before the fix (silently
+	 * "Not listed!"), GREEN after.
+	 */
+	public function test_single_file_folder_cidr_only_coverage_resolves_correctly_per_row_and_batched(): void
+	{
+		$tmp = sys_get_temp_dir() . '/pfb_833_cidr_' . getmypid();
+		mkdir($tmp, 0777, true);
+		file_put_contents("{$tmp}/LoneCidrFeed.txt", "192.0.2.0/24\n");
+		$folder = "{$tmp}/*.txt";
+
+		try {
+			$perRow = find_reported_header('192.0.2.5', $folder);
+			$this->assertSame(
+				['LoneCidrFeed', '192.0.2.0/24'],
+				$perRow,
+				'expected the per-row find_reported_header() to resolve the CIDR match in the single-file folder, got '
+					. var_export($perRow, true)
+			);
+
+			$batched = pfb_find_reported_headers(['192.0.2.5'], $folder);
+			$this->assertSame(
+				['LoneCidrFeed', '192.0.2.0/24'],
+				$batched['192.0.2.5'],
+				'expected the batched pfb_find_reported_headers() to resolve the CIDR match in the single-file folder, got '
+					. var_export($batched['192.0.2.5'], true)
+			);
+		} finally {
+			unlink("{$tmp}/LoneCidrFeed.txt");
+			rmdir($tmp);
+		}
+	}
+
+	// ------------------------------------------------------------------------------
 	// pfb_ip_prefetch() end-to-end -- seeding pfb_ip_render_memos() for real rows
 	// ------------------------------------------------------------------------------
 
@@ -476,12 +585,17 @@ final class IpPrefetchTest extends TestCase
 		// Then: the miss round resolved via find_reported_header()'s CIDR match against
 		// the SAME DenyFeed.txt entry, AND the aliastables round found the identical CIDR
 		// string in the alias fixture -- exactly what a per-row exec would have produced.
+		// issue #833: the alias fixture dir (fixtures/ip_prefetch/alias) holds exactly
+		// ONE .txt file, so the aliastables grep is now forced (via /dev/null) to emit
+		// its "path:" prefix -- the shape convert_ip_log()'s own alias-name parse chain
+		// (pfblockerng_alerts.php ltrim/strrchr/strstr) requires.
 		$missKey = "{$rq['host']}|{$rq['folder']}";
 		$this->assertArrayHasKey($missKey, $memos['miss'], "expected the miss round to seed key '{$missKey}'");
+		$expectedRawValidate = "{$GLOBALS['pfb']['aliasdir']}/pfB_SomeAlias_v4.txt:192.0.2.0/24";
 		$this->assertSame(
-			[['DenyFeed', '192.0.2.0/24'], '192.0.2.0/24'],
+			[['DenyFeed', '192.0.2.0/24'], $expectedRawValidate],
 			$memos['miss'][$missKey],
-			'expected [pfb_query, raw_validate] to be ' . var_export([['DenyFeed', '192.0.2.0/24'], '192.0.2.0/24'], true)
+			'expected [pfb_query, raw_validate] to be ' . var_export([['DenyFeed', '192.0.2.0/24'], $expectedRawValidate], true)
 				. ', got ' . var_export($memos['miss'][$missKey], true)
 		);
 	}
@@ -675,7 +789,10 @@ final class IpPrefetchTest extends TestCase
 		pfb_ip_prefetch($rows);
 		$memos   = &pfb_ip_render_memos();
 		$missKey = "{$rq['host']}|{$rq['folder']}";
-		$this->assertSame([['DenyFeed', '192.0.2.0/24'], '192.0.2.0/24'], $memos['miss'][$missKey]);
+		// issue #833: see the sibling assertion above -- the single-file alias
+		// fixture's raw_validate is now the forced-prefix "path:content" shape.
+		$expectedRawValidate = "{$GLOBALS['pfb']['aliasdir']}/pfB_SomeAlias_v4.txt:192.0.2.0/24";
+		$this->assertSame([['DenyFeed', '192.0.2.0/24'], $expectedRawValidate], $memos['miss'][$missKey]);
 
 		// When: the backing deny/native/alias directories are renamed away -- a FRESH
 		// find_reported_header() call (or a fresh aliastables exec) against these paths
@@ -711,7 +828,7 @@ final class IpPrefetchTest extends TestCase
 				'expected the CACHED pfb_query to survive the directories disappearing, got ' . var_export($cachedQuery, true)
 			);
 			$this->assertSame(
-				'192.0.2.0/24',
+				$expectedRawValidate,
 				$cachedValidate,
 				'expected the CACHED aliastables content to survive the directories disappearing, got ' . var_export($cachedValidate, true)
 			);
@@ -723,7 +840,8 @@ final class IpPrefetchTest extends TestCase
 	}
 
 	// ------------------------------------------------------------------------------
-	// issue #831: a single-.txt folder must never fatal the batched prefetch
+	// issue #831 / #833: a single-.txt folder must never fatal, and must resolve
+	// its miss round correctly (not merely avoid a crash)
 	// ------------------------------------------------------------------------------
 
 	/**
@@ -731,18 +849,25 @@ final class IpPrefetchTest extends TestCase
 	 * exactly ONE .txt file (a GeoIP row's ccdir here; an ET row's etdir is the
 	 * other in-tree shape).
 	 *
-	 * Given: with exactly one file argument grep emits its match UNPREFIXED (no
-	 * "path:" part), so pfb_parse_query() returns a one-element array with no
-	 * [1]. (The Block/Permit/Match folders are immune: their two-token
-	 * "<dir>/*.txt <nativedir>/*.txt" list always hands grep a second argument
-	 * -- even an unexpanded literal counts -- forcing filename prefixes.)
+	 * Given: pre-issue-#833, with exactly one file argument grep emitted its
+	 * match UNPREFIXED (no "path:" part), so pfb_parse_query() returned a
+	 * one-element array with no [1] -- issue #831's guard caught this and left
+	 * the row unseeded (no fatal, but no seed either). issue #833 fixes the ROOT
+	 * CAUSE instead: every find_reported_header()/pfb_find_reported_headers()
+	 * exec() now appends a trailing /dev/null, forcing grep to always be given
+	 * >=2 files -- it always emits the "path:" prefix, so pfb_parse_query()
+	 * always returns the 2-element shape and the #831 guard is now dead code
+	 * (removed).
+	 * (The Block/Permit/Match folders were always immune to the ORIGINAL bug:
+	 * their two-token "<dir>/*.txt <nativedir>/*.txt" list already hands grep a
+	 * second argument -- even an unexpanded literal counts -- forcing filename
+	 * prefixes with no #833 fix needed.)
 	 * When: pfb_ip_prefetch() runs its miss + aliastables rounds for that row.
-	 * Then: the prefetch completes WITHOUT the issue #831 TypeError (NULL into
-	 * the strict-typed pfb_ip_prefetch_last_match()), and the row is left
-	 * UNSEEDED -- convert_ip_log()'s per-row fallback then reproduces the
-	 * legacy (pre-batching) rendering for it, single-file quirk (#833) and all.
+	 * Then: the prefetch completes WITHOUT the issue #831 TypeError, AND the row
+	 * is now correctly SEEDED with the real (feed, value) pair -- no longer left
+	 * to convert_ip_log()'s per-row fallback.
 	 */
-	public function test_single_file_folder_miss_row_is_left_unseeded_instead_of_fataling(): void
+	public function test_single_file_folder_miss_row_is_correctly_seeded_after_the_833_fix(): void
 	{
 		// Given: a GeoIP cc dir holding exactly ONE feed file that contains the host.
 		$tmp = sys_get_temp_dir() . '/pfb_831_' . getmypid();
@@ -767,9 +892,9 @@ final class IpPrefetchTest extends TestCase
 				'eval_ip_raw'       => $fields[14],
 			]];
 
-			// When: the batched prefetch runs. Pre-fix this fataled with
-			// "pfb_ip_prefetch_last_match(): Argument #2 ($raw_prefix) must be of
-			// type string, null given" -- reaching the assertions below IS the fix.
+			// When: the batched prefetch runs. Pre-#833-fix this reached the #831
+			// skip-seed guard (no TypeError, but the row stayed unseeded); reaching
+			// the assertions below with a SEEDED, CORRECT entry IS this fix.
 			pfb_ip_prefetch($rows);
 			$memos = &pfb_ip_render_memos();
 
@@ -781,14 +906,16 @@ final class IpPrefetchTest extends TestCase
 					. var_export($memos['validate'][$rq['validate_cmd']] ?? 'MISSING', true)
 			);
 
-			// Then: the miss round left the row UNSEEDED (per-row fallback territory),
-			// never a seeded entry fabricated from the one-element pfb_parse_query().
+			// Then: the miss round is now SEEDED with the correct exact match --
+			// find_reported_header()'s forced-prefix grep resolved 'LoneFeed', and
+			// the aliastables round genuinely misses (the class-wide alias fixture
+			// only holds an unrelated CIDR), seeding the empty-string no-hit.
 			$missKey = "{$rq['host']}|{$rq['folder']}";
-			$this->assertArrayNotHasKey(
-				$missKey,
-				$memos['miss'],
-				"expected miss key '{$missKey}' to stay unseeded for the unprefixed single-file match, got "
-					. var_export($memos['miss'][$missKey] ?? null, true)
+			$this->assertSame(
+				[['LoneFeed', '192.0.2.201'], ''],
+				$memos['miss'][$missKey] ?? 'MISSING',
+				"expected miss key '{$missKey}' to be correctly seeded for the single-file match, got "
+					. var_export($memos['miss'][$missKey] ?? 'MISSING', true)
 			);
 		} finally {
 			foreach (["{$tmp}/cc/LoneFeed.txt", "{$tmp}/cc", $tmp] as $path) {
