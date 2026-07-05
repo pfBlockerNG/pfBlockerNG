@@ -96,6 +96,10 @@ on:
         description: "FreeBSD-ports branch (blank = build-pkg-linux default pfblockerng/use-github)."
         required: false
         default: ""
+      pkg_artifact:
+        description: "Name of a pre-built .pkg artifact to download instead of building one here. The smoke.yml fan-out builds one .pkg per version leg and passes its artifact name in; blank = build the .pkg in this workflow (bare dispatch + repo-install path)."
+        required: false
+        default: ""
   workflow_call:
     inputs:
       image_ref:
@@ -168,6 +172,11 @@ on:
         required: false
         type: string
         default: ""
+      pkg_artifact:
+        description: "Name of a pre-built .pkg artifact to download instead of building one here. The smoke.yml fan-out builds one .pkg per version leg and passes its artifact name in; blank = build the .pkg in this workflow (bare dispatch + repo-install path)."
+        required: false
+        type: string
+        default: ""
   # Nightly gated run — enable once the wall-time is confirmed within budget.
   # schedule:
   #   - cron: "0 5 * * *"
@@ -185,7 +194,15 @@ jobs:
   # version), so the portable .pkg installs identically to a `make package` one.
   # The portable builder is the SOLE .pkg builder (the FreeBSD make-package path
   # was retired — pfBlockerNG is NO_BUILD, so there is nothing to compile).
+  #
+  # This build-if-absent path only runs when no pkg_artifact was supplied (issue
+  # #857): the smoke.yml fan-out now builds one shared .pkg per version leg in
+  # its own build-pkg job and passes its artifact name via pkg_artifact, so
+  # every shard of that leg downloads it below instead of rebuilding here. A
+  # bare workflow_dispatch and repo-install.yml's direct call pass no
+  # pkg_artifact, so they keep building their own .pkg exactly as before.
   build-pkg:
+    if: ${{ inputs.pkg_artifact == '' }}
     uses: ./.github/workflows/build-pkg-linux.yml
     with:
       channel: devel
@@ -200,9 +217,8 @@ jobs:
       # so a shared name would collide / cross-feed. Keying on image_name keeps each
       # leg's artifact distinct (and the download below follows build-pkg.outputs.artifact).
       # The `-s<shard>` suffix (issue #797) keys it further: two shards of the SAME
-      # leg each build their own .pkg (a shared cross-shard build is a deferred
-      # optimization, not implemented here) — without it the name-based artifact
-      # download would collide across shards of one leg.
+      # leg each build their own .pkg on THIS path — only reached when pkg_artifact
+      # is blank, so it never collides with the shared per-leg artifact smoke.yml builds.
       artifact_name: pfBlockerNG-pkg-${{ inputs.image_name }}-s${{ inputs.shard }}
       # Optional Option-A validation: point the .pkg build at a FreeBSD-ports branch
       # carrying a new plist entry. Blank -> build-pkg-linux's own defaults
@@ -213,6 +229,10 @@ jobs:
   smoke:
     name: pytest -m smoke (live pfSense VM)
     needs: build-pkg
+    # Run whether build-pkg built (pkg_artifact blank) or was skipped
+    # (pkg_artifact set — build-pkg's `if` above never even started it); skip
+    # only if build-pkg actually ran and failed/was cancelled.
+    if: ${{ always() && (needs.build-pkg.result == 'success' || needs.build-pkg.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -395,9 +415,12 @@ jobs:
           chmod 600 smoke_key
 
       - name: Download the built pfBlockerNG package
+        # pkg_artifact set (issue #857): download the shared per-leg .pkg
+        # smoke.yml's build-pkg job already built. Blank: fall back to the
+        # artifact this workflow's OWN build-pkg job just built above.
         uses: actions/download-artifact@v8
         with:
-          name: ${{ needs.build-pkg.outputs.artifact }}
+          name: ${{ inputs.pkg_artifact != '' && inputs.pkg_artifact || needs.build-pkg.outputs.artifact }}
           path: pkg
 
       - name: Locate the .pkg + the pulled .qcow2

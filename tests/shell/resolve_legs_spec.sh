@@ -378,6 +378,67 @@ Describe 'resolve-legs.sh legs — shard expansion (issue #797)'
 
 End
 
+Describe 'resolve-legs.sh legs — leg_matrix output (issue #857)'
+    # Background: smoke.yml's build-pkg job (issue #857) builds the branch
+    # .pkg ONCE PER VERSION LEG by matrixing over the new leg_matrix output,
+    # while the smoke job keeps matrixing over the shard-expanded ci_matrix
+    # (every shard of a leg downloads that one shared artifact). This spec
+    # proves leg_matrix is the UNSHARDED per-leg set (no shard/shard_total
+    # fields) while ci_matrix keeps its existing shard expansion — the two
+    # outputs must diverge exactly this way, or a shard-count leg would
+    # rebuild its .pkg once per shard again.
+
+    setup() {
+        scrub_git_env
+        unset SCOPE_INPUT VERSION_INPUT PYTEST_FILTER_INPUT MARKER_INPUT SHARDS_INPUT GITHUB_OUTPUT GITHUB_ENV PFB_BASE_REF
+    }
+    BeforeEach 'setup'
+
+    # Run `legs` with $GITHUB_OUTPUT pointed at a temp file, extract the
+    # leg_matrix/ci_matrix heredoc blocks, and print jq summaries as plain
+    # `key=value` lines — shellspec has no built-in file-content matcher, so
+    # the It examples assert on this printed summary instead.
+    resolve_outputs() {
+        _gho="$(mktemp "${SHELLSPEC_TMPBASE:-/tmp}/resolve-legs-gho.XXXXXX")"
+        env GITHUB_OUTPUT="$_gho" \
+            CI_MATRIX="$FIXTURE_MATRIX" \
+            EVENT_NAME="workflow_dispatch" \
+            SCOPE_INPUT="full" \
+            SHARDS_INPUT="2" \
+            sh "$SCRIPT" legs --test-dir tests/smoke --label marker >/dev/null 2>&1
+        _leg_json="$(sed -n '/^leg_matrix<<__EOF__$/,/^__EOF__$/p' "$_gho" | sed '1d;$d')"
+        _ci_json="$(sed -n '/^ci_matrix<<__EOF__$/,/^__EOF__$/p' "$_gho" | sed '1d;$d')"
+        rm -f "$_gho"
+        printf 'leg_count=%s\n' "$(printf '%s' "$_leg_json" | jq 'length')"
+        printf 'leg_has_shard=%s\n' "$(printf '%s' "$_leg_json" | jq '[.[] | has("shard")] | any')"
+        printf 'ci_count=%s\n' "$(printf '%s' "$_ci_json" | jq 'length')"
+        printf 'ci_shard_total_2_count=%s\n' "$(printf '%s' "$_ci_json" | jq '[.[] | select(.shard_total == "2")] | length')"
+    }
+
+    It 'full scope + SHARDS_INPUT=2 -> leg_matrix has one unsharded entry per version leg (no shard fields)'
+        # Given: FIXTURE_MATRIX (3 version legs: CE 2.8, CE 2.10, Plus 26.03),
+        #        full scope, SHARDS_INPUT=2 over tests/smoke (43 modules, no clamp).
+        # When: legs runs and $GITHUB_OUTPUT's leg_matrix block is inspected.
+        # Then: leg_matrix carries exactly 3 entries (one per version leg) and
+        #       none of them carry a `shard` field.
+        When call resolve_outputs
+        The status should be success
+        The output should include 'leg_count=3'
+        The output should include 'leg_has_shard=false'
+    End
+
+    It 'full scope + SHARDS_INPUT=2 -> ci_matrix stays shard-expanded (3 legs x 2 shards = 6)'
+        # Given: the same run as above.
+        # When: $GITHUB_OUTPUT's ci_matrix block is inspected.
+        # Then: ci_matrix still carries 6 entries, all shard_total="2" — the
+        #       shard expansion this fix must NOT touch.
+        When call resolve_outputs
+        The status should be success
+        The output should include 'ci_count=6'
+        The output should include 'ci_shard_total_2_count=6'
+    End
+End
+
 Describe 'resolve-legs.sh image-ref'
 
     setup() {

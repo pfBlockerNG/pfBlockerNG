@@ -18,7 +18,11 @@
 #                 Plus shards exactly like CE (issue #856 validated
 #                 same-identity parallel Plus boots).
 #                 Prints the filtered legs JSON to stdout.
-#                 Writes scope= / ci_matrix= / pytest_filter= to $GITHUB_OUTPUT.
+#                 Writes scope= / ci_matrix= / leg_matrix= / pytest_filter= to
+#                 $GITHUB_OUTPUT. leg_matrix is the UNSHARDED per-leg set (one
+#                 entry per version leg, no shard fields) — smoke.yml's
+#                 build-pkg job matrixes over it so each version leg builds
+#                 its .pkg once, shared by every shard (issue #857).
 #
 #   image-ref   Compose the pfSense/civm image ref from env vars.
 #               Reads: INPUT_REF, INPUT_VERSION, INPUT_IMAGE_NAME,
@@ -157,6 +161,12 @@ _rl_legs() {
         S="$_l_mod_count"
     fi
 
+    # Snapshot the UNSHARDED per-leg set (one entry per version leg, no shard
+    # fields) before the expansion below fans it out to legs x shards. This
+    # feeds smoke.yml's build-pkg job (issue #857): one .pkg build per version
+    # leg, shared by every shard of that leg — not one build per shard.
+    _l_leg_matrix="$FILTERED"
+
     # Expand ALWAYS (even at S=1) so every matrix entry uniformly carries
     # shard/shard_total as STRINGS (workflow_call inputs are typed string;
     # avoid number/string coercion surprises). Every leg gets S copies —
@@ -179,6 +189,7 @@ _rl_legs() {
         {
             printf 'scope=%s\n' "$SCOPE"
             printf 'ci_matrix<<__EOF__\n%s\n__EOF__\n' "$FILTERED"
+            printf 'leg_matrix<<__EOF__\n%s\n__EOF__\n' "$_l_leg_matrix"
             printf 'pytest_filter<<__EOF__\n%s\n__EOF__\n' "$K"
         } >> "$GITHUB_OUTPUT"
     fi
