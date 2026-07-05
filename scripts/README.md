@@ -233,8 +233,9 @@ python3 scripts/build-pkg-portable.py --ports ../FreeBSD-ports \
     --local-src . --abi FreeBSD:15:amd64 --py-flavor py311 --php 8.3 --out /tmp
 
 # or build exactly what the port fetches (a commit/tag with a src/ tree), targeting Plus
+# (flag values from the target version's ci-metadata matrix entry)
 python3 scripts/build-pkg-portable.py --ports ../FreeBSD-ports \
-    --gh-tagname <commit> --abi FreeBSD:16:amd64 --py-flavor py311 --php 8.3
+    --gh-tagname <commit> --abi FreeBSD:16:amd64 --py-flavor py311 --php 8.5
 ```
 
 Needs only python3 (stdlib) + a zstd encoder (`zstd` / `brew install zstd` /

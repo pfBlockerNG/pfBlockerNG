@@ -764,9 +764,9 @@ catalog (`meta.conf`/`packagesite.pkg`/`data.pkg`) per ABI, and deploys the whol
 `${ABI}/` tree. The site is replaced each run (no history), so every published version/ABI
 is retained for free and a rollback is a re-deploy.
 
-- **Per-`${ABI}` tree.** One catalog under `…/<ABI>/` (today only `FreeBSD:15:amd64` — CE
-  2.8 and Plus 25.03 share it). The client conf's literal `${ABI}` lets one conf follow the
-  box across a pfSense OS upgrade.
+- **Per-`${ABI}` tree.** One catalog under `…/<ABI>/` per ABI present in the ci-metadata
+  version matrix (`supported-versions.json`). The client conf's literal `${ABI}` lets one
+  conf follow the box across a pfSense OS upgrade.
 - **NONE-signed, TLS-anchored.** No signing key in CI; trust is HTTPS to the Pages host. The
   catalog is served at the project's GitHub Pages URL
   **`https://pfblockerng.github.io/pkg/${ABI}`**.

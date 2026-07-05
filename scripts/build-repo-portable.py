@@ -43,8 +43,9 @@
 # dependency names) CANNOT coexist in one catalog (the second would silently
 # shadow the first). We FAIL LOUD (exit 1) rather than drop a build. Whether a
 # colliding combo exists depends on the ci-metadata version matrix (two entries
-# sharing a FreeBSD major with different php/py flavors); the fix when one arises
-# is a flavored layout <out>/<ABI>-<php><py>/, intentionally NOT implemented here.
+# sharing a full ABI — FreeBSD major AND arch — with different php/py flavors);
+# the fix when one arises is a flavored layout <out>/<ABI>-<php><py>/,
+# intentionally NOT implemented here.
 #
 # VERSION-KEYED CATALOG DIRS (ADR-20 Phase 3)
 #   Pass --catalog-name <name> (e.g. "ce-2.8", "plus-26.03") to write the catalog
