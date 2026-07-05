@@ -183,7 +183,10 @@ test_gamma.py::TestFoo::test_bar 1.11"
           return 0
         fi
       done
-      return 1
+      # No comma-decimal locale on this libc: emit nothing, rc 0 -- the caller's
+      # `Skip if [ -z "$loc" ]` is the signal. A nonzero rc here aborts the whole
+      # example under ShellSpec's errexit shell (bit the CI runner, PR #861).
+      true
     }
 
     It 'keeps dotted-decimal output even under an ambient comma-decimal locale'
