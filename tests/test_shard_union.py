@@ -205,15 +205,21 @@ def _parse_duration_table(path: Path) -> dict[str, float]:
     test id containing its own space round-trips intact (issue #861's table-parser
     fix -- the key is everything before that last field, rejoined verbatim)."""
     rows: dict[str, float] = {}
-    for raw_line in path.read_text().splitlines():
+    for lineno, raw_line in enumerate(path.read_text().splitlines(), start=1):
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
         parts = line.rsplit(None, 1)
+        # A malformed non-comment row must fail the gate, not slip past it — a
+        # corrupted committed table evading the drift checks defeats their point
+        # (review #861).
         if len(parts) != 2:
-            continue
+            raise AssertionError(f"malformed duration row in {path}:{lineno}: {raw_line!r}")
         key, weight = parts
-        rows[key] = float(weight)
+        try:
+            rows[key] = float(weight)
+        except ValueError as exc:
+            raise AssertionError(f"invalid duration weight in {path}:{lineno}: {raw_line!r}") from exc
     return rows
 
 
