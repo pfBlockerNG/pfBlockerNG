@@ -27,7 +27,7 @@ Describe 'module-durations.sh'
   # (multi-file summation), and interleaved noise lines that must be ignored.
   ci_line() {
     # $1=duration (e.g. "1.00s") $2=phase $3=nodeid
-    printf 'Smoke (CE 2.8 shard 0/2) / pytest -m smoke (live pfSense VM)\tUNKNOWN STEP\t2026-07-04T08:16:37.0000000Z %s %s     %s\n' \
+    printf 'Smoke (CE 2.8 shard 1/2) / pytest -m smoke (live pfSense VM)\tUNKNOWN STEP\t2026-07-04T08:16:37.0000000Z %s %s     %s\n' \
       "$1" "$2" "$3"
   }
 
