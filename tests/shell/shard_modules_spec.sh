@@ -648,7 +648,10 @@ ${fixture_dir}/test_e.py"
           return 0
         fi
       done
-      return 1
+      # No comma-decimal locale on this libc: emit nothing, rc 0 -- the caller's
+      # `Skip if [ -z "$loc" ]` is the signal. A nonzero rc here aborts the whole
+      # example under ShellSpec's errexit shell (bit the CI runner, PR #861).
+      true
     }
 
     It 'produces the SAME split under an ambient comma-decimal locale as under C'
