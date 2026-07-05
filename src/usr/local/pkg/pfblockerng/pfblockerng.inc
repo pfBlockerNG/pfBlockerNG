@@ -8495,8 +8495,11 @@ function pfb_match_reported_cidr(array $result, string $ip, bool $v4_type): ?arr
 		foreach ($result as $line) {
 			$rx = pfb_parse_query($line);
 
+			// A non-".txt:"-shaped line (e.g. a grep stderr message captured via 2>&1 --
+			// "grep -s" only silences "no such file") makes pfb_parse_query() return a
+			// 1-element array with no [1]; skip it instead of reading past the array (#843).
 			// Collect all CIDRs for analysis if Alert is from a CIDR
-			if (strpos($rx[1], '/') !== FALSE) {
+			if (strpos($rx[1] ?? '', '/') !== FALSE) {
 				$cidrs[] = $rx;
 			}
 		}
