@@ -288,5 +288,80 @@ ${fixture_dir}/test_e.py"
       The status should be failure
       The stderr should include 'empty'
     End
+
+    Describe 'an assignment-affecting weight tie resolves by path ASC (deterministic)'
+      # b and c tie at 50; the path-ascending tiebreak must process b first,
+      # so b lands on shard 0 and c on shard 1. The epsilon trio (a, d, e)
+      # then alternates from the re-tied loads: a->0, d->1, e->0. Pins the
+      # sort's secondary key -- without it a tie's order (and therefore the
+      # whole assignment) would be implementation-defined.
+      It 'puts the first-by-path tied module (b) plus a,e on shard 0'
+        write_table 'test_b.py 50.00' 'test_c.py 50.00'
+        When call shard 0 2
+        The output should equal "${fixture_dir}/test_a.py
+${fixture_dir}/test_b.py
+${fixture_dir}/test_e.py"
+      End
+
+      It 'puts the second-by-path tied module (c) plus d on shard 1'
+        write_table 'test_b.py 50.00' 'test_c.py 50.00'
+        When call shard 1 2
+        The output should equal "${fixture_dir}/test_c.py
+${fixture_dir}/test_d.py"
+      End
+    End
+
+    It 'clamps a zero, negative, or non-numeric row to the 0.01 epsilon (documented input class)'
+      # a=0, b=negative, c=non-numeric -- all three clamp to epsilon, so only
+      # d carries real weight and sits alone on shard 0; everything else
+      # (including the row-less e) balances onto shard 1.
+      write_table 'test_a.py 0.00' 'test_b.py -5.00' 'test_c.py junk' \
+        'test_d.py 50.00'
+      s0="$(shard 0 2)"
+      s1="$(shard 1 2)"
+      When call printf '%s\n---\n%s' "$s0" "$s1"
+      The output should equal "${fixture_dir}/test_d.py
+---
+${fixture_dir}/test_a.py
+${fixture_dir}/test_b.py
+${fixture_dir}/test_c.py
+${fixture_dir}/test_e.py"
+    End
+
+    It 'takes the LAST row when the table lists the same module twice (last-wins)'
+      # First a=1.00 would spread the load (a would ride shard 0 with b,d);
+      # the later a=100.00 must override it, reproducing the headline split.
+      write_table 'test_a.py 1.00' 'test_b.py 10.00' 'test_c.py 10.00' \
+        'test_d.py 10.00' 'test_e.py 10.00' 'test_a.py 100.00'
+      When call shard 0 2
+      The output should equal "${fixture_dir}/test_a.py"
+    End
+
+    Describe 'a test-dir containing a space (LPT mode round-trips full paths)'
+      # The LPT pipeline carries "<path>\t<weight>" records, so a space in
+      # the dir must survive intact -- pre-fix the whitespace-split pass
+      # truncated the path at the space and emitted silently-wrong output.
+      space_setup() {
+        space_dir="${fixture_dir}/sub dir"
+        mkdir -p "$space_dir"
+        : > "${space_dir}/test_a.py"
+        : > "${space_dir}/test_b.py"
+        : > "${space_dir}/test_c.py"
+        printf '%s\n' 'test_a.py 100.00' 'test_b.py 10.00' 'test_c.py 10.00' \
+          > "${space_dir}/module-durations.txt"
+      }
+      BeforeEach 'space_setup'
+
+      It 'emits the heavy module with its full space-containing path on shard 0'
+        When call sh "$SCRIPT" "$space_dir" 0 2
+        The output should equal "${space_dir}/test_a.py"
+      End
+
+      It 'emits the light modules with their full space-containing paths on shard 1'
+        When call sh "$SCRIPT" "$space_dir" 1 2
+        The output should equal "${space_dir}/test_b.py
+${space_dir}/test_c.py"
+      End
+    End
   End
 End

@@ -138,5 +138,12 @@ test_gamma.py 1.11"
       The status should be failure
       The stderr should include 'no duration lines'
     End
+
+    It 'rejects a directory passed as an input file (readable but not a regular file)'
+      dir_input="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/module-durations-dir.XXXXXX")"
+      When run sh "$SCRIPT" "$dir_input"
+      The status should be failure
+      The stderr should include 'cannot read'
+    End
   End
 End

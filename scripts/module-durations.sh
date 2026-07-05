@@ -37,7 +37,7 @@ usage() {
 [ "$#" -ge 1 ] || usage
 
 for f in "$@"; do
-	[ -r "$f" ] || {
+	[ -f "$f" ] && [ -r "$f" ] || {
 		printf 'module-durations: cannot read input file: %s\n' "$f" >&2
 		exit 1
 	}
@@ -67,7 +67,12 @@ durations="$(awk '
 ' "$@")" || {
 	status=$?
 	if [ "$status" -eq 2 ]; then
+		# awk itself also exits 2 on a fatal error (its own stderr message is
+		# already on the terminal then), so this wording covers the common
+		# case (clean parse, zero matches) without hiding a crash.
 		printf 'module-durations: no duration lines found in input\n' >&2
+	else
+		printf 'module-durations: awk parse failed (exit %s)\n' "$status" >&2
 	fi
 	exit 1
 }

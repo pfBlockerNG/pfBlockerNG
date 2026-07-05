@@ -111,13 +111,14 @@ durfile="${dir}/module-durations.txt"
 if [ -f "$durfile" ]; then
 	# Duration-balanced greedy LPT (issue #816). Pass 1 (awk): weight each
 	# enumerated module from the table by BASENAME (a stale/foreign row is
-	# simply never looked up), clamped to a 0.01 floor. Pass 2 (sort): order
-	# weight DESC then path ASC under LC_ALL=C -- the LPT processing order.
-	# Pass 3 (awk): greedy-assign each module, in that order, to the
-	# currently least-loaded shard (ties -> lowest index), printing only
-	# the requested shard's paths. Module paths are plain ASCII with no
-	# embedded spaces (test-dir + `test_*.py`), so plain whitespace-split
-	# "<weight> <path>" records are exact -- no delimiter escaping needed.
+	# simply never looked up; a duplicate row is last-wins), clamped to a
+	# 0.01 floor. Pass 2 (sort): order weight DESC then path ASC under
+	# LC_ALL=C -- the LPT processing order. Pass 3 (awk): greedy-assign each
+	# module, in that order, to the currently least-loaded shard (ties ->
+	# lowest index), printing only the requested shard's paths. Records are
+	# "<path>\t<weight>" -- TAB-delimited so a test-dir containing spaces
+	# still round-trips exactly (a path cannot contain a tab here).
+	tab="$(printf '\t')"
 	assigned="$(
 		printf '%s\n' "$modules" | awk -v durfile="$durfile" '
 			BEGIN {
@@ -133,15 +134,15 @@ if [ -f "$durfile" ]; then
 				base = path
 				sub(/^.*\//, "", base)
 				w = ((base in dur) && dur[base] > 0) ? dur[base] : 0.01
-				printf "%.6f %s\n", w, path
+				printf "%s\t%.6f\n", path, w
 			}
-		' | LC_ALL=C sort -k1,1rn -k2,2 | awk -v total="$total" -v want="$index" '
+		' | LC_ALL=C sort -t "$tab" -k2,2rn -k1,1 | awk -F '\t' -v total="$total" -v want="$index" '
 			BEGIN {
 				for (i = 0; i < total; i++) load[i] = 0
 			}
 			{
-				w = $1 + 0
-				path = $2
+				path = $1
+				w = $2 + 0
 				min_i = 0
 				for (i = 1; i < total; i++) {
 					if (load[i] < load[min_i]) min_i = i
