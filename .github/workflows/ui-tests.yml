@@ -58,7 +58,7 @@ name: UI tests fan-out (all CI legs, live pfSense VM)
 #   SMOKE_SSH_PRIV_KEY   private SSH key matching the image's baked authorized_keys (secret)
 #   SMOKE_ADMIN_PASSWORD baked webConfigurator admin password (secret) — REQUIRED here:
 #                        the UI tier logs in over the CSRF form; without it the ui
-#                        fixtures SKIP cleanly (never fail).
+#                        fixtures FAIL (never skip — a skipped tier is a false pass).
 # Optional:
 #   SMOKE_ADMIN_USER     webConfigurator user (var; default "admin")
 #   SMOKE_DNSBL_VIP4     baked pfb_dnsvip4 (the functional DNSBL flow injects the VIP); default 10.10.10.1
@@ -492,7 +492,7 @@ jobs:
           SMOKE_REDACT_VALUES: ${{ env.RESOLVED_REDACT }}
           # The Phase-1 gap closed: the UI tier logs into the webConfigurator over
           # the CSRF form, so the baked admin password MUST reach pytest. Without
-          # it the ui fixtures SKIP (never fail).
+          # it the ui fixtures FAIL (never skip).
           SMOKE_ADMIN_PASSWORD: ${{ secrets.SMOKE_ADMIN_PASSWORD }}
           SMOKE_ADMIN_USER: ${{ vars.SMOKE_ADMIN_USER }}
           # Screenshot artifact layout: <root>/<version>/<name>.png (browser tier).

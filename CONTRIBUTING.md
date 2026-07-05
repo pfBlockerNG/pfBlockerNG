@@ -1024,14 +1024,14 @@ python -m playwright install chromium                 # browser tier only
 export SMOKE_IMAGE_REF=ghcr.io/<org>/pfsense-ce@sha256:<digest>
 export SMOKE_SSH_KEY=/path/to/guest_priv_key          # mode 600
 export SMOKE_PKG=/path/to/pfBlockerNG-*.pkg           # from build-pkg
-export SMOKE_ADMIN_PASSWORD=<baked admin password>    # else the UI fixtures SKIP
+export SMOKE_ADMIN_PASSWORD=<baked admin password>    # REQUIRED — else the UI fixtures FAIL
 python -m pytest tests/smoke/ui -m ui_render   --override-ini="addopts="   # Tier A
 python -m pytest tests/smoke/ui -m ui_e2e      --override-ini="addopts="   # Tier B functional
 python -m pytest tests/smoke/ui -m ui_browser  --override-ini="addopts="   # Tier B browser
 ```
 
-Without `SMOKE_ADMIN_PASSWORD` the UI fixtures **skip** cleanly (never fail), so a
-run that lacks the baked credential degrades gracefully. Screenshots land under
+Without `SMOKE_ADMIN_PASSWORD` the UI fixtures **fail** (never skip) — the tests cannot
+run without the baked credential, and a skipped tier would report a false pass. Screenshots land under
 `$SMOKE_UI_SCREENSHOT_DIR/<version>/` (default `test-results/ui-screenshots/`, a
 git-ignored build output).
 
