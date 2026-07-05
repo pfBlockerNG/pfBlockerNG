@@ -13,7 +13,8 @@
 #                 unless the derived -k is EMPTY and the marker is exactly
 #                 "smoke", and is clamped to the --test-dir's direct-child
 #                 test_*.py module count. Every FILTERED entry gets `shard` /
-#                 `shard_total` STRING fields (CE: 0..S-1 / S; Plus is
+#                 `shard_label` / `shard_total` STRING fields (CE: 0..S-1 / S,
+#                 label = shard+1 for display; Plus is
 #                 hard-capped at 1 — parallel Plus boots are untested).
 #                 Prints the filtered legs JSON to stdout.
 #                 Writes scope= / ci_matrix= / pytest_filter= to $GITHUB_OUTPUT.
