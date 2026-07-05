@@ -1548,7 +1548,12 @@ closingprocess() {
 		wc -l "${pfbnative}"*.txt 2>/dev/null | sort -n -r
 	fi
 	if [ -d "${pfbdeny}" ] && [ "$(ls -A "${pfbdeny}")" ]; then
-		emptylists="$(grep "^${ip_placeholder2}$" "${pfbdeny}"*.txt | cut -d ':' -f1 | sed -e 's/^.*[a-zA-Z]\///')"
+		# grep only prefixes matches with "path:" when given >=2 file args; a deny glob that
+		# resolves to exactly one file then returns the bare match (the placeholder IP) and
+		# `cut -d ':' -f1` picks that up instead of the filename. The appended /dev/null forces
+		# a second (never-matching) file arg so the prefix -- and the filename -- always shows,
+		# same idiom as issue #833's PHP-side fix (#842). See issue #844.
+		emptylists="$(grep "^${ip_placeholder2}$" "${pfbdeny}"*.txt /dev/null | cut -d ':' -f1 | sed -e 's/^.*[a-zA-Z]\///')"
 		if [ -n "${emptylists}" ]; then
 			echo; echo "====================[ Empty Lists w/${ip_placeholder} ]=================="; echo
 			for list in ${emptylists}; do
