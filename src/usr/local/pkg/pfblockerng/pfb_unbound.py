@@ -1550,8 +1550,9 @@ def init_standard(id: int, env: module_env) -> bool:
                         if os.path.isfile(pfb["pfb_py_resolver"]):
                             os.remove(pfb["pfb_py_resolver"])
 
-                # Enable DNSBL statistics
-                if pfb["python_blacklist"]:
+                # Enable DNSBL statistics -- forwarding-gated too, not just
+                # blacklist-gated (issue #860; see _dnsbl_stats_wanted).
+                if _dnsbl_stats_wanted():
                     for i in range(2):
                         try:
                             if pfb_db_validate(2):
@@ -2430,6 +2431,18 @@ def _db_reset_cache() -> bool:
 def pfb_db_validate(db: int) -> bool:
     # Ensure the database/table exists (used at init to gate statistics).
     return _db_run(db, lambda con: None)
+
+
+def _dnsbl_stats_wanted() -> bool:
+    # Issue #860: the Upstream counter (issue #267 forwarding-mode detection) shares
+    # the dnsbl stats DB with per-feed blocks. Detection itself is forwarding-gated
+    # only (inplace_cb_query_response), so gating the DB open on python_blacklist
+    # alone left a forwarding-only install (no DNSBL blacklist loaded) with
+    # sqlite3_dnsbl_con permanently False: every upstream block logged its line but
+    # the counter enqueue/flush was silently skipped forever. Extracted (rather than
+    # inlined) so it's unit-testable -- init_standard itself needs the live Unbound
+    # env and can't run off-box.
+    return bool(pfb["python_blacklist"] or pfb.get("forwarding"))
 
 
 def _db_apply(task: tuple) -> None:
