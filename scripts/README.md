@@ -333,7 +333,7 @@ identically locally and in CI.
 | [`git-env-scrub-guard.sh`](git-env-scrub-guard.sh) | Meta-assertion: no raw `unset GIT_DIR` outside the lib; every git-using spec calls `scrub_git_env`. |
 | [`lib/git-env-scrub.sh`](lib/git-env-scrub.sh) | Sourceable lib exporting `pfb_scrub_git_env()` — unsets the six GIT_\* vars the pre-commit hook exports. |
 | [`impacted-tests.sh`](impacted-tests.sh) | Derive a pytest `-k` expression from the test modules changed vs a base ref. |
-| [`shard-modules.sh`](shard-modules.sh) | Deterministic round-robin module splitter — divides a test dir's direct-child `test_*.py` modules into N shards for the live-VM smoke suite's module-level parallelism (issue #797). |
+| [`shard-modules.sh`](shard-modules.sh) | Module splitter dividing a test dir's direct-child `test_*.py` modules into N shards for the live-VM smoke suite's module-level parallelism (issue #797) — duration-balanced greedy LPT when the dir has a `module-durations.txt` table, else deterministic round-robin (issue #816). |
 | [`module-durations.sh`](module-durations.sh) | Builds the per-module duration table (`tests/smoke/module-durations.txt`) from pytest `--durations=0` CI log output, so the shard splitter can balance shards by measured load (issue #816). |
 | [`select-box.sh`](select-box.sh) | Lease an LXC smoke box; `--print-id` mints a deterministic RUN_ID without a real lease. |
 | [`smoke-on-box.sh`](smoke-on-box.sh) | On-box smoke entrypoint: checkout, ports update, image pull, build, run. |
