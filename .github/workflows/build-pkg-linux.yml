@@ -22,8 +22,10 @@ name: build-pkg (Linux, portable)
 # docs/misc/version-bump-runbook.md.
 #
 # TARGET facts (ABI, py-flavor, PHP) are INPUTS, never read from this fork's tree:
-# they describe the pfSense the .pkg installs onto (CE 2.8 = FreeBSD 15 / py311 /
-# php 8.3).
+# they describe the pfSense the .pkg installs onto, and every value is derived from
+# the ci-metadata version matrix (supported-versions.json) — no FreeBSD/PHP/Python
+# version is fixed per edition. The bare-dispatch defaults below mirror the current
+# min-CE matrix entry.
 #
 # workflow_dispatch (iterate on the build) + workflow_call (smoke consumes it).
 
@@ -35,15 +37,15 @@ on:
         required: false
         default: "devel"
       abi:
-        description: "Target ABI — match the pfSense base (CE 2.8 = FreeBSD:15:amd64; Plus = FreeBSD:16:amd64)"
+        description: "Target ABI — FreeBSD:<freebsd_major>:<arch> for the target pfSense base, per the ci-metadata version matrix"
         required: false
         default: "FreeBSD:15:amd64"
       py_flavor:
-        description: "Python flavor for dep names (CE 2.8 = py311)"
+        description: "Python flavor for dep names (the matrix entry's py_flavor)"
         required: false
         default: "py311"
       php_version:
-        description: "PHP version for dep names (CE 2.8 = 8.3)"
+        description: "PHP version for dep names (the matrix entry's php_version)"
         required: false
         default: "8.3"
       ports_repo:

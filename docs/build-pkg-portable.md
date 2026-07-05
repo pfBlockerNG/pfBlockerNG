@@ -119,7 +119,7 @@ interactive, the tool prompts; otherwise it exits with an error naming the flag.
 
 | Option | Example | Description |
 | --- | --- | --- |
-| `--abi ABI` | `FreeBSD:15:amd64` | The package ABI. CE 2.8 = `FreeBSD:15:amd64`; Plus = `FreeBSD:16:amd64`. Sets the manifest `abi`. |
+| `--abi ABI` | `FreeBSD:15:amd64` | The package ABI (`FreeBSD:<major>:<arch>`), from the target version's entry in the ci-metadata version matrix (`supported-versions.json`). Sets the manifest `abi`. |
 | `--arch TRIPLET` | `freebsd:15:x86:64` | The manifest `arch` triplet. Default: derived from `--abi` (`amd64` → `x86:64`, etc.). |
 | `--py-flavor FLAVOR` | `py311` | The Python flavor used in dependency names (`py311-sqlite3`, …) and the `python<XY>` dep. |
 | `--php VERSION` | `8.3` | The PHP version for the `USES=php` dependency (`php83`, `php83-intl`). Asked **only** when the port uses PHP. |
@@ -303,6 +303,10 @@ the PORTVERSION changes, `PORTREVISION` is removed (reset to 0, no `_N` suffix).
 
 ## Examples
 
+The `--abi` / `--py-flavor` / `--php` values below are the current matrix values for
+the version each example targets — always take them from the ci-metadata version
+matrix (`supported-versions.json`), never treat them as fixed per edition.
+
 ```sh
 # 1) Build the local working tree for CE 2.8 (devel channel), into /tmp.
 python3 scripts/build-pkg-portable.py --ports ../FreeBSD-ports --local-src . \
@@ -319,9 +323,9 @@ python3 scripts/build-pkg-portable.py --ports ../FreeBSD-ports \
     --gh-tagname 3b4b27eb18c12a371d0b80366b8d3f20d201d1d1 \
     --abi FreeBSD:15:amd64 --py-flavor py311 --php 8.3 --repo-catalogue auto
 
-# 4) Target pfSense Plus (FreeBSD 16), xz compression, keep the work dir.
+# 4) Target pfSense Plus 26.03, xz compression, keep the work dir.
 python3 scripts/build-pkg-portable.py --ports ../FreeBSD-ports --local-src . \
-    --abi FreeBSD:16:amd64 --py-flavor py311 --php 8.3 \
+    --abi FreeBSD:16:amd64 --py-flavor py311 --php 8.5 \
     --compression xz --keep-work
 
 # 5) Just inspect the plan.

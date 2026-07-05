@@ -25,11 +25,11 @@
 # FLAVOR-COLLISION GUARD: two .pkg sharing package-name + version + ABI but
 # differing in php/py flavor (their `php*`/`py*-*` dependency names) CANNOT
 # coexist in one catalog — the second would silently shadow the first. We FAIL
-# LOUD rather than drop a build. No colliding combo exists today (CE 2.8 + Plus
-# 25.03 are both FreeBSD:15:amd64 / php83 / py311); when one ever does, the fix
-# is a flavored layout `<out>/<ABI>-<php><py>/` (add-repo.sh would then detect +
-# pin the box's flavor). That split is intentionally NOT implemented here — see
-# the guard below.
+# LOUD rather than drop a build. Whether a colliding combo exists depends on the
+# ci-metadata version matrix (two entries sharing a FreeBSD major with different
+# php/py flavors); when one ever arises, the fix is a flavored layout
+# `<out>/<ABI>-<php><py>/` (add-repo.sh would then detect + pin the box's flavor).
+# That split is intentionally NOT implemented here — see the guard below.
 #
 # LIBPKG PROVENANCE: `pkg repo` is a libpkg op needing the `pkg` binary. On
 # FreeBSD (or the pfSense VM) `pkg` is present. On a Linux CI runner it is NOT in
