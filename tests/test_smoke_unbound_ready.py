@@ -100,6 +100,38 @@ def test_timeout_error_reports_last_poll_and_process_list(
     assert "PROC-LIST-SENTINEL" in message
 
 
+def test_timeout_diagnostics_survive_a_failing_process_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Given unbound-control status always fails AND the process-list probe itself
+    raises (an unresponsive box times out the diagnostics ssh call too)
+    When wait_unbound_ready exhausts its attempts
+    Then the detailed RuntimeError still fires with the last poll's rc/stdout/stderr
+    and names the probe failure — the best-effort probe never replaces the
+    expected-vs-actual diagnostics with an opaque unrelated exception (PR #846 review).
+    """
+    monkeypatch.setattr(helpers.time, "sleep", lambda _seconds: None)
+
+    status_result = _FakeResult(returncode=1, stdout="STATUS-SENTINEL-OUT", stderr="STATUS-SENTINEL-ERR")
+    vm = _FakeVM(results=[status_result])
+
+    def ssh(*remote: str, timeout: float = 60.0) -> _FakeResult:
+        vm.calls.append(remote)
+        if "unbound-control" in remote[0]:
+            return status_result
+        raise TimeoutError("PROBE-TIMEOUT-SENTINEL")
+
+    monkeypatch.setattr(vm, "ssh", ssh)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        helpers.wait_unbound_ready(vm, attempts=2, delay=0)  # type: ignore[arg-type]
+
+    message = str(excinfo.value)
+    assert "STATUS-SENTINEL-OUT" in message
+    assert "rc=1" in message
+    assert "PROBE-TIMEOUT-SENTINEL" in message
+
+
 def test_returns_without_raising_once_status_reports_ready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

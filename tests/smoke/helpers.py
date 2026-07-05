@@ -2957,12 +2957,18 @@ def wait_unbound_ready(vm: SmokeVM, *, attempts: int = 60, delay: float = 2.0) -
         time.sleep(delay)
     # issue #845: never raise a bare message — print expected vs. actual (the last
     # poll) plus the process list, so "never started" reads differently from "slow".
-    procs = vm.ssh('ps auxww | grep -i "[u]nbound"', timeout=15.0)
+    # The probe is best-effort: on an unresponsive box it can itself time out, and
+    # that must not swallow the detailed RuntimeError below (PR #846 review).
+    try:
+        procs = vm.ssh('ps auxww | grep -i "[u]nbound"', timeout=15.0)
+        procs_diag = f"rc={procs.returncode} stdout={procs.stdout!r} stderr={procs.stderr!r}"
+    except Exception as exc:
+        procs_diag = f"<process-list probe failed: {exc!r}>"
     raise RuntimeError(
         f"Unbound did not become ready after reload: expected rc=0 from "
         f"`unbound-control status` within {attempts} attempts x {delay}s; "
         f"last poll rc={rc} stdout={out!r} stderr={err!r}; "
-        f"unbound processes: rc={procs.returncode} stdout={procs.stdout!r} stderr={procs.stderr!r}"
+        f"unbound processes: {procs_diag}"
     )
 
 
