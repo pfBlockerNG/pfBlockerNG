@@ -9,10 +9,9 @@ Credentials: the pfSense ``admin`` password is the ADR-04 baked
 ``SMOKE_ADMIN_PASSWORD`` (bcrypt in ``config.xml``, plaintext in the secret).
 It is NOT yet exported to pytest by ``smoke-single.yml`` (ADR-04 used SSH-key auth and
 reachability-only WebUI). :func:`admin_credentials` reads it from the environment.
-Off-CI (a credential-less local run) an unset password is a clean skip; under CI
-(``CI`` / ``GITHUB_ACTIONS`` set) it is a HARD FAILURE -- the secret is required
-there, and skipping the whole tier while the job reports green is a false pass (see
-:mod:`tests.smoke.ui.credgate`). Phase 5 wires ``SMOKE_ADMIN_PASSWORD`` (and an
+An unset password is a HARD FAILURE (never a skip): the UI tests cannot run without the
+webConfigurator admin password, and skipping the tier while the job reports green is a
+false pass (see :mod:`tests.smoke.ui.credgate`). Phase 5 wires ``SMOKE_ADMIN_PASSWORD`` (and an
 optional ``SMOKE_ADMIN_USER``) into the workflow's pytest ``env:`` block -- this
 phase does NOT edit any workflow.
 """
@@ -46,7 +45,7 @@ PFB_READY_PATH = "/pfblockerng/pfblockerng_general.php"
 PFB_READY_ATTEMPTS = 60
 PFB_READY_DELAY = 2.0
 
-# The admin password env var ("SMOKE_ADMIN_PASSWORD") + its skip/fail decision live in .credgate.
+# The admin password env var ("SMOKE_ADMIN_PASSWORD") + its ok/fail decision live in .credgate.
 # Optional override of the admin username; pfSense's default is "admin".
 ADMIN_USER_ENV = "SMOKE_ADMIN_USER"
 DEFAULT_ADMIN_USER = "admin"
@@ -150,15 +149,13 @@ __all__ = ["REDACTED", "mask_page_identity"]
 def admin_credentials() -> tuple[str, str]:
     """``(username, password)`` for the webConfigurator, from the environment.
 
-    Off-CI (a credential-less local run) an unset ``SMOKE_ADMIN_PASSWORD`` is a clean
-    skip. Under CI it is a HARD FAILURE: the secret is required there, and skipping the
-    whole UI tier while the job still reports green is a false pass (see :mod:`.credgate`).
+    An unset ``SMOKE_ADMIN_PASSWORD`` is a HARD FAILURE, never a skip: the UI tests cannot
+    run without the webConfigurator admin password, and skipping the tier while the job
+    reports green is a false pass (see :mod:`.credgate`).
     """
     action, value = admin_password_decision(os.environ)
     if action == "fail":
         pytest.fail(value)
-    if action == "skip":
-        pytest.skip(value)
     # action == "ok": value is the password.
     username = os.environ.get(ADMIN_USER_ENV) or DEFAULT_ADMIN_USER
     return username, value

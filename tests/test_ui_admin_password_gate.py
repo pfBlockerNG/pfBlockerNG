@@ -1,14 +1,14 @@
-"""The UI tier must not skip-as-pass when its required secret is missing in CI.
+"""The UI tier must not skip-as-pass when its required secret is missing.
 
 Pins :func:`tests.smoke.ui.credgate.admin_password_decision`: the pure decision the
 ``admin_credentials`` fixture acts on. ``tests/smoke`` is ``--ignore``d by the default
 ``python -m pytest`` (it needs a live VM), so this meta-test lives under ``tests/`` to run
 in the PR unit gate — exactly where the false-green would otherwise hide.
 
-Red->green: before the fix the fixture unconditionally ``pytest.skip``ed on an unset
-password, so a CI run with the secret missing skipped the whole UI tier and the job still
-reported success. Now an unset password under CI maps to ``"fail"`` (a hard failure);
-off-CI it still maps to ``"skip"``.
+Red->green: the fix makes an unset password map to ``"fail"`` (a hard failure) EVERYWHERE
+— CI and local alike. Previously a credential-less off-CI run mapped to ``"skip"``, silently
+skipping the whole UI tier while the job still reported success; the UI tests cannot run
+without the secret, so a skip is not a pass.
 """
 
 from __future__ import annotations
@@ -41,16 +41,21 @@ def test_unset_password_in_ci_fails() -> None:
         assert ADMIN_PASSWORD_ENV in msg, f"failure message should name the env var, got {msg!r}"
 
 
-def test_unset_password_off_ci_skips() -> None:
-    """Unset password with no CI marker => clean skip (credential-less local run)."""
+def test_unset_password_off_ci_also_fails() -> None:
+    """Unset password with NO CI marker => hard FAIL too (a skip is not a pass).
+
+    The regression guard for this change: the UI tests cannot run without the secret, so
+    even a credential-less LOCAL run must fail rather than silently skip. Pre-change this
+    returned a skip (the false green this closes).
+    """
     action, msg = admin_password_decision({})
-    assert action == "skip", f"unset password off-CI must skip, got {action!r}"
-    assert ADMIN_PASSWORD_ENV in msg, f"skip message should name the env var, got {msg!r}"
+    assert action == "fail", f"unset password off-CI must FAIL (never skip), got {action!r}"
+    assert ADMIN_PASSWORD_ENV in msg, f"failure message should name the env var, got {msg!r}"
 
 
 def test_empty_password_treated_as_unset() -> None:
-    """An empty-string password is not a real credential — treated as unset."""
+    """An empty-string password is not a real credential — treated as unset (=> fail everywhere)."""
     action, _ = admin_password_decision({ADMIN_PASSWORD_ENV: ""})
-    assert action == "skip", f"empty password off-CI must skip (treated as unset), got {action!r}"
+    assert action == "fail", f"empty password must fail (treated as unset), got {action!r}"
     action, _ = admin_password_decision({ADMIN_PASSWORD_ENV: "", "CI": "true"})
     assert action == "fail", f"empty password under CI must fail (treated as unset), got {action!r}"

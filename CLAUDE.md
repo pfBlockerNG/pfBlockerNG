@@ -853,7 +853,7 @@ mechanics, CI wiring (`ui-tests.yml`), gate status — are documented in
   on-box `php_error.log` line — **never HTTP 200 alone**. Tiers B `ui_e2e`/`ui_browser` are
   schedule/dispatch-only (non-PR-blocking). Run a tier: `python -m pytest tests/smoke/ui -m
   ui_render --override-ini="addopts="` (`SMOKE_ADMIN_PASSWORD` must be set, else the UI fixtures
-  SKIP, never fail).
+  FAIL — the UI tests cannot run without it and a skip is not a pass).
 - **Selective dispatch (validate your own change cheaply).** A bare `gh workflow run
   smoke.yml`/`ui-tests.yml` defaults to **`scope=impacted`**: the **min CE leg** + only the test
   modules **changed vs `origin/devel`** (auto-derived). Pass **`-f pytest_filter="a or b"`** to add the
