@@ -103,6 +103,46 @@ downgrade to LOWER build via `pkg delete` + reinstall → assert the stored conf
 preserved (sane reads, behaviour intact) AND the DNSBL probe still returns VIP. Skips cleanly
 when `SMOKE_PKG`/`repo_vm` is absent.
 
+## Downgrade-preparation tool — structural reversals the config layer can't cover
+
+The adapter/rollback contract above covers **config.xml scalar values**. A 4.0.x → pre-4.0.x
+downgrade also has two **structural** (filesystem / cron) changes that a config adapter cannot
+reverse and that do **not** self-heal on an older release:
+
+1. **Relocated custom list scripts.** On upgrade, `pfblockerng_install.inc` moves a user's
+   `{ip,dnsbl}_{pre,post}_*.{sh,py}` scripts from the package root into `list_scripts/`. A
+   pre-4.0.x release resolves list scripts against the package **root only**, so a moved script
+   silently stops running after a downgrade.
+2. **The ADR-43 `tick` cron.** The `pfblockerng.php tick` entry replaced the older
+   `cron`/`dcc`/`ss_refresh`/`bl` fleet; an older release has no `tick` verb, so the entry becomes
+   an orphan and the update fleet is absent until the older release re-syncs.
+
+Everything else the upgrade changed is already downgrade-safe: new-in-4.0.x config keys are
+**ignored** by an older release (inert, preserved for roll-forward), and the `.md5` →
+`.xxhash128` feed sidecars and the `.tar.bz2` → `.tar.zst` MFS archive **self-heal** on the next
+feed update / rebuild.
+
+**`scripts/pfb-downgrade-prep.sh`** reverses exactly those two non-self-healing changes. It is a
+**dev/ops-only** POSIX-sh tool — **not shipped** in the package (release archives are `src/` only) —
+that an operator copies to the appliance and runs as **root, before** the `pkg` downgrade (never
+fired automatically — a normal upgrade or uninstall must not trigger it):
+
+- Moves custom list scripts back to the package root, **skipping shipped scripts by name**
+  (`ip_pre_AWS_*.sh`, `aws_region_prefixes.sh` — the only files pfBlockerNG ships in `list_scripts/`),
+  so a shipped AWS wrapper is never moved. No pkg query is involved. Caveat: a user script named
+  exactly like a shipped wrapper is treated as shipped and left in place — the shipped namespace is
+  reserved.
+- Removes the `tick` cron via `pfSsh.php` (the shipped `install_cron_job()`), so config.xml and the
+  live crontab are rewritten cleanly.
+
+It is **idempotent** (a second run restores nothing and reports the tick cron already gone) and
+prints a short report of what it did.
+
+Coverage: `tests/shell/pfb_downgrade_prep_spec.sh` (shellspec — the file-move logic, the shipped-name
+gate, before/after, idempotency, skip-shipped, skip-existing, and the tick-cron output parsing via a
+fake `pfSsh.php`) and `tests/smoke/test_downgrade_prepare.py` (the tool end-to-end on a live VM,
+`repo` marker — real file moves + real `install_cron_job` tick removal).
+
 ## Foreign-key exclusion list (use `config_*_path` directly — NOT via `PfbConfig`)
 
 The following `installedpackages/pfblockerng*` paths are **not** registered in `pfb_cfg_registry()`
