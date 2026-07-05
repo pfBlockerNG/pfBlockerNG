@@ -25,6 +25,13 @@ name: Smoke fan-out (all CI legs, live pfSense VM)
 # needs.smoke.result already aggregates the WHOLE expanded matrix, shard
 # entries included.
 #
+# ONE .pkg BUILD PER VERSION LEG, NOT PER SHARD (issue #857): resolve-legs.sh
+# also emits `leg_matrix` — the UNSHARDED per-leg set (one entry per version
+# leg). The `build-pkg` job below matrixes over THAT, so a leg sharded N ways
+# still builds its .pkg exactly once; every shard of that leg (the `smoke`
+# job's shard-expanded matrix) downloads the shared artifact instead of
+# rebuilding a byte-identical .pkg.
+#
 # AND-gate semantics (GitHub Actions needs.*.result):
 #   - All legs pass  → smoke job result = 'success' → gate = green
 #   - Any leg fails  → smoke job result = 'failure' → gate = red
@@ -121,6 +128,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       ci_matrix: ${{ steps.filter.outputs.ci_matrix }}
+      leg_matrix: ${{ steps.filter.outputs.leg_matrix }}
       leg_count: ${{ steps.count.outputs.leg_count }}
       pytest_marker: ${{ steps.filter.outputs.pytest_marker }}
       pytest_filter: ${{ steps.filter.outputs.pytest_filter }}
@@ -196,11 +204,42 @@ jobs:
             echo "::warning::CI matrix is empty — no images to smoke-test."
           fi
 
-  # ── 2. Per-CE smoke run (parallel, fail-fast: false) ─────────────────────────
+  # ── 2. Build the .pkg ONCE PER VERSION LEG (issue #857) ──────────────────────
   #
-  # One leg per ci:true CE entry.  Each leg calls the ADR-04 smoke workflow
-  # (smoke-single.yml) as a reusable callee, passing the per-version image ref.
-  # `fail-fast: false` ensures EVERY leg runs to completion regardless of
+  # Matrixes over `leg_matrix` — the UNSHARDED per-leg set — so a leg sharded
+  # N ways (see the SHARD dimension note above) still builds its .pkg exactly
+  # once, not once per shard. build-pkg-linux.yml declares no `secrets:` input,
+  # so this call passes none (no `secrets: inherit`).
+  build-pkg:
+    name: build-pkg (${{ matrix.channel }} ${{ matrix.pfsense_version }})
+    needs: prepare
+    if: needs.prepare.outputs.leg_count != '0'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.prepare.outputs.leg_matrix) }}
+    uses: ./.github/workflows/build-pkg-linux.yml
+    with:
+      channel: devel
+      # ABI/dep target matching this leg's image (CE=FreeBSD:15, Plus=FreeBSD:16
+      # in the current matrix) — pkg add refuses a cross-major-ABI .pkg.
+      abi: FreeBSD:${{ matrix.freebsd_major }}:amd64
+      php_version: ${{ matrix.php_version }}
+      py_flavor: ${{ matrix.py_flavor }}
+      # Keyed on image_name + pfsense_version (unique per version leg, stable
+      # across its shards) — the smoke job below passes the SAME name as
+      # pkg_artifact so every shard of this leg downloads this one build.
+      artifact_name: pfBlockerNG-pkg-${{ matrix.image_name }}-${{ matrix.pfsense_version }}
+      ports_repo: pfBlockerNG/FreeBSD-ports
+      ports_ref: pfblockerng/use-github
+
+  # ── 3. Per-leg smoke run (parallel, fail-fast: false) ────────────────────────
+  #
+  # One leg per shard-expanded ci:true entry.  Each leg calls the ADR-04 smoke
+  # workflow (smoke-single.yml) as a reusable callee, passing the per-version
+  # image ref AND the shared .pkg artifact build-pkg produced for its version
+  # leg (pkg_artifact) — smoke-single.yml downloads it instead of building its
+  # own. `fail-fast: false` ensures EVERY leg runs to completion regardless of
   # whether another leg has already failed.
   #
   # IMAGE REF RESOLUTION + PER-LEG .pkg ABI:
@@ -209,15 +248,15 @@ jobs:
   # target (freebsd_major, php_version, py_flavor). We pass them all to smoke-single.yml: it
   # composes the GHCR ref from the SMOKE_IMAGE_REPO repo variable + the image_name
   # input + the pfsense_version tag (each input overriding its repo-variable default),
-  # exports mac as SMOKE_VM_MAC for the boot, AND builds the leg's .pkg for the
-  # matching ABI (FreeBSD:<major>:amd64) + dep flavors. The ABI step is essential:
-  # pkg add refuses a cross-major .pkg, so a .pkg built for one leg's FreeBSD major
-  # cannot install on another's — each leg must build its own ABI-matched package,
-  # with every major/flavor coming from the ci-metadata version matrix.
+  # exports mac as SMOKE_VM_MAC for the boot. abi/php_version/py_flavor are still
+  # passed for smoke-single.yml's build-if-absent fallback (a bare dispatch or
+  # repo-install.yml's direct call, neither of which sets pkg_artifact).
   smoke:
     name: Smoke (${{ matrix.channel }} ${{ matrix.pfsense_version }} shard ${{ matrix.shard_label }}/${{ matrix.shard_total }})
-    needs: prepare
-    # Run even if prepare had warnings; skip only if prepare hard-failed.
+    needs: [prepare, build-pkg]
+    # Run even if prepare had warnings; skip only if prepare hard-failed. No
+    # status function here, so Actions implicitly ANDs in success() — a
+    # build-pkg failure skips smoke too (the AND gate below still catches it).
     if: needs.prepare.outputs.leg_count != '0'
     strategy:
       fail-fast: false   # REQUIRED: all legs run to completion; no cancellation on failure
@@ -231,12 +270,16 @@ jobs:
       pfsense_version: ${{ matrix.pfsense_version }}
       image_name: ${{ matrix.image_name }}
       mac: ${{ matrix.mac }}
-      # Per-leg .pkg target so the built package matches the image's pfSense base:
-      # the ABI tag is keyed on the matrix freebsd_major (CE=15, Plus=16) — pkg add
-      # refuses a cross-major-ABI .pkg — and the dep names track php_version/py_flavor.
+      # Per-leg .pkg target — still needed for smoke-single.yml's build-if-absent
+      # fallback path — keyed on the matrix freebsd_major (CE=15, Plus=16); pkg add
+      # refuses a cross-major-ABI .pkg.
       abi: FreeBSD:${{ matrix.freebsd_major }}:amd64
       php_version: ${{ matrix.php_version }}
       py_flavor: ${{ matrix.py_flavor }}
+      # The .pkg build-pkg already produced for this version leg (issue #857):
+      # identical to that job's artifact_name, so every shard of this leg finds
+      # the SAME shared artifact and downloads it instead of rebuilding.
+      pkg_artifact: pfBlockerNG-pkg-${{ matrix.image_name }}-${{ matrix.pfsense_version }}
       # Resolved by the prepare step: the marker, and the effective -k (an explicit
       # input, else the impacted auto-derivation, else blank = whole marker).
       pytest_marker: ${{ needs.prepare.outputs.pytest_marker || 'smoke' }}
@@ -248,7 +291,7 @@ jobs:
       shard_total: ${{ matrix.shard_total }}
     secrets: inherit
 
-  # ── 3. AND-gate: green only if ALL legs passed ───────────────────────────────
+  # ── 4. AND-gate: green only if ALL legs passed ───────────────────────────────
   #
   # This is the REQUIRED STATUS check.  It runs regardless of the smoke matrix
   # outcome (if: always()) and hard-fails unless every leg passed.
