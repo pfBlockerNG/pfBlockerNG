@@ -70,7 +70,7 @@ on:
       shards:
         description: "Number of parallel module shards per CE leg for full-marker, un-filtered runs (issue #797). Collapses to 1 when pytest_filter is set or pytest_marker != smoke. Plus legs are always capped at 1 shard (parallel Plus boots are unvalidated). Clamped to the leg's test-module count."
         required: false
-        default: "2"
+        default: "3"
   # Called by other workflows. Defaults to the FULL suite so existing callers
   # that pass nothing are unchanged (workflow_call -> scope=full by default).
   workflow_call:
@@ -99,7 +99,7 @@ on:
         description: "Number of parallel module shards per CE leg for full-marker, un-filtered runs (issue #797). Collapses to 1 when pytest_filter is set or pytest_marker != smoke. Plus legs are always capped at 1 shard (parallel Plus boots are unvalidated). Clamped to the leg's test-module count."
         required: false
         type: string
-        default: "2"
+        default: "3"
   # Daily nightly run — runs the full CE suite every night.
   schedule:
     - cron: "0 7 * * *"
