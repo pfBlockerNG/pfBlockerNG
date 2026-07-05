@@ -5,6 +5,8 @@ Covers:
 - ``classify_upstream_block`` (NXRA / EDE15 / EDE17 classifier)
 - ``UpstreamBlock`` result type
 - ``_log_upstream_block`` counter enqueue branch (sqlite3_dnsbl_con guard)
+- ``_dnsbl_stats_wanted`` init-time DB-open gate (issue #860: forwarding-mode-only
+  installs must open the dnsbl stats DB too, not just blacklist-loaded ones)
 
 All tests are pure off-box — no Unbound API calls, no fixtures, no I/O.
 """
@@ -26,9 +28,11 @@ from pfb_unbound import (
     UpstreamBlock,
     _db_create,
     _db_flush_dnsbl,
+    _dnsbl_stats_wanted,
     _log_upstream_block,
     _parse_ede_options,
     classify_upstream_block,
+    pfb_db_validate,
 )
 
 # ---------------------------------------------------------------------------
@@ -569,3 +573,110 @@ class TestDnsblFlushSelfHealsUpstreamRow:
         assert con.execute("SELECT * FROM dnsbl WHERE groupname = 'Upstream'").fetchone() is None, (
             "a feed-only flush (no 'Upstream' delta) must not seed the Upstream row"
         )
+
+
+# ---------------------------------------------------------------------------
+# _dnsbl_stats_wanted — init-time DB-open gate (issue #860)
+# ---------------------------------------------------------------------------
+
+
+class TestDnsblStatsWanted:
+    """Scenario: the dnsbl stats DB must open whenever EITHER a blacklist loaded OR
+    forwarding mode is enabled -- not blacklist-loaded alone.
+
+    Background:
+        init_standard's "Enable DNSBL statistics" block used to gate on
+        ``pfb["python_blacklist"]`` only. Upstream/external-block detection
+        (issue #267) is gated on forwarding mode alone (inplace_cb_query_response),
+        so a forwarding-only install (no DNSBL blacklist loaded) left the gate
+        False forever -- sqlite3_dnsbl_con never became True, so
+        _log_upstream_block's counter enqueue (and _db_flush_dnsbl's guard) was
+        permanently skipped even though blocks were being logged.
+    """
+
+    def test_wanted_when_blacklist_loaded_no_forwarding(self) -> None:
+        # Pre-existing behaviour preserved: a loaded blacklist alone still wants the DB.
+        pfb_unbound.pfb["python_blacklist"] = True
+        pfb_unbound.pfb["forwarding"] = False
+        assert _dnsbl_stats_wanted()
+
+    def test_wanted_when_forwarding_enabled_no_blacklist(self) -> None:
+        """
+        The issue #860 fix: forwarding alone (no blacklist) must also want the DB.
+
+        RED on the unfixed gate (`pfb["python_blacklist"]` only): forwarding=True
+        with blacklist=False evaluates False, failing this assertion.
+        """
+        pfb_unbound.pfb["python_blacklist"] = False
+        pfb_unbound.pfb["forwarding"] = True
+        assert _dnsbl_stats_wanted(), "forwarding-only must want the dnsbl stats DB (issue #860)"
+
+    def test_not_wanted_when_neither_flag_set(self) -> None:
+        # Branch coverage: guard intact when neither condition holds.
+        pfb_unbound.pfb["python_blacklist"] = False
+        pfb_unbound.pfb["forwarding"] = False
+        assert not _dnsbl_stats_wanted()
+
+
+# ---------------------------------------------------------------------------
+# init's DB-open block composed with the gate (issue #860)
+# ---------------------------------------------------------------------------
+
+
+class TestDnsblDbOpensInForwardingMode:
+    """Scenario: with the gate fixed, a forwarding-only init actually opens the
+    dnsbl stats DB, and a subsequent Upstream flush lands the counter -- the full
+    effect the issue's live evidence showed missing (a logged block, dead counter).
+
+    Given:
+        init_standard itself needs the live Unbound env and can't run off-box (see
+        the sibling suites' same note), so this reproduces its "Enable DNSBL
+        statistics" retry-loop shape verbatim, calling the SAME production gate
+        (_dnsbl_stats_wanted) and DB-open call (pfb_db_validate) the source uses.
+    """
+
+    @staticmethod
+    def _open_dnsbl_db_like_init_standard(tmp_path: Any) -> None:
+        pfb_unbound.pfb["pfb_py_dnsbl"] = str(tmp_path / "dnsbl.sqlite")
+        if _dnsbl_stats_wanted():
+            for _ in range(2):
+                try:
+                    if pfb_db_validate(DB_DNSBL):
+                        pfb_unbound.pfb["sqlite3_dnsbl_con"] = True
+                        break
+                except Exception:
+                    pass
+
+    def test_forwarding_only_opens_db_and_flush_lands_counter(self, tmp_path: Any) -> None:
+        pfb_unbound.pfb["python_blacklist"] = False
+        pfb_unbound.pfb["forwarding"] = True
+
+        # Before: connection inactive (fixture default).
+        assert not pfb_unbound.pfb["sqlite3_dnsbl_con"]
+
+        self._open_dnsbl_db_like_init_standard(tmp_path)
+
+        # Then: the gate fix opens the connection -- RED on the unfixed gate (stays False).
+        assert pfb_unbound.pfb["sqlite3_dnsbl_con"], "forwarding-only init must open the dnsbl stats DB (issue #860)"
+
+        # When: an Upstream flush runs (as the DB worker would after _log_upstream_block).
+        assert _db_flush_dnsbl({"Upstream": 1})
+
+        # Then: the counter actually landed -- not silently dropped as before the fix.
+        con = pfb_unbound._db_conns[DB_DNSBL]
+        row = con.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchone()
+        assert row == (1,), f"Upstream counter not incremented after forwarding-only init: {row!r}"
+
+    def test_neither_flag_leaves_db_closed_and_flush_a_no_op(self, tmp_path: Any) -> None:
+        # Branch coverage: guard intact -- no forwarding, no blacklist -> DB never opens,
+        # and a later flush is a no-op (short-circuited by _db_flush_dnsbl's own guard).
+        pfb_unbound.pfb["python_blacklist"] = False
+        pfb_unbound.pfb["forwarding"] = False
+
+        self._open_dnsbl_db_like_init_standard(tmp_path)
+
+        assert not pfb_unbound.pfb["sqlite3_dnsbl_con"]
+        assert DB_DNSBL not in pfb_unbound._db_conns
+
+        assert _db_flush_dnsbl({"Upstream": 1})
+        assert DB_DNSBL not in pfb_unbound._db_conns, "guard must keep the DB closed with neither flag set"
