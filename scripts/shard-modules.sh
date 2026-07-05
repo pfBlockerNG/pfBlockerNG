@@ -16,21 +16,54 @@
 # locale-independent determinism (ADR-26).
 #
 # Two assignment modes, chosen by whether `<test-dir>/module-durations.txt`
-# (scripts/module-durations.sh's output) exists:
+# (scripts/module-durations.sh's output; override the path with the
+# test-only `SHARD_DURATIONS_FILE` env var — see below) exists:
 #
 #   - Present -> duration-balanced greedy LPT (longest processing time
-#     first). Each enumerated module's weight is its table duration; a
-#     module with no row, or a row <= 0, is clamped to a 0.01s epsilon so it
-#     still adds load (this is what stops zero-weight modules from piling
-#     onto one shard and leaving another falsely empty). Modules are
-#     processed weight DESC, then path ASC under `LC_ALL=C` (ties), each
-#     going to the currently least-loaded shard (ties -> lowest index).
+#     first), HYBRID at test granularity for oversized modules (issue #855,
+#     extending #816). Each enumerated module's baseline weight is its table
+#     duration; a module with no row, or a row <= 0, is clamped to a 0.01s
+#     epsilon so it still adds load (this is what stops zero-weight modules
+#     from piling onto one shard and leaving another falsely empty). Given
+#     `target = total-weight / shard-total`, a module whose weight exceeds
+#     `target` AND has per-test rows in the table (scripts/module-durations.sh
+#     emits both a module-sum row and one row per test, see its header) is
+#     OVERSIZED: it is split into one LPT unit per KNOWN test instead of one
+#     lump unit for the whole module (same 0.01 epsilon clamp, per test). A
+#     module that qualifies but has NO per-test rows (an old table predating
+#     this feature) cannot be split and rides whole, same as before. All
+#     units — normal modules and oversized modules' individual tests — are
+#     processed together: weight DESC, then path/nodeid ASC under `LC_ALL=C`
+#     (ties), each going to the currently least-loaded shard (ties -> lowest
+#     index).
+#
+#     For an oversized module, the shard receiving the LARGEST summed test
+#     weight (ties -> lowest shard index) is its CARRIER: it gets the
+#     module's PATH plus a `--deselect <nodeid>` pair for every one of that
+#     module's KNOWN tests assigned to any OTHER shard. Every other shard
+#     that received some of that module's tests gets plain pytest node-ID
+#     lines for its own tests only. Why the path+deselect carrier and not
+#     node IDs everywhere: a test added or renamed after the last table
+#     regeneration has NO row, so it can never be individually assigned or
+#     deselected — it always rides the carrier's whole-module collection,
+#     which keeps overall coverage complete by construction even for a test
+#     the table has never seen. run-smoke.sh splices this script's stdout
+#     newline-split straight into pytest's argv, one line = one argv word
+#     (scripts/run-smoke.sh's shard-splice step), so a `--deselect` line and
+#     its node-ID value are always emitted as two ADJACENT lines, in that
+#     order, never merged or reordered relative to each other.
 #   - Absent -> plain round-robin: the j-th module (0-based, sorted order)
 #     goes to shard `j % shard-total`. This is the fallback every table-less
 #     dir rides (e.g. tests/smoke/ui/).
 #
-# Both modes print the selected shard's module paths, one per line, sorted
-# `LC_ALL=C` by path, to stdout; diagnostics go to stderr only.
+# Both modes print the selected shard's assigned lines to stdout — module
+# paths (round-robin and LPT's normal/carrier units), pytest node IDs
+# (LPT's non-carrier test units), and `--deselect`/node-ID pairs (LPT's
+# carrier units) — deterministically ordered, one entry per line; diagnostics
+# go to stderr only. `SHARD_DURATIONS_FILE` (test-only env override; unset in
+# every real caller) replaces the default `<test-dir>/module-durations.txt`
+# path, so a test can inject a synthetic table over a real, unmodified
+# test-dir tree.
 #
 # Errors loudly (non-zero exit, one-line stderr message) on: wrong arg
 # count; non-numeric/negative index or total; total < 1; index >= total; a
@@ -38,7 +71,9 @@
 # requested shard EMPTY — never a silent empty success. The min-weight
 # epsilon guarantees this condition is identical for both modes: whenever
 # module-count >= shard-total every shard gets >= 1 module (LPT's first N
-# assignments land on N distinct shards, same as round-robin's).
+# assignments land on N distinct shards, same as round-robin's); splitting
+# an oversized module into more, smaller units only ever adds candidates for
+# an under-full shard, never removes one.
 
 set -eu
 
@@ -106,26 +141,92 @@ set +f
 IFS="$oldifs"
 
 module_count="$#"
-durfile="${dir}/module-durations.txt"
+durfile="${SHARD_DURATIONS_FILE:-${dir}/module-durations.txt}"
 
 if [ -f "$durfile" ]; then
-	# Duration-balanced greedy LPT (issue #816). Pass 1 (awk): weight each
-	# enumerated module from the table by BASENAME (a stale/foreign row is
-	# simply never looked up; a duplicate row is last-wins), clamped to a
-	# 0.01 floor. Pass 2 (sort): order weight DESC then path ASC under
-	# LC_ALL=C -- the LPT processing order. Pass 3 (awk): greedy-assign each
-	# module, in that order, to the currently least-loaded shard (ties ->
-	# lowest index), printing only the requested shard's paths. Records are
-	# "<path>\t<weight>" -- TAB-delimited so a test-dir containing spaces
-	# still round-trips exactly (a path cannot contain a tab here).
+	# Hybrid duration-balanced greedy LPT (issue #855, extending #816) — see
+	# the header for the full rule. Three stages:
+	#
+	# Stage 1 (awk): read the table once, splitting rows into module sums
+	# (`dur[base]`) and per-test sums (`tw[base,n]`/`tid[base,n]`, keyed by a
+	# running per-base counter — awk has no ordered multi-value map). Then,
+	# for each enumerated module (fed via stdin), compute its module-level
+	# weight exactly as #816 did (0.01 epsilon fallback) and accumulate the
+	# true total; at END, with the total known, compute `target` and decide
+	# each module's oversized status, emitting one LPT unit per module
+	# (kind=module) or one per known test (kind=test) — tagged with its sort
+	# key (path or nodeid), weight, module basename, module path, and (for a
+	# test unit) its test id.
+	#
+	# Stage 2 (sort): weight DESC, sort key ASC under LC_ALL=C — the same
+	# LPT processing order as #816, now over the mixed module/test units.
+	# Records are "<sortkey>\t<weight>\t...", TAB-delimited so a path
+	# containing a space still round-trips exactly.
+	#
+	# Stage 3 (awk): greedy-assign each unit, in that order, to the
+	# currently least-loaded shard (ties -> lowest index) — #816's greedy
+	# core, extended. A module-kind unit destined for the requested shard is
+	# queued for direct output. A test-kind unit is NOT printed here —
+	# bookkeeping only (summed weight + test list per (module, shard)),
+	# because deciding the carrier needs every shard's assignment, known
+	# only once every unit is processed. At END, per oversized module: find
+	# the carrier (largest summed test weight, ties -> lowest shard index)
+	# from that bookkeeping alone, BEFORE the prefix-safety fixup below.
+	#
+	# pytest's `--deselect` matches by NODE-ID PREFIX, not exact equality
+	# (`_pytest.main.pytest_collection_modifyitems`: `colitem.nodeid.
+	# startswith(deselect_prefixes)`, confirmed against a real pytest and
+	# caught for real by tests/test_shard_union.py's union oracle running
+	# against this repo's OWN test_smoke_feeds.py, where
+	# `test_cron_detects_changed_local_feed` is a literal string-prefix of
+	# the unrelated sibling `test_cron_detects_changed_local_feed_same_
+	# second`). Naively deselecting the shorter test from the carrier's
+	# whole-module collection would ALSO silently strip the longer sibling
+	# — a real coverage hole, not a hypothetical. Fix: flatten every known
+	# test of the base into one list tagged with its assigned shard, then
+	# run a fixpoint pass — any test STAYING on the carrier whose id is a
+	# STRICT prefix-match victim of a test going ELSEWHERE is PROMOTED onto
+	# that elsewhere test's shard (repeated to a fixed point, so a 3+ level
+	# prefix chain settles fully). A promoted test is no longer implicit on
+	# the carrier: it becomes its own explicit node-ID line on the shard it
+	# was promoted to (a bare positional node-id arg resolves by EXACT
+	# nodeid, never by prefix, so that side is always safe). Carrier
+	# selection is fixed before this pass, so the fixup can never flip who
+	# the carrier is.
+	#
+	# Every record carries a 2-char group prefix ("0"=plain path,
+	# "1"=deselect pair, "2"=bare node ID) plus its own sort key, so the
+	# following sort groups paths first, then each deselect pair as ONE
+	# still-paired record, then bare node IDs.
+	#
+	# Stage 4 (sort + awk): LC_ALL=C sort by group then sort key — this is
+	# the ONLY sort allowed on the final shape, because a naive re-sort of
+	# already-expanded `--deselect`/node-ID lines would separate a flag from
+	# its value (they must stay adjacent for run-smoke.sh's argv splice).
+	# The trailing awk expands each sorted record into its final output
+	# line(s) — a "pair" record becomes `--deselect` then the node ID, on
+	# two consecutive lines; everything else becomes its single payload
+	# line — AFTER sorting, so sort only ever orders whole not-yet-expanded
+	# records, never a flag separately from its value.
 	tab="$(printf '\t')"
-	assigned="$(
-		printf '%s\n' "$modules" | awk -v durfile="$durfile" '
+	units="$(
+		printf '%s\n' "$modules" | awk -v durfile="$durfile" -v stotal="$total" '
 			BEGIN {
 				while ((getline line < durfile) > 0) {
 					if (line ~ /^[ \t]*#/ || line ~ /^[ \t]*$/) continue
 					n = split(line, f)
-					if (n >= 2) dur[f[1]] = f[2] + 0
+					if (n < 2) continue
+					key = f[1]
+					w = f[2] + 0
+					sep = index(key, "::")
+					if (sep > 0) {
+						base = substr(key, 1, sep - 1)
+						cnt = ++tcount[base]
+						tid[base, cnt] = substr(key, sep + 2)
+						tw[base, cnt] = w
+					} else {
+						dur[key] = w
+					}
 				}
 				close(durfile)
 			}
@@ -134,28 +235,132 @@ if [ -f "$durfile" ]; then
 				base = path
 				sub(/^.*\//, "", base)
 				w = ((base in dur) && dur[base] > 0) ? dur[base] : 0.01
-				printf "%s\t%.6f\n", path, w
+				n_modules++
+				mpath[n_modules] = path
+				mbase[n_modules] = base
+				mweight[n_modules] = w
+				wsum += w
+			}
+			END {
+				target = wsum / stotal
+				for (i = 1; i <= n_modules; i++) {
+					base = mbase[i]
+					w = mweight[i]
+					if (w > target && (base in tcount)) {
+						for (t = 1; t <= tcount[base]; t++) {
+							tv = (tw[base, t] > 0) ? tw[base, t] : 0.01
+							nodeid = mpath[i] "::" tid[base, t]
+							printf "%s\t%.6f\ttest\t%s\t%s\t%s\n", nodeid, tv, base, mpath[i], tid[base, t]
+						}
+					} else {
+						printf "%s\t%.6f\tmodule\t%s\t%s\t%s\n", mpath[i], w, base, mpath[i], ""
+					}
+				}
 			}
 		' | LC_ALL=C sort -t "$tab" -k2,2rn -k1,1 | awk -F '\t' -v total="$total" -v want="$index" '
 			BEGIN {
 				for (i = 0; i < total; i++) load[i] = 0
 			}
 			{
-				path = $1
 				w = $2 + 0
+				kind = $3
+				base = $4
+				modpath = $5
+				testid = $6
 				min_i = 0
 				for (i = 1; i < total; i++) {
 					if (load[i] < load[min_i]) min_i = i
 				}
 				load[min_i] += w
-				if (min_i == want) print path
+				if (kind == "module") {
+					if (min_i == want) print "0\t" modpath "\tsingle\t" modpath
+				} else {
+					bw[base, min_i] += w
+					c = ++bt_count[base, min_i]
+					bt_id[base, min_i, c] = testid
+					if (!(base in seen_base)) {
+						seen_base[base] = 1
+						base_list[++base_n] = base
+					}
+					base_modpath[base] = modpath
+				}
 			}
-		'
+			END {
+				for (bi = 1; bi <= base_n; bi++) {
+					base = base_list[bi]
+					carrier = 0
+					best = ((base, 0) in bw) ? bw[base, 0] + 0 : 0
+					for (s = 1; s < total; s++) {
+						cur = ((base, s) in bw) ? bw[base, s] + 0 : 0
+						if (cur > best) {
+							best = cur
+							carrier = s
+						}
+					}
+
+					# Flatten every known test of this base into one
+					# 1..m indexed list tagged with its currently-assigned
+					# shard, so a test can be reassigned (promoted) without
+					# disturbing bt_id/bt_count (shared across bases).
+					m = 0
+					for (s = 0; s < total; s++) {
+						cnt = bt_count[base, s] + 0
+						for (c = 1; c <= cnt; c++) {
+							m++
+							ftest[m] = bt_id[base, s, c]
+							fshard[m] = s
+						}
+					}
+
+					# Prefix-safety fixpoint (see the header comment above
+					# this awk block): promote any carrier-staying test
+					# whose id is a strict prefix of a differently-shard-
+					# bound sibling id, onto that sibling shard — repeat
+					# until one full pass makes no more changes.
+					changed = 1
+					while (changed) {
+						changed = 0
+						for (a = 1; a <= m; a++) {
+							if (fshard[a] == carrier) continue
+							for (b = 1; b <= m; b++) {
+								if (fshard[b] != carrier) continue
+								if (length(ftest[b]) > length(ftest[a]) && index(ftest[b], ftest[a]) == 1) {
+									fshard[b] = fshard[a]
+									changed = 1
+								}
+							}
+						}
+					}
+
+					if (carrier == want) {
+						print "0\t" base_modpath[base] "\tsingle\t" base_modpath[base]
+						for (a = 1; a <= m; a++) {
+							if (fshard[a] == carrier) continue
+							nid = base_modpath[base] "::" ftest[a]
+							print "1\t" nid "\tpair\t" nid
+						}
+					} else {
+						for (a = 1; a <= m; a++) {
+							if (fshard[a] != want) continue
+							nid = base_modpath[base] "::" ftest[a]
+							print "2\t" nid "\tsingle\t" nid
+						}
+					}
+				}
+			}
+		' | LC_ALL=C sort -t "$tab" -k1,1 -k2,2 | awk -F '\t' '{
+			if ($3 == "pair") {
+				print "--deselect"
+				print $4
+			} else {
+				print $4
+			}
+		}'
 	)"
 	selected_any=0
-	if [ -n "$assigned" ]; then
+	if [ -n "$units" ]; then
 		selected_any=1
-		printf '%s\n' "$assigned" | LC_ALL=C sort
+		printf '%s\n' "$units"
 	fi
 else
 	j=0
