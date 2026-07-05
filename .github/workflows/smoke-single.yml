@@ -558,7 +558,10 @@ jobs:
           SMOKE_STUB_DNS_ADDR: "127.0.0.1"
           SMOKE_STUB_DNS_PORT: "53"
         run: |
-          set -eu
+          # pipefail is REQUIRED: run-smoke.sh's output is teed to a log below, so
+          # its exit status must survive the pipe or a genuine smoke failure would
+          # read green. GitHub's default shell already sets it; make it explicit.
+          set -euo pipefail
           # pfSense's System DNS is 10.0.2.2 (libslirp's host alias); libslirp NATs
           # guest->10.0.2.2:53 to the runner's 127.0.0.1:53 (the mock), the SAME host-alias
           # path the mock-feed HTTP server already rides. So the ONLY runner-side prep is
@@ -576,7 +579,13 @@ jobs:
           set -- --paths tests/smoke -m "${PYTEST_MARKER}" --timeout 30
           [ -n "${PYTEST_FILTER:-}" ] && set -- "$@" --filter "${PYTEST_FILTER}"
           set -- "$@" --shard "${SHARD}" --shard-total "${SHARD_TOTAL}"
-          sh scripts/run-smoke.sh "$@"
+          # Tee the run into the diagnostics dir so its pytest --durations=0 lines
+          # ride the smoke-diagnostics artifact. module-durations.yml aggregates
+          # every leg/shard's log after a green nightly to refresh the sharding
+          # duration table (issue #816). Stderr is folded in — the parser ignores
+          # non-duration lines. pipefail (above) keeps run-smoke.sh's exit status.
+          mkdir -p smoke-diag
+          sh scripts/run-smoke.sh "$@" 2>&1 | tee smoke-diag/pytest-durations.log
 
       # ADR-24 / ADR-47 P5: runner-side scrub delegated to the shared script.
       # resolve-legs.sh scrub --root smoke-diag handles: non-CE screenshot deletion,
