@@ -2940,15 +2940,30 @@ def assert_unbound_adds_only_python_config(vm: SmokeVM, *, timeout: float = 30.0
 
 
 @timed_step("wait_unbound_ready")
-def wait_unbound_ready(vm: SmokeVM, *, attempts: int = 30, delay: float = 2.0) -> None:
-    """Poll ``unbound-control status`` until ready (mirrors install-pkg.sh)."""
+def wait_unbound_ready(vm: SmokeVM, *, attempts: int = 60, delay: float = 2.0) -> None:
+    """Poll ``unbound-control status`` until ready (mirrors install-pkg.sh).
+
+    Budget is wider than the shell twin's (120s vs. install-pkg.sh's 60s, issue
+    #845): a restart-class reload (unbound restart + DNSBL structure rebuild
+    before the control socket answers) can legitimately exceed 60s under CI load.
+    """
     cmd = "/usr/local/sbin/unbound-control -c /var/unbound/unbound.conf status"
+    rc, out, err = None, None, None
     for _ in range(attempts):
         result = vm.ssh(cmd, timeout=15.0)
         if result.returncode == 0:
             return
+        rc, out, err = result.returncode, result.stdout, result.stderr
         time.sleep(delay)
-    raise RuntimeError("Unbound did not become ready after reload")
+    # issue #845: never raise a bare message — print expected vs. actual (the last
+    # poll) plus the process list, so "never started" reads differently from "slow".
+    procs = vm.ssh('ps auxww | grep -i "[u]nbound"', timeout=15.0)
+    raise RuntimeError(
+        f"Unbound did not become ready after reload: expected rc=0 from "
+        f"`unbound-control status` within {attempts} attempts x {delay}s; "
+        f"last poll rc={rc} stdout={out!r} stderr={err!r}; "
+        f"unbound processes: rc={procs.returncode} stdout={procs.stdout!r} stderr={procs.stderr!r}"
+    )
 
 
 def wait_boot_complete(vm: SmokeVM, *, timeout: float = 180.0, delay: float = 3.0) -> None:
