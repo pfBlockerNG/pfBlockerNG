@@ -249,9 +249,10 @@ through (`scripts/local-smoke.sh` forwards them — `--filter` becomes pytest `-
 sharding splits an already-selected, full-marker run across N parallel workers. CI's `smoke.yml`
 takes a `shards` input (default 3): a CE leg with the default `smoke` marker and no `-k` filter
 expands into `shards` matrix entries (`resolve-legs.sh legs`), each running one shard's slice —
-module-level, or test-level for an oversized module (issue #855's hybrid split, below); a Plus leg
-is capped at 1 shard unless the `plus_shards` dispatch opt-in is set (issue #856 validated
-same-identity parallel Plus boots — run 28749104142: both shards green, no license errors); the count is
+module-level, or test-level for an oversized module (issue #855's hybrid split, below); Plus legs
+shard exactly like CE — same `shards` count and defaults (issue #856 validated same-identity
+parallel Plus boots under the single `SMOKE_PLUS_*` identity — run 28749104142: both shards green,
+no license errors); the count is
 clamped to the leg's `test_*.py` module count; and a filtered (`pytest_filter` set) or
 non-`smoke`-marker leg collapses to 1 shard — the same empty-slice hazard `local-smoke.sh --shards`
 guards against (an N-way split can leave a shard with zero matching tests). The residual case — a

@@ -13,9 +13,9 @@
 #                 unless the derived -k is EMPTY and the marker is exactly
 #                 "smoke", and is clamped to the --test-dir's direct-child
 #                 test_*.py module count. Every FILTERED entry gets `shard` /
-#                 `shard_label` / `shard_total` STRING fields (CE: 0..S-1 / S,
-#                 label = shard+1 for display; Plus is capped at 1 unless
-#                 PLUS_SHARDS_INPUT=true — the issue #856 opt-in for
+#                 `shard_label` / `shard_total` STRING fields (0..S-1 / S,
+#                 label = shard+1 for display). One S drives every channel —
+#                 Plus shards exactly like CE (issue #856 validated
 #                 same-identity parallel Plus boots).
 #                 Prints the filtered legs JSON to stdout.
 #                 Writes scope= / ci_matrix= / pytest_filter= to $GITHUB_OUTPUT.
@@ -159,20 +159,17 @@ _rl_legs() {
 
     # Expand ALWAYS (even at S=1) so every matrix entry uniformly carries
     # shard/shard_total as STRINGS (workflow_call inputs are typed string;
-    # avoid number/string coercion surprises). CE gets S copies; Plus is
-    # capped at 1 shard unless PLUS_SHARDS_INPUT is exactly "true" — the
-    # issue #856 opt-in (same-identity parallel Plus boots; anything else
-    # fails closed to 1, #797's conservative default).
+    # avoid number/string coercion surprises). Every leg gets S copies —
+    # Plus shards exactly like CE, same count and defaults (issue #856
+    # validated same-identity parallel Plus boots; the #797 1-shard cap and
+    # its #856 opt-in are gone).
     # shard_label is the 1-based DISPLAY counterpart of the 0-based shard index —
     # job names read "shard 1/2".."2/2" instead of the off-by-one-looking "0/2"
     # (and "shard 1/1" for an unsharded leg instead of "0/1"). Scripts keep the
     # 0-based `shard` field; the label exists for naming only.
     FILTERED="$(printf '%s\n' "$FILTERED" | jq -c --argjson s "$S" \
-        --arg plus "${PLUS_SHARDS_INPUT:-}" \
-        '[ .[] | . as $e
-           | (if ($e.channel == "CE" or $plus == "true") then $s else 1 end) as $n
-           | range(0; $n) as $i
-           | $e + {shard: ($i | tostring), shard_label: (($i + 1) | tostring), shard_total: ($n | tostring)} ]')"
+        '[ .[] | range(0; $s) as $i
+           | . + {shard: ($i | tostring), shard_label: (($i + 1) | tostring), shard_total: ($s | tostring)} ]')"
 
     printf 'scope=%s  legs=%s  -k=[%s]\n' "$SCOPE" \
         "$(printf '%s' "$FILTERED" | jq 'length')" "$K" >&2
