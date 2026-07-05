@@ -1355,6 +1355,8 @@ def test_dot_block_dnsbl_disable_removes_rules_despite_toggle_on(deployed_vm: Sm
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.timeout(150)  # arrange runs reload+filter-sync then a real uninstall — exceeds the
+# 30s default cap under heavier shard companions (#859; killed mid-arrange on run 28739543530)
 def test_dot_block_uninstall_keep_on_removes_rules_retains_sections(deployed_vm: SmokeVM, primary_iface: str) -> None:
     """ADR-37 / issue #484 Case 10: uninstall with keep=on removes DoT rules but retains sections.
 
