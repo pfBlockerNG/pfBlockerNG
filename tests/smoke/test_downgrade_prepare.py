@@ -146,6 +146,25 @@ def _tick_cron_present(vm: SmokeVM) -> bool:
     return out[start + len(_TICK_OPEN) : end] == "1"
 
 
+def _remove_tick_cron(vm: SmokeVM) -> None:
+    """Strip any pfBlockerNG tick cron item from config.xml (teardown safety net).
+
+    The tool removes it on the happy path, but a body assertion that fires AFTER
+    ``_seed_tick_cron`` would otherwise leave the seeded item on the module-scoped
+    ``repo_vm`` — dirtying config.xml for a sibling test. Self-encapsulation.
+    """
+    snippet = (
+        "$kept = array();\n"
+        "foreach (config_get_path('cron/item', array()) as $i) {\n"
+        "    if (strpos($i['command'] ?? '', 'pfblockerng.php tick') === false) { $kept[] = $i; }\n"
+        "}\n"
+        "config_set_path('cron/item', $kept);\n"
+        "write_config('pfBlockerNG downgrade smoke: cleanup seeded tick cron');\n"
+        "echo 'OK';"
+    )
+    h.php_eval(vm, snippet, timeout=60.0)
+
+
 @pytest.mark.timeout(600)  # one pkg install cycle + a few ssh probes > the 30s default cap
 def test_downgrade_tool_restores_scripts_and_removes_tick_cron(repo_vm: SmokeVM) -> None:
     """DOWNGRADE-PREPARATION CONTRACT: ``pfb-downgrade-prep.sh`` restores a relocated
@@ -244,8 +263,14 @@ def test_downgrade_tool_restores_scripts_and_removes_tick_cron(repo_vm: SmokeVM)
         assert not _tick_cron_present(repo_vm), "AFTER: the ADR-43 tick cron must be removed from config.xml"
 
     finally:
-        # Remove the user script from both possible locations and the staged tool, then
-        # delete the package + guest repo dir (self-encapsulation: leave no state).
+        # Remove the user script from both possible locations and the staged tool, strip
+        # any leftover seeded tick cron (best-effort — a body assert may have fired before
+        # the tool removed it), then delete the package + guest repo dir. Self-encapsulation:
+        # leave no state for a sibling. The tick-cron cleanup must not mask a real failure.
         repo_vm.ssh("/bin/rm", "-f", root_user, list_user, _TOOL_DEST, timeout=30.0)
+        try:
+            _remove_tick_cron(repo_vm)
+        except Exception as exc:  # noqa: BLE001 -- cleanup must not mask the real test outcome
+            print(f"[smoke] _remove_tick_cron failed (non-fatal): {exc}")
         pkg_delete(repo_vm)
         repo_vm.ssh("/bin/rm", "-rf", UPGRADE_REPO_DIR, timeout=60.0)
