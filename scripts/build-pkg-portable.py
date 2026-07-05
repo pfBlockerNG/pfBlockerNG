@@ -1381,9 +1381,9 @@ def run_build(args: argparse.Namespace) -> Build:
     # Version-dependent TARGET facts. These are properties of the target pfSense
     # edition+version, NOT of the --ports checkout: that fork tree is a single
     # snapshot whose default versions (e.g. PHP 8.4) need not match what a given
-    # pfSense release ships (CE 2.8 = PHP 8.3, Python 3.11). So never derive them
-    # from the tree — take them explicitly and ask if missing. The repo's
-    # docs/misc/pfSense_versions.md is the authoritative per-version mirror.
+    # pfSense release ships. So never derive them from the tree — take them
+    # explicitly (from the ci-metadata version matrix, supported-versions.json)
+    # and ask if missing. docs/misc/pfSense_versions.md mirrors the same facts.
     #
     # Three such facts affect this tool's output: the ABI (manifest abi/arch), the
     # Python flavor, and the PHP version. `make package` records 12 deps for

@@ -17,7 +17,8 @@ name: Repo install (live pfSense VM)
 # but selects the `repo` pytest marker (tests/smoke/test_repo_install.py) instead of
 # `smoke`. The `repo` tests are deselected from `-m smoke`, so the smoke gate never
 # runs them and this never runs the smoke matrix. Each leg builds its own ABI-matched
-# .pkg (CE FreeBSD:15 / Plus FreeBSD:16 — pkg add refuses a cross-major-ABI package).
+# .pkg — pkg add refuses a cross-major-ABI package, and each version's FreeBSD major
+# comes from the ci-metadata version matrix.
 #
 # TRIGGERS: workflow_dispatch (always runs) + a nightly `schedule`. The scheduled run
 # is GATED — it only proceeds when `devel` actually moved since the previous nightly

@@ -41,10 +41,10 @@
 # FLAVOR-COLLISION GUARD: identical to build-repo.sh — two .pkg sharing
 # name+version+ABI but differing in php/py flavor (their php*/python*/py*-
 # dependency names) CANNOT coexist in one catalog (the second would silently
-# shadow the first). We FAIL LOUD (exit 1) rather than drop a build. No colliding
-# combo exists today (CE 2.8 + Plus 25.03 are both FreeBSD:15:amd64 / php83 /
-# py311); the fix when one arises is a flavored layout <out>/<ABI>-<php><py>/,
-# intentionally NOT implemented here.
+# shadow the first). We FAIL LOUD (exit 1) rather than drop a build. Whether a
+# colliding combo exists depends on the ci-metadata version matrix (two entries
+# sharing a FreeBSD major with different php/py flavors); the fix when one arises
+# is a flavored layout <out>/<ABI>-<php><py>/, intentionally NOT implemented here.
 #
 # VERSION-KEYED CATALOG DIRS (ADR-20 Phase 3)
 #   Pass --catalog-name <name> (e.g. "ce-2.8", "plus-26.03") to write the catalog

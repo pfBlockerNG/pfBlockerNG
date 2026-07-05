@@ -207,8 +207,9 @@ jobs:
   # input + the pfsense_version tag (each input overriding its repo-variable default),
   # exports mac as SMOKE_VM_MAC for the boot, AND builds the leg's .pkg for the
   # matching ABI (FreeBSD:<major>:amd64) + dep flavors. The ABI step is essential:
-  # pkg add refuses a cross-major .pkg, so a CE FreeBSD:15 .pkg cannot install on the
-  # Plus FreeBSD:16 base — each leg must build its own ABI-matched package.
+  # pkg add refuses a cross-major .pkg, so a .pkg built for one leg's FreeBSD major
+  # cannot install on another's — each leg must build its own ABI-matched package,
+  # with every major/flavor coming from the ci-metadata version matrix.
   smoke:
     name: Smoke (${{ matrix.channel }} ${{ matrix.pfsense_version }} shard ${{ matrix.shard_label }}/${{ matrix.shard_total }})
     needs: prepare

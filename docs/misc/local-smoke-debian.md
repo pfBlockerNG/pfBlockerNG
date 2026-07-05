@@ -145,7 +145,7 @@ separate from `SMOKE_IMAGE_DIR`.
 ## Building the `.pkg` off-FreeBSD (CI reference)
 
 The portable Linux builder reproduces `make package` for this `NO_BUILD` port. For CE 2.8
-(FreeBSD 15):
+(flag values from the target version's ci-metadata matrix entry):
 
 ```sh
 python3 scripts/build-pkg-portable.py \

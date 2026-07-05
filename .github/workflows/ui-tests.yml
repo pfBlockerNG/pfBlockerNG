@@ -155,9 +155,10 @@ permissions:
 jobs:
   # Build the branch's .pkg on a plain Linux runner (same builder the smoke gate
   # consumes). ONE build PER ci:true leg (version/ABI), not one global build:
-  # pkg add refuses a cross-major-ABI .pkg, so a CE FreeBSD:15 package cannot
-  # install on the Plus FreeBSD:16 base — each leg needs its own ABI-matched
-  # package. The build matrix is the distinct legs (prepare.build_matrix); each
+  # pkg add refuses a cross-major-ABI .pkg, so a package built for one leg's
+  # FreeBSD major cannot install on another's — each leg needs its own ABI-matched
+  # package (majors/flavors per the ci-metadata version matrix). The build matrix
+  # is the distinct legs (prepare.build_matrix); each
   # leg's artifact is named pfBlockerNG-pkg-<version> and the ui leg downloads the
   # one matching its own version.
   #
@@ -174,8 +175,8 @@ jobs:
     uses: ./.github/workflows/build-pkg-linux.yml
     with:
       channel: devel
-      # Build the leg's .pkg for its own pfSense base (CE=FreeBSD:15/php83,
-      # Plus=FreeBSD:16/php85). A CE-only run keeps the prior defaults.
+      # Build the leg's .pkg for its own pfSense base, with the ABI/php/python
+      # values coming from the leg's version-matrix entry.
       abi: FreeBSD:${{ matrix.freebsd_major }}:amd64
       php_version: ${{ matrix.php_version }}
       py_flavor: ${{ matrix.py_flavor }}
