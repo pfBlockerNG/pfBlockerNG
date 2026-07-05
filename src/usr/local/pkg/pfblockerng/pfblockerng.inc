@@ -8605,11 +8605,21 @@ function pfb_ip_render_query(array $fields): array {
 	if ($fields[14] != 'Unknown' && $fields[15] != 'Unknown') {
 		$q_ip = str_replace('.', '\.', $fields[14]);
 
-		$query_esc	= escapeshellarg($query);
-		$query_host_esc	= escapeshellarg($query_host);
-		$q_ip_esc	= escapeshellarg("^{$q_ip}");
+		$q_ip_esc = escapeshellarg("^{$q_ip}");
 
-		$validate_file_cmd = "/usr/bin/find {$folder} -type f {$query_prefix} {$query_esc} {$query_host_esc}";
+		// issue #832: the ET/Proofpoint branch above blanks $query/$query_host/
+		// $query_prefix (no filename filter -- every file under etdir is a
+		// candidate), so only append the filter tail when there IS one -- three
+		// escaped empty-string operands made `find` error out ("unknown primary or
+		// operator"), which silently killed the validate round for every ET row.
+		$filter = '';
+		if ($query !== '') {
+			$query_esc	= escapeshellarg($query);
+			$query_host_esc	= escapeshellarg($query_host);
+			$filter = " {$query_prefix} {$query_esc} {$query_host_esc}";
+		}
+
+		$validate_file_cmd = "/usr/bin/find {$folder} -type f{$filter}";
 		$validate_cmd	   = "{$validate_file_cmd} | xargs {$pfb['grep']} {$q_ip_esc} 2>&1";
 	}
 

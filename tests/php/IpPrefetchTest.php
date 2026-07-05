@@ -800,4 +800,107 @@ final class IpPrefetchTest extends TestCase
 			}
 		}
 	}
+
+	// ------------------------------------------------------------------------------
+	// issue #832: an ET/Proofpoint row's validate command must not break `find`
+	// with escaped-empty operands
+	// ------------------------------------------------------------------------------
+
+	/**
+	 * Scenario: an ET/Proofpoint-style row (':' in the logged Feed Name) blanks
+	 * $query/$query_host/$query_prefix in pfb_ip_render_query() -- there is no
+	 * per-feed filename filter, every file under etdir is a candidate.
+	 *
+	 * Given: such a row.
+	 * When: pfb_ip_render_query() builds its validate_file_cmd.
+	 * Then: the command is a plain `find <etdir>/*.txt -type f` with NO escaped
+	 * empty-string operands -- pre-fix it appended `{$query_prefix} '' ''`
+	 * (all three blanked), which made `find` itself error out ("unknown primary
+	 * or operator") and silently emit nothing, so the validate round always
+	 * missed for every ET row.
+	 */
+	public function test_et_header_validate_file_cmd_has_no_empty_find_operands(): void
+	{
+		$fields     = $this->buildBlockFields('192.0.2.201');
+		$fields[15] = 'IQRisk:Category1';	// ':' in the Feed Name -- the ET/Proofpoint branch
+
+		$rq = pfb_ip_render_query($fields);
+
+		$expected = "/usr/bin/find {$GLOBALS['pfb']['etdir']}/*.txt -type f";
+		$this->assertSame(
+			$expected,
+			$rq['validate_file_cmd'],
+			"expected an ET row's validate_file_cmd to carry no filename filter, got "
+				. var_export($rq['validate_file_cmd'], true)
+		);
+	}
+
+	/**
+	 * Scenario: an ET row whose reported IP is STILL present, verbatim, in its ET
+	 * feed file -- the exact real-world case issue #832 reports as broken.
+	 *
+	 * Given: a real etdir fixture file containing the reported IP.
+	 * When: the row's validate_cmd (built by pfb_ip_render_query()) is actually
+	 * exec()'d, exactly as convert_ip_log() does.
+	 * Then: the still-listed line comes back. Pre-fix, `find`'s primary-operator
+	 * error left the pipe with nothing for `xargs grep` to search, so this always
+	 * came back empty (a false "no longer listed") regardless of the real feed
+	 * state.
+	 */
+	public function test_et_header_still_listed_ip_is_found_by_the_real_validate_exec(): void
+	{
+		$tmp = sys_get_temp_dir() . '/pfb_832_et_' . getmypid();
+		mkdir($tmp, 0777, true);
+		file_put_contents("{$tmp}/IQRiskFeed.txt", "192.0.2.201\n");
+		$savedEtdir = $GLOBALS['pfb']['etdir'];
+		$GLOBALS['pfb']['etdir'] = $tmp;
+
+		try {
+			$fields     = $this->buildBlockFields('192.0.2.201');
+			$fields[15] = 'IQRisk:Category1';
+
+			$rq = pfb_ip_render_query($fields);
+			$this->assertNotNull($rq['validate_cmd'], 'expected a validate command to be built for a known IP/feed');
+
+			exec($rq['validate_cmd'], $output, $exitCode);
+
+			$this->assertNotEmpty(
+				$output,
+				"expected the real validate exec to find the still-listed IP via '{$rq['validate_cmd']}', "
+					. 'got empty output (exit ' . $exitCode . ') -- this is the issue #832 symptom: '
+					. "find errors out on the escaped-empty operands and the row silently reads as delisted"
+			);
+			$this->assertStringContainsString(
+				'192.0.2.201',
+				implode("\n", $output),
+				'expected the matched line to contain the reported IP, got ' . var_export($output, true)
+			);
+		} finally {
+			$GLOBALS['pfb']['etdir'] = $savedEtdir;
+			unlink("{$tmp}/IQRiskFeed.txt");
+			rmdir($tmp);
+		}
+	}
+
+	/**
+	 * Regression guard: the issue #832 fix only special-cases the ET branch's
+	 * blanked $query/$query_host/$query_prefix -- a normal (non-ET) Block row's
+	 * validate_file_cmd must stay byte-for-byte the command it was before.
+	 */
+	public function test_non_et_validate_file_cmd_shape_is_unchanged(): void
+	{
+		$fields = $this->buildBlockFields('192.0.2.77');
+		$rq     = pfb_ip_render_query($fields);
+
+		$queryEsc     = escapeshellarg($GLOBALS['pfb']['grep']);
+		$queryHostEsc = escapeshellarg('OldFeed.txt');	// buildBlockFields()'s fields[15]
+		$expected     = "/usr/bin/find {$rq['folder']} -type f | {$queryEsc} {$queryHostEsc}";
+
+		$this->assertSame(
+			$expected,
+			$rq['validate_file_cmd'],
+			"expected a non-ET row's validate_file_cmd shape to stay unchanged, got "
+				. var_export($rq['validate_file_cmd'], true)
+		);
+	}
 }
