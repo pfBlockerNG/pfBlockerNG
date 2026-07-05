@@ -664,7 +664,10 @@ ${fixture_dir}/test_e.py"
       write_table 'test_a.py 50.01' 'test_b.py 50.99'
       loc="$(comma_decimal_locale)"
       Skip if 'no comma-decimal locale installed on this box to demonstrate the guard' [ -z "$loc" ]
-      baseline="$(shard 0 2)"
+      # Baseline forced to LC_ALL=C: on a comma-decimal AMBIENT shell an
+      # inherited-locale baseline would equal the injected run even with the
+      # inline awk guard removed, false-passing this regression (review #861).
+      baseline="$(env LC_ALL=C sh "$SCRIPT" "${fixture_dir}" 0 2)"
       When call env LC_ALL="$loc" sh "$SCRIPT" "${fixture_dir}" 0 2
       The output should equal "$baseline"
     End
