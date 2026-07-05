@@ -85,13 +85,11 @@ final class DnsblParseComputeMetacharTest extends TestCase
 
 	/**
 	 * mode='test' -- neither 'alerts' nor 'daemon', so pfb_dnsbl_parse_compute() opens and
-	 * closes a fresh SQLite3 handle per call and returns the assoc-array shape. @ suppresses
-	 * the pre-existing (out-of-scope) "Undefined variable $cname_cnt" notice a total miss
-	 * raises when drill finds no CNAME -- unrelated legacy noise, not the value under test.
+	 * closes a fresh SQLite3 handle per call and returns the assoc-array shape.
 	 */
 	private function parse(string $domain): array
 	{
-		return @pfb_dnsbl_parse_compute('test', $domain, '', '');
+		return pfb_dnsbl_parse_compute('test', $domain, '', '');
 	}
 
 	/**
@@ -194,6 +192,51 @@ final class DnsblParseComputeMetacharTest extends TestCase
 			['pfb_mode' => 'TLD', 'pfb_group' => 'PlainZoneGroup', 'pfb_final' => $suffix, 'pfb_feed' => 'PlainZoneFeed'],
 			$result,
 			"expected the plain suffix '{$suffix}' to be found via the zone label-walk for '{$queryDomain}', got " . var_export($result, true)
+		);
+	}
+
+	/**
+	 * Given a domain that misses the data file, misses the zone label-walk, AND drill
+	 * returns no CNAME records -- a "total miss" (issue #834: $cname_cnt is assigned ONLY
+	 * inside the CNAME-found branch, so this path reads "if ($cname_cnt == 0)" before any
+	 * assignment ever ran).
+	 * When the total-miss compute runs, with every raised PHP error captured explicitly.
+	 * Then it raises NO PHP warning -- RED pre-fix ("Undefined variable $cname_cnt"), GREEN
+	 * post-fix ($cname_cnt initialised to 0 alongside $o_domain, same 0 == 0 outcome).
+	 */
+	public function test_total_miss_raises_no_undefined_cname_cnt_warning(): void
+	{
+		$domain = 'totalmiss834.com';
+		$this->seedSandbox('', ''); // empty data + zone files: guaranteed miss at both grep sites
+
+		$caught = [];
+		set_error_handler(function (int $errno, string $errstr) use (&$caught): bool {
+			$caught[] = $errstr;
+			return true; // swallow -- assert on the captured list below, not PHP's own output
+		});
+
+		try {
+			$result = pfb_dnsbl_parse_compute('test', $domain, '', '');
+		} finally {
+			restore_error_handler();
+		}
+
+		// pfb_open_sqlite()'s @chown/@chgrp to the 'unbound' user (absent on a dev box) is
+		// unrelated dev-box harness noise -- filter it out so this test targets only the bug.
+		$unexpected = array_values(array_filter($caught, static function (string $msg): bool {
+			return !str_contains($msg, 'Unable to find uid for unbound')
+				&& !str_contains($msg, 'Unable to find gid for unbound');
+		}));
+
+		$this->assertSame(
+			[],
+			$unexpected,
+			'expected no PHP warning/notice on the total-miss compute path, got: ' . var_export($unexpected, true)
+		);
+		$this->assertSame(
+			['pfb_mode' => 'Unknown', 'pfb_group' => 'Unknown', 'pfb_final' => 'Unknown', 'pfb_feed' => 'Unknown'],
+			$result,
+			'expected the total-miss domain to resolve to Unknown, got ' . var_export($result, true)
 		);
 	}
 }

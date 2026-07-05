@@ -13177,6 +13177,9 @@ function pfb_dnsbl_parse_compute($mode, $domain, $src_ip, $req_agent) {
 	// If domain is not in DNSBL cache, query for blocked domain details
 	if (!$dnsbl_cache) {
 		$o_domain = $domain; // Store original domain for CNAME query
+		$cname_cnt = 0; // issue #834: only ever set inside the CNAME-found branch below,
+		// but read unconditionally at "if ($cname_cnt == 0)" -- init so a total miss (no
+		// data/zone/CNAME match) doesn't read an undefined variable there.
 
 		// issue #809 Phase 3a: NULL unless the Alerts page's DNSBL table render pass
 		// seeded it via pfb_dnsbl_prefetch() -- read once here and reused at both grep
