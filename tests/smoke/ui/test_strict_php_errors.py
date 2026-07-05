@@ -53,21 +53,28 @@ def test_smoke_vm_php_error_reporting_is_strict(deployed_vm: SmokeVM) -> None:
     )
 
 
-def test_webconfigurator_php_fpm_runs_strict(webui: WebUI, deployed_vm: SmokeVM) -> None:
-    """The php-fpm (GUI) workers run at the strict level too — not just the CLI SAPI.
+def test_webconfigurator_php_fpm_logs_diagnostic_to_watched_path(webui: WebUI, deployed_vm: SmokeVM) -> None:
+    """php-fpm runs strict AND its diagnostics reach a watched log candidate.
 
-    The render tier's whole value is that GUI pages log at the raised level; a reload
-    that delivered its SIGUSR2 but left workers on the stale php.ini would leave the GUI
-    weak with the sweep catching nothing (a false green the coverage mandate forbids). T1
-    proves only the CLI SAPI (bare ``php -r`` reads php.ini directly, independent of fpm).
-    Here we read the FPM SAPI's effective ``error_reporting`` by GETting a probe served
-    through nginx → php-fpm, and pin it to the same masked level.
+    The render sweep's value is that a GUI page emitting a PHP diagnostic under the raised
+    level trips ``PhpErrorLogGuard``. That needs two facts a bare ``php -r`` cannot show: the
+    php-fpm WORKERS run strict, and php-fpm logs to a path the guard WATCHES. Fire a tagged
+    ``E_USER_WARNING`` from an fpm-served probe (the real GUI SAPI at the box's configured
+    level), then assert the fpm ``error_reporting`` is the mask AND the tagged line landed in a
+    watched candidate. If php-fpm's pool ever redirected ``error_log`` off the candidate list
+    this fails loudly — otherwise the sweep would silently miss every real page error (T1 and
+    the CLI log-catch below cannot see that: they read the CLI SAPI, not fpm's worker path).
     """
     expected = helpers.php_constant(deployed_vm, helpers.STRICT_PHP_ERROR_REPORTING)
-    actual = helpers.php_fpm_effective_error_reporting(deployed_vm, webui.get)
-    assert actual == expected, (
-        f"php-fpm (GUI) error_reporting is {actual}, expected the beta mask ({expected}) — "
+    tag = "pfb-fpm-smoke-diag"
+    level = helpers.php_fpm_probe(deployed_vm, webui.get, warn_tag=tag)
+    assert level == expected, (
+        f"php-fpm (GUI) error_reporting is {level}, expected the beta mask ({expected}) — "
         f"the SIGUSR2 reload did not move fpm workers to the strict level"
+    )
+    assert any(helpers.guest_file_contains(deployed_vm, c, tag) for c in PHP_ERROR_LOG_CANDIDATES), (
+        f"an fpm-logged diagnostic {tag!r} reached none of the watched candidates "
+        f"{list(PHP_ERROR_LOG_CANDIDATES)} — the render sweep's PhpErrorLogGuard would miss real page errors"
     )
 
 
