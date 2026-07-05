@@ -177,6 +177,7 @@ in `read-version-matrix.sh`.
 | --- | --- |
 | [`install-from-repo.sh`](install-from-repo.sh) | **First-time install** onto a clean pfSense from `src/` — no Netgate pkg. |
 | [`deploy.sh`](deploy.sh) | Fast code update of an **already-installed** pfBlockerNG: rsync `src/` + restart unbound/nginx. |
+| [`pfb-downgrade-prep.sh`](pfb-downgrade-prep.sh) | **Before rolling the package back** to a pre-4.0.x release: run on the box as root to reverse the two non-self-healing 4.0.x changes — restore custom `list_scripts/` pre/post scripts to the package root, and remove the ADR-43 `tick` cron. |
 | [`setup-hooks.sh`](setup-hooks.sh) | Point git at `.githooks` (run once after cloning). |
 | [`update-pfsense-stubs.py`](update-pfsense-stubs.py) | Regenerate `stubs/pfsense/` after a CE bump. |
 

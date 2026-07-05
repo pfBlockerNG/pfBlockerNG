@@ -1,0 +1,251 @@
+"""Live downgrade-preparation contract — the ``scripts/pfb-downgrade-prep.sh`` devops tool.
+
+NOT A SMOKE TEST. Like ``test_upgrade_config_stability.py`` this validates a
+*distribution* mechanic — here the ADMIN-DRIVEN downgrade-preparation step that makes
+rolling the package back to a pre-4.0.x release clean — and carries the ``repo`` marker
+(NOT ``smoke``), so ``pytest -m smoke`` never selects it. It reuses
+``test_repo_install.py``'s hermetic ``file://`` catalog and ``repo_vm`` fixture.
+
+THE TOOL (``scripts/pfb-downgrade-prep.sh``) is a dev/ops-only script — NOT shipped in
+the package — that an operator copies to the appliance and runs as root before the
+``pkg`` downgrade. It reverses the two 4.0.x changes a pre-4.0.x release cannot cope
+with:
+
+  1. Custom list pre/post transform scripts relocated into ``list_scripts/`` on upgrade —
+     an older release resolves list scripts against the package ROOT only, so a moved
+     script silently stops running. They are moved back to the root (shipped AWS wrappers
+     are left in place, recognised by name — no pkg query).
+  2. The ADR-43 ``pfblockerng.php tick`` cron entry is removed via ``pfSsh.php`` (the
+     shipped ``install_cron_job()``), so the downgraded release re-establishes its own
+     schedule instead of leaving an orphan tick cron behind.
+
+WHAT THIS PROVES on a REAL box that the off-box shellspec suite
+(``tests/shell/pfb_downgrade_prep_spec.sh``) cannot: the tool runs end-to-end on the
+appliance — it moves a real file inside the real package dir, LEAVES the shipped AWS
+wrapper in place, and removes the real tick cron from config.xml via ``install_cron_job``.
+
+DESELECTED from the default ``python -m pytest`` (``--ignore=tests/smoke`` in
+pyproject.toml). Run only via its own dispatch::
+
+    python -m pytest tests/smoke -m repo --override-ini="addopts="
+
+Needs the booted ``repo_vm`` fixture and the branch ``.pkg`` (``SMOKE_PKG``); without
+them it skips cleanly.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+from pathlib import Path
+
+import pytest
+
+import tests.smoke.helpers as h
+
+from .conftest import SmokeVM
+from .test_repo_install import (  # noqa: F401
+    NETGATE_REPO_NAME,
+    UPGRADE_REPO_DIR,
+    build_guest_repo,
+    pkg_delete,
+    pkg_install_from_repo,
+    pkg_installed_version,
+    pkg_update,
+    read_compact_version,
+    repo_priority,
+    repo_vm,
+    write_repo_conf,
+)
+
+pytestmark = pytest.mark.repo
+
+_PKGDIR = "/usr/local/pkg/pfblockerng"
+_LISTDIR = f"{_PKGDIR}/list_scripts"
+
+# The dev tool under test and where it is staged on the guest.
+_TOOL_SRC = Path(__file__).resolve().parents[2] / "scripts" / "pfb-downgrade-prep.sh"
+_TOOL_DEST = "/tmp/pfb-downgrade-prep.sh"
+
+# A user's custom list pre/post script (matches {ip,dnsbl}_{pre,post}_*.{sh,py}) — the
+# file the tool must move back to the package root.
+_USER_SCRIPT = "ip_pre_pfbdgsmoke.sh"
+# A shipped AWS region wrapper — the tool must leave it in list_scripts/ (name gate).
+_SHIPPED_SCRIPT = "ip_pre_AWS_US.sh"
+
+_TICK_CMD = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php tick >> /var/log/pfblockerng.log 2>&1"
+
+_TICK_OPEN = "<<<TICK>>>"
+_TICK_CLOSE = "<<<TICKEND>>>"
+
+
+def _file_exists(vm: SmokeVM, path: str) -> bool:
+    """TRUE iff ``path`` is a regular file on the guest (driven via /bin/sh -c by ssh)."""
+    return vm.ssh("test", "-f", path, timeout=30.0).returncode == 0
+
+
+def _scp_to_guest(vm: SmokeVM, local: Path, remote: str) -> None:
+    """Copy a host file to the guest via scp (the tool is dev-only, not in the pkg)."""
+    argv = [
+        "scp",
+        "-i",
+        vm.ssh_key_path,
+        "-P",
+        str(vm.ssh_port),
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "LogLevel=ERROR",
+        str(local),
+        f"{vm.ssh_target}:{remote}",
+    ]
+    result = subprocess.run(argv, capture_output=True, text=True, timeout=60.0, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"scp {local} -> {remote} failed: rc={result.returncode} {result.stderr!r}")
+
+
+def _seed_tick_cron(vm: SmokeVM) -> None:
+    """Plant the ADR-43 tick cron item directly into config.xml (the precondition the
+    tool must remove). Direct config_set_path append — no dependency on install_cron_job
+    being reachable from the pfSsh.php context."""
+    snippet = (
+        "$items = config_get_path('cron/item', array());\n"
+        "$items[] = array('minute' => '*/15', 'hour' => '*', 'mday' => '*', "
+        "'month' => '*', 'wday' => '*', 'who' => 'root', "
+        f"'command' => {h._php_str(_TICK_CMD)});\n"
+        "config_set_path('cron/item', $items);\n"
+        "write_config('pfBlockerNG downgrade smoke: seed ADR-43 tick cron');\n"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet, timeout=60.0)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_seed_tick_cron failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+
+
+def _tick_cron_present(vm: SmokeVM) -> bool:
+    """Scan config.xml cron items for the tick command."""
+    snippet = (
+        "$present = '0';\n"
+        "foreach (config_get_path('cron/item', array()) as $i) {\n"
+        "    if (strpos($i['command'] ?? '', 'pfblockerng.php tick') !== false) { $present = '1'; break; }\n"
+        "}\n"
+        f"echo {h._php_str(_TICK_OPEN)} . $present . {h._php_str(_TICK_CLOSE)};"
+    )
+    result = h.php_eval(vm, snippet, timeout=60.0)
+    if result.returncode != 0:
+        raise RuntimeError(f"_tick_cron_present failed: rc={result.returncode} {result.stderr!r}")
+    out = result.stdout
+    start = out.find(_TICK_OPEN)
+    end = out.find(_TICK_CLOSE)
+    if start == -1 or end == -1:
+        raise RuntimeError(f"_tick_cron_present: no delimited value in output: {out!r}")
+    return out[start + len(_TICK_OPEN) : end] == "1"
+
+
+@pytest.mark.timeout(600)  # one pkg install cycle + a few ssh probes > the 30s default cap
+def test_downgrade_tool_restores_scripts_and_removes_tick_cron(repo_vm: SmokeVM) -> None:
+    """DOWNGRADE-PREPARATION CONTRACT: ``pfb-downgrade-prep.sh`` restores a relocated
+    custom list script to the package root and removes the ADR-43 tick cron, WITHOUT
+    moving a shipped AWS wrapper.
+
+    Scenario: an admin prepares a 4.0.x box for a downgrade to a pre-4.0.x release.
+      Background: our NONE-signed file:// repo above the Netgate ``pfSense`` repo.
+
+    Given the branch build installed, the dev tool staged on the box, a custom user
+      script ``ip_pre_pfbdgsmoke.sh`` sitting in list_scripts/ (as a prior upgrade would
+      have relocated it), the shipped ``ip_pre_AWS_US.sh`` also in list_scripts/, and an
+      ADR-43 tick cron in config.xml,
+
+    When ``pfb-downgrade-prep.sh`` is run on the box as root,
+
+    Then the custom script is back at the package ROOT and gone from list_scripts/, the
+      shipped AWS wrapper is left untouched in list_scripts/, and the tick cron entry is
+      removed from config.xml.
+    """
+    pkg = os.environ.get("SMOKE_PKG")
+    assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file — repo_vm already gated this"
+    assert _TOOL_SRC.is_file(), f"dev tool not found at {_TOOL_SRC}"
+
+    pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
+
+    root_user = f"{_PKGDIR}/{_USER_SCRIPT}"
+    list_user = f"{_LISTDIR}/{_USER_SCRIPT}"
+    list_shipped = f"{_LISTDIR}/{_SHIPPED_SCRIPT}"
+    root_shipped = f"{_PKGDIR}/{_SHIPPED_SCRIPT}"
+
+    try:
+        # ------------------------------------------------------------------ #
+        # GIVEN: branch build installed; tool staged; preconditions planted   #
+        # ------------------------------------------------------------------ #
+        pkg_delete(repo_vm)
+        build_guest_repo(repo_vm, UPGRADE_REPO_DIR, [Path(pkg)])
+        write_repo_conf(repo_vm, UPGRADE_REPO_DIR, ours_priority=pfsense_prio + 100)
+        pkg_update(repo_vm)
+        pkg_install_from_repo(repo_vm)
+        installed = pkg_installed_version(repo_vm)
+        expected = read_compact_version(Path(pkg))
+        assert installed == expected, f"expected branch build {expected!r} installed, got {installed!r}"
+
+        # The shipped AWS wrapper must be present after install.
+        assert _file_exists(repo_vm, list_shipped), (
+            f"shipped {_SHIPPED_SCRIPT} not found in list_scripts/ after install — "
+            "the fixture assumption (a shipped AWS wrapper exists) is broken"
+        )
+
+        # Stage the dev tool on the guest.
+        _scp_to_guest(repo_vm, _TOOL_SRC, _TOOL_DEST)
+
+        # Plant the user's custom script in list_scripts/ (as a prior upgrade would have).
+        repo_vm.ssh("/usr/bin/touch", list_user, timeout=30.0)
+        repo_vm.ssh("/bin/chmod", "0755", list_user, timeout=30.0)
+
+        # Seed the ADR-43 tick cron.
+        _seed_tick_cron(repo_vm)
+
+        # BEFORE: user script only in list_scripts/, not at the root; tick cron present.
+        assert _file_exists(repo_vm, list_user), f"precondition: {_USER_SCRIPT} must be in list_scripts/"
+        assert not _file_exists(repo_vm, root_user), f"precondition: {_USER_SCRIPT} must NOT be at the package root yet"
+        assert _tick_cron_present(repo_vm), "precondition: the tick cron must be present before the tool runs"
+
+        # ------------------------------------------------------------------ #
+        # WHEN: the admin runs the downgrade-preparation tool as root         #
+        # ------------------------------------------------------------------ #
+        proc = repo_vm.ssh("/bin/sh", _TOOL_DEST, timeout=120.0)
+        assert proc.returncode == 0, (
+            f"pfb-downgrade-prep.sh failed: rc={proc.returncode} stdout={proc.stdout[-2000:]!r} stderr={proc.stderr!r}"
+        )
+        # The tool reports what it did.
+        assert "restored to package root: 1" in proc.stdout, (
+            f"tool did not report restoring the custom script: {proc.stdout!r}"
+        )
+        assert "tick cron entry: removed" in proc.stdout, f"tool did not report removing the tick cron: {proc.stdout!r}"
+
+        # ------------------------------------------------------------------ #
+        # THEN: script back at the root; shipped untouched; tick cron gone    #
+        # ------------------------------------------------------------------ #
+        assert _file_exists(repo_vm, root_user), (
+            f"AFTER: {_USER_SCRIPT} must be restored to the package root ({root_user})"
+        )
+        assert not _file_exists(repo_vm, list_user), (
+            f"AFTER: {_USER_SCRIPT} must be gone from list_scripts/ ({list_user})"
+        )
+        # Shipped AWS wrapper: never moved to the root, still in list_scripts/.
+        assert _file_exists(repo_vm, list_shipped), (
+            f"AFTER: shipped {_SHIPPED_SCRIPT} must remain in list_scripts/ (name gate, never moved)"
+        )
+        assert not _file_exists(repo_vm, root_shipped), (
+            f"AFTER: shipped {_SHIPPED_SCRIPT} must NOT be moved to the package root"
+        )
+        # Tick cron removed.
+        assert not _tick_cron_present(repo_vm), "AFTER: the ADR-43 tick cron must be removed from config.xml"
+
+    finally:
+        # Remove the user script from both possible locations and the staged tool, then
+        # delete the package + guest repo dir (self-encapsulation: leave no state).
+        repo_vm.ssh("/bin/rm", "-f", root_user, list_user, _TOOL_DEST, timeout=30.0)
+        pkg_delete(repo_vm)
+        repo_vm.ssh("/bin/rm", "-rf", UPGRADE_REPO_DIR, timeout=60.0)

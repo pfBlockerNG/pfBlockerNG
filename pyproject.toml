@@ -67,6 +67,7 @@ ignore = [
 # re-export idiom, not real shadowing. F811 is suppressed only for these files.
 "tests/smoke/test_software_update.py"              = ["F811"]
 "tests/smoke/test_upgrade_config_stability.py"  = ["F811"]
+"tests/smoke/test_downgrade_prepare.py"         = ["F811"]
 "tests/smoke/test_pkg_op_teardown.py"           = ["F811"]
 
 [tool.ruff.lint.isort]
