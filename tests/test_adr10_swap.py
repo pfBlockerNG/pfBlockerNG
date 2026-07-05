@@ -581,6 +581,34 @@ class TestSwapOpensDnsblStatsDb:
         assert not P.pfb["sqlite3_dnsbl_con"]
         assert P.DB_DNSBL not in P._db_conns, "an empty swap that does not want stats must not open the dnsbl DB"
 
+    def test_swap_does_not_open_db_when_mod_sqlite3_unavailable(self, tmp_path: Any, monkeypatch: Any) -> None:
+        """Third input of the AND guard (mod_sqlite3): with the sqlite3 module unavailable,
+        a swap that WOULD otherwise want stats (python_blacklist flips True) must still NOT
+        open the DB -- the mod_sqlite3 conjunct gates it, matching init's own mod_sqlite3
+        gate. Completes branch coverage of the guard's three inputs.
+
+        Failable guard: drop the `mod_sqlite3 and` conjunct and this fails -- sqlite3 is
+        importable in the test env, so the open would succeed and sqlite3_dnsbl_con flip True.
+        """
+        _set_count_paths(tmp_path)
+        monkeypatch.setattr(P, "dnsbl_emit_count", lambda *a, **k: True)
+        P.pfb["mod_sqlite3"] = False  # sqlite3 module unavailable on this install
+        P.pfb["pfb_py_dnsbl"] = str(tmp_path / "dnsbl.sqlite")
+        P.pfb["python_blacklist"] = False
+        P.pfb["forwarding"] = False
+        P._snapshot = _snapshot(counts=0)
+        assert not P.pfb["sqlite3_dnsbl_con"]
+
+        # ---- act: a swap loads a feed -> flips python_blacklist True (stats WOULD be wanted).
+        new = _snapshot(data={"blocked.example.com": {"log": "1", "index": 0, "important": False}}, counts=5)
+        assert P.rebuild_and_swap(lambda: new) is True
+
+        # ---- the master gate flips and stats ARE wanted, but mod_sqlite3=False keeps the DB closed.
+        assert P.pfb["python_blacklist"] is True
+        assert _dnsbl_stats_wanted()
+        assert not P.pfb["sqlite3_dnsbl_con"], "mod_sqlite3=False must gate the swap-side DB open"
+        assert P.DB_DNSBL not in P._db_conns, "no connection may open when the sqlite3 module is unavailable"
+
     def test_swap_does_not_reopen_an_already_open_db(self, tmp_path: Any, monkeypatch: Any) -> None:
         """Idempotency: when the stats DB is already open (init opened it), a later swap
         must NOT reconnect -- the not-sqlite3_dnsbl_con guard makes the open a no-op, so
