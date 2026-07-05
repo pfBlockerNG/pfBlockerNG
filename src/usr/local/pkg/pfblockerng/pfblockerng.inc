@@ -8495,11 +8495,9 @@ function pfb_match_reported_cidr(array $result, string $ip, bool $v4_type): ?arr
 		foreach ($result as $line) {
 			$rx = pfb_parse_query($line);
 
-			// A non-".txt:"-shaped line (e.g. a grep stderr message captured via 2>&1 --
-			// "grep -s" only silences "no such file") makes pfb_parse_query() return a
-			// 1-element array with no [1]; skip it instead of reading past the array (#843).
-			// Collect all CIDRs for analysis if Alert is from a CIDR
-			if (strpos($rx[1] ?? '', '/') !== FALSE) {
+			// Collect all CIDRs for analysis if Alert is from a CIDR (a non-".txt:"-shaped
+			// stderr line parses to an empty value and is skipped here -- issue #843)
+			if (strpos($rx[1], '/') !== FALSE) {
 				$cidrs[] = $rx;
 			}
 		}
@@ -12781,7 +12779,12 @@ function pfb_daemon_filterlog() {
 function pfb_parse_query($line) {
 	$rx = explode('.txt:', $line);
 	$rx[0] = ltrim(strrchr($rx[0], '/'), '/');
-	return $rx;
+
+	// issue #843: a non-".txt:"-shaped line can reach this parser -- e.g. a grep stderr
+	// message captured via 2>&1 ("grep -s" only silences "no such file") or a "Binary
+	// file X matches" notice -- and explode() then yields a single element. Return a
+	// stable 2-element [feed, value] shape so no consumer ever reads past the array.
+	return array($rx[0], $rx[1] ?? '');
 }
 
 

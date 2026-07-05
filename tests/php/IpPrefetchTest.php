@@ -224,8 +224,8 @@ final class IpPrefetchTest extends TestCase
 		// Given: $result mixes a non-".txt:"-shaped stderr line (issue #843 -- e.g. a
 		// grep stderr message captured via 2>&1; "grep -s" only silences "no such
 		// file", not e.g. "Binary file X matches") with a real filename-prefixed match.
-		// pfb_parse_query()'s explode('.txt:', $line) yields a 1-element array for the
-		// stderr line, so $rx[1] is undefined for it.
+		// pfb_parse_query() must absorb the stderr line into its stable 2-element
+		// [feed, value] shape (empty value) so no consumer reads past the array.
 		$result = [
 			'grep: warning: recursive search of stdin',
 			'/var/db/pfblockerng/deny/DenyFeed.txt:203.0.113.0/28',
@@ -251,6 +251,35 @@ final class IpPrefetchTest extends TestCase
 			['DenyFeed', '203.0.113.0/28'],
 			$match,
 			'expected the stderr-shaped line to be skipped and DenyFeed\'s /28 to still match, got ' . var_export($match, true)
+		);
+	}
+
+	public function test_cidr_helper_all_stderr_shaped_lines_yield_null_without_warning(): void
+	{
+		// Given: $result holds ONLY non-".txt:"-shaped lines (issue #843) -- the
+		// all-miss input class: no CIDR candidate can be collected at all.
+		$result = [
+			'grep: warning: recursive search of stdin',
+			'Binary file /var/db/pfblockerng/deny/DenyFeed.txt matches',
+		];
+
+		// Same E_WARNING escalation as the mixed-line case above: an unguarded read
+		// past pfb_parse_query()'s result must fail this test, not pass unnoticed.
+		set_error_handler(static function (int $errno, string $errstr): bool {
+			throw new \ErrorException($errstr, 0, $errno);
+		}, E_WARNING);
+
+		try {
+			// When: matching any host against the stderr-only result set.
+			$match = pfb_match_reported_cidr($result, '203.0.113.5', TRUE);
+		} finally {
+			restore_error_handler();
+		}
+
+		// Then: no candidates, no warning -- a clean NULL miss.
+		$this->assertNull(
+			$match,
+			'expected an all-stderr-shaped $result to yield a clean NULL, got ' . var_export($match, true)
 		);
 	}
 
