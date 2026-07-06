@@ -2447,6 +2447,34 @@ def _dnsbl_stats_wanted() -> bool:
     return bool(pfb["python_blacklist"] or pfb.get("forwarding"))
 
 
+def _open_dnsbl_stats_db_if_wanted() -> None:
+    # Issue #862 / #870: open the dnsbl stats SQLite DB when stats are newly wanted but
+    # init left it closed (a forwarding-off, no-feeds boot skips the open). Shared by
+    # every site that flips python_blacklist True AFTER init -- the ADR-10 swap
+    # (rebuild_and_swap) and the PFBL-03 control-channel enable / timed re-enable
+    # (pfb_apply_control_command, python_control_sleep) -- so all post-init enable paths
+    # stay consistent; else _db_flush_dnsbl and _log_upstream_block (both gated on
+    # sqlite3_dnsbl_con) silently drop every counter until the next full restart.
+    #
+    # Idempotent (the not-sqlite3_dnsbl_con guard no-ops when init already opened it) and
+    # off the DNS fast path: pfb_db_validate -> _db_run is _db_lock-serialized with a
+    # check_same_thread=False connection, safe on the watcher / control-sleep threads.
+    # Same mod_sqlite3 gate + two-attempt retry shape as init_standard's "Enable DNSBL
+    # statistics" block.
+    if pfb["mod_sqlite3"] and not pfb["sqlite3_dnsbl_con"] and _dnsbl_stats_wanted():
+        for i in range(2):
+            try:
+                if pfb_db_validate(DB_DNSBL):
+                    pfb["sqlite3_dnsbl_con"] = True
+                    break
+            except Exception as e:
+                sys.stderr.write(
+                    "[pfBlockerNG]: Failed to open pfb_py_dnsbl.sqlite database (Attempt: {}/2): {}".format(i + 1, e)
+                )
+                if os.path.isfile(pfb["pfb_py_dnsbl"]):
+                    os.remove(pfb["pfb_py_dnsbl"])
+
+
 def _db_apply(task: tuple) -> None:
     # Synchronous fallback when no DB worker is running (init, tests).
     kind = task[0]
@@ -3007,6 +3035,9 @@ def python_control_sleep(duration: int, arg: Any) -> bool:
     try:
         time.sleep(duration)
         pfb["python_blacklist"] = True
+        # Issue #870: the timed re-enable newly wants DNSBL stats too -- open the DB
+        # init skipped, same as the control-channel enable and the ADR-10 swap.
+        _open_dnsbl_stats_db_if_wanted()
     except Exception as e:
         sys.stderr.write("[pfBlockerNG] python_control_sleep: {}".format(e))
         pass
@@ -3082,6 +3113,10 @@ def pfb_apply_control_command(control_command: list[str]) -> tuple[bool, str]:
             control_rcd = True
             control_msg = "Python_control: DNSBL enabled"
             pfb["python_blacklist"] = True
+            # Issue #870: enabling via the control channel newly satisfies
+            # _dnsbl_stats_wanted(); open the stats DB init skipped at boot (sibling of
+            # #862's swap-path open) so per-feed/Upstream counters do not silently no-op.
+            _open_dnsbl_stats_db_if_wanted()
 
         elif control_command[1] == "addbypass" or control_command[1] == "removebypass":
             # PFBL-03: reject a malformed bypass command instead of raising
@@ -5269,29 +5304,12 @@ def rebuild_and_swap(build_snapshot: Callable[[], Snapshot | None], *, emit_coun
     # a reload that brings lists legitimately re-enables blocking, exactly as init does.)
     if new_snapshot.data_db or new_snapshot.zone_db or new_snapshot.regex_db or new_snapshot.allow_regex_db:
         pfb["python_blacklist"] = True
-    # Issue #862 (sibling of #860): init opens the dnsbl stats DB only when
-    # _dnsbl_stats_wanted() held at boot. A swap that NEWLY satisfies the predicate here
+    # Issue #862 (sibling of #860): a swap that NEWLY satisfies _dnsbl_stats_wanted()
     # -- python_blacklist just flipped True above (feeds added post-boot, no Unbound
-    # restart) -- must open the DB init skipped, or every per-feed and Upstream counter
-    # increment silently no-ops (both _db_flush_dnsbl and _log_upstream_block gate on
-    # sqlite3_dnsbl_con) until the next full restart. Off the DNS fast path: this runs on
-    # the watcher thread, and pfb_db_validate -> _db_run is _db_lock-serialized with a
-    # check_same_thread=False connection, so it is safe beside the query threads. Same
-    # mod_sqlite3 gate + two-attempt retry shape as init_standard's "Enable DNSBL
-    # statistics" block; the not-sqlite3_dnsbl_con guard keeps it idempotent (the
-    # synchronous init swap, where init already opened the DB, is a no-op).
-    if pfb["mod_sqlite3"] and not pfb["sqlite3_dnsbl_con"] and _dnsbl_stats_wanted():
-        for i in range(2):
-            try:
-                if pfb_db_validate(DB_DNSBL):
-                    pfb["sqlite3_dnsbl_con"] = True
-                    break
-            except Exception as e:
-                sys.stderr.write(
-                    "[pfBlockerNG]: Failed to open pfb_py_dnsbl.sqlite database (Attempt: {}/2): {}".format(i + 1, e)
-                )
-                if os.path.isfile(pfb["pfb_py_dnsbl"]):
-                    os.remove(pfb["pfb_py_dnsbl"])
+    # restart) -- must open the stats DB init skipped at boot, or every per-feed and
+    # Upstream counter increment silently no-ops until the next restart. Shared with the
+    # PFBL-03 control-channel enable path (issue #870); see _open_dnsbl_stats_db_if_wanted().
+    _open_dnsbl_stats_db_if_wanted()
     if emit_counts:
         dnsbl_emit_count(pfb["pfb_py_count"], new_snapshot.counts)
         dnsbl_emit_count(pfb["pfb_py_regex_count"], new_snapshot.regex_count)
