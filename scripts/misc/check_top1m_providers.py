@@ -75,11 +75,11 @@ DEFAULT_DESCRIPTOR_FILE = REPO_ROOT / "src/usr/local/pkg/pfblockerng/pfblockerng
 # a row is added to or removed from that descriptor table.
 MIN_PROVIDERS = 5
 
-# Matches "Top1mSource::<Case>->value => array(" -- the start of one provider's
+# Matches "PfbTop1mSource::<Case>->value => array(" -- the start of one provider's
 # descriptor block in pfb_top1m_providers()'s return array. Unique to that
 # table (grepped): every other `->value` use in the file is `$this->value`
 # inside the enum body, which this pattern doesn't match.
-_PROVIDER_ENTRY_RE = re.compile(r"Top1mSource::\w+->value\s*=>\s*array\(")
+_PROVIDER_ENTRY_RE = re.compile(r"PfbTop1mSource::\w+->value\s*=>\s*array\(")
 _URL_FIELD_RE = re.compile(r"'url'\s*=>\s*'([^']*)'")
 _LABEL_FIELD_RE = re.compile(r"'label'\s*=>\s*'([^']*)'")
 _CONTAINER_FIELD_RE = re.compile(r"'container'\s*=>\s*'([^']*)'")
@@ -93,7 +93,7 @@ _AUTH_TOKEN_RE = re.compile(r"'auth'\s*=>\s*array\(\s*'header'\s*=>\s*'([^']*)'\
 def _strip_php_line_comments(php_text: str) -> str:
     """Drop whole-line `//`-commented-out lines before extraction.
 
-    Without this, a commented-out `// Top1mSource::Dead->value => array(...`
+    Without this, a commented-out `// PfbTop1mSource::Dead->value => array(...`
     is still picked up as a live provider (the regex matches raw text). A
     trailing comment on a live line is unaffected -- the field is already
     matched before the comment starts.

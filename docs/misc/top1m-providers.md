@@ -25,7 +25,7 @@ source of truth — every provider is one row:
   `pfb_download()` sends — never a query-string token.
 - **`label`** / **`licence`** — the UI's option text and licence note.
 
-`pfblockerng.php` selects the active row via `$pfb['dnsbl_top1m_type']`/`Top1mSource` and wires
+`pfblockerng.php` selects the active row via `$pfb['dnsbl_top1m_type']`/`PfbTop1mSource` and wires
 its `url`/`headers` into the `extras[2]` download slot; no per-provider `if`/`elseif` remains.
 
 ## Providers

@@ -371,7 +371,7 @@ final class RollbackContractTest extends TestCase
 	 *
 	 * Note: pfb_idn is now adapted via PfbIdnMode (NOT plain-string). See
 	 * testPfbIdnModeAdapterForwardAndBackward() for pfb_idn coverage. alexa_type is
-	 * likewise adapted via Top1mSource (issue #877 review) -- see
+	 * likewise adapted via PfbTop1mSource (issue #877 review) -- see
 	 * testAlexaTypeForwardCoalescesLegacyAndBackwardNeverReemitsAlexa() for its coverage.
 	 */
 	public function testForwardPlainStringFieldsPassLegacyTokensUnchanged(): void
@@ -379,8 +379,8 @@ final class RollbackContractTest extends TestCase
 		// Representative plain-string fields with canonical legacy stored values.
 		// pfb_idn is intentionally excluded: it uses the PfbIdnMode adapter (not
 		// null/null) so it returns a PfbIdnMode enum, not a plain string. alexa_type
-		// is likewise excluded: it uses the Top1mSource adapter (not null/null) so
-		// it returns a Top1mSource enum, not a plain string.
+		// is likewise excluded: it uses the PfbTop1mSource adapter (not null/null) so
+		// it returns a PfbTop1mSource enum, not a plain string.
 		$cases = [
 			// General section
 			'pfb_interval'          => ['installedpackages/pfblockerng/config/0/pfb_interval', '1'],
@@ -652,7 +652,7 @@ final class RollbackContractTest extends TestCase
 	 *
 	 * Note: pfb_idn is now adapted via PfbIdnMode (NOT plain-string). See
 	 * testPfbIdnModeAdapterForwardAndBackward() for pfb_idn backward coverage. alexa_type
-	 * is likewise adapted via Top1mSource (issue #877 review) -- see
+	 * is likewise adapted via PfbTop1mSource (issue #877 review) -- see
 	 * testAlexaTypeForwardCoalescesLegacyAndBackwardNeverReemitsAlexa() for its coverage.
 	 */
 	public function testBackwardPlainStringFieldsIdentityAdapterCannotIntroduceNovelTokens(): void
@@ -661,7 +661,7 @@ final class RollbackContractTest extends TestCase
 		// which normalises to the canonical vocabulary ('on'|'confusable'|'off') rather
 		// than emitting identity for every input (e.g. the dropped alpha 'all' -> 'off').
 		// See testPfbIdnModeAdapterForwardAndBackward(). alexa_type is likewise excluded:
-		// it uses the Top1mSource write adapter (enum-typed), covered by
+		// it uses the PfbTop1mSource write adapter (enum-typed), covered by
 		// testAlexaTypeForwardCoalescesLegacyAndBackwardNeverReemitsAlexa() instead.
 		$cases = [
 			'pfb_interval'      => ['installedpackages/pfblockerng/config/0/pfb_interval', '6'],
@@ -1249,10 +1249,10 @@ final class RollbackContractTest extends TestCase
 	 *     'majestic', 'cloudflare', 'alexa'} (the latter three live tokens added
 	 *     ADR-59 P4/P5; 'alexa' is READ-only -- pfb_cfg_field_vocab()['top1m_source']
 	 *     lists only the five live WRITE-side tokens). The field is now adapted via
-	 *     the Top1mSource enum (mirrors PfbIdnMode/PfbAliasDeltaMode).
+	 *     the PfbTop1mSource enum (mirrors PfbIdnMode/PfbAliasDeltaMode).
 	 *   Given each of 'tranco', 'cisco', 'domcop', 'majestic', 'cloudflare', 'alexa' stored.
 	 *   When PfbConfig::read('alexa_type') then PfbConfig::write('alexa_type', result).
-	 *   Then (FORWARD) the read result is a Top1mSource enum (Tranco for legacy 'alexa').
+	 *   Then (FORWARD) the read result is a PfbTop1mSource enum (Tranco for legacy 'alexa').
 	 *   And (BACKWARD) the written token is in {'tranco', 'cisco', 'domcop', 'majestic',
 	 *     'cloudflare'} -- 'alexa' is NEVER re-emitted, even though it was the original
 	 *     stored value.
@@ -1263,12 +1263,12 @@ final class RollbackContractTest extends TestCase
 		$write_vocab = pfb_cfg_field_vocab()['top1m_source'];
 
 		$cases = [
-			'tranco'     => Top1mSource::Tranco,
-			'cisco'      => Top1mSource::Cisco,
-			'domcop'     => Top1mSource::DomCop,     // ADR-59 P4
-			'majestic'   => Top1mSource::Majestic,   // ADR-59 P4
-			'cloudflare' => Top1mSource::Cloudflare, // ADR-59 P5
-			'alexa'      => Top1mSource::Tranco,     // legacy dead source coalesces to Tranco (#872/#877)
+			'tranco'     => PfbTop1mSource::Tranco,
+			'cisco'      => PfbTop1mSource::Cisco,
+			'domcop'     => PfbTop1mSource::DomCop,     // ADR-59 P4
+			'majestic'   => PfbTop1mSource::Majestic,   // ADR-59 P4
+			'cloudflare' => PfbTop1mSource::Cloudflare, // ADR-59 P5
+			'alexa'      => PfbTop1mSource::Tranco,     // legacy dead source coalesces to Tranco (#872/#877)
 		];
 
 		foreach ($cases as $stored_token => $expected_runtime) {
@@ -1283,8 +1283,8 @@ final class RollbackContractTest extends TestCase
 
 			// FORWARD: read coalesces the legacy token; live tokens pass through.
 			$runtime = PfbConfig::read('alexa_type');
-			$this->assertInstanceOf(Top1mSource::class, $runtime,
-				"FORWARD: alexa_type token='{$stored_token}' must yield a Top1mSource enum"
+			$this->assertInstanceOf(PfbTop1mSource::class, $runtime,
+				"FORWARD: alexa_type token='{$stored_token}' must yield a PfbTop1mSource enum"
 			);
 			$this->assertSame($expected_runtime, $runtime,
 				"FORWARD: alexa_type token='{$stored_token}' must read as {$expected_runtime->name}"

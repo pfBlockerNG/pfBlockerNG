@@ -246,8 +246,8 @@ final class PfbGlobalParityTest extends TestCase
 	 * alexa_type: OLD = isset($pfb['dnsblconfig']['alexa_type'])
 	 *                   ? $pfb['dnsblconfig']['alexa_type'] : 'tranco'.
 	 * When absent: 'tranco'.
-	 * Via gateway: PfbConfig::read('alexa_type') = Top1mSource::Tranco (registered
-	 * default 'tranco', adapted through the Top1mSource enum, issue #877 review).
+	 * Via gateway: PfbConfig::read('alexa_type') = PfbTop1mSource::Tranco (registered
+	 * default 'tranco', adapted through the PfbTop1mSource enum, issue #877 review).
 	 * PARITY: same runtime meaning ('tranco'), now enum-typed instead of a raw string.
 	 */
 	public function testParityAlexaTypeAbsentYieldsTranco(): void
@@ -258,7 +258,7 @@ final class PfbGlobalParityTest extends TestCase
 
 		$result = PfbConfig::read('alexa_type');
 
-		$this->assertSame(Top1mSource::Tranco, $result, 'alexa_type absent -> Top1mSource::Tranco');
+		$this->assertSame(PfbTop1mSource::Tranco, $result, 'alexa_type absent -> PfbTop1mSource::Tranco');
 	}
 
 	/**

@@ -400,7 +400,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 	/**
 	 * ADR-59 P4 -- pfblockerng_top1m() parses Majestic Million's REAL CSV shape
 	 * (12-col unquoted header, Domain at str_getcsv() index 2) via its registered
-	 * provider descriptor (pfb_top1m_providers()[Top1mSource::Majestic->value]).
+	 * provider descriptor (pfb_top1m_providers()[PfbTop1mSource::Majestic->value]).
 	 * Sample verified against the live downloads.majestic.com/majestic_million.csv
 	 * format (fetched during development of this test).
 	 *
@@ -443,7 +443,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		$this->assertNotFalse(file_put_contents($GLOBALS['pfb']['log'], ''), 'reset main log between runs');
 
 		// When (AFTER): the actual registered Majestic descriptor.
-		pfblockerng_top1m(pfb_top1m_providers()[Top1mSource::Majestic->value]);
+		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::Majestic->value]);
 
 		// Then (GREEN): both real domains are correctly extracted from index 2.
 		$this->assertSame(
@@ -502,7 +502,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		$this->assertNotFalse(file_put_contents($GLOBALS['pfb']['log'], ''), 'reset main log between runs');
 
 		// When (AFTER): the actual registered DomCop descriptor.
-		pfblockerng_top1m(pfb_top1m_providers()[Top1mSource::DomCop->value]);
+		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::DomCop->value]);
 
 		// Then (GREEN): both real domains are correctly extracted from index 1
 		// ('www.' stripped per the existing whitelist-building convention).
@@ -543,7 +543,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		$this->assertNotFalse(file_put_contents($this->csvPath(), $csv), 'setup: real-shape Cloudflare Radar sample');
 
 		// When: the actual registered Cloudflare descriptor (domain_col 0, header skipped).
-		pfblockerng_top1m(pfb_top1m_providers()[Top1mSource::Cloudflare->value]);
+		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::Cloudflare->value]);
 
 		// Then: both real domains are correctly extracted from the single column despite
 		// carrying no comma -- proves the comma-requirement relaxation for domain_col 0.
@@ -583,7 +583,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 
 		// When: the real registered DomCop descriptor drives the parse (header=TRUE skips
 		// line 1; domain_col=1).
-		pfblockerng_top1m(pfb_top1m_providers()[Top1mSource::DomCop->value]);
+		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::DomCop->value]);
 
 		// Then: the HTML body must never be mistaken for real DomCop CSV data -- the prior
 		// whitelist survives byte-identical and the run warns instead of "succeeding".
@@ -607,7 +607,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()), 'before-state sanity');
 
 		// When: the real registered Majestic descriptor drives the parse.
-		pfblockerng_top1m(pfb_top1m_providers()[Top1mSource::Majestic->value]);
+		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::Majestic->value]);
 
 		// Then: the prose "domain" must never be mistaken for real Majestic CSV data.
 		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()),
@@ -635,7 +635,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()), 'before-state sanity');
 
 		// When: the real registered Cloudflare descriptor drives the parse.
-		pfblockerng_top1m(pfb_top1m_providers()[Top1mSource::Cloudflare->value]);
+		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::Cloudflare->value]);
 
 		// Then: the JSON error body must never be mistaken for a real Cloudflare domain row.
 		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()),
@@ -668,7 +668,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		$this->assertFileDoesNotExist($this->csvPath(), 'before-state: no top-1m.csv (simulates a failed download)');
 
 		// When: the Cloudflare descriptor is active but top-1m.csv never arrived.
-		pfblockerng_top1m(pfb_top1m_providers()[Top1mSource::Cloudflare->value]);
+		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::Cloudflare->value]);
 
 		// Then: the prior whitelist is untouched and a warning was logged (same generic
 		// path as testAbsentCsvPreservesPriorWhitelistAndWarns).
@@ -705,7 +705,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		$this->assertNotFalse(file_put_contents($this->csvPath(), $csv), 'setup: DomCop-shaped punycode-TLD row');
 
 		// When
-		pfblockerng_top1m(pfb_top1m_providers()[Top1mSource::DomCop->value]);
+		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::DomCop->value]);
 
 		// Then: the punycode-TLD row is counted as valid data and whitelisted
 		// -- not silently dropped by the final-label guard.
@@ -735,7 +735,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()), 'before-state sanity');
 
 		// When
-		pfblockerng_top1m(pfb_top1m_providers()[Top1mSource::DomCop->value]);
+		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::DomCop->value]);
 
 		// Then: the numeric-final-label row is still rejected.
 		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()),
@@ -764,7 +764,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()), 'before-state sanity');
 
 		// When
-		pfblockerng_top1m(pfb_top1m_providers()[Top1mSource::DomCop->value]);
+		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::DomCop->value]);
 
 		// Then: a dotless Domain field is still rejected even though the line
 		// itself contains a '.' (in another column).
@@ -798,7 +798,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()), 'before-state sanity');
 
 		// When
-		pfblockerng_top1m(pfb_top1m_providers()[Top1mSource::DomCop->value]);
+		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::DomCop->value]);
 
 		// Then: the malformed punycode-shaped TLD is rejected -- the widening
 		// admits real ACE labels only, not hyphen-runs or truncated prefixes.

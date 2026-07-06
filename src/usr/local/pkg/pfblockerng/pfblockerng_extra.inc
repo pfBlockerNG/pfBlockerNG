@@ -200,7 +200,7 @@ enum PfbAliasDeltaMode: string implements PfbStoredEnum
 	}
 }
 
-// Top1mSource — TOP1M source selector (alexa_type, issue #877).
+// PfbTop1mSource — TOP1M source selector (alexa_type, issue #877).
 //
 // Used by: alexa_type (config key) / $pfb['dnsbl_top1m_type'] (runtime).
 //   Canonical tokens: 'tranco' (default), 'cisco', 'domcop', 'majestic'
@@ -212,7 +212,7 @@ enum PfbAliasDeltaMode: string implements PfbStoredEnum
 //   reading any of them already understands its own subset; domcop/
 //   majestic/cloudflare are simply new to it, same as any other ADR-added
 //   option).
-enum Top1mSource: string implements PfbStoredEnum
+enum PfbTop1mSource: string implements PfbStoredEnum
 {
 	use PfbStoredEnumAdapter;
 
@@ -239,7 +239,7 @@ enum Top1mSource: string implements PfbStoredEnum
 // TOP1M provider descriptor table (ADR-59 P1, generalized P2, keyless
 // providers added P4, token-authenticated Cloudflare Radar added P5).
 //
-// Keyed by Top1mSource::value ('tranco'/'cisco'/'domcop'/'majestic'/'cloudflare').
+// Keyed by PfbTop1mSource::value ('tranco'/'cisco'/'domcop'/'majestic'/'cloudflare').
 // pfblockerng.php's TOP1M URL selection reads this table instead of a
 // per-provider if/else; pfblockerng_top1m() (ADR-59 P2) reads
 // 'parse'/'header'/'domain_col' to drive the builder. 'container' documents each
@@ -263,7 +263,7 @@ enum Top1mSource: string implements PfbStoredEnum
 function pfb_top1m_providers(): array
 {
 	return array(
-		Top1mSource::Tranco->value	=> array(
+		PfbTop1mSource::Tranco->value	=> array(
 			'url'		=> 'https://tranco-list.eu/top-1m.csv.zip',
 			'container'	=> 'zip',
 			'parse'		=> 'rank_domain',
@@ -273,7 +273,7 @@ function pfb_top1m_providers(): array
 			'label'		=> 'Tranco',
 			'licence'	=> '',
 		),
-		Top1mSource::Cisco->value	=> array(
+		PfbTop1mSource::Cisco->value	=> array(
 			'url'		=> 'https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip',
 			'container'	=> 'zip',
 			'parse'		=> 'rank_domain',
@@ -285,7 +285,7 @@ function pfb_top1m_providers(): array
 		),
 		// DomCop top-10M (registered-domain breadth): zipped CSV, quoted header
 		// row ("Rank","Domain","Open Page Rank"), Domain at str_getcsv() index 1.
-		Top1mSource::DomCop->value	=> array(
+		PfbTop1mSource::DomCop->value	=> array(
 			'url'		=> 'https://www.domcop.com/files/top/top10milliondomains.csv.zip',
 			'container'	=> 'zip',
 			'parse'		=> 'csv',
@@ -297,7 +297,7 @@ function pfb_top1m_providers(): array
 		),
 		// Majestic Million: PLAIN (uncompressed) CSV, unquoted 12-col header
 		// (GlobalRank,TldRank,Domain,TLD,...), Domain at str_getcsv() index 2.
-		Top1mSource::Majestic->value	=> array(
+		PfbTop1mSource::Majestic->value	=> array(
 			'url'		=> 'https://downloads.majestic.com/majestic_million.csv',
 			'container'	=> 'plain',
 			'parse'		=> 'csv',
@@ -327,7 +327,7 @@ function pfb_top1m_providers(): array
 		// made (no Cloudflare token available in this environment) to prove the alias/URL end
 		// to end -- confirmed via two independent official Cloudflare doc pages instead. A real
 		// token on a live box (ADR §7 definition-of-done manual smoke) is the final proof.
-		Top1mSource::Cloudflare->value	=> array(
+		PfbTop1mSource::Cloudflare->value	=> array(
 			'url'		=> 'https://api.cloudflare.com/client/v4/radar/datasets/ranking_top_1000000',
 			'container'	=> 'plain',
 			'parse'		=> 'csv',
@@ -424,21 +424,21 @@ function pfb_cfg_idn_mode_write(PfbIdnMode|string $mode): string
 	return ($mode instanceof PfbIdnMode ? $mode : PfbIdnMode::fromStored($mode))->toStored();
 }
 
-/** Read a Top1mSource from a raw stored value (legacy 'alexa' -> Tranco). */
-function pfb_cfg_top1m_source_read(mixed $stored): Top1mSource
+/** Read a PfbTop1mSource from a raw stored value (legacy 'alexa' -> Tranco). */
+function pfb_cfg_top1m_source_read(mixed $stored): PfbTop1mSource
 {
-	return Top1mSource::fromStored($stored);
+	return PfbTop1mSource::fromStored($stored);
 }
 
 /**
- * Write a Top1mSource (enum or legacy string) back to its canonical stored
+ * Write a PfbTop1mSource (enum or legacy string) back to its canonical stored
  * token ('tranco' | 'cisco' | 'domcop' | 'majestic' | 'cloudflare'). The dead
  * legacy 'alexa' token (#872) is never re-emitted — fromStored() already
  * coalesced it to Tranco before this runs.
  */
-function pfb_cfg_top1m_source_write(Top1mSource|string $source): string
+function pfb_cfg_top1m_source_write(PfbTop1mSource|string $source): string
 {
-	return ($source instanceof Top1mSource ? $source : Top1mSource::fromStored($source))->toStored();
+	return ($source instanceof PfbTop1mSource ? $source : PfbTop1mSource::fromStored($source))->toStored();
 }
 
 // ---------------------------------------------------------------------------
@@ -1672,7 +1672,7 @@ function pfb_run_migrations(): void
  * read as Off and never written.
  *
  * The top1m_source adapter (pfb_cfg_top1m_source_read/write, issue #877) is wired
- * for alexa_type and returns a Top1mSource enum. Legacy 'alexa' (dead service,
+ * for alexa_type and returns a PfbTop1mSource enum. Legacy 'alexa' (dead service,
  * #872) coalesces to Tranco on read and is never re-emitted by a write; the
  * write vocabulary is 'tranco'|'cisco'|'domcop'|'majestic'|'cloudflare'
  * (domcop/majestic added ADR-59 P4, cloudflare added ADR-59 P5).
@@ -1704,11 +1704,11 @@ function pfb_cfg_field_vocab(): array
 		// do not exist in config.xml, and the feature falls back to full replace.
 		'alias_delta_mode' => ['auto', 'delta', 'replace'],
 
-		// TOP1M source selector (Top1mSource, issue #877): the tokens a write can
+		// TOP1M source selector (PfbTop1mSource, issue #877): the tokens a write can
 		// emit. 'tranco' (default) | 'cisco' | 'domcop' | 'majestic' | 'cloudflare'
 		// (domcop/majestic added ADR-59 P4, cloudflare added ADR-59 P5). The legacy
 		// 'alexa' token (dead service, #872) is a READ-ONLY legacy value —
-		// pfb_cfg_top1m_source_read() coalesces it to Top1mSource::Tranco and it is
+		// pfb_cfg_top1m_source_read() coalesces it to PfbTop1mSource::Tranco and it is
 		// never re-emitted by a write.
 		'top1m_source' => ['tranco', 'cisco', 'domcop', 'majestic', 'cloudflare'],
 
