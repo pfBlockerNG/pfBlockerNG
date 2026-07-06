@@ -145,8 +145,9 @@ def _is_valid_row(row: list[str]) -> bool:
 def _scan_csv(body: bytes) -> tuple[str, int, int, tuple[int, list[str]] | None]:
     """Open `body` as a zip and scan its CSV member.
 
-    Returns (member_name, total_rows, valid_rows, first_bad_row). Raises
-    zipfile.BadZipFile / KeyError-free -- callers handle the zip-shape errors.
+    Returns (member_name, total_rows, valid_rows, first_bad_row). May raise
+    zipfile.BadZipFile on a non-zip / corrupt body (the caller catches zip-shape
+    errors); it does not raise KeyError.
     """
     with zipfile.ZipFile(io.BytesIO(body)) as zf:
         names = zf.namelist()

@@ -1,7 +1,7 @@
 name: Top1M Provider Health Check
 
-# Weekly health-check of every external Top1M provider URL we ship (issue
-# #884). We do NOT vendor these lists (they're ~1M rows, runtime-downloaded
+# Weekly health-check of every external Top1M provider URL we ship
+# (issue #884). We do NOT vendor these lists (they're ~1M rows, runtime-downloaded
 # per box) -- this is validate-only, the guard that would have caught the
 # Alexa Top1M source rotting silently (its hardcoded URL died years ago;
 # cleaned up in #877).
@@ -45,7 +45,8 @@ jobs:
           COUNT=$(jq 'length' <<<"$MATRIX")
           [ "$COUNT" -ge 1 ] || { echo "::error::no top1m providers discovered -- extractor may be broken"; exit 1; }
 
-          echo "matrix=${MATRIX}" >> "$GITHUB_OUTPUT"
+          # printf (not echo) avoids echo-escaping quirks on structured JSON.
+          printf 'matrix=%s\n' "$MATRIX" >> "$GITHUB_OUTPUT"
 
   # ── 2. Health-check each provider independently ───────────────────────────
   check:
