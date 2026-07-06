@@ -1,6 +1,6 @@
 # ADR-59: A provider framework for the DNSBL TOP1M whitelist — add sources, incl. token-authenticated ones
 
-- **Status:** **Proposed** (2026-07-06)
+- **Status:** **Implemented (pending smoke test)** (2026-07-06) — all 6 phases landed on `devel` via PR #892 (review findings incl. the csv-mode #886 wipe fixed). Flips to **Accepted** once the §7 manual smoke passes on a real box.
 - **Date:** 2026-07-06
 - **Branch:** `adr/59-top1m-provider-framework` (off **`devel`**); `{slug}` per CLAUDE.md "Branch naming".
 - **Component(s):**
