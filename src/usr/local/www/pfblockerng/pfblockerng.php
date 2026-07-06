@@ -159,7 +159,7 @@ $pfb['extras'][1]['type']	= 'geoip';
 
 // TOP1M database
 $pfb['extras'][2]			= array();
-if ($pfb['dnsbl_top1m_type'] == 'tranco') {
+if ($pfb['dnsbl_top1m_type'] === Top1mSource::Tranco) {
 	$pfb['extras'][2]['url']	= 'https://tranco-list.eu/top-1m.csv.zip';
 } else {
 	$pfb['extras'][2]['url']	= 'https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip';  // Cisco

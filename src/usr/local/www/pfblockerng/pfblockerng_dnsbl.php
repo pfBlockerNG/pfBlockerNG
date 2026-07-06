@@ -112,7 +112,9 @@ $pconfig['suppression']		= base64_decode($pfb['dconfig']['suppression'])		?: '';
 $pconfig['alexa_enable']	= $pfb['dconfig']['alexa_enable']			?: '';
 // Routed via the gateway (not the section array) so a stored legacy 'alexa'
 // (dead TOP1M source, #872/#877) coalesces to 'tranco' for the form select.
-$pconfig['alexa_type']		= PfbConfig::read('alexa_type');
+// ->toStored() unwraps the Top1mSource enum to its scalar option key (a
+// Form_Select selected-value must be the scalar, not the enum instance).
+$pconfig['alexa_type']		= PfbConfig::read('alexa_type')->toStored();
 $pconfig['alexa_count']		= $pfb['dconfig']['alexa_count']			?: '1000';
 // 0 (unlimited) is meaningful, so don't use the ?: idiom (0 is falsy -> would reset to default).
 $pconfig['pfb_py_cache_max']	= (isset($pfb['dconfig']['pfb_py_cache_max']) && $pfb['dconfig']['pfb_py_cache_max'] !== '') ? $pfb['dconfig']['pfb_py_cache_max'] : '10000';

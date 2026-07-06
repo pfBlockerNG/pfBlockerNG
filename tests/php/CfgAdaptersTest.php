@@ -38,13 +38,14 @@ use PHPUnit\Framework\TestCase;
  *     And write(read('all')) == 'off'  (dropped alpha token -> Off).
  *     And write(read('')) == 'off'    (normalised default).
  *
- * Scenario E — top1m_source (alexa_type, issue #877): 'tranco' / 'cisco' TOP1M
- *   source selector; the legacy 'alexa' token (dead service, #872) coalesces
- *   to 'tranco'. Read-boundary only, plain-string result (no enum, no write
- *   adapter — the field is written back unchanged since it is already canonical).
+ * Scenario E — Top1mSource (alexa_type, issue #877): backing values 'tranco' /
+ *   'cisco' TOP1M source selector; the legacy 'alexa' token (dead service,
+ *   #872) coalesces to Tranco.
  *     Given a raw stored value v.
- *     When pfb_cfg_top1m_source_read(v).
- *     Then 'tranco'/'cisco' pass through; 'alexa' and any unknown/absent value -> 'tranco'.
+ *     When pfb_cfg_top1m_source_read(v) -> enum, pfb_cfg_top1m_source_write(enum) -> stored.
+ *     Then 'tranco'/'cisco' pass through as Tranco/Cisco; 'alexa' and any
+ *     unknown/absent value -> Tranco. write(read(v)) == v for canonical tokens;
+ *     'alexa' is never re-emitted.
  */
 final class CfgAdaptersTest extends TestCase
 {
@@ -112,6 +113,7 @@ final class CfgAdaptersTest extends TestCase
 		$this->assertSame(PfbLenient::On, PfbLenient::fromStored(PfbLenient::On));
 		$this->assertSame(PfbIdnMode::Confusable, PfbIdnMode::fromStored(PfbIdnMode::Confusable));
 		$this->assertSame(PfbAliasDeltaMode::Delta, PfbAliasDeltaMode::fromStored(PfbAliasDeltaMode::Delta));
+		$this->assertSame(Top1mSource::Cisco, Top1mSource::fromStored(Top1mSource::Cisco));
 	}
 
 	public function testToggleRoundTripOn(): void
@@ -669,42 +671,42 @@ final class CfgAdaptersTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// Scenario E — top1m_source (alexa_type, issue #877)
+	// Scenario E — Top1mSource (alexa_type, issue #877)
 	//   Stored tokens: 'tranco', 'cisco' (live); legacy 'alexa' (dead service,
-	//   #872) coalesces to 'tranco' at the read boundary. write_adapter is a
-	//   pure identity (the runtime value is already the canonical stored
-	//   token) -- present only to satisfy the registry's paired-adapter rule.
+	//   #872) coalesces to Tranco at the read boundary. Mirrors the
+	//   PfbAliasDeltaMode adapter shape (Scenario D): read returns the enum,
+	//   write accepts either the enum or a raw string.
 	// -----------------------------------------------------------------------
 
 	public function testTop1mSourceReadTrancoReturnsTranco(): void
 	{
-		$this->assertSame('tranco', pfb_cfg_top1m_source_read('tranco'));
+		$this->assertSame(Top1mSource::Tranco, pfb_cfg_top1m_source_read('tranco'));
 	}
 
 	public function testTop1mSourceReadCiscoReturnsCisco(): void
 	{
-		$this->assertSame('cisco', pfb_cfg_top1m_source_read('cisco'));
+		$this->assertSame(Top1mSource::Cisco, pfb_cfg_top1m_source_read('cisco'));
 	}
 
-	/** The dead legacy TOP1M source (#872) must read as 'tranco', not 'alexa'. */
+	/** The dead legacy TOP1M source (#872) must read as Tranco, not a lost 'alexa' value. */
 	public function testTop1mSourceReadLegacyAlexaCoalescesToTranco(): void
 	{
-		$this->assertSame('tranco', pfb_cfg_top1m_source_read('alexa'));
+		$this->assertSame(Top1mSource::Tranco, pfb_cfg_top1m_source_read('alexa'));
 	}
 
 	public function testTop1mSourceReadUnknownTokenDefaultsToTranco(): void
 	{
-		$this->assertSame('tranco', pfb_cfg_top1m_source_read('junk'));
+		$this->assertSame(Top1mSource::Tranco, pfb_cfg_top1m_source_read('junk'));
 	}
 
 	public function testTop1mSourceReadNullDefaultsToTranco(): void
 	{
-		$this->assertSame('tranco', pfb_cfg_top1m_source_read(null));
+		$this->assertSame(Top1mSource::Tranco, pfb_cfg_top1m_source_read(null));
 	}
 
 	public function testTop1mSourceReadEmptyDefaultsToTranco(): void
 	{
-		$this->assertSame('tranco', pfb_cfg_top1m_source_read(''));
+		$this->assertSame(Top1mSource::Tranco, pfb_cfg_top1m_source_read(''));
 	}
 
 	/** write(read(v)) == v for the two live canonical tokens. */
@@ -723,5 +725,14 @@ final class CfgAdaptersTest extends TestCase
 		$written = pfb_cfg_top1m_source_write(pfb_cfg_top1m_source_read('alexa'));
 		$this->assertSame('tranco', $written,
 			"expected write(read('alexa')) == 'tranco'; actual: '{$written}'");
+	}
+
+	/** pfb_cfg_top1m_source_write() accepts both an enum instance and a string. */
+	public function testTop1mSourceWriteAcceptsEnumOrString(): void
+	{
+		$this->assertSame('tranco', pfb_cfg_top1m_source_write(Top1mSource::Tranco));
+		$this->assertSame('cisco',  pfb_cfg_top1m_source_write(Top1mSource::Cisco));
+		$this->assertSame('tranco', pfb_cfg_top1m_source_write('tranco'));
+		$this->assertSame('cisco',  pfb_cfg_top1m_source_write('cisco'));
 	}
 }
