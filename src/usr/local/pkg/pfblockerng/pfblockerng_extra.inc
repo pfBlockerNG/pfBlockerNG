@@ -230,16 +230,17 @@ enum Top1mSource: string implements PfbStoredEnum
 	}
 }
 
-// TOP1M provider descriptor table (ADR-59 P1).
+// TOP1M provider descriptor table (ADR-59 P1, generalized P2).
 //
 // Keyed by Top1mSource::value ('tranco'/'cisco'). pfblockerng.php's TOP1M URL
-// selection reads this table instead of a per-provider if/else; a later ADR-59
-// phase generalizes pfblockerng_top1m()'s parser + the download extractor to
-// read the 'parse'/'container'/'auth' fields the same way. This phase carries
-// only the two pre-existing providers, with their CURRENT literal URLs
-// unchanged -- a pure extraction, no behaviour change.
+// selection reads this table instead of a per-provider if/else; pfblockerng_top1m()
+// (ADR-59 P2) reads 'parse'/'header'/'domain_col' to drive the builder, and
+// pfb_download()'s extractor reads 'container'. 'header'/'domain_col' default to
+// FALSE/1 here -- Tranco/Cisco's CSV has no header row and the domain sits at
+// str_getcsv() index 1 (0-indexed: rank,domain), matching today's hardcoded shape
+// byte-for-byte. 'auth' is read by pfb_download()'s header-auth path (ADR-59 P3+).
 //
-// @return array<string, array{url: string, container: string, parse: string, auth: string, label: string, licence: string}>
+// @return array<string, array{url: string, container: string, parse: string, header: bool, domain_col: int, auth: string, label: string, licence: string}>
 function pfb_top1m_providers(): array
 {
 	return array(
@@ -247,6 +248,8 @@ function pfb_top1m_providers(): array
 			'url'		=> 'https://tranco-list.eu/top-1m.csv.zip',
 			'container'	=> 'zip',
 			'parse'		=> 'rank_domain',
+			'header'	=> FALSE,
+			'domain_col'	=> 1,
 			'auth'		=> 'none',
 			'label'		=> 'Tranco',
 			'licence'	=> '',
@@ -255,6 +258,8 @@ function pfb_top1m_providers(): array
 			'url'		=> 'https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip',
 			'container'	=> 'zip',
 			'parse'		=> 'rank_domain',
+			'header'	=> FALSE,
+			'domain_col'	=> 1,
 			'auth'		=> 'none',
 			'label'		=> 'Cisco Umbrella',
 			'licence'	=> '',

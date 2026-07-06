@@ -37,6 +37,12 @@ use PHPUnit\Framework\TestCase;
  *   * valid feed with matches -> whitelist REPLACED with the fresh build
  *   * valid feed with zero TLD matches -> whitelist replaced (with empty content) + a
  *     mild info note, NOT the dead-feed warning (a real feed just matched nothing)
+ *
+ * ADR-59 P2 addendum: pfblockerng_top1m() now drives header-skip/domain-column/the
+ * numeric-rank guard from the active provider descriptor (pfb_top1m_providers()) instead
+ * of a hardcoded rank,domain-at-column-1 shape.
+ *   * a SYNTHETIC descriptor's header/domain_col knobs are honoured (below) -- no live
+ *     non-Tranco/Cisco provider exists yet (ADR-59 Phase 4 adds one)
  */
 #[CoversFunction('pfblockerng_top1m')]
 final class Top1mPreserveOnEmptyFeedTest extends TestCase
@@ -340,5 +346,41 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		$this->assertStringContainsString('0 domains matched the configured TLD inclusions', $this->readMainLog());
 		$this->assertStringNotContainsString('keeping the previous TOP1M whitelist', $this->readMainLog());
 		$this->assertStringNotContainsString('keeping the previous TOP1M whitelist', $this->readErrLog());
+	}
+
+	/**
+	 * ADR-59 P2 -- the builder reads its header-skip/domain-column knobs from the active
+	 * provider descriptor instead of the original hardcoded "domain always at CSV index 1,
+	 * never a header row" shape. Proven via the $provider_override test seam (no live
+	 * provider needs this shape yet -- Phase 4 adds one) against a synthetic 'csv' parse
+	 * descriptor whose header row itself contains a '.'/',' (so it would otherwise pass the
+	 * dead-feed content filter) and whose domain sits at index 2, not 1.
+	 *
+	 * RED on the pre-P2 parser: it has no header-skip at all and always reads index 1, so
+	 * the header row is misread as data (accidentally dropped by the rank-column guard) and
+	 * the real data row's domain is read from the wrong column ('1', the tld_rank field) --
+	 * producing an EMPTY whitelist + "Found 0". GREEN after: the header row is skipped, the
+	 * domain comes from index 2, and the whitelist is populated.
+	 */
+	public function testSyntheticDescriptorAppliesHeaderSkipAndDomainColumn(): void
+	{
+		// Given: a header row containing a '.' and a ',' (so skipping it must be driven by
+		// the 'header' knob, not merely by the pre-existing content/rank filters) followed
+		// by one data row whose domain is the THIRD CSV field (0-indexed domain_col 2).
+		$csv = "rank,tld.rank,domain\n1,1,example.com\n";
+		$this->assertNotFalse(file_put_contents($this->csvPath(), $csv), 'setup: synthetic-shape top-1m.csv');
+		$syntheticDescriptor = ['parse' => 'csv', 'header' => true, 'domain_col' => 2];
+
+		// When
+		pfblockerng_top1m($syntheticDescriptor);
+
+		// Then: the header row was skipped (only 1 line parsed) and the domain came from
+		// index 2 -- not the rank_domain default's index 1 (which would have read '1' and
+		// matched nothing).
+		$got = file_get_contents($this->whitelistPath());
+		$this->assertNotFalse($got);
+		$this->assertSame(".example.com,,\n,example.com,,\n,www.example.com,,\n", $got,
+			'the domain must come from domain_col (index 2), and the header row must not count as data');
+		$this->assertStringContainsString('Parsed 1 lines | Found 1 of 1000', $this->readMainLog());
 	}
 }
