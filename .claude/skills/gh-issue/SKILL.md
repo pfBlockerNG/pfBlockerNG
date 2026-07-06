@@ -91,10 +91,16 @@ plan can still be wrong, stale, or infeasible.
 
 ## Step 3 — Does the report actually check out?
 
-Verify the claim against the **current code** — the heart of triage. Read the real
-sources (follow CLAUDE.md "Investigating the live system": follow includes, read the
-source of truth, don't infer from one artifact), reproduce the logic path, and check
-whether it is already fixed on `devel`, a duplicate, or a misunderstanding. For a
+Verify the claim against the **current code** — the heart of triage. **Read that code at
+the Step-0 `origin/<base>` ref, not the primary working tree** (`git show
+origin/devel:<path>`, `git log`/`git blame origin/devel`, or grep a worktree cut from it):
+triage runs *before* the Step-6 worktree exists, so the primary checkout may be many commits
+behind, and a plain `grep`/`sed` of it can show deleted / renamed / reworded code as though it
+were current — turning a genuinely-failing report into a wrongly-dismissed "already fixed /
+stale artifact" (this bit #894: a local tree 45 commits behind still showed help text `devel`
+had already reworded). Read the real sources (follow CLAUDE.md "Investigating the live system":
+follow includes, read the source of truth, don't infer from one artifact), reproduce the logic
+path, and check whether it is already fixed on `devel`, a duplicate, or a misunderstanding. For a
 pfSense-provided function, consult the real upstream source per CLAUDE.md. Land on
 an explicit **verdict**, with the evidence (file:line, repro, commit) that supports
 it:
