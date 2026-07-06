@@ -8262,11 +8262,19 @@ function pfblockerng_top1m() {
 		$pfb_include = array_flip($pfb_include);
 	}
 
+	$whitelist_file	= "{$pfb['dbdir']}/pfbalexawhitelist.txt";
+	$had_previous	= file_exists($whitelist_file);
+
 	$linecnt = $x = 0;
 	pfb_logger(" Building TOP1M Whitelist [", 1);
 
 	if (($handle = @fopen("{$pfb['dbdir']}/top-1m.csv", 'r')) !== FALSE) {
-		$pfb_output = @fopen("{$pfb['dbdir']}/pfbalexawhitelist.txt", 'w');
+		// Build into a TEMP file first -- an empty/invalid top-1m.csv must never
+		// truncate a previously-good whitelist (issue #886); only a build that
+		// actually parsed source lines is swapped into place below.
+		$tmp_file	= "{$whitelist_file}.tmp";
+		unlink_if_exists($tmp_file);
+		$pfb_output	= @fopen($tmp_file, 'w');
 		while (($line = @fgets($handle)) !== FALSE) {
 
 			if (strpos($line, '.') === FALSE || strpos($line, ',') === FALSE || empty($line)) {
@@ -8298,18 +8306,35 @@ function pfblockerng_top1m() {
 			}
 			$linecnt++;
 		}
-		pfb_logger("] [ Parsed {$linecnt} lines | Found {$x} of {$pfb['dnsbl_top1m_cnt']} ]...", 1);
+		if ($pfb_output) {
+			@fclose($pfb_output);
+		}
+		@fclose($handle);
+
+		if ($linecnt === 0) {
+			// Dead feed (empty/invalid top-1m.csv) -- discard the temp build and
+			// keep whatever whitelist was already on disk instead of wiping it.
+			unlink_if_exists($tmp_file);
+			if ($had_previous) {
+				pfb_logger("\n  TOP1M: feed returned no valid data (empty/invalid) -- keeping the previous TOP1M whitelist.\n", 2);
+			}
+			else {
+				pfb_logger("\n  TOP1M: feed returned no valid data (empty/invalid) -- no TOP1M whitelist available.\n", 2);
+			}
+		}
+		else {
+			// Valid feed -- atomically swap the validated build into place.
+			@rename($tmp_file, $whitelist_file);
+			unlink_if_exists($tmp_file);	// no-op on success; cleans up if rename failed
+			pfb_logger("] [ Parsed {$linecnt} lines | Found {$x} of {$pfb['dnsbl_top1m_cnt']} ]...", 1);
+			if ($x === 0) {
+				pfb_logger("\n  TOP1M: 0 domains matched the configured TLD inclusions.\n", 1);
+			}
+		}
 	}
 	else {
 		$log = "\nTOP1M conversion Failed. File: top-1m.csv, not found...";
 		pfb_logger("{$log}", 2);
-	}
-
-	if ($handle) {
-		@fclose($handle);
-	}
-	if ($pfb_output) {
-		@fclose($pfb_output);
 	}
 
 	// Remove Top1M update file marker
@@ -15723,6 +15748,15 @@ function sync_package_pfblockerng($cron='') {
 						$log = "\n TOP1M Database downloading ( approx 21MB ) ... Please wait ...\n";
 						pfb_logger("{$log}", 1);
 						exec('/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php al');
+
+						// Download attempted above (blocking exec) -- top-1m.csv still
+						// missing means the fetch failed (404/timeout/invalid). Warn
+						// rather than silently keeping (or wiping) any prior whitelist
+						// (issue #886); pfblockerng_top1m() below is not invoked when a
+						// previous whitelist exists and no top-1m.update marker was set.
+						if (!file_exists("{$pfb['dbdir']}/top-1m.csv")) {
+							pfb_logger("\n  TOP1M: feed download failed -- keeping the previous TOP1M whitelist (if any).\n", 2);
+						}
 					}
 					else {
 						$log = "\n TOP1M download already in process...\n";
