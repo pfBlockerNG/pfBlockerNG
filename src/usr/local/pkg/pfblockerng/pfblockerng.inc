@@ -8248,13 +8248,29 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython) {
 
 
 // Process TOP1M database
-function pfblockerng_top1m() {
+// $provider_override (ADR-59 P2 test seam): when given, its 'parse'/'header'/
+// 'domain_col' knobs drive the builder directly instead of resolving through
+// pfb_top1m_providers()[$pfb['dnsbl_top1m_type']->value] -- lets a unit test
+// exercise a synthetic descriptor's knobs without a live provider. Production
+// never passes it, so the resolved-provider path is exactly today's behaviour.
+function pfblockerng_top1m(?array $provider_override = NULL) {
 	global $pfb;
 
 	if (empty($pfb['dnsbl_top1m_inc'])) {
 		pfb_logger("\n  TOP1M: No TLD Inclusions found.\n", 1);
 		return;
 	}
+
+	// ADR-59 P2: the active provider descriptor drives the parse knobs below.
+	// $pfb['dnsbl_top1m_type'] may be unset in an isolated unit-test context
+	// (it is normally set by pfb_global() -- PfbConfig::read('alexa_type') --
+	// which some tests never call); default to Tranco, the same absent-default
+	// the registry itself uses, so the resolved shape stays rank_domain/zip.
+	$top1m_type	= $pfb['dnsbl_top1m_type'] ?? Top1mSource::Tranco;
+	$top1m_provider	= $provider_override ?? (pfb_top1m_providers()[$top1m_type->value] ?? array());
+	$top1m_parse	= $top1m_provider['parse'] ?? 'rank_domain';
+	$top1m_header	= $top1m_provider['header'] ?? FALSE;
+	$top1m_domcol	= $top1m_provider['domain_col'] ?? 1;
 
 	// Array of TLDs to include in Whitelist
 	$pfb_include = explode(',', $pfb['dnsbl_top1m_inc']);
@@ -8292,7 +8308,18 @@ function pfblockerng_top1m() {
 			pfb_logger("\n  TOP1M: could not create the temp whitelist file -- keeping the previous TOP1M whitelist.\n", 2);
 		}
 		else {
+			// ADR-59 P2: skip exactly the first physical line unconditionally when
+			// the provider ships a header row -- before the content filter below, so
+			// a header line's shape (which may not even contain a '.'/',') never
+			// matters.
+			$top1m_pending_header = $top1m_header;
+
 			while (($line = @fgets($handle)) !== FALSE) {
+
+				if ($top1m_pending_header) {
+					$top1m_pending_header = FALSE;
+					continue;
+				}
 
 				if (strpos($line, '.') === FALSE || strpos($line, ',') === FALSE || empty($line)) {
 					continue;
@@ -8303,13 +8330,14 @@ function pfblockerng_top1m() {
 					pfb_logger('.', 1);
 				}
 
-				// Collect Domain TLD -- only a row whose rank column is numeric counts as
-				// real parsed source data. A prose/HTML/error body (e.g. "error, service
-				// temporarily unavailable.") still has a '.' and a ',' and would otherwise
-				// pass the filter above, so a dead feed would classify as "valid" below
-				// and wipe the whitelist (#886 review).
+				// Collect Domain TLD -- for the 'rank_domain' parse (Tranco/Cisco), only a
+				// row whose rank column is numeric counts as real parsed source data. A
+				// prose/HTML/error body (e.g. "error, service temporarily unavailable.")
+				// still has a '.' and a ',' and would otherwise pass the filter above, so a
+				// dead feed would classify as "valid" below and wipe the whitelist (#886
+				// review). Other parse modes have no rank column to guard on.
 				$csvline = str_getcsv($line, ',', '"', "\\");
-				if (!ctype_digit((string) ($csvline[0] ?? ''))) {
+				if ($top1m_parse === 'rank_domain' && !ctype_digit((string) ($csvline[0] ?? ''))) {
 					continue;
 				}
 				// Count every valid CSV row BEFORE the match/break below, so a
@@ -8317,17 +8345,18 @@ function pfblockerng_top1m() {
 				// still leaves $linecnt > 0 and classifies as a valid feed
 				// (not the dead-feed $linecnt === 0 path) (#886 review).
 				$linecnt++;
-				$tld = substr($csvline[1], strrpos($csvline[1], '.') + 1);
+				$domain = $csvline[$top1m_domcol] ?? '';
+				$tld = substr($domain, strrpos($domain, '.') + 1);
 
 				if (isset($pfb_include[$tld])) {
 					// Whitelist both 'www.example.com' and 'example.com'
-					if (str_starts_with($csvline[1], 'www.')) {
-						$csvline[1] = substr($csvline[1], 4);
+					if (str_starts_with($domain, 'www.')) {
+						$domain = substr($domain, 4);
 					}
 					$x++;
 
 					// Create three whitelist options per TOP1M whitelisted Domain
-					@fwrite($pfb_output, ".{$csvline[1]},,\n,{$csvline[1]},,\n,www.{$csvline[1]},,\n");
+					@fwrite($pfb_output, ".{$domain},,\n,{$domain},,\n,www.{$domain},,\n");
 				}
 
 				if ($x >= $pfb['dnsbl_top1m_cnt']) {
@@ -10342,6 +10371,13 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				unlink_if_exists($file_download);
 				return TRUE;
 			}
+			elseif ($type == 'top1m') {
+				// ADR-59 P2: a gz-container TOP1M provider decompresses straight to
+				// the destination CSV pfblockerng_top1m() reads (no rename/staging).
+				exec("/usr/bin/gunzip -c {$file_dwn_esc} > {$header_esc}", $output, $retval);
+				unlink_if_exists($file_download);
+				return TRUE;
+			}
 			elseif ($type == 'blacklist') {
 				// Extras - Blacklist downloads
 				@rename("{$file_download}", strstr("{$file_download}", '.raw', TRUE));
@@ -10511,8 +10547,10 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 		}
 		else {
 			// Uncompressed file format.
-			if ($type == 'geoip' || $type == 'asn') {
-				// Extras - MaxMind/TOP1M/ASN downloads
+			if ($type == 'geoip' || $type == 'asn' || $type == 'top1m') {
+				// Extras - MaxMind/TOP1M/ASN downloads. ADR-59 P2: a 'plain' container
+				// provider's body IS the destination CSV -- rename straight to it, same
+				// as geoip/asn (no intermediate '.orig' staging needed).
 				@rename("{$file_download}", "{$head_download}");
 				return TRUE;
 			}

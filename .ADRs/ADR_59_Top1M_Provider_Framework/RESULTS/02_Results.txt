@@ -1,0 +1,189 @@
+================================================================================
+PHASE 2 RESULTS — Generalize pfblockerng_top1m() to the descriptor (behaviour-preserving)
+================================================================================
+
+WHAT CHANGED
+
+1. pfb_top1m_providers() (pfblockerng_extra.inc) — extended each entry (tranco,
+   cisco) with two new parse knobs, both set to today's implicit values:
+     'header'	=> FALSE,	// no header row in Tranco/Cisco's top-1m.csv
+     'domain_col'	=> 1,	// 0-indexed str_getcsv() field -- rank,domain -> index 1
+   ('container'/'parse'/'auth'/'url'/'label'/'licence' untouched.) Docblock
+   @return shape updated to match.
+
+2. pfblockerng_top1m() (pfblockerng.inc ~8251) — now resolves the active
+   descriptor and drives three knobs from it instead of a hardcoded shape:
+     - New optional param `?array $provider_override = NULL` (a test seam only
+       — production never passes it). When NULL, resolves via
+       `pfb_top1m_providers()[($pfb['dnsbl_top1m_type'] ?? Top1mSource::Tranco)->value]`.
+       The `?? Top1mSource::Tranco` fallback matters: $pfb['dnsbl_top1m_type']
+       is normally set by pfb_global() (PfbConfig::read('alexa_type')), but the
+       existing Top1mPreserveOnEmptyFeedTest sandbox never calls pfb_global()
+       and never sets this key -- so the fallback keeps that oracle's rank_domain/
+       zip behaviour intact without needing to touch the test.
+     - `$top1m_parse` (default 'rank_domain'): the numeric-rank guard
+       (`ctype_digit($csvline[0])`) now only fires when parse === 'rank_domain'
+       (other parse modes have no rank column to guard on).
+     - `$top1m_header` (default FALSE): when TRUE, the very first physical line
+       read from top-1m.csv is unconditionally skipped (`continue`), BEFORE the
+       existing dot/comma content filter -- so a header line's shape (which may
+       not even contain a '.'/',' ) never matters and is never misread as data.
+     - `$top1m_domcol` (default 1): replaces every literal `$csvline[1]` domain
+       read with `$csvline[$top1m_domcol] ?? ''` (a local `$domain` variable
+       threads through the TLD/www-strip/fwrite lines that used to repeat
+       `$csvline[1]` four times).
+   The #886 temp-file + atomic-rename + preserve-on-empty/garbage/rename-failure
+   + progress-log + linecnt-before-break semantics are all untouched -- only the
+   three knob reads and the header-skip insertion were added.
+
+3. pfb_download()'s extract post-processor (pfblockerng.inc, the ZIP/gz/plain
+   dispatch inside the big `if ($file_type == ...)` chain) — now honours
+   `container` for TOP1M beyond zip (zip was already wired to `$type == 'top1m'`
+   and is untouched):
+     - gz branch: added `elseif ($type == 'top1m')` alongside the existing
+       `geoip`/`asn`/`blacklist` cases -- `gunzip -c {raw} > {header}` (the
+       destination top-1m.csv), mirroring the `asn` case's pattern exactly (no
+       retval check, matching that sibling).
+     - uncompressed/"plain" branch: widened the existing
+       `if ($type == 'geoip' || $type == 'asn')` rename-straight-to-`$head_download`
+       branch to `|| $type == 'top1m'`. (Its comment already said "Extras -
+       MaxMind/TOP1M/ASN downloads" even though `top1m` was never actually
+       included in the condition -- this looks like a latent gap the ADR's
+       §2.3 "gz/plain write straight to top-1m.csv" requirement is explicitly
+       closing.) Before this, a plain-container TOP1M download would have
+       fallen into the generic `else` branch and been renamed to `.orig`
+       instead of `top-1m.csv` -- wrong destination for the parser to find.
+   No live gz/plain TOP1M provider exists yet (Phase 4 adds DomCop/Majestic),
+   so these two branches are unreachable in production today -- wired ahead for
+   Phase 4, per the phase's stated intent ("the new knobs are ready for Phase 4").
+
+TESTS
+
+Extended tests/php/Top1mPreserveOnEmptyFeedTest.php (all 9 pre-existing test
+methods left BYTE-IDENTICAL, not one line touched) with one new method:
+
+  testSyntheticDescriptorAppliesHeaderSkipAndDomainColumn()
+    Given: top-1m.csv = "rank,tld.rank,domain\n1,1,example.com\n" (the header
+    row deliberately contains a '.' AND a ',' so skipping it can only be
+    attributed to the 'header' knob, never the pre-existing dot/comma content
+    filter) and a synthetic descriptor {parse: 'csv', header: true, domain_col: 2}
+    passed via the new $provider_override param.
+    When: pfblockerng_top1m($syntheticDescriptor)
+    Then: whitelist == ".example.com,,\n,example.com,,\n,www.example.com,,\n"
+    (domain read from index 2) and the main log shows "Parsed 1 lines | Found 1
+    of 1000" (only the data row counted -- the header row was skipped, not
+    misparsed as data).
+
+  RED/GREEN proof (mandatory per CLAUDE.md — behaviour change, not a pure
+  refactor, for this specific knob): stashed pfblockerng.inc +
+  pfblockerng_extra.inc (kept the new test), reran just this test against the
+  pre-P2 ("col-1-only") pfblockerng_top1m():
+    FAILED — Expected ".example.com,,\n,example.com,,\n,www.example.com,,\n",
+    Actual "" (empty). Root cause on old code: the header row IS skipped, but
+    only by ACCIDENT (its first CSV field 'rank' fails the always-on numeric-
+    rank guard); the data row's domain is read from the OLD hardcoded index 1
+    ('1', the tld_rank field, not the domain) -> tld resolves to '' -> no TLD
+    match -> the feed still counts as "valid" (linecnt=1, unrelated to the
+    domain bug) but publishes an EMPTY whitelist.
+  Then unstashed and reran: GREEN (see VERIFICATION #2 below). This is a true
+  fail-before/pass-after proof for the new header/domain_col knobs -- not
+  coverage theater.
+
+  Top1mPreserveOnEmptyFeedTest's original 9 tests + Top1mProvidersTest's 4
+  tests are the behaviour-preservation oracle for tranco/cisco (rank_domain/
+  zip): all pinned pre-existing input/output pairs, run unmodified, and stay
+  green -- proving the P2 refactor did not change tranco/cisco output.
+
+VERIFICATION (all run inside the worktree)
+
+1. `/opt/homebrew/bin/php -l` on all three touched files -> clean (no syntax
+   errors; pre-existing unrelated Deprecated notices for OTHER functions'
+   param ordering, e.g. pfb_download's own `$pflex` before `$logtype` --
+   untouched by this phase, already present before this change).
+
+2. `/opt/homebrew/bin/php vendor/bin/phpunit`:
+   Tests: 2306, Assertions: 18443, Failures: 3, Skipped: 4.
+   The 3 failures are exactly the pre-existing, environment-only
+   `open_basedir` sandbox failures (same three named in Phase 1's handoff):
+     - DnsblPrefetchTest::test_prefetch_leaves_the_store_unseeded_when_a_grep_pass_pattern_file_cannot_be_created
+     - IpPrefetchTest::test_grep_lines_returns_null_when_the_pattern_file_cannot_be_created
+     - IpPrefetchTest::test_prefetch_leaves_the_miss_round_unseeded_when_round_a_pattern_file_cannot_be_created
+   No other failures. `--filter Top1m` alone: 24/24 green (was 23 in Phase 1 +
+   1 new test here), including Top1mPreserveOnEmptyFeedTest's original 9 +
+   Top1mProvidersTest's 4 (both oracles green, unmodified) + the new synthetic-
+   descriptor test.
+
+3. `php -d memory_limit=1G vendor/bin/phpcs --standard=phpcs.xml.dist src/` ->
+   clean (exit 0, no output). Default 128M OOMs as noted in the task brief
+   (environmental, not a violation).
+
+4. `php -d memory_limit=1G vendor/bin/phpstan analyse --memory-limit=1G` ->
+   `[OK] No errors`.
+
+5. Python untouched — `python -m pytest` not run (no src/**/*.py or tests/*.py
+   changed).
+
+SELF-REVIEW (git diff vs phase objectives)
+
+- The builder (pfblockerng_top1m()) reads `parse`/`header`/`domain_col` from
+  the active descriptor (via pfb_top1m_providers() or the test-only
+  $provider_override); the extractor (pfb_download()) reads `container` (zip
+  unchanged, gz/plain newly wired) -- matches ADR §2.3's split exactly ("the
+  builder takes the active descriptor's parse... the extract post-processor
+  honours container").
+- rank_domain/zip is byte-identical: Top1mPreserveOnEmptyFeedTest's original 9
+  assertions (dead feed, garbage feed, rename failures both variants, absent
+  csv, valid-with-matches, valid-with-small-count, valid-with-zero-matches) all
+  pass UNMODIFIED against the new code -- this IS the oracle proving
+  byte-identical Tranco/Cisco output post-refactor.
+- header/domain_col/gz/plain knobs proven: the new synthetic-descriptor test
+  is a genuine red-before/green-after (see TESTS section) for header-skip +
+  domain_col; gz/plain container wiring in pfb_download() is exercised by
+  neither PHPUnit nor a live provider yet (documented gap below), matching the
+  phase's own "no live provider added" scope and tests/php/README.md's
+  documented "pfb_download() as a whole is not off-appliance unit-testable
+  (curl/exec)" boundary -- the pre-existing sibling geoip/asn/blacklist
+  branches in the same function are equally untested at this tier; Phase 4's
+  DomCop/Majestic descriptors will exercise gz/plain end-to-end via the
+  live-VM smoke, per ADR §6 Phase 4's own test plan.
+- No JSON path added, no new provider added (still exactly tranco/cisco,
+  Top1mProvidersTest's `testOnlyTrancoAndCiscoAreDescribedInPhase1` stays
+  green unmodified), geoip's own zip/gz/plain branches are functionally
+  unchanged (only widened by an `||` in the plain branch's OR condition;
+  geoip's own matching arm of that condition is untouched).
+
+DEVIATIONS / JUDGMENT CALLS
+
+- `domain_col` is 0-indexed (matches str_getcsv()'s array index, default 1 =
+  today's hardcoded `$csvline[1]`), not 1-indexed human column numbering. This
+  reconciles the ADR §2.3 text "domain_col (default 1)" with the fact that
+  Tranco/Cisco's domain is the SECOND CSV field: default value 1 as an array
+  index (not "first column") matches both the ADR's stated default AND
+  preserves exact current behaviour. The synthetic test's `domain_col: 2`
+  reads as the THIRD field (0-indexed) accordingly.
+- Widened the pre-existing "plain" branch's `$type == 'geoip' || $type ==
+  'asn'` condition to also include `'top1m'`, even though its comment already
+  said "MaxMind/TOP1M/ASN downloads" -- read this as closing a pre-existing gap
+  between the comment's stated intent and the code, per the ADR's explicit
+  §2.3 "gz/plain write straight to top-1m.csv" requirement, not as an
+  unscoped/gratuitous change.
+- No new PHPUnit test for the gz/plain extractor wiring itself (only the
+  builder's header/domain_col knobs are unit-tested) -- pfb_download() shells
+  out to real `gunzip`/`tar`/`file` and is documented out-of-PHPUnit-scope
+  (tests/php/README.md "Out of scope"); this matches the phase prompt's own
+  VERIFICATION list, which specifies only the builder-knob PHPUnit test, not a
+  download-extractor test.
+
+GO-AHEAD FOR PHASE 3
+
+Ready. Phase 3 ("Header auth in pfb_download()") adds `$extra_headers` +
+`$feed['headers']`, merged into CURLOPT_HTTPHEADER without clobbering the
+conditional-GET header; no caller sets it yet. The provider descriptor's
+`auth` field (currently always 'none' for tranco/cisco) is unused by any
+runtime code path so far -- Phase 3 does not need to read it yet (that's
+Phase 5's Cloudflare wiring); Phase 3 is purely additive plumbing in
+pfb_download()'s signature/CURLOPT_HTTPHEADER construction.
+
+COMMIT
+
+pfblockerng: drive the TOP1M builder + extract from the provider descriptor (ADR-59 P2)
