@@ -2381,7 +2381,7 @@ function pfb_global() {
 	$pfb['dnsbl_port']	= $pfb['dnsblconfig']['pfb_dnsport'];									// Lighttpd web server http port setting
 	$pfb['dnsbl_port_ssl']	= $pfb['dnsblconfig']['pfb_dnsport_ssl'];								// Lighttpd web server https port setting
 	$pfb['dnsbl_top1m']	= $pfb['dnsblconfig']['alexa_enable'];							// TOP1M whitelist
-	$pfb['dnsbl_top1m_type']	= PfbConfig::read('alexa_type');						// TOP1M type (Tranco or Cisco; legacy 'alexa' coalesces to 'tranco', #877) (default 'tranco')
+	$pfb['dnsbl_top1m_type']	= PfbConfig::read('alexa_type');						// TOP1M type (Top1mSource enum; legacy 'alexa' coalesces to Tranco, #877) (default Tranco)
 	$pfb['dnsbl_res_cache']	= $pfb['dnsblconfig']['pfb_cache'];							// DNSBL Option to backup/restore Resolver cache
 	$pfb['dnsbl_global_log']= PfbConfig::read('global_log');							// Global Logging/Blocking mode (default '')
 	// ADR-22: lenient feed parsing. 'on' = permissive scheme strip (today); anything else =

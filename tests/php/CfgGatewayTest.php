@@ -337,24 +337,25 @@ final class CfgGatewayTest extends TestCase
 
 	public function testReadReturnsRegisteredDefaultForAlexaTypeAbsentKey(): void
 	{
-		// alexa_type default is 'tranco'.
+		// alexa_type default is 'tranco' -> Top1mSource::Tranco.
 		$this->assertNull(
 			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/alexa_type')
 		);
 
 		$result = PfbConfig::read('alexa_type');
-		$this->assertSame('tranco', $result);
+		$this->assertInstanceOf(Top1mSource::class, $result, 'alexa_type must return a Top1mSource enum');
+		$this->assertSame(Top1mSource::Tranco, $result);
 	}
 
 	/**
 	 * alexa_type (issue #877): a stored legacy 'alexa' (dead TOP1M source, #872)
-	 * coalesces to 'tranco' through the gateway's read adapter.
+	 * coalesces to Top1mSource::Tranco through the gateway's read adapter.
 	 *
 	 * Scenario: the dropped Alexa TOP1M option still reads safely on an existing
 	 * install that had it selected.
 	 *   Given alexa_type stored as the legacy 'alexa' token.
 	 *   When PfbConfig::read('alexa_type').
-	 *   Then the result is 'tranco', not the dead 'alexa' token.
+	 *   Then the result is Top1mSource::Tranco, not the dead 'alexa' token.
 	 */
 	public function testReadCoalescesLegacyAlexaTypeToTranco(): void
 	{
@@ -364,20 +365,20 @@ final class CfgGatewayTest extends TestCase
 		$this->seedConfig($path, 'alexa');
 		$this->assertSame('alexa', config_get_path($path), 'before: alexa_type seed is legacy alexa');
 
-		// When/Then: coalesced to 'tranco'.
-		$this->assertSame('tranco', PfbConfig::read('alexa_type'), "legacy 'alexa' coalesces to 'tranco'");
+		// When/Then: coalesced to Top1mSource::Tranco.
+		$this->assertSame(Top1mSource::Tranco, PfbConfig::read('alexa_type'), "legacy 'alexa' coalesces to Tranco");
 	}
 
-	/** alexa_type: the two live tokens ('tranco'/'cisco') pass through unchanged. */
+	/** alexa_type: the two live tokens ('tranco'/'cisco') pass through as their enum cases. */
 	public function testReadPassesThroughLiveTop1mSourceTokens(): void
 	{
 		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/alexa_type';
 
 		$this->seedConfig($path, 'cisco');
-		$this->assertSame('cisco', PfbConfig::read('alexa_type'), "'cisco' passes through unchanged");
+		$this->assertSame(Top1mSource::Cisco, PfbConfig::read('alexa_type'), "'cisco' passes through as Cisco");
 
 		$this->seedConfig($path, 'tranco');
-		$this->assertSame('tranco', PfbConfig::read('alexa_type'), "'tranco' passes through unchanged");
+		$this->assertSame(Top1mSource::Tranco, PfbConfig::read('alexa_type'), "'tranco' passes through as Tranco");
 	}
 
 	public function testReadReturnsRegisteredDefaultForDnsblInterfaceAbsentKey(): void
