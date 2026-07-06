@@ -675,4 +675,56 @@ ${fixture_dir}/test_e.py"
       The output should equal "$baseline"
     End
   End
+
+  Describe 'hostile duration-table row rejected loudly (issue #907, latent found reviewing #861)'
+    # Stage 1's awk BEGIN block reconstructs a row's key via awk's DEFAULT
+    # field split, which collapses any whitespace run -- a nodeid with an
+    # embedded TAB or consecutive spaces silently reconstructs to the WRONG
+    # key (never matches the real pytest nodeid), producing either a
+    # never-matching --deselect (double-run) or a nonexistent bare node ID
+    # (pytest exit 4) downstream. Pinned here at the point the row is first
+    # read, per CLAUDE.md's root-cause-not-symptom rule.
+    #
+    # RED->GREEN evidence (#907): the two rejection examples below were run
+    # against the PRE-fix script (the guard block removed, `git stash` on
+    # scripts/shard-modules.sh only) and FAILED both ("The status should be
+    # failure" -- the pre-fix script silently exits 0 with a corrupted
+    # split instead of erroring). After adding the guard, both pass with no
+    # other change to this file. The control example stayed green
+    # throughout (single-space nodeids were never broken), proving the
+    # guard doesn't regress the legitimate #861 case.
+    write_table() {
+      : > "${fixture_dir}/module-durations.txt"
+      for line in "$@"; do
+        printf '%s\n' "$line" >> "${fixture_dir}/module-durations.txt"
+      done
+    }
+
+    It 'rejects a row whose nodeid has an embedded TAB, naming the offending row'
+      tab="$(printf '\t')"
+      write_table 'test_a.py 100.00' "test_a.py::test_foo[hello${tab}world] 40.00" \
+        'test_b.py 5.00'
+      When run shard 0 2
+      The status should be failure
+      The stderr should include 'TAB'
+      The stderr should include 'test_a.py::test_foo[hello'
+    End
+
+    It 'rejects a row whose nodeid has consecutive spaces, naming the offending row'
+      write_table 'test_a.py 100.00' 'test_a.py::test_foo[hello  world] 40.00' \
+        'test_b.py 5.00'
+      When run shard 0 2
+      The status should be failure
+      The stderr should include 'consecutive spaces'
+      The stderr should include 'test_a.py::test_foo[hello'
+    End
+
+    It 'does not reject a normal single-space parametrized nodeid (control case)'
+      write_table 'test_a.py 100.00' 'test_a.py::test_foo[hello world] 40.00' \
+        'test_b.py 5.00'
+      When call shard 0 2
+      The status should be success
+      The output should equal "${fixture_dir}/test_a.py"
+    End
+  End
 End

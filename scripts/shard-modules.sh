@@ -170,6 +170,31 @@ module_count="$#"
 durfile="${SHARD_DURATIONS_FILE:-${dir}/module-durations.txt}"
 
 if [ -f "$durfile" ]; then
+	# Reject a hostile row before it's ever parsed (issue #907, latent found
+	# reviewing #861): the table reader below (stage 1's awk BEGIN block)
+	# rebuilds a row's key via awk's DEFAULT field split, which COLLAPSES any
+	# run of whitespace -- a nodeid containing a TAB or two-plus consecutive
+	# spaces silently reconstructs to the WRONG key. That produces either a
+	# never-matching `--deselect` (the test then double-runs across shards)
+	# or a nonexistent bare node ID (pytest exit 4 on that shard) -- a
+	# confusing downstream failure instead of a pointed one. A single space
+	# is fine and expected (a parametrized nodeid's own bracket text, e.g.
+	# `test_foo[hello world]`, round-trips correctly -- see the #861 table
+	# reader fix); only a TAB or a run of 2+ spaces is hostile. One guard
+	# here, at first read of the table, so every stage after it inherits it
+	# -- checked on the RAW line, before any split collapses the evidence.
+	LC_ALL=C awk '
+		/^[ \t]*#/ || /^[ \t]*$/ { next }
+		index($0, "\t") {
+			printf "shard-modules: duration-table row has an embedded TAB, would corrupt the nodeid key: %s\n", $0 > "/dev/stderr"
+			exit 1
+		}
+		index($0, "  ") {
+			printf "shard-modules: duration-table row has consecutive spaces, would corrupt the nodeid key: %s\n", $0 > "/dev/stderr"
+			exit 1
+		}
+	' "$durfile"
+
 	# Hybrid duration-balanced greedy LPT (issue #855, extending #816) — see
 	# the header for the full rule. Three stages:
 	#

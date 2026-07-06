@@ -295,3 +295,29 @@ def test_committed_table_has_no_prefix_blind_spot(oracle_ids: set[str]) -> None:
     in-tree test_cron_detects_changed_local_feed / ..._same_second pair is exactly
     this shape)."""
     _assert_committed_table_has_no_prefix_blind_spot(_COMMITTED_DURATIONS_FILE, oracle_ids)
+
+
+def _assert_committed_table_has_no_hostile_whitespace(table_path: Path) -> None:
+    """No row may carry an embedded TAB or consecutive spaces -- checked on the RAW
+    line (never via _parse_duration_table, whose own rsplit(None, 1) collapses that
+    same whitespace and would hide the very corruption being checked for)."""
+    hostile = [
+        (lineno, raw_line)
+        for lineno, raw_line in enumerate(table_path.read_text().splitlines(), start=1)
+        if raw_line.strip() and not raw_line.strip().startswith("#") and ("\t" in raw_line or "  " in raw_line)
+    ]
+    assert not hostile, (
+        f"duration-table row(s) with an embedded TAB or consecutive spaces in {table_path} -- "
+        f"scripts/shard-modules.sh's whitespace-collapsing table reader would reconstruct the "
+        f"WRONG key from these (issue #907).\n"
+        f"  row(s): {hostile}"
+    )
+
+
+def test_committed_table_has_no_hostile_whitespace_keys() -> None:
+    """The COMMITTED tests/smoke/module-durations.txt must never carry a nodeid with
+    an embedded TAB or consecutive spaces -- shard-modules.sh's table reader collapses
+    that whitespace when rebuilding the row's key, producing a never-matching
+    --deselect (double-run) or a nonexistent bare node ID (pytest exit 4) on some
+    shard (issue #907, latent -- defensive pin on the committed data)."""
+    _assert_committed_table_has_no_hostile_whitespace(_COMMITTED_DURATIONS_FILE)
