@@ -55,26 +55,26 @@ _PHP_DESCRIPTOR_TABLE = """
 function pfb_top1m_providers(): array
 {
 	return array(
-		Top1mSource::Tranco->value	=> array(
+		PfbTop1mSource::Tranco->value	=> array(
 			'url'		=> 'https://tranco-list.eu/top-1m.csv.zip',
 			'container'	=> 'zip',
 			'auth'		=> 'none',
 			'label'		=> 'Tranco',
 		),
-		Top1mSource::Cisco->value	=> array(
+		PfbTop1mSource::Cisco->value	=> array(
 			'url'		=> 'https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip',
 			'container'	=> 'zip',
 			'auth'		=> 'none',
 			'label'		=> 'Cisco Umbrella',
 		),
-		Top1mSource::Majestic->value	=> array(
+		PfbTop1mSource::Majestic->value	=> array(
 			'url'		=> 'https://downloads.majestic.com/majestic_million.csv',
 			'container'	=> 'plain',
 			'auth'		=> 'none',
 			'label'		=> 'Majestic Million',
 			'licence'	=> 'CC BY 3.0 -- attribution required',
 		),
-		Top1mSource::Cloudflare->value	=> array(
+		PfbTop1mSource::Cloudflare->value	=> array(
 			'url'		=> 'https://api.cloudflare.com/client/v4/radar/datasets/ranking_top_1000000',
 			'container'	=> 'plain',
 			'auth'		=> array('header' => 'Authorization', 'scheme' => 'Bearer'),
@@ -132,31 +132,31 @@ _PHP_DESCRIPTOR_TABLE_WITH_A_FIFTH_ROW = """
 function pfb_top1m_providers(): array
 {
 	return array(
-		Top1mSource::Tranco->value	=> array(
+		PfbTop1mSource::Tranco->value	=> array(
 			'url'		=> 'https://tranco-list.eu/top-1m.csv.zip',
 			'container'	=> 'zip',
 			'auth'		=> 'none',
 			'label'		=> 'Tranco',
 		),
-		Top1mSource::Cisco->value	=> array(
+		PfbTop1mSource::Cisco->value	=> array(
 			'url'		=> 'https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip',
 			'container'	=> 'zip',
 			'auth'		=> 'none',
 			'label'		=> 'Cisco Umbrella',
 		),
-		Top1mSource::Majestic->value	=> array(
+		PfbTop1mSource::Majestic->value	=> array(
 			'url'		=> 'https://downloads.majestic.com/majestic_million.csv',
 			'container'	=> 'plain',
 			'auth'		=> 'none',
 			'label'		=> 'Majestic Million',
 		),
-		Top1mSource::Cloudflare->value	=> array(
+		PfbTop1mSource::Cloudflare->value	=> array(
 			'url'		=> 'https://api.cloudflare.com/client/v4/radar/datasets/ranking_top_1000000',
 			'container'	=> 'plain',
 			'auth'		=> array('header' => 'Authorization', 'scheme' => 'Bearer'),
 			'label'		=> 'Cloudflare Radar',
 		),
-		Top1mSource::Quad9->value	=> array(
+		PfbTop1mSource::Quad9->value	=> array(
 			'url'		=> 'https://example-quad9.test/top-1m.csv.zip',
 			'container'	=> 'zip',
 			'auth'		=> 'none',
@@ -182,8 +182,8 @@ _PHP_WITH_A_COMMENTED_OUT_ROW = """
 function pfb_top1m_providers(): array
 {
 	return array(
-		// Top1mSource::Dead->value	=> array('url' => 'https://dead.test/x.zip', 'auth' => 'none', 'label' => 'Dead'),
-		Top1mSource::Tranco->value	=> array(
+		// PfbTop1mSource::Dead->value	=> array('url' => 'https://dead.test/x', 'auth' => 'none', 'label' => 'Dead'),
+		PfbTop1mSource::Tranco->value	=> array(
 			'url'		=> 'https://tranco-list.eu/top-1m.csv.zip',
 			'container'	=> 'zip',
 			'auth'		=> 'none',
@@ -204,7 +204,7 @@ _PHP_ONE_PROVIDER_NO_LABEL_NO_CONTAINER = """
 function pfb_top1m_providers(): array
 {
 	return array(
-		Top1mSource::Tranco->value	=> array(
+		PfbTop1mSource::Tranco->value	=> array(
 			'url'	=> 'https://tranco-list.eu/top-1m.csv.zip',
 			'auth'	=> 'none',
 		),
@@ -264,14 +264,14 @@ _PHP_DESCRIPTOR_TABLE_WITH_AN_UNBALANCED_PAREN_IN_A_LABEL = """
 function pfb_top1m_providers(): array
 {
 	return array(
-		Top1mSource::Tranco->value	=> array(
+		PfbTop1mSource::Tranco->value	=> array(
 			'url'		=> 'https://tranco-list.eu/top-1m.csv.zip',
 			'container'	=> 'zip',
 			'auth'		=> 'none',
 			'label'		=> 'Tranco Mirror (EU))',
 			'licence'	=> 'CC0',
 		),
-		Top1mSource::Cisco->value	=> array(
+		PfbTop1mSource::Cisco->value	=> array(
 			'url'		=> 'https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip',
 			'container'	=> 'zip',
 			'auth'		=> 'none',

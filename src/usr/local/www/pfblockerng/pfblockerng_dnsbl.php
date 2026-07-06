@@ -112,7 +112,7 @@ $pconfig['suppression']		= base64_decode($pfb['dconfig']['suppression'])		?: '';
 $pconfig['alexa_enable']	= $pfb['dconfig']['alexa_enable']			?: '';
 // Routed via the gateway (not the section array) so a stored legacy 'alexa'
 // (dead TOP1M source, #872/#877) coalesces to 'tranco' for the form select.
-// ->toStored() unwraps the Top1mSource enum to its scalar option key (a
+// ->toStored() unwraps the PfbTop1mSource enum to its scalar option key (a
 // Form_Select selected-value must be the scalar, not the enum instance).
 $pconfig['alexa_type']		= PfbConfig::read('alexa_type')->toStored();
 $pconfig['alexa_count']		= $pfb['dconfig']['alexa_count']			?: '1000';

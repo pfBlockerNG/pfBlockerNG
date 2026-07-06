@@ -337,25 +337,25 @@ final class CfgGatewayTest extends TestCase
 
 	public function testReadReturnsRegisteredDefaultForAlexaTypeAbsentKey(): void
 	{
-		// alexa_type default is 'tranco' -> Top1mSource::Tranco.
+		// alexa_type default is 'tranco' -> PfbTop1mSource::Tranco.
 		$this->assertNull(
 			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/alexa_type')
 		);
 
 		$result = PfbConfig::read('alexa_type');
-		$this->assertInstanceOf(Top1mSource::class, $result, 'alexa_type must return a Top1mSource enum');
-		$this->assertSame(Top1mSource::Tranco, $result);
+		$this->assertInstanceOf(PfbTop1mSource::class, $result, 'alexa_type must return a PfbTop1mSource enum');
+		$this->assertSame(PfbTop1mSource::Tranco, $result);
 	}
 
 	/**
 	 * alexa_type (issue #877): a stored legacy 'alexa' (dead TOP1M source, #872)
-	 * coalesces to Top1mSource::Tranco through the gateway's read adapter.
+	 * coalesces to PfbTop1mSource::Tranco through the gateway's read adapter.
 	 *
 	 * Scenario: the dropped Alexa TOP1M option still reads safely on an existing
 	 * install that had it selected.
 	 *   Given alexa_type stored as the legacy 'alexa' token.
 	 *   When PfbConfig::read('alexa_type').
-	 *   Then the result is Top1mSource::Tranco, not the dead 'alexa' token.
+	 *   Then the result is PfbTop1mSource::Tranco, not the dead 'alexa' token.
 	 */
 	public function testReadCoalescesLegacyAlexaTypeToTranco(): void
 	{
@@ -365,32 +365,32 @@ final class CfgGatewayTest extends TestCase
 		$this->seedConfig($path, 'alexa');
 		$this->assertSame('alexa', config_get_path($path), 'before: alexa_type seed is legacy alexa');
 
-		// When/Then: coalesced to Top1mSource::Tranco.
-		$this->assertSame(Top1mSource::Tranco, PfbConfig::read('alexa_type'), "legacy 'alexa' coalesces to Tranco");
+		// When/Then: coalesced to PfbTop1mSource::Tranco.
+		$this->assertSame(PfbTop1mSource::Tranco, PfbConfig::read('alexa_type'), "legacy 'alexa' coalesces to Tranco");
 	}
 
 	/**
 	 * alexa_type: all five live tokens pass through as their enum cases (domcop/majestic
 	 * added ADR-59 P4, cloudflare added ADR-59 P5).
 	 */
-	public function testReadPassesThroughLiveTop1mSourceTokens(): void
+	public function testReadPassesThroughLivePfbTop1mSourceTokens(): void
 	{
 		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/alexa_type';
 
 		$this->seedConfig($path, 'cisco');
-		$this->assertSame(Top1mSource::Cisco, PfbConfig::read('alexa_type'), "'cisco' passes through as Cisco");
+		$this->assertSame(PfbTop1mSource::Cisco, PfbConfig::read('alexa_type'), "'cisco' passes through as Cisco");
 
 		$this->seedConfig($path, 'tranco');
-		$this->assertSame(Top1mSource::Tranco, PfbConfig::read('alexa_type'), "'tranco' passes through as Tranco");
+		$this->assertSame(PfbTop1mSource::Tranco, PfbConfig::read('alexa_type'), "'tranco' passes through as Tranco");
 
 		$this->seedConfig($path, 'domcop');
-		$this->assertSame(Top1mSource::DomCop, PfbConfig::read('alexa_type'), "'domcop' passes through as DomCop");
+		$this->assertSame(PfbTop1mSource::DomCop, PfbConfig::read('alexa_type'), "'domcop' passes through as DomCop");
 
 		$this->seedConfig($path, 'majestic');
-		$this->assertSame(Top1mSource::Majestic, PfbConfig::read('alexa_type'), "'majestic' passes through as Majestic");
+		$this->assertSame(PfbTop1mSource::Majestic, PfbConfig::read('alexa_type'), "'majestic' passes through as Majestic");
 
 		$this->seedConfig($path, 'cloudflare');
-		$this->assertSame(Top1mSource::Cloudflare, PfbConfig::read('alexa_type'), "'cloudflare' passes through as Cloudflare");
+		$this->assertSame(PfbTop1mSource::Cloudflare, PfbConfig::read('alexa_type'), "'cloudflare' passes through as Cloudflare");
 	}
 
 	/**

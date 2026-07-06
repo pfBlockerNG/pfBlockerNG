@@ -29,7 +29,7 @@ field, reasoning about rollback/downgrade, or checking the foreign-key exclusion
     `=== PfbIdnMode::All` / `::Confusable`. The 4.0.0-alpha-only `'all'` token is **not** carried
     (alpha compatibility is intentionally not maintained) — it reads as Off. One canonical
     vocabulary spans `config.xml`, the ini, and the Python `IdnMode` enum.
-  - **`alexa_type` → `Top1mSource`** (issue #877 review, registry adapters
+  - **`alexa_type` → `PfbTop1mSource`** (issue #877 review, registry adapters
     `pfb_cfg_top1m_source_read/write`): tokens `'tranco'` (default) / `'cisco'` / `'domcop'` /
     `'majestic'` (added ADR-59 P4) / `'cloudflare'` (added ADR-59 P5, the first
     token-authenticated provider). The legacy `'alexa'` token (the dead Alexa
@@ -103,7 +103,7 @@ at/after that version; it is a per-field scope marker, not a migration.
 **Excluded fields** — none. `pfb_idn` was previously excluded (`NULL`/`NULL` identity adapters);
 it is now adopted as `PfbIdnMode` (see ADR-28 §2.2). `All` reuses the legacy `'on'` token, so the
 adoption is migration-free and downgrade-safe. `alexa_type` similarly moved off a plain-string
-read-boundary coalesce onto the `Top1mSource` enum (issue #877 review) — same shape, no migration.
+read-boundary coalesce onto the `PfbTop1mSource` enum (issue #877 review) — same shape, no migration.
 
 ## Since-version convention
 

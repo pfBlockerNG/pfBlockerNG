@@ -2396,7 +2396,7 @@ function pfb_global() {
 	$pfb['dnsbl_port']	= $pfb['dnsblconfig']['pfb_dnsport'];									// Lighttpd web server http port setting
 	$pfb['dnsbl_port_ssl']	= $pfb['dnsblconfig']['pfb_dnsport_ssl'];								// Lighttpd web server https port setting
 	$pfb['dnsbl_top1m']	= $pfb['dnsblconfig']['alexa_enable'];							// TOP1M whitelist
-	$pfb['dnsbl_top1m_type']	= PfbConfig::read('alexa_type');						// TOP1M type (Top1mSource enum; legacy 'alexa' coalesces to Tranco, #877) (default Tranco)
+	$pfb['dnsbl_top1m_type']	= PfbConfig::read('alexa_type');						// TOP1M type (PfbTop1mSource enum; legacy 'alexa' coalesces to Tranco, #877) (default Tranco)
 	$pfb['dnsbl_res_cache']	= $pfb['dnsblconfig']['pfb_cache'];							// DNSBL Option to backup/restore Resolver cache
 	$pfb['dnsbl_global_log']= PfbConfig::read('global_log');							// Global Logging/Blocking mode (default '')
 	// ADR-22: lenient feed parsing. 'on' = permissive scheme strip (today); anything else =
@@ -8308,7 +8308,7 @@ function pfblockerng_top1m(?array $provider_override = NULL) {
 	// (it is normally set by pfb_global() -- PfbConfig::read('alexa_type') --
 	// which some tests never call); default to Tranco, the same absent-default
 	// the registry itself uses, so the resolved shape stays rank_domain/zip.
-	$top1m_type	= $pfb['dnsbl_top1m_type'] ?? Top1mSource::Tranco;
+	$top1m_type	= $pfb['dnsbl_top1m_type'] ?? PfbTop1mSource::Tranco;
 	$top1m_provider	= $provider_override ?? (pfb_top1m_providers()[$top1m_type->value] ?? array());
 	$top1m_parse	= $top1m_provider['parse'] ?? 'rank_domain';
 	$top1m_header	= $top1m_provider['header'] ?? FALSE;
