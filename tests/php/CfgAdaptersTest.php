@@ -37,6 +37,14 @@ use PHPUnit\Framework\TestCase;
  *     And write(read('off')) == 'off'  (identity).
  *     And write(read('all')) == 'off'  (dropped alpha token -> Off).
  *     And write(read('')) == 'off'    (normalised default).
+ *
+ * Scenario E — top1m_source (alexa_type, issue #877): 'tranco' / 'cisco' TOP1M
+ *   source selector; the legacy 'alexa' token (dead service, #872) coalesces
+ *   to 'tranco'. Read-boundary only, plain-string result (no enum, no write
+ *   adapter — the field is written back unchanged since it is already canonical).
+ *     Given a raw stored value v.
+ *     When pfb_cfg_top1m_source_read(v).
+ *     Then 'tranco'/'cisco' pass through; 'alexa' and any unknown/absent value -> 'tranco'.
  */
 final class CfgAdaptersTest extends TestCase
 {
@@ -658,5 +666,62 @@ final class CfgAdaptersTest extends TestCase
 		$this->assertSame('auto',    pfb_cfg_alias_delta_mode_write('auto'));
 		$this->assertSame('delta',   pfb_cfg_alias_delta_mode_write('delta'));
 		$this->assertSame('replace', pfb_cfg_alias_delta_mode_write('replace'));
+	}
+
+	// -----------------------------------------------------------------------
+	// Scenario E — top1m_source (alexa_type, issue #877)
+	//   Stored tokens: 'tranco', 'cisco' (live); legacy 'alexa' (dead service,
+	//   #872) coalesces to 'tranco' at the read boundary. write_adapter is a
+	//   pure identity (the runtime value is already the canonical stored
+	//   token) -- present only to satisfy the registry's paired-adapter rule.
+	// -----------------------------------------------------------------------
+
+	public function testTop1mSourceReadTrancoReturnsTranco(): void
+	{
+		$this->assertSame('tranco', pfb_cfg_top1m_source_read('tranco'));
+	}
+
+	public function testTop1mSourceReadCiscoReturnsCisco(): void
+	{
+		$this->assertSame('cisco', pfb_cfg_top1m_source_read('cisco'));
+	}
+
+	/** The dead legacy TOP1M source (#872) must read as 'tranco', not 'alexa'. */
+	public function testTop1mSourceReadLegacyAlexaCoalescesToTranco(): void
+	{
+		$this->assertSame('tranco', pfb_cfg_top1m_source_read('alexa'));
+	}
+
+	public function testTop1mSourceReadUnknownTokenDefaultsToTranco(): void
+	{
+		$this->assertSame('tranco', pfb_cfg_top1m_source_read('junk'));
+	}
+
+	public function testTop1mSourceReadNullDefaultsToTranco(): void
+	{
+		$this->assertSame('tranco', pfb_cfg_top1m_source_read(null));
+	}
+
+	public function testTop1mSourceReadEmptyDefaultsToTranco(): void
+	{
+		$this->assertSame('tranco', pfb_cfg_top1m_source_read(''));
+	}
+
+	/** write(read(v)) == v for the two live canonical tokens. */
+	public function testTop1mSourceRoundTripCanonicalTokens(): void
+	{
+		foreach (['tranco', 'cisco'] as $token) {
+			$written = pfb_cfg_top1m_source_write(pfb_cfg_top1m_source_read($token));
+			$this->assertSame($token, $written,
+				"expected write(read('{$token}')) == '{$token}'; actual: '{$written}'");
+		}
+	}
+
+	/** The legacy 'alexa' token never round-trips back to itself -- it is coalesced. */
+	public function testTop1mSourceRoundTripLegacyAlexaNeverReemitted(): void
+	{
+		$written = pfb_cfg_top1m_source_write(pfb_cfg_top1m_source_read('alexa'));
+		$this->assertSame('tranco', $written,
+			"expected write(read('alexa')) == 'tranco'; actual: '{$written}'");
 	}
 }

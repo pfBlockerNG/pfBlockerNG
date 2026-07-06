@@ -764,7 +764,7 @@ final class RollbackContractTest extends TestCase
 	public function testAdapterTypeHelperReturnsValidTypeForEveryRegisteredField(): void
 	{
 		$registry    = pfb_cfg_registry();
-		$valid_types = ['toggle', 'lenient', 'idn', 'plain', 'alias_delta_mode'];
+		$valid_types = ['toggle', 'lenient', 'idn', 'plain', 'alias_delta_mode', 'top1m_source'];
 
 		foreach ($registry as $key => $entry) {
 			$type = pfb_cfg_field_adapter_type($entry);
@@ -1224,6 +1224,65 @@ final class RollbackContractTest extends TestCase
 			$stored = (string) config_get_path($path);
 			$this->assertContains($stored, $vocab,
 				"BACKWARD: log_syslog token='{$token}' write(read) stored='{$stored}' not in vocab"
+			);
+		}
+	}
+
+	// -----------------------------------------------------------------------
+	// I -- issue #877: alexa_type TOP1M-source coalesce (dead 'alexa' -> 'tranco')
+	// -----------------------------------------------------------------------
+
+	/**
+	 * alexa_type: FORWARD invariant covers the legacy 'alexa' token (dead TOP1M
+	 * service, #872) in addition to the live 'tranco'/'cisco' vocabulary; BACKWARD
+	 * invariant proves the coalesce -- a write after reading a legacy 'alexa'
+	 * store never re-emits 'alexa'.
+	 *
+	 * Scenario: alexa_type rollback contract with the #877 coalesce.
+	 *   Background: alexa_type's stored vocabulary is {'tranco', 'cisco', 'alexa'}
+	 *     (the legacy value is READ-only -- pfb_cfg_field_vocab()['top1m_source']
+	 *     lists only the two live WRITE-side tokens).
+	 *   Given each of 'tranco', 'cisco', 'alexa' stored.
+	 *   When PfbConfig::read('alexa_type') then PfbConfig::write('alexa_type', result).
+	 *   Then (FORWARD) the read result is a string ('tranco' for legacy 'alexa').
+	 *   And (BACKWARD) the written token is in {'tranco', 'cisco'} -- 'alexa' is
+	 *     NEVER re-emitted, even though it was the original stored value.
+	 */
+	public function testAlexaTypeForwardCoalescesLegacyAndBackwardNeverReemitsAlexa(): void
+	{
+		$path        = 'installedpackages/pfblockerngdnsblsettings/config/0/alexa_type';
+		$write_vocab = pfb_cfg_field_vocab()['top1m_source'];
+
+		$cases = [
+			'tranco' => 'tranco',
+			'cisco'  => 'cisco',
+			'alexa'  => 'tranco', // legacy dead source coalesces to tranco (#872/#877)
+		];
+
+		foreach ($cases as $stored_token => $expected_runtime) {
+			// Reset.
+			$GLOBALS['config'] = [];
+			config_set_path($path, $stored_token);
+
+			// BEFORE: raw value confirmed.
+			$this->assertSame($stored_token, config_get_path($path),
+				"before forward+backward: alexa_type token='{$stored_token}'"
+			);
+
+			// FORWARD: read coalesces the legacy token; live tokens pass through.
+			$runtime = PfbConfig::read('alexa_type');
+			$this->assertSame($expected_runtime, $runtime,
+				"FORWARD: alexa_type token='{$stored_token}' must read as '{$expected_runtime}'"
+			);
+
+			// BACKWARD: write(runtime) stores only a live vocabulary token -- never 'alexa'.
+			PfbConfig::write('alexa_type', $runtime);
+			$stored = (string) config_get_path($path);
+			$this->assertContains($stored, $write_vocab,
+				"BACKWARD: alexa_type token='{$stored_token}' write(read) stored='{$stored}' not in vocab"
+			);
+			$this->assertNotSame('alexa', $stored,
+				"BACKWARD: alexa_type write must never re-emit dead legacy token 'alexa'"
 			);
 		}
 	}
