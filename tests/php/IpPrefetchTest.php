@@ -722,7 +722,12 @@ final class IpPrefetchTest extends TestCase
 			$code = "<?php\nrequire " . var_export("{$repo}/tests/php/bootstrap.php", true) . ";\n" . $phpBody;
 			file_put_contents($probe, $code);
 
-			$cmd = 'php -d open_basedir=' . escapeshellarg($repo) . ' ' . escapeshellarg($probe) . ' 2>/dev/null';
+			// issue #896: route PHP engine diagnostics to stderr (dropped by the 2>/dev/null
+			// below) so the child's stdout stays pure JSON. Under open_basedir the child's
+			// tempnam() emits a Warning; on PHP 8.5 it lands on STDOUT (not stderr), prepending
+			// non-JSON text that breaks json_decode() — green on 8.3, red on 8.5 without this.
+			$cmd = 'php -d open_basedir=' . escapeshellarg($repo)
+				. ' -d display_errors=stderr ' . escapeshellarg($probe) . ' 2>/dev/null';
 			$output = shell_exec($cmd);
 		} finally {
 			@unlink($probe);
