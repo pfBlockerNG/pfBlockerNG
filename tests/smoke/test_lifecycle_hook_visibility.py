@@ -30,6 +30,11 @@ import pytest
 
 from . import helpers as h
 from .conftest import SmokeVM
+
+# _TEARDOWN_LINE (the pre-deinstall teardown log line) and _enable_dnsbl (the DNSBL-enable
+# setup) are exactly what test 2 needs and already live in the sibling lifecycle test — import
+# rather than duplicate. Underscore-private, so a rename there surfaces here at collection;
+# acceptable coupling between two tests that exercise the same pre-deinstall path.
 from .test_pkg_op_teardown import _TEARDOWN_LINE, _enable_dnsbl
 
 # ``repo_vm`` is re-exported (not just imported): pytest resolves fixtures PER-MODULE, so
@@ -92,8 +97,17 @@ def _visibility_hooks(token: str) -> list[dict[str, str]]:
 
 
 def _gui_log_tail(vm: SmokeVM, logpath: str, *, chars: int = 3000) -> str:
-    """Best-effort tail of the pfSense-upgrade GUI log (the exact `-l` path), for assertions."""
-    return vm.ssh("cat", logpath).stdout[-chars:]
+    """Tail of the pfSense-upgrade GUI log (the exact `-l` path).
+
+    Surface a `cat` failure explicitly instead of returning ''. A missing log file
+    (e.g. an `-l`-semantics regression, the exact bug this file already hit once) then
+    reads as an obvious diagnostic rather than looking identical to an empty tail —
+    so a failing assertion distinguishes "log was never created" from "hook did not run".
+    """
+    r = vm.ssh("cat", logpath)
+    if r.returncode != 0:
+        return f"<cat {logpath} failed rc={r.returncode}: {r.stderr.strip()}>"
+    return r.stdout[-chars:]
 
 
 @pytest.mark.timeout(900)  # install + terminal reinstall + GUI reinstall; budget ~15 min
@@ -171,6 +185,11 @@ def test_update_hooks_fire_and_are_gui_visible_on_reinstall(repo_vm: SmokeVM) ->
 
         gui_proc = vm.ssh(PFSENSE_UPGRADE, "-y", "-l", GUI_LOG_REINSTALL, "-i", PKG_NAME, "-f", timeout=600)
         gui_log = _gui_log_tail(vm, GUI_LOG_REINSTALL)
+        assert gui_proc.returncode == 0, (
+            f"the GUI 'Update now' wrapper (pfSense-upgrade -i -f) exited non-zero "
+            f"(rc={gui_proc.returncode}):\nstdout:\n{gui_proc.stdout[-2000:]}\n"
+            f"stderr:\n{gui_proc.stderr[-2000:]}\nGUI log:\n{gui_log}"
+        )
 
         pre_env2 = h.read_hook_env(vm, pre_marker)
         post_env2 = h.read_hook_env(vm, post_marker)
@@ -267,6 +286,7 @@ def test_uninstall_runs_hook_tears_down_and_is_gui_visible(repo_vm: SmokeVM) -> 
         gui_proc = vm.ssh(PFSENSE_UPGRADE, "-y", "-l", GUI_LOG_DELETE, "-r", PKG_NAME, timeout=600)
         gui_log = _gui_log_tail(vm, GUI_LOG_DELETE)
         diag = f"pfSense-upgrade -r rc={gui_proc.returncode}\nGUI log tail:\n{gui_log}\n{h.deinstall_debug(vm)}"
+        assert gui_proc.returncode == 0, f"the GUI 'Remove' wrapper (pfSense-upgrade -r) exited non-zero.\n{diag}"
 
         # THEN: both hooks fired with the uninstall lifecycle context.
         pre_env = h.read_hook_env(vm, pre_marker)
