@@ -10,6 +10,6 @@
     "scripts": {
         "test": "phpunit",
         "phpstan": "phpstan analyse --no-progress --memory-limit=1G",
-        "phpcs": "phpcs"
+        "phpcs": "phpcs -d memory_limit=1G"
     }
 }

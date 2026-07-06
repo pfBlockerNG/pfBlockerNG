@@ -195,7 +195,11 @@ if [ "$staged_php" = 1 ]; then
 	# from phpcs.xml.dist.
 	if [ -x vendor/bin/phpcs ]; then
 		step 'phpcs'
-		vendor/bin/phpcs || failed 'phpcs'
+		# issue #895: cap memory like the phpstan step above — phpcs tokenising a
+		# large file (pfblockerng.inc ~19.5k lines) exhausts PHP's default 128M and
+		# aborts, which forces --no-verify and skips ALL gates. CI runs at
+		# memory_limit=-1 so it never OOMs there; this closes the local-only gap.
+		vendor/bin/phpcs -d memory_limit=1G || failed 'phpcs'
 	else
 		skip phpcs
 	fi
