@@ -1,0 +1,60 @@
+================================================================================
+PHASE 4 PROMPT — Add the keyless providers: DomCop top-10M + Majestic Million
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_59_Top1M_Provider_Framework/ADR.md   (read §2.2, §6 Phase 4 first)
+================================================================================
+
+ROLE
+Branch adr/59-top1m-provider-framework. Phase 4 of 6. BEHAVIOUR-CHANGING (adds
+sources). Touches www/ → Tier-A required. Inline, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+With the descriptor + generalized parser (P1-P3), two keyless sources are now a
+table row + UI option each: DomCop top-10M (registered-domain breadth) and
+Majestic Million (diversity). Both need per-format parse; Majestic carries a
+CC BY 3.0 attribution obligation.
+
+REQUIRED READING
+- FIRST read RESULTS/03_Results.txt. If missing, STOP and report.
+- .ADRs/ADR_59_Top1M_Provider_Framework/ADR.md (§2.2, §2.3, §2.8)
+- The Top1mSource enum (pfblockerng_extra.inc) + its adapter/round-trip tests
+  (CfgAdaptersTest / CfgGatewayTest / RollbackContractTest) — adding enum values.
+- pfblockerng_dnsbl.php — $options_alexa_type (~193/3271) + the TOP1M section help.
+- tests/smoke/ui/test_render_smoke.py (the dnsbl-page Tier-A pattern).
+
+ACTION PLAN
+1. Add `domcop` + `majestic` cases to Top1mSource (round-trip + adapter tests
+   updated; sniff $registeredPaths unaffected — same key). Add their descriptor
+   rows: DomCop { url: top10milliondomains.csv.zip, container: zip, parse:
+   {csv, domain_col:2, header:true}, auth:none }; Majestic { url:
+   majestic_million.csv, container: plain, parse: {csv, domain_col:3, header:true},
+   auth:none, licence: 'CC BY 3.0 — attribution' }.
+2. UI: add both to $options_alexa_type; render Majestic's attribution note in the
+   TOP1M section help.
+3. Confirm the download filename/extract path handles the plain .csv (Majestic) —
+   it must land as top-1m.csv for the builder (Phase 2 container handling).
+
+CONSTRAINTS
+- Tabs, uppercase TRUE/FALSE. PFBL/config-gateway sniffs green. Do NOT add a token
+  field or Cloudflare here (Phase 5). Keep tranco/cisco unchanged.
+
+VERIFICATION
+- php -l / phpcs / phpstan clean; vendor/bin/phpunit green.
+- FAIL-BEFORE/PASS-AFTER: a PHPUnit case feeding a real-shape DomCop sample (quoted
+  header + domain in col 2) and a Majestic sample (12-col header, domain in col 3)
+  produces the expected pfbalexawhitelist.txt — and would MIS-read on the pre-P2
+  col-1 parser (assert the col index matters).
+- Tier-A: the DNSBL page renders the 4 source options (tranco/cisco/domcop/
+  majestic) and the Majestic attribution text.
+
+EXPECTED RESULT
+Four keyless providers selectable; DomCop/Majestic parse correctly from their real
+formats; Majestic attribution shown.
+
+COMMIT (single)
+    pfblockerng: add DomCop + Majestic keyless TOP1M providers (ADR-59 P4)
+Push directly; PR only if rejected.
+
+HANDOFF — RESULTS/04_Results.txt
+The enum values + descriptor rows added; the parse specifics per provider; the
+Tier-A assertions; go-ahead for Phase 5 (token + Cloudflare).
