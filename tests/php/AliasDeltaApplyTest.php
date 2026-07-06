@@ -71,7 +71,7 @@ final class AliasDeltaApplyTest extends TestCase
 		// issue #722: pfb_apply_alias_delta() now calls pfb_logger(), which writes to the
 		// process-global $pfb['log'] (seeded by tests/php/bootstrap.php under $g['varlog_path']).
 		// That directory is only created on demand by the tests that need it (see
-		// LiveLogTailPayloadTest / LiveLogPkgMirrorTest) — ensure it exists here too, so this
+		// LiveLogTailPayloadTest / LiveLogStdoutTest) — ensure it exists here too, so this
 		// class does not depend on another test class having run first in the same process.
 		global $pfb;
 		@mkdir($pfb['logdir'], 0777, TRUE);

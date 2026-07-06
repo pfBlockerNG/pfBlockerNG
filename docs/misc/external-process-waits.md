@@ -81,12 +81,19 @@ the per-run log the Update page's AJAX viewer tails) — never stdout. So the de
 `pfb_stop_start_unbound()` wait — and looks like a frozen/lost pipe even though nothing is stuck
 (issue #690). This is a **visibility** gap, distinct from the fd-hold hang above.
 
-Fix: while a package lifecycle callback is active — `$pfb['hook_lifecycle']` is set by the install
-command (`'install'`) and the pre-deinstall (`'uninstall'`), unset on every normal
-cron/manual/Run-Now pass — `pfb_logger()` also **mirrors its main-log lines (cases 1/2) to stdout**,
-so the page streams live progress. The unbound-stop wait logs its keepalive dots through the same
-path, so that closes the silent gap too. Visibility only: the fd-detach, `--foreground`, and
-redirect safety above are untouched.
+Fix (issue #690, widened by ADR-58): `pfb_logger()` **mirrors its main-log lines (cases 1/2) to
+stdout** so the page streams live progress. The gate is `pfb_run_streams_to_stdout()` — mirror only
+when stdout is a **real watched surface**: a lifecycle callback (`$pfb['hook_lifecycle']`, the pkg
+`| tee` pipe — the original #690 case) **OR an interactive terminal** (`pfb_stdout_is_terminal()` =
+`stream_isatty(php://stdout)`, ADR-58's addition, so a hand-run pass streams too). It does **not**
+print when stdout is a **log file the logger already writes** — the cron tick's `>> log`, the detached
+Run-Now's `>> runlog`, a nested extras dispatch (`dc`/`bls`/…) — because that is neither a tty nor a
+lifecycle, and printing there would double every line; nor for a **web in-process caller** (a
+settings-save that resyncs then `header('Location')`, where stdout is the HTTP response). The
+per-run-log fwrite-mirror (which populates the run-log the Update viewer tails, regardless of where
+stdout points) is unchanged. The unbound-stop wait logs its keepalive dots through the same path,
+closing that silent gap. Visibility only: the fd-detach, `--foreground`, and redirect safety above are
+untouched.
 
 An **update hook's own** stdout/stderr needs the same treatment, but it can't just be printed live
 through a pipe: the hook body is redirected to the log file precisely so a daemon it starts can't
