@@ -219,6 +219,40 @@ class TestControlEnableOpensDnsblStatsDb:
         assert P._db_conns[P.DB_DNSBL] is first_con, "an already-open stats DB must not be reconnected by enable"
         assert first_con.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchone() == (7,)
 
+    def test_open_helper_survives_a_losing_race_on_corrupt_db_delete(self, tmp_path: Any, monkeypatch: Any) -> None:
+        """Concurrency guard: the shared open helper now runs from three threads (the
+        ADR-10 swap, the control-channel enable, the timed re-enable). Two racing to
+        recover the SAME corrupt stats DB can both pass the ``isfile()`` check, so the
+        loser's ``os.remove()`` hits an already-deleted file. That FileNotFoundError must
+        NOT escape the helper -- from the un-wrapped enable call site it would propagate
+        out of ``pfb_apply_control_command``, kill ``pfb_control_watcher``'s thread, and
+        silently disable the control channel until Unbound restarts (issue #870).
+
+        RED without the inner try/except: os.remove's FileNotFoundError propagates and
+        this call raises.
+        """
+        db = tmp_path / "dnsbl.sqlite"
+        db.write_text("corrupt")  # a real file so os.path.isfile() is genuinely True
+        P.pfb["mod_sqlite3"] = True
+        P.pfb["pfb_py_dnsbl"] = str(db)
+        P.pfb["python_blacklist"] = True  # stats wanted -> the open path runs
+        P.pfb["sqlite3_dnsbl_con"] = False
+
+        # Every open attempt fails (corrupt DB) AND the file vanished under us (the other
+        # thread already removed it), so os.remove raises FileNotFoundError.
+        def _fail_open(*_a: Any, **_k: Any) -> bool:
+            raise OSError("simulated corrupt DB open failure")
+
+        def _already_removed(_path: str) -> None:
+            raise FileNotFoundError(_path)
+
+        monkeypatch.setattr(P, "pfb_db_validate", _fail_open)
+        monkeypatch.setattr(P.os, "remove", _already_removed)
+
+        # Must not raise; both attempts fail so the DB stays closed.
+        P._open_dnsbl_stats_db_if_wanted()
+        assert P.pfb["sqlite3_dnsbl_con"] is False
+
 
 class TestSharedHandlerBypass:
     def test_addbypass_adds_ip_to_gplistdb(self) -> None:

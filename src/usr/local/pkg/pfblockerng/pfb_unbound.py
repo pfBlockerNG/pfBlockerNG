@@ -2471,8 +2471,14 @@ def _open_dnsbl_stats_db_if_wanted() -> None:
                 sys.stderr.write(
                     "[pfBlockerNG]: Failed to open pfb_py_dnsbl.sqlite database (Attempt: {}/2): {}".format(i + 1, e)
                 )
+                # Now reachable from three threads (swap, control-enable, timed re-enable):
+                # a concurrent caller may have already removed the corrupt DB, so a losing
+                # race on the delete is a harmless no-op, not an uncaught FileNotFoundError.
                 if os.path.isfile(pfb["pfb_py_dnsbl"]):
-                    os.remove(pfb["pfb_py_dnsbl"])
+                    try:
+                        os.remove(pfb["pfb_py_dnsbl"])
+                    except OSError:
+                        pass
 
 
 def _db_apply(task: tuple) -> None:
