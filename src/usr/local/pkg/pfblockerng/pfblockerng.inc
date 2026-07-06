@@ -1634,7 +1634,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 			// (dashes, dots). Callers pass reference 'top1m_token' to suppress the
 			// failed-validation log line below -- a rejected token must never be logged,
 			// even at debug level (the secret itself, not just its download URL).
-			if (strlen($input) >= 8 && strlen($input) <= 512 && preg_match("/^[A-Za-z0-9._~+\/=-]+$/", $input)) {
+			if (strlen($input) >= 8 && strlen($input) <= 512 && preg_match("/^[A-Za-z0-9._~+\/=-]+$/D", $input)) {
 				$result = htmlspecialchars($input);
 			}
 			break;
@@ -8358,9 +8358,18 @@ function pfblockerng_top1m(?array $provider_override = NULL) {
 				// prose/HTML/error body (e.g. "error, service temporarily unavailable.")
 				// still has a '.' and a ',' and would otherwise pass the filter above, so a
 				// dead feed would classify as "valid" below and wipe the whitelist (#886
-				// review). Other parse modes have no rank column to guard on.
+				// review). Every other parse mode ('csv': DomCop/Majestic/Cloudflare) has no
+				// rank column to guard on instead, so the domain field itself must look like
+				// a hostname -- otherwise the SAME garbage-body wipe re-opens for those
+				// providers (a CDN error page or a JSON auth-error body still has a '.' and
+				// a ',' somewhere) (#892 review).
 				$csvline = str_getcsv($line, ',', '"', "\\");
-				if ($top1m_parse === 'rank_domain' && !ctype_digit((string) ($csvline[0] ?? ''))) {
+				$domain = $csvline[$top1m_domcol] ?? '';
+				if ($top1m_parse === 'rank_domain') {
+					if (!ctype_digit((string) ($csvline[0] ?? ''))) {
+						continue;
+					}
+				} elseif (!preg_match('/^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$/', $domain)) {
 					continue;
 				}
 				// Count every valid CSV row BEFORE the match/break below, so a
@@ -8368,7 +8377,6 @@ function pfblockerng_top1m(?array $provider_override = NULL) {
 				// still leaves $linecnt > 0 and classifies as a valid feed
 				// (not the dead-feed $linecnt === 0 path) (#886 review).
 				$linecnt++;
-				$domain = $csvline[$top1m_domcol] ?? '';
 				$tld = substr($domain, strrpos($domain, '.') + 1);
 
 				if (isset($pfb_include[$tld])) {
@@ -9924,9 +9932,11 @@ function pfb_download_http_headers(array $extra_headers, string $conditional_hea
 // ~14096) do NOT pass this argument, so their behaviour is entirely unchanged.
 //
 // Optional $extra_headers (ADR-59 Phase 3) — caller-supplied HTTP header strings (e.g. a
-// future Cloudflare Radar 'Authorization: Bearer <token>'), merged with the conditional-GET
-// header via pfb_download_http_headers() above. No caller passes this yet; every existing
-// feed keeps its current CURLOPT_HTTPHEADER behaviour exactly.
+// Cloudflare Radar 'Authorization: Bearer <token>'), merged with the conditional-GET
+// header via pfb_download_http_headers() above. The TOP1M provider (ADR-59 P5) is the
+// first caller: pfblockerng.php passes the active provider's pfb_top1m_auth_headers()
+// result here; every other feed still passes none, so its CURLOPT_HTTPHEADER behaviour
+// is unchanged.
 function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $logtype, $vtype='', $timeout=300, $type='', $username='', $password='', $srcint=FALSE, &$response_meta=NULL, array $extra_headers=array()) {
 	global $pfb;
 	$http_status = '';
@@ -10151,11 +10161,11 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 					}
 				}
 
-				// ADR-59 Phase 3: merge caller-supplied headers (none yet) with the
-				// conditional-GET header above -- neither list clobbers the other. Skips
-				// the curl_setopt entirely when both are empty (today, every feed except
-				// an in-flight change_detect probe with a stored ETag), matching the
-				// pre-Phase-3 behaviour byte-for-byte.
+				// ADR-59 Phase 3: merge caller-supplied headers (ADR-59 P5's TOP1M provider
+				// auth header is the first caller) with the conditional-GET header above --
+				// neither list clobbers the other. Skips the curl_setopt entirely when both
+				// are empty (every other feed, plus an in-flight change_detect probe with no
+				// stored ETag), matching the pre-Phase-3 behaviour byte-for-byte.
 				$http_headers = pfb_download_http_headers($extra_headers, $conditional_header);
 				if (!empty($http_headers)) {
 					curl_setopt($ch, CURLOPT_HTTPHEADER, $http_headers);

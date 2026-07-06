@@ -88,4 +88,25 @@ final class Top1mAuthHeadersTest extends TestCase
 			pfb_top1m_auth_headers($provider, 'raw-token')
 		);
 	}
+
+	/**
+	 * #892 review (finding 3, defense-in-depth): a token arriving by a non-UI path (a
+	 * hand-edited config.xml, HA sync, a restored backup) is not re-validated by
+	 * PFB_FILTER_TOKEN before reaching this function -- CR/LF embedded in it must never
+	 * ride into the Authorization header value (header/request splitting).
+	 *
+	 *  GIVEN a provider descriptor whose 'auth' needs a header and a token carrying
+	 *        embedded CR and LF characters;
+	 *   WHEN pfb_top1m_auth_headers() builds the caller headers;
+	 *   THEN the CR/LF is stripped from the emitted header value.
+	 */
+	public function testEmbeddedCrLfInTokenIsStrippedFromTheHeaderValue(): void
+	{
+		$provider = ['auth' => self::CLOUDFLARE_AUTH];
+
+		$this->assertSame(
+			['Authorization: Bearer cf-abc123injected'],
+			pfb_top1m_auth_headers($provider, "cf-abc123\r\ninjected")
+		);
+	}
 }
