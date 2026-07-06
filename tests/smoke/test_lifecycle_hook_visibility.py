@@ -52,10 +52,12 @@ from .test_repo_install import (  # noqa: F401
 pytestmark = pytest.mark.repo
 
 PFSENSE_UPGRADE = "/usr/local/sbin/pfSense-upgrade"
-# Distinct GUI log bases per test (pfSense-upgrade writes `<LOGBASE>.txt`) so neither
-# leg's diagnostics can read a stale file left by the other.
-GUI_LOG_REINSTALL = "/tmp/pfb_gui_reinstall"
-GUI_LOG_DELETE = "/tmp/pfb_gui_delete"
+# pfSense-upgrade writes the `-l` argument VERBATIM (pkg_mgr_install.php passes
+# `-l {logfilename}.txt` and then displays that exact file), so the `-l` value and the
+# path we read back MUST be identical — include the `.txt`. Distinct paths per test so
+# neither leg reads a stale file left by the other.
+GUI_LOG_REINSTALL = "/tmp/pfb_gui_reinstall.txt"
+GUI_LOG_DELETE = "/tmp/pfb_gui_delete.txt"
 
 
 def _stdout_marker_line(token: str, when: str) -> str:
@@ -89,9 +91,9 @@ def _visibility_hooks(token: str) -> list[dict[str, str]]:
     return [_visibility_hook(token, "pre"), _visibility_hook(token, "post")]
 
 
-def _gui_log_tail(vm: SmokeVM, logbase: str, *, chars: int = 3000) -> str:
-    """Best-effort tail of a pfSense-upgrade GUI log (``<logbase>.txt``), for assertions/diagnostics."""
-    return vm.ssh("cat", f"{logbase}.txt").stdout[-chars:]
+def _gui_log_tail(vm: SmokeVM, logpath: str, *, chars: int = 3000) -> str:
+    """Best-effort tail of the pfSense-upgrade GUI log (the exact `-l` path), for assertions."""
+    return vm.ssh("cat", logpath).stdout[-chars:]
 
 
 @pytest.mark.timeout(900)  # install + terminal reinstall + GUI reinstall; budget ~15 min
@@ -133,7 +135,7 @@ def test_update_hooks_fire_and_are_gui_visible_on_reinstall(repo_vm: SmokeVM) ->
 
         h.set_update_hooks(vm, _visibility_hooks(token))
         h.clear_hook_markers(vm, token)
-        vm.ssh("/bin/rm", "-f", f"{GUI_LOG_REINSTALL}.txt", GUI_LOG_REINSTALL)
+        vm.ssh("/bin/rm", "-f", GUI_LOG_REINSTALL)
         assert not h.hook_marker_exists(vm, pre_marker), "pre marker present before reinstall (stale state?)"
         assert not h.hook_marker_exists(vm, post_marker), "post marker present before reinstall (stale state?)"
 
@@ -184,13 +186,12 @@ def test_update_hooks_fire_and_are_gui_visible_on_reinstall(repo_vm: SmokeVM) ->
 
         assert pre_line in gui_log, (
             f"the pre hook's stdout marker {pre_line!r} is MISSING from the GUI log "
-            f"({GUI_LOG_REINSTALL}.txt) — pfSense-upgrade tees pkg-static's stdout there and "
+            f"({GUI_LOG_REINSTALL}) — pfSense-upgrade tees pkg-static's stdout there and "
             f"drops stderr, so a hook whose output does not reach stdout is invisible to the "
             f"GUI:\n{gui_log}"
         )
         assert post_line in gui_log, (
-            f"the post hook's stdout marker {post_line!r} is MISSING from the GUI log "
-            f"({GUI_LOG_REINSTALL}.txt):\n{gui_log}"
+            f"the post hook's stdout marker {post_line!r} is MISSING from the GUI log ({GUI_LOG_REINSTALL}):\n{gui_log}"
         )
     finally:
         h.clear_update_hooks(vm)
@@ -258,7 +259,7 @@ def test_uninstall_runs_hook_tears_down_and_is_gui_visible(repo_vm: SmokeVM) -> 
         # ---- AND: pre/post visibility hooks configured ----------------------------- #
         h.set_update_hooks(vm, _visibility_hooks(token))
         h.clear_hook_markers(vm, token)
-        vm.ssh("/bin/rm", "-f", f"{GUI_LOG_DELETE}.txt", GUI_LOG_DELETE)
+        vm.ssh("/bin/rm", "-f", GUI_LOG_DELETE)
         assert not h.hook_marker_exists(vm, pre_marker), "pre marker present before uninstall (stale state?)"
         assert not h.hook_marker_exists(vm, post_marker), "post marker present before uninstall (stale state?)"
 
@@ -285,20 +286,19 @@ def test_uninstall_runs_hook_tears_down_and_is_gui_visible(repo_vm: SmokeVM) -> 
             f"AFTER uninstall: {domain!r} still resolved to the DNSBL VIP — teardown did not "
             f"remove the DNSBL block; got rcode={after.rcode!r} records={after.records!r}\n{diag}"
         )
-        teardown_grep = vm.ssh("/usr/bin/grep", "-F", _TEARDOWN_LINE, h.PFB_LOG).stdout
-        assert _TEARDOWN_LINE in teardown_grep, (
-            f"the pfB log does not show the teardown line {_TEARDOWN_LINE!r} after uninstall.\n{diag}"
+        assert _TEARDOWN_LINE in gui_log, (
+            f"the GUI log does not show the teardown line {_TEARDOWN_LINE!r} after uninstall — the "
+            f"pre-deinstall's update_status() output must reach the GUI-tailed log:\n{gui_log}"
         )
 
         # THEN: each hook's stdout marker reached the GUI log.
         assert pre_line in gui_log, (
             f"the pre hook's stdout marker {pre_line!r} is MISSING from the GUI log "
-            f"({GUI_LOG_DELETE}.txt) — pfSense-upgrade tees pkg-static's stdout there and drops "
+            f"({GUI_LOG_DELETE}) — pfSense-upgrade tees pkg-static's stdout there and drops "
             f"stderr, so a hook whose output does not reach stdout is invisible to the GUI:\n{gui_log}"
         )
         assert post_line in gui_log, (
-            f"the post hook's stdout marker {post_line!r} is MISSING from the GUI log "
-            f"({GUI_LOG_DELETE}.txt):\n{gui_log}"
+            f"the post hook's stdout marker {post_line!r} is MISSING from the GUI log ({GUI_LOG_DELETE}):\n{gui_log}"
         )
     finally:
         h.clear_update_hooks(vm)
