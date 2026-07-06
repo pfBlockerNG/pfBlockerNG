@@ -82,7 +82,7 @@ on:
         type: string
         default: "all"
       scope:
-        description: "impacted | full. Blank on a call = full (preserve existing callers like test.yml/release.yml)."
+        description: "impacted | full. Blank on a call = impacted (issue #906 — the callee sees the caller's event); test.yml/release.yml pass full explicitly."
         required: false
         type: string
         default: ""

@@ -376,6 +376,10 @@ jobs:
     uses: ./.github/workflows/ui-tests.yml
     with:
       tier: all
+      # Explicit (issue #906): a workflow_call callee sees the CALLER's event,
+      # so without this the scope ladder resolves `impacted` — min-CE leg only —
+      # not the full pre-release fan-out this job exists for.
+      scope: full
     secrets: inherit
 
   # ── 1c. Read version matrix ──────────────────────────────────────────────
