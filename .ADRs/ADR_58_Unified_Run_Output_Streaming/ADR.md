@@ -1,12 +1,15 @@
 # ADR-58: Stream a run's progress to STDOUT in a command context (generalise the #690 mirror)
 
-- **Status:** **Implemented (pending smoke test)** (2026-07-06) — authored + implemented on
-  `adr/58-unified-run-output-streaming` off `devel`. **Scope corrected 2026-07-06** after the live-VM
-  smoke gate proved two broader designs unworkable (see §5). The change that landed is modest: the
-  `pfb_logger()` stdout mirror, previously gated on a package lifecycle callback (#690), is generalised
-  to **any command/CLI context** (so a terminal run and the detached Run-Now daemon stream too) and
-  **narrowed away from** web-in-process and nested-dispatch callers. **Hooks are unchanged** — they keep
-  the #883 file-sink + live-tail model, because #662 forbids a hook writing to the run's captured pipe.
+- **Status:** **Accepted** (2026-07-06; landed in PR #889) — the live-VM hook/visibility smoke
+  (`test_smoke_hooks` incl. the timeout-kill + stream oracles, `test_hook_stream_visibility`,
+  `test_lifecycle_hook_visibility`) is **green on CE + Plus**. **Scope corrected 2026-07-06** after the
+  smoke rejected two broader designs (see §5). The change that landed is modest: `pfb_logger()`'s #690
+  stdout mirror, previously gated on a package lifecycle callback only, is **widened to fire also for an
+  interactive terminal** (`pfb_run_streams_to_stdout()` = `hook_lifecycle || pfb_stdout_is_terminal()`),
+  and does **not** fire when stdout is redirected to a log file it already writes (the cron tick, the
+  detached Run-Now, a nested extras dispatch) or for a web in-process caller. **Hooks are unchanged** —
+  they keep the #883 file-sink + live-tail model, because #662 forbids a hook writing to the run's
+  captured pipe.
 - **Date:** 2026-07-06
 - **Branch:** `adr/58-unified-run-output-streaming` (off **`devel`**).
 - **Component(s):**
