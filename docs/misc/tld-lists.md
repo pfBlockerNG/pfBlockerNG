@@ -42,8 +42,11 @@ so it never goes stale.
 
 - **Automated (weekly):** `.github/workflows/tld-refresh.yml` runs the script every Monday and,
   when the root zone has drifted, opens/updates a PR against `devel` from a bot-owned branch.
-  It never pushes to `devel`/`main`; the normal CI (Tier-A `ui_render`) gates the data change.
-  The auto-PR carries the `ui-tests` label so that guard runs and blocks.
+  It never pushes to `devel`/`main`. GitHub runs no automatic CI on a GITHUB_TOKEN-created PR
+  (and a dispatched run's checks never attach to its Checks tab), so the workflow dispatches
+  the real gates — the unit suite (`test.yml`) and Tier-A `ui_render` (`ui-tests.yml`) — onto
+  the branch head and posts a PR comment linking both runs (issue #902); merge once the linked
+  runs are green. The auto-PR carries the `ui-tests` label to mark it as UI-affecting.
 - **Manual:** from the repo root, `python3 scripts/misc/update_tld_lists.py` (rewrites the file)
   or `python3 scripts/misc/update_tld_lists.py --check` (exit 1 + a diff if out of date, no
   write). A manual refresh is otherwise a 6–12 month task, or whenever a major new gTLD batch
