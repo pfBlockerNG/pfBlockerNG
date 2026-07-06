@@ -1234,17 +1234,17 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 				} else {
 					$data = parse_url($input);
 					if (!in_array($data['scheme'], array('http', 'https', 'rsync', 'ftp'))) {
-						pfb_logger("{$header} Invalid URL Scheme [ " . htmlspecialchars($input) . " ]", 6);
+						pfb_logger("{$header} Invalid URL Scheme [ " . htmlspecialchars(pfb_redact_url($input)) . " ]", 6);
 						return FALSE;
 					}
 				}
 
 				$validate_list = '';
 				if (!$data || !is_array($data)) {
-					pfb_logger("{$header} Invalid URL (missing data) [ " . htmlspecialchars($input) . " ]", 6);
+					pfb_logger("{$header} Invalid URL (missing data) [ " . htmlspecialchars(pfb_redact_url($input)) . " ]", 6);
 					return FALSE;
 				} elseif (!isset($data['host']) || empty($data['host'])) {
-					pfb_logger("{$header} Invalid URL (missing hostname) [ " . htmlspecialchars($input) . " ]", 6);
+					pfb_logger("{$header} Invalid URL (missing hostname) [ " . htmlspecialchars(pfb_redact_url($input)) . " ]", 6);
 					return FALSE;
 				} elseif (is_ipaddr($data['host'])) {
 					$validate_list = array(array('type' => 'IP', 'data' => $data['host']));
@@ -1295,7 +1295,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 				}
 				else {
 					// Cannot resolve host
-					pfb_logger("{$header} Invalid URL (cannot resolve) [ " . htmlspecialchars($input) . " ]", 6);
+					pfb_logger("{$header} Invalid URL (cannot resolve) [ " . htmlspecialchars(pfb_redact_url($input)) . " ]", 6);
 					return FALSE;
 				}
 
@@ -1318,7 +1318,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 					}
 
 					if ($reference == 'alerts refresh') {
-						pfb_logger("{$header} Invalid URL (alerts tab) [ " . htmlspecialchars($input) . " ]", 6);
+						pfb_logger("{$header} Invalid URL (alerts tab) [ " . htmlspecialchars(pfb_redact_url($input)) . " ]", 6);
 					}
 					return FALSE;
 				}
@@ -1335,7 +1335,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 					if ($path == '/') {
 						return TRUE;
 					}
-					pfb_logger("{$header} Invalid URL (not allowed) [ " . htmlspecialchars($input) . " ]", 6);
+					pfb_logger("{$header} Invalid URL (not allowed) [ " . htmlspecialchars(pfb_redact_url($input)) . " ]", 6);
 					return FALSE;
 				}
 
@@ -1348,7 +1348,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 				$pinned	= '';
 				if (pfb_feed_filter_enabled() &&
 				    !pfb_feed_host_allowed($data['host'], $reason, $pinned)) {
-					pfb_logger("{$header} Invalid URL ({$reason}) [ " . htmlspecialchars($input) . " ]", 6);
+					pfb_logger("{$header} Invalid URL ({$reason}) [ " . htmlspecialchars(pfb_redact_url($input)) . " ]", 6);
 					return FALSE;
 				}
 				return TRUE;
@@ -1377,7 +1377,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 				// exist (or cannot be resolved) — reject it.
 				$real = realpath($input);
 				if ($real === FALSE) {
-					pfb_logger("\n[PFB_FILTER - {$type}] Invalid URL (cannot resolve path) [ " . htmlspecialchars($input) . " ]", 6);
+					pfb_logger("\n[PFB_FILTER - {$type}] Invalid URL (cannot resolve path) [ " . htmlspecialchars(pfb_redact_url($input)) . " ]", 6);
 					return FALSE;
 				}
 
@@ -1386,7 +1386,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 				$base = basename($real);
 				if ($base === '' || $base === '.' || $base === '..' ||
 				    strpbrk($base, '/\\') !== FALSE) {
-					pfb_logger("\n[PFB_FILTER - {$type}] Invalid URL (not allowed2) [ " . htmlspecialchars($input) . " ]", 6);
+					pfb_logger("\n[PFB_FILTER - {$type}] Invalid URL (not allowed2) [ " . htmlspecialchars(pfb_redact_url($input)) . " ]", 6);
 					return FALSE;
 				}
 
@@ -1398,7 +1398,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 					return TRUE;
 				}
 			}
-			pfb_logger("\n[PFB_FILTER - {$type}] Invalid URL (not allowed2) [ " . htmlspecialchars($input) . " ]", 6);
+			pfb_logger("\n[PFB_FILTER - {$type}] Invalid URL (not allowed2) [ " . htmlspecialchars(pfb_redact_url($input)) . " ]", 6);
 			return FALSE;
 			break;
 		case PFB_FILTER_WORD:
@@ -9779,6 +9779,48 @@ function pfb_rsync_pin_url($list_url, $ip) {
 }
 
 
+// Issue #890: redact the query string and userinfo ('user:pass@') from a feed/
+// download URL before it is written to any log -- either can carry a credential,
+// and log files (including extras.log) ship inside pfSense support bundles.
+// scheme/host/port/path are kept so the log line stays useful for diagnosing a
+// failed download. A well-formed http(s)/ftp/rsync:// URL is rebuilt from
+// parse_url() (userinfo is simply dropped by not carrying it over; the query,
+// when present, is replaced with a '[redacted]' marker). Anything parse_url()
+// can't make sense of as a URL (a malformed input, or pfBlockerNG's own
+// '[user@]host::module' rsync shorthand) falls back to a regex strip -- when in
+// doubt this over-redacts rather than risk leaking a secret.
+function pfb_redact_url($url) {
+	if (!is_string($url) || $url === '') {
+		return (string) $url;
+	}
+
+	$parts = parse_url($url);
+	if (is_array($parts) && !empty($parts['host'])) {
+		$scheme		= $parts['scheme'] ?? '';
+		$redacted	= ($scheme !== '' ? "{$scheme}://" : '//') . $parts['host'];
+		if (isset($parts['port'])) {
+			$redacted .= ":{$parts['port']}";
+		}
+		$redacted .= $parts['path'] ?? '';
+		if (isset($parts['query'])) {
+			$redacted .= '?[redacted]';
+		}
+		return $redacted;
+	}
+
+	// Fallback: strip a leading '[scheme://]user[:pass]@' userinfo prefix,
+	// then truncate at the first '?' -- covers malformed URLs and the bare
+	// rsync '[user@]host::module' shorthand (parse_url reports no host for
+	// either, so both land here).
+	$redacted	= preg_replace('#(^|//)[^\s/@]+@#', '$1', $url, 1) ?? $url;
+	$qpos		= strpos($redacted, '?');
+	if ($qpos !== FALSE) {
+		$redacted = substr($redacted, 0, $qpos) . '?[redacted]';
+	}
+	return $redacted;
+}
+
+
 // Function to download feeds
 //
 // Optional $response_meta — when a non-NULL reference is passed (detector probe mode), it is
@@ -10078,7 +10120,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 						}
 						else {
 							if ($retries == 3) {
-								$log = curl_error($ch) . " |{$head_download}|{$list_download}| Retry [{$retries}] in 5 seconds...\n";
+								$log = curl_error($ch) . " |{$head_download}|" . pfb_redact_url($list_download) . "| Retry [{$retries}] in 5 seconds...\n";
 							} else {
 								$log = curl_error($ch) . " Retry [{$retries}] in 5 seconds...\n";
 							}
@@ -10435,7 +10477,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			// "corrupt archive" the structural probe would otherwise report (ADR-45).
 			$missing_7z = pfb_archive_missing_tool($file_type);
 			if ($missing_7z !== NULL) {
-				pfb_logger("\n[pfb_download] Cannot process {$file_type} feed: '{$missing_7z}' is not installed. Install the 7-Zip package (pkg install 7-zip) to use 7z-compressed feeds. Skipping [" . htmlspecialchars($list_url) . "]", 2);
+				pfb_logger("\n[pfb_download] Cannot process {$file_type} feed: '{$missing_7z}' is not installed. Install the 7-Zip package (pkg install 7-zip) to use 7z-compressed feeds. Skipping [" . htmlspecialchars(pfb_redact_url($list_url)) . "]", 2);
 				unlink_if_exists($file_download);
 				return FALSE;
 			}
@@ -10519,16 +10561,16 @@ function pfb_download_failure($alias, $header, $pfbfolder, $list_url, $format, $
 	// Re-evaluate URL
 	if ($format == 'whois') {
 		if (empty(pfb_filter($list_url, PFB_FILTER_DOMAIN, 'pfb_download_failure'))) {
-			pfb_logger("\n Invalid WHOIS. Terminating Download! [ {$list_url} ]\n", 1);
+			pfb_logger("\n Invalid WHOIS. Terminating Download! [ " . pfb_redact_url($list_url) . " ]\n", 1);
 		}
 	}
 	elseif ($format == 'asn') {
 		if (empty(pfb_filter($list_url, PFB_FILTER_ALNUM, 'pfb_download_failure'))) {
-			pfb_logger("\n Invalid ASN. Terminating Download! [ {$list_url} ]\n", 1);
+			pfb_logger("\n Invalid ASN. Terminating Download! [ " . pfb_redact_url($list_url) . " ]\n", 1);
 		}
 	}
 	elseif (!pfb_filter($list_url, PFB_FILTER_URL, 'pfb_download_failure')) {
-		pfb_logger("\n Invalid URL. Terminating Download! [ {$list_url} ]\n", 1);
+		pfb_logger("\n Invalid URL. Terminating Download! [ " . pfb_redact_url($list_url) . " ]\n", 1);
 	}
 	else {
 		// Determine if URL is a localfile
