@@ -324,6 +324,22 @@ def test_validate_top1m_flags_staleness_only_once_last_modified_ages_past_the_li
     assert "35 days old" in reasons[0]
 
 
+# A ~5-month-old Last-Modified: past the old 30-day default, well within the new
+# 6-month one. A provider that refreshes only monthly/quarterly (e.g. DomCop) is
+# not dead at this age.
+_WITHIN_SIX_MONTHS_LM = "Fri, 06 Feb 2026 00:00:00 GMT"  # 150 days before _NOW
+
+
+def test_validate_top1m_default_staleness_window_is_six_months_not_thirty_days() -> None:
+    # FAIL-BEFORE/PASS-AFTER for the 30 -> 180 day default bump: this calls
+    # validate_top1m WITHOUT max_age_days, so it exercises the MAX_AGE_DAYS
+    # default. A 150-day-old feed is stale under the old 30-day default (test
+    # fails) and fresh under the new 6-month one (test passes).
+    rows: list[tuple[str, ...]] = [(str(i), f"example{i}.com") for i in range(10)]
+    body = _zip_of(rows)
+    assert ctp.validate_top1m(body, _WITHIN_SIX_MONTHS_LM, _NOW, min_rows=10) == []
+
+
 # --- 'plain' container (Majestic/Cloudflare's real shape): no zip wrapper --- #
 
 

@@ -55,9 +55,12 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 # A real Top1M list is ~1M rows; 100k is a generous floor that still rejects a
-# truncated/error payload. Lists update ~daily; 30 days is generously frozen.
+# truncated/error payload. Refresh cadence varies by provider -- some publish
+# ~daily, others only monthly/quarterly (e.g. DomCop) -- so the staleness cutoff
+# is a deliberately generous 6 months: below that is too soon to declare a feed
+# dead, past it the source has almost certainly stopped updating.
 MIN_ROWS = 100_000
-MAX_AGE_DAYS = 30
+MAX_AGE_DAYS = 180
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DESCRIPTOR_FILE = REPO_ROOT / "src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
