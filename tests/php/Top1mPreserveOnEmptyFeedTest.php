@@ -47,6 +47,16 @@ use PHPUnit\Framework\TestCase;
  * ADR-59 P4 addendum: the two live non-Tranco/Cisco providers (DomCop, Majestic) added
  * by this phase -- their REAL sample shape parses correctly via the registered
  * descriptor, and a wrong domain_col genuinely mis-reads (fail-before/pass-after).
+ *
+ * ADR-59 P5 addendum: Cloudflare Radar (token-authenticated) parses its REAL shape too
+ * (a single 'domain' column, no rank) -- this exposed a genuine latent bug the DomCop/
+ * Majestic tests couldn't: the generic content filter required a comma on every data
+ * line, but a single-column CSV line has none, so every Cloudflare row was silently
+ * skipped regardless of domain_col. Fixed (pfblockerng.inc) by only requiring a comma
+ * when domain_col > 0. A missing/invalid top1m_token means the download never writes a
+ * fresh top-1m.csv, which hits the SAME generic "csv absent -> preserve + warn" path
+ * every provider's download failure already hits (no Cloudflare-specific branch exists
+ * to bypass) -- proven below alongside a direct "no token in any log" assertion.
  */
 #[CoversFunction('pfblockerng_top1m')]
 final class Top1mPreserveOnEmptyFeedTest extends TestCase
@@ -499,5 +509,89 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 			'the registered DomCop descriptor must extract Domain from index 1'
 		);
 		$this->assertStringContainsString('Parsed 2 lines | Found 2 of 1000', $this->readMainLog());
+	}
+
+	/**
+	 * ADR-59 P5 -- pfblockerng_top1m() parses Cloudflare Radar's REAL CSV shape (a
+	 * SINGLE 'domain' column, no rank -- confirmed against Cloudflare's own docs during
+	 * this phase, NOT the ADR's original 2-column guess) via its registered descriptor
+	 * (domain_col 0, header skipped).
+	 *
+	 * Unlike the DomCop/Majestic column-index bug above, this shape exposed a DIFFERENT
+	 * latent bug: the generic content filter demanded BOTH a '.' AND a ',' on every data
+	 * line (a guard against a prose/error body that would otherwise reach the parser).
+	 * A single-column CSV line has NO comma at all (nothing to delimit), so every one of
+	 * Cloudflare's real data lines was silently skipped regardless of domain_col -- the
+	 * whitelist came out EMPTY even though the fixture data is genuinely well-formed.
+	 * FAIL-BEFORE/PASS-AFTER: manually verified by reverting just the comma-relaxation
+	 * hunk in pfblockerng.inc (`git stash`) and re-running this exact test -- it goes RED
+	 * (empty whitelist, same as the DomCop/Majestic BEFORE runs above); restoring the fix
+	 * makes it GREEN. This test's own body only exercises the (permanent) AFTER state --
+	 * see RESULTS/05_Results.txt for the stash verification transcript.
+	 */
+	public function testCloudflareRealShapeSampleParsesViaItsDescriptorAndTheSingleColumnCommaFix(): void
+	{
+		// Given: a real-shape Cloudflare Radar sample -- single 'domain' column header,
+		// two real '.com' domains, no rank/second column (no comma anywhere in the data).
+		$csv = "domain\n"
+			. "google.com\n"
+			. "facebook.com\n";
+		$this->assertNotFalse(file_put_contents($this->csvPath(), $csv), 'setup: real-shape Cloudflare Radar sample');
+
+		// When: the actual registered Cloudflare descriptor (domain_col 0, header skipped).
+		pfblockerng_top1m(pfb_top1m_providers()[Top1mSource::Cloudflare->value]);
+
+		// Then: both real domains are correctly extracted from the single column despite
+		// carrying no comma -- proves the comma-requirement relaxation for domain_col 0.
+		$this->assertSame(
+			".google.com,,\n,google.com,,\n,www.google.com,,\n.facebook.com,,\n,facebook.com,,\n,www.facebook.com,,\n",
+			file_get_contents($this->whitelistPath()),
+			'the registered Cloudflare descriptor must extract the single-column domain despite no comma in the data'
+		);
+		$this->assertStringContainsString('Parsed 2 lines | Found 2 of 1000', $this->readMainLog());
+	}
+
+	/**
+	 * ADR-59 P5 -- safe-on-missing/invalid-token behaviour (ADR §4 requirement 3): when
+	 * Cloudflare's download fails (missing/invalid top1m_token -> pfb_top1m_auth_headers()
+	 * returns no Authorization header -> pfb_download() sends no auth and the request is
+	 * rejected -> top-1m.csv is never written/refreshed), pfblockerng_top1m() hits the SAME
+	 * generic "csv absent -> preserve + warn" path every other provider's download failure
+	 * already hits (see testAbsentCsvPreservesPriorWhitelistAndWarns above) -- there is no
+	 * Cloudflare-specific failure branch to bypass. This is the Cloudflare-scoped proof of
+	 * that reuse, plus a DIRECT "no token in any log" assertion: pfblockerng_top1m() never
+	 * reads $pfb['top1m_token'] or any header at all, so a fake secret standing in for a
+	 * real token genuinely cannot appear in either log -- asserted, not assumed.
+	 */
+	public function testMissingOrInvalidCloudflareTokenPreservesWhitelistAndLogsNoToken(): void
+	{
+		// Given: a prior good whitelist (a previous successful run/provider) and top-1m.csv
+		// ABSENT -- exactly what a failed Cloudflare download (no/invalid token) leaves
+		// behind (pfb_download() never wrote a fresh file).
+		$priorContent = ".oldsite.com,,\n,oldsite.com,,\n,www.oldsite.com,,\n";
+		$this->assertNotFalse(file_put_contents($this->whitelistPath(), $priorContent), 'setup: prior good whitelist');
+		$this->assertFileDoesNotExist($this->csvPath(), 'before-state: no top-1m.csv (simulates a failed download)');
+
+		// A fake secret standing in for a real Cloudflare token, so the log-scan
+		// assertions below are a genuine check rather than a vacuous one.
+		$fakeSecretToken = 'sk-live-should-never-appear-in-any-log-0xDEADBEEF';
+
+		// When: the Cloudflare descriptor is active but top-1m.csv never arrived.
+		pfblockerng_top1m(pfb_top1m_providers()[Top1mSource::Cloudflare->value]);
+
+		// Then: the prior whitelist is untouched and a warning was logged (same generic
+		// path as testAbsentCsvPreservesPriorWhitelistAndWarns)...
+		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()),
+			'a missing top-1m.csv (failed Cloudflare download) must preserve the prior whitelist');
+		$this->assertStringContainsString('TOP1M conversion Failed', $this->readErrLog());
+
+		// ...and NO log (main or error) contains the token -- pfblockerng_top1m() never
+		// reads $pfb['top1m_token'] or any header; the only code that ever touches the raw
+		// token is pfb_top1m_auth_headers() (Top1mAuthHeadersTest.php), which has no
+		// pfb_logger call in its body at all.
+		$this->assertStringNotContainsString($fakeSecretToken, $this->readMainLog(),
+			'the TOP1M main log must never contain a token, even a rejected/missing one');
+		$this->assertStringNotContainsString($fakeSecretToken, $this->readErrLog(),
+			'the TOP1M error log must never contain a token, even a rejected/missing one');
 	}
 }

@@ -195,7 +195,19 @@ if (is_dir("{$indexdir}")) {
 $options_dnsbl_webpage_cnt = count($options_dnsbl_webpage) ?: '1';
 
 $options_alexa_type		= [ 'tranco' => 'Tranco TOP1M', 'cisco' => 'Cisco Umbrella TOP1M',
-					    'domcop' => 'DomCop TOP1M', 'majestic' => 'Majestic Million TOP1M' ];
+					    'domcop' => 'DomCop TOP1M', 'majestic' => 'Majestic Million TOP1M',
+					    'cloudflare' => 'Cloudflare Radar' ];
+
+// ADR-59 P5: providers whose 'auth' needs the top1m_token field, derived from the
+// descriptor table so a future token provider needs no JS edit -- the JS toggle
+// below shows/hides the masked token field based on the selected provider.
+$pfb_top1m_token_providers = [];
+foreach (pfb_top1m_providers() as $pfb_top1m_id => $pfb_top1m_provider_row) {
+	if (is_array($pfb_top1m_provider_row['auth']) && !empty($pfb_top1m_provider_row['auth']['header'])) {
+		$pfb_top1m_token_providers[] = $pfb_top1m_id;
+	}
+}
+$pfb_top1m_token_providers_json = json_encode($pfb_top1m_token_providers);
 
 $options_alexa_count		= [	'500' => 'Top 500', '1000' => 'Top 1k', '2000' => 'Top 2k', '5000' => 'Top 5k', '10000' => 'Top 10k',
 					'25000' => 'Top 25k', '50000' => 'Top 50k', '75000' => 'Top 75k', '100000' => 'Top 100k', '250000' => 'Top 250k',
@@ -618,6 +630,17 @@ if ($_POST) {
 			$input_errors[] = 'DNSBL IDN Blocking mode is invalid!';
 		}
 
+		// ADR-59 P5: top1m_token is a masked, write-only field -- a blank POST means
+		// "leave the stored token unchanged" (never overwrite/clear it), so only a
+		// NON-EMPTY submission is validated. PFB_FILTER_WORD (used by asn_token) would
+		// reject a real base64url/JWT token -- PFB_FILTER_TOKEN accepts that charset.
+		// Reference 'top1m_token' suppresses pfb_filter()'s failed-validation log line
+		// -- the token itself must never reach a log, even a rejected one.
+		$pfb_top1m_token_post = trim((string) ($_POST['top1m_token'] ?? ''));
+		if ($pfb_top1m_token_post !== '' && empty(pfb_filter($pfb_top1m_token_post, PFB_FILTER_TOKEN, 'top1m_token'))) {
+			$input_errors[] = 'DNSBL TOP1M Token is invalid!';
+		}
+
 		// Validate customlists
 		foreach (array(	'pfb_regex_list'	=> 'regex',
 				'pfb_noaaaa_list'	=> 'domain',
@@ -840,6 +863,16 @@ if ($_POST) {
 				unlink_if_exists("{$pfb['dbdir']}/pfbalexawhitelist.txt");
 			}
 			$pfb['dconfig']['alexa_type']		= $_POST['alexa_type']							?: 'tranco';
+
+			// top1m_token: masked/write-only -- blank means "keep the existing stored
+			// token" (never clear it via a blank submit, e.g. an unrelated settings
+			// save re-posting this always-blank-rendered field). $pfb['dconfig']
+			// ['top1m_token'] already holds the current stored value from the
+			// readSection() at the top of this page, so skip the assignment entirely
+			// when the field was left blank.
+			if ($pfb_top1m_token_post !== '') {
+				$pfb['dconfig']['top1m_token'] = $pfb_top1m_token_post;
+			}
 
 			// Reset TOP1M Whitelist on user changes
 			if ($pfb['dconfig']['alexa_count'] != $_POST['alexa_count'] ||
@@ -3222,6 +3255,11 @@ $top1m_text = 'The TOP1M feed can be used to whitelist the most popular Domain n
 			<li><a target="_blank" href="https://majestic.com/reports/majestic-million">Majestic Million TOP1M</a> --
 				distributed under the <strong>Creative Commons Attribution (CC BY) 3.0</strong> License by:
 				<a target="_blank" href="https://majestic.com">Majestic</a>, attribution required.</li>
+			<li><a target="_blank" href="https://radar.cloudflare.com/domains">Cloudflare Radar</a> --
+				distributed under the <strong>Creative Commons Attribution-NonCommercial (CC BY-NC) 4.0</strong> License by:
+				<a target="_blank" href="https://www.cloudflare.com">Cloudflare</a>, non-commercial use, attribution required.
+				Requires a free <a target="_blank" href="https://developers.cloudflare.com/fundamentals/api/get-started/create-token/">Cloudflare API Token</a>
+				entered below.</li>
 		</ul>
 		To use this feature, select the number of \'Top Domains\' to whitelist. You can also \'include\' which TLDs to whitelist.
 
@@ -3249,6 +3287,21 @@ $section->addInput(new Form_Select(
 	$pconfig['alexa_type'],
 	$options_alexa_type
 ))->setHelp('Default: Tranco TOP1M. To change the TOP1M type, select the type and Save, then run an Update -- this clears and re-fetches the list.');
+
+// ADR-59 P5: masked, write-only token for a token-authenticated provider (currently only
+// Cloudflare Radar). Never populated from the stored value -- $pconfig['top1m_token'] is
+// only ever set here from a redisplayed $_POST on a validation error (like every other
+// field), never from PfbConfig::read(), so a plain GET always renders this field blank.
+// The JS toggle below (enable_top1m_token) shows it only for a provider whose 'auth' needs it.
+$section->addInput(new Form_Input(
+	'top1m_token',
+	gettext('API Token'),
+	'password',
+	$pconfig['top1m_token'] ?? '',
+	['placeholder' => 'Enter your Cloudflare Radar API Token -- leave blank to keep the current token']
+))->setHelp('Required for Cloudflare Radar. The stored token is never displayed here; leaving this field blank on Save keeps '
+		. 'the existing token unchanged.')
+  ->setAttribute('autocomplete', 'off');
 
 $section->addInput(new Form_Select(
 	'alexa_count',
@@ -3615,6 +3668,14 @@ function enable_idn_mode() {
 	}
 }
 
+// ADR-59 P5: providers whose 'auth' needs a token, derived server-side from the
+// descriptor table (pfb_top1m_providers()) -- a future token provider needs no JS edit.
+var pfb_top1m_token_providers = <?=$pfb_top1m_token_providers_json?>;
+
+function enable_top1m_token() {
+	hideInput('top1m_token', pfb_top1m_token_providers.indexOf($('#alexa_type').val()) === -1);
+}
+
 function enable_python_regex() {
 	if ($('#pfb_regex').prop('checked')) {
 		$('#Python_regex_list').show();
@@ -3671,6 +3732,11 @@ events.push(function(){
 		enable_idn_mode();
 	});
 	enable_idn_mode();
+
+	$('#alexa_type').change(function() {
+		enable_top1m_token();
+	});
+	enable_top1m_token();
 
 	$('#pfb_regex').click(function() {
 		enable_python_regex();

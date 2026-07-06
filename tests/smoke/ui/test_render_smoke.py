@@ -653,16 +653,17 @@ def test_dnsbl_control_fields_render(webui: WebUI, php_error_log_guard: PhpError
 
 
 def test_dnsbl_top1m_source_options_exclude_alexa(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
-    """The TOP1M 'Type' select renders the four live sources (Tranco, Cisco
-    Umbrella, DomCop, Majestic Million — the latter two added ADR-59 Phase 4) —
-    the dead Alexa TOP1M option (#872) is dropped from the page (#877), so a
-    regression that resurrects the option, or drops a live one, is caught at
-    the render tier. Majestic's CC BY 3.0 attribution note (required by its
-    licence) must also render.
+    """The TOP1M 'Type' select renders the five live sources (Tranco, Cisco
+    Umbrella, DomCop, Majestic Million — added ADR-59 Phase 4 — and Cloudflare
+    Radar — added ADR-59 Phase 5) — the dead Alexa TOP1M option (#872) is dropped
+    from the page (#877), so a regression that resurrects the option, or drops a
+    live one, is caught at the render tier. Majestic's CC BY 3.0 and Cloudflare's
+    CC BY-NC attribution notes (required by their licences) must also render, along
+    with the masked, write-only top1m_token field Cloudflare needs.
 
-    Asserts the page passes the clean-render oracle AND that all four live
-    option labels plus the Majestic attribution text are present, while the
-    removed 'Alexa TOP1M' label and its ``value="alexa"`` option are absent
+    Asserts the page passes the clean-render oracle AND that all five live option
+    labels, both attribution notes, and the masked token field are present, while
+    the removed 'Alexa TOP1M' label and its ``value="alexa"`` option are absent
     from the body.
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
@@ -670,9 +671,18 @@ def test_dnsbl_top1m_source_options_exclude_alexa(webui: WebUI, php_error_log_gu
     result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Configuration",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
-    for needle in ("Tranco TOP1M", "Cisco Umbrella TOP1M", "DomCop TOP1M", "Majestic Million TOP1M"):
+    for needle in (
+        "Tranco TOP1M",
+        "Cisco Umbrella TOP1M",
+        "DomCop TOP1M",
+        "Majestic Million TOP1M",
+        "Cloudflare Radar",
+    ):
         assert needle in body, f"DNSBL page is missing the TOP1M source option {needle!r}"
     assert "CC BY" in body and "3.0" in body, "DNSBL page is missing the Majestic CC BY 3.0 attribution note"
+    assert "CC BY-NC" in body and "4.0" in body, "DNSBL page is missing the Cloudflare CC BY-NC 4.0 attribution note"
+    assert 'name="top1m_token"' in body, "DNSBL page is missing the top1m_token field"
+    assert 'type="password"' in body, "DNSBL page's top1m_token field must be masked (type=password)"
     for absent in ("Alexa TOP1M", 'value="alexa"'):
         assert absent not in body, f"DNSBL page still renders the dropped Alexa TOP1M option ({absent!r})"
 

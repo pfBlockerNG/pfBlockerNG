@@ -123,6 +123,8 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngdnsblsettings/config/0/alexa_type',
 		'installedpackages/pfblockerngdnsblsettings/config/0/alexa_count',
 		'installedpackages/pfblockerngdnsblsettings/config/0/alexa_inclusion',
+		// ADR-59 P5: masked Cloudflare Radar Bearer token
+		'installedpackages/pfblockerngdnsblsettings/config/0/top1m_token',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache',
 		'installedpackages/pfblockerngdnsblsettings/config/0/global_log',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_lenient',

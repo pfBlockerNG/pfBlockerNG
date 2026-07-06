@@ -31,10 +31,20 @@ field, reasoning about rollback/downgrade, or checking the foreign-key exclusion
     vocabulary spans `config.xml`, the ini, and the Python `IdnMode` enum.
   - **`alexa_type` → `Top1mSource`** (issue #877 review, registry adapters
     `pfb_cfg_top1m_source_read/write`): tokens `'tranco'` (default) / `'cisco'` / `'domcop'` /
-    `'majestic'` (the latter two added ADR-59 P4). The legacy `'alexa'` token (the dead Alexa
+    `'majestic'` (added ADR-59 P4) / `'cloudflare'` (added ADR-59 P5, the first
+    token-authenticated provider). The legacy `'alexa'` token (the dead Alexa
     TOP1M service, #872) is READ-only — `fromLegacy()` coalesces it (and any unknown/absent
     token) to `Tranco`, and a write never re-emits it. The stored config key stays `alexa_type`
     — no rename.
+  - **`top1m_token`** (ADR-59 P5, plain string — `NULL`/`NULL` adapters): a masked,
+    write-only credential (currently consumed only by the `cloudflare` `alexa_type`,
+    ignored by every other provider), fed to `pfb_download()` via `pfb_top1m_auth_headers()`
+    and the ADR-59 P3 header-auth plumbing (`Authorization: Bearer <token>`). Default `''`.
+    Never echoed back on GET (`pfblockerng_dnsbl.php`); a blank POST preserves the
+    existing stored value rather than clearing it — the field has no "off" state to
+    round-trip, just identity pass-through like any other plain field. Validated on POST
+    by `PFB_FILTER_TOKEN` (`pfblockerng.inc`) — a base64url/JWT charset
+    (`[A-Za-z0-9._~+/=-]`), NOT `PFB_FILTER_WORD` (which would reject a real token).
 - **Python** (`pfb_unbound.py`): the **`IdnMode` enum** shares that vocabulary — `All = 'on'`,
   `Confusable = 'confusable'`, `Off = 'off'` — and reads the ini `idn_mode` token directly (the
   legacy `python_idn` fallback is retained for a config predating the key). Toggle/lenient enums
@@ -87,7 +97,7 @@ at/after that version; it is a per-field scope marker, not a migration.
 | `lenient`           | `{'on', 'off', ''}` — `''` is a LEGACY READ token (pre-ADR-22 absent); write emits `'off'` |
 | `idn`               | write `{'on' (=All), 'confusable', 'off'}`; legacy reads `'all'`→Off, `''`→Off (4.0.0-alpha `'all'` not carried) |
 | `alias_delta_mode`  | `{'auto', 'delta', 'replace'}` — unknown/absent token reads as `'auto'` (ADR-40, since 4.0.0) |
-| `top1m_source`      | write `{'tranco' (default), 'cisco', 'domcop', 'majestic'}` (ADR-59 P4); legacy read `'alexa'`→Tranco (dead service, #872), never re-emitted |
+| `top1m_source`      | write `{'tranco' (default), 'cisco', 'domcop', 'majestic', 'cloudflare'}` (domcop/majestic ADR-59 P4, cloudflare ADR-59 P5); legacy read `'alexa'`→Tranco (dead service, #872), never re-emitted |
 | `plain`             | identity — any stored value passes through unchanged |
 
 **Excluded fields** — none. `pfb_idn` was previously excluded (`NULL`/`NULL` identity adapters);

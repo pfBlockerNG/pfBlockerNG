@@ -426,6 +426,59 @@ def test_dnsbl_idn_mode_select_round_trips_all_modes(
         _post_and_get(webui, smoke_vm, page, {"pfb_idn": original or "off"}, cfg)
 
 
+def test_dnsbl_top1m_token_masked_field_persists_and_is_never_echoed(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    dnsbl_vip_ready: None,
+) -> None:
+    """The masked ``top1m_token`` field (ADR-59 P5) persists via config.xml -- the
+    HTTP body is never proof of a save (ADR §1 fact 3) -- and is a WRITE-ONLY field
+    with a "blank preserves" contract distinct from every ToggleFlow above:
+
+    * a real-looking token POSTed is stored verbatim in config.xml (transition 1);
+    * the very next GET's raw HTML never echoes it back (masked, write-only);
+    * a BLANK top1m_token POSTed afterwards -- simulating an ordinary settings save
+      that didn't touch this field, since the form always renders it blank -- must
+      PRESERVE the already-stored token rather than clearing it (transition 2, the
+      safe-on-missing-token contract: a user saving unrelated settings must never
+      silently wipe their Cloudflare Radar token).
+
+    The web form cannot blank/clear this field by design, so the original value is
+    restored directly via the config API in `finally` (mirrors the `pfSsh.php`
+    restore idiom already used by ``test_alerts_render_verify.py``), leaving the
+    box clean for the other flows on this session-scoped VM.
+    """
+    page = "/pfblockerng/pfblockerng_dnsbl.php"
+    cfg = "installedpackages/pfblockerngdnsblsettings/config/0/top1m_token"
+    token = "cf-test-token.ABC123~_+/=-9"
+    original = helpers.config_get(smoke_vm, cfg)
+    try:
+        # WHEN: a real-looking token is posted -- THEN: it persists verbatim.
+        got = _post_and_get(webui, smoke_vm, page, {"top1m_token": token}, cfg)
+        assert got == token, f"top1m_token should persist the posted value, got {got!r}"
+
+        # THEN: the very next GET never echoes it back in the raw HTML (write-only).
+        resp = webui.get(page)
+        assert token not in resp.text, "top1m_token must never be echoed back on GET (write-only masked field)"
+
+        # WHEN: a blank top1m_token rides a save (the form always renders this field
+        # blank, so this is what EVERY unrelated settings save actually posts).
+        got_after_blank = _post_and_get(webui, smoke_vm, page, {"top1m_token": ""}, cfg)
+        # THEN: unchanged -- a blank submit must never clear an already-stored token.
+        assert got_after_blank == token, (
+            f"a blank top1m_token POST must preserve the existing stored token, got {got_after_blank!r}"
+        )
+    finally:
+        # Restore directly via the config API -- the web form cannot blank this field
+        # by design (proven above), so a normal POST can't be used for cleanup.
+        restore = helpers.php_eval(
+            smoke_vm,
+            f"config_set_path({helpers._php_str(cfg)}, {helpers._php_str(original)});\n"
+            "write_config('ADR-59 P5 smoke: restore top1m_token');\necho 'OK';",
+        )
+        assert "OK" in restore.stdout, f"failed to restore top1m_token: {restore.stdout!r}"
+
+
 # --------------------------------------------------------------------------- #
 # General settings (installedpackages/pfblockerng/config/0)
 # --------------------------------------------------------------------------- #

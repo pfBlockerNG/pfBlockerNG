@@ -135,6 +135,76 @@ final class PfbFilterTest extends TestCase
 		$this->assertSame($expected, pfb_filter($input, PFB_FILTER_NUM));
 	}
 
+	public static function tokenProvider(): array
+	{
+		return [
+			// A realistic base64url/JWT-shaped credential (dots, dash, tilde, plus, slash,
+			// equals -- the exact punctuation PFB_FILTER_WORD would reject).
+			'realistic token'  => ['cf-abc123._~+/=-XYZ', 'cf-abc123._~+/=-XYZ'],
+			'too short'        => ['short12', ''],
+			'space rejected'   => ['has a space', ''],
+			'colon rejected'   => ['bad:token', ''],
+			'quote rejected'   => ["bad'token", ''],
+			'too long'         => [str_repeat('a', 513), ''],
+			'exactly max ok'   => [str_repeat('a', 512), str_repeat('a', 512)],
+			'exactly min ok'   => ['a1234567', 'a1234567'],
+		];
+	}
+
+	#[DataProvider('tokenProvider')]
+	public function testTokenFilter(string $input, string $expected): void
+	{
+		$this->assertSame($expected, pfb_filter($input, PFB_FILTER_TOKEN));
+	}
+
+	/**
+	 * ADR-59 P5 (security): a token rejected by PFB_FILTER_TOKEN must NEVER be logged --
+	 * not even at debug level -- when the caller identifies itself via the 'top1m_token'
+	 * reference. This is the load-bearing proof for the pfb_filter() exceptions list
+	 * (pfblockerng.inc ~1655) this phase added 'top1m_token' to, alongside the
+	 * pre-existing 'DNSBL_Download' exception. A DIFFERENT reference (the normal case
+	 * for every other pfb_filter() caller) still logs the reject -- proving the
+	 * suppression is genuinely conditional on the reference, not a side effect of
+	 * PFB_FILTER_TOKEN itself.
+	 */
+	public function testTokenFilterRejectionNeverLogsForTop1mTokenReferenceButOtherReferencesStillDo(): void
+	{
+		$errlog = tempnam(sys_get_temp_dir(), 'pfb_filter_token_errlog_');
+		$this->assertNotFalse($errlog, 'could not create temp errlog');
+		$saved = array_key_exists('errlog', $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb']['errlog'] : false;
+		$GLOBALS['pfb']['errlog'] = $errlog;
+
+		try {
+			$secret = 'REJECTED-SECRET-should-never-be-logged!!!';
+
+			// Given/When: reference 'top1m_token' -- the ADR-59 P5 exception.
+			$this->assertSame('', pfb_filter($secret, PFB_FILTER_TOKEN, 'top1m_token'));
+			// Then: the rejected value never reaches the error log.
+			$this->assertStringNotContainsString(
+				$secret,
+				(string) file_get_contents($errlog),
+				'a token rejected via the top1m_token reference must never be logged'
+			);
+
+			// Given/When: a DIFFERENT (ordinary) reference for the same rejected input.
+			$this->assertSame('', pfb_filter($secret, PFB_FILTER_TOKEN, 'some_other_caller'));
+			// Then: the suppression is genuinely reference-scoped -- an ordinary caller
+			// still gets its reject logged (the pre-existing, unchanged behaviour).
+			$this->assertStringContainsString(
+				$secret,
+				(string) file_get_contents($errlog),
+				'a non-top1m_token reference must still log its rejected input as before'
+			);
+		} finally {
+			if ($saved === false) {
+				unset($GLOBALS['pfb']['errlog']);
+			} else {
+				$GLOBALS['pfb']['errlog'] = $saved;
+			}
+			unlink($errlog);
+		}
+	}
+
 	public function testControlCharactersRejected(): void
 	{
 		// A control char anywhere makes the whole input fail, returning default.
