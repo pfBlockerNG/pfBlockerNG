@@ -58,14 +58,19 @@ Describe 'resolve-legs.sh legs — scope + leg selection'
         The error should include 'scope='
     End
 
-    It 'workflow_call → full scope → all 3 legs'
+    It 'EVENT_NAME=workflow_call without SCOPE_INPUT → impacted (no special rung)'
+        # A reusable-workflow callee sees the CALLER's event_name, never
+        # "workflow_call", so a dedicated rung could never fire in CI. Pin the
+        # fallthrough: without an explicit SCOPE_INPUT this resolves like any
+        # other event — impacted, min-CE leg only. A workflow_call gate that
+        # wants the full fan-out passes scope=full explicitly (issue #906).
         When run env \
             CI_MATRIX="$FIXTURE_MATRIX" \
             EVENT_NAME="workflow_call" \
             sh "$SCRIPT" legs --test-dir tests/smoke --label marker
         The status should be success
         The output should include '"pfsense_version":"2.8"'
-        The output should include '"pfsense_version":"26.03"'
+        The output should not include '"pfsense_version":"26.03"'
         The error should include 'scope='
     End
 
