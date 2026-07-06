@@ -183,6 +183,11 @@ if [ -f "$durfile" ]; then
 	# reader fix); only a TAB or a run of 2+ spaces is hostile. One guard
 	# here, at first read of the table, so every stage after it inherits it
 	# -- checked on the RAW line, before any split collapses the evidence.
+	# PERMANENT format limitation, not a style rule: the '<key> <weight>'
+	# single-space-joined table format cannot round-trip a nodeid with a real
+	# run of 2+ spaces (pytest permits one via parametrize string values), so
+	# rejecting loudly here is the only correct behaviour. If a real test ever
+	# hits this, give it a single-token ids= override in its parametrize.
 	LC_ALL=C awk '
 		/^[ \t]*#/ || /^[ \t]*$/ { next }
 		index($0, "\t") {
