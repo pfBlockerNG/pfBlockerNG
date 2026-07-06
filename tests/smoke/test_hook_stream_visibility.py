@@ -85,6 +85,21 @@ def _wait_for_guest_file(vm: SmokeVM, path: str, *, deadline_s: float, poll_s: f
     return False
 
 
+def _wait_upgrade_gone(vm: SmokeVM, *, deadline_s: float, poll_s: float = 2.0) -> bool:
+    """Poll (bounded) until no pfSense-upgrade process remains. Returns True iff it drained.
+
+    The test launches pfSense-upgrade DETACHED, so the wrapping pkg transaction (and its pkg
+    lock) outlives the hook itself. Wait for it to exit before touching the package again; a
+    bounded wait, never open-ended (pgrep rc 1 = none left).
+    """
+    end = time.monotonic() + deadline_s
+    while time.monotonic() < end:
+        if vm.ssh("/bin/sh", "-c", "pgrep -f pfSense-upgrade >/dev/null").returncode != 0:
+            return True
+        time.sleep(poll_s)
+    return False
+
+
 @pytest.mark.timeout(1200)
 def test_hook_output_streams_to_gui_while_running(repo_vm: SmokeVM) -> None:
     """A hook's stdout is visible in the GUI log WHILE the hook is still running.
@@ -142,11 +157,9 @@ def test_hook_output_streams_to_gui_while_running(repo_vm: SmokeVM) -> None:
         # only appears AFTER it exits (block-behaviour) never shows LINE1 here — the hook cannot
         # exit until PROCEED, which is created only after this loop.
         mid = ""
-        pid_seen = False
         end = time.monotonic() + 20.0
         while time.monotonic() < end:
             mid = vm.ssh("cat", GUI_LOG).stdout
-            pid_seen = pid_seen or vm.ssh("/bin/sh", "-c", "ls /var/run/pfb_hook_*.pid 2>/dev/null").returncode == 0
             if LINE1 in mid:
                 break
             time.sleep(1.0)
@@ -156,7 +169,7 @@ def test_hook_output_streams_to_gui_while_running(repo_vm: SmokeVM) -> None:
         assert LINE1 in mid, (
             f"the hook's first line {LINE1!r} did NOT reach the GUI log while the hook is still "
             f"blocked — its output is buffered until the hook exits instead of streaming to the pkg "
-            f"Software page (streaming daemon pidfile seen mid-hook: {pid_seen}). GUI log so far:\n{mid[-3000:]}"
+            f"Software page. GUI log so far:\n{mid[-3000:]}"
         )
         assert LINE2 not in mid, (
             f"{LINE2!r} appeared before the hook was released — the block-on-signal setup is "
@@ -181,8 +194,14 @@ def test_hook_output_streams_to_gui_while_running(repo_vm: SmokeVM) -> None:
             f"after releasing the hook, the GUI log is missing a line (LINE1={LINE1 in final}, "
             f"LINE2={LINE2 in final}):\n{final[-3000:]}"
         )
+
+        # LINE2 means the HOOK finished, but the wrapping detached pfSense-upgrade keeps its pkg
+        # lock through the rest of the resync. Drain it before cleanup so pkg_delete() below (in
+        # finally) doesn't race the still-held lock.
+        _wait_upgrade_gone(vm, deadline_s=120.0)
     finally:
         vm.ssh("/usr/bin/touch", PROCEED)  # never leave a blocked hook behind
+        _wait_upgrade_gone(vm, deadline_s=60.0)  # let a failed-path run release its pkg lock too
         h.clear_update_hooks(vm)
         vm.ssh("/bin/rm", "-f", GUI_LOG, WAITING, PROCEED)
         pkg_delete(vm)

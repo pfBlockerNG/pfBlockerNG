@@ -4270,10 +4270,12 @@ function pfb_run_hooks($when, $ctx = array()) {
 				pfb_mirror_hook_output($logtarget, $hook_log_offset);
 			} else {
 				// Tail the delta while the hook is alive, then drain the trailing partial line.
-				// Hard-bounded so a wedged status can never hang the pass -- timeout(1) already
-				// kills the hook at $timeout + PFB_HOOK_KILL_GRACE.
+				// The loop is bounded so a wedged status can't spin forever -- timeout(1) already
+				// kills the hook at $timeout + PFB_HOOK_KILL_GRACE, so a healthy child always reports
+				// exit well inside the cap; exhausting it means the child never reported dead.
 				$off     = $hook_log_offset;
 				$maxiter = (int) ceil(($timeout + PFB_HOOK_KILL_GRACE + 10) / 0.2);
+				$exited  = FALSE;
 				for ($i = 0; $i < $maxiter; $i++) {
 					$chunk = pfb_log_tail_chunk($logtarget, $off, FALSE);
 					if ($chunk['data'] !== '') {
@@ -4284,6 +4286,7 @@ function pfb_run_hooks($when, $ctx = array()) {
 					if (!$st['running']) {
 						// First not-running read carries the real exit code (later reads/close give -1).
 						$retval = (int) $st['exitcode'];
+						$exited = TRUE;
 						break;
 					}
 					usleep(200000);
@@ -4291,6 +4294,13 @@ function pfb_run_hooks($when, $ctx = array()) {
 				$chunk = pfb_log_tail_chunk($logtarget, $off, TRUE);
 				if ($chunk['data'] !== '') {
 					print $chunk['data'];
+				}
+				if (!$exited) {
+					// Cap exhausted with the child still "running" -- a pathologically wedged process.
+					// Don't let proc_close() block on it, and don't mis-log success: kill it and mark
+					// the status unknown (-1) so the branch below logs a failure, not "completed".
+					@proc_terminate($proc, 9);
+					$retval = -1;
 				}
 				proc_close($proc);
 			}
