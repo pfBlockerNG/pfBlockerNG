@@ -249,3 +249,57 @@ def test_require_plausible_rejects_an_implausibly_small_fetch() -> None:
 def test_require_plausible_accepts_a_full_root_zone() -> None:
     # A realistic root-zone-sized set passes the floor unchanged (no exception).
     utl.require_plausible({f"tld{i}" for i in range(utl.MIN_PLAUSIBLE_TLDS)})
+
+
+# --------------------------------------------------------------------------- #
+# Regression coverage for issue #903: tlds.json's optional country-code typing
+# must never destabilize the xn-- bucket or destroy a curated label, and an
+# implausibly small tlds.json body must be treated exactly like a fetch failure.
+# --------------------------------------------------------------------------- #
+
+
+def test_fresh_xn_dash_dash_stays_itld_with_curated_label_despite_country_code_type() -> None:
+    # Given: tlds.json types 'xn--abc' as a ccTLD ('country-code'), matching what
+    # the real endpoint does for IDN ccTLDs (e.g. 'xn--1qqw23a'), but the existing
+    # array curates it in iTLD with a native-script label -- that '(cc)'-style
+    # curation is how we record country-code-ness for xn-- entries, not a bucket.
+    existing = utl.parse_existing_arrays(_FAKE_EXISTING_PHP)
+    # When: the fresh arrays are built with that type map.
+    fresh = utl.build_fresh_arrays(_FAKE_IANA_TLDS, existing, iana_types={"xn--abc": "country-code"})
+    # Then: it STAYS in iTLD with its curated label intact, never migrating to
+    # ccTLD. FAILS on pre-#903 code: classify() honored 'country-code' before the
+    # xn-- check, moving 'xn--abc' to ccTLD -- and because label retention was
+    # per-bucket, the curated label was lost too (ccTLD's existing map has no
+    # 'xn--abc' entry, so it fell back to a bare 'XN--ABC'). Verified by stashing
+    # the #903 source fix and re-running: this assertion failed with
+    # `assert {} == {'xn--abc': 'XN--ABC - foo'}` (fresh["iTLD"] was empty --
+    # 'xn--abc' had migrated to ccTLD with the label reduced to 'XN--ABC').
+    assert fresh["iTLD"] == {"xn--abc": "XN--ABC - foo"}
+    assert "xn--abc" not in fresh["ccTLD"]
+
+
+def test_fresh_non_xn_bucket_move_preserves_curated_label_across_buckets() -> None:
+    # Given: 'com' is curated in the existing gTLD array with a feed-star label
+    # ('COM*'), but tlds.json types it as a ccTLD ('country-code') -- a genuine,
+    # non-xn-- bucket move (unlike xn--, classify() honors the type map here).
+    existing = utl.parse_existing_arrays(_FAKE_EXISTING_PHP)
+    # When: the fresh arrays are built with that type map.
+    fresh = utl.build_fresh_arrays(_FAKE_IANA_TLDS, existing, iana_types={"com": "country-code"})
+    # Then: 'com' moves to ccTLD AND keeps its curated star marker -- label
+    # lookup spans every regenerated bucket, not just the TLD's old (gTLD) one.
+    assert "com" not in fresh["gTLD"]
+    assert fresh["ccTLD"]["com"] == "COM*"
+
+
+def test_plausible_tld_types_rejects_an_implausibly_small_type_map() -> None:
+    # A tiny-but-valid tlds.json body (an empty object, or a captive-portal/proxy
+    # page that happens to parse as JSON with a handful of entries) must not be
+    # honored -- the caller (fetch_tlds_json) treats this exactly like a fetch
+    # failure, discarding the map rather than partially applying it.
+    assert utl.plausible_tld_types({}) is False
+    assert utl.plausible_tld_types({f"tld{i}": "generic" for i in range(utl.MIN_PLAUSIBLE_TLD_TYPES - 1)}) is False
+
+
+def test_plausible_tld_types_accepts_a_realistic_type_map() -> None:
+    # The other side of the same boundary: a root-zone-sized type map is trusted.
+    assert utl.plausible_tld_types({f"tld{i}": "generic" for i in range(utl.MIN_PLAUSIBLE_TLD_TYPES)}) is True

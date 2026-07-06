@@ -66,6 +66,13 @@ TLDS_JSON_URL = "https://data.iana.org/TLD/tlds.json"
 # discards every curated label). Refuse below this floor instead.
 MIN_PLAUSIBLE_TLDS = 1000
 
+# Plausibility floor for tlds.json's OPTIONAL type map (ccTLD refinement only, see
+# fetch_tlds_json). Set well under the real population (~1,450 TLDs) but far above
+# a garbage response that still happens to be valid JSON (a captive-portal/proxy
+# page, a truncated body with a handful of records) -- below this floor the
+# refinement is skipped exactly like a fetch failure, never partially applied.
+MIN_PLAUSIBLE_TLD_TYPES = 500
+
 DEFAULT_PHP_FILE = Path(__file__).resolve().parent.parent.parent / "src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php"
 
 _TLD_KEYS = ("gTLD", "ccTLD", "iTLD")
@@ -96,17 +103,35 @@ def require_plausible(iana_tlds: set[str]) -> None:
         )
 
 
+def plausible_tld_types(iana_types: dict[str, str]) -> bool:
+    """True iff tlds.json's OPTIONAL tld->type map is large enough to trust.
+
+    Mirrors require_plausible's floor, but for the best-effort refinement source:
+    unlike the required tlds-alpha fetch (which must hard-refuse below its floor),
+    a too-small tlds.json is simply discarded by the caller -- proceeding exactly
+    as on a fetch failure -- since classification never depends on it.
+    """
+    return len(iana_types) >= MIN_PLAUSIBLE_TLD_TYPES
+
+
 def classify(tld: str, iana_types: dict[str, str] | None = None) -> str:
     """Classify a lowercase TLD into 'iTLD' / 'ccTLD' / 'gTLD'.
 
     The heuristic (punycode -> iTLD, two ASCII letters -> ccTLD, else gTLD) is
     correct standalone. When tlds.json's type map is available, a 'country-code'
     entry is honored as ccTLD too -- pure refinement, never required.
+
+    xn-- is checked BEFORE the type map, unconditionally: the committed arrays
+    keep every xn-- TLD (including IDN ccTLDs) in iTLD, curated with a '(cc)'
+    marker in the label rather than a bucket move. Checking type first would make
+    an IDN ccTLD's bucket flip with whatever tlds.json happens to report on a
+    given run -- and since label retention is keyed by tld, not bucket, a flip
+    also silently replaces the curated '(cc) ...' label with a bare uppercase one.
     """
-    if iana_types and iana_types.get(tld) == "country-code":
-        return "ccTLD"
     if tld.startswith("xn--"):
         return "iTLD"
+    if iana_types and iana_types.get(tld) == "country-code":
+        return "ccTLD"
     if len(tld) == 2 and tld.isalpha():
         return "ccTLD"
     return "gTLD"
@@ -150,11 +175,18 @@ def build_fresh_arrays(
         buckets[classify(tld, iana_types)].add(tld)
     buckets["gTLD"] -= bgtld_keys
 
+    # Label lookup spans ALL regenerated buckets, not just the target one: a TLD
+    # that legitimately moves bucket (e.g. IANA re-typing a plain gTLD as a ccTLD)
+    # must still keep its curated label rather than falling back to a bare
+    # uppercase one just because the label lived in its old bucket.
+    existing_by_tld: dict[str, str] = {}
+    for key in _TLD_KEYS:
+        existing_by_tld.update(existing.get(key, {}))
+
     fresh: dict[str, dict[str, str]] = {}
     for key, tlds in buckets.items():
-        existing_labels = existing.get(key, {})
         fresh[key] = {
-            tld: strip_count(existing_labels[tld]) if tld in existing_labels else tld.upper() for tld in sorted(tlds)
+            tld: strip_count(existing_by_tld[tld]) if tld in existing_by_tld else tld.upper() for tld in sorted(tlds)
         }
     return fresh
 
@@ -191,8 +223,10 @@ def fetch_tlds_json(timeout: float = 15) -> dict[str, str] | None:
     """Best-effort fetch of tlds.json's tld->type map (ccTLD refinement only).
 
     Returns None on ANY problem -- unreachable, empty body (observed in some
-    sandboxed environments), or an unexpected schema. Classification never
-    depends on this succeeding.
+    sandboxed environments), an unexpected schema, or a body that parses fine but
+    is implausibly small (below MIN_PLAUSIBLE_TLD_TYPES; logged as a warning and
+    treated exactly like a fetch failure). Classification never depends on this
+    succeeding.
     """
     try:
         with urllib.request.urlopen(TLDS_JSON_URL, timeout=timeout) as resp:  # noqa: S310
@@ -201,9 +235,17 @@ def fetch_tlds_json(timeout: float = 15) -> dict[str, str] | None:
             return None
         data = json.loads(raw)
         records = data["tlds"] if isinstance(data, dict) else data
-        return {rec["tld"].lower(): rec.get("type", "") for rec in records}
+        result = {rec["tld"].lower(): rec.get("type", "") for rec in records}
     except Exception:
         return None
+    if not plausible_tld_types(result):
+        print(
+            f"warning: tlds.json refinement skipped -- only {len(result)} entries "
+            f"(< {MIN_PLAUSIBLE_TLD_TYPES}); proceeding as if the fetch had failed.",
+            file=sys.stderr,
+        )
+        return None
+    return result
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────
