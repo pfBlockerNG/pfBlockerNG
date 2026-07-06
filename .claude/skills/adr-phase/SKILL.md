@@ -150,10 +150,9 @@ Bring `adr/{NN}-{slug}` to a clean transaction boundary:
    recognizably ADR-`NN` phase work; else **STOP and ask**. This is safe against
    force-pushes because only completed phases are ever pushed — interrupted work is
    never on the remote.
-4. **Confirm baseline green:** run the gates for the ADR's languages in `<path>` —
-   always `python -m pytest` + `ruff check .`, plus `vendor/bin/phpunit`
-   (+ `vendor/bin/phpstan` / `vendor/bin/phpcs`) for a PHP ADR and `shellcheck` /
-   `shellspec` for a shell one. If red, **STOP and report** — a completed phase is broken.
+4. **Confirm baseline green:** run the **canonical gates** (CLAUDE.md "Canonical gates" table)
+   for the ADR's languages in `<path>`. If red, **STOP and report** — a completed phase is
+   broken.
 5. Resume point = phase `L+1`.
 
 ## Step 5 — Decide which phase(s) to run
@@ -191,41 +190,71 @@ read and edit:
   the prior handoff `RESULTS/{M-1}_Results.txt` (if that gate is in the prompt and
   the file is missing, STOP and report). Implement the ACTION PLAN under its
   CONSTRAINTS."
-- "Run the verification gates (`python -m pytest`, `ruff check .`,
-  `ruff format .`, plus `php -l` / ShellCheck for any PHP/shell). Do not proceed
-  red."
+- The brief follows **CLAUDE.md "The delegation contract"** — all seven BRIEF sections. In
+  particular you (the planner) supply, inside the brief: the **coverage matrix** (sibling axes /
+  callers / branches enumerated from grep or the version matrix, never from memory — each row
+  mapped to a test or an explicit deferral) and, for any parser/regex/guard work, the
+  **hostile-input rows** with expected outcomes. If the phase prompt already carries them, pass
+  them through; if it doesn't and the phase plausibly needs them, deriving them is YOUR job
+  before spawning — a brief that says "all X" without the list is invalid.
+- "Run the **canonical gates** for everything you touch (CLAUDE.md 'Canonical gates' table —
+  including cross-language consumers of artifacts you change). Do not proceed red."
 - "Honour CLAUDE.md **Test coverage** — the five non-negotiables. For any behaviour this
-  phase **adds/changes**, the new test MUST **fail on the pre-change code and pass after**
-  (prove red→green; record the red result in the handoff); a **behaviour-preserving** phase
-  instead pins existing behaviour as an oracle that stays green. A phase touching `www/` MUST
-  add **Tier A** UI coverage (Tier B only if the change is observable *only* there). No change
-  without its test; no coverage theater; tests state intent."
+  phase **adds/changes**, the new test MUST **fail on the pre-change code and pass after** —
+  an **executed run with output pasted into the handoff**, never 'reasoned through'; a
+  **behaviour-preserving** phase instead pins existing behaviour as an oracle that stays green.
+  A phase touching `www/` MUST add **Tier A** UI coverage (Tier B only if the change is
+  observable *only* there). No change without its test; no coverage theater; tests state intent."
+- "**ESCALATE, don't improvise:** if any factual claim in this brief, the phase prompt, or the
+  ADR is contradicted by the code or a live probe, STOP and return a BLOCKED handoff saying so —
+  the live tree and prior RESULTS files override the prompt on any conflict. Never silently
+  patch the plan."
 - "**Review your own work against the phase objectives BEFORE writing the
   handoff:** read your actual `git diff`; confirm the phase added the test cases it
   should (new/preserved behaviour + edge cases, not just 'existing tests pass'),
   every ACTION-PLAN / EXPECTED-RESULT objective is met, the ADR's preserved-
   semantics contract holds, and scope is clean. Fix and re-verify if anything is
   off."
-- "Then write `RESULTS/{MM}_Results.txt`, make a **single commit** (code + handoff)
+- "Then write `RESULTS/{MM}_Results.txt` **with the fixed HANDOFF fields from CLAUDE.md 'THE
+  HANDOFF'** (verdict; what changed; gates with pasted output; red→green proof; coverage-matrix
+  ticks; deviations; carry-forward), make a **single commit** (code + handoff)
   with the COMMIT-block message, and **push**: `git -C <path> push -u origin
   adr/{NN}-{slug}`."
 - "Report back: gate results, commit hash, push status, handoff path, and any
   deviation or STOP."
+- Spawn with **`model: sonnet`** and **effort `xhigh`** stated explicitly (never rely on
+  inheritance).
 
-**6b. Orchestrator gate (independent; keep it light to stay context-lean).** When
-the agent returns, in `<path>`: confirm `RESULTS/{MM}_Results.txt` is **committed
-and pushed** (`git -C <path> log`, `git -C <path> status`, remote ref updated),
-independently re-run the gates for the languages this phase touched (always
-`python -m pytest` + `ruff check .`; plus `php -l` / `vendor/bin/phpunit` /
-`vendor/bin/phpstan` / `vendor/bin/phpcs` for PHP, `shellcheck` for shell) to
-confirm green, and sanity-check the phase's EXPECTED RESULT against
-`git -C <path> show --stat`. For a **behaviour-changing** phase, confirm the handoff records
-the **red→green evidence** (the new test failed on the pre-change code, passes now) and
-spot-check it if in doubt; for a `www/`-touching phase, confirm **Tier A** UI coverage is
-present (CLAUDE.md "Test coverage"). If the
-agent reported a STOP/failure, the handoff is missing, or a gate fails → **HALT and
-report**; do not start `M+1`. (You verify the transaction; you do not re-implement
-it.)
+**6b. Orchestrator gate (independent, mechanical — CLAUDE.md "THE GATE").** Terse prose, full
+checks: every item below runs; a skipped item is recorded as SKIPPED with the reason, never
+silently dropped. When the agent returns, in `<path>`:
+
+1. **Transaction**: `RESULTS/{MM}_Results.txt` committed and pushed (`git -C <path> log`,
+   `status`, remote ref updated), and the handoff carries **every fixed field** (CLAUDE.md "THE
+   HANDOFF") — a missing/empty field rejects the handoff.
+2. **Re-run the canonical gates yourself** for everything the diff touches, computed from the
+   diff's file types plus cross-language consumers (CLAUDE.md "Canonical gates") — green.
+3. **Re-execute the red proof yourself** for a behaviour-changing phase — never accept the
+   handoff's claim: `git -C <path> checkout HEAD~1 -- <src paths>` (tests stay), run the phase's
+   named new test → expect FAIL; `git -C <path> checkout HEAD -- .`, re-run → expect PASS.
+   Record both results in the gate record.
+4. **Read the FULL diff** (`git -C <path> show` — never `--stat` alone) and tick **every**
+   ACTION-PLAN item and **every** coverage-matrix row against what the diff actually does —
+   hardcoded values, stubbed branches, and silently dropped plan items live below `--stat`.
+5. **Test honesty**: no weakened assertions; every negative assertion has a fixture that could
+   make it fail; no red-run via a monkeypatched fault production cannot produce; a
+   `www/`-touching phase has **Tier A** UI coverage.
+6. **Conventions**: new public symbols named like their siblings (list 3); stale
+   comments/docs about touched symbols reconciled.
+7. **Write the gate record** `RESULTS/{MM}_Gate.txt` (fixed fields: commands + results,
+   red/green re-execution evidence, per-item diff verdicts, matrix confirmation, SKIPPED list)
+   and commit + push it as its own small commit (`docs: ADR-NN phase M gate record`). On
+   resume, a phase with a Results file but no Gate record gets its gate run retroactively
+   before the next phase starts.
+
+If the agent reported a STOP/failure, the handoff is missing a field, or any gate item fails →
+**HALT and report**; do not start `M+1`. (You verify the transaction and the content against
+the plan; you do not re-implement it.)
 
 **Loop safety:** never run more iterations than there are phases; never re-run a
 completed phase except via the explicit redo path.
@@ -265,7 +294,10 @@ Summarize:
   your orchestrator-gate result, commit hash, and confirmation it was pushed.
 - If the ADR completed: the landing choice and the **PR URL** (or the base the
   commits were rebased onto), and the worktree-cleanup status.
-- The ADR's Definition of Done from `ADR.md` §7 — especially the **manual smoke /
-  live-box checks the maintainer must run** (no live Unbound in CI); Status stays
-  "Implemented (pending smoke test)" until those pass.
+- The ADR's Definition of Done from `ADR.md` §7 against CLAUDE.md "ADR acceptance": the ADR
+  flips to **Accepted** on green automated coverage alone (smoke/UI on the CE+Plus fan-out) —
+  report which §7 items the automated runs prove, and list any **documented out-of-CI
+  limitation** (HA/CARP, real HAProxy reload, load profiles, true visual correctness) left for
+  the maintainer. Status stays "Implemented (pending smoke test)" only until the fan-out is
+  green, not pending a manual sign-off.
 - Any blockers or deviations.

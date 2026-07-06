@@ -155,26 +155,44 @@ parallel with the CodeRabbit wait. It is additive: CodeRabbit reviewing does not
 it, and it does not replace CodeRabbit; when CodeRabbit never reviews it stands alone.
 
 1. **Spawn one sub-agent**, `model: sonnet`, briefed as an independent **ADVERSARIAL**
-   reviewer — its job is to try to **break the change**, not to rubber-stamp it: review
-   the PR's diff (`git diff origin/<BASE>...HEAD` in the PR's worktree/branch), grounded
-   in the **current** code (read the surrounding files, not just the hunk), and hunt as
+   reviewer — its job is to try to **break the change**, not to rubber-stamp it. The brief
+   MUST include **the work item's intent** — the issue/ADR link, its acceptance criteria /
+   coverage matrix, and the PR body — because a diff-only reviewer can never catch "asked for
+   ALL X, delivered a subset, claimed completeness"; the diff is internally consistent, only
+   diff-vs-spec exposes it. The reviewer: reviews the PR's diff
+   (`git diff origin/<BASE>...HEAD` in the PR's worktree/branch), grounded
+   in the **current** code (read the surrounding files, not just the hunk), and hunts as
    thoroughly as the PR allows for bugs, unhandled edge cases and input classes, races,
    security holes, CLAUDE.md/code-standard violations, and **coverage theater** (tests
    that execute but cannot fail on a regression; missing fail-before/pass-after
-   evidence). Return structured findings — each with a severity (`blocking` / `nitpick`
-   / `outside-diff`), `file:line`, a grounded explanation, and a concrete suggested fix
-   — plus a short "considered-and-fine" list. Tell it the result IS its final message
-   and not to edit anything.
+   evidence; negative assertions with no fixture that could fail them; red-runs
+   manufactured via faults production cannot produce). Mandatory hunt items:
+   **spec coverage** — each acceptance criterion / matrix row mapped to where the diff
+   satisfies it, silently narrowed scope flagged; **per-file verdict** — every changed
+   file gets findings / considered-and-fine / not-examined-because (a review missing
+   files is incomplete — re-run it); **hostile inputs** — any new/changed parser, regex,
+   or guard probed with the CLAUDE.md "THE BRIEF" §4 input classes; **hardcoding** —
+   env-derived literals (versions, ABIs, paths, column indexes) that the spec or matrix
+   says must be enumerated or resolved at runtime; **`www/` touched → Tier-A UI test
+   present, else a `blocking` finding** (test mandate #4); **stale comments/docs** about
+   touched symbols. The reviewer **executes, not just reads**: it MAY run the gates and
+   MUST ground each `blocking` correctness claim in an executed probe (command + output —
+   the "Empirically verified:" standard) wherever the claim is executable off-appliance.
+   Each finding: severity (`blocking` / `nitpick` / `outside-diff`), `file:line`, the
+   grounded explanation + how-to-reproduce, and a concrete suggested fix. Tell it the
+   result IS its final message and not to edit anything.
    **Reasoning effort: `xhigh` minimum — NEVER lower, and NEVER `max`.** You (the
-   orchestrator) pick the shape by the PR's size and complexity: a small/simple PR →
-   one sub-agent at effort `xhigh` (e.g. a Workflow `agent()` call with
+   orchestrator) pick the shape by the PR's size and complexity — and record the chosen
+   shape + the size metric that drove it in the Step-1d.5 audit comment: a small/simple
+   PR → one sub-agent at effort `xhigh` (e.g. a Workflow `agent()` call with
    `effort: 'xhigh'` when the spawning tool cannot set effort directly); a large or
-   complex PR → an **ultracode-style multi-agent review** (a Workflow fanning
-   independent reviewers per dimension with adversarial verification of each finding),
-   its agents likewise capped at `xhigh`. If `ponytail` is active in this session, the
-   brief's first instruction is `Run /ponytail:ponytail <level>` (the level active here
-   — full/lite/ultra; CLAUDE.md "Plan with a higher model"), so the reviewer matches
-   the parent's ponytail mode.
+   complex PR (roughly: >300 changed lines, >6 files, or any behaviour change in
+   `src/`'s parsing/guard/scheduling logic) → an **ultracode-style multi-agent review**
+   (a Workflow fanning independent reviewers per dimension — contract-conformance vs the
+   spec, correctness/edge cases, tests-kill-mutants — with adversarial verification of
+   each finding), its agents likewise capped at `xhigh`. Do **not** propagate ponytail
+   to the reviewer (CLAUDE.md: ponytail governs what you build; a reviewer builds
+   nothing — thoroughness and finding detail are outside its scope).
 2. **When the sub-agent finishes, resolve the CodeRabbit outcome (Steps 1a–1c).** If
    CodeRabbit reviewed — or turns up late (re-check the PR) — wait for its review to
    finish (the `pr-comments` `--wait-for=coderabbitai` wait, or poll until a terminal
@@ -187,12 +205,22 @@ it, and it does not replace CodeRabbit; when CodeRabbit never reviews it stands 
    pre-existing/orthogonal → **open a tracking GitHub Issue** per `pr-comments` Step 8,
    in the same public repo; a confirmed-real finding is never just acknowledged);
    mirror `pr-comments` Step 5 and reply on every CodeRabbit thread. Honour the repo's
-   lint config and `CLAUDE.md`.
+   lint config and `CLAUDE.md`. **Anti-self-grading asymmetry (you wrote or gated this
+   code — you don't get to wave its review away):** a `blocking` correctness/security
+   finding is closed only by **APPLY** (with its test) or **explicit user sign-off** —
+   the Snyk rule, applied to the Sonnet review; SKIPping one requires **reproduction
+   evidence that its premise is wrong** (a command + output demonstrating it, recorded
+   in the reply), never prose alone; and a finding that cites a CLAUDE.md mandate
+   cannot be self-skipped by the agent whose code it flags — fix it or escalate to the
+   user ("precedent elsewhere is also untested" is not an exemption the mandate
+   recognizes). Style/lint nits may still be skipped on config grounds alone.
 4. **Apply the valid fixes** — a fix that changes behaviour carries its own test per CLAUDE.md
    "Test coverage" (fail-before/pass-after; **Tier A** UI coverage for a `www/` change) — re-run
-   the relevant gates (`php -l` / PHPUnit / PHPStan for PHP, `python -m pytest` / `ruff` / `mypy`
-   for Python, ShellCheck for shell — whatever the change touches), commit
-   (`<scope>: <imperative summary>`) and push to the PR head branch.
+   the **canonical gates** (CLAUDE.md table) for whatever the fixes touch, commit
+   (`<scope>: <imperative summary>`) and push to the PR head branch. **Review-fix commits are
+   new unreviewed code** — two of the audited defect chains entered through them — so for any
+   non-trivial APPLY, re-run a focused review of the fix delta (same reviewer contract, scoped
+   to the fix commits) before the Gate below.
 5. **Record the review on the PR** — post one comment summarising the Sonnet 5 adversarial
    review (and noting CodeRabbit's, if one arrived) plus the per-finding
    resolution (applied + commit / skipped + reason / deferred + tracking-issue link), so there is an
@@ -237,7 +265,13 @@ Continue to the merge ONLY if the review step finished cleanly: every finding fr
 review received — the always-on Sonnet 5 adversarial review, CodeRabbit when it reviewed,
 **and** Snyk — triaged, any accepted fixes committed and pushed, and nothing left that needs a
 human decision. The Sonnet 5 review is **mandatory** — never merge without its findings triaged,
-even when CodeRabbit came back clean. If a finding is unresolved, contested, or needs the user,
+even when CodeRabbit came back clean. **Produce the findings ledger before invoking `pr-merge`:**
+a numbered list of every finding with its outcome — `fixed@<commit>` / `skipped: <evidence>` /
+`deferred: <issue link>` — folded into the Step-1d.5 audit comment; refuse to merge while any
+item lacks an outcome. **When both external bots are quota-dead on a substantive PR, escalate
+instead of merging on the single Sonnet pass** — the ultracode multi-agent shape, or pace the
+merge until quota recovers; the audited defect window coincided exactly with a both-bots-quota
+batch-merge cadence. If a finding is unresolved, contested, or needs the user,
 **stop here and report** — do not merge.
 
 **Catch-all sweep (last thing before merging):** "every review received" means every review on

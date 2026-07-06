@@ -300,6 +300,12 @@ For every finding, decide a verdict — do **not** auto-apply:
   for findings you have confirmed **real** — so a deferred finding ALWAYS gets an
   issue. A reply that just says "deferred" with no issue is wasted effort: either it
   is real (→ issue) or it is not (→ SKIP with the reason).
+- **Skip asymmetry (anti self-grading).** A style/lint nit may be SKIPped on config
+  grounds alone. A **correctness or security** finding may be SKIPped only with
+  **demonstrated evidence its premise is wrong** — a test run, a `git blame` cite, an
+  actual-behaviour probe (command + output) — recorded in the reply; and a finding that
+  cites a CLAUDE.md mandate is never self-skipped by the agent whose code it flags:
+  fix it or escalate to the user.
 
 ## Step 6 — Apply the valid fixes
 

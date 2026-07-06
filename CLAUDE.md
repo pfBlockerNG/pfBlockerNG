@@ -181,21 +181,127 @@ Delegation is for non-trivial, multi-step `src/`/`tests/`/CI work.
   spawned implementer, you are the implementer, not a new planner** — build, don't re-delegate.
   (Recursion here is a real failure mode: an implementer that re-reads "implement with Sonnet 5"
   and spawns its own sub-agent returns an "I launched an agent…" no-op instead of code.)
-- **The planner's brief to Sonnet 5 must be self-contained, accurate, and well-referenced** — the
-  exact objective, the files/symbols to read and change (paths, `file:line`), the constraints,
-  the verification gates, and the prior step's handoff. A vague or wrong brief is a planner bug.
+- **The planner's brief to Sonnet 5 follows the delegation contract below** — a vague or wrong
+  brief is a planner bug, and a handful of real shipped defects trace directly to brief bugs
+  (a half-enumerated axis, a vacuous test spec, an unverified "fact" stated as truth).
 - **Propagate an active ponytail level to every delegate.** If the `ponytail` plugin is installed
   and active in the orchestrator's session (e.g. `/ponytail:ponytail full`), every spawned
   sub-agent MUST run at the **same level** — make the **first** line of its brief
   `Run /ponytail:ponytail <level>` (the level active here: full/lite/ultra) before any other work,
   so the delegate inherits the same laziness discipline. This is part of the mandatory handoff,
-  not optional; skip it only when ponytail is not active in this session.
+  not optional; skip it only when ponytail is not active in this session. **Sole exception —
+  reviewer/verifier agents:** ponytail governs what you *build*; a reviewer builds nothing, so
+  review thoroughness and finding detail are outside ponytail's scope. Do not propagate it to
+  review/verify delegates (or say so explicitly in their brief).
 - **Sonnet 5 follows every directive in this file** — communication, the working principles
   (investigate / "don't assume, read" / confirm ambiguity), code standards (style, naming,
   per-language rules), the test-coverage mandate, and how to work with the specific
   codes/frameworks/tests. The implementer is cheaper, not exempt.
-- **Run at effort xhigh or better** when available — set as the session default in
-  `.claude/settings.json` (`effortLevel: xhigh`).
+- **Run at effort xhigh or better** — set as the session default in `.claude/settings.json`
+  (`effortLevel: xhigh`), and state it explicitly in every spawn (never rely on inheritance).
+
+### The delegation contract (brief → handoff → gate)
+
+Three fixed artifacts govern **every** delegated step — `/adr-phase` phases, `/gh-issue --fix`
+steps, and ad-hoc delegation alike. The design principle: **cheap models reliably fill required
+fields and reliably drop optional virtues**, so every check is a named field in an artifact, and
+**an empty or missing field is a gate failure** — never a judgment call. This contract exists
+because prose-only gates demonstrably failed: a one-day post-hoc audit (issues #900–#909) found
+ten reproducible defects in work that had passed every prose gate and review.
+
+#### THE BRIEF (planner → implementer) — mandatory sections
+
+1. **Objective** — the one outcome, tied to the work item.
+2. **Required reading** — `file:line` refs (identifiers, not pasted bodies — the implementer
+   reads just-in-time in its own fresh context); the prior step's handoff.
+3. **Coverage matrix** — when the change touches anything with siblings (v4/v6, address/port,
+   CE/Plus versions, parse modes, providers, every caller of a touched symbol, every branch of a
+   touched conditional): the planner enumerates ALL rows **from the source** — grep output, the
+   version-matrix file, the structure's own definition — **never from memory**. Each row maps to
+   a test or an explicit justified deferral. A brief saying "all X" without the enumerated list
+   is invalid; the planner generating the enumeration is the point (implementers execute
+   enumerated lists well and under-generate them reliably: the #858→#900 five-fix chain, #901,
+   #904, PR #881's missed port axis).
+4. **Hostile-input rows** — for any new/changed parser, regex, or input guard the planner
+   supplies the adversarial input set with expected outcomes: punycode/IDN labels, empty input,
+   header/no-header, quotes + shell/regex metacharacters, tabs and consecutive spaces, oversized
+   values, wrong encoding (#903, #904, #907, #908, #920 were all misses of exactly these).
+5. **Constraints** — the do-NOT-touch list, plus the **never-weaken rule**: a brief may never
+   weaken a CLAUDE.md mandate. In particular, red→green is an **executed run with output
+   pasted**, never "reasoned through" or "verified by reading".
+6. **Verification** — the canonical gates (table below) plus per-item acceptance checks, each a
+   runnable command with its expected observable (the shape "WHEN `<command/input>` THEN
+   `<observable>`"), mapping 1:1 to the tests the step ships.
+7. **ESCALATE contract** — if any factual claim in the brief/ADR is contradicted by the code or
+   a live probe, **STOP and return a structured blocker**; never silently patch the plan, never
+   proceed on a premise you have just falsified. Reality outranks the brief, loudly.
+
+#### THE HANDOFF (implementer → planner) — fixed fields, missing field = gate reject
+
+- **Verdict**: DONE / DONE-WITH-DEVIATION / BLOCKED.
+- **What changed**: files + a one-line why each; the commit hash.
+- **Gates**: the exact commands run + pasted output tails (pass/fail counts) — never bare claims.
+- **Red→green proof** (behaviour-changing steps): the new test's FAILING output on the pre-change
+  code AND its PASSING output after — both pasted from executed runs.
+- **Coverage matrix**: every brief row ticked with its test, or its stated deferral.
+- **Deviations / judgment calls** (or "none"); **carry-forward** for the next step.
+
+#### THE GATE (planner, after every step) — mechanical, evidenced, artifact-producing
+
+The producer never grades its own work; the gate **re-derives**, it never merely re-reads.
+Every item below is mandatory; a skipped item is recorded as SKIPPED with the reason, so an
+unrun check is visible instead of silent. **Terse prose, full checks** — brevity applies to the
+gate report's wording, never to which checks run.
+
+1. **Re-run the canonical gates yourself** (table below; "touched" is computed from the diff's
+   file types **plus cross-language consumers** — a suite that parses an artifact the diff
+   changes runs regardless of its language).
+2. **Re-execute the red proof yourself** for behaviour changes — never accept the handoff's
+   claim: `git -C <path> checkout HEAD~1 -- <src paths>` (tests stay), run the named test →
+   expect FAIL; `git -C <path> checkout HEAD -- .` → re-run → expect PASS. Record both results.
+3. **Read the full diff** (`git show` — never `--stat` alone) and tick **every** ACTION-PLAN
+   item and **every** coverage-matrix row against what the diff actually does. `--stat` cannot
+   see a hardcoded value, a stubbed branch, or a silently dropped plan item.
+4. **Test honesty**: no weakened/removed assertions; every "does NOT contain X" assertion has an
+   X-shaped fixture that could make it fail (vacuity check); no red-run manufactured by
+   monkeypatching a fault production cannot produce (#900's phantom `OSError`); real failure
+   modes exercised through the production surface (an on-disk corrupt file, not an injected
+   exception).
+5. **Conventions**: each new public symbol listed beside 3 sibling symbols proving the name
+   matches the house pattern (#905); comments/docs mentioning touched symbols reconciled with
+   the new reality (stale-comment defects recur).
+6. **Write the gate record** — a fixed-field block (or per-phase file where the skill says so):
+   commands + results, red/green evidence, per-item diff verdicts, matrix confirmation, the
+   SKIPPED list. This artifact is what makes a skipped check auditable.
+
+#### Canonical gates (single source of truth — briefs and gates reference THIS table)
+
+| Touched | Gates (all must pass) |
+| ------- | --------------------- |
+| Python (`*.py`) | `python -m pytest` · `ruff check .` · `ruff format --check .` · `mypy tests/` |
+| PHP (`*.php`/`*.inc`) | `php -l` per touched file · `vendor/bin/phpunit` · `vendor/bin/phpstan` · `vendor/bin/phpcs --standard=phpcs.xml.dist src/` |
+| Shell (`*.sh`) | `sh -n` · `shellcheck` · `shellspec` (where specs exist) |
+| Markdown (`*.md`) | `npx markdownlint-cli2` |
+| `www/` | Tier-A `ui_render` coverage exists for the change (test mandate #4) |
+
+### Evidence rules (planner and implementer alike)
+
+- **A claim without a run artifact is ASSUMED.** Every load-bearing fact in an ADR, brief, or
+  triage verdict carries the command + output (or a doc citation fetched this session) that
+  proved it. Facts marked ASSUMED must be verified before any step relies on them.
+- **Environmental/platform claims written INTO artifacts** (code comments, workflows, docs —
+  default shells, token semantics, external-service behaviour, file formats of third-party
+  feeds) must be probed or doc-verified **in-session, before being written**. A plausible memory
+  is not a fact (a false "pipefail" comment shipped from memory; #902 shipped a CI contract that
+  `GITHUB_TOKEN` event suppression made unfulfillable; ADR-59 shipped wrong `domain_col` values
+  for feeds nobody had fetched).
+- **No self-exemption.** Deviating from any MUST rule requires quoting the authorizing user
+  message verbatim in the report. "Per session config" or "acceptable here" without a citation
+  is fabricated authorization — a real observed failure, not a hypothetical.
+- **Debugging = hypothesis ledger.** Before any fix edit: list ≥2 candidate hypotheses, the
+  discriminating probe for each (what output confirms/refutes), run the probe, record the actual
+  output. Only a CONFIRMED hypothesis gets a fix; the ledger rides the handoff so the gate can
+  audit the causal chain instead of trusting the patch.
 
 ---
 

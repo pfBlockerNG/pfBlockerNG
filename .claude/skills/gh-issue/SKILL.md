@@ -115,6 +115,15 @@ it:
 - **INVALID / WORKS-AS-INTENDED / DUPLICATE** — not a defect (explain; link the
   canonical issue if duplicate).
 
+A CONFIRMED / CONFIRMED-WITH-CORRECTIONS verdict needs **executable evidence**, not a code
+reading: a minimal runnable repro (unit-level in the scratchpad is fine — no worktree needed;
+e.g. the one-liner `php -r`/`python -c` that shows the guard rejecting the input) **or** an
+explicit "repro infeasible off-appliance because X" line, in which case the plan's Step 1
+(pinning test) carries the burden. Present the verdict as a **claims table** — claim |
+discriminating evidence (`file:line` or command + output) | verdict — and name the alternative
+explanations you considered and the observation that discriminates them. A verdict whose table
+cites no evidence is not a verdict (CLAUDE.md "Evidence rules").
+
 If the verdict is anything other than a real, actionable defect, the "plan" is the
 appropriate non-code action (close with rationale, ask for info, mark duplicate) —
 do **not** invent a fix. Note that `--fix` on a non-actionable verdict means: carry
@@ -165,14 +174,24 @@ the brief a fresh sub-agent could execute with no other context. Each prompt sta
 - **Objective** — the one outcome this step must achieve, tied to the issue.
 - **Required reading** — `CLAUDE.md`, the relevant source/tests, and **the previous
   step's handoff** (named explicitly).
+- **Coverage matrix + hostile inputs** (CLAUDE.md "THE BRIEF" §3–4) — when the fix touches a
+  symmetric structure (v4/v6, address/port, CE/Plus, parse modes, every caller of the touched
+  symbol), YOU enumerate all rows from grep/the version matrix into the prompt, each mapped to
+  a test or an explicit deferral; a parser/regex/guard fix carries its hostile-input rows with
+  expected outcomes. Fixing one axis of a symmetric structure without enumerating its siblings
+  is how one bug becomes a five-issue chain (#858→#900).
 - **Scope / constraints** — exactly what to change and what NOT to (CLAUDE.md "Code
   standards" + "Naming"; "clean the diff"; worktree-only at `<path>`). A PHP fix obeys
   the CLAUDE.md PHP rules — stub a new pfSense function from upstream rather than work
-  around it, and keep the PFBL-01 `RequirePfbFilter` sniff green.
-- **Verification gates** — the commands that must pass (`python -m pytest`,
-  `ruff check .`, `ruff format .`, plus for PHP `php -l` + `vendor/bin/phpunit` +
-  `vendor/bin/phpstan` + `vendor/bin/phpcs`, and `shellcheck` for shell — as the
-  touched languages dictate), plus the case that proves THIS step.
+  around it, and keep the PFBL-01 `RequirePfbFilter` sniff green. The brief **never weakens a
+  mandate** (red→green is an executed run with pasted output), and carries the **ESCALATE
+  contract**: a brief claim contradicted by the code → STOP, return BLOCKED, don't improvise.
+- **Verification gates** — the **canonical gates** for the touched languages (CLAUDE.md
+  "Canonical gates" table, including cross-language consumers), plus the case that proves THIS
+  step as a runnable command with its expected observable.
+- **Hypothesis ledger** (debugging-shaped steps) — before any fix edit: ≥2 candidate
+  hypotheses, the discriminating probe for each, the probe run and its actual output recorded;
+  only a CONFIRMED hypothesis gets a fix, and the ledger rides the handoff.
 - **Expected result + handoff** — what the diff/tests should look like, and the
   instruction to **return a handoff document** (see format below).
 
@@ -242,8 +261,8 @@ one per step.
 For each plan step `M`, in order:
 
 **7a. Delegate to a clean sub-agent.** Spawn an Agent (`subagent_type:
-general-purpose`, **`model: sonnet`**, no `isolation` — the worktree already exists)
-with a self-contained brief. Per CLAUDE.md "Plan with a higher model, implement with
+general-purpose`, **`model: sonnet`**, effort **`xhigh`** stated explicitly, no `isolation` —
+the worktree already exists) with a self-contained brief. Per CLAUDE.md "Plan with a higher model, implement with
 Sonnet 5", **you are the higher-model planner/gater and the implementer runs on Sonnet 5** —
 the brief must be self-contained, accurate, and well-referenced, since the cheaper
 implementer is only safe because you independently gate every step (7b). The brief: the
@@ -259,18 +278,29 @@ IS the handoff. If `ponytail` is active in this session, the brief's **first** i
 `Run /ponytail:ponytail <level>` (the level active here — full/lite/ultra; CLAUDE.md "Plan with
 a higher model"), so the implementer matches the parent's ponytail mode.
 
-**7b. Orchestrator gate (independent — you verify the transaction, you don't
-re-implement it).** When the agent returns, in `<path>`: confirm the commit exists
-(`git -C <path> log`, clean `git -C <path> status`), **independently re-run** the
-gates relevant to what changed (`python -m pytest`, `ruff check .`, plus
-`php -l` / `shellcheck` / `vendor/bin/phpunit` for the touched languages), and
-sanity-check the diff (`git -C <path> show --stat`) against the step's expected
-result and the issue. For a fix step, confirm the pinning test **fails without** the
-fix and **passes with** it (the before/after the handoff claims); for a `www/`-touching
-fix, confirm **Tier A** UI coverage is present (CLAUDE.md "Test coverage" #4). If the agent
-reported BLOCKED, the handoff is missing, a gate fails, or the diff doesn't match the
-objective → **HALT and report**; do not start `M+1`. Carry the validated handoff into
-the next step's brief.
+**7b. Orchestrator gate (independent, mechanical — CLAUDE.md "THE GATE"; you verify the
+transaction and content, you don't re-implement).** Terse prose, full checks; a skipped item is
+recorded as SKIPPED with the reason. When the agent returns, in `<path>`:
+
+1. **Transaction**: commit exists (`git -C <path> log`, clean `status`); the handoff carries
+   every fixed field — a missing/empty field rejects it.
+2. **Re-run the canonical gates yourself** for everything the diff touches (file types + cross-
+   language consumers).
+3. **Re-execute the red proof yourself** for a fix step — never accept the handoff's claim:
+   `git -C <path> checkout HEAD~1 -- <src paths>` (tests stay), run the pinning test → expect
+   FAIL; `git -C <path> checkout HEAD -- .`, re-run → expect PASS. Record both results.
+4. **Read the FULL diff** (`git -C <path> show` — never `--stat` alone) and tick every plan
+   item and every coverage-matrix row against what the diff actually does.
+5. **Test honesty**: no weakened assertions; every negative assertion has a fixture that could
+   fail it; no impossible monkeypatched faults; `www/`-touching fix has **Tier A** coverage
+   (CLAUDE.md "Test coverage" #4).
+6. **Conventions**: new symbols named like siblings; stale comments/docs reconciled.
+7. **Record the gate** as a fixed-field block in your running report (commands + results,
+   red/green re-execution, per-item verdicts, SKIPPED list).
+
+If the agent reported BLOCKED, the handoff is missing a field, a gate item fails, or the diff
+doesn't match the objective → **HALT and report**; do not start `M+1`. Carry the validated
+handoff into the next step's brief.
 
 **Loop safety:** never run more iterations than there are plan steps; never re-run a
 completed step except on explicit user instruction.

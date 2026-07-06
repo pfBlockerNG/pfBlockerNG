@@ -71,6 +71,14 @@ claims and cite real symbols + `file:line`:
    the *load-bearing* facts (threading/concurrency model, concurrent writers,
    inode/file-lifecycle behaviour, platform limits, existing knobs) — the kind
    ADR-03 §1 enumerates. If the user asserts current behaviour, verify it.
+   **Every load-bearing fact carries its evidence** — the command + output, the
+   `file:line`, or the doc fetched this session — or is explicitly tagged
+   **ASSUMED** with a verification step in the phase that first relies on it
+   (CLAUDE.md "Evidence rules"). This applies doubly to **external formats and
+   third-party behaviour** (feed layouts, column indexes, API/token semantics,
+   CI-platform behaviour): fetch the live artifact or official doc **before** the
+   value enters a decision table — ADR-59 shipped wrong `domain_col` values for
+   feeds nobody had fetched, and only implementer initiative caught them.
 2. **Problem.** What hurts, and how would you *measure* it? If the justification
    is performance or memory, there must be a **baseline** — without it you
    cannot know the change helps (ADR-01's failure mode).
@@ -95,9 +103,16 @@ claims and cite real symbols + `file:line`:
    whether the premise even holds and how you'd **falsify** it cheaply *before*
    building phases. If it looks unjustified, say so plainly and propose the
    experiment that would settle it.
-6. **The contract.** Enumerate the semantics that MUST be preserved, each one
-   pinned by a test *before* any swap. These are the things a silent regression
-   would break.
+6. **The contract.** Enumerate the semantics that MUST be preserved as a
+   **numbered** "Semantics that MUST be preserved" list in §2, each one pinned by
+   a test *before* any swap — phase prompts cite the item **numbers** their tests
+   pin, turning acceptance into a per-phase checklist the orchestrator ticks.
+   These are the things a silent regression would break.
+   **Plus the coverage matrix:** every sibling axis the change touches (v4/v6,
+   address/port, CE/Plus versions, parse modes, providers, all callers of touched
+   symbols) enumerated **from the source** (grep output, the version-matrix file),
+   each row mapped to a phase/test or an explicit out-of-scope entry — "all X"
+   without the list is not a spec (CLAUDE.md "THE BRIEF" §3).
 7. **Validation strategy.** Concrete and falsifiable, and bound by CLAUDE.md **Test
    coverage** — the five non-negotiables. Encode them into the plan: every
    **behaviour-changing** phase pins a test that **fails before / passes after** the change;
@@ -202,10 +217,14 @@ ACTION PLAN (ordered — golden/oracle tests FIRST when behaviour-preserving)
 CONSTRAINTS
 <language rules; an explicit do-NOT-touch list>
 
-VERIFICATION (must all pass before the phase is done)
-- python -m pytest        → green (+ the new tests this phase adds)
-- ruff check . / ruff format .   → clean
-- php -l / shellcheck     → as relevant to files touched
+VERIFICATION (must all pass before the phase is done; only gates RUNNABLE in the
+implementer's environment — anything else goes under DEFERRED with its exact
+dispatch command, never as "must pass")
+- <the canonical gates for the touched languages — CLAUDE.md "Canonical gates">
+- red-run (behaviour-changing phase): <named new test> executed against the
+  pre-change code → FAILS (paste command + failure line into HANDOFF), then
+  passes after — an executed run, never "reasoned through"
+- <the per-item acceptance checks: WHEN <command/input> THEN <observable>>
 - diff-read <what to eyeball>
 
 EXPECTED RESULT
@@ -215,9 +234,10 @@ COMMIT (single)
     <scope>: <imperative summary> (ADR-NN PN)
 Push directly to <branch>; open a PR only if the direct push is rejected.
 
-HANDOFF — write `.ADRs/ADR_NN_Name/RESULTS/<NN>_Results.txt` (plain .txt)
-<what the next phase needs: state after this phase; decisions/values chosen;
- watch-outs; verification numbers; and the go-ahead>
+HANDOFF — write `.ADRs/ADR_NN_Name/RESULTS/<NN>_Results.txt` (plain .txt) with
+the fixed fields (CLAUDE.md "THE HANDOFF"): verdict; what changed + commit;
+gates with pasted output; red→green proof; coverage-matrix ticks; deviations /
+judgment calls (or "none"); carry-forward for the next phase.
 ```
 
 Rules:
@@ -227,6 +247,24 @@ Rules:
 - Each phase ends with the HANDOFF block naming `RESULTS/{NN}_Results.txt`.
 - Reflect the CLAUDE.md workflow actually in force (commit style, inline-on-
   branch, push-direct-PR-only-if-rejected).
+- **Every prompt carries the reality-override line:** "Line numbers and
+  code-state claims in this prompt were written before earlier phases ran; the
+  prior RESULTS files and the live tree override this prompt on any conflict —
+  verify each claim before acting on it, and flag contradictions loudly in the
+  handoff." Planner briefs contain errors in every era; the durable defence is
+  an implementer instructed to disprove the brief, not obey it.
+- A phase adding/changing a **parser, regex, or input guard** carries its
+  **hostile-input rows** (punycode/IDN, empty, header/no-header, metacharacters,
+  tabs/consecutive spaces, oversized, wrong encoding) with expected outcomes as
+  REQUIRED test data — the implementer fills in results, it never invents the
+  input classes (CLAUDE.md "THE BRIEF" §4).
+- **Template drift is bounded:** mirror the latest ADR's section set and prose
+  style, but the VERIFICATION and HANDOFF gate content above comes from THIS
+  skill's template — one weak ADR must not become the convention every later
+  ADR copies.
+- §7 Definition of Done always carries the **CE+Plus live-VM fan-out** line (the
+  org-default validation matrix); an ADR wanting to skip it states the exemption
+  explicitly.
 
 ## Step 5 — Do NOT pre-write handoffs
 
