@@ -97,14 +97,20 @@ jobs:
           # the union of the shards covers the whole suite (issue #816). Only ONE CE
           # version's shards may be aggregated — a second CE leg would double-count the
           # suite exactly like the Plus legs excluded by the download pattern above.
-          LOGS=$(find smoke-artifacts -path '*/smoke-diagnostics-pfsense-ce-*' -name pytest-durations.log | LC_ALL=C sort)
+          # PREFIX must stay in sync with the download `pattern:` above — the with:
+          # block cannot share a shell variable.
+          PREFIX='smoke-diagnostics-pfsense-ce-'
+          LOGS=$(find smoke-artifacts -path "*/${PREFIX}*" -name pytest-durations.log | LC_ALL=C sort)
           if [ -z "$LOGS" ]; then
             echo "::error::no pytest-durations.log found in the smoke artifacts — nothing to aggregate."
             exit 1
           fi
-          VERSIONS=$(printf '%s\n' $LOGS | sed -n 's|.*/smoke-diagnostics-pfsense-ce-\(.*\)-s[0-9][0-9]*/.*|\1|p' | LC_ALL=C sort -u)
-          if [ "$(printf '%s\n' "$VERSIONS" | wc -l)" -ne 1 ]; then
-            echo "::error::CE diagnostics span more than one pfSense version ($(printf '%s' "$VERSIONS" | tr '\n' ' ')) — aggregating them would double-count the suite. Narrow to one CE leg."
+          VERSIONS=$(printf '%s\n' $LOGS | sed -n "s|.*/${PREFIX}\(.*\)-s[0-9][0-9]*/.*|\1|p" | LC_ALL=C sort -u)
+          # Fail closed on an EMPTY extraction too: zero matched versions means the
+          # artifact naming drifted from PREFIX — the guard must not read a blank
+          # line as "one version" (wc -l would report 1).
+          if [ -z "$VERSIONS" ] || [ "$(printf '%s\n' "$VERSIONS" | wc -l)" -ne 1 ]; then
+            echo "::error::CE diagnostics must resolve to exactly one pfSense version, got: '$(printf '%s' "$VERSIONS" | tr '\n' ' ')' — empty means artifact-name drift; multiple would double-count the suite."
             exit 1
           fi
           echo "Aggregating these shard logs:"
