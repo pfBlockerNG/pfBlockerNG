@@ -9865,13 +9865,46 @@ function pfb_redact_url($url) {
 }
 
 
+// ADR-59 Phase 3: merge caller-supplied HTTP headers with the ADR-42 conditional-GET
+// header into one CURLOPT_HTTPHEADER list -- neither clobbers the other. Pure / no I/O,
+// so it is unit-testable off-appliance (pfb_download() itself is not: tests/php/README.md
+// "Out of scope" -- its curl/exec surface has no off-box double).
+//
+// $extra_headers: caller-supplied header strings (e.g. 'Authorization: Bearer <token>').
+//   A non-string or empty entry is dropped defensively rather than corrupting the list.
+// $conditional_header: the ADR-42 conditional-GET header ('If-None-Match: <etag>'), or
+//   '' when no conditional-GET validator applies (the common case for every feed today).
+//
+// @return string[] the merged list, conditional-GET header first -- preserves the
+//   pre-Phase-3 single-element list byte-for-byte when $extra_headers is empty (today,
+//   always -- no caller sets it yet).
+function pfb_download_http_headers(array $extra_headers, string $conditional_header = ''): array
+{
+	$headers = array();
+	if ($conditional_header !== '') {
+		$headers[] = $conditional_header;
+	}
+	foreach ($extra_headers as $extra_header) {
+		if (is_string($extra_header) && $extra_header !== '') {
+			$headers[] = $extra_header;
+		}
+	}
+	return $headers;
+}
+
+
 // Function to download feeds
 //
 // Optional $response_meta — when a non-NULL reference is passed (detector probe mode), it is
 // filled with an array: ['status' => <http_status_string>, 'etag' => <ETag string or ''>,
 // 'lastmod' => <epoch int or 0>]. The two sync callers in pfblockerng.inc (lines ~12436 and
 // ~14096) do NOT pass this argument, so their behaviour is entirely unchanged.
-function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $logtype, $vtype='', $timeout=300, $type='', $username='', $password='', $srcint=FALSE, &$response_meta=NULL) {
+//
+// Optional $extra_headers (ADR-59 Phase 3) — caller-supplied HTTP header strings (e.g. a
+// future Cloudflare Radar 'Authorization: Bearer <token>'), merged with the conditional-GET
+// header via pfb_download_http_headers() above. No caller passes this yet; every existing
+// feed keeps its current CURLOPT_HTTPHEADER behaviour exactly.
+function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $logtype, $vtype='', $timeout=300, $type='', $username='', $password='', $srcint=FALSE, &$response_meta=NULL, array $extra_headers=array()) {
 	global $pfb;
 	$http_status = '';
 	$elog = ">> {$pfb['log']} 2>&1";
@@ -10080,6 +10113,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				// (primary); Last-Modified epoch → CURLOPT_TIMECONDITION (fallback).
 				// Only applied to the probe ('change_detect') mode: the sync ingest callers
 				// pass $type == '' and must always receive the full body.
+				$conditional_header = '';
 				if ($type === 'change_detect') {
 					// Read the validators the detector persisted at {header}.orig, NOT the
 					// probe's infixed {file_dwn}.orig (= {header}.md5.orig) — see
@@ -10087,12 +10121,23 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 					// sent and the server can never answer 304 (ADR-42 §3 fast-path).
 					$validators = pfb_validator_read(pfb_conditional_get_validator_base($file_dwn));
 					if (is_string($validators['etag']) && $validators['etag'] !== '') {
-						curl_setopt($ch, CURLOPT_HTTPHEADER, array("If-None-Match: {$validators['etag']}"));
+						$conditional_header = "If-None-Match: {$validators['etag']}";
 					} elseif (is_int($validators['lastmod']) && $validators['lastmod'] > 0) {
 						curl_setopt($ch, CURLOPT_TIMECONDITION, CURL_TIMECOND_IFMODSINCE);
 						curl_setopt($ch, CURLOPT_TIMEVALUE, $validators['lastmod']);
 					}
 				}
+
+				// ADR-59 Phase 3: merge caller-supplied headers (none yet) with the
+				// conditional-GET header above -- neither list clobbers the other. Skips
+				// the curl_setopt entirely when both are empty (today, every feed except
+				// an in-flight change_detect probe with a stored ETag), matching the
+				// pre-Phase-3 behaviour byte-for-byte.
+				$http_headers = pfb_download_http_headers($extra_headers, $conditional_header);
+				if (!empty($http_headers)) {
+					curl_setopt($ch, CURLOPT_HTTPHEADER, $http_headers);
+				}
+
 				if ($srcint) {
 					curl_setopt($ch, CURLOPT_INTERFACE, $srcint);	// Use a specific interface when downloading lists
 					pfb_logger("\nList: {$header} will be downloaded via interface: {$srcint}\n", 1);

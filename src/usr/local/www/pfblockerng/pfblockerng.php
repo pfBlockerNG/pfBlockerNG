@@ -670,8 +670,11 @@ function pfblockerng_download_extras($timeout=600, $type='') {
 
 		$file_dwn = "{$feed['folder']}/{$feed['file_dwn']}";
 
-		if (!pfb_download($feed['url'], $file_dwn, FALSE, "{$feed['folder']}/{$feed['file']}", '', $logtype, '', $timeout, $feed['type'], 
-		    $feed['username'], $feed['password'])) {
+		// ADR-59 Phase 3: thread the per-feed 'headers' field through as caller-supplied
+		// HTTP headers (e.g. a future Cloudflare Radar Bearer token). No provider sets it
+		// yet, so this is always array() -- existing downloads are unaffected.
+		if (!pfb_download($feed['url'], $file_dwn, FALSE, "{$feed['folder']}/{$feed['file']}", '', $logtype, '', $timeout, $feed['type'],
+		    $feed['username'], $feed['password'], extra_headers: $feed['headers'] ?? array())) {
 
 			$log = "\nFailed to Download {$feed['file']}\n";
 			pfb_logger("{$log}", $logtype);
