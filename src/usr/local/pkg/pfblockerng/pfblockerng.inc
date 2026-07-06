@@ -8271,64 +8271,92 @@ function pfblockerng_top1m() {
 	if (($handle = @fopen("{$pfb['dbdir']}/top-1m.csv", 'r')) !== FALSE) {
 		// Build into a TEMP file first -- an empty/invalid top-1m.csv must never
 		// truncate a previously-good whitelist (issue #886); only a build that
-		// actually parsed source lines is swapped into place below.
-		$tmp_file	= "{$whitelist_file}.tmp";
-		unlink_if_exists($tmp_file);
-		$pfb_output	= @fopen($tmp_file, 'w');
-		while (($line = @fgets($handle)) !== FALSE) {
+		// actually parsed source lines is swapped into place below. tempnam()
+		// (not a fixed '.tmp' name) so a manual "Run Now" racing a cron tick can't
+		// collide on the same staging file (#886 review).
+		$tmp_file	= @tempnam(dirname($whitelist_file), '.pfbtop1m_');
+		$pfb_output	= ($tmp_file !== FALSE) ? @fopen($tmp_file, 'w') : FALSE;
 
-			if (strpos($line, '.') === FALSE || strpos($line, ',') === FALSE || empty($line)) {
-				continue;
+		if ($pfb_output === FALSE) {
+			// Could not stage the build at all (perms/full disk) -- never touch
+			// the existing whitelist; warn and move on (#886 review). Not
+			// deterministically unit-triggerable without an open_basedir-restricted
+			// child process (tempnam() falls back to the system temp dir for a
+			// merely-unwritable-but-existing dir) -- see the covered rename-failure
+			// branches (+ this gap's rationale) in
+			// tests/php/Top1mPreserveOnEmptyFeedTest.php.
+			if ($tmp_file !== FALSE) {
+				unlink_if_exists($tmp_file);
 			}
-
-			// Display progress indicator
-			if ($linecnt % 100000 == 0) {
-				pfb_logger('.', 1);
-			}
-
-			// Collect Domain TLD
-			$csvline	= str_getcsv($line, ',', '"', "\\");
-			$tld		= substr($csvline[1], strrpos($csvline[1], '.') + 1);
-
-			if (isset($pfb_include[$tld])) {
-				// Whitelist both 'www.example.com' and 'example.com'
-				if (str_starts_with($csvline[1], 'www.')) {
-					$csvline[1] = substr($csvline[1], 4);
-				}
-				$x++;
-
-				// Create three whitelist options per TOP1M whitelisted Domain
-				@fwrite($pfb_output, ".{$csvline[1]},,\n,{$csvline[1]},,\n,www.{$csvline[1]},,\n");
-			}
-
-			if ($x >= $pfb['dnsbl_top1m_cnt']) {
-				break;
-			}
-			$linecnt++;
-		}
-		if ($pfb_output) {
-			@fclose($pfb_output);
-		}
-		@fclose($handle);
-
-		if ($linecnt === 0) {
-			// Dead feed (empty/invalid top-1m.csv) -- discard the temp build and
-			// keep whatever whitelist was already on disk instead of wiping it.
-			unlink_if_exists($tmp_file);
-			if ($had_previous) {
-				pfb_logger("\n  TOP1M: feed returned no valid data (empty/invalid) -- keeping the previous TOP1M whitelist.\n", 2);
-			}
-			else {
-				pfb_logger("\n  TOP1M: feed returned no valid data (empty/invalid) -- no TOP1M whitelist available.\n", 2);
-			}
+			@fclose($handle);
+			pfb_logger("\n  TOP1M: could not create the temp whitelist file -- keeping the previous TOP1M whitelist.\n", 2);
 		}
 		else {
-			// Valid feed -- atomically swap the validated build into place.
-			@rename($tmp_file, $whitelist_file);
-			unlink_if_exists($tmp_file);	// no-op on success; cleans up if rename failed
-			pfb_logger("] [ Parsed {$linecnt} lines | Found {$x} of {$pfb['dnsbl_top1m_cnt']} ]...", 1);
-			if ($x === 0) {
-				pfb_logger("\n  TOP1M: 0 domains matched the configured TLD inclusions.\n", 1);
+			while (($line = @fgets($handle)) !== FALSE) {
+
+				if (strpos($line, '.') === FALSE || strpos($line, ',') === FALSE || empty($line)) {
+					continue;
+				}
+
+				// Display progress indicator
+				if ($linecnt % 100000 == 0) {
+					pfb_logger('.', 1);
+				}
+
+				// Collect Domain TLD -- only a row whose rank column is numeric counts as
+				// real parsed source data. A prose/HTML/error body (e.g. "error, service
+				// temporarily unavailable.") still has a '.' and a ',' and would otherwise
+				// pass the filter above, so a dead feed would classify as "valid" below
+				// and wipe the whitelist (#886 review).
+				$csvline = str_getcsv($line, ',', '"', "\\");
+				if (!ctype_digit((string) ($csvline[0] ?? ''))) {
+					continue;
+				}
+				$tld = substr($csvline[1], strrpos($csvline[1], '.') + 1);
+
+				if (isset($pfb_include[$tld])) {
+					// Whitelist both 'www.example.com' and 'example.com'
+					if (str_starts_with($csvline[1], 'www.')) {
+						$csvline[1] = substr($csvline[1], 4);
+					}
+					$x++;
+
+					// Create three whitelist options per TOP1M whitelisted Domain
+					@fwrite($pfb_output, ".{$csvline[1]},,\n,{$csvline[1]},,\n,www.{$csvline[1]},,\n");
+				}
+
+				if ($x >= $pfb['dnsbl_top1m_cnt']) {
+					break;
+				}
+				$linecnt++;
+			}
+			@fclose($pfb_output);
+			@fclose($handle);
+
+			if ($linecnt === 0) {
+				// Dead feed (empty/invalid top-1m.csv) -- discard the temp build and
+				// keep whatever whitelist was already on disk instead of wiping it.
+				unlink_if_exists($tmp_file);
+				if ($had_previous) {
+					pfb_logger("\n  TOP1M: feed returned no valid data (empty/invalid) -- keeping the previous TOP1M whitelist.\n", 2);
+				}
+				else {
+					pfb_logger("\n  TOP1M: feed returned no valid data (empty/invalid) -- no TOP1M whitelist available.\n", 2);
+				}
+			}
+			else if (@rename($tmp_file, $whitelist_file)) {
+				// Valid feed -- atomically swap the validated build into place.
+				pfb_logger("] [ Parsed {$linecnt} lines | Found {$x} of {$pfb['dnsbl_top1m_cnt']} ]...", 1);
+				if ($x === 0) {
+					pfb_logger("\n  TOP1M: 0 domains matched the configured TLD inclusions.\n", 1);
+				}
+			}
+			else {
+				// The parse looked valid but publishing it did not (perms/cross-device/
+				// disk) -- never report success while silently keeping a stale whitelist
+				// (#886 review).
+				unlink_if_exists($tmp_file);
+				pfb_logger("\n  TOP1M: failed to publish the new whitelist build -- keeping the previous TOP1M whitelist.\n", 2);
 			}
 		}
 	}
@@ -15754,6 +15782,9 @@ function sync_package_pfblockerng($cron='') {
 						// rather than silently keeping (or wiping) any prior whitelist
 						// (issue #886); pfblockerng_top1m() below is not invoked when a
 						// previous whitelist exists and no top-1m.update marker was set.
+						// Not unit-tested: this exec()'s a real download attempt --
+						// deep pfSense-runtime integration is the live-VM smoke's job
+						// (tests/php/README.md "Out of scope"; ADR-04).
 						if (!file_exists("{$pfb['dbdir']}/top-1m.csv")) {
 							pfb_logger("\n  TOP1M: feed download failed -- keeping the previous TOP1M whitelist (if any).\n", 2);
 						}
