@@ -928,7 +928,7 @@ def test_ipv4_category_edit_renders_alias_type_help_text(
 
     Scenario: a GET of ``pfblockerng_category_edit.php?type=ipv4`` returns a
     200 response with the ``Must be a Port-type alias.`` and
-    ``Must be a Network or Host-type alias.`` help strings that were added by
+    ``Must be an address-type (Host, Network, URL or URL Table) alias.`` help strings that were added by
     issue #356 to guide the user when filling the Advanced In/Out alias fields.
 
     Background:
@@ -944,7 +944,7 @@ def test_ipv4_category_edit_renders_alias_type_help_text(
     Then:
         - HTTP 200.
         - Body contains ``Must be a Port-type alias.``
-        - Body contains ``Must be a Network or Host-type alias.``
+        - Body contains ``Must be an address-type (Host, Network, URL or URL Table) alias.``
         - Body free of ``Fatal error``, ``Parse error``, ``Warning``, ``Notice``,
           ``Uncaught`` (standard ui_render guarantee).
     """
@@ -957,8 +957,9 @@ def test_ipv4_category_edit_renders_alias_type_help_text(
     assert "Must be a Port-type alias." in body, (
         "IPv4 category-edit page is missing help text 'Must be a Port-type alias.'"
     )
-    assert "Must be a Network or Host-type alias." in body, (
-        "IPv4 category-edit page is missing help text 'Must be a Network or Host-type alias.'"
+    assert "Must be an address-type (Host, Network, URL or URL Table) alias." in body, (
+        "IPv4 category-edit page is missing help text "
+        "'Must be an address-type (Host, Network, URL or URL Table) alias.'"
     )
 
 
