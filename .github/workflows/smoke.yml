@@ -120,7 +120,7 @@ on:
         required: false
         type: string
         default: "3"
-  # Daily nightly run — runs the full CE suite every night.
+  # Daily nightly run — scope=full: the whole marker on every ci:true leg (CE + Plus).
   schedule:
     - cron: "0 7 * * *"
 

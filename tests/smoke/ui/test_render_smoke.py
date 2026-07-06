@@ -683,7 +683,9 @@ def test_dnsbl_top1m_source_options_exclude_alexa(webui: WebUI, php_error_log_gu
     # and "3.0" are also individually satisfied by Cloudflare's "(CC BY-NC) 4.0" note, so
     # this would pass even if Majestic's own note vanished.
     assert "(CC BY) 3.0" in body, "DNSBL page is missing the Majestic (CC BY) 3.0 attribution note"
-    assert "CC BY-NC" in body and "4.0" in body, "DNSBL page is missing the Cloudflare CC BY-NC 4.0 attribution note"
+    # Exact form, like Majestic's above (#909): the split "CC BY-NC" + "4.0" pair was
+    # satisfiable by any unrelated "4.0" elsewhere in the page body.
+    assert "(CC BY-NC) 4.0" in body, "DNSBL page is missing the Cloudflare (CC BY-NC) 4.0 attribution note"
     assert 'name="top1m_token"' in body, "DNSBL page is missing the top1m_token field"
     assert 'type="password"' in body, "DNSBL page's top1m_token field must be masked (type=password)"
     for absent in ("Alexa TOP1M", 'value="alexa"'):
