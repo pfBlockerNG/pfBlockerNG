@@ -22,6 +22,7 @@ is gated on ``pfb["mod_threading"]`` and only a test that explicitly starts it r
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 import time
 from typing import Any
@@ -222,36 +223,231 @@ class TestControlEnableOpensDnsblStatsDb:
     def test_open_helper_survives_a_losing_race_on_corrupt_db_delete(self, tmp_path: Any, monkeypatch: Any) -> None:
         """Concurrency guard: the shared open helper now runs from three threads (the
         ADR-10 swap, the control-channel enable, the timed re-enable). Two racing to
-        recover the SAME corrupt stats DB can both pass the ``isfile()`` check, so the
-        loser's ``os.remove()`` hits an already-deleted file. That FileNotFoundError must
-        NOT escape the helper -- from the un-wrapped enable call site it would propagate
-        out of ``pfb_apply_control_command``, kill ``pfb_control_watcher``'s thread, and
-        silently disable the control channel until Unbound restarts (issue #870).
+        recover the SAME corrupt stats DB can both fail ``_validate_db_with_recovery``'s
+        first validate, so the loser's ``os.remove()`` hits an already-deleted file. That
+        FileNotFoundError must NOT escape the helper -- from the un-wrapped enable call
+        site it would propagate out of ``pfb_apply_control_command``, kill
+        ``pfb_control_watcher``'s thread, and silently disable the control channel until
+        Unbound restarts (issue #870).
 
-        RED without the inner try/except: os.remove's FileNotFoundError propagates and
-        this call raises.
+        Issue #900: ``pfb_db_validate`` -> ``_db_run`` swallows every fault internally and
+        never raises in production, so (unlike the test this replaces) it is NOT
+        monkeypatched here -- a genuinely corrupt file on disk drives its first, real
+        False. Only ``os.remove`` -- the boundary the guard actually protects -- is
+        monkeypatched, to simulate the losing race (another thread got there first).
         """
+        monkeypatch.setattr(P.time, "sleep", lambda *_a, **_k: None)  # skip _db_run's real retry backoff
         db = tmp_path / "dnsbl.sqlite"
-        db.write_text("corrupt")  # a real file so os.path.isfile() is genuinely True
+        db.write_text("corrupt")  # genuinely invalid sqlite file -> validate() really fails
         P.pfb["mod_sqlite3"] = True
         P.pfb["pfb_py_dnsbl"] = str(db)
         P.pfb["python_blacklist"] = True  # stats wanted -> the open path runs
         P.pfb["sqlite3_dnsbl_con"] = False
 
-        # Every open attempt fails (corrupt DB) AND the file vanished under us (the other
-        # thread already removed it), so os.remove raises FileNotFoundError.
-        def _fail_open(*_a: Any, **_k: Any) -> bool:
-            raise OSError("simulated corrupt DB open failure")
-
         def _already_removed(_path: str) -> None:
             raise FileNotFoundError(_path)
 
-        monkeypatch.setattr(P, "pfb_db_validate", _fail_open)
         monkeypatch.setattr(P.os, "remove", _already_removed)
 
-        # Must not raise; both attempts fail so the DB stays closed.
+        # Must not raise, even though the delete step lost the race.
         P._open_dnsbl_stats_db_if_wanted()
+
+        # os.remove was faked (not a real delete), so the corrupt bytes are still on disk --
+        # the revalidate genuinely fails too, so the DB stays closed. The point of this test
+        # is the FIRST assertion (no exception escaped), not this one.
         assert P.pfb["sqlite3_dnsbl_con"] is False
+
+
+class TestCorruptDnsblStatsDbRecovery:
+    """Issue #900: a genuinely corrupt ``pfb_py_dnsbl.sqlite`` on disk (e.g. after a power
+    loss) is recovered by the shared open helper -- deleted and rebuilt -- instead of
+    silently leaving the stats DB closed forever.
+
+    Background: ``pfb_db_validate`` -> ``_db_run`` swallows every connect/PRAGMA fault
+    internally and returns ``False``; it never raises. The old ``except Exception``
+    recovery around ``pfb_db_validate`` in both the helper and ``init_standard`` was
+    therefore dead code -- a corrupt file was never deleted, every DNSBL counter was
+    silently dropped forever, and each swap/enable re-paid a ~1.5s stall inside
+    ``_db_lock`` for nothing. ``_validate_db_with_recovery`` (shared by both call sites)
+    fixes this: a ``False`` validate is treated as the corrupt case (delete + one
+    revalidate).
+
+    Each test monkeypatches ``time.sleep`` to a no-op -- ``_db_run``'s internal retry
+    backoff is real production behaviour being exercised here, not test/production
+    concurrency to coordinate, so there is nothing to actually wait for.
+    """
+
+    def test_corrupt_db_is_deleted_rebuilt_and_flush_lands(self, tmp_path: Any, monkeypatch: Any) -> None:
+        """Positive branch: recovery deletes the corrupt file, the retry connects, the
+        flag goes True, and a counter flush lands.
+
+        RED pre-fix (confirmed by stashing this fix and re-running): the corrupt file
+        was NOT deleted (still on disk after the call) and
+        ``assert P.pfb["sqlite3_dnsbl_con"] is True`` failed -- actual: ``False`` --
+        because the recovery lived in a dead ``except`` branch ``pfb_db_validate``
+        never raises into.
+        """
+        monkeypatch.setattr(P.time, "sleep", lambda *_a, **_k: None)
+        db = tmp_path / "dnsbl.sqlite"
+        db.write_bytes(b"not a sqlite database")  # garbage bytes -> genuinely corrupt
+        P.pfb["mod_sqlite3"] = True
+        P.pfb["pfb_py_dnsbl"] = str(db)
+        P.pfb["python_blacklist"] = True  # stats wanted -> the open path runs
+        P.pfb["sqlite3_dnsbl_con"] = False
+
+        # ---- BEFORE: the corrupt file genuinely fails validation and the flag is off.
+        assert P.pfb_db_validate(P.DB_DNSBL) is False
+        assert db.exists(), "a failed validate alone must not touch the file"
+        assert P.pfb["sqlite3_dnsbl_con"] is False
+
+        # ---- act: drive the shared helper (the swap / control-enable / timed-re-enable
+        # entry point -- see _open_dnsbl_stats_db_if_wanted's docstring for its callers).
+        P._open_dnsbl_stats_db_if_wanted()
+
+        # ---- AFTER: the corrupt file was deleted+rebuilt, the retry connected, flag True.
+        assert P.pfb["sqlite3_dnsbl_con"] is True, "recovery must delete + revalidate a corrupt DB (issue #900)"
+        assert P.DB_DNSBL in P._db_conns
+
+        # ---- and a counter flush actually lands on the recovered DB.
+        assert P._db_flush_dnsbl({"Upstream": 1})
+        con = P._db_conns[P.DB_DNSBL]
+        row = con.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchone()
+        assert row == (1,), f"Upstream counter not incremented after corrupt-DB recovery: {row!r}"
+
+    def test_recovery_delete_failure_leaves_flag_false_with_no_crash(self, tmp_path: Any, monkeypatch: Any) -> None:
+        """Negative branch: when the recovery's own delete step itself fails (an
+        unremovable path), the helper must not crash -- it just leaves the stats DB
+        closed, no infinite retry, no uncaught exception.
+
+        Simulated by pointing ``pfb_py_dnsbl`` at a directory: sqlite3 can never open a
+        directory as a database (so validate() genuinely, always fails) and
+        ``os.remove()`` on a directory always fails too (``IsADirectoryError`` on Linux,
+        ``PermissionError`` on macOS) -- exercising the guard's ``except OSError``
+        without depending on a real file-permission model.
+        """
+        monkeypatch.setattr(P.time, "sleep", lambda *_a, **_k: None)
+        P.pfb["mod_sqlite3"] = True
+        P.pfb["pfb_py_dnsbl"] = str(tmp_path)  # a directory, never a valid sqlite file
+        P.pfb["python_blacklist"] = True
+        P.pfb["sqlite3_dnsbl_con"] = False
+
+        # Must not raise.
+        P._open_dnsbl_stats_db_if_wanted()
+
+        assert P.pfb["sqlite3_dnsbl_con"] is False
+        assert tmp_path.exists(), "the unremovable path (a directory) must survive the failed delete"
+
+    def test_racing_second_recovery_cannot_delete_the_winners_rebuilt_db(self, tmp_path: Any, monkeypatch: Any) -> None:
+        """Concurrency: two threads recovering the SAME corrupt stats DB must not
+        interleave -- without serialization, both validate False, the winner deletes +
+        rebuilds the file, and the LOSER's delete then unlinks the winner's freshly
+        rebuilt LIVE file while the cached connection in ``_db_conns`` keeps writing to
+        the unlinked inode: every counter silently lost, the exact class #900 fixes.
+        ``_db_recovery_lock`` makes validate -> remove -> revalidate atomic; the loser's
+        first validate inside the lock doubles as its recheck (succeeds via the winner's
+        cached connection, no second delete).
+
+        Deterministic choreography (no sleeps; every wait carries a loud-timeout assert):
+        T1's ``os.remove`` parks on an Event between its validate-False and its delete --
+        the exact window the lock must close. T2 then enters the helper: WITH the lock it
+        blocks at the (instrumented) recovery lock, signalling ``t2_progressed`` on the
+        contended acquire; WITHOUT the lock it runs straight through the parked T1's
+        window (validate False -> second delete -> rebuild) and signals ``t2_progressed``
+        on return. Either way main can then release T1 and join both -- no branch waits
+        on wall-clock time. The instrumented lock is a behaviourally identical stand-in
+        installed with ``raising=False`` so the same test runs against pre-fix code
+        (where the attribute does not exist and is simply never consulted).
+
+        RED pre-fix (confirmed by stashing the lock and re-running): both threads
+        performed a delete -- ``assert len(remove_calls) == 1`` failed with 2 calls,
+        T2's second delete having unlinked the winner's rebuilt live DB.
+        """
+        monkeypatch.setattr(P.time, "sleep", lambda *_a, **_k: None)
+        db = tmp_path / "dnsbl.sqlite"
+        db.write_bytes(b"not a sqlite database")  # garbage bytes -> genuinely corrupt
+        P.pfb["mod_sqlite3"] = True
+        P.pfb["pfb_py_dnsbl"] = str(db)
+        P.pfb["python_blacklist"] = True  # stats wanted -> the open path runs
+        P.pfb["sqlite3_dnsbl_con"] = False
+
+        t1_parked = threading.Event()  # T1 is inside its recovery delete
+        release_t1 = threading.Event()  # main lets T1's delete proceed
+        t2_progressed = threading.Event()  # T2 blocked on the lock OR completed
+        errors: list[BaseException] = []
+
+        real_remove = P.os.remove
+        remove_calls: list[str] = []
+
+        def choreographed_remove(path: str) -> None:
+            remove_calls.append(path)
+            if len(remove_calls) == 1:  # T1: park in the validate->delete window
+                t1_parked.set()
+                assert release_t1.wait(5), "loud timeout: T1 was never released from its parked delete"
+            real_remove(path)
+
+        class _SignallingLock:
+            """Same mutual exclusion as the real recovery lock, plus a signal on a
+            contended acquire so main knows (deterministically) that T2 is waiting."""
+
+            def __init__(self) -> None:
+                self._lock = threading.Lock()
+
+            def __enter__(self) -> None:
+                if not self._lock.acquire(blocking=False):
+                    t2_progressed.set()  # contended: the loser is waiting on the winner
+                    self._lock.acquire()
+
+            def __exit__(self, *_exc: object) -> None:
+                self._lock.release()
+
+        monkeypatch.setattr(P.os, "remove", choreographed_remove)
+        monkeypatch.setattr(P, "_db_recovery_lock", _SignallingLock(), raising=False)
+
+        def t1_run() -> None:
+            try:
+                P._open_dnsbl_stats_db_if_wanted()
+            except BaseException as e:  # noqa: BLE001 -- surface thread faults in main
+                errors.append(e)
+
+        def t2_run() -> None:
+            try:
+                P._open_dnsbl_stats_db_if_wanted()
+            except BaseException as e:  # noqa: BLE001 -- surface thread faults in main
+                errors.append(e)
+            finally:
+                t2_progressed.set()  # pre-fix path: T2 ran straight through and returned
+
+        t1 = threading.Thread(target=t1_run)
+        t1.start()
+        assert t1_parked.wait(5), "loud timeout: T1 never reached its recovery delete"
+
+        t2 = threading.Thread(target=t2_run)
+        t2.start()
+        assert t2_progressed.wait(5), "loud timeout: T2 neither blocked on the recovery lock nor completed"
+
+        release_t1.set()
+        t1.join(5)
+        t2.join(5)
+        assert not t1.is_alive() and not t2.is_alive(), "loud timeout: recovery threads did not finish"
+        assert not errors, f"a recovery thread raised: {errors!r}"
+
+        # Then: exactly ONE delete happened -- the loser revalidated instead of deleting
+        # the winner's rebuilt DB.
+        assert len(remove_calls) == 1, (
+            f"racing recovery must delete the corrupt DB exactly once, got {len(remove_calls)}: {remove_calls!r}"
+        )
+        assert P.pfb["sqlite3_dnsbl_con"] is True
+
+        # And: a flush lands AND is visible through a FRESH connection to the on-disk
+        # path -- proving the cached connection's file IS the live on-disk file, not an
+        # unlinked-inode ghost.
+        assert P._db_flush_dnsbl({"Upstream": 1})
+        fresh = sqlite3.connect(str(db))
+        try:
+            row = fresh.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchone()
+        finally:
+            fresh.close()
+        assert row == (1,), f"flush not visible via a fresh connection to the on-disk DB (ghost inode?): {row!r}"
 
 
 class TestSharedHandlerBypass:

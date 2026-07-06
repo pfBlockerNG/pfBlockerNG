@@ -1532,41 +1532,24 @@ def init_standard(id: int, env: module_env) -> bool:
             # accurate even with feed regex but no user regex.
             dnsbl_emit_count(pfb["pfb_py_regex_count"], len(regexDB) + len(allowRegexDB))
 
-            # Validate SQLite3 database connections
+            # Validate SQLite3 database connections. A False validate (issue #900)
+            # is the corrupt/broken-DB case -- _validate_db_with_recovery deletes
+            # the file and retries once; still False just leaves the flag off (no
+            # crash, no infinite retry) and is logged loudly.
             if pfb["mod_sqlite3"]:
                 # Enable Resolver query statistics
-                for i in range(2):
-                    try:
-                        if pfb_db_validate(1):
-                            pfb["sqlite3_resolver_con"] = True
-                            break
-                    except Exception as e:
-                        sys.stderr.write(
-                            "[pfBlockerNG]: Failed to open pfb_py_resolver.sqlite database (Attempt: {}/2): {}".format(
-                                i + 1, e
-                            )
-                        )
-                        pass
-                        if os.path.isfile(pfb["pfb_py_resolver"]):
-                            os.remove(pfb["pfb_py_resolver"])
+                if _validate_db_with_recovery(DB_RESOLVER):
+                    pfb["sqlite3_resolver_con"] = True
+                else:
+                    sys.stderr.write("[pfBlockerNG]: Failed to open pfb_py_resolver.sqlite database\n")
 
                 # Enable DNSBL statistics -- forwarding-gated too, not just
                 # blacklist-gated (issue #860; see _dnsbl_stats_wanted).
                 if _dnsbl_stats_wanted():
-                    for i in range(2):
-                        try:
-                            if pfb_db_validate(2):
-                                pfb["sqlite3_dnsbl_con"] = True
-                                break
-                        except Exception as e:
-                            sys.stderr.write(
-                                "[pfBlockerNG]: Failed to open pfb_py_dnsbl.sqlite database (Attempt: {}/2): {}".format(
-                                    i + 1, e
-                                )
-                            )
-                            pass
-                            if os.path.isfile(pfb["pfb_py_dnsbl"]):
-                                os.remove(pfb["pfb_py_dnsbl"])
+                    if _validate_db_with_recovery(DB_DNSBL):
+                        pfb["sqlite3_dnsbl_con"] = True
+                    else:
+                        sys.stderr.write("[pfBlockerNG]: Failed to open pfb_py_dnsbl.sqlite database\n")
 
             # Open MaxMind db reader for DNS Reply GeoIP logging
             if pfb["mod_maxminddb"] and pfb["python_reply"] and os.path.isfile(pfb["maxminddb"]):
@@ -2253,6 +2236,14 @@ def is_unknown(x: Any) -> Any:
 # check_same_thread=False so the DB worker and the synchronous fallback (init,
 # tests) can share them safely under the lock.
 _db_lock: Any = threading.Lock() if pfb.get("mod_threading") else nullcontext()
+# Issue #900: serializes corrupt-DB recovery -- _validate_db_with_recovery's whole
+# validate -> remove -> revalidate sequence must be atomic across its caller threads
+# (init, the ADR-10 swap watcher, the control-channel enable / timed re-enable), or a
+# losing racer can delete the winner's freshly rebuilt LIVE DB file. Lock ordering:
+# _db_recovery_lock -> _db_lock only (_db_lock is a plain lock acquired solely inside
+# _db_run, which pfb_db_validate calls under this lock); no path acquires
+# _db_recovery_lock while holding _db_lock, so the ordering never inverts -- no deadlock.
+_db_recovery_lock: Any = threading.Lock() if pfb.get("mod_threading") else nullcontext()
 _db_conns: dict[int, Any] = {}
 
 PFB_DB_QUEUE_MAXSIZE = 5000
@@ -2435,6 +2426,33 @@ def pfb_db_validate(db: int) -> bool:
     return _db_run(db, lambda con: None)
 
 
+def _validate_db_with_recovery(db: int) -> bool:
+    # Issue #900: pfb_db_validate -> _db_run swallows every connect/PRAGMA fault
+    # (a corrupt file included) and returns False -- it never raises, so the
+    # try/except recovery this replaces was dead code and a corrupt DB was never
+    # healed. Treat a False validate as the corrupt/broken-DB case: delete the
+    # file (tolerating a removal fault -- e.g. a read-only dir) and revalidate
+    # once -- no infinite retry.
+    #
+    # The whole validate -> remove -> revalidate sequence holds _db_recovery_lock:
+    # without it, two threads recovering the same corrupt DB can both validate
+    # False, and the loser's remove then deletes the winner's freshly rebuilt LIVE
+    # file while the cached connection in _db_conns keeps writing to the unlinked
+    # inode -- counters silently lost again. The first validate inside the lock
+    # doubles as the loser's recheck: it succeeds via the winner's cached
+    # connection and returns without a second delete. Lock ordering stays
+    # _db_recovery_lock -> _db_lock (via pfb_db_validate -> _db_run); see the
+    # _db_recovery_lock definition.
+    with _db_recovery_lock:
+        if pfb_db_validate(db):
+            return True
+        try:
+            os.remove(_db_file(db))
+        except OSError:
+            pass  # already gone, or unremovable; the revalidate below reports if still broken
+        return pfb_db_validate(db)
+
+
 def _dnsbl_stats_wanted() -> bool:
     # Issue #860: the Upstream counter (issue #267 forwarding-mode detection) shares
     # the dnsbl stats DB with per-feed blocks. Detection itself is forwarding-gated
@@ -2456,29 +2474,17 @@ def _open_dnsbl_stats_db_if_wanted() -> None:
     # stay consistent; else _db_flush_dnsbl and _log_upstream_block (both gated on
     # sqlite3_dnsbl_con) silently drop every counter until the next full restart.
     #
-    # Idempotent (the not-sqlite3_dnsbl_con guard no-ops when init already opened it) and
-    # off the DNS fast path: pfb_db_validate -> _db_run is _db_lock-serialized with a
-    # check_same_thread=False connection, safe on the watcher / control-sleep threads.
-    # Same mod_sqlite3 gate + two-attempt retry shape as init_standard's "Enable DNSBL
-    # statistics" block.
+    # Idempotent (the not-sqlite3_dnsbl_con guard no-ops when init already opened it).
+    # NOT off the DNS fast path under the legacy control transport: pfb_apply_control_command
+    # is reachable from operate() (the python_control_legacy branch), so this can run on an
+    # Unbound query worker, not just the watcher / control-sleep threads. Issue #900: a
+    # corrupt DB is recovered (delete + one revalidate) by _validate_db_with_recovery, shared
+    # with init_standard's identical "Enable DNSBL statistics" gate.
     if pfb["mod_sqlite3"] and not pfb["sqlite3_dnsbl_con"] and _dnsbl_stats_wanted():
-        for i in range(2):
-            try:
-                if pfb_db_validate(DB_DNSBL):
-                    pfb["sqlite3_dnsbl_con"] = True
-                    break
-            except Exception as e:
-                sys.stderr.write(
-                    "[pfBlockerNG]: Failed to open pfb_py_dnsbl.sqlite database (Attempt: {}/2): {}".format(i + 1, e)
-                )
-                # Now reachable from three threads (swap, control-enable, timed re-enable):
-                # a concurrent caller may have already removed the corrupt DB, so a losing
-                # race on the delete is a harmless no-op, not an uncaught FileNotFoundError.
-                if os.path.isfile(pfb["pfb_py_dnsbl"]):
-                    try:
-                        os.remove(pfb["pfb_py_dnsbl"])
-                    except OSError:
-                        pass
+        if _validate_db_with_recovery(DB_DNSBL):
+            pfb["sqlite3_dnsbl_con"] = True
+        else:
+            sys.stderr.write("[pfBlockerNG]: Failed to open pfb_py_dnsbl.sqlite database after recovery attempt\n")
 
 
 def _db_apply(task: tuple) -> None:
