@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import http.client
 import io
 import json
 import re
@@ -53,12 +54,32 @@ _URL_RE = re.compile(r"\$pfb\['extras'\]\[(\d+)\]\['url'\]\s*=\s*'([^']*)'")
 _TYPE_RE = re.compile(r"\$pfb\['extras'\]\[(\d+)\]\['type'\]\s*=\s*'([^']*)'")
 
 
+def _strip_php_line_comments(php_text: str) -> str:
+    """Drop whole-line `//`-commented-out lines before extraction.
+
+    Without this, a commented-out `// $pfb['extras'][2]['url'] = '...dead...'`
+    is still picked up as a live provider (the regex matches raw text). A
+    trailing comment on a live line (`'...zip';  // Cisco`) is unaffected --
+    the URL is already matched before the comment starts.
+
+    ponytail: only whole-line `//` comments are stripped, matching this file's
+    style; a `/* */` block comment would need its own handling if ever used
+    here.
+    """
+    return "\n".join(line for line in php_text.splitlines() if not line.strip().startswith("//"))
+
+
 def extract_providers(php_text: str) -> list[dict[str, str]]:
     """Every URL wired to the top1m extras slot in pfblockerng.php.
 
     Groups by extras index so a URL assigned in an if/elseif/else arm is
     matched to its slot's type regardless of assignment order in the file.
+
+    Ceiling: matches single-quoted, non-concatenated URL literals only (the
+    current pfblockerng.php style) -- a double-quoted string or a `'base' .
+    $token` concatenation would need extending _URL_RE.
     """
+    php_text = _strip_php_line_comments(php_text)
     types = dict(_TYPE_RE.findall(php_text))
     providers: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
@@ -77,31 +98,48 @@ def _name_from_url(url: str) -> str:
     return urlparse(url).netloc or url
 
 
+def _parse_http_date(value: str | None) -> datetime | None:
+    """Parse an HTTP-date header into a tz-aware UTC datetime.
+
+    Returns None for an absent or unparseable header. A bare RFC-822 date with
+    no zone (legal HTTP, e.g. "Mon, 01 Jun 2026 00:00:00") parses to a naive
+    datetime -- pin it to UTC here so no caller ever subtracts a naive value
+    from an aware `now` (that raised TypeError; see #884 review).
+    """
+    if not value:
+        return None
+    try:
+        parsed = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
 def is_stale(last_modified: str | None, now: datetime, max_age_days: int) -> bool:
     """True iff a present, parseable Last-Modified is older than max_age_days.
 
     No header, or one we can't parse, means "unknown" -- not a staleness
     verdict we can make, so it reads as not-stale rather than a false alarm.
     """
-    if not last_modified:
+    modified = _parse_http_date(last_modified)
+    if modified is None:
         return False
-    try:
-        modified = parsedate_to_datetime(last_modified)
-    except (TypeError, ValueError):
-        return False
-    if modified.tzinfo is None:
-        modified = modified.replace(tzinfo=timezone.utc)
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
     return (now - modified) > timedelta(days=max_age_days)
 
 
 def _is_valid_row(row: list[str]) -> bool:
-    """A plausible Top1M row: "<int rank>,<dotted domain>"."""
+    """A plausible Top1M row: "<int rank>,<dotted domain>" -- rejects a bare "."."""
     if len(row) != 2:
         return False
     rank, domain = row[0].strip(), row[1].strip()
-    return rank.isdigit() and "." in domain and not any(c.isspace() for c in domain)
+    if not rank.isdigit() or any(c.isspace() for c in domain):
+        return False
+    labels = domain.split(".")
+    return len(labels) >= 2 and all(labels)
 
 
 def _scan_csv(body: bytes) -> tuple[str, int, int, tuple[int, list[str]] | None]:
@@ -152,7 +190,11 @@ def validate_top1m(
             f"found {valid} (of {total} total rows){detail}"
         )
     if is_stale(last_modified, now, max_age_days):
-        age_days = (now - parsedate_to_datetime(last_modified)).days  # type: ignore[arg-type]
+        modified = _parse_http_date(last_modified)
+        assert modified is not None, "is_stale() only returns True when the header is parseable"
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        age_days = (now - modified).days
         reasons.append(
             f"expected Last-Modified within {max_age_days} days of {now.isoformat()}, "
             f"found {last_modified!r} ({age_days} days old)"
@@ -171,8 +213,12 @@ def check_url(url: str, min_rows: int = MIN_ROWS, max_age_days: int = MAX_AGE_DA
             status = resp.status
     except urllib.error.HTTPError as exc:
         return [f"expected HTTP 2xx, got HTTP {exc.code} {exc.reason}"]
-    except urllib.error.URLError as exc:
-        return [f"expected a reachable URL, got a connection error: {exc.reason}"]
+    except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
+        # Covers the whole fetch+read span: resp.read() on a multi-MB zip can
+        # raise IncompleteRead/socket.timeout/ConnectionResetError mid-download
+        # -- none are urllib.error.URLError, so a narrower except let those
+        # raise a raw traceback instead of a clean FAIL report (#884 review).
+        return [f"expected a reachable URL, got a connection error: {exc}"]
 
     if not (200 <= status < 300):
         return [f"expected HTTP 2xx, got HTTP {status}"]
