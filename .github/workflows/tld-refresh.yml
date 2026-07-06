@@ -5,9 +5,16 @@ name: TLD List Refresh
 # scripts/misc/update_tld_lists.py rewrites the gTLD/ccTLD/iTLD arrays in
 # src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php from the authoritative
 # IANA root-zone list (bgTLD is hand-curated and never touched). When the root
-# zone changes, this workflow opens/updates a PR against devel so the normal CI
-# (Tier-A ui_render) gates the data change — it NEVER pushes to devel directly.
-# See issue #872 (maintenance umbrella) and docs/misc/tld-lists.md.
+# zone changes, this workflow opens/updates a PR against devel — it NEVER
+# pushes to devel directly.
+#
+# GitHub suppresses push/pull_request-triggered workflow runs for events
+# created by GITHUB_TOKEN, so test.yml's own pull_request gate never fires on
+# this PR. workflow_dispatch is the documented exception, so this workflow
+# dispatches the real gates (test.yml's unit suite + ui-tests.yml's Tier-A
+# ui_render) onto the branch head itself, right after every push, so checks
+# attach to the PR's commit. See issue #872 (maintenance umbrella), issue #902
+# (the CI-dispatch fix), and docs/misc/tld-lists.md.
 
 on:
   # Weekly, Monday 06:00 UTC. The root zone changes slowly; weekly is ample.
@@ -40,6 +47,7 @@ jobs:
     permissions:
       contents: write        # push the automation branch (NOT devel)
       pull-requests: write    # open/label the PR
+      actions: write          # dispatch the CI gates onto the branch head (#902)
     env:
       GH_TOKEN: ${{ github.token }}
       BRANCH: tld-refresh/auto
@@ -81,6 +89,16 @@ jobs:
           git commit -m "pfblockerng: refresh TLD Allow lists from IANA (automated)"
           git push --force origin "$BRANCH"
 
+          # GITHUB_TOKEN-created pushes trigger no workflow runs (GitHub
+          # suppresses push/pull_request events from GITHUB_TOKEN actors), so
+          # the branch head above gets no automatic CI. workflow_dispatch is
+          # the documented exception — dispatch the real gates onto it
+          # ourselves so real checks attach to this commit / the PR's SHA
+          # (issue #902). Loud on failure: no `|| true`, `set -eu` is active.
+          echo "Dispatching CI onto $BRANCH (GITHUB_TOKEN pushes trigger no workflow runs)."
+          gh workflow run test.yml --ref "$BRANCH"
+          gh workflow run ui-tests.yml --ref "$BRANCH" -f tier=render -f scope=impacted
+
           # One open PR at a time: push above already updated any existing one.
           if [ "$(gh pr list --head "$BRANCH" --base devel --state open --json number --jq 'length')" -gt 0 ]; then
             echo "An open PR from $BRANCH already exists — the force-push updated it."
@@ -93,7 +111,7 @@ jobs:
             --title "pfblockerng: refresh TLD Allow lists from IANA (automated)" \
             --label "enhancement" \
             --label "ui-tests" \
-            --body "Automated weekly refresh of the DNSBL **TLD Allow** picker arrays (\`gTLD\`/\`ccTLD\`/\`iTLD\`) from the [IANA root zone](https://data.iana.org/TLD/tlds-alpha-by-domain.txt), via \`scripts/misc/update_tld_lists.py\`. \`bgTLD\` is hand-curated and untouched. Part of the recurring maintenance in #872 — review the data diff, then merge once CI (Tier-A \`ui_render\`) is green."
+            --body "Automated weekly refresh of the DNSBL **TLD Allow** picker arrays (\`gTLD\`/\`ccTLD\`/\`iTLD\`) from the [IANA root zone](https://data.iana.org/TLD/tlds-alpha-by-domain.txt), via \`scripts/misc/update_tld_lists.py\`. \`bgTLD\` is hand-curated and untouched. Part of the recurring maintenance in #872 — review the data diff. GitHub does not run CI automatically on a GITHUB_TOKEN-created PR, so this workflow dispatched the unit suite (\`test.yml\`) and the Tier-A \`ui_render\` UI gate (\`ui-tests.yml\`) onto this branch's head itself — see the Checks tab for their status. Merge once both are green."
 
       - name: Dry-run summary
         if: steps.refresh.outputs.changed == 'true' && env.DRY_RUN == 'true'
