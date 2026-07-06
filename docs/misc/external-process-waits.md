@@ -88,13 +88,18 @@ so the page streams live progress. The unbound-stop wait logs its keepalive dots
 path, so that closes the silent gap too. Visibility only: the fd-detach, `--foreground`, and
 redirect safety above are untouched.
 
-An **update hook's own** stdout/stderr needs the same treatment, but it can't just be printed live:
-the hook body is redirected to the log file precisely so a daemon it starts can't hold the capture
-pipe (above), so mirroring it with a `tee`/pipe would reintroduce the hang. Instead `pfb_run_hooks()`
-records the log offset before `exec()` and, after the hook returns, `pfb_mirror_hook_output()` reads
-back exactly the bytes the hook appended and prints them (during a lifecycle callback only). A plain
-file read can't hang — the daemon holds a harmless file fd, not the reader — so the page shows the
-`[ pfB Hook ] …` markers *and* the hook's real output between them (issue #693).
+An **update hook's own** stdout/stderr needs the same treatment, but it can't just be printed live
+through a pipe: the hook body is redirected to the log file precisely so a daemon it starts can't
+hold the capture pipe (above), so mirroring it with a `tee`/pipe would reintroduce the hang.
+Instead, during a lifecycle callback `pfb_run_hooks()` runs the hook under `proc_open()` with its
+stdout/stderr pointed at the log **file** via the descriptor spec (never a pipe back to PHP — a
+spawned daemon inherits only a harmless file fd), tracks the child with `proc_get_status()`, and
+**tails the file to stdout with `pfb_log_tail_chunk()` while the hook runs** — so the page shows the
+`[ pfB Hook ] …` markers *and* the hook's real output streaming live between them, not one block
+after it exits (issues #693/#883). The exit code (124 on timeout, else the hook's own) comes off
+the status; a plain file read can't hang, so the daemon-safety is preserved. On the non-lifecycle
+cron/manual/Run-Now path the hook stays a blocking `exec()` (the Update page's AJAX viewer already
+tails the per-run log); `pfb_mirror_hook_output()` remains only as the `proc_open`-failure fallback.
 
 ## Following one specific dispatched process — pidfile, not a `ps` pattern or a log string
 
