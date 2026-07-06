@@ -3243,7 +3243,7 @@ $section->addInput(new Form_Select(
 	gettext('Type'),
 	$pconfig['alexa_type'],
 	$options_alexa_type
-))->setHelp('Default: Tranco TOP1M. To change the TOP1M type, select type and Save, followed by a \'Force Reload - DNSBL\'');
+))->setHelp('Default: Tranco TOP1M. To change the TOP1M type, select the type and Save, then run an Update -- the previous list is cleared on save and re-fetched on the next Update.');
 
 $section->addInput(new Form_Select(
 	'alexa_count',

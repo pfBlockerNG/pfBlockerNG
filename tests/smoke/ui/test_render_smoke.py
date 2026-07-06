@@ -673,6 +673,33 @@ def test_dnsbl_top1m_source_options_exclude_alexa(webui: WebUI, php_error_log_gu
         assert absent not in body, f"DNSBL page still renders the dropped Alexa TOP1M option ({absent!r})"
 
 
+def test_dnsbl_top1m_type_help_says_update_not_force_reload(
+    webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """The TOP1M 'Type' select's help text says an Update suffices after a type change,
+    not the stale 'Force Reload - DNSBL' instruction (#886) — the Save handler already
+    clears the cached CSV/whitelist on a type change, so a plain Update re-fetches and
+    rebuilds them; a Force Reload was never actually required.
+
+    Asserts the page passes the clean-render oracle AND that the field's help text
+    mentions 'Update' while no longer telling the user to run a Force Reload.
+    """
+    path = "/pfblockerng/pfblockerng_dnsbl.php"
+    resp = webui.get(path)
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Configuration",))
+    assert result.ok, f"DNSBL render oracle failed: {result.detail}"
+    body = resp.text
+    assert "select the type and Save, then run an Update" in body, (
+        "DNSBL page's TOP1M Type help no longer tells the user an Update suffices"
+    )
+    # The old TOP1M Type help's exact wording (distinct from the OTHER, still-accurate
+    # Force-Reload help texts elsewhere on this page -- TLD Exclusion / Global-log) --
+    # its absence pins that the stale instruction was actually replaced, not just added to.
+    assert "select type and Save, followed by a" not in body, (
+        "DNSBL page's TOP1M Type help still carries the stale Force-Reload wording"
+    )
+
+
 def test_dnsbl_lenient_parsing_field_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
     """The ADR-22 'Lenient Feed Parsing' toggle renders cleanly on the DNSBL page — so a
     regression that drops or breaks the field is caught at the render tier (not only by the
