@@ -440,7 +440,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 		}
 
 		if (empty(pfb_filter($list_url, $pfb_filter_type, 'php'))) {
-                        pfb_logger("\n Invalid {$pfb_filter_text}. Terminating Download! [ {$list_url} ]\n", 1);
+                        pfb_logger("\n Invalid {$pfb_filter_text}. Terminating Download! [ " . pfb_redact_url($list_url) . " ]\n", 1);
 			return;
 		}
 
@@ -457,7 +457,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 		if (!empty(pfb_filter($list_url, PFB_FILTER_WORD, 'php'))) {
 			$list_url = "/usr/local/share/GeoIP/cc/{$list_url}{$vtype}.txt";
 		} else {
-			pfb_logger("\n Invalid GEOIP. Terminating Download! [ {$list_url} ]\n", 1);
+			pfb_logger("\n Invalid GEOIP. Terminating Download! [ " . pfb_redact_url($list_url) . " ]\n", 1);
 			return;
 		}
 	}
@@ -467,7 +467,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 		// header-scoped feed-host skip line here too (no-op unless the guard is
 		// why vetting failed). The line below stays for non-guard rejects.
 		pfb_log_feed_host_reject($list_url, $header, 1);
-		pfb_logger("\n Invalid URL. Terminating Download! [ {$list_url} ]\n", 1);
+		pfb_logger("\n Invalid URL. Terminating Download! [ " . pfb_redact_url($list_url) . " ]\n", 1);
 		return;
 	}
 
