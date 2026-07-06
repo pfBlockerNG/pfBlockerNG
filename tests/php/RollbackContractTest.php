@@ -1240,20 +1240,21 @@ final class RollbackContractTest extends TestCase
 
 	/**
 	 * alexa_type: FORWARD invariant covers the legacy 'alexa' token (dead TOP1M
-	 * service, #872) in addition to the live 'tranco'/'cisco' vocabulary; BACKWARD
-	 * invariant proves the coalesce -- a write after reading a legacy 'alexa'
-	 * store never re-emits 'alexa'.
+	 * service, #872) in addition to the live 'tranco'/'cisco'/'domcop'/'majestic'
+	 * vocabulary; BACKWARD invariant proves the coalesce -- a write after reading
+	 * a legacy 'alexa' store never re-emits 'alexa'.
 	 *
 	 * Scenario: alexa_type rollback contract with the #877 coalesce.
-	 *   Background: alexa_type's stored vocabulary is {'tranco', 'cisco', 'alexa'}
-	 *     (the legacy value is READ-only -- pfb_cfg_field_vocab()['top1m_source']
-	 *     lists only the two live WRITE-side tokens). The field is now adapted via
-	 *     the Top1mSource enum (mirrors PfbIdnMode/PfbAliasDeltaMode).
-	 *   Given each of 'tranco', 'cisco', 'alexa' stored.
+	 *   Background: alexa_type's stored vocabulary is {'tranco', 'cisco', 'domcop',
+	 *     'majestic', 'alexa'} (the latter two live tokens added ADR-59 P4; 'alexa'
+	 *     is READ-only -- pfb_cfg_field_vocab()['top1m_source'] lists only the four
+	 *     live WRITE-side tokens). The field is now adapted via the Top1mSource enum
+	 *     (mirrors PfbIdnMode/PfbAliasDeltaMode).
+	 *   Given each of 'tranco', 'cisco', 'domcop', 'majestic', 'alexa' stored.
 	 *   When PfbConfig::read('alexa_type') then PfbConfig::write('alexa_type', result).
 	 *   Then (FORWARD) the read result is a Top1mSource enum (Tranco for legacy 'alexa').
-	 *   And (BACKWARD) the written token is in {'tranco', 'cisco'} -- 'alexa' is
-	 *     NEVER re-emitted, even though it was the original stored value.
+	 *   And (BACKWARD) the written token is in {'tranco', 'cisco', 'domcop', 'majestic'}
+	 *     -- 'alexa' is NEVER re-emitted, even though it was the original stored value.
 	 */
 	public function testAlexaTypeForwardCoalescesLegacyAndBackwardNeverReemitsAlexa(): void
 	{
@@ -1261,9 +1262,11 @@ final class RollbackContractTest extends TestCase
 		$write_vocab = pfb_cfg_field_vocab()['top1m_source'];
 
 		$cases = [
-			'tranco' => Top1mSource::Tranco,
-			'cisco'  => Top1mSource::Cisco,
-			'alexa'  => Top1mSource::Tranco, // legacy dead source coalesces to Tranco (#872/#877)
+			'tranco'   => Top1mSource::Tranco,
+			'cisco'    => Top1mSource::Cisco,
+			'domcop'   => Top1mSource::DomCop,   // ADR-59 P4
+			'majestic' => Top1mSource::Majestic, // ADR-59 P4
+			'alexa'    => Top1mSource::Tranco,   // legacy dead source coalesces to Tranco (#872/#877)
 		];
 
 		foreach ($cases as $stored_token => $expected_runtime) {

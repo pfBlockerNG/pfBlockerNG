@@ -39,13 +39,14 @@ use PHPUnit\Framework\TestCase;
  *     And write(read('')) == 'off'    (normalised default).
  *
  * Scenario E — Top1mSource (alexa_type, issue #877): backing values 'tranco' /
- *   'cisco' TOP1M source selector; the legacy 'alexa' token (dead service,
- *   #872) coalesces to Tranco.
+ *   'cisco' / 'domcop' / 'majestic' (the latter two added ADR-59 P4) TOP1M
+ *   source selector; the legacy 'alexa' token (dead service, #872) coalesces
+ *   to Tranco.
  *     Given a raw stored value v.
  *     When pfb_cfg_top1m_source_read(v) -> enum, pfb_cfg_top1m_source_write(enum) -> stored.
- *     Then 'tranco'/'cisco' pass through as Tranco/Cisco; 'alexa' and any
- *     unknown/absent value -> Tranco. write(read(v)) == v for canonical tokens;
- *     'alexa' is never re-emitted.
+ *     Then 'tranco'/'cisco'/'domcop'/'majestic' pass through as their own enum
+ *     case; 'alexa' and any unknown/absent value -> Tranco. write(read(v)) == v
+ *     for canonical tokens; 'alexa' is never re-emitted.
  */
 final class CfgAdaptersTest extends TestCase
 {
@@ -672,10 +673,11 @@ final class CfgAdaptersTest extends TestCase
 
 	// -----------------------------------------------------------------------
 	// Scenario E — Top1mSource (alexa_type, issue #877)
-	//   Stored tokens: 'tranco', 'cisco' (live); legacy 'alexa' (dead service,
-	//   #872) coalesces to Tranco at the read boundary. Mirrors the
-	//   PfbAliasDeltaMode adapter shape (Scenario D): read returns the enum,
-	//   write accepts either the enum or a raw string.
+	//   Stored tokens: 'tranco', 'cisco', 'domcop', 'majestic' (live; the latter
+	//   two added ADR-59 P4); legacy 'alexa' (dead service, #872) coalesces to
+	//   Tranco at the read boundary. Mirrors the PfbAliasDeltaMode adapter shape
+	//   (Scenario D): read returns the enum, write accepts either the enum or a
+	//   raw string.
 	// -----------------------------------------------------------------------
 
 	public function testTop1mSourceReadTrancoReturnsTranco(): void
@@ -686,6 +688,17 @@ final class CfgAdaptersTest extends TestCase
 	public function testTop1mSourceReadCiscoReturnsCisco(): void
 	{
 		$this->assertSame(Top1mSource::Cisco, pfb_cfg_top1m_source_read('cisco'));
+	}
+
+	/** ADR-59 P4: the two new keyless-provider tokens read as their own enum cases. */
+	public function testTop1mSourceReadDomCopReturnsDomCop(): void
+	{
+		$this->assertSame(Top1mSource::DomCop, pfb_cfg_top1m_source_read('domcop'));
+	}
+
+	public function testTop1mSourceReadMajesticReturnsMajestic(): void
+	{
+		$this->assertSame(Top1mSource::Majestic, pfb_cfg_top1m_source_read('majestic'));
 	}
 
 	/** The dead legacy TOP1M source (#872) must read as Tranco, not a lost 'alexa' value. */
@@ -709,10 +722,10 @@ final class CfgAdaptersTest extends TestCase
 		$this->assertSame(Top1mSource::Tranco, pfb_cfg_top1m_source_read(''));
 	}
 
-	/** write(read(v)) == v for the two live canonical tokens. */
+	/** write(read(v)) == v for all four live canonical tokens (domcop/majestic added P4). */
 	public function testTop1mSourceRoundTripCanonicalTokens(): void
 	{
-		foreach (['tranco', 'cisco'] as $token) {
+		foreach (['tranco', 'cisco', 'domcop', 'majestic'] as $token) {
 			$written = pfb_cfg_top1m_source_write(pfb_cfg_top1m_source_read($token));
 			$this->assertSame($token, $written,
 				"expected write(read('{$token}')) == '{$token}'; actual: '{$written}'");
@@ -730,9 +743,13 @@ final class CfgAdaptersTest extends TestCase
 	/** pfb_cfg_top1m_source_write() accepts both an enum instance and a string. */
 	public function testTop1mSourceWriteAcceptsEnumOrString(): void
 	{
-		$this->assertSame('tranco', pfb_cfg_top1m_source_write(Top1mSource::Tranco));
-		$this->assertSame('cisco',  pfb_cfg_top1m_source_write(Top1mSource::Cisco));
-		$this->assertSame('tranco', pfb_cfg_top1m_source_write('tranco'));
-		$this->assertSame('cisco',  pfb_cfg_top1m_source_write('cisco'));
+		$this->assertSame('tranco',   pfb_cfg_top1m_source_write(Top1mSource::Tranco));
+		$this->assertSame('cisco',    pfb_cfg_top1m_source_write(Top1mSource::Cisco));
+		$this->assertSame('domcop',   pfb_cfg_top1m_source_write(Top1mSource::DomCop));
+		$this->assertSame('majestic', pfb_cfg_top1m_source_write(Top1mSource::Majestic));
+		$this->assertSame('tranco',   pfb_cfg_top1m_source_write('tranco'));
+		$this->assertSame('cisco',    pfb_cfg_top1m_source_write('cisco'));
+		$this->assertSame('domcop',   pfb_cfg_top1m_source_write('domcop'));
+		$this->assertSame('majestic', pfb_cfg_top1m_source_write('majestic'));
 	}
 }
