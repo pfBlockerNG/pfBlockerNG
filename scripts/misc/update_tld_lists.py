@@ -119,7 +119,11 @@ def classify(tld: str, iana_types: dict[str, str] | None = None) -> str:
 
     The heuristic (punycode -> iTLD, two ASCII letters -> ccTLD, else gTLD) is
     correct standalone. When tlds.json's type map is available, a 'country-code'
-    entry is honored as ccTLD too -- pure refinement, never required.
+    entry is honored as ccTLD too -- pure refinement, never required. For real
+    IANA data the refinement is effectively a no-op: every real ccTLD is either
+    exactly two ASCII letters or an xn-- A-label, and both forms are already
+    classified without the type map. Kept as a defensive fallback for a
+    hypothetical future TLD form, not because any current input needs it.
 
     xn-- is checked BEFORE the type map, unconditionally: the committed arrays
     keep every xn-- TLD (including IDN ccTLDs) in iTLD, curated with a '(cc)'
