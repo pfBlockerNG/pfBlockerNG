@@ -531,16 +531,24 @@ function pfb_exclude_alias_types(): array {
 	return ['host', 'network', 'url', 'urltable'];
 }
 
+// Port-bearing firewall alias types, valid for the Adv. In/Outbound Custom Port field --
+// the port-side counterpart to pfb_exclude_alias_types(): a 'port' alias plus the two
+// port-list types.
+function pfb_port_alias_types(): array {
+	return ['port', 'url_ports', 'urltable_ports'];
+}
+
 // Build the alias-name maps that feed the Adv. In/Outbound rule autocomplete + the
 // save-time option validation on the IP, DNSBL, and Feed (category-edit) pages
 // (Custom Port + Custom Source/Destination fields). Returned name=>name maps are
 // NAME-KEYED so a save-time array_key_exists($posted, $options) works.
 //
-// Ports: 'port' aliases. Addresses: every address-bearing alias type
-// (pfb_exclude_alias_types() -- host/network/url/urltable), NOT just 'network', so a
-// Host alias (a single IP) autocompletes and saves too. pfB_-managed (pfB_*) aliases
-// are skipped from the address list: the field help forbids them and they are not
-// valid rule sources.
+// Ports: every port-bearing type (pfb_port_alias_types() -- port/url_ports/urltable_ports).
+// Addresses: every address-bearing type (pfb_exclude_alias_types() -- host/network/url/
+// urltable), NOT just 'network', so a Host alias (a single IP) autocompletes and saves too.
+// pfB_-managed (pfB_*) aliases are skipped from BOTH lists: the field help forbids them
+// (e.g. the package's own pfB_DNSBL_Ports port alias) and they are not valid user rule
+// sources.
 //
 // @param array $aliases The config_get_path('aliases/alias', []) list.
 // @return array{ports: array<string,string>, networks: array<string,string>}
@@ -549,13 +557,14 @@ function pfb_alias_autocomplete_lists(array $aliases): array {
 	$networks = [];
 	foreach ($aliases as $alias) {
 		$name = (string) ($alias['name'] ?? '');
-		if ($name === '') {
+		// Skip empty names and pfB_-managed aliases (forbidden in both fields).
+		if ($name === '' || str_starts_with($name, PFB_MANAGED_FILTER_PFX)) {
 			continue;
 		}
 		$type = (string) ($alias['type'] ?? '');
-		if ($type === 'port') {
+		if (in_array($type, pfb_port_alias_types(), TRUE)) {
 			$ports[$name] = $name;
-		} elseif (in_array($type, pfb_exclude_alias_types(), TRUE) && !str_starts_with($name, PFB_MANAGED_FILTER_PFX)) {
+		} elseif (in_array($type, pfb_exclude_alias_types(), TRUE)) {
 			$networks[$name] = $name;
 		}
 	}

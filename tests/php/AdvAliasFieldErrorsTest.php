@@ -75,6 +75,28 @@ final class AdvAliasFieldErrorsTest extends TestCase
 		$this->assertSame([], $errors);
 	}
 
+	public function testExistingUrlPortsAliasInPortFieldIsAccepted(): void
+	{
+		// A URL-Ports alias is port-bearing, so a port field accepts it — the broadened
+		// autocomplete offers it, so the validator must not reject it. Pre-broadening the
+		// port branch only accepted the literal 'port' type and rejected this.
+		$this->seedAliases(['MyUrlPorts' => 'url_ports']);
+
+		$errors = pfb_adv_alias_field_errors(['aliasports_out' => 'MyUrlPorts']);
+
+		$this->assertSame([], $errors);
+	}
+
+	public function testExistingUrltablePortsAliasInPortFieldIsAccepted(): void
+	{
+		// A URL-Table (Ports) alias is likewise a valid port restriction.
+		$this->seedAliases(['MyUrlTablePorts' => 'urltable_ports']);
+
+		$errors = pfb_adv_alias_field_errors(['aliasports_in' => 'MyUrlTablePorts']);
+
+		$this->assertSame([], $errors);
+	}
+
 	public function testExistingNetworkAliasInAddressFieldIsAccepted(): void
 	{
 		// Given a network alias that exists
@@ -168,7 +190,7 @@ final class AdvAliasFieldErrorsTest extends TestCase
 
 		// Then rejected as the wrong type
 		$this->assertCount(1, $errors);
-		$this->assertStringContainsString('Must use a Network, Host or URL-type alias', $errors[0]);
+		$this->assertStringContainsString('Must use a Host, Network, URL or URL-Table-type alias', $errors[0]);
 	}
 
 	// -----------------------------------------------------------------------
