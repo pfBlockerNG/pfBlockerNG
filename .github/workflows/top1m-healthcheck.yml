@@ -44,9 +44,14 @@ jobs:
           echo "Discovered providers:"
           printf '%s\n' "$MATRIX" | python3 -m json.tool
 
-          # Floor guard: a broken extractor returning an empty/near-empty
-          # matrix would run 0 (or too few) legs and still exit green --
-          # the exact silent death this watchdog exists to catch (#884 review).
+          # The real floor guard lives in check_top1m_providers.py --extract
+          # itself (--min-providers, default: the committed provider count,
+          # #908) -- a too-small matrix already made `set -eu` abort this
+          # step at the `MATRIX=$(...)` line above with a non-zero exit, so a
+          # partial extractor breakage never reaches this point. This is a
+          # secondary belt-and-suspenders check for a literal zero/empty
+          # matrix (the exact silent death this watchdog exists to catch,
+          # #884 review).
           COUNT=$(jq 'length' <<<"$MATRIX")
           [ "$COUNT" -ge 1 ] || { echo "::error::no top1m providers discovered -- extractor may be broken"; exit 1; }
 
