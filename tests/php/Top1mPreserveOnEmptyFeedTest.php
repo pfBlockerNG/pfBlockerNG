@@ -217,12 +217,11 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 	 * guard as testRenameFailurePreservesPriorWhitelistAndWarns below). The genuine
 	 * tempnam()/fopen()-returns-FALSE branch (both the given dir AND the system temp dir
 	 * refuse the create) is only deterministically forceable via an
-	 * `open_basedir`-restricted child process -- the same mechanism already used by
-	 * DnsblPrefetchTest/IpPrefetchTest's `runInRestrictedTempDirSandbox()`, which is
-	 * known-flaky in this local dev environment (see this suite's pre-existing 3
-	 * failures) -- so THAT exact branch is left as a documented out-of-CI/covered-by-
-	 * guard gap rather than a fourth locally-flaky sandboxed test; this test still pins
-	 * the finding-2 crash fix via the read-only-dbdir trigger.
+	 * `open_basedir`-restricted child process -- the same mechanism used by
+	 * DnsblPrefetchTest/IpPrefetchTest's `runInRestrictedTempDirSandbox()` -- so THAT
+	 * exact branch is left as a documented out-of-CI/covered-by-guard gap rather than
+	 * adding a fourth sandboxed test here; this test still pins the finding-2 crash fix
+	 * via the read-only-dbdir trigger.
 	 */
 	public function testReadOnlyDbdirCausesRenameFailurePreservesPriorWhitelistAndWarns(): void
 	{
