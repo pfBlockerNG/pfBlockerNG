@@ -8312,6 +8312,11 @@ function pfblockerng_top1m() {
 				if (!ctype_digit((string) ($csvline[0] ?? ''))) {
 					continue;
 				}
+				// Count every valid CSV row BEFORE the match/break below, so a
+				// small dnsbl_top1m_cnt (e.g. 1) that breaks on the first match
+				// still leaves $linecnt > 0 and classifies as a valid feed
+				// (not the dead-feed $linecnt === 0 path) (#886 review).
+				$linecnt++;
 				$tld = substr($csvline[1], strrpos($csvline[1], '.') + 1);
 
 				if (isset($pfb_include[$tld])) {
@@ -8328,7 +8333,6 @@ function pfblockerng_top1m() {
 				if ($x >= $pfb['dnsbl_top1m_cnt']) {
 					break;
 				}
-				$linecnt++;
 			}
 			@fclose($pfb_output);
 			@fclose($handle);
