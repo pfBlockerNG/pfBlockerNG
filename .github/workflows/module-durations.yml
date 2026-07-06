@@ -35,7 +35,7 @@ on:
 
 permissions:
   contents: write   # commit the refreshed table to devel
-  actions: read     # download the smoke run's artifacts (cross-run)
+  actions: write    # download the smoke run's artifacts (cross-run) + dispatch CI onto devel (#902)
 
 # One refresh at a time; a newer run supersedes an in-flight one.
 concurrency:
@@ -104,6 +104,8 @@ jobs:
           cat tests/smoke/module-durations.txt
 
       - name: Commit the refreshed table (only if it changed)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
           if git diff --quiet -- tests/smoke/module-durations.txt; then
@@ -124,3 +126,11 @@ jobs:
             git pull --rebase origin devel
           done
           echo "Committed refreshed module-durations.txt to devel."
+
+          # GITHUB_TOKEN-created pushes trigger no workflow runs, so this commit
+          # would otherwise land on devel with no push-CI, and a stale table row
+          # (e.g. a test renamed between nightly start and this commit) silently
+          # reds the drift gate (tests/test_shard_union.py) on every later PR
+          # until someone notices (issue #902). Dispatch the unit suite onto
+          # devel's new tip ourselves; loud on failure (`set -eu`, no `|| true`).
+          gh workflow run test.yml --ref devel
