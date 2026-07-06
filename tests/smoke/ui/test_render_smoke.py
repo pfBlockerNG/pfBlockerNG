@@ -836,12 +836,22 @@ def test_dnsbl_page_renders_tld_pickers(webui: WebUI, php_error_log_guard: PhpEr
     result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Configuration",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
-    missing_selects = [name for name in _TLD_STABLE_OPTIONS if f'name="{name}"' not in body]
+    # Each picker is a pfSense multi-select (Form_Select(..., TRUE)), so its name renders
+    # with a trailing "[]" (see the safesearch_doh_list[] assertion above).
+    missing_selects = [name for name in _TLD_STABLE_OPTIONS if f'name="{name}[]"' not in body]
     assert not missing_selects, f"DNSBL page is missing TLD-Allow select(s) {missing_selects}"
     missing_options = [
         f"{name}(value={value!r})" for name, value in _TLD_STABLE_OPTIONS.items() if f'value="{value}"' not in body
     ]
     assert not missing_options, f"DNSBL page TLD-Allow select(s) missing a stable option: {missing_options}"
+    # The "N TLDs available" count is computed from the arrays (number_format($tld_total)),
+    # not the old hardcoded "1,546". Assert it rendered a plausible, non-stale total -- this
+    # also catches a silently-blanked $tld_list (the count would collapse to a tiny number).
+    count_match = re.search(r"\(([\d,]+) TLDs available\)", body)
+    assert count_match, "DNSBL page is missing the '(N TLDs available)' help text"
+    tld_count = int(count_match.group(1).replace(",", ""))
+    assert tld_count >= 1000, f"TLD-Allow count {tld_count} is implausibly low (arrays blanked?)"
+    assert count_match.group(1) != "1,546", "TLD-Allow count is still the stale hardcoded 1,546"
 
 
 # The DNSBL master-enable toggle -- gates the 'dnsbl'/'upstream'/'reply' rows of the alerts

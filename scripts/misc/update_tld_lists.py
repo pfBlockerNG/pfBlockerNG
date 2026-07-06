@@ -59,6 +59,13 @@ from pathlib import Path
 TLDS_ALPHA_URL = "https://data.iana.org/TLD/tlds-alpha-by-domain.txt"
 TLDS_JSON_URL = "https://data.iana.org/TLD/tlds.json"
 
+# Plausibility floor: the IANA root zone holds ~1,400+ TLDs. A fetch that returns far
+# fewer (an empty-but-200 body, a captive-portal/proxy interstitial, a truncated
+# response) must NEVER overwrite the arrays -- a blanked $tld_list is valid PHP (passes
+# php -l) and, once written, is unrecoverable (the next run sees empty existing arrays and
+# discards every curated label). Refuse below this floor instead.
+MIN_PLAUSIBLE_TLDS = 1000
+
 DEFAULT_PHP_FILE = Path(__file__).resolve().parent.parent.parent / "src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php"
 
 _TLD_KEYS = ("gTLD", "ccTLD", "iTLD")
@@ -74,6 +81,19 @@ def parse_tlds_alpha(text: str) -> set[str]:
     Drops the leading '# Version ...' comment line and blank lines.
     """
     return {line.strip().lower() for line in text.splitlines() if line.strip() and not line.startswith("#")}
+
+
+def require_plausible(iana_tlds: set[str]) -> None:
+    """Refuse to proceed if the fetched TLD set is implausibly small.
+
+    Guards every caller (cron, manual dispatch, a dev run) against a bad fetch silently
+    blanking the arrays. Raises SystemExit below :data:`MIN_PLAUSIBLE_TLDS`.
+    """
+    if len(iana_tlds) < MIN_PLAUSIBLE_TLDS:
+        raise SystemExit(
+            f"Refusing to rewrite: IANA fetch yielded only {len(iana_tlds)} TLDs "
+            f"(< {MIN_PLAUSIBLE_TLDS}); a truncated/empty response must not blank the arrays."
+        )
 
 
 def classify(tld: str, iana_types: dict[str, str] | None = None) -> str:
@@ -200,6 +220,7 @@ def main(argv: list[str] | None = None) -> int:
 
     php_text = DEFAULT_PHP_FILE.read_text(encoding="utf-8")
     iana_tlds = parse_tlds_alpha(fetch_tlds_alpha())
+    require_plausible(iana_tlds)
     iana_types = fetch_tlds_json()
     existing = parse_existing_arrays(php_text)
     fresh = build_fresh_arrays(iana_tlds, existing, iana_types)

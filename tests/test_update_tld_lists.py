@@ -233,3 +233,19 @@ def test_rewrite_php_replaces_gtld_body_with_the_fresh_alphabetical_render() -> 
     # oldgone is gone (IANA no longer lists it) and brandx is excluded (bgTLD-curated).
     assert "oldgone" not in new_text
     assert "'brandx'" not in new_text.split("bgTLD")[0]
+
+
+def test_require_plausible_rejects_an_implausibly_small_fetch() -> None:
+    # A truncated/empty IANA fetch must NOT be allowed to blank the arrays: refuse below
+    # the floor rather than overwrite (a blanked $tld_list is valid PHP and unrecoverable).
+    import pytest
+
+    with pytest.raises(SystemExit):
+        utl.require_plausible(set())
+    with pytest.raises(SystemExit):
+        utl.require_plausible({f"tld{i}" for i in range(utl.MIN_PLAUSIBLE_TLDS - 1)})
+
+
+def test_require_plausible_accepts_a_full_root_zone() -> None:
+    # A realistic root-zone-sized set passes the floor unchanged (no exception).
+    utl.require_plausible({f"tld{i}" for i in range(utl.MIN_PLAUSIBLE_TLDS)})
