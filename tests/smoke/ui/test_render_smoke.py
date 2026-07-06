@@ -809,6 +809,41 @@ def test_dnsbl_group_policy_section_renders_above_dns_redirect(
     )
 
 
+# The four TLD Allow picker selects (issue #876) -- built from the IANA-sourced gTLD/ccTLD/
+# iTLD arrays + the hand-curated bgTLD array in pfblockerng_dnsbl.php's $tld_list. Each is
+# checked for a STABLE, durable TLD rather than a newly-added one -- IANA's TLD set churns
+# release to release, so "was just added" is not a safe assertion target, but these have
+# existed for years and are extremely unlikely to be retired.
+_TLD_STABLE_OPTIONS = {
+    "pfb_pytlds_gtld": "com",
+    "pfb_pytlds_cctld": "de",
+    "pfb_pytlds_itld": "xn--p1ai",  # a punycode (IDN) TLD -- Russia's .рф
+    "pfb_pytlds_bgtld": "ovh",
+}
+
+
+def test_dnsbl_page_renders_tld_pickers(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """The TLD Allow pickers render populated after the IANA refresh (#876).
+
+    Regression guard against a malformed ``$tld_list`` rewrite by
+    ``scripts/misc/update_tld_lists.py``: asserts all four TLD-Allow Form_Select fields
+    (gTLD/ccTLD/iTLD/bgTLD) render by name AND each carries a real option -- one stable,
+    durable TLD per category (see :data:`_TLD_STABLE_OPTIONS`) so the guard survives IANA's
+    routine TLD churn instead of pinning a TLD that could vanish on the next refresh.
+    """
+    path = "/pfblockerng/pfblockerng_dnsbl.php"
+    resp = webui.get(path)
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Configuration",))
+    assert result.ok, f"DNSBL render oracle failed: {result.detail}"
+    body = resp.text
+    missing_selects = [name for name in _TLD_STABLE_OPTIONS if f'name="{name}"' not in body]
+    assert not missing_selects, f"DNSBL page is missing TLD-Allow select(s) {missing_selects}"
+    missing_options = [
+        f"{name}(value={value!r})" for name, value in _TLD_STABLE_OPTIONS.items() if f'value="{value}"' not in body
+    ]
+    assert not missing_options, f"DNSBL page TLD-Allow select(s) missing a stable option: {missing_options}"
+
+
 # The DNSBL master-enable toggle -- gates the 'dnsbl'/'upstream'/'reply' rows of the alerts
 # page's $uni_defaults Unified-Log colour registry (pfblockerng_alerts.php). Off by default on
 # a fresh install, so test_alerts_unified_log_colour_fields_render turns it on for its GET (and
