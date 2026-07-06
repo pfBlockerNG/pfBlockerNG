@@ -92,6 +92,7 @@ jobs:
             --head "$BRANCH" \
             --title "pfblockerng: refresh TLD Allow lists from IANA (automated)" \
             --label "enhancement" \
+            --label "ui-tests" \
             --body "Automated weekly refresh of the DNSBL **TLD Allow** picker arrays (\`gTLD\`/\`ccTLD\`/\`iTLD\`) from the [IANA root zone](https://data.iana.org/TLD/tlds-alpha-by-domain.txt), via \`scripts/misc/update_tld_lists.py\`. \`bgTLD\` is hand-curated and untouched. Part of the recurring maintenance in #872 — review the data diff, then merge once CI (Tier-A \`ui_render\`) is green."
 
       - name: Dry-run summary
