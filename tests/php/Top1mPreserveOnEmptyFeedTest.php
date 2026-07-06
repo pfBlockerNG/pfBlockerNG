@@ -298,6 +298,33 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		$this->assertStringContainsString('Parsed 3 lines | Found 1 of 1000', $this->readMainLog());
 	}
 
+	/**
+	 * A valid feed with a SMALL dnsbl_top1m_cnt must still classify as valid.
+	 * Regression for the #886-review off-by-one: $linecnt was incremented AFTER
+	 * the "$x >= dnsbl_top1m_cnt" break, so cnt=1 matching the first line broke
+	 * with $linecnt still 0 -- wrongly tripping the dead-feed path and keeping the
+	 * stale whitelist instead of publishing the (valid) 1-entry build.
+	 */
+	public function testValidFeedWithSmallCountReplacesNotPreserved(): void
+	{
+		$staleContent = ".stale.com,,\n,stale.com,,\n,www.stale.com,,\n";
+		$this->assertNotFalse(file_put_contents($this->whitelistPath(), $staleContent), 'setup: seed stale whitelist');
+		$GLOBALS['pfb']['dnsbl_top1m_cnt'] = '1';	// break on the very first match
+		// First line matches '.com' -> $x reaches 1 and the loop breaks immediately.
+		$csv = "1,example.com\n2,other.com\n";
+		$this->assertNotFalse(file_put_contents($this->csvPath(), $csv), 'setup: valid top-1m.csv');
+
+		pfblockerng_top1m();
+
+		$got = file_get_contents($this->whitelistPath());
+		$this->assertNotFalse($got);
+		$this->assertStringNotContainsString('stale.com', $got, 'a valid small-count feed must replace the stale whitelist');
+		$this->assertSame(".example.com,,\n,example.com,,\n,www.example.com,,\n", $got);
+		$this->assertStringNotContainsString('keeping the previous TOP1M whitelist', $this->readErrLog(),
+			'a valid feed must NOT emit the dead-feed warning');
+		$this->assertStringContainsString('Parsed 1 lines | Found 1 of 1', $this->readMainLog());
+	}
+
 	/** Valid feed, zero TLD matches -- replaced (with empty content) + a mild note, NOT the dead-feed warning. */
 	public function testValidFeedWithZeroMatchesReplacesAndNotesNoMatches(): void
 	{
