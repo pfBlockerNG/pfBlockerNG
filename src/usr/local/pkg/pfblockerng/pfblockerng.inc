@@ -8396,7 +8396,7 @@ function pfblockerng_top1m(?array $provider_override = NULL) {
 					if (!ctype_digit((string) ($csvline[0] ?? ''))) {
 						continue;
 					}
-				} elseif (!preg_match('/^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$/', $domain)) {
+				} elseif (!preg_match('/^[A-Za-z0-9][A-Za-z0-9.-]*\.(?:[A-Za-z]{2,}|[Xx][Nn]--[A-Za-z0-9-]{2,})$/', $domain)) {
 					continue;
 				}
 				// Count every valid CSV row BEFORE the match/break below, so a
