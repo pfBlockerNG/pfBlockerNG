@@ -159,7 +159,7 @@ $pfb['extras'][1]['type']	= 'geoip';
 
 // TOP1M database
 $pfb['extras'][2]			= array();
-if ($pfb['dnsbl_alexatype'] == 'tranco') {
+if ($pfb['dnsbl_top1m_type'] == 'tranco') {
 	$pfb['extras'][2]['url']	= 'https://tranco-list.eu/top-1m.csv.zip';
 } else {
 	$pfb['extras'][2]['url']	= 'https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip';  // Cisco
@@ -308,7 +308,7 @@ if (in_array($argv[1], array('update', 'updateip', 'updatednsbl', 'dc', 'dcc', '
 				}
 
 				// Skip TOP1M update, if disabled
-				if (pfb_cfg_toggle_read($pfb['dnsbl_alexa']) !== PfbToggle::On) {
+				if (pfb_cfg_toggle_read($pfb['dnsbl_top1m']) !== PfbToggle::On) {
 					unset($pfb['extras'][2]); // Remove TOP1M
 				}
 

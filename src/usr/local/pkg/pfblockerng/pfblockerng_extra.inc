@@ -714,7 +714,7 @@ function pfb_cfg_registry(): array
 			'since'         => '1.0.0',
 		],
 
-		// TOP1M (Alexa/Tranco) whitelist enable. Default ''.
+		// TOP1M whitelist enable. Default ''.
 		'alexa_enable' => [
 			'section'       => $dnsbl,
 			'default'       => '',

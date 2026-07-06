@@ -73,8 +73,9 @@ if [ -z "${PFB_SOURCED:-}" ]; then
 	pathasncsv="/usr/local/share/GeoIP/asn.csv"
 	pathasntable="/usr/local/www/pfblockerng/pfblockerng_asn.txt"
 	pfbsuppression=/var/db/pfblockerng/pfbsuppression.txt
-	# ADR-06: pfbdnsblsuppression / pfbalexa removed (only used by the dropped
-	# dnsbl_scrub build-time whitelist/TOP1M removal; now applied at query time).
+	# ADR-06: pfbdnsblsuppression / pfbalexa (legacy TOP1M whitelist) removed
+	# (only used by the dropped dnsbl_scrub build-time whitelist/TOP1M removal;
+	# now applied at query time).
 	masterfile=/var/db/pfblockerng/masterfile
 	mastercat=/var/db/pfblockerng/mastercat
 	geoiplog=/var/log/pfblockerng/geoip.log

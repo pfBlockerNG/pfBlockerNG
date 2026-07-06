@@ -53,7 +53,7 @@ final class UnboundPythonSourcesTest extends TestCase
 			'dnsdir'             => "{$this->tmp}/dnsbl",
 			'unbound_py_sources' => "{$this->tmp}/pfb_py_sources.json",
 			'dbdir'              => "{$this->tmp}/db",
-			'dnsbl_alexa'        => 'off',
+			'dnsbl_top1m'        => 'off',
 			'dnsbl_tld_data'     => "{$this->tmp}/does_not_exist",
 			'dnsbl_unlock'       => "{$this->tmp}/dnsbl_unlock",
 			'dnsblconfig'        => [
