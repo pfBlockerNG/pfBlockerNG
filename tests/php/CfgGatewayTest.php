@@ -369,7 +369,10 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame(Top1mSource::Tranco, PfbConfig::read('alexa_type'), "legacy 'alexa' coalesces to Tranco");
 	}
 
-	/** alexa_type: all four live tokens pass through as their enum cases (domcop/majestic added ADR-59 P4). */
+	/**
+	 * alexa_type: all five live tokens pass through as their enum cases (domcop/majestic
+	 * added ADR-59 P4, cloudflare added ADR-59 P5).
+	 */
 	public function testReadPassesThroughLiveTop1mSourceTokens(): void
 	{
 		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/alexa_type';
@@ -385,6 +388,35 @@ final class CfgGatewayTest extends TestCase
 
 		$this->seedConfig($path, 'majestic');
 		$this->assertSame(Top1mSource::Majestic, PfbConfig::read('alexa_type'), "'majestic' passes through as Majestic");
+
+		$this->seedConfig($path, 'cloudflare');
+		$this->assertSame(Top1mSource::Cloudflare, PfbConfig::read('alexa_type'), "'cloudflare' passes through as Cloudflare");
+	}
+
+	/**
+	 * top1m_token (ADR-59 P5): a masked, write-only plain-string field (no adapter) --
+	 * absent reads as the registered default '', and any stored token round-trips
+	 * (write(read(v)) == v) like every other plain field.
+	 *
+	 * Scenario: top1m_token default-absent + round-trip.
+	 *   Given the key is absent from config.xml.
+	 *   When PfbConfig::read('top1m_token').
+	 *   Then the result is '' (the registered default).
+	 *   And when a real-looking token is written then read back, it comes back verbatim.
+	 */
+	public function testTop1mTokenDefaultsToEmptyAndRoundTrips(): void
+	{
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/top1m_token';
+
+		// Given/When: absent key.
+		$this->assertNull(config_get_path($path));
+		$this->assertSame('', PfbConfig::read('top1m_token'), 'top1m_token absent -> default ""');
+
+		// Round-trip: write(read(v)) == v for a real-looking base64url/JWT-charset token.
+		$token = 'cf-abc123._~+/=-XYZ';
+		PfbConfig::write('top1m_token', $token);
+		$this->assertSame($token, config_get_path($path), 'top1m_token write() must store the token verbatim');
+		$this->assertSame($token, PfbConfig::read('top1m_token'), 'top1m_token read() must return the stored token verbatim');
 	}
 
 	public function testReadReturnsRegisteredDefaultForDnsblInterfaceAbsentKey(): void
@@ -937,6 +969,7 @@ final class CfgGatewayTest extends TestCase
 			'alexa_type',
 			'alexa_count',
 			'alexa_inclusion',
+			'top1m_token', // ADR-59 P5
 			'pfb_cache',
 			'global_log',
 			'pfb_dnsbl_lenient',

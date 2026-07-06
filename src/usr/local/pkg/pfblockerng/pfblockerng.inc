@@ -324,6 +324,7 @@ define('PFB_FILTER_FILE_MIME_COMPRESSED', 18);
 define('PFB_FILTER_ATYPE', 19);
 define('PFB_FILTER_HEX_COLOR', 20);
 define('PFB_FILTER_ON_OFF', 21);
+define('PFB_FILTER_TOKEN', 22);
 
 // Maximum number of HTTP redirects pfb_download() follows manually (each hop's
 // host is re-vetted by the feed-host guard before it is dialled). Matches the
@@ -1625,6 +1626,18 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 				pfb_logger("{$header} Invalid on/off [ " . htmlspecialchars($input) . " ]", 6);
 			}
 			break;
+		case PFB_FILTER_TOKEN:
+			// ADR-59 P5: validate a base64url/JWT-shaped credential token (e.g. a Cloudflare
+			// Radar API token) -- letters, digits, and the base64url/JWT punctuation set
+			// '._~+/=-', bounded length so a pathological input can't be used for resource
+			// exhaustion. PFB_FILTER_WORD ([A-Za-z0-9_] only) would reject a real token
+			// (dashes, dots). Callers pass reference 'top1m_token' to suppress the
+			// failed-validation log line below -- a rejected token must never be logged,
+			// even at debug level (the secret itself, not just its download URL).
+			if (strlen($input) >= 8 && strlen($input) <= 512 && preg_match("/^[A-Za-z0-9._~+\/=-]+$/", $input)) {
+				$result = htmlspecialchars($input);
+			}
+			break;
 		default:
 			pfb_logger("{$header} Type invalid [ " . htmlspecialchars($input) . " ]", 6);
 			break;
@@ -1638,8 +1651,10 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 	if (!empty($input) && empty($result) &&
 	    !in_array($type, array(PFB_FILTER_URL, PFB_FILTER_FILE_MIME_COMPARE, PFB_FILTER_FILE_MIME, PFB_FILTER_FILE_MIME_COMPRESSED, PFB_FILTER_ON_OFF, PFB_FILTER_NUM))) {
 
-		// Exceptions
-		if (in_array($reference, array(	'DNSBL_Download'))) {
+		// Exceptions -- callers whose rejected input must never be logged, even at
+		// debug level: 'DNSBL_Download' (parsed feed lines -- volume); 'top1m_token'
+		// (ADR-59 P5 -- the secret itself, not merely its download URL).
+		if (in_array($reference, array('DNSBL_Download', 'top1m_token'))) {
 			//
 		} else {
 			pfb_logger("{$header} Failed validation [ " . htmlspecialchars($input) . " ]", 6);
@@ -8321,7 +8336,15 @@ function pfblockerng_top1m(?array $provider_override = NULL) {
 					continue;
 				}
 
-				if (strpos($line, '.') === FALSE || strpos($line, ',') === FALSE || empty($line)) {
+				// ADR-59 P5: Cloudflare's dataset is a SINGLE 'domain' column (domain_col
+				// 0) -- a real data line has no comma at all (no column to split), so the
+				// comma requirement below would wrongly reject every line. Only demand a
+				// comma when a real multi-column split is expected (domain_col > 0, every
+				// other provider today); domain_col 0 still requires a '.' (every domain
+				// has one).
+				$top1m_needs_comma = $top1m_domcol > 0;
+				if (strpos($line, '.') === FALSE || empty($line) ||
+				    ($top1m_needs_comma && strpos($line, ',') === FALSE)) {
 					continue;
 				}
 

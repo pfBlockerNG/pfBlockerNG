@@ -204,21 +204,23 @@ enum PfbAliasDeltaMode: string implements PfbStoredEnum
 //
 // Used by: alexa_type (config key) / $pfb['dnsbl_top1m_type'] (runtime).
 //   Canonical tokens: 'tranco' (default), 'cisco', 'domcop', 'majestic'
-//   (ADR-59 P4). The legacy 'alexa' token (the dead Alexa TOP1M service,
-//   #872) is a READ-ONLY legacy value: fromLegacy() coalesces it (and any
-//   unknown/'' token) to Tranco, and a write NEVER re-emits it — every live
-//   token is ever persisted as itself, so the write vocabulary is
-//   downgrade-safe (an older release reading any of them already understands
-//   its own subset; domcop/majestic are simply new to it, same as any other
-//   ADR-added option).
+//   (ADR-59 P4), 'cloudflare' (ADR-59 P5, token-authenticated). The legacy
+//   'alexa' token (the dead Alexa TOP1M service, #872) is a READ-ONLY legacy
+//   value: fromLegacy() coalesces it (and any unknown/'' token) to Tranco,
+//   and a write NEVER re-emits it — every live token is ever persisted as
+//   itself, so the write vocabulary is downgrade-safe (an older release
+//   reading any of them already understands its own subset; domcop/
+//   majestic/cloudflare are simply new to it, same as any other ADR-added
+//   option).
 enum Top1mSource: string implements PfbStoredEnum
 {
 	use PfbStoredEnumAdapter;
 
-	case Tranco   = 'tranco';
-	case Cisco    = 'cisco';
-	case DomCop   = 'domcop';
-	case Majestic = 'majestic';
+	case Tranco     = 'tranco';
+	case Cisco      = 'cisco';
+	case DomCop     = 'domcop';
+	case Majestic   = 'majestic';
+	case Cloudflare = 'cloudflare';
 
 	// Legacy 'alexa' (dead service, #872) and any unknown/'' token -> Tranco.
 	protected static function fromLegacy(string $raw): static
@@ -235,9 +237,9 @@ enum Top1mSource: string implements PfbStoredEnum
 }
 
 // TOP1M provider descriptor table (ADR-59 P1, generalized P2, keyless
-// providers added P4).
+// providers added P4, token-authenticated Cloudflare Radar added P5).
 //
-// Keyed by Top1mSource::value ('tranco'/'cisco'/'domcop'/'majestic').
+// Keyed by Top1mSource::value ('tranco'/'cisco'/'domcop'/'majestic'/'cloudflare').
 // pfblockerng.php's TOP1M URL selection reads this table instead of a
 // per-provider if/else; pfblockerng_top1m() (ADR-59 P2) reads
 // 'parse'/'header'/'domain_col' to drive the builder, and pfb_download()'s
@@ -245,12 +247,15 @@ enum Top1mSource: string implements PfbStoredEnum
 // -- Tranco/Cisco's CSV has no header row and the domain sits at
 // str_getcsv() index 1 (0-indexed: rank,domain), matching today's hardcoded
 // shape byte-for-byte. 'auth' is read by pfb_download()'s header-auth path
-// (ADR-59 P3+). 'domain_col' is 0-indexed (str_getcsv() array index, not a
-// human 1-indexed column count) -- DomCop's Domain is the 2nd CSV field
-// ("Rank","Domain","Open Page Rank") -> index 1 (same index as Tranco/Cisco);
-// Majestic's Domain is the 3rd field (GlobalRank,TldRank,Domain,...) -> index 2.
+// (ADR-59 P3+) via pfb_top1m_auth_headers() below -- 'none' (every keyless
+// provider) or {header, scheme} (Cloudflare's Bearer token). 'domain_col' is
+// 0-indexed (str_getcsv() array index, not a human 1-indexed column count)
+// -- DomCop's Domain is the 2nd CSV field ("Rank","Domain","Open Page Rank")
+// -> index 1 (same index as Tranco/Cisco); Majestic's Domain is the 3rd
+// field (GlobalRank,TldRank,Domain,...) -> index 2; Cloudflare's dataset is
+// a SINGLE 'domain' column (no rank) -> index 0 (see the row's own comment).
 //
-// @return array<string, array{url: string, container: string, parse: string, header: bool, domain_col: int, auth: string, label: string, licence: string}>
+// @return array<string, array{url: string, container: string, parse: string, header: bool, domain_col: int, auth: string|array{header: string, scheme: string}, label: string, licence: string}>
 function pfb_top1m_providers(): array
 {
 	return array(
@@ -298,7 +303,61 @@ function pfb_top1m_providers(): array
 			'label'		=> 'Majestic Million',
 			'licence'	=> 'CC BY 3.0 — attribution required',
 		),
+		// Cloudflare Radar ranking bucket (ADR-59 P5). VERIFIED against Cloudflare's own
+		// current docs (developers.cloudflare.com/radar/investigate/domain-ranking-datasets/,
+		// developers.cloudflare.com/api/resources/radar/subresources/datasets/) rather than
+		// the ADR's original 2-column guess:
+		//   - GET /radar/datasets/{alias} streams the dataset's CSV content directly given a
+		//     STABLE alias ('ranking_top_1000000' for the 1,000,000-domain bucket -- id 213,
+		//     tags ['GLOBAL','top_1000000']) -- a single request, exactly like every other
+		//     provider here, NOT the two/three-call discover-id -> POST /datasets/download ->
+		//     fetch-signed-URL flow the ADR worried might be disproportionately complex (§7).
+		//   - The body is PLAIN (uncompressed) CSV with a header row reading literally
+		//     'domain' and ONE column per row (no rank) -- domain_col is 0, not 1 (the ADR's
+		//     guess assumed a 2-column rank,domain shape like Tranco/Cisco).
+		//   - Auth: 'Authorization: Bearer <token>' (confirmed on every Radar API page), fed
+		//     via pfb_top1m_auth_headers() below + the P3 $feed['headers'] plumbing.
+		//   - Licence: CC BY-NC 4.0 (developers.cloudflare.com/radar/ "About" -- confirmed by
+		//     web search, non-commercial use, attribution required).
+		// Residual verification gap (disclosed, not hidden): no live authenticated request was
+		// made (no Cloudflare token available in this environment) to prove the alias/URL end
+		// to end -- confirmed via two independent official Cloudflare doc pages instead. A real
+		// token on a live box (ADR §7 definition-of-done manual smoke) is the final proof.
+		Top1mSource::Cloudflare->value	=> array(
+			'url'		=> 'https://api.cloudflare.com/client/v4/radar/datasets/ranking_top_1000000',
+			'container'	=> 'plain',
+			'parse'		=> 'csv',
+			'header'	=> TRUE,
+			'domain_col'	=> 0,
+			'auth'		=> array('header' => 'Authorization', 'scheme' => 'Bearer'),
+			'label'		=> 'Cloudflare Radar',
+			'licence'	=> 'CC BY-NC 4.0 — non-commercial use, attribution required',
+		),
 	);
+}
+
+// ADR-59 P5: build the caller header(s) a provider's 'auth' descriptor needs, given the
+// user's top1m_token. Pure / no I/O (same extraction rationale as pfb_download_http_headers(),
+// Phase 3), so it is directly unit-testable and -- because it never logs anything -- the token
+// can only ever reach pfb_download()'s CURLOPT_HTTPHEADER, never a log line.
+//
+// 'auth' is either the string 'none' (every keyless provider) or an array {header, scheme}
+// (Cloudflare Radar's Bearer token, P5). An empty token or a keyless provider both yield
+// array() -- pfb_download() then sends no Authorization header, so a missing/blank token
+// fails the request safely rather than sending a malformed header: the #886 preserve+warn
+// path in pfblockerng_top1m() keeps the previous TOP1M whitelist and warns, exactly as any
+// other download failure does.
+//
+// @return string[] zero or one header line, e.g. ['Authorization: Bearer <token>'].
+function pfb_top1m_auth_headers(array $provider, string $token): array
+{
+	$auth = $provider['auth'] ?? 'none';
+	if (!is_array($auth) || empty($auth['header']) || $token === '') {
+		return array();
+	}
+	$scheme = $auth['scheme'] ?? '';
+	$value  = ($scheme !== '') ? "{$scheme} {$token}" : $token;
+	return array("{$auth['header']}: {$value}");
 }
 
 /** Read a PfbAliasDeltaMode from a raw stored value. */
@@ -365,8 +424,9 @@ function pfb_cfg_top1m_source_read(mixed $stored): Top1mSource
 
 /**
  * Write a Top1mSource (enum or legacy string) back to its canonical stored
- * token ('tranco' | 'cisco'). The dead legacy 'alexa' token (#872) is never
- * re-emitted — fromStored() already coalesced it to Tranco before this runs.
+ * token ('tranco' | 'cisco' | 'domcop' | 'majestic' | 'cloudflare'). The dead
+ * legacy 'alexa' token (#872) is never re-emitted — fromStored() already
+ * coalesced it to Tranco before this runs.
  */
 function pfb_cfg_top1m_source_write(Top1mSource|string $source): string
 {
@@ -811,8 +871,8 @@ function pfb_cfg_registry(): array
 			'since'         => '1.0.0',
 		],
 
-		// TOP1M type selector: 'tranco' | 'cisco' | 'domcop' | 'majestic'. Legacy
-		// 'alexa' (dead service, #872) coalesces to 'tranco' at the read boundary
+		// TOP1M type selector: 'tranco' | 'cisco' | 'domcop' | 'majestic' | 'cloudflare'.
+		// Legacy 'alexa' (dead service, #872) coalesces to 'tranco' at the read boundary
 		// via pfb_cfg_top1m_source_read(). Default 'tranco'.
 		'alexa_type' => [
 			'section'       => $dnsbl,
@@ -838,6 +898,21 @@ function pfb_cfg_registry(): array
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 			'since'         => '1.0.0',
+		],
+
+		// ADR-59 P5: masked, write-only Cloudflare Radar Bearer token -- consumed only
+		// when alexa_type == 'cloudflare' (every other provider ignores it), fed to
+		// pfb_download() via pfb_top1m_auth_headers() + the P3 header-auth plumbing.
+		// Plain string (no adapter): the DNSBL page never echoes the stored value back
+		// on GET, and a blank POST preserves the existing value rather than clearing it
+		// (pfblockerng_dnsbl.php's save handler) -- see PFB_FILTER_TOKEN (pfblockerng.inc)
+		// for the accepted charset. Default ''.
+		'top1m_token' => [
+			'section'       => $dnsbl,
+			'default'       => '',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'since'         => '4.0.0',
 		],
 
 		// Resolver cache backup/restore option. Default ''.
@@ -1591,8 +1666,8 @@ function pfb_run_migrations(): void
  * The top1m_source adapter (pfb_cfg_top1m_source_read/write, issue #877) is wired
  * for alexa_type and returns a Top1mSource enum. Legacy 'alexa' (dead service,
  * #872) coalesces to Tranco on read and is never re-emitted by a write; the
- * write vocabulary is 'tranco'|'cisco'|'domcop'|'majestic' (domcop/majestic
- * added ADR-59 P4).
+ * write vocabulary is 'tranco'|'cisco'|'domcop'|'majestic'|'cloudflare'
+ * (domcop/majestic added ADR-59 P4, cloudflare added ADR-59 P5).
  *
  * @return array<string,list<string>>
  */
@@ -1622,11 +1697,12 @@ function pfb_cfg_field_vocab(): array
 		'alias_delta_mode' => ['auto', 'delta', 'replace'],
 
 		// TOP1M source selector (Top1mSource, issue #877): the tokens a write can
-		// emit. 'tranco' (default) | 'cisco' | 'domcop' | 'majestic' (the latter
-		// two added ADR-59 P4). The legacy 'alexa' token (dead service, #872) is a
-		// READ-ONLY legacy value — pfb_cfg_top1m_source_read() coalesces it to
-		// Top1mSource::Tranco and it is never re-emitted by a write.
-		'top1m_source' => ['tranco', 'cisco', 'domcop', 'majestic'],
+		// emit. 'tranco' (default) | 'cisco' | 'domcop' | 'majestic' | 'cloudflare'
+		// (domcop/majestic added ADR-59 P4, cloudflare added ADR-59 P5). The legacy
+		// 'alexa' token (dead service, #872) is a READ-ONLY legacy value —
+		// pfb_cfg_top1m_source_read() coalesces it to Top1mSource::Tranco and it is
+		// never re-emitted by a write.
+		'top1m_source' => ['tranco', 'cisco', 'domcop', 'majestic', 'cloudflare'],
 
 		// Plain string (null/null adapters): identity. Backward-safe by construction.
 		// The 'plain' vocabulary contains the sentinel empty string; individual

@@ -7,7 +7,8 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * ADR-59 Phase 1 -- pfb_top1m_providers() extraction oracle. Extended Phase 4
- * to add the keyless providers DomCop + Majestic.
+ * to add the keyless providers DomCop + Majestic, and Phase 5 to add the
+ * token-authenticated Cloudflare Radar provider.
  *
  * Before Phase 1, pfblockerng.php:162 picked the TOP1M download URL with a
  * hardcoded if/else on the Top1mSource enum. Phase 1 moved both provider's
@@ -16,7 +17,10 @@ use PHPUnit\Framework\TestCase;
  * BEHAVIOUR-PRESERVING throughout: this oracle pins their resolved URL to the
  * exact pre-ADR-59 literal, so any future edit to the table that drifts
  * tranco/cisco's URL fails loudly. Phase 4 adds DomCop + Majestic as two more
- * rows in the same table -- their own shape is pinned separately below.
+ * rows in the same table -- their own shape is pinned separately below. Phase 5
+ * adds Cloudflare Radar -- the first (and so far only) header-auth provider,
+ * whose real API shape (verified against Cloudflare's own docs, NOT the ADR's
+ * original guess) is a single-column 'domain' CSV, no rank -- domain_col 0.
  */
 #[CoversFunction('pfb_top1m_providers')]
 final class Top1mProvidersTest extends TestCase
@@ -54,10 +58,13 @@ final class Top1mProvidersTest extends TestCase
 		);
 	}
 
-	/** The provider table now carries exactly the four live keyless sources (P4). */
-	public function testFourKeylessProvidersAreDescribed(): void
+	/** The provider table now carries exactly the four keyless sources (P4) plus Cloudflare (P5). */
+	public function testFiveProvidersAreDescribed(): void
 	{
-		$this->assertSame(['tranco', 'cisco', 'domcop', 'majestic'], array_keys(pfb_top1m_providers()));
+		$this->assertSame(
+			['tranco', 'cisco', 'domcop', 'majestic', 'cloudflare'],
+			array_keys(pfb_top1m_providers())
+		);
 	}
 
 	/**
@@ -98,5 +105,34 @@ final class Top1mProvidersTest extends TestCase
 		$this->assertSame(2, $majestic['domain_col'], 'majestic: Domain is the 3rd CSV field -> index 2');
 		$this->assertSame('none', $majestic['auth'], 'majestic: auth must be none');
 		$this->assertStringContainsString('CC BY 3.0', $majestic['licence'], 'majestic: CC BY 3.0 licence note must be present');
+	}
+
+	/**
+	 * ADR-59 P5 -- Cloudflare Radar's REAL shape, verified against Cloudflare's own docs
+	 * during this phase (not the ADR's original 2-column guess): a single 'domain' column
+	 * (no rank) in a PLAIN (uncompressed) CSV, so domain_col is 0 -- not 1. Auth is a
+	 * structured {header, scheme} array (distinct from every other provider's plain
+	 * 'none' string), the only descriptor row that needs pfb_top1m_auth_headers().
+	 */
+	public function testCloudflareDescribesItsRealSingleColumnAuthedCsvShape(): void
+	{
+		$cloudflare = pfb_top1m_providers()[Top1mSource::Cloudflare->value];
+		$this->assertSame(
+			'https://api.cloudflare.com/client/v4/radar/datasets/ranking_top_1000000',
+			$cloudflare['url'],
+			'cloudflare: URL must be the stable ranking_top_1000000 dataset alias'
+		);
+		$this->assertSame('plain', $cloudflare['container'], 'cloudflare: container must be plain (uncompressed CSV stream)');
+		$this->assertSame('csv', $cloudflare['parse'], 'cloudflare: parse must be csv');
+		$this->assertTrue($cloudflare['header'], 'cloudflare: header row (literal "domain") must be skipped');
+		$this->assertSame(
+			0,
+			$cloudflare['domain_col'],
+			'cloudflare: the dataset is a SINGLE domain column (no rank) -> index 0, not the ADR-guessed 1'
+		);
+		$this->assertIsArray($cloudflare['auth'], 'cloudflare: auth must be a structured header descriptor, not a plain string');
+		$this->assertSame('Authorization', $cloudflare['auth']['header'], 'cloudflare: auth header name must be Authorization');
+		$this->assertSame('Bearer', $cloudflare['auth']['scheme'], 'cloudflare: auth scheme must be Bearer');
+		$this->assertStringContainsString('CC BY-NC', $cloudflare['licence'], 'cloudflare: CC BY-NC licence note must be present');
 	}
 }

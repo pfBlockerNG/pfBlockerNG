@@ -673,11 +673,11 @@ final class CfgAdaptersTest extends TestCase
 
 	// -----------------------------------------------------------------------
 	// Scenario E — Top1mSource (alexa_type, issue #877)
-	//   Stored tokens: 'tranco', 'cisco', 'domcop', 'majestic' (live; the latter
-	//   two added ADR-59 P4); legacy 'alexa' (dead service, #872) coalesces to
-	//   Tranco at the read boundary. Mirrors the PfbAliasDeltaMode adapter shape
-	//   (Scenario D): read returns the enum, write accepts either the enum or a
-	//   raw string.
+	//   Stored tokens: 'tranco', 'cisco', 'domcop', 'majestic', 'cloudflare' (live;
+	//   the latter three added ADR-59 P4/P5); legacy 'alexa' (dead service, #872)
+	//   coalesces to Tranco at the read boundary. Mirrors the PfbAliasDeltaMode
+	//   adapter shape (Scenario D): read returns the enum, write accepts either
+	//   the enum or a raw string.
 	// -----------------------------------------------------------------------
 
 	public function testTop1mSourceReadTrancoReturnsTranco(): void
@@ -701,6 +701,12 @@ final class CfgAdaptersTest extends TestCase
 		$this->assertSame(Top1mSource::Majestic, pfb_cfg_top1m_source_read('majestic'));
 	}
 
+	/** ADR-59 P5: the token-authenticated Cloudflare Radar token reads as its own enum case. */
+	public function testTop1mSourceReadCloudflareReturnsCloudflare(): void
+	{
+		$this->assertSame(Top1mSource::Cloudflare, pfb_cfg_top1m_source_read('cloudflare'));
+	}
+
 	/** The dead legacy TOP1M source (#872) must read as Tranco, not a lost 'alexa' value. */
 	public function testTop1mSourceReadLegacyAlexaCoalescesToTranco(): void
 	{
@@ -722,10 +728,13 @@ final class CfgAdaptersTest extends TestCase
 		$this->assertSame(Top1mSource::Tranco, pfb_cfg_top1m_source_read(''));
 	}
 
-	/** write(read(v)) == v for all four live canonical tokens (domcop/majestic added P4). */
+	/**
+	 * write(read(v)) == v for all five live canonical tokens (domcop/majestic added
+	 * P4, cloudflare added P5).
+	 */
 	public function testTop1mSourceRoundTripCanonicalTokens(): void
 	{
-		foreach (['tranco', 'cisco', 'domcop', 'majestic'] as $token) {
+		foreach (['tranco', 'cisco', 'domcop', 'majestic', 'cloudflare'] as $token) {
 			$written = pfb_cfg_top1m_source_write(pfb_cfg_top1m_source_read($token));
 			$this->assertSame($token, $written,
 				"expected write(read('{$token}')) == '{$token}'; actual: '{$written}'");
@@ -743,13 +752,15 @@ final class CfgAdaptersTest extends TestCase
 	/** pfb_cfg_top1m_source_write() accepts both an enum instance and a string. */
 	public function testTop1mSourceWriteAcceptsEnumOrString(): void
 	{
-		$this->assertSame('tranco',   pfb_cfg_top1m_source_write(Top1mSource::Tranco));
-		$this->assertSame('cisco',    pfb_cfg_top1m_source_write(Top1mSource::Cisco));
-		$this->assertSame('domcop',   pfb_cfg_top1m_source_write(Top1mSource::DomCop));
-		$this->assertSame('majestic', pfb_cfg_top1m_source_write(Top1mSource::Majestic));
-		$this->assertSame('tranco',   pfb_cfg_top1m_source_write('tranco'));
-		$this->assertSame('cisco',    pfb_cfg_top1m_source_write('cisco'));
-		$this->assertSame('domcop',   pfb_cfg_top1m_source_write('domcop'));
-		$this->assertSame('majestic', pfb_cfg_top1m_source_write('majestic'));
+		$this->assertSame('tranco',     pfb_cfg_top1m_source_write(Top1mSource::Tranco));
+		$this->assertSame('cisco',      pfb_cfg_top1m_source_write(Top1mSource::Cisco));
+		$this->assertSame('domcop',     pfb_cfg_top1m_source_write(Top1mSource::DomCop));
+		$this->assertSame('majestic',   pfb_cfg_top1m_source_write(Top1mSource::Majestic));
+		$this->assertSame('cloudflare', pfb_cfg_top1m_source_write(Top1mSource::Cloudflare));
+		$this->assertSame('tranco',     pfb_cfg_top1m_source_write('tranco'));
+		$this->assertSame('cisco',      pfb_cfg_top1m_source_write('cisco'));
+		$this->assertSame('domcop',     pfb_cfg_top1m_source_write('domcop'));
+		$this->assertSame('majestic',   pfb_cfg_top1m_source_write('majestic'));
+		$this->assertSame('cloudflare', pfb_cfg_top1m_source_write('cloudflare'));
 	}
 }
