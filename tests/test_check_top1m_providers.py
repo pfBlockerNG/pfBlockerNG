@@ -1,15 +1,23 @@
-"""Tests for scripts/misc/check_top1m_providers.py (issue #884).
+"""Tests for scripts/misc/check_top1m_providers.py (issue #884, ADR-59 P6).
 
 Nothing caught the Alexa Top1M source rotting silently (its hardcoded URL died
 years ago; cleaned up in #877). These tests pin the guard that would have:
-extracting every top1m provider URL straight from pfblockerng.php (so adding
-or removing a provider arm needs no edit here), and validating a fetched
-payload is actually a healthy, fresh Top1M list -- not just a 200.
+extracting every top1m provider straight from `pfb_top1m_providers()`'s
+descriptor table (pfblockerng_extra.inc) -- so adding or removing a provider
+row needs no edit here -- classifying each by its `auth` (keyless vs a CI-secret
+-gated token provider), and validating a fetched payload is actually a
+healthy, fresh Top1M list -- not just a 200.
+
+ADR-59 moved the provider URLs off pfblockerng.php's literal
+`$pfb['extras'][2]['url'] = '...'` assignment (the shape these tests used to
+target) into the descriptor table -- that assignment is now an expression
+reading the table, so the OLD extraction regex no longer matches anything.
+This suite targets the table directly.
 
 No network: --check-url's HTTP fetch lives in check_url(); every test below
-targets the pure functions (extract_providers / validate_top1m / is_stale)
-with injected bytes/headers/now, per CLAUDE.md's no-network-in-unit-tests
-branch-coverage rule.
+targets the pure functions (extract_providers / validate_top1m / is_stale /
+main's classification) with injected bytes/headers/now/env, per CLAUDE.md's
+no-network-in-unit-tests branch-coverage rule.
 """
 
 from __future__ import annotations
@@ -35,101 +43,187 @@ _spec.loader.exec_module(ctp)
 
 
 # --------------------------------------------------------------------------- #
-# extract_providers -- PHP fixtures mirror the real extras-slot shape
+# extract_providers -- descriptor-table fixtures mirror pfb_top1m_providers()
 # --------------------------------------------------------------------------- #
 
-# Mirrors src/usr/local/www/pfblockerng/pfblockerng.php's real shape: extras[0]
-# is a geoip slot (must NOT be picked up), extras[2] is the top1m slot with its
-# URL set inside an if/else -- the type assignment trails both branches.
-_PHP_TWO_PROVIDERS = """
-$pfb['extras'][0]		= array();
-$pfb['extras'][0]['url']	= 'https://download.maxmind.com/geoip/databases/GeoLite2-Country/download?suffix=tar.gz';
-$pfb['extras'][0]['type']	= 'geoip';
-
-$pfb['extras'][2]			= array();
-if ($pfb['dnsbl_top1m_type'] === Top1mSource::Tranco) {
-	$pfb['extras'][2]['url']	= 'https://tranco-list.eu/top-1m.csv.zip';
-} else {
-	$pfb['extras'][2]['url']	= 'https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip';  // Cisco
+# Mirrors the real pfb_top1m_providers() shape: two keyless zip providers
+# (Tranco/Cisco, no 'label'/'container' -- exercises the fallback defaults),
+# one keyless plain-CSV provider (Majestic-shaped), and one token provider
+# (Cloudflare-shaped) whose 'auth' is a structured {header, scheme} array.
+_PHP_DESCRIPTOR_TABLE = """
+function pfb_top1m_providers(): array
+{
+	return array(
+		Top1mSource::Tranco->value	=> array(
+			'url'		=> 'https://tranco-list.eu/top-1m.csv.zip',
+			'container'	=> 'zip',
+			'auth'		=> 'none',
+			'label'		=> 'Tranco',
+		),
+		Top1mSource::Cisco->value	=> array(
+			'url'		=> 'https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip',
+			'container'	=> 'zip',
+			'auth'		=> 'none',
+			'label'		=> 'Cisco Umbrella',
+		),
+		Top1mSource::Majestic->value	=> array(
+			'url'		=> 'https://downloads.majestic.com/majestic_million.csv',
+			'container'	=> 'plain',
+			'auth'		=> 'none',
+			'label'		=> 'Majestic Million',
+			'licence'	=> 'CC BY 3.0 -- attribution required',
+		),
+		Top1mSource::Cloudflare->value	=> array(
+			'url'		=> 'https://api.cloudflare.com/client/v4/radar/datasets/ranking_top_1000000',
+			'container'	=> 'plain',
+			'auth'		=> array('header' => 'Authorization', 'scheme' => 'Bearer'),
+			'label'		=> 'Cloudflare Radar',
+			'licence'	=> 'CC BY-NC 4.0 -- non-commercial use, attribution required',
+		),
+	);
 }
-$pfb['extras'][2]['file_dwn']	= 'top-1m.csv.zip';
-$pfb['extras'][2]['type']	= 'top1m';
 """
 
-# A third provider arm added to the SAME slot (elseif) -- the crux case: the
-# extractor must pick this up with no code change, proving add/remove coverage
-# is automatic rather than a hardcoded Tranco/Cisco pair.
-_PHP_THREE_PROVIDERS = """
-$pfb['extras'][2]			= array();
-if ($pfb['dnsbl_top1m_type'] === Top1mSource::Tranco) {
-	$pfb['extras'][2]['url']	= 'https://tranco-list.eu/top-1m.csv.zip';
-} elseif ($pfb['dnsbl_top1m_type'] === Top1mSource::Quad9) {
-	$pfb['extras'][2]['url']	= 'https://example-quad9.test/top-1m.csv.zip';
-} else {
-	$pfb['extras'][2]['url']	= 'https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip';  // Cisco
-}
-$pfb['extras'][2]['type']	= 'top1m';
-"""
 
-
-def test_extract_providers_finds_both_top1m_urls() -> None:
-    providers = ctp.extract_providers(_PHP_TWO_PROVIDERS)
+def test_extract_providers_finds_every_row_in_the_descriptor_table() -> None:
+    providers = ctp.extract_providers(_PHP_DESCRIPTOR_TABLE)
     urls = {p["url"] for p in providers}
     assert urls == {
         "https://tranco-list.eu/top-1m.csv.zip",
         "https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip",
+        "https://downloads.majestic.com/majestic_million.csv",
+        "https://api.cloudflare.com/client/v4/radar/datasets/ranking_top_1000000",
     }
 
 
-def test_extract_providers_ignores_non_top1m_slot() -> None:
-    providers = ctp.extract_providers(_PHP_TWO_PROVIDERS)
-    urls = {p["url"] for p in providers}
-    assert "https://download.maxmind.com/geoip/databases/GeoLite2-Country/download?suffix=tar.gz" not in urls
+def test_extract_providers_reads_label_and_container_per_row() -> None:
+    providers = {p["name"]: p for p in ctp.extract_providers(_PHP_DESCRIPTOR_TABLE)}
+    assert providers["Tranco"]["container"] == "zip"
+    assert providers["Majestic Million"]["container"] == "plain"
 
 
-# A provider line commented out with `//` (a dead/retired provider left in
-# place for reference) must not be extracted as live -- the extractor
-# previously matched raw text with no regard for comments.
-_PHP_WITH_A_COMMENTED_OUT_PROVIDER = """
-$pfb['extras'][2]			= array();
-// $pfb['extras'][2]['url']	= 'https://dead-provider.test/top-1m.csv.zip';
-if ($pfb['dnsbl_top1m_type'] === Top1mSource::Tranco) {
-	$pfb['extras'][2]['url']	= 'https://tranco-list.eu/top-1m.csv.zip';
-} else {
-	$pfb['extras'][2]['url']	= 'https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip';  // Cisco
+def test_extract_providers_classifies_keyless_providers_as_auth_none() -> None:
+    providers = {p["name"]: p for p in ctp.extract_providers(_PHP_DESCRIPTOR_TABLE)}
+    for name in ("Tranco", "Cisco Umbrella", "Majestic Million"):
+        assert providers[name]["auth"] == "none"
+        assert providers[name]["secret_env"] == ""
+
+
+def test_extract_providers_classifies_a_token_provider_and_derives_its_secret_env() -> None:
+    # The load-bearing new behaviour: a structured {header, scheme} 'auth'
+    # marks the provider as token-gated, and the CI secret env-var name is
+    # DERIVED from its label -- "Cloudflare Radar" -> CLOUDFLARE_RADAR_TOKEN,
+    # matching the ADR's own example (S2.7) with no separate mapping table.
+    providers = {p["name"]: p for p in ctp.extract_providers(_PHP_DESCRIPTOR_TABLE)}
+    cloudflare = providers["Cloudflare Radar"]
+    assert cloudflare["auth"] == "token"
+    assert cloudflare["secret_env"] == "CLOUDFLARE_RADAR_TOKEN"
+    assert cloudflare["auth_header"] == "Authorization"
+    assert cloudflare["auth_scheme"] == "Bearer"
+
+
+# A fifth descriptor row (a plain new top-level array entry, the actual shape
+# a new provider takes in the real table) alongside the same four -- the
+# crux case: the extractor must pick this up with zero code changes, proving
+# add/remove coverage is automatic against the new source of truth, not a
+# hardcoded 4-provider list.
+_PHP_DESCRIPTOR_TABLE_WITH_A_FIFTH_ROW = """
+function pfb_top1m_providers(): array
+{
+	return array(
+		Top1mSource::Tranco->value	=> array(
+			'url'		=> 'https://tranco-list.eu/top-1m.csv.zip',
+			'container'	=> 'zip',
+			'auth'		=> 'none',
+			'label'		=> 'Tranco',
+		),
+		Top1mSource::Cisco->value	=> array(
+			'url'		=> 'https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip',
+			'container'	=> 'zip',
+			'auth'		=> 'none',
+			'label'		=> 'Cisco Umbrella',
+		),
+		Top1mSource::Majestic->value	=> array(
+			'url'		=> 'https://downloads.majestic.com/majestic_million.csv',
+			'container'	=> 'plain',
+			'auth'		=> 'none',
+			'label'		=> 'Majestic Million',
+		),
+		Top1mSource::Cloudflare->value	=> array(
+			'url'		=> 'https://api.cloudflare.com/client/v4/radar/datasets/ranking_top_1000000',
+			'container'	=> 'plain',
+			'auth'		=> array('header' => 'Authorization', 'scheme' => 'Bearer'),
+			'label'		=> 'Cloudflare Radar',
+		),
+		Top1mSource::Quad9->value	=> array(
+			'url'		=> 'https://example-quad9.test/top-1m.csv.zip',
+			'container'	=> 'zip',
+			'auth'		=> 'none',
+			'label'		=> 'Quad9',
+		),
+	);
 }
-$pfb['extras'][2]['type']	= 'top1m';
 """
 
 
-def test_extract_providers_skips_a_commented_out_provider_line() -> None:
-    providers = ctp.extract_providers(_PHP_WITH_A_COMMENTED_OUT_PROVIDER)
-    urls = {p["url"] for p in providers}
-    assert "https://dead-provider.test/top-1m.csv.zip" not in urls
-    assert urls == {
-        "https://tranco-list.eu/top-1m.csv.zip",
-        "https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip",
-    }
+def test_extract_providers_auto_covers_a_newly_added_descriptor_row() -> None:
+    # This is the guarantee issue #884 asks for: add a row to the descriptor
+    # table and the extractor picks it up with zero changes to this script.
+    providers = ctp.extract_providers(_PHP_DESCRIPTOR_TABLE_WITH_A_FIFTH_ROW)
+    names = {p["name"] for p in providers}
+    assert names == {"Tranco", "Cisco Umbrella", "Majestic Million", "Cloudflare Radar", "Quad9"}
 
 
-def test_extract_providers_auto_covers_a_newly_added_provider_arm() -> None:
-    # This is the guarantee issue #884 asks for: add a provider arm to the PHP
-    # and the extractor picks it up with zero changes to this script.
-    providers = ctp.extract_providers(_PHP_THREE_PROVIDERS)
-    urls = {p["url"] for p in providers}
-    assert urls == {
-        "https://tranco-list.eu/top-1m.csv.zip",
-        "https://example-quad9.test/top-1m.csv.zip",
-        "https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip",
-    }
+# A row commented out with `//` (a dead/retired provider left in place for
+# reference) must not be extracted as live -- mirrors the pre-existing
+# comment-stripping guarantee, now against the descriptor table.
+_PHP_WITH_A_COMMENTED_OUT_ROW = """
+function pfb_top1m_providers(): array
+{
+	return array(
+		// Top1mSource::Dead->value	=> array('url' => 'https://dead.test/x.zip', 'auth' => 'none', 'label' => 'Dead'),
+		Top1mSource::Tranco->value	=> array(
+			'url'		=> 'https://tranco-list.eu/top-1m.csv.zip',
+			'container'	=> 'zip',
+			'auth'		=> 'none',
+			'label'		=> 'Tranco',
+		),
+	);
+}
+"""
+
+
+def test_extract_providers_skips_a_commented_out_row() -> None:
+    providers = ctp.extract_providers(_PHP_WITH_A_COMMENTED_OUT_ROW)
+    names = {p["name"] for p in providers}
+    assert names == {"Tranco"}
+
+
+_PHP_ONE_PROVIDER_NO_LABEL_NO_CONTAINER = """
+function pfb_top1m_providers(): array
+{
+	return array(
+		Top1mSource::Tranco->value	=> array(
+			'url'	=> 'https://tranco-list.eu/top-1m.csv.zip',
+			'auth'	=> 'none',
+		),
+	);
+}
+"""
+
+
+def test_extract_providers_falls_back_to_url_netloc_and_zip_container_when_absent() -> None:
+    (provider,) = ctp.extract_providers(_PHP_ONE_PROVIDER_NO_LABEL_NO_CONTAINER)
+    assert provider["name"] == "tranco-list.eu"
+    assert provider["container"] == "zip"
 
 
 # --------------------------------------------------------------------------- #
-# validate_top1m / _scan_csv -- in-memory zips, no network
+# validate_top1m / _scan_csv -- in-memory zips + plain bodies, no network
 # --------------------------------------------------------------------------- #
 
 
-def _zip_of(rows: list[tuple[str, str]], member: str = "top-1m.csv") -> bytes:
+def _zip_of(rows: list[tuple[str, ...]], member: str = "top-1m.csv") -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         text = io.StringIO()
@@ -139,13 +233,19 @@ def _zip_of(rows: list[tuple[str, str]], member: str = "top-1m.csv") -> bytes:
     return buf.getvalue()
 
 
+def _plain_csv_of(rows: list[tuple[str, ...]]) -> bytes:
+    text = io.StringIO()
+    csv.writer(text).writerows(rows)
+    return text.getvalue().encode("utf-8")
+
+
 _NOW = datetime(2026, 7, 6, tzinfo=timezone.utc)
 _FRESH_LM = "Sun, 05 Jul 2026 00:00:00 GMT"  # 1 day old
 _STALE_LM = "Mon, 01 Jun 2026 00:00:00 GMT"  # 35 days old
 
 
 def test_validate_top1m_passes_with_enough_valid_fresh_rows() -> None:
-    rows = [(str(i), f"example{i}.com") for i in range(10)]
+    rows: list[tuple[str, ...]] = [(str(i), f"example{i}.com") for i in range(10)]
     body = _zip_of(rows)
     reasons = ctp.validate_top1m(body, _FRESH_LM, _NOW, min_rows=10, max_age_days=30)
     assert reasons == []
@@ -153,7 +253,7 @@ def test_validate_top1m_passes_with_enough_valid_fresh_rows() -> None:
 
 def test_validate_top1m_fails_when_row_count_below_min_rows() -> None:
     # Truncated payload: 5 good rows, floor set to 10.
-    rows = [(str(i), f"example{i}.com") for i in range(5)]
+    rows: list[tuple[str, ...]] = [(str(i), f"example{i}.com") for i in range(5)]
     body = _zip_of(rows)
     reasons = ctp.validate_top1m(body, _FRESH_LM, _NOW, min_rows=10, max_age_days=30)
     assert len(reasons) == 1
@@ -161,17 +261,17 @@ def test_validate_top1m_fails_when_row_count_below_min_rows() -> None:
     assert "found 5" in reasons[0]
 
 
-def test_validate_top1m_fails_when_body_is_not_a_zip() -> None:
-    reasons = ctp.validate_top1m(b"<html>error</html>", _FRESH_LM, _NOW, min_rows=10, max_age_days=30)
+def test_validate_top1m_fails_when_a_zip_container_body_is_not_a_zip() -> None:
+    reasons = ctp.validate_top1m(b"<html>error</html>", _FRESH_LM, _NOW, min_rows=10, max_age_days=30, container="zip")
     assert len(reasons) == 1
     assert "ZIP" in reasons[0]
 
 
 def test_validate_top1m_fails_on_a_malformed_row_non_int_rank_no_dot_domain() -> None:
-    # 9 good rows + 1 malformed ("foo,bar": non-int rank, no-dot domain) with
+    # 9 good rows + 1 malformed ("foo,bar": neither field has a dot) with
     # min_rows=10 -- the malformed row doesn't count as valid, so the floor
     # check itself catches it, AND the report names the exact bad row.
-    rows = [(str(i), f"example{i}.com") for i in range(9)]
+    rows: list[tuple[str, ...]] = [(str(i), f"example{i}.com") for i in range(9)]
     rows.append(("foo", "bar"))
     body = _zip_of(rows)
     reasons = ctp.validate_top1m(body, _FRESH_LM, _NOW, min_rows=10, max_age_days=30)
@@ -182,8 +282,8 @@ def test_validate_top1m_fails_on_a_malformed_row_non_int_rank_no_dot_domain() ->
 
 def test_validate_top1m_rejects_a_bare_dot_as_a_domain() -> None:
     # A bare "." has no real label on either side of the dot -- must not read
-    # as a valid "rank,domain" row just because it contains a "." and no space.
-    rows = [(str(i), f"example{i}.com") for i in range(9)]
+    # as a valid domain row just because it contains a "." and no space.
+    rows: list[tuple[str, ...]] = [(str(i), f"example{i}.com") for i in range(9)]
     rows.append(("9", "."))
     body = _zip_of(rows)
     reasons = ctp.validate_top1m(body, _FRESH_LM, _NOW, min_rows=10, max_age_days=30)
@@ -193,7 +293,7 @@ def test_validate_top1m_rejects_a_bare_dot_as_a_domain() -> None:
 
 def test_validate_top1m_flags_staleness_only_once_last_modified_ages_past_the_limit() -> None:
     # Before-state: same payload is healthy while Last-Modified is fresh...
-    rows = [(str(i), f"example{i}.com") for i in range(10)]
+    rows: list[tuple[str, ...]] = [(str(i), f"example{i}.com") for i in range(10)]
     body = _zip_of(rows)
     assert ctp.validate_top1m(body, _FRESH_LM, _NOW, min_rows=10, max_age_days=30) == []
 
@@ -202,6 +302,54 @@ def test_validate_top1m_flags_staleness_only_once_last_modified_ages_past_the_li
     reasons = ctp.validate_top1m(body, _STALE_LM, _NOW, min_rows=10, max_age_days=30)
     assert len(reasons) == 1
     assert "35 days old" in reasons[0]
+
+
+# --- 'plain' container (Majestic/Cloudflare's real shape): no zip wrapper --- #
+
+
+def test_validate_top1m_passes_a_plain_container_body_with_no_zip_wrapper() -> None:
+    # FAIL-BEFORE/PASS-AFTER for the container-awareness fix: the pre-P6
+    # script assumed every body was a zip unconditionally, so a real (never
+    # vendored) Majestic/Cloudflare-shaped plain CSV response would have been
+    # misread as "not a valid ZIP archive" and reported unhealthy even though
+    # the feed itself is perfectly fine.
+    rows: list[tuple[str, ...]] = [(str(i), f"example{i}.com") for i in range(10)]
+    body = _plain_csv_of(rows)
+    reasons = ctp.validate_top1m(body, _FRESH_LM, _NOW, min_rows=10, max_age_days=30, container="plain")
+    assert reasons == []
+
+
+def test_validate_top1m_skips_a_header_row_in_a_plain_wide_csv_with_domain_not_in_column_zero() -> None:
+    # Majestic/DomCop-shaped: a header row, then real rows with the domain in
+    # a column other than 0/1 -- _is_valid_row must find it anywhere in the
+    # row (provider-agnostic), and the header row (no dotted field) must not
+    # count as valid or as the "first bad row".
+    rows: list[tuple[str, ...]] = [("GlobalRank", "TldRank", "Domain", "TLD")]
+    rows += [(str(i), str(i), f"example{i}.com", "com") for i in range(10)]
+    body = _plain_csv_of(rows)
+    reasons = ctp.validate_top1m(body, _FRESH_LM, _NOW, min_rows=10, max_age_days=30, container="plain")
+    assert reasons == []
+
+
+def test_validate_top1m_fails_a_plain_container_body_with_too_few_domain_rows() -> None:
+    # A plain body that never validates (empty/garbage) fails via the row-count
+    # floor with an informative message -- not the "ZIP" message, since a
+    # 'plain' container never attempts a zip parse.
+    reasons = ctp.validate_top1m(
+        b"<html>error</html>", _FRESH_LM, _NOW, min_rows=10, max_age_days=30, container="plain"
+    )
+    assert len(reasons) == 1
+    assert "found 0" in reasons[0]
+    assert "ZIP" not in reasons[0]
+
+
+def test_validate_top1m_single_domain_only_column_cloudflare_shape_passes() -> None:
+    # Cloudflare's real shape: ONE 'domain' column, no rank at all.
+    rows: list[tuple[str, ...]] = [("domain",)]
+    rows += [(f"example{i}.com",) for i in range(10)]
+    body = _plain_csv_of(rows)
+    reasons = ctp.validate_top1m(body, _FRESH_LM, _NOW, min_rows=10, max_age_days=30, container="plain")
+    assert reasons == []
 
 
 # --------------------------------------------------------------------------- #
@@ -288,7 +436,7 @@ def test_check_url_reports_a_clean_reason_on_http_error(monkeypatch: Any) -> Non
 
 
 def test_check_url_reports_a_clean_reason_when_the_body_read_is_cut_short(monkeypatch: Any) -> None:
-    # The #3 fix: IncompleteRead mid-download of the multi-MB zip is neither
+    # The #3 fix: IncompleteRead mid-download of the multi-MB body is neither
     # HTTPError nor URLError -- a narrower except let this raise a raw
     # traceback instead of a clean FAIL report.
     exc = http.client.IncompleteRead(partial=b"only some bytes")
@@ -336,8 +484,29 @@ def test_check_url_handles_a_stale_tz_less_last_modified_without_crashing(monkey
     assert "days old" in reasons[0]
 
 
+def test_check_url_passes_the_caller_supplied_headers_through_to_the_request(monkeypatch: Any) -> None:
+    # A token provider's Authorization header must actually reach the
+    # request object, alongside (not instead of) the User-Agent.
+    body = _healthy_zip_body()
+    seen: dict[str, Any] = {}
+
+    def fake_urlopen(request: Any, timeout: int) -> Any:
+        seen["headers"] = dict(request.headers)
+        return _FakeResponse(body, {"Last-Modified": _ALWAYS_FRESH_LM})
+
+    monkeypatch.setattr(ctp.urllib.request, "urlopen", fake_urlopen)
+    reasons = ctp.check_url(
+        "https://example.test/top-1m.csv.zip", min_rows=10, headers={"Authorization": "Bearer sekrit-token-value"}
+    )
+    assert reasons == []
+    # urllib.request.Request title-cases header names on the wire.
+    assert seen["headers"]["Authorization"] == "Bearer sekrit-token-value"
+    assert seen["headers"]["User-agent"] == "pfBlockerNG-top1m-healthcheck/1.0"
+
+
 # --------------------------------------------------------------------------- #
-# main -- exit code reflects check_url's verdict
+# main -- exit code reflects check_url's verdict, and the auth classification
+# ('auth: none' vs a CI-secret-gated token provider, ADR-59 S2.7)
 # --------------------------------------------------------------------------- #
 
 
@@ -355,3 +524,106 @@ def test_main_exits_nonzero_when_check_url_reports_unhealthy(monkeypatch: Any, c
     out = capsys.readouterr().out
     assert "FAIL" in out
     assert "connection error" in out
+
+
+def test_main_never_calls_check_url_for_a_keyless_provider_and_behaves_as_before(monkeypatch: Any, capsys: Any) -> None:
+    # Before-state: a keyless provider (no --secret-env) is unchanged -- it is
+    # validated exactly like every prior release of this script.
+    called: dict[str, Any] = {}
+
+    def fake_check_url(url: str, **kwargs: Any) -> list[str]:
+        called["headers"] = kwargs.get("headers")
+        return []
+
+    monkeypatch.setattr(ctp, "check_url", fake_check_url)
+    code = ctp.main(["--check-url", "https://example.test/top-1m.csv.zip"])
+    assert code == 0
+    assert called["headers"] is None
+    assert "OK" in capsys.readouterr().out
+
+
+def test_main_skips_a_token_provider_with_no_reason_to_fail_when_its_secret_is_absent(
+    monkeypatch: Any, capsys: Any
+) -> None:
+    # The new behaviour this phase adds: a token-gated provider (Cloudflare)
+    # with no configured CI secret must be VISIBLY skipped and exit 0 -- never
+    # silently, and never counted as an unhealthy/failing leg.
+    monkeypatch.delenv("CLOUDFLARE_RADAR_TOKEN", raising=False)
+
+    def fail_if_called(url: str, **kwargs: Any) -> list[str]:
+        raise AssertionError("check_url must not be called when the secret is absent")
+
+    monkeypatch.setattr(ctp, "check_url", fail_if_called)
+    code = ctp.main(
+        [
+            "--check-url",
+            "https://api.cloudflare.com/client/v4/radar/datasets/ranking_top_1000000",
+            "--container",
+            "plain",
+            "--secret-env",
+            "CLOUDFLARE_RADAR_TOKEN",
+            "--auth-header",
+            "Authorization",
+            "--auth-scheme",
+            "Bearer",
+        ]
+    )
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "SKIP" in out
+    assert "needs token" in out
+    assert "CLOUDFLARE_RADAR_TOKEN" in out
+
+
+def test_main_validates_a_token_provider_once_its_mocked_secret_is_present(monkeypatch: Any, capsys: Any) -> None:
+    # ...and once a secret IS configured (mocked here via monkeypatch.setenv,
+    # standing in for a real repo secret in CI), the SAME provider is
+    # validated -- proving the secret's presence, not its absence, drives the
+    # behaviour change (before/after pair with the test above).
+    monkeypatch.setenv("CLOUDFLARE_RADAR_TOKEN", "mock-token-value")
+    seen: dict[str, Any] = {}
+
+    def fake_check_url(url: str, **kwargs: Any) -> list[str]:
+        seen["container"] = kwargs.get("container")
+        seen["headers"] = kwargs.get("headers")
+        return []
+
+    monkeypatch.setattr(ctp, "check_url", fake_check_url)
+    code = ctp.main(
+        [
+            "--check-url",
+            "https://api.cloudflare.com/client/v4/radar/datasets/ranking_top_1000000",
+            "--container",
+            "plain",
+            "--secret-env",
+            "CLOUDFLARE_RADAR_TOKEN",
+            "--auth-header",
+            "Authorization",
+            "--auth-scheme",
+            "Bearer",
+        ]
+    )
+    assert code == 0
+    assert seen["container"] == "plain"
+    assert seen["headers"] == {"Authorization": "Bearer mock-token-value"}
+    out = capsys.readouterr().out
+    assert "OK" in out
+    assert "mock-token-value" not in out, "the token must never be printed, even in the healthy report"
+
+
+def test_main_never_prints_the_token_on_an_unhealthy_token_provider_result(monkeypatch: Any, capsys: Any) -> None:
+    # Security-relevant: the token must not leak even in a FAIL report's
+    # reason text (e.g. a real connection-error string echoing request state).
+    monkeypatch.setenv("CLOUDFLARE_RADAR_TOKEN", "mock-token-value")
+    monkeypatch.setattr(ctp, "check_url", lambda url, **_kwargs: ["expected HTTP 2xx, got HTTP 401 Unauthorized"])
+    code = ctp.main(
+        [
+            "--check-url",
+            "https://api.cloudflare.com/client/v4/radar/datasets/ranking_top_1000000",
+            "--secret-env",
+            "CLOUDFLARE_RADAR_TOKEN",
+        ]
+    )
+    assert code != 0
+    out = capsys.readouterr().out
+    assert "mock-token-value" not in out
