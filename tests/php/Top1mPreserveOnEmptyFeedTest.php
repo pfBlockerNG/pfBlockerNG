@@ -772,4 +772,48 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 			'a dotless Domain field must still be dropped by the csv-mode hostname guard');
 		$this->assertStringContainsString('keeping the previous TOP1M whitelist', $this->readErrLog());
 	}
+
+	/**
+	 * Issue #904 review follow-up -- pin the WIDENED alternative's own lower
+	 * boundary: the punycode branch must require an alphanumeric first
+	 * character after the 'xn--' prefix, so a suffix made only of hyphens
+	 * (never a real RFC 3492 ACE label) is still rejected. Only 'xn----' is
+	 * reachable exclusively through the new branch (the other two rows are
+	 * rejected by both the old and new regex), so it is the row that proves
+	 * the tightened alternative -- RED against the first-cut widening
+	 * (`xn--[A-Za-z0-9-]{2,}`, which accepted it), GREEN with the
+	 * alnum-first form (`xn--[A-Za-z0-9][A-Za-z0-9-]+`).
+	 *
+	 * @dataProvider malformedPunycodeTldRows
+	 */
+	public function testCsvModeStillRejectsMalformedPunycodeTldRow(string $domain): void
+	{
+		// Given: a prior good whitelist and a DomCop-shaped row whose Domain
+		// field ends in a malformed punycode-shaped TLD.
+		$priorContent = ".real.com,,\n,real.com,,\n,www.real.com,,\n";
+		$this->assertNotFalse(file_put_contents($this->whitelistPath(), $priorContent), 'setup: seed prior whitelist');
+		$csv = "\"Rank\",\"Domain\",\"Open Page Rank\"\n"
+			. "\"1\",\"{$domain}\",\"10.00\"\n";
+		$this->assertNotFalse(file_put_contents($this->csvPath(), $csv), "setup: malformed punycode row {$domain}");
+		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()), 'before-state sanity');
+
+		// When
+		pfblockerng_top1m(pfb_top1m_providers()[Top1mSource::DomCop->value]);
+
+		// Then: the malformed punycode-shaped TLD is rejected -- the widening
+		// admits real ACE labels only, not hyphen-runs or truncated prefixes.
+		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()),
+			"a malformed punycode TLD ({$domain}) must still be dropped by the csv-mode hostname guard");
+		$this->assertStringContainsString('keeping the previous TOP1M whitelist', $this->readErrLog());
+	}
+
+	/** @return array<string, array{string}> */
+	public static function malformedPunycodeTldRows(): array
+	{
+		return [
+			'hyphen-only suffix (xn----)'      => ['example.xn----'],
+			'empty suffix (bare xn--)'         => ['example.xn--'],
+			'missing second hyphen (xn-p1ai)'  => ['example.xn-p1ai'],
+		];
+	}
 }
