@@ -135,12 +135,28 @@ def test_hook_output_streams_to_gui_while_running(repo_vm: SmokeVM) -> None:
         )
 
         # ---- THEN (streaming): LINE1 visible mid-hook, LINE2 not yet --------------- #
-        # The hook is provably still blocked (WAITING exists, PROCEED not created yet).
-        mid = vm.ssh("cat", GUI_LOG).stdout
+        # The hook is provably still blocked: it touched WAITING (removed only after LINE2),
+        # and PROCEED is not created until below — so nothing releases it during this window.
+        # Streaming has inherent lag (the on-box tail polls every 200ms, then pfSense-upgrade
+        # tees), so poll (bounded) for LINE1 rather than a single racy read. A hook whose output
+        # only appears AFTER it exits (block-behaviour) never shows LINE1 here — the hook cannot
+        # exit until PROCEED, which is created only after this loop.
+        mid = ""
+        pid_seen = False
+        end = time.monotonic() + 20.0
+        while time.monotonic() < end:
+            mid = vm.ssh("cat", GUI_LOG).stdout
+            pid_seen = pid_seen or vm.ssh("/bin/sh", "-c", "ls /var/run/pfb_hook_*.pid 2>/dev/null").returncode == 0
+            if LINE1 in mid:
+                break
+            time.sleep(1.0)
+        assert vm.ssh("/bin/test", "-f", WAITING).returncode == 0, (
+            "the hook left its wait state before LINE1 was checked — timing invariant broken"
+        )
         assert LINE1 in mid, (
-            f"the hook's first line {LINE1!r} is NOT in the GUI log while the hook is still "
-            f"running — its output is buffered until the hook exits instead of streaming to the "
-            f"pkg Software page. GUI log so far:\n{mid[-3000:]}"
+            f"the hook's first line {LINE1!r} did NOT reach the GUI log while the hook is still "
+            f"blocked — its output is buffered until the hook exits instead of streaming to the pkg "
+            f"Software page (streaming daemon pidfile seen mid-hook: {pid_seen}). GUI log so far:\n{mid[-3000:]}"
         )
         assert LINE2 not in mid, (
             f"{LINE2!r} appeared before the hook was released — the block-on-signal setup is "
