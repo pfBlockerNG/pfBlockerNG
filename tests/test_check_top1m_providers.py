@@ -15,12 +15,16 @@ branch-coverage rule.
 from __future__ import annotations
 
 import csv
+import http.client
 import importlib.util
 import io
 import sys
+import urllib.error
 import zipfile
 from datetime import datetime, timedelta, timezone
+from email.utils import formatdate
 from pathlib import Path
+from typing import Any
 
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "misc" / "check_top1m_providers.py"
 _spec = importlib.util.spec_from_file_location("check_top1m_providers", _SCRIPT)
@@ -81,6 +85,31 @@ def test_extract_providers_ignores_non_top1m_slot() -> None:
     providers = ctp.extract_providers(_PHP_TWO_PROVIDERS)
     urls = {p["url"] for p in providers}
     assert "https://download.maxmind.com/geoip/databases/GeoLite2-Country/download?suffix=tar.gz" not in urls
+
+
+# A provider line commented out with `//` (a dead/retired provider left in
+# place for reference) must not be extracted as live -- the extractor
+# previously matched raw text with no regard for comments.
+_PHP_WITH_A_COMMENTED_OUT_PROVIDER = """
+$pfb['extras'][2]			= array();
+// $pfb['extras'][2]['url']	= 'https://dead-provider.test/top-1m.csv.zip';
+if ($pfb['dnsbl_top1m_type'] === Top1mSource::Tranco) {
+	$pfb['extras'][2]['url']	= 'https://tranco-list.eu/top-1m.csv.zip';
+} else {
+	$pfb['extras'][2]['url']	= 'https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip';  // Cisco
+}
+$pfb['extras'][2]['type']	= 'top1m';
+"""
+
+
+def test_extract_providers_skips_a_commented_out_provider_line() -> None:
+    providers = ctp.extract_providers(_PHP_WITH_A_COMMENTED_OUT_PROVIDER)
+    urls = {p["url"] for p in providers}
+    assert "https://dead-provider.test/top-1m.csv.zip" not in urls
+    assert urls == {
+        "https://tranco-list.eu/top-1m.csv.zip",
+        "https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip",
+    }
 
 
 def test_extract_providers_auto_covers_a_newly_added_provider_arm() -> None:
@@ -151,6 +180,17 @@ def test_validate_top1m_fails_on_a_malformed_row_non_int_rank_no_dot_domain() ->
     assert "foo" in reasons[0] and "bar" in reasons[0]
 
 
+def test_validate_top1m_rejects_a_bare_dot_as_a_domain() -> None:
+    # A bare "." has no real label on either side of the dot -- must not read
+    # as a valid "rank,domain" row just because it contains a "." and no space.
+    rows = [(str(i), f"example{i}.com") for i in range(9)]
+    rows.append(("9", "."))
+    body = _zip_of(rows)
+    reasons = ctp.validate_top1m(body, _FRESH_LM, _NOW, min_rows=10, max_age_days=30)
+    assert len(reasons) == 1
+    assert "found 9" in reasons[0]
+
+
 def test_validate_top1m_flags_staleness_only_once_last_modified_ages_past_the_limit() -> None:
     # Before-state: same payload is healthy while Last-Modified is fresh...
     rows = [(str(i), f"example{i}.com") for i in range(10)]
@@ -186,3 +226,132 @@ def test_is_stale_false_when_last_modified_header_is_absent() -> None:
     # No header means "unknown", not "stale" -- a provider that omits
     # Last-Modified must not be flagged purely for that omission.
     assert ctp.is_stale(None, _NOW, max_age_days=30) is False
+
+
+# --------------------------------------------------------------------------- #
+# check_url -- urllib.request.urlopen mocked out, no real network (#884
+# review: the gap that let the tz-crash and read-crash bugs ship unnoticed).
+# --------------------------------------------------------------------------- #
+
+
+class _FakeResponse:
+    """Minimal stand-in for the context-manager `http.client.HTTPResponse`."""
+
+    def __init__(self, body: bytes, headers: dict[str, str], status: int = 200) -> None:
+        self._body = body
+        self.headers = headers
+        self.status = status
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self) -> "_FakeResponse":
+        return self
+
+    def __exit__(self, *exc_info: object) -> bool:
+        return False
+
+
+class _FailingReadResponse:
+    """A response whose `.read()` raises -- simulates a cut-short download."""
+
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+        self.status = 200
+        self.headers: dict[str, str] = {}
+
+    def read(self) -> bytes:
+        raise self._exc
+
+    def __enter__(self) -> "_FailingReadResponse":
+        return self
+
+    def __exit__(self, *exc_info: object) -> bool:
+        return False
+
+
+_ALWAYS_FRESH_LM = formatdate(usegmt=True)  # "now", so never stale regardless of wall-clock date
+
+
+def _healthy_zip_body(rows: int = 10) -> bytes:
+    return _zip_of([(str(i), f"example{i}.com") for i in range(rows)])
+
+
+def test_check_url_reports_a_clean_reason_on_http_error(monkeypatch: Any) -> None:
+    def fake_urlopen(request: Any, timeout: int) -> Any:
+        raise urllib.error.HTTPError(request.full_url, 404, "Not Found", hdrs=None, fp=None)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(ctp.urllib.request, "urlopen", fake_urlopen)
+    reasons = ctp.check_url("https://example.test/top-1m.csv.zip")
+    assert len(reasons) == 1
+    assert "404" in reasons[0]
+
+
+def test_check_url_reports_a_clean_reason_when_the_body_read_is_cut_short(monkeypatch: Any) -> None:
+    # The #3 fix: IncompleteRead mid-download of the multi-MB zip is neither
+    # HTTPError nor URLError -- a narrower except let this raise a raw
+    # traceback instead of a clean FAIL report.
+    exc = http.client.IncompleteRead(partial=b"only some bytes")
+    monkeypatch.setattr(ctp.urllib.request, "urlopen", lambda request, timeout: _FailingReadResponse(exc))
+    reasons = ctp.check_url("https://example.test/top-1m.csv.zip")
+    assert len(reasons) == 1
+    assert "connection error" in reasons[0]
+
+
+def test_check_url_reports_a_non_2xx_status_that_urlopen_does_not_raise_for(monkeypatch: Any) -> None:
+    body = _healthy_zip_body()
+    monkeypatch.setattr(
+        ctp.urllib.request,
+        "urlopen",
+        lambda request, timeout: _FakeResponse(body, {"Last-Modified": _ALWAYS_FRESH_LM}, status=304),
+    )
+    reasons = ctp.check_url("https://example.test/top-1m.csv.zip", min_rows=10)
+    assert len(reasons) == 1
+    assert "304" in reasons[0]
+
+
+def test_check_url_delegates_to_validate_top1m_on_a_healthy_2xx_response(monkeypatch: Any) -> None:
+    body = _healthy_zip_body()
+    monkeypatch.setattr(
+        ctp.urllib.request,
+        "urlopen",
+        lambda request, timeout: _FakeResponse(body, {"Last-Modified": _ALWAYS_FRESH_LM}),
+    )
+    reasons = ctp.check_url("https://example.test/top-1m.csv.zip", min_rows=10)
+    assert reasons == []
+
+
+def test_check_url_handles_a_stale_tz_less_last_modified_without_crashing(monkeypatch: Any) -> None:
+    # The #2 crash: a Last-Modified with no timezone (RFC-822-legal, e.g.
+    # "Mon, 01 Jan 2001 00:00:00") used to raise TypeError subtracting a naive
+    # datetime from the aware `now` inside the staleness-message branch.
+    body = _healthy_zip_body()
+    monkeypatch.setattr(
+        ctp.urllib.request,
+        "urlopen",
+        lambda request, timeout: _FakeResponse(body, {"Last-Modified": "Mon, 01 Jan 2001 00:00:00"}),
+    )
+    reasons = ctp.check_url("https://example.test/top-1m.csv.zip", min_rows=10)
+    assert len(reasons) == 1
+    assert "days old" in reasons[0]
+
+
+# --------------------------------------------------------------------------- #
+# main -- exit code reflects check_url's verdict
+# --------------------------------------------------------------------------- #
+
+
+def test_main_exits_zero_when_check_url_reports_healthy(monkeypatch: Any, capsys: Any) -> None:
+    monkeypatch.setattr(ctp, "check_url", lambda url, **_kwargs: [])
+    code = ctp.main(["--check-url", "https://example.test/top-1m.csv.zip"])
+    assert code == 0
+    assert "OK" in capsys.readouterr().out
+
+
+def test_main_exits_nonzero_when_check_url_reports_unhealthy(monkeypatch: Any, capsys: Any) -> None:
+    monkeypatch.setattr(ctp, "check_url", lambda url, **_kwargs: ["expected a reachable URL, got a connection error"])
+    code = ctp.main(["--check-url", "https://example.test/top-1m.csv.zip"])
+    assert code != 0
+    out = capsys.readouterr().out
+    assert "FAIL" in out
+    assert "connection error" in out
