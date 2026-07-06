@@ -676,4 +676,100 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 			'a missing top-1m.csv (failed Cloudflare download) must preserve the prior whitelist');
 		$this->assertStringContainsString('TOP1M conversion Failed', $this->readErrLog());
 	}
+
+	/**
+	 * Issue #904 -- the 'csv' parse guard's final-label class (`[A-Za-z]{2,}`)
+	 * rejected every punycode TLD (they contain digits/hyphens, e.g.
+	 * 'xn--p1ai' == .рф), so a user selecting a punycode TLD inclusion with a
+	 * csv-parse provider (DomCop/Majestic/Cloudflare) got ZERO matching
+	 * whitelist entries -- silently -- while the identical config on
+	 * Tranco/Cisco ('rank_domain' parse, no such guard) whitelisted them.
+	 * Fixed by widening the final-label alternative to also accept an
+	 * 'xn--...' label: `(?:[A-Za-z]{2,}|[Xx][Nn]--[A-Za-z0-9-]{2,})`.
+	 *
+	 * RED on pre-fix code (verified by stashing just this regex hunk and
+	 * re-running this exact test): preg_match() on 'example.xn--p1ai' returns
+	 * 0, so the row is `continue`d, $linecnt stays 0 -- classifying as a dead
+	 * feed -- and with no prior whitelist file the run logs "no TOP1M
+	 * whitelist available" instead of building one; the whitelist file assert
+	 * below fails (file never created). GREEN after: the row is counted as
+	 * valid data and whitelisted.
+	 */
+	public function testCsvModeAcceptsPunycodeTldDomainIntoWhitelist(): void
+	{
+		// Given: a DomCop-shaped csv row whose domain ends in a punycode TLD
+		// (xn--p1ai == .рф), and the TOP1M inclusion set names that exact TLD.
+		$GLOBALS['pfb']['dnsbl_top1m_inc'] = 'xn--p1ai';
+		$csv = "\"Rank\",\"Domain\",\"Open Page Rank\"\n"
+			. "\"1\",\"example.xn--p1ai\",\"10.00\"\n";
+		$this->assertNotFalse(file_put_contents($this->csvPath(), $csv), 'setup: DomCop-shaped punycode-TLD row');
+
+		// When
+		pfblockerng_top1m(pfb_top1m_providers()[Top1mSource::DomCop->value]);
+
+		// Then: the punycode-TLD row is counted as valid data and whitelisted
+		// -- not silently dropped by the final-label guard.
+		$this->assertSame(
+			".example.xn--p1ai,,\n,example.xn--p1ai,,\n,www.example.xn--p1ai,,\n",
+			file_get_contents($this->whitelistPath()),
+			'a punycode TLD (xn--p1ai) row must be accepted by the csv-mode hostname guard, not dropped'
+		);
+		$this->assertStringContainsString('Parsed 1 lines | Found 1 of 1000', $this->readMainLog());
+	}
+
+	/**
+	 * Issue #904 negative guard -- the punycode widening must not also open
+	 * the door to a bare numeric "TLD". A domain field whose final label is
+	 * all-digits (IP-shaped, e.g. no real TLD at all) matches neither
+	 * alternative ([A-Za-z]{2,} nor xn--...) and must still be dropped.
+	 */
+	public function testCsvModeStillRejectsNumericTldJunkRow(): void
+	{
+		// Given: a prior good whitelist and a DomCop-shaped row whose "Domain"
+		// field is an IP-shaped string -- garbage, not a TLD in any form.
+		$priorContent = ".real.com,,\n,real.com,,\n,www.real.com,,\n";
+		$this->assertNotFalse(file_put_contents($this->whitelistPath(), $priorContent), 'setup: seed prior whitelist');
+		$csv = "\"Rank\",\"Domain\",\"Open Page Rank\"\n"
+			. "\"1\",\"192.168.1.1\",\"10.00\"\n";
+		$this->assertNotFalse(file_put_contents($this->csvPath(), $csv), 'setup: numeric-TLD junk row');
+		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()), 'before-state sanity');
+
+		// When
+		pfblockerng_top1m(pfb_top1m_providers()[Top1mSource::DomCop->value]);
+
+		// Then: the numeric-final-label row is still rejected.
+		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()),
+			'a numeric-TLD junk row must still be dropped by the csv-mode hostname guard');
+		$this->assertStringContainsString('keeping the previous TOP1M whitelist', $this->readErrLog());
+	}
+
+	/**
+	 * Issue #904 negative guard -- a Domain field with no dot at all must
+	 * still be dropped, even though the CSV LINE itself contains a '.'
+	 * elsewhere (the 'Open Page Rank' field here) and so still passes the
+	 * coarser line-level content filter upstream of this guard.
+	 */
+	public function testCsvModeStillRejectsDomainFieldWithNoDot(): void
+	{
+		// Given: a prior good whitelist and a DomCop-shaped row whose Domain
+		// field has no dot at all.
+		$priorContent = ".real.com,,\n,real.com,,\n,www.real.com,,\n";
+		$this->assertNotFalse(file_put_contents($this->whitelistPath(), $priorContent), 'setup: seed prior whitelist');
+		$csv = "\"Rank\",\"Domain\",\"Open Page Rank\"\n"
+			. "\"1\",\"nodomainhere\",\"v1.0\"\n";
+		$this->assertNotFalse(
+			file_put_contents($this->csvPath(), $csv),
+			'setup: dotless Domain field, dot elsewhere on the line'
+		);
+		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()), 'before-state sanity');
+
+		// When
+		pfblockerng_top1m(pfb_top1m_providers()[Top1mSource::DomCop->value]);
+
+		// Then: a dotless Domain field is still rejected even though the line
+		// itself contains a '.' (in another column).
+		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()),
+			'a dotless Domain field must still be dropped by the csv-mode hostname guard');
+		$this->assertStringContainsString('keeping the previous TOP1M whitelist', $this->readErrLog());
+	}
 }
