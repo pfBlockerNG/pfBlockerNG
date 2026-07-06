@@ -197,8 +197,12 @@ def test_hook_output_streams_to_gui_while_running(repo_vm: SmokeVM) -> None:
 
         # LINE2 means the HOOK finished, but the wrapping detached pfSense-upgrade keeps its pkg
         # lock through the rest of the resync. Drain it before cleanup so pkg_delete() below (in
-        # finally) doesn't race the still-held lock.
-        _wait_upgrade_gone(vm, deadline_s=120.0)
+        # finally) doesn't race the still-held lock. Assert (loud timeout): if it never exits the
+        # test is not deterministic — surface that rather than proceed into a lock race.
+        assert _wait_upgrade_gone(vm, deadline_s=120.0), (
+            "pfSense-upgrade did not exit within 120s after the hook finished — cleanup would race "
+            "its still-held pkg lock"
+        )
     finally:
         vm.ssh("/usr/bin/touch", PROCEED)  # never leave a blocked hook behind
         _wait_upgrade_gone(vm, deadline_s=60.0)  # let a failed-path run release its pkg lock too
