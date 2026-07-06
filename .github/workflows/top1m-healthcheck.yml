@@ -1,0 +1,139 @@
+name: Top1M Provider Health Check
+
+# Weekly health-check of every external Top1M provider URL we ship (issue
+# #884). We do NOT vendor these lists (they're ~1M rows, runtime-downloaded
+# per box) -- this is validate-only, the guard that would have caught the
+# Alexa Top1M source rotting silently (its hardcoded URL died years ago;
+# cleaned up in #877).
+#
+# scripts/misc/check_top1m_providers.py --extract reads the provider URLs
+# straight out of pfblockerng.php's top1m extras slot, so adding/removing a
+# provider needs no edit here. --check-url fetches + validates one URL (a
+# real zip, plausible row count, not stale) and exits nonzero if unhealthy.
+
+on:
+  # Weekly, Monday 07:00 UTC (an hour after tld-refresh, different concern).
+  schedule:
+    - cron: "0 7 * * 1"
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ── 1. Discover every provider URL from pfblockerng.php ──────────────────
+  discover:
+    name: Discover Top1M provider URLs
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.extract.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Extract provider URLs
+        id: extract
+        run: |
+          set -eu
+          MATRIX=$(python3 scripts/misc/check_top1m_providers.py --extract)
+          echo "Discovered providers:"
+          printf '%s\n' "$MATRIX" | python3 -m json.tool
+          echo "matrix=${MATRIX}" >> "$GITHUB_OUTPUT"
+
+  # ── 2. Health-check each provider independently ───────────────────────────
+  check:
+    name: Check (${{ matrix.name }})
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.discover.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check provider URL
+        run: |
+          set -eu
+          python3 scripts/misc/check_top1m_providers.py --check-url "${{ matrix.url }}"
+
+  # ── 3. On any failed leg, open/update ONE deduped tracking issue ──────────
+  alert:
+    name: Alert on unhealthy provider(s)
+    needs: check
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Re-check every provider to build the failure report
+        id: report
+        run: |
+          set -eu
+          python3 scripts/misc/check_top1m_providers.py --extract > /tmp/providers.json
+
+          BODY_FILE=$(mktemp)
+          {
+            printf '## Top1M provider health check failed\n\n'
+            printf 'Run: %s\n\n' "$RUN_URL"
+          } > "$BODY_FILE"
+
+          COUNT=$(jq 'length' /tmp/providers.json)
+          i=0
+          while [ "$i" -lt "$COUNT" ]; do
+            NAME=$(jq -r ".[$i].name" /tmp/providers.json)
+            URL=$(jq -r ".[$i].url" /tmp/providers.json)
+            i=$((i + 1))
+
+            if python3 scripts/misc/check_top1m_providers.py --check-url "$URL" > /tmp/check_out.txt 2>&1; then
+              printf -- "- OK **%s** (\`%s\`)\n" "$NAME" "$URL" >> "$BODY_FILE"
+            else
+              {
+                printf -- "- FAILING **%s** (\`%s\`)\n\n\`\`\`text\n" "$NAME" "$URL"
+                cat /tmp/check_out.txt
+                printf '```\n\n'
+              } >> "$BODY_FILE"
+            fi
+          done
+
+          printf '_Opened automatically by the top1m-healthcheck workflow._\n' >> "$BODY_FILE"
+          echo "body_file=${BODY_FILE}" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure the tracking label exists
+        run: |
+          gh label create "top1m-provider" \
+            --color "b60205" \
+            --description "Automated Top1M provider health-check tracking" \
+            --repo "$REPO" 2>/dev/null || true
+
+      - name: Open or update the tracking issue
+        run: |
+          set -eu
+          TITLE="[top1m-healthcheck] provider URL unhealthy"
+
+          # Scope to the tracking label and lift the default 30-item cap (see
+          # version-tracker.yml's dedup note) so an older open issue past the
+          # first page is still found and updated in place, not re-created.
+          EXISTING_NUM=$(gh issue list --repo "$REPO" --state open \
+            --label "top1m-provider" --limit 500 --json number,title \
+            | jq -r --arg t "$TITLE" '.[] | select(.title == $t) | .number' \
+            | sort -n | head -1)
+
+          if [ -n "$EXISTING_NUM" ]; then
+            echo "[update] Updating tracking issue #${EXISTING_NUM}"
+            gh issue edit "$EXISTING_NUM" --repo "$REPO" --body-file "${{ steps.report.outputs.body_file }}"
+          else
+            echo "[create] Opening tracking issue"
+            gh issue create \
+              --repo "$REPO" \
+              --title "$TITLE" \
+              --body-file "${{ steps.report.outputs.body_file }}" \
+              --label "top1m-provider,bug"
+          fi
