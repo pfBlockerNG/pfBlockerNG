@@ -157,13 +157,9 @@ $pfb['extras'][1]['file']	= '';
 $pfb['extras'][1]['folder']	= "{$pfb['geoipshare']}";
 $pfb['extras'][1]['type']	= 'geoip';
 
-// TOP1M database
+// TOP1M database (ADR-59 P1: URL sourced from the provider descriptor table)
 $pfb['extras'][2]			= array();
-if ($pfb['dnsbl_top1m_type'] === Top1mSource::Tranco) {
-	$pfb['extras'][2]['url']	= 'https://tranco-list.eu/top-1m.csv.zip';
-} else {
-	$pfb['extras'][2]['url']	= 'https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip';  // Cisco
-}
+$pfb['extras'][2]['url']	= pfb_top1m_providers()[$pfb['dnsbl_top1m_type']->value]['url'];
 
 $pfb['extras'][2]['file_dwn']	= 'top-1m.csv.zip';
 $pfb['extras'][2]['file']	= 'top-1m.csv';
