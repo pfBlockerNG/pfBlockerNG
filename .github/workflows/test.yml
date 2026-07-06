@@ -546,6 +546,11 @@ jobs:
     uses: ./.github/workflows/ui-tests.yml
     with:
       tier: all
+      # Explicit on purpose (issue #906): a reusable-workflow callee sees the
+      # CALLER's event (pull_request here), so without this the scope ladder
+      # resolved `impacted` — min-CE leg + changed-UI-modules only — silently
+      # shrinking the labeled gate. The label opts into the FULL fan-out.
+      scope: full
     secrets: inherit
 
   # Single stable job name for branch-protection required-status-checks.

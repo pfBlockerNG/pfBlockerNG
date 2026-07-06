@@ -75,14 +75,16 @@ _rl_legs() {
     done
 
     # ── SCOPE ladder ───────────────────────────────────────────────────────── #
-    # schedule → full; explicit SCOPE_INPUT wins; workflow_call → full;
-    # bare dispatch → impacted (the new lean default).
+    # schedule → full; explicit SCOPE_INPUT wins; anything else → impacted (the
+    # lean default). Deliberately NO workflow_call rung: inside a reusable-
+    # workflow callee `github.event_name` is always the CALLER's event (never
+    # "workflow_call"), so such a rung is unreachable — a workflow_call gate
+    # that wants the full fan-out must pass `scope: full` explicitly
+    # (issue #906; test.yml's ui-suite does).
     if [ "${EVENT_NAME:-}" = "schedule" ]; then
         SCOPE="full"
     elif [ -n "${SCOPE_INPUT:-}" ]; then
         SCOPE="$SCOPE_INPUT"
-    elif [ "${EVENT_NAME:-}" = "workflow_call" ]; then
-        SCOPE="full"
     else
         SCOPE="impacted"
     fi
