@@ -70,6 +70,7 @@ ignore = [
 "tests/smoke/test_downgrade_prepare.py"         = ["F811"]
 "tests/smoke/test_pkg_op_teardown.py"           = ["F811"]
 "tests/smoke/test_lifecycle_hook_visibility.py" = ["F811"]
+"tests/smoke/test_hook_stream_visibility.py" = ["F811"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["pfb_unbound"]
