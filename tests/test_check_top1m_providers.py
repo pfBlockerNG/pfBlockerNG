@@ -218,6 +218,26 @@ def test_extract_providers_falls_back_to_url_netloc_and_zip_container_when_absen
     assert provider["container"] == "zip"
 
 
+def test_extract_providers_reads_the_real_descriptor_file_and_finds_all_five() -> None:
+    # #892 review (finding 6): every other test above feeds a hand-built fixture table --
+    # none couples the extractor to the REAL pfblockerng_extra.inc shape, so a silent
+    # reformat of the actual descriptor (a renamed field, a changed quoting style) could
+    # go undetected here while still breaking check_top1m_providers.py in CI. Read the
+    # real file straight off disk instead of a fixture.
+    providers = {p["name"]: p for p in ctp.extract_providers(ctp.DEFAULT_DESCRIPTOR_FILE.read_text(encoding="utf-8"))}
+    assert set(providers) == {"Tranco", "Cisco Umbrella", "DomCop", "Majestic Million", "Cloudflare Radar"}
+
+    for name in ("Tranco", "Cisco Umbrella", "DomCop", "Majestic Million"):
+        assert providers[name]["auth"] == "none", name
+        assert providers[name]["secret_env"] == "", name
+
+    cloudflare = providers["Cloudflare Radar"]
+    assert cloudflare["auth"] == "token"
+    assert cloudflare["secret_env"] == "CLOUDFLARE_RADAR_TOKEN"
+    assert cloudflare["auth_header"] == "Authorization"
+    assert cloudflare["auth_scheme"] == "Bearer"
+
+
 # --------------------------------------------------------------------------- #
 # validate_top1m / _scan_csv -- in-memory zips + plain bodies, no network
 # --------------------------------------------------------------------------- #

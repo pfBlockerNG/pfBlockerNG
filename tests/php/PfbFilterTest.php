@@ -148,6 +148,12 @@ final class PfbFilterTest extends TestCase
 			'too long'         => [str_repeat('a', 513), ''],
 			'exactly max ok'   => [str_repeat('a', 512), str_repeat('a', 512)],
 			'exactly min ok'   => ['a1234567', 'a1234567'],
+			// #892 review: PCRE's '$' matches before a trailing '\n' by default, so a
+			// token smuggling a trailing newline would otherwise pass the character-class
+			// check unmodified -- the 'D' flag (or '\z') pins '$' to the true end of the
+			// string, matching the same discipline PFB_FILTER_URL etc. don't need here
+			// (a token is the one filter mode taking a raw untrusted secret).
+			'trailing newline rejected' => ["a1234567\n", ''],
 		];
 	}
 

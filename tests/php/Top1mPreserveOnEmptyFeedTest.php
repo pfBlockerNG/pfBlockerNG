@@ -471,6 +471,11 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 	 * instead probes a WRONG column for DomCop's shape (domain_col 2 -- the
 	 * "Open Page Rank" field, Majestic's own domain_col) and shows it likewise
 	 * mis-reads; the registered DomCop descriptor (domain_col 1) is correct.
+	 *
+	 * #892 review addendum: the wrong column's value ("10.00") also doesn't look
+	 * like a hostname, so the domain-validity guard (finding 1) now rejects it as
+	 * no-real-data rather than "valid data, zero TLD matches" -- the BEFORE
+	 * assertions reflect that (no whitelist file at all, not an empty one).
 	 */
 	public function testDomCopRealShapeSampleMisreadsOnWrongColumnAndParsesCorrectlyViaItsDescriptor(): void
 	{
@@ -482,17 +487,17 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		$this->assertNotFalse(file_put_contents($this->csvPath(), $csv), 'setup: real-shape DomCop sample');
 
 		// When (BEFORE): the WRONG column for this shape -- index 2 ("Open Page
-		// Rank", a decimal string with no matching TLD).
+		// Rank", a decimal string with no matching TLD, and no matching hostname shape).
 		$wrongColumn = ['parse' => 'csv', 'header' => true, 'domain_col' => 2];
 		pfblockerng_top1m($wrongColumn);
 
 		// Then (RED): the real domains are misread as the Open Page Rank value
-		// ("10.00" -> tld "00"), so neither matches and the whitelist is empty.
-		$this->assertSame('', file_get_contents($this->whitelistPath()),
+		// ("10.00"), which is neither a valid TLD match NOR a hostname-shaped value --
+		// no whitelist can be built (none existed before this run).
+		$this->assertFileDoesNotExist($this->whitelistPath(),
 			"domain_col 2 must MIS-read DomCop's real shape -- Domain sits at index 1, not 2");
-		$this->assertStringContainsString('Parsed 2 lines | Found 0 of 1000', $this->readMainLog());
-		$this->assertStringContainsString('0 domains matched the configured TLD inclusions', $this->readMainLog());
-		$this->assertStringNotContainsString('keeping the previous TOP1M whitelist', $this->readMainLog());
+		$this->assertStringContainsString('no TOP1M whitelist available', $this->readMainLog());
+		$this->assertStringNotContainsString('Parsed 2 lines', $this->readMainLog());
 
 		// Reset the log so the GREEN assertion below is unambiguous.
 		$this->assertNotFalse(file_put_contents($GLOBALS['pfb']['log'], ''), 'reset main log between runs');
@@ -552,6 +557,96 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 	}
 
 	/**
+	 * #892 review (finding 1) -- the #886 silent-whitelist-wipe must not re-open for the
+	 * 'csv' parse providers (DomCop/Majestic/Cloudflare). Pre-fix, the domain-validity
+	 * guard only covered 'rank_domain' (Tranco/Cisco); a 'csv'-mode garbage/HTML/JSON
+	 * error body (a CDN 503 page, a Cloudflare auth-error response, etc -- the MIME
+	 * allow-list accepts text/html and ADR-49's sanity scan is opt-in/default-off) still
+	 * has a '.' and a ',' somewhere, so it passed the generic content filter, counted as
+	 * a "valid" parsed row, and the "valid feed" branch swapped the (empty) build over a
+	 * good whitelist -- reporting success, not a warning. Each provider gets its own
+	 * real-descriptor-driven proof below; the FAIL-BEFORE state is proven by the shared
+	 * mechanism (the 'csv' branch had NO validity guard at all before this fix -- every
+	 * garbage row here has a non-hostname domain field but would still have incremented
+	 * $linecnt on the pre-fix code, taking the wipe path).
+	 */
+	public function testDomCopGarbageHtmlBodyPreservesPriorWhitelistAndWarns(): void
+	{
+		// Given: a prior good whitelist and a multi-line HTML error body (a CDN 503 page,
+		// NOT DomCop's real quoted rank/domain/pagerank CSV) written as top-1m.csv.
+		$priorContent = ".real.com,,\n,real.com,,\n,www.real.com,,\n";
+		$this->assertNotFalse(file_put_contents($this->whitelistPath(), $priorContent), 'setup: seed prior whitelist');
+		$garbage = "<html><head><title>503 Backend fetch failed</title></head>\n"
+			. "<body><h1>Error 503 Backend fetch failed</h1>\n"
+			. "<p>Guru meditation, please retry. ref.12345</p></body></html>\n";
+		$this->assertNotFalse(file_put_contents($this->csvPath(), $garbage), 'setup: garbage HTML body as top-1m.csv');
+		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()), 'before-state sanity');
+
+		// When: the real registered DomCop descriptor drives the parse (header=TRUE skips
+		// line 1; domain_col=1).
+		pfblockerng_top1m(pfb_top1m_providers()[Top1mSource::DomCop->value]);
+
+		// Then: the HTML body must never be mistaken for real DomCop CSV data -- the prior
+		// whitelist survives byte-identical and the run warns instead of "succeeding".
+		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()),
+			'a garbage HTML body must NOT wipe the previously-good TOP1M whitelist (DomCop, #892 review)');
+		$this->assertSame([], $this->tempFilesLeftBehind(), 'no temp build file left behind');
+		$this->assertStringContainsString('keeping the previous TOP1M whitelist', $this->readErrLog());
+		$this->assertStringContainsString('keeping the previous TOP1M whitelist', $this->readMainLog());
+	}
+
+	/** Same proof as above, for Majestic's registered descriptor (header=TRUE, domain_col=2). */
+	public function testMajesticGarbagePlaintextBodyPreservesPriorWhitelistAndWarns(): void
+	{
+		// Given: a prior good whitelist and a garbage body shaped like Majestic's real CSV
+		// (12-col header + a data row) but whose Domain column is a prose error message.
+		$priorContent = ".real.com,,\n,real.com,,\n,www.real.com,,\n";
+		$this->assertNotFalse(file_put_contents($this->whitelistPath(), $priorContent), 'setup: seed prior whitelist');
+		$garbage = "GlobalRank,TldRank,Domain,TLD,RefSubNets,RefIPs,IDN_Domain,IDN_TLD,PrevGlobalRank,PrevTldRank,PrevRefSubNets,PrevRefIPs\n"
+			. "1,1,Service temporarily unavailable. Please retry.,text,0,0,,,0,0,0,0\n";
+		$this->assertNotFalse(file_put_contents($this->csvPath(), $garbage), 'setup: garbage Domain-column body as top-1m.csv');
+		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()), 'before-state sanity');
+
+		// When: the real registered Majestic descriptor drives the parse.
+		pfblockerng_top1m(pfb_top1m_providers()[Top1mSource::Majestic->value]);
+
+		// Then: the prose "domain" must never be mistaken for real Majestic CSV data.
+		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()),
+			'a garbage Domain-column body must NOT wipe the previously-good TOP1M whitelist (Majestic, #892 review)');
+		$this->assertSame([], $this->tempFilesLeftBehind(), 'no temp build file left behind');
+		$this->assertStringContainsString('keeping the previous TOP1M whitelist', $this->readErrLog());
+		$this->assertStringContainsString('keeping the previous TOP1M whitelist', $this->readMainLog());
+	}
+
+	/**
+	 * Same proof as above, for Cloudflare's registered descriptor (header=TRUE,
+	 * domain_col=0 -- the single-column shape where the comma requirement is relaxed, so
+	 * this is the strictest case: only the new domain-validity regex stands between a
+	 * JSON error body and a "valid feed" verdict.
+	 */
+	public function testCloudflareGarbageJsonBodyPreservesPriorWhitelistAndWarns(): void
+	{
+		// Given: a prior good whitelist and a Cloudflare-shaped ('domain' header, single
+		// column) body whose only "data" line is a JSON auth-error response, not a domain.
+		$priorContent = ".real.com,,\n,real.com,,\n,www.real.com,,\n";
+		$this->assertNotFalse(file_put_contents($this->whitelistPath(), $priorContent), 'setup: seed prior whitelist');
+		$garbage = "domain\n"
+			. "{\"success\":false,\"errors\":[{\"code\":10000,\"message\":\"Authentication error.\"}]}\n";
+		$this->assertNotFalse(file_put_contents($this->csvPath(), $garbage), 'setup: garbage JSON body as top-1m.csv');
+		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()), 'before-state sanity');
+
+		// When: the real registered Cloudflare descriptor drives the parse.
+		pfblockerng_top1m(pfb_top1m_providers()[Top1mSource::Cloudflare->value]);
+
+		// Then: the JSON error body must never be mistaken for a real Cloudflare domain row.
+		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()),
+			'a garbage JSON body must NOT wipe the previously-good TOP1M whitelist (Cloudflare, #892 review)');
+		$this->assertSame([], $this->tempFilesLeftBehind(), 'no temp build file left behind');
+		$this->assertStringContainsString('keeping the previous TOP1M whitelist', $this->readErrLog());
+		$this->assertStringContainsString('keeping the previous TOP1M whitelist', $this->readMainLog());
+	}
+
+	/**
 	 * ADR-59 P5 -- safe-on-missing/invalid-token behaviour (ADR §4 requirement 3): when
 	 * Cloudflare's download fails (missing/invalid top1m_token -> pfb_top1m_auth_headers()
 	 * returns no Authorization header -> pfb_download() sends no auth and the request is
@@ -559,9 +654,10 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 	 * generic "csv absent -> preserve + warn" path every other provider's download failure
 	 * already hits (see testAbsentCsvPreservesPriorWhitelistAndWarns above) -- there is no
 	 * Cloudflare-specific failure branch to bypass. This is the Cloudflare-scoped proof of
-	 * that reuse, plus a DIRECT "no token in any log" assertion: pfblockerng_top1m() never
-	 * reads $pfb['top1m_token'] or any header at all, so a fake secret standing in for a
-	 * real token genuinely cannot appear in either log -- asserted, not assumed.
+	 * that reuse. (The "no token in any log" guarantee itself is proven in
+	 * Top1mAuthHeadersTest.php / PfbFilterTest.php -- pfblockerng_top1m() never reads
+	 * $pfb['top1m_token'] or any header at all, so asserting it here would be vacuous:
+	 * the function never receives the token in the first place.)
 	 */
 	public function testMissingOrInvalidCloudflareTokenPreservesWhitelistAndLogsNoToken(): void
 	{
@@ -572,26 +668,13 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		$this->assertNotFalse(file_put_contents($this->whitelistPath(), $priorContent), 'setup: prior good whitelist');
 		$this->assertFileDoesNotExist($this->csvPath(), 'before-state: no top-1m.csv (simulates a failed download)');
 
-		// A fake secret standing in for a real Cloudflare token, so the log-scan
-		// assertions below are a genuine check rather than a vacuous one.
-		$fakeSecretToken = 'sk-live-should-never-appear-in-any-log-0xDEADBEEF';
-
 		// When: the Cloudflare descriptor is active but top-1m.csv never arrived.
 		pfblockerng_top1m(pfb_top1m_providers()[Top1mSource::Cloudflare->value]);
 
 		// Then: the prior whitelist is untouched and a warning was logged (same generic
-		// path as testAbsentCsvPreservesPriorWhitelistAndWarns)...
+		// path as testAbsentCsvPreservesPriorWhitelistAndWarns).
 		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()),
 			'a missing top-1m.csv (failed Cloudflare download) must preserve the prior whitelist');
 		$this->assertStringContainsString('TOP1M conversion Failed', $this->readErrLog());
-
-		// ...and NO log (main or error) contains the token -- pfblockerng_top1m() never
-		// reads $pfb['top1m_token'] or any header; the only code that ever touches the raw
-		// token is pfb_top1m_auth_headers() (Top1mAuthHeadersTest.php), which has no
-		// pfb_logger call in its body at all.
-		$this->assertStringNotContainsString($fakeSecretToken, $this->readMainLog(),
-			'the TOP1M main log must never contain a token, even a rejected/missing one');
-		$this->assertStringNotContainsString($fakeSecretToken, $this->readErrLog(),
-			'the TOP1M error log must never contain a token, even a rejected/missing one');
 	}
 }

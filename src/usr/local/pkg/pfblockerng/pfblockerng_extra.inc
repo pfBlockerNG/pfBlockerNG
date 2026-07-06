@@ -242,8 +242,12 @@ enum Top1mSource: string implements PfbStoredEnum
 // Keyed by Top1mSource::value ('tranco'/'cisco'/'domcop'/'majestic'/'cloudflare').
 // pfblockerng.php's TOP1M URL selection reads this table instead of a
 // per-provider if/else; pfblockerng_top1m() (ADR-59 P2) reads
-// 'parse'/'header'/'domain_col' to drive the builder, and pfb_download()'s
-// extractor reads 'container'. 'header'/'domain_col' default to FALSE/1 here
+// 'parse'/'header'/'domain_col' to drive the builder. 'container' documents each
+// provider's expected transport shape (zip/gz/plain) but is currently INFORMATIONAL
+// ONLY -- pfb_download()'s extractor branches on the actually-detected MIME type
+// (PFB_FILTER_FILE_MIME), not this field, so a mismatch (e.g. a zip provider serving
+// an HTML error page) is caught downstream by pfblockerng_top1m()'s domain-validity
+// guard rather than here (#892 review). 'header'/'domain_col' default to FALSE/1 here
 // -- Tranco/Cisco's CSV has no header row and the domain sits at
 // str_getcsv() index 1 (0-indexed: rank,domain), matching today's hardcoded
 // shape byte-for-byte. 'auth' is read by pfb_download()'s header-auth path
@@ -355,6 +359,10 @@ function pfb_top1m_auth_headers(array $provider, string $token): array
 	if (!is_array($auth) || empty($auth['header']) || $token === '') {
 		return array();
 	}
+	// Defense-in-depth (#892 review): a token stored via a non-UI path (hand-edited
+	// config.xml, HA sync, a restored backup) is not re-validated by PFB_FILTER_TOKEN --
+	// strip CR/LF here so it can never inject an extra header/split the request.
+	$token  = str_replace(["\r", "\n"], '', $token);
 	$scheme = $auth['scheme'] ?? '';
 	$value  = ($scheme !== '') ? "{$scheme} {$token}" : $token;
 	return array("{$auth['header']}: {$value}");

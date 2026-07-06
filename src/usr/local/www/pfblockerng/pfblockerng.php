@@ -680,8 +680,10 @@ function pfblockerng_download_extras($timeout=600, $type='') {
 		$file_dwn = "{$feed['folder']}/{$feed['file_dwn']}";
 
 		// ADR-59 Phase 3: thread the per-feed 'headers' field through as caller-supplied
-		// HTTP headers (e.g. a future Cloudflare Radar Bearer token). No provider sets it
-		// yet, so this is always array() -- existing downloads are unaffected.
+		// HTTP headers. The TOP1M provider (ADR-59 P5) sets it above via
+		// pfb_top1m_auth_headers() (Cloudflare Radar's Bearer token; array() for every
+		// keyless provider) -- every other feed still leaves it unset, so ?? array()
+		// keeps their downloads unaffected.
 		if (!pfb_download($feed['url'], $file_dwn, FALSE, "{$feed['folder']}/{$feed['file']}", '', $logtype, '', $timeout, $feed['type'],
 		    $feed['username'], $feed['password'], extra_headers: $feed['headers'] ?? array())) {
 
