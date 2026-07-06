@@ -497,20 +497,13 @@ $options_safesearch_doh_list	= [
 					'zero.dns0.eu' => 'European public DNS DoH/DoT/DoQ [zero.dns0.eu]'
 					];
 
-// Collect all pfSense 'Port' Aliases
+// Collect all pfSense 'Port' + address-bearing Aliases
 // foreign key — out of ADR-29 gateway scope (aliases/alias is not a pfblockerng* path)
-$ports_list = $networks_list = '';
-foreach (config_get_path('aliases/alias', []) as $alias) {
-	if ($alias['type'] == 'port') {
-		$ports_list .= "{$alias['name']},";
-	} elseif ($alias['type'] == 'network') {
-		$networks_list .= "{$alias['name']},";
-	}
-}
-$ports_list			= trim($ports_list, ',');
-$networks_list			= trim($networks_list, ',');
-$options_aliasports_in		= $options_aliasports_out	= explode(',', $ports_list);
-$options_aliasaddr_in		= $options_aliasaddr_out	= explode(',', $networks_list);
+$pfb_ac_lists			= pfb_alias_autocomplete_lists(config_get_path('aliases/alias', []));
+$options_aliasports_in		= $options_aliasports_out	= $pfb_ac_lists['ports'];
+$options_aliasaddr_in		= $options_aliasaddr_out	= $pfb_ac_lists['networks'];
+$ports_list			= implode(',', array_keys($pfb_ac_lists['ports']));
+$networks_list			= implode(',', array_keys($pfb_ac_lists['networks']));
 
 $options_autoproto_in		= $options_autoproto_out	= get_ipprotocols();
 $options_agateway_in		= $options_agateway_out		= pfb_get_gateways();
@@ -3457,7 +3450,7 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		'text',
 		$pconfig['aliasaddr_' . $advmode]
 	))->sethelp('<a target="_blank" href="/firewall_aliases.php?tab=ip">Click Here to add/edit Aliases</a>'
-		. 'Do not manually enter Addresses(es).<br />Do not use \'pfB_\' in the \'IP Network Type\' Alias name.<br />'
+		. 'Do not manually enter Addresses(es).<br />Do not use \'pfB_\' in the address-type (Host/Network) Alias name.<br />'
 		. "Select 'invert' to invert the sense of the match. ie - Not (!) {$custom_location} Address(es)"
 	)->setWidth(8)
 	 ->addClass('dnsbl_ip');

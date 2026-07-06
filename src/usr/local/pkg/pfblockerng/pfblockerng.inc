@@ -531,6 +531,37 @@ function pfb_exclude_alias_types(): array {
 	return ['host', 'network', 'url', 'urltable'];
 }
 
+// Build the alias-name maps that feed the Adv. In/Outbound rule autocomplete + the
+// save-time option validation on the IP, DNSBL, and Feed (category-edit) pages
+// (Custom Port + Custom Source/Destination fields). Returned name=>name maps are
+// NAME-KEYED so a save-time array_key_exists($posted, $options) works.
+//
+// Ports: 'port' aliases. Addresses: every address-bearing alias type
+// (pfb_exclude_alias_types() -- host/network/url/urltable), NOT just 'network', so a
+// Host alias (a single IP) autocompletes and saves too. pfB_-managed (pfB_*) aliases
+// are skipped from the address list: the field help forbids them and they are not
+// valid rule sources.
+//
+// @param array $aliases The config_get_path('aliases/alias', []) list.
+// @return array{ports: array<string,string>, networks: array<string,string>}
+function pfb_alias_autocomplete_lists(array $aliases): array {
+	$ports    = [];
+	$networks = [];
+	foreach ($aliases as $alias) {
+		$name = (string) ($alias['name'] ?? '');
+		if ($name === '') {
+			continue;
+		}
+		$type = (string) ($alias['type'] ?? '');
+		if ($type === 'port') {
+			$ports[$name] = $name;
+		} elseif (in_array($type, pfb_exclude_alias_types(), TRUE) && !str_starts_with($name, PFB_MANAGED_FILTER_PFX)) {
+			$networks[$name] = $name;
+		}
+	}
+	return ['ports' => $ports, 'networks' => $networks];
+}
+
 // Return the configured type of the firewall alias named $alias ('host'|'network'|'urltable'|
 // 'port'|…), or NULL when no alias by that name exists. Reads the configuration directly,
 // which is correct in EVERY context — unlike is_alias(), which consults the in-memory
