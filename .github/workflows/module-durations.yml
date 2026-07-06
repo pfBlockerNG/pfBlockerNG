@@ -82,18 +82,29 @@ jobs:
         with:
           run-id: ${{ github.event.workflow_run.id || inputs.run_id }}
           github-token: ${{ github.token }}
-          pattern: smoke-diagnostics-*
+          # CE shards ONLY (issue #901). The nightly full fan-out also runs the
+          # Plus legs, but module-durations.sh's contract forbids feeding a
+          # second leg that re-runs the whole suite: it sums per module, so a
+          # Plus leg double-counts every test with non-uniform CE-vs-Plus skew.
+          pattern: smoke-diagnostics-pfsense-ce-*
           path: smoke-artifacts
 
       - name: Rebuild the module-durations table
         run: |
           set -eu
-          # Feed every leg/shard's captured pytest --durations log. module-durations.sh
+          # Feed every CE shard's captured pytest --durations log. module-durations.sh
           # sums per module BASENAME across all inputs, so input order is irrelevant and
-          # the union of the shards covers the whole suite (issue #816).
-          LOGS=$(find smoke-artifacts -name pytest-durations.log | LC_ALL=C sort)
+          # the union of the shards covers the whole suite (issue #816). Only ONE CE
+          # version's shards may be aggregated — a second CE leg would double-count the
+          # suite exactly like the Plus legs excluded by the download pattern above.
+          LOGS=$(find smoke-artifacts -path '*/smoke-diagnostics-pfsense-ce-*' -name pytest-durations.log | LC_ALL=C sort)
           if [ -z "$LOGS" ]; then
             echo "::error::no pytest-durations.log found in the smoke artifacts — nothing to aggregate."
+            exit 1
+          fi
+          VERSIONS=$(printf '%s\n' $LOGS | sed -n 's|.*/smoke-diagnostics-pfsense-ce-\(.*\)-s[0-9][0-9]*/.*|\1|p' | LC_ALL=C sort -u)
+          if [ "$(printf '%s\n' "$VERSIONS" | wc -l)" -ne 1 ]; then
+            echo "::error::CE diagnostics span more than one pfSense version ($(printf '%s' "$VERSIONS" | tr '\n' ' ')) — aggregating them would double-count the suite. Narrow to one CE leg."
             exit 1
           fi
           echo "Aggregating these shard logs:"
