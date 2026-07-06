@@ -290,6 +290,13 @@ class TestCorruptDnsblStatsDbRecovery:
         monkeypatch.setattr(P.time, "sleep", lambda *_a, **_k: None)
         db = tmp_path / "dnsbl.sqlite"
         db.write_bytes(b"not a sqlite database")  # garbage bytes -> genuinely corrupt
+        # Stale WAL/SHM sidecars beside the corrupt main file (the DBs run
+        # journal_mode=WAL): recovery must sweep these too, or they linger next
+        # to the freshly recreated main file (#900 review).
+        wal = tmp_path / "dnsbl.sqlite-wal"
+        shm = tmp_path / "dnsbl.sqlite-shm"
+        wal.write_bytes(b"stale wal")
+        shm.write_bytes(b"stale shm")
         P.pfb["mod_sqlite3"] = True
         P.pfb["pfb_py_dnsbl"] = str(db)
         P.pfb["python_blacklist"] = True  # stats wanted -> the open path runs
@@ -307,6 +314,18 @@ class TestCorruptDnsblStatsDbRecovery:
         # ---- AFTER: the corrupt file was deleted+rebuilt, the retry connected, flag True.
         assert P.pfb["sqlite3_dnsbl_con"] is True, "recovery must delete + revalidate a corrupt DB (issue #900)"
         assert P.DB_DNSBL in P._db_conns
+        # Pinned invariant (behaviour-preserving, not red->green): the planted
+        # stale sidecar bytes never survive recovery. sqlite itself resets a
+        # salt-mismatched WAL pair on the fresh connect, and recovery now also
+        # sweeps them explicitly (#900 review) so the guarantee does not hinge
+        # on sqlite version behaviour. A fresh WAL pair for the recreated DB
+        # may exist -- only the planted bytes must be gone.
+        assert not wal.exists() or wal.read_bytes() != b"stale wal", (
+            f"stale -wal sidecar survived recovery: {wal.read_bytes()[:20]!r}"
+        )
+        assert not shm.exists() or shm.read_bytes() != b"stale shm", (
+            f"stale -shm sidecar survived recovery: {shm.read_bytes()[:20]!r}"
+        )
 
         # ---- and a counter flush actually lands on the recovered DB.
         assert P._db_flush_dnsbl({"Upstream": 1})
@@ -417,11 +436,11 @@ class TestCorruptDnsblStatsDbRecovery:
             finally:
                 t2_progressed.set()  # pre-fix path: T2 ran straight through and returned
 
-        t1 = threading.Thread(target=t1_run)
+        t1 = threading.Thread(target=t1_run, daemon=True)
         t1.start()
         assert t1_parked.wait(5), "loud timeout: T1 never reached its recovery delete"
 
-        t2 = threading.Thread(target=t2_run)
+        t2 = threading.Thread(target=t2_run, daemon=True)
         t2.start()
         assert t2_progressed.wait(5), "loud timeout: T2 neither blocked on the recovery lock nor completed"
 
@@ -431,10 +450,12 @@ class TestCorruptDnsblStatsDbRecovery:
         assert not t1.is_alive() and not t2.is_alive(), "loud timeout: recovery threads did not finish"
         assert not errors, f"a recovery thread raised: {errors!r}"
 
-        # Then: exactly ONE delete happened -- the loser revalidated instead of deleting
-        # the winner's rebuilt DB.
-        assert len(remove_calls) == 1, (
-            f"racing recovery must delete the corrupt DB exactly once, got {len(remove_calls)}: {remove_calls!r}"
+        # Then: exactly ONE recovery ran -- the loser revalidated instead of deleting
+        # the winner's rebuilt DB. Recovery sweeps the WAL/SHM sidecars alongside the
+        # main file (#900 review), so count MAIN-file removes: one recovery = one.
+        main_removes = [c for c in remove_calls if c == str(db)]
+        assert len(main_removes) == 1, (
+            f"racing recovery must delete the corrupt DB exactly once, got {len(main_removes)}: {remove_calls!r}"
         )
         assert P.pfb["sqlite3_dnsbl_con"] is True
 

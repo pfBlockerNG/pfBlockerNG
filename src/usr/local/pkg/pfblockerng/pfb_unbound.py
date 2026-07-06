@@ -2430,9 +2430,12 @@ def _validate_db_with_recovery(db: int) -> bool:
     # Issue #900: pfb_db_validate -> _db_run swallows every connect/PRAGMA fault
     # (a corrupt file included) and returns False -- it never raises, so the
     # try/except recovery this replaces was dead code and a corrupt DB was never
-    # healed. Treat a False validate as the corrupt/broken-DB case: delete the
-    # file (tolerating a removal fault -- e.g. a read-only dir) and revalidate
-    # once -- no infinite retry.
+    # healed. Treat a False validate as the broken-DB case (usually corruption;
+    # disk-full/read-only faults also land here -- acceptable for a stats-only
+    # DB): delete the file plus its WAL/SHM sidecars (the DBs run journal_mode=
+    # WAL, so a stale -wal/-shm surviving next to a recreated main file must not
+    # linger; each remove tolerates a fault, e.g. a read-only dir) and
+    # revalidate once -- no infinite retry.
     #
     # The whole validate -> remove -> revalidate sequence holds _db_recovery_lock:
     # without it, two threads recovering the same corrupt DB can both validate
@@ -2446,10 +2449,12 @@ def _validate_db_with_recovery(db: int) -> bool:
     with _db_recovery_lock:
         if pfb_db_validate(db):
             return True
-        try:
-            os.remove(_db_file(db))
-        except OSError:
-            pass  # already gone, or unremovable; the revalidate below reports if still broken
+        base = _db_file(db)
+        for stale in (base, base + "-wal", base + "-shm"):
+            try:
+                os.remove(stale)
+            except OSError:
+                pass  # already gone, or unremovable; the revalidate below reports if still broken
         return pfb_db_validate(db)
 
 
