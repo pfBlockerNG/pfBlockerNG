@@ -203,18 +203,22 @@ enum PfbAliasDeltaMode: string implements PfbStoredEnum
 // Top1mSource — TOP1M source selector (alexa_type, issue #877).
 //
 // Used by: alexa_type (config key) / $pfb['dnsbl_top1m_type'] (runtime).
-//   Canonical tokens: 'tranco' (default), 'cisco'. The legacy 'alexa' token
-//   (the dead Alexa TOP1M service, #872) is a READ-ONLY legacy value:
-//   fromLegacy() coalesces it (and any unknown/'' token) to Tranco, and a
-//   write NEVER re-emits it — only 'tranco'/'cisco' are ever persisted, so
-//   the write vocabulary is downgrade-safe (an older release reading either
-//   token already understands it).
+//   Canonical tokens: 'tranco' (default), 'cisco', 'domcop', 'majestic'
+//   (ADR-59 P4). The legacy 'alexa' token (the dead Alexa TOP1M service,
+//   #872) is a READ-ONLY legacy value: fromLegacy() coalesces it (and any
+//   unknown/'' token) to Tranco, and a write NEVER re-emits it — every live
+//   token is ever persisted as itself, so the write vocabulary is
+//   downgrade-safe (an older release reading any of them already understands
+//   its own subset; domcop/majestic are simply new to it, same as any other
+//   ADR-added option).
 enum Top1mSource: string implements PfbStoredEnum
 {
 	use PfbStoredEnumAdapter;
 
-	case Tranco = 'tranco';
-	case Cisco  = 'cisco';
+	case Tranco   = 'tranco';
+	case Cisco    = 'cisco';
+	case DomCop   = 'domcop';
+	case Majestic = 'majestic';
 
 	// Legacy 'alexa' (dead service, #872) and any unknown/'' token -> Tranco.
 	protected static function fromLegacy(string $raw): static
@@ -230,15 +234,21 @@ enum Top1mSource: string implements PfbStoredEnum
 	}
 }
 
-// TOP1M provider descriptor table (ADR-59 P1, generalized P2).
+// TOP1M provider descriptor table (ADR-59 P1, generalized P2, keyless
+// providers added P4).
 //
-// Keyed by Top1mSource::value ('tranco'/'cisco'). pfblockerng.php's TOP1M URL
-// selection reads this table instead of a per-provider if/else; pfblockerng_top1m()
-// (ADR-59 P2) reads 'parse'/'header'/'domain_col' to drive the builder, and
-// pfb_download()'s extractor reads 'container'. 'header'/'domain_col' default to
-// FALSE/1 here -- Tranco/Cisco's CSV has no header row and the domain sits at
-// str_getcsv() index 1 (0-indexed: rank,domain), matching today's hardcoded shape
-// byte-for-byte. 'auth' is read by pfb_download()'s header-auth path (ADR-59 P3+).
+// Keyed by Top1mSource::value ('tranco'/'cisco'/'domcop'/'majestic').
+// pfblockerng.php's TOP1M URL selection reads this table instead of a
+// per-provider if/else; pfblockerng_top1m() (ADR-59 P2) reads
+// 'parse'/'header'/'domain_col' to drive the builder, and pfb_download()'s
+// extractor reads 'container'. 'header'/'domain_col' default to FALSE/1 here
+// -- Tranco/Cisco's CSV has no header row and the domain sits at
+// str_getcsv() index 1 (0-indexed: rank,domain), matching today's hardcoded
+// shape byte-for-byte. 'auth' is read by pfb_download()'s header-auth path
+// (ADR-59 P3+). 'domain_col' is 0-indexed (str_getcsv() array index, not a
+// human 1-indexed column count) -- DomCop's Domain is the 2nd CSV field
+// ("Rank","Domain","Open Page Rank") -> index 1 (same index as Tranco/Cisco);
+// Majestic's Domain is the 3rd field (GlobalRank,TldRank,Domain,...) -> index 2.
 //
 // @return array<string, array{url: string, container: string, parse: string, header: bool, domain_col: int, auth: string, label: string, licence: string}>
 function pfb_top1m_providers(): array
@@ -263,6 +273,30 @@ function pfb_top1m_providers(): array
 			'auth'		=> 'none',
 			'label'		=> 'Cisco Umbrella',
 			'licence'	=> '',
+		),
+		// DomCop top-10M (registered-domain breadth): zipped CSV, quoted header
+		// row ("Rank","Domain","Open Page Rank"), Domain at str_getcsv() index 1.
+		Top1mSource::DomCop->value	=> array(
+			'url'		=> 'https://www.domcop.com/files/top/top10milliondomains.csv.zip',
+			'container'	=> 'zip',
+			'parse'		=> 'csv',
+			'header'	=> TRUE,
+			'domain_col'	=> 1,
+			'auth'		=> 'none',
+			'label'		=> 'DomCop',
+			'licence'	=> '',
+		),
+		// Majestic Million: PLAIN (uncompressed) CSV, unquoted 12-col header
+		// (GlobalRank,TldRank,Domain,TLD,...), Domain at str_getcsv() index 2.
+		Top1mSource::Majestic->value	=> array(
+			'url'		=> 'https://downloads.majestic.com/majestic_million.csv',
+			'container'	=> 'plain',
+			'parse'		=> 'csv',
+			'header'	=> TRUE,
+			'domain_col'	=> 2,
+			'auth'		=> 'none',
+			'label'		=> 'Majestic Million',
+			'licence'	=> 'CC BY 3.0 — attribution required',
 		),
 	);
 }
@@ -777,9 +811,9 @@ function pfb_cfg_registry(): array
 			'since'         => '1.0.0',
 		],
 
-		// TOP1M type selector: 'tranco' | 'cisco'. Legacy 'alexa' (dead service,
-		// #872) coalesces to 'tranco' at the read boundary via
-		// pfb_cfg_top1m_source_read(). Default 'tranco'.
+		// TOP1M type selector: 'tranco' | 'cisco' | 'domcop' | 'majestic'. Legacy
+		// 'alexa' (dead service, #872) coalesces to 'tranco' at the read boundary
+		// via pfb_cfg_top1m_source_read(). Default 'tranco'.
 		'alexa_type' => [
 			'section'       => $dnsbl,
 			'default'       => 'tranco',
@@ -1557,7 +1591,8 @@ function pfb_run_migrations(): void
  * The top1m_source adapter (pfb_cfg_top1m_source_read/write, issue #877) is wired
  * for alexa_type and returns a Top1mSource enum. Legacy 'alexa' (dead service,
  * #872) coalesces to Tranco on read and is never re-emitted by a write; the
- * write vocabulary is only 'tranco'|'cisco'.
+ * write vocabulary is 'tranco'|'cisco'|'domcop'|'majestic' (domcop/majestic
+ * added ADR-59 P4).
  *
  * @return array<string,list<string>>
  */
@@ -1587,10 +1622,11 @@ function pfb_cfg_field_vocab(): array
 		'alias_delta_mode' => ['auto', 'delta', 'replace'],
 
 		// TOP1M source selector (Top1mSource, issue #877): the tokens a write can
-		// emit. 'tranco' (default) | 'cisco'. The legacy 'alexa' token (dead
-		// service, #872) is a READ-ONLY legacy value — pfb_cfg_top1m_source_read()
-		// coalesces it to Top1mSource::Tranco and it is never re-emitted by a write.
-		'top1m_source' => ['tranco', 'cisco'],
+		// emit. 'tranco' (default) | 'cisco' | 'domcop' | 'majestic' (the latter
+		// two added ADR-59 P4). The legacy 'alexa' token (dead service, #872) is a
+		// READ-ONLY legacy value — pfb_cfg_top1m_source_read() coalesces it to
+		// Top1mSource::Tranco and it is never re-emitted by a write.
+		'top1m_source' => ['tranco', 'cisco', 'domcop', 'majestic'],
 
 		// Plain string (null/null adapters): identity. Backward-safe by construction.
 		// The 'plain' vocabulary contains the sentinel empty string; individual

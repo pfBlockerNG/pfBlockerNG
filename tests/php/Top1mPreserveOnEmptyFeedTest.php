@@ -43,6 +43,10 @@ use PHPUnit\Framework\TestCase;
  * of a hardcoded rank,domain-at-column-1 shape.
  *   * a SYNTHETIC descriptor's header/domain_col knobs are honoured (below) -- no live
  *     non-Tranco/Cisco provider exists yet (ADR-59 Phase 4 adds one)
+ *
+ * ADR-59 P4 addendum: the two live non-Tranco/Cisco providers (DomCop, Majestic) added
+ * by this phase -- their REAL sample shape parses correctly via the registered
+ * descriptor, and a wrong domain_col genuinely mis-reads (fail-before/pass-after).
  */
 #[CoversFunction('pfblockerng_top1m')]
 final class Top1mPreserveOnEmptyFeedTest extends TestCase
@@ -382,5 +386,118 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		$this->assertSame(".example.com,,\n,example.com,,\n,www.example.com,,\n", $got,
 			'the domain must come from domain_col (index 2), and the header row must not count as data');
 		$this->assertStringContainsString('Parsed 1 lines | Found 1 of 1000', $this->readMainLog());
+	}
+
+	/**
+	 * ADR-59 P4 -- pfblockerng_top1m() parses Majestic Million's REAL CSV shape
+	 * (12-col unquoted header, Domain at str_getcsv() index 2) via its registered
+	 * provider descriptor (pfb_top1m_providers()[Top1mSource::Majestic->value]).
+	 * Sample verified against the live downloads.majestic.com/majestic_million.csv
+	 * format (fetched during development of this test).
+	 *
+	 * FAIL-BEFORE/PASS-AFTER: the BEFORE run reproduces the exact pre-ADR-59-Phase-2
+	 * hardcoded shape -- pfblockerng_top1m(array()) resolves every knob to its
+	 * default (parse=rank_domain, header=false, domain_col=1), precisely what every
+	 * call site used before Phase 2 generalized the builder. Applied to Majestic's
+	 * real layout, domain_col=1 reads the TldRank column (a bare digit, e.g. "1")
+	 * as the "domain" instead of the real Domain field at index 2 -- neither digit
+	 * contains a '.', so no TLD ever matches and the whitelist ends up EMPTY despite
+	 * two real .com domains being present in the feed (RED). The AFTER run, using
+	 * the actual registered Majestic descriptor (domain_col 2, header skipped),
+	 * correctly extracts both domains (GREEN) -- proving domain_col is genuinely
+	 * read from the descriptor, not hardcoded.
+	 */
+	public function testMajesticRealShapeSampleMisreadsOnLegacyColumnAndParsesCorrectlyViaItsDescriptor(): void
+	{
+		// Given: a real-shape Majestic Million sample -- 12-col unquoted header,
+		// Domain at index 2, two real '.com' domains matching the 'com' TLD
+		// inclusion configured in setUp().
+		$csv = "GlobalRank,TldRank,Domain,TLD,RefSubNets,RefIPs,IDN_Domain,IDN_TLD,PrevGlobalRank,PrevTldRank,PrevRefSubNets,PrevRefIPs\n"
+			. "1,1,google.com,com,501790,2223489,google.com,com,1,1,500432,2222282\n"
+			. "2,2,facebook.com,com,473621,2232852,facebook.com,com,2,2,472323,2232281\n";
+		$this->assertNotFalse(file_put_contents($this->csvPath(), $csv), 'setup: real-shape Majestic Million sample');
+
+		// When (BEFORE): the pre-Phase-2 legacy shape -- domain_col 1, no header skip.
+		pfblockerng_top1m(array());
+
+		// Then (RED): the real domains are misread as the numeric TldRank column;
+		// neither matches a TLD (both rows still count as valid CSV lines -- the
+		// rank_domain guard passes on the numeric GlobalRank column), so the
+		// whitelist is replaced with EMPTY content, not "keeping previous".
+		$this->assertSame('', file_get_contents($this->whitelistPath()),
+			"the legacy col-1 parser must MIS-read Majestic's real shape -- Domain sits at index 2, not 1");
+		$this->assertStringContainsString('Parsed 2 lines | Found 0 of 1000', $this->readMainLog());
+		$this->assertStringContainsString('0 domains matched the configured TLD inclusions', $this->readMainLog());
+		$this->assertStringNotContainsString('keeping the previous TOP1M whitelist', $this->readMainLog());
+
+		// Reset the log so the GREEN assertion below is unambiguous.
+		$this->assertNotFalse(file_put_contents($GLOBALS['pfb']['log'], ''), 'reset main log between runs');
+
+		// When (AFTER): the actual registered Majestic descriptor.
+		pfblockerng_top1m(pfb_top1m_providers()[Top1mSource::Majestic->value]);
+
+		// Then (GREEN): both real domains are correctly extracted from index 2.
+		$this->assertSame(
+			".google.com,,\n,google.com,,\n,www.google.com,,\n.facebook.com,,\n,facebook.com,,\n,www.facebook.com,,\n",
+			file_get_contents($this->whitelistPath()),
+			'the registered Majestic descriptor must extract Domain from index 2'
+		);
+		$this->assertStringContainsString('Parsed 2 lines | Found 2 of 1000', $this->readMainLog());
+	}
+
+	/**
+	 * ADR-59 P4 -- pfblockerng_top1m() parses DomCop's REAL CSV shape (quoted
+	 * 3-col header, Domain at str_getcsv() index 1) via its registered provider
+	 * descriptor. Sample verified against the live
+	 * domcop.com/files/top/top10milliondomains.csv format (fetched during
+	 * development of this test).
+	 *
+	 * DomCop's own Domain column happens to sit at the SAME index (1) the
+	 * pre-Phase-2 legacy default already used, so replaying that legacy shape
+	 * verbatim (as the Majestic test above does) would coincidentally still
+	 * parse DomCop's real sample correctly -- on its own it would NOT prove
+	 * domain_col is read from the descriptor rather than hardcoded. To still
+	 * assert "the col index matters" for DomCop, this FAIL-BEFORE/PASS-AFTER
+	 * instead probes a WRONG column for DomCop's shape (domain_col 2 -- the
+	 * "Open Page Rank" field, Majestic's own domain_col) and shows it likewise
+	 * mis-reads; the registered DomCop descriptor (domain_col 1) is correct.
+	 */
+	public function testDomCopRealShapeSampleMisreadsOnWrongColumnAndParsesCorrectlyViaItsDescriptor(): void
+	{
+		// Given: a real-shape DomCop sample -- quoted 3-col header, Domain at
+		// index 1, two real '.com' domains matching the 'com' TLD inclusion.
+		$csv = "\"Rank\",\"Domain\",\"Open Page Rank\"\n"
+			. "\"1\",\"www.facebook.com\",\"10.00\"\n"
+			. "\"2\",\"fonts.googleapis.com\",\"10.00\"\n";
+		$this->assertNotFalse(file_put_contents($this->csvPath(), $csv), 'setup: real-shape DomCop sample');
+
+		// When (BEFORE): the WRONG column for this shape -- index 2 ("Open Page
+		// Rank", a decimal string with no matching TLD).
+		$wrongColumn = ['parse' => 'csv', 'header' => true, 'domain_col' => 2];
+		pfblockerng_top1m($wrongColumn);
+
+		// Then (RED): the real domains are misread as the Open Page Rank value
+		// ("10.00" -> tld "00"), so neither matches and the whitelist is empty.
+		$this->assertSame('', file_get_contents($this->whitelistPath()),
+			"domain_col 2 must MIS-read DomCop's real shape -- Domain sits at index 1, not 2");
+		$this->assertStringContainsString('Parsed 2 lines | Found 0 of 1000', $this->readMainLog());
+		$this->assertStringContainsString('0 domains matched the configured TLD inclusions', $this->readMainLog());
+		$this->assertStringNotContainsString('keeping the previous TOP1M whitelist', $this->readMainLog());
+
+		// Reset the log so the GREEN assertion below is unambiguous.
+		$this->assertNotFalse(file_put_contents($GLOBALS['pfb']['log'], ''), 'reset main log between runs');
+
+		// When (AFTER): the actual registered DomCop descriptor.
+		pfblockerng_top1m(pfb_top1m_providers()[Top1mSource::DomCop->value]);
+
+		// Then (GREEN): both real domains are correctly extracted from index 1
+		// ('www.' stripped per the existing whitelist-building convention).
+		$this->assertSame(
+			".facebook.com,,\n,facebook.com,,\n,www.facebook.com,,\n"
+			. ".fonts.googleapis.com,,\n,fonts.googleapis.com,,\n,www.fonts.googleapis.com,,\n",
+			file_get_contents($this->whitelistPath()),
+			'the registered DomCop descriptor must extract Domain from index 1'
+		);
+		$this->assertStringContainsString('Parsed 2 lines | Found 2 of 1000', $this->readMainLog());
 	}
 }

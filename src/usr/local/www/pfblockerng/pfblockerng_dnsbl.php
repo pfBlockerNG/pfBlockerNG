@@ -194,7 +194,8 @@ if (is_dir("{$indexdir}")) {
 }
 $options_dnsbl_webpage_cnt = count($options_dnsbl_webpage) ?: '1';
 
-$options_alexa_type		= [ 'tranco' => 'Tranco TOP1M', 'cisco' => 'Cisco Umbrella TOP1M' ];
+$options_alexa_type		= [ 'tranco' => 'Tranco TOP1M', 'cisco' => 'Cisco Umbrella TOP1M',
+					    'domcop' => 'DomCop TOP1M', 'majestic' => 'Majestic Million TOP1M' ];
 
 $options_alexa_count		= [	'500' => 'Top 500', '1000' => 'Top 1k', '2000' => 'Top 2k', '5000' => 'Top 5k', '10000' => 'Top 10k',
 					'25000' => 'Top 25k', '50000' => 'Top 50k', '75000' => 'Top 75k', '100000' => 'Top 100k', '250000' => 'Top 250k',
@@ -3217,6 +3218,10 @@ $top1m_text = 'The TOP1M feed can be used to whitelist the most popular Domain n
 		<ul>
 			<li><a target="_blank" href="https://tranco-list.eu/">Tranco TOP1M</a></li>
 			<li><a target="_blank" href="https://s3-us-west-1.amazonaws.com/umbrella-static/index.html">Cisco Umbrella TOP1M</a></li>
+			<li><a target="_blank" href="https://www.domcop.com/top-10-million-domains">DomCop TOP1M</a></li>
+			<li><a target="_blank" href="https://majestic.com/reports/majestic-million">Majestic Million TOP1M</a> --
+				distributed under the <strong>Creative Commons Attribution (CC BY) 3.0</strong> License by:
+				<a target="_blank" href="https://majestic.com">Majestic</a>, attribution required.</li>
 		</ul>
 		To use this feature, select the number of \'Top Domains\' to whitelist. You can also \'include\' which TLDs to whitelist.
 

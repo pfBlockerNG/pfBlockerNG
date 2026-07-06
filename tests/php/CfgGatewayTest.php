@@ -369,7 +369,7 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame(Top1mSource::Tranco, PfbConfig::read('alexa_type'), "legacy 'alexa' coalesces to Tranco");
 	}
 
-	/** alexa_type: the two live tokens ('tranco'/'cisco') pass through as their enum cases. */
+	/** alexa_type: all four live tokens pass through as their enum cases (domcop/majestic added ADR-59 P4). */
 	public function testReadPassesThroughLiveTop1mSourceTokens(): void
 	{
 		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/alexa_type';
@@ -379,6 +379,12 @@ final class CfgGatewayTest extends TestCase
 
 		$this->seedConfig($path, 'tranco');
 		$this->assertSame(Top1mSource::Tranco, PfbConfig::read('alexa_type'), "'tranco' passes through as Tranco");
+
+		$this->seedConfig($path, 'domcop');
+		$this->assertSame(Top1mSource::DomCop, PfbConfig::read('alexa_type'), "'domcop' passes through as DomCop");
+
+		$this->seedConfig($path, 'majestic');
+		$this->assertSame(Top1mSource::Majestic, PfbConfig::read('alexa_type'), "'majestic' passes through as Majestic");
 	}
 
 	public function testReadReturnsRegisteredDefaultForDnsblInterfaceAbsentKey(): void

@@ -30,11 +30,11 @@ field, reasoning about rollback/downgrade, or checking the foreign-key exclusion
     (alpha compatibility is intentionally not maintained) — it reads as Off. One canonical
     vocabulary spans `config.xml`, the ini, and the Python `IdnMode` enum.
   - **`alexa_type` → `Top1mSource`** (issue #877 review, registry adapters
-    `pfb_cfg_top1m_source_read/write`): tokens `'tranco'` (default) / `'cisco'`. The legacy
-    `'alexa'` token (the dead Alexa TOP1M service, #872) is READ-only — `fromLegacy()` coalesces
-    it (and any unknown/absent token) to `Tranco`, and a write never re-emits it, so the write
-    vocabulary is only `'tranco'`/`'cisco'` (downgrade-safe: an older release already understands
-    both). The stored config key stays `alexa_type` — no rename.
+    `pfb_cfg_top1m_source_read/write`): tokens `'tranco'` (default) / `'cisco'` / `'domcop'` /
+    `'majestic'` (the latter two added ADR-59 P4). The legacy `'alexa'` token (the dead Alexa
+    TOP1M service, #872) is READ-only — `fromLegacy()` coalesces it (and any unknown/absent
+    token) to `Tranco`, and a write never re-emits it. The stored config key stays `alexa_type`
+    — no rename.
 - **Python** (`pfb_unbound.py`): the **`IdnMode` enum** shares that vocabulary — `All = 'on'`,
   `Confusable = 'confusable'`, `Off = 'off'` — and reads the ini `idn_mode` token directly (the
   legacy `python_idn` fallback is retained for a config predating the key). Toggle/lenient enums
@@ -87,7 +87,7 @@ at/after that version; it is a per-field scope marker, not a migration.
 | `lenient`           | `{'on', 'off', ''}` — `''` is a LEGACY READ token (pre-ADR-22 absent); write emits `'off'` |
 | `idn`               | write `{'on' (=All), 'confusable', 'off'}`; legacy reads `'all'`→Off, `''`→Off (4.0.0-alpha `'all'` not carried) |
 | `alias_delta_mode`  | `{'auto', 'delta', 'replace'}` — unknown/absent token reads as `'auto'` (ADR-40, since 4.0.0) |
-| `top1m_source`      | write `{'tranco' (default), 'cisco'}`; legacy read `'alexa'`→Tranco (dead service, #872), never re-emitted |
+| `top1m_source`      | write `{'tranco' (default), 'cisco', 'domcop', 'majestic'}` (ADR-59 P4); legacy read `'alexa'`→Tranco (dead service, #872), never re-emitted |
 | `plain`             | identity — any stored value passes through unchanged |
 
 **Excluded fields** — none. `pfb_idn` was previously excluded (`NULL`/`NULL` identity adapters);
