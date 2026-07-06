@@ -90,12 +90,13 @@ on:
         description: "Number of parallel module shards per leg — CE and Plus alike (issues #797/#856) — for full-marker, un-filtered runs. Collapses to 1 when pytest_filter is set or pytest_marker != smoke. Clamped to the leg's test-module count."
         required: false
         default: "3"
-  # Called by other workflows. Defaults to the FULL suite so existing callers
-  # that pass nothing are unchanged (workflow_call -> scope=full by default).
+  # Called by other workflows. A callee sees the CALLER's event_name, so scope
+  # never auto-resolves to full here (issue #906): blank = impacted; a caller
+  # that wants the full suite passes scope=full explicitly.
   workflow_call:
     inputs:
       scope:
-        description: "impacted | full. Blank on a call = full (preserve existing callers)."
+        description: "impacted | full. Blank on a call = impacted (issue #906); pass full explicitly for the whole fan-out."
         required: false
         type: string
         default: ""
@@ -153,9 +154,11 @@ jobs:
 
       # Resolve the run scope, the leg set, and the effective -k. Default for a
       # bare DISPATCH is `impacted` (min CE leg + only the tests changed vs
-      # origin/devel); schedule and workflow_call default to `full` (every ci:true
-      # leg, whole marker) so the nightly run, the post-version-bump dispatch
-      # (version-tracker passes scope=full), and any caller stay unchanged.
+      # origin/devel); schedule resolves `full` (every ci:true leg, whole
+      # marker). A workflow_call caller gets NO special default (issue #906 —
+      # the callee sees the caller's event): the nightly schedule and the
+      # post-version-bump dispatch (version-tracker passes scope=full) stay
+      # full; any other caller passes scope explicitly.
       - name: Resolve scope, legs, and -k
         id: filter
         env:

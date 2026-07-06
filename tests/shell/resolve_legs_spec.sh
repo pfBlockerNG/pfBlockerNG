@@ -70,6 +70,7 @@ Describe 'resolve-legs.sh legs — scope + leg selection'
             sh "$SCRIPT" legs --test-dir tests/smoke --label marker
         The status should be success
         The output should include '"pfsense_version":"2.8"'
+        The output should not include '"pfsense_version":"2.10"'
         The output should not include '"pfsense_version":"26.03"'
         The error should include 'scope='
     End
