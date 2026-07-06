@@ -46,6 +46,33 @@ final class RedactUrlTest extends TestCase
 		$this->assertStringNotContainsString('SECRET', $redacted);
 	}
 
+	/**
+	 * The fallback path's two escape hatches -- a fragment ('#...') and a
+	 * userinfo password that itself contains '@' -- must not leak. Both landed
+	 * here because the input has no parse_url-detectable host (the bare rsync
+	 * '[user@]host::module' shorthand). A first-'@' split or a '?'-only truncate
+	 * used to leak part of the secret.
+	 *
+	 * @return array<string,array{string,string}>
+	 */
+	public static function fallbackLeakProvider(): array
+	{
+		return [
+			'password contains @'  => ['user:p@ss@host::module', 'host::module'],
+			'fragment secret'      => ['user@host::module#token=SECRET', 'host::module?[redacted]'],
+			'fragment no userinfo' => ['some garbage#token=SECRET', 'some garbage?[redacted]'],
+		];
+	}
+
+	#[DataProvider('fallbackLeakProvider')]
+	public function testFallbackDoesNotLeakFragmentOrAtInPassword(string $url, string $expected): void
+	{
+		$redacted = pfb_redact_url($url);
+		$this->assertStringNotContainsString('SECRET', $redacted, 'a fragment secret must not survive');
+		$this->assertStringNotContainsString('ss@', $redacted, 'an @-in-password must be fully stripped');
+		$this->assertSame($expected, $redacted);
+	}
+
 	public function testPlainUrlWithNoQueryOrUserinfoRoundTripsUnchanged(): void
 	{
 		$this->assertSame('https://h/p', pfb_redact_url('https://h/p'));

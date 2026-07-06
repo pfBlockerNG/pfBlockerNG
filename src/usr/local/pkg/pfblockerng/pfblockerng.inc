@@ -9808,14 +9808,29 @@ function pfb_redact_url($url) {
 		return $redacted;
 	}
 
-	// Fallback: strip a leading '[scheme://]user[:pass]@' userinfo prefix,
-	// then truncate at the first '?' -- covers malformed URLs and the bare
-	// rsync '[user@]host::module' shorthand (parse_url reports no host for
-	// either, so both land here).
-	$redacted	= preg_replace('#(^|//)[^\s/@]+@#', '$1', $url, 1) ?? $url;
-	$qpos		= strpos($redacted, '?');
-	if ($qpos !== FALSE) {
-		$redacted = substr($redacted, 0, $qpos) . '?[redacted]';
+	// Fallback (parse_url found no host): a malformed URL, or pfBlockerNG's bare
+	// rsync '[user@]host::module' shorthand. Strip a '[scheme://]user[:pass]@'
+	// userinfo prefix using the RIGHTMOST '@' in the authority -- an rsync
+	// password may itself contain a literal '@' (mirrors pfb_download's own
+	// strrpos('@') host handling), so a first-'@' split would leak part of it --
+	// then drop any query AND fragment, either of which can carry a credential.
+	$prefix		= '';
+	$body		= $url;
+	if (preg_match('#^([a-z][a-z0-9+.-]*://|//)#i', $body, $m)) {
+		$prefix	= $m[0];
+		$body	= substr($body, strlen($prefix));
+	}
+	$auth_end	= strcspn($body, '/?#');		// authority = up to the first /?#
+	$authority	= substr($body, 0, $auth_end);
+	$tail		= substr($body, $auth_end);
+	$at		= strrpos($authority, '@');
+	if ($at !== FALSE) {
+		$authority = substr($authority, $at + 1);
+	}
+	$redacted	= $prefix . $authority . $tail;
+	$cut		= strcspn($redacted, '?#');		// truncate a query OR fragment
+	if ($cut < strlen($redacted)) {
+		$redacted = substr($redacted, 0, $cut) . '?[redacted]';
 	}
 	return $redacted;
 }
