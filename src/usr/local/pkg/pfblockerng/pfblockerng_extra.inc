@@ -1644,9 +1644,9 @@ function pfb_alias_rename_followup(string $old_name, string $new_name): bool
 //
 // The four Advanced Inbound/Outbound alias fields accept different alias
 // types: port fields (aliasports_*) require a pfSense 'port' alias; address
-// fields (aliasaddr_*) require a 'network' or 'host' alias.  This helper
-// encodes that rule in one testable place so the category-edit validation
-// loop and any future caller stay in sync.
+// fields (aliasaddr_*) require an address-bearing alias (host/network/url/urltable).
+// This helper encodes that rule in one testable place so the category-edit
+// validation loop and any future caller stay in sync.
 // ---------------------------------------------------------------------------
 
 /**
@@ -1654,7 +1654,7 @@ function pfb_alias_rename_followup(string $old_name, string $new_name): bool
  * given Advanced Inbound/Outbound field.
  *
  * Port fields (aliasports_*) require a 'port' alias; address fields
- * (aliasaddr_*) require a 'network' or 'host' alias.
+ * (aliasaddr_*) require an address-bearing alias (host/network/url/urltable).
  * Unknown field names return FALSE (fail closed).
  *
  * @param  string $field       One of aliasports_in, aliasports_out,
@@ -1668,7 +1668,9 @@ function pfb_alias_field_type_ok(string $field, string $alias_type): bool
 		return $alias_type === 'port';
 	}
 	if ($field === 'aliasaddr_in' || $field === 'aliasaddr_out') {
-		return $alias_type === 'network' || $alias_type === 'host';
+		// Any address-bearing alias type (host/network/url/urltable), matching the
+		// broadened autocomplete + the DNS-redirect exception source (pfb_exclude_alias_types()).
+		return in_array($alias_type, pfb_exclude_alias_types(), TRUE);
 	}
 	return FALSE;
 }
@@ -1678,7 +1680,7 @@ function pfb_alias_field_type_ok(string $field, string $alias_type): bool
  * fields of a category-edit POST (issue #356, #636).
  *
  * Each non-empty field must name an EXISTING firewall alias whose type the field
- * accepts (port fields -> a port alias; address fields -> a network or host alias).
+ * accepts (port fields -> a port alias; address fields -> an address-bearing alias).
  *
  * Existence AND type are resolved from alias_get_type(), which reads the
  * 'aliases/alias' configuration directly (returning '' for an unknown name) —
@@ -1696,8 +1698,8 @@ function pfb_adv_alias_field_errors(array $post): array
 	$adv_alias_fields = [
 		'aliasports_in'  => ['dir' => 'Port In',         'type_label' => 'Port-type'],
 		'aliasports_out' => ['dir' => 'Port Out',        'type_label' => 'Port-type'],
-		'aliasaddr_in'   => ['dir' => 'Destination In',  'type_label' => 'Network or Host-type'],
-		'aliasaddr_out'  => ['dir' => 'Source Out',      'type_label' => 'Network or Host-type'],
+		'aliasaddr_in'   => ['dir' => 'Destination In',  'type_label' => 'Network, Host or URL-type'],
+		'aliasaddr_out'  => ['dir' => 'Source Out',      'type_label' => 'Network, Host or URL-type'],
 	];
 
 	$errors = [];

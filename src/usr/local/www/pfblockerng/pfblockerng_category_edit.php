@@ -414,25 +414,13 @@ $options_sort			= [	'sort' => 'Enable auto-sort', 'no-sort' => 'Disable auto-sor
 $options_aliaslog		= [	'enabled' => 'Enabled', 'disabled' => 'Disabled' ];
 $options_stateremoval		= [	'enabled' => 'Enabled', 'disabled' => 'Disabled' ];
 
-// Collect all pfSense 'Port' Aliases
-$portslist = $networkslist = '';
-$options_aliasports_in = $options_aliasports_out = array();
-
+// Collect all pfSense 'Port' + address-bearing Aliases
 // foreign section: aliases/alias is a pfSense core section, not in registry
-foreach (config_get_path('aliases/alias', []) as $alias) {
-	if ($alias['type'] == 'port') {
-		$portslist .= "{$alias['name']},";
-		$options_aliasports_in[$alias['name']] = $alias['name'];
-		$options_aliasports_out[$alias['name']] = $alias['name'];
-	}
-	elseif ($alias['type'] == 'network') {
-		$networkslist .= "{$alias['name']},";
-		$options_aliasaddr_in[$alias['name']] = $alias['name'];
-		$options_aliasaddr_out[$alias['name']] = $alias['name'];
-	}
-}
-$ports_list			= trim($portslist, ',');
-$networks_list			= trim($networkslist, ',');
+$pfb_ac_lists			= pfb_alias_autocomplete_lists(config_get_path('aliases/alias', []));
+$options_aliasports_in		= $options_aliasports_out	= $pfb_ac_lists['ports'];
+$options_aliasaddr_in		= $options_aliasaddr_out	= $pfb_ac_lists['networks'];
+$ports_list			= implode(',', array_keys($pfb_ac_lists['ports']));
+$networks_list			= implode(',', array_keys($pfb_ac_lists['networks']));
 
 $options_autoproto_in		= $options_autoproto_out	= get_ipprotocols();
 $options_agateway_in		= $options_agateway_out		= pfb_get_gateways();
@@ -1531,8 +1519,8 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 			'text',
 			$pconfig['aliasaddr_' . $advmode]
 		))->sethelp('<a target="_blank" href="/firewall_aliases.php?tab=ip">Click Here to add/edit Aliases</a>'
-			. 'Do not manually enter Addresses(es).<br />Do not use \'pfB_\' in the \'IP Network Type\' Alias name.<br />'
-			. "Select 'invert' to invert the sense of the match. ie - Not (!) {$custom_location} Address(es)<br />Must be a Network or Host-type alias.")
+			. 'Do not manually enter Addresses(es).<br />Do not use \'pfB_\' in the address-type (Host/Network) Alias name.<br />'
+			. "Select 'invert' to invert the sense of the match. ie - Not (!) {$custom_location} Address(es)<br />Must be an address-type (Host, Network or URL) alias.")
 		  ->setWidth(8);
 		$section->add($group);
 

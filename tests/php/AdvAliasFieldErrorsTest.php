@@ -97,6 +97,28 @@ final class AdvAliasFieldErrorsTest extends TestCase
 		$this->assertSame([], $errors);
 	}
 
+	public function testExistingUrlAliasInAddressFieldIsAccepted(): void
+	{
+		// A URL alias is address-bearing, so an address field accepts it — the
+		// autocomplete offers it, so the validator must not reject it (dropdown/
+		// validator parity). Pre-broadening this was rejected as wrong-type.
+		$this->seedAliases(['MyUrl' => 'url']);
+
+		$errors = pfb_adv_alias_field_errors(['aliasaddr_out' => 'MyUrl']);
+
+		$this->assertSame([], $errors);
+	}
+
+	public function testExistingUrltableAliasInAddressFieldIsAccepted(): void
+	{
+		// A URL-Table alias is likewise a valid rule address source.
+		$this->seedAliases(['MyUrlTable' => 'urltable']);
+
+		$errors = pfb_adv_alias_field_errors(['aliasaddr_in' => 'MyUrlTable']);
+
+		$this->assertSame([], $errors);
+	}
+
 	// -----------------------------------------------------------------------
 	// Non-existent alias — rejected with "Must use an existing Alias".
 	// -----------------------------------------------------------------------
@@ -146,7 +168,7 @@ final class AdvAliasFieldErrorsTest extends TestCase
 
 		// Then rejected as the wrong type
 		$this->assertCount(1, $errors);
-		$this->assertStringContainsString('Must use a Network or Host-type alias', $errors[0]);
+		$this->assertStringContainsString('Must use a Network, Host or URL-type alias', $errors[0]);
 	}
 
 	// -----------------------------------------------------------------------
