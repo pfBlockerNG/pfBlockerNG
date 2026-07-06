@@ -4237,11 +4237,77 @@ function pfb_run_hooks($when, $ctx = array()) {
 
 		$discard = array();
 		$retval  = 0;
-		exec($cmd, $discard, $retval);
 
-		// #693: during a pkg install/upgrade/uninstall (lifecycle callback), stream the hook's
-		// captured output to the package-manager output so the admin sees what it actually did.
-		pfb_mirror_hook_output($logtarget, $hook_log_offset);
+		if (empty($pfb['hook_lifecycle'])) {
+			// Normal cron/manual/Run-Now pass: unchanged synchronous path. The Update page's own
+			// AJAX tail already streams $logtarget (the per-run log) straight to the browser, so
+			// no extra streaming/mirroring is needed here.
+			exec($cmd, $discard, $retval);
+		} else {
+			// pkg install/upgrade/uninstall (lifecycle callback): STREAM the hook's own output to
+			// the pkg Software page AS it runs, instead of one block after it exits.
+			// pfb_mirror_hook_output() (below) only closed the "arrives at all" gap (#693); this
+			// closes "arrives live". Run the SAME timeout+redirect-to-file command in the
+			// BACKGROUND under daemon(8) -- output still lands on the log FILE, never a live pipe,
+			// so a hook that restarts a daemon still can't hang exec() (#662) -- and tail the file
+			// to stdout while daemon -p's pidfile stays live (isvalidpid), the same dispatch shape
+			// as pfb_runnow() in pfblockerng_update.php. The inner `echo $? > rcfile` captures the
+			// hook's real exit code (124 on timeout, else the hook's own) since a background
+			// launch has no exec() return value to read.
+			$idxsafe = (int) $idx;
+			$pidfile = "/var/run/pfb_hook_{$idxsafe}.pid";
+			$rcfile  = "/var/run/pfb_hook_{$idxsafe}.rc";
+			@unlink($pidfile);
+			@unlink($rcfile);
+			$inner = "/usr/bin/timeout --foreground -s TERM -k " . PFB_HOOK_KILL_GRACE .
+				" {$timeout} " . escapeshellarg($path) . " >> {$logf} 2>&1 < /dev/null; " .
+				'echo $? > ' . escapeshellarg($rcfile);
+			mwexec_bg("{$envprefix} /usr/sbin/daemon -p " . escapeshellarg($pidfile) .
+				' /bin/sh -c ' . escapeshellarg($inner));
+
+			// Bounded launch grace (~5s @ 200ms): daemon(8) needs a moment to fork and write the
+			// pidfile -- or, for a near-instant hook, $rcfile may already exist by the time we
+			// check. Neither showing up means the background launch itself failed.
+			$launched = FALSE;
+			for ($i = 0; $i < 25; $i++) {
+				if (isvalidpid($pidfile) || is_file($rcfile)) {
+					$launched = TRUE;
+					break;
+				}
+				usleep(200000);
+			}
+
+			if (!$launched) {
+				// Launch failed -- never lose the hook run: fall back to the exact synchronous
+				// path used outside a lifecycle callback, then mirror the captured body once.
+				@unlink($pidfile);
+				@unlink($rcfile);
+				exec($cmd, $discard, $retval);
+				pfb_mirror_hook_output($logtarget, $hook_log_offset);
+			} else {
+				// Tail the delta while the hook is alive. Hard-bounded so a wedged isvalidpid()
+				// can never hang the pass -- timeout(1) already kills the hook at $timeout +
+				// PFB_HOOK_KILL_GRACE, so the pidfile clears well inside this cap.
+				$off = $hook_log_offset;
+				$maxiter = (int) ceil(($timeout + PFB_HOOK_KILL_GRACE + 10) / 0.2);
+				for ($i = 0; $i < $maxiter && isvalidpid($pidfile); $i++) {
+					$chunk = pfb_log_tail_chunk($logtarget, $off, FALSE);
+					if ($chunk['data'] !== '') {
+						print $chunk['data'];
+					}
+					$off = $chunk['offset'];
+					usleep(200000);
+				}
+				// Final drain: flush the trailing partial line the whole-lines-only tail held back.
+				$chunk = pfb_log_tail_chunk($logtarget, $off, TRUE);
+				if ($chunk['data'] !== '') {
+					print $chunk['data'];
+				}
+				$retval = is_file($rcfile) ? (int) trim((string) @file_get_contents($rcfile)) : 0;
+				@unlink($pidfile);
+				@unlink($rcfile);
+			}
+		}
 
 		if ($retval === 124) {
 			pfb_logger("[ pfB Hook ] {$when} {$label} TIMED OUT after {$timeout}s (killed); continuing\n", 2);
