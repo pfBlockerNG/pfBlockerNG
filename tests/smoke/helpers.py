@@ -811,14 +811,22 @@ def php_ini_int(vm: SmokeVM, key: str, *, timeout: float = 30.0) -> int:
 def guest_file_contains(vm: SmokeVM, path: str, needle: str, *, timeout: float = 30.0) -> bool:
     """True iff the guest file at ``path`` contains the fixed string ``needle`` (``grep -F -q``).
 
-    grep exits 0 (match) / 1 (no match, including a not-yet-created log) / >1 (other). Only an
-    ssh transport failure (rc 255) is a real read fault worth raising — mirror PhpErrorLogGuard:
-    a missing file legitimately means "does not contain needle", so 1 and 2 both read as absent.
+    A missing file (e.g. a not-yet-created log) legitimately reads as "does not contain":
+    the existence pre-check maps it to rc 1 before grep runs. Any OTHER failure — an
+    unreadable file (grep rc 2) or an ssh transport fault (rc 255) — raises instead of
+    reading as absent, so a negative assertion (``assert not guest_file_contains(...)``)
+    can never pass vacuously on a file that was never actually read (issue #909).
     """
-    res = vm.ssh("/usr/bin/grep", "-F", "-q", "--", needle, path, timeout=timeout)
-    if res.returncode == 255:
-        raise RuntimeError(f"ssh failed grepping guest {path!r}: {(res.stderr or res.stdout).strip()!r}")
-    return res.returncode == 0
+    probe = f"[ -e {shlex.quote(path)} ] || exit 1; /usr/bin/grep -F -q -- {shlex.quote(needle)} {shlex.quote(path)}"
+    res = vm.ssh(probe, timeout=timeout)
+    if res.returncode == 0:
+        return True
+    if res.returncode == 1:
+        return False
+    raise RuntimeError(
+        f"grep on guest {path!r} failed rc={res.returncode} (0=match/1=absent expected): "
+        f"{(res.stderr or res.stdout).strip()!r}"
+    )
 
 
 _FPM_PROBE_FILE = "/usr/local/www/pfb_smoke_er_probe.php"
