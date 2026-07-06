@@ -248,8 +248,8 @@ class _FakeResponse:
     def __enter__(self) -> "_FakeResponse":
         return self
 
-    def __exit__(self, *exc_info: object) -> bool:
-        return False
+    def __exit__(self, *exc_info: object) -> None:
+        return None
 
 
 class _FailingReadResponse:
@@ -266,8 +266,8 @@ class _FailingReadResponse:
     def __enter__(self) -> "_FailingReadResponse":
         return self
 
-    def __exit__(self, *exc_info: object) -> bool:
-        return False
+    def __exit__(self, *exc_info: object) -> None:
+        return None
 
 
 _ALWAYS_FRESH_LM = formatdate(usegmt=True)  # "now", so never stale regardless of wall-clock date
