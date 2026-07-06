@@ -230,6 +230,38 @@ enum Top1mSource: string implements PfbStoredEnum
 	}
 }
 
+// TOP1M provider descriptor table (ADR-59 P1).
+//
+// Keyed by Top1mSource::value ('tranco'/'cisco'). pfblockerng.php's TOP1M URL
+// selection reads this table instead of a per-provider if/else; a later ADR-59
+// phase generalizes pfblockerng_top1m()'s parser + the download extractor to
+// read the 'parse'/'container'/'auth' fields the same way. This phase carries
+// only the two pre-existing providers, with their CURRENT literal URLs
+// unchanged -- a pure extraction, no behaviour change.
+//
+// @return array<string, array{url: string, container: string, parse: string, auth: string, label: string, licence: string}>
+function pfb_top1m_providers(): array
+{
+	return array(
+		Top1mSource::Tranco->value	=> array(
+			'url'		=> 'https://tranco-list.eu/top-1m.csv.zip',
+			'container'	=> 'zip',
+			'parse'		=> 'rank_domain',
+			'auth'		=> 'none',
+			'label'		=> 'Tranco',
+			'licence'	=> '',
+		),
+		Top1mSource::Cisco->value	=> array(
+			'url'		=> 'https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip',
+			'container'	=> 'zip',
+			'parse'		=> 'rank_domain',
+			'auth'		=> 'none',
+			'label'		=> 'Cisco Umbrella',
+			'licence'	=> '',
+		),
+	);
+}
+
 /** Read a PfbAliasDeltaMode from a raw stored value. */
 function pfb_cfg_alias_delta_mode_read(mixed $stored): PfbAliasDeltaMode
 {
