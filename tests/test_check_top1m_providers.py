@@ -26,6 +26,7 @@ import csv
 import http.client
 import importlib.util
 import io
+import json
 import sys
 import urllib.error
 import zipfile
@@ -239,8 +240,77 @@ def test_extract_providers_reads_the_real_descriptor_file_and_finds_all_five() -
 
 
 # --------------------------------------------------------------------------- #
-# validate_top1m / _scan_csv -- in-memory zips + plain bodies, no network
+# _matching_paren -- string-literal-aware paren counting (issue #908)
 # --------------------------------------------------------------------------- #
+
+# A 'label' with an unbalanced ')' inside the string (one '(', two ')') --
+# the current table is paren-free, but a future provider naming its mirror
+# "Tranco Mirror (EU))" (or any label/licence containing a stray paren) must
+# not confuse the block-boundary scanner.
+#
+# FAIL-BEFORE/PASS-AFTER (#908): pre-fix, the naive char-counting
+# `_matching_paren` treats every '(' / ')' in the raw text as real -- the
+# extra ')' inside this label makes its depth hit 0 one field early, cutting
+# the provider's block off mid-string (before the closing quote). The
+# resulting truncated block has no closing `'` for 'label' to match, so
+# `_LABEL_FIELD_RE` fails to match at all and the provider silently falls
+# back to its URL's netloc ("tranco-list.eu") instead of the real label --
+# confirmed against pre-fix code (`git stash`): the assertion below FAILS,
+# `providers["Tranco Mirror (EU))"]` is absent (KeyError) because the name
+# came out as "tranco-list.eu" instead. Post-fix, the scanner never leaves
+# the quoted span for those parens, so the real closing paren is found and
+# every field (url/container/auth/label) survives intact.
+_PHP_DESCRIPTOR_TABLE_WITH_AN_UNBALANCED_PAREN_IN_A_LABEL = """
+function pfb_top1m_providers(): array
+{
+	return array(
+		Top1mSource::Tranco->value	=> array(
+			'url'		=> 'https://tranco-list.eu/top-1m.csv.zip',
+			'container'	=> 'zip',
+			'auth'		=> 'none',
+			'label'		=> 'Tranco Mirror (EU))',
+			'licence'	=> 'CC0',
+		),
+		Top1mSource::Cisco->value	=> array(
+			'url'		=> 'https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip',
+			'container'	=> 'zip',
+			'auth'		=> 'none',
+			'label'		=> 'Cisco Umbrella',
+			'licence'	=> 'proprietary',
+		),
+	);
+}
+"""
+
+
+def test_extract_providers_handles_an_unbalanced_paren_inside_a_label_string() -> None:
+    providers = {p["name"]: p for p in ctp.extract_providers(_PHP_DESCRIPTOR_TABLE_WITH_AN_UNBALANCED_PAREN_IN_A_LABEL)}
+    assert set(providers) == {"Tranco Mirror (EU))", "Cisco Umbrella"}
+
+    tranco = providers["Tranco Mirror (EU))"]
+    assert tranco["url"] == "https://tranco-list.eu/top-1m.csv.zip"
+    assert tranco["container"] == "zip"
+    assert tranco["auth"] == "none"
+
+    # The block boundary must not have leaked into Cisco's row either.
+    cisco = providers["Cisco Umbrella"]
+    assert cisco["url"] == "https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip"
+
+
+def test_matching_paren_treats_a_backslash_escaped_quote_as_not_ending_the_string() -> None:
+    # FAIL-BEFORE/PASS-AFTER (#908): the literal PHP string is  Rob's)  -- an
+    # escaped quote (\\') followed by a stray, unmatched ')' still inside the
+    # quotes. Pre-fix (no quote-awareness at all), the scanner reads every
+    # character literally: it hits the escaped "'" and treats it as a normal
+    # char (no effect), but then the following genuine ')' balances the
+    # opening '(' and returns index 13 -- the ')' INSIDE the string, not the
+    # array's real closing paren at index 23 (confirmed against pre-fix code
+    # via `git stash`). Post-fix, the scanner recognizes `\'` as an escaped
+    # quote that keeps the string open, so the stray ')' is skipped and the
+    # true closing paren (index 23) is returned.
+    text = r"""array('Rob\'s)', 'more')"""
+    open_idx = text.index("(")
+    assert ctp._matching_paren(text, open_idx) == len(text) - 1 == 23
 
 
 def _zip_of(rows: list[tuple[str, ...]], member: str = "top-1m.csv") -> bytes:
@@ -663,3 +733,41 @@ def test_main_never_prints_the_token_on_an_unhealthy_token_provider_result(monke
     assert code != 0
     out = capsys.readouterr().out
     assert "mock-token-value" not in out
+
+
+# --------------------------------------------------------------------------- #
+# main --extract -- the --min-providers floor (issue #908 defect 2): a
+# partial extractor breakage silently dropping providers must FAIL, not pass
+# a too-small matrix on to the workflow.
+# --------------------------------------------------------------------------- #
+
+
+def test_main_extract_fails_when_discovered_providers_are_below_the_floor(monkeypatch: Any, capsys: Any) -> None:
+    # Before-state below pairs with the at-floor pass test right after it --
+    # together they prove the count, not something else, drives the verdict.
+    monkeypatch.setattr(ctp, "extract_providers", lambda _text: [{"name": "Only One"}])
+    code = ctp.main(["--extract", "--min-providers", "2"])
+    assert code != 0
+    err = capsys.readouterr().err
+    assert "expected >= 2" in err
+    assert "found 1" in err
+
+
+def test_main_extract_passes_when_discovered_providers_meet_the_floor(monkeypatch: Any, capsys: Any) -> None:
+    fake_providers = [{"name": "One"}, {"name": "Two"}]
+    monkeypatch.setattr(ctp, "extract_providers", lambda _text: fake_providers)
+    code = ctp.main(["--extract", "--min-providers", "2"])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert json.loads(out) == fake_providers
+
+
+def test_main_extract_default_min_providers_matches_the_real_descriptor_file() -> None:
+    # Regression guard: the default floor (MIN_PROVIDERS) must equal the
+    # ACTUAL committed provider count, else either a legitimate table would
+    # spuriously fail this gate, or the floor would silently tolerate a
+    # dropped provider. Pairs with
+    # test_extract_providers_reads_the_real_descriptor_file_and_finds_all_five
+    # -- both must move together whenever a provider is added/removed.
+    real_count = len(ctp.extract_providers(ctp.DEFAULT_DESCRIPTOR_FILE.read_text(encoding="utf-8")))
+    assert ctp.MIN_PROVIDERS == real_count

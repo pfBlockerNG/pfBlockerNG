@@ -23,7 +23,10 @@ Two modes:
                        to stdout (name/url/container/auth/secret_env/
                        auth_header/auth_scheme). Feeds the workflow's
                        matrix -- add/remove a descriptor row and this picks
-                       it up with no edit here.
+                       it up with no edit here. Fails (non-zero, no stdout)
+                       if fewer than --min-providers (default: the committed
+                       count) are discovered -- catches a partial extractor
+                       breakage silently dropping providers (#908).
   --check-url <url>   Fetch + validate one URL. Prints an expected-vs-actual
                        report. Exit 0 = healthy (or visibly skipped for a
                        token provider with no configured secret), non-zero
@@ -65,6 +68,13 @@ MAX_AGE_DAYS = 180
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DESCRIPTOR_FILE = REPO_ROOT / "src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
 
+# --extract's floor (#908): the committed provider count in
+# pfb_top1m_providers() (Tranco/Cisco/DomCop/Majestic/Cloudflare). A partial
+# extractor breakage that silently drops a provider must fail loud here
+# rather than pass a too-small matrix on to the workflow. Bump this whenever
+# a row is added to or removed from that descriptor table.
+MIN_PROVIDERS = 5
+
 # Matches "Top1mSource::<Case>->value => array(" -- the start of one provider's
 # descriptor block in pfb_top1m_providers()'s return array. Unique to that
 # table (grepped): every other `->value` use in the file is `$this->value`
@@ -95,15 +105,33 @@ def _strip_php_line_comments(php_text: str) -> str:
 
 
 def _matching_paren(text: str, open_idx: int) -> int:
-    """Index of the ')' that balances the '(' at text[open_idx]."""
+    """Index of the ')' that balances the '(' at text[open_idx].
+
+    String-literal-aware (#908): skips over single- and double-quoted spans
+    (backslash-escaping the quote char) while counting, so a `(`/`)` inside a
+    provider's 'label'/'licence'/'url' string doesn't unbalance the count and
+    truncate or over-extend the parsed block.
+    """
     depth = 0
-    for i in range(open_idx, len(text)):
-        if text[i] == "(":
+    quote: str | None = None
+    i = open_idx
+    while i < len(text):
+        ch = text[i]
+        if quote is not None:
+            if ch == "\\":
+                i += 2  # skip the escaped char -- it can't end the string
+                continue
+            if ch == quote:
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+        elif ch == "(":
             depth += 1
-        elif text[i] == ")":
+        elif ch == ")":
             depth -= 1
             if depth == 0:
                 return i
+        i += 1
     raise ValueError("unbalanced parentheses scanning a provider descriptor block")
 
 
@@ -351,6 +379,13 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--extract", action="store_true", help="print every top1m provider as JSON")
     group.add_argument("--check-url", metavar="URL", help="fetch + validate one provider URL")
     parser.add_argument(
+        "--min-providers",
+        type=int,
+        default=MIN_PROVIDERS,
+        metavar="N",
+        help=f"--extract: fail if fewer than N providers are discovered (default: {MIN_PROVIDERS})",
+    )
+    parser.add_argument(
         "--container", choices=("zip", "plain"), default="zip", help="--check-url's body shape (default: zip)"
     )
     parser.add_argument(
@@ -365,6 +400,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.extract:
         providers = extract_providers(DEFAULT_DESCRIPTOR_FILE.read_text(encoding="utf-8"))
+        if len(providers) < args.min_providers:
+            print(
+                f"expected >= {args.min_providers} providers from {DEFAULT_DESCRIPTOR_FILE}, "
+                f"found {len(providers)} -- extractor may be broken",
+                file=sys.stderr,
+            )
+            return 1
         print(json.dumps(providers))
         return 0
 
