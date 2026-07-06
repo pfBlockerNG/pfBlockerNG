@@ -298,11 +298,6 @@ $pglinks = array('', '/pfblockerng/pfblockerng_general.php', '/pfblockerng/pfblo
 				</tr>
 				<tr>
 					<td><i class="fa-solid fa-globe pull-right"></i></td>
-					<td><a target="_blank" href="https://www.alexa.com/siteinfo/<?=$domain;?>">
-						<?=gettext("Alexa");?></a></td>
-				</tr>
-				<tr>
-					<td><i class="fa-solid fa-globe pull-right"></i></td>
 					<td><a target="_blank" href="https://safeweb.norton.com/report/show?url=<?=$domain;?>">
 						<?=gettext("Norton Safe Web");?></a></td>
 				</tr>

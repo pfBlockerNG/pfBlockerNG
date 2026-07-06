@@ -1059,6 +1059,24 @@ def test_threats_rejects_malformed_lookup(name: str, query: str, message: str, w
     assert not present, f"{name}: reject path unexpectedly rendered lookup chrome {present}"
 
 
+def test_threats_domain_dead_alexa_siteinfo_link_removed(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """The domain threat-lookup page no longer links out to alexa.com/siteinfo (#877).
+
+    Alexa.com's siteinfo service shut down in 2022, so the link 404s. Asserts the
+    page still passes the clean-render oracle (Threat Domain Lookup chrome intact)
+    AND that the dead Alexa link is gone from the body while the sibling domain-intel
+    links (Talos, Norton Safe Web) remain -- proving only the one dead link was cut.
+    """
+    path = f"{THREATS_PAGE}?domain={helpers.unique_domain()}"
+    resp = webui.get(path)
+    result = evaluate_render(path, resp.status_code, resp.text, ("Threat Domain", "Source IP"))
+    assert result.ok, f"threats domain render oracle failed: {result.detail}"
+    body = resp.text
+    assert "alexa.com/siteinfo" not in body, "threats domain page still links to the dead alexa.com/siteinfo service"
+    for needle in ("Talos Threat Intelligence", "Norton Safe Web"):
+        assert needle in body, f"threats domain page lost an unrelated domain-intel link {needle!r}"
+
+
 # ADR-19: the "Software" page + tab are PROVENANCE-GATED — present ONLY on a build installed
 # from one of OUR repos (pkg %R == pfblockerng / pfblockerng-nightly). The ADR-04 UI harness
 # sideloads the branch .pkg with `pkg add -f` (offline), so its %R is empty -> the auto-detect

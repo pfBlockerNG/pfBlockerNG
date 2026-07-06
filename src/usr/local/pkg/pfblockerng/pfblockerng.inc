@@ -2380,8 +2380,8 @@ function pfb_global() {
 
 	$pfb['dnsbl_port']	= $pfb['dnsblconfig']['pfb_dnsport'];									// Lighttpd web server http port setting
 	$pfb['dnsbl_port_ssl']	= $pfb['dnsblconfig']['pfb_dnsport_ssl'];								// Lighttpd web server https port setting
-	$pfb['dnsbl_alexa']	= $pfb['dnsblconfig']['alexa_enable'];							// TOP1M whitelist
-	$pfb['dnsbl_alexatype']	= PfbConfig::read('alexa_type');							// TOP1M type (Tranco or Cisco; legacy 'alexa' coalesces to 'tranco', #877) (default 'tranco')
+	$pfb['dnsbl_top1m']	= $pfb['dnsblconfig']['alexa_enable'];							// TOP1M whitelist
+	$pfb['dnsbl_top1m_type']	= PfbConfig::read('alexa_type');						// TOP1M type (Tranco or Cisco; legacy 'alexa' coalesces to 'tranco', #877) (default 'tranco')
 	$pfb['dnsbl_res_cache']	= $pfb['dnsblconfig']['pfb_cache'];							// DNSBL Option to backup/restore Resolver cache
 	$pfb['dnsbl_global_log']= PfbConfig::read('global_log');							// Global Logging/Blocking mode (default '')
 	// ADR-22: lenient feed parsing. 'on' = permissive scheme strip (today); anything else =
@@ -6965,14 +6965,16 @@ function pfb_unbound_python_sources($feeds) {
 	// Synthetic whole-TLD blacklist feed (DNSBL_TLD): the Python build emits these
 	// as whole-TLD ZONE entries from config.tld_blacklist, so no raw file is needed.
 
-	// TOP1M (Alexa/Tranco) popularity whitelist -> query-time whiteDB only when on.
-	$top1m_enabled	= ($pfb['dnsbl_alexa'] == 'on' &&
+	// TOP1M (Tranco/Cisco) popularity whitelist -> query-time whiteDB only when on.
+	// ponytail: pfbalexawhitelist.txt keeps its on-disk name -- renaming a generated
+	// artifact needs old-file cleanup for zero user benefit (#877 triage decision).
+	$top1m_enabled	= ($pfb['dnsbl_top1m'] == 'on' &&
 			   file_exists("{$pfb['dbdir']}/pfbalexawhitelist.txt"));
 	$top1m_list	= array();
 	if ($top1m_enabled) {
-		$alexa = @file("{$pfb['dbdir']}/pfbalexawhitelist.txt", FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-		if (is_array($alexa)) {
-			$top1m_list = $alexa;
+		$top1m_lines = @file("{$pfb['dbdir']}/pfbalexawhitelist.txt", FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+		if (is_array($top1m_lines)) {
+			$top1m_list = $top1m_lines;
 		}
 	}
 
@@ -8186,13 +8188,13 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython) {
 function pfblockerng_top1m() {
 	global $pfb;
 
-	if (empty($pfb['dnsbl_alexa_inc'])) {
+	if (empty($pfb['dnsbl_top1m_inc'])) {
 		pfb_logger("\n  TOP1M: No TLD Inclusions found.\n", 1);
 		return;
 	}
 
 	// Array of TLDs to include in Whitelist
-	$pfb_include = explode(',', $pfb['dnsbl_alexa_inc']);
+	$pfb_include = explode(',', $pfb['dnsbl_top1m_inc']);
 	if (!empty($pfb_include)) {
 		$pfb_include = array_flip($pfb_include);
 	}
@@ -8228,12 +8230,12 @@ function pfblockerng_top1m() {
 				@fwrite($pfb_output, ".{$csvline[1]},,\n,{$csvline[1]},,\n,www.{$csvline[1]},,\n");
 			}
 
-			if ($x >= $pfb['dnsbl_alexa_cnt']) {
+			if ($x >= $pfb['dnsbl_top1m_cnt']) {
 				break;
 			}
 			$linecnt++;
 		}
-		pfb_logger("] [ Parsed {$linecnt} lines | Found {$x} of {$pfb['dnsbl_alexa_cnt']} ]...", 1);
+		pfb_logger("] [ Parsed {$linecnt} lines | Found {$x} of {$pfb['dnsbl_top1m_cnt']} ]...", 1);
 	}
 	else {
 		$log = "\nTOP1M conversion Failed. File: top-1m.csv, not found...";
@@ -14815,19 +14817,19 @@ function sync_package_pfblockerng($cron='') {
 	// DNSBL settings
 	$pfb['dnsbl_ip']	= $pfb['dnsblconfig']['action']		?:  'Disabled';		// Enable/Disable IP blocking from DNSBL lists
 	$pfb['dnsbl_rule']	= $pfb['dnsblconfig']['pfb_dnsbl_rule'] ?: 'Disabled';		// Auto create a Floating Pass Rule for other Lan subnets
-	$pfb['dnsbl_alexa_cnt']	= $pfb['dnsblconfig']['alexa_count']	?: '1000';		// TOP1M whitelist domain setting
+	$pfb['dnsbl_top1m_cnt']	= $pfb['dnsblconfig']['alexa_count']	?: '1000';		// TOP1M whitelist domain setting
 	// DNSBL Python decision-cache cap (LRU); 0 = unlimited. 0 is meaningful so avoid the
 	// ?: idiom (0 is falsy), and reject non-numeric input -- else the intval() at the ini
 	// emit would coerce a malformed value to 0 = silently unlimited. Clamp to the WebUI range.
 	$pfb_dcm_raw = (string) ($pfb['dnsblconfig']['pfb_py_cache_max'] ?? '');
 	$pfb['dnsbl_decisiondb_max'] = ctype_digit($pfb_dcm_raw) ? (string) min(5000000, (int) $pfb_dcm_raw) : '10000';
-	$pfb['dnsbl_alexa_inc']	= $pfb['dnsblconfig']['alexa_inclusion']?: '';			// TOP1M TLDs inclusions for whitelisting
+	$pfb['dnsbl_top1m_inc']	= $pfb['dnsblconfig']['alexa_inclusion']?: '';			// TOP1M TLDs inclusions for whitelisting
 	$pfb['dnsbl_tld']	= $pfb['dnsblconfig']['pfb_tld'];				// Enable TLD Function
 	$pfb['dnsbl_control']	= $pfb['dnsblconfig']['pfb_control']	?: '';			// Python Control integration
 	$pfb['dnsbl_control_legacy']	= $pfb['dnsblconfig']['pfb_control_legacy']	?? '';	// PFBL-03: deprecated legacy DNS-TXT control transport
 
 	// Validate pfB Script variable
-	$pfb['dnsbl_alexa_inc'] = pfb_filter($pfb['dnsbl_alexa_inc'], PFB_FILTER_CSV, 'Validate pfB Script variable');
+	$pfb['dnsbl_top1m_inc'] = pfb_filter($pfb['dnsbl_top1m_inc'], PFB_FILTER_CSV, 'Validate pfB Script variable');
 
 	// Reputation config variables
 	$pfb['config_rep'] = config_get_path('installedpackages/pfblockerngreputation/config/0', []);
@@ -15647,7 +15649,7 @@ function sync_package_pfblockerng($cron='') {
 
 
 			// Call TOP1M whitelist process
-			if ($pfb['dnsbl_alexa'] == 'on') {
+			if ($pfb['dnsbl_top1m'] == 'on') {
 				pfb_logger("\n Loading TOP1M Whitelist...", 1);
 
 				// Check if TOP1M database exists
