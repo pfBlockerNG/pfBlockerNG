@@ -280,8 +280,10 @@ def test_fresh_xn_dash_dash_stays_itld_with_curated_label_despite_country_code_t
 
 def test_fresh_non_xn_bucket_move_preserves_curated_label_across_buckets() -> None:
     # Given: 'com' is curated in the existing gTLD array with a feed-star label
-    # ('COM*'), but tlds.json types it as a ccTLD ('country-code') -- a genuine,
-    # non-xn-- bucket move (unlike xn--, classify() honors the type map here).
+    # ('COM*'), but tlds.json types it as a ccTLD ('country-code') -- a
+    # hypothetical bucket move (no real gTLD is typed country-code by IANA;
+    # this exercises existing_by_tld's cross-bucket generality, defence in
+    # depth for the unreachable-in-production branch classify() keeps).
     existing = utl.parse_existing_arrays(_FAKE_EXISTING_PHP)
     # When: the fresh arrays are built with that type map.
     fresh = utl.build_fresh_arrays(_FAKE_IANA_TLDS, existing, iana_types={"com": "country-code"})
