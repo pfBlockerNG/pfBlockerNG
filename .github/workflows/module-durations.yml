@@ -92,27 +92,17 @@ jobs:
       - name: Rebuild the module-durations table
         run: |
           set -eu
-          # Feed every CE shard's captured pytest --durations log. module-durations.sh
-          # sums per module BASENAME across all inputs, so input order is irrelevant and
-          # the union of the shards covers the whole suite (issue #816). Only ONE CE
-          # version's shards may be aggregated — a second CE leg would double-count the
-          # suite exactly like the Plus legs excluded by the download pattern above.
-          # PREFIX must stay in sync with the download `pattern:` above — the with:
-          # block cannot share a shell variable.
-          PREFIX='smoke-diagnostics-pfsense-ce-'
-          LOGS=$(find smoke-artifacts -path "*/${PREFIX}*" -name pytest-durations.log | LC_ALL=C sort)
-          if [ -z "$LOGS" ]; then
-            echo "::error::no pytest-durations.log found in the smoke artifacts — nothing to aggregate."
-            exit 1
-          fi
-          VERSIONS=$(printf '%s\n' $LOGS | sed -n "s|.*/${PREFIX}\(.*\)-s[0-9][0-9]*/.*|\1|p" | LC_ALL=C sort -u)
-          # Fail closed on an EMPTY extraction too: zero matched versions means the
-          # artifact naming drifted from PREFIX — the guard must not read a blank
-          # line as "one version" (wc -l would report 1).
-          if [ -z "$VERSIONS" ] || [ "$(printf '%s\n' "$VERSIONS" | wc -l)" -ne 1 ]; then
-            echo "::error::CE diagnostics must resolve to exactly one pfSense version, got: '$(printf '%s' "$VERSIONS" | tr '\n' ' ')' — empty means artifact-name drift; multiple would double-count the suite."
-            exit 1
-          fi
+          # Feed ONE CE version's shard logs. module-durations.sh sums per module
+          # BASENAME across all inputs, so input order is irrelevant and the union
+          # of the shards covers the whole suite (issue #816) — but exactly one
+          # full-suite leg may be aggregated (a second leg double-counts). The
+          # selection lives in scripts/module-durations-logs.sh (shellspec-pinned,
+          # issue #901 / #910 review): it excludes Plus, picks the numeric-minimum
+          # CE version when the supported window holds two GA CE versions (the
+          # drop_ce steady state — never a nightly hard-fail), and fails loudly on
+          # zero logs or artifact-name drift. Its PREFIX must stay in sync with
+          # the download `pattern:` above.
+          LOGS=$(sh scripts/module-durations-logs.sh smoke-artifacts)
           echo "Aggregating these shard logs:"
           printf '  %s\n' $LOGS
           # shellcheck disable=SC2086  # deliberate word-split: one arg per log path (all ASCII)
