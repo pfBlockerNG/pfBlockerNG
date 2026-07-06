@@ -1,15 +1,20 @@
 name: Top1M Provider Health Check
 
-# Weekly health-check of every external Top1M provider URL we ship
-# (issue #884). We do NOT vendor these lists (they're ~1M rows, runtime-downloaded
-# per box) -- this is validate-only, the guard that would have caught the
-# Alexa Top1M source rotting silently (its hardcoded URL died years ago;
-# cleaned up in #877).
+# Weekly health-check of every external Top1M provider we ship (issue #884,
+# generalized to a provider framework by ADR-59). We do NOT vendor these
+# lists (they're up to ~10M rows, runtime-downloaded per box) -- this is
+# validate-only, the guard that would have caught the Alexa Top1M source
+# rotting silently (its hardcoded URL died years ago; cleaned up in #877).
 #
-# scripts/misc/check_top1m_providers.py --extract reads the provider URLs
-# straight out of pfblockerng.php's top1m extras slot, so adding/removing a
-# provider needs no edit here. --check-url fetches + validates one URL (a
-# real zip, plausible row count, not stale) and exits nonzero if unhealthy.
+# scripts/misc/check_top1m_providers.py --extract reads every provider
+# straight out of pfb_top1m_providers()'s descriptor table
+# (pfblockerng_extra.inc), so adding/removing a provider row needs no edit
+# here. --check-url fetches + validates one URL (a real list, plausible row
+# count, not stale) and exits nonzero if unhealthy. A TOKEN provider (its
+# descriptor's 'auth' needs a header, e.g. Cloudflare Radar) is validated only
+# when its matching repo secret is configured (env CLOUDFLARE_RADAR_TOKEN
+# below) -- absent secret ⇒ the leg visibly SKIPs and exits 0, it never fails
+# the run merely for lacking a secret (ADR-59 S2.7).
 
 on:
   # Weekly, Monday 07:00 UTC (an hour after tld-refresh, different concern).
@@ -22,16 +27,16 @@ permissions:
   contents: read
 
 jobs:
-  # ── 1. Discover every provider URL from pfblockerng.php ──────────────────
+  # ── 1. Discover every provider from pfb_top1m_providers() ────────────────
   discover:
-    name: Discover Top1M provider URLs
+    name: Discover Top1M providers
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.extract.outputs.matrix }}
     steps:
       - uses: actions/checkout@v6
 
-      - name: Extract provider URLs
+      - name: Extract providers
         id: extract
         run: |
           set -eu
@@ -60,12 +65,26 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Check provider URL
+      - name: Check provider
         env:
           URL: ${{ matrix.url }}
+          CONTAINER: ${{ matrix.container }}
+          SECRET_ENV: ${{ matrix.secret_env }}
+          AUTH_HEADER: ${{ matrix.auth_header }}
+          AUTH_SCHEME: ${{ matrix.auth_scheme }}
+          # The one token secret currently wired (Cloudflare Radar). A future
+          # token provider adds its own "NAME: ${{ secrets.NAME }}" line here,
+          # matching the env-var name check_top1m_providers.py derives from
+          # its descriptor's 'label' (see _secret_env_from_label) -- no other
+          # workflow change needed.
+          CLOUDFLARE_RADAR_TOKEN: ${{ secrets.CLOUDFLARE_RADAR_TOKEN }}
         run: |
           set -eu
-          python3 scripts/misc/check_top1m_providers.py --check-url "$URL"
+          args=(--check-url "$URL" --container "$CONTAINER")
+          if [ -n "$SECRET_ENV" ]; then
+            args+=(--secret-env "$SECRET_ENV" --auth-header "$AUTH_HEADER" --auth-scheme "$AUTH_SCHEME")
+          fi
+          python3 scripts/misc/check_top1m_providers.py "${args[@]}"
 
   # ── 3. On any failed leg, open/update ONE deduped tracking issue ──────────
   alert:
@@ -80,6 +99,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      # See the "check" job -- same secret, same derivation rule.
+      CLOUDFLARE_RADAR_TOKEN: ${{ secrets.CLOUDFLARE_RADAR_TOKEN }}
     steps:
       - uses: actions/checkout@v6
 
@@ -105,10 +126,23 @@ jobs:
           while [ "$i" -lt "$COUNT" ]; do
             NAME=$(jq -r ".[$i].name" /tmp/providers.json)
             URL=$(jq -r ".[$i].url" /tmp/providers.json)
+            CONTAINER=$(jq -r ".[$i].container" /tmp/providers.json)
+            SECRET_ENV=$(jq -r ".[$i].secret_env" /tmp/providers.json)
+            AUTH_HEADER=$(jq -r ".[$i].auth_header" /tmp/providers.json)
+            AUTH_SCHEME=$(jq -r ".[$i].auth_scheme" /tmp/providers.json)
             i=$((i + 1))
 
-            if python3 scripts/misc/check_top1m_providers.py --check-url "$URL" > /tmp/check_out.txt 2>&1; then
-              printf -- "- OK **%s** (\`%s\`)\n" "$NAME" "$URL" >> "$BODY_FILE"
+            args=(--check-url "$URL" --container "$CONTAINER")
+            if [ -n "$SECRET_ENV" ]; then
+              args+=(--secret-env "$SECRET_ENV" --auth-header "$AUTH_HEADER" --auth-scheme "$AUTH_SCHEME")
+            fi
+
+            if python3 scripts/misc/check_top1m_providers.py "${args[@]}" > /tmp/check_out.txt 2>&1; then
+              if grep -q '^SKIP ' /tmp/check_out.txt; then
+                printf -- "- SKIPPED **%s** (\`%s\`) -- %s\n" "$NAME" "$URL" "$(cat /tmp/check_out.txt)" >> "$BODY_FILE"
+              else
+                printf -- "- OK **%s** (\`%s\`)\n" "$NAME" "$URL" >> "$BODY_FILE"
+              fi
             else
               {
                 printf -- "- FAILING **%s** (\`%s\`)\n\n\`\`\`text\n" "$NAME" "$URL"
