@@ -1643,18 +1643,18 @@ function pfb_alias_rename_followup(string $old_name, string $new_name): bool
 // Issue #356 — per-field alias-type validation helper.
 //
 // The four Advanced Inbound/Outbound alias fields accept different alias
-// types: port fields (aliasports_*) require a pfSense 'port' alias; address
-// fields (aliasaddr_*) require an address-bearing alias (host/network/url/urltable).
-// This helper encodes that rule in one testable place so the category-edit
-// validation loop and any future caller stay in sync.
+// types: port fields (aliasports_*) require a port-bearing alias
+// (port/url_ports/urltable_ports); address fields (aliasaddr_*) require an
+// address-bearing alias (host/network/url/urltable). This helper encodes that rule in
+// one testable place so the category-edit validation loop and any future caller stay in sync.
 // ---------------------------------------------------------------------------
 
 /**
  * pfb_alias_field_type_ok — check whether an alias type is valid for a
  * given Advanced Inbound/Outbound field.
  *
- * Port fields (aliasports_*) require a 'port' alias; address fields
- * (aliasaddr_*) require an address-bearing alias (host/network/url/urltable).
+ * Port fields (aliasports_*) require a port-bearing alias (port/url_ports/urltable_ports);
+ * address fields (aliasaddr_*) require an address-bearing alias (host/network/url/urltable).
  * Unknown field names return FALSE (fail closed).
  *
  * @param  string $field       One of aliasports_in, aliasports_out,
@@ -1665,7 +1665,9 @@ function pfb_alias_rename_followup(string $old_name, string $new_name): bool
 function pfb_alias_field_type_ok(string $field, string $alias_type): bool
 {
 	if ($field === 'aliasports_in' || $field === 'aliasports_out') {
-		return $alias_type === 'port';
+		// Any port-bearing alias type (port/url_ports/urltable_ports), matching the
+		// broadened Custom Port autocomplete (pfb_port_alias_types()).
+		return in_array($alias_type, pfb_port_alias_types(), TRUE);
 	}
 	if ($field === 'aliasaddr_in' || $field === 'aliasaddr_out') {
 		// Any address-bearing alias type (host/network/url/urltable), matching the
@@ -1698,8 +1700,8 @@ function pfb_adv_alias_field_errors(array $post): array
 	$adv_alias_fields = [
 		'aliasports_in'  => ['dir' => 'Port In',         'type_label' => 'Port-type'],
 		'aliasports_out' => ['dir' => 'Port Out',        'type_label' => 'Port-type'],
-		'aliasaddr_in'   => ['dir' => 'Destination In',  'type_label' => 'Network, Host or URL-type'],
-		'aliasaddr_out'  => ['dir' => 'Source Out',      'type_label' => 'Network, Host or URL-type'],
+		'aliasaddr_in'   => ['dir' => 'Destination In',  'type_label' => 'Host, Network, URL or URL-Table-type'],
+		'aliasaddr_out'  => ['dir' => 'Source Out',      'type_label' => 'Host, Network, URL or URL-Table-type'],
 	];
 
 	$errors = [];

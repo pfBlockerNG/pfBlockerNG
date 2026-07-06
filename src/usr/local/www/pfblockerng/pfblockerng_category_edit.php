@@ -1519,8 +1519,8 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 			'text',
 			$pconfig['aliasaddr_' . $advmode]
 		))->sethelp('<a target="_blank" href="/firewall_aliases.php?tab=ip">Click Here to add/edit Aliases</a>'
-			. 'Do not manually enter Addresses(es).<br />Do not use \'pfB_\' in the address-type (Host/Network) Alias name.<br />'
-			. "Select 'invert' to invert the sense of the match. ie - Not (!) {$custom_location} Address(es)<br />Must be an address-type (Host, Network or URL) alias.")
+			. 'Do not manually enter Addresses(es).<br />Do not use \'pfB_\' in the address-type (Host/Network/URL/URL Table) Alias name.<br />'
+			. "Select 'invert' to invert the sense of the match. ie - Not (!) {$custom_location} Address(es)<br />Must be an address-type (Host, Network, URL or URL Table) alias.")
 		  ->setWidth(8);
 		$section->add($group);
 

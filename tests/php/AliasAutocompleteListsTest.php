@@ -38,7 +38,10 @@ final class AliasAutocompleteListsTest extends TestCase
 			['name' => 'UT',          'type' => 'urltable'],
 			['name' => 'P1',          'type' => 'port'],
 			['name' => 'P2',          'type' => 'port'],
+			['name' => 'UP',          'type' => 'url_ports'],
+			['name' => 'UTP',         'type' => 'urltable_ports'],
 			['name' => 'pfB_Managed', 'type' => 'urltable'],
+			['name' => 'pfB_Ports',   'type' => 'port'],
 			['name' => '',            'type' => 'network'],
 		];
 
@@ -58,14 +61,16 @@ final class AliasAutocompleteListsTest extends TestCase
 		$this->assertArrayHasKey('U', $r['networks']);
 		$this->assertArrayHasKey('UT', $r['networks']);
 
-		// Managed (pfB_*), port, and empty-name entries are excluded from the address map
+		// Managed (pfB_*), port-bearing, and empty-name entries are excluded from the address map
 		$this->assertArrayNotHasKey('pfB_Managed', $r['networks']);
 		$this->assertArrayNotHasKey('P1', $r['networks']);
 		$this->assertArrayNotHasKey('P2', $r['networks']);
+		$this->assertArrayNotHasKey('UP', $r['networks']);   // url_ports is a port type, not an address
+		$this->assertArrayNotHasKey('UTP', $r['networks']);  // urltable_ports is a port type, not an address
 		$this->assertArrayNotHasKey('', $r['networks']);
 	}
 
-	public function testPortListIsNameKeyedAndExcludesAddressesAndManagedAliases(): void
+	public function testPortListIncludesEveryPortBearingTypeNameKeyedExcludingManagedAndAddresses(): void
 	{
 		// Given the same mixed input
 		$aliases = [
@@ -75,16 +80,24 @@ final class AliasAutocompleteListsTest extends TestCase
 			['name' => 'UT',          'type' => 'urltable'],
 			['name' => 'P1',          'type' => 'port'],
 			['name' => 'P2',          'type' => 'port'],
+			['name' => 'UP',          'type' => 'url_ports'],
+			['name' => 'UTP',         'type' => 'urltable_ports'],
 			['name' => 'pfB_Managed', 'type' => 'urltable'],
+			['name' => 'pfB_Ports',   'type' => 'port'],
 			['name' => '',            'type' => 'network'],
 		];
 
 		// When built
 		$r = pfb_alias_autocomplete_lists($aliases);
 
-		// Then the port map is exactly the name-keyed port aliases
-		$this->assertSame(['P1' => 'P1', 'P2' => 'P2'], $r['ports']);
-		$this->assertArrayNotHasKey('H', $r['ports']);
+		// Then the port map is exactly the name-keyed port-bearing aliases (port +
+		// url_ports + urltable_ports), NAME-KEYED so array_key_exists() save-validation works.
+		$this->assertSame(['P1' => 'P1', 'P2' => 'P2', 'UP' => 'UP', 'UTP' => 'UTP'], $r['ports']);
+		// A pfB_-managed PORT alias (e.g. the package's own pfB_DNSBL_Ports) must be excluded --
+		// the field help forbids it. This is the real pfB_-skip assertion: 'pfB_Ports' is a
+		// port-type alias, so it is dropped by the pfB_ prefix check, not merely by its type.
+		$this->assertArrayNotHasKey('pfB_Ports', $r['ports']);
 		$this->assertArrayNotHasKey('pfB_Managed', $r['ports']);
+		$this->assertArrayNotHasKey('H', $r['ports']);
 	}
 }
