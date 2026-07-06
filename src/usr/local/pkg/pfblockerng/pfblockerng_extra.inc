@@ -256,6 +256,35 @@ function pfb_cfg_idn_mode_write(PfbIdnMode|string $mode): string
 	return ($mode instanceof PfbIdnMode ? $mode : PfbIdnMode::fromStored($mode))->toStored();
 }
 
+/**
+ * Read the TOP1M source selector, coalescing the legacy 'alexa' token (dead
+ * service, #872) to 'tranco'. 'tranco'/'cisco' pass through unchanged.
+ *
+ * Read-boundary only — the stored value is untouched until the user re-saves
+ * (the DNSBL page now only POSTs 'tranco'/'cisco', already canonical), so a
+ * downgrade to an older release still reads the original stored 'alexa'.
+ *
+ * ponytail: a plain-string coalesce, not a PfbStoredEnum — the field has 2
+ * live values and every consumer (pfblockerng.inc, pfblockerng.php) compares
+ * it as a string; an enum would ripple with zero behavioural benefit.
+ */
+function pfb_cfg_top1m_source_read(mixed $stored): string
+{
+	$raw = is_string($stored) ? $stored : '';
+	return in_array($raw, ['tranco', 'cisco'], TRUE) ? $raw : 'tranco';
+}
+
+/**
+ * Write the TOP1M source selector back to its stored string. Identity — the
+ * runtime value is already the canonical stored token ('tranco' | 'cisco');
+ * this exists only to satisfy the registry's paired-adapter contract (every
+ * read_adapter needs a matching write_adapter).
+ */
+function pfb_cfg_top1m_source_write(string $value): string
+{
+	return $value;
+}
+
 // ---------------------------------------------------------------------------
 // ADR-29 Phase 1 — PfbConfig gateway + declarative field registry.
 //
@@ -694,12 +723,14 @@ function pfb_cfg_registry(): array
 			'since'         => '1.0.0',
 		],
 
-		// TOP1M type selector ('tranco'|'alexa'|'cisco'). Default 'tranco'.
+		// TOP1M type selector: 'tranco' | 'cisco'. Legacy 'alexa' (dead service,
+		// #872) coalesces to 'tranco' at the read boundary via
+		// pfb_cfg_top1m_source_read(). Default 'tranco'.
 		'alexa_type' => [
 			'section'       => $dnsbl,
 			'default'       => 'tranco',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
+			'read_adapter'  => 'pfb_cfg_top1m_source_read',
+			'write_adapter' => 'pfb_cfg_top1m_source_write',
 			'since'         => '2.0.0',
 		],
 
@@ -1469,6 +1500,10 @@ function pfb_run_migrations(): void
  * idn vocabulary ('on'|'confusable'|'off'); the dropped 4.0.0-alpha 'all' token is
  * read as Off and never written.
  *
+ * The top1m_source adapter (pfb_cfg_top1m_source_read, issue #877) is wired for
+ * alexa_type. Legacy 'alexa' (dead service, #872) coalesces to 'tranco' on read
+ * and is never re-emitted by a write; the write vocabulary is only 'tranco'|'cisco'.
+ *
  * @return array<string,list<string>>
  */
 function pfb_cfg_field_vocab(): array
@@ -1495,6 +1530,12 @@ function pfb_cfg_field_vocab(): array
 		// An older release (pre-4.0.0) has no knowledge of these fields; they simply
 		// do not exist in config.xml, and the feature falls back to full replace.
 		'alias_delta_mode' => ['auto', 'delta', 'replace'],
+
+		// TOP1M source selector (alexa_type, issue #877): the tokens a write can
+		// emit. 'tranco' (default) | 'cisco'. The legacy 'alexa' token (dead
+		// service, #872) is a READ-ONLY legacy value — pfb_cfg_top1m_source_read()
+		// coalesces it to 'tranco' and it is never re-emitted by a write.
+		'top1m_source' => ['tranco', 'cisco'],
 
 		// Plain string (null/null adapters): identity. Backward-safe by construction.
 		// The 'plain' vocabulary contains the sentinel empty string; individual
@@ -1527,6 +1568,9 @@ function pfb_cfg_field_adapter_type(array $entry): string
 	}
 	if ($read === 'pfb_cfg_alias_delta_mode_read') {
 		return 'alias_delta_mode';
+	}
+	if ($read === 'pfb_cfg_top1m_source_read') {
+		return 'top1m_source';
 	}
 	// All other adapters are toggle (pfb_cfg_toggle_read).
 	return 'toggle';

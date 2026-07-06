@@ -110,7 +110,9 @@ $pconfig['agateway_out']	= $pfb['dconfig']['agateway_out']			?: 'default';
 $pconfig['suppression']		= base64_decode($pfb['dconfig']['suppression'])		?: '';
 
 $pconfig['alexa_enable']	= $pfb['dconfig']['alexa_enable']			?: '';
-$pconfig['alexa_type']		= $pfb['dconfig']['alexa_type']				?: 'tranco';
+// Routed via the gateway (not the section array) so a stored legacy 'alexa'
+// (dead TOP1M source, #872/#877) coalesces to 'tranco' for the form select.
+$pconfig['alexa_type']		= PfbConfig::read('alexa_type');
 $pconfig['alexa_count']		= $pfb['dconfig']['alexa_count']			?: '1000';
 // 0 (unlimited) is meaningful, so don't use the ?: idiom (0 is falsy -> would reset to default).
 $pconfig['pfb_py_cache_max']	= (isset($pfb['dconfig']['pfb_py_cache_max']) && $pfb['dconfig']['pfb_py_cache_max'] !== '') ? $pfb['dconfig']['pfb_py_cache_max'] : '10000';
@@ -190,7 +192,7 @@ if (is_dir("{$indexdir}")) {
 }
 $options_dnsbl_webpage_cnt = count($options_dnsbl_webpage) ?: '1';
 
-$options_alexa_type		= [ 'tranco' => 'Tranco TOP1M', 'cisco' => 'Cisco Umbrella TOP1M', 'alexa' => 'Alexa TOP1M' ];
+$options_alexa_type		= [ 'tranco' => 'Tranco TOP1M', 'cisco' => 'Cisco Umbrella TOP1M' ];
 
 $options_alexa_count		= [	'500' => 'Top 500', '1000' => 'Top 1k', '2000' => 'Top 2k', '5000' => 'Top 5k', '10000' => 'Top 10k',
 					'25000' => 'Top 25k', '50000' => 'Top 50k', '75000' => 'Top 75k', '100000' => 'Top 100k', '250000' => 'Top 250k',
@@ -3213,7 +3215,6 @@ $top1m_text = 'The TOP1M feed can be used to whitelist the most popular Domain n
 		<ul>
 			<li><a target="_blank" href="https://tranco-list.eu/">Tranco TOP1M</a></li>
 			<li><a target="_blank" href="https://s3-us-west-1.amazonaws.com/umbrella-static/index.html">Cisco Umbrella TOP1M</a></li>
-			<li><a target="_blank" href="https://aws.amazon.com/alexa-top-sites/">Alexa TOP1M (out-of-date)</a></li>
 		</ul>
 		To use this feature, select the number of \'Top Domains\' to whitelist. You can also \'include\' which TLDs to whitelist.
 

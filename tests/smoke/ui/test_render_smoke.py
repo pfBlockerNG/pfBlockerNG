@@ -652,6 +652,27 @@ def test_dnsbl_control_fields_render(webui: WebUI, php_error_log_guard: PhpError
         assert needle in body, f"DNSBL page is missing the control marker {needle!r}"
 
 
+def test_dnsbl_top1m_source_options_exclude_alexa(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """The TOP1M 'Type' select renders only the two live sources (Tranco, Cisco
+    Umbrella) — the dead Alexa TOP1M option (#872) is dropped from the page
+    (#877), so a regression that resurrects the option is caught at the render
+    tier.
+
+    Asserts the page passes the clean-render oracle AND that both live option
+    labels are present while the removed 'Alexa TOP1M' label and its
+    ``value="alexa"`` option are absent from the body.
+    """
+    path = "/pfblockerng/pfblockerng_dnsbl.php"
+    resp = webui.get(path)
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Configuration",))
+    assert result.ok, f"DNSBL render oracle failed: {result.detail}"
+    body = resp.text
+    for needle in ("Tranco TOP1M", "Cisco Umbrella TOP1M"):
+        assert needle in body, f"DNSBL page is missing the TOP1M source option {needle!r}"
+    for absent in ("Alexa TOP1M", 'value="alexa"'):
+        assert absent not in body, f"DNSBL page still renders the dropped Alexa TOP1M option ({absent!r})"
+
+
 def test_dnsbl_lenient_parsing_field_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
     """The ADR-22 'Lenient Feed Parsing' toggle renders cleanly on the DNSBL page — so a
     regression that drops or breaks the field is caught at the render tier (not only by the
