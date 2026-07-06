@@ -42,9 +42,16 @@ final class LiveLogPkgMirrorTest extends TestCase
 
 	private function capture(string $msg, int $logtype): string
 	{
+		// pfb_logger()'s mirror now drains the output buffer (pfb_flush_output -> ob_flush) so an
+		// upgrade page streams live instead of truncating. Capture with TWO nested buffers: the
+		// mirror's ob_flush pushes the inner into the outer, which we then read -- otherwise the
+		// drained bytes would escape to the real STDOUT and ob_get_clean() would see nothing.
+		ob_start();
 		ob_start();
 		pfb_logger($msg, $logtype);
-		return (string) ob_get_clean();
+		$inner = (string) ob_get_clean();
+		$outer = (string) ob_get_clean();
+		return $outer . $inner;
 	}
 
 	public function testMainLogMirrorsToStdoutDuringAPackageLifecycleCallback(): void

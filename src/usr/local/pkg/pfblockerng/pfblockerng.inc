@@ -3121,6 +3121,12 @@ function pfb_logger($log, $logtype) {
 	// detached rc.d daemons are untouched -- this is visibility only, not the process-safety.
 	if (($logtype == 1 || $logtype == 2) && !empty($pfb['hook_lifecycle'])) {
 		print "{$log}";
+		// The pkg Software page (pkg_mgr_install.php) runs the resync under an
+		// active PHP output buffer, which holds each print until the buffer is
+		// flushed -- so its trailing content is delivered late or lost and the
+		// page shows progress cut off "mid way". Drain the ob buffer (if any)
+		// and the SAPI so every line reaches the tailed log immediately.
+		pfb_flush_output();
 	}
 }
 
@@ -4041,6 +4047,27 @@ function pfb_pkg_op_tears_down(string $op): bool {
 
 
 /*
+ * Push already-printed mirror bytes all the way to the client NOW (shared by the two
+ * lifecycle mirrors: pfb_logger()'s #690 progress mirror and pfb_mirror_hook_output()'s
+ * #693 hook-body mirror).
+ *
+ * The pkg Software page (pkg_mgr_install.php) runs the pfBlockerNG resync under an active
+ * PHP output buffer. A plain print() then only reaches the ob buffer, which is flushed in
+ * chunks / at request end -- so on a long upgrade the page shows the progress + hook output
+ * cut off "mid way" until the very end (or drops the tail if the poll stops first). Draining
+ * the ob buffer (when one is active) and then the SAPI makes each mirrored line stream
+ * immediately. No-op when no buffer is active (e.g. a CLI run, stdout already unbuffered),
+ * so it is safe on every path.
+ */
+function pfb_flush_output(): void {
+	if (ob_get_level() > 0) {
+		@ob_flush();
+	}
+	@flush();
+}
+
+
+/*
  * #693 (follow-up to #690): mirror a completed hook's captured stdout/stderr to the
  * package-manager output during a pkg install/upgrade/uninstall.
  *
@@ -4071,6 +4098,10 @@ function pfb_mirror_hook_output(string $logfile, int $offset): void {
 	$body = @file_get_contents($logfile, FALSE, NULL, $offset, $end - $offset);
 	if (is_string($body) && $body !== '') {
 		print $body;
+		// Same reason as the #690 mirror in pfb_logger(): the pkg Software page
+		// runs this under an active PHP output buffer, so without draining it
+		// the hook body is held back and the page shows it truncated "mid way".
+		pfb_flush_output();
 	}
 }
 

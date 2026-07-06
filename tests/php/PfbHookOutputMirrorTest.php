@@ -50,9 +50,16 @@ final class PfbHookOutputMirrorTest extends TestCase
 
 	private function capture(int $offset): string
 	{
+		// pfb_mirror_hook_output() now drains the output buffer (pfb_flush_output -> ob_flush) so
+		// the upgrade page streams the hook body instead of truncating it. Capture with TWO nested
+		// buffers: the mirror's ob_flush pushes the inner into the outer, which we then read --
+		// otherwise the drained bytes would escape to the real STDOUT and ob_get_clean() see nothing.
+		ob_start();
 		ob_start();
 		pfb_mirror_hook_output($this->logfile, $offset);
-		return (string) ob_get_clean();
+		$inner = (string) ob_get_clean();
+		$outer = (string) ob_get_clean();
+		return $outer . $inner;
 	}
 
 	public function testMirrorsOnlyTheHookBodyDeltaDuringALifecycleCallback(): void
@@ -93,8 +100,12 @@ final class PfbHookOutputMirrorTest extends TestCase
 	{
 		global $pfb;
 		$pfb['hook_lifecycle'] = 'install';
+		// Empty path -> the guard returns before any print/drain; nested capture stays ''.
+		ob_start();
 		ob_start();
 		pfb_mirror_hook_output('', 0);
-		$this->assertSame('', (string) ob_get_clean());
+		$inner = (string) ob_get_clean();
+		$outer = (string) ob_get_clean();
+		$this->assertSame('', $outer . $inner);
 	}
 }
