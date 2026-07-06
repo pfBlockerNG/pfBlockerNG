@@ -1,252 +1,165 @@
-# ADR-58: Unify run output on one stdout→run-log→tail path for every surface
+# ADR-58: Stream a run's progress to STDOUT in a command context (generalise the #690 mirror)
 
-- **Status:** **Proposed (Draft)** (2026-07-06) — authored on `adr/58-unified-run-output-streaming`
-  off `devel`. Not yet phased. Builds on the streaming groundwork already landed by PR #883
-  (`proc_open` live hook streaming) and its live-VM contract test.
+- **Status:** **Implemented (pending smoke test)** (2026-07-06) — authored + implemented on
+  `adr/58-unified-run-output-streaming` off `devel`. **Scope corrected 2026-07-06** after the live-VM
+  smoke gate proved two broader designs unworkable (see §5). The change that landed is modest: the
+  `pfb_logger()` stdout mirror, previously gated on a package lifecycle callback (#690), is generalised
+  to **any command/CLI context** (so a terminal run and the detached Run-Now daemon stream too) and
+  **narrowed away from** web-in-process and nested-dispatch callers. **Hooks are unchanged** — they keep
+  the #883 file-sink + live-tail model, because #662 forbids a hook writing to the run's captured pipe.
 - **Date:** 2026-07-06
-- **Branch:** `adr/58-unified-run-output-streaming` (off **`devel`**; `{slug}` = sanitised ADR-title
-  slug per CLAUDE.md "Branch naming").
-- **Component(s):** the run-output/visibility layer — its **write** side, its **dispatch** side, and
-  its **read** (live-tail) side:
-  - `src/usr/local/pkg/pfblockerng/pfblockerng.inc` — `pfb_logger()` (`:3078`–`:3165`, incl. the
-    #690 stdout-mirror at `:3151`–`:3164`), `pfb_mirror_hook_output()` (`:4100`–`:4115`, #693),
-    `pfb_run_hooks()` (`:4130`–`:4317`, incl. the PR #883 `proc_open` streaming block), the 18
-    `$elog = ">> {$pfb['log']} 2>&1"` `exec()` redirect sites, the cron-tick command build
-    (`:18922`), the run-log helpers (`pfb_run_log_target()` `:14088`, `pfb_runlog_begin()`
-    `:14075`, `pfb_log_tail_chunk()` `:13975`, `pfb_log_tail_payload()` `:14024`).
-  - `src/usr/local/www/pfblockerng/pfblockerng_update.php` — the `?ajax=tail` endpoint (`:44`–`:57`),
-    the Run-Now / force-check dispatch (`pfb_runnow()` `:80`, `pfb_runnow_forcecheck()` `:134`).
-  - `src/usr/local/www/pfblockerng/pfblockerng_ip.php` — the MaxMind `ugc` dispatch (`:184`).
-  - `src/usr/local/pkg/pfblockerng/pfblockerng.sh` — its own `tee -a "${errorlog}"` / `>> "${…}"`
-    progress writes (17 `tee` sites + the extras/geoip appends).
-- **Target runtime:** PHP 8.3 (pfSense CE 2.8) for the sink/dispatch/tail; POSIX `sh` for the
-  `pfblockerng.sh` progress writes. No Python (the DNSBL/IP **event** logs and syslog export —
-  ADR-38 — are out of scope; see §2.4).
-- **Test suite:** `tests/php/` (PHPUnit — the pure tail/target helpers already pinned by
-  `LiveLogTailChunkTest`, `LiveLogTailPayloadTest`, `LiveRunLogTargetTest`, `PfbUpdateAutotailTest`,
-  `PfbHookOutputMirrorTest`), `tests/smoke/` (live-VM ADR-04 — `test_hook_stream_visibility` and
-  `test_lifecycle_hook_visibility` are the streaming/visibility oracles this ADR must keep green),
-  `tests/smoke/ui/` (ADR-14 Tier A/B — the Update page live viewer).
+- **Branch:** `adr/58-unified-run-output-streaming` (off **`devel`**).
+- **Component(s):**
+  - `src/usr/local/pkg/pfblockerng/pfblockerng.inc` — **only** `pfb_logger()`'s #690 stdout-mirror gate
+    (`pfb_run_streams_to_stdout()` + `pfb_stdout_is_terminal()`). Everything else — the file writes, the
+    per-run-log fwrite-mirror, **`pfb_run_hooks()`, `pfb_mirror_hook_output()`** (the #693/#883 hook path)
+    — is UNCHANGED from `devel`. `pfblockerng.php` is unchanged (no per-verb override needed — §2.1).
+- **Target runtime:** PHP 8.3 (pfSense CE 2.8). **`freopen()` does not exist in this PHP build.**
+- **Test suite:** `tests/php/` — `LiveLogStdoutTest` (the run-progress print + its gate, branch-covered),
+  `PfbHookOutputMirrorTest` / `HookLifecycleCtxTest` / the tail-target suite (all unchanged, still green).
+  `tests/smoke/` — `test_smoke_hooks.py` (the hook timeout/stream/#662 oracles) and
+  `test_hook_stream_visibility` / `test_lifecycle_hook_visibility` (ADR-04) are the out-of-CI gate; they
+  must stay green, which is why the hook path was left intact.
 
-> **This ADR is a consolidation, not a new feature.** It removes accumulated special-casing without
-> changing what an operator sees. The visible behaviour — the Update page live viewer, and the pkg
-> Software page showing install/upgrade/uninstall progress — must be **identical or strictly better**
-> after each phase. Every phase is behaviour-preserving and pinned by the existing oracles above; the
-> net diff is **negative** (see the §3 removal inventory).
+> **This is a consolidation, not a feature.** What an operator sees is the same or better; the one
+> deliberate *addition* is that a CLI/terminal run now streams its progress (it was silent). The
+> ambition of the earlier drafts — "everything to STDOUT, hooks inherit it, delete #883" — was **wrong**
+> and the live-VM smoke caught it (§5). The design of record keeps hooks exactly as they were.
 
 ---
 
-## 1. Context (today)
+## 1. Context (today, pre-ADR-58)
 
-pfBlockerNG's run output reaches two operator surfaces:
+A run's progress reaches operators three ways:
 
-1. **The pfBlockerNG Update page** — a Run-Now/Force button dispatches the pass detached and the page
-   polls `?ajax=tail` for a live view of the per-run log.
-2. **The pfSense Software page** — the stock package manager (`pkg_mgr_install.php` →
-   `pfSense-upgrade`) drives install/upgrade/uninstall and shows whatever the package operation
-   writes to **stdout** (`pfSense-upgrade` runs `pkg-static <op> 2>/dev/null | tee -a <log>` and the
-   page renders `<log>.txt`).
+1. **pfSense Software page** (install/upgrade/uninstall): pfSense runs the op as
+   `pkg-static <op> 2>/dev/null | tee -a <log>` and renders `<log>.txt` — it shows what our scripts
+   write to **stdout** (a pipe drained to EOF by `tee`).
+2. **pfBlockerNG Update page**: a Run-Now dispatches the pass **detached** (survives page-nav) and the
+   AJAX viewer tails the **per-run log file**.
+3. **A terminal**: a user can run `pfblockerng.php pfb_trigger …` from the CLI.
 
-These two surfaces have **different capture mechanisms** (a file the page tails vs. the process's
-stdout), and over several issues the package grew **one bespoke bridge per gap**. The result is four
-overlapping output mechanisms that all exist to answer the same question — "show the operator what the
-run is doing" — plus manual per-call-site redirects that bypass all of them.
+`pfb_logger()` writes the pass to **files** (the cumulative + categorised logs, and — while a run is
+active — the per-run log the viewer tails). It did **not** write stdout, except: issue **#690** added a
+mirror of its main-log lines to stdout **while a package lifecycle callback is active**
+(`$pfb['hook_lifecycle']` = `'install'`/`'uninstall'`) so the Software page isn't silent during an
+install/upgrade. On a normal cron/manual/Run-Now pass, and on a terminal run, the logger was
+stdout-silent.
 
-### 1.1 The four overlapping mechanisms
-
-**(a) `pfb_logger()` writes to files, and *sometimes* also to stdout (#690).**
-`pfb_logger($log, $logtype)` (`pfblockerng.inc:3078`) switches on `$logtype`: cases 1/2 write the
-cumulative `$pfb['log']` (and mirror into the per-run `$pfb['runlog']` while `$pfb['runlog_active']`
-is set); case 2 also writes `$pfb['errlog']`; cases 3/4 write `$pfb['extraslog']`; case 6 writes
-`$pfb['errlog']`. On top of that, issue #690 bolted on a **stdout mirror** so the Software page isn't
-silent during a lifecycle callback (`pfblockerng.inc:3151`):
-
-```php
-if (($logtype == 1 || $logtype == 2) && !empty($pfb['hook_lifecycle'])) {
-    print "{$log}";
-}
-```
-
-So the *same* line can be written to a file *and* printed to stdout, gated on a process-scoped
-`$pfb['hook_lifecycle']` flag (set to `'install'` at `pfblockerng_install.inc:38`, `'uninstall'` in
-the pre-deinstall at `pfblockerng.inc:19087`; never explicitly unset — a normal pass just never sets
-it).
-
-**(b) An update hook's own output needs a *third* path (#693 → #883).** A hook's stdout can't be a
-pipe back to PHP — a daemon it restarts (an HAProxy reload) would inherit the pipe, never close it,
-and hang the read at EOF (#662; `docs/misc/external-process-waits.md`). So the hook body is redirected
-to the run-log **file**. Issue #693 then added `pfb_mirror_hook_output()` (`pfblockerng.inc:4100`) to
-read the appended bytes back and print them after the hook returned; PR #883 replaced that post-hoc
-block with **live streaming** — `pfb_run_hooks()` (`pfblockerng.inc:4130`) now runs the hook under
-`proc_open()` (stdout/stderr → the run-log file via the descriptor spec), tails the file to stdout
-with `pfb_log_tail_chunk()` while it runs, and reads the exit code off `proc_get_status()`.
-`pfb_mirror_hook_output()` survives only as the `proc_open`-failure fallback.
-
-**(c) The Run-Now dispatch redirects to the run-log and tails it.** `pfb_runnow()`
-(`pfblockerng_update.php:80`) and `pfb_runnow_forcecheck()` (`:134`) dispatch the pass detached and
-redirect its output to the file:
-
-```php
-mwexec_bg("/usr/sbin/daemon -p " . escapeshellarg($pidfile) .
-    " /usr/local/bin/php …/pfblockerng.php pfb_trigger scope=… force=… trigger=… >> {$pfb['runlog']} 2>&1");
-```
-
-with `$pidfile = /var/run/pfb_runnow.pid`. The `?ajax=tail` endpoint (`:44`) then reads that file via
-`pfb_log_tail_payload('update', …)` and decides "done" purely from the pidfile:
-`'done' => !isvalidpid('/var/run/pfb_runnow.pid')`.
-
-**(d) Many call sites redirect their own output to a file directly, bypassing (a)–(c).** A literal
-`$elog = ">> {$pfb['log']} 2>&1"` is appended to **18** `exec()` invocations of `pfblockerng.sh`
-(built at `pfblockerng.inc:9734` and `:14929`; used at `:9838`, `:10226`, `:10350`, `:10439`,
-`:15325`, `:17438`, `:17443`, `:17747`, `:17766`, `:17784`, `:18109`, `:18116`, `:18175`, `:18179`,
-`:18306`, `:18313`, `:18315`, `:18987`). The scheduled cron tick is installed with its own redirect
-(`… tick >> {$pfb['log']} 2>&1`, `:18922`). `pfblockerng_ip.php:184` dispatches the MaxMind `ugc`
-job with `>> {$pfb['extraslog']} 2>&1`. And `pfblockerng.sh` writes its own progress with 17
-`echo … | tee -a "${errorlog}"` plus direct `>> "${extraslog}"` / `>> "${geoiplog}"` appends.
-
-### 1.2 Why this is a problem
-
-- **Every new surface adds a bridge.** #690 mirrors `pfb_logger`; #693/#883 mirror hooks; each is a
-  separate mechanism reading/writing the same conceptual stream. A future surface would add a fifth.
-- **The `hook_lifecycle` flag is load-bearing in two places** (the `pfb_logger` mirror and the
-  `pfb_run_hooks` branch) purely to answer "am I being watched via stdout right now?" — a question a
-  single sink would never need to ask.
-- **Two writers, one truth.** A line can land in the file via `fwrite` *and* on stdout via `print`;
-  the 18 `$elog` sites and the `pfblockerng.sh` tees write progress the logger never sees, so the
-  run-log the Update page tails and the stdout the Software page shows are **assembled differently**
-  and can diverge.
-- **The daemon-safety rule is re-derived per site.** "Redirect to a file, never a pipe" is the load
-  bearing invariant (#662), but it's currently enforced independently in the hook path, the dispatch,
-  and each manual redirect — easy to get wrong at the next call site.
-
-The through-line: **there is one logical stream** (what this run is doing) and **four physical
-representations** of it, bridged pairwise.
+Update **hooks** are a separate, load-bearing mechanism (#662 → #693 → #883): `pfb_run_hooks()` points
+each hook's stdout/stderr at the per-run **log file** (never the run's own stdout), and — during a
+lifecycle callback — **tails that file to stdout while the hook runs** so the Software page shows the
+hook body live. This file indirection is what makes a hook that restarts a daemon safe (§4).
 
 ---
 
 ## 2. Decision
 
-Collapse the four mechanisms into **one path**: a run writes everything to its own
-**stdout/stderr**, that fd is redirected **once** to the per-run log **file**, and **one** tail
-renders that file to whichever surface is watching. The two operator surfaces converge because they
-read the *same bytes*, not because we bridge one into the other.
+**Generalise the #690 stdout mirror from "lifecycle callback only" to "any command context"; leave the
+hook path alone.**
 
-### 2.1 One sink — the process redirects its own stdout/stderr to the run-log file, once
+### 2.1 Widen #690's stdout mirror from "lifecycle only" to "lifecycle OR a terminal"
 
-At the entry of a pfBlockerNG run (the `pfblockerng.php` verb dispatch that begins a pass), the PHP
-process points its own `STDOUT`/`STDERR` at `$pfb['runlog']` (via `freopen()` on the CLI SAPI, or by
-the dispatcher's existing `>> {runlog} 2>&1` where it already applies). From that point:
+`pfb_logger()` is **unchanged from `devel` except one condition.** Issue #690 mirrored the main-log
+lines (cases 1/2) to stdout only *while a package lifecycle callback was active*
+(`!empty($pfb['hook_lifecycle'])`). That gate becomes:
 
-- **`pfb_logger()`'s run-progress cases just print.** The main-log cases emit to stdout; being a
-  regular **file** fd, the write is daemon-safe and lands in the run-log with no `fwrite`-to-file and
-  no #690 stdout-mirror. (The cumulative `$pfb['log']` and the categorised `errlog`/`extraslog` files
-  are handled by §2.3, not deleted.)
-- **Hooks inherit the redirected stdout.** A hook is a child of the run; it inherits an fd that
-  already points at the run-log file. It writes there directly — **no per-hook `proc_open`, no
-  `>> $logf` in the command, no `pfb_mirror_hook_output`**. A daemon the hook spawns inherits the
-  same **file** fd (harmless), so #662 is satisfied structurally, once, for every descendant.
-- **`pfblockerng.sh` inherits it too.** Its progress `echo`s go to the inherited stdout → run-log;
-  the 18 `$elog` redirects and the shell's own `tee -a` for *progress* become unnecessary.
+```php
+function pfb_run_streams_to_stdout(): bool {
+    global $pfb;
+    return $pfb['run_stdout_override'] ?? (!empty($pfb['hook_lifecycle']) || pfb_stdout_is_terminal());
+}
+// pfb_stdout_is_terminal(): stream_isatty(php://stdout), cached.
+```
 
-### 2.2 One bridge for the pkg-GUI surface — a single tail, not per-writer mirrors
+The rule is **"mirror to stdout only when stdout is a real watched surface":**
 
-The Update page already tails the run-log file directly (`?ajax=tail`), so it needs nothing new. The
-pkg Software page is the case that used to need per-writer mirrors, because there the run's stdout is
-**inherited from `pkg-static`'s pipe to `tee`** — writing to it directly is the #662 hazard.
+- **A lifecycle callback** — stdout is the pkg Software page's pipe to `tee` (#690, unchanged).
+- **An interactive terminal** — `pfb_stdout_is_terminal()` (a hand-run `pfblockerng.php pfb_trigger`).
+  This is the one behaviour **added**: a terminal pass now streams (was silent).
 
-Resolve it **once**: when a run detects it is executing under a package lifecycle callback, it
-`freopen`s its own stdout to the run-log **file** (§2.1, making all descendants daemon-safe) and
-starts **one** bridge-tail — a single controlled reader that copies new run-log bytes to the
-*original* inherited stdout (the `pkg-static | tee` pipe) until the run ends. The bridge-tail is the
-**only** process holding the pipe; hooks and their daemons never touch it. This is the #883 tail loop
-**promoted from per-hook to per-run** — so the Software page shows the entire pass live (feed
-progress, the up-to-30 s unbound stop/start, and hook output) with one mechanism, and the
-`hook_lifecycle`-gated `pfb_logger` mirror disappears.
+and **NOT** otherwise, which falls out for free — no per-verb exclusion list needed:
 
-### 2.3 What stays: the cumulative log, the categorised logs, and detachment
+- The **cron tick** (`>> log`), the **detached Run-Now** (`>> runlog`), and every **nested extras
+  dispatch** (`dc`/`bls`/… whose parent redirects/captures their stdout) have stdout = a **log file the
+  logger already writes**, and it is not a tty, and no lifecycle → **no print → no double.**
+- A **web in-process caller** (the General-settings save that resyncs then `header('Location')` + `exit`)
+  has stdout = the HTTP response — not a tty, not a lifecycle → **no print**, so the redirect is intact.
 
-Unification is of the **run-progress stream**, not of every file:
+The **per-run-log fwrite-mirror is KEPT** exactly as `devel` has it: while a run is active `pfb_logger()`
+appends each main-log line to the run-log the Update viewer tails, **regardless of where stdout points**.
+That is load-bearing — the detached Run-Now redirects its stdout to `>> runlog` but the viewer's header
+detection relies on the *mirror* putting the `[ pfB Hook ]` line in the runlog (the smoke
+`test_post_hook_output_streams_into_runlog_during_run` asserts exactly this). Removing it broke that test;
+keeping it means the widened print never collides with it (the print only fires for the tty/lifecycle
+surfaces, never for the `>> runlog`/`>> log` redirected ones).
 
-- **The cumulative `$pfb['log']`** (history across runs) is preserved. The per-run log is the live
-  view; the cumulative log is derived from it (the run-log content is appended to the cumulative log
-  at run end, or the cumulative log tees off the same sink) — the existing `pfb_log_mgmt()` rotation
-  contract is unchanged.
-- **The categorised logs stay categorised.** `errlog` (errors), `extraslog` (extras/DCC), the DNSBL/IP
-  **event** CSVs, and the ADR-38 syslog export are **not** the run-progress stream and are out of
-  scope (§2.4). A `pfb_logger` error case still writes `errlog` *and* now also reaches stdout→run-log
-  so the operator sees it live.
-- **Detachment is kept exactly where the work must outlive its trigger.** The async Run-Now/force-check
-  dispatch stays `mwexec_bg("daemon -p …")` — a web request returns immediately while the pass
-  continues, so `proc_open` (whose child dies with the request) cannot replace it. What simplifies is
-  the *content*: the detached process applies §2.1 (redirect-to-run-log) itself, so the dispatch is
-  just "launch detached, sink to the run-log," with no downstream mirror logic. `pfb_runnow.pid` +
-  `isvalidpid` (the tail's done-signal) are unchanged.
+### 2.2 Hooks are unchanged — the file sink stays
 
-### 2.4 Explicitly out of scope
+`pfb_run_hooks()`, `pfb_mirror_hook_output()`, and the #693/#883 path are **identical to `devel`**. A hook
+writes to the per-run **log file** and (during a lifecycle callback) `pfb_run_hooks()` tails that file to
+stdout while the hook runs. This is mandatory, not a preference (§4/§5).
 
-- The **event logs** and **syslog export** (ADR-38) — DNSBL/IP block/permit/match CSVs, the syslog
-  emitter. Those are structured security events, not run progress.
-- **`config.xml`**, the manifest, and any wire/serialized value — untouched (no schema change).
-- The **Python** side (`pfb_unbound.py`) — it does not participate in the run-progress stream.
-- **Log rotation / retention** semantics (`pfb_log_mgmt()`) — preserved as-is.
+### 2.3 What stays / out of scope
+
+Cumulative + categorised logs, log rotation, the detached Run-Now dispatch, the feed-script `$elog`
+redirects, `config.xml`/manifests/Python — all untouched. `hook_lifecycle` keeps **all** its roles
+(ADR-12 env-context, #883 lifecycle-tail, and the #690 stdout mirror — it is still one arm of the gate);
+the #690 print now *also* fires for an interactive terminal (`hook_lifecycle || pfb_stdout_is_terminal()`).
 
 ---
 
-## 3. Removal inventory (first-class — this ADR is net-negative)
+## 3. Removal inventory
 
-The point of the change is deletion. Each item below is removed or reduced once its function is
-subsumed by the single sink (§2.1) + single tail (§2.2). Verify each `file:line` at implementation
-time (they drift); the count, not the exact line, is the commitment.
+Small, by design. The only thing removed is **#690's `hook_lifecycle` gate on the logger print** — the
+`if (($logtype==1||2) && !empty($pfb['hook_lifecycle'])) print` block — replaced by the
+`pfb_run_streams_to_stdout()`-gated print (§2.1). Everything else in the earlier drafts' removal list
+(#693, #883, the per-hook file redirect) is **retained** — the smoke proved those deletions were wrong.
 
-| # | Removed / reduced | Where (on `devel` at authoring) | Subsumed by |
-| - | ----------------- | ------------------------------- | ----------- |
-| 1 | **#690 `pfb_logger` stdout-mirror** — the `($logtype==1\|\|2) && hook_lifecycle` `print` block | `pfblockerng.inc:3151`–`:3164` | §2.1 (logger prints to the redirected stdout) |
-| 2 | **#693 `pfb_mirror_hook_output()`** — the whole function + its fallback call site | `pfblockerng.inc:4100`–`:4115`, call at `:4269` | §2.1 (hooks inherit the sink) |
-| 3 | **The `proc_open` per-hook streaming block** in `pfb_run_hooks()` (the entire `hook_lifecycle` if/else split, the descriptor spec, the tail loop, the wedge guard) | `pfblockerng.inc:4241`–`:4307` | §2.1 + §2.2 (per-run bridge-tail, not per-hook) |
-| 4 | **The `>> $logf 2>&1` in the hook `$cmd`** and the split `$cmd`/`$proccmd` build | `pfblockerng.inc:4188`–`:4196` | §2.1 (inherited fd) |
-| 5 | **The 18 `$elog = ">> {$pfb['log']} 2>&1"` `exec()` redirects** (progress capture only — not the `2>&1`-for-return sites at `:4837`/`:12731`) | `pfblockerng.inc:9734`, `:14929` + 18 uses | §2.1 (`pfblockerng.sh` inherits the sink) |
-| 6 | **`pfblockerng.sh` progress `tee -a "${errorlog}"` / `>> "${…}"` for run progress** (the *error*/*extras* categorised writes are re-pointed, not deleted — see §2.3) | `pfblockerng.sh` — 17 `tee` sites + appends | §2.1 (script stdout → sink; errlog kept via a single tee, not per-line) |
-| 7 | **The `hook_lifecycle`-as-"am-I-watched" role** — the flag stops gating output paths (it keeps its ADR-12 `PFB_POST_INSTALL`/`PFB_PRE_UNINSTALL` env role, which is unrelated) | `pfblockerng.inc:3152`, `:4241` | §2.1/§2.2 (a run always sinks to the run-log; watching is the tail's job) |
-
-Rough order-of-magnitude: items 1–4 remove ~90 lines from `pfblockerng.inc` (the streaming block that
-PR #883 *added* is the largest single deletion here — expected and intended, per the ADR-vs-#883
-trade-off recorded when #883 landed); items 5–6 remove/simplify ~35 redirect fragments across the
-`.inc` and `.sh`. Net change is a **reduction**; any new code (the per-run bridge-tail, the entry
-`freopen`) is small and centralised.
+Net diff is tiny and roughly neutral: one changed condition on the #690 print, plus the two small gate
+helpers (`pfb_run_streams_to_stdout()` + `pfb_stdout_is_terminal()`). No other code changes.
 
 ---
 
-## 4. The load-bearing invariant (why a file, and why one bridge)
+## 4. Why hooks CANNOT inherit the run's stdout (the load-bearing constraint)
 
-The whole design rests on one FreeBSD fact (`docs/misc/external-process-waits.md`): a pipe read to EOF
-blocks until **every** inheritor of the write-end closes it, so a hook that leaves a daemon holding an
-inherited pipe hangs the reader forever (#662). A **regular file** fd has no such semantics — a write
-just lands, and a lingering daemon holding a file fd is inert.
+A pipe reaches EOF only when **every** copy of the write-end is closed; a **regular file** fd has no such
+semantics. The run's stdout, in the two captured contexts, is a **pipe drained to EOF**:
+`pkg-static | tee` (Software page) and the SSH capture (smoke/`vm.ssh`). So if a hook writes to the run's
+stdout and **anything it spawns outlives it holding that pipe**, the reader blocks until that thing dies:
 
-Therefore the sink is **always a file**, and the *only* process that may hold the surface's live pipe
-(the `pkg-static | tee` write-end, or a socket) is **our single bridge-tail** — a controlled reader
-that we start and stop, never a hook and never a hook's child. This is exactly why §2.2 promotes the
-tail to per-run: one owner of the pipe, chosen by us, for the whole pass. Any implementation that lets
-a hook write to the inherited pipe directly (rather than the file) reintroduces #662 and is rejected
-(§9).
+- A **restart hook → persistent daemon** (HAProxy) holds it **forever** → the Software page freezes /
+  the reload never returns.
+- A **timeout-killed hook** — killed *because* it was mid-work, i.e. with a live subprocess — leaves that
+  subprocess **orphaned**, holding the pipe for its lifetime. This is not a "bad hook"; it is inherent to
+  enforcing a timeout, and it breaks the ADR-12 promise *"a timeout is logged and the pass CONTINUES."*
+
+`timeout --foreground` (reaper off, so `timeout` doesn't wait on/kill the daemon) and `proc_close()`
+(waitpid on the **direct** child) both return promptly — the hang is in the **outer reader**, not our PHP.
+The fix is the same as the shell's (`cmd >file` not `x=$(cmd)`): give the hook a **file** sink so a
+survivor holds an inert file fd, and have **PHP** tail that file to stdout (the exit code off
+`proc_close()`, the bytes off a file read that never waits for EOF). That is exactly #883, and the run's
+own stdout is then held only by PHP, which releases it on exit → the reader gets EOF. **This is why the
+hook path is unchanged.**
 
 ---
 
-## 5. Alternatives considered
+## 5. Alternatives considered (both implemented, both rejected by the live-VM smoke)
 
-1. **Keep the four mechanisms; just document them.** Rejected — the `hook_lifecycle`-as-watch flag and
-   the two-writers-one-truth divergence are latent bugs, not just clutter. The next surface adds a
-   fifth bridge.
-2. **Give hooks the inherited pipe directly (no file, no bridge).** Rejected — reintroduces the #662
-   daemon-hang for the exact case hooks exist for (service reloads). §4.
-3. **`proc_open` everywhere, including Run-Now.** Rejected — the async Run-Now must outlive its web
-   request; `proc_open`'s child dies with the request. Detachment is irreducible there (§2.3).
-4. **A structured logging library / new log framework.** Rejected — YAGNI and out of proportion. The
-   package needs *one sink and one tail*, not a logging abstraction; the categorised logs already
-   exist and are out of scope (§2.4).
-5. **Ship #883's per-hook streaming as the end state.** Rejected as the *final* shape — it's a correct
-   stepping stone (and the reason the daemon-safety is already proven live), but it special-cases hooks
-   when the same sink serves everything. This ADR generalises it and deletes the special case.
+1. **Draft A — run-entry `freopen(STDOUT → run-log file)` + a per-run bridge-tail daemon.** Rejected:
+   `freopen()` does not exist in this PHP, and the bridge-tail is a background OS process copying
+   file→pipe — the very daemon/detach machinery the effort meant to remove.
+2. **Draft B — hooks inherit the run's stdout (`proc_open 1 => php://stdout`), delete #883.** **Rejected —
+   the live-VM smoke HUNG.** `test_hooks_timeout_killed_update_continues` (a `sleep 30` hook killed at its
+   2 s timeout) timed out on both CE and Plus: the orphaned `sleep` held the SSH-capture pipe, so
+   `vm.ssh` never saw EOF (§4). An adversarial review independently found the same broadening polluted the
+   nested `bls`/`dc`/`dcc`/`bl` dispatches (double-logging + a #711-prune corruption risk). Both signals
+   agree: a run's output cannot go straight onto a captured pipe when hooks (or nested dispatches) are
+   involved. The design of record (this ADR) keeps #883 and gates the logger print away from the nested
+   and web callers.
+3. **Keep #690 as-is (lifecycle-only).** Rejected — it left a terminal run silent and re-derived the
+   "am I watched?" question from `hook_lifecycle`; the SAPI/override gate is cleaner and adds the
+   terminal case.
 
 ---
 
@@ -254,66 +167,52 @@ a hook write to the inherited pipe directly (rather than the file) reintroduces 
 
 **Positive**
 
-- One mechanism, one invariant, one place to reason about run visibility. A new surface is "point the
-  bridge-tail at it," not "add a mirror."
-- The two operator surfaces show **identical** bytes by construction (same file), ending the
-  two-writers divergence.
-- `hook_lifecycle` sheds its output-gating role; it keeps only its ADR-12 env-context meaning.
-- Net-negative diff (§3); the daemon-safety is centralised, not re-derived per call site.
+- A **CLI/terminal run now streams** its progress (was silent). The Software page keeps #690's live view
+  via the same mechanism, now without the `hook_lifecycle` special-case.
+- No new double-writes: the tick, the detached Run-Now, the nested extras dispatches, and the web
+  settings-save all have a non-tty, non-lifecycle stdout, so the widened gate never prints there.
 
 **Negative / cost**
 
-- Touches a hot, safety-critical path (`pfb_run_hooks`, the logger). Every phase must be
-  behaviour-preserving and pinned by the live-VM oracles before the next.
-- The entry `freopen` + per-run bridge-tail is new central machinery; a bug there affects *all* run
-  output, not one hook. Mitigated by the existing `test_hook_stream_visibility` /
-  `test_lifecycle_hook_visibility` contracts and a bridge-tail unit/live test.
-- CLI-SAPI stdout must stay unbuffered for live streaming (already true: `output_buffering=Off`,
-  verified live during #883). The ADR pins this with a test rather than an assumption.
+- Small, not the sweeping consolidation first envisioned — the hook machinery (#693/#883) stays. That is
+  the correct outcome: §4/§5.
+- STDOUT must stay unbuffered for live streaming (`output_buffering=Off`, already true).
+- **Behaviour proof is out-of-CI.** The hook oracles (`test_smoke_hooks`, `test_hook_stream_visibility`,
+  `test_lifecycle_hook_visibility`) run only on a real box; because the hook path is unchanged they must
+  stay green, and the timeout/stream tests that Draft B failed must pass again.
 
 ---
 
-## 7. Implementation phases (each behaviour-preserving, each its own commit)
+## 7. Implementation
 
-1. **Entry sink.** Add the run-entry `freopen(STDOUT/STDERR → runlog)` (CLI) + the per-run bridge-tail
-   for the lifecycle-callback case (promote #883's loop from `pfb_run_hooks` to run scope). Keep the
-   old mechanisms live in parallel; assert the surfaces are unchanged. Pin with the two smoke oracles.
-2. **Hooks inherit.** Delete the `proc_open` per-hook block + `pfb_mirror_hook_output` + the hook
-   `$cmd` file-redirect (§3 items 2–4); hooks now inherit the entry sink. `test_hook_stream_visibility`
-   must stay green (its contract is exactly what phase 1 preserved).
-3. **Logger prints.** Remove the #690 mirror (item 1); route `pfb_logger` run-progress cases through
-   stdout; keep `errlog`/`extraslog`/cumulative-log writes (§2.3). Pin the Update page live view.
-4. **Redirect cleanup.** Remove the 18 `$elog` redirects (item 5) and re-point `pfblockerng.sh`
-   progress writes (item 6). The cron tick and `ip.php` `ugc` dispatch inherit or keep their own sink
-   as appropriate.
-5. **Flag demotion + docs.** Strip `hook_lifecycle`'s output-gating role (item 7); rewrite the
-   `docs/misc/external-process-waits.md` "visibility" section to the single-sink model.
+One commit's worth of change (behaviour-preserving except the CLI-stream addition):
 
-Each phase gates on the same live-VM fan-out before the next (CLAUDE.md "Plan with a higher model";
-`/adr-phase`).
+1. Add `pfb_run_streams_to_stdout()` (= override ?? `hook_lifecycle || pfb_stdout_is_terminal()`) and
+   `pfb_stdout_is_terminal()` (`stream_isatty(php://stdout)`, cached). Change ONLY the #690 print gate in
+   `pfb_logger()` from `!empty($pfb['hook_lifecycle'])` to `pfb_run_streams_to_stdout()`. All file writes
+   AND the per-run-log fwrite-mirror are unchanged from `devel`.
+2. Leave `pfb_run_hooks()` / `pfb_mirror_hook_output()` / the #883 path and `pfblockerng.php` untouched
+   (Draft B's inherit-stdout + the per-verb override are both reverted — the tty gate makes the override
+   unnecessary, §2.1).
+3. Docs: the `docs/misc/external-process-waits.md` visibility section notes the #690→ADR-58 widening
+   (lifecycle → lifecycle-or-tty) and the file-sink-for-hooks rationale.
 
 ## 8. Test plan
 
-- **Preserve, do not rewrite, the contracts.** `test_hook_stream_visibility` (hook output streams live
-  to the pkg surface *while the hook runs*) and `test_lifecycle_hook_visibility` (hooks fire with the
-  right env; output survives `pfSense-upgrade`'s stderr-drop+tee) are the oracles. They were authored
-  against #883 precisely so this ADR's rewrite is *proven* to preserve behaviour — they must stay green
-  across every phase (behaviour-preserving exception to the red→green mandate, per CLAUDE.md "Test
-  coverage").
-- **New coverage:** a unit/live test that the entry sink + bridge-tail streams **non-hook** run
-  progress (a `pfb_logger` line, a `pfblockerng.sh` echo) to *both* surfaces live — the property that
-  used to require the #690 mirror. Assert both surfaces show the *same* bytes (the anti-divergence
-  property). Pin CLI-SAPI unbuffered-stdout with a focused check.
-- The PHPUnit tail/target suite (`LiveLogTailChunkTest`, `LiveLogTailPayloadTest`,
-  `LiveRunLogTargetTest`, `PfbUpdateAutotailTest`) stays green; `PfbHookOutputMirrorTest` is deleted
-  with its function (item 2).
+- **`LiveLogStdoutTest`** branch-covers the gate: a lifecycle pass mirrors to stdout; a plain
+  non-lifecycle, non-tty pass is silent (the anti-double property); the override forces the mirror on
+  WITHOUT a lifecycle (red on `devel`, which only printed under `hook_lifecycle` — proving the widening);
+  the per-run-log fwrite-mirror still populates the runlog; case 2's error log; case 3 never prints.
+- **Unchanged oracles stay green:** `PfbHookOutputMirrorTest`, `HookLifecycleCtxTest`, the tail-target
+  suite.
+- **Smoke (out-of-CI, the real gate):** `test_smoke_hooks.py` — the timeout-kill-continues and
+  post-hook-streams-to-runlog tests (which Draft B hung) must PASS; `test_hook_stream_visibility` /
+  `test_lifecycle_hook_visibility` must stay green. A regression test that a nested `bls`/`dc` dispatch
+  does not double-log is the smoke-level guard for §2.1's extras narrowing.
 
 ## 9. Reject / revisit criteria
 
-- If any phase cannot keep both smoke oracles green without regressing what a surface shows, **stop** —
-  the single-sink model is wrong for that case; document it and keep the bridge for it.
-- If a hook is found that legitimately needs its stdout to be a live pipe (not a file) — none is known
-  — the file-sink invariant (§4) must be revisited before proceeding; do not special-case it silently.
-- If the entry `freopen` proves unsafe on any supported pfSense CLI/web entrypoint (e.g. a caller that
-  needs PHP's stdout for its own protocol), scope the sink to the run dispatch only and keep the
-  categorised writers as they are.
+- If any surface shows **less** than #690 gave it, stop and reconsider the gate.
+- If a nested verb's own direct output (not `pfb_logger`) is wrongly suppressed by the override, exclude
+  that verb.
+- The hook path is **not** to be "simplified" onto the run's stdout again — §4/§5 are the record of why.

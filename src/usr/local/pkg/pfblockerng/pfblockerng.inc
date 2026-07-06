@@ -3089,7 +3089,32 @@ function pfb_log_reset(): void
 }
 
 
-// Record log messsages to pfBlockerNG log file and/or error log file.
+// TRUE when this run's progress should stream to the process's STDOUT. Only when STDOUT is a real
+// watched surface: a package lifecycle callback (the pkg Software page's pipe to `tee`) OR an
+// interactive terminal. NOT when STDOUT is redirected to a log file we already write (the cron
+// tick's `>> log`, the detached Run-Now's `>> runlog`, a nested extras dispatch) -- printing there
+// would double every line -- and NOT for a web in-process caller (the HTTP response). This is a
+// widening of issue #690's lifecycle-only mirror to add the terminal case. Test-overridable.
+function pfb_run_streams_to_stdout(): bool {
+	global $pfb;
+	return $pfb['run_stdout_override'] ?? (!empty($pfb['hook_lifecycle']) || pfb_stdout_is_terminal());
+}
+
+// Whether this process's real STDOUT (fd 1) is an interactive terminal. FALSE when redirected to a
+// file/pipe or under a non-CLI SAPI. Opened by URI (the bare STDOUT constant is undefined outside
+// CLI); the fresh stream does not close fd 1 on fclose(). Cached -- fd 1 does not change mid-run.
+function pfb_stdout_is_terminal(): bool {
+	static $tty = NULL;
+	if ($tty === NULL) {
+		$h = @fopen('php://stdout', 'w');
+		$tty = is_resource($h) && @stream_isatty($h);
+		if (is_resource($h)) {
+			@fclose($h);
+		}
+	}
+	return (bool) $tty;
+}
+
 function pfb_logger($log, $logtype) {
 	global $g, $pfb;
 
@@ -3168,13 +3193,15 @@ function pfb_logger($log, $logtype) {
 	// reaches STDOUT. pfb_logger() otherwise writes the whole sync pass to the log FILE, so the
 	// page sits silent through it -- worst case the ~30s pfb_stop_start_unbound() wait, which
 	// emits its progress dots through this same function -- and looks like a frozen/lost pipe.
-	// While a lifecycle callback is active ($pfb['hook_lifecycle'] is set by the install command
-	// and the pre-deinstall, unset on every normal cron/manual/Run-Now pass and in the log
-	// daemon), mirror the main-log lines (cases 1 and 2) to the package-manager output so the
-	// page streams live progress. This also closes the silent unbound-stop gap with no separate
-	// keepalive, since that wait already logs via case 1. The redirected update hooks and the
-	// detached rc.d daemons are untouched -- this is visibility only, not the process-safety.
-	if (($logtype == 1 || $logtype == 2) && !empty($pfb['hook_lifecycle'])) {
+	// So mirror the main-log lines (cases 1 and 2) to STDOUT whenever STDOUT is a real watched
+	// surface -- pfb_run_streams_to_stdout(): a lifecycle callback ($pfb['hook_lifecycle'], the pkg
+	// pipe) OR an interactive terminal (ADR-58's addition, so a hand-run pass streams too). NOT when
+	// STDOUT is redirected to a log FILE we already write above (the cron tick's `>> log`, the
+	// detached Run-Now's `>> runlog`, a nested extras dispatch) -- that would double every line -- and
+	// NOT for a web in-process caller (the HTTP response). This also closes the silent unbound-stop
+	// gap with no separate keepalive, since that wait already logs via case 1. The redirected update
+	// hooks and the detached rc.d daemons are untouched -- visibility only, not the process-safety.
+	if (($logtype == 1 || $logtype == 2) && pfb_run_streams_to_stdout()) {
 		print "{$log}";
 	}
 }
