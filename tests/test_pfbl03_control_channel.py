@@ -100,6 +100,126 @@ class TestSharedHandlerDisableEnable:
         assert P.pfb["python_blacklist"] is False
 
 
+class TestControlEnableOpensDnsblStatsDb:
+    """Scenario: enabling DNSBL via the PFBL-03 control channel (or the timed re-enable)
+    opens the dnsbl stats DB that init left closed at boot, so a subsequent counter flush
+    lands.
+
+    Background:
+        init_standard opens ``sqlite3_dnsbl_con`` only when ``_dnsbl_stats_wanted()``
+        (python_blacklist OR forwarding) holds AT INIT; a forwarding-off / no-feeds boot
+        leaves it False. A later control-channel ``enable`` -- or the ``disable.<dur>``
+        timed re-enable -- raises ``python_blacklist``, newly satisfying the predicate.
+        Pre-fix neither control site re-opened the DB, so ``_db_flush_dnsbl`` (and
+        ``_log_upstream_block``, both gated on ``sqlite3_dnsbl_con``) silently dropped
+        every counter until a full restart -- the same silent-loss class #862 fixed for
+        the ADR-10 swap path, reached via the control channel instead (issue #870).
+
+    Each test asserts the BEFORE-state (DB closed, stats not wanted) first, so a green
+    proves the enable CAUSED the open. Every input of the shared open guard is covered:
+    the enable opens it, the timed re-enable opens it, mod_sqlite3=False keeps it closed,
+    and an already-open DB is not reconnected.
+    """
+
+    def test_control_enable_opens_db_and_flush_lands_counter(self, tmp_path: Any) -> None:
+        """A control-channel ``enable`` on a boot that left the stats DB closed opens it,
+        and a counter flush then lands -- the exact effect the bug silently lost.
+
+        RED pre-fix: the enable branch raised python_blacklist but left sqlite3_dnsbl_con
+        False, so the ``assert ... sqlite3_dnsbl_con`` below fails.
+        """
+        # Given: a forwarding-off, no-feeds boot -> init left the stats DB closed.
+        P.pfb["mod_sqlite3"] = True  # pin every guard input so "closed" is provably the predicate, not sqlite off
+        P.pfb["pfb_py_dnsbl"] = str(tmp_path / "dnsbl.sqlite")
+        P.pfb["python_blacklist"] = False
+        P.pfb["forwarding"] = False
+        assert not P.pfb["sqlite3_dnsbl_con"]
+        assert not P._dnsbl_stats_wanted()
+
+        # When: DNSBL is enabled over the control channel.
+        applied, _ = P.pfb_apply_control_command(["python_control", "enable"])
+        assert applied is True
+
+        # Then: the gate flipped AND the stats DB is now open.
+        assert P.pfb["python_blacklist"] is True
+        assert P.pfb["sqlite3_dnsbl_con"], (
+            "a control-channel enable that newly wants stats must open the dnsbl DB (issue #870)"
+        )
+
+        # And a counter flush actually lands now (pre-fix: guarded no-op).
+        assert P._db_flush_dnsbl({"Upstream": 1})
+        con = P._db_conns[P.DB_DNSBL]
+        row = con.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchone()
+        assert row == (1,), f"Upstream counter not incremented after enable opened the DB: {row!r}"
+
+    def test_timed_reenable_opens_db(self, tmp_path: Any) -> None:
+        """The other post-init control site: the ``disable.<dur>`` timed re-enable
+        (python_control_sleep) also newly wants stats and must open the DB. Called with
+        duration 0 so it returns immediately -- no real wait, no spawned thread.
+
+        RED pre-fix: sqlite3_dnsbl_con stays False across the re-enable.
+        """
+        P.pfb["mod_sqlite3"] = True  # pin every guard input so "closed" is provably the predicate, not sqlite off
+        P.pfb["pfb_py_dnsbl"] = str(tmp_path / "dnsbl.sqlite")
+        P.pfb["python_blacklist"] = False
+        P.pfb["forwarding"] = False
+        assert not P.pfb["sqlite3_dnsbl_con"]
+
+        # When: the timed re-enable fires (duration 0 -> returns immediately).
+        assert P.python_control_sleep(0, None) is True
+
+        # Then: blocking is back on AND the stats DB opened.
+        assert P.pfb["python_blacklist"] is True
+        assert P.pfb["sqlite3_dnsbl_con"], (
+            "the timed re-enable that newly wants stats must open the dnsbl DB (issue #870)"
+        )
+
+    def test_control_enable_does_not_open_db_when_mod_sqlite3_unavailable(self, tmp_path: Any) -> None:
+        """mod_sqlite3 conjunct: with the sqlite3 module unavailable, an enable that WOULD
+        otherwise want stats must still NOT open the DB -- matching init's own gate.
+
+        Failable guard: drop the ``mod_sqlite3 and`` conjunct and this fails -- sqlite3 is
+        importable in the test env, so the open would succeed and sqlite3_dnsbl_con flip True.
+        """
+        P.pfb["mod_sqlite3"] = False  # sqlite3 module unavailable on this install
+        P.pfb["pfb_py_dnsbl"] = str(tmp_path / "dnsbl.sqlite")
+        P.pfb["python_blacklist"] = False
+        P.pfb["forwarding"] = False
+        assert not P.pfb["sqlite3_dnsbl_con"]
+
+        applied, _ = P.pfb_apply_control_command(["python_control", "enable"])
+        assert applied is True
+
+        # The gate flips and stats ARE wanted, but mod_sqlite3=False keeps the DB closed.
+        assert P.pfb["python_blacklist"] is True
+        assert P._dnsbl_stats_wanted()
+        assert not P.pfb["sqlite3_dnsbl_con"], "mod_sqlite3=False must gate the control-enable DB open"
+        assert P.DB_DNSBL not in P._db_conns, "no connection may open when the sqlite3 module is unavailable"
+
+    def test_control_enable_does_not_reopen_an_already_open_db(self, tmp_path: Any) -> None:
+        """Idempotency: when the stats DB is already open (init opened it), an enable must
+        NOT reconnect -- the not-sqlite3_dnsbl_con guard makes the open a no-op, preserving
+        the existing connection and its accumulated counter."""
+        P.pfb["mod_sqlite3"] = True  # pin every guard input so "closed" is provably the predicate, not sqlite off
+        P.pfb["pfb_py_dnsbl"] = str(tmp_path / "dnsbl.sqlite")
+
+        # Given: the DB is already open with an accumulated Upstream counter.
+        P.pfb["python_blacklist"] = True
+        P.pfb["sqlite3_dnsbl_con"] = True
+        assert P._db_flush_dnsbl({"Upstream": 7})
+        first_con = P._db_conns[P.DB_DNSBL]
+        assert first_con.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchone() == (7,)
+
+        # When: an enable is applied while the DB is already open.
+        applied, _ = P.pfb_apply_control_command(["python_control", "enable"])
+        assert applied is True
+
+        # Then: same connection object (no reconnect), counter preserved.
+        assert P.pfb["sqlite3_dnsbl_con"]
+        assert P._db_conns[P.DB_DNSBL] is first_con, "an already-open stats DB must not be reconnected by enable"
+        assert first_con.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchone() == (7,)
+
+
 class TestSharedHandlerBypass:
     def test_addbypass_adds_ip_to_gplistdb(self) -> None:
         # Given: the IP is NOT in the bypass DB (BEFORE).
