@@ -1,0 +1,101 @@
+name: Nightly failure alert
+
+# File ONE deduped tracking issue when a NIGHTLY (schedule-triggered) run of a
+# live-VM suite fails, so a red nightly becomes a work item instead of waiting
+# for someone to notice. Issue #820 sat red DAILY for 8 days (2026-06-26 ->
+# 07-04, a real config-loss bug shipping in alphas) precisely because nothing
+# watches these: smoke/ui/repo-install are schedule+dispatch only (no PR gate),
+# and dispatch failures are already watched by whoever dispatched them — so
+# this alerts on the `schedule` event only.
+#
+# Pattern follows top1m-healthcheck.yml's alert job (dedup by label + exact
+# title, update-in-place). WHY workflow_run and not an `if: failure()` job in
+# each suite: one file, no edits to the three fan-out matrices, and it runs
+# with its own token even when the failing run's jobs are all red (see
+# module-durations.yml for the same trigger shape).
+
+on:
+  workflow_run:
+    workflows:
+      - "Smoke fan-out (all CI legs, live pfSense VM)"
+      - "UI tests fan-out (all CI legs, live pfSense VM)"
+      - "Repo install (live pfSense VM)"
+    types: [completed]
+  # Red-path test handle (CLAUDE.md: a newly wired gate demonstrates its red
+  # path once): simulate a failed nightly of the named workflow. The issue it
+  # files is real — close it after the drill.
+  workflow_dispatch:
+    inputs:
+      workflow_name:
+        description: "Workflow name to simulate a failed nightly for."
+        required: true
+        default: "Smoke fan-out (all CI legs, live pfSense VM)"
+
+permissions:
+  contents: read
+
+jobs:
+  alert:
+    name: Open/update the nightly-red tracking issue
+    # Real path: a schedule-triggered run that concluded failure. Dispatch
+    # path: always (that IS the drill).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'schedule' &&
+       github.event.workflow_run.conclusion == 'failure')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      # Dispatch drill: the run link points at THIS run, clearly labeled below.
+      WF_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.workflow_name || github.event.workflow_run.name }}
+      RUN_URL: ${{ github.event_name == 'workflow_dispatch' && format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) || github.event.workflow_run.html_url }}
+      HEAD_SHA: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
+      DRILL: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
+    steps:
+      - name: Ensure the tracking label exists
+        run: |
+          gh label create "nightly-red" \
+            --color "b60205" \
+            --description "Automated nightly-suite failure tracking" \
+            --repo "$REPO" 2>/dev/null || true
+
+      - name: Open or update the tracking issue
+        run: |
+          set -eu
+          TITLE="[nightly-red] ${WF_NAME} failing on devel"
+
+          BODY_FILE=$(mktemp)
+          {
+            printf '## Nightly run failed: %s\n\n' "$WF_NAME"
+            if [ -n "$DRILL" ]; then
+              printf '**DRILL** — manual red-path test of the alert wiring, not a real failure. Close me.\n\n'
+            fi
+            printf -- '- Run: %s\n' "$RUN_URL"
+            printf -- '- Head: `%s`\n\n' "$HEAD_SHA"
+            printf 'Triage: read the run'"'"'s failing job logs + its diagnostics artifact first '
+            printf '(CLAUDE.md "Smoke tests"). If the failure is a devel regression, fix it on a '
+            printf 'branch and close this; if flaky, say so here with the evidence.\n\n'
+            printf '_Opened automatically by the nightly-failure-alert workflow. Updated in place on every red nightly; closes manually with the fix._\n'
+          } > "$BODY_FILE"
+
+          # Dedup by label + exact title (top1m-healthcheck pattern, incl. the
+          # >30-item page-cap lift).
+          EXISTING_NUM=$(gh issue list --repo "$REPO" --state open \
+            --label "nightly-red" --limit 500 --json number,title \
+            | jq -r --arg t "$TITLE" '.[] | select(.title == $t) | .number' \
+            | sort -n | head -1)
+
+          if [ -n "$EXISTING_NUM" ]; then
+            echo "[update] Updating tracking issue #${EXISTING_NUM}"
+            gh issue edit "$EXISTING_NUM" --repo "$REPO" --body-file "$BODY_FILE"
+          else
+            echo "[create] Opening tracking issue"
+            gh issue create \
+              --repo "$REPO" \
+              --title "$TITLE" \
+              --body-file "$BODY_FILE" \
+              --label "nightly-red,bug"
+          fi
