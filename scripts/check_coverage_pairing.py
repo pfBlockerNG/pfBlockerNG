@@ -36,10 +36,11 @@ The CI job downgrades a violation to a warning (exit 0, printed to
 ``$GITHUB_STEP_SUMMARY``) instead of failing the PR when the PR carries the
 ``no-test-needed`` label — the ``--warn-only`` CLI flag mirrors that from this
 script's side; the label itself is applied by a human, not this script. When the
-label is set, the CI job additionally requires a ``no-test-needed: <why>``
-justification line in the PR body (issue #921's "applied deliberately"
-constraint, enforced per #934); that check lives in the workflow, not here — it
-reads the PR body, and this script reasons over paths only.
+label is set, the CI job additionally passes ``--pr-body-file`` so this script
+requires a ``no-test-needed: <why>`` justification LINE in the PR body (issue
+#921's "applied deliberately" constraint, enforced per #934) — an unjustified
+label FAILS the gate instead of downgrading it. See ``_has_justification`` for
+the exact (line-anchored) matching rules.
 
 This is dev/CI-only tooling under ``scripts/`` (mirrors ``check_url_encoding.py``
 / ``check_appliance_python.py``): it reasons over path STRINGS only, never reads
@@ -105,6 +106,24 @@ def evaluate(changed: list[str]) -> list[str]:
     return violations
 
 
+def _has_justification(body: str) -> bool:
+    """True if a LINE of ``body`` starts with ``no-test-needed:`` plus non-blank text.
+
+    Line-anchored on purpose: a mid-sentence mention of the token (prose
+    describing the feature), a blockquoted ``> no-test-needed: …``, or an
+    indented code block never counts as a justification — only a line the
+    author deliberately started with the token does. Case-insensitive;
+    ``splitlines()`` handles CRLF bodies natively. Documented accepted
+    limitation: a fenced code block whose line STARTS with the token still
+    matches (fence-stripping is not worth the complexity for this gate).
+    """
+    prefix = "no-test-needed:"
+    for line in body.splitlines():
+        if line.lower().startswith(prefix) and line[len(prefix) :].strip():
+            return True
+    return False
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point.
 
@@ -113,14 +132,40 @@ def main(argv: list[str] | None = None) -> int:
     ``git diff --name-only`` output in. Both entry points are normalized the
     same way (surrounding whitespace stripped, blank entries dropped), so a
     padded positional arg and a trailing-newline stdin line classify identically.
+
+    ``--pr-body-file <path>`` (passed by the CI job iff the ``no-test-needed``
+    label is set, alongside ``--warn-only``): the file holds the PR body; when
+    ``--warn-only`` is set and the body has no ``no-test-needed: <why>``
+    justification line, the gate FAILS (exit 1) instead of downgrading —
+    issue #921's "applied deliberately" constraint, enforced per #934. Without
+    the flag, ``--warn-only`` keeps its pure downgrade semantics.
     """
     args = list(sys.argv[1:] if argv is None else argv)
     warn_only = "--warn-only" in args
+    body_file: str | None = None
+    if "--pr-body-file" in args:
+        i = args.index("--pr-body-file")
+        if i + 1 >= len(args):
+            print("error: --pr-body-file requires a file path argument")
+            return 2
+        body_file = args[i + 1]
+        del args[i : i + 2]
     paths = [a for a in args if a != "--warn-only"]
 
     if not paths:
         paths = list(sys.stdin)
     paths = [p.strip() for p in paths if p.strip()]
+
+    if warn_only and body_file is not None:
+        with open(body_file, encoding="utf-8", errors="replace") as fh:
+            body = fh.read()
+        if not _has_justification(body):
+            print(
+                "no-test-needed label is set but the PR body has no 'no-test-needed: <why>' "
+                "justification line (issue #921: the label must be applied deliberately, with "
+                "its justification recorded in the PR body)."
+            )
+            return 1
 
     violations = evaluate(paths)
 
