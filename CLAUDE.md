@@ -134,7 +134,11 @@ and review.
    maps to a test or an explicit justified deferral. A brief saying "all X" without the
    enumerated list is invalid; the planner generating the enumeration is the point
    (implementers execute enumerated lists well and under-generate them reliably: the
-   #858→#900 five-fix chain, #901, #904, PR #881's missed port axis).
+   #858→#900 five-fix chain, #901, #904, PR #881's missed port axis). A tool whose scope
+   spans file types (a checker/parser over scan roots) gets a mandatory axis "per in-scope
+   file type × its comment/quote syntax", enumerated from the roots' actual extensions
+   (`git ls-files <roots>`) — PR #937 shipped a PHP false-positive class because only the
+   languages the author thought of got rows (#941).
 4. **Hostile-input rows** — for any new/changed parser, regex, or input guard the planner
    supplies the adversarial input set with expected outcomes: punycode/IDN labels, empty
    input, header/no-header, quotes + shell/regex metacharacters, tabs and consecutive spaces,
@@ -150,7 +154,11 @@ and review.
    or a live probe, **STOP and return a structured blocker**; never silently patch the plan,
    never proceed on a premise you have just falsified. Reality outranks the brief, loudly.
    An environmental claim the brief tags ASSUMED (or embeds with no evidence) is probed
-   before anything is built on it — same STOP rule if the probe refutes it.
+   before anything is built on it — same STOP rule if the probe refutes it. Same rule when
+   the fix requires **inventing a mechanism the brief never named** (an exemption layer, a
+   state machine, a heuristic): escalate, or at minimum return DONE-WITH-DEVIATION — never
+   plain DONE. PR #937's only blocking bug lived in an improvised exemption layer that had
+   no hostile-input rows because nobody had planned for it to exist (#943).
 
 #### THE HANDOFF (implementer → planner) — fixed fields, missing field = gate reject
 
@@ -179,7 +187,9 @@ the gate report's wording, never to which checks run.
    results.
 3. **Read the full diff** (`git show` — never `--stat` alone) and tick **every** ACTION-PLAN
    item and **every** coverage-matrix row against what the diff actually does. `--stat` cannot
-   see a hardcoded value, a stubbed branch, or a silently dropped plan item.
+   see a hardcoded value, a stubbed branch, or a silently dropped plan item. A mechanism in
+   the diff the brief never named = STOP: the planner writes hostile-input rows for it and
+   their tests land before PASS (PR #937's F1, #943).
 4. **Test honesty**: no weakened/removed assertions; every "does NOT contain X" assertion has
    an X-shaped fixture that could make it fail (vacuity check); no red-run manufactured by
    monkeypatching a fault production cannot produce (#900's phantom `OSError`); real failure
@@ -187,7 +197,9 @@ the gate report's wording, never to which checks run.
    exception).
 5. **Conventions**: each new public symbol listed beside 3 sibling symbols proving the name
    matches the house pattern (#905); comments/docs mentioning touched symbols reconciled with
-   the new reality (stale-comment defects recur).
+   the new reality (stale-comment defects recur); any comment/doc claim naming a **sibling
+   file or house convention** verified by grep — in-repo claims are the cheapest probes there
+   are (PR #937 shipped a fabricated "mirrors the URL-encoding checker" lineage, #941).
 6. **Write the gate record** — a fixed-field block (or per-phase file where the skill says
    so): commands + results, red/green evidence, per-item diff verdicts, matrix confirmation,
    the SKIPPED list. This artifact is what makes a skipped check auditable.
@@ -259,7 +271,10 @@ The five above are the law; how to satisfy them:
   shell options, so option drift trips it) feed a known-violating input through the
   identical pipeline shape and require nonzero before the real check runs. The canary is
   that wiring's red→green (PR #933: the default `bash -e {0}` has no `pipefail`, so `| tee`
-  masked the script's exit 1; exemplar: the `coverage-pairing` job in `test.yml`).
+  masked the script's exit 1; exemplar: the `coverage-pairing` job in `test.yml`). Broader
+  corollary: **any newly wired blocking gate** (a pre-commit block, a CI step) demonstrates
+  its red path once, in-session — feed a violating input, watch the gate fail — even when
+  the wiring is a bare `run:` line (PR #937's wiring shipped green-path-only, #943).
 
 ### ADR acceptance — automated tests, not a manual sign-off
 
@@ -636,7 +651,11 @@ clean". Only the dev-only no-PR classes are exempt.
 *class* ("the X clauses", "all Y", "… etc.") is fixed by re-enumerating the class **from the
 source** (grep), never from the finding's wording — PR #933's review-fix pinned 2 of 4
 equality clauses by trusting the reviewer's "etc." (#935). An APPLY delta that skips a full
-re-review still gets its coverage-matrix tick recorded in the audit comment.
+re-review still gets its coverage-matrix tick recorded in the audit comment. **A
+confirmed-real finding a reviewer itself downgrades to "pre-existing / no action needed" is
+still a finding**: it enters triage as DEFER and lands as a tracking issue before the merge —
+two real bugs from PR #937's re-review existed only in a session transcript until the
+post-merge audit (#941).
 
 **Rebase onto the latest base before every push, PR, or CI/smoke dispatch.** `devel` advances
 out of band: `git fetch origin` + `git rebase origin/devel` (or `origin/<pr-base>`),

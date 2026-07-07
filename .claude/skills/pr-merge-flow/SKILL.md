@@ -293,6 +293,10 @@ CodeRabbit wait:
    (the pre-merge catch-all sweep will still pick up a late review).
 4. **Triage its findings** exactly like any other review (APPLY / SKIP / DEFER + reply per
    thread) — a summary-only "generated no comments" review is just noted in the audit trail.
+   **A confirmed-real finding the reviewer itself downgrades to "pre-existing / out of scope /
+   no action needed" still enters triage**: DEFER + tracking issue, never a silent drop — PR
+   #937's focused re-review found two real pre-existing bugs that existed only in the session
+   transcript until the post-merge audit surfaced them (#941, #943).
 
 ### Gate before Step 2 (all paths)
 

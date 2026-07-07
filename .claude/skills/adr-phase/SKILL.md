@@ -170,7 +170,9 @@ to Step 7.
 
 For every phase `M` to run (the loop body in `all`):
 
-**Preferred route — the `phase-step` workflow.** When the Workflow tool is available, run
+**Default route — the `phase-step` workflow (use it whenever the Workflow tool is
+available; hand-spawning 6a/6b while it is available requires a recorded reason in your
+report — PR #937 bypassed it silently and produced no fixed-field gate record, #943).** Run
 6a+6b as ONE call: `Workflow({name: 'phase-step', args: {worktree: '<path>', brief: <the full
 6a brief below>, gates: [<canonical gate commands for the phase's languages>], redProof:
 {srcPaths: [<the phase's src paths>], testCmd: '<the named new test>'} | null (behaviour-
