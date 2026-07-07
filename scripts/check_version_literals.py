@@ -27,9 +27,9 @@ SCOPE (deliberately low false-positive: VALUES only, never prose)
   (production code, dev/CI tooling, and workflow YAML — everywhere a version
   literal could plausibly be pasted).
 * Excludes: any ``*.md`` path (docs describe value *formats*, not enforce
-  them — the user chose values-only enforcement); ``scripts/misc/install_deps_*``
+  them — the user chose values-only enforcement); any ``install_deps_*`` file
   (real FreeBSD package names such as ``py311-sqlite3`` legitimately hardcode
-  a flavor there — an intentional allowlist); this file and its own test
+  a flavor there — an intentional allowlist, matched by filename); this file and its own test
   (they define/contain the patterns being matched, so scanning them is
   meaningless self-reference). ``docs/misc/pfSense_versions.md`` is outside
   the scan roots anyway; it is named here only to document that intent.
@@ -76,14 +76,27 @@ _TOKEN_ALTERNATIVES = (
 # checker only matches a token that is the WHOLE value. Upgrade to substring
 # matching if hardcoded dependency names spread beyond the allowlisted file.
 #
+# ponytail: the unquoted-RHS check (_ASSIGNMENT_RE) matches a single whole-line
+# `key: value` / `key=value` (optionally `export`/`readonly`-prefixed) only. It
+# does NOT catch a token in a compound statement (`A=x; B=y`) or an unquoted
+# YAML sequence item (`- FreeBSD:15:amd64` / `[a, b]`); none occur in the tree
+# and the spec scopes to key/value. A QUOTED token in any of these is still
+# caught by the quoted-literal path.
+#
 # ponytail: a quoted illustrative example inside a multi-line YAML folded/
 # literal scalar (`description: >` ... "e.g. \"2.8\"" on a continuation line)
 # is not recognised as prose -- only `#` comments and Python triple-quoted
-# docstrings are tracked. Upgrade to a YAML block-scalar tracker (indentation-
-# based, mirroring _prose_line_flags's docstring state machine) if more than
-# this one line ever needs it; today `version-literal-ok` covers it.
+# docstrings are tracked. The single such site today (version-tracker.yml) was
+# fixed by DE-QUOTING the example, because a `version-literal-ok` comment cannot
+# sit inside a folded-scalar body without corrupting the visible description.
+# Upgrade to a YAML block-scalar tracker (indentation-based, mirroring
+# _prose_line_flags's docstring state machine) if more than one line ever needs it.
 _FULL_VALUE_RE = re.compile("^(?:" + "|".join(_TOKEN_ALTERNATIVES) + ")$")
-_ASSIGNMENT_RE = re.compile(r"^\s*[\w.-]+\s*[:=]\s*(?:" + "|".join(_TOKEN_ALTERNATIVES) + r")\s*$")
+# Optional `export`/`readonly` prefix: an unquoted `export ABI=FreeBSD:15:amd64`
+# is a real hardcode the quoted-literal path can't see (Copilot, PR #937).
+_ASSIGNMENT_RE = re.compile(
+    r"^\s*(?:export\s+|readonly\s+)?[\w.-]+\s*[:=]\s*(?:" + "|".join(_TOKEN_ALTERNATIVES) + r")\s*$"
+)
 
 _QUOTED_RE = re.compile(r'"([^"]*)"|\'([^\']*)\'')
 
@@ -103,8 +116,9 @@ def _is_excluded(path: Path) -> bool:
         return True
     if path.name in _EXCLUDED_SELF_NAMES:
         return True
-    # scripts/misc/install_deps_*.sh: real FreeBSD package names (py311-sqlite3)
-    # legitimately hardcode a flavor -- the spec's one intentional allowlist.
+    # install_deps_* (e.g. scripts/misc/install_deps_CE_2.8.sh): real FreeBSD
+    # package names (py311-sqlite3) legitimately hardcode a flavor -- the spec's
+    # one intentional allowlist, matched by filename.
     return path.name.startswith("install_deps_")
 
 
@@ -158,16 +172,21 @@ def _tracked_files(roots: tuple[str, ...]) -> list[Path]:
 _TRIPLE_QUOTE_TOKENS = ('"""', "'''")
 
 
-def _prose_line_flags(lines: list[str]) -> list[bool]:
-    """Return, per line, whether it is a ``#`` comment or triple-quote-delimited prose.
+def _prose_line_flags(lines: list[str], is_python: bool) -> list[bool]:
+    """Return, per line, whether it is a ``#`` comment or (in a .py file) prose.
 
-    Tracks triple-quote (docstring) state across the whole file: once a line
-    opens an odd number of triple-double- or triple-single-quote tokens,
-    every following line is prose until the matching token closes it. A doc
-    example line showing an arrow-mapping transformation is prose, not a real
-    assignment, even though the quoted span alone would otherwise fullmatch a
-    token -- this is a line-level heuristic (no real tokenizer), sufficient to
-    keep documentation/example content out of the value-position scan.
+    ``#`` comment lines are prose in every scanned language (sh/yaml/py), so
+    that exemption is unconditional.
+
+    The triple-quote (docstring) state machine runs ONLY for Python sources
+    (``is_python``): once a line opens an odd number of triple-double- or
+    triple-single-quote tokens, every following line is prose until the matching
+    token closes it, so a docstring example (an arrow-mapping transformation)
+    stays out of the value scan. It is deliberately NOT applied to shell/YAML:
+    a shell value wrapped in triple quotes is valid POSIX adjacent-quote
+    concatenation that evaluates to the exact inner literal, so treating such a
+    line as prose outside .py would let a hardcoded token bypass the gate
+    entirely (PR #937).
     """
     flags: list[bool] = []
     open_token = ""
@@ -181,13 +200,14 @@ def _prose_line_flags(lines: list[str]) -> list[bool]:
             flags.append(True)
             continue
         prose = False
-        for token in _TRIPLE_QUOTE_TOKENS:
-            count = line.count(token)
-            if count:
-                prose = True
-                if count % 2 == 1:
-                    open_token = token
-                break
+        if is_python:
+            for token in _TRIPLE_QUOTE_TOKENS:
+                count = line.count(token)
+                if count:
+                    prose = True
+                    if count % 2 == 1:
+                        open_token = token
+                    break
         flags.append(prose)
     return flags
 
@@ -201,7 +221,8 @@ def find_violations(paths: list[Path]) -> list[tuple[Path, int, str]]:
         except (OSError, UnicodeError):
             continue
         lines = text.splitlines()
-        for lineno, (line, is_prose) in enumerate(zip(lines, _prose_line_flags(lines), strict=True), start=1):
+        prose_flags = _prose_line_flags(lines, path.suffix == ".py")
+        for lineno, (line, is_prose) in enumerate(zip(lines, prose_flags, strict=True), start=1):
             if is_prose or _ESCAPE in line:
                 continue
             if _line_has_value_literal(line):

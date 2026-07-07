@@ -238,3 +238,39 @@ def test_lookalike_tokens_not_flagged(tmp_path: Path) -> None:
     # Longer lookalikes that merely start with a real token must not fullmatch.
     assert _find(tmp_path, f'flavor: "{_PY3110_LOOKALIKE}"\n') == [], "py3110 is not py31[0-9]"
     assert _find(tmp_path, f'target: "{_FREEBSD14}"\n') == [], "FreeBSD:14 is outside 15/16"
+
+
+# --- PR #937 review follow-ups ---------------------------------------------
+
+
+def test_shell_triple_quoted_value_flagged(tmp_path: Path) -> None:
+    # F1 (blocking, PR #937): the triple-quote docstring heuristic is Python-only.
+    # In shell, `X="""tok"""` is adjacent-quote concatenation that evaluates to
+    # `tok`; treating a `"""` line as prose in a .sh/.yml file let a hardcoded
+    # token bypass the whole gate. These MUST flag (they scan as .sh via _find).
+    assert len(_find(tmp_path, f'ABI="""{_FREEBSD15}"""\n')) == 1, "shell triple-double-quoted value must flag"
+    assert len(_find(tmp_path, f"PYF='''{_PY311}'''\n")) == 1, "shell triple-single-quoted value must flag"
+
+
+def test_python_docstring_body_still_exempt(tmp_path: Path) -> None:
+    # The boundary complement of the above: inside a real .py docstring the same
+    # triple-quoted token stays prose-exempt, so F1's fix did not over-correct.
+    content = '"""\n' + f'    "{_PY311}"\n' + '"""\n'
+    f = tmp_path / "d.py"
+    f.write_text(content, encoding="utf-8")
+    assert cvl.find_violations([f]) == [], "a .py docstring body must remain prose-exempt"
+
+
+def test_export_readonly_prefixed_unquoted_assignment_flagged(tmp_path: Path) -> None:
+    # Copilot (PR #937): `export`/`readonly` prefixes slipped UNQUOTED assignments
+    # past _ASSIGNMENT_RE (the quoted form was always caught by the literal path).
+    assert len(_find(tmp_path, f"export ABI={_FREEBSD15}\n")) == 1, "export-prefixed unquoted assignment must flag"
+    assert len(_find(tmp_path, f"readonly PYF={_PY311}\n")) == 1, "readonly-prefixed unquoted assignment must flag"
+
+
+def test_flags_php_flavor_quoted_value(tmp_path: Path) -> None:
+    # F4 (PR #937): the php8[0-9] token shape had no explicit coverage-matrix row.
+    php83 = "php8" + "3"
+    php85 = "php8" + "5"
+    assert len(_find(tmp_path, f'PHPFLAVOR="{php83}"\n')) == 1, "quoted php83 flavor must flag"
+    assert len(_find(tmp_path, f'flavor: "{php85}"\n')) == 1, "quoted php85 flavor must flag"
