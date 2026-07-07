@@ -514,6 +514,16 @@ composer install        # once; if it 403s in a managed cloud session, run
 vendor/bin/phpunit      # PHP suite: loads the REAL pfblockerng.inc off-appliance
 ```
 
+Environment gotchas that read as fake "baseline failures" — fix the env, never dismiss the
+red: the pytest suite needs a **zstd encoder** (the `zstd` binary or the `zstandard` module);
+a bare managed-cloud container lacks one and ~70 pkg/repo tests fail — the `SessionStart`
+hook auto-installs it (manual: `pip3 install zstandard`). PHPUnit permission-denial tests
+(`chmod 0555` fixtures) **skip under root** via a `posix_getuid() === 0` guard — root
+bypasses file permissions, so a root run cannot simulate the denial (a red there means the
+guard is missing, not that the code broke). Any other local-only failure: diagnose before
+dismissing — if it is genuinely pre-existing on the base branch, **file a tracking issue**
+(exemplars #791, #894); never leave it as folklore.
+
 The PHPUnit bootstrap satisfies `require_once` with empty shims (`tests/php/shims/`) +
 behavioural doubles (`tests/php/pfsense_doubles.php`); when a tested path reaches a new
 pfSense function, add a `function_exists()`-guarded double there (stubs can't serve —
