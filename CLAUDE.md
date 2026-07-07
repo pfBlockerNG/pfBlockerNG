@@ -712,6 +712,13 @@ ours. Three, ALL mandatory:
 3. **Pickup hygiene.** When starting or finishing any work item, run `TaskList` once and
    stop every stale wait you own from earlier items. If the task moved on, its future
    triggers are dead — good or bad outcome alike.
+4. **Portability — no `gh`, no bash polls.** Background bash loops presume the local
+   toolbox (`gh`); managed environments may lack it, and MCP tools are harness tools —
+   unreachable from inside a shell loop. Detect once at task start (`command -v gh` +
+   `gh auth status`); when absent, do GitHub reads/writes via the `mcp__github__*`
+   equivalents and run every wait as **wakeup-paced checks**: one minimal MCP state check
+   now → still unresolved → `ScheduleWakeup` the next ladder rung (self-invalidating
+   template) → repeat. Same rungs, same 2 h cap, same sweep — only the transport changes.
 
 Full ladder semantics + per-class mechanics:
 [`workflow-reference.md`](docs/misc/workflow-reference.md) "Bounded waits".

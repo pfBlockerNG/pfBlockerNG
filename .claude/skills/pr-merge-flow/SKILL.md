@@ -48,6 +48,11 @@ Args: `{{ args }}`
   `gh pr view --json number,headRefName,baseRefName,state,isDraft,url`. If there is
   none, stop and ask.
 - Resolve `OWNER/REPO`: `gh repo view --json nameWithOwner -q .nameWithOwner`.
+- **Transport check (managed environments):** `command -v gh && gh auth status` once. `gh`
+  absent → GitHub reads/writes via the session's `mcp__github__*` tools, and every wait below
+  runs as **wakeup-paced MCP checks** instead of a background bash loop (same rungs, caps, and
+  give-up budget — CLAUDE.md "No orphaned waits" §4 / workflow-reference "Managed
+  environments"). Neither `gh` nor a GitHub MCP server → stop and report.
 - This skill is for **code-bearing PRs**. If the work is a dev-only class that lands
   straight on `devel` with no PR (documentation-only, `CLAUDE.md`, ADR text, skills
   — see `CLAUDE.md` → "Worktrees"), this skill does not apply: say so and stop.

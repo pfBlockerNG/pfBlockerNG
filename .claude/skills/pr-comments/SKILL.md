@@ -41,6 +41,11 @@ supplements your judgement, it never replaces it.
   stop and ask.
 - Resolve `OWNER/REPO` with `gh repo view --json nameWithOwner -q .nameWithOwner`.
 - Be on the PR's **head** branch (checkout if needed) so fixes land on it.
+- **Transport check (managed environments):** `command -v gh && gh auth status` once. `gh`
+  absent → GitHub reads/writes via the session's `mcp__github__*` tools, and every wait below
+  runs as **wakeup-paced MCP checks** instead of a background bash loop (same rungs, caps, and
+  give-up budget — CLAUDE.md "No orphaned waits" §4 / workflow-reference "Managed
+  environments"). Neither `gh` nor a GitHub MCP server → stop and report.
 - Parse flags: `--wait-for=<handle>` (also accept `--wait-for <handle>`) turns on the
   wait in Step 2. It is **repeatable** and also accepts a **comma-separated list** —
   `--wait-for=coderabbitai,snyk` or `--wait-for=coderabbitai --wait-for=snyk` — so you can

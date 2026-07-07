@@ -117,6 +117,26 @@ The sweep is an explicit terminal step in every wait-spawning skill (`/pr-merge`
 It cannot be a workflow: `TaskStop`/`CronDelete` are orchestrator tools, invisible to
 workflow agents.
 
+### 4 — Managed environments (no `gh`): wakeup-paced MCP checks
+
+Background bash polls presume `gh`; managed (web/app) environments may not ship it, and MCP
+tools cannot be called from inside a shell loop. The portable wait:
+
+1. **Detect once** at Step 0/1 of the skill: `command -v gh && gh auth status`. Present →
+   the bash-poll snippets as written. Absent → the adaptation below; never mix per-call.
+2. **Reads/writes** go through the session's GitHub MCP server (`mcp__github__*` — discover
+   the exact tools via ToolSearch; names vary by server). Same data, same verdict logic.
+3. **Waits become wakeup-paced checks:** do one minimal MCP state check NOW; if unresolved,
+   `ScheduleWakeup` the next ladder rung with the self-invalidating template, and on firing
+   check again + re-arm. The rung ladder IS the poll cadence — same escalation, same 2 h
+   hard cap, same give-up-and-report rung. The sweep simplifies: there is no bash task to
+   `TaskStop`; the wakeups self-invalidate by template.
+4. **Workflows and scripts are unaffected:** the named workflows use only `git` + local
+   commands (both present in managed environments), and workflow agents reach MCP tools via
+   ToolSearch when they genuinely need GitHub state. Caveat: interactively-authenticated MCP
+   servers may be absent in headless/cron runs — a skill that finds NEITHER `gh` nor a
+   GitHub MCP server stops and reports rather than improvising.
+
 ## Config storage adapter rule (ADR-28 §2.2) — full text
 
 Expansion of CLAUDE.md "Code-quality conventions (ADR-28)":
