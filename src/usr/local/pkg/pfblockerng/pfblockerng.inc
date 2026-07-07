@@ -16493,6 +16493,13 @@ function sync_package_pfblockerng($cron='') {
 											// Collect original line
 											$oline = $line;
 
+											// Issue #946: strip a UTF-8 BOM before ANY per-line classification -- the ABP
+											// header sniff handles its own BOM, but the '!' comment skip, the ADR-21
+											// '||' anchor short-circuit and the CSV autodetection below do not; a BOM-led
+											// first line would be misclassified by all three. $oline keeps the original
+											// bytes for the parse-error log.
+											$line = pfb_dnsbl_strip_bom($line);
+
 											// Validate EasyList/AdBlock/uBlock/ADGuard Feeds.
 											// ADR-21: broadened to the generic ABP header
 											// convention ('[Adblock'/'[uBlock'/'! Title:'),
@@ -16597,12 +16604,6 @@ function sync_package_pfblockerng($cron='') {
 												if (strpos($line, '%20') !== FALSE) {
 													$line = str_replace('%20', '', $line);
 												}
-
-												// Issue #938: strip a UTF-8 BOM before ANY first-char
-												// classification below -- left in place it defeats the
-												// '#' comment check just below, so a BOM-led header
-												// line is treated as data and error-logged.
-												$line = pfb_dnsbl_strip_bom($line);
 
 												// Remove comment lines and special format considerations
 												if (str_starts_with($line, '#')) {

@@ -51,6 +51,20 @@ DNSBL assertion: `dns_probe` block-shape on the box (NOERROR + VIP, or NULL per 
 list's `logging`); the non-member (and the ABP allow-exception, where a feed `@@`
 allow band 2 beats the `||` block band 1) must RESOLVE, not block.
 
+## BOM-led '!' first line fixture (issue #946, `DnsblCase`, `test_smoke_feeds.py`)
+
+| File | First line | Anchor member (blocks) | Hosts member (blocks) |
+| --- | --- | --- | --- |
+| `dnsbl_bom_header.txt` | UTF-8-BOM-led `! ...` comment | `uuid-6c91761cef48.com` (`\|\|domain^`) | `uuid-2329767ef078.com` (`0.0.0.0 domain`) |
+
+Header-less, non-ABP feed whose FIRST bytes are a UTF-8 BOM (`EF BB BF`) directly
+ahead of a `!` comment line -- `pfb_dnsbl_strip_bom()` is hoisted to the top of the
+per-line parse loop so this line is skipped as a comment before the ADR-21 `||`
+anchor short-circuit and CSV autodetection ever see it. Neither the anchor line nor
+the hosts line carries a BOM. Assertion: both members block (VIP), AND the DNSBL
+parse-error log gains no new line for the BOM-led comment (the RED->GREEN carrier --
+pre-fix the still-BOM'd line missed the `!` skip and was logged as invalid data).
+
 ## Plain-text sanity scan fixture (ADR-49, `IpCase`, `test_smoke_feeds.py`)
 
 | File | on-box `file(1)` | Purpose |
