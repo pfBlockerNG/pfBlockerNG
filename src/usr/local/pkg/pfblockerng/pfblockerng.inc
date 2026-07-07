@@ -6470,7 +6470,7 @@ function pfb_dnsbl_strip_scheme(string $line, bool $strict = FALSE): string|fals
 
 
 // Issue #938: strip a leading UTF-8 BOM (EF BB BF) -- encoding metadata, not content,
-// the same class of noise pfb_text_sanity() strips up front (line ~1054) and
+// the same class of noise pfb_text_sanity() strips up front and
 // pfb_dnsbl_is_abp_header() peels per-line (below). Left in place on a feed's first line
 // it defeats the str_starts_with($line, '#') comment check, so a BOM-led '# Title: ...'
 // header is treated as data and error-logged instead of skipped as a comment. Strips

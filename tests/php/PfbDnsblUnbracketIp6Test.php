@@ -97,10 +97,11 @@ final class PfbDnsblUnbracketIp6Test extends TestCase
 
 	public function testZoneIdLiteralFollowsIsIpaddrv6Verbatim(): void
 	{
-		// Observed truth (run, not guessed): the pfSense is_ipaddrv6() double treats
-		// 'fe80::1%em0' as a valid link-local literal (zone-id retained in the address
-		// grammar for link-local addresses), so the bracket wrapper unwraps it verbatim
-		// -- the helper never itself strips the zone id, it only defers to is_ipaddrv6().
+		// Observed truth (run, not guessed): the pfSense is_ipaddrv6() double accepts
+		// 'fe80::1%em0' -- for a link-local literal it strips the '%zone' suffix during
+		// validation (see pfsense_doubles.php) -- and the bracket wrapper unwraps the
+		// ORIGINAL literal verbatim, zone id included: the helper never itself strips
+		// the zone id, it only defers to is_ipaddrv6() for validity.
 		$this->assertTrue(is_ipaddrv6('fe80::1%em0'));
 		$this->assertSame('fe80::1%em0', pfb_dnsbl_unbracket_ip6('[fe80::1%em0]'));
 	}
