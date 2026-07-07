@@ -40,13 +40,12 @@ use PHPUnit\Framework\TestCase;
  *     'WWW.' is stripped AFTER folding; a folded TLD that still doesn't match
  *     still counts toward $linecnt (not a dead feed) but writes no entry;
  *     an already-lowercase row is unaffected (no regression).
- *   * csv (OpenPageRank/Majestic/Cloudflare shapes): an uppercase
- *     single-column domain (Cloudflare shape) folds and matches; a
- *     quoted-unterminated field (domain_col 0 AND domain_col 1, header
- *     modes) is REJECTED by the anchored regex, taking the dead-feed
- *     preserve-prior-whitelist path instead of the pre-fix wipe; a
- *     mixed-case domain at a non-default column (Majestic shape, domain_col
- *     2) still folds and matches, proving the fix is not column-dependent.
+ *   * csv (OpenPageRank/Majestic/Cloudflare -- each via its REAL registered
+ *     descriptor from pfb_top1m_providers()): an uppercase/mixed-case domain
+ *     folds and matches at every registered domain_col (0 Cloudflare,
+ *     1 OpenPageRank, 2 Majestic); a quoted-unterminated field (domain_col 0
+ *     AND domain_col 1) is REJECTED by the anchored regex, taking the
+ *     dead-feed preserve-prior-whitelist path instead of the pre-fix wipe.
  */
 #[CoversFunction('pfblockerng_top1m')]
 final class Top1mTldCaseFoldTest extends TestCase
@@ -207,22 +206,25 @@ final class Top1mTldCaseFoldTest extends TestCase
 	}
 
 	/**
-	 * Row 6 -- 'csv' parse, domain_col 0 (Cloudflare's single-column shape,
-	 * no header): an uppercase domain still passes the hostname guard
-	 * (its character classes already cover both cases) and must fold before
-	 * the TLD compare, same as the rank_domain rows above.
+	 * Row 6 -- 'csv' parse, domain_col 0 via the REAL registered Cloudflare
+	 * descriptor (header=TRUE, single 'domain' column): an uppercase domain
+	 * still passes the hostname guard (its character classes already cover
+	 * both cases) and must fold before the TLD compare, same as the
+	 * rank_domain rows above (PR #953 review: the real descriptor, not a
+	 * synthetic no-header stand-in no registered provider matches).
 	 */
 	public function testCsvDomainCol0UppercaseDomainMatchesAndFoldsToLowercaseEntries(): void
 	{
-		$provider = ['parse' => 'csv', 'header' => FALSE, 'domain_col' => 0];
-		$this->assertNotFalse(file_put_contents($this->csvPath(), "EXAMPLE.COM\n"), 'setup: single-column uppercase domain, no header');
+		$csv = "domain\n"
+			. "EXAMPLE.COM\n";
+		$this->assertNotFalse(file_put_contents($this->csvPath(), $csv), 'setup: Cloudflare-shaped header + uppercase single-column domain');
 
-		pfblockerng_top1m($provider);
+		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::Cloudflare->value]);
 
 		$got = file_get_contents($this->whitelistPath());
 		$this->assertNotFalse($got);
 		$this->assertSame(".example.com,,\n,example.com,,\n,www.example.com,,\n", $got,
-			'domain_col 0 must fold an uppercase single-column domain the same as every other column shape');
+			'domain_col 0 (real Cloudflare descriptor) must fold an uppercase single-column domain the same as every other column shape');
 	}
 
 	/**
@@ -240,15 +242,16 @@ final class Top1mTldCaseFoldTest extends TestCase
 	 */
 	public function testCsvDomainCol0QuotedUnterminatedNewlineRejectedPreservesPriorWhitelist(): void
 	{
-		$provider = ['parse' => 'csv', 'header' => FALSE, 'domain_col' => 0];
 		$priorContent = ".real.com,,\n,real.com,,\n,www.real.com,,\n";
 		$this->assertNotFalse(file_put_contents($this->whitelistPath(), $priorContent), 'setup: seed prior whitelist');
 		// Written directly (not via an escaped literal) so the unterminated quote + trailing
 		// newline survive exactly as str_getcsv() would receive them from a real corrupted line.
-		$this->assertNotFalse(file_put_contents($this->csvPath(), "\"example.com\n"), 'setup: quoted-unterminated single-column row');
+		// Real Cloudflare descriptor (header=TRUE): the header row is skipped, the
+		// quoted-unterminated row is the only data line.
+		$this->assertNotFalse(file_put_contents($this->csvPath(), "domain\n\"example.com\n"), 'setup: header + quoted-unterminated single-column row');
 		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()), 'before-state sanity');
 
-		pfblockerng_top1m($provider);
+		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::Cloudflare->value]);
 
 		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()),
 			'a quoted-unterminated field (trailing newline retained) must NOT be accepted as a valid hostname');
@@ -277,6 +280,27 @@ final class Top1mTldCaseFoldTest extends TestCase
 			'a quoted-unterminated Domain field must NOT be accepted, even at a non-zero column with a header row');
 		$this->assertStringContainsString('keeping the previous TOP1M whitelist', $this->readErrLog());
 		$this->assertStringContainsString('keeping the previous TOP1M whitelist', $this->readMainLog());
+	}
+
+	/**
+	 * Row 8b -- 'csv' parse, domain_col 1 via the REAL registered OpenPageRank
+	 * descriptor (header=TRUE): an uppercase Domain field must fold and match,
+	 * completing the case-fold proof for every csv domain_col the provider
+	 * registry names (0/1/2) against its real descriptor (PR #953 review: row 8
+	 * only proved the /D anchor at this column, never the fold).
+	 */
+	public function testCsvDomainCol1OpenPageRankShapeUppercaseDomainMatchesAndFolds(): void
+	{
+		$csv = "Rank,Domain,Extension,Open Page Rank,Referring Domains\n"
+			. "1,EXAMPLE.COM,com,7.5,1000\n";
+		$this->assertNotFalse(file_put_contents($this->csvPath(), $csv), 'setup: OpenPageRank-shaped header + uppercase Domain row');
+
+		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::OpenPageRank->value]);
+
+		$got = file_get_contents($this->whitelistPath());
+		$this->assertNotFalse($got);
+		$this->assertSame(".example.com,,\n,example.com,,\n,www.example.com,,\n", $got,
+			'an uppercase Domain field at domain_col 1 (real OpenPageRank descriptor) must still fold and match');
 	}
 
 	/**

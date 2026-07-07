@@ -1,13 +1,16 @@
 #shellcheck shell=sh
 # composer-cloud-install.sh — the cloud egress fallback's offline-testable pieces
-# (issue #950): the lock-ref extraction and the json/lock phpstan strip. The
-# network stages (composer --prefer-source, the shallow phpstan fetch) need live
-# egress and are exercised by actually using the script in a cloud session.
+# (issue #950): the lock-ref extraction, the json/lock phpstan strip, and the
+# uncommitted-edits guard. The network stages (composer --prefer-source, the
+# shallow phpstan fetch) need live egress and are exercised by actually using
+# the script in a cloud session.
 
 Describe 'composer-cloud-install.sh helpers (issue #950)'
   SCRIPT="${PFB_ROOT}/scripts/composer-cloud-install.sh"
 
   setup() {
+    # Scrub inherited git context (GIT_DIR etc. would corrupt the fixture repo).
+    scrub_git_env
     WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/composercloud.XXXXXX")"
     cat > "${WORK}/composer.json" << 'EOF'
 {
@@ -94,6 +97,43 @@ EOF
       strip_phpstan "${WORK}/composer.json" "${WORK}/composer.lock"
       When call json_still_parses "${WORK}/composer.json" "${WORK}/composer.lock"
       The output should equal 'ok'
+    End
+  End
+
+  Describe 'refuse_if_composer_files_dirty'
+    # Turn the WORK fixture dir into a git repo with both files committed, so
+    # the guard's HEAD comparison has a baseline to diff against.
+    commit_baseline() {
+      git -C "$WORK" init -q
+      git -C "$WORK" -c user.name=spec -c user.email=spec@example.invalid \
+        add composer.json composer.lock
+      git -C "$WORK" -c user.name=spec -c user.email=spec@example.invalid \
+        commit -qm baseline
+    }
+
+    It 'passes on a clean composer.json/composer.lock'
+      commit_baseline
+      When call refuse_if_composer_files_dirty "$WORK"
+      The status should be success
+    End
+
+    It 'refuses UNSTAGED composer.json edits'
+      commit_baseline
+      echo '{"changed": true}' > "${WORK}/composer.json"
+      When call refuse_if_composer_files_dirty "$WORK"
+      The status should be failure
+      The stderr should include 'uncommitted changes'
+    End
+
+    # PR #953 review: `git diff --quiet` alone compares worktree vs index and
+    # silently passes STAGED edits; the guard must diff against HEAD instead.
+    It 'refuses STAGED composer.lock edits'
+      commit_baseline
+      echo '{"packages": []}' > "${WORK}/composer.lock"
+      git -C "$WORK" add composer.lock
+      When call refuse_if_composer_files_dirty "$WORK"
+      The status should be failure
+      The stderr should include 'uncommitted changes'
     End
   End
 End
