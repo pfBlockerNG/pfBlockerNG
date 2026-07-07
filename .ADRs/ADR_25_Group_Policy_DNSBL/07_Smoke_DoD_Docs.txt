@@ -12,6 +12,7 @@ ROLE
 Implementer in the per-ADR worktree on branch adr/25-group-policy-dnsbl. Phase 7 proves the
 feature end-to-end on a live VM (the part CI can do), codifies the maintainer manual smoke
 for anything CI can't, and updates docs. One commit. No sub-agents.
+MODE: behaviour change — new smoke/UI tests prove the feature red->green against pre-ADR code where dispatchable; any out-of-CI item is documented, not skipped silently.
 
 PRE-FLIGHT
 Read RESULTS/06_Results.txt AND 05_/04_/01_. Missing => STOP and report.
@@ -25,6 +26,11 @@ REQUIRED READING
 - docs/misc/architecture-notes.md — DNSBL pipeline section to extend.
 - CLAUDE.md — Smoke tests (on-box probe, unique_domain, block shapes, no localhost
   exemption, first-response-authoritative), Updating documentation.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
 
 ACTION PLAN (ordered)
 1. REUSE client_source(ip) for source-bound DNS probes (drill -I <src> from the second

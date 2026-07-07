@@ -6,6 +6,7 @@ ADR: .ADRs/ADR_55_Client_Groups_Group_Policy/ADR.md   (read SS3, SS7)
 
 ROLE
 Implementer in the adr/55-client-groups-group-policy worktree. One commit. No sub-agents.
+MODE: behaviour change — new smoke/UI tests prove the feature red->green against pre-ADR code where dispatchable; any out-of-CI item is documented, not skipped silently.
 
 WHY THIS PHASE EXISTS
 Per-CG rules are unit-pinned but only live traffic proves pf actually scopes them. Extend
@@ -22,6 +23,11 @@ REQUIRED READING
 - The ADR-41 deferred smoke (test_smoke_autorule_immutable.py skip) — pattern for
   rule-order assertions via pfctl -sr parsing (with rendered-form matching, e.g. port 53
   prints as 'domain').
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
 
 ACTION PLAN (ordered)
 1. HARNESS: source-bound probing from the VM guest — add a second guest address (alias IP
@@ -52,6 +58,14 @@ ACTION PLAN (ordered)
    completion state per the repo's ADR-acceptance rule (green CE+Plus fan-out = Accepted).
 6. Dispatch: rebase onto latest devel first; selective smoke dispatch for the new module
    (-f pytest_filter), then the full fan-out for acceptance.
+
+VERIFICATION (must all pass before the phase is done)
+- The canonical gates for every language the diff touches (CLAUDE.md "Canonical gates"),
+  including cross-language consumers of any artifact this phase changes.
+- The phase's tests per its MODE: an oracle that stays green across the change, or a
+  red->green cycle with both runs executed and their output pasted into the handoff.
+- The KILL-GATES below are the orchestrator's adversarial re-checks — make each one easy
+  to re-run (name the command; don't bury it in prose).
 
 KILL-GATES
 - Every smoke case proves the before-state (no false passes).

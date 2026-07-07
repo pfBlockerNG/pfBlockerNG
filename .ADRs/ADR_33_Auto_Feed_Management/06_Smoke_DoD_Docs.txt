@@ -7,6 +7,7 @@ ADR: .ADRs/ADR_33_Auto_Feed_Management/ADR.md   (read SS7 first)
 ROLE
 Work in the per-ADR worktree on branch adr/33-auto-feed-management. Phase 6 proves the
 reconciler end-to-end on a live VM, closes the DoD, and updates docs. One commit, push directly.
+MODE: behaviour change — new smoke/UI tests prove the feature red->green against pre-ADR code where dispatchable; any out-of-CI item is documented, not skipped silently.
 
 WHY THIS PHASE EXISTS
 The feature mutates user feed config in auto mode; a live-VM run with a seeded moved feed + a
@@ -20,6 +21,11 @@ REQUIRED READING
 - tests/smoke/ — conftest.py (smoke_vm), helpers.py (config injection); a journey test pattern.
 - docs/misc/architecture-notes.md — the feeds/pipeline section to extend.
 - CLAUDE.md — Smoke tests, Updating documentation.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
 
 ACTION PLAN (ordered)
 1. Live-VM smoke: inject a config with (a) a stored feed whose catalog url moved (stored url in

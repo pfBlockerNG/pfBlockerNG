@@ -29,6 +29,11 @@ REQUIRED READING
 - CLAUDE.md — Test coverage (branch + before/after + BDD), Python standards (incl. the
   no-fixed-time-waits rule for any async test).
 
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
 ACTION PLAN (ordered — tests alongside)
 1. LOAD from the manifest (Phase 4 shape): gp_groups (bit map), gp_divergent_mask,
    gp_clients, gp_domain_rules, gp_bindings (+ serialised schedule ranges) at build/reload;

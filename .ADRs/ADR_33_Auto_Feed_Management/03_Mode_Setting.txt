@@ -7,6 +7,7 @@ ADR: .ADRs/ADR_33_Auto_Feed_Management/ADR.md   (read SS2, SS5 first)
 ROLE
 Work in the per-ADR worktree on branch adr/33-auto-feed-management. Phase 3 adds the opt-in
 mode setting via the config gateway. No reconcile wiring yet. One commit, push directly.
+MODE: behaviour change — every new behaviour proves red->green (executed runs, output pasted in the handoff).
 
 WHY THIS PHASE EXISTS
 The whole feature is opt-in and tri-state (off/notify/auto). The setting must round-trip
@@ -20,6 +21,11 @@ REQUIRED READING
 - pfblockerng_extra.inc — PfbConfig + pfb_cfg_registry() (ADR-29); since-version convention.
 - tests/phpcs/.../RequireConfigGatewaySniff.php ($registeredPaths).
 - tests/php/CfgGatewayTest.php for the round-trip test pattern; CLAUDE.md — ADR-28/29.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
 
 ACTION PLAN (ordered)
 1. Register pfb_feed_mgmt_mode in pfb_cfg_registry() (section path + default stored string 'off';

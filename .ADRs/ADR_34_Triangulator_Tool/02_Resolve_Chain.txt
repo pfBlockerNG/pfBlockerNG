@@ -7,6 +7,7 @@ ADR: .ADRs/ADR_34_Triangulator_Tool/ADR.md   (read SS2.1, SS2.2 first)
 ROLE
 Work in the per-ADR worktree on branch adr/34-triangulator-tool. Phase 2 creates the
 diagnostics engine file and the DNS resolution function. One commit, push directly.
+MODE: behaviour change — every new behaviour proves red->green (executed runs, output pasted in the handoff).
 
 WHY THIS PHASE EXISTS
 Triangulation starts from the resolution chain: A/AAAA + every CNAME. On-demand lookups for
@@ -23,6 +24,11 @@ REQUIRED READING
 - docs/misc/external-process-waits.md — MANDATORY before writing the timeout mechanics
   (FreeBSD timeout(1) is a process reaper by default).
 - CLAUDE.md — PHP standards, PFBL-01 (validate before exec), Test coverage.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
 
 ACTION PLAN (ordered)
 1. Create src/usr/local/pkg/pfblockerng/pfblockerng_diagnostics.inc with the standard header +

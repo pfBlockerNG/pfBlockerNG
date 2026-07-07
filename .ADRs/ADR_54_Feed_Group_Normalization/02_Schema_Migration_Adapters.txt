@@ -28,6 +28,11 @@ REQUIRED READING
   suffix rule must keep it workable (store cat_category/cat_header on migrated feeds when
   the row matches the catalog; leave empty otherwise).
 
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
 ACTION PLAN (ordered)
 1. Schema constants + accessors in pfblockerng.inc (or pfblockerng_extra.inc where the
    existing config helpers live): read/write helpers for pfblockerngfeeds and
@@ -54,6 +59,14 @@ ACTION PLAN (ordered)
      the enable checks) — pin with a test.
 6. Gates: phpunit, php -l, PHPStan, PHPCS, pytest (nothing python should change — prove it),
    markdownlint for the config-gateway.md edit.
+
+VERIFICATION (must all pass before the phase is done)
+- The canonical gates for every language the diff touches (CLAUDE.md "Canonical gates"),
+  including cross-language consumers of any artifact this phase changes.
+- The phase's tests per its MODE: an oracle that stays green across the change, or a
+  red->green cycle with both runs executed and their output pasted into the handoff.
+- The KILL-GATES below are the orchestrator's adversarial re-checks — make each one easy
+  to re-run (name the command; don't bury it in prose).
 
 KILL-GATES
 - Phase 1 goldens byte-identical on migrated config.

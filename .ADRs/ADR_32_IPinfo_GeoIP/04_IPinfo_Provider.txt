@@ -20,6 +20,11 @@ REQUIRED READING
 - The Phase-2 interfaces + MaxMind impl; the Phase-3 ingestion + fixtures.
 - CLAUDE.md — PHP standards, Test coverage.
 
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
 ACTION PLAN (ordered)
 1. IMPLEMENT the IPinfo GeoipProvider: country/continent map, log-enrichment fields,
    Reputation inputs, all from the normalized record. Keep log formats/block shapes stable.

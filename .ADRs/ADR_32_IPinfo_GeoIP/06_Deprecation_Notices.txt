@@ -8,6 +8,7 @@ ROLE
 Work in the per-ADR worktree on branch adr/32-ipinfo-geoip. Phase 6 detects config that
 references GeoIP features the active provider cannot supply and NOTIFIES -- it never mutates
 config.xml. One commit, push directly.
+MODE: behaviour change — every new behaviour proves red->green (executed runs, output pasted in the handoff).
 
 WHY THIS PHASE EXISTS
 Issue #291 asks to "clean up" config for removed/deprecated GeoIP features. config.xml is
@@ -20,6 +21,11 @@ REQUIRED READING
 - The Phase-2 capability flags; pfblockerng.inc build path + file_notice usage; firewall-rule
   / continent references to GeoIP features.
 - CLAUDE.md — config freeze (ADR-28), PfbConfig (ADR-29), Test coverage.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
 
 ACTION PLAN (ordered)
 1. At build, scan config / firewall rules for references to GeoIP features the active provider

@@ -7,6 +7,7 @@ ADR: .ADRs/ADR_32_IPinfo_GeoIP/ADR.md   (read SS2, SS5 first)
 ROLE
 Work in the per-ADR worktree on branch adr/32-ipinfo-geoip. Phase 5 wires the provider choice
 to the UI + config. One commit, push directly.
+MODE: behaviour change — every new behaviour proves red->green (executed runs, output pasted in the handoff).
 
 WHY THIS PHASE EXISTS
 The seam (Phases 2-4) is config-driven once an admin can pick the provider. One geoip_provider
@@ -22,6 +23,11 @@ REQUIRED READING
   sniff registeredPaths.
 - tests/smoke/ui/ test_render_smoke.py (ADR-14 Tier A); tests/php/ for an extracted decider.
 - CLAUDE.md — PHP standards, Web UI help text, Naming, Smoke tests (ui_render).
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
 
 ACTION PLAN (ordered)
 1. Register geoip_provider (default 'maxmind') + asn_provider (default 'ipinfo') in

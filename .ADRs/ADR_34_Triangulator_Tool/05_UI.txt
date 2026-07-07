@@ -7,6 +7,7 @@ ADR: .ADRs/ADR_34_Triangulator_Tool/ADR.md   (read SS2.1, SS2.3 first)
 ROLE
 Work in the per-ADR worktree on branch adr/34-triangulator-tool. Phase 5 surfaces the engine in
 the UI (read-only v1: links, not in-place writes). One commit, push directly.
+MODE: behaviour change — every new behaviour proves red->green (executed runs, output pasted in the handoff).
 
 WHY THIS PHASE EXISTS
 The engine (Phases 2-4) is headless. v1 gives it two entry points (a Reports Diagnostics form +
@@ -22,6 +23,11 @@ REQUIRED READING
   tab/menu wiring; src/etc/inc/priv/ (existing pfBlockerNG .priv.inc entries).
 - tests/smoke/ui/ test_render_smoke.py (ADR-14 Tier A); tests/php/ for an extracted decider.
 - CLAUDE.md — Naming, PHP standards, Web UI help text, Smoke (ui_render), PFBL-01.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
 
 ACTION PLAN (ordered)
 1. Add a Reports -> Diagnostics sub-tab: a free-text input (IP/domain/URL) -> calls

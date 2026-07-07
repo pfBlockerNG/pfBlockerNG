@@ -26,6 +26,11 @@ REQUIRED READING
   filter_get_time_based_rule_status(); a rule with a dangling sched name — check pfSense
   source behaviour and mirror it (we emit without sched on dangling ref, SS2.2).
 
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
 ACTION PLAN (ordered)
 1. GENERATOR: after the existing per-group rule emission, iterate enabled CGs x enabled
    ipv4/ipv6 bindings: action = action_override ?: FG default_action; skip if resolved
@@ -58,6 +63,14 @@ ACTION PLAN (ordered)
    fixture: client in 2 CGs, Permit-override + Deny-default -> pass rule precedes (assert
    final array order).
 6. Gates: full phpunit + linters; pytest untouched (prove no python/manifest diff).
+
+VERIFICATION (must all pass before the phase is done)
+- The canonical gates for every language the diff touches (CLAUDE.md "Canonical gates"),
+  including cross-language consumers of any artifact this phase changes.
+- The phase's tests per its MODE: an oracle that stays green across the change, or a
+  red->green cycle with both runs executed and their output pasted into the handoff.
+- The KILL-GATES below are the orchestrator's adversarial re-checks — make each one easy
+  to re-run (name the command; don't bury it in prose).
 
 KILL-GATES
 - Scoped shapes reuse pfb_firewall_rule() — the orchestrator rejects a parallel rule

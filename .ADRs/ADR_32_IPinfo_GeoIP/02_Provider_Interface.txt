@@ -21,6 +21,11 @@ REQUIRED READING
 - The Phase-1 extracted functions + their call sites; tests/php/ oracle.
 - CLAUDE.md — PHP standards, naming, Test coverage.
 
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
 ACTION PLAN (ordered)
 1. DEFINE the normalized GeoIP/ASN record (country_iso, country_name, continent, asn, as_org,
    flags map, capability flags supports_locale + which deprecated flags are present).

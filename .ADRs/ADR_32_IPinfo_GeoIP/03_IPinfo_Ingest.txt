@@ -8,6 +8,7 @@ ROLE
 Work in the per-ADR worktree on branch adr/32-ipinfo-geoip. Phase 3 adds IPinfo DB ingestion
 (download + parse) to the normalized record. NOT yet wired to consumers (Phase 4). One commit,
 push directly.
+MODE: behaviour change — every new behaviour proves red->green (executed runs, output pasted in the handoff).
 
 WHY THIS PHASE EXISTS
 IPinfo now ships GeoIP in CIDR IPv4/IPv6 form with a field set that differs from MaxMind's
@@ -22,6 +23,11 @@ REQUIRED READING
   pattern to extend); the path* var convention for privileged binaries.
 - CLAUDE.md — Shell standards (POSIX sh, LC_ALL=C on sorts, path vars), URL-encoding gate,
   Test coverage; PFBL-01 (validate before exec/path build).
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
 
 ACTION PLAN (ordered)
 1. Fetch via the EXISTING extras pipeline per ADR.md §2.0 fork 2 ($pfb[extras] -> pfb_download() — ADR-42/44/45 gates + ADR-43 dcc scheduling), NOT a fresh downloader (token-authenticated; honour the

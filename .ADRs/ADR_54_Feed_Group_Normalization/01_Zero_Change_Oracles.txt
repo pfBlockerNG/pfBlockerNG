@@ -27,6 +27,11 @@ REQUIRED READING
 - tests/php/AggregateMemberListTest.php and AutoruleListOracleTest.php — existing oracle
   patterns to imitate (fixture config in, frozen expected artifact out).
 
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
 ACTION PLAN (ordered)
 1. Build a FIXTURE CONFIG (PHP array, tests/php/fixtures/) exercising every shape SS2.7
    protects: >=2 IP groups (one Deny_*, one Permit_* with Adv in/outbound fields set, one
@@ -47,6 +52,14 @@ ACTION PLAN (ordered)
    expected-vs-actual diffs on failure (CLAUDE.md "On failure, print expected vs actual").
 4. Run every gate: vendor/bin/phpunit, php -l on touched files, PHPStan, PHPCS,
    markdownlint (if docs touched). All green.
+
+VERIFICATION (must all pass before the phase is done)
+- The canonical gates for every language the diff touches (CLAUDE.md "Canonical gates"),
+  including cross-language consumers of any artifact this phase changes.
+- The phase's tests per its MODE: an oracle that stays green across the change, or a
+  red->green cycle with both runs executed and their output pasted into the handoff.
+- The KILL-GATES below are the orchestrator's adversarial re-checks — make each one easy
+  to re-run (name the command; don't bury it in prose).
 
 KILL-GATES (the orchestrator verifies these adversarially — make them easy to check)
 - The oracle tests FAIL if any captured artifact changes by one byte (prove by mutating a

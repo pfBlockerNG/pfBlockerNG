@@ -23,6 +23,11 @@ REQUIRED READING
 - docs/misc/architecture-notes.md — the GeoIP/Reputation section to extend.
 - CLAUDE.md — Smoke tests, Updating documentation.
 
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
 ACTION PLAN (ordered)
 1. Live-VM smoke for the non-credentialed paths: provider-selector pages render (ui_render);
    with provider=MaxMind the GeoIP/ASN behaviour is unchanged (oracle parity on-box where

@@ -35,6 +35,11 @@ REQUIRED READING
   (Unbound symbol injection).
 - CLAUDE.md — Python standards, Test coverage (branch + before/after + BDD).
 
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
 ACTION PLAN (ordered — tests FIRST when behaviour-preserving)
 1. ORACLE: add golden tests freezing current evaluate_domain decisions for a representative
    corpus (block VIP, block NULL, allow/whitelist, no-match, CNAME-chain, TLD). Reuse the

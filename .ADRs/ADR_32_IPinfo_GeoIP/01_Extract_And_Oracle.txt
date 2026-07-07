@@ -25,6 +25,11 @@ REQUIRED READING
 - tests/php/ — bootstrap.php, pfsense_doubles.php; an existing manifest/UI decider test for
   style. CLAUDE.md — PHP standards, Test coverage (branch + before/after + BDD).
 
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
 ACTION PLAN (ordered — tests FIRST when behaviour-preserving)
 1. ENUMERATE every MaxMind/IPinfo call site (the five consumers + the DB build) with
    file:line; record the current output shape of each (option-list rows, enrichment strings,

@@ -8,6 +8,7 @@ ROLE
 Work in the per-ADR worktree on branch adr/34-triangulator-tool. Phase 4 ties the engine into
 the top-level orchestrator + the classification + plain-English explanations. Read-only. One
 commit, push directly.
+MODE: behaviour change — every new behaviour proves red->green (executed runs, output pasted in the handoff).
 
 WHY THIS PHASE EXISTS
 pfb_triangulate() is the single entry point the UI calls. It auto-detects the input, runs the
@@ -20,6 +21,11 @@ REQUIRED READING
 - .ADRs/ADR_34_Triangulator_Tool/ADR.md (SS2.1 orchestrator/classification rows, SS2.2).
 - The Phase-2/3 engine functions + the report structure.
 - CLAUDE.md — PHP standards, Test coverage (every branch).
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
 
 ACTION PLAN (ordered)
 1. pfb_triangulate($input, $type='auto'): auto-detect IP (is_ipaddr) / domain (PFB_FILTER_

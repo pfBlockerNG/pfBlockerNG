@@ -22,6 +22,11 @@ REQUIRED READING
   wildcard/TLD zone distinction (unbound_py_data vs ..._zone).
 - tests/php/ for style; CLAUDE.md — PHP standards, Test coverage (branch + BDD).
 
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
 ACTION PLAN (ordered — tests FIRST when behaviour-preserving)
 1. Identify the smallest pure "classify a name against exact/wildcard/TLD data" decision the
    engine needs; extract it into a named function (input: name + the data/zone lookup view;

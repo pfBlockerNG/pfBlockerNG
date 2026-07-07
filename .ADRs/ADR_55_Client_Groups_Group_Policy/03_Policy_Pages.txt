@@ -6,6 +6,7 @@ ADR: .ADRs/ADR_55_Client_Groups_Group_Policy/ADR.md   (read SS2.6)  +  UI/ direc
 
 ROLE
 Implementer in the adr/55-client-groups-group-policy worktree. One commit. No sub-agents.
+MODE: behaviour change — every new behaviour proves red->green (executed runs, output pasted in the handoff).
 
 WHY THIS PHASE EXISTS
 Ship the operator surface for Phases 1-2 from the reviewed reference implementations in
@@ -22,6 +23,11 @@ REQUIRED READING
 - pfblockerng_category.php — the list-page pattern (panel, sortable table, AJAX quick-edit
   save loop, pfb_print_pending_changes_box) your list page mirrors.
 - ADR-14 tiers in docs/misc/architecture-notes.md + tests/smoke/ui/ patterns.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
 
 ACTION PLAN (ordered)
 1. Copy UI/pfblockerng_group_policy.php -> src/usr/local/www/pfblockerng/; wire the AJAX
@@ -43,6 +49,14 @@ ACTION PLAN (ordered)
    - PHPUnit: any page-level pure deciders extracted (option-list builders, count
      formatting).
 6. Gates: full suite + linters; Tier A run locally per CLAUDE.md.
+
+VERIFICATION (must all pass before the phase is done)
+- The canonical gates for every language the diff touches (CLAUDE.md "Canonical gates"),
+  including cross-language consumers of any artifact this phase changes.
+- The phase's tests per its MODE: an oracle that stays green across the change, or a
+  red->green cycle with both runs executed and their output pasted into the handoff.
+- The KILL-GATES below are the orchestrator's adversarial re-checks — make each one easy
+  to re-run (name the command; don't bury it in prose).
 
 KILL-GATES
 - Diff vs UI/ references: every divergence listed+justified in the handoff; unlisted =

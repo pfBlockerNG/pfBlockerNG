@@ -26,6 +26,11 @@ REQUIRED READING
   read via PfbConfig::read, never direct config_get_path) + pfbng_text_area_decode().
 - The 31-char pf table-name arithmetic: pfB_CG_ (7) + name <= 31 => name <= 24.
 
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
 ACTION PLAN (ordered)
 1. Schema helpers for installedpackages/pfblockerngclientgroups (section-level foreign
    keys, direct config_*_path — mirror ADR-54's helper pattern; add the section to the
@@ -50,6 +55,14 @@ ACTION PLAN (ordered)
    - ORACLES: ADR-54 goldens green; a CG-with-bindings fixture produces ZERO rule/manifest
      change (the inert proof).
 6. Gates: full phpunit + pytest + linters + PHPCS (new sniff scope green).
+
+VERIFICATION (must all pass before the phase is done)
+- The canonical gates for every language the diff touches (CLAUDE.md "Canonical gates"),
+  including cross-language consumers of any artifact this phase changes.
+- The phase's tests per its MODE: an oracle that stays green across the change, or a
+  red->green cycle with both runs executed and their output pasted into the handoff.
+- The KILL-GATES below are the orchestrator's adversarial re-checks — make each one easy
+  to re-run (name the command; don't bury it in prose).
 
 KILL-GATES
 - Zero enforcement: diff contains no pfb_firewall_rule() call site change, no manifest

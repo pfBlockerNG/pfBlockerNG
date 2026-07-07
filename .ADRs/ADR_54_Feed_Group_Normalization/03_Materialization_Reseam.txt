@@ -27,6 +27,11 @@ REQUIRED READING
 - pfblockerng.php cron path — where per-group cron/dow hour-gates run (the cadence rule
   hooks in here: a feed is due iff ANY member group's cadence marks it due).
 
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
 ACTION PLAN (ordered)
 1. RAW ARTIFACT PER FEED: one fetch + one sidecar per fid (keyed by the feed's on-disk
    header name, which Phase 2 made unique per family). The conditional-GET-first contract
@@ -66,6 +71,14 @@ ACTION PLAN (ordered)
    SAME commit with an explicit note in the test explaining why — everything else stays
    byte-identical.
 7. Gates: full phpunit + pytest + linters.
+
+VERIFICATION (must all pass before the phase is done)
+- The canonical gates for every language the diff touches (CLAUDE.md "Canonical gates"),
+  including cross-language consumers of any artifact this phase changes.
+- The phase's tests per its MODE: an oracle that stays green across the change, or a
+  red->green cycle with both runs executed and their output pasted into the handoff.
+- The KILL-GATES below are the orchestrator's adversarial re-checks — make each one easy
+  to re-run (name the command; don't bury it in prose).
 
 KILL-GATES
 - Fetch-count assertions (1 per fid) — the core claim of the phase.

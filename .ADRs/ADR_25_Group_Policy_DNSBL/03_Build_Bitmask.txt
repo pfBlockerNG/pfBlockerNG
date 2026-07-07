@@ -34,6 +34,11 @@ REQUIRED READING
   'group' (=DNSBL_ alias).
 - tests/ oracle from Phase 2.
 
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
 ACTION PLAN (ordered)
 1. Define the alias->bit assignment: enumerate distinct manifest 'group' (DNSBL_ alias)
    values deterministically (stable order) -> bit index. Build an alias->bit map in the build

@@ -21,6 +21,11 @@ REQUIRED READING
   header, url, state).
 - CLAUDE.md — Test coverage (every branch, before/after, BDD).
 
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
 ACTION PLAN (ordered — tests alongside)
 1. Add a pure function pfb_feed_reconcile_plan($user_rows, $index) -> [ actions ], each action
    { row_ref, type: none|rewrite_url|disable_discontinued|suggest_alternate, from, to,

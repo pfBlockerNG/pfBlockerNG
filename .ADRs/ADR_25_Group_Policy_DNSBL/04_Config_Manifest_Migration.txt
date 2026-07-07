@@ -39,6 +39,11 @@ REQUIRED READING
   foreign keys (section helpers).
 - tests/php/ bootstrap + an existing manifest test for style.
 
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
 ACTION PLAN (ordered)
 1. MANIFEST ADDITIONS (all additive-optional; absent => today's behaviour):
    - 'gp_groups': dnsbl Feed-Group name -> bit index. MIRROR Phase 3's assignment — one
@@ -68,6 +73,14 @@ ACTION PLAN (ordered)
 4. pytest: pin that a manifest WITHOUT the new keys still loads unchanged in the python
    loader (additive-optional proof), if not already pinned.
 5. Gates: vendor/bin/phpunit, php -l, PHPStan, phpcs (PFBL-01), python -m pytest, linters.
+
+VERIFICATION (must all pass before the phase is done)
+- The canonical gates for every language the diff touches (CLAUDE.md "Canonical gates"),
+  including cross-language consumers of any artifact this phase changes.
+- The phase's tests per its MODE: an oracle that stays green across the change, or a
+  red->green cycle with both runs executed and their output pasted into the handoff.
+- The KILL-GATES below are the orchestrator's adversarial re-checks — make each one easy
+  to re-run (name the command; don't bury it in prose).
 
 KILL-GATES (the orchestrator verifies adversarially)
 - Zero-CG manifest byte-identity (goldens).

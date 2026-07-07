@@ -8,6 +8,7 @@ ROLE
 Work in the per-ADR worktree on branch adr/33-auto-feed-management. Phase 4 is the behaviour
 change: consume the plan and act per mode, wired to install/update + a manual recheck. One
 commit, push directly.
+MODE: behaviour change — every new behaviour proves red->green (executed runs, output pasted in the handoff).
 
 WHY THIS PHASE EXISTS
 This turns the pure plan (Phase 2) into action under the mode (Phase 3): notify reports without
@@ -23,6 +24,11 @@ REQUIRED READING
   use section helpers / direct config_*_path (foreign-key list in CLAUDE.md); file_notice +
   write_config usage; PFB_FILTER_URL validation.
 - CLAUDE.md — PHP standards, PFBL-01, config freeze (schema), Test coverage.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
 
 ACTION PLAN (ordered)
 1. Add an orchestrator: read pfb_feed_mgmt_mode; if off -> return (no scan). Else load catalog ->

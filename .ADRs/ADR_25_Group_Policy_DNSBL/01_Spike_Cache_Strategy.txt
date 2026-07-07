@@ -10,6 +10,7 @@ latest devel if absent). This is Phase 1: a RESEARCH SPIKE. It ships NO producti
 throwaway harness/notes only. One commit (the RESULTS handoff + any throwaway harness under
 tests/smoke or a scratch dir), pushed directly to the branch. This phase can RECOMMEND
 REDUCING OR REJECTING the ADR.
+MODE: research spike — no production behaviour change; no red->green cycle (gate as behaviour-preserving).
 
 WHY THIS PHASE EXISTS
 Per-client DNSBL verdicts have one genuine architectural hazard: Unbound's C message cache.
@@ -30,6 +31,11 @@ REQUIRED READING
 - CLAUDE.md — "Investigating the live system" (unbound-control, chroot), Smoke tests.
 - Pi-Hole group management as prior art: https://docs.pi-hole.net/group_management/example/
   (FTL is open source — read how it resolves client->group and caches per client).
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
 
 ACTION PLAN (ordered)
 1. REPRODUCE the bleed on a live VM (use the ADR-04 smoke VM): configure the LEGACY bypass

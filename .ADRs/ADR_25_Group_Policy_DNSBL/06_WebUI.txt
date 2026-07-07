@@ -31,6 +31,11 @@ REQUIRED READING
   registry entry disposition documented there).
 - CLAUDE.md — Web UI help text rules; test principles (red->green for the handover).
 
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
 ACTION PLAN (ordered)
 1. UI UNLOCK in pfblockerng_group_policy_edit.php: the binding Feed-Group select now offers
    dnsbl-family groups (family-prefixed labels as the ipv4/ipv6 ones); the override select
@@ -59,6 +64,14 @@ ACTION PLAN (ordered)
      Warn/Bypass options render for a dnsbl group and NOT for an ipv4 group.
 4. Ports lockstep re-check (no new files expected — verify no plist change needed).
 5. Gates: full phpunit + pytest + linters + PHPCS; Tier A locally.
+
+VERIFICATION (must all pass before the phase is done)
+- The canonical gates for every language the diff touches (CLAUDE.md "Canonical gates"),
+  including cross-language consumers of any artifact this phase changes.
+- The phase's tests per its MODE: an oracle that stays green across the change, or a
+  red->green cycle with both runs executed and their output pasted into the handoff.
+- The KILL-GATES below are the orchestrator's adversarial re-checks — make each one easy
+  to re-run (name the command; don't bury it in prose).
 
 KILL-GATES
 - Exactly one enforcement path after the phase (grep: no gpListDB ini writer left).

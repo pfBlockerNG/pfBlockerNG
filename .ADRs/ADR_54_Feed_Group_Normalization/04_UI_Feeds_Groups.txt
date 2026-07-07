@@ -6,6 +6,7 @@ ADR: .ADRs/ADR_54_Feed_Group_Normalization/ADR.md   (read SS2.6 first)  +  UI/ d
 
 ROLE
 Implementer in the adr/54-feed-group-normalization worktree. One commit. No sub-agents.
+MODE: behaviour change — every new behaviour proves red->green (executed runs, output pasted in the handoff).
 
 WHY THIS PHASE EXISTS
 Phases 2-3 changed storage and pipeline with zero UI change. This phase ships the operator
@@ -21,6 +22,11 @@ REQUIRED READING
   Tier B for new pages/multi-step flows) and the ADR-14 tier definitions in
   docs/misc/architecture-notes.md.
 - tests/smoke/ui/test_feeds.py — the existing ui_render/ui_e2e patterns to extend.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
 
 ACTION PLAN (ordered)
 1. NEW PAGE src/usr/local/www/pfblockerng/pfblockerng_feed_edit.php from
@@ -50,6 +56,14 @@ ACTION PLAN (ordered)
 6. Gates: full suite + linters + Tier A locally via
    python -m pytest tests/smoke/ui -m ui_render --override-ini="addopts=" (documented env
    caveats apply).
+
+VERIFICATION (must all pass before the phase is done)
+- The canonical gates for every language the diff touches (CLAUDE.md "Canonical gates"),
+  including cross-language consumers of any artifact this phase changes.
+- The phase's tests per its MODE: an oracle that stays green across the change, or a
+  red->green cycle with both runs executed and their output pasted into the handoff.
+- The KILL-GATES below are the orchestrator's adversarial re-checks — make each one easy
+  to re-run (name the command; don't bury it in prose).
 
 KILL-GATES
 - Diff vs UI/ references: every intentional divergence listed in the handoff with a reason;
