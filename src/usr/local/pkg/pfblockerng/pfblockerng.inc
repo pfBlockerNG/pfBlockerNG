@@ -2358,7 +2358,7 @@ function pfb_global() {
 	$pfb['rdns']		= pfb_resolve_enabled($pfb['ipconfig']);			// Reverse-DNS lookup for block-log entries (issue #336)
 
 	$pfb['maxmind_account']	= pfb_filter($pfb['ipconfig']['maxmind_account'], PFB_FILTER_WORD, 'pfb_global')	?: '';		// Maxmind Account ID
-	$pfb['maxmind_key']	= pfb_filter($pfb['ipconfig']['maxmind_key'], PFB_FILTER_WORD, 'pfb_global')		?: '';		// Maxmind License Key
+	$pfb['maxmind_key']	= pfb_filter($pfb['ipconfig']['maxmind_key'], PFB_FILTER_WORD, 'maxmind_key')		?: '';		// Maxmind License Key (issue #924: log-safe reference -- a rejected key is never logged on this consumer path either)
 
 	$pfb['dnsbl']		= PfbConfig::read('pfb_dnsbl')->value;							// Enabled state of DNSBL
 	$pfb['dnsbl_vip_auto']	= PfbConfig::read('pfb_dnsvip_auto')->value;						// [ ADR-13 ] Auto-create/remove the DNSBL sinkhole VIP(s) (default off)

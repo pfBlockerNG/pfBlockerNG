@@ -344,7 +344,9 @@ def test_ip_page_renders_v6_suppression_section(webui: WebUI) -> None:
 _CFG_MAXMIND_KEY = "installedpackages/pfblockerngipsettings/config/0/maxmind_key"
 
 
-def test_ip_page_never_leaks_maxmind_key(smoke_vm: SmokeVM, webui: WebUI) -> None:
+def test_ip_page_never_leaks_maxmind_key(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:  # noqa: ARG001
     """The masked ``maxmind_key`` field (issue #924) never echoes the stored MaxMind
     license key back into the rendered HTML, and is masked (``type="password"``).
 
@@ -366,6 +368,11 @@ def test_ip_page_never_leaks_maxmind_key(smoke_vm: SmokeVM, webui: WebUI) -> Non
         "echo 'OK';",
     )
     assert "OK" in seed.stdout, f"failed to seed maxmind_key: {seed.stdout!r}"
+    # Confirm the seed actually persisted BEFORE the never-leak GET -- else "OK" (which
+    # prints even if config_set_path silently no-opped) would let the `not in body`
+    # assertion pass vacuously, with the leakable fixture it must fail on absent.
+    seeded = helpers.config_get(smoke_vm, _CFG_MAXMIND_KEY)
+    assert seeded == seed_token, f"seed did not take: expected {seed_token!r}, got {seeded!r}"
     try:
         resp = webui.get(_IP_PAGE)
         assert resp.status_code == 200, f"GET {_IP_PAGE} -> HTTP {resp.status_code} (expected 200)"
@@ -374,11 +381,14 @@ def test_ip_page_never_leaks_maxmind_key(smoke_vm: SmokeVM, webui: WebUI) -> Non
             f"maxmind_key leaked into the IP page body: expected {seed_token!r} to be ABSENT, "
             f"but it was found in the response (write-only masked field must never echo the stored key)"
         )
-        assert 'name="maxmind_key"' in body, "maxmind_key input not present on the IP page"
-        # maxmind_key is the IP page's only password-type input (asn_token stays plain
-        # text -- out of #924's scope), so this substring is unambiguous, matching the
-        # sibling top1m_token Tier-A assertion (test_dnsbl_top1m_source_options_exclude_alexa).
-        assert 'type="password"' in body, 'maxmind_key input must be masked (type="password"), not a plain text field'
+        # Bind type="password" to the maxmind_key input tag ITSELF -- a bare page-level
+        # 'type="password"' substring could be satisfied by any other element, so match the
+        # maxmind_key <input> tag and assert the mask attribute lives inside it.
+        tag = re.search(r'<input[^>]*\bname="maxmind_key"[^>]*>', body)
+        assert tag, "maxmind_key input not present on the IP page"
+        assert 'type="password"' in tag.group(0), (
+            f'maxmind_key input must be masked (type="password"), not a plain text field: got {tag.group(0)!r}'
+        )
     finally:
         restore = helpers.php_eval(
             smoke_vm,
