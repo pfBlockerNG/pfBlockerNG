@@ -425,6 +425,13 @@ Run linters while working; the `.githooks/pre-commit` hook blocks failing commit
 - **URL-encoding check** (`scripts/check_url_encoding.py`, pre-commit + CI): forbids naked
   shell-var interpolation into an HTTP-client URL query — let the value ride
   `curl --data-urlencode` instead.
+- **Version-literal check** (`scripts/check_version_literals.py`, pre-commit + CI): forbids
+  hardcoding a supported pfSense/FreeBSD version token (CE/Plus version, `FreeBSD:NN` ABI,
+  `php8x`/`py31x` flavor, `ce-`/`plus-` varver) as a **value** — an exact quoted literal or a
+  bare `key=value`/`key: value` RHS — anywhere under `src/`/`scripts/`/`.github/workflows/`.
+  Read it from the ci-metadata matrix (`read-version-matrix.sh`) at runtime instead of
+  restating it (a literal silently drifts when the matrix moves). Prose, comments, and Python
+  docstrings stay clean; escape a genuine one-off with an inline `# version-literal-ok: <reason>`.
 - **Markdown:** `npx markdownlint-cli2` (`--fix` to autofix). Blank line around every
   heading/list/fence; a language on every fence (`text` for plain output); single trailing
   newline. Rules + rationale in `.markdownlint.jsonc`; clean lint enforced pre-commit + CI.
