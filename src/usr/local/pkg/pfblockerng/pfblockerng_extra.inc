@@ -1948,7 +1948,10 @@ function pfb_adv_alias_field_errors(array $post): array
 		if (empty($post[$field])) {
 			continue;
 		}
-		$alias_type = pfb_alias_type($post[$field]) ?? '';
+		// A crafted request can submit the field as an array (aliasaddr_in[]=...);
+		// pfb_alias_type() is string-typed, so a non-string would TypeError. Treat
+		// it as non-existent — same verdict the untyped resolver reached.
+		$alias_type = is_string($post[$field]) ? (pfb_alias_type($post[$field]) ?? '') : '';
 		if ($alias_type === '') {
 			$errors[] = "Settings: Advanced {$meta['dir']}bound Alias error - Must use an existing Alias";
 		} elseif (!pfb_alias_field_type_ok($field, $alias_type)) {
