@@ -65,6 +65,12 @@ set -eu
 QEMU="${SMOKE_QEMU_BIN:-/usr/bin/qemu-system-x86_64}"
 QEMU_IMG="${SMOKE_QEMU_IMG_BIN:-/usr/bin/qemu-img}"
 
+# Absolute path to the bench guestfwd server (issue #584 dual-path bench, sibling
+# script in this same directory), independent of the caller's cwd — mirrors the
+# BASE_IMG absolutization idiom below.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BENCH_SRV="${SCRIPT_DIR}/bench_guestfwd_server.sh"
+
 # Source-VM hardware profile (mirror — do not change without re-baking image).
 # DEFAULT_CE_MAC is the CE source VM's own 8 NIC MACs (net0..net7, in order),
 # committed as non-secret defaults so a CE boot mirrors the source hardware. A
@@ -245,7 +251,14 @@ if [ "$ROLE" = pfsense ]; then
             # VIP (10.10.10.1) or the auto-VIP (10.10.10.53) — pfBlockerNG refuses
             # a VIP that overlaps an interface subnet and disables DNSBL wholesale.
             # 192.168.89.0/24 keeps the host alias 192.168.89.2 while leaving 10.10.10.x free.
-            0) netdev="user,id=net0,net=192.168.89.0/24,host=192.168.89.2" ;;
+            # guestfwd (issue #584 dual-path bench, always on — slirp-internal,
+            # no guest-visible hardware change, free when unused): .100 is the
+            # bench "flip" server IP (moved in/out of the pf bench table between
+            # runs), .101 is an always-allowed control; both forward to
+            # bench_guestfwd_server.sh on the host. Both addresses sit outside
+            # slirp's DHCP range and are distinct from the host alias .2 and
+            # guest .15.
+            0) netdev="user,id=net0,net=192.168.89.0/24,host=192.168.89.2,guestfwd=tcp:192.168.89.100:8080-cmd:${BENCH_SRV},guestfwd=tcp:192.168.89.101:8080-cmd:${BENCH_SRV}" ;;
             # net1 MGMT: a /24 (NOT a /16). A /16 made qemu's SLIRP DHCP lease the
             # guest an unexpected address (10.0.2.x) the forwards never reached; a
             # /24 is predictable (net|.15), mirroring net0. 192.168.43.0/24 avoids

@@ -153,6 +153,19 @@ def test_pfsense_wan_and_lan_topology() -> None:
     assert "socket,id=net1,connect=127.0.0.1:${LAN_SOCKET_PORT}" in text
 
 
+def test_pfsense_wan_bench_guestfwd_present() -> None:
+    """net0 WAN carries the issue #584 dual-path bench guestfwd wiring.
+
+    Two virtual bench-server IPs (.100 "flip", .101 always-allowed control)
+    forward to bench_guestfwd_server.sh on the host, always on (no env gate) —
+    a drift here silently breaks the later dual-path bench step.
+    """
+    text = _boot_vm_text()
+    assert "guestfwd=tcp:192.168.89.100:8080-cmd:" in text
+    assert "guestfwd=tcp:192.168.89.101:8080-cmd:" in text
+    assert "bench_guestfwd_server.sh" in text
+
+
 def test_ce_default_smbios_uuid_pin_present() -> None:
     """The CE source-VM SMBIOS uuid pin is present in boot_vm.sh.
 

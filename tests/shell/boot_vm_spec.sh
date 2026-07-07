@@ -78,6 +78,25 @@ QIEOF
       The stderr should include 'boot_vm:'
       The contents of file "$ARGV_FILE" should not include 'tap,id=net0'
     End
+
+    # issue #584 dual-path bench wiring: net0 guestfwd forwards the two virtual
+    # bench-server IPs to bench_guestfwd_server.sh on the host. Always on (no
+    # env gate) — asserted here as two invariant-prefix pins (the absolute
+    # server path varies by checkout) plus a path-suffix check.
+    It 'WAN net0 guestfwds the .100 bench flip IP to bench_guestfwd_server.sh'
+      When run sh "$SCRIPT" --role pfsense "$BASE" "$OVERLAY"
+      The status should be success
+      The stderr should include 'boot_vm:'
+      The contents of file "$ARGV_FILE" should include 'guestfwd=tcp:192.168.89.100:8080-cmd:'
+      The contents of file "$ARGV_FILE" should include '/bench_guestfwd_server.sh'
+    End
+
+    It 'WAN net0 guestfwds the .101 always-allowed control IP to bench_guestfwd_server.sh'
+      When run sh "$SCRIPT" --role pfsense "$BASE" "$OVERLAY"
+      The status should be success
+      The stderr should include 'boot_vm:'
+      The contents of file "$ARGV_FILE" should include 'guestfwd=tcp:192.168.89.101:8080-cmd:'
+    End
   End
 
   # ---- role client -----------------------------------------------------------
@@ -91,6 +110,15 @@ QIEOF
       The contents of file "$ARGV_FILE" should include 'socket,id=net1,connect=127.0.0.1:12340'
       # Pin the slirp-only contract for the client path too (no tap backend leaked in).
       The contents of file "$ARGV_FILE" should not include 'tap,id='
+    End
+
+    # issue #584 dual-path bench wiring is pfsense-role-only (net0 WAN); the
+    # client role's netdevs must carry no guestfwd at all.
+    It 'has NO guestfwd (bench wiring is pfsense-role-only)'
+      When run sh "$SCRIPT" --role client "$BASE" "$OVERLAY"
+      The status should be success
+      The stderr should include 'boot_vm:'
+      The contents of file "$ARGV_FILE" should not include 'guestfwd'
     End
   End
 
