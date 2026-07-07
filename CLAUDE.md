@@ -703,8 +703,10 @@ ours. Three, ALL mandatory:
    path — success, failure, give-up, or a user-driven check that supersedes the wait — sweep
    every trigger tied to it, by class: background polls → `TaskStop`; cron check-ins →
    `CronDelete`; PR/event subscriptions → unsubscribe. `ScheduleWakeup` **cannot be
-   cancelled**, so every wakeup prompt MUST be self-invalidating — it states the check and
-   "if resolved: no-op, do not re-arm" — and wakeups are a *fallback* to harness completion
+   cancelled**, so: **never one long wakeup at a speculative future time** — arm the
+   SHORTEST sensible rung, do a minimal state check on firing, and re-arm the next rung
+   only if still unresolved (the ladder). Every wakeup prompt uses the self-invalidating
+   template: `CHECK <concrete state/command>; IF RESOLVED: no-op, do NOT re-arm; ELSE <next action> + re-arm <n> min`. Wakeups are a *fallback* to harness completion
    notifications, never the primary wake. The wait-spawning skills carry this sweep as an
    explicit terminal step; it is not optional and not from memory.
 3. **Pickup hygiene.** When starting or finishing any work item, run `TaskList` once and
