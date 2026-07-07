@@ -25,6 +25,10 @@ on:
       - '**/*.md'
       - '*.md'
       - 'docs/**'
+      # Vendored third-party plugin trees (refreshed wholesale by
+      # scripts/update-vendored-skills.py; nothing in CI consumes them).
+      - '.claude/skills/ponytail/**'
+      - '.claude/skills/caveman/**'
   pull_request:
     # labeled/unlabeled so adding or removing the `ui-tests` label re-evaluates the
     # (label-gated) UI suite gate; synchronize re-runs it on new pushes while labeled.
@@ -33,6 +37,10 @@ on:
       - '**/*.md'
       - '*.md'
       - 'docs/**'
+      # Vendored third-party plugin trees (refreshed wholesale by
+      # scripts/update-vendored-skills.py; nothing in CI consumes them).
+      - '.claude/skills/ponytail/**'
+      - '.claude/skills/caveman/**'
   # Manual trigger to opt INTO the benchmark kill-gates (issue #76). They are OFF in
   # the automated push/PR flow: a synthetic corpus on a generic runner is not the
   # number that matters — the production-faithful build-time/RAM measurement belongs

@@ -1,0 +1,11 @@
+# CodeRabbit configuration.
+#
+# The vendored third-party plugin trees are excluded from review entirely:
+# they are byte-identical upstream copies (each dir carries an UPSTREAM
+# provenance file naming the exact upstream commit), refreshed wholesale by
+# scripts/update-vendored-skills.py — style/content findings on them are not
+# actionable here (fixes belong upstream) and local edits would drift.
+reviews:
+  path_filters:
+    - "!.claude/skills/ponytail/**"
+    - "!.claude/skills/caveman/**"

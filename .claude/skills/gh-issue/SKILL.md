@@ -283,9 +283,10 @@ run the verification gates and not proceed red, to **self-review the diff agains
 step objective and the issue** before finishing, then to make a focused commit
 (`<scope>: <imperative summary>`, CLAUDE.md commit style; reference the issue), and
 to **return the handoff document** in the Step-5 format. Tell it its returned message
-IS the handoff. If `ponytail` is active in this session, the brief's **first** instruction is
-`Run /ponytail:ponytail <level>` (the level active here — full/lite/ultra; CLAUDE.md "Plan with
-a higher model"), so the implementer matches the parent's ponytail mode.
+IS the handoff. Mode propagation is mechanical — the `SubagentStart` hook injects the
+ponytail + caveman capsule (CLAUDE.md "Plan with a higher model"); make the brief's **first**
+instruction `Run /ponytail:ponytail <level>` ONLY when a non-default level (`lite`/`ultra`)
+is active in this session.
 
 **7b. Orchestrator gate (independent, mechanical — CLAUDE.md "THE GATE"; you verify the
 transaction and content, you don't re-implement).** Terse prose, full checks; a skipped item is

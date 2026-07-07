@@ -2,7 +2,8 @@
   // markdownlint-cli2 runner config (globs + ignores). Rule set lives in
   // `.markdownlint.jsonc`. Run from the repo root: `npx markdownlint-cli2`
   // (add `--fix` to auto-fix). Lints every tracked Markdown file, including
-  // .ADRs/ and .claude/skills/; skips dependency/virtualenv trees.
+  // .ADRs/ and the repo's own .claude/skills/; skips dependency/virtualenv
+  // trees and the VENDORED plugin skill trees listed below.
   "globs": ["**/*.md"],
   "ignores": [
     "node_modules",

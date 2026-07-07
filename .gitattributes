@@ -1,0 +1,5 @@
+# Vendored third-party plugin trees (byte-identical upstream copies; see each
+# dir's UPSTREAM provenance file). linguist-vendored keeps them out of language
+# stats and collapses their diffs in GitHub review views.
+.claude/skills/ponytail/** linguist-vendored
+.claude/skills/caveman/** linguist-vendored

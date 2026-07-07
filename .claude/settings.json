@@ -33,6 +33,14 @@
         "hooks": [
           {
             "type": "command",
+            "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/vendored-plugin-hook.sh\" ponytail hooks/ponytail-activate.js"
+          },
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/vendored-plugin-hook.sh\" caveman src/hooks/caveman-activate.js"
+          },
+          {
+            "type": "command",
             "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"MANDATORY: this repo has a CLAUDE.md — read it and follow it, especially Working principles (investigate, do not assume; confirm genuine forks before building) and Code standards. docs/misc/workflow-reference.md is a POLICY ANNEX of CLAUDE.md — its sections are binding; read the relevant section whenever the task touches one CLAUDE.md points there. Activate BOTH modes when available: if the ponytail plugin is installed, run /ponytail:ponytail full (laziest working solution), AND if the caveman plugin/skill is available, run /caveman (terse, no filler, full technical accuracy); when only one is available, activate that one alone. This step CANNOT be skipped. Exception for external or public-facing text and documentation (GitHub issue and PR/MR comments, PR bodies, commit messages, docs): stay concise and to the point but use normal professional grammar, toning the caveman style down. Org rule: in ANY pfBlockerNG-org repository, the pfBlockerNG/pfBlockerNG CLAUDE.md and its project plus user settings are the default way of working unless that repo overrides a rule in its own CLAUDE.md; the pfBlockerNG-package-specific mechanics and language or runtime specifics do not carry over.\"}}'"
           }
         ]
@@ -51,6 +59,14 @@
     "UserPromptSubmit": [
       {
         "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/vendored-plugin-hook.sh\" ponytail hooks/ponytail-mode-tracker.js"
+          },
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/vendored-plugin-hook.sh\" caveman src/hooks/caveman-mode-tracker.js"
+          },
           {
             "type": "command",
             "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"DISCIPLINE (CLAUDE.md, every turn): (1) Evidence before conclusion — a claim without a run artifact is ASSUMED; probe environmental facts before writing them into code/comments/workflows. (2) Debugging: >=2 hypotheses + a discriminating probe BEFORE any fix edit. (3) Scope: enumerate EVERY sibling axis (v4/v6, ports, CE/Plus versions, callers, parse modes) from grep or the version matrix — never from memory; never hardcode env-derived values. (4) Done = executed verification with pasted output; red->green is run, never reasoned. (5) No self-exemption from MUST rules — deviation requires quoting the authorizing user message. (6) Delegation follows CLAUDE.md The delegation contract (brief/handoff/gate fields). (7) Output stays caveman-terse + ponytail-lazy; terse prose, FULL checks.\"}}'"
