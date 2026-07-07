@@ -411,12 +411,13 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 	 * default (parse=rank_domain, header=false, domain_col=1), precisely what every
 	 * call site used before Phase 2 generalized the builder. Applied to Majestic's
 	 * real layout, domain_col=1 reads the TldRank column (a bare digit, e.g. "1")
-	 * as the "domain" instead of the real Domain field at index 2 -- neither digit
-	 * contains a '.', so no TLD ever matches and the whitelist ends up EMPTY despite
-	 * two real .com domains being present in the feed (RED). The AFTER run, using
-	 * the actual registered Majestic descriptor (domain_col 2, header skipped),
-	 * correctly extracts both domains (GREEN) -- proving domain_col is genuinely
-	 * read from the descriptor, not hardcoded.
+	 * as the "domain" instead of the real Domain field at index 2 -- a bare digit
+	 * is not hostname-shaped, so the #954 domain-shape guard (which now covers the
+	 * rank_domain parse too) rejects every row as no-real-data and no whitelist is
+	 * built at all (RED). The AFTER run, using the actual registered Majestic
+	 * descriptor (domain_col 2, header skipped), correctly extracts both domains
+	 * (GREEN) -- proving domain_col is genuinely read from the descriptor, not
+	 * hardcoded.
 	 */
 	public function testMajesticRealShapeSampleMisreadsOnLegacyColumnAndParsesCorrectlyViaItsDescriptor(): void
 	{
@@ -431,15 +432,14 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		// When (BEFORE): the pre-Phase-2 legacy shape -- domain_col 1, no header skip.
 		pfblockerng_top1m(array());
 
-		// Then (RED): the real domains are misread as the numeric TldRank column;
-		// neither matches a TLD (both rows still count as valid CSV lines -- the
-		// rank_domain guard passes on the numeric GlobalRank column), so the
-		// whitelist is replaced with EMPTY content, not "keeping previous".
-		$this->assertSame('', file_get_contents($this->whitelistPath()),
+		// Then (RED): the real domains are misread as the numeric TldRank column
+		// ("1"/"2" -- dotless, not hostname-shaped), which the #954 domain-shape
+		// guard rejects before TLD matching is ever reached -- no whitelist can be
+		// built (none existed before this run).
+		$this->assertFileDoesNotExist($this->whitelistPath(),
 			"the legacy col-1 parser must MIS-read Majestic's real shape -- Domain sits at index 2, not 1");
-		$this->assertStringContainsString('Parsed 2 lines | Found 0 of 1000', $this->readMainLog());
-		$this->assertStringContainsString('0 domains matched the configured TLD inclusions', $this->readMainLog());
-		$this->assertStringNotContainsString('keeping the previous TOP1M whitelist', $this->readMainLog());
+		$this->assertStringContainsString('no TOP1M whitelist available', $this->readMainLog());
+		$this->assertStringNotContainsString('Parsed 2 lines', $this->readMainLog());
 
 		// Reset the log so the GREEN assertion below is unambiguous.
 		$this->assertNotFalse(file_put_contents($GLOBALS['pfb']['log'], ''), 'reset main log between runs');
@@ -823,5 +823,109 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 			'empty suffix (bare xn--)'         => ['example.xn--'],
 			'missing second hyphen (xn-p1ai)'  => ['example.xn-p1ai'],
 		];
+	}
+
+	/**
+	 * Issue #954 -- THE red->green pinning test. The 'rank_domain' parse (Tranco/Cisco)
+	 * validated only the rank column (ctype_digit on $csvline[0]); the domain field itself
+	 * went unchecked. A row whose domain field is dotless still satisfies the line-level
+	 * '.'+',' pre-filter (the dot sits in another column) and the rank-column check (a
+	 * numeric rank), so it reached the TLD-extraction strrpos($domain, '.') below with no
+	 * '.' to find -- strrpos() returns FALSE, and substr($domain, FALSE + 1) silently
+	 * produces a garbage "TLD" (the domain minus its first character) instead of the row
+	 * being rejected. Pre-fix, $linecnt still incremented for every such row regardless, so
+	 * an all-garbage feed classified as "valid" and WIPED a good prior whitelist -- the same
+	 * dead-feed-wipe class as #886/#892/#920.
+	 */
+	public function testRankDomainRejectsDotlessDomainFieldPreservesPriorWhitelist(): void
+	{
+		// Given: a prior good whitelist and a Tranco/Cisco-shaped ('rank_domain' parse) feed
+		// whose every row has a numeric rank column but a DOTLESS domain field -- each row's
+		// LINE still carries a '.' and a ',' elsewhere, so it passes the line-level filter.
+		$priorContent = ".real.com,,\n,real.com,,\n,www.real.com,,\n";
+		$this->assertNotFalse(file_put_contents($this->whitelistPath(), $priorContent), 'setup: seed prior whitelist');
+		$csv = "1,garbage,extra.dot\n2,another,more.dots\n";
+		$this->assertNotFalse(file_put_contents($this->csvPath(), $csv), 'setup: rank_domain feed, dotless domain field');
+		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()), 'before-state sanity');
+
+		// When: the default descriptor resolves to Tranco's 'rank_domain' parse (domain_col 1).
+		pfblockerng_top1m();
+
+		// Then: every row is rejected by the domain-shape guard -- $linecnt never leaves 0 --
+		// so the feed classifies as dead and the prior whitelist survives byte-identical.
+		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()),
+			'a rank_domain feed with dotless domain fields must NOT wipe the previously-good TOP1M whitelist (#954)');
+		$this->assertSame([], $this->tempFilesLeftBehind(), 'no temp build file left behind');
+		$this->assertStringContainsString('keeping the previous TOP1M whitelist', $this->readErrLog());
+		$this->assertStringContainsString('keeping the previous TOP1M whitelist', $this->readMainLog());
+	}
+
+	/**
+	 * Issue #954 -- hostile-input sweep for the same rank_domain domain-field guard: each
+	 * row below carries a numeric rank column (satisfies the rank-only check by itself) but
+	 * a domain field that fails the hostname-shape regex in a different way. Every one must
+	 * still be rejected now that the regex applies to rank_domain rows too.
+	 *
+	 * @dataProvider rankDomainHostileRows
+	 */
+	public function testRankDomainRejectsNonHostnameDomainFieldRow(string $csvLine): void
+	{
+		// Given: a prior good whitelist and a single-row rank_domain-shaped feed whose
+		// domain field is hostile in one specific way (see the data provider).
+		$priorContent = ".real.com,,\n,real.com,,\n,www.real.com,,\n";
+		$this->assertNotFalse(file_put_contents($this->whitelistPath(), $priorContent), 'setup: seed prior whitelist');
+		$this->assertNotFalse(file_put_contents($this->csvPath(), $csvLine), "setup: hostile rank_domain row {$csvLine}");
+		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()), 'before-state sanity');
+
+		// When
+		pfblockerng_top1m();
+
+		// Then: rejected by the domain-shape guard -- the feed classifies as dead, never a
+		// whitelist write.
+		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()),
+			"a hostile rank_domain domain field ({$csvLine}) must NOT wipe the previously-good TOP1M whitelist (#954)");
+		$this->assertStringContainsString('keeping the previous TOP1M whitelist', $this->readErrLog());
+	}
+
+	/** @return array<string, array{string}> */
+	public static function rankDomainHostileRows(): array
+	{
+		return [
+			'empty domain field'                          => ["1,,x.y\n"],
+			'numeric-shaped "TLD"'                         => ["1,foo.123,x.y\n"],
+			'prose rank/domain, trailing-dot empty TLD'    => ["503, service unavailable.\n"],
+			'unterminated-quoted domain field (#920 class)' => ["1,\"foo.com\n"],
+			'leading-hyphen domain field'                  => ["1,-foo.com,x.y\n"],
+		];
+	}
+
+	/**
+	 * Issue #954 -- the hostname-shape regex newly applied to rank_domain rows must not
+	 * regress its existing punycode-TLD acceptance (mirrors
+	 * testCsvModeAcceptsPunycodeTldDomainIntoWhitelist for the 'csv' parse, issue #904).
+	 * GREEN on both pre- and post-#954 code -- the rank_domain parse had no domain-field
+	 * guard at all before this change, so it already accepted this row; this test only pins
+	 * that the newly-added guard keeps accepting it (the red proof rides the two tests
+	 * above).
+	 */
+	public function testRankDomainAcceptsPunycodeTldDomainIntoWhitelist(): void
+	{
+		// Given: a Tranco/Cisco-shaped ('rank_domain' parse) row whose domain ends in a
+		// punycode TLD (xn--p1ai == .рф), and the TOP1M inclusion set names that exact TLD.
+		$GLOBALS['pfb']['dnsbl_top1m_inc'] = 'xn--p1ai';
+		$csv = "1,example.xn--p1ai\n";
+		$this->assertNotFalse(file_put_contents($this->csvPath(), $csv), 'setup: rank_domain punycode-TLD row');
+
+		// When
+		pfblockerng_top1m();
+
+		// Then: the punycode-TLD row is counted as valid data and whitelisted -- not
+		// wrongly dropped by the newly-applied hostname-shape guard.
+		$this->assertSame(
+			".example.xn--p1ai,,\n,example.xn--p1ai,,\n,www.example.xn--p1ai,,\n",
+			file_get_contents($this->whitelistPath()),
+			'a punycode TLD (xn--p1ai) rank_domain row must be accepted by the hostname-shape guard, not dropped'
+		);
+		$this->assertStringContainsString('Parsed 1 lines | Found 1 of 1000', $this->readMainLog());
 	}
 }

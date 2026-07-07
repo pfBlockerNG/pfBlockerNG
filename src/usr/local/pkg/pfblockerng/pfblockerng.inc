@@ -8523,16 +8523,19 @@ function pfblockerng_top1m(?array $provider_override = NULL) {
 					pfb_logger('.', 1);
 				}
 
-				// Collect Domain TLD -- for the 'rank_domain' parse (Tranco/Cisco), only a
-				// row whose rank column is numeric counts as real parsed source data. A
-				// prose/HTML/error body (e.g. "error, service temporarily unavailable.")
-				// still has a '.' and a ',' and would otherwise pass the filter above, so a
-				// dead feed would classify as "valid" below and wipe the whitelist (#886
-				// review). Every other parse mode ('csv': OpenPageRank/Majestic/Cloudflare) has no
-				// rank column to guard on instead, so the domain field itself must look like
-				// a hostname -- otherwise the SAME garbage-body wipe re-opens for those
-				// providers (a CDN error page or a JSON auth-error body still has a '.' and
-				// a ',' somewhere) (#892 review).
+				// Collect Domain TLD. For the 'rank_domain' parse (Tranco/Cisco), a row whose
+				// rank column is non-numeric is not real parsed source data -- a prose/HTML/
+				// error body (e.g. "error, service temporarily unavailable.") still has a '.'
+				// and a ',' and would otherwise pass the filter above, so a dead feed would
+				// classify as "valid" below and wipe the whitelist (#886 review). The other
+				// parse mode ('csv': OpenPageRank/Majestic/Cloudflare) has no rank column at
+				// all. BOTH checks below now apply to EVERY parse mode: the rank-column check
+				// where a rank column exists, and the hostname-shape regex always -- a numeric
+				// rank alone is not proof the domain field itself is usable. A dotless/
+				// malformed rank_domain domain field (e.g. Tranco/Cisco row
+				// "1,garbage,extra.dot") used to satisfy the rank-only guard and reach the
+				// TLD-extraction strrpos() below with a garbage result, wrongly counting the
+				// row as valid (#954 review) -- the SAME garbage-body-wipe class as #886/#892.
 				$csvline = str_getcsv($line, ',', '"', "\\");
 				// #920: fold once here -- the GUI's inclusion keys are always lowercase
 				// (pfblockerng_dnsbl.php's $options_alexa_inclusion), so an uppercase/
@@ -8540,15 +8543,14 @@ function pfblockerng_top1m(?array $provider_override = NULL) {
 				// fails the isset($pfb_include[$tld]) compare; folding here also feeds
 				// the 'www.' strip and the write, so every downstream use is canonical.
 				$domain = strtolower($csvline[$top1m_domcol] ?? '');
-				if ($top1m_parse === 'rank_domain') {
-					if (!ctype_digit((string) ($csvline[0] ?? ''))) {
-						continue;
-					}
+				if ($top1m_parse === 'rank_domain' && !ctype_digit((string) ($csvline[0] ?? ''))) {
+					continue;
+				}
 				// #920: the `D` modifier anchors '$' to the true string end -- without it, a
 				// quoted-unterminated CSV field (str_getcsv() retains its trailing "\n", unlike
 				// every other field shape) wrongly passes and can flip a garbage-only feed from
 				// dead (preserve) to valid (wipe), the same class of bug the #886/#892 guards fix.
-				} elseif (!preg_match('/^[A-Za-z0-9][A-Za-z0-9.-]*\.(?:[A-Za-z]{2,}|[Xx][Nn]--[A-Za-z0-9][A-Za-z0-9-]+)$/D', $domain)) {
+				if (!preg_match('/^[A-Za-z0-9][A-Za-z0-9.-]*\.(?:[A-Za-z]{2,}|[Xx][Nn]--[A-Za-z0-9][A-Za-z0-9-]+)$/D', $domain)) {
 					continue;
 				}
 				// Count every valid CSV row BEFORE the match/break below, so a
