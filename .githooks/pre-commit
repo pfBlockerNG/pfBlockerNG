@@ -116,7 +116,9 @@ if [ "$staged_sh" = 1 ]; then
 	# has no /bin/bash, and macOS /bin/bash is the ancient 3.2). Scans ALL tracked
 	# files, so it also covers tests/ (not lint-globbed below).
 	step 'shebang policy (no #!bash)'
-	git ls-files | while IFS= read -r f; do
+	# Vendored third-party plugin trees are exempt (upstream content, refreshed
+	# wholesale by scripts/update-vendored-skills.py; never runs on the box).
+	git ls-files | grep -v -e '^\.claude/skills/ponytail/' -e '^\.claude/skills/caveman/' | while IFS= read -r f; do
 		case $(head -n1 "$f" 2>/dev/null) in
 		'#!'*bash*)
 			printf '[pre-commit] bash shebang not allowed (use #!/bin/sh): %s\n' "$f" >&2
@@ -125,9 +127,9 @@ if [ "$staged_sh" = 1 ]; then
 		esac
 	done || failed 'shebang policy'
 
-	# sh -n parse gate (src + scripts + tests; cheap, tool-free).
+	# sh -n parse gate (src + scripts + tests + .claude/hooks; cheap, tool-free).
 	step 'shell (sh -n)'
-	find src scripts tests -name '*.sh' | sort | while IFS= read -r f; do
+	find src scripts tests .claude/hooks -name '*.sh' | sort | while IFS= read -r f; do
 		sh -n "$f" || exit 1
 	done || failed 'sh -n'
 
@@ -135,7 +137,7 @@ if [ "$staged_sh" = 1 ]; then
 	# false-positives — tracked as a separate cleanup).
 	if have shellcheck; then
 		step 'shellcheck'
-		find src scripts -name '*.sh' | sort \
+		find src scripts .claude/hooks -name '*.sh' | sort \
 			| xargs shellcheck --severity=info || failed 'shellcheck'
 	else
 		skip shellcheck

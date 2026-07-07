@@ -20,7 +20,12 @@ plugin=$1
 js=$2
 
 cfg_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-if [ -d "${cfg_dir}/plugins/marketplaces/${plugin}" ]; then
+# installed_plugins.json (keyed plugin@marketplace) is the authoritative "is
+# the real plugin present" source -- a marketplace-clone directory check keyed
+# by PLUGIN name only works while plugin and marketplace happen to share a
+# name (#931 delta review).
+installed="${cfg_dir}/plugins/installed_plugins.json"
+if [ -f "${installed}" ] && grep -q "\"${plugin}@" "${installed}"; then
 	exit 0
 fi
 

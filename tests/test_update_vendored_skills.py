@@ -382,6 +382,79 @@ def test_bad_ref_spec_is_a_nonzero_exit(tmp_path: Path, capsys: pytest.CaptureFi
     assert "PLUGIN=REF" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("target_kind", ["relative-inside-repo", "absolute-outside-clone"])
+def test_symlinked_skill_root_is_refused(tmp_path: Path, target_kind: str) -> None:
+    # The ROOT escape (#931 delta review): if skills/<plugin> is ITSELF a
+    # symlink, every descendant globs as a regular file from the TARGET --
+    # the component walk must reject the root before any copy.
+    if target_kind == "relative-inside-repo":
+        url, _ = _make_upstream(tmp_path, "myplugin")
+        repo = tmp_path / "myplugin-upstream"
+        decoy = repo / "decoy"
+        decoy.mkdir()
+        (decoy / "SKILL.md").write_text("smuggled\n", encoding="utf-8")
+        import shutil as _shutil
+
+        _shutil.rmtree(repo / "skills" / "myplugin")
+        (repo / "skills" / "myplugin").symlink_to(Path("..") / "decoy", target_is_directory=True)
+    else:
+        outside = tmp_path / "outside-clone"
+        outside.mkdir()
+        (outside / "SKILL.md").write_text("exfiltrated\n", encoding="utf-8")
+        url, _ = _make_upstream(tmp_path, "myplugin")
+        repo = tmp_path / "myplugin-upstream"
+        import shutil as _shutil
+
+        _shutil.rmtree(repo / "skills" / "myplugin")
+        (repo / "skills" / "myplugin").symlink_to(outside, target_is_directory=True)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "root symlink")
+
+    with pytest.raises(ValueError, match="symlink|escapes"):
+        uvs.vendor_one("myplugin", url, tmp_path / "skills", None)
+
+    assert not (tmp_path / "skills" / "myplugin").exists(), "root-symlink refusal must happen before any copy"
+
+
+def test_shim_copy_exists_at_the_upstream_relative_path(tmp_path: Path) -> None:
+    # The vendored hook scripts resolve SKILL.md at
+    # <plugin-root>/skills/<plugin>/SKILL.md via __dirname math; the shim copy
+    # keeps that path real inside the flattened vendored root (#931 delta review).
+    url, _ = _make_upstream(tmp_path, "myplugin")
+    skills = tmp_path / "skills"
+
+    uvs.vendor_one("myplugin", url, skills, None)
+
+    root_copy = (skills / "myplugin" / "SKILL.md").read_bytes()
+    shim_copy = (skills / "myplugin" / "skills" / "myplugin" / "SKILL.md").read_bytes()
+    assert shim_copy == root_copy, "the shim copy must be byte-identical to the root copy"
+
+
+def test_duplicate_ref_flag_is_a_nonzero_exit(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    url, _ = _make_upstream(tmp_path, "myplugin")
+    settings = _settings_file(
+        tmp_path,
+        {"myplugin": {"source": {"source": "github", "repo": url}}},
+        {"myplugin@myplugin": True},
+    )
+
+    rc = _run(settings, tmp_path / "skills", "--ref", "myplugin=v1", "--ref", "myplugin=v2")
+
+    assert rc == 1, "a duplicate --ref must fail loudly, not silently last-win"
+    assert "duplicate --ref" in capsys.readouterr().err
+
+
+def test_latest_release_tag_network_failure_is_loud(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_urlopen(request: Any, timeout: float = 0) -> Any:
+        raise urllib.error.URLError("dns lookup failed")
+
+    fresh = _real_latest_release_tag()
+    monkeypatch.setattr(sys.modules[fresh.__module__].urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(RuntimeError, match=r"--ref"):
+        fresh("owner/name")
+
+
 def test_no_enabled_github_plugins_is_a_nonzero_exit(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     settings = _settings_file(tmp_path, {}, {})
 

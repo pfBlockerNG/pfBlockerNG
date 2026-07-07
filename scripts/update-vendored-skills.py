@@ -63,8 +63,8 @@ _PLUGIN_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 # copied with their upstream-relative paths preserved under the vendored root
 # (matching each plugin's own ${CLAUDE_PLUGIN_ROOT}-relative hook manifest).
 EXTRA_VENDOR_GLOBS: dict[str, tuple[str, ...]] = {
-    "ponytail": ("hooks/*.js",),
-    "caveman": ("src/hooks/*.js",),
+    "ponytail": ("hooks/*.js", "hooks/ponytail-statusline.*"),
+    "caveman": ("src/hooks/*.js", "src/hooks/caveman-statusline.*"),
 }
 
 
@@ -122,6 +122,10 @@ def latest_release_tag(repo: str) -> str:
         raise RuntimeError(
             f"no latest GitHub release for {repo} (HTTP {exc.code}) -- pass --ref <plugin>=<ref> explicitly"
         ) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(
+            f"failed to query the latest release of {repo} ({exc.reason}) -- pass --ref <plugin>=<ref> explicitly"
+        ) from exc
     if not tag:
         raise RuntimeError(f"latest release of {repo} carries no tag_name -- pass --ref <plugin>=<ref> explicitly")
     return tag
@@ -132,11 +136,19 @@ def _refuse_symlinks(paths: list[Path], clone: Path, repo: str) -> None:
 
     A hostile/compromised upstream could point a symlink outside the clone
     (same escape class scripts/build-pkg-portable.py's _safe_extract guards);
-    vendored trees must be regular files only.
+    vendored trees must be regular files only. Every COMPONENT between each
+    path and the clone root is checked too: a symlinked skills/<plugin>/ (or
+    hooks/) directory would otherwise smuggle its target's files through as
+    regular-looking descendants (#931 delta review).
     """
     for path in paths:
-        if path.is_symlink():
-            raise ValueError(f"{repo}: refusing to vendor symlink {path.relative_to(clone)}")
+        p = path
+        while p != clone:
+            if p.is_symlink():
+                raise ValueError(f"{repo}: refusing to vendor symlink {p.relative_to(clone)}")
+            if p == p.parent:  # filesystem root -- path was never under the clone
+                raise ValueError(f"{repo}: {path} escapes the clone")
+            p = p.parent
 
 
 def vendor_one(plugin: str, repo: str, skills_dir: Path, ref: str | None, extra_globs: tuple[str, ...] = ()) -> None:
@@ -174,7 +186,7 @@ def vendor_one(plugin: str, repo: str, skills_dir: Path, ref: str | None, extra_
             if not matched:
                 raise FileNotFoundError(f"{repo} has no files matching {pattern!r} -- upstream layout changed?")
             extra_files.extend(matched)
-        _refuse_symlinks([*upstream_skill.rglob("*"), licence, *extra_files], clone, repo)
+        _refuse_symlinks([upstream_skill, *upstream_skill.rglob("*"), licence, *extra_files], clone, repo)
 
         target = skills_dir / plugin
         if target.exists():
@@ -186,6 +198,15 @@ def vendor_one(plugin: str, repo: str, skills_dir: Path, ref: str | None, extra_
             dest = target / src.relative_to(clone)
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dest)
+
+        # Compatibility shim (#931 delta review): the vendored hook scripts were
+        # written for the upstream PLUGIN-ROOT layout and resolve the skill text
+        # via __dirname math at <plugin-root>/skills/<plugin>/SKILL.md. Our
+        # vendored root IS upstream's skills/<plugin>/, so re-copy the skill dir
+        # at its upstream-relative path too -- without it every managed-session
+        # activation silently emits the js's frozen built-in fallback ruleset
+        # instead of the real, current SKILL.md.
+        shutil.copytree(upstream_skill, target / "skills" / plugin)
 
         date = datetime.now(timezone.utc).date().isoformat()
         (target / "UPSTREAM").write_text(f"{repo} @ {sha} (ref {ref or 'HEAD'}, {date})\n", encoding="utf-8")
@@ -222,6 +243,9 @@ def main(argv: list[str] | None = None) -> int:
         plugin, sep, ref = spec.partition("=")
         if not sep or not plugin or not ref:
             print(f"bad --ref {spec!r}: expected PLUGIN=REF", file=sys.stderr)
+            return 1
+        if plugin in refs:
+            print(f"duplicate --ref for {plugin!r} ({refs[plugin]!r} then {ref!r}) -- pass it once", file=sys.stderr)
             return 1
         refs[plugin] = ref
 
