@@ -205,8 +205,10 @@ jobs:
       - name: Forbid bash shebangs
         # Repo is #!/bin/sh POSIX (no /bin/bash on FreeBSD/pfSense; macOS /bin/bash is
         # the ancient 3.2). Scans ALL tracked files, so it also covers tests/.
+        # Vendored third-party plugin trees are exempt (upstream content, never
+        # runs on the box; same fence as .githooks/pre-commit).
         run: |
-          bad=$(git ls-files | while IFS= read -r f; do
+          bad=$(git ls-files | grep -v -e '^\.claude/skills/ponytail/' -e '^\.claude/skills/caveman/' | while IFS= read -r f; do
             case $(head -n1 "$f" 2>/dev/null) in '#!'*bash*) echo "$f" ;; esac
           done)
           if [ -n "$bad" ]; then
