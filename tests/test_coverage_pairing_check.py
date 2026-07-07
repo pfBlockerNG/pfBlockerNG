@@ -61,7 +61,53 @@ def test_warn_only_flag_downgrades_to_pass() -> None:
     path = "src/usr/local/pkg/pfblockerng/pfblockerng.inc"
     assert ccp.main([path]) == 1, "without the label, a violation must fail the gate"
     # --warn-only (the no-test-needed label's CI-side effect) downgrades to pass.
+    # Without --pr-body-file it keeps its pure downgrade semantics (no
+    # justification requirement) — the CI job always passes both together.
     assert ccp.main(["--warn-only", path]) == 0, "--warn-only must downgrade a violation to pass"
+
+
+# ---- no-test-needed justification (--pr-body-file, issue #921 via #934) ----
+
+_SRC_ONLY = "src/usr/local/pkg/pfblockerng/pfblockerng.inc"
+
+
+def _main_with_body(tmp_path: Any, body: str) -> int:
+    # Scenario shared by the justification tests: a rule-1 violation + the
+    # no-test-needed label (--warn-only) + the PR body handed over as the CI
+    # job does. The body's justification line alone decides warn-vs-fail.
+    f = tmp_path / "pr_body.txt"
+    f.write_text(body, encoding="utf-8")
+    return ccp.main(["--warn-only", "--pr-body-file", str(f), _SRC_ONLY])
+
+
+def test_justified_body_keeps_the_warn_downgrade(tmp_path: Any) -> None:
+    # A deliberate `no-test-needed: <why>` line preserves the label's downgrade;
+    # CRLF bodies (GitHub API) and case variants are equally valid.
+    assert _main_with_body(tmp_path, "Reasons.\nno-test-needed: comment-only change") == 0
+    assert _main_with_body(tmp_path, "Reasons.\r\nNo-Test-Needed: docs move\r\n") == 0
+
+
+def test_unjustified_body_fails_hard_despite_label(tmp_path: Any) -> None:
+    # The label without a justification line FAILS the gate (issue #921's
+    # "applied deliberately" constraint) — stricter than no label at all being
+    # merely violation-driven.
+    assert _main_with_body(tmp_path, "ordinary body that never mentions the token") == 1
+    assert _main_with_body(tmp_path, "") == 1, "an empty PR body is not a justification"
+    assert _main_with_body(tmp_path, "no-test-needed:   \n") == 1, "a blank <why> is not a justification"
+
+
+def test_mentions_of_the_token_are_not_justification(tmp_path: Any) -> None:
+    # The false-positive class found in PR #936's review: the check is
+    # line-anchored, so prose ABOUT the feature, a blockquote, or an indented
+    # line never counts — only a line the author started with the token does.
+    prose = "the PR body must now contain a `no-test-needed: <why>` line"
+    assert _main_with_body(tmp_path, prose) == 1, "a mid-sentence mention must not justify"
+    assert _main_with_body(tmp_path, "> no-test-needed: quoted, not real") == 1, "a blockquote must not justify"
+    assert _main_with_body(tmp_path, "  no-test-needed: indented") == 1, "an indented line must not justify"
+
+
+def test_pr_body_file_flag_requires_a_value() -> None:
+    assert ccp.main(["--warn-only", "--pr-body-file"]) == 2, "a dangling --pr-body-file must error, not crash"
 
 
 def test_docs_only_diff_is_neutral() -> None:

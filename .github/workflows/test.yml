@@ -628,14 +628,13 @@ jobs:
             exit 1
           fi
           # Escape-hatch justification (issue #921's "applied deliberately" constraint,
-          # enforced per #934): the no-test-needed label requires a
-          # `no-test-needed: <why>` line in the PR body; a bare label fails the gate
-          # instead of downgrading it.
-          if [ -n "$WARN_ONLY" ] && ! printf '%s\n' "$PR_BODY" | grep -qiE 'no-test-needed:[[:space:]]*[^[:space:]]'; then
-            echo "::error::the no-test-needed label is set but the PR body has no 'no-test-needed: <why>' justification line (issue #921: the label must be applied deliberately, with its justification recorded in the PR body)"
-            exit 1
-          fi
-          python3 scripts/check_coverage_pairing.py ${WARN_ONLY:+--warn-only} < changed.txt | tee -a "$GITHUB_STEP_SUMMARY"
+          # enforced per #934): with the no-test-needed label set, the PR body is
+          # handed to the script (--pr-body-file), which requires a line starting
+          # `no-test-needed: <why>` — else it FAILS instead of downgrading. The
+          # decision logic lives in the tested script, not in shell (mid-sentence
+          # mentions and blockquotes must not count; pinned by its unit tests).
+          printf '%s\n' "$PR_BODY" > pr_body.txt
+          python3 scripts/check_coverage_pairing.py ${WARN_ONLY:+--warn-only} ${WARN_ONLY:+--pr-body-file pr_body.txt} < changed.txt | tee -a "$GITHUB_STEP_SUMMARY"
 
   # Single stable job name for branch-protection required-status-checks.
   # Must use if: always() so it runs (and fails) even when 'test' fails.
