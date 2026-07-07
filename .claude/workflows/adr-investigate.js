@@ -10,7 +10,10 @@ export const meta = {
 // "verified live this session". This fan-out makes the evidence-per-fact rule
 // the output SCHEMA, so an unverified fact cannot masquerade as a verified one.
 
-const { topic, repoRoot, areas } = args ?? {}
+// Callers sometimes deliver args JSON-string-encoded (killed review-fanout on PR #937,
+// issue #942) — normalize before destructuring instead of trusting caller discipline.
+const input = typeof args === 'string' ? JSON.parse(args) : (args ?? {})
+const { topic, repoRoot, areas } = input
 if (!topic || !repoRoot || !Array.isArray(areas) || areas.length === 0) {
   throw new Error('args must include {topic, repoRoot, areas: [{key, focus}]}; see meta.whenToUse')
 }

@@ -13,7 +13,10 @@ export const meta = {
 // nothing). Findings must be execution-grounded; the verify stage tries to
 // REFUTE each finding, so plausible-but-wrong ones die here instead of in triage.
 
-const { pr, base = 'devel', worktree, spec = '(no spec provided — flag that as a finding)' } = args ?? {}
+// Callers sometimes deliver args JSON-string-encoded (killed this workflow on PR #937,
+// issue #942) — normalize before destructuring instead of trusting caller discipline.
+const input = typeof args === 'string' ? JSON.parse(args) : (args ?? {})
+const { pr, base = 'devel', worktree, spec = '(no spec provided — flag that as a finding)' } = input
 if (!pr || !worktree) throw new Error('args must be {pr, worktree, base?, spec?}')
 
 const FINDINGS = {

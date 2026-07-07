@@ -11,7 +11,10 @@ export const meta = {
 // worktree race, and the anti-self-grading asymmetry needs the orchestrator to
 // own the final verdict with the validator's evidence in hand).
 
-const { worktree, base = 'devel', findings, lintNotes = '' } = args ?? {}
+// Callers sometimes deliver args JSON-string-encoded (killed review-fanout on PR #937,
+// issue #942) — normalize before destructuring instead of trusting caller discipline.
+const input = typeof args === 'string' ? JSON.parse(args) : (args ?? {})
+const { worktree, base = 'devel', findings, lintNotes = '' } = input
 if (!worktree || !Array.isArray(findings) || findings.length === 0) {
   throw new Error('args must include {worktree, findings: [...]}; see meta.whenToUse')
 }

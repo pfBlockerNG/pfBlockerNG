@@ -13,7 +13,10 @@ export const meta = {
 // the red proof, reads the full diff) and returns a fixed-field gate record. The
 // calling skill owns HALT/resume/landing — a workflow cannot ask the user anything.
 
-const { worktree, brief, gates = [], redProof = null, planItems = [], ponytailLevel = null } = args ?? {}
+// Callers sometimes deliver args JSON-string-encoded (killed review-fanout on PR #937,
+// issue #942) — normalize before destructuring instead of trusting caller discipline.
+const input = typeof args === 'string' ? JSON.parse(args) : (args ?? {})
+const { worktree, brief, gates = [], redProof = null, planItems = [], ponytailLevel = null } = input
 if (!worktree || !brief) throw new Error('args must include {worktree, brief}; see meta.whenToUse')
 
 const HANDOFF = {
