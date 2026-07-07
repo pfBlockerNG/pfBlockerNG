@@ -14,6 +14,12 @@
     // Verbatim conversation transcript (a historical record, not maintained
     // documentation): its repeated "User"/"Assistant" headings and multiple
     // H1s are inherent to the format, so it is not linted.
-    "**/TRANSCRIPT.md"
+    "**/TRANSCRIPT.md",
+    // Vendored third-party plugin skills (upstream MIT content, copied
+    // byte-identical so managed/cloud sessions can load the modes without
+    // plugin machinery): not ours to lint — fixing them here would drift
+    // from upstream.
+    ".claude/skills/ponytail/**",
+    ".claude/skills/caveman/**"
   ]
 }

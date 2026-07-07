@@ -101,11 +101,10 @@ non-trivial, multi-step `src/`/`tests/`/CI work.
 - **The planner's brief to Sonnet 5 follows the delegation contract below** — a vague or wrong
   brief is a planner bug, and a handful of real shipped defects trace directly to brief bugs
   (a half-enumerated axis, a vacuous test spec, an unverified "fact" stated as truth).
-- **Propagate an active ponytail level to every delegate.** If `ponytail` is active in the
-  orchestrator's session, every spawned sub-agent MUST run at the **same level** — make the
-  **first** line of its brief `Run /ponytail:ponytail <level>`. **Sole exception —
-  reviewer/verifier agents:** ponytail governs what you *build*; a reviewer builds nothing, so
-  do not propagate it to review/verify delegates.
+- **Mode propagation to delegates is mechanical** — the `SubagentStart` hook
+  (`.claude/settings.json`) injects the ponytail + caveman capsule into every spawned
+  sub-agent; the capsule itself carries the rules (reviewer carve-out; "terse prose,
+  verbatim evidence"). Briefs add a mode line only for a non-default level (e.g. `ultra`).
 - **Sonnet 5 follows every directive in this file.** The implementer is cheaper, not exempt.
 - **Run at effort xhigh or better** — the session default in `.claude/settings.json`
   (`effortLevel: xhigh`), and stated explicitly in every spawn (never rely on inheritance).
