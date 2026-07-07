@@ -8529,9 +8529,10 @@ function pfblockerng_top1m(?array $provider_override = NULL) {
 				// and a ',' and would otherwise pass the filter above, so a dead feed would
 				// classify as "valid" below and wipe the whitelist (#886 review). The other
 				// parse mode ('csv': OpenPageRank/Majestic/Cloudflare) has no rank column at
-				// all. BOTH checks below now apply to EVERY parse mode: the rank-column check
-				// where a rank column exists, and the hostname-shape regex always -- a numeric
-				// rank alone is not proof the domain field itself is usable. A dotless/
+				// all. The hostname-shape regex below now applies to EVERY parse mode; the
+				// rank-column check still applies only where a rank column exists
+				// (rank_domain) -- a numeric rank alone is not proof the domain field itself
+				// is usable. A dotless/
 				// malformed rank_domain domain field (e.g. Tranco/Cisco row
 				// "1,garbage,extra.dot") used to satisfy the rank-only guard and reach the
 				// TLD-extraction strrpos() below with a garbage result, wrongly counting the
