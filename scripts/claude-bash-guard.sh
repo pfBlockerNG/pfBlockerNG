@@ -16,7 +16,8 @@
 #   Rule C -- `git worktree remove` with a force flag : CLAUDE.md forbids
 #             force-removing a worktree an agent does not own.
 #
-# First matching rule wins (A, then B, then C).
+# First matching (segment, rule) pair wins: segments are scanned left to
+# right (see MATCHING below); within one segment, A, then B, then C.
 #
 # FAIL-OPEN CONTRACT: this hook must NEVER block a legitimate Bash call
 # because of a parsing failure. Empty stdin, garbled/non-JSON stdin, or no
@@ -29,22 +30,34 @@
 #
 # MATCHING: deliberately a raw-text scan, not a JSON parser (no jq / no
 # non-base dependency -- see issue #923). It reads the whole PreToolUse stdin
-# payload once, builds ONE normalized view of it ($norm, see below), and
-# every rule matches against $norm as text -- never a real shell/argv parse.
-# This is robust to garbled JSON (it just fails to match, i.e. fail-open) but
-# has TWO documented, ACCEPTED false-positive surfaces:
+# payload once, builds ONE normalized view of it ($norm, see below), splits
+# $norm into newline-separated SEGMENTS on shell command-separator
+# metacharacters (`; & | ( )`, see $segs below), and every rule matches
+# against ONE segment at a time ($seg) -- never a real shell/argv parse, and
+# never across a segment boundary. Per-segment scoping is what fixes a
+# cross-segment false positive (issue #923 review, Copilot): scanning the
+# WHOLE payload let a force flag belonging to one part of a compound command
+# "leak" into a rule for an unrelated, unforced git subcommand elsewhere in
+# the same command, e.g. `git worktree remove ../wt && git push
+# --force-with-lease` used to wrongly deny on the (unforced) worktree remove
+# because `--force` appeared ANYWHERE in the payload.
 #
-#   1. The scan runs over the WHOLE payload (JSON structure and all), not
-#      just tool_input.command, so a trigger phrase occurring ANYWHERE in the
-#      payload denies -- e.g. a commit MESSAGE that merely CONTAINS the
-#      literal text "--no-verify" (`git commit -m 'handle the --no-verify
-#      flag'`) also denies, because the guard cannot distinguish "the flag"
-#      from "prose about the flag" without a real parse.
+# This is robust to garbled JSON (it just fails to match, i.e. fail-open) but
+# has TWO documented, ACCEPTED false-positive surfaces, each now scoped to a
+# single segment rather than the whole payload:
+#
+#   1. The scan runs over a segment's full text (JSON structure and all, for
+#      whichever segment the JSON's tool_input.command value falls into), so
+#      a trigger phrase occurring ANYWHERE in that SAME segment denies --
+#      e.g. a commit MESSAGE that merely CONTAINS the literal text
+#      "--no-verify" (`git commit -m 'handle the --no-verify flag'`) also
+#      denies, because the guard cannot distinguish "the flag" from "prose
+#      about the flag" without a real parse.
 #   2. Normalization (below) strips quotes/backslashes and collapses
-#      whitespace before matching, specifically so whitespace/quoting
-#      variance in the invoking command can't evade a rule -- but it applies
-#      to the WHOLE payload, so the same phrase-anywhere caveat holds after
-#      normalization too.
+#      whitespace BEFORE splitting into segments, specifically so
+#      whitespace/quoting variance in the invoking command can't evade a
+#      rule -- but matching still runs over a segment's full text, so the
+#      same phrase-anywhere-in-segment caveat holds after normalization too.
 #
 # Erring toward blocking is the intended tradeoff in both cases.
 #
@@ -66,7 +79,9 @@
 #   2. Collapsing every run of whitespace (space/tab/newline) to one space --
 #      defeats `git  commit` (double space) or a literal tab between tokens.
 # Fail-open holds through normalization: empty/garbled input still normalizes
-# to a string with no rule match, i.e. exit 0.
+# to a string with no rule match, i.e. exit 0. $norm is then split into
+# per-segment matching units ($segs/$seg, see below) -- normalization always
+# runs on the WHOLE payload first, splitting happens second.
 #
 # Standalone `-f` (short form of --force) and a clustered short flag
 # containing `f` (`-uf`, `-fu`, ...) are matched with an explicit boundary so
@@ -81,24 +96,39 @@ payload="$(cat)"
 # space.
 norm="$(printf '%s' "$payload" | tr -d '\\"' | tr -s '[:space:]' ' ')"
 
-# _contains <needle> -- true (rc 0) iff $norm contains <needle> as a literal
-# substring, independent of where else in the payload it occurs.
+# segs -- $norm split into newline-separated SEGMENTS on shell
+# command-separator metacharacters (`; & | ( )`). Each rule below matches
+# against ONE segment at a time ($seg, set by the per-segment loop further
+# down) instead of the whole payload -- this is what keeps a force flag in
+# one part of a compound command from "leaking" into a rule for an
+# unrelated, unforced git subcommand elsewhere in the same command (issue
+# #923 review, Copilot). $norm has already collapsed real newlines to spaces
+# (see NORMALIZATION above), so using a bare newline as the segment
+# delimiter here is unambiguous.
+segs="$(printf '%s' "$norm" | tr ';&|()' '\n')"
+
+# _contains <needle> -- true (rc 0) iff the CURRENT SEGMENT ($seg, set by
+# the per-segment loop below) contains <needle> as a literal substring.
 _contains() {
-	case "$norm" in
+	case "$seg" in
 	*"$1"*) return 0 ;;
 	*) return 1 ;;
 	esac
 }
 
 # Boundary class for a short force-flag token: the separator on either side
-# is start/end-of-string, whitespace, a shell word-terminator a metacharacter
-# can place directly after a flag with no space in between (`; | & ( ) < >
-# ,`), or a JSON structural brace (`{` `}`) -- normalization (above) strips
-# the payload's quotes, so a flag at the end of the JSON command value sits
-# directly against the closing `}}` with no other separator left to match.
+# is start/end-of-segment, whitespace, a shell word-terminator a
+# metacharacter can place directly after a flag with no space in between
+# (`; | & ( ) < > ,` -- none of `; | & ( )` can actually occur WITHIN a
+# segment any more, since those are exactly the characters $segs split on;
+# they stay in this class as harmless dead alternatives), or a JSON
+# structural brace (`{` `}`) -- normalization (above) strips the payload's
+# quotes, so a flag at the end of the last segment sits directly against
+# the closing `}}` with no other separator left to match.
 _SEP='[[:space:];|&(){}<>,]'
 
-# _has_force_flag -- true iff $norm carries a force flag:
+# _has_force_flag -- true iff the CURRENT SEGMENT ($seg) carries a force
+# flag:
 #   * the literal substring --force (covers --force and --force-with-lease
 #     alike; callers that must distinguish the two check --force-with-lease
 #     separately), OR
@@ -113,7 +143,7 @@ _SEP='[[:space:];|&(){}<>,]'
 #     f-cluster as force on those two subcommands is safe.
 _has_force_flag() {
 	_contains '--force' && return 0
-	printf '%s' "$norm" | grep -Eq "(^|${_SEP})-[a-z]*f[a-z]*(\$|${_SEP})"
+	printf '%s' "$seg" | grep -Eq "(^|${_SEP})-[a-z]*f[a-z]*(\$|${_SEP})"
 }
 
 # _deny <reason> -- print the PreToolUse deny JSON and exit 0 (exit 0 is
@@ -125,18 +155,27 @@ _deny() {
 	exit 0
 }
 
-if _contains 'git commit' && _contains '--no-verify'; then
-	_deny "the pre-commit lint gate's --no-verify bypass is for humans, not agents (CLAUDE.md)"
-fi
-
-if _contains 'git push' && _has_force_flag; then
-	if ! _contains '--force-with-lease'; then
-		_deny "the rebase-only landing flow uses --force-with-lease exclusively; a bare force-push can clobber another session's PR (CLAUDE.md)"
+# Walk $segs one segment at a time, applying all three rules to each ($seg
+# is read by _contains / _has_force_flag above). Fed via a heredoc (not a
+# `| while`) so this loop runs in the CURRENT shell, not a subshell: dash (the
+# box's /bin/sh) forks a subshell for the reader end of a pipe, which would
+# swallow _deny's `exit 0` instead of ending the whole script.
+while IFS= read -r seg; do
+	if _contains 'git commit' && _contains '--no-verify'; then
+		_deny "the pre-commit lint gate's --no-verify bypass is for humans, not agents (CLAUDE.md)"
 	fi
-fi
 
-if _contains 'git worktree remove' && _has_force_flag; then
-	_deny "CLAUDE.md forbids force-removing a worktree you do not own"
-fi
+	if _contains 'git push' && _has_force_flag; then
+		if ! _contains '--force-with-lease'; then
+			_deny "the rebase-only landing flow uses --force-with-lease exclusively; a bare force-push can clobber another session's PR (CLAUDE.md)"
+		fi
+	fi
+
+	if _contains 'git worktree remove' && _has_force_flag; then
+		_deny "CLAUDE.md forbids force-removing a worktree you do not own"
+	fi
+done <<_PFB_SEGS_
+$segs
+_PFB_SEGS_
 
 exit 0
