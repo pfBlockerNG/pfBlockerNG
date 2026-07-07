@@ -55,6 +55,7 @@ staged_py=0;  staged_has '\.py$'        && staged_py=1
 staged_md=0;  staged_has '\.md$'        && staged_md=1
 staged_php=0; staged_has '\.(php|inc)$' && staged_php=1
 staged_sh=0;  staged_has '\.sh$'        && staged_sh=1
+staged_adrtxt=0; staged_has '^\.ADRs/.*\.txt$' && staged_adrtxt=1
 
 # =============================== Python (*.py) =============================== #
 if [ "$staged_py" = 1 ]; then
@@ -130,7 +131,7 @@ if [ "$staged_sh" = 1 ]; then
 		sh -n "$f" || exit 1
 	done || failed 'sh -n'
 
-	# shellcheck (src + scripts only; tests/ shellspec specs trip SC2034
+	# ShellCheck (src + scripts only; tests/ shellspec specs trip SC2034
 	# false-positives — tracked as a separate cleanup).
 	if have shellcheck; then
 		step 'shellcheck'
@@ -170,6 +171,18 @@ if [ "$staged_py" = 1 ] || [ "$staged_php" = 1 ] || [ "$staged_sh" = 1 ]; then
 		"$py_bin" scripts/check_appliance_python.py || failed 'no-appliance-python'
 	else
 		skip no-appliance-python
+	fi
+fi
+
+# --- ADR phase prompts: post-contract prompts (ADR >= 60) must carry the
+#     delegation-contract blocks (VERIFICATION, HANDOFF->RESULTS, test mode,
+#     reality-override). Older ADRs are grandfathered by the script itself. ---
+if [ "$staged_adrtxt" = 1 ]; then
+	if [ -n "$py_bin" ]; then
+		step 'phase-prompts (delegation-contract blocks)'
+		"$py_bin" scripts/check_phase_prompts.py || failed 'phase-prompts'
+	else
+		skip phase-prompts
 	fi
 fi
 
