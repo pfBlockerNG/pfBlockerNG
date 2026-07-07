@@ -1400,7 +1400,7 @@ function pfb_dnsbl_webpage(): string
  *   PfbConfig::write($key, $value)                 — write one field
  *   PfbConfig::delete($key)                        — delete one field
  *   PfbConfig::readSection($section)               — read a whole section array
- *   PfbConfig::writeSection($section, $data)       — write a section array, normalizing
+ *   PfbConfig::writeSection($section, $data)       — write a section array, normalising
  *                                                     its registered fields through their
  *                                                     adapters (issue #930)
  *   PfbConfig::deleteSection($section)             — delete a whole section
@@ -1482,7 +1482,7 @@ final class PfbConfig
 	}
 
 	/**
-	 * Write a whole section array, normalizing every registered field of
+	 * Write a whole section array, normalising every registered field of
 	 * $section through its adapter pair before persisting (issue #930).
 	 *
 	 * For each key in $data that is registered to this EXACT section (a

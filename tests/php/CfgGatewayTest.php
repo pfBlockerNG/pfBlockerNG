@@ -2189,7 +2189,7 @@ final class CfgGatewayTest extends TestCase
 	// directly, bypassing every registered adapter -- a legacy read-only token
 	// ('domcop', 'alexa', alpha-only 'all') or hostile/junk value written through
 	// ANY section blob (www/ save handlers, install seeds, migrations) persisted
-	// raw into config.xml instead of being normalized like a single-key write().
+	// raw into config.xml instead of being normalised like a single-key write().
 	// -----------------------------------------------------------------------
 
 	/**
@@ -2302,7 +2302,7 @@ final class CfgGatewayTest extends TestCase
 
 	/**
 	 * A live canonical alexa_type token ('cisco') riding a section blob write
-	 * passes through byte-identical -- normalization never mangles a live token.
+	 * passes through byte-identical -- normalisation never mangles a live token.
 	 *
 	 * Scenario:
 	 *   Given a DNSBL settings blob with the canonical 'cisco' alexa_type token.
@@ -2323,7 +2323,7 @@ final class CfgGatewayTest extends TestCase
 
 	/**
 	 * pfb_idn: the dropped 4.0.0-alpha-only 'all' token riding a section blob
-	 * write normalizes to 'off' (never re-emitted); the canonical 'on' token
+	 * write normalises to 'off' (never re-emitted); the canonical 'on' token
 	 * (= PfbIdnMode::All) stays 'on' unchanged.
 	 *
 	 * Scenario:
@@ -2337,10 +2337,10 @@ final class CfgGatewayTest extends TestCase
 		$section = 'installedpackages/pfblockerngdnsblsettings/config/0';
 		$path    = $section . '/pfb_idn';
 
-		// Alpha-only 'all' -> normalized to 'off'.
+		// Alpha-only 'all' -> normalised to 'off'.
 		PfbConfig::writeSection($section, ['pfb_idn' => 'all']);
 		$this->assertSame('off', config_get_path($path),
-			"dropped alpha-only 'all' riding a section write normalizes to 'off'"
+			"dropped alpha-only 'all' riding a section write normalises to 'off'"
 		);
 
 		// Canonical 'on' -> stays 'on'.
@@ -2352,7 +2352,7 @@ final class CfgGatewayTest extends TestCase
 
 	/**
 	 * pfb_keep: the legacy empty-string token (pre-#484 absent-key install)
-	 * riding a section blob write normalizes to the explicit 'off' token, same
+	 * riding a section blob write normalises to the explicit 'off' token, same
 	 * as the single-key PfbConfig::write() lenient-adapter contract.
 	 *
 	 * Scenario:
@@ -2368,7 +2368,7 @@ final class CfgGatewayTest extends TestCase
 		PfbConfig::writeSection($section, ['pfb_keep' => '']);
 
 		$this->assertSame('off', config_get_path($path),
-			"legacy empty pfb_keep riding a section write normalizes to 'off'"
+			"legacy empty pfb_keep riding a section write normalises to 'off'"
 		);
 	}
 
@@ -2396,7 +2396,7 @@ final class CfgGatewayTest extends TestCase
 	/**
 	 * Hostile input: a crafted array value (e.g. a POST array
 	 * alexa_type[]=x) riding a section blob write hits the adapter's
-	 * non-scalar guard and normalizes to the parse-fallback default, never
+	 * non-scalar guard and normalises to the parse-fallback default, never
 	 * crashes and never persists the raw array.
 	 *
 	 * Scenario:
@@ -2465,7 +2465,7 @@ final class CfgGatewayTest extends TestCase
 	/**
 	 * Hostile input: an integer value on an adapted key riding a section blob
 	 * write hits the non-scalar-adjacent junk path (no matching token) and
-	 * normalizes to the field's parse-fallback default.
+	 * normalises to the field's parse-fallback default.
 	 *
 	 * Scenario:
 	 *   Given a DNSBL settings blob with alexa_type = 1 (int, not a string token).
@@ -2480,14 +2480,14 @@ final class CfgGatewayTest extends TestCase
 		PfbConfig::writeSection($section, ['alexa_type' => 1]);
 
 		$this->assertSame('tranco', config_get_path($path),
-			'int-valued alexa_type riding a section write normalizes to the parse-fallback tranco'
+			'int-valued alexa_type riding a section write normalises to the parse-fallback tranco'
 		);
 	}
 
 	/**
 	 * A registered key with NO adapter pair (plain string, e.g. top1m_token and
 	 * dnsbl_interface) riding a section blob write is left byte-identical --
-	 * normalization only ever touches adapter-bearing keys.
+	 * normalisation only ever touches adapter-bearing keys.
 	 *
 	 * Scenario:
 	 *   Given a DNSBL settings blob with two unadapted registered keys.
@@ -2522,7 +2522,7 @@ final class CfgGatewayTest extends TestCase
 	 *     'alexa_type' (foreign to this section -- the registry maps alexa_type
 	 *     to the DNSBL section only) with the legacy 'domcop' value.
 	 *   When PfbConfig::writeSection() persists it against the SYNC section.
-	 *   Then the stored value is the raw 'domcop' -- no normalization applied,
+	 *   Then the stored value is the raw 'domcop' -- no normalisation applied,
 	 *     because no registry entry has 'section' === the sync section for
 	 *     this key.
 	 */
@@ -2541,7 +2541,7 @@ final class CfgGatewayTest extends TestCase
 	/**
 	 * A realistic dconfig-shaped blob (mirrors pfblockerng_dnsbl.php's save
 	 * handler): a mix of adapted legacy/hostile tokens and unadapted
-	 * base64/plain fields. Adapted fields normalize; every other field is
+	 * base64/plain fields. Adapted fields normalise; every other field is
 	 * byte-identical.
 	 *
 	 * Scenario:
@@ -2557,8 +2557,8 @@ final class CfgGatewayTest extends TestCase
 
 		$data = [
 			'pfb_dnsbl'       => 'on',           // adapted (toggle), canonical.
-			'alexa_type'      => 'domcop',        // adapted (top1m_source), LEGACY -> normalizes.
-			'pfb_idn'         => 'all',           // adapted (idn_mode), ALPHA-ONLY -> normalizes.
+			'alexa_type'      => 'domcop',        // adapted (top1m_source), LEGACY -> normalises.
+			'pfb_idn'         => 'all',           // adapted (idn_mode), ALPHA-ONLY -> normalises.
 			'pfb_hsts'        => 'on',            // adapted (toggle), canonical.
 			'dnsbl_interface' => 'lo0',           // unadapted, plain.
 			'pfb_dnsvip4'     => '',              // unadapted, plain.
@@ -2570,11 +2570,42 @@ final class CfgGatewayTest extends TestCase
 		$result = PfbConfig::readSection($section);
 
 		$this->assertSame('on', $result['pfb_dnsbl'], 'pfb_dnsbl canonical stays on');
-		$this->assertSame('openpagerank', $result['alexa_type'], "legacy 'domcop' normalizes to 'openpagerank'");
-		$this->assertSame('off', $result['pfb_idn'], "alpha-only 'all' normalizes to 'off'");
+		$this->assertSame('openpagerank', $result['alexa_type'], "legacy 'domcop' normalises to 'openpagerank'");
+		$this->assertSame('off', $result['pfb_idn'], "alpha-only 'all' normalises to 'off'");
 		$this->assertSame('on', $result['pfb_hsts'], 'pfb_hsts canonical stays on');
 		$this->assertSame('lo0', $result['dnsbl_interface'], 'unadapted dnsbl_interface is byte-identical');
 		$this->assertSame('', $result['pfb_dnsvip4'], 'unadapted pfb_dnsvip4 is byte-identical');
 		$this->assertSame('QWJjMTIz', $result['top1m_token'], 'unadapted top1m_token is byte-identical');
+	}
+
+	/**
+	 * The gateway NEVER calls write_config() -- the caller decides when to
+	 * flush (CLAUDE.md "Config gateway -- PfbConfig"). Pins that invariant for
+	 * every public PfbConfig method: the pfsense_doubles write_config() records
+	 * each call in $GLOBALS['pfb_test_write_config_calls'], so an accidental
+	 * write_config() slipped into any gateway path fails this test (PR #949
+	 * review: a mutation adding one to writeSection() survived the whole suite).
+	 *
+	 * Scenario:
+	 *   Given a clean write_config() call recorder.
+	 *   When every public PfbConfig method runs (read/write/delete +
+	 *     readSection/writeSection/deleteSection).
+	 *   Then zero write_config() calls were recorded.
+	 */
+	public function testGatewayNeverCallsWriteConfig(): void
+	{
+		$GLOBALS['pfb_test_write_config_calls'] = [];
+
+		PfbConfig::write('pfb_keep', 'on');
+		PfbConfig::read('pfb_keep');
+		PfbConfig::delete('pfb_keep');
+		PfbConfig::readSection('installedpackages/pfblockerng/config/0');
+		PfbConfig::writeSection('installedpackages/pfblockerng/config/0', ['pfb_keep' => '', 'pfb_interval' => '1']);
+		PfbConfig::deleteSection('installedpackages/pfblockerng/config/0');
+
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'],
+			'PfbConfig must never call write_config() -- the caller flushes');
+
+		unset($GLOBALS['pfb_test_write_config_calls']);
 	}
 }

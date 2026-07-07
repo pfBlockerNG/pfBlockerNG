@@ -194,7 +194,7 @@ final class WwwGroupAGatewayTest extends TestCase
 	}
 
 	/**
-	 * General section: pfb_keep = '' (disabled) is normalized, not round-tripped raw.
+	 * General section: pfb_keep = '' (disabled) is normalised, not round-tripped raw.
 	 * Asserts the before-state ('on') and the after-state ('off') are distinct —
 	 * proving the write changed the value rather than being an always-equal no-op.
 	 *
@@ -214,8 +214,8 @@ final class WwwGroupAGatewayTest extends TestCase
 		// When: write '' (disabled, legacy empty token).
 		PfbConfig::writeSection($section, ['pfb_keep' => '']);
 
-		// Then: reads back as 'off' (lenient-adapter normalization, issue #930).
-		$this->assertSame('off', PfbConfig::readSection($section)['pfb_keep'], 'pfb_keep "" normalizes to "off"');
+		// Then: reads back as 'off' (lenient-adapter normalisation, issue #930).
+		$this->assertSame('off', PfbConfig::readSection($section)['pfb_keep'], 'pfb_keep "" normalises to "off"');
 	}
 
 	// -----------------------------------------------------------------------
@@ -300,7 +300,7 @@ final class WwwGroupAGatewayTest extends TestCase
 	 *   Then PfbConfig::readSection() returns an identical array.
 	 *
 	 * Issue #930: pfb_idn is adapter-bearing (PfbIdnMode); its fixture value uses
-	 * the canonical 'off' token (not the legacy '' — writeSection() now normalizes
+	 * the canonical 'off' token (not the legacy '' — writeSection() now normalises
 	 * every registered field of the target section, and the real save handler's
 	 * 3-way select never emits '' either) so this stays a true byte-identical
 	 * round-trip assertion.
