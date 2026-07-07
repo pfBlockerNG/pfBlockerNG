@@ -47,11 +47,13 @@ from pathlib import Path
 # Everything older is grandfathered — except the retrofitted set below.
 _CONTRACT_MIN_ADR = 60
 
-# Pre-contract ADRs whose prompts still drive FUTURE implementer runs (Proposed /
-# unimplemented at retrofit time) — brought up to the contract in 2821b9df and
-# gated despite their number. An ADR implemented before the contract stays
-# grandfathered; one added here must comply.
-_RETROFITTED_ADRS = frozenset({25, 32, 33, 34, 54, 55})
+# Pre-contract ADRs whose prompts still drive FUTURE implementer runs (every ADR
+# still Proposed/unimplemented at retrofit time — existing prompts brought up to
+# the contract in 2821b9df/9b21b75e; 51/56/57 have no prompts yet, but any they
+# gain are gated). An ADR implemented before the contract stays grandfathered;
+# an ADR added here must comply. Keep in sync with the Proposed set (positive
+# Status grep — a negative grep ate ADR-52's "Not yet implemented" once).
+_RETROFITTED_ADRS = frozenset({25, 32, 33, 34, 51, 52, 54, 55, 56, 57})
 
 # .ADRs/ADR_{NN}_{Name}/{MM}_{Name}.txt — capture the ADR number for the cutoff.
 _PROMPT_RE = re.compile(r"(?:^|/)\.ADRs/ADR_(\d+)_[^/]+/\d+_[^/]+\.txt$")
@@ -146,7 +148,11 @@ def main(argv: list[str]) -> int:
         return 0
     print("Phase prompt missing delegation-contract blocks:\n", file=sys.stderr)
     for path, check, msg in violations:
-        print(f"  {path}: {check}: {msg}", file=sys.stderr)
+        try:
+            shown = path.relative_to(_REPO_ROOT)
+        except ValueError:
+            shown = path
+        print(f"  {shown}: {check}: {msg}", file=sys.stderr)
     print(
         "\nEvery post-contract phase prompt (ADR >= "
         f"{_CONTRACT_MIN_ADR}) must carry the CLAUDE.md delegation-contract blocks: "
