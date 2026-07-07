@@ -172,6 +172,107 @@ def test_row13_write_tool_counts_as_edit() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Review findings (PR #945) -- each pinned red->green against the pre-fix code.
+# --------------------------------------------------------------------------- #
+
+
+def test_long_turn_edit_early_in_turn_still_blocks() -> None:
+    # Pre-fix, a 50-line tail cut dropped the edit (and the user boundary) on any
+    # turn longer than the window, silently flipping BLOCK to ALLOW.
+    turn: list[dict[str, Any]] = [_edit("src/foo.php")]
+    turn += [_text(f"investigating step {i}, still looking") for i in range(60)]
+    turn += [_text("All done, fixed the bug.")]
+    reason = csg.decide({}, _lines([_user(), *turn]))
+    assert reason is not None, "an edit early in a long turn must still trigger the guard"
+
+
+def test_main_long_turn_via_subprocess_blocks(tmp_path: Path) -> None:
+    turn: list[dict[str, Any]] = [_edit("src/foo.php")]
+    turn += [_text(f"noise {i}") for i in range(60)]
+    turn += [_text("All done, fixed it.")]
+    transcript = tmp_path / "long.jsonl"
+    transcript.write_text("\n".join(_lines([_user(), *turn])) + "\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(_TOOL)],
+        input=json.dumps({"hook_event_name": "Stop", "transcript_path": str(transcript)}),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout, "main() must block a long turn whose edit precedes >50 lines of activity"
+    assert json.loads(proc.stdout)["decision"] == "block"
+
+
+def test_main_byte_cap_truncating_user_boundary_still_blocks(tmp_path: Path) -> None:
+    # A transcript larger than the 5 MB tail cap loses the user-prompt boundary;
+    # the remaining tail is then treated as the whole turn and must still block.
+    filler = [_text("x" * 100_000) for _ in range(60)]  # ~6 MB before the edit
+    turn = [_edit("src/foo.php"), _text("All done, fixed it.")]
+    transcript = tmp_path / "huge.jsonl"
+    transcript.write_text("\n".join(_lines([_user(), *filler, *turn])) + "\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(_TOOL)],
+        input=json.dumps({"hook_event_name": "Stop", "transcript_path": str(transcript)}),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout, "losing the user boundary to the byte cap must not disarm the guard"
+    assert json.loads(proc.stdout)["decision"] == "block"
+
+
+def test_gate_keyword_inside_larger_word_not_credited() -> None:
+    # 'ruff' inside 'truffle' must not count as a gate run (word-boundary match).
+    turn = [_edit("src/foo.php"), _bash("npm install truffle-hardhat"), _text("Done.")]
+    reason = csg.decide({}, _lines([_user(), *turn]))
+    assert reason is not None, "a gate keyword embedded in an unrelated word must not satisfy THE GATE"
+
+
+def test_stale_done_before_final_tooluse_entry_does_not_block() -> None:
+    # The claim fallback reads ONLY the last assistant entry; a stale mid-turn
+    # "done" from before later tool work must not false-block.
+    turn = [_edit("src/foo.php"), _text("Done with step one, more to do."), _bash("ls -la")]
+    reason = csg.decide({}, _lines([_user(), *turn]))
+    assert reason is None, "a turn whose final assistant entry makes no claim must not block"
+
+
+_CLAIM_WORDS = ("done", "complete", "completed", "implemented", "fixed", "landed", "finished", "green")
+
+
+def test_each_claim_keyword_recognized() -> None:
+    for word in _CLAIM_WORDS:
+        turn = [_edit("src/foo.php"), _text(f"The task is now {word}.")]
+        reason = csg.decide({}, _lines([_user(), *turn]))
+        assert reason is not None, f"claim keyword {word!r} must trigger the guard"
+
+
+def test_payload_claim_text_preferred_over_transcript() -> None:
+    # A present, non-claiming last_assistant_message wins over a claiming transcript text...
+    reason = csg.decide({"last_assistant_message": "Still investigating the parser."}, _row1_tail())
+    assert reason is None, "payload last_assistant_message must be preferred over the transcript fallback"
+    # ...and a claiming one wins over a non-claiming transcript text.
+    turn = [_edit("src/foo.php"), _text("Wrapping up now.")]
+    reason = csg.decide({"last_assistant_message": "All done."}, _lines([_user(), *turn]))
+    assert reason is not None, "a claiming payload last_assistant_message must trigger the guard"
+
+
+def test_same_entry_batched_edit_and_gate_allows() -> None:
+    entry = {
+        "type": "assistant",
+        "message": {
+            "content": [
+                {"type": "tool_use", "name": "Edit", "input": {"file_path": "src/foo.php"}},
+                {"type": "tool_use", "name": "Bash", "input": {"command": "pytest -q tests/"}},
+            ]
+        },
+    }
+    reason = csg.decide({}, _lines([_user(), entry, _text("Done.")]))
+    assert reason is None, "an Edit and its gate Bash call batched in ONE assistant entry must credit the gate"
+
+
+# --------------------------------------------------------------------------- #
 # Hostile-input rows
 # --------------------------------------------------------------------------- #
 
