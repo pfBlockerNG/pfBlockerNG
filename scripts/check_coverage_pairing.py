@@ -105,15 +105,18 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entry point.
 
     Positional args are changed paths (used by tests); with none, changed paths
-    are read newline-separated from stdin (blank lines skipped) — how the CI
-    job pipes ``git diff --name-only`` output in.
+    are read newline-separated from stdin — how the CI job pipes
+    ``git diff --name-only`` output in. Both entry points are normalized the
+    same way (surrounding whitespace stripped, blank entries dropped), so a
+    padded positional arg and a trailing-newline stdin line classify identically.
     """
     args = list(sys.argv[1:] if argv is None else argv)
     warn_only = "--warn-only" in args
     paths = [a for a in args if a != "--warn-only"]
 
     if not paths:
-        paths = [line.strip() for line in sys.stdin if line.strip()]
+        paths = list(sys.stdin)
+    paths = [p.strip() for p in paths if p.strip()]
 
     violations = evaluate(paths)
 

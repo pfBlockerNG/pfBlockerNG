@@ -122,3 +122,28 @@ def test_main_reads_stdin_when_no_positional_paths(monkeypatch: Any) -> None:
     # args). Blank lines must be tolerated/skipped.
     monkeypatch.setattr("sys.stdin", io.StringIO("src/x.inc\n\n"))
     assert ccp.main([]) == 1, "stdin-fed src-only path (blank line skipped) must fail the gate"
+
+
+def test_positional_args_are_whitespace_normalized() -> None:
+    # A positional path is stripped the same as a stdin line, so a padded arg is
+    # classified (not silently dropped into no category). Before-state: without
+    # the strip, the padded path matched no classifier and the gate passed.
+    assert ccp.main(["  src/x.inc  "]) == 1, "a padded src path must still fire the gate"
+    # Discriminating sibling: a padded docs path is still neutral (stays a pass).
+    assert ccp.main([" README.md "]) == 0, "a padded docs path must stay neutral"
+
+
+def test_uppercase_md_extension_is_neutral() -> None:
+    # _is_docs matches `.md` case-insensitively, so an uppercase `.MD` under src/
+    # is still docs-neutral -- paired with a firing sibling to prove discrimination.
+    assert ccp.evaluate(["src/usr/local/pkg/pfblockerng/NOTES.MD"]) == [], "an uppercase .MD is docs, neutral"
+    assert ccp.evaluate(["src/usr/local/pkg/pfblockerng/notes.inc"]) != [], "a .inc sibling is src code, fires"
+
+
+def test_bare_directory_names_hit_the_equality_branches() -> None:
+    # The `path == "src"` / `== "tests"` equality clauses exist for completeness
+    # (git never emits a bare directory from --name-only, but the branches are
+    # written and documented): a bare `src` is src code (fires, no test), and a
+    # bare `tests` satisfies rule 1's pairing.
+    assert ccp.evaluate(["src"]) != [], "bare `src` classifies as src code and fires rule 1"
+    assert ccp.evaluate(["src", "tests"]) == [], "bare `tests` satisfies the src<->tests pairing"
