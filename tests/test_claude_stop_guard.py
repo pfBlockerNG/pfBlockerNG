@@ -177,8 +177,10 @@ def test_row13_write_tool_counts_as_edit() -> None:
 
 
 def test_long_turn_edit_early_in_turn_still_blocks() -> None:
-    # Pre-fix, a 50-line tail cut dropped the edit (and the user boundary) on any
-    # turn longer than the window, silently flipping BLOCK to ALLOW.
+    # decide()-level pin: the decision logic itself must have no turn-length
+    # window. The main()-level 50-line-tail regression (which this test cannot
+    # see -- it bypasses the file read) is pinned red->green by
+    # test_main_long_turn_via_subprocess_blocks below.
     turn: list[dict[str, Any]] = [_edit("src/foo.php")]
     turn += [_text(f"investigating step {i}, still looking") for i in range(60)]
     turn += [_text("All done, fixed the bug.")]
@@ -256,6 +258,32 @@ def test_payload_claim_text_preferred_over_transcript() -> None:
     turn = [_edit("src/foo.php"), _text("Wrapping up now.")]
     reason = csg.decide({"last_assistant_message": "All done."}, _lines([_user(), *turn]))
     assert reason is not None, "a claiming payload last_assistant_message must trigger the guard"
+
+
+def test_gate_keyword_case_insensitive() -> None:
+    # _GATE_RE is deliberately case-insensitive (consistent with _CLAIM_RE).
+    turn = [_edit("src/foo.php"), _bash("PYTEST -q tests/"), _text("Done.")]
+    reason = csg.decide({}, _lines([_user(), *turn]))
+    assert reason is None, "an upper-case gate command must still credit the gate"
+
+
+def test_main_byte_cut_on_exact_line_boundary_keeps_first_line(tmp_path: Path, monkeypatch: Any, capsys: Any) -> None:
+    # When the byte cut lands exactly after a newline, the first tail line is
+    # COMPLETE and must be kept -- dropping it can discard the triggering edit
+    # and silently flip BLOCK to ALLOW.
+    import io
+
+    lines = _lines([_user(), _edit("src/foo.php"), _text("All done, fixed it.")])
+    transcript = tmp_path / "boundary.jsonl"
+    transcript.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    size = transcript.stat().st_size
+    cap = size - (len(lines[0].encode()) + 1)  # cut starts exactly at the edit line
+    monkeypatch.setattr(csg, "_TAIL_BYTES", cap)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"transcript_path": str(transcript)})))
+    assert csg.main() == 0
+    out = capsys.readouterr().out
+    assert out, "a boundary-aligned byte cut must not drop the complete edit line (BLOCK expected)"
+    assert json.loads(out)["decision"] == "block"
 
 
 def test_same_entry_batched_edit_and_gate_allows() -> None:
