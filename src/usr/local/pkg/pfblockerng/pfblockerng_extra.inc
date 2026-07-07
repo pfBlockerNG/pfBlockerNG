@@ -203,8 +203,9 @@ enum PfbAliasDeltaMode: string implements PfbStoredEnum
 // PfbTop1mSource — TOP1M source selector (alexa_type, issue #877).
 //
 // Used by: alexa_type (config key) / $pfb['dnsbl_top1m_type'] (runtime).
-//   Canonical tokens: 'tranco' (default), 'cisco', 'openpagerank', 'majestic'
-//   (ADR-59 P4), 'cloudflare' (ADR-59 P5, token-authenticated). TWO tokens
+//   Canonical tokens: 'tranco' (default), 'cisco', 'openpagerank' (#928,
+//   replacing ADR-59 P4's 'domcop'), 'majestic' (ADR-59 P4), 'cloudflare'
+//   (ADR-59 P5, token-authenticated). TWO tokens
 //   are READ-ONLY legacy values, never re-emitted by a write: 'alexa' (the
 //   dead Alexa TOP1M service, #872) and 'domcop' (the DomCop top-10M list's
 //   hosting moved to OpenPageRank, #928) both coalesce to their replacement
@@ -1686,7 +1687,8 @@ function pfb_run_migrations(): void
  * #872) coalesces to Tranco on read, and legacy 'domcop' (list moved hosting,
  * #928) coalesces to OpenPageRank on read; neither is ever re-emitted by a write.
  * The write vocabulary is 'tranco'|'cisco'|'openpagerank'|'majestic'|'cloudflare'
- * (openpagerank/majestic added ADR-59 P4, cloudflare added ADR-59 P5).
+ * (majestic added ADR-59 P4, cloudflare added ADR-59 P5; openpagerank replaced
+ * P4's domcop in #928).
  *
  * @return array<string,list<string>>
  */
@@ -1717,7 +1719,8 @@ function pfb_cfg_field_vocab(): array
 
 		// TOP1M source selector (PfbTop1mSource, issue #877): the tokens a write can
 		// emit. 'tranco' (default) | 'cisco' | 'openpagerank' | 'majestic' | 'cloudflare'
-		// (openpagerank/majestic added ADR-59 P4, cloudflare added ADR-59 P5). Two
+		// (majestic added ADR-59 P4, cloudflare added ADR-59 P5; openpagerank
+		// replaced P4's domcop in #928). Two
 		// tokens are READ-ONLY legacy values — 'alexa' (dead service, #872) and
 		// 'domcop' (list moved hosting, #928) — pfb_cfg_top1m_source_read() coalesces
 		// them to PfbTop1mSource::Tranco / ::OpenPageRank respectively and neither is

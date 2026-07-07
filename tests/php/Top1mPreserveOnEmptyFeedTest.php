@@ -491,13 +491,15 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		$this->assertNotFalse(file_put_contents($this->csvPath(), $csv), 'setup: real-shape OpenPageRank sample');
 
 		// When (BEFORE): the WRONG column for this shape -- index 2 ("Extension",
-		// a bare dotless TLD string with no matching TLD, and no matching hostname shape).
+		// a bare dotless string like "com" -- the hostname-shape guard rejects it
+		// before TLD matching is ever reached).
 		$wrongColumn = ['parse' => 'csv', 'header' => true, 'domain_col' => 2];
 		pfblockerng_top1m($wrongColumn);
 
 		// Then (RED): the real domains are misread as the Extension value ("com"),
-		// which is neither a valid TLD match NOR a hostname-shaped value (no dot) --
-		// no whitelist can be built (none existed before this run).
+		// which the domain-validity guard rejects as not hostname-shaped (no dot),
+		// so TLD matching is never reached -- no whitelist can be built (none
+		// existed before this run).
 		$this->assertFileDoesNotExist($this->whitelistPath(),
 			"domain_col 2 must MIS-read OpenPageRank's real shape -- Domain sits at index 1, not 2");
 		$this->assertStringContainsString('no TOP1M whitelist available', $this->readMainLog());

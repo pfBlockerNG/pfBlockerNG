@@ -39,7 +39,8 @@ use PHPUnit\Framework\TestCase;
  *     And write(read('')) == 'off'    (normalised default).
  *
  * Scenario E — PfbTop1mSource (alexa_type, issue #877): backing values 'tranco' /
- *   'cisco' / 'openpagerank' / 'majestic' (the latter two added ADR-59 P4) TOP1M
+ *   'cisco' / 'openpagerank' (#928, replacing ADR-59 P4's 'domcop') / 'majestic'
+ *   (added ADR-59 P4) TOP1M
  *   source selector; the legacy 'alexa' token (dead service, #872) coalesces
  *   to Tranco, and the legacy 'domcop' token (list moved hosting, #928)
  *   coalesces to OpenPageRank.
@@ -676,7 +677,8 @@ final class CfgAdaptersTest extends TestCase
 	// -----------------------------------------------------------------------
 	// Scenario E — PfbTop1mSource (alexa_type, issue #877)
 	//   Stored tokens: 'tranco', 'cisco', 'openpagerank', 'majestic', 'cloudflare'
-	//   (live; the latter three added ADR-59 P4/P5); legacy 'alexa' (dead service,
+	//   (live; majestic/cloudflare added ADR-59 P4/P5, openpagerank replaced P4's
+	//   domcop in #928); legacy 'alexa' (dead service,
 	//   #872) coalesces to Tranco, legacy 'domcop' (list moved hosting, #928)
 	//   coalesces to OpenPageRank, both at the read boundary. Mirrors the
 	//   PfbAliasDeltaMode adapter shape (Scenario D): read returns the enum,
@@ -738,8 +740,8 @@ final class CfgAdaptersTest extends TestCase
 	}
 
 	/**
-	 * write(read(v)) == v for all five live canonical tokens (openpagerank/majestic added
-	 * P4, cloudflare added P5).
+	 * write(read(v)) == v for all five live canonical tokens (majestic added P4,
+	 * cloudflare added P5, openpagerank replaced P4's domcop in #928).
 	 */
 	public function testPfbTop1mSourceRoundTripCanonicalTokens(): void
 	{
