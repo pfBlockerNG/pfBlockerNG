@@ -48,6 +48,17 @@
 #
 # Erring toward blocking is the intended tradeoff in both cases.
 #
+# ACCEPTED LIMITATION (issue #923 review F4): being a static text scan, this
+# guard cannot defend against ACTIVE circumvention -- e.g. an agent that
+# pre-defines a git alias (`git config alias.p 'push --force'; git p`) so the
+# blocked subcommand phrase never appears in the command text at all.
+# Detecting that would require running `git config` with repo knowledge the
+# hook does not have. Out of scope BY DESIGN: issue #923's threat model is an
+# agent "talking itself past prose", not one deliberately constructing
+# payloads to defeat a technical control (if an agent does the latter, the
+# prose rules have already failed and this guard is not the intended
+# backstop). Accepted and documented per maintainer sign-off.
+#
 # NORMALIZATION (issue #923 review F1): rather than matching rules against
 # the raw payload, everything matches against $norm, built by:
 #   1. Deleting every `"` and `\` character -- collapses JSON-escaped quotes
