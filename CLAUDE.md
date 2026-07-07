@@ -73,7 +73,10 @@ pfSense-provided PHP functions".
   be probed or doc-verified **in-session, before being written**. A plausible memory is not a
   fact (a false "pipefail" comment shipped from memory; #902 shipped a CI contract that
   `GITHUB_TOKEN` event suppression made unfulfillable; ADR-59 shipped wrong `domain_col`
-  values for feeds nobody had fetched).
+  values for feeds nobody had fetched). **Briefs are artifacts too**: an environmental claim
+  a brief embeds in its build instructions (YAML, comments, commands) carries its probe
+  evidence inline or is tagged ASSUMED — PR #933's pipefail no-op gate was seeded by the
+  planner's own brief and caught only at the independent gate (#935).
 - **No self-exemption.** Deviating from any MUST rule requires quoting the authorizing user
   message verbatim in the report. "Per session config" or "acceptable here" without a citation
   is fabricated authorization — a real observed failure, not a hypothetical.
@@ -146,6 +149,8 @@ and review.
 7. **ESCALATE contract** — if any factual claim in the brief/ADR is contradicted by the code
    or a live probe, **STOP and return a structured blocker**; never silently patch the plan,
    never proceed on a premise you have just falsified. Reality outranks the brief, loudly.
+   An environmental claim the brief tags ASSUMED (or embeds with no evidence) is probed
+   before anything is built on it — same STOP rule if the probe refutes it.
 
 #### THE HANDOFF (implementer → planner) — fixed fields, missing field = gate reject
 
@@ -191,7 +196,7 @@ the gate report's wording, never to which checks run.
 
 | Touched | Gates (all must pass) |
 | ------- | --------------------- |
-| Python (`*.py`) | `python -m pytest` · `ruff check .` · `ruff format --check .` · `mypy tests/` |
+| Python (`*.py`) | `python3 -m pytest` · `ruff check .` · `ruff format --check .` · `mypy tests/` |
 | PHP (`*.php`/`*.inc`) | `php -l` per touched file · `vendor/bin/phpunit` · `vendor/bin/phpstan` · `vendor/bin/phpcs --standard=phpcs.xml.dist src/` |
 | Shell (`*.sh`) | `sh -n` · `shellcheck` · `shellspec` (where specs exist) |
 | Markdown (`*.md`) | `npx markdownlint-cli2` |
@@ -248,6 +253,13 @@ The five above are the law; how to satisfy them:
   bare "False" matcher is not acceptable; a diagnostic filtering by token must match the
   value's **rendered** form (`pfctl` prints port 53 as `domain`). Exemplar:
   `_redir_match_report` in `tests/smoke/test_dns_redirect.py`.
+- **CI-gate wiring proves its red path in-job (the red canary).** A CI job whose verdict
+  rides shell wiring unit tests cannot cover (pipes, `set` options, exit propagation) ships
+  a red canary: leading lines in the **same** `run:` block as the enforce command (same
+  shell options, so option drift trips it) feed a known-violating input through the
+  identical pipeline shape and require nonzero before the real check runs. The canary is
+  that wiring's red→green (PR #933: the default `bash -e {0}` has no `pipefail`, so `| tee`
+  masked the script's exit 1; exemplar: the `coverage-pairing` job in `test.yml`).
 
 ### ADR acceptance — automated tests, not a manual sign-off
 
@@ -462,7 +474,7 @@ Activate once after cloning: `sh scripts/setup-hooks.sh` (sets `core.hooksPath`)
 - **`pre-commit`** — the fast linters/static-analysis, path-scoped to staged file types
   (Python → ruff + `mypy tests/`; Markdown → markdownlint; shell → shebang gate + `sh -n` +
   shellcheck + shellspec; PHP → `php -l` + PHPStan + PHPCS; the URL-encoding check when
-  `*.sh`/`*.md` staged). NOT the unit suites — run `python -m pytest` yourself while
+  `*.sh`/`*.md` staged). NOT the unit suites — run `python3 -m pytest` yourself while
   iterating; CI is the hard gate. Missing tool = reported + skipped. The `--no-verify` bypass
   is for humans, not agents.
 - **`prepare-commit-msg`** — appends the owner's `Co-authored-by:` trailer (see Commit
@@ -474,7 +486,7 @@ Activate once after cloning: `sh scripts/setup-hooks.sh` (sets `core.hooksPath`)
 ## Running tests
 
 ```sh
-python -m pytest        # from repo root; run after ANY change to pfb_unbound.py or tests/
+python3 -m pytest        # from repo root; run after ANY change to pfb_unbound.py or tests/
 composer install        # once
 vendor/bin/phpunit      # PHP suite: loads the REAL pfblockerng.inc off-appliance
 ```
@@ -555,7 +567,7 @@ documented in architecture-notes. Operative facts:
 - **Tier A `ui_render` is the PR gate**: GET each page → 200, body free of PHP
   errors/warnings, a page-specific marker present, AND no new on-box `php_error.log` line —
   never HTTP 200 alone. Tiers B are schedule/dispatch-only. Run:
-  `python -m pytest tests/smoke/ui -m ui_render --override-ini="addopts="`
+  `python3 -m pytest tests/smoke/ui -m ui_render --override-ini="addopts="`
   (`SMOKE_ADMIN_PASSWORD` must be set — the UI fixtures FAIL without it; a skip is not a
   pass).
 - **Selective dispatch:** a bare `gh workflow run smoke.yml`/`ui-tests.yml` defaults to
@@ -612,6 +624,12 @@ without it; ≤ 5 min ⇒ wait, nudge once, drop it on any further problem). **S
 ran and flagged something is handled (as a security finding). A bot quota notice is an
 acknowledgement with **no review** — surface the skipped reviewer; never read it as "PR is
 clean". Only the dev-only no-PR classes are exempt.
+
+**Applying review findings follows the coverage-matrix discipline.** A finding that names a
+*class* ("the X clauses", "all Y", "… etc.") is fixed by re-enumerating the class **from the
+source** (grep), never from the finding's wording — PR #933's review-fix pinned 2 of 4
+equality clauses by trusting the reviewer's "etc." (#935). An APPLY delta that skips a full
+re-review still gets its coverage-matrix tick recorded in the audit comment.
 
 **Rebase onto the latest base before every push, PR, or CI/smoke dispatch.** `devel` advances
 out of band: `git fetch origin` + `git rebase origin/devel` (or `origin/<pr-base>`),
