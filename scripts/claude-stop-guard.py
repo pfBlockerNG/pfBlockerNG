@@ -191,11 +191,21 @@ def main() -> int:
             with open(transcript_path, "rb") as f:
                 f.seek(0, 2)
                 size = f.tell()
-                f.seek(max(0, size - _TAIL_BYTES))
+                start = max(0, size - _TAIL_BYTES)
+                # Drop the first line only when the cut really landed mid-line:
+                # a cut exactly after a newline leaves a COMPLETE first line, and
+                # unconditionally dropping it can silently discard the triggering
+                # edit entry (BLOCK flips to ALLOW).
+                partial_first_line = False
+                if start > 0:
+                    f.seek(start - 1)
+                    partial_first_line = f.read(1) != b"\n"
+                else:
+                    f.seek(start)
                 data = f.read().decode("utf-8", errors="replace")
             tail_lines = data.splitlines()
-            if size > _TAIL_BYTES and tail_lines:
-                tail_lines = tail_lines[1:]  # drop the partial first line of the byte cut
+            if partial_first_line and tail_lines:
+                tail_lines = tail_lines[1:]
         reason = decide(payload, tail_lines)
         if reason:
             print(json.dumps({"decision": "block", "reason": reason}))
