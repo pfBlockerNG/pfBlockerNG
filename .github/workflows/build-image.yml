@@ -43,7 +43,7 @@ on:
       pfsense_ce_version:
         description: "Target pfSense CE floating tag to publish (e.g. 2.8)"
         required: true
-        default: "2.8"
+        default: "2.8"  # version-literal-ok: dispatch fallback default; the CE floating tag to publish
       base_source:
         description: "Base source: 'upgrade' (boot a prior tag + pfSense-upgrade in place) or 'seed' (re-verify an existing maintainer seed; seeds are created off-runner via image-publish.sh)"
         required: true

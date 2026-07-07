@@ -247,6 +247,15 @@ jobs:
         # (Unbound's embedded loader). Scans tracked src/ + tests/ (the checker's defaults).
         run: python3 scripts/check_appliance_python.py
 
+      - name: Forbid hardcoded pfSense/FreeBSD version literals
+        # supported-versions.json (origin/ci-metadata) is the single source of truth for
+        # every supported version pairing. A version token restated as a literal (CE 2.8,
+        # FreeBSD:15, py311, ...) silently drifts when the matrix moves — read it at
+        # runtime via read-version-matrix.sh instead. Scans tracked src/ + scripts/ +
+        # .github/workflows/ (the checker's defaults); escape a real one-off inline with
+        # `# version-literal-ok: <reason>`.
+        run: python3 scripts/check_version_literals.py
+
   shell-tests:
     name: shellspec (POSIX sh)
     runs-on: ubuntu-latest

@@ -94,7 +94,7 @@ if [ -z "$PY_FLAVOR" ]; then
     # The box knows its own python: the py3xx that owns its py-sqlite3, if already present.
     PY_FLAVOR="$(ssh_t "pkg query %n 2>/dev/null | grep -E '^py3[0-9]+-sqlite3\$' | sed 's/-sqlite3//' | head -1" | tr -d '\r' || true)"
 fi
-[ -n "$PY_FLAVOR" ] || PY_FLAVOR="py311"
+[ -n "$PY_FLAVOR" ] || PY_FLAVOR="py311"  # version-literal-ok: last-resort fallback after probing the box + matrix
 echo "==> Python dep flavor for ${BOX_ABI:-unknown ABI}: ${PY_FLAVOR}"
 
 # 0b) Install the package's other RUN_DEPENDS — what `pkg install

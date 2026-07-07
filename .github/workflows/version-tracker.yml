@@ -38,7 +38,7 @@ on:
         default: "false"
       target_version:
         description: >
-          Restrict reactions to a specific pfsense_version (e.g. "2.8").
+          Restrict reactions to a specific pfsense_version (e.g. 2.8).
           Leave empty to react to all matrix entries.
         required: false
         default: ""

@@ -96,9 +96,6 @@ _SCAN_ROOTS = ("src", "scripts", ".github/workflows")
 # Self-reference: this checker and its own test define/contain the patterns.
 _EXCLUDED_SELF_NAMES = ("check_version_literals.py", "test_version_literal_check.py")
 
-# Documented for intent only -- already outside _SCAN_ROOTS, so never scanned.
-_ALSO_EXCLUDED_DOC = "docs/misc/pfSense_versions.md"
-
 
 def _is_excluded(path: Path) -> bool:
     """True if ``path`` is out of scope for the value-literal scan."""
