@@ -2181,4 +2181,400 @@ final class CfgGatewayTest extends TestCase
 			"dnsbl_dot_block_exclude absent -> '' (registered default)"
 		);
 	}
+
+	// -----------------------------------------------------------------------
+	// E — writeSection() applies per-field write adapters (issue #930)
+	//
+	// Before this fix, writeSection() called config_set_path($section, $data)
+	// directly, bypassing every registered adapter -- a legacy read-only token
+	// ('domcop', 'alexa', alpha-only 'all') or hostile/junk value written through
+	// ANY section blob (www/ save handlers, install seeds, migrations) persisted
+	// raw into config.xml instead of being normalized like a single-key write().
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Property test: for EVERY registered key carrying both a read and a write
+	 * adapter (enumerated from pfb_cfg_registry() itself, never a hand-picked
+	 * subset -- so this can't under-enumerate), writeSection($section, [$key =>
+	 * $raw]) must persist the exact same stored byte PfbConfig::write($key, $raw)
+	 * would for a representative sample set per adapter type: a canonical token,
+	 * a legacy/empty token, and a junk string.
+	 *
+	 * Scenario:
+	 *   Given a registered key with an adapter pair, and a raw sample value.
+	 *   When writeSection($section, [$key => $raw]) and write($key, $raw) are each
+	 *     applied to a fresh config slate.
+	 *   Then both persist the identical stored byte at the key's config.xml path.
+	 */
+	public function testWriteSectionAppliesAdapterForEveryRegisteredFieldAndSample(): void
+	{
+		$samples_by_read_adapter = [
+			'pfb_cfg_toggle_read'           => ['on', '', 'junk'],
+			'pfb_cfg_lenient_read'          => ['on', 'off', '', 'junk'],
+			'pfb_cfg_idn_mode_read'         => ['on', 'confusable', 'off', 'all', 'junk'],
+			'pfb_cfg_top1m_source_read'     => ['tranco', 'cisco', 'openpagerank', 'majestic', 'cloudflare', 'alexa', 'domcop', 'junk'],
+			'pfb_cfg_alias_delta_mode_read' => ['auto', 'delta', 'replace', '', 'junk'],
+		];
+
+		$tested = 0;
+		foreach (pfb_cfg_registry() as $key => $entry) {
+			$read_adapter  = $entry['read_adapter'];
+			$write_adapter = $entry['write_adapter'];
+			if ($read_adapter === NULL || $write_adapter === NULL) {
+				continue;
+			}
+			$this->assertArrayHasKey($read_adapter, $samples_by_read_adapter,
+				"no sample set registered for adapter type '{$read_adapter}' (field '{$key}') -- extend the sample map"
+			);
+
+			$section = $entry['section'];
+			$path    = $section . '/' . $key;
+
+			foreach ($samples_by_read_adapter[$read_adapter] as $raw) {
+				// Oracle: PfbConfig::write() on a fresh slate.
+				$GLOBALS['config'] = [];
+				PfbConfig::write($key, $raw);
+				$expected = config_get_path($path);
+
+				// Under test: PfbConfig::writeSection() on a fresh slate.
+				$GLOBALS['config'] = [];
+				PfbConfig::writeSection($section, [$key => $raw]);
+				$actual = config_get_path($path);
+
+				$this->assertSame($expected, $actual,
+					"writeSection() vs write() mismatch for key '{$key}' raw " . var_export($raw, TRUE)
+				);
+				$tested++;
+			}
+		}
+
+		// Sanity: the loop actually exercised all 16 adapted fields x >= 3 samples
+		// each (issue #930 coverage matrix) -- guards against a future registry
+		// refactor silently emptying the loop.
+		$this->assertGreaterThanOrEqual(16 * 3, $tested,
+			'expected at least 16 adapted fields x >= 3 samples each to have been exercised'
+		);
+	}
+
+	/**
+	 * THE pinning red test (mirrors the issue #930 repro): a legacy 'domcop'
+	 * alexa_type token riding a section blob write is no longer re-emitted raw --
+	 * it is coalesced to the canonical 'openpagerank' token, same as a single-key
+	 * PfbConfig::write('alexa_type', 'domcop') would.
+	 *
+	 * Scenario:
+	 *   Given a DNSBL settings blob with the legacy 'domcop' alexa_type token.
+	 *   When PfbConfig::writeSection() persists it.
+	 *   Then the stored alexa_type is 'openpagerank', never the dead 'domcop' token.
+	 */
+	public function testWriteSectionAlexaTypeLegacyDomcopNormalisesToOpenPageRank(): void
+	{
+		$section = 'installedpackages/pfblockerngdnsblsettings/config/0';
+		$path    = $section . '/alexa_type';
+
+		PfbConfig::writeSection($section, ['alexa_type' => 'domcop']);
+
+		$this->assertSame('openpagerank', config_get_path($path),
+			"legacy 'domcop' riding a section write coalesces to 'openpagerank'"
+		);
+	}
+
+	/**
+	 * Legacy 'alexa' (dead TOP1M service, #872) riding a section blob write
+	 * coalesces to the canonical 'tranco' token.
+	 *
+	 * Scenario:
+	 *   Given a DNSBL settings blob with the legacy 'alexa' alexa_type token.
+	 *   When PfbConfig::writeSection() persists it.
+	 *   Then the stored alexa_type is 'tranco', never the dead 'alexa' token.
+	 */
+	public function testWriteSectionAlexaTypeLegacyAlexaNormalisesToTranco(): void
+	{
+		$section = 'installedpackages/pfblockerngdnsblsettings/config/0';
+		$path    = $section . '/alexa_type';
+
+		PfbConfig::writeSection($section, ['alexa_type' => 'alexa']);
+
+		$this->assertSame('tranco', config_get_path($path),
+			"legacy 'alexa' riding a section write coalesces to 'tranco'"
+		);
+	}
+
+	/**
+	 * A live canonical alexa_type token ('cisco') riding a section blob write
+	 * passes through byte-identical -- normalization never mangles a live token.
+	 *
+	 * Scenario:
+	 *   Given a DNSBL settings blob with the canonical 'cisco' alexa_type token.
+	 *   When PfbConfig::writeSection() persists it.
+	 *   Then the stored alexa_type is still 'cisco'.
+	 */
+	public function testWriteSectionAlexaTypeCanonicalCiscoPassesThroughUnchanged(): void
+	{
+		$section = 'installedpackages/pfblockerngdnsblsettings/config/0';
+		$path    = $section . '/alexa_type';
+
+		PfbConfig::writeSection($section, ['alexa_type' => 'cisco']);
+
+		$this->assertSame('cisco', config_get_path($path),
+			"canonical 'cisco' riding a section write is byte-identical"
+		);
+	}
+
+	/**
+	 * pfb_idn: the dropped 4.0.0-alpha-only 'all' token riding a section blob
+	 * write normalizes to 'off' (never re-emitted); the canonical 'on' token
+	 * (= PfbIdnMode::All) stays 'on' unchanged.
+	 *
+	 * Scenario:
+	 *   Given a DNSBL settings blob with pfb_idn = the alpha-only 'all' token.
+	 *   When PfbConfig::writeSection() persists it.
+	 *   Then the stored pfb_idn is 'off', never the dropped 'all' token.
+	 *   And a canonical 'on' token riding the same path stays 'on'.
+	 */
+	public function testWriteSectionPfbIdnAlphaOnlyAllNormalisesToOff(): void
+	{
+		$section = 'installedpackages/pfblockerngdnsblsettings/config/0';
+		$path    = $section . '/pfb_idn';
+
+		// Alpha-only 'all' -> normalized to 'off'.
+		PfbConfig::writeSection($section, ['pfb_idn' => 'all']);
+		$this->assertSame('off', config_get_path($path),
+			"dropped alpha-only 'all' riding a section write normalizes to 'off'"
+		);
+
+		// Canonical 'on' -> stays 'on'.
+		PfbConfig::writeSection($section, ['pfb_idn' => 'on']);
+		$this->assertSame('on', config_get_path($path),
+			"canonical 'on' riding a section write is byte-identical"
+		);
+	}
+
+	/**
+	 * pfb_keep: the legacy empty-string token (pre-#484 absent-key install)
+	 * riding a section blob write normalizes to the explicit 'off' token, same
+	 * as the single-key PfbConfig::write() lenient-adapter contract.
+	 *
+	 * Scenario:
+	 *   Given a General settings blob with pfb_keep = '' (legacy empty).
+	 *   When PfbConfig::writeSection() persists it.
+	 *   Then the stored pfb_keep is 'off', never the legacy '' token.
+	 */
+	public function testWriteSectionPfbKeepEmptyNormalisesToOff(): void
+	{
+		$section = 'installedpackages/pfblockerng/config/0';
+		$path    = $section . '/pfb_keep';
+
+		PfbConfig::writeSection($section, ['pfb_keep' => '']);
+
+		$this->assertSame('off', config_get_path($path),
+			"legacy empty pfb_keep riding a section write normalizes to 'off'"
+		);
+	}
+
+	/**
+	 * A junk value on a toggle-adapted field ('yes' is not a recognized toggle
+	 * token) riding a section blob write parse-falls-back to Off ('').
+	 *
+	 * Scenario:
+	 *   Given a DNSBL settings blob with pfb_dnsbl = 'yes' (hostile/junk).
+	 *   When PfbConfig::writeSection() persists it.
+	 *   Then the stored pfb_dnsbl is '' (parse-fallback Off), never 'yes'.
+	 */
+	public function testWriteSectionToggleJunkNormalisesToOff(): void
+	{
+		$section = 'installedpackages/pfblockerngdnsblsettings/config/0';
+		$path    = $section . '/pfb_dnsbl';
+
+		PfbConfig::writeSection($section, ['pfb_dnsbl' => 'yes']);
+
+		$this->assertSame('', config_get_path($path),
+			"junk toggle value 'yes' riding a section write parse-falls-back to ''"
+		);
+	}
+
+	/**
+	 * Hostile input: a crafted array value (e.g. a POST array
+	 * alexa_type[]=x) riding a section blob write hits the adapter's
+	 * non-scalar guard and normalizes to the parse-fallback default, never
+	 * crashes and never persists the raw array.
+	 *
+	 * Scenario:
+	 *   Given a DNSBL settings blob with alexa_type = ['x'] (non-scalar).
+	 *   When PfbConfig::writeSection() persists it.
+	 *   Then the stored alexa_type is 'tranco' (the non-scalar-guard default).
+	 */
+	public function testWriteSectionAlexaTypeArrayValueNormalisesToDefaultTranco(): void
+	{
+		$section = 'installedpackages/pfblockerngdnsblsettings/config/0';
+		$path    = $section . '/alexa_type';
+
+		PfbConfig::writeSection($section, ['alexa_type' => ['x']]);
+
+		$this->assertSame('tranco', config_get_path($path),
+			'array-valued alexa_type riding a section write hits the non-scalar guard -> tranco'
+		);
+	}
+
+	/**
+	 * Hostile input: a NULL value on an adapted key riding a section blob write
+	 * is not a TypeError -- the read adapter's NULL->'' collapse feeds the write
+	 * adapter a well-formed enum, landing on the field's Off/legacy-empty token.
+	 *
+	 * Scenario:
+	 *   Given a General settings blob with pfb_keep = NULL.
+	 *   When PfbConfig::writeSection() persists it.
+	 *   Then the stored pfb_keep is 'off' (lenient NULL-collapse path), no crash.
+	 */
+	public function testWriteSectionNullValueNormalisesViaDefaultCollapse(): void
+	{
+		$section = 'installedpackages/pfblockerng/config/0';
+		$path    = $section . '/pfb_keep';
+
+		PfbConfig::writeSection($section, ['pfb_keep' => NULL]);
+
+		$this->assertSame('off', config_get_path($path),
+			'NULL-valued pfb_keep riding a section write collapses to the lenient Off token'
+		);
+	}
+
+	/**
+	 * Hostile input / idempotency: an already-adapted enum instance (e.g. fed
+	 * back through from a prior PfbConfig::read()) riding a section blob write
+	 * is not double-mangled -- the read adapter's `instanceof static` passthrough
+	 * returns it as-is, and the write adapter emits its canonical token.
+	 *
+	 * Scenario:
+	 *   Given a DNSBL settings blob with alexa_type = PfbTop1mSource::Cisco (an
+	 *     enum instance, not a raw string).
+	 *   When PfbConfig::writeSection() persists it.
+	 *   Then the stored alexa_type is 'cisco', not mangled by a double-apply.
+	 */
+	public function testWriteSectionAlexaTypeEnumInstanceIsIdempotent(): void
+	{
+		$section = 'installedpackages/pfblockerngdnsblsettings/config/0';
+		$path    = $section . '/alexa_type';
+
+		PfbConfig::writeSection($section, ['alexa_type' => PfbTop1mSource::Cisco]);
+
+		$this->assertSame('cisco', config_get_path($path),
+			'an already-adapted PfbTop1mSource enum instance riding a section write is idempotent'
+		);
+	}
+
+	/**
+	 * Hostile input: an integer value on an adapted key riding a section blob
+	 * write hits the non-scalar-adjacent junk path (no matching token) and
+	 * normalizes to the field's parse-fallback default.
+	 *
+	 * Scenario:
+	 *   Given a DNSBL settings blob with alexa_type = 1 (int, not a string token).
+	 *   When PfbConfig::writeSection() persists it.
+	 *   Then the stored alexa_type is 'tranco' (the parse-fallback default).
+	 */
+	public function testWriteSectionAlexaTypeIntValueNormalisesToDefaultTranco(): void
+	{
+		$section = 'installedpackages/pfblockerngdnsblsettings/config/0';
+		$path    = $section . '/alexa_type';
+
+		PfbConfig::writeSection($section, ['alexa_type' => 1]);
+
+		$this->assertSame('tranco', config_get_path($path),
+			'int-valued alexa_type riding a section write normalizes to the parse-fallback tranco'
+		);
+	}
+
+	/**
+	 * A registered key with NO adapter pair (plain string, e.g. top1m_token and
+	 * dnsbl_interface) riding a section blob write is left byte-identical --
+	 * normalization only ever touches adapter-bearing keys.
+	 *
+	 * Scenario:
+	 *   Given a DNSBL settings blob with two unadapted registered keys.
+	 *   When PfbConfig::writeSection() persists it.
+	 *   Then both stored values are byte-identical to the input.
+	 */
+	public function testWriteSectionUnadaptedRegisteredKeysPassThroughRaw(): void
+	{
+		$section = 'installedpackages/pfblockerngdnsblsettings/config/0';
+
+		PfbConfig::writeSection($section, [
+			'top1m_token'     => 'AbC123',
+			'dnsbl_interface' => 'lo0',
+		]);
+
+		$this->assertSame('AbC123', config_get_path($section . '/top1m_token'),
+			'unadapted top1m_token riding a section write is byte-identical'
+		);
+		$this->assertSame('lo0', config_get_path($section . '/dnsbl_interface'),
+			'unadapted dnsbl_interface riding a section write is byte-identical'
+		);
+	}
+
+	/**
+	 * An adapted KEY NAME landing in a FOREIGN section (not the section the
+	 * registry maps that key to) stays raw -- writeSection() matches on the
+	 * EXACT registered section string, so a same-named key belonging to a
+	 * different registry entry is untouched foreign data.
+	 *
+	 * Scenario:
+	 *   Given a pfblockerngsync section blob that happens to reuse the key name
+	 *     'alexa_type' (foreign to this section -- the registry maps alexa_type
+	 *     to the DNSBL section only) with the legacy 'domcop' value.
+	 *   When PfbConfig::writeSection() persists it against the SYNC section.
+	 *   Then the stored value is the raw 'domcop' -- no normalization applied,
+	 *     because no registry entry has 'section' === the sync section for
+	 *     this key.
+	 */
+	public function testWriteSectionAdaptedKeyNameInForeignSectionStaysRaw(): void
+	{
+		$section = 'installedpackages/pfblockerngsync/config/0';
+		$path    = $section . '/alexa_type';
+
+		PfbConfig::writeSection($section, ['alexa_type' => 'domcop']);
+
+		$this->assertSame('domcop', config_get_path($path),
+			"a same-named key in a foreign (non-registered-for-it) section stays raw"
+		);
+	}
+
+	/**
+	 * A realistic dconfig-shaped blob (mirrors pfblockerng_dnsbl.php's save
+	 * handler): a mix of adapted legacy/hostile tokens and unadapted
+	 * base64/plain fields. Adapted fields normalize; every other field is
+	 * byte-identical.
+	 *
+	 * Scenario:
+	 *   Given a DNSBL settings blob mixing legacy alexa_type/pfb_idn tokens with
+	 *     unadapted plain fields (dnsbl_interface, pfb_dnsvip4, top1m_token).
+	 *   When PfbConfig::writeSection() persists it.
+	 *   Then the adapted fields are stored at their canonical tokens and every
+	 *     unadapted field is byte-identical to the input.
+	 */
+	public function testWriteSectionDconfigShapedBlobNormalisesAdaptedFieldsOnly(): void
+	{
+		$section = 'installedpackages/pfblockerngdnsblsettings/config/0';
+
+		$data = [
+			'pfb_dnsbl'       => 'on',           // adapted (toggle), canonical.
+			'alexa_type'      => 'domcop',        // adapted (top1m_source), LEGACY -> normalizes.
+			'pfb_idn'         => 'all',           // adapted (idn_mode), ALPHA-ONLY -> normalizes.
+			'pfb_hsts'        => 'on',            // adapted (toggle), canonical.
+			'dnsbl_interface' => 'lo0',           // unadapted, plain.
+			'pfb_dnsvip4'     => '',              // unadapted, plain.
+			'top1m_token'     => 'QWJjMTIz',      // unadapted, plain (base64-shaped).
+		];
+
+		PfbConfig::writeSection($section, $data);
+
+		$result = PfbConfig::readSection($section);
+
+		$this->assertSame('on', $result['pfb_dnsbl'], 'pfb_dnsbl canonical stays on');
+		$this->assertSame('openpagerank', $result['alexa_type'], "legacy 'domcop' normalizes to 'openpagerank'");
+		$this->assertSame('off', $result['pfb_idn'], "alpha-only 'all' normalizes to 'off'");
+		$this->assertSame('on', $result['pfb_hsts'], 'pfb_hsts canonical stays on');
+		$this->assertSame('lo0', $result['dnsbl_interface'], 'unadapted dnsbl_interface is byte-identical');
+		$this->assertSame('', $result['pfb_dnsvip4'], 'unadapted pfb_dnsvip4 is byte-identical');
+		$this->assertSame('QWJjMTIz', $result['top1m_token'], 'unadapted top1m_token is byte-identical');
+	}
 }
