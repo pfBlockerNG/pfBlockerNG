@@ -20,7 +20,10 @@
 #
 # ponytail: phpstan/phpstan is the only dist-only package in today's lock;
 # generalize the strip/fetch to a package list if another one ever appears.
-set -eu
+#
+# No top-level `set -eu`: the shellspec suite sources this file for its helper
+# functions, and mutating the sourcing shell's options there is a side effect;
+# main() sets strict mode for direct execution.
 
 REPO_ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 
@@ -53,7 +56,18 @@ strip_phpstan() {
 	' "$1" "$2"
 }
 
+# The fallback mutates composer.json/lock in a repo ($1) and restores them via
+# git checkout; refuse to run over uncommitted user edits — staged OR unstaged,
+# hence the diff against HEAD, not just the index (PR #953 review).
+refuse_if_composer_files_dirty() {
+	if ! git -C "$1" diff --quiet HEAD -- composer.json composer.lock; then
+		echo "composer-cloud-install: composer.json/composer.lock have uncommitted changes; commit or stash them first" >&2
+		return 1
+	fi
+}
+
 main() {
+	set -eu
 	cd "$REPO_ROOT"
 	# Composer refuses plugins as root without this; harmless as non-root.
 	export COMPOSER_ALLOW_SUPERUSER=1
@@ -64,12 +78,7 @@ main() {
 
 	echo "composer-cloud-install: plain install failed -- applying the cloud egress fallback (issue #950)" >&2
 
-	# The fallback mutates composer.json/lock and restores them via git checkout;
-	# refuse to run over uncommitted user edits it would clobber.
-	if ! git diff --quiet -- composer.json composer.lock; then
-		echo "composer-cloud-install: composer.json/composer.lock have uncommitted changes; commit or stash them first" >&2
-		exit 1
-	fi
+	refuse_if_composer_files_dirty "$REPO_ROOT"
 
 	ref="$(phpstan_ref_from_lock composer.lock)"
 	if [ -z "$ref" ]; then
@@ -83,7 +92,7 @@ main() {
 	git checkout -- composer.json composer.lock
 	trap - EXIT
 
-	staging="$(mktemp -d)"
+	staging="$(mktemp -d "${TMPDIR:-/tmp}/composercloud.XXXXXX")"
 	git init -q "$staging"
 	git -C "$staging" fetch -q --depth 1 https://github.com/phpstan/phpstan.git "$ref"
 	git -C "$staging" checkout -q FETCH_HEAD
