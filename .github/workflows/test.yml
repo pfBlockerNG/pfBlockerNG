@@ -256,6 +256,16 @@ jobs:
         # `# version-literal-ok: <reason>`.
         run: python3 scripts/check_version_literals.py
 
+      - name: Version-literal patterns cover the live matrix (tripwire)
+        # The checker's windowed CE/Plus numeric shapes restate the matrix window, in a
+        # file self-excluded from its own scan (issue #940). Fail loudly the moment
+        # supported-versions.json carries a version those patterns no longer cover,
+        # instead of the gate narrowing silently. Checkout doesn't bring orphan refs,
+        # so fetch ci-metadata first (same as test-version-matrix).
+        run: |
+          git fetch --no-tags --depth=1 origin ci-metadata:refs/remotes/origin/ci-metadata
+          python3 scripts/check_version_literals.py --verify-matrix
+
   shell-tests:
     name: shellspec (POSIX sh)
     runs-on: ubuntu-latest

@@ -52,10 +52,17 @@ SCOPE (deliberately low false-positive: VALUES only, never prose)
   token is not the ENTIRE value there.
 
 Exit status: 0 = clean, 1 = one or more violations (printed with file:line).
+
+A second mode, ``--verify-matrix [--ref <git-ref> | --matrix-file <path>]``,
+tripwires the WINDOWED token shapes against ``supported-versions.json``
+(issue #940; a blocking CI step in ``test.yml``): exit 1 lists every
+matrix-implied token the patterns no longer cover, so the window is widened
+the moment the matrix moves instead of the gate narrowing silently.
 """
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
@@ -63,13 +70,23 @@ from pathlib import Path
 
 # Each alternative is a full-value token shape (no anchors here -- anchors are
 # added once, around the whole alternation, at the two call sites below).
+#
+# Unambiguous shapes (FreeBSD ABI, php/py flavors, varvers) are version-AGNOSTIC:
+# a stale or future version restated as a literal is just as much a drift hazard
+# as a current one (issue #940). Only the bare CE/Plus numerics stay WINDOWED --
+# a generic decimal shape would false-positive on unrelated version numbers --
+# and that window is tripwired against the live matrix by --verify-matrix (a
+# blocking CI step): the moment supported-versions.json carries a version these
+# patterns no longer cover, CI fails loudly instead of the gate narrowing
+# silently. This file restating the window is otherwise the exact disease it
+# polices, in a file self-excluded from its own scan.
 _TOKEN_ALTERNATIVES = (
-    r"2\.[89]",  # CE version: 2.8 / 2.9
-    r"2[56]\.[0-9]{2}",  # Plus version: 25.NN / 26.NN
-    r"FreeBSD:1[56](?::[a-z0-9_]+)?",  # FreeBSD ABI: FreeBSD:15/:16, optional :arch
-    r"php8[0-9]",  # php flavor: php80..php89
-    r"py31[0-9]",  # py flavor: py310..py319
-    r"ce-[0-9]\.[0-9]",  # varver: ce-X.Y
+    r"2\.[89]",  # CE version window: 2.8 / 2.9 (tripwired)
+    r"2[56]\.[0-9]{2}",  # Plus version window: 25.NN / 26.NN (tripwired)
+    r"FreeBSD:[0-9]+(?::[a-z0-9_]+)?",  # FreeBSD ABI, any major, optional :arch
+    r"php[0-9]{2}",  # php flavor: php74..php99
+    r"py3[0-9]{2}",  # py flavor: py310..py399
+    r"ce-[0-9]+\.[0-9]+",  # varver: ce-X.Y
     r"plus-[0-9]{2}\.[0-9]{2}",  # varver: plus-NN.NN
 )
 
@@ -306,7 +323,82 @@ def find_violations(paths: list[Path]) -> list[tuple[Path, int, str]]:
     return violations
 
 
+def _matrix_tokens(matrix: dict) -> list[str]:
+    """Derive every version-shaped token a ``supported-versions.json`` entry implies.
+
+    Per entry: the bare pfSense version (a trailing ``.x`` stripped), its
+    ``ce-``/``plus-`` varver, the ``FreeBSD:<major>`` ABI prefix, the php
+    flavor (``php_version`` with the dot dropped), and the py flavor verbatim.
+    """
+    tokens: list[str] = []
+    for entry in matrix.get("versions", []):
+        version = str(entry.get("pfsense_version", "")).removesuffix(".x")
+        channel = str(entry.get("channel", "")).lower()
+        major = str(entry.get("freebsd_major", ""))
+        php = str(entry.get("php_version", ""))
+        py = str(entry.get("py_flavor", ""))
+        if version:
+            tokens.append(version)
+            tokens.append(("ce-" if channel == "ce" else "plus-") + version)
+        if major:
+            tokens.append(f"FreeBSD:{major}")
+        if php:
+            tokens.append("php" + php.replace(".", ""))
+        if py:
+            tokens.append(py)
+    return tokens
+
+
+def uncovered_matrix_tokens(matrix: dict) -> list[str]:
+    """Matrix-implied tokens that ``_FULL_VALUE_RE`` no longer covers (sorted, unique)."""
+    return sorted({t for t in _matrix_tokens(matrix) if not _FULL_VALUE_RE.fullmatch(t)})
+
+
+def _verify_matrix(argv: list[str]) -> int:
+    """The ``--verify-matrix`` mode: tripwire the windowed token shapes (issue #940).
+
+    Reads ``supported-versions.json`` from the ci-metadata ref (``--ref``,
+    default ``origin/ci-metadata``) or from ``--matrix-file <path>``; exits 1
+    listing any matrix-implied token the patterns no longer cover.
+    """
+    ref = "origin/ci-metadata"
+    matrix_file: str | None = None
+    it = iter(argv)
+    for arg in it:
+        if arg == "--ref":
+            ref = next(it, ref)
+        elif arg == "--matrix-file":
+            matrix_file = next(it, None)
+        else:
+            print(f"unknown --verify-matrix option: {arg}", file=sys.stderr)
+            return 2
+    if matrix_file is not None:
+        text = Path(matrix_file).read_text(encoding="utf-8")
+    else:
+        out = subprocess.run(
+            ["git", "show", f"{ref}:supported-versions.json"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        text = out.stdout
+    uncovered = uncovered_matrix_tokens(json.loads(text))
+    if not uncovered:
+        return 0
+    print(
+        "supported-versions.json carries version token(s) the version-literal patterns\n"
+        "no longer cover -- widen the windowed shapes in _TOKEN_ALTERNATIVES\n"
+        "(scripts/check_version_literals.py) or the gate silently stops seeing them:\n",
+        file=sys.stderr,
+    )
+    for token in uncovered:
+        print(f"  {token}", file=sys.stderr)
+    return 1
+
+
 def main(argv: list[str]) -> int:
+    if argv and argv[0] == "--verify-matrix":
+        return _verify_matrix(argv[1:])
     if argv:
         paths = [p for p in (Path(a) for a in argv) if not _is_excluded(p)]
     else:
