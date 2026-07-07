@@ -17,8 +17,9 @@ use PHPUnit\Framework\TestCase;
  * parser/extractor) reads a single source of truth. Tranco/Cisco stay
  * BEHAVIOUR-PRESERVING throughout: this oracle pins their resolved URL to the
  * exact pre-ADR-59 literal, so any future edit to the table that drifts
- * tranco/cisco's URL fails loudly. Phase 4 adds OpenPageRank + Majestic as two
- * more rows in the same table -- their own shape is pinned separately below.
+ * tranco/cisco's URL fails loudly. Phase 4 added DomCop + Majestic as two more
+ * rows in the same table (DomCop's row became OpenPageRank in #928) -- their
+ * own shape is pinned separately below.
  * Phase 5 adds Cloudflare Radar -- the first (and so far only) header-auth
  * provider, whose real API shape (verified against Cloudflare's own docs, NOT
  * the ADR's original guess) is a single-column 'domain' CSV, no rank -- domain_col 0.
@@ -84,7 +85,8 @@ final class Top1mProvidersTest extends TestCase
 	}
 
 	/**
-	 * ADR-59 P4 -- OpenPageRank/Majestic's own shape (distinct container/parse/domain_col
+	 * ADR-59 P4 -- OpenPageRank/Majestic's own shape (OpenPageRank was P4's DomCop,
+	 * #928; distinct container/parse/domain_col
 	 * per the ADR §2.2 table + Phase 2's 0-indexed domain_col convention): OpenPageRank's
 	 * Domain is the 2nd CSV field (index 1, same index Tranco/Cisco use); Majestic's
 	 * Domain is the 3rd field (index 2). Majestic's container is 'plain' (uncompressed

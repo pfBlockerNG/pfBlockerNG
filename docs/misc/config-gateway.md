@@ -30,7 +30,8 @@ field, reasoning about rollback/downgrade, or checking the foreign-key exclusion
     (alpha compatibility is intentionally not maintained) — it reads as Off. One canonical
     vocabulary spans `config.xml`, the ini, and the Python `IdnMode` enum.
   - **`alexa_type` → `PfbTop1mSource`** (issue #877 review, registry adapters
-    `pfb_cfg_top1m_source_read/write`): tokens `'tranco'` (default) / `'cisco'` / `'openpagerank'` /
+    `pfb_cfg_top1m_source_read/write`): tokens `'tranco'` (default) / `'cisco'` /
+    `'openpagerank'` (#928, replacing ADR-59 P4's `'domcop'`) /
     `'majestic'` (added ADR-59 P4) / `'cloudflare'` (added ADR-59 P5, the first
     token-authenticated provider). TWO tokens are READ-only, never re-emitted by a write —
     `'alexa'` (the dead Alexa TOP1M service, #872) coalesces to `Tranco`, and `'domcop'`
@@ -98,7 +99,7 @@ at/after that version; it is a per-field scope marker, not a migration.
 | `lenient`           | `{'on', 'off', ''}` — `''` is a LEGACY READ token (pre-ADR-22 absent); write emits `'off'` |
 | `idn`               | write `{'on' (=All), 'confusable', 'off'}`; legacy reads `'all'`→Off, `''`→Off (4.0.0-alpha `'all'` not carried) |
 | `alias_delta_mode`  | `{'auto', 'delta', 'replace'}` — unknown/absent token reads as `'auto'` (ADR-40, since 4.0.0) |
-| `top1m_source`      | write `{'tranco' (default), 'cisco', 'openpagerank', 'majestic', 'cloudflare'}` (openpagerank/majestic ADR-59 P4, cloudflare ADR-59 P5); legacy read `'alexa'`→Tranco (dead service, #872) and `'domcop'`→OpenPageRank (list moved hosting, #928), neither re-emitted |
+| `top1m_source`      | write `{'tranco' (default), 'cisco', 'openpagerank', 'majestic', 'cloudflare'}` (majestic ADR-59 P4, cloudflare ADR-59 P5, openpagerank replaced P4's domcop in #928); legacy read `'alexa'`→Tranco (dead service, #872) and `'domcop'`→OpenPageRank (list moved hosting, #928), neither re-emitted |
 | `plain`             | identity — any stored value passes through unchanged |
 
 **Excluded fields** — none. `pfb_idn` was previously excluded (`NULL`/`NULL` identity adapters);
