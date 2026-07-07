@@ -506,7 +506,7 @@ def _mk_alias(vm: helpers.SmokeVM, name: str, alias_type: str, address: str) -> 
 
     Writes a single entry to ``aliases/alias`` and calls ``write_config``.
     ``alias_type`` must be ``'port'`` or ``'network'`` (the values
-    ``alias_get_type()`` returns and the category-edit validation checks).
+    ``pfb_alias_type()`` returns and the category-edit validation checks).
     """
     row = {
         "name": name,
@@ -563,9 +563,9 @@ def test_ipv4_advanced_inout_full_save_persists_and_reloads(
         The save handler (lines 741-764) writes each advanced field via
         ``config_set_path`` only when ``$gtype == 'ipv4'``. ``autoproto_*`` /
         ``aliasports_*`` / ``aliasaddr_*`` are validated: a non-'any' protocol is
-        required when ``autoports_*`` or ``autoaddr_*`` is set (lines 604-614);
-        the alias names must pass ``is_alias()`` + ``alias_get_type() in
-        {network,port}`` (lines 593-601). We therefore create a real port alias
+        required when ``autoports_*`` or ``autoaddr_*`` is set;
+        the alias names must resolve via ``pfb_alias_type()`` to a type the
+        field accepts (``pfb_adv_alias_field_errors``). We therefore create a real port alias
         and a real network alias first, use action=Deny_Both (no Permit guard),
         and supply non-any protocols (tcp / udp).
 

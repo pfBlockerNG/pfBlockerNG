@@ -263,6 +263,18 @@ final class AdvAliasFieldErrorsTest extends TestCase
 		$this->assertStringNotContainsString('Port-type', $errors[0]);
 	}
 
+	public function testReservedNetworkTableNameInPortOutFieldIsRejectedAsMissing(): void
+	{
+		// Closes the field x reserved-type matrix: the fourth field
+		// (aliasports_out) and the third upstream reserved type ('network' —
+		// vpn_networks/negate_networks/tonatsubnets) in one row.
+		$errors = pfb_adv_alias_field_errors(['aliasports_out' => 'vpn_networks']);
+
+		$this->assertCount(1, $errors);
+		$this->assertStringContainsString('Must use an existing Alias', $errors[0]);
+		$this->assertStringContainsString('Port Outbound', $errors[0]);
+	}
+
 	// -----------------------------------------------------------------------
 	// Hostile input — a crafted POST can submit a field as an ARRAY
 	// (aliasaddr_in[]=x). pfb_alias_type() is string-typed, so without a guard

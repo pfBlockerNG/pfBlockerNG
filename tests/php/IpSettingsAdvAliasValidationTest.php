@@ -21,14 +21,16 @@ use PHPUnit\Framework\TestCase;
  *      for the address fields — so this step silently drops any non-existent or
  *      wrong-type value BEFORE validation.
  *   2. Advanced alias validation: pfb_adv_alias_field_errors() (#636) checks each
- *      surviving value against the configuration via alias_get_type().
+ *      surviving value against the configuration via pfb_alias_type().
  *
  * The #676 bug is in step 2: it used is_alias(), which reads the in-memory
  * $aliastable cache — never populated on this page — so every alias that SURVIVED
  * normalization (i.e. every valid, existing, correct-type alias the user picked
  * from the dropdown) was then rejected with "Must use an existing Alias". The fix
- * resolves existence from alias_get_type() (config-based) instead, so surviving
- * aliases are accepted.
+ * resolves existence from the configuration instead — today via pfb_alias_type(),
+ * which (unlike pfSense's alias_get_type()) also refuses reserved system table
+ * names — so surviving aliases are accepted. Reserved names never even reach
+ * validation here: step 1's dropdown normalization drops them first.
  *
  * Because normalization runs first, a non-existent or wrong-type value never
  * reaches validation as an error — it is reset to '' and saved empty. These tests
@@ -90,7 +92,7 @@ final class IpSettingsAdvAliasValidationTest extends TestCase
 	}
 
 	/**
-	 * Seed firewall aliases into config — the source alias_get_type() and the
+	 * Seed firewall aliases into config — the source pfb_alias_type() and the
 	 * dropdown-option builder both read.
 	 *
 	 * @param array<string, string> $typesByName  name => type ('port'/'network'/'host'/...)
