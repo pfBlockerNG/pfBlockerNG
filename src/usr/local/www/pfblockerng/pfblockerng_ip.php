@@ -57,7 +57,10 @@ $pconfig['asn_reporting']	= $pfb['iconfig']['asn_reporting']			?: 'disabled';
 $pconfig['asn_token']		= $pfb['iconfig']['asn_token']				?: '';
 $pconfig['database_cc']		= $pfb['iconfig']['database_cc']			?: '';
 $pconfig['maxmind_account']	= $pfb['iconfig']['maxmind_account']			?: '';
-$pconfig['maxmind_key']		= $pfb['iconfig']['maxmind_key']			?: '';
+// issue #924: maxmind_key is masked/write-only -- never populate it from the stored value.
+// A GET renders blank; a validation-error redisplay preserves the just-typed $_POST value
+// (like every other field), never PfbConfig/iconfig.
+$pconfig['maxmind_key']		= $_POST['maxmind_key'] ?? '';
 $pconfig['inbound_interface']	= explode(',', $pfb['iconfig']['inbound_interface'])	?: array();
 $pconfig['inbound_deny_action']	= $pfb['iconfig']['inbound_deny_action']		?: 'block';
 $pconfig['outbound_interface']	= explode(',', $pfb['iconfig']['outbound_interface'])	?: array();
@@ -138,7 +141,11 @@ if ($_POST) {
 			$input_errors[] = 'MaxMind Account Invalid';
 		}
 
-		if (!empty($_POST['maxmind_key']) && empty(pfb_filter($_POST['maxmind_key'], PFB_FILTER_WORD, 'ip'))) {
+		// issue #924: maxmind_key is masked/write-only -- a blank POST keeps the stored key, so
+		// validate only a non-empty submission. Reference 'maxmind_key' suppresses pfb_filter()'s
+		// failed-validation log line so the secret never reaches a log, even when rejected.
+		$pfb_maxmind_key_post = trim((string) ($_POST['maxmind_key'] ?? ''));
+		if ($pfb_maxmind_key_post !== '' && empty(pfb_filter($pfb_maxmind_key_post, PFB_FILTER_WORD, 'maxmind_key'))) {
 			$input_errors[] = 'MaxMind License key Invalid';
 		}
 
@@ -207,7 +214,12 @@ if ($_POST) {
 			$pfb['iconfig']['maxmind_locale']	= $_POST['maxmind_locale']					?: 'en';
 			$pfb['iconfig']['database_cc']		= pfb_filter($_POST['database_cc'], PFB_FILTER_ON_OFF, 'ip')	?: '';
 			$pfb['iconfig']['maxmind_account']	= pfb_filter($_POST['maxmind_account'], PFB_FILTER_WORD, 'ip')	?: '';
-			$pfb['iconfig']['maxmind_key']		= pfb_filter($_POST['maxmind_key'], PFB_FILTER_WORD, 'ip')	?: '';
+			// issue #924: blank keeps the existing stored key -- only overwrite on a non-empty
+			// submission, never clear it via a blank re-post ($pfb['iconfig']['maxmind_key']
+			// already holds the current stored value from the readSection() above).
+			if ($pfb_maxmind_key_post !== '') {
+				$pfb['iconfig']['maxmind_key'] = pfb_filter($pfb_maxmind_key_post, PFB_FILTER_WORD, 'maxmind_key') ?: '';
+			}
 			$pfb['iconfig']['asn_reporting']	= $_POST['asn_reporting']					?: 'disabled';
 			$pfb['iconfig']['asn_token']		= $_POST['asn_token']					?: '';
 			$pfb['iconfig']['inbound_interface']	= implode(',', (array)$_POST['inbound_interface'])		?: '';
@@ -465,12 +477,13 @@ $section->addInput(new Form_Input(
 $section->addInput(new Form_Input(
 	'maxmind_key',
 	gettext('MaxMind License Key'),
-	'text',
-	$pconfig['maxmind_key'],
-	['placeholder' => 'Enter your MaxMind GeoLite2 License Key']
+	'password',
+	$pconfig['maxmind_key'] ?? '',
+	['placeholder' => 'Enter your MaxMind GeoLite2 License Key -- leave blank to keep the current key']
 ))->setHelp('To utilize the free MaxMind GeoLite2 GeoIP functionality, you must first register for a free MaxMind user account. Visit the following '
 	. '<a href="https://www.maxmind.com/en/geolite2/signup" target="_blank">Link to Register</a> for a free MaxMind user account. '
-	. '<strong>Utilize the GeoIP Update version 3.1.1 or newer registration option.</strong>')
+	. '<strong>Utilize the GeoIP Update version 3.1.1 or newer registration option.</strong>'
+	. ' The stored key is never displayed here; leaving this field blank on Save keeps the existing key unchanged.')
   ->setAttribute('autocomplete', 'off');
 
 $section->addInput(new Form_Select(

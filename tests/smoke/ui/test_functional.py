@@ -479,6 +479,98 @@ def test_dnsbl_top1m_token_masked_field_persists_and_is_never_echoed(
         assert "OK" in restore.stdout, f"failed to restore top1m_token: {restore.stdout!r}"
 
 
+def test_ip_maxmind_key_masked_field_persists_and_is_never_echoed(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """The masked ``maxmind_key`` field (issue #924) persists via config.xml -- the
+    HTTP body is never proof of a save (ADR §1 fact 3) -- and is a WRITE-ONLY field
+    with the same "blank preserves" contract as ``top1m_token`` (ADR-59 P5) above,
+    mirrored here for the MaxMind GeoIP license key on the IP-settings page.
+
+    Scenario: masked/write-only maxmind_key on the IP-settings page (issue #924).
+      Background: pfBlockerNG deployed; webConfigurator authenticated.
+
+    Given an inert MaxMind license key is already stored (seeded directly via the
+      config API -- the BEFORE state, independent of the save path under test),
+    When the IP page is fetched, Then the raw HTML never echoes the stored key
+      (write-only, masked field);
+    When a BLANK maxmind_key rides a save (the form always renders this field
+      blank, so this is what EVERY unrelated IP-settings save actually posts),
+      Then the stored key is PRESERVED -- this is the red->green core of #924:
+      pre-change, the save unconditionally wrote
+      ``pfb_filter($_POST['maxmind_key'], PFB_FILTER_WORD, 'ip') ?: ''``, so a
+      blank POST cleared the key (this assertion FAILS on that code); post-change,
+      the blank-keeps guard skips the assignment entirely (this assertion PASSES);
+    When a NEW inert key is posted, Then it REPLACES the stored key (branch
+      coverage: a non-empty submission still writes through);
+    When a non-word BOGUS key is posted, Then the WHOLE save aborts and the stored
+      key is UNCHANGED (the shared ``PFB_FILTER_WORD`` reject branch also covered
+      for maxmind_account/asn_token in test_ip_word_filter_field_valid_and_reject_
+      unchanged -- maxmind_key keeps that reject behaviour, only its BLANK handling
+      differs, so it is asserted here instead of in that shared parametrization).
+
+    The web form cannot blank/clear this field by design (proven above), so the
+    original value is restored directly via the config API in `finally` (mirrors
+    the `pfSsh.php` restore idiom already used for top1m_token), leaving the box
+    clean for the other flows on this session-scoped VM.
+    """
+    page = IP_PAGE
+    cfg = "installedpackages/pfblockerngipsettings/config/0/maxmind_key"
+    seed_token = "PFBTESTKEY000001"
+    new_token = "PFBTESTKEY000002"
+    original = helpers.config_get(smoke_vm, cfg)
+    try:
+        # GIVEN: an inert key is already stored -- seeded directly (not via the form
+        # under test), so the BEFORE state is established independently.
+        seed = helpers.php_eval(
+            smoke_vm,
+            f"config_set_path({helpers._php_str(cfg)}, {helpers._php_str(seed_token)});\n"
+            "write_config('#924 smoke: seed maxmind_key');\necho 'OK';",
+        )
+        assert "OK" in seed.stdout, f"failed to seed maxmind_key: {seed.stdout!r}"
+        assert helpers.config_get(smoke_vm, cfg) == seed_token, "seed did not take before the GET/POST assertions"
+
+        # THEN: a GET never echoes the stored key in the raw HTML (write-only, masked).
+        resp = webui.get(page)
+        assert seed_token not in resp.text, (
+            f"maxmind_key must never be echoed back on GET (write-only masked field) -- "
+            f"searched for {seed_token!r} in the {page} response body"
+        )
+
+        # WHEN: a blank maxmind_key rides a save. THEN: unchanged (the red->green core).
+        got_after_blank = _post_and_get(webui, smoke_vm, page, {"maxmind_key": ""}, cfg)
+        assert got_after_blank == seed_token, (
+            f"a blank maxmind_key POST must preserve the existing stored key: "
+            f"expected {seed_token!r}, got {got_after_blank!r}"
+        )
+
+        # WHEN: a NEW key is posted. THEN: it replaces the stored key.
+        got_after_new = _post_and_get(webui, smoke_vm, page, {"maxmind_key": new_token}, cfg)
+        assert got_after_new == new_token, (
+            f"maxmind_key should persist a new posted value: expected {new_token!r}, got {got_after_new!r}"
+        )
+
+        # WHEN: a non-word BOGUS key is posted. THEN: the whole save aborts -- config
+        # UNCHANGED at new_token (not the bogus value, not blanked). Same
+        # PFB_FILTER_WORD reject branch as maxmind_account/asn_token, unaffected by
+        # this fix (only the blank-handling above changed).
+        got_after_bogus = _post_and_get(webui, smoke_vm, page, {"maxmind_key": "bad/key"}, cfg)
+        assert got_after_bogus == new_token, (
+            f"a non-word maxmind_key must abort the save, leaving config unchanged: "
+            f"expected {new_token!r}, got {got_after_bogus!r}"
+        )
+    finally:
+        # Restore directly via the config API -- the web form cannot blank this field
+        # by design (proven above), so a normal POST can't be used for cleanup.
+        restore = helpers.php_eval(
+            smoke_vm,
+            f"config_set_path({helpers._php_str(cfg)}, {helpers._php_str(original)});\n"
+            "write_config('#924 smoke: restore maxmind_key');\necho 'OK';",
+        )
+        assert "OK" in restore.stdout, f"failed to restore maxmind_key: {restore.stdout!r}"
+
+
 # --------------------------------------------------------------------------- #
 # General settings (installedpackages/pfblockerng/config/0)
 # --------------------------------------------------------------------------- #
@@ -597,6 +689,14 @@ def _post_and_confirm_general(
 # the SOFT-COERCE select (asn_reporting) coerces to its default. The interface
 # multiselects are unvalidated (implode comma-join). No test overrides
 # maxmind_locale, so the ugc conversion never fires -- every flow is hermetic.
+#
+# maxmind_key (issue #924) is a HARD-ABORT validator too (a non-word bogus value
+# still aborts the whole save), but it is NOT in the parametrized WORD-filter flow
+# below alongside maxmind_account/asn_token: it is now masked/write-only, so an
+# EMPTY POST means "keep the stored key" rather than "overwrite with empty" --
+# incompatible with that flow's shared "restore via a blank/original POST" idiom.
+# Its own valid/blank-keeps/reject coverage lives in
+# test_ip_maxmind_key_masked_field_persists_and_is_never_echoed above.
 # --------------------------------------------------------------------------- #
 
 IP_PLACEHOLDER_CFG = "installedpackages/pfblockerngipsettings/config/0/ip_placeholder"
@@ -641,10 +741,9 @@ def test_ip_placeholder_valid_isolated_ipv4_and_reject_unchanged(
     ("field", "valid", "bogus"),
     [
         ("maxmind_account", "Test_123", "bad-chars!"),
-        ("maxmind_key", "Key_456", "bad/key"),
         ("asn_token", "Tok_789", "tok@en"),
     ],
-    ids=["maxmind_account", "maxmind_key", "asn_token"],
+    ids=["maxmind_account", "asn_token"],
 )
 def test_ip_word_filter_field_valid_and_reject_unchanged(
     field: str,
@@ -658,12 +757,14 @@ def test_ip_word_filter_field_valid_and_reject_unchanged(
     ``PFB_FILTER_WORD`` = no non-word char (``/\\W/``): only ``[A-Za-z0-9_]`` passes.
     Save guard: ``!empty($_POST[field]) && empty(pfb_filter($_POST[field],
     PFB_FILTER_WORD, 'ip'))`` -> a field-specific input error -> the WHOLE save
-    aborts -> config UNCHANGED. A valid word ('Test_123' / 'Key_456' / 'Tok_789')
-    passes and is stored verbatim; a value with a non-word char ('bad-chars!',
-    'bad/key', 'tok@en') is REJECTED -> config unchanged (NOT the bogus value, NOT
-    empty). Empty input is allowed (the ``!empty`` guard) and stores ''. Pure regex
-    validation, NO egress (these tokens only drive update/reload lookups, not this
-    save). Same mechanism for all three fields -> parametrized.
+    aborts -> config UNCHANGED. A valid word ('Test_123' / 'Tok_789') passes and is
+    stored verbatim; a value with a non-word char ('bad-chars!', 'tok@en') is
+    REJECTED -> config unchanged (NOT the bogus value, NOT empty). Empty input is
+    allowed (the ``!empty`` guard) and stores ''. Pure regex validation, NO egress
+    (these tokens only drive update/reload lookups, not this save). Same mechanism
+    for both fields -> parametrized. (``maxmind_key`` shares the same
+    ``PFB_FILTER_WORD`` reject branch but NOT this "blank stores empty" contract --
+    see the masked-field test above.)
     """
     vm = smoke_vm
     cfg = f"installedpackages/pfblockerngipsettings/config/0/{field}"

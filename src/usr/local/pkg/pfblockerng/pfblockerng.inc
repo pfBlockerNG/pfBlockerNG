@@ -1653,8 +1653,9 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 
 		// Exceptions -- callers whose rejected input must never be logged, even at
 		// debug level: 'DNSBL_Download' (parsed feed lines -- volume); 'top1m_token'
-		// (ADR-59 P5 -- the secret itself, not merely its download URL).
-		if (in_array($reference, array('DNSBL_Download', 'top1m_token'))) {
+		// (ADR-59 P5 -- the secret itself, not merely its download URL); 'maxmind_key'
+		// (issue #924 -- same masked/write-only treatment for the MaxMind license key).
+		if (in_array($reference, array('DNSBL_Download', 'top1m_token', 'maxmind_key'))) {
 			//
 		} else {
 			pfb_logger("{$header} Failed validation [ " . htmlspecialchars($input) . " ]", 6);
