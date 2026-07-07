@@ -127,7 +127,14 @@ _ASSIGNMENT_RE = re.compile(
     r"[\w.-]+\s*[:=]\s*(?:" + "|".join(_TOKEN_ALTERNATIVES) + r")\s*$"
 )
 
-_QUOTED_RE = re.compile(r'"([^"]*)"|\'([^\']*)\'')
+# The double-quote side is escape-aware (\" is content in sh/php/js/py alike),
+# so an escaped quote does not mispair the spans and swallow a later literal
+# (Copilot, PR #947). ponytail: the single-quote side stays naive -- POSIX sh
+# has NO single-quote escapes, so naive is shell-correct; a PHP/JS \' inside
+# single quotes may mispair spans, but no version token contains a quote and
+# the quoted-literal path still sees every properly paired span. Split the
+# regex per language if that ever bites.
+_QUOTED_RE = re.compile(r'"((?:[^"\\]|\\.)*)"|\'([^\']*)\'')
 
 # Inline per-line escape (`# version-literal-ok: <reason>`), spec'd in issue #922.
 _ESCAPE = "version-literal-ok"
@@ -166,19 +173,31 @@ def _strip_inline_comment(line: str) -> str:
     A trailing ``# e.g. "ce-2.8"`` on an otherwise-real code line is a comment
     illustrating the value, not the value itself -- same "prose" exemption as
     a full comment line, just not confined to the start of the line. A ``#``
-    INSIDE a quoted string is left alone (rare, but real content).
+    INSIDE a quoted string is left alone (rare, but real content). Inside a
+    DOUBLE-quoted string a backslash escapes the next char, so an escaped
+    quote does not mis-close the string (Copilot, PR #947); single quotes stay
+    escape-free -- POSIX sh has no escapes there.
     """
     quote: str | None = None
-    for i, ch in enumerate(line):
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
         if quote is not None:
+            if quote == '"' and ch == "\\":
+                i += 2
+                continue
             if ch == quote:
                 quote = None
+            i += 1
             continue
         if ch in ("'", '"'):
             quote = ch
+            i += 1
             continue
         if ch == "#":
             return line[:i]
+        i += 1
     return line
 
 
@@ -186,9 +205,12 @@ def _split_c_comment(line: str, hash_comments: bool) -> tuple[str, bool]:
     """Return (code part of ``line``, True if an unclosed ``/*`` block opens here).
 
     Quote-aware: ``//``, ``/*`` and ``#`` inside a quoted string are content,
-    not comments. A ``/*...*/`` pair closed on the same line is dropped and the
-    code after it is kept. ``hash_comments`` enables ``#`` (PHP family only --
-    in JS, ``#`` is a private-field sigil).
+    not comments, and a backslash inside a quoted string escapes the next char
+    (PHP/JS support ``\\'``/``\\"`` in both quote types -- Copilot, PR #947),
+    so an escaped quote does not mis-close the string. A ``/*...*/`` pair
+    closed on the same line is dropped and the code after it is kept.
+    ``hash_comments`` enables ``#`` (PHP family only -- in JS, ``#`` is a
+    private-field sigil).
     """
     out: list[str] = []
     quote: str | None = None
@@ -197,6 +219,10 @@ def _split_c_comment(line: str, hash_comments: bool) -> tuple[str, bool]:
     while i < n:
         ch = line[i]
         if quote is not None:
+            if ch == "\\" and i + 1 < n:
+                out.append(line[i : i + 2])
+                i += 2
+                continue
             if ch == quote:
                 quote = None
             out.append(ch)
