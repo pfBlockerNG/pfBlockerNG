@@ -260,6 +260,15 @@ one per step.
 
 For each plan step `M`, in order:
 
+**Preferred route — the `phase-step` workflow.** When the Workflow tool is available, run
+7a+7b as ONE call: `Workflow({name: 'phase-step', args: {worktree: '<path>', brief: <the full
+step prompt + handoff-format instructions>, gates: [<canonical gates for the touched
+languages>], redProof: {srcPaths: [...], testCmd: '<the pinning test>'} | null, planItems:
+[<the step's plan items>], ponytailLevel: <active level or null>}})` — implementer + fresh
+verifier, schema-forced `{handoff, gateRecord}`. You still validate the record, record it in
+your report, and keep HALT/continue/landing judgment; BLOCKED or FAIL → HALT as below.
+Workflow tool unavailable → run 7a/7b inline as specified below (same contract).
+
 **7a. Delegate to a clean sub-agent.** Spawn an Agent (`subagent_type:
 general-purpose`, **`model: sonnet`**, effort **`xhigh`** stated explicitly, no `isolation` —
 the worktree already exists) with a self-contained brief. Per CLAUDE.md "Plan with a higher model, implement with

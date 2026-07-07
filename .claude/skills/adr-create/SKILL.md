@@ -64,6 +64,15 @@ Next number = `max + 1`, zero-padded to two digits (`NN`). Agree a short
 The user feeds you the idea incrementally ("here's what I have so far"). For
 each piece, interrogate it. **Do not advance to writing files until the picture
 is coherent, the contract is explicit, and the validation plan is falsifiable.**
+
+**Big ADRs (spanning more than ~2 components): fan the investigation out.** When the
+Workflow tool is available, run `Workflow({name: 'adr-investigate', args: {topic: '<one-line
+ADR topic>', repoRoot: '<worktree/checkout path>', areas: [{key, focus, hints}...]}})` — one
+read-only reader per area, returning **evidence-tagged** facts (`verified` with the command/
+`file:line` that proved it; `assumed` with the probe that would). Use only `verified` facts as
+§1 load-bearing facts; every `assumed` fact is either probed by you now or carried into the
+plan as an explicit verification step. The design judgment — scrutiny, contract, phases —
+stays yours; the fan-out only grounds it.
 Drive these dimensions — ask, don't assume; read the actual code to confirm
 claims and cite real symbols + `file:line`:
 

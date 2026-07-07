@@ -170,6 +170,19 @@ to Step 7.
 
 For every phase `M` to run (the loop body in `all`):
 
+**Preferred route — the `phase-step` workflow.** When the Workflow tool is available, run
+6a+6b as ONE call: `Workflow({name: 'phase-step', args: {worktree: '<path>', brief: <the full
+6a brief below>, gates: [<canonical gate commands for the phase's languages>], redProof:
+{srcPaths: [<the phase's src paths>], testCmd: '<the named new test>'} | null (behaviour-
+preserving), planItems: [<the phase prompt's ACTION-PLAN items>], ponytailLevel: <active
+level or null>}})`. It runs the Sonnet implementer then an independent Sonnet verifier and
+returns `{handoff, gateRecord}` — both schema-forced. You then: reject a handoff/record with
+any failed or missing item, write `RESULTS/{MM}_Gate.txt` from the gateRecord and commit+push
+it, and keep ALL judgment (HALT/continue/redo, Step 7 landing). A BLOCKED handoff or a FAIL
+gate record → **HALT and report**, exactly as below. When the Workflow tool is unavailable,
+run 6a/6b inline as specified below — the contract is identical; the workflow only packages
+it.
+
 **6a. Delegate to a clean sub-agent.** Spawn an Agent (`subagent_type:
 general-purpose`, **`model: sonnet`**) — **without** `isolation: "worktree"`, since
 the worktree already exists. Per CLAUDE.md "Plan with a higher model, implement with

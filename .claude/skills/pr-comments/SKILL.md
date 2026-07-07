@@ -287,6 +287,17 @@ it arrived in.
 
 ## Step 5 — Validate each finding against the CURRENT code (the crux)
 
+**Big batches (≈10+ findings): fan the validation out.** When the Workflow tool is
+available, run `Workflow({name: 'triage-findings', args: {worktree: '<path>', base:
+'<base>', findings: [<the Step-4 list: {id, source, severity, path, line, body,
+suggested_fix}>], lintNotes: '<the repo's unenforced-rule notes below>'}})` — one
+independent read-only validator per finding, returning verdict + executed evidence +
+blame-based scope + a sanity check of the suggested fix. You remain the judge: adopt each
+verdict only with its evidence in hand (the skip asymmetry below still binds), apply fixes
+yourself **sequentially** (Step 6), and reply per thread (Step 7). Any finding in the
+returned `unvalidated` list is validated inline. Small batches, or no Workflow tool → inline
+as follows.
+
 For every finding, decide a verdict — do **not** auto-apply:
 
 - **Read the cited code as it is now.** The finding may already be **stale/fixed**
