@@ -315,6 +315,9 @@ def test_abp_regex_block_and_allow(deployed_vm: SmokeVM, client_vm: SmokeVM, moc
         assert h.resolves_to(ans_allow, STUB_DNS_A), f"@@ regex should un-block {unblocked} via stub, got {ans_allow}"
 
 
+@pytest.mark.timeout(90)  # two CaseContext reload cycles; each zero-downtime swap may burn its full
+# 30s watcher handshake before the designed restart fallback (pfb_unbound_py_wait_applied), so the
+# 30s default cap kills the test mid-fail-safe on a rare watcher stall (#875).
 def test_abp_regex_admitted_count(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """The DNSBL_Regex count reflects ADMITTED regex; the length cap (opt-in) shrinks it.
 
