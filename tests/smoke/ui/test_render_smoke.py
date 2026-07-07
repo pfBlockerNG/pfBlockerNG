@@ -341,6 +341,54 @@ def test_ip_page_renders_v6_suppression_section(webui: WebUI) -> None:
     )
 
 
+_CFG_MAXMIND_KEY = "installedpackages/pfblockerngipsettings/config/0/maxmind_key"
+
+
+def test_ip_page_never_leaks_maxmind_key(smoke_vm: SmokeVM, webui: WebUI) -> None:
+    """The masked ``maxmind_key`` field (issue #924) never echoes the stored MaxMind
+    license key back into the rendered HTML, and is masked (``type="password"``).
+
+    Before this fix the field was a plain ``text`` input pre-filled with the stored
+    key verbatim (``$pconfig['maxmind_key'] = $pfb['iconfig']['maxmind_key']``), so a
+    GET leaked the secret straight into the page source and into any screen-share /
+    browser autofill. Seed an inert key directly (independent of the save path Tier
+    B covers), GET the page, and assert (1) the exact stored key string is ABSENT
+    from the body -- this is the never-leak assertion PRE-change would FAIL on, since
+    the old code echoed it verbatim into the ``value`` attribute -- and (2) the
+    ``maxmind_key`` input renders ``type="password"`` (masked), not ``type="text"``.
+    """
+    seed_token = "PFBTESTKEY000001"
+    original = helpers.config_get(smoke_vm, _CFG_MAXMIND_KEY)
+    seed = helpers.php_eval(
+        smoke_vm,
+        f"config_set_path({helpers._php_str(_CFG_MAXMIND_KEY)}, {helpers._php_str(seed_token)});\n"
+        "write_config('#924 smoke: seed maxmind_key for the never-leak render check');\n"
+        "echo 'OK';",
+    )
+    assert "OK" in seed.stdout, f"failed to seed maxmind_key: {seed.stdout!r}"
+    try:
+        resp = webui.get(_IP_PAGE)
+        assert resp.status_code == 200, f"GET {_IP_PAGE} -> HTTP {resp.status_code} (expected 200)"
+        body = resp.text
+        assert seed_token not in body, (
+            f"maxmind_key leaked into the IP page body: expected {seed_token!r} to be ABSENT, "
+            f"but it was found in the response (write-only masked field must never echo the stored key)"
+        )
+        assert 'name="maxmind_key"' in body, "maxmind_key input not present on the IP page"
+        # maxmind_key is the IP page's only password-type input (asn_token stays plain
+        # text -- out of #924's scope), so this substring is unambiguous, matching the
+        # sibling top1m_token Tier-A assertion (test_dnsbl_top1m_source_options_exclude_alexa).
+        assert 'type="password"' in body, 'maxmind_key input must be masked (type="password"), not a plain text field'
+    finally:
+        restore = helpers.php_eval(
+            smoke_vm,
+            f"config_set_path({helpers._php_str(_CFG_MAXMIND_KEY)}, {helpers._php_str(original)});\n"
+            "write_config('#924 smoke: restore maxmind_key');\n"
+            "echo 'OK';",
+        )
+        assert "OK" in restore.stdout, f"failed to restore maxmind_key: {restore.stdout!r}"
+
+
 _UPDATE_PAGE = "/pfblockerng/pfblockerng_update.php"
 _HOOKS_PAGE = "/pfblockerng/pfblockerng_hooks.php"
 
