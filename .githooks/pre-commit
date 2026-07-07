@@ -192,6 +192,17 @@ if [ "$staged_py" = 1 ] || [ "$staged_php" = 1 ] || [ "$staged_sh" = 1 ] || [ "$
 	fi
 fi
 
+# --- Forbid delegation-process narration (Phase N, RESULTS/ refs, review
+#     archaeology) in ADDED comment lines under src/ + scripts/. Diff-scoped:
+#     judges only the staged diff, so pre-existing narration is grandfathered
+#     until its cleanup lands. Escape inline with `# narration-ok: <reason>`. ---
+if [ -n "$py_bin" ]; then
+	step 'comment-narration (no process narration in new comments)'
+	"$py_bin" scripts/check_comment_narration.py --staged || failed 'comment-narration'
+else
+	skip comment-narration
+fi
+
 # --- ADR phase prompts: post-contract prompts (ADR >= 60) must carry the
 #     delegation-contract blocks (VERIFICATION, HANDOFF->RESULTS, test mode,
 #     reality-override). Older ADRs are grandfathered by the script itself. ---
