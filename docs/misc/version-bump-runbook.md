@@ -88,3 +88,11 @@ entry — no new shipped file, no extra deploy wiring.
    `2$blake2b`), tar flavor/uid, mtime, and best-effort dep versions — are enumerated in
    `docs/build-pkg-portable.md` ("Fidelity vs `make package`"); anything else is a builder bug to
    fix before the bump lands.
+5. **Sweep the version-literal checker + seeded escapes** (issue #940) — as soon as the matrix
+   moves, `test.yml`'s tripwire step (`scripts/check_version_literals.py --verify-matrix`) fails
+   if the new version falls outside the checker's **windowed CE/Plus numeric shapes**
+   (`_TOKEN_ALTERNATIVES`); widen the window and update the checker's tests. Then sweep every
+   `version-literal-ok` escape (`git grep -n version-literal-ok -- src scripts .github`): the
+   escaped `workflow_dispatch` fallback defaults and dev-tooling defaults still name the OLD
+   version and need bumping by hand — the escape comment exempts them from the gate, so nothing
+   else will remind you.

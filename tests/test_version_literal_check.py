@@ -15,6 +15,7 @@ tests/test_appliance_python_check.py's convention -- defensive even though
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -159,14 +160,12 @@ def test_main_exit_codes(tmp_path: Path) -> None:
 
 
 def test_vacuity_guard_non_token_decimals_stay_clean(tmp_path: Path) -> None:
-    # python/php DOTTED forms ("3.11", "8.3") are not in the token list -- only
-    # php8x/py31x/2.8/2.9 are. FreeBSD:14/:17 are outside the supported 15/16
-    # window. If the checker discriminated on nothing but decimal shape, every
-    # one of these would (wrongly) flag.
+    # python/php DOTTED forms ("3.11", "8.3") are not in the token list. If the
+    # checker discriminated on nothing but decimal shape, both would (wrongly)
+    # flag. (FreeBSD:14/:17 moved to the FLAGGED rows in issue #940 -- the ABI
+    # shape is version-agnostic now.)
     assert _find(tmp_path, 'python_version: "3.11"\n') == [], '"3.11" is not a token'
     assert _find(tmp_path, 'php_version: "8.3"\n') == [], '"8.3" is not a token'
-    assert _find(tmp_path, f'target: "{_FREEBSD14}"\n') == [], "FreeBSD:14 is outside the supported window"
-    assert _find(tmp_path, f'target: "{_FREEBSD17}"\n') == [], "FreeBSD:17 is outside the supported window"
 
 
 # --- Hostile inputs ---------------------------------------------------------
@@ -235,9 +234,10 @@ def test_inline_trailing_comment_example_not_flagged(tmp_path: Path) -> None:
 
 
 def test_lookalike_tokens_not_flagged(tmp_path: Path) -> None:
-    # Longer lookalikes that merely start with a real token must not fullmatch.
-    assert _find(tmp_path, f'flavor: "{_PY3110_LOOKALIKE}"\n') == [], "py3110 is not py31[0-9]"
-    assert _find(tmp_path, f'target: "{_FREEBSD14}"\n') == [], "FreeBSD:14 is outside 15/16"
+    # Lookalikes that merely start with a real token shape must not fullmatch.
+    freebsd_1x = "FreeBSD" + ":1x"
+    assert _find(tmp_path, f'flavor: "{_PY3110_LOOKALIKE}"\n') == [], "py3110 is one digit too long"
+    assert _find(tmp_path, f'target: "{freebsd_1x}"\n') == [], "FreeBSD:1x is not a numeric ABI"
 
 
 # --- PR #937 review follow-ups ---------------------------------------------
@@ -373,3 +373,109 @@ def test_prefixed_unquoted_assignments_flagged(tmp_path: Path) -> None:
     ):
         violations = _find(tmp_path, line)
         assert len(violations) == 1, f"prefixed unquoted assignment must flag: {line!r}; got {violations}"
+
+
+# --- Issue #940: unambiguous shapes are version-agnostic ---------------------
+
+
+def test_stale_and_future_version_shapes_flagged(tmp_path: Path) -> None:
+    # A stale (FreeBSD:14) or future (FreeBSD:17) ABI, or an out-of-window
+    # php/py flavor, is a hardcode with the same drift hazard as a current one
+    # (issue #940) -- the unambiguous shapes no longer carry a version window.
+    for value in (_FREEBSD14, _FREEBSD17, "php7" + "4", "py3" + "12"):
+        violations = _find(tmp_path, f'target: "{value}"\n')
+        assert len(violations) == 1, f"version-agnostic shape must flag: {value}; got {violations}"
+
+
+# --- Issue #940: the matrix tripwire (--verify-matrix) -----------------------
+# The windowed CE/Plus numerics restate the matrix window; the tripwire fails
+# CI the moment supported-versions.json carries a version they no longer cover.
+
+
+def _matrix(entries: list[dict[str, str]]) -> dict[str, Any]:
+    return {"versions": entries}
+
+
+def _current_shape_matrix() -> dict[str, Any]:
+    return _matrix(
+        [
+            {
+                "pfsense_version": _CE28,
+                "channel": "CE",
+                "freebsd_major": "15",
+                "php_version": "8.3",
+                "py_flavor": _PY311,
+            },
+            {
+                "pfsense_version": _PLUS2603,
+                "channel": "Plus",
+                "freebsd_major": "16",
+                "php_version": "8.5",
+                "py_flavor": _PY311,
+            },
+        ]
+    )
+
+
+def test_matrix_tokens_current_shape_covered() -> None:
+    uncovered = cvl.uncovered_matrix_tokens(_current_shape_matrix())
+    assert uncovered == [], f"the live-shape matrix must be fully covered; got {uncovered}"
+
+
+def test_matrix_tokens_dot_x_suffix_stripped() -> None:
+    m = _matrix(
+        [
+            {
+                "pfsense_version": _CE28 + ".x",
+                "channel": "CE",
+                "freebsd_major": "15",
+                "php_version": "8.3",
+                "py_flavor": _PY311,
+            }
+        ]
+    )
+    uncovered = cvl.uncovered_matrix_tokens(m)
+    assert uncovered == [], f"a trailing .x on pfsense_version must be stripped; got {uncovered}"
+
+
+def test_matrix_tokens_future_versions_uncovered() -> None:
+    # The tripwire's red case: CE 3.0 and Plus 27.01 fall outside the windowed
+    # numerics (their varvers, ABI, and flavors are already version-agnostic).
+    ce30 = "3" + ".0"
+    plus2701 = "27" + ".01"
+    m = _matrix(
+        [
+            {
+                "pfsense_version": ce30,
+                "channel": "CE",
+                "freebsd_major": "17",
+                "php_version": "9.1",
+                "py_flavor": "py3" + "13",
+            },
+            {
+                "pfsense_version": plus2701,
+                "channel": "Plus",
+                "freebsd_major": "17",
+                "php_version": "9.1",
+                "py_flavor": "py3" + "13",
+            },
+        ]
+    )
+    uncovered = cvl.uncovered_matrix_tokens(m)
+    assert uncovered == [plus2701, ce30], f"future windowed numerics must be reported uncovered; got {uncovered}"
+
+
+def test_verify_matrix_cli_exit_codes(tmp_path: Path) -> None:
+    good = tmp_path / "good.json"
+    good.write_text(json.dumps(_current_shape_matrix()), encoding="utf-8")
+    bad = tmp_path / "bad.json"
+    bad_entry = {
+        "pfsense_version": "27" + ".01",
+        "channel": "Plus",
+        "freebsd_major": "17",
+        "php_version": "9.1",
+        "py_flavor": "py3" + "13",
+    }
+    bad.write_text(json.dumps(_matrix([bad_entry])), encoding="utf-8")
+    assert cvl.main(["--verify-matrix", "--matrix-file", str(good)]) == 0
+    assert cvl.main(["--verify-matrix", "--matrix-file", str(bad)]) == 1
