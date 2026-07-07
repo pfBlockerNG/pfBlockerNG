@@ -227,6 +227,10 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 	 */
 	public function testReadOnlyDbdirCausesRenameFailurePreservesPriorWhitelistAndWarns(): void
 	{
+		if (function_exists('posix_getuid') && posix_getuid() === 0) {
+			$this->markTestSkipped('running as root -- permission-based failure injection cannot be simulated');
+		}
+
 		// Given: a prior good whitelist, a valid+matching top-1m.csv, but a dbdir made
 		// read-only AFTER seeding both files.
 		$priorContent = ".kept2.com,,\n,kept2.com,,\n,www.kept2.com,,\n";
