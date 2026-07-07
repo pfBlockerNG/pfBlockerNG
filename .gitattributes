@@ -3,3 +3,11 @@
 # stats and collapses their diffs in GitHub review views.
 .claude/skills/ponytail/** linguist-vendored
 .claude/skills/caveman/** linguist-vendored
+
+# ADR text and dev-only docs dominate many commits (95%+ of the changed
+# lines). linguist-documentation keeps them out of the language stats while
+# leaving their diffs reviewable on GitHub (unlike linguist-generated, which
+# suppresses diffs). For local history views without the doc noise, use
+# scripts/git-no-docs.sh — it derives its excludes from these entries.
+.ADRs/** linguist-documentation
+docs/** linguist-documentation

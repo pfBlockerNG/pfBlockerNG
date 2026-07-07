@@ -179,6 +179,7 @@ in `read-version-matrix.sh`.
 | [`deploy.sh`](deploy.sh) | Fast code update of an **already-installed** pfBlockerNG: rsync `src/` + restart unbound/nginx. |
 | [`pfb-downgrade-prep.sh`](pfb-downgrade-prep.sh) | **Before rolling the package back** to a pre-4.0.x release: run on the box as root to reverse the two non-self-healing 4.0.x changes — restore custom `list_scripts/` pre/post scripts to the package root, and remove the ADR-43 `tick` cron. |
 | [`setup-hooks.sh`](setup-hooks.sh) | Point git at `.githooks` (run once after cloning). |
+| [`git-no-docs.sh`](git-no-docs.sh) | Local doc-free history views: run a read-only git command (default `log -p`) with the `.gitattributes` `linguist-documentation` trees (`.ADRs/`, `docs/`) excluded from its pathspec. |
 | [`update-pfsense-stubs.py`](update-pfsense-stubs.py) | Regenerate `stubs/pfsense/` after a CE bump. |
 | [`claude-stop-guard.py`](claude-stop-guard.py) | Claude Code Stop-hook: blocks a done/fixed/implemented claim made after editing `src/`/`tests/` with no gate command run since (issue #925). Not yet registered in `.claude/settings.json`. |
 
