@@ -8534,12 +8534,21 @@ function pfblockerng_top1m(?array $provider_override = NULL) {
 				// providers (a CDN error page or a JSON auth-error body still has a '.' and
 				// a ',' somewhere) (#892 review).
 				$csvline = str_getcsv($line, ',', '"', "\\");
-				$domain = $csvline[$top1m_domcol] ?? '';
+				// #920: fold once here -- the GUI's inclusion keys are always lowercase
+				// (pfblockerng_dnsbl.php's $options_alexa_inclusion), so an uppercase/
+				// mixed-case feed domain otherwise passes every guard below but silently
+				// fails the isset($pfb_include[$tld]) compare; folding here also feeds
+				// the 'www.' strip and the write, so every downstream use is canonical.
+				$domain = strtolower($csvline[$top1m_domcol] ?? '');
 				if ($top1m_parse === 'rank_domain') {
 					if (!ctype_digit((string) ($csvline[0] ?? ''))) {
 						continue;
 					}
-				} elseif (!preg_match('/^[A-Za-z0-9][A-Za-z0-9.-]*\.(?:[A-Za-z]{2,}|[Xx][Nn]--[A-Za-z0-9][A-Za-z0-9-]+)$/', $domain)) {
+				// #920: the `D` modifier anchors '$' to the true string end -- without it, a
+				// quoted-unterminated CSV field (str_getcsv() retains its trailing "\n", unlike
+				// every other field shape) wrongly passes and can flip a garbage-only feed from
+				// dead (preserve) to valid (wipe), the same class of bug the #886/#892 guards fix.
+				} elseif (!preg_match('/^[A-Za-z0-9][A-Za-z0-9.-]*\.(?:[A-Za-z]{2,}|[Xx][Nn]--[A-Za-z0-9][A-Za-z0-9-]+)$/D', $domain)) {
 					continue;
 				}
 				// Count every valid CSV row BEFORE the match/break below, so a
