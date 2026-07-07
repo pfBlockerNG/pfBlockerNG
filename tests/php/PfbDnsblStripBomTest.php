@@ -53,4 +53,26 @@ final class PfbDnsblStripBomTest extends TestCase
 		$line = "exam\xEF\xBB\xBFple.com";
 		$this->assertSame($line, pfb_dnsbl_strip_bom($line));
 	}
+
+	public function testBomLedAnchorLineBecomesAnchorDetectable(): void
+	{
+		// Issue #946: pins the property the parse-loop hoist depends on -- once the
+		// BOM is stripped, the line starts with '||' again, so the ADR-21 anchor
+		// short-circuit (str_starts_with($line, '||')) can recognise it. Before the
+		// hoist, this check ran AFTER the anchor short-circuit, so a BOM-led anchor
+		// line took the generic parse path instead.
+		$result = pfb_dnsbl_strip_bom("\xEF\xBB\xBF||example.com^");
+		$this->assertSame('||example.com^', $result);
+		$this->assertTrue(str_starts_with($result, '||'));
+	}
+
+	public function testBomLedCommentLineBecomesCommentDetectable(): void
+	{
+		// Issue #946: same property for the '!' comment skip in the !$validate_header
+		// block -- before the hoist, a BOM-led '! comment' first line fell through as
+		// data and was error-logged instead of skipped.
+		$result = pfb_dnsbl_strip_bom("\xEF\xBB\xBF! Some comment");
+		$this->assertSame('! Some comment', $result);
+		$this->assertTrue(str_starts_with($result, '!'));
+	}
 }

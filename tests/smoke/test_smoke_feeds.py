@@ -610,6 +610,86 @@ def test_abp_perline_path_anchor_not_overblocked(
 
 
 # --------------------------------------------------------------------------- #
+# Issue #946 — the UTF-8 BOM strip is hoisted to the TOP of the per-line parse loop,
+# ahead of the '!' comment skip, the ADR-21 '||' anchor short-circuit, and CSV
+# autodetection (all three previously ran against a still-BOM'd first line). The
+# committed fixture below opens with a BOM directly ahead of a '!' comment line,
+# followed by an anchor line and a hosts line -- neither of the latter two carries a
+# BOM, so they are unaffected by the fix either way (see the test docstring).
+# --------------------------------------------------------------------------- #
+
+
+def test_dnsbl_bom_header_feed_parses_without_error(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
+    """Issue #946: a BOM-led '!' first line no longer misclassifies the rest of the feed.
+
+    ``dnsbl_bom_header.txt`` (header-less, non-ABP) opens with a UTF-8 BOM
+    (``EF BB BF``) directly ahead of a '!' comment line, followed by an ADR-21 ``||``
+    anchor line and a plain hosts (``0.0.0.0 <domain>``) line. ``pfb_dnsbl_strip_bom()``
+    is now hoisted to the TOP of the per-line loop, so line 1's BOM is stripped BEFORE
+    the '!' comment check runs. Pre-fix, that check ran against the still-BOM'd line,
+    missed the '!' prefix, and the line fell through as data -- ultimately failing
+    domain validation and getting logged via ``pfb_parsed_fail()``, whose ``$oline``
+    field is the untouched, BOM-bearing original line.
+
+    The anchor line and the hosts line carry NO BOM, so both block identically
+    whether or not this fix is present -- they prove the feed as a whole still loads,
+    but the parse-error-log assertion below is the actual RED->GREEN carrier.
+
+    Given (before the feed loads) both domains RESOLVE via the controlled stub
+      upstream, and a baseline count of this fixture's exact BOM-led original line in
+      the DNSBL parse-error log (a fresh, never-updated header).
+    When the feed loads over HTTP (Force Update),
+    Then both the anchor-line domain and the hosts-line domain return the VIP block
+      shape, AND the parse-error-log count for the BOM-led line stays AT the baseline
+      -- pre-fix it would strictly increase (the line would be logged as bad data
+      instead of skipped as a comment).
+    """
+    anchor_member = "uuid-6c91761cef48.com"  # ADR-21 '||' anchor line -> must BLOCK
+    hosts_member = "uuid-2329767ef078.com"  # hosts '0.0.0.0 domain' line -> must BLOCK
+    feed_url = mock_feeds.feed_url("dnsbl_bom_header.txt")
+    spec = h.DnsblCase(aliasname="smokefeedbom", feed_url=feed_url, header="smokefeedbom", mode=h.DnsblMode.VIP)
+    # An ASCII substring of the fixture's BOM-led '!' line (skips the BOM bytes
+    # themselves -- grep -F matches it anywhere in the CSV's $oline field, so the
+    # leading BOM need not round-trip through the SSH/grep pipeline byte-for-byte).
+    bom_line_marker = "Issue #946: BOM-led '!' comment first line"
+
+    # BEFORE: neither domain is on any feed yet -> both resolve via the stub sentinel.
+    for name in (anchor_member, hosts_member):
+        before = h.dns_probe_client(client_vm, name, "A")
+        assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
+        assert not h.is_vip(before), f"{name} unexpectedly VIP-blocked before any feed: {before}"
+
+    parse_err_before = h.count_log_marker(deployed_vm, h.DNSBL_PARSE_ERR_LOG, bom_line_marker)
+
+    with h.CaseContext(deployed_vm, spec):
+        h.unblock_egress()
+        for name in (anchor_member, hosts_member):
+            h.flush_unbound_name(deployed_vm, name)
+
+        ans_anchor = h.dns_probe_client_until(client_vm, anchor_member, h.is_vip)
+        assert not h.resolves_to(ans_anchor, STUB_DNS_A), (
+            f"{anchor_member} still resolving after the ADR-21 anchor line block: {ans_anchor}"
+        )
+        ans_hosts = h.dns_probe_client_until(client_vm, hosts_member, h.is_vip)
+        assert not h.resolves_to(ans_hosts, STUB_DNS_A), (
+            f"{hosts_member} still resolving after the hosts-line block: {ans_hosts}"
+        )
+
+        # THEN (RED->GREEN carrier): no NEW parse-error log line for the BOM-led '!'
+        # first line -- pre-fix this count would be strictly greater (the still-BOM'd
+        # line missed the '!' comment skip and was logged as an invalid domain).
+        parse_err_after = h.count_log_marker(deployed_vm, h.DNSBL_PARSE_ERR_LOG, bom_line_marker)
+        assert parse_err_after == parse_err_before, (
+            f"expected NO new DNSBL parse-error log line for the BOM-led '!' first line "
+            f"(before={parse_err_before}, after={parse_err_after}) -- a BOM-led comment "
+            f"must be skipped, never logged as invalid data:\n"
+            f"{h.read_log_file(deployed_vm, h.DNSBL_PARSE_ERR_LOG)[-2000:]}"
+        )
+
+
+# --------------------------------------------------------------------------- #
 # ADR-22 — the "Lenient feed parsing" toggle (pfb_dnsbl_lenient) over the live box.
 #
 # The non-lite DNSBL download path strips a ``<scheme>://`` prefix from each feed

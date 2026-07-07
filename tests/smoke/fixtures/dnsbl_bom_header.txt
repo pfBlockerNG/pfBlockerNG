@@ -1,0 +1,3 @@
+﻿! Issue #946: BOM-led '!' comment first line (hosts-format DNSBL feed, non-ABP).
+||uuid-6c91761cef48.com^
+0.0.0.0 uuid-2329767ef078.com
