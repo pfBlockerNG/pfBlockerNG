@@ -6469,6 +6469,38 @@ function pfb_dnsbl_strip_scheme(string $line, bool $strict = FALSE): string|fals
 }
 
 
+// Issue #938: strip a leading UTF-8 BOM (EF BB BF) -- encoding metadata, not content,
+// the same class of noise pfb_text_sanity() strips up front (line ~1054) and
+// pfb_dnsbl_is_abp_header() peels per-line (below). Left in place on a feed's first line
+// it defeats the str_starts_with($line, '#') comment check, so a BOM-led '# Title: ...'
+// header is treated as data and error-logged instead of skipped as a comment. Strips
+// exactly ONE BOM (a malformed doubled BOM keeps its second copy rather than looping).
+function pfb_dnsbl_strip_bom(string $line): string {
+	if (str_starts_with($line, "\xEF\xBB\xBF")) {
+		return substr($line, 3);
+	}
+	return $line;
+}
+
+
+// Issue #938: unwrap a bracketed IPv6 literal ('[2604:2dc0:100:4ed8::]' -> '2604:2dc0:100:4ed8::')
+// so the existing is_ipaddrv6($line) collection branch (feeding $domain_data_ip6) recognises it.
+// is_ipaddrv6() rejects the brackets outright and pfb_filter() rejects it as a domain, so today
+// every such line hits the DNSBL parse-error log on every feed update. Only a '[' ... ']' wrapper
+// around a VALID IPv6 literal is unwrapped; anything else ('[not-an-ip]', '[]', a bracketed IPv4
+// literal -- IPv4 is never bracket-legal here) is returned UNCHANGED and keeps flowing to domain
+// validation (and the parse-error log) exactly as before.
+function pfb_dnsbl_unbracket_ip6(string $line): string {
+	if (str_starts_with($line, '[') && str_ends_with($line, ']')) {
+		$inner = substr($line, 1, -1);
+		if (is_ipaddrv6($inner)) {
+			return $inner;
+		}
+	}
+	return $line;
+}
+
+
 // ADR-22: per-line scheme parse for the non-lite download path. Returns the parsed host
 // string to keep, or FALSE when strict parsing rejected the line (invalid scheme or a URL
 // path). On rejection it records the line in the DNSBL parse-error log (the established
@@ -16468,6 +16500,12 @@ function sync_package_pfblockerng($cron='') {
 													$line = str_replace('%20', '', $line);
 												}
 
+												// Issue #938: strip a UTF-8 BOM before ANY first-char
+												// classification below -- left in place it defeats the
+												// '#' comment check just below, so a BOM-led header
+												// line is treated as data and error-logged.
+												$line = pfb_dnsbl_strip_bom($line);
+
 												// Remove comment lines and special format considerations
 												if (str_starts_with($line, '#')) {
 													// Exit (hpHosts) when end of domain names found.
@@ -16718,6 +16756,11 @@ function sync_package_pfblockerng($cron='') {
 												// Remove any Port numbers at end of line (IPv6-safe:
 												// never mangle a bare IPv6 literal's trailing hextet).
 												$line = pfb_strip_trailing_port($line);
+
+												// Issue #938: unwrap a bracketed IPv6 literal (e.g. a
+												// URI-style '[2604:2dc0::]') so the is_ipaddrv6($line)
+												// collection branch below recognises it.
+												$line = pfb_dnsbl_unbracket_ip6($line);
 											}
 											$line = trim($line);
 
