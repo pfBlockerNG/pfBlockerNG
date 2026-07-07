@@ -1015,6 +1015,91 @@ function pfb_emit_entry_reject_stats(string $path): void {
 	}
 }
 
+// issue #946: detect a UTF-16/UTF-32 BOM at the start of $head, returning the
+// mb_convert_encoding() encoding name to decode it with, or NULL if none matches.
+// Order is load-bearing: UTF-32LE's BOM ("\xFF\xFE\x00\x00") is a strict superset
+// of UTF-16LE's ("\xFF\xFE") -- checking UTF-16LE first would misdetect every
+// UTF-32LE feed. Pure: string in, ?string out, no I/O.
+function pfb_utf16_bom_encoding(string $head): ?string {
+	if (strncmp($head, "\xFF\xFE\x00\x00", 4) === 0) {
+		return 'UTF-32LE';
+	}
+	if (strncmp($head, "\x00\x00\xFE\xFF", 4) === 0) {
+		return 'UTF-32BE';
+	}
+	if (strncmp($head, "\xFF\xFE", 2) === 0) {
+		return 'UTF-16LE';
+	}
+	if (strncmp($head, "\xFE\xFF", 2) === 0) {
+		return 'UTF-16BE';
+	}
+	return NULL;
+}
+
+// issue #946: decode a UTF-16/UTF-32-BOM-prefixed sample to UTF-8 for pfb_text_sanity()'s
+// benefit. No BOM match -> returned unchanged. Fail-open: a conversion failure returns the
+// ORIGINAL sample unchanged, never throws -- the sanity scan then sees the same bytes it did
+// before this helper existed. Pure: string in, string out, no I/O.
+function pfb_utf16_sample_to_utf8(string $sample): string {
+	$enc = pfb_utf16_bom_encoding($sample);
+	if ($enc === NULL) {
+		return $sample;
+	}
+
+	$bom_len = ($enc === 'UTF-32LE' || $enc === 'UTF-32BE') ? 4 : 2;
+	$converted = @mb_convert_encoding(substr($sample, $bom_len), 'UTF-8', $enc);
+
+	return ($converted === FALSE) ? $sample : $converted;
+}
+
+// issue #946: transcode a UTF-16/UTF-32-BOM-prefixed FILE to UTF-8 in place, atomically.
+// Returns FALSE (file left untouched) when: the path is unreadable, no BOM matches, or
+// mb_convert_encoding() fails (logged as a warning) -- fail-open in every case, so downstream
+// behaves exactly as it did before this function existed. Returns TRUE after a successful
+// same-filesystem rename() with the original mtime restored (the caller runs this AFTER the
+// remote_stamp touch(), so that stamp must survive).
+// ponytail: whole-file read/rewrite -- BOM-marked feeds are rare and small in practice (a text
+// blocklist, not a multi-GB dataset); switch to a streaming decode if that assumption ever
+// stops holding.
+function pfb_utf16_transcode_file(string $path): bool {
+	if (!@is_readable($path)) {
+		return FALSE;
+	}
+	$content = @file_get_contents($path);
+	if ($content === FALSE) {
+		return FALSE;
+	}
+
+	$enc = pfb_utf16_bom_encoding($content);
+	if ($enc === NULL) {
+		return FALSE;
+	}
+
+	$bom_len = ($enc === 'UTF-32LE' || $enc === 'UTF-32BE') ? 4 : 2;
+	$converted = @mb_convert_encoding(substr($content, $bom_len), 'UTF-8', $enc);
+	if ($converted === FALSE) {
+		pfb_logger("\npfb_utf16_transcode_file: mb_convert_encoding failed for [{$path}] ({$enc}) -- leaving file untouched", 2);
+		return FALSE;
+	}
+
+	$mtime = @filemtime($path);
+	$tmp = @tempnam(dirname($path), 'pfb_u16_');
+	if ($tmp === FALSE || @file_put_contents($tmp, $converted) === FALSE) {
+		if ($tmp !== FALSE) {
+			@unlink($tmp);
+		}
+		return FALSE;
+	}
+	if (!@rename($tmp, $path)) {
+		@unlink($tmp);
+		return FALSE;
+	}
+	if ($mtime !== FALSE) {
+		@touch($path, $mtime);
+	}
+	return TRUE;
+}
+
 // ADR-49 Phase 1: pure content-sanity scan over the first chunk of a downloaded
 // text feed. The caller reads a capped head sample (64 KiB at the pfb_download()
 // gate) and passes it in as $sample -- this function does no I/O and has no
@@ -1050,7 +1135,13 @@ function pfb_emit_entry_reject_stats(string $path): void {
 // BYTE-LEVEL matching only -- no `/u` modifier anywhere. Every pattern above is
 // pure ASCII, so a chunk-truncated multibyte tail can never flip a verdict.
 // Pure: string in, ?string out, no I/O, no globals.
+//
+// issue #946: a UTF-16/UTF-32-BOM-prefixed sample is decoded to UTF-8 FIRST (before
+// the UTF-8 BOM strip below) -- otherwise every line of a legitimate UTF-16/32 feed
+// carries interleaved NUL bytes and trips 'nul_bytes' on text that is actually fine.
 function pfb_text_sanity(string $sample): ?string {
+	$sample = pfb_utf16_sample_to_utf8($sample);
+
 	// Strip a UTF-8 BOM up front -- encoding metadata, not content. Left in place
 	// it defeats the '<!doctype html'/'<html' opening-tag check (ltrim strips no
 	// BOM) AND lets a BOM-prefixed comment line count as data in the content floor.
@@ -10723,6 +10814,13 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			// (any path that finalises a plain .orig here).  The geoip/asn early-returns
 			// above do not reach this block, so they correctly never get a sidecar.
 			pfb_hash_write("{$orig_download}", pfb_source_hash_target($file_download, $orig_download));
+
+			// issue #946: transcode a UTF-16/UTF-32-BOM-marked feed to UTF-8 AFTER the
+			// hash sidecar above -- the sidecar hashes the RAW wire bytes (ADR-42), so
+			// transcoding first would make the persisted digest diverge from the
+			// change-probe's wire hash and re-ingest the feed every cron. No-op (FALSE,
+			// file untouched) for every feed that isn't UTF-16/32-BOM-marked.
+			pfb_utf16_transcode_file("{$orig_download}");
 
 			// Process Emerging Threats IQRisk if required
 			if (strpos($list_url, 'iprepdata.txt') !== FALSE) {
