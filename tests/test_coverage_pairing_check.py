@@ -110,6 +110,25 @@ def test_pr_body_file_flag_requires_a_value() -> None:
     assert ccp.main(["--warn-only", "--pr-body-file"]) == 2, "a dangling --pr-body-file must error, not crash"
 
 
+def test_pr_body_file_hostile_cli_shapes(tmp_path: Any) -> None:
+    # Hostile CLI rows from PR #936's fix-delta review (all unreachable via the
+    # CI wiring, pinned so a refactor cannot regress them into reachability):
+    justified = tmp_path / "b.txt"
+    justified.write_text("no-test-needed: why", encoding="utf-8")
+    # A missing body file is a clean rc-2 error, never a traceback.
+    assert ccp.main(["--warn-only", "--pr-body-file", str(tmp_path / "absent.txt"), _SRC_ONLY]) == 2
+    # A duplicated flag is stripped ENTIRELY (last value wins) — its value must
+    # be consumed as a (here: missing) file, never leak into the path list where
+    # a `tests/...`-shaped string would silently satisfy rule 1.
+    assert (
+        ccp.main(["--warn-only", "--pr-body-file", str(justified), "--pr-body-file", "tests/leaked.py", _SRC_ONLY]) == 2
+    ), "a repeated --pr-body-file must not leak its value into the changed-path list"
+    # A UTF-8 BOM at byte 0 must not hide a justification line (utf-8-sig read).
+    bom = tmp_path / "bom.txt"
+    bom.write_text("\ufeffno-test-needed: bom-leading body", encoding="utf-8")
+    assert ccp.main(["--warn-only", "--pr-body-file", str(bom), _SRC_ONLY]) == 0
+
+
 def test_docs_only_diff_is_neutral() -> None:
     # A .md under src/ is still neutral (docs-under-src does not count as src code).
     violations = ccp.evaluate(
