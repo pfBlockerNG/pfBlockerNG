@@ -56,8 +56,9 @@ _RETROFITTED_ADRS = frozenset({25, 32, 33, 34, 54, 55})
 # .ADRs/ADR_{NN}_{Name}/{MM}_{Name}.txt — capture the ADR number for the cutoff.
 _PROMPT_RE = re.compile(r"(?:^|/)\.ADRs/ADR_(\d+)_[^/]+/\d+_[^/]+\.txt$")
 
-# Mode tokens (lowercase; matched case-insensitively). One must appear.
-_MODE_TOKENS = ("red-run", "red->green", "red→green", "behaviour-preserving", "oracle")
+# Mode tokens (matched case-insensitively, word-bounded so e.g. "coracle" never
+# satisfies "oracle"). One must appear.
+_MODE_RE = re.compile(r"(?<!\w)(red-run|red->green|red→green|behaviour-preserving|oracle)(?!\w)")
 
 
 def _prompt_adr_number(path: Path) -> int | None:
@@ -68,16 +69,41 @@ def _prompt_adr_number(path: Path) -> int | None:
     return int(m.group(1))
 
 
+# Resolve the repo root from this file's location so the tracked scan is
+# cwd-independent — `git ls-files .ADRs` from a subdirectory silently matches
+# nothing and would defeat the CI gate (PR #927 review finding).
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
 def tracked_phase_prompts() -> list[Path]:
     """Every git-tracked phase prompt under ``.ADRs/`` (all ADR numbers)."""
     out = subprocess.run(
-        ["git", "ls-files", "-z", ".ADRs"],
+        ["git", "-C", str(_REPO_ROOT), "ls-files", "-z", ".ADRs"],
         capture_output=True,
         text=True,
         check=True,
     )
-    paths = [Path(p) for p in out.stdout.split("\0") if p]
+    paths = [_REPO_ROOT / p for p in out.stdout.split("\0") if p]
     return [p for p in paths if _prompt_adr_number(p) is not None]
+
+
+def _handoff_names_results(text: str) -> bool:
+    """True iff a HANDOFF block names a ``RESULTS/`` file within its own span
+    (the ``HANDOFF`` line and its continuation, up to the next all-caps section
+    header). A ``RESULTS/`` mention elsewhere — e.g. REQUIRED READING citing the
+    PRIOR phase's handoff — must not satisfy the check."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if not line.startswith("HANDOFF"):
+            continue
+        if "RESULTS/" in line:
+            return True
+        for nxt in lines[i + 1 :]:
+            if "RESULTS/" in nxt:
+                return True
+            if re.match(r"^[A-Z][A-Z0-9 -]{3,}", nxt):
+                break
+    return False
 
 
 def _check_prompt(text: str) -> list[tuple[str, str]]:
@@ -86,9 +112,9 @@ def _check_prompt(text: str) -> list[tuple[str, str]]:
     missing: list[tuple[str, str]] = []
     if not re.search(r"^VERIFICATION", text, flags=re.MULTILINE):
         missing.append(("verification-section", "no VERIFICATION section"))
-    if not (re.search(r"^HANDOFF", text, flags=re.MULTILINE) and "RESULTS/" in text):
+    if not _handoff_names_results(text):
         missing.append(("handoff-results", "no HANDOFF block naming its RESULTS/ file"))
-    if not any(token in lower for token in _MODE_TOKENS):
+    if not _MODE_RE.search(lower):
         missing.append(("mode-declared", "no test mode declared (red-run/red->green vs behaviour-preserving/oracle)"))
     if "override this prompt" not in lower:
         missing.append(("reality-override", 'no "prior RESULTS + live tree override this prompt" line'))
@@ -106,7 +132,8 @@ def find_violations(paths: list[Path]) -> list[tuple[Path, str, str]]:
             continue
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        except OSError as exc:
+            violations.append((path, "unreadable", f"cannot read prompt: {exc}"))
             continue
         violations.extend((path, check, msg) for check, msg in _check_prompt(text))
     return violations

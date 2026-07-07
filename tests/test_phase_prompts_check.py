@@ -1,4 +1,4 @@
-"""Tests for scripts/check_phase_prompts.py.
+"""Tests for scripts/check_phase_prompts.py (sibling-named: test_phase_prompts_check).
 
 Intent: a phase prompt authored after the delegation contract (ADR >= 60) must
 carry the contract's mandatory blocks — a VERIFICATION section, a HANDOFF block
@@ -156,3 +156,45 @@ def test_retrofitted_unimplemented_adrs_are_gated(tmp_path: Path) -> None:
         "reality-override",
         "verification-section",
     ]
+
+
+def test_handoff_results_must_be_in_the_handoff_span(tmp_path: Path) -> None:
+    # Review finding (PR #927): a phase-2 prompt legitimately cites the PRIOR
+    # phase's RESULTS file in REQUIRED READING; that mention must not satisfy
+    # the check when the HANDOFF block itself names no RESULTS/ file.
+    text = _COMPLIANT.replace(
+        "- src/example.inc — the helper (~line 10).",
+        "- src/example.inc — the helper (~line 10).\n"
+        "- .ADRs/ADR_60_Example/RESULTS/01_Results.txt — the prior handoff.",
+    ).replace(
+        'HANDOFF — write .ADRs/ADR_60_Example/RESULTS/01_Results.txt with the fixed\nfields (CLAUDE.md "THE HANDOFF").',
+        "HANDOFF — summarize what you did in the chat when finished.",
+    )
+    assert _violations(tmp_path, PROMPT_60, text) == ["handoff-results"]
+
+
+def test_mode_tokens_are_word_bounded(tmp_path: Path) -> None:
+    # Review finding (PR #927): "oracle" inside an unrelated word must not
+    # count as a mode declaration.
+    text = _COMPLIANT.replace("(behaviour-preserving)", "").replace("BEHAVIOUR-PRESERVING refactor.", "A refactor.")
+    text = text.replace("- oracle test pins the resolved URL byte-identically\n", "")
+    text += "\nWe sail in a coracle down the river.\n"
+    assert _violations(tmp_path, PROMPT_60, text) == ["mode-declared"]
+
+
+def test_tracked_scan_is_cwd_independent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Review finding (PR #927): `git ls-files .ADRs` resolved against the
+    # process cwd silently scans nothing when pytest runs from elsewhere,
+    # defeating test_repo_tree_is_clean.
+    from_root = {p.name for p in cpp.tracked_phase_prompts()}
+    assert from_root, "repo has tracked phase prompts; empty means the scan is broken"
+    monkeypatch.chdir(tmp_path)
+    assert {p.name for p in cpp.tracked_phase_prompts()} == from_root
+
+
+def test_unreadable_prompt_is_a_loud_violation(tmp_path: Path) -> None:
+    # Review finding (PR #927): an unreadable gated prompt must surface, not
+    # silently count as compliant.
+    missing = tmp_path / ".ADRs/ADR_60_Example/01_Ghost.txt"
+    checks = [c for (_, c, _) in cpp.find_violations([missing])]
+    assert checks == ["unreadable"]
