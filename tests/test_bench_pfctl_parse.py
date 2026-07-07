@@ -28,11 +28,17 @@ from typing import Any
 
 from tests.smoke.test_bench_pfctl import (
     _TCP_PROBE_SCRIPT,
+    DualPathSample,
+    DualPathStats,
     PooledStats,
     TcpRstWindow,
+    _compute_disrupt_buckets,
     _compute_pooled_tcp,
     _compute_pooled_tcp_full,
+    _dualpath_stats,
+    _parse_dualpath_probe_output,
     _parse_tcp_probe_output,
+    _slice_to_window,
 )
 
 
@@ -323,3 +329,315 @@ def test_probe_once_refused_yields_rtt_sample() -> None:
         f"expected a non-negative RTT for a refused (RST) connection but got {rtt_ms} — "
         "a refusal must never be tallied as a >=5s loss"
     )
+
+
+# --------------------------------------------------------------------------- #
+# issue #584 Step 1 — dual-path (allowed vs blocked) full-lifecycle bench:
+# _parse_dualpath_probe_output / _dualpath_stats / _slice_to_window
+# --------------------------------------------------------------------------- #
+
+
+def _dp_line(label: str, start: float, end: float, outcome: str) -> str:
+    """Build one line in the exact shape the dual-path probe emits on the guest."""
+    return f"S {label} {start:.4f} {end:.4f} {outcome}"
+
+
+# ---- _parse_dualpath_probe_output -------------------------------------------
+
+
+def test_parse_dualpath_well_formed_multi_label_produces_correct_samples() -> None:
+    """Well-formed multi-label output parses into the right per-label samples.
+
+    Given output with samples for two different labels (flip, ctrl)
+    When the output is parsed
+    Then each sample keeps its own label/start/end/outcome, in order, and
+      parse_errors stays 0.
+    """
+    text = "\n".join(
+        [
+            _dp_line("flip", 100.0, 100.010, "ok"),
+            _dp_line("ctrl", 100.1, 100.104, "ok"),
+            _dp_line("flip", 100.2, 100.201, "refused"),
+        ]
+    )
+
+    parsed = _parse_dualpath_probe_output(text)
+
+    assert parsed.parse_errors == 0, f"expected 0 parse errors on well-formed input but got {parsed.parse_errors}"
+    assert len(parsed.samples) == 3, f"expected 3 samples but got {len(parsed.samples)}: {parsed.samples}"
+    assert [s.label for s in parsed.samples] == ["flip", "ctrl", "flip"], (
+        f"expected labels in order [flip, ctrl, flip] but got {[s.label for s in parsed.samples]}"
+    )
+    assert [s.outcome for s in parsed.samples] == ["ok", "ok", "refused"], (
+        f"expected outcomes [ok, ok, refused] but got {[s.outcome for s in parsed.samples]}"
+    )
+    assert parsed.samples[0].start_epoch == 100.0 and parsed.samples[0].end_epoch == 100.010, (
+        f"expected the first sample's epoch pair (100.0, 100.010) but got "
+        f"({parsed.samples[0].start_epoch}, {parsed.samples[0].end_epoch})"
+    )
+
+
+def test_parse_dualpath_empty_text_yields_empty_samples_and_zero_errors() -> None:
+    """Empty input is valid (not an error) — empty samples, zero parse_errors.
+
+    Given an empty string (no probe output at all)
+    When it is parsed
+    Then samples is empty and parse_errors is 0 — never an exception.
+    """
+    parsed = _parse_dualpath_probe_output("")
+
+    assert parsed.samples == [], f"expected no samples for empty input but got {parsed.samples}"
+    assert parsed.parse_errors == 0, f"expected 0 parse errors for empty input but got {parsed.parse_errors}"
+
+
+def test_parse_dualpath_malformed_line_counts_as_parse_error_not_dropped_silently() -> None:
+    """A malformed line (wrong field count) increments parse_errors, never silently vanishes.
+
+    Given one well-formed line and one malformed line (missing the outcome field)
+    When the output is parsed
+    Then the well-formed line survives as a sample, the malformed line is
+      counted in parse_errors (not just dropped with no trace), and the EOF
+      trailer line is recognized and ignored (no penalty).
+    """
+    text = "\n".join(
+        [
+            _dp_line("flip", 1.0, 1.005, "ok"),
+            "S ctrl 2.0 2.001",  # missing the outcome field — 4 tokens, not 5
+            "EOF n=2",
+        ]
+    )
+
+    parsed = _parse_dualpath_probe_output(text)
+
+    assert parsed.parse_errors == 1, f"expected 1 parse error (the malformed line) but got {parsed.parse_errors}"
+    assert len(parsed.samples) == 1, f"expected 1 surviving sample but got {len(parsed.samples)}: {parsed.samples}"
+    assert parsed.samples[0].label == "flip", (
+        f"expected the surviving sample's label 'flip' but got {parsed.samples[0].label}"
+    )
+
+
+def test_parse_dualpath_truncated_final_line_counts_as_parse_error() -> None:
+    """A truncated final line (SSH output cut mid-write) is a parse error, not silently dropped.
+
+    Given a well-formed first line and a truncated final line with only 3 of
+      the 5 expected tokens (as if the SSH transport cut the connection mid-print)
+    When the output is parsed
+    Then the truncation is counted in parse_errors and never becomes a fabricated sample.
+    """
+    text = "\n".join(
+        [
+            _dp_line("ctrl", 5.0, 5.002, "ok"),
+            "S flip 6.0",  # truncated: only 3 tokens
+        ]
+    )
+
+    parsed = _parse_dualpath_probe_output(text)
+
+    assert parsed.parse_errors == 1, f"expected 1 parse error (the truncated line) but got {parsed.parse_errors}"
+    assert len(parsed.samples) == 1, f"expected 1 surviving sample but got {len(parsed.samples)}: {parsed.samples}"
+
+
+def test_parse_dualpath_end_before_start_is_flagged_as_parse_error() -> None:
+    """A sample whose end_epoch < start_epoch is impossible and must be flagged.
+
+    Given a line where the end timestamp precedes the start timestamp (clock
+      skew / corrupted line)
+    When the output is parsed
+    Then it is counted in parse_errors and excluded from samples — never
+      silently accepted as a negative-duration sample.
+    """
+    text = "\n".join(
+        [
+            _dp_line("flip", 10.0, 9.5, "ok"),  # end < start
+            _dp_line("ctrl", 20.0, 20.010, "ok"),
+        ]
+    )
+
+    parsed = _parse_dualpath_probe_output(text)
+
+    assert parsed.parse_errors == 1, f"expected 1 parse error (end<start) but got {parsed.parse_errors}"
+    assert len(parsed.samples) == 1, f"expected 1 surviving sample but got {len(parsed.samples)}: {parsed.samples}"
+    assert parsed.samples[0].label == "ctrl", (
+        f"expected the surviving sample's label 'ctrl' but got {parsed.samples[0].label}"
+    )
+
+
+def test_parse_dualpath_unknown_outcome_token_is_parse_error() -> None:
+    """An outcome token outside {ok,bad_echo,refused,timeout,error} is a parse error.
+
+    Given a line whose outcome field is a token the probe script never emits
+      (a corrupted/foreign line)
+    When the output is parsed
+    Then it is counted in parse_errors and excluded from samples.
+    """
+    text = _dp_line("flip", 1.0, 1.001, "mystery")
+
+    parsed = _parse_dualpath_probe_output(text)
+
+    assert parsed.parse_errors == 1, f"expected 1 parse error (unknown outcome token) but got {parsed.parse_errors}"
+    assert parsed.samples == [], f"expected no samples for an unknown-outcome line but got {parsed.samples}"
+
+
+# ---- _dualpath_stats ---------------------------------------------------------
+
+
+def test_dualpath_stats_mixed_outcomes_counted_correctly() -> None:
+    """Every outcome bucket is counted independently — branch coverage for all five.
+
+    Given one sample of each outcome (ok, bad_echo, refused, timeout, error)
+    When stats are computed
+    Then n==5 and each per-outcome count is exactly 1.
+    """
+    samples = [
+        DualPathSample(label="flip", start_epoch=0.0, end_epoch=0.010, outcome="ok"),
+        DualPathSample(label="flip", start_epoch=1.0, end_epoch=1.010, outcome="bad_echo"),
+        DualPathSample(label="flip", start_epoch=2.0, end_epoch=2.001, outcome="refused"),
+        DualPathSample(label="flip", start_epoch=3.0, end_epoch=18.0, outcome="timeout"),
+        DualPathSample(label="flip", start_epoch=4.0, end_epoch=4.002, outcome="error"),
+    ]
+
+    ps = _dualpath_stats(samples)
+
+    assert ps.n == 5, f"expected n=5 but got {ps.n}"
+    assert ps.n_ok == 1, f"expected n_ok=1 but got {ps.n_ok}"
+    assert ps.n_bad_echo == 1, f"expected n_bad_echo=1 but got {ps.n_bad_echo}"
+    assert ps.n_refused == 1, f"expected n_refused=1 but got {ps.n_refused}"
+    assert ps.n_timeout == 1, f"expected n_timeout=1 but got {ps.n_timeout}"
+    assert ps.n_error == 1, f"expected n_error=1 but got {ps.n_error}"
+
+
+def test_dualpath_stats_timeouts_are_censored_out_of_latency_percentiles() -> None:
+    """A timeout's huge wall-clock span must NEVER pollute the ok-only latency percentiles.
+
+    Given 2 ok samples (5ms, 15ms) and 3 timeout samples whose end-start span
+      is 15000ms (a realistic ``timeout_s`` stall)
+    When stats are computed
+    Then max_ms comes from the ok samples only (15ms) — never 15000ms — and
+      n_timeout records the 3 timeouts separately (counted, not averaged in).
+    """
+    samples = [
+        DualPathSample(label="ctrl", start_epoch=0.0, end_epoch=0.005, outcome="ok"),
+        DualPathSample(label="ctrl", start_epoch=1.0, end_epoch=1.015, outcome="ok"),
+        DualPathSample(label="ctrl", start_epoch=2.0, end_epoch=17.0, outcome="timeout"),
+        DualPathSample(label="ctrl", start_epoch=3.0, end_epoch=18.0, outcome="timeout"),
+        DualPathSample(label="ctrl", start_epoch=4.0, end_epoch=19.0, outcome="timeout"),
+    ]
+
+    ps = _dualpath_stats(samples)
+
+    assert ps.n_ok == 2, f"expected n_ok=2 but got {ps.n_ok}"
+    assert ps.n_timeout == 3, f"expected n_timeout=3 but got {ps.n_timeout}"
+    # round() absorbs float (end-start)*1000 representation error (e.g. 1.015-1.0 -> 14.999999999999902).
+    assert round(ps.max_ms, 3) == 15.0, (
+        f"expected max_ms≈15.0 (the ok-only max) but got {ps.max_ms} — a timeout leaked into latency"
+    )
+    assert ps.p99_ms <= 15.0 + 1e-6, (
+        f"expected p99_ms<=15.0 (ok-only) but got {ps.p99_ms} — a timeout leaked into latency"
+    )
+
+
+def test_dualpath_stats_n_ok_zero_returns_explicit_zero_stats_no_exception() -> None:
+    """An empty ok-set (everything refused/timeout) returns a clean zero, never crashes.
+
+    Given samples where none has outcome=='ok' (a fully blocked cell)
+    When stats are computed
+    Then n_ok==0 and every latency figure is an explicit 0.0 — no
+      ZeroDivisionError / IndexError, and the outcome counts are still real.
+    """
+    samples = [
+        DualPathSample(label="flip", start_epoch=0.0, end_epoch=0.001, outcome="refused"),
+        DualPathSample(label="flip", start_epoch=1.0, end_epoch=1.001, outcome="refused"),
+        DualPathSample(label="flip", start_epoch=2.0, end_epoch=17.0, outcome="timeout"),
+    ]
+
+    ps = _dualpath_stats(samples)
+
+    assert ps.n_ok == 0, f"expected n_ok=0 but got {ps.n_ok}"
+    assert ps.n == 3, f"expected n=3 but got {ps.n}"
+    assert ps.n_refused == 2, f"expected n_refused=2 but got {ps.n_refused}"
+    assert ps.n_timeout == 1, f"expected n_timeout=1 but got {ps.n_timeout}"
+    assert ps.p50_ms == 0.0, f"expected p50_ms=0.0 (explicit zero, empty ok-set) but got {ps.p50_ms}"
+    assert ps.p95_ms == 0.0, f"expected p95_ms=0.0 but got {ps.p95_ms}"
+    assert ps.p99_ms == 0.0, f"expected p99_ms=0.0 but got {ps.p99_ms}"
+    assert ps.max_ms == 0.0, f"expected max_ms=0.0 but got {ps.max_ms}"
+
+
+def test_dualpath_stats_empty_input_returns_explicit_zero_stats() -> None:
+    """Branch pair to the above: an entirely empty sample list is also a clean zero, not a crash."""
+    ps = _dualpath_stats([])
+
+    expected = DualPathStats(buckets=_compute_disrupt_buckets([]))
+    assert ps == expected, f"expected an all-zero DualPathStats() (zeroed buckets) for no samples but got {ps}"
+
+
+def test_dualpath_stats_bucket_counts_exact_on_hand_built_distribution() -> None:
+    """Disruption bucket counts (>50/100/250/500ms) are exact on a known distribution.
+
+    Given 5 ok samples with durations [10, 60, 120, 300, 600] ms
+    When stats are computed
+    Then each bucket's count matches hand-computed values exactly:
+      >50ms: 4 (60,120,300,600)   >100ms: 3 (120,300,600)
+      >250ms: 2 (300,600)         >500ms: 1 (600)
+    """
+    durations_ms = [10.0, 60.0, 120.0, 300.0, 600.0]
+    samples = [
+        DualPathSample(label="flip", start_epoch=float(i), end_epoch=float(i) + d / 1000.0, outcome="ok")
+        for i, d in enumerate(durations_ms)
+    ]
+
+    ps = _dualpath_stats(samples)
+
+    expected = {50: 4, 100: 3, 250: 2, 500: 1}
+    for threshold, expected_count in expected.items():
+        actual_count, _pct = ps.buckets[threshold]
+        assert actual_count == expected_count, (
+            f"bucket >{threshold}ms: expected count={expected_count} but got {actual_count} (full buckets={ps.buckets})"
+        )
+
+
+# ---- _slice_to_window ---------------------------------------------------------
+
+
+def test_slice_to_window_boundary_inclusive_both_ends() -> None:
+    """A sample whose start_epoch lands EXACTLY on t0 or t1 is included (inclusive bounds).
+
+    Given samples at start_epoch 5.0 (before), 10.0 (== t0), 20.0 (== t1), and
+      25.0 (after), windowed to [10.0, 20.0]
+    When sliced
+    Then exactly the 10.0 and 20.0 samples survive — the boundary values are
+      IN, not excluded by an off-by-one.
+    """
+    samples = [
+        DualPathSample(label="x", start_epoch=5.0, end_epoch=5.001, outcome="ok"),
+        DualPathSample(label="x", start_epoch=10.0, end_epoch=10.001, outcome="ok"),
+        DualPathSample(label="x", start_epoch=20.0, end_epoch=20.001, outcome="ok"),
+        DualPathSample(label="x", start_epoch=25.0, end_epoch=25.001, outcome="ok"),
+    ]
+
+    window = _slice_to_window(samples, 10.0, 20.0)
+
+    assert [s.start_epoch for s in window] == [10.0, 20.0], (
+        f"expected start_epoch values [10.0, 20.0] (inclusive boundaries) but got {[s.start_epoch for s in window]}"
+    )
+
+
+def test_slice_to_window_excludes_samples_outside_the_window() -> None:
+    """Branch pair to the boundary test: samples clearly outside [t0, t1] are excluded.
+
+    Given samples well before and well after the window
+    When sliced
+    Then neither survives.
+    """
+    samples = [
+        DualPathSample(label="x", start_epoch=1.0, end_epoch=1.001, outcome="ok"),
+        DualPathSample(label="x", start_epoch=99.0, end_epoch=99.001, outcome="ok"),
+    ]
+
+    window = _slice_to_window(samples, 10.0, 20.0)
+
+    assert window == [], f"expected an empty window (both samples outside [10.0, 20.0]) but got {window}"
+
+
+def test_slice_to_window_empty_input_returns_empty_list() -> None:
+    """An empty sample list slices to an empty window — never an exception."""
+    assert _slice_to_window([], 0.0, 100.0) == [], "expected [] for an empty input sample list"

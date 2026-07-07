@@ -68,6 +68,7 @@ Design notes for Phase 4 (recorded here per ADR §7):
 from __future__ import annotations
 
 import math
+import os
 import re
 import shlex
 import statistics
@@ -2523,3 +2524,642 @@ def test_pfctl_disruption_uncensored(
     )
 
     assert any(replace_ps[sz].n > 0 for sz in _UNCENSORED_REPLACE_SIZES), "expected non-empty pooled replace samples"
+
+
+# --------------------------------------------------------------------------- #
+# Dual-path (allowed vs blocked) full-lifecycle bench (issue #584 Step 1)
+# --------------------------------------------------------------------------- #
+#
+# Fixes ADR-40 Shortcomings #1 (the reject-loop bench only ever probed traffic
+# that was blocked anyway -- no legitimate-ALLOWED-traffic signal) and #4
+# (SYN->RST only, never a full connect+request/response lifecycle). Uses the
+# two guestfwd bench servers baked in by the previous issue #584 step
+# (bench_guestfwd_server.sh via boot_vm.sh's WAN net0): 192.168.89.100 "flip"
+# (moved in/out of the pf bench table) and 192.168.89.101 "ctrl"
+# (always-allowed control), plus bench_pfctl_tables.sh's new setup_rules
+# 'server' type (outbound NAT + in-table reject, no WAN blanket reject) and
+# flip_in/flip_out verbs.
+
+# Full-lifecycle dual-path probe script uploaded to civm and run there.
+# stdlib-only asyncio (civm is Debian; this runs on ITS python3 -- the
+# no-Python-on-appliance rule is about the pfSense box, not civm).
+#
+# Connects to one or more LABELED targets ("label=ip" pairs), sends ONE line
+# "PING <seq>\n" (matching bench_guestfwd_server.sh's one-shot protocol),
+# reads the response line, classifies the outcome. A REAL connect + request +
+# response cycle -- not just SYN->RST -- so it measures disruption to
+# legitimate ALLOWED traffic, not only to traffic that was blocked anyway.
+#
+# Prints one line per attempted connection (every outcome, including
+# timeouts/errors -- never silently dropped):
+#   S <label> <start_epoch> <end_epoch> <outcome>
+# outcome in {ok, bad_echo, refused, timeout, error}. Trailing line:
+#   EOF n=<count>
+_DUALPATH_PROBE_SCRIPT = r"""
+#!/usr/bin/env python3
+# Dual-path (allowed vs blocked) full-lifecycle TCP probe, issue #584 Step 1.
+# See tests/smoke/test_bench_pfctl.py's _DUALPATH_PROBE_SCRIPT docstring for
+# the wire protocol this drives (bench_guestfwd_server.sh) and output format.
+from __future__ import annotations
+import asyncio
+import sys
+import time
+
+PORT = 8080
+
+
+def _parse_args() -> tuple[list[tuple[str, str]], float, float, int]:
+    targets_arg = sys.argv[1]  # "label1=ip1,label2=ip2,..."
+    duration_s = float(sys.argv[2])
+    timeout_s = float(sys.argv[3])
+    concurrency = int(sys.argv[4])
+    targets: list[tuple[str, str]] = []
+    for pair in targets_arg.split(","):
+        label, _, ip = pair.partition("=")
+        targets.append((label, ip))
+    return targets, duration_s, timeout_s, concurrency
+
+
+async def probe_once(label: str, ip: str, seq: int, timeout_s: float) -> tuple[str, float, float, str]:
+    line = f"PING {seq}"
+    start_epoch = time.time()
+    try:
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(ip, PORT), timeout=timeout_s)
+    # Timeout MUST be caught before OSError: on Python 3.11+ asyncio.TimeoutError
+    # IS the builtin TimeoutError, which subclasses OSError -- same gotcha the
+    # SYN->RST probe documents (#738 F5). With OSError first, a genuine connect
+    # stall would be misrecorded as "refused".
+    except TimeoutError:
+        return label, start_epoch, time.time(), "timeout"
+    except (ConnectionRefusedError, OSError):
+        return label, start_epoch, time.time(), "refused"
+    try:
+        writer.write((line + "\n").encode())
+        await writer.drain()
+        raw = await asyncio.wait_for(reader.readline(), timeout=timeout_s)
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except OSError:
+            pass
+        end_epoch = time.time()
+        resp = raw.decode(errors="replace").rstrip("\n")
+        if resp == f"PFB_BENCH_OK {line}":
+            return label, start_epoch, end_epoch, "ok"
+        return label, start_epoch, end_epoch, "bad_echo"
+    except TimeoutError:
+        return label, start_epoch, time.time(), "timeout"
+    except OSError:
+        return label, start_epoch, time.time(), "error"
+
+
+async def run(targets: list[tuple[str, str]], duration_s: float, timeout_s: float, concurrency: int) -> None:
+    # Modest concurrency + a small spawn interval: a full connect+request/
+    # response cycle is heavier than the SYN-only probe, so this stays well
+    # below that probe's 400-way concurrency.
+    sem = asyncio.Semaphore(concurrency)
+    seq = 0
+    count = 0
+    deadline = time.monotonic() + duration_s
+    tasks: list[asyncio.Task[None]] = []
+
+    async def one(label: str, ip: str, s: int) -> None:
+        nonlocal count
+        async with sem:
+            lbl, t0, t1, outcome = await probe_once(label, ip, s, timeout_s)
+            count += 1
+            print(f"S {lbl} {t0:.4f} {t1:.4f} {outcome}", flush=True)
+
+    while time.monotonic() < deadline:
+        for label, ip in targets:
+            seq += 1
+            tasks.append(asyncio.create_task(one(label, ip, seq)))
+        await asyncio.sleep(0.005)
+        if len(tasks) > concurrency * 4:
+            done = [t for t in tasks if t.done()]
+            for t in done:
+                tasks.remove(t)
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    print(f"EOF n={count}", flush=True)
+
+
+def main() -> None:
+    targets, duration_s, timeout_s, concurrency = _parse_args()
+    asyncio.run(run(targets, duration_s, timeout_s, concurrency))
+
+
+if __name__ == "__main__":
+    main()
+"""
+
+# The two guestfwd bench-server IPs baked in by the previous issue #584 step
+# (boot_vm.sh, pfsense WAN net0, port 8080) -- see bench_guestfwd_server.sh.
+_DUALPATH_FLIP_IP = "192.168.89.100"  # moved in/out of the pf bench table
+_DUALPATH_CTRL_IP = "192.168.89.101"  # always-allowed control
+_DUALPATH_TARGETS: dict[str, str] = {"flip": _DUALPATH_FLIP_IP, "ctrl": _DUALPATH_CTRL_IP}
+
+# Quick-run defaults (this run validates WIRING; a later issue #584 step scales
+# these for production-calibrated numbers). Every knob is env-overridable.
+_DUALPATH_DEFAULT_SIZE = 100_000
+_DUALPATH_DEFAULT_REPS = 3
+_DUALPATH_DEFAULT_TIMEOUT_S = 15.0
+_DUALPATH_DEFAULT_DURATION_S = 8.0
+_DUALPATH_DEFAULT_CONCURRENCY = 64
+
+# Delta churn/batch for the dual-path bench's delta cells: 1% churn, batch=512
+# (the shipped ADR-40 default -- see _UNCENSORED_DELTA_CELLS above).
+_DUALPATH_DELTA_BATCH = "512"
+
+
+def _dualpath_delta_churn(size: int) -> int:
+    return max(1, size // 100)
+
+
+_DUALPATH_OUTCOMES = frozenset({"ok", "bad_echo", "refused", "timeout", "error"})
+
+
+@dataclass
+class DualPathSample:
+    """One full-lifecycle connect+request/response probe outcome."""
+
+    label: str
+    start_epoch: float
+    end_epoch: float
+    outcome: str  # ok | bad_echo | refused | timeout | error
+
+    @property
+    def duration_ms(self) -> float:
+        return max(0.0, (self.end_epoch - self.start_epoch) * 1000.0)
+
+
+@dataclass
+class DualPathParse:
+    """Result of parsing the dual-path probe's stdout: samples + parse-error count."""
+
+    samples: list[DualPathSample] = field(default_factory=list)
+    parse_errors: int = 0
+
+
+def _parse_dualpath_probe_output(text: str) -> DualPathParse:
+    """Parse ``S <label> <start_epoch> <end_epoch> <outcome>`` lines.
+
+    A malformed line (wrong field count, non-numeric epoch, unknown outcome
+    token) or a line whose ``end_epoch < start_epoch`` is counted in
+    ``parse_errors`` -- NEVER silently dropped -- and excluded from
+    ``samples``. Blank lines and the trailing ``EOF n=<count>`` line are
+    recognized and skipped without penalty (they are not sample lines).
+    """
+    samples: list[DualPathSample] = []
+    parse_errors = 0
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("EOF"):
+            continue
+        parts = line.split()
+        if len(parts) != 5 or parts[0] != "S":
+            parse_errors += 1
+            continue
+        _, label, start_s, end_s, outcome = parts
+        try:
+            start_epoch = float(start_s)
+            end_epoch = float(end_s)
+        except ValueError:
+            parse_errors += 1
+            continue
+        if outcome not in _DUALPATH_OUTCOMES:
+            parse_errors += 1
+            continue
+        if end_epoch < start_epoch:
+            parse_errors += 1
+            continue
+        samples.append(DualPathSample(label=label, start_epoch=start_epoch, end_epoch=end_epoch, outcome=outcome))
+    return DualPathParse(samples=samples, parse_errors=parse_errors)
+
+
+def _slice_to_window(samples: list[DualPathSample], t0: float, t1: float) -> list[DualPathSample]:
+    """Op-aligned slice: samples whose connection START fell in ``[t0, t1]``.
+
+    ADAPTS ``_LiveTcpProbe.slice_window``'s start-time filtering rule (a
+    connection that begins during the op but completes after it is still
+    attributed to the op window) rather than reusing that method directly --
+    it operates on ``TcpRstWindow``/``TcpRstSample`` with per-run pooled-loss
+    bookkeeping that does not apply here (every dual-path outcome, including
+    timeout/error, already rides as its own sample; nothing is pooled
+    separately). Empty input/empty window both return ``[]``, never raise.
+    """
+    return [s for s in samples if t0 <= s.start_epoch <= t1]
+
+
+@dataclass
+class DualPathStats:
+    """Aggregated outcome counts + ok-only latency percentiles for one cell.
+
+    Only ``outcome == "ok"`` samples contribute to the latency percentiles/
+    buckets -- a timeout/refused/error/bad_echo sample is CENSORED out of the
+    latency figures (it has no meaningful "successful round trip" duration)
+    but is still counted in its own outcome bucket, never silently dropped.
+    ``n_ok == 0`` is a valid, explicit all-zero-latency result -- never a
+    ZeroDivisionError/exception (an empty ok-set is real data, e.g. a fully
+    blocked cell).
+    """
+
+    n: int = 0
+    n_ok: int = 0
+    n_bad_echo: int = 0
+    n_refused: int = 0
+    n_timeout: int = 0
+    n_error: int = 0
+    p50_ms: float = 0.0
+    p95_ms: float = 0.0
+    p99_ms: float = 0.0
+    max_ms: float = 0.0
+    buckets: dict[int, tuple[int, float]] = field(default_factory=dict)
+
+
+def _dualpath_stats(samples: list[DualPathSample]) -> DualPathStats:
+    """Aggregate per-outcome counts + ok-only latency percentiles/buckets.
+
+    Reuses ``_compute_disrupt_buckets`` (already defined above for the
+    replace-disruption bench) for the disruption-bucket counts -- it already
+    degrades cleanly to all-zero on an empty input, so no separate empty-set
+    branch is needed for that part.
+    """
+    n = len(samples)
+    n_bad_echo = sum(1 for s in samples if s.outcome == "bad_echo")
+    n_refused = sum(1 for s in samples if s.outcome == "refused")
+    n_timeout = sum(1 for s in samples if s.outcome == "timeout")
+    n_error = sum(1 for s in samples if s.outcome == "error")
+
+    ok_durations = sorted(s.duration_ms for s in samples if s.outcome == "ok")
+    n_ok = len(ok_durations)
+    buckets = _compute_disrupt_buckets(ok_durations)
+
+    if n_ok == 0:
+        return DualPathStats(
+            n=n,
+            n_ok=0,
+            n_bad_echo=n_bad_echo,
+            n_refused=n_refused,
+            n_timeout=n_timeout,
+            n_error=n_error,
+            buckets=buckets,
+        )
+
+    def pct(p: float) -> float:
+        idx = min(int(math.floor(n_ok * p)), n_ok - 1)
+        return ok_durations[idx]
+
+    return DualPathStats(
+        n=n,
+        n_ok=n_ok,
+        n_bad_echo=n_bad_echo,
+        n_refused=n_refused,
+        n_timeout=n_timeout,
+        n_error=n_error,
+        p50_ms=pct(0.50),
+        p95_ms=pct(0.95),
+        p99_ms=pct(0.99),
+        max_ms=ok_durations[-1],
+        buckets=buckets,
+    )
+
+
+_DUALPATH_PROBE_UPLOADED = False
+
+
+def _upload_dualpath_probe(client_vm: SmokeVM) -> None:
+    global _DUALPATH_PROBE_UPLOADED  # noqa: PLW0603  # ponytail: module-level flag; reset per session
+    if _DUALPATH_PROBE_UPLOADED:
+        return
+    proc = subprocess.run(
+        client_vm.ssh_argv("tee /tmp/dualpath_probe.py > /dev/null && chmod +x /tmp/dualpath_probe.py"),
+        input=_DUALPATH_PROBE_SCRIPT,
+        capture_output=True,
+        text=True,
+        timeout=30.0,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"Failed to upload dual-path probe: {proc.stderr!r}")
+    _DUALPATH_PROBE_UPLOADED = True
+
+
+class _LiveDualPathProbe:
+    """Continuous dual-path full-lifecycle probe on civm in a background thread.
+
+    Mirrors ``_LiveTcpProbe``'s start()/slice_window()/stop() shape (issue #584
+    dual-path bench): runs the probe script in batches against a fixed set of
+    LABELED targets; caller calls ``start()``, then ``slice_window(t0, t1)``
+    for an op-aligned sample set, then ``stop()``.
+    """
+
+    def __init__(
+        self,
+        client_vm: SmokeVM,
+        targets: dict[str, str],
+        timeout_s: float,
+        concurrency: int,
+        batch_duration_s: float = 5.0,
+    ) -> None:
+        self._client = client_vm
+        self._targets = targets
+        self._timeout_s = timeout_s
+        self._concurrency = concurrency
+        self._batch_dur = batch_duration_s
+        self._samples: list[DualPathSample] = []
+        self._parse_errors = 0
+        self._lock = threading.Lock()
+        self._stop_evt = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def _run(self) -> None:
+        targets_arg = ",".join(f"{label}={ip}" for label, ip in self._targets.items())
+        while not self._stop_evt.is_set():
+            cmd = (
+                f"python3 /tmp/dualpath_probe.py {shlex.quote(targets_arg)} "
+                f"{self._batch_dur:.1f} {self._timeout_s:.1f} {self._concurrency} 2>/dev/null"
+            )
+            result = self._client.ssh(cmd, timeout=self._batch_dur + self._timeout_s + 15.0)
+            parsed = _parse_dualpath_probe_output(result.stdout)
+            with self._lock:
+                self._samples.extend(parsed.samples)
+                self._parse_errors += parsed.parse_errors
+
+    def slice_window(self, t0: float, t1: float) -> list[DualPathSample]:
+        with self._lock:
+            return _slice_to_window(self._samples, t0, t1)
+
+    def all_samples(self) -> list[DualPathSample]:
+        with self._lock:
+            return list(self._samples)
+
+    def parse_errors(self) -> int:
+        with self._lock:
+            return self._parse_errors
+
+    def stop(self) -> None:
+        self._stop_evt.set()
+        self._thread.join(timeout=30.0)
+
+
+def _dualpath_env_int(name: str, default: int) -> int:
+    return int(os.environ.get(name, str(default)))
+
+
+def _dualpath_env_float(name: str, default: float) -> float:
+    return float(os.environ.get(name, str(default)))
+
+
+@pytest.mark.pfctl_bench
+def test_pfctl_dualpath_server(
+    smoke_vm: SmokeVM,
+    lan_interface: SmokeVM,
+    client_vm: SmokeVM,
+    request: pytest.FixtureRequest,
+) -> None:
+    """issue #584 Step 1: dual-path (allowed vs blocked) full-lifecycle data-plane bench.
+
+    Scenario:
+      Given pfSense with setup_rules('server') (outbound NAT + in-table reject,
+        NO WAN blanket reject -- so allowed traffic actually exits WAN/slirp)
+        and the two guestfwd bench servers on WAN (192.168.89.100 "flip",
+        .101 always-allowed "ctrl"; ADR-40 Shortcomings #1/#4: prior benches
+        only ever probed traffic that was blocked anyway, and only measured
+        SYN->RST, never a full connection lifecycle)
+      And civm firing REAL connect + one-line-request/response cycles at both
+        targets through pfSense
+      When the flip IP is OUT of the pf bench table (ALLOWED phase) and IN the
+        table (BLOCKED phase), each phase crossing a MEASURED pfctl replace
+        and a MEASURED pfctl delta
+      Then legitimate ALLOWED traffic (ctrl always; flip while out) completes
+        the full request/response cycle with zero refusals, and BLOCKED
+        traffic (flip while in) is refused with zero successful cycles
+
+    DEVIATION (see this step's handoff): ``do_delta``'s own baseline-priming
+    step (bench_pfctl_tables.sh, "Load baseline table") unconditionally
+    reloads the table from the bare (no-extra-ip) file BEFORE its timed churn
+    begins -- pre-existing behaviour, not touched by this change -- which
+    evicts an out-of-band ``flip_in``'d IP for a delta op's ENTIRE duration.
+    So the BLOCKED-phase "zero ok on flip" / "refused on flip" invariants are
+    asserted from the quiescent baseline + the (blocked, replace) cell only,
+    where flip membership is guaranteed for the whole timed window; the
+    (blocked, delta) cell is still collected, printed, and starvation/parse-
+    error checked, but is EXPECTED to show "ok" flip samples and is excluded
+    from that specific strict count.
+
+    QUICK-vs-scaled: this run validates the WIRING (real connect through
+    pfSense, both table-membership phases, replace+delta, op-aligned windows)
+    with SMALL defaults; a later issue #584 step scales reps/duration/table
+    size for production-calibrated numbers. Env knobs (all optional):
+      SMOKE_BENCH_DUALPATH_SIZE         table size (default 100000)
+      SMOKE_BENCH_DUALPATH_REPS         reps per (phase, op) cell (default 3)
+      SMOKE_BENCH_DUALPATH_TIMEOUT_S    per-connection timeout (default 15)
+      SMOKE_BENCH_DUALPATH_DURATION_S   probe batch duration per rep (default 8)
+      SMOKE_BENCH_DUALPATH_CONCURRENCY  probe semaphore (default 64)
+
+    Only wiring invariants are asserted -- NEVER a latency number (that is
+    future scaled-run science). A starved during-op window (pooled n=0 across
+    every rep of a cell) DOES fail loudly -- a real wiring defect, not a
+    latency claim.
+
+    Run:
+        SMOKE_BENCH_DUALPATH_REPS=3 scripts/local-smoke.sh \\
+            tests/smoke/test_bench_pfctl.py \\
+            -m pfctl_bench -k test_pfctl_dualpath_server --override-ini="addopts="
+    """
+    size = _dualpath_env_int("SMOKE_BENCH_DUALPATH_SIZE", _DUALPATH_DEFAULT_SIZE)
+    reps = _dualpath_env_int("SMOKE_BENCH_DUALPATH_REPS", _DUALPATH_DEFAULT_REPS)
+    timeout_s = _dualpath_env_float("SMOKE_BENCH_DUALPATH_TIMEOUT_S", _DUALPATH_DEFAULT_TIMEOUT_S)
+    duration_s = _dualpath_env_float("SMOKE_BENCH_DUALPATH_DURATION_S", _DUALPATH_DEFAULT_DURATION_S)
+    concurrency = _dualpath_env_int("SMOKE_BENCH_DUALPATH_CONCURRENCY", _DUALPATH_DEFAULT_CONCURRENCY)
+    churn = _dualpath_delta_churn(size)
+
+    print("\n=== issue #584 Step 1: dual-path allowed/blocked data-plane bench ===")
+    print(f"  size={size:,} reps={reps} timeout_s={timeout_s} duration_s={duration_s} concurrency={concurrency}")
+    print(f"  targets: {_DUALPATH_TARGETS}")
+
+    _upload_dualpath_probe(client_vm)
+
+    kv = _bench(smoke_vm, "system_info")
+    print(f"  Guest: {kv.get('hostname')} RAM={kv.get('ram_mib')}MiB CPUs={kv.get('ncpu')}")
+
+    kv = _bench(smoke_vm, "raise_limits", "10000000")
+    print(f"  pf table limit: {kv.get('pf_table_limit')}")
+    # Guarantees the raised sysctl/pf limits + bench table are torn down even if
+    # a phase below throws — a bare end-of-function cleanup call never runs on a
+    # mid-run failure (issue #582). Runs during test teardown regardless of outcome.
+    request.addfinalizer(lambda: _bench(smoke_vm, "cleanup", timeout=30.0))
+
+    kv = _bench(smoke_vm, "gen", str(size), timeout=120.0)
+    print(f"  gen {size:,}: {kv.get('generated', kv.get('cached', '?'))}")
+
+    # Baseline load so setup_rules' table-loaded guard passes.
+    kv = _bench(smoke_vm, "replace", str(size), timeout=120.0)
+    print(f"  baseline replace: wall_ms={kv.get('wall_ms')} loaded={kv.get('loaded')}")
+
+    kv = _bench(smoke_vm, "setup_rules", "server", timeout=30.0)
+    print(f"  setup_rules server: {kv}")
+    if "error" in kv:
+        pytest.skip(f"Cannot set up server rules: {kv.get('error')} — STOP (dual-path bench not working)")
+
+    # ------------------------------------------------------------------ #
+    # Collect per-(phase, op) cell samples + per-phase quiescent baselines.
+    # ------------------------------------------------------------------ #
+    cells: dict[tuple[str, str], list[DualPathSample]] = {}
+    quiescent: dict[str, list[DualPathSample]] = {}
+    parse_error_total = 0
+    parse_errors_by_ctx: dict[str, int] = {}
+
+    def _note_parse_errors(ctx: str, n: int) -> None:
+        nonlocal parse_error_total
+        parse_error_total += n
+        if n:
+            parse_errors_by_ctx[ctx] = parse_errors_by_ctx.get(ctx, 0) + n
+
+    def _quiescent_probe(phase: str) -> None:
+        targets_arg = ",".join(f"{label}={ip}" for label, ip in _DUALPATH_TARGETS.items())
+        cmd = (
+            f"python3 /tmp/dualpath_probe.py {shlex.quote(targets_arg)} "
+            f"{duration_s:.1f} {timeout_s:.1f} {concurrency} 2>/dev/null"
+        )
+        result = client_vm.ssh(cmd, timeout=duration_s + timeout_s + 15.0)
+        parsed = _parse_dualpath_probe_output(result.stdout)
+        _note_parse_errors(f"{phase}/quiescent", parsed.parse_errors)
+        quiescent[phase] = parsed.samples
+        print(f"  [{phase}] quiescent baseline: n={len(parsed.samples)}")
+
+    def _measured_cell(phase: str, op: str, bench_args: tuple[str, ...]) -> None:
+        probe = _LiveDualPathProbe(client_vm, _DUALPATH_TARGETS, timeout_s, concurrency, batch_duration_s=duration_s)
+        probe.start()
+        res = client_vm.ssh("date +%s.%N", timeout=5.0)
+        t0 = float(res.stdout.strip())
+        kv_op = _bench(smoke_vm, *bench_args, timeout=180.0)
+        res = client_vm.ssh("date +%s.%N", timeout=5.0)
+        t1 = float(res.stdout.strip())
+        probe.stop()
+        window = probe.slice_window(t0, t1) if t1 > t0 else probe.all_samples()
+        _note_parse_errors(f"{phase}/{op}", probe.parse_errors())
+        cells.setdefault((phase, op), []).extend(window)
+        print(f"  [{phase}/{op}] wall_ms={kv_op.get('wall_ms')} during_n={len(window)}")
+
+    print("\n--- ALLOWED phase (flip IP OUT of the bench table) ---")
+    kv = _bench(smoke_vm, "flip_out", _DUALPATH_FLIP_IP, timeout=15.0)
+    print(f"  flip_out: {kv}")
+    _quiescent_probe("allowed")
+    for rep in range(reps):
+        print(f"  rep {rep + 1}/{reps}", flush=True)
+        _measured_cell("allowed", "replace", ("replace", str(size)))
+        _measured_cell("allowed", "delta", ("delta", str(size), str(churn), _DUALPATH_DELTA_BATCH))
+
+    print("\n--- BLOCKED phase (flip IP IN the bench table) ---")
+    kv = _bench(smoke_vm, "flip_in", _DUALPATH_FLIP_IP, timeout=15.0)
+    print(f"  flip_in: {kv}")
+    _quiescent_probe("blocked")
+    for rep in range(reps):
+        print(f"  rep {rep + 1}/{reps}", flush=True)
+        _measured_cell("blocked", "replace", ("replace", str(size), _DUALPATH_FLIP_IP))
+        _measured_cell("blocked", "delta", ("delta", str(size), str(churn), _DUALPATH_DELTA_BATCH))
+
+    _bench(smoke_vm, "teardown_rules", timeout=30.0)
+
+    # ------------------------------------------------------------------ #
+    # Stats + printing (informational — no latency numbers are asserted).
+    # ------------------------------------------------------------------ #
+    print("\n\n=== DUAL-PATH BENCH SUMMARY ===")
+
+    def _print_cell(tag: str, samples: list[DualPathSample]) -> None:
+        for target in _DUALPATH_TARGETS:
+            t_samples = [s for s in samples if s.label == target]
+            ps = _dualpath_stats(t_samples)
+            print(
+                f"  {tag}/{target}: n={ps.n} ok={ps.n_ok} refused={ps.n_refused} "
+                f"timeout={ps.n_timeout} error={ps.n_error} bad_echo={ps.n_bad_echo} "
+                f"p50={ps.p50_ms:.1f}ms p99={ps.p99_ms:.1f}ms max={ps.max_ms:.1f}ms"
+            )
+
+    for phase in ("allowed", "blocked"):
+        print(f"\n-- {phase} phase --")
+        _print_cell(f"{phase}/quiescent", quiescent.get(phase, []))
+        for op in ("replace", "delta"):
+            _print_cell(f"{phase}/{op}", cells.get((phase, op), []))
+
+    # ------------------------------------------------------------------ #
+    # HARD assertions — wiring invariants only, latency numbers are NEVER
+    # asserted. Every assertion prints expected-vs-actual on failure.
+    # ------------------------------------------------------------------ #
+    def _by_label(samples: list[DualPathSample], label: str) -> list[DualPathSample]:
+        return [s for s in samples if s.label == label]
+
+    def _phase_all(phase: str) -> list[DualPathSample]:
+        return quiescent.get(phase, []) + cells.get((phase, "replace"), []) + cells.get((phase, "delta"), [])
+
+    allowed_all = _phase_all("allowed")
+    allowed_flip_stats = _dualpath_stats(_by_label(allowed_all, "flip"))
+    allowed_ctrl_stats = _dualpath_stats(_by_label(allowed_all, "ctrl"))
+
+    assert allowed_flip_stats.n_ok >= 1, (
+        f"ALLOWED phase flip target: expected >=1 ok sample but got n_ok={allowed_flip_stats.n_ok} "
+        f"(n={allowed_flip_stats.n} refused={allowed_flip_stats.n_refused} "
+        f"timeout={allowed_flip_stats.n_timeout} error={allowed_flip_stats.n_error})"
+    )
+    assert allowed_ctrl_stats.n_ok >= 1, (
+        f"ALLOWED phase ctrl target: expected >=1 ok sample but got n_ok={allowed_ctrl_stats.n_ok} "
+        f"(n={allowed_ctrl_stats.n} refused={allowed_ctrl_stats.n_refused})"
+    )
+    assert allowed_flip_stats.n_refused == 0, (
+        f"ALLOWED phase flip target: expected 0 refused (flip is OUT of the table) "
+        f"but got {allowed_flip_stats.n_refused}"
+    )
+    assert allowed_ctrl_stats.n_refused == 0, (
+        f"ALLOWED phase ctrl target: expected 0 refused (always-allowed control) but got {allowed_ctrl_stats.n_refused}"
+    )
+
+    # BLOCKED/ctrl: safe to use the full aggregate (ctrl is never table-resident,
+    # so delta's baseline-priming reload — see the DEVIATION note in the
+    # docstring — never affects it).
+    blocked_all = _phase_all("blocked")
+    blocked_ctrl_stats = _dualpath_stats(_by_label(blocked_all, "ctrl"))
+    assert blocked_ctrl_stats.n_ok >= 1, (
+        f"BLOCKED phase ctrl target: expected >=1 ok sample (always-allowed) but got "
+        f"n_ok={blocked_ctrl_stats.n_ok} (n={blocked_ctrl_stats.n} refused={blocked_ctrl_stats.n_refused})"
+    )
+
+    # BLOCKED/flip STRICT: quiescent + replace cell only (see DEVIATION note) —
+    # both windows guarantee flip table-membership for their whole duration;
+    # the delta cell does not (do_delta's own baseline-priming reload evicts
+    # any out-of-band member before its timed churn even starts) and is
+    # deliberately excluded from this specific strict count.
+    blocked_flip_strict = quiescent.get("blocked", []) + cells.get(("blocked", "replace"), [])
+    blocked_flip_strict_stats = _dualpath_stats(_by_label(blocked_flip_strict, "flip"))
+    assert blocked_flip_strict_stats.n_refused >= 1, (
+        f"BLOCKED phase flip target (quiescent+replace): expected >=1 refused sample but got "
+        f"n_refused={blocked_flip_strict_stats.n_refused} "
+        f"(n={blocked_flip_strict_stats.n} ok={blocked_flip_strict_stats.n_ok})"
+    )
+    assert blocked_flip_strict_stats.n_ok == 0, (
+        f"BLOCKED phase flip target (quiescent+replace): expected 0 ok samples (flip is IN the "
+        f"table for this window) but got n_ok={blocked_flip_strict_stats.n_ok}"
+    )
+
+    assert parse_error_total == 0, (
+        f"expected 0 parse errors across every dual-path probe run but got {parse_error_total} total "
+        f"(by context: {parse_errors_by_ctx})"
+    )
+
+    # Starvation guard: each per-phase quiescent baseline (no op contending)
+    # must have >=1 sample; each measured op CELL, pooled across all `reps`
+    # repeats, must have >=1 sample (an individual rep's window MAY be empty —
+    # only a cell that is empty in EVERY rep is a real wiring defect).
+    for phase in ("allowed", "blocked"):
+        q_n = len(quiescent.get(phase, []))
+        assert q_n >= 1, f"[{phase}] quiescent baseline window: expected >=1 sample but got n={q_n} (probe starved)"
+        for op in ("replace", "delta"):
+            cell_n = len(cells.get((phase, op), []))
+            assert cell_n >= 1, (
+                f"[{phase}/{op}] starvation guard: expected >=1 sample pooled across all {reps} reps "
+                f"but got n=0 in every rep (probe starved for this op window)"
+            )

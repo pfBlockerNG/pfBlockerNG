@@ -23,22 +23,27 @@
 #   bench_pfctl_tables.sh raise_limits [MAX]
 #   bench_pfctl_tables.sh restore_limits          (also run automatically by cleanup)
 #   bench_pfctl_tables.sh gen N
-#   bench_pfctl_tables.sh replace N
+#   bench_pfctl_tables.sh replace N [EXTRA_IP]
 #   bench_pfctl_tables.sh delta N CHURN BATCH  (BATCH=0 = single-giant-op)
 #   bench_pfctl_tables.sh recompute N
 #   bench_pfctl_tables.sh cleanup
 #   bench_pfctl_tables.sh get_interfaces
-#   bench_pfctl_tables.sh setup_rules [lan_if|floating|none]
+#   bench_pfctl_tables.sh setup_rules [lan_if|floating|server|none]
 #   bench_pfctl_tables.sh teardown_rules
+#   bench_pfctl_tables.sh flip_in IP
+#   bench_pfctl_tables.sh flip_out IP
 #   bench_pfctl_tables.sh verify_reject
 #
 # Dependencies (stock pfSense): /sbin/pfctl, awk, LC_ALL=C sort, perl (Time::HiRes).
 
 set -eu
 
-PFCTL=/sbin/pfctl
-PERL=/usr/local/bin/perl
-TMP=/tmp/pfb_bench
+# PFCTL/PERL/TMP are env-overridable (unchanged absolute defaults on-box) so
+# tests/shell/bench_pfctl_tables_spec.sh can exercise this script hermetically
+# off a pfSense box (issue #584 dual-path bench); on-box behaviour is identical.
+PFCTL="${PFCTL:-/sbin/pfctl}"
+PERL="${PERL:-/usr/local/bin/perl}"
+TMP="${PFB_BENCH_TMP:-/tmp/pfb_bench}"
 TABLE=pfb_bench_main
 LIMITS_SNAPSHOT="${TMP}/orig_limits.txt"
 
@@ -184,20 +189,41 @@ do_gen() {
 }
 
 # (a) Benchmark -T replace.
+# EXTRA_IP (optional 2nd arg, issue #584 dual-path bench): when set, build
+# TMP/table_N_extra.txt = the generated table file + EXTRA_IP appended, and use
+# THAT file for BOTH the priming and the measured replace (idempotent rebuild
+# each call — cheap even at 1M rows). Needed for the BLOCKED-phase measurement:
+# a bare `-T replace` from the plain table file would silently evict a flip IP
+# that an earlier `flip_in` had -T add'd into the live table, so a "still
+# blocked after replace" assertion would really be testing a replace that had
+# already un-blocked it. Without EXTRA_IP, behaviour is byte-identical to
+# before this argument existed. do_delta needs no such argument: its churn set
+# is always drawn from 13.0.0.0/8 (see do_delta below) and never touches
+# whatever IP flip_in/flip_out moved — table membership of the flip IP
+# persists across a delta op unchanged.
 # Emits: op=replace size=N wall_ms=W epoch_start=S epoch_end=E loaded=L [error=...]
 #        ctrl_p50=P ctrl_p99=P ctrl_max=P ctrl_n=N
 do_replace() {
     _n="$1"
+    _extra_ip="${2:-}"
     _file="${TMP}/table_${_n}.txt"
     [ -f "${_file}" ] || { printf 'error=table_%d_not_generated\n' "${_n}"; return 1; }
 
+    _measure_file="${_file}"
+    _expected_n="${_n}"
+    if [ -n "${_extra_ip}" ]; then
+        _measure_file="${TMP}/table_${_n}_extra.txt"
+        { cat "${_file}"; printf '%s\n' "${_extra_ip}"; } > "${_measure_file}"
+        _expected_n=$(wc -l < "${_measure_file}" | tr -d ' ')
+    fi
+
     # Prime the table so the control probe has something to look up.
-    "${PFCTL}" -t "${TABLE}" -T replace -f "${_file}" >/dev/null 2>&1 || true
+    "${PFCTL}" -t "${TABLE}" -T replace -f "${_measure_file}" >/dev/null 2>&1 || true
 
     start_ctrl_probe
     _epoch_start=$(now_epoch)
     _t0=$(now_ms)
-    _err=$("${PFCTL}" -t "${TABLE}" -T replace -f "${_file}" 2>&1) || true
+    _err=$("${PFCTL}" -t "${TABLE}" -T replace -f "${_measure_file}" 2>&1) || true
     _t1=$(now_ms)
     _epoch_end=$(now_epoch)
     stop_ctrl_probe
@@ -209,9 +235,9 @@ do_replace() {
         "${_n}" "${_wall_ms}" "${_epoch_start}" "${_epoch_end}" "${_loaded}"
     pctls_from_file "${CTRL_PROBE_OUT}" "ctrl_"
 
-    if [ "${_loaded}" -lt "${_n}" ]; then
+    if [ "${_loaded}" -lt "${_expected_n}" ]; then
         printf 'error=load_failed loaded=%d expected=%d detail=%s\n' \
-            "${_loaded}" "${_n}" "$(printf '%s' "${_err}" | head -1 | tr ' ' '_')"
+            "${_loaded}" "${_expected_n}" "$(printf '%s' "${_err}" | head -1 | tr ' ' '_')"
     fi
 }
 
@@ -350,15 +376,19 @@ do_cleanup() {
 }
 
 # --------------------------------------------------------------------------- #
-# Reject-loop rule wiring (ADR-40 follow-up)
+# Reject-loop rule wiring (ADR-40 follow-up) + dual-path bench (issue #584)
 # --------------------------------------------------------------------------- #
 #
 # setup_rules TYPE   — install reject anchor for the data-plane bench.
 #   TYPE = lan_if    — block return QUICK on the LAN interface (vtnet2/em2, etc.)
 #          floating  — block return QUICK as a floating rule (all interfaces)
+#          server    — issue #584 dual-path bench: SAME in-table reject as
+#                      lan_if PLUS an outbound NAT, and DELIBERATELY OMITS the
+#                      WAN blanket reject below — see do_setup_rules for why.
 #
-# In BOTH cases a WAN-out floating reject is also installed to catch traffic NOT
-# in the table (11.x misses → route to WAN → WAN reject → RST back to civm).
+# In lan_if/floating/none, a WAN-out floating reject is also installed to catch
+# traffic NOT in the table (11.x misses → route to WAN → WAN reject → RST back
+# to civm). type=server omits it so real ALLOWED traffic can reach WAN/slirp.
 #
 # SSH is explicitly protected: an early PASS for the pfSense management SSH port
 # (port 22 on the mgmt interface) fires before any block.
@@ -373,6 +403,24 @@ do_cleanup() {
 # the `quick` keyword so it terminates immediately.  The bench VMs are throwaway
 # so any mis-fire is recoverable by killing qemu on the host box; nevertheless
 # we document the invariant here.
+#
+# flip_in IP / flip_out IP — issue #584 dual-path bench: move a single IP in/out
+# of the live bench table (a plain -T add / -T delete, not a whole-table op).
+# These are PHASE SETUP between measurements — never themselves measured; only
+# op=replace / op=delta rows are timed data points.
+do_flip_in() {
+    _ip="$1"
+    "${PFCTL}" -t "${TABLE}" -T add "${_ip}" >/dev/null 2>&1 || true
+    _count=$("${PFCTL}" -t "${TABLE}" -T show 2>/dev/null | grep -c . || echo 0)
+    printf 'op=flip_in ip=%s table_count=%d\n' "${_ip}" "${_count}"
+}
+
+do_flip_out() {
+    _ip="$1"
+    "${PFCTL}" -t "${TABLE}" -T delete "${_ip}" >/dev/null 2>&1 || true
+    _count=$("${PFCTL}" -t "${TABLE}" -T show 2>/dev/null | grep -c . || echo 0)
+    printf 'op=flip_out ip=%s table_count=%d\n' "${_ip}" "${_count}"
+}
 
 # Discover WAN and LAN interface names from pf's running rule state.
 # Returns via stdout: wan_if=<name> lan_if=<name>
@@ -391,7 +439,21 @@ do_get_interfaces() {
     printf 'wan_if=%s lan_if=%s\n' "${_wan}" "${_lan}"
 }
 
-# Load the reject ruleset. TYPE is 'lan_if' or 'floating'. 'none' = WAN reject only.
+# Load the reject ruleset. TYPE is 'lan_if', 'floating', or 'server'. 'none' =
+# WAN reject only.
+#
+# type=server (issue #584 dual-path bench): adds an outbound NAT line ahead of
+# the in-table reject and OMITS the WAN blanket reject entirely, so traffic to
+# an address NOT in the bench table (e.g. the always-allowed 192.168.89.101
+# control server, or the 192.168.89.100 flip server while flip_out) actually
+# reaches WAN/slirp instead of being rejected there — the gap ADR-40's
+# Shortcomings note #1 names (the original reject-loop bench only ever measured
+# disruption to traffic that was blocked anyway). The flip IP itself, when
+# table-resident, is still blocked by the same in-table reject the other types
+# use. NAT-line placement/necessity for the allowed path to work through slirp
+# is ASSUMED here (this script has always led with the mgmt/DHCP `pass` lines
+# below, ahead of any nat line) — validated live at the CI-dispatch step; it
+# cannot be proven on a non-pfSense dev box.
 #
 # Root cause investigation revealed that pfSense's "Default Allow LAN to any" rule
 # is loaded as a DIRECT flat rule in the main pf ruleset, AFTER the anchor call
@@ -440,7 +502,8 @@ do_setup_rules() {
     printf 'pass quick on %s proto udp from any port 68 to any port 67\n' "${_lan}" >> "${_rules_file}"
     printf 'pass quick on %s proto udp from any port 67 to any port 68\n' "${_lan}" >> "${_rules_file}"
 
-    # In-table reject: placed BEFORE the catch-all pass so it fires with quick.
+    # In-table reject (+ NAT for type=server): placed BEFORE the catch-all pass
+    # so the reject fires with quick.
     if [ "${_type}" = "lan_if" ]; then
         # Interface-scoped: fires only on the LAN interface (inbound from civm).
         printf 'block return quick on %s from 192.168.1.10 to <%s>\n' \
@@ -449,12 +512,27 @@ do_setup_rules() {
         # Floating (no on clause): fires on any interface for any direction.
         printf 'block return quick from 192.168.1.10 to <%s>\n' \
             "${TABLE}" >> "${_rules_file}"
+    elif [ "${_type}" = "server" ]; then
+        # issue #584 dual-path bench: outbound NAT (translation) ahead of the
+        # in-table reject (filter) below — see the do_setup_rules doc comment
+        # above for the ASSUMED ordering/necessity caveat.
+        printf 'nat on %s inet from 192.168.1.0/24 to any -> (%s)\n' \
+            "${_wan}" "${_wan}" >> "${_rules_file}"
+        # Same lan_if-style in-table reject: the flip IP, when table-resident,
+        # is still blocked even though other traffic now passes through NAT+WAN.
+        printf 'block return quick on %s from 192.168.1.10 to <%s>\n' \
+            "${_lan}" "${TABLE}" >> "${_rules_file}"
     fi
     # 'none' type: no in-table reject rule (WAN reject only, for no-rule baseline).
 
-    # WAN egress reject: traffic NOT in the table routes toward WAN and is rejected
-    # here, generating an immediate RST for the not-in-table probe path.
-    printf 'block return out quick on %s all\n' "${_wan}" >> "${_rules_file}"
+    if [ "${_type}" != "server" ]; then
+        # WAN egress reject: traffic NOT in the table routes toward WAN and is
+        # rejected here, generating an immediate RST for the not-in-table probe
+        # path. Omitted for type=server: that type needs the allowed path to
+        # actually reach WAN/slirp (issue #584 dual-path bench) instead of
+        # being rejected there.
+        printf 'block return out quick on %s all\n' "${_wan}" >> "${_rules_file}"
+    fi
 
     # pfSense-self outbound: pfSense must be able to exit WAN for DHCP renewals.
     printf 'pass out quick on %s from (self) to any\n' "${_wan}" >> "${_rules_file}"
@@ -523,16 +601,18 @@ case "${1:-}" in
     raise_limits)    do_raise_limits "${2:-10000000}" ;;
     restore_limits)  do_restore_limits ;;
     gen)             do_gen "${2:?missing N}" ;;
-    replace)         do_replace "${2:?missing N}" ;;
+    replace)         do_replace "${2:?missing N}" "${3:-}" ;;
     delta)           do_delta "${2:?missing N}" "${3:?missing CHURN}" "${4:?missing BATCH}" ;;
     recompute)       do_recompute "${2:?missing N}" ;;
     get_interfaces)  do_get_interfaces ;;
     setup_rules)     do_setup_rules "${2:-floating}" ;;
     teardown_rules)  do_teardown_rules ;;
+    flip_in)         do_flip_in "${2:?missing IP}" ;;
+    flip_out)        do_flip_out "${2:?missing IP}" ;;
     verify_reject)   do_verify_reject ;;
     cleanup)         do_cleanup ;;
     *)
-        printf 'usage: bench_pfctl_tables.sh <system_info|raise_limits [MAX]|restore_limits|gen N|replace N|delta N CHURN BATCH|recompute N|get_interfaces|setup_rules [lan_if|floating]|teardown_rules|verify_reject|cleanup>\n' >&2
+        printf 'usage: bench_pfctl_tables.sh <system_info|raise_limits [MAX]|restore_limits|gen N|replace N [EXTRA_IP]|delta N CHURN BATCH|recompute N|get_interfaces|setup_rules [lan_if|floating|server|none]|teardown_rules|flip_in IP|flip_out IP|verify_reject|cleanup>\n' >&2
         exit 2
         ;;
 esac
