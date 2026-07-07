@@ -27,9 +27,11 @@ SCOPE
 * Phase prompts only: tracked ``.ADRs/ADR_{NN}_*/{MM}_*.txt``. ``RESULTS/``
   handoffs and non-numeric ``.txt`` notes are not prompts and are skipped.
 * **Grandfather cutoff:** ADRs numbered below :data:`_CONTRACT_MIN_ADR` predate
-  the delegation contract and are never flagged (retrofitting 59 finished ADRs
-  would be noise, not safety). The cutoff applies in file-argument mode too, so
-  a typo fix in a legacy prompt is never blocked.
+  the delegation contract and are never flagged (retrofitting finished ADRs
+  would be noise, not safety) — EXCEPT the :data:`_RETROFITTED_ADRS` set: those
+  are still unimplemented, their prompts drive future implementer runs, and they
+  were brought up to the contract, so they are gated. The cutoff applies in
+  file-argument mode too, so a typo fix in a legacy prompt is never blocked.
 
 Exit status: 0 = clean, 1 = one or more violations (printed with file + check).
 """
@@ -42,8 +44,14 @@ import sys
 from pathlib import Path
 
 # First ADR authored under the delegation contract (CLAUDE.md, landed 2026-07).
-# Everything older is grandfathered.
+# Everything older is grandfathered — except the retrofitted set below.
 _CONTRACT_MIN_ADR = 60
+
+# Pre-contract ADRs whose prompts still drive FUTURE implementer runs (Proposed /
+# unimplemented at retrofit time) — brought up to the contract in 2821b9df and
+# gated despite their number. An ADR implemented before the contract stays
+# grandfathered; one added here must comply.
+_RETROFITTED_ADRS = frozenset({25, 32, 33, 34, 54, 55})
 
 # .ADRs/ADR_{NN}_{Name}/{MM}_{Name}.txt — capture the ADR number for the cutoff.
 _PROMPT_RE = re.compile(r"(?:^|/)\.ADRs/ADR_(\d+)_[^/]+/\d+_[^/]+\.txt$")
@@ -94,7 +102,7 @@ def find_violations(paths: list[Path]) -> list[tuple[Path, str, str]]:
     violations: list[tuple[Path, str, str]] = []
     for path in paths:
         adr = _prompt_adr_number(path)
-        if adr is None or adr < _CONTRACT_MIN_ADR:
+        if adr is None or (adr < _CONTRACT_MIN_ADR and adr not in _RETROFITTED_ADRS):
             continue
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
