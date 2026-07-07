@@ -1400,7 +1400,9 @@ function pfb_dnsbl_webpage(): string
  *   PfbConfig::write($key, $value)                 — write one field
  *   PfbConfig::delete($key)                        — delete one field
  *   PfbConfig::readSection($section)               — read a whole section array
- *   PfbConfig::writeSection($section, $data)       — write a whole section array
+ *   PfbConfig::writeSection($section, $data)       — write a section array, normalizing
+ *                                                     its registered fields through their
+ *                                                     adapters (issue #930)
  *   PfbConfig::deleteSection($section)             — delete a whole section
  *
  * @see pfb_cfg_registry()
@@ -1480,17 +1482,50 @@ final class PfbConfig
 	}
 
 	/**
-	 * Write a whole section array (no per-key adapters applied).
+	 * Write a whole section array, normalizing every registered field of
+	 * $section through its adapter pair before persisting (issue #930).
 	 *
-	 * Equivalent to config_set_path($section, $data) for callers that
-	 * manipulate the section blob directly (www/ save handlers). Does NOT
-	 * call write_config() — callers persist.
+	 * For each key in $data that is registered to this EXACT section (a
+	 * registered key name living under a DIFFERENT section path is foreign
+	 * data and is left untouched) and carries BOTH a read and a write
+	 * adapter, the value is round-tripped read_adapter() then
+	 * write_adapter() — coalescing a legacy/read-only token (e.g. alexa_type
+	 * 'domcop'/'alexa', pfb_idn 'all'), a NULL, a non-scalar (a crafted POST
+	 * array), or junk input to the field's canonical stored form, exactly as
+	 * a single-key PfbConfig::write() would. Unregistered keys and
+	 * adapter-less (plain-string) registered keys pass through byte-identical.
+	 * Consequence: the RollbackContract "never re-emitted" legacy-token
+	 * guarantee (see class docblock / ADR-29 §2.3) now holds on section
+	 * writes too — a legacy token riding a readSection()->writeSection()
+	 * round-trip (a restored backup, an HA sync, a hand-edited config.xml)
+	 * is coalesced to canonical on the next save. Does NOT call
+	 * write_config() — callers persist.
+	 *
+	 * Read adapter runs FIRST (mixed -> runtime value; the non-scalar guard
+	 * handles arrays/NULL/junk and is idempotent on an already-adapted enum
+	 * instance), write adapter SECOND (runtime value -> canonical stored
+	 * string) — calling the write adapter directly on a raw array or NULL
+	 * would TypeError (write adapters are typed EnumClass|string).
 	 *
 	 * @param string $section  The full config.xml section path.
 	 * @param array  $data     Section data to persist.
 	 */
 	public static function writeSection(string $section, array $data): void
 	{
+		foreach (pfb_cfg_registry() as $key => $entry) {
+			if ($entry['section'] !== $section) {
+				continue;
+			}
+			$read_adapter  = $entry['read_adapter'];
+			$write_adapter = $entry['write_adapter'];
+			if ($read_adapter === NULL || $write_adapter === NULL) {
+				continue;
+			}
+			if (!array_key_exists($key, $data)) {
+				continue;
+			}
+			$data[$key] = $write_adapter($read_adapter($data[$key]));
+		}
 		config_set_path($section, $data);
 	}
 

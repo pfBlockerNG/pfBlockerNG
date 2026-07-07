@@ -194,9 +194,14 @@ final class WwwGroupAGatewayTest extends TestCase
 	}
 
 	/**
-	 * General section: pfb_keep = '' (disabled) round-trips identically.
-	 * Asserts the before-state ('on') and the after-state ('') are distinct —
+	 * General section: pfb_keep = '' (disabled) is normalized, not round-tripped raw.
+	 * Asserts the before-state ('on') and the after-state ('off') are distinct —
 	 * proving the write changed the value rather than being an always-equal no-op.
+	 *
+	 * Issue #930: writeSection() now applies the lenient adapter to every
+	 * registered field of the target section (same as a single-key
+	 * PfbConfig::write()) -- the legacy '' token is coalesced to the explicit
+	 * 'off' token instead of persisting raw.
 	 */
 	public function testGeneralSectionPfbKeepOffRoundTrips(): void
 	{
@@ -206,11 +211,11 @@ final class WwwGroupAGatewayTest extends TestCase
 		PfbConfig::writeSection($section, ['pfb_keep' => 'on']);
 		$this->assertSame('on', PfbConfig::readSection($section)['pfb_keep'], 'pfb_keep starts as "on"');
 
-		// When: write '' (disabled).
+		// When: write '' (disabled, legacy empty token).
 		PfbConfig::writeSection($section, ['pfb_keep' => '']);
 
-		// Then: reads back as ''.
-		$this->assertSame('', PfbConfig::readSection($section)['pfb_keep'], 'pfb_keep "" round-trips identically');
+		// Then: reads back as 'off' (lenient-adapter normalization, issue #930).
+		$this->assertSame('off', PfbConfig::readSection($section)['pfb_keep'], 'pfb_keep "" normalizes to "off"');
 	}
 
 	// -----------------------------------------------------------------------
@@ -293,6 +298,12 @@ final class WwwGroupAGatewayTest extends TestCase
 	 *   Given a representative DNSBL settings array (mirrors what the save handler builds).
 	 *   When PfbConfig::writeSection() persists it.
 	 *   Then PfbConfig::readSection() returns an identical array.
+	 *
+	 * Issue #930: pfb_idn is adapter-bearing (PfbIdnMode); its fixture value uses
+	 * the canonical 'off' token (not the legacy '' — writeSection() now normalizes
+	 * every registered field of the target section, and the real save handler's
+	 * 3-way select never emits '' either) so this stays a true byte-identical
+	 * round-trip assertion.
 	 */
 	public function testDnsblSectionWriteReadRoundTrip(): void
 	{
@@ -316,7 +327,7 @@ final class WwwGroupAGatewayTest extends TestCase
 			'pfb_cache'                  => 'on',
 			'pfb_py_reply'               => 'on',
 			'pfb_hsts'                   => 'on',
-			'pfb_idn'                    => '',
+			'pfb_idn'                    => 'off',
 			'pfb_idn_block_malicious'    => 'on',
 			'pfb_idn_escalate_suspicious' => '',
 			'pfb_regex'                  => '',

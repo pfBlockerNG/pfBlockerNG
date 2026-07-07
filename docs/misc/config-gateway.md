@@ -91,6 +91,32 @@ on rollback the old code **ignores** the key (inert, not misread or corrupting) 
 version (inherent, out of scope). `since-version` bounds each field's rollback claim to releases
 at/after that version; it is a per-field scope marker, not a migration.
 
+### Section writes are normalized too (issue #930)
+
+`PfbConfig::writeSection($section, $data)` applies the **same** BACKWARD-invariant normalization
+as a single-key `PfbConfig::write()` — for every key in `$data` that is registered to the EXACT
+target `$section` (a same-named key registered to a *different* section is foreign data and is
+left untouched) and carries **both** a read and a write adapter, the value is round-tripped
+`read_adapter()` then `write_adapter()` before the section is persisted. A key with no adapter
+pair (plain string) or not present in `$data` passes through byte-identical; `writeSection()`
+never calls `write_config()`.
+
+Before this fix, `writeSection()` called `config_set_path($section, $data)` directly, bypassing
+every adapter — a legacy read-only token (`alexa_type` `'domcop'`/`'alexa'`, `pfb_idn` alpha-only
+`'all'`) or a hostile/junk value riding **any** section-blob write (a `www/` save handler, an
+install seed, a migration) persisted raw into `config.xml` instead of being coalesced to its
+canonical form. The consequence: the RollbackContract's "never re-emitted" guarantee above now
+holds on section writes too, and a legacy token riding a `readSection()` → `writeSection()`
+round-trip (a restored backup, an HA sync, a hand-edited `config.xml`) is coalesced to canonical
+on the next save — it does not perpetually re-emit itself just because the write went through the
+section-level helper instead of the per-key one.
+
+Coverage: `tests/php/CfgGatewayTest.php` — a property test iterating `pfb_cfg_registry()` itself
+(every adapter-bearing field × a canonical/legacy/junk sample set, compared against the
+`PfbConfig::write()` oracle) plus targeted scenario and hostile-input tests (legacy `alexa_type`
+tokens, alpha-only `pfb_idn`, a non-scalar/`NULL`/enum-instance/int value, an unadapted key,
+a same-named key in a foreign section, a mixed realistic section blob).
+
 ## Field vocabularies (`pfb_cfg_field_vocab()`)
 
 | Adapter type | Stored vocabulary |
