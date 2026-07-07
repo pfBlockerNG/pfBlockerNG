@@ -180,6 +180,7 @@ in `read-version-matrix.sh`.
 | [`pfb-downgrade-prep.sh`](pfb-downgrade-prep.sh) | **Before rolling the package back** to a pre-4.0.x release: run on the box as root to reverse the two non-self-healing 4.0.x changes — restore custom `list_scripts/` pre/post scripts to the package root, and remove the ADR-43 `tick` cron. |
 | [`setup-hooks.sh`](setup-hooks.sh) | Point git at `.githooks` (run once after cloning). |
 | [`update-pfsense-stubs.py`](update-pfsense-stubs.py) | Regenerate `stubs/pfsense/` after a CE bump. |
+| [`claude-stop-guard.py`](claude-stop-guard.py) | Claude Code Stop-hook: blocks a done/fixed/implemented claim made after editing `src/`/`tests/` with no gate command run since (issue #925). Not yet registered in `.claude/settings.json`. |
 
 `install-from-repo.sh` syncs the files then runs the port's real install hook —
 `php -f /etc/rc.packages pfSense-pkg-pfBlockerNG-devel POST-INSTALL` (exactly what
