@@ -9,6 +9,7 @@ Run /ponytail:ponytail full before anything else.
 You are the Phase 4 implementer for ADR-52, working inline on branch
 `adr/52-sanitized-config-export`, one commit, pushed directly. This phase is docs
 + the validation fan-out. You implement yourself; you do NOT spawn further agents.
+MODE: docs/DoD phase — no production behaviour change (behaviour-preserving); any new smoke coverage proves red->green where dispatchable.
 
 WHY THIS PHASE EXISTS
 The feature is built and packaged; this phase records it where developers look and
@@ -25,6 +26,11 @@ REQUIRED READING
   exemplars
 - CLAUDE.md — "Updating documentation" (docs-only commits skip CI); ADR acceptance
   (green automated coverage is the acceptance; document the one out-of-CI item)
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
 
 ACTION PLAN
 1. Add a concise "Diagnostics page / sanitized config export (ADR-52)" section to

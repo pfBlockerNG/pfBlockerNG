@@ -10,6 +10,7 @@ You are the Phase 3 implementer for ADR-52. This phase touches the SEPARATE
 `pfBlockerNG/FreeBSD-ports` fork repo (build-input branch `pfblockerng/use-github`)
 to register the two new shipped files. You implement yourself; you do NOT spawn
 further agents.
+MODE: behaviour change — every new behaviour proves red->green (executed runs, output pasted in the handoff).
 
 WHY THIS PHASE EXISTS
 Release archives contain only `src/`; a new shipped file is invisible to the
@@ -32,6 +33,11 @@ REQUIRED READING
   the template)
 - CLAUDE.md — "New shipped file -> chroot + plist"; the worktree + lockstep rules;
   ports are pushed to the build-input branch, not an upstream PR
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
 
 ACTION PLAN
 1. On the fork, for EACH of the three ports:

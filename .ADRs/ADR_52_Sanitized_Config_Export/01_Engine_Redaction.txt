@@ -33,6 +33,11 @@ REQUIRED READING
 - CLAUDE.md — PHP code standards, the test-coverage mandate (branch coverage,
   red->before/green->after, intent-named, no coverage theater)
 
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
 ACTION PLAN (tests FIRST)
 1. Write tests/php/DiagnosticsExportTest.php against the NOT-YET-EXISTING engine:
    - Build an in-test config.xml fixture string under `<installedpackages>` with,

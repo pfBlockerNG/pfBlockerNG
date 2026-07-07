@@ -10,6 +10,7 @@ You are the Phase 2 implementer for ADR-52, working inline on branch
 `adr/52-sanitized-config-export`, one commit, pushed directly. This phase adds a
 new GUI page that wires the Phase 1 engine to a download, plus the tab and ACL.
 You implement yourself; you do NOT spawn further agents.
+MODE: behaviour change — every new behaviour proves red->green (executed runs, output pasted in the handoff).
 
 WHY THIS PHASE EXISTS
 The engine from Phase 1 is headless. This phase gives users the one-click export
@@ -35,6 +36,11 @@ REQUIRED READING
 - CLAUDE.md — Web-UI help-text rule (brief, match neighbours); Tier A always
   required, Tier B required when the behaviour is observable only there
   (the download+content assertion is).
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
 
 ACTION PLAN
 1. Create src/usr/local/www/pfblockerng/pfblockerng_diagnostics.php:
