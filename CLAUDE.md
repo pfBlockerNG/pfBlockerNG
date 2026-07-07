@@ -427,10 +427,11 @@ primary checkout, never shared with another agent (concurrent agents race on the
 index, `HEAD`, refs).
 
 **Exception — dev-only classes need no PR.** Classes never shipped to users skip the PR
-stage: **ADR text** (`.ADRs/`), **skills** (`.claude/skills/`), and **documentation-only**
-changes (`**/*.md`, `docs/`). Each still uses a worktree but commits/pushes **directly to
-`devel`** (fetch + rebase first). Anything touching `src/`, `tests/`, or CI — ADR
-*implementation* included — uses the full worktree + rebase-only-PR flow.
+stage: **ADR text** (`.ADRs/`), **skills** (`.claude/skills/`), **agent workflows**
+(`.claude/workflows/`), and **documentation-only** changes (`**/*.md`, `docs/`). Each still
+uses a worktree but commits/pushes **directly to `devel`** (fetch + rebase first). Anything
+touching `src/`, `tests/`, or CI — ADR *implementation* included — uses the full worktree +
+rebase-only-PR flow.
 
 ```sh
 git worktree add -b <branch> <path> origin/devel   # branch off the latest base

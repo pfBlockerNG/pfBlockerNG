@@ -187,10 +187,14 @@ it, and it does not replace CodeRabbit; when CodeRabbit never reviews it stands 
    PR → one sub-agent at effort `xhigh` (e.g. a Workflow `agent()` call with
    `effort: 'xhigh'` when the spawning tool cannot set effort directly); a large or
    complex PR (roughly: >300 changed lines, >6 files, or any behaviour change in
-   `src/`'s parsing/guard/scheduling logic) → an **ultracode-style multi-agent review**
-   (a Workflow fanning independent reviewers per dimension — contract-conformance vs the
-   spec, correctness/edge cases, tests-kill-mutants — with adversarial verification of
-   each finding), its agents likewise capped at `xhigh`. Do **not** propagate ponytail
+   `src/`'s parsing/guard/scheduling logic) → the **committed `review-fanout` workflow**:
+   `Workflow({name: 'review-fanout', args: {pr: N, base: '<base>', worktree: '<path>',
+   spec: '<the work item's intent/acceptance criteria>'}})` — three independent lenses
+   (contract-conformance vs the spec, correctness + hostile inputs, test honesty) with
+   execution-grounded adversarial verification of every finding, agents capped at
+   `xhigh` (script: `.claude/workflows/review-fanout.js`; treat its `confirmed` list as
+   the review findings and note the `refuted` list in the audit trail rather than
+   re-improvising the fan-out shape each time). Do **not** propagate ponytail
    to the reviewer (CLAUDE.md: ponytail governs what you build; a reviewer builds
    nothing — thoroughness and finding detail are outside its scope).
 2. **When the sub-agent finishes, resolve the CodeRabbit outcome (Steps 1a–1c).** If
