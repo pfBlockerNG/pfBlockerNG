@@ -56,7 +56,9 @@ const GATE_RECORD = {
 
 phase('Implement')
 
-const ponytailLine = ponytailLevel ? `Run /ponytail:ponytail ${ponytailLevel} before anything else.\n` : ''
+// The SubagentStart hook injects the mode capsule at the repo default (full);
+// a brief line is needed only to OVERRIDE it with a non-default level.
+const ponytailLine = ponytailLevel && ponytailLevel !== 'full' ? `Run /ponytail:ponytail ${ponytailLevel} (or /ponytail ${ponytailLevel} if unnamespaced) before anything else.\n` : ''
 const handoff = await agent(`${ponytailLine}${brief}
 
 STANDING CONTRACT (CLAUDE.md "The delegation contract" — these override nothing above, they restate the law):

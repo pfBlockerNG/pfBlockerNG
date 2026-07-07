@@ -192,10 +192,6 @@ is only safe because you gate every step). Give it a **self-contained** brief �
 carry-over from this conversation, though it has the full worktree (the whole codebase) to
 read and edit:
 
-- **Mode propagation is mechanical** — the `SubagentStart` hook injects the ponytail +
-  caveman capsule into the implementer (CLAUDE.md "Plan with a higher model"). Add a FIRST
-  line `Run /ponytail:ponytail <level>` ONLY when a non-default level (`lite`/`ultra`) is
-  active in THIS session; at the default `full`, the hook alone propagates it.
 - The **full text** of the phase prompt `{ADR_DIR}/{MM}_*.txt`.
 - "Work **entirely inside** the worktree at `<path>` — all edits and all git
   commands there (`git -C <path> …`). Do not touch the main checkout."

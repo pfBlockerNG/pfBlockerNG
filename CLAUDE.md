@@ -263,8 +263,8 @@ required" gate.
 ## Communication
 
 **Mandatory at every session start (enforced by the `SessionStart` hook):** activate **both**
-modes when available — `/ponytail:ponytail full` (laziest working solution) and `/caveman`
-(terse, full technical accuracy). Ponytail governs what you build; caveman how you talk. A
+modes — ponytail at `full` (`/ponytail:ponytail` plugin form or `/ponytail` vendored form,
+whichever exists; laziest working solution) and `/caveman` (terse, full technical accuracy). Ponytail governs what you build; caveman how you talk. A
 per-prompt `UserPromptSubmit` hook re-injects the discipline capsule; the hooks are the
 mechanism, this line is the rule.
 
