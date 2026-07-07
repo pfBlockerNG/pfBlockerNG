@@ -39,8 +39,9 @@ Verification — the canonical gates + per-item acceptance checks ("WHEN `<comma
 `<observable>`"). 7. The ESCALATE contract.
 
 Also in the brief: worktree-only work, the fixed HANDOFF fields (CLAUDE.md "THE HANDOFF"),
-commit style, and — if ponytail is active in this session — the first line
-`Run /ponytail:ponytail <level>`.
+and commit style. Mode propagation is mechanical (the `SubagentStart` hook injects the
+ponytail + caveman capsule); add a first line `Run /ponytail:ponytail <level>` ONLY when a
+non-default level (`lite`/`ultra`) is active in this session.
 
 A weak brief is YOUR bug. If a load-bearing fact is unverified, probe it now or mark it
 ASSUMED with a verification step in the brief.

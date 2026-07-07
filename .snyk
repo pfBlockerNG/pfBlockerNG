@@ -8,3 +8,7 @@ exclude:
     - build/**
     - ci/**
     - .github/**
+    # Vendored third-party plugin trees (byte-identical upstream copies,
+    # refreshed by scripts/update-vendored-skills.py; see UPSTREAM files).
+    - .claude/skills/ponytail/**
+    - .claude/skills/caveman/**

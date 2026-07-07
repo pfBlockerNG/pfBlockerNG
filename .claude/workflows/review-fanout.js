@@ -55,7 +55,7 @@ const VERDICT = {
   },
 }
 
-const COMMON = `You are an independent ADVERSARIAL reviewer of PR #${pr} (base ${base}) in a READ-ONLY checkout at ${worktree}. Diff: git -C ${worktree} diff origin/${base}...HEAD. Read surrounding code, not just hunks; you may run commands/gates but never edit, commit, or push. Ground every blocking correctness claim in an EXECUTED probe (command + output) where executable off-appliance — create scratch fixtures under /tmp, never inside the checkout. Return structured findings; your output is the review. THE SPEC (review the diff AGAINST this; silently narrowed scope is a blocking finding): ${spec}`
+const COMMON = `You are an independent ADVERSARIAL reviewer of PR #${pr} (base ${base}) in a READ-ONLY checkout at ${worktree}. Diff: git -C ${worktree} diff origin/${base}...HEAD. Read surrounding code, not just hunks; you may run commands/gates but never edit, commit, or push. Ground every blocking correctness claim in an EXECUTED probe (command + output) where executable off-appliance — create scratch fixtures under /tmp, never inside the checkout. Files under .claude/skills/ponytail/ and .claude/skills/caveman/ are VENDORED byte-identical third-party trees (see their UPSTREAM provenance files) — do NOT review their content or style; only byte-identity with the pinned upstream ref and the UPSTREAM provenance are reviewable. Return structured findings; your output is the review. THE SPEC (review the diff AGAINST this; silently narrowed scope is a blocking finding): ${spec}`
 
 phase('Find')
 
