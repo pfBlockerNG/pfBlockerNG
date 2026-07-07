@@ -143,3 +143,16 @@ def test_repo_tree_is_clean() -> None:
     # CI enforcement: every tracked post-contract phase prompt in THIS repo
     # complies. (Trivially green until ADR_60 exists; from then on it gates.)
     assert cpp.find_violations(cpp.tracked_phase_prompts()) == []
+
+
+def test_retrofitted_unimplemented_adrs_are_gated(tmp_path: Path) -> None:
+    # ADR-25/32/33/34/54/55 are Proposed (unimplemented) — their prompts drive
+    # FUTURE implementer runs, were retrofitted to comply (2821b9df), and are
+    # gated despite predating the contract cutoff.
+    rel = ".ADRs/ADR_55_Client_Groups_Group_Policy/05_New_Phase.txt"
+    assert sorted(_violations(tmp_path, rel, "just do the thing\n")) == [
+        "handoff-results",
+        "mode-declared",
+        "reality-override",
+        "verification-section",
+    ]
