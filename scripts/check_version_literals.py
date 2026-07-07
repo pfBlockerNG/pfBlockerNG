@@ -87,7 +87,7 @@ _TOKEN_ALTERNATIVES = (
     r"php[0-9]{2}",  # php flavor: php74..php99
     r"py3[0-9]{2}",  # py flavor: py310..py399
     r"ce-[0-9]+\.[0-9]+",  # varver: ce-X.Y
-    r"plus-[0-9]{2}\.[0-9]{2}",  # varver: plus-NN.NN
+    r"plus-[0-9]+\.[0-9]+",  # varver: plus-X.Y (generalized like ce- — review-fanout C8, PR #947)
 )
 
 # ponytail: a flavor token embedded in a hardcoded package name (e.g.
@@ -129,12 +129,14 @@ _ASSIGNMENT_RE = re.compile(
 
 # The double-quote side is escape-aware (\" is content in sh/php/js/py alike),
 # so an escaped quote does not mispair the spans and swallow a later literal
-# (Copilot, PR #947). ponytail: the single-quote side stays naive -- POSIX sh
-# has NO single-quote escapes, so naive is shell-correct; a PHP/JS \' inside
-# single quotes may mispair spans, but no version token contains a quote and
-# the quoted-literal path still sees every properly paired span. Split the
-# regex per language if that ever bites.
+# (Copilot, PR #947). The single-quote side is language-scoped: PHP/JS support
+# \' inside single quotes, so the C-style variant is escape-aware there too
+# (review-fanout C9, PR #947 — a \' earlier on the line mispaired the spans
+# and swallowed a later single-quoted token); POSIX sh has NO single-quote
+# escapes, so the shell/YAML variant keeps the naive single-quote side, which
+# is shell-correct.
 _QUOTED_RE = re.compile(r'"((?:[^"\\]|\\.)*)"|\'([^\']*)\'')
+_QUOTED_C_RE = re.compile(r'"((?:[^"\\]|\\.)*)"|\'((?:[^\'\\]|\\.)*)\'')
 
 # Inline per-line escape (`# version-literal-ok: <reason>`), spec'd in issue #922.
 _ESCAPE = "version-literal-ok"
@@ -162,9 +164,14 @@ def _is_excluded(path: Path) -> bool:
     return path.name.startswith("install_deps_")
 
 
-def _quoted_literals(line: str) -> list[str]:
-    """Return the inner text of every single- or double-quoted span on ``line``."""
-    return [m.group(1) if m.group(1) is not None else m.group(2) for m in _QUOTED_RE.finditer(line)]
+def _quoted_literals(line: str, c_style: bool = False) -> list[str]:
+    """Return the inner text of every single- or double-quoted span on ``line``.
+
+    ``c_style`` selects the PHP/JS variant whose single-quote side is
+    escape-aware (``\\'`` is content there, unlike POSIX sh).
+    """
+    regex = _QUOTED_C_RE if c_style else _QUOTED_RE
+    return [m.group(1) if m.group(1) is not None else m.group(2) for m in regex.finditer(line)]
 
 
 def _strip_inline_comment(line: str) -> str:
@@ -207,10 +214,18 @@ def _split_c_comment(line: str, hash_comments: bool) -> tuple[str, bool]:
     Quote-aware: ``//``, ``/*`` and ``#`` inside a quoted string are content,
     not comments, and a backslash inside a quoted string escapes the next char
     (PHP/JS support ``\\'``/``\\"`` in both quote types -- Copilot, PR #947),
-    so an escaped quote does not mis-close the string. A ``/*...*/`` pair
-    closed on the same line is dropped and the code after it is kept.
-    ``hash_comments`` enables ``#`` (PHP family only -- in JS, ``#`` is a
-    private-field sigil).
+    so an escaped quote does not mis-close the string. Backticks are tracked
+    as a third quote type (review-fanout C5, PR #947): a JS template literal
+    (or PHP shell-exec string) containing ``//`` must not truncate the scan of
+    real code after it. A ``/*...*/`` pair closed on the same line is dropped
+    and the code after it is kept. ``hash_comments`` enables ``#`` (PHP family
+    only -- in JS, ``#`` is a private-field sigil).
+
+    ponytail: quote state is per-line -- a PHP/JS string spanning physical
+    lines without heredoc can hide a value on its continuation line
+    (review-fanout C6; none in the tree, house style uses single-line strings
+    or heredoc). Carry the open quote across lines like ``in_block`` if that
+    ever bites.
     """
     out: list[str] = []
     quote: str | None = None
@@ -228,7 +243,7 @@ def _split_c_comment(line: str, hash_comments: bool) -> tuple[str, bool]:
             out.append(ch)
             i += 1
             continue
-        if ch in ("'", '"'):
+        if ch in ("'", '"', "`"):
             quote = ch
             out.append(ch)
             i += 1
@@ -248,9 +263,9 @@ def _split_c_comment(line: str, hash_comments: bool) -> tuple[str, bool]:
     return "".join(out), False
 
 
-def _line_has_value_literal(code: str) -> bool:
+def _line_has_value_literal(code: str, c_style: bool = False) -> bool:
     """True if ``code`` (comments already stripped) holds a token standing ALONE as a value."""
-    for literal in _quoted_literals(code):
+    for literal in _quoted_literals(code, c_style):
         if _FULL_VALUE_RE.fullmatch(literal):
             return True
     return bool(_ASSIGNMENT_RE.match(code))
@@ -340,11 +355,12 @@ def find_violations(paths: list[Path]) -> list[tuple[Path, int, str]]:
         except (OSError, UnicodeError):
             continue
         lines = text.splitlines()
+        c_style = path.suffix in _C_COMMENT_EXTS
         code_lines = _code_lines(lines, path.suffix)
         for lineno, (line, code) in enumerate(zip(lines, code_lines, strict=True), start=1):
             if code is None or _ESCAPE in line:
                 continue
-            if _line_has_value_literal(code):
+            if _line_has_value_literal(code, c_style):
                 violations.append((path, lineno, line.strip()))
     return violations
 
@@ -355,9 +371,17 @@ def _matrix_tokens(matrix: dict) -> list[str]:
     Per entry: the bare pfSense version (a trailing ``.x`` stripped), its
     ``ce-``/``plus-`` varver, the ``FreeBSD:<major>`` ABI prefix, the php
     flavor (``php_version`` with the dot dropped), and the py flavor verbatim.
+
+    ``role=route-only`` entries (ADR-27: EOL'd but still served, frozen
+    catalog, no longer built/tested) are excluded, mirroring
+    ``read-version-matrix.sh``'s BUILD/CI derivations (review-fanout C1,
+    PR #947): a frozen version's identity is no longer an active-development
+    value, so the window need not keep covering it forever.
     """
     tokens: list[str] = []
     for entry in matrix.get("versions", []):
+        if str(entry.get("role", "build")) == "route-only":
+            continue
         version = str(entry.get("pfsense_version", "")).removesuffix(".x")
         channel = str(entry.get("channel", "")).lower()
         major = str(entry.get("freebsd_major", ""))
@@ -398,17 +422,25 @@ def _verify_matrix(argv: list[str]) -> int:
         else:
             print(f"unknown --verify-matrix option: {arg}", file=sys.stderr)
             return 2
-    if matrix_file is not None:
-        text = Path(matrix_file).read_text(encoding="utf-8")
-    else:
-        out = subprocess.run(
-            ["git", "show", f"{ref}:supported-versions.json"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        text = out.stdout
-    uncovered = uncovered_matrix_tokens(json.loads(text))
+    # A misconfigured invocation (bad ref, missing file, malformed JSON) gets the
+    # file's one-line stderr convention + exit 2, not a traceback (review-fanout
+    # C7, PR #947) -- distinct from exit 1 (uncovered tokens) so CI logs read right.
+    try:
+        if matrix_file is not None:
+            text = Path(matrix_file).read_text(encoding="utf-8")
+        else:
+            out = subprocess.run(
+                ["git", "show", f"{ref}:supported-versions.json"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            text = out.stdout
+        uncovered = uncovered_matrix_tokens(json.loads(text))
+    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+        detail = exc.stderr.strip() if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+        print(f"--verify-matrix: cannot read the matrix: {detail}", file=sys.stderr)
+        return 2
     if not uncovered:
         return 0
     print(
