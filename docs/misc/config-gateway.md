@@ -91,9 +91,9 @@ on rollback the old code **ignores** the key (inert, not misread or corrupting) 
 version (inherent, out of scope). `since-version` bounds each field's rollback claim to releases
 at/after that version; it is a per-field scope marker, not a migration.
 
-### Section writes are normalized too (issue #930)
+### Section writes are normalised too (issue #930)
 
-`PfbConfig::writeSection($section, $data)` applies the **same** BACKWARD-invariant normalization
+`PfbConfig::writeSection($section, $data)` applies the **same** BACKWARD-invariant normalisation
 as a single-key `PfbConfig::write()` — for every key in `$data` that is registered to the EXACT
 target `$section` (a same-named key registered to a *different* section is foreign data and is
 left untouched) and carries **both** a read and a write adapter, the value is round-tripped
