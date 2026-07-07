@@ -353,6 +353,23 @@ def test_js_hash_is_not_a_comment(tmp_path: Path) -> None:
     assert len(violations) == 1, f"# must not comment-strip JS; got {violations}"
 
 
+def test_js_template_literal_slashes_not_a_comment(tmp_path: Path) -> None:
+    # review-fanout C5 (PR #947): a // inside a backtick template literal is
+    # content, not a comment opener -- the real value after it must still flag.
+    content = 'const u = `https://example/x`; const f = "' + _PY311 + '";\n'
+    violations = _find_named(tmp_path, "s.js", content)
+    assert len(violations) == 1, f"// inside a template literal must not truncate the scan; got {violations}"
+
+
+def test_php_escaped_squote_before_squoted_token_flagged(tmp_path: Path) -> None:
+    # review-fanout C9 (PR #947): PHP/JS support \' inside single quotes; the
+    # naive single-quote span pairing swallowed a later single-quoted token on
+    # the same line. The C-style extractor is escape-aware on both quote types.
+    content = "$s = 'it\\'s fine'; $f = '" + _PY311 + "';\n"
+    violations = _find_named(tmp_path, "s.php", content)
+    assert len(violations) == 1, f"\\' must not swallow a later single-quoted token; got {violations}"
+
+
 # --- Issue #941: Python triple-quote fixes (parity + one-line value) --------
 
 
@@ -399,6 +416,15 @@ def test_stale_and_future_version_shapes_flagged(tmp_path: Path) -> None:
     for value in (_FREEBSD14, _FREEBSD17, "php7" + "4", "py3" + "12"):
         violations = _find(tmp_path, f'target: "{value}"\n')
         assert len(violations) == 1, f"version-agnostic shape must flag: {value}; got {violations}"
+
+
+def test_widened_varvers_flagged(tmp_path: Path) -> None:
+    # Discriminating rows for the varver widening (review-fanout C4/C8, PR
+    # #947): multi-digit components the old single-digit ce- pattern and the
+    # old exactly-2-digit plus- pattern could not match.
+    for value in ("ce-" + "2.10", "ce-" + "10.0", "plus-" + "27.1", "plus-" + "100.03"):
+        violations = _find(tmp_path, f'varver: "{value}"\n')
+        assert len(violations) == 1, f"generalized varver must flag: {value}; got {violations}"
 
 
 # --- Issue #940: the matrix tripwire (--verify-matrix) -----------------------
@@ -493,3 +519,34 @@ def test_verify_matrix_cli_exit_codes(tmp_path: Path) -> None:
     bad.write_text(json.dumps(_matrix([bad_entry])), encoding="utf-8")
     assert cvl.main(["--verify-matrix", "--matrix-file", str(good)]) == 0
     assert cvl.main(["--verify-matrix", "--matrix-file", str(bad)]) == 1
+
+
+def test_verify_matrix_config_errors_exit_2(tmp_path: Path) -> None:
+    # review-fanout C7 (PR #947): a misconfigured invocation (missing file,
+    # malformed JSON, bad ref) gets a one-line stderr message + exit 2 -- never
+    # a traceback, and never conflated with exit 1 (uncovered tokens).
+    missing = tmp_path / "nope.json"
+    garbled = tmp_path / "garbled.json"
+    garbled.write_text("{not json", encoding="utf-8")
+    assert cvl.main(["--verify-matrix", "--matrix-file", str(missing)]) == 2
+    assert cvl.main(["--verify-matrix", "--matrix-file", str(garbled)]) == 2
+    assert cvl.main(["--verify-matrix", "--ref", "origin/does-not-exist-" + "xyz"]) == 2
+
+
+def test_matrix_tokens_route_only_entries_excluded() -> None:
+    # review-fanout C1 (PR #947): a role=route-only entry (ADR-27 -- EOL'd but
+    # still served, frozen catalog) is excluded from the tripwire derivation,
+    # mirroring read-version-matrix.sh. Its wildly-out-of-window version must
+    # NOT be reported uncovered; the same entry without the role must be.
+    entry = {
+        "pfsense_version": "99" + ".99",
+        "channel": "Plus",
+        "freebsd_major": "15",
+        "php_version": "8.3",
+        "py_flavor": _PY311,
+        "role": "route-only",
+    }
+    assert cvl.uncovered_matrix_tokens(_matrix([entry])) == [], "route-only entries must be excluded"
+    active = {k: v for k, v in entry.items() if k != "role"}
+    uncovered = cvl.uncovered_matrix_tokens(_matrix([active]))
+    assert uncovered == ["99" + ".99"], f"the same entry without role must be reported; got {uncovered}"

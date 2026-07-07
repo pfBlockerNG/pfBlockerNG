@@ -261,7 +261,7 @@ jobs:
         # file self-excluded from its own scan (issue #940). Fail loudly the moment
         # supported-versions.json carries a version those patterns no longer cover,
         # instead of the gate narrowing silently. Checkout doesn't bring orphan refs,
-        # so fetch ci-metadata first (same as test-version-matrix).
+        # so fetch ci-metadata first (same fetch as the read-matrix job above).
         run: |
           git fetch --no-tags --depth=1 origin ci-metadata:refs/remotes/origin/ci-metadata
           python3 scripts/check_version_literals.py --verify-matrix
