@@ -40,21 +40,20 @@ _BLOCK_REASON = (
     "applies."
 )
 
-_TAIL_LINES = 50
+# Byte-bounded tail read: a fixed small LINE window (the first cut used 50 lines)
+# silently drops the triggering edit on any real turn longer than the window --
+# each tool round-trip is >=2 JSONL lines -- flipping BLOCK to ALLOW. 5 MB from
+# EOF comfortably covers a whole turn while keeping memory bounded; the turn
+# boundary (last genuine user prompt) decides scope, not the window.
+_TAIL_BYTES = 5_000_000
 
 _EDIT_TOOLS = ("Edit", "Write")
 _EDIT_PATH_RE = re.compile(r"(^|/)(src|tests)/")
 _CLAIM_RE = re.compile(r"\b(done|completed?|implemented|fixed|landed|finished|green)\b", re.IGNORECASE)
-_GATE_KEYWORDS = (
-    "pytest",
-    "phpunit",
-    "phpstan",
-    "phpcs",
-    "php -l",
-    "ruff",
-    "shellcheck",
-    "shellspec",
-    "mypy",
+# \b-anchored: a bare substring test credits `ruff` inside `truffle` as a gate run.
+_GATE_RE = re.compile(
+    r"\b(pytest|phpunit|phpstan|phpcs|php -l|ruff|shellcheck|shellspec|mypy)\b",
+    re.IGNORECASE,
 )
 
 
@@ -114,8 +113,10 @@ def _last_edit_index(turn: list[dict[str, Any]]) -> int | None:
 
 
 def _gate_ran_after(turn: list[dict[str, Any]], after_index: int) -> bool:
+    # `i < after_index` (not <=): an Edit and its gate Bash call batched as two
+    # tool_use blocks in the SAME assistant entry must credit the gate.
     for i, e in enumerate(turn):
-        if i <= after_index or e.get("type") != "assistant":
+        if i < after_index or e.get("type") != "assistant":
             continue
         for item in _content_items(e):
             if item.get("type") != "tool_use" or item.get("name") != "Bash":
@@ -126,18 +127,24 @@ def _gate_ran_after(turn: list[dict[str, Any]], after_index: int) -> bool:
             command = tool_input.get("command")
             if not isinstance(command, str):
                 continue
-            if any(kw in command for kw in _GATE_KEYWORDS):
+            if _GATE_RE.search(command):
                 return True
     return False
 
 
 def _last_assistant_text(turn: list[dict[str, Any]]) -> str:
+    """Text of the LAST assistant entry only -- never an earlier entry's text.
+
+    Walking further back would resurrect a stale mid-turn "done" from before
+    later tool work and false-block a turn whose real final entry made no claim.
+    """
     for e in reversed(turn):
         if e.get("type") != "assistant":
             continue
         for item in reversed(_content_items(e)):
             if item.get("type") == "text" and isinstance(item.get("text"), str):
                 return item["text"]
+        return ""
     return ""
 
 
@@ -181,9 +188,14 @@ def main() -> int:
         transcript_path = payload.get("transcript_path")
         tail_lines: list[str] = []
         if isinstance(transcript_path, str) and transcript_path:
-            with open(transcript_path, encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()
-            tail_lines = lines[-_TAIL_LINES:]
+            with open(transcript_path, "rb") as f:
+                f.seek(0, 2)
+                size = f.tell()
+                f.seek(max(0, size - _TAIL_BYTES))
+                data = f.read().decode("utf-8", errors="replace")
+            tail_lines = data.splitlines()
+            if size > _TAIL_BYTES and tail_lines:
+                tail_lines = tail_lines[1:]  # drop the partial first line of the byte cut
         reason = decide(payload, tail_lines)
         if reason:
             print(json.dumps({"decision": "block", "reason": reason}))
