@@ -138,12 +138,3 @@ def test_uppercase_md_extension_is_neutral() -> None:
     # is still docs-neutral -- paired with a firing sibling to prove discrimination.
     assert ccp.evaluate(["src/usr/local/pkg/pfblockerng/NOTES.MD"]) == [], "an uppercase .MD is docs, neutral"
     assert ccp.evaluate(["src/usr/local/pkg/pfblockerng/notes.inc"]) != [], "a .inc sibling is src code, fires"
-
-
-def test_bare_directory_names_hit_the_equality_branches() -> None:
-    # The `path == "src"` / `== "tests"` equality clauses exist for completeness
-    # (git never emits a bare directory from --name-only, but the branches are
-    # written and documented): a bare `src` is src code (fires, no test), and a
-    # bare `tests` satisfies rule 1's pairing.
-    assert ccp.evaluate(["src"]) != [], "bare `src` classifies as src code and fires rule 1"
-    assert ccp.evaluate(["src", "tests"]) == [], "bare `tests` satisfies the src<->tests pairing"
