@@ -180,4 +180,58 @@ final class PfbUtf16TranscodeFileTest extends TestCase
 		$this->assertTrue($result);
 		$this->assertSame('AB?', file_get_contents($path), 'pinned observed mb_convert_encoding behaviour for a dangling odd byte');
 	}
+
+	public function test_bom_only_utf16be_and_utf32be_files(): void
+	{
+		// BE siblings of the LE BOM-only pins above -- the conversion path is shared,
+		// and these rows pin that the BE byte orders behave identically (PR #951 review).
+		$path16 = $this->path('bom_only_16be.bin');
+		file_put_contents($path16, "\xFE\xFF");
+		$this->assertTrue(pfb_utf16_transcode_file($path16));
+		$this->assertSame('', file_get_contents($path16));
+
+		$path32 = $this->path('bom_only_32be.bin');
+		file_put_contents($path32, "\x00\x00\xFE\xFF");
+		$this->assertTrue(pfb_utf16_transcode_file($path32));
+		$this->assertSame('', file_get_contents($path32));
+	}
+
+	public function test_odd_length_utf16be_and_utf32_payloads_do_not_crash(): void
+	{
+		// BE / UTF-32 siblings of the odd-length pin: a dangling partial code unit is
+		// substituted with '?' identically across byte orders (PR #951 review).
+		$path16 = $this->path('odd_16be.bin');
+		file_put_contents($path16, "\xFE\xFF" . mb_convert_encoding('AB', 'UTF-16BE', 'UTF-8') . "\x41");
+		$this->assertTrue(pfb_utf16_transcode_file($path16));
+		$this->assertSame('AB?', file_get_contents($path16));
+
+		$path32le = $this->path('odd_32le.bin');
+		file_put_contents($path32le, "\xFF\xFE\x00\x00" . mb_convert_encoding('AB', 'UTF-32LE', 'UTF-8') . "\x41");
+		$this->assertTrue(pfb_utf16_transcode_file($path32le));
+		$this->assertSame('AB?', file_get_contents($path32le));
+
+		$path32be = $this->path('odd_32be.bin');
+		file_put_contents($path32be, "\x00\x00\xFE\xFF" . mb_convert_encoding('AB', 'UTF-32BE', 'UTF-8') . "\x41");
+		$this->assertTrue(pfb_utf16_transcode_file($path32be));
+		$this->assertSame('AB?', file_get_contents($path32be));
+	}
+
+	public function test_transcode_preserves_permission_bits(): void
+	{
+		// tempnam() creates 0600 files; without an explicit chmod the rename would
+		// silently narrow the .orig's mode (PR #951 review, Copilot). Pin that a
+		// distinctive pre-existing mode survives the atomic rewrite.
+		$path = $this->path('perms.bin');
+		file_put_contents($path, "\xFF\xFE" . mb_convert_encoding("0.0.0.0 example.com\n", 'UTF-16LE', 'UTF-8'));
+		chmod($path, 0644);
+
+		$this->assertTrue(pfb_utf16_transcode_file($path));
+
+		clearstatcache();
+		$this->assertSame(
+			'644',
+			decoct(fileperms($path) & 0777),
+			'permission bits must survive the tempnam()+rename() rewrite'
+		);
+	}
 }

@@ -1047,31 +1047,45 @@ function pfb_utf16_sample_to_utf8(string $sample): string {
 	}
 
 	$bom_len = ($enc === 'UTF-32LE' || $enc === 'UTF-32BE') ? 4 : 2;
+	// Stock mbstring substitutes invalid sequences with '?' rather than returning FALSE,
+	// so this fail-open branch is believed unreachable in practice -- kept as cheap
+	// insurance against a build where the conversion does fail.
 	$converted = @mb_convert_encoding(substr($sample, $bom_len), 'UTF-8', $enc);
 
 	return ($converted === FALSE) ? $sample : $converted;
 }
 
 // issue #946: transcode a UTF-16/UTF-32-BOM-prefixed FILE to UTF-8 in place, atomically.
-// Returns FALSE (file left untouched) when: the path is unreadable, no BOM matches, or
-// mb_convert_encoding() fails (logged as a warning) -- fail-open in every case, so downstream
-// behaves exactly as it did before this function existed. Returns TRUE after a successful
-// same-filesystem rename() with the original mtime restored (the caller runs this AFTER the
-// remote_stamp touch(), so that stamp must survive).
-// ponytail: whole-file read/rewrite -- BOM-marked feeds are rare and small in practice (a text
-// blocklist, not a multi-GB dataset); switch to a streaming decode if that assumption ever
-// stops holding.
+// Only the first 4 bytes are read to sniff the BOM (an ingest runs this on EVERY feed, and
+// feeds can be tens of MB -- slurping them all just to look at a prefix would risk the PHP
+// memory limit, which file_get_contents() hits as a fatal error, not a catchable failure);
+// the full read happens only for an actual BOM match. Returns FALSE (file left untouched)
+// when: the path is unreadable, no BOM matches, or mb_convert_encoding() fails (logged as a
+// warning; believed unreachable on stock mbstring, which substitutes '?' instead of failing)
+// -- fail-open in every case, so downstream behaves exactly as it did before this function
+// existed. Returns TRUE after a successful same-filesystem rename() with the original mtime
+// (when readable) and permission bits (when readable) restored -- the caller runs this AFTER
+// the remote_stamp touch(), so that stamp must survive, and tempnam() creates 0600 files, so
+// the mode must be carried over explicitly (same discipline as the atomic-publish helpers).
+// ponytail: whole-file read/rewrite for the BOM-matched case only -- BOM-marked feeds are
+// rare and small in practice; switch to a streaming decode if that assumption ever stops
+// holding.
 function pfb_utf16_transcode_file(string $path): bool {
 	if (!@is_readable($path)) {
 		return FALSE;
 	}
-	$content = @file_get_contents($path);
-	if ($content === FALSE) {
+	$head = @file_get_contents($path, FALSE, NULL, 0, 4);
+	if ($head === FALSE) {
 		return FALSE;
 	}
 
-	$enc = pfb_utf16_bom_encoding($content);
+	$enc = pfb_utf16_bom_encoding($head);
 	if ($enc === NULL) {
+		return FALSE;
+	}
+
+	$content = @file_get_contents($path);
+	if ($content === FALSE) {
 		return FALSE;
 	}
 
@@ -1083,12 +1097,16 @@ function pfb_utf16_transcode_file(string $path): bool {
 	}
 
 	$mtime = @filemtime($path);
+	$perms = @fileperms($path);
 	$tmp = @tempnam(dirname($path), 'pfb_u16_');
 	if ($tmp === FALSE || @file_put_contents($tmp, $converted) === FALSE) {
 		if ($tmp !== FALSE) {
 			@unlink($tmp);
 		}
 		return FALSE;
+	}
+	if ($perms !== FALSE) {
+		@chmod($tmp, $perms & 0777);
 	}
 	if (!@rename($tmp, $path)) {
 		@unlink($tmp);
@@ -16497,7 +16515,9 @@ function sync_package_pfblockerng($cron='') {
 											// header sniff handles its own BOM, but the '!' comment skip, the ADR-21
 											// '||' anchor short-circuit and the CSV autodetection below do not; a BOM-led
 											// first line would be misclassified by all three. $oline keeps the original
-											// bytes for the parse-error log.
+											// bytes for the parse-error log. This also strips a BOM from raw ABP body
+											// lines before their verbatim passthrough to Python -- intentional and
+											// harmless (Python's parser is byte-oriented too).
 											$line = pfb_dnsbl_strip_bom($line);
 
 											// Validate EasyList/AdBlock/uBlock/ADGuard Feeds.
