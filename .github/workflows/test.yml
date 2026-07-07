@@ -573,6 +573,44 @@ jobs:
       scope: full
     secrets: inherit
 
+  # ── Coverage-pairing gate (issue #921) ───────────────────────────────────
+  # PR-only: diffs the PR head against its base and enforces src<->tests and
+  # www<->ui-tests pairing (scripts/check_coverage_pairing.py). On push (post-
+  # merge, no PR base) it is skipped and folds into all-tests-passed as a pass,
+  # same shape as the ui-suite label fold below.
+  coverage-pairing:
+    name: Coverage pairing (src/tests + www/ui)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # need the merge-base with the PR base ref for the three-dot diff
+
+      - name: Compute changed files vs base
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -eu
+          git fetch --no-tags origin "$BASE:refs/remotes/origin/$BASE"
+          git diff --name-only "origin/$BASE...HEAD" > changed.txt
+          echo "Changed files vs origin/$BASE:"; cat changed.txt
+
+      - name: Enforce src<->tests and www<->ui coverage pairing
+        # ubuntu-latest ships python3. --warn-only downgrades a violation to a
+        # visible warning when the PR carries the no-test-needed label.
+        # `pipefail` is REQUIRED here: a step with no `shell:` keyword runs under
+        # `bash -e {0}` (the default template — NOT `-o pipefail`), so without it
+        # the tee's exit 0 would mask the script's exit 1 and this gate would
+        # silently always pass. Setting it explicitly makes the exit code of the
+        # script (not tee) decide the job result.
+        env:
+          WARN_ONLY: ${{ contains(github.event.pull_request.labels.*.name, 'no-test-needed') && '1' || '' }}
+        run: |
+          set -euo pipefail
+          python3 scripts/check_coverage_pairing.py ${WARN_ONLY:+--warn-only} < changed.txt | tee -a "$GITHUB_STEP_SUMMARY"
+
   # Single stable job name for branch-protection required-status-checks.
   # Must use if: always() so it runs (and fails) even when 'test' fails.
   all-tests-passed:
@@ -584,7 +622,7 @@ jobs:
     # The ADR-14 UI suite (`ui-suite`) IS folded in: it is skipped (== pass) on an
     # unlabeled PR / push, and only a `ui-tests`-labeled PR whose UI suite FAILS
     # blocks here — that is how the opt-in label gates a merge.
-    needs: [read-matrix, test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, ui-suite]
+    needs: [read-matrix, test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, ui-suite, coverage-pairing]
     runs-on: ubuntu-latest
     steps:
       - name: Check matrix results
@@ -643,4 +681,12 @@ jobs:
           case "${{ needs.ui-suite.result }}" in
             success|skipped) ;;
             *) echo "Labeled UI suite (ui-tests) failed or was cancelled."; exit 1 ;;
+          esac
+          # Coverage-pairing gate (issue #921): 'skipped' (push, no PR base) is a
+          # PASS; a PR whose src<->tests / www<->ui-tests pairing actually FAILED
+          # (or was cancelled) blocks the merge, unless the no-test-needed label
+          # already downgraded it to a warning (job still reports success).
+          case "${{ needs.coverage-pairing.result }}" in
+            success|skipped) ;;
+            *) echo "Coverage-pairing gate (src/tests, www/ui) failed or was cancelled."; exit 1 ;;
           esac
