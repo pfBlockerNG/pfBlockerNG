@@ -381,6 +381,84 @@ Describe 'claude-bash-guard.sh'
     End
   End
 
+  # ── per-segment scoping: a force flag in one compound-command segment must
+  #    not leak into a rule for an unrelated, unforced segment (#923 review,
+  #    Copilot false-positive) ───────────────────────────────────────────────
+
+  Describe 'per-segment scoping (compound commands): a rule only fires when its trigger and its force flag share ONE segment'
+    It 'C1 (Rule C FP, Copilot case): unforced worktree remove && leased push -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git worktree remove ../wt && git push --force-with-lease"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'C2 (Rule C FP, reversed order): leased push && unforced worktree remove -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push --force-with-lease && git worktree remove ../wt"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'C3 (Rule B FP): git clean --force && normal git push -> PASS (force belongs to git clean, not the push)'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git clean --force && git push origin main"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'C4 (Rule B FP, subshell boundary): (git clean --force); git push origin main -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"(git clean --force); git push origin main"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'C5 (still caught): git status && a genuinely forced push in its own segment -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git status && git push --force"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'C6 (still caught): git fetch && a genuinely forced worktree remove -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git fetch && git worktree remove -f ../wt"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'C7 (still caught): git status && git commit --no-verify -m x -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git status && git commit --no-verify -m x"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'C8 (unforced remove next to a genuinely forced push): the push segment is still denied on its own merits'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git worktree remove ../wt && git push --force origin main"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+  End
+
   # ── plain git, no rule in scope ─────────────────────────────────────────────
 
   It 'P9: plain git status -> PASS'
