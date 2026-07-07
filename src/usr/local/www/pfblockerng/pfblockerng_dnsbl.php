@@ -195,7 +195,7 @@ if (is_dir("{$indexdir}")) {
 $options_dnsbl_webpage_cnt = count($options_dnsbl_webpage) ?: '1';
 
 $options_alexa_type		= [ 'tranco' => 'Tranco TOP1M', 'cisco' => 'Cisco Umbrella TOP1M',
-					    'domcop' => 'DomCop TOP1M', 'majestic' => 'Majestic Million TOP1M',
+					    'openpagerank' => 'OpenPageRank TOP1M', 'majestic' => 'Majestic Million TOP1M',
 					    'cloudflare' => 'Cloudflare Radar' ];
 
 // ADR-59 P5: providers whose 'auth' needs the top1m_token field, derived from the
@@ -3251,7 +3251,7 @@ $top1m_text = 'The TOP1M feed can be used to whitelist the most popular Domain n
 		<ul>
 			<li><a target="_blank" href="https://tranco-list.eu/">Tranco TOP1M</a></li>
 			<li><a target="_blank" href="https://s3-us-west-1.amazonaws.com/umbrella-static/index.html">Cisco Umbrella TOP1M</a></li>
-			<li><a target="_blank" href="https://www.domcop.com/top-10-million-domains">DomCop TOP1M</a></li>
+			<li><a target="_blank" href="https://openpagerank.keywordseverywhere.com/top-10-million-domains">OpenPageRank TOP1M</a></li>
 			<li><a target="_blank" href="https://majestic.com/reports/majestic-million">Majestic Million TOP1M</a> --
 				distributed under the <strong>Creative Commons Attribution (CC BY) 3.0</strong> License by:
 				<a target="_blank" href="https://majestic.com">Majestic</a>, attribution required.</li>

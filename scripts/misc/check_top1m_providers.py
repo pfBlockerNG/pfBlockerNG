@@ -59,9 +59,10 @@ from urllib.parse import urlparse
 
 # A real Top1M list is ~1M rows; 100k is a generous floor that still rejects a
 # truncated/error payload. Refresh cadence varies by provider -- some publish
-# ~daily, others only monthly/quarterly (e.g. DomCop) -- so the staleness cutoff
-# is a deliberately generous 6 months: below that is too soon to declare a feed
-# dead, past it the source has almost certainly stopped updating.
+# ~daily, others only monthly/quarterly (e.g. OpenPageRank, which inherited
+# DomCop's cadence when the list moved hosting, #928) -- so the staleness
+# cutoff is a deliberately generous 6 months: below that is too soon to
+# declare a feed dead, past it the source has almost certainly stopped updating.
 MIN_ROWS = 100_000
 MAX_AGE_DAYS = 180
 
@@ -69,7 +70,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DESCRIPTOR_FILE = REPO_ROOT / "src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
 
 # --extract's floor (#908): the committed provider count in
-# pfb_top1m_providers() (Tranco/Cisco/DomCop/Majestic/Cloudflare). A partial
+# pfb_top1m_providers() (Tranco/Cisco/OpenPageRank/Majestic/Cloudflare). A partial
 # extractor breakage that silently drops a provider must fail loud here
 # rather than pass a too-small matrix on to the workflow. Bump this whenever
 # a row is added to or removed from that descriptor table.
@@ -253,8 +254,8 @@ def _is_valid_row(row: list[str]) -> bool:
     """A plausible Top1M row: at least one field looks like a dotted domain.
 
     Provider-agnostic across every descriptor shape -- Tranco/Cisco's 2-col
-    rank+domain, DomCop's 3-col Rank/Domain/OpenPageRank, Majestic's wide
-    12-col layout, Cloudflare's bare single 'domain' column. The health-check
+    rank+domain, OpenPageRank's 5-col Rank/Domain/Extension/PageRank/RefDomains,
+    Majestic's wide 12-col layout, Cloudflare's bare single 'domain' column. The health-check
     only needs proof real domain rows are still flowing, not which exact
     column holds them. A header row's field names ("Domain", "GlobalRank",
     ...) have no dot, so header rows fail this check with no separate

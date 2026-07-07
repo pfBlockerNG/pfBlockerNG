@@ -8386,7 +8386,7 @@ function pfblockerng_top1m(?array $provider_override = NULL) {
 				// prose/HTML/error body (e.g. "error, service temporarily unavailable.")
 				// still has a '.' and a ',' and would otherwise pass the filter above, so a
 				// dead feed would classify as "valid" below and wipe the whitelist (#886
-				// review). Every other parse mode ('csv': DomCop/Majestic/Cloudflare) has no
+				// review). Every other parse mode ('csv': OpenPageRank/Majestic/Cloudflare) has no
 				// rank column to guard on instead, so the domain field itself must look like
 				// a hostname -- otherwise the SAME garbage-body wipe re-opens for those
 				// providers (a CDN error page or a JSON auth-error body still has a '.' and

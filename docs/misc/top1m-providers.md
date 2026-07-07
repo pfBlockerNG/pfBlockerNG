@@ -34,7 +34,7 @@ its `url`/`headers` into the `extras[2]` download slot; no per-provider `if`/`el
 | -------- | ------ | --------- | ---- | ------- |
 | Tranco | rank,domain CSV | zip | none | — |
 | Cisco Umbrella | rank,domain CSV | zip | none | — |
-| DomCop (top 10M) | `"Rank","Domain","Open Page Rank"` CSV, header | zip | none | — |
+| OpenPageRank (top 10M) | `Rank,Domain,Extension,Open Page Rank,Referring Domains` CSV, header | zip | none | — |
 | Majestic Million | `GlobalRank,TldRank,Domain,TLD,...` CSV, header | plain | none | CC BY 3.0 — attribution required |
 | Cloudflare Radar (top 1M bucket) | single `domain` column CSV, header | plain | `Authorization: Bearer <token>` | CC BY-NC 4.0 — non-commercial use, attribution required |
 
@@ -87,5 +87,10 @@ under that derived name, then add one `NAME: ${{ secrets.NAME }}` line to the `c
 ## Out of scope
 
 Vendoring/embedding any of these lists; Chrome CrUX (BigQuery-only, not a bulk downloadable
-list) and OpenPageRank (a per-domain API, not a bulk list); per-provider tokens (one shared
-`top1m_token` field suffices — only one source is active at a time).
+list); per-provider tokens (one shared `top1m_token` field suffices — only one source is
+active at a time).
+
+Note (#928): the bulk top-10M list itself moved hosting from DomCop to OpenPageRank in 2026 (the
+DomCop URL froze 2026-03-29) — the descriptor above tracks that bulk CSV download, not
+OpenPageRank's separate **per-domain API** (a rank lookup for one domain at a time), which
+remains out of scope for the same reason as Chrome CrUX: this feature only downloads bulk lists.

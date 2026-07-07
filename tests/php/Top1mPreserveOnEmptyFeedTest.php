@@ -44,12 +44,14 @@ use PHPUnit\Framework\TestCase;
  *   * a SYNTHETIC descriptor's header/domain_col knobs are honoured (below) -- no live
  *     non-Tranco/Cisco provider exists yet (ADR-59 Phase 4 adds one)
  *
- * ADR-59 P4 addendum: the two live non-Tranco/Cisco providers (DomCop, Majestic) added
- * by this phase -- their REAL sample shape parses correctly via the registered
+ * ADR-59 P4 addendum: the two live non-Tranco/Cisco providers (OpenPageRank, Majestic)
+ * added by this phase -- their REAL sample shape parses correctly via the registered
  * descriptor, and a wrong domain_col genuinely mis-reads (fail-before/pass-after).
+ * (OpenPageRank was originally DomCop; the list's hosting moved, #928 -- same
+ * descriptor shape/index, only the URL/label/token changed.)
  *
  * ADR-59 P5 addendum: Cloudflare Radar (token-authenticated) parses its REAL shape too
- * (a single 'domain' column, no rank) -- this exposed a genuine latent bug the DomCop/
+ * (a single 'domain' column, no rank) -- this exposed a genuine latent bug the OpenPageRank/
  * Majestic tests couldn't: the generic content filter required a comma on every data
  * line, but a single-column CSV line has none, so every Cloudflare row was silently
  * skipped regardless of domain_col. Fixed (pfblockerng.inc) by only requiring a comma
@@ -455,54 +457,57 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 	}
 
 	/**
-	 * ADR-59 P4 -- pfblockerng_top1m() parses DomCop's REAL CSV shape (quoted
-	 * 3-col header, Domain at str_getcsv() index 1) via its registered provider
+	 * ADR-59 P4 -- pfblockerng_top1m() parses OpenPageRank's REAL CSV shape (unquoted
+	 * 5-col header, Domain at str_getcsv() index 1) via its registered provider
 	 * descriptor. Sample verified against the live
-	 * domcop.com/files/top/top10milliondomains.csv format (fetched during
-	 * development of this test).
+	 * openpagerank.keywordseverywhere.com/downloads/top10milliondomains.csv format
+	 * (fetched 2026-07-07; #928 -- this list was formerly hosted by DomCop, whose
+	 * URL froze 2026-03-29).
 	 *
-	 * DomCop's own Domain column happens to sit at the SAME index (1) the
+	 * OpenPageRank's own Domain column happens to sit at the SAME index (1) the
 	 * pre-Phase-2 legacy default already used, so replaying that legacy shape
 	 * verbatim (as the Majestic test above does) would coincidentally still
-	 * parse DomCop's real sample correctly -- on its own it would NOT prove
+	 * parse OpenPageRank's real sample correctly -- on its own it would NOT prove
 	 * domain_col is read from the descriptor rather than hardcoded. To still
-	 * assert "the col index matters" for DomCop, this FAIL-BEFORE/PASS-AFTER
-	 * instead probes a WRONG column for DomCop's shape (domain_col 2 -- the
-	 * "Open Page Rank" field, Majestic's own domain_col) and shows it likewise
-	 * mis-reads; the registered DomCop descriptor (domain_col 1) is correct.
+	 * assert "the col index matters" for OpenPageRank, this FAIL-BEFORE/PASS-AFTER
+	 * instead probes a WRONG column for OpenPageRank's shape (domain_col 2 -- the
+	 * "Extension" field, e.g. "com": dotless, so it cannot be mistaken for a
+	 * hostname) and shows it likewise mis-reads; the registered OpenPageRank
+	 * descriptor (domain_col 1) is correct.
 	 *
-	 * #892 review addendum: the wrong column's value ("10.00") also doesn't look
+	 * #892 review addendum: the wrong column's value ("com") also doesn't look
 	 * like a hostname, so the domain-validity guard (finding 1) now rejects it as
 	 * no-real-data rather than "valid data, zero TLD matches" -- the BEFORE
 	 * assertions reflect that (no whitelist file at all, not an empty one).
 	 */
-	public function testDomCopRealShapeSampleMisreadsOnWrongColumnAndParsesCorrectlyViaItsDescriptor(): void
+	public function testOpenPageRankRealShapeSampleMisreadsOnWrongColumnAndParsesCorrectlyViaItsDescriptor(): void
 	{
-		// Given: a real-shape DomCop sample -- quoted 3-col header, Domain at
+		// Given: a real-shape OpenPageRank sample -- unquoted 5-col header
+		// (Rank,Domain,Extension,Open Page Rank,Referring Domains), Domain at
 		// index 1, two real '.com' domains matching the 'com' TLD inclusion.
-		$csv = "\"Rank\",\"Domain\",\"Open Page Rank\"\n"
-			. "\"1\",\"www.facebook.com\",\"10.00\"\n"
-			. "\"2\",\"fonts.googleapis.com\",\"10.00\"\n";
-		$this->assertNotFalse(file_put_contents($this->csvPath(), $csv), 'setup: real-shape DomCop sample');
+		$csv = "Rank,Domain,Extension,Open Page Rank,Referring Domains\n"
+			. "1,www.facebook.com,com,10,2059716\n"
+			. "2,fonts.googleapis.com,com,10,2059716\n";
+		$this->assertNotFalse(file_put_contents($this->csvPath(), $csv), 'setup: real-shape OpenPageRank sample');
 
-		// When (BEFORE): the WRONG column for this shape -- index 2 ("Open Page
-		// Rank", a decimal string with no matching TLD, and no matching hostname shape).
+		// When (BEFORE): the WRONG column for this shape -- index 2 ("Extension",
+		// a bare dotless TLD string with no matching TLD, and no matching hostname shape).
 		$wrongColumn = ['parse' => 'csv', 'header' => true, 'domain_col' => 2];
 		pfblockerng_top1m($wrongColumn);
 
-		// Then (RED): the real domains are misread as the Open Page Rank value
-		// ("10.00"), which is neither a valid TLD match NOR a hostname-shaped value --
+		// Then (RED): the real domains are misread as the Extension value ("com"),
+		// which is neither a valid TLD match NOR a hostname-shaped value (no dot) --
 		// no whitelist can be built (none existed before this run).
 		$this->assertFileDoesNotExist($this->whitelistPath(),
-			"domain_col 2 must MIS-read DomCop's real shape -- Domain sits at index 1, not 2");
+			"domain_col 2 must MIS-read OpenPageRank's real shape -- Domain sits at index 1, not 2");
 		$this->assertStringContainsString('no TOP1M whitelist available', $this->readMainLog());
 		$this->assertStringNotContainsString('Parsed 2 lines', $this->readMainLog());
 
 		// Reset the log so the GREEN assertion below is unambiguous.
 		$this->assertNotFalse(file_put_contents($GLOBALS['pfb']['log'], ''), 'reset main log between runs');
 
-		// When (AFTER): the actual registered DomCop descriptor.
-		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::DomCop->value]);
+		// When (AFTER): the actual registered OpenPageRank descriptor.
+		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::OpenPageRank->value]);
 
 		// Then (GREEN): both real domains are correctly extracted from index 1
 		// ('www.' stripped per the existing whitelist-building convention).
@@ -510,7 +515,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 			".facebook.com,,\n,facebook.com,,\n,www.facebook.com,,\n"
 			. ".fonts.googleapis.com,,\n,fonts.googleapis.com,,\n,www.fonts.googleapis.com,,\n",
 			file_get_contents($this->whitelistPath()),
-			'the registered DomCop descriptor must extract Domain from index 1'
+			'the registered OpenPageRank descriptor must extract Domain from index 1'
 		);
 		$this->assertStringContainsString('Parsed 2 lines | Found 2 of 1000', $this->readMainLog());
 	}
@@ -521,7 +526,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 	 * this phase, NOT the ADR's original 2-column guess) via its registered descriptor
 	 * (domain_col 0, header skipped).
 	 *
-	 * Unlike the DomCop/Majestic column-index bug above, this shape exposed a DIFFERENT
+	 * Unlike the OpenPageRank/Majestic column-index bug above, this shape exposed a DIFFERENT
 	 * latent bug: the generic content filter demanded BOTH a '.' AND a ',' on every data
 	 * line (a guard against a prose/error body that would otherwise reach the parser).
 	 * A single-column CSV line has NO comma at all (nothing to delimit), so every one of
@@ -529,7 +534,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 	 * whitelist came out EMPTY even though the fixture data is genuinely well-formed.
 	 * FAIL-BEFORE/PASS-AFTER: manually verified by reverting just the comma-relaxation
 	 * hunk in pfblockerng.inc (`git stash`) and re-running this exact test -- it goes RED
-	 * (empty whitelist, same as the DomCop/Majestic BEFORE runs above); restoring the fix
+	 * (empty whitelist, same as the OpenPageRank/Majestic BEFORE runs above); restoring the fix
 	 * makes it GREEN. This test's own body only exercises the (permanent) AFTER state --
 	 * see RESULTS/05_Results.txt for the stash verification transcript.
 	 */
@@ -557,7 +562,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 
 	/**
 	 * #892 review (finding 1) -- the #886 silent-whitelist-wipe must not re-open for the
-	 * 'csv' parse providers (DomCop/Majestic/Cloudflare). Pre-fix, the domain-validity
+	 * 'csv' parse providers (OpenPageRank/Majestic/Cloudflare). Pre-fix, the domain-validity
 	 * guard only covered 'rank_domain' (Tranco/Cisco); a 'csv'-mode garbage/HTML/JSON
 	 * error body (a CDN 503 page, a Cloudflare auth-error response, etc -- the MIME
 	 * allow-list accepts text/html and ADR-49's sanity scan is opt-in/default-off) still
@@ -569,10 +574,11 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 	 * garbage row here has a non-hostname domain field but would still have incremented
 	 * $linecnt on the pre-fix code, taking the wipe path).
 	 */
-	public function testDomCopGarbageHtmlBodyPreservesPriorWhitelistAndWarns(): void
+	public function testOpenPageRankGarbageHtmlBodyPreservesPriorWhitelistAndWarns(): void
 	{
 		// Given: a prior good whitelist and a multi-line HTML error body (a CDN 503 page,
-		// NOT DomCop's real quoted rank/domain/pagerank CSV) written as top-1m.csv.
+		// NOT OpenPageRank's real unquoted rank/domain/extension/pagerank/refdomains CSV)
+		// written as top-1m.csv.
 		$priorContent = ".real.com,,\n,real.com,,\n,www.real.com,,\n";
 		$this->assertNotFalse(file_put_contents($this->whitelistPath(), $priorContent), 'setup: seed prior whitelist');
 		$garbage = "<html><head><title>503 Backend fetch failed</title></head>\n"
@@ -581,14 +587,14 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		$this->assertNotFalse(file_put_contents($this->csvPath(), $garbage), 'setup: garbage HTML body as top-1m.csv');
 		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()), 'before-state sanity');
 
-		// When: the real registered DomCop descriptor drives the parse (header=TRUE skips
+		// When: the real registered OpenPageRank descriptor drives the parse (header=TRUE skips
 		// line 1; domain_col=1).
-		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::DomCop->value]);
+		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::OpenPageRank->value]);
 
-		// Then: the HTML body must never be mistaken for real DomCop CSV data -- the prior
+		// Then: the HTML body must never be mistaken for real OpenPageRank CSV data -- the prior
 		// whitelist survives byte-identical and the run warns instead of "succeeding".
 		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()),
-			'a garbage HTML body must NOT wipe the previously-good TOP1M whitelist (DomCop, #892 review)');
+			'a garbage HTML body must NOT wipe the previously-good TOP1M whitelist (OpenPageRank, #892 review)');
 		$this->assertSame([], $this->tempFilesLeftBehind(), 'no temp build file left behind');
 		$this->assertStringContainsString('keeping the previous TOP1M whitelist', $this->readErrLog());
 		$this->assertStringContainsString('keeping the previous TOP1M whitelist', $this->readMainLog());
@@ -681,7 +687,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 	 * Issue #904 -- the 'csv' parse guard's final-label class (`[A-Za-z]{2,}`)
 	 * rejected every punycode TLD (they contain digits/hyphens, e.g.
 	 * 'xn--p1ai' == .рф), so a user selecting a punycode TLD inclusion with a
-	 * csv-parse provider (DomCop/Majestic/Cloudflare) got ZERO matching
+	 * csv-parse provider (OpenPageRank/Majestic/Cloudflare) got ZERO matching
 	 * whitelist entries -- silently -- while the identical config on
 	 * Tranco/Cisco ('rank_domain' parse, no such guard) whitelisted them.
 	 * Fixed by widening the final-label alternative to also accept an
@@ -697,15 +703,15 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 	 */
 	public function testCsvModeAcceptsPunycodeTldDomainIntoWhitelist(): void
 	{
-		// Given: a DomCop-shaped csv row whose domain ends in a punycode TLD
+		// Given: an OpenPageRank-shaped csv row whose domain ends in a punycode TLD
 		// (xn--p1ai == .рф), and the TOP1M inclusion set names that exact TLD.
 		$GLOBALS['pfb']['dnsbl_top1m_inc'] = 'xn--p1ai';
-		$csv = "\"Rank\",\"Domain\",\"Open Page Rank\"\n"
-			. "\"1\",\"example.xn--p1ai\",\"10.00\"\n";
-		$this->assertNotFalse(file_put_contents($this->csvPath(), $csv), 'setup: DomCop-shaped punycode-TLD row');
+		$csv = "Rank,Domain,Extension,Open Page Rank,Referring Domains\n"
+			. "1,example.xn--p1ai,xn--p1ai,10,2059716\n";
+		$this->assertNotFalse(file_put_contents($this->csvPath(), $csv), 'setup: OpenPageRank-shaped punycode-TLD row');
 
 		// When
-		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::DomCop->value]);
+		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::OpenPageRank->value]);
 
 		// Then: the punycode-TLD row is counted as valid data and whitelisted
 		// -- not silently dropped by the final-label guard.
@@ -725,17 +731,17 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 	 */
 	public function testCsvModeStillRejectsNumericTldJunkRow(): void
 	{
-		// Given: a prior good whitelist and a DomCop-shaped row whose "Domain"
+		// Given: a prior good whitelist and an OpenPageRank-shaped row whose "Domain"
 		// field is an IP-shaped string -- garbage, not a TLD in any form.
 		$priorContent = ".real.com,,\n,real.com,,\n,www.real.com,,\n";
 		$this->assertNotFalse(file_put_contents($this->whitelistPath(), $priorContent), 'setup: seed prior whitelist');
-		$csv = "\"Rank\",\"Domain\",\"Open Page Rank\"\n"
-			. "\"1\",\"192.168.1.1\",\"10.00\"\n";
+		$csv = "Rank,Domain,Extension,Open Page Rank,Referring Domains\n"
+			. "1,192.168.1.1,com,10,2059716\n";
 		$this->assertNotFalse(file_put_contents($this->csvPath(), $csv), 'setup: numeric-TLD junk row');
 		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()), 'before-state sanity');
 
 		// When
-		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::DomCop->value]);
+		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::OpenPageRank->value]);
 
 		// Then: the numeric-final-label row is still rejected.
 		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()),
@@ -751,12 +757,12 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 	 */
 	public function testCsvModeStillRejectsDomainFieldWithNoDot(): void
 	{
-		// Given: a prior good whitelist and a DomCop-shaped row whose Domain
+		// Given: a prior good whitelist and an OpenPageRank-shaped row whose Domain
 		// field has no dot at all.
 		$priorContent = ".real.com,,\n,real.com,,\n,www.real.com,,\n";
 		$this->assertNotFalse(file_put_contents($this->whitelistPath(), $priorContent), 'setup: seed prior whitelist');
-		$csv = "\"Rank\",\"Domain\",\"Open Page Rank\"\n"
-			. "\"1\",\"nodomainhere\",\"v1.0\"\n";
+		$csv = "Rank,Domain,Extension,Open Page Rank,Referring Domains\n"
+			. "1,nodomainhere,v1.0,10,2059716\n";
 		$this->assertNotFalse(
 			file_put_contents($this->csvPath(), $csv),
 			'setup: dotless Domain field, dot elsewhere on the line'
@@ -764,7 +770,7 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()), 'before-state sanity');
 
 		// When
-		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::DomCop->value]);
+		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::OpenPageRank->value]);
 
 		// Then: a dotless Domain field is still rejected even though the line
 		// itself contains a '.' (in another column).
@@ -788,17 +794,17 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 	 */
 	public function testCsvModeStillRejectsMalformedPunycodeTldRow(string $domain): void
 	{
-		// Given: a prior good whitelist and a DomCop-shaped row whose Domain
+		// Given: a prior good whitelist and an OpenPageRank-shaped row whose Domain
 		// field ends in a malformed punycode-shaped TLD.
 		$priorContent = ".real.com,,\n,real.com,,\n,www.real.com,,\n";
 		$this->assertNotFalse(file_put_contents($this->whitelistPath(), $priorContent), 'setup: seed prior whitelist');
-		$csv = "\"Rank\",\"Domain\",\"Open Page Rank\"\n"
-			. "\"1\",\"{$domain}\",\"10.00\"\n";
+		$csv = "Rank,Domain,Extension,Open Page Rank,Referring Domains\n"
+			. "1,{$domain},com,10,2059716\n";
 		$this->assertNotFalse(file_put_contents($this->csvPath(), $csv), "setup: malformed punycode row {$domain}");
 		$this->assertSame($priorContent, file_get_contents($this->whitelistPath()), 'before-state sanity');
 
 		// When
-		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::DomCop->value]);
+		pfblockerng_top1m(pfb_top1m_providers()[PfbTop1mSource::OpenPageRank->value]);
 
 		// Then: the malformed punycode-shaped TLD is rejected -- the widening
 		// admits real ACE labels only, not hyphen-runs or truncated prefixes.
