@@ -21,10 +21,12 @@ You land a PR. The non-negotiable rules, all from this repo's `CLAUDE.md`:
   `--force-with-lease`, and let CI re-run on the rebased commits — *that* is the CI
   you wait on. A PR behind its base must be made a clean fast-forward before it
   lands.
-- **Never block on CodeRabbit.** Wait for the real CI checks; treat any check whose
-  name matches `coderabbit` (case-insensitive) as advisory — its state (pending,
-  pass, "Review skipped") never gates the merge. Review feedback is `/pr-comments`'
-  job, not this skill's.
+- **Never block on CodeRabbit or Snyk.** Wait for the real CI checks; treat any check
+  whose name matches `coderabbit` or `snyk` (case-insensitive) as advisory — CodeRabbit's
+  state (pending, pass, "Review skipped") never gates the merge, and Snyk's quota/infra
+  `error` ("Code test limit reached") is a skipped scan, not a failure. The one exception:
+  a terminal Snyk `fail` carrying a **real finding** is a security finding to resolve
+  before merging (Step 4). Review feedback is `/pr-comments`' job, not this skill's.
 - **Never merge a red, draft, or unmergeable PR.** Abort and report instead.
 - **Work in a dedicated worktree** (repo rule for AI agents) — never rebase/push
   from the primary checkout.
@@ -76,13 +78,15 @@ git rebase "origin/$BASE"                # replay onto the LIVE base tip
 
 ## Step 4 — Wait for CI to pass (excluding CodeRabbit)
 
-Poll `gh pr checks` until every **non-CodeRabbit** check has completed, then decide.
+Poll `gh pr checks` until every **required** check has completed — excluding
+**CodeRabbit** (advisory bot) and **Snyk** (advisory security scan; its quota/infra `error`
+state must never gate a merge) — then decide.
 Run the loop as a **Bash command with `run_in_background: true`** (a background
 `until`-style loop that self-exits gives a single wake — do not foreground-`sleep`),
 then read `$RESULT`:
 
 ```sh
-# Set first: PR  EXCLUDE(regex, default 'coderabbit')  RESULT(tmpfile)
+# Set first: PR  EXCLUDE(regex, default 'coderabbit|snyk')  RESULT(tmpfile)
 i=0
 while [ "$i" -lt 80 ]; do                                  # ~40 min at 30s/poll
   json=$(gh pr checks "$PR" --json name,bucket 2>/dev/null)
@@ -101,7 +105,11 @@ echo TIMEOUT > "$RESULT"
 counts as done-not-failed. Requiring `total > 0` avoids declaring PASS before any
 check has registered. When it wakes you, read `$RESULT`:
 
-- **`PASS`** → every required check is green. Go to Step 5.
+- **`PASS`** → every required check is green. One post-pass read of the excluded Snyk
+  status (`gh pr checks "$PR" | grep -i snyk`): a terminal **`fail` whose description is a
+  real finding** (NOT "Code test limit reached"/quota/infra `error`) is a genuine security
+  finding — stop and route it through the review flow instead of merging. Quota/error/
+  pending/absent → proceed (note the skipped scan). Then go to Step 5.
 - **`FAIL`** → a real check failed (the body lists which). **Do not merge.** Report
   the failing checks and their run URLs (`gh pr checks "$PR"`) and stop.
 - **`TIMEOUT`** → checks did not finish in the window. Report and ask whether to

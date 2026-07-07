@@ -13,8 +13,12 @@ description: >
   gives CodeRabbit ~10 minutes to acknowledge the PR: if it does, wait on its review
   too; if it stays silent, nudge it once with `@coderabbitai review` and wait 10 more
   minutes; if it is STILL silent the Sonnet 5 review stands alone (folding CodeRabbit's
-  review in if it shows up late) — and handle every comment of every review the same
-  way. This
+  review in if it shows up late); a CodeRabbit rate-limit notice follows the 5-minute
+  rule (resume > 5 min = proceed without it; else wait 5 min, nudge once, and drop it on
+  any further problem). GitHub Copilot's review is REQUESTED when available (skipped if
+  already reviewing) and waited on, bounded. Snyk is advisory — never waited on; only a
+  terminal failure verdict (it ran and flagged something) enters the gate. Handle every
+  comment of every review the same way. This
   is the default flow after any GitHub issue, ADR, or code change — everything
   except the dev-only classes that land straight on devel with no PR
   (documentation-only, CLAUDE.md, ADR text, skills). Args: [PR number] (defaults to
@@ -50,16 +54,24 @@ Args: `{{ args }}`
 
 ## Step 1 — Review feedback
 
-**Two code reviews run on every PR, plus Snyk when present:**
+**Review sources on every PR:**
 
 - **Claude Sonnet 5 adversarial review (Step 1d) — ALWAYS.** Spawn it **first**, in the
   background, before starting the CodeRabbit wait; it is independent of CodeRabbit's
   availability and never a mere fallback.
+- **GitHub Copilot (Step 1f) — request + wait when available.** If Copilot is not already
+  reviewing the PR, request its review at the start of Step 1; either way, wait for it
+  (bounded) and triage its findings. If the request fails (Copilot review unavailable),
+  skip and note it — never stall on Copilot.
 - **CodeRabbit (Steps 1a–1c)** — decide availability with a **10-minute acknowledgement
   window** (1a), wait on + handle its review when it acknowledges (1b), nudge once when
-  silent (1c). If CodeRabbit never reviews (NOACK / QUOTA / timeout), the Sonnet 5
-  review stands alone — **surface the skip**; never stall the flow on CodeRabbit.
-- **Snyk (Step 1e)** runs **in parallel** (security findings) and folds into the same gate.
+  silent (1c). A rate-limit notice follows the **5-minute rule** (see 1b): resume time
+  > 5 min ⇒ proceed without CodeRabbit; ≤ 5 min ⇒ wait 5 min, nudge once, resume — and if
+  the nudged wait hits any further problem, proceed without it. If CodeRabbit never
+  reviews (NOACK / QUOTA / timeout), the remaining reviews stand — **surface the skip**;
+  never stall the flow on CodeRabbit.
+- **Snyk (Step 1e) — advisory, no wait.** Read its status post-hoc before the gate; only a
+  terminal `failure` verdict (Snyk actually ran and flagged something) enters the gate.
 
 Whichever reviews you end up with, **handle every comment of every review you receive**;
 *how* each comment is handled (the triage below) never changes.
@@ -114,19 +126,22 @@ done
 
 ### Step 1b — CodeRabbit acknowledged → wait on + handle its review
 
-- Invoke the **pr-comments** skill with `N --wait-for=coderabbitai,snyk` (one call,
-  both reviewers — `pr-comments` waits per-handle and skips either if it isn't reviewing
-  the PR; **Snyk** rides this same call, see Step 1e). It blocks until they have finished
-  reviewing, then validates each finding against the current code, applies the ones that
-  genuinely hold, skips the rest with a reason, and replies on every thread.
+- Invoke the **pr-comments** skill with `N --wait-for=coderabbitai`. It blocks until
+  CodeRabbit has finished reviewing, then validates each finding against the current
+  code, applies the ones that genuinely hold, skips the rest with a reason, and replies
+  on every thread. Its `QUOTA <mins>` result implements the **5-minute rule** (the
+  rate-limit notice's own "Next review available in" time): > 5 min ⇒ CodeRabbit is
+  dropped from this flow; ≤ 5 min ⇒ one 5-minute wait + one `@coderabbitai review` nudge +
+  one resumed wait, and **any further problem on the nudged wait drops CodeRabbit** —
+  never block on it twice.
 - If that wait **times out** (CodeRabbit acknowledged but never finished the review),
   do not stall the flow — proceed on the Step-1d Sonnet 5 review (already running) and
   note the timeout; the nudge in Step 1c is for the *no-acknowledgement* case, so it
   won't help once it has already acknowledged.
-- If the wait returns **`QUOTA`** for CodeRabbit (it acknowledged only with a usage/rate-limit
-  notice — see Step 2 of `pr-comments`), it will not review: proceed on the Step-1d
-  Sonnet 5 review alone and note the quota skip in the final report. (A `QUOTA` for **Snyk**
-  just drops Snyk from this wait — surface the skipped scan.)
+- If the wait resolves to CodeRabbit dropped under the **5-minute rule** (`QUOTA` with a
+  long resume time, or a failed post-nudge wait — see Step 2 of `pr-comments`), proceed on
+  the Step-1d Sonnet review + Step-1f Copilot review and note the quota skip in the final
+  report.
 
 ### Step 1c — No ack → nudge `@coderabbitai review`, then wait 10 more minutes
 
@@ -142,8 +157,7 @@ Re-run the Step-1a loop with `deadline=$(( $(date -u +%s) + 600 ))`. On the resu
 
 - **`ACK`** (CodeRabbit posted something after the nudge) → **Step 1b**.
 - **`NOACK`** (still silent 10 min after the nudge) → CodeRabbit is unavailable; the
-  Step-1d Sonnet 5 review (already running) is the only code review. Invoke
-  `/pr-comments N --wait-for=snyk` so Snyk is still waited on (Step 1e).
+  Step-1d Sonnet 5 review and the Step-1f Copilot review carry the review step.
 
 Nudge **once only** — a second silent window means CodeRabbit is genuinely unavailable;
 do not loop on it.
@@ -236,46 +250,57 @@ it, and it does not replace CodeRabbit; when CodeRabbit never reviews it stands 
    🤖 Generated by [Claude Code](https://claude.com/claude-code), posted via @<gh-login>'s account on their behalf.
    ```
 
-### Step 1e — Snyk security review (in parallel, when present)
+### Step 1e — Snyk security review (advisory — read post-hoc, never wait)
 
-Snyk reviews PRs independently of CodeRabbit — handle it **alongside** the 1a–1d path, not
-instead of it. **The wait runs through `/pr-comments`, not a bespoke poll here:** on the
-CodeRabbit-present path (1b) Snyk is already folded into that one call's
-`--wait-for=coderabbitai,snyk`; when **no CodeRabbit `pr-comments` wait ran** (CodeRabbit
-absent after 1c, or quota) invoke `/pr-comments N --wait-for=snyk` so Snyk is still waited on and
-its findings fetched/replied. `pr-comments` tolerates an absent Snyk (no `snyk` status ⇒ skipped,
-no stall), so it is always safe to include. This step just records Snyk's specifics:
+Snyk is **not** a required check and is **never waited on**. Immediately before the Gate
+below, read its state once from the head SHA:
 
-- **Detect** whether Snyk is reviewing THIS PR. **Snyk posts NO review comments** — it surfaces as
-  a commit **status/gate** whose context contains `snyk` (e.g. `code/snyk (…)`) on the head SHA, not
-  as inline threads. A `snyk` status present ⇒ Snyk is engaged; absent ⇒ not active on this PR (the
-  `--wait-for=snyk` wait skips it). Read the finding detail from the status `description` + `target_url`.
-- **A Snyk status in `error` ("Code test limit reached") is a quota/infra error, not a clean pass**
-  — `pr-comments` returns `QUOTA` for it (Step 2). Drop Snyk from the gate and **surface the skipped
-  scan** to the user; never report Snyk as green from a limit-reached status, and never let it block
-  the merge (it is a Snyk-side limit, not a vulnerability in the PR).
-- **Handle every real finding.** Snyk reports **security** issues and, unlike CodeRabbit, posts **no**
-  nitpick or outside-diff-range comments — so there are no buckets to sort: every Snyk finding is
-  a substantive, in-diff item. Apply the same per-finding triage as CodeRabbit — **APPLY** (fix
-  the vulnerability) · **SKIP** (false positive / not introduced by this PR / accepted risk —
-  record the reason) · **DEFER** (real but pre-existing/orthogonal → tracking issue) — and reply
-  on the PR. A `failure` Snyk status that flags a **real vulnerability the PR introduces**
-  is **blocking**: fix it (or, for an unavoidable accepted risk, get the user's call) before
-  merging. Honour the `private`-repo disclosure rules when the finding is security-sensitive.
+- No `snyk` status/check present → Snyk isn't active on this PR; nothing to do.
+- Status `error` ("Code test limit reached"), `pending`, or any non-terminal state → the scan
+  did not run (or hasn't finished): **ignore it** — it neither blocks nor passes; note the
+  skipped scan in the audit trail. Do not treat a quota/infra error as a signal at all.
+- Status **`failure` with a real finding** (Snyk actually ran and flagged something — read the
+  detail from the status `description` + `target_url`) → that is a genuine security finding:
+  triage it like any blocking review finding (**APPLY** the fix with its test · **SKIP** only
+  with demonstrated false-positive evidence · **DEFER** pre-existing/orthogonal → tracking
+  issue), honouring the `private`-repo disclosure rules when sensitive.
+- Status `success` → note it; still not a gate requirement.
+
+### Step 1f — GitHub Copilot review (request + wait when available)
+
+Runs on **every** PR, started at the beginning of Step 1 alongside the Sonnet spawn and the
+CodeRabbit wait:
+
+1. **Already reviewing?** Check for an existing Copilot review or a pending request:
+   `gh api repos/OWNER/REPO/pulls/N/reviews --paginate -q '.[]|select(.user.login|test("copilot";"i"))|.id'`
+   and `gh pr view N --json reviewRequests`. If Copilot has reviewed or is requested,
+   **skip the request** — go straight to the wait.
+2. **Request it:** `gh pr edit N --add-reviewer "@copilot"` (fallback:
+   `gh api --method POST repos/OWNER/REPO/pulls/N/requested_reviewers -f 'reviewers[]=copilot-pull-request-reviewer[bot]'`).
+   If both fail, Copilot code review is not available on this repo/plan — **skip this step
+   and note it**; never stall.
+3. **Wait (bounded)** for its review: poll `.../pulls/N/reviews` for a copilot login
+   submission since the request — Copilot typically reviews within a few minutes; use a
+   self-exiting background loop with a ~10-minute window. Timeout → proceed and note it
+   (the pre-merge catch-all sweep will still pick up a late review).
+4. **Triage its findings** exactly like any other review (APPLY / SKIP / DEFER + reply per
+   thread) — a summary-only "generated no comments" review is just noted in the audit trail.
 
 ### Gate before Step 2 (all paths)
 
 Continue to the merge ONLY if the review step finished cleanly: every finding from **every**
-review received — the always-on Sonnet 5 adversarial review, CodeRabbit when it reviewed,
-**and** Snyk — triaged, any accepted fixes committed and pushed, and nothing left that needs a
-human decision. The Sonnet 5 review is **mandatory** — never merge without its findings triaged,
-even when CodeRabbit came back clean. **Produce the findings ledger before invoking `pr-merge`:**
+review received — the always-on Sonnet 5 adversarial review, Copilot when it reviewed,
+CodeRabbit when it reviewed, and any **terminal Snyk `failure` finding** (Step 1e; a Snyk
+quota/infra error is ignored, not gated) — triaged, any accepted fixes committed and pushed,
+and nothing left that needs a human decision. The Sonnet 5 review is **mandatory** — never
+merge without its findings triaged, even when every bot came back clean. **Produce the findings ledger before invoking `pr-merge`:**
 a numbered list of every finding with its outcome — `fixed@<commit>` / `skipped: <evidence>` /
 `deferred: <issue link>` — folded into the Step-1d.5 audit comment; refuse to merge while any
-item lacks an outcome. **When both external bots are quota-dead on a substantive PR, escalate
-instead of merging on the single Sonnet pass** — the ultracode multi-agent shape, or pace the
-merge until quota recovers; the audited defect window coincided exactly with a both-bots-quota
-batch-merge cadence. If a finding is unresolved, contested, or needs the user,
+item lacks an outcome. **When NO external reviewer reviewed a substantive PR** (CodeRabbit dropped under the
+5-minute rule AND Copilot unavailable/timed out), **escalate instead of merging on the single
+Sonnet pass** — the `review-fanout` workflow shape, a focused second Sonnet pass over the
+final diff, or pace the merge; the audited defect window coincided exactly with a
+bots-quota batch-merge cadence. If a finding is unresolved, contested, or needs the user,
 **stop here and report** — do not merge.
 
 **Catch-all sweep (last thing before merging):** "every review received" means every review on
@@ -301,9 +326,9 @@ it may not be clean.
 ## Definition of done
 
 - Review resolved (note which reviews landed — the always-on Sonnet 5 adversarial
-  review and its effort shape (`xhigh` single-agent or ultracode multi-agent),
-  CodeRabbit when it reviewed, **plus Snyk if it reviewed**); PR merged by rebase;
-  remote branch deleted.
+  review and its effort shape (`xhigh` single-agent or the `review-fanout` workflow),
+  Copilot when it reviewed, CodeRabbit when it reviewed, plus any terminal Snyk
+  `failure` finding); PR merged by rebase; remote branch deleted.
 - Sync the work item's labels (an issue's `Waiting PR` removed on merge), per
   `CLAUDE.md` → "Labels (lifecycle)".
 - If you stopped before merging, state exactly why and what is needed to proceed.

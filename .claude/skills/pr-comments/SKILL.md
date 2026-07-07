@@ -93,7 +93,7 @@ true gives you a single wake — do not use a foreground `sleep`), then read
 #            bot, raise/disable for a human who may start late)  RESULT(tmpfile)
 # First wait: MODE=full, SINCE=head commit time → `gh pr view "$PR" --json commits -q '.commits[-1].committedDate'`,
 #             SHA=`gh pr view "$PR" --json headRefOid -q .headRefOid` (anchors on the current code).
-i=0; seen=0; cr_quota=""
+i=0; seen=0
 while [ "$i" -lt 60 ]; do                       # ~30 min at 30s/poll
   inline=$(gh api "repos/$OWNER_REPO/pulls/$PR/comments" --paginate \
     -q ".[] | select((.user.login|ascii_downcase)==\"$HANDLE\" or (.user.login|ascii_downcase)==\"${HANDLE}[bot]\") | select(.created_at > \"$SINCE\") | .id" 2>/dev/null)
@@ -133,11 +133,16 @@ $(gh api "repos/$OWNER_REPO/commits/$SHA/check-runs" --paginate \
        || printf '%s' "$issuec" | grep -qiE 'actionable comments posted|no actionable comments'; then
     { echo FINISHED; printf '%s\n' "$issuec"; } > "$RESULT"; exit 0
   fi
-  # A CodeRabbit usage/rate-limit notice with NO review content yet is NON-TERMINAL — it is often
-  # transient (CR retries) or stale. RECORD it (sticky) but do NOT exit; only conclude QUOTA at the
-  # END of the window if review content never appears. So a transient/stale notice that later
-  # resolves to a real review is reported FINISHED above; only a genuine no-content quota → QUOTA.
-  printf '%s' "$issuec" | grep -Eqi 'run out of usage credits|review limit reached|rate limited by coderabbit|reached your .*review rate limit' && cr_quota=1
+  # A CodeRabbit rate-limit notice with NO review content THIS iteration (content is checked
+  # FIRST above, so a notice sitting next to real comments still reports FINISHED) is TERMINAL
+  # for this wait: the notice states when reviews resume ("**Next review available in:** **N
+  # minutes**"), so exit now carrying that number and let the caller apply the 5-minute rule.
+  # Hours convert to minutes; an unparsable time reports 999 (treated as "long").
+  if printf '%s' "$issuec" | grep -Eqi 'run out of usage credits|review limit reached|rate limited by coderabbit|reached your .*review rate limit'; then
+    mins=$(printf '%s' "$issuec" | grep -oEi 'available in:.{0,10}[0-9]+ *(minute|hour)' | grep -oE '[0-9]+' | head -1)
+    printf '%s' "$issuec" | grep -oEi 'available in:.{0,10}[0-9]+ *hour' | grep -q . && mins=$(( ${mins:-1} * 60 ))
+    { echo "QUOTA ${mins:-999}"; printf '%s\n' "$issuec" | head -c 2000; } > "$RESULT"; exit 0
+  fi
   # DECLINE (MODE=full) = "Review skipped" because the base isn't the default branch.
   if [ "$MODE" = full ] && printf '%s' "$issuec" | grep -qi 'review skipped' \
        && printf '%s' "$issuec" | grep -Eqi 'base branch|base branches|default branch'; then
@@ -153,9 +158,8 @@ $(gh api "repos/$OWNER_REPO/commits/$SHA/check-runs" --paginate \
   [ "$seen" -eq 0 ] && [ "$i" -ge "$PRESENCE" ] && { echo NOTPRESENT > "$RESULT"; exit 0; }
   i=$((i + 1)); sleep 30
 done
-# Window exhausted with no review content. A recorded CodeRabbit usage-limit notice (and still no
-# content) is a genuine QUOTA (did-not-review); otherwise it is a real TIMEOUT.
-if [ -n "$cr_quota" ]; then echo QUOTA > "$RESULT"; else echo TIMEOUT > "$RESULT"; fi
+# Window exhausted with no review content and no terminal notice: a real TIMEOUT.
+echo TIMEOUT > "$RESULT"
 ```
 
 CodeRabbit's exact wording drifts — if the markers above don't fire when you can
@@ -170,22 +174,25 @@ comment body and adjust the `grep` patterns rather than waiting out the timeout.
   actionable items and Step 9 reports it clean. **FINISHED takes precedence over a quota
   phrase:** if CodeRabbit posted actual review content (inline comments / a submitted
   review / the "actionable comments" header), that is `FINISHED` even if a usage/rate-limit
-  notice is also present — a CodeRabbit quota notice is `QUOTA` **only** when no review
-  content appears for the whole window (the loop is content-first for exactly this reason).
-- **`QUOTA`** → the reviewer **did not actually review**: a Snyk `code/snyk` status in
-  `error` ("Code test limit reached"), OR a CodeRabbit usage/rate-limit notice ("Review
-  limit reached" / "run out of usage credits" / "rate limited by coderabbit.ai") that
-  persisted for the **whole window with NO inline comments or submitted review**. Treat it
-  as **did-not-review, NOT a clean pass**. **Crucial:** a quota phrase alone is NOT QUOTA —
-  CodeRabbit routinely posts a transient rate-limit notice (or a stale one from an earlier
-  push) and then completes the review, so a verdict of QUOTA requires the absence of any
-  posted review content (this bit us: a premature QUOTA when CR had in fact left 13
-  comments — **always also eyeball the PR for posted comments before acting on QUOTA**). In
-  a multi-handle wait, **drop this handle and continue** with the others. For a
-  lone-CodeRabbit wait, fall through — the caller (`/pr-merge-flow`) already runs its
-  always-on Sonnet 5 adversarial review, which then stands alone. **Do not retry-loop** —
-  a genuine limit won't clear in this window. Always **surface** the skipped reviewer to
-  the user.
+  notice is also present — content is checked FIRST in every iteration, so a notice sitting
+  beside real comments never masks them; only a notice with NO content exits as `QUOTA`.
+- **`QUOTA <mins>`** → the reviewer **did not actually review** and is rate-limited. For
+  **Snyk** (a `code/snyk` status in `error`, "Code test limit reached"): drop the handle and
+  continue — a skipped scan, never a clean security pass; surface it. For **CodeRabbit** the
+  result carries the notice's own **"Next review available in"** time — apply the
+  **5-minute rule**:
+  - **`mins > 5` (or unparsable/999)** → CodeRabbit will not review this flow: treat as
+    did-not-review immediately, drop the handle, and continue (the caller's always-on
+    Sonnet 5 adversarial review stands alone). Surface the skip + the stated wait.
+  - **`mins <= 5`** → wait ~5 minutes (one self-exiting background sleep — never a foreground
+    `sleep`), post the nudge `@coderabbitai review` (one top-level comment, Step-7 footer),
+    then re-arm the poll in finished-only mode (`MODE=finished`, `SINCE=now`). If that second
+    wait returns anything other than `FINISHED` — another `QUOTA`, `TIMEOUT`, `PAUSE` —
+    **give up on CodeRabbit and continue without it**; one nudge only, never a retry loop.
+
+  Before acting on any QUOTA, **eyeball the PR for posted comments** (a stale notice from an
+  earlier push can sit beside a completed review — content wins; this bit us once with 13
+  live comments). Always **surface** a skipped reviewer to the user.
 - **`NOTPRESENT`** → no engagement within the presence window — this handle isn't
   reviewing the PR. **Skip it** (in a multi-handle wait, drop this handle and continue
   with the others); it is not a stall, so don't report it as a failure.
@@ -258,8 +265,10 @@ diff range|Additional comments|Actionable comments|Prompt for AI Agents"` to
 enumerate every finding (inline + nitpick + outside-diff-range) and its location.
 Build the full list before fixing anything.
 
-**Snyk** (when reviewing the PR — `--wait-for=snyk`, or a `code/snyk` commit status is present on
-the head SHA) is an **additional** source. **Snyk posts NO review comments** — it surfaces as a
+**Snyk** is an **additional, advisory** source — the flows no longer wait on it by default
+(`--wait-for=snyk` still works when explicitly passed). Read it when a `code/snyk` commit status
+is present on the head SHA; only a **terminal `failure` verdict** (Snyk actually ran and flagged
+something) carries findings to handle. **Snyk posts NO review comments** — it surfaces as a
 commit **status/check** (`code/snyk (…)`), so read its detail from the status `description` +
 `target_url` rather than looking for inline threads. Snyk reports **security** findings only and
 posts **no** nitpick or outside-diff-range buckets — so there is just the one in-diff class, each

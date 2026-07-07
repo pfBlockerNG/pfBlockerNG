@@ -604,11 +604,15 @@ squash. History stays strictly linear (`main` always an ancestor of `devel`).
 
 **Default landing flow — `/pr-merge-flow N`** after completing any issue, ADR, or code
 change: review feedback first, then merge. A **Claude Sonnet 5 adversarial review runs on
-EVERY PR** at effort `xhigh` or as an ultracode multi-agent review (never below `xhigh`,
-never `max`) — **in addition to** CodeRabbit and Snyk when they review. A bot quota notice is
-an acknowledgement with **no review** — treat the bot as did-not-review and **surface the
-skipped reviewer**; never read it as "PR is clean". Only the dev-only no-PR classes are
-exempt.
+EVERY PR** at effort `xhigh` or as the `review-fanout` workflow (never below `xhigh`, never
+`max`) — in addition to **GitHub Copilot** (its review is *requested* when available, skipped
+if already reviewing, and waited on, bounded) and **CodeRabbit** when it reviews. A CodeRabbit
+rate-limit notice follows the **5-minute rule** (its stated resume time > 5 min ⇒ proceed
+without it; ≤ 5 min ⇒ wait, nudge once, drop it on any further problem). **Snyk is advisory**
+— never waited on, never a required check; only a terminal `failure` verdict where it actually
+ran and flagged something is handled (as a security finding). A bot quota notice is an
+acknowledgement with **no review** — surface the skipped reviewer; never read it as "PR is
+clean". Only the dev-only no-PR classes are exempt.
 
 **Rebase onto the latest base before every push, PR, or CI/smoke dispatch.** `devel` advances
 out of band: `git fetch origin` + `git rebase origin/devel` (or `origin/<pr-base>`),
