@@ -493,8 +493,21 @@ do_setup_rules() {
     # Build the minimal ruleset file.
     _rules_file="${TMP}/bench_minimal.conf"
 
+    # type=server ONLY: outbound NAT so the allowed path reaches WAN/slirp with
+    # a translated source (issue #584 dual-path bench). MUST be the FIRST line:
+    # pfctl enforces pf.conf statement order by default (options, normalization,
+    # queueing, translation, filter — pf.conf(5)), so a nat line after any
+    # pass/block filter line fails the whole load (proven by the first #584
+    # CI dispatch, run 28903200587: ruleset_load_failed with the nat mid-file).
+    if [ "${_type}" = "server" ]; then
+        printf 'nat on %s inet from 192.168.1.0/24 to any -> (%s)\n' \
+            "${_wan}" "${_wan}" > "${_rules_file}"
+    else
+        : > "${_rules_file}"
+    fi
+
     # Mgmt interface (vtnet1): always pass SSH + HTTP (harness control channel).
-    printf 'pass quick on %s proto tcp to port 22\n' "${_lan}" > "${_rules_file}"
+    printf 'pass quick on %s proto tcp to port 22\n' "${_lan}" >> "${_rules_file}"
     printf 'pass quick on vtnet1 proto tcp to port 22\n' >> "${_rules_file}"
     printf 'pass quick on vtnet1 proto tcp to port 80\n' >> "${_rules_file}"
 
@@ -513,11 +526,7 @@ do_setup_rules() {
         printf 'block return quick from 192.168.1.10 to <%s>\n' \
             "${TABLE}" >> "${_rules_file}"
     elif [ "${_type}" = "server" ]; then
-        # issue #584 dual-path bench: outbound NAT (translation) ahead of the
-        # in-table reject (filter) below — see the do_setup_rules doc comment
-        # above for the ASSUMED ordering/necessity caveat.
-        printf 'nat on %s inet from 192.168.1.0/24 to any -> (%s)\n' \
-            "${_wan}" "${_wan}" >> "${_rules_file}"
+        # issue #584 dual-path bench (nat line already written FIRST above).
         # Same lan_if-style in-table reject: the flip IP, when table-resident,
         # is still blocked even though other traffic now passes through NAT+WAN.
         printf 'block return quick on %s from 192.168.1.10 to <%s>\n' \
@@ -542,9 +551,12 @@ do_setup_rules() {
 
     # Replace the entire main ruleset. pfctl -f accepts <table_name> references
     # for tables already persistent in the kernel — no table definition needed.
-    "${PFCTL}" -f "${_rules_file}" 2>&1 || {
-        printf 'error=ruleset_load_failed type=%s wan_if=%s lan_if=%s\n' \
-            "${_type}" "${_wan}" "${_lan}"
+    # On failure, surface pfctl's first diagnostic line in the kv (detail=) —
+    # the first #584 dispatch had to be debugged blind without it.
+    _err=$("${PFCTL}" -f "${_rules_file}" 2>&1) || {
+        printf 'error=ruleset_load_failed type=%s wan_if=%s lan_if=%s detail=%s\n' \
+            "${_type}" "${_wan}" "${_lan}" \
+            "$(printf '%s' "${_err}" | head -1 | tr ' ' '_')"
         return 1
     }
 

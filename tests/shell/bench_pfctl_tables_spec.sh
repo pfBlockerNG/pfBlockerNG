@@ -17,14 +17,12 @@
 # CI/dev box) — do_setup_rules's own vtnet0/vtnet2 fallbacks fire, which is the
 # documented, correct degrade path.
 #
-# NOTE on the 'server' nat-line-ordering row: the DESIGN this spec pins places
-# the mgmt/DHCP `pass` lines BEFORE the `nat` line (see bench_pfctl_tables.sh's
-# do_setup_rules doc comment — the ordering/necessity claim is ASSUMED there,
-# validated live at the CI-dispatch step). So "the nat line appears before any
-# block/pass filter line" is checked here as "before the in-table reject and
-# catch-all pass lines that structurally follow it" — the leading mgmt/DHCP
-# pass lines necessarily precede the nat line by construction and are excluded
-# from that claim.
+# NOTE on the 'server' nat-line-ordering row: the nat line must be the FIRST
+# line of the rules file — pfctl enforces pf.conf statement order by default
+# (options, normalization, queueing, translation, filter; pf.conf(5)), so a
+# translation rule after ANY pass/block filter line fails the whole load with
+# ruleset_load_failed. Proven live by the first issue #584 CI dispatch (run
+# 28903200587), where a mgmt-pass-lines-first layout was rejected on-box.
 
 Describe 'bench_pfctl_tables.sh'
   SCRIPT="${PFB_ROOT}/scripts/bench_pfctl_tables.sh"
@@ -101,6 +99,12 @@ STUBEOF
       sh "$SCRIPT" setup_rules server > /dev/null 2>&1
       When call nat_line_precedes "$RULES_FILE" 'block return quick on vtnet2 from 192.168.1.10'
       The output should start with 'nat-before-other'
+    End
+
+    It 'places the nat line FIRST (pfctl require-order: translation before ALL filter lines)'
+      sh "$SCRIPT" setup_rules server > /dev/null 2>&1
+      When call head -1 "$RULES_FILE"
+      The output should start with 'nat on '
     End
 
     It 'places the nat line before the catch-all pass line'
