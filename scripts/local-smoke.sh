@@ -71,7 +71,7 @@ export PFB_BOXES
 
 # ── Parse flags ───────────────────────────────────────────────────────────── #
 _REF="${PFB_REF:-}"
-_ABI="FreeBSD:15:amd64"
+_ABI="FreeBSD:15:amd64"  # version-literal-ok: local-dev default; overridden by --abi
 _MARKER="smoke"
 _FILTER=""
 _NO_TWO_VM=0

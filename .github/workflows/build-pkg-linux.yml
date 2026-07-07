@@ -39,11 +39,11 @@ on:
       abi:
         description: "Target ABI — FreeBSD:<freebsd_major>:<arch> for the target pfSense base, per the ci-metadata version matrix"
         required: false
-        default: "FreeBSD:15:amd64"
+        default: "FreeBSD:15:amd64"  # version-literal-ok: dispatch/caller fallback default; the fan-out passes the matrix value
       py_flavor:
         description: "Python flavor for dep names (the matrix entry's py_flavor)"
         required: false
-        default: "py311"
+        default: "py311"  # version-literal-ok: dispatch/caller fallback default; the fan-out passes the matrix value
       php_version:
         description: "PHP version for dep names (the matrix entry's php_version)"
         required: false
@@ -69,11 +69,11 @@ on:
       abi:
         required: false
         type: string
-        default: "FreeBSD:15:amd64"
+        default: "FreeBSD:15:amd64"  # version-literal-ok: dispatch/caller fallback default; the fan-out passes the matrix value
       py_flavor:
         required: false
         type: string
-        default: "py311"
+        default: "py311"  # version-literal-ok: dispatch/caller fallback default; the fan-out passes the matrix value
       php_version:
         required: false
         type: string

@@ -55,6 +55,7 @@ staged_py=0;  staged_has '\.py$'        && staged_py=1
 staged_md=0;  staged_has '\.md$'        && staged_md=1
 staged_php=0; staged_has '\.(php|inc)$' && staged_php=1
 staged_sh=0;  staged_has '\.sh$'        && staged_sh=1
+staged_yaml=0; staged_has '\.ya?ml$'    && staged_yaml=1
 staged_adrtxt=0; staged_has '^\.ADRs/.*\.txt$' && staged_adrtxt=1
 
 # =============================== Python (*.py) =============================== #
@@ -173,6 +174,21 @@ if [ "$staged_py" = 1 ] || [ "$staged_php" = 1 ] || [ "$staged_sh" = 1 ]; then
 		"$py_bin" scripts/check_appliance_python.py || failed 'no-appliance-python'
 	else
 		skip no-appliance-python
+	fi
+fi
+
+# --- Forbid hardcoded pfSense/FreeBSD version tokens in value positions (CE 2.8,
+#     FreeBSD:15, py311, ...): they must be read from the ci-metadata matrix at
+#     runtime, not restated as literals that silently drift when the matrix moves.
+#     Relevant to any scan-root language (src/scripts/.github/workflows carry
+#     py/php/sh/yaml). Scans the whole tracked set; escape a real one-off inline
+#     with `# version-literal-ok: <reason>`. ---
+if [ "$staged_py" = 1 ] || [ "$staged_php" = 1 ] || [ "$staged_sh" = 1 ] || [ "$staged_yaml" = 1 ]; then
+	if [ -n "$py_bin" ]; then
+		step 'version-literals (no hardcoded version tokens)'
+		"$py_bin" scripts/check_version_literals.py || failed 'version-literals'
+	else
+		skip version-literals
 	fi
 fi
 

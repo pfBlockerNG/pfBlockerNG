@@ -42,7 +42,7 @@ set -eu
 
 # ── Defaults ──────────────────────────────────────────────────────────────── #
 _REF=""        # resolved below (HEAD) if not given
-_ABI="FreeBSD:15:amd64"
+_ABI="FreeBSD:15:amd64"  # version-literal-ok: local-dev default; overridden by --abi
 _MARKER="smoke"
 _FILTER=""
 _NO_TWO_VM=0
@@ -131,7 +131,7 @@ case "$_freebsd_major" in
         ;;
 esac
 # ponytail: all current legs use py311; extend the case above when this changes.
-_py_flavor="py311"
+_py_flavor="py311"  # version-literal-ok: all current legs are py311 (see comment above)
 
 # ── Step 2: ports tree — bring to pfblockerng/use-github ───────────────────── #
 printf 'smoke-on-box: updating FreeBSD-ports at %s (php=%s %s)\n' \

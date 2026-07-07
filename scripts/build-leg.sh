@@ -61,8 +61,8 @@ pfb_scrub_git_env
 PORTS_REPO='pfBlockerNG/FreeBSD-ports'
 PORTS_REF='pfblockerng/use-github'
 CHANNEL='devel'
-ABI='FreeBSD:15:amd64'
-PYFLAVOR='py311'
+ABI='FreeBSD:15:amd64'  # version-literal-ok: default; overridden by --abi (CI passes the matrix ABI)
+PYFLAVOR='py311'  # version-literal-ok: default; overridden by --py-flavor (CI passes the matrix flavor)
 PHP='8.3'
 LOCAL_SRC='.'
 PKGVERSION=''
