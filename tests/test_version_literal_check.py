@@ -365,9 +365,36 @@ def test_php_escaped_squote_before_squoted_token_flagged(tmp_path: Path) -> None
     # review-fanout C9 (PR #947): PHP/JS support \' inside single quotes; the
     # naive single-quote span pairing swallowed a later single-quoted token on
     # the same line. The C-style extractor is escape-aware on both quote types.
+    # The .inc row pins that the whole PHP family shares the branch (re-review
+    # F3, PR #947).
     content = "$s = 'it\\'s fine'; $f = '" + _PY311 + "';\n"
-    violations = _find_named(tmp_path, "s.php", content)
-    assert len(violations) == 1, f"\\' must not swallow a later single-quoted token; got {violations}"
+    for name in ("s.php", "s.inc"):
+        violations = _find_named(tmp_path, name, content)
+        assert len(violations) == 1, f"\\' must not swallow a later single-quoted token ({name}); got {violations}"
+
+
+def test_backtick_spans_do_not_mispair_quotes(tmp_path: Path) -> None:
+    # re-review F1 (PR #947): two backtick segments each holding an odd count
+    # of the same quote char let the extractor pair a quote from inside the
+    # first with one from inside the second, swallowing the real value between
+    # them. Backtick spans are consumed as boundaries in BOTH extractor
+    # variants, so the bracketed value must flag in JS, PHP, and shell alike.
+    js = "const a = `it's`; const b = \"" + _CE28 + "\"; const c = `he's fine`;\n"
+    php = "$a = `it's`; $b = \"" + _CE28 + "\"; $c = `he's fine`;\n"
+    sh = "A=`echo it's`; B=\"" + _CE28 + "\"; C=`echo he's`\n"
+    assert len(_find_named(tmp_path, "s.js", js)) == 1, "JS backtick spans must not swallow the value between them"
+    assert len(_find_named(tmp_path, "s.php", php)) == 1, "PHP backtick spans must not swallow the value between them"
+    assert len(_find(tmp_path, sh)) == 1, "shell backtick spans must not swallow the value between them"
+
+
+def test_backtick_template_literal_is_a_value_in_js_only(tmp_path: Path) -> None:
+    # A backtick-delimited exact token is a template-literal VALUE in JS/PHP
+    # (C-style extractor captures the span); in shell a backtick span is
+    # command substitution, so the same shape stays clean there.
+    js = "const f = `" + _PY311 + "`;\n"
+    sh = "F=`" + _PY311 + "`\n"
+    assert len(_find_named(tmp_path, "s.js", js)) == 1, "a backtick-exact token is a value in JS"
+    assert _find(tmp_path, sh) == [], "a backtick span in shell is command substitution, not a value"
 
 
 # --- Issue #941: Python triple-quote fixes (parity + one-line value) --------
