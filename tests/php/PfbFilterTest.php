@@ -211,6 +211,54 @@ final class PfbFilterTest extends TestCase
 		}
 	}
 
+	/**
+	 * issue #924 (security): a MaxMind license key rejected by PFB_FILTER_WORD must NEVER be
+	 * logged -- the same reference-scoped suppression proven above for top1m_token, extended
+	 * to the 'maxmind_key' reference (added to the pfb_filter() exceptions list at
+	 * pfblockerng.inc ~1658). Every maxmind_key call site passes this reference -- the UI
+	 * validate/store (pfblockerng_ip.php) AND the pfb_global() consumer read
+	 * (pfblockerng.inc ~2361) -- so a rejected stored key never reaches the log on any path.
+	 * A DIFFERENT reference still logs the reject, proving the suppression is reference-scoped
+	 * and not a side effect of PFB_FILTER_WORD itself.
+	 */
+	public function testWordFilterRejectionNeverLogsForMaxmindKeyReferenceButOtherReferencesStillDo(): void
+	{
+		$errlog = tempnam(sys_get_temp_dir(), 'pfb_filter_maxmind_errlog_');
+		$this->assertNotFalse($errlog, 'could not create temp errlog');
+		$saved = array_key_exists('errlog', $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb']['errlog'] : false;
+		$GLOBALS['pfb']['errlog'] = $errlog;
+
+		try {
+			// A key with non-word chars ('-'/'!') that PFB_FILTER_WORD rejects.
+			$secret = 'REJECTED-MAXMIND-KEY-should-never-be-logged!!!';
+
+			// Given/When: reference 'maxmind_key' -- the issue #924 exception.
+			$this->assertSame('', pfb_filter($secret, PFB_FILTER_WORD, 'maxmind_key'));
+			// Then: the rejected key never reaches the error log.
+			$this->assertStringNotContainsString(
+				$secret,
+				(string) file_get_contents($errlog),
+				'a key rejected via the maxmind_key reference must never be logged'
+			);
+
+			// Given/When: a DIFFERENT (ordinary) reference for the same rejected input.
+			$this->assertSame('', pfb_filter($secret, PFB_FILTER_WORD, 'some_other_caller'));
+			// Then: the suppression is reference-scoped -- an ordinary caller still logs.
+			$this->assertStringContainsString(
+				$secret,
+				(string) file_get_contents($errlog),
+				'a non-maxmind_key reference must still log its rejected input as before'
+			);
+		} finally {
+			if ($saved === false) {
+				unset($GLOBALS['pfb']['errlog']);
+			} else {
+				$GLOBALS['pfb']['errlog'] = $saved;
+			}
+			unlink($errlog);
+		}
+	}
+
 	public function testControlCharactersRejected(): void
 	{
 		// A control char anywhere makes the whole input fail, returning default.

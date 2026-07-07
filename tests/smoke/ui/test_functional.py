@@ -479,6 +479,9 @@ def test_dnsbl_top1m_token_masked_field_persists_and_is_never_echoed(
         assert "OK" in restore.stdout, f"failed to restore top1m_token: {restore.stdout!r}"
 
 
+MAXMIND_KEY_CFG = "installedpackages/pfblockerngipsettings/config/0/maxmind_key"
+
+
 def test_ip_maxmind_key_masked_field_persists_and_is_never_echoed(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
@@ -516,7 +519,7 @@ def test_ip_maxmind_key_masked_field_persists_and_is_never_echoed(
     clean for the other flows on this session-scoped VM.
     """
     page = IP_PAGE
-    cfg = "installedpackages/pfblockerngipsettings/config/0/maxmind_key"
+    cfg = MAXMIND_KEY_CFG
     seed_token = "PFBTESTKEY000001"
     new_token = "PFBTESTKEY000002"
     original = helpers.config_get(smoke_vm, cfg)
@@ -532,7 +535,15 @@ def test_ip_maxmind_key_masked_field_persists_and_is_never_echoed(
         assert helpers.config_get(smoke_vm, cfg) == seed_token, "seed did not take before the GET/POST assertions"
 
         # THEN: a GET never echoes the stored key in the raw HTML (write-only, masked).
+        # Guard against a false pass first: a redirect/login/error page also lacks the
+        # token, so prove this is the real IP page (200 + the maxmind_key field present)
+        # before trusting the absence check below.
         resp = webui.get(page)
+        assert resp.status_code == 200, f"GET {page} -> HTTP {resp.status_code} (expected 200)"
+        assert 'name="maxmind_key"' in resp.text, (
+            f"{page} did not render the maxmind_key field -- not the expected IP page "
+            f"(redirect/login/error?), which would make the never-leak check vacuous"
+        )
         assert seed_token not in resp.text, (
             f"maxmind_key must never be echoed back on GET (write-only masked field) -- "
             f"searched for {seed_token!r} in the {page} response body"
