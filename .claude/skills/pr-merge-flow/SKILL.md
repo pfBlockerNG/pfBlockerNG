@@ -195,9 +195,9 @@ it, and it does not replace CodeRabbit; when CodeRabbit never reviews it stands 
    says must be enumerated or resolved at runtime; **`www/` touched → Tier-A UI test
    present, else a `blocking` finding** (test mandate #4); **stale comments/docs** about
    touched symbols. The VENDORED plugin trees (`.claude/skills/ponytail/`,
-   `.claude/skills/caveman/` — byte-identical upstream copies, see their UPSTREAM files) are
-   OUT of review scope: only byte-identity with the pinned ref and the provenance itself are
-   reviewable; never their content/style. The reviewer **executes, not just reads**: it MAY run the gates and
+   `.claude/skills/caveman/`) are OUT of review scope — byte-identical upstream copies (see
+   their UPSTREAM files); only byte-identity with the pinned ref and the provenance itself
+   are reviewable, never their content or style. The reviewer **executes, not just reads**: it MAY run the gates and
    MUST ground each `blocking` correctness claim in an executed probe (command + output —
    the "Empirically verified:" standard) wherever the claim is executable off-appliance.
    Each finding: severity (`blocking` / `nitpick` / `outside-diff`), `file:line`, the

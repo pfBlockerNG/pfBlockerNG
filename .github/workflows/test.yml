@@ -25,10 +25,15 @@ on:
       - '**/*.md'
       - '*.md'
       - 'docs/**'
-      # Vendored third-party plugin trees (refreshed wholesale by
-      # scripts/update-vendored-skills.py; nothing in CI consumes them).
-      - '.claude/skills/ponytail/**'
-      - '.claude/skills/caveman/**'
+      # Vendored plugin trees: only the INERT files skip CI. The vendored
+      # hook scripts (hooks/*.js, src/hooks/*.js) are EXECUTED at runtime by
+      # .claude/hooks/vendored-plugin-hook.sh and integration-tested by
+      # pytest, so a refresh touching them must run the suite (the top
+      # '**/*.md' pattern already covers the vendored markdown).
+      - '.claude/skills/ponytail/LICENSE'
+      - '.claude/skills/ponytail/UPSTREAM'
+      - '.claude/skills/caveman/LICENSE'
+      - '.claude/skills/caveman/UPSTREAM'
   pull_request:
     # labeled/unlabeled so adding or removing the `ui-tests` label re-evaluates the
     # (label-gated) UI suite gate; synchronize re-runs it on new pushes while labeled.
@@ -37,10 +42,15 @@ on:
       - '**/*.md'
       - '*.md'
       - 'docs/**'
-      # Vendored third-party plugin trees (refreshed wholesale by
-      # scripts/update-vendored-skills.py; nothing in CI consumes them).
-      - '.claude/skills/ponytail/**'
-      - '.claude/skills/caveman/**'
+      # Vendored plugin trees: only the INERT files skip CI. The vendored
+      # hook scripts (hooks/*.js, src/hooks/*.js) are EXECUTED at runtime by
+      # .claude/hooks/vendored-plugin-hook.sh and integration-tested by
+      # pytest, so a refresh touching them must run the suite (the top
+      # '**/*.md' pattern already covers the vendored markdown).
+      - '.claude/skills/ponytail/LICENSE'
+      - '.claude/skills/ponytail/UPSTREAM'
+      - '.claude/skills/caveman/LICENSE'
+      - '.claude/skills/caveman/UPSTREAM'
   # Manual trigger to opt INTO the benchmark kill-gates (issue #76). They are OFF in
   # the automated push/PR flow: a synthetic corpus on a generic runner is not the
   # number that matters — the production-faithful build-time/RAM measurement belongs
@@ -214,7 +224,7 @@ jobs:
         # tests/ shellspec specs trip SC2034 false-positives (separate cleanup).
         # --severity=info also gates the unquoted-variable class (SC2086) so the
         # quoting / word-splitting bugs the shell audit found cannot silently regress.
-        run: find src scripts -name '*.sh' | sort | xargs shellcheck --severity=info
+        run: find src scripts .claude/hooks -name '*.sh' | sort | xargs shellcheck --severity=info
 
       - name: Forbid naked $var in curl/wget/fetch URLs
         # Preventative: a query value jammed straight into a URL (`?ip=$VAR`) breaks
