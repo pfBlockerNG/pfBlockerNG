@@ -143,8 +143,8 @@ def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     warn_only = "--warn-only" in args
     body_file: str | None = None
-    if "--pr-body-file" in args:
-        i = args.index("--pr-body-file")
+    while "--pr-body-file" in args:  # strip EVERY occurrence — a leaked repeat must
+        i = args.index("--pr-body-file")  # never enter the path list; last value wins
         if i + 1 >= len(args):
             print("error: --pr-body-file requires a file path argument")
             return 2
@@ -157,8 +157,13 @@ def main(argv: list[str] | None = None) -> int:
     paths = [p.strip() for p in paths if p.strip()]
 
     if warn_only and body_file is not None:
-        with open(body_file, encoding="utf-8", errors="replace") as fh:
-            body = fh.read()
+        try:
+            # utf-8-sig: a BOM at byte 0 must not hide a justification line.
+            with open(body_file, encoding="utf-8-sig", errors="replace") as fh:
+                body = fh.read()
+        except OSError as exc:
+            print(f"error: cannot read --pr-body-file {body_file!r}: {exc}")
+            return 2
         if not _has_justification(body):
             print(
                 "no-test-needed label is set but the PR body has no 'no-test-needed: <why>' "
