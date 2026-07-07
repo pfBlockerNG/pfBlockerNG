@@ -331,6 +331,20 @@ def test_js_line_and_block_comments_not_flagged(tmp_path: Path) -> None:
     assert _find_named(tmp_path, "s.js", block) == [], "a block-comment body must stay clean in JS"
 
 
+def test_escaped_quote_does_not_misclose_string(tmp_path: Path) -> None:
+    # Copilot (PR #947): a backslash-escaped quote inside a string mis-closed
+    # the quote tracker, so a // (PHP/JS) or # (shell) INSIDE the string read
+    # as a comment opener and truncated the scan -- hiding a real value after
+    # it. Same class in both trackers (_split_c_comment and
+    # _strip_inline_comment), so all three rows must flag.
+    php_dquote = '$s = "a \\" // not a comment"; $v = "' + _CE28 + '";\n'
+    php_squote = "$s = 'it\\'s // x'; $v = \"" + _CE28 + '";\n'
+    sh_dquote = 'MSG="a \\" # note"; V="' + _CE28 + '"\n'
+    assert len(_find_named(tmp_path, "s.php", php_dquote)) == 1, "escaped dquote must not hide a PHP value"
+    assert len(_find_named(tmp_path, "s2.php", php_squote)) == 1, "escaped squote must not hide a PHP value"
+    assert len(_find(tmp_path, sh_dquote)) == 1, "escaped dquote must not hide a shell value"
+
+
 def test_js_hash_is_not_a_comment(tmp_path: Path) -> None:
     # `#` is a private-field sigil in JS, not a comment -- a real value after a
     # `#` must still flag (in PHP the same line would be comment-stripped).
