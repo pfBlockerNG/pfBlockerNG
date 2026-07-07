@@ -99,6 +99,24 @@ When waiting on a normal event (CI green, a PR merge, a queued job), the event-d
 still carries its own **explicit deadline** — never an open-ended re-arm. Default cap: the
 same 2 h / seven-check budget unless the user sets a longer one.
 
+### 3 — The cancel-on-resolution sweep, per trigger class
+
+Background waits have been found alive **20+ hours** after their task ended. The sweep runs
+the moment the awaited item reaches ANY terminal state, and again at work-item pickup/finish
+(`TaskList` once; stop stale waits you own):
+
+| Trigger class | Kill mechanism | Notes |
+| ------------- | -------------- | ----- |
+| Background Bash poll (`run_in_background`) | `TaskStop <task-id>` | Also self-terminating by construction: a hard iteration cap + wall-clock deadline INSIDE the loop. A poll without both is a defect — never launch it. |
+| Cron check-in | `CronDelete` | The heartbeat ladder's rungs are crons — delete every remaining rung on resolution, not just the next. |
+| PR/event subscription | unsubscribe | A user-driven check supersedes the subscription — kill it then and there. |
+| `ScheduleWakeup` | **none — cannot be cancelled** | Fires regardless. Therefore: (a) use only as a FALLBACK to harness completion notifications, never the primary wake; (b) the prompt must be self-invalidating — name the concrete check and end with "if already resolved: no-op, do not re-arm"; (c) keep delays modest so a stale firing costs one cheap turn. |
+
+The sweep is an explicit terminal step in every wait-spawning skill (`/pr-merge`,
+`/pr-merge-flow`, `/pr-comments`, `/gh-issue`, `/adr-phase`) — mechanical, not remembered.
+It cannot be a workflow: `TaskStop`/`CronDelete` are orchestrator tools, invisible to
+workflow agents.
+
 ## Config storage adapter rule (ADR-28 §2.2) — full text
 
 Expansion of CLAUDE.md "Code-quality conventions (ADR-28)":

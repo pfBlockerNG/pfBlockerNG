@@ -688,17 +688,31 @@ is author (`--author=`), and the `prepare-commit-msg` hook injects the owner's
 
 ---
 
-## Bounded waits — scheduled tasks / triggers must self-terminate
+## No orphaned waits — every trigger dies with its task
 
-Any agent waiting on an external event MUST bound the wait so it dies on its own — there is
-no platform-level timeout on cron/`ScheduleWakeup`/subscriptions. Two guards, **both
-required**: **(1)** a self-check heartbeat ladder independent of the event trigger — first
-check at 10 min, then 10/10/15/15/30/30 (≈2 h total), then **give up, cancel every pending
-trigger, and report the wait abandoned** (never re-arm past the ladder); **(2)** an explicit
-deadline on the happy-path event wait (same 2 h default unless the user extends). The instant
-the task reaches a terminal state by any path — including a user-driven check — cancel every
-pending trigger tied to it: if the task moved on, its future triggers are dead. Full ladder
-semantics: [`workflow-reference.md`](docs/misc/workflow-reference.md) "Bounded waits".
+Background waits have been found running **20+ hours** after their task ended; there is no
+platform-level timeout on polls/cron/`ScheduleWakeup`/subscriptions, so the guarantees are
+ours. Three, ALL mandatory:
+
+1. **Self-terminating by construction.** Every background wait carries a hard iteration cap
+   AND a wall-clock deadline *inside the loop itself* (the skills' poll snippets are the
+   exemplars) so it dies on its own even if orphaned. A wait without a cap is a defect —
+   never launch one. Event waits also follow the heartbeat ladder (10, 10/10/15/15/30/30 min,
+   ≈2 h total, then give up + report the wait abandoned; never re-arm past it).
+2. **Cancel-on-resolution sweep.** The instant a work item reaches a terminal state by ANY
+   path — success, failure, give-up, or a user-driven check that supersedes the wait — sweep
+   every trigger tied to it, by class: background polls → `TaskStop`; cron check-ins →
+   `CronDelete`; PR/event subscriptions → unsubscribe. `ScheduleWakeup` **cannot be
+   cancelled**, so every wakeup prompt MUST be self-invalidating — it states the check and
+   "if resolved: no-op, do not re-arm" — and wakeups are a *fallback* to harness completion
+   notifications, never the primary wake. The wait-spawning skills carry this sweep as an
+   explicit terminal step; it is not optional and not from memory.
+3. **Pickup hygiene.** When starting or finishing any work item, run `TaskList` once and
+   stop every stale wait you own from earlier items. If the task moved on, its future
+   triggers are dead — good or bad outcome alike.
+
+Full ladder semantics + per-class mechanics:
+[`workflow-reference.md`](docs/misc/workflow-reference.md) "Bounded waits".
 
 ---
 

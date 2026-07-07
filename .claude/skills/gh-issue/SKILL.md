@@ -347,3 +347,11 @@ Summarize:
   (main checkout untouched); the landing outcome (PR URL or the non-code action) and
   worktree-cleanup status.
 - Any blocker, deviation, or open follow-up.
+
+**Trigger sweep (mandatory — CLAUDE.md "No orphaned waits").** The task just reached a
+terminal state, so kill every wait tied to it NOW, by class: `TaskStop` each background
+poll you started for it; `CronDelete` every remaining heartbeat rung; unsubscribe any
+PR/event subscription. Any `ScheduleWakeup` you armed cannot be cancelled — confirm its
+prompt was self-invalidating and let it no-op. Then `TaskList` once: stop anything stale
+you own from earlier items. Report the sweep in one line (what was stopped / "nothing
+pending").

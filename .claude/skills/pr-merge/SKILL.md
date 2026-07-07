@@ -138,6 +138,14 @@ gh pr merge "$PR" --rebase
   the tree): `git worktree remove <path>`. If you created a throwaway branch only
   to hold the worktree, delete it too.
 
+**Trigger sweep (mandatory — CLAUDE.md "No orphaned waits").** The task just reached a
+terminal state, so kill every wait tied to it NOW, by class: `TaskStop` each background
+poll you started for it; `CronDelete` every remaining heartbeat rung; unsubscribe any
+PR/event subscription. Any `ScheduleWakeup` you armed cannot be cancelled — confirm its
+prompt was self-invalidating and let it no-op. Then `TaskList` once: stop anything stale
+you own from earlier items. Report the sweep in one line (what was stopped / "nothing
+pending").
+
 ## Step 7 — Report back
 
 State plainly: the PR number and title, whether a rebase was needed (and onto which

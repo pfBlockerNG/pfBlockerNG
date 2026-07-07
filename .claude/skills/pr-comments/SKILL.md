@@ -389,3 +389,11 @@ wasted computation.
 Summarize: findings by source (inline / nitpick / outside-diff-range), how many
 **applied** (+ commit hash), **skipped** (with reasons), **deferred** (+ tracking
 issue links, and any follow-up PR); gate results; and any thread you could not resolve.
+
+**Trigger sweep (mandatory — CLAUDE.md "No orphaned waits").** The waits this skill armed (Step 2 polls) are now
+resolved, so kill every wait tied to it NOW, by class: `TaskStop` each background
+poll you started for it; `CronDelete` every remaining heartbeat rung; unsubscribe any
+PR/event subscription. Any `ScheduleWakeup` you armed cannot be cancelled — confirm its
+prompt was self-invalidating and let it no-op. Then `TaskList` once: stop anything stale
+you own from earlier items. Report the sweep in one line (what was stopped / "nothing
+pending").
