@@ -57,7 +57,8 @@ A second mode, ``--verify-matrix [--ref <git-ref> | --matrix-file <path>]``,
 tripwires the WINDOWED token shapes against ``supported-versions.json``
 (issue #940; a blocking CI step in ``test.yml``): exit 1 lists every
 matrix-implied token the patterns no longer cover, so the window is widened
-the moment the matrix moves instead of the gate narrowing silently.
+the moment the matrix moves instead of the gate narrowing silently; a
+misconfigured invocation (bad ref, missing file, malformed JSON) exits 2.
 """
 
 from __future__ import annotations
@@ -134,9 +135,14 @@ _ASSIGNMENT_RE = re.compile(
 # (review-fanout C9, PR #947 — a \' earlier on the line mispaired the spans
 # and swallowed a later single-quoted token); POSIX sh has NO single-quote
 # escapes, so the shell/YAML variant keeps the naive single-quote side, which
-# is shell-correct.
-_QUOTED_RE = re.compile(r'"((?:[^"\\]|\\.)*)"|\'([^\']*)\'')
-_QUOTED_C_RE = re.compile(r'"((?:[^"\\]|\\.)*)"|\'((?:[^\'\\]|\\.)*)\'')
+# is shell-correct. Both variants CONSUME backtick spans so quote pairing
+# cannot cross a backtick boundary (re-review F1, PR #947 — two backtick
+# segments each holding an odd quote count swallowed the value between them):
+# in the C-style variant the span is also CAPTURED (a JS template literal is a
+# value); in the shell variant it is consume-only (shell backticks are command
+# substitution, not a value literal).
+_QUOTED_RE = re.compile(r'"((?:[^"\\]|\\.)*)"|\'([^\']*)\'|`(?:[^`\\]|\\.)*`')
+_QUOTED_C_RE = re.compile(r'"((?:[^"\\]|\\.)*)"|\'((?:[^\'\\]|\\.)*)\'|`((?:[^`\\]|\\.)*)`')
 
 # Inline per-line escape (`# version-literal-ok: <reason>`), spec'd in issue #922.
 _ESCAPE = "version-literal-ok"
@@ -168,10 +174,11 @@ def _quoted_literals(line: str, c_style: bool = False) -> list[str]:
     """Return the inner text of every single- or double-quoted span on ``line``.
 
     ``c_style`` selects the PHP/JS variant whose single-quote side is
-    escape-aware (``\\'`` is content there, unlike POSIX sh).
+    escape-aware (``\\'`` is content there, unlike POSIX sh) and whose
+    backtick spans count as values (template literals).
     """
     regex = _QUOTED_C_RE if c_style else _QUOTED_RE
-    return [m.group(1) if m.group(1) is not None else m.group(2) for m in regex.finditer(line)]
+    return [g for m in regex.finditer(line) for g in m.groups() if g is not None]
 
 
 def _strip_inline_comment(line: str) -> str:
@@ -409,7 +416,8 @@ def _verify_matrix(argv: list[str]) -> int:
 
     Reads ``supported-versions.json`` from the ci-metadata ref (``--ref``,
     default ``origin/ci-metadata``) or from ``--matrix-file <path>``; exits 1
-    listing any matrix-implied token the patterns no longer cover.
+    listing any matrix-implied token the patterns no longer cover, and 2 on a
+    misconfigured invocation (unknown option, bad ref, missing file, bad JSON).
     """
     ref = "origin/ci-metadata"
     matrix_file: str | None = None
