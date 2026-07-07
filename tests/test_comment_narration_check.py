@@ -1,0 +1,180 @@
+"""Tests for scripts/check_comment_narration.py.
+
+Covers both branches per dimension (CLAUDE.md test-coverage rules): every
+pattern that flags a violation is paired with the nearest correct form that
+must stay clean, so a green proves the checker discriminates rather than
+always firing (or never firing).
+
+The checker is diff-scoped: only ADDED lines are judged, so the tests build
+unified-diff text (the exact format `git diff --unified=0` emits) rather than
+whole files.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import subprocess
+import sys
+from pathlib import Path
+
+_TOOL = Path(__file__).resolve().parent.parent / "scripts" / "check_comment_narration.py"
+_spec = importlib.util.spec_from_file_location("check_comment_narration", _TOOL)
+assert _spec is not None and _spec.loader is not None
+ccn = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = ccn
+_spec.loader.exec_module(ccn)
+
+
+def _diff(path: str, added: list[str], start: int = 1) -> str:
+    """Unified diff adding ``added`` lines to ``path`` at ``start``."""
+    hunk = "\n".join("+" + line for line in added)
+    return f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -0,0 +{start},{len(added)} @@\n{hunk}\n"
+
+
+def _find(path: str, added: list[str], start: int = 1) -> list:
+    return ccn.find_violations(_diff(path, added, start))
+
+
+# --------------------------------------------------------------------------- #
+# Patterns — flagged vs the nearest clean sibling
+# --------------------------------------------------------------------------- #
+
+
+def test_results_ref_is_flagged() -> None:
+    v = _find("src/usr/local/pkg/pfblockerng/pfblockerng.inc", ["// see RESULTS/01 SS2"])
+    assert len(v) == 1
+    assert v[0].line == 1
+    assert "RESULTS/" in v[0].reason
+
+
+def test_results_word_without_slash_is_clean() -> None:
+    assert _find("src/a.inc", ["// the RESULTS are cached"]) == []
+
+
+def test_capital_phase_number_is_flagged() -> None:
+    v = _find("src/a.py", ["# wired into init() in Phase 4"])
+    assert len(v) == 1
+    assert "phase" in v[0].reason.lower()
+
+
+def test_lowercase_phase_number_is_clean() -> None:
+    # Only the ADR-narration capitalised form is banned; ordinary prose about a
+    # protocol's "phase 2" stays legal.
+    assert _find("src/a.py", ["# TLS handshake phase 2 resumes here"]) == []
+
+
+def test_review_fanout_is_flagged() -> None:
+    v = _find("scripts/build-leg.sh", ["# review-fanout C9 pinned this"])
+    assert len(v) == 1
+
+
+def test_pr_number_is_flagged_but_issue_breadcrumb_is_clean() -> None:
+    assert len(_find("src/a.inc", ["// escape-aware (Copilot, PR #947)"])) == 1
+    assert _find("src/a.inc", ["// issue #946: decode UTF-16 BOM first"]) == []
+    assert _find("src/a.inc", ["// case-fold TOP1M match (#920)"]) == []
+
+
+# --------------------------------------------------------------------------- #
+# Scope — roots, extensions, self-exclusions, escape hatch
+# --------------------------------------------------------------------------- #
+
+
+def test_markdown_and_out_of_root_paths_are_clean() -> None:
+    bad = ["see RESULTS/01 and Phase 3"]
+    assert _find("docs/misc/architecture-notes.md", bad) == []
+    assert _find("src/notes.md", bad) == []
+    assert _find("tests/test_x.py", bad) == []
+    assert _find(".ADRs/ADR_60_X/prompt.txt", bad) == []
+
+
+def test_self_and_phase_prompt_checker_are_excluded() -> None:
+    bad = ["# RESULTS/ Phase 1"]
+    assert _find("scripts/check_comment_narration.py", bad) == []
+    assert _find("tests/test_comment_narration_check.py", bad) == []
+    assert _find("scripts/check_phase_prompts.py", bad) == []
+
+
+def test_narration_ok_escape_exempts_the_line() -> None:
+    assert _find("src/a.inc", ["// Phase 2 of BGP convergence  // narration-ok: protocol term"]) == []
+
+
+# --------------------------------------------------------------------------- #
+# Diff mechanics — only added lines judged, line numbers from hunk headers
+# --------------------------------------------------------------------------- #
+
+
+def test_removed_and_context_lines_are_ignored() -> None:
+    diff = (
+        "diff --git a/src/a.inc b/src/a.inc\n"
+        "--- a/src/a.inc\n"
+        "+++ b/src/a.inc\n"
+        "@@ -5,2 +5,1 @@\n"
+        "-// old RESULTS/01 note\n"
+        " // context Phase 9 line\n"
+        "+// clean replacement\n"
+    )
+    assert ccn.find_violations(diff) == []
+
+
+def test_line_numbers_track_hunk_headers_across_files() -> None:
+    diff = _diff("src/a.inc", ["// ok", "// see RESULTS/02"], start=40) + _diff(
+        "src/b.py", ["# ADR-48 Phase 4 tally"], start=7
+    )
+    v = ccn.find_violations(diff)
+    assert [(x.path, x.line) for x in v] == [("src/a.inc", 41), ("src/b.py", 7)]
+
+
+def test_clean_diff_yields_nothing() -> None:
+    assert _find("src/a.inc", ["// pfb_foo(): guard empty input"]) == []
+
+
+# --------------------------------------------------------------------------- #
+# CLI — the two production modes, end-to-end in a scratch repo
+# --------------------------------------------------------------------------- #
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+
+
+def _run(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run([sys.executable, str(_TOOL), *args], cwd=repo, capture_output=True, text=True)
+
+
+def test_cli_staged_and_diff_modes(tmp_path: Path) -> None:
+    _git(tmp_path, "init", "-q", "-b", "devel")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/a.inc").write_text("// clean\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base")
+
+    # --staged: violating staged line fails with file:line on stderr...
+    (tmp_path / "src/a.inc").write_text("// clean\n// per RESULTS/03 SS1\n")
+    _git(tmp_path, "add", ".")
+    res = _run(tmp_path, "--staged")
+    assert res.returncode == 1, res.stderr
+    assert "src/a.inc:2" in res.stderr
+
+    # --diff BASE: committed violation vs the base branch fails the same way,
+    # and a clean staged tree passes --staged.
+    _git(tmp_path, "commit", "-qm", "bad")
+    assert _run(tmp_path, "--staged").returncode == 0
+    res = _run(tmp_path, "--diff", "devel~1")
+    assert res.returncode == 1, res.stderr
+    assert "src/a.inc:2" in res.stderr
+
+    # Reverting to clean content passes --diff again.
+    (tmp_path / "src/a.inc").write_text("// clean\n")
+    _git(tmp_path, "commit", "-qam", "clean")
+    assert _run(tmp_path, "--diff", "devel~2").returncode == 0
+
+
+def test_cli_usage_error(tmp_path: Path) -> None:
+    _git(tmp_path, "init", "-q")
+    assert _run(tmp_path).returncode == 2
+    assert _run(tmp_path, "--bogus").returncode == 2

@@ -146,7 +146,9 @@ and review.
    these).
 5. **Constraints** — the do-NOT-touch list, plus the **never-weaken rule**: a brief may never
    weaken a CLAUDE.md mandate. In particular, red→green is an **executed run with output
-   pasted**, never "reasoned through" or "verified by reading".
+   pasted**, never "reasoned through" or "verified by reading". Comments follow "Comments —
+   constraint, not narration" (Code standards): gate-facing justification goes in the
+   handoff, never the code.
 6. **Verification** — the canonical gates (table below) plus per-item acceptance checks, each
    a runnable command with its expected observable (the shape "WHEN `<command/input>` THEN
    `<observable>`"), mapping 1:1 to the tests the step ships.
@@ -199,7 +201,8 @@ the gate report's wording, never to which checks run.
    matches the house pattern (#905); comments/docs mentioning touched symbols reconciled with
    the new reality (stale-comment defects recur); any comment/doc claim naming a **sibling
    file or house convention** verified by grep — in-repo claims are the cheapest probes there
-   are (PR #937 shipped a fabricated "mirrors the URL-encoding checker" lineage, #941).
+   are (PR #937 shipped a fabricated "mirrors the URL-encoding checker" lineage, #941);
+   added comments respect the comment budget ("Comments — constraint, not narration").
 6. **Write the gate record** — a fixed-field block (or per-phase file where the skill says
    so): commands + results, red/green evidence, per-item diff verdicts, matrix confirmation,
    the SKIPPED list. This artifact is what makes a skipped check auditable.
@@ -331,6 +334,21 @@ that file (or similar files)** — match the surrounding pattern (prefix, casing
 word order); with sibling `pfB_*` identifiers, a wizard flag is `pfB_wizard_disable`, not
 `donotshowthisagain`. An off-pattern name is a smell even when it works. Spans the whole
 stack.
+
+### Comments — constraint, not narration
+
+A comment states a constraint the code cannot show; default budget **≤3 lines**. Design
+rationale lives in the ADR / architecture-notes and the comment carries a one-line pointer
+(`// ADR-49: content-sanity gate; contract pinned by PfbTextSanityTest`) — never a
+restatement: a contract stored in ADR + comment + test is three copies, two of which drift.
+One-line regression breadcrumbs stay (`// issue #946: decode UTF-16 BOM first — else
+nul_bytes false-positives`). **Never in committed comments:** ADR **phase numbers**
+("wired in Phase 4"), **`RESULTS/` handoff refs**, **review archaeology** (reviewer names,
+`PR #N` finding IDs, `review-fanout CN`), or correctness argument aimed at the gate/reviewer
+— that evidence belongs in the handoff / gate record / PR body, not the tree. Enforced on
+**added** lines under `src/` + `scripts/` by `scripts/check_comment_narration.py`
+(pre-commit + CI, diff-scoped — pre-existing narration is grandfathered until its cleanup
+lands); escape a genuine need inline with `# narration-ok: <reason>`.
 
 ### PHP
 
