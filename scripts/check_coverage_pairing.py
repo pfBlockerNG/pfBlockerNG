@@ -35,7 +35,11 @@ ESCAPE HATCH
 The CI job downgrades a violation to a warning (exit 0, printed to
 ``$GITHUB_STEP_SUMMARY``) instead of failing the PR when the PR carries the
 ``no-test-needed`` label — the ``--warn-only`` CLI flag mirrors that from this
-script's side; the label itself is applied by a human, not this script.
+script's side; the label itself is applied by a human, not this script. When the
+label is set, the CI job additionally requires a ``no-test-needed: <why>``
+justification line in the PR body (issue #921's "applied deliberately"
+constraint, enforced per #934); that check lives in the workflow, not here — it
+reads the PR body, and this script reasons over paths only.
 
 This is dev/CI-only tooling under ``scripts/`` (mirrors ``check_url_encoding.py``
 / ``check_appliance_python.py``): it reasons over path STRINGS only, never reads
@@ -51,12 +55,12 @@ _FIX_HINT = "add the paired test, or apply the `no-test-needed` label if none is
 
 def _is_docs(path: str) -> bool:
     """True if ``path`` is documentation and therefore neutral to both rules."""
-    return path.lower().endswith(".md") or path == "docs" or path.startswith("docs/")
+    return path.lower().endswith(".md") or path.startswith("docs/")
 
 
 def _is_src(path: str) -> bool:
     """True if ``path`` is production ``src/**`` code (docs under src excluded)."""
-    return not _is_docs(path) and (path == "src" or path.startswith("src/"))
+    return not _is_docs(path) and path.startswith("src/")
 
 
 def _is_www(path: str) -> bool:
@@ -66,12 +70,12 @@ def _is_www(path: str) -> bool:
 
 def _is_test(path: str) -> bool:
     """True if ``path`` is under ``tests/**`` (a sibling ``othertests/`` is not)."""
-    return path == "tests" or path.startswith("tests/")
+    return path.startswith("tests/")
 
 
 def _is_ui_test(path: str) -> bool:
     """True if ``path`` is under ``tests/smoke/ui/**`` (Tier-A UI coverage)."""
-    return path == "tests/smoke/ui" or path.startswith("tests/smoke/ui/")
+    return path.startswith("tests/smoke/ui/")
 
 
 def evaluate(changed: list[str]) -> list[str]:
