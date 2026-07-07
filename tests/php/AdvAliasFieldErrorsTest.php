@@ -12,15 +12,16 @@ use PHPUnit\Framework\TestCase;
  * fields (aliasports_in / aliasports_out / aliasaddr_in / aliasaddr_out) by
  * looking each non-empty value up as a firewall alias and checking its type.
  *
- * Existence + type MUST come from alias_get_type() (config-based), NOT
- * is_alias(): is_alias() reads the in-memory $aliastable cache, which is empty
- * on the category-edit page (it is only populated during filter generation), so
- * is_alias() reports every existing alias as missing — rejecting a valid alias
- * with "Must use an existing Alias" (#636). These tests seed firewall aliases
- * into the configuration — the source the fixed check reads — and are the
- * red->green for the fix: against an is_alias()-backed implementation the
- * "existing alias is accepted" cases fail (the seeded aliases are never written
- * into $aliastable / $GLOBALS['pfb_test_aliases']).
+ * Existence + type MUST come from the config-read pfb_alias_type(), NOT from
+ * either pfSense helper: is_alias() reads the in-memory $aliastable cache, which
+ * is empty on the category-edit page (only populated during filter generation),
+ * so it reports every existing alias as missing (#636); alias_get_type() gives
+ * reserved system table names (bogons, virusprot, ...) precedence over the
+ * configuration, so it accepts names the rule builder then silently ignores.
+ * These tests seed firewall aliases into the configuration — the source the
+ * fixed check reads. Red->green: against an is_alias()-backed implementation
+ * the "existing alias is accepted" cases fail; against an alias_get_type()-
+ * backed one the "reserved table name is rejected" cases fail.
  */
 #[CoversFunction('pfb_adv_alias_field_errors')]
 final class AdvAliasFieldErrorsTest extends TestCase
@@ -209,6 +210,57 @@ final class AdvAliasFieldErrorsTest extends TestCase
 
 		// Then nothing is validated — empty means "no Advanced alias", not an error
 		$this->assertSame([], $errors);
+	}
+
+	// -----------------------------------------------------------------------
+	// pfSense reserved system table names (bogons, virusprot, ...) — rejected
+	// as non-existent. They are dynamic pf tables with NO aliases/alias config
+	// entry, so the Advanced-alias rule builder (pfblockerng.inc, non-empty
+	// 'address' required) silently ignores them: accepting one at save time
+	// yields a setting that is dead at rule build. pfSense's alias_get_type()
+	// resolves them WITH precedence (get_reserved_table_names(), identical
+	// CE 2.8.0..master), which is exactly why the validator must resolve via
+	// the config-read pfb_alias_type() instead — matching the autocomplete
+	// (which never offers reserved names) and the DNS-redirect exception path.
+	// -----------------------------------------------------------------------
+
+	public function testReservedHostTableNameInAddressFieldIsRejectedAsMissing(): void
+	{
+		// Given: a genuinely configured alias is accepted (proves the validator is
+		// live and the rejection below is specific to the reserved name).
+		$this->seedAliases(['RealHosts' => 'host']);
+		$this->assertSame([], pfb_adv_alias_field_errors(['aliasaddr_in' => 'RealHosts']),
+			'pre-condition: a configured host alias is accepted');
+
+		// When a reserved system table name (type 'host' upstream) is supplied
+		$errors = pfb_adv_alias_field_errors(['aliasaddr_in' => 'virusprot']);
+
+		// Then it is rejected as non-existent — not silently accepted and dropped
+		$this->assertCount(1, $errors);
+		$this->assertStringContainsString('Must use an existing Alias', $errors[0]);
+	}
+
+	public function testReservedUrltableNameInAddressFieldIsRejectedAsMissing(): void
+	{
+		// 'bogons' is type 'urltable' upstream — address-bearing, so under
+		// alias_get_type() it passes BOTH the existence and the type check; and its
+		// pf table only exists when an interface enables block-bogons.
+		$errors = pfb_adv_alias_field_errors(['aliasaddr_out' => 'bogons']);
+
+		$this->assertCount(1, $errors);
+		$this->assertStringContainsString('Must use an existing Alias', $errors[0]);
+		$this->assertStringContainsString('Source Outbound', $errors[0]);
+	}
+
+	public function testReservedTableNameInPortFieldIsRejectedAsMissing(): void
+	{
+		// In a port field a reserved name must fail the EXISTENCE check (no config
+		// entry), not the type check — pins the resolver, not just the message.
+		$errors = pfb_adv_alias_field_errors(['aliasports_in' => 'virusprot']);
+
+		$this->assertCount(1, $errors);
+		$this->assertStringContainsString('Must use an existing Alias', $errors[0]);
+		$this->assertStringNotContainsString('Port-type', $errors[0]);
 	}
 
 	// -----------------------------------------------------------------------

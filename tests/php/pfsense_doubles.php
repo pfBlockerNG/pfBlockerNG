@@ -821,11 +821,28 @@ if (!function_exists('is_alias')) {
 }
 
 if (!function_exists('alias_get_type')) {
-	// pfSense util.inc: return the 'type' of the named firewall alias from the
-	// configuration ('host'/'network'/'port'/'urltable'/...), or '' when no alias
-	// of that name exists. Config-based (reads aliases/alias via config_get_path),
-	// matching the real function — NOT the $aliastable cache that is_alias() uses.
+	// pfSense util.inc: return the 'type' of the named firewall alias, or '' when no
+	// alias of that name exists. RESERVED SYSTEM TABLE NAMES TAKE PRECEDENCE over the
+	// configuration (get_reserved_table_names(), matched case-insensitively) — the 8
+	// static entries below are byte-identical across CE 2.8.0..master (globals.inc
+	// $reserved_table_names, verified 2026-07-07; upstream can register more at runtime
+	// via add_reserved_table()). Then config-based (reads aliases/alias via
+	// config_get_path) — NOT the $aliastable cache that is_alias() uses.
 	function alias_get_type($name) {
+		$reserved = [
+			'bogons'          => 'urltable',
+			'bogonsv6'        => 'urltable',
+			'sshguard'        => 'host',
+			'snort2c'         => 'host',
+			'virusprot'       => 'host',
+			'vpn_networks'    => 'network',
+			'negate_networks' => 'network',
+			'tonatsubnets'    => 'network',
+		];
+		$lower = strtolower((string) $name);
+		if (isset($reserved[$lower])) {
+			return $reserved[$lower];
+		}
 		foreach (config_get_path('aliases/alias', []) as $a) {
 			if (($a['name'] ?? '') === (string) $name) {
 				return (string) ($a['type'] ?? '');

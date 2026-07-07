@@ -1893,7 +1893,7 @@ function pfb_alias_rename_followup(string $old_name, string $new_name): bool
  *
  * @param  string $field       One of aliasports_in, aliasports_out,
  *                             aliasaddr_in, aliasaddr_out.
- * @param  string $alias_type  The type string returned by alias_get_type().
+ * @param  string $alias_type  The alias type string (pfb_alias_type() value).
  * @return bool                TRUE when the alias type is allowed for this field.
  */
 function pfb_alias_field_type_ok(string $field, string $alias_type): bool
@@ -1918,13 +1918,18 @@ function pfb_alias_field_type_ok(string $field, string $alias_type): bool
  * Each non-empty field must name an EXISTING firewall alias whose type the field
  * accepts (port fields -> a port alias; address fields -> an address-bearing alias).
  *
- * Existence AND type are resolved from alias_get_type(), which reads the
- * 'aliases/alias' configuration directly (returning '' for an unknown name) —
- * the same source the page builds its alias dropdowns/autocomplete from. This
- * deliberately replaces is_alias(): is_alias() consults the in-memory $aliastable
- * cache, populated only by alias_make_table() during filter generation, so on the
- * category-edit page that cache is empty and is_alias() reports every existing
- * alias as missing — rejecting valid aliases with "Must use an existing Alias" (#636).
+ * Existence AND type are resolved from pfb_alias_type(), which reads the
+ * 'aliases/alias' configuration directly — the same source the page builds its
+ * alias dropdowns/autocomplete from and the same resolver the DNS-redirect
+ * exception path uses. This deliberately replaces BOTH pfSense helpers:
+ *   - is_alias() consults the in-memory $aliastable cache, populated only by
+ *     alias_make_table() during filter generation, so on the category-edit page
+ *     that cache is empty and every existing alias is reported missing (#636);
+ *   - alias_get_type() gives reserved system table names (bogons, virusprot, ...)
+ *     precedence over the configuration, so a reserved name passes save-time
+ *     validation here while the rule builder (which requires an aliases/alias
+ *     entry with a non-empty address) silently ignores it — an accepted setting
+ *     that is dead at rule build. Reserved names must be rejected at save.
  *
  * @param  array $post           The submitted form ($_POST).
  * @return array<int, string>    Human-readable input-error strings (empty when valid).
@@ -1943,7 +1948,7 @@ function pfb_adv_alias_field_errors(array $post): array
 		if (empty($post[$field])) {
 			continue;
 		}
-		$alias_type = alias_get_type($post[$field]);
+		$alias_type = pfb_alias_type($post[$field]) ?? '';
 		if ($alias_type === '') {
 			$errors[] = "Settings: Advanced {$meta['dir']}bound Alias error - Must use an existing Alias";
 		} elseif (!pfb_alias_field_type_ok($field, $alias_type)) {

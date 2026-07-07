@@ -1786,8 +1786,9 @@ if ($_POST) {
 		}
 
 		// Validate Adv. In/Outbound firewall rules settings (issue #676, sibling of #636).
-		// Existence + type are resolved from the configuration (alias_get_type), NOT is_alias()
-		// whose $aliastable cache is empty on this page — see pfb_adv_alias_field_errors().
+		// Existence + type are resolved from the configuration (pfb_alias_type), NOT is_alias()
+		// (empty $aliastable cache here) nor alias_get_type() (reserved system tables would
+		// wrongly pass) — see pfb_adv_alias_field_errors().
 		// Append (not array_merge): $input_errors is left unset until the first error so the
 		// later isset($input_errors) checks hold — appending auto-vivifies only on a real error.
 		foreach (pfb_adv_alias_field_errors($_POST) as $pfb_alias_error) {

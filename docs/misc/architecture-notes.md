@@ -998,3 +998,55 @@ in), `tests/php/V6CidrSubtractTest.php` (the pure-PHP engine, incl. the `/64 −
 before-state asserted first, plus the whole-token/mask-agnostic upgrade-parity scenarios) and the
 Alerts "+" Tier B e2e above. Per CLAUDE.md "ADR acceptance", ADR-53 moves to Accepted on the green
 CE+Plus live-VM fan-out of those cases.
+
+## Firewall-alias resolution — config reads, not pfSense alias helpers
+
+Everywhere pfBlockerNG needs a firewall alias's existence, type, members, or config index, it
+reads `config_get_path('aliases/alias', [])` (or the package resolver `pfb_alias_type()` in
+`pfblockerng.inc`) instead of pfSense's alias helpers. This is a **deliberate, audited
+decision** — do not "clean it up" back to the helpers. Evidence base: the 2026-07-07 contract
+audit, which extracted every helper body at 7 dated refs of the public mirror (CE 2.8.0
+`ed6c2eb8` 2025-05-28, Plus 25.07/25.07.1, CE 2.8.1, Plus 25.11/25.11.1, and
+master≙26.03/26.03.1 `9363ac5b` 2026-03-31) and found them **byte-identical at every ref** —
+the blockers below are structural, not version drift.
+
+**Why `get_alias_list()` cannot serve (all refs, `util.inc`):**
+
+- Returns **names only** (a `string[]`) — most of our sites need the full entry (`type`,
+  `address`, `detail`), the config array **index** (the widget's `alias_info_popup($id)`), or
+  **write access** (the alias-reconcile region) — none of which a name list provides.
+- `$type` must be a **comma-separated string**; an array argument silently returns `[]`
+  (the dead-feature bug found in pfSense-pkg-haproxy — already true at CE 2.8.0, so no
+  "old ref" is safe either).
+- Merges in the **reserved system table names** and returns `null` (undefined `$result`)
+  instead of `[]` when nothing matches — `foreach` warnings on an alias-less config.
+
+**Why `alias_get_type()` / `is_alias()` cannot serve as existence checks:**
+
+- `is_alias()` consults the in-memory `$aliastable` cache that only `alias_make_table()`
+  (filter generation) populates — empty on settings pages and in cron syncs, reporting every
+  real alias missing (#636, #664).
+- `alias_get_type()` gives **reserved system table names precedence** over the configuration
+  (`get_reserved_table_names()`, matched case-insensitively). The 8 static reserved entries —
+  `bogons`/`bogonsv6` (`urltable`), `sshguard`/`snort2c`/`virusprot` (`host`),
+  `vpn_networks`/`negate_networks`/`tonatsubnets` (`network`), identical CE 2.8.0..master,
+  extensible at runtime via `add_reserved_table()` — are ALL address-bearing types, so they
+  pass any address-field validation while having **no `aliases/alias` entry**: the Advanced
+  In/Outbound rule builder (`pfblockerng.inc`, non-empty `address` required) silently drops
+  them, and `pfb_redirect_exclude_source()` would risk emitting a negated source for a pf
+  table that may not exist (`bogons` without block-bogons ⇒ whole-ruleset load failure, the
+  #664 class). Save-time validators therefore resolve via `pfb_alias_type()` (returns `NULL`
+  for anything not in the configuration — reserved names included) so a reserved name is
+  rejected at save, consistent with the autocomplete (`pfb_alias_autocomplete_lists()`, which
+  never offers reserved or `pfB_*` names).
+
+**Test-double fidelity.** The off-appliance `alias_get_type()` double
+(`tests/php/pfsense_doubles.php`) mirrors the reserved-table precedence — keep it faithful to
+upstream `util.inc`, not to what would be convenient: the config-only version it replaced is
+exactly what hid the reserved-name defect from the suite. Behaviour pinned by the reserved-name
+cases in `tests/php/AdvAliasFieldErrorsTest.php`.
+
+**Audit scope note.** The same audit hash-compared all 104 pfSense functions called from
+`src/` across those 7 refs: no call-site contract break anywhere (the 20 upstream body changes
+are internal — logging refactors, debug gates, `config_read_file`'s Plus-25.11 cache rework,
+which is inert for us because every call passes explicit `(FALSE, TRUE)`).
