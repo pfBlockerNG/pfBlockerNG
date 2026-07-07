@@ -1056,7 +1056,8 @@ function pfb_utf16_sample_to_utf8(string $sample): string {
 }
 
 // issue #946: transcode a UTF-16/UTF-32-BOM-prefixed FILE to UTF-8 in place, atomically.
-// Only the first 4 bytes are read to sniff the BOM (an ingest runs this on EVERY feed, and
+// Only the first 4 bytes are read to sniff the BOM (this runs on every text-feed ingest
+// that reaches the .orig finalize step, and
 // feeds can be tens of MB -- slurping them all just to look at a prefix would risk the PHP
 // memory limit, which file_get_contents() hits as a fatal error, not a catchable failure);
 // the full read happens only for an actual BOM match. Returns FALSE (file left untouched)
@@ -1064,7 +1065,7 @@ function pfb_utf16_sample_to_utf8(string $sample): string {
 // warning; believed unreachable on stock mbstring, which substitutes '?' instead of failing)
 // -- fail-open in every case, so downstream behaves exactly as it did before this function
 // existed. Returns TRUE after a successful same-filesystem rename() with the original mtime
-// (when readable) and permission bits (when readable) restored -- the caller runs this AFTER
+// (when its stat succeeded) and permission bits (same) restored -- the caller runs this AFTER
 // the remote_stamp touch(), so that stamp must survive, and tempnam() creates 0600 files, so
 // the mode must be carried over explicitly (same discipline as the atomic-publish helpers).
 // ponytail: whole-file read/rewrite for the BOM-matched case only -- BOM-marked feeds are

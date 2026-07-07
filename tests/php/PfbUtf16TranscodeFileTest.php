@@ -181,6 +181,24 @@ final class PfbUtf16TranscodeFileTest extends TestCase
 		$this->assertSame('AB?', file_get_contents($path), 'pinned observed mb_convert_encoding behaviour for a dangling odd byte');
 	}
 
+	public function test_short_heads_no_bom_untouched_truncated_utf32_bom_still_utf16(): void
+	{
+		// Shorter-than-any-BOM heads (1 byte; 3 bytes = a truncated UTF-32 BOM prefix)
+		// must never match and must leave the file untouched (PR #951 fix-delta review).
+		$path1 = $this->path('one_byte.bin');
+		file_put_contents($path1, "\xFF");
+		$this->assertFalse(pfb_utf16_transcode_file($path1));
+		$this->assertSame("\xFF", file_get_contents($path1));
+
+		$path3 = $this->path('three_byte.bin');
+		file_put_contents($path3, "\xFF\xFE\x00");
+		// A 3-byte "\xFF\xFE\x00" head cannot match UTF-32LE (needs 4 bytes) but DOES
+		// carry the 2-byte UTF-16LE BOM -- pin the observed outcome: the single stray
+		// NUL after the BOM converts to a replacement, file transcodes.
+		$this->assertTrue(pfb_utf16_transcode_file($path3));
+		$this->assertSame('?', file_get_contents($path3));
+	}
+
 	public function test_bom_only_utf16be_and_utf32be_files(): void
 	{
 		// BE siblings of the LE BOM-only pins above -- the conversion path is shared,
