@@ -145,11 +145,15 @@ def test_repo_tree_is_clean() -> None:
     assert cpp.find_violations(cpp.tracked_phase_prompts()) == []
 
 
-def test_retrofitted_unimplemented_adrs_are_gated(tmp_path: Path) -> None:
-    # ADR-25/32/33/34/54/55 are Proposed (unimplemented) — their prompts drive
-    # FUTURE implementer runs, were retrofitted to comply (2821b9df), and are
-    # gated despite predating the contract cutoff.
-    rel = ".ADRs/ADR_55_Client_Groups_Group_Policy/05_New_Phase.txt"
+@pytest.mark.parametrize("adr", sorted({25, 32, 33, 34, 51, 52, 54, 55, 56, 57}))
+def test_retrofitted_unimplemented_adrs_are_gated(tmp_path: Path, adr: int) -> None:
+    # Every Proposed (unimplemented) ADR is gated — its prompts (existing,
+    # retrofitted in 2821b9df/9b21b75e, or authored in the future like
+    # ADR-51/56/57's) drive FUTURE implementer runs despite predating the
+    # contract cutoff. ADR-52 was missed by the first retrofit sweep (a
+    # negative status grep ate "Not yet implemented") — hence pinning the
+    # whole set, not one representative.
+    rel = f".ADRs/ADR_{adr}_Example/05_New_Phase.txt"
     assert sorted(_violations(tmp_path, rel, "just do the thing\n")) == [
         "handoff-results",
         "mode-declared",
