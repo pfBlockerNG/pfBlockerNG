@@ -274,3 +274,102 @@ def test_flags_php_flavor_quoted_value(tmp_path: Path) -> None:
     php85 = "php8" + "5"
     assert len(_find(tmp_path, f'PHPFLAVOR="{php83}"\n')) == 1, "quoted php83 flavor must flag"
     assert len(_find(tmp_path, f'flavor: "{php85}"\n')) == 1, "quoted php85 flavor must flag"
+
+
+# --- Issue #941: comment syntax follows the file type (PHP/JS) --------------
+# The axis is enumerated from the scan roots' actual extensions (git ls-files):
+# sh/yml/conf use `#` (already covered above); php/inc/js use `//` and
+# `/* ... */`, with `#` valid in the PHP family only.
+
+
+def _find_named(tmp_path: Path, name: str, content: str) -> list[Any]:
+    f = tmp_path / name
+    f.write_text(content, encoding="utf-8")
+    return cvl.find_violations([f])
+
+
+def test_php_line_comment_not_flagged(tmp_path: Path) -> None:
+    content = f'// example: "{_CE28}" is the CE version\n$x = 1;\n'
+    assert _find_named(tmp_path, "s.php", content) == [], "a // comment line must stay clean in PHP"
+
+
+def test_php_docblock_not_flagged(tmp_path: Path) -> None:
+    content = f'/**\n * @example "{_CE28}"\n */\n$x = 1;\n'
+    assert _find_named(tmp_path, "s.inc", content) == [], "a docblock body must stay clean in PHP"
+
+
+def test_php_trailing_line_comment_not_flagged(tmp_path: Path) -> None:
+    content = f'$v = pfb_build_varver($ver);  // e.g. "{_CE_VARVER}"\n'
+    assert _find_named(tmp_path, "s.php", content) == [], "a trailing // example must stay clean in PHP"
+
+
+def test_php_real_value_still_flagged(tmp_path: Path) -> None:
+    # Vacuity complement of the three exemptions above: a REAL PHP value must
+    # still flag, proving the comment stripping does not swallow code.
+    violations = _find_named(tmp_path, "s.php", f'$v = "{_CE28}";\n')
+    assert len(violations) == 1, f"a real PHP value assignment must flag; got {violations}"
+
+
+def test_php_same_line_block_comment_keeps_code(tmp_path: Path) -> None:
+    # A /*...*/ pair closed on the same line drops only the comment span; the
+    # code after it is still scanned.
+    violations = _find_named(tmp_path, "s.php", f'/* note */ $v = "{_CE28}";\n')
+    assert len(violations) == 1, f"code after a same-line block comment must be scanned; got {violations}"
+
+
+def test_php_comment_marker_inside_string_not_comment(tmp_path: Path) -> None:
+    # Quote-awareness: // inside a quoted string is content, so the real value
+    # after it must still flag.
+    violations = _find_named(tmp_path, "s.php", f'$s = "a // b"; $v = "{_CE28}";\n')
+    assert len(violations) == 1, f"// inside a string must not truncate the scan; got {violations}"
+
+
+def test_js_line_and_block_comments_not_flagged(tmp_path: Path) -> None:
+    line = f'// default "{_PY311}"\n'
+    block = f'/*\n * fallback "{_PY311}"\n */\nvar x = 1;\n'
+    assert _find_named(tmp_path, "s.js", line) == [], "a // comment must stay clean in JS"
+    assert _find_named(tmp_path, "s.js", block) == [], "a block-comment body must stay clean in JS"
+
+
+def test_js_hash_is_not_a_comment(tmp_path: Path) -> None:
+    # `#` is a private-field sigil in JS, not a comment -- a real value after a
+    # `#` must still flag (in PHP the same line would be comment-stripped).
+    content = f'this.#flavor = "{_PY311}";\n'
+    violations = _find_named(tmp_path, "s.js", content)
+    assert len(violations) == 1, f"# must not comment-strip JS; got {violations}"
+
+
+# --- Issue #941: Python triple-quote fixes (parity + one-line value) --------
+
+
+def test_py_one_line_triple_quoted_value_flagged(tmp_path: Path) -> None:
+    # The .py mirror of PR #937's blocking F1: X = """tok""" is a real string
+    # assignment, not a docstring -- sweeping any triple-quote line as prose
+    # let it bypass the gate.
+    content = 'FLAVOR = """' + _PY311 + '"""\n'
+    violations = _find_named(tmp_path, "s.py", content)
+    assert len(violations) == 1, f"a one-line triple-quoted value must flag; got {violations}"
+
+
+def test_py_docstring_close_reopen_stays_prose(tmp_path: Path) -> None:
+    # Parity bug (PR #937 audit): a line that closes AND reopens a docstring
+    # (even token count) must leave the docstring state OPEN, so the next line
+    # is still prose. The old `if open_token in line` check cleared the state
+    # and spuriously scanned line 3.
+    content = '"""doc\nx """ + """ y\n"' + _PY311 + '"\n"""\n'
+    assert _find_named(tmp_path, "s.py", content) == [], "a close-and-reopen line must keep the docstring open"
+
+
+# --- Issue #941: shell assignment-prefix builtins (the full class) ----------
+
+
+def test_prefixed_unquoted_assignments_flagged(tmp_path: Path) -> None:
+    # The class enumerated, not example-driven: POSIX export/readonly (covered
+    # above), plus local and bash/ksh declare/typeset (with option words).
+    for line in (
+        f"local ABI={_FREEBSD15}\n",
+        f"declare -r PYF={_PY311}\n",
+        f"typeset ABI={_FREEBSD15}\n",
+    ):
+        violations = _find(tmp_path, line)
+        assert len(violations) == 1, f"prefixed unquoted assignment must flag: {line!r}; got {violations}"

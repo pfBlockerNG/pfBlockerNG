@@ -35,12 +35,14 @@ SCOPE (deliberately low false-positive: VALUES only, never prose)
   the scan roots anyway; it is named here only to document that intent.
 * A line containing the substring ``version-literal-ok`` is exempt (inline
   escape: ``# version-literal-ok: <reason>``).
-* A ``#``-comment line, an unquoted trailing ``# ...`` comment on an
-  otherwise-real code line, and any line inside a triple-quoted
-  docstring/prose block are all exempt outright — a doc example illustrating
-  a transformation (e.g. an arrow mapping shown inside a docstring, or a
-  trailing ``# e.g. "ce-2.8"``) is prose, not a value assignment, even though
-  the quoted span alone would otherwise fullmatch a token.
+* Comments are prose in every scanned language, per that language's syntax
+  (enumerated from the scan roots' actual file types — issue #941): ``#``
+  line/trailing comments everywhere; ``//`` and ``/* ... */`` in PHP/JS
+  (``.php``/``.inc``/``.js``, where ``#`` is PHP-only); Python triple-quoted
+  docstring bodies in ``.py``. A doc example illustrating a transformation
+  (an arrow mapping in a docstring, a trailing ``# e.g. "ce-2.8"``, a
+  ``@example "2.8"`` docblock line) is prose, not a value assignment, even
+  though the quoted span alone would otherwise fullmatch a token.
 * Flags a token ONLY when it stands ALONE as a value: the entire inner text
   of a quoted string literal (``"2.8"``, ``'py311'``), or the entire unquoted
   right-hand side of a ``key: value`` / ``key=value`` assignment. A token
@@ -77,30 +79,40 @@ _TOKEN_ALTERNATIVES = (
 # matching if hardcoded dependency names spread beyond the allowlisted file.
 #
 # ponytail: the unquoted-RHS check (_ASSIGNMENT_RE) matches a single whole-line
-# `key: value` / `key=value` (optionally `export`/`readonly`-prefixed) only. It
-# does NOT catch a token in a compound statement (`A=x; B=y`) or an unquoted
-# YAML sequence item (`- FreeBSD:15:amd64` / `[a, b]`); none occur in the tree
-# and the spec scopes to key/value. A QUOTED token in any of these is still
-# caught by the quoted-literal path.
+# `key: value` / `key=value` (optionally prefixed by a shell assignment builtin)
+# only. It does NOT catch a token in a compound statement (`A=x; B=y`) or an
+# unquoted YAML sequence item (`- FreeBSD:15:amd64` / `[a, b]`); none occur in
+# the tree and the spec scopes to key/value. A QUOTED token in any of these is
+# still caught by the quoted-literal path.
 #
 # ponytail: a quoted illustrative example inside a multi-line YAML folded/
 # literal scalar (`description: >` ... "e.g. \"2.8\"" on a continuation line)
-# is not recognised as prose -- only `#` comments and Python triple-quoted
+# is not recognised as prose -- only comments and Python triple-quoted
 # docstrings are tracked. The single such site today (version-tracker.yml) was
 # fixed by DE-QUOTING the example, because a `version-literal-ok` comment cannot
 # sit inside a folded-scalar body without corrupting the visible description.
 # Upgrade to a YAML block-scalar tracker (indentation-based, mirroring
-# _prose_line_flags's docstring state machine) if more than one line ever needs it.
+# _code_lines's docstring state machine) if more than one line ever needs it.
+#
+# ponytail: XML comments (`<!-- -->`) are not tracked -- the scan roots hold 3
+# XML files with no version-token history; add a tracker if one ever bites.
+# Same for JS private fields (`this.#x`): `#` is treated as a comment opener
+# only in PHP-family files, so JS is safe from that, but a token inside a JS
+# regex literal containing `//` could be mis-stripped (2 JS files, none such).
 _FULL_VALUE_RE = re.compile("^(?:" + "|".join(_TOKEN_ALTERNATIVES) + ")$")
-# Optional `export`/`readonly` prefix: an unquoted `export ABI=FreeBSD:15:amd64`
-# is a real hardcode the quoted-literal path can't see (Copilot, PR #937).
+# Optional assignment-builtin prefix. The class is enumerated, not example-driven
+# (PR #937 pinned only the two keywords Copilot named -- issue #941): POSIX
+# `export`/`readonly`, the near-universal `local`, and bash/ksh
+# `declare`/`typeset` (with option words), which shellcheck bans here but a
+# hardcode guard should still see.
 _ASSIGNMENT_RE = re.compile(
-    r"^\s*(?:export\s+|readonly\s+)?[\w.-]+\s*[:=]\s*(?:" + "|".join(_TOKEN_ALTERNATIVES) + r")\s*$"
+    r"^\s*(?:(?:export|readonly|local|declare|typeset)(?:\s+-\w+)*\s+)?"
+    r"[\w.-]+\s*[:=]\s*(?:" + "|".join(_TOKEN_ALTERNATIVES) + r")\s*$"
 )
 
 _QUOTED_RE = re.compile(r'"([^"]*)"|\'([^\']*)\'')
 
-# Inline per-line escape, mirroring the URL-encoding checker's convention.
+# Inline per-line escape (`# version-literal-ok: <reason>`), spec'd in issue #922.
 _ESCAPE = "version-literal-ok"
 
 # Tracked-tree roots where a version literal could plausibly be pasted.
@@ -108,6 +120,10 @@ _SCAN_ROOTS = ("src", "scripts", ".github/workflows")
 
 # Self-reference: this checker and its own test define/contain the patterns.
 _EXCLUDED_SELF_NAMES = ("check_version_literals.py", "test_version_literal_check.py")
+
+# File types using C-style comments (`//`, `/* ... */`); `#` is a comment in
+# the PHP family but NOT in JS (private fields).
+_C_COMMENT_EXTS = (".php", ".inc", ".js")
 
 
 def _is_excluded(path: Path) -> bool:
@@ -149,9 +165,48 @@ def _strip_inline_comment(line: str) -> str:
     return line
 
 
-def _line_has_value_literal(line: str) -> bool:
-    """True if ``line`` holds a version token standing ALONE as a value."""
-    code = _strip_inline_comment(line)
+def _split_c_comment(line: str, hash_comments: bool) -> tuple[str, bool]:
+    """Return (code part of ``line``, True if an unclosed ``/*`` block opens here).
+
+    Quote-aware: ``//``, ``/*`` and ``#`` inside a quoted string are content,
+    not comments. A ``/*...*/`` pair closed on the same line is dropped and the
+    code after it is kept. ``hash_comments`` enables ``#`` (PHP family only --
+    in JS, ``#`` is a private-field sigil).
+    """
+    out: list[str] = []
+    quote: str | None = None
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
+        if quote is not None:
+            if ch == quote:
+                quote = None
+            out.append(ch)
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "#" and hash_comments:
+            return "".join(out), False
+        if ch == "/" and i + 1 < n and line[i + 1] == "/":
+            return "".join(out), False
+        if ch == "/" and i + 1 < n and line[i + 1] == "*":
+            end = line.find("*/", i + 2)
+            if end == -1:
+                return "".join(out), True
+            i = end + 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out), False
+
+
+def _line_has_value_literal(code: str) -> bool:
+    """True if ``code`` (comments already stripped) holds a token standing ALONE as a value."""
     for literal in _quoted_literals(code):
         if _FULL_VALUE_RE.fullmatch(literal):
             return True
@@ -172,44 +227,65 @@ def _tracked_files(roots: tuple[str, ...]) -> list[Path]:
 _TRIPLE_QUOTE_TOKENS = ('"""', "'''")
 
 
-def _prose_line_flags(lines: list[str], is_python: bool) -> list[bool]:
-    """Return, per line, whether it is a ``#`` comment or (in a .py file) prose.
+def _code_lines(lines: list[str], suffix: str) -> list[str | None]:
+    """Return, per line, the code portion to scan -- or ``None`` for prose.
 
-    ``#`` comment lines are prose in every scanned language (sh/yaml/py), so
-    that exemption is unconditional.
+    Comment syntax follows the file type (the axis is enumerated from the scan
+    roots' actual extensions, issue #941):
 
-    The triple-quote (docstring) state machine runs ONLY for Python sources
-    (``is_python``): once a line opens an odd number of triple-double- or
-    triple-single-quote tokens, every following line is prose until the matching
-    token closes it, so a docstring example (an arrow-mapping transformation)
-    stays out of the value scan. It is deliberately NOT applied to shell/YAML:
-    a shell value wrapped in triple quotes is valid POSIX adjacent-quote
-    concatenation that evaluates to the exact inner literal, so treating such a
-    line as prose outside .py would let a hardcoded token bypass the gate
-    entirely (PR #937).
+    * ``.php``/``.inc``/``.js``: ``//`` and ``/* ... */`` (state-tracked across
+      lines); ``#`` in the PHP family only. ponytail: code after a ``*/`` that
+      closes a MULTI-line block is not scanned until the next line (none in
+      the tree; a same-line `/*...*/` pair keeps its trailing code).
+    * everything else: ``#`` line/trailing comments.
+    * ``.py`` additionally tracks triple-quoted docstrings: an ODD number of
+      triple-quote tokens toggles the docstring state (a close-and-reopen on
+      one line therefore stays open -- the PR #937 parity bug, issue #941),
+      while an EVEN count on a non-docstring line falls through to the value
+      scan, so a one-line triple-quoted assignment (X = triple-quoted token)
+      is caught by the quoted-literal path instead of being swept as prose
+      (the ``.py`` mirror of PR #937's blocking F1). ponytail: a one-line
+      module docstring whose ENTIRE text is a bare token would now
+      false-positive -- absurd corner, escape-comment it if it ever occurs.
+      This is deliberately NOT applied to shell/YAML: a shell value wrapped in
+      triple quotes is adjacent-quote concatenation evaluating to the exact
+      inner literal (PR #937 F1).
     """
-    flags: list[bool] = []
+    out: list[str | None] = []
+    if suffix in _C_COMMENT_EXTS:
+        in_block = False
+        for line in lines:
+            if in_block:
+                if "*/" in line:
+                    in_block = False
+                out.append(None)
+                continue
+            code, in_block = _split_c_comment(line, hash_comments=suffix != ".js")
+            out.append(code)
+        return out
+    is_python = suffix == ".py"
     open_token = ""
     for line in lines:
         if open_token:
-            flags.append(True)
-            if open_token in line:
+            out.append(None)
+            if line.count(open_token) % 2 == 1:
                 open_token = ""
             continue
         if line.lstrip().startswith("#"):
-            flags.append(True)
+            out.append(None)
             continue
-        prose = False
         if is_python:
+            opened = False
             for token in _TRIPLE_QUOTE_TOKENS:
-                count = line.count(token)
-                if count:
-                    prose = True
-                    if count % 2 == 1:
-                        open_token = token
+                if line.count(token) % 2 == 1:
+                    open_token = token
+                    opened = True
                     break
-        flags.append(prose)
-    return flags
+            if opened:
+                out.append(None)
+                continue
+        out.append(_strip_inline_comment(line))
+    return out
 
 
 def find_violations(paths: list[Path]) -> list[tuple[Path, int, str]]:
@@ -221,11 +297,11 @@ def find_violations(paths: list[Path]) -> list[tuple[Path, int, str]]:
         except (OSError, UnicodeError):
             continue
         lines = text.splitlines()
-        prose_flags = _prose_line_flags(lines, path.suffix == ".py")
-        for lineno, (line, is_prose) in enumerate(zip(lines, prose_flags, strict=True), start=1):
-            if is_prose or _ESCAPE in line:
+        code_lines = _code_lines(lines, path.suffix)
+        for lineno, (line, code) in enumerate(zip(lines, code_lines, strict=True), start=1):
+            if code is None or _ESCAPE in line:
                 continue
-            if _line_has_value_literal(line):
+            if _line_has_value_literal(code):
                 violations.append((path, lineno, line.strip()))
     return violations
 

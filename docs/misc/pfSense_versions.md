@@ -33,6 +33,12 @@ Observed on a CE **2.8.1** box; 2.8.0 shares the same base toolchain.
 > any unmapped version — the reject-unknown contract from issue #22 is preserved).
 > When adding a new supported CE version, add an entry to `supported-versions.json`
 > on `ci-metadata` **and** update the table here. No workflow edit needed.
+>
+> **These values must never be restated as literals** in `src/`, `scripts/`, or
+> `.github/workflows/` — read them from the matrix at runtime/generation time
+> (`scripts/read-version-matrix.sh`). `scripts/check_version_literals.py`
+> (pre-commit + CI) enforces this; escape a genuine one-off with an inline
+> `# version-literal-ok: <reason>` comment.
 
 ### pfBlockerNG runtime dependencies (port `RUN_DEPENDS`)
 
