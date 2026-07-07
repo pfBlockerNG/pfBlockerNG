@@ -509,7 +509,8 @@ Activate once after cloning: `sh scripts/setup-hooks.sh` (sets `core.hooksPath`)
 
 ```sh
 python3 -m pytest        # from repo root; run after ANY change to pfb_unbound.py or tests/
-composer install        # once
+composer install        # once; if it 403s in a managed cloud session, run
+                        # scripts/composer-cloud-install.sh instead (issue #950)
 vendor/bin/phpunit      # PHP suite: loads the REAL pfblockerng.inc off-appliance
 ```
 
