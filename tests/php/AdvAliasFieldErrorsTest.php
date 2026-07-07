@@ -264,6 +264,28 @@ final class AdvAliasFieldErrorsTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
+	// Hostile input — a crafted POST can submit a field as an ARRAY
+	// (aliasaddr_in[]=x). pfb_alias_type() is string-typed, so without a guard
+	// that would throw an uncaught TypeError (fatal on save) instead of a
+	// validation message; the untyped alias_get_type() it replaced returned ''
+	// (array == string is FALSE), so the guard preserves the old verdict.
+	// -----------------------------------------------------------------------
+
+	public function testArrayFieldValueIsRejectedAsMissingNotTypeError(): void
+	{
+		// Given a crafted POST where each field arrives as an array
+		$errors = pfb_adv_alias_field_errors([
+			'aliasports_in' => ['x'],
+			'aliasaddr_in'  => ['MyHosts', 'other'],
+		]);
+
+		// Then each is rejected with the existence message — no TypeError thrown
+		$this->assertCount(2, $errors);
+		$this->assertStringContainsString('Must use an existing Alias', $errors[0]);
+		$this->assertStringContainsString('Must use an existing Alias', $errors[1]);
+	}
+
+	// -----------------------------------------------------------------------
 	// Every field is validated independently — each direction reports its own
 	// error (branch coverage across all four fields).
 	// -----------------------------------------------------------------------
