@@ -265,6 +265,11 @@ Rules:
 - §7 Definition of Done always carries the **CE+Plus live-VM fan-out** line (the
   org-default validation matrix); an ADR wanting to skip it states the exemption
   explicitly.
+- **After writing all prompts, lint them:**
+  `python3 scripts/check_phase_prompts.py .ADRs/ADR_{NN}_{Name}/[0-9]*.txt`
+  (the `/spec-lint` checker — also a pre-commit gate). Fix any missing block
+  before reporting the ADR done; never weaken the checker to make a prompt
+  pass.
 
 ## Step 5 — Do NOT pre-write handoffs
 
