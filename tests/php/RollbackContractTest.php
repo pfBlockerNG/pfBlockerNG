@@ -372,7 +372,7 @@ final class RollbackContractTest extends TestCase
 	 * Note: pfb_idn is now adapted via PfbIdnMode (NOT plain-string). See
 	 * testPfbIdnModeAdapterForwardAndBackward() for pfb_idn coverage. alexa_type is
 	 * likewise adapted via PfbTop1mSource (issue #877 review) -- see
-	 * testAlexaTypeForwardCoalescesLegacyAndBackwardNeverReemitsAlexa() for its coverage.
+	 * testAlexaTypeForwardCoalescesLegacyAndBackwardNeverReemitsLegacyTokens() for its coverage.
 	 */
 	public function testForwardPlainStringFieldsPassLegacyTokensUnchanged(): void
 	{
@@ -653,7 +653,7 @@ final class RollbackContractTest extends TestCase
 	 * Note: pfb_idn is now adapted via PfbIdnMode (NOT plain-string). See
 	 * testPfbIdnModeAdapterForwardAndBackward() for pfb_idn backward coverage. alexa_type
 	 * is likewise adapted via PfbTop1mSource (issue #877 review) -- see
-	 * testAlexaTypeForwardCoalescesLegacyAndBackwardNeverReemitsAlexa() for its coverage.
+	 * testAlexaTypeForwardCoalescesLegacyAndBackwardNeverReemitsLegacyTokens() for its coverage.
 	 */
 	public function testBackwardPlainStringFieldsIdentityAdapterCannotIntroduceNovelTokens(): void
 	{
@@ -662,7 +662,7 @@ final class RollbackContractTest extends TestCase
 		// than emitting identity for every input (e.g. the dropped alpha 'all' -> 'off').
 		// See testPfbIdnModeAdapterForwardAndBackward(). alexa_type is likewise excluded:
 		// it uses the PfbTop1mSource write adapter (enum-typed), covered by
-		// testAlexaTypeForwardCoalescesLegacyAndBackwardNeverReemitsAlexa() instead.
+		// testAlexaTypeForwardCoalescesLegacyAndBackwardNeverReemitsLegacyTokens() instead.
 		$cases = [
 			'pfb_interval'      => ['installedpackages/pfblockerng/config/0/pfb_interval', '6'],
 			'dnsbl_interface'   => ['installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_interface', 'lo0'],
@@ -1239,36 +1239,41 @@ final class RollbackContractTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	/**
-	 * alexa_type: FORWARD invariant covers the legacy 'alexa' token (dead TOP1M
-	 * service, #872) in addition to the live 'tranco'/'cisco'/'domcop'/'majestic'/
-	 * 'cloudflare' vocabulary; BACKWARD invariant proves the coalesce -- a write
-	 * after reading a legacy 'alexa' store never re-emits 'alexa'.
+	 * alexa_type: FORWARD invariant covers the legacy 'alexa' AND 'domcop' tokens
+	 * (dead TOP1M service #872; DomCop's list moved hosting to OpenPageRank #928)
+	 * in addition to the live 'tranco'/'cisco'/'openpagerank'/'majestic'/'cloudflare'
+	 * vocabulary; BACKWARD invariant proves the coalesce -- a write after reading a
+	 * legacy 'alexa' or 'domcop' store never re-emits either legacy token.
 	 *
-	 * Scenario: alexa_type rollback contract with the #877 coalesce.
-	 *   Background: alexa_type's stored vocabulary is {'tranco', 'cisco', 'domcop',
-	 *     'majestic', 'cloudflare', 'alexa'} (the latter three live tokens added
-	 *     ADR-59 P4/P5; 'alexa' is READ-only -- pfb_cfg_field_vocab()['top1m_source']
-	 *     lists only the five live WRITE-side tokens). The field is now adapted via
-	 *     the PfbTop1mSource enum (mirrors PfbIdnMode/PfbAliasDeltaMode).
-	 *   Given each of 'tranco', 'cisco', 'domcop', 'majestic', 'cloudflare', 'alexa' stored.
+	 * Scenario: alexa_type rollback contract with the #877/#928 coalesces.
+	 *   Background: alexa_type's stored vocabulary is {'tranco', 'cisco', 'openpagerank',
+	 *     'majestic', 'cloudflare', 'alexa', 'domcop'} (the latter three live tokens added
+	 *     ADR-59 P4/P5; 'alexa'/'domcop' are READ-only --
+	 *     pfb_cfg_field_vocab()['top1m_source'] lists only the five live WRITE-side
+	 *     tokens). The field is now adapted via the PfbTop1mSource enum (mirrors
+	 *     PfbIdnMode/PfbAliasDeltaMode).
+	 *   Given each of 'tranco', 'cisco', 'openpagerank', 'majestic', 'cloudflare',
+	 *     'alexa', 'domcop' stored.
 	 *   When PfbConfig::read('alexa_type') then PfbConfig::write('alexa_type', result).
-	 *   Then (FORWARD) the read result is a PfbTop1mSource enum (Tranco for legacy 'alexa').
-	 *   And (BACKWARD) the written token is in {'tranco', 'cisco', 'domcop', 'majestic',
-	 *     'cloudflare'} -- 'alexa' is NEVER re-emitted, even though it was the original
-	 *     stored value.
+	 *   Then (FORWARD) the read result is a PfbTop1mSource enum (Tranco for legacy
+	 *     'alexa'; OpenPageRank for legacy 'domcop').
+	 *   And (BACKWARD) the written token is in {'tranco', 'cisco', 'openpagerank',
+	 *     'majestic', 'cloudflare'} -- neither 'alexa' nor 'domcop' is ever re-emitted,
+	 *     even though it was the original stored value.
 	 */
-	public function testAlexaTypeForwardCoalescesLegacyAndBackwardNeverReemitsAlexa(): void
+	public function testAlexaTypeForwardCoalescesLegacyAndBackwardNeverReemitsLegacyTokens(): void
 	{
 		$path        = 'installedpackages/pfblockerngdnsblsettings/config/0/alexa_type';
 		$write_vocab = pfb_cfg_field_vocab()['top1m_source'];
 
 		$cases = [
-			'tranco'     => PfbTop1mSource::Tranco,
-			'cisco'      => PfbTop1mSource::Cisco,
-			'domcop'     => PfbTop1mSource::DomCop,     // ADR-59 P4
-			'majestic'   => PfbTop1mSource::Majestic,   // ADR-59 P4
-			'cloudflare' => PfbTop1mSource::Cloudflare, // ADR-59 P5
-			'alexa'      => PfbTop1mSource::Tranco,     // legacy dead source coalesces to Tranco (#872/#877)
+			'tranco'       => PfbTop1mSource::Tranco,
+			'cisco'        => PfbTop1mSource::Cisco,
+			'openpagerank' => PfbTop1mSource::OpenPageRank, // ADR-59 P4
+			'majestic'     => PfbTop1mSource::Majestic,     // ADR-59 P4
+			'cloudflare'   => PfbTop1mSource::Cloudflare,   // ADR-59 P5
+			'alexa'        => PfbTop1mSource::Tranco,       // legacy dead source coalesces to Tranco (#872/#877)
+			'domcop'       => PfbTop1mSource::OpenPageRank, // legacy: list moved hosting (#928)
 		];
 
 		foreach ($cases as $stored_token => $expected_runtime) {
@@ -1290,7 +1295,7 @@ final class RollbackContractTest extends TestCase
 				"FORWARD: alexa_type token='{$stored_token}' must read as {$expected_runtime->name}"
 			);
 
-			// BACKWARD: write(runtime) stores only a live vocabulary token -- never 'alexa'.
+			// BACKWARD: write(runtime) stores only a live vocabulary token -- never a legacy token.
 			PfbConfig::write('alexa_type', $runtime);
 			$stored = (string) config_get_path($path);
 			$this->assertContains($stored, $write_vocab,
@@ -1298,6 +1303,9 @@ final class RollbackContractTest extends TestCase
 			);
 			$this->assertNotSame('alexa', $stored,
 				"BACKWARD: alexa_type write must never re-emit dead legacy token 'alexa'"
+			);
+			$this->assertNotSame('domcop', $stored,
+				"BACKWARD: alexa_type write must never re-emit moved legacy token 'domcop'"
 			);
 		}
 	}

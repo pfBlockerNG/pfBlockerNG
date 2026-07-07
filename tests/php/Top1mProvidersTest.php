@@ -7,7 +7,8 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * ADR-59 Phase 1 -- pfb_top1m_providers() extraction oracle. Extended Phase 4
- * to add the keyless providers DomCop + Majestic, and Phase 5 to add the
+ * to add the keyless providers DomCop (now OpenPageRank, #928 -- the DomCop
+ * URL froze when the list's hosting moved) + Majestic, and Phase 5 to add the
  * token-authenticated Cloudflare Radar provider.
  *
  * Before Phase 1, pfblockerng.php:162 picked the TOP1M download URL with a
@@ -16,11 +17,11 @@ use PHPUnit\Framework\TestCase;
  * parser/extractor) reads a single source of truth. Tranco/Cisco stay
  * BEHAVIOUR-PRESERVING throughout: this oracle pins their resolved URL to the
  * exact pre-ADR-59 literal, so any future edit to the table that drifts
- * tranco/cisco's URL fails loudly. Phase 4 adds DomCop + Majestic as two more
- * rows in the same table -- their own shape is pinned separately below. Phase 5
- * adds Cloudflare Radar -- the first (and so far only) header-auth provider,
- * whose real API shape (verified against Cloudflare's own docs, NOT the ADR's
- * original guess) is a single-column 'domain' CSV, no rank -- domain_col 0.
+ * tranco/cisco's URL fails loudly. Phase 4 adds OpenPageRank + Majestic as two
+ * more rows in the same table -- their own shape is pinned separately below.
+ * Phase 5 adds Cloudflare Radar -- the first (and so far only) header-auth
+ * provider, whose real API shape (verified against Cloudflare's own docs, NOT
+ * the ADR's original guess) is a single-column 'domain' CSV, no rank -- domain_col 0.
  */
 #[CoversFunction('pfb_top1m_providers')]
 final class Top1mProvidersTest extends TestCase
@@ -45,12 +46,12 @@ final class Top1mProvidersTest extends TestCase
 		);
 	}
 
-	/** ADR-59 P4 -- the two new keyless providers' URLs, per the ADR §2.2 table. */
-	public function testDomCopAndMajesticUrlsMatchTheAdrTable(): void
+	/** ADR-59 P4 -- the two new keyless providers' URLs; OpenPageRank's per #928 (was DomCop). */
+	public function testOpenPageRankAndMajesticUrlsMatchTheAdrTable(): void
 	{
 		$this->assertSame(
-			'https://www.domcop.com/files/top/top10milliondomains.csv.zip',
-			pfb_top1m_providers()[PfbTop1mSource::DomCop->value]['url']
+			'https://openpagerank.keywordseverywhere.com/downloads/top10milliondomains.csv.zip',
+			pfb_top1m_providers()[PfbTop1mSource::OpenPageRank->value]['url']
 		);
 		$this->assertSame(
 			'https://downloads.majestic.com/majestic_million.csv',
@@ -62,7 +63,7 @@ final class Top1mProvidersTest extends TestCase
 	public function testFiveProvidersAreDescribed(): void
 	{
 		$this->assertSame(
-			['tranco', 'cisco', 'domcop', 'majestic', 'cloudflare'],
+			['tranco', 'cisco', 'openpagerank', 'majestic', 'cloudflare'],
 			array_keys(pfb_top1m_providers())
 		);
 	}
@@ -83,20 +84,20 @@ final class Top1mProvidersTest extends TestCase
 	}
 
 	/**
-	 * ADR-59 P4 -- DomCop/Majestic's own shape (distinct container/parse/domain_col
-	 * per the ADR §2.2 table + Phase 2's 0-indexed domain_col convention): DomCop's
+	 * ADR-59 P4 -- OpenPageRank/Majestic's own shape (distinct container/parse/domain_col
+	 * per the ADR §2.2 table + Phase 2's 0-indexed domain_col convention): OpenPageRank's
 	 * Domain is the 2nd CSV field (index 1, same index Tranco/Cisco use); Majestic's
 	 * Domain is the 3rd field (index 2). Majestic's container is 'plain' (uncompressed
 	 * CSV), not 'zip' -- the one provider so far that isn't a zip download.
 	 */
-	public function testDomCopAndMajesticDescribeTheirOwnCsvShape(): void
+	public function testOpenPageRankAndMajesticDescribeTheirOwnCsvShape(): void
 	{
-		$domcop = pfb_top1m_providers()[PfbTop1mSource::DomCop->value];
-		$this->assertSame('zip', $domcop['container'], 'domcop: container must be zip');
-		$this->assertSame('csv', $domcop['parse'], 'domcop: parse must be csv');
-		$this->assertTrue($domcop['header'], 'domcop: header row must be skipped');
-		$this->assertSame(1, $domcop['domain_col'], 'domcop: Domain is the 2nd CSV field -> index 1');
-		$this->assertSame('none', $domcop['auth'], 'domcop: auth must be none');
+		$openpagerank = pfb_top1m_providers()[PfbTop1mSource::OpenPageRank->value];
+		$this->assertSame('zip', $openpagerank['container'], 'openpagerank: container must be zip');
+		$this->assertSame('csv', $openpagerank['parse'], 'openpagerank: parse must be csv');
+		$this->assertTrue($openpagerank['header'], 'openpagerank: header row must be skipped');
+		$this->assertSame(1, $openpagerank['domain_col'], 'openpagerank: Domain is the 2nd CSV field -> index 1');
+		$this->assertSame('none', $openpagerank['auth'], 'openpagerank: auth must be none');
 
 		$majestic = pfb_top1m_providers()[PfbTop1mSource::Majestic->value];
 		$this->assertSame('plain', $majestic['container'], 'majestic: container must be plain (uncompressed)');

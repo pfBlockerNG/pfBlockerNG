@@ -712,7 +712,7 @@ def test_dnsbl_control_fields_render(webui: WebUI, php_error_log_guard: PhpError
 
 def test_dnsbl_top1m_source_options_exclude_alexa(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
     """The TOP1M 'Type' select renders the five live sources (Tranco, Cisco
-    Umbrella, DomCop, Majestic Million — added ADR-59 Phase 4 — and Cloudflare
+    Umbrella, OpenPageRank, Majestic Million — added ADR-59 Phase 4 — and Cloudflare
     Radar — added ADR-59 Phase 5) — the dead Alexa TOP1M option (#872) is dropped
     from the page (#877), so a regression that resurrects the option, or drops a
     live one, is caught at the render tier. Majestic's CC BY 3.0 and Cloudflare's
@@ -732,7 +732,7 @@ def test_dnsbl_top1m_source_options_exclude_alexa(webui: WebUI, php_error_log_gu
     for needle in (
         "Tranco TOP1M",
         "Cisco Umbrella TOP1M",
-        "DomCop TOP1M",
+        "OpenPageRank TOP1M",
         "Majestic Million TOP1M",
         "Cloudflare Radar",
     ):

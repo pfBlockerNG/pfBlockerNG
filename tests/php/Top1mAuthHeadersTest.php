@@ -56,7 +56,7 @@ final class Top1mAuthHeadersTest extends TestCase
 	}
 
 	/**
-	 * Every keyless provider (auth == 'none', Tranco/Cisco/DomCop/Majestic today) must
+	 * Every keyless provider (auth == 'none', Tranco/Cisco/OpenPageRank/Majestic today) must
 	 * never emit a header, EVEN IF a token happens to be stored (e.g. left over from a
 	 * prior Cloudflare selection) -- only the active provider's OWN auth requirement
 	 * governs whether the token is sent.

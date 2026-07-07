@@ -169,7 +169,7 @@ $pfb['extras'][2]['type']	= 'top1m';
 
 // ADR-59 P5: header auth (Cloudflare Radar's Bearer token) via the P3 $feed['headers']
 // plumbing. A keyless provider's 'auth' is 'none', so pfb_top1m_auth_headers() returns
-// array() and this is a no-op for tranco/cisco/domcop/majestic, exactly as before P5.
+// array() and this is a no-op for tranco/cisco/openpagerank/majestic, exactly as before P5.
 // An empty/absent top1m_token also yields array() -- no Authorization header is sent,
 // so a missing token fails the download safely (pfblockerng_top1m()'s #886 preserve+warn
 // path keeps the previous TOP1M whitelist) rather than sending a malformed header.

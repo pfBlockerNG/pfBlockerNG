@@ -226,9 +226,9 @@ def test_extract_providers_reads_the_real_descriptor_file_and_finds_all_five() -
     # go undetected here while still breaking check_top1m_providers.py in CI. Read the
     # real file straight off disk instead of a fixture.
     providers = {p["name"]: p for p in ctp.extract_providers(ctp.DEFAULT_DESCRIPTOR_FILE.read_text(encoding="utf-8"))}
-    assert set(providers) == {"Tranco", "Cisco Umbrella", "DomCop", "Majestic Million", "Cloudflare Radar"}
+    assert set(providers) == {"Tranco", "Cisco Umbrella", "OpenPageRank", "Majestic Million", "Cloudflare Radar"}
 
-    for name in ("Tranco", "Cisco Umbrella", "DomCop", "Majestic Million"):
+    for name in ("Tranco", "Cisco Umbrella", "OpenPageRank", "Majestic Million"):
         assert providers[name]["auth"] == "none", name
         assert providers[name]["secret_env"] == "", name
 
@@ -395,7 +395,7 @@ def test_validate_top1m_flags_staleness_only_once_last_modified_ages_past_the_li
 
 
 # A ~5-month-old Last-Modified: past the old 30-day default, well within the new
-# 6-month one. A provider that refreshes only monthly/quarterly (e.g. DomCop) is
+# 6-month one. A provider that refreshes only monthly/quarterly (e.g. OpenPageRank) is
 # not dead at this age.
 _WITHIN_SIX_MONTHS_LM = "Fri, 06 Feb 2026 00:00:00 GMT"  # 150 days before _NOW
 
@@ -426,7 +426,7 @@ def test_validate_top1m_passes_a_plain_container_body_with_no_zip_wrapper() -> N
 
 
 def test_validate_top1m_skips_a_header_row_in_a_plain_wide_csv_with_domain_not_in_column_zero() -> None:
-    # Majestic/DomCop-shaped: a header row, then real rows with the domain in
+    # Majestic/OpenPageRank-shaped: a header row, then real rows with the domain in
     # a column other than 0/1 -- _is_valid_row must find it anywhere in the
     # row (provider-agnostic), and the header row (no dotted field) must not
     # count as valid or as the "first bad row".

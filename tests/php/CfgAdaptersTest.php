@@ -39,14 +39,16 @@ use PHPUnit\Framework\TestCase;
  *     And write(read('')) == 'off'    (normalised default).
  *
  * Scenario E — PfbTop1mSource (alexa_type, issue #877): backing values 'tranco' /
- *   'cisco' / 'domcop' / 'majestic' (the latter two added ADR-59 P4) TOP1M
+ *   'cisco' / 'openpagerank' / 'majestic' (the latter two added ADR-59 P4) TOP1M
  *   source selector; the legacy 'alexa' token (dead service, #872) coalesces
- *   to Tranco.
+ *   to Tranco, and the legacy 'domcop' token (list moved hosting, #928)
+ *   coalesces to OpenPageRank.
  *     Given a raw stored value v.
  *     When pfb_cfg_top1m_source_read(v) -> enum, pfb_cfg_top1m_source_write(enum) -> stored.
- *     Then 'tranco'/'cisco'/'domcop'/'majestic' pass through as their own enum
- *     case; 'alexa' and any unknown/absent value -> Tranco. write(read(v)) == v
- *     for canonical tokens; 'alexa' is never re-emitted.
+ *     Then 'tranco'/'cisco'/'openpagerank'/'majestic' pass through as their own
+ *     enum case; 'alexa' -> Tranco, 'domcop' -> OpenPageRank, any other
+ *     unknown/absent value -> Tranco. write(read(v)) == v for canonical
+ *     tokens; neither legacy token is ever re-emitted.
  */
 final class CfgAdaptersTest extends TestCase
 {
@@ -673,11 +675,12 @@ final class CfgAdaptersTest extends TestCase
 
 	// -----------------------------------------------------------------------
 	// Scenario E — PfbTop1mSource (alexa_type, issue #877)
-	//   Stored tokens: 'tranco', 'cisco', 'domcop', 'majestic', 'cloudflare' (live;
-	//   the latter three added ADR-59 P4/P5); legacy 'alexa' (dead service, #872)
-	//   coalesces to Tranco at the read boundary. Mirrors the PfbAliasDeltaMode
-	//   adapter shape (Scenario D): read returns the enum, write accepts either
-	//   the enum or a raw string.
+	//   Stored tokens: 'tranco', 'cisco', 'openpagerank', 'majestic', 'cloudflare'
+	//   (live; the latter three added ADR-59 P4/P5); legacy 'alexa' (dead service,
+	//   #872) coalesces to Tranco, legacy 'domcop' (list moved hosting, #928)
+	//   coalesces to OpenPageRank, both at the read boundary. Mirrors the
+	//   PfbAliasDeltaMode adapter shape (Scenario D): read returns the enum,
+	//   write accepts either the enum or a raw string.
 	// -----------------------------------------------------------------------
 
 	public function testPfbTop1mSourceReadTrancoReturnsTranco(): void
@@ -691,9 +694,9 @@ final class CfgAdaptersTest extends TestCase
 	}
 
 	/** ADR-59 P4: the two new keyless-provider tokens read as their own enum cases. */
-	public function testPfbTop1mSourceReadDomCopReturnsDomCop(): void
+	public function testPfbTop1mSourceReadOpenPageRankReturnsOpenPageRank(): void
 	{
-		$this->assertSame(PfbTop1mSource::DomCop, pfb_cfg_top1m_source_read('domcop'));
+		$this->assertSame(PfbTop1mSource::OpenPageRank, pfb_cfg_top1m_source_read('openpagerank'));
 	}
 
 	public function testPfbTop1mSourceReadMajesticReturnsMajestic(): void
@@ -713,6 +716,12 @@ final class CfgAdaptersTest extends TestCase
 		$this->assertSame(PfbTop1mSource::Tranco, pfb_cfg_top1m_source_read('alexa'));
 	}
 
+	/** #928: DomCop's list moved hosting to OpenPageRank -- the legacy token must not vanish. */
+	public function testPfbTop1mSourceReadLegacyDomCopCoalescesToOpenPageRank(): void
+	{
+		$this->assertSame(PfbTop1mSource::OpenPageRank, pfb_cfg_top1m_source_read('domcop'));
+	}
+
 	public function testPfbTop1mSourceReadUnknownTokenDefaultsToTranco(): void
 	{
 		$this->assertSame(PfbTop1mSource::Tranco, pfb_cfg_top1m_source_read('junk'));
@@ -729,12 +738,12 @@ final class CfgAdaptersTest extends TestCase
 	}
 
 	/**
-	 * write(read(v)) == v for all five live canonical tokens (domcop/majestic added
+	 * write(read(v)) == v for all five live canonical tokens (openpagerank/majestic added
 	 * P4, cloudflare added P5).
 	 */
 	public function testPfbTop1mSourceRoundTripCanonicalTokens(): void
 	{
-		foreach (['tranco', 'cisco', 'domcop', 'majestic', 'cloudflare'] as $token) {
+		foreach (['tranco', 'cisco', 'openpagerank', 'majestic', 'cloudflare'] as $token) {
 			$written = pfb_cfg_top1m_source_write(pfb_cfg_top1m_source_read($token));
 			$this->assertSame($token, $written,
 				"expected write(read('{$token}')) == '{$token}'; actual: '{$written}'");
@@ -749,18 +758,26 @@ final class CfgAdaptersTest extends TestCase
 			"expected write(read('alexa')) == 'tranco'; actual: '{$written}'");
 	}
 
+	/** The legacy 'domcop' token never round-trips back to itself -- it is coalesced (#928). */
+	public function testPfbTop1mSourceRoundTripLegacyDomCopNeverReemitted(): void
+	{
+		$written = pfb_cfg_top1m_source_write(pfb_cfg_top1m_source_read('domcop'));
+		$this->assertSame('openpagerank', $written,
+			"expected write(read('domcop')) == 'openpagerank'; actual: '{$written}'");
+	}
+
 	/** pfb_cfg_top1m_source_write() accepts both an enum instance and a string. */
 	public function testPfbTop1mSourceWriteAcceptsEnumOrString(): void
 	{
-		$this->assertSame('tranco',     pfb_cfg_top1m_source_write(PfbTop1mSource::Tranco));
-		$this->assertSame('cisco',      pfb_cfg_top1m_source_write(PfbTop1mSource::Cisco));
-		$this->assertSame('domcop',     pfb_cfg_top1m_source_write(PfbTop1mSource::DomCop));
-		$this->assertSame('majestic',   pfb_cfg_top1m_source_write(PfbTop1mSource::Majestic));
-		$this->assertSame('cloudflare', pfb_cfg_top1m_source_write(PfbTop1mSource::Cloudflare));
-		$this->assertSame('tranco',     pfb_cfg_top1m_source_write('tranco'));
-		$this->assertSame('cisco',      pfb_cfg_top1m_source_write('cisco'));
-		$this->assertSame('domcop',     pfb_cfg_top1m_source_write('domcop'));
-		$this->assertSame('majestic',   pfb_cfg_top1m_source_write('majestic'));
-		$this->assertSame('cloudflare', pfb_cfg_top1m_source_write('cloudflare'));
+		$this->assertSame('tranco',       pfb_cfg_top1m_source_write(PfbTop1mSource::Tranco));
+		$this->assertSame('cisco',        pfb_cfg_top1m_source_write(PfbTop1mSource::Cisco));
+		$this->assertSame('openpagerank', pfb_cfg_top1m_source_write(PfbTop1mSource::OpenPageRank));
+		$this->assertSame('majestic',     pfb_cfg_top1m_source_write(PfbTop1mSource::Majestic));
+		$this->assertSame('cloudflare',   pfb_cfg_top1m_source_write(PfbTop1mSource::Cloudflare));
+		$this->assertSame('tranco',       pfb_cfg_top1m_source_write('tranco'));
+		$this->assertSame('cisco',        pfb_cfg_top1m_source_write('cisco'));
+		$this->assertSame('openpagerank', pfb_cfg_top1m_source_write('openpagerank'));
+		$this->assertSame('majestic',     pfb_cfg_top1m_source_write('majestic'));
+		$this->assertSame('cloudflare',   pfb_cfg_top1m_source_write('cloudflare'));
 	}
 }

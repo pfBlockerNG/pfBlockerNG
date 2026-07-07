@@ -370,7 +370,33 @@ final class CfgGatewayTest extends TestCase
 	}
 
 	/**
-	 * alexa_type: all five live tokens pass through as their enum cases (domcop/majestic
+	 * alexa_type (issue #928): a stored legacy 'domcop' token (the DomCop TOP1M list's
+	 * hosting moved to OpenPageRank) coalesces to PfbTop1mSource::OpenPageRank through
+	 * the gateway's read adapter -- same shape as the 'alexa' legacy coalesce above.
+	 *
+	 * Scenario: an existing install with DomCop selected still reads safely.
+	 *   Given alexa_type stored as the legacy 'domcop' token.
+	 *   When PfbConfig::read('alexa_type').
+	 *   Then the result is PfbTop1mSource::OpenPageRank, not the dead 'domcop' token.
+	 */
+	public function testReadCoalescesLegacyDomCopTypeToOpenPageRank(): void
+	{
+		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/alexa_type';
+
+		// Given: legacy 'domcop' stored.
+		$this->seedConfig($path, 'domcop');
+		$this->assertSame('domcop', config_get_path($path), 'before: alexa_type seed is legacy domcop');
+
+		// When/Then: coalesced to PfbTop1mSource::OpenPageRank.
+		$this->assertSame(
+			PfbTop1mSource::OpenPageRank,
+			PfbConfig::read('alexa_type'),
+			"legacy 'domcop' coalesces to OpenPageRank"
+		);
+	}
+
+	/**
+	 * alexa_type: all five live tokens pass through as their enum cases (openpagerank/majestic
 	 * added ADR-59 P4, cloudflare added ADR-59 P5).
 	 */
 	public function testReadPassesThroughLivePfbTop1mSourceTokens(): void
@@ -383,8 +409,8 @@ final class CfgGatewayTest extends TestCase
 		$this->seedConfig($path, 'tranco');
 		$this->assertSame(PfbTop1mSource::Tranco, PfbConfig::read('alexa_type'), "'tranco' passes through as Tranco");
 
-		$this->seedConfig($path, 'domcop');
-		$this->assertSame(PfbTop1mSource::DomCop, PfbConfig::read('alexa_type'), "'domcop' passes through as DomCop");
+		$this->seedConfig($path, 'openpagerank');
+		$this->assertSame(PfbTop1mSource::OpenPageRank, PfbConfig::read('alexa_type'), "'openpagerank' passes through as OpenPageRank");
 
 		$this->seedConfig($path, 'majestic');
 		$this->assertSame(PfbTop1mSource::Majestic, PfbConfig::read('alexa_type'), "'majestic' passes through as Majestic");
