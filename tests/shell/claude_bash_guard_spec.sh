@@ -10,19 +10,30 @@
 #
 # Contracts pinned here:
 #   Rule A  -- git commit + --no-verify                       -> DENY
-#   Rule B  -- git push + force flag (--force / standalone -f)
+#   Rule B  -- git push + force flag (--force / standalone -f /
+#              a clustered short flag like -uf, -fu)
 #              WITHOUT --force-with-lease                     -> DENY
 #              (lease present -> PASS, lease wins even alongside a bare -f)
 #   Rule C  -- git worktree remove + force flag                -> DENY
 #   fail-open -- empty / garbled stdin, no rule match           -> PASS
-#   -f boundary -- standalone -f only; never matches inside
-#                  --force/-force/a token like foo-f            -> PASS
+#   -f boundary -- standalone -f / an f-bearing short-flag cluster,
+#                  never matching inside --force/-force/a token
+#                  like foo-f                                   -> PASS
+#   normalization (#923 review F1) -- every rule matches against a
+#              normalized view (quotes/backslashes stripped, whitespace
+#              runs collapsed to one space), so double/tab whitespace and a
+#              quoted subcommand token can't evade a rule               -> DENY
+#   force-flag boundary (#923 review F2/F3) -- a shell metacharacter
+#              (`; | & ( ) < > ,`) directly after -f, or a clustered short
+#              flag (-uf/-fu), still counts as force                    -> DENY
 #
 # One documented, ACCEPTED false-positive (B10): a commit message that merely
 # CONTAINS the literal text "--no-verify" also denies -- the guard is a raw
 # text scan (no jq / real argv parse in scope, see the guard's own header),
 # so it cannot distinguish "the flag" from "prose about the flag". Erring
-# toward blocking is the intended tradeoff, not a bug.
+# toward blocking is the intended tradeoff, not a bug. More generally
+# (#923 review F6): the scan runs over the WHOLE stdin payload, so a trigger
+# phrase occurring ANYWHERE in the payload denies, not just in the command.
 
 Describe 'claude-bash-guard.sh'
   GUARD="${PFB_ROOT}/scripts/claude-bash-guard.sh"
@@ -63,6 +74,42 @@ Describe 'claude-bash-guard.sh'
       When run script "$GUARD"
       The status should be success
       The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'H1 (F1 whitespace evasion): double space between git and commit (git  commit --no-verify -m x) -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git  commit --no-verify -m x"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'H2 (F1 whitespace evasion): a literal TAB between git and commit -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git	commit --no-verify"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'H3 (F1 quoting evasion): quoted subcommand token (git \"commit\" --no-verify) -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git \"commit\" --no-verify"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'H12a (F5 full JSON validity): exact deny JSON for Rule A'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git commit --no-verify -m x"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"the pre-commit lint gate'"'"'s --no-verify bypass is for humans, not agents (CLAUDE.md)"}}'
     End
 
     It 'B10 (documented accepted false-positive): --no-verify inside the commit MESSAGE text -> DENY'
@@ -136,6 +183,69 @@ Describe 'claude-bash-guard.sh'
       The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
     End
 
+    It 'H4 (F2 metachar boundary): git push -f;true -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push -f;true"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'H5 (F2 metachar boundary): git push -f|cat -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push -f|cat"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'H6 (F2 metachar boundary): git push -f&&echo done -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push -f&&echo done"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'H7 (F3 clustered short flag): git push -uf origin main -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push -uf origin main"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'H8 (F3 clustered short flag, other order): git push -fu origin main -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push -fu origin main"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'H10: --force-with-lease with a trailing metachar (;true) -> PASS (lease still wins)'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push --force-with-lease;true"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'H12b (F5 full JSON validity): exact deny JSON for Rule B'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push --force"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"the rebase-only landing flow uses --force-with-lease exclusively; a bare force-push can clobber another session'"'"'s PR (CLAUDE.md)"}}'
+    End
+
     It 'P1: --force-with-lease alone -> PASS (contains substring --force but lease wins)'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"git push --force-with-lease"}}
@@ -194,6 +304,24 @@ Describe 'claude-bash-guard.sh'
       The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
     End
 
+    It 'H9 (F1 whitespace evasion): double space (git worktree  remove --force ../wt) -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git worktree  remove --force ../wt"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'H12c (F5 full JSON validity): exact deny JSON for Rule C'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git worktree remove --force ../wt"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"CLAUDE.md forbids force-removing a worktree you do not own"}}'
+    End
+
     It 'P5: remove without force -> PASS'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"git worktree remove ../wt"}}
@@ -237,6 +365,15 @@ Describe 'claude-bash-guard.sh'
     It 'P14: -f embedded in a path token (git worktree add ../my-f-dir) -> PASS (not a standalone -f, and not remove)'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"git worktree add ../my-f-dir"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'H11 (F3 over-match guard): bare -f on a non-push/remove git command (echo -f && git status) -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"echo -f && git status"}}
       End
       When run script "$GUARD"
       The status should be success
