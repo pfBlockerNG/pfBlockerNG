@@ -288,8 +288,8 @@ function pfb_ledger_entry_html(?array $entry): string {
 	if ($entry === NULL) {
 		return '<em>Not yet run</em>';
 	}
-	$last = isset($entry['last_run']) ? date('Y-m-d H:i', (int)$entry['last_run']) : '—';
-	$next = isset($entry['next_due']) ? date('Y-m-d H:i', (int)$entry['next_due']) : '—';
+	$last = isset($entry['last_run']) ? date('Y-m-d H:i:s', (int)$entry['last_run']) : '—';
+	$next = isset($entry['next_due']) ? date('Y-m-d H:i:s', (int)$entry['next_due']) : '—';
 	return "Last: <strong>{$last}</strong>&emsp;Next: <strong>{$next}</strong>";
 }
 

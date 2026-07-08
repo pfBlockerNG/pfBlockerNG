@@ -688,6 +688,139 @@ def test_update_page_schedule_and_help_polish(webui: WebUI, php_error_log_guard:
     )
 
 
+_LEDGER_DIR = "/var/db/pfblockerng"
+_PFB_EXTRA_INC = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
+
+
+def _write_ledger_entry(vm: SmokeVM, job_key: str, last_run: int, next_due: int, jitter: int = 0) -> None:
+    """Seed one due-ledger job entry via the package's own PHP ledger writer (ADR-43's
+    format) -- a hand-written JSON file risks drifting from pfb_due_ledger_write_entry()'s
+    own shape. Mirrors tests/smoke/test_smoke_tick.py's local helper of the same shape.
+    """
+    snippet = (
+        f"require_once('{_PFB_EXTRA_INC}');"
+        f"pfb_due_ledger_write_entry('{job_key}', array("
+        f"'last_run' => {int(last_run)}, 'next_due' => {int(next_due)}, 'jitter' => {int(jitter)}"
+        f"), '{_LEDGER_DIR}');"
+        "echo 'OK';"
+    )
+    result = helpers.php_eval(vm, snippet)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_write_ledger_entry failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+
+
+def test_update_page_schedule_shows_seconds_precision(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """The Schedule section's Last/Next timestamps now include seconds (ADR-60 P10):
+    pfb_ledger_entry_html() switched from 'Y-m-d H:i' to 'Y-m-d H:i:s'.
+
+    Scenario: a due-ledger 'cron' entry with a known last_run/next_due epoch is seeded,
+    then the Update page is rendered.
+
+    Given a 'cron' ledger entry with last_run/next_due epochs whose seconds component is
+      deliberately non-zero (':45'),
+    When the Update page is GET,
+    Then the rendered Schedule line shows BOTH timestamps WITH those seconds -- the
+      pre-fix minute-only format would have silently dropped them.
+    """
+    last_run = 1735722045  # 2025-01-01 09:00:45 UTC -- non-zero seconds so a minute-only
+    # render (the pre-fix format) would visibly truncate them.
+    next_due = last_run + 900  # +15 minutes, still :45s
+
+    _write_ledger_entry(smoke_vm, "cron", last_run, next_due)
+
+    resp = webui.get(_UPDATE_PAGE)
+    result = evaluate_render(_UPDATE_PAGE, resp.status_code, resp.text, ("Update Settings", "Schedule"))
+    assert result.ok, f"Update page render oracle failed: {result.detail}"
+
+    assert re.search(r"Last:\s*<strong>[\d-]+ \d{2}:\d{2}:45</strong>", resp.text), (
+        "Update page Schedule 'Last' timestamp must show seconds precision (':45') -- "
+        f"the pre-fix 'Y-m-d H:i' format truncates them; body snippet around 'Last:': "
+        f"{resp.text[resp.text.find('Last:') : resp.text.find('Last:') + 80]!r}"
+    )
+    assert re.search(r"Next:\s*<strong>[\d-]+ \d{2}:\d{2}:45</strong>", resp.text), (
+        "Update page Schedule 'Next' timestamp must show seconds precision (':45')"
+    )
+
+
+_CFG_PFB_ENABLE = "installedpackages/pfblockerng/config/0/enable_cb"
+_DNSBL_STAT_DB = "/var/unbound/pfb_py_dnsbl.sqlite"
+_WIDGET_PAGE = "/widgets/widgets/pfblockerng.widget.php"
+
+
+# Dual-marked ui_e2e (issue #810, same rationale as test_alerts_unified_log_colour_fields_render):
+# this test mutates config.xml (enable_cb + pfb_dnsbl) as setup.
+@pytest.mark.ui_e2e
+def test_widget_dnsbl_stat_renders_year_bearing_iso_timestamp(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """The dashboard widget's per-group DNSBL 'last updated' stat renders a YEAR-bearing
+    ISO timestamp (ADR-60 P10 -- dnsbl_alias_update() now stores 'Y-m-d H:i:s', not the
+    old year-less 'M j H:i:s' that pfb_iso_timestamp() had to guess a year for).
+
+    Seeds the SQLite 'dnsbl' row directly (the widget's own read path, ``SELECT * FROM
+    dnsbl``) with a value in the NEW year-bearing shape, then confirms the rendered
+    group row shows that exact value -- proving pfb_iso_timestamp()'s round-trip-unchanged
+    branch is what actually reaches the page for a fresh (post-fix) stored value.
+    """
+    helpers.ensure_dnsbl_vip(smoke_vm)
+    orig_enable = helpers.config_get(smoke_vm, _CFG_PFB_ENABLE)
+    orig_dnsbl = helpers.config_get(smoke_vm, CFG_PFB_DNSBL)
+    helpers.php_eval(
+        smoke_vm,
+        f"config_set_path('{_CFG_PFB_ENABLE}', 'on');\n"
+        f"config_set_path('{CFG_PFB_DNSBL}', 'on');\n"
+        "write_config('pfBlockerNG smoke: enable DNSBL for the widget stat render check');\n"
+        "echo 'OK';",
+    )
+
+    group = f"PFB_SMOKE_WIDGETSTAT_{uuid.uuid4().hex[:8]}"
+    seed_snippet = (
+        f"$db = new SQLite3('{_DNSBL_STAT_DB}');"
+        '$db->exec("CREATE TABLE IF NOT EXISTS dnsbl '
+        '(groupname TEXT, timestamp TEXT, entries INTEGER, counter INTEGER);");'
+        "$stmt = $db->prepare('INSERT OR REPLACE INTO dnsbl (groupname, timestamp, entries, counter) "
+        "VALUES (:g, :t, :e, :c)');"
+        f"$stmt->bindValue(':g', '{group}', SQLITE3_TEXT);"
+        "$stmt->bindValue(':t', '2025-01-01 09:00:45', SQLITE3_TEXT);"
+        "$stmt->bindValue(':e', 42, SQLITE3_INTEGER);"
+        "$stmt->bindValue(':c', 0, SQLITE3_INTEGER);"
+        "$stmt->execute();"
+        "$db->close();"
+        "echo 'OK';"
+    )
+    seed = helpers.php_eval(smoke_vm, seed_snippet)
+    assert "OK" in seed.stdout, (
+        f"failed to seed the dnsbl stat row: rc={seed.returncode} {seed.stderr!r} {seed.stdout!r}"
+    )
+
+    try:
+        resp = webui.get(_WIDGET_PAGE)
+        result = evaluate_render(_WIDGET_PAGE, resp.status_code, resp.text, ('id="pfblockerngack"',))
+        assert result.ok, f"Widget render oracle failed: {result.detail}"
+        assert "2025-01-01 09:00:45" in resp.text, (
+            f"widget must render the year-bearing ISO stat for group {group!r} unchanged; not found in body"
+        )
+    finally:
+        helpers.php_eval(
+            smoke_vm,
+            f"$db = new SQLite3('{_DNSBL_STAT_DB}');"
+            "$stmt = $db->prepare('DELETE FROM dnsbl WHERE groupname = :g');"
+            f"$stmt->bindValue(':g', '{group}', SQLITE3_TEXT);"
+            "$stmt->execute();"
+            "$db->close();"
+            "echo 'OK';",
+        )
+        helpers.php_eval(
+            smoke_vm,
+            f"config_set_path('{_CFG_PFB_ENABLE}', '{orig_enable}');\n"
+            f"config_set_path('{CFG_PFB_DNSBL}', '{orig_dnsbl}');\n"
+            "write_config('pfBlockerNG smoke: restore enable_cb/pfb_dnsbl after widget stat render check');\n"
+            "echo 'OK';",
+        )
+
+
 def test_dnsbl_idn_blocking_fields_render(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
     """The ADR-08 'IDN Blocking' selector + its two Confusable sub-toggles render
     cleanly on the DNSBL page — so a regression that drops or breaks the field is

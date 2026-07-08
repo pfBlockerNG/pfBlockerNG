@@ -890,12 +890,12 @@ def init_standard(id: int, env: module_env) -> bool:
 
         try:
             if os.path.isfile(lfile) and not os.access(lfile, os.W_OK):
-                new_file = "/var/log/pfblockerng/" + l_file + str(datetime.now().strftime("_%Y%m%-d%H%M%S.log"))
+                new_file = "/var/log/pfblockerng/" + l_file + str(datetime.now().strftime("_%Y%m%d%H%M%S.log"))
                 os.rename(lfile, new_file)
         except Exception as e:
             sys.stderr.write("[pfBlockerNG]: Failed to validate write permission: {}.log: {}".format(l_file, e))
             if os.path.isfile(lfile):
-                new_file = "/var/log/pfblockerng/" + l_file + str(datetime.now().strftime("_%Y%m%-d%H%M%S.log"))
+                new_file = "/var/log/pfblockerng/" + l_file + str(datetime.now().strftime("_%Y%m%d%H%M%S.log"))
                 os.rename(lfile, new_file)
             pass
 
