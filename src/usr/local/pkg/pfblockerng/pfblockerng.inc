@@ -539,17 +539,11 @@ function pfb_port_alias_types(): array {
 	return ['port', 'url_ports', 'urltable_ports'];
 }
 
-// Build the alias-name maps that feed the Adv. In/Outbound rule autocomplete + the
-// save-time option validation on the IP, DNSBL, and Feed (category-edit) pages
-// (Custom Port + Custom Source/Destination fields). Returned name=>name maps are
-// NAME-KEYED so a save-time array_key_exists($posted, $options) works.
-//
-// Ports: every port-bearing type (pfb_port_alias_types() -- port/url_ports/urltable_ports).
-// Addresses: every address-bearing type (pfb_exclude_alias_types() -- host/network/url/
-// urltable), NOT just 'network', so a Host alias (a single IP) autocompletes and saves too.
-// pfB_-managed (pfB_*) aliases are skipped from BOTH lists: the field help forbids them
-// (e.g. the package's own pfB_DNSBL_Ports port alias) and they are not valid user rule
-// sources.
+// Alias-name maps for the Adv. In/Outbound autocomplete + save-time option validation on the
+// IP/DNSBL/Feed pages. NAME-KEYED so a save-time array_key_exists($posted, $options) works.
+// Ports: pfb_port_alias_types(). Addresses: pfb_exclude_alias_types() (host/network/url/
+// urltable, so a single-IP Host alias autocompletes/saves too). pfB_-managed aliases are
+// skipped from both — forbidden by field help and not valid user rule sources.
 //
 // @param array $aliases The config_get_path('aliases/alias', []) list.
 // @return array{ports: array<string,string>, networks: array<string,string>}
@@ -605,16 +599,12 @@ function pfb_exclude_alias_exists(string $alias): bool {
 	return $type !== NULL && in_array($type, pfb_exclude_alias_types(), TRUE);
 }
 
-// Build the NAT/filter SOURCE array for a DNS-redirect / DoT-block exception alias.
-// An empty alias yields source 'any' (no exception). A non-empty alias becomes a negated
-// source (listed hosts bypass) ONLY when it is a usable firewall-rule source (an existing
-// address-bearing, non-pfB_ alias); a missing / port / managed / stale name falls back to
-// 'any' and is logged. This guard is the single point that prevents a non-resolving alias
-// from emitting a sourceless "from ! ..." rule — pf rejects that as a syntax error, which
-// fails the WHOLE ruleset load, not just this one rule. Shared by pfb_dot_block_rule(),
-// pfb_dot_block_floating_rule() and the DNS-redirect NAT builder in sync_package_pfblockerng().
-// $context names the specific rule (interface [+ IP version]) so the log identifies WHICH rule
-// dropped its exception, rather than repeating an identical line per rule (#664).
+// Build the NAT/filter SOURCE array for a DNS-redirect/DoT-block exception alias. Empty alias
+// -> source 'any'. Non-empty alias -> negated source ONLY when it resolves to a usable,
+// non-pfB_ address alias; otherwise falls back to 'any' (logged) — a non-resolving alias must
+// never reach a sourceless "from ! ..." rule, which pf rejects and fails the WHOLE ruleset load.
+// Shared by pfb_dot_block_rule(), pfb_dot_block_floating_rule(), and the DNS-redirect NAT
+// builder. $context names the rule so the log identifies WHICH rule dropped its exception (#664).
 function pfb_redirect_exclude_source(string $alias, string $context = ''): array {
 	if ($alias === '') {
 		return ['any' => ''];
@@ -731,15 +721,10 @@ function pfb_rule_alias_needs_v4_suffix($address, $ipprotocol) {
 	       $ipprotocol === 'inet';
 }
 
-// Collect the auto-rule suffix already in use by an existing pfB_ firewall
-// rule (sync_package_pfblockerng() auto-rule-suffix configuration, issue
-// #713). Scans $rules for the FIRST rule whose descr matches the
-// pfBlockerNG auto-rule naming pattern ('pfB_<Type><suffix>') and, when
-// found, both confirms a pfB_ rule already exists ('found') and extracts its
-// suffix ('suffix') so the caller can preserve it instead of re-applying the
-// currently configured suffix setting over already-deployed rules.
-//
-// PURE — no I/O, no globals, no side effects.
+// Collect the auto-rule suffix already in use by an existing pfB_ firewall rule (issue #713).
+// Scans $rules for the FIRST rule whose descr matches 'pfB_<Type><suffix>'; when found, reports
+// existence ('found') and extracts 'suffix' so the caller preserves it instead of re-applying
+// the configured suffix over already-deployed rules. PURE — no I/O, no globals, no side effects.
 //
 // @param array<int, array<string, mixed>> $rules  config 'filter/rule' entries.
 // @return array{found: bool, suffix: string}
@@ -757,17 +742,12 @@ function pfb_collect_autorule_suffix(array $rules): array {
 	return ['found' => $found, 'suffix' => $suffix];
 }
 
-// Validate and normalise the Reports-tab whitelist composite 'atype' parameter,
-// which arrives as 'Whitelist|<ip>|<description>'. The IP is validated via
-// PFB_FILTER_IP (is_ipaddr); an invalid IP yields an empty IP slot
-// ('Whitelist||<descr>') that the downstream invalid-IP branch in the addgroup
-// block catches and surfaces as a user-visible error. The description is kept as
-// normalised raw text — control characters and newlines are collapsed to a single
-// space so it cannot inject extra lines into the (base64-stored) custom list — and
-// is NOT HTML-encoded here: storage is base64 and each display sink escapes on
-// output (json_encode for the JS variable, Form_Input/Form_Textarea for HTML).
-// Splitting with a limit of 3 preserves any '|' characters inside the description.
-// A non-'Whitelist' first token is rejected (returns '').
+// Validate/normalise the Reports-tab whitelist composite 'atype' param ('Whitelist|<ip>|
+// <description>'). IP validated via PFB_FILTER_IP; an invalid IP yields an empty slot that the
+// addgroup block surfaces as a user error. Description: control chars/newlines collapsed to a
+// space (blocks line injection into the base64-stored custom list); NOT HTML-encoded here —
+// each display sink escapes on output. Split limit 3 preserves '|' inside the description; a
+// non-'Whitelist' first token is rejected (returns '').
 function pfb_filter_whitelist_atype(string $raw): string {
 	$parts = explode('|', $raw, 3);
 	if (($parts[0] ?? '') !== 'Whitelist') {
@@ -789,10 +769,9 @@ function pfb_sync_filter_password(string $value): string {
 	return $value;
 }
 
-// Pure allow-list membership test for a MIME-type string.
-// Encapsulates the isset($pfb['mime_types'][...]) lookup used by the
-// PFB_FILTER_FILE_MIME (17) and PFB_FILTER_FILE_MIME_COMPRESSED (18) branches
-// so that Phase 2 normalisation has a clean, single insertion point.
+// Pure allow-list membership test for a MIME-type string. Encapsulates the
+// isset($pfb['mime_types'][...]) lookup used by the PFB_FILTER_FILE_MIME (17) and
+// PFB_FILTER_FILE_MIME_COMPRESSED (18) branches as a single insertion point.
 function pfb_mime_in_allowlist(string $mime, array $allowlist): bool {
 	return isset($allowlist[$mime]);
 }
@@ -821,7 +800,7 @@ function pfb_mime_normalise(string $raw): string {
 	return $raw;
 }
 
-// ADR-45 Phase 1: pure mapping — canonical archive MIME → base integrity-test argv.
+// ADR-45: pure mapping — canonical archive MIME → base integrity-test argv.
 // Returns the binary + flags array (file NOT included; pfb_validate_archive() appends
 // it at call time so this helper stays pure and trivially oracle-testable).
 // Returns NULL for non-archive types — nothing to probe.
@@ -841,7 +820,7 @@ function pfb_archive_probe(string $canonical_type): ?array {
 	}
 }
 
-// ADR-45 Phase 1: run the structural integrity probe for $file.
+// ADR-45: run the structural integrity probe for $file.
 // Returns TRUE for non-archive types (nothing to test), TRUE if the probe exits 0
 // (archive is intact), FALSE if the probe exits non-zero (corrupt/truncated archive).
 // The $runner callable(array $argv): int is injectable for unit tests — default runner
@@ -863,7 +842,7 @@ function pfb_validate_archive(string $file, string $canonical_type, ?callable $r
 	return $runner($argv) === 0;
 }
 
-// ADR-45 Phase 3: seamed recovery helper for application/octet-stream (or empty) MIME.
+// ADR-45: seamed recovery helper for application/octet-stream (or empty) MIME.
 // Loops $supported_types in order; returns the first $type for which $validator($file, $type)
 // is TRUE (positive structural identification), or NULL when no probe matches.
 // $validator shape: callable(string $file, string $type): bool — production value is
@@ -894,22 +873,13 @@ function pfb_archive_missing_tool(string $canonical_type, ?callable $checker = N
 	return $checker($argv[0]) ? NULL : $argv[0];
 }
 
-// ADR-48 Phase 1: pure formatter for the canonical download-validation reject line —
-// a single greppable line naming which feed/stage/reason caused a rejection and the
-// raw detected detail (e.g. file(1) output, a tool's exit code, an offending member
-// name). $stage is one of mime|structural|inner|member|plaintext|entries; this
-// formatter does not validate the token, callers own the vocabulary.
-//
-// Canonical shape (leading "\n" per the pfb_logger() caller convention -- pfb_logger()
-// itself emits no newline):
-//   \npfb_validate: REJECT feed=<feed> stage=<stage> reason=<reason> detected=<detail>
-//
-// Escaping is applied to EACH of the four values independently, in this order:
-//   1. every control byte in [\x00-\x1F\x7F] is replaced with a single space -- these
-//      values may carry attacker-influenced file(1) output, and a raw "\n"/"\r" would
-//      forge or split the greppable line;
-//   2. htmlspecialchars() (matching the escaping the existing reject messages use).
-// Pure: string in, string out, no I/O, no globals.
+// ADR-48: pure formatter for the canonical download-validation reject line — a single
+// greppable line naming feed/stage/reason + raw detected detail. $stage is one of
+// mime|structural|inner|member|plaintext|entries (caller-owned vocabulary, unvalidated here).
+// Shape: "\npfb_validate: REJECT feed=<feed> stage=<stage> reason=<reason> detected=<detail>"
+// (leading "\n" per pfb_logger() convention). Each value is escaped independently: control
+// bytes -> space (blocks forging/splitting the line via attacker-influenced detail), then
+// htmlspecialchars(). Pure: string in, string out, no I/O, no globals.
 function pfb_validate_log_line(string $feed, string $stage, string $reason, string $detail = ''): string {
 	[$feed, $stage, $reason, $detail] = array_map(
 		static function (string $value): string {
@@ -920,7 +890,7 @@ function pfb_validate_log_line(string $feed, string $stage, string $reason, stri
 	return "\npfb_validate: REJECT feed={$feed} stage={$stage} reason={$reason} detected={$detail}";
 }
 
-// ADR-48 Phase 1: thin emit wrapper -- builds the canonical reject line via
+// ADR-48: thin emit wrapper -- builds the canonical reject line via
 // pfb_validate_log_line() and emits it through pfb_logger() at the reject level
 // (default 2 = pfB log + error log). One call site per rejection.
 function pfb_validate_log(string $feed, string $stage, string $reason, string $detail = '', int $level = 2): void {
@@ -984,7 +954,7 @@ function pfb_archive_unsafe_member(?array $names): ?string {
 	return NULL;
 }
 
-// ADR-48 Phase 4 (issue #789): reads the Python-emitted per-entry reject tally
+// ADR-48 (issue #789): reads the Python-emitted per-entry reject tally
 // artifact (pfb_py_reject_stats.json -- build()'s normalise() domain-shape rejects
 // and #753 wire-cap rejects, bucketed shape/wire_cap, per feed/group) and emits
 // ONE canonical stage=entries line per (feed, nonzero bucket) via pfb_validate_log().
@@ -1055,22 +1025,15 @@ function pfb_utf16_sample_to_utf8(string $sample): string {
 	return ($converted === FALSE) ? $sample : $converted;
 }
 
-// issue #946: transcode a UTF-16/UTF-32-BOM-prefixed FILE to UTF-8 in place, atomically.
-// Only the first 4 bytes are read to sniff the BOM (this runs on every text-feed ingest
-// that reaches the .orig finalize step, and
-// feeds can be tens of MB -- slurping them all just to look at a prefix would risk the PHP
-// memory limit, which file_get_contents() hits as a fatal error, not a catchable failure);
-// the full read happens only for an actual BOM match. Returns FALSE (file left untouched)
-// when: the path is unreadable, no BOM matches, or mb_convert_encoding() fails (logged as a
-// warning; believed unreachable on stock mbstring, which substitutes '?' instead of failing)
-// -- fail-open in every case, so downstream behaves exactly as it did before this function
-// existed. Returns TRUE after a successful same-filesystem rename() with the original mtime
-// (when its stat succeeded) and permission bits (same) restored -- the caller runs this AFTER
-// the remote_stamp touch(), so that stamp must survive, and tempnam() creates 0600 files, so
-// the mode must be carried over explicitly (same discipline as the atomic-publish helpers).
-// ponytail: whole-file read/rewrite for the BOM-matched case only -- BOM-marked feeds are
-// rare and small in practice; switch to a streaming decode if that assumption ever stops
-// holding.
+// issue #946: transcode a UTF-16/UTF-32-BOM-prefixed FILE to UTF-8 in place, atomically. Reads
+// only the first 4 bytes to sniff the BOM (feeds can be tens of MB; a full read risks the PHP
+// memory limit) — the full read happens only on an actual BOM match. Returns FALSE (untouched)
+// on an unreadable path, no BOM match, or a failed mb_convert_encoding() (fail-open in every
+// case). Returns TRUE after a same-filesystem rename() with the original mtime/permission bits
+// restored (tempnam() creates 0600 files, so the mode must be carried over explicitly).
+//
+// ponytail: whole-file read/rewrite for the BOM-matched case only; switch to streaming if
+// BOM-marked feeds stop being rare/small.
 function pfb_utf16_transcode_file(string $path): bool {
 	if (!@is_readable($path)) {
 		return FALSE;
@@ -1119,45 +1082,15 @@ function pfb_utf16_transcode_file(string $path): bool {
 	return TRUE;
 }
 
-// ADR-49 Phase 1: pure content-sanity scan over the first chunk of a downloaded
-// text feed. The caller reads a capped head sample (64 KiB at the pfb_download()
-// gate) and passes it in as $sample -- this function does no I/O and has no
-// notion of the cap: the read is a ceiling, never a floor, so a feed shorter
-// than the cap is a COMPLETE sample and is never penalised for its size.
+// ADR-49: content-sanity gate for a downloaded text feed's first 64-KiB chunk; pinned by
+// PfbTextSanityTest. Reason order (first hit wins): 'nul_bytes' (any NUL byte) >
+// 'html_error_page' (opens as HTML AND no line is blocklist-shaped: an IPv4/IPv6/CIDR
+// anywhere, or a whole-line domain.tld token) > 'below_min_content' (zero non-blank,
+// non-comment lines) > NULL. BYTE-LEVEL matching only (no `/u`) so a chunk-truncated
+// multibyte tail can never flip a verdict. Pure: string in, ?string out, no I/O.
 //
-// Returns NULL when the sample looks like plausible blocklist text, else one of
-// three reason tokens naming why it does not. Evaluated in this order, first
-// hit wins:
-//   1. 'nul_bytes'         -- the sample contains ANY NUL byte. Unambiguous for
-//                             a text feed, so it is checked first.
-//   2. 'html_error_page'   -- the sample, left-trimmed of leading whitespace,
-//                             opens (case-insensitively) with "<!doctype html"
-//                             or "<html", AND no line of the sample is
-//                             "blocklist-shaped": an IPv4/IPv6 address or CIDR
-//                             anywhere in the line (real feeds -- ProjectHoneypot,
-//                             cybercrime-tracker -- embed IPs inside HTML markup),
-//                             or a WHOLE line that is one bare/ABP-wrapped
-//                             domain.tld token. The domain token must BE the
-//                             line, never a substring: real error pages embed
-//                             domain-shaped tokens in markup (a DOCTYPE's w3.org
-//                             DTD URL, favicon.ico / *.css hrefs, CDN links),
-//                             and those must not suppress the verdict. This is
-//                             the false-positive guard: an HTML-ish feed that
-//                             DOES carry blocklist lines is not flagged.
-//   3. 'below_min_content' -- a LINE-count floor of 1, never a byte-size floor:
-//                             fires only when the sample has ZERO non-blank,
-//                             non-comment lines (a comment line begins with
-//                             '#' or '!' after trimming leading whitespace). A
-//                             single legitimate data line satisfies the floor.
-//   4. otherwise NULL.
-//
-// BYTE-LEVEL matching only -- no `/u` modifier anywhere. Every pattern above is
-// pure ASCII, so a chunk-truncated multibyte tail can never flip a verdict.
-// Pure: string in, ?string out, no I/O, no globals.
-//
-// issue #946: a UTF-16/UTF-32-BOM-prefixed sample is decoded to UTF-8 FIRST (before
-// the UTF-8 BOM strip below) -- otherwise every line of a legitimate UTF-16/32 feed
-// carries interleaved NUL bytes and trips 'nul_bytes' on text that is actually fine.
+// issue #946: a UTF-16/32-BOM-prefixed sample is decoded to UTF-8 FIRST (before the UTF-8
+// BOM strip below) -- else a legitimate wide-char feed trips 'nul_bytes' on its own bytes.
 function pfb_text_sanity(string $sample): ?string {
 	$sample = pfb_utf16_sample_to_utf8($sample);
 
@@ -1235,17 +1168,13 @@ function pfb_text_sanity(string $sample): ?string {
 	return 'below_min_content';
 }
 
-// Function to filter/sanitize user input
+// Function to filter/sanitize user input.
 //
-// ADR-48 Phase 2: $reject_detail is an optional by-ref out-param for the
-// PFB_FILTER_FILE_MIME / PFB_FILTER_FILE_MIME_COMPRESSED reject paths only. A
-// caller that pre-sets it to an array() opts in: on rejection this function
-// fills it with the raw detail (['mime_raw', 'mime', 'retval']) and SUPPRESSES
-// its own legacy message so the caller can emit the canonical
-// pfb_validate_log() line instead (it has the feed header + true stage in
-// scope, which pfb_filter() does not). A caller that leaves it NULL (the
-// default) gets the legacy in-filter message unchanged -- no rejection ever
-// loses its log entry.
+// ADR-48: $reject_detail is an optional by-ref out-param for the PFB_FILTER_FILE_MIME /
+// PFB_FILTER_FILE_MIME_COMPRESSED reject paths only. A caller that pre-sets it to an array()
+// opts in: on rejection this fills it with the raw detail and SUPPRESSES the legacy message so
+// the caller can emit the canonical pfb_validate_log() line instead. A caller that leaves it
+// NULL (default) gets the legacy in-filter message unchanged -- no rejection loses its log.
 function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FALSE, &$reject_detail=NULL) {
 	global $pfb;
 
@@ -1833,16 +1762,11 @@ function pfb_get_vip_options(int $family, bool $pkg_xml_format = FALSE) {
 	return $options;
 }
 
-// [ ADR-13 ] Pure decision: is a v6 sinkhole VIP WANTED for this DNSBL config?
-// True iff the DNS Resolver listens on IPv6 AND the package is NOT auto-provisioning
-// the VIP (manual mode). When auto-create is on, pfb_manage_dnsbl_vip() provisions the
-// v6 VIP with no user friction. When auto is off, a v6-listening resolver SHOULD have a
-// v6 sinkhole VIP so AAAA blocks are sinkholed too — but this is a NON-BLOCKING
-// recommendation (ADR-13 §7 pivot): pfb_global logs a warning and DNSBL keeps running
-// on IPv4. It is NOT a hard requirement — an earlier revision force-disabled DNSBL here,
-// which broke every existing manual setup whose resolver listens on IPv6 without a v6
-// VIP (the common case). Pure: takes the two booleans, decides; no global/config access,
-// so the recommendation has a single, directly-testable source of truth.
+// [ADR-13] Pure decision: is a v6 sinkhole VIP WANTED for this DNSBL config? True iff the DNS
+// Resolver listens on IPv6 AND auto-provisioning is off (manual mode) — a NON-BLOCKING
+// recommendation (ADR-13 §7): pfb_global logs a warning, DNSBL keeps running on IPv4. NOT a hard
+// requirement — a v6-listening resolver without a v6 VIP is a common, valid manual setup. Pure:
+// no global/config access, single directly-testable source of truth.
 function pfb_dnsbl_v6_vip_required(bool $listens_v6, bool $auto): bool {
 	return $listens_v6 && !$auto;
 }
@@ -2006,22 +1930,10 @@ function pfb_validate_vips(string $interface, string|null $vip4 = '', string|nul
 	return [TRUE, null];
 }
 
-// [ ADR-13 / issue #473 / issue #487 ] Small fixed ordered list of DNS-themed
-// candidate sinkhole VIP addresses for a family. Pure (no side effects).
-//
-// IPv4 — three candidates, Class B first (least-used RFC1918 on end-user LANs),
-// then Class C, then Class A (most-used, so last). Each is a /32 .53 host
-// (DNS-port homage):
-//   172.16.53.53  (172.16/12)
-//   192.168.53.53 (192.168/16)
-//   10.53.53.53   (10/8)
-//
-// IPv6 — single ULA candidate: fd00:53:53:53:53:53:53:53 (/128). On conflict
-// the picker returns null and the user resolves it manually (an IPv6 user on
-// that exact ULA can address it themselves without a larger pool).
-//
-// The conflict-aware picker (pfb_pick_free_dnsbl_vip) returns the first free one.
-// Returns [] for any other family.
+// [ADR-13] (issue #473 / #487) Fixed ordered candidate sinkhole VIP list per family, each a
+// DNS-port-homage .53 host; IPv4 ordered least-used RFC1918 first (Class B, C, then A). IPv6:
+// single ULA fd00:53:53:53:53:53:53:53/128 — on conflict the picker returns null and the user
+// resolves it manually. pfb_pick_free_dnsbl_vip() returns the first free candidate. Pure.
 function pfb_dnsbl_vip_candidates(int $family): array {
 
 	if ($family === AF_INET) {
@@ -2076,33 +1988,14 @@ function pfb_pick_free_dnsbl_vip(int $family, string $interface): ?string {
 	return null;
 }
 
-// [ ADR-13 ] True iff the DNS Resolver (Unbound) is configured to listen on at least
-// one IPv6 address. Mirrors how pfSense builds Unbound's listen set in
-// unbound_generate_config_text() (src/etc/inc/unbound.inc) — verified verbatim
-// against upstream at RELENG_2_7_2 (frozen public-mirror ref, signatures stable
-// 2.7->2.8) and master; the active_interface key, the empty/'all' => automatic
-// branch, and the per-interface get_interface_ip()/get_interface_ipv6() resolution
-// are identical across both refs:
-//
-//   $active = array_filter(explode(',', $unboundcfg['active_interface']));
-//   if (empty($active) || in_array('all', $active, true)) { interface-automatic: yes }
-//   else foreach ($active as $ubif) { ... get_interface_ipv6($ubif) -> bind v6 ... }
-//
-// Predicate (conservative/correct over clever):
-//   * Resolver disabled (config_path_enabled('unbound') false) -> listens on nothing
-//     -> false.
-//   * active_interface empty or contains 'all' -> Unbound emits 'interface-automatic:
-//     yes' and binds EVERY address on its enabled interfaces, v6 included -> true iff
-//     ANY configured interface currently resolves to an IPv6 address (get_interface_ipv6).
-//   * otherwise -> the explicit per-interface list: true iff ANY listed token is a v6
-//     literal (is_ipaddrv6) or an interface that resolves to a v6 address
-//     (get_interface_ipv6), mirroring upstream's bind loop (incl. the up/enabled
-//     status guard from redmine #11087).
-//
-// MUST still be confirmed on-box (no PHP/Unbound runtime in CI): that
-// get_interface_ipv6() returns a routable v6 (not just link-local) for an automatic
-// bind, and that 'interface-automatic: yes' does in fact accept v6 queries on the
-// box's configuration. Used by Phase 3 (v6-mandatory rule) — UNWIRED in Phase 1.
+// [ADR-13] True iff Unbound is configured to listen on IPv6. Mirrors unbound_generate_config_text()
+// (src/etc/inc/unbound.inc) — verified verbatim against upstream at RELENG_2_7_2 and master.
+// Predicate: resolver disabled -> false; active_interface empty/'all' -> 'interface-automatic:
+// yes', true iff ANY enabled interface currently has a v6 address; else true iff ANY listed
+// token is a v6 literal or an interface resolving to v6 (mirrors upstream's bind loop, incl.
+// the up/enabled guard from redmine #11087). MUST be confirmed on-box (no PHP/Unbound runtime
+// in CI): that an automatic bind's v6 is routable (not link-local only), and that
+// 'interface-automatic: yes' does accept v6 queries. Not yet wired into the v6-mandatory rule.
 function pfb_unbound_listens_v6(): bool {
 
 	// A disabled resolver listens on nothing.
@@ -2144,18 +2037,12 @@ function pfb_unbound_listens_v6(): bool {
 	return FALSE;
 }
 
-// [ ADR-13 ] Locate the index of the auto-managed DNSBL VIP this package owns inside a
-// virtualip/vip array. Pure (no side effects). Ownership is decided by TWO predicates,
-// both required, mirroring the lifecycle contract:
-//   (1) MARKER  : pfb_is_managed_obj($vip['descr']) AND marker match via the same
-//                 prefix/contains logic as pfb_find_managed_obj. VIP markers
-//                 (PFB_AUTO_VIP_DESCR_V4/V6) start with 'pfB_' → str_starts_with.
-//   (2) IP MATCH: when $match_ip is a non-empty string, $vip['subnet'] must equal it.
-//                 Used on delete to bind removal to the address currently resolved from
-//                 the stored pfb_dnsvip4/6 config, so we never delete a marked VIP whose
-//                 address no longer corresponds to our config. Pass null to match on the
-//                 marker alone (idempotent reuse on create, before any id is stored).
-// Returns the integer key of the first matching entry, or null if none matches.
+// [ADR-13] Locate the index of the auto-managed DNSBL VIP this package owns inside a
+// virtualip/vip array. Pure. Ownership requires BOTH: (1) MARKER — pfb_is_managed_obj($descr)
+// AND a prefix/contains match against PFB_AUTO_VIP_DESCR_V4/V6 (same logic as
+// pfb_find_managed_obj); (2) IP MATCH — when $match_ip is non-empty, $vip['subnet'] must equal
+// it (binds delete to the address currently resolved from stored config, so a marked VIP whose
+// address no longer matches is never deleted). Pass null to match on the marker alone (create).
 function pfb_find_marked_vip(array $vips_config, string $marker, ?string $match_ip): ?int {
 	$use_prefix = str_starts_with($marker, PFB_MANAGED_FILTER_PFX);
 	foreach ($vips_config as $idx => $vip) {
@@ -2179,35 +2066,14 @@ function pfb_find_marked_vip(array $vips_config, string $marker, ?string $match_
 	return null;
 }
 
-// [ ADR-13 ] VIP lifecycle manager. Creates the marked DNSBL sinkhole VIP(s) on enable
-// (when 'Create VIPs automatically' is on) and removes ONLY the marked + IP-matched
-// VIP(s) on disable / when no longer managed. Wired into pfb_create_dnsbl($mode).
-//
-// ADDITIVE: with pfb_dnsvip_auto off (and never previously on) there is no marked VIP,
-// so neither the enabled nor the disabled path finds a marker+IP-matched VIP to remove
-// -> $changed stays FALSE -> no write_config -> the runtime is byte-identical to today.
-//
-// Marker/IP delete guard: a VIP is removed iff BOTH (a) its descr equals
-// PFB_AUTO_VIP_DESCR_V4/_V6 AND (b) its subnet equals the IP currently resolved from the
-// stored pfb_dnsvip4/6 config (pfb_find_marked_vip(..., $match_ip)). A manually-created
-// VIP (no marker) is NEVER touched; a marked VIP whose address no longer matches stored
-// config is NEVER deleted on the basis of the marker alone.
-//
-// Create apply sequence matches upstream firewall_virtual_ip.inc (config first, then
-// apply): the vip entry is written into virtualip/vip and the dnsvip id into the DNSBL
-// settings, write_config fires ONCE iff anything changed, then interface_ipalias_configure()
-// brings the alias up live.
-//
-// Validation contract (PFBL-01): $interface (the stored dnsbl_interface setting; a
-// pfSense friendly interface name -- 'lo0', 'lan', 'optN', 'enc0', 'openvpn', 'l2tp',
-// per pfb_build_if_list()) must validate via pfb_filter(PFB_FILTER_WORD) before it is
-// written into a VIP entry or handed to interface_vip_bring_down() /
-// interface_ipalias_configure(). Every legal friendly name is \w-only, so the WORD
-// filter passes all of them unchanged and rejects anything carrying separators,
-// spaces, quotes or other non-word characters. As a singular required parameter, a
-// value failing the filter ABORTS VIP management for the run (log + return, no
-// config read or write, no VIP operation). The constant's accept/reject behaviour
-// is pinned by tests/php/PfbFilterContractTest.php.
+// [ADR-13] VIP lifecycle manager: creates the marked DNSBL sinkhole VIP(s) on enable (auto
+// on), removes ONLY the marked + IP-matched VIP(s) on disable/unmanaged. ADDITIVE: with
+// pfb_dnsvip_auto never turned on, no marked VIP is found -> no write_config -> byte-identical
+// runtime. Delete guard: removed iff descr == PFB_AUTO_VIP_DESCR_V4/_V6 AND subnet == the
+// address resolved from stored pfb_dnsvip4/6 (pfb_find_marked_vip) — a manual or
+// address-drifted VIP is NEVER deleted. Apply order matches upstream firewall_virtual_ip.inc.
+// PFBL-01: $interface must pass pfb_filter(PFB_FILTER_WORD) before use, else the run aborts;
+// pinned by tests/php/PfbFilterContractTest.php.
 function pfb_manage_dnsbl_vip(string $mode): void {
 	global $pfb;
 
@@ -2238,7 +2104,7 @@ function pfb_manage_dnsbl_vip(string $mode): void {
 
 	// Families to provision when creating. v4 is always managed. v6 is managed when a
 	// v6 VIP is already requested (an id stored) or the resolver listens on IPv6
-	// (Phase 3 makes v6 mandatory in that case; here we simply provision it).
+	// (provisioned here; not yet made mandatory in that case).
 	$want_v6 = !empty($pfb['dnsblconfig']['pfb_dnsvip6']) || pfb_unbound_listens_v6();
 
 	// Per-family descriptor table: marker, AF, subnet_bits, the stored-id config key.
@@ -2891,19 +2757,13 @@ function pfbng_text_area_decode($text, $mode=FALSE, $type=TRUE, $idn=FALSE) {
 }
 
 
-// Resolve a stored 'log_max_<type>' config value to the truncation limit
-// pfb_log_mgmt() should apply. The web UI stores the literal string 'nolimit'
-// for the "No Limit - Not recommended" option (pfblockerng_general.php);
-// PFB_FILTER_NUM only accepts digit strings, so running the raw value
-// through it directly silently collapses 'nolimit' to the numeric default
-// and the opt-out never takes effect (issue #713) — this helper must run on
-// the RAW config value, before any numeric filtering.
-//
-// PURE — no I/O, no globals, no side effects.
+// Resolve a stored 'log_max_<type>' config value to the truncation limit pfb_log_mgmt() should
+// apply. UI stores literal 'nolimit' for "No Limit"; PFB_FILTER_NUM accepts digits only, so
+// filtering the raw value directly silently collapses 'nolimit' to the numeric default and the
+// opt-out never takes effect (issue #713) — must run on the RAW value first. PURE.
 //
 // @param mixed $raw  Raw 'log_max_<type>' config value.
-// @return int|string  'nolimit' (skip truncation), or a positive int line
-//                      count (a numeric raw value, else the 20000 default).
+// @return int|string  'nolimit', or a positive int line count (numeric raw, else 20000 default).
 function pfb_log_max_lines($raw) {
 	if ($raw === 'nolimit') {
 		return 'nolimit';
@@ -3541,7 +3401,7 @@ function pfb_should_notify(?string $installed, ?string $latest, ?string $last_no
 }
 
 /*
- * ADR-19 Phase 3 — pkg IO wrapper + cron-driven update check (consumes the pure core).
+ * ADR-19 — pkg IO wrapper + cron-driven update check (consumes the pure core).
  *
  * The pfb_pkg_*() functions below are the ONLY new code that shells to `pkg`; isolating
  * the shellout in thin wrappers keeps pfb_software_update_check() unit-testable (the
@@ -3782,7 +3642,7 @@ function pfb_software_update_check(bool $force = FALSE, ?array $io = null): arra
 }
 
 /*
- * ADR-19 Phase 4 — provenance gate for the shipped GUI surfaces.
+ * ADR-19 — provenance gate for the shipped GUI surfaces.
  *
  * Live wrapper over the pure pfb_software_is_our_build() (ADR-19 2026-06-15
  * amendment): reads the installed package's provenance from `pkg query '%R'`
@@ -4510,7 +4370,7 @@ function pfb_hook_trigger($cron) {
  *                  'force'   => bool,
  *                  'trigger' => 'cron'|'manual'|'force' }
  *
- * ADR-43 Phase 3: 'update' gets its own 'manual' trigger identity (was 'cron' in Phase 1).
+ * ADR-43: 'update' now gets its own 'manual' trigger identity (previously 'cron').
  * PFB_TRIGGER is now derived by pfb_req_to_hook_trigger() from the struct's 'trigger' field:
  *   'cron'   → 'cron'          (scheduled cron and noupdates)
  *   'manual' → 'update'        (pfblockerng.php 'update' verb, HA-sync, settings save)
@@ -4519,8 +4379,7 @@ function pfb_hook_trigger($cron) {
  * 'noupdates' and '' (settings save / de-install) carry the same struct as 'cron'; their
  * side-channel behaviour ($pfb['save']=TRUE; no-scope-change) is handled by sync_package.
  *
- * ADR-43 Phase 1 — oracle: TriggerRequestTest.php pins this table; Phase 3 breaks
- * testUpdateVerbMapsIdenticallyToCronToday (trigger 'cron'→'manual') red→green.
+ * ADR-43 — oracle: TriggerRequestTest.php pins this table (trigger 'cron'→'manual' for 'update').
  */
 function pfb_trigger_request($verb) {
 	switch ((string) $verb) {
@@ -4529,7 +4388,7 @@ function pfb_trigger_request($verb) {
 		case 'updatednsbl':
 			return ['scope' => 'dnsbl', 'force' => TRUE,  'trigger' => 'force'];
 		case 'update':
-			// ADR-43 Phase 3: 'update' gets its own 'manual' trigger identity.
+			// ADR-43: 'update' gets its own 'manual' trigger identity.
 			// pfblockerng.php now passes 'update' (not 'cron') so the verb is distinguishable
 			// inside the pass. PFB_TRIGGER = pfb_req_to_hook_trigger('manual') = 'update'.
 			return ['scope' => 'both', 'force' => FALSE, 'trigger' => 'manual'];
@@ -4543,7 +4402,7 @@ function pfb_trigger_request($verb) {
 /*
  * Map the 'trigger' field of a pfb_trigger_request() struct to the ADR-12 PFB_TRIGGER value.
  *
- * ADR-43 Phase 3: replaces the direct pfb_hook_trigger($cron) calls in sync_package_pfblockerng()
+ * ADR-43: replaces the direct pfb_hook_trigger($cron) calls in sync_package_pfblockerng()
  * for the array (new API) path. The string path still uses pfb_hook_trigger() directly so the
  * back-compat mapping is preserved without duplication.
  *
@@ -4563,7 +4422,7 @@ function pfb_req_to_hook_trigger($trigger) {
 /*
  * Return the deprecation warning string for a legacy verb string, or '' if not deprecated.
  *
- * ADR-43 Phase 3: 'update', 'updateip', 'updatednsbl' are DEPRECATED as sync_package_pfblockerng()
+ * ADR-43: 'update', 'updateip', 'updatednsbl' are DEPRECATED as sync_package_pfblockerng()
  * string arguments. Callers should pass the explicit {scope, force, trigger} request array instead
  * (or use pfb_trigger_request($verb) to build it). Removal is scheduled for a future major release.
  *
@@ -4728,40 +4587,14 @@ function pfb_determine_list_detail($list='', $header='', $confconfig='', $key=''
 }
 
 
-// ADR-11: Return the EFFECTIVE member-file list for one aggregate action type and
-// family -- the input the Phase-3 caller hands to `pfblockerng.sh aggregate` to union
-// into pfB_<Type>_Aggregated_<fam>. Pure: it reads the per-type dir off disk and
-// returns the matching family member files; it has NO side effects and is NOT yet
-// called from the update pass (Phase 2 is behaviour-preserving).
-//
-// Type -> dir map (mirrors pfb_determine_list_detail's action -> folder routing):
-//   'Deny'   -> denydir    'Permit' -> permitdir
-//   'Match'  -> matchdir   'Native' -> nativedir
-//
-// EFFECTIVE / post-suppression -- the key Phase-4 fact:
-//   The denydir '<header>_<fam>.txt' member files are ALREADY the effective
-//   (post-suppression / post-whitelist) block set on disk. During the update pass
-//   the shell 'suppress' action (pfblockerng.sh suppress, grepcidr -vf
-//   pfbsuppression.txt) rewrites each Deny member file IN PLACE (pfblockerng.inc
-//   ~:10829-10834) BEFORE it is read into the alias (~:10836) -- and
-//   pfb_create_suppression_file() folds the user whitelist, local/DNS IPs and
-//   Permit-customlist IPs into pfbsuppression.txt. So reading denydir/*_<fam>.txt
-//   yields the effective set directly; the helper applies NO further suppression.
-//   (Phase 3 must therefore run the aggregate AFTER the per-member suppress step.)
-//
-// DNSBLIP + GeoIP fold in for FREE -- no special-casing here:
-//   DNSBLIP_<fam>.txt is deposited into the dir of its configured action
-//   ($pfb['dnsbl_ip'], e.g. Deny -> denydir) during the build loop, and each
-//   Deny-action GeoIP continent likewise lands in denydir by its action
-//   (pfblockerng.inc ~:9926, the §1.5 "GeoIP folds by action" fact). Both are plain
-//   '<header>_<fam>.txt' members in the type's dir, so this glob already includes
-//   them; a continent set to Permit/Match lands in that type's dir instead, never
-//   double-listed.
-//
-// $type   : 'Deny' | 'Permit' | 'Match' | 'Native'   (the GUI action-group labels)
-// $family : 'v4' | 'v6'
-// Returns : array of absolute member-file paths (possibly empty); [] for an unknown
-//           type/family so the caller can treat it as "nothing to aggregate".
+// ADR-11: Return the EFFECTIVE member-file list for one aggregate action type + family — the
+// input `pfblockerng.sh aggregate` unions into pfB_<Type>_Aggregated_<fam>. Pure: reads the
+// per-type dir off disk (Deny->denydir, Permit->permitdir, Match->matchdir, Native->nativedir);
+// no side effects; not yet called from the update pass. denydir's '<header>_<fam>.txt' members
+// are ALREADY the effective (post-suppression/whitelist) set — the shell 'suppress' action
+// rewrites each Deny member file in place before the alias read, so this helper must run AFTER
+// that step and applies NO further suppression. DNSBLIP + Deny-action GeoIP continents fold in
+// for free (land in denydir like any other member). $type/$family per GUI; [] if unknown.
 function pfb_aggregate_member_list($type, $family) {
 	global $pfb;
 
@@ -4914,30 +4747,14 @@ function pfb_pfctl_test_match_count(string $output): int {
 }
 
 
-// ADR-11 Phase 3: build + register the opt-in per-type aggregate ("Uber") Native aliases.
-//
-// ONE generic loop over the type->dir map {Deny,Permit,Match,Native} x family {v4,v6}.
-// For each SELECTED type ($pfb['agg_types'], CSV scalar, default none):
-//   pfb_aggregate_member_list($type,$family) -> write a memberlist file -> run
-//   `pfblockerng.sh aggregate <family> <memberlist> <aggout> <consumerout>` (cat|sort -u|
-//   iprange, mtime-gated inside the action) -> register pfB_<Type>_Aggregated_<fam> as a
-//   standard pfB `urltable` alias (mirrors the member-alias registration shape) -> load the
-//   table via `pfctl -T replace -f`. NEVER pfb_firewall_rule -- "Native" is the registration
-//   mode (no rule), regardless of which action class is being aggregated. When an aggregate
-//   is actually (re)built this pass (aggout mtime advanced), its name is merged into
-//   $pfb['changed_ip_aliases'] (emitted to the ADR-12 post-hook as PFB_CHANGED_IP_ALIASES)
-//   and into $pfb_alias_lists, so a recipe can gate its reload on the aggregate changing.
-//
-// A NON-selected type (or pfBlockerNG disabled) is torn down: its aggregate file, consumer
-// file and pf table are removed cleanly, and -- by NOT appending its name to
-// $new_aliases_list -- the caller's existing pfB orphan-prune also unlinks its alias .txt.
-//
-// Additive guarantee: nothing selected => the loop registers/builds nothing and tears down
-// nothing that exists (the aliases were never created), so the pass is byte-identical.
-//
-// $new_aliases, $new_aliases_list, $pfb_alias_lists are taken by reference (the caller's
-// alias-registration arrays); the aggregate alias entries are appended like any other pfB
-// alias so the normal config write + reconcile path carries them.
+// ADR-11: build + register the opt-in per-type aggregate ("Uber") Native aliases. ONE generic
+// loop over type->dir {Deny,Permit,Match,Native} x family {v4,v6}: each SELECTED type
+// ($pfb['agg_types']) gets a memberlist, an mtime-gated `pfblockerng.sh aggregate` run, and a
+// standard pfB urltable alias pfB_<Type>_Aggregated_<fam> (NEVER a firewall rule). A rebuilt
+// aggregate's name merges into $pfb['changed_ip_aliases']/$pfb_alias_lists (reload gating); a
+// non-selected type is torn down (files + pf table removed, omitted from $new_aliases_list so
+// the caller's orphan-prune unlinks it). Additive: nothing selected => byte-identical pass.
+// Array args are by-reference (caller's alias-registration arrays).
 function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_list, array &$pfb_alias_lists) {
 	global $pfb;
 
@@ -5029,7 +4846,7 @@ function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_li
 
 
 // ---------------------------------------------------------------------------
-// ADR-40 Phase 1 — alias reload-scope helpers (extracted from sync_package_pfblockerng)
+// ADR-40 — alias reload-scope helpers (extracted from sync_package_pfblockerng)
 // ---------------------------------------------------------------------------
 
 /**
@@ -5080,8 +4897,8 @@ function pfb_select_reload_aliases(
  * (pfblockerng.inc:14460 / :14481) — order-dependent, not deduplicated. This helper
  * captures that exact semantic: read each existing path in order and concatenate.
  *
- * Phase 3 will replace callers with pfb_canonical_alias_set() once content-addressed
- * gating is wired in. Until then this is the oracle for the current behaviour.
+ * This is the oracle for the current (pre-content-addressed) behaviour; callers move to
+ * pfb_canonical_alias_set() once content-addressed gating lands.
  *
  * @param string[] $member_paths Absolute paths to the per-feed .txt files, in the order
  *                               they should be concatenated (matches the row iteration order
@@ -5225,7 +5042,7 @@ function pfb_supp_update_active(bool $pfbadv, bool $supp_enabled): bool {
 }
 
 // ---------------------------------------------------------------------------
-// ADR-40 Phase 4 — forward-delta alias-table apply
+// ADR-40 — forward-delta alias-table apply
 // ---------------------------------------------------------------------------
 
 /** Churn-ratio threshold above which 'auto' mode falls back to -T replace (5%). */
@@ -6026,24 +5843,14 @@ function pfb_create_dnsbl($mode) {
 }
 
 
-// Resolve a SafeSearch CNAME target (e.g. safe.duckduckgo.com) to its current
-// A/AAAA via the configured external DNS server. These are the #2 baked-fallback
-// IPs written into the SafeSearch CSV (issue #149): pfb_unbound.py uses them only
-// when the live CNAME chase yields no address, and the SafeSearch freshness cron
-// re-runs this every 15 minutes to keep them current. Returns array($v4, $v6),
-// each '' when unresolved.
-//
-// Validation contract (PFBL-01): $target is built into an exec() command line
-// (escapeshellarg() supplies the quoting; $pfb['extdns'] is already
-// PFB_FILTER_IPV4-validated in pfb_global). The contract for this boundary is
-// that $target must ALSO validate as a domain via pfb_filter(PFB_FILTER_DOMAIN)
-// before any command is composed -- semantic validation and shell quoting are
-// two distinct layers (the pattern pfb_unbound_py_ccache_flush_cmds() already
-// follows). A value failing the filter is rejected: logged and returned as
-// array('', '') with no command run -- the same shape as the empty-target
-// guard, so pfb_ss_refresh_lines() keeps the prior baked IPs for a rejected
-// target exactly as it does for a failed resolution. The constant's
-// accept/reject behaviour is pinned by tests/php/PfbFilterContractTest.php.
+// Resolve a SafeSearch CNAME target (e.g. safe.duckduckgo.com) to its current A/AAAA via the
+// configured external DNS server — the baked-fallback IPs in the SafeSearch CSV (issue #149);
+// pfb_unbound.py uses them only when the live CNAME chase fails. Returns array($v4, $v6), each
+// '' when unresolved. PFBL-01: $target is built into an exec() command line (escapeshellarg()
+// handles quoting) and must ALSO validate as a domain via pfb_filter(PFB_FILTER_DOMAIN) first —
+// semantic validation and shell quoting are distinct layers. A rejected value returns array('',
+// '') with no command run (same shape as a failed resolution); pinned by
+// tests/php/PfbFilterContractTest.php.
 function pfb_ss_resolve_target($target) {
 	global $pfb;
 
@@ -6133,18 +5940,12 @@ function pfb_ss_refresh_lines(array $lines, callable $resolver) {
 	return array($out, $changed);
 }
 
-// #740 install/upgrade migration: pfBlockerNG shipped a malformed DoH-block conf entry
-// (local-zone: "yandex.dns" -- not a real hostname, so it never matched real Yandex
-// encrypted-DNS traffic) alongside its paired UI option key 'yandex.dns'. Both are now
-// replaced with the real endpoints under the 'dns.yandex' substring key. An existing
-// install with the dead 'yandex.dns' token still selected in its 'safesearch_doh_list'
-// CSV would silently lose that selection (the token now matches nothing in the
-// corrected conf), so this migrates it in place: replaces the CSV element 'yandex.dns'
-// with 'dns.yandex', preserving element order and de-duplicating against an
-// already-present 'dns.yandex'. $stored is the raw PfbConfig::read('safesearch_doh_list')
-// CSV string. Returns the rewritten CSV to persist, or NULL when there is nothing to
-// migrate (absent/empty/non-string input, or the legacy token is not present as a CSV
-// element).
+// #740 install/upgrade migration: the shipped DoH-block conf's dead 'yandex.dns' local-zone
+// token (never a real hostname) is now 'dns.yandex'; an install with 'yandex.dns' still
+// selected in its 'safesearch_doh_list' CSV would silently lose that selection. Migrates the
+// CSV in place: replaces 'yandex.dns' with 'dns.yandex' (preserving order, de-duplicating
+// against an existing 'dns.yandex'). $stored is the raw CSV string; returns the rewritten CSV,
+// or NULL when nothing to migrate (absent/empty/non-string input, or token not present).
 function pfb_ss_doh_list_yandex_migrate($stored) {
 
 	if (!is_string($stored) || $stored === '') {
@@ -6391,18 +6192,12 @@ function pfb_unbound_python_whitelist($mode='') {
 }
 
 
-// ADR-06: Collect the user DNSBL whitelist as a normalised list of source lines
-// for the Python build manifest (config.user_whitelist). The Python build performs
-// the www-strip / leading-dot->wildcard normalisation itself (pfb_unbound.py
-// _dnsbl_normalise_whitelist), so this hands the RAW suppression lines through.
-//
-// Validation contract (PFBL-01): the suppression textarea is free-form user input
-// and pfbng_text_area_decode() only normalises encoding (no domain validation), yet
-// each line lands in the manifest (config.user_whitelist) and from there in the
-// query-time whiteDB. Each line must validate via pfb_filter(PFB_FILTER_DOMAIN)
-// before it is returned -- the filter accepts the leading-dot wildcard form
-// ('.example.com') as well as plain domains. A line failing the filter is
-// SKIPPED + logged (list iteration), never silently dropped.
+// ADR-06: Collect the user DNSBL whitelist as normalised source lines for the Python build
+// manifest (config.user_whitelist); Python does the www-strip/leading-dot->wildcard
+// normalisation itself, so this hands the RAW suppression lines through. PFBL-01: each line
+// (free-form textarea input) must validate via pfb_filter(PFB_FILTER_DOMAIN) — accepting the
+// leading-dot wildcard form — before it reaches the manifest and query-time whiteDB; a failing
+// line is SKIPPED + logged, never silently dropped.
 function pfb_dnsbl_whitelist_lines() {
 	global $pfb;
 
@@ -6427,25 +6222,14 @@ function pfb_dnsbl_whitelist_lines() {
 	return $out;
 }
 
-// ADR-06 (#51): collect the TEMPORARY per-alert DNSBL unlock store
-// ($pfb['dnsbl_unlock'], a CSV of "domain,type" rows toggled by the alerts
-// Lock/Unlock icon) as a normalised list of domains for the Python build manifest
-// (config.user_unlock). The Python build merges these into whiteDB as band-6 user
-// allows (same shape as config.user_whitelist) so an unlocked domain resolves. This
-// store is deliberately temporary: it lives in /tmp and a full update / Force / Cron
-// deletes it (pfb_update_unbound), so a FULL build emits an EMPTY user_unlock and the
-// rebuilt manifest re-locks every unlock (the "re-locked on Cron/Force" behaviour
-// documented in the alerts icon tooltip). Only pfb_unbound_python_sources_unlock()
-// (the incremental alerts path) feeds the live store into the manifest.
-//
-// Validation contract (PFBL-01): the alerts handler filters the POSTed domain with
-// pfb_filter(PFB_FILTER_DOMAIN) before it enters the store, but the store itself is
-// a plain file under /tmp re-read here later -- so this reader is a boundary of its
-// own and must not trust the file contents (same posture as
-// pfb_unbound_py_ccache_flush_cmds() towards its callers). Each domain read from
-// the store re-validates via pfb_filter(PFB_FILTER_DOMAIN) before it is placed
-// into the manifest (config.user_unlock); a row failing the filter is SKIPPED
-// + logged.
+// ADR-06 (#51): collect the TEMPORARY per-alert DNSBL unlock store ($pfb['dnsbl_unlock'], CSV
+// "domain,type" rows toggled by the alerts Lock/Unlock icon) as domains for the Python build
+// manifest (config.user_unlock), merged into whiteDB as band-6 user allows. Deliberately
+// temporary: lives in /tmp, deleted by a full update/Force/Cron, so a FULL build emits an EMPTY
+// user_unlock and re-locks every unlock (documented in the alerts icon tooltip); only the
+// incremental alerts path feeds the live store into the manifest. PFBL-01: the store is a plain
+// file re-read here, so this reader is its own trust boundary — each domain re-validates via
+// pfb_filter(PFB_FILTER_DOMAIN) before entering the manifest; a failing row is SKIPPED + logged.
 function pfb_dnsbl_unlock_lines() {
 	global $pfb;
 
@@ -6538,21 +6322,12 @@ function pfb_strip_trailing_port($line) {
 }
 
 
-// ADR-22: the non-lite scheme strip, gated on the 'pfb_dnsbl_lenient' toggle.
-//
-// No '://' present  -> return the line unchanged (no scheme to strip).
-//
-// $strict === FALSE (lenient -- today's behaviour, byte-identical): strip everything up to
-// and including the FIRST '://' and return the remainder (paths/query/port handled
-// downstream). strpos() finds the first '://' anywhere, so the permissive cases
-// ('123://evil.com', '://evil.com', mid-token schemes) are accepted exactly as before. The
-// $strict parameter DEFAULTS to FALSE so callers (and the Phase-1 oracle tests) that pass no
-// second argument observe this unchanged behaviour.
-//
-// $strict === TRUE (lenient OFF): validate the text before '://' against the RFC 3986 scheme
-// grammar (ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )); an invalid scheme returns FALSE.
-// A single trailing '/' (root path) is normalised away; any remaining '/' is an actual path
-// and returns FALSE. A FALSE return tells the caller to skip + log the line (ADR §2.3/§2.4).
+// ADR-22: the non-lite scheme strip, gated on the 'pfb_dnsbl_lenient' toggle. No '://' ->
+// line unchanged. $strict === FALSE (lenient, today's default/byte-identical): strip through
+// the FIRST '://' (permissive: '123://evil.com', '://evil.com', mid-token schemes all accepted,
+// matching legacy behaviour). $strict === TRUE (lenient OFF): the text before '://' must match
+// the RFC 3986 scheme grammar; a single trailing '/' is normalised away, any other '/' is a
+// real path -> FALSE. FALSE tells the caller to skip + log the line (ADR §2.3/§2.4).
 function pfb_dnsbl_strip_scheme(string $line, bool $strict = FALSE): string|false {
 	$pos = strpos($line, '://');
 	if ($pos === FALSE) {
@@ -6716,7 +6491,7 @@ function pfb_unbound_py_atomic_write($path, $content) {
 // ADR-10 P5: flip the zero-downtime RELOAD SENTINEL (the all-or-nothing commit that
 // wakes the Python reload-watcher). The sentinel host path is /var/unbound/pfb_py_reload
 // (Unbound is chrooted at /var/unbound; the module opens it as the chroot-relative
-// "pfb_py_reload" -- RESULTS/04 SS1). Its content is a monotonically NON-DECREASING
+// "pfb_py_reload"). Its content is a monotonically NON-DECREASING
 // base-10 integer GENERATION on the FIRST LINE. The watcher swaps IFF the freshly-read
 // generation is a STRICT ADVANCE over its last-seen value, so we write current+1 (or 1
 // when the sentinel is absent/empty/non-integer). The write is atomic (stage -> fsync ->
@@ -6782,16 +6557,12 @@ function pfb_unbound_py_wait_marker($path, $target, $timeout_s) {
 }
 
 
-// ADR-10: wait (bounded) for the reload-watcher to APPLY a published generation.
-// After flipping the sentinel to $gen, PHP blocks here until the watcher writes a value
-// >= $gen to the applied marker (/var/unbound/pfb_py_reload.applied), so the data fast
-// path returns only once the new lists are LIVE -- restoring the "lists live on return"
-// invariant the restart had (the ADR-12 post hook + the #51 alert page then observe the
-// new state, not a pending swap). Queries NEVER stop: the old snapshot keeps serving
-// during the wait, so this stays zero-downtime/zero-dropped. Returns TRUE once applied;
-// FALSE on timeout -- the caller then falls back to the restart so the lists still load
-// (fail-safe). The watcher's poll cadence (RELOAD_POLL_INTERVAL ~2s) + the rebuild time
-// bound the latency; the default budget covers a large ABP rebuild.
+// ADR-10: wait (bounded) for the reload-watcher to APPLY a published generation. After
+// flipping the sentinel to $gen, blocks until the watcher writes a value >= $gen to the applied
+// marker (/var/unbound/pfb_py_reload.applied) — restoring the "lists live on return" invariant
+// the restart had. Queries NEVER stop during the wait (zero-downtime/zero-dropped). Returns
+// TRUE once applied; FALSE on timeout, where the caller falls back to the restart (fail-safe).
+// Poll cadence (~2s) + rebuild time bound the latency; the default budget covers a large ABP rebuild.
 function pfb_unbound_py_wait_applied($gen, $timeout_s = 30) {
 	global $pfb;
 
@@ -6872,23 +6643,14 @@ function pfb_unbound_py_atomic_write_root($path, $content) {
 }
 
 
-// PFBL-03: root-only DNSBL-control writer. Validates the command + its argument (the
-// SEMANTIC layer -- a bypass IP through pfb_filter(PFB_FILTER_IP), a duration through
-// pfb_filter(PFB_FILTER_NUM) clamped to 1-3600), assembles a small JSON record carrying a
-// monotonically-advancing SEQUENCE, and atomically publishes it to the local privileged
-// command channel with the root:unbound 0640 permission model (pfb_unbound_py_atomic_write_root).
-// The control-watcher in pfb_unbound.py consumes a record only when its seq advances
-// (exactly-once + replay safety) and re-validates every argument again before any side
-// effect, so this writer and the reader form a dual-validation boundary.
-//
-//   $cmd      one of disable|enable|addbypass|removebypass
-//   $ip       required for addbypass/removebypass (a v4/v6 literal); ignored otherwise
-//   $duration optional seconds (1-3600) for disable/addbypass; ignored otherwise
-//
-// Returns the published sequence (>= 1) on success, or FALSE on an invalid command /
-// invalid argument / lock failure / write failure. No die()/exit().
-// $wait_timeout: seconds to wait for the watcher to apply the command (default 5).
-//   <= 0 = fire-and-forget (skip the wait entirely, return the seq immediately).
+// PFBL-03: root-only DNSBL-control writer. Validates command + argument (bypass IP via
+// PFB_FILTER_IP, duration via PFB_FILTER_NUM clamped 1-3600), assembles a JSON record with a
+// monotonically-advancing SEQUENCE, and atomically publishes to the privileged command channel
+// (root:unbound 0640, pfb_unbound_py_atomic_write_root). pfb_unbound.py's control-watcher
+// consumes a record only when its seq advances and re-validates every argument itself — writer
+// + reader form a dual-validation boundary. $cmd: disable|enable|addbypass|removebypass; $ip
+// required for add/removebypass; $duration optional 1-3600s. Returns the published sequence
+// (>= 1) or FALSE on failure; $wait_timeout <= 0 = fire-and-forget.
 function pfb_unbound_py_write_control($cmd, $ip = '', $duration = '', $wait_timeout = 5) {
 	global $pfb;
 
@@ -6982,16 +6744,13 @@ function pfb_unbound_py_write_control($cmd, $ip = '', $duration = '', $wait_time
 }
 
 
-// ADR-10 P5: PRIMARY RAM gate for the zero-downtime swap (the Python watcher re-checks
-// it as a safety net -- RESULTS/04 SS3). The background rebuild holds the OLD and NEW
-// matcher structures resident at once (~2x transient); on a constrained box that bust
-// would OOM mid-swap (RESULTS/01 SS2: 785.9 MiB both-resident at ABP scale busts a 1 GB
-// box). Mirror the Python projection: 2 * loaded_entries * 276 B + a 64 MiB headroom,
-// measured against hw.usermem (physical RAM the OS can hand out). Returns TRUE when the
-// projected build FITS (zero-downtime allowed); FALSE -> the caller must take the restart
-// fallback so the new lists actually load. Unknown RAM / unknown count -> FALSE
-// (fail-closed: when in doubt, restart -- which never doubles, it frees the old set by
-// dying before rebuilding).
+// ADR-10 P5: PRIMARY RAM gate for the zero-downtime swap (the Python watcher re-checks it as a
+// safety net). The background rebuild holds OLD + NEW matcher structures resident at once
+// (~2x transient); on a constrained box that bust would OOM mid-swap. Mirrors the Python
+// projection: 2 * loaded_entries * 276 B + 64 MiB headroom, measured against hw.usermem.
+// Returns TRUE when the projected build FITS (zero-downtime allowed); FALSE -> the caller
+// takes the restart fallback. Unknown RAM/count -> FALSE (fail-closed: restart never doubles,
+// frees the old set by dying before rebuilding).
 function pfb_unbound_py_swap_fits_ram() {
 	global $pfb;
 
@@ -7043,17 +6802,11 @@ function pfb_sanitise_feed_header(string $header, string $reference = 'pfb_sanit
 }
 
 
-// ADR-31 P3: Build a single per-feed manifest row for $pfb_py_feeds[]. Extracted
-// from the DNSBL download loop so the DNSWL section (Phase 4) can reuse the same
-// structure parameterised by $mode.
-//
-// $mode = 'deny'   → omit the 'mode' key (byte-identical with pre-ADR-31 deny entries;
-//                    Python treats absent as deny — Phase 2 contract).
-// $mode = 'permit' → add 'mode' => 'permit' to the row (Phase 4 DNSWL feeds).
-//
-// No file I/O, no exec, no validation side-effects — pure array construction; the
-// producing loops have already validated $header (PFB_FILTER_WORD) and resolved
-// $format/$provenance before calling here.
+// ADR-31: Build a single per-feed manifest row for $pfb_py_feeds[], parameterised by $mode so
+// DNSWL feeds can reuse the same structure as DNSBL. $mode = 'deny' omits the 'mode' key
+// (byte-identical with pre-ADR-31 entries; Python treats absent as deny); $mode = 'permit' adds
+// 'mode' => 'permit'. No file I/O, no exec, no validation side-effects — pure array
+// construction; callers have already validated $header and resolved $format/$provenance.
 function pfb_feed_manifest_row(string $header, string $group, string $log_flag,
 	string $format, string $provenance, string $mode = 'deny'): array
 {
@@ -7072,43 +6825,14 @@ function pfb_feed_manifest_row(string $header, string $group, string $log_flag,
 }
 
 
-// ADR-06: Build the shell->Python contract. Writes the per-feed manifest
-// ($pfb['unbound_py_sources']) plus a per-feed IP-stripped raw file (one bare,
-// lower-cased domain per line) referenced by the manifest. The Python plugin's
-// init (pfb_unbound.py dnsbl_build_from_manifest) consumes this to build the
-// DNSBL structures from raw -- replacing the previous data/zone CSV load.
-//
-// For 'plain' feeds the per-feed raw is the bare-domain extraction of the already-
-// parsed per-feed '.txt' (col1 of the 6-col CSV produced by the download loop). The
-// download loop already routes embedded IPs to the firewall '*_v4.ip' path and
-// excludes them from '.txt', so the raw handed to Python carries NO bare-IP lines
-// (ADR-06 §3b; Python would ignore stray IPs anyway). PHP has already done all
-// per-format extraction (hosts/CSV/IDN), so Python only revalidates + lower-cases
-// the bare domains -- decision-equivalent.
-//
-// ADR-07 P8: ABP/EasyList feeds are tagged format_hint='abp' (via the row 'format'
-// key, set from $easylist in the download loop). Their '.txt' holds RAW ABP lines
-// (the PHP lite parser is deleted) which are copied to the per-feed raw VERBATIM, so
-// the full DNS-only ABP parser in Python (parse_abp: @@/regex/$important/$badfilter)
-// sees them intact. Non-ABP feeds stay 'plain' exactly as ADR-06 left them.
-//
-// $feeds: array of rows [ 'header' => <feed>, 'group' => <alias>, 'log' => <flag>,
-//         'format' => 'abp'|'plain', 'provenance' => 'user'|'feed' ]. ADR-07: a
-//         Custom_List ({alias}_custom) row is 'user' -> the Python build bands it as a
-//         sovereign user block (5); a downloaded feed is 'feed' -> band 1.
-//
-// Validation contract (PFBL-01): each row's 'header' names the per-feed source
-// '.txt' and staged '.raw' files and becomes the manifest 'feed'/'raw' keys. The
-// producing loops already validate headers with pfb_filter(PFB_FILTER_WORD) (e.g.
-// 'DNSBL - Processes'), but this writer is the choke point for every path derived
-// from a header and RE-validates each one via pfb_sanitise_feed_header() before
-// use -- it must not trust its callers (the posture
-// pfb_unbound_py_ccache_flush_cmds() documents). Note PFB_FILTER_WORD is the
-// correct constant here, NOT PFB_FILTER_DOMAIN: headers are \w-only list labels
-// (no dots), so the DOMAIN filter would reject every legal header. A row whose
-// header fails the filter is SKIPPED + logged, before any file is touched. The
-// constant's accept/reject behaviour is pinned by
-// tests/php/PfbFilterContractTest.php.
+// ADR-06: Build the shell->Python contract: the per-feed manifest ($pfb['unbound_py_sources'])
+// plus a per-feed IP-stripped raw domain file that pfb_unbound.py's dnsbl_build_from_manifest
+// consumes. 'plain' feeds: raw is the bare-domain extraction of the parsed '.txt' (IPs already
+// routed elsewhere). ADR-07: 'abp' feeds copy their RAW '.txt' lines verbatim so Python's
+// parse_abp sees them intact. $feeds rows: header/group/log/format/provenance ('user'
+// Custom_List -> band 5, 'feed' download -> band 1). PFBL-01: RE-validates each header via
+// pfb_sanitise_feed_header() (PFB_FILTER_WORD, not DOMAIN); a failing row is SKIPPED + logged
+// before any file touch; pinned by tests/php/PfbFilterContractTest.php.
 function pfb_unbound_python_sources($feeds) {
 	global $pfb;
 
@@ -7332,16 +7056,12 @@ function pfb_unbound_python_sources_unlock() {
 }
 
 
-// ADR-06 (#51): map a per-alert DNSBL Lock/Unlock action (the dnsbl_remove POST
-// value) to its temporary-unlock STORE operation + status message. Extracted from
-// the pfblockerng_alerts.php handler so the four-way dispatch is unit-testable (every
-// branch covered, not just the unlock/lock paths the smoke matrix observes). The four
-// icon actions collapse onto two pfb_unlock modes: unlock/relock ADD the domain to
-// the store ('unlock'), lock/reunlock REMOVE it ('lock'). An UNKNOWN action returns an
-// empty mode so the handler does NOTHING -- a crafted POST cannot mutate the store
-// (the old inline `else` treated any non-unlock/relock value as a REMOVE). 'msg'
-// carries a single %s for the domain (sprintf in the handler); empty for an unknown
-// action so the redirect shows no status.
+// ADR-06 (#51): map a per-alert DNSBL Lock/Unlock action (dnsbl_remove POST value) to its
+// temporary-unlock STORE operation + status message. The four icon actions collapse onto two
+// pfb_unlock modes: unlock/relock ADD the domain ('unlock'), lock/reunlock REMOVE it ('lock').
+// An UNKNOWN action returns an empty mode so the handler does NOTHING — a crafted POST cannot
+// mutate the store. 'msg' carries a single %s for the domain (sprintf in the handler); empty
+// for an unknown action so the redirect shows no status.
 function pfb_dnsbl_unlock_action($action) {
 	switch ($action) {
 		case 'unlock':
@@ -8058,30 +7778,14 @@ function pfb_unbound_py_mode_active() {
 }
 
 
-// ADR-10 P5: C-cache flip for a zero-downtime swap. Staleness is ONE-DIRECTIONAL
-// (RESULTS/01 SS4b, Context 7): since #43 DNSBL blocks set qstate.no_cache_store=1 so a
-// block reply is NEVER in Unbound's message cache. So:
-//   block->allow (unlock / name removed): IMMEDIATE -- nothing to flush (the swap's
-//     decisionDB.clear() inside the module is all it needs).
-//   allow->block (lock / name added): the previously-RESOLVED real answer is still cached
-//     and serves until its TTL. ONLY this direction needs a flush, and ONLY for names
-//     whose new verdict is "blocked".
-// $names: the newly-blocked names (allow->block delta). For an alerts Lock this is the
-// single known domain (exact, cheap); a feed/cron update's delta is not cheaply
-// computable here, so the caller passes none and we accept TTL-bounded staleness -- NOT a
-// regression (today's restart preserves the resolved cache, so today is stale too).
-// Coalesced into ONE chroot unbound-control session and gated behind the DNSBL-queries
-// daemon's '.sync' suppression marker (touched by pfb_update_unbound / the fast path) so
-// the flush does not collide with the daemon on the control socket.
-// Build the coalesced unbound-control C-cache flush command list for the newly-blocked
-// names. Each name is VALIDATED as a domain via pfb_filter() (issue #153) before it can be
-// interpolated into a command: a non-domain / shell-metachar entry is DROPPED, never
-// reaching the exec() in pfb_unbound_py_ccache_flush() -- defence in depth atop the
-// escapeshellarg() below (the names already arrive PFB_FILTER_DOMAIN-filtered from the
-// alerts page, but this choke point must not trust its input). Returns the full command
-// strings (chroot_cmd-prefixed, each variant escapeshellarg'd), de-duplicated across each
-// name + its 'www.' sibling. Pure (no globals / side effects) so every branch is
-// unit-testable off-appliance (the exec lives in the wrapper below).
+// ADR-10 P5: C-cache flip for a zero-downtime swap. Staleness is ONE-DIRECTIONAL: since #43
+// DNSBL blocks set qstate.no_cache_store=1, a block reply is NEVER cached. block->allow needs
+// NO flush (decisionDB.clear() suffices); allow->block leaves the previously-resolved answer
+// cached until TTL, so ONLY that direction needs a flush, ONLY for newly-blocked names. $names:
+// the allow->block delta (alerts Lock passes one domain; feed/cron pass none, accepting
+// TTL-bounded staleness — no regression, a restart is equally stale). Each name is VALIDATED as
+// a domain (issue #153) before interpolation, dropped otherwise — defence in depth atop
+// escapeshellarg(). Pure; coalesced into ONE chroot session, de-duped per name + 'www.' sibling.
 function pfb_unbound_py_ccache_flush_cmds($names, $chroot_cmd) {
 	$cmds = array();
 	if (!is_array($names) || empty($names)) {
@@ -8126,18 +7830,12 @@ function pfb_unbound_py_ccache_flush($names) {
 }
 
 
-// Reload Resolver
-//
-// ADR-10 P5: $datapath signals a pure DNSBL-DATA update (feed/cron, or a #51 user
-// custom-list Lock/Unlock/whitelist edit) that has already been published atomically to
-// the manifest. When the python integration is the live mode, unbound is running, no
-// config change is pending, and the projected ~2x build fits RAM, such an update takes
-// the ZERO-DOWNTIME fast path: flip the reload sentinel (the module rebuilds + swaps off
-// the query threads) with NO unbound restart. $newly_blocked carries the allow->block
-// delta to flush from the C-cache after the swap (a #51 Lock passes the one locked name;
-// feed/cron pass none -> accepted TTL-bounded staleness). Any other case -- a config
-// change, the feature unavailable, or the RAM gate declining -- falls back to the restart
-// (the fail-safe; PHP is the PRIMARY gate so we never "flip and hope").
+// Reload Resolver. ADR-10 P5: $datapath signals a pure DNSBL-DATA update (feed/cron or a #51
+// custom-list edit) already published atomically to the manifest. When python is live, unbound
+// is running, no config change is pending, and the RAM gate fits, this takes the ZERO-DOWNTIME
+// fast path (flip the reload sentinel, no restart). $newly_blocked carries the allow->block
+// delta to flush from the C-cache after the swap. Any other case falls back to the restart
+// (fail-safe; PHP is the PRIMARY gate — never "flip and hope").
 function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FALSE, $newly_blocked=array()) {
 	global $g, $pfb;
 
@@ -8392,7 +8090,7 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython) {
 		// change ($pfbpython TRUE) -> $datapath FALSE -> the restart path. The feed delta
 		// (allow->block names) is not cheaply computable here, so no targeted C-cache
 		// flush is passed -> accepted TTL-bounded staleness (no worse than the restart,
-		// which preserves the resolved cache too -- RESULTS/01 SS4b).
+		// which preserves the resolved cache too).
 		$datapath = !$pfbpython;
 		pfb_reload_unbound($mode, TRUE, $pfbpython, $datapath);
 	}
@@ -8422,7 +8120,7 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython) {
 	$log = "\nDNSBL update [ feed lines: {$dnsbl_cnt} | loaded entries: {$loaded_cnt} ]... completed [ NOW ]";
 	pfb_logger("{$log}", 1);
 
-	// ADR-48 Phase 4 (issue #789): emit stage=entries reject lines for any feed
+	// ADR-48 (issue #789): emit stage=entries reject lines for any feed
 	// with a nonzero per-entry tally, BEFORE clearing work files.
 	pfb_emit_entry_reject_stats($pfb['unbound_py_reject_stats']);
 
@@ -8718,17 +8416,12 @@ function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 }
 
 
-// IPv6 sibling of sanitize_ipaddr(): exclude private/reserved/loopback IPv6
-// addresses from loaded block lists when Suppression is enabled. A downloaded
-// feed's explicit /0 is clamped to a single host (issue #744); otherwise the
-// entry is returned unchanged when kept, nothing (dropped) when excluded.
-// Also drops documentation (RFC 3849), multicast and the NAT64 well-known
-// prefix (RFC 6052), which the PHP filter flags leave routable (issue #760).
-// These are explicit prefix checks rather than another filter flag, so the
-// behaviour is independent of PHP's patch level (the RFC 6890 refactor in
-// PHP 8.3.16/8.4.3 moved 2001:db8::/32 between filter sets). $pfbcidr is the
-// per-category Advanced "Suppression CIDR Limit" floor (issue #760 §3), the
-// v6 sibling of sanitize_ipaddr()'s $pfbcidr.
+// IPv6 sibling of sanitize_ipaddr(): excludes private/reserved/loopback IPv6 from loaded block
+// lists when Suppression is enabled; a feed's explicit /0 clamps to a single host (issue #744).
+// Also drops documentation (RFC 3849), multicast, and the NAT64 prefix (RFC 6052), which PHP's
+// filter flags leave routable (issue #760) — explicit prefix checks so behaviour is independent
+// of PHP's patch level (RFC 6890 moved 2001:db8::/32 between filter sets in 8.3.16/8.4.3).
+// $pfbcidr: per-category Advanced "Suppression CIDR Limit" floor (issue #760 §3).
 function sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr = 'Disabled') {
 	global $pfb;
 
@@ -8866,7 +8559,7 @@ function find_reported_header($ip, $pfbfolder, $geoip=FALSE) {
 			exec("{$pfb['grep']} -s {$query_esc} {$pfb['ccdir']}/*.txt /dev/null | {$pfb['grep']} -v '{$geoip_list}' 2>&1", $result);
 		}
 
-		// issue #809 Phase 3b: the CIDR-selection loop (collect CIDR-shaped candidates
+		// issue #809: the CIDR-selection loop (collect CIDR-shaped candidates
 		// from $result, then walk them doing the v4 mask math / v6 gen_subnetv6 +
 		// Net_IPv6::isInNetmask() match) is extracted to pfb_match_reported_cidr() so the
 		// batched pfb_find_reported_headers() sibling below can reuse the EXACT same logic
@@ -8885,8 +8578,8 @@ function find_reported_header($ip, $pfbfolder, $geoip=FALSE) {
 }
 
 
-// Shared CIDR-selection core of find_reported_header()'s prefix-match branch (issue #809
-// Phase 3b): given the RAW grep output lines already collected for a first-octet (v4) or
+// Shared CIDR-selection core of find_reported_header()'s prefix-match branch (issue #809):
+// given the RAW grep output lines already collected for a first-octet (v4) or
 // prefix (v6) query, parse out every CIDR-shaped candidate and return the first one
 // containing $ip, or NULL if none does. find_reported_header() calls this on its own
 // single-host $result array (behaviour unchanged); the batched pfb_find_reported_headers()
@@ -8937,28 +8630,16 @@ function pfb_match_reported_cidr(array $result, string $ip, bool $v4_type): ?arr
 }
 
 
-// issue #809 Phase 3b: the exact per-row query derivation convert_ip_log()
-// (pfblockerng_alerts.php) needs before it can validate/re-locate a reported IP --
-// extracted VERBATIM (same order, same values) so the batched prefetch pass below
-// (pfb_ip_prefetch()) can derive the IDENTICAL lookup groups from a copy of the same
-// $fields, with no separate re-derivation to drift from convert_ip_log()'s own logic.
-// $fields must already be in convert_ip_log()'s POST-REORDER shape (called AFTER that
-// function's own `$fields[99] = array_shift($fields);` line) -- the reorder itself is not
-// part of what this derivation consumes, so it stays in the caller, unchanged.
+// issue #809: the exact per-row query derivation convert_ip_log() (pfblockerng_alerts.php)
+// needs before validating/re-locating a reported IP — extracted VERBATIM so the batched
+// prefetch pass (pfb_ip_prefetch()) derives IDENTICAL lookup groups from the same $fields.
+// $fields must already be in convert_ip_log()'s POST-REORDER shape (called AFTER
+// `$fields[99] = array_shift($fields);`).
 //
-// Returns:
-//   host              - the reported IP/CIDR host (SRC on inbound, DST on outbound)
-//   hostname          - array('src'=>.., 'dst'=>..), RAW (not yet htmlencoded)
-//   pfb_geoip         - TRUE iff the row's alias name is a GeoIP continent alias
-//   field15           - $fields[15], with any Proofpoint IQRisk 'Category:Feed' prefix
-//                        stripped (render-visible -- the caller must write this back)
-//   folder            - the feed-dir glob this row's IP is checked against
-//   validate_file_cmd - the "find <folder> -type f <prefix> <query> <query_host>" pipe
-//                        (no ip pattern yet) that GROUPS rows for the batched validate
-//                        round below, or NULL when this row never runs a validate exec at
-//                        all (mirrors the guard on validate_cmd)
-//   validate_cmd      - the exact validate command convert_ip_log() execs (and memoizes,
-//                        keyed by this string), or NULL under the same guard
+// Returns: host (reported IP/CIDR); hostname (array('src','dst'), RAW); pfb_geoip (TRUE iff a
+// GeoIP continent alias); field15 (Proofpoint IQRisk prefix stripped, render-visible — caller
+// writes back); folder (feed-dir glob); validate_file_cmd/validate_cmd (row-grouping find pipe
+// / exact memoized validate command, each NULL when this row never validates).
 function pfb_ip_render_query(array $fields): array {
 	global $pfb, $continents;
 
@@ -9048,14 +8729,13 @@ function pfb_ip_render_query(array $fields): array {
 }
 
 
-// issue #809 Phase 3b: promotes convert_ip_log()'s two Phase-1 function-static memo stores
-// ($validate_memo / $ip_miss_memo, pfblockerng_alerts.php) to a reference-returning
-// accessor so the batched prefetch pass below (pfb_ip_prefetch()) can seed them from
-// OUTSIDE convert_ip_log(). Same one-page-load lifetime as before (a static local, just
-// declared here instead of inside convert_ip_log()). No reset is needed between the three
-// per-type IP tables rendered on one page load: every key is content-derived (the exact
-// validate command string, or "$host|$folder") and therefore stable regardless of which
-// table populated it first -- the same reasoning as the original Phase 1 memos.
+// issue #809: promotes convert_ip_log()'s two function-static memo stores ($validate_memo /
+// $ip_miss_memo, pfblockerng_alerts.php) to a reference-returning accessor so the batched
+// prefetch pass below (pfb_ip_prefetch()) can seed them from OUTSIDE convert_ip_log(). Same
+// one-page-load lifetime as before (a static local, just declared here). No reset is needed
+// between the three per-type IP tables rendered on one page load: every key is content-derived
+// (the exact validate command string, or "$host|$folder") and therefore stable regardless of
+// which table populated it first.
 function &pfb_ip_render_memos(): array {
 	static $memos = array('validate' => array(), 'miss' => array());
 	return $memos;
@@ -9089,17 +8769,13 @@ function pfb_prefetch_pattern_file_write_ok($written, string $data): bool {
 }
 
 
-// Run ONE batched `grep -f <patternfile>` pass (issue #809 Phase 3b), sharing the pattern-
-// file plumbing across every IP-table batched round (validate / miss-header / aliastables)
-// below. Returns every matched line (not a first-match map, unlike pfb_dnsbl_prefetch_grep())
-// since callers here attribute possibly-many lines per candidate themselves (see
-// pfb_ip_prefetch_last_match()). The pattern-file path is inserted between $cmd_prefix and
-// $cmd_suffix verbatim (no sprintf/format-string parsing of caller-supplied paths).
-//
-// B3/R1 (issue #809 review): returns NULL -- distinct from a genuine empty-array no-match
-// result -- when the pattern file itself could not be created or fully written (a full or
-// read-only temp dir). Every caller must treat NULL as "this batched pass did not run" and
-// leave the rows it would have covered UNSEEDED, never seed a false negative from it.
+// Run ONE batched `grep -f <patternfile>` pass, sharing the pattern-file plumbing across every
+// IP-table batched round (validate / miss-header / aliastables) below. Returns every matched
+// line (not a first-match map, unlike pfb_dnsbl_prefetch_grep()) since callers attribute
+// possibly-many lines per candidate themselves. The pattern-file path is inserted between
+// $cmd_prefix and $cmd_suffix verbatim (no sprintf/format-string parsing). Returns NULL —
+// distinct from a genuine empty-array no-match — when the pattern file could not be created or
+// fully written; every caller must treat NULL as "did not run" and leave rows UNSEEDED.
 function pfb_ip_prefetch_grep_lines(string $cmd_prefix, string $cmd_suffix, array $patterns): ?array {
 
 	$lines = array();
@@ -9129,30 +8805,14 @@ function pfb_ip_prefetch_grep_lines(string $cmd_prefix, string $cmd_suffix, arra
 }
 
 
-// Attribute the LAST line in $lines (grep's original file/line order is preserved
-// regardless of pattern order) that "belongs" to $raw_prefix -- reproducing the "last line
-// of output" semantics a per-row single-pattern exec() call gives (PHP's exec() without an
-// $output array returns only the last stdout line), from a batched multi-pattern grep pass
-// whose output interleaves every candidate's matches together (issue #809 Phase 3b).
-//
-// A line belongs to $raw_prefix under either shape grep can emit:
-//   - unprefixed (the `find` pipeline matched exactly one file): the line IS the file
-//     content, so a direct prefix match applies;
-//   - file-prefixed (more than one file matched): grep emits "path:content", where the
-//     path is one of THIS module's own absolute glob results -- always containing '/' --
-//     so the substring after the FIRST ':' is unambiguously the content, and that is what
-//     must carry the prefix.
-// This deliberately preserves grep's own prefix-match quirk (an anchored `^1\.2\.3\.4`
-// pattern also matches content beginning `1.2.3.45`) -- the per-row exec has the identical
-// quirk, so reproducing it (rather than an exact-match) is what keeps this behaviour-
-// identical to the code it replaces.
-//
-// N1 (issue #809 review): the colon-fallback used to apply on ANY ':' in the line, which
-// misattributed an UNPREFIXED IPv6 content line (its OWN ':' is part of the address, not a
-// path separator) whenever the tail after that first ':' happened to equal $raw_prefix.
-// Guarded now by requiring the segment BEFORE that ':' to look like a path (contain '/') --
-// true of every real "path:content" line this module ever greps, and never true of a bare
-// IPv6 literal.
+// Attribute the LAST line in $lines (grep's original order is preserved regardless of pattern
+// order) that "belongs" to $raw_prefix — reproducing per-row exec()'s "last stdout line"
+// semantics from a batched multi-pattern grep pass whose output interleaves every candidate's
+// matches. A line belongs under either grep shape: unprefixed (single file matched, line IS
+// the content) or file-prefixed ("path:content", path always contains '/', so the substring
+// after the FIRST ':' is the content) — preserving grep's own prefix-match quirk (`^1.2.3.4`
+// also matches `1.2.3.45`) for behaviour-identity with the exec it replaces. The colon-fallback
+// requires the segment BEFORE ':' to contain '/', else an unprefixed IPv6 line could misattribute.
 function pfb_ip_prefetch_last_match(array $lines, string $raw_prefix): ?string {
 
 	$match = NULL;
@@ -9172,26 +8832,15 @@ function pfb_ip_prefetch_last_match(array $lines, string $raw_prefix): ?string {
 }
 
 
-// Batched sibling of find_reported_header() (issue #809 Phase 3b): resolves every host in
-// $hosts against the SAME $pfbfolder/$geoip via one exact-match Round-A pass over ALL
-// hosts, followed -- for any host Round A missed -- by Round B: one grep per DISTINCT
-// first-octet (v4) / prefix (v6) group among the still-missing hosts (issue #809 review,
-// R3: best case one shared pass when every miss shares a prefix, worst case one PER HOST
-// under fully-diverse prefixes -- corrects an earlier "at most two batched grep passes"
-// docblock, which did not account for Round B's per-group multiplicity). At most two
-// batched exec()s touch any ONE host (its Round-A pass, and -- if missed -- its own
-// Round-B group's pass), replacing one-to-two exec() calls run independently per host.
-// Returns a map host => $pfb_query (['Unknown','Unknown'] on a total miss, matching
-// find_reported_header()'s own return shape).
-//
-// B3 (issue #809 review): Round A's batched pattern-file grep
-// (pfb_ip_prefetch_grep_lines()) can fail (its pattern file could not be created/written)
-// -- a NULL sentinel distinct from a genuine zero-hit round. On that failure this function
-// does NOT run Round B for any host in $hosts (a failed batching layer means "could not
-// resolve", never "resolved to nothing") and reports every host via the $grep_failed
-// out-parameter (keyed by host, value TRUE) so the caller (pfb_ip_prefetch()) can leave
-// them entirely UNSEEDED rather than caching this function's placeholder Unknown/Unknown
-// as a false negative.
+// Batched sibling of find_reported_header(): resolves every host in $hosts against the SAME
+// $pfbfolder/$geoip via one exact-match Round-A pass over ALL hosts, then Round B for any
+// Round-A miss: one grep per DISTINCT first-octet (v4) / prefix (v6) group among the
+// still-missing hosts (worst case one PER HOST under fully-diverse prefixes). At most two
+// batched exec()s touch any ONE host, replacing one-to-two exec() calls run independently per
+// host. Returns host => $pfb_query (['Unknown','Unknown'] on a total miss). Round A's batched
+// grep can fail with a NULL sentinel (pattern file unwritable, distinct from a genuine
+// zero-hit round); on that failure Round B does NOT run, and every host is reported via
+// $grep_failed so the caller leaves them UNSEEDED rather than caching a false Unknown/Unknown.
 function pfb_find_reported_headers(array $hosts, $pfbfolder, $geoip = FALSE, ?array &$grep_failed = NULL): array {
 	global $pfb;
 
@@ -9293,20 +8942,14 @@ function pfb_find_reported_headers(array $hosts, $pfbfolder, $geoip = FALSE, ?ar
 }
 
 
-// Batch every buffered, filter-ACCEPTED row's render-time IP lookups ahead of the per-type
-// IP table's replay pass (issue #809 Phase 3b): the validate round (is the logged IP/CIDR
-// still in its logged feed file), the miss round (find_reported_header()'s exact + prefix/
-// CIDR search), and the aliastables round (which alias table now holds the resolved IP),
-// each collapsed from one exec() per row to at most one grep pass per distinct group.
-// Seeds pfb_ip_render_memos() -- convert_ip_log() (pfblockerng_alerts.php) transparently
-// consults the same memo stores via pfb_render_memo(), falling back to its own per-row exec
-// for anything this pass did not cover (an unseeded key, or when this function was never
-// called at all -- e.g. the Unified table, out of scope for this phase).
-//
-// $rows is one entry per buffered, filter-accepted row (pfblockerng_alerts.php's Pass 1.5)
-// -- keys: 'host', 'folder', 'eval_ip_raw' (the raw $fields[14] evaluated-IP literal), and
-// 'validate_file_cmd'/'validate_cmd' from pfb_ip_render_query() (both NULL when that row
-// never runs a validate exec at all).
+// Batch every buffered, filter-ACCEPTED row's render-time IP lookups ahead of the per-type IP
+// table's replay pass: the validate round (is the logged IP/CIDR still in its feed file), the
+// miss round (find_reported_header()'s exact + prefix/CIDR search), and the aliastables round
+// (which alias table now holds the resolved IP), each collapsed from one exec() per row to at
+// most one grep pass per distinct group. Seeds pfb_ip_render_memos() — convert_ip_log()
+// consults the same memo stores, falling back to its own per-row exec for anything unseeded.
+// $rows: one entry per buffered, filter-accepted row — 'host', 'folder', 'eval_ip_raw',
+// 'validate_file_cmd'/'validate_cmd' from pfb_ip_render_query() (both NULL when unused).
 function pfb_ip_prefetch(array $rows): void {
 	global $pfb;
 
@@ -9656,15 +9299,12 @@ function pfb_dnsbl_python_migrate($dconfig) {
 
 
 // PFBL-03: one-time upgrade seed for the deprecated legacy DNS-TXT control sub-toggle.
-// $dconfig is the existing DNSBL-settings 'config/0' node. DNSBL control is CLI-driven and
-// the DNS-TXT transport is OFF by default; to avoid breaking an operator already driving
-// control over DNS TXT, the legacy sub-toggle is seeded ON IFF the pre-existing config
-// already had DNSBL Control enabled ('pfb_control' == 'on') at this upgrade. A one-shot
-// marker ('pfb_control_legacy_seeded') makes this run EXACTLY ONCE: once set, the function
-// returns NULL (no change), so a later save never re-seeds and never re-enables a toggle
-// the operator deliberately turned back off. Returns the updated config array to persist,
-// or NULL when nothing should change (empty config, or the seed already ran). Slated for
-// removal next release with the rest of the legacy DNS-TXT path.
+// $dconfig is the DNSBL-settings 'config/0' node; DNS-TXT transport is OFF by default, so to
+// avoid breaking an operator already driving control over DNS TXT, the legacy sub-toggle is
+// seeded ON IFF the pre-existing config already had 'pfb_control' == 'on'. A one-shot marker
+// ('pfb_control_legacy_seeded') makes this run EXACTLY ONCE, so a later save never re-enables
+// a toggle the operator turned back off. Returns the updated config, or NULL when nothing
+// changes (empty config, or already seeded). Slated for removal with the legacy DNS-TXT path.
 function pfb_control_legacy_seed($dconfig) {
 
 	if (!is_array($dconfig) || empty($dconfig)) {
@@ -9681,16 +9321,12 @@ function pfb_control_legacy_seed($dconfig) {
 }
 
 
-// ADR-22: one-time upgrade migration for the 'pfb_dnsbl_lenient' DNSBL scheme-parsing
-// toggle. $dconfig is the existing DNSBL-settings 'config/0' node. New installs default to
-// OFF (strict RFC 3986 parsing); an EXISTING install (a non-empty config section) that
-// predates this key is migrated to 'on' (lenient) to preserve the permissive behaviour it
-// already relies on -- malformed-scheme lines were silently accepted/blocked before. Keying
-// on a non-empty $dconfig distinguishes an upgrade from a first-ever install (which has no
-// prior config section, so the new-install strict default stands). Migration ONLY sets a
-// missing key -- an existing 'on'/'off' value is never overwritten. Returns the updated
-// config array to persist, or NULL when nothing should change (fresh install, or the key
-// already present).
+// ADR-22: one-time upgrade migration for the 'pfb_dnsbl_lenient' DNSBL scheme-parsing toggle.
+// New installs default to OFF (strict RFC 3986 parsing); an EXISTING install (non-empty
+// $dconfig, distinguishing upgrade from first-ever install) that predates this key is migrated
+// to 'on' (lenient) to preserve the permissive behaviour it already relies on. Migration ONLY
+// sets a missing key — an existing 'on'/'off' value is never overwritten. Returns the updated
+// config, or NULL when nothing should change (fresh install, or the key already present).
 function pfb_dnsbl_lenient_migrate($dconfig) {
 
 	if (!is_array($dconfig) || empty($dconfig)) {
@@ -9751,18 +9387,14 @@ function pfb_ip_is_self($ip) {
 }
 
 
-// Verify a feed host does not resolve to a non-public/reserved address before any
-// connection is made. Fail-closed: an unresolvable host, or any resolved address
-// that is non-public AND not covered by the operator's internal-address allowlist,
-// is rejected. On success $pinned receives the vetted IP the caller pins the
-// connection to (so the fetch cannot rebind to another address); $reason carries a
-// neutral skip reason on rejection.
-//
-// A resolved address is permitted when it is public, when it is the firewall itself
-// (its own configured address / loopback — a self-hosted feed), or when it is covered
-// by an allowlist entry (exact IP, or containment in an allowlisted CIDR — General
-// settings: 'internal-address exemptions'). An empty allowlist (the default) blocks
-// every other feed that resolves to an internal/private address.
+// Verify a feed host does not resolve to a non-public/reserved address before any connection
+// is made. Fail-closed: an unresolvable host, or any resolved address that is non-public AND
+// not covered by the operator's internal-address allowlist, is rejected. On success $pinned
+// receives the vetted IP the caller pins the connection to (so the fetch cannot rebind to
+// another address); $reason carries a neutral skip reason on rejection. A resolved address is
+// permitted when public, self-hosted (firewall's own address/loopback), or allowlisted (exact
+// IP or CIDR containment, General settings 'internal-address exemptions'); an empty allowlist
+// (default) blocks every other internal/private-resolving feed.
 function pfb_feed_host_allowed($host, &$reason, &$pinned) {
 
 	$reason = '';
@@ -10021,16 +9653,12 @@ function pfb_rsync_pin_url($list_url, $ip) {
 }
 
 
-// Issue #890: redact the query string and userinfo ('user:pass@') from a feed/
-// download URL before it is written to any log -- either can carry a credential,
-// and log files (including extras.log) ship inside pfSense support bundles.
-// scheme/host/port/path are kept so the log line stays useful for diagnosing a
-// failed download. A well-formed http(s)/ftp/rsync:// URL is rebuilt from
-// parse_url() (userinfo is simply dropped by not carrying it over; the query,
-// when present, is replaced with a '[redacted]' marker). Anything parse_url()
-// can't make sense of as a URL (a malformed input, or pfBlockerNG's own
-// '[user@]host::module' rsync shorthand) falls back to a regex strip -- when in
-// doubt this over-redacts rather than risk leaking a secret.
+// Issue #890: redact the query string and userinfo ('user:pass@') from a feed/download URL
+// before it is written to any log — either can carry a credential, and log files ship inside
+// pfSense support bundles. scheme/host/port/path are kept for diagnosability. A well-formed
+// http(s)/ftp/rsync:// URL is rebuilt from parse_url() (userinfo dropped, query replaced with
+// '[redacted]'); anything parse_url() can't parse (malformed input, or the '[user@]host::module'
+// rsync shorthand) falls back to a regex strip — when in doubt this over-redacts.
 function pfb_redact_url($url) {
 	if (!is_string($url) || $url === '') {
 		return (string) $url;
@@ -10078,19 +9706,14 @@ function pfb_redact_url($url) {
 }
 
 
-// ADR-59 Phase 3: merge caller-supplied HTTP headers with the ADR-42 conditional-GET
-// header into one CURLOPT_HTTPHEADER list -- neither clobbers the other. Pure / no I/O,
-// so it is unit-testable off-appliance (pfb_download() itself is not: tests/php/README.md
-// "Out of scope" -- its curl/exec surface has no off-box double).
+// ADR-59: merge caller-supplied HTTP headers with the ADR-42 conditional-GET header into one
+// CURLOPT_HTTPHEADER list — neither clobbers the other. Pure/no I/O (pfb_download() itself
+// isn't: tests/php/README.md "Out of scope").
 //
-// $extra_headers: caller-supplied header strings (e.g. 'Authorization: Bearer <token>').
-//   A non-string or empty entry is dropped defensively rather than corrupting the list.
-// $conditional_header: the ADR-42 conditional-GET header ('If-None-Match: <etag>'), or
-//   '' when no conditional-GET validator applies (the common case for every feed today).
-//
-// @return string[] the merged list, conditional-GET header first -- preserves the
-//   pre-Phase-3 single-element list byte-for-byte when $extra_headers is empty (today,
-//   always -- no caller sets it yet).
+// $extra_headers: caller-supplied header strings; a non-string/empty entry is dropped.
+// $conditional_header: the ADR-42 conditional-GET header, or '' when none applies.
+// @return string[] merged list, conditional-GET header first; byte-identical to the prior
+//   single-element list when $extra_headers is empty (today, always).
 function pfb_download_http_headers(array $extra_headers, string $conditional_header = ''): array
 {
 	$headers = array();
@@ -10106,19 +9729,13 @@ function pfb_download_http_headers(array $extra_headers, string $conditional_hea
 }
 
 
-// Function to download feeds
-//
-// Optional $response_meta — when a non-NULL reference is passed (detector probe mode), it is
-// filled with an array: ['status' => <http_status_string>, 'etag' => <ETag string or ''>,
-// 'lastmod' => <epoch int or 0>]. The two sync callers in pfblockerng.inc (lines ~12436 and
-// ~14096) do NOT pass this argument, so their behaviour is entirely unchanged.
-//
-// Optional $extra_headers (ADR-59 Phase 3) — caller-supplied HTTP header strings (e.g. a
-// Cloudflare Radar 'Authorization: Bearer <token>'), merged with the conditional-GET
-// header via pfb_download_http_headers() above. The TOP1M provider (ADR-59 P5) is the
-// first caller: pfblockerng.php passes the active provider's pfb_top1m_auth_headers()
-// result here; every other feed still passes none, so its CURLOPT_HTTPHEADER behaviour
-// is unchanged.
+// Function to download feeds. Optional $response_meta — when a non-NULL reference is passed
+// (detector probe mode), filled with ['status' => <http_status_string>, 'etag' => <ETag or
+// ''>, 'lastmod' => <epoch or 0>]; the two sync callers in this file do NOT pass it, so their
+// behaviour is unchanged. Optional $extra_headers (ADR-59) — caller-supplied HTTP header
+// strings (e.g. a Cloudflare Radar 'Authorization: Bearer <token>'), merged with the
+// conditional-GET header via pfb_download_http_headers(). The TOP1M provider is the first
+// caller; every other feed still passes none, so its CURLOPT_HTTPHEADER behaviour is unchanged.
 function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $logtype, $vtype='', $timeout=300, $type='', $username='', $password='', $srcint=FALSE, &$response_meta=NULL, array $extra_headers=array()) {
 	global $pfb;
 	$http_status = '';
@@ -10305,7 +9922,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				curl_setopt($ch, CURLOPT_MAXREDIRS, $feed_filter ? 0 : PFB_DOWNLOAD_MAXREDIRS);
 
 				// Capture the response 'Location' header for the manual redirect
-				// follow and the 'ETag' header for ADR-42 Phase 3 conditional-GET.
+				// follow and the 'ETag' header for ADR-42 conditional-GET.
 				// Reset per hop ($redirect_location is cleared before each curl_exec).
 				// Bodies are written to $fhandle; a redirect hop's body is truncated
 				// away before the next hop so only the final 2xx body survives.
@@ -10323,7 +9940,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 					}
 				);
 
-				// ADR-42 Phase 3: send a conditional GET when stored validators are
+				// ADR-42: send a conditional GET when stored validators are
 				// available for this feed's .orig baseline.  ETag → If-None-Match
 				// (primary); Last-Modified epoch → CURLOPT_TIMECONDITION (fallback).
 				// Only applied to the probe ('change_detect') mode: the sync ingest callers
@@ -10343,11 +9960,11 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 					}
 				}
 
-				// ADR-59 Phase 3: merge caller-supplied headers (ADR-59 P5's TOP1M provider
-				// auth header is the first caller) with the conditional-GET header above --
-				// neither list clobbers the other. Skips the curl_setopt entirely when both
-				// are empty (every other feed, plus an in-flight change_detect probe with no
-				// stored ETag), matching the pre-Phase-3 behaviour byte-for-byte.
+				// ADR-59: merge caller-supplied headers (the TOP1M provider auth header is
+				// the first caller) with the conditional-GET header above -- neither list
+				// clobbers the other. Skips the curl_setopt entirely when both are empty
+				// (every other feed, plus an in-flight change_detect probe with no stored
+				// ETag), matching prior behaviour byte-for-byte.
 				$http_headers = pfb_download_http_headers($extra_headers, $conditional_header);
 				if (!empty($http_headers)) {
 					curl_setopt($ch, CURLOPT_HTTPHEADER, $http_headers);
@@ -10510,7 +10127,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 	}
 
 	// Probe mode for the cron detector (type='change_detect'): fill $response_meta when
-	// the caller requested it (ADR-42 Phase 3 conditional-GET path), then return.
+	// the caller requested it (ADR-42 conditional-GET path), then return.
 	// A 304 means "not modified" — the server confirmed the feed unchanged; the
 	// caller (pfb_update_check detector) handles the 304 via pfb_conditional_get_decision.
 	// Any 200 means the body was downloaded to {file_dwn}.raw; the caller hashes it.
@@ -10830,7 +10447,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				@touch("{$orig_download}", $remote_stamp);
 			}
 
-			// ADR-42 Phase 2 / issue #713 bug 5: refresh the content-hash sidecar at every
+			// ADR-42 / issue #713 bug 5: refresh the content-hash sidecar at every
 			// successful ingest so pfb_local_feed_changed() / the probe's conditional-GET
 			// compare always land on the SAME domain of bytes the probe hashed.  The probe
 			// (pfb_update_check -> pfb_download($type='change_detect')) hashes the RAW
@@ -11094,21 +10711,14 @@ function pfb_tracker($alias, $int, $text) {
 }
 
 
-// Deterministic, IP-independent firewall-rule tracker for pfBlockerNG MANAGED
-// STATIC rules (ADR-37 DoT/DoQ block). Modelled on pfb_tracker() (feed rules) but
-// keyed on the rule's stable 'descr' ALONE -- no interface IP/subnet -- so the id
-// is identical across re-syncs and survives a DHCP renewal. That stability is the
-// point: a fresh-each-sync tracker (e.g. the GUI's (int)microtime()) would make the
-// rule's change-detection always fire, churning write_config()/filter_configure()
-// every sync. (ADR-36 NAT redirect rules need NO tracker -- pfSense NAT rules don't
-// carry one, and 'associated-rule-id=pass' has no companion filter rule to link.)
-//
-// Namespaced '176' to mark it as a pfBlockerNG MANAGED-rule tracker, distinct from
-// feed trackers ('177'). 176xxxxxxx is a PAST Unix epoch (~Oct 2025), so it can
-// never collide with a future GUI rule's (int)microtime() tracker, and it stays
-// well under 2^32 so pf's uint32 'ridentifier' never overflows. Duplicates (same
-// char-sum) step to a sequential id in the same namespace, registered like
-// pfb_tracker() so a managed tracker never clashes with a feed tracker in one sync.
+// Deterministic, IP-independent firewall-rule tracker for pfBlockerNG MANAGED STATIC rules
+// (ADR-37 DoT/DoQ block). Modelled on pfb_tracker() (feed rules) but keyed on the rule's
+// stable 'descr' ALONE — no interface IP/subnet — so the id is identical across re-syncs and
+// survives a DHCP renewal; a fresh-each-sync tracker would churn write_config()/
+// filter_configure() every sync. (ADR-36 NAT redirect rules need no tracker.) Namespaced '176'
+// (distinct from feed trackers '177'); 176xxxxxxx is a PAST Unix epoch (~Oct 2025) so it can
+// never collide with a future GUI rule's microtime() tracker, staying under pf's uint32
+// ridentifier ceiling. Duplicates step to a sequential id in the same namespace.
 function pfb_managed_rule_tracker(string $descr): int {
 	global $pfb;
 
@@ -11508,16 +11118,13 @@ function pfb_aliastables($mode) {
 }
 
 
-// #468: DNSBL python-integration cache for RAM-disk /var (use_mfs_tmpvar) installs.
-// SEPARATE from pfb_aliastables() on purpose -- the IP-alias archive and the DNSBL
-// archive have different lifecycles (DNSBL changes vs IP-rule changes). All file ops
-// live in 'pfblockerng.sh dnsbl_cache' (the shipped-file list has one home, in shell).
-//
-//   'conf' -- register the boot 'dnsbl_cache restore' earlyshellcmd when DNSBL is
-//             enabled AND /var is a RAM disk; otherwise remove it and delete the
-//             archive (DNSBL off or MFS off -> nothing to restore).
-//   'save' -- archive the current generated DNSBL state (called post-reload on a real
-//             DNSBL change; the caller gates on use_mfs_tmpvar + DNSBL enabled).
+// #468: DNSBL python-integration cache for RAM-disk /var (use_mfs_tmpvar) installs. SEPARATE
+// from pfb_aliastables() on purpose — the IP-alias archive and the DNSBL archive have different
+// lifecycles. All file ops live in 'pfblockerng.sh dnsbl_cache' (one home, in shell). 'conf':
+// register the boot 'dnsbl_cache restore' earlyshellcmd when DNSBL is enabled AND /var is a RAM
+// disk; otherwise remove it and delete the archive. 'save': archive the current generated DNSBL
+// state (called post-reload on a real DNSBL change; the caller gates on use_mfs_tmpvar + DNSBL
+// enabled).
 function pfb_dnsbl_cache($mode) {
 	global $pfb;
 
@@ -12235,19 +11842,16 @@ function pfb_collect_localhosts() {
 }
 
 
-// Resolve a filter.log Tracker ID to a pfBlockerNG rule.
+// Resolve a filter.log Tracker ID to a pfBlockerNG rule. Returns TRUE when $tracker is a pfB
+// rule whose type matches $type (caller processes the line); FALSE for a known non-pfB
+// ('other') or an unresolvable tracker (caller skips).
 //
-// Returns TRUE when $tracker is a pfB rule whose type matches $type (caller processes
-// the line); FALSE for a known non-pfB ('other') or an unresolvable tracker (caller skips).
-//
-// $rule_list  : positive cache from pfb_filterrules(); rebuilt in place on a reparse.
-// $miss_cache : PERSISTENT negative cache keyed by "tracker\0type"; survives reparses (a
-//               reparse rebuilds $rule_list but not this), so each unresolvable tracker/type
-//               triggers at most ONE reparse for the daemon's life. Keying by type (and
-//               checking the positive pfB cache first) ensures a transient type mismatch
-//               never suppresses a later log event whose type DOES match the pfB rule.
-// $reparse    : callable() => array — fresh rule list (production: 'pfb_filterrules').
-// $on_reparse : callable() => void  — refresh daemon-local IP/host collections after a reparse.
+// $rule_list: positive cache from pfb_filterrules(); rebuilt in place on a reparse.
+// $miss_cache: PERSISTENT negative cache keyed by "tracker\0type"; survives reparses, so each
+//   unresolvable tracker/type triggers at most ONE reparse for the daemon's life (keyed by
+//   type + checking the positive cache first, so a transient type mismatch never suppresses a
+//   later match). $reparse: callable() => array, fresh rule list. $on_reparse: callable() =>
+//   void, refresh daemon-local IP/host collections after a reparse.
 function pfb_resolve_tracker(
 	array &$rule_list,
 	array &$miss_cache,
@@ -12396,23 +12000,14 @@ function pfb_hash_read($base) {
 	return $sentinel;
 }
 
-// ADR-42 / issue #713 bug 5: resolve which on-disk file holds the RAW fetched body, so
-// the source-hash sidecar pfb_download() persists at ingest time hashes the SAME bytes
-// as the probe (pfb_update_check -> pfb_download($type='change_detect') hashes the raw
-// fetched body -- it returns before any decompression).
-//
-// $file_download is the '.raw' download (pre-decompression); $orig_download is the
-// finalised '.orig' the caller will ingest (decompressed for a compressed feed, or the
-// renamed raw file itself for an uncompressed one).
-//
-//   - Compressed feed (gz/bz2/zip/7z): the decompress tool (gunzip/bzip2/tar/7z) does
-//     not delete its source archive, so $file_download still exists on disk here and IS
-//     the raw fetched bytes -> hash that, not the decompressed $orig_download.
-//   - Uncompressed feed: $file_download was already @rename()'d onto $orig_download
-//     before this is called, so it no longer exists on disk -- but $orig_download now
-//     holds byte-identical content to what was fetched, so falling back to it is exact.
-//
-// Pure / no I/O beyond file_exists(); unit-testable in isolation from pfb_download().
+// ADR-42 / issue #713 bug 5: resolve which on-disk file holds the RAW fetched body, so the
+// source-hash sidecar pfb_download() persists at ingest hashes the SAME bytes as the probe
+// (which hashes the raw body before any decompression). $file_download is the '.raw' download
+// (pre-decompression); $orig_download is the finalised '.orig'. Compressed feed: the decompress
+// tool doesn't delete its source, so $file_download still exists and IS the raw bytes — hash
+// that. Uncompressed feed: $file_download was already renamed onto $orig_download, so it's gone
+// but $orig_download holds byte-identical content — falling back to it is exact. Pure / no I/O
+// beyond file_exists().
 function pfb_source_hash_target($file_download, $orig_download) {
 	return file_exists($file_download) ? $file_download : $orig_download;
 }
@@ -12434,7 +12029,7 @@ function pfb_hash_write($base, $path) {
 	return $ok;
 }
 
-// ADR-42 Phase 3: map a probe ('change_detect' mode) download path to the feed's persisted
+// ADR-42: map a probe ('change_detect' mode) download path to the feed's persisted
 // conditional-GET validator baseline.  The detector (pfb_update_check) persists the
 // ETag/Last-Modified sidecars at {header}.orig (pfb_validator_write on its $local_file),
 // but the probe is handed file_dwn = {header}.md5 so the probe body ({file_dwn}.raw =
@@ -12450,7 +12045,7 @@ function pfb_conditional_get_validator_base($file_dwn) {
 	return "{$file_dwn}.orig";
 }
 
-// ADR-42 Phase 3: read the per-feed HTTP validators (ETag + Last-Modified epoch)
+// ADR-42: read the per-feed HTTP validators (ETag + Last-Modified epoch)
 // stored as sidecars next to the .orig baseline.
 //
 // Returns an array with keys:
@@ -12488,7 +12083,7 @@ function pfb_validator_read($base) {
 	return array('etag' => $etag, 'lastmod' => $lastmod);
 }
 
-// ADR-42 Phase 3: persist the HTTP validators for a feed's .orig base path.
+// ADR-42: persist the HTTP validators for a feed's .orig base path.
 // $etag is the ETag response header value (string) or FALSE/'' to skip.
 // $lastmod is the Last-Modified epoch (int > 0) or FALSE to skip.
 // Does nothing when neither value is meaningful — never writes an empty sidecar.
@@ -12545,21 +12140,12 @@ function pfb_force_scope_dirs(string $scope, string $ip_origdir, string $dnsbl_o
 	return array($ip_origdir, $dnsbl_origdir);
 }
 
-// ADR-42 Phase 3: pure decision helper for the remote conditional-GET result.
-// Called by the detector after pfb_download returns the probe response.
-//
-// Contract (ADR-42 §2 #5 and #6):
-//   304 → unchanged (server confirmed — body was not re-sent).
-//   200 with body_hash == persisted_hash → unchanged (spurious 200; same bytes as baseline).
-//   200 with body_hash != persisted_hash → changed (real update; re-ingest needed).
-//   200 with no persisted hash ('') or body_hash FALSE → changed (no baseline to compare;
-//     fail-safe: cannot confirm unchanged, so treat as changed).
-//   Any other status or body_hash FALSE → changed (ambiguous/error; fail-safe, never false skip).
-//
-// $http_status  — the HTTP status code string from pfb_download's $response_meta['status'].
-// $body_hash    — the xxh128 digest of the probe body (string) or FALSE if unreadable.
-// $persisted_hash — the stored xxh128 digest of the last-ingested .orig (string) or '' if absent.
-// Returns TRUE when re-ingest is needed, FALSE when the feed is confirmed unchanged.
+// ADR-42: pure decision helper for the remote conditional-GET result, called by the detector
+// after pfb_download returns the probe response (contract: ADR-42 §2 #5/#6). 304 -> unchanged.
+// 200 with body_hash == persisted_hash -> unchanged (spurious 200). 200 with body_hash !=
+// persisted_hash -> changed. 200 with no persisted hash or body_hash FALSE -> changed
+// (fail-safe: no baseline to compare). Any other status -> changed (fail-safe, never a false
+// skip). Returns TRUE when re-ingest is needed, FALSE when confirmed unchanged.
 function pfb_conditional_get_decision($http_status, $body_hash, $persisted_hash) {
 	if ($http_status === '304') {
 		return FALSE;	// Server confirmed: not modified.
@@ -12574,25 +12160,15 @@ function pfb_conditional_get_decision($http_status, $body_hash, $persisted_hash)
 	return ($body_hash !== $persisted_hash);	// TRUE = changed, FALSE = spurious 200 (same bytes).
 }
 
-// Extract the local-feed change decision from pfb_update_check() as a named,
-// off-appliance-testable helper. Callers pass the source path and the .orig baseline;
-// this function returns TRUE when the feed has changed (re-ingest needed), FALSE when it
-// has not. It never concludes "unchanged" on a read failure — fail-safe.
-//
-// Algorithm (ADR-42 Phase 2 — content-hash gate, mtime removed):
-//  1. If either file is absent → changed (no baseline = first run).
-//  2. Read the tagged sidecar for the .orig via pfb_hash_read():
-//     - sentinel (no/corrupt sidecar) → live-hash the .orig as the baseline (the
-//       first-pass-after-upgrade case; also handles new installs before any sidecar exists).
-//     - 'md5' → baseline = sidecar digest; compare source with md5_file().
-//     - 'xxh128' → baseline = sidecar digest; compare source with pfb_content_hash().
-//  3. Hash the source in the SAME algo as the baseline.
-//  4. changed = (source_hash !== baseline). Any read failure → TRUE (fail-safe).
-//
-// NOTE: The sidecar is written (refreshed) at ingest time inside pfb_download(), so the
-// baseline is always the hash of the last-ingested .orig.  This prevents the staleness
-// trap: if the sidecar were only written here (before ingest) it would hold the OLD hash
-// after re-ingest, causing every subsequent cron to falsely report "changed".
+// Extract the local-feed change decision from pfb_update_check() as a named, off-appliance-
+// testable helper. Returns TRUE when the feed changed (re-ingest needed), FALSE when not;
+// never concludes "unchanged" on a read failure — fail-safe. Algorithm (ADR-42 content-hash
+// gate, mtime removed): either file absent -> changed (no baseline); else read the tagged
+// .orig sidecar (sentinel -> live-hash the .orig as baseline; 'md5'/'xxh128' -> sidecar digest
+// compared with the matching hash function); hash the source in the SAME algo; changed =
+// source_hash !== baseline. The sidecar is refreshed at ingest inside pfb_download(), so the
+// baseline is always the last-ingested .orig's hash — else it would go stale and falsely
+// report "changed" every cron after a real re-ingest.
 function pfb_local_feed_changed($source_path, $orig_path) {
 	if (!file_exists($source_path) || !file_exists($orig_path)) {
 		return TRUE;
@@ -12655,14 +12231,11 @@ function pfb_filterlog_refresh_config() {
 	}
 }
 
-// Select the correct filterlog port field for an exploded filter.log CSV row ($d) by
-// IP version ($d[8]) and flow direction. The v4 row carries its ports at $d[20]
-// (src) / $d[21] (dst); the v6 row -- which has fewer leading fields -- carries them
-// at $d[17] (src) / $d[18] (dst). Issue #713: the port-selection at the 'in'/'out'
-// branch used the v4 indices unconditionally, so a v6 flow read the wrong CSV field
-// as its port, mis-attributing the local_hosts reverse-lookup key.
-//
-// PURE -- no I/O, no globals, no side effects.
+// Select the correct filterlog port field for an exploded filter.log CSV row ($d) by IP
+// version ($d[8]) and flow direction. v4 carries ports at $d[20]/$d[21] (src/dst); v6 — fewer
+// leading fields — carries them at $d[17]/$d[18]. Issue #713: the port-selection used to use
+// v4 indices unconditionally, mis-attributing the local_hosts reverse-lookup key for v6 flows.
+// PURE — no I/O, no globals, no side effects.
 //
 // @param array<int, string> $d           Exploded filter.log CSV row.
 // @param bool                $is_inbound  TRUE for the 'in' branch (dst is local).
@@ -13327,27 +12900,14 @@ function pfb_render_memo(array &$store, string $key, callable $resolver) {
 }
 
 
-// Predicate for the Unified-log render loop (pfblockerng_alerts.php): TRUE once no
-// converter (convert_dnsbl_log() / convert_dns_reply_log() / convert_ip_log()) can
-// possibly render another row, so the caller can break out of its fgetcsv() loop
-// instead of parsing the rest of the log for nothing (issue #809 Phase 2).
-//
-// Non-filter mode ($filterlogentries FALSE): all three converters share one counter
-// ($counter['Unified']) and one limit ($pfbentries) -- each converter's own
-// top-of-function gate is `$counter['Unified'] >= $pfbentries`, so once that holds,
-// every converter call from here on is a guaranteed no-op (its OWN early-return guard,
-// e.g. `if ($dnsblfilterlimit) return TRUE;`, trips before any side effect). Done is
-// therefore exactly `$unified_count >= $pfbentries`.
-//
-// Filter mode ($filterlogentries TRUE): each converter instead gates on its OWN
-// per-type counter/limit ($dnsblfilterlimitentries/$dnsfilterlimitentries/
-// $ipfilterlimitentries) and sets its OWN flag ($dnsblfilterlimit/$dnsfilterlimit/
-// $ipfilterlimit) once reached -- exactly mirroring the <tfoot> Unified summary's own
-// "Filter Limit setting reached" check (`$ipfilterlimit && $dnsblfilterlimit &&
-// $dnsfilterlimit`). Only once ALL THREE are TRUE can no type render anything more, so
-// done is `$ipfilterlimit && $dnsblfilterlimit && $dnsfilterlimit`. If any one knob is
-// 0 (unlimited), its flag never sets and this never returns TRUE -- the loop then
-// correctly runs to EOF exactly as before this change.
+// Predicate for the Unified-log render loop (pfblockerng_alerts.php): TRUE once no converter
+// (convert_dnsbl_log/convert_dns_reply_log/convert_ip_log) can render another row, so the
+// caller can break out of fgetcsv() instead of parsing the rest of the log for nothing (issue
+// #809). Non-filter mode: all three share one counter/limit, so done = `$unified_count >=
+// $pfbentries`. Filter mode: each converter gates on its OWN counter/limit and sets its OWN
+// flag; done = `$ipfilterlimit && $dnsblfilterlimit && $dnsfilterlimit` (mirrors the <tfoot>
+// summary check) — an unlimited (0) knob never sets its flag, so the loop runs to EOF as
+// before.
 function pfb_alerts_unified_scan_done($filterlogentries, $unified_count, $pfbentries, $ipfilterlimit, $dnsblfilterlimit, $dnsfilterlimit): bool {
 	if ($filterlogentries) {
 		return $ipfilterlimit && $dnsblfilterlimit && $dnsfilterlimit;
@@ -13356,15 +12916,12 @@ function pfb_alerts_unified_scan_done($filterlogentries, $unified_count, $pfbent
 }
 
 
-// Pass-1 buffer-append rule for the DNSBL non-filter two-pass render
-// (pfblockerng_alerts.php, issue #809 Phase 3a). Extracted verbatim (issue #809 T2
-// review) so the compression arithmetic is unit-pinned by AlertsBufferReplayTest
-// instead of living only as inline page code with no committed coverage.
-//
-// A duplicate-marker line ('-') either extends the buffer's trailing int run (a
-// run-length counter) or opens a fresh one; a non-dup line is appended verbatim as
-// $row. The page passes $row = NULL when $is_dup is TRUE ($row is unused on that
-// branch). See pfb_alerts_dnsbl_replay_step() for the Pass-2 counterpart.
+// Pass-1 buffer-append rule for the DNSBL non-filter two-pass render (pfblockerng_alerts.php).
+// Extracted verbatim so the compression arithmetic is unit-pinned by AlertsBufferReplayTest
+// instead of living only as inline page code with no committed coverage. A duplicate-marker
+// line ('-') either extends the buffer's trailing int run (a run-length counter) or opens a
+// fresh one; a non-dup line is appended verbatim as $row ($row is unused when $is_dup is
+// TRUE). See pfb_alerts_dnsbl_replay_step() for the Pass-2 counterpart.
 function pfb_alerts_dnsbl_buffer_push(array &$buf, bool $is_dup, $row): void {
 	if ($is_dup) {
 		$last = count($buf) - 1;
@@ -13399,26 +12956,15 @@ function pfb_alerts_dnsbl_replay_step($entry): array {
 }
 
 
-// Pass-1 buffer-append rule for the IP two-pass render's two COMPRESSIBLE line
-// kinds (pfblockerng_alerts.php, issue #809 Phase 3b). Extracted verbatim (issue
-// #809 T2 review) so the compression arithmetic is unit-pinned by
-// AlertsBufferReplayTest instead of living only as inline page code with no
-// committed coverage. The third buffer shape -- an ACCEPTED row, array($fields,
-// TRUE) -- is not compressible and stays appended inline by the page.
-//
-// $kind is 'dup' (a duplicate-marker '-' line) or 'reject' (a filter-rejected
-// line):
-//   'dup'    -- extend a trailing int run, extend a trailing gap marker's 'dup'
-//               counter, or open a fresh int run.
-//   'reject' -- zero a trailing gap marker's 'dup' counter (mirrors the streamed
-//               loop's `$dup[$rtype] = 0` on every reject), REPLACE a trailing
-//               pure int run with a fresh zero-dup gap (those dups precede the
-//               reject, so the reset makes them irrelevant), or open a fresh
-//               zero-dup gap. A reject's fields are deliberately never kept --
-//               convert_ip_log()'s filter-reject path has a CONSTANT,
-//               field-independent effect (`$dup[$rtype] = 0; return
-//               array(FALSE, '');`), so only the post-last-reject dup count
-//               needs to survive.
+// Pass-1 buffer-append rule for the IP two-pass render's two COMPRESSIBLE line kinds
+// (pfblockerng_alerts.php). Extracted verbatim so the compression arithmetic is unit-pinned by
+// AlertsBufferReplayTest instead of living only as inline page code. The third buffer shape —
+// an ACCEPTED row, array($fields, TRUE) — is not compressible and stays appended inline.
+// $kind is 'dup' (a duplicate-marker '-' line) or 'reject': 'dup' extends a trailing int run or
+// a trailing gap marker's 'dup' counter, or opens a fresh int run. 'reject' zeroes a trailing
+// gap marker's 'dup' counter, REPLACES a trailing pure int run with a fresh zero-dup gap, or
+// opens a fresh zero-dup gap — a reject's fields are never kept since convert_ip_log()'s
+// filter-reject path has a CONSTANT effect, so only the post-last-reject dup count survives.
 // See pfb_alerts_ip_replay_step() for the Pass-2 counterpart.
 function pfb_alerts_ip_buffer_push(array &$buf, string $kind): void {
 	$last = count($buf) - 1;
@@ -13447,23 +12993,15 @@ function pfb_alerts_ip_buffer_push(array &$buf, string $kind): void {
 }
 
 
-// Pass-2 replay-decode counterpart to pfb_alerts_ip_buffer_push(): tells the IP
-// render loop what a buffered entry MEANS, so it never has to inspect the
-// buffer's storage shape itself.
-//
-//   int N                -> array('dup_add' => N) -- a pure dup run: one
-//                            accumulation into $dup[$rtype], output-identical to
-//                            N individual $dup[$rtype]++ increments.
-//   array('rej'=>...,
-//         'dup'=>N)      -> array('gap' => N) -- a mixed dup/reject run. The
-//                            caller must SET $dup[$rtype] = N (never +=) and
-//                            clear $p_query_port, exactly as a reject's
-//                            convert_ip_log() return does; N is the dup count
-//                            AFTER the last reject in the run (earlier dups
-//                            never reach the next rendered row's badge).
-//   array($fields, TRUE) -> array('render' => $fields) -- an accepted row,
-//                            replayed through the unchanged convert_ip_log()
-//                            call.
+// Pass-2 replay-decode counterpart to pfb_alerts_ip_buffer_push(): tells the IP render loop
+// what a buffered entry MEANS, so it never has to inspect the buffer's storage shape itself.
+//   int N -> array('dup_add' => N): a pure dup run, one accumulation into $dup[$rtype],
+//     output-identical to N individual increments.
+//   array('rej'=>...,'dup'=>N) -> array('gap' => N): a mixed dup/reject run — the caller must
+//     SET $dup[$rtype] = N (never +=) and clear $p_query_port, exactly as a reject's
+//     convert_ip_log() return does; N is the dup count AFTER the last reject in the run.
+//   array($fields, TRUE) -> array('render' => $fields): an accepted row, replayed through the
+//     unchanged convert_ip_log() call.
 function pfb_alerts_ip_replay_step($entry): array {
 	if (is_int($entry)) {
 		return array('dup_add' => $entry);
@@ -13477,20 +13015,13 @@ function pfb_alerts_ip_replay_step($entry): array {
 }
 
 
-// Page-scope prefetch store for pfb_dnsbl_parse_compute()'s data/zone grep sites (issue
-// #809 Phase 3a). NULL means "no prefetch ran" -- every consult site then falls straight
-// through to its normal per-row exec, so daemon mode (which never seeds this) and any
-// alerts-mode call outside a batched render pass are completely unaffected.
-//
-// Read current value:   pfb_dnsbl_prefetch_store()
-// Seed / reset value:   pfb_dnsbl_prefetch_store($arrayOrNull)  -- an explicit NULL
-//                        argument (func_num_args() > 0) resets to "no prefetch", which
-//                        is how the DNSBL table render pass (pfblockerng_alerts.php)
-//                        clears the store once it finishes. Defensive hygiene, not a
-//                        live fix: that page renders at most one prefetch-consuming
-//                        table per request, so no later same-process consumer can
-//                        actually see a stale seed today -- the reset just guarantees
-//                        that stays true if a future change adds a second consumer.
+// Page-scope prefetch store for pfb_dnsbl_parse_compute()'s data/zone grep sites (issue #809).
+// NULL means "no prefetch ran" — every consult site falls straight through to its normal
+// per-row exec, so daemon mode (which never seeds this) is unaffected. Read:
+// pfb_dnsbl_prefetch_store(); seed/reset: pfb_dnsbl_prefetch_store($arrayOrNull) — an explicit
+// NULL argument (func_num_args() > 0) resets to "no prefetch", which the DNSBL table render
+// pass clears once it finishes (defensive hygiene: today's page renders at most one
+// prefetch-consuming table per request, so no live bug depends on the reset yet).
 function pfb_dnsbl_prefetch_store(?array $seed = NULL): ?array {
 	static $store = NULL;
 
@@ -13502,37 +13033,15 @@ function pfb_dnsbl_prefetch_store(?array $seed = NULL): ?array {
 }
 
 
-// Batch the DNSBL/TLD render-time grep lookups for a set of domains ahead of a page
-// render pass (issue #809 Phase 3a). Reproduces, in at most one grep pass per file, the
-// per-row match pfb_dnsbl_parse_compute() would otherwise run separately for each of
-// $qdomains:
-//
-//   - data file ($pfb['unbound_py_data']): the per-row site matches the fixed-string
-//     literal ",{domain},," with `grep -shm1 -F` (issue #837 -- previously an escaped-BRE
-//     match that hand-escaped only the dot, so any OTHER BRE metacharacter in the domain
-//     rode into the regex live). Batched here as a single `grep -shF -f <patternfile>`
-//     pass with the same RAW literal patterns.
-//   - zone file ($pfb['unbound_py_zone']): the per-row site walks the domain's labels
-//     longest-first (full domain, then each suffix with the leftmost label stripped,
-//     down to the bare TLD), matching each step the same way. Batched by collecting
-//     every suffix of every domain and running ONE fixed-string pass over the zone file.
-//
-// Negative results are recorded too ('covered'/'zone_covered' with no matching
-// 'data'/'zone' entry): a domain/suffix this prefetch pass covered but did not find is a
-// genuine miss, and the consult sites must serve that cached '' rather than falling back
-// to a per-row exec (which would just re-run the identical grep for the same answer).
-//
-// B2 (issue #809 review; revised for issue #837): a domain is only added to 'covered'
-// (and only contributes data/zone patterns) when it VALIDATES as PFB_FILTER_DOMAIN --
-// guards against an embedded control character (a fgetcsv()'d quoted field can carry a
-// literal \r/\n) reaching the pattern file. Since the per-row sites are now ALSO `-F`
-// fixed-string (issue #837), batched == per-row by construction for every domain, not
-// only ones passing this filter; a domain that fails it is simply left UNCOVERED and
-// falls straight through to the unchanged (and, post-#837, equally fixed-string) per-row
-// exec at pfb_dnsbl_parse_compute()'s consult sites.
-//
-// Seeds pfb_dnsbl_prefetch_store(); the caller (pfblockerng_alerts.php's DNSBL table
-// branch) is responsible for resetting the store once its render pass is done.
+// Batch the DNSBL/TLD render-time grep lookups for $qdomains ahead of a page render pass
+// (issue #809): one grep pass per file instead of a per-row exec each. Data file: fixed-string
+// ",{domain},," match via `grep -shF` (issue #837 fixed a prior escaped-BRE match that let
+// non-dot metacharacters ride into the regex live). Zone file: batches every longest-first
+// label-suffix of every domain into one fixed-string pass. Negative results are cached too
+// ('covered'/'zone_covered' with no match) so the consult sites serve a genuine miss from
+// cache, never re-exec. A domain enters 'covered' only when it VALIDATES as PFB_FILTER_DOMAIN
+// — guards an embedded control char reaching the pattern file. Seeds
+// pfb_dnsbl_prefetch_store(); the caller resets it once rendering finishes.
 function pfb_dnsbl_prefetch(array $qdomains) {
 	global $pfb;
 
@@ -13591,25 +13100,15 @@ function pfb_dnsbl_prefetch(array $qdomains) {
 
 
 // One `grep -shF -f <patternfile>` pass over $file, returning a map of the matched
-// domain/suffix (each line's field [1] -- the same position pfb_dnsbl_parse_compute()
-// destructures on a per-row hit) to the FIRST line seen for it. grep preserves the
-// file's original line order regardless of pattern order, so "first seen in this batched
-// pass" is exactly the per-row `-m1` result for that same domain/suffix. $patterns are
-// raw literal ",{domain-or-suffix},," strings (no regex escaping) -- the per-row sites
-// are `-F` fixed-string too (issue #837; see pfb_dnsbl_prefetch()'s docblock), so both
-// sides match identically by construction.
-//
-// Keying the map by field [1] relies on where a ",X,," pattern can match: in the
-// ",domain,,log_type,feed,group" line shape, the empty placeholder after the domain slot
-// is the only double comma a well-formed line contains, so a ",X,," fixed string can
-// only ever match with X in the domain slot -- field [1]. That is exactly what makes
-// "key by field [1]" select the same line the per-row `grep -shm1 -F ',X,,'` would.
-//
-// B3/R1 (issue #809 review): returns NULL -- distinct from a genuine empty-array
-// no-match result -- when the pattern file itself could not be created or fully written
-// (a full or read-only temp dir). pfb_dnsbl_prefetch() must treat NULL as "this batched
-// pass did not run" and leave its store unseeded entirely, never seed a false negative
-// from it.
+// domain/suffix (field [1], same position pfb_dnsbl_parse_compute() destructures per-row) to
+// the FIRST line seen for it — grep preserves file order, so "first seen in this batched pass"
+// matches the per-row `-m1` result. $patterns are raw literal ",{domain-or-suffix},," strings
+// (no regex escaping); the per-row sites are also `-F` fixed-string (issue #837), so both sides
+// match identically by construction. Keying by field [1] works because in the
+// ",domain,,log_type,feed,group" line shape the only double comma is right after the domain
+// slot, so a ",X,," pattern can only match with X there. Returns NULL — distinct from a genuine
+// empty-array no-match — when the pattern file could not be created/written; the caller must
+// leave its store unseeded, never seed a false negative.
 function pfb_dnsbl_prefetch_grep(array $patterns, string $file): ?array {
 	global $pfb;
 
@@ -13650,15 +13149,14 @@ function pfb_dnsbl_prefetch_grep(array $patterns, string $file): ?array {
 }
 
 
-// Functon to find which DNSBL Feed/Groupname blocked this event
+// Function to find which DNSBL Feed/Groupname blocked this event.
 //
-// issue #809 (Alerts page render-time performance): in 'alerts' mode ONLY, memoize the
-// whole return value per $domain -- a render request is one PHP process, so a repeated
-// domain across rows on one page load costs zero further SQLite/grep/drill work (the
-// real work lives in pfb_dnsbl_parse_compute() below). 'daemon' mode (the long-running
-// filterlog/dnsbl daemons) is completely unchanged: it is never memoized (an unbounded
-// static store has no place in a process that runs for the life of the service) and
-// always calls straight through.
+// issue #809 (Alerts page render-time performance): in 'alerts' mode ONLY, memoize the whole
+// return value per $domain — a render request is one PHP process, so a repeated domain across
+// rows on one page load costs zero further SQLite/grep/drill work (the real work lives in
+// pfb_dnsbl_parse_compute() below). 'daemon' mode (the long-running filterlog/dnsbl daemons) is
+// unchanged: never memoized (an unbounded static store has no place in a service-lifetime
+// process) and always calls straight through.
 function pfb_dnsbl_parse($mode='daemon', $domain, $src_ip, $req_agent) {
 	static $alerts_memo = array();
 
@@ -13720,7 +13218,7 @@ function pfb_dnsbl_parse_compute($mode, $domain, $src_ip, $req_agent) {
 		// but read unconditionally at "if ($cname_cnt == 0)" -- init so a total miss (no
 		// data/zone/CNAME match) doesn't read an undefined variable there.
 
-		// issue #809 Phase 3a: NULL unless the Alerts page's DNSBL table render pass
+		// issue #809: NULL unless the Alerts page's DNSBL table render pass
 		// seeded it via pfb_dnsbl_prefetch() -- read once here and reused at both grep
 		// sites below (data + zone) for every iteration of the CNAME while(TRUE) loop.
 		$prefetch_store = pfb_dnsbl_prefetch_store();
@@ -14380,17 +13878,12 @@ function pfb_js_string(string $text): string {
 
 
 // Read the next slice of a live log file for the AJAX tail endpoint, starting at byte $offset.
-// Returns ['data' => <new text>, 'offset' => <next byte offset to request>].
-//
-// - Whole lines only (default): a trailing partial line is held back -- $offset advances only
-//   past the last newline -- so a multibyte UTF-8 char is never split across two polls (the JSON
-//   encoder would otherwise substitute the split byte and corrupt it irreparably). Pass
-//   $flush = TRUE on the FINAL read (the run is done, no more lines are coming) to emit the
-//   trailing partial line too.
-// - $offset is always a RAW byte position in the file; the returned data has CR stripped for
-//   display only, so the count is computed on raw bytes BEFORE stripping (the two would diverge).
-// - $offset past EOF (the file was truncated/rotated -- e.g. a fresh run truncated the run log)
-//   resets to 0, so the tail re-reads from the new start instead of desyncing.
+// Returns ['data' => <new text>, 'offset' => <next byte offset to request>]. Whole lines only
+// by default — a trailing partial line is held back ($offset advances only past the last
+// newline) so a multibyte UTF-8 char is never split across two polls; pass $flush = TRUE on the
+// FINAL read to emit the trailing partial line too. $offset is a RAW byte position (the
+// returned data has CR stripped for display only, so the count is computed BEFORE stripping).
+// $offset past EOF (file truncated/rotated) resets to 0 so the tail re-reads from the new start.
 function pfb_log_tail_chunk(string $file, int $offset, bool $flush = FALSE): array {
 	clearstatcache(FALSE, $file);
 	$len = @filesize($file);
@@ -15106,7 +14599,7 @@ function sync_package_pfblockerng($cron='') {
 
 	$pfb['filter_configure']	= FALSE;	// Flag to call filter_configure once
 
-	// ADR-12 Phase 6: TWO pass-scoped accumulators of the names UPDATED this pass,
+	// ADR-12: TWO pass-scoped accumulators of the names UPDATED this pass,
 	// split by side because DNSBL groups are NOT firewall aliases. They feed the
 	// 'post' hook's PFB_CHANGED_IP_ALIASES and PFB_CHANGED_DNSBL_GROUPS. Both are
 	// initialised empty here so they are always defined at the hook (even on a pass
@@ -15175,7 +14668,7 @@ function sync_package_pfblockerng($cron='') {
 		return;
 	}
 
-	// ADR-43 Phase 3: normalize the trigger input.
+	// ADR-43: normalize the trigger input.
 	// Array = new API (explicit request, no deprecation log).
 	// String = back-compat (routes through pfb_trigger_request(); deprecated verbs log once).
 	if (is_array($cron)) {
@@ -17090,7 +16583,7 @@ function sync_package_pfblockerng($cron='') {
 						}
 					}
 
-					// ADR-12 Phase 6: record GENUINELY-changed DNSBL groups for
+					// ADR-12: record GENUINELY-changed DNSBL groups for
 					// PFB_CHANGED_DNSBL_GROUPS. $pfb['aliasupdate'] is final for the
 					// group here (reset at :8859, set TRUE at :9500 ONLY when a feed in
 					// this group was actually (re)downloaded+parsed -- stays FALSE on
@@ -19452,14 +18945,14 @@ function sync_package_pfblockerng($cron='') {
 	//       whose block did not run — no undefined-variable warning.
 	//   PFB_TRIGGER       = $pfb_hook_val (from pfb_req_to_hook_trigger / pfb_hook_trigger).
 	//   PFB_CHANGED_IP_ALIASES = the space-separated list of IP firewall aliases UPDATED
-	//       this pass (ADR-12 Phase 6) = $pfb_alias_lists (the content-diff set --
+	//       this pass (ADR-12) = $pfb_alias_lists (the content-diff set --
 	//       pfB_*_v4/_v6 whose canonical membership set actually changed this pass,
 	//       as determined by pfb_alias_set_different(); ADR-40 P3).  Reputation/dedup
 	//       no longer inflate this to all active aliases -- only moved tables appear here.
 	//       The IP locals are in scope only at this tail, so they are merged into
 	//       $pfb['changed_ip_aliases'] here, then de-duped at emit.
 	//   PFB_CHANGED_DNSBL_GROUPS = the space-separated list of DNSBL groups UPDATED this
-	//       pass (ADR-12 Phase 6) = the DNSBL_<group> names appended in the per-group
+	//       pass (ADR-12) = the DNSBL_<group> names appended in the per-group
 	//       feed loop under $pfb['aliasupdate'] (genuine feed (re)parse only -- file-reuse
 	//       and the always-rebuilt DNSBL_IDN/DNSBL_TLD_Allow/DNSBL_Regex specials are
 	//       excluded), de-duped at emit. DNSBL groups are NOT firewall aliases, so they
