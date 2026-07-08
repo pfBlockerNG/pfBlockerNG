@@ -14,6 +14,9 @@ process's own captured stdout/stderr) cover:
   this file proves that output actually SURVIVES the drop+tee and lands in the file the
   GUI would render.
 
+Both tests also assert (issue #988) that a hook's stdout during a lifecycle callback lands
+in the PERSISTED ``pfblockerng.log`` (``h.PFB_LOG``), not only the GUI's live stream.
+
 Both tests drive ``/usr/local/sbin/pfSense-upgrade`` directly (the same binary
 ``pkg_mgr_install.php`` shells out to for "Update now" / "Remove"), reproducing what the
 GUI page shows WITHOUT a browser (Tier B territory otherwise). NOT A SMOKE TEST — like
@@ -154,6 +157,8 @@ def test_update_hooks_fire_and_are_gui_visible_on_reinstall(repo_vm: SmokeVM) ->
         assert not h.hook_marker_exists(vm, post_marker), "post marker present before reinstall (stale state?)"
 
         # ---- WHEN (terminal): pkg install -f -y <name> (op 'reinstall') ----------- #
+        log_pre_before = h.count_log_marker(vm, h.PFB_LOG, pre_line)
+        log_post_before = h.count_log_marker(vm, h.PFB_LOG, post_line)
         proc = vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "install", "-f", "-y", PKG_NAME, timeout=600)
         combined = proc.stdout + proc.stderr
 
@@ -177,12 +182,24 @@ def test_update_hooks_fire_and_are_gui_visible_on_reinstall(repo_vm: SmokeVM) ->
             f"terminal `pkg install -f` output is missing the post hook's stdout marker "
             f"{post_line!r}:\n{combined[-3000:]}"
         )
+        # issue #988: the lifecycle branch's hook stdout must also reach the PERSISTED
+        # pfblockerng.log, not only the pkg Software page's live stream.
+        assert h.count_log_marker(vm, h.PFB_LOG, pre_line) > log_pre_before, (
+            f"pre hook stdout marker {pre_line!r} did not reach the persisted {h.PFB_LOG} "
+            f"after the terminal pkg install"
+        )
+        assert h.count_log_marker(vm, h.PFB_LOG, post_line) > log_post_before, (
+            f"post hook stdout marker {post_line!r} did not reach the persisted {h.PFB_LOG} "
+            f"after the terminal pkg install"
+        )
 
         # ---- WHEN (GUI): pfSense-upgrade -i <name> -f ("Update now" shortcut) ------ #
         h.clear_hook_markers(vm, token)
         assert not h.hook_marker_exists(vm, pre_marker), "pre marker present before GUI reinstall (stale state?)"
         assert not h.hook_marker_exists(vm, post_marker), "post marker present before GUI reinstall (stale state?)"
 
+        log_pre_before_gui = h.count_log_marker(vm, h.PFB_LOG, pre_line)
+        log_post_before_gui = h.count_log_marker(vm, h.PFB_LOG, post_line)
         gui_proc = vm.ssh(PFSENSE_UPGRADE, "-y", "-l", GUI_LOG_REINSTALL, "-i", PKG_NAME, "-f", timeout=600)
         gui_log = _gui_log_tail(vm, GUI_LOG_REINSTALL)
         assert gui_proc.returncode == 0, (
@@ -211,6 +228,14 @@ def test_update_hooks_fire_and_are_gui_visible_on_reinstall(repo_vm: SmokeVM) ->
         )
         assert post_line in gui_log, (
             f"the post hook's stdout marker {post_line!r} is MISSING from the GUI log ({GUI_LOG_REINSTALL}):\n{gui_log}"
+        )
+        # issue #988: same persist call fires on the GUI-driven reinstall (same lifecycle
+        # branch, same call site as the terminal `pkg install -f` above).
+        assert h.count_log_marker(vm, h.PFB_LOG, pre_line) > log_pre_before_gui, (
+            f"pre hook stdout marker {pre_line!r} did not reach the persisted {h.PFB_LOG} after the GUI reinstall"
+        )
+        assert h.count_log_marker(vm, h.PFB_LOG, post_line) > log_post_before_gui, (
+            f"post hook stdout marker {post_line!r} did not reach the persisted {h.PFB_LOG} after the GUI reinstall"
         )
     finally:
         h.clear_update_hooks(vm)
@@ -283,6 +308,8 @@ def test_uninstall_runs_hook_tears_down_and_is_gui_visible(repo_vm: SmokeVM) -> 
         assert not h.hook_marker_exists(vm, post_marker), "post marker present before uninstall (stale state?)"
 
         # ---- WHEN: GUI delete path (op 'delete' -> pre-deinstall disable pass) ---- #
+        log_pre_before = h.count_log_marker(vm, h.PFB_LOG, pre_line)
+        log_post_before = h.count_log_marker(vm, h.PFB_LOG, post_line)
         gui_proc = vm.ssh(PFSENSE_UPGRADE, "-y", "-l", GUI_LOG_DELETE, "-r", PKG_NAME, timeout=600)
         gui_log = _gui_log_tail(vm, GUI_LOG_DELETE)
         diag = f"pfSense-upgrade -r rc={gui_proc.returncode}\nGUI log tail:\n{gui_log}\n{h.deinstall_debug(vm)}"
@@ -319,6 +346,14 @@ def test_uninstall_runs_hook_tears_down_and_is_gui_visible(repo_vm: SmokeVM) -> 
         )
         assert post_line in gui_log, (
             f"the post hook's stdout marker {post_line!r} is MISSING from the GUI log ({GUI_LOG_DELETE}):\n{gui_log}"
+        )
+        # issue #988: same lifecycle-branch call site as the reinstall test (only the
+        # PFB_PRE_UNINSTALL context value differs) — same persist call fires here too.
+        assert h.count_log_marker(vm, h.PFB_LOG, pre_line) > log_pre_before, (
+            f"pre hook stdout marker {pre_line!r} did not reach the persisted {h.PFB_LOG} after the GUI uninstall"
+        )
+        assert h.count_log_marker(vm, h.PFB_LOG, post_line) > log_post_before, (
+            f"post hook stdout marker {post_line!r} did not reach the persisted {h.PFB_LOG} after the GUI uninstall"
         )
     finally:
         h.clear_update_hooks(vm)
