@@ -334,15 +334,18 @@ residue is explained, not hidden.
 --------------------------------------------------------------------------------
 CARRY-FORWARD FOR PHASE 8 (Log Settings UI)
 --------------------------------------------------------------------------------
-- src/usr/local/www/pfblockerng/pfblockerng_general.php still reads/writes
-  log_rotate_<type>/log_reset_keep_<type> via PfbConfig::read() (lines ~87,
-  92, 169, 179, 223, 228, 438-447 pre-Phase-7 numbering) and renders their
-  Form_Select controls -- Phase 8 removes those and adds log_max_days_<type>
-  Form_Input controls per the ADR's Phase 8 text. Because the registry keys
-  are now deregistered (this phase), any `PfbConfig::read('log_rotate_...')`
-  call left in place after Phase 8 partially lands would throw
-  InvalidArgumentException -- Phase 8 MUST remove every read/write site,
-  not just the visible Form_Select markup.
+- URGENT, confirmed BROKEN NOW (not merely a future-partial-Phase-8 risk):
+  src/usr/local/www/pfblockerng/pfblockerng_general.php unconditionally
+  calls PfbConfig::read('log_rotate_log') / read('log_reset_keep_unilog')
+  (and siblings) at the TOP of every page request (lines ~87, 92, before any
+  $_POST branch) -- since this phase deregistered those keys, on the CURRENT
+  commit (eb1f3121) that page throws an uncaught InvalidArgumentException on
+  every load (verified this session via an executed PHPUnit probe: both
+  calls threw). Phase 8 is not cosmetic Form_Select cleanup -- it is a
+  required fix to a page that is presently non-functional. Phase 8 removes
+  every read/write site (lines ~87, 92, 169, 179, 223, 228, 438-447
+  pre-Phase-7 numbering) and the Form_Select controls, adding
+  log_max_days_<type> Form_Input controls per the ADR's Phase 8 text.
 - tests/smoke/ui/test_render_smoke.py:1567-1570 asserts the presence of
   `name="log_rotate_dnslog"`, `name="log_reset_keep_unilog"`,
   `name="log_rotate_dnsreplylog"` field-name markers -- Phase 8 must flip
