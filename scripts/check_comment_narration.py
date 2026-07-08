@@ -99,9 +99,11 @@ def find_violations(diff_text: str) -> list[Violation]:
 
 
 def _git_diff(args: list[str]) -> str:
-    # core.quotePath defaults to true (octal-quotes non-ASCII paths) and
-    # diff.mnemonicPrefix/noprefix rewrite the +++ prefix — any of them silently
-    # defeats the b/ parse. Pin all three so user git config cannot bypass the gate.
+    # core.quotePath defaults to true (octal-quotes non-ASCII paths),
+    # diff.mnemonicPrefix/noprefix rewrite the +++ prefix, and an external diff
+    # driver (diff.external / GIT_EXTERNAL_DIFF) replaces the unified output
+    # entirely — any of them silently defeats the b/ parse. Pin them all so
+    # user git config/environment cannot bypass the gate.
     out = subprocess.run(
         [
             "git",
@@ -110,6 +112,7 @@ def _git_diff(args: list[str]) -> str:
             "diff",
             "--unified=0",
             "--no-color",
+            "--no-ext-diff",
             "--src-prefix=a/",
             "--dst-prefix=b/",
             *args,
