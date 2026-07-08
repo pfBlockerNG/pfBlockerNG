@@ -195,13 +195,13 @@ final class PfbDnsblStripSchemeTest extends TestCase
 	// --- Empty scheme + bracketed IPv6: DandelionSprouts' "block regardless of
 	//     scheme" shape (confirmed live: 4 identical-shaped lines in a real feed). ---
 
-	public function testEmptySchemeBracketedIpv6PassesThroughWhenStrict(): void
+	public function testEmptySchemeBracketedIpv6ReturnsBareAddressWhenStrict(): void
 	{
-		// The brackets are NOT unwrapped here -- that is pfb_dnsbl_unbracket_ip6()'s
-		// job, called later in the caller. This function only decides "is this a
-		// scheme-rejection", so it returns the remainder as-is.
+		// Returns the bare address, not the bracketed remainder -- the validation
+		// this branch already did (is_ipaddrv6 on the unwrapped content) would
+		// otherwise be redone by pfb_dnsbl_unbracket_ip6() downstream for nothing.
 		$this->assertSame(
-			'[2604:2dc0:100:4ed8::]',
+			'2604:2dc0:100:4ed8::',
 			pfb_dnsbl_strip_scheme('://[2604:2dc0:100:4ed8::]', true)
 		);
 	}
