@@ -204,8 +204,9 @@ def _decode_load_body(body: str) -> tuple[str, str]:
     """Parse the ``|code|info|base64|`` AJAX envelope -> ``(code, decoded_text)``.
 
     The handler prints ``|<code>|<info>|<base64-of-content>|``; on the load path
-    code '0' is success and the third field is base64 of the file's (html-escaped)
-    bytes. Mirrors the page's JS (``responseText.split('|')`` then ``atob``).
+    code '0' is success and the third field is base64 of the file's raw bytes
+    (verbatim, no HTML-escaping). Mirrors the page's JS (``responseText.split('|')``
+    then ``atob``).
     """
     parts = body.split("|")
     # parts[0] is the leading '' before the first '|'; [1]=code, [2]=info, [3]=b64.
@@ -251,6 +252,77 @@ def test_load_returns_real_file_content(webui: WebUI, smoke_vm: helpers.SmokeVM)
             f"load body content {decoded!r} != on-box file {_cat(vm, target)!r} (handler must return the real file)"
         )
         assert marker in decoded, f"seeded marker missing from the loaded content: {decoded!r}"
+    finally:
+        _rm(vm, target)
+
+
+def test_load_does_not_html_escape_content(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """``act=load`` returns bytes verbatim -- no HTML-entity substitution.
+
+    Regression pin: the handler used to htmlspecialchars() each line before
+    base64-encoding it, even though the only consumer is the #fileContent
+    <textarea>'s JS ``.val()`` -- a plain-text sink that never decodes entities, so
+    the escape only ever produced literal "&lt;"/"&gt;" text on screen. Seeds a
+    line carrying every char htmlspecialchars would touch and asserts the decoded
+    body is byte-identical to the on-box file, not an escaped variant.
+    """
+    vm = smoke_vm
+    target = _throwaway_log("pfblockerng.log")
+    marker = helpers.unique_domain("esc")
+    expected = f"<{marker}> & \"quoted\" 'single'\n"
+    _seed_file(vm, target, expected)
+    try:
+        assert _cat(vm, target) == expected, "seed line not present on the box before load"
+
+        token = _csrf(webui)
+        resp = _post_load(webui, token, target)
+        assert not looks_like_login_page(resp.text), "load POST returned the login form (session lost)"
+        code, decoded = _decode_load_body(resp.text)
+        assert code == "0", f"load did not report success: envelope={resp.text!r}"
+        assert decoded == expected, (
+            f"load body {decoded!r} != raw seeded content {expected!r} "
+            "(handler must not HTML-escape -- the textarea sink never decodes entities)"
+        )
+        assert "&lt;" not in decoded and "&gt;" not in decoded and "&amp;" not in decoded, (
+            f"load body still HTML-escaped: {decoded!r}"
+        )
+    finally:
+        _rm(vm, target)
+
+
+def test_load_does_not_double_escape_write_time_escaped_lines(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """``act=load`` must not add a SECOND escape layer atop write-time-escaped lines.
+
+    ``pfb_validate_log_line()`` (ADR-48, pfblockerng.inc) already htmlspecialchars()s
+    reject-line fields at WRITE time for pfblockerng.log/error.log -- that write-time
+    escape is untouched by this fix and stays correct. Before this fix, load()'s OWN
+    htmlspecialchars() ran a SECOND time over that already-escaped text, turning
+    "&lt;" into "&amp;lt;" -- a genuine double-escape distinct from the never-escaped
+    case above. Seeds a line shaped like pfb_validate_log_line's output (pre-escaped
+    '&lt;'/'&amp;') and asserts it survives load() with no additional escaping.
+    """
+    vm = smoke_vm
+    target = _throwaway_log("error.log")
+    marker = helpers.unique_domain("dblesc")
+    # Mirrors pfb_validate_log_line()'s write-time-escaped shape for a REJECT line
+    # whose detail field originally contained '<' '>' '&'.
+    expected = f"pfb_validate: REJECT feed=x stage=y reason=z detected=&lt;{marker}&gt; &amp; done\n"
+    _seed_file(vm, target, expected)
+    try:
+        assert _cat(vm, target) == expected, "seed line not present on the box before load"
+
+        token = _csrf(webui)
+        resp = _post_load(webui, token, target)
+        assert not looks_like_login_page(resp.text), "load POST returned the login form (session lost)"
+        code, decoded = _decode_load_body(resp.text)
+        assert code == "0", f"load did not report success: envelope={resp.text!r}"
+        assert decoded == expected, (
+            f"load body {decoded!r} != raw seeded content {expected!r} "
+            "(handler re-escaped an already-escaped line -- double escape regression)"
+        )
+        assert "&amp;lt;" not in decoded and "&amp;amp;" not in decoded, (
+            f"load body double-escaped the write-time-escaped line: {decoded!r}"
+        )
     finally:
         _rm(vm, target)
 
