@@ -9,31 +9,37 @@ use PHPUnit\Framework\TestCase;
  * ADR-61 — Pure sync-status ledger library.
  *
  * Tests the clock-injectable pfb_sync_status_* helpers defined in
- * pfblockerng_extra.inc, mirroring DueLedgerTest's shape. The library is
- * unreferenced by production code this phase — a later phase wires writers/
- * clearers into the download/apply/parse pipeline.
+ * pfblockerng_extra.inc, mirroring DueLedgerTest's shape.
  *
  * Functions under test:
  *   pfb_sync_status_open(string $facility, string $item, string $stage,
  *                          string $message, string $ledger_dir, ?callable $clock_fn = null): void
  *   pfb_sync_status_close(string $facility, string $item, string $stage, string $ledger_dir): void
  *   pfb_sync_status_list_open(string $ledger_dir, ?string $facility = null): array
+ *   pfb_sync_status_locked(string $ledger_dir, callable $fn): void
  *
  * Coverage mandate (CLAUDE.md "Test coverage") — every branch:
  *   open:  new key creates an entry; an already-open key refreshes message/
- *          last_seen and preserves first_seen (no duplicate); clock is injectable.
+ *          last_seen and preserves first_seen (no duplicate); clock is injectable;
+ *          an invalid-UTF8 message must not wipe the rest of the ledger.
  *   close: existing key removed; absent key is a safe no-op (no write, no throw).
  *   list_open: filters by facility; NULL facility returns every facility.
  *   read:  absent file, corrupt (non-JSON) file, and corrupt (non-object JSON)
  *          file all read as an empty ledger — never throw.
  *   write: an unwritable ledger dir fails silently (no uncaught exception) —
  *          this suite's chosen contract; see testUnwritableLedgerDirFailsSafely().
+ *   locked: the read-modify-write span is held under a real cross-process
+ *          exclusive lock (proven against an actual second process, not a
+ *          single-process simulation) — closes the TOCTOU window between a
+ *          read and its paired write that would otherwise let two concurrent
+ *          writers silently discard one another's update.
  */
 #[CoversFunction('pfb_sync_status_open')]
 #[CoversFunction('pfb_sync_status_close')]
 #[CoversFunction('pfb_sync_status_list_open')]
 #[CoversFunction('pfb_sync_status_read_all')]
 #[CoversFunction('pfb_sync_status_write_all')]
+#[CoversFunction('pfb_sync_status_locked')]
 final class PfbSyncStatusLedgerTest extends TestCase
 {
 	private string $dir;
@@ -204,5 +210,77 @@ final class PfbSyncStatusLedgerTest extends TestCase
 
 		// The chosen contract is a silent no-op: nothing observable changed.
 		$this->assertFileDoesNotExist($this->dir . '/pfb_sync_status.json', 'an unwritable dir must not produce a ledger file');
+	}
+
+	// -----------------------------------------------------------------------
+	// write_all() — an invalid-UTF8 message must never wipe the WHOLE ledger.
+	// json_encode() returns FALSE on invalid UTF-8; file_put_contents(FALSE, ...)
+	// casts to "" and SUCCEEDS (verified: it returns int(0), never FALSE), so a
+	// naive "=== FALSE" guard on file_put_contents() alone never fires and an
+	// empty file gets renamed over the real ledger.
+	// -----------------------------------------------------------------------
+
+	public function testOpenWithInvalidUtf8MessageDoesNotWipeExistingLedger(): void
+	{
+		pfb_sync_status_open('ip', 'pfB_Existing_v4', 'download', 'HTTP 404', $this->dir, self::clockAt(1000));
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir), 'pre-condition: one entry exists before the bad write');
+
+		// \xFF is never valid UTF-8 -- json_encode() of the WHOLE ledger (including
+		// this new key) fails once this key is merged in.
+		$badMessage = "pfctl: \xFF garbled stderr";
+		pfb_sync_status_open('ip', 'pfB_Bad_v4', 'apply', $badMessage, $this->dir, self::clockAt(2000));
+
+		$open = pfb_sync_status_list_open($this->dir);
+		$this->assertCount(
+			1,
+			$open,
+			'an invalid-UTF8 message must not silently wipe the pre-existing entry -- the bad write must be a no-op, not an empty-ledger rename'
+		);
+		$this->assertSame('pfB_Existing_v4', $open[0]['item']);
+	}
+
+	// -----------------------------------------------------------------------
+	// pfb_sync_status_locked() — the read-modify-write span is held under a REAL
+	// cross-process exclusive lock, not just the final write. Proven against an
+	// actual second process (pcntl_fork), not a single-process simulation.
+	// -----------------------------------------------------------------------
+
+	public function testOpenBlocksUntilARealConcurrentProcessReleasesTheLedgerLock(): void
+	{
+		if (!function_exists('pcntl_fork')) {
+			$this->markTestSkipped('pcntl not available -- cannot spawn a real concurrent process for this test.');
+		}
+
+		$lockPath = $this->dir . '/pfb_sync_status.json.lock';
+		$pid      = pcntl_fork();
+		if ($pid === -1) {
+			$this->markTestSkipped('pcntl_fork() failed.');
+		}
+
+		if ($pid === 0) {
+			// Child: acquire the SAME lock file pfb_sync_status_locked() uses, hold it
+			// briefly (simulating a still-running backgrounded pass mid read-modify-write),
+			// then release. A fresh fopen() (not an inherited fd) makes this a genuine
+			// second, independent lock holder -- the real multi-process scenario.
+			$fp = fopen($lockPath, 'c');
+			flock($fp, LOCK_EX);
+			usleep(500000);
+			flock($fp, LOCK_UN);
+			fclose($fp);
+			exit(0);
+		}
+
+		usleep(100000); // let the child actually acquire the lock first
+		$start = microtime(TRUE);
+		pfb_sync_status_open('ip', 'pfB_Example_v4', 'download', 'HTTP 404', $this->dir, self::clockAt(1000));
+		$elapsed = microtime(TRUE) - $start;
+
+		pcntl_waitpid($pid, $waitStatus);
+
+		$this->assertGreaterThanOrEqual(
+			0.3,
+			$elapsed,
+			'pfb_sync_status_open() must block on the lock file until the real concurrent holder releases it -- a near-instant return means the read-modify-write span is not actually protected'
+		);
 	}
 }

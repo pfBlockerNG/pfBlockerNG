@@ -606,7 +606,9 @@ function pfBlockerNG_get_header($mode='') {
 		$pfb_ip_open = pfb_sync_status_list_open($pfb['dbdir'], 'ip');
 		if (!empty($pfb_ip_open)) {
 			$pfb_status	= 'fa-solid fa-exclamation-circle text-warning';
-			$pfb_ip_other	= array_filter($pfb_ip_open, fn ($entry) => $entry['item'] !== 'dedup');
+			// Match on stage, not item: an admin-named alias literally called "dedup"
+			// would otherwise be misclassified as the dedup-sanity sentinel entry.
+			$pfb_ip_other	= array_filter($pfb_ip_open, fn ($entry) => $entry['stage'] !== 'dedup');
 			$pfb_msg	= empty($pfb_ip_other)
 				? 'pfBlockerNG deDuplication is out of sync. Perform a Force Reload to correct.'
 				: sprintf('pfBlockerNG has %d open issue(s). See the Failed Downloads list below.', count($pfb_ip_open));

@@ -403,6 +403,14 @@ def _pfb_py_status_write_all(entries: list[dict[str, Any]]) -> None:
             pass
 
 
+# init_standard() runs once per Unbound worker thread (same shared interpreter/globals
+# as decisionDB's _LruCache above), so a read-modify-write span here needs the same
+# lock-protects-the-whole-span treatment -- two threads' open()/close() calls can
+# otherwise interleave their _pfb_py_status_read_all()/_write_all() and silently drop
+# one thread's update (the classic lost-update race).
+_pfb_py_status_lock: Any = threading.Lock() if pfb.get("mod_threading") else nullcontext()
+
+
 def pfb_py_status_open(
     facility: str, item: str, stage: str, message: str, clock_fn: Callable[[], int] | None = None
 ) -> None:
@@ -412,38 +420,40 @@ def pfb_py_status_open(
     ``last_seen`` in place and preserves the original ``first_seen`` -- never
     duplicates the entry."""
     now = clock_fn() if clock_fn is not None else int(time.time())
-    entries = _pfb_py_status_read_all()
-    for entry in entries:
-        if entry.get("facility") == facility and entry.get("item") == item and entry.get("stage") == stage:
-            entry["message"] = message
-            entry["last_seen"] = now
-            _pfb_py_status_write_all(entries)
-            return
-    entries.append(
-        {
-            "facility": facility,
-            "item": item,
-            "stage": stage,
-            "message": message,
-            "first_seen": now,
-            "last_seen": now,
-        }
-    )
-    _pfb_py_status_write_all(entries)
+    with _pfb_py_status_lock:
+        entries = _pfb_py_status_read_all()
+        for entry in entries:
+            if entry.get("facility") == facility and entry.get("item") == item and entry.get("stage") == stage:
+                entry["message"] = message
+                entry["last_seen"] = now
+                _pfb_py_status_write_all(entries)
+                return
+        entries.append(
+            {
+                "facility": facility,
+                "item": item,
+                "stage": stage,
+                "message": message,
+                "first_seen": now,
+                "last_seen": now,
+            }
+        )
+        _pfb_py_status_write_all(entries)
 
 
 def pfb_py_status_close(facility: str, item: str, stage: str) -> None:
     """Clear one ``{facility, item, stage}`` entry. Closing an absent key is a
     safe no-op -- no write."""
-    entries = _pfb_py_status_read_all()
-    filtered = [
-        entry
-        for entry in entries
-        if not (entry.get("facility") == facility and entry.get("item") == item and entry.get("stage") == stage)
-    ]
-    if len(filtered) == len(entries):
-        return
-    _pfb_py_status_write_all(filtered)
+    with _pfb_py_status_lock:
+        entries = _pfb_py_status_read_all()
+        filtered = [
+            entry
+            for entry in entries
+            if not (entry.get("facility") == facility and entry.get("item") == item and entry.get("stage") == stage)
+        ]
+        if len(filtered) == len(entries):
+            return
+        _pfb_py_status_write_all(filtered)
 
 
 def _build_swap_snapshot() -> Snapshot | None:

@@ -110,6 +110,60 @@ class TestPfbPyStatusOpenClose:
         assert entries[0]["item"] == "pfb_py_zone.txt"
 
 
+class TestPfbPyStatusLock:
+    """init_standard() runs once per Unbound worker thread sharing the same globals
+    (see the _LruCache precedent in pfb_unbound.py) -- pfb_py_status_open/close must
+    serialize their read-modify-write span under a real lock, or two threads opening
+    DIFFERENT keys concurrently can silently lose one of the two updates."""
+
+    def setup_method(self) -> None:
+        pfb_unbound.pfb["pfb_py_status"] = None
+        pfb_unbound.pfb["mod_threading"] = True
+
+    def test_concurrent_opens_for_different_keys_do_not_lose_either_update(
+        self, tmp_path: Any, monkeypatch: Any
+    ) -> None:
+        import threading
+        import time
+
+        status_path = str(tmp_path / "pfb_py_status.json")
+        pfb_unbound.pfb["pfb_py_status"] = status_path
+
+        # Widen the window between read and write for thread "A" only, so an
+        # unlocked implementation has a real chance to interleave with thread "B"'s
+        # full read-modify-write cycle in between.
+        real_read_all = pfb_unbound._pfb_py_status_read_all
+
+        def slow_read_all() -> list[dict[str, Any]]:
+            data = real_read_all()
+            if threading.current_thread().name == "A":
+                time.sleep(0.3)
+            return data
+
+        monkeypatch.setattr(pfb_unbound, "_pfb_py_status_read_all", slow_read_all)
+
+        def open_a() -> None:
+            pfb_unbound.pfb_py_status_open("dnsbl", "keyA", "parse", "A", clock_fn=lambda: 1000)
+
+        def open_b() -> None:
+            time.sleep(0.05)  # let A start (and, if locked, acquire the lock) first
+            pfb_unbound.pfb_py_status_open("dnsbl", "keyB", "parse", "B", clock_fn=lambda: 2000)
+
+        thread_a = threading.Thread(target=open_a, name="A")
+        thread_b = threading.Thread(target=open_b, name="B")
+        thread_a.start()
+        thread_b.start()
+        thread_a.join(timeout=5)
+        thread_b.join(timeout=5)
+
+        entries = _read_status_file(status_path)
+        items = {entry["item"] for entry in entries}
+        assert items == {"keyA", "keyB"}, (
+            "both concurrent opens must persist -- a missing key means the lock did not "
+            f"serialize the two read-modify-write cycles (got {items!r})"
+        )
+
+
 class TestPfbPyStatusReadDegradation:
     """Absent/corrupt/wrong-shape content all degrade to an empty read, never raise."""
 

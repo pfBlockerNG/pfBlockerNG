@@ -205,6 +205,25 @@ final class PfbWidgetOracleTest extends TestCase
 		$this->assertSame('pfBlockerNG has 1 open issue(s). See the Failed Downloads list below.', $msg);
 	}
 
+	public function testIpAliasLiterallyNamedDedupIsNotMisclassifiedAsTheDedupSentinel(): void
+	{
+		// The dedup-sanity sentinel key is (item='dedup', stage='dedup') -- an admin's
+		// own alias/feed named "dedup" opens a DIFFERENT stage (e.g. 'download') under
+		// the SAME item string. Classifying by item alone would wrongly show the
+		// dedup-specific wording for what is really an unrelated download failure.
+		$pfb = $this->basePfb();
+		pfb_sync_status_open('ip', 'dedup', 'download', 'HTTP 404', $this->dir);
+
+		[$status, $msg] = pfb_widget_oracle_status($pfb);
+
+		$this->assertSame(self::ICON_YELLOW, $status);
+		$this->assertSame(
+			'pfBlockerNG has 1 open issue(s). See the Failed Downloads list below.',
+			$msg,
+			'a real download failure for an alias named "dedup" must not be mistaken for the dedup-sanity sentinel'
+		);
+	}
+
 	// -----------------------------------------------------------------------
 	// (b) DNSBL icon — each "is it live" gate, individually off -> red.
 	// -----------------------------------------------------------------------
