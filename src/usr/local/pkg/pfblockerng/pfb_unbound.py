@@ -121,7 +121,7 @@ safeSearchDB: defaultdict[str, Any]
 feedGroupIndexDB: defaultdict[int, Any]
 maxmindReader: Any
 
-# ADR-10 P2: the single module-level reference to the current immutable matcher
+# ADR-10: the single module-level reference to the current immutable matcher
 # snapshot. init_standard builds it from the loaded strata and assigns it ONCE
 # (replacing the per-global query-time read); operate() captures this ONE ref per
 # query and reads every matcher field off it. A future zero-downtime reload rebinds
@@ -139,7 +139,7 @@ pfb_log_queue: queue.Queue
 pfb_log_listener: Any
 pfb_loggers: dict[str, Any] = {}
 
-# ADR-10 P4: the reload-watcher daemon thread + its stop handle (a threading.Event).
+# ADR-10: the reload-watcher daemon thread + its stop handle (a threading.Event).
 # The watcher waits on the reload sentinel's DIRECTORY and runs rebuild_and_swap() off
 # the query threads on a generation-id advance. Declared here; created in init_standard
 # (gated on pfb["mod_threading"]) and joined in deinit.
@@ -253,7 +253,7 @@ def pfb_async(func: Callable[..., Any], *args: Any) -> None:
 # Pinned by tests/test_adr10_watcher.py, tests/test_adr10_swap.py.
 # --------------------------------------------------------------------------- #
 
-# Steady-state retained bytes per matcher entry (ADR-05 SS3a / ADR-10 P1 spike:
+# Steady-state retained bytes per matcher entry (ADR-05 SS3a / ADR-10 spike:
 # 274-276 B/entry). Used to PROJECT the both-resident transient of an in-process build.
 RELOAD_BYTES_PER_ENTRY = 276
 # Headroom kept free above the projected transient so the build does not drive the box
@@ -454,7 +454,7 @@ def _reload_run_swap(builder: Callable[[], Snapshot | None]) -> bool:
     Projects the build's transient from the LIVE snapshot's entry count and consults the
     RAM gate FIRST; if the box cannot fit the ~2x transient, DECLINE fail-closed -- the
     old snapshot stays live, log that the update needs the restart fallback. Otherwise
-    delegate to the Phase-3 fail-closed rebuild_and_swap (default emit_counts=True so the
+    delegate to the fail-closed rebuild_and_swap (default emit_counts=True so the
     UI counts refresh without a restart).
 
     Returns ``True`` iff the snapshot was actually swapped in (the caller then advances
@@ -919,14 +919,14 @@ def init_standard(id: int, env: module_env) -> bool:
     pfb["hstsDB"] = False
     pfb["whiteDB"] = False
     pfb["regexDB"] = False
-    # ADR-07 P3: allow-regex container (@@/re/) and the $important/$badfilter fast-path
+    # ADR-07: allow-regex container (@@/re/) and the $important/$badfilter fast-path
     # flag. Both are inert today (no ABP rule is parsed yet) -- the matcher keeps its
     # existing early-exit path while important_rules is False (behaviour-preserving).
     pfb["allowRegexDB"] = False
     pfb["important_rules"] = False
-    # ADR-07 P7 regex-safety defaults: cap OFF (nothing dropped at load unless the
+    # ADR-07 regex-safety defaults: cap OFF (nothing dropped at load unless the
     # user enables "Limit long/complex regex"); runtime warn/evict ALWAYS on at the
-    # Phase-1 ceilings. The ini MAIN section overrides these.
+    # measured ceilings. The ini MAIN section overrides these.
     pfb["regex_cap"] = False
     pfb["regex_warn_ms"] = REGEX_WARN_MS_DEFAULT
     pfb["regex_evict_ms"] = REGEX_EVICT_MS_DEFAULT
@@ -992,7 +992,7 @@ def init_standard(id: int, env: module_env) -> bool:
     # it falls back to the legacy data/zone CSV load (shell/PHP still produce
     # those files for that fallback).
     pfb["pfb_py_sources"] = "pfb_py_sources.json"
-    # ADR-10 P4: the zero-downtime RELOAD SENTINEL. Path is chroot-relative (Unbound
+    # ADR-10: the zero-downtime RELOAD SENTINEL. Path is chroot-relative (Unbound
     # is chrooted at /var/unbound, the module's CWD) -- so the in-chroot absolute path
     # PHP/shell must write is /var/unbound/pfb_py_reload. PHP atomically publishes the
     # new manifest + per-feed raw, then writes a monotonically-advancing GENERATION ID
@@ -1023,7 +1023,7 @@ def init_standard(id: int, env: module_env) -> bool:
     # so the writer can confirm execution. Host path /var/unbound/pfb_py_control.applied.
     pfb["pfb_py_control_applied"] = "pfb_py_control.applied"
     pfb["pfb_py_count"] = "pfb_py_count"
-    # ADR-07 P8: the ADMITTED (cap-filtered) feed+user regex total -- the count the
+    # ADR-07: the ADMITTED (cap-filtered) feed+user regex total -- the count the
     # DNSBL_Regex UI alias reads (inc:8329). It is the live size of regexDB +
     # allowRegexDB AFTER both the user REGEX-ini load and the feed-regex merge, so
     # patterns the static cap dropped are excluded (value changes by design, ADR §2).
@@ -1092,7 +1092,7 @@ def init_standard(id: int, env: module_env) -> bool:
 
     regexDB = defaultdict(str)
     allowRegexDB = defaultdict(str)
-    # ADR-07 P7: clear the runtime warn rate-limit + perf-fallback strike state on a
+    # ADR-07: clear the runtime warn rate-limit + perf-fallback strike state on a
     # (re)load so a fresh regex set starts with clean warn/evict bookkeeping.
     _regex_warned.clear()
     _regex_perf_strikes.clear()
@@ -1184,11 +1184,11 @@ def init_standard(id: int, env: module_env) -> bool:
             if config.has_option("MAIN", "forwarding"):
                 pfb["forwarding"] = config.getboolean("MAIN", "forwarding")
 
-            # ADR-07 P7: regex-safety knobs. ``regex_cap`` is the opt-in "Limit
+            # ADR-07: regex-safety knobs. ``regex_cap`` is the opt-in "Limit
             # long/complex regex" static pre-filter (drops over-long/nested-quantifier
             # patterns at load -- feed AND user). ``regex_warn_ms`` / ``regex_evict_ms``
             # are the always-on runtime warn/evict ceilings (per-match thread CPU). All
-            # default to OFF / the Phase-1 defaults when absent.
+            # default to OFF / the measured defaults when absent.
             if config.has_option("MAIN", "regex_cap"):
                 pfb["regex_cap"] = config.getboolean("MAIN", "regex_cap")
             if config.has_option("MAIN", "regex_warn_ms"):
@@ -1250,7 +1250,7 @@ def init_standard(id: int, env: module_env) -> bool:
                 if regex_config:
                     r_count = 1
                     for name, pattern in regex_config:
-                        # ADR-07 P7: a catastrophic SHAPE in the un-vetted USER regex
+                        # ADR-07: a catastrophic SHAPE in the un-vetted USER regex
                         # list is dropped at load UNCONDITIONALLY (logged, not compiled)
                         # -- the always-on safety gate. The opt-in length ceiling (the
                         # "Limit long/complex regex" setting) is the separate tunable
@@ -1334,7 +1334,7 @@ def init_standard(id: int, env: module_env) -> bool:
             # Collect SafeSearch Redirection list
             _load_safesearch_db()
 
-            # ADR-06 P4: prefer BUILDING the DNSBL structures from the raw feeds via
+            # ADR-06: prefer BUILDING the DNSBL structures from the raw feeds via
             # the pure build() layer (the new shell->Python boundary). When the
             # per-feed manifest is present, Python parses -> normalises -> classifies
             # (data/zone) -> builds dataDB/zoneDB/feedGroupIndexDB/whiteDB and emits
@@ -1355,7 +1355,7 @@ def init_standard(id: int, env: module_env) -> bool:
                 feedGroupIndexDB = build_result.feed_group_index_db
                 whiteDB = build_result.white_db
 
-                # ADR-07 P6: MERGE the ABP feed block-regex into regexDB (preserving the
+                # ADR-07: MERGE the ABP feed block-regex into regexDB (preserving the
                 # user-regex patterns compiled from the REGEX ini section above) and load
                 # the @@/re/ allow-regex into allowRegexDB. Feed regex carry an explicit
                 # band + $important; user regex are the {re, band: PRIO_USER_BLOCK (5)}
@@ -1467,7 +1467,7 @@ def init_standard(id: int, env: module_env) -> bool:
                                         wildcard = True
                                     else:
                                         wildcard = False
-                                    # ADR-07 P3: whiteDB value widens to
+                                    # ADR-07: whiteDB value widens to
                                     # {"wildcard", "important"}; the legacy CSV is the
                                     # USER whitelist -> important=True (sovereignty).
                                     whiteDB[row[0]] = {"wildcard": wildcard, "important": True}
@@ -1492,7 +1492,7 @@ def init_standard(id: int, env: module_env) -> bool:
                         sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}".format(pfb["pfb_py_hsts"], e))
                         pass
 
-            # ADR-07 P8: emit the ADMITTED regex total for the DNSBL_Regex UI alias
+            # ADR-07: emit the ADMITTED regex total for the DNSBL_Regex UI alias
             # (inc:8329). regexDB now holds USER regex (REGEX-ini) + FEED block regex
             # (merged from build()); allowRegexDB holds FEED @@/re/ allow regex. Both
             # have already had over-cap patterns dropped at load when the static cap is
@@ -1531,7 +1531,7 @@ def init_standard(id: int, env: module_env) -> bool:
     else:
         log_info("[pfBlockerNG]: Failed to load ini configuration. Ini file missing.")
 
-    # ADR-10 P3: BUNDLE the loaded matcher strata into ONE immutable Snapshot and
+    # ADR-10: BUNDLE the loaded matcher strata into ONE immutable Snapshot and
     # install it through the shared fail-closed rebuild_and_swap(). Up to here init
     # populated the scratch globals (dataDB/zoneDB/whiteDB/regexDB/allowRegexDB/
     # feedGroupIndexDB/hstsDB) exactly as before -- from the manifest build() OR the
@@ -1589,7 +1589,7 @@ def init_standard(id: int, env: module_env) -> bool:
             pfb["async_worker"] = False
             sys.stderr.write("[pfBlockerNG]: Failed to start async I/O worker: {}".format(e))
 
-    # ADR-10 P4: start the zero-downtime reload-watcher (daemon). It waits on the reload
+    # ADR-10: start the zero-downtime reload-watcher (daemon). It waits on the reload
     # sentinel and runs a single-flight, RAM-gated rebuild_and_swap() off the query
     # threads on a generation advance -- no Unbound restart for a DNSBL-data update.
     if pfb["mod_threading"] and not pfb.get("reload_watcher"):
@@ -1695,7 +1695,7 @@ def idn_mode_decision(q_name: str, idn_mode: IdnMode) -> bool:
 # is punycode-decoded, each code point's script read from unicodedata.name(), and
 # a severity assigned PER LABEL (never unioned across the dot). Decode-safe: a
 # malformed label is FLAGGED, never raised into operate(). Graded against the
-# Phase-2 oracle + corpus in tests/test_adr08_*.
+# reference oracle + corpus in tests/test_adr08_*.
 # --------------------------------------------------------------------------- #
 
 SEV_LEGIT = "legit"
@@ -1842,7 +1842,7 @@ IDN_GROUP_MALICIOUS = "DNSBL_Homoglyph"
 IDN_FEED_SUSPECT = "Homoglyph_Suspect"
 IDN_GROUP_SUSPECT = "DNSBL_Homoglyph_Suspect"
 
-# The three matcher actions the analyzer's severity maps to (mirrors the Phase-2
+# The three matcher actions the analyzer's severity maps to (mirrors the reference
 # oracle's ACT_NONE/ACT_ALERT/ACT_BLOCK under the two sub-toggles).
 IDN_ACT_NONE = "none"
 IDN_ACT_ALERT = "alert"
@@ -1965,7 +1965,7 @@ def idn_confusable_action(
     work, returns ``(IDN_ACT_NONE, None)``). On an xn-- query it classifies the name
     PER-LABEL via the pure analyzer (``classify_idn`` never raises -- a malformed label
     is FLAGGED, the resolver never crashes) and maps severity -> action exactly like the
-    Phase-2 oracle's ``action(...)`` under the two sub-toggles:
+    reference oracle's ``action(...)`` under the two sub-toggles:
 
       * MALICIOUS  -> block  when ``block_malicious`` (default-ON); alert when disabled.
       * SUSPICIOUS / FLAGGED -> alert by default; block when ``escalate_suspicious`` (opt-in).
@@ -2368,7 +2368,7 @@ def _db_flush_cache(rows: list[Any]) -> bool:
 
 
 def _db_reset_cache() -> bool:
-    # ADR-10 P3: reset the DNSBL Reports cache (the dnsblcache table the Reports tab
+    # ADR-10: reset the DNSBL Reports cache (the dnsblcache table the Reports tab
     # reads) on a zero-downtime DNSBL swap, in parity with the init-time os.remove of
     # pfb_py_cache.sqlite. Goes through _db_run -> _db_lock, so it serializes with the
     # off-thread pfb_db_worker (and the synchronous fallback) on the SAME persistent
@@ -3276,7 +3276,7 @@ def deinit(id: int) -> bool:
     if pfb["python_maxmind"]:
         maxmindReader.close()
 
-    # ADR-10 P4: stop the reload-watcher cleanly -- set the stop Event (which also wakes
+    # ADR-10: stop the reload-watcher cleanly -- set the stop Event (which also wakes
     # the kqueue/poll wait via its timeout), then join with a timeout so deinit never
     # hangs on a stuck watcher. The thread is a daemon, so a missed join cannot block
     # interpreter shutdown either.
@@ -3502,7 +3502,7 @@ class BuildResult:
 
 @dataclass(frozen=True)
 class Snapshot:
-    """ADR-10 P2: the immutable bundle of every matcher stratum a DNS query reads.
+    """ADR-10: the immutable bundle of every matcher stratum a DNS query reads.
 
     Today the matcher reads several independent module globals per query
     (``dataDB``/``zoneDB``/``whiteDB``/``regexDB`` + ADR-07's ``allowRegexDB`` and the
@@ -3849,7 +3849,7 @@ def parse_abp(
             group=group,
             log=log,
             signature=(dom, ()),
-            wildcard=True,  # plain/hosts cover the domain + subdomains (Phase-2 spec)
+            wildcard=True,  # plain/hosts cover the domain + subdomains (reference oracle)
         )
 
     # ---- bare plain domain ---------------------------------------------- #
@@ -4088,7 +4088,7 @@ def classify(domain: str, tlds: dict[str, dict[str, str]], exclusion: set[str]) 
 # benchmarks/spike_adr07_regex.reduce_pattern; ADR.md SS2.
 # --------------------------------------------------------------------------- #
 
-# Regex-reduction grammar (mirrors the Phase-2 oracle reduce_regex + the spike
+# Regex-reduction grammar (mirrors the reference oracle reduce_regex + the spike
 # reduce_pattern). A reducible ``/re/`` decides IDENTICALLY to a domain/wildcard
 # rule, so it folds to a domain Rule at zero per-query cost. ``D`` is a domain
 # literal: labels of [a-z0-9-] joined by ESCAPED dots (``\.``), no other metachar.
@@ -4106,7 +4106,7 @@ def _dnsbl_reduce_regex(inner: str) -> tuple[bool, str] | None:
     domain/wildcard rule, else ``None`` (irreducible -- stays a compiled pattern).
 
     ``wildcard`` True -> domain + subdomains (zone); False -> exact (data). Mirrors
-    the Phase-2 oracle ``reduce_regex`` + ``spike.reduce_pattern`` exactly (so a
+    the reference oracle ``reduce_regex`` + ``spike.reduce_pattern`` exactly (so a
     reducible feed regex == its dict form). Pure; does NOT compile the pattern.
     Per ADR.md SS2 we do NOT expand finite classes (``ad[0-9]\\.x`` stays a regex).
     """
@@ -4244,7 +4244,7 @@ def reconcile(
     ``exclusion`` is the TLD-exclusion set (same shape build() uses). ``tlds`` is
     kept for signature stability but no longer consulted: classify's registrable-
     parent rule is a plain/hosts-path concept (ADR-06) that must not demote an ABP
-    anchor. Matches the Phase-2 oracle ``reconcile`` + ``decide`` precedence.
+    anchor. Matches the reference oracle ``reconcile`` + ``decide`` precedence.
 
     ``tally`` (ADR-48, issue #789): optional out-param -- when not ``None``,
     the #753 wire-cap fold-drop (a reducible regex whose folded key is unqueryable)
@@ -4367,7 +4367,7 @@ def _dnsbl_normalise_whitelist(
     TOP1M entries are loaded ONLY when enabled (bare domains -> exact). No build-time
     list pruning -- this only populates whiteDB.
 
-    ADR-07 P3: the whiteDB value widens from a bare ``bool`` (wildcard?) to
+    ADR-07: the whiteDB value widens from a bare ``bool`` (wildcard?) to
     ``{"wildcard": bool, "important": bool}``. User whitelist + TOP1M load as
     ``important=True`` (user-intent sovereignty, ADR.md SS2 / fact 7). Because an
     allow already beats every block today, this changes NO decision now -- the
@@ -4414,7 +4414,7 @@ def _dnsbl_normalise_whitelist(
 REGEX_STATIC_LEN_CAP = 200
 
 # A quantified group that itself sits inside a quantifier: (a+)+, (a*)*, (\w+\.)+,
-# ([a-z]+)*, (.*a){20}. Phase-1 measured this catching 1/1 catastrophic patterns in
+# ([a-z]+)*, (.*a){20}. Measured to catch 1/1 catastrophic patterns in
 # the corpus with no false-negatives and no false-positives on the cap-passing set.
 _REGEX_NESTED_QUANTIFIER = re.compile(r"\([^()]*[+*][^()]*\)\s*[+*{]")
 
@@ -4446,12 +4446,12 @@ _REGEX_STACKED_BOUNDED_REPEAT = re.compile(r"(?:\)|\]|\w)\{\d+(?:,\d*)?\}\{\d+(?
 # pair matches a structural template. The threshold (12) is generous: realistic ABP/DNS
 # feed regex carries a handful of anchors + one or two trailing quantifiers (a domain
 # pattern like `^(.+\.)?ads?[0-9]*\.example\.(com|net|org)$` counts ~5), so 12 clears
-# every benign pattern in the Phase-1 corpus while still bounding adversarial stacking.
+# every benign pattern in the corpus while still bounding adversarial stacking.
 _REGEX_BUDGET_MAX = 12
 _REGEX_UNBOUNDED_QUANTIFIER = re.compile(r"(?<!\\)[+*]")
 _REGEX_ALTERNATION = re.compile(r"(?<!\\)\|")
 
-# Runtime warn/evict ceilings (milliseconds of per-match thread CPU; Phase-1
+# Runtime warn/evict ceilings (milliseconds of per-match thread CPU; measured
 # defaults, ADR.md SS2). Overridable via the pfb_unbound.ini MAIN section
 # (regex_warn_ms / regex_evict_ms) -> cfg, so they are not hardcoded magic.
 REGEX_WARN_MS_DEFAULT = 10.0
@@ -4664,7 +4664,7 @@ def _dnsbl_compile_regex_rules(
     load) -- it never aborts the build. Names are unique per pattern occurrence so two
     feeds carrying the same pattern both load.
 
-    ADR-07 P7: a pattern carrying a catastrophic SHAPE (nested / adjacent / overlapping
+    ADR-07: a pattern carrying a catastrophic SHAPE (nested / adjacent / overlapping
     unbounded quantifier, stacked bounded repeat, or over the complexity budget) is
     DROPPED at load UNCONDITIONALLY -- independent of ``static_cap`` -- because such a
     shape drives catastrophic backtracking in the `re` engine. The opt-in length ceiling
@@ -4744,7 +4744,7 @@ def build(
     tld_exclusion = list(config.get("tld_exclusion", []))
     exclusion = {e.strip(".") for e in tld_exclusion}
 
-    # ADR-07 P7: the opt-in static cap (drop over-long / nested-quantifier feed regex
+    # ADR-07: the opt-in static cap (drop over-long / nested-quantifier feed regex
     # at load). Read from the manifest config; OFF by default so nothing is dropped.
     static_cap = bool(config.get("regex_cap", False))
 
@@ -4806,7 +4806,7 @@ def build(
             "band": max(_white_entry_band(existing), _white_entry_band(unlock_entry)),
         }
 
-    # ADR-07 P6: ABP feeds (format_hint='abp') are parsed into the typed Rule stream
+    # ADR-07: ABP feeds (format_hint='abp') are parsed into the typed Rule stream
     # (Stage A, parse_abp) and reconciled (Stage B) into the banded pre-emit rule
     # sets; non-ABP feeds keep the ADR-06 lite parse() -> block-only path unchanged.
     # The reconciled ABP structures (incl. @@/regex/important/badfilter) are emitted
@@ -5058,7 +5058,7 @@ def _dnsbl_config_from_manifest(manifest: dict[str, Any], base_dir: str) -> dict
             except OSError as e:
                 sys.stderr.write("[pfBlockerNG]: Failed to read tld_master '{}': {}".format(path, e))
 
-    # ADR-07 P7: the static-cap flag reaches build() via the ini-derived pfb setting
+    # ADR-07: the static-cap flag reaches build() via the ini-derived pfb setting
     # (the cap setting lives in pfb_unbound.ini MAIN, not the manifest); a manifest
     # ``config.regex_cap`` (if present) takes precedence so the build stays a pure
     # function of (manifest+config) in tests that inject it directly.
@@ -5079,7 +5079,7 @@ def _dnsbl_config_from_manifest(manifest: dict[str, Any], base_dir: str) -> dict
 def dnsbl_build_from_manifest(manifest_path: str) -> BuildResult | None:
     """Read the per-feed manifest JSON and BUILD the DNSBL structure-set from raw.
 
-    This is the ADR-06 P4 init swap point: a pure ``(manifest+raw) -> BuildResult``
+    This is the ADR-06 init swap point: a pure ``(manifest+raw) -> BuildResult``
     step (build() mutates no global) that a future zero-downtime reload can run on a
     background thread and atomically swap in. This phase only calls it synchronously
     at init and assigns the result into the module globals -- no background/restart-
@@ -5169,7 +5169,7 @@ def dnsbl_emit_reject_stats(stats_path: str, rejects: RejectTally) -> bool:
 
 
 def rebuild_and_swap(build_snapshot: Callable[[], Snapshot | None], *, emit_counts: bool = True) -> bool:
-    """ADR-10 P3: the single fail-closed build -> atomic-swap + cache-reset step.
+    """ADR-10: the single fail-closed build -> atomic-swap + cache-reset step.
 
     ``build_snapshot`` is a zero-arg builder that produces a BRAND-NEW ``Snapshot`` off
     the live one (the pure ``build()``/``dnsbl_build_from_manifest()`` layer plus the
@@ -5228,7 +5228,7 @@ def rebuild_and_swap(build_snapshot: Callable[[], Snapshot | None], *, emit_coun
     # warn-suppression + perf-fallback strike bookkeeping keyed on pattern NAME must not
     # survive it -- a name reused across reloads (a re-added or edited rule) would
     # otherwise inherit stale strikes/suppression from the OLD pattern object. Mirrors
-    # the init_standard clear (ADR-07 P7) so a no-restart swap resets the same state a
+    # the init_standard clear (ADR-07) so a no-restart swap resets the same state a
     # restart would.
     _regex_warned.clear()
     _regex_perf_strikes.clear()
@@ -5288,7 +5288,7 @@ def find_noaaaa_wildcard_parent(q_name: str, noaaaa_db: dict[str, Any]) -> str |
 def _white_entry_wildcard(entry: Any) -> bool:
     """Wildcard flag of a whiteDB value, tolerant of both shapes.
 
-    ADR-07 P3 widens whiteDB values from a bare ``bool`` (wildcard?) to
+    ADR-07 widens whiteDB values from a bare ``bool`` (wildcard?) to
     ``{"wildcard": bool, "important": bool}``. Existing callers/tests still seed bare
     bools (e.g. ``add_white`` and the retained ADR-06 oracle), so the matcher accepts
     either: a dict reads ``["wildcard"]``; a bare bool IS the wildcard flag.
@@ -5299,7 +5299,7 @@ def _white_entry_wildcard(entry: Any) -> bool:
 
 
 def _white_entry_important(entry: Any) -> bool:
-    """Sovereignty flag of a whiteDB value (ADR-07 P3). Bare-bool legacy entries are
+    """Sovereignty flag of a whiteDB value (ADR-07). Bare-bool legacy entries are
     treated as not-important (False); only the new dict shape can carry it. Consulted
     solely by the numeric 6-band branch (unreachable while important_rules is False)."""
     if isinstance(entry, dict):
@@ -5308,7 +5308,7 @@ def _white_entry_important(entry: Any) -> bool:
 
 
 def _white_entry_band(entry: Any) -> int:
-    """Numeric band of a whiteDB value (ADR-07 P6). A dict entry carries an explicit
+    """Numeric band of a whiteDB value (ADR-07). A dict entry carries an explicit
     ``band`` (feed allow 2/4, user allow 6); else it is derived from ``important``
     (an important entry is a user allow -> band 6, a bare-bool/legacy feed allow ->
     band 2). Consulted only by the numeric 6-band branch."""
@@ -5484,7 +5484,7 @@ class _LruCache:
             self._d.clear()
 
 
-# ADR-07 P3: the 6-band precedence scale (ADR.md SS2 / RESULTS-P2 SS2). Highest wins;
+# ADR-07: the 6-band precedence scale (ADR.md SS2 / RESULTS-P2 SS2). Highest wins;
 # a block wins iff block_prio > allow_prio (no ties: block in {1,3,5}, allow in {2,4,6}).
 #   6 user allow   5 user block   4 feed allow+important
 #   3 feed block+important   2 feed allow (@@)   1 feed block (||)
@@ -5557,7 +5557,7 @@ def _scan_block_band(
 
     ``None`` when nothing matched. The numeric 6-band resolution takes the max block
     band (decide() semantics) -- the fast-path discovery short-circuits on the first
-    hit, which is wrong for the max. Snapshot-iterates the regex DB (Phase-7 eviction
+    hit, which is wrong for the max. Snapshot-iterates the regex DB (eviction
     safety). On a tie the first scanned kind (data -> zone -> regex) holds best_meta,
     but the caller only re-attributes when this band strictly exceeds the discovered
     one, so a tie never disturbs the discovered attribution."""
@@ -5599,7 +5599,7 @@ def _scan_block_band(
                 for _name, _lit in _b:
                     if _lit in q_lower:
                         cand.add(_name)
-        # Snapshot-iterate + time each match (ADR-07 P7), same warn/evict policy as the
+        # Snapshot-iterate + time each match (ADR-07), same warn/evict policy as the
         # fast-path discovery scan; collect evicted names and pop AFTER the loop.
         warn_ms = cfg.get("regex_warn_ms", REGEX_WARN_MS_DEFAULT)
         evict_ms = cfg.get("regex_evict_ms", REGEX_EVICT_MS_DEFAULT)
@@ -5631,7 +5631,7 @@ def _scan_allow_regex_band(
     """Highest allow band over the allow-regex (@@/re/) entries that match ``q_name``;
     0 if none match. Values mirror regexDB's tolerant shape: a bare compiled pattern,
     or a {"re", "important", "band"} payload. Iterates a SNAPSHOT (list(...)) and TIMES
-    each match (ADR-07 P7): over the warn ceiling logs once, over the evict ceiling is
+    each match (ADR-07): over the warn ceiling logs once, over the evict ceiling is
     removed from the live allow-regex DB AFTER the loop (snapshot-iterate, evict-after-
     loop -- the same warn/evict policy as the block-regex scans; fact 3)."""
     if not q_name:
@@ -5715,7 +5715,7 @@ def _resolve_numeric_allow(
     its highest matching band (computed by the caller over data/zone/block-regex).
     Blocked iff ``block_band > allow_band``; with no allow match ``allow_band`` is 0
     so the block stands. Engaged only when ``important_rules`` is True (an ABP
-    $important / feed @@ / feed regex was loaded); proven against the Phase-2 band
+    $important / feed @@ / feed regex was loaded); proven against the 6-band precedence
     table by synthetic-payload unit tests and the production ABP equivalence tests.
     """
     allow_band = 0
@@ -5824,7 +5824,7 @@ def evaluate_domain(
         # internally); derive it from the legacy cfg["python_idn"] when a cfg predates the
         # key (legacy callers/tests still pass only python_idn -- True->All-IDN).  The
         # explicit None check is REQUIRED: IdnMode.Off is truthy so an ``or`` idiom would
-        # bypass the stored value whenever Off is present (ADR-28 P8 landmine fix).
+        # bypass the stored value whenever Off is present (ADR-28 landmine fix).
         if not is_found:
             _raw = cfg.get("idn_mode")
             if isinstance(_raw, IdnMode):
@@ -5835,7 +5835,7 @@ def evaluate_domain(
                 # None (key absent) or unrecognised string -> legacy fallback preserving
                 # the pre-ADR-08 behaviour (python_idn=True -> All-IDN, False -> Off).
                 idn_mode = idn_mode_from_legacy(cfg.get("python_idn", False))
-            # All-IDN / Off arm -- BYTE-IDENTICAL to today (the Phase-3 golden gate):
+            # All-IDN / Off arm -- BYTE-IDENTICAL to today (the golden gate):
             # idn_mode_decision blocks IFF All-IDN on an xn-- query, as the old inline test.
             if idn_mode_decision(q_name, idn_mode):
                 is_found = True
@@ -5910,7 +5910,7 @@ def evaluate_domain(
         if is_found:
             b_eval = q_name
             log_type = "1"
-            # ADR-08 P5: a Confusable BLOCK reports the dual-form (xn-- [decoded] script)
+            # ADR-08: a Confusable BLOCK reports the dual-form (xn-- [decoded] script)
             # instead of the bare A-label, so the dnsbl.log line / alerts page are
             # actionable. Only set on the homoglyph block path; the All-IDN feed and every
             # other stratum keep b_eval = q_name untouched.
@@ -5922,7 +5922,7 @@ def evaluate_domain(
     # byte-for-byte the pre-P3 matcher; this is the path when no ABP @@/regex/$important
     # is loaded. The numeric 6-band resolution is the important_rules==True branch -- it
     # IS reached in production once an ABP feed (or user regex / Custom_List) loads a
-    # feed @@ / $important / feed-regex (ADR-07 P6 wired it; not just synthetic tests).
+    # feed @@ / $important / feed-regex (ADR-07 wired it; not just synthetic tests).
     if is_found:
         if not cfg.get("important_rules", False):
             if cfg["whiteDB"]:
@@ -6335,7 +6335,7 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                 if isgpBypass is not None:
                     bypass_dnsbl = True
 
-        # ADR-10 P2: capture the ONE live matcher snapshot ref for this query. Every
+        # ADR-10: capture the ONE live matcher snapshot ref for this query. Every
         # name in this query (the original + any CNAME-chain targets) is evaluated
         # against this single immutable snapshot, so a swap that rebinds ``_snapshot``
         # mid-query never tears a decision across names (ADR.md SS2 atomic-swap shape).
@@ -6410,7 +6410,7 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                     # hand-edited ini, or a test seeding only python_idn) still resolves
                     # to today's mode rather than KeyError-ing.
                     "idn_mode": pfb.get("idn_mode") or idn_mode_from_legacy(pfb.get("python_idn", False)),
-                    # ADR-08 P5: the Confusable sub-toggles (only read in IDN_MODE_CONFUSABLE).
+                    # ADR-08: the Confusable sub-toggles (only read in IDN_MODE_CONFUSABLE).
                     # Default-ON malicious block, opt-in suspicious escalation.
                     "python_idn_block_malicious": pfb.get("python_idn_block_malicious", True),
                     "python_idn_escalate_suspicious": pfb.get("python_idn_escalate_suspicious", False),
@@ -6424,7 +6424,7 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                     "hstsDB": bool(snap.hsts_db),
                     "hsts_tlds": pfb["hsts_tlds"],
                 }
-                # ADR-10 P2: read every matcher stratum off the ONE captured snapshot
+                # ADR-10: read every matcher stratum off the ONE captured snapshot
                 # ref (``snap``, taken once at the top of this per-name loop) instead of
                 # re-assembling ``containers`` from separate module globals. ``snap`` is
                 # immutable for this query, so a swap that rebinds ``_snapshot`` mid-query
@@ -6445,7 +6445,7 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                 if dnsbl.is_found and not dnsbl.in_whitelist:
                     pfb_db_enqueue(("cache", (dnsbl.b_type, q_name, dnsbl.group, dnsbl.b_eval, dnsbl.feed)))
 
-                # ADR-08 P5: a Confusable-mode ALERT (suspicious/flagged, or malicious with
+                # ADR-08: a Confusable-mode ALERT (suspicious/flagged, or malicious with
                 # block disabled) does NOT block -- the name resolves -- but the anomaly is
                 # surfaced once, here on the fresh evaluation, in the same dnsbl.log shape as
                 # a block (dual-form b_eval so it is actionable). A repeat query reuses the

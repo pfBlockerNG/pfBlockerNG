@@ -92,7 +92,7 @@ $pfb['dnsbl_parse_err']	= "{$pfb['logdir']}/dnsbl_parsed_error.log";
 
 $pfb['master']		= "{$pfb['dbdir']}/masterfile";
 $pfb['supptxt']		= "{$pfb['dbdir']}/pfbsuppression.txt";
-$pfb['supptxt_v6']	= "{$pfb['dbdir']}/pfbsuppression_v6.txt";	// ADR-53 P6: IPv6 suppression customlist
+$pfb['supptxt_v6']	= "{$pfb['dbdir']}/pfbsuppression_v6.txt";	// ADR-53: IPv6 suppression customlist
 $pfb['dnsbl_supptxt']	= "{$pfb['dbdir']}/pfbdnsblsuppression.txt";
 $pfb['geoip_isos']	= "{$pfb['dbdir']}/geoip.txt";
 $pfb['dnsbl_info']	= '/var/unbound/pfb_py_dnsbl.sqlite';
@@ -127,8 +127,8 @@ $pfb['unbound_py_zone'] = '/var/unbound/pfb_py_zone.txt';
 $pfb['unbound_py_ss']	= '/var/unbound/pfb_py_ss.txt';
 $pfb['unbound_py_hsts']	= '/var/unbound/pfb_py_hsts.txt';	// SHIPPED file re-staged by dnsbl_cache_stage() cp -f; fingerprinted so a package update ships a new list and triggers a zero-downtime reload
 $pfb['unbound_py_count']= '/var/unbound/pfb_py_count';
-$pfb['unbound_py_regex_count']= '/var/unbound/pfb_py_regex_count';	// ADR-07 P8: Python-emitted ADMITTED (cap-filtered) feed+user regex total for the DNSBL_Regex alias
-$pfb['unbound_py_reject_stats']= '/var/unbound/pfb_py_reject_stats.json';	// ADR-48 P4: Python-emitted per-entry reject tally (issue #789), read by pfb_emit_entry_reject_stats()
+$pfb['unbound_py_regex_count']= '/var/unbound/pfb_py_regex_count';	// ADR-07: Python-emitted ADMITTED (cap-filtered) feed+user regex total for the DNSBL_Regex alias
+$pfb['unbound_py_reject_stats']= '/var/unbound/pfb_py_reject_stats.json';	// ADR-48: Python-emitted per-entry reject tally (issue #789), read by pfb_emit_entry_reject_stats()
 $pfb['unbound_py_sources']= '/var/unbound/pfb_py_sources.json';	// ADR-06: per-feed manifest consumed by pfb_unbound.py init
 $pfb['unbound_py_rawdir']= '/var/unbound/pfb_py_raw';		// ADR-06: per-feed IP-stripped raw feeds referenced by the manifest
 
@@ -897,7 +897,7 @@ function pfb_validate_log(string $feed, string $stage, string $reason, string $d
 	pfb_logger(pfb_validate_log_line($feed, $stage, $reason, $detail), $level);
 }
 
-// ADR-48 P2: the one formatter for the detected= summary built from pfb_filter()'s
+// ADR-48: the one formatter for the detected= summary built from pfb_filter()'s
 // $reject_detail out-param -- every wired pfb_download() call site uses it, so the
 // shape has a single place to change.
 function pfb_reject_detail_summary(array $reject_detail): string {
@@ -1202,7 +1202,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 		foreach ($input as $vline) {
 			if (preg_match("/[\p{C}]+/u", $vline) !== 0) {
 				pfb_logger("{$header} Control characters found [ " . htmlspecialchars($vline) . " ]", 6);
-				// ADR-48 P2: this early return precedes the switch, so it also rejects
+				// ADR-48: this early return precedes the switch, so it also rejects
 				// the FILE_MIME types -- fill the out-param for an opted-in caller
 				// (keep the level-6 diagnostic; it is errlog-only, not the legacy
 				// reject message the contract suppresses).
@@ -1551,7 +1551,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 			unset($retval);
 			unset($output);
 			if (!file_exists($input[1])) {
-				// ADR-48 P2: honour the out-param contract on EVERY reject path — an
+				// ADR-48: honour the out-param contract on EVERY reject path — an
 				// opted-in caller emits the canonical line itself, so fill the detail
 				// and suppress the legacy message (mirrors the mime-reject branch).
 				if (is_array($reject_detail)) {
@@ -1594,7 +1594,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 						pfb_logger("MIME recovered: octet-stream positively identified as \"" . htmlspecialchars($recovered) . "\" via structural probe", 5);
 						$output[0] = $recovered;
 					} else {
-						// ADR-48 P2: opted-in caller (pre-set $reject_detail = array())
+						// ADR-48: opted-in caller (pre-set $reject_detail = array())
 						// gets the raw detail back instead of the legacy message.
 						if (is_array($reject_detail)) {
 							$reject_detail = array(
@@ -1620,7 +1620,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 			unset($retval);
 			unset($output);
 			if (!file_exists($input[1])) {
-				// ADR-48 P2: same out-param contract as the FILE_MIME branch above.
+				// ADR-48: same out-param contract as the FILE_MIME branch above.
 				if (is_array($reject_detail)) {
 					$reject_detail = array('mime_raw' => 'file-not-found', 'mime' => '', 'retval' => -1);
 				} else {
@@ -1630,7 +1630,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 			}
 			exec("/usr/bin/file -bZ --mime-type " . escapeshellarg($input[1]) . " 2>&1", $output, $retval);
 			if ($retval != 0 || empty($output[0]) || !pfb_mime_in_allowlist($output[0], $pfb['mime_types'])) {
-				// ADR-48 P2: same out-param contract as the FILE_MIME branch above.
+				// ADR-48: same out-param contract as the FILE_MIME branch above.
 				if (is_array($reject_detail)) {
 					$reject_detail = array(
 						'mime_raw' => $output[0],
@@ -1666,7 +1666,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 			}
 			break;
 		case PFB_FILTER_TOKEN:
-			// ADR-59 P5: validate a base64url/JWT-shaped credential token (e.g. a Cloudflare
+			// ADR-59: validate a base64url/JWT-shaped credential token (e.g. a Cloudflare
 			// Radar API token) -- letters, digits, and the base64url/JWT punctuation set
 			// '._~+/=-', bounded length so a pathological input can't be used for resource
 			// exhaustion. PFB_FILTER_WORD ([A-Za-z0-9_] only) would reject a real token
@@ -1692,7 +1692,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 
 		// Exceptions -- callers whose rejected input must never be logged, even at
 		// debug level: 'DNSBL_Download' (parsed feed lines -- volume); 'top1m_token'
-		// (ADR-59 P5 -- the secret itself, not merely its download URL); 'maxmind_key'
+		// (ADR-59 -- the secret itself, not merely its download URL); 'maxmind_key'
 		// (issue #924 -- same masked/write-only treatment for the MaxMind license key).
 		if (in_array($reference, array('DNSBL_Download', 'top1m_token', 'maxmind_key'))) {
 			//
@@ -1895,7 +1895,7 @@ function pfb_dnsblip_mark_reprocess($action, string $vtype): void {
 // v6 stays OPTIONAL (ADR-13 §7 pivot): a missing v6 VIP never fails validation, even when
 // the resolver listens on IPv6 — pfb_global surfaces that as a non-blocking warning, not a
 // force-disable. The validator only checks the VIPs that ARE configured (existence,
-// interface, overlap). Behaviour is identical to before the (reverted) Phase-3 hard rule.
+// interface, overlap). Behaviour is identical to before the (reverted) hard rule.
 function pfb_validate_vips(string $interface, string|null $vip4 = '', string|null $vip6 = ''): array {
 	$enabled4 = !empty($vip4);
 	$enabled6 = !empty($vip6);
@@ -2291,7 +2291,7 @@ function pfb_global() {
 	// Reload config.xml to get any recent changes
 	config_read_file(FALSE, TRUE);
 
-	// General variables — registered sections read through the gateway (ADR-29 P4).
+	// General variables — registered sections read through the gateway (ADR-29).
 	$pfb['config']		= PfbConfig::readSection('installedpackages/pfblockerng/config/0');
 	$pfb['ipconfig']	= config_get_path('installedpackages/pfblockerngipsettings/config/0', []);
 	$pfb['dnsblconfig']	= PfbConfig::readSection('installedpackages/pfblockerngdnsblsettings/config/0');
@@ -2402,7 +2402,7 @@ function pfb_global() {
 	$pfb['dnsbl_gp']		= $pfb['dnsblconfig']['pfb_gp'];		// DNSBL Resolver python - DNSBL Bypass
 	$pfb['dnsbl_gp_bypass_list']	= $pfb['dnsblconfig']['pfb_gp_bypass_list'];	// DNSBL Resolver python - List of Local IPs to bypass DNSBL
 
-	// SafeSearch — read via gateway (ADR-29 P4).
+	// SafeSearch — read via gateway (ADR-29).
 	$pfb['safesearch_enable']	= PfbConfig::read('safesearch_enable');
 	$pfb['safesearch_youtube']	= PfbConfig::read('safesearch_youtube');
 	$pfb['safesearch_doh']		= PfbConfig::read('safesearch_doh');
@@ -4921,7 +4921,7 @@ function pfb_concat_member_files(array $member_paths): string {
  *
  * Applies LC_ALL=C sort -u (ADR-26) to the concatenated member content, returning
  * an array of unique, C-sorted IP/CIDR strings with blank lines and comments stripped.
- * Used as the content-addressed gate input (ADR-40 P3) and the delta last_set source (P4).
+ * Used as the content-addressed gate input and the delta last_set source (ADR-40).
  *
  * @param string $member_content Raw concatenated member content (output of pfb_concat_member_files).
  * @return string[] Sorted, unique, non-empty lines. Empty array for empty/blank input.
@@ -4963,7 +4963,7 @@ function pfb_write_canonical_alias(string $path, array $canonical_set): void {
  * does not exist yet, as on boot/initial-load for non-empty sets).
  *
  * Set comparison is ORDER- and DUPLICATE-immune: the mirror is also passed
- * through pfb_canonical_alias_set() before comparing, so a pre-Phase-3
+ * through pfb_canonical_alias_set() before comparing, so a legacy
  * non-canonical mirror (raw concat with dups) round-trips correctly on
  * the first upgrade pass.
  *
@@ -5085,7 +5085,7 @@ function pfb_alias_delta_batch_resolve(string $raw): int {
  *
  * ADR-40 contract items satisfied:
  *   (1) End-state == replace: after delta apply, table membership equals $desired_set.
- *   (5) Empty-table: full replace handles initial population (mirrors Phase-3 gate).
+ *   (5) Empty-table: full replace handles initial population (mirrors the content-addressed gate).
  *   (8) Idempotence: identical $desired_set and $last_set → empty delta → zero pfctl calls.
  *
  * Failures: a pfctl error is logged; the caller can still verify the table state.
@@ -5336,7 +5336,7 @@ function pfb_create_suppression_file() {
 		unlink_if_exists("{$pfb['supptxt']}");
 	}
 
-	// ADR-53 P6: v6 sibling -- same decode/write/unlink-when-empty shape as v4 above.
+	// ADR-53: v6 sibling -- same decode/write/unlink-when-empty shape as v4 above.
 	$v6suppression = pfbng_text_area_decode($pfb['ipconfig']['v6suppression'] ?? '', FALSE, TRUE);
 	if (!empty($v6suppression)) {
 		@file_put_contents("{$pfb['supptxt_v6']}", $v6suppression, LOCK_EX);
@@ -6254,7 +6254,7 @@ function pfb_dnsbl_unlock_lines() {
 	return $out;
 }
 
-// ADR-07 P8: extract an IP from an ABP-anchored / hosts line for the DNSBL-IP
+// ADR-07: extract an IP from an ABP-anchored / hosts line for the DNSBL-IP
 // firewall pass (coexistence). The raw ABP line itself still flows to Python, which
 // SKIPS IP-valued anchors (parse_abp returns None) -- so IP -> firewall only,
 // domain/regex -> Python only (no double-handling, no leak; ADR-06 fact 7).
@@ -6436,7 +6436,7 @@ function pfb_dnsbl_is_abp_header($line) {
 }
 
 
-// ADR-10 P5: atomically publish a file to the chroot (/var/unbound). Stage into a
+// ADR-10: atomically publish a file to the chroot (/var/unbound). Stage into a
 // temp file ON THE SAME FILESYSTEM (same directory) -> flush + fsync the data ->
 // fix ownership -> atomic rename() over the final path. The plugin only ever reads
 // a fully-written, immutable file: a half-written manifest is never visible because
@@ -6488,7 +6488,7 @@ function pfb_unbound_py_atomic_write($path, $content) {
 }
 
 
-// ADR-10 P5: flip the zero-downtime RELOAD SENTINEL (the all-or-nothing commit that
+// ADR-10: flip the zero-downtime RELOAD SENTINEL (the all-or-nothing commit that
 // wakes the Python reload-watcher). The sentinel host path is /var/unbound/pfb_py_reload
 // (Unbound is chrooted at /var/unbound; the module opens it as the chroot-relative
 // "pfb_py_reload"). Its content is a monotonically NON-DECREASING
@@ -6744,7 +6744,7 @@ function pfb_unbound_py_write_control($cmd, $ip = '', $duration = '', $wait_time
 }
 
 
-// ADR-10 P5: PRIMARY RAM gate for the zero-downtime swap (the Python watcher re-checks it as a
+// ADR-10: PRIMARY RAM gate for the zero-downtime swap (the Python watcher re-checks it as a
 // safety net). The background rebuild holds OLD + NEW matcher structures resident at once
 // (~2x transient); on a constrained box that bust would OOM mid-swap. Mirrors the Python
 // projection: 2 * loaded_entries * 276 B + 64 MiB headroom, measured against hw.usermem.
@@ -6849,7 +6849,7 @@ function pfb_unbound_python_sources($feeds) {
 		$header	= isset($feed['header']) ? $feed['header'] : '';
 		$group	= isset($feed['group'])  ? $feed['group']  : '';
 		$logf	= isset($feed['log'])    ? (string) $feed['log'] : '1';
-		// ADR-07 P8: 'abp' feeds carry RAW ABP lines verbatim to the Python parser;
+		// ADR-07: 'abp' feeds carry RAW ABP lines verbatim to the Python parser;
 		// every other feed stays 'plain' (PHP-extracted bare domains, ADR-06).
 		$format	= (isset($feed['format']) && $feed['format'] === 'abp') ? 'abp' : 'plain';
 
@@ -6877,7 +6877,7 @@ function pfb_unbound_python_sources($feeds) {
 		if (($in_h = @fopen($src, 'r')) !== FALSE) {
 			while (($line = @fgets($in_h)) !== FALSE) {
 				if ($format === 'abp') {
-					// ADR-07 P8: pass the RAW ABP line through unmodified -- the
+					// ADR-07: pass the RAW ABP line through unmodified -- the
 					// '.txt' of an 'abp' feed already holds raw ABP lines (the
 					// lite parser is gone). Python's parse_abp does all parsing.
 					$line = rtrim($line, "\r\n");
@@ -6988,7 +6988,7 @@ function pfb_unbound_python_sources($feeds) {
 
 	$json = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
 	if ($json !== FALSE) {
-		// ADR-10 P5: atomic publish (stage -> fsync -> rename). The per-feed raw
+		// ADR-10: atomic publish (stage -> fsync -> rename). The per-feed raw
 		// files were already (re)written into unbound_py_rawdir above; the manifest
 		// rename is the point at which the new immutable set becomes readable. The
 		// sentinel flip that ACTS on it is driven by pfb_reload_unbound's data
@@ -7028,7 +7028,7 @@ function pfb_unbound_python_sources_patch($key, $values) {
 
 	$json = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
 	if ($json !== FALSE) {
-		// ADR-10 P5: atomic publish (the sentinel flip is driven by the reload).
+		// ADR-10: atomic publish (the sentinel flip is driven by the reload).
 		return pfb_unbound_py_atomic_write($pfb['unbound_py_sources'], $json);
 	}
 
@@ -7572,7 +7572,7 @@ function tld_analysis() {
 
 	pfb_logger("TLD analysis", 1);
 
-	// ADR-07 P8: ABP/EasyList feeds carry RAW ABP lines (||x^, @@||x^, /re/,
+	// ADR-07: ABP/EasyList feeds carry RAW ABP lines (||x^, @@||x^, /re/,
 	// '0.0.0.0 host') -- NOT the legacy ',domain,,log,feed,group' CSV shape that
 	// this loop parses. Parsing them as CSV yields garbage/empty domains. ABP feeds
 	// are tagged with a persisted '{$header}.abp' marker and are built ENTIRELY by
@@ -7596,7 +7596,7 @@ function tld_analysis() {
 				continue;
 			}
 
-			// ADR-07 P8: skip ABP-feed lines (see note above). A plain CSV row is
+			// ADR-07: skip ABP-feed lines (see note above). A plain CSV row is
 			// ',domain,,log,feed,group'; the feed name is column index 4. ABP raw
 			// lines lack this shape, so an unset/empty feed column also means skip.
 			if (!empty($abp_feeds)) {
@@ -7768,7 +7768,7 @@ function pfb_stop_start_unbound($type) {
 }
 
 
-// ADR-10 P5: is the DNSBL Unbound python integration the LIVE resolver mode? The
+// ADR-10: is the DNSBL Unbound python integration the LIVE resolver mode? The
 // zero-downtime swap only applies when the in-memory matcher (pfb_unbound.py) is the
 // active blocklist source -- i.e. the resolver config has the python module wired in.
 // Read from config.xml (the source of truth), not a generated file.
@@ -7778,7 +7778,7 @@ function pfb_unbound_py_mode_active() {
 }
 
 
-// ADR-10 P5: C-cache flip for a zero-downtime swap. Staleness is ONE-DIRECTIONAL: since #43
+// ADR-10: C-cache flip for a zero-downtime swap. Staleness is ONE-DIRECTIONAL: since #43
 // DNSBL blocks set qstate.no_cache_store=1, a block reply is NEVER cached. block->allow needs
 // NO flush (decisionDB.clear() suffices); allow->block leaves the previously-resolved answer
 // cached until TTL, so ONLY that direction needs a flush, ONLY for newly-blocked names. $names:
@@ -7830,7 +7830,7 @@ function pfb_unbound_py_ccache_flush($names) {
 }
 
 
-// Reload Resolver. ADR-10 P5: $datapath signals a pure DNSBL-DATA update (feed/cron or a #51
+// Reload Resolver. ADR-10: $datapath signals a pure DNSBL-DATA update (feed/cron or a #51
 // custom-list edit) already published atomically to the manifest. When python is live, unbound
 // is running, no config change is pending, and the RAM gate fits, this takes the ZERO-DOWNTIME
 // fast path (flip the reload sentinel, no restart). $newly_blocked carries the allow->block
@@ -8083,7 +8083,7 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython) {
 	// Load new DNSBL updates
 	if (is_service_running('unbound')) {
 
-		// ADR-10 P5: a feed/cron DNSBL-DATA update takes the zero-downtime swap when the
+		// ADR-10: a feed/cron DNSBL-DATA update takes the zero-downtime swap when the
 		// reload introduces NO config change ($pfbpython FALSE -> unbound.conf/ini/mounts
 		// unchanged). The manifest + per-feed raw were already published atomically by
 		// pfb_unbound_python_sources() above; flip the sentinel, no restart. A config
@@ -8131,7 +8131,7 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython) {
 
 
 // Process TOP1M database
-// $provider_override (ADR-59 P2 test seam): when given, its 'parse'/'header'/
+// $provider_override (ADR-59 test seam): when given, its 'parse'/'header'/
 // 'domain_col' knobs drive the builder directly instead of resolving through
 // pfb_top1m_providers()[$pfb['dnsbl_top1m_type']->value] -- lets a unit test
 // exercise a synthetic descriptor's knobs without a live provider. Production
@@ -8144,7 +8144,7 @@ function pfblockerng_top1m(?array $provider_override = NULL) {
 		return;
 	}
 
-	// ADR-59 P2: the active provider descriptor drives the parse knobs below.
+	// ADR-59: the active provider descriptor drives the parse knobs below.
 	// $pfb['dnsbl_top1m_type'] may be unset in an isolated unit-test context
 	// (it is normally set by pfb_global() -- PfbConfig::read('alexa_type') --
 	// which some tests never call); default to Tranco, the same absent-default
@@ -8191,7 +8191,7 @@ function pfblockerng_top1m(?array $provider_override = NULL) {
 			pfb_logger("\n  TOP1M: could not create the temp whitelist file -- keeping the previous TOP1M whitelist.\n", 2);
 		}
 		else {
-			// ADR-59 P2: skip exactly the first physical line unconditionally when
+			// ADR-59: skip exactly the first physical line unconditionally when
 			// the provider ships a header row -- before the content filter below, so
 			// a header line's shape (which may not even contain a '.'/',') never
 			// matters.
@@ -8204,7 +8204,7 @@ function pfblockerng_top1m(?array $provider_override = NULL) {
 					continue;
 				}
 
-				// ADR-59 P5: Cloudflare's dataset is a SINGLE 'domain' column (domain_col
+				// ADR-59: Cloudflare's dataset is a SINGLE 'domain' column (domain_col
 				// 0) -- a real data line has no comma at all (no column to split), so the
 				// comma requirement below would wrongly reject every line. Only demand a
 				// comma when a real multi-column split is expected (domain_col > 0, every
@@ -10249,7 +10249,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				return TRUE;
 			}
 			elseif ($type == 'top1m') {
-				// ADR-59 P2: a gz-container TOP1M provider decompresses straight to
+				// ADR-59: a gz-container TOP1M provider decompresses straight to
 				// the destination CSV pfblockerng_top1m() reads (no rename/staging).
 				exec("/usr/bin/gunzip -c {$file_dwn_esc} > {$header_esc}", $output, $retval);
 				unlink_if_exists($file_download);
@@ -10425,7 +10425,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 		else {
 			// Uncompressed file format.
 			if ($type == 'geoip' || $type == 'asn' || $type == 'top1m') {
-				// Extras - MaxMind/TOP1M/ASN downloads. ADR-59 P2: a 'plain' container
+				// Extras - MaxMind/TOP1M/ASN downloads. ADR-59: a 'plain' container
 				// provider's body IS the destination CSV -- rename straight to it, same
 				// as geoip/asn (no intermediate '.orig' staging needed).
 				@rename("{$file_download}", "{$head_download}");
@@ -11027,7 +11027,7 @@ function pfb_aliastables($mode) {
 			// pfb_dnsbl_cache() (different lifecycle); ADR-08 had wrongly piggybacked
 			// the /var/unbound/pfb_unbound* + pfb_py_* files onto this IP archive.
 			$files = glob("{{$pfb['aliasdir']}/pfB_*.txt,{$pfb['dnsbl_file']}.conf}", GLOB_BRACE) ?: [];
-			// ADR-43 P4: include the due-ledger so cron schedules survive a RAM-disk reboot.
+			// ADR-43: include the due-ledger so cron schedules survive a RAM-disk reboot.
 			$pfb_ledger = "{$pfb['dbdir']}/pfb_due_ledger.json";
 			if (is_file($pfb_ledger)) {
 				$files[] = $pfb_ledger;
@@ -11321,7 +11321,7 @@ function pfb_remove_states() {
 	// List of IPs to suppress
 	$pfb_local = $pfb_localsub = array();
 
-	// Collect v4/v6 Suppression list entries (ADR-53 P7): checked prefix-aware via
+	// Collect v4/v6 Suppression list entries (ADR-53): checked prefix-aware via
 	// pfb_ip_suppressed() below, replacing the old exact-IP hashmap + subnetv4_expand()
 	// '/24' materialisation -- which could only express a bare host or an exact '/24';
 	// any other containing mask (v4 '/8'-'/23', any v6 mask) silently stayed
@@ -12197,7 +12197,7 @@ function pfb_local_feed_changed($source_path, $orig_path) {
 		return ($src_hash !== $sidecar['digest']);
 	}
 
-	// 'xxh128' — canonical post-Phase-2 path.
+	// 'xxh128' — canonical path.
 	$src_hash = pfb_content_hash($source_path, TRUE);
 	if ($src_hash === FALSE) {
 		return TRUE;
@@ -14687,7 +14687,7 @@ function sync_package_pfblockerng($cron='') {
 		$pfb_is_noups  = ($pfb_cron_str === 'noupdates');
 		// 'update' is the deprecated CLI verb that historically called sync_package_pfblockerng('cron'),
 		// so it got $pfb_cron_tick=TRUE and the reuse_dnsbl propagation below fired.
-		// Post-Phase-3 it reaches here as 'update' → trigger='manual' → cron_tick FALSE.
+		// Now it reaches here as 'update' → trigger='manual' → cron_tick FALSE.
 		// Restore back-compat for this DEPRECATED STRING path only: treat 'update' like 'cron'
 		// for the reuse_dnsbl elseif guard. The new ARRAY path stays unaffected (trigger='manual'
 		// from pfb_trigger_request('update') keeps cron_tick FALSE there, as intended).
@@ -15877,7 +15877,7 @@ function sync_package_pfblockerng($cron='') {
 								$custom = FALSE;
 							}
 
-							// ADR-31 P4: per-row action → manifest mode.
+							// ADR-31: per-row action → manifest mode.
 							// 'action' is a dynamic per-row key (like 'custom') — read
 							// directly; default/absent ⇒ 'Deny' (deny path, byte-identical).
 							// Config storage freeze (ADR-28): only 'Permit'/'Deny' are stored;
@@ -15933,10 +15933,10 @@ function sync_package_pfblockerng($cron='') {
 								// Collect existing list stats
 								$lists_dnsbl_all[]	= "{$row['header']}.txt";
 								$lists_dnsbl_current[]	= "{$row['header']}";
-								// ADR-07 P8: a reused feed isn't re-parsed, so read the
+								// ADR-07: a reused feed isn't re-parsed, so read the
 								// persisted '.abp' marker to carry its format_hint forward.
-								// ADR-31 P3: delegate to pfb_feed_manifest_row() (deny default).
-								// ADR-31 P4: pass $mode derived from per-row 'action' (above).
+								// ADR-31: delegate to pfb_feed_manifest_row() (deny default).
+								// ADR-31: pass $mode derived from per-row 'action' (above).
 								$pfb_py_feeds[]		= pfb_feed_manifest_row(
 									$header, $alias, $logging_type,
 									file_exists("{$pfbfolder}/{$header}.abp") ? 'abp' : 'plain',
@@ -15998,7 +15998,7 @@ function sync_package_pfblockerng($cron='') {
 									$liteparser = TRUE;
 								}
 
-								// ADR-07 P8: ABP/EasyList feeds are header-sniffed (below) and
+								// ADR-07: ABP/EasyList feeds are header-sniffed (below) and
 								// tagged format_hint='abp'; their RAW lines pass through to the
 								// Python parser. The old PHP lite parser ($e_replace token-strip)
 								// is deleted -- $easylist now only flags the feed as ABP.
@@ -16072,7 +16072,7 @@ function sync_package_pfblockerng($cron='') {
 											}
 
 											if ($easylist) {
-												// ADR-07 P8: the PHP $easylist lite parser is
+												// ADR-07: the PHP $easylist lite parser is
 												// DELETED. ABP feeds are tagged format_hint='abp'
 												// and their RAW lines are passed through verbatim
 												// to the Python parser (parse_abp), which is now
@@ -16545,18 +16545,18 @@ function sync_package_pfblockerng($cron='') {
 								$pfb['domain_update']	= $pfb['aliasupdate'] = $pfb['summary'] = TRUE;
 								$lists_dnsbl_all[]	= "{$row['header']}.txt";
 								$lists_dnsbl_current[]	= "{$row['header']}";
-								// ADR-07 P8: tag ABP feeds 'abp' so the manifest writer passes
+								// ADR-07: tag ABP feeds 'abp' so the manifest writer passes
 								// their RAW lines through to the Python parser (parse_abp); all
 								// other feeds stay 'plain' (PHP-extracted bare domains).
-								// ADR-31 P3: delegate to pfb_feed_manifest_row() (deny default).
-								// ADR-31 P4: pass $mode derived from per-row 'action' (above).
+								// ADR-31: delegate to pfb_feed_manifest_row() (deny default).
+								// ADR-31: pass $mode derived from per-row 'action' (above).
 								$pfb_py_feeds[]		= pfb_feed_manifest_row(
 									$header, $alias, $logging_type,
 									$easylist ? 'abp' : 'plain',
 									$custom ? 'user' : 'feed',
 									$mode);
 
-								// ADR-07 P8: persist the ABP marker so a future reuse build (which
+								// ADR-07: persist the ABP marker so a future reuse build (which
 								// does not re-parse the feed) carries the format_hint forward.
 								if ($easylist) {
 									@touch("{$pfbfolder}/{$header}.abp");
@@ -16659,7 +16659,7 @@ function sync_package_pfblockerng($cron='') {
 			$pfb['alias_dnsbl_all'][] = 'DNSBL_TLD_Allow';
 			dnsbl_alias_update('update', 'DNSBL_TLD_Allow', '', '', $pytld_cnt);
 		}
-		// ADR-07 P8: the DNSBL_Regex alias count now reflects the ADMITTED
+		// ADR-07: the DNSBL_Regex alias count now reflects the ADMITTED
 		// (cap-filtered) feed + user regex total emitted by Python (regexDB +
 		// allowRegexDB after the static cap drops over-cap patterns at load) --
 		// value changes by design (ADR §2 "Emit + counts"). The Python count file
@@ -16862,7 +16862,7 @@ function sync_package_pfblockerng($cron='') {
 				@file_put_contents($pfb['unbound_py_data'], '', LOCK_EX);	// present-but-empty CSV
 				unlink_if_exists($pfb['unbound_py_zone']);			// python mode: zone must be absent
 				unlink_if_exists($pfb['unbound_py_count']);
-				unlink_if_exists($pfb['unbound_py_regex_count']);		// ADR-07 P8
+				unlink_if_exists($pfb['unbound_py_regex_count']);		// ADR-07
 			}
 		}
 		else {
@@ -18121,7 +18121,7 @@ function sync_package_pfblockerng($cron='') {
 	#	CONFIGURE ALIASES AND FIREWALL RULES	#
 	#################################################
 
-	// ADR-40 P3: Snapshot the feed-changed set (populated by the download loop above)
+	// ADR-40: Snapshot the feed-changed set (populated by the download loop above)
 	// before the file-write loop.  The file-write loop will rebuild $pfb_alias_lists
 	// as the content-diff set (aliases whose canonical membership set actually changed),
 	// which is what the pfctl regions and ADR-12 emit consume.
@@ -18129,12 +18129,12 @@ function sync_package_pfblockerng($cron='') {
 	// and "read member files" decision anchored to feed-changed aliases.
 	$pfb_feed_changed    = $pfb_alias_lists;
 	$pfb_alias_lists     = array();   // reset: refilled below with content-validated aliases
-	// ADR-40 P4: per-alias map from alias name -> previous canonical set (what was in the
+	// ADR-40: per-alias map from alias name -> previous canonical set (what was in the
 	// mirror BEFORE this pass wrote the new one).  Captured in the write loop (below) so the
 	// no-rule-change reload site can compute add/del deltas without a second file read.
 	$pfb_alias_prev_sets = array();
 
-	// ADR-40 P3: hoist cross-list scope and feed-changed alias selection here — both
+	// ADR-40: hoist cross-list scope and feed-changed alias selection here — both
 	// inputs ($pfb['dup'], $pfb['drep'], $pfb['prep'], $pfb_feed_changed,
 	// $pfb_alias_lists_all) are invariant across the $ip_types / $lists loops below.
 	// Avoids redundant recomputation on every list iteration.
@@ -18207,7 +18207,7 @@ function sync_package_pfblockerng($cron='') {
 				$pfbdescr	= $pfbarr['descr'];
 				$pfbfolder	= $pfbarr['folder'];
 
-				// ADR-40 P3: Content-addressed reload gate (hybrid scope).
+				// ADR-40: Content-addressed reload gate (hybrid scope).
 				// $pfb_cross_list and $final_alias_old are computed once before the
 				// $ip_types / $lists loops (their inputs are loop-invariant) — see
 				// the hoist above.
@@ -18231,7 +18231,7 @@ function sync_package_pfblockerng($cron='') {
 
 								$pfctlck = pfb_pfctl_table_count($alias);
 
-								// ADR-40 P3: read member files when:
+								// ADR-40: read member files when:
 								//   (a) cross-list scope → always (dedup/rep can shift any alias), OR
 								//   (b) this alias had a feed change this pass, OR
 								//   (c) kernel table is empty (boot/repopulation).
@@ -18254,7 +18254,7 @@ function sync_package_pfblockerng($cron='') {
 										}
 									}
 
-									// ADR-53 P6: v6 sibling of the v4 suppression block above -- a direct
+									// ADR-53: v6 sibling of the v4 suppression block above -- a direct
 									// PHP call (pfb_suppress_file_v6()), no shell round-trip (ADR-53 §2.1 v6
 									// wiring). No masterfile/dedup resync here: that bookkeeping is v4-only
 									// (§1.2). $pfbrunonce is reset TRUE at the top of EVERY vtype pass (see
@@ -18295,7 +18295,7 @@ function sync_package_pfblockerng($cron='') {
 					$pfctlck = pfb_pfctl_table_count($alias);
 					if (!empty($list['custom'])) {
 						$urlvalue .= "{$aliasname},";
-						// ADR-40 P3: same scope logic for custom lists.
+						// ADR-40: same scope logic for custom lists.
 						$custom_eligible = file_exists("{$pfbfolder}/{$aliasname}.txt")
 							&& ($pfb_cross_list || in_array($alias, $final_alias_old) || empty($pfctlck));
 						if ($custom_eligible) {
@@ -18309,7 +18309,7 @@ function sync_package_pfblockerng($cron='') {
 						unlink_if_exists("{$pfb['aliasdir']}/{$alias}.txt");
 					}
 					else {
-						// ADR-40 P3: Compute the canonical set from the raw concat, compare
+						// ADR-40: Compute the canonical set from the raw concat, compare
 						// against the last-applied mirror (the existing aliasdir file), and write
 						// only when the set changed.  This replaces the old pfbupdate flag write
 						// (which wrote on every feed-fetch) with a content-addressed gate.
@@ -18317,7 +18317,7 @@ function sync_package_pfblockerng($cron='') {
 							$alias_mirror  = "{$pfb['aliasdir']}/{$alias}.txt";
 							$canonical_set = pfb_canonical_alias_set($alias_ips);
 							if (pfb_alias_set_different($canonical_set, $alias_mirror) || empty($pfctlck)) {
-								// ADR-40 P4: capture the previous canonical set before overwriting
+								// ADR-40: capture the previous canonical set before overwriting
 								// the mirror, so the reload site has last_set for delta computation.
 								// When the kernel table is empty (empty($pfctlck)), stash an empty
 								// array so the reload site's force_rpl = empty([]) = TRUE fires a
@@ -18618,7 +18618,7 @@ function sync_package_pfblockerng($cron='') {
 
 		exec("{$pfb['pfctl']} -s Tables | {$pfb['grep']} '^pfB_'", $pfb_tables);
 		if (isset($pfb_tables)) {
-			// ADR-40 P3: $pfb_alias_lists is the content-diff set (aliases whose
+			// ADR-40: $pfb_alias_lists is the content-diff set (aliases whose
 			// canonical membership set changed this pass).
 			// Rule-change path: filter_configure() rebuilds all pf tables from the
 			// aliasdir files after this block, so we always do a full -T replace here
@@ -18666,7 +18666,7 @@ function sync_package_pfblockerng($cron='') {
 				$pfb_ip_unlock_forced = TRUE;
 				unlink_if_exists("{$pfb['ip_unlock']}");
 				$pfb['repcheck'] = TRUE;
-				// ADR-40 P3: ip_unlock forces a re-block of all active aliases (the previously
+				// ADR-40: ip_unlock forces a re-block of all active aliases (the previously
 				// unlocked IP must be re-added to every alias it belongs to).  With content
 				// gating, $pfb_alias_lists may be empty (if no feed changed this pass), so
 				// explicitly add all active aliases to the reload set here — same as the old
@@ -18674,7 +18674,7 @@ function sync_package_pfblockerng($cron='') {
 				$pfb_alias_lists = array_unique(array_merge($pfb_alias_lists, $pfb_alias_lists_all));
 			}
 
-			// ADR-40 P3/P4: $pfb_alias_lists is the content-diff set — aliases whose
+			// ADR-40: $pfb_alias_lists is the content-diff set — aliases whose
 			// canonical membership set changed this pass (or ip_unlock forced a re-block).
 			// P4: apply each changed alias via forward delta (or replace per mode/churn).
 			$final_alias = array_unique($pfb_alias_lists);
@@ -18682,7 +18682,7 @@ function sync_package_pfblockerng($cron='') {
 			if (!empty($final_alias)) {
 				pfb_logger(localize_text("Alias table changes detected, updating:") . "\n", 1);
 
-				// ADR-40 P4: read mode/batch once for the loop (PfbConfig gateway).
+				// ADR-40: read mode/batch once for the loop (PfbConfig gateway).
 				$pfb_delta_mode  = (string) PfbConfig::read('pfb_alias_delta_mode')->toStored();
 				$pfb_delta_batch = pfb_alias_delta_batch_clamp((string) PfbConfig::read('pfb_alias_delta_batch'));
 
@@ -18690,7 +18690,7 @@ function sync_package_pfblockerng($cron='') {
 					$log = " Updating: {$final}\n";	// trailing \n only — a leading \n put a blank line before each entry
 					pfb_logger("{$log}", 1);
 					if (file_exists("{$pfb['aliasdir']}/{$final}.txt")) {
-						// ADR-40 P4: compute delta from the stashed previous canonical set.
+						// ADR-40: compute delta from the stashed previous canonical set.
 						// Two cases always get force_rpl = TRUE here:
 						//   • ip_unlock-widened aliases: not in $pfb_alias_prev_sets (added
 						//     after the write loop), so ?? NULL → empty(NULL) = TRUE.
@@ -18852,7 +18852,7 @@ function sync_package_pfblockerng($cron='') {
 	#	Define/Apply CRON Jobs		#
 	#########################################
 
-	// ADR-43 P4: one trigger-tick replaces the cron/dcc/ss_refresh/bl fleet.
+	// ADR-43: one trigger-tick replaces the cron/dcc/ss_refresh/bl fleet.
 	// A single */pfb_tick_interval cron entry fires; the tick reads the due-ledger
 	// and dispatches each job only when its entry says "due". clearip/cleardnsbl
 	// are out of scope (ADR-30 territory) and remain as separate jobs below.
@@ -18947,7 +18947,7 @@ function sync_package_pfblockerng($cron='') {
 	//   PFB_CHANGED_IP_ALIASES = the space-separated list of IP firewall aliases UPDATED
 	//       this pass (ADR-12) = $pfb_alias_lists (the content-diff set --
 	//       pfB_*_v4/_v6 whose canonical membership set actually changed this pass,
-	//       as determined by pfb_alias_set_different(); ADR-40 P3).  Reputation/dedup
+	//       as determined by pfb_alias_set_different(); ADR-40).  Reputation/dedup
 	//       no longer inflate this to all active aliases -- only moved tables appear here.
 	//       The IP locals are in scope only at this tail, so they are merged into
 	//       $pfb['changed_ip_aliases'] here, then de-duped at emit.

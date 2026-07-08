@@ -1,7 +1,7 @@
 #!/bin/sh
 # scripts/parity-guard.sh — lint GitHub Actions workflows for build/test-parity violations.
 #
-# After ADR-47 P3 (build path) and P5 (test path), workflow YAML must route
+# After ADR-47 (build path and test path), workflow YAML must route
 # through the shared scripts. Violations are caught by five rules.
 #
 # BUILD RULES (P3):

@@ -75,7 +75,7 @@ function pfb_active_task_running(): bool {
 	return pfb_feed_task_running();
 }
 
-// Dispatch pfb_trigger via the Phase-3 explicit API, then update the due ledger so the Schedule
+// Dispatch pfb_trigger via the explicit API, then update the due ledger so the Schedule
 // view reflects the manual run. The page returns immediately; the client polls ?ajax=tail.
 function pfb_runnow(string $scope, bool $force): void {
 	global $pfb;
@@ -180,7 +180,7 @@ if ($_POST) {
 	$pconfig = $_POST;
 }
 
-// Wizard handler (updated to Phase-3 API: scope=both, force=parse).
+// Wizard handler (updated to the explicit API: scope=both, force=parse).
 $pfb_wizard = FALSE;
 if (isset($_GET) && isset($_GET['wizard']) && $_GET['wizard'] == 'reload') {
 	$pconfig['run']            = '';

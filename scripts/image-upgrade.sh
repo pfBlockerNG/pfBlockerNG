@@ -162,7 +162,7 @@ FORCE=0
 image_px_defaults
 
 # The non-interactive pfSense upgrade command. NOTE: confirm the exact flags for
-# the running CE release during the Phase-1 spike (ADR-04 §6 flags this) — `yes |`
+# the running CE release during the spike (ADR-04 §6 flags this) — `yes |`
 # is a hedge against any interactive prompt; the version-poll below detects the
 # real completion regardless of how it reboots.
 UPGRADE_CMD='yes | /usr/local/sbin/pfSense-upgrade -d'

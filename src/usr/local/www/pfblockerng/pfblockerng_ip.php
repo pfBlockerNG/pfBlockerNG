@@ -163,7 +163,7 @@ if ($_POST) {
 			}
 		}
 
-		// ADR-53 P6: v6 sibling of the v4 validation above. explode() always returns a
+		// ADR-53: v6 sibling of the v4 validation above. explode() always returns a
 		// non-empty array, so (unlike the v4 block above) this skips the vestigial
 		// !empty() wrapper -- avoids replicating the pre-existing PHPStan
 		// empty.variable finding baselined for v4suppression at the same call shape.
@@ -542,7 +542,7 @@ $section->addInput(new Form_Textarea(
 
 $form->add($section);
 
-// Print Custom List TextArea section (ADR-53 P6: v6 sibling of the v4 section above)
+// Print Custom List TextArea section (ADR-53: v6 sibling of the v4 section above)
 $section = new Form_Section('IPv6 Suppression', 'IPv6_Suppression_customlist', COLLAPSIBLE|SEC_CLOSED);
 $suppression_text_v6 = '<strong><u>This suppression list is for [ /32 through /128 ] IPv6 addresses only!</u></strong><br /><br />
 

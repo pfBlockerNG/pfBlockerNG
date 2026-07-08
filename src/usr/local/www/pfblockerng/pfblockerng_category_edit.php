@@ -1172,7 +1172,7 @@ foreach ($rowdata[$rowid] as $tags) {
 		  ->setAttribute('style', $failed_bg)
 		  ->setWidth(3);
 
-		// ADR-31 P5: per-row Deny/Permit action for DNSBL feeds.
+		// ADR-31: per-row Deny/Permit action for DNSBL feeds.
 		// Absent or unrecognised value defaults to 'Deny' (block) — matches the engine default.
 		// Dynamic per-row key (like 'logging') — saved by the rowhelper loop below; not via PfbConfig.
 		if ($gtype == 'dnsbl') {

@@ -198,7 +198,7 @@ $options_alexa_type		= [ 'tranco' => 'Tranco TOP1M', 'cisco' => 'Cisco Umbrella 
 					    'openpagerank' => 'OpenPageRank TOP1M', 'majestic' => 'Majestic Million TOP1M',
 					    'cloudflare' => 'Cloudflare Radar' ];
 
-// ADR-59 P5: providers whose 'auth' needs the top1m_token field, derived from the
+// ADR-59: providers whose 'auth' needs the top1m_token field, derived from the
 // descriptor table so a future token provider needs no JS edit -- the JS toggle
 // below shows/hides the masked token field based on the selected provider.
 $pfb_top1m_token_providers = [];
@@ -630,7 +630,7 @@ if ($_POST) {
 			$input_errors[] = 'DNSBL IDN Blocking mode is invalid!';
 		}
 
-		// ADR-59 P5: top1m_token is a masked, write-only field -- a blank POST means
+		// ADR-59: top1m_token is a masked, write-only field -- a blank POST means
 		// "leave the stored token unchanged" (never overwrite/clear it), so only a
 		// NON-EMPTY submission is validated. PFB_FILTER_WORD (used by asn_token) would
 		// reject a real base64url/JWT token -- PFB_FILTER_TOKEN accepts that charset.
@@ -3288,7 +3288,7 @@ $section->addInput(new Form_Select(
 	$options_alexa_type
 ))->setHelp('Default: Tranco TOP1M. To change the TOP1M type, select the type and Save, then run an Update -- this clears and re-fetches the list.');
 
-// ADR-59 P5: masked, write-only token for a token-authenticated provider (currently only
+// ADR-59: masked, write-only token for a token-authenticated provider (currently only
 // Cloudflare Radar). Never populated from the stored value -- $pconfig['top1m_token'] is
 // only ever set here from a redisplayed $_POST on a validation error (like every other
 // field), never from PfbConfig::read(), so a plain GET always renders this field blank.
@@ -3668,7 +3668,7 @@ function enable_idn_mode() {
 	}
 }
 
-// ADR-59 P5: providers whose 'auth' needs a token, derived server-side from the
+// ADR-59: providers whose 'auth' needs a token, derived server-side from the
 // descriptor table (pfb_top1m_providers()) -- a future token provider needs no JS edit.
 var pfb_top1m_token_providers = <?=$pfb_top1m_token_providers_json?>;
 

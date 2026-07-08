@@ -261,14 +261,14 @@ if (!$alert_summary) {
 
 	PfbConfig::write('v4suppression', PfbConfig::read('v4suppression') ?: '');
 
-	// ADR-53 P8: v6 sibling -- same absent-key normalisation as v4suppression above.
+	// ADR-53: v6 sibling -- same absent-key normalisation as v4suppression above.
 	PfbConfig::write('v6suppression', PfbConfig::read('v6suppression') ?: '');
 
 	PfbConfig::write('suppression', PfbConfig::read('suppression') ?: '');
 
 	PfbConfig::write('tldexclusion', PfbConfig::read('tldexclusion') ?: '');
 
-	// ADR-53 P8: 'ipsuppression_v6' is the new v6suppression sibling of
+	// ADR-53: 'ipsuppression_v6' is the new v6suppression sibling of
 	// 'ipsuppression' (v4) -- same collection shape, keyed separately so the
 	// addsuppress handler below can dedup/rewrite each family's customlist
 	// independently.
@@ -865,7 +865,7 @@ if (isset($_POST) && !empty($_POST)) {
 			// already covered by a BROADER manual suppression entry (e.g. a
 			// /24 already covers this /32) -- appending the exact host on top
 			// would be a redundant customlist entry. Reuses the same
-			// prefix-aware predicate killstates uses (ADR-53 P7) rather than
+			// prefix-aware predicate killstates uses (ADR-53) rather than
 			// re-deriving containment here. The live punch above already ran
 			// (unaffected by this dedup); the suppression file is still
 			// refreshed below so it reflects the covering entry.
@@ -996,7 +996,7 @@ if (isset($_POST) && !empty($_POST)) {
 		}
 
 		// Reload if the Custom_List grew or the domain was stripped from the whitelist.
-		// ADR-10 P5: this is a #51 user custom-list DATA edit -- take the zero-downtime
+		// ADR-10: this is a #51 user custom-list DATA edit -- take the zero-downtime
 		// fast path (no restart). It is an allow->block transition (the domain becomes
 		// blocked), so pass it as the newly-blocked delta for the targeted C-cache flush.
 		if ($cl_added || $wl_removed) {
@@ -1170,7 +1170,7 @@ if (isset($_POST) && !empty($_POST)) {
 			// config.user_whitelist so the next build's whiteDB un-blocks this domain.
 			pfb_unbound_python_whitelist('alerts');
 			pfb_unbound_python_sources_whitelist();
-			// ADR-10 P5: #51 whitelist add is a block->allow DATA edit -> zero-downtime
+			// ADR-10: #51 whitelist add is a block->allow DATA edit -> zero-downtime
 			// fast path (no restart). block->allow is immediate (blocks were never
 			// C-cached since #43), so no newly-blocked delta is passed.
 			pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
@@ -1424,7 +1424,7 @@ if (isset($_POST) && !empty($_POST)) {
 			if ($dnsbl_py_changes) {
 				pfb_unbound_python_whitelist('alerts');
 				pfb_unbound_python_sources_whitelist();
-				// ADR-10 P5: #51 customlist delete is a DATA edit -> zero-downtime fast
+				// ADR-10: #51 customlist delete is a DATA edit -> zero-downtime fast
 				// path (no restart). Removing a block is block->allow (immediate, no
 				// C-cache flush needed since blocks are not cached, #43).
 				pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
@@ -1452,7 +1452,8 @@ if (isset($_POST) && !empty($_POST)) {
 
 		// ADR-06 (#51): DNSBL is built by Unbound's python plugin from the per-feed
 		// manifest; the legacy pfb_py_whitelist.txt/pfb_py_data/pfb_py_zone files this
-		// handler once wrote are no longer read, so writing them was a no-op. Lock/Unlock
+		// handler once wrote are not read on the manifest path (only pfb_unbound.py's
+		// legacy CSV fallback still loads them), so writing them was a no-op. Lock/Unlock
 		// now only toggles $pfb['dnsbl_unlock']; the resolver effect comes from
 		// regenerating the manifest's config.user_unlock from that store and reloading
 		// Unbound. Dispatch: pfb_dnsbl_unlock_action() (unit-tested); unknown action = no-op.
@@ -1464,7 +1465,7 @@ if (isset($_POST) && !empty($_POST)) {
 			// reload Unbound so the query-time whiteDB picks up the change.
 			pfb_unbound_python_sources_unlock();
 
-			// ADR-10 P5: #51 Lock/Unlock is a user custom-list DATA edit -> zero-downtime
+			// ADR-10: #51 Lock/Unlock is a user custom-list DATA edit -> zero-downtime
 			// fast path (no restart). pfb_dnsbl_unlock_action() collapses the four icons
 			// onto two store modes: 'lock' (lock/reunlock) REMOVES the domain from the
 			// unlock store -> it returns to feed-blocked = allow->block -> targeted C-cache
@@ -2023,7 +2024,7 @@ function pfb_match_filter_field($flent, $fields) {
    query they make is the freshness re-check: is the logged attribution still true against
    the CURRENT feed/DNSBL state (drift strikethrough + icon decisions). That re-check is
    per-row (shell pipelines, SQLite cycles, a drill fallback) and dominates page load
-   time; the dnsblcache in front of it is wiped on every DNSBL swap (ADR-10 P3), and the
+   time; the dnsblcache in front of it is wiped on every DNSBL swap (ADR-10), and the
    IP path has no render-time cache at all. See the doc before changing lookup ordering
    or caching here. */
 
@@ -5496,7 +5497,7 @@ function ip_suppression() {
 	}
 }
 
-// ADR-53 P8: the "+" now carves the reported host out of WHICHEVER table
+// ADR-53: the "+" now carves the reported host out of WHICHEVER table
 // entry currently contains it, at any mask -- the /32-vs-/24 mask-choice
 // dialog this function used to show is no longer meaningful (the backend
 // never reads a chosen mask, see pfblockerng_alerts.php's addsuppress
