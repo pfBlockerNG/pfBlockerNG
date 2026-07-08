@@ -405,6 +405,7 @@ def test_ip_page_never_leaks_maxmind_key(
 
 _UPDATE_PAGE = "/pfblockerng/pfblockerng_update.php"
 _HOOKS_PAGE = "/pfblockerng/pfblockerng_hooks.php"
+_LOG_PAGE = "/pfblockerng/pfblockerng_log.php"
 
 
 def test_update_hooks_subtab_relocation(webui: WebUI) -> None:
@@ -512,6 +513,27 @@ def test_update_log_textareas_are_readonly(webui: WebUI) -> None:
         assert m is not None, f"update page is missing the '{name}' textarea"
         tag = m.group(0)
         assert re.search(r"\breadonly\b", tag), f"'{name}' textarea is editable (no readonly): {tag}"
+
+
+def test_log_page_textarea_is_readonly(webui: WebUI) -> None:
+    """The Logs page's file-content viewer is display-only — it renders readonly.
+
+    Same footgun as the Update page's log windows (see
+    ``test_update_log_textareas_are_readonly``): 'fileContent' is populated by the
+    load AJAX action, not typed into, so an editable textarea let a user
+    accidentally cut/type into it with no effect on the underlying file. It must
+    carry the readonly attribute.
+
+    Given the rendered Log page,
+    When the fileContent textarea opening tag is located,
+    Then it contains the readonly attribute. (Pre-fix the tag had no readonly, so
+      this assertion FAILS on the old markup and passes only after it.)
+    """
+    body = webui.get(_LOG_PAGE).text
+    m = re.search(r"<textarea\b[^>]*\bname=([\"'])fileContent\1[^>]*>", body)
+    assert m is not None, "log page is missing the 'fileContent' textarea"
+    tag = m.group(0)
+    assert re.search(r"\breadonly\b", tag), f"'fileContent' textarea is editable (no readonly): {tag}"
 
 
 def test_update_ajax_tail_returns_wellformed_json(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
