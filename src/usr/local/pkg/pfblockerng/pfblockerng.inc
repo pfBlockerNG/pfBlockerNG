@@ -2780,7 +2780,104 @@ function pfb_log_max_lines($raw) {
 	return 20000;
 }
 
-// Manage log files line limit
+// Resolve a stored 'log_max_days_<type>' config value to an age-cutoff day count
+// (ADR-60 S2.2). Mirrors pfb_log_max_lines()'s fallback shape: non-numeric/
+// garbage/absent -> 0 (off), never a silent crash on an operator's typo. PURE.
+function pfb_log_max_days($raw): int {
+	if (is_scalar($raw) && preg_match('/^[0-9]+$/', (string) $raw)) {
+		return (int) $raw;
+	}
+	return 0;
+}
+
+// ADR-60 S2.1: where a log type's Y-m-d H:i:s timestamp lives in a line -- a
+// leading line-prefix for the free-text logs, else a fixed CSV field (verified
+// per writer: pfb_logger()/pfb_daemon_filterlog()/pfb_parsed_fail()/dnsbl.log's
+// python+PHP writers/pfb_unified_format_ip()'s comma-join).
+function pfb_log_age_field_mode(string $logtype): string {
+	switch ($logtype) {
+		case 'log':
+		case 'errlog':
+		case 'extraslog':
+			return 'prefix';
+		case 'dnslog':
+		case 'dnsreplylog':
+		case 'unilog':
+			return 'field1';
+		default: // ip_blocklog, ip_permitlog, ip_matchlog, dnsbl_parse_err
+			return 'field0';
+	}
+}
+
+// Extract + strictly validate the Y-m-d H:i:s timestamp at $field_mode's position
+// in $line ('prefix' = leading 19 chars; 'field0'/'field1' = the CSV column at
+// that index). NULL for anything not an exact, real timestamp -- a truncated,
+// garbled, or legacy pre-rework line is deliberately unparseable (ADR-60 S2.2
+// "Unparseable line policy": treated as expired by the caller).
+function pfb_log_line_timestamp(string $line, string $field_mode): ?int {
+	switch ($field_mode) {
+		case 'field0':
+			$candidate = explode(',', $line, 2)[0];
+			break;
+		case 'field1':
+			$fields = explode(',', $line, 3);
+			$candidate = $fields[1] ?? '';
+			break;
+		default: // 'prefix'
+			$candidate = substr($line, 0, 19);
+			break;
+	}
+
+	if (strlen($candidate) !== 19) {
+		return NULL;
+	}
+
+	// createFromFormat() alone is too lenient (silently overflows an invalid
+	// shape like '2026-13-45 99:99:99' into a different, valid date) -- the
+	// round-trip + getLastErrors() checks together reject that class of input.
+	$dt = DateTime::createFromFormat('Y-m-d H:i:s', $candidate);
+	if ($dt === FALSE || $dt->format('Y-m-d H:i:s') !== $candidate) {
+		return NULL;
+	}
+	$errors = DateTime::getLastErrors();
+	if ($errors !== FALSE && ($errors['warning_count'] > 0 || $errors['error_count'] > 0)) {
+		return NULL;
+	}
+
+	return $dt->getTimestamp();
+}
+
+// ADR-60 S2.2 age-cutoff scan: log lines are chronologically appended, so this
+// walks from the top and stops at the first non-expired line -- everything from
+// there on is kept without re-checking. An unparseable/corrupted timestamp
+// counts as expired (safe: only ever runs on the already line-capped candidate,
+// or the whole file when log_max_<type>=='nolimit'). PURE.
+function pfb_log_age_cutoff(array $lines, int $cutoff_ts, string $field_mode): array {
+	foreach ($lines as $i => $line) {
+		$ts = pfb_log_line_timestamp($line, $field_mode);
+		if ($ts !== NULL && $ts >= $cutoff_ts) {
+			return array_slice($lines, $i);
+		}
+	}
+	return array();
+}
+
+// Rewrite the truncation-candidate file $temp in place, keeping only lines
+// within the last $days (ADR-60 S2.2) per $logtype's field position. Returns
+// FALSE on any read/write failure so the caller can gate its exec chain on it,
+// exactly like the existing tail/cat steps -- a failed pass must never reach
+// the final cat-over-the-live-log step with truncated/garbage content.
+function pfb_log_age_trim_temp(string $temp, int $days, string $logtype): bool {
+	$lines = @file($temp, FILE_IGNORE_NEW_LINES);
+	if ($lines === FALSE) {
+		return FALSE;
+	}
+	$kept = pfb_log_age_cutoff($lines, time() - ($days * 86400), pfb_log_age_field_mode($logtype));
+	$content = $kept ? implode("\n", $kept) . "\n" : '';
+	return file_put_contents($temp, $content) !== FALSE;
+}
+
+// Manage log files line limit + age-based retention (ADR-60)
 function pfb_log_mgmt() {
 	global $g, $pfb;
 	pfb_global();
@@ -2793,8 +2890,13 @@ function pfb_log_mgmt() {
 		// Max lines in Log file
 		$logmax = pfb_log_max_lines($pfb['config']['log_max_' . $logtype] ?? '');
 
-		// 'nolimit' opt-out: skip truncation for this log entirely.
-		if ($logmax === 'nolimit') {
+		// ADR-60 S2.2/S2.3 item 3: age cap is independent of $logmax/'nolimit' --
+		// 'nolimit' only opts this type out of the LINE-COUNT step below.
+		$agedays = pfb_log_max_days($pfb['config']['log_max_days_' . $logtype] ?? '');
+
+		// Neither cap active for this type: nothing to do (byte-identical to
+		// pre-ADR-60 behaviour for every operator who has not opted in).
+		if ($logmax === 'nolimit' && $agedays === 0) {
 			continue;
 		}
 
@@ -2817,7 +2919,17 @@ function pfb_log_mgmt() {
 					// same inode - the file just shrinks - and so keeps its ownership.
 					// Gate on each exit code: unlike the atomic mv, '>' truncates first,
 					// so a failed tail/cat must not be allowed to leave an empty/partial log.
-					exec("/usr/bin/tail -n " . escapeshellarg($logmax) . " " . escapeshellarg($final_log_file) . " > " . escapeshellarg($temp), $out, $ret);
+					if ($logmax === 'nolimit') {
+						// No line-count candidate exists (ADR-60 S2.2): age-cutoff
+						// scans the whole file instead of a tail(1) candidate.
+						$ret = @copy($final_log_file, $temp) ? 0 : 1;
+					} else {
+						exec("/usr/bin/tail -n " . escapeshellarg($logmax) . " " . escapeshellarg($final_log_file) . " > " . escapeshellarg($temp), $out, $ret);
+					}
+					if ($ret === 0 && $agedays > 0 && !pfb_log_age_trim_temp($temp, $agedays, $logtype)) {
+						pfb_logger("\npfb_log_mgmt: failed to age-trim {$final_log_file}'s truncation candidate", 2);
+						$ret = 1;
+					}
 					if ($ret === 0) {
 						exec("/bin/cat " . escapeshellarg($temp) . " > " . escapeshellarg($final_log_file), $out, $ret);
 						if ($ret === 0) {
@@ -2835,7 +2947,15 @@ function pfb_log_mgmt() {
 				$temp = tempnam("{$g['tmp_path']}/", 'pfb_log_');
 				// Truncate in place to preserve the inode (#264) - see above. Gate on
 				// each exit code so a failed tail/cat cannot truncate the live log.
-				exec("/usr/bin/tail -n " . escapeshellarg($logmax) . " {$pfb[$logtype]} > " . escapeshellarg($temp), $out, $ret);
+				if ($logmax === 'nolimit') {
+					$ret = @copy($pfb[$logtype], $temp) ? 0 : 1;
+				} else {
+					exec("/usr/bin/tail -n " . escapeshellarg($logmax) . " {$pfb[$logtype]} > " . escapeshellarg($temp), $out, $ret);
+				}
+				if ($ret === 0 && $agedays > 0 && !pfb_log_age_trim_temp($temp, $agedays, $logtype)) {
+					pfb_logger("\npfb_log_mgmt: failed to age-trim {$pfb[$logtype]}'s truncation candidate", 2);
+					$ret = 1;
+				}
 				if ($ret === 0) {
 					exec("/bin/cat " . escapeshellarg($temp) . " > {$pfb[$logtype]}", $out, $ret);
 					if ($ret !== 0) {

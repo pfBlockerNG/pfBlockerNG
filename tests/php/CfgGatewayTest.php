@@ -967,6 +967,17 @@ final class CfgGatewayTest extends TestCase
 			'log_reset_keep_dnsbl_parse_err',
 			'log_reset_keep_dnsreplylog',
 			'log_reset_keep_unilog',
+			// ADR-60: per-log age-based retention cap (days; '0' = off)
+			'log_max_days_log',
+			'log_max_days_errlog',
+			'log_max_days_extraslog',
+			'log_max_days_ip_blocklog',
+			'log_max_days_ip_permitlog',
+			'log_max_days_ip_matchlog',
+			'log_max_days_dnslog',
+			'log_max_days_dnsbl_parse_err',
+			'log_max_days_dnsreplylog',
+			'log_max_days_unilog',
 			'pfb_software_check',
 			'pfb_feed_internal_filter',
 			'pfb_feed_internal_allowlist',
@@ -1707,6 +1718,129 @@ final class CfgGatewayTest extends TestCase
 
 		foreach ($log_types as $type) {
 			$key  = 'log_reset_keep_' . $type;
+			$path = 'installedpackages/pfblockerng/config/0/' . $key;
+
+			// Before: absent.
+			$this->assertNull(config_get_path($path),
+				"before: {$key} must be absent"
+			);
+
+			// When/Then: default '0' returned.
+			$result = PfbConfig::read($key);
+			$this->assertSame('0', $result,
+				"{$key} absent must return '0' (registered default)"
+			);
+		}
+	}
+
+	// -----------------------------------------------------------------------
+	// ADR-60 — log_max_days_<type> field round-trip, default-absent, inventory
+	// -----------------------------------------------------------------------
+
+	/**
+	 * All 10 log_max_days_<type> fields are registered.
+	 *
+	 * Scenario:
+	 *   Background: ADR-60 adds one log_max_days_<type> key per log type.
+	 *     Given pfb_cfg_registry().
+	 *     When checking for each expected key.
+	 *     Then all 10 are present.
+	 */
+	public function testLogMaxDaysFieldsAreRegistered(): void
+	{
+		$registry  = pfb_cfg_registry();
+		$log_types = [
+			'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
+			'ip_matchlog', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
+		];
+
+		foreach ($log_types as $type) {
+			$key = 'log_max_days_' . $type;
+			$this->assertArrayHasKey($key, $registry,
+				"log_max_days_{$type} must be in the registry"
+			);
+		}
+	}
+
+	/**
+	 * Data provider — all 10 log_max_days_<type> keys × canonical numeric tokens.
+	 *
+	 * @return array<string, array{string, string}>
+	 */
+	public static function logMaxDaysVocabularyProvider(): array
+	{
+		$log_types = [
+			'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
+			'ip_matchlog', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
+		];
+		$vocab  = ['0', '30', '365'];
+		$cases  = [];
+		foreach ($log_types as $type) {
+			foreach ($vocab as $token) {
+				$cases["log_max_days_{$type}/{$token}"] = ["log_max_days_{$type}", $token];
+			}
+		}
+		return $cases;
+	}
+
+	/**
+	 * log_max_days_<type>: write(read(v)) == v for every vocabulary token.
+	 *
+	 * Scenario:
+	 *   Background: log_max_days_<type> fields use identity (null/null) adapter.
+	 *     Given a vocabulary token v ∈ {'0','30','365'}.
+	 *     When PfbConfig::read($key) then PfbConfig::write($key, result).
+	 *     Then write(read(v)) == v (round-trip identity).
+	 */
+	#[DataProvider('logMaxDaysVocabularyProvider')]
+	public function testLogMaxDaysFieldRoundTripForAllVocabularyTokens(
+		string $key,
+		string $token
+	): void {
+		$path = 'installedpackages/pfblockerng/config/0/' . $key;
+
+		// Given: a vocabulary token stored.
+		$this->seedConfig($path, $token);
+
+		// Before: raw value confirmed.
+		$this->assertSame($token, config_get_path($path),
+			"before: {$key} seeded to '{$token}'"
+		);
+
+		// When: read.
+		$result = PfbConfig::read($key);
+
+		// Then: identity adapter — result is the same string.
+		$this->assertIsString($result, "{$key} read('{$token}') must return a string");
+		$this->assertSame($token, $result,
+			"{$key} read('{$token}') must return '{$token}' (identity)"
+		);
+
+		// And: write back produces the same stored value (round-trip).
+		PfbConfig::write($key, $result);
+		$this->assertSame($token, config_get_path($path),
+			"write(read('{$token}')) == '{$token}' for {$key}"
+		);
+	}
+
+	/**
+	 * log_max_days_<type>: absent key returns default '0' (off).
+	 *
+	 * Scenario:
+	 *   Background: key entirely absent from config.xml.
+	 *     Given no value seeded.
+	 *     When PfbConfig::read($key).
+	 *     Then '0' is returned (registered default; age cap off).
+	 */
+	public function testLogMaxDaysFieldAbsentKeyReturnsDefaultZero(): void
+	{
+		$log_types = [
+			'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
+			'ip_matchlog', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
+		];
+
+		foreach ($log_types as $type) {
+			$key  = 'log_max_days_' . $type;
 			$path = 'installedpackages/pfblockerng/config/0/' . $key;
 
 			// Before: absent.
