@@ -1,5 +1,5 @@
 #!/bin/sh
-# bench_pfctl_tables.sh — ADR-40 Phase 2: pfctl table benchmark harness (guest side).
+# bench_pfctl_tables.sh — ADR-40 pfctl table benchmark harness (guest side).
 #
 # Runs ON the pfSense guest (as root, via SSH from the pytest harness).
 # Outputs: key=val lines to stdout; progress/diagnostics to stderr.

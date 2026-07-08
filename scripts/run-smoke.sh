@@ -1,57 +1,12 @@
 #!/bin/sh
-# scripts/run-smoke.sh — the ONE canonical pytest invocation for all three call sites:
-#   smoke-single.yml, ui-tests.yml, scripts/smoke-on-box.sh (local runs via lease).
-#
-# Emits and executes:
-#   $PYTHON -m pytest $PATHS -m $MARKER
-#     --override-ini="addopts=" --override-ini="timeout_func_only=true"
-#     --timeout=$TIMEOUT --timeout-method=signal --durations=0 --capture=tee-sys -v
-#     [-k $K] [passthrough...]
-#
-# --durations=0 reports every test's setup/call/teardown phase timing (issue #605
-#   Layer A); --capture=tee-sys streams stdout live so the per-step PFB_TIMING lines
-#   (Layer B, tests/timing.py) show on a PASSING run, not only on failure.
-#
-# Params + defaults (structured flags must precede passthrough):
-#   --paths P        default tests/smoke   (UI: tests/smoke/ui)
-#   -m/--marker M    default smoke         (CI smoke: smoke|repo; UI: ui_render|...)
-#   --timeout N      default 30            (UI: 300)
-#   --filter EXPR    optional; ONE arg, no word-split (passed to pytest as -k "expr")
-#   --shard I        default 0             (0-based shard index; issue #797)
-#   --shard-total N  default 1             (N=1: no-op, byte-identical to pre-#797
-#                                            behaviour; N>1: --paths is replaced by
-#                                            its shard slice -- a pytest argv
-#                                            fragment, module-level or, for an
-#                                            oversized module, test-level, issue #855)
-#   trailing passthrough → forwarded to pytest verbatim
-#
-# AMENDMENTS:
-#   bare-path parity: a positional path in the passthrough REPLACES --paths (not
-#     appended) — so `local-smoke.sh -m ui_render tests/smoke/ui` runs only that
-#     subtree. Only the FIRST non-option token in the passthrough is treated as a
-#     path; a subsequent non-'-' token (e.g. the '1' in --maxfail 1) is an option
-#     value and must not suppress the default --paths.
-#   PYTHON/CI parity: when GITHUB_ACTIONS is set the runner has no .venv; python3
-#     is always used.  Locally (GITHUB_ACTIONS unset), prefers the .venv when
-#     executable.  PYTHON env overrides both.
-#   argv injection: passthrough args are assembled via successive set -- prepends —
-#     no eval, no numbered vars; shell metacharacters in passthrough args are
-#     never interpreted.
-#   shard slicing (issue #797, hybrid test-level split issue #855): --shard-total
-#     N>1 hands the single --paths dir to scripts/shard-modules.sh and splices its
-#     newline-separated stdout -- a pytest ARGV FRAGMENT (module paths, bare node
-#     IDs, and adjacent `--deselect`/node-ID pairs, one argv word per line) -- in
-#     as MULTIPLE leftmost pytest args, in the exact spot the one path occupies
-#     today. An explicit passthrough path together with N>1 is a conflict (loud
-#     error, never a silent pick); the splitter's own errors (e.g. an empty slice)
-#     propagate as-is under `set -eu`. When N>1, pytest exit 5 ("no tests ran") is
-#     mapped to 0 — a shard whose slice carries no test matching the marker is a
-#     partition artifact, not a failure; unsharded runs keep exit 5 fatal.
-#
-# Env passthrough: RUN_ID / PFB_DIAG_DIR / SMOKE_LANE reach pytest by inheritance (no
-#   explicit forwarding needed — subprocess env-inherit covers it).
-#
-# POSIX sh; shellcheck clean.
+# scripts/run-smoke.sh — the ONE canonical pytest invocation for all three call
+# sites (smoke-single.yml, ui-tests.yml, scripts/smoke-on-box.sh). Builds argv
+# via right-to-left `set --` prepends only (no eval; passthrough args are never
+# word-split or interpreted): [PATH?] [-m MARKER?] [fixed flags] [-k FILTER?]
+# [passthrough...]. A leading positional path in the passthrough REPLACES the
+# default --paths (never appended); --shard-total N>1 replaces it with a shard
+# slice via scripts/shard-modules.sh instead, and conflicts loudly with an
+# explicit passthrough path. POSIX sh; shellcheck clean.
 
 set -eu
 
@@ -66,7 +21,7 @@ _MARKER_EXPLICIT=0  # set to 1 when -m/--marker was given as a structured flag
 _SHARD=0       # 0-based shard index (issue #797)
 _SHARD_TOTAL=1 # N=1 = no sharding (default; byte-identical to pre-#797)
 
-# ── Phase 1: parse structured flags; remaining "$@" = passthrough ─────────── #
+# ── Parse structured flags; remaining "$@" = passthrough ───────────────────── #
 # Structured flags must come before any passthrough args.
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -130,7 +85,7 @@ if [ "$_SHARD_TOTAL" -lt 1 ]; then
     exit 1
 fi
 
-# ── Phase 2: scan passthrough for the -m guard and bare-path guard ─────────── #
+# ── Scan passthrough for the -m guard and bare-path guard ──────────────────── #
 # -m guard: if the passthrough already has -m, do NOT inject our default marker.
 # bare-path: a caller-supplied pytest TARGET (path/file/node-id) replaces the
 #   default tests/smoke. Detect it by SHAPE, not position: a real target contains
@@ -158,7 +113,7 @@ if [ "$_SHARD_TOTAL" -gt 1 ] && [ "$_CALLER_GAVE_PATH" -eq 1 ]; then
     exit 1
 fi
 
-# ── Phase 3: PYTHON resolution ─────────────────────────────────────────────── #
+# ── PYTHON resolution ───────────────────────────────────────────────────────── #
 # CI parity: when GITHUB_ACTIONS is set the runner has no .venv; use python3
 # unconditionally to prevent a stray future .venv from silently drifting CI vs
 # local behaviour.  PYTHON env overrides both paths.
@@ -170,10 +125,10 @@ if [ -z "${PYTHON:-}" ]; then
     fi
 fi
 
-# ── Phase 4: build the canonical argv — no eval ───────────────────────────── #
-# "$@" = passthrough (intact since Phase 1). Build the final pytest argv via
-# successive right-to-left prepends — each set -- replaces "$@" entirely, so the
-# LAST prepend ends up LEFTMOST in the final exec. No eval; no numbered vars;
+# ── Build the canonical argv — no eval ──────────────────────────────────────── #
+# "$@" = passthrough (intact from arg parsing above). Build the final pytest argv
+# via successive right-to-left prepends — each set -- replaces "$@" entirely, so
+# the LAST prepend ends up LEFTMOST in the final exec. No eval; no numbered vars;
 # shell metacharacters in passthrough args are never interpreted.
 #
 # Final order: [PATH?] [-m MARKER?] [fixed...] [-k K?] [passthrough...]

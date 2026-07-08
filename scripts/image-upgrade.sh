@@ -1,7 +1,7 @@
 #!/bin/sh
 # image-upgrade.sh — upgrade a published pfSense (CE or Plus) smoke base to a
-# newer release and publish the result as a new tag (ADR-04, Phase 2 "upgrade in
-# place").
+# newer release and publish the result as a new tag (ADR-04's "upgrade in
+# place" flow).
 #
 # Drive it FROM YOUR MACHINE: the KVM boot + in-VM upgrade must run on a KVM host
 # (your Proxmox host), so pass its SSH coordinates and the script runs qemu there

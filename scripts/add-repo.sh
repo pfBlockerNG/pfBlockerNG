@@ -1,64 +1,12 @@
 #!/bin/sh
 # add-repo.sh — bootstrap pfBlockerNG's self-hosted pkg repository on a pfSense
-# box (ADR-17 Phase 4, the client side). Run it ON the pfSense box. It installs
-# the boot-time repo-conf generator rc.d hook (ADR-39), stubs the repo conf so
-# the hook regenerates it for THIS box's edition/version/arch, runs the hook
-# once to resolve the conf now, then runs `pkg update` and VERIFIES our package
-# is visible from OUR repo — after which
-#   pkg install pfSense-pkg-pfBlockerNG-devel   (or -y, no -f, no -r)
-# resolves deps and installs our build, and the stock webConfigurator Install
-# pulls it too via cross-repo resolution (ADR §2; install is not repo-locked).
-#
-# WHY A HOOK DOES THE DETECTION: a pfSense OS upgrade can change the box's
-# edition/version/arch (which moves the catalog subtree). The rc.d hook
-# regenerates the conf every boot, so the URL self-corrects after an upgrade
-# with no work here. add-repo.sh therefore does NO detection itself — it installs
-# the hook and runs it; the hook is the single source of the resolved conf.
-#
-# CHANNELS
-#   Default (NO argument) sets up the RELEASE repo `pfblockerng` — one shared catalog
-#   carrying BOTH the stable and devel packages, exactly like Netgate ships
-#   `pfSense-pkg-pfBlockerNG` and `-devel` from its single `pfSense` repo (the two
-#   packages CONFLICT — install one). After the bootstrap, pick the package:
-#       pkg install pfSense-pkg-pfBlockerNG          # stable
-#       pkg install pfSense-pkg-pfBlockerNG-devel    # development tree
-#
-#   --nightly sets up the SEPARATE `pfblockerng-nightly` repo instead (its own
-#   `nightly/` catalog path). Bleeding edge — NOT for daily use: the only guarantee is
-#   that CI passed (devel still carries a stability target; nightly does not):
-#       pkg install pfSense-pkg-pfBlockerNG-nightly
-#
-#   default     -> conf /usr/local/etc/pkg/repos/pfblockerng.conf,         repo `pfblockerng`
-#   --nightly   -> conf /usr/local/etc/pkg/repos/pfblockerng-nightly.conf, repo `pfblockerng-nightly`
-#
-# THE CONF (single source of truth — byte-identical to `build-repo.sh --print-conf`,
-# `build-repo-portable.py --print-conf`, and what the rc.d hook writes):
-#   url:            Direct GitHub Pages URL, fully resolved by the hook for this box:
-#                   https://pfblockerng.github.io/pkg/<channel>/<varver>/<arch>
-#   mirror_type:    none.
-#   signature_type: none — NONE-signed; trust anchor is HTTPS to the host (no CI
-#                   signing key). pfSense honors per-repo `none` (ADR §1 Context 4).
-#   priority:       ABOVE the base Netgate `pfSense` repo (ships 0). Phase 1 PROVED
-#                   repo priority decides cross-repo selection (a higher-priority
-#                   repo wins even at a lower version), so this is what makes our
-#                   build win. 100 clears pfSense's 0 with margin.
-#   enabled:        yes.
-#
-# IDEMPOTENT: re-running reinstalls the hook and re-runs it (safe at any time).
-#
-# Usage:
-#   add-repo.sh                       # set up the release repo (stable + devel), pkg update, verify
-#   add-repo.sh --nightly             # set up the nightly repo instead (bleeding edge)
-#   add-repo.sh --print-conf [--nightly] [--catalog-path <varver>/<arch>]
-#                                     # print the conf to stdout and exit (no writes)
-#   add-repo.sh --base-url <url> [--nightly]   # override the catalog base (forks/staging)
-#
-# POSIX sh; quoted expansions; absolute path for the privileged `pkg` binary.
-# Env:
-#   PFBLOCKERNG_ROOT  filesystem root prefix (default: /); override in tests to
-#                     redirect conf/hook writes to a temp dir.
-#   PKG_BIN           pkg binary path (default: /usr/local/sbin/pkg); override
-#                     in tests to stub out pkg.
+# box (ADR-17, the client side). Run it ON the pfSense box: installs the
+# boot-time repo-conf generator rc.d hook (ADR-39), which does ALL edition/
+# version/arch detection itself (an OS upgrade self-corrects, no work here),
+# runs the hook once now, then `pkg update` + verifies the package is visible
+# from OUR repo. Default sets up the shared `pfblockerng` release repo (stable
+# + devel; pick the package at install time); --nightly sets up the separate
+# bleeding-edge `pfblockerng-nightly` repo instead. Idempotent; see --help.
 
 set -eu
 
