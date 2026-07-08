@@ -1,6 +1,15 @@
 # ADR-60: Uniform log timestamps and continuous age-based log retention
 
-- **Status:** **Proposed** (2026-07-08)
+- **Status:** **Accepted** (2026-07-08; Phases 1-9 implemented 2026-07-08) — the new
+  `tests/smoke/test_log_age_retention.py` cases (host-path `ip_blocklog` age cutoff with inode
+  preserved, chrooted `dnslog` age cutoff with inode + `unbound` ownership preserved, and the
+  `log_max_days_<type>='0'` no-op control) pass on the CE + Plus live-VM fan-out (run
+  28964455515); the deferred Phase 5/8 Tier-A `ui_render` proofs (Reports/Alerts day-bucket +
+  hourly-chart rendering, the redesigned Log Settings page) also pass on the CE + Plus fan-out
+  (run 28964459756). A disposable pre-Phase-6 dispatch (run 28964420263, `adr-60-redproof-temp`,
+  deleted after use) confirmed the new smoke cases genuinely fail without this ADR's code
+  (`assert content_after == kept` failed — the age cap did not exist yet). Phase 10 (the wider
+  §1.8 ISO-8601 sweep) is a separate, non-gating follow-on.
 - **Date:** 2026-07-08
 - **Branch:** `adr/60-age-based-log-retention` (off `devel`; `{slug}` per CLAUDE.md "Branch naming")
 - **Supersedes:** **ADR-30** (`Scheduled_Log_Reset`) — retires `pfb_log_reset()`, `log_rotate_<type>`,

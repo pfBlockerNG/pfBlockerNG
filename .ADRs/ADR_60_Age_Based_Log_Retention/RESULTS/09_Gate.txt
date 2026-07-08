@@ -1,0 +1,120 @@
+ADR-60 Phase 9 — Final live-VM gate record (orchestrator-executed)
+================================================================================
+Verdict: PASS — ADR-60 flips to Accepted
+
+Phase 9a (test-authoring, commit 84113100) already gated PASS — see
+RESULTS/09a_Gate.txt. This record covers the orchestrator's own live-VM
+dispatch step, which 09a explicitly deferred (no VM access in that delegated
+step's session).
+
+--------------------------------------------------------------------------------
+LIVE-VM DISPATCHES (all via `gh workflow run`, GitHub Actions CI)
+--------------------------------------------------------------------------------
+
+1. RED-PROOF (disposable branch, pre-Phase-6 code)
+   - Branch: `adr-60-redproof-temp`, cut from commit 0f866cf3 (Phase 5's tip,
+     the last commit before Phase 6's age-cutoff feature landed), with ONLY
+     the new test file (commit 84113100) cherry-picked on top — 7d267185.
+   - Dispatch: `gh workflow run smoke.yml --ref adr-60-redproof-temp
+     -f scope=impacted -f pytest_filter="log_age_retention"`
+   - Run: https://github.com/pfBlockerNG/pfBlockerNG/actions/runs/28964420263
+   - Result: FAILURE (expected — this IS the red state).
+   - Verified the failure reason is substantive, not an infra/setup error:
+     `gh run view 28964420263 --log-failed` shows both new test cases failed
+     at `assert content_after == kept` — i.e. against pre-Phase-6
+     pfb_log_mgmt(), the expired lines were NOT dropped (no age concept
+     exists yet), exactly the expected red condition.
+   - Cleanup: worktree removed, remote + local branch deleted after the run
+     completed (git status confirmed clean before removal).
+
+2. MAIN ACCEPTANCE RUN (real branch, current tip)
+   - Dispatch: `gh workflow run smoke.yml --ref
+     adr/60-age-based-log-retention -f scope=full
+     -f pytest_filter="log_age_retention"`
+   - Run: https://github.com/pfBlockerNG/pfBlockerNG/actions/runs/28964455515
+   - Result: SUCCESS on BOTH legs (verified via `gh run view --json jobs`):
+     - Smoke (CE 2.8 shard 1/1) [-k log_age_retention]: success
+     - Smoke (Plus 26.03 shard 1/1) [-k log_age_retention]: success
+   - This is the genuine CE + Plus fan-out CLAUDE.md's "ADR acceptance"
+     rule requires.
+
+3. DEFERRED TIER-A ui_render PROOFS (Phase 5 + Phase 8)
+   - Dispatch: `gh workflow run ui-tests.yml --ref
+     adr/60-age-based-log-retention -f scope=full -f tier=render
+     -f pytest_filter="test_alerts_dnsbl_stat_renders_iso_day_bucket_and_hourly_chart
+     or test_log_settings_section_redesign_render"`
+   - Run: https://github.com/pfBlockerNG/pfBlockerNG/actions/runs/28964459756
+   - Result: SUCCESS on BOTH legs (verified via `gh run view --json jobs`):
+     - render / ce-2.8 (live pfSense VM): success
+     - render / plus-26.03 (live pfSense VM): success
+   - This closes Phase 5's and Phase 8's explicitly-deferred live-execution
+     gaps (no PFB_BOXES was available in either of those delegated sessions;
+     this orchestrator step, dispatching real CI infra, is where they
+     actually run for the first time).
+
+--------------------------------------------------------------------------------
+§2.3 CONTRACT ITEMS — LIVE-VM PROOF STATUS
+--------------------------------------------------------------------------------
+1. Inode + ownership preserved (trim, age-cutoff, combination) — PROVEN live:
+   both test_log_age_retention.py cases assert inode before==after; the
+   chrooted dnslog case additionally asserts unbound ownership before==after.
+2. Default log_max_days_<type>='0' ⇒ zero behaviour change — PROVEN live:
+   test_log_max_days_zero_leaves_only_line_count_trim (byte-identical
+   content + inode unchanged with old-only lines seeded).
+3. nolimit × log_max_days_<type> independence — proven at the PHPUnit level
+   (Phase 6, LogMgmtAgeCutoffTest 7 coverage-matrix rows) — not re-proven
+   live this phase (out of the ADR's own §7 manual-checklist scope; PHPUnit
+   coverage is the acceptance-gating evidence per CLAUDE.md, live-VM proves
+   environment integration, not the full matrix again).
+4. Year-bearing timestamps, all 10 types — proven at the PHPUnit/pytest
+   level across Phases 1-4 (independently re-verified by every phase gate).
+5. pfb_failures() FAIL-date matching — proven at the PHPUnit level (Phase 2).
+6. Failed exec never corrupts the live log — proven at the PHPUnit level
+   (Phase 6, testFailedCatNeverCorruptsLiveLogEvenWithAgeCutoffActive, a
+   real chmod-0444-induced failure).
+7. config.xml hard-frozen (no migration) — proven by construction (Phase 7's
+   grep-gate; no migration code exists anywhere).
+
+--------------------------------------------------------------------------------
+§7 MANUAL CHECKLIST — REMAINS FOR THE MAINTAINER (out-of-CI, documented
+limitations, NOT acceptance blockers per CLAUDE.md "ADR acceptance")
+--------------------------------------------------------------------------------
+1. Real multi-day-old production data: set log_max_days_ip_blocklog=7 on a
+   box with >7 days of real history; confirm only >7-day-old lines drop at
+   the next tick, inode unchanged, no remote syslog re-ship.
+2. A box that never touches log_max_days_<type> sees byte-identical
+   behaviour to pre-ADR-60 (line-count-only) — the smoke control case
+   proves this on synthetic data; a real long-lived box is the maintainer's
+   own confirmation.
+3. An upgrade from a build with log_rotate_ip_blocklog=daily set no longer
+   resets that log on any calendar boundary (the key is now inert) — needs
+   a real upgraded box, not reproducible in a fresh smoke VM.
+4. A real DNSBL block shows real Type/Group/Evaluated/Feed detail on the
+   block page (not `-` placeholders) — Phase 5's LogFormatConsumersTest.php
+   proves the correlation logic; a live end-user block is the maintainer's
+   final visual confirmation (www/index.php has no Tier-A path at all, per
+   Phase 5's finding — it's served by a separate DNSBL-VIP-sinkhole
+   lighttpd).
+5. Reports/Alerts daily stat table and hourly chart group correctly on real
+   traffic — the new Tier-A test (run 28964459756) proves this on seeded
+   synthetic data; real-traffic visual confirmation is the maintainer's.
+
+--------------------------------------------------------------------------------
+FULL OFF-BOX SUITE (final combined check, Phases 1-9)
+--------------------------------------------------------------------------------
+Already confirmed green at Phase 9a's gate (vendor/bin/phpunit: 2372 tests/
+18574 assertions; phpstan/phpcs clean; python3 -m pytest: 2436 passed/4
+skipped) — no production code changed since, so this stands as the final
+figure for Phases 1-9 combined.
+
+--------------------------------------------------------------------------------
+ADR STATUS
+--------------------------------------------------------------------------------
+ADR.md's Status line flipped to **Accepted** (2026-07-08), citing all 3 CI
+run IDs above, per CLAUDE.md "ADR acceptance — automated tests, not a manual
+sign-off." Phase 10 (§1.8's wider ISO-8601 sweep) remains open as a
+separate, non-gating follow-on.
+
+Skipped: none. No orphaned waits — the ScheduleWakeup that polled these 3
+runs resolved and will not re-arm (this gate record is the terminal action
+it was waiting to trigger).
