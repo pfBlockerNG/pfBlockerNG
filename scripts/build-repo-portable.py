@@ -4,9 +4,11 @@
 # for a plain Linux CI runner with no real `pkg` binary, hand-rolling the same
 # catalog `pkg repo` produces (meta.conf/packagesite.pkg/data.pkg, incl. the
 # libpkg `sum` checksum — see pkg_checksum()) from each .pkg's manifest,
-# deterministically and without network. FLAVOR-COLLISION GUARD, version-keyed
-# catalogs (ADR-20), the matrix-driven build, and release retention are each
-# documented at their own function; see --help for full CLI usage.
+# deterministically and without network. (scripts/build-repo.sh drives a real
+# `pkg repo` and stays the FreeBSD/pfSense-side fallback; this is the CI/release
+# builder.) FLAVOR-COLLISION GUARD, version-keyed catalogs (ADR-20), the
+# matrix-driven build, and release retention are each documented at their own
+# function; see --help for full CLI usage.
 
 from __future__ import annotations
 
