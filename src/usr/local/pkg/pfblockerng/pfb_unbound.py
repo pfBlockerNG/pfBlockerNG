@@ -356,6 +356,96 @@ def _reload_write_applied(gen: int) -> None:
             pass
 
 
+# ADR-61: Python's OWN structured status ledger (``pfb_py_status.json``, chroot-relative
+# alongside ``pfb_py_reload``) -- Python writes it, PHP only ever reads it (a read-only
+# merge helper lives in pfblockerng_extra.inc). Entries are ``{facility, item, stage,
+# message, first_seen, last_seen}``, the same shape as PHP's own pfb_sync_status.json for
+# display consistency, but a SEPARATE file (the two-file boundary is load-bearing, not
+# incidental -- see the ADR's cross-process-boundary section). Every entry here uses
+# facility="dnsbl", stage="parse" (Python owns only the DNSBL parse-stage signal; the
+# apply-stage entries for the SAME facility are PHP-owned under a different key).
+
+
+def _pfb_py_status_read_all() -> list[dict[str, Any]]:
+    """Read the full ledger. Absent file, unreadable file, or corrupt/wrong-shape
+    JSON all degrade to an empty list (fail-open), never raise."""
+    path = pfb.get("pfb_py_status")
+    if not path:
+        return []
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [entry for entry in data if isinstance(entry, dict)]
+
+
+def _pfb_py_status_write_all(entries: list[dict[str, Any]]) -> None:
+    """Atomically persist the full ledger (temp write + fsync + ``os.replace``),
+    mirroring ``_reload_write_applied()``'s idiom. A write failure is a silent
+    no-op -- the ledger is a display-only signal, never worth raising over."""
+    path = pfb.get("pfb_py_status")
+    if not path:
+        return
+    tmp = "{}.tmp".format(path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(entries, fh)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+def pfb_py_status_open(
+    facility: str, item: str, stage: str, message: str, clock_fn: Callable[[], int] | None = None
+) -> None:
+    """Open (or refresh) one ``{facility, item, stage}`` entry.
+
+    Idempotent by key: refreshing an already-open key updates ``message``/
+    ``last_seen`` in place and preserves the original ``first_seen`` -- never
+    duplicates the entry."""
+    now = clock_fn() if clock_fn is not None else int(time.time())
+    entries = _pfb_py_status_read_all()
+    for entry in entries:
+        if entry.get("facility") == facility and entry.get("item") == item and entry.get("stage") == stage:
+            entry["message"] = message
+            entry["last_seen"] = now
+            _pfb_py_status_write_all(entries)
+            return
+    entries.append(
+        {
+            "facility": facility,
+            "item": item,
+            "stage": stage,
+            "message": message,
+            "first_seen": now,
+            "last_seen": now,
+        }
+    )
+    _pfb_py_status_write_all(entries)
+
+
+def pfb_py_status_close(facility: str, item: str, stage: str) -> None:
+    """Clear one ``{facility, item, stage}`` entry. Closing an absent key is a
+    safe no-op -- no write."""
+    entries = _pfb_py_status_read_all()
+    filtered = [
+        entry
+        for entry in entries
+        if not (entry.get("facility") == facility and entry.get("item") == item and entry.get("stage") == stage)
+    ]
+    if len(filtered) == len(entries):
+        return
+    _pfb_py_status_write_all(filtered)
+
+
 def _build_swap_snapshot() -> Snapshot | None:
     """The background reload builder: re-read the manifest, rebuild every matcher
     stratum into FRESH dicts (mutating NO live dict), and return a new Snapshot -- or
@@ -805,6 +895,133 @@ def warn_if_legacy_control_enabled(enabled: bool) -> None:
         )
 
 
+def _load_zone_db(feed_group_db: defaultdict[str, int], feed_group_index: int) -> int:
+    """Parse the legacy zone CSV (``pfb["pfb_py_zone"]``) into ``zoneDB`` -- skipped
+    when the ADR-06 manifest already built it. Extracted out of ``init_standard``
+    (mirrors ``_load_safesearch_db``) so the load -- and its failure diagnostic --
+    are unit-testable without the full Unbound ``env``/``id`` init rig. Returns the
+    advanced ``feed_group_index`` (shared with ``_load_data_db`` across both files).
+    Behaviour-preserving: same parse rules, same ``pfb["zoneDB"]`` flag."""
+    if not os.path.isfile(pfb["pfb_py_zone"]):
+        return feed_group_index
+    try:
+        with open(pfb["pfb_py_zone"]) as csv_file:
+            csv_reader = csv.reader(csv_file, delimiter=",")
+            for row in csv_reader:
+                if row and len(row) == 6:
+                    # Query Feed/Group/index
+                    isInFeedGroupDB = feed_group_db.get(row[4] + row[5])
+
+                    # Add Feed/Group/index
+                    if isInFeedGroupDB is None:
+                        feed_group_db[row[4] + row[5]] = feed_group_index
+                        feedGroupIndexDB[feed_group_index] = {"feed": row[4], "group": row[5]}
+                        final_index = feed_group_index
+                        feed_group_index += 1
+
+                    # Use existing Feed/Group/index
+                    else:
+                        final_index = isInFeedGroupDB
+
+                    zoneDB[row[1]] = {"log": row[3], "index": final_index, "important": False}
+                else:
+                    sys.stderr.write("[pfBlockerNG]: Failed to parse: {}: {}".format(pfb["pfb_py_zone"], row))
+
+            pfb["zoneDB"] = True
+            pfb["python_blacklist"] = True
+            pfb_py_status_close("dnsbl", pfb["pfb_py_zone"], "parse")
+    except Exception as e:
+        sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}".format(pfb["pfb_py_zone"], e))
+        pfb_py_status_open("dnsbl", pfb["pfb_py_zone"], "parse", "Failed to load: {}: {}".format(pfb["pfb_py_zone"], e))
+    return feed_group_index
+
+
+def _load_data_db(feed_group_db: defaultdict[str, int], feed_group_index: int) -> int:
+    """Parse the legacy data CSV (``pfb["pfb_py_data"]``) into ``dataDB`` -- skipped
+    when the ADR-06 manifest already built it. Same extraction rationale/shape as
+    ``_load_zone_db`` (shares ``feed_group_db``/``feed_group_index`` with it)."""
+    if not os.path.isfile(pfb["pfb_py_data"]):
+        return feed_group_index
+    try:
+        with open(pfb["pfb_py_data"]) as csv_file:
+            csv_reader = csv.reader(csv_file, delimiter=",")
+            for row in csv_reader:
+                if row and len(row) == 6:
+                    # Query Feed/Group/index
+                    isInFeedGroupDB = feed_group_db.get(row[4] + row[5])
+
+                    # Add Feed/Group/index
+                    if isInFeedGroupDB is None:
+                        feed_group_db[row[4] + row[5]] = feed_group_index
+                        feedGroupIndexDB[feed_group_index] = {"feed": row[4], "group": row[5]}
+                        final_index = feed_group_index
+                        feed_group_index += 1
+
+                    # Use existing Feed/Group/index
+                    else:
+                        final_index = isInFeedGroupDB
+
+                    dataDB[row[1]] = {"log": row[3], "index": final_index, "important": False}
+                else:
+                    sys.stderr.write("[pfBlockerNG]: Failed to parse: {}: {}".format(pfb["pfb_py_data"], row))
+
+            pfb["dataDB"] = True
+            pfb["python_blacklist"] = True
+            pfb_py_status_close("dnsbl", pfb["pfb_py_data"], "parse")
+    except Exception as e:
+        sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}".format(pfb["pfb_py_data"], e))
+        pfb_py_status_open("dnsbl", pfb["pfb_py_data"], "parse", "Failed to load: {}: {}".format(pfb["pfb_py_data"], e))
+    return feed_group_index
+
+
+def _load_whitelist_db() -> None:
+    """Parse the legacy user whitelist CSV (``pfb["pfb_py_whitelist"]``) into
+    ``whiteDB`` -- skipped when the ADR-06 manifest already built it. Same
+    extraction rationale as ``_load_zone_db``."""
+    if not os.path.isfile(pfb["pfb_py_whitelist"]):
+        return
+    try:
+        with open(pfb["pfb_py_whitelist"]) as csv_file:
+            csv_reader = csv.reader(csv_file, delimiter=",")
+            for row in csv_reader:
+                if row and len(row) == 2:
+                    if row[1] == "1":
+                        wildcard = True
+                    else:
+                        wildcard = False
+                    # ADR-07: whiteDB value widens to
+                    # {"wildcard", "important"}; the legacy CSV is the
+                    # USER whitelist -> important=True (sovereignty).
+                    whiteDB[row[0]] = {"wildcard": wildcard, "important": True}
+                    pfb["whiteDB"] = True
+                else:
+                    sys.stderr.write("[pfBlockerNG]: Failed to parse: {}: {}".format(pfb["pfb_py_whitelist"], row))
+
+        pfb_py_status_close("dnsbl", pfb["pfb_py_whitelist"], "parse")
+    except Exception as e:
+        sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}".format(pfb["pfb_py_whitelist"], e))
+        pfb_py_status_open(
+            "dnsbl", pfb["pfb_py_whitelist"], "parse", "Failed to load: {}: {}".format(pfb["pfb_py_whitelist"], e)
+        )
+
+
+def _load_hsts_db() -> None:
+    """Parse the HSTS preload file (``pfb["pfb_py_hsts"]``) into ``hstsDB`` --
+    gated on ``pfb["python_hsts"]`` (not on the ADR-06 manifest: hstsDB is NOT
+    part of the manifest build). Same extraction rationale as ``_load_zone_db``."""
+    if not (pfb["python_hsts"] and os.path.isfile(pfb["pfb_py_hsts"])):
+        return
+    try:
+        with open(pfb["pfb_py_hsts"]) as hsts:
+            for line in hsts:
+                hstsDB[line.rstrip("\r\n")] = 0
+            pfb["hstsDB"] = True
+        pfb_py_status_close("dnsbl", pfb["pfb_py_hsts"], "parse")
+    except Exception as e:
+        sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}".format(pfb["pfb_py_hsts"], e))
+        pfb_py_status_open("dnsbl", pfb["pfb_py_hsts"], "parse", "Failed to load: {}: {}".format(pfb["pfb_py_hsts"], e))
+
+
 def init_standard(id: int, env: module_env) -> bool:
     global \
         pfb, \
@@ -1033,6 +1250,9 @@ def init_standard(id: int, env: module_env) -> bool:
     # it after a DNSBL run and emits the canonical stage=entries line. Chroot-relative
     # bare name, exactly like pfb_py_count above (the manifest-boundary discipline).
     pfb["pfb_py_reject_stats"] = "pfb_py_reject_stats.json"
+    # ADR-61: Python's OWN parse-stage status ledger (chroot-relative, alongside
+    # pfb_py_reload) -- written/cleared by pfb_py_status_open()/close(); PHP only reads it.
+    pfb["pfb_py_status"] = "pfb_py_status.json"
     pfb["pfb_py_dnsbl"] = "pfb_py_dnsbl.sqlite"
     pfb["pfb_py_cache"] = "pfb_py_cache.sqlite"
     pfb["pfb_py_resolver"] = "pfb_py_resolver.sqlite"
@@ -1386,70 +1606,12 @@ def init_standard(id: int, env: module_env) -> bool:
             feedGroup_index = 0
 
             # Zone dicts
-            if not dnsbl_built and os.path.isfile(pfb["pfb_py_zone"]):
-                try:
-                    with open(pfb["pfb_py_zone"]) as csv_file:
-                        csv_reader = csv.reader(csv_file, delimiter=",")
-                        for row in csv_reader:
-                            if row and len(row) == 6:
-                                # Query Feed/Group/index
-                                isInFeedGroupDB = feedGroupDB.get(row[4] + row[5])
-
-                                # Add Feed/Group/index
-                                if isInFeedGroupDB is None:
-                                    feedGroupDB[row[4] + row[5]] = feedGroup_index
-                                    feedGroupIndexDB[feedGroup_index] = {"feed": row[4], "group": row[5]}
-                                    final_index = feedGroup_index
-                                    feedGroup_index += 1
-
-                                # Use existing Feed/Group/index
-                                else:
-                                    final_index = isInFeedGroupDB
-
-                                zoneDB[row[1]] = {"log": row[3], "index": final_index, "important": False}
-                            else:
-                                sys.stderr.write(
-                                    "[pfBlockerNG]: Failed to parse: {}: {}".format(pfb["pfb_py_zone"], row)
-                                )
-
-                        pfb["zoneDB"] = True
-                        pfb["python_blacklist"] = True
-                except Exception as e:
-                    sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}".format(pfb["pfb_py_zone"], e))
-                    pass
+            if not dnsbl_built:
+                feedGroup_index = _load_zone_db(feedGroupDB, feedGroup_index)
 
             # Data dicts
-            if not dnsbl_built and os.path.isfile(pfb["pfb_py_data"]):
-                try:
-                    with open(pfb["pfb_py_data"]) as csv_file:
-                        csv_reader = csv.reader(csv_file, delimiter=",")
-                        for row in csv_reader:
-                            if row and len(row) == 6:
-                                # Query Feed/Group/index
-                                isInFeedGroupDB = feedGroupDB.get(row[4] + row[5])
-
-                                # Add Feed/Group/index
-                                if isInFeedGroupDB is None:
-                                    feedGroupDB[row[4] + row[5]] = feedGroup_index
-                                    feedGroupIndexDB[feedGroup_index] = {"feed": row[4], "group": row[5]}
-                                    final_index = feedGroup_index
-                                    feedGroup_index += 1
-
-                                # Use existing Feed/Group/index
-                                else:
-                                    final_index = isInFeedGroupDB
-
-                                dataDB[row[1]] = {"log": row[3], "index": final_index, "important": False}
-                            else:
-                                sys.stderr.write(
-                                    "[pfBlockerNG]: Failed to parse: {}: {}".format(pfb["pfb_py_data"], row)
-                                )
-
-                        pfb["dataDB"] = True
-                        pfb["python_blacklist"] = True
-                except Exception as e:
-                    sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}".format(pfb["pfb_py_data"], e))
-                    pass
+            if not dnsbl_built:
+                feedGroup_index = _load_data_db(feedGroupDB, feedGroup_index)
 
             # Clear temporary Feed/Group/Index list
             feedGroupDB.clear()
@@ -1457,40 +1619,11 @@ def init_standard(id: int, env: module_env) -> bool:
             if pfb["python_blacklist"]:
                 # Collect user-defined Whitelist (legacy CSV path -- the build()
                 # already loaded whiteDB from the manifest config when dnsbl_built).
-                if not dnsbl_built and os.path.isfile(pfb["pfb_py_whitelist"]):
-                    try:
-                        with open(pfb["pfb_py_whitelist"]) as csv_file:
-                            csv_reader = csv.reader(csv_file, delimiter=",")
-                            for row in csv_reader:
-                                if row and len(row) == 2:
-                                    if row[1] == "1":
-                                        wildcard = True
-                                    else:
-                                        wildcard = False
-                                    # ADR-07: whiteDB value widens to
-                                    # {"wildcard", "important"}; the legacy CSV is the
-                                    # USER whitelist -> important=True (sovereignty).
-                                    whiteDB[row[0]] = {"wildcard": wildcard, "important": True}
-                                    pfb["whiteDB"] = True
-                                else:
-                                    sys.stderr.write(
-                                        "[pfBlockerNG]: Failed to parse: {}: {}".format(pfb["pfb_py_whitelist"], row)
-                                    )
-
-                    except Exception as e:
-                        sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}".format(pfb["pfb_py_whitelist"], e))
-                        pass
+                if not dnsbl_built:
+                    _load_whitelist_db()
 
                 # HSTS dicts
-                if pfb["python_hsts"] and os.path.isfile(pfb["pfb_py_hsts"]):
-                    try:
-                        with open(pfb["pfb_py_hsts"]) as hsts:
-                            for line in hsts:
-                                hstsDB[line.rstrip("\r\n")] = 0
-                            pfb["hstsDB"] = True
-                    except Exception as e:
-                        sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}".format(pfb["pfb_py_hsts"], e))
-                        pass
+                _load_hsts_db()
 
             # ADR-07: emit the ADMITTED regex total for the DNSBL_Regex UI alias
             # (inc:8329). regexDB now holds USER regex (REGEX-ini) + FEED block regex
@@ -5098,6 +5231,9 @@ def dnsbl_build_from_manifest(manifest_path: str) -> BuildResult | None:
             manifest = json.load(fh)
     except (OSError, ValueError) as e:
         sys.stderr.write("[pfBlockerNG]: Failed to load DNSBL manifest '{}': {}".format(manifest_path, e))
+        pfb_py_status_open(
+            "dnsbl", manifest_path, "parse", "Failed to load DNSBL manifest '{}': {}".format(manifest_path, e)
+        )
         return None
 
     base_dir = os.path.dirname(os.path.abspath(manifest_path))
@@ -5105,7 +5241,7 @@ def dnsbl_build_from_manifest(manifest_path: str) -> BuildResult | None:
     top1m_enabled = bool(manifest.get("config", {}).get("top1m_enabled", False))
 
     try:
-        return build(
+        result = build(
             manifest,
             config,
             line_reader=_dnsbl_file_line_reader(base_dir),
@@ -5113,7 +5249,11 @@ def dnsbl_build_from_manifest(manifest_path: str) -> BuildResult | None:
         )
     except Exception as e:
         sys.stderr.write("[pfBlockerNG]: Failed to build DNSBL structures from raw: {}".format(e))
+        pfb_py_status_open("dnsbl", manifest_path, "parse", "Failed to build DNSBL structures from raw: {}".format(e))
         return None
+
+    pfb_py_status_close("dnsbl", manifest_path, "parse")
+    return result
 
 
 def dnsbl_emit_count(count_path: str, count: int) -> bool:
