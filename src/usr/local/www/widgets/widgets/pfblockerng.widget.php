@@ -447,12 +447,12 @@ function pfBlockerNG_get_failed() {
 	global $pfb;
 	$response = '';
 
-	// Collect any failed downloads
-	$today_date = date('Y-m-d', time());	// matches pfb_logger()'s ISO-8601 log timestamp
-	exec("{$pfb['grep']} 'FAIL' {$pfb['errlog']} | {$pfb['grep']} {$today_date}", $results);
-	$results = array_reverse($results);
+	// ADR-61: ledger-driven -- merge PHP (both facilities) + Python-owned entries,
+	// most-recently-touched first (the old grep's array_reverse equivalent).
+	$entries = array_merge(pfb_sync_status_list_open($pfb['dbdir']), pfb_py_sync_status_list_open($pfb['dnsbldir']));
+	usort($entries, fn ($a, $b) => $b['last_seen'] <=> $a['last_seen']);
 
-	if (!empty($results)) {
+	if (!empty($entries)) {
 
 		$list_type = array( 'pfblockernglistsv4' => 'ipv4', 'pfblockernglistsv6' => 'ipv6', 'pfblockerngdnsbl' => 'dnsbl' );
 		$emheight = ($pfb['maxfails'] * 1.37) + 0.1;
@@ -463,50 +463,50 @@ function pfBlockerNG_get_failed() {
 		$tab7 = "\t\t\t\t\t\t";
 		$counter = 1;
 
-		foreach ($results as $result) {
-			$result = htmlspecialchars($result);
+		foreach ($entries as $entry) {
+			$text = htmlspecialchars($entry['message']);
 
-			if (substr($result, 3, 4) == 'pfB_') {
-				$header		= str_replace(' [ pfB_', '', strstr($result, ' - ', TRUE));
-				$pfb_prefix	= 'pfB_';
+			// A recognized item is the structured, code-controlled field a link is
+			// built from -- never the free-text message (that coupling is exactly
+			// the log-format fragility this ADR retires).
+			if (str_starts_with($entry['item'], 'pfB_')) {
+				$pfb_prefix = 'pfB_';
+			} elseif (str_starts_with($entry['item'], 'DNSBL_')) {
+				$pfb_prefix = 'DNSBL_';
 			} else {
-				$header		= str_replace(' [ DNSBL_', '', strstr($result, ' - ', TRUE));
-				$pfb_prefix	= 'DNSBL_';
+				$pfb_prefix = '';
 			}
 
-			// Remove trailing IP type
-			$suffix = substr($header, -3);
-			if ($suffix == '_v4' || $suffix == '_v6') {
-				$f_alias = substr($header, 0, -3);
-			} else {
-				$f_alias = $header;
-			}
+			$pfb_found = FALSE;
+			$f_alias   = '';
+			if ($pfb_prefix !== '') {
+				$f_alias = substr($entry['item'], strlen($pfb_prefix));
+				// Remove trailing IP type
+				$suffix = substr($f_alias, -3);
+				if ($suffix == '_v4' || $suffix == '_v6') {
+					$f_alias = substr($f_alias, 0, -3);
+				}
 
-			if (!empty(pfb_filter($f_alias, PFB_FILTER_WORD, 'widget')) && $f_alias != $p_alias) {
-				$pfb_found = FALSE;
-				foreach ($list_type as $conf_type => $type) {
-					// foreign structure: pfblockernglistsv4/v6/dnsbl list sections are not in registry
-					foreach (config_get_path("installedpackages/{$conf_type}/config", []) as $key => $alias) {
-						if ($alias['aliasname'] == $f_alias) {
-							$pfb_found = TRUE;
-							break 2;
+				if (!empty(pfb_filter($f_alias, PFB_FILTER_WORD, 'widget'))) {
+					foreach ($list_type as $conf_type => $type) {
+						// foreign structure: pfblockernglistsv4/v6/dnsbl list sections are not in registry
+						foreach (config_get_path("installedpackages/{$conf_type}/config", []) as $key => $alias) {
+							if ($alias['aliasname'] == $f_alias) {
+								$pfb_found = TRUE;
+								break 2;
+							}
 						}
 					}
 				}
-			}
-			else {
-				$pfb_found = TRUE;
 			}
 
 			if ($pfb_found) {
 				$link   = "<a target=\"_blank\" href=\"/pfblockerng/pfblockerng_category_edit.php?type={$type}&act=edit&rowid={$key}\" ";
 				$link  .= "\"title=\"Click to view Alias\" >{$pfb_prefix}{$f_alias}</a>";
-				$final	= str_replace("{$pfb_prefix}{$f_alias}", $link, $result);
-				$p_alias = $f_alias;
+				$final	= str_replace("{$pfb_prefix}{$f_alias}", $link, $text);
 			}
 			else {
-				$final = $result;
-				$p_alias = '';
+				$final = $text;
 			}
 
 			if ($counter == 1) {
@@ -598,13 +598,15 @@ function pfBlockerNG_get_header($mode='') {
 		$pfb_status	= 'fa-solid fa-check-circle text-success';
 		$pfb_msg	= 'pfBlockerNG is Active.';
 
-		// Check Masterfile Database Sanity
-		if (isset($pfb['config']['enable_dup']) && pfb_cfg_toggle_read($pfb['config']['enable_dup']) === PfbToggle::On) {
-			$db_sanity = exec("{$pfb['grep']} 'Sanity check' {$pfb['logdir']}/pfblockerng.log | tail -1 | {$pfb['grep']} -o 'PASSED'");
-			if ($db_sanity != 'PASSED') {
-				$pfb_status	= 'fa-solid fa-exclamation-circle text-warning';
-				$pfb_msg	= 'pfBlockerNG deDuplication is out of sync. Perform a Force Reload to correct.';
-			}
+		// ADR-61: yellow on ANY open facility='ip' sync-status entry (dedup is
+		// just one stage among several now, not a separately-coded branch).
+		$pfb_ip_open = pfb_sync_status_list_open($pfb['dbdir'], 'ip');
+		if (!empty($pfb_ip_open)) {
+			$pfb_status	= 'fa-solid fa-exclamation-circle text-warning';
+			$pfb_ip_other	= array_filter($pfb_ip_open, fn ($entry) => $entry['item'] !== 'dedup');
+			$pfb_msg	= empty($pfb_ip_other)
+				? 'pfBlockerNG deDuplication is out of sync. Perform a Force Reload to correct.'
+				: sprintf('pfBlockerNG has %d open issue(s). See the Failed Downloads list below.', count($pfb_ip_open));
 		}
 	} else {
 		$pfb_status = 'fa-solid fa-times-circle text-danger';
@@ -621,30 +623,18 @@ function pfBlockerNG_get_header($mode='') {
 	// Status indicator if DNSBL is actively running
 	if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On && pfb_cfg_toggle_read($pfb['dnsbl']) === PfbToggle::On && pfb_cfg_toggle_read($pfb['unbound_state']) === PfbToggle::On && $unbound_validate) {
 
-		// Check DNSBL Database Sanity
-		$db_sanity = exec("{$pfb['grep']} 'DNSBL update' {$pfb['logdir']}/pfblockerng.log | tail -1 | {$pfb['grep']} -o 'OUT OF SYNC'");
-		if ($db_sanity == 'OUT OF SYNC') {
+		// ADR-61: yellow on ANY open facility='dnsbl' entry, merged PHP + Python ledgers.
+		$pfb_dnsbl_open = array_merge(pfb_sync_status_list_open($pfb['dbdir'], 'dnsbl'), pfb_py_sync_status_list_open($pfb['dnsbldir']));
+		if (!empty($pfb_dnsbl_open)) {
 			$dnsbl_status	= 'fa-solid fa-exclamation-circle text-warning';
-			$dnsbl_msg	= "DNSBL is out of sync. Perform a Force Reload to correct.";
+			$dnsbl_msg	= sprintf('DNSBL has %d open issue(s). See the Failed Downloads list below.', count($pfb_dnsbl_open));
 		} else {
 			$dnsbl_status	= 'fa-solid fa-check-circle text-success';
 			$dnsbl_msg	= "DNSBL is Active on vip: {$pfb['dnsbl_vip4']} ports: {$pfb['dnsbl_port']} & {$pfb['dnsbl_port_ssl']}";
 		}
-
-		// Check for any DNSBL errors
-		if ((int)@filesize($pfb['pyerrlog']) > 0) {
-			$dnsbl_status	= 'fa-solid fa-exclamation-circle text-warning';
-			$dnsbl_msg	= "DNSBL errors Found! Review py_error.log";
-		}
 	} else {
 		$dnsbl_status		= 'fa-solid fa-times-circle text-danger';
-
-		// Check for any DNSBL errors
-		if ((int)@filesize($pfb['pyerrlog']) > 0) {
-			$dnsbl_msg = "DNSBL is Disabled with errors! Review py_error.log";
-		} else {
-			$dnsbl_msg = "DNSBL is Disabled.";
-		}
+		$dnsbl_msg		= "DNSBL is Disabled.";
 	}
 
 	// Collect folder/file counts

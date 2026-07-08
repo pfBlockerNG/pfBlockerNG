@@ -5,12 +5,9 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * ADR-61 — Golden oracles pinning TODAY's dashboard-widget icon/report logic,
- * BEFORE any ledger rewrite touches it. A later phase replaces the underlying
- * checks (dedup-sanity grep, dead OUT-OF-SYNC grep, py_error.log filesize,
- * error.log FAIL-grep) with the sync-status ledger; these oracles are the
- * regression net that catches an unintended behaviour change along the way —
- * once that rewrite lands, it supersedes (not merely extends) these pins.
+ * ADR-61 Phase 6 — golden oracles for the LEDGER-DRIVEN dashboard-widget icon/
+ * report logic, superseding Phase 1's frozen-old-behavior pins (scaffolding,
+ * not a permanent contract -- Phase 1's own handoff flagged this explicitly).
  *
  * The widget file (src/usr/local/www/widgets/widgets/pfblockerng.widget.php)
  * carries top-level page execution and cannot be require()d off-appliance, so
@@ -19,15 +16,22 @@ use PHPUnit\Framework\TestCase;
  * pfBlockerNG_get_failed() function verbatim) rather than reimplementing the
  * logic. No production file is modified.
  *
- * Coverage (ADR-61 §6 Phase 1 action plan item 2):
- *   (a) IP icon    — disabled; enabled+dedup-off; enabled+dedup-on+PASSED;
- *                     enabled+dedup-on+FAILED; enabled+dedup-on+absent.
- *   (b) DNSBL icon — each "is it live" gate off (enable/dnsbl/unbound_state/
- *                     unbound.conf reference) in turn; live+clean; live+OUT OF
- *                     SYNC (dead code, still pinned as today's behaviour);
- *                     live+py_error.log content; disabled+py_error.log content.
- *   (c) pfBlockerNG_get_failed() — a recognized alias builds the expected deep
- *                     link; an unrecognized one still renders without crashing.
+ * Coverage (ADR-61 SS2.5 / SS4 items 1-3):
+ *   (a) IP icon    — disabled (unchanged, red); enabled+no open entries (green);
+ *                     enabled+dedup-only entry (yellow, dedup wording preserved);
+ *                     enabled+non-dedup entry, e.g. an apply-stage failure
+ *                     (yellow, regardless of enable_dup -- the asymmetry this
+ *                     ADR retires).
+ *   (b) DNSBL icon — each "is it live" gate off (unchanged, red), both with and
+ *                     without an open dnsbl entry present (the entries must
+ *                     never leak into the red branch); live+no open entries
+ *                     (green); live+an open PHP entry (yellow); live+only a
+ *                     Python-side entry (yellow, merged).
+ *   (c) pfBlockerNG_get_failed() — a recognized (pfB_/DNSBL_-prefixed) item
+ *                     builds the alias-editor deep link; a Python-side (file-
+ *                     path) item renders as plain text, no link attempted, no
+ *                     crash; an empty ledger falls back to the MaxMind version
+ *                     line exactly as today.
  */
 final class PfbWidgetOracleTest extends TestCase
 {
@@ -114,20 +118,13 @@ final class PfbWidgetOracleTest extends TestCase
 			'enable'         => 'on',
 			'dnsbl'          => 'on',
 			'unbound_state'  => 'on',
-			'grep'           => '/usr/bin/grep',
-			'logdir'         => $this->dir,
-			'dnsbldir'       => $this->dir,
-			'pyerrlog'       => $this->dir . '/py_error.log',
+			'dbdir'          => $this->dir,	// PHP-owned ledger (pfb_sync_status.json)
+			'dnsbldir'       => $this->dir,	// Python-owned ledger (pfb_py_status.json)
 			'dnsbl_vip4'     => '198.51.100.1',
 			'dnsbl_port'     => '8080',
 			'dnsbl_port_ssl' => '8443',
 			'config'         => [],
 		];
-	}
-
-	private function writeLog(string $contents): void
-	{
-		file_put_contents($this->dir . '/pfblockerng.log', $contents);
 	}
 
 	private function writeUnboundConf(bool $referencesPfbUnbound): void
@@ -138,9 +135,9 @@ final class PfbWidgetOracleTest extends TestCase
 		);
 	}
 
-	private function writePyErrLog(string $contents): void
+	private function writePyStatusFile(array $entries): void
 	{
-		file_put_contents($this->dir . '/py_error.log', $contents);
+		file_put_contents($this->dir . '/pfb_py_status.json', json_encode($entries));
 	}
 
 	// -----------------------------------------------------------------------
@@ -151,7 +148,6 @@ final class PfbWidgetOracleTest extends TestCase
 	{
 		$pfb = $this->basePfb();
 		$pfb['enable'] = '';
-		$this->writeLog('');
 
 		[$status, $msg] = pfb_widget_oracle_status($pfb);
 
@@ -159,23 +155,24 @@ final class PfbWidgetOracleTest extends TestCase
 		$this->assertSame('pfBlockerNG is Disabled.', $msg);
 	}
 
-	public function testIpEnabledDedupOffIsGreenRegardlessOfLogContent(): void
+	public function testIpDisabledStaysRedEvenWithAnOpenIpEntry(): void
 	{
+		// Semantics #1: the red/green "is it running" gate is untouched by the
+		// ledger -- a disabled facility must never read as yellow just because
+		// a stale entry is still open.
 		$pfb = $this->basePfb();
-		$pfb['config']['enable_dup'] = '';	// dedup off
-		$this->writeLog("Sanity check [ FAILED ]\n");	// even with a failing line present
+		$pfb['enable'] = '';
+		pfb_sync_status_open('ip', 'pfB_Stale_v4', 'apply', 'stale entry', $this->dir);
 
 		[$status, $msg] = pfb_widget_oracle_status($pfb);
 
-		$this->assertSame(self::ICON_GREEN, $status, 'dedup off must never look at the sanity line');
-		$this->assertSame('pfBlockerNG is Active.', $msg);
+		$this->assertSame(self::ICON_RED, $status);
+		$this->assertSame('pfBlockerNG is Disabled.', $msg);
 	}
 
-	public function testIpEnabledDedupOnSanityPassedIsGreen(): void
+	public function testIpEnabledNoOpenEntriesIsGreen(): void
 	{
 		$pfb = $this->basePfb();
-		$pfb['config']['enable_dup'] = 'on';
-		$this->writeLog("Some other line\nDatabase Sanity check [ PASSED ]\n");
 
 		[$status, $msg] = pfb_widget_oracle_status($pfb);
 
@@ -183,11 +180,10 @@ final class PfbWidgetOracleTest extends TestCase
 		$this->assertSame('pfBlockerNG is Active.', $msg);
 	}
 
-	public function testIpEnabledDedupOnSanityFailedIsYellow(): void
+	public function testIpEnabledDedupOnlyEntryIsYellowWithDedupWording(): void
 	{
 		$pfb = $this->basePfb();
-		$pfb['config']['enable_dup'] = 'on';
-		$this->writeLog("Database Sanity check [ FAILED ]\n");
+		pfb_sync_status_open('ip', 'dedup', 'dedup', 'Database Sanity check [ FAILED ]', $this->dir);
 
 		[$status, $msg] = pfb_widget_oracle_status($pfb);
 
@@ -195,28 +191,28 @@ final class PfbWidgetOracleTest extends TestCase
 		$this->assertSame('pfBlockerNG deDuplication is out of sync. Perform a Force Reload to correct.', $msg);
 	}
 
-	public function testIpEnabledDedupOnSanityAbsentIsYellow(): void
+	public function testIpEnabledNonDedupEntryIsYellowRegardlessOfEnableDup(): void
 	{
+		// The exact asymmetry this ADR targets: a real apply-stage failure must
+		// turn the row yellow even though enable_dup was never turned on.
 		$pfb = $this->basePfb();
-		$pfb['config']['enable_dup'] = 'on';
-		$this->writeLog("no sanity line at all here\n");
+		pfb_sync_status_open('ip', 'pfB_Example_v4', 'apply', '[pfctl] op=replace table=pfB_Example_v4 failed (rc=1)', $this->dir);
 
 		[$status, $msg] = pfb_widget_oracle_status($pfb);
 
-		$this->assertSame(self::ICON_YELLOW, $status, 'no Sanity check line at all must be treated the same as FAILED');
+		$this->assertSame(self::ICON_YELLOW, $status);
+		$this->assertSame('pfBlockerNG has 1 open issue(s). See the Failed Downloads list below.', $msg);
 	}
 
 	// -----------------------------------------------------------------------
 	// (b) DNSBL icon — each "is it live" gate, individually off -> red.
 	// -----------------------------------------------------------------------
 
-	/** A baseline $pfb that is fully "live" for the DNSBL check, log clean. */
+	/** A baseline $pfb that is fully "live" for the DNSBL check, no open entries. */
 	private function liveDnsblPfb(): array
 	{
 		$pfb = $this->basePfb();
 		$this->writeUnboundConf(TRUE);
-		$this->writeLog("DNSBL update [ completed ]\n");
-		$this->writePyErrLog('');
 		return $pfb;
 	}
 
@@ -271,23 +267,27 @@ final class PfbWidgetOracleTest extends TestCase
 		$this->assertSame(self::ICON_RED, $status);
 	}
 
-	public function testDnsblDisabledWithPyErrorsUsesTheErrorMessage(): void
+	public function testDnsblDisabledStaysRedEvenWithAnOpenDnsblEntry(): void
 	{
+		// Semantics #1 for the DNSBL row's own red branch: an open entry must
+		// never leak a yellow read into a genuinely-disabled facility, and the
+		// disabled message no longer differentiates by error-log content (that
+		// distinction depended on py_error.log, now fully retired from the widget).
 		$pfb = $this->liveDnsblPfb();
 		$pfb['enable'] = '';
-		$this->writePyErrLog("Traceback...\n");
+		pfb_sync_status_open('dnsbl', 'dnsbl', 'apply', 'stale dnsbl entry', $this->dir);
 
 		[, , $status, $msg] = pfb_widget_oracle_status($pfb);
 
 		$this->assertSame(self::ICON_RED, $status);
-		$this->assertSame('DNSBL is Disabled with errors! Review py_error.log', $msg);
+		$this->assertSame('DNSBL is Disabled.', $msg);
 	}
 
 	// -----------------------------------------------------------------------
 	// (b) DNSBL icon — live states.
 	// -----------------------------------------------------------------------
 
-	public function testDnsblLiveCleanIsGreen(): void
+	public function testDnsblLiveNoOpenEntriesIsGreen(): void
 	{
 		$pfb = $this->liveDnsblPfb();
 
@@ -297,48 +297,48 @@ final class PfbWidgetOracleTest extends TestCase
 		$this->assertSame('DNSBL is Active on vip: 198.51.100.1 ports: 8080 & 8443', $msg);
 	}
 
-	// The dead OUT-OF-SYNC grep (ADR-61 §1.1 — no writer exists in the current
-	// tree) is still today's CODE, so still pinned here: a later phase retires
-	// it, and this oracle documents exactly what is being replaced.
-	public function testDnsblLiveOutOfSyncLineIsYellow(): void
+	public function testDnsblLiveWithOpenPhpEntryIsYellow(): void
 	{
 		$pfb = $this->liveDnsblPfb();
-		$this->writeLog("DNSBL update [ OUT OF SYNC ]\n");
+		pfb_sync_status_open('dnsbl', 'dnsbl', 'apply', 'DNSBL apply not converged', $this->dir);
 
 		[, , $status, $msg] = pfb_widget_oracle_status($pfb);
 
 		$this->assertSame(self::ICON_YELLOW, $status);
-		$this->assertSame('DNSBL is out of sync. Perform a Force Reload to correct.', $msg);
+		$this->assertSame('DNSBL has 1 open issue(s). See the Failed Downloads list below.', $msg);
 	}
 
-	public function testDnsblLiveWithPyErrorContentIsYellow(): void
+	public function testDnsblLiveWithOnlyAPythonSideEntryIsYellow(): void
 	{
+		// No py_error.log content anywhere -- the OLD monotonic filesize trigger
+		// would have missed this entirely; the merged ledger read catches it.
 		$pfb = $this->liveDnsblPfb();
-		$this->writePyErrLog("Traceback...\n");
+		$this->writePyStatusFile([
+			['facility' => 'dnsbl', 'item' => 'pfb_py_zone.txt', 'stage' => 'parse', 'message' => 'Failed to load: pfb_py_zone.txt: boom', 'first_seen' => 1, 'last_seen' => 1],
+		]);
 
 		[, , $status, $msg] = pfb_widget_oracle_status($pfb);
 
 		$this->assertSame(self::ICON_YELLOW, $status);
-		$this->assertSame('DNSBL errors Found! Review py_error.log', $msg);
+		$this->assertSame('DNSBL has 1 open issue(s). See the Failed Downloads list below.', $msg);
 	}
 
 	// -----------------------------------------------------------------------
 	// (c) pfBlockerNG_get_failed().
 	// -----------------------------------------------------------------------
 
-	/**
-	 * Build one realistic error.log FAIL line, matching pfb_download_failure()'s
-	 * "\n\n [ {$alias} - {$header} ] Download FAIL [ NOW ]\n" shape with NOW
-	 * resolved to today (pfb_logger's ISO date, which the widget's own grep
-	 * matches — see the lockstep comment at pfblockerng.inc:3096-3098).
-	 */
-	private function writeFailLine(string $alias, string $header): void
+	public function testGetFailedEmptyLedgerShowsMaxmindFallback(): void
 	{
-		$now = date('Y-m-d H:i:s');
-		file_put_contents(
-			$this->dir . '/error.log',
-			"\n\n [ {$alias} - {$header} ] Download FAIL [ {$now} ]\n"
-		);
+		$pfb = $this->basePfb();
+		$pfb['maxfails'] = 3;
+		$GLOBALS['pfb'] = $pfb;
+
+		ob_start();
+		pfBlockerNG_get_failed();
+		$html = ob_get_clean();
+
+		$this->assertStringContainsString('MaxMind:', $html, 'an empty ledger must fall back to the MaxMind version line');
+		$this->assertStringNotContainsString('<ol', $html, 'an empty ledger must not render the issues list');
 	}
 
 	public function testGetFailedRecognizedAliasBuildsDeepLink(): void
@@ -353,44 +353,41 @@ final class PfbWidgetOracleTest extends TestCase
 			],
 		];
 		$pfb = $this->basePfb();
-		$pfb['errlog']   = $this->dir . '/error.log';
 		$pfb['maxfails'] = 3;
-		$this->writeFailLine('pfB_Example_v4', 'pfB_Example_v4');
+		pfb_sync_status_open('ip', 'pfB_Example_v4', 'apply', '[pfctl] op=replace table=pfB_Example_v4 failed (rc=1)', $this->dir);
 		$GLOBALS['pfb'] = $pfb;
 
-		// @-suppressed: the shipped function reads $p_alias before its first
-		// assignment on the very first log line, an existing PHP 8 undefined-
-		// variable warning we pin as-is (not our bug to fix in this phase).
 		ob_start();
-		@pfBlockerNG_get_failed();
+		pfBlockerNG_get_failed();
 		$html = ob_get_clean();
 
 		$this->assertStringContainsString(
 			'pfblockerng_category_edit.php?type=ipv4&act=edit&rowid=0',
 			$html,
-			'a recognized alias must build the alias-editor deep link'
+			'a recognized item must build the alias-editor deep link'
 		);
 		$this->assertStringContainsString('pfB_Example', $html);
 	}
 
-	public function testGetFailedUnrecognizedAliasRendersWithoutCrashing(): void
+	public function testGetFailedPythonSideEntryRendersAsPlainTextWithoutCrashing(): void
 	{
 		$GLOBALS['config'] = ['installedpackages' => []];
 		$pfb = $this->basePfb();
-		$pfb['errlog']   = $this->dir . '/error.log';
 		$pfb['maxfails'] = 3;
-		$this->writeFailLine('pfB_NoSuchAlias_v4', 'pfB_NoSuchAlias_v4');
+		$this->writePyStatusFile([
+			['facility' => 'dnsbl', 'item' => 'pfb_py_zone.txt', 'stage' => 'parse', 'message' => 'Failed to load: pfb_py_zone.txt: boom', 'first_seen' => 1, 'last_seen' => 1],
+		]);
 		$GLOBALS['pfb'] = $pfb;
 
 		ob_start();
-		@pfBlockerNG_get_failed();
+		pfBlockerNG_get_failed();
 		$html = ob_get_clean();
 
 		$this->assertStringNotContainsString(
 			'pfblockerng_category_edit.php',
 			$html,
-			'an unrecognized alias must render plain text, no deep link'
+			'a Python-side file-path item must never attempt a deep link'
 		);
-		$this->assertStringContainsString('pfB_NoSuchAlias', $html, 'the raw log line must still render');
+		$this->assertStringContainsString('pfb_py_zone.txt', $html, 'the entry message must still render');
 	}
 }
