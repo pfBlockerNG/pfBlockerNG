@@ -4347,12 +4347,11 @@ function pfb_run_hooks($when, $ctx = array()) {
 				}
 				proc_close($proc);
 			}
-
-			// issue #988: this branch streams to $logtarget same as the normal pass does --
-			// persist its delta into $pfb['log'] too (covers both the proc_open and the
-			// exec() fallback sub-paths above; no-op outside a run).
-			pfb_persist_hook_output($logtarget, $hook_log_offset);
 		}
+
+		// issue #988: the lifecycle branch above streams to $logtarget same as the normal
+		// pass does -- persist its delta into $pfb['log'] too (no-op outside a run).
+		pfb_persist_hook_output($logtarget, $hook_log_offset);
 
 		if ($retval === 124) {
 			pfb_logger("[ pfB Hook ] {$when} {$label} TIMED OUT after {$timeout}s (killed); continuing\n", 2);
