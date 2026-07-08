@@ -5066,8 +5066,10 @@ foreach ($stats as $stat_type => $stype):
 							}
 
 							if ($stat_type == 'dnsbldatehr' || $stat_type == 'dnsbldatehrmin') {
+								// ISO bucket key is 2 space-tokens (date, hour[:min]), not the
+								// old 3-token "Mon D HH" shape -- label as "date (hour[:min])".
 								$d = explode (' ', $data);
-								$data = "{$d[0]} {$d[1]}&emsp;({$d[2]})";
+								$data = "{$d[0]}&emsp;({$d[1]})";
 							}
 
 							if (!empty($data) && $data != 'Not available for HTTPS alerts') {

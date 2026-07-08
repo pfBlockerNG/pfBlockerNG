@@ -111,22 +111,23 @@ final class LogTimestampBaselineTest extends TestCase
 	}
 
 	/**
-	 * A caller still embedding the legacy '[ NOW ]' token gets it defensively
-	 * scrubbed to nothing -- never substituted, never left as dead text --
-	 * while the unconditional prefix still lands.
+	 * issue #1008: the legacy '[ NOW ]' scrub is retired (every caller's literal token
+	 * was deleted in the same change) -- pfb_logger() no longer special-cases message
+	 * content at all, so a message that happens to contain the substring 'NOW'
+	 * (bracketed or bare) is preserved byte-for-byte, not silently mangled.
 	 */
-	public function testLogLegacyNowTokenScrubbedNotSubstituted(): void
+	public function testLogMessageContainingNowSubstringIsPreservedVerbatim(): void
 	{
 		$log = $this->tempFile('pfb_log_now_');
 		$GLOBALS['pfb']['log'] = $log;
 
-		pfb_logger("pfb-baseline now-token line [ NOW ]\n", 1);
+		pfb_logger("SNOWSHOE feed KNOWN issue [ NOW ]\n", 1);
 
 		$written = (string) file_get_contents($log);
 		$this->assertMatchesRegularExpression(
-			'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} pfb-baseline now-token line\n$/',
+			'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} SNOWSHOE feed KNOWN issue \[ NOW \]\n$/',
 			$written,
-			"the legacy '[ NOW ]' token must be scrubbed, and the real prefix used instead; got: {$written}"
+			"a message containing 'NOW' must be preserved verbatim (no scrub) after the prefix; got: {$written}"
 		);
 	}
 
@@ -284,7 +285,7 @@ final class LogTimestampBaselineTest extends TestCase
 	{
 		$source = (string) file_get_contents(self::PFBLOCKERNG_INC);
 		$this->assertStringContainsString(
-			"\$ts_formatted = date('Y-m-d H:i:s', strtotime(\$f[1]));",
+			'$ts = strtotime($f[1]);',
 			$source,
 			"pfb_daemon_filterlog()'s 'syslog' branch formula changed -- update this baseline oracle"
 		);
@@ -293,9 +294,33 @@ final class LogTimestampBaselineTest extends TestCase
 		$f = [1 => '2024-11-05T13:30:45+00:00'];
 		$this->assertStringContainsString('2024', $f[1], 'fixture sanity: the RFC-5424 source must carry a year');
 
-		$ts = date('Y-m-d H:i:s', strtotime($f[1]));
+		$ts = strtotime($f[1]);
+		$ts_formatted = ($ts === FALSE) ? pfb_log_iso_timestamp() : date('Y-m-d H:i:s', $ts);
 
-		$this->assertSame('2024-11-05 13:30:45', $ts, "the 'syslog' branch must keep \$f[1]'s real year verbatim, not discard it");
+		$this->assertSame('2024-11-05 13:30:45', $ts_formatted, "the 'syslog' branch must keep \$f[1]'s real year verbatim, not discard it");
+	}
+
+	/**
+	 * issue #1006: a malformed RFC-5424 $f[1] must fall back to
+	 * pfb_log_iso_timestamp()'s "now", never stamp 1970 -- an unguarded
+	 * strtotime()===FALSE previously fed date() a FALSE (=> 0) timestamp,
+	 * which the age-cutoff (Phase 6) would then treat as always-expired,
+	 * silently dropping a genuinely recent line.
+	 */
+	public function testFilterlogSyslogBranchUnparseableFallsBackToIsoNow(): void
+	{
+		$f = [1 => 'not-a-valid-rfc5424-timestamp'];
+		$ts = strtotime($f[1]);
+		$this->assertFalse($ts, 'fixture sanity: the garbage $f[1] must fail to parse (FALSE)');
+
+		$ts_formatted = ($ts === FALSE) ? pfb_log_iso_timestamp() : date('Y-m-d H:i:s', $ts);
+
+		$this->assertMatchesRegularExpression(
+			'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/',
+			$ts_formatted,
+			"the FALSE-parse fallback must be pfb_log_iso_timestamp()'s ISO-8601 \"now\" shape"
+		);
+		$this->assertStringStartsNotWith('1970-01-01', $ts_formatted, 'must never silently stamp the Unix epoch on a parse failure');
 	}
 
 	/**
@@ -329,6 +354,37 @@ final class LogTimestampBaselineTest extends TestCase
 		$ts = strtotime("{$f[0]} {$f[1]} {$f[2]} " . ((int) date('Y', $now) - 1), $now);
 
 		$this->assertSame('2025-12-31 23:00:00', date('Y-m-d H:i:s', $ts), 'a December BSD line read in January must roll back exactly one year');
+	}
+
+	/**
+	 * Adversarial review nitpick (PR #1005): the '6*3600' skew-tolerance boundary
+	 * itself (a value beyond the ADR's literal "roll back if in the future" text,
+	 * added to avoid misreading a same-day line near midnight/DST as "next year")
+	 * had no test pinning its exact edge. Reproduces the full production formula
+	 * on both sides of the threshold, same $bsd_now, only the BSD line's time
+	 * differing by +/- 1 minute around exactly 6 hours ahead.
+	 */
+	public function testFilterlogBsdBranchSixHourSkewToleranceBoundary(): void
+	{
+		$bsdNow = strtotime('2026-07-08 12:00:00 UTC');
+
+		$infer = static function (string $f0, string $f1, string $f2, int $bsdNow): string {
+			$ts = strtotime("{$f0} {$f1} {$f2}", $bsdNow);
+			if ($ts > $bsdNow + 6 * 3600) {
+				$ts = strtotime("{$f0} {$f1} {$f2} " . ((int) date('Y', $bsdNow) - 1), $bsdNow);
+			}
+			return date('Y-m-d H:i:s', $ts);
+		};
+
+		// 5h59m ahead: AT/under tolerance -- no rollback, current year kept.
+		$this->assertSame('2026-07-08 17:59:00', $infer('Jul', '8', '17:59:00', $bsdNow),
+			'just under the 6h tolerance must NOT roll back the year');
+
+		// 6h01m ahead: OVER tolerance -- the guard fires and rolls back a year
+		// (the heuristic applies uniformly, not only at a literal Dec/Jan boundary --
+		// a documented, already-shipped characteristic, pinned here, not redesigned).
+		$this->assertSame('2025-07-08 18:01:00', $infer('Jul', '8', '18:01:00', $bsdNow),
+			'just over the 6h tolerance must roll back the year');
 	}
 
 	/**

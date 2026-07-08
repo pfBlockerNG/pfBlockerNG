@@ -34,6 +34,7 @@ use PHPUnit\Framework\TestCase;
  *     - testEmptyFileStaysEmpty
  *     - testRealisticUpgradeMixedLegacyAndNewFormatLines
  *     - testNonNumericLogMaxDaysConfigValueIsTreatedAsOff
+ *     - testOversizedLogMaxDaysConfigValueDoesNotCrash
  *
  *   Per-type field-position wiring (at least one per DISTINCT field mode --
  *   'log' above covers 'prefix'; these cover the other two):
@@ -505,6 +506,40 @@ final class LogMgmtAgeCutoffTest extends TestCase
 		$linesAfter = array_values(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
 		$this->assertSame(array_slice($lines, 2), $linesAfter,
 			"a non-numeric log_max_days_log value must be treated as off (line-count only), got "
+			. var_export($linesAfter, TRUE)
+		);
+	}
+
+	/**
+	 * Adversarial review finding (PR #1005): an oversized-but-all-digit
+	 * log_max_days_<type> value used to crash pfb_log_mgmt() with an uncaught
+	 * TypeError (days*86400 overflowing int into a float, rejected by
+	 * pfb_log_age_cutoff()'s typed int parameter) -- aborting the whole
+	 * foreach loop and leaving every subsequent log type untrimmed. Red-proof:
+	 * this test crashed with "TypeError: pfb_log_age_cutoff(): Argument #2
+	 * ($cutoff_ts) must be of type int, float given" against the pre-fix
+	 * pfb_log_max_days() (no clamp); it must run to completion now.
+	 */
+	public function testOversizedLogMaxDaysConfigValueDoesNotCrash(): void
+	{
+		$this->seedMinimalConfig();
+		$this->setLogCaps('log', '3', '99999999999999999999999999999999');
+		$this->ensureLogDir();
+		pfb_global();
+
+		$logPath = $this->logPath('log');
+		$lines = [
+			$this->now() . ' l1', $this->now() . ' l2', $this->now() . ' l3',
+			$this->now() . ' l4', $this->now() . ' l5',
+		];
+		file_put_contents($logPath, implode("\n", $lines) . "\n");
+
+		pfb_log_mgmt();
+
+		clearstatcache(TRUE, $logPath);
+		$linesAfter = array_values(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
+		$this->assertSame(array_slice($lines, 2), $linesAfter,
+			"an oversized log_max_days_log value must not crash pfb_log_mgmt() -- line-count trim must still apply, got "
 			. var_export($linesAfter, TRUE)
 		);
 	}

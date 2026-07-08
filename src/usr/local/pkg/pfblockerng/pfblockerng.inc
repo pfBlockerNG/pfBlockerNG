@@ -1180,7 +1180,7 @@ function pfb_text_sanity(string $sample): ?string {
 function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FALSE, &$reject_detail=NULL) {
 	global $pfb;
 
-	$header = "\n PFB_FILTER - {$type} | {$reference} [ NOW ]";
+	$header = "\n PFB_FILTER - {$type} | {$reference}";
 
 	$return_type = $default;
 	if (in_array($type, array(PFB_FILTER_URL, PFB_FILTER_FILE_MIME_COMPARE, PFB_FILTER_FILE_MIME, PFB_FILTER_FILE_MIME_COMPRESSED))) {
@@ -2785,7 +2785,9 @@ function pfb_log_max_lines($raw) {
 // garbage/absent -> 0 (off), never a silent crash on an operator's typo. PURE.
 function pfb_log_max_days($raw): int {
 	if (is_scalar($raw) && preg_match('/^[0-9]+$/', (string) $raw)) {
-		return (int) $raw;
+		// Clamp so days*86400 (pfb_log_age_trim_temp()) can never overflow int into a
+		// float -- an oversized-but-numeric operator typo must never crash pfb_log_mgmt().
+		return min((int) $raw, 3650000);
 	}
 	return 0;
 }
@@ -2926,7 +2928,9 @@ function pfb_log_mgmt() {
 					} else {
 						exec("/usr/bin/tail -n " . escapeshellarg($logmax) . " " . escapeshellarg($final_log_file) . " > " . escapeshellarg($temp), $out, $ret);
 					}
-					if ($ret === 0 && $agedays > 0 && !pfb_log_age_trim_temp($temp, $agedays, $logtype)) {
+					if ($ret !== 0) {
+						pfb_logger("\npfb_log_mgmt: failed to produce {$final_log_file}'s truncation candidate", 2);
+					} elseif ($agedays > 0 && !pfb_log_age_trim_temp($temp, $agedays, $logtype)) {
 						pfb_logger("\npfb_log_mgmt: failed to age-trim {$final_log_file}'s truncation candidate", 2);
 						$ret = 1;
 					}
@@ -2938,8 +2942,6 @@ function pfb_log_mgmt() {
 						} else {
 							pfb_logger("\npfb_log_mgmt: failed to overwrite {$final_log_file} during truncation", 2);
 						}
-					} else {
-						pfb_logger("\npfb_log_mgmt: failed to tail {$final_log_file} for truncation", 2);
 					}
 				}
 			}
@@ -2952,7 +2954,9 @@ function pfb_log_mgmt() {
 				} else {
 					exec("/usr/bin/tail -n " . escapeshellarg($logmax) . " {$pfb[$logtype]} > " . escapeshellarg($temp), $out, $ret);
 				}
-				if ($ret === 0 && $agedays > 0 && !pfb_log_age_trim_temp($temp, $agedays, $logtype)) {
+				if ($ret !== 0) {
+					pfb_logger("\npfb_log_mgmt: failed to produce {$pfb[$logtype]}'s truncation candidate", 2);
+				} elseif ($agedays > 0 && !pfb_log_age_trim_temp($temp, $agedays, $logtype)) {
 					pfb_logger("\npfb_log_mgmt: failed to age-trim {$pfb[$logtype]}'s truncation candidate", 2);
 					$ret = 1;
 				}
@@ -2961,8 +2965,6 @@ function pfb_log_mgmt() {
 					if ($ret !== 0) {
 						pfb_logger("\npfb_log_mgmt: failed to overwrite {$pfb[$logtype]} during truncation", 2);
 					}
-				} else {
-					pfb_logger("\npfb_log_mgmt: failed to tail {$pfb[$logtype]} for truncation", 2);
 				}
 			}
 			unlink_if_exists($temp);
@@ -3008,10 +3010,9 @@ function pfb_logger($log, $logtype) {
 
 	$now = pfb_log_iso_timestamp();
 
-	// Scrub the legacy '[ NOW ]' token, then insert the stamp AFTER any leading
-	// newlines -- ADR-48's pfb_validate_log_line() (among other callers) uses a
-	// leading "\n" as a separator from the PREVIOUS write, not this line's content.
-	$log = str_replace([' [ NOW ]', 'NOW'], '', $log);
+	// Insert the stamp AFTER any leading newlines -- ADR-48's pfb_validate_log_line()
+	// (among other callers) uses a leading "\n" as a separator from the PREVIOUS
+	// write, not this line's content.
 	$lead = strspn($log, "\n");
 	$log = substr($log, 0, $lead) . "{$now} " . substr($log, $lead);
 	$elog = $log;
@@ -5426,7 +5427,7 @@ function dnsbl_save_stats() {
 		}
 		pfb_close_sqlite($db_handle);
 	}
-	pfb_logger(" completed [ NOW ]", 1);
+	pfb_logger(" completed", 1);
 }
 
 
@@ -7647,7 +7648,7 @@ function tld_analysis() {
 
 	// TLD 'redirect zones' found. Finalize TLD function
 	if ($pfb_found) {
-		$log = " completed [ NOW ]\n";
+		$log = " completed\n";
 		// Print TLD exceedance error message
 		if ($domain_cnt >= $pfb['domain_max_cnt']) {
 			$log .= "\n  ** TLD Domain count exceeded. [ {$pfb['domain_max_cnt']} ] All subsequent Domains listed as-is **\n\n";
@@ -7665,7 +7666,7 @@ function tld_analysis() {
 				@rename("{$py_final}.raw", $py_final);
 			}
 		}
-		pfb_logger("\nTLD finalize... completed [ NOW ]\n", 1);
+		pfb_logger("\nTLD finalize... completed\n", 1);
 
 		// Update DNSBL Alias and Widget Stats
 		if (!empty($pfb['tld_update'])) {
@@ -7839,7 +7840,7 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 					// the block is LIVE. Coalesced, gated behind the '.sync' marker above.
 					pfb_unbound_py_ccache_flush($newly_blocked);
 
-					pfb_logger(" completed [ NOW ]", 1);
+					pfb_logger(" completed", 1);
 					// Clear the daemon-suppression marker before this early return: the
 					// alert/#51 path (pfb_reload_unbound called from pfblockerng_alerts.php)
 					// has no later clear_work_files, so '.sync' would otherwise leak and keep
@@ -7926,23 +7927,23 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 		exec("{$pfb['chroot_cmd']} status 2>&1", $final['result'], $final['retval']);
 		pfb_logger('.', 1);
 		if (preg_grep("/is running.../", $final['result'])) {
-			pfb_logger(" completed [ NOW ]", 1);
+			pfb_logger(" completed", 1);
 
 			// Restore Resolver cache
 			if ($cache && $pfb['dnsbl_res_cache'] == 'on' && file_exists($cache_dumpfile) && filesize($cache_dumpfile) > 0) {
 				exec("{$pfb['chroot_cmd']} load_cache < " . escapeshellarg($cache_dumpfile) . " 2>&1");
-				$log = "\nResolver cache restored [ NOW ]";
+				$log = "\nResolver cache restored";
 				pfb_logger($log, 1);
 			}
 		}
 		else {
 			$log = htmlspecialchars(implode("\n", $final['result']));
-			pfb_logger(" Not completed. [ NOW ]\n{$log}\n", 1);
+			pfb_logger(" Not completed.\n{$log}\n", 1);
 		}
 	}
 	else {
 		$log = htmlspecialchars(implode("\n", $final['result']));
-		pfb_logger(" Not completed. [ NOW ]\n{$log}\n", 1);
+		pfb_logger(" Not completed.\n{$log}\n", 1);
 	}
 	unlink_if_exists($cache_dumpfile);
 }
@@ -8081,7 +8082,7 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython) {
 	// count meant 'entries removed by subdomain collapse') no longer applies; just
 	// report both numbers for visibility.
 	$loaded_cnt = trim((string) @file_get_contents($pfb['unbound_py_count']));
-	$log = "\nDNSBL update [ feed lines: {$dnsbl_cnt} | loaded entries: {$loaded_cnt} ]... completed [ NOW ]";
+	$log = "\nDNSBL update [ feed lines: {$dnsbl_cnt} | loaded entries: {$loaded_cnt} ]... completed";
 	pfb_logger("{$log}", 1);
 
 	// ADR-48 (issue #789): emit stage=entries reject lines for any feed
@@ -9986,9 +9987,9 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 
 						$curl_error = curl_errno($ch);
 						if ($logtype != 3) {
-							pfb_logger(" cURL Error: {$curl_error} [ NOW ]\n", 1);
+							pfb_logger(" cURL Error: {$curl_error}\n", 1);
 						} else {
-							pfb_logger(" {$header}\t\tcURL Error: {$curl_error} [ NOW ]\n\n", 3);
+							pfb_logger(" {$header}\t\tcURL Error: {$curl_error}\n\n", 3);
 						}
 
 						/* 'Flex' Downgrade cURL errors -	[ 35 - GET_SERVER_HELLO:sslv3		]
@@ -10481,7 +10482,7 @@ function pfb_download_failure($alias, $header, $pfbfolder, $list_url, $format, $
 		}
 
 		// Log FAILED downloads and check if firewall or Snort/Suricata is blocking host
-		$log = "\n\n [ {$alias} - {$header} ] Download FAIL [ NOW ]\n";
+		$log = "\n\n [ {$alias} - {$header} ] Download FAIL\n";
 		pfb_logger("{$log}", 2);
 
 		// Only perform these checks if they are not 'localfiles'
@@ -12761,7 +12762,10 @@ function pfb_daemon_filterlog() {
 						}
 					} else {
 						// RFC-5424's $f[1] already carries a real year -- keep it verbatim.
-						$ts_formatted = date('Y-m-d H:i:s', strtotime($f[1]));
+						// A parse failure must fall back like the BSD branch, never stamp
+						// 1970 (which the age-cutoff would then treat as always-expired).
+						$ts = strtotime($f[1]);
+						$ts_formatted = ($ts === FALSE) ? pfb_log_iso_timestamp() : date('Y-m-d H:i:s', $ts);
 					}
 					$log = "{$ts_formatted},{$d[3]},{$d[4]},{$int},{$d[6]},{$d[8]},";
 
@@ -14647,7 +14651,7 @@ function sync_package_pfblockerng($cron='') {
 			pfb_create_dnsbl('enabled');
 		}
 		$log = 'Sync terminated during boot process.';
-		pfb_logger("\n{$log}\nUPDATE PROCESS ENDED [ NOW ]\n", 1);
+		pfb_logger("\n{$log}\nUPDATE PROCESS ENDED\n", 1);
 		logger(LOG_INFO, localize_text($log), LOG_PREFIX_PKG_PFBLOCKERNG);
 		return;
 	}
@@ -14724,11 +14728,11 @@ function sync_package_pfblockerng($cron='') {
 
 	// Start of pfBlockerNG logging to 'pfblockerng.log'
 	if ($pfb['enable'] == 'on' && !$pfb['save']) {
-		$log = " UPDATE PROCESS START [ " . pfb_pkg_ver() . " ] [ NOW ]\n";
+		$log = " UPDATE PROCESS START [ " . pfb_pkg_ver() . " ]\n";
 		pfb_logger("{$log}", 1);
 	} else {
 		if (!$pfb_is_noups) {
-			$log = "\n**Saving configuration [ NOW ]**\n";
+			$log = "\n**Saving configuration**\n";
 			pfb_logger("{$log}", 1);
 		}
 	}
@@ -15908,9 +15912,9 @@ function sync_package_pfblockerng($cron='') {
 
 
 								if ($row['state'] == 'Hold') {
-									$log = "\n[ {$header} ]{$logtab} static hold. [ NOW ]";
+									$log = "\n[ {$header} ]{$logtab} static hold.";
 								} else {
-									$log = "\n[ {$header} ]{$logtab} exists. [ NOW ]";
+									$log = "\n[ {$header} ]{$logtab} exists.";
 								}
 								pfb_logger("{$log}", 1);
 
@@ -15932,9 +15936,9 @@ function sync_package_pfblockerng($cron='') {
 							}
 							else {
 								if ($pfbreuse == 'on' && file_exists("{$pfborig}/{$header}.orig")) {
-									$log = "\n[ {$header} ]{$logtab} Reload [ NOW ]";
+									$log = "\n[ {$header} ]{$logtab} Reload";
 								} else {
-									$log = "\n[ {$header} ]{$logtab} Downloading update [ NOW ]";
+									$log = "\n[ {$header} ]{$logtab} Downloading update";
 								}
 								pfb_logger("{$log}", 1);
 								$file_dwn = "{$pfborig}/{$header}";
@@ -16804,7 +16808,7 @@ function sync_package_pfblockerng($cron='') {
 			if ($pfb_output) {
 				@fclose($pfb_output);
 			}
-			pfb_logger("... completed [ NOW ]", 1);
+			pfb_logger("... completed", 1);
 
 			// DNSBL Python blocking mode, if TLD is not enabled
 			if (!$pfb['dnsbl_tld']) {
@@ -17344,7 +17348,7 @@ function sync_package_pfblockerng($cron='') {
 						    && file_exists("{$pfbfolder}/{$cc_alias}.txt")
 						    && !file_exists("{$pfb['dbdir']}/geoip.update")) {
 							if (!$pfb['save']) {
-								$log = "\n[ {$cc_alias} ]{$logtab} exists. [ NOW ]";
+								$log = "\n[ {$cc_alias} ]{$logtab} exists.";
 								pfb_logger("{$log}", 1);
 							}
 						} else {
@@ -17616,17 +17620,17 @@ function sync_package_pfblockerng($cron='') {
 						    $pfbreuse == '') {
 
 							if ($row['state'] == 'Hold') {
-								$log = "\n[ {$header} ]{$logtab} static hold. [ NOW ]";
+								$log = "\n[ {$header} ]{$logtab} static hold.";
 							} else {
-								$log = "\n[ {$header} ]{$logtab} exists. [ NOW ]";
+								$log = "\n[ {$header} ]{$logtab} exists.";
 							}
 							pfb_logger("{$log}", 1);
 						}
 						else {
 							if ($pfbreuse == 'on' && file_exists("{$pfborig}/{$header}.orig")) {
-								$log = "\n[ {$header} ]{$logtab} Reload [ NOW ]";
+								$log = "\n[ {$header} ]{$logtab} Reload";
 							} else {
-								$log = "\n[ {$header} ]{$logtab} Downloading update [ NOW ]";
+								$log = "\n[ {$header} ]{$logtab} Downloading update";
 							}
 							pfb_logger("{$log}", 1);
 							$file_dwn = "{$pfborig}/{$header}";
@@ -19010,7 +19014,7 @@ function sync_package_pfblockerng($cron='') {
 	}
 
 	if ($pfb['enable'] == 'on' && !$pfb['save'] || $pfb['summary']) {
-		pfb_logger("\n UPDATE PROCESS ENDED [ NOW ]\n", 1);
+		pfb_logger("\n UPDATE PROCESS ENDED\n", 1);
 	}
 }
 
