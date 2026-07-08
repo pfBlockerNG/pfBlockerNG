@@ -1,0 +1,94 @@
+================================================================================
+PHASE 6 PROMPT — Retire pfb_log_reset() / ADR-30's calendar-boundary reset
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_60_Age_Based_Log_Retention/ADR.md   (read the ADR header "Supersedes: ADR-30", §2.1
+     last row, §2.3 item 7, §6 Phase 6 first)
+================================================================================
+
+ROLE
+Inline on branch `adr/60-age-based-log-retention`. Phase 6 of 8. Behaviour-CHANGING (removal). One
+commit, push directly.
+
+WHY THIS PHASE EXISTS
+The new continuous `log_max_days_<type>` cap (Phase 5) supersedes ADR-30's calendar-boundary reset
+feature (`log_rotate_<type>`/`log_reset_keep_<type>`/`pfb_log_reset()`/the marker file). This phase
+deletes it. Read ADR-30's own text (`.ADRs/ADR_30_Scheduled_Log_Reset/ADR.md`, on `devel`) before
+deleting anything it built, so you know exactly what's being retired and why (ADR-60 §1.2 quotes its
+own §8.3/8.4 deferral that this ADR resolves).
+
+REQUIRED READING
+- FIRST, read `.ADRs/ADR_60_Age_Based_Log_Retention/RESULTS/05_Results.txt` — confirm Phase 5's
+  `log_max_days_<type>` landed and is green. If missing, STOP and report.
+- `.ADRs/ADR_30_Scheduled_Log_Reset/ADR.md` (on `devel` — this is the ADR being superseded; read its
+  §2 Decision table and §8 Amendment to know the full surface you're removing).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc: `pfb_log_reset()` (~:2937-:3060), the marker
+  parse/serialize helpers `pfb_log_rotate_marker_parse()`/`pfb_log_rotate_marker_serialize()`
+  (~:2865-:2913).
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc: `pfblockerng_tick()` (~:2670, the
+  `pfb_log_mgmt()`/`pfb_log_reset()` call site at ~:2777-:2778), `pfb_log_rotate_period()`
+  (~:1891)/`pfb_log_should_reset()`, the `log_rotate_<type>`/`log_reset_keep_<type>` registry loop
+  (~:605-:626).
+- tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php (~:81-:100, the 20
+  `log_rotate_<type>`/`log_reset_keep_<type>` sniff paths to remove).
+- tests/php/LogRotateScheduleTest.php, LogRotateResetTest.php (to delete).
+- tests/smoke/test_log_rotate.py (the ADR-30-specific cases to remove — check if any cases in this
+  file are unrelated to ADR-30 before deleting the whole file; if it's ADR-30-only, delete it
+  entirely).
+
+ACTION PLAN
+1. Delete `pfb_log_reset()`, `pfb_log_rotate_marker_parse()`, `pfb_log_rotate_marker_serialize()` from
+   pfblockerng.inc.
+2. Delete `pfb_log_rotate_period()`, `pfb_log_should_reset()` from pfblockerng_extra.inc.
+3. Remove the `pfb_log_reset()` call at the `pfblockerng_tick()` call site (keep the
+   `pfb_log_mgmt()` call and its `pfb_update_pass_running()` gate — that still protects the
+   line-count/age trim).
+4. Remove the `log_rotate_<type>`/`log_reset_keep_<type>` loop from `pfb_cfg_registry()` (20 entries).
+   Remove the corresponding 20 paths from the sniff's `$registeredPaths`.
+5. Delete `tests/php/LogRotateScheduleTest.php` and `LogRotateResetTest.php`.
+6. In `tests/smoke/test_log_rotate.py`: remove the ADR-30 reset/keep-buffer cases. If the whole file
+   is ADR-30-specific, delete it (Phase 8 adds the new age-cutoff live-VM case, possibly in a
+   differently-named file — your call whether to leave an empty shell or delete outright; prefer
+   deleting and letting Phase 8 create fresh).
+7. Do NOT touch anyone's stored `config.xml` values for the removed keys (ADR.md §2.3 item 7,
+   ADR-28 §2.2 "hard-frozen") — deregistering just means they're no longer read; no migration script.
+8. Grep-gate (run and paste the output — must be empty except `.ADRs/` historical mentions):
+   `grep -rniE 'log_rotate_[a-z_]+|log_reset_keep_[a-z_]+|pfb_log_reset|log_rotate\.last|pfb_log_rotate_period|pfb_log_should_reset|pfb_log_rotate_marker' --include=*.php --include=*.inc --include=*.py --include=*.md . | grep -v '\.ADRs/'`
+
+CONSTRAINTS
+- Do not touch `pfb_log_mgmt()` or the Phase-5 `log_max_days_<type>` logic — additive only was
+  Phase 5's job, this phase is pure removal of the ADR-30 surface.
+- Do not edit `.ADRs/ADR_30_Scheduled_Log_Reset/ADR.md` itself (CLAUDE.md convention: don't edit
+  another ADR's document while working a different one) — ADR-60's own text is where the
+  supersession is recorded. If you believe ADR-30's doc needs a "Superseded by ADR-60" pointer, note
+  it as a carry-forward for the maintainer to add by hand — do not do it yourself in this phase.
+- PHP: tabs, uppercase `TRUE`/`FALSE`.
+- Line numbers and code-state claims in this prompt were written before earlier phases ran; the
+  prior RESULTS files and the live tree override this prompt on any conflict — verify each claim
+  before acting on it, and flag contradictions loudly in the handoff.
+
+TEST MODE: red-run. This is a pure removal phase — the grep-gate IS the red/green check: run it
+against the pre-deletion tree first (expect nonzero matches — the red state, paste it), then again
+after your deletions (expect empty output — the green state, paste it). Do not skip the "before" run.
+
+VERIFICATION
+- `vendor/bin/phpunit` + `phpcs` + `phpstan` + `python -m pytest` full suite green with the deletions.
+- The grep-gate command's output pasted verbatim, BOTH before (red, nonzero) and after (green, empty)
+  your deletions.
+- `CfgGatewayTest`/`RollbackContractTest`/the config inventory test (whatever currently enumerates
+  every registered key) updated and green with the 20 keys gone and the 10 Phase-5 keys already
+  counted.
+- Diff-read: confirm no dangling reference to the deleted functions remains anywhere in `src/`.
+
+EXPECTED RESULT
+ADR-30's calendar-boundary reset mechanism is gone: no `pfb_log_reset()`, no `log_rotate_<type>`/
+`log_reset_keep_<type>` config surface, no marker file. `pfb_log_mgmt()` (with its new Phase-5 age cap)
+is the sole retention mechanism.
+
+COMMIT (single)
+    pfblockerng: retire scheduled log reset (ADR-30), superseded by age-based retention (ADR-60 P6)
+Push directly to `adr/60-age-based-log-retention`; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_60_Age_Based_Log_Retention/RESULTS/06_Results.txt` with: verdict; every
+deleted symbol/file + commit; gates + pasted output; the grep-gate output (pasted, empty); deviations
+(esp. what you did with `test_log_rotate.py` — deleted vs emptied) or "none"; carry-forward for
+Phase 7 (the UI still has the now-dead `log_rotate_<type>`/`log_reset_keep_<type>` selects to remove).

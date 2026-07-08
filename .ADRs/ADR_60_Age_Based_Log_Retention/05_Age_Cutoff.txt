@@ -1,0 +1,104 @@
+================================================================================
+PHASE 5 PROMPT — log_max_days_<type>: the age-cutoff cap
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_60_Age_Based_Log_Retention/ADR.md   (read §2.2, §2.3, §2.5, §2.6, §6 Phase 5 first)
+================================================================================
+
+ROLE
+Inline on branch `adr/60-age-based-log-retention`. Phase 5 of 8 — the core feature this ADR exists
+for. Behaviour-CHANGING (additive: default off). One commit, push directly.
+
+WHY THIS PHASE EXISTS
+All 10 log types now share one uniform, always-present, year-bearing `Y-m-d H:i:s` timestamp
+(Phases 2-4). This phase adds the actual age-based retention cap the user asked for: "if retention is
+N days, trim lines older than N days from the file," implemented as one extra pass over
+`pfb_log_mgmt()`'s existing line-count trim candidate.
+
+REQUIRED READING
+- FIRST, read `.ADRs/ADR_60_Age_Based_Log_Retention/RESULTS/04_Results.txt` — confirm all 10 types
+  share the uniform format. If missing, STOP and report.
+- ADR.md §2.2 (the mechanism), §2.3 items 1/2/3/6/7 (the contract this phase must satisfy), §2.5
+  (coverage matrix), §2.6 (hostile-input rows) — ALL are mandatory rows for this phase's tests.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc: `pfb_log_mgmt()` (~:2778-:2850), `pfb_log_max_lines()`
+  (~:2767).
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc: `pfb_cfg_registry()` (~:528-:598, the
+  `log_max_<type>` loop you are mirroring), the now-removed-in-Phase-6 `log_rotate_<type>` loop
+  (~:605-:626) — read it as the STRUCTURAL template for your new loop (same shape, new key name),
+  even though Phase 6 deletes the old one.
+- tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php (~:71-:100, `$registeredPaths`).
+
+ACTION PLAN
+1. Register `log_max_days_<type>` in `pfb_cfg_registry()` — one entry per each of the 10 log types
+   (`log, errlog, extraslog, ip_blocklog, ip_permitlog, ip_matchlog, dnslog, dnsbl_parse_err,
+   dnsreplylog, unilog`), default `'0'` (numeric string, `'0'` = off), plain-string identity adapter
+   (`NULL`/`NULL`), `'since' => '4.0.0'` — mirror the `log_max_<type>` loop's exact shape. Add all 10
+   full paths (`installedpackages/pfblockerng/config/0/log_max_days_<type>`) to the sniff's
+   `$registeredPaths`.
+2. Restructure `pfb_log_mgmt()` so the `nolimit` early-`continue` (currently gates the WHOLE function
+   body per type) only skips the LINE-COUNT step, not the age-cutoff step. Read `log_max_days_<type>`
+   via `PfbConfig::read()`; treat a non-numeric/garbage value as `'0'` (off) — mirror
+   `pfb_log_max_lines()`'s existing fallback-to-default pattern (adapt it, don't invent a new one).
+3. Add the age-cutoff pass: it operates on the SAME candidate the line-count trim already produces
+   (the `tail -n $logmax` output, or — when `log_max_<type> == 'nolimit'` — the whole file, since
+   there's no line-count candidate to reuse in that case; decide and document which you read in that
+   branch). Parse each candidate line's leading (free-text logs) or field-0/1 (CSV logs — reuse
+   whichever field position Phases 2-4 established per type) `Y-m-d H:i:s` timestamp; scan from the
+   top; drop the leading run older than `now - log_max_days_<type>` days; keep everything from the
+   first non-expired line onward. A line with NO parseable timestamp (legacy pre-rework line) counts
+   as expired (§2.2 "Unparseable line policy"). Write the result back through the SAME inode-preserving
+   `cat`-over mechanism already in place (reuse it, don't duplicate the chroot/`chown unbound` handling
+   — factor it into a shared helper if that's the cleanest fit, your call, but do not fork two copies
+   of the chroot-path logic).
+4. Gate every exec (`tail`/`cat`/your new scan) on its exit code exactly like the existing code does —
+   a failed step must never blank or corrupt the live log (§2.3 item 6).
+
+CONSTRAINTS
+- PHP: tabs, uppercase `TRUE`/`FALSE`, `RequireConfigGateway` sniff must stay green (read through
+  `PfbConfig`, never direct `config_*_path`).
+- Do not touch `pfb_log_reset()`/`log_rotate_<type>`/`log_reset_keep_<type>` — Phase 6 removes them;
+  keep this phase additive only.
+- Do not change `pfb_log_mgmt()`'s existing line-count behaviour for anyone who leaves
+  `log_max_days_<type>` at its default `'0'` — this must be byte-identical to pre-Phase-5 behaviour.
+- Line numbers and code-state claims in this prompt were written before earlier phases ran; the
+  prior RESULTS files and the live tree override this prompt on any conflict — verify each claim
+  before acting on it, and flag contradictions loudly in the handoff (Phases 2-4 shifted nearby
+  lines).
+
+VERIFICATION
+- `vendor/bin/phpunit` + `phpcs` + `phpstan` green.
+- Red→green proof: a new test asserting age-cutoff trimming (`log_max_days_<type>` set, a file with
+  old+new lines) FAILS against the pre-Phase-5 `pfb_log_mgmt()` (which has no age concept at all —
+  paste the failing run), then PASSES after (paste).
+- Full §2.5 coverage-matrix row for this phase, each an executed test:
+  - `log_max_<type>` × `log_max_days_<type>`: off×off (byte-identical to today), off×set (age-only
+    trim engages), `nolimit`×off (today's opt-out, unchanged), `nolimit`×set (age STILL trims despite
+    `nolimit` — the independence fix), set×off (line-count only, unchanged), set×set (tighter of the
+    two wins — test both directions: age tighter than line-count, and vice versa).
+- Full §2.6 hostile-input rows, each an executed test: empty file; all-legacy-format lines; mixed
+  legacy+new lines (realistic upgrade case — assert only the legacy lines are dropped, or the whole
+  file if all legacy, per the "unparseable = expired" policy); a line exactly at the cutoff boundary
+  (off-by-one day, both sides); a corrupted/truncated timestamp prefix; a non-numeric
+  `log_max_days_<type>` config value (treated as off).
+- Inode + ownership: `stat`/`ls -i` before/after a trim in a PHPUnit test using a real temp file
+  (chown to a non-existent 'unbound' user isn't available off-appliance — assert what IS assertable
+  off-box: same inode number before/after; the chroot/`chown unbound` call path is exercised via the
+  existing pattern's own test seam, whatever that is — check how the current `pfb_log_mgmt()` tests
+  handle this, if any exist, and follow the same approach).
+- A failed exec (inject a failure — e.g. an unwritable temp dir) must leave the original log file
+  byte-for-byte untouched — assert this explicitly.
+- Diff-read: confirm `log_max_<type>=default` + `log_max_days_<type>=default` is truly a no-op vs the
+  pre-Phase-5 code path (line-by-line diff of the untouched-defaults code path).
+
+EXPECTED RESULT
+Every log type can be given an independent age-based retention window (`log_max_days_<type>`, default
+off) that trims lines older than N days, inode-preserving, independent of the line-count cap.
+
+COMMIT (single)
+    pfblockerng: add log_max_days_<type> age-based log retention (ADR-60 P5)
+Push directly to `adr/60-age-based-log-retention`; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_60_Age_Based_Log_Retention/RESULTS/05_Results.txt` with: verdict; what
+changed + commit; gates + pasted output; red→green proof; every §2.5/§2.6 row ticked with its test
+name and pasted result; the inode-preservation proof; deviations/judgment calls (esp. how you handled
+the `nolimit`-with-no-line-cap-candidate case, and whether you factored a shared chroot/ownership
+helper) or "none"; carry-forward for Phase 6.

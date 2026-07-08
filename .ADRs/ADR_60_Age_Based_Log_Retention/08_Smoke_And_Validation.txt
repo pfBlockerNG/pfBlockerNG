@@ -1,0 +1,86 @@
+================================================================================
+PHASE 8 PROMPT — Live-VM smoke, final validation, docs, flip Status -> Accepted
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_60_Age_Based_Log_Retention/ADR.md   (read §7 Definition of done first)
+================================================================================
+
+ROLE
+Inline on branch `adr/60-age-based-log-retention`. Phase 8 of 8 — final phase. One commit, push
+directly.
+
+WHY THIS PHASE EXISTS
+Phases 1-7 landed off-box (PHPUnit/pytest/UI-render). This phase proves the age-cutoff trim on a real
+live pfSense VM (ADR-04), where the chroot + `chown unbound` handling for the python-side logs and a
+real cron tick can actually be exercised, then closes out the ADR.
+
+REQUIRED READING
+- FIRST, read `.ADRs/ADR_60_Age_Based_Log_Retention/RESULTS/07_Results.txt` — confirm Phase 7's UI
+  change is green. If missing, STOP and report.
+- ADR.md §7 Definition of done (the manual checklist + reject criteria), §2.3 (the full contract —
+  this phase's live-VM cases must exercise every preserved-inode/ownership/independence guarantee).
+- docs/misc/local-smoke-debian.md / scripts/local-smoke.sh — run locally first, no CI spend, per
+  CLAUDE.md smoke-test guidance.
+- Whatever remains of `tests/smoke/test_log_rotate.py` after Phase 6's deletions (may be empty/gone —
+  confirm current state, don't assume).
+- Any user-facing doc/help text elsewhere in the repo that still describes the old scheduled-reset
+  feature (grep for "daily/weekly/monthly" log rotation mentions in docs/, README.md) — update or
+  remove.
+
+ACTION PLAN
+1. Add a live-VM smoke test (new file, e.g. `tests/smoke/test_log_age_retention.py`, or reuse
+   whatever's left of `test_log_rotate.py` if Phase 6 kept a shell) covering:
+   - Seed a log (pick one PHP-side type, e.g. `ip_blocklog`, and one python-side type, e.g. `dnslog`,
+     covering both chroot paths) with a mix of lines whose timestamps are older and newer than a
+     configured `log_max_days_<type>` cutoff.
+   - Set `log_max_days_<type>` via config, trigger a cron tick (or the direct callable path the
+     existing smoke suite uses to invoke `pfblockerng_tick()`/`pfb_log_mgmt()`).
+   - Assert: only the expired lines are gone (before-state: all present; after-state: only
+     non-expired remain — assert BOTH, per CLAUDE.md "assert the before-state in transition tests").
+   - Assert inode unchanged (`stat`/`ls -i` before/after over SSH, per the existing smoke pattern —
+     drive the guest via `/bin/sh`, never tcsh).
+   - Assert `unbound` ownership preserved for the chrooted log.
+   - Assert a log left at `log_max_days_<type>='0'` (default) is untouched by the age logic (still
+     only line-count trimmed).
+2. Confirm the ADR-30 UI controls are gone and the new `log_max_days_<type>` fields are present via
+   the Tier-A `ui_render` suite (should already be green from Phase 7 — re-run to confirm nothing
+   regressed).
+3. Update any stale doc/help text referencing the old scheduled-reset feature.
+4. Once the live-VM run is green (CE + Plus fan-out per the org-default validation matrix), flip
+   ADR.md's Status line to **Accepted**, with the date and the smoke-fanout run reference (mirror
+   ADR-30's own Status-line format as the house style).
+
+CONSTRAINTS
+- Live-VM commands go through `/bin/sh`, never tcsh (CLAUDE.md smoke-test rules).
+- Probe ON-BOX for any DNS-adjacent assertion; never assume from a generated file.
+- Line numbers and code-state claims in this prompt were written before earlier phases ran; the
+  prior RESULTS files and the live tree override this prompt on any conflict — verify each claim
+  before acting on it, and flag contradictions loudly in the handoff.
+
+TEST MODE: red→green. The new live-VM case must fail against a pre-Phase-5 checkout (no age-cutoff
+code exists at all — paste the failing run) and pass on the current branch tip (paste the passing
+run) before this phase is considered done.
+
+VERIFICATION
+- `python3 -m pytest tests/smoke -k log_age_retention` (or whatever marker/name you gave it) green
+  on the local Debian/KVM smoke box first (no CI spend), THEN dispatched on the CE + Plus live-VM
+  fan-out (`smoke-fanout.yml` or the project's current dispatch mechanism — check
+  `docs/misc/workflow-reference.md` "Selective dispatch" for the current invocation).
+- `tests/smoke/ui -m ui_render` green (Phase 7's page, re-confirmed).
+- Full `vendor/bin/phpunit` + `phpcs` + `phpstan` + `python -m pytest` green (final full-suite check
+  across all 8 phases combined).
+- Paste the live-VM run's pass/fail summary (run ID + leg results) in the handoff — this is what
+  flips Status to Accepted, per this repo's "ADR acceptance — automated tests, not a manual sign-off"
+  rule.
+
+EXPECTED RESULT
+The full age-based log retention feature is proven end-to-end on a real pfSense VM (CE + Plus), the
+ADR-30 mechanism is confirmed gone from the live system too, and ADR-60's Status flips to Accepted.
+
+COMMIT (single)
+    tests/smoke: prove log_max_days_<type> age retention on live VM; ADR-60 -> Accepted (ADR-60 P8)
+Push directly to `adr/60-age-based-log-retention`; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_60_Age_Based_Log_Retention/RESULTS/08_Results.txt` with: verdict; what
+changed + commit; the live-VM run reference + pass/fail summary; every §2.3 contract item's live-VM
+proof; the manual-checklist items from §7 that remain for the maintainer to run post-merge (real
+multi-day-old data, real calendar-boundary absence check); deviations (or "none"); final ADR status.
