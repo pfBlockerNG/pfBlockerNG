@@ -23,10 +23,11 @@ use PHPUnit\Framework\TestCase;
  *                     (yellow, regardless of enable_dup -- the asymmetry this
  *                     ADR retires).
  *   (b) DNSBL icon — each "is it live" gate off (unchanged, red), both with and
- *                     without an open dnsbl entry present (the entries must
- *                     never leak into the red branch); live+no open entries
- *                     (green); live+an open PHP entry (yellow); live+only a
- *                     Python-side entry (yellow, merged).
+ *                     without an open dnsbl entry present (an open entry never
+ *                     turns the red branch yellow, but its wording DOES still
+ *                     distinguish "errors remain" from a clean disable); live+no
+ *                     open entries (green); live+an open PHP entry (yellow);
+ *                     live+only a Python-side entry (yellow, merged).
  *   (c) pfBlockerNG_get_failed() — a recognized (pfB_/DNSBL_-prefixed) item
  *                     builds the alias-editor deep link; a Python-side (file-
  *                     path) item renders as plain text, no link attempted, no
@@ -267,12 +268,27 @@ final class PfbWidgetOracleTest extends TestCase
 		$this->assertSame(self::ICON_RED, $status);
 	}
 
-	public function testDnsblDisabledStaysRedEvenWithAnOpenDnsblEntry(): void
+	public function testDnsblDisabledIsRedWithPlainWordingWhenNoOpenEntries(): void
 	{
-		// Semantics #1 for the DNSBL row's own red branch: an open entry must
-		// never leak a yellow read into a genuinely-disabled facility, and the
-		// disabled message no longer differentiates by error-log content (that
-		// distinction depended on py_error.log, now fully retired from the widget).
+		// Before-state for the pair below: disabled + a clean ledger keeps the
+		// plain "Disabled." wording (Semantics #1: never yellow, but wording still
+		// distinguishes "nothing open" from "something open" while disabled).
+		$pfb = $this->liveDnsblPfb();
+		$pfb['enable'] = '';
+
+		[, , $status, $msg] = pfb_widget_oracle_status($pfb);
+
+		$this->assertSame(self::ICON_RED, $status);
+		$this->assertSame('DNSBL is Disabled.', $msg);
+	}
+
+	public function testDnsblDisabledStaysRedButShowsErrorsWordingWithAnOpenDnsblEntry(): void
+	{
+		// Semantics #1: an open entry must never leak a yellow read into a
+		// genuinely-disabled facility -- but the disabled message DOES still
+		// distinguish "errors remain" from a clean disable, now sourced from the
+		// merged ledger instead of py_error.log's filesize (which the widget no
+		// longer reads at all).
 		$pfb = $this->liveDnsblPfb();
 		$pfb['enable'] = '';
 		pfb_sync_status_open('dnsbl', 'dnsbl', 'apply', 'stale dnsbl entry', $this->dir);
@@ -280,7 +296,7 @@ final class PfbWidgetOracleTest extends TestCase
 		[, , $status, $msg] = pfb_widget_oracle_status($pfb);
 
 		$this->assertSame(self::ICON_RED, $status);
-		$this->assertSame('DNSBL is Disabled.', $msg);
+		$this->assertSame('DNSBL is Disabled with errors! See the Failed Downloads list below.', $msg);
 	}
 
 	// -----------------------------------------------------------------------

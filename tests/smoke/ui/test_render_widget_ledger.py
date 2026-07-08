@@ -45,6 +45,8 @@ import pytest
 from .. import helpers
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from .webui import WebUI
 
 WIDGET_PAGE = "/widgets/widgets/pfblockerng.widget.php"
@@ -83,7 +85,7 @@ def _remove_remote_file(vm: helpers.SmokeVM, path: str) -> None:
 
 
 @pytest.fixture
-def clean_ledger(smoke_vm: helpers.SmokeVM):
+def clean_ledger(smoke_vm: helpers.SmokeVM) -> Iterator[None]:
     """Snapshot + force-empty both ledger files; restore the ORIGINAL bytes after.
 
     Guarantees every test in this module starts from a verified-empty ledger
@@ -256,16 +258,28 @@ def test_dnsbl_row_disabled_stays_red_with_open_entry(
 
     ``enable_cb`` off alone forces the DNSBL gate false (it AND-combines with
     the dnsbl/unbound_state/unbound.conf conditions), so this needs no live
-    Unbound setup -- cheap, and also confirms the message no longer
-    differentiates by py_error.log content (that distinction is retired).
+    Unbound setup -- cheap. Before-state: disabled + a clean ledger keeps the
+    plain "Disabled." wording; opening an entry keeps the row RED but flips the
+    wording to the errors-remain variant -- sourced from the merged ledger, never
+    from py_error.log content (that distinction is retired).
     """
     vm = smoke_vm
     helpers.set_package_enabled(vm, False)
+
+    body = _widget_body(webui)
+    assert _dnsblstatus_marker(ICON_RED, "DNSBL is Disabled.") in body, (
+        "DNSBL row must show the plain disabled wording with an empty ledger"
+    )
+
     _ledger_open(vm, "dnsbl", "dnsbl", "apply", "smoke: synthetic dnsbl apply failure")
     try:
         body = _widget_body(webui)
-        assert _dnsblstatus_marker(ICON_RED, "DNSBL is Disabled.") in body, (
-            "DNSBL row must stay red (disabled) even with an open ledger entry present"
+        errors_msg = "DNSBL is Disabled with errors! See the Failed Downloads list below."
+        assert _dnsblstatus_marker(ICON_RED, errors_msg) in body, (
+            "DNSBL row must stay red (disabled) but switch to the errors-remain wording with an open ledger entry"
+        )
+        assert "DNSBLSTATUS fa-solid fa-exclamation-circle" not in body, (
+            "DNSBL row rendered yellow while disabled -- the red gate leaked"
         )
     finally:
         _ledger_close(vm, "dnsbl", "dnsbl", "apply")
