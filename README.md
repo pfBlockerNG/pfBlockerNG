@@ -116,6 +116,13 @@ to `pkg install`. **Nightly** sits on its own catalog path and so has its own re
 
 ## Installation
 
+> [!TIP]
+> The package repository's landing page —
+> **[pfblockerng.github.io/pkg](https://pfblockerng.github.io/pkg)** — is the
+> main installation page: it always shows the current package versions, ready-to-copy
+> bootstrap and install commands, per-edition package tables, and the retained older
+> releases. The instructions below are kept as a reference.
+
 ### Option 1 — pfSense Package Manager
 
 pfBlockerNG ships in pfSense's built-in package catalog. In the webConfigurator go
