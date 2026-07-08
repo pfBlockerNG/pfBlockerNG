@@ -1,0 +1,41 @@
+ADR-60 Phase 9a (test-authoring step) — Gate record
+================================================================================
+Verdict: PASS
+
+Independent verifier (Sonnet 5, fresh context) ran the mandatory 6 checks
+against commit 84113100 (new file: tests/smoke/test_log_age_retention.py,
+452 lines, zero production src/ changed):
+
+1. handoff-fields — PASS.
+2. gate-rerun — PASS. Collect-only confirms 3 new smoke tests discovered
+   under the smoke marker; full off-box suite (phpunit 2372/18574, phpstan,
+   phpcs, pytest 2436+4skip, ruff, mypy, 4 policy checkers) all green,
+   byte-identical to the Phase 8 baseline plus the 3 new (not-yet-executed)
+   smoke tests.
+3. red-proof — correctly SKIPPED with reason (no VM access this session,
+   explicitly out of this step's narrowed scope) — not a silent gap.
+4. diff-vs-plan — PASS. Verifier independently re-derived the seed-content
+   claims against the real production writers (pfblockerng.inc's
+   ip_blocklog write, pfb_unbound.py's dnslog CSV join) and confirmed the
+   field-position parsing assumptions hold. One minor observation: the
+   ip_blocklog seed line has 20 comma-fields vs production's real 21-field
+   line (one filler field short) — judged functionally inert since the
+   age-cutoff parser only reads up to the first comma (field 0), matching
+   the design note that filler-field exactness isn't required.
+5. test-honesty — PASS. Every assertion has a genuinely failable fixture
+   (mixed expired/current seeds, not vacuous same-day-only seeds).
+6. conventions — PASS. New helpers/fixtures verified against 3+ sibling
+   patterns in test_smoke_tick.py / test_smoke_apply_on_change.py / the
+   retired test_log_rotate.py.
+
+Skipped (correctly, explicitly out of scope for this step): live VM
+execution of the 3 new tests, the cross-commit red-proof dispatch, and the
+ADR.md Status flip — all three deferred to the orchestrator's live-VM
+dispatch step, which follows this gate record.
+
+No orchestrator polish needed on the code itself. Committing the handoff now.
+
+Commits this step (in order):
+- 84113100 — tests/smoke: add live-VM age-based log retention proof
+  (ADR-60 P9, code only)
+- (this handoff+gate commit)
