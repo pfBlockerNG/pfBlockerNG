@@ -4480,7 +4480,7 @@ function pfb_verb_deprecation_warning($verb) {
 function pfb_parsed_fail($header, $line='', $oline, $logfile) {
 
 	$line   = $line ?: 'null';
-	$now	= date('m/j/y H:i:s', time());
+	$now	= pfb_log_iso_timestamp();
 
 	$log	= "{$now},{$header},{$line},{$oline}";
 	@file_put_contents("{$logfile}", "{$log}", FILE_APPEND);
@@ -12841,11 +12841,24 @@ function pfb_daemon_filterlog() {
 
 					// Log: "Date timestamp/Tracker ID/Interface/Interface Name/Action/IP Version"
 					if ($log_type == 'BSD') {
-						$log = "{$f[0]} {$f[1]} {$f[2]},{$d[3]},{$d[4]},{$int},{$d[6]},{$d[8]},";
+						// ADR-60 S2.1: BSD syslog carries no year; infer from now, roll back
+						// a year if the result lands in the future (year-less-syslog fix).
+						// ponytail: 6h skew tolerance -- avoids misreading a same-day line as "next year" near midnight/DST.
+						$bsd_now = time();
+						$ts = strtotime("{$f[0]} {$f[1]} {$f[2]}", $bsd_now);
+						if ($ts === FALSE) {
+							$ts_formatted = pfb_log_iso_timestamp();
+						} else {
+							if ($ts > $bsd_now + 6 * 3600) {
+								$ts = strtotime("{$f[0]} {$f[1]} {$f[2]} " . ((int) date('Y', $bsd_now) - 1), $bsd_now);
+							}
+							$ts_formatted = date('Y-m-d H:i:s', $ts);
+						}
 					} else {
-						$ts = date('M j H:i:s', strtotime($f[1]));
-						$log = "{$ts},{$d[3]},{$d[4]},{$int},{$d[6]},{$d[8]},";
+						// RFC-5424's $f[1] already carries a real year -- keep it verbatim.
+						$ts_formatted = date('Y-m-d H:i:s', strtotime($f[1]));
 					}
+					$log = "{$ts_formatted},{$d[3]},{$d[4]},{$int},{$d[6]},{$d[8]},";
 
 					// Details:	"Direction/GeoIP/Aliasname/IP evaluated/Feed Name/Resolved Hostname/Client Hostname/ASN/Duplicate status"
 					$details	= "{$dir},{$geoip},{$pfb_alias},{$pfb_query[1]},{$pfb_query[0]},{$resolved_host},{$hostname},{$asn}";
