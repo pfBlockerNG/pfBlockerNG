@@ -351,6 +351,114 @@ def test_load_rejects_path_outside_allowed_dirs(webui: WebUI, smoke_vm: helpers.
     assert _cat(vm, EVIL_PATH) == before, "/etc/passwd changed after a rejected load (must be untouched)"
 
 
+def test_load_reports_failure_for_nonexistent_file(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """``act=load`` of a validator-admitted path that has no file must NOT report success.
+
+    Regression pin (issue #978): the ``file_exists`` false branch used to print
+    code ``"0"`` -- the same code the page JS (``loadComplete()``) treats as
+    success -- even though the info text says the file is missing. Picks a
+    throwaway path under the allowed dir and never creates it.
+    """
+    vm = smoke_vm
+    target = _throwaway_log("missing.log")
+    assert not _exists(vm, target), "throwaway target unexpectedly exists before the test"
+
+    token = _csrf(webui)
+    resp = _post_load(webui, token, target)
+    assert not looks_like_login_page(resp.text), "load POST returned the login form (session lost)"
+    code, _ = _decode_load_body(resp.text)
+    assert code != "0", f"missing-file load reported success: envelope={resp.text!r}"
+    assert "Log file does not exist" in resp.text, f"reject envelope missing the message: {resp.text!r}"
+
+
+def test_load_reports_failure_for_unopenable_socket_node(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """``act=load`` of a validator-admitted UNIX-domain socket node must NOT report success.
+
+    Regression pin (issue #978, defect B -- final-else ``fopen()``-failure branch,
+    code ``|0|`` -> ``|2|``): ``file_exists()`` is TRUE for a socket special file, so
+    control reaches the ``fopen()`` branch. Opening a socket node via the generic
+    file-open API is refused by the VFS (a directory target does NOT discriminate
+    this on this platform -- FreeBSD's ``fopen($dir, 'r')`` succeeds, unlike Linux --
+    but a socket node is refused everywhere, POSIX-wide, independent of that
+    divergence). This lands in the final ``else``, which used to print code "0"
+    (success) despite the message saying the read failed.
+    """
+    vm = smoke_vm
+    target = _throwaway_log("asock")
+    # Bind+listen a UNIX-domain socket at `target` via FreeBSD base nc(1) (`-lU`),
+    # detached exactly like the update-hook launcher (test_smoke_hooks.py): all
+    # three std streams redirected away from the SSH channel so the call returns
+    # at once, `echo $!` captures the PID for teardown.
+    launch = vm.ssh(f"nohup /usr/bin/nc -lU {target} >/dev/null 2>&1 </dev/null & echo $!")
+    assert launch.returncode == 0, f"failed to launch the nc -lU listener: {launch.stderr!r}"
+    pid = launch.stdout.strip()
+    assert pid.isdigit(), f"did not capture a PID for the nc -lU listener: {launch.stdout!r}"
+    try:
+        assert _exists(vm, target), "socket node was not created by nc -lU before load"
+
+        token = _csrf(webui)
+        resp = _post_load(webui, token, target)
+        assert not looks_like_login_page(resp.text), "load POST returned the login form (session lost)"
+        code, _ = _decode_load_body(resp.text)
+        assert code != "0", f"socket-node load reported success: envelope={resp.text!r}"
+        assert "Failed to read log file" in resp.text, f"reject envelope missing the message: {resp.text!r}"
+    finally:
+        vm.ssh("kill", pid)
+        _rm(vm, target)
+
+
+def test_load_reports_correct_line_count_for_literal_zero_content(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """``act=load`` of a file whose entire content is the single char ``"0"`` reports 1 line.
+
+    Regression pin (issue #978): PHP's ``empty("0") === TRUE`` quirk made the
+    handler treat a one-line file containing only ``"0"`` as if it had read no
+    data, reporting "Total Lines: 0" even though ``$linecnt`` (already computed
+    by the read loop) was 1. No trailing newline -- that is the exact byte
+    sequence the quirk requires.
+    """
+    vm = smoke_vm
+    target = _throwaway_log("zero-content.log")
+    _seed_file(vm, target, "0")
+    try:
+        assert _cat(vm, target) == "0", "seed content not present on the box before load"
+
+        token = _csrf(webui)
+        resp = _post_load(webui, token, target)
+        assert not looks_like_login_page(resp.text), "load POST returned the login form (session lost)"
+        code, decoded = _decode_load_body(resp.text)
+        assert code == "0", f"load of literal-zero content did not report success: envelope={resp.text!r}"
+        assert decoded == "0", f"load body {decoded!r} != raw seeded content '0'"
+        assert "Total Lines: 1" in resp.text, f"expected 'Total Lines: 1', got: {resp.text!r}"
+    finally:
+        _rm(vm, target)
+
+
+def test_load_reports_zero_lines_for_empty_file(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """``act=load`` of a genuinely empty (0-byte) file still reports "Total Lines: 0".
+
+    Regression GUARD (issue #978): pins the branch the fix must NOT disturb --
+    a real empty file (``$linecnt == 0``, no lines read at all) is a distinct
+    case from the literal-``"0"``-content file above (``$linecnt == 1``), and
+    must still land in the "Total Lines: 0" branch after the fix. This is the
+    behaviour-preserving side of the ``if ($linecnt > 0)`` condition, so unlike
+    its siblings above it is expected to pass on both pre-fix and post-fix code.
+    """
+    vm = smoke_vm
+    target = _throwaway_log("empty.log")
+    _seed_file(vm, target, "")
+    try:
+        assert _cat(vm, target) == "", "seed content not empty on the box before load"
+
+        token = _csrf(webui)
+        resp = _post_load(webui, token, target)
+        assert not looks_like_login_page(resp.text), "load POST returned the login form (session lost)"
+        code, _ = _decode_load_body(resp.text)
+        assert code == "0", f"load of empty file did not report success: envelope={resp.text!r}"
+        assert "Total Lines: 0" in resp.text, f"expected 'Total Lines: 0', got: {resp.text!r}"
+    finally:
+        _rm(vm, target)
+
+
 # --------------------------------------------------------------------------- #
 # act=download
 # --------------------------------------------------------------------------- #

@@ -233,7 +233,7 @@ if (isset($_REQUEST) && isset($_REQUEST['ajax'])) {
 	// Load log
 	if ($_REQUEST['action'] == 'load') {
 		if (!file_exists($pfb_logfilename)) {
-			print ("|0|" . gettext('Log file does not exist') . "|IA==|");
+			print ("|1|" . gettext('Log file does not exist') . "|IA==|");
 		}
 		elseif (($fhandle = @fopen("{$pfb_logfilename}", 'r')) !== FALSE) {
 
@@ -264,7 +264,7 @@ if (isset($_REQUEST) && isset($_REQUEST['ajax'])) {
 				$linecnt++;
 			}
 
-			if (!empty($data)) {
+			if ($linecnt > 0) {
 				$data = base64_encode($data);
 				print ("|0|File successfully loaded: Total Lines: {$linecnt}{$line_limit}|{$data}|");
 				if (isset($data)) {
@@ -276,7 +276,7 @@ if (isset($_REQUEST) && isset($_REQUEST['ajax'])) {
 			}
 		}
 		else {
-			print ("|0|" . gettext('Failed to read log file') . "|IA==|");
+			print ("|2|" . gettext('Failed to read log file') . "|IA==|");
 		}
 		exit;
 	}
