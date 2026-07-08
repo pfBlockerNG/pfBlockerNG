@@ -2749,9 +2749,11 @@ def restore_pfb_config_baseline(vm: SmokeVM, *, snapshot_path: str, timeout: flo
     wipe deletes ``pfb_dnsvip4``/``pfb_dnsport``/``pfb_dnsport_ssl`` (the
     :data:`_DNSBL_INFRA_KEYS`) with nothing left in the session to re-provision them,
     so every LATER ``pfblockerng_dnsbl.php``/SafeSearch save runs ``pfb_validate_vips``
-    against a VIP-less config and gets rejected — 23 functional tests + 1 browser test
-    failed this way in ui-tests.yml run 28900064099, all reading back ``''`` after the
-    FIRST dirty-path reset. So the UI tier's per-test isolation is RESTORE-to-session-
+    against a VIP-less config and gets rejected — 23 functional-leg tests failed this
+    way in ui-tests.yml run 28900064099, all reading back ``''`` after the FIRST
+    dirty-path reset (that run's one browser-leg failure was the unrelated,
+    pre-existing issue #964 vocabulary bug, fixed separately). So the UI tier's
+    per-test isolation is RESTORE-to-session-
     baseline, not wipe-to-empty: copy back a config.xml snapshot taken once at session
     start (after the DNSBL VIP was established — see ``deployed_vm``), rather than
     reconstructing it from nothing.
