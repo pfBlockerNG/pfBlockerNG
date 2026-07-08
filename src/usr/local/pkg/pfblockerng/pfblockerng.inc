@@ -4135,9 +4135,9 @@ function pfb_mirror_hook_output(string $logfile, int $offset): void {
 
 
 /*
- * issue #973: restores ADR-12's persistence promise -- pfb_run_hooks() redirects hook stdout to
- * runlog during an active run, so copy the same delta back into $pfb['log']. No-op when $logfile
- * IS $pfb['log'] already (outside a run) -- else this would duplicate its own tail into itself.
+ * issue #973: restores ADR-12's persistence promise for the normal cron/manual/Run-Now pass --
+ * copies the delta a hook wrote to runlog back into $pfb['log']. No-op when $logfile IS
+ * $pfb['log'] already (outside a run) -- else this would duplicate its own tail into itself.
  */
 function pfb_persist_hook_output(string $logfile, int $offset): void {
 	global $pfb;
@@ -4281,9 +4281,9 @@ function pfb_run_hooks($when, $ctx = array()) {
 		$retval  = 0;
 
 		if (empty($pfb['hook_lifecycle'])) {
-			// Normal cron/manual/Run-Now pass: unchanged synchronous path. The Update page's own
-			// AJAX tail already streams $logtarget (the per-run log) straight to the browser, so
-			// no extra streaming/mirroring is needed here.
+			// Normal cron/manual/Run-Now pass: unchanged synchronous exec(). The Update page's own
+			// AJAX tail already streams $logtarget (the per-run log) live, so no extra STREAMING
+			// mirror is needed here -- issue #973's pfb_persist_hook_output() below only persists.
 			exec($cmd, $discard, $retval);
 			pfb_persist_hook_output($logtarget, $hook_log_offset);
 		} else {
