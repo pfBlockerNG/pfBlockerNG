@@ -1450,22 +1450,12 @@ if (isset($_POST) && !empty($_POST)) {
 			exit;
 		}
 
-		// ADR-06 (#51): DNSBL is built by the Unbound python plugin from the per-feed
-		// manifest (pfb_py_sources.json); the legacy pfb_py_whitelist.txt / pfb_py_data
-		// / pfb_py_zone files this handler once wrote are no longer read by the build,
-		// so writing them was a no-op. The TEMPORARY per-alert Lock/Unlock now toggles
-		// ONLY the pfb_unlock state store ($pfb['dnsbl_unlock']); the resolver effect
-		// comes from regenerating the manifest's config.user_unlock (band-6 user allows,
-		// merged into whiteDB) from that store and reloading Unbound.
-		//
-		// Store toggle: unlock/relock ADD the domain, lock/reunlock REMOVE it --
-		// preserving the four icon states rendered from $dnsbl_unlock (red lock /
-		// primary unlock / warning relock / warning reunlock). user_unlock is recomputed
-		// as the store's domains, so an unlocked (in-store, non-whitelisted) domain
-		// resolves and a re-locked one returns to its feed-blocked state on reload. The
-		// four-way action -> (store-mode, message) dispatch lives in
-		// pfb_dnsbl_unlock_action() (unit-tested); an unknown action has an empty mode
-		// and is a no-op here.
+		// ADR-06 (#51): DNSBL is built by Unbound's python plugin from the per-feed
+		// manifest; the legacy pfb_py_whitelist.txt/pfb_py_data/pfb_py_zone files this
+		// handler once wrote are no longer read, so writing them was a no-op. Lock/Unlock
+		// now only toggles $pfb['dnsbl_unlock']; the resolver effect comes from
+		// regenerating the manifest's config.user_unlock from that store and reloading
+		// Unbound. Dispatch: pfb_dnsbl_unlock_action() (unit-tested); unknown action = no-op.
 		$ua = pfb_dnsbl_unlock_action($action);
 		if ($ua['mode'] !== '') {
 			pfb_unlock($ua['mode'], 'dnsbl', $domain, $dnsbl_type, $dnsbl_unlock);
@@ -1812,10 +1802,10 @@ if ($alert_summary) {
 
 	// Total entry count for this view is constant across every $stat_info
 	// iteration (the log doesn't change mid-loop), so compute it once here
-	// instead of once per iteration (issue #809 Phase 2). The per-iteration
-	// assignment below stays IN the loop body -- if every stat type is hidden
-	// the loop body never runs, so $alert_stats['count'] must stay unset for
-	// this view exactly as it does today.
+	// instead of once per iteration (issue #809). The per-iteration assignment
+	// below stays IN the loop body -- if every stat type is hidden the loop body
+	// never runs, so $alert_stats['count'] must stay unset for this view exactly
+	// as it does today.
 	$alert_log_total_count = file_exists($alert_log) ? (exec("{$pfb['grep']} -c ^ {$alert_log} 2>&1") ?: 0) : 0;
 
 	foreach ($stat_info as $stat_type => $column) {
@@ -1920,9 +1910,9 @@ if ($alert_summary) {
 					$alert_stats[$alert_view]['dnsblgpblock'] = array();
 				}
 			}
-			// The exec is hoisted above the loop (issue #809 Phase 2); this
-			// assignment stays here so an all-hidden $stat_info leaves
-			// $alert_stats['count'] unset for this view, exactly as before.
+			// The exec is hoisted above the loop (issue #809); this assignment
+			// stays here so an all-hidden $stat_info leaves $alert_stats['count']
+			// unset for this view, exactly as before.
 			$alert_stats['count'][$alert_view] = $alert_log_total_count;
 		}
 		else {
@@ -2232,16 +2222,13 @@ function convert_dnsbl_log($mode, $fields) {
 		return TRUE;
 	}
 
-	// Counter/limit gate (issue #809): only the NON-FILTER limit check is
-	// order-independent of the expensive render-time re-check below
-	// (pfb_dnsbl_parse() + the dnsbl_whitelist_type() calls) -- it only reads
-	// $counter/$pfbentries, neither of which the parse produces -- so it is hoisted
-	// here, output-identical to evaluating it after the parse. The filter-mode limit
-	// gate is NOT hoisted and stays after the filter-MATCH gate (restored ahead of the
-	// $counter[...]++ below): on origin/devel it only ever tripped on a row that
-	// PASSED the filter match, so hoisting it here changed the tfoot "Filter Limit"
-	// flag for a post-limit tail of rows that never match the filter (B1, PR #825
-	// review) -- see the "Ordering constraint" note ahead of that gate below.
+	// Counter/limit gate (issue #809): only the non-filter limit check is
+	// order-independent of the render-time re-check below (pfb_dnsbl_parse() +
+	// dnsbl_whitelist_type()), so it is hoisted here, output-identical to
+	// evaluating it after the parse. The filter-mode limit gate stays after the
+	// filter-MATCH gate below -- it only trips on rows that pass the match, so
+	// hoisting it would mis-flag a post-limit tail of non-matching rows (see the
+	// "Ordering constraint" note below in this function).
 	if (!$pfb['filterlogentries'] &&
 		$counter[$mode == 'Unified' && !$pfb['filterlogentries'] ? 'Unified' : 'DNSBL'] >= $pfbentries) {
 		$dnsblfilterlimit = TRUE;
@@ -2291,22 +2278,10 @@ function convert_dnsbl_log($mode, $fields) {
 	$p_group = $p_domain = $p_feed = $p_mode = '';
 	$p_feed_disp = $p_group_disp = '';
 
-	// Collect current details about domain
-	// Skip for upstream blocks: the domain is not in a local feed, so pfb_dnsbl_parse()
-	// would rewrite group/feed/mode to 'Unknown', corrupting the row.
-	// Cost: on a dnsblcache miss this greps the whole DNSBL data file (a de-listed
-	// domain scans all of it), greps the zone file per label, and falls back to a live
-	// drill against the external DNS server — and the cache is wiped on every DNSBL
-	// swap, so post-update loads miss for most rows (alerts-reports-pipeline.md).
-	// issue #809: pfb_dnsbl_parse('alerts', ...) memoizes its full result per domain
-	// and reuses one open dnsblcache SQLite3 handle for the rest of this page load, so
-	// a repeated domain (or a warm cache) no longer pays per-row open/close -- only a
-	// genuinely new domain still runs the grep/zone/drill path above. issue #809 Phase
-	// 3a additionally batches the grep/zone lookups themselves: in non-filter mode the
-	// DNSBL table branch prefetches every displayed row's domain in ONE grep pass per
-	// file (pfb_dnsbl_prefetch()) before this loop runs, so a dnsblcache miss here
-	// consults that seeded result instead of re-executing grep -- the drill fallback
-	// is untouched (still per-domain, only reached on a genuine miss).
+	// Collect current details about domain. Skip for upstream blocks: the domain is
+	// not in a local feed, so pfb_dnsbl_parse() would rewrite group/feed/mode to
+	// 'Unknown', corrupting the row. Cost + memoization + batched-prefetch behaviour:
+	// docs/misc/alerts-reports-pipeline.md.
 	if (!$isPython && !$isUpstream && !$isWhitelist_found) {
 		$domain_details = pfb_dnsbl_parse('alerts', $qdomain, '', '');
 		$pfb_mode	= $domain_details['pfb_mode']	?: 'Unknown';
@@ -2514,14 +2489,12 @@ function convert_dnsbl_log($mode, $fields) {
 	$pfbalertdnsbl[99]	= pfb_hsc($fields[1]);	// Timestamp
 
 	// If alerts filtering is selected, process filters as required.
-	// Ordering constraint: this filter matches the CORRECTED fields ($pfbalertdnsbl is
-	// built from post-pfb_dnsbl_parse values), so the filter-MATCH gate cannot be
-	// hoisted above the parse without changing filter semantics — a feed-name filter
-	// matches the domain's current feed, not the stale logged one. The filter-mode
-	// limit gate below shares that constraint: it only trips AFTER a row passes the
-	// match, so it stays here too (issue #809 only hoists the non-filter limit gate to
-	// the top of this function, since that one is parse-independent — see the comment
-	// there; B1, PR #825 review).
+	// Ordering constraint: this filter matches CORRECTED fields ($pfbalertdnsbl is
+	// built from post-pfb_dnsbl_parse values), so the filter-MATCH gate cannot move
+	// above the parse -- a feed-name filter must match the domain's current feed, not
+	// the stale logged one. The filter-mode limit gate shares that constraint (only
+	// trips after a match); issue #809 hoists only the non-filter limit gate above,
+	// since that one is parse-independent (see the comment there).
 	if ($pfb['filterlogentries']) {
 		if (empty($filterfieldsarray[1])) {
 			return TRUE;
@@ -2926,16 +2899,12 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 		return array(TRUE, '');
 	}
 
-	// issue #809 page-scope memos (pfb_render_memo(), pfblockerng.inc): one page load
-	// = one process, so these persist for exactly one render.
-	// - $memos['validate']: the "is the logged IP/CIDR still in its logged feed file"
-	//   validate exec below, keyed by the exact command about to run.
-	// - $memos['miss']: the "where does this host live NOW" miss path (find_reported_header()
-	//   plus the raw aliastables grep), keyed by host+folder -- see the comment at its
-	//   call site for what stays outside the memo.
-	// issue #809 Phase 3b: promoted from two function-statics to the shared accessor
-	// pfb_ip_render_memos() so the batched prefetch pass (pfb_ip_prefetch(), called from
-	// this page's two-pass IP table render) can seed them from OUTSIDE this function.
+	// issue #809: page-scope memos (pfb_render_memo(), pfblockerng.inc) live for one
+	// render. $memos['validate'] caches the "still in its logged feed file" validate
+	// exec, keyed by the exact command; $memos['miss'] caches the "where does this
+	// host live NOW" path (find_reported_header() + raw aliastables grep), keyed by
+	// host+folder. pfb_ip_render_memos() is a shared accessor so pfb_ip_prefetch()
+	// can seed both from outside this function.
 	$memos = &pfb_ip_render_memos();
 
 	$alert_ip = $pfb_query = $pfb_matchtitle = '';
@@ -3009,8 +2978,8 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 		$vtype = 4;
 	}
 
-	// IPv4 IP address mask -- relocated up from its original position (issue #809 Phase
-	// 3b): it depends only on $pfb_ipv4/$fields[14], neither of which the derivation below
+	// IPv4 IP address mask -- relocated up from its original position (issue #809):
+	// it depends only on $pfb_ipv4/$fields[14], neither of which the derivation below
 	// touches, and nothing between here and its original site reads $mask, so this is
 	// behaviour-identical.
 	$mask = '';
@@ -3018,11 +2987,11 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 		$mask = strstr($fields[14], '/', FALSE) ?: '/32';
 	}
 
-	// issue #809 Phase 3b: the GeoIP/host-selection/ET-header/folder/validate-command
-	// derivation is extracted to pfb_ip_render_query() (pfblockerng.inc) -- a verbatim-
-	// motion refactor so the batched prefetch pass (pfb_ip_prefetch(), called from this
-	// page's two-pass IP table render below) derives the IDENTICAL lookup groups from a
-	// copy of the same $fields, with no separate re-derivation to drift from this one.
+	// issue #809: the GeoIP/host-selection/ET-header/folder/validate-command derivation
+	// is extracted to pfb_ip_render_query() (pfblockerng.inc) -- a verbatim-motion
+	// refactor so the batched prefetch pass (pfb_ip_prefetch(), called from this page's
+	// two-pass IP table render below) derives the IDENTICAL lookup groups from a copy
+	// of the same $fields, with no separate re-derivation to drift from this one.
 	$rq = pfb_ip_render_query($fields);
 
 	$host		= $rq['host'];
@@ -3035,18 +3004,12 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	$hostname['src'] = pfb_hsc($hostname['src']);
 	$hostname['dst'] = pfb_hsc($hostname['dst']);
 
-	// Determine if event IP still exists in Feed Aliastable
-	// Per-row pipeline with no render-time cache (the daemon's ipcache is event-time
-	// only); a miss falls into find_reported_header() — full grep sweeps of the feed
-	// dirs — plus a whole-aliastables grep below, so after a feed update de-lists or
-	// moves entries, most rows take that path (alerts-reports-pipeline.md, issue #809).
-	// Memoized by the exact command about to run: two rows that would exec the
-	// byte-identical find|xargs-grep pipeline share one result for the rest of this
-	// page load. issue #809 Phase 3b: in non-filter mode (or bounded-filter mode) this
-	// key is usually pre-seeded by pfb_ip_prefetch()'s batched validate round, so the
-	// closure below never actually runs for a covered row -- it remains the per-row
-	// fallback for anything the prefetch pass did not cover (the Unified table; any row
-	// it missed).
+	// Determine if event IP still exists in Feed Aliastable. Per-row pipeline with no
+	// render-time cache (the daemon's ipcache is event-time only); a miss falls into
+	// find_reported_header() -- full grep sweeps of the feed dirs -- plus a whole-
+	// aliastables grep below (alerts-reports-pipeline.md, issue #809). Memoized by the
+	// exact command about to run; in non-filter/bounded-filter mode this key is usually
+	// pre-seeded by pfb_ip_prefetch(), so the closure below is the per-row fallback.
 	$validate = '';
 	if ($rq['validate_cmd'] !== NULL) {
 		$validate_cmd = $rq['validate_cmd'];
@@ -4250,13 +4213,12 @@ if (!$alert_summary):
 				'Match'		=> "{$pfb['ip_matchlog']}",
 				'Unified'	=> "{$pfb['unilog']}") as $logtype => $pfb_log ):
 
-		// $pfbentries gets a definite default here (issue #809 Phase 2, same
-		// approach as $folder above): every reachable path below overwrites it
-		// before the post-switch reads (the "Skip table output" gate, the Unified
-		// early-exit call, the <tfoot> message); the only paths that skip those
-		// reads are the `continue 2`s, which never reach them either. The default
-		// makes that provable to PHPStan instead of relying on it to trace the
-		// switch/if/continue control flow.
+		// $pfbentries gets a definite default here (issue #809, same approach as
+		// $folder above): every reachable path below overwrites it before the
+		// post-switch reads (the "Skip table output" gate, the Unified early-exit
+		// call, the <tfoot> message) -- the `continue 2` paths skip those reads too.
+		// The default makes that provable to PHPStan instead of relying on it to
+		// trace the switch/if/continue control flow.
 		$pfbentries = 0;
 
 		// Validate Alert view and Log type
@@ -4363,12 +4325,11 @@ if (!$alert_summary):
 			<tbody>
 	<?php
 			// This loop reads the reversed log via a popen() stream (no on-disk .rev
-			// copy, issue #809 Phase 2) and breaks as soon as
-			// pfb_alerts_unified_scan_done() determines no converter
-			// (convert_dnsbl_log() / convert_dns_reply_log() / convert_ip_log()) can
-			// render another row -- see that helper for the exact non-filter/filter
-			// mode conditions. If any per-type filter-limit knob is 0 (unlimited) its
-			// flag never sets and this still scans to EOF, exactly as before.
+			// copy, issue #809) and breaks as soon as pfb_alerts_unified_scan_done()
+			// determines no converter (convert_dnsbl_log() / convert_dns_reply_log() /
+			// convert_ip_log()) can render another row -- see that helper for the exact
+			// non-filter/filter mode conditions. If any per-type filter-limit knob is 0
+			// (unlimited) its flag never sets and this still scans to EOF, exactly as before.
 			if (($handle = @popen('/usr/bin/tail -r ' . escapeshellarg($pfb_log), 'r')) !== FALSE) {
 				while (($fields = @fgetcsv($handle)) !== FALSE) {
 
@@ -4436,9 +4397,9 @@ if (!$alert_summary):
 			</thead>
 			<tbody>
 	<?php
-			// issue #809 Phase 3a scope guard: batching (below) only ever applies in
-			// non-filter mode. Filtered mode keeps today's single-pass streaming loop --
-			// the Alert-filter match runs against the CORRECTED fields (post
+			// issue #809 scope guard: batching (below) only ever applies in non-filter
+			// mode. Filtered mode keeps today's single-pass streaming loop -- the
+			// Alert-filter match runs against the CORRECTED fields (post
 			// pfb_dnsbl_parse()), so a row can't be pre-collected without parsing it
 			// first; see the "Ordering constraint" note in convert_dnsbl_log() and
 			// docs/misc/alerts-reports-pipeline.md.
@@ -4461,26 +4422,12 @@ if (!$alert_summary):
 					@pclose($handle);
 				}
 			} else {
-				// Non-filter mode: two passes over the reversed log instead of one, so the
-				// DNSBL data/zone-file lookups for every row this render will walk are
-				// batched into at most one grep pass each (pfb_dnsbl_prefetch()) instead of
-				// one exec per row.
-				//
-				// Pass 1 (collect): buffer until $pfbentries + 1 NON-dup lines are seen or
-				// EOF. That "+1" line is exactly the one whose convert_dnsbl_log() call
-				// trips the counter/limit gate and breaks today's loop, so buffering stops
-				// there; lines beyond it are unreachable today too. The '-' duplicate lines
-				// are run-length compressed: their field content is never read anywhere in
-				// the render loop -- only their COUNT feeds the $dup['DNSBL'] badge
-				// accumulator -- so a buffer entry is either a $fields array (non-dup line)
-				// or an integer (length of a consecutive dup run). Real dnsbl.logs are
-				// dup-heavy, so this is what bounds the buffer at <= ($pfbentries + 1)
-				// field arrays plus <= ($pfbentries + 2) integers regardless of log size,
-				// keeping this pass as O(rows-rendered) in memory as the streamed loop it
-				// replaces (which held one line at a time). The append rule itself is
-				// pfb_alerts_dnsbl_buffer_push() (pfblockerng.inc) -- the single source of
-				// this compression arithmetic, unit-pinned by AlertsBufferReplayTest
-				// (issue #809 T2).
+				// Non-filter mode: two passes over the reversed log instead of one, so DNSBL
+				// data/zone-file lookups for every row this render will walk are batched into
+				// at most one grep pass each (pfb_dnsbl_prefetch()) instead of one exec per row.
+				// Pass 1 buffers up to ($pfbentries + 1) non-dup rows, run-length compressing
+				// '-' duplicate lines to an int count -- append rule + bound proof:
+				// pfb_alerts_dnsbl_buffer_push() (pfblockerng.inc), pinned by AlertsBufferReplayTest.
 				$dnsbl_buffered	 = array();
 				$dnsbl_qdomains	 = array();
 				$dnsbl_nondup_seen = 0;
@@ -4516,16 +4463,11 @@ if (!$alert_summary):
 				// pfb_dnsbl_parse_compute() call in pass 2 below transparently consults.
 				pfb_dnsbl_prefetch($dnsbl_qdomains);
 
-				// Pass 2 (render): replay the buffer in the same (reversed) order, decoding
-				// each entry via pfb_alerts_dnsbl_replay_step() (pfblockerng.inc) -- the
-				// same single source the compression above appended through, unit-pinned
-				// by AlertsBufferReplayTest (issue #809 T2). A 'dup' step is a compressed
-				// dup run and replays as one accumulation -- output-identical to the N
-				// individual $dup['DNSBL']++ increments the streamed loop performed for
-				// those N consecutive lines. A 'render' step runs today's exact loop body,
-				// verbatim (its dup-marker check can never fire for a buffered row -- dup
-				// lines were compressed away in pass 1 -- but keeping it keeps the body
-				// identical to the streamed loop's).
+				// Pass 2 (render): replay the buffer in the same (reversed) order via
+				// pfb_alerts_dnsbl_replay_step() (pfblockerng.inc; decode contract documented
+				// there), unit-pinned by AlertsBufferReplayTest -- 'render' steps run today's
+				// exact loop body verbatim (its dup-marker check can never fire for a buffered
+				// row, but keeping it keeps the body identical to the streamed loop's).
 				foreach ($dnsbl_buffered as $dnsbl_entry) {
 
 					$dnsbl_step = pfb_alerts_dnsbl_replay_step($dnsbl_entry);
@@ -4622,20 +4564,14 @@ if (!$alert_summary):
 
 			$p_query_port = '';
 
-			// issue #809 Phase 3b scope guard: batching (below) only runs when a finite row
-			// bound exists -- non-filter mode (bound $pfbentries), or filter mode with a real
-			// per-row limit ($ipfilterlimitentries != 0) AND real filter fields set. Filter
-			// mode with $ipfilterlimitentries == 0 never trips convert_ip_log()'s own limit
-			// check (see its `if ($pfb['filterlogentries'])` branch), so the log is genuinely
-			// scanned to EOF -- an unbounded buffer is not safe to build -- and the degenerate
-			// empty($filterfieldsarray[0]) case (every row short-circuits immediately) both
-			// keep today's single-pass streaming loop verbatim. See
-			// docs/misc/alerts-reports-pipeline.md.
-			// $ipfilterlimitentries is always genuinely set by this point (the
-			// $aglobal_array dynamic ${"$type"} assignment near the top of this file) --
-			// PHPStan just cannot trace that dynamic assignment, so this coalesce is a
-			// runtime no-op that keeps every read below provably defined (same approach
-			// as the $pfbentries/$folder defaults elsewhere in this file, issue #809).
+			// issue #809 scope guard: batching below only runs when a finite row bound
+			// exists -- non-filter mode (bound $pfbentries), or filter mode with a real
+			// per-row limit ($ipfilterlimitentries != 0) AND real filter fields set.
+			// Otherwise the log genuinely scans to EOF (unbounded buffer unsafe), so both
+			// cases keep the single-pass streaming loop. See docs/misc/alerts-reports-pipeline.md.
+			// $ipfilterlimitentries is always genuinely set by this point (the dynamic
+			// ${"$type"} assignment near the top of this file, which PHPStan can't trace);
+			// this coalesce is a runtime no-op that keeps every read below provably defined.
 			$ipfilterlimitentries = $ipfilterlimitentries ?? 0;
 			$ip_two_pass = !$pfb['filterlogentries'] || ($ipfilterlimitentries != 0 && !empty($filterfieldsarray[0]));
 
@@ -4662,43 +4598,13 @@ if (!$alert_summary):
 					@pclose($handle);
 				}
 			} else {
-				// Two passes over the reversed log instead of one, so every buffered row's
-				// render-time IP lookups (validate / miss-header / aliastables) are batched
-				// into a bounded number of grep passes (pfb_ip_prefetch()) instead of one-to-
-				// three exec()s per row.
-				//
-				// Pass 1 (collect): buffer up to and including the row that trips today's
-				// counter/limit gate ($pfbentries + 1 ACCEPTED rows -- in filter mode
-				// "accepted" means it passes pfb_match_filter_field(); in non-filter mode
-				// every non-dup row counts). A buffer entry is one of exactly three shapes:
-				//
-				//   array($fields, TRUE)              -- an accepted row (replayed verbatim);
-				//   int N                             -- a pure run of N consecutive '-'
-				//                                        duplicate-marker lines (Phase 3a
-				//                                        style: content never read, only the
-				//                                        count feeds $dup[$rtype]);
-				//   array('rej' => TRUE, 'dup' => N)  -- a "gap": a mixed run of dup-marker
-				//                                        and REJECTED lines containing >= 1
-				//                                        reject, of which N dup lines came
-				//                                        AFTER the last reject.
-				//
-				// The gap compression is sound because a rejected row's entire effect in
-				// today's streamed loop is CONSTANT and field-independent: convert_ip_log()'s
-				// filter-reject path does exactly `$dup[$rtype] = 0; return array(FALSE, '');`
-				// (nothing else -- no counter, no output), and the caller then assigns
-				// $p_query_port = ''. So within any run between two accepted rows, each reject
-				// wipes whatever dup count preceded it, and only the dups AFTER the LAST
-				// reject survive into the next rendered row's "[N]" badge -- two numbers
-				// (had-a-reject; dups-since-last-reject) reproduce the run's entire effect.
-				// This is what bounds the buffer in FILTER mode too: at most one int-or-gap
-				// entry can sit between consecutive accepted entries (a reject REPLACES a
-				// trailing int run with a gap; later dups/rejects mutate that same gap), so
-				// the buffer holds <= ($pfbentries + 1) field arrays plus <= ($pfbentries + 2)
-				// int/gap entries REGARDLESS of log size or filter selectivity -- O(rows
-				// rendered), never O(rows scanned). The 'dup'/'reject' append rules
-				// themselves are pfb_alerts_ip_buffer_push() (pfblockerng.inc) -- the single
-				// source of this compression arithmetic, unit-pinned by
-				// AlertsBufferReplayTest (issue #809 T2).
+				// Two passes over the reversed log instead of one: render-time IP lookups for
+				// every buffered row are batched via pfb_ip_prefetch() instead of one-to-three
+				// exec()s per row. Buffer entries: array($fields, TRUE) (accepted row), int N
+				// (N dup-marker lines), or array('rej'=>TRUE,'dup'=>N) (a mixed dup/reject run
+				// collapsed to one gap marker). Bound + correctness proof:
+				// docs/misc/alerts-reports-pipeline.md; compression logic is
+				// pfb_alerts_ip_buffer_push() (pfblockerng.inc), pinned by AlertsBufferReplayTest.
 				$ip_buffered	  = array();
 				$ip_accepted_seen = 0;
 				if (($handle = @popen('/usr/bin/tail -r ' . escapeshellarg($pfb_log), 'r')) !== FALSE) {
@@ -4768,28 +4674,12 @@ if (!$alert_summary):
 				}
 				pfb_ip_prefetch($ip_prefetch_rows);
 
-				// Pass 2 (render): replay the buffer in the same (reversed) order, decoding
-				// each entry via pfb_alerts_ip_replay_step() (pfblockerng.inc) -- the same
-				// single source the compression above appended through, unit-pinned by
-				// AlertsBufferReplayTest (issue #809 T2).
-				// - 'dup_add' N: a pure dup run -- one accumulation, output-identical to the N
-				//   individual $dup[$rtype]++ increments the streamed loop performed.
-				// - 'gap' N: a mixed dup/reject run. The streamed loop's net effect for
-				//   [d1 dups][reject]...[last reject][d2 dups] is $dup[$rtype] === d2 (each
-				//   reject RESET the count, then d2 post-reject dups re-accumulated) and
-				//   $p_query_port === '' (every reject returns array(FALSE, '') and the
-				//   caller assigns it) -- so the replay SETS $dup[$rtype] (never +=) to the
-				//   marker's post-last-reject count and clears $p_query_port. Ordering
-				//   matters and is preserved: the pre-reject d1 dups never reach the next
-				//   rendered row's badge, exactly as in the streamed loop.
-				// - 'render' $fields: today's exact loop body, unchanged, over the SAME
-				//   post-dup-pop $fields the streaming loop would have handed
-				//   convert_ip_log() (which transparently consults the batched prefetch
-				//   above via pfb_ip_render_memos(), falling back to its own per-row exec
-				//   for anything Pass 1.5 did not cover).
-				// $rtype is always genuinely set by the case 'alert': switch above (the
-				// only path that reaches this block) -- see the $ipfilterlimitentries
-				// coalesce comment above for why PHPStan needs this spelled out anyway.
+				// Pass 2 (render): replay the buffer in the same (reversed) order via
+				// pfb_alerts_ip_replay_step() (pfblockerng.inc; decode contract documented
+				// there), unit-pinned by AlertsBufferReplayTest -- 'render' rows replay through
+				// the unchanged convert_ip_log() loop body, consulting the batched prefetch via
+				// pfb_ip_render_memos() first. $rtype is always set here (see the
+				// $ipfilterlimitentries coalesce note above; PHPStan can't trace it).
 				$rtype = $rtype ?? '';
 				foreach ($ip_buffered as $ip_entry) {
 					$ip_step = pfb_alerts_ip_replay_step($ip_entry);

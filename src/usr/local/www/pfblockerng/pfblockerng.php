@@ -73,19 +73,12 @@ if (isset($argv[1])) {
 		pfBlockerNG_clearsqlite('cleardnsbl');
 		exit;
 	}
-	// ADR-12 Phase 1: manual hook-runner test path (unwired from the update
-	// pass). Usage: pfblockerng.php runhooks <pre|post> [trigger]
-	// Runs the configured 'pre'/'post' hooks with a synthetic context so the
-	// runner can be exercised live without performing an update.
-	//
-	// This path does NOT run sync_package_pfblockerng, so NOTHING is updated --
-	// the LIVE post context (incl. the real PFB_CHANGED_IP_ALIASES /
-	// PFB_CHANGED_DNSBL_GROUPS populated from $pfb['changed_ip_aliases'] /
-	// $pfb['changed_dnsbl_groups'], ADR-12 Phase 6) is built only in
-	// pfblockerng.inc's closing tail. Here every post key is a fixed synthetic
-	// value, and both changed lists are '' BECAUSE no pass ran (no alias/group was
-	// updated) -- not a reserved placeholder. PFB_STATUS stays the reserved 'ok'
-	// placeholder there too.
+	// ADR-12: manual hook-runner test path (unwired from the update pass). Usage:
+	// pfblockerng.php runhooks <pre|post> [trigger]. Runs the configured pre/post
+	// hooks with a synthetic context WITHOUT sync_package_pfblockerng (nothing is
+	// updated) -- the real CHANGED_* context is built only in pfblockerng.inc's
+	// closing tail. Both lists are '' here because no pass ran, not a reserved
+	// placeholder; PFB_STATUS stays the reserved 'ok'.
 	elseif ($argv[1] == 'runhooks') {
 		$when = ($argv[2] ?? '') === 'post' ? 'post' : 'pre';
 		$ctx  = array('TRIGGER' => ($argv[3] ?? 'manual-test'));
@@ -255,7 +248,7 @@ if (in_array($argv[1], array('update', 'updateip', 'updatednsbl', 'dc', 'dcc', '
 		case 'update':		// Sync 'Force update' [DEPRECATED — use pfb_trigger scope=both force=false trigger=manual]
 			sync_package_pfblockerng('update');	// deprecation warning logged inside sync_package_pfblockerng
 			break;
-		case 'pfb_trigger':	// ADR-43 Phase 3: explicit {scope, force, trigger} API
+		case 'pfb_trigger':	// ADR-43: explicit {scope, force, trigger} API
 			// Usage: pfblockerng.php pfb_trigger scope=<both|ip|dnsbl> force=<true|false> trigger=<cron|manual|force>
 			$pfb_tscope   = 'both';
 			$pfb_tforce   = FALSE;
@@ -528,10 +521,9 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 		}
 
 		if ($localfile) {
-			// ADR-42 Phase 1: local-file change detection delegated to the extracted helper
-			// pfb_local_feed_changed() (pfblockerng.inc). Behaviour-preserving refactor:
-			// the helper encodes today's mtime + md5-confirm decision (Phase 2 will swap
-			// to xxh128 there without touching this call site).
+			// ADR-42: local-file change detection delegated to pfb_local_feed_changed()
+			// (pfblockerng.inc) -- content-hash (xxh128) gate, mtime removed; pinned by
+			// FeedChangeHashHelpersTest.
 			$pfb['cron_update'] = pfb_local_feed_changed($list_download, $local_file);
 			if (!$pfb['cron_update']) {
 				$log = "[ {$header} ] ( local feed unchanged )\tUpdate not required\n";
@@ -539,26 +531,11 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 			}
 		}
 		else {
-			// ADR-42 Phase 3: replace the HEAD+Last-Modified client-compare and the
-			// whole-feed md5 fallback with a single conditional GET.
-			//
-			// pfb_download() (probe mode, type='change_detect') downloads the body to
-			// {pfborig}/{header}.md5.raw and fills $probe_meta with the response HTTP
-			// status, the response ETag, and the response Last-Modified epoch.  Before
-			// the request it sends If-None-Match (from the stored .etag sidecar) or
-			// CURLOPT_TIMECONDITION/CURLOPT_TIMEVALUE (from the stored .lastmod sidecar),
-			// so a server that supports conditional requests can answer 304 (no body).
-			//
-			// Decision matrix (pfb_conditional_get_decision):
-			//   304 → unchanged (server confirmed; no body was sent; reuse cached .orig).
-			//   200, body_hash == persisted_hash → unchanged (spurious 200; same bytes).
-			//   200, body_hash != persisted_hash → changed (real update; re-ingest).
-			//   200, no persisted_hash → download+hash decides (first run or upgrade).
-			//   error / unknown status → fail-safe (re-ingest; never a false skip).
-			//
-			// The SSRF guard (pfb_feed_host_allowed + CURLOPT_RESOLVE IP-pin) and the
-			// manual redirect revalidation loop stay fully intact because the probe goes
-			// through pfb_download(), not a separate bare curl_init().
+			// ADR-42: replaces the HEAD+Last-Modified compare and whole-feed md5 fallback
+			// with a conditional GET via pfb_download() (probe mode, type='change_detect'),
+			// decided by pfb_conditional_get_decision() (decision matrix documented
+			// there). The SSRF guard + redirect revalidation loop stay intact because the
+			// probe goes through pfb_download(), not a bare curl_init().
 			$probe_meta = array();
 			$probe_ok = pfb_download("{$list_download}", "{$pfborig}/{$header}.md5", $pflex, $header, '', 1, '', 300, 'change_detect', '', '', $srcint, $probe_meta);
 
@@ -679,11 +656,11 @@ function pfblockerng_download_extras($timeout=600, $type='') {
 
 		$file_dwn = "{$feed['folder']}/{$feed['file_dwn']}";
 
-		// ADR-59 Phase 3: thread the per-feed 'headers' field through as caller-supplied
-		// HTTP headers. The TOP1M provider (ADR-59 P5) sets it above via
-		// pfb_top1m_auth_headers() (Cloudflare Radar's Bearer token; array() for every
-		// keyless provider) -- every other feed still leaves it unset, so ?? array()
-		// keeps their downloads unaffected.
+		// ADR-59: thread the per-feed 'headers' field through as caller-supplied HTTP
+		// headers. The TOP1M provider sets it above via pfb_top1m_auth_headers()
+		// (Cloudflare Radar's Bearer token; array() for every keyless provider) --
+		// every other feed leaves it unset, so ?? array() keeps their downloads
+		// unaffected.
 		if (!pfb_download($feed['url'], $file_dwn, FALSE, "{$feed['folder']}/{$feed['file']}", '', $logtype, '', $timeout, $feed['type'],
 		    $feed['username'], $feed['password'], extra_headers: $feed['headers'] ?? array())) {
 
