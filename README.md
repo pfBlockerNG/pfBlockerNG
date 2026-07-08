@@ -1,6 +1,19 @@
-# pfBlockerNG
+<div align="center">
 
-**IP and DNS blocking for [pfSense](https://www.pfsense.org/) (CE and Plus).**
+<img src="docs/assets/logo.png" alt="pfBlockerNG logo" width="150">
+
+<h1>pfBlockerNG</h1>
+
+<p><strong>IP and DNS blocking for <a href="https://www.pfsense.org/">pfSense</a> (CE and Plus).</strong></p>
+
+<p>
+  <a href="https://github.com/pfBlockerNG/pfBlockerNG/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/pfBlockerNG/pfBlockerNG/test.yml?branch=devel&label=tests" alt="Tests"></a>
+  <a href="https://github.com/pfBlockerNG/pfBlockerNG/releases"><img src="https://img.shields.io/github/v/release/pfBlockerNG/pfBlockerNG?include_prereleases&label=release&color=blue" alt="Latest release"></a>
+  <a href="#installation"><img src="https://img.shields.io/badge/pfSense-CE%202.8%20%7C%20Plus%2026.03-212121" alt="Supported pfSense versions"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/pfBlockerNG/pfBlockerNG?color=green" alt="License: Apache-2.0"></a>
+</p>
+
+</div>
 
 pfBlockerNG downloads curated IP and domain feeds and turns them into live
 firewall and DNS policy: IP feeds become pf alias tables with automatic firewall
@@ -13,11 +26,29 @@ This repository is a community-maintained fork —
 original package by [BBcan177](https://github.com/BBcan177). It is licensed under
 the **Apache License 2.0**.
 
+> [!NOTE]
 > For day-to-day usage and configuration, the upstream
 > [Netgate pfBlockerNG documentation](https://docs.netgate.com/pfsense/en/latest/packages/pfblocker.html)
 > applies. This README covers what is specific to **installing this fork** and the
 > features it adds on top; the per-feature design records live under
 > [`.ADRs/`](.ADRs/).
+
+## Table of contents
+
+- [Features](#features)
+- [Release channels](#release-channels)
+- [Installation](#installation)
+  - [Option 1 — pfSense Package Manager](#option-1--pfsense-package-manager)
+  - [Option 2 — this fork's self-hosted `pkg` repository](#option-2--this-forks-self-hosted-pkg-repository)
+  - [Updating](#updating)
+  - [Building from the FreeBSD ports tree](#building-from-the-freebsd-ports-tree)
+- [Usage](#usage)
+  - [Update Hooks](#update-hooks)
+  - [Software tab — version + update notice for self-hosted builds](#software-tab--version--update-notice-for-self-hosted-builds)
+  - [DNSBL Control (CLI)](#dnsbl-control-cli)
+- [Documentation](#documentation)
+- [Contributing](#contributing)
+- [License & credits](#license--credits)
 
 ## Features
 
@@ -47,6 +78,7 @@ the **Apache License 2.0**.
   for you instead of a manual setup
   ([ADR-13](.ADRs/ADR_13_Auto_DNSBL_VIP/ADR.md)).
 
+> [!WARNING]
 > **Reserved alias prefix (`pfB_`).** Every firewall alias pfBlockerNG creates is named with
 > the `pfB_` prefix, and that prefix is how it recognizes its own aliases: on each reload it
 > deletes any `pfB_`-named alias that is not one of its currently active aliases. **Do not give
@@ -187,6 +219,7 @@ stable releases are retained; builds older than that window are no longer in the
 shows an "Older releases" disclosure per pfSense edition listing the retained versions with
 their commit and date — use it to find the version string to pass to `pkg install`.
 
+> [!CAUTION]
 > **Config-schema note:** rolling back across a schema-changing release may leave the stored
 > `config.xml` in a format the older code cannot read. Test first in a non-production VM.
 
@@ -233,6 +266,7 @@ A `post` hook receives this environment:
 | `PFB_CHANGED_DNSBL_GROUPS` | space-separated DNSBL groups (`DNSBL_*`) updated (empty when none) |
 | `PFB_STATUS` | reserved — currently always `ok` |
 
+> [!TIP]
 > To act when the blocklist **data** changed, guard on a **non-empty**
 > `PFB_CHANGED_IP_ALIASES`, not `PFB_IP_CHANGED=1` — the latter fires only on a rule
 > change and misses content-only feed refreshes.
@@ -283,6 +317,7 @@ offers two buttons:
 - **Update now** — a **same-channel** `pkg upgrade` of the installed package, streamed live
   (it never switches channels). The button is enabled only when an update is available.
 
+> [!NOTE]
 > The Software tab, the page, and the update notice are present **only on a build installed
 > from one of our repos** (`pfblockerng` / `pfblockerng-nightly`). On a stock
 > **Netgate-ports** install they are **entirely absent** — Netgate's own repo-bound badge
@@ -315,6 +350,7 @@ pfblockerng dnsbl-control removebypass <ip>
 These commands can be incorporated in CRON/Scheduler tasks or run manually; all events
 are logged to the Reports tab.
 
+> [!IMPORTANT]
 > **Migration:** the older `drill TXT python_control.*` DNS-TXT transport is
 > **deprecated** and **off by default**. Switch any CRON/Scheduler task to the
 > `pfblockerng dnsbl-control` CLI above. The **DNSBL Control (legacy DNS TXT)** sub-toggle

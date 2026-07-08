@@ -25,5 +25,9 @@
 
   // duplicate-heading: allow the same heading text under different parents
   // (e.g. repeated "Positive"/"Negative" across ADR sections).
-  "MD024": { "siblings_only": true }
+  "MD024": { "siblings_only": true },
+
+  // inline-html: only the elements the centered README header needs
+  // (logo + title + badge row); everything else stays pure markdown.
+  "MD033": { "allowed_elements": ["div", "img", "h1", "p", "strong", "a", "em", "br"] }
 }
