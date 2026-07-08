@@ -275,6 +275,45 @@ final class TickApplyReconciliationTest extends TestCase
 			'a fixed underlying pfctl condition must clear the entry within one tick');
 	}
 
+	/**
+	 * Scenario:
+	 *   Given an open (ip,'pfB_NoMirror_v4',apply) entry but NO mirror file at
+	 *   {aliasdir}/pfB_NoMirror_v4.txt (pfb_ip_apply_retry()'s is_file() check
+	 *   is FALSE -- e.g. the mirror was never written, or the alias/table no
+	 *   longer has one).
+	 *   When  pfblockerng_tick() runs once.
+	 *   Then  pfctl is invoked with the KILL op, not REPLACE -- there is no
+	 *         mirror content to replace with (pfb_ip_apply_retry()'s branch
+	 *         coverage: every prior test here seeds a mirror file and only
+	 *         exercises the replace branch).
+	 */
+	public function testTickRetriesIpApplyEntryWithKillWhenMirrorFileIsAbsent(): void
+	{
+		$argsLog = tempnam(sys_get_temp_dir(), 'pfb_pfctl_args_');
+		$this->tmpfiles[] = $argsLog;
+		@unlink($argsLog);
+		$mockBin = tempnam(sys_get_temp_dir(), 'pfb_pfctl_mock_');
+		$this->tmpfiles[] = $mockBin;
+		$argsLogEsc = escapeshellarg($argsLog);
+		file_put_contents($mockBin, "#!/bin/sh\nprintf '%s\\n' \"\$*\" >> {$argsLogEsc}\nexit 0\n");
+		chmod($mockBin, 0755);
+
+		// Seed directly -- no mirror file is ever written for this alias.
+		pfb_sync_status_open('ip', 'pfB_NoMirror_v4', 'apply', '[pfctl] op=replace table=pfB_NoMirror_v4 failed (rc=1)', $this->dir);
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'ip'), 'seed: entry must be open before the tick');
+		$this->assertFileDoesNotExist("{$this->dir}/pfB_NoMirror_v4.txt", 'seed: no mirror file must exist for this test');
+
+		$GLOBALS['pfb']['pfctl'] = $mockBin;
+		$this->tick();
+
+		$this->assertFileExists($argsLog, 'expected pfctl to have been invoked at all -- the retry never ran');
+		$invocation = trim((string) file_get_contents($argsLog));
+		$this->assertStringContainsString('-T kill', $invocation,
+			"expected the mirror-absent retry to invoke pfctl's KILL op, got: {$invocation}");
+		$this->assertStringNotContainsString('-T replace', $invocation,
+			"mirror-absent retry must not invoke REPLACE -- there is no mirror content, got: {$invocation}");
+	}
+
 	// -----------------------------------------------------------------------
 	// VERIFICATION (c) — Semantics #5: download/parse entries are untouched
 	// -----------------------------------------------------------------------

@@ -141,6 +141,33 @@ final class PfbSyncStatusIpWritersTest extends TestCase
 		$this->assertSame('HTTP 500', $open[0]['message'], 'message must be the LATEST refresh');
 	}
 
+	public function testDownloadCallSitesKeyOnTheAliasNotTheHeader(): void
+	{
+		// Regression pin: pfb_ip_download_ledger_update() was called with $header (the
+		// per-row label, e.g. "Feodo_v4" -- never pfB_/DNSBL_-prefixed) instead of
+		// $alias (the actual table name, e.g. "pfB_Feodo_v4"). The widget's deep-link
+		// recognition matches ONLY on that prefix (pfblockerng.widget.php), so keying
+		// on $header silently drops the link for every download-fail entry.
+		// sync_package_pfblockerng() itself has no PHPUnit harness (issue #993 -- it is
+		// smoke-only), so this pins the exact call-site argument via source inspection
+		// rather than a functional call: narrow, but it catches a regression of this
+		// specific defect, which the function-level unit tests above cannot (they call
+		// the helper directly with an already-correct item name).
+		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
+		$this->assertNotFalse($source, 'pfblockerng.inc must be readable');
+
+		$this->assertMatchesRegularExpression(
+			'/pfb_ip_download_ledger_update\(FALSE, \$alias,/',
+			$source,
+			'the download-fail call must key on $alias, not $header, or the widget deep link breaks'
+		);
+		$this->assertMatchesRegularExpression(
+			'/pfb_ip_download_ledger_update\(TRUE, \$alias,/',
+			$source,
+			'the paired success-close call must key on the SAME $alias for symmetry'
+		);
+	}
+
 	// -----------------------------------------------------------------------
 	// Pair 2 — dedup sanity FAILED/PASSED (pfb_sync_status_dedup_check)
 	// -----------------------------------------------------------------------
