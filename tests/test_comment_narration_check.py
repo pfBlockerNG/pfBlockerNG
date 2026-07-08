@@ -63,6 +63,14 @@ def test_lowercase_phase_number_is_clean() -> None:
     assert _find("src/a.py", ["# TLS handshake phase 2 resumes here"]) == []
 
 
+def test_number_needs_trailing_boundary() -> None:
+    # "Phase 9x"/"PR #9foo" are not phase/PR references; multi-digit ones are.
+    assert _find("src/a.py", ["# gets a Phase 9x speedup"]) == []
+    assert _find("src/a.inc", ["// tracked as PR #9foo"]) == []
+    assert len(_find("src/a.py", ["# wired in Phase 10"])) == 1
+    assert len(_find("src/a.inc", ["// per PR #1024"])) == 1
+
+
 def test_review_fanout_is_flagged() -> None:
     v = _find("scripts/build-leg.sh", ["# review-fanout C9 pinned this"])
     assert len(v) == 1
