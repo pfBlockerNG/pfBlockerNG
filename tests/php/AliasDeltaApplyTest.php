@@ -152,7 +152,7 @@ SH
 	 * issue #722: count occurrences of $marker in the CURRENT pfBlockerNG log
 	 * (global $pfb['log'], seeded to a writable sandbox path by tests/php/bootstrap.php).
 	 *
-	 * pfb_apply_alias_delta() is the ONLY thing under test that writes ADR-40 apply-path
+	 * pfb_apply_alias_delta() is the ONLY thing under test that writes the apply-path
 	 * markers, so a before/after delta around a single call isolates that call's decision
 	 * even though the log file is shared process-wide across every test in this run —
 	 * the same before/after-count discipline the live-VM smoke suite uses on its log.
@@ -260,7 +260,7 @@ SH
 	 * Before: pfb_apply_alias_delta returns FALSE (we'll verify the path).
 	 * When mode='auto' and churn_ratio=0.001 < PFB_DELTA_CHURN_THRESHOLD.
 	 * Then returns TRUE (delta path taken) AND (issue #722) the ONLY on-box signal that
-	 *   distinguishes delta from replace — the " ADR-40 apply [ <table> ]: delta …" log
+	 *   distinguishes delta from replace — the " Updating [ <table> ]: delta …" log
 	 *   line — was emitted for this table (not the "…: replace" shape).
 	 */
 	public function testSmallChurnAutoModeUsesDeltaPath(): void
@@ -289,8 +289,8 @@ SH
 		@unlink($this->pfctl_call_log);
 
 		// issue #722: before-state — no delta/replace apply-path marker logged yet for this table.
-		$delta_marker   = ' ADR-40 apply [ pfB_Large_v4 ]: delta +';
-		$replace_marker = ' ADR-40 apply [ pfB_Large_v4 ]: replace';
+		$delta_marker   = ' Updating [ pfB_Large_v4 ]: delta +';
+		$replace_marker = ' Updating [ pfB_Large_v4 ]: replace';
 		$delta_before   = $this->countLogMarker($delta_marker);
 		$replace_before = $this->countLogMarker($replace_marker);
 
@@ -307,7 +307,7 @@ SH
 		$delta_after   = $this->countLogMarker($delta_marker);
 		$replace_after = $this->countLogMarker($replace_marker);
 		$this->assertSame($delta_before + 1, $delta_after,
-			"expected: one new ' ADR-40 apply [ pfB_Large_v4 ]: delta +…' log line "
+			"expected: one new ' Updating [ pfB_Large_v4 ]: delta +…' log line "
 			. "(before={$delta_before}, after={$delta_after}) — apply-path observability regressed");
 		$this->assertSame($replace_before, $replace_after,
 			"expected: NO new '…: replace' log line for a delta apply "
@@ -337,7 +337,7 @@ SH
 
 		// Before: no calls, no apply-path marker logged yet for this table.
 		$this->assertFileDoesNotExist($this->pfctl_call_log, 'before: no pfctl calls yet');
-		$replace_marker = " ADR-40 apply [ {$table} ]: replace";
+		$replace_marker = " Updating [ {$table} ]: replace";
 		$replace_before = $this->countLogMarker($replace_marker);
 
 		// When
@@ -360,7 +360,7 @@ SH
 		// Then (issue #722) — the auto-mode large-churn fallback logged the replace marker.
 		$replace_after = $this->countLogMarker($replace_marker);
 		$this->assertSame($replace_before + 1, $replace_after,
-			"expected: one new ' ADR-40 apply [ {$table} ]: replace' log line from the auto-mode "
+			"expected: one new ' Updating [ {$table} ]: replace' log line from the auto-mode "
 			. "large-churn fallback (before={$replace_before}, after={$replace_after}) — "
 			. "apply-path observability regressed");
 	}
@@ -375,7 +375,7 @@ SH
 	 * Given any churn level.
 	 * When mode='replace'.
 	 * Then returns FALSE (replace path) regardless of churn ratio, AND (issue #722) the
-	 *   " ADR-40 apply [ <table> ]: replace" apply-path marker is logged — the sole
+	 *   " Updating [ <table> ]: replace" apply-path marker is logged — the sole
 	 *   on-box signal a live-VM smoke test (or a human) can use to prove replace, not
 	 *   delta, actually ran (pfb_pfctl_table_op itself logs only on error).
 	 *
@@ -393,7 +393,7 @@ SH
 		// Before: asserting that mode=auto would take delta (churn ratio matters less here
 		// since table_size=1, churn=1/1=100%, but let's use mode=replace explicitly).
 		// The key assertion is: mode=replace → replace.
-		$replace_marker = " ADR-40 apply [ {$table} ]: replace";
+		$replace_marker = " Updating [ {$table} ]: replace";
 		$replace_before = $this->countLogMarker($replace_marker);
 
 		$used_delta = pfb_apply_alias_delta(
@@ -412,7 +412,7 @@ SH
 		// Then (issue #722) — the replace apply-path marker was logged for this table.
 		$replace_after = $this->countLogMarker($replace_marker);
 		$this->assertSame($replace_before + 1, $replace_after,
-			"expected: one new ' ADR-40 apply [ {$table} ]: replace' log line "
+			"expected: one new ' Updating [ {$table} ]: replace' log line "
 			. "(before={$replace_before}, after={$replace_after}) — apply-path observability regressed");
 	}
 

@@ -307,19 +307,19 @@ def test_adr40_content_gate_fires_on_change(adr40_vm: SmokeVM) -> None:
 
     # The content change ran the no-rule-change reload path, which logs:
     #   "Alias table changes detected, updating:\n"
-    # immediately followed by per-alias " Updating: <alias>" lines, all CONTIGUOUS (one per
-    # line, no blank lines between them). The sub-header is the anchor; without it the block
-    # reads as a contradiction after "No changes to Firewall rules".
+    # immediately followed by per-alias " Updating [ <alias> ]: <replace|delta ...>" lines,
+    # all CONTIGUOUS (one per line, no blank lines between them). The sub-header is the
+    # anchor; without it the block reads as a contradiction after "No changes to Firewall rules".
     reload_log = adr40_vm.ssh("cat", h.PFB_LOG).stdout[log_len_before:]
     assert "Alias table changes detected, updating:" in reload_log, (
         "expected 'Alias table changes detected, updating:' sub-header in the reload log "
         f"after a content change (no-rule-change path):\n{reload_log[-1500:]}"
     )
-    assert " Updating:" in reload_log, (
-        f"expected a per-alias ' Updating:' line in the reload log after a content change:\n{reload_log[-1500:]}"
+    assert " Updating [" in reload_log, (
+        f"expected a per-alias ' Updating [' line in the reload log after a content change:\n{reload_log[-1500:]}"
     )
-    assert "\n\n Updating:" not in reload_log, (
-        "per-alias ' Updating:' log lines are blank-separated (a leading newline in the log "
+    assert "\n\n Updating [" not in reload_log, (
+        "per-alias ' Updating [' log lines are blank-separated (a leading newline in the log "
         f"format) — they must be contiguous:\n{reload_log[-1500:]}"
     )
 
@@ -393,7 +393,7 @@ def test_adr40_delta_apply_small_churn(adr40_vm: h.SmokeVM) -> None:
     — ``test_adr40_delta_replace_mode`` produces the identical pf-table end-state, so a
     regression that silently routed this "delta" run through -T replace would pass every
     assertion above unnoticed. ``pfb_apply_alias_delta()`` now logs a
-    " ADR-40 apply [ <table> ]: delta +N/-M" / "…: replace" marker naming the actual
+    " Updating [ <table> ]: delta +N/-M" / "…: replace" marker naming the actual
     apply path taken (pfblockerng.inc ~4711-4736) — the ONLY on-box signal that
     discriminates the two (``pfb_pfctl_table_op()`` itself logs only on error). This test
     asserts the DELTA marker fired for this table and the REPLACE marker did NOT.
@@ -434,8 +434,8 @@ def test_adr40_delta_apply_small_churn(adr40_vm: h.SmokeVM) -> None:
         # issue #722: capture the apply-path markers for THIS table right before the change
         # reload, isolating its own delta/replace decision from the settling reload above
         # (which force-replaces on first creation) and from any other table in the run.
-        delta_marker = f" ADR-40 apply [ {ip_spec.alias} ]: delta "
-        replace_marker = f" ADR-40 apply [ {ip_spec.alias} ]: replace"
+        delta_marker = f" Updating [ {ip_spec.alias} ]: delta "
+        replace_marker = f" Updating [ {ip_spec.alias} ]: replace"
         delta_before = h.count_log_marker(adr40_vm, h.PFB_LOG, delta_marker)
         replace_before = h.count_log_marker(adr40_vm, h.PFB_LOG, replace_marker)
 
@@ -561,8 +561,8 @@ def test_adr40_delta_replace_mode(adr40_vm: h.SmokeVM) -> None:
         # issue #722: capture the apply-path markers for THIS table right before the change
         # reload (the settling reload above already force-replaces on first creation, so it
         # must NOT be counted as evidence of this change's own decision).
-        delta_marker = f" ADR-40 apply [ {ip_spec.alias} ]: delta "
-        replace_marker = f" ADR-40 apply [ {ip_spec.alias} ]: replace"
+        delta_marker = f" Updating [ {ip_spec.alias} ]: delta "
+        replace_marker = f" Updating [ {ip_spec.alias} ]: replace"
         delta_before = h.count_log_marker(adr40_vm, h.PFB_LOG, delta_marker)
         replace_before = h.count_log_marker(adr40_vm, h.PFB_LOG, replace_marker)
 

@@ -5153,7 +5153,7 @@ function pfb_apply_alias_delta(
 		// issue #722: nothing else on a live box distinguishes the delta path from a
 		// replace (pfb_pfctl_table_op logs only on error) — this line is the sole apply-path
 		// oracle the smoke suite (and a human reading the log) can grep for.
-		pfb_logger(" ADR-40 apply [ {$table} ]: replace\n", 1);
+		pfb_logger(" Updating [ {$table} ]: replace\n", 1);
 		pfb_pfctl_table_op($table, 'replace', "-f {$table_file_esc}", $pfctl_bin);
 		return FALSE;
 	}
@@ -5167,14 +5167,14 @@ function pfb_apply_alias_delta(
 
 	// Churn-ratio fallback: auto mode with large churn → replace.
 	if ($mode === 'auto' && $table_size > 0 && ($churn / $table_size) >= PFB_DELTA_CHURN_THRESHOLD) {
-		pfb_logger(" ADR-40 apply [ {$table} ]: replace\n", 1);
+		pfb_logger(" Updating [ {$table} ]: replace\n", 1);
 		pfb_pfctl_table_op($table, 'replace', "-f {$table_file_esc}", $pfctl_bin);
 		return FALSE;
 	}
 
 	// issue #722: log the delta decision (incl. the zero-churn idempotent no-op below) so the
 	// delta path is just as observable on a live box as the replace path logged above.
-	pfb_logger(" ADR-40 apply [ {$table} ]: delta +" . count($add_set) . '/-' . count($del_set) . "\n", 1);
+	pfb_logger(" Updating [ {$table} ]: delta +" . count($add_set) . '/-' . count($del_set) . "\n", 1);
 
 	// Idempotence: empty delta → zero pfctl calls.
 	if (empty($add_set) && empty($del_set)) {
@@ -6418,6 +6418,19 @@ function pfb_dnsbl_unbracket_ip6(string $line): string {
 		}
 	}
 	return $line;
+}
+
+
+// A blank line, or one led by a well-known full-line comment marker: '#' (hosts-style),
+// '!' (ABP/uBlock), '//' (C-style) -- the three conventions feeds in this ecosystem mix
+// together regardless of the list's own declared format. Callers whose '#' handling
+// carries side effects (hpHosts/Spamhaus/CSV-header sniffing in the DNSBL hosts-format
+// branch) check '#' themselves first and do not route it through here.
+function pfb_is_blank_or_comment_line(string $line): bool {
+	return empty($line) ||
+		str_starts_with($line, '#') ||
+		str_starts_with($line, '!') ||
+		str_starts_with($line, '//');
 }
 
 
@@ -16166,7 +16179,9 @@ function sync_package_pfblockerng($cron='') {
 													$line = str_replace('%20', '', $line);
 												}
 
-												// Remove comment lines and special format considerations
+												// Remove comment lines and special format considerations. Checked
+												// BEFORE the generic '!'/'//' skip below since these side effects
+												// (hpHosts end marker, Spamhaus format, h3x CSV header) must run.
 												if (str_starts_with($line, '#')) {
 													// Exit (hpHosts) when end of domain names found.
 													if (strpos($line, 'Append critical updates below') !== FALSE) {
@@ -16186,8 +16201,11 @@ function sync_package_pfblockerng($cron='') {
 													continue;
 												}
 
-												// Remove slash comment lines
-												if (str_starts_with($line, '//')) {
+												// '!' (ABP/uBlock, e.g. DandelionSprouts' mid-body '!#if'/'!#endif' --
+												// the header-scan above only skips these before $validate_header flips
+												// TRUE) and '//' (C-style) comment lines. Neither carries side effects,
+												// unlike '#' above -- safe to merge into one plain skip.
+												if (str_starts_with($line, '!') || str_starts_with($line, '//')) {
 													continue;
 												}
 
@@ -16502,6 +16520,13 @@ function sync_package_pfblockerng($cron='') {
 									@fclose($fhandle);
 								}
 
+								// Close the "Reload . completed ." progress line with its trailing dot
+								// BEFORE the strict-parsing WARNING below, else the warning's own
+								// leading/trailing newlines strand this dot on its own line.
+								if (!empty($domain_data)) {
+									pfb_logger(".\n", 1);
+								}
+
 								// ADR-22: one WARNING per feed summarising strict-mode skips (silent
 								// when none -- lenient never increments the counter).
 								pfb_dnsbl_scheme_skip_warn($pfb_scheme_skipped, $header);
@@ -16541,8 +16566,6 @@ function sync_package_pfblockerng($cron='') {
 									$conf .= "pidfile: \"/var/run/unbound.pid\"\n";
 									$conf .= "server:include: {$pfbfolder}/{$header}.bk";
 									@file_put_contents("{$pfb['dnsbldir']}/check.conf", $conf, LOCK_EX);
-
-									pfb_logger(".\n", 1);
 
 									// ADR-06: The build-time De-Duplication / user-whitelist /
 									// TOP1M removal passes (dnsbl_scrub) are DROPPED. The Python
@@ -17814,8 +17837,10 @@ function sync_package_pfblockerng($cron='') {
 									// Remove any leading/trailing whitespaces
 									$line = trim($line);
 
-									// Remove commentlines and blank lines
-									if (str_starts_with($line, '#') || empty($line)) {
+									// Remove commentlines and blank lines (mirrors the DNSBL hosts-
+									// format skip -- feeds mix '#'/'!'/'//' comment conventions
+									// regardless of the list's own declared format).
+									if (pfb_is_blank_or_comment_line($line)) {
 										continue;
 									}
 
@@ -18006,14 +18031,34 @@ function sync_package_pfblockerng($cron='') {
 
 									// Check for parse failures
 									if (!empty($line) && !preg_match('/[a-zA-Z,;|\"\'?]/', $line)) {
-										$parse_fail++;
-										$log = "[!] Parse Errors [ {$parse_fail} ]\n";
-										pfb_logger("{$log}", 2);
+
+										// A syntactically valid address of the list's OTHER family (a
+										// hex-letter-free IPv6 line in a '_v4' list, or an IPv4 line in
+										// a '_v6' list) is not a parse failure -- mixed-family feeds are
+										// common, and the family this list doesn't collect is silently
+										// skipped either way (same as any hex-lettered opposite-family
+										// address already is, uncounted). Only flag genuine garbage.
+										$other_family_addr =
+											($list['vtype'] == '_v4' && str_contains($line, ':') && validate_ipv6($line)) ||
+											($list['vtype'] == '_v6' && !str_contains($line, ':') && validate_ipv4($line));
+
+										if (!$other_family_addr) {
+											$parse_fail++;
+										}
 									}
 								}
 							}
 							if ($fhandle) {
 								@fclose($fhandle);
+							}
+
+							// One summary line per feed with the final count (mirrors the DNSBL
+							// strict-scheme WARNING) -- was previously one spammed line PER failed
+							// line, e.g. "[!] Parse Errors [ 1 ]" through "[ 967 ]" for a single feed.
+							// Names the feed: this is logtype 2 (also written to the error log,
+							// which has no surrounding "[ header ] Reload..." context of its own).
+							if ($parse_fail > 0) {
+								pfb_logger("[!] Parse Errors [ {$header} ]: {$parse_fail}\n", 2);
 							}
 							pfb_logger("\n", 1);
 
@@ -18722,8 +18767,6 @@ function sync_package_pfblockerng($cron='') {
 				$pfb_delta_batch = pfb_alias_delta_batch_clamp((string) PfbConfig::read('pfb_alias_delta_batch'));
 
 				foreach ($final_alias as $final) {
-					$log = " Updating: {$final}\n";	// trailing \n only — a leading \n put a blank line before each entry
-					pfb_logger("{$log}", 1);
 					if (file_exists("{$pfb['aliasdir']}/{$final}.txt")) {
 						// ADR-40: compute delta from the stashed previous canonical set.
 						// Two cases always get force_rpl = TRUE here:
@@ -18751,7 +18794,7 @@ function sync_package_pfblockerng($cron='') {
 						);
 						$log = '';
 					} else {
-						$log = "Aliastable file not found\n";
+						$log = " Updating [ {$final} ]: Aliastable file not found\n";
 					}
 					pfb_logger("{$log}", 1);
 				}
