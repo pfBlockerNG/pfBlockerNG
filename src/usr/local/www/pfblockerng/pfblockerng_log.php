@@ -257,7 +257,10 @@ if (isset($_REQUEST) && isset($_REQUEST['ajax'])) {
 					continue;
 				}
 
-				$data .= htmlspecialchars($line, ENT_NOQUOTES);
+				// Raw: this only ever feeds the #fileContent <textarea> via JS .val()
+				// (never HTML-parsed). A future .html()/innerHTML consumer must escape
+				// at that point instead.
+				$data .= $line;
 				$linecnt++;
 			}
 
