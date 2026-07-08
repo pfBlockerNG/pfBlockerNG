@@ -53,6 +53,9 @@ jobs:
       WF_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.workflow_name || github.event.workflow_run.name }}
       RUN_URL: ${{ github.event_name == 'workflow_dispatch' && format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) || github.event.workflow_run.html_url }}
       HEAD_SHA: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
+      # Nightlies run on the default branch; read it from the payload rather than
+      # hardcoding it (PR #958 review) — the title doubles as the dedup key.
+      BRANCH: ${{ github.event_name == 'workflow_dispatch' && github.ref_name || github.event.workflow_run.head_branch }}
       DRILL: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
     steps:
       - name: Ensure the tracking label exists
@@ -64,8 +67,11 @@ jobs:
 
       - name: Open or update the tracking issue
         run: |
-          set -eu
-          TITLE="[nightly-red] ${WF_NAME} failing on devel"
+          # pipefail: without it a failed `gh issue list` is masked by the jq/sort
+          # pipeline below and the dedup opens duplicates (PR #958 review, the
+          # PR #933 default-shell class).
+          set -euo pipefail
+          TITLE="[nightly-red] ${WF_NAME} failing on ${BRANCH}"
 
           BODY_FILE=$(mktemp)
           {
@@ -82,13 +88,22 @@ jobs:
           } > "$BODY_FILE"
 
           # Dedup by label + exact title (top1m-healthcheck pattern, incl. the
-          # >30-item page-cap lift).
-          EXISTING_NUM=$(gh issue list --repo "$REPO" --state open \
-            --label "nightly-red" --limit 500 --json number,title \
-            | jq -r --arg t "$TITLE" '.[] | select(.title == $t) | .number' \
-            | sort -n | head -1)
+          # >30-item page-cap lift) — but across ALL states: a recurrence after a
+          # fix REOPENS the closed tracker instead of filing a duplicate (PR #958
+          # review). Prefer an open match, then the lowest issue number.
+          MATCH=$(gh issue list --repo "$REPO" --state all \
+            --label "nightly-red" --limit 500 --json number,title,state \
+            | jq -r --arg t "$TITLE" \
+                '[.[] | select(.title == $t)] | sort_by(.state != "OPEN", .number)
+                 | .[0] | if . then "\(.number) \(.state)" else empty end')
 
-          if [ -n "$EXISTING_NUM" ]; then
+          if [ -n "$MATCH" ]; then
+            EXISTING_NUM=${MATCH% *}
+            EXISTING_STATE=${MATCH#* }
+            if [ "$EXISTING_STATE" = "CLOSED" ]; then
+              echo "[reopen] Reopening tracking issue #${EXISTING_NUM}"
+              gh issue reopen "$EXISTING_NUM" --repo "$REPO"
+            fi
             echo "[update] Updating tracking issue #${EXISTING_NUM}"
             gh issue edit "$EXISTING_NUM" --repo "$REPO" --body-file "$BODY_FILE"
           else
