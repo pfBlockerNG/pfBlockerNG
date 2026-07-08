@@ -6,16 +6,20 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * pfb_is_blank_or_comment_line() — the shared blank/comment-prefix predicate used by
- * the generic IP-list parser wholesale, and by the DNSBL hosts-format branch for its
- * side-effect-free '!'/'//' prefixes (its '#' handling carries side effects -- hpHosts
- * end marker, Spamhaus format detection, h3x CSV header sniff -- and is checked by the
- * caller itself, never routed through here).
+ * pfb_is_blank_or_comment_line() — the blank/comment-prefix predicate for the generic
+ * IP-list parser (its one production call site). The DNSBL hosts-format branch does
+ * NOT call this function: it hand-inlines the equivalent '!'/'//' skip instead, kept
+ * deliberately separate because its '#' handling carries side effects (hpHosts end
+ * marker, Spamhaus format detection, h3x CSV header sniff) that must run BEFORE the
+ * generic skip decision -- routing '#' through this predicate would skip those lines
+ * before the side effects fire. The two are conceptually the same rule, not shared code.
  *
- * Regression pin for the DandelionSprouts bug: a hosts-format feed embeds ABP-style
- * '!#if'/'!#endif' directives mid-body; before this predicate existed, only '#'/'//'
- * were recognised as comment prefixes in that branch, so a bang-comment line fell
- * through into "typical host feed" column-stripping and got logged as a parse error.
+ * Regression pin for the DandelionSprouts bug (the DNSBL branch's own inlined check,
+ * exercised indirectly here since it mirrors this predicate's '!'/'//' logic exactly):
+ * a hosts-format feed embeds ABP-style '!#if'/'!#endif' directives mid-body; before
+ * that inlined check existed, only '#'/'//' were recognised as comment prefixes there,
+ * so a bang-comment line fell through into "typical host feed" column-stripping and
+ * got logged as a parse error.
  *
  * Also pins that a scheme-less bracketed-IPv6 line ('://[...]', no leading '#'/'!'/'//')
  * is NOT swallowed here -- it must keep flowing to the strict-scheme validator, which is
@@ -33,7 +37,7 @@ final class BlankOrCommentLineTest extends TestCase
 	public function testUntrimmedWhitespaceOnlyStringIsNotBlank(): void
 	{
 		// empty('   ') is FALSE in PHP -- this predicate relies on the caller having
-		// already trim()'d $line (both call sites do), matching every other
+		// already trim()'d $line (its one call site does), matching every other
 		// empty($line) check in this file rather than reimplementing trim-and-check.
 		// Pins the contract explicitly instead of leaving it an unstated assumption.
 		$this->assertFalse(pfb_is_blank_or_comment_line('   '));
