@@ -192,10 +192,8 @@ final class PfbDnsblStripSchemeTest extends TestCase
 		$this->assertSame('evil.com', pfb_dnsbl_strip_scheme('evil.com', true));
 	}
 
-	// --- Empty scheme + bracketed IPv6: a known DandelionSprouts-style "block
-	//     regardless of scheme" convention. Confirmed live: 4 identical-shaped lines
-	//     in a real feed, each pairing with an adjacent hosts-format block entry for
-	//     the same campaign. ---
+	// --- Empty scheme + bracketed IPv6: DandelionSprouts' "block regardless of
+	//     scheme" shape (confirmed live: 4 identical-shaped lines in a real feed). ---
 
 	public function testEmptySchemeBracketedIpv6PassesThroughWhenStrict(): void
 	{
