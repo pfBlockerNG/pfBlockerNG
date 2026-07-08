@@ -169,18 +169,31 @@ jobs:
 
       - name: Open or update the tracking issue
         run: |
-          set -eu
+          # pipefail: without it a failed `gh issue list` is masked by the
+          # jq/sort pipeline below and the dedup opens duplicates (issue #960,
+          # the PR #933 default-shell class).
+          set -euo pipefail
           TITLE="[top1m-healthcheck] provider URL unhealthy"
 
           # Scope to the tracking label and lift the default 30-item cap (see
-          # version-tracker.yml's dedup note) so an older open issue past the
-          # first page is still found and updated in place, not re-created.
-          EXISTING_NUM=$(gh issue list --repo "$REPO" --state open \
-            --label "top1m-provider" --limit 500 --json number,title \
-            | jq -r --arg t "$TITLE" '.[] | select(.title == $t) | .number' \
-            | sort -n | head -1)
+          # version-tracker.yml's dedup note) so an older issue past the
+          # first page is still found and updated in place, not re-created --
+          # but across ALL states: a recurrence after a closed tracker
+          # REOPENS it instead of filing a duplicate (issue #960). Prefer an
+          # open match, then the lowest issue number.
+          MATCH=$(gh issue list --repo "$REPO" --state all \
+            --label "top1m-provider" --limit 500 --json number,title,state \
+            | jq -r --arg t "$TITLE" \
+                '[.[] | select(.title == $t)] | sort_by(.state != "OPEN", .number)
+                 | .[0] | if . then "\(.number) \(.state)" else empty end')
 
-          if [ -n "$EXISTING_NUM" ]; then
+          if [ -n "$MATCH" ]; then
+            EXISTING_NUM=${MATCH% *}
+            EXISTING_STATE=${MATCH#* }
+            if [ "$EXISTING_STATE" = "CLOSED" ]; then
+              echo "[reopen] Reopening tracking issue #${EXISTING_NUM}"
+              gh issue reopen "$EXISTING_NUM" --repo "$REPO"
+            fi
             echo "[update] Updating tracking issue #${EXISTING_NUM}"
             gh issue edit "$EXISTING_NUM" --repo "$REPO" --body-file "${{ steps.report.outputs.body_file }}"
           else
