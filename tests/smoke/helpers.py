@@ -2736,7 +2736,10 @@ def reset_pfb_baseline(vm: SmokeVM, *, timeout: float = 300.0) -> None:
                 raise RuntimeError(
                     f"reset_pfb_baseline {verb} failed: rc={cleared.returncode} stderr={cleared.stderr!r}"
                 )
-    apply_filter_sync(vm)
+    # Propagate this reset's budget: apply_filter_sync's own 60s default proved
+    # too short for a post-bench filter reload (#584 dispatch runs 28903200587 +
+    # 28906541336 both timed out the module-baseline teardown at exactly 60s).
+    apply_filter_sync(vm, timeout=timeout)
 
 
 # --------------------------------------------------------------------------- #

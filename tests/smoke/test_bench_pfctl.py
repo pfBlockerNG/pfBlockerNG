@@ -2915,6 +2915,11 @@ def _dualpath_env_float(name: str, default: float) -> float:
 
 
 @pytest.mark.pfctl_bench
+# ~14 probe windows (2 phases x (quiescent + 2 ops x 3 reps)) x ~30s each +
+# gen/replace/setup overhead. The pyproject default is 30s — local bench runs
+# always overrode addopts, so CI dispatch (which doesn't) needs this mark
+# (proven by #584 dispatch run 28906541336: killed at 30s mid-first-probe).
+@pytest.mark.timeout(900)
 def test_pfctl_dualpath_server(
     smoke_vm: SmokeVM,
     lan_interface: SmokeVM,

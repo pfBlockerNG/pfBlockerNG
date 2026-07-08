@@ -641,3 +641,21 @@ def test_slice_to_window_excludes_samples_outside_the_window() -> None:
 def test_slice_to_window_empty_input_returns_empty_list() -> None:
     """An empty sample list slices to an empty window — never an exception."""
     assert _slice_to_window([], 0.0, 100.0) == [], "expected [] for an empty input sample list"
+
+
+def test_dualpath_server_carries_a_timeout_mark_above_the_global_cap() -> None:
+    """The dual-path bench test MUST carry a @pytest.mark.timeout override.
+
+    The pyproject addopts set a 30s global pytest-timeout budget. Local bench
+    runs always pass --override-ini="addopts=" (which drops it), but a CI
+    dispatch does not — issue #584 dispatch run 28906541336 was killed at 30s
+    mid-first-probe because the mark was missing. This pins the mark so it
+    cannot silently regress.
+    """
+    from tests.smoke.test_bench_pfctl import test_pfctl_dualpath_server
+
+    marks = getattr(test_pfctl_dualpath_server, "pytestmark", [])
+    timeouts = [m for m in marks if m.name == "timeout"]
+    assert timeouts, f"expected a @pytest.mark.timeout on test_pfctl_dualpath_server, marks={[m.name for m in marks]}"
+    budget = timeouts[0].args[0]
+    assert budget >= 600, f"expected a timeout budget >= 600s (full dual-path matrix), got {budget}"
