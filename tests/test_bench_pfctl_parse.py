@@ -659,3 +659,53 @@ def test_dualpath_server_carries_a_timeout_mark_above_the_global_cap() -> None:
     assert timeouts, f"expected a @pytest.mark.timeout on test_pfctl_dualpath_server, marks={[m.name for m in marks]}"
     budget = timeouts[0].args[0]
     assert budget >= 600, f"expected a timeout budget >= 600s (full dual-path matrix), got {budget}"
+
+
+def test_dualpath_probe_drain_is_bounded_when_every_connection_hangs() -> None:
+    """The probe's wall clock stays ~duration+timeout+2s even when NOTHING answers.
+
+    Scenario (issue #584 dispatch run 28908183959): every connection through
+    pfSense hung (no RST, no response). Pre-fix, tasks queued behind the
+    semaphore drained at concurrency/timeout_s per second — minutes for the
+    few thousand spawned tasks, far past the caller's ssh budget, so the probe
+    returned NOTHING (subprocess.TimeoutExpired) instead of timeout samples.
+
+    Given a local listener that accepts nothing (connects land in the backlog
+      or stall; the request/response read then times out per sample)
+    When the probe runs with duration=1s timeout=1s concurrency=8
+    Then it exits within the drain bound (~duration+timeout+2s, asserted with
+      startup slack) and reports an EOF line — data, not a hang.
+    """
+    import socket
+    import subprocess
+    import sys
+    import tempfile
+    import time
+
+    from tests.smoke.test_bench_pfctl import _DUALPATH_PROBE_SCRIPT
+
+    srv = socket.socket()
+    try:
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)  # accept() never called: handshakes stall or land in the tiny backlog
+        port = srv.getsockname()[1]
+        script = _DUALPATH_PROBE_SCRIPT.replace("PORT = 8080", f"PORT = {port}")
+        assert f"PORT = {port}" in script, "probe source no longer defines 'PORT = 8080' — update this test"
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as fh:
+            fh.write(script)
+            probe_path = fh.name
+        t0 = time.monotonic()
+        proc = subprocess.run(
+            [sys.executable, probe_path, "x=127.0.0.1", "1.0", "1.0", "8"],
+            capture_output=True,
+            text=True,
+            timeout=20.0,  # red direction: the unbounded drain blows straight through this
+        )
+        wall = time.monotonic() - t0
+    finally:
+        srv.close()
+
+    assert wall < 10.0, f"expected the probe to finish within the drain bound (<10s incl. slack), took {wall:.1f}s"
+    assert "EOF n=" in proc.stdout, f"expected an EOF summary line even under total hang, stdout={proc.stdout!r}"
+    outcomes = {line.split()[4] for line in proc.stdout.splitlines() if line.startswith("S ")}
+    assert "ok" not in outcomes, f"nothing answers, so no sample may be 'ok'; outcomes seen: {outcomes}"

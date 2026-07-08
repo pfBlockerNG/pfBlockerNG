@@ -2639,8 +2639,24 @@ async def run(targets: list[tuple[str, str]], duration_s: float, timeout_s: floa
             done = [t for t in tasks if t.done()]
             for t in done:
                 tasks.remove(t)
+    # Bounded drain: when every connection hangs (e.g. a broken forwarding
+    # path), the queued tasks would otherwise drain at concurrency/timeout_s
+    # per second -- minutes for a few thousand spawned tasks, far past the
+    # caller's ssh budget (issue #584 dispatch run 28908183959). One global
+    # drain deadline caps the probe's wall clock at ~duration+timeout+2s;
+    # tasks still pending then (queued behind the semaphore, never sampled)
+    # are cancelled and reported on stderr, never as samples.
+    cancelled = 0
     if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
+        drain_s = timeout_s + 2.0
+        done, pending = await asyncio.wait(tasks, timeout=drain_s)
+        cancelled = len(pending)
+        for t in pending:
+            t.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+    if cancelled:
+        print(f"drain-cancelled {cancelled} queued probes past the drain deadline", file=sys.stderr, flush=True)
     print(f"EOF n={count}", flush=True)
 
 
@@ -2828,6 +2844,28 @@ def _dualpath_stats(samples: list[DualPathSample]) -> DualPathStats:
 _DUALPATH_PROBE_UPLOADED = False
 
 
+def _print_vm_log_tail(vm: SmokeVM, *, lines: int = 40) -> None:
+    """Print the runner-side qemu log tail (+ any guestfwd/slirp lines).
+
+    qemu logs guestfwd failures (bad cmd path, fork/exec errors) to its
+    stderr, which the harness captures at ``vm.log_path`` on the RUNNER —
+    outside the workspace, so the diagnostics artifact glob never uploads it.
+    The test process runs on the runner and can read it directly.
+    """
+    path = Path(vm.log_path)
+    if not path.exists():
+        print(f"  vm log not found at {path}")
+        return
+    text = path.read_text(errors="replace").splitlines()
+    hits = [ln for ln in text if "guestfwd" in ln or "slirp" in ln]
+    print(f"  ----- vm.log guestfwd/slirp lines ({len(hits)}) -----")
+    for ln in hits[-lines:]:
+        print(f"  {ln}")
+    print(f"  ----- vm.log tail ({min(lines, len(text))} of {len(text)} lines) -----")
+    for ln in text[-lines:]:
+        print(f"  {ln}")
+
+
 def _upload_dualpath_probe(client_vm: SmokeVM) -> None:
     global _DUALPATH_PROBE_UPLOADED  # noqa: PLW0603  # ponytail: module-level flag; reset per session
     if _DUALPATH_PROBE_UPLOADED:
@@ -3010,6 +3048,26 @@ def test_pfctl_dualpath_server(
     print(f"  setup_rules server: {kv}")
     if "error" in kv:
         pytest.skip(f"Cannot set up server rules: {kv.get('error')} — STOP (dual-path bench not working)")
+
+    # Guestfwd preflight — the discriminating probe for a hanging allowed path
+    # (dispatch run 28908183959: every civm connection hung, no RST). pfSense
+    # sits DIRECTLY on the slirp WAN net, so a request from the guest itself
+    # reaches guestfwd with no pf forwarding/NAT in the path: a response here
+    # proves the slirp `guestfwd -cmd:` servers work (leaving pf/NAT as the
+    # suspect); no response means guestfwd itself is broken -- fail fast with
+    # the runner-side qemu log instead of burning the whole probe matrix.
+    for label, ip in _DUALPATH_TARGETS.items():
+        res = smoke_vm.ssh(f"printf 'PING preflight\\n' | nc -w 5 {ip} 8080", timeout=15.0)
+        got = res.stdout.strip()
+        print(f"  guestfwd preflight [{label} {ip}:8080]: rc={res.returncode} stdout={got!r}")
+        if "PFB_BENCH_OK PING preflight" not in got:
+            _print_vm_log_tail(smoke_vm)
+            pytest.fail(
+                f"guestfwd preflight failed for {label}={ip}:8080 — expected a "
+                f"'PFB_BENCH_OK PING preflight' echo from the slirp guestfwd server, got "
+                f"stdout={got!r} rc={res.returncode}. qemu's guestfwd -cmd: forwarding is "
+                f"not serving (vm.log tail above)."
+            )
 
     # ------------------------------------------------------------------ #
     # Collect per-(phase, op) cell samples + per-phase quiescent baselines.
