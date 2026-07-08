@@ -259,11 +259,14 @@ def test_714_b2_parse_fail_counts_every_bad_line(deployed_vm: SmokeVM) -> None:
     RED before / GREEN after (no external credentials needed): pre-fix, the "Check for
     parse failures" block sat OUTSIDE the ``while (fgets...)`` loop, so it ran exactly
     ONCE using whatever ``$line`` the loop last left behind — the LAST line read, our
-    single VALID trailing IP (non-empty, letter-free) — so the log would show
-    ``[!] Parse Errors [ 1 ]`` even though 3 lines actually failed to parse. Post-fix
-    the block is the last statement INSIDE the loop, evaluating every line that fell
-    through without a ``continue`` (every failed parse); the trailing valid IP
-    ``continue``s before reaching it — so the log shows ``[!] Parse Errors [ 3 ]``.
+    single VALID trailing IP (non-empty, letter-free) — so the log would show a count of
+    1 even though 3 lines actually failed to parse. Post-fix the block is the last
+    statement INSIDE the loop, evaluating every line that fell through without a
+    ``continue`` (every failed parse); the trailing valid IP ``continue``s before
+    reaching it — so the counter reaches 3. The counter is reported once per feed, after
+    the loop, as ``[!] Parse Errors [ <header> ]: <count>`` (naming the feed matters: this
+    line is logtype 2, also written to the error log, which has no surrounding
+    "[ header ] Reload..." context of its own).
 
     NOTE: this is the IP-side ``$parse_fail`` counter in the MAIN pfBlockerNG log —
     distinct from the DNSBL per-line parse-error CSV (``pfb_parsed_fail()`` →
@@ -274,9 +277,9 @@ def test_714_b2_parse_fail_counts_every_bad_line(deployed_vm: SmokeVM) -> None:
       fallback cannot silently ``continue`` past the check) followed by ONE valid
       RFC 5737 IP as the LAST line,
     When a Force IP reload parses the feed,
-    Then the pfBlockerNG log gains a ``[!] Parse Errors [ 3 ]`` line — the counter
-      reached the number of bad lines, not merely "1" (the pre-fix last-line-only
-      count).
+    Then the pfBlockerNG log gains a ``[!] Parse Errors [ smoke714b2 ]: 3`` line — the
+      counter reached the number of bad lines, not merely "1" (the pre-fix
+      last-line-only count).
     """
     # Each has only TWO dots, so it fails IPv4 parsing AND is skipped by the regex
     # fallback (which requires >=3 dots) — guaranteeing it falls through to the
@@ -286,7 +289,7 @@ def test_714_b2_parse_fail_counts_every_bad_line(deployed_vm: SmokeVM) -> None:
     good_line = "198.51.100.7"  # RFC 5737 TEST-NET-2 — the trailing VALID line (must not count)
     body = "\n".join([*bad_lines, good_line]) + "\n"
     feed_url = h.write_local_feed(deployed_vm, "smoke_714_b2_parsefail.txt", body)
-    marker = "[!] Parse Errors [ 3 ]"
+    marker = "[!] Parse Errors [ smoke714b2 ]: 3"
     spec = h.IpCase(aliasname="smoke714b2", feed_url=feed_url, header="smoke714b2", family="v4")
 
     try:
