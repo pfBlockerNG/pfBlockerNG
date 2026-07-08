@@ -64,6 +64,14 @@ def test_lowercase_phase_number_is_clean() -> None:
     assert _find("src/a.py", ["# TLS handshake phase 2 resumes here"]) == []
 
 
+def test_hyphenated_and_abbreviated_phase_idioms_are_flagged() -> None:
+    # The repo's other narration spellings: "Phase-3" and "ADR-NN PN".
+    assert len(_find("src/a.inc", ["// falls back to the Phase-3 hard rule"])) == 1
+    assert len(_find("src/a.py", ["# ADR-53 P6: token-shape guard"])) == 1
+    assert _find("src/a.py", ["# two-phase-commit protocol, phase-2 resumes"]) == []
+    assert _find("src/a.py", ["# the P6 bus register"]) == []
+
+
 def test_number_needs_trailing_boundary() -> None:
     # "Phase 9x"/"PR #9foo" are not phase/PR references; multi-digit ones are.
     assert _find("src/a.py", ["# gets a Phase 9x speedup"]) == []

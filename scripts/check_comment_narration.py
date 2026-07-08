@@ -35,7 +35,8 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"RESULTS/"), "delegation handoff artifact (RESULTS/...)"),
     # Capitalised only: ADR narration always writes "Phase N"; ordinary prose
     # about a protocol's "phase 2" stays legal.
-    (re.compile(r"\bPhase [0-9]+\b"), "ADR phase narration (Phase N)"),
+    (re.compile(r"\bPhase[ -][0-9]+\b"), "ADR phase narration (Phase N)"),
+    (re.compile(r"\bADR-[0-9]+ P[0-9]+\b"), "ADR phase narration (ADR-NN PN)"),
     (re.compile(r"review-fanout", re.IGNORECASE), "review archaeology (review-fanout)"),
     (re.compile(r"\bPR ?#[0-9]+\b"), "review archaeology (PR #N)"),
 )
