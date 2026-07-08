@@ -1,0 +1,50 @@
+ADR-60 Phase 8 — Gate record
+================================================================================
+Verdict: PASS
+
+Independent verifier (Sonnet 5, fresh context) ran the mandatory 6 checks
+against commit 9a410ec8 (this phase fixed the Log Settings page that Phase
+7's gate found was throwing InvalidArgumentException on every request):
+
+1. handoff-fields — PASS.
+2. gate-rerun — PASS. php -l, vendor/bin/phpunit (2372 tests, 18574
+   assertions — 1 new round-trip test), phpstan, phpcs, python3 -m pytest
+   (2436 passed), ui smoke collect-only (290 tests), ruff, mypy, 4 policy
+   checkers, WwwGroupAGatewayTest filter (12/12) — all clean, all matched.
+3. red-proof — PASS, independently re-executed (not trusted from the
+   handoff): reverted pfblockerng_general.php to the pre-Phase-8 tip
+   (b7305628) and ran a FRESH PHPUnit-bootstrap probe (not copy-pasted) —
+   confirmed both PfbConfig::read() calls throw InvalidArgumentException
+   against the reverted file, i.e. the page genuinely 500s pre-fix. Restored
+   -> all 10 log_max_days_<type> read cleanly ('0'), while the deregistered
+   keys still correctly throw when queried directly (deregistration intact,
+   the page just no longer touches them) — genuine green.
+4. diff-vs-plan — PASS, all 12 plan items ticked against the full diff
+   across all 3 files (pfblockerng_general.php, WwwGroupAGatewayTest.php,
+   test_render_smoke.py).
+5. test-honesty — PASS. The flipped ABSENT assertions are non-vacuous: the
+   revert dance proved the old field-name strings genuinely exist in the
+   pre-fix source inside live Form_Select/Form_Input calls, so the ABSENT
+   assertion would catch a real regression. The new PRESENT markers have a
+   genuine fail-before (0 occurrences)/pass-after (6 occurrences) pair.
+6. conventions — PASS. New test method matches 3 sibling naming patterns.
+   The column-width deviation (width(4)/width(4)) was checked against its
+   cited precedent (pfblockerng_dnsbl.php's VIP4/VIP6 pair) and confirmed
+   genuine, not fabricated.
+
+Skipped (correctly, pre-authorized by the brief): live execution of the
+ui_render marker against a real pfSense VM — no PFB_BOXES this session, same
+constraint as Phase 5, substituted with the source-level red/green proof
+above and explicitly deferred to Phase 9.
+
+No orchestrator polish needed this phase — clean gate, no nits.
+
+Coverage: the URGENT throw-site fix, the log_max_days_<type> wiring
+(read/validate/persist/render for all 10 types), the UI test flip, and the
+config-gateway round-trip test all confirmed independently.
+
+Commits this phase (in order):
+- 9a410ec8 — www: replace scheduled-reset controls with log_max_days_<type>
+  in Log Settings (ADR-60 P8)
+- fe07ac6d — docs: ADR-60 phase 8 handoff
+- (this gate-record commit)
