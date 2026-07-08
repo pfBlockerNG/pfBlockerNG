@@ -2703,6 +2703,171 @@ function pfblockerng_tick(): void
 }
 
 // ---------------------------------------------------------------------------
+// ADR-61 — Sync-status ledger: a general-purpose open-issues ledger recording
+// {facility, item, stage} -> {message, first_seen, last_seen} in
+// pfb_sync_status.json under a ledger dir, mirroring pfb_due_ledger_*'s pure,
+// clock-injectable, atomic-write idiom above. Unwired here — no production
+// caller yet. Tests: tests/php/PfbSyncStatusLedgerTest.php
+// ---------------------------------------------------------------------------
+
+/**
+ * pfb_sync_status_read_all — read the full ledger as a nested array.
+ *
+ * Absent file, unreadable file, or corrupt/non-object JSON all read as an
+ * empty ledger (fail-open for display), never throws.
+ *
+ * @param string $ledger_dir Directory that contains pfb_sync_status.json.
+ * @return array<string,array<string,array<string,array{message:string,first_seen:int,last_seen:int}>>>
+ */
+function pfb_sync_status_read_all(string $ledger_dir): array
+{
+	$path = $ledger_dir . '/pfb_sync_status.json';
+	if (!is_file($path)) {
+		return [];
+	}
+	$fp = @fopen($path, 'r');
+	if ($fp === FALSE) {
+		return [];
+	}
+	if (!flock($fp, LOCK_SH)) {
+		fclose($fp);
+		return [];
+	}
+	$raw = stream_get_contents($fp);
+	flock($fp, LOCK_UN);
+	fclose($fp);
+	if ($raw === FALSE || $raw === '') {
+		return [];
+	}
+	$data = json_decode($raw, TRUE);
+	return is_array($data) ? $data : [];	// corrupt/non-object -> empty, fail-open
+}
+
+/**
+ * pfb_sync_status_write_all — atomically persist the full ledger.
+ *
+ * Silent no-op on an unwritable directory (@-suppressed): the ledger is a
+ * display-only signal, never worth crashing the caller's pipeline over.
+ * Stages a .tmp file then renames it into place (atomic on a same-filesystem
+ * POSIX rename), matching pfb_due_ledger_write_entry()'s idiom.
+ *
+ * @param array  $data       Full ledger structure (see pfb_sync_status_read_all()).
+ * @param string $ledger_dir Directory that contains pfb_sync_status.json.
+ * @return void
+ */
+function pfb_sync_status_write_all(array $data, string $ledger_dir): void
+{
+	$path = $ledger_dir . '/pfb_sync_status.json';
+	$tmp  = $path . '.tmp';
+	if (@file_put_contents($tmp, json_encode($data, JSON_PRETTY_PRINT), LOCK_EX) === FALSE) {
+		return;	// unwritable dir -- fail safe, never throws to the caller
+	}
+	@rename($tmp, $path);
+}
+
+/**
+ * pfb_sync_status_open — open (or refresh) one {facility,item,stage} entry.
+ *
+ * Idempotent by key: opening an already-open key updates message/last_seen in
+ * place and preserves the original first_seen — it never duplicates the entry.
+ *
+ * @param string        $facility   'ip' | 'dnsbl'.
+ * @param string        $item       The alias/group/feed name the entry is about.
+ * @param string        $stage      'download' | 'parse' | 'apply' | 'dedup'.
+ * @param string        $message    Human-readable failure description.
+ * @param string        $ledger_dir Directory that contains pfb_sync_status.json.
+ * @param callable|null $clock_fn   Returns the current epoch timestamp; defaults to time().
+ * @return void
+ */
+function pfb_sync_status_open(
+	string    $facility,
+	string    $item,
+	string    $stage,
+	string    $message,
+	string    $ledger_dir,
+	?callable $clock_fn = null
+): void {
+	$now        = ($clock_fn !== NULL) ? $clock_fn() : time();
+	$data       = pfb_sync_status_read_all($ledger_dir);
+	$existing   = $data[$facility][$item][$stage] ?? NULL;
+	$first_seen = (is_array($existing) && isset($existing['first_seen'])) ? $existing['first_seen'] : $now;
+
+	$data[$facility][$item][$stage] = [
+		'message'    => $message,
+		'first_seen' => $first_seen,
+		'last_seen'  => $now,
+	];
+	pfb_sync_status_write_all($data, $ledger_dir);
+}
+
+/**
+ * pfb_sync_status_close — clear one {facility,item,stage} entry, if open.
+ *
+ * Closing an absent key is a safe no-op — no write, no exception.
+ *
+ * @param string $facility   'ip' | 'dnsbl'.
+ * @param string $item       The alias/group/feed name the entry is about.
+ * @param string $stage      'download' | 'parse' | 'apply' | 'dedup'.
+ * @param string $ledger_dir Directory that contains pfb_sync_status.json.
+ * @return void
+ */
+function pfb_sync_status_close(string $facility, string $item, string $stage, string $ledger_dir): void
+{
+	$data = pfb_sync_status_read_all($ledger_dir);
+	if (!isset($data[$facility][$item][$stage])) {
+		return;	// absent key -- safe no-op
+	}
+	unset($data[$facility][$item][$stage]);
+	if (empty($data[$facility][$item])) {
+		unset($data[$facility][$item]);
+	}
+	if (empty($data[$facility])) {
+		unset($data[$facility]);
+	}
+	pfb_sync_status_write_all($data, $ledger_dir);
+}
+
+/**
+ * pfb_sync_status_list_open — enumerate open entries, optionally filtered by facility.
+ *
+ * @param string      $ledger_dir Directory that contains pfb_sync_status.json.
+ * @param string|null $facility   'ip' | 'dnsbl' | NULL for every facility.
+ * @return list<array{facility:string,item:string,stage:string,message:string,first_seen:int,last_seen:int}>
+ */
+function pfb_sync_status_list_open(string $ledger_dir, ?string $facility = null): array
+{
+	$data = pfb_sync_status_read_all($ledger_dir);
+	$out  = [];
+	foreach ($data as $fac => $items) {
+		if ($facility !== NULL && $fac !== $facility) {
+			continue;
+		}
+		if (!is_array($items)) {
+			continue;	// corrupt shape -- skip, never throw
+		}
+		foreach ($items as $item => $stages) {
+			if (!is_array($stages)) {
+				continue;
+			}
+			foreach ($stages as $stage => $entry) {
+				if (!is_array($entry)) {
+					continue;
+				}
+				$out[] = [
+					'facility'   => (string) $fac,
+					'item'       => (string) $item,
+					'stage'      => (string) $stage,
+					'message'    => (string) ($entry['message'] ?? ''),
+					'first_seen' => (int) ($entry['first_seen'] ?? 0),
+					'last_seen'  => (int) ($entry['last_seen'] ?? 0),
+				];
+			}
+		}
+	}
+	return $out;
+}
+
+// ---------------------------------------------------------------------------
 // ADR-53 — pure suppression-line validator (v4 mask lift /8-/32)
 // ---------------------------------------------------------------------------
 
