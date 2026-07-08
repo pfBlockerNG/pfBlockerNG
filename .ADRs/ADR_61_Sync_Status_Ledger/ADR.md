@@ -4,11 +4,12 @@
   PHPUnit + pytest green, PHPCS/PHPStan clean. Phases 3-6 carried DONE-WITH-DEVIATION
   verdicts — each a disclosed, reasoned engineering choice, not a defect (Phase 6's first
   attempt separately failed its own gate on 2 real defects, both fixed in a corrective
-  round; see `RESULTS/06_Results.txt`). Two known, tracked gaps remain open (not blockers
-  to this status, but not silently accepted as done either): the DNSBL feed-download stage
-  was never wired to the ledger (only IP was), and the DNSBL tick-retry is a sentinel-reflip
-  only, not the full restart path, so a genuinely stuck DNSBL condition does not always
-  self-heal via tick alone. See `docs/misc/architecture-notes.md` "Sync-status ledger
+  round; see `RESULTS/06_Results.txt`). One known, tracked gap remains open (not a blocker
+  to this status, but not silently accepted as done either): the DNSBL tick-retry is a
+  sentinel-reflip only, not the full restart path, so a genuinely stuck DNSBL condition
+  does not always self-heal via tick alone (issue #998's DNSBL feed-download gap closed —
+  `pfb_dnsbl_download_ledger_update()` now mirrors the IP call site). See
+  `docs/misc/architecture-notes.md` "Sync-status ledger
   (ADR-61)" for the as-built system and §7 below for the live-VM acceptance checklist that
   flips this to **Accepted**.
 - **Date:** 2026-07-08
