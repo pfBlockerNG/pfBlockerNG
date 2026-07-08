@@ -23,25 +23,11 @@
 // This file is used to 'include functions' not yet merged into pfSense
 
 // ---------------------------------------------------------------------------
-// ADR-28 — config field enums + the PfbStoredEnum adapter contract.
-//
-// Backed string enums for recurring config flags. Each enum OWNS its stored-value
-// semantics (the PfbStoredEnum interface + PfbStoredEnumAdapter trait) so the
-// PfbConfig gateway and the pfb_cfg_* helpers stay trivial:
-//   - read : EnumClass::fromStored($raw)   — the NULL/absent default is the registry's
-//             $entry['default'] (applied by PfbConfig::read() BEFORE the adapter);
-//             '', legacy aliases, and junk are resolved by the enum itself.
-//   - write: $enum->toStored()             — the canonical persisted token.
-//
-// Policy (ADR-28 §2.2, reframed): the goal is PRESERVE BEHAVIOUR ON UPGRADE, not
-// byte-identical storage. A write may persist a normalised canonical token when it
-// is behaviour-equivalent to the legacy one (e.g. pfb_idn All persists the legacy
-// 'on' token, reproducing the prior block-all-IDN behaviour). Downgrade is tolerated:
-// older releases string-compared these values, so an unknown token falls through to
-// the safe default there.
-//
+// ADR-28 — config field enums (PfbStoredEnum contract): read = EnumClass::fromStored($raw)
+// (registry default applied first; '' / legacy / junk resolved by the enum), write =
+// $enum->toStored(). Goal: preserve upgrade behaviour, not byte-identical storage — a
+// downgrade-unknown token falls through to the safe default.
 // Tests: tests/php/CfgAdaptersTest.php, tests/php/RollbackContractTest.php.
-// Naming follows pfb_* conventions (CLAUDE.md "Naming").
 // ---------------------------------------------------------------------------
 
 // PfbStoredEnum — the contract every config-backed enum implements. Keeps the
@@ -112,16 +98,10 @@ enum PfbToggle: string implements PfbStoredEnum
 	}
 }
 
-// PfbLenient — a tri-state {on, off, legacy ''} flag (the explicit 'off' token
-// survives the live config round-trip where a toggle's '' off-value would not).
-//
-// Used by: pfb_dnsbl_lenient (pfb_dnsblconfig['pfb_dnsbl_lenient'], ADR-22 scheme-parsing
-//   leniency) and pfb_keep (#484 — so a default-on keep flag can store 'off' explicitly).
-//   Stored vocabulary: 'on' | 'off' | '' (legacy: a missing pre-ADR-22 / pre-#484 install).
-//   pfb_global() reads pfb_dnsbl_lenient as a PfbLenient enum via PfbConfig::read()
-//   (the registry wires pfb_cfg_lenient_read/write); consumers compare === PfbLenient::On.
-//   Note: '' (missing key) maps to Off ('off'), NOT to the PfbToggle '' value.
-//   This field's "off" stored value is 'off', distinct from PfbToggle::Off = ''.
+// PfbLenient — tri-state {on, off, legacy ''} flag; explicit 'off' survives the config
+// round-trip where a toggle's '' off-value would not. Used by pfb_dnsbl_lenient (ADR-22
+// scheme-parsing leniency) and pfb_keep (#484, default-on keep storing 'off' explicitly).
+// Stored vocabulary: 'on' | 'off' | '' (legacy missing key -> Off, NOT PfbToggle's '').
 enum PfbLenient: string implements PfbStoredEnum
 {
 	use PfbStoredEnumAdapter;
@@ -136,16 +116,11 @@ enum PfbLenient: string implements PfbStoredEnum
 	}
 }
 
-// PfbIdnMode — ADR-08 IDN-feature mode selector. Adopted into the PfbConfig gateway.
-//
-// Used by: pfb_idn (config key) / $pfb['dnsbl_idn'] (runtime).
-//   Canonical tokens (config.xml AND py_unbound.ini AND the Python IdnMode enum, all the
-//   same vocabulary): 'on' (= All), 'confusable', 'off'. '' / unknown -> Off.
-//   Reusing the original 'on' token for All is the key move — pre-4.0.0 installs round-trip
-//   with no migration and an older release reading 'on' still blocks all IDN (behaviour
-//   preserved on downgrade). 'confusable' is the only genuinely new token; an old release
-//   treats it as off (acceptable). PfbConfig::read('pfb_idn') returns the enum;
-//   PfbConfig::write() persists toStored(); the ini build emits the same toStored() token.
+// PfbIdnMode — ADR-08 IDN-feature mode selector, adopted into the PfbConfig gateway.
+// Used by pfb_idn / $pfb['dnsbl_idn']. Canonical tokens (config.xml, py_unbound.ini, and
+// the Python IdnMode enum share one vocabulary): 'on' (=All), 'confusable', 'off'; '' /
+// unknown -> Off. Reusing 'on' for All keeps pre-4.0.0 installs migration-free and
+// downgrade-safe (an older release reading 'on' still blocks all IDN).
 enum PfbIdnMode: string implements PfbStoredEnum
 {
 	use PfbStoredEnumAdapter;
@@ -169,23 +144,12 @@ enum PfbIdnMode: string implements PfbStoredEnum
 }
 
 // PfbAliasDeltaMode — ADR-40 alias-table apply mechanism selector.
-//
-// Three modes control how pfBlockerNG applies alias-table changes to the pf kernel:
-//   Auto    ('auto')    — default; delta (-T add/-T delete) for small churn (< ~5%),
-//                         full -T replace for initial load / boot / large churn. Safe
-//                         default for all deployments.
-//   Delta   ('delta')   — ALWAYS apply via forward delta (-T add/-T delete); NO
-//                         large-churn replace fallback. Power-user/controlled-incremental
-//                         override — can be slow on a full-table rebuild. Use 'auto' for
-//                         the safe default.
+//   Auto    ('auto')    — default; delta for small churn (< ~5%), full replace for
+//                         initial load / boot / large churn.
+//   Delta   ('delta')   — ALWAYS forward delta, no large-churn replace fallback.
 //   Replace ('replace') — always full -T replace (pre-ADR-40 behaviour).
-//
-// Absent-default = 'auto' for a NEW install. An already-configured install is grandfathered to
-// 'replace' (pre-ADR-40 full -T replace) by a one-time install/upgrade seed
-// (pfb_alias_delta_mode_install_default() + pfblockerng_install.inc), so an upgrade preserves the
-// operator's prior apply path instead of silently switching to delta — the absent-default 'auto'
-// reaches only brand-new installs. Downgrade-safe: an older release lacking this key ignores it
-// and performs its existing full replace.
+// Absent-default 'auto' reaches only brand-new installs; an existing install is
+// grandfathered to 'replace' at install/upgrade (pfb_alias_delta_mode_install_default()).
 enum PfbAliasDeltaMode: string implements PfbStoredEnum
 {
 	use PfbStoredEnumAdapter;
@@ -201,18 +165,11 @@ enum PfbAliasDeltaMode: string implements PfbStoredEnum
 }
 
 // PfbTop1mSource — TOP1M source selector (alexa_type, issue #877).
-//
-// Used by: alexa_type (config key) / $pfb['dnsbl_top1m_type'] (runtime).
-//   Canonical tokens: 'tranco' (default), 'cisco', 'openpagerank' (#928,
-//   replacing ADR-59 P4's 'domcop'), 'majestic' (ADR-59 P4), 'cloudflare'
-//   (ADR-59 P5, token-authenticated). TWO tokens
-//   are READ-ONLY legacy values, never re-emitted by a write: 'alexa' (the
-//   dead Alexa TOP1M service, #872) and 'domcop' (the DomCop top-10M list's
-//   hosting moved to OpenPageRank, #928) both coalesce to their replacement
-//   at the read boundary — every live token is ever persisted as itself, so
-//   the write vocabulary is downgrade-safe (an older release reading any of
-//   them already understands its own subset; openpagerank/majestic/
-//   cloudflare are simply new to it, same as any other ADR-added option).
+// Used by alexa_type (config key) / $pfb['dnsbl_top1m_type'] (runtime). Canonical tokens:
+// 'tranco' (default), 'cisco', 'openpagerank' (#928, replacing ADR-59 P4's 'domcop'),
+// 'majestic' (ADR-59 P4), 'cloudflare' (ADR-59 P5, token-authenticated). 'alexa' (#872) and
+// 'domcop' (#928) are READ-ONLY legacy tokens, coalesced to their replacement on read — the
+// write vocabulary only ever emits live tokens, so it is downgrade-safe.
 enum PfbTop1mSource: string implements PfbStoredEnum
 {
 	use PfbStoredEnumAdapter;
@@ -241,29 +198,15 @@ enum PfbTop1mSource: string implements PfbStoredEnum
 	}
 }
 
-// TOP1M provider descriptor table (ADR-59 P1, generalized P2, keyless
-// providers added P4, token-authenticated Cloudflare Radar added P5).
-//
-// Keyed by PfbTop1mSource::value ('tranco'/'cisco'/'openpagerank'/'majestic'/'cloudflare').
-// pfblockerng.php's TOP1M URL selection reads this table instead of a
-// per-provider if/else; pfblockerng_top1m() (ADR-59 P2) reads
-// 'parse'/'header'/'domain_col' to drive the builder. 'container' documents each
-// provider's expected transport shape (zip/gz/plain) but is currently INFORMATIONAL
-// ONLY -- pfb_download()'s extractor branches on the actually-detected MIME type
-// (PFB_FILTER_FILE_MIME), not this field, so a mismatch (e.g. a zip provider serving
-// an HTML error page) is caught downstream by pfblockerng_top1m()'s domain-validity
-// guard rather than here (#892 review). 'header'/'domain_col' default to FALSE/1 here
-// -- Tranco/Cisco's CSV has no header row and the domain sits at
-// str_getcsv() index 1 (0-indexed: rank,domain), matching today's hardcoded
-// shape byte-for-byte. 'auth' is read by pfb_download()'s header-auth path
-// (ADR-59 P3+) via pfb_top1m_auth_headers() below -- 'none' (every keyless
-// provider) or {header, scheme} (Cloudflare's Bearer token). 'domain_col' is
-// 0-indexed (str_getcsv() array index, not a human 1-indexed column count)
-// -- OpenPageRank's Domain is the 2nd CSV field
-// (Rank,Domain,Extension,Open Page Rank,Referring Domains) -> index 1 (same
-// index as Tranco/Cisco); Majestic's Domain is the 3rd field
-// (GlobalRank,TldRank,Domain,...) -> index 2; Cloudflare's dataset is a
-// SINGLE 'domain' column (no rank) -> index 0 (see the row's own comment).
+// TOP1M provider descriptor table (ADR-59). Keyed by PfbTop1mSource::value.
+// pfblockerng.php's TOP1M URL selection and pfblockerng_top1m() read
+// 'parse'/'header'/'domain_col' to drive the builder; 'container' is INFORMATIONAL ONLY —
+// pfb_download() branches on the actually-detected MIME type, not this field, so a mismatch
+// (e.g. a zip provider serving an HTML error page) is caught by pfblockerng_top1m()'s
+// domain-validity guard instead (#892). 'domain_col' is 0-indexed (str_getcsv() array
+// index): Tranco/Cisco/OpenPageRank -> 1, Majestic -> 2, Cloudflare's single 'domain'
+// column (no rank) -> 0. 'auth' is read by pfb_download()'s header-auth path via
+// pfb_top1m_auth_headers() below: 'none' or {header, scheme} (Cloudflare's Bearer token).
 //
 // @return array<string, array{url: string, container: string, parse: string, header: bool, domain_col: int, auth: string|array{header: string, scheme: string}, label: string, licence: string}>
 function pfb_top1m_providers(): array
@@ -349,17 +292,12 @@ function pfb_top1m_providers(): array
 	);
 }
 
-// ADR-59 P5: build the caller header(s) a provider's 'auth' descriptor needs, given the
-// user's top1m_token. Pure / no I/O (same extraction rationale as pfb_download_http_headers(),
-// Phase 3), so it is directly unit-testable and -- because it never logs anything -- the token
-// can only ever reach pfb_download()'s CURLOPT_HTTPHEADER, never a log line.
-//
-// 'auth' is either the string 'none' (every keyless provider) or an array {header, scheme}
-// (Cloudflare Radar's Bearer token, P5). An empty token or a keyless provider both yield
-// array() -- pfb_download() then sends no Authorization header, so a missing/blank token
-// fails the request safely rather than sending a malformed header: the #886 preserve+warn
-// path in pfblockerng_top1m() keeps the previous TOP1M whitelist and warns, exactly as any
-// other download failure does.
+// ADR-59 P5: build the caller header(s) a provider's 'auth' descriptor needs. Pure / no I/O,
+// so it is unit-testable and -- because it never logs -- the token only ever reaches
+// pfb_download()'s CURLOPT_HTTPHEADER, never a log line. 'auth' is 'none' (keyless) or
+// {header, scheme} (Cloudflare's Bearer token); an empty token/keyless provider yields
+// array() so pfb_download() sends no Authorization header -- the #886 preserve+warn path
+// keeps the previous TOP1M whitelist and warns on a resulting failure.
 //
 // @return string[] zero or one header line, e.g. ['Authorization: Bearer <token>'].
 function pfb_top1m_auth_headers(array $provider, string $token): array
@@ -452,32 +390,12 @@ function pfb_cfg_top1m_source_write(PfbTop1mSource|string $source): string
 }
 
 // ---------------------------------------------------------------------------
-// ADR-29 Phase 1 — PfbConfig gateway + declarative field registry.
-//
-// PfbConfig is the single sanctioned gateway for all config.xml reads/writes
-// of registered installedpackages/pfblockerng* keys. It wraps
-// config_get_path / config_set_path / config_del_path, applying the
-// registered default and the field-aware adapter (from ADR-28) at the
-// boundary.
-//
-// Field registry shape (pfb_cfg_registry()):
-//   key => [
-//     'section'       => 'installedpackages/pfblockerng*/config/0',  // config.xml path prefix
-//     'default'       => <stored-string default for absent/null>,
-//     'read_adapter'  => callable|null,   // null = plain string (identity)
-//     'write_adapter' => callable|null,   // null = plain string (identity)
-//     'since'         => 'x.y.z',        // version that introduced the key
-//   ]
-//
-// Section-level helpers (read/write/delete a whole section) allow www/ pages and
-// pfb_remove_config_settings() to flow through one gateway call in later phases.
-//
-// CONSTRAINTS (ADR-29 §5, ADR-28 §2.2):
-//   - Registry keys are the EXACT existing config.xml keys — no renames.
-//   - Stored values NEVER change; adapters map to the legacy stored string on write.
-//   - Round-trip identity: write(read(v)) == v for every canonical stored value.
-//   - This phase adds the class + registry only; no call site changed yet.
-//
+// ADR-29 — PfbConfig gateway: the single sanctioned gateway for config.xml reads/writes of
+// registered installedpackages/pfblockerng* keys, wrapping config_get/set/del_path with the
+// registered default + field adapter (ADR-28) at the boundary.
+// CONSTRAINTS (ADR-29 §5, ADR-28 §2.2): registry keys are the EXACT existing config.xml keys
+// (no renames); stored values NEVER change (adapters map to the legacy stored string on
+// write); round-trip identity write(read(v)) == v for every canonical stored value.
 // Tests: tests/php/CfgGatewayTest.php (round-trip, default, inventory).
 // ---------------------------------------------------------------------------
 
@@ -1371,18 +1289,13 @@ function pfb_cfg_registry(): array
 	return $registry;
 }
 
-// Read the configured DNSBL block-page template filename. issue #713: this is a
-// FOREIGN key (ADR-29 §2.5 out-of-scope) written directly by pfblockerng_dnsbl.php
-// as 'dnsbl_webpage' — NOT a gateway-registered key — so it is read here with a
-// direct config_get_path(), mirroring how the DNSBL settings page stores and reads
-// it ($pfb['dconfig']['dnsbl_webpage'] ?: 'dnsbl_default.php'). config_get_path()'s
-// default arg only substitutes when the key is ABSENT, not when it is present but
-// empty (''), so the `?:` coercion below is required to actually match that page —
-// a saved-then-cleared 'dnsbl_webpage' must still report 'dnsbl_default.php', the
-// same as an install that never saved DNSBL settings (and the install/upgrade
-// refresh of dnsbl_active.php then fires). Fixes the dead read of the mis-spelled
-// 'dnsblwebpage' registry key, which always returned '' because nothing ever
-// writes that path.
+// Read the configured DNSBL block-page template filename. issue #713: this is a FOREIGN key
+// (ADR-29 §2.5 out-of-scope), written directly by pfblockerng_dnsbl.php as 'dnsbl_webpage' —
+// so it is read here via a direct config_get_path(), mirroring how the DNSBL settings page
+// stores/reads it. config_get_path()'s default arg only substitutes when the key is ABSENT,
+// not when present-but-empty (''), so the `?:` coercion below is required — a
+// saved-then-cleared 'dnsbl_webpage' must still report 'dnsbl_default.php'. Fixes the dead
+// read of the mis-spelled 'dnsblwebpage' key, which always returned ''.
 function pfb_dnsbl_webpage(): string
 {
 	return config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_webpage', 'dnsbl_default.php') ?: 'dnsbl_default.php';
@@ -1467,9 +1380,7 @@ final class PfbConfig
 	 *
 	 * This is the equivalent of config_get_path($section, []) for callers
 	 * (www/ pages, pfb_global) that load an entire section blob at once
-	 * and access keys individually. Phase 1 exposes this seam without
-	 * changing existing call sites; later phases route per-key reads through
-	 * it.
+	 * and access keys individually.
 	 *
 	 * @param  string $section  The full config.xml section path (e.g.
 	 *                          'installedpackages/pfblockerng/config/0').
@@ -1566,26 +1477,13 @@ final class PfbConfig
 }
 
 // ---------------------------------------------------------------------------
-// ADR-29 Phase 2 — Migration registry + driver.
-//
-// pfb_migration_registry() is the ordered, idempotent, since-version-gated
-// inventory of every upgrade migration. Each entry delegates to an existing
-// *_migrate / *_seed helper (from pfblockerng.inc) and carries the exact
-// write_config() message that appeared in the original install.inc block.
-//
-// Registry shape:
-//   'id'       => string — unique, stable identifier for the migration
-//   'section'  => string — full config.xml section path to read/write
-//   'apply'    => callable($cfg: array): ?array
-//                   returns the updated section array to persist,
-//                   or NULL for a no-op (already migrated / fresh install)
-//   'message'  => string — write_config() description when the migration writes
-//   'since'    => string — version that introduced the migration
-//
-// The driver in pfblockerng_install.inc calls pfb_run_migrations() to execute
-// all entries in registry order. The helper bodies are UNCHANGED; this registry
-// only wraps/calls them so the install.inc is one loop instead of four blocks.
-//
+// ADR-29 — Migration registry + driver: pfb_migration_registry() is the ordered,
+// idempotent, since-version-gated inventory of every upgrade migration (shape below);
+// each entry delegates to an existing *_migrate/*_seed helper and carries its original
+// write_config() message. 'apply' returns the updated section array to persist, or NULL
+// for a no-op (already migrated / fresh install). The pfblockerng_install.inc driver calls
+// pfb_run_migrations() to execute all entries in registry order; helper bodies are
+// UNCHANGED, this registry only wraps them.
 // Tests: tests/php/MigrationRegistryTest.php
 // ---------------------------------------------------------------------------
 
@@ -1659,38 +1557,13 @@ function pfb_run_migrations(): void
 }
 
 // ---------------------------------------------------------------------------
-// ADR-29 Phase 3 — Rollback / backward-compat contract helpers.
-//
-// pfb_cfg_field_vocab() documents the FULL STORED VOCABULARY for every
-// registered field adapter type. The tests (RollbackContractTest.php) use
-// this to assert the FORWARD invariant (every legacy stored token yields a
-// sane runtime value) and the BACKWARD invariant (every write emits ONLY a
-// token in the legacy vocabulary — never a novel on-disk token an older
-// release would not recognise).
-//
-// ROLLBACK CONTRACT (ADR-29 §2.3):
-//   - A field PASSES the backward invariant iff, for every possible runtime
-//     value R, write_adapter(R) returns a string that is a member of the
-//     field's legacy stored vocabulary.  The gateway always writes legacy
-//     tokens, so downgrades leave older code reading values it already
-//     understands.
-//   - At the PfbConfig level no field is excluded: every write adapter emits a
-//     token from the field's known vocabulary. A write may NORMALISE a legacy
-//     token to a behaviour-equivalent canonical one (e.g. pfb_idn: All persists
-//     the legacy 'on' token, and the dropped 4.0.0-alpha 'all' normalises to
-//     'off') — the emitted token is always one an older release understands.
-//
-// SINCE-VERSION CONVENTION:
-//   The 'since' field in pfb_cfg_registry() records the package release that
-//   INTRODUCED the key to config.xml. For keys that pre-date the registry
-//   (i.e. existed before ADR-29 Phase 1), 'since' is set to the earliest
-//   release that still ships the pfBlockerNG line that uses the key — using
-//   the legacy release series as a conservative baseline (e.g. '1.0.0' for
-//   original-era keys, '2.0.0' for the Python-mode era, '3.x.y' for ADR-xx
-//   additions).  The current shipped devel version is always an acceptable
-//   baseline for any key whose introduction predates the registry (there is
-//   no config-version migration routine, so any installed config.xml may
-//   contain any subset of these keys).
+// ADR-29 §2.3 — Rollback / backward-compat contract. pfb_cfg_field_vocab() documents the
+// FULL STORED VOCABULARY per field adapter; RollbackContractTest.php asserts the FORWARD
+// invariant (every legacy token yields a sane runtime value) and the BACKWARD invariant
+// (every write emits ONLY a legacy-vocabulary token, never a novel on-disk one — a write may
+// normalise to a behaviour-equivalent canonical token, e.g. pfb_idn All persisting 'on').
+// SINCE-VERSION: 'since' records the release that introduced the key; pre-registry keys use
+// the earliest release still shipping that key's line (no config-version migration exists).
 // ---------------------------------------------------------------------------
 
 /**
@@ -1802,16 +1675,11 @@ function pfb_cfg_field_adapter_type(array $entry): string
 }
 
 // ---------------------------------------------------------------------------
-// Issue #357 — alias-rename follow-up helper.
-//
-// pfSense's alias-rename path (saveAlias() in alias-utils.inc) calls
-// update_alias_name() to rewrite core config sections (aliases, filter,
-// nat, …) but does NOT touch installedpackages/*.  The four per-row
-// Advanced Inbound/Outbound alias keys (aliasports_in / aliasports_out /
-// aliasaddr_in / aliasaddr_out) stored in our list sections go stale after
-// a rename.  pfb_alias_rename_followup() rewrites them in-memory via the
-// PfbConfig section gateway; the caller (the pre_write_config shim or any
-// other save path) is responsible for persisting via write_config().
+// Issue #357 — pfSense's alias-rename path (update_alias_name()) rewrites core config
+// sections but not installedpackages/*, so the four per-row Advanced Inbound/Outbound
+// alias keys (aliasports_in/out, aliasaddr_in/out) go stale after a rename.
+// pfb_alias_rename_followup() rewrites them in-memory via PfbConfig; the caller persists
+// via write_config().
 // ---------------------------------------------------------------------------
 
 /**
@@ -1997,23 +1865,12 @@ function pfb_adv_alias_field_errors(array $post): array
 }
 
 // ---------------------------------------------------------------------------
-// ADR-30 Phase 1 — Pure schedule-period deciders for log rotation.
-//
-// Two pure helper functions — no I/O, no globals, no config access.
-// The caller passes all inputs explicitly; this is the testable seam.
-//
-// Period-key format (what gets stored in the state file per log type):
-//   'off' or ''           -> '' (schedule disabled; no key)
-//   'daily'               -> 'YYYY-MM-DD'    (date('Y-m-d', $ts))
-//   'weekly'              -> 'YYYY-Www'       (date('o-\WW', $ts) — ISO week-year)
-//   'monthly'             -> 'YYYY-MM'        (date('Y-m', $ts))
-//   any unrecognised      -> '' (off-default; defensive)
-//
-// ISO week-year note: date('o') returns the ISO 8601 week-YEAR (not the
-// calendar year), so 2027-01-01 (calendar year 2027) yields '2026-W53'
-// (ISO year 2026, week 53) rather than the wrong '2027-W01'. This is the
-// correct behaviour — use date('o'), never date('Y'), for the week key.
-//
+// ADR-30 — Pure schedule-period deciders for log rotation (no I/O, no globals, no config
+// access; caller passes all inputs explicitly). Period-key format (state file per log type):
+//   'off'/''  -> ''            'daily'   -> 'YYYY-MM-DD'
+//   'weekly'  -> 'YYYY-Www' (ISO week-year)   'monthly' -> 'YYYY-MM'   unrecognised -> ''
+// ISO week-year: date('o') returns the ISO week-YEAR, not calendar year — 2027-01-01 yields
+// '2026-W53', not '2027-W01'. Use date('o'), never date('Y'), for the week key.
 // Tests: tests/php/LogRotateScheduleTest.php
 // ---------------------------------------------------------------------------
 
@@ -2071,41 +1928,9 @@ function pfb_log_should_reset(string $schedule, string $last_key, int $now_ts): 
 }
 
 // ---------------------------------------------------------------------------
-// ADR-38 Phase 1 — Pure key=value syslog event formatters.
-//
-// pfb_syslog_format_ip(array $fields): string
-//   Maps the already-computed IP Block/Permit/Match event fields to a single
-//   space-separated "key=value ..." string suitable for emission as a syslog
-//   message body.  The key order is fixed and documented below; this is the
-//   stable contract that later phases wire to syslog(3) and that tests pin.
-//
-// Key vocabulary (fixed order):
-//   act   — action:   'block'|'pass'|'match'
-//   dir   — direction: 'in'|'out'
-//   if    — friendly interface name (e.g. 'em0', 'LAN')
-//   proto — protocol string (e.g. 'TCP', 'UDP', 'TCP-SA')
-//   src   — source IP address
-//   dst   — destination IP address
-//   sport — source port (omitted when empty)
-//   dport — destination port (omitted when empty)
-//   ipver — IP version: '4' or '6'
-//   geoip — GeoIP ISO country code (omitted when empty or 'Unk'/'Unknown')
-//   alias — pfBlockerNG alias name (omitted when empty or 'Unknown')
-//   feed  — feed name (omitted when empty or 'Unknown')
-//   host  — resolved hostname of the external IP (omitted when empty/'Unknown')
-//   asn   — ASN string (omitted when empty or 'Unknown'/'null')
-//
-// Empty-value convention:
-//   Required fields (act/dir/if/proto/src/dst/ipver) are always present.
-//   Optional fields (sport/dport/geoip/alias/feed/host/asn) are OMITTED
-//   entirely when the value is empty, 'Unknown', 'Unk', or 'null'.
-//
-// Escaping rule:
-//   A value containing a space, '=', or '"' is double-quoted; internal '"'
-//   characters are backslash-escaped (\").  Newlines (\n, \r) are replaced
-//   with a space before quoting to keep the message single-line.
-//   Other punctuation (e.g. '|', ':', '/') is not quoted.
-//
+// ADR-38: pure key=value syslog event formatters (pfb_syslog_format_ip() etc.) — the fixed
+// key order, empty-value omission rules, and quoting/escaping are specified in
+// .ADRs/ADR_38_System_Log_Integration/ and pinned by tests/php/SyslogFormatTest.php.
 // PURE — no globals, no I/O, no config reads.
 // ---------------------------------------------------------------------------
 
@@ -2185,27 +2010,11 @@ function pfb_syslog_format_ip(array $fields): string
 }
 
 // ---------------------------------------------------------------------------
-// ADR-38 Amendment 1 — DNSBL syslog + unified.log formatters.
-//
-// pfb_syslog_format_dnsbl(array $fields): string
-//   PHP port of the (retired) Python syslog_format_dnsbl().  Formats a DNSBL
-//   block event as a space-separated key=value string for syslog emission.
-//   Fixed key order: act qname qip qtype [group] [feed] btype eval.
-//   group and feed are OPTIONAL — omitted entirely when the value is ''.
-//   Escaping rule is identical to pfb_syslog_format_ip (see above).
-//
-// pfb_unified_format_ip(array $fields): string
-//   Renders a unified.log IP row as a comma-joined string from 4 named fields:
-//   l_type, log, details, dup.  No escaping — raw passthrough join.
-//
-// pfb_unified_format_dnsbl(array $fields): string
-//   Renders a dnsbl.log CSV line as a comma-joined string from 11 named fields
-//   in the FIXED column order that dnsbl.log defines.  No escaping.
-//
-// pfb_unified_format_dnsreply(array $fields): string
-//   Renders a DNS-reply row for unified.log as a comma-joined string from 10
-//   named fields in fixed column order.  No escaping.
-//
+// ADR-38 Amendment 1 — DNSBL syslog + unified.log formatters. pfb_syslog_format_dnsbl()
+// (PHP port of the retired Python syslog_format_dnsbl()) formats a DNSBL block event as
+// key=value; fixed order act qname qip qtype [group] [feed] btype eval (group/feed omitted
+// when ''); escaping matches pfb_syslog_format_ip. pfb_unified_format_ip/_dnsbl/_dnsreply
+// render comma-joined unified.log/dnsbl.log rows in FIXED column order — no escaping.
 // All four are PURE — no globals, no I/O, no config reads.
 // ---------------------------------------------------------------------------
 
@@ -2332,31 +2141,12 @@ function pfb_unified_format_dnsreply(array $fields): string
 }
 
 // ---------------------------------------------------------------------------
-// ADR-38 — PHP syslog event emitter.
-//
-// pfb_syslog_event(string $body): void
-//   Emits ONE syslog record with the syslog ident (program name) 'pfblockerng'
-//   at a FIXED facility (LOG_LOCAL6) and severity (LOG_INFO).
-//
-//   Facility/severity are NOT user-configurable (ADR-38 Amendment 1): the events
-//   are routed to the dedicated pfblockerng_syslog.log by the package <logging>
-//   block's PROGRAM-name filter (!pfblockerng), so the facility never affects
-//   where they land; and every exported event is the same class of record, so a
-//   severity picker would only ever set one fixed level. They are all
-//   informational security events -> LOG_INFO. The only user control is the
-//   log_syslog master toggle.
-//
-//   Behaviour:
-//     - Reads log_syslog FRESH on every call (no per-process cache). The
-//       long-running pfb_filter daemon is the sole caller and the user can
-//       toggle log_syslog live; a cached value would keep emitting (or stay
-//       silent) until a daemon restart. This fires only on block events (the
-//       caller gates on the event class), not per packet, so the PfbConfig
-//       array read is cheap. The daemon keeps $config current via
-//       pfb_filterlog_refresh_config() so PfbConfig sees the live value.
-//     - No-op when log_syslog is off (PfbToggle::Off / '').
-//     - openlog() sets ident + facility; syslog() emits at LOG_INFO; closelog()
-//       releases the connection.
+// ADR-38 — PHP syslog event emitter. pfb_syslog_event(string $body) emits ONE record with
+// ident 'pfblockerng' at a FIXED facility (LOG_LOCAL6) and severity (LOG_INFO) — not
+// user-configurable: the package <logging> PROGRAM-name filter routes events regardless of
+// facility, and every event is the same informational-security class. Reads log_syslog FRESH
+// on every call (no per-process cache) since the long-running pfb_filter daemon is the sole
+// caller and the user can toggle it live; no-op when off (PfbToggle::Off / '').
 // ---------------------------------------------------------------------------
 
 /**
@@ -2402,42 +2192,12 @@ function pfb_syslog_event(string $body): void
 }
 
 // ---------------------------------------------------------------------------
-// ADR-43 Phase 2 — Due-ledger library (pure core + I/O helpers).
-//
-// A persisted per-job next-due ledger stored as a single JSON file
-// (pfb_due_ledger.json) under $pfb['dbdir']. This evolves the existing
-// .update/.last sentinel pattern: instead of flag files that only record
-// "needs update", each entry records {last_run, next_due, jitter} so a
-// single tick can decide what is due without reading the clock per-job.
-//
-// Design invariants (ADR-43 §2.C):
-//   - Absent entry (new install or wiped RAM-disk) ⇒ is_due returns TRUE.
-//     The stable seeded jitter is applied on mark_ran, spreading next_due.
-//   - next_due in the past                         ⇒ is_due returns TRUE (catch-up).
-//   - next_due in the future                       ⇒ is_due returns FALSE.
-//   - mark_ran sets next_due = now + interval + seeded_jitter(job, seed, max).
-//   - Corrupt or absent ledger file                ⇒ treated as absent (fail-safe).
-//
-// #468 persist/restore integration:
-//   pfb_due_ledger.json lives in $pfb['dbdir'] (= /var/db/pfblockerng on MFS).
-//   Phase 4 adds it to the earlyshellcmd archive set (alongside IP aliastables)
-//   so a clean reboot restores the schedule and avoids the boot stampede that the
-//   absent-entry rule guards against. Until Phase 4 wires this, the absent-⇒-due
-//   rule is the sole boot-stampede defence (jobs spread by their seeded jitter
-//   after the first post-boot mark_ran).
-//
-// On-disk layout (pfb_due_ledger.json under ledger_dir):
-//   {
-//     "dcc":  {"last_run": 1234567890, "next_due": 1234567890, "jitter": 35079},
-//     "bl":   {"last_run": 1234567890, "next_due": 1234567890, "jitter": 79870}
-//   }
-//   Writes are atomic: content assembled, written to .tmp with LOCK_EX, then
-//   renamed to the target (atomic on POSIX / FreeBSD same-filesystem rename).
-//
-// Clock and seed are INJECTABLE (passed as arguments to every function that needs
-// them) so PHPUnit can pin the date math without wall-clock or rand() flakiness.
-// Only a thin outer wrapper (Phase 4's tick) reads time() and the install seed.
-//
+// ADR-43 — Due-ledger library: persisted per-job next-due ledger (pfb_due_ledger.json under
+// $pfb['dbdir']) recording {last_run, next_due, jitter} so a tick decides what's due without
+// per-job clock reads. Invariants (§2.C): absent/corrupt -> is_due TRUE (fail-safe, sole
+// boot-stampede defence pending earlyshellcmd archival); next_due past -> TRUE, future ->
+// FALSE; mark_ran sets next_due = now + interval + seeded_jitter(job, seed, max). Atomic
+// writes (.tmp + LOCK_EX + rename); clock/seed INJECTABLE for PHPUnit determinism.
 // Tests: tests/php/DueLedgerTest.php
 // ---------------------------------------------------------------------------
 
@@ -3029,11 +2789,8 @@ function pfblockerng_tick(): void
  * Mirrors the tolerant textarea shape the page already accepts: a line starting
  * with '#', or blank, is a no-op (skip, no error); an inline comment introduced
  * by '#' (e.g. "10.0.0.1/32 # example.com") is stripped before validating the
- * address/mask. IPv4 accepts masks /8-/32 (ADR-53 §2.3 fork 1 — the /8 floor is
- * a fail-open-typo guard; the carve engine itself is mask-agnostic since Phase
- * 3's iprange --except swap). IPv6 accepts masks /32-/128 (ADR-53 Phase 6 — the
- * /32 floor is the same fail-open-typo guard; the Phase 5 pure-PHP set-diff
- * engine is likewise mask-agnostic).
+ * address/mask. IPv4 accepts masks /8-/32, IPv6 accepts masks /32-/128 (ADR-53 §2.3
+ * fork 1 — pure fail-open-typo guards; both carve engines are themselves mask-agnostic).
  *
  * PURE — no config access, no I/O; only the pfSense is_subnetv4()/is_subnetv6()
  * predicates.
@@ -3090,23 +2847,15 @@ function pfb_validate_suppression_line(string $line, string $family): ?string
 }
 
 // ---------------------------------------------------------------------------
-// ADR-53 P5 — pure IPv6 CIDR set-subtraction engine
+// ADR-53 P5 — pure IPv6 CIDR set-subtraction engine. IPv6 suppression can't carve by host
+// enumeration (a /64 minus a /128 hole is 2^64 hosts -- ADR-53 §1.2) and `iprange` mangles v6
+// input outright (parses a v6 literal as a hostname); unlike the v4 engine's `iprange --except`,
+// this is pure-PHP set subtraction over fixed-width 128-bit binary-string ranges, emitting the
+// minimal covering-CIDR remainder via pfSense's REAL ip_range_to_subnet_array() (never
+// redefined here; a faithful double stands in under PHPUnit, tests/php/pfsense_doubles.php).
+// Every binary-string comparison uses strcmp(), NEVER bare </>/<=/>=/min()/max(): a 128-char
+// '0'/'1' string is a PHP "numeric string" and normal comparison risks silent float coercion.
 // ---------------------------------------------------------------------------
-//
-// IPv6 suppression can't carve by host enumeration (a /64 minus a /128 hole is
-// 2^64 hosts -- ADR-53 §1.2) and `iprange` mangles v6 input outright (it parses
-// a v6 literal as a hostname). Unlike the v4 engine (Phase 3's `iprange
-// --except`), this is a pure-PHP set subtraction over fixed-width 128-bit
-// binary-string ranges, emitting the minimal covering-CIDR remainder via
-// pfSense's own ip_range_to_subnet_array() -- the REAL on-appliance function
-// (never redefined here; a faithful double stands in for it under PHPUnit,
-// see tests/php/pfsense_doubles.php).
-//
-// Every binary-string comparison below goes through strcmp(), NEVER the bare
-// <, >, <=, >=, min(), max() operators: a 128-char string of '0'/'1' digits is
-// a PHP "numeric string", and comparing two of those the normal way risks a
-// silent (lossy, float-precision) numeric coercion for a string this long.
-// strcmp() is the only byte-exact comparison for a fixed-width digit string.
 
 /**
  * pfb_v6_cidr_to_range — parse one IPv6 CIDR token ('addr/bits') into its
@@ -3501,17 +3250,14 @@ function pfb_ip_suppressed_match(string $ip, array $entries): ?string
 }
 
 // ---------------------------------------------------------------------------
-// ADR-53 P8 -- Alerts "+" / widget live-punch plan (any mask + v6)
-// ---------------------------------------------------------------------------
-//
-// The Alerts "+" button (and the dashboard widget, which shares its stats
-// read of the same suppression config) used to punch a hole in a live pf
-// table by deleting an exact '/24' and re-adding 254 sibling hosts, refusing
-// anything "blocked by a CIDR other than /24" (ADR-53 §1.2). This replaces
-// that with the same covering-CIDR set-subtraction already proven for the
-// persisted engines (P3's v4 `iprange --except` pass, P5's v6 PHP pass):
-// locate the table entr(y/ies) that actually contain the host, delete them,
+// ADR-53 P8 -- Alerts "+" / widget live-punch plan (any mask + v6). The Alerts "+" button
+// (and the dashboard widget, sharing its stats read) used to punch a hole in a live pf table
+// by deleting an exact '/24' and re-adding 254 sibling hosts, refusing anything "blocked by a
+// CIDR other than /24" (ADR-53 §1.2). This replaces that with the same covering-CIDR
+// set-subtraction already proven for the persisted engines (P3's v4 `iprange --except` pass,
+// P5's v6 PHP pass): locate the table entr(y/ies) that actually contain the host, delete them,
 // and re-add only the covering-CIDR remainder -- any mask, both families.
+// ---------------------------------------------------------------------------
 
 /**
  * pfb_v4_carve_single -- the covering-CIDR remainder of one IPv4 CIDR (or

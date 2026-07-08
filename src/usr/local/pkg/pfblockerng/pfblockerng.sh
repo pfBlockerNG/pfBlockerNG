@@ -137,21 +137,13 @@ exitnow() {
 }
 
 
-# Token-shape guards for feed-derived list data. The list-processing functions
-# iterate values that ultimately originate from downloaded feeds and splice them
-# into `grep` patterns (anchored octet-prefix matches such as `^10\.0\.0\.`).
-# Previously only the literal dot was escaped, so any other regex metacharacter
-# in a token stayed live and `grep` interpreted it as a pattern -- yielding an
-# over-broad / incorrect match set, or an expensive pattern.
-#
-# Each guard returns success only when the token is built solely from the
-# characters that shape allows (digits, dots, and -- for CIDR -- a slash). A
-# token that fails is dropped by its caller (`continue`), never matched. Because
-# the surviving tokens contain only digits/dots/slashes, the existing dot-escape
-# + `^` anchor that follows is then exact and safe.
-#
-# Reject the empty string explicitly: `case ''` would match the `*[!set]*`
-# negation as "no disallowed char present" and pass.
+# Token-shape guards for feed-derived list data spliced into `grep` patterns (anchored
+# octet-prefix matches like `^10\.0\.0\.`). Previously only the literal dot was escaped, so
+# any other regex metacharacter stayed live -- yielding an over-broad/incorrect match or an
+# expensive pattern. Each guard passes only when the token is built solely from its allowed
+# characters (digits, dots, and -- for CIDR -- a slash); a failing token is dropped by its
+# caller (`continue`), never matched. Reject '' explicitly: `case ''` would match
+# `*[!set]*`'s negation as "no disallowed char present" and pass.
 
 # An octet prefix: one or more dot-separated decimal octets, digits and dots
 # only (e.g. '10' or '10.0.0'). No anchors, no slash.
@@ -315,26 +307,14 @@ aliastables() {
 }
 
 
-# DNSBL python-integration cache (#468). On a RAM-disk /var (use_mfs_tmpvar) the
-# chroot is wiped on reboot, so DNSBL comes up dead. This keeps DNSBL alive across a
-# reboot with PURE FILE OPS (no reload/restart -- Unbound's normal start loads the
-# restored files). Kept SEPARATE from the IP aliastables flow above on purpose: the
-# two have different lifecycles (DNSBL state vs IP-rule state).
-#
-#   stage   -- single source of truth for the SHIPPED file set (PFB_PY_SHIPPED): copy
-#              each from /usr/local into the chroot, after making the chroot + the
-#              nullfs/devfs mount-point dirs (fresh MFS lacks them, which is what made
-#              pfb_python_mount fail). Re-run on every save/restore so the shipped code
-#              is always current from /usr/local (never restored stale from an archive).
-#   save    -- stage, then archive ONLY the GENERATED set (pfb_unbound*/pfb_py_* +
-#              pfb_unbound.ini: the manifest, raw feeds, caches, ini). Shipped files
-#              are NOT archived -- they come from /usr/local on restore.
-#   restore -- the boot earlyshellcmd: untar the generated set (if present) THEN stage.
-#
-# Naming contract: the generated archive set is matched by the pfb_unbound* / pfb_py_*
-# globs below; a new generated DNSBL file MUST keep that prefix to be carried across a
-# reboot. The shipped set is the explicit PFB_PY_SHIPPED list -- add a new shipped file
-# there (and to the pkg-plist / chroot-copy wiring) so it stays the one definition.
+# DNSBL python-integration cache (#468). On a RAM-disk /var (use_mfs_tmpvar) the chroot is
+# wiped on reboot, so DNSBL comes up dead; this keeps it alive across reboot with PURE FILE
+# OPS (no reload/restart), kept SEPARATE from the IP aliastables flow above (different
+# lifecycles). stage = copy the SHIPPED set (PFB_PY_SHIPPED) from /usr/local into the chroot
+# (re-run on every save/restore, never restored stale); save = stage then archive ONLY the
+# GENERATED set (pfb_unbound*/pfb_py_*/pfb_unbound.ini); restore = boot earlyshellcmd, untar
+# the generated set THEN stage. Naming contract: a new generated file MUST keep the
+# pfb_unbound*/pfb_py_* prefix; a new shipped file goes in PFB_PY_SHIPPED + pkg-plist wiring.
 dnsbl_cache() {
 	# Overridable for unit tests; default to the live locations.
 	pfbchroot="${pfbchroot:-/var/unbound}"
@@ -630,27 +610,15 @@ cidr_aggregate() {
 }
 
 
-# ADR-11: Union a set of already-effective member files into ONE deduped + CIDR-
-# aggregated alias file, plus a never-empty '-f' consumer file. Type-AGNOSTIC: it is
-# handed a plain list of member-file paths (one per line) and does not care which
-# action class (Deny/Permit/Match/Native) they belong to -- the per-type membership
-# is decided in PHP (pfb_aggregate_member_list) by the Phase-3 caller.
-#
-# Reuses the existing aggregation primitive (${pathaggregate} = iprange, the same
-# binary cidr_aggregate() shells out to) -- NO new aggregation algorithm. iprange is
-# set-exact (minimal CIDR cover equal to the union; never adds an address), so the
-# union cannot widen the set.
-#
-# Positional args (read directly, not via the global $alias/$max slots):
-#   $2 family       : 'v4' | 'v6'   (informational; iprange handles either family)
-#   $3 memberlist   : path to a file listing member files, one path per line
-#   $4 aggout       : path to write the aggregate alias file (the urltable content)
-#   $5 consumerout  : path to write the never-empty '-f' consumer file
-#
-# mtime-gate (Phase 1 strategy): rebuild only when a listed member file is newer than
-# the existing aggregate output -- otherwise the prior aggregate is current, so skip
-# the cat|sort -u|iprange entirely. The consumer file must also already exist and be
-# non-empty, else we always (re)build to honour the never-empty contract.
+# ADR-11: Union a set of already-effective member files into ONE deduped + CIDR-aggregated
+# alias file, plus a never-empty '-f' consumer file. Type-AGNOSTIC (handed a plain list of
+# member-file paths; per-type membership is decided in PHP by pfb_aggregate_member_list).
+# Reuses the existing aggregation primitive (${pathaggregate} = iprange, set-exact: minimal
+# CIDR cover equal to the union, never adds an address) -- NO new aggregation algorithm.
+# Args: $2 family ('v4'|'v6', informational), $3 memberlist (member-file-list path), $4
+# aggout (aggregate alias output), $5 consumerout (never-empty '-f' consumer output).
+# mtime-gate: rebuild only when a listed member file is newer than the existing aggregate
+# output; the consumer file must also already exist and be non-empty, else always rebuild.
 pfb_aggregate() {
 	agg_family="${2}"
 	agg_memberlist="${3}"
