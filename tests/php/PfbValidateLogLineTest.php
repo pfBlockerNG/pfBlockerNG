@@ -13,19 +13,20 @@ use PHPUnit\Framework\TestCase;
  *
  *   \npfb_validate: REJECT feed=<feed> stage=<stage> reason=<reason> detected=<detail>
  *
- * Every one of the four values is escaped independently: control bytes in
- * [\x00-\x1F\x7F] are first neutralised to a single space (these values may carry
- * attacker-influenced file(1) output, and a raw "\n"/"\r" would forge or split the
- * greppable line), THEN htmlspecialchars() is applied. Pure function: string in,
- * string out, no I/O, no globals.
+ * Every one of the four values has control bytes in [\x00-\x1F\x7F] neutralised to a
+ * single space (these values may carry attacker-influenced file(1) output, and a raw
+ * "\n"/"\r" would forge or split the greppable line). No HTML-escaping is applied: the
+ * sole renderer (the Logs tab's #fileContent textarea) never parses HTML, so the raw
+ * bytes are preserved for an accurate operator view. Pure function: string in, string
+ * out, no I/O, no globals.
  */
 #[CoversFunction('pfb_validate_log_line')]
 final class PfbValidateLogLineTest extends TestCase
 {
 	// --- Canonical shape, one exact-string oracle per stage token in the fixed
 	// vocabulary (mime | structural | inner | member | plaintext | entries). None of
-	// these values carry hostile bytes -- they pin the SHAPE; escaping is separately
-	// pinned below.
+	// these values carry hostile bytes -- they pin the SHAPE; control-byte neutralising
+	// is separately pinned below.
 
 	public function testCanonicalLineForStageMime(): void
 	{
@@ -98,9 +99,10 @@ final class PfbValidateLogLineTest extends TestCase
 	// carrying a NUL byte, "\n", and HTML metacharacters -- including an embedded
 	// fake "pfb_validate: REJECT" line, an attempt to forge a second greppable
 	// entry -- must collapse to a SINGLE line (no "\n" past the leading one), with
-	// every control byte turned into a space and <, >, & escaped.
+	// every control byte turned into a space and <, >, & preserved VERBATIM (no
+	// HTML-escaping -- the sole renderer is a textarea that never parses HTML).
 
-	public function testHostileDetailNeutralisedToSingleEscapedLine(): void
+	public function testHostileDetailNeutralisedButNotEscaped(): void
 	{
 		$hostileDetail = "app\x00lication/zip\nfake pfb_validate: REJECT x <b>&";
 
@@ -108,7 +110,7 @@ final class PfbValidateLogLineTest extends TestCase
 
 		$this->assertSame(
 			"\npfb_validate: REJECT feed=FeedZ stage=mime reason=hostile-detail detected="
-			. 'app lication/zip fake pfb_validate: REJECT x &lt;b&gt;&amp;',
+			. 'app lication/zip fake pfb_validate: REJECT x <b>&',
 			$result
 		);
 		// Defensive: only the pinned leading "\n" may appear -- a hostile detail can
@@ -120,29 +122,29 @@ final class PfbValidateLogLineTest extends TestCase
 		);
 	}
 
-	// --- Hostile feed/reason/stage: same escaping code path as detail: one case
+	// --- Hostile feed/reason/stage: same neutralising code path as detail: one case
 	// each is enough to prove it applies uniformly to all four values.
 
-	public function testHostileFeedIsNeutralisedAndEscaped(): void
+	public function testHostileFeedIsNeutralisedButNotEscaped(): void
 	{
 		$this->assertSame(
-			"\npfb_validate: REJECT feed=Feed &lt;Name&gt;&amp; stage=mime reason=r detected=d",
+			"\npfb_validate: REJECT feed=Feed <Name>& stage=mime reason=r detected=d",
 			pfb_validate_log_line("Feed\x01<Name>&", 'mime', 'r', 'd')
 		);
 	}
 
-	public function testHostileReasonIsNeutralisedAndEscaped(): void
+	public function testHostileReasonIsNeutralisedButNotEscaped(): void
 	{
 		$this->assertSame(
-			"\npfb_validate: REJECT feed=f stage=mime reason=bad reason&amp;x detected=d",
+			"\npfb_validate: REJECT feed=f stage=mime reason=bad reason&x detected=d",
 			pfb_validate_log_line('f', 'mime', "bad\x1freason&x", 'd')
 		);
 	}
 
-	public function testHostileStageIsNeutralisedAndEscaped(): void
+	public function testHostileStageIsNeutralisedButNotEscaped(): void
 	{
 		$this->assertSame(
-			"\npfb_validate: REJECT feed=f stage=mi me&lt;x&gt; reason=r detected=d",
+			"\npfb_validate: REJECT feed=f stage=mi me<x> reason=r detected=d",
 			pfb_validate_log_line('f', "mi\x7fme<x>", 'r', 'd')
 		);
 	}
