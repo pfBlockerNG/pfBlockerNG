@@ -143,6 +143,8 @@ final class SoftwareUpdateCheckTest extends TestCase
 		$this->assertSame($onDisk, $cache, 'returns the freshly written cache');
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'after: exactly one notice fired');
 		$this->assertStringContainsString('3.2.0_9 available (devel)', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+		$this->assertSame(1, $GLOBALS['pfb_test_file_notices'][0]['priority'], 'priority is the real 5th file_notice() arg (warning-level)');
+		$this->assertFalse($GLOBALS['pfb_test_file_notices'][0]['local_only'], 'local_only defaults false — no call site passes a 6th arg');
 	}
 
 	/**
