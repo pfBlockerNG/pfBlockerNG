@@ -4131,7 +4131,7 @@ def _dnsbl_reduce_regex(inner: str) -> tuple[bool, str] | None:
 
 
 def _dnsbl_rule_band(rule: Rule) -> int:
-    """The numeric priority band (1-6) for a surviving rule (ADR.md SS2 / the P3
+    """The numeric priority band (1-6) for a surviving rule (ADR.md SS2 / the
     PRIO_* constants). USER -> band 5/6 (sovereign); FEED -> 1/2, +$important ->
     3/4. ``important`` is meaningless for USER rules (they are always sovereign)."""
     user = rule.provenance == RULE_PROV_USER
@@ -4350,7 +4350,7 @@ def reconcile(
             )
         # NOTE: a user rule alone does NOT force ``important_rules`` -- today's fast
         # path already handles a pure user whitelist (important whiteDB) + user
-        # blocks (P3 SS3). The flag is about the feed $important/@@/regex the fast
+        # blocks. The flag is about the feed $important/@@/regex the fast
         # path cannot resolve; once that is set, the numeric branch sees the user
         # bands (5/6) too.
 
@@ -5327,7 +5327,7 @@ def whitelist_lookup_domain(name: str, white_db: dict[str, Any], tld_seg: int) -
     ``www.``-strip, then a parent-suffix walk gated by ``tld_seg`` that only honours
     WILDCARD entries), but also returns the matched entry's ``important`` flag so the
     numeric 6-band resolution can place a user allow in band 6. Behaviour for the
-    boolean ``matched`` result is byte-identical to the pre-P3 function.
+    boolean ``matched`` result is byte-identical to the pre-ABP function.
     """
     entry = white_db.get(name)
     if entry is not None:
@@ -5484,7 +5484,7 @@ class _LruCache:
             self._d.clear()
 
 
-# ADR-07: the 6-band precedence scale (ADR.md SS2 / RESULTS-P2 SS2). Highest wins;
+# ADR-07: the 6-band precedence scale (ADR.md SS2). Highest wins;
 # a block wins iff block_prio > allow_prio (no ties: block in {1,3,5}, allow in {2,4,6}).
 #   6 user allow   5 user block   4 feed allow+important
 #   3 feed block+important   2 feed allow (@@)   1 feed block (||)
@@ -5919,7 +5919,7 @@ def evaluate_domain(
 
     # Resolution stratum. FAST PATH (important_rules False): the historical "a block is
     # found, then an allow overrides it" -- whiteDB checked as a plain override,
-    # byte-for-byte the pre-P3 matcher; this is the path when no ABP @@/regex/$important
+    # byte-for-byte the pre-ABP matcher; this is the path when no ABP @@/regex/$important
     # is loaded. The numeric 6-band resolution is the important_rules==True branch -- it
     # IS reached in production once an ABP feed (or user regex / Custom_List) loads a
     # feed @@ / $important / feed-regex (ADR-07 wired it; not just synthetic tests).

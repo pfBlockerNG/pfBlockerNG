@@ -4,14 +4,14 @@
 # After ADR-47 (build path and test path), workflow YAML must route
 # through the shared scripts. Violations are caught by five rules.
 #
-# BUILD RULES (P3):
+# BUILD RULES:
 #   1. build-pkg-portable.py called directly (bypasses build-leg.sh).
 #   2. sparse-clone-ports.sh called directly (bypasses build-leg.sh).
 #   3. An inline-derived arg to build-leg.sh — $(...) or backtick AFTER the
 #      build-leg.sh token on the same line.
 #      Legit: PKG="$(sh scripts/build-leg.sh ...)" has $( BEFORE → not flagged.
 #
-# TEST RULES (P5):
+# TEST RULES:
 #   4. A direct  python[3] -m pytest tests/smoke  call (bypasses run-smoke.sh).
 #      False-positive guard: bare `python -m pytest` with NO tests/smoke path
 #      on the same line (e.g. the unit runner in test.yml) is NOT flagged.
