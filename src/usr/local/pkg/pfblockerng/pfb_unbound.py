@@ -2702,15 +2702,6 @@ def _log_upstream_block(q_name: str, q_ip: str, result: UpstreamBlock, q_type: s
 def make_timestamp() -> str:
     for _ in range(2):
         try:
-            return datetime.now().strftime("%b %-d %H:%M:%S")
-        except TypeError:
-            continue
-    return ""
-
-
-def iso_timestamp() -> str:
-    for _ in range(2):
-        try:
             return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         except TypeError:
             continue
