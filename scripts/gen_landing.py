@@ -305,15 +305,19 @@ def _ver_or_empty(latest: dict[str, str], channel: str) -> str:
     return f"Latest <code>{_esc(lv)}</code>" if lv else '<span class="empty">not yet published</span>'
 
 
-def _manual_conf_details(conf_fn: Callable[[str], str], channel: str) -> str:
-    """The collapsed 'Manual conf (advanced)' disclosure shared by every channel card."""
+def _manual_conf_details(conf_fn: Callable[[str], str], repo: str) -> str:
+    """The collapsed 'Manual conf (advanced)' disclosure shared by every channel card.
+
+    ``repo`` is the repo add-repo.sh selects ('release' or 'nightly'), not the card's
+    package channel — stable and devel share the release repo, so both pass 'release'.
+    """
     return (
         "<details><summary>Manual conf (advanced)</summary>"
         '<p class="blurb">The bootstrap auto-detects these; in a hand-written conf, replace '
         "<code>&lt;varver&gt;</code> (the edition-version: <code>ce-2.8</code>, <code>plus-26.03</code>, &hellip;) and "
         "<code>&lt;arch&gt;</code> (the CPU architecture: <code>amd64</code> or <code>aarch64</code>) "
         "with your box's values.</p>"
-        f"{_copyable(_esc(conf_fn(channel)))}</details>"
+        f"{_copyable(_esc(conf_fn(repo)))}</details>"
     )
 
 
