@@ -4660,6 +4660,23 @@ function pfb_pfctl_table_op(string $table, string $op, string $args = '', string
 }
 
 
+// ADR-61: tick-driven reconciliation for one stuck (ip,$item,apply) ledger entry --
+// re-apply against the aliasdir mirror already persisted by the last normal pass
+// (no re-download/parse/dedup). Mirrors pfb_apply_alias_delta()'s force_replace
+// branch; a missing mirror means the desired content IS empty, so kill instead of
+// erroring on a nonexistent -f path. pfb_pfctl_table_op() re-opens/closes the SAME
+// key on its own (above) -- this never touches the ledger directly.
+function pfb_ip_apply_retry(string $item): void {
+	global $pfb;
+	$mirror = "{$pfb['aliasdir']}/{$item}.txt";
+	if (is_file($mirror)) {
+		pfb_pfctl_table_op($item, 'replace', '-f ' . escapeshellarg($mirror));
+	} else {
+		pfb_pfctl_table_op($item, 'kill');
+	}
+}
+
+
 // Number of entries in pf table $table, or 0 when the table does not exist yet (a benign read
 // on boot / mid-reload). Reads via `pfctl -T show` with pfctl's OWN stderr suppressed: a missing
 // table writes "pfctl: Table does not exist" to stderr, which would otherwise leak UNATTRIBUTED
@@ -7859,6 +7876,26 @@ function pfb_dnsbl_apply_ledger_update(): void {
 			'DNSBL apply not converged -- Unbound not fully live with pfb_unbound.py; see error.log',
 			$pfb['dbdir']);
 	}
+}
+
+// ADR-61: tick-driven reconciliation for a stuck (dnsbl,dnsbl,apply) ledger entry.
+// A full Unbound restart (pfb_stop_start_unbound(): a real ~30s stop-wait plus an
+// actual daemon restart) is deliberately out of scope for a per-tick retry -- only
+// re-publishes the reload sentinel (one atomic file write, no wait_applied poll,
+// no restart), and only when a live python-mode watcher could actually consume
+// it; otherwise nothing safe/cheap is left to try, so the entry just stays open.
+function pfb_dnsbl_apply_retry(): void {
+	global $pfb;
+
+	if (!pfb_dnsbl_converged()
+	    && pfb_unbound_py_mode_active()
+	    && is_process_running('unbound')
+	    && empty($pfb['dnsbl_python_unmount'])
+	    && !file_exists("{$pfb['dnsbldir']}/unbound.tmp")) {
+		pfb_unbound_py_flip_sentinel();
+	}
+
+	pfb_dnsbl_apply_ledger_update();
 }
 
 // Reload Resolver. ADR-10: $datapath signals a pure DNSBL-DATA update (feed/cron or a #51
