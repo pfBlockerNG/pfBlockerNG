@@ -625,6 +625,19 @@ function pfb_cfg_registry(): array
 		];
 	}
 
+	// ADR-60: per-log age-based retention cap (days; '0' = off), independent of
+	// log_max_<type>'s line-count cap and its 'nolimit' opt-out (S2.2/S2.3 item 3).
+	// Reuses the SAME $log_types array as the log_rotate_/log_reset_keep_ loop above.
+	foreach ($log_types as $log_type) {
+		$registry['log_max_days_' . $log_type] = [
+			'section'       => $gen,
+			'default'       => '0',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'since'         => '4.0.0',
+		];
+	}
+
 	$registry = $registry + [
 
 		// Software update check last-seen version (string or null). Default ''.

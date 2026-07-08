@@ -1311,6 +1311,108 @@ final class RollbackContractTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
+	// J -- ADR-60: log_max_days_<type> rollback contract
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Data provider — all 10 log_max_days_<type> keys × canonical numeric tokens.
+	 *
+	 * @return array<string, array{string, string}>
+	 */
+	public static function logMaxDaysVocabularyProvider(): array
+	{
+		$log_types = [
+			'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
+			'ip_matchlog', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
+		];
+		$vocab  = ['0', '30', '365'];
+		$cases  = [];
+		foreach ($log_types as $type) {
+			foreach ($vocab as $token) {
+				$cases["log_max_days_{$type}/{$token}"] = ["log_max_days_{$type}", $token];
+			}
+		}
+		return $cases;
+	}
+
+	/**
+	 * log_max_days_<type>: FORWARD invariant — every token yields a string (no crash).
+	 * log_max_days_<type>: BACKWARD invariant — write(read(v)) stores exactly v (identity).
+	 *
+	 * Scenario:
+	 *   Background: log_max_days_<type> uses null/null adapters (plain-string identity).
+	 *     Given a stored token v ∈ {'0','30','365'}.
+	 *     When PfbConfig::read($key).
+	 *     Then (FORWARD) result is a string — not NULL, not a crash.
+	 *     And (BACKWARD) PfbConfig::write($key, result) stores the same string v.
+	 */
+	#[DataProvider('logMaxDaysVocabularyProvider')]
+	public function testLogMaxDaysFieldForwardAndBackwardForEveryVocabToken(
+		string $key,
+		string $token
+	): void {
+		$path = 'installedpackages/pfblockerng/config/0/' . $key;
+
+		// GIVEN: token stored.
+		config_set_path($path, $token);
+
+		// BEFORE: raw value confirmed.
+		$this->assertSame($token, config_get_path($path),
+			"before forward+backward: {$key} token='{$token}'"
+		);
+
+		// FORWARD: read returns a well-formed string (no crash, correct type).
+		$runtime = PfbConfig::read($key);
+		$this->assertIsString($runtime,
+			"FORWARD: {$key} token='{$token}' must return a string"
+		);
+		$this->assertSame($token, $runtime,
+			"FORWARD: {$key} token='{$token}' identity adapter must return token unchanged"
+		);
+
+		// BACKWARD: write(runtime) stores exactly the same string (no novel token).
+		PfbConfig::write($key, $runtime);
+		$stored = config_get_path($path);
+		$this->assertSame($token, $stored,
+			"BACKWARD: {$key} token='{$token}' write(read) must store '{$token}' (identity)"
+		);
+	}
+
+	/**
+	 * log_max_days_<type>: absent key returns '0' (FORWARD — sane default, off, no crash).
+	 *
+	 * Scenario:
+	 *   Background: key absent from config.xml (clean install / field never written).
+	 *     Given no stored value.
+	 *     When PfbConfig::read($key).
+	 *     Then '0' is returned (registered default; age cap off; no crash).
+	 */
+	public function testLogMaxDaysFieldAbsentKeyReturnsZeroDefault(): void
+	{
+		$log_types = [
+			'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
+			'ip_matchlog', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
+		];
+
+		foreach ($log_types as $type) {
+			$key  = 'log_max_days_' . $type;
+			$path = 'installedpackages/pfblockerng/config/0/' . $key;
+
+			// GIVEN: absent (setUp cleared config).
+			// BEFORE: confirm absent.
+			$this->assertNull(config_get_path($path),
+				"before: {$key} must be absent"
+			);
+
+			// FORWARD: read returns the registered default '0' — no crash.
+			$result = PfbConfig::read($key);
+			$this->assertSame('0', $result,
+				"FORWARD: {$key} absent must return '0' (registered default)"
+			);
+		}
+	}
+
+	// -----------------------------------------------------------------------
 	// Private helpers
 	// -----------------------------------------------------------------------
 
