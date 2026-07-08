@@ -1,0 +1,299 @@
+ADR-60 Phase 2 — Uniform, always-on timestamp for log/extraslog/errlog — RESULTS
+================================================================================
+
+VERDICT: DONE-WITH-DEVIATION (deviations are additive robustness fixes discovered
+via executed probes this session -- see DEVIATIONS below; no CLAUDE.md rule weakened,
+no ACTION-PLAN item skipped).
+
+--------------------------------------------------------------------------------
+WHAT CHANGED
+--------------------------------------------------------------------------------
+Commit: (pending -- see COMMIT below)
+Branch: adr/60-age-based-log-retention (pushed directly, no PR needed)
+
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  - pfb_logger(): deleted the `strpos($log,'NOW')!==FALSE` branch and $pfb['pnow'].
+    Every call now: $now = pfb_log_iso_timestamp(); scrub literal ' [ NOW ]' / bare
+    'NOW'; insert "{$now} " AFTER any leading newlines (strspn/substr, not ltrim --
+    see DEVIATIONS #1); $elog = $log (both writers get the identical stamped line).
+  - case 5 (debugger, /tmp/pfb_debug): dropped the now-redundant "{$now} | " prefix
+    since $elog already carries its own stamp (avoids a doubled timestamp; not one
+    of the 10 tracked log types, no test covers it, out of ADR scope but inside the
+    function being rewritten).
+  - pfb_open_sqlite(): added `$now = pfb_log_iso_timestamp();` at top; all 6 bypass
+    writes (`\nDNSBL_SQL: ...`) now `\n{$now} DNSBL_SQL: ...` -- the single leading
+    "\n" (separator from the PREVIOUS write) is preserved, stamp inserted after it.
+  - pfb_failures(): strips the new leading ISO-8601 prefix
+    (`preg_replace('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} /', '', $result)`) from
+    each grep-matched line BEFORE `explode(' ')`, so `$header[4]` still indexes the
+    original (pre-stamp) message shape -- the REQUIRED FIX for the header[4]
+    regression the brief flagged (see below).
+
+- tests/php/PfbLoggerIsoTimestampTest.php
+  - testLogTimestampIsIso8601NotUsStyle: rewritten to assert the ALWAYS-stamped
+    shape and that a leftover '[ NOW ]' token is scrubbed, not substituted.
+  - testFailuresGrepMatchesIsoLogTimestamp: rewritten per the brief's point 4 to
+    drive the REAL production path end-to-end (real pfb_logger() call, real
+    "Download FAIL" message shape verbatim, real pfb_failures()) instead of
+    hand-constructing the errlog line -- this is what actually catches the
+    header[4] regression (the old version could not).
+
+- tests/php/LogTimestampBaselineTest.php
+  - 7 tests flipped from "pins the bug" to "pins the fix" (6 named in the brief +
+    1 the brief's own enumeration missed -- see DEVIATIONS #2):
+    testLogWithoutNowTokenWritesNoTimestamp -> testLogAlwaysStampedWithIsoTimestamp
+    testExtrasLogWithoutNowTokenWritesNoTimestamp -> testExtrasLogAlwaysStampedWithIsoTimestamp
+    testLogWithNowTokenSubstitutesIsoTimestampWhenPnowCleared -> testLogLegacyNowTokenScrubbedNotSubstituted
+    testLogNowTokenStrippedToNothingWhenPnowAlreadySetSameSecond -> testLogRepeatedSameSecondCallsBothStamped
+    testPnowDedupContaminatesAcrossLogAndExtrasLog -> testLogAndExtrasLogCallsAreIndependent
+    testErrlogAlwaysStampedEvenWhenMainLogDedupStripsTimestamp -> testErrlogAndMainLogBothStampedSameFormat
+    testErrlogBypassWriteHasNoTimestamp -> testErrlogBypassWriteAlwaysStamped
+  - Removed the now-dead NO_TIMESTAMP_PATTERN const and 'pnow' from saved/tracked
+    globals (the key is no longer read/written anywhere).
+  - runWithinSameSecond() simplified to a 0-arg closure ($before is no longer
+    injected into $work -- no test presets 'pnow' anymore).
+  - Filterlog/dnsbl_parse_err/Python tests: UNTOUCHED (Phase 3/4's rows).
+
+- tests/php/PfbValidateLogTest.php, tests/php/PfbEmitEntryRejectStatsTest.php,
+  tests/php/LiveLogStdoutTest.php: updated assertions to match pfb_logger()'s new
+  stamped shape (see DEVIATIONS #3 -- these are real downstream consumers the
+  brief did not enumerate, found by running the FULL suite, not just the ADR's
+  named tests).
+
+--------------------------------------------------------------------------------
+GATES RUN (final tree)
+--------------------------------------------------------------------------------
+
+$ php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+No syntax errors detected in src/usr/local/pkg/pfblockerng/pfblockerng.inc
+(the 5 "Deprecated: optional-before-required-parameter" notices are pre-existing,
+unrelated functions (pfb_parsed_fail/pfb_download/pfb_dnsbl_parse/pfb_unlock x2) --
+confirmed present before this phase's changes too, same as Phase 1 noted for
+pfb_unlock().)
+
+$ vendor/bin/phpunit
+............................................................. 2440 / 2449 ( 99%)
+.........                                                     2449 / 2449 (100%)
+Time: 00:09.596, Memory: 38.00 MB
+OK, but there were issues!
+Tests: 2449, Assertions: 19094, PHPUnit Deprecations: 2, Skipped: 4.
+(same pre-existing 2 deprecations / 4 posix_getuid()===0 skips as Phase 1; exit 0)
+
+$ vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+[OK] No errors
+
+$ vendor/bin/phpcs -d memory_limit=1G --standard=phpcs.xml.dist src/
+(no output, exit 0 -- clean)
+
+$ python3 -m pytest
+======================= 2437 passed, 4 skipped in 43.54s =======================
+(no .py files touched this phase; run for completeness -- unaffected, same
+pre-existing skips)
+
+$ python3 scripts/check_comment_narration.py --diff HEAD   -> exit 0, clean
+$ python3 scripts/check_version_literals.py --diff HEAD    -> exit 0, clean
+$ python3 scripts/check_appliance_python.py --diff HEAD     -> exit 0, clean
+
+--------------------------------------------------------------------------------
+RED -> GREEN PROOF #1 -- Phase 1's flipped oracles (all 7, see DEVIATIONS #2)
+--------------------------------------------------------------------------------
+RED (pre-Phase-2 code: `git checkout HEAD -- src/.../pfblockerng.inc`, tests at
+the Phase-2 HEAD):
+
+$ vendor/bin/phpunit --filter "LogTimestampBaselineTest|PfbLoggerIsoTimestampTest" --testdox
+ ✘ Log always stamped with iso timestamp
+ ✘ Extras log always stamped with iso timestamp
+ ✘ Log legacy now token scrubbed not substituted
+ ✘ Log repeated same second calls both stamped
+ ✘ Log and extras log calls are independent
+ ✘ Errlog and main log both stamped same format
+ ✘ Errlog bypass write always stamped
+ ✔ Filterlog bsd branch raw passthrough has no year
+ ✔ Filterlog syslog branch lossy reformat drops year
+ ✔ Parsed fail pins ambiguous two digit year format
+ ✔ Pfb log iso timestamp matches iso 8601 format
+ ✘ Log timestamp is iso 8601 not us style
+ ✔ Failures grep matches iso log timestamp
+Tests: 13, Assertions: 45, Failures: 8, PHPUnit Deprecations: 2.
+(8 failures = the 7 flipped LogTimestampBaselineTest tests + the rewritten
+PfbLoggerIsoTimestampTest::testLogTimestampIsIso8601NotUsStyle; the untouched
+Filterlog/ParsedFail/helper tests and testFailuresGrepMatchesIsoLogTimestamp
+correctly stay green on old code -- see note below on why that one test is
+green on BOTH sides, by design.)
+
+GREEN (restore Phase-2 code):
+$ vendor/bin/phpunit --filter "LogTimestampBaselineTest|PfbLoggerIsoTimestampTest" --testdox
+ ✔ (all 13 tests, same list as above, all checkmarks)
+Tests: 13, Assertions: 53, PHPUnit Deprecations: 2.
+
+--------------------------------------------------------------------------------
+RED -> GREEN PROOF #2 -- the pfb_failures() header[4] regression (isolated)
+--------------------------------------------------------------------------------
+Confirmed via an EXECUTED php -r probe this session (not reasoned/assumed) before
+writing any fix, exactly reproducing the brief's claimed numbers:
+  OLD (today's mid-string 'NOW' substitution): header[4] = 'SomeFeed'  (correct)
+  NEW (front-of-line stamp, brief's shape)    : header[4] = 'ProviderX' (the alias,
+                                                 WRONG -- confirmed, not assumed)
+  NEW + REQUIRED FIX (strip ISO prefix first) : header[4] = 'SomeFeed'  (restored)
+
+Isolated red (Phase-2 pfb_logger() + pfb_open_sqlite() in place, ONLY the
+pfb_failures() preg_replace fix temporarily removed):
+$ vendor/bin/phpunit --filter testFailuresGrepMatchesIsoLogTimestamp --testdox
+ ✘ Failures grep matches iso log timestamp
+   pfb_failures() did not extract the feed header at explode(' ')[4] -- got:
+   array ( 'pfB_TestAlias' => 1, )
+   Failed asserting that an array has the key 'pfbtestheader'.
+Tests: 1, Assertions: 5, Failures: 1, PHPUnit Deprecations: 2.
+
+Green (fix restored):
+$ vendor/bin/phpunit --filter PfbLoggerIsoTimestampTest --testdox
+ ✔ Log timestamp is iso 8601 not us style
+ ✔ Failures grep matches iso log timestamp
+Tests: 2, Assertions: 10, PHPUnit Deprecations: 2.
+
+Note: testFailuresGrepMatchesIsoLogTimestamp is ALSO green against fully
+pre-Phase-2 code (both writers unchanged) -- expected: old pfb_logger()'s
+mid-string substitution already put the header at the same index old
+pfb_failures() read, so old code was already internally consistent. The
+isolated-fix red/green above is the discriminating proof for THIS regression
+specifically (new stamping code + missing fix = wrong key; + fix = right key).
+
+--------------------------------------------------------------------------------
+NOW-TOKEN GREP ENUMERATION (verified this session, not from memory)
+--------------------------------------------------------------------------------
+$ grep -o '\[ NOW \]' src/usr/local/pkg/pfblockerng/pfblockerng.inc \
+    src/usr/local/www/pfblockerng/*.php | wc -l
+      38   (29 in pfblockerng.inc, 9 in pfblockerng.php)
+$ grep -n "NOW" src/usr/local/pkg/pfblockerng/pfblockerng.inc src/usr/local/www/pfblockerng/*.php
+  -- every hit is either the exact ' [ NOW ]' token (38 call sites, confirmed
+     above) or unrelated (pfb_logger()'s own definition; pfblockerng_dnsbl.php's
+     'now'/'NOW'/'NOWRUZ'/'NOWTV' feed-name config VALUES, not pfb_logger()
+     messages). No bare mid-word 'NOW' exists anywhere -- confirmed, matches the
+     brief's claim exactly. None of these 38 caller strings were touched (diff-
+     read: only pfb_logger(), pfb_open_sqlite()'s 6 sites, and pfb_failures()
+     changed in pfblockerng.inc).
+Each site's output now: the ' [ NOW ]'/'NOW' text is scrubbed to nothing by
+pfb_logger()'s defensive str_replace, and the line carries pfb_logger()'s real
+"{$now} " prefix instead (inserted after any leading newlines the caller's raw
+message had, so consecutive appends stay on separate physical lines).
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX
+--------------------------------------------------------------------------------
+| Row                                          | Test                                                    |
+| --------------------------------------------- | ------------------------------------------------------- |
+| log, no legacy token                          | testLogAlwaysStampedWithIsoTimestamp                     |
+| extraslog, no legacy token                    | testExtrasLogAlwaysStampedWithIsoTimestamp               |
+| log, legacy '[ NOW ]' token present           | testLogLegacyNowTokenScrubbedNotSubstituted              |
+| same-second dedup retired (log)               | testLogRepeatedSameSecondCallsBothStamped                |
+| log/extraslog cross-contamination retired     | testLogAndExtrasLogCallsAreIndependent                   |
+| errlog + main log, same write (logtype 2)     | testErrlogAndMainLogBothStampedSameFormat                |
+| errlog writer #2: pfb_open_sqlite() bypass    | testErrlogBypassWriteAlwaysStamped (tripwire + repro)    |
+| pfb_failures() header[4] regression           | PfbLoggerIsoTimestampTest::testFailuresGrepMatchesIsoLogTimestamp (real pfb_logger()+pfb_failures() end-to-end) |
+| ISO format itself (leftover from Phase 1)     | testLogTimestampIsIso8601NotUsStyle, testPfbLogIsoTimestampMatchesIso8601Format (unchanged) |
+| leading-newline-as-separator convention (ADR-48 pfb_validate_log_line() callers) | PfbValidateLogTest (3), PfbEmitEntryRejectStatsTest (2 of 6 needed updating), LiveLogStdoutTest (2 of 6) -- see DEVIATIONS #3 |
+| case 5 debugger (/tmp/pfb_debug) no longer double-stamped | manual diff-read only; not one of the 10 tracked types, no existing test, out of ADR scope |
+
+--------------------------------------------------------------------------------
+DEVIATIONS / JUDGMENT CALLS
+--------------------------------------------------------------------------------
+1. IMPLEMENTATION CHOICE the brief left unspecified, resolved by executed probe:
+   the brief's action plan says "prefix $log with {$now}" but does not specify
+   HOW to handle a message with LEADING NEWLINES (e.g. the real "Download FAIL"
+   call site is "\n\n [ ... ] Download FAIL [ NOW ]\n"). Two candidates were
+   probed:
+     (a) `"{$now} " . ltrim($log, "\n")` -- strips leading newlines entirely.
+         Reproduces the brief's EXACT claimed header[4] regression numbers
+         ('ProviderX' wrong / 'SomeFeed' after the fix) -- confirmed via
+         executed php -r probe. BUT: breaks a load-bearing, DOCUMENTED
+         convention (ADR-48's pfb_validate_log_line(): "Shape: leading \n per
+         pfb_logger() convention" -- a PURE SEPARATOR from the PREVIOUS write,
+         relied on by every pfb_validate_log() caller, since each message has
+         NO trailing newline). Under ltrim, two consecutive same-call-site
+         writes concatenate onto ONE physical line with no separator --
+         confirmed via the full suite: PfbEmitEntryRejectStatsTest,
+         LiveLogStdoutTest, PfbValidateLogTest all broke, one (
+         testNonzeroBucketsEmitOneCanonicalLineEach) with a literal
+         line-concatenation failure, not just a format mismatch.
+     (b) `substr($log,0,$lead) . "{$now} " . substr($log,$lead)` where
+         `$lead = strspn($log, "\n")` -- preserves ALL leading newlines
+         verbatim (so the separator convention still works) and inserts the
+         stamp right after them, before the actual content. Produces the
+         IDENTICAL final content-line bytes as (a) for the header[4]
+         regression's purposes (verified: same double-space artifact, same
+         header[4] shift, same fix), while ALSO fixing the concatenation
+         bug ADR-48's callers depend on.
+   SHIPPED: (b). Confirmed via the full suite (2449/2449 green) that this
+   choice does not regress any of the 8 downstream tests (a) broke.
+
+2. COVERAGE-MATRIX GAP the brief's (and Phase 1's carry-forward's) own
+   enumeration missed: `testLogWithNowTokenSubstitutesIsoTimestampWhenPnowCleared`
+   was NOT in either's "6 tests to flip" list, but running the suite against
+   the new pfb_logger() showed it ALSO fails (7 failures, not 6) --
+   re-enumerated from the actual test run per CLAUDE.md's coverage-matrix
+   discipline ("re-enumerate the class from the source, never from the
+   finding's wording"), not silently left broken. Flipped to
+   testLogLegacyNowTokenScrubbedNotSubstituted (item 5's list above already
+   reflects the corrected 7).
+
+3. UNENUMERATED DOWNSTREAM CONSUMERS: neither the brief nor ADR.md's coverage
+   matrix names pfb_validate_log_line()'s callers (ADR-48/#789:
+   PfbValidateLogTest, PfbEmitEntryRejectStatsTest) or LiveLogStdoutTest
+   (ADR-58) as consumers of pfb_logger()'s exact output shape. Found by
+   running the FULL `vendor/bin/phpunit` suite (not just the ADR's named
+   test files) after the pfb_logger() rewrite -- 8 failures surfaced (3
+   PfbValidateLogTest, 3 PfbEmitEntryRejectStatsTest, 2 LiveLogStdoutTest).
+   All 8 were literal exact-match assertions against the PRE-stamp output;
+   updated to match the new stamped shape (regex-based, still capable of
+   failing on a real regression -- verified the zero-count-bucket
+   "must NOT emit" assertion in PfbEmitEntryRejectStatsTest specifically,
+   since a naive fix could have made it vacuously always-pass; rewrote it
+   with assertDoesNotMatchRegularExpression against the STAMPED pattern so
+   it still catches a wrongly-emitted line). None of these files are in
+   ADR.md's Phase 2 scope by name, but they ARE pfb_logger() callers whose
+   tests pin its exact byte output -- fixing them is required by "every
+   change ships with green tests," not a scope expansion of the ADR itself.
+
+4. Case 5 (debugger) simplification: dropped the redundant "{$now} | " prefix
+   in `@file_put_contents("/tmp/pfb_debug", "{$elog}", FILE_APPEND);` since
+   $elog now always carries its own leading stamp -- otherwise this internal,
+   untested, out-of-scope debug path would silently double-print the
+   timestamp. Judged a same-function correctness fix, not caller-string
+   scope creep (case 5 is internal switch-case logic inside pfb_logger()
+   itself, not one of the ~30+ caller message strings the constraints
+   protect).
+
+None of the above weakens any CLAUDE.md MUST rule. All are either (a) an
+executed-probe-confirmed implementation choice where the brief was silent,
+(b) a coverage gap closed per the mandatory re-enumeration rule, or (c) a
+same-function robustness fix inside pfb_logger()/pfb_open_sqlite() -- no
+caller message string, no ip_block/permit/matchlog/dnsbl_parse_err/dnslog/
+dnsreplylog/unilog site was touched (verified via diff-read).
+
+--------------------------------------------------------------------------------
+CARRY-FORWARD FOR PHASE 3 (pfb_daemon_filterlog()/pfb_parsed_fail())
+--------------------------------------------------------------------------------
+- Phase 3 touches the SAME file (pfblockerng.inc). pfb_logger()'s NEW shape is:
+  `substr($log,0,strspn($log,"\n")) . "{$now} " . substr($log,strspn($log,"\n"))`
+  -- i.e. the stamp lands right after any leading newlines in the message, not
+  necessarily at absolute byte 0. If Phase 3's pfb_daemon_filterlog()/
+  pfb_parsed_fail() rewrite calls pfb_logger() (rather than writing ip_block/
+  permit/matchlog directly, which it does today via a separate path), re-verify
+  this insertion point doesn't collide with whatever format Phase 3 introduces.
+- pfb_failures()'s fix strips EXACTLY `^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} ` --
+  if Phase 3 or later phases change pfb_log_iso_timestamp()'s format, this
+  regex must move in lockstep (same coupling ADR.md §2.3 item 5 already flags).
+- $pfb['pnow'] no longer exists ANYWHERE (grep confirms) -- Phase 3 must not
+  reintroduce or reference it.
+- Any NEW pfb_logger() caller Phase 3 adds should be checked against BOTH
+  conventions now in play: "no leading newline" (most callers, gets a clean
+  "{$now} text" line) and "leading \n as pure separator" (ADR-48's
+  pfb_validate_log_line() family) -- pfb_logger() now handles both correctly,
+  but a new caller mixing conventions (e.g. embedding an INTERIOR \n mid-
+  message with no trailing \n) was not a coverage-matrix row here and is
+  worth a fresh probe if Phase 3 introduces one.
+- Full `vendor/bin/phpunit` (not just ADR.md's named test files) should be
+  re-run after ANY pfb_logger()-shape change -- this phase's own gate caught
+  3 unenumerated consumer files (DEVIATIONS #3) that ADR.md's coverage matrix
+  never named; Phase 3 risks the same class of miss if it only checks the
+  named rows.
