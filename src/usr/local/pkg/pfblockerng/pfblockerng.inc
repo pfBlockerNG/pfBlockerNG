@@ -7799,6 +7799,68 @@ function pfb_unbound_py_ccache_flush($names) {
 }
 
 
+// Read a reload/applied marker's first-line generation with the IDENTICAL parsing
+// convention as pfb_unbound_py_flip_sentinel()/_wait_marker() (first line, trim,
+// ctype_digit) -- an absent/empty/non-integer file reads as 0, the shared "never
+// flipped yet" baseline pfb_dnsbl_converged() relies on for its 0 == 0 case.
+function pfb_unbound_py_marker_generation(string $path): int {
+	if (!file_exists($path)) {
+		return 0;
+	}
+	$raw = @file_get_contents($path);
+	if ($raw === FALSE) {
+		return 0;
+	}
+	$first = strtok($raw, "\n");
+	if ($first === FALSE) {
+		return 0;
+	}
+	$first = trim($first);
+	if ($first === '' || !ctype_digit($first)) {
+		return 0;
+	}
+	return (int) $first;
+}
+
+// ADR-61: is DNSBL's live matcher state actually caught up with what it was told to
+// become? TRUE iff the sentinel/applied generations agree (or neither has ever been
+// written), Unbound is running, and unbound.conf still wires pfb_unbound.py. Pure
+// read -- no writes, no waiting/polling. Reused by pfb_reload_unbound()'s own
+// apply-stage writer/clearer and by the tick reconciliation step.
+function pfb_dnsbl_converged(): bool {
+	global $pfb;
+
+	$sentinel = pfb_unbound_py_marker_generation("{$pfb['dnsbldir']}/pfb_py_reload");
+	$applied  = pfb_unbound_py_marker_generation("{$pfb['dnsbldir']}/pfb_py_reload.applied");
+	if ($sentinel !== $applied) {
+		return FALSE;
+	}
+
+	if (!is_process_running('unbound')) {
+		return FALSE;
+	}
+
+	// Mirrors the widget's $unbound_validate check (pfblockerng.widget.php) verbatim.
+	$unbound_conf = "{$pfb['dnsbldir']}/unbound.conf";
+	return file_exists($unbound_conf) && strpos(file_get_contents($unbound_conf), 'pfb_unbound.py') !== FALSE;
+}
+
+// ADR-61: the DNSBL apply-stage writer/clearer decision, shared by every point in
+// pfb_reload_unbound() where convergence might settle (the zero-downtime swap's own
+// success return, and the shared restart path's completion). Kept separate from
+// pfb_dnsbl_converged() so it stays directly unit-testable.
+function pfb_dnsbl_apply_ledger_update(): void {
+	global $pfb;
+
+	if (pfb_dnsbl_converged()) {
+		pfb_sync_status_close('dnsbl', 'dnsbl', 'apply', $pfb['dbdir']);
+	} else {
+		pfb_sync_status_open('dnsbl', 'dnsbl', 'apply',
+			'DNSBL apply not converged -- Unbound not fully live with pfb_unbound.py; see error.log',
+			$pfb['dbdir']);
+	}
+}
+
 // Reload Resolver. ADR-10: $datapath signals a pure DNSBL-DATA update (feed/cron or a #51
 // custom-list edit) already published atomically to the manifest. When python is live, unbound
 // is running, no config change is pending, and the RAM gate fits, this takes the ZERO-DOWNTIME
@@ -7851,6 +7913,9 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 					// the DNSBL Queries daemon suppressed. The restart-fallback paths below
 					// reach the normal clear, so this is the only fast-path exit that needs it.
 					unlink_if_exists("{$pfb['dnsbl_file']}.sync");
+					// ADR-61: this swap just confirmed applied == sentinel -- a second,
+					// independent convergence point besides the restart path's completion.
+					pfb_dnsbl_apply_ledger_update();
 					return;
 				}
 
@@ -7949,6 +8014,16 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 		$log = htmlspecialchars(implode("\n", $final['result']));
 		pfb_logger(" Not completed.\n{$log}\n", 1);
 	}
+
+	// ADR-61: mode=='enabled' is the only state DNSBL's apply is meant to converge to --
+	// a deliberate 'disabled' teardown clears any stale entry rather than flagging its
+	// own (expected) non-convergence as a failure.
+	if ($mode == 'enabled') {
+		pfb_dnsbl_apply_ledger_update();
+	} else {
+		pfb_sync_status_close('dnsbl', 'dnsbl', 'apply', $pfb['dbdir']);
+	}
+
 	unlink_if_exists($cache_dumpfile);
 }
 
