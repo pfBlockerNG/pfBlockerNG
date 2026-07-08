@@ -13,6 +13,7 @@ whole files.
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -222,6 +223,16 @@ def test_cli_hostile_git_configs_cannot_bypass_the_gate(tmp_path: Path) -> None:
     _git(tmp_path, "config", "diff.mnemonicPrefix", "true")
     _git(tmp_path, "config", "diff.noprefix", "true")
     assert _run(tmp_path, "--staged").returncode == 1
+
+    # An external diff driver replaces the unified output entirely — the gate
+    # must still see the real diff (config form and env form).
+    _git(tmp_path, "config", "diff.external", "/bin/echo")
+    assert _run(tmp_path, "--staged").returncode == 1
+    env = {**os.environ, "GIT_EXTERNAL_DIFF": "/bin/echo"}
+    res = subprocess.run(
+        [sys.executable, str(_TOOL), "--staged"], cwd=tmp_path, capture_output=True, text=True, env=env
+    )
+    assert res.returncode == 1, res.stderr
 
 
 def test_cli_space_bearing_md_path_stays_clean(tmp_path: Path) -> None:
