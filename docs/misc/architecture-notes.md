@@ -933,10 +933,10 @@ boundary the PHP file cannot safely share), merged read-only by the widget.
 The PHP-owned ledger is `{$pfb['dbdir']}/pfb_sync_status.json`, a nested
 `{facility: {item: {stage: {message, first_seen, last_seen}}}}` object (`facility` ∈
 `ip`/`dnsbl`; `stage` ∈ `download`/`apply`/`dedup`/`parse`). Pure, clock-injectable, atomic
-(stage → `fsync` → `rename`) read/write/open/close/list-open helpers live in
-`pfblockerng_extra.inc` (`pfb_sync_status_*`), mirroring `pfb_due_ledger_*`'s exact persistence
-idiom (ADR-43) — same sidecar-file convention, same downgrade-safe-on-corrupt/absent-file
-contract, same "no config.xml involvement" shape.
+(temp-write → `rename`, no `fsync` — same as `pfb_due_ledger_*`) read/write/open/close/
+list-open helpers live in `pfblockerng_extra.inc` (`pfb_sync_status_*`), mirroring
+`pfb_due_ledger_*`'s exact persistence idiom (ADR-43) — same sidecar-file convention, same
+downgrade-safe-on-corrupt/absent-file contract, same "no config.xml involvement" shape.
 
 `pfb_unbound.py` runs chrooted inside Unbound's Python loader, a separate process from PHP —
 it cannot safely co-write the PHP file (write contention, and PHP is not chrooted so the paths
