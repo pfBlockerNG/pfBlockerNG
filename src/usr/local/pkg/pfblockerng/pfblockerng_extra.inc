@@ -595,39 +595,15 @@ function pfb_cfg_registry(): array
 			'write_adapter' => NULL,
 			'since'         => '2.0.0',
 		],
-
-		// ADR-30: per-log scheduled reset period (off|daily|weekly|monthly). Default 'off'.
-		// Vocabulary: {'off','daily','weekly','monthly'}. Plain-string (identity) adapter.
-		// Mirrors the log_max_<type> set exactly — one entry per managed log type.
-		// 'since' = '4.0.0' — the first release that ships these fields.
 	];
 
 	$log_types = [
 		'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
 		'ip_matchlog', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
 	];
-	foreach ($log_types as $log_type) {
-		$registry['log_rotate_' . $log_type] = [
-			'section'       => $gen,
-			'default'       => 'off',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
-			'since'         => '4.0.0',
-		];
-		// ADR-30 amendment: lines to keep when a scheduled reset fires (numeric string).
-		// Default '0' = clear fully. Plain-string (identity) adapter; mirrors log_rotate_<type>.
-		$registry['log_reset_keep_' . $log_type] = [
-			'section'       => $gen,
-			'default'       => '0',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
-			'since'         => '4.0.0',
-		];
-	}
 
 	// ADR-60: per-log age-based retention cap (days; '0' = off), independent of
 	// log_max_<type>'s line-count cap and its 'nolimit' opt-out (S2.2/S2.3 item 3).
-	// Reuses the SAME $log_types array as the log_rotate_/log_reset_keep_ loop above.
 	foreach ($log_types as $log_type) {
 		$registry['log_max_days_' . $log_type] = [
 			'section'       => $gen,
@@ -1878,69 +1854,6 @@ function pfb_adv_alias_field_errors(array $post): array
 }
 
 // ---------------------------------------------------------------------------
-// ADR-30 — Pure schedule-period deciders for log rotation (no I/O, no globals, no config
-// access; caller passes all inputs explicitly). Period-key format (state file per log type):
-//   'off'/''  -> ''            'daily'   -> 'YYYY-MM-DD'
-//   'weekly'  -> 'YYYY-Www' (ISO week-year)   'monthly' -> 'YYYY-MM'   unrecognised -> ''
-// ISO week-year: date('o') returns the ISO week-YEAR, not calendar year — 2027-01-01 yields
-// '2026-W53', not '2027-W01'. Use date('o'), never date('Y'), for the week key.
-// Tests: tests/php/LogRotateScheduleTest.php
-// ---------------------------------------------------------------------------
-
-/**
- * pfb_log_rotate_period — compute the period key for a given schedule and time.
- *
- * Returns a string period key representing the calendar window that $ts falls
- * in, given $schedule. Returns '' when the schedule is off/empty/unrecognised.
- * The key is compared with the stored last-reset key to decide whether to reset.
- *
- * PURE — no I/O, no globals, no side effects.
- *
- * @param string $schedule  Schedule value: 'off'|''|'daily'|'weekly'|'monthly'.
- *                          Any unrecognised value is treated as 'off'.
- * @param int    $ts        Unix timestamp to compute the period key for.
- * @return string           Period key, or '' when the schedule is off/unrecognised.
- */
-function pfb_log_rotate_period(string $schedule, int $ts): string
-{
-	return match ($schedule) {
-		'daily'   => date('Y-m-d', $ts),
-		'weekly'  => date('o-\WW', $ts),
-		'monthly' => date('Y-m',   $ts),
-		default   => '',
-	};
-}
-
-/**
- * pfb_log_should_reset — decide whether a log should be reset at $now_ts.
- *
- * Returns TRUE when the calendar period has rolled over since the last reset
- * (i.e. the current period key differs from $last_key), or when $last_key is
- * empty (the log has never been reset and a reset is overdue).
- * Always returns FALSE when the schedule is 'off' / '' / unrecognised.
- *
- * PURE — no I/O, no globals, no side effects. Idempotent: within the same
- * period, pfb_log_rotate_period($schedule, $now_ts) === $last_key, so this
- * returns FALSE on every tick after the first reset in that period.
- *
- * @param string $schedule  Schedule value: 'off'|''|'daily'|'weekly'|'monthly'.
- * @param string $last_key  The period key stored after the last reset, or '' if
- *                          the log has never been reset (triggers reset).
- * @param int    $now_ts    Current Unix timestamp.
- * @return bool             TRUE iff the log should be truncated now.
- */
-function pfb_log_should_reset(string $schedule, string $last_key, int $now_ts): bool
-{
-	$period = pfb_log_rotate_period($schedule, $now_ts);
-	if ($period === '') {
-		// Schedule is off or unrecognised — never reset.
-		return FALSE;
-	}
-	// Reset when the period has changed (or when the log has never been reset).
-	return $period !== $last_key;
-}
-
-// ---------------------------------------------------------------------------
 // ADR-38: pure key=value syslog event formatters (pfb_syslog_format_ip() etc.) — the fixed
 // key order, empty-value omission rules, and quoting/escaping are specified in
 // .ADRs/ADR_38_System_Log_Integration/ and pinned by tests/php/SyslogFormatTest.php.
@@ -2649,7 +2562,7 @@ function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir): bool
  *
  * Reads the ledger, dispatches each job that is due (feeds, dcc, bl) via exec() as a
  * separate process, then marks each as ran. ss_refresh runs every tick; the scheduled
- * log maintenance (pfb_log_mgmt/pfb_log_reset) runs only on an idle tick (see below).
+ * log maintenance (pfb_log_mgmt) runs only on an idle tick (see below).
  *
  * Lives here (not in the www/ dispatcher script) rather than the reverse so the
  * PHPUnit bootstrap can load and call the real entrypoint off-appliance: the www
@@ -2670,13 +2583,13 @@ function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir): bool
  *   dcc       : 86400 s daily, jitter = seeded_jitter (stable per install).
  *   bl        : 86400 or 604800 s, jitter = seeded_jitter (stable per install).
  *
- * Scheduled log maintenance (pfb_log_mgmt/pfb_log_reset) runs at the end of every tick,
- * independent of the feed-cron cadence above (issue #573: with pfb_interval='Disabled'
- * the feed cron never dispatches, so log maintenance can no longer ride its tail the way
- * it used to inside pfblockerng_sync_cron()) -- but ONLY on an IDLE tick: skipped when
- * this tick just dispatched an update pass (cron/dcc/bl) or one from an earlier tick is
- * still running (pfb_update_pass_running()). Both dispatch and a backgrounded pass append
- * to $pfb['log']/$pfb['extraslog'] for potentially minutes; pfb_log_mgmt()'s
+ * Scheduled log maintenance (pfb_log_mgmt) runs at the end of every tick, independent of
+ * the feed-cron cadence above (issue #573: with pfb_interval='Disabled' the feed cron
+ * never dispatches, so log maintenance can no longer ride its tail the way it used to
+ * inside pfblockerng_sync_cron()) -- but ONLY on an IDLE tick: skipped when this tick just
+ * dispatched an update pass (cron/dcc/bl) or one from an earlier tick is still running
+ * (pfb_update_pass_running()). Both dispatch and a backgrounded pass append to
+ * $pfb['log']/$pfb['extraslog'] for potentially minutes; pfb_log_mgmt()'s
  * tail-to-temp-then-cat-over trim is a read/truncate/rewrite window that would lose any
  * lines the concurrent writer appends during it.
  */
@@ -2718,8 +2631,8 @@ function pfblockerng_tick(): void
 	// `pfb_trigger scope=both` skips (it would poll every feed every tick and never
 	// run the once-per-pass update check). Apply-on-change still happens via ADR-40
 	// (IP) + ADR-10 (DNSBL) inside that final sync. Backgrounded so the tick stays
-	// fast. The scheduled log trim + reset no longer ride this dispatch (issue
-	// #573) -- see pfb_log_mgmt()/pfb_log_reset() at the end of this function.
+	// fast. The scheduled log trim no longer rides this dispatch (issue #573) --
+	// see pfb_log_mgmt() at the end of this function.
 	if (!$cron_disabled && ($due['cron'] || pfb_due_ledger_is_pending('cron', $dbdir))) {
 		if ($in_win) {
 			logger(LOG_NOTICE, localize_text('Tick: dispatching feed cron.'), LOG_PREFIX_PKG_PFBLOCKERNG);
@@ -2778,17 +2691,14 @@ function pfblockerng_tick(): void
 
 	// Scheduled log maintenance (issue #573): runs on every IDLE tick, independent of
 	// the feed-cron gate above -- pfb_interval='Disabled' must not silently stop log
-	// upkeep. Both self-gate by their own configured schedule/caps (per-log line cap
-	// for pfb_log_mgmt, per-log calendar boundary for pfb_log_reset), so calling them
-	// on every idle tick is safe: most calls are a no-op. Trim (line-cap) runs before
-	// reset (calendar boundary), same ordering as the prior sync_cron tail. Skipped
-	// when THIS tick dispatched an update pass ($dispatched) or an earlier one is
-	// still running (pfb_update_pass_running()) -- both append to the same log files
-	// pfb_log_mgmt()'s tail-to-temp-then-cat-over trim reads/truncates/rewrites, and
-	// racing that window against a live writer loses whatever it appends meanwhile.
+	// upkeep. pfb_log_mgmt() self-gates by its own configured per-log line/age caps, so
+	// calling it every idle tick is safe: most calls are a no-op. Skipped when THIS tick
+	// dispatched an update pass ($dispatched) or an earlier one is still running
+	// (pfb_update_pass_running()) -- both append to the same log files pfb_log_mgmt()'s
+	// tail-to-temp-then-cat-over trim reads/truncates/rewrites, and racing that window
+	// against a live writer loses whatever it appends meanwhile.
 	if (!$dispatched && !pfb_update_pass_running()) {
 		pfb_log_mgmt();
-		pfb_log_reset();
 	}
 }
 

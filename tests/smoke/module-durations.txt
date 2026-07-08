@@ -26,13 +26,6 @@ test_dot_doq_block.py::test_self_exempt_guard_in_pfctl_output 7.47
 test_dot_doq_block.py::test_stale_interface_rule_pruned_on_reconcile 8.20
 test_dot_doq_block.py::test_uninstall_sweep_removes_all_dot_block_rules 6.90
 test_dot_doq_block.py::test_user_filter_rule_survives_disable_and_uninstall 10.33
-test_log_rotate.py 14.48
-test_log_rotate.py::test_all_off_no_log_emptied 1.50
-test_log_rotate.py::test_boundary_reset_inode_preserved_and_per_log_independence 3.36
-test_log_rotate.py::test_chrooted_python_log_reset_preserves_inode_and_ownership 1.88
-test_log_rotate.py::test_retention_buffer_chrooted_dns_log_keeps_last_k_lines_and_ownership 4.41
-test_log_rotate.py::test_retention_buffer_plain_log_keeps_last_k_lines 1.95
-test_log_rotate.py::test_same_period_is_idempotent 1.38
 test_smoke_714_asn_geoip.py 54.98
 test_smoke_714_asn_geoip.py::test_714_b2_parse_fail_counts_every_bad_line 4.75
 test_smoke_714_asn_geoip.py::test_714_c1_asn_table_logs_not_stray_file 50.21

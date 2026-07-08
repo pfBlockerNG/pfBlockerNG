@@ -7,12 +7,11 @@ use PHPUnit\Framework\TestCase;
 /**
  * issue #573 — scheduled log maintenance must survive pfb_interval='Disabled'.
  *
- * pfblockerng_tick() is the ONLY scheduled path to pfb_log_mgmt()/pfb_log_reset()
- * (ADR30-1). Before this change those two calls lived at the tail of
- * pfblockerng_sync_cron(), reachable only through the tick's feed-cron dispatch,
- * itself gated on `!$cron_disabled` (pfb_interval !== 'Disabled'). A user who set
- * Update Frequency to 'Disabled' therefore silently stopped ALL scheduled log
- * trim/reset, with no warning.
+ * pfblockerng_tick() is the ONLY scheduled path to pfb_log_mgmt() (ADR30-1). Before
+ * this change that call lived at the tail of pfblockerng_sync_cron(), reachable only
+ * through the tick's feed-cron dispatch, itself gated on `!$cron_disabled`
+ * (pfb_interval !== 'Disabled'). A user who set Update Frequency to 'Disabled'
+ * therefore silently stopped ALL scheduled log trim, with no warning.
  *
  * This suite drives the REAL pfblockerng_tick() entrypoint -- relocated here
  * (from the www/ dispatcher script, which is never require()'d off-appliance)
@@ -150,8 +149,7 @@ final class TickEntrypointTest extends TestCase
 	 * Seed the minimum config keys pfb_global() reads (avoids undefined-array-key
 	 * warnings against a near-empty test config), the tick cadence knob under
 	 * test ($rawInterval), an always-apply quiet-hours window, and a scheduled
-	 * line-cap ('log') + calendar reset ('errlog') so a real tick call exercises
-	 * BOTH log-maintenance functions distinguishably.
+	 * line-cap ('log') so a real tick call exercises pfb_log_mgmt().
 	 */
 	private function seedTickPrereqs(string $rawInterval): void
 	{
@@ -203,22 +201,6 @@ final class TickEntrypointTest extends TestCase
 		// pfb_log_mgmt(): cap 'log' to 3 lines; every other type stays at the
 		// registry default (20000) -> no-op trim, keeping the test single-purpose.
 		config_set_path("{$gen}/log_max_log", '3');
-
-		// pfb_log_reset(): 'errlog' has a daily reset schedule; every other type
-		// stays 'off' (registry default) -> no-op reset except for 'errlog'.
-		config_set_path("{$gen}/log_rotate_errlog",     'daily');
-		config_set_path("{$gen}/log_reset_keep_errlog", '0');
-	}
-
-	/**
-	 * Write a stale (yesterday) log_rotate.last marker entry for $logtype, so
-	 * pfb_log_reset() finds its daily schedule "due" (period rolled over).
-	 */
-	private function writeStaleMarker(string $logtype): void
-	{
-		$markerPath = $GLOBALS['pfb']['dbdir'] . '/log_rotate.last';
-		$yesterday  = date('Y-m-d', strtotime('-1 day'));
-		file_put_contents($markerPath, "{$logtype}={$yesterday}\n");
 	}
 
 	/**
@@ -243,14 +225,10 @@ final class TickEntrypointTest extends TestCase
 	 * Scenario:
 	 *   Given pfb_interval='Disabled' (the feed cron is entirely gated off).
 	 *   And   a 5-line 'log' file with log_max_log=3 (pfb_log_mgmt should trim it).
-	 *   And   a non-empty 'errlog' file with a stale daily marker (pfb_log_reset
-	 *         should clear it).
-	 *   Before: 'log' has 5 lines; 'errlog' is non-empty.
+	 *   Before: 'log' has 5 lines.
 	 *   When  pfblockerng_tick() is called.
-	 *   Then  'log' is trimmed to its last 3 lines (pfb_log_mgmt ran).
-	 *   And   'errlog' is fully cleared and its marker advanced to today
-	 *         (pfb_log_reset ran) -- log maintenance survives a Disabled
-	 *         Update Frequency (issue #573).
+	 *   Then  'log' is trimmed to its last 3 lines (pfb_log_mgmt ran) -- log
+	 *         maintenance survives a Disabled Update Frequency (issue #573).
 	 */
 	public function testDisabledIntervalStillRunsLogMaintenance(): void
 	{
@@ -269,20 +247,15 @@ final class TickEntrypointTest extends TestCase
 		$this->seedFutureLedgerEntry('dcc', $now);
 		$this->seedFutureLedgerEntry('bl',  $now);
 
-		$logPath    = $this->logPath('log');
-		$errlogPath = $this->logPath('errlog');
+		$logPath = $this->logPath('log');
 
 		file_put_contents($logPath, implode("\n", ['l1', 'l2', 'l3', 'l4', 'l5']) . "\n");
-		file_put_contents($errlogPath, "some error\n");
-		$this->writeStaleMarker('errlog');
 
 		// Before.
 		$linesBefore = count(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
 		$this->assertSame(5, $linesBefore,
 			"Before: expected 'log' to have 5 lines, got {$linesBefore};\n"
 			. '  content=' . var_export(file_get_contents($logPath), TRUE));
-		$this->assertGreaterThan(0, filesize($errlogPath),
-			"Before: expected 'errlog' non-empty, got " . filesize($errlogPath) . ' bytes');
 
 		// Act.
 		pfblockerng_tick();
@@ -294,18 +267,6 @@ final class TickEntrypointTest extends TestCase
 			"After tick with pfb_interval='Disabled': expected 'log' trimmed to [l3,l4,l5], got "
 			. var_export($linesAfter, TRUE)
 			. ' -- pfb_log_mgmt() must run every tick, not only when the feed cron is enabled');
-
-		// After: pfb_log_reset() cleared 'errlog' and advanced its marker.
-		clearstatcache(TRUE, $errlogPath);
-		$this->assertSame(0, filesize($errlogPath),
-			"After tick with pfb_interval='Disabled': expected 'errlog' fully cleared, got "
-			. filesize($errlogPath) . ' bytes -- pfb_log_reset() must run every tick');
-
-		$markerContents = (string) file_get_contents($GLOBALS['pfb']['dbdir'] . '/log_rotate.last');
-		$entries        = pfb_log_rotate_marker_parse($markerContents);
-		$this->assertSame(date('Y-m-d'), $entries['errlog'] ?? NULL,
-			"After tick: expected 'errlog' marker advanced to today (" . date('Y-m-d') . '), got '
-			. var_export($entries['errlog'] ?? NULL, TRUE));
 	}
 
 	// -----------------------------------------------------------------------
@@ -318,15 +279,13 @@ final class TickEntrypointTest extends TestCase
 	 * Scenario:
 	 *   Given pfb_interval='24' (a normal numeric cadence, NOT disabled).
 	 *   And   the 'cron' ledger entry is NOT due (next_due 1h in the future).
-	 *   And   the same 'log'/'errlog' seeding as Case A.
-	 *   Before: 'log' has 5 lines; 'errlog' is non-empty; 'cron' next_due is
-	 *           1h in the future.
+	 *   And   the same 'log' seeding as Case A.
+	 *   Before: 'log' has 5 lines; 'cron' next_due is 1h in the future.
 	 *   When  pfblockerng_tick() is called.
 	 *   Then  the feed cron is NOT dispatched (its ledger entry is untouched --
 	 *         no mark_ran).
-	 *   And   'log' is STILL trimmed and 'errlog' STILL cleared -- log
-	 *         maintenance runs regardless of whether the feed cron itself was
-	 *         due this tick.
+	 *   And   'log' is STILL trimmed -- log maintenance runs regardless of
+	 *         whether the feed cron itself was due this tick.
 	 */
 	public function testLogMaintenanceRunsEvenWhenFeedCronNotDue(): void
 	{
@@ -341,19 +300,14 @@ final class TickEntrypointTest extends TestCase
 		$this->seedFutureLedgerEntry('dcc',  $now);
 		$this->seedFutureLedgerEntry('bl',   $now);
 
-		$logPath    = $this->logPath('log');
-		$errlogPath = $this->logPath('errlog');
+		$logPath = $this->logPath('log');
 
 		file_put_contents($logPath, implode("\n", ['l1', 'l2', 'l3', 'l4', 'l5']) . "\n");
-		file_put_contents($errlogPath, "some error\n");
-		$this->writeStaleMarker('errlog');
 
 		// Before.
 		$linesBefore = count(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
 		$this->assertSame(5, $linesBefore,
 			"Before: expected 'log' to have 5 lines, got {$linesBefore}");
-		$this->assertGreaterThan(0, filesize($errlogPath),
-			"Before: expected 'errlog' non-empty, got " . filesize($errlogPath) . ' bytes');
 
 		// Act.
 		pfblockerng_tick();
@@ -373,11 +327,6 @@ final class TickEntrypointTest extends TestCase
 			"After tick with feed cron NOT due: expected 'log' still trimmed to [l3,l4,l5], got "
 			. var_export($linesAfter, TRUE)
 			. ' -- log maintenance must be unconditional, not gated behind the feed-cron due check');
-
-		clearstatcache(TRUE, $errlogPath);
-		$this->assertSame(0, filesize($errlogPath),
-			"After tick with feed cron NOT due: expected 'errlog' still fully cleared, got "
-			. filesize($errlogPath) . ' bytes');
 	}
 
 	// -----------------------------------------------------------------------
@@ -454,24 +403,22 @@ final class TickEntrypointTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Red->green: before this fix pfblockerng_tick() called pfb_log_mgmt()/
-	 * pfb_log_reset() unconditionally at its tail, even on a tick that itself
-	 * just dispatched the feed cron. This test drives a tick that DOES
-	 * dispatch (a due, in-window 'cron' job) and pins that log maintenance is
-	 * SKIPPED that tick (the $dispatched flag path -- deterministic, does not
-	 * depend on `ps`, unlike the pfb_update_pass_running() branch covered by
-	 * Cases A/B staying idle).
+	 * Red->green: before this fix pfblockerng_tick() called pfb_log_mgmt()
+	 * unconditionally at its tail, even on a tick that itself just dispatched
+	 * the feed cron. This test drives a tick that DOES dispatch (a due,
+	 * in-window 'cron' job) and pins that log maintenance is SKIPPED that tick
+	 * (the $dispatched flag path -- deterministic, does not depend on `ps`,
+	 * unlike the pfb_update_pass_running() branch covered by Cases A/B staying
+	 * idle).
 	 *
 	 * Scenario:
 	 *   Given pfb_interval='24' and a 'cron' ledger entry 10 s past due
-	 *   (dispatches this tick); the same 5-line 'log' + stale-marker 'errlog'
-	 *   seeding as Case A.
-	 *   Before: 'log' has 5 lines; 'errlog' is non-empty with a stale marker.
+	 *   (dispatches this tick); the same 5-line 'log' seeding as Case A.
+	 *   Before: 'log' has 5 lines.
 	 *   When  pfblockerng_tick() is called.
 	 *   Then  the feed cron IS dispatched (mark_ran_anchored advances 'cron').
-	 *   And   'log' is STILL 5 lines and 'errlog' is STILL non-empty with its
-	 *         stale marker unchanged -- pfb_log_mgmt()/pfb_log_reset() must be
-	 *         skipped on a tick that itself just dispatched an update pass.
+	 *   And   'log' is STILL 5 lines -- pfb_log_mgmt() must be skipped on a
+	 *         tick that itself just dispatched an update pass.
 	 */
 	public function testDispatchingTickSkipsLogMaintenanceThisTick(): void
 	{
@@ -493,20 +440,14 @@ final class TickEntrypointTest extends TestCase
 		$this->seedFutureLedgerEntry('dcc', $now);
 		$this->seedFutureLedgerEntry('bl',  $now);
 
-		$logPath    = $this->logPath('log');
-		$errlogPath = $this->logPath('errlog');
-		$yesterday  = date('Y-m-d', strtotime('-1 day'));
+		$logPath = $this->logPath('log');
 
 		file_put_contents($logPath, implode("\n", ['l1', 'l2', 'l3', 'l4', 'l5']) . "\n");
-		file_put_contents($errlogPath, "some error\n");
-		$this->writeStaleMarker('errlog');
 
 		// Before.
 		$linesBefore = count(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
 		$this->assertSame(5, $linesBefore,
 			"Before: expected 'log' to have 5 lines, got {$linesBefore}");
-		$this->assertGreaterThan(0, filesize($errlogPath),
-			"Before: expected 'errlog' non-empty, got " . filesize($errlogPath) . ' bytes');
 
 		// Act.
 		pfblockerng_tick();
@@ -527,18 +468,5 @@ final class TickEntrypointTest extends TestCase
 			"After a tick that DISPATCHED the feed cron: expected 'log' UNTRIMMED at 5 lines, got "
 			. "{$linesAfter} -- pfb_log_mgmt() must be skipped on a tick that just dispatched an "
 			. 'update pass (race against the backgrounded pass appending to the same log)');
-
-		clearstatcache(TRUE, $errlogPath);
-		$this->assertGreaterThan(0, filesize($errlogPath),
-			"After a tick that DISPATCHED the feed cron: expected 'errlog' STILL non-empty, got "
-			. filesize($errlogPath) . ' bytes -- pfb_log_reset() must be skipped on a tick that just '
-			. 'dispatched an update pass');
-
-		$markerContents = (string) file_get_contents($GLOBALS['pfb']['dbdir'] . '/log_rotate.last');
-		$entries        = pfb_log_rotate_marker_parse($markerContents);
-		$this->assertSame($yesterday, $entries['errlog'] ?? NULL,
-			"After a tick that DISPATCHED the feed cron: expected 'errlog' marker still yesterday's key "
-			. "({$yesterday}), got " . var_export($entries['errlog'] ?? NULL, TRUE)
-			. ' -- pfb_log_reset() must not have advanced it');
 	}
 }
