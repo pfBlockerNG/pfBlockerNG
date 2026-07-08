@@ -496,9 +496,11 @@ def test_download_streams_file_with_attachment_header(webui: WebUI, smoke_vm: he
 def test_download_rejects_path_outside_allowed_dirs(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
     """Download of a path outside the allowed dirs is refused, source untouched.
 
-    The same validator gates download. ``/etc/passwd`` -> the ``|0|Invalid
-    filename/path.|`` reject envelope (NOT the file's bytes). Transition rigor:
-    snapshot before and assert the file is byte-for-byte unchanged after.
+    The same validator gates download. ``/etc/passwd`` -> the ``|3|Invalid
+    filename/path|IA==|`` reject envelope (NOT the file's bytes) -- code '3' is the
+    handler's dedicated reject code (issue #991: this branch used to reuse '0', the
+    success code, for the rejection). Transition rigor: snapshot before and assert
+    the file is byte-for-byte unchanged after.
     """
     vm = smoke_vm
     before = _cat(vm, EVIL_PATH)
@@ -510,6 +512,8 @@ def test_download_rejects_path_outside_allowed_dirs(webui: WebUI, smoke_vm: help
     # The reject envelope -- emphatically NOT the file's contents (no root: line).
     assert "Invalid filename/path" in resp.text, f"reject envelope missing the message: {resp.text!r}"
     assert "root:" not in resp.text, f"download leaked /etc/passwd content: {resp.text!r}"
+    code = resp.text.split("|")[1] if resp.text.startswith("|") else ""
+    assert code == "3", f"reject envelope reused a non-reject code (issue #991): {resp.text!r}"
     assert _cat(vm, EVIL_PATH) == before, "/etc/passwd changed after a rejected download (must be untouched)"
 
 
@@ -608,7 +612,9 @@ def test_clear_rejects_path_outside_allowed_dirs(webui: WebUI, smoke_vm: helpers
 
     The most safety-critical branch: an unvalidated clear would unlink/truncate an
     arbitrary file. The validator must refuse ``/etc/passwd`` with the
-    ``|0|Invalid filename/path.|`` envelope and NOT remove or empty it.
+    ``|3|Invalid filename/path|IA==|`` envelope and NOT remove or empty it -- code
+    '3' is the handler's dedicated reject code (issue #991: this branch used to
+    reuse '0', the success code, for the rejection).
 
     Transition rigor: snapshot the file's content + size BEFORE, POST the rejected
     clear, then assert it still EXISTS, is the SAME size, and the SAME bytes.
@@ -623,6 +629,8 @@ def test_clear_rejects_path_outside_allowed_dirs(webui: WebUI, smoke_vm: helpers
     resp = _post_clear(webui, token, EVIL_PATH)
     assert not looks_like_login_page(resp.text), "clear POST returned the login form (session lost)"
     assert "Invalid filename/path" in resp.text, f"reject envelope missing the message: {resp.text!r}"
+    code = resp.text.split("|")[1] if resp.text.startswith("|") else ""
+    assert code == "3", f"reject envelope reused a non-reject code (issue #991): {resp.text!r}"
     # AFTER (oracle): the protected file is wholly intact -- not unlinked, not truncated.
     assert _exists(vm, EVIL_PATH), "/etc/passwd was removed by a rejected clear (validator failed!)"
     assert _size(vm, EVIL_PATH) == before_size, "/etc/passwd was truncated by a rejected clear (validator failed!)"

@@ -287,7 +287,7 @@ if (isset($pconfig['logFile']) && !empty($pconfig['logFile']) && (isset($pconfig
 	
 	$s_logfile = htmlspecialchars($pconfig['logFile']);
 	if (!pfb_validate_filepath($s_logfile, $pfb_logtypes)) {
-		print ("|0|" . gettext('Invalid filename/path') . ".|");
+		print ("|3|" . gettext('Invalid filename/path') . "|IA==|");
 		exit;
 	}
 
