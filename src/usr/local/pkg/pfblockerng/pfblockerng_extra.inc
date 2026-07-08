@@ -2867,6 +2867,62 @@ function pfb_sync_status_list_open(string $ledger_dir, ?string $facility = null)
 	return $out;
 }
 
+/**
+ * pfb_ip_download_ledger_update — translate one IP feed's download result into the
+ * sync-status ledger. FALSE opens facility=ip stage=download for $item; TRUE closes
+ * the same key. Extracted from the download loop so the ledger write is unit-testable
+ * without invoking the full sync_package_pfblockerng() pass.
+ *
+ * @param bool   $download_ok TRUE when pfb_download() succeeded for this item.
+ * @param string $item        The alias/feed header identifying this download.
+ * @param string $message     Human-readable failure text (ignored on success).
+ * @param string $ledger_dir  Directory that contains pfb_sync_status.json.
+ * @return void
+ */
+function pfb_ip_download_ledger_update(bool $download_ok, string $item, string $message, string $ledger_dir): void
+{
+	if ($download_ok) {
+		pfb_sync_status_close('ip', $item, 'download', $ledger_dir);
+	} else {
+		pfb_sync_status_open('ip', $item, 'download', $message, $ledger_dir);
+	}
+}
+
+/**
+ * pfb_sync_status_dedup_check — mirror the shell's "Sanity check" line (pfblockerng.sh's
+ * closingprocess(), 'Database Sanity check [ PASSED / FAILED ]') into the IP dedup ledger
+ * key -- the same LAST-line-wins read as the widget's `grep 'Sanity check' | tail -1`.
+ * FAILED opens facility=ip item=dedup stage=dedup; PASSED closes it. No line recorded yet
+ * (dedup never run) is left untouched -- nothing known to report either way.
+ *
+ * @param string $log_path   Absolute path to pfblockerng.log.
+ * @param string $ledger_dir Directory that contains pfb_sync_status.json.
+ * @return void
+ */
+function pfb_sync_status_dedup_check(string $log_path, string $ledger_dir): void
+{
+	$lines = @file($log_path, FILE_IGNORE_NEW_LINES);
+	if (!is_array($lines)) {
+		return;
+	}
+
+	$last = '';
+	foreach ($lines as $line) {
+		if (strpos($line, 'Sanity check') !== FALSE) {
+			$last = $line;
+		}
+	}
+	if ($last === '') {
+		return;
+	}
+
+	if (strpos($last, 'PASSED') !== FALSE) {
+		pfb_sync_status_close('ip', 'dedup', 'dedup', $ledger_dir);
+	} else {
+		pfb_sync_status_open('ip', 'dedup', 'dedup', trim($last), $ledger_dir);
+	}
+}
+
 // ---------------------------------------------------------------------------
 // ADR-53 — pure suppression-line validator (v4 mask lift /8-/32)
 // ---------------------------------------------------------------------------
