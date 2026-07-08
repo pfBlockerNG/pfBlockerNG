@@ -12,6 +12,10 @@ use PHPUnit\Framework\TestCase;
  * artifact; this is the sole place the line is EMITTED (sinks stay PHP-only).
  * Uses the sink-capture technique from PfbValidateLogTest: $GLOBALS['pfb']
  * 'log'/'errlog' point at temp files so the real on-disk write is asserted.
+ *
+ * ADR-60 P2: pfb_logger() inserts its ISO-8601 stamp AFTER
+ * pfb_validate_log_line()'s leading "\n" -- assertions below match on that
+ * shape via stampedLinePattern(), not the pre-stamp literal.
  */
 #[CoversFunction('pfb_emit_entry_reject_stats')]
 final class PfbEmitEntryRejectStatsTest extends TestCase
@@ -24,12 +28,18 @@ final class PfbEmitEntryRejectStatsTest extends TestCase
 
 	protected function setUp(): void
 	{
-		foreach (['log', 'errlog', 'pnow', 'runlog', 'runlog_active'] as $k) {
+		foreach (['log', 'errlog', 'runlog', 'runlog_active'] as $k) {
 			$this->saved[$k] = array_key_exists($k, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$k] : false;
 		}
 		// A stray 'runlog_active' from an earlier test must not mirror our writes
 		// into a third file this test never provisions.
 		unset($GLOBALS['pfb']['runlog'], $GLOBALS['pfb']['runlog_active']);
+	}
+
+	/** Regex matching $expectedLine (pfb_validate_log_line()'s output) as pfb_logger() now stamps it. */
+	private function stampedLinePattern(string $expectedLine): string
+	{
+		return '/\n\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} ' . preg_quote(substr($expectedLine, 1), '/') . '/';
 	}
 
 	protected function tearDown(): void
@@ -88,13 +98,13 @@ final class PfbEmitEntryRejectStatsTest extends TestCase
 		$logContents = (string) file_get_contents($log);
 		$expectedShape = pfb_validate_log_line('FeedA', 'entries', 'shape', '3');
 		$expectedWireCap = pfb_validate_log_line('FeedA', 'entries', 'wire_cap', '5');
-		$this->assertStringContainsString(
-			$expectedShape,
+		$this->assertMatchesRegularExpression(
+			$this->stampedLinePattern($expectedShape),
 			$logContents,
 			"expected <{$expectedShape}> in <{$logContents}>"
 		);
-		$this->assertStringContainsString(
-			$expectedWireCap,
+		$this->assertMatchesRegularExpression(
+			$this->stampedLinePattern($expectedWireCap),
 			$logContents,
 			"expected <{$expectedWireCap}> in <{$logContents}>"
 		);
@@ -113,13 +123,13 @@ final class PfbEmitEntryRejectStatsTest extends TestCase
 
 		$logContents = (string) file_get_contents($log);
 		$shapeLine = pfb_validate_log_line('FeedB', 'entries', 'shape', '0');
-		$this->assertStringNotContainsString(
-			$shapeLine,
+		$this->assertDoesNotMatchRegularExpression(
+			$this->stampedLinePattern($shapeLine),
 			$logContents,
 			"a zero-count bucket must not log a line, got <{$logContents}>"
 		);
 		$wireCapLine = pfb_validate_log_line('FeedB', 'entries', 'wire_cap', '2');
-		$this->assertStringContainsString($wireCapLine, $logContents);
+		$this->assertMatchesRegularExpression($this->stampedLinePattern($wireCapLine), $logContents);
 	}
 
 	public function testEmptyArrayEmitsNoLines(): void
@@ -174,8 +184,8 @@ final class PfbEmitEntryRejectStatsTest extends TestCase
 		$logContents = (string) file_get_contents($log);
 		$this->assertStringNotContainsString('feed=Array', $logContents, 'an array feed must never stringify into a line');
 		$this->assertStringNotContainsString('FeedOk', $logContents, 'a non-scalar count must read as 0 (no line)');
-		$this->assertStringContainsString(
-			pfb_validate_log_line('FeedReal', 'entries', 'wire_cap', '3'),
+		$this->assertMatchesRegularExpression(
+			$this->stampedLinePattern(pfb_validate_log_line('FeedReal', 'entries', 'wire_cap', '3')),
 			$logContents,
 			'a sane sibling entry must still emit despite hostile neighbours'
 		);
