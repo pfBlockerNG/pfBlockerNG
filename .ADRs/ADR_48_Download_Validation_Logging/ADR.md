@@ -52,11 +52,12 @@ through that same message format.
    ```
 
    `stage` ∈ `mime` | `structural` | `inner` | `member` | `plaintext` | `entries` (Phase 4,
-   §2 item 4). Values are
-   `htmlspecialchars()`-escaped **and control-character/newline-neutralised** (these strings
-   include attacker-influenced `file` output; `htmlspecialchars()` alone passes `\n`/control
-   bytes, which would let a hostile `detail` forge or split the greppable line — violating the
-   §7 reject criterion). The formatter also pins the **line-termination convention** (existing
+   §2 item 4). Values are **control-character/newline-neutralised** (these strings include
+   attacker-influenced `file` output; a raw `\n`/control byte would let a hostile `detail`
+   forge or split the greppable line — violating the §7 reject criterion). Originally also
+   `htmlspecialchars()`-escaped; PR #979 dropped that step — the line's sole renderer (the
+   Logs-tab `#fileContent` textarea) never parses HTML, so escaping only hid the real bytes
+   from the operator. The formatter also pins the **line-termination convention** (existing
    `pfb_logger` messages carry a leading `"\n"`); the oracle test includes a `\n`-bearing
    hostile `detail`. No I/O — string in, string out — so it is fully unit-testable.
 
