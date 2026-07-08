@@ -17812,8 +17812,11 @@ function sync_package_pfblockerng($cron='') {
 
 										// Determine reason for download failure
 										pfb_download_failure($alias, $header, $pfbfolder, $row['url'], $row['format'], $list['vtype']);
-										// ADR-61: sync-status ledger, mirrors the download-fail log above.
-										pfb_ip_download_ledger_update(FALSE, $header, "[ {$alias} - {$header} ] Download FAIL", $pfb['dbdir']);
+										// ADR-61: sync-status ledger, mirrors the download-fail log above. Keyed on
+										// $alias (the pfB_*-prefixed table name), not $header (the per-row label,
+										// never prefixed) -- the widget's deep-link recognition matches on the
+										// pfB_/DNSBL_ prefix, so keying on $header would leave every entry unlinked.
+										pfb_ip_download_ledger_update(FALSE, $alias, "[ {$alias} - {$header} ] Download FAIL", $pfb['dbdir']);
 
 										// Utilize previously download file (If 'fail' marker exists)
 										if (file_exists("{$pfbfolder}/{$header}.fail") &&
@@ -17831,7 +17834,7 @@ function sync_package_pfblockerng($cron='') {
 									else {
 										// Clear any previous download fail marker
 										unlink_if_exists("{$pfbfolder}/{$header}.fail");
-										pfb_ip_download_ledger_update(TRUE, $header, '', $pfb['dbdir']);
+										pfb_ip_download_ledger_update(TRUE, $alias, '', $pfb['dbdir']);
 										pfb_logger('.', 1);
 									}
 								}

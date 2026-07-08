@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from .. import helpers
+from .render_oracle import PhpErrorLogGuard
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -145,6 +146,21 @@ def _write_py_status_entries(vm: helpers.SmokeVM, entries: list[dict[str, object
     _write_remote_file(vm, _PY_STATUS_PATH, json.dumps(entries))
 
 
+@pytest.fixture(scope="module")
+def php_error_log_guard(smoke_vm: helpers.SmokeVM, webui: WebUI) -> Iterator[PhpErrorLogGuard]:  # noqa: ARG001
+    """Snapshot ``php_error.log`` once before this module's tests, assert no growth
+    after -- oracle condition (d), mirroring ``test_render_smoke.py``'s own fixture.
+    A 200 + marker alone is never sufficient (pfSense logs but does not echo a PHP
+    diagnostic); this is the source-of-truth catch for a Notice/Warning the new
+    render code (``usort`` over ``last_seen``, ``str_starts_with``, the two-reader
+    ``array_merge``) could log without changing the visible body at all.
+    """
+    guard = PhpErrorLogGuard(smoke_vm)
+    guard.snapshot()
+    yield guard
+    guard.assert_no_growth()
+
+
 def _widget_body(webui: WebUI) -> str:
     resp = webui.get(WIDGET_PAGE)
     assert resp.status_code == 200, f"GET {WIDGET_PAGE} -> HTTP {resp.status_code} (expected 200)"
@@ -178,6 +194,7 @@ def test_ip_row_green_then_yellow_on_open_entry_then_green_again(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
     clean_ledger: None,
+    php_error_log_guard: PhpErrorLogGuard,  # noqa: ARG001
 ) -> None:
     """IP row: empty ledger -> green; ANY open facility='ip' entry -> yellow; clears -> green.
 
@@ -220,6 +237,7 @@ def test_ip_row_disabled_stays_red_with_open_entry(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
     clean_ledger: None,
+    php_error_log_guard: PhpErrorLogGuard,  # noqa: ARG001
 ) -> None:
     """Semantics #1: a disabled facility stays RED even with an open ledger entry.
 
@@ -253,6 +271,7 @@ def test_dnsbl_row_disabled_stays_red_with_open_entry(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
     clean_ledger: None,
+    php_error_log_guard: PhpErrorLogGuard,  # noqa: ARG001
 ) -> None:
     """Semantics #1 for the DNSBL row: disabled stays red regardless of open entries.
 
@@ -291,6 +310,7 @@ def test_dnsbl_row_live_states_transition_on_php_and_python_entries(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
     clean_ledger: None,
+    php_error_log_guard: PhpErrorLogGuard,  # noqa: ARG001
 ) -> None:
     """DNSBL live: empty ledger -> green; a PHP entry -> yellow; a Python-only entry -> yellow.
 
@@ -367,6 +387,7 @@ def test_dnsbl_row_live_states_transition_on_php_and_python_entries(
 def test_get_failed_empty_ledger_shows_maxmind_fallback(
     webui: WebUI,
     clean_ledger: None,
+    php_error_log_guard: PhpErrorLogGuard,  # noqa: ARG001
 ) -> None:
     """An empty (merged) ledger falls back to the MaxMind version line, same as today."""
     body = _widget_body(webui)
@@ -380,6 +401,7 @@ def test_get_failed_recognized_alias_builds_deep_link(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
     clean_ledger: None,
+    php_error_log_guard: PhpErrorLogGuard,  # noqa: ARG001
 ) -> None:
     """A ledger entry whose ``item`` is a recognized ``pfB_``-prefixed alias links to its editor.
 
@@ -422,6 +444,7 @@ def test_get_failed_python_side_entry_renders_as_plain_text(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
     clean_ledger: None,
+    php_error_log_guard: PhpErrorLogGuard,  # noqa: ARG001
 ) -> None:
     """A Python-side (file-path) entry renders its message but never attempts a link."""
     vm = smoke_vm
