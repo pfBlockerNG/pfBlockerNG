@@ -2,7 +2,7 @@
 # /usr/local/etc/rc.d/pfblockerng_repo_generate.sh — boot-time repo-conf
 # regenerator (ADR-39). Installed by add-repo.sh.
 #
-# WHAT IT DOES (and nothing more): for each of our pkg-repo conf files that
+# WHAT IT DOES (and nothing more): for each pfBlockerNG pkg-repo conf file that
 # EXISTS, it detects this box's pfSense edition/version/arch and UNCONDITIONALLY
 # overwrites the conf with the canonical body — a fully-resolved GitHub Pages
 # catalog URL for the box's variant (ADR-17 / ADR-20) plus a marker comment.
@@ -89,7 +89,7 @@ _emit_conf() {
 # fully resolved for this box's edition/version/arch (ADR-39); the boot
 # rc.d hook updates it on a pfSense OS upgrade.
 # priority ${CONF_PRIORITY} sits above the base Netgate \`pfSense\` repo so cross-repo
-# resolution (pkg install/upgrade, GUI Install) selects our build.
+# resolution (pkg install/upgrade, GUI Install) selects the pfBlockerNG build.
 ${_ec_repo}: {
   url: "${_ec_url}",
   mirror_type: none,

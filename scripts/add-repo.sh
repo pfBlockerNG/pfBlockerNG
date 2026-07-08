@@ -4,7 +4,7 @@
 # boot-time repo-conf generator rc.d hook (ADR-39), which does ALL edition/
 # version/arch detection itself (an OS upgrade self-corrects, no work here),
 # runs the hook once now, then `pkg update` + verifies the package is visible
-# from OUR repo. Default sets up the shared `pfblockerng` release repo (stable
+# from the pfBlockerNG repo. Default sets up the shared `pfblockerng` release repo (stable
 # + devel; pick the package at install time); --nightly sets up the separate
 # bleeding-edge `pfblockerng-nightly` repo instead. Idempotent; see --help.
 
@@ -125,7 +125,7 @@ print_conf() {
 # fully resolved for this box's edition/version/arch (ADR-39); the boot
 # rc.d hook updates it on a pfSense OS upgrade.
 # priority ${CONF_PRIORITY} sits above the base Netgate \`pfSense\` repo so cross-repo
-# resolution (pkg install/upgrade, GUI Install) selects our build.
+# resolution (pkg install/upgrade, GUI Install) selects the pfBlockerNG build.
 ${REPO_NAME}: {
   url: "${_pc_url}",
   mirror_type: none,
@@ -197,13 +197,13 @@ fi
 printf '==> Conf resolved:\n'
 sed -n 's/^[[:space:]]*url:[[:space:]]*/    url: /p' "${CONF_PATH}" >&2
 
-# 5. pkg update (refresh catalogs, including our repo).
-printf '==> pkg update (refreshing catalogs, including our repo)\n'
+# 5. pkg update (refresh catalogs, including the pfBlockerNG repo).
+printf '==> pkg update (refreshing catalogs, including the pfBlockerNG repo)\n'
 env ASSUME_ALWAYS_YES=yes "${PKG_BIN}" update -f >/dev/null
 
-# 6. VERIFY a pfBlockerNG package is visible FROM OUR repo (not merely that pkg
+# 6. VERIFY a pfBlockerNG package is visible FROM the pfBlockerNG repo (not merely that pkg
 #    update ran). `pkg rquery -r <repo>` queries that ONE repo's catalog; a hit
-#    means our catalog loaded and carries the package. The release repo carries
+#    means the pfBlockerNG catalog loaded and carries the package. The release repo carries
 #    two (stable may not be published yet) — finding EITHER proves the repo
 #    loaded; nightly carries one. Exit non-zero (fail loud) only if NONE present.
 printf '==> Verifying pfBlockerNG package(s) are visible from repo '\''%s'\''\n' "${REPO_NAME}"
