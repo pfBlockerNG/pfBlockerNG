@@ -16085,6 +16085,9 @@ function sync_package_pfblockerng($cron='') {
 
 											// Determine reason for download failure
 											pfb_download_failure($alias, $header, $pfbfolder, $row['url'], $row['format'], '');
+											// ADR-61: keyed on $alias (pfB_/DNSBL_-prefixed), not $header --
+											// the widget's deep-link match needs that prefix (issue #998).
+											pfb_dnsbl_download_ledger_update(FALSE, $alias, "[ {$alias} - {$header} ] Download FAIL", $pfb['dbdir']);
 
 											// Utilize previously download file (If 'fail' marker exists)
 											if (file_exists("{$pfbfolder}/{$header}.fail") &&
@@ -16097,6 +16100,7 @@ function sync_package_pfblockerng($cron='') {
 										else {
 											// Clear any previous download fail marker
 											unlink_if_exists("{$pfbfolder}/{$header}.fail");
+											pfb_dnsbl_download_ledger_update(TRUE, $alias, '', $pfb['dbdir']);
 										}
 									}
 								}

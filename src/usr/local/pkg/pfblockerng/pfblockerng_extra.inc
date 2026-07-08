@@ -2945,6 +2945,26 @@ function pfb_ip_download_ledger_update(bool $download_ok, string $item, string $
 }
 
 /**
+ * pfb_dnsbl_download_ledger_update — translate one DNSBL feed's download result into
+ * the sync-status ledger. FALSE opens facility=dnsbl stage=download for $item; TRUE
+ * closes the same key. Mirrors pfb_ip_download_ledger_update() (issue #998).
+ *
+ * @param bool   $download_ok TRUE when pfb_download() succeeded for this item.
+ * @param string $item        The alias/feed header identifying this download.
+ * @param string $message     Human-readable failure text (ignored on success).
+ * @param string $ledger_dir  Directory that contains pfb_sync_status.json.
+ * @return void
+ */
+function pfb_dnsbl_download_ledger_update(bool $download_ok, string $item, string $message, string $ledger_dir): void
+{
+	if ($download_ok) {
+		pfb_sync_status_close('dnsbl', $item, 'download', $ledger_dir);
+	} else {
+		pfb_sync_status_open('dnsbl', $item, 'download', $message, $ledger_dir);
+	}
+}
+
+/**
  * pfb_sync_status_dedup_check — mirror the shell's "Sanity check" line (pfblockerng.sh's
  * closingprocess(), 'Database Sanity check [ PASSED / FAILED ]') into the IP dedup ledger
  * key -- the same LAST-line-wins read as the widget's `grep 'Sanity check' | tail -1`.
