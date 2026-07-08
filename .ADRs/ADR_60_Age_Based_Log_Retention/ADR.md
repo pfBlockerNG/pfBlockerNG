@@ -508,7 +508,14 @@ of sites outside the 10 log types, not part of the retention feature's correctne
   green; the §2.3 contract pinned; the §2.5/§2.6 coverage matrix fully ticked (Phase 10's row
   excepted — it ticks when Phase 10 lands).
 - Live-VM smoke (CE + Plus fan-out) green for the age-cutoff trim, inode/ownership preservation,
-  `nolimit`-independence, the DNSBL block page, and the Reports/Alerts stat tables/charts.
+  and `nolimit`-independence (`tests/smoke/test_log_age_retention.py`, run 28964455515); Tier-A
+  `ui_render` (CE + Plus) green for the Reports/Alerts stat tables/charts and the redesigned Log
+  Settings page (run 28964459756). The DNSBL block page's fix is proven off-box
+  (`tests/php/LogFormatConsumersTest.php`'s real red/green execution of the correlation
+  grep/regex-guard pipeline) but has **no automated live-VM proof** — `www/index.php` is served
+  by a separate DNSBL-VIP-sinkhole listener outside the webConfigurator Tier-A harness, and no
+  Tier-B (`ui_e2e`) case exists yet to reach it (tracked: issue #1013). Item 4 of the manual
+  checklist below is this ADR's real, currently out-of-CI confirmation for that page.
 - **Manual smoke checklist (owner: maintainer — out-of-CI, real multi-day-old data):**
   1. Set `log_max_days_ip_blocklog=7` on a box with more than 7 days of real block history; confirm
      only lines older than 7 days are dropped at the next tick, inode (`ls -i`) unchanged, a remote
