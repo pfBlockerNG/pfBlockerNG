@@ -1491,23 +1491,29 @@ def test_software_page_hidden_when_override_forces_off(
 
 
 def test_log_settings_section_redesign_render(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
-    """The Log Settings section was regrouped into aligned per-log rows with a single 3-item
-    column-help intro and category header rows (issue #489).
+    """The Log Settings section was regrouped into aligned per-log rows with a single 2-item
+    column-help intro and category header rows (issue #489), and the ADR-30 scheduled-reset
+    controls (log_rotate_<type>/log_reset_keep_<type>) were replaced by ADR-60's age-based
+    log_max_days_<type> field.
 
-    Scenario: Log Settings section redesigned — grouped by category, aligned columns.
+    Scenario: Log Settings section redesigned — grouped by category, 2 aligned columns.
       Background: pfBlockerNG deployed; General page renders cleanly.
 
     Given the General page renders via the clean-render oracle (200, no Fatal/Warning/Notice,
       "General Settings" section marker present),
 
-    When the body is inspected for the new grouped-column structure,
+    When the body is inspected for the grouped-column structure,
 
-    Then the three column-header texts are present in the body, emitted by the per-category
-      header ``Form_Group`` rows (PRESENT: new design);
-    And the 3-item intro wording markers are present (the column-purpose ``<ul>`` sentences
-      written in issue #489's intro ``Form_StaticText``);
-    And a representative set of field names spanning all four categories are present —
-      proving no control was dropped by the redesign;
+    Then the two column-header texts (Max lines / Max days) are present in the body, emitted
+      by the per-category header ``Form_Group`` rows (PRESENT: new design);
+    And the 2-item intro wording markers are present (the column-purpose ``<ul>`` sentences
+      written in issue #489's intro ``Form_StaticText``, updated for ADR-60's Max days column);
+    And a representative set of ``log_max_days_<type>`` field names spanning the categories the
+      retired controls covered (DNS block, General Unified, DNS Reply) are present, plus
+      ``log_max_<type>`` — proving no control was dropped by the redesign;
+    And the retired ADR-30 ``log_rotate_<type>``/``log_reset_keep_<type>`` field names are
+      ABSENT — the scheduled-reset controls were removed (ABSENT: old design, before/after
+      evidence);
     And the old repeated per-field help suffix ("</strong> Log", the pattern emitted by
       ``setHelp("Default: <strong>20000<br />{$descr}</strong> Log")`` on every row) is
       ABSENT — the repetition was removed (ABSENT: old design, before/after evidence);
@@ -1516,21 +1522,25 @@ def test_log_settings_section_redesign_render(webui: WebUI, php_error_log_guard:
       in the module-level no-growth sweep.
 
     Source-inspection proof of fail-before/pass-after (verified against
-    ``pfblockerng_general.php`` ~lines 445-478 in this worktree):
-    - PRESENT markers ("rolling cap", "discards that period", "cushion for remote log
-      shippers") come from the intro ``Form_StaticText`` — one column-purpose ``<ul>``,
-      absent from ``origin/devel``.
+    ``pfblockerng_general.php`` ~lines 359-418 in this worktree):
+    - PRESENT markers ("rolling cap", "trims lines older than", "whichever cap is more
+      restrictive") come from the intro ``Form_StaticText`` — one column-purpose ``<ul>``,
+      absent from ``origin/devel`` (which instead has the 3-item Schedule/Keep-lines intro).
     - PRESENT markers (the full header-cell markup
-      ``form-control-static hidden-xs"><strong>Max lines</strong>`` / Schedule / Keep
-      lines) come ONLY from the per-category header ``Form_Group`` rows
-      (``Form_StaticText('', '<p class="form-control-static hidden-xs"><strong>...
-      </strong></p>')``). A bare ``>Max lines<`` substring is NOT sufficient: the intro
-      ``<ul>`` also renders ``<li><strong>Max lines</strong> &mdash; ...`` (no
-      ``hidden-xs``, no ``form-control-static``), so it satisfies the old bare needle
-      even with every header row deleted — the full markup needle only matches the
-      header cell. (The ``pfb-loghdr`` class is NOT asserted for the same reason: its
-      name also appears in the intro's ``<style>`` block, so it can't prove a header
-      row rendered.)
+      ``form-control-static hidden-xs"><strong>Max lines</strong>`` / Max days) come ONLY
+      from the per-category header ``Form_Group`` rows (``Form_StaticText('', '<p
+      class="form-control-static hidden-xs"><strong>...</strong></p>')``). A bare
+      ``>Max lines<`` substring is NOT sufficient: the intro ``<ul>`` also renders
+      ``<li><strong>Max lines</strong> &mdash; ...`` (no ``hidden-xs``, no
+      ``form-control-static``), so it satisfies the old bare needle even with every header
+      row deleted — the full markup needle only matches the header cell. (The
+      ``pfb-loghdr`` class is NOT asserted for the same reason: its name also appears in
+      the intro's ``<style>`` block, so it can't prove a header row rendered.)
+    - ABSENT markers (``name="log_rotate_..."``/``name="log_reset_keep_..."``) exist ONLY in
+      the retired ADR-30 ``Form_Select``/``Form_Input`` calls this phase deletes; they are
+      absent from the new code, so the test PASSES after the change and would FAIL if the
+      old controls were reinstated (this is the flip of the field-name assertions this same
+      test carried through ADR-60 Phase 7, where they were still PRESENT — see git history).
     - ABSENT markers ("</strong> Log", "Unified Log") exist ONLY in the old
       ``setHelp("Default: <strong>20000<br />{$descr}</strong> Log")`` calls and the old
       ``'Unified Log'`` key; they are absent from the new code, so the test PASSES after
@@ -1541,11 +1551,11 @@ def test_log_settings_section_redesign_render(webui: WebUI, php_error_log_guard:
     assert result.ok, f"General page render oracle failed: {result.detail}"
     body = resp.text
 
-    # PRESENT: new 3-item intro wording (emitted by the intro Form_StaticText).
+    # PRESENT: new 2-item intro wording (emitted by the intro Form_StaticText).
     for needle in (
         "rolling cap",
-        "discards that period",
-        "cushion for remote log shippers",
+        "trims lines older than",
+        "whichever cap is more restrictive",
     ):
         assert needle in body, f"Log Settings intro wording {needle!r} missing — redesign intro not rendered"
 
@@ -1556,20 +1566,32 @@ def test_log_settings_section_redesign_render(webui: WebUI, php_error_log_guard:
     # assert the "pfb-loghdr" class: its name also appears in the intro's <style> block.)
     for needle in (
         'form-control-static hidden-xs"><strong>Max lines</strong>',
-        'form-control-static hidden-xs"><strong>Schedule</strong>',
-        'form-control-static hidden-xs"><strong>Keep lines</strong>',
+        'form-control-static hidden-xs"><strong>Max days</strong>',
     ):
         assert needle in body, f"Log Settings header cell {needle!r} missing — header rows not rendered"
 
-    # PRESENT: field names spanning all four categories — no control dropped.
+    # PRESENT: field names spanning all four categories — no control dropped. The
+    # log_max_days_<type> markers cover the same 3 categories the retired
+    # log_rotate_<type>/log_reset_keep_<type> markers (below) used to cover.
     for field_name in (
         'name="log_max_log"',  # General: pfBlockerNG
-        'name="log_rotate_dnslog"',  # DNSBL
-        'name="log_reset_keep_unilog"',  # General: Unified
+        'name="log_max_days_dnslog"',  # DNS: Block
+        'name="log_max_days_unilog"',  # General: Unified
         'name="log_max_ip_blocklog"',  # IP
-        'name="log_rotate_dnsreplylog"',  # DNS Reply
+        'name="log_max_days_dnsreplylog"',  # DNS: Reply
     ):
         assert field_name in body, f"Log Settings field {field_name!r} missing — control dropped by redesign"
+
+    # ABSENT: retired ADR-30 scheduled-reset controls (log_rotate_<type>/
+    # log_reset_keep_<type>) — superseded by log_max_days_<type> (ADR-60).
+    for field_name in (
+        'name="log_rotate_dnslog"',
+        'name="log_reset_keep_unilog"',
+        'name="log_rotate_dnsreplylog"',
+    ):
+        assert field_name not in body, (
+            f"retired Log Settings field {field_name!r} still present — ADR-30 control not removed"
+        )
 
     # ABSENT: old repeated per-field help suffix (was emitted by every row in the old code).
     assert "</strong> Log" not in body, (
