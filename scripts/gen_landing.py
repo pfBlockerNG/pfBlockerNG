@@ -27,8 +27,8 @@ from datetime import datetime, timezone
 from pfb_pkg import pkg_version_sort_key, read_compact_manifest
 
 # Display order for the published-packages table (newest per channel). The channel of a
-# package is read from its name suffix (channel_of); the install CARDS are rendered
-# separately (release vs nightly) since stable + devel share one repo.
+# package is read from its name suffix (channel_of); each channel gets its own install
+# card (stable + devel share one repo — the cards differ only in the package name).
 CH_ORDER: list[str] = ["stable", "devel", "nightly"]
 # Embed markers in add-repo.sh that delimit the hook placeholder body.
 _HOOK_EMBED_BEGIN = "# PFB_EMBED_HOOK_BEGIN"
@@ -212,7 +212,7 @@ def _esc(s: object) -> str:
 
 
 _CSS = """
-:root{--bg:#0d1117;--card:#161b22;--bd:#30363d;--fg:#e6edf3;--mut:#8b949e;--acc:#2f81f7;--warn:#d29922;--code:#0b0f14}
+:root{--bg:#0d1117;--card:#161b22;--bd:#30363d;--fg:#e6edf3;--mut:#8b949e;--acc:#2f81f7;--warn:#d29922;--red:#f85149;--code:#0b0f14}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);
   font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
@@ -244,12 +244,10 @@ table.autoindex td:first-child{white-space:normal;overflow-wrap:anywhere}
 table.autoindex td.num{white-space:nowrap}
 footer{margin-top:3rem;color:var(--mut);font-size:.85rem;border-top:1px solid var(--bd);padding-top:1rem}
 .empty{color:var(--mut);font-style:italic}
-.card ul.pkgs{margin:.3rem 0 .7rem;padding-left:0;list-style:none}
-.card ul.pkgs li{margin:.45rem 0}
-.card ul.pkgs .lbl{font-weight:600}
-.card.release{border-color:var(--acc)}
-.card.nightly{border-color:var(--warn)}
-.card.nightly .badge{border-color:var(--warn);color:var(--warn)}
+.card.stable{border-color:var(--acc)}
+.card.devel{border-color:var(--warn)}
+.card.nightly{border-color:var(--red)}
+.card.nightly .badge{border-color:var(--red);color:var(--red)}
 .warn{color:var(--warn)}
 .snip{position:relative}
 .snip>pre{padding-right:3.6rem}
@@ -307,36 +305,50 @@ def _ver_or_empty(latest: dict[str, str], channel: str) -> str:
     return f"Latest <code>{_esc(lv)}</code>" if lv else '<span class="empty">not yet published</span>'
 
 
-def _release_card(base: str, latest: dict[str, str], conf_fn: Callable[[str], str]) -> str:
-    """The unified stable+devel card: ONE bootstrap (the shared `pfblockerng` repo), then
-    install whichever package you want — the channels differ only in the package name."""
-    setup = f"fetch -qo - {base}/add-repo.sh \\\n  | sh -s -- --base-url {base}"
-    items = (
-        f'<li><span class="lbl">Stable</span> — {_ver_or_empty(latest, "stable")}'
-        f"{_copyable('pkg install ' + _esc(_PKG_STABLE))}</li>"
-        f'<li><span class="lbl">Development</span> — {_ver_or_empty(latest, "devel")}'
-        f"{_copyable('pkg install ' + _esc(_PKG_DEVEL))}</li>"
-    )
+def _manual_conf_details(conf_fn: Callable[[str], str], channel: str) -> str:
+    """The collapsed 'Manual conf (advanced)' disclosure shared by every channel card."""
     return (
-        '<div class="card release"><h3>Stable &amp; development</h3>'
-        '<p class="blurb">One bootstrap adds the shared <code>pfblockerng</code> repo, which carries '
-        "both packages (they conflict &mdash; install one):</p>"
-        f"{_copyable(_esc(setup))}"
-        f'<ul class="pkgs">{items}</ul>'
         "<details><summary>Manual conf (advanced)</summary>"
         '<p class="blurb">The bootstrap auto-detects these; in a hand-written conf, replace '
         "<code>&lt;varver&gt;</code> (the edition-version: <code>ce-2.8</code>, <code>plus-26.03</code>, &hellip;) and "
         "<code>&lt;arch&gt;</code> (the CPU architecture: <code>amd64</code> or <code>aarch64</code>) "
         "with your box's values.</p>"
-        f"{_copyable(_esc(conf_fn('release')))}</details></div>"
+        f"{_copyable(_esc(conf_fn(channel)))}</details>"
+    )
+
+
+def _bootstrap_install(base: str, pkg: str, *, nightly: bool = False) -> str:
+    """A channel's unified command: the bootstrap one-liner + its `pkg install`."""
+    flag = " --nightly" if nightly else ""
+    return f"fetch -qo - {base}/add-repo.sh \\\n  | sh -s -- --base-url {base}{flag}\npkg install {pkg}"
+
+
+def _stable_card(base: str, latest: dict[str, str], conf_fn: Callable[[str], str]) -> str:
+    """The stable card: bootstrap the shared `pfblockerng` repo + install the stable package."""
+    return (
+        '<div class="card stable"><h3>Stable</h3>'
+        f'<p class="ver">{_ver_or_empty(latest, "stable")}</p>'
+        '<p class="blurb">The stable release, served from the shared <code>pfblockerng</code> repo '
+        "(it also carries the devel package &mdash; the two conflict, install one):</p>"
+        f"{_copyable(_esc(_bootstrap_install(base, _PKG_STABLE)))}"
+        f"{_manual_conf_details(conf_fn, 'release')}</div>"
+    )
+
+
+def _devel_card(base: str, latest: dict[str, str], conf_fn: Callable[[str], str]) -> str:
+    """The devel card: same shared repo as stable, different package."""
+    return (
+        '<div class="card devel"><h3>Development</h3>'
+        f'<p class="ver">{_ver_or_empty(latest, "devel")}</p>'
+        '<p class="blurb">The development channel, served from the same shared <code>pfblockerng</code> '
+        "repo as stable (the two packages conflict &mdash; install one):</p>"
+        f"{_copyable(_esc(_bootstrap_install(base, _PKG_DEVEL)))}"
+        f"{_manual_conf_details(conf_fn, 'release')}</div>"
     )
 
 
 def _nightly_card(base: str, latest: dict[str, str], conf_fn: Callable[[str], str]) -> str:
     """The nightly card — deliberately set apart: its own repo + a stability caveat."""
-    one_liner = (
-        f"fetch -qo - {base}/add-repo.sh \\\n  | sh -s -- --base-url {base} --nightly\npkg install {_PKG_NIGHTLY}"
-    )
     return (
         '<div class="card nightly"><h3>Nightly <span class="badge">not for daily use</span></h3>'
         f'<p class="ver">{_ver_or_empty(latest, "nightly")}</p>'
@@ -344,13 +356,8 @@ def _nightly_card(base: str, latest: dict[str, str], conf_fn: Callable[[str], st
         '<code>pfblockerng-nightly</code> repo. <span class="warn">Bleeding edge</span> &mdash; the only '
         "guarantee is that CI passed; unlike <code>devel</code> it carries no stability target. Use it to "
         "track the very latest, not on a production firewall.</p>"
-        f"{_copyable(_esc(one_liner))}"
-        "<details><summary>Manual conf (advanced)</summary>"
-        '<p class="blurb">The bootstrap auto-detects these; in a hand-written conf, replace '
-        "<code>&lt;varver&gt;</code> (the edition-version: <code>ce-2.8</code>, <code>plus-26.03</code>, &hellip;) and "
-        "<code>&lt;arch&gt;</code> (the CPU architecture: <code>amd64</code> or <code>aarch64</code>) "
-        "with your box's values.</p>"
-        f"{_copyable(_esc(conf_fn('nightly')))}</details></div>"
+        f"{_copyable(_esc(_bootstrap_install(base, _PKG_NIGHTLY, nightly=True)))}"
+        f"{_manual_conf_details(conf_fn, 'nightly')}</div>"
     )
 
 
@@ -672,7 +679,7 @@ def render_page(
 ) -> str:
     """Render the root landing page."""
     latest = latest_versions(pkgs)
-    cards = _release_card(base, latest, conf_fn) + _nightly_card(base, latest, conf_fn)
+    cards = "".join(card(base, latest, conf_fn) for card in (_stable_card, _devel_card, _nightly_card))
     eol_block = _eol_versions_html(pkgs, matrix)
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
@@ -681,10 +688,10 @@ def render_page(
         f'<style>{_CSS}</style></head><body><div class="wrap">'
         "<header><h1>pfBlockerNG</h1>"
         "<p>Self-hosted FreeBSD <code>pkg</code> repository for pfSense&nbsp;CE &amp; pfSense&nbsp;Plus.</p></header>"
-        "<p>Install pfBlockerNG straight from this repository: run the bootstrap on your firewall "
-        "(as <code>root</code>), then <code>pkg install</code>. <strong>Stable</strong> and "
-        "<strong>devel</strong> share one repo &mdash; pick the package; <strong>nightly</strong> is a "
-        "separate, opt-in repo.</p>"
+        "<p>Install pfBlockerNG straight from this repository: pick a channel below and run its "
+        "commands on your firewall (as <code>root</code>). <strong>Stable</strong> and "
+        "<strong>devel</strong> share one repo (the same bootstrap, a different package); "
+        "<strong>nightly</strong> is a separate, opt-in repo.</p>"
         f'<h2>Channels</h2><div class="cards">{cards}</div>'
         f"<h2>Published packages</h2>{_packages_html(pkgs, matrix)}"
         f"{eol_block}"

@@ -557,32 +557,33 @@ def test_render_page_shows_latest_and_empty_stable() -> None:
     # not the whole page (the .tablewrap rule is what makes that scroll possible).
     assert '<div class="tablewrap"><table>' in page
     assert ".tablewrap{overflow-x:auto" in page
-    # Stable has no package -> empty state, NOT a bogus version (its line in the unified
-    # release card).
+    # Stable has no package -> empty state, NOT a bogus version (its line in the stable card).
     assert "not yet published" in page
-    # The unified release card: ONE bootstrap (no channel arg), then both install targets.
-    # The bootstrap URL points to the SELF-HOSTED add-repo.sh (not the raw GitHub URL).
-    assert f"fetch -qo - {base}/add-repo.sh" in page
-    assert f"sh -s -- --base-url {base}" in page
-    assert "pkg install pfSense-pkg-pfBlockerNG<" in page  # stable (exact, not -devel)
-    assert "pkg install pfSense-pkg-pfBlockerNG-devel" in page  # development
-    # Nightly is its own card with the --nightly flag and its own package.
-    assert f"fetch -qo - {base}/add-repo.sh" in page  # same URL for nightly too
-    assert f"--base-url {base} --nightly" in page
-    assert "pkg install pfSense-pkg-pfBlockerNG-nightly" in page
-    # The manual conf came from the injected conf function — release + nightly, keyed by
-    # the logical channel the cards pass.
-    assert "release-conf-snippet" in page
+    # One card per channel, each with a UNIFIED command: the bootstrap one-liner + that
+    # channel's `pkg install`, in the SAME snippet. Stable + devel share the release repo
+    # (no channel flag); nightly bootstraps with --nightly. The bootstrap URL points to the
+    # SELF-HOSTED add-repo.sh (not the raw GitHub URL).
+    assert f"sh -s -- --base-url {base}\npkg install pfSense-pkg-pfBlockerNG</pre>" in page  # stable (exact)
+    assert f"sh -s -- --base-url {base}\npkg install pfSense-pkg-pfBlockerNG-devel</pre>" in page
+    assert f"sh -s -- --base-url {base} --nightly\npkg install pfSense-pkg-pfBlockerNG-nightly</pre>" in page
+    assert page.count(f"fetch -qo - {base}/add-repo.sh") == 3  # one bootstrap per card
+    # The manual conf came from the injected conf function — stable + devel pass the shared
+    # 'release' channel (one repo), nightly its own.
+    assert page.count("release-conf-snippet") == 2
     assert "nightly-conf-snippet" in page
     # The badge/title casing fix: no CSS capitalize that would mangle `pfSense-pkg-...`.
     assert "text-transform:capitalize" not in page
-    # Accent grammar: the release card is the primary (blue --acc); nightly is cautioned
-    # (amber --warn), never the other way round (blue would read as "recommended").
-    assert '<div class="card release">' in page
+    # Accent grammar: stable is the primary (blue --acc), devel is cautioned (amber --warn),
+    # nightly is danger (red --red) — in that card order.
+    assert '<div class="card stable">' in page
+    assert '<div class="card devel">' in page
     assert '<div class="card nightly">' in page
-    assert "--warn:#d29922" in page
-    assert ".card.release{border-color:var(--acc)}" in page
-    assert ".card.nightly{border-color:var(--warn)}" in page
+    assert page.index('"card stable"') < page.index('"card devel"') < page.index('"card nightly"')
+    assert "--warn:#d29922" in page and "--red:#f85149" in page
+    assert ".card.stable{border-color:var(--acc)}" in page
+    assert ".card.devel{border-color:var(--warn)}" in page
+    assert ".card.nightly{border-color:var(--red)}" in page
+    assert ".card.nightly .badge{border-color:var(--red);color:var(--red)}" in page
     # The catalog-trees list is replaced by a SINGLE link to the folder-navigable browse page.
     assert '<a class="browse" href="./browse.html">' in page
     assert "Browse the repository" in page
@@ -607,14 +608,14 @@ def test_render_page_snippets_have_copy_buttons() -> None:
     assert '<div class="snip">' in page
     btn = '<button class="copy" type="button" aria-label="Copy to clipboard">Copy</button>'
     assert btn in page
-    # A representative install line is wrapped: button precedes its own <pre>, content intact.
-    assert f"{btn}<pre>pkg install pfSense-pkg-pfBlockerNG-devel</pre>" in page
-    # The bootstrap one-liner and the manual conf are wrapped too.
+    # A representative unified command is wrapped: button precedes its own <pre>, content intact
+    # (bootstrap + install in ONE snippet).
     assert f"{btn}<pre>fetch -qo -" in page
+    assert "\npkg install pfSense-pkg-pfBlockerNG-devel</pre>" in page
     assert f"{btn}<pre>release-conf-snippet</pre>" in page
 
-    # Exactly the six command snippets are copyable (2 installs + bootstrap + release conf in the
-    # release card; nightly one-liner + nightly conf in the nightly card) — inline <code> is not.
+    # Exactly the six command snippets are copyable (a unified command + a manual conf in each
+    # of the three channel cards) — inline <code> is not.
     assert page.count('<button class="copy"') == 6
 
     # The styling + the behaviour that make the button work are shipped inline (static page).
