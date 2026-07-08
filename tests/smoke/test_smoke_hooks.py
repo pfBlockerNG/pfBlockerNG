@@ -661,6 +661,11 @@ def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -
     later read of the per-run log) sees NOTHING — the failing assertion, mirroring the missing
     live-view output. (Window << the 12s sleep; if a loaded runner ever flakes, raise the sleep
     AND the window together.)
+
+    Also proves (issue #988): the normal-pass branch's #973 persist call
+    (``pfb_persist_hook_output``) fires exactly ONCE for this hook into the PERSISTED
+    ``pfblockerng.log`` — a stray second call (a wrongly-placed lifecycle-branch persist
+    call sitting outside its own branch) would double the marker count there.
     """
     token = "stream"
     stream_marker = f"STREAM_{token}_MARK"
@@ -677,6 +682,7 @@ def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -
     }
     h.set_update_hooks(deployed_vm, [post_hook])
     h.wait_no_active_pfb_task(deployed_vm)  # clean baseline — no prior pass in flight
+    persisted_before = h.count_log_marker(deployed_vm, h.PFB_LOG, stream_marker)
 
     try:
         # Dispatch DETACHED (mirrors the GUI's mwexec_bg): returns at once; observe via the log.
@@ -722,6 +728,14 @@ def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -
         )
     finally:
         h.wait_no_active_pfb_task(deployed_vm, timeout=40.0)
+        # issue #988: exactly ONE persisted copy per hook run — a duplicate here means
+        # pfb_persist_hook_output() double-fired on the normal-pass branch.
+        persisted_delta = h.count_log_marker(deployed_vm, h.PFB_LOG, stream_marker) - persisted_before
+        assert persisted_delta == 1, (
+            f"hook marker {stream_marker!r} was persisted into {h.PFB_LOG} {persisted_delta} time(s) "
+            "for one hook run (expected exactly 1 — pfb_persist_hook_output double-fired):\n"
+            f"{deployed_vm.ssh('cat', h.PFB_LOG).stdout[-4000:]}"
+        )
         h.clear_update_hooks(deployed_vm)
 
 
