@@ -6372,12 +6372,14 @@ function pfb_dnsbl_strip_scheme(string $line, bool $strict = FALSE): string|fals
 		$scheme = substr($line, 0, $pos);
 		if ($scheme === '') {
 			// DandelionSprouts' "block regardless of scheme" shape: a bare '://' in
-			// front of a bracketed IPv6 literal. Let ONLY this exact form through for
-			// pfb_dnsbl_unbracket_ip6() to unwrap; any other empty scheme is rejected.
+			// front of a bracketed IPv6 literal. Return the bare address directly
+			// (already unwrapped and validated here); any other empty scheme is rejected.
 			$remainder = substr($line, $pos + 3);
-			if (str_starts_with($remainder, '[') && str_ends_with($remainder, ']') &&
-			    is_ipaddrv6(substr($remainder, 1, -1))) {
-				return $remainder;
+			if (str_starts_with($remainder, '[') && str_ends_with($remainder, ']')) {
+				$inner = substr($remainder, 1, -1);
+				if (is_ipaddrv6($inner)) {
+					return $inner;
+				}
 			}
 			return FALSE;
 		}
