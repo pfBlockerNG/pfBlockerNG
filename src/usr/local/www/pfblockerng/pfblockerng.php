@@ -840,7 +840,7 @@ function pfblockerng_uc_countries() {
 	}
 
 	// Save Date/Time stamp to MaxMind version file
-	$local_tds	 = @gmdate('D, j M Y H:i:s T', pfb_file_mtime($maxmind_cont));
+	$local_tds	 = @gmdate('Y-m-d H:i:s', pfb_file_mtime($maxmind_cont));
 	$maxmind_ver	 = "MaxMind GeoLite2 Date/Time Stamp\n";
 	$maxmind_ver	.= "Last-Modified: {$local_tds}\n";
 	@file_put_contents("{$pfb['logdir']}/maxmind_ver", $maxmind_ver, LOCK_EX);

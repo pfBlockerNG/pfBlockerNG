@@ -5304,7 +5304,7 @@ function dnsbl_alias_update($mode, $alias, $pfbfolder, $lists_dnsbl_current, $al
 		}
 
 		// Update DNSBL alias statistics
-		$dns_now = date('M j H:i:s', time());
+		$dns_now = date('Y-m-d H:i:s', time());
 		$pfbfound = FALSE;
 
 		if (!empty($pfb['dnsbl_info_stats'])) {
@@ -5338,7 +5338,7 @@ function dnsbl_alias_update($mode, $alias, $pfbfolder, $lists_dnsbl_current, $al
 		}
 
 		if (!$pfbfound) {
-			$dns_now = date('M j H:i:s', time());
+			$dns_now = date('Y-m-d H:i:s', time());
 			$pfb['dnsbl_info_stats'][] = array ('groupname' => $alias, 'timestamp' => $dns_now, 'entries' => 'disabled', 'counter' => 0);
 		}
 	}
@@ -14114,11 +14114,11 @@ function pfBlockerNG_clearsqlite($mode, $totalqueries = 0) {
 		$todo[] = array(3, 'Clear Resolver queries', 'UPDATE resolver SET totalqueries = :totalqueries, queries = 0 WHERE row = 0;');
 	}
 	elseif ($mode == 'clearip') {
-		$lastipclear = date('M j H:i:s', time()); 
+		$lastipclear = date('Y-m-d H:i:s', time());
 		$todo[] = array(6, 'Reset IP last clear timestamp', 'UPDATE lastclear SET lastipclear = :lastipclear WHERE row = 0;');
 	}
 	elseif ($mode == 'cleardnsbl') {
-		$lastdnsblclear = date('M j H:i:s', time()); 
+		$lastdnsblclear = date('Y-m-d H:i:s', time());
 		$todo[] = array(1, 'Clear Widget counters', 'UPDATE dnsbl SET counter = 0;');
 		$todo[] = array(3, 'Clear Resolver queries', 'UPDATE resolver SET totalqueries = 0, queries = 0;');
 		$todo[] = array(6, 'Reset DNSBL last clear timestamp', 'UPDATE lastclear SET lastdnsblclear = :lastdnsblclear WHERE row = 0;');
@@ -16525,7 +16525,7 @@ function sync_package_pfblockerng($cron='') {
 									pfb_logger("{$log}", 1);
 
 									// Copy downloaded file to /tmp for debugging
-									$ts = date('M_j', time());
+									$ts = date('Y-m-d', time());
 									@copy("{$file_dwn}.orig", "/tmp/Error_{$header}_{$ts}.orig");
 
 									unlink_if_exists("{$pfbfolder}/{$header}.bk");

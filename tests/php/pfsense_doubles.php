@@ -701,6 +701,15 @@ if (!function_exists('is_service_running')) {
 	}
 }
 
+if (!function_exists('is_process_running')) {
+	// pfSense util.inc: TRUE when a process by this name is running (pgrep-backed).
+	// Default FALSE -- a dev/CI box never has a real 'unbound' process, matching
+	// every call site's real off-appliance behaviour.
+	function is_process_running($process) {
+		return FALSE;
+	}
+}
+
 if (!function_exists('restart_service')) {
 	// pfSense services.inc: restart a named rc.d service. No-op off-appliance.
 	function restart_service($service) {
