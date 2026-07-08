@@ -4349,6 +4349,10 @@ function pfb_run_hooks($when, $ctx = array()) {
 			}
 		}
 
+		// issue #988: the lifecycle branch above streams to $logtarget same as the normal
+		// pass does -- persist its delta into $pfb['log'] too (no-op outside a run).
+		pfb_persist_hook_output($logtarget, $hook_log_offset);
+
 		if ($retval === 124) {
 			pfb_logger("[ pfB Hook ] {$when} {$label} TIMED OUT after {$timeout}s (killed); continuing\n", 2);
 		} elseif ($retval !== 0) {
