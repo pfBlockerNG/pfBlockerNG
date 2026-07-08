@@ -350,9 +350,13 @@ def _ui_config_baseline(webui: WebUI, smoke_vm: SmokeVM) -> dict[str, str]:
 def _ui_pfb_isolation(request: pytest.FixtureRequest) -> Iterator[None]:
     """Restore pfBlockerNG config to baseline after a mutating UI test LEFT it dirty (issue #810).
 
-    ``ui_render`` and unmarked tests get a plain no-op ``yield`` -- no VM/webui
-    setup, no probe cost, matching Tier A's read-only contract. For ``ui_e2e``/
-    ``ui_browser`` tests: at TEARDOWN, compare the current config digest
+    Gating rule: a test carrying the ``ui_e2e`` or ``ui_browser`` marker anywhere in
+    its chain is probed -- INCLUDING a test dual-marked ``ui_render`` (a mutating
+    render test rides the net, and a read-only test in a ``ui_e2e`` module pays one
+    ~0.1s probe -- the safe direction). Tests with NEITHER marker (the pure
+    ``ui_render`` modules and unmarked tests) get a plain no-op ``yield`` -- no
+    VM/webui setup, no probe cost, matching Tier A's read-only contract. For probed
+    tests: at TEARDOWN, compare the current config digest
     (:func:`~tests.smoke.helpers.pfb_config_digest`) against the session
     baseline; only a MISMATCH pays
     :func:`~tests.smoke.helpers.restore_pfb_config_baseline`'s real cost, then the
@@ -365,8 +369,9 @@ def _ui_pfb_isolation(request: pytest.FixtureRequest) -> Iterator[None]:
     ``deployed_vm`` re-establishes any infra a wipe drops, but this tier is ONE
     session -- a wipe deletes ``pfb_dnsvip4``/ports with nothing left to re-add them,
     so every LATER DNSBL/SafeSearch save fails ``pfb_validate_vips`` (the failure
-    class ui-tests.yml run 28900064099 hit: 23 functional + 1 browser test failed
-    reading back ``''`` after the first dirty-path wipe). Restoring the
+    class ui-tests.yml run 28900064099 hit: 23 functional-leg tests failed reading
+    back ``''`` after the first dirty-path wipe; its one browser-leg failure was
+    the unrelated pre-existing issue #964 bug, fixed separately). Restoring the
     :data:`UI_CONFIG_SNAPSHOT` guest-side snapshot -- taken once, post-VIP, at session
     start -- puts the box back exactly where the session began instead.
 

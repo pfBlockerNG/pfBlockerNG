@@ -344,6 +344,10 @@ def test_ip_page_renders_v6_suppression_section(webui: WebUI) -> None:
 _CFG_MAXMIND_KEY = "installedpackages/pfblockerngipsettings/config/0/maxmind_key"
 
 
+# Dual-marked ui_e2e (issue #810): this test MUTATES config.xml (seeds maxmind_key) as
+# setup, so it must ride the per-test isolation probe (_ui_pfb_isolation gates on the
+# ui_e2e/ui_browser markers); the module-level ui_render marker keeps it in the Tier-A gate.
+@pytest.mark.ui_e2e
 def test_ip_page_never_leaks_maxmind_key(
     smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:  # noqa: ARG001
@@ -986,6 +990,10 @@ def test_dnsbl_page_renders_tld_pickers(webui: WebUI, php_error_log_guard: PhpEr
 CFG_PFB_DNSBL = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl"
 
 
+# Dual-marked ui_e2e (issue #810): this test MUTATES config.xml (flips pfb_dnsbl on) as
+# setup, so it must ride the per-test isolation probe (_ui_pfb_isolation gates on the
+# ui_e2e/ui_browser markers); the module-level ui_render marker keeps it in the Tier-A gate.
+@pytest.mark.ui_e2e
 def test_alerts_unified_log_colour_fields_render(
     smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:
