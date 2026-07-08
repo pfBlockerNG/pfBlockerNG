@@ -2780,10 +2780,10 @@ def restore_pfb_config_baseline(vm: SmokeVM, *, snapshot_path: str, timeout: flo
 
     Issue #810.
     """
+    # Single-string ssh convention (runs verbatim under the guest /bin/sh -- required for
+    # the `&&`); shlex.quote hardens the caller-supplied path (PR #965 Copilot review).
     cp_result = vm.ssh(
-        "/bin/sh",
-        "-c",
-        f"cp {snapshot_path} /conf/config.xml && rm -f /tmp/config.cache",
+        f"cp {shlex.quote(snapshot_path)} /conf/config.xml && rm -f /tmp/config.cache",
         timeout=timeout,
     )
     if cp_result.returncode != 0:
