@@ -21,7 +21,10 @@ use PHPUnit\Framework\TestCase;
  *         fires naming the reason -- FAILS on pre-fix code (no notice), PASSES after.
  *
  * Scenario B (must stay unaffected) — auto-create mode, invalid VIP:
- *   Given the same invalid VIP, but pfb_dnsvip_auto='on'.
+ *   Given the same unresolvable VIP id, but pfb_dnsvip_auto='on' (interface is left at
+ *         the 'lo0' default here, so validation actually fails on interface mismatch
+ *         rather than Scenario A's "invalid IPv4 VIP" -- irrelevant to this branch,
+ *         which only checks $vips_valid_result[0], never the reason string).
  *   Then  validation is deferred to the auto-create bootstrap (existing behaviour) and
  *         NO file_notice() fires -- the fix must not fire while auto-create still owns
  *         provisioning.
