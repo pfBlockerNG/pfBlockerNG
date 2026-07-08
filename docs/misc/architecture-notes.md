@@ -961,14 +961,9 @@ next success. Open is idempotent-by-key: opening an already-open key refreshes
 | `ip` | `download` | `pfb_ip_download_ledger_update()` at the IP feed-download call site (`pfblockerng.inc`) | paired with the download success path |
 | `ip` | `dedup` | `pfb_sync_status_dedup_check()` (`pfblockerng_extra.inc`), reads the shell's `Sanity check [ PASSED / FAILED ]` line the same way the old widget grep did | replaces that grep entirely |
 | `ip` | `apply` | wired **inside** `pfb_pfctl_table_op()` itself (`pfblockerng.inc`) — a deliberate choice covering every one of that function's callers (delta apply, force-replace, aggregate build/teardown) at one choke point | issue #980's logging-level fix (level 2) is untouched; this ADR only adds the ledger write alongside it |
+| `dnsbl` | `download` | `pfb_dnsbl_download_ledger_update()` at the DNSBL feed-download call site (`pfblockerng.inc`) | paired with the download success path; issue #998 follow-up, mirrors the IP download writer |
 | `dnsbl` | `apply` | `pfb_dnsbl_apply_ledger_update()` + the pure `pfb_dnsbl_converged(): bool` helper (sentinel/applied generation match, Unbound running, `unbound.conf` still wires `pfb_unbound.py`), wired at `pfb_reload_unbound()`'s zero-downtime-success return and its shared-restart tail (mode-gated) | the swap-not-confirmed → restart-fallback branch never opens an entry by itself (fail-safe by design, not an error) |
 | `dnsbl` | `parse` | Python-owned, 8 sites in `pfb_unbound.py`: the zone/data/whitelist/hsts/SafeSearch loaders and the `pfb_unbound.ini` config read (each extracted into its own testable `_load_*` function) plus the DNSBL manifest load (`dnsbl_build_from_manifest()`, both its callers) | 7 further `sys.stderr.write` sites (module-capability imports, per-pattern REGEX-ini rows, background-thread bring-up) are deliberately left freetext-only — no stable per-run item identity / no natural clear site; still visible in `py_error.log` as before |
-
-**Known gap, not yet closed:** the ADR's own writer table calls for **IP + DNSBL** feed-download
-coverage, but only the IP call site got wired — the DNSBL feed-download call site
-(`pfb_download_failure()`'s DNSBL-branch caller) has no ledger writer today, so a DNSBL feed
-download failure is currently invisible to the ledger (still logged to `error.log` as always).
-Tracked as a follow-up, not silently accepted as done.
 
 ### Tick-driven reconciliation — apply stage only
 
