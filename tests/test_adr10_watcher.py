@@ -259,8 +259,15 @@ class _Harness:
         # the original flake was a slow-scheduled daemon thread reading the
         # just-published generation as its OWN baseline, so no build ever fired and
         # wait_builds timed out. This alone fixes the primary race for every test that
-        # publishes right after start().
-        self.wait_sentinel_reads(1)
+        # publishes right after start(). On timeout, stop/join the just-spawned daemon
+        # before re-raising -- callers only reach their try/finally stop_join AFTER
+        # start() returns, and an orphaned watcher could race the NEXT test's module
+        # globals (self-encapsulation rule).
+        try:
+            self.wait_sentinel_reads(1)
+        except AssertionError:
+            self.stop_join()
+            raise
 
     def publish(self, gen: int) -> None:
         _write_generation(self.sentinel, gen)
@@ -358,6 +365,11 @@ class TestHarnessWaiterDiagnostics:
     downstream ``builds == [2, 3]`` equality mismatch. These pin the contract directly:
     when the awaited condition is never met, the waiter raises a descriptive AssertionError.
     (Against the pre-fix silent-return waiters these tests FAIL -- no exception is raised.)
+
+    issue #957 adds a second contract: start() must not return before the watcher's
+    baseline sentinel read, so a publish() immediately after start() can never be
+    adopted as the baseline (test_start_waits_for_baseline_read_before_returning pins
+    it with a deterministic starved-thread delay).
     """
 
     def test_wait_builds_raises_on_timeout(self, tmp_path: Any, monkeypatch: Any) -> None:
