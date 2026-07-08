@@ -29,14 +29,16 @@ function log_error(string $error): void {}
  * @param string $notice     Notice text displayed in the GUI.
  * @param string $category   Category label (e.g. 'General', 'Packages').
  * @param string $url        Optional URL to link from the notice.
- * @param int    $local_only 1 to suppress HA/XMLRPC sync of this notice.
+ * @param int    $priority   Notice severity: 0 = informational, 1 = warning, 2 = error.
+ * @param bool   $local_only Suppress HA/XMLRPC sync of this notice.
  */
 function file_notice(
     string $id,
     string $notice,
     string $category   = 'General',
     string $url        = '',
-    int    $local_only = 0
+    int    $priority   = 1,
+    bool   $local_only = false
 ): void {}
 
 /**
