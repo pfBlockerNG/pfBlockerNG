@@ -1,0 +1,398 @@
+ADR-60 Phase 5 -- Fix the in-repo consumers of the new log format -- RESULTS
+================================================================================
+
+VERDICT: DONE
+
+--------------------------------------------------------------------------------
+REALITY CHECK AGAINST THE BRIEF (verified this session)
+--------------------------------------------------------------------------------
+Confirmed Phase 4 landed first: read RESULTS/04_Results.txt -- both dnsbl.log
+writers (python make_timestamp(), PHP pfb_log_event()) are ISO. Not missing;
+proceeded.
+
+Re-derived (not trusted) every code-state claim the brief made, against the
+live tree at branch tip bd02092e (Phase 4's commit), BEFORE editing:
+
+- www/index.php lines 45/51/52: confirmed `date('M j H:i', ...)` / `date('M j',
+  ...)` exactly as the brief said, at those exact line numbers.
+- The critical finding (guard regex charset `[a-zA-Z0-9: ]` has NO hyphen,
+  would abort the page render on any ISO $ts): re-probed myself --
+  `php -r 'var_dump(preg_match("/^[a-zA-Z0-9: ]+$/", "2026-07-08 14:30"));'`
+  -> int(0) (rejects). `preg_match("/^[a-zA-Z0-9:\- ]+$/", "2026-07-08 14:30")`
+  -> int(1), and `"2026-07-08"` alone -> int(1). CONFIRMED, matches the brief
+  exactly.
+- pfblockerng_alerts.php day-bucket (:1837, now :1842 after my edit added 2
+  comment lines above it) and chart_cmd (:1782, now :1785): confirmed exact
+  source text via `git show HEAD:...` before editing. Re-probed the cut/awk
+  formulas myself with real shell commands (pasted below) -- all match the
+  brief's own probes exactly.
+- Grep-gates (item 5): re-ran both BEFORE editing -- `grep -rn "cut -d ' '\|awk
+  -F ' '" src/usr/local/www/pfblockerng/` returned EXACTLY the 2 sites (line
+  1782 chart_cmd, line 1837 day-bucket); `grep -rn "a-zA-Z0-9: \]" src/usr/
+  local/www/pfblockerng/ src/usr/local/pkg/pfblockerng/` returned EXACTLY the 2
+  www/index.php guards. No contradiction found -- both brief claims held.
+- Additionally grepped the wider tree (src/usr/local/pkg/pfblockerng/*.inc,
+  *.sh) for any other space-token-count consumer of a log path -- the .sh
+  `cut -d ' '` hits are all feed-masterfile parsing (unrelated data, not a log
+  timestamp), and no other .inc/.php site assumes the old shape. No missed
+  consumer.
+
+No blocker. Proceeded exactly per the brief's action plan.
+
+--------------------------------------------------------------------------------
+WHAT CHANGED
+--------------------------------------------------------------------------------
+Commit: 55af70bc
+Branch: adr/60-age-based-log-retention (pushed directly, no PR needed)
+
+- src/usr/local/www/pfblockerng/www/index.php
+  - The DNSBL block page's dnsbl.log correlation key: all 3 `date()` calls
+    changed `'M j H:i'` -> `'Y-m-d H:i'` and `'M j'` -> `'Y-m-d'` (same
+    precision the old code keyed on, just in the new format).
+  - BOTH `preg_match` guards widened from `"/^[a-zA-Z0-9: ]+$/"` to
+    `"/^[a-zA-Z0-9:\- ]+$/"` (the critical finding) -- without this the page
+    would `exit` on every real request once Phase 4's ISO writer landed.
+  - Two-grep pipe logic and the `$data[5..8]` field extraction: untouched, per
+    the constraint (CSV comma-fields are unaffected by the timestamp's
+    internal space/format).
+
+- src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+  - Day-bucket stats (`ipdate`/`dnsbldate`/`replydate`): `cut -d ' ' -f1-2` ->
+    `cut -d ' ' -f1` (ISO's date field alone is the day bucket).
+  - Hourly chart label (`$chart_cmd`): the 4-field awk
+    (`{print $2 " " $3 " (" $4 "),"$1}`) -> a 3-field awk
+    (`{print $2 " (" $3 "),"$1}`) -- ISO's date has no internal space, so one
+    fewer field carries the same information (date, then hour in parens).
+  - `dnsbldatehr`/`dnsbldatehrmin` (`cut -d ':' -f1`/`-f1,2`): UNTOUCHED, per
+    the constraint -- confirmed correct via a new regression test (below).
+  - Day/hour bucket GRANULARITY (still daily/hourly buckets an operator sees):
+    unchanged -- only the field-extraction mechanics changed, per constraint.
+
+- tests/php/LogFormatConsumersTest.php (NEW, 9 tests)
+  - Neither consumer is a callable function (www/index.php runs at include
+    time; the alerts stat loop is top-level script code AlertsPageLoader.php's
+    eval window does not cover -- confirmed by reading that loader's docblock:
+    it covers a DIFFERENT, later function block only). Followed Phase 1/3's
+    established convention: a source tripwire (assertStringContainsString on
+    the exact current formula, so the oracle goes red if it drifts) +
+    reproduction of the exact formula, executed for REAL via `exec()` against
+    synthetic fixture files -- not `include`d, not reasoned through.
+  - Block-page tests: guard-charset accept/reject (the critical finding, both
+    directions); a synthetic ISO dnsbl.log line correlates and its Type/Group/
+    Evaluated/Feed fields render (green); the SAME line does NOT correlate
+    under the pre-Phase-5 key format (red, the real live breakage).
+  - Alerts tests: day-bucket cut groups ISO lines by date correctly (green);
+    the pre-Phase-5 `-f1-2` selection fails to group even same-day rows (red);
+    hourly chart awk shows the correct hour (green); the pre-Phase-5 4-field
+    awk shows an empty hour field against ISO input (red); the
+    dnsbldatehr/dnsbldatehrmin regression test (old-format AND new-format
+    samples both bucket to the correct "<date> <hour[:min]>" shape).
+  - Old-format/pre-Phase-5 formulas are reproduced from `git show HEAD~1:...`
+    of the two touched files (verified byte-exact before use), never
+    re-derived from memory.
+
+- tests/smoke/ui/test_alerts_stat_render.py (NEW, Tier-A `ui_render`)
+  - Seeds 4 real ISO-format dnsbl.log rows (3 on one synthetic day across 2
+    hours, 1 on a second day) via SSH, GETs
+    `pfblockerng_alerts.php?view=dnsbl_stat`, and asserts: the Tier-A oracle
+    (200, no PHP diagnostic, "DNSBL Block Stats" marker) AND the ACTUAL
+    corrected day-bucket grouping (both days render, no full-timestamp-as-its-
+    own-bucket artifact) AND the hourly chart_stats.csv shows the correct hour
+    with no empty "()" field. Self-encapsulated: an explicit fixture restores
+    the log to its exact pre-test byte size in teardown and fails loudly if
+    that didn't take (this module carries no ui_e2e/ui_browser marker, so the
+    shared _ui_pfb_isolation config-restore fixture does not apply to it).
+  - The DNSBL block page (www/index.php) is a SEPARATE consumer this phase
+    also fixes but is NOT reachable via this Tier-A harness at all -- verified
+    this session by reading test_render_smoke.py's EXCLUDED_FROM_TIER_A table
+    (pre-existing, ADR-14, unrelated to this phase): it is served by the DNSBL
+    VIP sinkhole lighttpd on a separate port, never the authenticated
+    webConfigurator session Tier-A drives. This is a real, documented
+    contradiction of the brief's phrasing ("Tier-A ui_render for the DNSBL
+    block page") -- flagged here per the ESCALATE contract rather than
+    building a test that could never pass. Its correlation-grep fix is proven
+    instead by LogFormatConsumersTest.php's red/green execution above; live
+    confirmation against a real block is this ADR's own Phase 9 live-VM smoke
+    item 4 ("Trigger a real DNSBL block, confirm the block page shows real
+    Type/Group/Evaluated/Feed detail") and ADR-14's separate Tier-B VIP-
+    sinkhole access leg -- not a gap this phase leaves silently.
+  - ENVIRONMENTAL LIMITATION (ASSUMED, not executed live this session): no
+    `PFB_BOXES` remote VM pool is configured in this session
+    (`echo $PFB_BOXES` -> empty; no remote box access) --
+    `python3 -m pytest tests/smoke/ui -m ui_render --override-ini="addopts="`
+    could NOT be run against a real pfSense VM. The test file is written and
+    STATICALLY verified only: `python3 -m pytest tests/smoke/ui --collect-only`
+    (290 tests collected, this module's test present) and
+    `python3 -m pytest tests/smoke/ui -m ui_render --override-ini="addopts="
+    --collect-only` (confirms it is picked up by the marker filter), plus a
+    read-through against test_alerts_render_verify.py/test_render_smoke.py's
+    conventions (fixture SSH-seeding pattern, PhpErrorLogGuard usage, webui/
+    smoke_vm fixture signatures) for structural correctness. Live execution is
+    deferred to CI (ui-tests.yml) / Phase 9's dedicated live-VM smoke run.
+
+--------------------------------------------------------------------------------
+GATES RUN (final tree, commit 55af70bc)
+--------------------------------------------------------------------------------
+
+$ php -l src/usr/local/www/pfblockerng/www/index.php
+No syntax errors detected in src/usr/local/www/pfblockerng/www/index.php
+
+$ php -l src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+No syntax errors detected in src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+
+$ php -l tests/php/LogFormatConsumersTest.php
+No syntax errors detected in tests/php/LogFormatConsumersTest.php
+
+$ vendor/bin/phpunit
+............................................................. 2440 / 2466 ( 98%)
+..........................                                    2466 / 2466 (100%)
+Time: 00:09.355, Memory: 38.00 MB
+OK, but there were issues!
+Tests: 2466, Assertions: 19174, PHPUnit Deprecations: 2, Skipped: 4.
+(2466 = Phase 4's 2457 baseline + 9 new tests in LogFormatConsumersTest. FULL
+suite green, same 2 pre-existing PHPUnit Deprecations and 4 skips as every
+prior phase.)
+
+$ vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+[OK] No errors
+
+$ vendor/bin/phpcs -d memory_limit=1G --standard=phpcs.xml.dist src/
+(no output, exit 0 -- clean)
+
+$ python3 -m pytest
+======================= 2436 passed, 4 skipped in 39.92s =======================
+(unchanged from Phase 4's baseline -- no .py file under the default pytest
+scope was touched; tests/smoke/ is --ignore'd by default, see pyproject.toml.)
+
+$ python3 -m pytest tests/smoke/ui --collect-only -q
+========================= 290 tests collected in 0.08s =========================
+(includes the new test_alerts_stat_render.py module; confirmed present via a
+-k filter and via the ui_render marker filter, both pasted below.)
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check .
+199 files already formatted
+
+$ python3 -m mypy tests/
+Success: no issues found in 84 source files
+
+$ python3 scripts/check_comment_narration.py --staged   -> exit 0, clean
+$ python3 scripts/check_version_literals.py             -> exit 0, clean
+$ python3 scripts/check_appliance_python.py              -> exit 0, clean
+(only check_comment_narration.py supports --staged; the other two take no args
+and full-tree scan -- corrected during the phase-5 gate, which independently
+re-ran both correctly with zero violations either way)
+
+--------------------------------------------------------------------------------
+RED -> GREEN PROOF -- www/index.php + pfblockerng_alerts.php (all via
+LogFormatConsumersTest.php, real shell-pipeline execution, not reasoning)
+--------------------------------------------------------------------------------
+Procedure: `git checkout HEAD~1 -- <the 2 src paths>` (Phase-5 test file left
+in its NEW state, HEAD~1 = Phase 4's tip bd02092e) -> run -> expect FAIL for
+the "green-side" assertions and PASS for the "red-side" assertions (which
+pin the OLD/broken behaviour) -> `git checkout HEAD -- <the 2 src paths>` ->
+re-run -> expect ALL PASS. `git status --short` empty both before editing and
+after the final restore (confirmed tree returned to the exact committed
+state).
+
+RED (pre-Phase-5 www/index.php + pfblockerng_alerts.php, new tests):
+$ vendor/bin/phpunit --filter LogFormatConsumersTest --testdox
+ X Block page guard charset accepts iso timestamp
+ . Block page old guard charset would have aborted on iso timestamp
+ X Block page correlation matches new iso format log line
+ . Block page correlation fails with pre p 5 key against new iso log line
+ X Day bucket cut field selection groups iso lines by date
+ . Day bucket old field selection fails to group iso lines
+ X Hourly chart label awk shows correct hour for iso lines
+ . Hourly chart label old awk produces empty hour for iso lines
+ . Dnsbl date hr and hr min buckets unaffected by format change
+Tests: 9, Assertions: 22, Failures: 4, PHPUnit Deprecations: 2.
+(X = failed, . = passed; substituted for the testdox glyphs verbatim printed
+by PHPUnit, which are checkmark/cross characters.)
+
+Exactly the 4 tests asserting the FIXED/green behaviour failed against the
+pre-Phase-5 code (guard-charset acceptance, block-page correlation, day-bucket
+grouping, chart hour) -- for the precise documented reason each time (sample
+failure: the day-bucket test's `assertCount(2, $stats, ...)` got 3, i.e. no
+grouping at all -- the exact live breakage). The 4 tests asserting the
+OLD/broken behaviour (used as red-proof controls) and the format-unaffected
+regression test all stayed green, proving the oracle isolates exactly the
+intended regression, not a broader environment difference.
+
+GREEN (restore Phase-5 www/index.php + pfblockerng_alerts.php):
+$ vendor/bin/phpunit --filter LogFormatConsumersTest --testdox
+ ✔ Block page guard charset accepts iso timestamp
+ ✔ Block page old guard charset would have aborted on iso timestamp
+ ✔ Block page correlation matches new iso format log line
+ ✔ Block page correlation fails with pre p 5 key against new iso log line
+ ✔ Day bucket cut field selection groups iso lines by date
+ ✔ Day bucket old field selection fails to group iso lines
+ ✔ Hourly chart label awk shows correct hour for iso lines
+ ✔ Hourly chart label old awk produces empty hour for iso lines
+ ✔ Dnsbl date hr and hr min buckets unaffected by format change
+Tests: 9, Assertions: 47, PHPUnit Deprecations: 2.
+
+--------------------------------------------------------------------------------
+THE CRITICAL FINDING -- re-verified independently this session
+--------------------------------------------------------------------------------
+$ php -r 'var_dump(preg_match("/^[a-zA-Z0-9: ]+$/", "2026-07-08 14:30"));'
+int(0)
+$ php -r 'var_dump(preg_match("/^[a-zA-Z0-9:\- ]+$/", "2026-07-08 14:30"));'
+int(1)
+$ php -r 'var_dump(preg_match("/^[a-zA-Z0-9:\- ]+$/", "2026-07-08"));'
+int(1)
+Confirmed: the pre-Phase-5 guard charset (no hyphen) rejects EVERY ISO
+timestamp -- with Phase 4's writer already ISO, every real block-page request
+would `exit` at the FIRST guard (line 46, pre-fix), a hard abort, not a
+graceful placeholder fallback. Fixed by widening both guards to
+`/^[a-zA-Z0-9:\- ]+$/`. Pinned by testBlockPageGuardCharsetAcceptsIsoTimestamp
+/ testBlockPageOldGuardCharsetWouldHaveAbortedOnIsoTimestamp.
+
+--------------------------------------------------------------------------------
+DAY-BUCKET / CHART FORMULA PROBES -- re-verified independently this session
+--------------------------------------------------------------------------------
+$ echo '2026-07-08 14:30:45' | cut -d ' ' -f1-2    # OLD selection (broken on ISO)
+2026-07-08 14:30:45
+$ echo '2026-07-08 14:30:45' | cut -d ' ' -f1       # NEW selection (fixed)
+2026-07-08
+$ echo '  5 2026-07-08 14' | awk '{$1=$1} 1' | awk -F ' ' '{print $2 " " $3 " (" $4 "),"$1}'   # OLD 4-field (broken)
+2026-07-08 14 (),5
+$ echo '  5 2026-07-08 14' | awk '{$1=$1} 1' | awk -F ' ' '{print $2 " (" $3 "),"$1}'          # NEW 3-field (fixed)
+2026-07-08 (14),5
+$ echo 'Jan 5 14:30:45' | cut -d ':' -f1     # dnsbldatehr, OLD format -- unaffected
+Jan 5 14
+$ echo '2026-07-08 14:30:45' | cut -d ':' -f1   # dnsbldatehr, NEW format -- unaffected
+2026-07-08 14
+$ echo 'Jan 5 14:30:45' | cut -d ':' -f1,2   # dnsbldatehrmin, OLD format -- unaffected
+Jan 5 14:30
+$ echo '2026-07-08 14:30:45' | cut -d ':' -f1,2 # dnsbldatehrmin, NEW format -- unaffected
+2026-07-08 14:30
+All match the brief's own probes exactly; no discrepancy found.
+
+--------------------------------------------------------------------------------
+DNSBLDATEHR / DNSBLDATEHRMIN REGRESSION TEST -- result
+--------------------------------------------------------------------------------
+testDnsblDateHrAndHrMinBucketsUnaffectedByFormatChange (part of the 9/9 green
+run above): tripwires BOTH `cut -d ':' -f1 | sort | uniq -c | sort -nr` and
+`cut -d ':' -f1,2 | sort | uniq -c | sort -nr` are byte-identical in the
+current source (untouched this phase), then runs both an old-format
+('Jan 5 14:30:45') and a new-format ('2026-07-08 14:30:45') sample through the
+REAL `cut -d ':' -f1` / `-f1,2` pipelines and asserts both end in the correct
+" 14" / " 14:30" shape -- PASSED for both formats, confirming the mechanism is
+genuinely format-agnostic, not merely assumed so.
+
+--------------------------------------------------------------------------------
+GREP-GATES (re-run this session, final tree)
+--------------------------------------------------------------------------------
+$ grep -rn "cut -d ' '\|awk -F ' '" src/usr/local/www/pfblockerng/
+src/usr/local/www/pfblockerng/pfblockerng_alerts.php:1785:	$chart_cmd = "awk '{\$1=\$1} 1' | awk -F ' ' '{print \$2 \" \(\" \$3 \"\),\" \$1}' >> /usr/local/www/pfblockerng/chart_stats.csv";
+src/usr/local/www/pfblockerng/pfblockerng_alerts.php:1842:					exec("{$cut_cmd} {$alert_log} | cut -d ' ' -f1 | uniq -c 2>&1", $stats);
+(EXACTLY the 2 expected sites, both already fixed -- no `-f1-2` remains, no
+4-field awk remains.)
+
+$ grep -rn "a-zA-Z0-9: \]" src/usr/local/www/pfblockerng/ src/usr/local/pkg/pfblockerng/
+(empty -- no lingering old-charset guard anywhere.)
+
+No other consumer found: also grepped src/usr/local/pkg/pfblockerng/*.sh/*.inc
+for `cut -d ' '`/`awk -F ' '` over a pfBlockerNG log path -- the .sh hits are
+all feed-masterfile parsing (unrelated), and pfblockerng_ip.php/
+pfblockerng_log.php (the other two www/ files touching these log names) carry
+no space-token-count cut/awk at all.
+
+--------------------------------------------------------------------------------
+TIER-A ui_render -- STATUS (per the environmental constraint given this
+session: no PFB_BOXES remote box pool configured, cannot execute live)
+--------------------------------------------------------------------------------
+tests/smoke/ui/test_alerts_stat_render.py -- WRITTEN, statically checked only:
+  $ python3 -m pytest tests/smoke/ui --collect-only -q
+  -> 290 tests collected (this module's test present, verified with a -k
+     filter: "1/290 tests collected")
+  $ python3 -m pytest tests/smoke/ui -m ui_render --override-ini="addopts="
+    --collect-only -q
+  -> confirmed the new test is selected by the ui_render marker filter
+  Live execution NOT run this session (ASSUMED, deferred to CI/Phase 9) --
+  the module follows test_alerts_render_verify.py's SSH-seed/_append pattern
+  and test_render_smoke.py's PhpErrorLogGuard/evaluate_render usage exactly
+  (same fixture signatures, same oracle call), so it is structurally
+  consistent with sibling Tier-A tests, but its actual pass/fail against a
+  real pfSense VM is unverified in this session.
+
+www/index.php (the DNSBL block page) has NO Tier-A ui_render coverage and
+CANNOT per ADR-14's own architecture (verified this session, see WHAT CHANGED
+above) -- this is a documented pre-existing fact, not a gap this phase
+introduces or silently omits. Its fix is proven by LogFormatConsumersTest.php
+instead; live confirmation is ADR-60 Phase 9 + ADR-14's Tier-B VIP-sinkhole
+leg.
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX (ADR.md S2.5 "In-repo consumers of the new format" row)
+--------------------------------------------------------------------------------
+| Row                                                | Covered by |
+| --- | --- |
+| www/index.php block-page correlation grep key      | LogFormatConsumersTest::testBlockPageCorrelationMatchesNewIsoFormatLogLine (green) + testBlockPageCorrelationFailsWithPreP5KeyAgainstNewIsoLogLine (red) |
+| The critical charset-abort finding                 | testBlockPageGuardCharsetAcceptsIsoTimestamp (green) + testBlockPageOldGuardCharsetWouldHaveAbortedOnIsoTimestamp (red) |
+| pfblockerng_alerts.php day-bucket stats (ip/dnsbl/reply) | testDayBucketCutFieldSelectionGroupsIsoLinesByDate (green) + testDayBucketOldFieldSelectionFailsToGroupIsoLines (red) |
+| pfblockerng_alerts.php hourly chart labels          | testHourlyChartLabelAwkShowsCorrectHourForIsoLines (green) + testHourlyChartLabelOldAwkProducesEmptyHourForIsoLines (red) |
+| dnsbldatehr/dnsbldatehrmin (":"-split) confirmed UNAFFECTED | testDnsblDateHrAndHrMinBucketsUnaffectedByFormatChange (old-format AND new-format samples both pass) |
+| No other www/ consumer assumes the old shape        | grep-gates above, re-run this session, both empty/exact-2 |
+| Tier-A ui_render (test mandate #4)                  | tests/smoke/ui/test_alerts_stat_render.py -- written + statically checked; live execution deferred (environmental limitation, see above). www/index.php's own Tier-A is architecturally N/A (ADR-14) -- proven instead by the PHPUnit red/green pipeline tests. |
+
+--------------------------------------------------------------------------------
+DEVIATIONS / JUDGMENT CALLS
+--------------------------------------------------------------------------------
+1. The brief's VERIFICATION section literally says "Tier-A ui_render for the
+   DNSBL block page and the Reports/Alerts page". Reading test_render_smoke.py
+   before writing anything (CLAUDE.md "investigate, don't assume") found its
+   own EXCLUDED_FROM_TIER_A table already documents (pre-existing, ADR-14,
+   unrelated to this phase) that www/index.php is NOT reachable via the
+   authenticated webConfigurator Tier-A harness at all -- it's served by the
+   DNSBL VIP sinkhole lighttpd on a different port. Writing a PAGE_TABLE-style
+   entry attempting to GET it through the normal harness would be a test that
+   can never pass for reasons unrelated to this phase's correctness -- exactly
+   the kind of contradiction CLAUDE.md's ESCALATE contract says to flag loudly
+   rather than silently build around. Resolved by: (a) adding genuine NEW
+   Tier-A coverage for the Reports/Alerts half (the page that IS Tier-A-
+   reachable), seeding real ISO log content so the touched code path actually
+   executes (the existing generic `alerts_dnsbl_stat` PAGE_TABLE entry never
+   seeds data, so it never exercises this phase's cut/awk fix at all); (b) for
+   the block page, relying on the already-thorough PHPUnit red/green shell-
+   pipeline tests as the functional proof, with live confirmation explicitly
+   deferred to this ADR's own Phase 9 live-VM smoke (item 4 of its manual
+   smoke checklist already names this exact scenario) and ADR-14's separate
+   Tier-B VIP-sinkhole access leg. Not a new gap -- both are pre-existing,
+   documented deferrals this phase did not create.
+2. Live execution of the new ui_render test is unverified this session
+   (environmental constraint: no PFB_BOXES remote box pool configured) --
+   ASSUMED, statically checked only (collect-only + marker-filter selection +
+   structural read-through against sibling conventions), per this session's
+   explicit brief. Flagged, not silently skipped.
+None of the above weakens any CLAUDE.md MUST rule.
+
+--------------------------------------------------------------------------------
+CARRY-FORWARD FOR PHASE 6 (log_max_days_<type>: the age-cutoff cap)
+--------------------------------------------------------------------------------
+- The system is internally consistent now: all 10 log types share ONE ISO-8601
+  timestamp format (from Phases 2-4) AND both in-repo consumers byte-coupled
+  to the old 3-space-token shape are rebuilt for it (this phase) -- safe to
+  add the age-cutoff feature (parsing the now-uniform `Y-m-d H:i:s` prefix/
+  field) on top without inheriting a stale-format assumption anywhere in
+  `src/usr/local/www/pfblockerng/`.
+- `pfb_log_mgmt()` (Phase 6's target, `pfblockerng.inc:2778`) is UNTOUCHED by
+  this phase -- Phase 5 only touched `www/index.php` and
+  `pfblockerng_alerts.php`, per the brief's constraint.
+- The two grep-gates re-run this session (both pasted above) are now clean:
+  no site in `src/usr/local/www/pfblockerng/` assumes the old shape. Phase 6
+  should still re-derive its own grep for `pfblockerng.inc`/`pfblockerng_extra
+  .inc` sites before touching them (this phase's gates only scanned www/).
+- Tier-A ui_render live execution (this test AND the whole suite) is still
+  unverified against a real VM this session -- Phase 6 (also touching `www/`
+  only indirectly via config, but Phase 8's UI work will) and Phase 9's
+  live-VM smoke run are where that gets its first real confirmation. Don't
+  chain-trust this phase's "should work" read-through as if it were an
+  executed pass.
+- www/index.php's Tier-A-unreachability (ADR-14, pre-existing) is now
+  explicitly documented in this phase's test file's own docstring -- any
+  future phase touching that page should read it there first rather than
+  re-discovering the same fact.
