@@ -2847,7 +2847,7 @@ def pfb_config_digest(vm: SmokeVM, *, timeout: float = 30.0) -> str:
             f"pfb_config_digest: reading /conf/config.xml failed: rc={result.returncode} "
             f"stderr={result.stderr!r} stdout={result.stdout!r}"
         )
-    return hashlib.md5(strip_config_revision(result.stdout).encode("utf-8")).hexdigest()
+    return hashlib.md5(strip_config_revision(result.stdout).encode("utf-8"), usedforsecurity=False).hexdigest()
 
 
 # --------------------------------------------------------------------------- #
