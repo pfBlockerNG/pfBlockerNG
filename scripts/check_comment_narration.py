@@ -13,6 +13,11 @@ grandfathered until its cleanup lands and this gate never blocks an unrelated
 change. Scope: `src/` and `scripts/`, minus `*.md` and the files whose subject
 IS phases/narration (this checker, its test, `check_phase_prompts.py`).
 
+Every added line is judged, not only comment-shaped ones: the banned
+vocabulary has no legitimate code/string use in the scan roots, and
+per-language comment parsing is the known false-positive trap; a genuine
+future hit rides the escape hatch.
+
 Escape a genuine need inline with `# narration-ok: <reason>`.
 
 Exit status: 0 = clean, 1 = violations (printed file:line), 2 = usage/git error.
@@ -30,9 +35,9 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"RESULTS/"), "delegation handoff artifact (RESULTS/...)"),
     # Capitalised only: ADR narration always writes "Phase N"; ordinary prose
     # about a protocol's "phase 2" stays legal.
-    (re.compile(r"\bPhase [0-9]"), "ADR phase narration (Phase N)"),
+    (re.compile(r"\bPhase [0-9]+\b"), "ADR phase narration (Phase N)"),
     (re.compile(r"review-fanout", re.IGNORECASE), "review archaeology (review-fanout)"),
-    (re.compile(r"\bPR ?#[0-9]"), "review archaeology (PR #N)"),
+    (re.compile(r"\bPR ?#[0-9]+\b"), "review archaeology (PR #N)"),
 )
 
 # Matched case-insensitively so a differently-cased escape still exempts.
