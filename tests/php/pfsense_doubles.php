@@ -962,6 +962,30 @@ if (!function_exists('isvalidpid')) {
 	}
 }
 
+// --- ADR-61 Phase 3 doubles: pfb_dnsbl_converged() + pfb_reload_unbound() restart path ---
+
+if (!function_exists('is_process_running')) {
+	// pfSense util.inc: TRUE when a process by that name has a live PID. Tests seed
+	// $GLOBALS['pfb_test_process_running'][$process] with either a bool (constant
+	// answer) or a callable(): bool (a per-call sequence, e.g. "running, then
+	// stopped, then running again"). Default TRUE (mirrors is_service_running's
+	// default so callers see "up" unless a test overrides it).
+	function is_process_running($process) {
+		$v = $GLOBALS['pfb_test_process_running'][$process] ?? TRUE;
+		return is_callable($v) ? (bool) $v() : (bool) $v;
+	}
+}
+
+if (!function_exists('get_single_sysctl')) {
+	// pfSense pfsense-utils.inc: read one sysctl OID as a string. pfb_unbound_py_swap_fits_ram()
+	// reads 'hw.usermem' to project whether a zero-downtime swap fits in RAM. Tests seed
+	// $GLOBALS['pfb_test_sysctl'][$oid]; default a generous 16 GiB so the swap-eligibility
+	// gate passes unless a test deliberately RAM-starves it.
+	function get_single_sysctl($oid) {
+		return $GLOBALS['pfb_test_sysctl'][$oid] ?? (string) (16 * 1024 * 1024 * 1024);
+	}
+}
+
 // --- pfb_remove_states() doubles (#702/#705) ---
 //
 // The kill-states validation walk (pfb_remove_states) reaches two util.inc

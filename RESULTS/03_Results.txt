@@ -1,0 +1,387 @@
+================================================================================
+ADR-61 PHASE 3 — RESULTS
+Wire PHP-side DNSBL writers + clearers, + pfb_dnsbl_converged()
+================================================================================
+
+VERDICT: DONE-WITH-DEVIATION (see DEVIATIONS below -- several judgment calls
+diverge from the original phase-prompt's literal wording; all are within the
+top-level brief's explicit "planItems supersede the action-plan where they
+conflict" authorization, none silently narrows scope, all documented here).
+
+--------------------------------------------------------------------------------
+WHAT CHANGED
+--------------------------------------------------------------------------------
+
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  Three new functions, added right before pfb_reload_unbound() (after
+  pfb_unbound_py_ccache_flush()):
+    1. pfb_unbound_py_marker_generation(string $path): int -- shared
+       first-line-integer reader (file_exists -> file_get_contents ->
+       strtok(first line) -> trim -> ctype_digit), IDENTICAL convention to
+       pfb_unbound_py_flip_sentinel()/_wait_marker()'s inline parsing, so an
+       absent/empty/non-integer file reads as 0.
+    2. pfb_dnsbl_converged(): bool -- TRUE iff (a) sentinel/applied
+       generations agree (via #1 -- both absent means 0==0, the "never
+       flipped yet" baseline), (b) is_process_running('unbound'), (c)
+       unbound.conf references 'pfb_unbound.py' (mirrors the widget's
+       $unbound_validate check verbatim). Pure read, no I/O side effects, no
+       polling.
+    3. pfb_dnsbl_apply_ledger_update(): void -- the writer/clearer decision:
+       converged() TRUE -> pfb_sync_status_close('dnsbl','dnsbl','apply',...);
+       FALSE -> pfb_sync_status_open(...) with a fixed human message.
+  Two call sites added inside pfb_reload_unbound():
+    - The zero-downtime swap's own success return (right before the early
+      `return;` that fires once pfb_unbound_py_wait_applied() confirms the
+      swap) -- calls pfb_dnsbl_apply_ledger_update().
+    - The tail, right after the "Confirm that Resolver is running" block
+      (covers ALL THREE of that block's terminal outcomes: build/restart
+      failure retried into a running confirm, running-but-status-unconfirmed,
+      and not-running) -- `if ($mode == 'enabled') { pfb_dnsbl_apply_ledger_
+      update(); } else { pfb_sync_status_close(...); }`.
+  Zero existing pfb_logger() calls touched (verified below).
+
+- tests/php/pfsense_doubles.php
+  Two new function_exists()-guarded doubles (section "ADR-61 Phase 3
+  doubles"): is_process_running($process) (constant bool OR a callable():bool
+  per $GLOBALS['pfb_test_process_running'][$process], default TRUE) and
+  get_single_sysctl($oid) (per $GLOBALS['pfb_test_sysctl'][$oid], default a
+  generous 16 GiB so pfb_unbound_py_swap_fits_ram()'s RAM gate passes unless a
+  test deliberately starves it). Neither existed before this phase -- no test
+  had ever reached pfb_reload_unbound()/pfb_stop_start_unbound() previously.
+
+- tests/php/PfbDnsblConvergedTest.php (new) -- 6 tests, full truth-table
+  coverage of pfb_dnsbl_converged() (see COVERAGE MATRIX).
+
+- tests/php/PfbSyncStatusDnsblWritersTest.php (new) -- 4 tests: the writer/
+  clearer/refresh triple against pfb_dnsbl_apply_ledger_update() directly,
+  plus one end-to-end test driving the REAL pfb_reload_unbound() through its
+  swap-not-confirmed restart-fallback branch.
+
+- RESULTS/03_Results.txt (this file).
+
+Commit: (filled after `git commit` -- see bottom of this file / the commit
+message; this file is committed IN the same commit).
+
+--------------------------------------------------------------------------------
+pfb_dnsbl_converged() -- EXACT LOCATION/SIGNATURE (for Phase 5)
+--------------------------------------------------------------------------------
+
+src/usr/local/pkg/pfblockerng/pfblockerng.inc, function pfb_dnsbl_converged():
+bool (no parameters). Reads global $pfb. Called from exactly ONE site in this
+diff: inside pfb_dnsbl_apply_ledger_update() (same file). Phase 5's tick
+reconciliation calls pfb_dnsbl_converged() directly to decide whether a
+stuck facility=dnsbl/item=dnsbl/stage=apply entry has cleared; on FALSE it
+should re-attempt the swap/restart path per ADR SS2.4, then re-check.
+
+--------------------------------------------------------------------------------
+THREE TERMINAL BRANCHES -- HOW THEY FUNNEL INTO ONE DECISION
+--------------------------------------------------------------------------------
+
+Read the WHOLE function fresh (post Phase-2 rebase, no drift found in this
+region -- Phase 2's own edits landed at :4733 and :17724, both well below
+this function). pfb_reload_unbound()'s restart path has exactly THREE ways
+to end, all inside/after the "Confirm that Resolver is running" block:
+  S. is_process_running() TRUE AND `unbound-control status` output matches
+     "is running..." -- the "completed [ NOW ]" branch.
+  B. is_process_running() TRUE but the status text does NOT match -- the
+     "Not completed. [ NOW ]" branch (still logged at level 1, never
+     error.log -- a genuinely silent gap today).
+  C. is_process_running() FALSE outright -- the OTHER "Not completed. [ NOW ]"
+     branch (also level 1 only).
+The originally-drafted phase prompt (03_DNSBL_Writers_And_Clearers.txt) only
+named ONE write site ($final['retval'] != 0, a MID-flow signal that does NOT
+itself end the function -- it triggers a retry-restart and always falls
+through to S/B/C). Per the orchestrator's fresh top-level brief (which
+supersedes the prompt's action-plan wording on this exact point), ALL of
+S/B/C are funneled into ONE decision: a single pfb_dnsbl_apply_ledger_update()
+call placed AFTER the whole confirm-running block, driven by
+pfb_dnsbl_converged() rather than by re-deriving pass/fail from $final
+directly. This is deliberately NOT keyed to $final['retval'] because in a
+PHPUnit sandbox (no real unbound binary at /usr/local/sbin/unbound) that exec()
+ALWAYS fails, which would make a retval-keyed write untestable in isolation
+from environment noise; pfb_dnsbl_converged()'s own three conditions (files +
+is_process_running + unbound.conf content) are fully test-controllable and are
+the SAME signal the widget/Phase 5 need regardless of which internal branch
+(S/B/C) produced them.
+
+--------------------------------------------------------------------------------
+CONVERGENCE VIA MORE THAN ONE CODE PATH (planItem 3)
+--------------------------------------------------------------------------------
+
+CONFIRMED: convergence becomes observable via TWO distinct code paths inside
+pfb_reload_unbound(), and both are wired:
+  1. The zero-downtime swap's own success return (pfb_unbound_py_wait_applied()
+     confirms the flip) -- an EARLY RETURN that would otherwise bypass the
+     tail's check entirely. Wired with its own pfb_dnsbl_apply_ledger_update()
+     call immediately before that `return;`.
+  2. The tail, after the shared restart path's confirm-running block (covers
+     S/B/C uniformly, and also the mode=='disabled' teardown case, gated
+     separately -- see DEVIATIONS #1).
+No other place in pfb_reload_unbound() can make convergence become newly
+true (the two swap-fallback sub-branches -- "not confirmed in time" and
+"sentinel flip failed" -- only ever fall through to path #2 above; they never
+return early and never touch the ledger themselves, satisfying planItem 4).
+
+--------------------------------------------------------------------------------
+DEVIATIONS / JUDGMENT CALLS
+--------------------------------------------------------------------------------
+
+1. MODE-GATING AT THE TAIL (not in the original phase prompt). Verified from
+   source: pfb_reload_unbound('disabled', ...) is a REAL, regular call
+   (pfblockerng.inc, the "Disable DNSBL" branch) made AFTER unbound.conf has
+   already been rewritten WITHOUT the pfb_unbound.py module wired in (by
+   pfb_update_unbound(), which runs the "Backup existing unbound.conf and
+   rename new unbound.conf file" step before ever calling pfb_reload_unbound).
+   An UNGATED convergence check at the tail would see condition (c) FALSE on
+   EVERY legitimate DNSBL disable and falsely open a 'dnsbl'/'dnsbl'/'apply'
+   entry on every single disable -- a real false-positive bug, not a
+   hypothetical. Fix: the tail only runs pfb_dnsbl_apply_ledger_update() when
+   $mode == 'enabled'; the disabled branch unconditionally closes the same key
+   instead (never opens), mirroring Phase 2's own precedent (the IP dedup-off
+   branch closing a stale entry when the tracked feature is turned off).
+
+2. RESTART-FALLBACK TEST DRIVES THE "SENTINEL FLIP FAILED" SUB-BRANCH, NOT
+   THE "WAIT-APPLIED TIMEOUT" SUB-BRANCH the coverage-matrix's literal wording
+   ("swap-not-confirmed") most directly names. Both sub-branches are
+   symmetric in the code (ADR SS1.3 / the code's own comments: neither is
+   itself an error, both fall through unconditionally to the identical shared
+   restart path, neither ever touches the ledger) -- verified by reading both
+   branches side by side (pfblockerng.inc, the `if ($gen !== FALSE) {...}
+   else {...}` pair). Reason for choosing the flip-failed branch: (a) it is
+   near-instant (no 200ms-interval poll against a wall-clock deadline,
+   avoiding a real-time test cost, consistent with the "no fixed-time waits"
+   spirit even though this specific poll is pre-existing production code, not
+   new); (b) driving the wait_applied-timeout sub-branch would either cost a
+   real 30-second wait (pfb_reload_unbound() has no parameter to shrink
+   pfb_unbound_py_wait_applied()'s hardcoded 30s default) OR require adding a
+   NEW optional parameter to pfb_reload_unbound() purely for testability --
+   a larger, unrequested production-signature change I judged disproportionate
+   given the flip-failed branch already gives an equally faithful, real-branch
+   proof; (c) critically, the flip-failed branch leaves BOTH the sentinel and
+   applied-marker files at their PRE-CALL values (the failed rename() means
+   the sentinel is never actually incremented), which for a fresh sandbox
+   means both stay absent (0 == 0) -- letting the test assert convergence
+   without having to predict/replicate the specific generation number a real
+   Python watcher would have adopted (pfb_unbound.py's pfb_reload_watcher()
+   baseline-adopts the CURRENT sentinel into applied on every module init,
+   confirmed by reading pfb_unbound.py:490-496 -- a fact this PHPUnit sandbox
+   cannot reproduce without a live Python process). Flagged here rather than
+   silently substituted.
+
+3. THE OPEN() MESSAGE IS A FIXED STRING, not the specific historical
+   pfb_logger() text from whichever of S/B/C fired (there are three DIFFERENT
+   existing log texts: "DNSBL {mode} FAIL...", "DNSBL {mode} - Unbound conf
+   update FAIL...", "Not completed..."). The single tail decision cannot
+   cheaply attribute WHICH of the three fired without re-deriving that logic
+   a second time (violating the "no stray reimplementation" kill-gate) --
+   the ledger message instead states the OBSERVABLE symptom
+   (sentinel/applied/running/conf) pfb_dnsbl_converged() itself checks,
+   which is accurate regardless of which S/B/C branch produced it.
+
+4. pfb_dnsbl_apply_ledger_update()'s success-close is called from the
+   zero-downtime fast path too (see "CONVERGENCE VIA MORE THAN ONE CODE
+   PATH" above) even though the ADR's SS2.2 item names it as covering "the
+   normal completion branch" -- the fast-path return is a DIFFERENT
+   completion branch this phase's own reading found; per planItem 3's
+   explicit instruction ("close() there too... the clearer should not be
+   narrowly coupled to only the one success branch"), it is wired, not
+   treated as out of scope.
+
+No other deviations.
+
+--------------------------------------------------------------------------------
+GATES — exact commands + pasted output tails
+--------------------------------------------------------------------------------
+
+$ php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+No syntax errors detected in src/usr/local/pkg/pfblockerng/pfblockerng.inc
+(only the same pre-existing PHP 8.x optional-before-required-param Deprecated
+notices on UNTOUCHED functions, identical to Phase 1/2's baseline)
+
+$ php -l tests/php/pfsense_doubles.php
+No syntax errors detected in tests/php/pfsense_doubles.php
+
+$ php -l tests/php/PfbDnsblConvergedTest.php
+No syntax errors detected in tests/php/PfbDnsblConvergedTest.php
+
+$ php -l tests/php/PfbSyncStatusDnsblWritersTest.php
+No syntax errors detected in tests/php/PfbSyncStatusDnsblWritersTest.php
+
+$ vendor/bin/phpunit   (full suite)
+............................................................. 2488 / 2488 (100%)
+Time: 00:11.381, Memory: 40.00 MB
+OK, but there were issues!
+Tests: 2488, Assertions: 19206, PHPUnit Deprecations: 2, Skipped: 4.
+(2488 = Phase 2's baseline 2478 + this phase's 10 new tests. The 2
+deprecations / 4 skips are the SAME pre-existing baseline Phase 1/2 recorded.)
+
+$ vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+Note: Using configuration file phpstan.neon.
+ [OK] No errors
+
+$ vendor/bin/phpcs -d memory_limit=1G --standard=phpcs.xml.dist src/
+(no output; EXIT=0 -- clean, including PFBL-01/RequireConfigGateway/
+UppercaseBooleanLiteral)
+
+$ python3 scripts/check_comment_narration.py --diff origin/devel
+(no output; EXIT=0)
+
+$ python3 scripts/check_version_literals.py --diff origin/devel
+(no output; EXIT=0)
+
+Python/Shell/Markdown canonical gates: SKIPPED -- no .py/.sh/.md files touched
+this phase (confirmed via `git status --short`: one .inc file modified, one
+.php double file modified, two new .php test files).
+
+--------------------------------------------------------------------------------
+RED -> GREEN PROOF (executed both directions; backed up the two touched files
+to the scratchpad dir, `git checkout HEAD -- <both files>` to revert to the
+committed pre-Phase-3 state -- tests left in place, untouched -- ran the
+filtered suite, then restored the backups and re-ran)
+--------------------------------------------------------------------------------
+
+RED (pfblockerng.inc + pfsense_doubles.php reverted to HEAD, i.e. Phase 2's
+committed state -- pfb_dnsbl_converged/apply_ledger_update and the two new
+pfSense doubles do not exist):
+
+$ vendor/bin/phpunit --filter 'PfbDnsblConvergedTest|PfbSyncStatusDnsblWritersTest'
+EEEEEEEEEE                                                        10 / 10 (100%)
+There were 10 errors:
+1) PfbDnsblConvergedTest::testSentinelEqualsAppliedRunningAndConfReferenced_returnsTrue
+Error: Call to undefined function pfb_dnsbl_converged()
+2) PfbDnsblConvergedTest::testNeitherMarkerFileExists_defaultsToZeroEqualsZero_convergedWhenRunningAndConfOk
+Error: Call to undefined function pfb_dnsbl_converged()
+3) PfbDnsblConvergedTest::testSentinelNotEqualApplied_returnsFalseRegardlessOfOtherConditions
+Error: Call to undefined function pfb_dnsbl_converged()
+4) PfbDnsblConvergedTest::testUnboundNotRunning_returnsFalseEvenWhenGenerationsMatch
+Error: Call to undefined function pfb_dnsbl_converged()
+5) PfbDnsblConvergedTest::testUnboundConfMissing_returnsFalse
+Error: Call to undefined function pfb_dnsbl_converged()
+6) PfbDnsblConvergedTest::testUnboundConfDoesNotReferencePfbUnboundPy_returnsFalse
+Error: Call to undefined function pfb_dnsbl_converged()
+7) PfbSyncStatusDnsblWritersTest::testNotConvergedOpensEntry
+Error: Call to undefined function pfb_dnsbl_apply_ledger_update()
+8) PfbSyncStatusDnsblWritersTest::testConvergedClosesEntry
+Error: Call to undefined function pfb_dnsbl_apply_ledger_update()
+9) PfbSyncStatusDnsblWritersTest::testNotConvergedTwiceRefreshesWithoutDuplicating
+Error: Call to undefined function pfb_dnsbl_apply_ledger_update()
+10) PfbSyncStatusDnsblWritersTest::testRestartFallbackAloneOpensNoEntry
+Error: Call to undefined function is_process_running()
+ERRORS!
+Tests: 10, Assertions: 0, Errors: 10, PHPUnit Deprecations: 2.
+
+GREEN (backups restored -- Phase 3's implementation back in place):
+
+$ vendor/bin/phpunit --filter 'PfbDnsblConvergedTest|PfbSyncStatusDnsblWritersTest'
+..........                                                        10 / 10 (100%)
+Time: 00:00.094, Memory: 34.00 MB
+OK, but there were issues!
+Tests: 10, Assertions: 16, PHPUnit Deprecations: 2.
+
+--------------------------------------------------------------------------------
+KILL-GATE REHEARSALS (own rehearsal per the brief; orchestrator repeats
+independently)
+--------------------------------------------------------------------------------
+
+1. Every pfb_logger(...) call in the touched region is byte-identical:
+
+$ git diff -- src/usr/local/pkg/pfblockerng/pfblockerng.inc | grep -n "pfb_logger"
+86: 		pfb_logger(" Not completed. [ NOW ]\n{$log}\n", 1);
+(that single hit is a PURE CONTEXT line -- no leading +/- -- confirmed by
+reading the diff hunk directly: it sits between two unchanged lines, only
+the code AFTER it is new. No pfb_logger() call anywhere in this diff carries
+a +/- prefix.) PASS.
+
+2. The restart-fallback-does-not-open-an-entry test genuinely exercises the
+   REAL restart-fallback code path (not a mocked shortcut):
+   testRestartFallbackAloneOpensNoEntry calls the REAL pfb_reload_unbound()
+   with mode='enabled', datapath=TRUE, and a chmod(0555) dnsbldir so
+   pfb_unbound_py_flip_sentinel()'s rename() genuinely fails (empirically
+   verified: `rename()` into a 0555 dir returns FALSE for a non-root user --
+   `tempnam()` on that same dir does NOT fail, it silently falls back to the
+   system temp dir per PHP's documented behaviour, so the REAL failure point
+   exercised is the final rename(), not a fabricated early return). The test
+   asserts `$calls >= 5` on the is_process_running() call counter as a
+   self-check that the shared restart path (both pfb_stop_start_unbound()
+   invocations + the final confirm block) genuinely ran, not merely the
+   fallback's own two log lines. Root-guarded (posix_getuid()===0 skip,
+   matching PfbSyncStatusLedgerTest's established precedent) since root
+   bypasses directory permissions and cannot simulate this. PASS.
+
+3. pfb_dnsbl_converged() is called from exactly the sites this phase needs,
+   no stray/duplicate reimplementation:
+
+$ grep -rn "pfb_dnsbl_converged(" src/ | grep -v ":function"
+(one hit: pfblockerng.inc, inside pfb_dnsbl_apply_ledger_update() -- its
+ONLY call site in this diff)
+$ grep -rn "pfb_dnsbl_apply_ledger_update(" src/
+pfblockerng.inc:function pfb_dnsbl_apply_ledger_update(): void {
+pfblockerng.inc:  (zero-downtime fast-path success, before `return;`)
+pfblockerng.inc:  (the tail, mode=='enabled' branch)
+No other sentinel/applied/is_process_running/conf-check logic was added
+anywhere else in the diff (grepped the full diff for those tokens -- every
+hit is inside pfb_unbound_py_marker_generation()/pfb_dnsbl_converged()
+themselves). PASS.
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX
+--------------------------------------------------------------------------------
+
+pfb_dnsbl_converged() truth table (short-circuit collapse: once an earlier
+condition fails, later conditions cannot affect the result, so each collapsed
+case is tested with the LATER conditions deliberately left PASSING to prove
+the EARLIER condition alone forces the result):
+
+Row (collapsed from the 8-way {a,b,c} product)         | Test
+--------------------------------------------------------|---------------------------------------------
+(a) sentinel==applied, nonzero, (b) running, (c) wired -> TRUE
+                                                          | testSentinelEqualsAppliedRunningAndConfReferenced_returnsTrue
+(a) both markers absent (0==0 baseline), (b) running,   | testNeitherMarkerFileExists_defaultsToZeroEqualsZero_
+    (c) wired -> TRUE                                    |   convergedWhenRunningAndConfOk
+(a) sentinel != applied (b,c) both TRUE -> FALSE         | testSentinelNotEqualApplied_returnsFalseRegardlessOfOtherConditions
+(a) TRUE, (b) NOT running, (c) TRUE -> FALSE             | testUnboundNotRunning_returnsFalseEvenWhenGenerationsMatch
+(a) TRUE, (b) running, (c) unbound.conf ABSENT -> FALSE  | testUnboundConfMissing_returnsFalse
+(a) TRUE, (b) running, (c) conf present but NOT wired    | testUnboundConfDoesNotReferencePfbUnboundPy_returnsFalse
+    -> FALSE                                             |
+
+Writer/clearer + restart-fallback (brief's explicit list):
+Row                                                     | Test
+---------------------------------------------------------|---------------------------------------------
+Not converged opens ('dnsbl','dnsbl','apply')             | testNotConvergedOpensEntry
+Converged closes SAME key (before-state asserted first)   | testConvergedClosesEntry
+Not converged x2 on same key refreshes, no duplicate      | testNotConvergedTwiceRefreshesWithoutDuplicating
+Swap-not-confirmed -> restart-fallback opens NO entry,     | testRestartFallbackAloneOpensNoEntry
+  exercised via the REAL pfb_reload_unbound()              |
+
+--------------------------------------------------------------------------------
+CARRY-FORWARD FOR PHASE 4/5
+--------------------------------------------------------------------------------
+
+- pfb_dnsbl_converged(): bool -- pfblockerng.inc, no parameters, reads global
+  $pfb. Phase 5's tick reconciliation should call this directly (never
+  re-derive its 3 conditions) to decide whether a stuck
+  facility=dnsbl/item=dnsbl/stage=apply entry has cleared, and to decide
+  whether a re-attempt is even worth making.
+- The DNSBL apply-stage ledger key is ALWAYS ('dnsbl', 'dnsbl', 'apply') --
+  no per-feed/per-group granularity exists at this stage (verified: nothing
+  in pfb_reload_unbound() carries a feed/alias identity; it operates on the
+  WHOLE DNSBL subsystem). Phase 5 should reuse this exact key, not invent a
+  different item name.
+- Phase 4 (Python-side status file): the DNSBL apply-stage key above is
+  PHP-owned and unrelated to Python's parse-stage file (different stage
+  string: 'apply' vs whatever Phase 4 picks for parse failures, e.g.
+  'parse'). No naming collision risk as long as Phase 4 keeps a distinct
+  stage value; Phase 4 does not need to know anything else about this
+  phase's internals.
+- Widget (Phase 6): pfblockerng.widget.php:614-617's $unbound_validate check
+  was read (per the brief) but NOT touched this phase -- Phase 6 owns
+  retiring it. pfb_dnsbl_converged() reimplements the SAME check internally
+  (condition c) rather than calling into the widget file (a `www/` PHP
+  script, not includable from pfblockerng.inc) -- this is the one place the
+  logic is duplicated by necessity of file boundaries, not carelessness.
+- Line-number drift: this phase's own edits land between :7864 (right after
+  pfb_unbound_py_ccache_flush()) and the end of pfb_reload_unbound()
+  (originally :8018, now shifted +~75 lines by this phase's insertions).
+  Anything Phase 4/5 needs BELOW this region (e.g. pfblockerng_tick() in
+  pfblockerng_extra.inc, a different file) is unaffected. Re-grep before
+  trusting any absolute line number, per standing policy.
