@@ -70,8 +70,13 @@ def test_review_fanout_is_flagged() -> None:
 
 def test_pr_number_is_flagged_but_issue_breadcrumb_is_clean() -> None:
     assert len(_find("src/a.inc", ["// escape-aware (Copilot, PR #947)"])) == 1
+    assert len(_find("src/a.inc", ["// see PR#947 for context"])) == 1
     assert _find("src/a.inc", ["// issue #946: decode UTF-16 BOM first"]) == []
     assert _find("src/a.inc", ["// case-fold TOP1M match (#920)"]) == []
+
+
+def test_review_fanout_is_case_insensitive() -> None:
+    assert len(_find("src/a.inc", ["// Review-Fanout C9 pinned this"])) == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -94,13 +99,31 @@ def test_self_and_phase_prompt_checker_are_excluded() -> None:
     assert _find("scripts/check_phase_prompts.py", bad) == []
 
 
+def test_self_exclusion_is_full_path_not_basename() -> None:
+    assert len(_find("src/nested/check_comment_narration.py", ["# RESULTS/ Phase 1"])) == 1
+
+
 def test_narration_ok_escape_exempts_the_line() -> None:
     assert _find("src/a.inc", ["// Phase 2 of BGP convergence  // narration-ok: protocol term"]) == []
+    assert _find("src/a.inc", ["// Phase 2 of BGP convergence  // Narration-OK: protocol term"]) == []
 
 
 # --------------------------------------------------------------------------- #
 # Diff mechanics — only added lines judged, line numbers from hunk headers
 # --------------------------------------------------------------------------- #
+
+
+def test_space_bearing_path_tab_is_stripped() -> None:
+    # git appends a disambiguation tab to +++ headers of space-bearing paths;
+    # unstripped it defeats the .md suffix exclusion.
+    tabbed = (
+        "diff --git a/src/my notes.md b/src/my notes.md\n"
+        "--- a/src/my notes.md\t\n"
+        "+++ b/src/my notes.md\t\n"
+        "@@ -0,0 +1,1 @@\n"
+        "+see RESULTS/01 and Phase 4\n"
+    )
+    assert ccn.find_violations(tabbed) == []
 
 
 def test_removed_and_context_lines_are_ignored() -> None:
@@ -174,7 +197,48 @@ def test_cli_staged_and_diff_modes(tmp_path: Path) -> None:
     assert _run(tmp_path, "--diff", "devel~2").returncode == 0
 
 
+def test_cli_hostile_git_configs_cannot_bypass_the_gate(tmp_path: Path) -> None:
+    # core.quotePath defaults true (octal-quotes non-ASCII paths) and
+    # diff.mnemonicPrefix rewrites the +++ prefix — either must not blind the scan.
+    _git(tmp_path, "init", "-q", "-b", "devel")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/café.inc").write_text("// clean\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base")
+    (tmp_path / "src/café.inc").write_text("// clean\n// see RESULTS/01\n")
+    _git(tmp_path, "add", ".")
+    res = _run(tmp_path, "--staged")
+    assert res.returncode == 1, res.stderr
+    assert "src/café.inc:2" in res.stderr
+
+    _git(tmp_path, "config", "diff.mnemonicPrefix", "true")
+    _git(tmp_path, "config", "diff.noprefix", "true")
+    assert _run(tmp_path, "--staged").returncode == 1
+
+
+def test_cli_space_bearing_md_path_stays_clean(tmp_path: Path) -> None:
+    _git(tmp_path, "init", "-q", "-b", "devel")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/my notes.md").write_text("// clean\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base")
+    (tmp_path / "src/my notes.md").write_text("// clean\n// RESULTS/01 and Phase 4\n")
+    _git(tmp_path, "add", ".")
+    res = _run(tmp_path, "--staged")
+    assert res.returncode == 0, res.stderr
+
+
 def test_cli_usage_error(tmp_path: Path) -> None:
     _git(tmp_path, "init", "-q")
     assert _run(tmp_path).returncode == 2
     assert _run(tmp_path, "--bogus").returncode == 2
+
+
+def test_cli_bad_ref_is_a_usage_error_not_a_traceback(tmp_path: Path) -> None:
+    _git(tmp_path, "init", "-qb", "devel")
+    (tmp_path / "f").write_text("x\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base")
+    res = _run(tmp_path, "--diff", "no-such-ref")
+    assert res.returncode == 2, res.stderr
+    assert "git diff failed" in res.stderr

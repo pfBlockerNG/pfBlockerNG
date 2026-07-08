@@ -31,19 +31,21 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     # Capitalised only: ADR narration always writes "Phase N"; ordinary prose
     # about a protocol's "phase 2" stays legal.
     (re.compile(r"\bPhase [0-9]"), "ADR phase narration (Phase N)"),
-    (re.compile(r"review-fanout"), "review archaeology (review-fanout)"),
-    (re.compile(r"\bPR #[0-9]"), "review archaeology (PR #N)"),
+    (re.compile(r"review-fanout", re.IGNORECASE), "review archaeology (review-fanout)"),
+    (re.compile(r"\bPR ?#[0-9]"), "review archaeology (PR #N)"),
 )
 
+# Matched case-insensitively so a differently-cased escape still exempts.
 _ESCAPE = "narration-ok"
 
 _SCAN_ROOTS = ("src", "scripts")
 
-# Self-reference: these define/validate the banned vocabulary.
-_EXCLUDED_NAMES = (
-    "check_comment_narration.py",
-    "test_comment_narration_check.py",
-    "check_phase_prompts.py",
+# Self-reference: these define/validate the banned vocabulary. Full repo-relative
+# paths, so an unrelated same-named file elsewhere is still scanned.
+_EXCLUDED_PATHS = (
+    "scripts/check_comment_narration.py",
+    "tests/test_comment_narration_check.py",
+    "scripts/check_phase_prompts.py",
 )
 
 
@@ -56,7 +58,7 @@ class Violation(NamedTuple):
 
 def _in_scope(path: str) -> bool:
     p = PurePosixPath(path)
-    if p.suffix == ".md" or p.name in _EXCLUDED_NAMES:
+    if p.suffix == ".md" or path in _EXCLUDED_PATHS:
         return False
     return any(p.parts and p.parts[0] == root for root in _SCAN_ROOTS)
 
@@ -68,8 +70,11 @@ def find_violations(diff_text: str) -> list[Violation]:
     lineno = 0
     for raw in diff_text.splitlines():
         if raw.startswith("+++ "):
+            # _git_diff pins the b/ prefix; a space-bearing path still gets git's
+            # disambiguation tab appended — strip it. A control-char path stays
+            # quoted even under core.quotePath=false and is skipped (absurd corner).
             name = raw[4:]
-            path = name[2:] if name.startswith("b/") else None  # +++ /dev/null
+            path = name[2:].split("\t", 1)[0] if name.startswith("b/") else None
             continue
         if raw.startswith("@@"):
             m = re.match(r"@@ -\S+ \+(\d+)", raw)
@@ -77,7 +82,7 @@ def find_violations(diff_text: str) -> list[Violation]:
             continue
         if raw.startswith("+") and not raw.startswith("+++"):
             line = raw[1:]
-            if path is not None and _in_scope(path) and _ESCAPE not in line:
+            if path is not None and _in_scope(path) and _ESCAPE not in line.lower():
                 for pattern, reason in _PATTERNS:
                     if pattern.search(line):
                         violations.append(Violation(path, lineno, line.strip(), reason))
@@ -89,8 +94,21 @@ def find_violations(diff_text: str) -> list[Violation]:
 
 
 def _git_diff(args: list[str]) -> str:
+    # core.quotePath defaults to true (octal-quotes non-ASCII paths) and
+    # diff.mnemonicPrefix/noprefix rewrite the +++ prefix — any of them silently
+    # defeats the b/ parse. Pin all three so user git config cannot bypass the gate.
     out = subprocess.run(
-        ["git", "diff", "--unified=0", "--no-color", *args],
+        [
+            "git",
+            "-c",
+            "core.quotePath=false",
+            "diff",
+            "--unified=0",
+            "--no-color",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            *args,
+        ],
         capture_output=True,
         text=True,
         check=True,

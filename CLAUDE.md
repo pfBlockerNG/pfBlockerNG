@@ -465,6 +465,10 @@ Run linters while working; the `.githooks/pre-commit` hook blocks failing commit
   Read it from the ci-metadata matrix (`read-version-matrix.sh`) at runtime instead of
   restating it (a literal silently drifts when the matrix moves). Prose, comments, and Python
   docstrings stay clean; escape a genuine one-off with an inline `# version-literal-ok: <reason>`.
+- **Comment-narration check** (`scripts/check_comment_narration.py`, pre-commit + CI,
+  diff-scoped): forbids ADR phase numbers, `RESULTS/` handoff refs, and review archaeology on
+  **added** lines under `src/` + `scripts/` ("Comments — constraint, not narration"); escape a
+  genuine need inline with `# narration-ok: <reason>`.
 - **Markdown:** `npx markdownlint-cli2` (`--fix` to autofix). Blank line around every
   heading/list/fence; a language on every fence (`text` for plain output); single trailing
   newline. Rules + rationale in `.markdownlint.jsonc`; clean lint enforced pre-commit + CI.
