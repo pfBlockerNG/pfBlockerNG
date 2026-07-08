@@ -86,7 +86,7 @@ if ($_POST && isset($_POST['save'])) {
 	exit;
 }
 
-// "Check now" — a manual, explicit cache refresh from our repo, then redisplay. $force=true
+// "Check now" — a manual, explicit cache refresh from the pfBlockerNG repo, then redisplay. $force=true
 // bypasses the "Check for new versions" enable-gate so a one-off check always works.
 if ($pfb_sw_action === 'check') {
 	pfb_software_update_check(TRUE);
@@ -175,7 +175,7 @@ $form->add($section);
 
 $section = new Form_Section('Actions');
 
-// Check now — a local cache refresh from our repo (no network mutation), POSTed below.
+// Check now — a local cache refresh from the pfBlockerNG repo (no network mutation), POSTed below.
 $btn_check = new Form_Button(
 	'pfb_sw_check',
 	'Check now',

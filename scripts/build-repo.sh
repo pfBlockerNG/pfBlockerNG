@@ -33,7 +33,7 @@ set -eu
 # (expanded by pkg itself, never shell-interpolated), so one conf auto-follows
 # an OS upgrade. priority sits above the base Netgate `pfSense` repo (ships 0)
 # because priority — not version — decides cross-repo resolution; that is the
-# lever that makes our build win. Override the base with --base-url for a fork.
+# lever that makes the pfBlockerNG build win. Override the base with --base-url for a fork.
 DEFAULT_BASE_URL="https://pfblockerng.github.io/pkg"
 CONF_PRIORITY=100
 
@@ -50,7 +50,7 @@ print_conf() {
 # fully resolved for this box's edition/version/arch (ADR-39); the boot
 # rc.d hook updates it on a pfSense OS upgrade.
 # priority ${CONF_PRIORITY} sits above the base Netgate \`pfSense\` repo so cross-repo
-# resolution (pkg install/upgrade, GUI Install) selects our build.
+# resolution (pkg install/upgrade, GUI Install) selects the pfBlockerNG build.
 pfblockerng: {
   url: "${base}",
   mirror_type: none,

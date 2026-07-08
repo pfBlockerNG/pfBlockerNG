@@ -3466,8 +3466,8 @@ function pfb_pkg_installed_repo(string $pkgname): string {
 }
 
 /*
- * OUR repo's latest version of $pkgname: `pkg update -r <repo>` (best-effort refresh of
- * just our catalog DB) then `pkg rquery -r <repo> '%v' <pkgname>`. Reads ONLY our repo
+ * The pfBlockerNG repo's latest version of $pkgname: `pkg update -r <repo>` (best-effort refresh of
+ * just that repo's catalog DB) then `pkg rquery -r <repo> '%v' <pkgname>`. Reads ONLY that repo
  * ($reponame) — never -r pfSense / get_pkg_info (ADR-19 §2 "Read latest"). Returns ''
  * (the caller then serves cache) when:
  *   - $pkgname/$reponame is empty;
@@ -3490,7 +3490,7 @@ function pfb_pkg_latest(string $pkgname, string $reponame): string {
 	// Bound both networked pkg calls with timeout(1) (same idiom as the hook runner) so a
 	// hung mirror can never stall the cron pass or the page's forced "Check now".
 	$tmo = '/usr/bin/timeout -s TERM -k 5 60 ';
-	// Best-effort catalog refresh of our repo only; ignore failures (stale DB still reads).
+	// Best-effort catalog refresh of the pfBlockerNG repo only; ignore failures (stale DB still reads).
 	exec("{$tmo}{$bin} update -r {$repo} 2>/dev/null");
 	$out = array();
 	$ret = -1;

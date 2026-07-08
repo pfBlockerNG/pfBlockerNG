@@ -753,7 +753,7 @@ def print_conf(resolved_url: str) -> None:
         "# fully resolved for this box's edition/version/arch (ADR-39); the boot\n"
         "# rc.d hook updates it on a pfSense OS upgrade.\n"
         f"# priority {CONF_PRIORITY} sits above the base Netgate `pfSense` repo so cross-repo\n"
-        "# resolution (pkg install/upgrade, GUI Install) selects our build.\n"
+        "# resolution (pkg install/upgrade, GUI Install) selects the pfBlockerNG build.\n"
         "pfblockerng: {\n"
         f'  url: "{url}",\n'
         "  mirror_type: none,\n"
