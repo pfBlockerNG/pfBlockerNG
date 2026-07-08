@@ -327,7 +327,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
-          set -eu
+          # pipefail: without it a failed `gh issue list` is masked by the
+          # jq pipeline below and the dedup opens duplicates (issue #960, the
+          # PR #933 default-shell class).
+          set -euo pipefail
           COUNT=$(jq '.supported_missing | length' probe_result.json)
           echo "supported_missing count: ${COUNT}"
           [ "$COUNT" -eq 0 ] && echo "No supported-but-missing versions detected." && exit 0
@@ -341,26 +344,38 @@ jobs:
 
             TITLE="[version-tracker] pfSense ${CHANNEL} ${VERSION} still-supported — evaluate for matrix"
 
-            # Skip if an open issue with this exact title already exists.
             # Scope to the version-tracker label and lift the default 30-item cap:
             # without an explicit --limit, gh issue list returns only the 30 newest
             # open issues, so an older tracker issue beyond that window is invisible
-            # to the dedup and a duplicate is opened every run.
-            EXISTING=$(gh issue list --repo "$REPO" --state open \
-              --label "version-tracker" --limit 500 --json title 2>/dev/null \
-              | jq --arg t "$TITLE" '[.[] | select(.title == $t)] | length')
-            if [ "${EXISTING:-0}" -gt 0 ]; then
+            # to the dedup and a duplicate is opened every run. Match across ALL
+            # states (issue #960): a recurrence after a closed tracker REOPENS it
+            # instead of filing a duplicate. Prefer an open match, then the lowest
+            # issue number.
+            MATCH=$(gh issue list --repo "$REPO" --state all \
+              --label "version-tracker" --limit 500 --json number,title,state \
+              | jq -r --arg t "$TITLE" \
+                  '[.[] | select(.title == $t)] | sort_by(.state != "OPEN", .number)
+                   | .[0] | if . then "\(.number) \(.state)" else empty end')
+            if [ -n "$MATCH" ] && [ "${MATCH#* }" = "OPEN" ]; then
               echo "  [skip] open issue already exists for ${CHANNEL} ${VERSION}"
               continue
             fi
 
             # Skip if a closed issue with tracker-wontfix mentions this version.
-            # --limit 500 lifts the default 30-item cap (see the dedup note above).
+            # Checked BEFORE reopening: a wontfix'd version must never be
+            # reopened. --limit 500 lifts the default 30-item cap (see above).
             WONTFIX=$(gh issue list --repo "$REPO" --state closed --label "tracker-wontfix" \
-              --limit 500 --json title 2>/dev/null \
+              --limit 500 --json title \
               | jq --arg v "$VERSION" '[.[] | select(.title | contains($v))] | length')
             if [ "${WONTFIX:-0}" -gt 0 ]; then
               echo "  [wontfix] suppressed for ${CHANNEL} ${VERSION}"
+              continue
+            fi
+
+            if [ -n "$MATCH" ]; then
+              EXISTING_NUM=${MATCH% *}
+              echo "  [reopen] Reopening tracking issue #${EXISTING_NUM} for ${CHANNEL} ${VERSION}"
+              gh issue reopen "$EXISTING_NUM" --repo "$REPO"
               continue
             fi
 
@@ -398,7 +413,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
-          set -eu
+          # pipefail: without it a failed `gh issue list` is masked by the
+          # jq/sort pipeline below and the dedup opens duplicates (issue #960,
+          # the PR #933 default-shell class).
+          set -euo pipefail
           COUNT=$(jq '.future | length' probe_result.json)
           echo "future count: ${COUNT}"
           [ "$COUNT" -eq 0 ] && echo "No future/TBD versions detected." && exit 0
@@ -431,16 +449,27 @@ jobs:
               printf '_the page signal changes (TBD → released date → GA)._\n'
             } > "$BODY_FILE"
 
-            # Update an existing open tracking issue; create one if none exists.
+            # Update an existing tracking issue; create one if none exists.
             # Scope to the version-tracker label and lift the default 30-item cap so
             # an older tracking issue past the first page is still found and updated
-            # in place rather than re-created (the duplicate-issue bug).
-            EXISTING_NUM=$(gh issue list --repo "$REPO" --state open \
-              --label "version-tracker" --limit 500 --json number,title 2>/dev/null \
-              | jq -r --arg t "$TITLE" '.[] | select(.title == $t) | .number' \
-              | sort -n | head -1)
+            # in place rather than re-created (the duplicate-issue bug). Match across
+            # ALL states (issue #960): a recurrence after a closed tracker REOPENS it
+            # instead of filing a duplicate. Prefer an open match, then the lowest
+            # issue number.
+            MATCH=$(gh issue list --repo "$REPO" --state all \
+              --label "version-tracker" --limit 500 --json number,title,state \
+              | jq -r --arg t "$TITLE" \
+                  '[.[] | select(.title == $t)] | sort_by(.state != "OPEN", .number)
+                   | .[0] | if . then "\(.number) \(.state)" else empty end')
 
-            if [ -n "$EXISTING_NUM" ]; then
+            if [ -n "$MATCH" ]; then
+              EXISTING_NUM=${MATCH% *}
+              EXISTING_STATE=${MATCH#* }
+              if [ "$EXISTING_STATE" = "CLOSED" ]; then
+                echo "  [reopen] Reopening tracking issue #${EXISTING_NUM} for ${CHANNEL} ${VERSION}"
+                gh issue reopen "$EXISTING_NUM" --repo "$REPO" \
+                  || echo "  ::warning::Could not reopen tracking issue #${EXISTING_NUM}"
+              fi
               echo "  [update] Updating tracking issue #${EXISTING_NUM} for ${CHANNEL} ${VERSION}"
               gh issue edit "$EXISTING_NUM" --repo "$REPO" --body-file "$BODY_FILE" \
                 || echo "  ::warning::Could not update tracking issue #${EXISTING_NUM}"
