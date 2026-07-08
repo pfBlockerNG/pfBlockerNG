@@ -42,7 +42,6 @@ under the **Apache License 2.0**.
   - [Option 2 — the pfBlockerNG `pkg` repository](#option-2--the-pfblockerng-pkg-repository)
   - [Building from the FreeBSD ports tree](#building-from-the-freebsd-ports-tree)
 - [Version upgrades](#version-upgrades)
-  - [Software tab — version + update notice](#software-tab--version--update-notice)
 - [Usage](#usage)
   - [Update Hooks](#update-hooks)
   - [DNSBL Control (CLI)](#dnsbl-control-cli)
@@ -102,17 +101,9 @@ opt-in package available **only** from the pfBlockerNG package repository (Optio
 The three packages are mutually exclusive — install **one**. Choose **stable** unless
 you specifically want to track development builds.
 
-Releases follow semantic versioning. Development releases are pre-release tags cut
-from `devel` — `vX.Y.Z.alpha.N` (alpha), `vX.Y.Z.beta.N` (beta), `vX.Y.Z.rc.N`
-(release candidate) — and stable releases are plain `vX.Y.Z`, cut from `main`. The
-corresponding package versions order naturally for `pkg` (`4.0.0.alpha.1` <
-`4.0.0.beta.1` < `4.0.0.rc.1` < `4.0.0`). Nightly builds are not published as GitHub
-releases.
-
-In the pfBlockerNG package repository the **stable** and **development** packages are served
-from a single repo (`pfblockerng`) — exactly as Netgate ships `pfSense-pkg-pfBlockerNG`
-and `-devel` from its one `pfSense` repo — so one bootstrap exposes both; you pick which
-to `pkg install`. **Nightly** sits on its own catalog path and so has its own repo conf.
+Releases follow semantic versioning: development releases are pre-releases
+(`vX.Y.Z.alpha.N`, `vX.Y.Z.beta.N`, `vX.Y.Z.rc.N`) and stable releases are plain
+`vX.Y.Z`.
 
 ## Installation
 
@@ -133,99 +124,52 @@ simplest path and the right one for most users.
 ### Option 2 — the pfBlockerNG `pkg` repository
 
 To run the **latest builds** — ahead of, and independent of, the Netgate
-catalog — add the pfBlockerNG FreeBSD `pkg` repository
-([ADR-17](.ADRs/ADR_17_Pkg_Repository/ADR.md),
-[ADR-20](.ADRs/ADR_20_CE_Plus_Variant_Distribution/ADR.md)). It resolves dependencies
-normally (no `pkg add -f`). Run the bootstrap **on the firewall** over SSH, then install:
-
-From a **checkout** (over SSH, cloned onto the box):
-
-```sh
-./scripts/add-repo.sh                       # adds the shared `pfblockerng` repo (stable + devel)
-pkg install pfSense-pkg-pfBlockerNG-devel    # or: pfSense-pkg-pfBlockerNG (stable)
-```
-
-Or run the **published one-file bootstrap** (no checkout needed — safe to pipe; the hook
-is embedded so it works when the script is not run from a file on disk):
+catalog — add the pfBlockerNG FreeBSD `pkg` repository. Run the bootstrap
+**on the firewall** over SSH (as root), then install the package you want:
 
 ```sh
 fetch -qo - https://pfblockerng.github.io/pkg/add-repo.sh | sh
-pkg install pfSense-pkg-pfBlockerNG-devel
+pkg install pfSense-pkg-pfBlockerNG-devel    # or: pfSense-pkg-pfBlockerNG (stable)
 ```
 
-`add-repo.sh` with no argument installs a small boot-time `rc.d` hook
-(`pfblockerng_repo_generate.sh`), which detects the pfSense variant (CE vs Plus),
-version, and arch and writes `/usr/local/etc/pkg/repos/pfblockerng.conf` pointing
-**directly** to the correct, fully-resolved variant catalog on GitHub Pages (which
-carries **both** the stable and devel packages — pick one at `pkg install`); the
-bootstrap then runs `pkg update` and verifies a package is visible. The **nightly**
-repo is opt-in — `./scripts/add-repo.sh --nightly` writes its own
-`pfblockerng-nightly.conf` (bleeding edge, not for daily use). The configuration the
-default run writes on a CE 2.8 / amd64 box is:
-
-```sh
-# Generated at boot by pfblockerng_repo_generate (ADR-39) — do not edit; re-run add-repo.sh to change.
-pfblockerng: {
-  url: "https://pfblockerng.github.io/pkg/release/ce-2.8/amd64",
-  mirror_type: none,
-  signature_type: none,
-  priority: 100,
-  enabled: yes
-}
-```
-
-(Plus boxes get `release/plus-26.03/<arch>` instead of `release/ce-2.8/amd64`.)
-
-- The URL is **fully resolved** for the box's edition/version/arch (no `${ABI}` token).
-  The `rc.d` hook **regenerates** the whole conf on every boot, so after a pfSense OS
-  upgrade (e.g. CE 2.8 → 2.9, which always reboots) the URL self-corrects to the new
-  variant catalog with no manual step — local-file-only, no `pkg` call, ordered before
-  any network catalog fetch ([ADR-39](.ADRs/ADR_39_Meta_Package_Distribution/ADR.md)).
-- The repository is **NONE-signed** — trust is anchored in HTTPS to the host.
-- **`priority: 100`** places it above the Netgate `pfSense` repository, so cross-repo
-  resolution (and the webConfigurator's **Install** button) picks the
-  pfBlockerNG repository's build.
+The bootstrap detects your pfSense edition, version, and architecture and configures
+the matching package catalog — and keeps it correct automatically across pfSense OS
+upgrades. The repository is served over HTTPS and takes precedence over the Netgate
+catalog, so the webConfigurator's **Install**/**Update** buttons pick up its builds
+too. Design details live in [ADR-17](.ADRs/ADR_17_Pkg_Repository/ADR.md),
+[ADR-20](.ADRs/ADR_20_CE_Plus_Variant_Distribution/ADR.md), and
+[ADR-39](.ADRs/ADR_39_Meta_Package_Distribution/ADR.md).
 
 #### Nightly channel (bleeding edge)
 
 To track the **`devel` tip rebuilt every night**, opt into the separate `nightly`
-channel — a distinct package `pfSense-pkg-pfBlockerNG-nightly` served from a
-`nightly/` catalog subtree:
+channel:
 
 ```sh
-./scripts/add-repo.sh --nightly             # from a checkout, or:
-# fetch -qo - https://pfblockerng.github.io/pkg/add-repo.sh | sh -s -- --nightly
+fetch -qo - https://pfblockerng.github.io/pkg/add-repo.sh | sh -s -- --nightly
 pkg install pfSense-pkg-pfBlockerNG-nightly
 ```
 
-It **conflicts with the stable and `-devel` packages** (they install the same files),
-so it replaces whichever you had; switch back any time with `./scripts/add-repo.sh`
-and `pkg install` the release package you want (`pfSense-pkg-pfBlockerNG` or `-devel`).
-Nightly versions order as
-`<target>.YYYYMMDD.N`, so `pkg upgrade` always moves to the newest build, and the
-source commit rides the package — `pkg info -A pfSense-pkg-pfBlockerNG-nightly` shows it.
-The **last 14 builds** are kept, so you can roll back by installing an older version
-explicitly (`pkg install pfSense-pkg-pfBlockerNG-nightly-<version>`).
+The nightly package **replaces** a stable or `-devel` install (they conflict); switch
+back any time by re-running the bootstrap without `--nightly` and `pkg install`-ing
+the release package you want. Recent nightly builds stay in the catalog, so a
+regression can be undone by installing an older build explicitly.
 
 #### Rolling back a stable or devel release
 
-When the package repository is configured with a retention depth greater than one,
-the release catalog lists **multiple versions** of the stable and devel packages. You can
-pin to any retained version by specifying it explicitly:
+The catalog keeps several recent versions of the stable and devel packages. You can
+pin any retained version by naming it explicitly:
 
 ```sh
 pkg install -f pfSense-pkg-pfBlockerNG-devel-<version>   # pin to an older devel build
 pkg install -f pfSense-pkg-pfBlockerNG-<version>         # pin to an older stable build
 ```
 
-The `-f` (force) flag is **required to roll back**: `pkg install` never downgrades over a
-newer already-installed build, so without it the command is a no-op. Dependencies are still
-resolved from the catalog (unlike `pkg add <url>`). `pkg install <name>` with no version
-always resolves the **highest** version listed in the catalog (newest-wins). Only the configured N most recent devel releases and M most recent
-stable releases are retained; builds older than that window are no longer in the catalog. The
-**repository landing page** ([pfblockerng.github.io/pkg](https://pfblockerng.github.io/pkg))
-shows an "Older releases" disclosure per pfSense edition listing the retained versions with
-their commit and date — use it to find the version string to pass to `pkg install`.
+The `-f` (force) flag is **required to roll back** — without it `pkg` refuses to
+downgrade. The **repository landing page**
+([pfblockerng.github.io/pkg](https://pfblockerng.github.io/pkg)) lists the retained
+versions per pfSense edition, with their commit and date — use it to find the version
+string.
 
 > [!CAUTION]
 > **Config-schema note:** rolling back across a schema-changing release may leave the stored
@@ -240,44 +184,24 @@ directly — `make package` in `net/pfSense-pkg-pfBlockerNG` (stable) or
 
 ## Version upgrades
 
-Upgrade to the newest build in your channel with `pkg`:
+On a build installed from the pfBlockerNG package repository (Option 2), every
+pfBlockerNG page has a **Software** tab
+([ADR-19](.ADRs/ADR_19_Update_Channel_Panel/ADR.md)): it shows your channel and
+installed version against the repository's latest, and can check for and install
+updates for you. Upgrades always stay **within the same channel** (stable to stable,
+devel to devel, nightly to nightly); to switch channels, reinstall as in Option 2.
+A daily background check also raises a pfSense notification — once per new version —
+when a newer build is available; a checkbox on the tab turns it off.
+
+Upgrading from the command line works too, on any install:
 
 ```sh
 pkg upgrade pfSense-pkg-pfBlockerNG-devel        # or the stable package name
 ```
 
-### Software tab — version + update notice
-
-When pfBlockerNG was installed from **the pfBlockerNG package repository** (Option 2
-above), a **Software** tab appears on every pfBlockerNG page
-([ADR-19](.ADRs/ADR_19_Update_Channel_Panel/ADR.md)). It is the substitute for the stock
-GUI's "update available" badge, which only ever tracks the Netgate catalog and cannot see
-the pfBlockerNG repository's builds. The tab shows your current **channel**
-(stable / devel / nightly) and **installed version** against **the repository's latest**,
-plus the last-checked time, and offers two buttons:
-
-- **Check now** — refresh the comparison from the pfBlockerNG repository (reads
-  `pkg … -r <repo>`, never the Netgate repo).
-- **Update now** — a **same-channel** `pkg upgrade` of the installed package, streamed live
-  (it never switches channels). The button is enabled only when an update is available.
-
 > [!NOTE]
-> The Software tab, the page, and the update notice are present **only on a build installed
-> from one of the pfBlockerNG repositories** (`pfblockerng` / `pfblockerng-nightly`). On a
-> stock **Netgate-ports** install they are **entirely absent** — Netgate's own repo-bound
-> badge already serves those users, so this one would be redundant.
-
-A daily background check (riding the existing pfBlockerNG cron) compares installed vs the
-repository's latest and raises a **de-duped notification** when a newer build exists — the pfSense bell
-plus whatever remote channels you have configured (SMTP / Telegram / Pushover / Slack). It
-fires **once per new version**, not once per day. It is governed by a single checkbox on the
-Software tab, **Check for new versions** (`pfb_software_check`), **enabled by default** and
-applied equally on every channel: when enabled, pfBlockerNG checks the package repository and notifies
-you of a newer build; untick it to stop the background checks and notifications. The page's
-**Check now** button always runs a one-off check regardless of the setting.
-
-Cross-channel **switching** from the GUI is not offered (the selector is read-only); switch
-channels with `add-repo.sh` + `pkg install` as in Option 2 above.
+> On a stock install from the Netgate catalog (Option 1) the Software tab is absent —
+> pfSense's own update badge already covers those installs.
 
 ## Usage
 
