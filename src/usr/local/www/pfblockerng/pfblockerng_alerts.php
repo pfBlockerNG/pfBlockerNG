@@ -1779,7 +1779,10 @@ if ($alert_summary) {
 	$grep_cmd	= "{$pfb['grep']} -v";
 	$sss_cmd	= "sort | uniq -c | {$pfb['sed']} 's/^ *//' | sort -nr";
 
-	$chart_cmd = "awk '{\$1=\$1} 1' | awk -F ' ' '{print \$2 \" \" \$3 \" \(\" \$4 \"\),\" \$1}' >> /usr/local/www/pfblockerng/chart_stats.csv";
+	// dnsbl.log/ip logs' date field is now ISO ('Y-m-d H:i:s', one space token
+	// before the hour), so the label is date+"("+hour+")" -- one fewer field
+	// than the old 3-token 'M j H:i:s' shape this pipeline used to assume.
+	$chart_cmd = "awk '{\$1=\$1} 1' | awk -F ' ' '{print \$2 \" \(\" \$3 \"\),\" \$1}' >> /usr/local/www/pfblockerng/chart_stats.csv";
 
 	$alert_stats = array();
 	$alert_stats[$alert_view] = array();
@@ -1834,7 +1837,9 @@ if ($alert_summary) {
 				case 'ipdate':
 				case 'dnsbldate':
 				case 'replydate':
-					exec("{$cut_cmd} {$alert_log} | cut -d ' ' -f1-2 | uniq -c 2>&1", $stats);
+					// ISO date/time has 1 space token (not the old 3-token
+					// 'M j H:i:s'); the day bucket is the date field alone.
+					exec("{$cut_cmd} {$alert_log} | cut -d ' ' -f1 | uniq -c 2>&1", $stats);
 					$stats = array_reverse($stats);
 					break;
 				case 'dnsbldatehr':
