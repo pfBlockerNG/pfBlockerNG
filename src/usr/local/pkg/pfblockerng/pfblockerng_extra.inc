@@ -2689,6 +2689,20 @@ function pfblockerng_tick(): void
 	// SafeSearch CNAME freshness: every tick (cheap DNS re-resolution).
 	pfblockerng_ss_refresh();
 
+	// ADR-61: apply-stage reconciliation. Unconditional -- never gated on $due or
+	// pending state -- and touches ONLY stage='apply' entries (Semantics #5);
+	// download/parse/dedup stages keep their normal cadence, untouched here.
+	foreach (pfb_sync_status_list_open($dbdir) as $entry) {
+		if ($entry['stage'] !== 'apply') {
+			continue;
+		}
+		if ($entry['facility'] === 'ip') {
+			pfb_ip_apply_retry($entry['item']);
+		} elseif ($entry['facility'] === 'dnsbl') {
+			pfb_dnsbl_apply_retry();
+		}
+	}
+
 	// Scheduled log maintenance (issue #573): runs on every IDLE tick, independent of
 	// the feed-cron gate above -- pfb_interval='Disabled' must not silently stop log
 	// upkeep. pfb_log_mgmt() self-gates by its own configured per-log line/age caps, so
@@ -2706,8 +2720,9 @@ function pfblockerng_tick(): void
 // ADR-61 — Sync-status ledger: a general-purpose open-issues ledger recording
 // {facility, item, stage} -> {message, first_seen, last_seen} in
 // pfb_sync_status.json under a ledger dir, mirroring pfb_due_ledger_*'s pure,
-// clock-injectable, atomic-write idiom above. Unwired here — no production
-// caller yet. Tests: tests/php/PfbSyncStatusLedgerTest.php
+// clock-injectable, atomic-write idiom above. Writers/clearers live in
+// pfblockerng.inc; pfblockerng_tick() (above) retries open stage=apply entries
+// every tick. Tests: tests/php/PfbSyncStatusLedgerTest.php
 // ---------------------------------------------------------------------------
 
 /**
