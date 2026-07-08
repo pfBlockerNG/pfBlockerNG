@@ -40,11 +40,11 @@ under the **Apache License 2.0**.
 - [Installation](#installation)
   - [Option 1 — pfSense Package Manager](#option-1--pfsense-package-manager)
   - [Option 2 — the pfBlockerNG `pkg` repository](#option-2--the-pfblockerng-pkg-repository)
-  - [Updating](#updating)
   - [Building from the FreeBSD ports tree](#building-from-the-freebsd-ports-tree)
+- [Version upgrades](#version-upgrades)
+  - [Software tab — version + update notice](#software-tab--version--update-notice)
 - [Usage](#usage)
   - [Update Hooks](#update-hooks)
-  - [Software tab — version + update notice](#software-tab--version--update-notice)
   - [DNSBL Control (CLI)](#dnsbl-control-cli)
 - [Documentation](#documentation)
 - [Contributing](#contributing)
@@ -231,18 +231,53 @@ their commit and date — use it to find the version string to pass to `pkg inst
 > **Config-schema note:** rolling back across a schema-changing release may leave the stored
 > `config.xml` in a format the older code cannot read. Test first in a non-production VM.
 
-### Updating
-
-```sh
-pkg upgrade pfSense-pkg-pfBlockerNG-devel        # or the stable package name
-```
-
 ### Building from the FreeBSD ports tree
 
 On a FreeBSD machine with the ports tree available, the package can be built
 directly — `make package` in `net/pfSense-pkg-pfBlockerNG` (stable) or
 `net/pfSense-pkg-pfBlockerNG-devel` (devel); the resulting `.pkg` lands in
 `work/pkg/`.
+
+## Version upgrades
+
+Upgrade to the newest build in your channel with `pkg`:
+
+```sh
+pkg upgrade pfSense-pkg-pfBlockerNG-devel        # or the stable package name
+```
+
+### Software tab — version + update notice
+
+When pfBlockerNG was installed from **the pfBlockerNG package repository** (Option 2
+above), a **Software** tab appears on every pfBlockerNG page
+([ADR-19](.ADRs/ADR_19_Update_Channel_Panel/ADR.md)). It is the substitute for the stock
+GUI's "update available" badge, which only ever tracks the Netgate catalog and cannot see
+the pfBlockerNG repository's builds. The tab shows your current **channel**
+(stable / devel / nightly) and **installed version** against **the repository's latest**,
+plus the last-checked time, and offers two buttons:
+
+- **Check now** — refresh the comparison from the pfBlockerNG repository (reads
+  `pkg … -r <repo>`, never the Netgate repo).
+- **Update now** — a **same-channel** `pkg upgrade` of the installed package, streamed live
+  (it never switches channels). The button is enabled only when an update is available.
+
+> [!NOTE]
+> The Software tab, the page, and the update notice are present **only on a build installed
+> from one of the pfBlockerNG repositories** (`pfblockerng` / `pfblockerng-nightly`). On a
+> stock **Netgate-ports** install they are **entirely absent** — Netgate's own repo-bound
+> badge already serves those users, so this one would be redundant.
+
+A daily background check (riding the existing pfBlockerNG cron) compares installed vs the
+repository's latest and raises a **de-duped notification** when a newer build exists — the pfSense bell
+plus whatever remote channels you have configured (SMTP / Telegram / Pushover / Slack). It
+fires **once per new version**, not once per day. It is governed by a single checkbox on the
+Software tab, **Check for new versions** (`pfb_software_check`), **enabled by default** and
+applied equally on every channel: when enabled, pfBlockerNG checks the package repository and notifies
+you of a newer build; untick it to stop the background checks and notifications. The page's
+**Check now** button always runs a one-off check regardless of the setting.
+
+Cross-channel **switching** from the GUI is not offered (the selector is read-only); switch
+channels with `add-repo.sh` + `pkg install` as in Option 2 above.
 
 ## Usage
 
@@ -309,39 +344,6 @@ it as a `post` hook:
 The full trust model, the complete HAProxy frontend ACL setup, and the URL-encoding
 rules are in [ADR-12](.ADRs/ADR_12_Update_Hooks/ADR.md) and
 [CONTRIBUTING.md](CONTRIBUTING.md#update-hooks-prepost-update-scripts-adr-12).
-
-### Software tab — version + update notice
-
-When pfBlockerNG was installed from **the pfBlockerNG package repository** (Option 2
-above), a **Software** tab appears on every pfBlockerNG page
-([ADR-19](.ADRs/ADR_19_Update_Channel_Panel/ADR.md)). It is the substitute for the stock
-GUI's "update available" badge, which only ever tracks the Netgate catalog and cannot see
-the pfBlockerNG repository's builds. The tab shows your current **channel**
-(stable / devel / nightly) and **installed version** against **the repository's latest**,
-plus the last-checked time, and offers two buttons:
-
-- **Check now** — refresh the comparison from the pfBlockerNG repository (reads
-  `pkg … -r <repo>`, never the Netgate repo).
-- **Update now** — a **same-channel** `pkg upgrade` of the installed package, streamed live
-  (it never switches channels). The button is enabled only when an update is available.
-
-> [!NOTE]
-> The Software tab, the page, and the update notice are present **only on a build installed
-> from one of the pfBlockerNG repositories** (`pfblockerng` / `pfblockerng-nightly`). On a
-> stock **Netgate-ports** install they are **entirely absent** — Netgate's own repo-bound
-> badge already serves those users, so this one would be redundant.
-
-A daily background check (riding the existing pfBlockerNG cron) compares installed vs the
-repository's latest and raises a **de-duped notification** when a newer build exists — the pfSense bell
-plus whatever remote channels you have configured (SMTP / Telegram / Pushover / Slack). It
-fires **once per new version**, not once per day. It is governed by a single checkbox on the
-Software tab, **Check for new versions** (`pfb_software_check`), **enabled by default** and
-applied equally on every channel: when enabled, pfBlockerNG checks the package repository and notifies
-you of a newer build; untick it to stop the background checks and notifications. The page's
-**Check now** button always runs a one-off check regardless of the setting.
-
-Cross-channel **switching** from the GUI is not offered (the selector is read-only); switch
-channels with `add-repo.sh` + `pkg install` as in Option 2 above.
 
 ### DNSBL Control (CLI)
 
