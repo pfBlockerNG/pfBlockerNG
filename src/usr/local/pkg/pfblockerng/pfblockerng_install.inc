@@ -113,7 +113,7 @@ if (
 	pfb_global();
 }
 
-// ADR-29 P2: run all registered upgrade migrations in order. Each migration's apply()
+// ADR-29: run all registered upgrade migrations in order. Each migration's apply()
 // callable reads the section, returns the updated array or NULL (no-op), and the driver
 // writes back and calls write_config() only when a change is needed. Replaces the four
 // hand-wired blocks (ADR-02, PFBL-03, ADR-22, issue #281) with a single ordered registry.

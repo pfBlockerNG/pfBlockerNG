@@ -143,7 +143,7 @@ if ($_POST) {
 		if (!$input_errors) {
 
 			// Rebuild the hooks list from POST, preserving row order. Map each
-			// rowhelper field to the Phase-1 config key the runner consumes.
+			// rowhelper field to the config key the runner consumes.
 			$hooks = array();
 			foreach (array_keys($rowhelper_exist) as $rowid) {
 				$hook = array(

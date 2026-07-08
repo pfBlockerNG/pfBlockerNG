@@ -166,8 +166,8 @@ enum PfbAliasDeltaMode: string implements PfbStoredEnum
 
 // PfbTop1mSource — TOP1M source selector (alexa_type, issue #877).
 // Used by alexa_type (config key) / $pfb['dnsbl_top1m_type'] (runtime). Canonical tokens:
-// 'tranco' (default), 'cisco', 'openpagerank' (#928, replacing ADR-59 P4's 'domcop'),
-// 'majestic' (ADR-59 P4), 'cloudflare' (ADR-59 P5, token-authenticated). 'alexa' (#872) and
+// 'tranco' (default), 'cisco', 'openpagerank' (#928, replacing ADR-59's 'domcop'),
+// 'majestic' (ADR-59), 'cloudflare' (ADR-59, token-authenticated). 'alexa' (#872) and
 // 'domcop' (#928) are READ-ONLY legacy tokens, coalesced to their replacement on read — the
 // write vocabulary only ever emits live tokens, so it is downgrade-safe.
 enum PfbTop1mSource: string implements PfbStoredEnum
@@ -259,7 +259,7 @@ function pfb_top1m_providers(): array
 			'label'		=> 'Majestic Million',
 			'licence'	=> 'CC BY 3.0 — attribution required',
 		),
-		// Cloudflare Radar ranking bucket (ADR-59 P5). VERIFIED against Cloudflare's own
+		// Cloudflare Radar ranking bucket (ADR-59). VERIFIED against Cloudflare's own
 		// current docs (developers.cloudflare.com/radar/investigate/domain-ranking-datasets/,
 		// developers.cloudflare.com/api/resources/radar/subresources/datasets/) rather than
 		// the ADR's original 2-column guess:
@@ -292,7 +292,7 @@ function pfb_top1m_providers(): array
 	);
 }
 
-// ADR-59 P5: build the caller header(s) a provider's 'auth' descriptor needs. Pure / no I/O,
+// ADR-59: build the caller header(s) a provider's 'auth' descriptor needs. Pure / no I/O,
 // so it is unit-testable and -- because it never logs -- the token only ever reaches
 // pfb_download()'s CURLOPT_HTTPHEADER, never a log line. 'auth' is 'none' (keyless) or
 // {header, scheme} (Cloudflare's Bearer token); an empty token/keyless provider yields
@@ -709,7 +709,7 @@ function pfb_cfg_registry(): array
 			'since'         => '4.0.0',
 		],
 
-		// ADR-43 P5: optional apply-on-change maintenance window ("HH:MM-HH:MM", local time).
+		// ADR-43: optional apply-on-change maintenance window ("HH:MM-HH:MM", local time).
 		// When set: detected changes outside the window are deferred (pending); the first tick
 		// inside the window applies them. Empty string (default) = apply immediately (no deferral).
 		// Wrapping windows (e.g. "23:00-03:00") span midnight. Malformed = fail-safe (apply now).
@@ -837,7 +837,7 @@ function pfb_cfg_registry(): array
 			'since'         => '1.0.0',
 		],
 
-		// ADR-59 P5: masked, write-only Cloudflare Radar Bearer token -- consumed only
+		// ADR-59: masked, write-only Cloudflare Radar Bearer token -- consumed only
 		// when alexa_type == 'cloudflare' (every other provider ignores it), fed to
 		// pfb_download() via pfb_top1m_auth_headers() + the P3 header-auth plumbing.
 		// Plain string (no adapter): the DNSBL page never echoes the stored value back
@@ -1273,7 +1273,7 @@ function pfb_cfg_registry(): array
 			'since'         => '1.0.0',
 		],
 
-		// ADR-53 P6: IPv6 suppression customlist -- the v4 blob's v6 sibling
+		// ADR-53: IPv6 suppression customlist -- the v4 blob's v6 sibling
 		// (same base64/newline-separated shape). Genuinely new (no pre-registry
 		// era to inherit from v4suppression's), so 'since' is the current
 		// development version rather than a legacy '1.0.0'. Default ''.
@@ -1595,8 +1595,8 @@ function pfb_run_migrations(): void
  * #872) coalesces to Tranco on read, and legacy 'domcop' (list moved hosting,
  * #928) coalesces to OpenPageRank on read; neither is ever re-emitted by a write.
  * The write vocabulary is 'tranco'|'cisco'|'openpagerank'|'majestic'|'cloudflare'
- * (majestic added ADR-59 P4, cloudflare added ADR-59 P5; openpagerank replaced
- * P4's domcop in #928).
+ * (majestic added ADR-59, cloudflare added ADR-59; openpagerank replaced
+ * ADR-59's domcop in #928).
  *
  * @return array<string,list<string>>
  */
@@ -1627,8 +1627,8 @@ function pfb_cfg_field_vocab(): array
 
 		// TOP1M source selector (PfbTop1mSource, issue #877): the tokens a write can
 		// emit. 'tranco' (default) | 'cisco' | 'openpagerank' | 'majestic' | 'cloudflare'
-		// (majestic added ADR-59 P4, cloudflare added ADR-59 P5; openpagerank
-		// replaced P4's domcop in #928). Two
+		// (majestic added ADR-59, cloudflare added ADR-59; openpagerank
+		// replaced ADR-59's domcop in #928). Two
 		// tokens are READ-ONLY legacy values — 'alexa' (dead service, #872) and
 		// 'domcop' (list moved hosting, #928) — pfb_cfg_top1m_source_read() coalesces
 		// them to PfbTop1mSource::Tranco / ::OpenPageRank respectively and neither is
@@ -2519,7 +2519,7 @@ function pfb_tick_seed(): string
 /**
  * pfb_tick_due_jobs — which scheduled jobs are due this tick?
  *
- * Delegates to the Phase-2 due-ledger API for each job. The $now, $seed, and
+ * Delegates to the due-ledger API for each job. The $now, $seed, and
  * $dbdir are injectable so PHPUnit can verify cadence without filesystem or
  * wall-clock dependencies. ss_refresh is not returned — it runs every tick
  * unconditionally (called directly by pfblockerng_tick()).
@@ -2548,7 +2548,7 @@ function pfb_tick_due_jobs(
 }
 
 // ---------------------------------------------------------------------------
-// ADR-43 P5 — apply-on-change maintenance window + pending helpers
+// ADR-43 — apply-on-change maintenance window + pending helpers
 // ---------------------------------------------------------------------------
 
 /**
@@ -2632,7 +2632,7 @@ function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir): bool
 }
 
 /**
- * pfblockerng_tick — ADR-43 P5: apply-on-change due-ledger tick dispatcher.
+ * pfblockerng_tick — ADR-43: apply-on-change due-ledger tick dispatcher.
  *
  * Reads the ledger, dispatches each job that is due (feeds, dcc, bl) via exec() as a
  * separate process, then marks each as ran. ss_refresh runs every tick; the scheduled
@@ -2691,7 +2691,7 @@ function pfblockerng_tick(): void
 	// --- Due check ---
 	$due = pfb_tick_due_jobs($now, $seed, $dbdir, $cron_secs, $bl_secs);
 
-	// --- Apply-on-change window (ADR-43 P5) ---
+	// --- Apply-on-change window (ADR-43) ---
 	// Empty window = apply immediately (default). Non-empty = defer outside window.
 	$window = (string) PfbConfig::read('pfb_quiet_hours');
 	$in_win = pfb_quiet_hours_in_window($now, $window);
@@ -2780,7 +2780,7 @@ function pfblockerng_tick(): void
 }
 
 // ---------------------------------------------------------------------------
-// ADR-53 P4 — pure suppression-line validator (v4 mask lift /8-/32)
+// ADR-53 — pure suppression-line validator (v4 mask lift /8-/32)
 // ---------------------------------------------------------------------------
 
 /**
@@ -2847,13 +2847,13 @@ function pfb_validate_suppression_line(string $line, string $family): ?string
 }
 
 // ---------------------------------------------------------------------------
-// ADR-53 P5 — pure IPv6 CIDR set-subtraction engine. IPv6 suppression can't carve by host
+// ADR-53 — pure IPv6 CIDR set-subtraction engine. IPv6 suppression can't carve by host
 // enumeration (a /64 minus a /128 hole is 2^64 hosts -- ADR-53 §1.2) and `iprange` mangles v6
 // input outright (parses a v6 literal as a hostname); unlike the v4 engine's `iprange --except`,
 // this is pure-PHP set subtraction over fixed-width 128-bit binary-string ranges, emitting the
 // minimal covering-CIDR remainder via pfSense's REAL ip_range_to_subnet_array() (never
 // redefined here; a faithful double stands in under PHPUnit, tests/php/pfsense_doubles.php).
-// Every binary-string comparison uses strcmp(), NEVER bare </>/<=/>=/min()/max(): a 128-char
+// Every binary-string comparison uses strcmp(), NEVER bare <, >, <=, >=, min(), max(): a 128-char
 // '0'/'1' string is a PHP "numeric string" and normal comparison risks silent float coercion.
 // ---------------------------------------------------------------------------
 
@@ -3148,7 +3148,7 @@ function pfb_suppress_file_v6(string $file, string $suppfile): bool
 }
 
 // ---------------------------------------------------------------------------
-// ADR-53 P7 — prefix-aware killstates suppression exclusion
+// ADR-53 — prefix-aware killstates suppression exclusion
 // ---------------------------------------------------------------------------
 
 /**
@@ -3188,7 +3188,7 @@ function pfb_ip_suppressed(string $ip, array $entries): bool
 /**
  * pfb_ip_suppressed_match — same coverage test as pfb_ip_suppressed(), but
  * returns the MOST SPECIFIC (longest-prefix) covering entry instead of a
- * bool (issue #422, follow-up to ADR-53 P7/P8). Feeds two Alerts surfaces
+ * bool (issue #422, follow-up to ADR-53). Feeds two Alerts surfaces
  * that need to act on the actual customlist line, not just a yes/no: the
  * un-suppress ('delete_ip') handler (which entry to remove + re-add) and the
  * suppressed-row icon detection in the Alerts render loop.
@@ -3250,7 +3250,7 @@ function pfb_ip_suppressed_match(string $ip, array $entries): ?string
 }
 
 // ---------------------------------------------------------------------------
-// ADR-53 P8 -- Alerts "+" / widget live-punch plan (any mask + v6). The Alerts "+" button
+// ADR-53 -- Alerts "+" / widget live-punch plan (any mask + v6). The Alerts "+" button
 // (and the dashboard widget, sharing its stats read) used to punch a hole in a live pf table
 // by deleting an exact '/24' and re-adding 254 sibling hosts, refusing anything "blocked by a
 // CIDR other than /24" (ADR-53 §1.2). This replaces that with the same covering-CIDR

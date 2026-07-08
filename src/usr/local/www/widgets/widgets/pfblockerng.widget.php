@@ -684,7 +684,7 @@ function pfBlockerNG_get_header($mode='') {
 					}
 				}
 
-				// ADR-53 P8: the Suppression count was v4-only ($config_path above
+				// ADR-53: the Suppression count was v4-only ($config_path above
 				// is v4suppression) -- fold in v6suppression too, now that the
 				// Alerts "+" writes v6 entries as well, so the widget stat reflects
 				// the TOTAL suppressed-host count across both families.

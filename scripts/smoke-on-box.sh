@@ -51,7 +51,7 @@ _SHARD_TOTAL=1 # N=1 = no sharding (default)
 
 REPO_ROOT="/root/pfBlockerNG"
 
-# ── Scrub inherited GIT_* context (via shared lib — ADR-47 P5 chokepoint) ─── #
+# ── Scrub inherited GIT_* context (via shared lib — ADR-47 chokepoint) ─── #
 # Inherited from the pre-commit hook or the orchestrator's env; scrub once
 # before any git operations in this script.
 # shellcheck source=scripts/lib/git-env-scrub.sh

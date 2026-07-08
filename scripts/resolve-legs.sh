@@ -1,5 +1,5 @@
 #!/bin/sh
-# scripts/resolve-legs.sh — shared leg-resolution + per-leg helpers (ADR-47 P5).
+# scripts/resolve-legs.sh — shared leg-resolution + per-leg helpers (ADR-47).
 #
 # Six subcommands covering the inline blocks previously repeated across
 # smoke.yml / smoke-single.yml / ui-tests.yml:
@@ -57,7 +57,7 @@ set -eu
 # ── Self-dir (for lib + sibling scripts) ─────────────────────────────────── #
 _RL_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# ── GIT_* scrub (ADR-47 P5 chokepoint) ───────────────────────────────────── #
+# ── GIT_* scrub (ADR-47 chokepoint) ───────────────────────────────────── #
 # shellcheck source=scripts/lib/git-env-scrub.sh
 . "${_RL_DIR}/lib/git-env-scrub.sh"
 pfb_scrub_git_env

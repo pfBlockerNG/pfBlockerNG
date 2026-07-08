@@ -100,7 +100,7 @@ if (isset($argv[1])) {
 		pfblockerng_ss_refresh();
 		exit;
 	}
-	// ADR-43 P4: due-ledger trigger-tick. Reads the ledger, dispatches each job
+	// ADR-43: due-ledger trigger-tick. Reads the ledger, dispatches each job
 	// that is due (feeds, dcc, bl), then calls ss_refresh unconditionally (cheap).
 	elseif ($argv[1] == 'tick') {
 		pfblockerng_tick();
@@ -150,7 +150,7 @@ $pfb['extras'][1]['file']	= '';
 $pfb['extras'][1]['folder']	= "{$pfb['geoipshare']}";
 $pfb['extras'][1]['type']	= 'geoip';
 
-// TOP1M database (ADR-59 P1: URL sourced from the provider descriptor table)
+// TOP1M database (ADR-59: URL sourced from the provider descriptor table)
 $pfb_top1m_provider		= pfb_top1m_providers()[$pfb['dnsbl_top1m_type']->value];
 $pfb['extras'][2]			= array();
 $pfb['extras'][2]['url']	= $pfb_top1m_provider['url'];
@@ -160,7 +160,7 @@ $pfb['extras'][2]['file']	= 'top-1m.csv';
 $pfb['extras'][2]['folder']	= "{$pfb['dbdir']}";
 $pfb['extras'][2]['type']	= 'top1m';
 
-// ADR-59 P5: header auth (Cloudflare Radar's Bearer token) via the P3 $feed['headers']
+// ADR-59: header auth (Cloudflare Radar's Bearer token) via the P3 $feed['headers']
 // plumbing. A keyless provider's 'auth' is 'none', so pfb_top1m_auth_headers() returns
 // array() and this is a no-op for tranco/cisco/openpagerank/majestic, exactly as before P5.
 // An empty/absent top1m_token also yields array() -- no Authorization header is sent,

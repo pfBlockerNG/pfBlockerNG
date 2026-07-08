@@ -1,5 +1,5 @@
 #!/bin/sh
-# scripts/lib/git-env-scrub.sh — shared GIT_* context scrubber (ADR-47 P5).
+# scripts/lib/git-env-scrub.sh — shared GIT_* context scrubber (ADR-47).
 #
 # Safe to source: no top-level side effects, no set -e, no traps.
 #
