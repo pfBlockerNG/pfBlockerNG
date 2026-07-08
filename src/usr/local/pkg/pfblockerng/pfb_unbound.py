@@ -2708,6 +2708,15 @@ def make_timestamp() -> str:
     return ""
 
 
+def iso_timestamp() -> str:
+    for _ in range(2):
+        try:
+            return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        except TypeError:
+            continue
+    return ""
+
+
 def _log_entry_direct(line: str, log: str) -> None:
     # Synchronous fallback used when the logging pipeline is not running (during
     # init, in the test suite, or if it failed to start): open/append/close per line.

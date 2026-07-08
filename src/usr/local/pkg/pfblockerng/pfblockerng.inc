@@ -3092,6 +3092,12 @@ function pfb_stdout_is_terminal(): bool {
 	return (bool) $tty;
 }
 
+// ISO-8601 'YYYY-MM-DD HH:MM:SS' (unambiguous, locale-independent, sorts lexically) --
+// shared timestamp helper for pfBlockerNG's log writers.
+function pfb_log_iso_timestamp(): string {
+	return date('Y-m-d H:i:s', time());
+}
+
 function pfb_logger($log, $logtype) {
 	global $g, $pfb;
 
