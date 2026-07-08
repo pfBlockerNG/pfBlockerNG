@@ -1,0 +1,53 @@
+ADR-60 Phase 6 — Gate record
+================================================================================
+Verdict: PASS
+
+Independent verifier (Sonnet 5, fresh context) ran the mandatory 6 checks
+against commit 9e3b8b8f (the core age-cutoff feature — the largest phase so
+far, 97 new tests):
+
+1. handoff-fields — PASS.
+2. gate-rerun — PASS. php -l x2, vendor/bin/phpunit (2563 tests, 19660
+   assertions — 97 new), phpstan, phpcs, python3 -m pytest (unaffected),
+   3 policy checkers — all clean, all matched.
+3. red-proof — PASS, independently re-executed (own checkout dance, not the
+   handoff's scratch-dir method): reverted the 3 touched files to pre-Phase-6
+   -> 83 errors (undefined new functions) + 7 failures (old code keeps
+   expired lines the age cap must drop — e.g. a 40-day-old ip_blocklog row
+   incorrectly kept); restored -> all 97 pass, tree confirmed clean after.
+4. diff-vs-plan — PASS, all 14 checklist items ticked against the full diff.
+   Critically, the verifier INDEPENDENTLY RE-DERIVED the per-type
+   field-position mapping (prefix/field0/field1) by reading every writer
+   site itself (pfb_daemon_filterlog, pfb_parsed_fail, pfb_unbound.py's 4
+   csv_line joins, pfb_unified_format_ip/dnsbl/dnsreply, and the
+   malformed-fallback verbatim passthrough) rather than trusting the
+   planner's or implementer's claim — no contradiction found, mapping
+   confirmed correct for all 10 types. The nolimit-with-no-candidate
+   whole-file-copy() decision, the reused (not forked) chroot/chown code
+   path, and the exit-code short-circuit semantics were all hand-traced and
+   confirmed.
+5. test-honesty — PASS. New test files are pure additions (no existing
+   assertion touched). The failed-exec test injects a REAL fault (chmod 0444
+   on the live log, causing a genuine cat permission-denied failure), not a
+   monkeypatched exception, correctly skipped under root. Both sides of the
+   cutoff-boundary off-by-one are asserted.
+6. conventions — PASS. All 5 new pfb_log_* functions match the established
+   15-function sibling naming pattern. Longer explanatory comments have
+   local precedent (the immediately-preceding pfb_log_max_lines() already
+   carries a 6-line docblock in this file) — not a new deviation.
+
+Orchestrator fix after the gate (verifier-flagged non-blocking nit):
+RESULTS/06_Results.txt had a dangling "Commit: (see COMMIT section below)"
+placeholder with no such section ever added — backfilled with the real hash
+9e3b8b8f68669afd30e0fcc39bdb1b821a558e9c.
+
+Skipped: none.
+
+Coverage: every §2.5 matrix cell (6) and every §2.6 hostile-input row (6)
+executed and PASS; per-field-mode coverage (prefix/field0/field1) each has a
+dedicated test; inode preservation and failed-exec protection both asserted.
+
+Commits this phase (in order):
+- 9e3b8b8f — pfblockerng: add log_max_days_<type> age-based log retention
+  (ADR-60 P6)
+- (handoff commit, to follow with this gate-fix)

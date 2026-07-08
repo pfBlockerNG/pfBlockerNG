@@ -70,7 +70,7 @@ No blocker found. Proceeded exactly per the brief's action plan.
 --------------------------------------------------------------------------------
 WHAT CHANGED
 --------------------------------------------------------------------------------
-Commit: (see COMMIT section below -- filled after `git commit`)
+Commit: 9e3b8b8f68669afd30e0fcc39bdb1b821a558e9c
 Branch: adr/60-age-based-log-retention (pushed directly, no PR needed)
 
 - src/usr/local/pkg/pfblockerng/pfblockerng.inc
