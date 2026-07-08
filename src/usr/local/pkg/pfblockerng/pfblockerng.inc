@@ -2359,7 +2359,11 @@ function pfb_global() {
 			} else {
 				// Manual mode: a genuinely invalid/missing/mismatched VIP disables DNSBL.
 				$pfb['dnsbl'] = '';
-				pfb_logger("\nDNSBL disabled: {$vips_valid_result[1]}", 1);
+				$vip_notice = "DNSBL disabled: {$vips_valid_result[1]}";
+				pfb_logger("\n{$vip_notice}", 1);
+				// issue #331: this was log-only, invisible in the GUI. Surface it like
+				// the MaxMind/ASN credential notices below.
+				file_notice('pfBlockerNG DNSBL', $vip_notice, 'pfBlockerNG', '/pfblockerng/pfblockerng_dnsbl.php', 2);
 			}
 		} elseif (pfb_dnsbl_v6_vip_required(pfb_unbound_listens_v6(), ($pfb['dnsbl_vip_auto'] === 'on')) && empty($pfb['dnsblconfig']['pfb_dnsvip6'])) {
 			// [ ADR-13 §7 pivot ] NON-BLOCKING: the resolver listens on IPv6 but no v6
