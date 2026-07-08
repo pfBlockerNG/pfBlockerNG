@@ -22,6 +22,20 @@
   - `src/usr/local/www/pfblockerng/pfblockerng_general.php` — the Log Settings section (`:75`-`:450`
     ish): remove the `log_rotate_<type>`/`log_reset_keep_<type>` selects (ADR-30 Phase 4), add
     `log_max_days_<type>`.
+  - `src/usr/local/www/pfblockerng/www/index.php` — the DNSBL sinkhole block page (`:45`, `:51`,
+    `:52`): its `dnsbl.log` correlation grep key is coupled to `make_timestamp()`'s output shape —
+    BREAKS the moment that format changes unless fixed in lockstep (§1.8).
+  - `src/usr/local/www/pfblockerng/pfblockerng_alerts.php` — the Reports/Alerts day-bucket stat
+    grouping (`:1837`) and hourly chart-label builder (`:1782`, `:1850`) — both `cut`/`awk` on a
+    fixed space-token count that the old (3-token) log format satisfies and the new (2-token) ISO
+    format does not. BREAKS the moment the log format changes unless fixed in lockstep (§1.8).
+  - Wider ISO-8601 sweep (§1.8, Phase 10 — lower priority, optional-but-requested normalization):
+    `pfblockerng.inc` — `dnsbl_alias_update()` (~`:5370`/`:5404`, DNSBL group "last updated"),
+    `pfBlockerNG_clearsqlite()` (~`:14133`/`:14137`, "last clear" timestamps), the `/tmp` debug
+    snapshot filename (~`:16534`); `pfblockerng.php` (~`:843`, MaxMind version `gmdate`);
+    `pfblockerng_update.php` (~`:291`-`:292`, schedule ledger display); `pfb_unbound.py`
+    (~`:893`/`:898`, unwritable-log rename filename); `widget.php`'s `pfb_iso_timestamp()` helper
+    (~`:702`-`:711`, a year-guessing reformatter that becomes unnecessary once its source is ISO).
   - `tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php` — `$registeredPaths`
     (`:71`-`:100`).
   - `tests/php/` — `PfbLoggerIsoTimestampTest.php`, `PfbIsoTimestampTest.php`,
@@ -127,6 +141,58 @@ explicitly states *"Log rotation / retention semantics (`pfb_log_mgmt()`) — pr
 never references `pfb_log_reset()`/ADR-30. The two are orthogonal; retiring `pfb_log_reset()` here has
 no effect on `runlog`'s reason to exist.
 
+### 1.8 Beyond the 10 log types — a full codebase sweep for non-ISO dates
+
+Once the "external consumer might parse our old format" excuse is gone for the 10 log files, it's
+gone everywhere else too. A full `date(`/`gmdate(`/`strftime(` sweep of `src/` (verified: no
+`DateTime::format()`/`new DateTime()` usage exists outside these calls) found two categories.
+
+**HIGH PRIORITY — in-repo consumers of the 10 log types' format, would BREAK the moment Phases 2-4
+land if not fixed alongside them (not optional, folded into Phases 4-5 below):**
+
+- **`www/index.php:45,51,52`** — the DNSBL block page shown to end users builds a grep key via
+  `date('M j H:i', ...)`/`date('M j', ...)` to correlate a blocked request against `dnsbl.log` and
+  pull the Type/Group/Evaluated/Feed detail for display. This key is byte-coupled to
+  `make_timestamp()`'s exact output shape (`"Jan 5 14:30:45"`). The moment `make_timestamp()` goes
+  ISO, the grep **never matches** — the block page silently falls back to `-` placeholders, no error,
+  100% loss of the "why was I blocked" detail.
+- **`pfblockerng.inc:13725`** (`pfb_log_event()`) — a **second writer** to the exact same
+  `dnsbl.log` file `pfb_unbound.py` writes (Unbound-native-mode DNSBL logging, vs Python-mode),
+  still using `date('M j H:i:s', time())`. Missed by a naive reading of "Python logs = only
+  `pfb_unbound.py`" — this PHP call site writes the identical file and MUST change in the same
+  phase, or `dnsbl.log` ends up mixed-format (worse than today's uniformly-wrong state).
+- **`pfblockerng_alerts.php:1837`** — the Reports per-day stat buckets (`ipdate`/`dnsbldate`/
+  `replydate` columns, feeding IP-block/permit/match AND dnsbl AND dns-reply stats alike) do
+  `cut -d ',' -f{col} | cut -d ' ' -f1-2 | uniq -c`, relying on the OLD format's 3 space-separated
+  tokens (`"Jan 5 14:30:45"` → `-f1-2` = `"Jan 5"`, the day bucket). ISO (`"2026-07-08 14:30:45"`)
+  has only 2 space tokens, so `-f1-2` returns the whole field unchanged — every line becomes its own
+  unique bucket down to the second; the daily stat table/chart breaks completely.
+- **`pfblockerng_alerts.php:1782,1850`** — the hourly chart-label builder assumes the same 3-token
+  shape (`awk -F ' ' '{print $2 " " $3 "(" $4 ")",$1}'` — month/day/hour). ISO's 2-token date+time
+  means `$4` (hour) is empty; chart labels render as `"2026-07-08 (),N"`. **Not** broken by this
+  change: `dnsbldatehr`/`dnsbldatehrmin` (`cut -d ':' -f1`/`-f1,2`, same file `:1841`/`:1844`) —
+  ISO's date part uses only dashes, so splitting on `:` still correctly isolates the hour — verified,
+  not assumed; these need a regression test proving they stay correct, not a code change.
+
+**Lower priority — genuinely optional "everywhere" broadening the user asked for, since the same
+"but what if something consumes it" excuse no longer holds anywhere in this codebase (Phase 10):**
+
+| Site | Format today | Has year? | What it's for |
+| --- | --- | --- | --- |
+| `pfblockerng.inc:5370`/`:5404` (`dnsbl_alias_update()`) | `'M j H:i:s'` | No | DNSBL group "last updated" stat (SQLite `dnsbl.timestamp`); the widget's `pfb_iso_timestamp()` helper (below) already has to GUESS the year from this — a real latent wrong-year bug for a group updated in December and viewed in January |
+| `pfblockerng.inc:14133`/`:14137` (`pfBlockerNG_clearsqlite()`) | `'M j H:i:s'` | No | "Last clear" timestamp, shown RAW (no reformatter) in the dashboard widget tooltip — same latent wrong-year exposure, with no safety net at all |
+| `pfblockerng.inc:16534` | `'M_j'` | No | `/tmp` debug snapshot filename on a DNSBL feed `unbound-checkconf` failure — zero external consumer, trivial to convert |
+| `pfblockerng.php:843` (`gmdate`) | `'D, j M Y H:i:s T'` | Yes | MaxMind version file, displayed on the dashboard widget — already unambiguous, purely cosmetic normalization |
+| `pfblockerng_update.php:291`/`:292` | `'Y-m-d H:i'` | Yes | Update page "Last/Next" schedule display — already ISO-shaped, just missing seconds vs the `H:i:s` used elsewhere |
+| `pfb_unbound.py:893`/`:898` | `strftime("_%Y%m%-d%H%M%S.log")` | Yes | Unwritable-log rename filename (ownership-repair path) — `%-d` is variable-width, so the filename isn't fixed-width/sortable; low-frequency, zero-risk fix (`%Y%m%d%H%M%S`) |
+| `widget.php:390` (`pfb_iso_timestamp()`, `pfblockerng.inc:702`-`:711`) | reformatter, not a writer | n/a | Best-effort `strtotime()`-based reformatter for the (no-year) `dnsbl_alias_update()` value above — becomes dead weight once the source is already ISO; candidate for simplification/removal |
+
+**Explicitly out of scope, never touch:** `www/index.php:101`'s hardcoded
+`"Sat, 26 Jul 2014 05:00:00 GMT"` `Expires:` HTTP response header — RFC 7231/2822 format is
+protocol-mandated for an actual HTTP header; this is not a candidate for ISO conversion under any
+reading of "everywhere." No non-ISO date rendering was found in `src/usr/local/www/`'s JavaScript
+(the only date-related JS is cache-busting `new Date().getTime()`, unrelated).
+
 ## 2. Decision
 
 ### 2.1 Per-area decision table
@@ -138,9 +204,12 @@ no effect on `runlog`'s reason to exist.
 | `errlog` | opt-in via `pfb_logger()`, zero timestamp via the `pfb_open_sqlite()` bypass | Both paths go through the same helper; always stamped |
 | `ip_block/permit/matchlog`, IP rows of `unilog` | 'BSD' branch: no year available; 'syslog' branch: year available but discarded | 'syslog' branch: use `strtotime($f[1])`'s already-correct year verbatim — a free fidelity win, zero ambiguity. 'BSD' branch: year-infer (assume current year; roll back one if the resulting date is in the future relative to now — the standard BSD-syslog fix) since pf's raw output never carries one. Both branches emit `date('Y-m-d H:i:s', $ts)`. |
 | `dnsbl_parse_err` | `m/j/y H:i:s`, ambiguous | `Y-m-d H:i:s` |
-| `dnslog`/`dnsreplylog`, python rows of `unilog` | `make_timestamp()`, no year | `make_timestamp()` gains the year: `"%Y-%m-%d %H:%M:%S"` |
+| `dnslog`/`dnsreplylog`, python rows of `unilog` | `make_timestamp()`, no year | `make_timestamp()` gains the year: `"%Y-%m-%d %H:%M:%S"`; `pfb_log_event()`'s twin PHP writer to the same `dnsbl.log` file (`:13725`) converted in lockstep |
+| `www/index.php`'s block-page correlation key | `date('M j H:i'/'M j', ...)` grepping `dnsbl.log` | Rebuilt against the new ISO shape (Phase 5) |
+| `pfblockerng_alerts.php`'s day-bucket/chart stats | `cut`/`awk` assuming a 3-space-token log line | Rebuilt for the 2-space-token ISO shape (Phase 5); the `:`-split hour buckets are verified unaffected |
 | Continuous retention | line-count only (`log_max_<type>`) | **adds** `log_max_days_<type>` (numeric string, default `'0'` = off) — both caps apply independently every tick; whichever is more restrictive wins |
 | Calendar-boundary reset (ADR-30) | `log_rotate_<type>` / `log_reset_keep_<type>` / `pfb_log_reset()` / marker file | **removed** — superseded by the continuous age cap above |
+| Wider ISO sweep (§1.8, optional) | `dnsbl_alias_update()`/`pfBlockerNG_clearsqlite()` (no year, 2 latent wrong-year bugs), a debug filename, a cosmetic `gmdate`, a seconds-less display, a variable-width Python rename filename | All converted to ISO-8601 (or the closest fixed-width equivalent for filenames); `pfb_iso_timestamp()`'s year-guessing simplified once its source is already ISO |
 
 ### 2.2 The age-cutoff mechanism (mechanically simple, reuses the existing trim)
 
@@ -197,13 +266,15 @@ line-count cap; `log_max_days_<type}` still applies if set. Pinned as a coverage
 
 | Axis | Rows | Covered by |
 | --- | --- | --- |
-| Log type × writer | `log`, `errlog` (2 writers: `pfb_logger` + `pfb_open_sqlite` bypass), `extraslog`, `ip_blocklog`, `ip_permitlog`, `ip_matchlog`, `dnsbl_parse_err`, `dnslog` (2 writers: Python + PHP `pfb_daemon_dnsbl`), `dnsreplylog`, `unilog` (mixed-format passthrough) | Phases 2-4 |
+| Log type × writer | `log`, `errlog` (2 writers: `pfb_logger` + `pfb_open_sqlite` bypass), `extraslog`, `ip_blocklog`, `ip_permitlog`, `ip_matchlog`, `dnsbl_parse_err`, `dnslog` (2 writers: Python `make_timestamp()` + PHP `pfb_log_event()` — both write the SAME file), `dnsreplylog`, `unilog` (mixed-format passthrough) | Phases 2-4 |
 | `pfb_daemon_filterlog()` input format | `'BSD'` branch, `'syslog'` (RFC-5424) branch | Phase 3 |
-| `log_max_<type>` × `log_max_days_<type>` | off×off, off×set, `nolimit`×off, `nolimit`×set, set×off, set×set (tighter cap wins each direction) | Phase 5 |
-| Unparseable-line handling | legacy pre-rework line (no/old-format timestamp) present in a file when age-cutoff first runs | Phase 5 (hostile-input row) |
-| Config removal | every one of the 10 `log_rotate_<type>` + 10 `log_reset_keep_<type>` registry entries and sniff paths | Phase 6 |
+| In-repo consumers of the new format | `www/index.php`'s block-page correlation grep; `pfblockerng_alerts.php`'s day-bucket stats (ip/dnsbl/reply) and hourly chart labels; the `:`-split hour buckets confirmed UNAFFECTED (regression test, not a code change) | Phase 5 |
+| `log_max_<type>` × `log_max_days_<type>` | off×off, off×set, `nolimit`×off, `nolimit`×set, set×off, set×set (tighter cap wins each direction) | Phase 6 |
+| Unparseable-line handling | legacy pre-rework line (no/old-format timestamp) present in a file when age-cutoff first runs | Phase 6 (hostile-input row) |
+| Config removal | every one of the 10 `log_rotate_<type>` + 10 `log_reset_keep_<type>` registry entries and sniff paths | Phase 7 |
+| Wider ISO sweep (§1.8) | every site in the §1.8 lower-priority table | Phase 10 |
 
-### 2.6 Hostile-input rows for the new age-cutoff parser (Phase 5)
+### 2.6 Hostile-input rows for the new age-cutoff parser (Phase 6)
 
 - Empty file.
 - File with only unparseable (legacy-format) lines.
@@ -226,6 +297,10 @@ line-count cap; `log_max_days_<type}` still applies if set. Pinned as a coverage
   ones).
 - The age-cutoff implementation is cheap: one extra linear pass over an already line-capped (small)
   candidate, reusing the proven inode-preserving trim.
+- The §1.8 sweep caught two genuine in-repo consumers (`www/index.php`'s block-page correlation key,
+  `pfblockerng_alerts.php`'s stat/chart builders) that a naive "just change the two writer functions"
+  implementation would have silently broken — found and fixed in the same rollout instead of as a
+  post-merge incident.
 
 **Negative / risks**
 
@@ -255,9 +330,13 @@ line-count cap; `log_max_days_<type}` still applies if set. Pinned as a coverage
 3. `pfb_log_reset()`, `log_rotate_<type>`, `log_reset_keep_<type>`, and the marker file are gone —
    `pfb_cfg_registry()`, the sniff, the UI, and the tick call site all agree.
 4. `pfb_failures()` and every other errlog/`FAIL`-date consumer keep working unchanged.
-5. A `www/` change carries Tier-A `ui_render` coverage.
-6. All gates green; the §2.3 contract pinned by tests; red→green proof for every behaviour-changing
+5. `www/index.php`'s DNSBL block page and `pfblockerng_alerts.php`'s Reports/Alerts stat tables and
+   charts keep working against the new log format — verified, not merely un-broken by omission.
+6. A `www/` change carries Tier-A `ui_render` coverage.
+7. All gates green; the §2.3 contract pinned by tests; red→green proof for every behaviour-changing
    phase.
+8. Every §1.8 lower-priority site converts to ISO-8601 (or the closest fixed-width equivalent for a
+   filename), with `pfb_iso_timestamp()`'s year-guessing simplified once its source is ISO.
 
 ## 5. Constraints (from CLAUDE.md)
 
@@ -313,20 +392,42 @@ line-count cap; `log_max_days_<type}` still applies if set. Pinned as a coverage
   boundary (a December log line parsed in January, and vice versa). Update `UnifiedFormatTest.php`'s
   fixtures to the new format.
 
-### Phase 4 — Uniform timestamp for the Python-side logs
+### Phase 4 — Uniform timestamp for the Python-side logs (and its PHP-side twin writer)
 
-- Prompt: `04_Python_Logs.txt`
-- `make_timestamp()`: `"%b %-d %H:%M:%S"` → `"%Y-%m-%d %H:%M:%S"`. Verify `unilog`'s passthrough of
-  `dnslog`/`dnsreplylog` rows inherits the new format with no separate PHP-side change (it's a
-  straight field copy).
-- Tests: `python -m pytest` red-before/green-after against Phase 1's oracle for `dnslog`/
-  `dnsreplylog`; the `TypeError`-twice fallback path still returns `""` (unchanged, still a real edge
-  case, now just documented); a PHP-side `UnifiedFormatTest.php` case confirming a python-sourced
-  `unilog` row shows the new year-bearing format.
+- Prompt: `04_Dns_Logs_Python_And_Php.txt`
+- `make_timestamp()`: `"%b %-d %H:%M:%S"` → `"%Y-%m-%d %H:%M:%S"`. **Also** convert `pfb_log_event()`
+  (`pfblockerng.inc:13725`) — the PHP-side writer to the SAME `dnsbl.log` file, used in
+  Unbound-native-mode DNSBL logging — from `date('M j H:i:s', time())` to the same ISO helper,
+  in this same phase (missing this leaves `dnsbl.log` mixed-format between modes, per §1.8). Verify
+  `unilog`'s passthrough of `dnslog`/`dnsreplylog` rows inherits the new format with no separate
+  change beyond that (it's a straight field copy).
+- Tests: `python -m pytest` + `vendor/bin/phpunit` red-before/green-after against Phase 1's oracle for
+  `dnslog`/`dnsreplylog` (both writers); the `TypeError`-twice fallback path still returns `""`
+  (unchanged, still a real edge case, now just documented); a PHP-side `UnifiedFormatTest.php` case
+  confirming a python-sourced `unilog` row shows the new year-bearing format.
 
-### Phase 5 — `log_max_days_<type>`: the age-cutoff cap
+### Phase 5 — Fix the in-repo consumers of the new log format
 
-- Prompt: `05_Age_Cutoff.txt`
+- Prompt: `05_Fix_Format_Consumers.txt`
+- Two real, in-repo consumers are byte-coupled to the OLD 3-space-token log shape and BREAK the
+  moment Phases 2-4 land (§1.8) — this phase fixes them so the system is internally consistent again
+  before the age-cutoff feature (Phase 6) lands:
+  - `www/index.php`'s DNSBL block page (`:45`, `:51`, `:52`): rebuild its `dnsbl.log` correlation
+    grep key against the new ISO shape.
+  - `pfblockerng_alerts.php`'s day-bucket stats (`:1837`) and hourly chart-label builder (`:1782`,
+    `:1850`): rebuild for the 2-space-token ISO shape. Confirm (don't just assume) the `:`-split
+    `dnsbldatehr`/`dnsbldatehrmin` buckets (`:1841`, `:1844`) are unaffected — add a regression test
+    proving it, since this is exactly the kind of "looks unrelated, quietly isn't" claim CLAUDE.md
+    says to verify.
+- Tests: red-before/green-after for the block page (a synthetic ISO-format `dnsbl.log` line, assert
+  the correlation now matches and the real detail — not `-` placeholders — renders); red-before/
+  green-after for the Reports day-bucket grouping and the chart label shape; a regression test
+  proving the hour-only buckets are unaffected. Tier-A `ui_render` for the block page and the Reports
+  page.
+
+### Phase 6 — `log_max_days_<type>`: the age-cutoff cap
+
+- Prompt: `06_Age_Cutoff.txt`
 - Register `log_max_days_<type>` (10 keys, default `'0'`, mirroring `log_max_<type>`'s loop shape) in
   `pfb_cfg_registry()` + the sniff `$registeredPaths`. Restructure `pfb_log_mgmt()` so `nolimit` on
   `log_max_<type>` no longer short-circuits the function — the age cap evaluates independently. Add
@@ -334,13 +435,13 @@ line-count cap; `log_max_days_<type}` still applies if set. Pinned as a coverage
   `now - log_max_days_<type>` days (parse the now-uniform `Y-m-d H:i:s` prefix/field); unparseable
   lines are treated as expired.
 - Tests: every §2.5/§2.6 coverage-matrix and hostile-input row; red-before (today's `pfb_log_mgmt()`
-  has no age cap at all — the new test fails against pre-Phase-5 code) / green-after; inode +
+  has no age cap at all — the new test fails against pre-Phase-6 code) / green-after; inode +
   ownership preserved (both plain and chrooted python-log paths); a failed `tail`/`cat` still never
   blanks the log.
 
-### Phase 6 — Retire `pfb_log_reset()` / ADR-30's mechanism
+### Phase 7 — Retire `pfb_log_reset()` / ADR-30's mechanism
 
-- Prompt: `06_Retire_Adr30.txt`
+- Prompt: `07_Retire_Adr30.txt`
 - Delete `pfb_log_reset()`, `pfb_log_rotate_period()`, `pfb_log_should_reset()`, the marker
   parse/serialize helpers, and the `log_rotate.last` marker-file handling. Remove the
   `log_rotate_<type>`/`log_reset_keep_<type>` registry entries + sniff paths. Remove the
@@ -350,30 +451,55 @@ line-count cap; `log_max_days_<type}` still applies if set. Pinned as a coverage
 - Tests: full suite green with the deletions; the grep-gate command + its (empty) output pasted in
   the handoff.
 
-### Phase 7 — Log Settings UI
+### Phase 8 — Log Settings UI
 
-- Prompt: `07_Ui.txt`
+- Prompt: `08_Ui.txt`
 - `pfblockerng_general.php`: remove the `log_rotate_<type>`/`log_reset_keep_<type>` `Form_Select`
   controls; add a `log_max_days_<type>` numeric `Form_Input` next to each `log_max_<type>` field,
   with help text. Load/save via `$pconfig`/`$_POST`, reading through `PfbConfig`.
 - Tests: Tier-A `ui_render` (page loads, no PHP error, the new fields present, the removed ones
   gone).
 
-### Phase 8 — Smoke + validation + docs
+### Phase 9 — Smoke + validation + docs
 
-- Prompt: `08_Smoke_And_Validation.txt`
+- Prompt: `09_Smoke_And_Validation.txt`
 - Live-VM smoke (ADR-04): seed a log with lines whose timestamps straddle a `log_max_days_<type>`
   cutoff (mix of expired/current), run the cron tick, assert only the expired prefix is dropped,
-  inode + ownership preserved, `log_max_days_<type>='0'` leaves size-only behaviour unchanged, and the
-  retired ADR-30 config keys/UI controls are gone. Update any user-facing help text/docs referencing
-  the old scheduled-reset feature. Flip Status → Accepted on green.
+  inode + ownership preserved, `log_max_days_<type>='0'` leaves size-only behaviour unchanged, the
+  retired ADR-30 config keys/UI controls are gone, the DNSBL block page still shows real detail (not
+  `-` placeholders), and the Reports/Alerts stat tables/charts still group correctly. Update any
+  user-facing help text/docs referencing the old scheduled-reset feature. Flip Status → Accepted on
+  green.
+
+### Phase 10 — Wider ISO-8601 sweep (§1.8 lower-priority sites)
+
+- Prompt: `10_Wider_Iso_Sweep.txt`
+- Convert every §1.8 lower-priority site to ISO-8601 (or the closest fixed-width equivalent for a
+  filename): `dnsbl_alias_update()` (`:5370`/`:5404`), `pfBlockerNG_clearsqlite()`
+  (`:14133`/`:14137`), the `/tmp` debug filename (`:16534`), `pfblockerng.php`'s MaxMind `gmdate`
+  (`:843`), `pfblockerng_update.php`'s schedule display (`:291`/`:292`), and `pfb_unbound.py`'s
+  rename filename (`:893`/`:898`). Simplify/remove `pfb_iso_timestamp()`'s (`pfblockerng.inc:702`-
+  `:711`) year-guessing logic now that its source (`dnsbl_alias_update()`) is already ISO. Do NOT
+  touch `www/index.php:101`'s hardcoded HTTP `Expires:` header — protocol-mandated, explicitly
+  out of scope (§1.8).
+- Tests: for `dnsbl_alias_update()`/`pfBlockerNG_clearsqlite()` — a red-before/green-after proving
+  the December-updated/January-viewed wrong-year bug is actually fixed (construct a fixture that
+  straddles a year boundary); for the rest, straightforward before/after format assertions; a test
+  proving `pfb_iso_timestamp()`'s simplified form still round-trips correctly (or that its removal
+  doesn't break the widget, if you remove it entirely — your call, justify in the handoff).
 
 ## 7. Definition of done
 
-- All eight phases landed; `vendor/bin/phpunit` + `phpcs` + `phpstan` + `python -m pytest` +
-  `ui_render` green; the §2.3 contract pinned; the §2.5/§2.6 coverage matrix fully ticked.
-- Live-VM smoke (CE + Plus fan-out) green for the age-cutoff trim, inode/ownership preservation, and
-  `nolimit`-independence cases.
+**Phases 1-9 gate Status → Accepted** (the core ask: uniform timestamps, the age-cutoff cap, ADR-30's
+retirement, and the in-repo consumers that would otherwise break). Phase 10 (§1.8's lower-priority
+sweep) is a follow-on that lands afterward and does not block Accepted — it's requested normalization
+of sites outside the 10 log types, not part of the retention feature's correctness contract.
+
+- Phases 1-9 landed; `vendor/bin/phpunit` + `phpcs` + `phpstan` + `python -m pytest` + `ui_render`
+  green; the §2.3 contract pinned; the §2.5/§2.6 coverage matrix fully ticked (Phase 10's row
+  excepted — it ticks when Phase 10 lands).
+- Live-VM smoke (CE + Plus fan-out) green for the age-cutoff trim, inode/ownership preservation,
+  `nolimit`-independence, the DNSBL block page, and the Reports/Alerts stat tables/charts.
 - **Manual smoke checklist (owner: maintainer — out-of-CI, real multi-day-old data):**
   1. Set `log_max_days_ip_blocklog=7` on a box with more than 7 days of real block history; confirm
      only lines older than 7 days are dropped at the next tick, inode (`ls -i`) unchanged, a remote
@@ -382,10 +508,18 @@ line-count cap; `log_max_days_<type}` still applies if set. Pinned as a coverage
      before this ADR (line-count only).
   3. Confirm an upgrade from a build with `log_rotate_ip_blocklog=daily` set no longer resets that
      log on any calendar boundary (the config key is now inert).
+  4. Trigger a real DNSBL block, confirm the block page shows real Type/Group/Evaluated/Feed detail
+     (not `-` placeholders).
+  5. Confirm the Reports/Alerts daily stat table and hourly chart still group correctly on real data.
 
-**Reject criteria.** Abandon/redesign if: (a) the age-cutoff scan cannot be reconciled with the
-inode-preserving trim (it should — same `tail`/`cat` shape, one extra filter pass); or (b) the
-BSD-branch year-inference proves unreliable enough in practice (e.g., a box with a badly-skewed clock)
-that it produces materially wrong retention decisions — in that case, fall back to keeping the
+**Reject criteria (Phases 1-9).** Abandon/redesign if: (a) the age-cutoff scan cannot be reconciled
+with the inode-preserving trim (it should — same `tail`/`cat` shape, one extra filter pass); or (b)
+the BSD-branch year-inference proves unreliable enough in practice (e.g., a box with a badly-skewed
+clock) that it produces materially wrong retention decisions — in that case, fall back to keeping the
 year-less format for the `'BSD'` branch only and treat every `'BSD'`-sourced line as needing the
 line-count cap (not the age cap) until a better source of truth exists.
+
+**Phase 10 (follow-on, does not gate Accepted):** all §1.8 lower-priority sites converted; the two
+genuine latent wrong-year bugs (`dnsbl_alias_update()`, `pfBlockerNG_clearsqlite()`) proven fixed with
+a year-boundary test; `pfb_iso_timestamp()` simplified or removed with the widget still correct;
+`www/index.php:101`'s HTTP header untouched (verified, not just "didn't get to it").
