@@ -634,7 +634,12 @@ function pfBlockerNG_get_header($mode='') {
 		}
 	} else {
 		$dnsbl_status		= 'fa-solid fa-times-circle text-danger';
-		$dnsbl_msg		= "DNSBL is Disabled.";
+
+		// ADR-61: disabled-with-errors wording, from the ledger (never py_error.log).
+		$pfb_dnsbl_open = array_merge(pfb_sync_status_list_open($pfb['dbdir'], 'dnsbl'), pfb_py_sync_status_list_open($pfb['dnsbldir']));
+		$dnsbl_msg = empty($pfb_dnsbl_open)
+			? 'DNSBL is Disabled.'
+			: 'DNSBL is Disabled with errors! See the Failed Downloads list below.';
 	}
 
 	// Collect folder/file counts
