@@ -3103,11 +3103,9 @@ function pfb_logger($log, $logtype) {
 
 	$now = pfb_log_iso_timestamp();
 
-	// ADR-60: log/extraslog/errlog are always stamped now; the legacy opt-in
-	// '[ NOW ]' token + same-second '$pfb[pnow]' dedup (ADR.md S1.4) is retired. Scrub
-	// any leftover literal token, then insert the stamp AFTER any leading newlines --
-	// several callers (e.g. ADR-48's pfb_validate_log_line()) use a leading "\n" as a
-	// pure separator from the PREVIOUS write, not part of their own line's content.
+	// Scrub the legacy '[ NOW ]' token, then insert the stamp AFTER any leading
+	// newlines -- ADR-48's pfb_validate_log_line() (among other callers) uses a
+	// leading "\n" as a separator from the PREVIOUS write, not this line's content.
 	$log = str_replace([' [ NOW ]', 'NOW'], '', $log);
 	$lead = strspn($log, "\n");
 	$log = substr($log, 0, $lead) . "{$now} " . substr($log, $lead);
