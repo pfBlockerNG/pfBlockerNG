@@ -2508,10 +2508,10 @@ def reload(
     ``updateip`` (scope=ip force=true trigger=force — IP-side force reload),
     ``updatednsbl`` (scope=dnsbl force=true trigger=force — DNSBL-side force reload),
     ``cron`` (the legacy feed-cron pass via ``pfblockerng_sync_cron()`` — since PR #790 this
-    verb no longer runs the ADR-30 log reset/trim), or ``tick`` (the scheduled tick via
-    ``pfblockerng_tick()`` — NOW the only path that runs ``pfb_log_mgmt()``/``pfb_log_reset()``,
-    and only on an IDLE tick: skipped when this tick dispatches an update pass or one from an
-    earlier tick is still running, see ``pfb_update_pass_running()`` in ``pfblockerng.inc``).
+    verb no longer runs the log-maintenance trim), or ``tick`` (the scheduled tick via
+    ``pfblockerng_tick()`` — the only path that runs ``pfb_log_mgmt()``, and only on an IDLE
+    tick: skipped when this tick dispatches an update pass or one from an earlier tick is
+    still running, see ``pfb_update_pass_running()`` in ``pfblockerng.inc``).
 
     READINESS depends on whether a restart is expected (ADR-10):
 
