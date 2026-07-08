@@ -6425,7 +6425,8 @@ function pfb_dnsbl_unbracket_ip6(string $line): string {
 // '!' (ABP/uBlock), '//' (C-style) -- the three conventions feeds in this ecosystem mix
 // together regardless of the list's own declared format. Callers whose '#' handling
 // carries side effects (hpHosts/Spamhaus/CSV-header sniffing in the DNSBL hosts-format
-// branch) check '#' themselves first and do not route it through here.
+// branch) check '#' themselves first and do not route it through here. Blank detection is
+// empty($line) -- callers MUST trim() first, or a whitespace-only line won't match.
 function pfb_is_blank_or_comment_line(string $line): bool {
 	return empty($line) ||
 		str_starts_with($line, '#') ||
@@ -18792,11 +18793,9 @@ function sync_package_pfblockerng($cron='') {
 							$pfb_delta_batch,
 							$force_rpl
 						);
-						$log = '';
 					} else {
-						$log = " Updating [ {$final} ]: Aliastable file not found\n";
+						pfb_logger(" Updating [ {$final} ]: Aliastable file not found\n", 1);
 					}
-					pfb_logger("{$log}", 1);
 				}
 				pfb_logger("\n", 1);
 				unset($pfb_delta_mode, $pfb_delta_batch, $desired, $previous, $mirror_path, $force_rpl);
