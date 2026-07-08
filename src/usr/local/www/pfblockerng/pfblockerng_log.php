@@ -442,7 +442,7 @@ $section->addInput(new Form_Textarea(
 	NULL,
 	''
 ))->removeClass('form-control')->addClass('row-fluid col-sm-12')->setAttribute('rows', '30')->setAttribute('wrap', 'off')
-  ->setAttribute('style', 'background:#fafafa; width: 100%');
+  ->setAttribute('style', 'background:#fafafa; width: 100%')->setAttribute('readonly', 'readonly');
 
 // Scroll to end of page when loading logs
 $section->addInput(new Form_StaticText(
