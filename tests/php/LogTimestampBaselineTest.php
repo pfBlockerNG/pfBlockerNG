@@ -8,21 +8,23 @@ use PHPUnit\Framework\TestCase;
 /**
  * ADR-60 Phase 1 pinned TODAY's inconsistent, sometimes-absent, sometimes
  * year-less log timestamp behaviour (ADR.md §1.3) as the "before" oracle for
- * Phases 2-4's red→green proofs. Phases 2-3 have since flipped the
- * log/extraslog/errlog and ip_block/permit/matchlog/dnsbl_parse_err rows
- * (below) to pin the FIXED, always-on ISO-8601 behaviour instead.
+ * Phases 2-4's red→green proofs. Phases 2-4 have since flipped every row
+ * (below) to pin the FIXED, always-on ISO-8601 behaviour instead: all 10 log
+ * types now share the same 'Y-m-d H:i:s' shape.
  *
  * pfb_daemon_filterlog() reads php://stdin in an unbounded daemon loop and is
  * not directly callable from a unit test; its 'BSD'/'syslog' timestamp branch
  * (§1.3's ip_blocklog/ip_permitlog/ip_matchlog row) is pinned via (a) a grep
  * tripwire on the exact current source line, so this oracle goes red the
  * moment the formula changes again, and (b) a reproduction of that exact
- * formula against synthetic fixtures.
+ * formula against synthetic fixtures. pfb_log_event() (§1.8's dnsbl.log twin
+ * writer) IS directly callable and is exercised for real below.
  */
 #[CoversFunction('pfb_logger')]
 #[CoversFunction('pfb_parsed_fail')]
 #[CoversFunction('pfb_log_iso_timestamp')]
 #[CoversFunction('pfb_open_sqlite')]
+#[CoversFunction('pfb_log_event')]
 final class LogTimestampBaselineTest extends TestCase
 {
 	private const PFBLOCKERNG_INC = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc';
@@ -397,8 +399,136 @@ final class LogTimestampBaselineTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// The shared ISO-8601 helper -- wired in by Phases 2-3; Phase 4's python-side
-	// rows are the remaining unconverted consumers.
+	// §1.3 row: dnslog -- ADR-60 P4: pfb_log_event() (the Unbound-native-mode
+	// twin writer to the SAME dnsbl.log file pfb_unbound.py's python-mode
+	// writer targets, ADR.md §1.8) now stamps 'Y-m-d H:i:s' too. Unlike
+	// pfb_daemon_filterlog()/pfb_parsed_fail(), pfb_log_event() takes plain
+	// scalar args and IS directly callable -- exercised for real below.
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Seeds a minimal-but-real $pfb sandbox for pfb_log_event(): a temp dnsbl.log
+	 * plus two temp SQLite3 DB files for its 'dnsbl' (table 1) and 'lastevent'
+	 * (table 2) opens, with the SAME lastevent row pre-seeded so pfb_log_event()
+	 * takes its "duplicate entry" branch -- skipping pfb_dnsbl_parse() (a real-DNS
+	 * lookup + on-disk grep dependency unrelated to this phase's timestamp-only
+	 * change) entirely, without stubbing or touching pfb_log_event() itself.
+	 *
+	 * @return array{0:string,1:string} [$dnslog path, $lastevent groupname/details string]
+	 */
+	private function seedLogEventSandbox(string $domain, string $src_ip): array
+	{
+		$dnslog = $this->tempFile('pfb_log_event_dnslog_');
+		$resolverDb = $this->tempFile('pfb_log_event_resolver_');
+		$infoDb = $this->tempFile('pfb_log_event_info_');
+		$GLOBALS['pfb']['dnslog'] = $dnslog;
+		$GLOBALS['pfb']['dnsbl_resolver'] = $resolverDb;
+		$GLOBALS['pfb']['dnsbl_info'] = $infoDb;
+		$GLOBALS['pfb']['sqlite_timeout'] = 2000;
+		$GLOBALS['pfb']['errlog'] = $this->tempFile('pfb_log_event_errlog_');
+
+		$db = new SQLite3($resolverDb);
+		$db->exec('CREATE TABLE IF NOT EXISTS lastevent ( row INTEGER, groupname TEXT, entry TEXT, details TEXT )');
+		$stmt = $db->prepare('INSERT INTO lastevent (row, groupname, entry, details) VALUES (0, :g, :e, :d)');
+		$stmt->bindValue(':g', 'PreGroup', SQLITE3_TEXT);
+		$stmt->bindValue(':e', "{$domain}{$src_ip}", SQLITE3_TEXT);
+		$stmt->bindValue(':d', 'predetails', SQLITE3_TEXT);
+		$stmt->execute();
+		$db->close();
+
+		return [$dnslog, 'predetails'];
+	}
+
+	/**
+	 * Calls $work() with every raised PHP warning/notice captured (not printed),
+	 * then returns those messages MINUS pfb_open_sqlite()'s @chown/@chgrp-to-
+	 * 'unbound' noise (the 'unbound' OS user is absent on a dev/CI box -- same
+	 * harness-noise filter as DnsblParseComputeMetacharTest).
+	 *
+	 * @return string[] unexpected warning messages (empty = none)
+	 */
+	private function callCapturingUnexpectedWarnings(callable $work): array
+	{
+		$caught = [];
+		set_error_handler(function (int $errno, string $errstr) use (&$caught): bool {
+			$caught[] = $errstr;
+			return true;
+		});
+		try {
+			$work();
+		} finally {
+			restore_error_handler();
+		}
+
+		return array_values(array_filter($caught, static function (string $msg): bool {
+			return !str_contains($msg, 'Unable to find uid for unbound')
+				&& !str_contains($msg, 'Unable to find gid for unbound');
+		}));
+	}
+
+	public function testPfbLogEventWritesIsoTimestamp(): void
+	{
+		[$dnslog] = $this->seedLogEventSandbox('uuid-logevent-iso.example.com', '203.0.113.77');
+
+		$unexpected = $this->callCapturingUnexpectedWarnings(function () {
+			pfb_log_event('DNSBL-HTTPS', 'uuid-logevent-iso.example.com', '203.0.113.77', 'Unknown');
+		});
+		$this->assertSame([], $unexpected, 'expected no unrelated PHP warning from pfb_log_event(); got: ' . var_export($unexpected, true));
+
+		$written = (string) file_get_contents($dnslog);
+		$this->assertMatchesRegularExpression(
+			'/^DNSBL-HTTPS,\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},predetails,-\n$/',
+			$written,
+			"pfb_log_event() (Unbound-native-mode DNSBL logging) must write an ISO-8601 timestamp now, like the python-mode writer; got: {$written}"
+		);
+	}
+
+	/**
+	 * The concrete §1.8 "mixed-format" failure mode this phase closes: dnsbl.log
+	 * accumulates lines from BOTH writers (pfb_log_event() here; pfb_unbound.py's
+	 * make_timestamp() simulated as a synthetic python-shaped CSV row, since
+	 * Python is not callable from PHPUnit) -- after this phase, every line's
+	 * timestamp field (index 1 in both writers' CSV shapes) is uniformly ISO,
+	 * regardless of which DNSBL mode wrote it.
+	 */
+	public function testDnsblLogUniformAcrossBothWritersAfterFix(): void
+	{
+		$pySource = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfb_unbound.py');
+		$this->assertStringContainsString(
+			'datetime.now().strftime("%Y-%m-%d %H:%M:%S")',
+			$pySource,
+			"pfb_unbound.py's make_timestamp() format changed -- update this synthetic python-writer line to match"
+		);
+
+		[$dnslog] = $this->seedLogEventSandbox('uuid-logevent-mixed.example.com', '203.0.113.78');
+
+		$unexpected = $this->callCapturingUnexpectedWarnings(function () {
+			pfb_log_event('DNSBL-Full', 'uuid-logevent-mixed.example.com', '203.0.113.78', 'Unknown');
+		});
+		$this->assertSame([], $unexpected, 'expected no unrelated PHP warning from pfb_log_event(); got: ' . var_export($unexpected, true));
+
+		// Synthetic python-mode line -- same 'Y-m-d H:i:s' shape make_timestamp()
+		// now produces (pinned by the source tripwire above), same file.
+		$pyLine = 'DNSBL-python,' . date('Y-m-d H:i:s', time())
+			. ',uuid-pyrow.example.com,203.0.113.79,Python,VIP,TestGroup,uuid-pyrow.example.com,TestFeed,+,A';
+		file_put_contents($dnslog, "{$pyLine}\n", FILE_APPEND | LOCK_EX);
+
+		$lines = array_values(array_filter(explode("\n", (string) file_get_contents($dnslog)), static fn (string $l): bool => $l !== ''));
+		$this->assertCount(2, $lines, "expected exactly the PHP-writer line + the synthetic python-writer line; got: " . var_export($lines, true));
+
+		foreach ($lines as $line) {
+			$fields = explode(',', $line);
+			$this->assertMatchesRegularExpression(
+				'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/',
+				$fields[1],
+				"every dnsbl.log line's timestamp field must be ISO-8601 regardless of writer; got line: {$line}"
+			);
+		}
+	}
+
+	// -----------------------------------------------------------------------
+	// The shared ISO-8601 helper -- wired in by Phases 2-4 (every log-timestamp
+	// call site, PHP and python, now shares this same 'Y-m-d H:i:s' shape).
 	// -----------------------------------------------------------------------
 
 	public function testPfbLogIsoTimestampMatchesIso8601Format(): void

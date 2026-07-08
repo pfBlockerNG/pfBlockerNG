@@ -339,6 +339,43 @@ final class UnifiedFormatTest extends TestCase
 		);
 	}
 
+	/**
+	 * ADR-60 P4: verifies (not just asserts) unilog's python-sourced DNSBL row
+	 * needs zero further change once pfb_unbound.py's make_timestamp() goes
+	 * ISO -- pfb_unified_format_dnsbl() is a pure comma-join, so a NEW
+	 * year-bearing 'datetime' value renders through byte-identical, same as
+	 * the old no-year value already did above.
+	 *
+	 * Scenario:
+	 *   Given datetime='2026-07-08 14:30:45' (the new ISO-8601 shape).
+	 *   When  pfb_unified_format_dnsbl($fields).
+	 *   Then  the golden string carries that exact value unmodified.
+	 */
+	public function testUnifiedDnsblPassesThroughNewIsoTimestampUnmodified(): void
+	{
+		$fields = [
+			'l_type'   => 'DNSBL-python',
+			'datetime' => '2026-07-08 14:30:45',
+			'q_name'   => 'ads.example.com',
+			'q_ip'     => '10.0.0.5',
+			'p_type'   => 'Python',
+			'b_type'   => 'VIP',
+			'group'    => 'ADs',
+			'b_eval'   => 'ads.example.com',
+			'feed'     => 'EasyList',
+			'dup'      => '+',
+			'q_type'   => 'A',
+		];
+
+		$result = pfb_unified_format_dnsbl($fields);
+
+		$this->assertSame(
+			'DNSBL-python,2026-07-08 14:30:45,ads.example.com,10.0.0.5,Python,VIP,ADs,ads.example.com,EasyList,+,A',
+			$result,
+			'the new ISO-8601 datetime must pass through unmodified -- zero further change needed'
+		);
+	}
+
 	// -----------------------------------------------------------------------
 	// pfb_unified_format_dnsreply
 	// -----------------------------------------------------------------------
@@ -405,6 +442,36 @@ final class UnifiedFormatTest extends TestCase
 			'DNS-reply,06/24/26 10:00:00,cache,,A,30,good.example.com,10.0.0.5,93.184.216.34,US',
 			$result,
 			'absent o_type must coerce to empty and render as empty segment'
+		);
+	}
+
+	/**
+	 * ADR-60 P4: same "zero further change needed" verification as
+	 * testUnifiedDnsblPassesThroughNewIsoTimestampUnmodified, for the
+	 * DNS-reply formatter -- pfb_unified_format_dnsreply() is likewise a pure
+	 * comma-join with no timestamp-shape awareness.
+	 */
+	public function testUnifiedDnsreplyPassesThroughNewIsoTimestampUnmodified(): void
+	{
+		$fields = [
+			'l_type'   => 'DNS-reply',
+			'datetime' => '2026-07-08 14:30:45',
+			'm_type'   => 'cache',
+			'o_type'   => '',
+			'q_type'   => 'A',
+			'ttl'      => '30',
+			'q_name'   => 'good.example.com',
+			'q_ip'     => '10.0.0.5',
+			'r_addr'   => '93.184.216.34',
+			'iso_code' => 'US',
+		];
+
+		$result = pfb_unified_format_dnsreply($fields);
+
+		$this->assertSame(
+			'DNS-reply,2026-07-08 14:30:45,cache,,A,30,good.example.com,10.0.0.5,93.184.216.34,US',
+			$result,
+			'the new ISO-8601 datetime must pass through unmodified -- zero further change needed'
 		);
 	}
 }

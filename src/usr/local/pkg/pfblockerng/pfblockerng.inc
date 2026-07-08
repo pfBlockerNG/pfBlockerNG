@@ -13801,7 +13801,7 @@ function pfb_close_sqlite($db_handle) {
 function pfb_log_event($type, $domain, $src_ip, $req_agent) {
 	global $pfb;
 
-	$datereq	= date('M j H:i:s', time());
+	$datereq	= pfb_log_iso_timestamp();
 	$req_agent	= str_replace("'", '', $req_agent);
 
 	// Collect lastevent without saving new event
