@@ -1,0 +1,432 @@
+================================================================================
+ADR-61 PHASE 4 — RESULTS
+Python-side DNSBL parse-stage status file (pfb_py_status.json)
+================================================================================
+
+VERDICT: DONE-WITH-DEVIATION (two disclosed judgment calls: the missing
+planItems enumeration, replaced with my own from-source 13-site list; and a
+behaviour-preserving extraction needed for testability, which makes 4 of the
+touched sys.stderr.write sites show as MOVED, not pure-context, in the diff.
+Both are argued below with evidence -- neither narrows scope silently.)
+
+--------------------------------------------------------------------------------
+DEVIATION #0 — THE BRIEF'S "planItems item 2" 13-SITE ENUMERATION WAS ABSENT
+--------------------------------------------------------------------------------
+
+The brief repeatedly cites "planItems item 2" as containing the authoritative
+13-site enumeration with MANDATORY/ENCOURAGED/MAY-DEFER tiers and success-
+marker locations "already identified". No such list is present anywhere in
+the brief text I received -- only the ADR's own SS1.2 table (5 illustrative
+examples) and this phase's prompt file. Per CLAUDE.md's coverage-matrix rule
+("the planner enumerates ALL rows FROM THE SOURCE... never from memory"), I
+derived my OWN full enumeration by grepping every sys.stderr.write(...) site
+in pfb_unbound.py (60 total hits) and classifying each by whether it names a
+concrete file/subsystem identity plausible for stage="parse" (see COVERAGE
+MATRIX below for the full 13-row table with reasons). This is disclosed here
+rather than silently proceeding as if planItems had been honored -- the brief
+promised evidence that was not actually delivered, and I am flagging that gap
+per the ESCALATE contract ("environmental claim... probed before anything is
+built on it") rather than either stopping the whole phase or pretending the
+list existed. The 4 MANDATORY sites (zone/data/whitelist/hsts) the brief DID
+name explicitly are honored and match the ADR's own SS1.2 line citations.
+
+--------------------------------------------------------------------------------
+DEVIATION #1 — 4 MANDATORY LOAD BLOCKS EXTRACTED FOR TESTABILITY
+--------------------------------------------------------------------------------
+
+The zone/data/whitelist/hsts CSV-load try/except blocks lived inline inside
+`init_standard()`, which registers 5 pfSense-injected callbacks
+(`register_inplace_cb_reply*`), sets up real log files under
+`/var/log/pfblockerng/`, and starts real background threads (DB I/O worker,
+async I/O worker, reload watcher, control watcher) -- confirmed by reading
+lines 1073-1147ish of the current file. No existing test calls
+`init_standard()` (`grep -n "init_standard(" tests/test_pfb_unbound.py`
+returns nothing) -- the established pattern for testing logic embedded in
+`init_standard` is EXTRACTION into a standalone module-level function, exactly
+as `_load_safesearch_db()` already does (its own docstring: "Extracted out of
+init_standard (#714 FIX #6) so the load -- and its failure diagnostic -- are
+unit-testable without the full Unbound env/id init rig"). I mirrored this
+EXACT precedent for `_load_zone_db`/`_load_data_db`/`_load_whitelist_db`/
+`_load_hsts_db`, behaviour-preserving (same parse rules, same `pfb[...]`
+flags, same guard conditions moved verbatim). Consequence: `git diff` shows 4
+of the touched `sys.stderr.write(...)` lines as MOVED (a `-` at the old
+location, a `+` at the new one) rather than pure context, because the code
+physically relocated. I verified byte-identical wording holds regardless (see
+KILL-GATE REHEARSALS below, extracted-vs-added text diffed line-by-line) --
+the kill gate's SPIRIT (no wording change) holds; its LETTER (pure context
+lines) does not, because the letter assumed no extraction would be needed.
+Flagged here per "no self-exemption" rather than silently narrowing scope or
+silently violating the letter without saying so.
+
+--------------------------------------------------------------------------------
+WHAT CHANGED
+--------------------------------------------------------------------------------
+
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py
+  1. New status-ledger library (right after `_reload_write_applied()`, mirrors
+     its atomic-write idiom exactly): `_pfb_py_status_read_all()` /
+     `_pfb_py_status_write_all()` (private) and `pfb_py_status_open(facility,
+     item, stage, message, clock_fn=None)` / `pfb_py_status_close(facility,
+     item, stage)` (public). On-disk shape: a JSON ARRAY of `{facility, item,
+     stage, message, first_seen, last_seen}` dicts at `pfb["pfb_py_status"]`
+     (registered alongside the other `pfb_py_*` bare chroot-relative names,
+     next to `pfb_py_reject_stats`). Idempotent-by-key open (refresh, never
+     duplicate), safe no-op close on an absent key, fail-open read on
+     absent/corrupt/wrong-shape content.
+  2. Extracted `_load_zone_db(feed_group_db, feed_group_index) -> int`,
+     `_load_data_db(feed_group_db, feed_group_index) -> int`,
+     `_load_whitelist_db() -> None`, `_load_hsts_db() -> None` out of
+     `init_standard()` (placed immediately before it, mirroring where
+     `_load_safesearch_db` sits relative to its own call site). Each wires
+     `pfb_py_status_close("dnsbl", <file>, "parse")` on its own success path
+     and `pfb_py_status_open("dnsbl", <file>, "parse", <same message text
+     already sent to stderr>)` in its own except-block, alongside the
+     UNCHANGED `sys.stderr.write(...)` call -- never replacing it.
+     `init_standard()`'s call sites became `feedGroup_index =
+     _load_zone_db(feedGroupDB, feedGroup_index)` / `_load_data_db(...)` /
+     `_load_whitelist_db()` / `_load_hsts_db()`, with the SAME `not
+     dnsbl_built` / `pfb["python_hsts"]` guards preserved at the call site
+     (behaviour-preserving).
+  3. `dnsbl_build_from_manifest()` (the ADR-06 manifest path, the PRIMARY
+     parse path when a manifest is present -- called from both `init_standard`
+     and `_build_swap_snapshot`, the zero-downtime reload path) gained
+     `pfb_py_status_open("dnsbl", manifest_path, "parse", ...)` at its own 2
+     existing failure sites (JSON load failure, `build()` exception) and
+     `pfb_py_status_close("dnsbl", manifest_path, "parse")` on success --
+     entirely self-contained inside the one function, no cross-call-site
+     coordination needed. The legitimate "manifest absent, using legacy CSV
+     fallback" early-return path is UNTOUCHED (no ledger call there -- it is
+     not an error).
+
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+  New `pfb_py_sync_status_list_open(string $status_dir): array` (placed right
+  after `pfb_sync_status_dedup_check()`, the last function in the existing
+  ADR-61 PHP-writer section) -- reads `$status_dir/pfb_py_status.json`
+  (Python's OWN file; PHP NEVER writes it), parses the JSON-array-of-dicts
+  shape Python actually produces, and returns entries in the SAME shape as
+  `pfb_sync_status_list_open()`'s own return contract (`{facility, item,
+  stage, message, first_seen, last_seen}`) for Phase 6's merge. Every hostile
+  input (absent file, empty file, corrupt JSON, wrong top-level type, a
+  malformed individual entry) degrades to `[]` (or to dropping just the bad
+  entry), never a PHP warning/exception.
+
+- tests/test_adr61_py_status.py (new, 26 tests)
+  `TestPfbPyStatusOpenClose` (6), `TestPfbPyStatusReadDegradation` (5),
+  `TestLoadZoneDbLedgerWiring` (3), `TestLoadDataDbLedgerWiring` (2),
+  `TestLoadWhitelistDbLedgerWiring` (2), `TestLoadHstsDbLedgerWiring` (3),
+  `TestDnsblBuildFromManifestLedgerWiring` (4), `TestPfbPyStatusRegisteredPath`
+  (1, source-grep confirming the production default is a bare chroot-relative
+  filename, matching `pfb_py_reload`'s convention).
+
+- tests/php/PfbPySyncStatusReaderTest.php (new, 10 tests, class
+  PfbPySyncStatusReaderTest) -- 2 happy-path + 5 mandated hostile-input rows
+  (absent/empty/corrupt/wrong-top-level-type-object/wrong-top-level-type-
+  scalar) + 3 additional degrade-safety rows (well-formed-but-wrong-shape
+  entries all dropped, one malformed entry among valid ones dropped without
+  losing the valid one, missing optional fields default safely).
+
+- RESULTS/04_Results.txt (this file).
+
+--------------------------------------------------------------------------------
+THE NEW FILE — EXACT PATHS (carry-forward for Phase 5/6)
+--------------------------------------------------------------------------------
+
+- Chroot-relative (what pfb_unbound.py opens, registered in `pfb`):
+  `pfb_py_status.json`
+- Host-absolute (Unbound's chroot root, matching `$pfb['dnsbldir']` on the PHP
+  side): `/var/unbound/pfb_py_status.json`
+- PHP reader: `pfb_py_sync_status_list_open(string $status_dir): array` in
+  `src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc` (right after
+  `pfb_sync_status_dedup_check()`). Phase 6 calls it as
+  `pfb_py_sync_status_list_open($pfb['dnsbldir'])` and merges the returned
+  list with `pfb_sync_status_list_open($ledger_dir, 'dnsbl')`'s own list for
+  the DNSBL row's combined view. Both return the exact same entry shape, so
+  the merge is a plain `array_merge()` of the two lists.
+- Every Python-side entry uses `facility="dnsbl"`, `stage="parse"` -- the
+  PHP-owned DNSBL apply-stage key (`facility="dnsbl"`, `item="dnsbl"`,
+  `stage="apply"`, from Phase 3) uses a DIFFERENT stage string, so there is no
+  key collision between the two files even when merged.
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX — my own from-source 13-site enumeration (see DEVIATION #0)
+--------------------------------------------------------------------------------
+
+WIRED (6 sys.stderr.write sites, funneled into 6 ledger keys via the 5
+extracted/inline functions above):
+
+1. `_load_zone_db` / pfb_py_zone.txt load failure (line 932 `sys.stderr.write
+   "Failed to load: {}: {}"`) -- WIRED. Test:
+   TestLoadZoneDbLedgerWiring::test_load_failure_opens_entry_and_keeps_
+   freetext_log / test_success_after_failure_clears_the_entry.
+2. `_load_data_db` / pfb_py_data.txt load failure (line 970) -- WIRED. Test:
+   TestLoadDataDbLedgerWiring::test_load_failure_opens_entry /
+   test_success_after_failure_clears_the_entry.
+3. `_load_whitelist_db` / pfb_py_whitelist.txt load failure (line 1006) --
+   WIRED. Test: TestLoadWhitelistDbLedgerWiring::test_load_failure_opens_entry
+   / test_success_after_failure_clears_the_entry.
+4. `_load_hsts_db` / pfb_py_hsts.txt load failure (line 1019, init path) --
+   WIRED. Test: TestLoadHstsDbLedgerWiring::test_load_failure_opens_entry /
+   test_success_after_failure_clears_the_entry (also
+   test_hsts_disabled_never_opens_an_entry for the `python_hsts` OFF branch).
+5. `dnsbl_build_from_manifest` / manifest JSON unparseable (line ~5234,
+   "Failed to load DNSBL manifest") -- WIRED, same key as #6. Test:
+   TestDnsblBuildFromManifestLedgerWiring::test_corrupt_json_opens_entry_and_
+   keeps_freetext_log / test_missing_manifest_never_opens_an_entry (the
+   legitimate non-error absent-manifest case) / test_success_after_failure_
+   clears_the_entry.
+6. `dnsbl_build_from_manifest` / build() raises ("Failed to build DNSBL
+   structures from raw") -- WIRED, SAME key as #5 (item=manifest_path,
+   stage="parse" -- one manifest file per box, one key funnels both failure
+   shapes, mirroring Phase 3's own "funnel S/B/C into one decision"
+   precedent). Test: TestDnsblBuildFromManifestLedgerWiring::test_build_
+   exception_opens_the_same_key.
+
+DEFERRED (7, one-line reason each -- a documented coverage-matrix row, not a
+silent omission):
+
+7. Reload-swap-path (`_build_swap_snapshot`) user REGEX-ini load/compile/drop
+   lines (lines 488, 495, 508, 514) -- per-PATTERN granularity (name+pattern+
+   line#), not per-file; no stable single `item` key and no natural clear
+   site (a later reload with the same pattern simply absent doesn't "clear" a
+   past compile error, it just stops re-attempting it).
+8. Reload-swap-path (`_build_swap_snapshot`) hsts load failure (line 524) --
+   duplicates item="pfb_py_hsts.txt" from #4 but on a DIFFERENT code path
+   (the zero-downtime swap, not init); wiring both risks the two call sites
+   racing the SAME key with different "which pass produced this" semantics,
+   and `rebuild_and_swap()`'s own `None`-check already fails the swap closed
+   (old snapshot keeps serving) regardless -- the init-path wiring (#4) already
+   gives the operator visibility for the common (init) case.
+9. Module-capability failures (lines 1120/1123/1126/1129: threading/
+   ipaddress/maxminddb/sqlite3 import failures) -- one-time PROCESS-level
+   capability failures fixed only by a package reinstall/interpreter restart,
+   not a per-attempt item an operator can retry; no natural clear site short
+   of the next module load (symmetric-ownership rule has nothing to pair
+   against).
+10. Init-path user REGEX-ini per-pattern compile/drop lines (lines 1480, 1487,
+    1511) -- same reasoning as #7 (per-pattern granularity, no stable key, no
+    natural clear point).
+11. noAAAA / GP-Bypass config-section parse issues (lines 1533, 1538, 1551) --
+    small optional ini sections, not core DNSBL feed parsing; same per-row/
+    no-natural-clear-site reasoning as #7/#10, lower value to wire.
+12. sqlite3/MaxMind DB open failures (lines 1646, 1654, 1662) -- a DIFFERENT
+    subsystem class (DB connectivity), not feed/file parsing; `stage="parse"`
+    would misrepresent the failure class, and this phase's file is scoped
+    exclusively to the DNSBL parse-stage signal (ADR SS2.3).
+13. Background-thread/log-listener/applied-marker-write bring-up failures
+    (lines 352, 1712, 1723, 1738, 1754, plus the log-listener start at
+    line 2915) -- one-time subsystem bring-up failures at module init, no
+    natural clear site (same reasoning as #9); the applied-marker write
+    failure (352) is additionally about the RELOAD-APPLY mechanism itself,
+    not a parse failure -- wiring it into a "parse" stage entry would
+    misrepresent the failure class the same way #12 would.
+
+--------------------------------------------------------------------------------
+GATES — exact commands + pasted output tails
+--------------------------------------------------------------------------------
+
+$ python3 -m pytest -q
+======================= 2460 passed, 4 skipped in 41.41s =======================
+(2460 = the pre-existing 2434 + this phase's 26 new tests in
+tests/test_adr61_py_status.py; the 4 skips are the SAME pre-existing baseline.)
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check .
+198 files already formatted
+
+$ python3 -m mypy tests/
+Success: no issues found in 84 source files
+
+$ php -l src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+No syntax errors detected in src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+
+$ php -l tests/php/PfbPySyncStatusReaderTest.php
+No syntax errors detected in tests/php/PfbPySyncStatusReaderTest.php
+
+$ vendor/bin/phpunit
+Tests: 2498, Assertions: 19226, PHPUnit Deprecations: 2, Skipped: 4.
+(2498 = Phase 3's baseline 2488 + this phase's 10 new tests.)
+
+$ vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+[OK] No errors
+
+$ vendor/bin/phpcs -d memory_limit=1G --standard=phpcs.xml.dist src/
+(no output; EXIT=0 -- clean)
+
+$ python3 scripts/check_comment_narration.py --diff origin/devel
+(no output; EXIT=0)
+
+$ python3 scripts/check_version_literals.py --diff origin/devel
+(no output; EXIT=0)
+
+$ python3 scripts/check_appliance_python.py
+(no output; EXIT=0 -- confirmed pfb_unbound.py is still the sole recognized
+Python-on-appliance exception: `grep -n "pfb_unbound" scripts/check_appliance_
+python.py` shows it named explicitly in the script's own exemption comment
+and message string, not merely assumed.)
+
+Shell/Markdown canonical gates: SKIPPED -- no .sh/.md files touched this
+phase (confirmed via `git status --short`: 2 modified .py/.inc files, 2 new
+.py/.php test files).
+
+--------------------------------------------------------------------------------
+RED -> GREEN PROOF (executed both directions, pasted)
+--------------------------------------------------------------------------------
+
+PYTHON SIDE -- reverted src/usr/local/pkg/pfblockerng/pfb_unbound.py to its
+Phase-3 committed state (`git checkout HEAD --`), tests left in place:
+
+RED:
+$ python3 -m pytest tests/test_adr61_py_status.py -q
+25 failed, 1 passed in 0.18s
+(24 "Call to undefined function/attribute" style AttributeErrors on
+pfb_unbound.pfb_py_status_open/close, plus 1 assertion failure on the
+source-grep test asserting the new pfb["pfb_py_status"] registration line
+exists -- all for the exact reason this phase's change addresses.)
+
+Restored the Phase-4 implementation (`cp` from a pre-saved backup, confirmed
+via `grep -c pfb_py_status` returning 25 hits again):
+
+GREEN:
+$ python3 -m pytest tests/test_adr61_py_status.py -q
+============================== 26 passed in 0.30s ==============================
+
+PHP SIDE -- reverted src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc to
+its Phase-3 committed state:
+
+RED:
+$ vendor/bin/phpunit --filter PfbPySyncStatusReaderTest
+Tests: 10, Assertions: 0, Errors: 10, PHPUnit Deprecations: 2.
+(all 10: "Error: Call to undefined function pfb_py_sync_status_list_open()")
+
+Restored the Phase-4 reader (re-applied the same Edit), confirmed via
+`git diff HEAD --stat` matching the pre-revert state exactly:
+
+GREEN:
+$ vendor/bin/phpunit --filter PfbPySyncStatusReaderTest
+..........                                                        10 / 10 (100%)
+Tests: 10, Assertions: 20, PHPUnit Deprecations: 2.
+
+(NOTE: `git checkout HEAD -- .` was used once during this red/green exercise
+and inadvertently reverted BOTH tracked files at once, since both had
+uncommitted changes -- caught immediately via `grep -c pfb_py_status` / `grep
+-c pfb_py_sync_status_list_open` returning 0, both files restored from a
+pre-saved backup / re-applied Edit before proceeding, and the full gate suite
+re-run afterward to confirm the restore was exact -- see GATES above, all
+still green post-restore.)
+
+--------------------------------------------------------------------------------
+KILL-GATE REHEARSALS (own rehearsal; orchestrator repeats independently)
+--------------------------------------------------------------------------------
+
+1. Every touched sys.stderr.write(...) site's TEXT is byte-identical to
+   origin/devel, despite 4 of them showing as moved (not pure context) in the
+   diff -- see DEVIATION #1 for why extraction was necessary. Verified by
+   extracting the (format-string, .format(...)-args) pair for every "Failed
+   to parse:"/"Failed to load:" site from BOTH origin/devel and the working
+   tree via a small regex script and diffing the two normalized sets:
+
+   OLD (origin/devel) set == NEW (working tree) set, both exactly:
+     "[pfBlockerNG]: Failed to load: {}: {}" | pfb["pfb_py_data"], e
+     "[pfBlockerNG]: Failed to load: {}: {}" | pfb["pfb_py_hsts"], e
+     "[pfBlockerNG]: Failed to load: {}: {}" | pfb["pfb_py_ss"], e
+     "[pfBlockerNG]: Failed to load: {}: {}" | pfb["pfb_py_whitelist"], e
+     "[pfBlockerNG]: Failed to load: {}: {}" | pfb["pfb_py_zone"], e
+     "[pfBlockerNG]: Failed to parse: {}: {}" | pfb["pfb_py_data"], row
+     "[pfBlockerNG]: Failed to parse: {}: {}" | pfb["pfb_py_ss"], row
+     "[pfBlockerNG]: Failed to parse: {}: {}" | pfb["pfb_py_whitelist"], row
+     "[pfBlockerNG]: Failed to parse: {}: {}" | pfb["pfb_py_zone"], row
+     "[pfBlockerNG]: Failed to parse: noAAAA: row:{} line:{}" | key, line
+   PASS -- identical sets; zero wording drift.
+
+   The 2 manifest-build sites (dnsbl_build_from_manifest) show as PURE
+   CONTEXT (no `-` prefix at all) in `git diff origin/devel`, confirmed:
+   $ git diff origin/devel -- src/.../pfb_unbound.py | grep -B2 -A2 \
+     "Failed to load DNSBL manifest\|Failed to build DNSBL structures"
+   -- both sys.stderr.write lines appear with no leading `-`, only new `+`
+   lines (the ledger calls) added directly after each. PASS.
+
+2. No PHP code path writes pfb_py_status.json; no Python code path writes
+   pfb_sync_status.json:
+   $ grep -rn "pfb_py_status" src/.../pfblockerng.inc src/.../pfblockerng.sh
+   (no hits -- PHP touches the new file ONLY via the read-only reader in
+   pfblockerng_extra.inc)
+   $ grep -n "pfb_sync_status" src/.../pfb_unbound.py
+   (one hit: a comment mentioning the OTHER file's name for context, no write)
+   PASS both directions.
+
+3. If DONE-WITH-DEVIATION was invoked... N/A here (no chroot-fallback
+   invoked; the two deviations above are about a missing planner artifact and
+   a disclosed testability-driven extraction, not the ADR SS7 reject
+   criteria). The chroot boundary itself was NOT genuinely hard: writing to a
+   bare chroot-relative filename via the standard atomic-temp-then-rename
+   idiom (identical to the EXISTING pfb_py_reload_applied marker, which
+   already works in production) required no new mechanism -- confirmed by
+   direct code inspection of `_reload_write_applied()`'s working precedent,
+   no live-box attempt needed since the write path is byte-for-byte the same
+   idiom already shipping.
+
+--------------------------------------------------------------------------------
+DEVIATIONS / JUDGMENT CALLS (summary; full detail above)
+--------------------------------------------------------------------------------
+
+1. The brief's referenced "planItems item 2" 13-site enumeration was absent
+   from the text I received; I derived my own 13-site enumeration from source
+   (grep of every sys.stderr.write site + classification), documented in
+   full in the COVERAGE MATRIX above, per CLAUDE.md's "enumerate from source,
+   never from memory" rule. The 4 explicitly-named MANDATORY sites (zone/
+   data/whitelist/hsts) match the brief's own citations exactly.
+2. Extracted 4 load blocks out of init_standard() (mirroring the existing
+   _load_safesearch_db precedent) so they are independently unit-testable --
+   required because no test calls init_standard() directly (it registers
+   pfSense callbacks + starts real background threads), and there was no
+   other way to produce an executed fail-before/pass-after run against these
+   4 MANDATORY sites otherwise. This makes 4 sys.stderr.write sites show as
+   MOVED rather than pure-context in the diff; verified byte-identical
+   wording via a normalized before/after comparison (see KILL-GATE #1).
+3. dnsbl_build_from_manifest() wiring (encouraged, not brief-mandated) added
+   as a 5th/6th site because it is the CURRENT PRIMARY parse path (ADR-06
+   manifest, used whenever a manifest is present) -- arguably more load-
+   bearing in practice than the legacy CSV fallback the 4 mandatory sites
+   cover, and it required zero cross-function coordination (fully self-
+   contained inside the one function).
+
+No chroot-related fallback (ADR SS7) was invoked -- the boundary was not
+genuinely hard; the existing pfb_py_reload_applied marker convention
+transposed directly.
+
+--------------------------------------------------------------------------------
+CARRY-FORWARD FOR PHASE 5/6
+--------------------------------------------------------------------------------
+
+- New file: chroot-relative `pfb_py_status.json`; host-absolute
+  `/var/unbound/pfb_py_status.json` (= `{$pfb['dnsbldir']}/pfb_py_status.json`
+  on the PHP side).
+- PHP reader: `pfb_py_sync_status_list_open(string $status_dir): array` in
+  pfblockerng_extra.inc, returns the identical entry shape as
+  `pfb_sync_status_list_open()`. Phase 6 merges
+  `pfb_py_sync_status_list_open($pfb['dnsbldir'])` with
+  `pfb_sync_status_list_open($ledger_dir, 'dnsbl')` via a plain array concat
+  for the DNSBL row's combined "any open entry" check and reporting list.
+- Every Python-side entry is `facility="dnsbl"`, `stage="parse"` -- distinct
+  from Phase 3's PHP-owned `facility="dnsbl"`, `item="dnsbl"`,
+  `stage="apply"` key, so a merge never collides.
+- Python-side writer/clearer API for any FUTURE site Phase 5/6 (or a later
+  ADR) wants to wire: `pfb_py_status_open(facility, item, stage, message,
+  clock_fn=None)` / `pfb_py_status_close(facility, item, stage)`, both
+  module-level in pfb_unbound.py, right after `_reload_write_applied()`.
+- Phase 5 (tick reconciliation) is APPLY-stage only per ADR SS2.4 and does
+  NOT touch this phase's parse-stage file at all -- no carry-forward action
+  needed there.
+- Phase 6 (widget) needs: the reporting-list item identity for a
+  Python-side entry is a FILE PATH string (e.g. "pfb_py_zone.txt"), not an
+  alias/group name -- Phase 6's deep-link logic (which maps `item` to an
+  alias/group editor page) will not find a match for these entries and should
+  render them as plain text (no link), exactly as today's `pfBlockerNG_
+  get_failed()` already does for any `item` it can't resolve to a known
+  alias/group.
+- The 7 deferred sites (COVERAGE MATRIX above) remain freetext-only
+  (py_error.log); no future phase of THIS ADR is expected to wire them, but a
+  future ADR extending the ledger's scope should re-derive this list fresh
+  from source rather than reusing it from memory.

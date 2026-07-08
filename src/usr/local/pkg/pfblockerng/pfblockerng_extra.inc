@@ -2923,6 +2923,50 @@ function pfb_sync_status_dedup_check(string $log_path, string $ledger_dir): void
 	}
 }
 
+/**
+ * pfb_py_sync_status_list_open — read-only reader for Python's OWN status ledger
+ * (pfb_py_status.json, written EXCLUSIVELY by pfb_unbound.py -- this function never
+ * writes it), returning entries in the SAME shape as pfb_sync_status_list_open() so
+ * the widget can merge both sources. Every degenerate input (absent/unreadable file,
+ * non-array JSON, a malformed entry) reads as "no open Python-side entries" -- never
+ * a PHP warning/exception.
+ *
+ * @param string $status_dir Directory that contains pfb_py_status.json (the Unbound
+ *                            chroot dir, e.g. $pfb['dnsbldir']).
+ * @return list<array{facility:string,item:string,stage:string,message:string,first_seen:int,last_seen:int}>
+ */
+function pfb_py_sync_status_list_open(string $status_dir): array
+{
+	$path = $status_dir . '/pfb_py_status.json';
+	if (!is_file($path)) {
+		return [];
+	}
+	$raw = @file_get_contents($path);
+	if ($raw === FALSE || $raw === '') {
+		return [];
+	}
+	$data = json_decode($raw, TRUE);
+	if (!is_array($data) || !array_is_list($data)) {
+		return [];	// wrong top-level type (object/scalar) -- fail-open, never throw
+	}
+
+	$out = [];
+	foreach ($data as $entry) {
+		if (!is_array($entry) || !isset($entry['facility'], $entry['item'], $entry['stage'])) {
+			continue;	// malformed entry -- skip it, never abort the whole read
+		}
+		$out[] = [
+			'facility'   => (string) $entry['facility'],
+			'item'       => (string) $entry['item'],
+			'stage'      => (string) $entry['stage'],
+			'message'    => (string) ($entry['message'] ?? ''),
+			'first_seen' => (int) ($entry['first_seen'] ?? 0),
+			'last_seen'  => (int) ($entry['last_seen'] ?? 0),
+		];
+	}
+	return $out;
+}
+
 // ---------------------------------------------------------------------------
 // ADR-53 — pure suppression-line validator (v4 mask lift /8-/32)
 // ---------------------------------------------------------------------------
