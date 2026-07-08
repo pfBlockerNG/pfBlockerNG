@@ -28,6 +28,13 @@ def test_src_only_no_tests_fires_rule1() -> None:
     assert "tests/**" in violations[0], f"rule-1 message must name tests/**; got {violations[0]!r}"
 
 
+def test_violation_message_says_rerun_after_labeling() -> None:
+    # issue #969: the remedy must work as written — labels/body are re-read live,
+    # so the hint tells the author a plain re-run suffices after labeling.
+    violations = ccp.evaluate(["src/usr/local/pkg/pfblockerng/pfblockerng.inc"])
+    assert "re-run this check" in violations[0], f"hint must say re-run works; got {violations[0]!r}"
+
+
 def test_src_with_paired_test_passes() -> None:
     # Discriminating sibling of the above: adding the paired test clears rule 1.
     violations = ccp.evaluate(["src/usr/local/pkg/pfblockerng/pfblockerng.inc", "tests/test_x.py"])
