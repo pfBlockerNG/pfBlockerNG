@@ -291,21 +291,22 @@ def test_load_does_not_html_escape_content(webui: WebUI, smoke_vm: helpers.Smoke
 
 
 def test_load_does_not_double_escape_write_time_escaped_lines(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
-    """``act=load`` must not add a SECOND escape layer atop write-time-escaped lines.
+    """``act=load`` must not add a SECOND escape layer atop already-escaped-looking text.
 
-    ``pfb_validate_log_line()`` (ADR-48, pfblockerng.inc) already htmlspecialchars()s
-    reject-line fields at WRITE time for pfblockerng.log/error.log -- that write-time
-    escape is untouched by this fix and stays correct. Before this fix, load()'s OWN
-    htmlspecialchars() ran a SECOND time over that already-escaped text, turning
-    "&lt;" into "&amp;lt;" -- a genuine double-escape distinct from the never-escaped
-    case above. Seeds a line shaped like pfb_validate_log_line's output (pre-escaped
-    '&lt;'/'&amp;') and asserts it survives load() with no additional escaping.
+    Regression pin for a defect that existed when ``pfb_validate_log_line()`` (ADR-48,
+    pfblockerng.inc) still htmlspecialchars()'d reject-line fields at WRITE time: load()'s
+    OWN htmlspecialchars() ran a SECOND time over that already-escaped text, turning "&lt;"
+    into "&amp;lt;". pfb_validate_log_line() no longer escapes (a later follow-up dropped
+    that call for the same reason load() dropped its own -- the sole renderer is a textarea
+    that never parses HTML), so this fixture is now synthetic rather than something the
+    current write path actually produces; it's kept as a general invariant pin: load() must
+    never re-escape text that merely LOOKS pre-escaped, regardless of its source.
     """
     vm = smoke_vm
     target = _throwaway_log("error.log")
     marker = helpers.unique_domain("dblesc")
-    # Mirrors pfb_validate_log_line()'s write-time-escaped shape for a REJECT line
-    # whose detail field originally contained '<' '>' '&'.
+    # Synthetic: shaped like pfb_validate_log_line's OLD write-time-escaped output (a REJECT
+    # line whose detail field originally contained '<' '>' '&') -- see docstring above.
     expected = f"pfb_validate: REJECT feed=x stage=y reason=z detected=&lt;{marker}&gt; &amp; done\n"
     _seed_file(vm, target, expected)
     try:

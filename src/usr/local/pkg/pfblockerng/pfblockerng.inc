@@ -877,13 +877,15 @@ function pfb_archive_missing_tool(string $canonical_type, ?callable $checker = N
 // greppable line naming feed/stage/reason + raw detected detail. $stage is one of
 // mime|structural|inner|member|plaintext|entries (caller-owned vocabulary, unvalidated here).
 // Shape: "\npfb_validate: REJECT feed=<feed> stage=<stage> reason=<reason> detected=<detail>"
-// (leading "\n" per pfb_logger() convention). Each value is escaped independently: control
-// bytes -> space (blocks forging/splitting the line via attacker-influenced detail), then
-// htmlspecialchars(). Pure: string in, string out, no I/O, no globals.
+// (leading "\n" per pfb_logger() convention). Each value has control bytes -> space (blocks
+// forging/splitting the line via attacker-influenced detail) — HTML-escaping is NOT applied
+// here: the sole renderer of this line (the Logs tab's #fileContent textarea) never parses
+// HTML, so escaping here only mangled the operator's view of the real bytes. Pure: string in,
+// string out, no I/O, no globals.
 function pfb_validate_log_line(string $feed, string $stage, string $reason, string $detail = ''): string {
 	[$feed, $stage, $reason, $detail] = array_map(
 		static function (string $value): string {
-			return htmlspecialchars(preg_replace('/[\x00-\x1F\x7F]/', ' ', $value) ?? '');
+			return preg_replace('/[\x00-\x1F\x7F]/', ' ', $value) ?? '';
 		},
 		[$feed, $stage, $reason, $detail]
 	);
