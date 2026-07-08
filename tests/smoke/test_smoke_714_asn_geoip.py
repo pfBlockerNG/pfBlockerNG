@@ -344,15 +344,15 @@ def test_714_b3_v6_regex_parser_success_not_double_counted(deployed_vm: SmokeVM)
     hex letter (a-f) never reaches the heuristic regardless of this bug.
 
     Given a v6 feed with two syntactically valid, hex-letter-free IPv6 addresses
-      (2000:0:0:0:0:0:0:1 / 2000:0:0:0:0:0:0:2 — outside the RFC 3849 documentation
-      range specifically because that range's 'db8' hextet contains hex letters),
-      via a URL with no path extension (forces $pftype='regex', matching the live
-      qfeeds_ip_list_v6 case),
+      (2000::1 / 2000::2 — outside the RFC 3849 documentation range specifically
+      because that range's 'db8' hextet contains hex letters), via a URL with no
+      path extension (forces $pftype='regex', matching the live qfeeds_ip_list_v6
+      case),
     When a Force IP reload parses the feed,
     Then the pfBlockerNG log gains NO "[!] Parse Errors" line for this feed — both
       addresses were collected, not flagged.
     """
-    good_lines = ["2000:0:0:0:0:0:0:1", "2000:0:0:0:0:0:0:2"]
+    good_lines = ["2000::1", "2000::2"]
     body = "\n".join(good_lines) + "\n"
     # No '.' in the name -> pathinfo() finds no extension -> $pftype='regex',
     # reproducing the live qfeeds_ip_list_v6 (query-string-only URL) case.
@@ -367,10 +367,13 @@ def test_714_b3_v6_regex_parser_success_not_double_counted(deployed_vm: SmokeVM)
         h.reload(deployed_vm, "update")
 
         # THEN: both addresses reached the pf table (proves they were actually parsed
-        # and collected, not silently dropped by some other mechanism).
+        # and collected, not silently dropped by some other mechanism). By-VALUE
+        # comparison (h.ip_in): pf/pfBlockerNG may render a compressed literal
+        # differently (e.g. an equivalent expanded form), which a substring check
+        # would miss.
         members = h.wait_pfctl_table(deployed_vm, spec.alias)
         for ip in good_lines:
-            assert any(ip in m for m in members), f"expected valid IPv6 {ip} in pf table {spec.alias}: {members}"
+            assert h.ip_in(ip, members), f"expected valid IPv6 {ip} in pf table {spec.alias}: {members}"
 
         # AND: no parse-error line was emitted for this feed.
         after = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)

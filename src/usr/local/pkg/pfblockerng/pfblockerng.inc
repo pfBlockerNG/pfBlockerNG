@@ -6371,11 +6371,9 @@ function pfb_dnsbl_strip_scheme(string $line, bool $strict = FALSE): string|fals
 	if ($strict) {
 		$scheme = substr($line, 0, $pos);
 		if ($scheme === '') {
-			// A bare '://' (empty scheme) in front of a bracketed IPv6 literal is a
-			// known DandelionSprouts-style "block regardless of scheme" convention --
-			// let ONLY that exact shape through so pfb_dnsbl_unbracket_ip6() (which
-			// runs later in the caller) can unwrap it. Any other empty-scheme line is
-			// still an invalid URI and rejected, same as before.
+			// DandelionSprouts' "block regardless of scheme" shape: a bare '://' in
+			// front of a bracketed IPv6 literal. Let ONLY this exact form through for
+			// pfb_dnsbl_unbracket_ip6() to unwrap; any other empty scheme is rejected.
 			$remainder = substr($line, $pos + 3);
 			if (str_starts_with($remainder, '[') && str_ends_with($remainder, ']') &&
 			    is_ipaddrv6(substr($remainder, 1, -1))) {
@@ -18075,8 +18073,10 @@ function sync_package_pfblockerng($cron='') {
 							// line, e.g. "[!] Parse Errors [ 1 ]" through "[ 967 ]" for a single feed.
 							// Names the feed: this is logtype 2 (also written to the error log,
 							// which has no surrounding "[ header ] Reload..." context of its own).
-							// Leading \n: this always follows the unterminated "Reload . completed .."
-							// progress line above.
+							// Leading \n: closes the unterminated "Reload . completed .." progress
+							// line above (a rarely-configured per-list Pre Script tunable can print
+							// its own newline-terminated line first instead -- one harmless extra
+							// blank line in that case, not a rejoin).
 							if ($parse_fail > 0) {
 								pfb_logger("\n[!] Parse Errors [ {$header} ]: {$parse_fail}\n", 2);
 							}
