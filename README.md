@@ -41,22 +41,17 @@ under the **Apache License 2.0**.
 - **DNSBL** — domain blocklists enforced inside the Unbound resolver;
   sinkhole-VIP or NULL responses, SafeSearch enforcement, and per-name reports.
 - **Adblock Plus / EasyList feeds** — full ABP syntax: allow (`@@`) exceptions,
-  regex rules, and `$important` / `$badfilter` precedence
-  ([ADR-07](.ADRs/ADR_07_ABP_DNSBL_Support/ADR.md)).
+  regex rules, and `$important` / `$badfilter` precedence.
 - **IDN homoglyph protection** — blocks deceptive cross-script look-alike
-  domains, e.g. a Cyrillic `аpple`
-  ([ADR-08](.ADRs/ADR_08_Homoglyph_Protection/ADR.md)).
+  domains, e.g. a Cyrillic `аpple`.
 - **Zero-downtime DNSBL updates** — updates swap the blocklist without
-  restarting Unbound; queries keep flowing
-  ([ADR-10](.ADRs/ADR_10_Zero_Downtime_DNSBL/ADR.md)).
+  restarting Unbound; queries keep flowing.
 - **Aggregated ("Uber") aliases** — opt-in aliases holding the combined,
   CIDR-aggregated set of a whole action type, for use by your own rules or an
-  external service such as HAProxy ([ADR-11](.ADRs/ADR_11_Uber_Aliases/ADR.md)).
-- **Update Hooks** — run your own `pre`/`post` scripts on each update pass
-  ([ADR-12](.ADRs/ADR_12_Update_Hooks/ADR.md)).
+  external service such as HAProxy.
+- **Update Hooks** — run your own `pre`/`post` scripts on each update pass.
 - **Automatic DNSBL sinkhole VIP** — pfBlockerNG can own the sinkhole Virtual
-  IP for you instead of a manual setup
-  ([ADR-13](.ADRs/ADR_13_Auto_DNSBL_VIP/ADR.md)).
+  IP for you instead of a manual setup.
 
 > [!WARNING]
 > **The `pfB_` alias prefix is reserved.** pfBlockerNG recognizes its own
@@ -102,10 +97,8 @@ by Netgate — see [Other installation methods](#other-installation-methods).
 
 ## Version upgrades
 
-pfBlockerNG has a **Software** tab
-([ADR-19](.ADRs/ADR_19_Update_Channel_Panel/ADR.md)): it shows your channel and
-installed version against the repository's latest, and can check for and
-install updates for you. Upgrades always stay **within the same channel**
+The **Software** tab shows your channel and installed version against the
+repository's latest, and can check for and install updates for you. Upgrades always stay **within the same channel**
 (stable to stable, devel to devel, nightly to nightly); to switch channels,
 reinstall as in [Installation](#installation). A daily background check also
 raises a pfSense notification — once per new version — when a newer build is
@@ -166,7 +159,7 @@ pick it as a `post` hook:
 ```
 
 More recipes (e.g. notifying a webhook), the trust model, and the full
-contract are in [ADR-12](.ADRs/ADR_12_Update_Hooks/ADR.md) and
+contract are in
 [CONTRIBUTING.md](CONTRIBUTING.md#update-hooks-prepost-update-scripts-adr-12).
 
 ### DNSBL Control (CLI)
@@ -244,7 +237,6 @@ directly — `make package` in `net/pfSense-pkg-pfBlockerNG` (stable) or
 
 - **Using pfBlockerNG:**
   [Netgate documentation](https://docs.netgate.com/pfsense/en/latest/packages/pfblocker.html).
-- **Design decisions** (one record per feature/subsystem): [`.ADRs/`](.ADRs/).
 - **Developing, testing, and releasing this package:**
   [CONTRIBUTING.md](CONTRIBUTING.md).
 
