@@ -372,10 +372,11 @@ jobs:
               continue
             fi
 
-            if [ -n "$MATCH" ]; then
+            if [ -n "$MATCH" ] && [ "${MATCH#* }" = "CLOSED" ]; then
               EXISTING_NUM=${MATCH% *}
               echo "  [reopen] Reopening tracking issue #${EXISTING_NUM} for ${CHANNEL} ${VERSION}"
-              gh issue reopen "$EXISTING_NUM" --repo "$REPO"
+              gh issue reopen "$EXISTING_NUM" --repo "$REPO" \
+                || echo "  ::warning::Could not reopen tracking issue #${EXISTING_NUM}"
               continue
             fi
 
