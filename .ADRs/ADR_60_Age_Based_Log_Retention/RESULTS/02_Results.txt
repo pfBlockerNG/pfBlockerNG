@@ -8,7 +8,7 @@ no ACTION-PLAN item skipped).
 --------------------------------------------------------------------------------
 WHAT CHANGED
 --------------------------------------------------------------------------------
-Commit: (pending -- see COMMIT below)
+Commit: f41f5ef1 (code+tests), 1b803438 (this handoff)
 Branch: adr/60-age-based-log-retention (pushed directly, no PR needed)
 
 - src/usr/local/pkg/pfblockerng/pfblockerng.inc
@@ -191,7 +191,7 @@ COVERAGE MATRIX
 | errlog writer #2: pfb_open_sqlite() bypass    | testErrlogBypassWriteAlwaysStamped (tripwire + repro)    |
 | pfb_failures() header[4] regression           | PfbLoggerIsoTimestampTest::testFailuresGrepMatchesIsoLogTimestamp (real pfb_logger()+pfb_failures() end-to-end) |
 | ISO format itself (leftover from Phase 1)     | testLogTimestampIsIso8601NotUsStyle, testPfbLogIsoTimestampMatchesIso8601Format (unchanged) |
-| leading-newline-as-separator convention (ADR-48 pfb_validate_log_line() callers) | PfbValidateLogTest (3), PfbEmitEntryRejectStatsTest (2 of 6 needed updating), LiveLogStdoutTest (2 of 6) -- see DEVIATIONS #3 |
+| leading-newline-as-separator convention (ADR-48 pfb_validate_log_line() callers) | PfbValidateLogTest (3), PfbEmitEntryRejectStatsTest (3 of 6 needed updating), LiveLogStdoutTest (2 of 6) -- see DEVIATIONS #3 |
 | case 5 debugger (/tmp/pfb_debug) no longer double-stamped | manual diff-read only; not one of the 10 tracked types, no existing test, out of ADR scope |
 
 --------------------------------------------------------------------------------
