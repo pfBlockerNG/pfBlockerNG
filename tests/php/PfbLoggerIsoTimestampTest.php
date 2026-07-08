@@ -10,11 +10,13 @@ use PHPUnit\Framework\TestCase;
  * ambiguous US 'm/j/y H:i:s' (issue: American-style dates in user-facing logs).
  *
  * ADR-60 P2: every write is now unconditionally stamped -- the legacy opt-in
- * '[ NOW ]' token + same-second '$pfb[pnow]' dedup is retired. A caller still
- * embedding the old token gets it defensively scrubbed to nothing, never a dead
- * artifact. The shipped pfb_logger() is exercised against a temp log file so the
- * on-disk side-effect is asserted (not coverage theater). The shared
- * $GLOBALS['pfb'] keys are saved/restored so the suite stays order-independent.
+ * '[ NOW ]' token + same-second '$pfb[pnow]' dedup is retired. issue #1008: every
+ * caller's literal '[ NOW ]' token was deleted and the scrub removed entirely
+ * (LogTimestampBaselineTest::testLogMessageContainingNowSubstringIsPreservedVerbatim
+ * pins that a message containing 'NOW' is no longer mangled). The shipped
+ * pfb_logger() is exercised against a temp log file so the on-disk side-effect is
+ * asserted (not coverage theater). The shared $GLOBALS['pfb'] keys are
+ * saved/restored so the suite stays order-independent.
  */
 #[CoversFunction('pfb_logger')]
 #[CoversFunction('pfb_failures')]
@@ -52,17 +54,17 @@ final class PfbLoggerIsoTimestampTest extends TestCase
 
 	public function testLogTimestampIsIso8601NotUsStyle(): void
 	{
-		// Given: a temp log target and a message still carrying the legacy '[ NOW ]' token.
+		// Given: a temp log target.
 		$log = tempnam(sys_get_temp_dir(), 'pfb_logtest_');
 		$this->assertNotFalse($log, 'could not create temp log file');
 		$this->tmpfiles[] = $log;
 		$GLOBALS['pfb']['log'] = $log;
 
 		// When: logged to the main log (logtype 1).
-		pfb_logger("pfb-iso-timestamp-test [ NOW ]\n", 1);
+		pfb_logger("pfb-iso-timestamp-test\n", 1);
 
 		// Then: the written line is unconditionally ISO-8601-stamped, never the old US
-		// m/j/y form, and the now-vestigial '[ NOW ]' token is scrubbed, not left dangling.
+		// m/j/y form.
 		$written = (string) file_get_contents($log);
 		$this->assertMatchesRegularExpression(
 			'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} pfb-iso-timestamp-test\n$/',
@@ -73,11 +75,6 @@ final class PfbLoggerIsoTimestampTest extends TestCase
 			'#\b\d{2}/\d{1,2}/\d{2}\b#',
 			$written,
 			"log line must not carry an ambiguous US 'm/j/y' date; got: {$written}"
-		);
-		$this->assertStringNotContainsString(
-			'NOW',
-			$written,
-			"the legacy '[ NOW ]' token must be scrubbed, not left as dead text; got: {$written}"
 		);
 	}
 

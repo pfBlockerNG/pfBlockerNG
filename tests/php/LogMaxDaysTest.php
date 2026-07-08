@@ -53,4 +53,29 @@ final class LogMaxDaysTest extends TestCase
 		$this->assertSame(0, pfb_log_max_days('-5'), "a negative numeric string must fall back to 0 (off)");
 		$this->assertSame(0, pfb_log_max_days('nolimit'), "'nolimit' is not a valid day count -- must fall back to 0 (off)");
 	}
+
+	/**
+	 * Adversarial review finding (PR #1005): an oversized-but-all-digit value passes
+	 * the /^[0-9]+$/ guard and (int) casts to PHP_INT_MAX. pfb_log_age_trim_temp()
+	 * then computes 'days * 86400', which overflows int into a float and throws a
+	 * TypeError against pfb_log_age_cutoff()'s typed 'int $cutoff_ts' parameter --
+	 * crashing pfb_log_mgmt() entirely instead of the promised never-crash fallback.
+	 * The result must be clamped well below PHP_INT_MAX / 86400 so the multiplication
+	 * can never overflow.
+	 */
+	public function testOversizedAllDigitRawIsClampedNotPhpIntMax(): void
+	{
+		$result = pfb_log_max_days('99999999999999999999999999999999');
+
+		$this->assertLessThan(
+			(int) (PHP_INT_MAX / 86400),
+			$result,
+			'an oversized value must be clamped well under PHP_INT_MAX/86400, or the *86400 step overflows int to float'
+		);
+		$this->assertIsInt($result);
+
+		// The clamped value, multiplied out, must itself never overflow.
+		$product = $result * 86400;
+		$this->assertIsInt($product, "days*86400 must stay a native int (not overflow to float); got: " . var_export($product, TRUE));
+	}
 }
