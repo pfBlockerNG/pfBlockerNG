@@ -4651,6 +4651,10 @@ function pfb_pfctl_table_op(string $table, string $op, string $args = '', string
 	$stderr    = implode(' ', $out);
 	if (pfb_pfctl_op_failed($op, $rc, $stderr)) {
 		pfb_logger(pfb_pfctl_error_message($table, $op, $rc, $stderr) . "\n", 2);
+		// ADR-61: sync-status ledger -- every $table here is a pfB_* IP alias table.
+		pfb_sync_status_open('ip', $table, 'apply', pfb_pfctl_error_message($table, $op, $rc, $stderr), $pfb['dbdir']);
+	} else {
+		pfb_sync_status_close('ip', $table, 'apply', $pfb['dbdir']);
 	}
 	return ['out' => $out, 'rc' => $rc];
 }
@@ -17690,6 +17694,8 @@ function sync_package_pfblockerng($cron='') {
 
 										// Determine reason for download failure
 										pfb_download_failure($alias, $header, $pfbfolder, $row['url'], $row['format'], $list['vtype']);
+										// ADR-61: sync-status ledger, mirrors the download-fail log above.
+										pfb_ip_download_ledger_update(FALSE, $header, "[ {$alias} - {$header} ] Download FAIL", $pfb['dbdir']);
 
 										// Utilize previously download file (If 'fail' marker exists)
 										if (file_exists("{$pfbfolder}/{$header}.fail") &&
@@ -17707,6 +17713,7 @@ function sync_package_pfblockerng($cron='') {
 									else {
 										// Clear any previous download fail marker
 										unlink_if_exists("{$pfbfolder}/{$header}.fail");
+										pfb_ip_download_ledger_update(TRUE, $header, '', $pfb['dbdir']);
 										pfb_logger('.', 1);
 									}
 								}
@@ -18947,6 +18954,10 @@ function sync_package_pfblockerng($cron='') {
 		// Script to run final script processes.
 		if ($pfb['dup'] == 'on') {
 			exec("{$pfb['script']} closing on {$elog}");
+			pfb_sync_status_dedup_check($pfb['log'], $pfb['dbdir']);
+		} else {
+			// ADR-61: dedup disabled -- its sanity signal doesn't apply; clear any stale entry.
+			pfb_sync_status_close('ip', 'dedup', 'dedup', $pfb['dbdir']);
 		}
 	}
 
