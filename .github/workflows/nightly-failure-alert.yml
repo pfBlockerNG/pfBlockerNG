@@ -37,6 +37,11 @@ permissions:
 jobs:
   alert:
     name: Open/update the nightly-red tracking issue
+    # Serialize per workflow name: the list-then-create dedup is check-then-act,
+    # so two concurrent alerts for the same title (drill overlapping a real
+    # failure) could both see "no match" and file duplicates (PR #958 review).
+    concurrency:
+      group: nightly-red-${{ github.event_name == 'workflow_dispatch' && inputs.workflow_name || github.event.workflow_run.name }}
     # Real path: a schedule-triggered run that concluded failure. Dispatch
     # path: always (that IS the drill).
     if: >-
