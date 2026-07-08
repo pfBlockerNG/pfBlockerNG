@@ -4742,7 +4742,7 @@ function pfb_pfctl_table_op(string $table, string $op, string $args = '', string
 	exec("{$pfctl_bin} -t {$table_esc} -T {$op}{$args_part} 2>&1", $out, $rc);
 	$stderr    = implode(' ', $out);
 	if (pfb_pfctl_op_failed($op, $rc, $stderr)) {
-		pfb_logger(pfb_pfctl_error_message($table, $op, $rc, $stderr) . "\n", 1);
+		pfb_logger(pfb_pfctl_error_message($table, $op, $rc, $stderr) . "\n", 2);
 	}
 	return ['out' => $out, 'rc' => $rc];
 }

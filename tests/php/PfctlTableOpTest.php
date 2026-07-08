@@ -6,16 +6,14 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Tests for the two pure helpers of pfb_pfctl_table_op():
+ * Tests for pfb_pfctl_table_op() and its two pure helpers:
  *   - pfb_pfctl_error_message() — the formatter that names a failed pfctl table
  *     operation (adding attribution to "pfctl: Table does not exist" floods that
- *     the original exec() call sites logged with no table/op info); and
+ *     the original exec() call sites logged with no table/op info);
  *   - pfb_pfctl_op_failed() — the predicate that decides WHETHER a completed op is
- *     a failure worth logging, exempting the idempotent absent-table `kill`.
- *
- * pfb_pfctl_table_op() wraps exec() and cannot be exercised off-appliance, so only
- * its pure helpers are tested here (exec doubles would add fragile complexity for no
- * new coverage benefit — the helpers are the testable invariants).
+ *     a failure worth logging, exempting the idempotent absent-table `kill`; and
+ *   - pfb_pfctl_table_op() itself, exercised via an injectable mock pfctl binary
+ *     (the same $pfctl_bin parameter AliasDeltaApplyTest uses for pfb_apply_alias_delta()).
  *
  * Scenarios:
  *   A — failure message contains table, op, rc, and trimmed stderr.
@@ -24,11 +22,57 @@ use PHPUnit\Framework\TestCase;
  *   D — empty stderr is represented cleanly (no trailing colon-space).
  *   E — pfb_pfctl_op_failed(): an absent-table `kill` is success (not logged); every
  *       other kill error, non-kill absent-table op, and clean success is classified right.
+ *   F — pfb_pfctl_table_op(): an attributed failure is logged to error.log too, not just
+ *       pfblockerng.log (issue #980); a clean success logs to neither.
  */
 #[CoversFunction('pfb_pfctl_error_message')]
 #[CoversFunction('pfb_pfctl_op_failed')]
+#[CoversFunction('pfb_pfctl_table_op')]
 final class PfctlTableOpTest extends TestCase
 {
+	/** @var array<string,mixed> saved $GLOBALS['pfb'] keys (sentinel FALSE = was unset) */
+	private array $saved = [];
+
+	/** @var string[] temp files to remove in tearDown */
+	private array $tmpfiles = [];
+
+	protected function setUp(): void
+	{
+		foreach (['log', 'errlog'] as $k) {
+			$this->saved[$k] = array_key_exists($k, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$k] : false;
+		}
+	}
+
+	protected function tearDown(): void
+	{
+		foreach ($this->saved as $k => $prev) {
+			if ($prev === false) {
+				unset($GLOBALS['pfb'][$k]);
+			} else {
+				$GLOBALS['pfb'][$k] = $prev;
+			}
+		}
+		$this->saved = [];
+		foreach ($this->tmpfiles as $f) {
+			if (is_file($f)) {
+				$this->assertTrue(unlink($f), "failed to remove temp file {$f}");
+			}
+		}
+		$this->tmpfiles = [];
+	}
+
+	/** Write an executable POSIX-sh mock pfctl that exits $rc, emitting $stderr on fd 2. */
+	private function mock_pfctl(int $rc, string $stderr): string
+	{
+		$path = tempnam(sys_get_temp_dir(), 'pfb_pfctl_mock_');
+		$this->assertNotFalse($path, 'could not create temp mock pfctl script');
+		$this->tmpfiles[] = $path;
+		$stderr_esc = str_replace("'", "'\\''", $stderr);
+		file_put_contents($path, "#!/bin/sh\nprintf '%s\\n' '{$stderr_esc}' >&2\nexit {$rc}\n");
+		chmod($path, 0755);
+		return $path;
+	}
+
 	// -----------------------------------------------------------------------
 	// Scenario A — standard failure: message contains all four fields
 	// -----------------------------------------------------------------------
@@ -218,5 +262,71 @@ final class PfctlTableOpTest extends TestCase
 			pfb_pfctl_op_failed('add', 0, ''),
 			'expected: rc=0 clean op classified as success (FALSE);\nactual: TRUE'
 		);
+	}
+
+	// -----------------------------------------------------------------------
+	// Scenario F — pfb_pfctl_table_op(): a failing mutation is logged to
+	//              error.log too, not just pfblockerng.log
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Scenario F (pinning) — an attributed op failure reaches error.log, not just
+	 * pfblockerng.log.
+	 *
+	 * Given: a mock pfctl exiting rc=1 with 'pfctl: EINVAL' on stderr — an
+	 *        op_failed()==TRUE shape.
+	 * When:  pfb_pfctl_table_op() runs the mutation against the mock.
+	 * Then:  the attributed failure line lands in BOTH pfblockerng.log and error.log
+	 *        (issue #980: a level-1 pfb_logger() call wrote pfblockerng.log only,
+	 *        leaving error.log consumers blind to the failure).
+	 */
+	public function testTableOpFailureIsLoggedToErrorLogToo(): void
+	{
+		$log    = tempnam(sys_get_temp_dir(), 'pfb_log_');
+		$errlog = tempnam(sys_get_temp_dir(), 'pfb_errlog_');
+		$this->assertNotFalse($log, 'could not create temp log file');
+		$this->assertNotFalse($errlog, 'could not create temp errlog file');
+		$this->tmpfiles[]         = $log;
+		$this->tmpfiles[]         = $errlog;
+		$GLOBALS['pfb']['log']    = $log;
+		$GLOBALS['pfb']['errlog'] = $errlog;
+		$pfctl_bin = $this->mock_pfctl(1, 'pfctl: EINVAL');
+
+		pfb_pfctl_table_op('pfB_Test_v4', 'replace', '', $pfctl_bin);
+
+		$log_content    = (string) file_get_contents($log);
+		$errlog_content = (string) file_get_contents($errlog);
+		$this->assertStringContainsString('op=replace', $log_content,
+			"expected: pfblockerng.log contains the attributed failure line;\nactual: '{$log_content}'");
+		$this->assertStringContainsString('op=replace', $errlog_content,
+			"expected: error.log ALSO contains the attributed failure line;\nactual (errlog): '{$errlog_content}'");
+	}
+
+	/**
+	 * Scenario F (control) — a clean success logs nothing to either file.
+	 *
+	 * Given: a mock pfctl exiting rc=0 with no stderr — an op_failed()==FALSE shape.
+	 * When:  pfb_pfctl_table_op() runs the mutation against the mock.
+	 * Then:  pfb_logger() is never called — pfblockerng.log and error.log both stay
+	 *        untouched, proving the log-level fix does not start logging successes too.
+	 */
+	public function testTableOpSuccessLogsNothing(): void
+	{
+		$log    = tempnam(sys_get_temp_dir(), 'pfb_log_');
+		$errlog = tempnam(sys_get_temp_dir(), 'pfb_errlog_');
+		$this->assertNotFalse($log, 'could not create temp log file');
+		$this->assertNotFalse($errlog, 'could not create temp errlog file');
+		$this->tmpfiles[]         = $log;
+		$this->tmpfiles[]         = $errlog;
+		$GLOBALS['pfb']['log']    = $log;
+		$GLOBALS['pfb']['errlog'] = $errlog;
+		$pfctl_bin = $this->mock_pfctl(0, '');
+
+		pfb_pfctl_table_op('pfB_Test_v4', 'add', '', $pfctl_bin);
+
+		$this->assertSame('', file_get_contents($log),
+			'expected: pfblockerng.log untouched on a clean pfctl success');
+		$this->assertSame('', file_get_contents($errlog),
+			'expected: error.log untouched on a clean pfctl success');
 	}
 }
