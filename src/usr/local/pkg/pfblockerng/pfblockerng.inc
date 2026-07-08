@@ -6370,6 +6370,19 @@ function pfb_dnsbl_strip_scheme(string $line, bool $strict = FALSE): string|fals
 	}
 	if ($strict) {
 		$scheme = substr($line, 0, $pos);
+		if ($scheme === '') {
+			// A bare '://' (empty scheme) in front of a bracketed IPv6 literal is a
+			// known DandelionSprouts-style "block regardless of scheme" convention --
+			// let ONLY that exact shape through so pfb_dnsbl_unbracket_ip6() (which
+			// runs later in the caller) can unwrap it. Any other empty-scheme line is
+			// still an invalid URI and rejected, same as before.
+			$remainder = substr($line, $pos + 3);
+			if (str_starts_with($remainder, '[') && str_ends_with($remainder, ']') &&
+			    is_ipaddrv6(substr($remainder, 1, -1))) {
+				return $remainder;
+			}
+			return FALSE;
+		}
 		if (!preg_match('/^[a-zA-Z][a-zA-Z0-9+\-.]*$/', $scheme)) {
 			return FALSE;
 		}
@@ -18027,6 +18040,10 @@ function sync_package_pfblockerng($cron='') {
 													}
 												}
 											}
+											// Mirrors the IPv4 regex-parser sibling block above: without this,
+											// a line the regex already matched and collected still falls
+											// through to the parse-fail heuristic below and is double-counted.
+											continue;
 										}
 									}
 
@@ -18058,8 +18075,10 @@ function sync_package_pfblockerng($cron='') {
 							// line, e.g. "[!] Parse Errors [ 1 ]" through "[ 967 ]" for a single feed.
 							// Names the feed: this is logtype 2 (also written to the error log,
 							// which has no surrounding "[ header ] Reload..." context of its own).
+							// Leading \n: this always follows the unterminated "Reload . completed .."
+							// progress line above.
 							if ($parse_fail > 0) {
-								pfb_logger("[!] Parse Errors [ {$header} ]: {$parse_fail}\n", 2);
+								pfb_logger("\n[!] Parse Errors [ {$header} ]: {$parse_fail}\n", 2);
 							}
 							pfb_logger("\n", 1);
 

@@ -314,3 +314,72 @@ def test_714_b2_parse_fail_counts_every_bad_line(deployed_vm: SmokeVM) -> None:
     finally:
         h.reset(deployed_vm)
         deployed_vm.ssh("/bin/rm", "-f", feed_url)
+
+
+# --------------------------------------------------------------------------- #
+# b3 — a hex-letter-free, syntactically valid IPv6 address in a '_v6' list running
+# in REGEX mode must NOT be double-counted as a parse failure once it has already
+# been collected. CI-RUNNABLE: no external credentials needed.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.timeout(300)
+def test_714_b3_v6_regex_parser_success_not_double_counted(deployed_vm: SmokeVM) -> None:
+    """sync_package_pfblockerng's IPv6 "regex fallback" parser must ``continue`` after
+    successfully collecting an address, mirroring its IPv4 sibling block — else a line
+    it already matched and validated still falls through to the parse-fail heuristic
+    and gets counted as an error.
+
+    RED before / GREEN after: confirmed live against a real feed (qfeeds_ip_list_v6,
+    format=auto but a query-string-only URL with no path extension resolves to
+    $pftype='regex' via the extension-fallback rule) — 97 syntactically valid,
+    hex-letter-free IPv6 addresses were all successfully extracted by
+    ``preg_match_all($pfb['ipv6'], ...)`` and collected into ``$ip_data``, yet the
+    "IPv6 Regex parser" block never ``continue``s (unlike the IPv4 regex-parser
+    sibling, which already does), so every one of them ALSO fell through to
+    "Check for parse failures" and was double-counted.
+
+    A hex-letter-free address is required to reproduce this: the parse-fail
+    heuristic itself only considers a-zA-Z-free lines, so an address with any
+    hex letter (a-f) never reaches the heuristic regardless of this bug.
+
+    Given a v6 feed with two syntactically valid, hex-letter-free IPv6 addresses
+      (2000:0:0:0:0:0:0:1 / 2000:0:0:0:0:0:0:2 — outside the RFC 3849 documentation
+      range specifically because that range's 'db8' hextet contains hex letters),
+      via a URL with no path extension (forces $pftype='regex', matching the live
+      qfeeds_ip_list_v6 case),
+    When a Force IP reload parses the feed,
+    Then the pfBlockerNG log gains NO "[!] Parse Errors" line for this feed — both
+      addresses were collected, not flagged.
+    """
+    good_lines = ["2000:0:0:0:0:0:0:1", "2000:0:0:0:0:0:0:2"]
+    body = "\n".join(good_lines) + "\n"
+    # No '.' in the name -> pathinfo() finds no extension -> $pftype='regex',
+    # reproducing the live qfeeds_ip_list_v6 (query-string-only URL) case.
+    feed_url = h.write_local_feed(deployed_vm, "smoke_714_b3_v6regex_ok", body)
+    spec = h.IpCase(aliasname="smoke714b3", feed_url=feed_url, header="smoke714b3", family="v6")
+    marker = f"[!] Parse Errors [ {spec.header}_{spec.family} ]"
+
+    try:
+        before = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+
+        h.inject(deployed_vm, spec)
+        h.reload(deployed_vm, "update")
+
+        # THEN: both addresses reached the pf table (proves they were actually parsed
+        # and collected, not silently dropped by some other mechanism).
+        members = h.wait_pfctl_table(deployed_vm, spec.alias)
+        for ip in good_lines:
+            assert any(ip in m for m in members), f"expected valid IPv6 {ip} in pf table {spec.alias}: {members}"
+
+        # AND: no parse-error line was emitted for this feed.
+        after = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+        assert after == before, (
+            f"expected NO new {marker!r} line in {h.PFB_LOG} (before={before}, "
+            f"after={after}) — both lines were valid IPv6 addresses that got "
+            f"collected; the regex-parser success path must not also count them "
+            f"as parse failures"
+        )
+    finally:
+        h.reset(deployed_vm)
+        deployed_vm.ssh("/bin/rm", "-f", feed_url)

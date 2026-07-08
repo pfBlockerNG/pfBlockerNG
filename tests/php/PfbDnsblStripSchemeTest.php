@@ -191,4 +191,40 @@ final class PfbDnsblStripSchemeTest extends TestCase
 		// No '://' -> returned unchanged regardless of toggle state.
 		$this->assertSame('evil.com', pfb_dnsbl_strip_scheme('evil.com', true));
 	}
+
+	// --- Empty scheme + bracketed IPv6: a known DandelionSprouts-style "block
+	//     regardless of scheme" convention. Confirmed live: 4 identical-shaped lines
+	//     in a real feed, each pairing with an adjacent hosts-format block entry for
+	//     the same campaign. ---
+
+	public function testEmptySchemeBracketedIpv6PassesThroughWhenStrict(): void
+	{
+		// The brackets are NOT unwrapped here -- that is pfb_dnsbl_unbracket_ip6()'s
+		// job, called later in the caller. This function only decides "is this a
+		// scheme-rejection", so it returns the remainder as-is.
+		$this->assertSame(
+			'[2604:2dc0:100:4ed8::]',
+			pfb_dnsbl_strip_scheme('://[2604:2dc0:100:4ed8::]', true)
+		);
+	}
+
+	public function testEmptySchemeNonBracketedStillRejectedWhenStrict(): void
+	{
+		// The special-case is narrow: an empty scheme with anything OTHER than an
+		// exact '[valid-ipv6]' remainder is still rejected, same as before.
+		$this->assertFalse(pfb_dnsbl_strip_scheme('://evil.com', true));
+	}
+
+	public function testEmptySchemeInvalidBracketContentRejectedWhenStrict(): void
+	{
+		// A bracket-wrapped string that is NOT a valid IPv6 literal does not qualify.
+		$this->assertFalse(pfb_dnsbl_strip_scheme('://[not-an-ipv6]', true));
+	}
+
+	public function testEmptySchemeBracketedIpv6WithTrailingJunkRejectedWhenStrict(): void
+	{
+		// Anything beyond the exact '[...]' shape (a path, trailing text) is still
+		// an invalid URI and rejected -- only the clean whole-line form is special-cased.
+		$this->assertFalse(pfb_dnsbl_strip_scheme('://[2604:2dc0:100:4ed8::]/path', true));
+	}
 }
