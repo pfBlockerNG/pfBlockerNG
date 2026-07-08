@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/logo.png" alt="pfBlockerNG logo" width="150">
+<img src="docs/assets/logo.svg" alt="pfBlockerNG logo" width="150">
 
 <h1>pfBlockerNG</h1>
 
@@ -21,16 +21,16 @@ rules, GeoIP lets you block or permit by country/continent, and DNSBL enforces
 domain blocklists directly in the Unbound resolver. It adds reports, alerts, a
 dashboard widget, and HA/CARP sync on top.
 
-This repository is a community-maintained fork —
-[pfBlockerNG/pfBlockerNG](https://github.com/pfBlockerNG/pfBlockerNG) — of the
-original package by [BBcan177](https://github.com/BBcan177). It is licensed under
-the **Apache License 2.0**.
+pfBlockerNG is developed in this repository —
+[pfBlockerNG/pfBlockerNG](https://github.com/pfBlockerNG/pfBlockerNG) —
+continuing the original package by [BBcan177](https://github.com/BBcan177),
+under the **Apache License 2.0**.
 
 > [!NOTE]
-> For day-to-day usage and configuration, the upstream
+> For day-to-day usage and configuration, the
 > [Netgate pfBlockerNG documentation](https://docs.netgate.com/pfsense/en/latest/packages/pfblocker.html)
-> applies. This README covers what is specific to **installing this fork** and the
-> features it adds on top; the per-feature design records live under
+> applies. This README covers **installation** and the **features added on top**
+> of the classic pfBlockerNG; the per-feature design records live under
 > [`.ADRs/`](.ADRs/).
 
 ## Table of contents
@@ -39,12 +39,12 @@ the **Apache License 2.0**.
 - [Release channels](#release-channels)
 - [Installation](#installation)
   - [Option 1 — pfSense Package Manager](#option-1--pfsense-package-manager)
-  - [Option 2 — this fork's self-hosted `pkg` repository](#option-2--this-forks-self-hosted-pkg-repository)
+  - [Option 2 — the pfBlockerNG `pkg` repository](#option-2--the-pfblockerng-pkg-repository)
   - [Updating](#updating)
   - [Building from the FreeBSD ports tree](#building-from-the-freebsd-ports-tree)
 - [Usage](#usage)
   - [Update Hooks](#update-hooks)
-  - [Software tab — version + update notice for self-hosted builds](#software-tab--version--update-notice-for-self-hosted-builds)
+  - [Software tab — version + update notice](#software-tab--version--update-notice)
   - [DNSBL Control (CLI)](#dnsbl-control-cli)
 - [Documentation](#documentation)
 - [Contributing](#contributing)
@@ -94,11 +94,11 @@ Two channels track two branches of this repository:
 |---------|--------|---------|-----|
 | **Stable** | `main` | `pfSense-pkg-pfBlockerNG` | Production use |
 | **Development** | `devel` | `pfSense-pkg-pfBlockerNG-devel` | Latest features, early testing |
-| **Nightly** | `devel` (HEAD, built nightly) | `pfSense-pkg-pfBlockerNG-nightly` | Bleeding edge; self-hosted repo only |
+| **Nightly** | `devel` (HEAD, built nightly) | `pfSense-pkg-pfBlockerNG-nightly` | Bleeding edge; Option 2 repo only |
 
 New work lands on `devel` first; once it has settled it is promoted to `main` to
 cut a stable release. **Nightly** rebuilds the `devel` tip each night as a separate,
-opt-in package available **only** from this fork's self-hosted repository (Option 2).
+opt-in package available **only** from the pfBlockerNG package repository (Option 2).
 The three packages are mutually exclusive — install **one**. Choose **stable** unless
 you specifically want to track development builds.
 
@@ -109,7 +109,7 @@ corresponding package versions order naturally for `pkg` (`4.0.0.alpha.1` <
 `4.0.0.beta.1` < `4.0.0.rc.1` < `4.0.0`). Nightly builds are not published as GitHub
 releases.
 
-In the self-hosted repository the **stable** and **development** packages are served
+In the pfBlockerNG package repository the **stable** and **development** packages are served
 from a single repo (`pfblockerng`) — exactly as Netgate ships `pfSense-pkg-pfBlockerNG`
 and `-devel` from its one `pfSense` repo — so one bootstrap exposes both; you pick which
 to `pkg install`. **Nightly** sits on its own catalog path and so has its own repo conf.
@@ -123,10 +123,10 @@ to **System ▸ Package Manager ▸ Available Packages**, search for `pfBlockerN
 install **pfBlockerNG** (stable) or **pfBlockerNG-devel** (development). This is the
 simplest path and the right one for most users.
 
-### Option 2 — this fork's self-hosted `pkg` repository
+### Option 2 — the pfBlockerNG `pkg` repository
 
-To run **this fork's latest builds** — ahead of, and independent of, the Netgate
-catalog — add our self-hosted FreeBSD `pkg` repository
+To run the **latest builds** — ahead of, and independent of, the Netgate
+catalog — add the pfBlockerNG FreeBSD `pkg` repository
 ([ADR-17](.ADRs/ADR_17_Pkg_Repository/ADR.md),
 [ADR-20](.ADRs/ADR_20_CE_Plus_Variant_Distribution/ADR.md)). It resolves dependencies
 normally (no `pkg add -f`). Run the bootstrap **on the firewall** over SSH, then install:
@@ -176,7 +176,8 @@ pfblockerng: {
   any network catalog fetch ([ADR-39](.ADRs/ADR_39_Meta_Package_Distribution/ADR.md)).
 - The repository is **NONE-signed** — trust is anchored in HTTPS to the host.
 - **`priority: 100`** places it above the Netgate `pfSense` repository, so cross-repo
-  resolution (and the webConfigurator's **Install** button) picks our build.
+  resolution (and the webConfigurator's **Install** button) picks the
+  pfBlockerNG repository's build.
 
 #### Nightly channel (bleeding edge)
 
@@ -201,7 +202,7 @@ explicitly (`pkg install pfSense-pkg-pfBlockerNG-nightly-<version>`).
 
 #### Rolling back a stable or devel release
 
-When the self-hosted repository is configured with a retention depth greater than one,
+When the package repository is configured with a retention depth greater than one,
 the release catalog lists **multiple versions** of the stable and devel packages. You can
 pin to any retained version by specifying it explicitly:
 
@@ -240,7 +241,7 @@ directly — `make package` in `net/pfSense-pkg-pfBlockerNG` (stable) or
 
 Most configuration lives in the webConfigurator under **Firewall ▸ pfBlockerNG**;
 the [Netgate documentation](https://docs.netgate.com/pfsense/en/latest/packages/pfblocker.html)
-is the general reference. A couple of this fork's additions are worth calling out.
+is the general reference. A few notable additions are worth calling out.
 
 ### Update Hooks
 
@@ -302,33 +303,33 @@ The full trust model, the complete HAProxy frontend ACL setup, and the URL-encod
 rules are in [ADR-12](.ADRs/ADR_12_Update_Hooks/ADR.md) and
 [CONTRIBUTING.md](CONTRIBUTING.md#update-hooks-prepost-update-scripts-adr-12).
 
-### Software tab — version + update notice for self-hosted builds
+### Software tab — version + update notice
 
-When pfBlockerNG was installed from **this fork's self-hosted repository** (Option 2
+When pfBlockerNG was installed from **the pfBlockerNG package repository** (Option 2
 above), a **Software** tab appears on every pfBlockerNG page
 ([ADR-19](.ADRs/ADR_19_Update_Channel_Panel/ADR.md)). It is the substitute for the stock
 GUI's "update available" badge, which only ever tracks the Netgate catalog and cannot see
-our builds. The tab shows your current **channel** (stable / devel / nightly) and
-**installed version** against **our repository's latest**, plus the last-checked time, and
-offers two buttons:
+the pfBlockerNG repository's builds. The tab shows your current **channel**
+(stable / devel / nightly) and **installed version** against **the repository's latest**,
+plus the last-checked time, and offers two buttons:
 
-- **Check now** — refresh the comparison from our repo (reads `pkg … -r <ourrepo>`, never
-  the Netgate repo).
+- **Check now** — refresh the comparison from the pfBlockerNG repository (reads
+  `pkg … -r <repo>`, never the Netgate repo).
 - **Update now** — a **same-channel** `pkg upgrade` of the installed package, streamed live
   (it never switches channels). The button is enabled only when an update is available.
 
 > [!NOTE]
 > The Software tab, the page, and the update notice are present **only on a build installed
-> from one of our repos** (`pfblockerng` / `pfblockerng-nightly`). On a stock
-> **Netgate-ports** install they are **entirely absent** — Netgate's own repo-bound badge
-> already serves those users, so ours would be redundant.
+> from one of the pfBlockerNG repositories** (`pfblockerng` / `pfblockerng-nightly`). On a
+> stock **Netgate-ports** install they are **entirely absent** — Netgate's own repo-bound
+> badge already serves those users, so this one would be redundant.
 
-A daily background check (riding the existing pfBlockerNG cron) compares installed vs our
-latest and raises a **de-duped notification** when a newer build exists — the pfSense bell
+A daily background check (riding the existing pfBlockerNG cron) compares installed vs the
+repository's latest and raises a **de-duped notification** when a newer build exists — the pfSense bell
 plus whatever remote channels you have configured (SMTP / Telegram / Pushover / Slack). It
 fires **once per new version**, not once per day. It is governed by a single checkbox on the
 Software tab, **Check for new versions** (`pfb_software_check`), **enabled by default** and
-applied equally on every channel: when enabled, pfBlockerNG checks our repository and notifies
+applied equally on every channel: when enabled, pfBlockerNG checks the package repository and notifies
 you of a newer build; untick it to stop the background checks and notifications. The page's
 **Check now** button always runs a one-off check regardless of the setting.
 
@@ -361,7 +362,7 @@ are logged to the Reports tab.
 
 - **Using pfBlockerNG:**
   [Netgate documentation](https://docs.netgate.com/pfsense/en/latest/packages/pfblocker.html).
-- **This fork's design decisions** (one record per feature/subsystem):
+- **Design decisions** (one record per feature/subsystem):
   [`.ADRs/`](.ADRs/).
 - **Developing, testing, and releasing this package:**
   [CONTRIBUTING.md](CONTRIBUTING.md).
