@@ -34,7 +34,7 @@ final class LogTimestampBaselineTest extends TestCase
 
 	protected function setUp(): void
 	{
-		foreach (['log', 'errlog', 'pnow', 'runlog', 'runlog_active'] as $k) {
+		foreach (['log', 'errlog', 'extraslog', 'pnow', 'runlog', 'runlog_active'] as $k) {
 			$this->saved[$k] = array_key_exists($k, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$k] : false;
 		}
 		// The syslog-branch reproduction below reformats a fixed instant -- pin the
