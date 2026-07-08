@@ -22,8 +22,8 @@ _PFB_UNBOUND_PY = Path(__file__).resolve().parent.parent / "src/usr/local/pkg/pf
 def test_source_uses_fixed_width_format_at_both_call_sites() -> None:
     source = _PFB_UNBOUND_PY.read_text()
 
-    assert source.count('str(datetime.now().strftime("_%Y%m%d%H%M%S.log"))') == 2, (
-        "expected exactly 2 fixed-width rename-filename call sites; update this oracle if the count changed"
+    assert source.count('"_%Y%m%d%H%M%S.log"') == 2, (
+        "expected exactly 2 fixed-width rename-filename format strings; update this oracle if the count changed"
     )
     assert "%-d" not in source, "the OLD variable-width '%-d' day format must be gone"
 
