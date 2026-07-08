@@ -38,9 +38,12 @@ final class PfctlTableOpTest extends TestCase
 
 	protected function setUp(): void
 	{
-		foreach (['log', 'errlog'] as $k) {
+		foreach (['log', 'errlog', 'pnow', 'runlog', 'runlog_active'] as $k) {
 			$this->saved[$k] = array_key_exists($k, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$k] : false;
 		}
+		// A stray 'runlog_active' from an earlier test must not mirror our writes
+		// into a third file this test never provisions.
+		unset($GLOBALS['pfb']['runlog'], $GLOBALS['pfb']['runlog_active']);
 	}
 
 	protected function tearDown(): void
