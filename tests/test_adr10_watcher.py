@@ -220,6 +220,22 @@ class _Harness:
         self.os = os
         P.pfb_reload_stop = threading.Event()
         self.thread: Any = None
+        # issue #957: count completed reads of the SENTINEL (never the applied-marker
+        # path) so a test can wait for "the watcher observed the sentinel >= N times"
+        # instead of a fixed sleep and hoping the daemon thread got scheduled in time.
+        # Incrementing AFTER orig() returns means "count observed" implies "read done".
+        self.sentinel_reads = 0
+        orig_read_generation = P._reload_read_generation
+
+        def _counting_read_generation(path: str) -> int | None:
+            r = orig_read_generation(path)
+            if path == self.sentinel:
+                with self._builds_cond:
+                    self.sentinel_reads += 1
+                    self._builds_cond.notify_all()
+            return r
+
+        monkeypatch.setattr(P, "_reload_read_generation", _counting_read_generation)
 
     def builder(self) -> P.Snapshot | None:
         # Record the generation observed at build time; optionally block to simulate a
@@ -228,7 +244,7 @@ class _Harness:
         with self._builds_cond:
             self.builds.append(gen)
             self._builds_cond.notify_all()  # wake any wait_builds waiter.
-        self._gate.wait(1.0)
+        self._gate.wait(10.0)  # safety-guard only; stop_join() always sets the gate.
         if self.fail:
             return None
         return _snapshot(tag="gen{}.example.com".format(gen), counts=gen)
@@ -238,15 +254,63 @@ class _Harness:
             name="pfb_reload_watcher_test", target=P.pfb_reload_watcher, args=(self.builder,), daemon=True
         )
         self.thread.start()
+        # issue #957: block until the watcher has read its baseline generation, so a
+        # publish() immediately after start() can never race the baseline adoption --
+        # the original flake was a slow-scheduled daemon thread reading the
+        # just-published generation as its OWN baseline, so no build ever fired and
+        # wait_builds timed out. This alone fixes the primary race for every test that
+        # publishes right after start().
+        self.wait_sentinel_reads(1)
 
     def publish(self, gen: int) -> None:
         _write_generation(self.sentinel, gen)
+
+    def wait_publish_processed(self, timeout: float = 10.0) -> None:
+        # issue #957: block until the watcher has read the sentinel at least twice
+        # since this publish. Read c+1 may have STARTED before this publish's
+        # os.replace landed (a stale read); read c+2 necessarily started after read
+        # c+1's increment, which happened after the counter snapshot below, which
+        # happened after the publish -- so read c+2 is guaranteed to observe the
+        # post-publish sentinel.
+        with self._builds_cond:
+            c = self.sentinel_reads
+        self.wait_sentinel_reads(c + 2, timeout=timeout)
 
     def read_applied(self) -> int | None:
         # The applied marker uses the same int-on-first-line format as the sentinel.
         return P._reload_read_generation(self.applied)
 
-    def wait_builds(self, n: int, timeout: float = 3.0) -> None:
+    def wait_sentinel_reads(self, n: int, timeout: float = 10.0) -> None:
+        # issue #957/#456: block until >= n sentinel reads have completed. The timeout
+        # is a deadlock safety-guard only: on expiry FAIL LOUD so a starved daemon
+        # surfaces as an honest timeout, not a misleading downstream mismatch.
+        with self._builds_cond:
+            if not self._builds_cond.wait_for(lambda: self.sentinel_reads >= n, timeout=timeout):
+                raise AssertionError(
+                    "wait_sentinel_reads timed out after {:.1f}s: expected >= {} sentinel read(s), got {}".format(
+                        timeout, n, self.sentinel_reads
+                    )
+                )
+
+    def wait_snapshot_contains(self, tag: str, timeout: float = 10.0) -> None:
+        # wait_builds/wait_sentinel_reads return before the swap is installed, so this
+        # stays a poll on the module-level P._snapshot we cannot signal from here --
+        # but with a loud timeout (issue #456). Check-then-deadline-then-final-recheck
+        # ordering (#729/#551) matches wait_snapshot_changed below: the tag may land
+        # during the final sleep, so always re-check once more right before giving up.
+        deadline = time.monotonic() + timeout
+        while True:
+            if tag in P._snapshot.data_db:
+                return
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.005)
+        raise AssertionError(
+            "wait_snapshot_contains timed out after {:.1f}s: {!r} was never present in "
+            "P._snapshot.data_db (keys={!r})".format(timeout, tag, sorted(P._snapshot.data_db.keys()))
+        )
+
+    def wait_builds(self, n: int, timeout: float = 10.0) -> None:
         # Block on the builder's signal until >= n builds are recorded. The timeout is a
         # deadlock safety-guard only: on expiry FAIL LOUD (issue #456) so a starved daemon
         # surfaces as an honest timeout, not a misleading downstream equality mismatch.
@@ -258,7 +322,7 @@ class _Harness:
                     )
                 )
 
-    def wait_snapshot_changed(self, old: Any, timeout: float = 3.0) -> None:
+    def wait_snapshot_changed(self, old: Any, timeout: float = 10.0) -> None:
         # wait_builds returns when a build is RECORDED (before the builder returns), so
         # P._snapshot may not be swapped yet. The swap is done by production code on a
         # module-level variable we cannot signal from here, so this stays a poll -- but
@@ -278,7 +342,7 @@ class _Harness:
             "from the old snapshot (expected a new snapshot to be installed)".format(timeout)
         )
 
-    def stop_join(self, timeout: float = 5.0) -> None:
+    def stop_join(self, timeout: float = 30.0) -> None:
         P.pfb_reload_stop.set()
         self._gate.set()  # release a blocked build so the thread can exit promptly
         if self.thread is not None:
@@ -322,6 +386,55 @@ class TestHarnessWaiterDiagnostics:
         P._snapshot = new  # the swap already landed before the waiter is even called.
         h.wait_snapshot_changed(old, timeout=0.0)  # must return, not raise.
 
+    def test_wait_sentinel_reads_raises_on_timeout(self, tmp_path: Any, monkeypatch: Any) -> None:
+        # No watcher started -> no sentinel read ever happens. wait_sentinel_reads must raise.
+        h = _Harness(tmp_path, monkeypatch)
+        with pytest.raises(AssertionError, match=r"wait_sentinel_reads timed out"):
+            h.wait_sentinel_reads(1, timeout=0.1)
+
+    def test_wait_snapshot_contains_raises_on_timeout(self, tmp_path: Any, monkeypatch: Any) -> None:
+        # No watcher thread -> the tag is never added. wait_snapshot_contains must raise.
+        h = _Harness(tmp_path, monkeypatch)
+        P._snapshot = _snapshot(tag="old.example.com", counts=0)
+        with pytest.raises(AssertionError, match=r"wait_snapshot_contains timed out"):
+            h.wait_snapshot_contains("gen1.example.com", timeout=0.1)
+
+    def test_wait_snapshot_contains_returns_when_tag_already_present(self, tmp_path: Any, monkeypatch: Any) -> None:
+        # #729/#551: timeout=0.0 makes the deadline already-expired at call time, so the
+        # loop's ONLY chance to see the tag is the check-before-give-up -- this must
+        # still return, not raise, when the tag is already present.
+        h = _Harness(tmp_path, monkeypatch)
+        P._snapshot = _snapshot(tag="gen1.example.com", counts=1)
+        h.wait_snapshot_contains("gen1.example.com", timeout=0.0)  # must return, not raise.
+
+    def test_start_waits_for_baseline_read_before_returning(self, tmp_path: Any, monkeypatch: Any) -> None:
+        # issue #957: THE PIN for the primary flake. Delay the watcher's FIRST sentinel
+        # read (simulating a starved daemon thread under contention) and replay the
+        # start()-then-publish() shape every TestWatcherLoop test relies on. Against the
+        # pre-fix harness (no start()-blocks-on-baseline-read handshake) this exact
+        # sequence FAILS: the publish lands before the delayed baseline read, so the
+        # published generation is adopted AS the baseline, no build ever happens, and
+        # wait_builds raises its timeout. The handshake makes it deterministic.
+        h = _Harness(tmp_path, monkeypatch)
+        orig = P._reload_read_generation  # the harness's own counting wrapper.
+        delayed_once = threading.Event()
+
+        def _delayed_read(path: str) -> int | None:
+            if path == h.sentinel and not delayed_once.is_set():
+                delayed_once.set()
+                time.sleep(0.15)  # deterministic starved-thread simulation.
+            return orig(path)
+
+        monkeypatch.setattr(P, "_reload_read_generation", _delayed_read)  # stacks on the harness wrapper.
+
+        h.start()
+        try:
+            h.publish(5)
+            h.wait_builds(1)
+            assert h.builds == [5]
+        finally:
+            h.stop_join()
+
 
 class TestWatcherLoop:
     def test_generation_advance_triggers_swap(self, tmp_path: Any, monkeypatch: Any) -> None:
@@ -331,7 +444,9 @@ class TestWatcherLoop:
         h.start()
         try:
             assert P._snapshot is old  # BEFORE: old snapshot live, no advance yet.
-            time.sleep(0.1)
+            # issue #957: start()'s handshake already waited for the baseline sentinel
+            # read (there is no sentinel yet -> baseline None), so no build can have
+            # happened -- deterministic immediately, no sleep needed.
             assert h.builds == []  # no sentinel -> no build.
 
             h.publish(1)  # ADVANCE.
@@ -353,7 +468,7 @@ class TestWatcherLoop:
             h.wait_builds(1)
             assert h.builds == [5]
             h.publish(5)  # same generation again (duplicate/best-effort event).
-            time.sleep(0.2)
+            h.wait_publish_processed()  # issue #957: block until the watcher observed it.
             assert h.builds == [5]  # NO additional build for an unchanged generation.
         finally:
             h.stop_join()
@@ -367,7 +482,8 @@ class TestWatcherLoop:
         h.publish(5)  # sentinel pre-exists at gen 5 BEFORE the watcher starts.
         h.start()
         try:
-            time.sleep(0.2)
+            # issue #957: start()'s handshake already waited for the baseline sentinel
+            # read, so gen 5 was adopted as baseline (no build) before start() returned.
             assert h.builds == []  # baseline adopted, NO build for the pre-existing gen.
             h.publish(6)  # a genuine future advance.
             h.wait_builds(1)
@@ -389,11 +505,15 @@ class TestWatcherLoop:
             assert h.builds == [2]
 
             h.publish(3)  # advance WHILE gen-2 build is in flight.
-            time.sleep(0.2)
+            # issue #957: the watcher thread is blocked INSIDE the gen-2 builder call on
+            # self._gate -- it is the only thread that reads the sentinel or builds, so
+            # no further read/build can happen until _gate.set() below releases it. The
+            # assert is deterministic the instant publish()'s os.replace returns.
             assert h.builds == [2]  # still single-flight: no parallel gen-3 build.
 
             h._gate.set()  # release gen-2 build; watcher re-checks -> builds gen-3 once.
             h.wait_builds(2)
+            h.wait_snapshot_contains("gen3.example.com")  # wait_builds returns before the swap lands.
             assert h.builds == [2, 3]
             assert "gen3.example.com" in P._snapshot.data_db  # latest generation won.
         finally:
@@ -410,7 +530,12 @@ class TestWatcherLoop:
             assert P._snapshot is old  # BEFORE.
             h.publish(9)
             h.wait_builds(1)
-            time.sleep(0.1)
+            # issue #957: drain_and_swap's NEXT sentinel read only happens once THIS
+            # failed build's _reload_run_swap call has returned -- observing one more
+            # read proves the fail-closed decision is final, no fixed-time sleep needed.
+            with h._builds_cond:
+                c = h.sentinel_reads
+            h.wait_sentinel_reads(c + 1)
             assert P._snapshot is old  # AFTER: failed build kept the old snapshot.
         finally:
             h.stop_join()
@@ -425,7 +550,10 @@ class TestWatcherLoop:
         try:
             assert P._snapshot is old  # BEFORE.
             h.publish(1)
-            time.sleep(0.3)
+            h.wait_publish_processed()  # issue #957: block until the watcher observed it.
+            # The negatives hold at ANY time (the RAM gate declines BEFORE the builder
+            # runs) -- the wait only makes them non-vacuous by proving the watcher
+            # demonstrably saw the advance rather than never having looked.
             assert P._snapshot is old  # AFTER: declined -> old kept.
             assert h.builds == []  # the builder was never invoked (gate is pre-build).
         finally:
@@ -526,7 +654,7 @@ class TestAppliedMarker:
         assert h.read_applied() is None  # BEFORE: no marker yet.
         h.start()
         try:
-            deadline = time.monotonic() + 2.0
+            deadline = time.monotonic() + 10.0
             while time.monotonic() < deadline and h.read_applied() != 5:
                 time.sleep(0.01)
             assert h.read_applied() == 5  # AFTER: baseline published.
@@ -542,7 +670,7 @@ class TestAppliedMarker:
             assert h.read_applied() is None  # BEFORE: nothing applied (no sentinel yet).
             h.publish(1)
             h.wait_builds(1)
-            deadline = time.monotonic() + 2.0
+            deadline = time.monotonic() + 10.0
             while time.monotonic() < deadline and h.read_applied() != 1:
                 time.sleep(0.01)
             assert h.read_applied() == 1  # AFTER: marker advanced to the swapped gen.
@@ -557,7 +685,7 @@ class TestAppliedMarker:
         h.start()
         try:
             h.publish(7)
-            time.sleep(0.4)  # several poll cycles.
+            h.wait_publish_processed()  # issue #957: block until the watcher observed it.
             assert h.read_applied() is None  # declined -> never written.
         finally:
             h.stop_join()
@@ -571,7 +699,11 @@ class TestAppliedMarker:
         try:
             h.publish(3)
             h.wait_builds(1)  # the builder ran (returned None).
-            time.sleep(0.2)
+            # issue #957: same reasoning as test_build_fail_keeps_old_snapshot -- one
+            # more sentinel read proves drain_and_swap's fail-closed decision is final.
+            with h._builds_cond:
+                c = h.sentinel_reads
+            h.wait_sentinel_reads(c + 1)
             assert h.read_applied() is None  # build failed -> marker not advanced.
         finally:
             h.stop_join()
