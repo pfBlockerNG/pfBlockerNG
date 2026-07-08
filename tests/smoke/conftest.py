@@ -1589,14 +1589,16 @@ def _pfb_module_baseline(request: pytest.FixtureRequest) -> Generator[None, None
     config; module 1 is already clean from the fresh boot.
 
     Scoped to the SMOKE tier only — the UI tier (``tests/smoke/ui/``) shares a session-scoped
-    login + box and is reset separately, so it is excluded here. A strict no-op unless
-    ``SMOKE_PKG`` is set (a package was actually deployed) AND the VM was actually booted, so
-    off-box modules that never touch the VM are untouched (and never boot one just to reset).
-    A genuine reset failure is allowed to SURFACE — silently swallowing it would leak dirty
-    state into the next module, defeating the isolation this fixture exists to provide.
+    login + box and is reset by its own per-test mechanism instead
+    (``tests/smoke/ui/conftest.py::_ui_pfb_isolation``, issue #810), so it is excluded here.
+    A strict no-op unless ``SMOKE_PKG`` is set (a package was actually deployed) AND the VM
+    was actually booted, so off-box modules that never touch the VM are untouched (and never
+    boot one just to reset). A genuine reset failure is allowed to SURFACE — silently
+    swallowing it would leak dirty state into the next module, defeating the isolation this
+    fixture exists to provide.
     """
     yield
-    # UI tier shares session state (deferred to its own per-test reset) — leave it alone.
+    # UI tier has its own per-test reset (_ui_pfb_isolation, issue #810) — leave it alone here.
     if Path(str(request.path)).parent.name == "ui":
         return
     # No-op outside a real deployed smoke run, so off-box modules (no VM) are unaffected.

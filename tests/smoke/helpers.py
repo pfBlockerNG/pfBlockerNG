@@ -40,6 +40,7 @@ so importing this module does not require the smoke deps.
 from __future__ import annotations
 
 import base64
+import hashlib
 import ipaddress
 import os
 import re
@@ -2737,6 +2738,114 @@ def reset_pfb_baseline(vm: SmokeVM, *, timeout: float = 300.0) -> None:
                     f"reset_pfb_baseline {verb} failed: rc={cleared.returncode} stderr={cleared.stderr!r}"
                 )
     apply_filter_sync(vm)
+
+
+def restore_pfb_config_baseline(vm: SmokeVM, *, snapshot_path: str, timeout: float = 300.0) -> None:
+    """Restore ``/conf/config.xml`` from a guest-side snapshot (UI-tier session isolation).
+
+    :func:`reset_pfb_baseline` WIPES pfBlockerNG config to empty — correct for the
+    module-scoped SMOKE tier, where the next module's ``deployed_vm`` re-establishes
+    whatever infrastructure (VIP, ports, ...) it needs. The UI tier is ONE session: a
+    wipe deletes ``pfb_dnsvip4``/``pfb_dnsport``/``pfb_dnsport_ssl`` (the
+    :data:`_DNSBL_INFRA_KEYS`) with nothing left in the session to re-provision them,
+    so every LATER ``pfblockerng_dnsbl.php``/SafeSearch save runs ``pfb_validate_vips``
+    against a VIP-less config and gets rejected — 23 functional tests + 1 browser test
+    failed this way in ui-tests.yml run 28900064099, all reading back ``''`` after the
+    FIRST dirty-path reset. So the UI tier's per-test isolation is RESTORE-to-session-
+    baseline, not wipe-to-empty: copy back a config.xml snapshot taken once at session
+    start (after the DNSBL VIP was established — see ``deployed_vm``), rather than
+    reconstructing it from nothing.
+
+    Sequence, each step raising ``RuntimeError`` on failure so a broken restore
+    surfaces loudly (never silently leaves a dirty box for the next test):
+
+    1. Copy the snapshot over ``/conf/config.xml`` and drop the serialized config
+       cache. pfSense re-parses ``config.xml`` only when the cache is absent/stale —
+       upstream ``config.lib.inc`` itself does
+       ``unlink_if_exists(g_get('tmp_path') . '/config.cache')`` (``/tmp/config.cache``)
+       right after replacing the file on disk, commented "Configuration file has been
+       replaced, remove the config cache." (config.lib.inc:198-199 and :720-721,
+       confirmed against pfsense/pfSense ``master`` this session) — mirrored here
+       exactly.
+    2. ``services_unbound_configure()`` regenerates the resolver config/host entries
+       from the restored config (the fresh ``pfSsh.php`` process reads ``config.xml``
+       anew now that the cache is gone).
+    3. ``clearip``/``cleardnsbl`` (skipped when the package is uninstalled — same
+       guard and rationale as :func:`reset_pfb_baseline`: an uninstall test already
+       dropped the derived state, and ``PFB_CLI`` no longer exists to shell out to).
+    4. A blocking :func:`apply_filter_sync` so the pf ruleset matches the restored
+       config.
+
+    Issue #810.
+    """
+    cp_result = vm.ssh(
+        "/bin/sh",
+        "-c",
+        f"cp {snapshot_path} /conf/config.xml && rm -f /tmp/config.cache",
+        timeout=timeout,
+    )
+    if cp_result.returncode != 0:
+        raise RuntimeError(
+            f"restore_pfb_config_baseline: restoring {snapshot_path} failed: "
+            f"rc={cp_result.returncode} stderr={cp_result.stderr!r}"
+        )
+    eval_result = php_eval(vm, "services_unbound_configure();\necho 'OK';", timeout=timeout)
+    if eval_result.returncode != 0 or "OK" not in eval_result.stdout:
+        raise RuntimeError(
+            f"restore_pfb_config_baseline: services_unbound_configure failed: "
+            f"rc={eval_result.returncode} {eval_result.stderr!r} {eval_result.stdout!r}"
+        )
+    if pkg_installed(vm):
+        for verb in ("clearip", "cleardnsbl"):
+            cleared = vm.ssh(PHP_BIN, PFB_CLI, verb, timeout=120.0)
+            if cleared.returncode != 0:
+                raise RuntimeError(
+                    f"restore_pfb_config_baseline {verb} failed: rc={cleared.returncode} stderr={cleared.stderr!r}"
+                )
+    apply_filter_sync(vm)
+
+
+# --------------------------------------------------------------------------- #
+# Per-test UI config-change detection (issue #810) — cheap probe so the UI
+# tier's per-test reset only pays reset_pfb_baseline's cost when a test
+# actually left config dirty.
+# --------------------------------------------------------------------------- #
+
+
+def strip_config_revision(text: str) -> str:
+    """Remove the FIRST ``<revision>...</revision>`` block from a config.xml body.
+
+    ``<revision>`` (time/description/username) is REWRITTEN by every
+    ``write_config()`` call, so it is pure noise for detecting a REAL config
+    change (issue #810). It is the volatile block near the top, a direct child
+    of ``<pfsense>`` — ``count=1`` strips ONLY that first occurrence. Any LATER
+    ``<revision>``-shaped content (hostile: a package key literally named
+    "revision") is deliberately PRESERVED, so a change buried in it still reads
+    as dirty — false-dirty (an extra reset) is safe, false-clean is not.
+    """
+    return re.sub(r"<revision>.*?</revision>", "", text, count=1, flags=re.DOTALL)
+
+
+def pfb_config_digest(vm: SmokeVM, *, timeout: float = 30.0) -> str:
+    """A cheap content digest of the guest's ``/conf/config.xml`` (issue #810).
+
+    One ``ssh`` round-trip (a bare ``cat``, no ``pfSsh.php`` spin-up) — that
+    spin-up cost is exactly what the UI tier's per-test isolation probe must
+    avoid on the common (test self-restored) path. MD5 of the config text with
+    its volatile ``<revision>`` block stripped (:func:`strip_config_revision`) —
+    a Python-side SELF-comparison digest only (ADR-42 policy), never a
+    cross-language digest. Raises on a non-zero read or EMPTY stdout: a
+    failed/truncated read must NEVER fold into a digest value — the same #909
+    lesson as :func:`guest_file_contains` (a bad read must surface, never
+    silently compare-equal to some other bad read).
+    """
+    result = vm.ssh("cat", "/conf/config.xml", timeout=timeout)
+    if result.returncode != 0 or not result.stdout:
+        raise RuntimeError(
+            f"pfb_config_digest: reading /conf/config.xml failed: rc={result.returncode} "
+            f"stderr={result.stderr!r} stdout={result.stdout!r}"
+        )
+    return hashlib.md5(strip_config_revision(result.stdout).encode("utf-8")).hexdigest()
 
 
 # --------------------------------------------------------------------------- #

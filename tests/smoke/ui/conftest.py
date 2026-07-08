@@ -18,6 +18,7 @@ phase does NOT edit any workflow.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
 from collections.abc import Iterator
@@ -188,10 +189,20 @@ def deployed_vm(smoke_vm: SmokeVM) -> SmokeVM:
     which reads as a UI failure but is really "the package was never installed".
     ``pkg add`` resolves RUN_DEPENDS from the baked image offline (ADR-04), so no
     egress is required.
+
+    Also establishes the DNSBL sinkhole VIP (:func:`~tests.smoke.helpers.ensure_dnsbl_vip`)
+    here, once: unlike the module-scoped SMOKE tier (each module's ``deployed_vm``
+    re-establishes its own infra), the UI tier is ONE session, so the VIP/ports are
+    part of THIS tier's baseline -- every ``pfblockerng_dnsbl.php``/SafeSearch save
+    runs ``pfb_validate_vips``, and once per-test isolation RESTORES config
+    (:func:`_ui_pfb_isolation`) there is no later re-provisioning step to add it back
+    (issue #810). ``ensure_dnsbl_vip`` is idempotent on its fixed uniqid, so the
+    tests that also call it directly (e.g. ``dnsbl_vip_ready``) stay digest-clean.
     """
     from .. import helpers
 
     helpers.deploy(smoke_vm)
+    helpers.ensure_dnsbl_vip(smoke_vm)
     return smoke_vm
 
 
@@ -286,6 +297,110 @@ def webui(deployed_vm: SmokeVM, admin_credentials: tuple[str, str], webgui_proto
 
 
 # --------------------------------------------------------------------------- #
+# Per-test config isolation (issue #810) — the UI tier shares ONE session-scoped
+# login + box across ~170 mutating tests; `_pfb_module_baseline` (tests/smoke/
+# conftest.py) explicitly excludes this ``ui/`` subpackage and defers to this
+# mechanism. Unconditional reset_pfb_baseline() after every ui_e2e/ui_browser
+# test would cost ~15-30s each (write_config + services_unbound_configure +
+# clearip/cleardnsbl + apply_filter_sync) -- unacceptable at this volume. So:
+# a cheap one-ssh-round-trip digest probe per test, full reset ONLY when dirty.
+# Most UI e2e tests already self-restore (drive-form-back / finally-restore),
+# so the common path costs exactly one extra `cat /conf/config.xml`.
+#
+# The dirty path RESTORES to the session baseline (a guest-side config.xml
+# snapshot), not `reset_pfb_baseline`'s wipe-to-empty: a wipe deletes the DNSBL
+# VIP `deployed_vm` established, and the UI tier -- ONE session -- has no later
+# re-provisioning step to add it back, so every subsequent DNSBL/SafeSearch save
+# was rejected by `pfb_validate_vips` (ui-tests.yml run 28900064099, issue #810).
+# --------------------------------------------------------------------------- #
+
+# Guest-side path for the session-baseline config.xml snapshot (issue #810) --
+# the restore artifact `_ui_pfb_isolation`'s dirty path copies back over
+# `/conf/config.xml`. Under `/root` (writable, survives for the VM's lifetime,
+# outside `/conf` so it is never itself clobbered by a config restore).
+UI_CONFIG_SNAPSHOT = "/root/pfb_ui_config_baseline.xml"
+
+
+@pytest.fixture(scope="session")
+def _ui_config_baseline(webui: WebUI, smoke_vm: SmokeVM) -> dict[str, str]:
+    """Snapshot + digest the post-login config (issue #810) -- the per-test isolation oracle.
+
+    Depending on ``webui`` (not ``deployed_vm``) is REQUIRED and deliberate: it
+    guarantees the snapshot is taken AFTER login + ``_dismiss_pfblockerng_wizard``
+    (itself a config write -- ``pfb_wizard_skip``) AND after ``deployed_vm``
+    established the DNSBL VIP, so the baseline already includes both. The guest-side
+    copy to :data:`UI_CONFIG_SNAPSHOT` IS the restore artifact
+    :func:`~tests.smoke.helpers.restore_pfb_config_baseline` copies back on the dirty
+    path -- taken back-to-back with the digest, no writer running in between, so the
+    two describe the exact same config state. Mutable (a dict, not a bare str) so
+    :func:`_ui_pfb_isolation` can re-snapshot the digest in place after a restore.
+    """
+    from .. import helpers
+
+    result = smoke_vm.ssh("/bin/sh", "-c", f"cp /conf/config.xml {UI_CONFIG_SNAPSHOT}")
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"_ui_config_baseline: snapshotting /conf/config.xml to {UI_CONFIG_SNAPSHOT} failed: "
+            f"rc={result.returncode} stderr={result.stderr!r}"
+        )
+    return {"digest": helpers.pfb_config_digest(smoke_vm)}
+
+
+@pytest.fixture(autouse=True)
+def _ui_pfb_isolation(request: pytest.FixtureRequest) -> Iterator[None]:
+    """Restore pfBlockerNG config to baseline after a mutating UI test LEFT it dirty (issue #810).
+
+    ``ui_render`` and unmarked tests get a plain no-op ``yield`` -- no VM/webui
+    setup, no probe cost, matching Tier A's read-only contract. For ``ui_e2e``/
+    ``ui_browser`` tests: at TEARDOWN, compare the current config digest
+    (:func:`~tests.smoke.helpers.pfb_config_digest`) against the session
+    baseline; only a MISMATCH pays
+    :func:`~tests.smoke.helpers.restore_pfb_config_baseline`'s real cost, then the
+    baseline is re-snapshotted to the post-restore digest -- without this
+    re-snapshot every LATER probe would compare against the pre-restore baseline
+    and read as dirty forever, resetting on every single test regardless of
+    whether it actually mutated anything.
+
+    RESTORE, not `reset_pfb_baseline`'s wipe-to-empty: the SMOKE tier's module-scoped
+    ``deployed_vm`` re-establishes any infra a wipe drops, but this tier is ONE
+    session -- a wipe deletes ``pfb_dnsvip4``/ports with nothing left to re-add them,
+    so every LATER DNSBL/SafeSearch save fails ``pfb_validate_vips`` (the failure
+    class ui-tests.yml run 28900064099 hit: 23 functional + 1 browser test failed
+    reading back ``''`` after the first dirty-path wipe). Restoring the
+    :data:`UI_CONFIG_SNAPSHOT` guest-side snapshot -- taken once, post-VIP, at session
+    start -- puts the box back exactly where the session began instead.
+
+    A false POSITIVE (reads dirty when the test actually self-restored) is
+    safe -- one wasted restore. A false NEGATIVE (reads clean when config truly
+    changed) is not, so ``strip_config_revision`` errs toward over-detecting
+    (see its docstring) and a genuine probe/restore failure is left to SURFACE
+    here rather than suppressed -- mirroring ``_pfb_module_baseline``'s
+    rationale: a teardown error is reported separately from the test's own
+    result and must never mask a leaked dirty state.
+
+    PHPSESSID is untouched by any of this: ``restore_pfb_config_baseline`` only
+    touches ``/conf/config.xml`` + derived pf/Unbound state, never the
+    webConfigurator session store, and the browser tier's session cookie lives
+    on the session-scoped ``browser_context`` (not per-test), so it survives
+    regardless of whether a restore ran.
+    """
+    is_mutating = request.node.get_closest_marker("ui_e2e") or request.node.get_closest_marker("ui_browser")
+    if not is_mutating:
+        yield
+        return
+
+    baseline = request.getfixturevalue("_ui_config_baseline")
+    vm = request.getfixturevalue("smoke_vm")
+    yield
+    from .. import helpers
+
+    current = helpers.pfb_config_digest(vm)
+    if current != baseline["digest"]:
+        helpers.restore_pfb_config_baseline(vm, snapshot_path=UI_CONFIG_SNAPSHOT)
+        baseline["digest"] = helpers.pfb_config_digest(vm)
+
+
+# --------------------------------------------------------------------------- #
 # Tier B — browser (ADR-14 Phase 4). Headless Chromium reusing the Phase-1
 # authenticated session: the `webui` PHPSESSID cookie is injected into the
 # browser context so the browser never logs in a second time (a second login is
@@ -361,4 +476,10 @@ def browser_page(browser_context: BrowserContext) -> Iterator[Page]:
     try:
         yield page
     finally:
+        # issue #810: clear per-origin storage a browser test wrote so it doesn't leak into
+        # the next browser test. Cookies (PHPSESSID) are untouched -- they live on the
+        # session-scoped browser_context, not here. Best-effort: the page may already be
+        # crashed/closed, or parked on an origin where storage access throws.
+        with contextlib.suppress(Exception):
+            page.evaluate("() => { localStorage.clear(); sessionStorage.clear(); }")
         page.close()
