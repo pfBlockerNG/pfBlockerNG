@@ -15,6 +15,9 @@ Covers:
     _load_data_db, _load_whitelist_db, _load_hsts_db (extracted out of
     init_standard for testability, mirroring the existing
     _load_safesearch_db precedent).
+  * Fail-before/pass-after wiring at the 2 STRONGLY-ENCOURAGED sites:
+    _load_safesearch_db, and _load_ini_config (pfb_unbound.ini -- newly
+    extracted out of init_standard this round, same rationale).
   * Fail-before/pass-after wiring at dnsbl_build_from_manifest (the ADR-06
     manifest path -- the PRIMARY parse path when a manifest is present).
 """
@@ -169,10 +172,14 @@ class TestLoadZoneDbLedgerWiring:
         pfb_unbound.pfb["pfb_py_zone"] = str(zone_path)
         pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
 
-        def _boom(*a: Any, **k: Any) -> Any:
-            raise RuntimeError("csv boom")
+        real_open = open
 
-        monkeypatch.setattr(pfb_unbound.csv, "reader", _boom)
+        def _boom_open(path: Any, *a: Any, **k: Any) -> Any:
+            if str(path) == str(zone_path):
+                raise OSError("simulated read failure")
+            return real_open(path, *a, **k)
+
+        monkeypatch.setattr("builtins.open", _boom_open)
 
         pfb_unbound._load_zone_db(_new_feed_group_db(), 0)
 
@@ -184,7 +191,7 @@ class TestLoadZoneDbLedgerWiring:
             "facility": "dnsbl",
             "item": str(zone_path),
             "stage": "parse",
-            "message": "Failed to load: {}: csv boom".format(zone_path),
+            "message": "Failed to load: {}: simulated read failure".format(zone_path),
             "first_seen": entries[0]["first_seen"],
             "last_seen": entries[0]["last_seen"],
         }
@@ -195,10 +202,14 @@ class TestLoadZoneDbLedgerWiring:
         pfb_unbound.pfb["pfb_py_zone"] = str(zone_path)
         pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
 
-        def _boom(*a: Any, **k: Any) -> Any:
-            raise RuntimeError("csv boom")
+        real_open = open
 
-        monkeypatch.setattr(pfb_unbound.csv, "reader", _boom)
+        def _boom_open(path: Any, *a: Any, **k: Any) -> Any:
+            if str(path) == str(zone_path):
+                raise OSError("simulated read failure")
+            return real_open(path, *a, **k)
+
+        monkeypatch.setattr("builtins.open", _boom_open)
         pfb_unbound._load_zone_db(_new_feed_group_db(), 0)
         # Before-state: the entry is genuinely open first.
         assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 1
@@ -235,10 +246,14 @@ class TestLoadDataDbLedgerWiring:
         pfb_unbound.pfb["pfb_py_data"] = str(data_path)
         pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
 
-        def _boom(*a: Any, **k: Any) -> Any:
-            raise RuntimeError("csv boom")
+        real_open = open
 
-        monkeypatch.setattr(pfb_unbound.csv, "reader", _boom)
+        def _boom_open(path: Any, *a: Any, **k: Any) -> Any:
+            if str(path) == str(data_path):
+                raise OSError("simulated read failure")
+            return real_open(path, *a, **k)
+
+        monkeypatch.setattr("builtins.open", _boom_open)
 
         pfb_unbound._load_data_db(_new_feed_group_db(), 0)
 
@@ -255,10 +270,14 @@ class TestLoadDataDbLedgerWiring:
         pfb_unbound.pfb["pfb_py_data"] = str(data_path)
         pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
 
-        def _boom(*a: Any, **k: Any) -> Any:
-            raise RuntimeError("csv boom")
+        real_open = open
 
-        monkeypatch.setattr(pfb_unbound.csv, "reader", _boom)
+        def _boom_open(path: Any, *a: Any, **k: Any) -> Any:
+            if str(path) == str(data_path):
+                raise OSError("simulated read failure")
+            return real_open(path, *a, **k)
+
+        monkeypatch.setattr("builtins.open", _boom_open)
         pfb_unbound._load_data_db(_new_feed_group_db(), 0)
         assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 1
 
@@ -284,10 +303,14 @@ class TestLoadWhitelistDbLedgerWiring:
         pfb_unbound.pfb["pfb_py_whitelist"] = str(wl_path)
         pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
 
-        def _boom(*a: Any, **k: Any) -> Any:
-            raise RuntimeError("csv boom")
+        real_open = open
 
-        monkeypatch.setattr(pfb_unbound.csv, "reader", _boom)
+        def _boom_open(path: Any, *a: Any, **k: Any) -> Any:
+            if str(path) == str(wl_path):
+                raise OSError("simulated read failure")
+            return real_open(path, *a, **k)
+
+        monkeypatch.setattr("builtins.open", _boom_open)
 
         pfb_unbound._load_whitelist_db()
 
@@ -303,10 +326,14 @@ class TestLoadWhitelistDbLedgerWiring:
         pfb_unbound.pfb["pfb_py_whitelist"] = str(wl_path)
         pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
 
-        def _boom(*a: Any, **k: Any) -> Any:
-            raise RuntimeError("csv boom")
+        real_open = open
 
-        monkeypatch.setattr(pfb_unbound.csv, "reader", _boom)
+        def _boom_open(path: Any, *a: Any, **k: Any) -> Any:
+            if str(path) == str(wl_path):
+                raise OSError("simulated read failure")
+            return real_open(path, *a, **k)
+
+        monkeypatch.setattr("builtins.open", _boom_open)
         pfb_unbound._load_whitelist_db()
         assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 1
 
@@ -386,6 +413,126 @@ class TestLoadHstsDbLedgerWiring:
         pfb_unbound._load_hsts_db()
 
         assert not os.path.isfile(pfb_unbound.pfb["pfb_py_status"])
+
+
+class TestLoadSafeSearchDbLedgerWiring:
+    """_load_safesearch_db(): same fail-before/pass-after shape as the 4 mandatory
+    sites, via a REAL open() OSError (not a monkeypatched csv.reader)."""
+
+    def setup_method(self) -> None:
+        pfb_unbound.safeSearchDB = defaultdict(list)
+        pfb_unbound.pfb["safeSearchDB"] = False
+
+    def test_load_failure_opens_entry_and_keeps_freetext_log(
+        self, tmp_path: Any, monkeypatch: Any, capsys: Any
+    ) -> None:
+        ss_path = tmp_path / "pfb_py_ss.txt"
+        ss_path.write_text("forcesafe.com,1.2.3.4,::1\n", encoding="utf-8")
+        pfb_unbound.pfb["pfb_py_ss"] = str(ss_path)
+        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
+
+        real_open = open
+
+        def _boom_open(path: Any, *a: Any, **k: Any) -> Any:
+            if str(path) == str(ss_path):
+                raise OSError("simulated read failure")
+            return real_open(path, *a, **k)
+
+        monkeypatch.setattr("builtins.open", _boom_open)
+
+        pfb_unbound._load_safesearch_db()
+
+        err = capsys.readouterr().err
+        assert str(ss_path) in err, "the existing freetext diagnostic must be unchanged"
+        entries = _read_status_file(pfb_unbound.pfb["pfb_py_status"])
+        assert len(entries) == 1
+        assert entries[0]["item"] == str(ss_path)
+        assert entries[0]["stage"] == "parse"
+
+    def test_success_after_failure_clears_the_entry(self, tmp_path: Any, monkeypatch: Any) -> None:
+        ss_path = tmp_path / "pfb_py_ss.txt"
+        ss_path.write_text("forcesafe.com,1.2.3.4,::1\n", encoding="utf-8")
+        pfb_unbound.pfb["pfb_py_ss"] = str(ss_path)
+        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
+
+        real_open = open
+
+        def _boom_open(path: Any, *a: Any, **k: Any) -> Any:
+            if str(path) == str(ss_path):
+                raise OSError("simulated read failure")
+            return real_open(path, *a, **k)
+
+        monkeypatch.setattr("builtins.open", _boom_open)
+        pfb_unbound._load_safesearch_db()
+        # Before-state: the entry is genuinely open first.
+        assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 1
+
+        monkeypatch.undo()
+
+        pfb_unbound._load_safesearch_db()
+
+        assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
+        assert pfb_unbound.safeSearchDB["forcesafe.com"] == {"A": "1.2.3.4", "AAAA": "::1"}
+
+    def test_no_file_present_leaves_ledger_untouched(self, tmp_path: Any) -> None:
+        pfb_unbound.pfb["pfb_py_ss"] = str(tmp_path / "does_not_exist.txt")
+        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
+
+        pfb_unbound._load_safesearch_db()
+
+        assert not os.path.isfile(pfb_unbound.pfb["pfb_py_status"])
+
+
+class TestLoadIniConfigLedgerWiring:
+    """_load_ini_config(): fail-before/pass-after via a REAL configparser parse
+    failure. ConfigParser.read() swallows OSError internally (a permission-
+    denied/missing file is silently skipped, never raised -- verified: an
+    open()-monkeypatch fault would never reach the except branch), so the only
+    production-realistic fault reaching it is a malformed ini file -- content
+    before any section header raises a real MissingSectionHeaderError."""
+
+    def test_missing_file_returns_none_and_never_opens_an_entry(self, tmp_path: Any) -> None:
+        pfb_unbound.pfb["pfb_unbound.ini"] = str(tmp_path / "does_not_exist.ini")
+        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
+
+        assert pfb_unbound._load_ini_config() is None
+        assert not os.path.isfile(pfb_unbound.pfb["pfb_py_status"])
+
+    def test_parse_failure_opens_entry_and_keeps_freetext_log(self, tmp_path: Any, capsys: Any) -> None:
+        ini_path = tmp_path / "pfb_unbound.ini"
+        ini_path.write_text("bogus_line_with_no_section_header\n", encoding="utf-8")
+        pfb_unbound.pfb["pfb_unbound.ini"] = str(ini_path)
+        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
+
+        config = pfb_unbound._load_ini_config()
+
+        assert config is not None
+        assert config.has_section("MAIN") is False, "a failed parse must fall through to an empty config"
+        err = capsys.readouterr().err
+        assert "Failed to load ini configuration" in err, "the existing freetext diagnostic must be unchanged"
+        entries = _read_status_file(pfb_unbound.pfb["pfb_py_status"])
+        assert len(entries) == 1
+        assert entries[0]["facility"] == "dnsbl"
+        assert entries[0]["item"] == str(ini_path)
+        assert entries[0]["stage"] == "parse"
+
+    def test_success_after_failure_clears_the_entry(self, tmp_path: Any) -> None:
+        ini_path = tmp_path / "pfb_unbound.ini"
+        ini_path.write_text("bogus_line_with_no_section_header\n", encoding="utf-8")
+        pfb_unbound.pfb["pfb_unbound.ini"] = str(ini_path)
+        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
+
+        pfb_unbound._load_ini_config()
+        # Before-state: the entry is genuinely open first.
+        assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 1
+
+        ini_path.write_text("[MAIN]\npython_enable = true\n", encoding="utf-8")
+
+        config = pfb_unbound._load_ini_config()
+
+        assert config is not None
+        assert config.has_section("MAIN") is True
+        assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
 
 
 class TestDnsblBuildFromManifestLedgerWiring:

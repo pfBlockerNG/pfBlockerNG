@@ -1022,6 +1022,26 @@ def _load_hsts_db() -> None:
         pfb_py_status_open("dnsbl", pfb["pfb_py_hsts"], "parse", "Failed to load: {}: {}".format(pfb["pfb_py_hsts"], e))
 
 
+def _load_ini_config() -> ConfigParser | None:
+    """Parse ``pfb["pfb_unbound.ini"]`` -- extracted out of ``init_standard`` (same
+    extraction rationale as ``_load_zone_db``) so the load -- and its failure
+    diagnostic -- are unit-testable. Returns ``None`` when the ini file is absent
+    (caller's existing "ini file missing" fallback applies unchanged). On a parse
+    failure, still returns the (empty) ConfigParser -- behaviour-preserving fall-
+    through into the caller's ``has_section()`` checks, exactly as the original
+    inline try/except (no early return on the read failure)."""
+    if not os.path.isfile(pfb["pfb_unbound.ini"]):
+        return None
+    config = ConfigParser()
+    try:
+        config.read(pfb["pfb_unbound.ini"])
+        pfb_py_status_close("dnsbl", pfb["pfb_unbound.ini"], "parse")
+    except Exception as e:
+        sys.stderr.write("[pfBlockerNG]: Failed to load ini configuration: {}".format(e))
+        pfb_py_status_open("dnsbl", pfb["pfb_unbound.ini"], "parse", "Failed to load ini configuration: {}".format(e))
+    return config
+
+
 def init_standard(id: int, env: module_env) -> bool:
     global \
         pfb, \
@@ -1329,14 +1349,8 @@ def init_standard(id: int, env: module_env) -> bool:
     feedGroupDB: defaultdict[str, Any] = defaultdict(str)
 
     # Read pfb_unbound.ini settings
-    if os.path.isfile(pfb["pfb_unbound.ini"]):
-        config = ConfigParser()
-        try:
-            config.read(pfb["pfb_unbound.ini"])
-        except Exception as e:
-            sys.stderr.write("[pfBlockerNG]: Failed to load ini configuration: {}".format(e))
-            pass
-
+    config = _load_ini_config()
+    if config is not None:
         if config.has_section("MAIN"):
             if config.has_option("MAIN", "python_enable"):
                 pfb["python_enable"] = config.getboolean("MAIN", "python_enable")
@@ -6175,12 +6189,13 @@ def _load_safesearch_db() -> None:
                         sys.stderr.write("[pfBlockerNG]: Failed to parse: {}: {}".format(pfb["pfb_py_ss"], row))
 
                 pfb["safeSearchDB"] = True
+            pfb_py_status_close("dnsbl", pfb["pfb_py_ss"], "parse")
         except Exception as e:
             # #714 FIX #6: name the SafeSearch source (pfb_py_ss), not pfb_py_zone -- a
             # copy-paste leftover from the zone-list loader below sent a real SafeSearch
             # load failure diagnostic at the wrong file.
             sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}".format(pfb["pfb_py_ss"], e))
-            pass
+            pfb_py_status_open("dnsbl", pfb["pfb_py_ss"], "parse", "Failed to load: {}: {}".format(pfb["pfb_py_ss"], e))
 
 
 def safesearch_entry(q_name_original: str) -> Any:
