@@ -430,12 +430,13 @@ if (!function_exists('pkg_version_compare')) {
 //   * get_dnsavailable()   -> reads $GLOBALS['pfb_test_dns_available'] (default true).
 
 if (!function_exists('file_notice')) {
-	function file_notice($id, $notice, $category = 'General', $url = '', $local_only = 0) {
+	function file_notice($id, $notice, $category = 'General', $url = '', $priority = 1, $local_only = false) {
 		$GLOBALS['pfb_test_file_notices'][] = array(
 			'id'         => $id,
 			'notice'     => $notice,
 			'category'   => $category,
 			'url'        => $url,
+			'priority'   => $priority,
 			'local_only' => $local_only,
 		);
 	}
