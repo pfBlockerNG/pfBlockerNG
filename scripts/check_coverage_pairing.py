@@ -51,7 +51,11 @@ from __future__ import annotations
 
 import sys
 
-_FIX_HINT = "add the paired test, or apply the `no-test-needed` label if none is warranted"
+_FIX_HINT = (
+    "add the paired test, or — if none is warranted — apply the `no-test-needed` label, "
+    "add a `no-test-needed: <why>` line to the PR body, and re-run this check "
+    "(labels/body are re-read live on every run; issue #969)"
+)
 
 
 def _is_docs(path: str) -> bool:

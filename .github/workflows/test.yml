@@ -630,10 +630,9 @@ jobs:
         # silently always pass. Setting it explicitly makes the exit code of the
         # script (not tee) decide the job result — and the red canary below pins
         # that on every run (CLAUDE.md "CI-gate wiring proves its red path in-job").
-        # PR_BODY arrives via env, never inline ${{ }} in run: — script injection.
         env:
-          WARN_ONLY: ${{ contains(github.event.pull_request.labels.*.name, 'no-test-needed') && '1' || '' }}
-          PR_BODY: ${{ github.event.pull_request.body }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUM: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           # Red canary: prove ON THIS RUNNER, under THIS block's shell options, that
@@ -646,13 +645,23 @@ jobs:
             echo "::error::coverage-pairing red canary failed: a violating input did not propagate exit 1 through the pipe — fix this step's shell options before trusting the gate"
             exit 1
           fi
+          # LIVE label + body read — never the trigger-time event payload. The
+          # no-test-needed escape is applied AFTER this gate goes red, and a re-run
+          # keeps the original payload, so a payload read makes the failure
+          # message's own remedy impossible without a synthetic push/reopen
+          # (issue #969). A failed fetch leaves WARN_ONLY/body empty = strict
+          # mode: an API hiccup tightens the gate, never skips it.
+          WARN_ONLY=''
+          if gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUM}/labels" --jq '.[].name' 2>/dev/null | grep -qx 'no-test-needed'; then
+            WARN_ONLY=1
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUM}" --jq '.body // ""' > pr_body.txt 2>/dev/null || : > pr_body.txt
           # Escape-hatch justification (issue #921's "applied deliberately" constraint,
           # enforced per #934): with the no-test-needed label set, the PR body is
           # handed to the script (--pr-body-file), which requires a line starting
           # `no-test-needed: <why>` — else it FAILS instead of downgrading. The
           # decision logic lives in the tested script, not in shell (mid-sentence
           # mentions and blockquotes must not count; pinned by its unit tests).
-          printf '%s\n' "$PR_BODY" > pr_body.txt
           python3 scripts/check_coverage_pairing.py ${WARN_ONLY:+--warn-only} ${WARN_ONLY:+--pr-body-file pr_body.txt} < changed.txt | tee -a "$GITHUB_STEP_SUMMARY"
 
   # ── Comment-narration gate (CLAUDE.md "Comments — constraint, not narration") ──
