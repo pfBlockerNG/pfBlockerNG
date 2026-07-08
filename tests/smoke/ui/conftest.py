@@ -337,7 +337,9 @@ def _ui_config_baseline(webui: WebUI, smoke_vm: SmokeVM) -> dict[str, str]:
     """
     from .. import helpers
 
-    result = smoke_vm.ssh("/bin/sh", "-c", f"cp /conf/config.xml {UI_CONFIG_SNAPSHOT}")
+    # Single-string ssh convention (verbatim under the guest /bin/sh); both paths are
+    # fixed internal constants (PR #965 Copilot review: no extra /bin/sh -c layer).
+    result = smoke_vm.ssh(f"cp /conf/config.xml {UI_CONFIG_SNAPSHOT}")
     if result.returncode != 0:
         raise RuntimeError(
             f"_ui_config_baseline: snapshotting /conf/config.xml to {UI_CONFIG_SNAPSHOT} failed: "
