@@ -62,7 +62,7 @@ failures — entries the icon logic never looks at.
 | Feed download fail | IP + DNSBL | `pfb_download_failure()` (`:10494`, log at `:10519-10520`), called from `:15973-15977` and `:17690-17694` | 2 | yes |
 | DNSBL conf/build fail (`pfb_stop_start_unbound()` returns non-zero) | DNSBL | `:7936-7952` | 2 | yes |
 | DNSBL swap-not-confirmed → restart fallback | DNSBL | `:7886-7896` | 2 | yes, but **not itself terminal** — see 1.3 |
-| IP `pfctl` apply fail | IP | `pfb_pfctl_table_op()` (`:4703-4716`) | **1** | **no** — tracked separately, issue #980 |
+| IP `pfctl` apply fail | IP | `pfb_pfctl_table_op()` (`:4733-4747`) | 2 (fixed by issue #980 / PR #987, was 1) | yes — but the widget's case-sensitive `grep 'FAIL'` still misses it: `pfb_pfctl_error_message()` emits lowercase `failed` (issue #990) |
 | DNSBL Python parse/load exception | DNSBL | `pfb_unbound.py`, ~20 `sys.stderr.write(...)` sites (e.g. `:1318`, `:1418`, `:1451`, `:1481`, `:1492`) → `py_error.log` | n/a (stderr redirect) | n/a — separate file, not `error.log` |
 
 Most Python-side lines name the offending file (`pfb["pfb_py_zone"]`, `pfb_py_data`,
@@ -74,9 +74,11 @@ lines cannot assume every one names a file.
 
 `pfb_write_canonical_alias($alias_mirror, $canonical_set)` (`:18332`) writes the last-applied
 mirror `/var/db/aliastables/pfB_<Alias>_v{4,6}.txt` **before** the apply step runs.
-`pfb_apply_alias_delta()` → `pfb_pfctl_table_op()` (`:18701-18713` → `:4703-4716`) is
-fire-and-forget: on a `pfctl` failure it only logs at level 1 (issue #980). **Nothing compares
-the live kernel table back against the mirror after the fact, and nothing retries.** A failed
+`pfb_apply_alias_delta()` → `pfb_pfctl_table_op()` (`:5133-5203` → `:4733-4747`) is
+fire-and-forget: on a `pfctl` failure it now logs at level 2 into `error.log` too (issue #980,
+fixed by PR #987) — but the widget still can't see it (issue #990: lowercase `failed`, above).
+**Nothing compares the live kernel table back against the mirror after the fact, and nothing
+retries.** A failed
 apply is invisible today and stays wrong until the source changes again (which re-triggers a
 fresh attempt) or an operator manually Force-Reloads.
 
@@ -200,7 +202,8 @@ retried again next tick.
    red/green logic for "is it live at all" is untouched by this ADR).
 2. Every existing writer's `pfb_logger(..., 2)` call (or Python `sys.stderr.write`) is
    **unchanged** — this ADR ADDS ledger writes alongside them, never removes or reformats the
-   log line itself (issue #980's logging-level fix is explicitly OUT of scope here).
+   log line itself (issue #980's logging-level fix already landed via PR #987 — this ADR
+   touches no logging level, only adds ledger writes alongside).
 3. Opening the same `(facility, item, stage)` key twice never duplicates an entry — refresh only.
 4. Every writer site has a paired clearer for the same key (§2.2) — no phase ships a writer
    without also shipping its clearer.
@@ -221,7 +224,10 @@ overrides this draft) and each row maps to a Phase-2/3/4 test or an explicit def
 
 ### Explicitly kept / out of scope
 
-- Issue #980 (pfctl failure logging level) — separate fix, not bundled here.
+- Issue #980 (pfctl failure logging level) — already fixed separately (PR #987, merged
+  2026-07-08), not part of this ADR. Residual gap it left behind (the widget's case-sensitive
+  `FAIL` grep still misses the fix's lowercase `failed` wording) is tracked as issue #990 and
+  moot regardless — Phase 6 retires that grep entirely in favor of the ledger.
 - Active retry for `download`/`parse` stages — stays on normal cadence (§2.4).
 - A UI settings knob to disable/tune the ledger — none proposed; always-on, matching how the
   due-ledger itself has no on/off switch.
@@ -307,7 +313,8 @@ overrides this draft) and each row maps to a Phase-2/3/4 test or an explicit def
   produced by `pfblockerng.sh`, unchanged) into an open/close call from whichever PHP path
   already reads it.
 - IP apply fail/success in `pfb_pfctl_table_op()` / its caller — open alongside the EXISTING
-  level-1 log call (do not touch its logging level — issue #980).
+  level-2 log call (issue #980 already fixed this via PR #987; do not touch its logging level
+  further).
 - Tests: fail-before/pass-after per writer — synthetic failure opens the entry; synthetic
   success (same key) closes it; a second failure on an already-open key refreshes, not
   duplicates.

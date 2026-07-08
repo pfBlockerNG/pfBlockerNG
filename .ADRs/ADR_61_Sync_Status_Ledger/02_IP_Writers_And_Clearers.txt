@@ -51,16 +51,17 @@ ACTION PLAN (ordered)
 3. IP apply fail/success: in pfb_pfctl_table_op() (or its caller, pfb_apply_alias_delta()
    -- pick whichever has access to a stable per-alias item identity), on a pfctl failure
    add open('ip', <table/alias>, 'apply', <the existing error message text>) ALONGSIDE the
-   existing pfb_logger(..., 1) call -- do NOT change that call's logtype (issue #980 owns
-   that separately). On the next successful apply for the same alias, close() the key.
+   existing pfb_logger(..., 2) call -- do NOT change that call's logtype (issue #980 already
+   fixed it to level 2 via PR #987; this ADR touches no logging level). On the next
+   successful apply for the same alias, close() the key.
 4. Every open() call in this phase MUST have a close() call landing in this SAME phase
    for the same (facility,item,stage) triple -- ADR Semantics #4 is a hard gate, not a
    suggestion.
 
 CONSTRAINTS
 - Tabs, uppercase TRUE/FALSE, PFBL-01/RequireConfigGateway/UppercaseBoolean clean.
-- Do NOT touch pfb_pfctl_table_op()'s existing pfb_logger(..., 1) call -- leave the
-  logging level exactly as-is (issue #980, filed separately, not this ADR's scope).
+- Do NOT touch pfb_pfctl_table_op()'s existing pfb_logger(..., 2) call -- leave the
+  logging level exactly as-is (issue #980 already fixed it via PR #987; not this ADR's scope).
 - Do NOT wire DNSBL-side writers here (Phase 3) or the Python side (Phase 4) or tick
   reconciliation (Phase 5) or any widget change (Phase 6).
 - Do NOT change what triggers a download/apply attempt, its retry cadence, or any
@@ -85,8 +86,8 @@ KILL-GATES (the orchestrator verifies these adversarially)
 - For every open() added this phase, grep for its paired close() and confirm it lands in
   THIS phase's diff, not deferred -- a writer without a same-phase clearer is a Semantics
   #4 violation and blocks the phase.
-- Diff-read: pfb_logger(..., 1) at the pfctl-failure site is byte-identical to before
-  (issue #980 untouched).
+- Diff-read: pfb_logger(..., 2) at the pfctl-failure site is byte-identical to before
+  (issue #980's PR #987 fix untouched by this phase).
 - The download-fail test actually fails against a git-stash-free revert of just this
   phase's hunk (use a plain Edit-based revert-then-restore, NOT git stash/checkout per
   this session's established practice -- git stash is repo-wide and can collide with a
