@@ -12,6 +12,11 @@ use PHPUnit\Framework\TestCase;
  * level 1 writes to the pfB log only -- proving level routing, not just presence.
  * Uses the sink-capture technique from PfbLoggerIsoTimestampTest: $GLOBALS['pfb']
  * 'log'/'errlog' point at temp files so the real on-disk write is asserted.
+ *
+ * ADR-60 P2: pfb_logger() now inserts its ISO-8601 stamp AFTER
+ * pfb_validate_log_line()'s leading "\n" (a pure separator from the PREVIOUS
+ * write, preserved verbatim) and BEFORE the "pfb_validate: REJECT ..." text --
+ * expectations below match on that shape, not the pre-stamp literal.
  */
 #[CoversFunction('pfb_validate_log')]
 final class PfbValidateLogTest extends TestCase
@@ -24,12 +29,22 @@ final class PfbValidateLogTest extends TestCase
 
 	protected function setUp(): void
 	{
-		foreach (['log', 'errlog', 'pnow', 'runlog', 'runlog_active'] as $k) {
+		foreach (['log', 'errlog', 'runlog', 'runlog_active'] as $k) {
 			$this->saved[$k] = array_key_exists($k, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$k] : false;
 		}
 		// A stray 'runlog_active' from an earlier test must not mirror our writes
 		// into a third file this test never provisions.
 		unset($GLOBALS['pfb']['runlog'], $GLOBALS['pfb']['runlog_active']);
+	}
+
+	/**
+	 * pfb_validate_log_line()'s leading "\n" is preserved verbatim by pfb_logger();
+	 * the ISO-8601 stamp lands right after it, before the rest of the canonical line.
+	 */
+	private function assertSinkContainsStampedLine(string $expectedLine, string $sink, string $message): void
+	{
+		$pattern = '/\n\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} ' . preg_quote(substr($expectedLine, 1), '/') . '/';
+		$this->assertMatchesRegularExpression($pattern, $sink, $message);
 	}
 
 	protected function tearDown(): void
@@ -76,12 +91,12 @@ final class PfbValidateLogTest extends TestCase
 		// Then: the canonical line lands in BOTH sinks (level 2 semantics).
 		$logContents    = (string) file_get_contents($log);
 		$errlogContents = (string) file_get_contents($errlog);
-		$this->assertStringContainsString(
+		$this->assertSinkContainsStampedLine(
 			$expectedLine,
 			$logContents,
 			"expected pfB log to contain <{$expectedLine}>, got <{$logContents}>"
 		);
-		$this->assertStringContainsString(
+		$this->assertSinkContainsStampedLine(
 			$expectedLine,
 			$errlogContents,
 			"expected error log to contain <{$expectedLine}>, got <{$errlogContents}>"
@@ -106,7 +121,7 @@ final class PfbValidateLogTest extends TestCase
 
 		// Then: the pfB log carries the line...
 		$logContents = (string) file_get_contents($log);
-		$this->assertStringContainsString(
+		$this->assertSinkContainsStampedLine(
 			$expectedLine,
 			$logContents,
 			"expected pfB log to contain <{$expectedLine}>, got <{$logContents}>"
@@ -151,7 +166,7 @@ final class PfbValidateLogTest extends TestCase
 		// the formatter no longer escapes it either.
 		$expectedLine = pfb_validate_log_line('pfB_Feed7', 'structural', 'probe_failed', $detail);
 		$logged       = (string) file_get_contents($log);
-		$this->assertStringContainsString($expectedLine, $logged);
+		$this->assertSinkContainsStampedLine($expectedLine, $logged, "expected sink to contain <{$expectedLine}>, got <{$logged}>");
 		$this->assertStringContainsString('application/x-gzip&evil', $logged);
 		$this->assertStringNotContainsString(
 			'&amp;',

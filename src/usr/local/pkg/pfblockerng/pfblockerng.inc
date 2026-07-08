@@ -3101,24 +3101,17 @@ function pfb_log_iso_timestamp(): string {
 function pfb_logger($log, $logtype) {
 	global $g, $pfb;
 
-	// ISO-8601 'YYYY-MM-DD HH:MM:SS' (unambiguous, locale-independent, sorts lexically).
-	// The "FAIL" error-log greps in pfblockerng.inc + the dashboard widget match THIS log
-	// timestamp by today's date, so they use the same Y-m-d pattern (keep them in lockstep).
-	$now = date('Y-m-d H:i:s', time());
+	$now = pfb_log_iso_timestamp();
 
-	// Only log timestamp if new
-	if (strpos($log, 'NOW') !== FALSE) {
-		$elog = str_replace('NOW', $now, "{$log}");	// Always report timestamp to errorlog
-		if ($now == ($pfb['pnow'] ?? '')) {
-			$log = str_replace(' [ NOW ]', '', "{$log}");
-		} else {
-			$log = str_replace('NOW', $now, "{$log}");
-		}
-		$pfb['pnow'] = "{$now}";
-	}
-	else {
-		$elog = "{$log} [ {$now} ]";
-	} 
+	// ADR-60: log/extraslog/errlog are always stamped now; the legacy opt-in
+	// '[ NOW ]' token + same-second '$pfb[pnow]' dedup (ADR.md S1.4) is retired. Scrub
+	// any leftover literal token, then insert the stamp AFTER any leading newlines --
+	// several callers (e.g. ADR-48's pfb_validate_log_line()) use a leading "\n" as a
+	// pure separator from the PREVIOUS write, not part of their own line's content.
+	$log = str_replace([' [ NOW ]', 'NOW'], '', $log);
+	$lead = strspn($log, "\n");
+	$log = substr($log, 0, $lead) . "{$now} " . substr($log, $lead);
+	$elog = $log;
 
 	// Mirror the main-log lines into the per-run log while a run is active (set by
 	// sync_package_pfblockerng). The live Update viewer tails this file; the cumulative log is
@@ -3160,7 +3153,7 @@ function pfb_logger($log, $logtype) {
 
 		// Print to debugger
 		case 5:
-			@file_put_contents("/tmp/pfb_debug", "{$now} | {$elog}", FILE_APPEND);
+			@file_put_contents("/tmp/pfb_debug", "{$elog}", FILE_APPEND);
 			break;
 
 		// Print to Error log
@@ -10693,6 +10686,10 @@ function pfb_failures() {
 		exec("{$pfb['grep']} 'FAIL' {$pfb['errlog']} | {$pfb['grep']} {$today_date}", $results);
 		if (!empty($results)) {
 			foreach ($results as $result) {
+				// ADR-60: every errlog line now carries pfb_logger()'s leading ISO-8601
+				// stamp -- strip it first so header[4] still indexes into the original
+				// (pre-stamp) message shape, unchanged from before this rework.
+				$result = preg_replace('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} /', '', $result);
 				$header = explode(' ', $result);
 				$alias  = $header[4] ?? '';
 				$pfb['failed'][$alias] = ($pfb['failed'][$alias] ?? 0) + 1;	// avoid PHP 8 undefined-key warning on first failure
@@ -13671,6 +13668,9 @@ function pfb_sqlite_table_spec(int $table): array {
 function pfb_open_sqlite($table, $message) {
 	global $pfb;
 
+	// ADR-60: these writes bypass pfb_logger() entirely, so they stamp themselves.
+	$now = pfb_log_iso_timestamp();
+
 	// $table is always 1-7 from callers, but the if/elseif chain below has no else;
 	// default these so they are defined for any value. Behaviour-preserving.
 	$database	= '';
@@ -13700,14 +13700,14 @@ function pfb_open_sqlite($table, $message) {
 		$db_handle->busyTimeout("{$pfb['sqlite_timeout']}");
 	}
 	catch (Exception $e) {
-		@file_put_contents($pfb['errlog'], "\nDNSBL_SQL: Failed to open DB - {$message}", FILE_APPEND | LOCK_EX);
+		@file_put_contents($pfb['errlog'], "\n{$now} DNSBL_SQL: Failed to open DB - {$message}", FILE_APPEND | LOCK_EX);
 
 		try {
 			$db_handle = new SQLite3($database);
 			$db_handle->busyTimeout("{$pfb['sqlite_timeout']}");
 		}
 		catch (Exception $e) {
-			@file_put_contents($pfb['errlog'], "\nDNSBL_SQL: Failed to open DB 2nd attempt - {$message}", FILE_APPEND | LOCK_EX);
+			@file_put_contents($pfb['errlog'], "\n{$now} DNSBL_SQL: Failed to open DB 2nd attempt - {$message}", FILE_APPEND | LOCK_EX);
 		}
 	}
 
@@ -13722,11 +13722,11 @@ function pfb_open_sqlite($table, $message) {
 			// can confirm WAL stuck (exec() returns only success, not the mode).
 			$journal_mode = strtolower((string) $db_handle->querySingle('PRAGMA journal_mode = WAL;'));
 			if ($journal_mode !== 'wal') {
-				@file_put_contents($pfb['errlog'], "\nDNSBL_SQL: Failed to enable WAL ({$journal_mode}) - {$message}", FILE_APPEND | LOCK_EX);
+				@file_put_contents($pfb['errlog'], "\n{$now} DNSBL_SQL: Failed to enable WAL ({$journal_mode}) - {$message}", FILE_APPEND | LOCK_EX);
 			}
 		}
 		catch (Exception $e) {
-			@file_put_contents($pfb['errlog'], "\nDNSBL_SQL: Failed to enable WAL - {$message}", FILE_APPEND | LOCK_EX);
+			@file_put_contents($pfb['errlog'], "\n{$now} DNSBL_SQL: Failed to enable WAL - {$message}", FILE_APPEND | LOCK_EX);
 		}
 
 		// Validate database integrity
@@ -13735,7 +13735,7 @@ function pfb_open_sqlite($table, $message) {
 			$validate = $db_handle->query("PRAGMA integrity_check;");
 		}
 		catch (Exception $e) {
-			@file_put_contents($pfb['errlog'], "\nDNSBL_SQL: Failed to validate database - {$message}", FILE_APPEND | LOCK_EX);
+			@file_put_contents($pfb['errlog'], "\n{$now} DNSBL_SQL: Failed to validate database - {$message}", FILE_APPEND | LOCK_EX);
 		}
 
 		if ($validate) {
@@ -13763,7 +13763,7 @@ function pfb_open_sqlite($table, $message) {
 					. "END TRANSACTION;");
 		}
 		catch (Exception $e) {
-			@file_put_contents($pfb['errlog'], "\nDNSBL_SQL: Database failure - {$message}", FILE_APPEND | LOCK_EX);
+			@file_put_contents($pfb['errlog'], "\n{$now} DNSBL_SQL: Database failure - {$message}", FILE_APPEND | LOCK_EX);
 			return;
 		}
 

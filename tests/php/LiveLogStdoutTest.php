@@ -65,8 +65,13 @@ final class LiveLogStdoutTest extends TestCase
 
 		$out = $this->capture('Removing pfBlockerNG...', 1);
 
-		// Then the line reaches STDOUT so the page streams it, AND the cumulative log records it.
-		$this->assertSame('Removing pfBlockerNG...', $out, 'a lifecycle pass must mirror progress to STDOUT');
+		// Then the line reaches STDOUT so the page streams it (ADR-60 P2: with pfb_logger()'s
+		// leading ISO-8601 stamp, now unconditional), AND the cumulative log records it.
+		$this->assertMatchesRegularExpression(
+			'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} Removing pfBlockerNG\.\.\.$/',
+			$out,
+			'a lifecycle pass must mirror progress to STDOUT'
+		);
 		$this->assertStringContainsString('Removing pfBlockerNG...', (string) @file_get_contents($pfb['log']));
 	}
 
@@ -95,7 +100,11 @@ final class LiveLogStdoutTest extends TestCase
 		unset($pfb['hook_lifecycle']);
 		$pfb['run_stdout_override'] = TRUE;
 
-		$this->assertSame('a warning', $this->capture('a warning', 2), 'the widened gate must print without a lifecycle');
+		$this->assertMatchesRegularExpression(
+			'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} a warning$/',
+			$this->capture('a warning', 2),
+			'the widened gate must print without a lifecycle'
+		);
 		$this->assertStringContainsString('a warning', (string) @file_get_contents($pfb['errlog']));
 	}
 

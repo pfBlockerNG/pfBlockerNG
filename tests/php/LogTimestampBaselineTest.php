@@ -6,20 +6,23 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * ADR-60 Phase 1 — pins TODAY's inconsistent, sometimes-absent, sometimes
+ * ADR-60 Phase 1 pinned TODAY's inconsistent, sometimes-absent, sometimes
  * year-less log timestamp behaviour (ADR.md §1.3) as the "before" oracle for
- * Phases 2-4's red→green proofs. No production output changes in this phase.
+ * Phases 2-4's red→green proofs. Phase 2 flips the log/extraslog/errlog rows
+ * (below) to pin the FIXED, always-on behaviour instead: the legacy opt-in
+ * '[ NOW ]' token + same-second '$pfb[pnow]' dedup (ADR.md §1.4) is retired.
  *
  * pfb_daemon_filterlog() reads php://stdin in an unbounded daemon loop and is
  * not directly callable from a unit test; its 'BSD'/'syslog' timestamp branch
- * (§1.3's ip_blocklog/ip_permitlog/ip_matchlog row) is pinned via (a) a
- * grep tripwire on the exact current source line, so this oracle goes red the
- * moment Phase 3 changes it, and (b) a reproduction of that exact formula
- * against synthetic fixtures.
+ * (§1.3's ip_blocklog/ip_permitlog/ip_matchlog row, Phase 3's row, untouched
+ * here) is pinned via (a) a grep tripwire on the exact current source line, so
+ * this oracle goes red the moment Phase 3 changes it, and (b) a reproduction
+ * of that exact formula against synthetic fixtures.
  */
 #[CoversFunction('pfb_logger')]
 #[CoversFunction('pfb_parsed_fail')]
 #[CoversFunction('pfb_log_iso_timestamp')]
+#[CoversFunction('pfb_open_sqlite')]
 final class LogTimestampBaselineTest extends TestCase
 {
 	private const PFBLOCKERNG_INC = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc';
@@ -34,7 +37,7 @@ final class LogTimestampBaselineTest extends TestCase
 
 	protected function setUp(): void
 	{
-		foreach (['log', 'errlog', 'extraslog', 'pnow', 'runlog', 'runlog_active'] as $k) {
+		foreach (['log', 'errlog', 'extraslog', 'runlog', 'runlog_active'] as $k) {
 			$this->saved[$k] = array_key_exists($k, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$k] : false;
 		}
 		// The syslog-branch reproduction below reformats a fixed instant -- pin the
@@ -68,13 +71,14 @@ final class LogTimestampBaselineTest extends TestCase
 		return $f;
 	}
 
-	private const NO_TIMESTAMP_PATTERN = '/\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2}|[A-Za-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}/';
-
 	// -----------------------------------------------------------------------
-	// §1.3 row: log/extraslog -- opt-in NOW token, process-global same-second dedup
+	// §1.3 row: log/extraslog -- ADR-60 P2: always stamped now, no opt-in
+	// token, no same-second dedup. Fixture messages carry no '[ NOW ]' token
+	// at all (that opt-in mechanic no longer exists), proving the timestamp
+	// is unconditional, not substitution-triggered.
 	// -----------------------------------------------------------------------
 
-	public function testLogWithoutNowTokenWritesNoTimestamp(): void
+	public function testLogAlwaysStampedWithIsoTimestamp(): void
 	{
 		$log = $this->tempFile('pfb_log_notoken_');
 		$GLOBALS['pfb']['log'] = $log;
@@ -82,15 +86,14 @@ final class LogTimestampBaselineTest extends TestCase
 		pfb_logger("pfb-baseline no-token line\n", 1);
 
 		$written = (string) file_get_contents($log);
-		$this->assertSame(
-			"pfb-baseline no-token line\n",
+		$this->assertMatchesRegularExpression(
+			'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} pfb-baseline no-token line\n$/',
 			$written,
-			"a pfb_logger() call with no 'NOW' token must write the line unchanged, no timestamp"
+			"pfb_logger() must ALWAYS prefix an ISO-8601 timestamp, even with no legacy 'NOW' token; got: {$written}"
 		);
-		$this->assertDoesNotMatchRegularExpression(self::NO_TIMESTAMP_PATTERN, $written);
 	}
 
-	public function testExtrasLogWithoutNowTokenWritesNoTimestamp(): void
+	public function testExtrasLogAlwaysStampedWithIsoTimestamp(): void
 	{
 		$extraslog = $this->tempFile('pfb_extraslog_notoken_');
 		$GLOBALS['pfb']['extraslog'] = $extraslog;
@@ -98,143 +101,152 @@ final class LogTimestampBaselineTest extends TestCase
 		pfb_logger("pfb-baseline extraslog no-token line\n", 3);
 
 		$written = (string) file_get_contents($extraslog);
-		$this->assertSame(
-			"pfb-baseline extraslog no-token line\n",
+		$this->assertMatchesRegularExpression(
+			'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} pfb-baseline extraslog no-token line\n$/',
 			$written,
-			'extraslog shares log\'s opt-in NOW-token mechanics -- no token means no timestamp'
+			"extraslog must ALWAYS be stamped now too; got: {$written}"
 		);
-		$this->assertDoesNotMatchRegularExpression(self::NO_TIMESTAMP_PATTERN, $written);
 	}
 
-	public function testLogWithNowTokenSubstitutesIsoTimestampWhenPnowCleared(): void
+	/**
+	 * A caller still embedding the legacy '[ NOW ]' token gets it defensively
+	 * scrubbed to nothing -- never substituted, never left as dead text --
+	 * while the unconditional prefix still lands.
+	 */
+	public function testLogLegacyNowTokenScrubbedNotSubstituted(): void
 	{
 		$log = $this->tempFile('pfb_log_now_');
 		$GLOBALS['pfb']['log'] = $log;
-		unset($GLOBALS['pfb']['pnow']);
 
 		pfb_logger("pfb-baseline now-token line [ NOW ]\n", 1);
 
 		$written = (string) file_get_contents($log);
 		$this->assertMatchesRegularExpression(
-			'/^pfb-baseline now-token line \[ \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \]\n$/',
+			'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} pfb-baseline now-token line\n$/',
 			$written,
-			"a fresh (cleared 'pnow') NOW-token call must substitute an ISO-8601 timestamp"
+			"the legacy '[ NOW ]' token must be scrubbed, and the real prefix used instead; got: {$written}"
 		);
 	}
 
 	/**
-	 * The dedup bug (ADR.md §1.4): a same-second repeat call with the identical
-	 * 'pnow' strips the '[ NOW ]' bracket to NOTHING -- reproduced on purpose,
-	 * this is the "before" proof Phase 2 flips to "always stamped".
+	 * The dedup bug (ADR.md §1.4) is retired: two calls landing in the SAME
+	 * wall-clock second must BOTH carry a real, non-blank ISO timestamp --
+	 * neither strips the other's.
 	 *
-	 * Bounded retry: the premise ($now === preset pnow) only holds if the
-	 * wall-clock second does not roll over between presetting 'pnow' and
-	 * pfb_logger()'s own date() call: an inherent race with no injectable
-	 * clock in production code today.
+	 * Bounded retry: only proves the same-second premise if the wall-clock
+	 * second does not roll over between the two calls -- an inherent race
+	 * with no injectable clock in production code today.
 	 */
-	public function testLogNowTokenStrippedToNothingWhenPnowAlreadySetSameSecond(): void
+	public function testLogRepeatedSameSecondCallsBothStamped(): void
 	{
 		$log = $this->tempFile('pfb_log_dedup_');
 		$GLOBALS['pfb']['log'] = $log;
 
-		[$before, $after] = $this->runWithinSameSecond(function (string $before) use ($log) {
+		[$before, $after] = $this->runWithinSameSecond(function () use ($log) {
 			file_put_contents($log, '');
-			$GLOBALS['pfb']['pnow'] = $before;
-			pfb_logger("pfb-baseline dedup line [ NOW ]\n", 1);
+			pfb_logger("pfb-baseline dedup line\n", 1);
+			pfb_logger("pfb-baseline dedup line\n", 1);
 		});
 		$this->assertSame($before, $after, 'wall-clock second rolled over on every retry attempt (flaky env)');
 
-		$written = (string) file_get_contents($log);
-		$this->assertSame(
-			"pfb-baseline dedup line\n",
-			$written,
-			"same-second dedup must strip ' [ NOW ]' to nothing, not substitute a timestamp"
-		);
+		$lines = explode("\n", rtrim((string) file_get_contents($log), "\n"));
+		$this->assertCount(2, $lines, 'expected two independently-stamped lines');
+		foreach ($lines as $i => $line) {
+			$this->assertMatchesRegularExpression(
+				'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} pfb-baseline dedup line$/',
+				$line,
+				"line {$i} must carry its own real ISO timestamp even though both calls landed in the same second; got: {$line}"
+			);
+		}
 	}
 
 	/**
-	 * ADR.md §1.4: 'pnow' is a single process-global shared across every
-	 * logtype -- a log (logtype 1) call's timestamp poisons a LATER,
-	 * same-second extraslog (logtype 3) call too.
+	 * ADR.md §1.4's 'pnow' was a single process-global shared across every
+	 * logtype; it is deleted, so a log (logtype 1) call can no longer poison
+	 * a LATER, same-second extraslog (logtype 3) call -- each is now stamped
+	 * independently.
 	 */
-	public function testPnowDedupContaminatesAcrossLogAndExtrasLog(): void
+	public function testLogAndExtrasLogCallsAreIndependent(): void
 	{
 		$log = $this->tempFile('pfb_log_cross_');
 		$extraslog = $this->tempFile('pfb_extraslog_cross_');
 		$GLOBALS['pfb']['log'] = $log;
 		$GLOBALS['pfb']['extraslog'] = $extraslog;
-		unset($GLOBALS['pfb']['pnow']);
 
-		// Note: no external 'pnow' preset here -- the FIRST call (logtype 1) sets
-		// $pfb['pnow'] itself; the second call (logtype 3) is poisoned by THAT,
-		// proving the contamination flows from pfb_logger() itself, not the harness.
-		[$before, $after] = $this->runWithinSameSecond(function (string $before) use ($log, $extraslog) {
+		[$before, $after] = $this->runWithinSameSecond(function () use ($log, $extraslog) {
 			file_put_contents($log, '');
 			file_put_contents($extraslog, '');
-			unset($GLOBALS['pfb']['pnow']);
-			pfb_logger("pfb-cross-a [ NOW ]\n", 1);        // sets $pfb['pnow']
-			pfb_logger("pfb-cross-b [ NOW ]\n", 3);         // extraslog, same second
+			pfb_logger("pfb-cross-a\n", 1);
+			pfb_logger("pfb-cross-b\n", 3);
 		});
 		$this->assertSame($before, $after, 'wall-clock second rolled over on every retry attempt (flaky env)');
 
+		$logWritten    = (string) file_get_contents($log);
 		$extrasWritten = (string) file_get_contents($extraslog);
-		$this->assertSame(
-			"pfb-cross-b\n",
+
+		$this->assertMatchesRegularExpression(
+			'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} pfb-cross-a\n$/',
+			$logWritten,
+			"log's own stamp must be unaffected by the LATER extraslog call; got: {$logWritten}"
+		);
+		$this->assertMatchesRegularExpression(
+			'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} pfb-cross-b\n$/',
 			$extrasWritten,
-			"the log (logtype 1) call's 'pnow' must poison the LATER extraslog (logtype 3) call's bracket too"
+			"extraslog must carry its OWN real timestamp -- no shared global state left to contaminate it with; got: {$extrasWritten}"
 		);
 	}
 
 	// -----------------------------------------------------------------------
-	// §1.3 row: errlog -- always stamped via pfb_logger()'s $elog; the
-	// pfb_open_sqlite() bypass writes directly, with no timestamp at all.
+	// §1.3 row: errlog -- ADR-60 P2: both writers (pfb_logger()'s $elog and
+	// the pfb_open_sqlite() bypass) are always stamped now.
 	// -----------------------------------------------------------------------
 
-	public function testErrlogAlwaysStampedEvenWhenMainLogDedupStripsTimestamp(): void
+	public function testErrlogAndMainLogBothStampedSameFormat(): void
 	{
 		$log = $this->tempFile('pfb_log_errdedup_');
 		$errlog = $this->tempFile('pfb_errlog_errdedup_');
 		$GLOBALS['pfb']['log'] = $log;
 		$GLOBALS['pfb']['errlog'] = $errlog;
 
-		[$before, $after] = $this->runWithinSameSecond(function (string $before) use ($log, $errlog) {
-			file_put_contents($log, '');
-			file_put_contents($errlog, '');
-			$GLOBALS['pfb']['pnow'] = $before;
-			pfb_logger("pfb-errlog-dedup line [ NOW ]\n", 2);
-		});
-		$this->assertSame($before, $after, 'wall-clock second rolled over on every retry attempt (flaky env)');
+		pfb_logger("pfb-errlog-dedup line\n", 2);
 
 		$mainWritten = (string) file_get_contents($log);
 		$errWritten  = (string) file_get_contents($errlog);
 
-		$this->assertSame("pfb-errlog-dedup line\n", $mainWritten, 'main log: dedup strips the bracket');
 		$this->assertMatchesRegularExpression(
-			'/^pfb-errlog-dedup line \[ \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \]\n$/',
+			'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} pfb-errlog-dedup line\n$/',
+			$mainWritten,
+			"main log must always carry the ISO timestamp now; got: {$mainWritten}"
+		);
+		$this->assertSame(
+			$mainWritten,
 			$errWritten,
-			'errlog must always carry the ISO timestamp, even when the main log dedup fired'
+			'a logtype-2 write must land the IDENTICAL stamped line in both log and errlog'
 		);
 	}
 
-	public function testErrlogBypassWriteHasNoTimestamp(): void
+	public function testErrlogBypassWriteAlwaysStamped(): void
 	{
-		// Tripwire: pin the exact bypass shape from pfb_open_sqlite() so this
-		// oracle goes red if that call site's format ever changes.
+		// Tripwire: pin the exact (now-stamped) bypass shape from pfb_open_sqlite() so
+		// this oracle goes red if that call site's format ever changes.
 		$source = (string) file_get_contents(self::PFBLOCKERNG_INC);
 		$this->assertStringContainsString(
-			'@file_put_contents($pfb[\'errlog\'], "\nDNSBL_SQL: Failed to open DB - {$message}", FILE_APPEND | LOCK_EX);',
+			'@file_put_contents($pfb[\'errlog\'], "\n{$now} DNSBL_SQL: Failed to open DB - {$message}", FILE_APPEND | LOCK_EX);',
 			$source,
 			'pfb_open_sqlite() bypass write shape changed -- update this baseline oracle'
 		);
 
 		$errlog = $this->tempFile('pfb_errlog_bypass_');
-		// Reproduces that exact write: a direct file_put_contents(), no pfb_logger(),
-		// no timestamp of any kind.
-		file_put_contents($errlog, "\nDNSBL_SQL: Failed to open DB - Query ip cache", FILE_APPEND | LOCK_EX);
+		$now = date('Y-m-d H:i:s', time());
+		// Reproduces that exact (now-stamped) write: a direct file_put_contents(), no pfb_logger().
+		file_put_contents($errlog, "\n{$now} DNSBL_SQL: Failed to open DB - Query ip cache", FILE_APPEND | LOCK_EX);
 
 		$written = (string) file_get_contents($errlog);
-		$this->assertSame("\nDNSBL_SQL: Failed to open DB - Query ip cache", $written);
-		$this->assertDoesNotMatchRegularExpression(self::NO_TIMESTAMP_PATTERN, $written);
+		$this->assertMatchesRegularExpression(
+			'/^\n\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} DNSBL_SQL: Failed to open DB - Query ip cache$/',
+			$written,
+			"the pfb_open_sqlite() bypass write must always carry a real ISO timestamp now; got: {$written}"
+		);
 	}
 
 	// -----------------------------------------------------------------------
@@ -318,10 +330,8 @@ final class LogTimestampBaselineTest extends TestCase
 	}
 
 	/**
-	 * Runs $work($before) with a best-effort guarantee that no wall-clock
-	 * second boundary was crossed during it, retrying up to 5 times. $work()
-	 * itself decides whether/how to use $before (e.g. presetting
-	 * $GLOBALS['pfb']['pnow']) -- this helper has no side effects of its own.
+	 * Runs $work() with a best-effort guarantee that no wall-clock second
+	 * boundary was crossed during it, retrying up to 5 times.
 	 *
 	 * @return array{0:string,1:string} [$before, $after] -- equal on success.
 	 */
@@ -329,7 +339,7 @@ final class LogTimestampBaselineTest extends TestCase
 		$before = $after = '';
 		for ($attempt = 0; $attempt < 5; $attempt++) {
 			$before = date('Y-m-d H:i:s', time());
-			$work($before);
+			$work();
 			$after = date('Y-m-d H:i:s', time());
 			if ($before === $after) {
 				break;
