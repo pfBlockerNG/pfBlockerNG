@@ -512,7 +512,7 @@ def test_download_rejects_path_outside_allowed_dirs(webui: WebUI, smoke_vm: help
     # The reject envelope -- emphatically NOT the file's contents (no root: line).
     assert "Invalid filename/path" in resp.text, f"reject envelope missing the message: {resp.text!r}"
     assert "root:" not in resp.text, f"download leaked /etc/passwd content: {resp.text!r}"
-    code = resp.text.split("|")[1] if resp.text.startswith("|") else ""
+    code, _ = _decode_load_body(resp.text)
     assert code == "3", f"reject envelope reused a non-reject code (issue #991): {resp.text!r}"
     assert _cat(vm, EVIL_PATH) == before, "/etc/passwd changed after a rejected download (must be untouched)"
 
@@ -629,7 +629,7 @@ def test_clear_rejects_path_outside_allowed_dirs(webui: WebUI, smoke_vm: helpers
     resp = _post_clear(webui, token, EVIL_PATH)
     assert not looks_like_login_page(resp.text), "clear POST returned the login form (session lost)"
     assert "Invalid filename/path" in resp.text, f"reject envelope missing the message: {resp.text!r}"
-    code = resp.text.split("|")[1] if resp.text.startswith("|") else ""
+    code, _ = _decode_load_body(resp.text)
     assert code == "3", f"reject envelope reused a non-reject code (issue #991): {resp.text!r}"
     # AFTER (oracle): the protected file is wholly intact -- not unlinked, not truncated.
     assert _exists(vm, EVIL_PATH), "/etc/passwd was removed by a rejected clear (validator failed!)"
