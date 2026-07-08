@@ -42,16 +42,18 @@ if (file_exists('/var/log/pfblockerng/dnsbl.log')) {
 	for ($i=0; $i <= 5; $i++) {
 
 		// Search for blocked domain within last minutes
-		$timestamp = date('M j H:i', htmlspecialchars($_SERVER['REQUEST_TIME']));
-		if (!preg_match("/^[a-zA-Z0-9: ]+$/", $timestamp)) {
+		// dnsbl.log timestamps are ISO (Y-m-d H:i:s); the guard charset below
+		// must include '-' or every $ts here fails preg_match and aborts render.
+		$timestamp = date('Y-m-d H:i', htmlspecialchars($_SERVER['REQUEST_TIME']));
+		if (!preg_match("/^[a-zA-Z0-9:\- ]+$/", $timestamp)) {
 			exit;
 		}
 
 		foreach (array( $timestamp,
-				date('M j H:i', strtotime('-1 minute', strtotime($timestamp))),
-				date('M j', strtotime($timestamp))) as $ts) {
+				date('Y-m-d H:i', strtotime('-1 minute', strtotime($timestamp))),
+				date('Y-m-d', strtotime($timestamp))) as $ts) {
 
-			if (!preg_match("/^[a-zA-Z0-9: ]+$/", $ts)) {
+			if (!preg_match("/^[a-zA-Z0-9:\- ]+$/", $ts)) {
 				exit;
 			}
 
