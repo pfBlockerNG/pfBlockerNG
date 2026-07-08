@@ -102,7 +102,7 @@ by Netgate — see [Other installation methods](#other-installation-methods).
 
 ## Version upgrades
 
-Every pfBlockerNG page has a **Software** tab
+pfBlockerNG has a **Software** tab
 ([ADR-19](.ADRs/ADR_19_Update_Channel_Panel/ADR.md)): it shows your channel and
 installed version against the repository's latest, and can check for and
 install updates for you. Upgrades always stay **within the same channel**
