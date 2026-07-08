@@ -683,6 +683,7 @@ def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -
     h.set_update_hooks(deployed_vm, [post_hook])
     h.wait_no_active_pfb_task(deployed_vm)  # clean baseline — no prior pass in flight
     persisted_before = h.count_log_marker(deployed_vm, h.PFB_LOG, stream_marker)
+    persisted_before_done = h.count_log_marker(deployed_vm, h.PFB_LOG, done_marker)
 
     try:
         # Dispatch DETACHED (mirrors the GUI's mwexec_bg): returns at once; observe via the log.
@@ -733,6 +734,12 @@ def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -
         persisted_delta = h.count_log_marker(deployed_vm, h.PFB_LOG, stream_marker) - persisted_before
         assert persisted_delta == 1, (
             f"hook marker {stream_marker!r} was persisted into {h.PFB_LOG} {persisted_delta} time(s) "
+            "for one hook run (expected exactly 1 — pfb_persist_hook_output double-fired):\n"
+            f"{deployed_vm.ssh('cat', h.PFB_LOG).stdout[-4000:]}"
+        )
+        persisted_delta_done = h.count_log_marker(deployed_vm, h.PFB_LOG, done_marker) - persisted_before_done
+        assert persisted_delta_done == 1, (
+            f"hook marker {done_marker!r} was persisted into {h.PFB_LOG} {persisted_delta_done} time(s) "
             "for one hook run (expected exactly 1 — pfb_persist_hook_output double-fired):\n"
             f"{deployed_vm.ssh('cat', h.PFB_LOG).stdout[-4000:]}"
         )
