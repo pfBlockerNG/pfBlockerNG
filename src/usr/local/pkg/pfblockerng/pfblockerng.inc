@@ -18676,7 +18676,7 @@ function sync_package_pfblockerng($cron='') {
 
 			// ADR-40: $pfb_alias_lists is the content-diff set — aliases whose
 			// canonical membership set changed this pass (or ip_unlock forced a re-block).
-			// P4: apply each changed alias via forward delta (or replace per mode/churn).
+			// Apply each changed alias via forward delta (or replace per mode/churn).
 			$final_alias = array_unique($pfb_alias_lists);
 
 			if (!empty($final_alias)) {

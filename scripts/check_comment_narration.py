@@ -32,7 +32,7 @@ from pathlib import PurePosixPath
 from typing import NamedTuple
 
 _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"RESULTS/"), "delegation handoff artifact (RESULTS/...)"),
+    (re.compile(r"RESULTS[-/]"), "delegation handoff artifact (RESULTS/ or RESULTS-Pn)"),
     # Capitalised only: ADR narration always writes "Phase N"; ordinary prose
     # about a protocol's "phase 2" stays legal.
     (re.compile(r"\bPhase[ -][0-9]+\b"), "ADR phase narration (Phase N)"),

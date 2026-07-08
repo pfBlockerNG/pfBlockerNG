@@ -52,6 +52,10 @@ def test_results_word_without_slash_is_clean() -> None:
     assert _find("src/a.inc", ["// the RESULTS are cached"]) == []
 
 
+def test_slashless_results_handoff_ref_is_flagged() -> None:
+    assert len(_find("src/a.py", ["# the 6-band scale (RESULTS-P2 SS2)"])) == 1
+
+
 def test_capital_phase_number_is_flagged() -> None:
     v = _find("src/a.py", ["# wired into init() in Phase 4"])
     assert len(v) == 1

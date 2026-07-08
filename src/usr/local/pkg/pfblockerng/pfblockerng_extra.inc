@@ -272,7 +272,7 @@ function pfb_top1m_providers(): array
 		//     'domain' and ONE column per row (no rank) -- domain_col is 0, not 1 (the ADR's
 		//     guess assumed a 2-column rank,domain shape like Tranco/Cisco).
 		//   - Auth: 'Authorization: Bearer <token>' (confirmed on every Radar API page), fed
-		//     via pfb_top1m_auth_headers() below + the P3 $feed['headers'] plumbing.
+		//     via pfb_top1m_auth_headers() below + the $feed['headers'] plumbing.
 		//   - Licence: CC BY-NC 4.0 (developers.cloudflare.com/radar/ "About" -- confirmed by
 		//     web search, non-commercial use, attribution required).
 		// Residual verification gap (disclosed, not hidden): no live authenticated request was
@@ -839,7 +839,7 @@ function pfb_cfg_registry(): array
 
 		// ADR-59: masked, write-only Cloudflare Radar Bearer token -- consumed only
 		// when alexa_type == 'cloudflare' (every other provider ignores it), fed to
-		// pfb_download() via pfb_top1m_auth_headers() + the P3 header-auth plumbing.
+		// pfb_download() via pfb_top1m_auth_headers() + the header-auth plumbing.
 		// Plain string (no adapter): the DNSBL page never echoes the stored value back
 		// on GET, and a blank POST preserves the existing value rather than clearing it
 		// (pfblockerng_dnsbl.php's save handler) -- see PFB_FILTER_TOKEN (pfblockerng.inc)
@@ -3254,8 +3254,8 @@ function pfb_ip_suppressed_match(string $ip, array $entries): ?string
 // (and the dashboard widget, sharing its stats read) used to punch a hole in a live pf table
 // by deleting an exact '/24' and re-adding 254 sibling hosts, refusing anything "blocked by a
 // CIDR other than /24" (ADR-53 §1.2). This replaces that with the same covering-CIDR
-// set-subtraction already proven for the persisted engines (P3's v4 `iprange --except` pass,
-// P5's v6 PHP pass): locate the table entr(y/ies) that actually contain the host, delete them,
+// set-subtraction already proven for the persisted engines (the v4 `iprange --except` pass,
+// the v6 PHP pass): locate the table entr(y/ies) that actually contain the host, delete them,
 // and re-add only the covering-CIDR remainder -- any mask, both families.
 // ---------------------------------------------------------------------------
 
@@ -3265,7 +3265,7 @@ function pfb_ip_suppressed_match(string $ip, array $entries): ?string
  * sibling of pfb_cidr_subtract_v6(), scoped to the one-entry/one-hole shape
  * the live punch actually needs -- pfb_cidr_subtract_v6() stays the only
  * general multi-hole engine (the v4 persisted engine already has its own for
- * that, P3's `iprange --except`). A v4 range fits a plain PHP int (32 bits,
+ * that, `iprange --except`). A v4 range fits a plain PHP int (32 bits,
  * ip2long32() already returns it unsigned on 64-bit PHP), so no
  * binary-string arithmetic is needed here.
  *
