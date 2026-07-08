@@ -129,4 +129,25 @@ final class PfbDnsblConvergedTest extends TestCase
 
 		$this->assertFalse(pfb_dnsbl_converged(), 'an unbound.conf that no longer wires pfb_unbound.py must never converge');
 	}
+
+	public function testUnboundConfExistsButUnreadable_returnsFalseInsteadOfCrashing(): void
+	{
+		if (function_exists('posix_getuid') && posix_getuid() === 0) {
+			$this->markTestSkipped('root bypasses file permissions -- cannot simulate an unreadable file.');
+		}
+
+		$this->writeSentinel(1);
+		$this->writeApplied(1);
+		$this->writeUnboundConf(TRUE);
+		chmod("{$this->dir}/unbound.conf", 0000);
+
+		try {
+			// file_exists() sees the file (TOCTOU-style: present but unreadable), so
+			// file_get_contents() returns FALSE -- a bare strpos(FALSE, ...) call would
+			// TypeError in PHP 8+. Must degrade to FALSE, not throw.
+			$this->assertFalse(pfb_dnsbl_converged(), 'an existing-but-unreadable unbound.conf must read as not converged, never crash');
+		} finally {
+			chmod("{$this->dir}/unbound.conf", 0644);
+		}
+	}
 }

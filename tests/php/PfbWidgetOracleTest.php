@@ -385,6 +385,36 @@ final class PfbWidgetOracleTest extends TestCase
 		$this->assertStringContainsString('pfB_Example', $html);
 	}
 
+	public function testGetFailedRecognizedAliasBuildsDeepLinkEvenWhenMessageOmitsTheAliasText(): void
+	{
+		// The message is free-text and does NOT echo "pfB_Example" anywhere -- the link
+		// must still be built from the structured 'item' field, not spliced into the
+		// message by a substring match (which would silently find nothing here).
+		$GLOBALS['config'] = [
+			'installedpackages' => [
+				'pfblockernglistsv4' => [
+					'config' => [
+						0 => ['aliasname' => 'Example'],
+					],
+				],
+			],
+		];
+		$pfb = $this->basePfb();
+		$pfb['maxfails'] = 3;
+		pfb_sync_status_open('ip', 'pfB_Example_v4', 'dedup', 'N open issue(s). See the report.', $this->dir);
+		$GLOBALS['pfb'] = $pfb;
+
+		ob_start();
+		pfBlockerNG_get_failed();
+		$html = ob_get_clean();
+
+		$this->assertStringContainsString(
+			'pfblockerng_category_edit.php?type=ipv4&act=edit&rowid=0',
+			$html,
+			'the deep link must appear even when the message text never mentions the alias'
+		);
+	}
+
 	public function testGetFailedPythonSideEntryRendersAsPlainTextWithoutCrashing(): void
 	{
 		$GLOBALS['config'] = ['installedpackages' => []];

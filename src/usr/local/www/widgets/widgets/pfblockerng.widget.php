@@ -503,7 +503,10 @@ function pfBlockerNG_get_failed() {
 			if ($pfb_found) {
 				$link   = "<a target=\"_blank\" href=\"/pfblockerng/pfblockerng_category_edit.php?type={$type}&act=edit&rowid={$key}\" ";
 				$link  .= "\"title=\"Click to view Alias\" >{$pfb_prefix}{$f_alias}</a>";
-				$final	= str_replace("{$pfb_prefix}{$f_alias}", $link, $text);
+				// Prepend, never splice into $text: the message is free-text and is not
+				// guaranteed to contain "{$pfb_prefix}{$f_alias}" verbatim -- a guaranteed
+				// link beats a fragile substring match against writer-authored wording.
+				$final = "{$link}: {$text}";
 			}
 			else {
 				$final = $text;

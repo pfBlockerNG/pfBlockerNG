@@ -7859,7 +7859,13 @@ function pfb_dnsbl_converged(): bool {
 
 	// Mirrors the widget's $unbound_validate check (pfblockerng.widget.php) verbatim.
 	$unbound_conf = "{$pfb['dnsbldir']}/unbound.conf";
-	return file_exists($unbound_conf) && strpos(file_get_contents($unbound_conf), 'pfb_unbound.py') !== FALSE;
+	if (!file_exists($unbound_conf)) {
+		return FALSE;
+	}
+	// @-suppressed: a TOCTOU race (deleted/unreadable between the check above and here)
+	// returns FALSE, not a string -- strpos(FALSE, ...) is a PHP 8+ TypeError otherwise.
+	$conf_contents = @file_get_contents($unbound_conf);
+	return $conf_contents !== FALSE && strpos($conf_contents, 'pfb_unbound.py') !== FALSE;
 }
 
 // ADR-61: the DNSBL apply-stage writer/clearer decision, shared by every point in
