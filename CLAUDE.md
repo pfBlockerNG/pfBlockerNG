@@ -342,7 +342,7 @@ rationale lives in the ADR / architecture-notes and the comment carries a one-li
 (`// ADR-49: content-sanity gate; contract pinned by PfbTextSanityTest`) — never a
 restatement: a contract stored in ADR + comment + test is three copies, two of which drift.
 One-line regression breadcrumbs stay (`// issue #946: decode UTF-16 BOM first — else
-nul_bytes false-positives`). **Compression must never lose information: usage
+nul_bytes false-positives`). **Compression sheds redundancy, never essential information: usage
 instructions and function-contract facts (params, returns, invariants, defaults) that
 are expressed nowhere else may be reworded tighter, never removed.** The budget bites
 hardest mid-code; a file header carrying interface documentation may run long.
