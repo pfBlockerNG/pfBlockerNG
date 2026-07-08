@@ -2774,10 +2774,47 @@ function pfb_sync_status_write_all(array $data, string $ledger_dir): void
 {
 	$path = $ledger_dir . '/pfb_sync_status.json';
 	$tmp  = $path . '.tmp';
-	if (@file_put_contents($tmp, json_encode($data, JSON_PRETTY_PRINT), LOCK_EX) === FALSE) {
+	$json = json_encode($data, JSON_PRETTY_PRINT);
+	if ($json === FALSE) {
+		// e.g. invalid UTF-8 in a message (raw exec() stderr) -- file_put_contents(FALSE)
+		// casts to "" and succeeds, which would silently rename an EMPTY ledger over the
+		// real one; bail before touching the tmp file at all.
+		return;
+	}
+	if (@file_put_contents($tmp, $json, LOCK_EX) === FALSE) {
 		return;	// unwritable dir -- fail safe, never throws to the caller
 	}
 	@rename($tmp, $path);
+}
+
+/**
+ * pfb_sync_status_locked — run $fn with an exclusive cross-process lock held for the
+ * WHOLE read-modify-write span, not just the final write. Closes the TOCTOU window
+ * between pfb_sync_status_read_all() and pfb_sync_status_write_all() that would
+ * otherwise let two concurrent writers (e.g. the tick's synchronous apply-retry step
+ * racing a still-running backgrounded sync pass) silently discard one another's update.
+ *
+ * @param string   $ledger_dir Directory that contains pfb_sync_status.json.
+ * @param callable $fn         The read-modify-write body to run under the lock.
+ * @return void
+ */
+function pfb_sync_status_locked(string $ledger_dir, callable $fn): void
+{
+	$lock_path = $ledger_dir . '/pfb_sync_status.json.lock';
+	$fp        = @fopen($lock_path, 'c');
+	if ($fp === FALSE || !flock($fp, LOCK_EX)) {
+		if ($fp !== FALSE) {
+			fclose($fp);
+		}
+		$fn();	// can't lock (unwritable dir) -- degrade to best-effort, same fail-open contract as write_all()
+		return;
+	}
+	try {
+		$fn();
+	} finally {
+		flock($fp, LOCK_UN);
+		fclose($fp);
+	}
 }
 
 /**
@@ -2802,17 +2839,19 @@ function pfb_sync_status_open(
 	string    $ledger_dir,
 	?callable $clock_fn = null
 ): void {
-	$now        = ($clock_fn !== NULL) ? $clock_fn() : time();
-	$data       = pfb_sync_status_read_all($ledger_dir);
-	$existing   = $data[$facility][$item][$stage] ?? NULL;
-	$first_seen = (is_array($existing) && isset($existing['first_seen'])) ? $existing['first_seen'] : $now;
+	$now = ($clock_fn !== NULL) ? $clock_fn() : time();
+	pfb_sync_status_locked($ledger_dir, function () use ($facility, $item, $stage, $message, $now, $ledger_dir) {
+		$data       = pfb_sync_status_read_all($ledger_dir);
+		$existing   = $data[$facility][$item][$stage] ?? NULL;
+		$first_seen = (is_array($existing) && isset($existing['first_seen'])) ? $existing['first_seen'] : $now;
 
-	$data[$facility][$item][$stage] = [
-		'message'    => $message,
-		'first_seen' => $first_seen,
-		'last_seen'  => $now,
-	];
-	pfb_sync_status_write_all($data, $ledger_dir);
+		$data[$facility][$item][$stage] = [
+			'message'    => $message,
+			'first_seen' => $first_seen,
+			'last_seen'  => $now,
+		];
+		pfb_sync_status_write_all($data, $ledger_dir);
+	});
 }
 
 /**
@@ -2828,18 +2867,20 @@ function pfb_sync_status_open(
  */
 function pfb_sync_status_close(string $facility, string $item, string $stage, string $ledger_dir): void
 {
-	$data = pfb_sync_status_read_all($ledger_dir);
-	if (!isset($data[$facility][$item][$stage])) {
-		return;	// absent key -- safe no-op
-	}
-	unset($data[$facility][$item][$stage]);
-	if (empty($data[$facility][$item])) {
-		unset($data[$facility][$item]);
-	}
-	if (empty($data[$facility])) {
-		unset($data[$facility]);
-	}
-	pfb_sync_status_write_all($data, $ledger_dir);
+	pfb_sync_status_locked($ledger_dir, function () use ($facility, $item, $stage, $ledger_dir) {
+		$data = pfb_sync_status_read_all($ledger_dir);
+		if (!isset($data[$facility][$item][$stage])) {
+			return;	// absent key -- safe no-op
+		}
+		unset($data[$facility][$item][$stage]);
+		if (empty($data[$facility][$item])) {
+			unset($data[$facility][$item]);
+		}
+		if (empty($data[$facility])) {
+			unset($data[$facility]);
+		}
+		pfb_sync_status_write_all($data, $ledger_dir);
+	});
 }
 
 /**
