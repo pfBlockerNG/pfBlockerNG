@@ -68,8 +68,11 @@ final class PfctlTableOpTest extends TestCase
 		$this->assertNotFalse($path, 'could not create temp mock pfctl script');
 		$this->tmpfiles[] = $path;
 		$stderr_esc = str_replace("'", "'\\''", $stderr);
-		file_put_contents($path, "#!/bin/sh\nprintf '%s\\n' '{$stderr_esc}' >&2\nexit {$rc}\n");
-		chmod($path, 0755);
+		$this->assertNotFalse(
+			file_put_contents($path, "#!/bin/sh\nprintf '%s\\n' '{$stderr_esc}' >&2\nexit {$rc}\n"),
+			"could not write mock pfctl script {$path}"
+		);
+		$this->assertTrue(chmod($path, 0755), "could not chmod mock pfctl script {$path} executable");
 		return $path;
 	}
 
