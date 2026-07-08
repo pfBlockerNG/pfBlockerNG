@@ -6,21 +6,25 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * ADR-61 Phase 3 — DNSBL-side sync-status writer/clearer pairs.
+ * ADR-61 Phase 3 (+ #998 follow-up) — DNSBL-side sync-status writer/clearer pairs.
  *
  * The apply-stage decision (pfb_dnsbl_apply_ledger_update(), built on
  * pfb_dnsbl_converged()) is tested directly for the open/close/refresh
  * contract, and separately end-to-end through the REAL pfb_reload_unbound()
  * to prove its swap-not-confirmed restart-fallback branch does not, by
  * itself, leave a ledger entry behind (ADR SS1.3: "NOT an error: fail-safe
- * by design").
+ * by design"). The feed-download pair (pfb_dnsbl_download_ledger_update())
+ * mirrors the IP side's PfbSyncStatusIpWritersTest Pair 1.
  *
  * Functions under test:
  *   pfb_dnsbl_apply_ledger_update(): void
  *   pfb_reload_unbound(...) -- the zero-downtime swap + restart-fallback paths.
+ *   pfb_dnsbl_download_ledger_update(bool $download_ok, string $item, string $message,
+ *                                      string $ledger_dir): void
  */
 #[CoversFunction('pfb_dnsbl_apply_ledger_update')]
 #[CoversFunction('pfb_reload_unbound')]
+#[CoversFunction('pfb_dnsbl_download_ledger_update')]
 final class PfbSyncStatusDnsblWritersTest extends TestCase
 {
 	private string $dir;
@@ -138,6 +142,67 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 
 		$open = pfb_sync_status_list_open($this->dir, 'dnsbl');
 		$this->assertCount(1, $open, 'two consecutive non-converged reads must refresh, never duplicate');
+	}
+
+	// -----------------------------------------------------------------------
+	// pfb_dnsbl_download_ledger_update() -- feed download fail/success (#998)
+	// -----------------------------------------------------------------------
+
+	public function testDnsblDownloadFailureOpensEntry(): void
+	{
+		pfb_dnsbl_download_ledger_update(FALSE, 'DNSBL_Example', '[ DNSBL_Example - Example ] Download FAIL', $this->dir);
+
+		$open = pfb_sync_status_list_open($this->dir, 'dnsbl');
+		$this->assertCount(1, $open, 'a DNSBL download failure must open exactly one entry');
+		$this->assertSame('dnsbl', $open[0]['facility']);
+		$this->assertSame('DNSBL_Example', $open[0]['item']);
+		$this->assertSame('download', $open[0]['stage']);
+		$this->assertStringContainsString('Download FAIL', $open[0]['message']);
+	}
+
+	public function testDnsblDownloadSuccessClosesEntry(): void
+	{
+		pfb_dnsbl_download_ledger_update(FALSE, 'DNSBL_Example', 'Download FAIL', $this->dir);
+		// Before-state: the entry is genuinely open first, so the success close
+		// below is a real transition, not a no-op that happens to leave zero entries.
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'dnsbl'));
+
+		pfb_dnsbl_download_ledger_update(TRUE, 'DNSBL_Example', '', $this->dir);
+
+		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'dnsbl'),
+			'a paired download success must close the SAME key');
+	}
+
+	public function testDnsblDownloadFailureTwiceRefreshesWithoutDuplicating(): void
+	{
+		pfb_dnsbl_download_ledger_update(FALSE, 'DNSBL_Example', 'HTTP 404', $this->dir);
+		pfb_dnsbl_download_ledger_update(FALSE, 'DNSBL_Example', 'HTTP 500', $this->dir);
+
+		$open = pfb_sync_status_list_open($this->dir, 'dnsbl');
+		$this->assertCount(1, $open, 'two consecutive failures on the SAME item must refresh, never duplicate');
+		$this->assertSame('HTTP 500', $open[0]['message'], 'message must be the LATEST refresh');
+	}
+
+	public function testDnsblDownloadCallSitesKeyOnTheAliasNotTheHeader(): void
+	{
+		// Regression pin (mirrors PfbSyncStatusIpWritersTest): the widget's deep-link
+		// recognition matches only the pfB_/DNSBL_-prefixed $alias, never $header, so
+		// keying on $header would silently drop the link for every entry. The DNSBL
+		// download loop has no PHPUnit harness of its own (too heavy to invoke), so
+		// this pins the exact call-site argument via source inspection.
+		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
+		$this->assertNotFalse($source, 'pfblockerng.inc must be readable');
+
+		$this->assertMatchesRegularExpression(
+			'/pfb_dnsbl_download_ledger_update\(FALSE, \$alias,/',
+			$source,
+			'the DNSBL download-fail call must key on $alias, not $header, or the widget deep link breaks'
+		);
+		$this->assertMatchesRegularExpression(
+			'/pfb_dnsbl_download_ledger_update\(TRUE, \$alias,/',
+			$source,
+			'the paired success-close call must key on the SAME $alias for symmetry'
+		);
 	}
 
 	// -----------------------------------------------------------------------
