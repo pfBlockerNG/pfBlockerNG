@@ -606,6 +606,13 @@ jobs:
     name: Coverage pairing (src/tests + www/ui)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    # Job-level override (replaces the workflow-level set entirely): the live
+    # label/body reads need issues+pull-requests read, which the workflow-level
+    # contents+packages grant forces to none (issue #969).
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -645,17 +652,26 @@ jobs:
             echo "::error::coverage-pairing red canary failed: a violating input did not propagate exit 1 through the pipe — fix this step's shell options before trusting the gate"
             exit 1
           fi
-          # LIVE label + body read — never the trigger-time event payload. The
-          # no-test-needed escape is applied AFTER this gate goes red, and a re-run
-          # keeps the original payload, so a payload read makes the failure
-          # message's own remedy impossible without a synthetic push/reopen
-          # (issue #969). A failed fetch leaves WARN_ONLY/body empty = strict
-          # mode: an API hiccup tightens the gate, never skips it.
+          # LIVE label + body read — never the trigger-time event payload. A
+          # payload read breaks the escape hatch twice over (issue #969): a
+          # manual re-run reuses the stale payload, and the `labeled`-event run
+          # snapshots the body BEFORE the justification edit when the label is
+          # applied first. A failed fetch is reported loudly and leaves
+          # WARN_ONLY/body empty = strict mode: an API failure tightens the
+          # gate, never skips it. Label/body content is attacker-influenced but
+          # only ever flows into grep/a file redirect — never eval'd.
           WARN_ONLY=''
-          if gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUM}/labels" --jq '.[].name' 2>/dev/null | grep -qx 'no-test-needed'; then
-            WARN_ONLY=1
+          if labels=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUM}/labels" --jq '.[].name'); then
+            if printf '%s\n' "$labels" | grep -qx 'no-test-needed'; then
+              WARN_ONLY=1
+            fi
+          else
+            echo "::warning::coverage-pairing: label fetch failed — strict mode, the no-test-needed escape is unavailable this run"
           fi
-          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUM}" --jq '.body // ""' > pr_body.txt 2>/dev/null || : > pr_body.txt
+          if ! gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUM}" --jq '.body // ""' > pr_body.txt; then
+            echo "::warning::coverage-pairing: PR body fetch failed — strict mode"
+            : > pr_body.txt
+          fi
           # Escape-hatch justification (issue #921's "applied deliberately" constraint,
           # enforced per #934): with the no-test-needed label set, the PR body is
           # handed to the script (--pr-body-file), which requires a line starting
