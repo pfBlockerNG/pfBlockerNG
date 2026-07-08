@@ -4135,6 +4135,29 @@ function pfb_mirror_hook_output(string $logfile, int $offset): void {
 
 
 /*
+ * issue #973: restores ADR-12's persistence promise -- pfb_run_hooks() redirects hook stdout to
+ * runlog during an active run, so copy the same delta back into $pfb['log']. No-op when $logfile
+ * IS $pfb['log'] already (outside a run) -- else this would duplicate its own tail into itself.
+ */
+function pfb_persist_hook_output(string $logfile, int $offset): void {
+	global $pfb;
+
+	if ($logfile === '' || $logfile === $pfb['log']) {
+		return;
+	}
+	clearstatcache(TRUE, $logfile);
+	$end = @filesize($logfile);
+	if ($end === FALSE || $end <= $offset) {
+		return;
+	}
+	$body = @file_get_contents($logfile, FALSE, NULL, $offset, $end - $offset);
+	if (is_string($body) && $body !== '') {
+		@file_put_contents($pfb['log'], $body, FILE_APPEND);
+	}
+}
+
+
+/*
  * Run every enabled hook matching $when, in list order, as root.
  *
  * $ctx is a flat name => value map exported to each hook as PFB_* environment
@@ -4262,6 +4285,7 @@ function pfb_run_hooks($when, $ctx = array()) {
 			// AJAX tail already streams $logtarget (the per-run log) straight to the browser, so
 			// no extra streaming/mirroring is needed here.
 			exec($cmd, $discard, $retval);
+			pfb_persist_hook_output($logtarget, $hook_log_offset);
 		} else {
 			// pkg install/upgrade/uninstall (lifecycle callback): STREAM the hook's own output to
 			// the pkg Software page AS it runs, instead of one block after it exits.
