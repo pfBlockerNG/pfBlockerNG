@@ -8,16 +8,16 @@ use PHPUnit\Framework\TestCase;
 /**
  * ADR-60 Phase 1 pinned TODAY's inconsistent, sometimes-absent, sometimes
  * year-less log timestamp behaviour (ADR.md §1.3) as the "before" oracle for
- * Phases 2-4's red→green proofs. Phase 2 flips the log/extraslog/errlog rows
- * (below) to pin the FIXED, always-on behaviour instead: the legacy opt-in
- * '[ NOW ]' token + same-second '$pfb[pnow]' dedup (ADR.md §1.4) is retired.
+ * Phases 2-4's red→green proofs. Phases 2-3 have since flipped the
+ * log/extraslog/errlog and ip_block/permit/matchlog/dnsbl_parse_err rows
+ * (below) to pin the FIXED, always-on ISO-8601 behaviour instead.
  *
  * pfb_daemon_filterlog() reads php://stdin in an unbounded daemon loop and is
  * not directly callable from a unit test; its 'BSD'/'syslog' timestamp branch
- * (§1.3's ip_blocklog/ip_permitlog/ip_matchlog row, Phase 3's row, untouched
- * here) is pinned via (a) a grep tripwire on the exact current source line, so
- * this oracle goes red the moment Phase 3 changes it, and (b) a reproduction
- * of that exact formula against synthetic fixtures.
+ * (§1.3's ip_blocklog/ip_permitlog/ip_matchlog row) is pinned via (a) a grep
+ * tripwire on the exact current source line, so this oracle goes red the
+ * moment the formula changes again, and (b) a reproduction of that exact
+ * formula against synthetic fixtures.
  */
 #[CoversFunction('pfb_logger')]
 #[CoversFunction('pfb_parsed_fail')]
@@ -250,57 +250,124 @@ final class LogTimestampBaselineTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// §1.3 row: ip_blocklog/ip_permitlog/ip_matchlog -- pfb_daemon_filterlog()'s
-	// 'BSD' raw passthrough (no year available) vs 'syslog' lossy reformat
-	// (year discarded). Not directly callable (stdin daemon loop); pinned via
+	// §1.3 row: ip_blocklog/ip_permitlog/ip_matchlog -- ADR-60 P3:
+	// pfb_daemon_filterlog()'s 'BSD' branch year-infers, 'syslog' keeps its
+	// already-real year. Not directly callable (stdin daemon loop); pinned via
 	// a source tripwire + a reproduction of the exact formula.
 	// -----------------------------------------------------------------------
 
-	public function testFilterlogBsdBranchRawPassthroughHasNoYear(): void
+	public function testFilterlogBsdBranchYearInfersFromNow(): void
 	{
 		$source = (string) file_get_contents(self::PFBLOCKERNG_INC);
 		$this->assertStringContainsString(
-			'$log = "{$f[0]} {$f[1]} {$f[2]},{$d[3]},{$d[4]},{$int},{$d[6]},{$d[8]},";',
+			'$ts = strtotime("{$f[0]} {$f[1]} {$f[2]}", $bsd_now);',
 			$source,
 			"pfb_daemon_filterlog()'s 'BSD' branch formula changed -- update this baseline oracle"
 		);
 
-		// A classic BSD syslog triple has no year field at all.
-		$f = ['Jul', '4', '13:30:45'];
-		$bsdPassthrough = "{$f[0]} {$f[1]} {$f[2]}";
+		// A classic BSD syslog triple has no year field at all -- infer it from $now.
+		// A line timestamped for "today" (a few hours before $now, the live-tailing
+		// daemon's normal case) must pick $now's own year, no rollback.
+		$now = strtotime('2026-07-08 10:00:00 UTC');
+		$f = ['Jul', '8', '07:00:00'];
+		$ts = strtotime("{$f[0]} {$f[1]} {$f[2]}", $now);
+		if ($ts > $now + 6 * 3600) {
+			$ts = strtotime("{$f[0]} {$f[1]} {$f[2]} " . ((int) date('Y', $now) - 1), $now);
+		}
 
-		$this->assertSame('Jul 4 13:30:45', $bsdPassthrough);
-		$this->assertDoesNotMatchRegularExpression('/\d{4}/', $bsdPassthrough, 'BSD raw passthrough must carry no year');
+		$this->assertSame('2026-07-08 07:00:00', date('Y-m-d H:i:s', $ts), 'BSD triple must year-infer against $now, unrolled');
 	}
 
-	public function testFilterlogSyslogBranchLossyReformatDropsYear(): void
+	public function testFilterlogSyslogBranchKeepsRealYear(): void
 	{
 		$source = (string) file_get_contents(self::PFBLOCKERNG_INC);
 		$this->assertStringContainsString(
-			"\$ts = date('M j H:i:s', strtotime(\$f[1]));",
+			"\$ts_formatted = date('Y-m-d H:i:s', strtotime(\$f[1]));",
 			$source,
 			"pfb_daemon_filterlog()'s 'syslog' branch formula changed -- update this baseline oracle"
 		);
 
-		// A synthetic RFC-5424 timestamp field -- it DOES carry a year.
+		// A synthetic RFC-5424 timestamp field -- it DOES carry a year, verbatim.
 		$f = [1 => '2024-11-05T13:30:45+00:00'];
 		$this->assertStringContainsString('2024', $f[1], 'fixture sanity: the RFC-5424 source must carry a year');
 
-		$ts = date('M j H:i:s', strtotime($f[1]));
+		$ts = date('Y-m-d H:i:s', strtotime($f[1]));
 
-		$this->assertSame('Nov 5 13:30:45', $ts);
-		$this->assertDoesNotMatchRegularExpression(
-			'/\d{4}/',
+		$this->assertSame('2024-11-05 13:30:45', $ts, "the 'syslog' branch must keep \$f[1]'s real year verbatim, not discard it");
+	}
+
+	/**
+	 * Hostile-input row (a): a real RFC-5424 timestamp spanning a year
+	 * boundary must parse to EXACTLY that year -- never inferred.
+	 */
+	public function testFilterlogSyslogBranchPreservesYearAcrossBoundary(): void
+	{
+		$f = [1 => '2025-12-31T23:59:59+00:00'];
+		$ts = date('Y-m-d H:i:s', strtotime($f[1]));
+
+		$this->assertSame(
+			'2025-12-31 23:59:59',
 			$ts,
-			"the 'syslog' branch's date('M j H:i:s', ...) reformat must drop the year, even though the source had one"
+			'a syslog line spanning a year boundary must keep its verbatim source year, never year-inferred'
+		);
+	}
+
+	/**
+	 * Hostile-input row (c): a December BSD line read in January (the classic
+	 * yearless-BSD-syslog case) must roll back exactly one year.
+	 */
+	public function testFilterlogBsdBranchDecemberReadInJanuaryRollsBackYear(): void
+	{
+		$now = strtotime('2026-01-05 10:00:00 UTC');
+		$f = ['Dec', '31', '23:00:00'];
+
+		$ts = strtotime("{$f[0]} {$f[1]} {$f[2]}", $now);
+		$this->assertGreaterThan($now + 6 * 3600, $ts, 'fixture sanity: the naive same-year parse must land in the future');
+
+		$ts = strtotime("{$f[0]} {$f[1]} {$f[2]} " . ((int) date('Y', $now) - 1), $now);
+
+		$this->assertSame('2025-12-31 23:00:00', date('Y-m-d H:i:s', $ts), 'a December BSD line read in January must roll back exactly one year');
+	}
+
+	/**
+	 * Hostile-input row (d): unparseable BSD fields must never raise a PHP
+	 * warning/fatal -- the daemon falls back to pfb_log_iso_timestamp()'s "now".
+	 */
+	public function testFilterlogBsdBranchUnparseableFallsBackToIsoNow(): void
+	{
+		$source = (string) file_get_contents(self::PFBLOCKERNG_INC);
+		$this->assertStringContainsString(
+			'$ts_formatted = pfb_log_iso_timestamp();',
+			$source,
+			"pfb_daemon_filterlog()'s FALSE-parse fallback changed -- update this baseline oracle"
+		);
+
+		$warnings = [];
+		set_error_handler(function ($errno, $errstr) use (&$warnings) {
+			$warnings[] = $errstr;
+			return true;
+		});
+		$f = ['Foo', '99', '99:99:99'];
+		$ts = strtotime("{$f[0]} {$f[1]} {$f[2]}", time());
+		restore_error_handler();
+
+		$this->assertSame([], $warnings, 'strtotime() on garbage BSD fields must never raise a PHP warning');
+		$this->assertFalse($ts, 'garbage BSD fields must fail to parse (FALSE), triggering the fallback');
+
+		$fallback = pfb_log_iso_timestamp();
+		$this->assertMatchesRegularExpression(
+			'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/',
+			$fallback,
+			"the FALSE-parse fallback must be pfb_log_iso_timestamp()'s ISO-8601 \"now\" shape"
 		);
 	}
 
 	// -----------------------------------------------------------------------
-	// §1.3 row: dnsbl_parse_err -- pfb_parsed_fail()'s ambiguous 2-digit-year format
+	// §1.3 row: dnsbl_parse_err -- ADR-60 P3: pfb_parsed_fail() now writes the
+	// same unambiguous ISO-8601 format as every other log type.
 	// -----------------------------------------------------------------------
 
-	public function testParsedFailPinsAmbiguousTwoDigitYearFormat(): void
+	public function testParsedFailWritesIsoTimestampFormat(): void
 	{
 		$logfile = $this->tempFile('pfb_parsedfail_');
 
@@ -308,14 +375,30 @@ final class LogTimestampBaselineTest extends TestCase
 
 		$written = (string) file_get_contents($logfile);
 		$this->assertMatchesRegularExpression(
-			'/^\d{1,2}\/\d{1,2}\/\d{2} \d{2}:\d{2}:\d{2},pfbtestheader,some parse line,orig line$/',
+			'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},pfbtestheader,some parse line,orig line$/',
 			$written,
-			"pfb_parsed_fail() must write the ambiguous 'm/j/y H:i:s' 2-digit-year format; got: {$written}"
+			"pfb_parsed_fail() must write the unambiguous 'Y-m-d H:i:s' format now; got: {$written}"
 		);
 	}
 
+	/**
+	 * Hostile-input row (e): the new ISO timestamp's ':' characters must not
+	 * introduce an extra comma that would shift dnsbl_parse_err's CSV columns.
+	 */
+	public function testParsedFailIsoTimestampHasNoExtraCommaFields(): void
+	{
+		$logfile = $this->tempFile('pfb_parsedfail_csv_');
+
+		pfb_parsed_fail('pfbtestheader', 'some parse line', 'orig line', $logfile);
+
+		$written = (string) file_get_contents($logfile);
+		$fields = explode(',', $written);
+		$this->assertCount(4, $fields, "the ISO timestamp must not shift dnsbl_parse_err's CSV columns; got: {$written}");
+	}
+
 	// -----------------------------------------------------------------------
-	// The new (unwired) ISO-8601 helper Phases 2-4 will call.
+	// The shared ISO-8601 helper -- wired in by Phases 2-3; Phase 4's python-side
+	// rows are the remaining unconverted consumers.
 	// -----------------------------------------------------------------------
 
 	public function testPfbLogIsoTimestampMatchesIso8601Format(): void
