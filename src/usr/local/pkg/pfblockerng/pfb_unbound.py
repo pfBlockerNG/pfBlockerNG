@@ -243,37 +243,14 @@ def pfb_async(func: Callable[..., Any], *args: Any) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# ADR-10 P4 -- the zero-downtime reload-watcher (daemon thread + background swap).
-#
-# A daemon thread (started next to pfb_db_worker/pfb_async_worker, gated on
-# pfb["mod_threading"]) waits on the reload SENTINEL. PHP/shell (Phase 5) atomically
-# publishes the new manifest + per-feed raw and then writes a monotonically-advancing
-# GENERATION ID into the sentinel; the watcher wakes, reads the generation, and on an
-# ADVANCE runs rebuild_and_swap() OFF the query threads -- queries keep serving the OLD
-# snapshot through the (seconds-long) ABP build, then a single GIL-atomic ref rebind
-# swaps the new one in (zero downtime, briefly stale by design).
-#
-# Correctness rides on the atomic publish + the generation COMPARE, NOT on notify
-# latency: a missed/coalesced event only DELAYS, never corrupts (the watcher always
-# reads the current generation before building). Single-flight: at most one build runs
-# at a time; a trigger arriving mid-build is coalesced and re-checked after the build.
-#
-# Watch mechanism: select.kqueue EVFILT_VNODE on the sentinel's DIRECTORY where
-# available (FreeBSD) -- watching the dir survives an atomic rename/replace of the
-# sentinel file (a file fd would go stale). A low-frequency mtime-POLL fallback is used
-# where kqueue is unavailable (inotify is Linux-only and NOT on pfSense -- never used).
-#
-# RAM gate (mandatory -- RESULTS/01 SS2): the in-process build holds the OLD + NEW
-# matcher sets simultaneously (~2x, ~786 MiB at ABP scale), which busts a ~358 MiB
-# transient budget on a 1 GB box. Before building, the watcher PROJECTS the transient
-# (~RELOAD_BYTES_PER_ENTRY x current entry count) and checks TOTAL RAM (a coarse
-# impossibility backstop, consistent with PHP's hw.usermem gate -- NOT free pages, which
-# spuriously declined on cache-heavy boxes); if it would
-# not fit, it DECLINES the swap fail-closed -- the OLD snapshot stays live and a clear
-# log line says the box is RAM-constrained and the update needs the restart fallback.
-# The PRIMARY gate is PHP (Phase 5, before flipping the sentinel); this is the Python
-# safety net so a constrained box never OOMs even if PHP flips the sentinel anyway.
-# stdlib-only + injectable so it is unit-testable without a live box.
+# ADR-10: zero-downtime reload-watcher daemon (gated on pfb["mod_threading"]).
+# Watches a generation-id sentinel PHP/shell advance after an atomic publish;
+# on advance, rebuild_and_swap() builds off the query threads and swaps in
+# the new snapshot via one GIL-atomic ref rebind (old snapshot serves until
+# then; single-flight). Watch is kqueue EVFILT_VNODE on the sentinel's
+# directory where available, else a low-frequency mtime poll. RAM-gated:
+# declines the swap fail-closed if the OLD+NEW-resident build would not fit.
+# Pinned by tests/test_adr10_watcher.py, tests/test_adr10_swap.py.
 # --------------------------------------------------------------------------- #
 
 # Steady-state retained bytes per matcher entry (ADR-05 SS3a / ADR-10 P1 spike:
@@ -392,7 +369,7 @@ def _build_swap_snapshot() -> Snapshot | None:
         ``None`` (absent/unparseable manifest, build error) -> the whole swap is a no-op.
       * USER REGEX-ini patterns merged on top (band PRIO_USER_BLOCK, sovereign over feed
         allows), honouring the opt-in static cap -- so a swap NEVER drops user regex
-        (RESULTS/02 / ADR-07).
+        (ADR-07).
       * hstsDB reloaded from pfb_py_hsts.txt (watch-out (b): hstsDB is NOT in the
         manifest; omitting it would ship an empty hsts_db and silently flip HSTS NULL-vs-
         VIP behaviour)."""
@@ -628,20 +605,12 @@ class _ReloadKqueueWaiter:
 
 
 # --------------------------------------------------------------------------- #
-# PFBL-03 -- the local privileged DNSBL-control command channel (reader daemon).
-#
-# A daemon thread mirrors the ADR-10 reload watcher: it waits on the control file's
-# DIRECTORY (kqueue EVFILT_VNODE where available, mtime-poll fallback) and, on a change,
-# reads the JSON record. The record carries a monotonically-advancing SEQUENCE; the
-# watcher tracks the last-applied seq and IGNORES any record with seq <= last_applied
-# (exactly-once + replay safety, exactly as the reload watcher compares generations).
-# A FRESH record is re-validated and routed through the SHARED pfb_apply_control_command()
-# handler -- the same implementation the legacy DNS-TXT branch uses -- then the applied
-# seq is published so the writer can confirm execution. Correctness rides on the atomic
-# publish + the seq COMPARE, NOT on notify latency: a missed event only delays.
-#
-# The reader runs OFF the query threads (its own daemon, blocking only on the kqueue/poll
-# wait), so it never blocks DNS response processing.
+# PFBL-03: the local privileged DNSBL-control command channel (reader daemon).
+# Mirrors the ADR-10 reload watcher: waits on the control file's directory
+# (kqueue EVFILT_VNODE, mtime-poll fallback); on change, reads a JSON record
+# carrying a monotonic SEQUENCE and ignores any seq <= last-applied (exactly-
+# once + replay safety). A fresh record routes through the shared
+# pfb_apply_control_command() handler; runs off the query threads.
 # --------------------------------------------------------------------------- #
 
 
@@ -967,7 +936,7 @@ def init_standard(id: int, env: module_env) -> bool:
     # ADR-08: the IDN-feature mode, derived from python_idn (see idn_mode_from_legacy).
     # Default OFF; the ini load below recomputes it from the loaded python_idn.
     pfb["idn_mode"] = IdnMode.Off
-    # ADR-08 Phase 5: the two Confusable-mode sub-toggles. block_malicious is DEFAULT-ON
+    # ADR-08: the two Confusable-mode sub-toggles. block_malicious is DEFAULT-ON
     # (a cross-script confusable homograph blocks unless the operator disables it);
     # escalate_suspicious is OPT-IN (a suspicious/flagged anomaly only alerts unless the
     # operator escalates it to a block). Both only act in IDN_MODE_CONFUSABLE.
@@ -1019,9 +988,9 @@ def init_standard(id: int, env: module_env) -> bool:
     pfb["pfb_py_ss"] = "pfb_py_ss.txt"
     # ADR-06: per-feed manifest (the new shell->Python boundary) and the
     # Python-emitted entry count. When the manifest is present, init builds the
-    # DNSBL structures from the raw feeds via the pure build() layer (ADR-06 P4);
-    # otherwise it falls back to the legacy data/zone CSV load (shell/PHP still
-    # produce those files until Phase 5 removes the duplication).
+    # DNSBL structures from the raw feeds via the pure build() layer; otherwise
+    # it falls back to the legacy data/zone CSV load (shell/PHP still produce
+    # those files for that fallback).
     pfb["pfb_py_sources"] = "pfb_py_sources.json"
     # ADR-10 P4: the zero-downtime RELOAD SENTINEL. Path is chroot-relative (Unbound
     # is chrooted at /var/unbound, the module's CWD) -- so the in-chroot absolute path
@@ -1059,7 +1028,7 @@ def init_standard(id: int, env: module_env) -> bool:
     # allowRegexDB AFTER both the user REGEX-ini load and the feed-regex merge, so
     # patterns the static cap dropped are excluded (value changes by design, ADR §2).
     pfb["pfb_py_regex_count"] = "pfb_py_regex_count"
-    # ADR-48 Phase 4 (#789): the per-entry reject tally artifact (BuildResult.rejects,
+    # ADR-48 (issue #789): the per-entry reject tally artifact (BuildResult.rejects,
     # a JSON array of nonzero-total {feed, group, shape, wire_cap} rows) -- PHP reads
     # it after a DNSBL run and emits the canonical stage=entries line. Chroot-relative
     # bare name, exactly like pfb_py_count above (the manifest-boundary discipline).
@@ -1159,10 +1128,10 @@ def init_standard(id: int, env: module_env) -> bool:
                 pfb["python_hsts"] = config.getboolean("MAIN", "python_hsts")
             if config.has_option("MAIN", "python_idn"):
                 pfb["python_idn"] = config.getboolean("MAIN", "python_idn")
-            # ADR-08: the IDN mode. The PHP ini writer (Phase 6+) emits an explicit
-            # idn_mode = off|all|confusable key; honour it when present. For a config that
-            # predates the key (only python_idn=on|off written), fall back to the legacy
-            # derivation -- 'on'->All-IDN, off->Off -- byte-identical to today.
+            # ADR-08: the IDN mode. The PHP ini writer emits an explicit
+            # idn_mode = off|all|confusable key; honour it when present, else fall
+            # back to the legacy derivation ('on'->All-IDN, off->Off) for a config
+            # written before the key existed.
             if config.has_option("MAIN", "idn_mode"):
                 _raw_idn = config.get("MAIN", "idn_mode").strip().lower()
                 if _raw_idn in (IDN_MODE_OFF, IDN_MODE_ALL, IDN_MODE_CONFUSABLE):
@@ -1171,9 +1140,9 @@ def init_standard(id: int, env: module_env) -> bool:
                     pfb["idn_mode"] = idn_mode_from_legacy(pfb["python_idn"])
             else:
                 pfb["idn_mode"] = idn_mode_from_legacy(pfb["python_idn"])
-            # ADR-08 Phase 5: the two Confusable sub-toggles. The PHP ini writer emits these
-            # MAIN keys from Phase 6 on; read them when present so the matcher honours the
-            # operator's choice, else keep the defaults (block_malicious ON, escalate OFF).
+            # ADR-08: the two Confusable sub-toggles. Read the MAIN keys when the
+            # PHP ini writer emits them, else keep the defaults (block_malicious
+            # ON, escalate OFF).
             if config.has_option("MAIN", "python_idn_block_malicious"):
                 pfb["python_idn_block_malicious"] = config.getboolean("MAIN", "python_idn_block_malicious")
             if config.has_option("MAIN", "python_idn_escalate_suspicious"):
@@ -1371,8 +1340,8 @@ def init_standard(id: int, env: module_env) -> bool:
             # (data/zone) -> builds dataDB/zoneDB/feedGroupIndexDB/whiteDB and emits
             # the entry count -- it is now the source of truth for the built
             # structures. The legacy data/zone/whitelist CSV load below is the
-            # FALLBACK (shell/PHP still produce those files until Phase 5 removes the
-            # duplication), used only when no manifest is present. Python ignores
+            # FALLBACK (shell/PHP still produce those files for this fallback),
+            # used only when no manifest is present. Python ignores
             # stray IP lines and never touches the firewall/IP path (DNSBL-IP stays
             # in PHP). The build call site is the future zero-downtime swap point;
             # no background-thread/restart-free behaviour is added here.
@@ -1407,7 +1376,7 @@ def init_standard(id: int, env: module_env) -> bool:
 
                 # Emit pfb_py_count (the LOADED total) for the UI (inc:3149).
                 dnsbl_emit_count(pfb["pfb_py_count"], build_result.counts)
-                # ADR-48 Phase 4 (#789): emit the per-entry reject tally artifact
+                # ADR-48 (issue #789): emit the per-entry reject tally artifact
                 # alongside the count -- PHP reads it after this run and emits
                 # stage=entries for any feed with a nonzero bucket.
                 dnsbl_emit_reject_stats(pfb["pfb_py_reject_stats"], build_result.rejects)
@@ -1570,7 +1539,7 @@ def init_standard(id: int, env: module_env) -> bool:
     # ``important_rules`` fast-path gate sits in pfb["important_rules"]. The builder
     # closure wraps those SAME dict objects into a fresh Snapshot (no copy, no shape
     # change), and rebuild_and_swap is the SINGLE place the ``_snapshot`` ref is bound
-    # (one GIL-atomic store; the future zero-downtime swap point Phase 4 reuses). It
+    # (one GIL-atomic store; the zero-downtime reload-watcher reuses this same point). It
     # runs on BOTH the python_enable and the else (empty defaultdicts) paths, so a
     # snapshot is always present for operate(). Decision-identical to the old per-global
     # read -- the same dict objects, just bundled (pinned by the retained ADR-06/07
@@ -1581,7 +1550,7 @@ def init_standard(id: int, env: module_env) -> bool:
     # ``emit_counts=False`` keeps init's existing path-specific inline count emits (the
     # manifest-path pfb_py_count + the always-on pfb_py_regex_count above) -- the swap
     # must NOT re-emit here or the CSV-fallback/else paths would gain count writes they
-    # do not make today. Phase 4's background caller uses the default emit_counts=True.
+    # do not make today. The background reload-watcher caller uses the default emit_counts=True.
     def _init_build_snapshot() -> Snapshot:
         return Snapshot(
             data_db=dataDB,
@@ -1657,17 +1626,12 @@ def init_standard(id: int, env: module_env) -> bool:
     return True
 
 
-# ADR-08: IDN-feature mode selector. The legacy on/off ``python_idn`` toggle becomes
-# a three-valued mode so a later phase can add a surgical cross-script-homoglyph tier
-# without disturbing the two behaviour-preserving modes:
-#   IDN_MODE_OFF        -- the IDN feed never fires (every xn-- query resolves normally).
-#   IDN_MODE_ALL        -- block EVERY xn-- query as feed="IDN" (pure prefix match, no
-#                          punycode decode). Token "on" (reused from the pre-ADR-08 binary
-#                          IDN toggle): the PHP gateway, py_unbound.ini, and this enum all
-#                          share the one vocabulary 'on'|'confusable'|'off' (ADR-28).
-#   IDN_MODE_CONFUSABLE  -- the TR39 mixed-script analyzer tier.
-# Legacy: a config predating the idn_mode key (only python_idn=on|off) still maps via
-# idn_mode_from_legacy() -- on->All, off/absent->Off.
+# ADR-08: IDN-feature mode selector (ADR-28 shared vocabulary 'on'/'confusable'/'off'
+# across config.xml, py_unbound.ini, and this enum). IDN_MODE_OFF: the IDN feed never
+# fires. IDN_MODE_ALL: block every xn-- query as feed="IDN" (prefix match only, no
+# punycode decode); token "on" is the legacy value. IDN_MODE_CONFUSABLE: the TR39
+# mixed-script analyzer tier. A config predating idn_mode (only python_idn=on|off)
+# maps via idn_mode_from_legacy(): on->All, off/absent->Off.
 IDN_MODE_OFF = "off"
 IDN_MODE_ALL = "on"
 IDN_MODE_CONFUSABLE = "confusable"
@@ -1702,11 +1666,11 @@ class IdnMode(Enum):
 
 
 def idn_mode_from_legacy(python_idn: bool) -> IdnMode:
-    """Map the legacy on/off ``python_idn`` flag to an IDN mode (RESULTS/01 SS1).
+    """Map the legacy on/off ``python_idn`` flag to an IDN mode.
 
     True ('on') -> IdnMode.All (today's block-all-IDN behaviour); False -> IdnMode.Off.
-    The Confusable value cannot arise from the legacy flag -- it reaches Python only once
-    the PHP UI emits it (Phase 6); until then this is the sole derivation of the mode.
+    The Confusable value cannot arise from the legacy flag -- it reaches Python only
+    once the PHP UI emits it.
     """
     return IdnMode.All if python_idn else IdnMode.Off
 
@@ -1718,13 +1682,10 @@ def is_idn_domain(q_name: str) -> bool:
 def idn_mode_decision(q_name: str, idn_mode: IdnMode) -> bool:
     """Pure IDN feed decision: should this query be blocked by the All-IDN feed?
 
-    Extracted verbatim from the evaluate_domain IDN branch so the contract can be
-    pinned (ADR-08 Phase 3). Returns True only in IdnMode.All on an xn-- query --
-    the exact condition the inline ``cfg["python_idn"] and is_idn_domain(q_name)``
-    encoded. IdnMode.Off and IdnMode.Confusable return False here -- Off never
-    blocks, and the Confusable tier is decided by ``idn_confusable_action`` (Phase 5),
-    NOT this gate. No punycode decode, no script work. The Off/All arms it governs
-    stay byte-identical to today (the Phase-3 golden gate).
+    Returns True only in IdnMode.All on an xn-- query. IdnMode.Off and
+    IdnMode.Confusable return False here -- the Confusable tier is decided by
+    ``idn_confusable_action`` instead, not this gate. No punycode decode, no
+    script work. Pinned by tests/test_adr08_mode_baseline.py.
     """
     return idn_mode is IdnMode.All and is_idn_domain(q_name)
 
@@ -1872,7 +1833,7 @@ def classify_idn(q_name: str) -> NameVerdict:
     return NameVerdict(q_name, verdicts, worst.severity, worst.offending)
 
 
-# ADR-08 Phase 5: the Confusable tier. Distinct feed/group labels so a homoglyph block
+# ADR-08: the Confusable tier. Distinct feed/group labels so a homoglyph block
 # is attributed apart from the blunt All-IDN feed ("IDN"/"DNSBL_IDN") and the alerts
 # page / Reports can break it out. Malicious -> the Homoglyph feed; the suspicious/
 # flagged (non-malicious anomaly) tier -> the Suspect feed.
@@ -2416,8 +2377,8 @@ def _db_reset_cache() -> bool:
     # the schema + WAL connection live so the very next enqueued block row inserts
     # cleanly post-swap; _db_run re-creates the table on a faulted reconnect. The
     # current PHP Reports reader reads ALL rows (no generation column), so a destructive
-    # clear is the correct no-restart equivalent of today's wipe-on-restart; see the
-    # Phase-3 handoff for the generation-key alternative deferred to Phase 5/PHP.
+    # clear is the correct no-restart equivalent of today's wipe-on-restart; a
+    # generation-key alternative is deferred to PHP.
     return _db_run(DB_CACHE, lambda con: con.execute("DELETE FROM dnsblcache"))
 
 
@@ -3076,22 +3037,14 @@ def python_control_addbypass(duration: int, b_ip: str) -> bool:
     return False
 
 
-# PFBL-03: the SINGLE DNSBL-control command handler. Both transports route here -- the
-# legacy DNS-TXT branch (operate(), retired in a later phase) and the local privileged
-# command channel consumed by pfb_control_watcher() -- so the command grammar and its
-# side effects have exactly one implementation.
-#
-# ``control_command`` is the dot-split token list exactly as the DNS-TXT path builds it
-# (q_name "python_control.disable.60" -> ["python_control", "disable", "60"]); the file
-# reader builds the identical list from its JSON record. Validation contract (re-checked
-# here, never trusting the transport): a bypass IP must parse via ipaddress.ip_address()
-# and a duration must pass python_control_duration() (1-3600) before any side effect.
-#
-# Returns ``(applied, message)`` -- ``applied`` is the DNS-TXT branch's control_rcd
-# (True only when the command took effect), ``message`` its human-readable status. The
-# behaviour is BYTE-FOR-BYTE the prior DNS-TXT branch (disable/enable toggle
-# python_blacklist; addbypass/removebypass mutate gpListDB; durations spawn the same
-# timed re-enable/remove threads).
+# PFBL-03: the SINGLE DNSBL-control command handler. Both transports route
+# here -- the legacy DNS-TXT branch (operate()) and the local privileged
+# command channel (pfb_control_watcher()) -- so the grammar and its side
+# effects have exactly one implementation. ``control_command`` is the
+# dot-split token list both build identically; validated here (never
+# trusting the transport): a bypass IP via ipaddress.ip_address(), a
+# duration via python_control_duration() (1-3600). Returns
+# ``(applied, message)``; behaviour is byte-for-byte the prior DNS-TXT branch.
 def pfb_apply_control_command(control_command: list[str]) -> tuple[bool, str]:
     global pfb, gpListDB
 
@@ -3385,40 +3338,24 @@ def inform_super(id: int, qstate: module_qstate, superqstate: module_qstate, qda
 
 
 # --------------------------------------------------------------------------- #
-# DNSBL build layer (ADR-06) -- pure, stdlib-only, Unbound-symbol-free.
+# DNSBL build layer (ADR-06) -- pure, stdlib-only, Unbound-symbol-free. Moves
+# list preprocessing (parse -> normalise -> classify data/zone -> build dicts)
+# out of shell/PHP: the boundary is "shell/PHP fetch + tag; Python parse ->
+# normalise -> classify -> build dicts -> emit counts" (ADR.md SS2), wired
+# into init() via dnsbl_build_from_manifest().
 #
-# Moves the DNSBL list preprocessing (parse -> normalise -> classify data/zone ->
-# build dicts) out of shell/PHP into this plugin. The boundary is "shell/PHP fetch
-# + tag; Python parse -> normalise -> classify -> build dicts -> emit counts"
-# (ADR.md SS2). The layer is wired into init() via dnsbl_build_from_manifest()
-# (Phase 4), and the duplicated shell/PHP preprocessing has since been removed
-# (Phase 5); decision-equivalence is pinned against the Phase-2 oracle.
+#   * Build-time OPTIMISATIONS are dropped, not reimplemented -- no dedup/
+#     collapse/build-time whitelist removal (the dict load dedups keys for
+#     free; whitelisting is QUERY-TIME via whiteDB).
+#   * Classification mirrors tld_analysis/tld_search: a registrable parent ->
+#     wildcard ZONE; a deeper sub-domain under an unknown public suffix, or a
+#     TLD-excluded name -> exact DATA; a blacklisted TLD -> a whole-TLD ZONE.
+#   * IP extraction is NOT Python's job -- it stays in PHP; the parser SKIPS
+#     non-domain lines and never produces firewall input.
+#   * build() is REENTRANT (returns a new structure-set, mutates no module
+#     global) so a zero-downtime reload can run it off-thread and swap in.
 #
-# Design notes the contract pins (RESULTS/01_Results.txt, RESULTS/02_Results.txt):
-#   * Build-time OPTIMISATIONS are dropped, not reimplemented: no within/cross-feed
-#     dedup, no subdomain collapse, no build-time user-whitelist or TOP1M removal.
-#     The dict load dedups keys for free (last-wins) and redundant subdomains stay
-#     because the parent zone still matches them.
-#   * Data/zone CLASSIFICATION is kept (it is not an optimisation) and mirrors
-#     tld_analysis/tld_search exactly: a registrable parent -> wildcard ZONE; a
-#     deeper sub-domain whose parent is not a known public suffix -> exact DATA;
-#     TLD exclusion forces exact DATA; a blacklisted TLD -> a whole-TLD ZONE entry.
-#   * Whitelisting is QUERY-TIME: build() loads the user whitelist into whiteDB
-#     (input normalisation moves here) and loads the TOP1M list into whiteDB ONLY
-#     when enabled. No list pruning at build time.
-#   * IP extraction is NOT Python's job -- it stays in PHP (Phase 5). The parser
-#     SKIPS non-domain lines (bare IPs fail domain validation); it never produces
-#     firewall input.
-#   * ENTRY MODEL: every entry carries a ``kind`` tag (block | allow | regex) so the
-#     model is ABP-ready, BUT this phase produces ONLY ``block`` and still IGNORES
-#     ``@@`` exceptions, regex rules, element-hiding (``##`` / ``#@#``), path/URL
-#     rules and non-domain ``$options`` -- exactly as today. The allow/regex kinds
-#     and their query-time matching are the future ABP ADR, not here.
-#   * build() is REENTRANT: it returns a NEW structure-set and mutates no module
-#     global, so a future zero-downtime reload can run it on a background thread and
-#     atomically swap the result in (the swap itself is not built here).
-#
-# No Unbound symbol is referenced below; only the stdlib (csv) is used.
+# Pinned by tests/test_adr06_build_module.py.
 # --------------------------------------------------------------------------- #
 
 # Entry kinds (ABP-ready seam). The ADR-06 plain/hosts/csv path emits ONLY BLOCK;
@@ -3434,25 +3371,17 @@ DNSBL_CLASS_DATA = "data"  # exact match  (loaded into dataDB)
 DNSBL_CLASS_ZONE = "zone"  # wildcard-incl-self match (loaded into zoneDB)
 
 # --------------------------------------------------------------------------- #
-# ADR-07 -- the intermediate ABP Rule model (Stage A).
+# ADR-07: the intermediate ABP Rule model. ``parse_abp(line, ...) -> Rule |
+# None`` turns one raw ABP line into a typed Rule (or None to skip), agreeing
+# on every corpus line with the reference oracle
+# (tests/test_adr07_decision_spec.py::parse_abp_line).
 #
-# ``parse_abp(line, ...) -> Rule | None`` turns one raw ABP line into a typed
-# Rule (or None to skip). This is PURE + ADDITIVE: it is NOT wired into build()
-# / init in this phase (the reconcile/reduce/emit + the live matcher are later
-# phases). The reference TARGET for this parser is the Phase-2 oracle
-# (tests/test_adr07_decision_spec.py::parse_abp_line); this production parser
-# agrees with it on every corpus line.
-#
-# A Rule's ``target`` says what it matches:
-#   RULE_TARGET_DOMAIN -- an exact-or-wildcard domain literal (``wildcard`` says
-#                         whether subdomains are covered); ``key`` is the domain.
-#   RULE_TARGET_REGEX  -- an irreducible regex pattern (NOT compiled here -- the
-#                         raw inner pattern is stored in ``key``; compile/load is
-#                         a later phase, runtime safety is a later phase).
-# A Rule's ``kind`` is DNSBL_KIND_BLOCK (``||`` / hosts / plain / ``/re/``) or
-# DNSBL_KIND_ALLOW (``@@||`` / ``@@/re/``).
-# A Rule's ``provenance`` is RULE_PROV_FEED (a downloaded feed line) or
-# RULE_PROV_USER (a user-supplied rule -- sovereign, $badfilter-immune, fact 7).
+# A Rule's ``target``: RULE_TARGET_DOMAIN (an exact-or-wildcard domain
+# literal, ``wildcard`` says whether subdomains are covered) or
+# RULE_TARGET_REGEX (an irreducible pattern stored raw in ``key``, NOT
+# compiled here). ``kind`` is DNSBL_KIND_BLOCK (``||``/hosts/plain/``/re/``)
+# or DNSBL_KIND_ALLOW (``@@||``/``@@/re/``). ``provenance`` is RULE_PROV_FEED
+# (a downloaded feed line) or RULE_PROV_USER (sovereign, $badfilter-immune).
 # --------------------------------------------------------------------------- #
 RULE_TARGET_DOMAIN = "domain"
 RULE_TARGET_REGEX = "regex"
@@ -3472,11 +3401,10 @@ _DNSBL_LABEL_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-_")
 class Rule:
     """One typed, DNS-only ABP rule (Stage A) -- the output of ``parse_abp``.
 
-    This is the intermediate model the reconcile / precedence stages (Phase 5+)
-    stand on; it carries everything ``$badfilter`` / ``$important`` / provenance
+    This is the intermediate model the reconcile / precedence stages stand on;
+    it carries everything ``$badfilter`` / ``$important`` / provenance
     resolution need, none of which can survive being folded into a domain-keyed
-    dict. Mirrors the Phase-2 oracle Rule (tests/test_adr07_decision_spec.py) and
-    RESULTS/01_Results.txt SS1c.
+    dict. Mirrors the reference oracle Rule (tests/test_adr07_decision_spec.py).
 
     Fields:
         kind            DNSBL_KIND_BLOCK (``||`` / hosts / plain / ``/re/``) or
@@ -3493,7 +3421,7 @@ class Rule:
                         3/4). Always meaningless for, but recorded on, USER rules
                         (they are sovereign regardless).
         badfilter       the rule carried ``$badfilter`` (feed-only prune key; the
-                        rule itself emits no decision -- Phase 5 consumes it).
+                        rule itself emits no decision -- reconcile() consumes it).
         provenance      RULE_PROV_USER (sovereign, $badfilter-immune, fact 7) or
                         RULE_PROV_FEED.
         feed/group/log  the per-feed manifest row metadata (attached by the caller;
@@ -3502,7 +3430,7 @@ class Rule:
                         ``(key_or_pattern, tuple(sorted DNS-options)) MINUS $badfilter``.
                         Two rules with the same signature are the same target+options
                         (a feed ``$badfilter`` prunes a feed rule with a matching
-                        signature in Phase 5).
+                        signature during reconcile()).
     """
 
     kind: str
@@ -3537,12 +3465,12 @@ class ParsedEntry:
 @dataclass
 class BuildResult:
     """The structure-set build() returns -- decision-equivalent to the loader
-    contract (RESULTS/01_Results.txt SS1f). All dicts are FRESH (no module global
-    is mutated), so the result is safe to atomically swap in later.
+    contract. All dicts are FRESH (no module global is mutated), so the
+    result is safe to atomically swap in later.
 
     Shapes (ADR-07 widened payloads). For a non-ABP (plain/hosts/csv) build every
     ``important`` is ``False`` and ``band`` is the feed-block band (1); the ABP path
-    (Phase 6, format_hint='abp') sets ``important``/``band`` from the reconciled rule:
+    (format_hint='abp') sets ``important``/``band`` from the reconciled rule:
         data_db[domain]          = {"log": <"0"|"1"|"2">, "index": <int>, "important": bool, "band": int}
         zone_db[registrable]     = {"log": <flag>,        "index": <int>, "important": bool, "band": int}
         feed_group_index_db[idx] = {"feed": <str>, "group": <str>}
@@ -3554,7 +3482,7 @@ class BuildResult:
     regex). ``counts`` is the LOADED total (len(data_db) + len(zone_db)); init emits
     it as pfb_py_count (its value legitimately rises -- lists are un-pruned).
     ``regex_count`` is the ADMITTED feed-regex total for the DNSBL_Regex alias (UI).
-    ``rejects`` is the ADR-48 Phase 4 (#789) per-entry reject tally -- (feed, group)
+    ``rejects`` is the ADR-48 (issue #789) per-entry reject tally -- (feed, group)
     -> {'shape': n, 'wire_cap': m} -- for every domain target a normalise-fail (or
     the reconcile() wire-cap fold-drop) rejected; a diagnostic count, not consumed
     by any decision.
@@ -3596,7 +3524,7 @@ class Snapshot:
     so it is not an immutable swap target. ``rcodeDB``/``maxmindReader`` shape the reply,
     not the block decision, and are likewise out.
 
-    Immutability note (Phase 3/4 watch-out): the tuple of fields is frozen, but the
+    Immutability note (watch-out): the tuple of fields is frozen, but the
     contained dicts are ordinary dicts. ADR-07's runtime regex eviction still mutates
     ``regex_db`` in place (``_regex_evict_names`` in ``evaluate_domain``); a swap replaces
     the whole snapshot with a freshly-compiled set, so any evicted-pattern state is
@@ -3608,7 +3536,7 @@ class Snapshot:
     ``regex_db``->regexDB, ``allow_regex_db``->allowRegexDB,
     ``feed_group_index_db``->feedGroupIndexDB, ``hsts_db``->hstsDB.
 
-    ``rejects`` (ADR-48 Phase 4, #789) rides alongside ``counts``/``regex_count`` as
+    ``rejects`` (ADR-48, issue #789) rides alongside ``counts``/``regex_count`` as
     a build-diagnostic passthrough -- NOT a per-query stratum (absent from
     ``containers()``) -- so a no-restart swap can re-emit the reject-stats artifact
     from the fresh ``BuildResult`` exactly as it re-emits the UI counts.
@@ -3674,14 +3602,12 @@ def _dnsbl_parse_abp_line(line: str) -> str | None:
 
 
 # --------------------------------------------------------------------------- #
-# ADR-07 Stage-A -- DNS-only ABP option / scope classification.
-#
-# A ``$options`` tail is KEPT only if EVERY option is DNS-relevant ($important /
-# $badfilter). Any page-context option ($third-party / $domain= / $script /
-# $image / $csp / ...), any non-DNS AdGuard modifier whose only effect is a
-# rewrite ($dnsrewrite / $dnstype / $client / $ctag), OR any UNRECOGNISED option
-# makes the whole rule out of DNS scope -> the rule is skipped (parse_abp returns
-# None). Mirrors the Phase-2 oracle _classify_options + ADR.md SS2 "Scope".
+# ADR-07 Stage-A: DNS-only ABP option / scope classification. A ``$options``
+# tail is KEPT only if EVERY option is DNS-relevant ($important / $badfilter).
+# Any page-context option ($third-party / $domain= / $script / $image / $csp
+# / ...), any non-DNS AdGuard modifier that only rewrites ($dnsrewrite /
+# $dnstype / $client / $ctag), or any UNRECOGNISED option puts the whole rule
+# out of DNS scope -> skipped (parse_abp returns None).
 # --------------------------------------------------------------------------- #
 # Options that DO modify a DNS block/allow decision (kept):
 _DNSBL_DNS_RELEVANT_OPTS = frozenset({"important", "badfilter"})
@@ -3726,7 +3652,7 @@ def _dnsbl_classify_options(opts_str: str) -> tuple[tuple[str, ...], bool, bool]
 
     ``sorted_dns_opts`` is the sorted tuple of DNS-relevant option NAMES that are
     NOT ``$badfilter`` (i.e. ``("important",)`` or ``()``) -- it feeds the rule's
-    $badfilter signature (Phase 5). A page-context option, a non-DNS modifier, or
+    $badfilter signature. A page-context option, a non-DNS modifier, or
     an unrecognised option returns None (conservative: never invent a DNS decision
     for a modifier we do not model).
     """
@@ -3756,9 +3682,10 @@ def _dnsbl_parse_abp_regex(stripped: str) -> tuple[str, str, str] | None:
     """Recognise a regex rule. Return ``(kind, inner, opts_str)`` for ``/re/`` (block)
     or ``@@/re/`` (allow), with an OPTIONAL ``$options`` suffix after the closing
     slash (``/re/$important``, ``@@/re/$badfilter``); else ``None``. ``inner`` is the
-    raw pattern between the slashes (NOT compiled here -- reduction is Phase 5,
-    compile/load is Phase 6); ``opts_str`` is the ``$``-suffix (without the ``$``) or
-    "" when absent. The closing slash is the last ``/`` of the rule (no options) or
+    raw pattern between the slashes (NOT compiled here -- reduction happens in
+    reconcile(), compile/load in _dnsbl_compile_regex_rules()); ``opts_str`` is
+    the ``$``-suffix (without the ``$``) or "" when absent. The closing slash
+    is the last ``/`` of the rule (no options) or
     the ``/`` immediately preceding ``$`` (options) -- so a ``/`` inside the pattern
     body does not end it."""
     if stripped.startswith("@@/"):
@@ -3792,9 +3719,8 @@ def parse_abp(
     tally: RejectTally | None = None,
 ) -> Rule | None:
     """The full DNS-only ABP Stage-A parser: one raw ABP line -> a typed ``Rule``
-    (or ``None`` to skip). PURE -- no Unbound symbol, no side effect; NOT wired into
-    build()/init this phase. The reference TARGET is the Phase-2 oracle
-    (tests/test_adr07_decision_spec.py::parse_abp_line); this agrees with it on
+    (or ``None`` to skip). PURE -- no Unbound symbol, no side effect. Agrees with
+    the reference oracle (tests/test_adr07_decision_spec.py::parse_abp_line) on
     every corpus line.
 
     KEEP (-> Rule):
@@ -3814,7 +3740,7 @@ def parse_abp(
     (the caller supplies them from the manifest row). Domain targets pass through
     ``normalise()`` (lower-case + shape gate); an invalid domain -> ``None``.
 
-    ``tally`` (ADR-48 Phase 4, issue #789): optional out-param -- when not ``None``,
+    ``tally`` (ADR-48, issue #789): optional out-param -- when not ``None``,
     a normalise-fail reject on a domain target (anchor/hosts/bare) is counted into
     it (bucket 'shape' | 'wire_cap', keyed (feed, group)). Left ``None`` (the
     default), this function is BYTE-IDENTICAL to before -- purity is test-pinned.
@@ -3972,7 +3898,7 @@ def parse(format_hint: str, line: str) -> ParsedEntry | None:
     reproduces today's per-format behaviour, including which lines are IGNORED.
 
     Bare-IP lines and the csv:pon col-0 IP are NOT returned here -- IP extraction is
-    a PHP/firewall concern (Phase 5); a stray bare IP simply yields ``None`` (and
+    a PHP/firewall concern; a stray bare IP simply yields ``None`` (and
     would fail domain validation anyway). ``feed`` / ``group`` / ``log`` are attached
     by build() from the manifest row, so parse() only resolves the domain token.
 
@@ -3995,7 +3921,7 @@ def parse(format_hint: str, line: str) -> ParsedEntry | None:
 
     if format_hint == "csv:pon":
         # 9-col CSV: domain = col2 (always kept). col0 is handled by the PHP DNSBL-IP
-        # pass (Phase 5); Python ignores it here.
+        # pass; Python ignores it here.
         if stripped.startswith("!") or stripped.lower().startswith("timestamp"):
             return None
         try:
@@ -4022,7 +3948,7 @@ def parse(format_hint: str, line: str) -> ParsedEntry | None:
     return ParsedEntry(kind=DNSBL_KIND_BLOCK, value=token, feed="", group="", log="")
 
 
-# ADR-48 Phase 4 (issue #789): the per-entry reject tally build()/parse_abp()/
+# ADR-48 (issue #789): the per-entry reject tally build()/parse_abp()/
 # reconcile() accumulate into, keyed (feed, group) -> {'shape': n, 'wire_cap': m}.
 # A plain dict (no class): the shape never grows past the two RESOLVED buckets
 # (ADR §2 item 4), so a helper that does the defaulting is all this needs.
@@ -4076,16 +4002,16 @@ def normalise(value: str) -> str | None:
     Length caps mirror the PHP gate at the queryable bound (#753): every label
     <= 63 chars, whole name <= 253 chars (``_dnsbl_within_wire_caps``; the RFC
     1035 presentation cap, applied after the trailing dot is stripped -- the
-    same names PHP's ``strlen < 255`` accepts in dotted form, PR #752). PHP also
+    same names PHP's ``strlen < 255`` accepts in dotted form, #752). PHP also
     tolerates a bare 254-char undotted name (an inert sanity-cap artefact,
-    pinned by PR #752); this gate rejects it as unqueryable. Every entry gated
+    pinned by #752); this gate rejects it as unqueryable. Every entry gated
     here becomes an exact or wildcard match key, and a name that cannot be
     encoded in a DNS query could never match a lookup -- rejecting it keeps
     unreachable dead weight out of the block dicts. The ``reconcile()`` regex
     fold applies the same caps to a domain-literal regex key.
 
     Thin wrapper over ``_normalise_verdict()`` -- see there for the reject-bucket
-    classification (ADR-48 Phase 4, issue #789).
+    classification (ADR-48, issue #789).
     """
     domain, _ = _normalise_verdict(value)
     return domain
@@ -4156,12 +4082,10 @@ def classify(domain: str, tlds: dict[str, dict[str, str]], exclusion: set[str]) 
 # --------------------------------------------------------------------------- #
 # ADR-07 Stage-B reconcile: $badfilter prune + regex reduction + classify +
 # priority bands. PURE / reentrant -- consumes the typed ``Rule`` stream from
-# Stage-A (parse_abp) and produces the pre-emit rule sets. NOT wired into
-# build()/init (Phase 6) and NEVER compiles/executes a regex.
-#
-# The reference TARGETs are tests/test_adr07_decision_spec.py (reduce_regex /
-# reconcile / priority / decide) and benchmarks/spike_adr07_regex.reduce_pattern;
-# this agrees with both. ADR.md SS2 ($badfilter / Regex-reduction / Precedence).
+# Stage-A (parse_abp) into the pre-emit rule sets build() folds in; NEVER
+# compiles/executes a regex itself. Reference oracle:
+# tests/test_adr07_decision_spec.py (reduce_regex/reconcile/priority/decide),
+# benchmarks/spike_adr07_regex.reduce_pattern; ADR.md SS2.
 # --------------------------------------------------------------------------- #
 
 # Regex-reduction grammar (mirrors the Phase-2 oracle reduce_regex + the spike
@@ -4218,7 +4142,7 @@ def _dnsbl_rule_band(rule: Rule) -> int:
 
 @dataclass(frozen=True)
 class BlockDomainRule:
-    """A reconciled domain BLOCK ready to emit into dataDB/zoneDB (Phase 6).
+    """A reconciled domain BLOCK ready to emit into dataDB/zoneDB.
 
     ``cls`` is DNSBL_CLASS_DATA (exact) or DNSBL_CLASS_ZONE (wildcard); ``key`` is
     the anchor domain itself for a ZONE (ABP ``||host^`` covers subdomains at any
@@ -4238,7 +4162,7 @@ class BlockDomainRule:
 
 @dataclass(frozen=True)
 class AllowDomainRule:
-    """A reconciled domain ALLOW ready to emit into whiteDB (Phase 6).
+    """A reconciled domain ALLOW ready to emit into whiteDB.
 
     ``wildcard`` True -> domain + subdomains; False -> exact. ``important`` raises a
     feed allow's band to 4 (and is always effectively sovereign for USER rules)."""
@@ -4252,8 +4176,9 @@ class AllowDomainRule:
 
 @dataclass(frozen=True)
 class RegexRule:
-    """A reconciled IRREDUCIBLE regex (block or allow) handed to Phase 6 to
-    COMPILE (raw ``pattern`` -- NOT compiled here; Stage B never executes a regex).
+    """A reconciled IRREDUCIBLE regex (block or allow), raw ``pattern`` NOT
+    compiled here -- Stage B never executes a regex; ``_dnsbl_compile_regex_rules()``
+    compiles it.
 
     ``kind`` is DNSBL_KIND_BLOCK or DNSBL_KIND_ALLOW. ``band`` is the priority band;
     ``important`` is carried for the 6-band resolution."""
@@ -4272,11 +4197,11 @@ class RegexRule:
 class ReconcileResult:
     """The Stage-B pre-emit rule sets (pure return value -- no global is touched).
 
-    Phase 6 folds these into the matcher dicts + compiles the irreducible regex:
+    build() folds these into the matcher dicts + compiles the irreducible regex:
         block_domains            -> dataDB/zoneDB (+band/important/feed/group/log)
         allow_domains            -> whiteDB ({wildcard, important} + band)
-        block_regex_irreducible  -> regexDB     (compiled in Phase 6)
-        allow_regex_irreducible  -> allowRegexDB (compiled in Phase 6)
+        block_regex_irreducible  -> regexDB     (compiled by _dnsbl_compile_regex_rules())
+        allow_regex_irreducible  -> allowRegexDB (compiled by _dnsbl_compile_regex_rules())
     ``important_rules`` is the build-emitted fast-path flag (ADR.md SS2 "Query-time
     matcher"): True iff ANY surviving rule would engage the numeric 6-band branch
     (any $important, any feed allow/@@ or feed regex). False keeps today's matcher.
@@ -4302,7 +4227,7 @@ def reconcile(
 
     PURE + REENTRANT: builds and returns a FRESH ``ReconcileResult``, mutates no
     argument and no module global, never compiles/executes a regex -- two calls on
-    equal inputs yield equal results. Steps (ADR.md SS2 / RESULTS/04 SS7):
+    equal inputs yield equal results. Steps (ADR.md SS2):
 
       1. $BADFILTER PRUNE (feed-only): collect the signatures of FEED rules carrying
          ``$badfilter``; drop every FEED rule with a matching signature; the
@@ -4310,7 +4235,7 @@ def reconcile(
          collected, never pruned -- sovereignty, fact 7).
       2. REGEX REDUCTION: a reducible regex Rule folds to a domain rule (block ->
          data/zone by its wildcard bit, allow -> whiteDB wildcard); irreducible
-         regex passes through into the irreducible set (compiled in Phase 6).
+         regex passes through into the irreducible set (compiled by build()).
       3. DATA vs ZONE: a wildcard block (``||host^`` / wildcard fold) emits a ZONE
          keyed at the anchor itself -- ABP subdomain coverage at ANY depth (#718);
          a TLD-exclusion domain still forces exact DATA; an exact fold stays DATA.
@@ -4321,7 +4246,7 @@ def reconcile(
     parent rule is a plain/hosts-path concept (ADR-06) that must not demote an ABP
     anchor. Matches the Phase-2 oracle ``reconcile`` + ``decide`` precedence.
 
-    ``tally`` (ADR-48 Phase 4, issue #789): optional out-param -- when not ``None``,
+    ``tally`` (ADR-48, issue #789): optional out-param -- when not ``None``,
     the #753 wire-cap fold-drop (a reducible regex whose folded key is unqueryable)
     is counted into it as 'wire_cap', attributed to the ORIGINATING rule's own
     feed/group (each survivor is reconciled one rule at a time, before any
@@ -4353,7 +4278,7 @@ def reconcile(
         if r.target == RULE_TARGET_REGEX:
             reduced = _dnsbl_reduce_regex(r.key_or_pattern)
             if reduced is None:
-                # Irreducible -> hand the RAW pattern to Phase 6 (compile candidate).
+                # Irreducible -> hand the RAW pattern through as a compile candidate.
                 if r.provenance == RULE_PROV_FEED:
                     result.important_rules = True  # any feed regex engages numeric path
                 regex_rule = RegexRule(
@@ -4472,24 +4397,20 @@ def _dnsbl_normalise_whitelist(
 
 
 # ============================================================================ #
-# ADR-07 P7 -- regex safety (opt-in static cap + always-on runtime warn/evict)  #
+# ADR-07: regex safety (opt-in static cap + always-on runtime warn/evict)      #
 # ============================================================================ #
 # `re` does not release the GIL during a match and a Python thread cannot be
-# killed (ADR.md fact 2), so a query-time timeout CANNOT interrupt a catastrophic
-# match. The accepted design is a bounded residual: a pathological pattern's FIRST
-# match may block one query, but it is then EVICTED so it cannot hang again. Two
-# layers, both stdlib + in-process, applied to FEED *and* user regex:
-#   (1) opt-in static cap -- drop over-long / nested-quantifier patterns at LOAD
-#       (no execution) when the "Limit long/complex regex" setting is enabled;
-#   (2) always-on runtime timing -- time each match (per-thread CPU); over a WARN
-#       ceiling log (rate-limited), over a higher EVICT ceiling log + remove the
-#       pattern from the live regexDB/allowRegexDB (snapshot-iterate, evict-after-
-#       loop -- never mutate mid-iteration; dict.pop is atomic under the GIL).
+# killed, so a query-time timeout CANNOT interrupt a catastrophic match. Bounded
+# residual instead: a pathological pattern's FIRST match may block one query,
+# then it is EVICTED so it cannot hang again. (1) opt-in static cap drops
+# over-long/nested-quantifier patterns at LOAD; (2) always-on runtime timing
+# evicts a pattern from the live regexDB/allowRegexDB over an EVICT ceiling
+# (snapshot-iterate, evict-after-loop; dict.pop is atomic under the GIL).
 
-# Length ceiling (Phase-1 RESULTS/01 SS3c heuristic): a pattern over this many
-# characters is dropped at load ONLY when the opt-in "Limit long/complex regex"
-# setting is enabled. Length alone is a tunable convenience cap, NOT a safety gate --
-# a long pattern is not inherently pathological -- so it stays behind the flag.
+# Length ceiling (heuristic): a pattern over this many characters is dropped
+# at load ONLY when the opt-in "Limit long/complex regex" setting is enabled.
+# Length alone is a tunable convenience cap, NOT a safety gate -- a long
+# pattern is not inherently pathological -- so it stays behind the flag.
 REGEX_STATIC_LEN_CAP = 200
 
 # A quantified group that itself sits inside a quantifier: (a+)+, (a*)*, (\w+\.)+,
@@ -4569,8 +4490,7 @@ def _required_literal(pattern: str) -> str | None:
     Backs the per-query regex-rule prefilter: rules are bucketed by this literal's
     first char and only run when it is present in the query; a rule with no literal
     is always-run.  Necessary-condition only -- it never drops a match.  Rationale,
-    benchmarks, and the bucket-vs-Aho-Corasick decision live in
-    .ADRs/ADR_28_Code_Quality_Conventions/RESULTS/12_Results.txt.
+    benchmarks, and the bucket-vs-Aho-Corasick decision live in ADR-28.
 
     Walks Python's regex AST to find the longest contiguous run of mandatory literal
     characters.  A run is broken by anything that is not a guaranteed-present literal:
@@ -4798,14 +4718,14 @@ def build(
 ) -> BuildResult:
     """Pure, reentrant DNSBL build: raw feeds + config -> matcher structure-set.
 
-    ``manifest`` is the per-feed boundary (RESULTS/01_Results.txt SS1i): one row per
+    ``manifest`` is the per-feed boundary: one row per
     raw feed file mapping it to ``{raw, feed, group, format_hint, log_flag}``.
     ``config`` carries the classification + whitelist inputs (``tld_master`` suffix
     lines, ``tld_blacklist``, ``tld_exclusion``, ``user_whitelist``, ``user_unlock``,
     ``top1m_list``).
     ``line_reader`` yields the raw lines for a feed's ``raw`` reference -- injected so
     this stays pure and side-effect-free (no filesystem coupling, unit-testable; the
-    init wiring in Phase 4 supplies a file-backed reader).
+    init wiring supplies a file-backed reader).
 
     Returns a FRESH ``BuildResult`` and mutates no module global -- calling it twice
     yields equal structures (reentrant / zero-downtime-ready). It performs NO dedup,
@@ -4814,7 +4734,7 @@ def build(
     change, ADR.md SS2), and redundant subdomains stay because their parent zone still
     matches them.
 
-    ADR-48 Phase 4 (#789): every domain target a normalise-fail rejects (permit path,
+    ADR-48 (issue #789): every domain target a normalise-fail rejects (permit path,
     plain path, both parse_abp() call sites) and the reconcile() wire-cap fold-drop
     are tallied into ``BuildResult.rejects`` (bucket 'shape' | 'wire_cap', keyed
     (feed, group)) -- accounting only, no gate DECISION changes.
@@ -4835,7 +4755,7 @@ def build(
     feed_group_index_db: dict[int, dict[str, str]] = {}
     feed_group_db: dict[str, int] = {}
     next_index = 0
-    # ADR-48 Phase 4 (#789): the per-entry reject tally this build accumulates.
+    # ADR-48 (issue #789): the per-entry reject tally this build accumulates.
     rejects: RejectTally = {}
 
     def index_for(feed: str, group: str) -> int:
@@ -5040,9 +4960,10 @@ def build(
                     "band": a.band,
                 }
 
-        # Irreducible regex -> regexDB (block) / allowRegexDB (allow). Compile here
-        # (Phase 6); a broken pattern is logged + skipped, mirroring the init regex
-        # load (pfb_unbound.py REGEX section). NO runtime cap/evict guard yet (P7).
+        # Irreducible regex -> regexDB (block) / allowRegexDB (allow). Compile here;
+        # a broken pattern is logged + skipped, mirroring the init regex load
+        # (pfb_unbound.py REGEX section). The runtime warn/evict guard (ADR-07)
+        # applies later, at query time in evaluate_domain, not during this compile.
         # Iterate over a stable list so the emit order is deterministic.
         regex_db, block_admitted = _dnsbl_compile_regex_rules(result.block_regex_irreducible, static_cap=static_cap)
         allow_regex_db, allow_admitted = _dnsbl_compile_regex_rules(
@@ -5083,7 +5004,7 @@ def _dnsbl_path_within_base(path: str, base_dir: str) -> bool:
 
 def _dnsbl_file_line_reader(base_dir: str) -> Callable[[str], Iterable[str]]:
     """A file-backed ``line_reader`` for build(): map a feed_row["raw"] reference to
-    its raw lines, streamed lazily so peak RAM stays at the dict floor (RESULTS/01).
+    its raw lines, streamed lazily so peak RAM stays at the dict floor.
 
     ``raw`` may be an absolute path or a name relative to ``base_dir`` (the directory
     holding the manifest). Yields stripped-of-newline lines; a missing/unreadable feed
@@ -5164,10 +5085,10 @@ def dnsbl_build_from_manifest(manifest_path: str) -> BuildResult | None:
     at init and assigns the result into the module globals -- no background/restart-
     free behaviour is added here.
 
-    The manifest carries ``feeds`` (one row per raw feed file) and a ``config`` block
-    (RESULTS/01 SS2). ``top1m_enabled`` is taken from ``config["top1m_enabled"]``.
-    Returns ``None`` when the manifest is absent or cannot be parsed (init then falls
-    back to the legacy CSV load -- shell/PHP still produce those files until Phase 5).
+    The manifest carries ``feeds`` (one row per raw feed file) and a ``config`` block.
+    ``top1m_enabled`` is taken from ``config["top1m_enabled"]``. Returns ``None`` when
+    the manifest is absent or cannot be parsed (init then falls back to the legacy
+    CSV load -- shell/PHP still produce those files for that fallback).
     """
     if not os.path.isfile(manifest_path):
         return None
@@ -5201,9 +5122,9 @@ def dnsbl_emit_count(count_path: str, count: int) -> bool:
 
     ADR-06 redefines ``pfb_py_count`` to the LOADED entry total (len(dataDB)+len(
     zoneDB)); its value legitimately RISES vs today because the lists are no longer
-    dedup/collapse/whitelist/TOP1M-pruned (RESULTS/01 SS1e). The sync-check at
-    inc:3149-3156 still subtracts this value -- it must be reconciled when shell/PHP
-    is slimmed (Phase 5); flagged in the handoff. Returns True on success.
+    dedup/collapse/whitelist/TOP1M-pruned. The sync-check at inc:3149-3156 still
+    subtracts this value -- it must be reconciled once shell/PHP is slimmed to
+    match. Returns True on success.
     """
     try:
         with open(count_path, "w", encoding="utf-8") as fh:
@@ -5215,7 +5136,7 @@ def dnsbl_emit_count(count_path: str, count: int) -> bool:
 
 
 def dnsbl_emit_reject_stats(stats_path: str, rejects: RejectTally) -> bool:
-    """Write the ADR-48 Phase 4 (#789) per-entry reject tally to ``pfb_py_reject_stats``
+    """Write the ADR-48 (issue #789) per-entry reject tally to ``pfb_py_reject_stats``
     as a JSON array of ``{"feed", "group", "shape", "wire_cap"}`` rows, one per
     (feed, group) with a NONZERO bucket -- PHP reads it after a DNSBL run and emits
     the canonical ``stage=entries`` line per nonzero bucket (Python never logs the
@@ -5258,8 +5179,8 @@ def rebuild_and_swap(build_snapshot: Callable[[], Snapshot | None], *, emit_coun
 
     On SUCCESS (a non-None Snapshot):
       1. atomically rebind the single module ``_snapshot`` ref (one GIL-atomic STORE --
-         RESULTS/01 SS1: shared __main__ dict + GIL, so the new snapshot is visible to
-         every query worker without a lock on the hot path);
+         shared __main__ dict + GIL, so the new snapshot is visible to every query
+         worker without a lock on the hot path);
       2. ``decisionDB.clear()`` -- the unified per-name LRU query memo (#67/#70/#72).
          It is otherwise reset only by ``init`` re-creating it, so a no-restart swap
          MUST clear it or ``operate()`` re-serves a STALE block/allow verdict on a cache
@@ -5275,14 +5196,14 @@ def rebuild_and_swap(build_snapshot: Callable[[], Snapshot | None], *, emit_coun
     NEITHER cache (decisionDB AND the Reports sqlite stay intact), log, and return
     ``False`` -- fail-closed, mirroring init's ``build_result is not None`` guard. The
     swap NEVER installs an empty/partial set on a build error; the resolver keeps
-    serving the last good snapshot (Phase 4's background watcher relies on exactly this
-    so a failed reload is a no-op, not an outage).
+    serving the last good snapshot (the background reload-watcher relies on exactly
+    this so a failed reload is a no-op, not an outage).
 
-    This phase calls it SYNCHRONOUSLY from ``init_standard`` (net init behaviour
-    unchanged: the same snapshot, a no-op decisionDB clear on the fresh empty cache, a
-    Reports reset in parity with the init os.remove, and -- with ``emit_counts=False``
-    -- init's own unchanged inline count emits). Phase 4 adds only the background
-    thread + trigger that calls this same function with the default ``emit_counts=True``.
+    ``init_standard`` calls it SYNCHRONOUSLY (net init behaviour unchanged: the same
+    snapshot, a no-op decisionDB clear on the fresh empty cache, a Reports reset in
+    parity with the init os.remove, and -- with ``emit_counts=False`` -- init's own
+    unchanged inline count emits). The background reload-watcher thread calls this
+    same function with the default ``emit_counts=True``.
     """
     global _snapshot
 
@@ -5330,7 +5251,7 @@ def rebuild_and_swap(build_snapshot: Callable[[], Snapshot | None], *, emit_coun
     if emit_counts:
         dnsbl_emit_count(pfb["pfb_py_count"], new_snapshot.counts)
         dnsbl_emit_count(pfb["pfb_py_regex_count"], new_snapshot.regex_count)
-        # ADR-48 Phase 4 (#789): re-emit the reject-stats artifact from the new
+        # ADR-48 (issue #789): re-emit the reject-stats artifact from the new
         # snapshot on a no-restart swap too, exactly like the UI counts above.
         # ``.get()`` (not a bare index): unit tests build a bare ``pfb`` dict
         # without this key and must not KeyError on an unrelated code path.
@@ -5473,7 +5394,7 @@ class DnsblDecision:
     feed: Any
     group: Any
     b_eval: str
-    # ADR-08 Phase 5: a Confusable-mode ALERT (suspicious/flagged, or malicious with
+    # ADR-08: a Confusable-mode ALERT (suspicious/flagged, or malicious with
     # block disabled) does NOT block -- the name resolves (is_found stays False) -- but
     # the anomaly must be surfaced. When an alert fired this carries its
     # (feed, group, b_eval) so operate() emits a dnsbl.log line in the same shape as a
@@ -5836,7 +5757,7 @@ def evaluate_domain(
     feed: Any = "Unknown"
     group: Any = "Unknown"
     b_eval = ""
-    # ADR-08 Phase 5: a Confusable-mode ALERT (non-blocking) records its attribution here
+    # ADR-08: a Confusable-mode ALERT (non-blocking) records its attribution here
     # so operate() can log it while the name still resolves; None on the common path.
     idn_alert: Any = None
     # The dual-form description of a Confusable BLOCK (xn-- [decoded] script), captured in
@@ -5925,7 +5846,7 @@ def evaluate_domain(
                 # overridden (allow_band >= 0 is always true) and resolve it anyway.
                 block_band = PRIO_FEED_BLOCK
             elif idn_mode is IdnMode.Confusable:
-                # Confusable arm (Phase 5): decode + TR39 mixed-script analysis, PER-LABEL,
+                # Confusable arm: decode + TR39 mixed-script analysis, PER-LABEL,
                 # gated by is_idn_domain (a non-xn-- query pays nothing). classify_idn is
                 # decode-safe -- a malformed label is FLAGGED, never raised into the resolver.
                 action, verdict = idn_confusable_action(
@@ -6595,9 +6516,10 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
         # SafeSearch CNAME redirect (duckduckgo.com / pixabay.com). Handled here,
         # post-resolution, because Unbound will not chase a CNAME the module hands
         # it (issue #149 / unbound #976): we plant the synthetic CNAME in the cache
-        # and restart the iterator so it chases the target itself. Phase 1 (plant +
-        # restart) and phase 2 (fix DNSSEC + finish, or #2 baked fallback) are
-        # distinguished inside safesearch_cname_redirect by the resolved answer.
+        # and restart the iterator so it chases the target itself. The first pass
+        # (plant + restart) and the second pass (fix DNSSEC + finish, or the baked
+        # fallback) are distinguished inside safesearch_cname_redirect by the
+        # resolved answer.
         if qstate_valid and pfb["safeSearchDB"]:
             isSafeSearch = safesearch_entry(q_name_original)
             if isSafeSearch is not None and isSafeSearch["A"] == "cname":
