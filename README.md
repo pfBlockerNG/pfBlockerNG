@@ -95,12 +95,16 @@ Stable and development are also available from pfSense's built-in Package
 Manager (**System ▸ Package Manager ▸ Available Packages**), built and shipped
 by Netgate — see [Other installation methods](#other-installation-methods).
 
+Once installed, the interface lives in the webConfigurator under
+**Firewall ▸ pfBlockerNG**.
+
 ## Version upgrades
 
 The **Software** tab shows your channel and installed version against the
-repository's latest, and can check for and install updates for you. Upgrades always stay **within the same channel**
-(stable to stable, devel to devel, nightly to nightly); to switch channels,
-reinstall as in [Installation](#installation). A daily background check also
+repository's latest, and can check for and install updates for you. Upgrades
+always stay **within the same channel** (stable to stable, devel to devel,
+nightly to nightly); to switch channels, reinstall as in
+[Installation](#installation). A daily background check also
 raises a pfSense notification — once per new version — when a newer build is
 available; a checkbox on the tab turns it off.
 
@@ -116,10 +120,9 @@ pkg upgrade pfSense-pkg-pfBlockerNG-devel        # or the installed package name
 
 ## Usage
 
-Most configuration lives in the webConfigurator under
-**Firewall ▸ pfBlockerNG**; the
+The
 [Netgate documentation](https://docs.netgate.com/pfsense/en/latest/packages/pfblocker.html)
-is the general reference. Two additions are worth calling out.
+is the general configuration reference. Two additions are worth calling out.
 
 ### Update Hooks
 
