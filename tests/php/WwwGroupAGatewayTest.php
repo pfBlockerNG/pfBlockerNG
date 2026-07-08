@@ -180,6 +180,16 @@ final class WwwGroupAGatewayTest extends TestCase
 			'log_max_dnsbl_parse_err'    => '20000',
 			'log_max_dnsreplylog'        => '20000',
 			'log_max_unilog'             => '20000',
+			'log_max_days_log'           => '0',
+			'log_max_days_errlog'        => '0',
+			'log_max_days_extraslog'     => '0',
+			'log_max_days_ip_blocklog'   => '0',
+			'log_max_days_ip_permitlog'  => '0',
+			'log_max_days_ip_matchlog'   => '0',
+			'log_max_days_dnslog'        => '0',
+			'log_max_days_dnsbl_parse_err' => '0',
+			'log_max_days_dnsreplylog'   => '0',
+			'log_max_days_unilog'        => '0',
 		];
 
 		// Before: section absent.
@@ -191,6 +201,30 @@ final class WwwGroupAGatewayTest extends TestCase
 		// Then: read back is byte-identical.
 		$result = PfbConfig::readSection($section);
 		$this->assertSame($data, $result, 'General section round-trips identically through gateway');
+	}
+
+	/**
+	 * ADR-60 Phase 8: log_max_days_<type> (age-based log retention) toggled from its
+	 * default '0' (disabled) to a set value round-trips correctly through the gateway —
+	 * the Log Settings page's new field, replacing the retired log_rotate_/
+	 * log_reset_keep_ controls.
+	 *
+	 * Asserts the before-state ('0') and the after-state ('30') are distinct — proving
+	 * the write actually changed the stored value, not just replayed the default.
+	 */
+	public function testGeneralLogMaxDaysIpBlocklogRoundTrips(): void
+	{
+		$section = 'installedpackages/pfblockerng/config/0';
+
+		// Given: write the default '0' first (mirrors an unconfigured/new install).
+		PfbConfig::writeSection($section, ['log_max_days_ip_blocklog' => '0']);
+		$this->assertSame('0', PfbConfig::readSection($section)['log_max_days_ip_blocklog'], 'log_max_days_ip_blocklog starts as "0"');
+
+		// When: write '30' (operator opts into a 30-day retention window and saves).
+		PfbConfig::writeSection($section, ['log_max_days_ip_blocklog' => '30']);
+
+		// Then: reads back as '30'.
+		$this->assertSame('30', PfbConfig::readSection($section)['log_max_days_ip_blocklog'], 'log_max_days_ip_blocklog "30" round-trips identically');
 	}
 
 	/**

@@ -72,24 +72,19 @@ $pconfig['pfb_hour']			= $pfb['gconfig']['pfb_hour']				?: 0;
 $pconfig['pfb_dailystart']		= $pfb['gconfig']['pfb_dailystart']			?: 0;
 $pconfig['skipfeed']			= $pfb['gconfig']['skipfeed']				?: 0;
 
-// Flat list of per-log suffixes shared by the log_max_*/log_rotate_*/log_reset_keep_* key
-// families below (read here, saved further down) and their validation loops -- one source of
-// truth for the per-log key set, in the same order as $log_types further down the file.
+// Flat list of per-log suffixes shared by the log_max_*/log_max_days_* key families below
+// (read here, saved further down) and their validation loops -- one source of truth for
+// the per-log key set, in the same order as $log_types further down the file.
 $log_suffixes = array('log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog', 'ip_matchlog', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog');
 
 foreach ($log_suffixes as $log_suffix) {
 	$pconfig['log_max_' . $log_suffix]	= $pfb['gconfig']['log_max_' . $log_suffix]	?: 20000;
 }
 
-// ADR-30: per-log rotation schedule. Read via PfbConfig::read so the registered
-// default ('off') is applied when the key is absent (new install / upgrade).
+// ADR-60: per-log age-based retention (days; '0' = disabled). Read via PfbConfig::read
+// so the registered default applies when the key is absent (new install / upgrade).
 foreach ($log_suffixes as $log_suffix) {
-	$pconfig['log_rotate_' . $log_suffix]	= PfbConfig::read('log_rotate_' . $log_suffix);
-}
-
-// ADR-30 amendment: lines to keep on scheduled reset. Default '0' (clear fully).
-foreach ($log_suffixes as $log_suffix) {
-	$pconfig['log_reset_keep_' . $log_suffix]	= PfbConfig::read('log_reset_keep_' . $log_suffix);
+	$pconfig['log_max_days_' . $log_suffix]	= PfbConfig::read('log_max_days_' . $log_suffix);
 }
 
 // ADR-38: syslog export toggle. Read via PfbConfig::read so registered default applies.
@@ -116,9 +111,6 @@ $options_log_types	= [	'100' => '100', '1000' => '1,000', '2000' => '2,000', '40
 				'600000' => '600,000', '800000' => '800,000', '1000000' => '1,000,000', '1500000' => '1,500,000',
 				'2000000' => '2,000,000', '2500000' => '2,500,000', '3000000' => '3,000,000',
 				'nolimit' => 'No Limit - Not recommended' ];
-// ADR-30: rotation schedule options for each per-log schedule select.
-$options_log_rotate	= [ 'off' => 'Off', 'daily' => 'Daily', 'weekly' => 'Weekly', 'monthly' => 'Monthly' ];
-
 
 // $input_errors is read unconditionally in the render section below, so it must be
 // defined on every request path (incl. a POST without 'save'). Initialise it once.
@@ -163,23 +155,12 @@ if ($_POST) {
 			}
 		}
 
-		// ADR-30: validate per-log rotation schedule selects. Handled separately to
-		// avoid extending the ${"options_$s_option"} lookup with unknown variable names.
+		// ADR-60: validate per-log age-based retention fields (non-negative integer string).
 		foreach ($log_suffixes as $log_suffix) {
-			$rkey = 'log_rotate_' . $log_suffix;
-			if (is_array($_POST[$rkey])) {
-				$_POST[$rkey] = 'off';
-			} elseif (!array_key_exists($_POST[$rkey], $options_log_rotate)) {
-				$_POST[$rkey] = 'off';
-			}
-		}
-
-		// ADR-30 amendment: validate per-log keep-lines fields (non-negative integer string).
-		foreach ($log_suffixes as $log_suffix) {
-			$kkey = 'log_reset_keep_' . $log_suffix;
-			$v = $_POST[$kkey] ?? '0';
+			$dkey = 'log_max_days_' . $log_suffix;
+			$v = $_POST[$dkey] ?? '0';
 			if (is_array($v) || !ctype_digit((string) $v)) {
-				$_POST[$kkey] = '0';
+				$_POST[$dkey] = '0';
 			}
 		}
 
@@ -216,16 +197,11 @@ if ($_POST) {
 				$pfb['gconfig']['log_max_' . $log_suffix]	= $_POST['log_max_' . $log_suffix]	?: 20000;
 			}
 
-			// ADR-30: persist per-log rotation schedules. Values have already been validated
-			// above. Written into $pfb['gconfig'] so the writeSection() call below includes
-			// them in the section; PfbConfig::write would be overwritten by writeSection.
+			// ADR-60: persist per-log age-based retention (validated above; default '0').
+			// Written into $pfb['gconfig'] so the writeSection() call below includes it in
+			// the section; a bare PfbConfig::write() would be overwritten by writeSection.
 			foreach ($log_suffixes as $log_suffix) {
-				$pfb['gconfig']['log_rotate_' . $log_suffix]	= $_POST['log_rotate_' . $log_suffix]	?: 'off';
-			}
-
-			// ADR-30 amendment: persist per-log keep-lines (validated above; default '0').
-			foreach ($log_suffixes as $log_suffix) {
-				$pfb['gconfig']['log_reset_keep_' . $log_suffix]	= $_POST['log_reset_keep_' . $log_suffix]	?: '0';
+				$pfb['gconfig']['log_max_days_' . $log_suffix]	= $_POST['log_max_days_' . $log_suffix]	?: '0';
 			}
 
 			// ADR-38: persist syslog export toggle. Written into $pfb['gconfig'] so the
@@ -381,9 +357,9 @@ $section->addInput(new Form_Select(
 $form->add($section);
 
 // issue #489: Log Settings — grouped by category, one row per log. A shaded header row
-// opens each category; the three columns (Max lines / Schedule / Keep lines) are labelled
-// once per category on desktop (the header row) and per-control on mobile, where the
-// columns stack (the desktop header row is hidden on xs, the per-control labels shown).
+// opens each category; the two columns (Max lines / Max days) are labelled once per
+// category on desktop (the header row) and per-control on mobile, where the columns
+// stack (the desktop header row is hidden on xs, the per-control labels shown).
 $section = new Form_Section('Log Settings');
 $log_types = array(
 	'General'	=> array('pfBlockerNG' => 'log', 'Unified' => 'unilog', 'Error' => 'errlog', 'Extras' => 'extraslog'),
@@ -391,7 +367,7 @@ $log_types = array(
 	'DNS'		=> array('Block' => 'dnslog', 'Reply' => 'dnsreplylog', 'Parse Error' => 'dnsbl_parse_err'),
 );
 
-// Single intro explaining all three columns — replaces the former per-field repeated help.
+// Single intro explaining both columns — replaces the former per-field repeated help.
 // ponytail: the media query is the whole responsive trick — per-control labels (Form_Input
 // label-start, class form-label) carry the columns on mobile; on >=sm the desktop header
 // row carries them, so the per-control copies are hidden to avoid double-labelling.
@@ -404,11 +380,8 @@ $section->addInput(new Form_StaticText(
 	. '</style>'
 	. '<ul style="margin-bottom:0">'
 	. '<li><strong>Max lines</strong> &mdash; rolling cap; the log keeps only its most recent N lines.</li>'
-	. '<li><strong>Schedule</strong> &mdash; resets the log at the start of each calendar period '
-	. '(Daily/Weekly/Monthly); independent of Max lines.'
-	. '<ul><li><strong>A reset discards that period\'s data</strong> &mdash; export first if you need history.</li></ul></li>'
-	. '<li><strong>Keep lines</strong> &mdash; lines retained at the tail on a scheduled reset '
-	. '(default 0 = clear fully); set &gt; 0 as a cushion for remote log shippers.</li>'
+	. '<li><strong>Max days</strong> &mdash; trims lines older than this many days (0 = disabled); '
+	. 'independent of Max lines &mdash; whichever cap is more restrictive wins.</li>'
 	. '</ul>'
 ));
 
@@ -420,8 +393,7 @@ foreach ($log_types as $logdescr => $logtype) {
 	// form-control-static gives the column titles the same top padding as the category
 	// control-label, so the label and the titles sit on one line (hidden-xs: desktop only).
 	$header->add(new Form_StaticText('', '<p class="form-control-static hidden-xs"><strong>Max lines</strong></p>'))->setWidth(4);
-	$header->add(new Form_StaticText('', '<p class="form-control-static hidden-xs"><strong>Schedule</strong></p>'))->setWidth(3);
-	$header->add(new Form_StaticText('', '<p class="form-control-static hidden-xs"><strong>Keep lines</strong></p>'))->setWidth(3);
+	$header->add(new Form_StaticText('', '<p class="form-control-static hidden-xs"><strong>Max days</strong></p>'))->setWidth(4);
 	$section->add($header);
 
 	// One row per log in this category. Each control carries a label-start so the column is
@@ -434,18 +406,12 @@ foreach ($log_types as $logdescr => $logtype) {
 			$pconfig['log_max_' . $type],
 			$options_log_types
 		))->setWidth(4)->setAttribute('label-start', 'Max lines');
-		$group->add(new Form_Select(
-			'log_rotate_' . $type,
-			'',
-			$pconfig['log_rotate_' . $type],
-			$options_log_rotate
-		))->setWidth(3)->setAttribute('label-start', 'Schedule');
 		$group->add((new Form_Input(
-			'log_reset_keep_' . $type,
+			'log_max_days_' . $type,
 			'',
 			'number',
-			$pconfig['log_reset_keep_' . $type]
-		))->setAttribute('min', '0'))->setWidth(3)->setAttribute('label-start', 'Keep lines');
+			$pconfig['log_max_days_' . $type]
+		))->setAttribute('min', '0'))->setWidth(4)->setAttribute('label-start', 'Max days');
 		$section->add($group);
 	}
 }
