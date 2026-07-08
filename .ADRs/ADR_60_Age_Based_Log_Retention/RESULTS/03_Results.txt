@@ -288,7 +288,7 @@ CARRY-FORWARD FOR PHASE 4 (pfb_unbound.py / pfb_log_event() / dnslog / dnsreplyl
   -- pure comma-join over its 'l_type'/'log'/'details'/'dup' args, no
   reformatting of the 'log' field's content. Since $log (built in
   pfb_daemon_filterlog()'s BSD/syslog branch, this phase's own change)
-  is passed verbatim as 'log' at pfblockerng.inc:12892, unilog's IP rows
+  is passed verbatim as 'log' at pfblockerng.inc:12905, unilog's IP rows
   already carry the new Y-m-d H:i:s format with zero Phase 4 involvement.
   This claim was VERIFIED this session (read both the call site and the
   formatter's body), not assumed.
