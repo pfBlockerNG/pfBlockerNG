@@ -915,6 +915,127 @@ persistence), `test_smoke_apply_on_change.py` (apply without Force; quiet-hours 
 `tests/smoke/ui/`. Per CLAUDE.md "ADR acceptance", ADR-43 moves to Accepted on the green CE+Plus
 live-VM fan-out of those cases.
 
+## Sync-status ledger (ADR-61)
+
+Before ADR-61, the dashboard widget's health signal was four unrelated ad-hoc checks: an
+IP-row yellow gated entirely behind the optional, default-off `enable_dup` dedup feature (so a
+box with dedup off could never show IP yellow, no matter what actually failed); a dead
+`OUT OF SYNC` log-grep on the DNSBL row (no writer of that substring exists anywhere in the
+tree); a **monotonic** `py_error.log` filesize check (one exception ever written keeps the row
+yellow forever, until an operator manually clears the log); and a separate `error.log` FAIL-grep
+powering the reporting list, decoupled from the icons entirely. ADR-61 replaces all four with
+**one PHP-owned, general-purpose open-issues ledger** every failure/success site writes to
+directly, plus a **Python-owned** companion for the DNSBL parse stage (a cross-process/chroot
+boundary the PHP file cannot safely share), merged read-only by the widget.
+
+### Ledger shape and the two-file boundary
+
+The PHP-owned ledger is `{$pfb['dbdir']}/pfb_sync_status.json`, a nested
+`{facility: {item: {stage: {message, first_seen, last_seen}}}}` object (`facility` ∈
+`ip`/`dnsbl`; `stage` ∈ `download`/`apply`/`dedup`/`parse`). Pure, clock-injectable, atomic
+(stage → `fsync` → `rename`) read/write/open/close/list-open helpers live in
+`pfblockerng_extra.inc` (`pfb_sync_status_*`), mirroring `pfb_due_ledger_*`'s exact persistence
+idiom (ADR-43) — same sidecar-file convention, same downgrade-safe-on-corrupt/absent-file
+contract, same "no config.xml involvement" shape.
+
+`pfb_unbound.py` runs chrooted inside Unbound's Python loader, a separate process from PHP —
+it cannot safely co-write the PHP file (write contention, and PHP is not chrooted so the paths
+don't resolve the same way). It instead owns a **second**, structurally-identical file,
+chroot-relative `pfb_py_status.json` (mirroring the existing `pfb_py_reload`/`.applied` marker
+convention: PHP never writes it, Python never writes the PHP one), via its own pure
+`pfb_py_status_open()`/`close()` functions using the identical atomic tmp-then-`os.replace()`
+idiom `_reload_write_applied()` already established. A read-only PHP helper,
+`pfb_py_sync_status_list_open()` in `pfblockerng_extra.inc`, reads it and returns entries in the
+same shape as `pfb_sync_status_list_open()`'s, for the widget's merge — every hostile input
+(absent/empty/corrupt/wrong-shape JSON) degrades to "no open entries," never a crash.
+
+**Symmetric ownership (mandatory).** Every code path that can open an entry for a given
+`(facility, item, stage)` is paired with the code path that clears that *same* key on its own
+next success. Open is idempotent-by-key: opening an already-open key refreshes
+`message`/`last_seen` in place, never duplicates.
+
+### Writer sites (what's covered today, and what deliberately isn't)
+
+| Facility | Stage | Writer/clearer site | Notes |
+| --- | --- | --- | --- |
+| `ip` | `download` | `pfb_ip_download_ledger_update()` at the IP feed-download call site (`pfblockerng.inc`) | paired with the download success path |
+| `ip` | `dedup` | `pfb_sync_status_dedup_check()` (`pfblockerng_extra.inc`), reads the shell's `Sanity check [ PASSED / FAILED ]` line the same way the old widget grep did | replaces that grep entirely |
+| `ip` | `apply` | wired **inside** `pfb_pfctl_table_op()` itself (`pfblockerng.inc`) — a deliberate choice covering every one of that function's callers (delta apply, force-replace, aggregate build/teardown) at one choke point | issue #980's logging-level fix (level 2) is untouched; this ADR only adds the ledger write alongside it |
+| `dnsbl` | `apply` | `pfb_dnsbl_apply_ledger_update()` + the pure `pfb_dnsbl_converged(): bool` helper (sentinel/applied generation match, Unbound running, `unbound.conf` still wires `pfb_unbound.py`), wired at `pfb_reload_unbound()`'s zero-downtime-success return and its shared-restart tail (mode-gated) | the swap-not-confirmed → restart-fallback branch never opens an entry by itself (fail-safe by design, not an error) |
+| `dnsbl` | `parse` | Python-owned, 8 sites in `pfb_unbound.py`: the zone/data/whitelist/hsts/SafeSearch loaders and the `pfb_unbound.ini` config read (each extracted into its own testable `_load_*` function) plus the DNSBL manifest load (`dnsbl_build_from_manifest()`, both its callers) | 7 further `sys.stderr.write` sites (module-capability imports, per-pattern REGEX-ini rows, background-thread bring-up) are deliberately left freetext-only — no stable per-run item identity / no natural clear site; still visible in `py_error.log` as before |
+
+**Known gap, not yet closed:** the ADR's own writer table calls for **IP + DNSBL** feed-download
+coverage, but only the IP call site got wired — the DNSBL feed-download call site
+(`pfb_download_failure()`'s DNSBL-branch caller) has no ledger writer today, so a DNSBL feed
+download failure is currently invisible to the ledger (still logged to `error.log` as always).
+Tracked as a follow-up, not silently accepted as done.
+
+### Tick-driven reconciliation — apply stage only
+
+`pfblockerng_tick()` gains one **unconditional** step (runs every tick regardless of due-ness,
+placed after `pfblockerng_ss_refresh()` and before the log-maintenance tail — it never sets
+`$dispatched`, so it doesn't interact with the log-trim race guard) that, for every open
+`stage=apply` entry:
+
+- **IP:** re-applies the already-persisted mirror directly — `pfb_pfctl_table_op($item,
+  'replace', '-f '.escapeshellarg("{$pfb['aliasdir']}/{$item}.txt"))` when the mirror exists
+  (or `kill` when it doesn't) — no re-download, no re-parse, no re-dedup. Reuses
+  `pfb_pfctl_table_op()`'s own ledger wiring; the tick step makes zero direct ledger calls on
+  the IP side.
+- **DNSBL:** re-flips the reload sentinel (only when a live Python-mode watcher could actually
+  consume it — the same eligibility gate `pfb_reload_unbound()`'s zero-downtime path uses), then
+  re-runs `pfb_dnsbl_apply_ledger_update()` to re-settle the entry either way.
+
+**Deliberate narrowing (permanent, not a stopgap):** the DNSBL retry is a sentinel-re-flip only,
+**not** a full stop/restart. Re-invoking `pfb_reload_unbound()`'s restart fallback from every
+15-minute tick would restart a live DNS resolver indefinitely for a condition that stays
+genuinely stuck — heavier than this mechanism's own "no network I/O, no feed re-parse" premise.
+Consequence: a **genuinely** stuck DNSBL apply condition (Unbound fully down, a real conf/build
+failure) does **not** self-heal via the tick alone — it stays open/yellow until an operator's own
+Force Reload/Update pass (which does run the full restart path) or Unbound's own recovery
+resolves it. A stuck IP `pfctl` condition, by contrast, self-heals within one tick interval —
+the two facilities are not symmetric on this specific point, by design.
+
+Retry is unbounded and uncounted — no attempt-count field, no backoff timer, per direct
+instruction (a genuinely un-fixable condition retries forever at tick cadence; cheap
+per-attempt, accepted as fine). Download/parse-stage entries are never touched by this step —
+those failures stay ledger-visible but retry only at their normal fetch/parse cadence.
+
+### The widget — a pure reader
+
+Both dashboard rows read the merged ledger exclusively for their **yellow** trigger; the
+existing **red/green "is it live"** gates are completely untouched by this ADR. IP row: yellow
+on any open `facility=ip` entry of any stage. DNSBL row: yellow on any open `facility=dnsbl`
+entry, PHP ledger merged with the Python file. The reporting list
+(`pfBlockerNG_get_failed()`) is rebuilt from the same merged read — each entry's `item` field
+already *is* the clean alias name (no more log-line text-parsing), so a recognized
+`pfB_*`/`DNSBL_*` item still deep-links to its editor page exactly as before; a Python-side
+entry (whose `item` is a raw file path, e.g. `pfb_py_zone.txt`) renders as plain text, never
+attempts a link. `error.log`/`py_error.log` are no longer read anywhere in the widget — they
+stay pure, freetext operator logs, governed only by their existing rotation, never required to
+be "cleared" for the icon to go green.
+
+**Known UX loose end:** the pre-existing "Clear Failed Downloads" trash-can icon still POSTs a
+handler that mutates `error.log` — now functionally inert against the ledger-driven list (there
+is no longer a `error.log`-driven state for it to clear). Deciding what "clear" should mean
+against a ledger (manually ack an entry? force the underlying retry?) is a real product
+decision, left open rather than silently invented.
+
+### Tests & DoD
+
+Off-appliance (PHPUnit): `PfbSyncStatusLedgerTest` (ledger library — open/refresh/close/list/
+corrupt-file), `PfbSyncStatusIpWritersTest`, `PfbDnsblConvergedTest` + `PfbSyncStatusDnsblWritersTest`,
+`PfbPySyncStatusReaderTest` (PHP-side Python-file reader + hostile inputs), `TickApplyReconciliationTest`
+(retry dispatch, Semantics-#5 non-interference, the `$dispatched`-flag guard), `PfbWidgetOracleTest`
+(icon/report logic, both rows, both ledger sources). Off-appliance (pytest):
+`tests/test_adr61_py_status.py` (Python-side writer/clearer pairs + hostile-input reads).
+Live-VM (ADR-04/ADR-14, authored this ADR run but not yet executed against a live box — no VM
+was reachable in the implementing session): `tests/smoke/ui/test_render_widget_ledger.py`
+(Tier A `ui_render`, both rows' empty/populated states, the reporting list's link/plain-text
+cases). Per CLAUDE.md "ADR acceptance", ADR-61 moves to Accepted on the green CE+Plus live-VM
+fan-out of those cases, plus the manual smoke checklist below for the scenarios PHPUnit/pytest
+structurally cannot reach (a real `pfctl` failure, a real Unbound restart, a real reboot).
+
 ## IP suppression set-subtraction (ADR-53)
 
 Replaces the IP-side **Suppression** feature's host-explosion mechanism with genuine CIDR set
