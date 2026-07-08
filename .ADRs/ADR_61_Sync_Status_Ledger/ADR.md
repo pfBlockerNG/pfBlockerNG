@@ -1,6 +1,16 @@
 # ADR-61: A sync-status ledger — unify widget error/out-of-sync reporting for IP and DNSBL
 
-- **Status:** **Proposed** (2026-07-08)
+- **Status:** **Implemented (pending live-VM smoke)** (2026-07-08). All 7 phases landed;
+  PHPUnit + pytest green, PHPCS/PHPStan clean. Phases 3-6 carried DONE-WITH-DEVIATION
+  verdicts — each a disclosed, reasoned engineering choice, not a defect (Phase 6's first
+  attempt separately failed its own gate on 2 real defects, both fixed in a corrective
+  round; see `RESULTS/06_Results.txt`). Two known, tracked gaps remain open (not blockers
+  to this status, but not silently accepted as done either): the DNSBL feed-download stage
+  was never wired to the ledger (only IP was), and the DNSBL tick-retry is a sentinel-reflip
+  only, not the full restart path, so a genuinely stuck DNSBL condition does not always
+  self-heal via tick alone. See `docs/misc/architecture-notes.md` "Sync-status ledger
+  (ADR-61)" for the as-built system and §7 below for the live-VM acceptance checklist that
+  flips this to **Accepted**.
 - **Date:** 2026-07-08
 - **Branch:** `adr/61-sync-status-ledger` (off `devel`; `{slug}` = sanitised ADR-title slug per
   CLAUDE.md "Branch naming") / **Component(s):** `pfblockerng.inc` (download/apply failure
@@ -375,23 +385,76 @@ overrides this draft) and each row maps to a Phase-2/3/4 test or an explicit def
 
 ## 7. Definition of done
 
-- All phases landed; full PHPUnit + pytest green; PHPCS/PHPStan clean; Tier-A `ui_render` green.
-- **Live-VM manual smoke (CE + Plus fan-out, per CLAUDE.md "ADR acceptance"):**
-  - Force a real feed download failure (point a list at an unreachable/404 URL) → IP or DNSBL row
-    turns yellow, entry appears with the file/reason, link works; fix the URL, next scheduled
-    fetch clears it, `error.log` still contains the historical FAIL line untouched.
-  - Force a genuine `pfctl` apply failure if feasible on the smoke box (or PHPUnit-simulate at
-    the `pfb_pfctl_table_op()` boundary if a live trigger isn't reliably reproducible) → IP
-    yellow, entry present; within one tick interval after the underlying condition clears, the
-    entry self-clears with no manual Force Reload.
-  - DNSBL restart-fallback path (swap-not-confirmed) does NOT open an entry by itself (§1.3); a
-    genuine post-restart failure does.
-  - Reboot: ledger absence reads as clean (Semantics #6); a still-real condition re-opens on the
-    next natural pass.
-- **Reject criteria:** if the Python-side chroot status file (P4) proves unreliable to write from
-  inside the jail (permission/chroot-path issues not resolvable simply), fall back to Python
-  continuing to log freetext to `py_error.log` only, with the DNSBL row's parse-stage yellow
-  trigger derived from a **narrower, still-monotonic-but-bounded** signal (e.g. "any `py_error.log`
-  growth since the last tick" rather than "any content ever") rather than abandoning the whole
-  DNSBL-symmetry goal — document the narrowing explicitly rather than silently reverting to
-  today's filesize check.
+- All 7 phases landed (`RESULTS/01-07_Results.txt` + `*_Gate.txt`); full PHPUnit + pytest
+  green; PHPCS/PHPStan clean; Tier-A `ui_render` **authored** (`tests/smoke/ui/
+  test_render_widget_ledger.py`) but not yet executed against a live box (no VM was
+  reachable in the implementing session) — step 1 below is that execution.
+- **Live-VM manual smoke checklist (CE + Plus fan-out, per CLAUDE.md "ADR acceptance").**
+  Each step names its expected, falsifiable observable — "should work" is not an
+  acceptable substitute for any of these.
+
+  1. **Run the authored Tier-A suite for real:**
+     `python3 -m pytest tests/smoke/ui -k widget_ledger -m ui_render --override-ini="addopts="`
+     with `SMOKE_ADMIN_PASSWORD` set. Expected: all cases in
+     `test_render_widget_ledger.py` pass (empty-ledger green states, seeded-entry yellow
+     states + working deep link for both rows, the DNSBL disabled-row wording
+     distinction) — a skip is not a pass.
+  2. **IP feed download failure:** point an IP list at an unreachable/404 URL, run an
+     update pass. Expected: IP row turns yellow within that pass; the reporting list
+     shows the entry with a working deep link to the alias editor; `error.log` gains the
+     historical FAIL line and is left untouched afterward. Fix the URL, run again.
+     Expected: entry clears, row returns to green (assuming no other open IP entry).
+  3. **IP `pfctl` apply failure, then self-heal:** trigger a genuine `pfctl` failure if
+     reproducible on the box (or PHPUnit-simulate at the `pfb_pfctl_table_op()` boundary
+     per `PfctlTableOpTest`'s `mock_pfctl()` seam if a live trigger isn't reliable).
+     Expected: IP row yellow, generic "N open issue(s)" wording (not the dedup-specific
+     text). Fix the underlying condition out-of-band (no source change, no Force
+     Reload). Expected: within **one tick interval** (`pfb_tick_interval`, default 15
+     min) the entry self-clears — this is the ADR's core self-healing claim for IP;
+     confirm it actually happens unattended, not just that the retry code exists.
+  4. **DNSBL swap-not-confirmed fallback opens nothing by itself:** force a slow/stalled
+     zero-downtime swap so `pfb_reload_unbound()` falls back to a restart. Expected: NO
+     ledger entry opens from the fallback alone (§1.3, "fail-safe by design"); only a
+     genuine post-restart failure (Unbound still not confirmed running afterward) opens
+     one.
+  5. **DNSBL apply failure — confirm the narrower retry, don't assume the IP behavior
+     generalizes:** force a genuine DNSBL apply failure (a real conf/build error, or
+     Unbound stopped underneath the pipeline). Expected: DNSBL row yellow. Wait past
+     one tick interval WITHOUT fixing the underlying condition or forcing an
+     operator Reload. Expected: the entry is **still open** — per the ADR's own
+     sentinel-reflip-only retry narrowing (see architecture-notes), a genuinely stuck
+     DNSBL condition does NOT self-heal via tick alone. THEN perform an operator Force
+     Reload / Update pass (which runs the full restart path). Expected: the entry
+     clears. This step exists specifically to catch a wrong assumption that DNSBL
+     mirrors IP's tick-only self-heal — it does not.
+  6. **DNSBL parse-stage (Python-side) failure:** corrupt or make unreadable one of the
+     Python-loaded files (`pfb_py_zone.txt`, `pfb_py_data.txt`, `pfb_py_whitelist.txt`,
+     `pfb_py_hsts.txt`, `pfb_py_ss.txt`, or `pfb_unbound.ini`) and trigger a reload.
+     Expected: DNSBL row turns yellow via the merged Python-owned file read (this ADR
+     run's own UI test only ever injected a synthetic `pfb_py_status.json`, never
+     exercised a REAL Python writer — this step is the first genuine end-to-end proof).
+     Fix the file, reload again. Expected: entry clears.
+  7. **Reboot:** confirm the ledger is NOT in issue #468's MFS persist/restore set (by
+     design, per §2's "Explicitly kept / out of scope") — after a clean reboot, both
+     ledger files read as absent/empty (Semantics #6, fail-open display) regardless of
+     any pre-reboot open entry; a still-real underlying condition re-opens its entry on
+     the pipeline's own next natural pass, not automatically at boot.
+  8. **DNSBL feed download failure — expected to FAIL today, tracked, not silently
+     accepted:** point a DNSBL feed at an unreachable/404 URL. Expected (current,
+     known-gap behavior): the DNSBL row does **not** turn yellow for this specific
+     failure (the DNSBL feed-download call site was never wired to the ledger — see
+     architecture-notes "Known gap"). This step exists so the gap is verified-real, not
+     assumed; closing it is a follow-up, not blocking this ADR's Accepted flip for the
+     stages that ARE wired.
+
+- **Accepted** requires steps 1-7 green: a genuine DNSBL apply failure that fails to
+  self-heal via tick alone (step 5) is the EXPECTED, documented behavior, not a
+  regression — do not treat it as a smoke failure. Step 8's known gap is an accepted,
+  tracked limitation, not an acceptance blocker (CLAUDE.md "ADR acceptance": a
+  documented out-of-scope item is not a blocker), but it must remain tracked (issue
+  filed) rather than forgotten.
+- **Reject criteria (already resolved, kept for record):** Phase 4's Python-side chroot
+  status file proved straightforward to write from inside the jail — no chroot-boundary
+  fallback was needed; the file mirrors the existing `pfb_py_reload`/`.applied` marker
+  idiom directly. This reject path is retained here only as the documented alternative
+  that was considered and not required.
