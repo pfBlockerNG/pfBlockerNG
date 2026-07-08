@@ -277,9 +277,12 @@ def test_714_b2_parse_fail_counts_every_bad_line(deployed_vm: SmokeVM) -> None:
       fallback cannot silently ``continue`` past the check) followed by ONE valid
       RFC 5737 IP as the LAST line,
     When a Force IP reload parses the feed,
-    Then the pfBlockerNG log gains a ``[!] Parse Errors [ smoke714b2 ]: 3`` line — the
-      counter reached the number of bad lines, not merely "1" (the pre-fix
-      last-line-only count).
+    Then the pfBlockerNG log gains a ``[!] Parse Errors [ smoke714b2_v4 ]: 3`` line —
+      the counter reached the number of bad lines, not merely "1" (the pre-fix
+      last-line-only count). The feed HEADER in that line carries the family
+      suffix (``pfblockerng.inc``'s ``$header = "{$row['header']}{$list['vtype']}"``),
+      same gotcha ``force_ip_refetch()`` already documents for the on-disk feed
+      filename — it is NOT the bare ``IpCase.header`` value.
     """
     # Each has only TWO dots, so it fails IPv4 parsing AND is skipped by the regex
     # fallback (which requires >=3 dots) — guaranteeing it falls through to the
@@ -289,8 +292,10 @@ def test_714_b2_parse_fail_counts_every_bad_line(deployed_vm: SmokeVM) -> None:
     good_line = "198.51.100.7"  # RFC 5737 TEST-NET-2 — the trailing VALID line (must not count)
     body = "\n".join([*bad_lines, good_line]) + "\n"
     feed_url = h.write_local_feed(deployed_vm, "smoke_714_b2_parsefail.txt", body)
-    marker = "[!] Parse Errors [ smoke714b2 ]: 3"
     spec = h.IpCase(aliasname="smoke714b2", feed_url=feed_url, header="smoke714b2", family="v4")
+    # $header at the print site is "{row.header}{vtype}", e.g. "smoke714b2_v4" -- NOT
+    # the bare IpCase.header (see docstring).
+    marker = f"[!] Parse Errors [ {spec.header}_{spec.family} ]: 3"
 
     try:
         # BEFORE: this exact marker has never appeared (a fresh aliasname/header pair).
