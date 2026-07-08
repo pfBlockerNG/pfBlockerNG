@@ -62,7 +62,7 @@ WHAT THE CASE PROVES (issue #281 contract):
           - ``dnsbl_lenient='on'``    (deliberately package-UNKNOWN key)
           - ``dnsbl_vip_auto='on'``   (deliberately package-UNKNOWN key)
           - ``pfb_dnsbl='on'``        (real control field)
-          - ``pfb_idn='all'``         (real registered field, canonical token)
+          - ``pfb_idn='on'``          (real registered field, canonical token)
           - ``pfb_keep='on'``         (seeded by install migration — the fix output)
         BEFORE runtime behaviour: a DNSBL-blocked ``unique_domain()`` name returns
         the VIP block shape on-box (proves DNSBL is live before the upgrade).
@@ -140,7 +140,7 @@ _SNAPSHOT_FIELDS: list[tuple[str, str]] = [
     (_CFG_DNSBL + "/dnsbl_lenient", "on"),  # deliberately package-UNKNOWN key (wholesale-preservation canary)
     (_CFG_DNSBL + "/dnsbl_vip_auto", "on"),  # deliberately package-UNKNOWN key (wholesale-preservation canary)
     (_CFG_DNSBL + "/pfb_dnsbl", "on"),  # real control field (harness sets it too)
-    (_CFG_DNSBL + "/pfb_idn", "all"),  # real registered field, canonical stored value
+    (_CFG_DNSBL + "/pfb_idn", "on"),  # real registered field, canonical stored value
     (_CFG_GLOBAL + "/pfb_keep", "on"),  # seeded by pfb_keep_migrate (the fix)
 ]
 
@@ -196,7 +196,7 @@ def _write_representative_config(vm: SmokeVM) -> None:
     package-UNKNOWN keys (no code reads or writes them) — they prove the pkg
     transition preserves the section wholesale, not merely the fields the package
     happens to rewrite. ``pfb_idn`` is a real registered field at its canonical
-    'all'; ``pfb_dnsbl`` is a real control field the harness also sets.
+    'on'; ``pfb_dnsbl`` is a real control field the harness also sets.
     """
     snippet = (
         # DNSBL-settings block: read-modify-write — preserve the harness's keys.
@@ -204,7 +204,7 @@ def _write_representative_config(vm: SmokeVM) -> None:
         "$s['pfb_dnsbl']      = 'on';\n"
         "$s['dnsbl_vip_auto'] = 'on';\n"
         "$s['dnsbl_lenient']  = 'on';\n"
-        "$s['pfb_idn']        = 'all';\n"
+        "$s['pfb_idn']        = 'on';\n"
         f"config_set_path({h._php_str(_CFG_DNSBL)}, $s);\n"
         "write_config('pfBlockerNG upgrade-config-stability smoke: set representative config');\n"
         "echo 'OK';"
@@ -278,7 +278,7 @@ def test_pkg_upgrade_preserves_config_values(repo_vm: SmokeVM, tmp_path: Path) -
 
     Given the prior-release build (``<V>_1``) installed and representative config
       written (dnsbl_lenient='on', dnsbl_vip_auto='on', pfb_dnsbl='on',
-      pfb_idn='all'; pfb_keep NOT set by the test), and the install migration having
+      pfb_idn='on'; pfb_keep NOT set by the test), and the install migration having
       seeded pfb_keep='on' into config.xml, and a DNSBL-blocked unique_domain() name
       returning the VIP block shape on-box,
 
@@ -429,7 +429,7 @@ def test_pkg_downgrade_preserves_config_values(repo_vm: SmokeVM, tmp_path: Path)
 
     Given the HIGHER (branch) build (``<V>_9``) installed and representative config
       written (dnsbl_lenient='on', dnsbl_vip_auto='on', pfb_dnsbl='on',
-      pfb_idn='all'; pfb_keep seeded by migration), and a DNSBL-blocked
+      pfb_idn='on'; pfb_keep seeded by migration), and a DNSBL-blocked
       unique_domain() name returning the VIP block shape on-box,
 
     When the LOWER build (``<V>_1``) is installed over the higher build via
