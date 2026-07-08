@@ -342,7 +342,10 @@ rationale lives in the ADR / architecture-notes and the comment carries a one-li
 (`// ADR-49: content-sanity gate; contract pinned by PfbTextSanityTest`) — never a
 restatement: a contract stored in ADR + comment + test is three copies, two of which drift.
 One-line regression breadcrumbs stay (`// issue #946: decode UTF-16 BOM first — else
-nul_bytes false-positives`). **Never in committed comments:** ADR **phase numbers**
+nul_bytes false-positives`). **Operational headers of executable scripts are interface
+documentation, not narration** — usage, options/params with defaults, env vars, examples
+stay in the header at full length unless the script itself prints an equivalent
+`--help`/usage. **Never in committed comments:** ADR **phase numbers**
 ("wired in Phase 4"), **`RESULTS/` handoff refs**, **review archaeology** (reviewer names,
 `PR #N` finding IDs, `review-fanout CN`), or correctness argument aimed at the gate/reviewer
 — that evidence belongs in the handoff / gate record / PR body, not the tree. Enforced on
