@@ -69,18 +69,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Each alternative is a full-value token shape (no anchors here -- anchors are
-# added once, around the whole alternation, at the two call sites below).
-#
-# Unambiguous shapes (FreeBSD ABI, php/py flavors, varvers) are version-AGNOSTIC:
-# a stale or future version restated as a literal is just as much a drift hazard
-# as a current one (issue #940). Only the bare CE/Plus numerics stay WINDOWED --
-# a generic decimal shape would false-positive on unrelated version numbers --
-# and that window is tripwired against the live matrix by --verify-matrix (a
-# blocking CI step): the moment supported-versions.json carries a version these
-# patterns no longer cover, CI fails loudly instead of the gate narrowing
-# silently. This file restating the window is otherwise the exact disease it
-# polices, in a file self-excluded from its own scan.
+# Each alternative is a full-value token shape (anchored once, at the
+# alternation, by the two call sites below). Unambiguous shapes (ABI/php/py/
+# varver) are version-AGNOSTIC -- any restated literal is a drift hazard
+# (issue #940). Only the bare CE/Plus numerics stay WINDOWED (an unbounded
+# decimal shape would false-positive on unrelated numbers); --verify-matrix
+# tripwires that window against the live matrix so it widens instead of
+# silently narrowing.
 _TOKEN_ALTERNATIVES = (
     r"2\.[89]",  # CE version window: 2.8 / 2.9 (tripwired)
     r"2[56]\.[0-9]{2}",  # Plus version window: 25.NN / 26.NN (tripwired)
@@ -88,59 +83,38 @@ _TOKEN_ALTERNATIVES = (
     r"php[0-9]{2}",  # php flavor: php74..php99
     r"py3[0-9]{2}",  # py flavor: py310..py399
     r"ce-[0-9]+\.[0-9]+",  # varver: ce-X.Y
-    r"plus-[0-9]+\.[0-9]+",  # varver: plus-X.Y (generalized like ce- — review-fanout C8, PR #947)
+    r"plus-[0-9]+\.[0-9]+",  # varver: plus-X.Y (generalized like ce-)
 )
 
-# ponytail: a flavor token embedded in a hardcoded package name (e.g.
-# "py311-sqlite3" outside the install_deps_* allowlist) is not caught -- this
-# checker only matches a token that is the WHOLE value. Upgrade to substring
-# matching if hardcoded dependency names spread beyond the allowlisted file.
+# ponytail: a flavor token embedded in a hardcoded name (e.g. "py311-sqlite3")
+# is not caught -- only whole-value tokens are; extend if that ever spreads.
 #
-# ponytail: the unquoted-RHS check (_ASSIGNMENT_RE) matches a single whole-line
-# `key: value` / `key=value` (optionally prefixed by a shell assignment builtin)
-# only. It does NOT catch a token in a compound statement (`A=x; B=y`) or an
-# unquoted YAML sequence item (`- FreeBSD:15:amd64` / `[a, b]`); none occur in
-# the tree and the spec scopes to key/value. A QUOTED token in any of these is
-# still caught by the quoted-literal path.
+# ponytail: _ASSIGNMENT_RE matches only a single whole-line key:value/key=value
+# -- misses compound statements/unquoted YAML sequences (a quoted token there still hits the quoted-literal path).
 #
-# ponytail: a quoted illustrative example inside a multi-line YAML folded/
-# literal scalar (`description: >` ... "e.g. \"2.8\"" on a continuation line)
-# is not recognised as prose -- only comments and Python triple-quoted
-# docstrings are tracked. The single such site today (version-tracker.yml) was
-# fixed by DE-QUOTING the example, because a `version-literal-ok` comment cannot
-# sit inside a folded-scalar body without corrupting the visible description.
-# Upgrade to a YAML block-scalar tracker (indentation-based, mirroring
-# _code_lines's docstring state machine) if more than one line ever needs it.
+# ponytail: a quoted example inside a multi-line YAML folded/literal scalar is
+# not recognised as prose (the one site was fixed by de-quoting instead).
 #
-# ponytail: XML comments (`<!-- -->`) are not tracked -- the scan roots hold 3
-# XML files with no version-token history; add a tracker if one ever bites.
-# Same for JS private fields (`this.#x`): `#` is treated as a comment opener
-# only in PHP-family files, so JS is safe from that, but a token inside a JS
-# regex literal containing `//` could be mis-stripped (2 JS files, none such).
+# ponytail: XML comments and JS private-field `#x` syntax are not tracked --
+# no version-token history in either today; add a tracker if one ever bites.
 _FULL_VALUE_RE = re.compile("^(?:" + "|".join(_TOKEN_ALTERNATIVES) + ")$")
-# Optional assignment-builtin prefix. The class is enumerated, not example-driven
-# (PR #937 pinned only the two keywords Copilot named -- issue #941): POSIX
-# `export`/`readonly`, the near-universal `local`, and bash/ksh
-# `declare`/`typeset` (with option words), which shellcheck bans here but a
-# hardcode guard should still see.
+# Optional assignment-builtin prefix. The class is enumerated, not example-
+# driven (issue #941): POSIX `export`/`readonly`, the near-universal `local`,
+# and bash/ksh `declare`/`typeset` (with option words), which shellcheck bans
+# here but a hardcode guard should still see.
 _ASSIGNMENT_RE = re.compile(
     r"^\s*(?:(?:export|readonly|local|declare|typeset)(?:\s+-\w+)*\s+)?"
     r"[\w.-]+\s*[:=]\s*(?:" + "|".join(_TOKEN_ALTERNATIVES) + r")\s*$"
 )
 
-# The double-quote side is escape-aware (\" is content in sh/php/js/py alike),
-# so an escaped quote does not mispair the spans and swallow a later literal
-# (Copilot, PR #947). The single-quote side is language-scoped: PHP/JS support
-# \' inside single quotes, so the C-style variant is escape-aware there too
-# (review-fanout C9, PR #947 — a \' earlier on the line mispaired the spans
-# and swallowed a later single-quoted token); POSIX sh has NO single-quote
-# escapes, so the shell/YAML variant keeps the naive single-quote side, which
-# is shell-correct. Both variants CONSUME backtick spans so quote pairing
-# cannot cross a backtick boundary (re-review F1, PR #947 — two backtick
-# segments each holding an odd quote count swallowed the value between them):
-# in the C-style variant the span is also CAPTURED (a JS template literal is a
-# value); in the shell variant it is consume-only (shell backticks are command
-# substitution, not a value literal).
+# The double-quote side is escape-aware (\" is content in sh/php/js/py alike)
+# so an escaped quote cannot mispair spans and swallow a later literal. The
+# single-quote side is language-scoped: PHP/JS support \', so that side is
+# escape-aware too there; POSIX sh has none, so the shell/YAML variant stays
+# naive (shell-correct). Both variants CONSUME backtick spans so quote pairing
+# never crosses one; the C-style variant also CAPTURES that span (a JS
+# template literal is a value), the shell variant does not (backticks are
+# command substitution, not a value).
 _QUOTED_RE = re.compile(r'"((?:[^"\\]|\\.)*)"|\'([^\']*)\'|`(?:[^`\\]|\\.)*`')
 _QUOTED_C_RE = re.compile(r'"((?:[^"\\]|\\.)*)"|\'((?:[^\'\\]|\\.)*)\'|`((?:[^`\\]|\\.)*)`')
 
@@ -189,8 +163,8 @@ def _strip_inline_comment(line: str) -> str:
     a full comment line, just not confined to the start of the line. A ``#``
     INSIDE a quoted string is left alone (rare, but real content). Inside a
     DOUBLE-quoted string a backslash escapes the next char, so an escaped
-    quote does not mis-close the string (Copilot, PR #947); single quotes stay
-    escape-free -- POSIX sh has no escapes there.
+    quote does not mis-close the string; single quotes stay escape-free --
+    POSIX sh has no escapes there.
     """
     quote: str | None = None
     i = 0
@@ -220,19 +194,17 @@ def _split_c_comment(line: str, hash_comments: bool) -> tuple[str, bool]:
 
     Quote-aware: ``//``, ``/*`` and ``#`` inside a quoted string are content,
     not comments, and a backslash inside a quoted string escapes the next char
-    (PHP/JS support ``\\'``/``\\"`` in both quote types -- Copilot, PR #947),
-    so an escaped quote does not mis-close the string. Backticks are tracked
-    as a third quote type (review-fanout C5, PR #947): a JS template literal
-    (or PHP shell-exec string) containing ``//`` must not truncate the scan of
-    real code after it. A ``/*...*/`` pair closed on the same line is dropped
-    and the code after it is kept. ``hash_comments`` enables ``#`` (PHP family
-    only -- in JS, ``#`` is a private-field sigil).
+    (PHP/JS support ``\\'``/``\\"`` in both quote types), so an escaped quote
+    does not mis-close the string. Backticks are tracked as a third quote
+    type: a JS template literal (or PHP shell-exec string) containing ``//``
+    must not truncate the scan of real code after it. A ``/*...*/`` pair
+    closed on the same line is dropped and the code after it is kept.
+    ``hash_comments`` enables ``#`` (PHP family only -- in JS, ``#`` is a
+    private-field sigil).
 
-    ponytail: quote state is per-line -- a PHP/JS string spanning physical
-    lines without heredoc can hide a value on its continuation line
-    (review-fanout C6; none in the tree, house style uses single-line strings
-    or heredoc). Carry the open quote across lines like ``in_block`` if that
-    ever bites.
+    ponytail: quote state is per-line, so a multi-line PHP/JS string (no
+    heredoc) could hide a value on a continuation line (none today) -- carry
+    the open quote across lines like ``in_block`` if that ever bites.
     """
     out: list[str] = []
     quote: str | None = None
@@ -305,16 +277,14 @@ def _code_lines(lines: list[str], suffix: str) -> list[str | None]:
     * everything else: ``#`` line/trailing comments.
     * ``.py`` additionally tracks triple-quoted docstrings: an ODD number of
       triple-quote tokens toggles the docstring state (a close-and-reopen on
-      one line therefore stays open -- the PR #937 parity bug, issue #941),
-      while an EVEN count on a non-docstring line falls through to the value
-      scan, so a one-line triple-quoted assignment (X = triple-quoted token)
-      is caught by the quoted-literal path instead of being swept as prose
-      (the ``.py`` mirror of PR #937's blocking F1). ponytail: a one-line
-      module docstring whose ENTIRE text is a bare token would now
-      false-positive -- absurd corner, escape-comment it if it ever occurs.
-      This is deliberately NOT applied to shell/YAML: a shell value wrapped in
-      triple quotes is adjacent-quote concatenation evaluating to the exact
-      inner literal (PR #937 F1).
+      one line therefore stays open), while an EVEN count on a non-docstring
+      line falls through to the value scan, so a one-line triple-quoted
+      assignment (X = triple-quoted token) is caught by the quoted-literal
+      path instead of being swept as prose. ponytail: a one-line module
+      docstring whose ENTIRE text is a bare token would false-positive --
+      absurd corner; escape-comment it if it occurs. This is deliberately
+      NOT applied to shell/YAML: a shell value wrapped in triple quotes is
+      adjacent-quote concatenation evaluating to the exact inner literal.
     """
     out: list[str | None] = []
     if suffix in _C_COMMENT_EXTS:
@@ -381,9 +351,9 @@ def _matrix_tokens(matrix: dict) -> list[str]:
 
     ``role=route-only`` entries (ADR-27: EOL'd but still served, frozen
     catalog, no longer built/tested) are excluded, mirroring
-    ``read-version-matrix.sh``'s BUILD/CI derivations (review-fanout C1,
-    PR #947): a frozen version's identity is no longer an active-development
-    value, so the window need not keep covering it forever.
+    ``read-version-matrix.sh``'s BUILD/CI derivations: a frozen version's
+    identity is no longer an active-development value, so the window need
+    not keep covering it forever.
     """
     tokens: list[str] = []
     for entry in matrix.get("versions", []):
@@ -431,8 +401,8 @@ def _verify_matrix(argv: list[str]) -> int:
             print(f"unknown --verify-matrix option: {arg}", file=sys.stderr)
             return 2
     # A misconfigured invocation (bad ref, missing file, malformed JSON) gets the
-    # file's one-line stderr convention + exit 2, not a traceback (review-fanout
-    # C7, PR #947) -- distinct from exit 1 (uncovered tokens) so CI logs read right.
+    # file's one-line stderr convention + exit 2, not a traceback -- distinct
+    # from exit 1 (uncovered tokens) so CI logs read right.
     try:
         if matrix_file is not None:
             text = Path(matrix_file).read_text(encoding="utf-8")

@@ -1,43 +1,13 @@
 #!/bin/sh
-# bench_aggregate_union.sh — ADR-11 Phase 1 cost benchmark (DE-RISKING, dev-only).
+# bench_aggregate_union.sh — dev-only benchmark: cost of unioning pfBlockerNG's
+# Deny set into the aggregate ("Uber") alias (cat -> sort -u -> cidr_aggregate()
+# /iprange): wall-time, peak RSS, dedup ratio. Uses the real `iprange` when
+# present; else a Python ipaddress.collapse_addresses stand-in — ratio-faithful
+# but its wall-clock is a dev-box proxy only (live iprange timing needs a
+# maintainer run on real hardware). Synthetic data; not part of the release
+# archive (only src/ ships).
 #
-# Characterise the cost of unioning pfBlockerNG's effective Deny set into the
-# aggregate ("Uber") alias, so ADR-11 can choose full-rebuild-each-pass vs an
-# incremental (rebuild-on-member-change) build, and document the RAM caveat.
-#
-# What it measures, for the union step `cat members -> sort -u -> aggregate`:
-#   * wall-time (real seconds)
-#   * peak RAM (maximum resident set size)
-#   * input entry count vs output entry count (the dedup/aggregation ratio)
-#
-# The aggregation primitive pfBlockerNG uses is `cidr_aggregate()` in
-# pfblockerng.sh, which shells out to `/usr/local/bin/iprange` (a single file
-# arg -> stdout: sort + collapse of overlapping/adjacent CIDRs). This script
-# benchmarks the SAME primitive:
-#   * If `iprange` is present (a real pfSense box / a box with it installed),
-#     it is used directly -> a faithful, live-equivalent number.
-#   * Otherwise (e.g. a macOS/Linux dev box without it) a portable Python
-#     stand-in built on `ipaddress.collapse_addresses` is used. That performs
-#     the identical job (sort + merge overlapping/adjacent CIDRs into the
-#     minimal covering set); it is NOT the production binary, so its TIME is a
-#     dev-box proxy only — the authoritative live `iprange` timing is a
-#     maintainer-run slot (see RESULTS/01_Results.txt). The dedup/aggregation
-#     RATIO and the output entry count it reports ARE representative (same
-#     collapse semantics), only the wall-clock is implementation-specific.
-#
-# This is a measurement harness on SYNTHETIC data. It changes no shipped
-# behaviour and is not part of the release archive (only src/ ships).
-#
-# POSIX sh. Usage:
-#   scripts/misc/bench_aggregate_union.sh [v4_cidrs] [v6_cidrs] [members]
-#
-#   v4_cidrs  total IPv4 CIDR lines to synthesize  (default 2000000)
-#   v6_cidrs  total IPv6 CIDR lines to synthesize  (default  500000)
-#   members   number of member files to split them across (default 30)
-#
-# The synthetic generator deliberately injects exact-duplicate lines and
-# adjacent/contained subnets across members so `sort -u` + aggregate have real
-# work to collapse (mirrors overlapping real-world deny feeds).
+# Usage: scripts/misc/bench_aggregate_union.sh [v4_cidrs=2000000] [v6_cidrs=500000] [members=30]
 
 set -eu
 
@@ -101,7 +71,7 @@ for u in ('B','KiB','MiB','GiB','TiB'):
 }
 
 # --- 1. synthesize representative member files -------------------------------
-echo "ADR-11 Phase 1 — aggregate-union cost benchmark"
+echo "ADR-11 aggregate-union cost benchmark"
 echo "================================================"
 echo "host          : $(uname -s -m -r)"
 echo "agg primitive : ${agg_mode}"
@@ -113,7 +83,7 @@ python3 - "${memberdir}" "${v4_total}" "${v6_total}" "${members}" <<'PY'
 import ipaddress, random, sys, os
 
 memberdir, v4_total, v6_total, members = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
-random.seed(1108)  # deterministic: ADR-11, Phase 1
+random.seed(1108)  # deterministic: ADR-11
 
 fhs = [open(os.path.join(memberdir, f"deny_{i:03d}.txt"), "w") for i in range(members)]
 

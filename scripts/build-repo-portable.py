@@ -1,94 +1,12 @@
 #!/usr/bin/env python3
 # build-repo-portable.py — turn a directory of pfBlockerNG .pkg files into a
-# per-ABI FreeBSD `pkg` repository tree WITHOUT libpkg or the `pkg` binary, in
-# pure Python (stdlib + the `zstd` binary, exactly like scripts/build-pkg-portable.py).
-# ADR-17 Phase 3a. This is the catalog generator the Phase-3b publish job runs on
-# a plain Linux runner that has NO libpkg.
-#
-# WHY A PURE-PYTHON GENERATOR
-#   `pkg repo` is a libpkg op. On FreeBSD (or the pfSense VM) `pkg` is present —
-#   scripts/build-repo.sh (Phase 2) drives it and STAYS the FreeBSD-VM fallback.
-#   On a plain Linux runner there is no apt `pkg` and no official prebuilt; the
-#   Phase-2 path needs `pkg` built from source + an ABI forced in the env. So,
-#   mirroring how build-pkg-portable.py hand-rolls the .pkg archive in pure Python,
-#   this tool hand-rolls the REPOSITORY CATALOG: it reads each .pkg's manifest
-#   directly (no libpkg, no ABI guessing) and emits a `pkg`-format catalog a real
-#   pfSense `pkg update`/`pkg install` accepts.
-#
-# WHAT IT EMITS (verified byte-structurally against real `pkg repo` output — see
-# ADR-17 RESULTS/03a): for each distinct ABI, under <out>/<ABI>/:
-#   * the input .pkg file(s),
-#   * meta.conf  (+ an identical copy named `meta`) — the catalog descriptor:
-#       version = 2; packing_format = "tzst"; manifests = "packagesite.yaml";
-#       data = "data"; filesite = "files"; manifests_archive = "packagesite";
-#       filesite_archive = "files";
-#   * packagesite.pkg — a zstd-compressed tar holding `packagesite.yaml`:
-#       newline-delimited JSON, ONE object per package = that pkg's
-#       +COMPACT_MANIFEST plus the repo fields `sum`/`flatsize`/`path`/`repopath`/
-#       `pkgsize` libpkg injects, in libpkg's field order.
-#   * data.pkg — a zstd-compressed tar holding `data`:
-#       {"groups":[], "expired_packages":[], "packages":[<the same objects>]}.
-#
-# THE `sum` FIELD (load-bearing — `pkg install` validates the downloaded .pkg
-# against it): libpkg checksum type 2 = `2$` + z-base-32(blake2b(file)). blake2b
-# is the 64-byte default digest; the base32 is z-base-32 (alphabet
-# "ybndrfg8ejkmcpqxot1uwisza345h769") packed LSB-first. Reproduced exactly here
-# (cracked against a real `pkg repo` oracle), so a real box accepts the .pkg.
-#
-# Deterministic + re-runnable + NO network: same inputs -> byte-identical tree;
-# a re-run wipes and rebuilds each ABI bucket so a removed .pkg never lingers.
-#
-# FLAVOR-COLLISION GUARD: identical to build-repo.sh — two .pkg sharing
-# name+version+ABI but differing in php/py flavor (their php*/python*/py*-
-# dependency names) CANNOT coexist in one catalog (the second would silently
-# shadow the first). We FAIL LOUD (exit 1) rather than drop a build. Whether a
-# colliding combo exists depends on the ci-metadata version matrix (two entries
-# sharing a full ABI — FreeBSD major AND arch — with different php/py flavors);
-# the fix when one arises is a flavored layout <out>/<ABI>-<php><py>/,
-# intentionally NOT implemented here.
-#
-# VERSION-KEYED CATALOG DIRS (ADR-20 Phase 3)
-#   Pass --catalog-name <name> (e.g. "ce-2.8", "plus-26.03") to write the catalog
-#   under <out>/<catalog-name>/<ABI>/ instead of <out>/<ABI>/.
-#   When absent, behaviour is UNCHANGED (writes to <ABI>/ — the legacy path).
-#
-#   Catalog name derivation rule (use catalog_name_from_version()):
-#     Both CE and Plus strip any trailing patch component, taking only major.minor:
-#       "2.8.1"  + "CE"   -> "ce-2.8"
-#       "2.8.x"  + "CE"   -> "ce-2.8"
-#       "26.03"  + "Plus" -> "plus-26.03"
-#       "26.03.1"+ "Plus" -> "plus-26.03"
-#
-#   The publish pipeline loops over all active ci-metadata entries and calls this
-#   tool once per entry with the appropriate --catalog-name. Each versioned subdir
-#   is self-contained; multiple coexist under the same <out> root.
-#
-# MATRIX-DRIVEN BUILD — the BRAIN
-#   Pass --build-matrix --matrix-json <file|-> --out <dir> to drive the DUMB
-#   build-pkg-portable.py per (matrix entry × channel) and project the version matrix
-#   1:1 onto the tree:
-#       release/<variant>-<major.minor>/<arch>/<catalog files>   (devel + stable)
-#       nightly/<variant>-<major.minor>/<arch>/<catalog files>   (retained to N)
-#   The LEAF is the bare arch (amd64/aarch64) — the version segment already implies
-#   the FreeBSD major, and each .pkg's manifest carries its real ABI.
-#   Also callable from Python as build_repo_matrix(...).
-#
-# Requires: python3 (stdlib only) + a zstd encoder (the `zstd` binary, or the
-# python `zstandard` module) — the same compressor contract as build-pkg-portable.py.
-#
-# Usage:
-#   build-repo-portable.py --in <dir-of-.pkg> --out <dir>   # build the per-ABI tree
-#   build-repo-portable.py --in <dir> --out <dir> --catalog-name ce-2.8  # versioned
-#   build-repo-portable.py --print-conf [--base-url <url>]  # print the client repo-conf
-#
-# RELEASE RETENTION (ADR-27 Phase 2)
-#   --release-keep-devel N   retain the N newest devel releases per ABI (default 1 = latest-only)
-#   --release-keep-stable M  retain the M newest stable releases per ABI (default 1 = latest-only)
-#   --release-extra-pkgs <path>  (repeatable) pre-built older-release .pkg to fold in alongside
-#     the fresh build; publish.yml downloads these from GitHub Releases and passes them here.
-#   Defaults (N=M=1) reproduce today's behaviour; set higher values to enable rollback.
-#
-# This is a developer tool (not shipped in release archives). See --help.
+# per-ABI FreeBSD `pkg` repository tree WITHOUT libpkg, in pure Python (ADR-17):
+# for a plain Linux CI runner with no real `pkg` binary, hand-rolling the same
+# catalog `pkg repo` produces (meta.conf/packagesite.pkg/data.pkg, incl. the
+# libpkg `sum` checksum — see pkg_checksum()) from each .pkg's manifest,
+# deterministically and without network. FLAVOR-COLLISION GUARD, version-keyed
+# catalogs (ADR-20), the matrix-driven build, and release retention are each
+# documented at their own function; see --help for full CLI usage.
 
 from __future__ import annotations
 
@@ -122,17 +40,14 @@ META_CONF = (
     'filesite_archive = "files";\n'
 )
 
-# The shared client repo-conf template (the SINGLE source Phase 4's add-repo.sh +
-# the README reuse). Kept byte-identical to scripts/build-repo.sh --print-conf so
-# the two generators are interchangeable. ${ABI} is the literal pkg(8) variable
-# (expanded by pkg, not the shell), so one conf follows the box across an OS
-# upgrade; priority 100 sits above the base Netgate `pfSense` repo (priority 0) —
-# Phase 1 proved priority dominates version, so this is the precedence lever.
-# The published GitHub Pages base — the repo's standard project Pages URL, and the
-# canonical client conf base (ADR-39; the Cloudflare Worker has been retired). The
-# per-box conf URL resolves to <base>/<channel>/<varver>/<arch>, regenerated by the
-# rc.d hook on an OS upgrade. Kept identical to scripts/build-repo.sh / add-repo.sh
-# DEFAULT_BASE_URL so all three generators emit a byte-equal --print-conf.
+# The shared client repo-conf template — kept byte-identical to
+# scripts/build-repo.sh / add-repo.sh --print-conf (pinned by
+# tests/test_add_repo_conf.py) so all three generators are interchangeable.
+# ${ABI} is the literal pkg(8) variable (expanded by pkg, never the shell), so
+# one conf follows the box across an OS upgrade; priority 100 sits above the
+# base Netgate `pfSense` repo (priority 0) because priority — not version —
+# decides cross-repo resolution. Base URL is this repo's GitHub Pages root
+# (ADR-39; the Cloudflare Worker has been retired).
 DEFAULT_BASE_URL = "https://pfblockerng.github.io/pkg"
 CONF_PRIORITY = 100
 
@@ -153,7 +68,7 @@ class BuildRepoError(Exception):
 # blake2b default digest = 64 bytes; z-base-32 (RFC-less human base32, alphabet
 # "ybndrfg8ejkmcpqxot1uwisza345h769") packs the bit stream LSB-FIRST within each
 # byte — matching libpkg's pkg_checksum_encode_base32(). Cracked against a real
-# `pkg repo` oracle (RESULTS/03a). 64 bytes -> 103 base32 chars (ceil(64*8/5)).
+# `pkg repo` oracle. 64 bytes -> 103 base32 chars (ceil(64*8/5)).
 # --------------------------------------------------------------------------- #
 
 _ZBASE32 = "ybndrfg8ejkmcpqxot1uwisza345h769"
@@ -325,7 +240,7 @@ def _check_collisions(entries: list[tuple[Path, dict]]) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# ADR-20 Phase 3: catalog name derivation + routing manifest
+# ADR-20: catalog name derivation + routing manifest
 # --------------------------------------------------------------------------- #
 
 
@@ -446,25 +361,13 @@ def _write_catalog_dir(dest: Path, items: dict[tuple[str, str], tuple[Path, dict
 
 
 # --------------------------------------------------------------------------- #
-# ADR-20 routing rework: the matrix-driven BRAIN
-#
-# build_repo_matrix() is the single orchestrator. It reads the ci-metadata version
-# matrix and, per (entry × channel), drives the DUMB build-pkg-portable.py builder,
-# places each .pkg into a literal 1:1 projection of the matrix —
-#     release/<variant>-<major.minor>/<arch>/<catalog files>
-#     nightly/<variant>-<major.minor>/<arch>/<catalog files>
-# — generates each subtree's catalog.
-#
-# Layout decisions (maintainer-confirmed):
-#   * channel-group "release" = the production (stable-tag) + devel packages in ONE
-#     catalog (Netgate-style; both coexist). "nightly" = nightly only, retained to N.
-#   * the version segment = catalog_name_from_version() ("ce-2.8" / "plus-26.03").
-#   * the LEAF is the bare ARCH (amd64 / aarch64), NOT the full ABI: the version
-#     segment already implies the FreeBSD major, and each .pkg's real ABI lives in
-#     its own manifest (pkg validates the ABI from the package), so the directory is
-#     purely the routing path.
-#   * FULL MATRIX, NO DEDUP — each entry populates its own (version, arch) subtree
-#     independently, even if two pfSense versions share ABI+PHP+PY.
+# ADR-20: the matrix-driven BRAIN. build_repo_matrix() drives the DUMB
+# build-pkg-portable.py builder per (ci-metadata entry x channel) and projects
+# the matrix 1:1 onto release/<variant>-<major.minor>/<arch>/... (stable+devel,
+# one catalog) and nightly/<variant>-<major.minor>/<arch>/... (retained to N).
+# The leaf is the bare ARCH, not the full ABI (the version segment already
+# implies the FreeBSD major; each .pkg's real ABI lives in its own manifest).
+# FULL MATRIX, NO DEDUP: every entry gets its own subtree.
 # --------------------------------------------------------------------------- #
 
 
@@ -865,14 +768,14 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(
         prog="build-repo-portable.py",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Generate a per-ABI FreeBSD pkg repository catalog in pure Python (no libpkg). ADR-17 Phase 3a.",
+        description="Generate a per-ABI FreeBSD pkg repository catalog in pure Python (no libpkg). ADR-17.",
         epilog=(
             "examples:\n"
             "  # build a catalog tree from a dir of release .pkg\n"
             "  build-repo-portable.py --in ./pkgs --out ./site\n\n"
             "  # build under a version-keyed subdir (ADR-20)\n"
             "  build-repo-portable.py --in ./pkgs --out ./site --catalog-name ce-2.8\n\n"
-            "  # print the client repo-conf (Phase 4 add-repo.sh + README reuse it)\n"
+            "  # print the client repo-conf (add-repo.sh + README reuse it)\n"
             "  build-repo-portable.py --print-conf --base-url https://example.github.io/pkg\n\n"
             "  # matrix-driven: build the full variant/arch tree (ADR-20)\n"
             "  read-version-matrix.sh --print-build | build-repo-portable.py --build-matrix \\\n"

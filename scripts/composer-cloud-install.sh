@@ -58,7 +58,7 @@ strip_phpstan() {
 
 # The fallback mutates composer.json/lock in a repo ($1) and restores them via
 # git checkout; refuse to run over uncommitted user edits — staged OR unstaged,
-# hence the diff against HEAD, not just the index (PR #953 review).
+# hence the diff against HEAD, not just the index.
 refuse_if_composer_files_dirty() {
 	if ! git -C "$1" diff --quiet HEAD -- composer.json composer.lock; then
 		echo "composer-cloud-install: composer.json/composer.lock have uncommitted changes; commit or stash them first" >&2

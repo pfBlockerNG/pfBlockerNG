@@ -6,7 +6,7 @@
 # (overlay discarded), so every run is a clean install of the branch under test.
 #
 # It does NOT add feeds / addresses / whitelists / response modes — that is
-# per-case config injection (ADR-04 Phase 4), done later by the test harness.
+# per-case config injection (ADR-04), done later by the test harness.
 #
 # The pfSense setup wizard is a GUI-only first-run prompt; the baked image is
 # already a configured box (config.xml present), so there is nothing to skip

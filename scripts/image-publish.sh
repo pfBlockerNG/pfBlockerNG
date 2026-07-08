@@ -1,6 +1,6 @@
 #!/bin/sh
 # image-publish.sh — export a Proxmox VM's disk to a compressed qcow2 and
-# publish it to GHCR as a pfBlockerNG smoke-test base image (ADR-04, Phase 2).
+# publish it to GHCR as a pfBlockerNG smoke-test base image (ADR-04).
 #
 # Drive it FROM YOUR MACHINE: pass the Proxmox SSH coordinates and the script
 # runs the native steps (qm/pvesm/qemu-img — all shipped with Proxmox VE) over

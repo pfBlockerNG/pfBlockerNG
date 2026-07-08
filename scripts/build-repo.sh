@@ -1,41 +1,12 @@
 #!/bin/sh
 # build-repo.sh — turn a directory of pfBlockerNG .pkg files into a per-ABI
-# FreeBSD `pkg` repository tree (ADR-17 Phase 2). This is the reusable, proven
-# catalog generator the Phase-3 publish job calls over the .pkg assets ADR-09
-# attaches to each GitHub Release.
-#
-# WHAT IT DOES
-#   1. Reads each input .pkg's ABI FROM THE PACKAGE (`pkg query -F <f> '%q'`) —
-#      never guessed from the filename.
-#   2. Buckets each .pkg under  <out>/release/<ABI>/  (the release channel subtree,
-#      one catalog per ABI, e.g. <out>/release/FreeBSD:15:amd64/) and copies the
-#      .pkg there — symmetric with the nightly/ subtree
-#      (ADR-20), so a conf url with the explicit `release/${ABI}` prefix resolves.
-#   3. Runs `pkg repo <out>/release/<ABI>` per bucket with NO signing key, emitting the
-#      catalog triple (meta.conf / packagesite.pkg / data.pkg) a client
-#      `pkg update` consumes. NONE-signed by construction (the ADR trust model:
-#      TLS to the host, no CI key — ADR §2 "Trust model").
-#   4. Optionally prints the shared client repo-conf TEMPLATE (`--print-conf`):
-#      the single `${ABI}` / NONE-signed / above-pfSense-priority stanza Phase 4's
-#      add-repo.sh and the README reuse.
-#
-# Deterministic + re-runnable + NO network: the same inputs yield the same tree;
-# a re-run wipes and rebuilds each ABI bucket so a removed .pkg never lingers.
-#
-# FLAVOR-COLLISION GUARD: two .pkg sharing package-name + version + ABI but
-# differing in php/py flavor (their `php*`/`py*-*` dependency names) CANNOT
-# coexist in one catalog — the second would silently shadow the first. We FAIL
-# LOUD rather than drop a build. Whether a colliding combo exists depends on the
-# ci-metadata version matrix (two entries sharing a full ABI — FreeBSD major AND
-# arch — with different php/py flavors); when one ever arises, the fix is a flavored layout
-# `<out>/<ABI>-<php><py>/` (add-repo.sh would then detect + pin the box's flavor).
-# That split is intentionally NOT implemented here — see the guard below.
-#
-# LIBPKG PROVENANCE: `pkg repo` is a libpkg op needing the `pkg` binary. On
-# FreeBSD (or the pfSense VM) `pkg` is present. On a Linux CI runner it is NOT in
-# apt and has no official prebuilt — see RESULTS/02 for the libpkg-on-Linux vs
-# FreeBSD-VM-fallback verdict that decides where Phase 3 runs this. The script is
-# transport-agnostic: it only needs SOME `pkg` on PATH (override with PKG_BIN).
+# FreeBSD `pkg` repository tree (ADR-17): reads each .pkg's ABI FROM THE
+# PACKAGE (never the filename), buckets it under <out>/release/<ABI>/
+# (symmetric with the nightly/ subtree, ADR-20), and runs unsigned `pkg repo`
+# per bucket (NONE-signed trust model, ADR §2). Deterministic + re-runnable +
+# no network: each ABI bucket is wiped and rebuilt every run. A flavor
+# collision (same name+version+ABI, different php/py flavor) fails loud — see
+# the guard below. `pkg` must be a real libpkg build on PATH (override PKG_BIN).
 #
 # Usage:
 #   build-repo.sh --in <dir-of-.pkg> --out <dir>      # build the per-ABI tree
@@ -55,37 +26,14 @@
 
 set -eu
 
-# ── The shared client repo-conf template ───────────────────────────────────────
-#
-# The SINGLE source of the client stanza (Phase 4's add-repo.sh + the README
-# reuse this exact shape). Fields, per ADR §2 "Client bootstrap":
-#   * url:            STATIC base + the literal ${ABI} pkg variable (NO shell/query
-#                     interpolation) so one conf auto-follows the box's ABI across
-#                     an OS upgrade. ${ABI} is expanded by pkg(8), not the shell.
-#   * mirror_type: none / signature_type: none — NONE-signed; trust = HTTPS to the host.
-#   * priority:       ABOVE the base Netgate `pfSense` repo so cross-repo resolution
-#                     picks our build. Phase 1 PROVED priority dominates version (a
-#                     higher-priority repo wins even at a lower version), so this is
-#                     the real precedence lever. The pfSense repo ships priority 0 by
-#                     default; 100 clears it with margin while staying an ordinary
-#                     positive value (add-repo.sh may recompute it live, +100 over the
-#                     effective pfSense priority, the way the Phase-1 smoke does).
-#   * enabled: yes.
-# `pfblockerng` matches the shared release conf Phase 4 writes
-# (/usr/local/etc/pkg/repos/pfblockerng.conf) — the one repo that carries BOTH the
-# stable and devel packages (Netgate-style); only nightly gets its own conf.
-# The published GitHub Pages base — the repo's standard project Pages URL
-# (gh api repos/.../pages -> html_url https://pfblockerng.github.io/pkg/);
-# we serve over HTTPS, so the base is https://pfblockerng.github.io/pkg and the conf
-# appends the literal ${ABI} pkg(8) variable. Override with --base-url for a fork.
-# NOTE: the Pages tree also publishes VERSION-KEYED subdirs:
-#   https://pfblockerng.github.io/pkg/ce-2.8/${ABI}/   (CE 2.8.x)
-#   https://pfblockerng.github.io/pkg/plus-26.03/${ABI}/  (Plus 26.03)
-# The variant conf is written by add-repo.sh (install/self-heal) and points directly
-# to the versioned GitHub Pages URL for the box's variant — no intermediary layer.
-# This --print-conf template is kept in sync with add-repo.sh (byte-identical release
-# stanza — what `add-repo.sh stable` and `add-repo.sh devel` both write). Override with
-# --base-url for forks/staging.
+# ── The shared client repo-conf template ─────────────────────────────────────
+# Single source of the client stanza — add-repo.sh, build-repo-portable.py, and
+# the README reuse this exact shape (byte-identical; pinned by
+# tests/test_add_repo_conf.py). url carries the LITERAL ${ABI} pkg(8) variable
+# (expanded by pkg itself, never shell-interpolated), so one conf auto-follows
+# an OS upgrade. priority sits above the base Netgate `pfSense` repo (ships 0)
+# because priority — not version — decides cross-repo resolution; that is the
+# lever that makes our build win. Override the base with --base-url for a fork.
 DEFAULT_BASE_URL="https://pfblockerng.github.io/pkg"
 CONF_PRIORITY=100
 
@@ -129,7 +77,7 @@ while [ $# -gt 0 ]; do
         --base-url)      BASE_URL="$2"; shift 2 ;;
         --catalog-path)  CATALOG_PATH="$2"; shift 2 ;;
         -h|--help)
-            sed -n '37,57p' "$0"   # the Usage/Options/Env block from the header
+            sed -n '11,25p' "$0"   # the Usage/Options/Env block from the header
             exit 0 ;;
         *) echo "build-repo: unknown arg: $1" >&2; exit 2 ;;
     esac
