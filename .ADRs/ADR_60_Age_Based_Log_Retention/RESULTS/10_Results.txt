@@ -1,0 +1,421 @@
+ADR-60 Phase 10 -- Wider ISO-8601 sweep (follow-on, non-gating) -- RESULTS
+================================================================================
+
+VERDICT: DONE
+
+--------------------------------------------------------------------------------
+CORRECTIONS / REALITY CHECK AGAINST THE PROMPT (verified this session)
+--------------------------------------------------------------------------------
+1. Confirmed Phase 9 landed and ADR-60 is Accepted before starting:
+     $ grep -n -i "status" .ADRs/ADR_60_Age_Based_Log_Retention/ADR.md
+     3: - **Status:** **Accepted** (2026-07-08; Phases 1-9 implemented 2026-07-08)
+   RESULTS/09_Results.txt + RESULTS/09_Gate.txt both confirm PASS with real
+   CE+Plus live-VM CI run IDs.
+
+2. The orchestrator's own correction (widget.php path) verified independently:
+     $ ls src/usr/local/www/pfblockerng/widget.php
+     ls: ... No such file or directory
+     $ find src -iname "*.widget.php"
+     src/usr/local/www/widgets/widgets/pfblockerng.widget.php
+   Confirmed correct; used throughout.
+
+3. Every other file path in the corrected brief re-verified via direct grep/read
+   before editing (pfblockerng.php is at src/usr/local/www/pfblockerng/pfblockerng.php,
+   NOT src/usr/local/pkg/ -- confirmed via `find`; www/index.php is at
+   src/usr/local/www/pfblockerng/www/index.php). Exact line numbers re-confirmed
+   per-site below (the brief's own approximate line numbers had drifted slightly
+   from earlier phases, as it warned they might):
+     dnsbl_alias_update() timestamp writes: lines 5302 / 5336 (not 5370/5404)
+     pfBlockerNG_clearsqlite() timestamp writes: lines 14085 / 14089 (not 14133/14137)
+     debug filename: line 16486 (not 16534, matches the orchestrator's own correction)
+     MaxMind gmdate: pfblockerng.php:843 (confirmed exact)
+     Update page schedule: pfblockerng_update.php:291-292 (confirmed exact)
+     Python rename filename: pfb_unbound.py:893 and 898 (confirmed exact, 2 sites)
+     Expires header: www/index.php:103 (not :101 -- confirmed via grep)
+   No contradiction that blocked the phase; all re-verified before editing, per
+   the brief's own "verify each claim before acting on it" instruction.
+
+--------------------------------------------------------------------------------
+WHAT CHANGED + WHY (commit 81c4c8fe, pushed directly to
+adr/60-age-based-log-retention -- direct push succeeded, no PR needed)
+--------------------------------------------------------------------------------
+
+CODE (5 files):
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc
+    dnsbl_alias_update() lines 5302/5336: date('M j H:i:s', time()) ->
+      date('Y-m-d H:i:s', time())  [genuine bug #1 -- write side]
+    pfBlockerNG_clearsqlite() lines 14085/14089: date('M j H:i:s', time()) ->
+      date('Y-m-d H:i:s', time())  [genuine bug #2 -- write side]
+    line 16486 (debug snapshot filename): date('M_j', time()) ->
+      date('Y-m-d', time())  [cosmetic, fixed-width]
+- src/usr/local/www/pfblockerng/pfblockerng.php
+    line 843 (MaxMind version-file gmdate): gmdate('D, j M Y H:i:s T', ...) ->
+      gmdate('Y-m-d H:i:s', ...)  [cosmetic, already had a year]
+- src/usr/local/www/pfblockerng/pfblockerng_update.php
+    lines 291-292 (pfb_ledger_entry_html): date('Y-m-d H:i', ...) ->
+      date('Y-m-d H:i:s', ...)  [cosmetic, adds seconds]
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py
+    lines 893/898 (init_standard()'s unwritable-log rename): dropped the '-' in
+      "_%Y%m%-d%H%M%S.log" -> "_%Y%m%d%H%M%S.log"  [cosmetic, fixed-width]
+
+widget.php: NOT touched -- confirmed by test that its EXISTING read paths
+(pfb_iso_timestamp() for the dnsbl stat, raw display for lastclear) already
+render the new year-bearing values correctly with zero code change needed.
+
+www/index.php:103 (Expires header): NOT touched, deliberately -- confirmed by a
+new byte-for-byte source-tripwire test (see below).
+
+pfb_iso_timestamp() (pfblockerng.inc:702-711): NOT touched -- see decision below.
+
+TEST INFRASTRUCTURE (1 file):
+- tests/php/pfsense_doubles.php: added a function_exists()-guarded double for
+  is_process_running() (pfSense util.inc). Needed because
+  pfBlockerNG_clearsqlite('cleardnsbl') reaches `is_process_running('unbound')`
+  at runtime and no double existed yet (confirmed via grep -- zero prior test
+  reached this call path); returns FALSE, matching every off-appliance dev/CI
+  box's real state (no live 'unbound' process). Per CLAUDE.md's own documented
+  convention ("when a tested path reaches a new pfSense function, add a
+  function_exists()-guarded double").
+
+NEW TESTS (5 files, 19 new test methods total):
+- tests/php/DnsblAliasUpdateTimestampFormatTest.php (4 tests) -- genuine bug #1
+- tests/php/ClearSqliteTimestampFormatTest.php (5 tests) -- genuine bug #2
+- tests/php/TimestampCosmeticNormalizationTest.php (7 tests) -- debug filename,
+  MaxMind gmdate, Update page seconds, Expires header
+- tests/php/UpdatePageLoader.php -- off-appliance loader for
+  pfb_ledger_entry_html()/pfb_dnsbl_category_schedule_html() (mirrors
+  AlertsPageLoader.php's pattern; needed a NARROWER span than "first function
+  keyword onward" because pfblockerng_update.php, unlike pfblockerng_alerts.php,
+  interleaves function defs with top-level page-building code)
+- tests/test_pfb_unbound_log_rename_filename.py (3 tests) -- Python rename
+  filename, both call sites
+
+MODIFIED TEST FILE (1):
+- tests/smoke/ui/test_render_smoke.py: 2 new Tier-A ui_render tests --
+  test_update_page_schedule_shows_seconds_precision,
+  test_widget_dnsbl_stat_renders_year_bearing_iso_timestamp (dual-marked
+  ui_e2e, same rationale/precedent as test_alerts_unified_log_colour_fields_render
+  -- it mutates config.xml as setup). LIVE EXECUTION DEFERRED (see below).
+
+--------------------------------------------------------------------------------
+DECISION: pfb_iso_timestamp() -- KEPT, not simplified/removed
+--------------------------------------------------------------------------------
+Verified the planner's strong-lean-keep reasoning and agree: pfb_iso_timestamp()
+has real, independent value beyond dnsbl_alias_update()'s no-year format --
+it's issue #333's general "reformat any parseable date, else passthrough"
+helper, already proven by its own 6 pre-existing tests (PfbIsoTimestampTest.php)
+covering 3 branches (US-style-with-year, already-ISO round-trip, unparseable
+passthrough) that this phase did not need to touch.
+
+Concretely, once dnsbl_alias_update() writes real ISO-with-year values, a
+FRESH value round-trips through pfb_iso_timestamp() as a no-op (proven by
+DnsblAliasUpdateTimestampFormatTest::testUpdateModeStoresYearBearingIsoTimestamp,
+which asserts `pfb_iso_timestamp($stamp) === $stamp` for a freshly-stored
+value). But EXISTING installs upgrading to this fix have old no-year values
+sitting in their live SQLite `dnsbl` table right now, for every DNSBL group
+that hasn't had a dnsbl_alias_update('update', ...) call since the upgrade
+(a disabled/inactive feed group could sit stale for a long time). Removing
+pfb_iso_timestamp() would make those old rows display raw ('Jul  8 14:30:45',
+unparsed by anything) instead of at least a best-effort guessed year. Keeping
+it costs nothing (it's already a no-op on fresh values) and closes that
+upgrade-window gap. DnsblAliasUpdateTimestampFormatTest::
+testOldNoYearFormatLosesTheRealWriteYearOnReadback documents the residual risk
+it still guards against (an old no-year value's real write year is
+unrecoverable -- pfb_iso_timestamp() can only guess the CURRENT year, never
+the true one -- but that's strictly better than showing the raw ambiguous
+string with literally nothing reformatted).
+
+--------------------------------------------------------------------------------
+GATES RUN (final tree, commit 81c4c8fe)
+--------------------------------------------------------------------------------
+
+$ php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+$ php -l src/usr/local/www/pfblockerng/pfblockerng.php
+$ php -l src/usr/local/www/pfblockerng/pfblockerng_update.php
+$ php -l src/usr/local/www/widgets/widgets/pfblockerng.widget.php
+No syntax errors detected in src/usr/local/pkg/pfblockerng/pfblockerng.inc
+No syntax errors detected in src/usr/local/www/pfblockerng/pfblockerng.php
+No syntax errors detected in src/usr/local/www/pfblockerng/pfblockerng_update.php
+No syntax errors detected in src/usr/local/www/widgets/widgets/pfblockerng.widget.php
+(pre-existing PHP Deprecated notices for optional-before-required params, same
+as every prior phase's baseline -- unrelated to this diff, confirmed by grep --
+none of them are on a line this phase touched)
+
+$ vendor/bin/phpunit
+............................................................. 2318 / 2388 ( 97%)
+......................................................         2388 / 2388 (100%)
+Time: 00:11.041, Memory: 38.00 MB
+OK, but there were issues!
+Tests: 2388, Assertions: 18619, PHPUnit Deprecations: 2, Skipped: 4.
+(Phase 9a baseline: 2372 tests / 18574 assertions / 2 deprecations / 4 skipped
+ -- delta = +16 tests / +45 assertions, matching this phase's 4+5+7=16 new
+ PHPUnit test methods; deprecations/skips unchanged)
+
+$ vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+Note: Using configuration file phpstan.neon.
+ [OK] No errors
+
+$ vendor/bin/phpcs -d memory_limit=1G --standard=phpcs.xml.dist src/
+(no output, exit 0 -- clean)
+
+$ python3 -m pytest
+======================= 2439 passed, 4 skipped in 40.46s =======================
+(Phase 9a baseline: 2436 passed / 4 skipped -- delta = +3, matching
+ tests/test_pfb_unbound_log_rename_filename.py's 3 new tests)
+
+$ python3 -m pytest tests/smoke/ui --collect-only
+========================= 292 tests collected in 0.09s =========================
+(includes the 2 new ui_render tests -- confirmed present via grep on the
+ collect-only output: test_update_page_schedule_shows_seconds_precision,
+ test_widget_dnsbl_stat_renders_year_bearing_iso_timestamp)
+
+$ python3 -m pytest tests/smoke --collect-only -q
+========================= 604 tests collected in 0.20s =========================
+(Phase 9a baseline: 602 -- delta = +2, matching the 2 new ui tests; no smoke
+ test file was deleted or renamed this phase)
+
+$ ruff check . / ruff format --check .
+All checks passed! / 200 files already formatted
+
+$ python3 -m mypy tests/
+Success: no issues found in 85 source files
+
+$ python3 scripts/check_appliance_python.py
+$ python3 scripts/check_comment_narration.py --diff origin/devel
+$ python3 scripts/check_version_literals.py
+$ python3 scripts/check_url_encoding.py
+(all 4: exit 0, no output -- clean)
+
+Pre-commit hook (ran automatically on `git commit`): ruff check, ruff format
+--check (200 files), no-appliance-python, version-literals, comment-narration,
+php -l, phpstan, phpcs all passed. mypy reported "skipped (tool not found)" in
+the hook's own sandboxed PATH -- re-run manually above via `python3 -m mypy
+tests/`, green.
+
+--------------------------------------------------------------------------------
+RED -> GREEN PROOF -- GENUINE BUG #1: dnsbl_alias_update() (executed, pasted)
+--------------------------------------------------------------------------------
+Reverted ONLY the 2 dnsbl_alias_update() format-string lines to the OLD
+`date('M j H:i:s', time())` (via targeted Edit, restored from a pre-fix backup
+afterward -- no git stash used, per the org-wide "never git stash in a
+worktree" rule), then re-ran the new test file:
+
+RED (pre-fix code):
+  $ vendor/bin/phpunit tests/php/DnsblAliasUpdateTimestampFormatTest.php \
+      tests/php/ClearSqliteTimestampFormatTest.php
+  F. -- among 5 total failures across both files, the 2 belonging to
+  DnsblAliasUpdateTimestampFormatTest:
+    1) DnsblAliasUpdateTimestampFormatTest::testUpdateModeStoresYearBearingIsoTimestamp
+       dnsbl_alias_update('update', ...) must store a year-bearing ISO timestamp
+       now; got: Jul 8 18:43:43
+       Failed asserting that 'Jul 8 18:43:43' matches PCRE pattern
+       "/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/".
+    2) DnsblAliasUpdateTimestampFormatTest::testDisabledModeStoresYearBearingIsoTimestamp
+       dnsbl_alias_update('disabled', ...) must store a year-bearing ISO
+       timestamp now; got: Jul 8 18:43:43
+       Failed asserting that 'Jul 8 18:43:43' matches PCRE pattern
+       "/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/".
+  Tests: 9, Assertions: 25, Failures: 5.
+
+GREEN (fix restored):
+  $ vendor/bin/phpunit tests/php/DnsblAliasUpdateTimestampFormatTest.php \
+      tests/php/ClearSqliteTimestampFormatTest.php
+  .........
+  OK (9 tests, 28 assertions)
+
+--------------------------------------------------------------------------------
+RED -> GREEN PROOF -- GENUINE BUG #2: pfBlockerNG_clearsqlite() (executed, pasted)
+--------------------------------------------------------------------------------
+Same revert/restore cycle covered BOTH genuine bugs in the same run (both
+files' format-string lines were reverted together, single pfblockerng.inc
+edit/restore):
+
+RED (pre-fix code), the 2 failures belonging to ClearSqliteTimestampFormatTest
+(plus its source-tripwire, also correctly red):
+  3) ClearSqliteTimestampFormatTest::testClearIpModeWritesYearBearingIsoTimestamp
+     pfBlockerNG_clearsqlite('clearip') must store a year-bearing ISO
+     'lastipclear'; got: Jul 8 18:43:43
+     Failed asserting that 'Jul 8 18:43:43' matches PCRE pattern
+     "/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/".
+  4) ClearSqliteTimestampFormatTest::testClearDnsblModeWritesYearBearingIsoTimestamp
+     pfBlockerNG_clearsqlite('cleardnsbl') must store a year-bearing ISO
+     'lastdnsblclear'; got: Jul 8 18:43:43
+     Failed asserting that 'Jul 8 18:43:43' matches PCRE pattern
+     "/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/".
+  5) ClearSqliteTimestampFormatTest::testSourceUsesYearBearingFormatAtBothCallSites
+     pfBlockerNG_clearsqlite()'s 'clearip' timestamp format changed -- update
+     this oracle
+     Failed asserting that '<?php ... ' contains "$lastipclear = date('Y-m-d
+     H:i:s', time());"
+
+GREEN (fix restored): same combined run pasted above -- OK (9 tests, 28
+assertions), all 5 pass.
+
+--------------------------------------------------------------------------------
+RED -> GREEN PROOF -- COSMETIC SITES (debug filename, MaxMind gmdate,
+Update-page seconds) (executed, pasted)
+--------------------------------------------------------------------------------
+Reverted the debug-filename line (pfblockerng.inc:16486), the MaxMind gmdate
+line (pfblockerng.php:843), and the Update-page seconds lines
+(pfblockerng_update.php:291-292) to their OLD formats, restored afterward:
+
+RED (pre-fix code):
+  $ vendor/bin/phpunit tests/php/TimestampCosmeticNormalizationTest.php
+  F.F.F..
+  There were 3 failures:
+  1) TimestampCosmeticNormalizationTest::testDebugFilenameSourceUsesFixedWidthFormat
+     the /tmp debug-snapshot filename format changed -- update this oracle
+  2) TimestampCosmeticNormalizationTest::testMaxmindGmdateSourceUsesIsoFormat
+     the MaxMind version-file gmdate format changed -- update this oracle
+     (source contains "@gmdate('Y-m-d H:i:s', pfb_file_mtime($maxmind_cont));")
+  3) TimestampCosmeticNormalizationTest::testScheduleDisplayIncludesSecondsForBothLastAndNext
+     the Schedule 'Last' timestamp must include seconds now; got:
+     Last: <strong>2025-01-01 09:00</strong>&emsp;Next: <strong>2025-01-01 09:15</strong>
+     Failed asserting that '...' contains "Last: <strong>2025-01-01 09:00:45</strong>".
+  Tests: 7, Assertions: 14, Failures: 3.
+
+GREEN (fix restored):
+  $ vendor/bin/phpunit tests/php/TimestampCosmeticNormalizationTest.php \
+      tests/php/DnsblAliasUpdateTimestampFormatTest.php \
+      tests/php/ClearSqliteTimestampFormatTest.php
+  ................
+  OK (16 tests, 45 assertions)
+
+--------------------------------------------------------------------------------
+RED -> GREEN PROOF -- PYTHON RENAME FILENAME (executed, pasted)
+--------------------------------------------------------------------------------
+Reverted both pfb_unbound.py call sites to the OLD "_%Y%m%-d%H%M%S.log",
+restored afterward:
+
+RED (pre-fix code):
+  $ python3 -m pytest tests/test_pfb_unbound_log_rename_filename.py -q
+  ________ test_source_uses_fixed_width_format_at_both_call_sites ________
+      assert source.count('str(datetime.now().strftime("_%Y%m%d%H%M%S.log"))') == 2
+  E   AssertionError: expected exactly 2 fixed-width rename-filename call
+      sites; update this oracle if the count changed
+  E   assert 0 == 2
+  ========================= 1 failed, 2 passed in 0.02s ==========================
+  (the 2 passes are the pure-strftime-reproduction tests, which don't read the
+   source file -- correctly unaffected by the source-level revert)
+
+GREEN (fix restored):
+  $ python3 -m pytest tests/test_pfb_unbound_log_rename_filename.py -q
+  ...
+  3 passed in 0.01s
+
+--------------------------------------------------------------------------------
+DIFF-READ: CONFIRMED NOTHING UNDER THE 10-MANAGED-LOG-TYPES SURFACE WAS TOUCHED
+--------------------------------------------------------------------------------
+Reviewed `git diff` for every touched src/ file line-by-line:
+- pfb_unbound.py's diff touches ONLY the ownership-repair RENAME filename
+  (a /var/log/pfblockerng/<type><timestamp>.log path built from datetime.now()),
+  NOT make_timestamp() (the actual per-line log-writer Phases 2-4 fixed) --
+  confirmed by grep: `make_timestamp` does not appear in this diff at all.
+- pfblockerng.inc's diff touches dnsbl_alias_update() (SQLite `dnsbl.timestamp`
+  stat column, not a log FILE), pfBlockerNG_clearsqlite() (SQLite `lastclear`
+  table, not a log file), and one /tmp debug-snapshot filename (not a managed
+  log path at all) -- zero overlap with log/extraslog/errlog, ip_blocklog/
+  ip_permitlog/ip_matchlog, dnslog/dnsreplylog/unilog, or runlog.
+- pfb_iso_timestamp() (pfblockerng.inc:702-711): confirmed via
+  `git diff ... | grep -A5 -B5 pfb_iso_timestamp` -- zero hits, function
+  byte-for-byte unchanged (the keep decision above).
+- src/usr/local/www/widgets/widgets/pfblockerng.widget.php: confirmed via
+  `git status` -- NOT in the changed-files list at all (its existing read
+  paths already handle the new year-bearing values correctly, proven by the
+  new smoke tests -- no code change needed).
+
+--------------------------------------------------------------------------------
+HTTP EXPIRES HEADER: CONFIRMED DELIBERATELY LEFT ALONE
+--------------------------------------------------------------------------------
+Read src/usr/local/www/pfblockerng/www/index.php:103 --
+`header("Expires: Sat, 26 Jul 2014 05:00:00 GMT");` -- RFC 7231/2822 HTTP
+header format is protocol-mandated; this line is NOT touched, and
+TimestampCosmeticNormalizationTest::testExpiresHttpHeaderIsByteForByteUnchanged
+pins the exact literal so any future accidental edit is caught.
+
+--------------------------------------------------------------------------------
+TIER-A ui_render COVERAGE: WRITTEN, STATICALLY VERIFIED, LIVE EXECUTION DEFERRED
+--------------------------------------------------------------------------------
+Same environmental constraint as Phases 5/8/9a's test-authoring steps: no
+PFB_BOXES / live pfSense VM access this session. Two new Tier-A (ui_render)
+tests were written in tests/smoke/ui/test_render_smoke.py:
+  1. test_update_page_schedule_shows_seconds_precision -- seeds a due-ledger
+     'cron' entry via the package's own pfb_due_ledger_write_entry() PHP
+     writer (mirrors tests/smoke/test_smoke_tick.py's own local helper of the
+     same shape), then asserts the rendered Schedule Last/Next lines show
+     seconds precision (a deliberately non-zero ':45' marker that a
+     pre-fix minute-only render would visibly truncate).
+  2. test_widget_dnsbl_stat_renders_year_bearing_iso_timestamp (dual-marked
+     ui_e2e, same config-mutation rationale as
+     test_alerts_unified_log_colour_fields_render) -- seeds the real SQLite
+     'dnsbl' table row directly (the widget's own `SELECT * FROM dnsbl` read
+     path) with a year-bearing value, then confirms the widget renders that
+     exact string.
+Both: syntactically compiled (py_compile), collected successfully
+(`python3 -m pytest tests/smoke/ui --collect-only` -- 292 tests, confirmed
+both new test names present), ruff-clean, mypy-clean. NEITHER was executed
+against a real VM this session -- that is an honest, flagged gap, not a
+silent one, exactly per the brief's own instruction and Phase 5/8/9a's
+precedent for the same class of deferral. This is the final ADR-60 phase, so
+there is no further "orchestrator live-VM dispatch" step scheduled after
+this -- the maintainer's own next live-VM smoke/UI run is where these two
+tests get their first real execution.
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX (every §1.8 lower-priority site + the 2 genuine bugs)
+--------------------------------------------------------------------------------
+| Site | Status |
+| --- | --- |
+| dnsbl_alias_update() 'update' branch (:5302) | DONE -- fixed + red/green proven |
+| dnsbl_alias_update() 'disabled' branch (:5336) | DONE -- fixed + red/green proven |
+| pfBlockerNG_clearsqlite() 'clearip' (:14085) | DONE -- fixed + red/green proven |
+| pfBlockerNG_clearsqlite() 'cleardnsbl' (:14089) | DONE -- fixed + red/green proven |
+| widget.php:390 (pfb_iso_timestamp() call site) | KEPT unchanged, decision justified above, tested |
+| widget.php:797-798 (raw lastclear display) | Confirmed reads sensibly with new format (tested) |
+| /tmp debug filename (:16486) | DONE -- fixed + red/green proven |
+| MaxMind gmdate (pfblockerng.php:843) | DONE -- fixed + red/green proven |
+| widget.php:524 (MaxMind grep display) | Confirmed grep still captures whole line (tested) |
+| Update page schedule (pfblockerng_update.php:291-292) | DONE -- fixed + red/green proven |
+| Python rename filename (pfb_unbound.py:893) | DONE -- fixed + red/green proven |
+| Python rename filename (pfb_unbound.py:898) | DONE -- fixed + red/green proven |
+| www/index.php:103 Expires header | Confirmed untouched, byte-for-byte test added |
+| pfb_iso_timestamp() simplify-vs-keep | KEPT, justified above |
+| Tier-A ui_render (Update page + widget) | Written, statically verified, live execution DEFERRED |
+
+--------------------------------------------------------------------------------
+DEVIATIONS / JUDGMENT CALLS
+--------------------------------------------------------------------------------
+1. dnsbl_alias_update()/pfBlockerNG_clearsqlite() write the ISO format via the
+   plain `date('Y-m-d H:i:s', time())` literal (the same convention already
+   dominant elsewhere in this file for non-managed-log timestamps, e.g.
+   pfblockerng.inc:710 inside pfb_iso_timestamp() itself and :7162's
+   py_unbound.ini "File created" comment), NOT via pfb_log_iso_timestamp().
+   pfb_log_iso_timestamp()'s own comment scopes it explicitly to "pfBlockerNG's
+   log writers" (its 5 existing call sites are all managed-log-file writers);
+   dnsbl_alias_update()/pfBlockerNG_clearsqlite() write SQLite stat columns,
+   not log files, so reusing the log-writer helper would misrepresent what
+   these two functions are. This is a judgment call the brief explicitly left
+   open ("your call, but stay consistent with whichever pattern is already
+   dominant nearby") -- confirmed via grep that the bare literal IS the
+   dominant non-log-writer convention in this file.
+2. Added a `is_process_running()` PHPUnit double (tests/php/pfsense_doubles.php)
+   -- required to call pfBlockerNG_clearsqlite('cleardnsbl') for real in a
+   test (it reaches that function at runtime and no double existed). Strictly
+   additive, function_exists()-guarded, matches the file's own documented
+   convention; confirmed via a full phpunit re-run that no other test's
+   behaviour changed (same pass/skip/deprecation counts as before, +16 new
+   tests only).
+3. Wrote 2 new Tier-A ui_render tests (Update page + widget) covering the
+   format change specifically (not just relying on the existing generic
+   test_page_renders_clean sweep, which only proves "still renders, no PHP
+   error" -- not that the NEW format actually appears). Per the brief's own
+   explicit ask ("Tier-A ui_render for any page whose displayed date format
+   changed (the dashboard widget, the Update page)").
+None of the above weakens any CLAUDE.md MUST rule.
+
+--------------------------------------------------------------------------------
+FINAL ADR STATUS
+--------------------------------------------------------------------------------
+Unchanged: Accepted (flipped in Phase 9). This was the final phase (10 of 10)
+-- a non-gating follow-on; no further phases remain and no carry-forward is
+needed.
