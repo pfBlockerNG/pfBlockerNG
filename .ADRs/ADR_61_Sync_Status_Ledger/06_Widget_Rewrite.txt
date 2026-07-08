@@ -1,0 +1,107 @@
+================================================================================
+PHASE 6 PROMPT — Widget rewrite: icon logic + reporting list, ledger-driven
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_61_Sync_Status_Ledger/ADR.md   (read SS2.5, SS4 items 1-3/5/6, Semantics all)
+================================================================================
+
+ROLE
+IMPLEMENTER. Branch adr/61-sync-status-ledger (continue from Phase 5). One commit, pushed
+directly. Read/Edit/Write/Bash only -- never spawn sub-agents.
+
+WHY THIS PHASE EXISTS
+Every prior phase built and populated the ledger; the widget still reads none of it. This
+phase is the actual user-visible payoff: retire the four ad-hoc checks (dedup-only IP
+gate, dead OUT-OF-SYNC grep, monotonic py_error.log filesize, error.log FAIL-grep report)
+and make both rows symmetric, ledger-driven.
+
+REQUIRED READING
+- FIRST, read RESULTS/05_Results.txt. If missing, Phase 5 is not complete; STOP and
+  report.
+- .ADRs/ADR_61_Sync_Status_Ledger/ADR.md (SS1.1 full -- know exactly what you're
+  replacing; SS2.5; SS4 items 1,2,3,5,6; the full "Semantics that MUST be preserved"
+  list -- #1 and #7 are this phase's hard constraints).
+- RESULTS/01_Results.txt -- the frozen golden oracles this phase supersedes (read the
+  note there about which ones are scaffolding vs. permanent).
+- src/usr/local/www/widgets/widgets/pfblockerng.widget.php:585-648 (icons),
+  :446-513 (pfBlockerNG_get_failed) -- the CURRENT state after Phases 1-5 (unchanged by
+  them; this is the first phase that edits this file).
+- Phase 1's pfb_sync_status_list_open(); Phase 4's Python-side reader -- the merge point.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases ran;
+the prior RESULTS files and the live tree override this prompt on any conflict — verify
+each claim before acting on it, and flag contradictions loudly in the handoff.
+
+TEST MODE: red->green. This phase's fail-before/pass-after pairs supersede Phase 1's
+frozen-old-behavior oracle for the icon/report logic (that oracle was scaffolding, not a
+permanent pin — see RESULTS/01_Results.txt).
+
+ACTION PLAN (ordered)
+1. Icon logic, IP row: keep the enable_cb-off -> red branch UNCHANGED (Semantics #1).
+   Replace the yellow condition with: dedup-sanity-failed (unchanged trigger, now READ
+   from the ledger via Phase 2's writer instead of the widget's own exec()+grep -- delete
+   that direct exec() call) OR any open facility='ip' entry of ANY stage (download,
+   apply, dedup -- all fold into the same yellow trigger; the dedup case is just one
+   stage among several now, not a separately-coded branch).
+2. Icon logic, DNSBL row: keep the "is it live" red-branch gates UNCHANGED (Semantics
+   #1). Replace the yellow condition with: any open facility='dnsbl' entry, MERGED from
+   Phase 1's PHP ledger AND Phase 4's Python-side reader. DELETE the dead OUT-OF-SYNC
+   grep (:625-628 per the original ADR draft -- confirm current location) and the
+   py_error.log filesize check entirely.
+3. pfBlockerNG_get_failed(): rebuild from pfb_sync_status_list_open() (both facilities)
+   merged with Phase 4's Python-side entries, sorted/formatted to preserve today's UX --
+   each entry renders its message, and for a recognized pfB_*/DNSBL_*-prefixed item,
+   the SAME deep-link-to-editor behavior as today (Semantics #7). DELETE the error.log
+   grep entirely from this function.
+4. Confirm error.log and py_error.log are no longer read ANYWHERE in the widget files
+   (grep to prove it) -- they become pure write-only-from-the-widget's-perspective logs
+   from here on (still written by pfb_logger()/sys.stderr.write() as before -- untouched
+   producers, just no longer consumed by the dashboard).
+5. Add Tier-A ui_render coverage (CLAUDE.md www/ mandate, ADR-14): GET the dashboard
+   widget with (a) an empty ledger -- both rows green (when otherwise healthy),
+   empty reporting list; (b) a synthetically seeded ledger entry per facility -- that
+   row yellow, the entry's message + working link present in the reporting list. No PHP
+   errors/warnings, no new php_error.log line, per the standard ui_render bar.
+
+CONSTRAINTS
+- Tabs, uppercase TRUE/FALSE, PFBL-01/RequireConfigGateway/UppercaseBoolean clean.
+- Do NOT change the red/green "is it running" gates for either row (Semantics #1) --
+  ONLY the yellow-trigger logic changes.
+- Do NOT reintroduce any read of error.log/py_error.log in the widget (Semantics implicit
+  in SS2.5 -- these become pure operator logs).
+- Preserve the exact deep-link URL shape/behavior for recognized aliases (Semantics #7).
+
+VERIFICATION (all must pass before the phase is done)
+- Canonical PHP gates + Tier-A ui_render (CLAUDE.md "www/" row of the canonical-gates
+  table): `python3 -m pytest tests/smoke/ui -m ui_render --override-ini="addopts="`
+  (SMOKE_ADMIN_PASSWORD required -- a skip is not a pass).
+- Fail-before/pass-after, executed and pasted:
+  a. Before this phase's change (or via a scoped revert of just this file): an
+     enable_dup=off box with an open facility='ip' ledger entry (from Phase 2's writer,
+     already landed) still shows the IP row GREEN -- the exact asymmetry bug this ADR
+     targets, reproduced live. FAILS the new expectation (should be yellow).
+  b. After this phase: the SAME scenario shows yellow. PASS.
+  c. Same fail-before/pass-after pair for: DNSBL yellow no longer requiring
+     py_error.log content (an open ledger entry alone triggers it); the reporting list
+     showing a ledger-sourced entry with a working deep link.
+- grep confirms zero remaining reads of error.log/py_error.log/the dead OUT-OF-SYNC
+  string in the widget files.
+
+KILL-GATES (the orchestrator verifies these adversarially)
+- Manually seed a ledger entry (via Phase 1's pfb_sync_status_open() directly, not
+  through a full pipeline failure) and load the actual widget page (or its ui_render
+  test) -- confirm yellow + message + link appear, not just that unit tests pass in
+  isolation from the real render path.
+- Confirm the red-branch conditions for both rows are byte-identical pre/post this
+  phase's diff (diff-read, not just "tests still pass" -- a red case with no ledger
+  entries and no py_error.log content must still be red, and this specific case has no
+  ledger entry to make it accidentally look "healthy-yellow-instead-of-red").
+- Confirm every prior phase's oracle/regression test (Phases 1-5) is STILL green after
+  this phase -- this phase should not require editing any Phase 1-5 test file except the
+  explicitly-superseded oracle Phase 1's handoff flagged as scaffolding.
+
+HANDOFF (RESULTS/06_Results.txt, committed)
+State: exact diff summary of the widget rewrite; confirmation error.log/py_error.log are
+no longer read; the Tier-A ui_render test names/paths and their pass output; the
+fail-before/pass-after pair proving the enable_dup-independent IP yellow now works; full
+gate output including the live ui_render run.

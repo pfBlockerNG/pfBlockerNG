@@ -1,0 +1,101 @@
+================================================================================
+PHASE 2 PROMPT — Wire PHP-side IP writers + clearers
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_61_Sync_Status_Ledger/ADR.md   (read SS1.2, SS1.3, SS2.2, SS2 Semantics first)
+================================================================================
+
+ROLE
+IMPLEMENTER. Branch adr/61-sync-status-ledger (continue from Phase 1). One commit, pushed
+directly. Read/Edit/Write/Bash only -- never spawn sub-agents.
+
+WHY THIS PHASE EXISTS
+The ledger library exists (Phase 1) but nothing writes to it. This phase wires the THREE
+IP-side failure classes (download, dedup-sanity, pfctl apply) to open/close entries,
+alongside their EXISTING logging -- this phase changes what gets recorded, not what gets
+decided or logged today.
+
+REQUIRED READING
+- FIRST, read .ADRs/ADR_61_Sync_Status_Ledger/RESULTS/01_Results.txt -- the re-derived
+  coverage-matrix file:line table is authoritative over this prompt's own line numbers.
+  If it is missing, Phase 1 is not complete; STOP and report.
+- .ADRs/ADR_61_Sync_Status_Ledger/ADR.md (SS1.2 table, SS1.3, SS2.2, Semantics #2-#4).
+- The ledger library from Phase 1 (pfb_sync_status_open/close/list_open).
+- pfblockerng.inc: pfb_download_failure() and its two call sites (per Phase 1's matrix);
+  pfb_pfctl_table_op() and pfb_apply_alias_delta(); pfblockerng.sh:1547-1552 (dedup
+  sanity check text) and whatever PHP path currently execs/reads it for the widget.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases ran;
+the prior RESULTS files and the live tree override this prompt on any conflict — verify
+each claim before acting on it, and flag contradictions loudly in the handoff.
+
+TEST MODE: red->green. Every writer/clearer pair in this phase is pinned by an executed
+fail-before/pass-after run (this phase's tests must FAIL on pre-Phase-2 code and PASS
+after — see VERIFICATION).
+
+ACTION PLAN (ordered)
+1. Download fail/success: at the site(s) that call pfb_download_failure() on a FALSE
+   pfb_download() return, add pfb_sync_status_open('ip', <alias/header>, 'download',
+   <human message incl. what's knowable -- HTTP status if available, else the existing
+   log text>, $pfb['dbdir']). At the corresponding SUCCESS path (the code that consumes
+   the downloaded content when pfb_download() returns TRUE for that same item), add the
+   paired pfb_sync_status_close() call for the SAME (facility,item,stage) key. Verify from
+   source whether a DNSBL-classed feed also flows through this same call site (per the
+   ADR's SS1.2 uncertainty flag) -- if so it opens facility='dnsbl' there instead; do not
+   assume, check $format/$type at the call site.
+2. Dedup sanity: find (or add, if none exists) the PHP path that already produces/reads
+   the shell's "Sanity check [ PASSED / FAILED ]" line. On FAILED, open('ip', 'dedup',
+   'dedup', <the FAILED detail line(s)>); on PASSED, close() the same key. This REPLACES
+   the widget's own direct exec()+grep for this specific signal (Phase 6 removes the
+   widget-side grep; this phase only needs the write/clear to exist and be correct).
+3. IP apply fail/success: in pfb_pfctl_table_op() (or its caller, pfb_apply_alias_delta()
+   -- pick whichever has access to a stable per-alias item identity), on a pfctl failure
+   add open('ip', <table/alias>, 'apply', <the existing error message text>) ALONGSIDE the
+   existing pfb_logger(..., 1) call -- do NOT change that call's logtype (issue #980 owns
+   that separately). On the next successful apply for the same alias, close() the key.
+4. Every open() call in this phase MUST have a close() call landing in this SAME phase
+   for the same (facility,item,stage) triple -- ADR Semantics #4 is a hard gate, not a
+   suggestion.
+
+CONSTRAINTS
+- Tabs, uppercase TRUE/FALSE, PFBL-01/RequireConfigGateway/UppercaseBoolean clean.
+- Do NOT touch pfb_pfctl_table_op()'s existing pfb_logger(..., 1) call -- leave the
+  logging level exactly as-is (issue #980, filed separately, not this ADR's scope).
+- Do NOT wire DNSBL-side writers here (Phase 3) or the Python side (Phase 4) or tick
+  reconciliation (Phase 5) or any widget change (Phase 6).
+- Do NOT change what triggers a download/apply attempt, its retry cadence, or any
+  existing decision logic -- purely additive instrumentation this phase.
+
+VERIFICATION (all must pass before the phase is done)
+- Canonical PHP gates (php -l, phpunit, phpstan --memory-limit=1G, phpcs).
+- Fail-before/pass-after per writer, each an EXECUTED run with pasted output:
+  a. Simulate a download failure (inject via the existing test seams for
+     pfb_download()/pfb_download_failure() if any exist, else add a minimal seam) ->
+     assert pfb_sync_status_list_open() contains the expected entry. FAILS on
+     pre-Phase-2 code (no entry ever appears), PASSES after.
+  b. Simulate the paired success -> assert the entry is gone.
+  c. Same pair for dedup sanity (FAILED opens, PASSED closes).
+  d. Same pair for pfctl apply (failure opens, success closes) -- mock/stub pfctl's
+     exit code via whatever seam pfb_pfctl_table_op() already offers for testing (check
+     tests/php/ for an existing pfctl-stubbing pattern before inventing a new one).
+- Re-opening an already-open key (two consecutive failures) is asserted to NOT duplicate
+  (list_open() still returns exactly one entry for that key, with refreshed message).
+
+KILL-GATES (the orchestrator verifies these adversarially)
+- For every open() added this phase, grep for its paired close() and confirm it lands in
+  THIS phase's diff, not deferred -- a writer without a same-phase clearer is a Semantics
+  #4 violation and blocks the phase.
+- Diff-read: pfb_logger(..., 1) at the pfctl-failure site is byte-identical to before
+  (issue #980 untouched).
+- The download-fail test actually fails against a git-stash-free revert of just this
+  phase's hunk (use a plain Edit-based revert-then-restore, NOT git stash/checkout per
+  this session's established practice -- git stash is repo-wide and can collide with a
+  parallel worktree; if that constraint doesn't apply in your environment, standard
+  git-based red-proof is fine, but confirm you are not sharing refs with another live
+  session first).
+
+HANDOFF (RESULTS/02_Results.txt, committed)
+State: exact file:line for every writer+clearer pair added; whether the download call
+site turned out to be IP-only, DNSBL-only, or shared (and how that was resolved); the
+dedup-sanity PHP read path (new or pre-existing) and its location; red-before/green-after
+output for each of the four writer/clearer pairs; gate output.

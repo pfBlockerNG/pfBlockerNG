@@ -1,0 +1,110 @@
+================================================================================
+PHASE 4 PROMPT — Python-side DNSBL parse-stage status file
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_61_Sync_Status_Ledger/ADR.md   (read SS1.2, SS2.3, SS7 reject-criteria first)
+================================================================================
+
+ROLE
+IMPLEMENTER. Branch adr/61-sync-status-ledger (continue from Phase 3). One commit, pushed
+directly. Read/Edit/Write/Bash only -- never spawn sub-agents. This is the ADR's most
+novel phase (new cross-process persistence) -- read the ADR's SS7 reject/fallback
+criteria before starting, in case the chroot boundary proves harder than expected.
+
+WHY THIS PHASE EXISTS
+pfb_unbound.py's parse/load failures only reach py_error.log today -- freetext, no
+structured item/reason the widget can enumerate. This phase gives Python its OWN
+structured status file (mirroring the pfb_py_reload/.applied marker convention: Python
+writes it, PHP only ever reads it) so DNSBL parse-stage failures become as visible and
+symmetric as everything else this ADR wires.
+
+REQUIRED READING
+- FIRST, read RESULTS/03_Results.txt. If missing, Phase 3 is not complete; STOP and
+  report.
+- .ADRs/ADR_61_Sync_Status_Ledger/ADR.md (SS1.2's Python sys.stderr.write table, SS2.3,
+  SS7's reject-criteria fallback -- know this escape hatch before you need it).
+- pfb_unbound.py: every sys.stderr.write(...) site named in the ADR's SS1.2 table (or
+  RESULTS/01's re-derived version) -- read enough surrounding code at each to know what
+  "item" identity is available (a filename? a generic subsystem?) and whether a
+  corresponding SUCCESS point exists nearby to pair a clear with.
+- pfb_unbound.py:1004-1021 (the pfb_py_reload / pfb_py_reload.applied marker convention)
+  -- mirror its atomic-write-in-chroot pattern exactly for the new file.
+- CLAUDE.md Python rules: stdlib-only (json is fine), 4-space indent, type hints,
+  `from __future__ import annotations`.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases ran;
+the prior RESULTS files and the live tree override this prompt on any conflict — verify
+each claim before acting on it, and flag contradictions loudly in the handoff.
+
+TEST MODE: red->green. Every writer/clearer pair and every hostile-input case for the
+PHP-side reader are pinned by an executed fail-before/pass-after run.
+
+ACTION PLAN (ordered)
+1. Add a new file (chroot-relative, alongside pfb_py_reload -- confirm the exact sibling
+   directory from source) written EXCLUSIVELY by Python, e.g. pfb_py_status.json,
+   {facility:'dnsbl', item, stage:'parse', message, first_seen, last_seen} entries, same
+   shape as the PHP ledger for consistency (not literally shared code -- Python owns its
+   own read/open/close/list functions in pure Python, using stdlib json + the SAME
+   atomic-write-then-rename pattern the existing marker files use).
+2. At each sys.stderr.write(...) site from the coverage matrix that names a concrete file
+   (pfb_py_zone, pfb_py_data, pfb_py_whitelist, pfb_py_hsts, etc.), add the paired
+   open()/close() calls: open on the exception path (item = the file path), close on the
+   NEXT successful load of that same file (find or confirm the successful-load code path
+   for each -- do not assume one exists without checking).
+3. For subsystem-level failures with no file identity (module-load failures, the applied-
+   marker write failure itself) -- decide per-site whether a stable non-file item identity
+   exists (e.g. the module name) to key on, or whether that specific site is a documented
+   deferral (not every stderr.write needs to become a ledger entry -- state which sites
+   you wired and which you deliberately left as freetext-only, with a one-line reason
+   each, in the handoff. This is a coverage-matrix row, not a silent omission).
+4. Add a PHP-side read-only helper (pfblockerng_extra.inc or pfblockerng.inc, wherever
+   Phase 1's pfb_sync_status_list_open() lives) that reads this Python-owned file and
+   returns entries in the SAME shape, for Phase 6's merge. PHP NEVER writes to this file.
+5. Hostile-input rows for the PHP reader (required, not optional): file absent, empty
+   file, truncated/corrupt JSON, a JSON value of the wrong type (e.g. a bare string
+   instead of an array), a file the PHP process can read but whose content references a
+   nonexistent item -- every case must degrade to "no open Python-side entries," never a
+   PHP warning/exception surfaced to the widget.
+
+CONSTRAINTS
+- Python: stdlib only, 4-space indent, type hints, `from __future__ import annotations`,
+  no bare `except:` (except Exception minimum).
+- PHP: tabs, uppercase TRUE/FALSE.
+- Do NOT have PHP write to the Python-owned file, or Python write to the PHP-owned
+  pfb_sync_status.json -- the two-file boundary (ADR SS2.3) is load-bearing, not
+  incidental.
+- Do NOT wire tick reconciliation (Phase 5) or the widget (Phase 6) yet.
+- If the chroot boundary genuinely blocks a clean implementation (confirm this with an
+  actual attempt + evidence before invoking it -- do not pre-emptively give up), fall back
+  per the ADR's SS7 reject-criteria (a bounded "growth since last tick" signal instead of
+  full structured entries) and say so explicitly as DONE-WITH-DEVIATION in the handoff --
+  do not silently narrow scope without flagging it.
+
+VERIFICATION (all must pass before the phase is done)
+- Canonical gates: python3 -m pytest (Python-side helpers), ruff check . / ruff format
+  --check ., php -l / phpunit / phpstan --memory-limit=1G / phpcs (PHP-side reader).
+- Fail-before/pass-after, executed and pasted: for at least 2 of the file-identified
+  sys.stderr.write sites (pick the two the coverage matrix marks most representative --
+  e.g. one already-parenthesized as a "Failed to load: {file}" pattern, one different
+  shape if any exists) -- simulate the failure, assert the Python-side file gains the
+  entry; simulate the paired success, assert it clears.
+- Every hostile-input row from ACTION PLAN step 5 has its own PHPUnit case with the
+  expected "reads as empty" outcome asserted explicitly (not just "doesn't crash" --
+  assert the actual returned value is empty/safe).
+
+KILL-GATES (the orchestrator verifies these adversarially)
+- grep the touched pfb_unbound.py sites: confirm the EXISTING sys.stderr.write(...) text
+  is unchanged (this phase adds a parallel structured write, never replaces the freetext
+  one).
+- Confirm via grep that no PHP code path writes the new Python-owned file path, and no
+  Python code path writes pfb_sync_status.json.
+- If DONE-WITH-DEVIATION was invoked (chroot fallback), the handoff's stated reason is
+  backed by an actual attempted-and-failed implementation artifact (an error message, a
+  permission-denial output), not a hypothetical.
+
+HANDOFF (RESULTS/04_Results.txt, committed)
+State: the new Python-owned file's exact path (chroot-relative and host-absolute);
+which sys.stderr.write sites got structured writers+clearers and which were deliberately
+left freetext-only (with reasons); the PHP-side reader's location/signature; every
+hostile-input case and its asserted outcome; DONE-WITH-DEVIATION details if invoked; gate
+output.
