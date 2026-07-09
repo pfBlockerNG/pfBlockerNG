@@ -1894,6 +1894,13 @@ function pfb_dnsblip_mark_reprocess($action, string $vtype): void {
 	}
 }
 
+// DNSBLIP's "download" is a local-file copy of a just-rebuilt source, not a network
+// fetch -- the reuse-skip optimization (meant for real feeds) must never apply to it,
+// or a same-pass rebuild is silently stranded until the next .ip source change. (#1002)
+function pfb_ip_reuse_skip_active(bool $reuse_on, bool $orig_exists, bool $is_dnsblip): bool {
+	return $reuse_on && $orig_exists && !$is_dnsblip;
+}
+
 // v6 stays OPTIONAL (ADR-13 §7 pivot): a missing v6 VIP never fails validation, even when
 // the resolver listens on IPv6 — pfb_global surfaces that as a non-blocking warning, not a
 // force-disable. The validator only checks the VIPs that ARE configured (existence,
@@ -17753,7 +17760,7 @@ function sync_package_pfblockerng($cron='') {
 							pfb_logger("{$log}", 1);
 						}
 						else {
-							if ($pfbreuse == 'on' && file_exists("{$pfborig}/{$header}.orig")) {
+							if (pfb_ip_reuse_skip_active($pfbreuse == 'on', file_exists("{$pfborig}/{$header}.orig"), isset($list['dnsblip']))) {
 								$log = "\n[ {$header} ]{$logtab} Reload";
 							} else {
 								$log = "\n[ {$header} ]{$logtab} Downloading update";
@@ -17796,7 +17803,7 @@ function sync_package_pfblockerng($cron='') {
 								}
 
 								// Determine if	list needs to be downloaded or reuse previously downloaded file.
-								if ($pfbreuse == 'on' && file_exists("{$file_dwn}.orig")) {
+								if (pfb_ip_reuse_skip_active($pfbreuse == 'on', file_exists("{$file_dwn}.orig"), isset($list['dnsblip']))) {
 									// File exists/reuse
 
 									// Process Emerging Threats IQRisk if required
