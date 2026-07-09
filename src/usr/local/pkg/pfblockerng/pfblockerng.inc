@@ -6666,6 +6666,73 @@ function pfb_dnsbl_hash_line_classify(string $line): array {
 }
 
 
+// ADR-62: the shape shared by the 6 DNSBL IP-collection call sites (3 v4 + 3 v6
+// pairs). Asymmetric by design (kept, not flattened): v4 sanitizes $candidate_value
+// THEN validates the SANITIZED result; v6 validates $candidate_value RAW (never
+// sanitized) and appends it as-is. $guard_value is the family-check target (equal to
+// $candidate_value at two sites; a distinct CSV column at the csv:pon site).
+// $pfb['updateip']/$ipcount and any 'continue' differ per call site and stay there;
+// this returns TRUE iff an IP was appended.
+function pfb_dnsbl_collect_feed_ip(string $guard_value, string $candidate_value, bool $custom, array &$domain_data_ip, array &$domain_data_ip6): bool {
+	if (is_ipaddrv4($guard_value)) {
+		$parsed = sanitize_ipaddr($candidate_value, $custom, 'Disabled');
+		if (validate_ipv4($parsed)) {
+			$domain_data_ip[] = $parsed;
+			return TRUE;
+		}
+		return FALSE;
+	}
+	if (is_ipaddrv6($guard_value)) {
+		if (validate_ipv6($candidate_value)) {
+			$domain_data_ip6[] = $candidate_value;
+			return TRUE;
+		}
+		return FALSE;
+	}
+	return FALSE;
+}
+
+
+// ADR-62: blank/comment/ABP-marker capture guard for the (not-yet-wired) universal
+// control-line skip. Mirrors pfb_is_blank_or_comment_line's contract: blank detection is
+// an exact '' match, so the CALLER must trim() first. Deliberately excludes '#' --
+// pfb_dnsbl_hash_line_classify() owns it (side effects). A bracketed IPv6 literal is an
+// ADDRESS, never skipped as an ABP section marker (ADR-62 §2 Decision 4).
+function pfb_dnsbl_is_skippable_control_line(string $line): bool {
+	if ($line === '' || str_starts_with($line, '!') || str_starts_with($line, '//')) {
+		return TRUE;
+	}
+	if (str_starts_with($line, '[') && str_ends_with($line, ']')) {
+		return pfb_dnsbl_unbracket_ip6($line) === $line;
+	}
+	return FALSE;
+}
+
+
+// ADR-62: capture guard for the (not-yet-broadened) per-line ABP shape set --
+// answers "should Python's parse_abp() decide this line?", never parses it itself.
+// Mirrors parse_abp()/_dnsbl_parse_abp_regex()'s recognised shapes: '||'/'@@' anchors,
+// a '/regex/' (optional trailing '$options') block/allow rule, and the element-hiding
+// marker family. A bare domain line is deliberately FALSE (stays on the plain path).
+function pfb_dnsbl_is_abp_rule_line(string $line): bool {
+	if (str_starts_with($line, '||') || str_starts_with($line, '@@')) {
+		return TRUE;
+	}
+	if (str_contains($line, '##') || str_contains($line, '#@#') ||
+	    str_contains($line, '#?#') || str_contains($line, '#%#') || str_contains($line, '#$#')) {
+		return TRUE;
+	}
+	if (str_starts_with($line, '/')) {
+		if (str_ends_with($line, '/') && strlen($line) > 1) {
+			return TRUE;
+		}
+		$marker = strrpos($line, '/$');
+		return ($marker !== FALSE && $marker > 0);
+	}
+	return FALSE;
+}
+
+
 // ADR-10: atomically publish a file to the chroot (/var/unbound). Stage into a
 // temp file ON THE SAME FILESYSTEM (same directory) -> flush + fsync the data ->
 // fix ownership -> atomic rename() over the final path. The plugin only ever reads
@@ -16450,16 +16517,7 @@ function sync_package_pfblockerng($cron='') {
 												if ($pfb['dnsbl_ip'] != 'Disabled') {
 													$abp_ip = pfb_dnsbl_abp_extract_ip($line);
 													if ($abp_ip !== '') {
-														if (is_ipaddrv4($abp_ip)) {
-															$parsed = sanitize_ipaddr($abp_ip, $custom, 'Disabled');
-															if (validate_ipv4($parsed)) {
-																$domain_data_ip[] = $parsed;
-																$pfb['updateip'] = TRUE;
-																$ipcount++;
-															}
-														}
-														elseif (is_ipaddrv6($abp_ip) && validate_ipv6($abp_ip)) {
-															$domain_data_ip6[] = $abp_ip;
+														if (pfb_dnsbl_collect_feed_ip($abp_ip, $abp_ip, $custom, $domain_data_ip, $domain_data_ip6)) {
 															$pfb['updateip'] = TRUE;
 															$ipcount++;
 														}
@@ -16600,24 +16658,12 @@ function sync_package_pfblockerng($cron='') {
 															$line		= $csvline[2];
 															$csv_found	= TRUE;
 
-															// Collect additional IP csv entry
-															if (is_ipaddrv4($csvline[0]) &&
-															    $pfb['dnsbl_ip'] != 'Disabled') {
-																$parsed = sanitize_ipaddr($line, $custom, 'Disabled');
-																if (validate_ipv4($parsed)) {
-																	$domain_data_ip[] = $parsed;
-																	$pfb['updateip'] = TRUE;
-																	$ipcount++;
-																}
-															}
-															// Collect additional IPv6 csv entry
-															if (is_ipaddrv6($csvline[0]) &&
-															    $pfb['dnsbl_ip'] != 'Disabled') {
-																if (validate_ipv6($line)) {
-																	$domain_data_ip6[] = $line;
-																	$pfb['updateip'] = TRUE;
-																	$ipcount++;
-																}
+															// Collect additional IP csv entry (guard value is
+															// csvline[0], the collected value is line).
+															if ($pfb['dnsbl_ip'] != 'Disabled' &&
+															    pfb_dnsbl_collect_feed_ip($csvline[0], $line, $custom, $domain_data_ip, $domain_data_ip6)) {
+																$pfb['updateip'] = TRUE;
+																$ipcount++;
 															}
 														}
 														break;
@@ -16759,26 +16805,14 @@ function sync_package_pfblockerng($cron='') {
 											}
 											$line = trim($line);
 
-											// Collect any IPs found in domain feed
-											if (is_ipaddrv4($line)) {
-												if ($pfb['dnsbl_ip'] != 'Disabled') {
-													$parsed = sanitize_ipaddr($line, $custom, 'Disabled');
-													if (validate_ipv4($parsed)) {
-														$domain_data_ip[] = $parsed;
-														$pfb['updateip'] = TRUE;
-														$ipcount++;
-													}
-												}
-												continue;
-											}
-											// Collect any IPv6 IPs found in domain feed
-											if (is_ipaddrv6($line)) {
-												if ($pfb['dnsbl_ip'] != 'Disabled') {
-													if (validate_ipv6($line)) {
-														$domain_data_ip6[] = $line;
-														$pfb['updateip'] = TRUE;
-														$ipcount++;
-													}
+											// Collect any IPs (v4 or v6) found in domain feed. The family
+											// check gates the 'continue' regardless of dnsbl_ip -- an IP
+											// line never falls through to domain validation either way.
+											if (is_ipaddrv4($line) || is_ipaddrv6($line)) {
+												if ($pfb['dnsbl_ip'] != 'Disabled' &&
+												    pfb_dnsbl_collect_feed_ip($line, $line, $custom, $domain_data_ip, $domain_data_ip6)) {
+													$pfb['updateip'] = TRUE;
+													$ipcount++;
 												}
 												continue;
 											}
