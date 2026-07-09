@@ -306,10 +306,9 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 
 		$region = substr($source, $start, $end - $start);
 
-		// \s*\( (not a literal "(") so neither call is evadable by reformatting with
-		// whitespace before the parenthesis; pfb_sync_status_open/close are the only
-		// two ledger-mutating primitives (grepped -- no pfb_sync_status_refresh() or
-		// similar exists), so this pair is exhaustive.
+		// \s*\( (not a literal "(") so neither call is evadable via whitespace before
+		// the parenthesis; pfb_sync_status_open/close are the only two ledger-mutating
+		// primitives (grepped -- no pfb_sync_status_refresh() exists), exhaustive.
 		$this->assertDoesNotMatchRegularExpression('/pfb_sync_status_open\s*\(/', $region,
 			'a restart-fallback branch must never open a ledger entry directly -- only the shared tail may');
 		$this->assertDoesNotMatchRegularExpression('/pfb_sync_status_close\s*\(/', $region,
