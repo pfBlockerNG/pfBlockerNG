@@ -169,6 +169,125 @@ final class PfbSyncStatusIpWritersTest extends TestCase
 		);
 	}
 
+	/**
+	 * Issue #1048: source-inspection pin -- the per-row download loop must never
+	 * close the ledger entry directly from a row's success branch (that let a
+	 * later feed's success mask an earlier feed's still-open failure); the close
+	 * must be gated by the once-per-alias-pass $pfb_dl_failed flag instead. RED on
+	 * pre-fix code: the per-row close call is present, the gated call is absent.
+	 */
+	public function testIpDownloadCloseFiresOncePerAliasPassNotPerRow(): void
+	{
+		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
+		$this->assertNotFalse($source, 'pfblockerng.inc must be readable');
+
+		$this->assertDoesNotMatchRegularExpression(
+			'/unlink_if_exists\("\{\$pfbfolder\}\/\{\$header\}\.fail"\);\s*\n\s*pfb_ip_download_ledger_update\(TRUE,/',
+			$source,
+			'a row\'s success branch must not close the download ledger directly -- masks a sibling row\'s failure'
+		);
+		$this->assertMatchesRegularExpression(
+			'/if \(!\$pfb_dl_failed\) \{\s*\n\s*pfb_ip_download_ledger_update\(TRUE, \$alias, \'\', \$pfb\[\'dbdir\'\]\);/',
+			$source,
+			'the close call must be gated by the once-per-alias-pass $pfb_dl_failed flag'
+		);
+	}
+
+	/**
+	 * Mirrors the row-loop's per-alias-pass contract (issue #1048): the FALSE
+	 * (open) ledger call fires per failing row, and the TRUE (close) call fires
+	 * ONCE after all rows -- iff none failed. Drives the REAL production ledger
+	 * helper in the exact call pattern the fixed loop now follows
+	 * (sync_package_pfblockerng() itself has no PHPUnit harness -- too heavy to
+	 * invoke, see testDownloadCallSitesKeyOnTheAliasNotTheHeader's docblock --
+	 * so this is the primary functional proof of the contract, supplemented by
+	 * the source-inspection pin above).
+	 *
+	 * @param bool[] $rowOutcomes TRUE = row succeeded, FALSE = row failed, in order.
+	 */
+	private function runIpAliasPass(string $alias, array $rowOutcomes): void
+	{
+		$failed = FALSE;
+		foreach ($rowOutcomes as $i => $ok) {
+			if (!$ok) {
+				$failed = TRUE;
+				pfb_ip_download_ledger_update(FALSE, $alias, "[ {$alias} - row{$i} ] Download FAIL", $this->dir);
+			}
+		}
+		if (!$failed) {
+			pfb_ip_download_ledger_update(TRUE, $alias, '', $this->dir);
+		}
+	}
+
+	public function testAliasPassFailThenSucceedLeavesEntryOpen(): void
+	{
+		$this->runIpAliasPass('pfB_Example_v4', [FALSE, TRUE]);
+
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'ip'),
+			'a failing row followed by a succeeding sibling row must leave the entry OPEN -- a per-row close would mask this'
+		);
+	}
+
+	public function testAliasPassSucceedThenFailLeavesEntryOpen(): void
+	{
+		$this->runIpAliasPass('pfB_Example_v4', [TRUE, FALSE]);
+
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'ip'),
+			'a succeeding row followed by a failing sibling row must leave the entry OPEN'
+		);
+	}
+
+	public function testAliasPassAllSuccessMultiFeedClosesEntry(): void
+	{
+		// Before-state: genuinely open first, so the close below is a real transition.
+		$this->runIpAliasPass('pfB_Example_v4', [FALSE]);
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'ip'));
+
+		$this->runIpAliasPass('pfB_Example_v4', [TRUE, TRUE, TRUE]);
+
+		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'ip'),
+			'an all-success multi-feed pass must close the entry'
+		);
+	}
+
+	public function testAliasPassSingleFeedFailOpensEntry(): void
+	{
+		$this->runIpAliasPass('pfB_Example_v4', [FALSE]);
+
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'ip'),
+			'a single-feed alias with one failing row must open the entry'
+		);
+	}
+
+	public function testAliasPassSingleFeedSuccessClosesEntry(): void
+	{
+		// Before-state: genuinely open first (regression pin for the pre-#1048 behaviour).
+		$this->runIpAliasPass('pfB_Example_v4', [FALSE]);
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'ip'));
+
+		$this->runIpAliasPass('pfB_Example_v4', [TRUE]);
+
+		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'ip'),
+			'a single-feed alias with its one row succeeding must close the entry (regression)'
+		);
+	}
+
+	public function testAliasPassAllReusedClosesPreviouslyOpenEntry(): void
+	{
+		// Before-state: genuinely open first.
+		$this->runIpAliasPass('pfB_Example_v4', [FALSE]);
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'ip'));
+
+		// An all-reused pass makes ZERO ledger calls inside the loop (no row ever
+		// hits the download branch) -- $pfb_dl_failed stays FALSE the whole pass,
+		// so the post-loop close still fires.
+		$this->runIpAliasPass('pfB_Example_v4', []);
+
+		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'ip'),
+			'an all-reused pass (zero download attempts) must still close a previously-open entry'
+		);
+	}
+
 	// -----------------------------------------------------------------------
 	// Pair 2 — dedup sanity FAILED/PASSED (pfb_sync_status_dedup_check)
 	// -----------------------------------------------------------------------

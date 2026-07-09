@@ -209,6 +209,124 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		);
 	}
 
+	/**
+	 * Issue #1048: source-inspection pin -- the per-row download loop must never
+	 * close the ledger entry directly from a row's success branch (that let a
+	 * later feed's success mask an earlier feed's still-open failure); the close
+	 * must be gated by the once-per-alias-pass $pfb_dl_failed flag instead. RED on
+	 * pre-fix code: the per-row close call is present, the gated call is absent.
+	 */
+	public function testDnsblDownloadCloseFiresOncePerAliasPassNotPerRow(): void
+	{
+		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
+		$this->assertNotFalse($source, 'pfblockerng.inc must be readable');
+
+		$this->assertDoesNotMatchRegularExpression(
+			'/unlink_if_exists\("\{\$pfbfolder\}\/\{\$header\}\.fail"\);\s*\n\s*pfb_dnsbl_download_ledger_update\(TRUE,/',
+			$source,
+			'a row\'s success branch must not close the download ledger directly -- masks a sibling row\'s failure'
+		);
+		$this->assertMatchesRegularExpression(
+			'/if \(!\$pfb_dl_failed\) \{\s*\n\s*pfb_dnsbl_download_ledger_update\(TRUE, \$alias, \'\', \$pfb\[\'dbdir\'\]\);/',
+			$source,
+			'the close call must be gated by the once-per-alias-pass $pfb_dl_failed flag'
+		);
+	}
+
+	/**
+	 * Mirrors the row-loop's per-alias-pass contract (issue #1048): the FALSE
+	 * (open) ledger call fires per failing row, and the TRUE (close) call fires
+	 * ONCE after all rows -- iff none failed. Drives the REAL production ledger
+	 * helper in the exact call pattern the fixed loop now follows (the loop
+	 * itself has no PHPUnit harness -- too heavy to invoke, see the class
+	 * docblock -- so this is the primary functional proof of the contract,
+	 * supplemented by the source-inspection pin above).
+	 *
+	 * @param bool[] $rowOutcomes TRUE = row succeeded, FALSE = row failed, in order.
+	 */
+	private function runDnsblAliasPass(string $alias, array $rowOutcomes): void
+	{
+		$failed = FALSE;
+		foreach ($rowOutcomes as $i => $ok) {
+			if (!$ok) {
+				$failed = TRUE;
+				pfb_dnsbl_download_ledger_update(FALSE, $alias, "[ {$alias} - row{$i} ] Download FAIL", $this->dir);
+			}
+		}
+		if (!$failed) {
+			pfb_dnsbl_download_ledger_update(TRUE, $alias, '', $this->dir);
+		}
+	}
+
+	public function testAliasPassFailThenSucceedLeavesEntryOpen(): void
+	{
+		$this->runDnsblAliasPass('DNSBL_Example', [FALSE, TRUE]);
+
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'dnsbl'),
+			'a failing row followed by a succeeding sibling row must leave the entry OPEN -- a per-row close would mask this'
+		);
+	}
+
+	public function testAliasPassSucceedThenFailLeavesEntryOpen(): void
+	{
+		$this->runDnsblAliasPass('DNSBL_Example', [TRUE, FALSE]);
+
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'dnsbl'),
+			'a succeeding row followed by a failing sibling row must leave the entry OPEN'
+		);
+	}
+
+	public function testAliasPassAllSuccessMultiFeedClosesEntry(): void
+	{
+		// Before-state: genuinely open first, so the close below is a real transition.
+		$this->runDnsblAliasPass('DNSBL_Example', [FALSE]);
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'dnsbl'));
+
+		$this->runDnsblAliasPass('DNSBL_Example', [TRUE, TRUE, TRUE]);
+
+		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'dnsbl'),
+			'an all-success multi-feed pass must close the entry'
+		);
+	}
+
+	public function testAliasPassSingleFeedFailOpensEntry(): void
+	{
+		$this->runDnsblAliasPass('DNSBL_Example', [FALSE]);
+
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'dnsbl'),
+			'a single-feed alias with one failing row must open the entry'
+		);
+	}
+
+	public function testAliasPassSingleFeedSuccessClosesEntry(): void
+	{
+		// Before-state: genuinely open first (regression pin for the pre-#1048 behaviour).
+		$this->runDnsblAliasPass('DNSBL_Example', [FALSE]);
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'dnsbl'));
+
+		$this->runDnsblAliasPass('DNSBL_Example', [TRUE]);
+
+		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'dnsbl'),
+			'a single-feed alias with its one row succeeding must close the entry (regression)'
+		);
+	}
+
+	public function testAliasPassAllReusedClosesPreviouslyOpenEntry(): void
+	{
+		// Before-state: genuinely open first.
+		$this->runDnsblAliasPass('DNSBL_Example', [FALSE]);
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'dnsbl'));
+
+		// An all-reused pass makes ZERO ledger calls inside the loop (no row ever
+		// hits the download branch) -- $pfb_dl_failed stays FALSE the whole pass,
+		// so the post-loop close still fires.
+		$this->runDnsblAliasPass('DNSBL_Example', []);
+
+		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'dnsbl'),
+			'an all-reused pass (zero download attempts) must still close a previously-open entry'
+		);
+	}
+
 	// -----------------------------------------------------------------------
 	// pfb_reload_unbound() end-to-end -- restart-fallback reaches a converged tail
 	// -----------------------------------------------------------------------
