@@ -74,19 +74,25 @@ def find_violations(diff_text: str) -> list[Violation]:
     violations: list[Violation] = []
     path: str | None = None
     lineno = 0
+    in_hunk = False
     for raw in diff_text.splitlines():
-        if raw.startswith("+++ "):
-            # _git_diff pins the b/ prefix; a space-bearing path still gets git's
-            # disambiguation tab appended — strip it. A control-char path stays
-            # quoted even under core.quotePath=false and is skipped (absurd corner).
+        if raw.startswith("diff --git"):
+            path = None
+            in_hunk = False
+            continue
+        if not in_hunk and raw.startswith("+++ "):
+            # Header only before a section's first @@ -- inside a hunk an added
+            # "++..." line renders identically and must be scanned, not misread
+            # as one. Strip git's disambiguation tab from a space-bearing path.
             name = raw[4:]
             path = name[2:].split("\t", 1)[0] if name.startswith("b/") else None
             continue
         if raw.startswith("@@"):
             m = re.match(r"@@ -\S+ \+(\d+)", raw)
             lineno = int(m.group(1)) if m else 0
+            in_hunk = True
             continue
-        if raw.startswith("+") and not raw.startswith("+++"):
+        if in_hunk and raw.startswith("+"):
             line = raw[1:]
             if path is not None and _in_scope(path) and _ESCAPE not in line.lower():
                 for pattern, reason in _PATTERNS:
@@ -119,7 +125,10 @@ def _git_diff(args: list[str]) -> str:
             *args,
         ],
         capture_output=True,
-        text=True,
+        # A non-UTF-8 byte anywhere in the diff must not crash the whole run
+        # with an UnicodeDecodeError -- decode lossily instead of raising.
+        encoding="utf-8",
+        errors="replace",
         check=True,
     )
     return out.stdout
