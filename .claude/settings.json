@@ -3,7 +3,7 @@
   "env": {
     "SHELL": "bash",
     "MCP_TIMEOUT": "120000",
-    "TS_BASH_COMPACT": "1",
+    "TS_BASH_COMPACT": "0",
     "TS_BASH_REWRITE": "1"
   },
   "enableAllProjectMcpServers": true,

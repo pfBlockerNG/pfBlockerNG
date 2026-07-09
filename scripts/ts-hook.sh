@@ -4,6 +4,10 @@
 # scripts/mcp-token-savior.sh installs. Pass-through no-op when the venv is absent
 # (first session, before the MCP launcher has installed it).
 # Env (optional): TS_VENV — venv location (default: ${XDG_CACHE_HOME:-$HOME/.cache}/token-savior/venv).
+# TS_BASH_REWRITE/TS_BASH_COMPACT come from .claude/settings.json env (rewrite on,
+# compact off): the compact git compactors parse only human-format output, so combined
+# with the rewriter's porcelain/oneline forms they render dirty trees as "clean" and
+# diffs/logs as empty (token-savior-recall 4.4.1).
 set -eu
 
 py="${TS_VENV:-${XDG_CACHE_HOME:-$HOME/.cache}/token-savior/venv}/bin/python3"
