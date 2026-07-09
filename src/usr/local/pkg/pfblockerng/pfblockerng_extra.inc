@@ -897,9 +897,10 @@ function pfb_cfg_registry(): array
 		// ADR-08: IDN mode — adopted into the gateway as a PfbIdnMode enum (ADR-28
 		// reframe: preserve behaviour on upgrade, not byte-identical storage). Read
 		// normalises legacy 'on' -> All; write persists the canonical token
-		// ('all'|'confusable'|'off'), so a stored legacy 'on'/'' migrates on next save
-		// to a behaviour-equivalent value. Downgrade-safe: older releases string-compared
-		// these tokens, so an unknown token falls through to their off default.
+		// ('on'=All | 'confusable' | 'off'), reusing the pre-4.0.0 'on' token so All
+		// round-trips with zero migration. Legacy '' and the 4.0.0-alpha 'all' token
+		// read as Off. Downgrade-safe: older releases string-compared these tokens,
+		// so an unknown token falls through to their off default.
 		// See ADR-28 §2.2 + CfgAdaptersTest + RollbackContractTest.
 		'pfb_idn' => [
 			'section'       => $dnsbl,
