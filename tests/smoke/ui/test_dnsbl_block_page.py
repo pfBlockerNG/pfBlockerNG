@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import time
 
 import pytest
 
@@ -33,8 +34,8 @@ def test_dnsbl_block_page_shows_real_correlation_detail(deployed_vm: helpers.Smo
     Given a DNSBL feed listing one unique test domain (VIP mode).
     When the domain is force-updated into the block list, resolved (the real DNS
     query that both proves the block AND writes the ``dnsbl.log`` correlator
-    line), then fetched from the sinkhole webserver with that domain as the
-    ``Host`` header.
+    line), then fetched (polled -- the sinkhole restart is async, see below) from
+    the sinkhole webserver with that domain as the ``Host`` header.
     Then the page renders "Site blocked via DNSBL" AND its 6-cell detail row's
     Type/Group/Evaluated-Domain/Feed cells are populated from the real
     ``dnsbl.log`` match -- never the ``-`` fallback -- with the Evaluated Domain
@@ -59,17 +60,48 @@ def test_dnsbl_block_page_shows_real_correlation_detail(deployed_vm: helpers.Smo
         # for reaching index.php/dnsbl_default.php outside the webConfigurator.
         # Runs inside CaseContext so the dnsbl.log line is guaranteed fresh and
         # egress being blocked here doesn't matter (the curl is loopback-local).
-        result = subprocess.run(
-            deployed_vm.ssh_argv(
-                helpers.GUEST_CURL, "-s", "-H", f"Host: {domain}", f"http://{helpers.DEFAULT_DNSBL_VIP4}:8081/"
-            ),
-            capture_output=True,
-            text=True,
-            timeout=30,
+        #
+        # issue #1013: pfb_create_dnsbl() (pfblockerng.inc ~5793) restarts the
+        # sinkhole via restart_service('pfb_dnsbl'), whose rc script forks
+        # lighttpd_pfb -- lighttpd self-daemonizes (pfblockerng.inc ~2587-2591,
+        # issue #662), so the rc script -- and reload() -- can return before the
+        # forked child finishes binding :8081. Poll instead of one unbounded curl,
+        # with a short per-attempt timeout so a dropped-not-refused SYN fails fast
+        # rather than hanging the whole budget on one attempt.
+        curl_argv = (
+            helpers.GUEST_CURL,
+            "-s",
+            "--connect-timeout",
+            "3",
+            "--max-time",
+            "8",
+            "-H",
+            f"Host: {domain}",
+            f"http://{helpers.DEFAULT_DNSBL_VIP4}:8081/",
         )
-        assert result.returncode == 0, (
-            f"on-box curl to the DNSBL sinkhole failed: rc={result.returncode} stderr={result.stderr!r}"
-        )
+        attempts, delay = 10, 1.5  # lighttpd's post-fork bind is normally sub-second; generous headroom
+        result: subprocess.CompletedProcess[str] | None = None
+        for attempt in range(attempts):
+            result = deployed_vm.ssh(*curl_argv, timeout=15.0)
+            if result.returncode == 0 and "Site blocked via DNSBL" in result.stdout:
+                break
+            if attempt < attempts - 1:
+                time.sleep(delay)
+        assert result is not None  # attempts >= 1, loop always assigns
+
+        if result.returncode != 0 or "Site blocked via DNSBL" not in result.stdout:
+            # Self-diagnosing failure: confirms/refutes the restart race straight from
+            # this log, no second CI dispatch + diagnostics-archaeology round trip.
+            diag = deployed_vm.ssh(
+                "ps auxww | grep -i '[l]ighttpd_pfb'; "
+                "/usr/bin/sockstat -4 -l 2>/dev/null | grep ':8081' || echo NO_LISTENER",
+                timeout=15.0,
+            )
+            pytest.fail(
+                f"sinkhole curl never succeeded after {attempts} attempts: "
+                f"rc={result.returncode} stderr={result.stderr!r}\n"
+                f"lighttpd_pfb/:8081 snapshot (rc={diag.returncode}):\n{diag.stdout}{diag.stderr}"
+            )
 
         body = result.stdout
         assert "Site blocked via DNSBL" in body, f"sinkhole page missing its block marker; body:\n{body}"
