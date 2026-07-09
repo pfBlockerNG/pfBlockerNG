@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -577,3 +578,277 @@ def test_matrix_tokens_route_only_entries_excluded() -> None:
     active = {k: v for k, v in entry.items() if k != "role"}
     uncovered = cvl.uncovered_matrix_tokens(_matrix([active]))
     assert uncovered == ["99" + ".99"], f"the same entry without role must be reported; got {uncovered}"
+
+
+# --------------------------------------------------------------------------- #
+# Issue #1000: --staged / --diff <base> diff-scoped CLI modes
+#
+# The full scan (no args) stays the pre-commit/CI gate; these modes are the
+# ad-hoc / CI-PR entry points. Full-file content is re-read per changed file
+# (scan_text needs whole-file comment/docstring state) and filtered to added
+# lines, mirroring test_comment_narration_check.py's subprocess CLI harness.
+# --------------------------------------------------------------------------- #
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+
+
+def _run(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run([sys.executable, str(_TOOL), *args], cwd=repo, capture_output=True, text=True)
+
+
+def _rev(repo: Path) -> str:
+    out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True)
+    return out.stdout.strip()
+
+
+def test_cli_staged_mode_flags_then_clears(tmp_path: Path) -> None:
+    _git(tmp_path, "init", "-q", "-b", "devel")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/tool.sh").write_text("_CLEAN=1\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base")
+
+    (tmp_path / "scripts/tool.sh").write_text(f'_CLEAN=1\n_ABI="{_FREEBSD15}"\n')
+    _git(tmp_path, "add", ".")
+    res = _run(tmp_path, "--staged")
+    assert res.returncode == 1, res.stderr
+    assert "scripts/tool.sh:2" in res.stderr
+
+    # Committing (nothing staged afterwards) -> empty diff -> exit 0.
+    _git(tmp_path, "commit", "-qm", "add literal")
+    assert _run(tmp_path, "--staged").returncode == 0
+
+
+def test_cli_diff_red_canary_flags_added_but_not_preexisting_literal(tmp_path: Path) -> None:
+    # RED CANARY (issue #1000's explicit ask): (a) a diff ADDING a version
+    # literal fails naming file:line; (b) the SAME literal sitting unchanged
+    # while only an unrelated clean line is added passes -- proving the scan
+    # is filtered to the diff, not the whole file.
+    _git(tmp_path, "init", "-q", "-b", "devel")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/tool.sh").write_text(f'_OLD="{_FREEBSD15}"\n_CLEAN=1\n')
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base")
+    base = _rev(tmp_path)
+
+    # (a) added literal -> exit 1 naming file:line
+    (tmp_path / "scripts/tool.sh").write_text(f'_OLD="{_FREEBSD15}"\n_CLEAN=1\n_NEW="{_PY311}"\n')
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "add a literal")
+    res = _run(tmp_path, "--diff", base)
+    assert res.returncode == 1, res.stderr
+    assert "scripts/tool.sh:3" in res.stderr
+    added_rev = _rev(tmp_path)
+
+    # (b) both literals now pre-existing/unchanged; only an unrelated clean
+    # line is added -> exit 0 (must NOT re-flag the pre-existing literals)
+    (tmp_path / "scripts/tool.sh").write_text(f'_OLD="{_FREEBSD15}"\n_CLEAN=1\n_NEW="{_PY311}"\n_UNRELATED=1\n')
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "unrelated clean add")
+    res = _run(tmp_path, "--diff", added_rev)
+    assert res.returncode == 0, res.stderr
+
+
+def test_cli_diff_added_line_inside_preexisting_comment_block_not_flagged(tmp_path: Path) -> None:
+    # Full-file-context axis: proves scan_text sees the WHOLE file, not
+    # isolated added-line text -- an added line inside an already-open
+    # /* ... */ block must not flag, even though the raw diff hunk alone
+    # gives no clue the line sits inside a comment.
+    _git(tmp_path, "init", "-q", "-b", "devel")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/a.inc").write_text("/*\n * base note\n */\n$x = 1;\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base")
+    base = _rev(tmp_path)
+
+    (tmp_path / "src/a.inc").write_text(f'/*\n * base note\n * "{_CE28}" version note\n */\n$x = 1;\n')
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "extend comment")
+    res = _run(tmp_path, "--diff", base)
+    assert res.returncode == 0, res.stderr
+
+
+def test_cli_diff_excluded_paths_not_flagged(tmp_path: Path) -> None:
+    # Exclusion axis: .md, install_deps_*, and the checker's own file stay
+    # clean even when the added line is an exact quoted token.
+    _git(tmp_path, "init", "-q", "-b", "devel")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "docs/notes.md").write_text("clean\n")
+    (tmp_path / "scripts/install_deps_CE_2.8.sh").write_text(f'PYFLAVOR="{_PY311}"\n')
+    (tmp_path / "scripts/check_version_literals.py").write_text("x = 1\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base")
+    base = _rev(tmp_path)
+
+    (tmp_path / "docs/notes.md").write_text(f'clean\nversion: "{_CE28}"\n')
+    (tmp_path / "scripts/install_deps_CE_2.8.sh").write_text(f'PYFLAVOR="{_PY311}"\nEXTRA="{_FREEBSD15}"\n')
+    (tmp_path / "scripts/check_version_literals.py").write_text(f'x = 1\ny = "{_CE28}"\n')
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "add excluded-path literals")
+    res = _run(tmp_path, "--diff", base)
+    assert res.returncode == 0, res.stderr
+
+
+def test_cli_diff_out_of_scan_root_path_not_flagged(tmp_path: Path) -> None:
+    # Scan-root parity: the full scan only visits src/scripts/.github-workflows,
+    # so the diff modes must too. A version literal added to a changed file
+    # OUTSIDE those roots (here tests/, where fixtures legitimately carry
+    # version tokens) must NOT be flagged -- else --diff origin/devel on a PR
+    # would false-positive on a file the authoritative full gate never sees.
+    _git(tmp_path, "init", "-q", "-b", "devel")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests/fixture.py").write_text("x = 1\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base")
+    base = _rev(tmp_path)
+
+    (tmp_path / "tests/fixture.py").write_text(f'x = 1\n_ABI = "{_FREEBSD15}"\n')
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "add literal outside scan roots")
+    res = _run(tmp_path, "--diff", base)
+    assert res.returncode == 0, res.stderr
+
+
+def test_cli_diff_escape_comment_suppresses_added_literal(tmp_path: Path) -> None:
+    # Escape axis: an added line carrying `version-literal-ok` stays clean.
+    _git(tmp_path, "init", "-q", "-b", "devel")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/tool.sh").write_text("_CLEAN=1\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base")
+    base = _rev(tmp_path)
+
+    (tmp_path / "scripts/tool.sh").write_text(
+        f'_CLEAN=1\n_ABI="{_FREEBSD15}"  # version-literal-ok: pinned intentionally\n'
+    )
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "escaped literal")
+    res = _run(tmp_path, "--diff", base)
+    assert res.returncode == 0, res.stderr
+
+
+def test_cli_diff_bad_base_ref_exits_2(tmp_path: Path) -> None:
+    _git(tmp_path, "init", "-qb", "devel")
+    (tmp_path / "f").write_text("x\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base")
+    res = _run(tmp_path, "--diff", "no-such-ref-" + "xyz")
+    assert res.returncode == 2, res.stderr
+    assert "git diff failed" in res.stderr
+
+
+def test_cli_diff_missing_base_arg_is_usage_error(tmp_path: Path) -> None:
+    _git(tmp_path, "init", "-qb", "devel")
+    (tmp_path / "f").write_text("x\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base")
+    res = _run(tmp_path, "--diff")
+    assert res.returncode == 2, res.stderr
+    assert "usage" in res.stderr.lower()
+
+
+def test_cli_diff_empty_diff_exits_0(tmp_path: Path) -> None:
+    _git(tmp_path, "init", "-qb", "devel")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/tool.sh").write_text("_CLEAN=1\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base")
+    base = _rev(tmp_path)
+    _git(tmp_path, "commit", "--allow-empty", "-qm", "empty")
+    res = _run(tmp_path, "--diff", base)
+    assert res.returncode == 0, res.stderr
+
+
+# --- Hostile inputs: the diff parser itself ---------------------------------
+
+
+def test_cli_diff_new_and_renamed_and_multiple_files(tmp_path: Path) -> None:
+    # Brand-new file (all lines added, whole file via git show), renamed file
+    # (the b/ NEW path is used), and multiple changed files in one diff.
+    _git(tmp_path, "init", "-q", "-b", "devel")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/old.sh").write_text("_CLEAN=1\n_STABLE=1\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base")
+    base = _rev(tmp_path)
+
+    (tmp_path / "scripts/new.sh").write_text(f'_ABI="{_FREEBSD15}"\n')
+    (tmp_path / "scripts/old.sh").unlink()
+    (tmp_path / "scripts/renamed.sh").write_text(f'_CLEAN=1\n_STABLE=1\n_NEW="{_PY311}"\n')
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-qm", "new + rename + literal")
+    res = _run(tmp_path, "--diff", base)
+    assert res.returncode == 1, res.stderr
+    assert "scripts/new.sh:1" in res.stderr
+    assert "scripts/renamed.sh:3" in res.stderr
+
+
+def test_cli_diff_deleted_file_is_skipped_without_crash(tmp_path: Path) -> None:
+    _git(tmp_path, "init", "-q", "-b", "devel")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/tool.sh").write_text(f'_ABI="{_FREEBSD15}"\n')
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base")
+    base = _rev(tmp_path)
+
+    (tmp_path / "scripts/tool.sh").unlink()
+    (tmp_path / "scripts/clean.sh").write_text("_OK=1\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-qm", "delete + add clean file")
+    res = _run(tmp_path, "--diff", base)
+    assert res.returncode == 0, res.stderr
+
+
+def test_cli_diff_binary_file_is_skipped_without_crash(tmp_path: Path) -> None:
+    _git(tmp_path, "init", "-q", "-b", "devel")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/tool.sh").write_text("_CLEAN=1\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base")
+    base = _rev(tmp_path)
+
+    (tmp_path / "scripts/blob.bin").write_bytes(b"\x00\x01\xff\xfe\x02binarydata")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "add binary")
+    res = _run(tmp_path, "--diff", base)
+    assert res.returncode == 0, res.stderr
+
+
+def test_cli_diff_space_bearing_path_tab_is_stripped(tmp_path: Path) -> None:
+    _git(tmp_path, "init", "-q", "-b", "devel")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/my tool.sh").write_text("_CLEAN=1\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base")
+    base = _rev(tmp_path)
+
+    (tmp_path / "scripts/my tool.sh").write_text(f'_CLEAN=1\n_ABI="{_FREEBSD15}"\n')
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "add literal")
+    res = _run(tmp_path, "--diff", base)
+    assert res.returncode == 1, res.stderr
+    assert "scripts/my tool.sh:2" in res.stderr
+
+
+def test_cli_diff_added_line_at_eof_no_trailing_newline(tmp_path: Path) -> None:
+    _git(tmp_path, "init", "-q", "-b", "devel")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/tool.sh").write_text("_CLEAN=1\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base")
+    base = _rev(tmp_path)
+
+    (tmp_path / "scripts/tool.sh").write_bytes(f'_CLEAN=1\n_ABI="{_FREEBSD15}"'.encode())
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "add literal no eol")
+    res = _run(tmp_path, "--diff", base)
+    assert res.returncode == 1, res.stderr
+    assert "scripts/tool.sh:2" in res.stderr
