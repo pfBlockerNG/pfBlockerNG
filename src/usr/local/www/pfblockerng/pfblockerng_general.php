@@ -161,8 +161,11 @@ if ($_POST) {
 			$dkey = 'log_max_days_' . $log_suffix;
 			$v = $_POST[$dkey] ?? '0';
 			if (is_array($v) || !ctype_digit((string) $v)) {
-				$_POST[$dkey] = '0';
+				$v = '0';
 			}
+			// issue #1056: assign back unconditionally -- a POST missing this key left
+			// $_POST[$dkey] unset, so the persist step below raised an undefined-key warning.
+			$_POST[$dkey] = (string) $v;
 		}
 
 		if (!$input_errors) {

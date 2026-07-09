@@ -24,6 +24,8 @@ import pytest
 
 from .. import helpers
 from .conftest import mask_page_identity
+from .render_oracle import PhpErrorLogGuard
+from .webui import looks_like_login_page, scrape_form_fields
 
 sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed (Tier-B browser dep)")
 expect = sync_api.expect
@@ -257,3 +259,59 @@ def test_log_settings_grouped_layout(
     assert n_rows >= 1, f"expected at least one Log Settings row (select[name^=log_max_]), found {n_rows}"
     expect(max_days).to_have_count(n_rows, timeout=JS_TIMEOUT_MS)
     expect(page.locator("label.form-label")).to_have_count(n_rows * 2, timeout=JS_TIMEOUT_MS)
+
+
+# --------------------------------------------------------------------------- #
+# issue #1056 -- a crafted POST missing a log_max_days_* field must not warn
+# --------------------------------------------------------------------------- #
+
+
+def test_general_save_missing_log_max_days_field_does_not_warn(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """A save POST missing ``log_max_days_log`` must not raise an "Undefined array
+    key" PHP warning (issue #1056).
+
+    ``pfblockerng_general.php``'s validation loop read ``$_POST[$dkey] ?? '0'`` but
+    only assigned back into ``$_POST[$dkey]`` on the INVALID branch; a well-formed-
+    but-absent field left the key unset, so the later unconditional
+    ``$_POST['log_max_days_' . $log_suffix] ?: '0'`` persist read raised the warning.
+    Can't use ``WebUI.post()`` here -- it always resends the page's OWN scraped
+    field set, so it can never OMIT one; this replicates its scrape-then-POST shape
+    with one key deleted first (mirrors ``test_widget_clear_failed.py``'s pattern for
+    the same reason).
+
+    Scenario: General save survives a POST missing an optional per-log field.
+      Background: pfBlockerNG deployed; webConfigurator authenticated.
+
+    Given the General page's own current field set (scraped, so every OTHER field
+      round-trips at its present value),
+
+    When ``log_max_days_log`` is deleted from that set before the save POST
+      (simulating a crafted/truncated client request),
+
+    Then the response is a save success (200 or a redirect, never a server error),
+      the session is still authenticated (no bounce to the login form), AND no
+      candidate ``php_error.log`` gained a byte during the request (the guard that
+      catches a logged-but-not-echoed PHP warning).
+    """
+    guard = PhpErrorLogGuard(smoke_vm)
+    guard.snapshot()
+
+    page = webui.get(GENERAL_PAGE)
+    assert page.status_code == 200, f"GET {GENERAL_PAGE} -> HTTP {page.status_code} (expected 200)"
+    assert not looks_like_login_page(page.text), "pre-save GET bounced to the login page -- not authenticated"
+
+    payload = scrape_form_fields(page.text)
+    assert "log_max_days_log" in payload, "fixture sanity: log_max_days_log must be a real scraped field"
+    del payload["log_max_days_log"]
+    payload["save"] = "save"
+
+    resp = webui.session.post(webui.url(GENERAL_PAGE), data=payload, timeout=_GENERAL_POST_TIMEOUT)
+
+    assert resp.status_code < 400, (
+        f"General save (missing log_max_days_log) -> HTTP {resp.status_code} (expected a save success)"
+    )
+    assert not looks_like_login_page(resp.text), "save POST bounced to the login page -- session not authenticated"
+    guard.assert_no_growth()
