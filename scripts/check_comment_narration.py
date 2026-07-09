@@ -100,7 +100,8 @@ def find_violations(diff_text: str) -> list[Violation]:
                         violations.append(Violation(path, lineno, line.strip(), reason))
                         break
             lineno += 1
-        elif not raw.startswith("-"):
+        elif not raw.startswith(("-", "\\")):
+            # issue #1051: "\ No newline at end of file" is a marker, not content
             lineno += 1  # context line (absent under --unified=0, tolerated)
     return violations
 

@@ -236,6 +236,25 @@ def test_cli_staged_and_diff_modes(tmp_path: Path) -> None:
     assert _run(tmp_path, "--diff", "devel~2").returncode == 0
 
 
+def test_cli_diff_replacing_no_eol_last_line_reports_correct_lineno(tmp_path: Path) -> None:
+    # Hostile input (issue #1051): when the OLD file's last line lacks a
+    # trailing newline, git emits "\ No newline at end of file" BETWEEN the
+    # "-" and "+" lines. Counting that marker as a content line shifts every
+    # following added line by one — the violation must be reported at its
+    # REAL line number, not real+1.
+    _git(tmp_path, "init", "-q", "-b", "devel")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/a.inc").write_bytes(b"// clean\n// tail")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base no eol")
+
+    (tmp_path / "src/a.inc").write_text("// clean\n// per RESULTS/03 SS1\n")
+    _git(tmp_path, "add", ".")
+    res = _run(tmp_path, "--staged")
+    assert res.returncode == 1, res.stderr
+    assert "src/a.inc:2" in res.stderr, f"expected src/a.inc:2, got: {res.stderr}"
+
+
 def test_cli_hostile_git_configs_cannot_bypass_the_gate(tmp_path: Path) -> None:
     # core.quotePath defaults true (octal-quotes non-ASCII paths) and
     # diff.mnemonicPrefix rewrites the +++ prefix — either must not blind the scan.
