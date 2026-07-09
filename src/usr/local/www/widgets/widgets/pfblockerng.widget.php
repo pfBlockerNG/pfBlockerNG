@@ -72,10 +72,11 @@ if ($_POST) {
 
 	// Save widget customizations
 	// issue #1050: $nocsrf=TRUE means csrf-magic never runs here -- gate the mutation itself.
+	// issue #1064: per-field reads use ?? '' -- a crafted POST (or an unchecked checkbox) omits keys.
 	if (isset($_POST['pfb_submit']) && pfb_widget_post_allowed($_SERVER)) {
-		$pfb['wglobal']['widget-popup']			= pfb_filter($_POST['pfb_popup'], PFB_FILTER_ON_OFF, 'widget');
-		$pfb['wglobal']['widget-sortmix']		= pfb_filter($_POST['pfb_sortmix'], PFB_FILTER_ON_OFF, 'widget');
-		$pfb['wglobal']['widget-show_agg']		= pfb_filter($_POST['pfb_show_agg'], PFB_FILTER_ON_OFF, 'widget');
+		$pfb['wglobal']['widget-popup']			= pfb_filter($_POST['pfb_popup'] ?? '', PFB_FILTER_ON_OFF, 'widget');
+		$pfb['wglobal']['widget-sortmix']		= pfb_filter($_POST['pfb_sortmix'] ?? '', PFB_FILTER_ON_OFF, 'widget');
+		$pfb['wglobal']['widget-show_agg']		= pfb_filter($_POST['pfb_show_agg'] ?? '', PFB_FILTER_ON_OFF, 'widget');
 		// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
 		config_set_path('installedpackages/pfblockerngglobal/widget-popup', $pfb['wglobal']['widget-popup']);
 		// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
@@ -83,27 +84,27 @@ if ($_POST) {
 		// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
 		config_set_path('installedpackages/pfblockerngglobal/widget-show_agg', $pfb['wglobal']['widget-show_agg']);
 
-		if (in_array($_POST['pfb_sortcolumn'], array('none', 'alias', 'count', 'packets', 'update'))) {
+		if (in_array($_POST['pfb_sortcolumn'] ?? '', array('none', 'alias', 'count', 'packets', 'update'))) {
 			$pfb['wglobal']['widget-sortcolumn']	= $_POST['pfb_sortcolumn'];
 			// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
 			config_set_path('installedpackages/pfblockerngglobal/widget-sortcolumn', $pfb['wglobal']['widget-sortcolumn']);
 		}
-		if (in_array($_POST['pfb_sortdir'], array('asc', 'des'))) {
+		if (in_array($_POST['pfb_sortdir'] ?? '', array('asc', 'des'))) {
 			$pfb['wglobal']['widget-sortdir']	= $_POST['pfb_sortdir'];
 			// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
 			config_set_path('installedpackages/pfblockerngglobal/widget-sortdir', $pfb['wglobal']['widget-sortdir']);
 		}
-		if (in_array($_POST['pfb_clearip'], array('never', 'daily', 'weekly'))) {
+		if (in_array($_POST['pfb_clearip'] ?? '', array('never', 'daily', 'weekly'))) {
 			$pfb['wglobal']['widget-clearip']	= $_POST['pfb_clearip'];
 			// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
 			config_set_path('installedpackages/pfblockerngglobal/widget-clearip', $pfb['wglobal']['widget-clearip']);
 		}
-		if (in_array($_POST['pfb_cleardnsbl'], array('never', 'daily', 'weekly'))) {
+		if (in_array($_POST['pfb_cleardnsbl'] ?? '', array('never', 'daily', 'weekly'))) {
 			$pfb['wglobal']['widget-cleardnsbl']	= $_POST['pfb_cleardnsbl'];
 			// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
 			config_set_path('installedpackages/pfblockerngglobal/widget-cleardnsbl', $pfb['wglobal']['widget-cleardnsbl']);
 		}
-		if (is_numeric($_POST['pfb_dnsblquery']) && $_POST['pfb_dnsblquery'] < 10000) {
+		if (is_numeric($_POST['pfb_dnsblquery'] ?? '') && $_POST['pfb_dnsblquery'] < 10000) {
 			$pfb['wglobal']['widget-dnsblquery']	= $_POST['pfb_dnsblquery'];
 			// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
 			config_set_path('installedpackages/pfblockerngglobal/widget-dnsblquery', $pfb['wglobal']['widget-dnsblquery']);
@@ -113,12 +114,12 @@ if ($_POST) {
 				restart_service('pfb_dnsbl');
 			}
 		}
-		if (is_numeric($_POST['pfb_maxfails']) && $_POST['pfb_maxfails'] < 100) {
+		if (is_numeric($_POST['pfb_maxfails'] ?? '') && $_POST['pfb_maxfails'] < 100) {
 			$pfb['wglobal']['widget-maxfails']	= $_POST['pfb_maxfails'];
 			// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
 			config_set_path('installedpackages/pfblockerngglobal/widget-maxfails', $pfb['wglobal']['widget-maxfails']);
 		}
-		if (is_numeric($_POST['pfb_maxheight']) && $_POST['pfb_maxheight'] < 10000) {
+		if (is_numeric($_POST['pfb_maxheight'] ?? '') && $_POST['pfb_maxheight'] < 10000) {
 			$pfb['wglobal']['widget-maxheight']	= $_POST['pfb_maxheight'];
 			// foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
 			config_set_path('installedpackages/pfblockerngglobal/widget-maxheight', $pfb['wglobal']['widget-maxheight']);
