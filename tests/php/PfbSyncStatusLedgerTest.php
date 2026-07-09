@@ -323,9 +323,17 @@ final class PfbSyncStatusLedgerTest extends TestCase
 
 	public function testCloseRemovedAliasEmptyAliasnameIsNoOp(): void
 	{
+		// pfb_sync_status_close() already no-ops on an absent key, so the ONLY fixture that
+		// discriminates "empty-guard present" from "absent" is a pre-opened pfB__v4 entry --
+		// the exact key the un-guarded switch ('ipv4' + '') would build and wrongly close.
+		pfb_sync_status_open('ip', 'pfB__v4', 'download', 'HTTP 404', $this->dir, self::clockAt(1000));
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'ip'));
+
 		pfb_sync_status_close_removed_alias('ipv4', '', $this->dir);
 
-		$this->assertFileDoesNotExist($this->dir . '/pfb_sync_status.json', 'an empty aliasname must not write a ledger file');
+		$open = pfb_sync_status_list_open($this->dir, 'ip');
+		$this->assertCount(1, $open, 'an empty aliasname must be a no-op even when pfB__v4 happens to be open');
+		$this->assertSame('pfB__v4', $open[0]['item']);
 	}
 
 	public function testCloseRemovedAliasUnknownGtypeIsNoOp(): void
@@ -357,13 +365,16 @@ final class PfbSyncStatusLedgerTest extends TestCase
 
 	public function testCloseRemovedAliasKeyPrecisionLeavesOtherAliasesOpen(): void
 	{
-		pfb_sync_status_open('ip', 'pfB_Other_v4', 'download', 'HTTP 404', $this->dir, self::clockAt(1000));
-		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'ip'));
+		// Prefix-adjacent sibling proves EXACT-key match, not a prefix/substring match:
+		// closing 'Foo' must close only pfB_Foo_v4 and leave pfB_FooBar_v4 open.
+		pfb_sync_status_open('ip', 'pfB_Foo_v4', 'download', 'HTTP 404', $this->dir, self::clockAt(1000));
+		pfb_sync_status_open('ip', 'pfB_FooBar_v4', 'download', 'HTTP 404', $this->dir, self::clockAt(2000));
+		$this->assertCount(2, pfb_sync_status_list_open($this->dir, 'ip'));
 
 		pfb_sync_status_close_removed_alias('ipv4', 'Foo', $this->dir);
 
 		$open = pfb_sync_status_list_open($this->dir, 'ip');
-		$this->assertCount(1, $open, 'closing Foo must not touch a different alias key (Other)');
-		$this->assertSame('pfB_Other_v4', $open[0]['item']);
+		$this->assertCount(1, $open, 'closing Foo must close only its exact key, leaving prefix-adjacent FooBar open');
+		$this->assertSame('pfB_FooBar_v4', $open[0]['item']);
 	}
 }
