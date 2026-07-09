@@ -17760,7 +17760,8 @@ function sync_package_pfblockerng($cron='') {
 							pfb_logger("{$log}", 1);
 						}
 						else {
-							if (pfb_ip_reuse_skip_active($pfbreuse == 'on', file_exists("{$pfborig}/{$header}.orig"), isset($list['dnsblip']))) {
+							$pfbreuse_on = $pfbreuse == 'on';
+							if (pfb_ip_reuse_skip_active($pfbreuse_on, $pfbreuse_on && file_exists("{$pfborig}/{$header}.orig"), isset($list['dnsblip']))) {
 								$log = "\n[ {$header} ]{$logtab} Reload";
 							} else {
 								$log = "\n[ {$header} ]{$logtab} Downloading update";
@@ -17803,7 +17804,7 @@ function sync_package_pfblockerng($cron='') {
 								}
 
 								// Determine if	list needs to be downloaded or reuse previously downloaded file.
-								if (pfb_ip_reuse_skip_active($pfbreuse == 'on', file_exists("{$file_dwn}.orig"), isset($list['dnsblip']))) {
+								if (pfb_ip_reuse_skip_active($pfbreuse_on, $pfbreuse_on && file_exists("{$file_dwn}.orig"), isset($list['dnsblip']))) {
 									// File exists/reuse
 
 									// Process Emerging Threats IQRisk if required
