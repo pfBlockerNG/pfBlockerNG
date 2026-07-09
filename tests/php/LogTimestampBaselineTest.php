@@ -405,10 +405,35 @@ final class LogTimestampBaselineTest extends TestCase
 
 		$written = (string) file_get_contents($logfile);
 		$this->assertMatchesRegularExpression(
-			'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},pfbtestheader,some parse line,orig line,5$/',
+			'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},pfbtestheader,some parse line,orig line,5\n$/',
 			$written,
 			"pfb_parsed_fail() must write the unambiguous 'Y-m-d H:i:s' format now; got: {$written}"
 		);
+	}
+
+	/**
+	 * Regression (issue #1004): $oline reaches pfb_parsed_fail() as a raw fgets()
+	 * line (trailing "\n"). The writer must strip it and terminate the row itself,
+	 * so the appended $lineno cannot split the record and empty the NEXT row's
+	 * field0 timestamp -- which ADR-60's field0 age-cutoff would read as expired.
+	 */
+	public function testParsedFailRawFgetsLineDoesNotSplitTheRecord(): void
+	{
+		$logfile = $this->tempFile('pfb_parsedfail_nl_');
+
+		pfb_parsed_fail('pfbtestheader', 'l1', "orig line one\n", $logfile, 4);
+		pfb_parsed_fail('pfbtestheader', 'l2', "orig line two\n", $logfile, 9);
+
+		$written = (string) file_get_contents($logfile);
+		$lines   = explode("\n", rtrim($written, "\n"));
+		$this->assertCount(2, $lines, "each parse-error record must be one physical line; got: {$written}");
+		foreach ($lines as $l) {
+			$this->assertMatchesRegularExpression(
+				'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},/',
+				$l,
+				"every physical line must start with a parseable field0 timestamp: {$l}"
+			);
+		}
 	}
 
 	/**

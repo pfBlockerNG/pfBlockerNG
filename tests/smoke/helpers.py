@@ -3420,7 +3420,7 @@ PY_ERROR_LOG = f"{PFB_LOGDIR}/py_error.log"
 SWAP_LOG_MARKER = "[ zero-downtime swap ]"
 # The DNSBL per-line parse-error log: pfb_parsed_fail() appends one CSV record
 # ({date},{header},{line},{oline},{lineno}) here for every rejected line — including
-# an ADR-22 strict-mode scheme/path skip. Mirrors $pfb['dnsbl_parse_err'] (inc:88,
+# an ADR-22 strict-mode scheme/path skip. Mirrors $pfb['dnsbl_parse_err'] (inc:91,
 # "{$pfb['logdir']}/dnsbl_parsed_error.log"), the established per-line failure sink.
 DNSBL_PARSE_ERR_LOG = f"{PFB_LOGDIR}/dnsbl_parsed_error.log"
 # issue #1004: the generic IP-list sibling sink. pfb_ip_parsed_fail() appends one CSV

@@ -4479,10 +4479,14 @@ function pfb_verb_deprecation_warning($verb) {
 
 
 // issue #1004: dedicated IP-parse-error sink; CSV adds a line-number column vs pfb_parsed_fail()
-function pfb_ip_parsed_fail($header, $line, $oline, $lineno, $logfile) {
-	$line = $line !== '' ? $line : 'null';
-	$now  = pfb_log_iso_timestamp();
-	$log  = "{$now},{$header},{$line},{$oline},{$lineno}";
+function pfb_ip_parsed_fail($header, $line, $oline, $logfile, $lineno) {
+	$line  = $line !== '' ? $line : 'null';
+	// issue #1004: $oline is a raw fgets() line (keeps its trailing \n); strip it and
+	// terminate the row ourselves so the trailing $lineno stays on the SAME physical
+	// line -- else the record splits and field0 empties (ADR-60 age-cutoff wipe).
+	$oline = rtrim((string) $oline, "\r\n");
+	$now   = pfb_log_iso_timestamp();
+	$log   = "{$now},{$header},{$line},{$oline},{$lineno}\n";
 	@file_put_contents("{$logfile}", "{$log}", FILE_APPEND);
 }
 
@@ -4492,9 +4496,12 @@ function pfb_ip_parsed_fail($header, $line, $oline, $lineno, $logfile) {
 function pfb_parsed_fail($header, $line='', $oline, $logfile, $lineno = '') {
 
 	$line   = $line ?: 'null';
+	// issue #1004: strip the raw fgets() line's trailing \n and terminate the row here,
+	// so the appended $lineno column can't split the record and empty field0 (ADR-60).
+	$oline  = rtrim((string) $oline, "\r\n");
 	$now	= pfb_log_iso_timestamp();
 
-	$log	= "{$now},{$header},{$line},{$oline},{$lineno}";
+	$log	= "{$now},{$header},{$line},{$oline},{$lineno}\n";
 	@file_put_contents("{$logfile}", "{$log}", FILE_APPEND);
 }
 
@@ -18229,7 +18236,7 @@ function sync_package_pfblockerng($cron='') {
 
 										if (!$other_family_addr) {
 											$parse_fail++;
-											pfb_ip_parsed_fail($header, $line, $oline, $ip_lineno, $pfb['ip_parse_err']);
+											pfb_ip_parsed_fail($header, $line, $oline, $pfb['ip_parse_err'], $ip_lineno);
 										}
 									}
 								}

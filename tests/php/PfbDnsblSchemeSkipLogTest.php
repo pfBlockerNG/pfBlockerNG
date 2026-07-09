@@ -103,7 +103,8 @@ final class PfbDnsblSchemeSkipLogTest extends TestCase
 		$this->assertSame(1, $skipped);
 		$logged = $this->readFile($logfile);
 		$this->assertStringContainsString('TestFeed', $logged);
-		$this->assertStringEndsWith(',123://evil.com,7', $logged);
+		// issue #1004: newline-terminated row, lineno the final column.
+		$this->assertStringEndsWith(",123://evil.com,7\n", $logged);
 	}
 
 	public function testLenientEmitsNoNewLog(): void
