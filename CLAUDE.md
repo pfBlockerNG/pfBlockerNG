@@ -472,6 +472,11 @@ Run linters while working; the `.githooks/pre-commit` hook blocks failing commit
   Read it from the ci-metadata matrix (`read-version-matrix.sh`) at runtime instead of
   restating it (a literal silently drifts when the matrix moves). Prose, comments, and Python
   docstrings stay clean; escape a genuine one-off with an inline `# version-literal-ok: <reason>`.
+  The bare/explicit-path invocation is the authoritative pre-commit/CI gate (full scan); it
+  also has diff-scoped `--staged`/`--diff <base>` modes (issue #1000) that judge only added
+  lines — like `check_comment_narration.py`, but re-reading each changed file's whole content
+  (needed for correct comment/docstring state) and filtering to the added lines, for ad-hoc
+  and CI-PR invocation.
 - **Comment-narration check** (`scripts/check_comment_narration.py`, pre-commit + CI,
   diff-scoped): forbids ADR phase numbers, `RESULTS/` handoff refs, and review archaeology on
   **added** lines under `src/` + `scripts/` ("Comments — constraint, not narration"); escape a

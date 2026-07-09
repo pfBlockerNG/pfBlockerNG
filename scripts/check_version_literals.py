@@ -59,6 +59,14 @@ tripwires the WINDOWED token shapes against ``supported-versions.json``
 matrix-implied token the patterns no longer cover, so the window is widened
 the moment the matrix moves instead of the gate narrowing silently; a
 misconfigured invocation (bad ref, missing file, malformed JSON) exits 2.
+
+DIFF-SCOPED modes ``--staged`` and ``--diff <base>`` (issue #1000) judge only
+ADDED lines, like ``check_comment_narration.py`` -- but full-file comment/
+docstring state is needed for a correct scan, so each changed file's WHOLE
+content is re-read (index for ``--staged``, ``HEAD`` for ``--diff``) and only
+violations landing on an added line are kept; pre-existing literals stay
+grandfathered. A git failure exits 2. These modes are for ad-hoc/CI-PR
+invocation; the argument-less full scan above remains the pre-commit/CI gate.
 """
 
 from __future__ import annotations
@@ -142,6 +150,17 @@ def _is_excluded(path: Path) -> bool:
     # package names (py311-sqlite3) legitimately hardcode a flavor -- the spec's
     # one intentional allowlist, matched by filename.
     return path.name.startswith("install_deps_")
+
+
+def _in_scan_roots(path_str: str) -> bool:
+    """True if a diff-mode path lives under a scan root.
+
+    The full scan only visits ``_SCAN_ROOTS`` (via ``git ls-files``), so the
+    diff modes must match that scope -- else a version token in a changed file
+    the full gate never sees (e.g. under ``tests/``, where fixtures legitimately
+    carry version literals) would false-positive on a PR.
+    """
+    return any(path_str == root or path_str.startswith(f"{root}/") for root in _SCAN_ROOTS)
 
 
 def _quoted_literals(line: str, c_style: bool = False) -> list[str]:
@@ -323,6 +342,25 @@ def _code_lines(lines: list[str], suffix: str) -> list[str | None]:
     return out
 
 
+def scan_text(path: Path, text: str) -> list[tuple[Path, int, str]]:
+    """Return ``(path, lineno, line)`` for every value-position literal in ``text``.
+
+    Needs the WHOLE file body: ``_code_lines`` tracks multi-line ``/*...*/``
+    and Python triple-quote docstring state across lines, so a diff-scoped
+    caller must feed full file content, never isolated added-line text.
+    """
+    violations: list[tuple[Path, int, str]] = []
+    lines = text.splitlines()
+    c_style = path.suffix in _C_COMMENT_EXTS
+    code_lines = _code_lines(lines, path.suffix)
+    for lineno, (line, code) in enumerate(zip(lines, code_lines, strict=True), start=1):
+        if code is None or _ESCAPE in line:
+            continue
+        if _line_has_value_literal(code, c_style):
+            violations.append((path, lineno, line.strip()))
+    return violations
+
+
 def find_violations(paths: list[Path]) -> list[tuple[Path, int, str]]:
     """Return ``(path, lineno, line)`` for every value-position version literal."""
     violations: list[tuple[Path, int, str]] = []
@@ -331,15 +369,118 @@ def find_violations(paths: list[Path]) -> list[tuple[Path, int, str]]:
             text = path.read_text(encoding="utf-8", errors="replace")
         except (OSError, UnicodeError):
             continue
-        lines = text.splitlines()
-        c_style = path.suffix in _C_COMMENT_EXTS
-        code_lines = _code_lines(lines, path.suffix)
-        for lineno, (line, code) in enumerate(zip(lines, code_lines, strict=True), start=1):
-            if code is None or _ESCAPE in line:
-                continue
-            if _line_has_value_literal(code, c_style):
-                violations.append((path, lineno, line.strip()))
+        violations.extend(scan_text(path, text))
     return violations
+
+
+def _git_diff(args: list[str]) -> str:
+    # Same flag set (and same rationale) as check_comment_narration._git_diff:
+    # pin quotePath/prefixes/ext-diff so config/env cannot defeat the +++ b/ parse.
+    out = subprocess.run(
+        [
+            "git",
+            "-c",
+            "core.quotePath=false",
+            "diff",
+            "--unified=0",
+            "--no-color",
+            "--no-ext-diff",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            *args,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return out.stdout
+
+
+def _added_lines_by_path(diff_text: str) -> dict[str, set[int]]:
+    """Map each changed path to the set of its added (new-file) line numbers.
+
+    A deleted file's ``+++`` target is ``/dev/null`` (no ``b/`` prefix), so it
+    never gets an entry -- nothing to scan there anyway.
+    """
+    added: dict[str, set[int]] = {}
+    path: str | None = None
+    lineno = 0
+    for raw in diff_text.splitlines():
+        if raw.startswith("+++ "):
+            name = raw[4:]
+            path = name[2:].split("\t", 1)[0] if name.startswith("b/") else None
+            continue
+        if raw.startswith("@@"):
+            m = re.match(r"@@ -\S+ \+(\d+)", raw)
+            lineno = int(m.group(1)) if m else 0
+            continue
+        if raw.startswith("+") and not raw.startswith("+++"):
+            if path is not None:
+                added.setdefault(path, set()).add(lineno)
+            lineno += 1
+        elif not raw.startswith("-"):
+            lineno += 1  # context line (absent under --unified=0, tolerated)
+    return added
+
+
+def _diff_mode(argv: list[str]) -> int:
+    """The ``--staged``/``--diff <base>`` modes: scan whole-file content, keep only added lines.
+
+    Full-file context is mandatory (``scan_text`` needs it for comment/docstring
+    state), so raw diff text is never scanned directly -- each changed file's
+    complete content is read back (index for ``--staged``, ``HEAD`` for
+    ``--diff``) and every violation is filtered to lines the diff actually added.
+    """
+    if argv == ["--staged"]:
+        diff_args = ["--cached"]
+        show_ref = ":"
+    elif len(argv) == 2 and argv[0] == "--diff":
+        diff_args = [f"{argv[1]}...HEAD"]
+        show_ref = "HEAD:"
+    else:
+        print("usage: check_version_literals.py --staged | --diff <base>", file=sys.stderr)
+        return 2
+    try:
+        diff_text = _git_diff(diff_args)
+    except subprocess.CalledProcessError as exc:
+        print(f"git diff failed: {exc.stderr.strip()}", file=sys.stderr)
+        return 2
+    violations: list[tuple[Path, int, str]] = []
+    for path_str, added_linenos in _added_lines_by_path(diff_text).items():
+        path = Path(path_str)
+        if _is_excluded(path) or not _in_scan_roots(path_str):
+            continue
+        try:
+            out = subprocess.run(
+                ["git", "show", f"{show_ref}{path_str}"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except (subprocess.CalledProcessError, UnicodeError):
+            continue  # deleted/binary/unreadable at that ref -- nothing to scan
+        for v_path, lineno, line in scan_text(path, out.stdout):
+            if lineno in added_linenos:
+                violations.append((v_path, lineno, line))
+    return _report(violations)
+
+
+def _report(violations: list[tuple[Path, int, str]]) -> int:
+    """Print the shared violation report (used by full-scan, explicit-path, and diff modes)."""
+    if not violations:
+        return 0
+    print("Hardcoded pfSense/FreeBSD version literal(s) in value position:\n", file=sys.stderr)
+    for path, lineno, line in violations:
+        print(f"  {path}:{lineno}: {line}", file=sys.stderr)
+    print(
+        "\nsupported-versions.json (origin/ci-metadata) is the single source of truth for "
+        "every supported version pairing -- read it at runtime/generation time via "
+        "scripts/read-version-matrix.sh instead of restating a value here.\n"
+        "Escape a genuine one-off with an inline `# version-literal-ok: <reason>` comment. "
+        "See CLAUDE.md and docs/misc/pfSense_versions.md.",
+        file=sys.stderr,
+    )
+    return 1
 
 
 def _matrix_tokens(matrix: dict) -> list[str]:
@@ -435,25 +576,13 @@ def _verify_matrix(argv: list[str]) -> int:
 def main(argv: list[str]) -> int:
     if argv and argv[0] == "--verify-matrix":
         return _verify_matrix(argv[1:])
+    if argv and argv[0] in ("--staged", "--diff"):
+        return _diff_mode(argv)
     if argv:
         paths = [p for p in (Path(a) for a in argv) if not _is_excluded(p)]
     else:
         paths = _tracked_files(_SCAN_ROOTS)
-    violations = find_violations(paths)
-    if not violations:
-        return 0
-    print("Hardcoded pfSense/FreeBSD version literal(s) in value position:\n", file=sys.stderr)
-    for path, lineno, line in violations:
-        print(f"  {path}:{lineno}: {line}", file=sys.stderr)
-    print(
-        "\nsupported-versions.json (origin/ci-metadata) is the single source of truth for "
-        "every supported version pairing -- read it at runtime/generation time via "
-        "scripts/read-version-matrix.sh instead of restating a value here.\n"
-        "Escape a genuine one-off with an inline `# version-literal-ok: <reason>` comment. "
-        "See CLAUDE.md and docs/misc/pfSense_versions.md.",
-        file=sys.stderr,
-    )
-    return 1
+    return _report(find_violations(paths))
 
 
 if __name__ == "__main__":
