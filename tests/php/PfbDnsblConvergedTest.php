@@ -16,9 +16,16 @@ use PHPUnit\Framework\TestCase;
  * with the LATER conditions deliberately left passing, to prove the EARLIER
  * failing condition alone forces FALSE.
  *
- * Function under test: pfb_dnsbl_converged(): bool (pfblockerng.inc).
+ * Also covers pfb_unbound_py_marker_generation()'s remaining return-0 shapes
+ * DIRECTLY (issue #1024): the truth table above only reaches it through the
+ * "neither marker file exists" case; the unreadable/blank/non-digit branches
+ * had no direct coverage.
+ *
+ * Functions under test: pfb_dnsbl_converged(): bool,
+ * pfb_unbound_py_marker_generation(string $path): int (pfblockerng.inc).
  */
 #[CoversFunction('pfb_dnsbl_converged')]
+#[CoversFunction('pfb_unbound_py_marker_generation')]
 final class PfbDnsblConvergedTest extends TestCase
 {
 	private string $dir;
@@ -149,5 +156,62 @@ final class PfbDnsblConvergedTest extends TestCase
 		} finally {
 			chmod("{$this->dir}/unbound.conf", 0644);
 		}
+	}
+
+	// -----------------------------------------------------------------------
+	// pfb_unbound_py_marker_generation() -- direct branch coverage (issue #1024)
+	// -----------------------------------------------------------------------
+
+	public function testMarkerGenerationUnreadableFile_returnsZeroInsteadOfCrashing(): void
+	{
+		if (function_exists('posix_getuid') && posix_getuid() === 0) {
+			$this->markTestSkipped('root bypasses file permissions -- cannot simulate an unreadable file.');
+		}
+
+		$path = "{$this->dir}/unreadable_marker";
+		file_put_contents($path, "5\n");
+		chmod($path, 0000);
+
+		try {
+			$this->assertSame(0, pfb_unbound_py_marker_generation($path),
+				'an existing-but-unreadable marker (file_get_contents() FALSE) must read as generation 0, never crash');
+		} finally {
+			chmod($path, 0644);
+		}
+	}
+
+	public function testMarkerGenerationBlankFirstLine_returnsZero(): void
+	{
+		$empty = "{$this->dir}/empty_marker";
+		file_put_contents($empty, '');
+
+		$whitespace = "{$this->dir}/whitespace_marker";
+		file_put_contents($whitespace, "   \n");
+
+		$this->assertSame(0, pfb_unbound_py_marker_generation($empty),
+			'a zero-byte marker file must read as generation 0');
+		$this->assertSame(0, pfb_unbound_py_marker_generation($whitespace),
+			'a whitespace-only first line must trim() to empty and read as generation 0');
+	}
+
+	public function testMarkerGenerationNonDigitFirstLine_returnsZero(): void
+	{
+		// Leading-digit-run input ("12abc"): a naive (int) cast without the ctype_digit()
+		// guard would silently yield 12, not 0 -- this fixture actually discriminates the
+		// guard, unlike a purely alphabetic string (which casts to 0 either way).
+		$path = "{$this->dir}/non_digit_marker";
+		file_put_contents($path, "12abc\n");
+
+		$this->assertSame(0, pfb_unbound_py_marker_generation($path),
+			'a non-digit first line must fail ctype_digit() and read as generation 0, never a garbage leading-digit int cast');
+	}
+
+	public function testMarkerGenerationValidDigitFirstLine_returnsParsedInt(): void
+	{
+		$path = "{$this->dir}/valid_marker";
+		file_put_contents($path, "42\nstray second line\n");
+
+		$this->assertSame(42, pfb_unbound_py_marker_generation($path),
+			'a valid digit first line must parse to its integer value, ignoring any later lines');
 	}
 }
