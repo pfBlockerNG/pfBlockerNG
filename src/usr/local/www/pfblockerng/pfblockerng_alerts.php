@@ -1782,7 +1782,9 @@ if ($alert_summary) {
 	// dnsbl.log/ip logs' date field is now ISO ('Y-m-d H:i:s', one space token
 	// before the hour), so the label is date+"("+hour+")" -- one fewer field
 	// than the old 3-token 'M j H:i:s' shape this pipeline used to assume.
-	$chart_cmd = "awk '{\$1=\$1} 1' | awk -F ' ' '{print \$2 \" \(\" \$3 \"\),\" \$1}' >> /usr/local/www/pfblockerng/chart_stats.csv";
+	// issue #1009: keep the parens UNescaped -- awk string literals need no
+	// paren escaping, and mawk prints a literal `\(` where gawk/onetrueawk strip it.
+	$chart_cmd = "awk '{\$1=\$1} 1' | awk -F ' ' '{print \$2 \" (\" \$3 \"),\" \$1}' >> /usr/local/www/pfblockerng/chart_stats.csv";
 
 	$alert_stats = array();
 	$alert_stats[$alert_view] = array();
