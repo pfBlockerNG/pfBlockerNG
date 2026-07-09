@@ -215,6 +215,24 @@ Full varver/ABI rationale + live proof + upgrade-lag, the boot-time `rc.d` conf 
 generators + `add-repo.sh` bootstrap, and the `repo`-marker smoke flow:
 [`docs/misc/architecture-notes.md`](architecture-notes.md) ("Self-hosted pkg distribution").
 
+## ADR amendments after merge
+
+An Accepted/Implemented ADR is still the spec its future readers plan against — stale text
+seeds repeat defects (the #1008 scrub removal overturned ADR-60 §2.1/§2.4; the un-amended
+ADR text then seeded #1047).
+
+- **When a post-merge fix overturns a piece of an Accepted/Implemented ADR** — a review
+  finding, an issue fix, anything that invalidates a decision, contract, or stated fact —
+  the ADR gains (or extends) a **§8 "Post-merge amendments" section in the same change**
+  as the fix. The correction never lives only in the issue/PR.
+- Earlier sections stay as written (the historical record); §8 is the authoritative
+  correction: one numbered item per overturned piece, each naming the issue/commit that
+  overturned it and the corrected decision.
+- Exemplars: `.ADRs/ADR_60_Age_Based_Log_Retention/ADR.md` §8 and
+  `.ADRs/ADR_61_Sync_Status_Ledger/ADR.md` §8.
+- ADR text is the dev-only no-PR class, so the amendment commits directly to `devel`
+  alongside (or immediately after) the fix landing.
+
 ## Managed-remote sessions: branch policy + cross-session resume (full text)
 
 A managed remote (web/app) session mints its own branch — `claude/<slug>-<rand>`. Where you

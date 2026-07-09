@@ -705,7 +705,9 @@ the audit comment. **A
 confirmed-real finding a reviewer itself downgrades to "pre-existing / no action needed" is
 still a finding**: it enters triage as DEFER and lands as a tracking issue before the merge —
 two real bugs from PR #937's re-review existed only in a session transcript until the
-post-merge audit (#941).
+post-merge audit (#941). **A fix overturning Accepted/Implemented ADR text amends the ADR in
+the same change** (§8 "Post-merge amendments"; stale text seeded #1047 — rule + exemplars:
+[`workflow-reference.md`](docs/misc/workflow-reference.md) "ADR amendments after merge").
 
 **Rebase onto the latest base before every push, PR, or CI/smoke dispatch.** `devel` advances
 out of band: `git fetch origin` + `git rebase origin/devel` (or `origin/<pr-base>`),

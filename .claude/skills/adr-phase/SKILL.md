@@ -265,7 +265,11 @@ silently dropped. When the agent returns, in `<path>`:
 
 If the agent reported a STOP/failure, the handoff is missing a field, or any gate item fails →
 **HALT and report**; do not start `M+1`. (You verify the transaction and the content against
-the plan; you do not re-implement it.)
+the plan; you do not re-implement it.) When a phase's executed reality contradicts the ADR's
+own text (a falsified claim, an overturned decision — the ESCALATE contract's trigger), the
+gate also reconciles the ADR: correct the text now, or post-merge via a §8 "Post-merge
+amendments" entry (workflow-reference "ADR amendments after merge"), before any later phase
+plans against the stale claim.
 
 **Loop safety:** never run more iterations than there are phases; never re-run a
 completed phase except via the explicit redo path.
