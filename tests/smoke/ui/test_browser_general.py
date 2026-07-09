@@ -215,11 +215,14 @@ def test_log_settings_grouped_layout(
     _open(page, webui, GENERAL_PAGE)
     _shot(page, screenshot_dir, "log_settings_grouped_layout")
 
-    # Column header texts visible (emitted by each category header Form_Group's StaticText
-    # children). exact=True + .first targets a header cell rather than the longer intro
-    # sentence ("Max lines -- rolling cap ...") that also contains the word as a substring.
+    # Column headers must come from the shaded category header rows (.pfb-loghdr), NOT the intro
+    # bullets: the intro also wraps "Max lines"/"Max days" in <strong> (exact text nodes) and is
+    # emitted before the header rows, so an unscoped exact match resolves to the intro via .first
+    # and would pass even if a header StaticText child were missing or renamed. Scope the lookup
+    # into the header rows so a broken column header actually fails the test.
+    loghdr = page.locator(".pfb-loghdr")
     for col_header in ("Max lines", "Max days"):
-        expect(page.get_by_text(col_header, exact=True).first).to_be_visible(timeout=JS_TIMEOUT_MS)
+        expect(loghdr.get_by_text(col_header, exact=True).first).to_be_visible(timeout=JS_TIMEOUT_MS)
 
     # The log_max_log control's enclosing form-group carries the per-log label "pfBlockerNG".
     log_max_log = page.locator('select[name="log_max_log"]')
