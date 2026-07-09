@@ -3419,10 +3419,15 @@ PY_ERROR_LOG = f"{PFB_LOGDIR}/py_error.log"
 # false-positive on a fallback (restart) as if the swap had been taken.
 SWAP_LOG_MARKER = "[ zero-downtime swap ]"
 # The DNSBL per-line parse-error log: pfb_parsed_fail() appends one CSV record
-# ({date},{header},{line},{oline}) here for every rejected line — including an ADR-22
-# strict-mode scheme/path skip. Mirrors $pfb['dnsbl_parse_err'] (inc:88,
+# ({date},{header},{line},{oline},{lineno}) here for every rejected line — including
+# an ADR-22 strict-mode scheme/path skip. Mirrors $pfb['dnsbl_parse_err'] (inc:88,
 # "{$pfb['logdir']}/dnsbl_parsed_error.log"), the established per-line failure sink.
 DNSBL_PARSE_ERR_LOG = f"{PFB_LOGDIR}/dnsbl_parsed_error.log"
+# issue #1004: the generic IP-list sibling sink. pfb_ip_parsed_fail() appends one CSV
+# record ({date},{header},{line-or-'null'},{oline},{lineno}) here for every line the
+# Site-B "other family" heuristic rejects. Mirrors $pfb['ip_parse_err'] (inc:92,
+# "{$pfb['logdir']}/ip_parsed_error.log").
+IP_PARSE_ERR_LOG = f"{PFB_LOGDIR}/ip_parsed_error.log"
 
 
 def unbound_pid(vm: SmokeVM, *, timeout: float = 30.0) -> int:

@@ -12,9 +12,9 @@ use PHPUnit\Framework\TestCase;
  * byte-identical to today (nothing skipped, no new log output).
  *   Background:
  *     - strict = (pfb_dnsbl_lenient !== 'on') -- the trivial single-toggle resolution.
- *     - pfb_dnsbl_scheme_line($line, $strict, $header, $oline, $logfile, &$skipped):
- *       returns the kept host, or FALSE after recording a parse-error line + bumping the
- *       per-feed counter.
+ *     - pfb_dnsbl_scheme_line($line, $strict, $header, $oline, $lineno, $logfile, &$skipped):
+ *       returns the kept host, or FALSE after recording a parse-error line (naming its
+ *       source line number, issue #1004) + bumping the per-feed counter.
  *     - pfb_dnsbl_scheme_skip_warn($skipped, $header): one main-log WARNING when $skipped>0.
  *
  * Real pfb_parsed_fail()/pfb_logger() are exercised (the shipped code), pointed at temp
@@ -94,15 +94,16 @@ final class PfbDnsblSchemeSkipLogTest extends TestCase
 		$logfile = $this->mktemp('pfb_parse_err_');	// Given: an empty parse-error log.
 		$skipped = 0;
 
-		// When: a malformed line ('123://evil.com') is parsed in STRICT mode.
-		$result = pfb_dnsbl_scheme_line('123://evil.com', true, 'TestFeed', '123://evil.com', $logfile, $skipped);
+		// When: a malformed line ('123://evil.com') is parsed in STRICT mode, at source line 7.
+		$result = pfb_dnsbl_scheme_line('123://evil.com', true, 'TestFeed', '123://evil.com', 7, $logfile, $skipped);
 
-		// Then: the line is rejected, the counter bumped, and a CSV parse-error row written.
+		// Then: the line is rejected, the counter bumped, and a CSV parse-error row written
+		// ending in the offending line + its source line number (issue #1004).
 		$this->assertFalse($result);
 		$this->assertSame(1, $skipped);
 		$logged = $this->readFile($logfile);
 		$this->assertStringContainsString('TestFeed', $logged);
-		$this->assertStringContainsString('123://evil.com', $logged);
+		$this->assertStringEndsWith(',123://evil.com,7', $logged);
 	}
 
 	public function testLenientEmitsNoNewLog(): void
@@ -111,7 +112,7 @@ final class PfbDnsblSchemeSkipLogTest extends TestCase
 		$skipped = 0;
 
 		// When: the SAME malformed line is parsed in LENIENT mode.
-		$result = pfb_dnsbl_scheme_line('123://evil.com', false, 'TestFeed', '123://evil.com', $logfile, $skipped);
+		$result = pfb_dnsbl_scheme_line('123://evil.com', false, 'TestFeed', '123://evil.com', 7, $logfile, $skipped);
 
 		// Then: it is kept (today's behaviour), nothing is counted, and the log stays empty
 		// -- byte-identical to today.
@@ -127,7 +128,7 @@ final class PfbDnsblSchemeSkipLogTest extends TestCase
 		$logfile = $this->mktemp('pfb_parse_err_');
 		$skipped = 0;
 
-		$result = pfb_dnsbl_scheme_line('evil://evil.com', true, 'TestFeed', 'evil://evil.com', $logfile, $skipped);
+		$result = pfb_dnsbl_scheme_line('evil://evil.com', true, 'TestFeed', 'evil://evil.com', 3, $logfile, $skipped);
 
 		$this->assertSame('evil.com', $result);
 		$this->assertSame(0, $skipped);

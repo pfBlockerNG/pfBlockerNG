@@ -400,11 +400,12 @@ final class LogTimestampBaselineTest extends TestCase
 	{
 		$logfile = $this->tempFile('pfb_parsedfail_');
 
-		pfb_parsed_fail('pfbtestheader', 'some parse line', 'orig line', $logfile);
+		// issue #1004: trailing $lineno column added -- pinned explicitly (5) here.
+		pfb_parsed_fail('pfbtestheader', 'some parse line', 'orig line', $logfile, 5);
 
 		$written = (string) file_get_contents($logfile);
 		$this->assertMatchesRegularExpression(
-			'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},pfbtestheader,some parse line,orig line$/',
+			'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},pfbtestheader,some parse line,orig line,5$/',
 			$written,
 			"pfb_parsed_fail() must write the unambiguous 'Y-m-d H:i:s' format now; got: {$written}"
 		);
@@ -418,11 +419,12 @@ final class LogTimestampBaselineTest extends TestCase
 	{
 		$logfile = $this->tempFile('pfb_parsedfail_csv_');
 
-		pfb_parsed_fail('pfbtestheader', 'some parse line', 'orig line', $logfile);
+		// issue #1004: 5 columns now (timestamp,header,line,oline,lineno) -- field0 unmoved.
+		pfb_parsed_fail('pfbtestheader', 'some parse line', 'orig line', $logfile, 5);
 
 		$written = (string) file_get_contents($logfile);
 		$fields = explode(',', $written);
-		$this->assertCount(4, $fields, "the ISO timestamp must not shift dnsbl_parse_err's CSV columns; got: {$written}");
+		$this->assertCount(5, $fields, "the ISO timestamp must not shift dnsbl_parse_err's CSV columns; got: {$written}");
 	}
 
 	// -----------------------------------------------------------------------
