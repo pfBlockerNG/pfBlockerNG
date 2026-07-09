@@ -1,0 +1,34 @@
+ADR-62 PHASE 1 — ORCHESTRATOR GATE RECORD
+Verdict: PASS
+Route: phase-step workflow wf_ccd5b137-aaf (Sonnet implementer aa3179e3 + independent Sonnet verifier aa154dc3); orchestrator validated the schema-forced gate record, re-ran pytest, and wrote this file.
+Commit gated: e97b80d0b414c0691745779f12d4caa5cc52781f ("tests: pin DNSBL feed parse output as a byte-identity corpus (ADR-62 P1)")
+
+1. TRANSACTION — PASS
+   - HEAD == origin/adr/62-dnsbl-unified-line-parsing == e97b80d0; tree clean; single commit ahead of base 753f2e7b (rev-list count 1).
+   - RESULTS/01_Results.txt committed at HEAD; all fixed handoff fields present and non-empty (verdict DONE; what-changed + hash; gates with pasted tails; vacuity red output in lieu of red→green for a behaviour-preserving phase; coverage matrix with per-row tick/deferral; deviations; carry-forward).
+
+2. CANONICAL GATES (re-run independently of the implementer) — PASS
+   - Verifier: ruff check (All checks passed); ruff format --check (208 files already formatted); mypy tests/ (no issues, 88 files); php -l x2 (no syntax errors); vendor/bin/phpunit (Tests: 2593, Assertions: 19289, Warnings: 1 pre-existing $tlds notice, Skipped: 4, 0 failures); phpstan --memory-limit=1G ([OK] No errors); phpcs -d memory_limit=1G src/ (0 violations); markdownlint on corpus README (0 errors).
+   - Verifier pytest run showed 2557 passed/5 skipped vs handoff 2563/4 — traced to the verifier session's dnspython import quirk, 0 failures either way; ORCHESTRATOR re-ran python3 -m pytest -q in the worktree: 2563 passed, 4 skipped — matches the handoff exactly. Env-caused delta, closed.
+
+3. RED PROOF — behaviour-preserving phase ⇒ vacuity checks instead of red→green; all 3 RE-EXECUTED by the verifier (not trusted):
+   - (b) mutate raw/plain_hosts.raw → phpunit --filter testEveryCorpusFeedRawMatchesGolden → 1 failure; reverted clean.
+   - (c) mutate tld/golden_pfb_py_zone.txt → phpunit --filter testDataAndZoneClassificationMatchesGolden → 1 failure; reverted clean.
+   - (a) mutate raw/abp_feed.raw anchor → pytest test_abp_feed_anchor_block → AssertionError; reverted, 19 passed.
+   All three oracles demonstrably can go red.
+
+4. DIFF VS PLAN (full git show, not --stat alone) — PASS
+   - 39 files changed, ALL under tests/ or .ADRs/ — zero src/ change (test-only blast radius honoured).
+   - Plan item 1 (re-derived matrix): 9 file:line claims spot-verified against live source (while(fgets)@16349, $easylist@16338/16371-72, pfb_unbound_python_sources@7054, tld_analysis@7652, is_abp_header@6629, abp_extract_ip@6443, strip_scheme@6508, strip_bom@6553, unbracket_ip6@6568, hash_line_classify@6646, .abp skip gate@7804-7826 incl. the $abp_feeds latent-bug gate, D2 strstr trace@16700-16702) — none fabricated.
+   - Plan item 2 (corpus): 14 feeds spanning all matrix + hostile rows; #752 (254-char undotted) and #753 (253-char boundary) char-counted.
+   - Plan item 3 (pinned surfaces): exactly (a) pytest build(), (b) PHPUnit pfb_unbound_python_sources(), (c) PHPUnit tld_analysis(); loop rows DEFERRED with real live-VM commands — all 12 cited smoke test names grep-verified as existing tests; no loop re-implementation.
+   - Plan item 4 (oracle + delta tags): D1/D2/D4 tagged in test names/docstrings; D3/D5 documented as non-behavioural/out-of-surface per ADR.
+
+5. TEST HONESTY — PASS. New files only; the negative assertion (testAbpFeedLinesAreSkippedNotMangled) has an X-shaped fixture (adline/safe.zzsuffix present in the raw source); golden-fixture comparison is the appropriate oracle class; vacuity independently re-proven.
+
+6. CONVENTIONS — PASS. Adr62* test classes match 3 siblings (AbpExtractIpTest, AdvAliasFieldErrorsTest, AggregateMemberListTest); test_adr62_*.py matches test_adr06/07/31 siblings; "Phase N" docstring mentions match existing tests/ prior art and the narration checker is scoped to src/+scripts/; rmdir_recursive reused from pfsense_doubles.php.
+
+7. SKIPPED — none.
+
+Deviations acknowledged (from handoff): pre-push commit amends to backfill the hash field (single-commit requirement, nothing shared yet — accepted); D2 sub-case "bare /re/ line silently dropped" is a hand-trace (loop has no off-appliance driver) — carried forward as a Phase 4 live-probe obligation.
+Carry-forward highlights for Phase 2: #752/#753 PHP↔Python divergences corpus-pinned both sides; corpus regeneration only via the real functions per README; newly-flipped rows must carry their delta-ID comment.
