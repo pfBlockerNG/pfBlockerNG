@@ -311,7 +311,10 @@ def _py_docstring_probe(line: str) -> str:
             continue
         if quote is not None:
             ch = line[i]
-            if quote == '"' and ch == "\\":
+            if ch == "\\":
+                # Python escapes inside BOTH '...' and "..." strings, so a \' or \"
+                # does not close the string and a following triple-quote token stays
+                # string content rather than a docstring delimiter.
                 i += 2
                 continue
             if ch == quote:
