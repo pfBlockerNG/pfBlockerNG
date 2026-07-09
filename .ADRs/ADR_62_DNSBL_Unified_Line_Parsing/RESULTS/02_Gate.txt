@@ -1,0 +1,31 @@
+ADR-62 PHASE 2 — ORCHESTRATOR GATE RECORD
+Verdict: PASS
+Route: phase-step workflow wf_eb49b439-0ec (Sonnet implementer + independent Sonnet verifier); orchestrator validated the schema-forced gate record and wrote this file.
+Commit gated: b4cda72eb258176f6299220a64400c019c3cdf3f ("pfblockerng: extract DNSBL IP collector + control/ABP line predicates (ADR-62 P2)")
+
+1. TRANSACTION — PASS. HEAD == origin/adr/62-dnsbl-unified-line-parsing == b4cda72e; tree clean; RESULTS/02_Results.txt committed; all fixed handoff fields present (verdict DONE; files+hash; gates pasted; fail-on-mutation reds in lieu of red→green; coverage matrix; deviations; carry-forward).
+
+2. CANONICAL GATES (verifier re-ran independently) — PASS. php -l inc + 3 new test files clean; phpunit Tests: 2643, Assertions: 19360, 0 failures (2593 baseline + 50 new); phpstan --memory-limit=1G OK; phpcs src/ 0 violations; pytest green (verifier's 2557/5 vs handoff 2563/4 re-proven env-only: same 2557/5 reproduces on the PRE-phase parent commit via checkout-and-restore — not caused by this diff; no .py touched); ruff check/format clean; mypy clean; narration/retired-token/version-literal checkers exit 0.
+
+3. RED PROOF — behaviour-preserving ⇒ pinned oracles + fail-on-mutation, all RE-EXECUTED by verifier:
+   - Phase-1 corpus oracles re-run post-rewire: PHPUnit corpus filter 6 tests/102 assertions 0 fail; pytest corpus 19/19 — byte-identity held.
+   - Mutation (1): break bracketed-IPv6 carve-out → 2 named failures; reverted clean.
+   - Mutation (2): loosen closing-slash rule to bare prefix → 4 named failures; reverted clean.
+   - Mutation (3): route v6 arm through sanitize_ipaddr → 1 failure with '0::1' vs '::1' diff; reverted clean.
+
+4. DIFF VS PLAN (full git show) — PASS.
+   - Item 1 collector: pfb_dnsbl_collect_feed_ip @6664; v4 sanitize→validate→append-parsed / v6 validate-raw→append-raw preserved; ABP site (16491-16502) outer dnsbl_ip guard + unconditional continue-on-extract kept at site; pon site (16630-16643) guard=$csvline[0] vs candidate=$line preserved; host site (16782-16792) continue-outside-dnsbl_ip-guard preserved. Re-grep: exactly 3 collect_feed_ip call sites in the loop, zero inline copies left.
+   - Item 2 skippable-control-line @6689-6697: ''/'!'/'//'/'[…]'-non-IPv6 with unbracket-based carve-out; '#' excluded. All 13 hostile rows asserted (15 tests).
+   - Item 3 abp-rule-line @6705-6721: ||/@@ prefix, element-hiding substring family, /re/ closing-slash + '/$'-options rule; bare domain FALSE (D1 contract). All 22 provider rows + 5 dedicated tests; probes executed vs parse_abp/_dnsbl_parse_abp_regex ('@@'/'||' alone → parse_abp None but capture TRUE by design; '//comment' → regex helper None, predicate FALSE — no PHP↔Python disagreement).
+   - Item 4 wiring discipline: predicates wired NOWHERE (grep zero call sites outside tests); 3 candidate sites investigated and left untouched with per-site reasoning; only inc changes = 2 helper blocks + 3 site rewires.
+   - Item 5: corpus oracles green (above).
+
+5. TEST HONESTY — PASS. No pre-existing test modified; every negative assertion demonstrated failable via realistic production-path mutations (re-executed, reverted, diff-clean); no monkeypatched impossible faults; no www/ (Tier-A N/A).
+
+6. CONVENTIONS — PASS. pfb_dnsbl_collect_feed_ip beside pfb_dnsbl_abp_extract_ip/unbracket_ip6/whitelist_lines; is_* predicates beside pfb_dnsbl_is_abp_header/has_loaded_feeds/v6_vip_required; sniffs green by execution. Function-header comments 7/4/5 lines = function-contract facts (CLAUDE.md carve-out), checker clean.
+
+7. SKIPPED — none.
+
+Deviations accepted: (1) host-site two mutually-exclusive family blocks collapsed to one guard — proven equivalent (corpus green + source re-read; the two blocks were byte-identical in guard+continue shape); (2) in-file handoff hash names the pre-amend commit (self-reference limitation, same as Phase 1) — structured output + git confirm b4cda72e.
+Notes for later phases: branch now 8 commits behind origin/devel — rebase happens at landing (Step 7), not mid-run, to keep the corpus baseline stable; handoff's investigation line numbers were ~5-68 off (marked '~') — Phase 4 must re-grep sites fresh, not trust RESULTS/02 numbers.
+Carry-forward: predicate↔parse_abp agreement table lives in RESULTS/02_Results.txt; capture-guard semantics = structural capture (bare '@@'/'||' TRUE even though parse_abp returns None) — Phase 3's Python mirror must match the PHP predicate, not parse_abp's accept set.
