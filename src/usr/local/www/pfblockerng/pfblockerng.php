@@ -414,7 +414,7 @@ if (in_array($argv[1], array('update', 'updateip', 'updatednsbl', 'dc', 'dcc', '
 function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $format, $vtype, $srcint=FALSE) {
 	global $pfb;
 
-	$log = "[ {$header} ] [ NOW ]\n";
+	$log = "[ {$header} ]\n";
 	pfb_logger("{$log}", 1);
 	$pfb['cron_update'] = FALSE;
 
@@ -630,7 +630,7 @@ function pfblockerng_download_extras($timeout=600, $type='') {
 		$logtype = 4;
 	}
 
-	pfb_logger("\nDownload Process Starting [ NOW ]\n", $logtype);
+	pfb_logger("\nDownload Process Starting\n", $logtype);
 	foreach ($pfb['extras'] as $feed) {
 
 		if (empty($feed)) {
@@ -683,7 +683,7 @@ function pfblockerng_download_extras($timeout=600, $type='') {
 			}
 		}
 	}
-	pfb_logger("Download Process Ended [ NOW ]\n\n", $logtype);
+	pfb_logger("Download Process Ended\n\n", $logtype);
 
 	if ($type == 'blacklist') {
 		print "{$pfb_return}";
@@ -709,7 +709,7 @@ function pfblockerng_sync_cron($force_all = FALSE, $scope = 'both') {
 	$hour = date('G');
 	$dow  = date('N');
 	$pfb['update_cron'] = FALSE;
-	$log = " CRON  PROCESS  START [ " . pfb_pkg_ver() . " ] [ NOW ]\n";
+	$log = " CRON  PROCESS  START [ " . pfb_pkg_ver() . " ]\n";
 	pfb_logger("{$log}", 1);
 
 	$list_type = array('pfblockernglistsv4' => '_v4', 'pfblockernglistsv6' => '_v6', 'pfblockerngdnsbl' => '_v4');
@@ -829,12 +829,12 @@ function pfblockerng_uc_countries() {
 		safe_mkdir ("{$folder}", 0755);
 	}
 
-	$log = "Country code update Start [ NOW ]\n";
+	$log = "Country code update Start\n";
 	pfb_logger("{$log}", 4);
 
 	$maxmind_cont = "{$pfb['geoipshare']}/GeoLite2-Country-Locations-{$pfb['maxmind_locale']}.csv";
 	if (!file_exists($maxmind_cont)) {
-		$log = " [ MAXMIND UPDATE FAIL, Language File Missing, using previous Country code database ] [ NOW ]\n";
+		$log = " [ MAXMIND UPDATE FAIL, Language File Missing, using previous Country code database ]\n";
 		pfb_logger("{$log}", 4); 
 		return;
 	}
@@ -1194,7 +1194,7 @@ function pfblockerng_uc_countries() {
 	// Collect Country ISO data and sort to Continent arrays (IPv4 and IPv6)
 	foreach (array('4', '6') as $type) {
 	
-		$log = " Processing ISO IPv{$type} Continent/Country Data [ NOW ]\n";
+		$log = " Processing ISO IPv{$type} Continent/Country Data\n";
 		pfb_logger("{$log}", 4);
 
 		$geoip_dup = 0;		// Count of Geoname_ids which have both a different 'Registered and Represented' geoname_id
@@ -1471,7 +1471,7 @@ function pfblockerng_get_countries() {
 				$tab = "\t";
 			}
 
-			$log = " IPv{$type} {$cont}{$tab} [ NOW ]\n";
+			$log = " IPv{$type} {$cont}{$tab}\n";
 			pfb_logger("{$log}", 4);
 
 			if ($type == '6') {
@@ -2193,7 +2193,7 @@ EOF;
 	//Build Reputation Tab
 	pfb_build_reputation_tab($et_options);
 
-	$log = "Country Code Update Ended [ NOW ]\n\n";
+	$log = "Country Code Update Ended\n\n";
 	pfb_logger("{$log}", 4);
 
 	// Unset arrays
