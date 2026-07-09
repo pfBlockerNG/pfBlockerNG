@@ -350,10 +350,14 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		// applied marker to 1 so wait_applied(1) confirms on its FIRST read, never sleeping.
 		file_put_contents("{$this->dir}/pfb_py_reload.applied", "1\n");
 
+		// TRUE only for the two expected success-path calls -- if a regression falls
+		// through to the restart path instead, is_process_running() resolves FALSE
+		// immediately so pfb_stop_start_unbound()'s 30-iteration wait loop never
+		// real-sleeps; the call-count assertion below still catches the regression.
 		$calls = 0;
 		$GLOBALS['pfb_test_process_running']['unbound'] = function () use (&$calls) {
 			$calls++;
-			return TRUE;
+			return $calls <= 2;
 		};
 
 		pfb_reload_unbound('enabled', FALSE, FALSE, TRUE, []);
