@@ -210,7 +210,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// pfb_reload_unbound() end-to-end -- restart-fallback opens nothing alone
+	// pfb_reload_unbound() end-to-end -- restart-fallback reaches a converged tail
 	// -----------------------------------------------------------------------
 
 	/**
@@ -298,17 +298,21 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 
 		$start = strpos($source, 'function pfb_reload_unbound(');
 		$this->assertNotFalse($start, 'pfb_reload_unbound() must exist');
-		// The shared restart path (both the fallback branches AND the zero-downtime
-		// success return fall through to it) always opens with this tempnam() call --
+		// The three fallback branches all fall through to this tempnam() call (the
+		// zero-downtime SUCCESS path instead `return`s early, before reaching it) --
 		// a stable, unique boundary marking the end of the fallback-branches region.
 		$end = strpos($source, "\$cache_dumpfile = tempnam(", $start);
 		$this->assertNotFalse($end, 'the shared restart path boundary marker must exist');
 
 		$region = substr($source, $start, $end - $start);
 
-		$this->assertStringNotContainsString('pfb_sync_status_open(', $region,
+		// \s*\( (not a literal "(") so neither call is evadable by reformatting with
+		// whitespace before the parenthesis; pfb_sync_status_open/close are the only
+		// two ledger-mutating primitives (grepped -- no pfb_sync_status_refresh() or
+		// similar exists), so this pair is exhaustive.
+		$this->assertDoesNotMatchRegularExpression('/pfb_sync_status_open\s*\(/', $region,
 			'a restart-fallback branch must never open a ledger entry directly -- only the shared tail may');
-		$this->assertStringNotContainsString('pfb_sync_status_close(', $region,
+		$this->assertDoesNotMatchRegularExpression('/pfb_sync_status_close\s*\(/', $region,
 			'a restart-fallback branch must never close a ledger entry directly -- only the shared tail may');
 	}
 }
