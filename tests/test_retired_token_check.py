@@ -2,12 +2,14 @@
 
 Every candidate/threshold rule is paired with the nearest form that must
 stay clean, so a green run proves the checker discriminates a genuine
-tree-wide retirement (issue #1047's ``' [ NOW ]'`` shape: >=3 removed sites,
-0 re-adds) from a rename/move, a partial edit, or noise -- rather than firing
-on any repeated quoted string.
+tree-wide retirement (issue #1047's bracketed NOW-marker shape: >=3 removed
+sites, 0 exact re-adds) from a rename/move, a partial edit, or noise --
+rather than firing on any repeated quoted string.
 
 Fixture tokens are assembled at runtime (string concatenation) so this
-tracked test file does not itself contain a flaggable literal, mirroring
+tracked test file does not itself contain a flaggable literal -- the exemplar
+marker is deliberately not written out either, else this file would be a
+permanent "surviving site" in its own tool's report. Mirrors
 tests/test_version_literal_check.py's convention.
 """
 
@@ -286,8 +288,10 @@ def test_r10_pure_punctuation_token_skipped() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# R11 -- '\ No newline at end of file' marker: not counted as content;
-# candidate math identical with vs without it present (issue #1051 lesson)
+# R11 -- '\ No newline at end of file' marker: not counted as content
+# (issue #1051 class). Pins the PROPERTY, not a mechanism: the current
+# prefix-dispatch parser skips the marker structurally; this test is the
+# tripwire for a future lineno/index-tracking rewrite counting it as content.
 # --------------------------------------------------------------------------- #
 
 
@@ -513,3 +517,134 @@ def test_r18_unquoted_token_never_becomes_a_candidate() -> None:
     diff = _diff_hunk("src/a.php", removed=[f"x = {tok};" for _ in range(3)], added=[])
     retired = _retired(diff)
     assert tok not in retired, f"an unquoted-only token must never seed a candidate; got retired={retired}"
+
+
+# --------------------------------------------------------------------------- #
+# R19 -- an ADDED line that merely CONTAINS the token's bytes inside a longer,
+# unrelated string must NOT suppress the retirement (suppression is exact
+# quoted-span re-adds only); a genuine exact re-add still suppresses (R3).
+# --------------------------------------------------------------------------- #
+
+
+def test_r19_substring_in_added_line_does_not_suppress(tmp_path: Path) -> None:
+    tok = "TOK" + "_R19_MARK"
+    _init_repo(tmp_path)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/a.php").write_text("\n".join(f"logger('{tok}');" for _ in range(3)) + "\n")
+    (tmp_path / "src/b.php").write_text(f"echo '{tok} survivor';\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base")
+
+    (tmp_path / "src/a.php").write_text("logger();\n" * 3)
+    (tmp_path / "src/c.php").write_text(f"// unrelated: X{tok}X appears here by coincidence\n")
+    _git(tmp_path, "add", ".")
+    res = _run(tmp_path, "--staged")
+    assert res.returncode == 1, (
+        f"a coincidental substring on an added line must not silently kill the finding; "
+        f"got {res.returncode}, stdout={res.stdout!r}, stderr={res.stderr}"
+    )
+    assert "src/b.php:1" in res.stdout, f"the survivor must be reported; got stdout={res.stdout!r}"
+
+
+def test_r19_exact_quoted_readd_embedded_in_longer_string_does_not_suppress() -> None:
+    tok = "TOK" + "_R19B_MARK"
+    diff = _diff_hunk(
+        "src/a.php",
+        removed=[f"logger('{tok}');" for _ in range(3)],
+        added=[f'x = "prefix {tok} suffix";'],
+    )
+    retired = _retired(diff)
+    assert tok in retired, (
+        f"a token embedded inside a LONGER added quoted string is not a re-add of the same "
+        f"literal and must stay retired; got retired={retired}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# R20 -- the two non-src scan roots (scripts/, .github/workflows/) are in
+# scope for extraction AND for the straggler grep; a lookalike prefix
+# (.github/workflowsX/) is NOT a scan root.
+# --------------------------------------------------------------------------- #
+
+
+def test_r20_scripts_and_workflows_roots_in_scope(tmp_path: Path) -> None:
+    tok = "TOK" + "_R20_MARK"
+    _init_repo(tmp_path)
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / ".github/workflows").mkdir(parents=True)
+    (tmp_path / ".github/workflows/w.yml").write_text("\n".join(f"run: x '{tok}'" for _ in range(3)) + "\n")
+    (tmp_path / "scripts/s.sh").write_text(f"echo '{tok} survivor'\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base")
+
+    (tmp_path / ".github/workflows/w.yml").write_text("run: x\n" * 3)
+    _git(tmp_path, "add", ".")
+    res = _run(tmp_path, "--staged")
+    assert res.returncode == 1, (
+        f"a retirement in .github/workflows with a survivor in scripts/ must flag; "
+        f"got {res.returncode}, stdout={res.stdout!r}, stderr={res.stderr}"
+    )
+    assert "scripts/s.sh:1" in res.stdout, f"the scripts/ survivor must be reported; got stdout={res.stdout!r}"
+
+
+def test_r20_lookalike_root_prefix_out_of_scope() -> None:
+    tok = "TOK" + "_R20B_MARK"
+    diff = _diff_hunk(".github/workflowsX/w.yml", removed=[f"run: x '{tok}'" for _ in range(3)], added=[])
+    retired = _retired(diff)
+    assert tok not in retired, f"a lookalike directory prefix must not count as a scan root; got retired={retired}"
+
+
+# --------------------------------------------------------------------------- #
+# R21 -- the git-error half of exit 2: an unresolvable --diff base fails
+# loudly (never a silent pass, never conflated with findings' exit 1).
+# --------------------------------------------------------------------------- #
+
+
+def test_r21_git_error_exits_2(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    (tmp_path / "f.txt").write_text("x\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base")
+    res = _run(tmp_path, "--diff", "nonexistent-base-ref")
+    assert res.returncode == 2, f"a git failure must exit 2; got {res.returncode}, stdout={res.stdout!r}"
+    assert "git diff failed" in res.stderr, f"the git error must reach stderr; got stderr={res.stderr!r}"
+
+
+# --------------------------------------------------------------------------- #
+# R22 -- report hits sort NUMERICALLY by line within a file (417 before 2196),
+# not lexicographically ("2196" < "417" as strings).
+# --------------------------------------------------------------------------- #
+
+
+def test_r22_report_hits_sorted_numerically() -> None:
+    tok = "TOK" + "_R22_MARK"
+    report = crt.format_report({tok: [f"src/f.php:2196:x('{tok}');", f"src/f.php:417:y('{tok}');"]})
+    assert report.index(":417:") < report.index(":2196:"), (
+        f"hits must sort numerically by line number within a file; got report={report!r}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# R23 -- tokens whose surviving-hit sets are IDENTICAL (e.g. a code token and
+# its comment-quoted variant, both matching the same sites) merge into ONE
+# report block; distinct hit sets keep separate blocks.
+# --------------------------------------------------------------------------- #
+
+
+def test_r23_identical_hit_sets_merge_into_one_block() -> None:
+    tok_a = " [ TOK" + "_R23 ]"
+    tok_b = "[ TOK" + "_R23 ]"
+    hits = ["src/f.php:10:x", "src/f.php:20:y"]
+    report = crt.format_report({tok_a: list(hits), tok_b: list(hits)})
+    assert repr(tok_a) in report and repr(tok_b) in report, f"both token reprs must appear; got {report!r}"
+    assert report.count("src/f.php:10:x") == 1, (
+        f"identical hit sets must print once, merged under both tokens; got report={report!r}"
+    )
+    assert f"{len(hits)} site(s) remain:" in report
+
+
+def test_r23_distinct_hit_sets_stay_separate_blocks() -> None:
+    tok_a = "TOK" + "_R23A"
+    tok_b = "TOK" + "_R23B"
+    report = crt.format_report({tok_a: ["src/f.php:10:x"], tok_b: ["src/g.php:5:z"]})
+    assert report.count("site(s) remain:") == 2, f"distinct hit sets must keep separate blocks; got report={report!r}"

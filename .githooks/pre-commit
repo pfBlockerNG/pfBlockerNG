@@ -209,8 +209,15 @@ fi
 #     rollout -- a partial retirement can be a deliberate staged migration. ---
 if [ -n "$py_bin" ]; then
 	step 'retired-tokens (stragglers of a tree-wide token removal; advisory)'
-	"$py_bin" scripts/check_retired_tokens.py --staged \
-		|| printf 'WARN: retired-token stragglers reported above are ADVISORY (issue #1059 rollout) -- commit not blocked.\n'
+	rt_rc=0
+	"$py_bin" scripts/check_retired_tokens.py --staged || rt_rc=$?
+	if [ "$rt_rc" -eq 1 ]; then
+		printf 'WARN: retired-token stragglers reported above are ADVISORY (issue #1059 rollout) -- commit not blocked.\n'
+	elif [ "$rt_rc" -ne 0 ]; then
+		# rc>=2 = the checker itself failed to run -- distinct message so a broken
+		# guard is visible instead of masquerading as a straggler warning.
+		printf 'WARN: check_retired_tokens.py did not run (exit %s) -- retired-token guard skipped this commit.\n' "$rt_rc"
+	fi
 else
 	skip retired-tokens
 fi
