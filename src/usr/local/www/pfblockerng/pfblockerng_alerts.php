@@ -1841,14 +1841,17 @@ if ($alert_summary) {
 				case 'replydate':
 					// ISO date/time has 1 space token (not the old 3-token
 					// 'M j H:i:s'); the day bucket is the date field alone.
-					exec("{$cut_cmd} {$alert_log} | cut -d ' ' -f1 | uniq -c 2>&1", $stats);
+					// issue #1057: grep skips pre-ISO legacy lines (no digit-year prefix).
+					exec("{$cut_cmd} {$alert_log} | {$pfb['grep']} -E '^[0-9]{4}-' | cut -d ' ' -f1 | uniq -c 2>&1", $stats);
 					$stats = array_reverse($stats);
 					break;
 				case 'dnsbldatehr':
-					exec("{$cut_cmd} {$alert_log} | cut -d ':' -f1 | sort | uniq -c | sort -nr 2>&1", $stats);
+					// issue #1057: grep skips pre-ISO legacy lines (no digit-year prefix).
+					exec("{$cut_cmd} {$alert_log} | {$pfb['grep']} -E '^[0-9]{4}-' | cut -d ':' -f1 | sort | uniq -c | sort -nr 2>&1", $stats);
 					break;
 				case 'dnsbldatehrmin':
-					exec("{$cut_cmd} {$alert_log} | cut -d ':' -f1,2 | sort | uniq -c | sort -nr 2>&1", $stats);
+					// issue #1057: grep skips pre-ISO legacy lines (no digit-year prefix).
+					exec("{$cut_cmd} {$alert_log} | {$pfb['grep']} -E '^[0-9]{4}-' | cut -d ':' -f1,2 | sort | uniq -c | sort -nr 2>&1", $stats);
 					break;
 				case 'dnsblchart':
 				case 'replychart':
@@ -5070,8 +5073,9 @@ foreach ($stats as $stat_type => $stype):
 							if ($stat_type == 'dnsbldatehr' || $stat_type == 'dnsbldatehrmin') {
 								// ISO bucket key is 2 space-tokens (date, hour[:min]), not the
 								// old 3-token "Mon D HH" shape -- label as "date (hour[:min])".
+								// issue #1057: a truncated/corrupt key has no 2nd token.
 								$d = explode (' ', $data);
-								$data = "{$d[0]}&emsp;({$d[1]})";
+								$data = isset($d[1]) ? "{$d[0]}&emsp;({$d[1]})" : $d[0];
 							}
 
 							if (!empty($data) && $data != 'Not available for HTTPS alerts') {
