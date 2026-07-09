@@ -74,13 +74,38 @@ final class TldAnalysisAbpVerbatimTest extends TestCase
 	}
 
 	/**
+	 * Run tld_analysis() collecting every PHP diagnostic it raises (instead of
+	 * blanket-@-suppression, per PR #1066 review): callers assert on the list.
+	 *
+	 * @return list<string>
+	 */
+	private function runTldAnalysis(): array
+	{
+		$warnings = [];
+		set_error_handler(
+			static function (int $errno, string $errstr) use (&$warnings): bool {
+				$warnings[] = $errstr;
+				return TRUE;
+			}
+		);
+		try {
+			tld_analysis();
+		} finally {
+			restore_error_handler();
+		}
+		return $warnings;
+	}
+
+	/**
 	 * Scenario: verbatim ABP lines in a plain feed, no ABP feed configured.
 	 *
 	 * Given:  pfb_dnsbl.raw holding one plain CSV row plus verbatim ||x^ and
-	 *         @@||x^ lines, and ZERO .abp markers in dnsdir
+	 *         @@||x^ lines — one with >=5 comma-separated ABP options — and
+	 *         ZERO .abp markers in dnsdir
 	 * When:   tld_analysis() runs
-	 * Then:   the CSV row lands in the zone output and the verbatim lines are
-	 *         skipped — no malformed ',,' row in the data output
+	 * Then:   the CSV row lands in the zone output and every verbatim line is
+	 *         skipped — no malformed row in the data output, no numeric
+	 *         undefined-array-key warning from the CSV explode
 	 */
 	public function testVerbatimAbpLinesSkippedWithZeroAbpMarkers(): void
 	{
@@ -91,9 +116,10 @@ final class TldAnalysisAbpVerbatimTest extends TestCase
 			",example.com,,1,PlainFeed,GroupA\n"
 			. "||evil-verbatim.example^\n"
 			. "@@||allow-verbatim.example^\n"
+			. "||opt-verbatim.example^\$script,third-party,domain=x.com,match-case,important,other\n"
 		);
 
-		@tld_analysis();
+		$warnings = $this->runTldAnalysis();
 
 		$this->assertFileExists($pfb['unbound_py_zone']);
 		$zone = (string) file_get_contents($pfb['unbound_py_zone']);
@@ -109,6 +135,16 @@ final class TldAnalysisAbpVerbatimTest extends TestCase
 			'',
 			$data,
 			"verbatim ABP lines must be skipped, not CSV-mangled; got: " . var_export($data, TRUE)
+		);
+
+		$numeric = array_values(array_filter(
+			$warnings,
+			static fn (string $w): bool => preg_match('/Undefined array key \d/', $w) === 1
+		));
+		$this->assertSame(
+			[],
+			$numeric,
+			'no verbatim line may reach the CSV explode; got: ' . var_export($numeric, TRUE)
 		);
 	}
 
@@ -131,7 +167,7 @@ final class TldAnalysisAbpVerbatimTest extends TestCase
 			. ",abp-carried.example,,1,AbpFeed,GroupB\n"
 		);
 
-		@tld_analysis();
+		$this->runTldAnalysis();
 
 		$this->assertFileExists($pfb['unbound_py_zone']);
 		$zone = (string) file_get_contents($pfb['unbound_py_zone']);
