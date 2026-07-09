@@ -283,6 +283,58 @@ def _tracked_files(roots: tuple[str, ...]) -> list[Path]:
 _TRIPLE_QUOTE_TOKENS = ('"""', "'''")
 
 
+def _py_docstring_probe(line: str) -> str:
+    """Reduce ``line`` to its real triple-quote delimiters plus bare code.
+
+    issue #1082: a triple-quote token (``'''`` or its double-quote form) that
+    appears only inside a normal single-line ``'...'``/``"..."`` string or a
+    trailing ``#`` comment (e.g. ``SEP = "'''"``) must NOT count as a delimiter -- else it
+    opens a spurious docstring that swallows every following line. This blanks
+    normal-string content and the trailing comment while keeping delimiters, so
+    the caller's odd/even count sees only genuine triple-quote delimiters.
+    """
+    out: list[str] = []
+    quote: str | None = None  # inside a normal single-line '...'/"..." string
+    triple: str | None = None  # inside a triple-quoted span opened on THIS line
+    i, n = 0, len(line)
+    while i < n:
+        three = line[i : i + 3]
+        if triple is not None:
+            # content of an open triple span is blanked; only its matching close
+            # delimiter is emitted, so a quote or "#" inside it can't mislead us.
+            if three == triple:
+                out.append(three)
+                triple = None
+                i += 3
+                continue
+            i += 1
+            continue
+        if quote is not None:
+            ch = line[i]
+            if quote == '"' and ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if three in _TRIPLE_QUOTE_TOKENS:
+            out.append(three)
+            triple = three
+            i += 3
+            continue
+        ch = line[i]
+        if ch in ("'", '"'):
+            quote = ch
+            i += 1
+            continue
+        if ch == "#":
+            break
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def _code_lines(lines: list[str], suffix: str) -> list[str | None]:
     """Return, per line, the code portion to scan -- or ``None`` for prose.
 
@@ -295,7 +347,8 @@ def _code_lines(lines: list[str], suffix: str) -> list[str | None]:
       the tree; a same-line `/*...*/` pair keeps its trailing code).
     * everything else: ``#`` line/trailing comments.
     * ``.py`` additionally tracks triple-quoted docstrings: an ODD number of
-      triple-quote tokens toggles the docstring state (a close-and-reopen on
+      real triple-quote delimiters (outside normal strings/comments, issue
+      #1082) toggles the docstring state (a close-and-reopen on
       one line therefore stays open), while an EVEN count on a non-docstring
       line falls through to the value scan, so a one-line triple-quoted
       assignment (X = triple-quoted token) is caught by the quoted-literal
@@ -329,9 +382,10 @@ def _code_lines(lines: list[str], suffix: str) -> list[str | None]:
             out.append(None)
             continue
         if is_python:
+            probe = _py_docstring_probe(line)
             opened = False
             for token in _TRIPLE_QUOTE_TOKENS:
-                if line.count(token) % 2 == 1:
+                if probe.count(token) % 2 == 1:
                     open_token = token
                     opened = True
                     break
