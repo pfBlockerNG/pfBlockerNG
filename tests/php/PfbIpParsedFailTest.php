@@ -11,8 +11,8 @@ use PHPUnit\Framework\TestCase;
  * Scenario: mirrors pfb_parsed_fail()'s CSV/FILE_APPEND idiom exactly, plus a
  * trailing line-number column (the #1004 DNSBL-parity addition).
  *   Background:
- *     - pfb_ip_parsed_fail($header, $line, $oline, $lineno, $logfile) writes
- *       "{now},{header},{line-or-'null'},{oline},{lineno}" via FILE_APPEND.
+ *     - pfb_ip_parsed_fail($header, $line, $oline, $logfile, $lineno) writes
+ *       "{now},{header},{line-or-'null'},{oline},{lineno}\n" via FILE_APPEND.
  *     - An empty $line records the literal string 'null', never a blank field.
  *
  * This step wires ONLY the helper -- no parse-loop caller exists yet (Step 2).
