@@ -5,6 +5,8 @@ declare(strict_types=1);
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/LogTypesFixture.php';
+
 /**
  * ADR-29 Phase 3 — Rollback / backward-compat contract.
  *
@@ -1117,10 +1119,7 @@ final class RollbackContractTest extends TestCase
 	 */
 	public static function logMaxDaysVocabularyProvider(): array
 	{
-		$log_types = [
-			'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
-			'ip_matchlog', 'ip_parse_err', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
-		];
+		$log_types = pfb_test_log_types();
 		$vocab  = ['0', '30', '365'];
 		$cases  = [];
 		foreach ($log_types as $type) {
@@ -1185,10 +1184,8 @@ final class RollbackContractTest extends TestCase
 	 */
 	public function testLogMaxDaysFieldAbsentKeyReturnsZeroDefault(): void
 	{
-		$log_types = [
-			'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
-			'ip_matchlog', 'ip_parse_err', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
-		];
+		$log_types = pfb_test_log_types();
+		$this->assertNotEmpty($log_types, 'pfb_test_log_types() must not be empty');
 
 		foreach ($log_types as $type) {
 			$key  = 'log_max_days_' . $type;
