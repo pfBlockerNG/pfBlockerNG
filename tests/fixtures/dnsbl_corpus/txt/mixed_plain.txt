@@ -1,0 +1,3 @@
+,mixedhost.example,,1,mixed_plain,grp_mixed
+||anchor.mixed.example^
+,falsepositive.example,,1,mixed_plain,grp_mixed

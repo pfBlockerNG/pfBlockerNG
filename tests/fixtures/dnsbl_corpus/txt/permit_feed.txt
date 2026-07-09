@@ -1,0 +1,2 @@
+,allowme.example,,1,permit_feed,grp_permit
+,accidentalallow.example,,1,permit_feed,grp_permit

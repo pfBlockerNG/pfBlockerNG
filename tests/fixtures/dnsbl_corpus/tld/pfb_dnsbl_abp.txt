@@ -1,0 +1,2 @@
+||adline.zzsuffix.example^
+@@||safe.zzsuffix.example^
