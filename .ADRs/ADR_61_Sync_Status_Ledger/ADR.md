@@ -1,6 +1,7 @@
 # ADR-61: A sync-status ledger — unify widget error/out-of-sync reporting for IP and DNSBL
 
-- **Status:** **Implemented (pending live-VM smoke)** (2026-07-08). All 7 phases landed;
+- **Status:** **Implemented (pending live-VM smoke), amended** (2026-07-08; §8 post-merge
+  amendments 2026-07-09). All 7 phases landed;
   PHPUnit + pytest green, PHPCS/PHPStan clean. Phases 3-6 carried DONE-WITH-DEVIATION
   verdicts — each a disclosed, reasoned engineering choice, not a defect (Phase 6's first
   attempt separately failed its own gate on 2 real defects, both fixed in a corrective
@@ -457,3 +458,37 @@ overrides this draft) and each row maps to a Phase-2/3/4 test or an explicit def
   fallback was needed; the file mirrors the existing `pfb_py_reload`/`.applied` marker
   idiom directly. This reject path is retained here only as the documented alternative
   that was considered and not required.
+
+## 8. Post-merge amendments (2026-07-09 — the 48h review, issues #1048-#1052)
+
+The 48h post-merge review (PR #1003's window) found three defects rooted in this document's
+spec, not in its implementation. Sections above stay as written for the record; **this
+section is the authoritative correction.**
+
+1. **§2.2 never decided `item`'s granularity — and the ambiguity guaranteed a masking bug
+   (#1048).** `item` was defined as "the alias/group/feed name"; the #998 follow-up pinned
+   the per-LIST alias (for the widget deep link) while open/close fired per FEED row.
+   Combined with §2.2's "paired clearer for the same key on its own next success", a
+   sibling feed's success is indistinguishable from "its own next success": in a
+   multi-feed alias, feed A's failure is closed by feed B's success (order-dependent).
+   Corrected decision: the key stays per-alias (the #998 widget contract), but the
+   download clearer fires once per alias-pass, only when **no** row of that alias failed —
+   a failing row anywhere in the pass leaves (or opens) the entry.
+2. **§2.2's symmetric-ownership rule modeled two outcomes; reality has three (#1049).**
+   "Every open path paired with the clear path on its own next success" misses the path
+   that neither succeeds nor fails but becomes NOT APPLICABLE: the absent-manifest early
+   return (manifest removed after a corrupt-manifest open → stale entry until reboot),
+   and the skipped-loader variants (manifest success skips the CSV loaders; feature
+   toggles skip whole loader groups). Corrected: a skip/not-applicable transition closes
+   the keys it makes unreachable. Phase 4's "written/cleared by the same try/except
+   sites" framing structurally couldn't see these — a return-without-raise is not a
+   try/except site. §1.2's Python enumeration was also by example ("~20 sites (e.g. …)")
+   in the one document whose own Phase 1 mandates fresh-grep enumeration.
+3. **Cross-ADR interaction unowned (#1052).** `pfb_sync_status_dedup_check()` reads the
+   whole `pfblockerng.log` via `file()`; ADR-60 — same day — is what makes a `nolimit`
+   log legitimately unbounded. Each ADR was locally coherent; nobody owned the product.
+   Corrected: bounded tail-read.
+4. **Phase 6 rewrote a mutating POST handler on a `$nocsrf = TRUE` page without flagging
+   the security surface (#1050).** The exemption predates this ADR, but the widget
+   rewrite widened what the exempt endpoint mutates (the whole ledger). Corrected:
+   cross-site-shaped requests are rejected on the mutating handlers.

@@ -1,6 +1,7 @@
 # ADR-60: Uniform log timestamps and continuous age-based log retention
 
-- **Status:** **Accepted** (2026-07-08; Phases 1-9 implemented 2026-07-08) — the new
+- **Status:** **Accepted, amended** (2026-07-08; Phases 1-9 implemented 2026-07-08; §8
+  post-merge amendments 2026-07-09) — the new
   `tests/smoke/test_log_age_retention.py` cases (host-path `ip_blocklog` age cutoff with inode
   preserved, chrooted `dnslog` age cutoff with inode + `unbound` ownership preserved, and the
   `log_max_days_<type>='0'` no-op control) pass on the CE + Plus live-VM fan-out (run
@@ -539,3 +540,35 @@ line-count cap (not the age cap) until a better source of truth exists.
 genuine latent wrong-year bugs (`dnsbl_alias_update()`, `pfBlockerNG_clearsqlite()`) proven fixed with
 a year-boundary test; `pfb_iso_timestamp()` simplified or removed with the widget still correct;
 `www/index.php:101`'s HTTP header untouched (verified, not just "didn't get to it").
+
+## 8. Post-merge amendments (2026-07-09 — the 48h review, issues #1047-#1057)
+
+Reality overturned four pieces of this ADR after merge (PR #1005). The sections above are
+left as written for the historical record; **this section is the authoritative correction.**
+
+1. **The §2.1/§2.4/Phase-2 defensive scrub NO LONGER EXISTS — and was a spec defect.**
+   Scrubbing the bare substring `NOW` corrupts legitimate message content (`SNOWSHOE` →
+   `SSHOE`) — found by the PR #1005 review (#1008) and removed in 958e679f, which deleted
+   the call-site tokens instead. §2.4's "call-site cleanup is cosmetic, deferred" was
+   premised on the scrub existing; once the scrub was removed that deferral became
+   load-bearing, and the incomplete call-site enumeration (one file instead of the tree)
+   shipped #1047 (9 leftover `[ NOW ]` tokens in `pfblockerng.php`, fixed with a
+   zero-hit tree-grep tripwire test). Spec lesson: the ADR wrote hostile-input rows for
+   the age-cutoff parser (§2.6) but none for the scrub — its other new string transformer.
+2. **§2.1's "fixed line-start prefix" missed the message-shape axis.** The §2.5 matrix
+   enumerated log type × writer but not full-line vs sub-line fragment writes
+   (`pfb_logger('.')`, 23 sites tree-wide), so fragments were stamped mid-line (#1054).
+   Corrected: `pfb_logger()` stamps only at the start of a physical line (per-target
+   beginning-of-line tracking); the §2.3-4 contract's unit is the LINE, not the write.
+3. **§3's "the age-cutoff pass is cheap" was false for a row of this ADR's own matrix.**
+   For `nolimit` × age-cap (§2.2 independence) there is no small `tail` candidate — the
+   shipped implementation copied the whole unbounded log every idle tick (#1052).
+   Corrected: a first-line age probe skips the pass when nothing is expired.
+4. **§2.6's legacy-line hostile row was applied to the trim only.** The same "realistic
+   upgrade scenario" (mixed legacy + ISO lines) was never propagated to the Phase-5
+   consumers, so the Reports/Alerts bucketing mis-buckets legacy lines until the logs
+   roll (#1057). Corrected: the bucketing pipelines skip non-ISO lines (older by
+   construction than every ISO line).
+
+Related, same window: the array-path short-write gap the stream sibling already guarded
+(#1053) and the Log Settings absent-POST-key warning (#1056).
