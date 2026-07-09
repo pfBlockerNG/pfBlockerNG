@@ -83,6 +83,10 @@ input classes). For each, state expected domain-or-None and why:
 CONSTRAINTS
 - Python stdlib only; no new dependency. Do NOT wire PHP yet (Phase 4). Do NOT change
   parse()/parse_abp public contracts unless strictly necessary — if you must, note it.
+- Blast-radius note for the gate: this extension is PRODUCTION-DORMANT until Phase 4 — before
+  PHP broadens its capture, a plain feed's .raw contains only PHP-extracted domains plus
+  '||'/'@@||' lines (the shapes already routed), and ABP feeds take the whole-feed 'abp' path.
+  State in the handoff that no production feed's output can change from this phase alone.
 - No cross-language digest (ADR-42): the parity oracle compares domain SETS, not a shared hash.
 
 VERIFICATION (all must pass)

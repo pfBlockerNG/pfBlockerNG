@@ -11,11 +11,11 @@ spawn sub-agents. Behaviour-PRESERVING phase: pure extractions, zero output chan
 CLAUDE.md in full (tabs, uppercase TRUE/FALSE, str_* over preg_*).
 
 WHY THIS PHASE EXISTS
-Phase 4 broadens the per-line ABP capture, applies the universal control-line skip, and deletes
-the ABP classifier. Three pieces it needs are duplicated/tangled or absent today: the
+Phase 4 broadens the per-line ABP capture and applies the universal control-line skip; Phase 5
+deletes the ABP classifier. Three pieces they need are duplicated/tangled or absent today: the
 IP-collection block (6 copies, ADR §1.4), the scattered comment/control-line skips, and the
 capture-shape predicate itself. Extracting/adding them as pure, tested helpers first makes
-Phase 4 a smaller, safer diff — and (ADR-01 lesson) the helpers are behaviour-preserving with
+Phases 4–5 smaller, safer diffs — and (ADR-01 lesson) the helpers are behaviour-preserving with
 standalone value, retained even if the ADR is later rejected.
 
 REQUIRED READING
@@ -59,7 +59,8 @@ ACTION PLAN (ordered — oracle tests FIRST, then the behaviour-preserving extra
    exact-equivalent to an existing check (e.g. the plain-path '!'/'//' skip may route through the
    control-line predicate ONLY if the call site first excludes the blank/'[' cases so behaviour is
    identical — if that is not clean, leave the site untouched). The universal application and the
-   broadened capture are Phase 4: a broader predicate at an existing site is NOT like-for-like.
+   broadened capture are Phase 4, the classifier deletion Phase 5: a broader predicate at an
+   existing site is NOT like-for-like.
 5. Keep the Phase-1 corpus byte-identical throughout.
 
 CONSTRAINTS
@@ -67,7 +68,7 @@ CONSTRAINTS
 - Place helpers top-level near the ~6360–6580 helper cluster; typed signatures; uppercase
   TRUE/FALSE. PFBL-01 (a pure helper is out of scope), UppercaseBooleanLiteral, RequireConfigGateway
   all stay green — confirm, don't assume.
-- Do NOT delete $easylist / the header sniff yet (Phase 4). Do NOT change routing or capture.
+- Do NOT delete $easylist / the header sniff yet (Phase 5). Do NOT change routing or capture.
 
 VERIFICATION (all must pass)
 - Canonical PHP gates: php -l on touched files; vendor/bin/phpunit (full green); vendor/bin/phpstan;

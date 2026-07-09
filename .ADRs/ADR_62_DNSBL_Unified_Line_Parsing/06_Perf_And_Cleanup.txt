@@ -1,7 +1,7 @@
 ================================================================================
-PHASE 5 PROMPT — Perf validation + dead-code cleanup
+PHASE 6 PROMPT — Perf validation + dead-code cleanup
 Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
-ADR: .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md   (read §3 risks, §7 reject criterion 2, §6 P5)
+ADR: .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md   (read §3 risks, §7 reject criterion 2, §6 P6)
 ================================================================================
 
 ROLE
@@ -13,12 +13,12 @@ WHY THIS PHASE EXISTS
 The corrected design keeps the plain hot path (PHP extraction + Python parse()) and only adds
 per-line prefix/shape checks, so the EXPECTED perf delta is ~0 — but "expected" is not evidence
 (CLAUDE.md). ADR §7 reject criterion 2 makes it falsifiable: this phase measures a 1M-line hosts
-feed against the kill-threshold and removes any code the Phase-4 deletion left dead.
+feed against the kill-threshold and removes any code the Phase-4/5 diffs left dead.
 
 REQUIRED READING
 - FIRST, read the prior phase's handoff:
-  .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/RESULTS/04_Results.txt — confirm the classifier is gone
-  and the corpus is green (deltas asserted). If missing, STOP and report.
+  .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/RESULTS/05_Results.txt — confirm the classifier is gone
+  and the corpus is green (D1 flipped, D2–D5 held). If missing, STOP and report.
 - .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md (§3 Negative/risks, §7 reject criterion 2).
 - src/usr/local/pkg/pfblockerng/pfb_unbound.py — the extended routing + build() path; the reload
   cost path.
@@ -27,7 +27,7 @@ REQUIRED READING
   not coordination; keep it a measurement, no sleep-to-synchronise).
 
 REALITY OVERRIDE (standing rule)
-Line numbers/code-state predate implementation and earlier phases; RESULTS/01–04 and the live tree
+Line numbers/code-state predate implementation and earlier phases; RESULTS/01–05 and the live tree
 override this prompt — verify before acting, flag contradictions in the handoff.
 
 ACTION PLAN (ordered)
@@ -40,7 +40,7 @@ ACTION PLAN (ordered)
 2. Compare to the kill-threshold (ADR §7 criterion 2: > 25% wall-clock OR > 25% peak-RSS
    regression on the 1M-line parse+build). If exceeded: STOP and report BLOCKED with the numbers;
    do not paper over it.
-3. Remove dead code the Phase-4 deletion orphaned (helpers only reachable from the deleted
+3. Remove dead code the Phase-4/5 diffs orphaned (helpers only reachable from the deleted
    classifier, now-unused branches). Keep the diff to genuine dead code — no opportunistic
    reformatting. This step is behaviour-preserving: the corpus oracle is the gate.
 
@@ -63,10 +63,10 @@ A recorded perf comparison within threshold (or an evidenced reject signal), and
 classifier's dead code.
 
 COMMIT (single)
-    pfblockerng: perf-validate DNSBL per-line capture; drop dead classifier code (ADR-62 P5)
+    pfblockerng: perf-validate DNSBL per-line capture; drop dead classifier code (ADR-62 P6)
 Push directly to adr/62-dnsbl-unified-line-parsing; open a PR only if the direct push is rejected.
 
-HANDOFF — write .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/RESULTS/05_Results.txt with the fixed
+HANDOFF — write .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/RESULTS/06_Results.txt with the fixed
 fields: verdict; files + why + commit; gates with pasted output; the benchmark methodology + numbers
 (devel vs branch, wall-clock + RSS) + the threshold verdict; the corpus-still-green confirmation; the
-list of removed dead symbols with grep-gone proof; deviations (or "none"); carry-forward for Phase 6.
+list of removed dead symbols with grep-gone proof; deviations (or "none"); carry-forward for Phase 7.

@@ -1,0 +1,88 @@
+================================================================================
+PHASE 4 PROMPT — Broaden the PHP capture + universal skip (behaviour-changing; deltas D2–D5 ONLY)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md   (read §1.2, §1.5, §2 Decisions 2/4 +
+deltas + Semantics, §6 P4)
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch
+adr/62-dnsbl-unified-line-parsing. One commit, pushed to the branch. Implement yourself; NEVER
+spawn sub-agents. BEHAVIOUR-CHANGING phase with a deliberately SMALL delta budget: the Phase-1
+corpus must stay byte-identical outside delta rows D2/D3/D4/D5, which flip here (red->green:
+OLD pinned by Phase 1, NEW asserted here). Follow CLAUDE.md (tabs, uppercase TRUE/FALSE,
+PFBL-01 sniff, str_* over preg_*).
+
+WHY THIS PHASE EXISTS
+With the extended Python routing proven (Phase 3), the PHP side can start handing every
+self-identifying ABP-shaped line to Python — WITHOUT yet touching the feed-level classifier.
+This phase wires Phase-2's predicates at the capture sites and applies the universal
+control-line skip. The $easylist classifier and the .abp marker are DELIBERATELY untouched
+(Phase 5): the loop's capture guard is `!$easylist && (…)`, so this diff can only affect
+unclassified (plain/permit) feeds — that confinement is what makes the phase's delta budget
+exactly D2–D5 and lets the gate localise any corpus red to the capture change.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/RESULTS/03_Results.txt — confirm parity was PROVEN
+  (not BLOCKED). If Phase 3 returned a §7 reject signal, STOP: this phase does not proceed
+  until the orchestrator resolves scope. If the handoff is missing, STOP and report.
+- .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md (§1.2 staging dialects, §1.5 consumer
+  contract, §2 Decisions 2/4 + "Accepted semantic deltas" + Semantics #1–#5/#8, §7).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — the download-loop verbatim-capture guard
+  (~16317-16322, currently '||'/'@@||' behind !$easylist), the plain path's comment skips
+  (~16385-16415), the manifest-writer capture (~7030), the Phase-2 helpers
+  (pfb_dnsbl_is_abp_rule_line, pfb_dnsbl_is_skippable_control_line, pfb_dnsbl_unbracket_ip6).
+- RESULTS/01–03 for current file:line and the proven routing contract.
+- docs/misc/architecture-notes.md "DNSBL/ABP pipeline"; tests/php/README.md.
+
+REALITY OVERRIDE (standing rule)
+Line numbers/code-state predate implementation and earlier phases; RESULTS/01–03 and the live tree
+override this prompt on any conflict — verify each claim before acting, and flag contradictions
+loudly in the handoff.
+
+ACTION PLAN (ordered)
+1. Broaden the capture: replace the download-loop guard (~16317, '||'/'@@||') and the
+   manifest-writer guard (~7030) with Phase-2's pfb_dnsbl_is_abp_rule_line(). Captured lines are
+   written/passed VERBATIM; everything else keeps the existing plain extraction pipeline
+   untouched (scheme/IDN/filter/6-col rows — ADR Decision 3). Keep the `!$easylist &&` prefix on
+   the loop guard EXACTLY as it is — the classifier is Phase 5's to delete.
+2. Apply the universal control-line skip in the plain path: pfb_dnsbl_is_skippable_control_line
+   so ''/'!'/'//'/'[…]'-non-IPv6 lines are skipped everywhere in the domain path; unbracket/
+   collect IPv6 FIRST so a bracketed IPv6 literal is an IP, never a skipped comment (ADR
+   Semantics #3). The '#'-classifier keeps running first (side effects).
+3. Do NOT touch: $easylist / the header sniff / the $validate_header block / the .abp marker /
+   the reuse path / the TLD pass / format_hint values / the CSV switch / the generic IP-list
+   loop / parse_abp semantics.
+
+CONSTRAINTS
+- Delta budget is EXACTLY D2/D3/D4/D5 (ADR §2 table): the Phase-1 corpus oracle must show D2–D5
+  rows flipped to their NEW outcome and EVERY other row — including D1 and every ABP-feed row —
+  byte-identical. Any other change is a regression: investigate, do not adjust the golden.
+- Clean the diff (CLAUDE.md): no reformatting, no drive-by changes.
+
+VERIFICATION (all must pass)
+- Canonical gates: php -l touched files; vendor/bin/phpunit; vendor/bin/phpstan;
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/; python3 -m pytest (the parity oracle).
+- Corpus gate: the Phase-1 oracle GREEN with exactly D2–D5 flipped. Red->green per delta: paste
+  the OLD-pinning assertion failing against the new code BEFORE you flip it, then the NEW
+  assertion passing — both from executed runs.
+- D1 guard: paste the corpus run line proving the ABP-feed bare-domain row (D1) did NOT move.
+- Semantics #2/#3 IP tests: bracketed-IPv6 collects as IP; non-IPv6 '[…]' skipped; ABP-anchored
+  IP still collected.
+- The manifest-writer golden (UnboundPythonSourcesTest lineage) reflects the broadened
+  passthrough for plain feeds and is otherwise unchanged.
+
+EXPECTED RESULT
+Shape-decided verbatim capture at the loop + manifest writer for unclassified feeds; universal
+control-line skip in the domain path; classifier and marker untouched; corpus green with exactly
+D2–D5 flipped.
+
+COMMIT (single)
+    pfblockerng: broaden DNSBL per-line ABP capture + universal control-line skip (ADR-62 P4)
+Push directly to adr/62-dnsbl-unified-line-parsing; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/RESULTS/04_Results.txt with the fixed
+fields: verdict; files + why + commit; gates with pasted output; the corpus evidence (per-delta
+red->green + the D1-did-not-move proof + full-format equality elsewhere); the Semantics #2/#3
+test results; deviations (or "none"); carry-forward for Phase 5.

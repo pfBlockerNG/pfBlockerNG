@@ -1,7 +1,7 @@
 ================================================================================
-PHASE 6 PROMPT — Docs, delta release notes, AUTOMATED smoke rows
+PHASE 7 PROMPT — Docs, delta release notes, AUTOMATED smoke rows
 Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
-ADR: .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md   (read §5, §7 in full, §6 P6)
+ADR: .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md   (read §5, §7 in full, §6 P7)
 ================================================================================
 
 ROLE
@@ -22,17 +22,17 @@ Status.
 
 REQUIRED READING
 - FIRST, read the prior phase's handoff:
-  .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/RESULTS/05_Results.txt — confirm perf within threshold
+  .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/RESULTS/06_Results.txt — confirm perf within threshold
   and the tree clean. If missing, STOP and report.
 - .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md (§2 delta table, §5 constraints, §7 DoD + smoke
-  rows + reject criteria) and RESULTS/01–05 for the as-built facts.
+  rows + reject criteria) and RESULTS/01–06 for the as-built facts.
 - docs/misc/architecture-notes.md "DNSBL/ABP pipeline" — the section to update.
 - CLAUDE.md "Smoke tests (ADR-04)" + tests/smoke/ + tests/smoke/fixtures/README.md — the fan-out,
   fixture conventions (inert data, unique_domain(), block shapes, probe ON-BOX, chroot paths),
   and how a new feed case is added (mock_feeds.feed_url("<name>") + fixtures/README.md row).
 
 REALITY OVERRIDE (standing rule)
-Line numbers/code-state predate implementation; RESULTS/01–05 and the live tree override this prompt
+Line numbers/code-state predate implementation; RESULTS/01–06 and the live tree override this prompt
 — verify each as-built claim (what was actually deleted, the final helper names, the format_hint
 outcome) against the RESULTS files before writing docs, and flag contradictions in the handoff.
 
@@ -56,7 +56,7 @@ ACTION PLAN (ordered)
    range; the ADR is the canonical statement).
 4. Update this ADR's Status line to the implemented state (e.g. "Implemented (pending smoke
    fan-out)" or "Accepted" if the fan-out already ran green — CLAUDE.md "ADR acceptance") with the
-   honest as-built summary from RESULTS/01–05, including any DONE-WITH-DEVIATION carried by a
+   honest as-built summary from RESULTS/01–06, including any DONE-WITH-DEVIATION carried by a
    phase.
 5. Verify the phase prompts still lint (they are tracked docs):
    python3 scripts/check_phase_prompts.py .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/[0-9]*.txt
@@ -83,10 +83,10 @@ architecture-notes updated; delta table recorded; §7 rows exist as automated sm
 into the CE+Plus fan-out; ADR Status reflects the evidence state; phase prompts lint clean.
 
 COMMIT (single)
-    docs+tests: document ADR-62 per-line parse authority; add smoke fan-out rows (ADR-62 P6)
+    docs+tests: document ADR-62 per-line parse authority; add smoke fan-out rows (ADR-62 P7)
 Push directly to adr/62-dnsbl-unified-line-parsing; open a PR only if the direct push is rejected.
 
-HANDOFF — write .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/RESULTS/06_Results.txt with the fixed
+HANDOFF — write .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/RESULTS/07_Results.txt with the fixed
 fields: verdict; files + why + commit; gates with pasted output (markdownlint + check_phase_prompts
 + suites green + smoke collection/dispatch evidence); confirmation the architecture note matches
 the as-built; the final ADR Status set; deviations (or "none"); carry-forward (the smoke fan-out

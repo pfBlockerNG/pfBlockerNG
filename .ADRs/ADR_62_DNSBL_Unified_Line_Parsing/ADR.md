@@ -129,7 +129,7 @@ just Python's input — they are a contract consumed by:
   of the `.abp` markers (@7723-7726) — a second `.abp`-marker consumer the handoff missed.
   (Latent pre-existing bug found during this audit: the skip is gated on
   `!empty($abp_feeds)` @7738, so a *plain* feed's ADR-21 verbatim `||x^` line is CSV-mangled
-  by this pass when **no** ABP feed is configured — file as a tracking issue; Phase 4 makes
+  by this pass when **no** ABP feed is configured — tracked as issue #1060; Phase 5 makes
   the skip unconditional on an empty feed column, fixing it structurally.)
 - the **Alerts feed-attribution greps** (`inc:13477`, `13504`) and the **prefetch** helper
   (`inc:13316`) — they grep `pfb_py_data`/`pfb_py_zone` (6-col rows) to answer "which feed
@@ -269,7 +269,7 @@ name; empty / whitespace-only / BOM-led first line; **reused feed with old-diale
 - **CSV column extraction stays in PHP.** The 6-type CSV switch (`inc:16426–16562`) and the
   `#`-header classifier are untouched. A future ADR may lift CSV into Python.
 - **The IP-collection triplication (R2)** is de-tangled as behaviour-preserving prep (Phase 2)
-  because Phase 4 touches those sites — pure extraction, not a behaviour change.
+  because Phases 4–5 touch those sites — pure extraction, not a behaviour change.
 - **The generic IP-list loop** (`pfb_ip_is_opposite_family` etc.) — different loop, untouched.
 - **Raw-passthrough / Option B** — rejected (§2 fork), not deferred.
 - **The `pfb_py_data`/`pfb_py_zone` 6-col dialect** and its consumers — unchanged.
@@ -296,10 +296,10 @@ name; empty / whitespace-only / BOM-led first line; **reused feed with old-diale
   at both PHP sites, a Python-side mirror pinned by the same corpus rows on both sides, and the
   Phase-3 parity oracle.
 - The delta table is a **behaviour contract with users** — each delta is small and defensible,
-  but it must be stated in release notes (Phase 6) and pinned by OLD → NEW tests, or it will
+  but it must be stated in release notes (Phase 7) and pinned by OLD → NEW tests, or it will
   read as a regression report.
 - Per-line cost on the plain hot path grows by a few `str_starts_with` checks (PHP) and prefix
-  checks (Python) — expected ~0; Phase 5 measures against a kill-threshold anyway.
+  checks (Python) — expected ~0; Phase 6 measures against a kill-threshold anyway.
 
 ## 4. Requirements (acceptance)
 
@@ -353,6 +353,14 @@ name; empty / whitespace-only / BOM-led first line; **reused feed with old-diale
   behaviour is the red half of the later red→green). This is the falsification harness every
   later phase is gated on — and a permanent regression net with standalone value even if the
   ADR is rejected.
+- **Capture surfaces are PINNED (not the implementer's choice):** Python side via pytest
+  (`build()`/`parse`/`parse_abp` with a hand manifest); manifest writer via PHPUnit driving
+  `pfb_unbound_python_sources()` (mirror the existing `UnboundPythonSourcesTest.php`); TLD pass
+  via PHPUnit driving `tld_analysis()` (standalone function, `inc:7570` — temp dirs + a
+  `pfb_dnsbl.raw` fixture). The download loop itself has **no off-appliance driver** (nothing
+  drives `sync_package_pfblockerng()`): loop-level rows are DEFERRED smoke rows with their
+  exact live-VM command recorded per row — never a re-implementation of the loop inside a test
+  (an oracle of a copy is coverage theater).
 - Tests: a PHPUnit/pytest oracle that runs the corpus through today's parse path and asserts the
   captured golden output; a **vacuity check** (mutate one golden domain → oracle goes red).
 
@@ -366,8 +374,8 @@ name; empty / whitespace-only / BOM-led first line; **reused feed with old-diale
   pure functions with oracle tests. **Wiring discipline:** the IP collector replaces its six
   call sites like-for-like; the two predicates are **NOT wired into the loop in this phase**
   beyond replacements that are provably exact-equivalent to an existing site's check — the
-  universal application and the broadened capture are Phase 4 (a broader predicate at an
-  existing site is NOT like-for-like).
+  universal application and the broadened capture are Phase 4, the classifier deletion Phase 5
+  (a broader predicate at an existing site is NOT like-for-like).
 - Tests: fail-on-mutation oracle for each helper; the Phase-1 corpus stays byte-identical.
 
 ### Phase 3 — Extend Python's per-line routing + parity oracle (the premise PROOF or REJECT)
@@ -388,34 +396,48 @@ name; empty / whitespace-only / BOM-led first line; **reused feed with old-diale
 - Tests: parity oracle per format; the hostile-input table; red-run proof the oracle catches a
   deliberately wrong dispatch.
 
-### Phase 4 — Broaden capture, delete the classifier + marker (behaviour-changing)
+### Phase 4 — Broaden the capture + universal skip (behaviour-changing; deltas D2–D5 ONLY)
 
-- Prompt: `04_Wire_And_Delete.txt`
+- Prompt: `04_Broaden_Capture.txt`
 - Wire `pfb_dnsbl_is_abp_rule_line()` at the download-loop capture (@16317) and the manifest
   writer (@7030); apply the universal control-line skip in the plain path (Decision 4,
-  unbracket-first ordering). Delete `$easylist`, `pfb_dnsbl_is_abp_header()` (+ its test file),
-  the `$validate_header` block; collapse 16317/16324 into one verbatim path. Retire the `.abp`
-  marker: reuse path (@16182) stops branching, writer sites (@16823-16827) deleted, TLD-pass
-  skip (@7723-7744) made unconditional on an empty feed column (fixes the §1.5 latent bug —
-  red→green test required). Collapse `format_hint` to `'plain'`; Python tolerates stale `'abp'`
-  manifests (Semantics #7). The Phase-1 corpus oracle MUST stay byte-identical modulo the delta
-  table; delta rows get their red→green (OLD on `devel`, NEW here).
-- Tests: Phase-1 corpus green (deltas asserted); symbol-anchored grep proof (Requirement 2);
-  Semantics #2/#3 IP tests; the TLD-pass skip red→green.
+  unbracket-first ordering). **The classifier is NOT touched:** the loop guard is
+  `!$easylist && (…)`, so this phase changes only unclassified (plain/permit) feeds — the
+  delta set it may flip is exactly **D2/D3/D4/D5**; D1 must NOT move (ABP feeds still take the
+  `$easylist` branch). The Phase-1 corpus oracle stays byte-identical outside those rows;
+  D2–D5 rows get their red→green (OLD pinned by Phase 1, NEW asserted here).
+- Tests: Phase-1 corpus green with exactly D2–D5 flipped; Semantics #2/#3 IP tests (bracketed
+  IPv6 vs `[…]` skip); the manifest-writer golden reflecting the broadened passthrough.
 
-### Phase 5 — Perf validation + delete dead code
+### Phase 5 — Delete the classifier + retire the `.abp` marker (behaviour-changing; delta D1 ONLY)
 
-- Prompt: `05_Perf_And_Cleanup.txt`
+- Prompt: `05_Delete_Classifier.txt`
+- **First commit: the issue #1060 TLD-pass gate fix** — skip on an empty/unset feed column
+  unconditionally (drop the `!empty($abp_feeds)` gate + marker glob, @7723-7744), red→green
+  (the marker retirement below depends on it). Then delete `$easylist` (all sites),
+  `pfb_dnsbl_is_abp_header()` (+ `DnsblIsAbpHeaderTest.php`), the `$validate_header` block;
+  collapse 16317/16324 into one verbatim path (the ABP branch's `pfb_dnsbl_abp_extract_ip`
+  IP-extract survives the collapse, Semantics #2). Retire the `.abp` marker: reuse path
+  (@16182) stops branching, writer sites (@16823-16827) deleted, stale markers swept.
+  Collapse `format_hint` to `'plain'`; Python tolerates stale `'abp'` manifests (Semantics
+  #7). The delta set this phase may flip is exactly **D1** (former-ABP feeds' bare lines);
+  everything else — including the D2–D5 rows Phase 4 flipped — stays put.
+- Tests: Phase-1 corpus green with exactly D1 flipped; symbol-anchored grep proof
+  (Requirement 2); the #1060 red→green; reused old-dialect `.txt` + stale-manifest rows.
+
+### Phase 6 — Perf validation + delete dead code
+
+- Prompt: `06_Perf_And_Cleanup.txt`
 - Benchmark a large hosts feed (≥1M lines) through the new path vs `origin/devel` — PHP parse
   loop and Python `build()` — with a stated methodology and the kill-threshold (default:
   **>25% wall-clock or >25% peak-RSS** regression on the 1M-line parse+build → §7 reject
   criterion 2). Expected result ~0 (the plain hot path gains only prefix checks); the benchmark
-  exists to prove that, not to explore. Remove now-dead code surfaced by the Phase-4 diff.
+  exists to prove that, not to explore. Remove now-dead code surfaced by the Phase-4/5 diffs.
 - Tests: the benchmark harness + its recorded numbers in the handoff; full suite green.
 
-### Phase 6 — Docs, release-notes deltas, automated smoke rows
+### Phase 7 — Docs, release-notes deltas, automated smoke rows
 
-- Prompt: `06_Docs_Dod_Smoke.txt`
+- Prompt: `07_Docs_Dod_Smoke.txt`
 - Update `docs/misc/architecture-notes.md` "DNSBL/ABP pipeline" for the retired classifier +
   the per-line capture boundary; record the delta table where release notes are drafted from;
   add/extend the **automated** `tests/smoke/` feed cases so every §7 row runs in the ADR-04
@@ -424,7 +446,7 @@ name; empty / whitespace-only / BOM-led first line; **reused feed with old-diale
 
 ## 7. Definition of done
 
-- All phases landed (`RESULTS/01–06_Results.txt` + gate records); full PHPUnit + pytest green;
+- All phases landed (`RESULTS/01–07_Results.txt` + gate records); full PHPUnit + pytest green;
   PHPCS/PHPStan clean; the **Phase-1 byte-identity corpus oracle green at the final phase**
   (delta rows asserting their NEW outcome).
 - **Automated live-VM smoke rows (CE + Plus fan-out, ADR-04; per CLAUDE.md "ADR acceptance"
@@ -451,7 +473,7 @@ name; empty / whitespace-only / BOM-led first line; **reused feed with old-diale
      set (modulo the delta table) for some format, and no bounded, documented reconciliation
      closes the gap → **REJECT** the unification (retain Phases 1–2 prep, which are
      behaviour-preserving and independently valuable). Option B is NOT the fallback (§2 fork).
-  2. **Phase 5 perf regresses** past the kill-threshold (>25% wall-clock or >25% peak-RSS on
+  2. **Phase 6 perf regresses** past the kill-threshold (>25% wall-clock or >25% peak-RSS on
      the 1M-line parse+build) → reject the capture-broadening approach.
   3. Any Semantics test that cannot pass without weakening its assertion, or any output change
      **outside the delta table** → REJECT (a weakened byte-identity assertion is coverage

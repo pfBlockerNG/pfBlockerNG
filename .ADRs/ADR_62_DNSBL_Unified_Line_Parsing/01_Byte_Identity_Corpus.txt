@@ -33,6 +33,8 @@ REQUIRED READING
   (~3869), _normalise_verdict (~4130), _dnsbl_within_wire_caps (~4122).
 - tests/fixtures/feed_corpus/README.md + manifest.json (ADR-49 committed real-feed first-8KiB
   samples — legitimate raw material for offline capture; REUSE before inventing fixtures).
+- tests/php/UnboundPythonSourcesTest.php — the existing manifest-writer test to mirror for
+  capture surface (b).
 - tests/php/README.md, tests/php/bootstrap.php, tests/php/pfsense_doubles.php; tests/conftest.py;
   tests/smoke/fixtures/README.md (inert-data rules for anything a smoke test resolves:
   RFC 5737/3849 IPs, uuid-*.com, NEVER RFC 6761 TLDs or HSTS-preload names).
@@ -58,11 +60,16 @@ ACTION PLAN (ordered — oracle capture, no source change)
 3. Capture the GOLDEN output each corpus feed produces on THIS ref: the resulting domain set (as
    written to .bk/.txt, extracted to .raw, and loaded by the Python build) AND the DNSBLIP IP
    set — and, for one TLD-enabled row, the TLD-analysis pass output (pfb_py_zone/pfb_py_data
-   classification). Choose the most faithful capture surface available off-appliance and state it
-   in the handoff (e.g. drive the PHP extraction reachable via the PHPUnit harness, and/or the
-   Python build()/parse()/parse_abp output for the raw lines). If a format's output cannot be
-   captured off-appliance, record it as a DEFERRED smoke-only row with the exact live-VM
-   command — never silently drop it.
+   classification). The capture surfaces are PINNED (ADR §6 Phase 1 — not your choice):
+   (a) Python side: pytest driving build()/parse()/parse_abp with a hand-written manifest;
+   (b) manifest writer: PHPUnit driving pfb_unbound_python_sources() — mirror the existing
+       tests/php/UnboundPythonSourcesTest.php;
+   (c) TLD pass: PHPUnit driving tld_analysis() (standalone, inc:~7570) with temp dirs + a
+       pfb_dnsbl.raw fixture;
+   (d) the download loop itself has NO off-appliance driver (nothing drives
+       sync_package_pfblockerng()): loop-level rows are DEFERRED smoke rows — record each with
+       its exact live-VM command; NEVER re-implement the loop inside a test (an oracle of a
+       copy is coverage theater and will be gate-rejected).
 4. Write the oracle test(s) that run the corpus and assert the captured golden output. Delta-table
    rows assert TODAY's behaviour and carry a comment naming their delta ID (D1-D5) so Phase 4 can
    flip them deliberately.

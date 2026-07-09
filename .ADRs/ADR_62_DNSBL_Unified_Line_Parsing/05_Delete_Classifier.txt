@@ -1,0 +1,96 @@
+================================================================================
+PHASE 5 PROMPT — Delete the ABP classifier + retire the .abp marker (behaviour-changing; delta D1 ONLY)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md   (read §1.1, §1.5, §2 Decisions 1/5 +
+deltas + Semantics, §6 P5)
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch
+adr/62-dnsbl-unified-line-parsing. TWO commits (the issue #1060 fix, then the deletion), both
+pushed to the branch. Implement yourself; NEVER spawn sub-agents. BEHAVIOUR-CHANGING phase with
+a delta budget of exactly D1 (red->green: OLD pinned by Phase 1, NEW asserted here); the #1060
+fix is its own red->green. Follow CLAUDE.md (tabs, uppercase TRUE/FALSE, PFBL-01 sniff).
+
+WHY THIS PHASE EXISTS
+Phase 4 made line shape decide the parser for unclassified feeds. The feed-level classifier is
+now redundant machinery: an ABP feed's rule lines are captured by the same per-line predicate.
+This phase deletes it — $easylist, the header sniff, the $validate_header window — and retires
+the .abp marker. The marker has TWO consumers: the reuse-path format_hint derivation (~16182)
+and the TLD-analysis skip (~7723-7744), which carries the pre-existing issue #1060 gate bug
+(skip only runs when a marker exists). The #1060 fix must land FIRST — marker retirement
+depends on the skip working without markers.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/RESULTS/04_Results.txt — confirm the broadened
+  capture landed and the corpus is green with exactly D2–D5 flipped. If missing, STOP and report.
+- .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md (§1.1 classifier sites, §1.5 consumer
+  contract + the #1060 bug, §2 Decisions 1/5 + "Accepted semantic deltas" + Semantics #1–#8, §7).
+- GitHub issue #1060 (the TLD-pass gate bug — cause, anchors, fix direction).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — the $validate_header block (~16283-16294),
+  pfb_dnsbl_is_abp_header (~6547), ALL $easylist sites (init ~16251, set ~16285,
+  ~16317/16324/16572, manifest tag ~16817, marker write/unlink ~16823-16827), the reuse-path
+  marker read (~16182), tld_analysis() (~7570) + the marker glob and skip gate (~7723-7744).
+- tests/php/DnsblIsAbpHeaderTest.php (deleted with its helper).
+- RESULTS/01–04 for current file:line; docs/misc/architecture-notes.md "DNSBL/ABP pipeline".
+
+REALITY OVERRIDE (standing rule)
+Line numbers/code-state predate implementation and earlier phases; RESULTS/01–04 and the live tree
+override this prompt on any conflict — verify each claim before acting, and flag contradictions
+loudly in the handoff.
+
+ACTION PLAN (ordered)
+1. COMMIT 1 — the issue #1060 fix, red->green: write the failing test first (a pfb_dnsbl.raw
+   fixture containing a verbatim '||x^' line, ZERO .abp markers, driven through tld_analysis()
+   → today a malformed row / undefined-index read), watch it fail on the pre-change code, then
+   make the skip unconditional: any line with an empty/unset feed column (col 4 of the 6-col
+   dialect) is skipped regardless of markers; drop the !empty($abp_feeds) gate + the marker
+   glob. Paste both runs.
+2. COMMIT 2 — delete the classifier: the $validate_header block, pfb_dnsbl_is_abp_header() AND
+   tests/php/DnsblIsAbpHeaderTest.php, the $easylist variable + ALL its sites; collapse the two
+   verbatim paths (~16317/~16324) into one (the ABP branch's pfb_dnsbl_abp_extract_ip IP-extract
+   MUST survive the collapse — ABP-anchored IPs still collect, Semantics #2). Retire the .abp
+   marker: reuse path (~16182) emits 'plain' unconditionally; marker write/unlink sites deleted;
+   stale markers swept opportunistically. Collapse the manifest hint: pfb_unbound_python_sources
+   emits 'plain' for every domain feed; Python keeps accepting 'abp' from a stale manifest
+   (asserted in Phase 3 — re-run that test here).
+3. Do NOT touch: the plain extraction pipeline, the 6-col dialect, the CSV switch, the generic
+   IP-list loop, parse_abp semantics, the Phase-4 capture sites (beyond dropping the
+   now-deleted `!$easylist &&` prefix).
+
+CONSTRAINTS
+- Delta budget is EXACTLY D1 (ADR §2 table): former-ABP feeds' bare hosts/plain lines move from
+  parse_abp wildcard-ZONE to plain classify() treatment. Every other corpus row — including the
+  D2–D5 rows Phase 4 flipped — stays put. Any other change is a regression: investigate, do not
+  adjust the golden.
+- Clean the diff (CLAUDE.md): remove the dead code you deleted from, not around, no reformatting.
+
+VERIFICATION (all must pass)
+- Canonical gates: php -l touched files; vendor/bin/phpunit; vendor/bin/phpstan;
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/; python3 -m pytest.
+- The #1060 red->green pasted (failing run on pre-change code, passing after).
+- Corpus gate: the Phase-1 oracle GREEN with exactly D1 flipped (red->green pasted); D2–D5 rows
+  unchanged from Phase 4 (paste the run line).
+- Reuse/upgrade rows: reused old-dialect .txt (both generations) and the stale-'abp'-manifest
+  row still green (Semantics #7).
+- grep proof (ADR Requirement 2, symbol-anchored — the substring 'easylist' legitimately
+  survives in the MIME-exception hostnames and the pfblockerngdnsbleasylist section name):
+  `grep -rn '\$easylist\|pfb_dnsbl_is_abp_header\|\$validate_header' src/` returns nothing, and
+  `grep -rn '\.abp' src/` returns no live marker read/write (paste both).
+- Semantics #2 test: ABP-anchored IP (||1.2.3.4^) still collected after the branch collapse.
+
+EXPECTED RESULT
+Classifier, header sniff and .abp marker gone; #1060 fixed with its own red->green; corpus green
+with exactly D1 flipped; IP set unchanged.
+
+COMMITS (two, in order)
+    pfblockerng: TLD pass skips feed-less lines unconditionally (issue #1060) (ADR-62 P5)
+    pfblockerng: retire DNSBL feed-level ABP classification + .abp marker (ADR-62 P5)
+Push directly to adr/62-dnsbl-unified-line-parsing; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/RESULTS/05_Results.txt with the fixed
+fields: verdict; files + why + both commit hashes; gates with pasted output; the #1060
+red->green; the corpus evidence (D1 red->green + D2–D5-unchanged proof); the grep-clean proofs;
+the reuse/stale-manifest results; the Semantics #2 result; deviations (or "none"); carry-forward
+for Phase 6.
