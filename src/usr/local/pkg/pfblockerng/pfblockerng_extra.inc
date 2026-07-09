@@ -2950,7 +2950,8 @@ function pfb_ip_download_ledger_update(bool $download_ok, string $item, string $
  * closes the same key. Mirrors pfb_ip_download_ledger_update() (issue #998).
  *
  * @param bool   $download_ok TRUE when pfb_download() succeeded for this item.
- * @param string $item        The alias/feed header identifying this download.
+ * @param string $item        The pfB_/DNSBL_-prefixed alias, NOT the per-row $header --
+ *                             the widget's deep-link match depends on the prefix.
  * @param string $message     Human-readable failure text (ignored on success).
  * @param string $ledger_dir  Directory that contains pfb_sync_status.json.
  * @return void
