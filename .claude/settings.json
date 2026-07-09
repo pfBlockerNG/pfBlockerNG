@@ -1,8 +1,10 @@
 {
   "effortLevel": "xhigh",
   "env": {
-    "SHELL": "bash"
+    "SHELL": "bash",
+    "MCP_TIMEOUT": "120000"
   },
+  "enableAllProjectMcpServers": true,
   "enabledPlugins": {
     "ponytail@ponytail": true,
     "caveman@caveman": true

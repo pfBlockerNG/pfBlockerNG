@@ -1,0 +1,8 @@
+{
+    "mcpServers": {
+        "token-savior-recall": {
+            "command": "sh",
+            "args": ["scripts/mcp-token-savior.sh"]
+        }
+    }
+}
