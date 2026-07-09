@@ -276,6 +276,31 @@ class TestLoadZoneDbLedgerWiring:
         assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
         assert pfb_unbound.zoneDB["evil.com"]["log"] == "1"
 
+    def test_file_removed_after_failure_closes_the_orphaned_entry(self, tmp_path: Any, monkeypatch: Any) -> None:
+        zone_path = tmp_path / "pfb_py_zone.txt"
+        zone_path.write_text("a,b,c,d,e,f\n", encoding="utf-8")
+        pfb_unbound.pfb["pfb_py_zone"] = str(zone_path)
+        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
+
+        real_open = open
+
+        def _boom_open(path: Any, *a: Any, **k: Any) -> Any:
+            if str(path) == str(zone_path):
+                raise OSError("simulated read failure")
+            return real_open(path, *a, **k)
+
+        monkeypatch.setattr("builtins.open", _boom_open)
+        pfb_unbound._load_zone_db(_new_feed_group_db(), 0)
+        # Before-state: the entry is genuinely open first.
+        assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 1
+
+        monkeypatch.undo()
+        os.remove(zone_path)
+
+        pfb_unbound._load_zone_db(_new_feed_group_db(), 0)
+
+        assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
+
     def test_no_file_present_leaves_ledger_untouched(self, tmp_path: Any) -> None:
         pfb_unbound.pfb["pfb_py_zone"] = str(tmp_path / "does_not_exist.txt")
         pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
@@ -343,6 +368,31 @@ class TestLoadDataDbLedgerWiring:
         assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
         assert pfb_unbound.dataDB["evil.com"]["log"] == "1"
 
+    def test_file_removed_after_failure_closes_the_orphaned_entry(self, tmp_path: Any, monkeypatch: Any) -> None:
+        data_path = tmp_path / "pfb_py_data.txt"
+        data_path.write_text("a,b,c,d,e,f\n", encoding="utf-8")
+        pfb_unbound.pfb["pfb_py_data"] = str(data_path)
+        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
+
+        real_open = open
+
+        def _boom_open(path: Any, *a: Any, **k: Any) -> Any:
+            if str(path) == str(data_path):
+                raise OSError("simulated read failure")
+            return real_open(path, *a, **k)
+
+        monkeypatch.setattr("builtins.open", _boom_open)
+        pfb_unbound._load_data_db(_new_feed_group_db(), 0)
+        # Before-state: the entry is genuinely open first.
+        assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 1
+
+        monkeypatch.undo()
+        os.remove(data_path)
+
+        pfb_unbound._load_data_db(_new_feed_group_db(), 0)
+
+        assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
+
 
 class TestLoadWhitelistDbLedgerWiring:
     """_load_whitelist_db(): fail-before/pass-after."""
@@ -397,6 +447,31 @@ class TestLoadWhitelistDbLedgerWiring:
 
         assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
         assert pfb_unbound.whiteDB["a"] == {"wildcard": True, "important": True}
+
+    def test_file_removed_after_failure_closes_the_orphaned_entry(self, tmp_path: Any, monkeypatch: Any) -> None:
+        wl_path = tmp_path / "pfb_py_whitelist.txt"
+        wl_path.write_text("a,1\n", encoding="utf-8")
+        pfb_unbound.pfb["pfb_py_whitelist"] = str(wl_path)
+        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
+
+        real_open = open
+
+        def _boom_open(path: Any, *a: Any, **k: Any) -> Any:
+            if str(path) == str(wl_path):
+                raise OSError("simulated read failure")
+            return real_open(path, *a, **k)
+
+        monkeypatch.setattr("builtins.open", _boom_open)
+        pfb_unbound._load_whitelist_db()
+        # Before-state: the entry is genuinely open first.
+        assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 1
+
+        monkeypatch.undo()
+        os.remove(wl_path)
+
+        pfb_unbound._load_whitelist_db()
+
+        assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
 
 
 class TestLoadHstsDbLedgerWiring:
@@ -455,6 +530,56 @@ class TestLoadHstsDbLedgerWiring:
 
         assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
         assert "bad.example" in pfb_unbound.hstsDB
+
+    def test_file_removed_after_failure_closes_the_orphaned_entry(self, tmp_path: Any, monkeypatch: Any) -> None:
+        hsts_path = tmp_path / "pfb_py_hsts.txt"
+        hsts_path.write_text("bad.example\n", encoding="utf-8")
+        pfb_unbound.pfb["pfb_py_hsts"] = str(hsts_path)
+        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
+
+        real_open = open
+
+        def _boom_open(path: Any, *a: Any, **k: Any) -> Any:
+            if str(path) == str(hsts_path):
+                raise OSError("simulated read failure")
+            return real_open(path, *a, **k)
+
+        monkeypatch.setattr("builtins.open", _boom_open)
+        pfb_unbound._load_hsts_db()
+        # Before-state: the entry is genuinely open first.
+        assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 1
+
+        monkeypatch.undo()
+        os.remove(hsts_path)
+
+        pfb_unbound._load_hsts_db()
+
+        assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
+
+    def test_feature_disabled_after_failure_closes_the_orphaned_entry(self, tmp_path: Any, monkeypatch: Any) -> None:
+        hsts_path = tmp_path / "pfb_py_hsts.txt"
+        hsts_path.write_text("bad.example\n", encoding="utf-8")
+        pfb_unbound.pfb["pfb_py_hsts"] = str(hsts_path)
+        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
+
+        real_open = open
+
+        def _boom_open(path: Any, *a: Any, **k: Any) -> Any:
+            if str(path) == str(hsts_path):
+                raise OSError("simulated read failure")
+            return real_open(path, *a, **k)
+
+        monkeypatch.setattr("builtins.open", _boom_open)
+        pfb_unbound._load_hsts_db()
+        # Before-state: the entry is genuinely open first.
+        assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 1
+
+        monkeypatch.undo()
+        pfb_unbound.pfb["python_hsts"] = False
+
+        pfb_unbound._load_hsts_db()
+
+        assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
 
     def test_hsts_disabled_never_opens_an_entry(self, tmp_path: Any) -> None:
         # python_hsts OFF must never touch pfb_py_hsts, even if it exists.
@@ -528,6 +653,31 @@ class TestLoadSafeSearchDbLedgerWiring:
         assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
         assert pfb_unbound.safeSearchDB["forcesafe.com"] == {"A": "1.2.3.4", "AAAA": "::1"}
 
+    def test_file_removed_after_failure_closes_the_orphaned_entry(self, tmp_path: Any, monkeypatch: Any) -> None:
+        ss_path = tmp_path / "pfb_py_ss.txt"
+        ss_path.write_text("forcesafe.com,1.2.3.4,::1\n", encoding="utf-8")
+        pfb_unbound.pfb["pfb_py_ss"] = str(ss_path)
+        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
+
+        real_open = open
+
+        def _boom_open(path: Any, *a: Any, **k: Any) -> Any:
+            if str(path) == str(ss_path):
+                raise OSError("simulated read failure")
+            return real_open(path, *a, **k)
+
+        monkeypatch.setattr("builtins.open", _boom_open)
+        pfb_unbound._load_safesearch_db()
+        # Before-state: the entry is genuinely open first.
+        assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 1
+
+        monkeypatch.undo()
+        os.remove(ss_path)
+
+        pfb_unbound._load_safesearch_db()
+
+        assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
+
     def test_no_file_present_leaves_ledger_untouched(self, tmp_path: Any) -> None:
         pfb_unbound.pfb["pfb_py_ss"] = str(tmp_path / "does_not_exist.txt")
         pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
@@ -586,6 +736,21 @@ class TestLoadIniConfigLedgerWiring:
 
         assert config is not None
         assert config.has_section("MAIN") is True
+        assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
+
+    def test_file_removed_after_failure_closes_the_orphaned_entry(self, tmp_path: Any) -> None:
+        ini_path = tmp_path / "pfb_unbound.ini"
+        ini_path.write_text("bogus_line_with_no_section_header\n", encoding="utf-8")
+        pfb_unbound.pfb["pfb_unbound.ini"] = str(ini_path)
+        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
+
+        pfb_unbound._load_ini_config()
+        # Before-state: the entry is genuinely open first.
+        assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 1
+
+        os.remove(ini_path)
+
+        assert pfb_unbound._load_ini_config() is None
         assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
 
 
