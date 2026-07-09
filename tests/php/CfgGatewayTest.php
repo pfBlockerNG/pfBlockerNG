@@ -5,6 +5,8 @@ declare(strict_types=1);
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/LogTypesFixture.php';
+
 /**
  * ADR-29 Phase 1 — PfbConfig gateway + field registry tests.
  *
@@ -1485,10 +1487,8 @@ final class CfgGatewayTest extends TestCase
 	public function testLogMaxDaysFieldsAreRegistered(): void
 	{
 		$registry  = pfb_cfg_registry();
-		$log_types = [
-			'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
-			'ip_matchlog', 'ip_parse_err', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
-		];
+		$log_types = pfb_test_log_types();
+		$this->assertNotEmpty($log_types, 'pfb_test_log_types() must not be empty');
 
 		foreach ($log_types as $type) {
 			$key = 'log_max_days_' . $type;
@@ -1499,16 +1499,29 @@ final class CfgGatewayTest extends TestCase
 	}
 
 	/**
+	 * Pin pfb_test_log_types() to the known 11-item vocabulary so a broken
+	 * derivation (e.g. an empty/partial result) fails loudly here instead of
+	 * silently under-testing every consumer via a vacuous foreach.
+	 */
+	public function testLogTypesFixtureMatchesCanonicalVocabulary(): void
+	{
+		$expected = [
+			'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
+			'ip_matchlog', 'ip_parse_err', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
+		];
+		$this->assertSame($expected, pfb_test_log_types(),
+			'pfb_test_log_types() must match the canonical 11 log types exactly'
+		);
+	}
+
+	/**
 	 * Data provider — all 11 log_max_days_<type> keys × canonical numeric tokens.
 	 *
 	 * @return array<string, array{string, string}>
 	 */
 	public static function logMaxDaysVocabularyProvider(): array
 	{
-		$log_types = [
-			'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
-			'ip_matchlog', 'ip_parse_err', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
-		];
+		$log_types = pfb_test_log_types();
 		$vocab  = ['0', '30', '365'];
 		$cases  = [];
 		foreach ($log_types as $type) {
@@ -1570,10 +1583,8 @@ final class CfgGatewayTest extends TestCase
 	 */
 	public function testLogMaxDaysFieldAbsentKeyReturnsDefaultZero(): void
 	{
-		$log_types = [
-			'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
-			'ip_matchlog', 'ip_parse_err', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
-		];
+		$log_types = pfb_test_log_types();
+		$this->assertNotEmpty($log_types, 'pfb_test_log_types() must not be empty');
 
 		foreach ($log_types as $type) {
 			$key  = 'log_max_days_' . $type;
