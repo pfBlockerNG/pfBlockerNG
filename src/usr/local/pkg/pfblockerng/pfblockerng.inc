@@ -3012,6 +3012,24 @@ function pfb_log_iso_timestamp(): string {
 	return date('Y-m-d H:i:s', time());
 }
 
+// BSD: year-infers strtotime("$f[0] $f[1] $f[2]", $now); rolls back one year if
+// >6h ahead of $now. Non-BSD (syslog): keeps $f[1]'s real year verbatim. Both
+// fall back to pfb_log_iso_timestamp() on strtotime()===FALSE, never epoch 0.
+function pfb_filterlog_timestamp(array $f, string $log_type, int $now): string {
+	if ($log_type == 'BSD') {
+		$ts = strtotime("{$f[0]} {$f[1]} {$f[2]}", $now);
+		if ($ts === FALSE) {
+			return pfb_log_iso_timestamp();
+		}
+		if ($ts > $now + 6 * 3600) {
+			$ts = strtotime("{$f[0]} {$f[1]} {$f[2]} " . ((int) date('Y', $now) - 1), $now);
+		}
+		return date('Y-m-d H:i:s', $ts);
+	}
+	$ts = strtotime($f[1]);
+	return ($ts === FALSE) ? pfb_log_iso_timestamp() : date('Y-m-d H:i:s', $ts);
+}
+
 function pfb_logger($log, $logtype) {
 	global $g, $pfb;
 
@@ -12875,27 +12893,7 @@ function pfb_daemon_filterlog() {
 					}
 
 					// Log: "Date timestamp/Tracker ID/Interface/Interface Name/Action/IP Version"
-					if ($log_type == 'BSD') {
-						// ADR-60 S2.1: BSD syslog carries no year; infer from now, roll back
-						// a year if the result lands in the future (year-less-syslog fix).
-						// ponytail: 6h skew tolerance -- avoids misreading a same-day line as "next year" near midnight/DST.
-						$bsd_now = time();
-						$ts = strtotime("{$f[0]} {$f[1]} {$f[2]}", $bsd_now);
-						if ($ts === FALSE) {
-							$ts_formatted = pfb_log_iso_timestamp();
-						} else {
-							if ($ts > $bsd_now + 6 * 3600) {
-								$ts = strtotime("{$f[0]} {$f[1]} {$f[2]} " . ((int) date('Y', $bsd_now) - 1), $bsd_now);
-							}
-							$ts_formatted = date('Y-m-d H:i:s', $ts);
-						}
-					} else {
-						// RFC-5424's $f[1] already carries a real year -- keep it verbatim.
-						// A parse failure must fall back like the BSD branch, never stamp
-						// 1970 (which the age-cutoff would then treat as always-expired).
-						$ts = strtotime($f[1]);
-						$ts_formatted = ($ts === FALSE) ? pfb_log_iso_timestamp() : date('Y-m-d H:i:s', $ts);
-					}
+					$ts_formatted = pfb_filterlog_timestamp($f, $log_type, time());
 					$log = "{$ts_formatted},{$d[3]},{$d[4]},{$int},{$d[6]},{$d[8]},";
 
 					// Details:	"Direction/GeoIP/Aliasname/IP evaluated/Feed Name/Resolved Hostname/Client Hostname/ASN/Duplicate status"
