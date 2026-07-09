@@ -188,11 +188,13 @@ final class LogFormatConsumersTest extends TestCase
 	/**
 	 * Green: the rebuilt day-bucket field selection (`cut -d ' ' -f1`) groups
 	 * ISO-format rows sharing a date into one bucket, regardless of their time.
+	 * issue #1057 added the `grep -E '^[0-9]{4}-'` gate right before it -- pinned
+	 * as part of the SAME tripwire so the two can never drift apart unnoticed.
 	 */
 	public function testDayBucketCutFieldSelectionGroupsIsoLinesByDate(): void
 	{
 		$source = (string) file_get_contents(self::ALERTS_PHP);
-		$needle = "cut -d ' ' -f1 | uniq -c";
+		$needle = "{\$pfb['grep']} -E '^[0-9]{4}-' | cut -d ' ' -f1 | uniq -c";
 		$this->assertStringContainsString($needle, $source, "pfblockerng_alerts.php's day-bucket cut changed -- update this oracle");
 		$this->assertStringNotContainsString("cut -d ' ' -f1-2", $source, 'the OLD 3-token field selection must be gone');
 
@@ -205,7 +207,7 @@ final class LogFormatConsumersTest extends TestCase
 		);
 
 		$cutField2 = "/usr/bin/cut -d ',' -f2 {$fixture}";
-		exec("{$cutField2} | cut -d ' ' -f1 | uniq -c", $stats);
+		exec("{$cutField2} | /usr/bin/grep -E '^[0-9]{4}-' | cut -d ' ' -f1 | uniq -c", $stats);
 
 		$this->assertCount(2, $stats, 'two distinct days must produce exactly two buckets');
 		$buckets = array_map(static fn (string $l): array => array_map('trim', explode(' ', trim($l), 2)), $stats);
@@ -296,21 +298,24 @@ EOT;
 	}
 
 	/**
-	 * Regression: `dnsbldatehr`/`dnsbldatehrmin` (`:'-split hour buckets) are
-	 * genuinely unaffected by the format change -- neither line was touched
-	 * this phase, and BOTH an old-format and a new-format sample bucket to the
-	 * same "<date> <hour[:min]>" shape, proving the mechanism is format-agnostic.
+	 * Regression: `dnsbldatehr`/`dnsbldatehrmin` (`:'-split hour buckets) formula
+	 * ITSELF is genuinely unaffected by the ISO format change -- neither line was
+	 * rewritten this phase, and BOTH an old-format and a new-format sample bucket
+	 * to the same "<date> <hour[:min]>" shape at this cut stage alone. issue #1057
+	 * later gated this formula's INPUT (a `grep -E '^[0-9]{4}-'`, pinned below) so
+	 * an old-format sample no longer REACHES it in production -- LogFormatConsumersTest's
+	 * mixed-fixture tests below cover that full-pipeline behaviour.
 	 */
 	public function testDnsblDateHrAndHrMinBucketsUnaffectedByFormatChange(): void
 	{
 		$source = (string) file_get_contents(self::ALERTS_PHP);
 		$this->assertStringContainsString(
-			"cut -d ':' -f1 | sort | uniq -c | sort -nr",
+			"{\$pfb['grep']} -E '^[0-9]{4}-' | cut -d ':' -f1 | sort | uniq -c | sort -nr",
 			$source,
 			'dnsbldatehr\'s cut formula changed -- update this oracle'
 		);
 		$this->assertStringContainsString(
-			"cut -d ':' -f1,2 | sort | uniq -c | sort -nr",
+			"{\$pfb['grep']} -E '^[0-9]{4}-' | cut -d ':' -f1,2 | sort | uniq -c | sort -nr",
 			$source,
 			'dnsbldatehrmin\'s cut formula changed -- update this oracle'
 		);
@@ -331,6 +336,196 @@ EOT;
 				"{$label}: dnsbldatehrmin must end in the correct hour:minute"
 			);
 			$hrOut = $hrMinOut = [];
+		}
+	}
+
+	// -----------------------------------------------------------------------
+	// issue #1057 -- legacy pre-ISO lines surviving an upgrade must not
+	// pollute the day/hour buckets (mixed-format fixture, all 3 pipelines).
+	// -----------------------------------------------------------------------
+
+	/**
+	 * A dnsbl.log with 2 ISO rows (same day, different hours) plus 1 legacy
+	 * `M j H:i:s`-prefixed row (`Nov 31 14:30:15`, the exact shape the issue
+	 * reports rendering as "Nov (31)"), CSV field 2 (column for the dnsbl_stat
+	 * view's $stat_info), mirroring a real dnsbl.log's field layout.
+	 */
+	private function mixedFormatFixture(): string
+	{
+		$fixture = $this->tempFile('pfb_alerts_mixed_');
+		file_put_contents(
+			$fixture,
+			"DNSBL-python,2026-07-08 09:15:00,a.example,203.0.113.1,Python,VIP,G1,a.example,F1,+,A\n"
+			. "DNSBL-python,2026-07-08 10:20:00,b.example,203.0.113.2,Python,VIP,G1,b.example,F1,+,A\n"
+			. "DNSBL-python,Nov 31 14:30:15,legacy.example,203.0.113.9,Python,VIP,G1,legacy.example,F1,+,A\n"
+		);
+		return $fixture;
+	}
+
+	/**
+	 * Red proof: the PRE-#1057 day-bucket pipeline (no grep gate) buckets the
+	 * legacy row's bare month token "Nov" as if it were a day -- exactly the
+	 * issue's reported symptom.
+	 */
+	public function testMixedFormatDayBucketOldPipelinePollutesWithLegacyMonthToken(): void
+	{
+		$fixture = $this->mixedFormatFixture();
+		$cutField2 = "/usr/bin/cut -d ',' -f2 {$fixture}";
+		exec("{$cutField2} | cut -d ' ' -f1 | uniq -c", $stats);
+
+		$this->assertNotEmpty(
+			array_filter($stats, static fn (string $l): bool => str_contains($l, 'Nov')),
+			'the OLD (ungated) day-bucket pipeline must bucket the legacy row\'s bare "Nov" token (the live breakage)'
+		);
+	}
+
+	/**
+	 * Green: the NEW (`grep -E '^[0-9]{4}-'`-gated) day-bucket pipeline skips
+	 * the legacy row entirely -- only the 2 ISO rows bucket, by date.
+	 */
+	public function testMixedFormatDayBucketNewPipelineSkipsLegacyLines(): void
+	{
+		$fixture = $this->mixedFormatFixture();
+		$cutField2 = "/usr/bin/cut -d ',' -f2 {$fixture}";
+		exec("{$cutField2} | /usr/bin/grep -E '^[0-9]{4}-' | cut -d ' ' -f1 | uniq -c", $stats);
+
+		$this->assertEmpty(
+			array_filter($stats, static fn (string $l): bool => str_contains($l, 'Nov')),
+			'the NEW gated pipeline must never bucket the legacy row\'s "Nov" token; got: ' . implode(', ', $stats)
+		);
+		$this->assertCount(1, $stats, 'the 2 same-day ISO rows must collapse into exactly one bucket');
+		$this->assertStringContainsString('2026-07-08', $stats[0], "expected the ISO date bucket; got: {$stats[0]}");
+		$this->assertMatchesRegularExpression('/^\s*2\s/', $stats[0], "expected a count of 2; got: {$stats[0]}");
+	}
+
+	/**
+	 * Red proof: the PRE-#1057 dnsbldatehr pipeline buckets the legacy row as
+	 * "Nov 31 14" (month/day/hour all shifted one slot left of where an ISO
+	 * row's "date hour" bucket key would put them) -- the exact shape the
+	 * render loop later mangles into "Nov (31)".
+	 */
+	public function testMixedFormatDnsblDateHrOldPipelinePollutesWithLegacyBucket(): void
+	{
+		$fixture = $this->mixedFormatFixture();
+		$cutField2 = "/usr/bin/cut -d ',' -f2 {$fixture}";
+		exec("{$cutField2} | cut -d ':' -f1 | sort | uniq -c | sort -nr", $stats);
+
+		$this->assertNotEmpty(
+			array_filter($stats, static fn (string $l): bool => str_contains($l, 'Nov 31 14')),
+			'the OLD (ungated) dnsbldatehr pipeline must bucket the legacy row as "Nov 31 14" (the live breakage)'
+		);
+	}
+
+	/**
+	 * Green: the NEW gated dnsbldatehr pipeline skips the legacy row -- only
+	 * the 2 ISO "date hour" buckets survive.
+	 */
+	public function testMixedFormatDnsblDateHrNewPipelineSkipsLegacyLines(): void
+	{
+		$fixture = $this->mixedFormatFixture();
+		$cutField2 = "/usr/bin/cut -d ',' -f2 {$fixture}";
+		exec("{$cutField2} | /usr/bin/grep -E '^[0-9]{4}-' | cut -d ':' -f1 | sort | uniq -c | sort -nr", $stats);
+
+		$joined = implode(', ', $stats);
+		$this->assertStringNotContainsString('Nov', $joined, "legacy row must never survive the gate; got: {$joined}");
+		$this->assertStringContainsString('2026-07-08 09', $joined, "expected the 09:00 ISO bucket; got: {$joined}");
+		$this->assertStringContainsString('2026-07-08 10', $joined, "expected the 10:00 ISO bucket; got: {$joined}");
+		$this->assertCount(2, $stats, 'exactly the 2 distinct ISO hour buckets, no legacy pollution');
+	}
+
+	/**
+	 * Red proof: the PRE-#1057 dnsbldatehrmin pipeline buckets the legacy row
+	 * as "Nov 31 14:30".
+	 */
+	public function testMixedFormatDnsblDateHrMinOldPipelinePollutesWithLegacyBucket(): void
+	{
+		$fixture = $this->mixedFormatFixture();
+		$cutField2 = "/usr/bin/cut -d ',' -f2 {$fixture}";
+		exec("{$cutField2} | cut -d ':' -f1,2 | sort | uniq -c | sort -nr", $stats);
+
+		$this->assertNotEmpty(
+			array_filter($stats, static fn (string $l): bool => str_contains($l, 'Nov 31 14:30')),
+			'the OLD (ungated) dnsbldatehrmin pipeline must bucket the legacy row as "Nov 31 14:30" (the live breakage)'
+		);
+	}
+
+	/**
+	 * Green: the NEW gated dnsbldatehrmin pipeline skips the legacy row.
+	 */
+	public function testMixedFormatDnsblDateHrMinNewPipelineSkipsLegacyLines(): void
+	{
+		$fixture = $this->mixedFormatFixture();
+		$cutField2 = "/usr/bin/cut -d ',' -f2 {$fixture}";
+		exec("{$cutField2} | /usr/bin/grep -E '^[0-9]{4}-' | cut -d ':' -f1,2 | sort | uniq -c | sort -nr", $stats);
+
+		$joined = implode(', ', $stats);
+		$this->assertStringNotContainsString('Nov', $joined, "legacy row must never survive the gate; got: {$joined}");
+		$this->assertStringContainsString('2026-07-08 09:15', $joined, "expected the 09:15 ISO bucket; got: {$joined}");
+		$this->assertStringContainsString('2026-07-08 10:20', $joined, "expected the 10:20 ISO bucket; got: {$joined}");
+		$this->assertCount(2, $stats, 'exactly the 2 distinct ISO hour:min buckets, no legacy pollution');
+	}
+
+	// -----------------------------------------------------------------------
+	// issue #1057 -- the $d[1] undefined-array-key exposure on a truncated/
+	// corrupt bucket key (no space at all in $data).
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Red proof: the PRE-#1057 render line (no `isset()` guard), reproduced
+	 * verbatim, raises "Undefined array key 1" when $data has no space --
+	 * exactly the truncated/corrupt-key exposure the issue reports.
+	 */
+	public function testBucketLabelOldCodeWarnsOnKeyWithoutSpace(): void
+	{
+		$warnings = [];
+		set_error_handler(function (int $errno, string $errstr) use (&$warnings): bool {
+			$warnings[] = $errstr;
+			return true;
+		});
+		try {
+			$data = '14'; // corrupt/truncated key: no space, so explode() yields only index 0.
+			$d = explode(' ', $data);
+			$data = "{$d[0]}&emsp;({$d[1]})"; // the OLD (unguarded) shape reproduced verbatim.
+		} finally {
+			restore_error_handler();
+		}
+
+		$this->assertNotEmpty($warnings, 'the OLD unguarded access must raise a PHP warning on a spaceless key');
+		$this->assertStringContainsString('Undefined array key', $warnings[0] ?? '', "got: " . implode(', ', $warnings));
+	}
+
+	/**
+	 * Green: the NEW `isset($d[1])`-guarded render line, pinned by source
+	 * tripwire then reproduced verbatim, raises NO warning on a spaceless key
+	 * (falls back to the bare $d[0]) and keeps the normal "date (hour)" shape
+	 * for a well-formed key.
+	 */
+	public function testBucketLabelIssetGuardPreventsWarningOnKeyWithoutSpace(): void
+	{
+		$source = (string) file_get_contents(self::ALERTS_PHP);
+		$needle = '$data = isset($d[1]) ? "{$d[0]}&emsp;({$d[1]})" : $d[0];';
+		$this->assertStringContainsString($needle, $source, 'the $d[1] render guard changed -- update this oracle');
+
+		foreach (
+			[
+				'well-formed key'   => ['2026-07-08 09', '2026-07-08&emsp;(09)'],
+				'spaceless (corrupt) key' => ['14', '14'],
+			] as $label => [$data, $expected]
+		) {
+			$warnings = [];
+			set_error_handler(function (int $errno, string $errstr) use (&$warnings): bool {
+				$warnings[] = $errstr;
+				return true;
+			});
+			try {
+				$d = explode(' ', $data);
+				$data = isset($d[1]) ? "{$d[0]}&emsp;({$d[1]})" : $d[0]; // the NEW (guarded) shape, reproduced verbatim.
+			} finally {
+				restore_error_handler();
+			}
+
+			$this->assertSame([], $warnings, "{$label}: the guarded access must never warn; got: " . implode(', ', $warnings));
+			$this->assertSame($expected, $data, "{$label}: unexpected rendered bucket label");
 		}
 	}
 }
