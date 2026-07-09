@@ -115,9 +115,9 @@ def test_dnsbl_block_page_shows_real_correlation_detail(deployed_vm: helpers.Smo
                 f"lighttpd_pfb/:80 snapshot (rc={diag.returncode}):\n{diag.stdout}{diag.stderr}"
             )
 
+        # The block marker is already guaranteed by the fail-path above (its condition's
+        # negation), so no separate assertion here -- re-asserting it would be dead code.
         body = result.stdout
-        assert "Site blocked via DNSBL" in body, f"sinkhole page missing its block marker; body:\n{body}"
-
         cells = re.findall(r"<td>(.*?)</td>", body, re.DOTALL)
         assert len(cells) == 6, (
             f"expected 6 <td> cells (Referer/Client/Type/Group/Evaluated Domain/Feed), got {len(cells)}: {cells}"
