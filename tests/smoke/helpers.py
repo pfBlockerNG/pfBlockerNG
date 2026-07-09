@@ -1066,7 +1066,11 @@ def ensure_dnsbl_vip(vm: SmokeVM, *, ip4: str = DEFAULT_DNSBL_VIP4, timeout: flo
     be realized for ``pfb_get_vips`` (-> ``get_specialnet``) to list it —
     config-only left it "invalid IPv4 VIP". ``interface_vip_configure`` lives in
     ``interfaces.inc`` (not auto-loaded by pfSsh.php), so require_once it first
-    and guard the call so a missing symbol can't abort the eval.
+    and guard the call so a missing symbol can't abort the eval. Verified via
+    ``ifconfig`` with a direct-alias fallback (issue #1013): on this image
+    ``interface_vip_configure()`` alone left the OS-level alias absent even
+    though config.xml was correct, so a caller needing a REACHABLE (not just
+    resolvable) VIP could not rely on this returning cleanly meaning "live".
     """
     vip = {
         "mode": "ipalias",
@@ -1096,6 +1100,16 @@ def ensure_dnsbl_vip(vm: SmokeVM, *, ip4: str = DEFAULT_DNSBL_VIP4, timeout: flo
         "write_config('pfBlockerNG smoke: DNSBL VIP');\n"
         "require_once('interfaces.inc');\n"
         f"if (function_exists('interface_vip_configure')) {{ interface_vip_configure({_php_kv_array(vip)}); }}\n"
+        # issue #1013: interface_vip_configure() has been observed to leave config.xml
+        # updated but the OS-level alias absent (ifconfig lo0 shows no `ip4` after the
+        # call) -- verify directly and add the alias ourselves if it didn't take, so a
+        # caller that needs a REACHABLE (not just resolvable) VIP can rely on this.
+        f"$vipif = escapeshellarg({_php_str(SMOKE_VIP_IFACE)});\n"
+        f"$vipaddr = escapeshellarg({_php_str(ip4)} . '/32');\n"
+        "$vipup = shell_exec('/sbin/ifconfig ' . $vipif . ' 2>/dev/null');\n"
+        f"if (strpos((string) $vipup, 'inet ' . {_php_str(ip4)} . ' ') === FALSE) {{\n"
+        "  exec('/sbin/ifconfig ' . $vipif . ' alias ' . $vipaddr);\n"
+        "}\n"
         "echo 'OK';"
     )
     result = php_eval(vm, snippet, timeout=timeout)
