@@ -219,10 +219,14 @@ def test_log_settings_grouped_layout(
     # bullets: the intro also wraps "Max lines"/"Max days" in <strong> (exact text nodes) and is
     # emitted before the header rows, so an unscoped exact match resolves to the intro via .first
     # and would pass even if a header StaticText child were missing or renamed. Scope the lookup
-    # into the header rows so a broken column header actually fails the test.
+    # into the header rows, and assert one header cell PER category (all three, matching the three
+    # .pfb-loghdr rows), so a column header dropped from any single category fails -- not just the
+    # first row.
     loghdr = page.locator(".pfb-loghdr")
     for col_header in ("Max lines", "Max days"):
-        expect(loghdr.get_by_text(col_header, exact=True).first).to_be_visible(timeout=JS_TIMEOUT_MS)
+        cells = loghdr.get_by_text(col_header, exact=True)
+        expect(cells).to_have_count(3, timeout=JS_TIMEOUT_MS)
+        expect(cells.first).to_be_visible(timeout=JS_TIMEOUT_MS)
 
     # The log_max_log control's enclosing form-group carries the per-log label "pfBlockerNG".
     log_max_log = page.locator('select[name="log_max_log"]')
@@ -242,11 +246,14 @@ def test_log_settings_grouped_layout(
     expect(_row_label("log_max_ip_blocklog")).to_have_text("Block", timeout=JS_TIMEOUT_MS)
     expect(_row_label("log_max_dnsreplylog")).to_have_text("Reply", timeout=JS_TIMEOUT_MS)
 
-    # EVERY log control carries a per-control mobile label (label-start, class form-label): two
-    # per log row -- a Max-lines select and a Max-days input. Count the actual controls on the
-    # page (the only label-start sources on the General page) and assert exactly that many
-    # form-labels, so the check tracks the real log list and proves every control is labelled,
-    # not merely some.
-    log_controls = page.locator('select[name^="log_max_"], input[name^="log_max_days_"]').count()
-    assert log_controls >= 2, f"expected Log Settings controls (log_max_* select/input), found {log_controls}"
-    expect(page.locator("label.form-label")).to_have_count(log_controls, timeout=JS_TIMEOUT_MS)
+    # Each log row carries BOTH a Max-lines select and a Max-days input; each control emits exactly
+    # one per-control mobile label (label-start, class form-label -- the only source of
+    # label.form-label on this page). Assert the two column families are present and equal-sized,
+    # so dropping either whole column fails (counting only their union would miss a symmetric loss),
+    # then that every control is labelled (one form-label per control).
+    max_lines = page.locator('select[name^="log_max_"]')
+    max_days = page.locator('input[name^="log_max_days_"]')
+    n_rows = max_lines.count()
+    assert n_rows >= 1, f"expected at least one Log Settings row (select[name^=log_max_]), found {n_rows}"
+    expect(max_days).to_have_count(n_rows, timeout=JS_TIMEOUT_MS)
+    expect(page.locator("label.form-label")).to_have_count(n_rows * 2, timeout=JS_TIMEOUT_MS)
