@@ -69,7 +69,7 @@ def _get_failed_body(webui: WebUI) -> str:
     return resp.text
 
 
-def _dismiss(webui: WebUI) -> None:
+def _dismiss(webui: WebUI, headers: dict[str, str] | None = None) -> None:
     """POST the widget's dismiss action -- the exact payload the hidden 'formicons'
     form's JS-driven submit sends (``pfblockerngack=1``); the handler redirects to
     ``/`` on success (widget.php ~184-186).
@@ -79,13 +79,18 @@ def _dismiss(webui: WebUI) -> None:
     never injects one here at all (confirmed live -- the rendered form has no
     hidden CSRF input), so this replicates ``post()``'s field-scrape-then-POST
     shape without that requirement.
+
+    ``headers`` (issue #1050): extra request headers, e.g. a synthetic
+    ``Sec-Fetch-Site`` to drive ``pfb_widget_post_allowed()``'s gate -- the response
+    is still a normal 200 either way (blocked = the mutation is skipped and the
+    page falls through to its normal render, never a login bounce or a 4xx).
     """
     page = webui.get(WIDGET_PAGE)
     assert page.status_code == 200, f"GET {WIDGET_PAGE} -> HTTP {page.status_code} (expected 200)"
     assert not looks_like_login_page(page.text), "pre-dismiss GET bounced to the login page -- not authenticated"
     payload = scrape_form_fields(page.text)
     payload["pfblockerngack"] = "1"
-    resp = webui.session.post(webui.url(WIDGET_PAGE), data=payload, timeout=30)
+    resp = webui.session.post(webui.url(WIDGET_PAGE), data=payload, headers=headers, timeout=30)
     assert resp.status_code == 200, f"POST {WIDGET_PAGE} pfblockerngack=1 -> HTTP {resp.status_code} (expected 200)"
     assert not looks_like_login_page(resp.text), "dismiss POST bounced to the login page -- session not authenticated"
 
@@ -236,3 +241,40 @@ def test_dismiss_with_no_open_entries_is_a_safe_noop(
 
     after = _get_failed_body(webui)
     assert "MaxMind:" in after, "empty ledger must still fall back to the MaxMind version line after a no-op dismiss"
+
+
+def test_dismiss_cross_site_post_does_not_clear_ledger(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    clean_ledger: None,
+    php_error_log_guard: PhpErrorLogGuard,  # noqa: ARG001
+) -> None:
+    """issue #1050 (security, red case): a cross-site-shaped POST must NOT clear
+    the ledger.
+
+    ``$nocsrf=TRUE`` means csrf-magic never runs on this endpoint, so before this
+    fix ANY POST (session-authenticated or auto-submitted from a completely
+    unrelated site in the admin's browser) cleared every open ledger entry --
+    ``pfb_widget_post_allowed()`` now rejects a POST carrying
+    ``Sec-Fetch-Site: cross-site``. Reuses ``test_dismiss_closes_single_open_ip_entry``'s
+    seed/assert shape, with the opposite outcome: the entry SURVIVES.
+    """
+    vm = smoke_vm
+    item = f"pfB_SmokeCrossSite_{uuid.uuid4().hex[:8]}_v4"
+    message = f"smoke: synthetic cross-site-blocked failure {uuid.uuid4().hex[:8]}"
+    _ledger_open(vm, "ip", item, "apply", message)
+
+    # BEFORE: the seeded open entry is visible, same as any other dismiss test.
+    before = _get_failed_body(webui)
+    assert message in before, "seeded ledger entry's message missing before the blocked dismiss"
+
+    _dismiss(webui, headers={"Sec-Fetch-Site": "cross-site"})
+
+    # AFTER: the entry must SURVIVE -- proving the gate, not just "dismiss is a no-op".
+    after = _get_failed_body(webui)
+    assert message in after, "cross-site POST cleared the ledger entry -- pfb_widget_post_allowed() gate failed"
+
+    raw = helpers.read_log_file(vm, f"{_LEDGER_DIR}/pfb_sync_status.json")
+    assert item in raw, f"cross-site POST removed {item!r} from the raw ledger file"
+
+    _ledger_close(vm, "ip", item, "apply")
