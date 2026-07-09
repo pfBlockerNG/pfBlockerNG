@@ -11,10 +11,14 @@ use PHPUnit\Framework\TestCase;
  * The apply-stage decision (pfb_dnsbl_apply_ledger_update(), built on
  * pfb_dnsbl_converged()) is tested directly for the open/close/refresh
  * contract, and separately end-to-end through the REAL pfb_reload_unbound()
- * to prove its swap-not-confirmed restart-fallback branch does not, by
- * itself, leave a ledger entry behind (ADR SS1.3: "NOT an error: fail-safe
- * by design"). The feed-download pair (pfb_dnsbl_download_ledger_update())
- * mirrors the IP side's PfbSyncStatusIpWritersTest Pair 1.
+ * to prove its swap-not-confirmed restart-fallback path reaches the shared
+ * tail and converges (ADR SS1.3: "NOT an error: fail-safe by design"). That
+ * the three restart-fallback branches never call a ledger function directly
+ * is a SEPARATE, source-inspection-only invariant (the tail's write is
+ * deterministic/idempotent-by-key, so no end-state assertion can prove it) --
+ * see testRestartFallbackBranchesNeverCallLedgerFunctionsDirectly. The
+ * feed-download pair (pfb_dnsbl_download_ledger_update()) mirrors the IP
+ * side's PfbSyncStatusIpWritersTest Pair 1.
  *
  * Functions under test:
  *   pfb_dnsbl_apply_ledger_update(): void
@@ -210,19 +214,24 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Drives the REAL swap-not-confirmed -> restart-fallback branch: the
-	 * zero-downtime eligibility gate passes, but the sentinel flip itself
-	 * fails (dnsbldir made read-only), so pfb_reload_unbound() falls through
-	 * to the shared restart path exactly as it would on a genuine stuck
-	 * watcher. Neither fallback branch calls any ledger function -- only the
-	 * TAIL's pfb_dnsbl_apply_ledger_update() does, and it is proven
-	 * (PfbDnsblConvergedTest) to correctly read "converged" once the
-	 * sentinel/applied pair (both absent -> 0 == 0), Unbound liveness, and
-	 * unbound.conf all agree -- so this test's PASSING assertion is a real
-	 * proof that the fallback branch itself never wrote an entry, not an
-	 * artifact of the tail masking one.
+	 * Drives the REAL swap-not-confirmed -> restart-fallback branch (dnsbldir
+	 * made read-only, so the sentinel flip itself fails) through to the
+	 * shared tail, exactly as a genuine stuck watcher would. Proves ONLY:
+	 * (1) the fallback + shared restart path runs to completion without
+	 * crashing/hanging ($calls sanity check), and (2) the tail's
+	 * pfb_dnsbl_apply_ledger_update() correctly reflects the REAL final
+	 * convergence outcome once Unbound is back up.
+	 *
+	 * Does NOT prove the fallback branch itself never calls a ledger
+	 * function: the tail's write is deterministic/idempotent-by-key (see
+	 * testConvergedClosesEntry / testNotConvergedTwiceRefreshesWithoutDuplicating),
+	 * so it unconditionally overwrites the (dnsbl,dnsbl,apply) key regardless
+	 * of what ran earlier in the same call -- a stray open() inside the
+	 * fallback branch would be silently masked here. See
+	 * testRestartFallbackBranchesNeverCallLedgerFunctionsDirectly for that
+	 * invariant, pinned by source inspection instead.
 	 */
-	public function testRestartFallbackAloneOpensNoEntry(): void
+	public function testRestartFallbackPathReachesTailWithConvergedState(): void
 	{
 		if (function_exists('posix_getuid') && posix_getuid() === 0) {
 			$this->markTestSkipped('root bypasses directory permissions -- cannot simulate the sentinel-flip failure.');
@@ -275,5 +284,31 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 			'the restart-fallback + shared restart path must have actually run (sanity check on the call-count assumption)');
 		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'dnsbl'),
 			'a swap-not-confirmed restart-fallback that ultimately converges must not leave a dnsbl apply entry open');
+	}
+
+	/**
+	 * Source-inspection pin (mirrors testDnsblDownloadCallSitesKeyOnTheAliasNotTheHeader):
+	 * the tail's ledger write is deterministic/idempotent-by-key, so no end-state
+	 * assertion can prove a fallback branch stayed silent -- only reading the source can.
+	 */
+	public function testRestartFallbackBranchesNeverCallLedgerFunctionsDirectly(): void
+	{
+		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
+		$this->assertNotFalse($source, 'pfblockerng.inc must be readable');
+
+		$start = strpos($source, 'function pfb_reload_unbound(');
+		$this->assertNotFalse($start, 'pfb_reload_unbound() must exist');
+		// The shared restart path (both the fallback branches AND the zero-downtime
+		// success return fall through to it) always opens with this tempnam() call --
+		// a stable, unique boundary marking the end of the fallback-branches region.
+		$end = strpos($source, "\$cache_dumpfile = tempnam(", $start);
+		$this->assertNotFalse($end, 'the shared restart path boundary marker must exist');
+
+		$region = substr($source, $start, $end - $start);
+
+		$this->assertStringNotContainsString('pfb_sync_status_open(', $region,
+			'a restart-fallback branch must never open a ledger entry directly -- only the shared tail may');
+		$this->assertStringNotContainsString('pfb_sync_status_close(', $region,
+			'a restart-fallback branch must never close a ledger entry directly -- only the shared tail may');
 	}
 }
