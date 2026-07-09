@@ -99,7 +99,13 @@ def test_dnsbl_block_page_shows_real_correlation_detail(deployed_vm: helpers.Smo
             # this log, no second CI dispatch + diagnostics-archaeology round trip.
             diag = deployed_vm.ssh(
                 "ps auxww | grep -i '[l]ighttpd_pfb'; "
-                "/usr/bin/sockstat -4 -l 2>/dev/null | grep ':8081' || echo NO_LISTENER",
+                "/usr/bin/sockstat -4 -l 2>/dev/null | grep ':8081' || echo NO_LISTENER; "
+                # issue #1013 round 4: NO_LISTENER survived a confirmed-live VIP, so the
+                # remaining suspects are the lighttpd/lighttpd_pfb hardlink pfb_create_dnsbl()
+                # makes (pfblockerng.inc ~5786-5788) and whether the rc script's own daemon
+                # actually ran -- both are cheap to confirm directly rather than guess again.
+                "/bin/ls -la /usr/local/sbin/lighttpd /usr/local/sbin/lighttpd_pfb 2>&1; "
+                "/usr/bin/grep -i lighttpd_pfb /var/log/system.log 2>/dev/null | tail -20",
                 timeout=15.0,
             )
             pytest.fail(
