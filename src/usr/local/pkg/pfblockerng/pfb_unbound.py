@@ -913,6 +913,7 @@ def _load_zone_db(feed_group_db: defaultdict[str, int], feed_group_index: int) -
     advanced ``feed_group_index`` (shared with ``_load_data_db`` across both files).
     Behaviour-preserving: same parse rules, same ``pfb["zoneDB"]`` flag."""
     if not os.path.isfile(pfb["pfb_py_zone"]):
+        pfb_py_status_close("dnsbl", pfb["pfb_py_zone"], "parse")
         return feed_group_index
     try:
         with open(pfb["pfb_py_zone"]) as csv_file:
@@ -951,6 +952,7 @@ def _load_data_db(feed_group_db: defaultdict[str, int], feed_group_index: int) -
     when the ADR-06 manifest already built it. Same extraction rationale/shape as
     ``_load_zone_db`` (shares ``feed_group_db``/``feed_group_index`` with it)."""
     if not os.path.isfile(pfb["pfb_py_data"]):
+        pfb_py_status_close("dnsbl", pfb["pfb_py_data"], "parse")
         return feed_group_index
     try:
         with open(pfb["pfb_py_data"]) as csv_file:
@@ -989,6 +991,7 @@ def _load_whitelist_db() -> None:
     ``whiteDB`` -- skipped when the ADR-06 manifest already built it. Same
     extraction rationale as ``_load_zone_db``."""
     if not os.path.isfile(pfb["pfb_py_whitelist"]):
+        pfb_py_status_close("dnsbl", pfb["pfb_py_whitelist"], "parse")
         return
     try:
         with open(pfb["pfb_py_whitelist"]) as csv_file:
@@ -1020,6 +1023,7 @@ def _load_hsts_db() -> None:
     gated on ``pfb["python_hsts"]`` (not on the ADR-06 manifest: hstsDB is NOT
     part of the manifest build). Same extraction rationale as ``_load_zone_db``."""
     if not (pfb["python_hsts"] and os.path.isfile(pfb["pfb_py_hsts"])):
+        pfb_py_status_close("dnsbl", pfb["pfb_py_hsts"], "parse")
         return
     try:
         with open(pfb["pfb_py_hsts"]) as hsts:
@@ -1041,6 +1045,7 @@ def _load_ini_config() -> ConfigParser | None:
     through into the caller's ``has_section()`` checks, exactly as the original
     inline try/except (no early return on the read failure)."""
     if not os.path.isfile(pfb["pfb_unbound.ini"]):
+        pfb_py_status_close("dnsbl", pfb["pfb_unbound.ini"], "parse")
         return None
     config = ConfigParser()
     try:
@@ -6201,6 +6206,8 @@ def _load_safesearch_db() -> None:
             # load failure diagnostic at the wrong file.
             sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}".format(pfb["pfb_py_ss"], e))
             pfb_py_status_open("dnsbl", pfb["pfb_py_ss"], "parse", "Failed to load: {}: {}".format(pfb["pfb_py_ss"], e))
+    else:
+        pfb_py_status_close("dnsbl", pfb["pfb_py_ss"], "parse")
 
 
 def safesearch_entry(q_name_original: str) -> Any:
