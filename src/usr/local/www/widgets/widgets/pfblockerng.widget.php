@@ -188,7 +188,7 @@ if ($_POST) {
 	}
 
 	// Clear widget IP/DNSBL Packet Counts
-	elseif ($_POST['pfblockerngclearall']) {
+	elseif (!empty($_POST['pfblockerngclearall']) && pfb_widget_post_allowed($_SERVER)) {
 		pfBlockerNG_clearip();
 		pfBlockerNG_clearsqlite('clearip');
 		pfBlockerNG_clearsqlite('cleardnsbl');
@@ -197,7 +197,7 @@ if ($_POST) {
 	}
 
 	// Clear widget IP Packet Counts
-	elseif ($_POST['pfblockerngclearip']) {
+	elseif (!empty($_POST['pfblockerngclearip']) && pfb_widget_post_allowed($_SERVER)) {
 		pfBlockerNG_clearip();
 		pfBlockerNG_clearsqlite('clearip');
 		header("Location: /");
@@ -205,7 +205,7 @@ if ($_POST) {
 	}
 
 	// Clear widget DNSBL Packet Counts
-	elseif ($_POST['pfblockerngcleardnsbl']) {
+	elseif (!empty($_POST['pfblockerngcleardnsbl']) && pfb_widget_post_allowed($_SERVER)) {
 		pfBlockerNG_clearsqlite('cleardnsbl');
 		header("Location: /");
 		exit(0);
