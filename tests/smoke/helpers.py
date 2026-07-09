@@ -1106,9 +1106,19 @@ def ensure_dnsbl_vip(vm: SmokeVM, *, ip4: str = DEFAULT_DNSBL_VIP4, timeout: flo
         # caller that needs a REACHABLE (not just resolvable) VIP can rely on this.
         f"$vipif = escapeshellarg({_php_str(SMOKE_VIP_IFACE)});\n"
         f"$vipaddr = escapeshellarg({_php_str(ip4)} . '/32');\n"
+        f"$viptoken = 'inet ' . {_php_str(ip4)} . ' ';\n"
         "$vipup = shell_exec('/sbin/ifconfig ' . $vipif . ' 2>/dev/null');\n"
-        f"if (strpos((string) $vipup, 'inet ' . {_php_str(ip4)} . ' ') === FALSE) {{\n"
+        "if (strpos((string) $vipup, $viptoken) === FALSE) {\n"
         "  exec('/sbin/ifconfig ' . $vipif . ' alias ' . $vipaddr);\n"
+        # Re-check: the fallback itself can fail (permissions, a bad interface) and would
+        # otherwise report 'OK' with the VIP still unreachable -- a much less diagnostic
+        # failure surfaces later (a bare connect timeout) instead of here, with a reason.
+        "  $vipup = shell_exec('/sbin/ifconfig ' . $vipif . ' 2>/dev/null');\n"
+        "  if (strpos((string) $vipup, $viptoken) === FALSE) {\n"
+        "    fwrite(STDERR, 'ensure_dnsbl_vip: alias fallback did not bring up ' . $viptoken . "
+        "'on ' . $vipif . \"\\n\");\n"
+        "    exit(1);\n"
+        "  }\n"
         "}\n"
         "echo 'OK';"
     )
