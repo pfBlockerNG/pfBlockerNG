@@ -6,10 +6,12 @@ PROBLEM
 A change that RETIRES a quoted string-literal token tree-wide (e.g. removing
 a dead log-format marker from every call site) is easy to under-apply: the
 author fixes the file(s) they were looking at and misses a sibling file with
-the same token. Commit ``958e679f`` removed the ``' [ NOW ]'`` token from 29+
-call sites in ``pfblockerng.inc`` but missed 9 sibling sites in
-``www/pfblockerng/pfblockerng.php`` (issue #1047) -- caught only by a manual
-post-merge tree grep, not by review or CI.
+the same token. Commit ``958e679f`` removed a legacy bracketed ``NOW`` log
+marker from 29+ call sites in ``pfblockerng.inc`` but missed 9 sibling sites
+in ``www/pfblockerng/pfblockerng.php`` (issue #1047) -- caught only by a
+manual post-merge tree grep, not by review or CI. (The marker is deliberately
+not written out here: this docstring would otherwise be a permanent
+"surviving site" in its own tool's report.)
 
 WHAT THIS CHECKS
 -----------------

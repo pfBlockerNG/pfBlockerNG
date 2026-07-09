@@ -48,6 +48,10 @@
             "type": "command",
             "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/scripts/ts-hook.sh\" bash_rewriter_hook",
             "timeout": 2000
+          },
+          {
+            "type": "command",
+            "command": "cd \"${CLAUDE_PROJECT_DIR:-.}\" && python3 scripts/check_retired_tokens.py --claude-hook || true"
           }
         ]
       }

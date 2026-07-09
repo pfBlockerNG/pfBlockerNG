@@ -203,6 +203,18 @@ else
 	skip comment-narration
 fi
 
+# --- Retired-token completeness guard (issue #1059): a quoted literal removed on
+#     >=3 staged scan-root lines and re-added nowhere is a retirement; any site
+#     surviving in the index is a straggler (the #1047 class). WARN-ONLY during
+#     rollout -- a partial retirement can be a deliberate staged migration. ---
+if [ -n "$py_bin" ]; then
+	step 'retired-tokens (stragglers of a tree-wide token removal; advisory)'
+	"$py_bin" scripts/check_retired_tokens.py --staged \
+		|| printf 'WARN: retired-token stragglers reported above are ADVISORY (issue #1059 rollout) -- commit not blocked.\n'
+else
+	skip retired-tokens
+fi
+
 # --- ADR phase prompts: post-contract prompts (ADR >= 60) must carry the
 #     delegation-contract blocks (VERIFICATION, HANDOFF->RESULTS, test mode,
 #     reality-override). Older ADRs are grandfathered by the script itself. ---

@@ -707,6 +707,36 @@ jobs:
           git fetch --no-tags origin "$BASE:refs/remotes/origin/$BASE"
           python3 scripts/check_comment_narration.py --diff "origin/$BASE"
 
+  # ── Retired-token completeness guard (issue #1059) ──
+  # PR-only, diff-scoped: a quoted literal removed on >=3 lines under the scan
+  # roots and re-added nowhere is a RETIREMENT; any surviving occurrence is a
+  # straggler the same PR should have removed (the #1047 class: 29 sites fixed
+  # in pfblockerng.inc, 9 missed in pfblockerng.php). WARN-ONLY during rollout —
+  # a partial retirement can be a deliberate staged migration; promote to
+  # blocking once the observed false-positive rate is near zero. On push it is
+  # skipped and folds into all-tests-passed as a pass, same shape as
+  # comment-narration above.
+  retired-tokens:
+    name: Retired tokens (no stragglers after a tree-wide token removal)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # need the merge-base with the PR base ref for the three-dot diff
+
+      - name: Report stragglers of retired tokens (advisory)
+        # ubuntu-latest ships python3. Escape hatches: `# retired-token-ok: <reason>`
+        # on an intentional survivor line, or --token-allowlist for a staged migration.
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -eu
+          git fetch --no-tags origin "$BASE:refs/remotes/origin/$BASE"
+          python3 scripts/check_retired_tokens.py --diff "origin/$BASE" \
+            || echo "::warning::retired-token stragglers found (ADVISORY during issue #1059 rollout — see step log above)"
+
   # Single stable job name for branch-protection required-status-checks.
   # Must use if: always() so it runs (and fails) even when 'test' fails.
   all-tests-passed:
@@ -718,7 +748,7 @@ jobs:
     # The ADR-14 UI suite (`ui-suite`) IS folded in: it is skipped (== pass) on an
     # unlabeled PR / push, and only a `ui-tests`-labeled PR whose UI suite FAILS
     # blocks here — that is how the opt-in label gates a merge.
-    needs: [read-matrix, test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, ui-suite, coverage-pairing, comment-narration]
+    needs: [read-matrix, test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, ui-suite, coverage-pairing, comment-narration, retired-tokens]
     runs-on: ubuntu-latest
     steps:
       - name: Check matrix results
@@ -792,4 +822,11 @@ jobs:
           case "${{ needs.comment-narration.result }}" in
             success|skipped) ;;
             *) echo "Comment-narration gate (no process narration in new comments) failed or was cancelled."; exit 1 ;;
+          esac
+          # Retired-token guard (issue #1059): warn-only during rollout, so only
+          # a cancelled/errored job (never a finding) can land here as non-success;
+          # 'skipped' (push, no PR base) is a PASS.
+          case "${{ needs.retired-tokens.result }}" in
+            success|skipped) ;;
+            *) echo "Retired-token guard job errored or was cancelled."; exit 1 ;;
           esac
