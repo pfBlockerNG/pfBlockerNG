@@ -1908,6 +1908,13 @@ function pfb_ip_update_marker_clear_active(bool $orig_content_stale): bool {
 	return !$orig_content_stale;
 }
 
+// A stale-.orig download-failure fallback in the DNSBL-domain loop (e.g. a Blacklist
+// category row's local-file re-read) never refreshed the row's content, so the
+// '.update' reprocess marker must survive it, same class as #1022. (#1031)
+function pfb_dnsbl_update_marker_clear_active(bool $orig_content_stale): bool {
+	return !$orig_content_stale;
+}
+
 // v6 stays OPTIONAL (ADR-13 §7 pivot): a missing v6 VIP never fails validation, even when
 // the resolver listens on IPv6 — pfb_global surfaces that as a non-blocking warning, not a
 // force-disable. The validator only checks the VIPs that ARE configured (existence,
@@ -16076,6 +16083,7 @@ function sync_package_pfblockerng($cron='') {
 								}
 								pfb_logger("{$log}", 1);
 								$file_dwn = "{$pfborig}/{$header}";
+								$orig_content_stale = FALSE;
 
 								if (!$custom) {
 									pfb_logger(' .', 1);
@@ -16105,6 +16113,7 @@ function sync_package_pfblockerng($cron='') {
 											if (file_exists("{$pfbfolder}/{$header}.fail") &&
 											    file_exists("{$file_dwn}.orig")) {
 												pfb_logger("\n  Restoring previously downloaded file\n ", 2);
+												$orig_content_stale = TRUE;
 											} else {
 												continue;
 											}
@@ -16713,8 +16722,12 @@ function sync_package_pfblockerng($cron='') {
 								$list_cnt	= exec("{$pfb['grep']} -c ^ " . escapeshellarg("{$pfbfolder}/{$header}.txt"));
 								$alias_cnt	= $alias_cnt + $list_cnt;
 
-								// Remove update file indicator
-								unlink_if_exists("{$pfbfolder}/{$header}.update");
+								// Remove update file indicator -- skip if this row fell through to
+								// the stale-.orig download-failure fallback, else a pending rebuild
+								// is stranded like #1002 but via the download-failure path. (#1031)
+								if (pfb_dnsbl_update_marker_clear_active($orig_content_stale)) {
+									unlink_if_exists("{$pfbfolder}/{$header}.update");
+								}
 							}
 						}
 					}
