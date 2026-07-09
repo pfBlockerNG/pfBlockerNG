@@ -7814,15 +7814,18 @@ function tld_analysis() {
 				continue;
 			}
 
-			// ADR-07: skip ABP-feed lines (see note above). A plain CSV row is
-			// ',domain,,log,feed,group'; the feed name is column index 4. ABP raw
-			// lines lack this shape, so an unset/empty feed column also means skip --
-			// unconditionally: a plain feed can carry ADR-21 verbatim ABP lines with
-			// zero '.abp' markers present (issue #1060).
-			$fparts	= explode(',', $line, 6);
-			$lfeed	= isset($fparts[4]) ? $fparts[4] : '';
-			if ($lfeed === '' || isset($abp_feeds[$lfeed])) {
+			// ADR-07/ADR-21: plain CSV rows (',domain,,log,feed,group') always start
+			// with ','; ABP raw lines (||x^, @@||x^, /re/, '0.0.0.0 h') never do --
+			// skip by prefix, marker-independent (issue #1060; cheap, hot loop).
+			if (strncmp($line, ',', 1) !== 0) {
 				continue;
+			}
+			if (!empty($abp_feeds)) {
+				$fparts	= explode(',', $line, 6);
+				$lfeed	= isset($fparts[4]) ? $fparts[4] : '';
+				if ($lfeed === '' || isset($abp_feeds[$lfeed])) {
+					continue;
+				}
 			}
 
 			// Display progress indicator

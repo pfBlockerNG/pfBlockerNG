@@ -148,12 +148,9 @@ _has_force_flag() {
 	printf '%s' "$seg" | grep -Eq "(^|${_SEP})${_FORCE_CLUSTER}(\$|${_SEP})"
 }
 
-# _bare_force_after_last_lease -- true iff a BARE force flag sits after the
-# last --force-with-lease in $seg. git honors the LAST force flag, so
-# `git push --force-with-lease --force` (or a trailing -f) is a bare force
-# push despite the lease (issue #1058). Exact-word --force only: the
-# remainder can't contain --force-with-lease (stripped past the last one),
-# and --force-if-includes -- a lease COMPANION flag -- must stay clean.
+# _bare_force_after_last_lease -- git honors the LAST force flag: a bare
+# --force (exact word) or f-cluster after the last --force-with-lease is a
+# bare force push (issue #1058); --force-if-includes stays clean.
 _bare_force_after_last_lease() {
 	printf '%s' "${seg##*--force-with-lease}" \
 		| grep -Eq "(^|${_SEP})(--force|${_FORCE_CLUSTER})(\$|${_SEP})"
