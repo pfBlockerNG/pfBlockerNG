@@ -37,12 +37,21 @@ final class SoftwareUpdateCheckTest extends TestCase
 {
 	private string $dbdir = '';
 
+	/** Saved bootstrap-seeded globals, RESTORED in tearDown (issue #1063: an
+	 *  unset here leaked into later suites under --order-by=random). */
+	private bool $hadDbdir    = false;
+	private mixed $savedDbdir = null;
+	private bool $hadConfig    = false;
+	private mixed $savedConfig = null;
+
 	protected function setUp(): void
 	{
 		// Each test gets a private temp dbdir so the cache file is isolated and the
 		// orchestrator's $pfb['dbdir'] lookup resolves there.
 		$this->dbdir = sys_get_temp_dir() . '/pfb_adr19_' . uniqid('', true);
 		mkdir($this->dbdir, 0755, true);
+		$this->hadDbdir   = isset($GLOBALS['pfb']) && array_key_exists('dbdir', $GLOBALS['pfb']);
+		$this->savedDbdir = $GLOBALS['pfb']['dbdir'] ?? null;
 		$GLOBALS['pfb']['dbdir'] = $this->dbdir;
 
 		// Reset the test-driveable doubles to their permissive defaults.
@@ -52,6 +61,8 @@ final class SoftwareUpdateCheckTest extends TestCase
 
 		// No saved setting unless a test overrides it — exercises the DEFAULT (enabled)
 		// state of "Check for new versions" (pfb_software_check unset => enabled).
+		$this->hadConfig   = array_key_exists('config', $GLOBALS);
+		$this->savedConfig = $GLOBALS['config'] ?? null;
 		$GLOBALS['config'] = [];
 	}
 
@@ -65,12 +76,20 @@ final class SoftwareUpdateCheckTest extends TestCase
 			rmdir($this->dbdir);
 		}
 		unset(
-			$GLOBALS['pfb']['dbdir'],
 			$GLOBALS['pfb_test_file_notices'],
 			$GLOBALS['pfb_test_pkg_locked'],
-			$GLOBALS['pfb_test_dns_available'],
-			$GLOBALS['config']
+			$GLOBALS['pfb_test_dns_available']
 		);
+		if ($this->hadDbdir) {
+			$GLOBALS['pfb']['dbdir'] = $this->savedDbdir;
+		} else {
+			unset($GLOBALS['pfb']['dbdir']);
+		}
+		if ($this->hadConfig) {
+			$GLOBALS['config'] = $this->savedConfig;
+		} else {
+			unset($GLOBALS['config']);
+		}
 	}
 
 	private function cacheFile(): string

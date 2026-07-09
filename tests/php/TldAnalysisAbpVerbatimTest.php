@@ -19,9 +19,16 @@ final class TldAnalysisAbpVerbatimTest extends TestCase
 {
 	private string $tmpDir;
 
+	/** Saved bootstrap globals, restored in tearDown (issue #1063 hygiene). */
+	private mixed $savedPfb  = null;
+	private mixed $savedTlds = null;
+
 	protected function setUp(): void
 	{
 		global $pfb, $tlds;
+
+		$this->savedPfb  = $pfb ?? null;
+		$this->savedTlds = $tlds ?? null;
 
 		$this->tmpDir = sys_get_temp_dir() . '/pfb_tld_abp_' . getmypid() . '_' . mt_rand();
 		mkdir($this->tmpDir, 0700, TRUE);
@@ -51,6 +58,11 @@ final class TldAnalysisAbpVerbatimTest extends TestCase
 
 	protected function tearDown(): void
 	{
+		global $pfb, $tlds;
+
+		$pfb  = $this->savedPfb;
+		$tlds = $this->savedTlds;
+
 		$files = new RecursiveIteratorIterator(
 			new RecursiveDirectoryIterator($this->tmpDir, FilesystemIterator::SKIP_DOTS),
 			RecursiveIteratorIterator::CHILD_FIRST
