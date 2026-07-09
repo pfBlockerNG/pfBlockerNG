@@ -10,7 +10,8 @@
 # the genuinely-new ones. This hook runs it every session so no agent has to
 # remember, and reports what happened.
 #
-#   base branch (devel/main) -> pull --rebase its own remote (fast-forward)
+#   base branch (devel/main) -> fast-forward only (ff-only) to its own remote;
+#                               a diverged base is surfaced, never rewritten
 #   session branch           -> rebase onto origin/devel: merged commits drop,
 #                               new commits replay on the live base
 #   dirty tree               -> touch nothing; tell the agent to sync by hand
@@ -21,17 +22,31 @@
 # rebases onto devel; the agent corrects that by hand.
 
 git rev-parse --git-dir >/dev/null 2>&1 || exit 0
-branch=$(git symbolic-ref --short HEAD 2>/dev/null) || exit 0   # detached -> skip
+# Detached HEAD (which includes a paused/in-progress rebase) -> skip untouched.
+# This guard is ALSO what keeps the hook from ever running `git rebase --abort`
+# on someone's in-progress rebase -- keep it (don't swap in `git branch
+# --show-current`, which returns "" instead of failing and would slip through).
+branch=$(git symbolic-ref --short HEAD 2>/dev/null) || exit 0
 
-git fetch --quiet origin >/dev/null 2>&1 || true
+# Bound the fetch so a SYN-dropping network can't hang session start: abort if
+# throughput stays under 1 KB/s for 15s. git config (portable) rather than a
+# timeout(1) wrapper (absent on some agent OSes); non-fatal either way.
+git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=15 fetch --quiet origin >/dev/null 2>&1 || true
 
+# Emit one SessionStart JSON object. A branch name is an arbitrary byte string
+# (git does not enforce UTF-8), so drop invalid sequences (iconv -c, when present)
+# and JSON-escape backslash then double quote -- either would otherwise produce
+# JSON a strict parser rejects, silently dropping the injected context.
 emit() {
-	printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$1"
+	msg=$1
+	command -v iconv >/dev/null 2>&1 && msg=$(printf '%s' "$msg" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null)
+	esc=$(printf '%s' "$msg" | sed 's/\\/\\\\/g; s/"/\\"/g')
+	printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$esc"
 }
 
 case "$branch" in
-	devel | main) base="origin/${branch}" ;;
-	*) base="origin/devel" ;;
+	devel | main) base="origin/${branch}"; kind="BASE BRANCH" ;;
+	*) base="origin/devel"; kind="SESSION BRANCH" ;;
 esac
 
 git rev-parse --verify --quiet "$base" >/dev/null 2>&1 || exit 0
@@ -43,16 +58,21 @@ behind=$(git rev-list --count "HEAD..${base}" 2>/dev/null || echo 0)
 [ "$before" -eq 0 ] && [ "$behind" -eq 0 ] && exit 0
 
 if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
-	emit "SESSION BRANCH '${branch}': ${before} commit(s) ahead of ${base}, ${behind} behind, but the working tree is DIRTY so it was left untouched. Commit or discard your changes, then run: git rebase ${base}  (or, on a base branch, git pull --rebase). Rebasing onto ${base} drops any already-merged commits by patch-id -- do NOT trust git log ${base}..HEAD, which overcounts them after a rebase-merge."
+	emit "${kind} '${branch}': ${before} commit(s) ahead of ${base}, ${behind} behind, but the working tree is DIRTY so it was left untouched. Commit or discard your changes, then run: git rebase ${base}  (or, on a base branch, git merge --ff-only ${base}). Rebasing onto ${base} drops any already-merged commits by patch-id -- do NOT trust git log ${base}..HEAD, which overcounts them after a rebase-merge."
 	exit 0
 fi
 
 case "$branch" in
 	devel | main)
-		if git merge --ff-only --quiet "$base" >/dev/null 2>&1; then
+		# Branch on $before, not merge's exit code: a purely-ahead base branch
+		# (unpushed local commit, behind=0) makes `git merge --ff-only` succeed
+		# trivially ("Already up to date", rc 0), which would misreport an
+		# unpushed commit as "current". Any local commit not on the remote =>
+		# not current; only behind=0/ahead=0 (already filtered above) is clean.
+		if [ "$before" -gt 0 ]; then
+			emit "BASE BRANCH '${branch}': has ${before} local commit(s) not on ${base}. This branch is meant to be PR-only -- reconcile by hand before starting work (push them via a PR, or reset to ${base})."
+		elif git merge --ff-only --quiet "$base" >/dev/null 2>&1; then
 			emit "BASE BRANCH '${branch}': fast-forwarded ${behind} commit(s) up to ${base}. Checkout is current."
-		else
-			emit "BASE BRANCH '${branch}': has ${before} local commit(s) not on ${base} and could not fast-forward. This branch is meant to be PR-only -- reconcile by hand (git pull --rebase) before starting work."
 		fi
 		;;
 	*)
@@ -64,9 +84,10 @@ case "$branch" in
 			else
 				emit "SESSION BRANCH '${branch}': rebased onto ${base}; dropped ${dropped} already-merged commit(s) and replayed ${after} genuinely-new one(s) on the live base. Push with --force-with-lease. (Hash-based git log ${base}..HEAD had reported ${before}, overcounting the merged ones.)"
 			fi
+		elif git rebase --abort >/dev/null 2>&1; then
+			emit "SESSION BRANCH '${branch}': rebase onto ${base} FAILED and was ABORTED -- branch is unchanged (stderr was suppressed, so the cause is unshown). Re-run by hand to see why: git rebase ${base}  (most often a merge conflict, the ~1% rebase cannot auto-resolve), then --force-with-lease push."
 		else
-			git rebase --abort >/dev/null 2>&1
-			emit "SESSION BRANCH '${branch}': rebase onto ${base} hit a conflict and was ABORTED -- branch is unchanged. Resolve by hand: git rebase ${base}  then --force-with-lease push. The conflict is the ~1% case rebase cannot auto-resolve."
+			emit "SESSION BRANCH '${branch}': rebase onto ${base} FAILED and the --abort ALSO failed -- the repo may be stuck mid-rebase. Inspect by hand: git status; git rebase --abort."
 		fi
 		;;
 esac
