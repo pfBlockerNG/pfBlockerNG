@@ -230,15 +230,21 @@ EXCLUDED_FROM_TIER_A: tuple[ExcludedPage, ...] = (
         path="/index.php and /dnsbl_default.php under www/ (DNSBL VIP webserver)",
         reason=(
             "www/index.php + dnsbl_default.php are served by the DNSBL sinkhole lighttpd on the "
-            "DNSBL VIP (ports 8081/8443), NOT the main webConfigurator: no guiconfig auth, and "
-            "index.php exit()s unless HTTP_HOST is a valid hostname and REQUEST_URI=='/' (otherwise "
-            "it returns a 1x1 GIF). dnsbl_default.php is a template INCLUDED by dnsbl_active.php, "
-            "never served standalone. The authenticated session on :8080 cannot reach them."
+            "DNSBL VIP, NOT the main webConfigurator: no guiconfig auth, and index.php exit()s "
+            "unless HTTP_HOST is a valid hostname and REQUEST_URI=='/' (otherwise it returns a "
+            "1x1 GIF). dnsbl_default.php is a template INCLUDED by dnsbl_active.php, never served "
+            "standalone. The authenticated session on :8080 cannot reach them. issue #1013: the "
+            "sinkhole listens on ports 80/443, NOT the configured dnsbl_port/dnsbl_port_ssl "
+            "(8081/8443 by default) -- those are the NAT local-port pfb_create_lighttpd() binds "
+            "127.0.0.1 to on a real interface (pfblockerng.inc:5459-5460); on lo0 (this harness's "
+            "VIP mode) NAT is skipped entirely (pfb_dnsbl_nat_enabled()) and lighttpd binds the "
+            "VIP directly on 80/443 -- either way the externally-reachable port is 80/443."
         ),
         access_note=(
-            "Phase 5: fetch the VIP sinkhole directly -- http://<DNSBL_VIP>:8081/ with a Host header "
-            "set to a blocked hostname and REQUEST_URI '/' to get the DNSBL-Full block page; the "
-            "marker is 'Site blocked via DNSBL' (dnsbl_default.php <title>). No webConfigurator login."
+            "Phase 5: fetch the VIP sinkhole directly -- http://<DNSBL_VIP>/ (port 80, NOT the "
+            "configured dnsbl_port) with a Host header set to a blocked hostname and REQUEST_URI "
+            "'/' to get the DNSBL-Full block page; the marker is 'Site blocked via DNSBL' "
+            "(dnsbl_default.php <title>). No webConfigurator login."
         ),
         markers=("Site blocked via DNSBL",),
     ),
