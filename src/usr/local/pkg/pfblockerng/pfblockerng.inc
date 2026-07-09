@@ -1901,6 +1901,13 @@ function pfb_ip_reuse_skip_active(bool $reuse_on, bool $orig_exists, bool $is_dn
 	return $reuse_on && $orig_exists && !$is_dnsblip;
 }
 
+// A stale-.orig download-failure fallback never refreshed the row's content, so the
+// '.update' reprocess marker must survive it -- else a pending rebuild/refresh is
+// stranded exactly like #1002, but reached via the download-failure path. (#1022)
+function pfb_ip_update_marker_clear_active(bool $orig_content_stale): bool {
+	return !$orig_content_stale;
+}
+
 // v6 stays OPTIONAL (ADR-13 §7 pivot): a missing v6 VIP never fails validation, even when
 // the resolver listens on IPv6 — pfb_global surfaces that as a non-blocking warning, not a
 // force-disable. The validator only checks the VIPs that ARE configured (existence,
@@ -17769,6 +17776,7 @@ function sync_package_pfblockerng($cron='') {
 							}
 							pfb_logger("{$log}", 1);
 							$file_dwn = "{$pfborig}/{$header}";
+							$orig_content_stale = FALSE;
 
 							// Force 'Alias Native' setting to any Alias with 'Advanced Inbound/Outbound -Invert src/dst' settings.
 							// This will bypass Deduplication and Reputation features.
@@ -17836,6 +17844,7 @@ function sync_package_pfblockerng($cron='') {
 										if (file_exists("{$pfbfolder}/{$header}.fail") &&
 										    file_exists("{$file_dwn}.orig")) {
 											pfb_logger("\n  Restoring previously downloaded file contents...", 2);
+											$orig_content_stale = TRUE;
 										}
 										else {
 											if ($pfbadv) {
@@ -18251,8 +18260,12 @@ function sync_package_pfblockerng($cron='') {
 							}
 							unset($ip_data);
 
-							// Remove update file indicator
-							unlink_if_exists("{$pfbfolder}/{$header}.update");
+							// Remove update file indicator -- skip if this row fell through to the
+							// stale-.orig download-failure fallback, else a pending rebuild is
+							// stranded like #1002 but via the download-failure path. (#1022)
+							if (pfb_ip_update_marker_clear_active($orig_content_stale)) {
+								unlink_if_exists("{$pfbfolder}/{$header}.update");
+							}
 
 							// Restore Original Downloaded file after Post Script function
 							if (file_exists("{$file_dwn}.orig.post")) {
