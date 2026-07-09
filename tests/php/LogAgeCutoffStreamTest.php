@@ -167,15 +167,14 @@ final class LogAgeCutoffStreamTest extends TestCase
 
 		$missing = $GLOBALS['pfb']['logdir'] . '/does-not-exist-' . uniqid() . '.log';
 		$this->assertFileDoesNotExist($missing, 'Before: the path must not exist');
-		$scratchBefore = glob(dirname($missing) . '/pfb_logtrim_*');
 
 		$ok = pfb_log_age_trim_temp($missing, 30, 'log', TRUE);
 
 		$this->assertFalse($ok, 'a missing $temp must make the streaming trim return FALSE');
 		$this->assertFileDoesNotExist($missing, 'a failed trim must never create $temp');
-		$this->assertSame($scratchBefore, glob(dirname($missing) . '/pfb_logtrim_*'),
-			'a failed trim must leave no orphaned scratch file in dirname($temp)'
-		);
+		// No orphaned-scratch assertion here: fopen($temp, 'r') fails before
+		// tempnam() is ever reached on this branch, so no scratch file can exist
+		// either way -- that property is covered by the read-only-dir test below.
 	}
 
 	/**
@@ -204,7 +203,10 @@ final class LogAgeCutoffStreamTest extends TestCase
 		$content = date('Y-m-d H:i:s') . " fresh line\n";
 		file_put_contents($temp, $content);
 		chmod($roDir, 0555);
-		$scratchBefore = glob($roDir . '/pfb_logtrim_*');
+		// tempnam() falls back to the SYSTEM temp dir when $roDir is unwritable
+		// (see docblock above) -- glob there, not $roDir, or this assertion can
+		// never fail regardless of whether cleanup actually runs.
+		$scratchBefore = glob(sys_get_temp_dir() . '/pfb_logtrim_*');
 
 		try {
 			$ok = pfb_log_age_trim_temp($temp, 30, 'log', TRUE);
@@ -214,8 +216,8 @@ final class LogAgeCutoffStreamTest extends TestCase
 			$this->assertSame($content, file_get_contents($temp),
 				'a failed rename() back onto $temp must leave it byte-for-byte untouched'
 			);
-			$this->assertSame($scratchBefore, glob($roDir . '/pfb_logtrim_*'),
-				'a failed trim must leave no orphaned scratch file in dirname($temp)'
+			$this->assertSame($scratchBefore, glob(sys_get_temp_dir() . '/pfb_logtrim_*'),
+				'a failed trim must leave no orphaned scratch file in the system temp dir'
 			);
 		} finally {
 			chmod($roDir, 0755);
