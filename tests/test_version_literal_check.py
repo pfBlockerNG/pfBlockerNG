@@ -950,3 +950,15 @@ def test_py_real_docstring_block_still_masks_prose(tmp_path: Path) -> None:
     # masks its prose, so a version token inside it stays clean (green before AND after).
     content = '"""' + "\n" + _FREEBSD15 + "\n" + '"""' + "\n"
     assert _find_py(tmp_path, content) == [], "a version token inside a real docstring must stay clean"
+
+
+def test_py_triple_quote_after_escaped_single_quote_does_not_swallow_next_line(tmp_path: Path) -> None:
+    # issue #1082: a single-quoted Python string may contain an escaped
+    # quote (\') before a triple-quote token, e.g. x = 'it\'s """'. The probe
+    # must honour the backslash escape (single quotes escape in Python, unlike POSIX
+    # sh) so the string does not close early and the """ inside it is not miscounted.
+    tricky = "x = 'it\\'s " + '"""' + "'\n"  # -> x = 'it\'s """'
+    abi_line = '_ABI = "' + _FREEBSD15 + '"\n'
+    violations = _find_py(tmp_path, tricky + abi_line)
+    assert len(violations) == 1, f"literal after an escaped-quote + triple-quote line must be flagged; got {violations}"
+    assert violations[0][1] == 2
