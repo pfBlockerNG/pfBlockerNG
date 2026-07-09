@@ -5,6 +5,10 @@
     "MCP_TIMEOUT": "120000"
   },
   "enableAllProjectMcpServers": true,
+  "statusLine": {
+    "type": "command",
+    "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/skills/ponytail/hooks/ponytail-statusline.sh\"; printf ' '; bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/skills/caveman/src/hooks/caveman-statusline.sh\""
+  },
   "enabledPlugins": {
     "ponytail@ponytail": true,
     "caveman@caveman": true
