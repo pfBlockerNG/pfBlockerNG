@@ -71,7 +71,8 @@ if ($_GET) {
 if ($_POST) {
 
 	// Save widget customizations
-	if (isset($_POST['pfb_submit'])) {
+	// issue #1050: $nocsrf=TRUE means csrf-magic never runs here -- gate the mutation itself.
+	if (isset($_POST['pfb_submit']) && pfb_widget_post_allowed($_SERVER)) {
 		$pfb['wglobal']['widget-popup']			= pfb_filter($_POST['pfb_popup'], PFB_FILTER_ON_OFF, 'widget');
 		$pfb['wglobal']['widget-sortmix']		= pfb_filter($_POST['pfb_sortmix'], PFB_FILTER_ON_OFF, 'widget');
 		$pfb['wglobal']['widget-show_agg']		= pfb_filter($_POST['pfb_show_agg'], PFB_FILTER_ON_OFF, 'widget');
@@ -176,7 +177,8 @@ if ($_POST) {
 	}
 
 	// Clear widget Failed downloads
-	elseif ($_POST['pfblockerngack']) {
+	// issue #1050: $nocsrf=TRUE means csrf-magic never runs here -- gate the mutation itself.
+	elseif ($_POST['pfblockerngack'] && pfb_widget_post_allowed($_SERVER)) {
 		exec("{$pfb['sed']} -i '' 's/FAIL/Fail/g' /var/log/pfblockerng/error.log");
 		// issue #999: ADR-61 moved the reporting list to the sync-status ledger --
 		// close the entries it actually reads, not just the retired error.log.
