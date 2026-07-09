@@ -88,9 +88,6 @@ final class PfbWidgetOracleTest extends TestCase
 
 	private string $dir;
 
-	/** A SEPARATE ledger dir, used only by the pfBlockerNG_clearfailed() python-owned-isolation test. */
-	private ?string $pyDir = null;
-
 	/** Saved $GLOBALS['pfb']/['config'], restored in tearDown (repo convention). */
 	private bool $hadPfb = false;
 	private mixed $savedPfb = null;
@@ -114,14 +111,6 @@ final class PfbWidgetOracleTest extends TestCase
 			@unlink($file);
 		}
 		@rmdir($this->dir);
-
-		if ($this->pyDir !== null) {
-			foreach (glob($this->pyDir . '/*') ?: [] as $file) {
-				@unlink($file);
-			}
-			@rmdir($this->pyDir);
-			$this->pyDir = null;
-		}
 
 		if ($this->hadPfb) {
 			$GLOBALS['pfb'] = $this->savedPfb;
@@ -530,12 +519,10 @@ final class PfbWidgetOracleTest extends TestCase
 
 	public function testClearfailedNeverTouchesThePythonOwnedLedger(): void
 	{
-		// A SEPARATE dir for the python-owned ledger -- pfBlockerNG_clearfailed()
-		// is called with ONLY the PHP ledger dir, exactly as the real handler does.
-		$this->pyDir = sys_get_temp_dir() . '/pfb_widget_oracle_py_' . getmypid() . '_' . uniqid();
-		mkdir($this->pyDir, 0777, TRUE);
+		// Same dir passed to pfBlockerNG_clearfailed() -- proves isolation against
+		// the actual function under test, not an unrelated directory it never sees.
 		file_put_contents(
-			$this->pyDir . '/pfb_py_status.json',
+			$this->dir . '/pfb_py_status.json',
 			json_encode([
 				['facility' => 'dnsbl', 'item' => 'pfb_py_zone.txt', 'stage' => 'parse', 'message' => 'boom', 'first_seen' => 1, 'last_seen' => 1],
 			])
@@ -547,7 +534,7 @@ final class PfbWidgetOracleTest extends TestCase
 		$this->assertSame([], pfb_sync_status_list_open($this->dir), 'the PHP-owned entry must be closed');
 		$this->assertCount(
 			1,
-			pfb_py_sync_status_list_open($this->pyDir),
+			pfb_py_sync_status_list_open($this->dir),
 			'the python-owned entry must remain untouched -- PHP has no writer for that file'
 		);
 	}
