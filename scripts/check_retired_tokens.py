@@ -29,10 +29,14 @@ contains at least one ASCII alphanumeric character (drops noise like bare
 punctuation or single-character quoting artefacts).
 
 A candidate is RETIRED iff it appears (plain substring, not regex) on at
-least 3 removed scan-root lines and on ZERO added scan-root lines -- a token
-that moved (removed here, re-added elsewhere) is not a retirement. Lines
-outside the scan roots (e.g. ``tests/``) never contribute to either count,
-matching the class of files the retiring commit itself was expected to fix.
+least 3 removed scan-root lines AND is not re-added anywhere as the SAME
+quoted literal -- the added side matches exact single-/double-quoted spans,
+never raw substrings, so an added line that merely contains the token's
+bytes inside a longer unrelated string cannot silently suppress a genuine
+retirement. (A re-add inside a backtick span is not recognized -- backtick
+spans donate no candidates on either side.) Lines outside the scan roots
+(e.g. ``tests/``) never contribute to either side, matching the class of
+files the retiring commit itself was expected to fix.
 
 For each retired token, the post-change tree is searched with a fixed-string
 ``git grep -F`` (never a regex) over the same scan roots. Every surviving hit
