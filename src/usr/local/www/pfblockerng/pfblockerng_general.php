@@ -75,7 +75,7 @@ $pconfig['skipfeed']			= $pfb['gconfig']['skipfeed']				?: 0;
 // Flat list of per-log suffixes shared by the log_max_*/log_max_days_* key families below
 // (read here, saved further down) and their validation loops -- one source of truth for
 // the per-log key set, in the same order as $log_types further down the file.
-$log_suffixes = array('log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog', 'ip_matchlog', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog');
+$log_suffixes = array('log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog', 'ip_matchlog', 'ip_parse_err', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog');
 
 foreach ($log_suffixes as $log_suffix) {
 	$pconfig['log_max_' . $log_suffix]	= $pfb['gconfig']['log_max_' . $log_suffix]	?: 20000;
@@ -132,6 +132,7 @@ if ($_POST) {
 						'log_max_ip_blocklog'		=> 20000,
 						'log_max_ip_permitlog'		=> 20000,
 						'log_max_ip_matchlog'		=> 20000,
+						'log_max_ip_parse_err'		=> 20000,
 						'log_max_dnslog'		=> 20000,
 						'log_max_dnsbl_parse_err'	=> 20000,
 						'log_max_dnsreplylog'		=> 20000,
@@ -363,7 +364,7 @@ $form->add($section);
 $section = new Form_Section('Log Settings');
 $log_types = array(
 	'General'	=> array('pfBlockerNG' => 'log', 'Unified' => 'unilog', 'Error' => 'errlog', 'Extras' => 'extraslog'),
-	'IP'		=> array('Block' => 'ip_blocklog', 'Permit' => 'ip_permitlog', 'Match' => 'ip_matchlog'),
+	'IP'		=> array('Block' => 'ip_blocklog', 'Permit' => 'ip_permitlog', 'Match' => 'ip_matchlog', 'Parse Error' => 'ip_parse_err'),
 	'DNS'		=> array('Block' => 'dnslog', 'Reply' => 'dnsreplylog', 'Parse Error' => 'dnsbl_parse_err'),
 );
 

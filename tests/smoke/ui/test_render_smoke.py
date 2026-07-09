@@ -481,6 +481,32 @@ def test_general_page_keep_help_upgrade_warning(webui: WebUI, php_error_log_guar
     assert 'name="pfb_keep_on_upgrade"' not in body, "the removed pfb_keep_on_upgrade toggle still renders (#697)"
 
 
+def test_general_page_renders_ip_parse_error_log_row(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
+    """issue #1004 Step 1: the General page's Log Settings 'IP' group gains a 'Parse
+    Error' row (``log_max_ip_parse_err`` / ``log_max_days_ip_parse_err``), the plumbing
+    for the new dedicated ``ip_parsed_error.log`` sink (loop wiring is Step 2).
+
+    Given the General page,
+    When GET,
+    Then the new Max-lines select (``log_max_ip_parse_err``) and Max-days input
+      (``log_max_days_ip_parse_err``) both render.
+
+    Fail-before / pass-after: neither field name exists in the pre-#1004 markup, so
+    both assertions fail on that build and pass only once the registry + page wiring land.
+
+    AUTHORED, NOT EXECUTED this session (no live VM) -- run via
+    ``pytest tests/smoke/ui -m ui_render --override-ini="addopts="`` on the fan-out VM.
+    """
+    resp = webui.get(_GENERAL_PAGE)
+    body = resp.text
+    result = evaluate_render(_GENERAL_PAGE, resp.status_code, body, ("General Settings",))
+    assert result.ok, f"General page render oracle failed: {result.detail}"
+    assert 'name="log_max_ip_parse_err"' in body, "General page is missing the log_max_ip_parse_err Max-lines select"
+    assert 'name="log_max_days_ip_parse_err"' in body, (
+        "General page is missing the log_max_days_ip_parse_err Max-days input"
+    )
+
+
 def test_hooks_page_documents_lifecycle_env_vars(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
     """The hooks page lists the PFB_POST_INSTALL / PFB_PRE_UNINSTALL env vars (#684 doc gap, #687).
 
@@ -540,6 +566,28 @@ def test_log_page_textarea_is_readonly(webui: WebUI) -> None:
     assert m is not None, "log page is missing the 'fileContent' textarea"
     tag = m.group(0)
     assert re.search(r"\breadonly\b", tag), f"'fileContent' textarea is editable (no readonly): {tag}"
+
+
+def test_log_page_lists_ip_parsed_error_log(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
+    """issue #1004 Step 1: the Logs page's default (\"Log Files\") file-selection list
+    gains the new dedicated ``ip_parsed_error.log`` detail sink, alongside its DNSBL
+    sibling ``dnsbl_parsed_error.log`` (loop wiring that actually populates it is Step 2).
+
+    Given the Log/File Browser page (default 'Log Files' logtype selected),
+    When GET,
+    Then the ``logFile`` select's option list includes ``ip_parsed_error.log``.
+
+    Fail-before / pass-after: the filename is absent from the pre-#1004 options list, so
+    this assertion fails on that build and passes only once the viewer wiring lands.
+
+    AUTHORED, NOT EXECUTED this session (no live VM) -- run via
+    ``pytest tests/smoke/ui -m ui_render --override-ini="addopts="`` on the fan-out VM.
+    """
+    resp = webui.get(_LOG_PAGE)
+    body = resp.text
+    result = evaluate_render(_LOG_PAGE, resp.status_code, body, ("Log/File Browser selections",))
+    assert result.ok, f"Log page render oracle failed: {result.detail}"
+    assert "ip_parsed_error.log" in body, "Log page's default file list is missing ip_parsed_error.log"
 
 
 def test_update_ajax_tail_returns_wellformed_json(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:

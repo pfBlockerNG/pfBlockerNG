@@ -74,7 +74,7 @@ function getlogs($logdir, $log_extentions = array('log')) {
 $pfb_logtypes = array(	'defaultlogs'	=> array('name'		=> 'Log Files',
 						'logdir'	=> "{$pfb['logdir']}/",
 						'logs'		=> array('pfblockerng.log', 'error.log', 'ip_block.log', 'ip_permit.log', 'ip_match.log',
-									'dnsbl.log', 'unified.log', 'extras.log', 'dnsbl_parsed_error.log', 'dns_reply.log',
+									'dnsbl.log', 'unified.log', 'extras.log', 'dnsbl_parsed_error.log', 'ip_parsed_error.log', 'dns_reply.log',
 									'py_error.log', 'maxmind_ver', 'wizard.log'),
 						'download'	=> TRUE,
 						'clear'		=> TRUE

@@ -567,6 +567,13 @@ function pfb_cfg_registry(): array
 			'write_adapter' => NULL,
 			'since'         => '2.0.0',
 		],
+		'log_max_ip_parse_err' => [
+			'section'       => $gen,
+			'default'       => '20000',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'since'         => '4.0.0',
+		],
 		'log_max_dnslog' => [
 			'section'       => $gen,
 			'default'       => '20000',
@@ -599,7 +606,7 @@ function pfb_cfg_registry(): array
 
 	$log_types = [
 		'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
-		'ip_matchlog', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
+		'ip_matchlog', 'ip_parse_err', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
 	];
 
 	// ADR-60: per-log age-based retention cap (days; '0' = off), independent of

@@ -1111,7 +1111,7 @@ final class RollbackContractTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Data provider — all 10 log_max_days_<type> keys × canonical numeric tokens.
+	 * Data provider — all 11 log_max_days_<type> keys × canonical numeric tokens.
 	 *
 	 * @return array<string, array{string, string}>
 	 */
@@ -1119,7 +1119,7 @@ final class RollbackContractTest extends TestCase
 	{
 		$log_types = [
 			'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
-			'ip_matchlog', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
+			'ip_matchlog', 'ip_parse_err', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
 		];
 		$vocab  = ['0', '30', '365'];
 		$cases  = [];
@@ -1187,7 +1187,7 @@ final class RollbackContractTest extends TestCase
 	{
 		$log_types = [
 			'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
-			'ip_matchlog', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
+			'ip_matchlog', 'ip_parse_err', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
 		];
 
 		foreach ($log_types as $type) {
