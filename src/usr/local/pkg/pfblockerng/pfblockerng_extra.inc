@@ -2985,13 +2985,30 @@ function pfb_dnsbl_download_ledger_update(bool $download_ok, string $item, strin
  */
 function pfb_sync_status_dedup_check(string $log_path, string $ledger_dir): void
 {
-	$lines = @file($log_path, FILE_IGNORE_NEW_LINES);
-	if (!is_array($lines)) {
+	// issue #1052: bounded tail read, not @file() of the WHOLE log -- a 'nolimit'
+	// log has no size cap. The sanity line is written every dedup pass, so the
+	// last match always sits within this trailing window.
+	$tail_bytes = 65536;
+
+	$fh = @fopen($log_path, 'rb');
+	if ($fh === FALSE) {
+		return;
+	}
+	$stat   = fstat($fh);
+	$size   = ($stat !== FALSE) ? $stat['size'] : 0;
+	$offset = ($size > $tail_bytes) ? $size - $tail_bytes : 0;
+	if (fseek($fh, $offset) === -1) {
+		fclose($fh);
+		return;
+	}
+	$tail = stream_get_contents($fh);
+	fclose($fh);
+	if ($tail === FALSE) {
 		return;
 	}
 
 	$last = '';
-	foreach ($lines as $line) {
+	foreach (explode("\n", $tail) as $line) {
 		if (strpos($line, 'Sanity check') !== FALSE) {
 			$last = $line;
 		}

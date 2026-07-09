@@ -2971,6 +2971,30 @@ function pfb_log_age_trim_write_ok($written, string $content): bool {
 	return $written !== FALSE && $written === strlen($content);
 }
 
+// issue #1052: probe-before-copy for the 'nolimit'+age-cap path -- log lines are
+// chronologically appended, so an unexpired FIRST line means nothing in $path can
+// be expired; the caller skips its whole copy()+age-trim pass this tick. An
+// unparseable/legacy first line falls through to TRUE (pass must run), matching
+// pfb_log_age_cutoff()'s own "unparseable = expired" rule.
+function pfb_log_age_nolimit_pass_needed(string $path, int $agedays, string $logtype): bool {
+	$fh = @fopen($path, 'r');
+	if ($fh === FALSE) {
+		return TRUE;
+	}
+	$first = fgets($fh);
+	fclose($fh);
+	if ($first === FALSE) {
+		return TRUE; // empty file -- let the existing pass handle it (no-op either way)
+	}
+
+	$ts = pfb_log_line_timestamp(rtrim($first, "\r\n"), pfb_log_age_field_mode($logtype));
+	if ($ts === NULL) {
+		return TRUE; // unparseable/legacy first line -- must run the full pass
+	}
+
+	return $ts < (time() - ($agedays * 86400));
+}
+
 // Manage log files line limit + age-based retention (ADR-60)
 function pfb_log_mgmt() {
 	global $g, $pfb;
@@ -3007,6 +3031,13 @@ function pfb_log_mgmt() {
 				}
 
 				if (file_exists($final_log_file)) {
+					// issue #1052: 'nolimit'+age-cap -- skip the whole copy()+age-trim
+					// pass this tick when the first (oldest) line hasn't expired yet.
+					if ($logmax === 'nolimit' && !pfb_log_age_nolimit_pass_needed($final_log_file, $agedays, $logtype)) {
+						unlink_if_exists($temp);
+						continue;
+					}
+
 					// Truncate in place to preserve the inode (#264): mv replaces the
 					// inode, so a remote syslog shipper keyed on (inode, offset) treats
 					// it as a rotation and re-sends the whole log. cat over '>' keeps the
@@ -3039,6 +3070,11 @@ function pfb_log_mgmt() {
 			}
 			else {
 				$temp = tempnam("{$g['tmp_path']}/", 'pfb_log_');
+				// issue #1052: same nolimit+age-cap skip as the chroot branch above.
+				if ($logmax === 'nolimit' && !pfb_log_age_nolimit_pass_needed($pfb[$logtype], $agedays, $logtype)) {
+					unlink_if_exists($temp);
+					continue;
+				}
 				// Truncate in place to preserve the inode (#264) - see above. Gate on
 				// each exit code so a failed tail/cat cannot truncate the live log.
 				if ($logmax === 'nolimit') {
