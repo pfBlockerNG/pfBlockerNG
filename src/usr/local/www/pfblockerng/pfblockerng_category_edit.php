@@ -730,6 +730,13 @@ if ($_POST && isset($_POST['save'])) {
 	}
 
 	if (!$input_errors) {
+		// issue #1014/#1019: close the OLD alias's stage=download ledger entry before
+		// the aliasname is overwritten below -- a renamed alias must not orphan it.
+		$pfb_old_aliasname = config_get_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname", '');
+		if ($pfb_old_aliasname !== '' && $pfb_old_aliasname !== ($_POST['aliasname'] ?: '')) {
+			pfb_sync_status_close_removed_alias($gtype, $pfb_old_aliasname, $pfb['dbdir']);
+		}
+
 		// foreign structure: pfblockernglistsv4/v6/dnsbl per-row keys are not in registry
 		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname", $_POST['aliasname'] ?: '');
 
