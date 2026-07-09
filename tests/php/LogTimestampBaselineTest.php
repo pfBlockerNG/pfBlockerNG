@@ -254,10 +254,8 @@ final class LogTimestampBaselineTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// §1.3 row: ip_blocklog/ip_permitlog/ip_matchlog -- ADR-60 P3:
-	// pfb_daemon_filterlog()'s 'BSD' branch year-infers, 'syslog' keeps its
-	// already-real year. Extracted into pfb_filterlog_timestamp() and called
-	// directly below -- no more source tripwire / formula reproduction.
+	// §1.3 row: ip_blocklog/ip_permitlog/ip_matchlog -- pfb_filterlog_timestamp()'s
+	// 'BSD' branch year-infers, 'syslog' keeps its already-real year.
 	// -----------------------------------------------------------------------
 
 	public function testFilterlogBsdBranchYearInfersFromNow(): void
@@ -390,6 +388,7 @@ final class LogTimestampBaselineTest extends TestCase
 			$ts_formatted,
 			"the FALSE-parse fallback must be pfb_log_iso_timestamp()'s ISO-8601 \"now\" shape"
 		);
+		$this->assertStringStartsNotWith('1970-01-01', $ts_formatted, 'must never silently stamp the Unix epoch on a parse failure');
 	}
 
 	// -----------------------------------------------------------------------

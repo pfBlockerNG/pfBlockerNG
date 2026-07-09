@@ -3012,9 +3012,9 @@ function pfb_log_iso_timestamp(): string {
 	return date('Y-m-d H:i:s', time());
 }
 
-// BSD: year-infers strtotime("$f[0] $f[1] $f[2]", $now); rolls back one year if
-// >6h ahead of $now. Non-BSD (syslog): keeps $f[1]'s real year verbatim. Both
-// fall back to pfb_log_iso_timestamp() on strtotime()===FALSE, never epoch 0.
+// BSD year-infers vs $now, rolling back a year past a 6h skew (rollback reparse
+// unchecked -- mirrors pre-extraction behaviour). Syslog keeps $f[1]'s real year.
+// Either falls back to pfb_log_iso_timestamp() on the initial strtotime()===FALSE.
 function pfb_filterlog_timestamp(array $f, string $log_type, int $now): string {
 	if ($log_type == 'BSD') {
 		$ts = strtotime("{$f[0]} {$f[1]} {$f[2]}", $now);
