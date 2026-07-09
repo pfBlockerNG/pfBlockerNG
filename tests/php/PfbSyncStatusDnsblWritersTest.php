@@ -314,4 +314,81 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		$this->assertDoesNotMatchRegularExpression('/pfb_sync_status_close\s*\(/', $region,
 			'a restart-fallback branch must never close a ledger entry directly -- only the shared tail may');
 	}
+
+	// -----------------------------------------------------------------------
+	// pfb_reload_unbound() -- zero-downtime swap SUCCESS early-return (issue #1024)
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Drives the REAL zero-downtime swap all the way to its own SUCCESS
+	 * early-return (pfb_dnsbl_apply_ledger_update(); return;) -- distinct from
+	 * testRestartFallbackPathReachesTailWithConvergedState, which only reaches
+	 * the SHARED tail via the restart fallback. is_process_running('unbound')
+	 * is called exactly twice on this path (the fast-path eligibility check,
+	 * then pfb_dnsbl_converged() inside the ledger update this return makes) --
+	 * any other count means the restart path (>=5 calls, see the fallback
+	 * sibling above) ran instead.
+	 */
+	public function testZeroDowntimeSwapSuccessClosesLedgerViaEarlyReturn(): void
+	{
+		$this->writeUnboundConf(TRUE);
+		$GLOBALS['pfb']['dnsbl_file']            = "{$this->dir}/dnsbl_file";
+		$GLOBALS['pfb']['unbound_py_count']      = "{$this->dir}/unbound_py_count";
+		file_put_contents($GLOBALS['pfb']['unbound_py_count'], '10');
+		$GLOBALS['pfb']['chroot_cmd']            = '/bin/echo';
+		$GLOBALS['pfb']['dnsbl_python_unmount']  = FALSE;
+		$GLOBALS['config']['unbound']            = ['python' => 'on', 'python_script' => 'pfb_unbound'];
+
+		// No sentinel written yet -> flip_sentinel()'s cur=0 -> next=1; pre-write the
+		// applied marker to 1 so wait_applied(1) confirms on its FIRST read, never sleeping.
+		file_put_contents("{$this->dir}/pfb_py_reload.applied", "1\n");
+
+		$calls = 0;
+		$GLOBALS['pfb_test_process_running']['unbound'] = function () use (&$calls) {
+			$calls++;
+			return TRUE;
+		};
+
+		pfb_reload_unbound('enabled', FALSE, FALSE, TRUE, []);
+
+		$this->assertSame(2, $calls,
+			"the success path must call is_process_running('unbound') exactly twice (eligibility check + pfb_dnsbl_converged()); any other count means the restart path ran instead");
+		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'dnsbl'),
+			'a converged zero-downtime swap must close the dnsbl apply entry via its own early return');
+		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['dnsbl_file']}.sync",
+			'the success early-return must clear its own daemon-suppression marker before returning');
+	}
+
+	// -----------------------------------------------------------------------
+	// pfb_reload_unbound() -- non-'enabled' mode closes via the else branch (issue #1024)
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Drives the shared tail's ELSE branch (mode != 'enabled' -> a direct
+	 * pfb_sync_status_close(), never pfb_dnsbl_apply_ledger_update()) with a
+	 * state that stays NON-converged even after the call (is_process_running
+	 * FALSE throughout, no unbound.conf) -- proving the close happens because
+	 * mode != 'enabled', not because convergence happened to be met.
+	 */
+	public function testDisabledModeClosesLedgerEntryViaElseBranchRegardlessOfConvergence(): void
+	{
+		// Before-state: a stale dnsbl-apply entry genuinely open first (mirrors
+		// testNotConvergedOpensEntry), so the close below is a real transition.
+		$GLOBALS['pfb_test_process_running']['unbound'] = FALSE;
+		pfb_dnsbl_apply_ledger_update();
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'dnsbl'),
+			'a stale dnsbl apply entry must exist before the disabled-mode call under test');
+
+		$GLOBALS['g']['varrun_path']            = $this->dir;
+		$GLOBALS['pfb']['chroot_cmd']            = '/bin/echo';
+		$GLOBALS['pfb']['dnsbl_python_unmount']  = FALSE;
+		// is_process_running('unbound') stays FALSE for the whole call and no unbound.conf
+		// is ever written -- pfb_dnsbl_converged() would read FALSE too, but mode !=
+		// 'enabled' means it is never even reached on this path (confirmed by source read).
+
+		pfb_reload_unbound('disabled', FALSE, FALSE);
+
+		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'dnsbl'),
+			'a disabled-mode reload must close the dnsbl apply entry via the unconditional else branch, even though the state never converged');
+	}
 }
