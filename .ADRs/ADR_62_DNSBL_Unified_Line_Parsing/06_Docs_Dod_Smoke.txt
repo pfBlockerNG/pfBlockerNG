@@ -1,0 +1,70 @@
+================================================================================
+PHASE 6 PROMPT — Docs, Definition of Done, live-VM smoke checklist
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md   (read §5, §7 in full, §6 P6)
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch
+adr/62-dnsbl-unified-line-parsing. One commit, pushed to the branch. Implement yourself; NEVER
+spawn sub-agents. This is a behaviour-preserving docs/DoD phase — no production-code behaviour
+change (the suites stay green as the oracle that nothing shifted). Docs use normal professional
+grammar (CLAUDE.md documentation exception). Follow CLAUDE.md.
+
+WHY THIS PHASE EXISTS
+The as-built system (retired feed-level ABP classification; Python single per-line authority) must
+be documented for the next maintainer, and the ADR's acceptance rests on the live-VM smoke fan-out
+(CLAUDE.md "ADR acceptance") which CI cannot run (no live Unbound). This phase writes the
+architecture note, updates the ADR Status, and finalises the §7 checklist.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/RESULTS/05_Results.txt — confirm perf within threshold and
+  the tree clean. If missing, STOP and report.
+- .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md (§5 constraints, §7 DoD + smoke checklist + reject
+  criteria) and RESULTS/01–05 for the as-built facts.
+- docs/misc/architecture-notes.md "DNSBL/ABP pipeline" — the section to update.
+- tests/smoke/ + tests/smoke/fixtures/README.md — the fan-out + fixture conventions the checklist
+  references (probe ON-BOX, unique_domain(), block shapes, chroot paths).
+
+REALITY OVERRIDE (standing rule)
+Line numbers/code-state predate implementation; RESULTS/01–05 and the live tree override this prompt
+— verify each as-built claim (what was actually deleted, the final helper names, the format_hint
+outcome) against the RESULTS files before writing docs, and flag contradictions in the handoff.
+
+ACTION PLAN (ordered)
+1. Update docs/misc/architecture-notes.md "DNSBL/ABP pipeline": describe the retired classifier
+   ($easylist / header sniff / $validate_header gone), the single per-line Python authority
+   (dispatcher → parse_abp/plain), the raw-passthrough boundary, and the IPv6-bracket carve-out.
+   Mirror the neighbouring entries' style/length. Cross-reference this ADR.
+2. Update this ADR's Status line to reflect the implemented state (e.g. "Implemented (pending
+   live-VM smoke)") with the honest as-built summary from RESULTS/01–05, including any DONE-WITH-
+   DEVIATION carried by a phase.
+3. Finalise the §7 live-VM smoke checklist: each step names a falsifiable observable (block shape,
+   IP collection, byte-identity vs a devel baseline). Confirm the checklist covers every §2 coverage-
+   matrix format and the reject criteria are stated. Note it is owner-run (maintainer) on CE + Plus.
+4. Verify the phase prompts still lint (they are tracked docs):
+   python3 scripts/check_phase_prompts.py .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/[0-9]*.txt
+
+CONSTRAINTS
+- Docs-only phase: change no production code, no test behaviour. Markdown passes markdownlint.
+- Do NOT flip the ADR to "Accepted" — that requires the owner's live-VM smoke evidence (§7).
+
+VERIFICATION (all must pass)
+- npx markdownlint-cli2 on the touched .md files (architecture-notes + ADR.md).
+- python3 scripts/check_phase_prompts.py on all ADR-62 phase prompts (the /spec-lint gate) — clean.
+- python3 -m pytest + the PHP suite stay green (nothing production changed; this proves it).
+- diff-read: the architecture note matches the as-built RESULTS, not this prompt's assumptions.
+
+EXPECTED RESULT
+architecture-notes updated; ADR Status reflects implemented-pending-smoke; §7 checklist final;
+phase prompts lint clean.
+
+COMMIT (single)
+    docs: document ADR-62 DNSBL single-parse-authority; finalise smoke checklist (ADR-62 P6)
+Push directly to adr/62-dnsbl-unified-line-parsing; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/RESULTS/06_Results.txt with the fixed
+fields: verdict; files + why + commit; gates with pasted output (markdownlint + check_phase_prompts
++ suites green); confirmation the architecture note matches the as-built; the final ADR Status set;
+deviations (or "none"); carry-forward (the owner's live-VM smoke acceptance step remains open).

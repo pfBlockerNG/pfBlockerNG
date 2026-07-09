@@ -1,0 +1,77 @@
+================================================================================
+PHASE 2 PROMPT — De-tangle prep: IP collector + universal control-line predicate (behaviour-preserving)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md   (read §1.4, §2 Decision 4, §6 Phase 2 first)
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch
+adr/62-dnsbl-unified-line-parsing. One commit, pushed to the branch. Implement yourself; NEVER
+spawn sub-agents. Behaviour-PRESERVING phase: pure extractions, zero output change. Follow
+CLAUDE.md in full (tabs, uppercase TRUE/FALSE, str_* over preg_*).
+
+WHY THIS PHASE EXISTS
+Phase 4 rewrites the IP-scan pass and deletes the ABP classifier. Two pieces it touches are
+duplicated/tangled today: the IP-collection block (6 copies, ADR §1.4) and the scattered comment/
+control-line skips. Extracting them into pure, tested helpers first makes Phase 4 a smaller, safer
+diff — and (ADR-01 lesson) these helpers are behaviour-preserving with standalone value, retained
+even if the ADR is later rejected.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/RESULTS/01_Results.txt — confirm the byte-identity
+  corpus + the re-derived file:line for the IP-collection sites. If it is missing, Phase 1 is not
+  complete; STOP and report.
+- .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md (§1.4, §2 Decision 4 + Semantics #2/#3/#5).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — the IP-collection copies (Phase-1 handoff's
+  current lines; ADR draft ~16343/16349, 16495/16504, 16654/16665); pfb_dnsbl_unbracket_ip6
+  (~6486); pfb_is_blank_or_comment_line (~6503); validate_ipv4/6 (~8720/8729);
+  sanitize_ipaddr callers.
+- tests/php/README.md; the 8563ac5d helper tests (PfbDnsbl*Test.php) as the shape to mirror.
+
+REALITY OVERRIDE (standing rule)
+Line numbers/code-state here predate implementation and Phase 1; RESULTS/01 and the live tree
+override this prompt on any conflict — verify each claim (especially the IP-collection site lines,
+which Phase 1 re-derived) before acting, and flag contradictions loudly in the handoff.
+
+ACTION PLAN (ordered — oracle tests FIRST, then the behaviour-preserving extraction)
+1. Extract pfb_dnsbl_collect_feed_ip(...) encapsulating the identical is_ipaddrvN → sanitize_ipaddr
+   → validate_ipvN → append shape shared by the 6 sites. Signature TBD by the call sites (pass the
+   candidate value + $custom; append to the v4/v6 arrays + bump the count; the $pfb['updateip']
+   flip may stay at the call site or ride the return — state your choice). Replace all sites.
+2. Extract pfb_dnsbl_is_skippable_control_line(string $line): bool = a '!'/'//' comment OR a '[…]'
+   ABP section marker that is NOT a bracketed IPv6 literal (reuse pfb_dnsbl_unbracket_ip6 / an
+   is_ipaddrv6(inner) check for the carve-out, ADR §2 Decision 4 / Semantics #3). Do NOT fold the
+   '#'-classifier in (it carries side effects; keep pfb_dnsbl_hash_line_classify separate). Do NOT
+   wire this into the loop's control flow yet beyond a like-for-like replacement of the plain
+   '!'/'//' skips — the universal application in the IP-scan pass is Phase 4.
+3. Keep the Phase-1 corpus byte-identical throughout.
+
+CONSTRAINTS
+- Behaviour-preserving: the domain set AND the DNSBLIP IP set are unchanged for every corpus row.
+- Place helpers top-level near the ~6360–6580 helper cluster; typed signatures; uppercase
+  TRUE/FALSE. PFBL-01 (a pure helper is out of scope), UppercaseBooleanLiteral, RequireConfigGateway
+  all stay green — confirm, don't assume.
+- Do NOT delete $easylist / the header sniff yet (Phase 4). Do NOT change routing.
+
+VERIFICATION (all must pass)
+- Canonical PHP gates: php -l on touched files; vendor/bin/phpunit (full green); vendor/bin/phpstan;
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/. Plus python3 -m pytest if any Python/oracle
+  fixture is touched.
+- The Phase-1 byte-identity corpus oracle stays GREEN (this proves the extraction preserved output).
+- Each new helper has a fail-on-mutation oracle: e.g. break the is_ipaddrv6 carve-out in a scratch
+  copy → the '[…]'-skip test that pins a bracketed-IPv6-collects-as-IP case goes RED (paste it).
+- diff-read: confirm all 6 IP sites now route through the one helper (no copy left behind).
+
+EXPECTED RESULT
+Two pure, tested helpers; the 6 IP-collection sites collapsed to one; the plain '!'/'//' skips
+routed through the predicate; corpus byte-identical.
+
+COMMIT (single)
+    pfblockerng: extract DNSBL IP collector + control-line predicate (ADR-62 P2)
+Push directly to adr/62-dnsbl-unified-line-parsing; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/RESULTS/02_Results.txt with the fixed
+fields (CLAUDE.md "THE HANDOFF"): verdict; files + one-line why each + commit hash; gates with
+pasted output; the helper signatures + the updateip-flip decision; the fail-on-mutation red output;
+confirmation the Phase-1 corpus stayed green; deviations (or "none"); carry-forward for Phase 3.
