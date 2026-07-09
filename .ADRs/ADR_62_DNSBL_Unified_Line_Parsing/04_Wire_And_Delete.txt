@@ -1,35 +1,39 @@
 ================================================================================
-PHASE 4 PROMPT — Wire PHP to raw-passthrough + delete the ABP classifier (behaviour-changing)
+PHASE 4 PROMPT — Broaden PHP capture, delete the ABP classifier + .abp marker (behaviour-changing)
 Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
-ADR: .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md   (read §1.1, §1.2, §2 Decision + Semantics, §6 P4)
+ADR: .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md   (read §1.1, §1.2, §1.5, §2 Decision +
+deltas + Semantics, §6 P4)
 ================================================================================
 
 ROLE
 You are the IMPLEMENTER. Work in the per-ADR worktree on branch
 adr/62-dnsbl-unified-line-parsing. One commit, pushed to the branch. Implement yourself; NEVER
 spawn sub-agents. BEHAVIOUR-CHANGING phase, gated by the Phase-1 byte-identity corpus staying
-green. Follow CLAUDE.md (tabs, uppercase TRUE/FALSE, PFBL-01 sniff, str_* over preg_*).
+green modulo the ADR delta table (delta rows get red->green: OLD pinned by Phase 1, NEW asserted
+here). Follow CLAUDE.md (tabs, uppercase TRUE/FALSE, PFBL-01 sniff, str_* over preg_*).
 
 WHY THIS PHASE EXISTS
-With the Python dispatcher proven (Phase 3), PHP no longer needs to classify feeds as ABP or to
-extract plain-feed domains itself. This phase makes PHP pass raw domain lines to the Python domain
-path and DELETES the feed-level ABP classifier ($easylist, pfb_dnsbl_is_abp_header, the
-$validate_header block), collapsing the doubled verbatim paths (ADR §1.1). The Phase-1 corpus is
-the fail-before/pass-after gate: the new PHP path must reproduce the golden domain+IP set; a red is
-a real regression.
+With the extended Python routing proven (Phase 3), PHP no longer needs to classify feeds as ABP:
+a line's shape decides its parser. This phase broadens the PHP verbatim capture to the same shape
+set, applies the universal control-line skip, DELETES the feed-level classifier ($easylist,
+pfb_dnsbl_is_abp_header, the $validate_header block), and retires the .abp marker — including its
+second consumer, the TLD-analysis pass skip (ADR §1.5), whose latent gate bug this phase fixes.
+The PHP plain extraction pipeline (scheme/IDN/filter/6-col rows/counts/diagnostics) is NOT
+touched — the §1.5 consumer contract forbids raw-passthrough.
 
 REQUIRED READING
 - FIRST, read the prior phase's handoff:
   .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/RESULTS/03_Results.txt — confirm parity was PROVEN (not
   BLOCKED). If Phase 3 returned a §7 reject signal, STOP: this phase does not proceed until the
-  orchestrator resolves scope (Option B / reject). If the handoff is missing, STOP and report.
-- .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md (§1.1/§1.2 the classifier + manifest boundary,
-  §2 Decision 1/3/4 + Semantics #1–#7, §7).
+  orchestrator resolves scope. If the handoff is missing, STOP and report.
+- .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md (§1.1/§1.2 classifier + staging dialects, §1.5
+  consumer contract, §2 Decisions 1–5 + "Accepted semantic deltas" + Semantics #1–#8, §7).
 - src/usr/local/pkg/pfblockerng/pfblockerng.inc — the $validate_header block (~16283-16294),
-  pfb_dnsbl_is_abp_header (~6547), the $easylist branches (~16317/16324/16572), pfb_feed_manifest_row
-  (~6946) + the format='abp'/'plain' logic (~6990) + the .abp marker sites (~16182/16810), the
-  Phase-2 helpers (collector + control-line predicate).
-- RESULTS/01–03 for current file:line and the proven dispatcher contract.
+  pfb_dnsbl_is_abp_header (~6547), ALL $easylist sites (init ~16251, set ~16285, ~16317/16324/
+  16572, manifest tag ~16817, marker write/unlink ~16823-16827), the reuse-path marker read
+  (~16182), the manifest-writer capture (~7030), the TLD-analysis pass + marker glob + skip gate
+  (~7709-7860, esp. ~7723-7744), the Phase-2 helpers.
+- RESULTS/01–03 for current file:line and the proven routing contract.
 - docs/misc/architecture-notes.md "DNSBL/ABP pipeline"; tests/php/README.md.
 
 REALITY OVERRIDE (standing rule)
@@ -38,48 +42,60 @@ override this prompt on any conflict — verify each claim before acting, and fl
 loudly in the handoff.
 
 ACTION PLAN (ordered)
-1. Route domain lines to the Python path: PHP writes RAW domain lines to the per-feed staging/.raw
-   (as ABP feeds already do, ADR §1.2) instead of PHP-extracting bare domains for plain feeds. Keep
-   the IP-scan pass (Phase-2 collector, ADR §1.4) and CSV column extraction (out of scope, ADR §2).
-2. Apply the universal control-line skip: use the Phase-2 pfb_dnsbl_is_skippable_control_line in the
-   IP-scan pass so '!'/'//'/'[…]'-non-IPv6 lines are skipped everywhere; unbracket/collect IPv6
-   FIRST so a bracketed IPv6 literal is an IP, never a skipped comment (ADR Semantics #3).
-3. DELETE the classifier: remove the $validate_header block (~16283-16294), pfb_dnsbl_is_abp_header
-   (~6547), and the $easylist variable + its three branches (~16317/16324/16572), collapsing the two
-   verbatim-write paths into one raw passthrough.
-4. Migrate format_hint: the domain feed's hint collapses to a single "domain" hint (CSV hints stay);
-   ensure the .abp on-disk marker's routing role is preserved or cleanly retired (ADR Semantics #7)
-   — a reused (not re-downloaded) feed must route the same as before.
+1. Broaden the capture: replace the download-loop guard (~16317, '||'/'@@||') and the
+   manifest-writer guard (~7030) with Phase-2's pfb_dnsbl_is_abp_rule_line(). Captured lines are
+   written/passed VERBATIM; everything else keeps the existing plain extraction pipeline
+   untouched (scheme/IDN/filter/6-col rows — ADR Decision 3).
+2. Apply the universal control-line skip in the plain path: pfb_dnsbl_is_skippable_control_line
+   so ''/'!'/'//'/'[…]'-non-IPv6 lines are skipped everywhere; unbracket/collect IPv6 FIRST so a
+   bracketed IPv6 literal is an IP, never a skipped comment (ADR Semantics #3). The '#'-classifier
+   keeps running first (side effects).
+3. DELETE the classifier: the $validate_header block, pfb_dnsbl_is_abp_header() AND
+   tests/php/DnsblIsAbpHeaderTest.php, the $easylist variable + ALL its sites (the two verbatim
+   paths ~16317/~16324 collapse into one; the ABP branch's IP-extract via
+   pfb_dnsbl_abp_extract_ip must survive the collapse — ABP-anchored IPs still collect,
+   Semantics #2).
+4. Retire the .abp marker: reuse path (~16182) emits 'plain' unconditionally; marker write/unlink
+   sites deleted; stale markers swept opportunistically. Fix the TLD-analysis pass: skip any line
+   with an empty/unset feed column UNCONDITIONALLY (drop the !empty($abp_feeds) gate + marker
+   glob) — this is a red->green fix for the latent bug (ADR §1.5): first write the failing test
+   (a plain feed's verbatim '||x^' line, no ABP feed configured, TLD enabled → today garbage),
+   watch it fail on the pre-change code, then fix.
+5. Python side: collapse the manifest hint — pfb_unbound_python_sources emits 'plain' for every
+   domain feed; Python keeps accepting 'abp' (stale-manifest tolerance, asserted in Phase 3).
 
 CONSTRAINTS
-- The Phase-1 byte-identity corpus (domain set AND DNSBLIP IP set) MUST stay byte-identical — that
-  is the acceptance gate, not "looks right".
-- Do NOT touch the CSV switch beyond what $easylist removal forces; do NOT touch the generic IP-list
-  loop; do NOT alter parse_abp semantics.
+- The Phase-1 byte-identity corpus (domain set AND DNSBLIP IP set) MUST stay byte-identical
+  modulo the ADR delta table — that is the acceptance gate, not "looks right". Any output change
+  outside the delta table is a regression: investigate, do not adjust the golden.
+- Do NOT touch the CSV switch, the plain extraction pipeline, the 6-col dialect, or the generic
+  IP-list loop; do NOT alter parse_abp semantics.
 - Clean the diff (CLAUDE.md): remove the now-dead code you deleted from, not around, no reformatting.
 
 VERIFICATION (all must pass)
 - Canonical gates: php -l touched files; vendor/bin/phpunit; vendor/bin/phpstan;
   vendor/bin/phpcs --standard=phpcs.xml.dist src/; python3 -m pytest (the parity oracle).
-- Fail-before/pass-after via the corpus: the Phase-1 oracle is GREEN on the new path; then, in a
-  scratch checkout of the PRE-change loop, confirm the oracle still described today's output (it was
-  green there too — this is behaviour-preserving-by-construction, so the evidence is: same golden
-  output both sides). If the new path changes ANY corpus row, that is a red regression — investigate,
-  do not adjust the golden.
-- grep proof (ADR Requirement 2): `grep -rn "easylist\|pfb_dnsbl_is_abp_header\|validate_header" src/`
-  returns nothing (paste it).
+- Corpus gate: the Phase-1 oracle is GREEN on the new path with every delta row flipped to its
+  NEW outcome (red->green per delta: paste the OLD-pinning assertion failing against the new code
+  BEFORE you flip it, then the NEW assertion passing — both from executed runs).
+- The TLD-pass red->green (step 4) pasted.
+- grep proof (ADR Requirement 2, symbol-anchored — the substring 'easylist' legitimately
+  survives in the MIME-exception hostnames and the pfblockerngdnsbleasylist section name):
+  `grep -rn '\$easylist\|pfb_dnsbl_is_abp_header\|\$validate_header' src/` returns nothing, and
+  `grep -rn '\.abp' src/` returns no live marker read/write (paste both).
 - Semantics #2/#3 IP tests: bracketed-IPv6 collects as IP; non-IPv6 '[…]' skipped; ABP-anchored IP
   still collected.
 
 EXPECTED RESULT
-PHP passes raw domain lines to Python; the ABP classifier + header sniff are gone; corpus byte-
-identical; IP set unchanged.
+Shape-decided per-line capture at all three sites; the ABP classifier, header sniff and .abp
+marker gone; the TLD-pass gate bug fixed; corpus byte-identical modulo the asserted deltas; IP set
+unchanged.
 
 COMMIT (single)
-    pfblockerng: retire DNSBL feed-level ABP classification; raw-passthrough to Python (ADR-62 P4)
+    pfblockerng: retire DNSBL feed-level ABP classification; per-line shape capture (ADR-62 P4)
 Push directly to adr/62-dnsbl-unified-line-parsing; open a PR only if the direct push is rejected.
 
 HANDOFF — write .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/RESULTS/04_Results.txt with the fixed
-fields: verdict; files + why + commit; gates with pasted output; the corpus byte-identity evidence
-(before/after golden equality); the grep-clean proof; the Semantics #2/#3 test results; deviations
-(or "none"); carry-forward for Phase 5.
+fields: verdict; files + why + commit; gates with pasted output; the corpus evidence (per-format
+equality + per-delta red->green); the TLD-pass red->green; the grep-clean proofs; the Semantics
+#2/#3 test results; deviations (or "none"); carry-forward for Phase 5.

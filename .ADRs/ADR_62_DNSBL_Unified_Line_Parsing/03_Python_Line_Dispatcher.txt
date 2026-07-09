@@ -1,33 +1,39 @@
 ================================================================================
-PHASE 3 PROMPT — Python per-line dispatcher + parity oracle (the premise PROOF or REJECT)
+PHASE 3 PROMPT — Extend build()'s per-line routing + parity oracle (the premise PROOF or REJECT)
 Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
-ADR: .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md   (read §1.3, §1.5, §2 "realization fork", §7 first)
+ADR: .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md   (read §1.3, §1.5, §2 fork + deltas, §7 first)
 ================================================================================
 
 ROLE
 You are the IMPLEMENTER. Work in the per-ADR worktree on branch
 adr/62-dnsbl-unified-line-parsing. One commit, pushed to the branch. Implement yourself; NEVER
-spawn sub-agents. This phase adds a Python parser path and PROVES (or fails to prove) byte-identity
-— it does NOT yet wire PHP (that is Phase 4). Follow CLAUDE.md; Python stdlib only (chrooted loader).
+spawn sub-agents. This phase extends the Python routing and PROVES (or fails to prove)
+byte-identity modulo the ADR's delta table — it does NOT yet wire PHP (that is Phase 4). Follow
+CLAUDE.md; Python stdlib only (chrooted loader).
 
 WHY THIS PHASE EXISTS
-The ADR's whole premise is that Python can be the single per-line domain-rule authority reproducing
-today's per-format output (ADR §1.3: parse() "reproduces today's per-format behaviour"). parse()
-and parse_abp are NOT interchangeable (ADR §1.3) and there are KNOWN PHP↔Python divergences (ADR
-§1.5: #752 undotted-254, #753 wire-caps, IDN). This phase builds the dispatcher (Option A: ABP-
-shaped → parse_abp, else parse() plain/hosts) and proves it against the Phase-1 corpus. THIS is
-where the premise is falsified or confirmed (ADR §7 reject criterion 1).
+The per-line dispatcher the ADR needs MOSTLY EXISTS: build()'s plain-feed loop already routes
+'||'/'@@||' lines to parse_abp (ADR-21, pfb_unbound.py ~5045-5058). Do NOT add a parallel
+dispatcher — extend the existing routing's shape set to the ADR §2 Decision-2 capture set
+('||', '@@…' incl. '@@/re/', '/re/…' regex, element-hiding markers), mirroring Phase 2's
+pfb_dnsbl_is_abp_rule_line(). parse() and parse_abp are NOT interchangeable (ADR §1.3: bare
+domains split zone/data differently — delta D1) and there are KNOWN PHP↔Python divergences (ADR
+§1.5: #752, #753, IDN — they apply only to ABP-captured lines under this design). This phase
+proves the extended routing against the Phase-1 corpus. THIS is where the premise is falsified
+or confirmed (ADR §7 reject criterion 1).
 
 REQUIRED READING
 - FIRST, read the prior phase's handoff:
-  .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/RESULTS/02_Results.txt — confirm the corpus + helpers.
-  Also read RESULTS/01_Results.txt for the golden output + any divergence it recorded. If either is
-  missing, the prior phase is incomplete; STOP and report.
-- .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md (§1.3, §1.5, §2 realization fork + Semantics
-  #1/#4/#5, §7).
-- src/usr/local/pkg/pfblockerng/pfb_unbound.py — parse() (~4050), parse_abp (~3869),
-  _dnsbl_parse_abp_line (~3746), _dnsbl_parse_abp_regex (~3838), normalise() (~4152),
-  _dnsbl_strip_hosts_prefix, _dnsbl_within_wire_caps (~4122).
+  .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/RESULTS/02_Results.txt — confirm the corpus + helpers
+  (especially the predicate↔parse_abp agreement table). Also read RESULTS/01_Results.txt for the
+  golden output + any divergence it recorded. If either is missing, the prior phase is
+  incomplete; STOP and report.
+- .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md (§1.3, §1.5, §2 fork + "Accepted semantic
+  deltas" + Semantics #1/#4/#5, §7).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py — build()'s three per-feed loops (permit ~4993,
+  abp ~5039, plain ~5045-5058 — the ADR-21 routing to extend), parse() (~4050), parse_abp
+  (~3869), _dnsbl_parse_abp_line (~3746), _dnsbl_parse_abp_regex (~3841), _normalise_verdict
+  (~4130), _dnsbl_strip_hosts_prefix, _dnsbl_within_wire_caps (~4122).
 - tests/test_adr07_decision_spec.py (the parse_abp reference oracle) + tests/test_adr06_build_module.py.
 - CLAUDE.md (Python rules; ADR-42 hashing; no cross-language digest).
 
@@ -36,57 +42,72 @@ Line numbers/code-state predate implementation and earlier phases; RESULTS/01–
 override this prompt on any conflict — verify each claim before acting, flag contradictions loudly.
 
 ACTION PLAN (ordered — parity oracle is the point)
-1. Add a per-line dispatcher in pfb_unbound.py (Option A): for one raw line, recognise an ABP-shaped
-   rule using parse_abp's OWN recogniser (||/@@/ /re/ / $options — do NOT re-implement detection;
-   reuse the existing parse_abp machinery) and route it to parse_abp; otherwise take the parse()
-   plain/hosts path. Comment/control lines (!/#/[) drop as parse()/parse() already do. Reproduce
-   today's per-format output — including which lines are ignored (ADR §1.3).
-2. Write the PARITY ORACLE: run the Phase-1 corpus raw lines through the dispatcher and assert the
-   produced domain set == the golden domain set, PER FORMAT (ADR §2 Semantics #1). Where the
-   Phase-1 handoff recorded a real PHP↔Python divergence, resolve it explicitly: either the
-   dispatcher is made to match PHP, or the divergence is documented + escalated (ADR §7 reject
-   path) — never silently accepted.
-3. Fill the HOSTILE-INPUT table below and assert each expected outcome.
+1. Extend the plain-loop routing predicate in build() (~5054) from startswith('||')/('@@||') to
+   the full Decision-2 shape set, EXACTLY mirroring pfb_dnsbl_is_abp_rule_line() (Phase 2). Reuse
+   parse_abp's own machinery for the shapes — do NOT re-implement grammar; the predicate only
+   answers "route to parse_abp?". Element-hiding lines route to parse_abp, which returns None
+   (they must never reach parse()'s host token path).
+2. Verify the permit-mode loop (~4993) stays consistent: its skip set must cover every shape the
+   broadened capture can now place in a permit feed's .raw ('@@…', '/re/…', '##…') so no
+   accidental allow appears (ADR delta D4). Extend its skips if needed.
+3. Confirm stale-manifest tolerance: format_hint='abp' still parses (Phase 4 collapses the hint;
+   Python must keep accepting the old vocabulary — assert it with a test now).
+4. Write the PARITY ORACLE: run the Phase-1 corpus raw lines through build()'s routing and assert
+   the produced domain set == the golden domain set PER FORMAT (ADR §2 Semantics #1) — delta-table
+   rows assert their NEW outcome (this is the red->green: the Phase-1 oracle pinned OLD; here the
+   delta rows flip, everything else stays byte-identical). Where the Phase-1 handoff recorded a
+   real PHP↔Python divergence, resolve it explicitly: match PHP, or document + escalate (ADR §7
+   reject path) — never silently accepted.
+5. Fill the HOSTILE-INPUT table below and assert each expected outcome.
 
 HOSTILE-INPUT ROWS (REQUIRED test data — implementer fills the observed result; never invent the
 input classes). For each, state expected domain-or-None and why:
-- IDN/punycode name (non-ASCII) → expected punycode domain (match PHP idn_to_ascii).
-- #752 undotted 254-char name → PHP tolerates / Python normalise() rejects (ADR §1.5) — pin the
-  RESOLVED expectation and cite which side wins + why.
+- IDN/punycode name (non-ASCII) in a plain row → punycode domain (PHP idn_to_ascii did it; Python
+  never sees raw IDN under this design) — assert the boundary, not a Python conversion.
+- #752 undotted 254-char name → pin the RESOLVED expectation and cite which side wins + why.
 - #753 wire-cap: 64-char label, 254-total dotted → reject.
 - empty / whitespace-only / BOM-led first line → None (no domain).
 - '@@||exception.com^' → allow-rule (parse_abp), not a block domain.
-- '/regex/' and '@@/re/' → regex rule via parse_abp (not dropped as in bare parse()).
+- '/regex/', '@@/re/', '/re/$important' → regex rule via parse_abp (routed even in a plain feed —
+  delta D2).
 - '||domain.com^$important' and '$badfilter' → banded rule, domain preserved.
+- 'example.com##.ad' and each of '#@#'/'#?#'/'#%#'/'#$#' → None (element-hiding; must NOT become
+  a block for example.com — delta D2's false-positive fix).
 - '[Adblock Plus 2.0]' and '! Title: X' → None (control lines).
 - '||1.2.3.4^' and a bare '2604:2dc0::' → None here (IP is PHP's job, ADR §1.4) — assert the
-  dispatcher does NOT emit them as domains.
+  routing does NOT emit them as domains.
+- bare 'sub.deep.example.com' plain line → classify() zone/data outcome (delta D1: NOT the
+  parse_abp wildcard ZONE) — assert the D1-resolved expectation.
 - mixed: a plain-hosts line and a '||domain^' in the same corpus feed → both blocked.
 
 CONSTRAINTS
-- Python stdlib only; no new dependency. Do NOT wire PHP to this dispatcher yet (Phase 4). Do NOT
-  change parse()/parse_abp public contracts unless strictly necessary — if you must, note it.
+- Python stdlib only; no new dependency. Do NOT wire PHP yet (Phase 4). Do NOT change
+  parse()/parse_abp public contracts unless strictly necessary — if you must, note it.
 - No cross-language digest (ADR-42): the parity oracle compares domain SETS, not a shared hash.
 
 VERIFICATION (all must pass)
 - Canonical gates: python3 -m pytest (full green); ruff check .; ruff format --check .; mypy tests/.
-- Parity oracle GREEN for every capturable corpus format (byte-identical domain set).
-- Red-run proof: deliberately mis-route one format in a scratch copy (e.g. send ABP lines to
-  parse() so @@/regex drop) → the parity oracle goes RED. Paste command + failure line.
+- Parity oracle GREEN for every capturable corpus format (byte-identical modulo the delta table;
+  every delta row asserts its NEW outcome and references its D-id).
+- Red-run proof: deliberately mis-route one shape in a scratch copy (e.g. let '##' lines reach
+  parse()'s host path) → the parity oracle goes RED. Paste command + failure line.
 - The hostile-input table: every row asserted with its resolved expectation.
-- If any format's parity CANNOT be achieved: STOP, do NOT force-pass — record it as a BLOCKED /
-  DONE-WITH-DEVIATION triggering ADR §7 reject criterion 1, with the exact diverging inputs.
+- If any format's parity CANNOT be achieved outside the delta table: STOP, do NOT force-pass —
+  record it as BLOCKED / DONE-WITH-DEVIATION triggering ADR §7 reject criterion 1, with the exact
+  diverging inputs.
 
 EXPECTED RESULT
-A Python per-line dispatcher proven byte-identical to today's per-format domain output across the
-corpus (or an explicit, evidenced reject signal for a format it cannot match).
+build()'s per-line routing extended to the full capture shape set, proven byte-identical (modulo
+the enumerated deltas) to today's per-format domain output across the corpus — or an explicit,
+evidenced reject signal for a format it cannot match.
 
 COMMIT (single)
-    pfb_unbound: add per-line DNSBL parse dispatcher + parity oracle (ADR-62 P3)
+    pfb_unbound: extend per-line DNSBL parse routing to full ABP shape set (ADR-62 P3)
 Push directly to adr/62-dnsbl-unified-line-parsing; open a PR only if the direct push is rejected.
 
 HANDOFF — write .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/RESULTS/03_Results.txt with the fixed
 fields: verdict (DONE / DONE-WITH-DEVIATION / BLOCKED); files + why + commit; gates with pasted
-output; the parity-oracle result per format (byte-identical? or the exact divergence); the red-run
-proof; the completed hostile-input table with observed results; any §7 reject signal with evidence;
-deviations (or "none"); carry-forward for Phase 4.
+output; the parity-oracle result per format (byte-identical? which delta rows flipped?); the
+red-run proof; the completed hostile-input table with observed results; the permit-loop and
+stale-hint checks; any §7 reject signal with evidence; deviations (or "none"); carry-forward for
+Phase 4.

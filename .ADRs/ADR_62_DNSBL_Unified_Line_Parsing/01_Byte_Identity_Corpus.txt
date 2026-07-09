@@ -1,7 +1,8 @@
 ================================================================================
 PHASE 1 PROMPT — Byte-identity corpus + coverage matrix (behaviour-preserving)
 Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
-ADR: .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md   (read §1, §2 "Coverage matrix", §6 Phase 1 first)
+ADR: .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md   (read §1, §2 "Coverage matrix" +
+"Accepted semantic deltas", §6 Phase 1 first)
 ================================================================================
 
 ROLE
@@ -12,49 +13,64 @@ Behaviour-PRESERVING phase: change no production code; only add a test corpus + 
 Follow CLAUDE.md in full.
 
 WHY THIS PHASE EXISTS
-Every later phase moves domain parsing across the PHP↔Python boundary. Byte-identity of the
-produced domain/IP set is this ADR's load-bearing claim (ADR §2 Semantics #1/#2) and its reject
-criterion (ADR §7). Before touching any production code, capture today's parse output for a
-corpus spanning every feed format as golden fixtures — the falsification harness the whole ADR is
-gated on, and a permanent regression net with standalone value even if the ADR is rejected.
+Every later phase changes which parser a feed line reaches. Byte-identity of the produced
+domain/IP set — modulo the ADR's enumerated delta table — is this ADR's load-bearing claim
+(ADR §2 Semantics #1/#2) and its reject criterion (ADR §7). Before touching any production
+code, capture today's parse output for a corpus spanning every feed format AND every delta-table
+line class (their TODAY behaviour is the red half of Phase 4's red->green) as golden fixtures —
+the falsification harness the whole ADR is gated on, and a permanent regression net with
+standalone value even if the ADR is rejected.
 
 REQUIRED READING
-- .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md (§1 full, §2 "Coverage matrix" + "Semantics",
-  §7 reject criteria).
-- src/usr/local/pkg/pfblockerng/pfblockerng.inc — the DNSBL parse loop (while ~16262, end ~16715)
-  and pfb_feed_manifest_row (~6946); read enough to know exactly what a feed's .bk/.raw output is.
-- src/usr/local/pkg/pfblockerng/pfb_unbound.py — parse() (~4050), parse_abp (~3869), normalise()
-  (~4152), _dnsbl_within_wire_caps (~4122).
+- .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md (§1 full — especially §1.5 consumer contract,
+  §2 "Coverage matrix" + "Accepted semantic deltas" + "Semantics", §7 reject criteria).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — the DNSBL parse loop (while ~16262, end
+  ~16715), the two staging dialects (6-col row write ~16712; verbatim captures ~16317/~16324),
+  pfb_unbound_python_sources (~6975, dual-dialect .raw writer), the TLD-analysis pass
+  (~7709-7860) and its .abp-marker skip (~7723-7744).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py — build() per-line routing (~4993 permit,
+  ~5039 abp, ~5045-5058 plain incl. the ADR-21 ||/@@|| routing), parse() (~4050), parse_abp
+  (~3869), _normalise_verdict (~4130), _dnsbl_within_wire_caps (~4122).
+- tests/fixtures/feed_corpus/README.md + manifest.json (ADR-49 committed real-feed first-8KiB
+  samples — legitimate raw material for offline capture; REUSE before inventing fixtures).
 - tests/php/README.md, tests/php/bootstrap.php, tests/php/pfsense_doubles.php; tests/conftest.py;
-  tests/smoke/fixtures/README.md (inert-data rules: RFC 5737/3849 IPs, uuid-*.com, NEVER RFC 6761
-  TLDs or HSTS-preload names).
+  tests/smoke/fixtures/README.md (inert-data rules for anything a smoke test resolves:
+  RFC 5737/3849 IPs, uuid-*.com, NEVER RFC 6761 TLDs or HSTS-preload names).
 
 REALITY OVERRIDE (standing rule)
 Line numbers and code-state claims in this prompt were written before implementation; the live
 tree and any prior RESULTS override this prompt on any conflict — verify each claim before acting,
-and flag contradictions loudly in the handoff. This phase's FIRST job is re-deriving the ADR §2 coverage
-matrix from a fresh grep of the loop — treat the ADR's list as a starting search, not truth.
+and flag contradictions loudly in the handoff. This phase's FIRST job is re-deriving the ADR §2
+coverage matrix from a fresh grep of the loop — treat the ADR's list as a starting search, not truth.
 
 ACTION PLAN (ordered — oracle capture, no source change)
 1. Re-derive the coverage matrix: grep the live loop for every feed-format branch ($easylist,
    $rev_format, $csv_type/$csv_parser and each CSV case pt/bbc/h3x/otx/pon/et, $liteparser, the
-   '#'-classifier, the ABP header sniff, the IP-collection sites, the IDN block). Record the CURRENT
-   file:line for each row in the handoff.
+   '#'-classifier, the ABP header sniff, the verbatim-capture guard, the IP-collection sites, the
+   scheme/IDN blocks) AND the delta-table line classes (ADR §2: bare-domain-in-ABP-feed,
+   /re/ and @@/re/ and ##-family in a plain feed, permit-mode feed, [.]-non-IPv6). Record the
+   CURRENT file:line for each row in the handoff.
 2. Build a fixture corpus under tests/ (or tests/php/fixtures/ mirroring the house pattern): one
-   small feed per matrix row, inert data only. Include the hostile/edge rows from ADR §2 (empty,
-   whitespace, BOM-led first line, oversized/#752 undotted, #753 wire-cap, bracketed-IPv6,
-   ABP-anchored IP, mixed plain+||).
+   small feed per matrix row. Include the hostile/edge rows from ADR §2 (empty, whitespace,
+   BOM-led first line, oversized/#752 undotted, #753 wire-cap, bracketed-IPv6, ABP-anchored IP,
+   mixed plain+||, URL/scheme lines under ADR-22 lenient AND strict, inline ' #', tab/%20,
+   trailing port, yHost '@', mixed-case, CRLF, mid-body '!#if').
 3. Capture the GOLDEN output each corpus feed produces on THIS ref: the resulting domain set (as
-   written to .bk / loaded by the Python build) AND the DNSBLIP IP set. Choose the most faithful
-   capture surface available off-appliance and state it in the handoff (e.g. drive the PHP
-   extraction that is reachable via the PHPUnit harness, and/or the Python parse()/parse_abp
-   output for the raw lines). If a format's output cannot be captured off-appliance, record it as a
-   DEFERRED smoke-only row with the exact live-VM command — never silently drop it.
-4. Write the oracle test(s) that run the corpus and assert the captured golden output.
+   written to .bk/.txt, extracted to .raw, and loaded by the Python build) AND the DNSBLIP IP
+   set — and, for one TLD-enabled row, the TLD-analysis pass output (pfb_py_zone/pfb_py_data
+   classification). Choose the most faithful capture surface available off-appliance and state it
+   in the handoff (e.g. drive the PHP extraction reachable via the PHPUnit harness, and/or the
+   Python build()/parse()/parse_abp output for the raw lines). If a format's output cannot be
+   captured off-appliance, record it as a DEFERRED smoke-only row with the exact live-VM
+   command — never silently drop it.
+4. Write the oracle test(s) that run the corpus and assert the captured golden output. Delta-table
+   rows assert TODAY's behaviour and carry a comment naming their delta ID (D1-D5) so Phase 4 can
+   flip them deliberately.
 
 CONSTRAINTS
 - Add NO production-code change. Tabs/uppercase TRUE/FALSE if any PHP test helper is added.
-- Fixtures are inert (RFC 5737/3849, uuid-*.com); never RFC 6761 TLDs or HSTS-preload names.
+- Smoke-destined fixtures are inert (RFC 5737/3849, uuid-*.com); offline capture may reuse the
+  committed ADR-49 feed_corpus samples.
 - Do not assume PHP and Python already agree — capture each side's ACTUAL output; a divergence you
   find here is a real finding for Phase 3, record it, do not paper over it.
 
@@ -66,8 +82,8 @@ VERIFICATION (all must pass; only gates runnable here — else DEFERRED with the
   the red output into the handoff. A golden oracle that cannot go red is coverage theater.
 
 EXPECTED RESULT
-A committed corpus + green oracle capturing today's domain+IP output per feed format, ready to gate
-Phases 3–5, plus the re-derived coverage-matrix table with current file:line.
+A committed corpus + green oracle capturing today's domain+IP output per feed format and delta
+class, ready to gate Phases 3–5, plus the re-derived coverage-matrix table with current file:line.
 
 COMMIT (single)
     tests: pin DNSBL feed parse output as a byte-identity corpus (ADR-62 P1)

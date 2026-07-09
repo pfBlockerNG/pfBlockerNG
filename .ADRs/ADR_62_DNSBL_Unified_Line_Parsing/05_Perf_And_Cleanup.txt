@@ -10,17 +10,17 @@ adr/62-dnsbl-unified-line-parsing. One commit, pushed to the branch. Implement y
 spawn sub-agents. Follow CLAUDE.md.
 
 WHY THIS PHASE EXISTS
-Moving domain extraction off PHP shifts per-update work onto the chrooted single-threaded Python
-loader (ADR §3). On a giant hosts feed this could regress wall-clock / memory. ADR §7 reject
-criterion 2 makes that falsifiable: this phase measures it against a stated kill-threshold and
-removes any code the Phase-4 deletion left dead.
+The corrected design keeps the plain hot path (PHP extraction + Python parse()) and only adds
+per-line prefix/shape checks, so the EXPECTED perf delta is ~0 — but "expected" is not evidence
+(CLAUDE.md). ADR §7 reject criterion 2 makes it falsifiable: this phase measures a 1M-line hosts
+feed against the kill-threshold and removes any code the Phase-4 deletion left dead.
 
 REQUIRED READING
 - FIRST, read the prior phase's handoff:
   .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/RESULTS/04_Results.txt — confirm the classifier is gone
-  and the corpus is byte-identical. If missing, STOP and report.
+  and the corpus is green (deltas asserted). If missing, STOP and report.
 - .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md (§3 Negative/risks, §7 reject criterion 2).
-- src/usr/local/pkg/pfblockerng/pfb_unbound.py — the dispatcher + build() path (~5039); the reload
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py — the extended routing + build() path; the reload
   cost path.
 - docs/misc/external-process-waits.md IF you launch any timed subprocess for the benchmark.
 - CLAUDE.md (no fixed-time waits for concurrency, issue #456 — a benchmark timer is measurement,
@@ -32,21 +32,23 @@ override this prompt — verify before acting, flag contradictions in the handof
 
 ACTION PLAN (ordered)
 1. Build a reproducible benchmark: a synthetic large hosts feed (>= 1,000,000 inert lines,
-   uuid-*.com / RFC 5737 IPs) parsed by (a) origin/devel and (b) this branch. Measure wall-clock of
-   the parse+build and peak RSS of the Python loader. State the methodology (machine, warm/cold,
-   repeats, how you isolate the parse phase) in the handoff — a number with no methodology is not
-   evidence.
-2. Compare to the kill-threshold the orchestrator set (default, unless overridden: > 25% wall-clock
-   OR > 25% peak-RSS regression on the parse+build for the 1M-line feed). If exceeded: this is ADR
-   §7 reject criterion 2 — STOP and report BLOCKED with the numbers; do not paper over it.
-3. Remove dead code the Phase-4 deletion orphaned (helpers only reachable from the deleted classifier,
-   now-unused format branches). Keep the diff to genuine dead code — no opportunistic reformatting.
+   uuid-*.com / RFC 5737 IPs; include a realistic sprinkle of comment and ||-anchored lines) run
+   through (a) origin/devel and (b) this branch — BOTH halves: the PHP parse loop's extraction
+   (whatever surface Phase 1 established) and the Python parse+build. Measure wall-clock and peak
+   RSS of the Python loader. State the methodology (machine, warm/cold, repeats, how you isolate
+   the parse phase) in the handoff — a number with no methodology is not evidence.
+2. Compare to the kill-threshold (ADR §7 criterion 2: > 25% wall-clock OR > 25% peak-RSS
+   regression on the 1M-line parse+build). If exceeded: STOP and report BLOCKED with the numbers;
+   do not paper over it.
+3. Remove dead code the Phase-4 deletion orphaned (helpers only reachable from the deleted
+   classifier, now-unused branches). Keep the diff to genuine dead code — no opportunistic
+   reformatting. This step is behaviour-preserving: the corpus oracle is the gate.
 
 CONSTRAINTS
 - The benchmark is a dev/CI harness (bare `python3` under scripts/ is fine — it names the developer
   interpreter, CLAUDE.md); it does NOT ship to the appliance and must not add an appliance-side
   Python dependency.
-- The Phase-1 corpus stays byte-identical (dead-code removal is behaviour-preserving).
+- The Phase-1 corpus stays green, deltas included (dead-code removal changes no output).
 
 VERIFICATION (all must pass; benchmark numbers are DATA, recorded not "passed")
 - Canonical gates: python3 -m pytest; ruff check .; ruff format --check .; mypy tests/; and, if any
@@ -61,7 +63,7 @@ A recorded perf comparison within threshold (or an evidenced reject signal), and
 classifier's dead code.
 
 COMMIT (single)
-    pfblockerng: perf-validate DNSBL raw-passthrough; drop dead classifier code (ADR-62 P5)
+    pfblockerng: perf-validate DNSBL per-line capture; drop dead classifier code (ADR-62 P5)
 Push directly to adr/62-dnsbl-unified-line-parsing; open a PR only if the direct push is rejected.
 
 HANDOFF — write .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/RESULTS/05_Results.txt with the fixed
