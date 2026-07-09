@@ -755,4 +755,30 @@ final class LogMgmtAgeCutoffTest extends TestCase
 			chmod($logPath, 0644);
 		}
 	}
+
+	/**
+	 * Issue #1053: pfb_log_age_trim_temp()'s array path must treat a SHORT
+	 * (partial, non-FALSE) file_put_contents() write as failure, not success --
+	 * a genuine disk-full short write cannot be forced deterministically/
+	 * portably in a unit test (same constraint documented at
+	 * DnsblPrefetchTest::test_write_complete_helper_flags_a_short_write_as_incomplete),
+	 * so this pins the extracted write-outcome predicate directly with
+	 * fabricated byte counts -- the "testable shape" fallback for an
+	 * unforceable OS failure. The predicate is new code: it does not exist
+	 * pre-fix (calling it errors on the old source), so red<->green here is
+	 * "did not exist" -> "exists and rules correctly" for every input shape.
+	 */
+	public function testAgeTrimWriteOkFlagsAShortWriteAsIncomplete(): void
+	{
+		$content = "line-one\nline-two\n";
+
+		$short = pfb_log_age_trim_write_ok(strlen($content) - 3, $content);
+		$this->assertFalse($short, 'expected a short byte count to be flagged as an incomplete write');
+
+		$failed = pfb_log_age_trim_write_ok(FALSE, $content);
+		$this->assertFalse($failed, 'expected FALSE to be flagged as an incomplete write');
+
+		$complete = pfb_log_age_trim_write_ok(strlen($content), $content);
+		$this->assertTrue($complete, 'expected an exact full-length write to be flagged as complete');
+	}
 }

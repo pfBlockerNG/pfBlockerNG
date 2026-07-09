@@ -2961,7 +2961,14 @@ function pfb_log_age_trim_temp(string $temp, int $days, string $logtype, bool $u
 	}
 	$kept = pfb_log_age_cutoff($lines, $cutoff_ts, $field_mode);
 	$content = $kept ? implode("\n", $kept) . "\n" : '';
-	return file_put_contents($temp, $content) !== FALSE;
+	return pfb_log_age_trim_write_ok(file_put_contents($temp, $content), $content);
+}
+
+// issue #1053: a short (partial, non-FALSE) write must count as failure -- else a
+// disk-full write silently truncates the candidate that then gets cat-ed over the
+// live log. Mirrors pfb_prefetch_pattern_file_write_ok()'s decision shape.
+function pfb_log_age_trim_write_ok($written, string $content): bool {
+	return $written !== FALSE && $written === strlen($content);
 }
 
 // Manage log files line limit + age-based retention (ADR-60)
