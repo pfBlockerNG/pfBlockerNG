@@ -2915,10 +2915,17 @@ function pfb_log_age_trim_temp_stream(string $temp, int $cutoff_ts, string $fiel
 			}
 			$kept = TRUE;
 		}
-		if (fwrite($out, $line) === FALSE) {
+		$written = @fwrite($out, $line);
+		if ($written === FALSE || $written !== strlen($line)) {
 			$ok = FALSE;
 			break;
 		}
+	}
+	// issue #1036: NOT stream_copy_to_stream() + early break -- feof() doesn't
+	// reliably flag EOF after a zero-byte bulk copy on Linux; this loop only
+	// exits via a real past-EOF fgets() unless a write already failed above.
+	if ($ok && !feof($in)) {
+		$ok = FALSE;
 	}
 	fclose($in);
 	fclose($out);
