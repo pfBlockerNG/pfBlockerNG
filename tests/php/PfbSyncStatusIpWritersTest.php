@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -223,6 +224,56 @@ final class PfbSyncStatusIpWritersTest extends TestCase
 
 		$open = pfb_sync_status_list_open($this->dir, 'ip');
 		$this->assertCount(1, $open, 'the LAST sanity-check line in the log must win, matching the widget\'s tail -1 read');
+	}
+
+	/**
+	 * Issue #1052: pfb_sync_status_dedup_check() must not @file() the WHOLE
+	 * pfblockerng.log into memory -- a 'nolimit' log has no size cap. A
+	 * several-MB multi-chunk log with the Sanity check line near the end
+	 * (within the bounded tail window) must resolve the SAME verdict as a
+	 * small log, AND the memory_get_peak_usage(true) delta must stay far
+	 * below the file size -- the old @file()-array approach scales its
+	 * memory with file size, the bounded-tail read does not (same proof
+	 * shape as LogAgeCutoffStreamTest::testStreamingTrimStaysMemoryBounded...).
+	 * Bound justification (measured this session on this machine): the old
+	 * @file()-array approach costs a +7,065,600 byte (~6.7 MiB) delta on this
+	 * exact fixture; the bounded-tail read costs 0 bytes. 1 MiB sits
+	 * comfortably between the two, cleanly separating old-code-fails from
+	 * new-code-passes.
+	 */
+	#[RunInSeparateProcess]
+	public function testDedupSanityCheckStaysMemoryBoundedOnLargeLog(): void
+	{
+		$log = tempnam(sys_get_temp_dir(), 'pfb_dedup_big_log_');
+		$this->tmpfiles[] = $log;
+
+		$fh = fopen($log, 'w');
+		// ~3 MiB of filler lines (well outside the 64 KiB tail window) before
+		// the sanity line -- proves only the trailing window is ever read.
+		for ($i = 0; $i < 40000; $i++) {
+			fwrite($fh, 'filler line number ' . $i . ' of irrelevant log content padding out the file' . "\n");
+		}
+		fwrite($fh, "Database Sanity check [  FAILED  ] ** These two counts should match! **\n");
+		fclose($fh);
+
+		clearstatcache(TRUE, $log);
+		$this->assertGreaterThan(1_000_000, filesize($log), 'Before: fixture must be several MB');
+
+		gc_collect_cycles();
+		$memBefore = memory_get_peak_usage(TRUE);
+
+		pfb_sync_status_dedup_check($log, $this->dir);
+
+		$memDelta = memory_get_peak_usage(TRUE) - $memBefore;
+
+		$open = pfb_sync_status_list_open($this->dir, 'ip');
+		$this->assertCount(1, $open, 'a FAILED sanity-check line within the tail window must open the dedup entry, got '
+			. var_export($open, true));
+		$this->assertStringContainsString('FAILED', $open[0]['message']);
+
+		$this->assertLessThan(1024 * 1024, $memDelta,
+			"dedup check's memory_get_peak_usage(true) delta must stay under 1 MiB on a several-MB log, got {$memDelta} bytes"
+		);
 	}
 
 	// -----------------------------------------------------------------------

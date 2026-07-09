@@ -264,6 +264,9 @@ final class LogMgmtAgeCutoffTest extends TestCase
 	 * nolimit x set -- THE INDEPENDENCE FIX: 'nolimit' opts out of the
 	 * LINE-COUNT step only; the age cap still trims. Exercises the
 	 * copy()-based whole-file candidate path (no tail(1) step at all).
+	 * Issue #1052 coverage row "first-line expired (run)": the first line
+	 * ($old1) is expired, so the pass must still run -- the sibling pin for
+	 * testNolimitWithAgeSetSkipsPassWhenFirstLineIsFresh below.
 	 *
 	 * Scenario:
 	 *   Given log_max_log='nolimit'; log_max_days_log='30'.
@@ -299,6 +302,91 @@ final class LogMgmtAgeCutoffTest extends TestCase
 		);
 		$this->assertSame($inodeBefore, fileinode($logPath),
 			'the copy()-based nolimit+age path must preserve the inode (in-place cat-over)'
+		);
+	}
+
+	/**
+	 * Issue #1052, coverage row "first-line fresh (skip)": lines are
+	 * chronologically appended, so an unexpired FIRST line means nothing in
+	 * the file can be expired -- the whole copy()+age-trim pass must be
+	 * SKIPPED this tick, not just a no-op trim of an untouched candidate.
+	 * RED-PROVABLE: pre-fix code @copy()s + cat-overwrites the live log
+	 * every idle tick regardless, which rewrites (and would bump) the mtime.
+	 *
+	 * Scenario:
+	 *   Given log_max_log='nolimit'; log_max_days_log='30'.
+	 *   And   5 lines, ALL fresh (today) -- the first line is nowhere near
+	 *         expired.
+	 *   Before: 5 lines; mtime M.
+	 *   When  pfb_log_mgmt() is called.
+	 *   Then  content AND mtime are BOTH unchanged (the pass never ran).
+	 */
+	public function testNolimitWithAgeSetSkipsPassWhenFirstLineIsFresh(): void
+	{
+		$this->seedMinimalConfig();
+		$this->setLogCaps('log', 'nolimit', '30');
+		$this->ensureLogDir();
+		pfb_global();
+
+		$logPath = $this->logPath('log');
+		$content = implode("\n", [
+			$this->now() . ' a',
+			$this->now() . ' b',
+			$this->now() . ' c',
+			$this->now() . ' d',
+			$this->now() . ' e',
+		]) . "\n";
+		file_put_contents($logPath, $content);
+		$mtimeBefore = filemtime($logPath);
+
+		// A real filesystem mtime tick so an accidental rewrite would be visible.
+		usleep(1_100_000);
+
+		pfb_log_mgmt();
+
+		clearstatcache(TRUE, $logPath);
+		$this->assertSame($content, file_get_contents($logPath),
+			'a fresh-first-line nolimit+age-cap file must be byte-identical (whole pass skipped)'
+		);
+		$this->assertSame($mtimeBefore, filemtime($logPath),
+			'a fresh-first-line nolimit+age-cap file must not even be rewritten (mtime unchanged) -- '
+			. 'the copy()+cat pass must be skipped entirely, not run as a no-op'
+		);
+	}
+
+	/**
+	 * Issue #1052, coverage row "first-line unparseable-legacy (run)": an
+	 * unparseable FIRST line must NOT trigger the skip -- the probe falls
+	 * through to "pass needed" so the legacy line is still correctly dropped
+	 * (S2.2 "unparseable = expired"), matching pre-#1052 behaviour exactly.
+	 *
+	 * Scenario:
+	 *   Given log_max_log='nolimit'; log_max_days_log='30'.
+	 *   And   1 legacy line (no timestamp) + 2 fresh ISO lines.
+	 *   Before: 3 lines.
+	 *   When  pfb_log_mgmt() is called.
+	 *   Then  only the 2 fresh lines survive (the pass ran, dropping the legacy line).
+	 */
+	public function testNolimitWithAgeSetStillRunsWhenFirstLineIsUnparseableLegacy(): void
+	{
+		$this->seedMinimalConfig();
+		$this->setLogCaps('log', 'nolimit', '30');
+		$this->ensureLogDir();
+		pfb_global();
+
+		$logPath = $this->logPath('log');
+		$legacy = 'pre-ADR-60 legacy line, no timestamp';
+		$fresh1 = $this->now() . ' fresh-one';
+		$fresh2 = $this->now() . ' fresh-two';
+		file_put_contents($logPath, implode("\n", [$legacy, $fresh1, $fresh2]) . "\n");
+
+		pfb_log_mgmt();
+
+		clearstatcache(TRUE, $logPath);
+		$linesAfter = array_values(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
+		$this->assertSame([$fresh1, $fresh2], $linesAfter,
+			'an unparseable legacy first line must not skip the pass -- only it gets dropped, got '
+			. var_export($linesAfter, TRUE)
 		);
 	}
 
