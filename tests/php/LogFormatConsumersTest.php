@@ -249,7 +249,7 @@ final class LogFormatConsumersTest extends TestCase
 		// Nowdoc: zero escape processing, so this holds the exact RAW source bytes
 		// (literal backslashes and all) for a byte-for-byte tripwire against the file.
 		$rawSourceNeedle = <<<'EOT'
-awk '{\$1=\$1} 1' | awk -F ' ' '{print \$2 \" \(\" \$3 \"\),\" \$1}'
+awk '{\$1=\$1} 1' | awk -F ' ' '{print \$2 \" (\" \$3 \"),\" \$1}'
 EOT;
 		$this->assertStringContainsString(
 			$rawSourceNeedle,
@@ -259,7 +259,7 @@ EOT;
 		// Same formula, hand-copied as a double-quoted PHP string so ITS escapes
 		// resolve (matching what production's $chart_cmd evaluates to at runtime) --
 		// reproduced for real execution below, not re-derived.
-		$chartCmdFormula = "awk '{\$1=\$1} 1' | awk -F ' ' '{print \$2 \" \(\" \$3 \"\),\" \$1}'";
+		$chartCmdFormula = "awk '{\$1=\$1} 1' | awk -F ' ' '{print \$2 \" (\" \$3 \"),\" \$1}'";
 
 		$out = $this->tempFile('pfb_alerts_chart_new_');
 		// Shape of `cut -d ':' -f1 | uniq -c` over ISO dnsbl.log lines: "  N date hour".
@@ -279,8 +279,9 @@ EOT;
 	 */
 	public function testHourlyChartLabelOldAwkProducesEmptyHourForIsoLines(): void
 	{
-		// Pre-Phase-5 $chart_cmd RHS (verified via `git show HEAD~1:.../pfblockerng_alerts.php`).
-		$oldChartCmdFormula = "awk '{\$1=\$1} 1' | awk -F ' ' '{print \$2 \" \" \$3 \" \(\" \$4 \"\),\" \$1}'";
+		// Pre-Phase-5 $chart_cmd's 4-field selection, awk-paren escaping normalized
+		// (issue #1009: bare parens print identically on every awk; mawk keeps `\(`).
+		$oldChartCmdFormula = "awk '{\$1=\$1} 1' | awk -F ' ' '{print \$2 \" \" \$3 \" (\" \$4 \"),\" \$1}'";
 
 		$out = $this->tempFile('pfb_alerts_chart_old_');
 		$input = "  2 2026-07-08 09\n";
