@@ -178,6 +178,9 @@ if ($_POST) {
 	// Clear widget Failed downloads
 	elseif ($_POST['pfblockerngack']) {
 		exec("{$pfb['sed']} -i '' 's/FAIL/Fail/g' /var/log/pfblockerng/error.log");
+		// issue #999: ADR-61 moved the reporting list to the sync-status ledger --
+		// close the entries it actually reads, not just the retired error.log.
+		pfBlockerNG_clearfailed($pfb['dbdir']);
 		header("Location: /");
 		exit(0);
 	}
@@ -439,6 +442,16 @@ function pfBlockerNG_update_table() {
 		$pfb_table = array_merge($pfb_table, $pfb_dtable);
 	}
 	return $pfb_table;
+}
+
+
+// Close every open PHP-owned sync-status ledger entry (both facilities) -- the
+// "Clear Failed Downloads" icon's manual dismiss. issue #999: never touches the
+// python-owned ledger (pfb_unbound.py's exclusive writer).
+function pfBlockerNG_clearfailed($ledger_dir) {
+	foreach (pfb_sync_status_list_open($ledger_dir) as $entry) {
+		pfb_sync_status_close($entry['facility'], $entry['item'], $entry['stage'], $ledger_dir);
+	}
 }
 
 

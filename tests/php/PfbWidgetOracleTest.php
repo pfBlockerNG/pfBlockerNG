@@ -33,6 +33,11 @@ use PHPUnit\Framework\TestCase;
  *                     path) item renders as plain text, no link attempted, no
  *                     crash; an empty ledger falls back to the MaxMind version
  *                     line exactly as today.
+ *   (d) pfBlockerNG_clearfailed() — issue #999: the "Clear Failed Downloads"
+ *                     icon closes every open PHP-owned ledger entry (facility
+ *                     'ip' and 'dnsbl' alike, single or multiple), never
+ *                     touches the Python-owned ledger, and is a safe no-op on
+ *                     an empty or corrupt ledger.
  */
 final class PfbWidgetOracleTest extends TestCase
 {
@@ -72,9 +77,19 @@ final class PfbWidgetOracleTest extends TestCase
 			}
 			eval($m[0]);
 		}
+
+		if (!function_exists('pfBlockerNG_clearfailed')) {
+			if (!preg_match('/function\s+pfBlockerNG_clearfailed\s*\([^)]*\).*?\n\}/s', $src, $m)) {
+				throw new RuntimeException('test bootstrap: pfBlockerNG_clearfailed() not found in widget source');
+			}
+			eval($m[0]);
+		}
 	}
 
 	private string $dir;
+
+	/** A SEPARATE ledger dir, used only by the pfBlockerNG_clearfailed() python-owned-isolation test. */
+	private ?string $pyDir = null;
 
 	/** Saved $GLOBALS['pfb']/['config'], restored in tearDown (repo convention). */
 	private bool $hadPfb = false;
@@ -99,6 +114,14 @@ final class PfbWidgetOracleTest extends TestCase
 			@unlink($file);
 		}
 		@rmdir($this->dir);
+
+		if ($this->pyDir !== null) {
+			foreach (glob($this->pyDir . '/*') ?: [] as $file) {
+				@unlink($file);
+			}
+			@rmdir($this->pyDir);
+			$this->pyDir = null;
+		}
 
 		if ($this->hadPfb) {
 			$GLOBALS['pfb'] = $this->savedPfb;
@@ -454,5 +477,91 @@ final class PfbWidgetOracleTest extends TestCase
 			'a Python-side file-path item must never attempt a deep link'
 		);
 		$this->assertStringContainsString('pfb_py_zone.txt', $html, 'the entry message must still render');
+	}
+
+	// -----------------------------------------------------------------------
+	// (d) pfBlockerNG_clearfailed() — issue #999 coverage matrix.
+	// -----------------------------------------------------------------------
+
+	public function testClearfailedClosesASingleOpenIpEntry(): void
+	{
+		pfb_sync_status_open('ip', 'pfB_Example_v4', 'apply', '[pfctl] op=replace failed', $this->dir);
+		$this->assertNotEmpty(pfb_sync_status_list_open($this->dir), 'before-state: the ip entry must be open');
+
+		pfBlockerNG_clearfailed($this->dir);
+
+		$this->assertSame([], pfb_sync_status_list_open($this->dir), 'the ip entry must be closed after clearfailed');
+	}
+
+	public function testClearfailedClosesASingleOpenDnsblEntry(): void
+	{
+		pfb_sync_status_open('dnsbl', 'dnsbl', 'apply', 'DNSBL apply not converged', $this->dir);
+		$this->assertNotEmpty(pfb_sync_status_list_open($this->dir), 'before-state: the dnsbl entry must be open');
+
+		pfBlockerNG_clearfailed($this->dir);
+
+		$this->assertSame([], pfb_sync_status_list_open($this->dir), 'the dnsbl entry must be closed after clearfailed');
+	}
+
+	public function testClearfailedClosesAllEntriesAcrossBothFacilitiesNoPartialClear(): void
+	{
+		pfb_sync_status_open('ip', 'pfB_Example_v4', 'apply', 'apply failed', $this->dir);
+		pfb_sync_status_open('ip', 'dedup', 'dedup', 'Database Sanity check [ FAILED ]', $this->dir);
+		pfb_sync_status_open('dnsbl', 'dnsbl', 'apply', 'DNSBL apply not converged', $this->dir);
+		$this->assertCount(3, pfb_sync_status_list_open($this->dir), 'before-state: all three entries must be open');
+
+		pfBlockerNG_clearfailed($this->dir);
+
+		$this->assertSame(
+			[],
+			pfb_sync_status_list_open($this->dir),
+			'every entry across both facilities must be closed, no partial-clear / key-collision left behind'
+		);
+	}
+
+	public function testClearfailedOnEmptyLedgerIsASafeNoOp(): void
+	{
+		$this->assertSame([], pfb_sync_status_list_open($this->dir), 'before-state: the ledger must start empty');
+
+		pfBlockerNG_clearfailed($this->dir);
+
+		$this->assertSame([], pfb_sync_status_list_open($this->dir), 'an empty ledger must stay empty, no warning/exception');
+	}
+
+	public function testClearfailedNeverTouchesThePythonOwnedLedger(): void
+	{
+		// A SEPARATE dir for the python-owned ledger -- pfBlockerNG_clearfailed()
+		// is called with ONLY the PHP ledger dir, exactly as the real handler does.
+		$this->pyDir = sys_get_temp_dir() . '/pfb_widget_oracle_py_' . getmypid() . '_' . uniqid();
+		mkdir($this->pyDir, 0777, TRUE);
+		file_put_contents(
+			$this->pyDir . '/pfb_py_status.json',
+			json_encode([
+				['facility' => 'dnsbl', 'item' => 'pfb_py_zone.txt', 'stage' => 'parse', 'message' => 'boom', 'first_seen' => 1, 'last_seen' => 1],
+			])
+		);
+		pfb_sync_status_open('ip', 'pfB_Example_v4', 'apply', 'apply failed', $this->dir);
+
+		pfBlockerNG_clearfailed($this->dir);
+
+		$this->assertSame([], pfb_sync_status_list_open($this->dir), 'the PHP-owned entry must be closed');
+		$this->assertCount(
+			1,
+			pfb_py_sync_status_list_open($this->pyDir),
+			'the python-owned entry must remain untouched -- PHP has no writer for that file'
+		);
+	}
+
+	public function testClearfailedOnCorruptLedgerJsonDoesNotThrow(): void
+	{
+		file_put_contents($this->dir . '/pfb_sync_status.json', 'this is not json{{{');
+
+		pfBlockerNG_clearfailed($this->dir);
+
+		$this->assertSame(
+			[],
+			pfb_sync_status_list_open($this->dir),
+			'a corrupt ledger file must read as empty (fail-open), never throw'
+		);
 	}
 }
