@@ -852,3 +852,48 @@ def test_cli_diff_added_line_at_eof_no_trailing_newline(tmp_path: Path) -> None:
     res = _run(tmp_path, "--diff", base)
     assert res.returncode == 1, res.stderr
     assert "scripts/tool.sh:2" in res.stderr
+
+
+def test_cli_diff_plus_plus_prefixed_added_line_not_misparsed_as_header(tmp_path: Path) -> None:
+    # Hostile input: an added content line starting with "++" renders in the
+    # unified diff as "+++ ..." (marker '+' + content "++ ..."). It must NOT be
+    # taken for a "+++ b/<path>" file header -- doing so drops it AND every
+    # following added line, silently missing a real literal (the exact #1000
+    # no-op class). The literal sits AFTER such a line, so a miss => exit 0.
+    _git(tmp_path, "init", "-q", "-b", "devel")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/tool.sh").write_text("#!/bin/sh\necho hello\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base")
+    base = _rev(tmp_path)
+
+    (tmp_path / "scripts/tool.sh").write_text(f'#!/bin/sh\n++ banner\n_ABI="{_FREEBSD15}"\n')
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "add ++ line then a literal")
+    res = _run(tmp_path, "--diff", base)
+    assert res.returncode == 1, res.stderr
+    assert "scripts/tool.sh:3" in res.stderr
+
+
+def test_cli_diff_non_utf8_byte_does_not_crash_the_run(tmp_path: Path) -> None:
+    # Hostile input: a non-UTF-8 byte anywhere in the diff must not crash the
+    # whole run with an UnicodeDecodeError traceback (was exit 1 + traceback).
+    # The bad file is decoded lossily like the full scan; a literal added to a
+    # SEPARATE file in the same run is still caught -- proving the run survived
+    # the bad bytes rather than aborting before reaching it.
+    _git(tmp_path, "init", "-q", "-b", "devel")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/a.sh").write_text("_CLEAN=1\n")
+    (tmp_path / "scripts/b.sh").write_text("_CLEAN=1\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base")
+    base = _rev(tmp_path)
+
+    (tmp_path / "scripts/a.sh").write_bytes(b"_CLEAN=1\n_NOTE=caf\xe9\n")
+    (tmp_path / "scripts/b.sh").write_text(f'_CLEAN=1\n_ABI="{_FREEBSD15}"\n')
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "non-utf8 byte + a literal elsewhere")
+    res = _run(tmp_path, "--diff", base)
+    assert res.returncode == 1, res.stderr
+    assert "Traceback" not in res.stderr, res.stderr
+    assert "scripts/b.sh:2" in res.stderr
