@@ -440,20 +440,18 @@ overrides this draft) and each row maps to a Phase-2/3/4 test or an explicit def
      ledger files read as absent/empty (Semantics #6, fail-open display) regardless of
      any pre-reboot open entry; a still-real underlying condition re-opens its entry on
      the pipeline's own next natural pass, not automatically at boot.
-  8. **DNSBL feed download failure — expected to FAIL today, tracked, not silently
-     accepted:** point a DNSBL feed at an unreachable/404 URL. Expected (current,
-     known-gap behavior): the DNSBL row does **not** turn yellow for this specific
-     failure (the DNSBL feed-download call site was never wired to the ledger — see
-     architecture-notes "Known gap"). This step exists so the gap is verified-real, not
-     assumed; closing it is a follow-up, not blocking this ADR's Accepted flip for the
-     stages that ARE wired.
+  8. **DNSBL feed download failure, then self-heal (issue #998 follow-up, now wired):**
+     point a DNSBL feed at an unreachable/404 URL, run an update pass. Expected: DNSBL
+     row turns yellow within that pass; the reporting list shows the entry with a
+     working deep link to the alias editor (`pfb_dnsbl_download_ledger_update()` keys
+     on the `DNSBL_`-prefixed `$alias`, mirroring step 2's IP behavior);
+     `error.log` gains the historical FAIL line and is left untouched. Fix the URL, run
+     again. Expected: entry clears, row returns to green (assuming no other open DNSBL
+     entry).
 
-- **Accepted** requires steps 1-7 green: a genuine DNSBL apply failure that fails to
+- **Accepted** requires steps 1-8 green: a genuine DNSBL apply failure that fails to
   self-heal via tick alone (step 5) is the EXPECTED, documented behavior, not a
-  regression — do not treat it as a smoke failure. Step 8's known gap is an accepted,
-  tracked limitation, not an acceptance blocker (CLAUDE.md "ADR acceptance": a
-  documented out-of-scope item is not a blocker), but it must remain tracked (issue
-  filed) rather than forgotten.
+  regression — do not treat it as a smoke failure.
 - **Reject criteria (already resolved, kept for record):** Phase 4's Python-side chroot
   status file proved straightforward to write from inside the jail — no chroot-boundary
   fallback was needed; the file mirrors the existing `pfb_py_reload`/`.applied` marker
