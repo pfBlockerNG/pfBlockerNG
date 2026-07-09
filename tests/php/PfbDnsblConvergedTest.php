@@ -22,8 +22,9 @@ use PHPUnit\Framework\TestCase;
  * (absent, unreadable, blank, non-digit), only "non-digit" is independently
  * observable via a return-value assertion -- "absent"/"unreadable"/"blank" all
  * funnel through the SAME downstream ctype_digit('')-is-FALSE catch-all, so no
- * assertion can attribute their shared 0 result to one specific guard over another
- * (each still gets its own regression-pinning test below, honestly scoped as such).
+ * assertion can attribute their shared 0 result to one specific guard over another.
+ * "unreadable" and "blank" each still get an honestly-scoped regression-pinning test
+ * below; "absent" continues to rely on the truth table's own indirect coverage above.
  *
  * Functions under test: pfb_dnsbl_converged(): bool,
  * pfb_unbound_py_marker_generation(string $path): int (pfblockerng.inc).
@@ -214,6 +215,23 @@ final class PfbDnsblConvergedTest extends TestCase
 
 		$this->assertSame(0, pfb_unbound_py_marker_generation($path),
 			'a non-digit first line must fail ctype_digit() and read as generation 0, never a garbage leading-digit int cast');
+	}
+
+	public function testMarkerGenerationSignPrefixedFirstLine_returnsZero(): void
+	{
+		// ctype_digit() is strict digits-only, unlike the looser is_numeric() (which
+		// accepts a sign/exponent) -- this fixture would survive an accidental
+		// ctype_digit() -> is_numeric() swap if it only asserted "12abc" above.
+		$positive = "{$this->dir}/plus_marker";
+		file_put_contents($positive, "+5\n");
+
+		$negative = "{$this->dir}/minus_marker";
+		file_put_contents($negative, "-3\n");
+
+		$this->assertSame(0, pfb_unbound_py_marker_generation($positive),
+			'a sign-prefixed first line must fail ctype_digit() and read as generation 0');
+		$this->assertSame(0, pfb_unbound_py_marker_generation($negative),
+			'a negative first line must fail ctype_digit() and read as generation 0');
 	}
 
 	public function testMarkerGenerationValidDigitFirstLine_returnsParsedInt(): void
