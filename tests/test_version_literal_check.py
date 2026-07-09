@@ -917,3 +917,36 @@ def test_cli_diff_non_utf8_byte_does_not_crash_the_run(tmp_path: Path) -> None:
     assert res.returncode == 1, res.stderr
     assert "Traceback" not in res.stderr, res.stderr
     assert "scripts/b.sh:2" in res.stderr
+
+
+# --- issue #1082: triple-quote inside a normal string/comment must not open a
+# --- spurious docstring that swallows a real version literal on later lines ----
+
+
+def _find_py(tmp_path: Path, content: str) -> list[Any]:
+    f = tmp_path / "sample.py"
+    f.write_text(content, encoding="utf-8")
+    return cvl.find_violations([f])
+
+
+def test_py_triple_quote_inside_string_does_not_swallow_next_line(tmp_path: Path) -> None:
+    # `SEP = "'''"` holds one `'''` INSIDE a normal string; before the fix its odd
+    # count opened a phantom docstring, masking the ABI literal on the next line.
+    sep_line = 'SEP = "' + "'''" + '"\n'  # SEP = "'''"
+    abi_line = '_ABI = "' + _FREEBSD15 + '"\n'
+    violations = _find_py(tmp_path, sep_line + abi_line)
+    assert len(violations) == 1, f"literal after a string-embedded triple-quote must be flagged; got {violations}"
+    assert violations[0][1] == 2
+
+
+def test_py_triple_quote_in_trailing_comment_does_not_swallow_next_line(tmp_path: Path) -> None:
+    violations = _find_py(tmp_path, "x = 1  # " + "'''" + "\n" + f'_ABI = "{_FREEBSD15}"\n')
+    assert len(violations) == 1, f"literal after a comment-embedded triple-quote must be flagged; got {violations}"
+    assert violations[0][1] == 2
+
+
+def test_py_real_docstring_block_still_masks_prose(tmp_path: Path) -> None:
+    # Behaviour-preserving oracle: a genuine triple-quoted docstring block still
+    # masks its prose, so a version token inside it stays clean (green before AND after).
+    content = '"""' + "\n" + _FREEBSD15 + "\n" + '"""' + "\n"
+    assert _find_py(tmp_path, content) == [], "a version token inside a real docstring must stay clean"
