@@ -43,14 +43,10 @@ while the PR is in review / awaiting CI, **🏁** on merge + cleanup. Format
 
 ## Step 0 — Sync to the latest remote base FIRST (before triaging or planning)
 
-Before anything else — **every invocation, including when you already handled another issue or ADR
-earlier in this session** — `git fetch origin` and ground all triage, planning, and work on the
-just-fetched `origin/devel` (or the chosen base). The remote advances out of band (parallel agents
-land commits), so re-fetch each time; never plan or branch off a stale local `devel` or an
-in-session snapshot left over from a previous item. A stale base re-runs bugs the base has already
-fixed and sends you chasing a phantom regression (CLAUDE.md "Rebase onto the latest base BEFORE
-opening a PR"). This governs Step 6: cut a fresh `issue/{NN}-{slug}` from `origin/devel`, and when
-**reusing/resuming** an existing branch, rebase it onto the freshly-fetched `origin/devel` first.
+The `skill-branch-sync.sh` PreToolUse hook (`.claude/hooks/`) already fetched `origin` and
+rebased the current checkout onto `origin/devel` before this invocation started — including when
+this session already handled another issue or ADR — so triage/planning/Step 6's fresh
+`issue/{NN}-{slug}` all ground on a current base with no manual fetch.
 
 ## Step 1 — Parse args
 

@@ -44,15 +44,17 @@ across phases whether you call each phase yourself or `all` loops them.
 
 ## Step 0 — Sync to the latest remote base FIRST (before parsing or planning)
 
-Before anything else — **every invocation, including when you already implemented another ADR or
-issue earlier in this session** — `git fetch origin` and base all work on the just-fetched
-`origin/<base>` (default `origin/devel`). The remote advances out of band (parallel agents land
-commits), so re-fetch and re-base each time; never plan or branch off a stale local `devel` or an
-in-session snapshot left over from a previous item. A stale base re-runs bugs the base has already
-fixed and sends you chasing a phantom regression (CLAUDE.md "Rebase onto the latest base BEFORE
-opening a PR"). This governs Step 3: cut a fresh `adr/{NN}-{slug}` from `origin/<base>`, and when
-**reusing/resuming** an existing branch, rebase it onto the freshly-fetched `origin/<base>`
-(`git -C <path> rebase origin/<base>`; `--force-with-lease` to push) **before** running any phase.
+The `skill-branch-sync.sh` PreToolUse hook (`.claude/hooks/`) already fetched `origin` and
+rebased the current checkout onto `origin/devel` before this invocation started — including when
+this session already implemented another ADR or issue — so Step 3's fresh `adr/{NN}-{slug}`
+grounds on a current base with no manual fetch. **Two things the hook doesn't cover:**
+
+- **A non-default `--base`.** The hook always targets `origin/devel`; when `--base <branch>` is
+  given, `git fetch origin <base>` yourself and base Step 3 on that instead.
+- **Reusing/resuming an existing `adr/{NN}-{slug}` branch.** The hook synced whatever branch was
+  checked out when this invocation started, not that branch — rebase it onto the freshly-fetched
+  `origin/<base>` yourself (`git -C <path> rebase origin/<base>`; `--force-with-lease` to push)
+  **before** running any phase.
 
 ## Step 1 — Parse args
 

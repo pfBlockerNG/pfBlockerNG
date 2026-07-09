@@ -26,6 +26,7 @@ Invoke the `adr-phase` skill (via the Skill tool) with args `<ADR-number> all`,
 appending `--base <branch>` if it was given. Do not re-implement or summarise
 `adr-phase`'s behaviour — just run it and let it drive the full ADR.
 
-`adr-phase` performs the mandatory **Step 0 sync — `git fetch origin` + base/rebase onto the
-latest `origin/<base>` first**, even when this session already implemented another ADR/issue, so
-the whole run starts from the current base. No need to pre-fetch here.
+The `skill-branch-sync.sh` PreToolUse hook (`.claude/hooks/`) already synced the checkout onto
+`origin/devel` before this invocation started, and fires again for the nested `adr-phase` call —
+no need to pre-fetch here. A non-default `--base` still isn't hook-covered (see `adr-phase`
+Step 0); it's forwarded unchanged so `adr-phase` handles it.

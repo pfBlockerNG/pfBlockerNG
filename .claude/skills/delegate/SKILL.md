@@ -18,8 +18,10 @@ Args: `{{ args }}`
 
 ## Step 0 — Route and size
 
-- `git fetch origin`; base = `--base` if given, else `devel`. Ground all reading on the
-  fresh `origin/<base>`.
+- Base = `--base` if given, else `devel`. For the default base, the `skill-branch-sync.sh`
+  PreToolUse hook (`.claude/hooks/`) already fetched `origin` and rebased the current checkout
+  onto `origin/devel` before this invocation started — ground reading on that. For a non-default
+  `--base`, `git fetch origin <base>` yourself; the hook doesn't cover it.
 - If the task belongs to a GitHub issue or an ADR, stop and route to `/gh-issue N --fix` or
   `/adr-phase N` instead.
 - If the task is **small and doable in one step** (CLAUDE.md: the higher model implements

@@ -28,12 +28,10 @@ Read these so the new ADR matches the **current** house style (conventions have
 evolved across ADRs — always mirror the most recent one rather than this file's
 embedded snippets if they diverge):
 
-- **Sync FIRST — `git fetch origin` before anything else, every invocation** (even if you
-  authored another ADR or handled an issue earlier in this session): ground on the current
-  `origin/devel` and the latest ADRs across refs, never a stale local `devel` or an in-session
-  snapshot left over from a previous item. The remote advances out of band; a stale base re-runs
-  already-fixed bugs (CLAUDE.md "Rebase onto the latest base BEFORE opening a PR"). The
-  `adr/{NN}-{slug}` branch that `/adr-phase` later cuts inherits this base.
+- **Sync.** The `skill-branch-sync.sh` PreToolUse hook (`.claude/hooks/`) already fetched
+  `origin` and rebased the current checkout onto `origin/devel` before this invocation started —
+  including when you authored another ADR or handled an issue earlier in this session — so the
+  latest ADRs across refs and the base `/adr-phase` later cuts from are already current.
 - `CLAUDE.md` — code standards, branch/release model, commit style, the exact
   test/lint commands, and the "no live Unbound in CI" reality.
 - **The most recent ADR as the template of record.** Find the highest-numbered

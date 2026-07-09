@@ -37,6 +37,15 @@
             "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/scripts/claude-bash-guard.sh\""
           }
         ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/skill-branch-sync.sh\""
+          }
+        ]
       }
     ],
     "SessionStart": [

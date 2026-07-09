@@ -506,8 +506,12 @@ git worktree add -b <branch> <path> origin/devel   # branch off the latest base
 git worktree remove <path>                          # run from the PRIMARY checkout
 ```
 
-- Branch off the **current** base (`git fetch` first); a stale-tip worktree needs a rebase
-  before it can land.
+- Branch off the **current** base. The `skill-branch-sync.sh` PreToolUse hook (`.claude/hooks/`)
+  fetches `origin` and rebases the checkout onto `origin/devel` before every gh-issue/adr-phase/
+  adr-create/delegate/adr-all invocation, so `origin/devel` is fresh by the time the worktree is
+  cut — no manual fetch needed for the default base. A non-default `--base` isn't covered by the
+  hook; `git fetch origin <base>` it by hand. Either way, a stale-tip worktree still needs a
+  rebase before it can land (see "Rebase onto the latest base before every push").
 - **Reuse only YOUR OWN worktree — never adopt one you merely found.** A worktree at the
   conventional path that you did not create this run may belong to a live parallel session:
   `git -C <path> status` — foreign uncommitted changes ⇒ not yours; never `--force`-remove
