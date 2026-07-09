@@ -47,7 +47,12 @@ def test_dnsbl_block_page_shows_real_correlation_detail(deployed_vm: helpers.Smo
         aliasname="uidnsblpage", feed_url=feed_path, header="uidnsblpage", mode=helpers.DnsblMode.VIP
     )
 
-    with helpers.CaseContext(deployed_vm, spec):
+    # scope="update" (not CaseContext's default "updatednsbl"): pfb_create_dnsbl()
+    # (pfblockerng.inc:5671) -- the NAT/lighttpd-conf/restart_service('pfb_dnsbl')
+    # pass that actually starts the sinkhole -- only runs reliably off a FULL
+    # update pass; test_functional.py's dnsvip_auto test documents the same split
+    # ("a bare update with no DNSBL list does NOT reach the VIP-provisioning pass").
+    with helpers.CaseContext(deployed_vm, spec, scope="update"):
         # BEFORE (transition-test discipline): the real DNS query both proves the
         # block itself is real AND writes the dnsbl.log correlator line -- the
         # HTTP probe below only makes sense once this is asserted true.
