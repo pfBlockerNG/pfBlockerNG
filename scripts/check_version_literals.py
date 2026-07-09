@@ -435,7 +435,8 @@ def _added_lines_by_path(diff_text: str) -> dict[str, set[int]]:
             if path is not None:
                 added.setdefault(path, set()).add(lineno)
             lineno += 1
-        elif not raw.startswith("-"):
+        elif not raw.startswith(("-", "\\")):
+            # issue #1051: "\ No newline at end of file" is a marker, not content
             lineno += 1  # context line (absent under --unified=0, tolerated)
     return added
 

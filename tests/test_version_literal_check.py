@@ -854,6 +854,26 @@ def test_cli_diff_added_line_at_eof_no_trailing_newline(tmp_path: Path) -> None:
     assert "scripts/tool.sh:2" in res.stderr
 
 
+def test_cli_diff_replacing_no_eol_last_line_is_flagged(tmp_path: Path) -> None:
+    # Hostile input (issue #1051): when the OLD file's last line lacks a
+    # trailing newline, git emits "\ No newline at end of file" BETWEEN the
+    # "-" and "+" lines. Counting that marker as a content line shifts every
+    # following added line by one, silently filtering out the real violation.
+    _git(tmp_path, "init", "-q", "-b", "devel")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/tool.sh").write_bytes(b"_CLEAN=1\n_TAIL=0")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base no eol")
+    base = _rev(tmp_path)
+
+    (tmp_path / "scripts/tool.sh").write_text(f'_CLEAN=1\n_ABI="{_FREEBSD15}"\n')
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "replace no-eol tail with literal")
+    res = _run(tmp_path, "--diff", base)
+    assert res.returncode == 1, res.stderr
+    assert "scripts/tool.sh:2" in res.stderr
+
+
 def test_cli_diff_plus_plus_prefixed_added_line_not_misparsed_as_header(tmp_path: Path) -> None:
     # Hostile input: an added content line starting with "++" renders in the
     # unified diff as "+++ ..." (marker '+' + content "++ ..."). It must NOT be
