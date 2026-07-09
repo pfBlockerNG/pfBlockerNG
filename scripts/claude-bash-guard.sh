@@ -132,18 +132,31 @@ _SEP='[[:space:];|&(){}<>,]'
 #   * the literal substring --force (covers --force and --force-with-lease
 #     alike; callers that must distinguish the two check --force-with-lease
 #     separately), OR
-#   * a single-dash short-flag CLUSTER containing f (-f, -uf, -fu, ...) --
-#     getopt clusters short flags, so `git push -uf origin main` force-pushes
-#     exactly like `-f`. The mandatory single leading dash (never --) is why
-#     this never matches --force/--force-with-lease: the character right
-#     after the boundary dash in "--force" is another dash, not [a-z], so the
-#     match can't start there, and the first dash itself has no valid
-#     boundary before it either. The only f-bearing short flag on `git push`
-#     / `git worktree remove` is force, so treating any single-dash
-#     f-cluster as force on those two subcommands is safe.
+#   * a single-dash short-flag CLUSTER containing f (-f, -uf, -fu, -4f, ...)
+#     -- getopt clusters short flags, so `git push -uf origin main`
+#     force-pushes exactly like `-f`, and digit short flags (`-4`/`-6`)
+#     cluster the same way (issue #1058). The mandatory single leading dash
+#     (never --) is why this never matches --force/--force-with-lease: the
+#     character right after the boundary dash in "--force" is another dash,
+#     not [a-z0-9], so the match can't start there, and the first dash
+#     itself has no valid boundary before it either. The only f-bearing
+#     short flag on `git push` / `git worktree remove` is force, so treating
+#     any single-dash f-cluster as force on those two subcommands is safe.
+_FORCE_CLUSTER="-[a-z0-9]*f[a-z0-9]*"
 _has_force_flag() {
 	_contains '--force' && return 0
-	printf '%s' "$seg" | grep -Eq "(^|${_SEP})-[a-z]*f[a-z]*(\$|${_SEP})"
+	printf '%s' "$seg" | grep -Eq "(^|${_SEP})${_FORCE_CLUSTER}(\$|${_SEP})"
+}
+
+# _bare_force_after_last_lease -- true iff a BARE force flag sits after the
+# last --force-with-lease in $seg. git honors the LAST force flag, so
+# `git push --force-with-lease --force` (or a trailing -f) is a bare force
+# push despite the lease (issue #1058). Exact-word --force only: the
+# remainder can't contain --force-with-lease (stripped past the last one),
+# and --force-if-includes -- a lease COMPANION flag -- must stay clean.
+_bare_force_after_last_lease() {
+	printf '%s' "${seg##*--force-with-lease}" \
+		| grep -Eq "(^|${_SEP})(--force|${_FORCE_CLUSTER})(\$|${_SEP})"
 }
 
 # _deny <reason> -- print the PreToolUse deny JSON and exit 0 (exit 0 is
@@ -166,7 +179,7 @@ while IFS= read -r seg; do
 	fi
 
 	if _contains 'git push' && _has_force_flag; then
-		if ! _contains '--force-with-lease'; then
+		if ! _contains '--force-with-lease' || _bare_force_after_last_lease; then
 			_deny "the rebase-only landing flow uses --force-with-lease exclusively; a bare force-push can clobber another session's PR (CLAUDE.md)"
 		fi
 	fi

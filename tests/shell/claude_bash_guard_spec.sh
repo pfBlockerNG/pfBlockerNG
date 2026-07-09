@@ -11,9 +11,11 @@
 # Contracts pinned here:
 #   Rule A  -- git commit + --no-verify                       -> DENY
 #   Rule B  -- git push + force flag (--force / standalone -f /
-#              a clustered short flag like -uf, -fu)
+#              a clustered short flag like -uf, -fu, -4f)
 #              WITHOUT --force-with-lease                     -> DENY
-#              (lease present -> PASS, lease wins even alongside a bare -f)
+#              (lease present AND no bare force flag after the LAST
+#              --force-with-lease -> PASS; git honors the last force
+#              flag, so a bare force AFTER the lease still denies, #1058)
 #   Rule C  -- git worktree remove + force flag                -> DENY
 #   fail-open -- empty / garbled stdin, no rule match           -> PASS
 #   -f boundary -- standalone -f / an f-bearing short-flag cluster,
@@ -273,9 +275,45 @@ Describe 'claude-bash-guard.sh'
       The output should equal ""
     End
 
-    It 'P13 (edge case): --force-with-lease alongside a bare -f -> PASS (lease wins)'
+    It 'P13 (issue #1058): bare -f AFTER --force-with-lease -> DENY (git honors the last force flag)'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"git push --force-with-lease -f"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'H13 (issue #1058): digit-bearing short-flag cluster (git push -4f origin main) -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push -4f origin main"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'H14 (issue #1058): --force AFTER --force-with-lease -> DENY (last force flag wins)'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push --force-with-lease --force"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'P14 (issue #1058): bare force BEFORE --force-with-lease -> PASS (the lease, last, wins)'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push --force --force-with-lease origin main"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'P15 (issue #1058): --force-with-lease --force-if-includes -> PASS (lease companion, not a bare force)'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push --force-with-lease --force-if-includes"}}
       End
       When run script "$GUARD"
       The status should be success
