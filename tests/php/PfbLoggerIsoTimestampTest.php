@@ -176,4 +176,42 @@ final class PfbLoggerIsoTimestampTest extends TestCase
 			"a fragment written first to an absent/fresh target must be stamped (it starts a new line); got: {$written}"
 		);
 	}
+
+	/**
+	 * CodeRabbit on PR #1061 (issue #1054 follow-up): other writers append to
+	 * the SAME log file in-process (hook output via pfb_persist_hook_output()),
+	 * so the BOL decision must come from the file's real last byte at write
+	 * time -- never from remembered state a foreign append silently outdated.
+	 */
+	public function testForeignAppendBetweenWritesCannotDesyncTheBolDecision(): void
+	{
+		$log = tempnam(sys_get_temp_dir(), 'pfb_logtest_');
+		$this->assertNotFalse($log, 'could not create temp log file');
+		$this->tmpfiles[] = $log;
+		$GLOBALS['pfb']['log'] = $log;
+
+		// Given: a stamped full line, leaving the target at BOL.
+		pfb_logger("First line\n", 1);
+		// And: a foreign writer appends an UNTERMINATED fragment directly
+		// (same shape as hook-output persistence) -- the file is now mid-line.
+		file_put_contents($log, 'hook-tail-without-newline', FILE_APPEND);
+
+		// When: pfb_logger writes a fragment -- stale remembered state would say
+		// BOL (the last pfb_logger write ended with \n) and stamp it mid-line.
+		pfb_logger('.', 1);
+		// And: a foreign writer terminates the line; the next write starts one.
+		file_put_contents($log, "\n", FILE_APPEND);
+		pfb_logger("Second line\n", 1);
+
+		$written = (string) file_get_contents($log);
+		$isoRe   = '\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}';
+		$this->assertMatchesRegularExpression(
+			"/^{$isoRe} First line\nhook-tail-without-newline\\.\n{$isoRe} Second line\n\$/",
+			$written,
+			"the BOL decision must track the file's REAL last byte across foreign appends; got: {$written}"
+		);
+		$this->assertSame(2, preg_match_all("/{$isoRe}/", $written),
+			"exactly the two pfb_logger line starts are stamped -- got: {$written}"
+		);
+	}
 }
