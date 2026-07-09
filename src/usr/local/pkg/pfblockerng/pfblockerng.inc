@@ -2873,8 +2873,8 @@ function pfb_log_line_timestamp(string $line, string $field_mode): ?int {
 // ADR-60 S2.2 age-cutoff scan: log lines are chronologically appended, so this
 // walks from the top and stops at the first non-expired line -- everything from
 // there on is kept without re-checking. An unparseable/corrupted timestamp
-// counts as expired (safe: only ever runs on the already line-capped candidate,
-// or the whole file when log_max_<type>=='nolimit'). PURE.
+// counts as expired (safe: only ever runs on the already line-capped candidate --
+// issue #1012 moved the 'nolimit' whole-file case off this array-based path). PURE.
 function pfb_log_age_cutoff(array $lines, int $cutoff_ts, string $field_mode): array {
 	foreach ($lines as $i => $line) {
 		$ts = pfb_log_line_timestamp($line, $field_mode);
@@ -2885,17 +2885,73 @@ function pfb_log_age_cutoff(array $lines, int $cutoff_ts, string $field_mode): a
 	return array();
 }
 
+// Same leading-run drop as pfb_log_age_cutoff(), streamed line-by-line into a
+// scratch file instead of an in-memory array -- issue #1012: a 'nolimit' log
+// has no line-count cap, so the candidate can be the whole unbounded file.
+function pfb_log_age_trim_temp_stream(string $temp, int $cutoff_ts, string $field_mode): bool {
+	$in = @fopen($temp, 'r');
+	if ($in === FALSE) {
+		return FALSE;
+	}
+
+	$scratch = @tempnam(dirname($temp), 'pfb_logtrim_');
+	$out = ($scratch !== FALSE) ? @fopen($scratch, 'w') : FALSE;
+	if ($out === FALSE) {
+		fclose($in);
+		if ($scratch !== FALSE) {
+			unlink_if_exists($scratch);
+		}
+		return FALSE;
+	}
+
+	$kept = FALSE;
+	$ok = TRUE;
+	while (($line = fgets($in)) !== FALSE) {
+		if (!$kept) {
+			$ts = pfb_log_line_timestamp(rtrim($line, "\r\n"), $field_mode);
+			if ($ts === NULL || $ts < $cutoff_ts) {
+				continue;
+			}
+			$kept = TRUE;
+		}
+		if (fwrite($out, $line) === FALSE) {
+			$ok = FALSE;
+			break;
+		}
+	}
+	fclose($in);
+	fclose($out);
+
+	if ($ok) {
+		$ok = @rename($scratch, $temp);
+	}
+	if (!$ok) {
+		unlink_if_exists($scratch);
+		return FALSE;
+	}
+	return TRUE;
+}
+
 // Rewrite the truncation-candidate file $temp in place, keeping only lines
 // within the last $days (ADR-60 S2.2) per $logtype's field position. Returns
 // FALSE on any read/write failure so the caller can gate its exec chain on it,
 // exactly like the existing tail/cat steps -- a failed pass must never reach
 // the final cat-over-the-live-log step with truncated/garbage content.
-function pfb_log_age_trim_temp(string $temp, int $days, string $logtype): bool {
+// $unbounded_candidate (issue #1012): route 'nolimit' through the streaming
+// helper -- the array/@file() path below stays exact for the line-capped case.
+function pfb_log_age_trim_temp(string $temp, int $days, string $logtype, bool $unbounded_candidate = FALSE): bool {
+	$field_mode = pfb_log_age_field_mode($logtype);
+	$cutoff_ts = time() - ($days * 86400);
+
+	if ($unbounded_candidate) {
+		return pfb_log_age_trim_temp_stream($temp, $cutoff_ts, $field_mode);
+	}
+
 	$lines = @file($temp, FILE_IGNORE_NEW_LINES);
 	if ($lines === FALSE) {
 		return FALSE;
 	}
-	$kept = pfb_log_age_cutoff($lines, time() - ($days * 86400), pfb_log_age_field_mode($logtype));
+	$kept = pfb_log_age_cutoff($lines, $cutoff_ts, $field_mode);
 	$content = $kept ? implode("\n", $kept) . "\n" : '';
 	return file_put_contents($temp, $content) !== FALSE;
 }
@@ -2951,7 +3007,7 @@ function pfb_log_mgmt() {
 					}
 					if ($ret !== 0) {
 						pfb_logger("\npfb_log_mgmt: failed to produce {$final_log_file}'s truncation candidate", 2);
-					} elseif ($agedays > 0 && !pfb_log_age_trim_temp($temp, $agedays, $logtype)) {
+					} elseif ($agedays > 0 && !pfb_log_age_trim_temp($temp, $agedays, $logtype, $logmax === 'nolimit')) {
 						pfb_logger("\npfb_log_mgmt: failed to age-trim {$final_log_file}'s truncation candidate", 2);
 						$ret = 1;
 					}
@@ -2977,7 +3033,7 @@ function pfb_log_mgmt() {
 				}
 				if ($ret !== 0) {
 					pfb_logger("\npfb_log_mgmt: failed to produce {$pfb[$logtype]}'s truncation candidate", 2);
-				} elseif ($agedays > 0 && !pfb_log_age_trim_temp($temp, $agedays, $logtype)) {
+				} elseif ($agedays > 0 && !pfb_log_age_trim_temp($temp, $agedays, $logtype, $logmax === 'nolimit')) {
 					pfb_logger("\npfb_log_mgmt: failed to age-trim {$pfb[$logtype]}'s truncation candidate", 2);
 					$ret = 1;
 				}
