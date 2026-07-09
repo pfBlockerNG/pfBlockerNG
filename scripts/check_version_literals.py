@@ -391,6 +391,11 @@ def _git_diff(args: list[str]) -> str:
         ],
         capture_output=True,
         text=True,
+        # errors='replace': a non-UTF-8 byte ANYWHERE in the diff (even in a
+        # file outside the scan roots) must not crash the whole run with an
+        # UnicodeDecodeError -- decode lossily, same as the full scan's read.
+        encoding="utf-8",
+        errors="replace",
         check=True,
     )
     return out.stdout
@@ -399,22 +404,34 @@ def _git_diff(args: list[str]) -> str:
 def _added_lines_by_path(diff_text: str) -> dict[str, set[int]]:
     """Map each changed path to the set of its added (new-file) line numbers.
 
-    A deleted file's ``+++`` target is ``/dev/null`` (no ``b/`` prefix), so it
+    ``+++ b/<path>`` is only a file header BEFORE the first ``@@`` of a file
+    section: inside a hunk an added content line whose text starts with ``++``
+    renders as ``+++ ...`` and must NOT be mistaken for a header (else its --
+    and every following added line's -- violation is silently dropped). The
+    ``in_hunk`` flag, reset on each ``diff --git``, draws that boundary. A
+    deleted file's ``+++`` target is ``/dev/null`` (no ``b/`` prefix), so it
     never gets an entry -- nothing to scan there anyway.
     """
     added: dict[str, set[int]] = {}
     path: str | None = None
     lineno = 0
+    in_hunk = False
     for raw in diff_text.splitlines():
-        if raw.startswith("+++ "):
-            name = raw[4:]
-            path = name[2:].split("\t", 1)[0] if name.startswith("b/") else None
+        if raw.startswith("diff --git"):
+            path = None
+            in_hunk = False
             continue
         if raw.startswith("@@"):
             m = re.match(r"@@ -\S+ \+(\d+)", raw)
             lineno = int(m.group(1)) if m else 0
+            in_hunk = True
             continue
-        if raw.startswith("+") and not raw.startswith("+++"):
+        if not in_hunk:
+            if raw.startswith("+++ "):
+                name = raw[4:]
+                path = name[2:].split("\t", 1)[0] if name.startswith("b/") else None
+            continue  # header block: '---'/'index'/etc. never carry added content
+        if raw.startswith("+"):
             if path is not None:
                 added.setdefault(path, set()).add(lineno)
             lineno += 1
@@ -455,10 +472,15 @@ def _diff_mode(argv: list[str]) -> int:
                 ["git", "show", f"{show_ref}{path_str}"],
                 capture_output=True,
                 text=True,
+                # errors='replace' mirrors the full scan's read_text: a file
+                # with a stray non-UTF-8 byte is still scanned (not silently
+                # skipped), so diff mode can't miss a literal the full scan sees.
+                encoding="utf-8",
+                errors="replace",
                 check=True,
             )
-        except (subprocess.CalledProcessError, UnicodeError):
-            continue  # deleted/binary/unreadable at that ref -- nothing to scan
+        except subprocess.CalledProcessError:
+            continue  # deleted/unreadable at that ref -- nothing to scan
         for v_path, lineno, line in scan_text(path, out.stdout):
             if lineno in added_linenos:
                 violations.append((v_path, lineno, line))
