@@ -167,11 +167,15 @@ final class LogAgeCutoffStreamTest extends TestCase
 
 		$missing = $GLOBALS['pfb']['logdir'] . '/does-not-exist-' . uniqid() . '.log';
 		$this->assertFileDoesNotExist($missing, 'Before: the path must not exist');
+		$scratchBefore = glob(dirname($missing) . '/pfb_logtrim_*');
 
 		$ok = pfb_log_age_trim_temp($missing, 30, 'log', TRUE);
 
 		$this->assertFalse($ok, 'a missing $temp must make the streaming trim return FALSE');
 		$this->assertFileDoesNotExist($missing, 'a failed trim must never create $temp');
+		$this->assertSame($scratchBefore, glob(dirname($missing) . '/pfb_logtrim_*'),
+			'a failed trim must leave no orphaned scratch file in dirname($temp)'
+		);
 	}
 
 	/**
@@ -200,6 +204,7 @@ final class LogAgeCutoffStreamTest extends TestCase
 		$content = date('Y-m-d H:i:s') . " fresh line\n";
 		file_put_contents($temp, $content);
 		chmod($roDir, 0555);
+		$scratchBefore = glob($roDir . '/pfb_logtrim_*');
 
 		try {
 			$ok = pfb_log_age_trim_temp($temp, 30, 'log', TRUE);
@@ -208,6 +213,9 @@ final class LogAgeCutoffStreamTest extends TestCase
 			clearstatcache(TRUE, $temp);
 			$this->assertSame($content, file_get_contents($temp),
 				'a failed rename() back onto $temp must leave it byte-for-byte untouched'
+			);
+			$this->assertSame($scratchBefore, glob($roDir . '/pfb_logtrim_*'),
+				'a failed trim must leave no orphaned scratch file in dirname($temp)'
 			);
 		} finally {
 			chmod($roDir, 0755);

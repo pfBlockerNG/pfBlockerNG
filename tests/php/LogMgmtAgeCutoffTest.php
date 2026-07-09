@@ -39,10 +39,12 @@ use PHPUnit\Framework\TestCase;
  *   Per-type field-position wiring (at least one per DISTINCT field mode --
  *   'log' above covers 'prefix'; these cover the other two):
  *     - testFieldZeroModeAgeCutoffTrimsIpBlocklog             (field0)
+ *     - testFieldZeroModeNolimitAgeCutoffTrimsIpBlocklog      (field0, streaming)
  *     - testFieldOneModeAgeCutoffTrimsDnslog                  (field1, also
  *       exercises the chroot-branch code path -- chroot dir absent on this
  *       runner, so it falls back to the host path per LogRotateResetTest's
  *       established note)
+ *     - testFieldOneModeNolimitAgeCutoffTrimsDnslog           (field1, streaming)
  *
  *   Inode + ownership: fileinode() before/after in the tail-based path (the
  *   'set x set' tests above) AND the 'nolimit'-with-age copy()-based path
