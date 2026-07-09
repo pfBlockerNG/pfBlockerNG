@@ -373,17 +373,20 @@ def test_ip_generic_parse_failure_logs_line_and_number(deployed_vm: SmokeVM, moc
       once-per-feed contract (no per-line spam) is unchanged by #1004.
     """
     header = "smokeip1004"
+    # The IP loop names each on-disk feed/logged header {row.header}{vtype}, so the
+    # ip_parsed_error.log row and the "[!] Parse Errors [ ... ]" summary both carry the
+    # family-suffixed form -- NOT the bare IpCase.header (see helpers.py IpCase docstring).
+    logged_header = f"{header}_v4"
     valid_host = "203.0.113.90"
     bad_line = "999.999.999.999"
-    oline_bad = f"{bad_line}\n"  # pfb_ip_parsed_fail's $oline keeps fgets()'s raw newline
     feed_url = mock_feeds.register("ip_parse_fail_bad.txt", f"{valid_host}\n{bad_line}\n")
     spec = h.IpCase(aliasname="smokeip1004", feed_url=feed_url, header=header, family="v4")
 
     # BEFORE: no table yet, no row for this (session-unique) header, no summary line.
     assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the feed was ever loaded"
-    header_marker = f",{header},"
+    header_marker = f",{logged_header},"
     header_before = h.count_log_marker(deployed_vm, h.IP_PARSE_ERR_LOG, header_marker)
-    summary_marker = f"[!] Parse Errors [ {header} ]: 1"
+    summary_marker = f"[!] Parse Errors [ {logged_header} ]: 1"
     summary_before = h.count_log_marker(deployed_vm, h.PFB_LOG, summary_marker)
 
     with h.CaseContext(deployed_vm, spec):
@@ -392,11 +395,13 @@ def test_ip_generic_parse_failure_logs_line_and_number(deployed_vm: SmokeVM, moc
 
         header_after = h.count_log_marker(deployed_vm, h.IP_PARSE_ERR_LOG, header_marker)
         assert header_after == header_before + 1, (
-            f"expected exactly ONE new ip_parsed_error.log row for header {header!r} "
+            f"expected exactly ONE new ip_parsed_error.log row for header {logged_header!r} "
             f"(before={header_before}, after={header_after})"
         )
         parse_err = h.read_log_file(deployed_vm, h.IP_PARSE_ERR_LOG)
-        assert f"{header},{bad_line},{oline_bad},2" in parse_err, (
+        # Row shape: {ts},{logged_header},{line},{oline},{lineno} -- $oline's raw fgets()
+        # newline is stripped by the writer, so line and oline both read as the bad line.
+        assert f"{logged_header},{bad_line},{bad_line},2" in parse_err, (
             f"expected the bad line + its 1-based source line number (2) in the new "
             f"ip_parsed_error.log row, got:\n{parse_err[-2000:]}"
         )
