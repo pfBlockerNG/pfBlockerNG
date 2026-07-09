@@ -335,6 +335,13 @@ For every finding, decide a verdict — do **not** auto-apply:
 ## Step 6 — Apply the valid fixes
 
 - Minimal changes, matching repo conventions (see `CLAUDE.md`).
+- **A finding that names a class ("the X clauses", "all Y call sites", "… etc.") is fixed by
+  re-enumerating the class TREE-WIDE from the source** — `git grep` across every scan root
+  (`src/`, `scripts/`, `.github/`, `tests/`), never just the file the finding names and never
+  the finding's own wording. Paste the enumeration output into the audit/reply so the tick is
+  auditable. (PR #933 pinned 2 of 4 equality clauses by trusting "etc." (#935); PR #1005's
+  `[ NOW ]` retirement fixed all 29 sites in `pfblockerng.inc` and missed 9 in
+  `www/pfblockerng/pfblockerng.php` because the grep stopped at one file (#1047).)
 - **A fix that changes behaviour carries its own test** — CLAUDE.md "Test coverage" applies
   to review fixes too: fail-before/pass-after, no coverage theater, and **Tier A** UI coverage
   for a `www/` change. (A pure-comment/lint nit needs none.)

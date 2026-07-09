@@ -695,8 +695,13 @@ clean". Only the dev-only no-PR classes are exempt.
 **Applying review findings follows the coverage-matrix discipline.** A finding that names a
 *class* ("the X clauses", "all Y", "… etc.") is fixed by re-enumerating the class **from the
 source** (grep), never from the finding's wording — PR #933's review-fix pinned 2 of 4
-equality clauses by trusting the reviewer's "etc." (#935). An APPLY delta that skips a full
-re-review still gets its coverage-matrix tick recorded in the audit comment. **A
+equality clauses by trusting the reviewer's "etc." (#935). **The re-enumeration greps the
+whole tree** (`git grep` over every scan root and file type), never just the file the finding
+names — PR #1005's `[ NOW ]` retirement (#1008) removed all 29 tokens in `pfblockerng.inc`
+and left 9 in `www/pfblockerng/pfblockerng.php` (#1047); when a change *retires* a literal
+token, a zero-hit tree grep for it is part of done (mechanical backstop designed in #1059).
+An APPLY delta that skips a full re-review still gets its coverage-matrix tick recorded in
+the audit comment. **A
 confirmed-real finding a reviewer itself downgrades to "pre-existing / no action needed" is
 still a finding**: it enters triage as DEFER and lands as a tracking issue before the merge —
 two real bugs from PR #937's re-review existed only in a session transcript until the
