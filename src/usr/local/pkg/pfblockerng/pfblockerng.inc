@@ -3152,10 +3152,12 @@ function pfb_filterlog_timestamp(array $f, string $log_type, int $now): string {
 }
 
 // issue #1054: TRUE when $path's NEXT pfb_logger() write starts a new physical
-// line -- the file is absent/empty, or its last byte is "\n". Called once per
-// path per process; pfb_logger_format_for_target()'s static cache takes over
-// after that from each write's own outcome.
+// line -- the file is absent/empty, or its last byte is "\n". Probed on EVERY
+// write, never cached: other writers append to these same files in-process
+// (hook-output persistence :4250, pfb_open_sqlite() errlog writes) and a
+// short write can leave the file mid-line, so only the real last byte is safe.
 function pfb_logger_target_starts_at_bol(string $path): bool {
+	clearstatcache(FALSE, $path);
 	if (!file_exists($path) || @filesize($path) === 0) {
 		return TRUE;
 	}
@@ -3177,18 +3179,9 @@ function pfb_logger_target_starts_at_bol(string $path): bool {
 // leading run of "\n" always forces BOL for what follows (it just ended the
 // previous line), matching the existing leading-newline convention.
 function pfb_logger_format_for_target(string $path, string $raw, int $lead, string $now): string {
-	static $bol = array();
-
-	if (!array_key_exists($path, $bol)) {
-		$bol[$path] = pfb_logger_target_starts_at_bol($path);
-	}
-
-	$formatted = ($lead > 0 || $bol[$path])
+	return ($lead > 0 || pfb_logger_target_starts_at_bol($path))
 		? substr($raw, 0, $lead) . "{$now} " . substr($raw, $lead)
 		: $raw;
-
-	$bol[$path] = (substr($formatted, -1) === "\n");
-	return $formatted;
 }
 
 function pfb_logger($log, $logtype) {
