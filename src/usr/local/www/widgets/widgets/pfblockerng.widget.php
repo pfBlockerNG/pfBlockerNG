@@ -178,7 +178,7 @@ if ($_POST) {
 
 	// Clear widget Failed downloads
 	// issue #1050: $nocsrf=TRUE means csrf-magic never runs here -- gate the mutation itself.
-	elseif ($_POST['pfblockerngack'] && pfb_widget_post_allowed($_SERVER)) {
+	elseif (!empty($_POST['pfblockerngack']) && pfb_widget_post_allowed($_SERVER)) {
 		exec("{$pfb['sed']} -i '' 's/FAIL/Fail/g' /var/log/pfblockerng/error.log");
 		// issue #999: ADR-61 moved the reporting list to the sync-status ledger --
 		// close the entries it actually reads, not just the retired error.log.
