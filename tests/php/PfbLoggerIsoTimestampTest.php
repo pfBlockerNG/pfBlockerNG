@@ -10,13 +10,15 @@ use PHPUnit\Framework\TestCase;
  * ambiguous US 'm/j/y H:i:s' (issue: American-style dates in user-facing logs).
  *
  * ADR-60 P2: every write is now unconditionally stamped -- the legacy opt-in
- * '[ NOW ]' token + same-second '$pfb[pnow]' dedup is retired. issue #1008: every
- * caller's literal '[ NOW ]' token was deleted and the scrub removed entirely
+ * '[ NOW ]' token + same-second '$pfb[pnow]' dedup is retired. issue #1008 deleted
+ * every pfblockerng.inc caller's literal '[ NOW ]' token and the scrub itself
  * (LogTimestampBaselineTest::testLogMessageContainingNowSubstringIsPreservedVerbatim
- * pins that a message containing 'NOW' is no longer mangled). The shipped
- * pfb_logger() is exercised against a temp log file so the on-disk side-effect is
- * asserted (not coverage theater). The shared $GLOBALS['pfb'] keys are
- * saved/restored so the suite stays order-independent.
+ * pins that a message containing 'NOW' is no longer mangled); issue #1047 found the
+ * token still live in 9 pfblockerng.php (www UI) call sites and deleted those too --
+ * LogNowTokenRetiredTest now tripwires the WHOLE tracked src/ tree, not just one file.
+ * The shipped pfb_logger() is exercised against a temp log file so the on-disk
+ * side-effect is asserted (not coverage theater). The shared $GLOBALS['pfb'] keys
+ * are saved/restored so the suite stays order-independent.
  */
 #[CoversFunction('pfb_logger')]
 #[CoversFunction('pfb_failures')]
