@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -795,9 +796,8 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 	 * the tightened alternative -- RED against the first-cut widening
 	 * (`xn--[A-Za-z0-9-]{2,}`, which accepted it), GREEN with the
 	 * alnum-first form (`xn--[A-Za-z0-9][A-Za-z0-9-]+`).
-	 *
-	 * @dataProvider malformedPunycodeTldRows
 	 */
+	#[DataProvider('malformedPunycodeTldRows')]
 	public function testCsvModeStillRejectsMalformedPunycodeTldRow(string $domain): void
 	{
 		// Given: a prior good whitelist and an OpenPageRank-shaped row whose Domain
@@ -869,9 +869,8 @@ final class Top1mPreserveOnEmptyFeedTest extends TestCase
 	 * row below carries a numeric rank column (satisfies the rank-only check by itself) but
 	 * a domain field that fails the hostname-shape regex in a different way. Every one must
 	 * still be rejected now that the regex applies to rank_domain rows too.
-	 *
-	 * @dataProvider rankDomainHostileRows
 	 */
+	#[DataProvider('rankDomainHostileRows')]
 	public function testRankDomainRejectsNonHostnameDomainFieldRow(string $csvLine): void
 	{
 		// Given: a prior good whitelist and a single-row rank_domain-shaped feed whose
