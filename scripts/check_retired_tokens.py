@@ -151,8 +151,6 @@ def _parse_diff(diff_text: str) -> tuple[dict[str, list[str]], dict[str, list[st
                 elif name.split("\t", 1)[0] == "/dev/null":
                     path = a_path
             continue
-        if raw.startswith("\\"):
-            continue  # issue #1051: skip the backslash marker -- it is not content
         if path is None or not _in_scan_roots(path):
             continue
         if raw.startswith("-"):
@@ -167,15 +165,21 @@ def _candidate_tokens(removed: dict[str, list[str]]) -> set[str]:
 
 
 def find_retired_tokens(removed: dict[str, list[str]], added: dict[str, list[str]]) -> list[str]:
-    """Return, sorted, every candidate token retired by this diff (>=3 removed, 0 added hits)."""
+    """Return, sorted, every candidate token retired by this diff.
+
+    Retired = the token appears (plain substring) on >=3 removed lines and is
+    not re-added anywhere as the SAME quoted literal. The added side matches
+    exact quoted spans, never raw substrings: an added line that merely
+    contains the token's bytes inside a longer, unrelated string must not
+    silently suppress a genuine retirement (a tree-wide false negative).
+    """
     all_removed = [line for lines in removed.values() for line in lines]
-    all_added = [line for lines in added.values() for line in lines]
-    retired = []
-    for token in _candidate_tokens(removed):
-        removed_count = sum(1 for line in all_removed if token in line)
-        added_count = sum(1 for line in all_added if token in line)
-        if removed_count >= 3 and added_count == 0:
-            retired.append(token)
+    added_spans = {lit for lines in added.values() for line in lines for lit in _quoted_literals(line)}
+    retired = [
+        token
+        for token in _candidate_tokens(removed)
+        if token not in added_spans and sum(1 for line in all_removed if token in line) >= 3
+    ]
     return sorted(retired)
 
 
@@ -237,12 +241,28 @@ def analyze_diff(diff_text: str, allowlist: set[str], cached: bool) -> dict[str,
     return findings
 
 
+def _hit_key(hit: str) -> tuple[str, int]:
+    """Sort key for a ``path:lineno:content`` grep line: numeric by line within a file."""
+    path, _, rest = hit.partition(":")
+    lineno = rest.partition(":")[0]
+    return (path, int(lineno) if lineno.isdigit() else 0)
+
+
 def format_report(findings: dict[str, list[str]]) -> str:
+    """Render findings; tokens with IDENTICAL hit sets merge into one block.
+
+    A retiring diff often donates near-duplicate candidates (a code token and
+    its comment-quoted variant) that grep to the same sites -- print those
+    sites once, under all their token reprs, instead of repeating the block.
+    """
+    by_hits: dict[tuple[str, ...], list[str]] = {}
+    for token, hits in findings.items():
+        by_hits.setdefault(tuple(sorted(hits, key=_hit_key)), []).append(token)
     lines: list[str] = []
-    for token in sorted(findings):
-        hits = sorted(findings[token])
-        lines.append(f"{token!r}: {len(hits)} site(s) remain:")
-        lines.extend(f"  {hit}" for hit in hits)
+    for hits_key, tokens in sorted(by_hits.items(), key=lambda kv: min(kv[1])):
+        reprs = ", ".join(repr(t) for t in sorted(tokens))
+        lines.append(f"{reprs}: {len(hits_key)} site(s) remain:")
+        lines.extend(f"  {hit}" for hit in hits_key)
     lines.append(_REPORT_HINT)
     return "\n".join(lines)
 
