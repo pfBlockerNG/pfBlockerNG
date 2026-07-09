@@ -204,8 +204,8 @@ def test_dismiss_still_flips_legacy_error_log_fail_marker(
 ) -> None:
     """Regression guard: the pre-existing, UNTOUCHED
     ``sed -i 's/FAIL/Fail/g' error.log`` (feeds pfb_failures()'s separate
-    skip-download-threshold mechanism) still fires alongside the new ledger close --
-    Step 1 must not have silently dropped it."""
+    skip-download-threshold mechanism) still fires alongside the new ledger close,
+    on the SAME dismiss POST."""
     vm = smoke_vm
     alias = f"SmokeSedRegress{uuid.uuid4().hex[:8]}"
     line = _seed_error_log_fail_line(vm, alias)
