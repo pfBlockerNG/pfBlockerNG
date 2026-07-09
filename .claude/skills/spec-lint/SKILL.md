@@ -27,8 +27,11 @@ Args: `{{ args }}`
 ## Step 2 — Report
 
 - Clean → say so, one line, and note anything the checker cannot see that you noticed
-  anyway (a vague ACTION PLAN, a missing coverage matrix where the ADR says "all X" — the
-  checker's known blind spots).
+  anyway (a vague ACTION PLAN, a missing coverage matrix where the ADR says "all X", a
+  new transformer — parser/regex/scrub/formatter — whose prompt carries no hostile-input
+  rows — the checker's known blind spots; the transformer check is judgment, not
+  mechanical: those words pepper ordinary ADR prose, so a word-trigger lint would be
+  mostly false positives).
 - Violations → list them file-by-file with the missing block, and fix the prompts (prompt
   text is the ADR-text dev-only class — direct-to-`devel` landing per CLAUDE.md
   "Worktrees") or hand the list back to the author, per what the user asked.

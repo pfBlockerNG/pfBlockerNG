@@ -177,6 +177,48 @@ claims and cite real symbols + `file:line`:
      its fix lands as its **own red→green commit** at the start of the earliest
      phase that depends on it (the ADR-62 / issue #1060 pattern).
 
+**Design-completeness checks (the ADR-60/61 post-merge classes — issues
+1047–1057).** Before writing files, answer each of these **with evidence
+written into the ADR** — an enumeration, a grep output, a stated decision —
+never a platitude; where one is genuinely not applicable, say so explicitly:
+
+- **Transformer × hostile-input completeness.** Enumerate EVERY new/changed
+  parser, regex, scrub, or formatter the ADR introduces (grep your own decision
+  table for them) and give EACH its hostile-input row set. Rows for only some
+  transformers is an incomplete spec (ADR-60 covered its age-cutoff parser but
+  not its NOW scrub, which shipped content-corrupting — #1047).
+- **Data-shape axis.** A contract pinned over call sites ("all X get Y") gets a
+  shape axis enumerated FROM GREP of the actual call sites, never from the
+  contract's mental model (ADR-60's "fixed line-start prefix" assumed every
+  write is a line; 23 sub-line fragment sites existed — #1054).
+- **Key granularity.** A new keyed store (ledger, cache, map) states its key's
+  granularity explicitly AND compares it against the granularity of the events
+  that write it; a key coarser than the event needs an explicit aggregation
+  decision (ADR-61's `item` spanned three granularities and the ambiguity
+  guaranteed a masking bug — #1048).
+- **The third transition.** Any lifecycle the ADR introduces (open/close,
+  set/clear, start/stop) enumerates what happens when the owning code path is
+  SKIPPED — path not taken, feature off, input absent — not just when it
+  succeeds or fails (ADR-61's symmetric open/close stranded state on skipped
+  paths — #1049).
+- **Scenario propagation.** A scenario named anywhere in the ADR is checked
+  against EVERY row of the consumer axis, not just the component it was written
+  for (ADR-60's mixed legacy+ISO upgrade scenario reached the trim but never
+  the format's consumers — #1057).
+- **Cost claims per matrix row.** A performance/cost claim is checked against
+  every row of the coverage matrix; a claim that only holds for some rows is
+  stated per-row (ADR-60's "cheap — one extra pass" was false for its own
+  nolimit row — #1052).
+- **Cross-ADR interaction.** Which other Proposed/in-flight ADRs touch the same
+  files or resources? Grep `.ADRs/` for status + component overlap and add an
+  interaction row for each hit (ADR-61's whole-log read met ADR-60's unbounded
+  nolimit logs the same day; each locally coherent, nobody owned the product —
+  #1052).
+- **Security surface.** Any phase touching a `www/` page or endpoint states
+  that page's auth/CSRF posture in the ADR (one line), so a weakened surface is
+  a decision, not an accident (ADR-61 rewrote a mutating POST handler on a
+  `$nocsrf` page without flagging it — #1050).
+
 Use `AskUserQuestion` only for genuine forks. Periodically reflect the evolving
 ADR back to the user in prose so they can correct course.
 
@@ -286,11 +328,12 @@ Rules:
   verify each claim before acting on it, and flag contradictions loudly in the
   handoff." Planner briefs contain errors in every era; the durable defence is
   an implementer instructed to disprove the brief, not obey it.
-- A phase adding/changing a **parser, regex, or input guard** carries its
-  **hostile-input rows** (punycode/IDN, empty, header/no-header, metacharacters,
-  tabs/consecutive spaces, oversized, wrong encoding) with expected outcomes as
-  REQUIRED test data — the implementer fills in results, it never invents the
-  input classes (CLAUDE.md "THE BRIEF" §4).
+- A phase adding/changing a **parser, regex, scrub, formatter, or input guard**
+  carries its **hostile-input rows** (punycode/IDN, empty, header/no-header,
+  metacharacters, tabs/consecutive spaces, oversized, wrong encoding) with
+  expected outcomes as REQUIRED test data — the implementer fills in results,
+  it never invents the input classes (CLAUDE.md "THE BRIEF" §4; the full
+  transformer list comes from Step 2's design-completeness enumeration).
 - **Every prompt carries a blast-radius line** (Step 2 item 9's safety rails;
   `blast-radius` check in the prompt checker): what production behaviour can
   change when the phase lands alone, with a behaviour-changing prompt naming
