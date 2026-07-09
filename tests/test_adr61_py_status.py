@@ -394,6 +394,49 @@ class TestLoadDataDbLedgerWiring:
         assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
 
 
+class TestLoadZoneAndDataDbsLedgerWiring:
+    """_load_zone_and_data_dbs(): the 7th orphan site (issue #1049) -- a
+    manifest-built init (dnsbl_built=True) skips BOTH CSV loaders, so their
+    parse-stage entries must close instead of staying orphaned."""
+
+    def setup_method(self) -> None:
+        pfb_unbound.zoneDB = defaultdict(list)
+        pfb_unbound.dataDB = defaultdict(list)
+        pfb_unbound.feedGroupIndexDB = defaultdict(list)
+        pfb_unbound.pfb["zoneDB"] = False
+        pfb_unbound.pfb["dataDB"] = False
+        pfb_unbound.pfb["python_blacklist"] = False
+
+    def test_manifest_built_closes_preexisting_zone_and_data_entries(self, tmp_path: Any) -> None:
+        pfb_unbound.pfb["pfb_py_zone"] = str(tmp_path / "zone.txt")
+        pfb_unbound.pfb["pfb_py_data"] = str(tmp_path / "data.txt")
+        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
+        pfb_unbound.pfb_py_status_open("dnsbl", pfb_unbound.pfb["pfb_py_zone"], "parse", "boom")
+        pfb_unbound.pfb_py_status_open("dnsbl", pfb_unbound.pfb["pfb_py_data"], "parse", "boom")
+        # Before-state: both entries are genuinely open first.
+        assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 2
+
+        pfb_unbound._load_zone_and_data_dbs(True, _new_feed_group_db(), 0)
+
+        assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
+
+    def test_manifest_not_built_still_runs_the_csv_loaders(self, tmp_path: Any) -> None:
+        # dnsbl_built=False must still reach the legacy loaders (wiring check --
+        # the manifest-built branch must not swallow the fallback path too).
+        zone_path = tmp_path / "zone.txt"
+        zone_path.write_text("evil.com,evil.com,0,1,FeedA,GroupA\n", encoding="utf-8")
+        data_path = tmp_path / "data.txt"
+        data_path.write_text("bad.com,bad.com,0,1,FeedB,GroupB\n", encoding="utf-8")
+        pfb_unbound.pfb["pfb_py_zone"] = str(zone_path)
+        pfb_unbound.pfb["pfb_py_data"] = str(data_path)
+        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
+
+        pfb_unbound._load_zone_and_data_dbs(False, _new_feed_group_db(), 0)
+
+        assert pfb_unbound.zoneDB["evil.com"]["log"] == "1"
+        assert pfb_unbound.dataDB["bad.com"]["log"] == "1"
+
+
 class TestLoadWhitelistDbLedgerWiring:
     """_load_whitelist_db(): fail-before/pass-after."""
 
@@ -594,6 +637,70 @@ class TestLoadHstsDbLedgerWiring:
         assert not os.path.isfile(pfb_unbound.pfb["pfb_py_status"])
 
 
+class TestLoadWhitelistAndHstsDbsLedgerWiring:
+    """_load_whitelist_and_hsts_dbs(): issue #1049's other two skip axes --
+    (a) manifest-built skips only the whitelist loader; (b) python_blacklist OFF
+    skips both loaders. Either skip must close the owned entry, not orphan it."""
+
+    def setup_method(self) -> None:
+        pfb_unbound.whiteDB = defaultdict(str)
+        pfb_unbound.hstsDB = defaultdict(str)
+        pfb_unbound.pfb["whiteDB"] = False
+        pfb_unbound.pfb["hstsDB"] = False
+        pfb_unbound.pfb["python_hsts"] = True
+
+    def test_manifest_built_closes_preexisting_whitelist_entry_only(self, tmp_path: Any) -> None:
+        wl_path = tmp_path / "whitelist.txt"
+        hsts_path = tmp_path / "hsts.txt"
+        hsts_path.write_text("bad.example\n", encoding="utf-8")
+        pfb_unbound.pfb["pfb_py_whitelist"] = str(wl_path)
+        pfb_unbound.pfb["pfb_py_hsts"] = str(hsts_path)
+        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
+        pfb_unbound.pfb["python_blacklist"] = True
+        pfb_unbound.pfb_py_status_open("dnsbl", str(wl_path), "parse", "boom")
+        # Before-state: the whitelist entry is genuinely open first.
+        assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 1
+
+        pfb_unbound._load_whitelist_and_hsts_dbs(True)
+
+        assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
+        # HSTS still ran normally -- only the manifest-shadowed whitelist load was skipped.
+        assert "bad.example" in pfb_unbound.hstsDB
+
+    def test_blacklist_off_closes_preexisting_whitelist_and_hsts_entries(self, tmp_path: Any) -> None:
+        wl_path = tmp_path / "whitelist.txt"
+        hsts_path = tmp_path / "hsts.txt"
+        pfb_unbound.pfb["pfb_py_whitelist"] = str(wl_path)
+        pfb_unbound.pfb["pfb_py_hsts"] = str(hsts_path)
+        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
+        pfb_unbound.pfb["python_blacklist"] = False
+        pfb_unbound.pfb_py_status_open("dnsbl", str(wl_path), "parse", "boom")
+        pfb_unbound.pfb_py_status_open("dnsbl", str(hsts_path), "parse", "boom")
+        # Before-state: both entries are genuinely open first.
+        assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 2
+
+        pfb_unbound._load_whitelist_and_hsts_dbs(False)
+
+        assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
+
+    def test_blacklist_on_manifest_not_built_still_runs_both_loaders(self, tmp_path: Any) -> None:
+        # dnsbl_built=False + blacklist ON must still reach both legacy loaders
+        # (wiring check -- the skip branches must not swallow the normal path).
+        wl_path = tmp_path / "whitelist.txt"
+        wl_path.write_text("allow.example,0\n", encoding="utf-8")
+        hsts_path = tmp_path / "hsts.txt"
+        hsts_path.write_text("bad.example\n", encoding="utf-8")
+        pfb_unbound.pfb["pfb_py_whitelist"] = str(wl_path)
+        pfb_unbound.pfb["pfb_py_hsts"] = str(hsts_path)
+        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
+        pfb_unbound.pfb["python_blacklist"] = True
+
+        pfb_unbound._load_whitelist_and_hsts_dbs(False)
+
+        assert pfb_unbound.whiteDB["allow.example"]["important"] is True
+        assert "bad.example" in pfb_unbound.hstsDB
+
+
 class TestLoadSafeSearchDbLedgerWiring:
     """_load_safesearch_db(): same fail-before/pass-after shape as the 4 mandatory
     sites, via a REAL open() OSError (not a monkeypatched csv.reader)."""
@@ -768,6 +875,19 @@ class TestDnsblBuildFromManifestLedgerWiring:
         assert pfb_unbound.dnsbl_build_from_manifest(manifest_path) is None
         assert not os.path.isfile(pfb_unbound.pfb["pfb_py_status"])
 
+    def test_missing_manifest_closes_a_preexisting_orphaned_entry(self, tmp_path: Any) -> None:
+        # issue #1049 site 7: an earlier corrupt-manifest run left this key open;
+        # the manifest is now gone -- the absent-manifest return must close it.
+        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
+        manifest_path = str(tmp_path / "nope.json")
+        pfb_unbound.pfb_py_status_open("dnsbl", manifest_path, "parse", "boom")
+        # Before-state: the entry is genuinely open first.
+        assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 1
+
+        assert pfb_unbound.dnsbl_build_from_manifest(manifest_path) is None
+
+        assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
+
     def test_corrupt_json_opens_entry_and_keeps_freetext_log(self, tmp_path: Any, capsys: Any) -> None:
         manifest_path = tmp_path / "pfb_py_sources.json"
         manifest_path.write_text("{ this is not json", encoding="utf-8")
@@ -819,6 +939,51 @@ class TestDnsblBuildFromManifestLedgerWiring:
 
         assert result is not None
         assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
+
+
+class TestCloseDnsblLoaderEntriesWhenDisabled:
+    """_close_dnsbl_loader_entries_when_disabled(): issue #1049's 3rd skip axis --
+    python_enable OFF skips every DNSBL loader inside init_standard's guarded
+    block (reachable: python_enable is read from the ini and branched on within
+    the SAME init_standard call, so a prior True->False transition strands these)."""
+
+    def test_closes_every_preexisting_owned_entry(self, tmp_path: Any) -> None:
+        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
+        pfb_unbound.pfb["pfb_py_sources"] = str(tmp_path / "sources.json")
+        pfb_unbound.pfb["pfb_py_zone"] = str(tmp_path / "zone.txt")
+        pfb_unbound.pfb["pfb_py_data"] = str(tmp_path / "data.txt")
+        pfb_unbound.pfb["pfb_py_whitelist"] = str(tmp_path / "whitelist.txt")
+        pfb_unbound.pfb["pfb_py_hsts"] = str(tmp_path / "hsts.txt")
+        pfb_unbound.pfb["pfb_py_ss"] = str(tmp_path / "ss.txt")
+        owned_items = (
+            pfb_unbound.pfb["pfb_py_sources"],
+            pfb_unbound.pfb["pfb_py_zone"],
+            pfb_unbound.pfb["pfb_py_data"],
+            pfb_unbound.pfb["pfb_py_whitelist"],
+            pfb_unbound.pfb["pfb_py_hsts"],
+            pfb_unbound.pfb["pfb_py_ss"],
+        )
+        for item in owned_items:
+            pfb_unbound.pfb_py_status_open("dnsbl", item, "parse", "boom")
+        # Before-state: all 6 entries are genuinely open first.
+        assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 6
+
+        pfb_unbound._close_dnsbl_loader_entries_when_disabled()
+
+        assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
+
+    def test_no_preexisting_entries_is_a_safe_no_op(self, tmp_path: Any) -> None:
+        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
+        pfb_unbound.pfb["pfb_py_sources"] = str(tmp_path / "sources.json")
+        pfb_unbound.pfb["pfb_py_zone"] = str(tmp_path / "zone.txt")
+        pfb_unbound.pfb["pfb_py_data"] = str(tmp_path / "data.txt")
+        pfb_unbound.pfb["pfb_py_whitelist"] = str(tmp_path / "whitelist.txt")
+        pfb_unbound.pfb["pfb_py_hsts"] = str(tmp_path / "hsts.txt")
+        pfb_unbound.pfb["pfb_py_ss"] = str(tmp_path / "ss.txt")
+
+        pfb_unbound._close_dnsbl_loader_entries_when_disabled()
+
+        assert not os.path.isfile(pfb_unbound.pfb["pfb_py_status"])
 
 
 class TestPfbPyStatusRegisteredPath:

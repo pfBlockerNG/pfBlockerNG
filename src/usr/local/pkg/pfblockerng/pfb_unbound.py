@@ -1036,6 +1036,49 @@ def _load_hsts_db() -> None:
         pfb_py_status_open("dnsbl", pfb["pfb_py_hsts"], "parse", "Failed to load: {}: {}".format(pfb["pfb_py_hsts"], e))
 
 
+def _load_zone_and_data_dbs(dnsbl_built: bool, feed_group_db: defaultdict[str, int], feed_group_index: int) -> int:
+    """Run the legacy zone/data CSV loaders when the ADR-06 manifest build did NOT
+    already supply them; otherwise close the parse-stage entries they would own --
+    a manifest-built init means neither loader ran this pass (issue #1049)."""
+    if not dnsbl_built:
+        feed_group_index = _load_zone_db(feed_group_db, feed_group_index)
+        feed_group_index = _load_data_db(feed_group_db, feed_group_index)
+    else:
+        pfb_py_status_close("dnsbl", pfb["pfb_py_zone"], "parse")
+        pfb_py_status_close("dnsbl", pfb["pfb_py_data"], "parse")
+    return feed_group_index
+
+
+def _load_whitelist_and_hsts_dbs(dnsbl_built: bool) -> None:
+    """Run whitelist/HSTS loading when the blacklist gate is on -- whitelist is
+    skipped when the manifest already built it (ADR-06); otherwise (blacklist
+    OFF) close both parse-stage entries, since neither loader runs this pass
+    (issue #1049)."""
+    if pfb["python_blacklist"]:
+        if not dnsbl_built:
+            _load_whitelist_db()
+        else:
+            pfb_py_status_close("dnsbl", pfb["pfb_py_whitelist"], "parse")
+        _load_hsts_db()
+    else:
+        pfb_py_status_close("dnsbl", pfb["pfb_py_whitelist"], "parse")
+        pfb_py_status_close("dnsbl", pfb["pfb_py_hsts"], "parse")
+
+
+def _close_dnsbl_loader_entries_when_disabled() -> None:
+    """python_enable OFF skips every DNSBL loader this pass -- close every
+    parse-stage entry a prior init could have left open (issue #1049)."""
+    for item in (
+        pfb["pfb_py_sources"],
+        pfb["pfb_py_zone"],
+        pfb["pfb_py_data"],
+        pfb["pfb_py_whitelist"],
+        pfb["pfb_py_hsts"],
+        pfb["pfb_py_ss"],
+    ):
+        pfb_py_status_close("dnsbl", item, "parse")
+
+
 def _load_ini_config() -> ConfigParser | None:
     """Parse ``pfb["pfb_unbound.ini"]`` -- extracted out of ``init_standard`` (same
     extraction rationale as ``_load_zone_db``) so the load -- and its failure
@@ -1634,25 +1677,14 @@ def init_standard(id: int, env: module_env) -> bool:
             # While reading 'data|zone' CSV files: Replace 'Feed/Group' pairs with an index value (Memory performance)
             feedGroup_index = 0
 
-            # Zone dicts
-            if not dnsbl_built:
-                feedGroup_index = _load_zone_db(feedGroupDB, feedGroup_index)
-
-            # Data dicts
-            if not dnsbl_built:
-                feedGroup_index = _load_data_db(feedGroupDB, feedGroup_index)
+            # Zone/Data dicts -- or close their entries when the manifest built them.
+            feedGroup_index = _load_zone_and_data_dbs(dnsbl_built, feedGroupDB, feedGroup_index)
 
             # Clear temporary Feed/Group/Index list
             feedGroupDB.clear()
 
-            if pfb["python_blacklist"]:
-                # Collect user-defined Whitelist (legacy CSV path -- the build()
-                # already loaded whiteDB from the manifest config when dnsbl_built).
-                if not dnsbl_built:
-                    _load_whitelist_db()
-
-                # HSTS dicts
-                _load_hsts_db()
+            # Whitelist/HSTS dicts -- or close their entries when the blacklist gate is off.
+            _load_whitelist_and_hsts_dbs(dnsbl_built)
 
             # ADR-07: emit the ADMITTED regex total for the DNSBL_Regex UI alias
             # (inc:8329). regexDB now holds USER regex (REGEX-ini) + FEED block regex
@@ -1690,6 +1722,10 @@ def init_standard(id: int, env: module_env) -> bool:
                 except Exception as e:
                     sys.stderr.write("[pfBlockerNG]: Failed to open MaxMind DB: {}".format(e))
                     pass
+        else:
+            # issue #1049: python_enable OFF skips every DNSBL loader above --
+            # close their parse-stage entries instead of stranding them open.
+            _close_dnsbl_loader_entries_when_disabled()
     else:
         log_info("[pfBlockerNG]: Failed to load ini configuration. Ini file missing.")
 
@@ -5248,6 +5284,9 @@ def dnsbl_build_from_manifest(manifest_path: str) -> BuildResult | None:
     CSV load -- shell/PHP still produce those files for that fallback).
     """
     if not os.path.isfile(manifest_path):
+        # issue #1049: close an orphaned prior parse-stage entry -- mirrors the
+        # 6 CSV-loader sites' absent-file close (af3da0ec).
+        pfb_py_status_close("dnsbl", manifest_path, "parse")
         return None
 
     try:
