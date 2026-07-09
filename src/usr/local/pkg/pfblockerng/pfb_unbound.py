@@ -2857,12 +2857,7 @@ def _log_upstream_block(q_name: str, q_ip: str, result: UpstreamBlock, q_type: s
 
 
 def make_timestamp() -> str:
-    for _ in range(2):
-        try:
-            return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        except TypeError:
-            continue
-    return ""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _log_entry_direct(line: str, log: str) -> None:
