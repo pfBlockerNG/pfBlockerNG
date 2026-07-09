@@ -7815,8 +7815,8 @@ function tld_analysis() {
 			}
 
 			// ADR-07/ADR-21: plain CSV rows (',domain,,log,feed,group') always start
-			// with ','; ABP raw lines (||x^, @@||x^, /re/, '0.0.0.0 h') never do --
-			// skip by prefix, marker-independent (issue #1060; cheap, hot loop).
+			// with ','; the known ABP raw shapes (||x^, @@||x^, /re/, '0.0.0.0 h')
+			// don't -- skip those by prefix (issue #1060; cheap, hot loop).
 			if (strncmp($line, ',', 1) !== 0) {
 				continue;
 			}
@@ -7840,6 +7840,12 @@ function tld_analysis() {
 
 			// DNSBL python blocking mode
 			$eparts = explode(',', $line, 3);
+
+			// A well-formed row has all three parts; a degenerate comma-first
+			// line (e.g. bare ',') must not become a malformed output row.
+			if (!isset($eparts[2]) || $eparts[1] === '') {
+				continue;
+			}
 			$domain = $eparts[1];
 			$dparts = explode('.', $domain);
 			$dcnt   = count($dparts);
