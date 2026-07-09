@@ -3151,6 +3151,46 @@ function pfb_filterlog_timestamp(array $f, string $log_type, int $now): string {
 	return ($ts === FALSE) ? pfb_log_iso_timestamp() : date('Y-m-d H:i:s', $ts);
 }
 
+// issue #1054: TRUE when $path's NEXT pfb_logger() write starts a new physical
+// line -- the file is absent/empty, or its last byte is "\n". Called once per
+// path per process; pfb_logger_format_for_target()'s static cache takes over
+// after that from each write's own outcome.
+function pfb_logger_target_starts_at_bol(string $path): bool {
+	if (!file_exists($path) || @filesize($path) === 0) {
+		return TRUE;
+	}
+	$fh = @fopen($path, 'rb');
+	if ($fh === FALSE) {
+		return TRUE;
+	}
+	fseek($fh, -1, SEEK_END);
+	$last = fread($fh, 1);
+	fclose($fh);
+	return $last === "\n";
+}
+
+// issue #1054 (ADR-60's stamped-unit contract: the physical LINE, not the
+// write): decide + apply the ISO stamp for ONE target file, independently of
+// every other sink pfb_logger() writes -- a sub-line progress fragment (e.g.
+// pfb_logger('.', 1)) must not get a mid-line stamp just because a DIFFERENT
+// target happens to be at BOL. $raw is the caller's unstamped message; a
+// leading run of "\n" always forces BOL for what follows (it just ended the
+// previous line), matching the existing leading-newline convention.
+function pfb_logger_format_for_target(string $path, string $raw, int $lead, string $now): string {
+	static $bol = array();
+
+	if (!array_key_exists($path, $bol)) {
+		$bol[$path] = pfb_logger_target_starts_at_bol($path);
+	}
+
+	$formatted = ($lead > 0 || $bol[$path])
+		? substr($raw, 0, $lead) . "{$now} " . substr($raw, $lead)
+		: $raw;
+
+	$bol[$path] = (substr($formatted, -1) === "\n");
+	return $formatted;
+}
+
 function pfb_logger($log, $logtype) {
 	global $g, $pfb;
 
@@ -3160,8 +3200,6 @@ function pfb_logger($log, $logtype) {
 	// (among other callers) uses a leading "\n" as a separator from the PREVIOUS
 	// write, not this line's content.
 	$lead = strspn($log, "\n");
-	$log = substr($log, 0, $lead) . "{$now} " . substr($log, $lead);
-	$elog = $log;
 
 	// Mirror the main-log lines into the per-run log while a run is active (set by
 	// sync_package_pfblockerng). The live Update viewer tails this file; the cumulative log is
@@ -3169,46 +3207,54 @@ function pfb_logger($log, $logtype) {
 	// call from a normal page never pollutes it.
 	$runlog = (!empty($pfb['runlog']) && !empty($pfb['runlog_active'])) ? $pfb['runlog'] : '';
 
+	// issue #1054: $log_out mirrors whatever was decided for $pfb['log'] (cases 1/2)
+	// to the STDOUT copy below -- STDOUT isn't a probed target of its own, it only
+	// ever echoes the SAME bytes already committed to the main log file.
+	$log_out = $log;
+
 	switch ($logtype) {
 
 		// Print to pfBlockerNG log
 		case 1:
-			@file_put_contents("{$pfb['log']}", "{$log}", FILE_APPEND);
+			$log_out = pfb_logger_format_for_target($pfb['log'], $log, $lead, $now);
+			@file_put_contents("{$pfb['log']}", "{$log_out}", FILE_APPEND);
 			if ($runlog !== '') {
-				@file_put_contents($runlog, "{$log}", FILE_APPEND);
+				@file_put_contents($runlog, pfb_logger_format_for_target($runlog, $log, $lead, $now), FILE_APPEND);
 			}
 			break;
 
 		// Print to pfBlockerNG log and Error log
 		case 2:
-			@file_put_contents("{$pfb['log']}", "{$log}", FILE_APPEND);
-			@file_put_contents("{$pfb['errlog']}", "{$elog}", FILE_APPEND);
+			$log_out = pfb_logger_format_for_target($pfb['log'], $log, $lead, $now);
+			@file_put_contents("{$pfb['log']}", "{$log_out}", FILE_APPEND);
+			@file_put_contents("{$pfb['errlog']}", pfb_logger_format_for_target($pfb['errlog'], $log, $lead, $now), FILE_APPEND);
 			if ($runlog !== '') {
-				@file_put_contents($runlog, "{$log}", FILE_APPEND);
+				@file_put_contents($runlog, pfb_logger_format_for_target($runlog, $log, $lead, $now), FILE_APPEND);
 			}
 			break;
 
 		// Print to Extras log
 		case 3:
-			@file_put_contents("{$pfb['extraslog']}", "{$log}", FILE_APPEND);
+			@file_put_contents("{$pfb['extraslog']}", pfb_logger_format_for_target($pfb['extraslog'], $log, $lead, $now), FILE_APPEND);
 			break;
 
 		// Print to screen and Extras log
 		case 4:
+			$extras_out = pfb_logger_format_for_target($pfb['extraslog'], $log, $lead, $now);
 			if (!$g['pfblockerng_install'] && !$pfb['extras_update']) {
-				print "{$log}";
+				print "{$extras_out}";
 			}
-			@file_put_contents("{$pfb['extraslog']}", "{$log}", FILE_APPEND);
+			@file_put_contents("{$pfb['extraslog']}", "{$extras_out}", FILE_APPEND);
 			break;
 
 		// Print to debugger
 		case 5:
-			@file_put_contents("/tmp/pfb_debug", "{$elog}", FILE_APPEND);
+			@file_put_contents("/tmp/pfb_debug", pfb_logger_format_for_target('/tmp/pfb_debug', $log, $lead, $now), FILE_APPEND);
 			break;
 
 		// Print to Error log
 		case 6:
-			@file_put_contents("{$pfb['errlog']}", "{$elog}", FILE_APPEND);
+			@file_put_contents("{$pfb['errlog']}", pfb_logger_format_for_target($pfb['errlog'], $log, $lead, $now), FILE_APPEND);
 			break;
 		default:
 			break;
@@ -3228,7 +3274,7 @@ function pfb_logger($log, $logtype) {
 	// gap with no separate keepalive, since that wait already logs via case 1. The redirected update
 	// hooks and the detached rc.d daemons are untouched -- visibility only, not the process-safety.
 	if (($logtype == 1 || $logtype == 2) && pfb_run_streams_to_stdout()) {
-		print "{$log}";
+		print "{$log_out}";
 	}
 }
 
