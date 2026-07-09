@@ -943,6 +943,7 @@ final class CfgGatewayTest extends TestCase
 			'log_max_ip_blocklog',
 			'log_max_ip_permitlog',
 			'log_max_ip_matchlog',
+			'log_max_ip_parse_err',
 			'log_max_dnslog',
 			'log_max_dnsbl_parse_err',
 			'log_max_dnsreplylog',
@@ -954,6 +955,7 @@ final class CfgGatewayTest extends TestCase
 			'log_max_days_ip_blocklog',
 			'log_max_days_ip_permitlog',
 			'log_max_days_ip_matchlog',
+			'log_max_days_ip_parse_err',
 			'log_max_days_dnslog',
 			'log_max_days_dnsbl_parse_err',
 			'log_max_days_dnsreplylog',
@@ -1472,20 +1474,20 @@ final class CfgGatewayTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	/**
-	 * All 10 log_max_days_<type> fields are registered.
+	 * All 11 log_max_days_<type> fields are registered.
 	 *
 	 * Scenario:
 	 *   Background: ADR-60 adds one log_max_days_<type> key per log type.
 	 *     Given pfb_cfg_registry().
 	 *     When checking for each expected key.
-	 *     Then all 10 are present.
+	 *     Then all 11 are present.
 	 */
 	public function testLogMaxDaysFieldsAreRegistered(): void
 	{
 		$registry  = pfb_cfg_registry();
 		$log_types = [
 			'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
-			'ip_matchlog', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
+			'ip_matchlog', 'ip_parse_err', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
 		];
 
 		foreach ($log_types as $type) {
@@ -1497,7 +1499,7 @@ final class CfgGatewayTest extends TestCase
 	}
 
 	/**
-	 * Data provider — all 10 log_max_days_<type> keys × canonical numeric tokens.
+	 * Data provider — all 11 log_max_days_<type> keys × canonical numeric tokens.
 	 *
 	 * @return array<string, array{string, string}>
 	 */
@@ -1505,7 +1507,7 @@ final class CfgGatewayTest extends TestCase
 	{
 		$log_types = [
 			'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
-			'ip_matchlog', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
+			'ip_matchlog', 'ip_parse_err', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
 		];
 		$vocab  = ['0', '30', '365'];
 		$cases  = [];
@@ -1570,7 +1572,7 @@ final class CfgGatewayTest extends TestCase
 	{
 		$log_types = [
 			'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
-			'ip_matchlog', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
+			'ip_matchlog', 'ip_parse_err', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
 		];
 
 		foreach ($log_types as $type) {
@@ -1588,6 +1590,29 @@ final class CfgGatewayTest extends TestCase
 				"{$key} absent must return '0' (registered default)"
 			);
 		}
+	}
+
+	/**
+	 * issue #1004: log_max_ip_parse_err (line-count cap) is registered with the
+	 * same '20000' default every other log_max_<type> field uses.
+	 *
+	 * Scenario:
+	 *   Background: key entirely absent from config.xml.
+	 *     Given no value seeded.
+	 *     When PfbConfig::read('log_max_ip_parse_err').
+	 *     Then '20000' is returned (registered default; matches every sibling log_max_<type>).
+	 */
+	public function testLogMaxIpParseErrAbsentKeyReturnsDefault20000(): void
+	{
+		$path = 'installedpackages/pfblockerng/config/0/log_max_ip_parse_err';
+
+		// Before: absent.
+		$this->assertNull(config_get_path($path), 'before: log_max_ip_parse_err must be absent');
+
+		// When/Then: default '20000' returned.
+		$this->assertSame('20000', PfbConfig::read('log_max_ip_parse_err'),
+			'log_max_ip_parse_err absent must return \'20000\' (registered default)'
+		);
 	}
 
 	// -----------------------------------------------------------------------

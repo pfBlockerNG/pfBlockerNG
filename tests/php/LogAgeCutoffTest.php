@@ -26,7 +26,7 @@ final class LogAgeCutoffTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Every one of the 10 log types maps to its verified field position:
+	 * Every one of the 11 log types maps to its verified field position:
 	 * 'log'/'errlog'/'extraslog' are a leading line-prefix; 'dnslog'/
 	 * 'dnsreplylog'/'unilog' carry the timestamp at CSV field 1 (field 0 is a
 	 * type label prepended by both writers); the rest are CSV field 0.
@@ -40,6 +40,7 @@ final class LogAgeCutoffTest extends TestCase
 			'ip_blocklog'     => 'field0',
 			'ip_permitlog'    => 'field0',
 			'ip_matchlog'     => 'field0',
+			'ip_parse_err'    => 'field0',
 			'dnsbl_parse_err' => 'field0',
 			'dnslog'          => 'field1',
 			'dnsreplylog'     => 'field1',

@@ -89,6 +89,7 @@ $pfb['errlog']		= "{$pfb['logdir']}/error.log";
 $pfb['pyerrlog']	= "{$pfb['logdir']}/py_error.log";
 $pfb['extraslog']	= "{$pfb['logdir']}/extras.log";
 $pfb['dnsbl_parse_err']	= "{$pfb['logdir']}/dnsbl_parsed_error.log";
+$pfb['ip_parse_err']	= "{$pfb['logdir']}/ip_parsed_error.log";
 
 $pfb['master']		= "{$pfb['dbdir']}/masterfile";
 $pfb['supptxt']		= "{$pfb['dbdir']}/pfbsuppression.txt";
@@ -2827,7 +2828,7 @@ function pfb_log_age_field_mode(string $logtype): string {
 		case 'dnsreplylog':
 		case 'unilog':
 			return 'field1';
-		default: // ip_blocklog, ip_permitlog, ip_matchlog, dnsbl_parse_err
+		default: // ip_blocklog, ip_permitlog, ip_matchlog, ip_parse_err, dnsbl_parse_err
 			return 'field0';
 	}
 }
@@ -2964,7 +2965,7 @@ function pfb_log_mgmt() {
 	$chroot_folder = '/var/unbound';
 
 	foreach (array(	'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog', 'ip_matchlog',
-			'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog') as $logtype) {
+			'ip_parse_err', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog') as $logtype) {
 
 		// Max lines in Log file
 		$logmax = pfb_log_max_lines($pfb['config']['log_max_' . $logtype] ?? '');
@@ -4474,6 +4475,15 @@ function pfb_verb_deprecation_warning($verb) {
 		return '';
 	}
 	return "DEPRECATED: pfblockerng verb '{$v}' — use explicit request ({$map[$v]}); removal scheduled";
+}
+
+
+// issue #1004: dedicated IP-parse-error sink; CSV adds a line-number column vs pfb_parsed_fail()
+function pfb_ip_parsed_fail($header, $line, $oline, $lineno, $logfile) {
+	$line = $line !== '' ? $line : 'null';
+	$now  = pfb_log_iso_timestamp();
+	$log  = "{$now},{$header},{$line},{$oline},{$lineno}";
+	@file_put_contents("{$logfile}", "{$log}", FILE_APPEND);
 }
 
 

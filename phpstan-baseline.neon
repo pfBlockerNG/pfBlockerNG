@@ -884,6 +884,12 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_general.php
 
 		-
+			message: '#^Variable \$options_log_max_ip_parse_err might not be defined\.$#'
+			identifier: variable.undefined
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_general.php
+
+		-
 			message: '#^Variable \$options_log_max_ip_permitlog might not be defined\.$#'
 			identifier: variable.undefined
 			count: 1
