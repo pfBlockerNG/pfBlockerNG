@@ -71,6 +71,8 @@ ignore = [
 "tests/smoke/test_pkg_op_teardown.py"           = ["F811"]
 "tests/smoke/test_lifecycle_hook_visibility.py" = ["F811"]
 "tests/smoke/test_hook_stream_visibility.py"    = ["F811"]
+# issue #999: imports the `clean_ledger` fixture from test_render_widget_ledger.py
+"tests/smoke/ui/test_widget_clear_failed.py"    = ["F811"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["pfb_unbound"]
