@@ -184,28 +184,30 @@ def test_log_settings_grouped_layout(
 ) -> None:
     """Log Settings section renders with aligned per-category grouped rows in the live DOM.
 
-    Scenario: Log Settings regrouped into aligned per-log rows with category headers (issue #489).
+    Scenario: Log Settings grouped into aligned per-log rows with category headers (issue #489),
+      each row exposing the two per-log caps -- Max lines and Max days. (The Max-days column
+      replaced the earlier scheduled-reset controls, so the columns are no longer the retired
+      "Schedule"/"Keep lines" pair -- ADR-60.)
       Background: pfBlockerNG deployed; General page authenticated and settled.
 
     Given the General page is loaded in the authenticated browser,
 
-    When the DOM is inspected for the new grouped-column structure,
+    When the DOM is inspected for the grouped-column structure,
 
-    Then the three column-header texts are visible on the page ("Max lines", "Schedule",
-      "Keep lines") — emitted by the per-category header ``Form_StaticText`` children;
+    Then the two column-header texts are visible on the page ("Max lines", "Max days") --
+      emitted by the per-category header ``Form_StaticText`` children;
     And the ``log_max_log`` control is present and its enclosing ``.form-group`` left label
-      (``col-sm-2.control-label``) shows the log name "pfBlockerNG" — proving per-log rows
-      carry the individual log name as the left label.
-
-    Plus the issue #489 follow-up polish (this commit), each a before/after discriminator:
-    And each category header row is a SHADED divider — its ``.form-group`` carries the
-      ``pfb-loghdr`` class (absent in the pre-polish layout);
-    And the IP rows are renamed to bare "Block"/"Permit"/"Match": the ``log_max_ip_blocklog``
-      row's left label reads "Block", NOT the old "IP Block" (so it fails on the old layout);
-    And the DNS-Reply log is now folded into the merged "DNS" category as the "Reply" row:
-      the ``log_max_dnsreplylog`` row's left label reads "Reply", NOT the old "DNS Reply";
-    And every control carries a per-control ``label.form-label`` (the mobile column label) —
-      the pre-polish layout emitted none.
+      (``col-sm-2.control-label``) shows the log name "pfBlockerNG" -- proving per-log rows
+      carry the individual log name as the left label;
+    And each category header row is a SHADED divider -- its ``.form-group`` carries the
+      ``pfb-loghdr`` class -- and there are EXACTLY three (General / IP / DNS);
+    And the IP rows read bare "Block"/"Permit"/"Match": the ``log_max_ip_blocklog`` row's left
+      label reads "Block", NOT "IP Block";
+    And the DNS-Reply log sits in the merged "DNS" category as the "Reply" row: the
+      ``log_max_dnsreplylog`` row's left label reads "Reply", NOT "DNS Reply";
+    And every log control carries a per-control ``label.form-label`` (the mobile column label):
+      one per Max-lines select and one per Max-days input, so the label count equals the
+      control count.
 
     A full-page screenshot is saved as a human-review artifact (not an asserted baseline).
     """
@@ -213,10 +215,10 @@ def test_log_settings_grouped_layout(
     _open(page, webui, GENERAL_PAGE)
     _shot(page, screenshot_dir, "log_settings_grouped_layout")
 
-    # Column header texts visible (emitted by the header Form_Group's StaticText children).
-    # exact=True so the "Schedule" header is not shadowed by the hidden "Schedules" nav
-    # link (/firewall_schedule.php), whose substring match would pick a hidden element.
-    for col_header in ("Max lines", "Schedule", "Keep lines"):
+    # Column header texts visible (emitted by each category header Form_Group's StaticText
+    # children). exact=True + .first targets a header cell rather than the longer intro
+    # sentence ("Max lines -- rolling cap ...") that also contains the word as a substring.
+    for col_header in ("Max lines", "Max days"):
         expect(page.get_by_text(col_header, exact=True).first).to_be_visible(timeout=JS_TIMEOUT_MS)
 
     # The log_max_log control's enclosing form-group carries the per-log label "pfBlockerNG".
@@ -237,10 +239,11 @@ def test_log_settings_grouped_layout(
     expect(_row_label("log_max_ip_blocklog")).to_have_text("Block", timeout=JS_TIMEOUT_MS)
     expect(_row_label("log_max_dnsreplylog")).to_have_text("Reply", timeout=JS_TIMEOUT_MS)
 
-    # EVERY log control carries a per-control mobile label (Form_Input label-start): three per
-    # log row (Max lines / Schedule / Keep lines). Derive the row count from the page (one
-    # log_max_* select per row) so the assertion tracks the real log list, then assert the full
-    # label count rather than just one -- proving every control is labelled, not merely some.
-    log_rows = page.locator('select[name^="log_max_"]').count()
-    assert log_rows >= 1, f"expected at least one log row (select[name^=log_max_]), found {log_rows}"
-    expect(page.locator("label.form-label")).to_have_count(log_rows * 3, timeout=JS_TIMEOUT_MS)
+    # EVERY log control carries a per-control mobile label (label-start, class form-label): two
+    # per log row -- a Max-lines select and a Max-days input. Count the actual controls on the
+    # page (the only label-start sources on the General page) and assert exactly that many
+    # form-labels, so the check tracks the real log list and proves every control is labelled,
+    # not merely some.
+    log_controls = page.locator('select[name^="log_max_"], input[name^="log_max_days_"]').count()
+    assert log_controls >= 2, f"expected Log Settings controls (log_max_* select/input), found {log_controls}"
+    expect(page.locator("label.form-label")).to_have_count(log_controls, timeout=JS_TIMEOUT_MS)
