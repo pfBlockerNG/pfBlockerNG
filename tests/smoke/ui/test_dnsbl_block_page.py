@@ -82,7 +82,7 @@ def test_dnsbl_block_page_shows_real_correlation_detail(deployed_vm: helpers.Smo
         # whole budget on one attempt.
         curl_argv = (
             helpers.GUEST_CURL,
-            "-s",
+            "-sS",  # silent but keep stderr -- a bare -s leaves stderr empty on failure
             "--connect-timeout",
             "3",
             "--max-time",
