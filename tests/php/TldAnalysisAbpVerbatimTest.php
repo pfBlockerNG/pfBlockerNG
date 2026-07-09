@@ -100,12 +100,13 @@ final class TldAnalysisAbpVerbatimTest extends TestCase
 	 * Scenario: verbatim ABP lines in a plain feed, no ABP feed configured.
 	 *
 	 * Given:  pfb_dnsbl.raw holding one plain CSV row plus verbatim ||x^ and
-	 *         @@||x^ lines — one with >=5 comma-separated ABP options — and
-	 *         ZERO .abp markers in dnsdir
+	 *         @@||x^ lines — one with >=5 comma-separated ABP options, one a
+	 *         degenerate bare ',' line — and ZERO .abp markers in dnsdir
 	 * When:   tld_analysis() runs
-	 * Then:   the CSV row lands in the zone output and every verbatim line is
-	 *         skipped — no malformed row in the data output, no numeric
-	 *         undefined-array-key warning from the CSV explode
+	 * Then:   the CSV row lands in the zone output and every other line is
+	 *         skipped — no malformed row in the data output, and no numeric
+	 *         undefined-array-key warning from the CSV explode (the #1060
+	 *         warning class; the bare ',' row is the fixture that reds it)
 	 */
 	public function testVerbatimAbpLinesSkippedWithZeroAbpMarkers(): void
 	{
@@ -117,6 +118,7 @@ final class TldAnalysisAbpVerbatimTest extends TestCase
 			. "||evil-verbatim.example^\n"
 			. "@@||allow-verbatim.example^\n"
 			. "||opt-verbatim.example^\$script,third-party,domain=x.com,match-case,important,other\n"
+			. ",\n"
 		);
 
 		$warnings = $this->runTldAnalysis();
