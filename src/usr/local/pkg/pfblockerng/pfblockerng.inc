@@ -4498,6 +4498,14 @@ function pfb_ip_parsed_fail($header, $line, $oline, $logfile, $lineno) {
 }
 
 
+// issue #993: per-feed parse-error summary wrapper extracted for unit coverage.
+function pfb_ip_parse_fail_warn($parse_fail, $header) {
+	if ($parse_fail > 0) {
+		pfb_logger("\n[!] Parse Errors [ {$header} ]: {$parse_fail}\n", 2);
+	}
+}
+
+
 // Record failed IP/DNSBL Feed parse errors
 // issue #1004: trailing optional $lineno keeps existing 4-arg callers call-safe.
 function pfb_parsed_fail($header, $line='', $oline, $logfile, $lineno = '') {
@@ -4519,6 +4527,14 @@ function pfb_parsed_fail($header, $line='', $oline, $logfile, $lineno = '') {
 // a v4 list reading the v4 section instead of the stale v6 one (#709).
 function pfb_list_section_for_vtype(string $vtype): string {
 	return ($vtype === '_v6') ? 'pfblockernglistsv6' : 'pfblockernglistsv4';
+}
+
+
+// issue #993: opposite-family predicate extracted for unit coverage. A syntactically
+// valid address of the list's OTHER family is not a parse failure (mixed-family feeds).
+function pfb_ip_is_opposite_family(string $line, string $vtype): bool {
+	return ($vtype === '_v4' && str_contains($line, ':') && validate_ipv6($line)) ||
+		($vtype === '_v6' && !str_contains($line, ':') && validate_ipv4($line));
 }
 
 // Drop the Blacklist categories whose download Failed, matching by feed NAME in the
@@ -6539,6 +6555,20 @@ function pfb_dnsbl_is_abp_header($line) {
 	return (str_starts_with($hline, '[Adblock') ||
 		str_starts_with($hline, '[uBlock') ||
 		str_starts_with($hline, '! Title:'));
+}
+
+
+// issue #995: DNSBL '#'-marker classifier extracted for unit coverage. Flags are
+// report-only (never clear a caller's existing state) -- a plain '#' comment line
+// returns all-false/null and the caller must leave rev_format/csv_type untouched.
+function pfb_dnsbl_hash_line_classify(string $line): array {
+	if (str_contains($line, 'Append critical updates below')) {
+		return ['stop' => TRUE, 'rev_format' => FALSE, 'csv_type' => NULL, 'csv_parser' => FALSE];
+	}
+	$rev_format = str_contains($line, 'The Spamhaus Project Ltd');
+	$csv_type = ($line === '#family,type,url,status,first_seen,'
+			. 'first_active,last_active,last_update') ? 'h3x' : NULL;
+	return ['stop' => FALSE, 'rev_format' => $rev_format, 'csv_type' => $csv_type, 'csv_parser' => ($csv_type === 'h3x')];
 }
 
 
@@ -16355,19 +16385,21 @@ function sync_package_pfblockerng($cron='') {
 												// BEFORE the generic '!'/'//' skip below since these side effects
 												// (hpHosts end marker, Spamhaus format, h3x CSV header) must run.
 												if (str_starts_with($line, '#')) {
+													$pfb_hash_class = pfb_dnsbl_hash_line_classify($line);
 													// Exit (hpHosts) when end of domain names found.
-													if (strpos($line, 'Append critical updates below') !== FALSE) {
+													if ($pfb_hash_class['stop']) {
 														break;
 													}
 
 													// Spamhaus format validation
-													if (strpos($line, 'The Spamhaus Project Ltd') !== FALSE) {
+													if ($pfb_hash_class['rev_format']) {
 														$rev_format = TRUE;
 													}
 
-													if ($line == '#family,type,url,status,first_seen,'
-															. 'first_active,last_active,last_update') {
-														$csv_type	= 'h3x';
+													if ($pfb_hash_class['csv_type'] !== NULL) {
+														$csv_type	= $pfb_hash_class['csv_type'];
+													}
+													if ($pfb_hash_class['csv_parser']) {
 														$csv_parser	= TRUE;
 													}
 													continue;
@@ -18237,9 +18269,7 @@ function sync_package_pfblockerng($cron='') {
 										// common, and the family this list doesn't collect is silently
 										// skipped either way (same as any hex-lettered opposite-family
 										// address already is, uncounted). Only flag genuine garbage.
-										$other_family_addr =
-											($list['vtype'] == '_v4' && str_contains($line, ':') && validate_ipv6($line)) ||
-											($list['vtype'] == '_v6' && !str_contains($line, ':') && validate_ipv4($line));
+										$other_family_addr = pfb_ip_is_opposite_family($line, $list['vtype']);
 
 										if (!$other_family_addr) {
 											$parse_fail++;
@@ -18261,9 +18291,7 @@ function sync_package_pfblockerng($cron='') {
 							// line above (a rarely-configured per-list Pre Script tunable can print
 							// its own newline-terminated line first instead -- one harmless extra
 							// blank line in that case, not a rejoin).
-							if ($parse_fail > 0) {
-								pfb_logger("\n[!] Parse Errors [ {$header} ]: {$parse_fail}\n", 2);
-							}
+							pfb_ip_parse_fail_warn($parse_fail, $header);
 							pfb_logger("\n", 1);
 
 							// IP v4/6 Advanced Tunable - (Post Script processing)
