@@ -1,0 +1,385 @@
+ADR-62 Phase 1 -- Byte-identity corpus + coverage matrix -- HANDOFF
+====================================================================
+
+VERDICT: DONE
+
+WORKTREE BASE CHECK
+--------------------
+git fetch origin; git rev-list --count HEAD..origin/devel = 0 (worktree already on
+adr/62-dnsbl-unified-line-parsing, cut from origin/devel @ 753f2e7b, up to date at
+session start). No rebase needed.
+
+REALITY-OVERRIDE FINDINGS (prompt line numbers vs live tree @753f2e7b)
+------------------------------------------------------------------------
+Every prompt/ADR file:line anchor drifted (measured @8563ac5d; branch base is
+753f2e7b). Re-derived (see COVERAGE MATRIX below for the full list):
+  - DNSBL parse loop `while`: prompt/ADR said ~16262 -> ACTUAL 16349.
+  - $easylist init/set: ADR said @16251/@16285 -> ACTUAL @16338/@16371-16372.
+  - ADR-21 stray ||/@@|| verbatim-capture guard: ADR said @16317 -> ACTUAL @16404-16409.
+  - $easylist ABP verbatim branch: ADR said @16324 -> ACTUAL @16411-16458.
+  - 6-col plain write: ADR said @16712-16714 -> ACTUAL @16800-16803.
+  - Manifest-row tag + .abp marker write: ADR said @16817/@16823-16827 -> ACTUAL
+    @16897-16914.
+  - pfb_feed_manifest_row(): ADR said inc:6946 -> ACTUAL 7028.
+  - pfb_unbound_python_sources(): ADR said inc:6975 -> ACTUAL 7054.
+  - tld_analysis(): ADR said inc:7570/7652-7860 -> function starts ACTUAL 7652 (matches
+    the "standalone function inc:~7570" prompt note closely enough); .abp-marker skip
+    ADR said @7723-7744 -> ACTUAL @7804-7826 (glob @7804-7807, skip-branch @7817-7826).
+  - pfb_dnsbl_is_abp_header(): ADR said inc:6547 (comment) / function ACTUAL @6629-6640.
+None of these drifts contradict the ADR's DESCRIBED behaviour -- every quoted code
+excerpt in ADR SS1 matches the live tree verbatim at its (drifted) new line number.
+No blocker; proceeding as planned with corrected anchors below.
+
+ADDITIONAL FINDING (not a blocker, carried forward): tld_analysis() reads/writes the
+GLOBAL $tlds (`global $pfb, $tlds;`, inc:7653) without ever initialising it first;
+`$tlds[$tld]` (inc:7679) on a truly-fresh global triggers a benign PHP "Trying to
+access array offset on null" warning on every invocation (pre-existing, behaviour-
+unaffected -- `!is_array(null)` is TRUE so the array is still correctly created).
+Reproduced in this phase's own PHPUnit run (see GATES below); not introduced by this
+change. Noted for the planner to decide whether it merits its own tracking issue --
+low severity, cosmetic-only, out of this behaviour-preserving phase's scope.
+
+WHAT CHANGED (all new files; ZERO production-file changes)
+------------------------------------------------------------
+- tests/fixtures/dnsbl_corpus/README.md -- corpus layout/regeneration doc (ADR-49
+  feed_corpus README pattern).
+- tests/fixtures/dnsbl_corpus/feeds.json -- single source of truth for the 14
+  synthetic corpus feeds' header/group/log/format/provenance/mode + coverage-matrix
+  row note; read by BOTH the PHPUnit and pytest oracles (avoids drift).
+- tests/fixtures/dnsbl_corpus/txt/*.txt (14 files) -- the DOCUMENTED per-feed ".txt"
+  staging output for each row (hand-derived from reading the live DNSBL parse loop;
+  the loop itself has no off-appliance driver, so this is the loop's claimed output,
+  not an independently re-executed one -- see DEFERRED rows below).
+- tests/fixtures/dnsbl_corpus/raw/*.raw (14 files) -- GOLDEN per-feed ".raw" output,
+  captured by actually RUNNING the real pfb_unbound_python_sources() once over the
+  txt/ fixtures (throwaway script, discarded) -- not hand-derived, so the PHPUnit
+  oracle (re-running the function) and the pytest oracle (reading these bytes
+  straight into build()) share one ground truth produced by real PHP execution.
+- tests/fixtures/dnsbl_corpus/tld/{tld_master.txt,pfb_dnsbl_plain.txt,
+  pfb_dnsbl_abp.txt,golden_pfb_py_data.txt,golden_pfb_py_zone.txt} -- TLD-analysis
+  surface (c) fixtures; golden outputs captured the same way (real tld_analysis()
+  execution, throwaway script).
+- tests/php/Adr62DnsblCorpusManifestTest.php -- surface (b) oracle: drives the REAL
+  pfb_unbound_python_sources() over txt/, asserts byte-identity vs raw/ per feed,
+  plus the #752/#753 PHP-side pfb_filter() probes (pure-function calls, no loop).
+- tests/php/Adr62TldAnalysisCorpusTest.php -- surface (c) oracle: drives the REAL
+  tld_analysis() over the tld/ fixtures, asserts byte-identity vs golden_pfb_py_*.
+- tests/test_adr62_byte_identity_corpus.py -- surface (a) oracle: drives the REAL
+  build() over the SAME committed raw/*.raw bytes (read directly, no PHP re-run),
+  asserting the golden domain/allow-set per row incl. delta D1/D2/D4 (TODAY's
+  behaviour, tagged) and the #752/#753 divergence/boundary.
+
+Commit hash: single commit, code + this handoff together (self-referential -- this
+file is PART OF the commit it describes, so its own final hash cannot be embedded
+here without a further edit changing that hash; see the session's structured
+handoff to the orchestrator, or `git log -1 --format=%H` on
+adr/62-dnsbl-unified-line-parsing, for the authoritative value).
+
+GATES (exact commands + pasted tails)
+----------------------------------------
+$ python3 -m pytest -q
+======================= 2563 passed, 4 skipped in 51.52s =======================
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check .
+208 files already formatted
+
+$ python3 -m mypy tests/
+Success: no issues found in 88 source files
+
+$ php -l tests/php/Adr62DnsblCorpusManifestTest.php tests/php/Adr62TldAnalysisCorpusTest.php
+No syntax errors detected in tests/php/Adr62DnsblCorpusManifestTest.php
+No syntax errors detected in tests/php/Adr62TldAnalysisCorpusTest.php
+
+$ vendor/bin/phpunit
+OK, but there were issues!
+Tests: 2593, Assertions: 19289, Warnings: 1, Skipped: 4.
+(the 1 warning is the pre-existing $tlds-uninitialised notice above; 0 failures/errors)
+
+$ vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+[OK] No errors
+
+$ vendor/bin/phpcs -d memory_limit=1G --standard=phpcs.xml.dist src/
+(no output -- 0 violations; phpcs scans src/ only, unaffected by this test-only phase)
+
+$ npx markdownlint-cli2 tests/fixtures/dnsbl_corpus/README.md
+Summary: 0 error(s)
+
+RED->GREEN: N/A (behaviour-preserving phase -- the oracle pins EXISTING behaviour and
+must stay green before and after; there is no "before" state to diff against).
+VACUITY CHECK (all three surfaces, executed and reverted) instead:
+
+1) PHPUnit surface (b) -- mutated raw/plain_hosts.raw to a wrong domain, re-ran the
+   single test:
+   $ vendor/bin/phpunit --filter 'Adr62DnsblCorpusManifestTest::testEveryCorpusFeedRawMatchesGolden'
+   F  1 / 1 (100%)
+   1) Adr62DnsblCorpusManifestTest::testEveryCorpusFeedRawMatchesGolden
+   manifest-writer .raw output drifted for [ plain_hosts ] (...)
+   Failed asserting that two strings are identical.
+   --- Expected
+   +++ Actual
+   @@ @@
+   -'mutated-golden.example
+   +'plainhost1.example
+   +plainhost2.example
+   '
+   Tests: 1, Assertions: 4, Failures: 1.
+   -> reverted (cp backup back over the fixture); re-ran green.
+
+2) PHPUnit surface (c) -- mutated tld/golden_pfb_py_zone.txt, re-ran the single test:
+   $ vendor/bin/phpunit --filter 'Adr62TldAnalysisCorpusTest::testDataAndZoneClassificationMatchesGolden'
+   1) Adr62TldAnalysisCorpusTest::testDataAndZoneClassificationMatchesGolden
+   pfb_py_zone (redirect/wildcard) classification drifted
+   Failed asserting that two strings are identical.
+   --- Expected
+   +++ Actual
+   @@ @@
+   -',mutated.zone.example,,1,x,x
+   +',twolabelzone.example,,1,tld_plain_feed,tld_plain_feed
+   +,biz.co.zzsuffix,,1,tld_plain_feed,tld_plain_feed
+   '
+   Tests: 1, Assertions: 4, Failures: 1.
+   -> reverted; re-ran green.
+
+3) pytest surface (a) -- mutated raw/abp_feed.raw's anchor domain, re-ran the single test:
+   $ python3 -m pytest tests/test_adr62_byte_identity_corpus.py::test_abp_feed_anchor_block -v
+   FAILED tests/test_adr62_byte_identity_corpus.py::test_abp_feed_anchor_block
+   AssertionError: assert 'anchor.abp.example' in {... 'mutated-anchor.abp.example': ...}
+   1 failed in 0.03s
+   -> reverted; re-ran green (full file: 19 passed).
+
+Full suites re-confirmed green after every revert (see GATES above, captured post-revert).
+
+COVERAGE MATRIX (re-derived from source; every ADR SS2 row + delta row ticked)
+---------------------------------------------------------------------------------
+Legend: [a]=pytest build()/parse()/parse_abp() surface, [b]=PHPUnit
+pfb_unbound_python_sources() surface, [c]=PHPUnit tld_analysis() surface,
+[DEFERRED]=no off-appliance driver, live-VM command given (existing test where one
+already covers this row; "Phase 7 gap" where none exists yet).
+
+1. Plain hosts feed (0.0.0.0/bare/mixed-case->lowercase)
+   Loop: hosts-prefix strip inc:16659-16669; lowercase-at-write inc:16800-16803.
+   [a]+[b]: test_plain_hosts_feed_domains_are_blocked / testEveryCorpusFeedRawMatchesGolden.
+   [DEFERRED] loop's raw->".txt" transform (incl. mixed-case lowering): existing
+   tests/smoke/test_smoke_feeds.py::test_dnsbl_http_hosts_feed_loads --
+   `scripts/local-smoke.sh --filter test_dnsbl_http_hosts_feed_loads`
+
+2. URL/scheme lines, lenient AND strict (ADR-22)
+   Loop: pfb_dnsbl_strip_scheme() inc:6508-6544 (PURE, already unit-tested BOTH
+   modes by tests/php/PfbDnsblStripSchemeTest.php); orchestration (path/frag/query/
+   port/unbracket) inc:16693-16733.
+   Pure-helper axis already covered (no new test added -- reused).
+   [DEFERRED] full loop round-trip: existing test_strict_skips_invalid_scheme_and_path_and_logs
+   + test_lenient_blocks_invalid_scheme_and_path --
+   `scripts/local-smoke.sh --filter "test_strict_skips_invalid_scheme_and_path_and_logs or test_lenient_blocks_invalid_scheme_and_path"`
+
+3. Whitespace mutations (tab, %20, inline ' #', CRLF, leading/trailing dots)
+   Loop: tab replace inc:16462-16464; %20 remove inc:16466-16469; inline ' #' strip
+   inc:16503-16506; CRLF strip inc:16383-16386; dot-trim inc:16779-16780.
+   [DEFERRED] no pure-function boundary, no existing dedicated smoke test found --
+   Phase 7 gap (name a case under tests/smoke/test_smoke_feeds.py).
+
+4. yHost '@'-prefix line
+   Loop: inc:16788-16791 (skip, no log).
+   [DEFERRED] no existing dedicated smoke test found -- Phase 7 gap.
+
+5. ABP/EasyList feed (||, @@||, header, [Adblock], /regex/, @@/re/, $important,
+   $badfilter, ##-family, mid-body !#if, bare hosts/plain line = delta D1)
+   Loop: header sniff inc:16370-16381 (pfb_dnsbl_is_abp_header inc:6629-6640); ABP
+   verbatim branch inc:16411-16458.
+   [a]+[b]: abp_feed.txt/raw + test_abp_feed_anchor_block /
+   test_abp_feed_exception_allow / test_abp_feed_regex_block_reduces_to_exact_data /
+   test_abp_feed_regex_allow_reduces_to_exact_allow / test_abp_feed_important_flag_carried /
+   test_abp_feed_badfilter_rule_emits_no_decision / test_abp_feed_element_hiding_line_produces_no_domain
+   / test_abp_feed_bare_domain_is_wildcard_zone_delta_d1 (D1: TODAY = wildcard ZONE
+   via parse_abp, #718 -- pins the BEFORE state Phase 5 will flip).
+   [DEFERRED] loop's header-sniff classification + BOM-led header + mid-body !#if
+   pass-through: existing test_dnsbl_http_abp_feed_loads + test_abp_bom_header_still_detected
+   -- `scripts/local-smoke.sh --filter "test_dnsbl_http_abp_feed_loads or test_abp_bom_header_still_detected"`
+
+6. Mixed plain feed (stray ||domain^ = ADR-21 already-routed; /re/, @@, ## = delta D2/D3)
+   Loop: ADR-21 capture inc:16404-16409; '#'-truncation inc:16706-16707 (mangles a
+   "domain##selector" line into a live false-positive block, D2/D3).
+   [a]+[b]: mixed_plain.txt/raw + test_mixed_plain_feed_ordinary_domain_blocked /
+   test_mixed_plain_feed_stray_abp_anchor_routes_to_parse_abp (ADR-21, already-live
+   routing) / test_mixed_plain_feed_hash_truncation_false_positive_delta_d2 (D2: TODAY
+   = "falsepositive.example##.ad" truncates to a LIVE block -- pins the BEFORE state).
+   [DEFERRED] a BARE /re/-only or @@-only or ##-only line being silently DROPPED
+   (traced by hand against inc:16700-16798 this phase -- `/^ads\.example$/` truncates
+   to "" at the first '/' inc:16701-16702, then fails pfb_filter and is logged+dropped,
+   never reaching the .txt; consistent with the ADR's own D2 claim, but NOT an
+   executed off-appliance probe): existing test_abp_perline_detection_in_plain_feed +
+   test_abp_perline_path_anchor_not_overblocked --
+   `scripts/local-smoke.sh --filter "test_abp_perline_detection_in_plain_feed or test_abp_perline_path_anchor_not_overblocked"`
+
+7. Permit-mode feed (ADR-31 -- delta D4)
+   Manifest 'mode' derivation: inc:16205-16215 (row['action']=='Permit'->'permit');
+   pfb_feed_manifest_row() inc:7028-7043 (mode key omit/emit).
+   [a]+[b]: permit_feed.txt/raw + test_permit_feed_host_is_allow /
+   test_permit_feed_hash_truncation_accidental_allow_delta_d4 (D4: TODAY =
+   "accidentalallow.example##.ad" truncates to a live host line, and build()'s permit
+   loop treats it as a band-2 allow -- pins the BEFORE state).
+   [DEFERRED] loop's own action->mode wiring live: existing
+   test_dnswl_permit_feed_allow_overrides_block_feed --
+   `scripts/local-smoke.sh --filter test_dnswl_permit_feed_allow_overrides_block_feed`
+
+8. Spamhaus rev_format
+   Loop: pfb_dnsbl_hash_line_classify() inc:6646-6654 (PURE, already unit-tested by
+   tests/php/PfbDnsblHashLineClassifyTest.php), consumed inc:16481-16484.
+   Pure-helper axis already covered.
+   [DEFERRED] no existing dedicated smoke test found -- Phase 7 gap.
+
+9. hpHosts end-marker
+   Loop: pfb_dnsbl_hash_line_classify() inc:6646-6654 ('stop' flag, PURE, already
+   unit-tested), consumed inc:16476-16479 (break).
+   Pure-helper axis already covered.
+   [DEFERRED] no existing dedicated smoke test found -- Phase 7 gap.
+
+10. CSV types pt(8)/bbc(4)/h3x(8)/otx(3)/pon(9)/et(3) + header-sniff feeds
+    (phishtank/bambenek/otx/ponomocup/et)
+    Loop: CSV switch inc:16536-16649.
+    [a]+[b]: csv_pt/bbc/h3x/otx/pon/et.txt/raw (post-extraction domain) +
+    test_csv_type_domains_are_blocked.
+    [DEFERRED] the CSV extraction/column-picking itself (per-type, incl. the
+    csv:pon extra-IP-collection branch inc:16577-16596): no dedicated existing smoke
+    test found -- Phase 7 gap.
+
+11. Custom ($liteparser) list
+    Loop: inc:16327-16332 ($liteparser=TRUE, provenance='user'); $lite short-circuit
+    inc:16680-16682.
+    [a]+[b]: custom_list.txt/raw + test_custom_list_domain_is_user_band (provenance
+    'user' -> PRIO_USER_BLOCK band, both surfaces).
+    [DEFERRED] none beyond ordinary loop mechanics -- low risk; PFBL-01 header
+    validation already covers the security-relevant surface.
+
+12. IDN/punycode line
+    Loop: inc:16760-16777 (mb_convert_encoding + idn_to_ascii, no pure-function
+    boundary).
+    [DEFERRED] no off-appliance driver; closest existing coverage is the ADR-08
+    homoglyph suite (a stronger, adjacent feature, not plain IDN round-trip):
+    tests/smoke/test_smoke_matrix.py::test_dnsbl_idn_confusable_blocks_homoglyph_resolves_legit
+    -- `scripts/local-smoke.sh --filter test_dnsbl_idn_confusable_blocks_homoglyph_resolves_legit`;
+    a dedicated plain-IDN-conversion smoke row is a Phase 7 gap.
+
+13. Bare IPv4 / IPv6 / bracketed-IPv6 line
+    Loop: IP collection inc:16737-16758; unbracket inc:16732
+    (pfb_dnsbl_unbracket_ip6() inc:6568-6576, PURE, already unit-tested by
+    tests/php/PfbDnsblUnbracketIp6Test.php).
+    Pure-helper axis already covered; the DNSBLIP alias-set ASSEMBLY is loop-only
+    (ADR SS1.4 "IP extraction stays in PHP") -- genuinely no off-appliance surface.
+    [DEFERRED] existing test_ipv6_http_feed_loads + test_ip_http_feed_loads --
+    `scripts/local-smoke.sh --filter "test_ipv6_http_feed_loads or test_ip_http_feed_loads"`;
+    the bracketed-IPv6-specific alias-landing assertion is ADR SS7 smoke row 4
+    (Phase 7).
+
+14. ABP-anchored IP (||1.2.3.4^)
+    Loop: inc:16424-16444 (pfb_dnsbl_abp_extract_ip() inc:6443-6483, PURE, already
+    unit-tested by tests/php/AbpExtractIpTest.php). The loop strips these BEFORE
+    the ".txt" write (continue at inc:16442), so they never reach the manifest/.raw
+    dialect at all -- surfaces [a]/[b] have nothing to observe for this row.
+    parse_abp()'s independent IP-anchor skip is already pinned by
+    tests/test_adr07_parser.py.
+    [DEFERRED] the DNSBLIP alias-set landing is a live-VM fact -- ADR SS7 smoke row 4
+    (Phase 7).
+
+15. Oversized/#752 undotted name (KNOWN pre-existing divergence, NOT a delta)
+    [a]+[b]: oversized_feed.txt/raw (254-char name) + PHP-side
+    testPhp752OversizedUndottedNameValidatesAsDomain (pfb_filter() accepts, pure
+    off-appliance probe) + Python-side test_oversized_752_undotted_name_rejected_by_python
+    (build()/normalise() rejects, wire_cap bucket). Fully pinned off-appliance both
+    sides -- no deferral needed.
+
+16. Wire-cap (#753) name (byte-identical boundary, NOT a divergence)
+    [a]+[b]: wirecap_feed.txt/raw (253-char name) + testPhp753WireCapBoundaryNameValidatesAsDomain
+    + test_wirecap_753_boundary_name_accepted_by_python. Fully pinned off-appliance
+    both sides.
+
+17. Empty / whitespace-only / BOM-led first line
+    Loop: BOM strip inc:16364 (pfb_dnsbl_strip_bom() inc:6553-6558, PURE, already
+    unit-tested by tests/php/PfbDnsblStripBomTest.php); blank-line skip inc:16525-16528.
+    Pure-helper axis already covered.
+    [DEFERRED] existing test_dnsbl_bom_header_feed_parses_without_error +
+    test_abp_bom_header_still_detected --
+    `scripts/local-smoke.sh --filter "test_dnsbl_bom_header_feed_parses_without_error or test_abp_bom_header_still_detected"`
+
+18. Reused feed with old-dialect ".txt" (both generations) -- Semantics #7
+    [a]+[b]: reused_manifest_abp.txt/raw (format='abp', simulating a persisted
+    marker-derived hint) + test_stale_abp_format_hint_manifest_still_parses (pins
+    that a manifest still naming format_hint='abp' parses identically -- the
+    regression Phase 5 must keep green after format_hint collapses to 'plain' for
+    NEW builds).
+    [DEFERRED] the loop's own reuse-path ".abp"-marker read (inc:16267): no
+    dedicated existing smoke test found -- Phase 7 gap (ADR SS7 smoke row 7).
+
+19. TLD-analysis-enabled run over a corpus containing verbatim lines
+    [c]: tests/php/Adr62TldAnalysisCorpusTest.php -- 2-label domain (auto-ZONE,
+    inc:~7865-7867), 3-label domain matching a registered 2-label suffix (ZONE at
+    the whole domain via tld_search inc:7640-7648), a deeper sub-domain with no
+    suffix match (DATA/transparent), AND an ABP-feed's verbatim lines correctly
+    SKIPPED via the CURRENT '.abp'-marker-gated rule (inc:7804-7826, the issue
+    #1060 latent gate bug this ADR's Phase 5 fixes structurally) -- all captured
+    byte-identically vs golden fixtures + a dedicated
+    testAbpFeedLinesAreSkippedNotMangled negative assertion.
+    [DEFERRED] the live end-to-end TLD-enabled cron/force run: ADR SS7 smoke row 7
+    (Phase 7).
+
+DELTA TABLE (D1-D5) -- ticked
+--------------------------------
+D1 (bare hosts/plain line in an ABP-classified feed): row 5, TODAY pinned =
+   wildcard ZONE via parse_abp (test_abp_feed_bare_domain_is_wildcard_zone_delta_d1).
+D2 (/re/, @@/re/, @@, ## in a never-ABP-classified feed): row 6, TODAY's
+   representable sub-case (the "domain##selector" truncation false-positive) pinned
+   (test_mixed_plain_feed_hash_truncation_false_positive_delta_d2); the "silently
+   dropped" sub-cases (bare /re/, bare @@, bare ##) are hand-traced against the live
+   loop code (see row 6 note) but NOT independently executed off-appliance -- carried
+   forward as a Phase 4 red-side gap to close with a live probe before the fix lands.
+D3 ([...]-non-IPv6 and ## lines, any feed): diagnostics-only per the ADR (parse-error
+   log noise, not a domain/IP-set effect) -- no dedicated corpus row; the D2 false-
+   positive row above is the behaviourally-relevant overlap.
+D4 (element-hiding in a permit-mode feed -> accidental allow): row 7, TODAY pinned
+   (test_permit_feed_hash_truncation_accidental_allow_delta_d4).
+D5 (.txt line counts / "No Domains Found" emptiness): explicitly a UI statistic per
+   the ADR ("not a blocking contract") -- no corpus row; out of this phase's surfaces
+   entirely (widget/report count, not a domain/IP-set fact).
+
+DEVIATIONS: none. Followed the brief exactly; the pinned capture surfaces (a/b/c) and
+the "no loop re-implementation" constraint were honoured throughout -- every corpus
+".txt" fixture is a DOCUMENTED (code-read, in several cases hand-traced) claim about
+the loop's output, never an executed stand-in for the loop itself.
+
+CARRY-FORWARD for Phase 2+
+------------------------------
+1. PHP<->Python divergence CONFIRMED this phase (not new, but now corpus-pinned both
+   sides): #752 (oversized undotted 254-char name) -- PHP's pfb_filter(PFB_FILTER_DOMAIN)
+   accepts it into the .txt/.raw dialect (Adr62DnsblCorpusManifestTest::testPhp752...),
+   Python's build()/_normalise_verdict() rejects it (wire_cap bucket,
+   test_oversized_752_undotted_name_rejected_by_python). Per ADR SS1.5 this is a KNOWN
+   divergence, NOT a delta -- carried as-is, no phase should "fix" it as part of this
+   ADR's scope.
+2. Pre-existing benign PHP warning found while building the TLD fixture: the global
+   $tlds is read (inc:7679) before ever being initialised inside tld_analysis() --
+   "Trying to access array offset on null". Behaviour-unaffected (auto-vivifies
+   correctly afterward); flagged for the planner's judgment on a tracking issue,
+   not fixed here (behaviour-preserving phase, no production change permitted).
+3. Coverage-matrix rows 3/4/8/9/10/12(dedicated)/18 have NO existing live-VM smoke
+   test today -- flagged as "Phase 7 gap" above; Phase 7's action plan ("add/extend
+   the automated tests/smoke/ feed cases so every SS7 row runs") should pick these up
+   explicitly, not just the ADR SS7 rows 1-7 already named.
+4. D2's "silently dropped" sub-cases (a bare /re/-only, @@-only, or ##-only line in a
+   plain feed) were traced BY HAND against the live loop source this phase (see row 6
+   note) and are consistent with the ADR's own claim, but were NOT executed against
+   the real loop off-appliance (impossible, per ADR SS6 Phase 1) NOR on a live VM this
+   phase. Phase 4, before flipping D2, should add a live-VM probe of this exact "today
+   silently drops" claim as its own red-state evidence (not just trust the ADR text).
+5. The corpus's 14 synthetic feeds + TLD fixtures are a reusable, standalone asset
+   (tests/fixtures/dnsbl_corpus/) -- Phases 3-5 extend feeds.json + txt/*.txt (NEVER
+   hand-edit raw/*.raw or golden_pfb_py_*.txt; regenerate via the real function, see
+   the corpus README's "Regenerating" section) as they broaden the capture/delete the
+   classifier, keeping delta rows explicit (comment-tag D1-D5, mirroring this phase's
+   convention) so the byte-identity assertion for every OTHER row stays untouched.
+
+RETIRED-TOKEN / COMMENT-NARRATION / VERSION-LITERAL checks: not applicable -- this
+phase touches only tests/ and tests/fixtures/ (those checkers scan src/+scripts/+
+.github/workflows only per CLAUDE.md).

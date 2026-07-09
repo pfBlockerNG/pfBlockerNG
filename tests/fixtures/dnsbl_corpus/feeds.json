@@ -1,0 +1,16 @@
+[
+	{"header": "plain_hosts",         "group": "grp_plain",  "log": "1", "format": "plain", "provenance": "feed", "row": "plain hosts feed (0.0.0.0/bare/mixed-case, post-loop)"},
+	{"header": "csv_pt",              "group": "grp_csv",    "log": "1", "format": "plain", "provenance": "feed", "row": "CSV type pt (8-col, post-extraction)"},
+	{"header": "csv_bbc",             "group": "grp_csv",    "log": "1", "format": "plain", "provenance": "feed", "row": "CSV type bbc (4-col, post-extraction)"},
+	{"header": "csv_h3x",             "group": "grp_csv",    "log": "1", "format": "plain", "provenance": "feed", "row": "CSV type h3x (8-col, post-extraction)"},
+	{"header": "csv_otx",             "group": "grp_csv",    "log": "1", "format": "plain", "provenance": "feed", "row": "CSV type otx (3-col, post-extraction)"},
+	{"header": "csv_pon",             "group": "grp_csv",    "log": "1", "format": "plain", "provenance": "feed", "row": "CSV type pon (9-col, post-extraction)"},
+	{"header": "csv_et",              "group": "grp_csv",    "log": "1", "format": "plain", "provenance": "feed", "row": "CSV type et (3-col, post-extraction)"},
+	{"header": "custom_list",         "group": "grp_custom", "log": "1", "format": "plain", "provenance": "user", "row": "custom (liteparser) list"},
+	{"header": "abp_feed",            "group": "grp_abp",    "log": "1", "format": "abp",   "provenance": "feed", "row": "ABP/EasyList feed: ||, @@||, /re/, @@/re/, $important, $badfilter, ##-element-hiding (skip), bare-domain (delta D1)"},
+	{"header": "mixed_plain",         "group": "grp_mixed",  "log": "1", "format": "plain", "provenance": "feed", "row": "mixed plain feed: ADR-21 stray ||anchor + delta D2 ##-truncation false-positive"},
+	{"header": "permit_feed",         "group": "grp_permit", "log": "1", "format": "plain", "provenance": "feed", "mode": "permit", "row": "permit-mode feed (ADR-31): host->allow + delta D4 ##-truncation accidental allow"},
+	{"header": "oversized_feed",      "group": "grp_edge",   "log": "1", "format": "plain", "provenance": "feed", "row": "oversized/#752 undotted 254-char name (KNOWN PHP-accepts/Python-rejects divergence)"},
+	{"header": "wirecap_feed",        "group": "grp_edge",   "log": "1", "format": "plain", "provenance": "feed", "row": "wire-cap (#753) 253-char boundary name (byte-identical accept both sides)"},
+	{"header": "reused_manifest_abp", "group": "grp_reuse",  "log": "1", "format": "abp",   "provenance": "feed", "row": "reused feed / stale manifest still naming format_hint=abp (Semantics #7)"}
+]
