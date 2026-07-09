@@ -18,8 +18,12 @@ use PHPUnit\Framework\TestCase;
  *
  * Also covers pfb_unbound_py_marker_generation()'s remaining return-0 shapes
  * DIRECTLY (issue #1024): the truth table above only reaches it through the
- * "neither marker file exists" case; the unreadable/blank/non-digit branches
- * had no direct coverage.
+ * "neither marker file exists" case. Of the four input shapes named in #1024
+ * (absent, unreadable, blank, non-digit), only "non-digit" is independently
+ * observable via a return-value assertion -- "absent"/"unreadable"/"blank" all
+ * funnel through the SAME downstream ctype_digit('')-is-FALSE catch-all, so no
+ * assertion can attribute their shared 0 result to one specific guard over another
+ * (each still gets its own regression-pinning test below, honestly scoped as such).
  *
  * Functions under test: pfb_dnsbl_converged(): bool,
  * pfb_unbound_py_marker_generation(string $path): int (pfblockerng.inc).
@@ -161,6 +165,12 @@ final class PfbDnsblConvergedTest extends TestCase
 	// -----------------------------------------------------------------------
 	// pfb_unbound_py_marker_generation() -- direct branch coverage (issue #1024)
 	// -----------------------------------------------------------------------
+
+	// issue #1024: "unreadable file" and "blank/whitespace first line" have no test of
+	// their own beyond regression-pinning below. Both funnel through the SAME downstream
+	// ctype_digit('')-is-FALSE catch-all as every other degenerate shape -- confirmed via
+	// mutation that no return-value assertion can attribute the 0 result to one guard over
+	// another, so a "this specific branch" claim here would be coverage theater.
 
 	public function testMarkerGenerationUnreadableFile_returnsZeroInsteadOfCrashing(): void
 	{

@@ -331,6 +331,13 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 	 */
 	public function testZeroDowntimeSwapSuccessClosesLedgerViaEarlyReturn(): void
 	{
+		// Before-state: a stale dnsbl-apply entry genuinely open first (mirrors
+		// testConvergedClosesEntry), so the close asserted below is a real transition.
+		$GLOBALS['pfb_test_process_running']['unbound'] = FALSE;
+		pfb_dnsbl_apply_ledger_update();
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'dnsbl'),
+			'a stale dnsbl apply entry must exist before the zero-downtime swap under test');
+
 		$this->writeUnboundConf(TRUE);
 		$GLOBALS['pfb']['dnsbl_file']            = "{$this->dir}/dnsbl_file";
 		$GLOBALS['pfb']['unbound_py_count']      = "{$this->dir}/unbound_py_count";
