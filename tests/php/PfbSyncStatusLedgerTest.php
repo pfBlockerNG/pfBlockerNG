@@ -40,6 +40,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_sync_status_read_all')]
 #[CoversFunction('pfb_sync_status_write_all')]
 #[CoversFunction('pfb_sync_status_locked')]
+#[CoversFunction('pfb_sync_status_close_removed_alias')]
 final class PfbSyncStatusLedgerTest extends TestCase
 {
 	private string $dir;
@@ -282,5 +283,87 @@ final class PfbSyncStatusLedgerTest extends TestCase
 			$elapsed,
 			'pfb_sync_status_open() must block on the lock file until the real concurrent holder releases it -- a near-instant return means the read-modify-write span is not actually protected'
 		);
+	}
+
+	// -----------------------------------------------------------------------
+	// pfb_sync_status_close_removed_alias() — issue #1014/#1019: close an
+	// orphaned stage=download entry when our own WebUI renames/deletes an alias.
+	// -----------------------------------------------------------------------
+
+	public function testCloseRemovedAliasIpv4ClosesDownloadEntry(): void
+	{
+		pfb_sync_status_open('ip', 'pfB_Foo_v4', 'download', 'HTTP 404', $this->dir, self::clockAt(1000));
+		// Before-state: the download entry is genuinely open first.
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'ip'));
+
+		pfb_sync_status_close_removed_alias('ipv4', 'Foo', $this->dir);
+
+		$this->assertSame([], pfb_sync_status_list_open($this->dir), 'ipv4 removal must close pfB_Foo_v4/download');
+	}
+
+	public function testCloseRemovedAliasIpv6ClosesDownloadEntry(): void
+	{
+		pfb_sync_status_open('ip', 'pfB_Foo_v6', 'download', 'HTTP 404', $this->dir, self::clockAt(1000));
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'ip'));
+
+		pfb_sync_status_close_removed_alias('ipv6', 'Foo', $this->dir);
+
+		$this->assertSame([], pfb_sync_status_list_open($this->dir), 'ipv6 removal must close pfB_Foo_v6/download');
+	}
+
+	public function testCloseRemovedAliasDnsblClosesDownloadEntry(): void
+	{
+		pfb_sync_status_open('dnsbl', 'DNSBL_Foo', 'download', 'timeout', $this->dir, self::clockAt(1000));
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'dnsbl'));
+
+		pfb_sync_status_close_removed_alias('dnsbl', 'Foo', $this->dir);
+
+		$this->assertSame([], pfb_sync_status_list_open($this->dir), 'dnsbl removal must close DNSBL_Foo/download');
+	}
+
+	public function testCloseRemovedAliasEmptyAliasnameIsNoOp(): void
+	{
+		pfb_sync_status_close_removed_alias('ipv4', '', $this->dir);
+
+		$this->assertFileDoesNotExist($this->dir . '/pfb_sync_status.json', 'an empty aliasname must not write a ledger file');
+	}
+
+	public function testCloseRemovedAliasUnknownGtypeIsNoOp(): void
+	{
+		pfb_sync_status_open('ip', 'pfB_Foo_v4', 'download', 'HTTP 404', $this->dir, self::clockAt(1000));
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'ip'));
+
+		// 'geoip' has no download ledger key shape -- must no-op, never crash.
+		pfb_sync_status_close_removed_alias('geoip', 'Foo', $this->dir);
+
+		$open = pfb_sync_status_list_open($this->dir);
+		$this->assertCount(1, $open, 'an unknown gtype must leave an unrelated open entry untouched');
+		$this->assertSame('pfB_Foo_v4', $open[0]['item']);
+	}
+
+	public function testCloseRemovedAliasOnlyClosesDownloadStageNeverApply(): void
+	{
+		pfb_sync_status_open('ip', 'pfB_Foo_v4', 'download', 'HTTP 404', $this->dir, self::clockAt(1000));
+		pfb_sync_status_open('ip', 'pfB_Foo_v4', 'apply', '[pfctl] failed', $this->dir, self::clockAt(1000));
+		// Before-state: both stages genuinely open.
+		$this->assertCount(2, pfb_sync_status_list_open($this->dir, 'ip'));
+
+		pfb_sync_status_close_removed_alias('ipv4', 'Foo', $this->dir);
+
+		$open = pfb_sync_status_list_open($this->dir, 'ip');
+		$this->assertCount(1, $open, 'only the download stage must close -- apply is tick-managed');
+		$this->assertSame('apply', $open[0]['stage'], 'the surviving entry must be the apply stage');
+	}
+
+	public function testCloseRemovedAliasKeyPrecisionLeavesOtherAliasesOpen(): void
+	{
+		pfb_sync_status_open('ip', 'pfB_Other_v4', 'download', 'HTTP 404', $this->dir, self::clockAt(1000));
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'ip'));
+
+		pfb_sync_status_close_removed_alias('ipv4', 'Foo', $this->dir);
+
+		$open = pfb_sync_status_list_open($this->dir, 'ip');
+		$this->assertCount(1, $open, 'closing Foo must not touch a different alias key (Other)');
+		$this->assertSame('pfB_Other_v4', $open[0]['item']);
 	}
 }

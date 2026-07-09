@@ -154,6 +154,9 @@ if (!empty($action) && isset($gtype) && isset($rowid)) {
 			// Delete Table row (via POST)
 			$name = pfb_filter($rowdata[$rowid]['aliasname'], PFB_FILTER_WORD, 'Category');
 			if (!empty($name) && isset($rowdata[$rowid])) {
+				// issue #1014/#1019: close the deleted alias's stage=download ledger entry
+				// before the row config node is gone -- else it orphans forever.
+				pfb_sync_status_close_removed_alias($gtype, $rowdata[$rowid]['aliasname'] ?? '', $pfb['dbdir']);
 				unset($rowdata[$rowid]);
 				if (isset($rowdata_path)) {
 					config_del_path("{$rowdata_path}/{$rowid}");

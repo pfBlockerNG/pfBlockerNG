@@ -3008,6 +3008,42 @@ function pfb_sync_status_dedup_check(string $log_path, string $ledger_dir): void
 }
 
 /**
+ * pfb_sync_status_close_removed_alias — close the stage=download ledger entry for an
+ * IP/DNSBL alias removed by our own WebUI (renamed or deleted). $gtype selects the
+ * download-key shape (pfb_ip/dnsbl_download_ledger_update's own prefix/suffix rules);
+ * an empty $aliasname or an unrecognized $gtype (e.g. 'geoip') is a no-op.
+ *
+ * Only the download stage closes -- apply/parse/dedup stay tick-managed (issue
+ * #1014/#1019; ADR-61 §2.2 symmetric ownership).
+ *
+ * @param string $gtype     'ipv4' | 'ipv6' | 'dnsbl' (any other value is a no-op).
+ * @param string $aliasname The REMOVED alias's raw aliasname (empty = no-op).
+ * @param string $ledger_dir Directory that contains pfb_sync_status.json.
+ * @return void
+ */
+function pfb_sync_status_close_removed_alias(string $gtype, string $aliasname, string $ledger_dir): void
+{
+	if ($aliasname === '') {
+		return;
+	}
+
+	switch ($gtype) {
+		case 'ipv4':
+			pfb_sync_status_close('ip', "pfB_{$aliasname}_v4", 'download', $ledger_dir);
+			break;
+		case 'ipv6':
+			pfb_sync_status_close('ip', "pfB_{$aliasname}_v6", 'download', $ledger_dir);
+			break;
+		case 'dnsbl':
+			pfb_sync_status_close('dnsbl', "DNSBL_{$aliasname}", 'download', $ledger_dir);
+			break;
+		default:
+			// unknown gtype (e.g. 'geoip') -- no download ledger key shape defined, no-op
+			break;
+	}
+}
+
+/**
  * pfb_py_sync_status_list_open — read-only reader for Python's OWN status ledger
  * (pfb_py_status.json, written EXCLUSIVELY by pfb_unbound.py -- this function never
  * writes it), returning entries in the SAME shape as pfb_sync_status_list_open() so
