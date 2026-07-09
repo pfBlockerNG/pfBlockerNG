@@ -2,12 +2,14 @@
   "effortLevel": "xhigh",
   "env": {
     "SHELL": "bash",
-    "MCP_TIMEOUT": "120000"
+    "MCP_TIMEOUT": "120000",
+    "TS_BASH_COMPACT": "1",
+    "TS_BASH_REWRITE": "1"
   },
   "enableAllProjectMcpServers": true,
   "statusLine": {
     "type": "command",
-    "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/skills/ponytail/hooks/ponytail-statusline.sh\"; printf ' '; bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/skills/caveman/src/hooks/caveman-statusline.sh\""
+    "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/skills/ponytail/hooks/ponytail-statusline.sh\"; printf ' '; bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/skills/caveman/src/hooks/caveman-statusline.sh\"; pgrep -f 'bin/token-savio[r]' >/dev/null 2>&1 && printf ' \\033[38;5;39m[TS]\\033[0m'"
   },
   "enabledPlugins": {
     "ponytail@ponytail": true,
@@ -41,6 +43,23 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/scripts/claude-bash-guard.sh\""
+          },
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/scripts/ts-hook.sh\" bash_rewriter_hook",
+            "timeout": 2000
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|WebFetch|Read|Grep|mcp__playwright__.*|mcp__token-savior-recall__(search_codebase|get_function_source|get_class_source)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/scripts/ts-hook.sh\" tool_capture_hook",
+            "timeout": 5000
           }
         ]
       }
