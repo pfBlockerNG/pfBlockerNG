@@ -439,6 +439,30 @@ final class LogMgmtAgeCutoffTest extends TestCase
 	}
 
 	/**
+	 * Empty file, NOLIMIT (issue #1012): testEmptyFileStaysEmpty above only
+	 * exercises the DEFAULT/bounded '20000' line-cap path -- this pins the
+	 * streaming trim's empty-input case (fopen($temp,'r') on a 0-byte file,
+	 * no fgets() iterations, rename empty scratch over $temp).
+	 */
+	public function testEmptyFileStaysEmptyUnderNolimit(): void
+	{
+		$this->seedMinimalConfig();
+		$this->setLogCaps('log', 'nolimit', '30');
+		$this->ensureLogDir();
+		pfb_global();
+
+		$logPath = $this->logPath('log');
+		file_put_contents($logPath, '');
+
+		$this->assertSame(0, filesize($logPath), 'Before: file must be empty');
+
+		pfb_log_mgmt();
+
+		clearstatcache(TRUE, $logPath);
+		$this->assertSame(0, filesize($logPath), 'an empty file under nolimit must stay empty, not error or grow');
+	}
+
+	/**
 	 * Realistic upgrade scenario: a file with legacy (pre-ADR-60, unparseable)
 	 * lines from before the operator opted in, followed by new-format ISO
 	 * lines. Only the legacy lines are dropped (S2.2 "unparseable = expired").
@@ -587,6 +611,36 @@ final class LogMgmtAgeCutoffTest extends TestCase
 	}
 
 	/**
+	 * field0 mode, NOLIMIT (issue #1012): same as
+	 * testFieldZeroModeAgeCutoffTrimsIpBlocklog but log_max_ip_blocklog is
+	 * also 'nolimit' -- exercises the streaming trim path with field0 CSV
+	 * timestamps instead of the array/@file() path.
+	 */
+	public function testFieldZeroModeNolimitAgeCutoffTrimsIpBlocklog(): void
+	{
+		$this->seedMinimalConfig();
+		$this->setLogCaps('ip_blocklog', 'nolimit', '10');
+		$this->ensureLogDir();
+		pfb_global();
+
+		$logPath = $this->logPath('ip_blocklog');
+		$old   = $this->daysAgo(40) . ',1,em0,WAN,block,4,17,UDP,10.0.0.1,10.0.0.2,1234,53,in,US,-,-,-,-,-,+';
+		$fresh = $this->now()       . ',2,em0,WAN,block,4,17,UDP,10.0.0.3,10.0.0.4,1235,53,in,US,-,-,-,-,-,+';
+		file_put_contents($logPath, $old . "\n" . $fresh . "\n");
+
+		$inodeBefore = fileinode($logPath);
+
+		pfb_log_mgmt();
+
+		clearstatcache(TRUE, $logPath);
+		$linesAfter = array_values(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
+		$this->assertSame([$fresh], $linesAfter,
+			'field0 nolimit streaming trim must drop the 40-day-old CSV row, got ' . var_export($linesAfter, TRUE)
+		);
+		$this->assertSame($inodeBefore, fileinode($logPath), 'inode must be unchanged (in-place)');
+	}
+
+	/**
 	 * field1 mode ('dnslog'): field 0 is a type label ('DNSBL-python'), the
 	 * timestamp is CSV column 1. Also exercises the chroot-branch code path
 	 * (dnslog/dnsreplylog/unilog) -- the chroot dir is absent on this runner,
@@ -620,6 +674,36 @@ final class LogMgmtAgeCutoffTest extends TestCase
 		$linesAfter = array_values(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
 		$this->assertSame([$fresh], $linesAfter,
 			'field1 age cutoff must drop the 40-day-old row, got ' . var_export($linesAfter, TRUE)
+		);
+		$this->assertSame($inodeBefore, fileinode($logPath), 'inode must be unchanged (in-place)');
+	}
+
+	/**
+	 * field1 mode, NOLIMIT (issue #1012): same as
+	 * testFieldOneModeAgeCutoffTrimsDnslog but log_max_dnslog is also
+	 * 'nolimit' -- exercises the streaming trim path with field1 CSV
+	 * timestamps, also under the chroot-branch code path.
+	 */
+	public function testFieldOneModeNolimitAgeCutoffTrimsDnslog(): void
+	{
+		$this->seedMinimalConfig();
+		$this->setLogCaps('dnslog', 'nolimit', '10');
+		$this->ensureLogDir();
+		pfb_global();
+
+		$logPath = $this->logPath('dnslog');
+		$old   = 'DNSBL-python,' . $this->daysAgo(40) . ',old.example.com,127.0.0.1,Python,Block,Feed,eval,feed,+,A';
+		$fresh = 'DNSBL-python,' . $this->now()       . ',new.example.com,127.0.0.1,Python,Block,Feed,eval,feed,+,A';
+		file_put_contents($logPath, $old . "\n" . $fresh . "\n");
+
+		$inodeBefore = fileinode($logPath);
+
+		pfb_log_mgmt();
+
+		clearstatcache(TRUE, $logPath);
+		$linesAfter = array_values(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
+		$this->assertSame([$fresh], $linesAfter,
+			'field1 nolimit streaming trim must drop the 40-day-old row, got ' . var_export($linesAfter, TRUE)
 		);
 		$this->assertSame($inodeBefore, fileinode($logPath), 'inode must be unchanged (in-place)');
 	}
