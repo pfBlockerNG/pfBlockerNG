@@ -16119,6 +16119,9 @@ function sync_package_pfblockerng($cron='') {
 				$pfb['aliasupdate']	= FALSE;		// Flag to signal changes to alias
 				$pfb['domain_clear']	= FALSE;		// Flag to signal no Aliases defined or all Aliases disabled.
 				$alias_cnt		= 0;
+				// issue #1048: per-alias-pass failure flag -- a sibling feed's success must
+				// never close a DIFFERENT feed's still-open download-failure ledger entry.
+				$pfb_dl_failed		= FALSE;
 
 				if ($list['action'] != 'Disabled' && isset($list['row'])) {
 					$alias				= "DNSBL_{$list['aliasname']}";
@@ -16261,6 +16264,9 @@ function sync_package_pfblockerng($cron='') {
 											pfb_download_failure($alias, $header, $pfbfolder, $row['url'], $row['format'], '');
 											// ADR-61: keyed on $alias (pfB_/DNSBL_-prefixed), not $header --
 											// the widget's deep-link match needs that prefix (issue #998).
+											// issue #1048: close moves to once-per-alias-pass below, so a
+											// sibling feed's success can never mask this failure.
+											$pfb_dl_failed = TRUE;
 											pfb_dnsbl_download_ledger_update(FALSE, $alias, "[ {$alias} - {$header} ] Download FAIL", $pfb['dbdir']);
 
 											// Utilize previously download file (If 'fail' marker exists)
@@ -16275,7 +16281,6 @@ function sync_package_pfblockerng($cron='') {
 										else {
 											// Clear any previous download fail marker
 											unlink_if_exists("{$pfbfolder}/{$header}.fail");
-											pfb_dnsbl_download_ledger_update(TRUE, $alias, '', $pfb['dbdir']);
 										}
 									}
 								}
@@ -16890,6 +16895,13 @@ function sync_package_pfblockerng($cron='') {
 								}
 							}
 						}
+					}
+
+					// issue #1048: close the download ledger entry once for the WHOLE
+					// alias-pass, iff no row in it failed -- a per-row close let a later
+					// feed's success mask an earlier feed's still-live failure.
+					if (!$pfb_dl_failed) {
+						pfb_dnsbl_download_ledger_update(TRUE, $alias, '', $pfb['dbdir']);
 					}
 
 					// ADR-12: record GENUINELY-changed DNSBL groups for
@@ -17835,6 +17847,9 @@ function sync_package_pfblockerng($cron='') {
 					pfb_logger("\n Invalid Aliasname:{$list['aliasname']}{$list['vtype']}, *skipping*", 1);
 					continue;
 				}
+				// issue #1048: per-alias-pass failure flag -- a sibling feed's success must
+				// never close a DIFFERENT feed's still-open download-failure ledger entry.
+				$pfb_dl_failed = FALSE;
 
 				foreach	($list['row'] as $row) {
 					if (!empty($row['url']) && $row['state'] != 'Disabled') {
@@ -18011,6 +18026,9 @@ function sync_package_pfblockerng($cron='') {
 										// $alias (the pfB_*-prefixed table name), not $header (the per-row label,
 										// never prefixed) -- the widget's deep-link recognition matches on the
 										// pfB_/DNSBL_ prefix, so keying on $header would leave every entry unlinked.
+										// issue #1048: close moves to once-per-alias-pass below, so a
+										// sibling feed's success can never mask this failure.
+										$pfb_dl_failed = TRUE;
 										pfb_ip_download_ledger_update(FALSE, $alias, "[ {$alias} - {$header} ] Download FAIL", $pfb['dbdir']);
 
 										// Utilize previously download file (If 'fail' marker exists)
@@ -18030,7 +18048,6 @@ function sync_package_pfblockerng($cron='') {
 									else {
 										// Clear any previous download fail marker
 										unlink_if_exists("{$pfbfolder}/{$header}.fail");
-										pfb_ip_download_ledger_update(TRUE, $alias, '', $pfb['dbdir']);
 										pfb_logger('.', 1);
 									}
 								}
@@ -18453,6 +18470,13 @@ function sync_package_pfblockerng($cron='') {
 							}
 						}
 					}
+				}
+
+				// issue #1048: close the download ledger entry once for the WHOLE
+				// alias-pass, iff no row in it failed -- a per-row close let a later
+				// feed's success mask an earlier feed's still-live failure.
+				if (!$pfb_dl_failed) {
+					pfb_ip_download_ledger_update(TRUE, $alias, '', $pfb['dbdir']);
 				}
 			}
 		}
