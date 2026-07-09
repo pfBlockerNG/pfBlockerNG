@@ -252,26 +252,40 @@ final class PfbSyncStatusLedgerTest extends TestCase
 			$this->markTestSkipped('pcntl not available -- cannot spawn a real concurrent process for this test.');
 		}
 
-		$lockPath = $this->dir . '/pfb_sync_status.json.lock';
-		$pid      = pcntl_fork();
+		$lockPath   = $this->dir . '/pfb_sync_status.json.lock';
+		$markerPath = $this->dir . '/child_locked.marker';
+		$pid        = pcntl_fork();
 		if ($pid === -1) {
 			$this->markTestSkipped('pcntl_fork() failed.');
 		}
 
 		if ($pid === 0) {
-			// Child: acquire the SAME lock file pfb_sync_status_locked() uses, hold it
-			// briefly (simulating a still-running backgrounded pass mid read-modify-write),
-			// then release. A fresh fopen() (not an inherited fd) makes this a genuine
-			// second, independent lock holder -- the real multi-process scenario.
+			// Child: acquire the SAME lock file pfb_sync_status_locked() uses, signal
+			// readiness (issue #1055 -- a marker file, not a guessed sleep), hold the
+			// lock briefly (simulating a still-running backgrounded pass mid
+			// read-modify-write), then release. A fresh fopen() (not an inherited fd)
+			// makes this a genuine second, independent lock holder.
 			$fp = fopen($lockPath, 'c');
 			flock($fp, LOCK_EX);
+			touch($markerPath);
 			usleep(500000);
 			flock($fp, LOCK_UN);
 			fclose($fp);
 			exit(0);
 		}
 
-		usleep(100000); // let the child actually acquire the lock first
+		// issue #1055: poll for the child's readiness marker instead of guessing a
+		// fixed delay -- a bounded poll is the accepted last resort across this
+		// fork boundary (no in-process signal reaches across processes).
+		$deadline = microtime(TRUE) + 2.0;
+		while (!file_exists($markerPath)) {
+			if (microtime(TRUE) >= $deadline) {
+				pcntl_waitpid($pid, $waitStatus);
+				$this->fail('child process never signalled lock acquisition (marker file never appeared) -- deadlock or fork failure?');
+			}
+			usleep(1000);
+		}
+
 		$start = microtime(TRUE);
 		pfb_sync_status_open('ip', 'pfB_Example_v4', 'download', 'HTTP 404', $this->dir, self::clockAt(1000));
 		$elapsed = microtime(TRUE) - $start;

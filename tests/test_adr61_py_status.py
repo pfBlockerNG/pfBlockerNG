@@ -124,37 +124,57 @@ class TestPfbPyStatusLock:
         self, tmp_path: Any, monkeypatch: Any
     ) -> None:
         import threading
-        import time
 
         status_path = str(tmp_path / "pfb_py_status.json")
         pfb_unbound.pfb["pfb_py_status"] = status_path
 
-        # Widen the window between read and write for thread "A" only, so an
-        # unlocked implementation has a real chance to interleave with thread "B"'s
-        # full read-modify-write cycle in between.
+        # issue #456: gate each thread's read on an Event instead of a fixed sleep --
+        # the patched read fires INSIDE "with _pfb_py_status_lock:", so thread A
+        # parked here genuinely HOLDS the lock (a real block, not a timing guess).
         real_read_all = pfb_unbound._pfb_py_status_read_all
+        read_done = {"A": threading.Event(), "B": threading.Event()}
+        resume = {"A": threading.Event(), "B": threading.Event()}
 
-        def slow_read_all() -> list[dict[str, Any]]:
+        def gated_read_all() -> list[dict[str, Any]]:
+            name = threading.current_thread().name
             data = real_read_all()
-            if threading.current_thread().name == "A":
-                time.sleep(0.3)
+            if name in read_done:
+                read_done[name].set()
+                if not resume[name].wait(timeout=5.0):
+                    raise AssertionError(f"thread {name} was never told to resume -- deadlock?")
             return data
 
-        monkeypatch.setattr(pfb_unbound, "_pfb_py_status_read_all", slow_read_all)
+        monkeypatch.setattr(pfb_unbound, "_pfb_py_status_read_all", gated_read_all)
 
         def open_a() -> None:
             pfb_unbound.pfb_py_status_open("dnsbl", "keyA", "parse", "A", clock_fn=lambda: 1000)
 
         def open_b() -> None:
-            time.sleep(0.05)  # let A start (and, if locked, acquire the lock) first
             pfb_unbound.pfb_py_status_open("dnsbl", "keyB", "parse", "B", clock_fn=lambda: 2000)
 
         thread_a = threading.Thread(target=open_a, name="A")
         thread_b = threading.Thread(target=open_b, name="B")
+
         thread_a.start()
+        assert read_done["A"].wait(timeout=5.0), "thread A never reached its read -- deadlock?"
+
         thread_b.start()
-        thread_a.join(timeout=5)
-        thread_b.join(timeout=5)
+        # Discriminating probe: a real lock keeps B blocked acquiring it (A still
+        # holds it, parked above) -- B never reaches its OWN read this soon. This
+        # construction cannot pass with the lock removed: an unlocked B races in,
+        # reads the SAME stale/empty state A already read, and one of the two
+        # writes clobbers the other's key below.
+        b_raced_in = read_done["B"].wait(timeout=0.5)
+
+        resume["A"].set()
+        if not b_raced_in:
+            assert read_done["B"].wait(timeout=5.0), "thread B never reached its read after A released the lock"
+        resume["B"].set()
+
+        thread_a.join(timeout=5.0)
+        thread_b.join(timeout=5.0)
+        assert not thread_a.is_alive(), "thread A did not finish -- deadlock?"
+        assert not thread_b.is_alive(), "thread B did not finish -- deadlock?"
 
         entries = _read_status_file(status_path)
         items = {entry["item"] for entry in entries}
