@@ -4488,12 +4488,13 @@ function pfb_ip_parsed_fail($header, $line, $oline, $lineno, $logfile) {
 
 
 // Record failed IP/DNSBL Feed parse errors
-function pfb_parsed_fail($header, $line='', $oline, $logfile) {
+// issue #1004: trailing optional $lineno keeps existing 4-arg callers call-safe.
+function pfb_parsed_fail($header, $line='', $oline, $logfile, $lineno = '') {
 
 	$line   = $line ?: 'null';
 	$now	= pfb_log_iso_timestamp();
 
-	$log	= "{$now},{$header},{$line},{$oline}";
+	$log	= "{$now},{$header},{$line},{$oline},{$lineno}";
 	@file_put_contents("{$logfile}", "{$log}", FILE_APPEND);
 }
 
@@ -6483,10 +6484,10 @@ function pfb_is_blank_or_comment_line(string $line): bool {
 // per-line sink) and increments the per-feed skip counter so the caller can emit one summary
 // WARNING (pfb_dnsbl_scheme_skip_warn) after the feed. In lenient mode it never rejects, so
 // the counter is untouched and no parse-error line is written -- byte-identical to today.
-function pfb_dnsbl_scheme_line(string $line, bool $strict, $header, $oline, $logfile, &$skipped): string|false {
+function pfb_dnsbl_scheme_line(string $line, bool $strict, $header, $oline, $lineno, $logfile, &$skipped): string|false {
 	$stripped = pfb_dnsbl_strip_scheme($line, $strict);
 	if ($stripped === FALSE) {
-		pfb_parsed_fail($header, $line, $oline, $logfile);
+		pfb_parsed_fail($header, $line, $oline, $logfile, $lineno);
 		$skipped++;
 		return FALSE;
 	}
@@ -16209,11 +16210,15 @@ function sync_package_pfblockerng($cron='') {
 								$csv_type = '';
 								$ipcount = $ip_cnt = $ip_cnt6 = 0;
 								$pfb_scheme_skipped = 0;	// ADR-22: per-feed strict scheme/path skips
+								$dnsbl_lineno = 0;		// issue #1004: per-line counter for the parse-error detail sink
 
 								// Parse downloaded file for Domain names
 								if (($fhandle = @fopen("{$file_dwn}.orig", 'r')) !== FALSE) {
 									if (($dhandle = @fopen("{$pfbfolder}/{$header}.bk", 'w')) !== FALSE) {
 										while (($line = @fgets($fhandle)) !== FALSE) {
+
+											// issue #1004: incremented every iteration, regardless of outcome
+											$dnsbl_lineno++;
 
 											// Collect original line
 											$oline = $line;
@@ -16512,7 +16517,7 @@ function sync_package_pfblockerng($cron='') {
 
 												// Record Failed CSV Parse event
 												if (!$csv_found || empty($csv_type)) {
-													pfb_parsed_fail($header, '', $oline, $pfb['dnsbl_parse_err']);
+													pfb_parsed_fail($header, '', $oline, $pfb['dnsbl_parse_err'], $dnsbl_lineno);
 													continue;
 												}
 											}
@@ -16554,7 +16559,7 @@ function sync_package_pfblockerng($cron='') {
 												// counted for the once-per-feed summary WARNING below.
 												$strict = ($pfb['dnsbl_lenient'] !== PfbLenient::On);
 												$line = pfb_dnsbl_scheme_line($line, $strict, $header, $oline,
-													$pfb['dnsbl_parse_err'], $pfb_scheme_skipped);
+													$dnsbl_lineno, $pfb['dnsbl_parse_err'], $pfb_scheme_skipped);
 												if ($line === FALSE) {
 													continue;
 												}
@@ -16633,7 +16638,7 @@ function sync_package_pfblockerng($cron='') {
 												}
 												else {
 													// Record failed parsed line
-													pfb_parsed_fail($header, '', $oline, $pfb['dnsbl_parse_err']);
+													pfb_parsed_fail($header, '', $oline, $pfb['dnsbl_parse_err'], $dnsbl_lineno);
 													continue;
 												}
 											}
@@ -16654,7 +16659,7 @@ function sync_package_pfblockerng($cron='') {
 
 												// Log invalid Domains
 												if (!isset($dnsbl_skip[$line])) {
-													pfb_parsed_fail($header, $line, $oline, $pfb['dnsbl_parse_err']);
+													pfb_parsed_fail($header, $line, $oline, $pfb['dnsbl_parse_err'], $dnsbl_lineno);
 												}
 												continue;
 											}
@@ -17963,6 +17968,7 @@ function sync_package_pfblockerng($cron='') {
 							$ip_data = '';		// IPs collected from feed
 							$ip_suppressed = FALSE;	// TRUE when suppression dropped otherwise-valid IPv6 entries
 							$parse_fail = 0;	// Failed parsed lines from feed
+							$ip_lineno = 0;		// issue #1004: per-line counter for the parse-error detail sink
 							pfb_logger('.', 1);
 
 							// Set 'auto' format for all lists, except for lists that require 'regex' parsing.
@@ -18001,6 +18007,9 @@ function sync_package_pfblockerng($cron='') {
 
 							if (($fhandle = @fopen("{$file_dwn}.orig", 'r')) !== FALSE) {
 								while (($line = @fgets($fhandle)) !== FALSE) {
+									// issue #1004: incremented every iteration, regardless of outcome
+									$ip_lineno++;
+
 									// Record original line for regex matching, if required.
 									$oline = $line;
 
@@ -18091,6 +18100,8 @@ function sync_package_pfblockerng($cron='') {
 															$ip_data .= $cidr . "\n";
 														}
 														else {
+															// issue #1004: detail sink deliberately Site-B-only (per-line);
+															// this per-CIDR path can fire many times per source line.
 															$parse_fail++;
 														}
 													}
@@ -18218,6 +18229,7 @@ function sync_package_pfblockerng($cron='') {
 
 										if (!$other_family_addr) {
 											$parse_fail++;
+											pfb_ip_parsed_fail($header, $line, $oline, $ip_lineno, $pfb['ip_parse_err']);
 										}
 									}
 								}

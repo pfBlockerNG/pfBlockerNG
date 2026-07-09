@@ -335,6 +335,79 @@ def test_ipv6_http_feed_loads(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer)
         assert h.rule_references(deployed_vm, spec.alias), f"no loaded pf rule references {spec.alias}"
 
 
+# --------------------------------------------------------------------------- #
+# issue #1004 — the generic IP-list per-line parse-error detail sink (Site B: the
+# "other family" heuristic in the regex-fallback path). Mirrors the DNSBL strict-
+# scheme parse-error-log proof (test_strict_skips_invalid_scheme_and_path_and_logs)
+# but for pfb_ip_parsed_fail()/ip_parsed_error.log.
+# --------------------------------------------------------------------------- #
+
+
+def test_ip_generic_parse_failure_logs_line_and_number(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """issue #1004: a Site-B IP parse failure logs the bad line + its source line
+    number; the once-per-feed main-log summary stays exactly one line (no spam).
+
+    AUTHORED, NOT EXECUTED against a live VM (no VM in this session;
+    sync_package_pfblockerng() is the CI-untestable monolith issue #993 names, so a
+    live-VM smoke run is the only coverage path for its parse loop). Pins the
+    expected on-box observable for the next live smoke run.
+
+    ``bad_line`` ("999.999.999.999") is a genuine Site-B garbage line: digit/dot
+    only (clears the heuristic's ``[a-zA-Z,;|"'?]`` exclusion), 4 dot-groups
+    (IP-shaped) but out-of-range octets (fails ``validate_ipv4`` AND the ipv4
+    regex's 0-255 octet classes), and not the opposite family (no ':'). A line
+    WITH LETTERS (e.g. the issue's illustrative "not-an-ip-!!!") does NOT reach
+    this heuristic at all -- the same exclusion class short-circuits whenever a
+    letter is present, so it is silently dropped, uncounted, by EXISTING design
+    (verified by reading the heuristic; not a #1004 change).
+
+    Given the alias table does not exist yet, and the main-log summary + the
+      ip_parsed_error.log header marker are captured before any update (before-
+      state, transition proof),
+    When a feed with one valid host + the one bad line loads via a Force Update,
+    Then the valid host is a pf table member, EXACTLY ONE new ip_parsed_error.log
+      row appears for this feed's header, that row's line + oline fields carry the
+      bad text and its 1-based source line number (2 -- ``$ip_lineno`` increments
+      once per fgets() line before either line is judged), and the main log gains
+      EXACTLY ONE new "[!] Parse Errors [ header ]: 1" summary line -- proving the
+      once-per-feed contract (no per-line spam) is unchanged by #1004.
+    """
+    header = "smokeip1004"
+    valid_host = "203.0.113.90"
+    bad_line = "999.999.999.999"
+    oline_bad = f"{bad_line}\n"  # pfb_ip_parsed_fail's $oline keeps fgets()'s raw newline
+    feed_url = mock_feeds.register("ip_parse_fail_bad.txt", f"{valid_host}\n{bad_line}\n")
+    spec = h.IpCase(aliasname="smokeip1004", feed_url=feed_url, header=header, family="v4")
+
+    # BEFORE: no table yet, no row for this (session-unique) header, no summary line.
+    assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the feed was ever loaded"
+    header_marker = f",{header},"
+    header_before = h.count_log_marker(deployed_vm, h.IP_PARSE_ERR_LOG, header_marker)
+    summary_marker = f"[!] Parse Errors [ {header} ]: 1"
+    summary_before = h.count_log_marker(deployed_vm, h.PFB_LOG, summary_marker)
+
+    with h.CaseContext(deployed_vm, spec):
+        members = h.wait_pfctl_table(deployed_vm, spec.alias)
+        assert h.member_present(members, valid_host), f"{valid_host} not in {spec.alias}: {members}"
+
+        header_after = h.count_log_marker(deployed_vm, h.IP_PARSE_ERR_LOG, header_marker)
+        assert header_after == header_before + 1, (
+            f"expected exactly ONE new ip_parsed_error.log row for header {header!r} "
+            f"(before={header_before}, after={header_after})"
+        )
+        parse_err = h.read_log_file(deployed_vm, h.IP_PARSE_ERR_LOG)
+        assert f"{header},{bad_line},{oline_bad},2" in parse_err, (
+            f"expected the bad line + its 1-based source line number (2) in the new "
+            f"ip_parsed_error.log row, got:\n{parse_err[-2000:]}"
+        )
+
+        summary_after = h.count_log_marker(deployed_vm, h.PFB_LOG, summary_marker)
+        assert summary_after == summary_before + 1, (
+            f"expected exactly ONE new '{summary_marker}' summary line (before={summary_before}, "
+            f"after={summary_after}) -- the once-per-feed summary must not spam per-line"
+        )
+
+
 def test_dnsbl_http_hosts_feed_loads(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """DNSBL hosts format over HTTP: ``dnsbl_hosts.txt`` (``0.0.0.0 <domain>``) blocks.
 
