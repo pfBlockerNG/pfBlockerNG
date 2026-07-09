@@ -8,7 +8,7 @@ Type/Group/Evaluated-Domain/Feed render -- as opposed to the ``-`` placeholders
 ``index.php`` falls back to when the correlation grep misses.
 
 Tier B (``ui_e2e``): the sinkhole listener (lighttpd on the DNSBL VIP, port
-8081) is outside the authenticated webConfigurator's reach, so Tier A
+80) is outside the authenticated webConfigurator's reach, so Tier A
 (``ui_render``) cannot exercise it -- see ``test_render_smoke.py``'s
 ``EXCLUDED_FROM_TIER_A["dnsbl_vip_sinkhole_pages"]``. This test causes a real
 DNS block and a real HTTP correlation (mutating, slow) -- daily/on-demand
@@ -66,13 +66,20 @@ def test_dnsbl_block_page_shows_real_correlation_detail(deployed_vm: helpers.Smo
         # Runs inside CaseContext so the dnsbl.log line is guaranteed fresh and
         # egress being blocked here doesn't matter (the curl is loopback-local).
         #
-        # issue #1013: pfb_create_dnsbl() (pfblockerng.inc ~5793) restarts the
-        # sinkhole via restart_service('pfb_dnsbl'), whose rc script forks
-        # lighttpd_pfb -- lighttpd self-daemonizes (pfblockerng.inc ~2587-2591,
-        # issue #662), so the rc script -- and reload() -- can return before the
-        # forked child finishes binding :8081. Poll instead of one unbounded curl,
-        # with a short per-attempt timeout so a dropped-not-refused SYN fails fast
-        # rather than hanging the whole budget on one attempt.
+        # issue #1013: pfb_create_lighttpd() (pfblockerng.inc:5459-5460) binds the
+        # sinkhole to port 80 (443 for TLS) when dnsbl_iface=='lo0' (this harness's
+        # VIP mode) -- NAT is skipped entirely for lo0 (pfb_dnsbl_nat_enabled()), so
+        # dnsbl_port/dnsbl_port_ssl (8081/8443) never apply here; on a real interface
+        # they're the internal NAT local-port, never externally reachable either. The
+        # externally-reachable port is always 80/443.
+        #
+        # pfb_create_dnsbl() (pfblockerng.inc ~5793) restarts the sinkhole via
+        # restart_service('pfb_dnsbl'), whose rc script forks lighttpd_pfb --
+        # lighttpd self-daemonizes (pfblockerng.inc ~2587-2591, issue #662), so the
+        # rc script -- and reload() -- can return before the forked child finishes
+        # binding. Poll instead of one unbounded curl, with a short per-attempt
+        # timeout so a dropped-not-refused SYN fails fast rather than hanging the
+        # whole budget on one attempt.
         curl_argv = (
             helpers.GUEST_CURL,
             "-s",
@@ -82,7 +89,7 @@ def test_dnsbl_block_page_shows_real_correlation_detail(deployed_vm: helpers.Smo
             "8",
             "-H",
             f"Host: {domain}",
-            f"http://{helpers.DEFAULT_DNSBL_VIP4}:8081/",
+            f"http://{helpers.DEFAULT_DNSBL_VIP4}/",
         )
         attempts, delay = 10, 1.5  # lighttpd's post-fork bind is normally sub-second; generous headroom
         result: subprocess.CompletedProcess[str] | None = None
@@ -99,19 +106,13 @@ def test_dnsbl_block_page_shows_real_correlation_detail(deployed_vm: helpers.Smo
             # this log, no second CI dispatch + diagnostics-archaeology round trip.
             diag = deployed_vm.ssh(
                 "ps auxww | grep -i '[l]ighttpd_pfb'; "
-                "/usr/bin/sockstat -4 -l 2>/dev/null | grep ':8081' || echo NO_LISTENER; "
-                # issue #1013 round 4: NO_LISTENER survived a confirmed-live VIP, so the
-                # remaining suspects are the lighttpd/lighttpd_pfb hardlink pfb_create_dnsbl()
-                # makes (pfblockerng.inc ~5786-5788) and whether the rc script's own daemon
-                # actually ran -- both are cheap to confirm directly rather than guess again.
-                "/bin/ls -la /usr/local/sbin/lighttpd /usr/local/sbin/lighttpd_pfb 2>&1; "
-                "/usr/bin/grep -i lighttpd_pfb /var/log/system.log 2>/dev/null | tail -20",
+                "/usr/bin/sockstat -4 -l 2>/dev/null | grep -E ':80([[:space:]]|$)' || echo NO_LISTENER",
                 timeout=15.0,
             )
             pytest.fail(
                 f"sinkhole curl never succeeded after {attempts} attempts: "
                 f"rc={result.returncode} stderr={result.stderr!r}\n"
-                f"lighttpd_pfb/:8081 snapshot (rc={diag.returncode}):\n{diag.stdout}{diag.stderr}"
+                f"lighttpd_pfb/:80 snapshot (rc={diag.returncode}):\n{diag.stdout}{diag.stderr}"
             )
 
         body = result.stdout
