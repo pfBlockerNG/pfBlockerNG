@@ -9,6 +9,8 @@ You are the IMPLEMENTER. Work in the per-ADR worktree on branch
 adr/62-dnsbl-unified-line-parsing. One commit, pushed to the branch. Implement yourself; NEVER
 spawn sub-agents. Behaviour-PRESERVING phase: pure extractions, zero output change. Follow
 CLAUDE.md in full (tabs, uppercase TRUE/FALSE, str_* over preg_*).
+Blast-radius note for the gate: live parse sites are refactored but byte-identity is pinned —
+zero intended output change; any Phase-1 corpus drift is a phase failure.
 
 WHY THIS PHASE EXISTS
 Phase 4 broadens the per-line ABP capture and applies the universal control-line skip; Phase 5

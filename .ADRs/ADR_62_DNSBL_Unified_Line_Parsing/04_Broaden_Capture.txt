@@ -12,6 +12,8 @@ spawn sub-agents. BEHAVIOUR-CHANGING phase with a deliberately SMALL delta budge
 corpus must stay byte-identical outside delta rows D2/D3/D4/D5, which flip here (red->green:
 OLD pinned by Phase 1, NEW asserted here). Follow CLAUDE.md (tabs, uppercase TRUE/FALSE,
 PFBL-01 sniff, str_* over preg_*).
+Blast-radius note for the gate: unclassified (plain/permit) feed parsing only — delta budget
+D2–D5; ABP-classified feeds (D1) keep the $easylist branch and must not move.
 
 WHY THIS PHASE EXISTS
 With the extended Python routing proven (Phase 3), the PHP side can start handing every

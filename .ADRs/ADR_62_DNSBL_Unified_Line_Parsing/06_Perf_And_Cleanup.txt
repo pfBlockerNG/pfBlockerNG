@@ -8,6 +8,8 @@ ROLE
 You are the IMPLEMENTER. Work in the per-ADR worktree on branch
 adr/62-dnsbl-unified-line-parsing. One commit, pushed to the branch. Implement yourself; NEVER
 spawn sub-agents. Follow CLAUDE.md.
+Blast-radius note for the gate: dead-code deletion + measurement only — zero intended behaviour
+change; the Phase-1 corpus stays byte-identical, deltas included.
 
 WHY THIS PHASE EXISTS
 The corrected design keeps the plain hot path (PHP extraction + Python parse()) and only adds

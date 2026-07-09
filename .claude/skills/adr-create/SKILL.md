@@ -154,7 +154,28 @@ claims and cite real symbols + `file:line`:
    **Front-load the preparatory phases from (8)** — extract pure functions + lay
    down oracle/regression tests, and do the simplifying refactors — *before* any
    risky swap of data structures or I/O. Each phase becomes one `NN_Name.txt`
-   prompt.
+   prompt. **Per-phase safety rails (each was a cause of ADR-62's
+   pre-implementation re-split — build them in from the start):**
+   - **Delta budget.** Number the accepted behaviour deltas in §2 (D1, D2, …);
+     every behaviour-changing phase declares the exact subset it may flip, and
+     the oracle stays byte-identical outside it. A phase whose budget spans
+     deltas carried by **independent mechanisms** (e.g. a broadened capture vs
+     a deletable classifier) is TWO phases — one mechanism per phase; ADR-62's
+     original Phase 4 bundled five interacting concerns and had to be re-split.
+   - **Pinned test surfaces.** For every golden/oracle/capture target the
+     PLANNER names the driving harness + entry symbol (which pytest path, which
+     PHPUnit test drives which function — mirror an existing sibling test),
+     enumerated from source — never "implementer picks a way to test it". A
+     target with **no off-appliance driver** becomes an explicit DEFERRED smoke
+     row carrying its exact live-VM dispatch command; never instruct
+     re-implementing production logic as its own oracle (an oracle of a copy is
+     coverage theater).
+   - **Blast radius.** Every phase states what production behaviour can change
+     when it lands alone ("NONE" / "PRODUCTION-DORMANT until Phase N" must be
+     stated, never implied) — checker-enforced from ADR-62 on.
+   - **Latent bug found while planning.** File the tracking issue immediately;
+     its fix lands as its **own red→green commit** at the start of the earliest
+     phase that depends on it (the ADR-62 / issue #1060 pattern).
 
 Use `AskUserQuestion` only for genuine forks. Periodically reflect the evolving
 ADR back to the user in prose so they can correct course.
@@ -207,6 +228,9 @@ ADR: .ADRs/ADR_NN_Name/ADR.md   (read <relevant section> first)
 ROLE
 <which branch; which phase; behaviour-preserving? ; "inline on <branch>, one
  commit, push directly">
+Blast-radius note for the gate: <what production behaviour can change when this
+ phase lands alone — "NONE" / "PRODUCTION-DORMANT until Phase N" stated, never
+ implied; a behaviour-changing phase names its delta budget here>
 
 WHY THIS PHASE EXISTS
 <motivation + the load-bearing facts this phase depends on>
@@ -267,6 +291,10 @@ Rules:
   tabs/consecutive spaces, oversized, wrong encoding) with expected outcomes as
   REQUIRED test data — the implementer fills in results, it never invents the
   input classes (CLAUDE.md "THE BRIEF" §4).
+- **Every prompt carries a blast-radius line** (Step 2 item 9's safety rails;
+  `blast-radius` check in the prompt checker): what production behaviour can
+  change when the phase lands alone, with a behaviour-changing prompt naming
+  its exact delta budget and the pinned surfaces its oracle rides.
 - **Template drift is bounded:** mirror the latest ADR's section set and prose
   style, but the VERIFICATION and HANDOFF gate content above comes from THIS
   skill's template — one weak ADR must not become the convention every later

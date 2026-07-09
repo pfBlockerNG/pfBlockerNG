@@ -11,6 +11,9 @@ adr/62-dnsbl-unified-line-parsing. TWO commits (the issue #1060 fix, then the de
 pushed to the branch. Implement yourself; NEVER spawn sub-agents. BEHAVIOUR-CHANGING phase with
 a delta budget of exactly D1 (red->green: OLD pinned by Phase 1, NEW asserted here); the #1060
 fix is its own red->green. Follow CLAUDE.md (tabs, uppercase TRUE/FALSE, PFBL-01 sniff).
+Blast-radius note for the gate: ABP-classified feeds switch to per-line capture (delta D1) and
+every .abp-marker consumer changes; outside D1 and the #1060 TLD-pass fix, output stays
+byte-identical.
 
 WHY THIS PHASE EXISTS
 Phase 4 made line shape decide the parser for unclassified feeds. The feed-level classifier is

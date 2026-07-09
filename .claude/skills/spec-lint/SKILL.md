@@ -2,8 +2,9 @@
 name: spec-lint
 description: >
   Lint ADR phase prompts for the delegation-contract blocks (VERIFICATION,
-  HANDOFF naming its RESULTS file, declared test mode, reality-override line)
-  via scripts/check_phase_prompts.py — the mechanical floor beneath /adr-create.
+  HANDOFF naming its RESULTS file, declared test mode, reality-override line,
+  blast-radius line from ADR-62 on) via scripts/check_phase_prompts.py — the
+  mechanical floor beneath /adr-create.
   Args: [ADR number or prompt file paths] (default: every tracked post-contract
   prompt). Use when the user says "lint the ADR prompts", "spec-lint ADR N",
   "check the phase prompts", or invokes /spec-lint. /adr-create runs this

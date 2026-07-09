@@ -10,6 +10,8 @@ adr/62-dnsbl-unified-line-parsing. One commit, pushed to the branch. Implement y
 spawn sub-agents. Docs + smoke-test phase — no production-code behaviour change (the suites stay
 green as the oracle that nothing shifted; the new smoke tests are additive). Docs use normal
 professional grammar (CLAUDE.md documentation exception). Follow CLAUDE.md.
+Blast-radius note for the gate: docs + additive smoke rows only — no production-code behaviour
+change.
 
 WHY THIS PHASE EXISTS
 The as-built system (retired feed-level ABP classification; per-line shape capture; single Python

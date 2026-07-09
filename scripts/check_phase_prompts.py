@@ -21,6 +21,9 @@ CHECKS (per post-contract phase prompt)
   one (``behaviour-preserving`` / ``oracle``), case-insensitive.
 * ``reality-override``     — the standing line telling the implementer the live
   tree and prior RESULTS "override this prompt" on any conflict is present.
+* ``blast-radius``         — (ADR >= :data:`_BLAST_RADIUS_MIN_ADR` only) a
+  blast-radius line exists: what production behaviour can change when this
+  phase lands alone ("NONE" / "PRODUCTION-DORMANT until Phase N" count).
 
 SCOPE
 -----
@@ -54,6 +57,14 @@ _CONTRACT_MIN_ADR = 60
 # an ADR added here must comply. Keep in sync with the Proposed set (positive
 # Status grep — a negative grep ate ADR-52's "Not yet implemented" once).
 _RETROFITTED_ADRS = frozenset({25, 32, 33, 34, 51, 52, 54, 55, 56, 57})
+
+# First ADR whose prompts must carry a blast-radius line. ADR-62's phases were
+# re-split pre-implementation because one phase silently bundled five concerns;
+# a stated blast radius is what makes an overloaded phase visible to the gate.
+# Implemented ADRs below this stay grandfathered (their prompts never run again).
+_BLAST_RADIUS_MIN_ADR = 62
+
+_BLAST_RE = re.compile(r"blast[- ]radius", re.IGNORECASE)
 
 # .ADRs/ADR_{NN}_{Name}/{MM}_{Name}.txt — capture the ADR number for the cutoff.
 _PROMPT_RE = re.compile(r"(?:^|/)\.ADRs/ADR_(\d+)_[^/]+/\d+_[^/]+\.txt$")
@@ -108,7 +119,7 @@ def _handoff_names_results(text: str) -> bool:
     return False
 
 
-def _check_prompt(text: str) -> list[tuple[str, str]]:
+def _check_prompt(text: str, adr: int) -> list[tuple[str, str]]:
     """Return ``(check_id, message)`` for each contract block missing in ``text``."""
     lower = text.lower()
     missing: list[tuple[str, str]] = []
@@ -120,6 +131,8 @@ def _check_prompt(text: str) -> list[tuple[str, str]]:
         missing.append(("mode-declared", "no test mode declared (red-run/red->green vs behaviour-preserving/oracle)"))
     if "override this prompt" not in lower:
         missing.append(("reality-override", 'no "prior RESULTS + live tree override this prompt" line'))
+    if adr >= _BLAST_RADIUS_MIN_ADR and not _BLAST_RE.search(text):
+        missing.append(("blast-radius", "no blast-radius line (what may change when this phase lands alone)"))
     return missing
 
 
@@ -137,7 +150,7 @@ def find_violations(paths: list[Path]) -> list[tuple[Path, str, str]]:
         except OSError as exc:
             violations.append((path, "unreadable", f"cannot read prompt: {exc}"))
             continue
-        violations.extend((path, check, msg) for check, msg in _check_prompt(text))
+        violations.extend((path, check, msg) for check, msg in _check_prompt(text, adr))
     return violations
 
 
@@ -158,7 +171,8 @@ def main(argv: list[str]) -> int:
         f"{_CONTRACT_MIN_ADR}) must carry the CLAUDE.md delegation-contract blocks: "
         "a VERIFICATION section, a HANDOFF block naming its RESULTS/ file, a declared "
         "test mode (red-run vs behaviour-preserving/oracle), and the reality-override "
-        'line. Template: /adr-create Step 4; law: CLAUDE.md "The delegation contract".',
+        f"line; from ADR >= {_BLAST_RADIUS_MIN_ADR} also a blast-radius line. "
+        'Template: /adr-create Step 4; law: CLAUDE.md "The delegation contract".',
         file=sys.stderr,
     )
     return 1

@@ -4,8 +4,10 @@ Intent: a phase prompt authored after the delegation contract (ADR >= 60) must
 carry the contract's mandatory blocks — a VERIFICATION section, a HANDOFF block
 naming its RESULTS file, a declared test mode (red-run vs behaviour-preserving
 oracle), and the reality-override line — so a weak spec is caught before a
-Sonnet implementer executes it. Pre-contract ADRs (<= 59) are grandfathered and
-must never be flagged.
+Sonnet implementer executes it. From ADR >= 62 a blast-radius line is also
+required (ADR-62's phases were re-split pre-implementation because one phase
+silently bundled five concerns). Pre-contract ADRs (<= 59) are grandfathered
+and must never be flagged.
 
 Per the test mandate, every flagged case is paired with the compliant form that
 must stay clean, so green proves the check DISCRIMINATES rather than always or
@@ -175,6 +177,34 @@ def test_handoff_results_must_be_in_the_handoff_span(tmp_path: Path) -> None:
         "HANDOFF — summarize what you did in the chat when finished.",
     )
     assert _violations(tmp_path, PROMPT_60, text) == ["handoff-results"]
+
+
+PROMPT_62 = ".ADRs/ADR_62_Example/01_Example.txt"
+_BLAST_LINE = "Blast-radius note for the gate: NONE — test-only phase.\n"
+
+
+def test_blast_radius_missing_is_flagged_from_adr_62(tmp_path: Path) -> None:
+    # _COMPLIANT has no blast-radius line: clean at ADR-60 (cutoff), flagged at 62.
+    assert _violations(tmp_path, PROMPT_60, _COMPLIANT) == []
+    assert _violations(tmp_path, PROMPT_62, _COMPLIANT) == ["blast-radius"]
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["BLAST RADIUS: none — docs only.\n", _BLAST_LINE],
+)
+def test_blast_radius_wordings_satisfy_the_check(tmp_path: Path, line: str) -> None:
+    assert _violations(tmp_path, PROMPT_62, _COMPLIANT + line) == []
+
+
+def test_noncompliant_adr62_prompt_reports_blast_radius_too(tmp_path: Path) -> None:
+    assert sorted(_violations(tmp_path, PROMPT_62, "just do the thing\n")) == [
+        "blast-radius",
+        "handoff-results",
+        "mode-declared",
+        "reality-override",
+        "verification-section",
+    ]
 
 
 def test_mode_tokens_are_word_bounded(tmp_path: Path) -> None:

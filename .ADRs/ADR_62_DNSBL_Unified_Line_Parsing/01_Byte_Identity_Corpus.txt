@@ -10,6 +10,8 @@ You are the IMPLEMENTER. Work in the per-ADR worktree on branch
 adr/62-dnsbl-unified-line-parsing (off the latest devel; create if absent). One commit, pushed
 to the branch. You implement yourself with Read/Edit/Write/Bash — you NEVER spawn sub-agents.
 Behaviour-PRESERVING phase: change no production code; only add a test corpus + golden oracle.
+Blast-radius note for the gate: NONE — test-only phase (corpus fixtures + oracle harnesses);
+any production-file change in the diff is a phase failure.
 Follow CLAUDE.md in full.
 
 WHY THIS PHASE EXISTS
