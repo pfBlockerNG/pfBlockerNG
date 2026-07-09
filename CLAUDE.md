@@ -481,6 +481,14 @@ Run linters while working; the `.githooks/pre-commit` hook blocks failing commit
   diff-scoped): forbids ADR phase numbers, `RESULTS/` handoff refs, and review archaeology on
   **added** lines under `src/` + `scripts/` ("Comments — constraint, not narration"); escape a
   genuine need inline with `# narration-ok: <reason>`.
+- **Retired-token guard** (`scripts/check_retired_tokens.py`, issue #1059; pre-commit,
+  CI-PR, and a Claude `PreToolUse` hook, diff-scoped, **warn-only during rollout**): a quoted literal
+  removed on ≥3 scan-root lines and not re-added as the same exact quoted span is a
+  *retirement*; any surviving occurrence (`git grep -F` over `src/`/`scripts/`/
+  `.github/workflows/`) is reported as a straggler (the #1047 class). Findings warn; a tool
+  error (exit ≥2) fails the CI job. Escapes: `# retired-token-ok: <reason>` on an intentional
+  survivor, `--token-allowlist` for a staged migration. Promote to blocking once the observed
+  false-positive rate is near zero.
 - **Markdown:** `npx markdownlint-cli2` (`--fix` to autofix). Blank line around every
   heading/list/fence; a language on every fence (`text` for plain output); single trailing
   newline. Rules + rationale in `.markdownlint.jsonc`; clean lint enforced pre-commit + CI.
