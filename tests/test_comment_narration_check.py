@@ -172,6 +172,24 @@ def test_clean_diff_yields_nothing() -> None:
     assert _find("src/a.inc", ["// pfb_foo(): guard empty input"]) == []
 
 
+def test_added_line_starting_with_plus_plus_is_not_misread_as_a_header() -> None:
+    # Hostile input (issue #1029): an added line whose own content starts
+    # with "++" renders in the diff as "+++ ..." -- must not be mistaken for
+    # a file header, which would drop it and every following added line.
+    diff = (
+        "diff --git a/scripts/tool.sh b/scripts/tool.sh\n"
+        "--- a/scripts/tool.sh\n"
+        "+++ b/scripts/tool.sh\n"
+        "@@ -0,0 +1,2 @@\n"
+        "+++ banner\n"
+        "+// per RESULTS/03 SS1\n"
+    )
+    v = ccn.find_violations(diff)
+    assert len(v) == 1
+    assert v[0].path == "scripts/tool.sh"
+    assert v[0].line == 2
+
+
 # --------------------------------------------------------------------------- #
 # CLI — the two production modes, end-to-end in a scratch repo
 # --------------------------------------------------------------------------- #
@@ -273,3 +291,21 @@ def test_cli_bad_ref_is_a_usage_error_not_a_traceback(tmp_path: Path) -> None:
     res = _run(tmp_path, "--diff", "no-such-ref")
     assert res.returncode == 2, res.stderr
     assert "git diff failed" in res.stderr
+
+
+def test_cli_staged_non_utf8_byte_does_not_crash_the_run(tmp_path: Path) -> None:
+    # Hostile input (issue #1029): a non-UTF-8 byte anywhere in the staged
+    # diff must not crash the run with a raw UnicodeDecodeError traceback --
+    # decode lossily and still report the real violation on its own line.
+    _git(tmp_path, "init", "-q", "-b", "devel")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/a.inc").write_text("// clean\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "base")
+
+    (tmp_path / "src/a.inc").write_bytes(b"// clean\n// note caf\xff\xfe\n// per RESULTS/03 SS1\n")
+    _git(tmp_path, "add", ".")
+    res = _run(tmp_path, "--staged")
+    assert res.returncode == 1, res.stderr
+    assert "Traceback" not in res.stderr, res.stderr
+    assert "src/a.inc:3" in res.stderr
