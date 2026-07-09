@@ -32,7 +32,7 @@ from .test_render_widget_ledger import (  # noqa: F401 -- clean_ledger used as a
     _ledger_open,
     clean_ledger,
 )
-from .webui import looks_like_login_page
+from .webui import looks_like_login_page, scrape_form_fields
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -72,8 +72,20 @@ def _get_failed_body(webui: WebUI) -> str:
 def _dismiss(webui: WebUI) -> None:
     """POST the widget's dismiss action -- the exact payload the hidden 'formicons'
     form's JS-driven submit sends (``pfblockerngack=1``); the handler redirects to
-    ``/`` on success (widget.php ~184-186)."""
-    resp = webui.post(WIDGET_PAGE, {"pfblockerngack": "1"})
+    ``/`` on success (widget.php ~184-186).
+
+    Can't use ``WebUI.post()`` (it hard-requires a scraped ``__csrf_magic`` token):
+    ``$nocsrf = TRUE`` at the top of this page means csrf-magic's output filter
+    never injects one here at all (confirmed live -- the rendered form has no
+    hidden CSRF input), so this replicates ``post()``'s field-scrape-then-POST
+    shape without that requirement.
+    """
+    page = webui.get(WIDGET_PAGE)
+    assert page.status_code == 200, f"GET {WIDGET_PAGE} -> HTTP {page.status_code} (expected 200)"
+    assert not looks_like_login_page(page.text), "pre-dismiss GET bounced to the login page -- not authenticated"
+    payload = scrape_form_fields(page.text)
+    payload["pfblockerngack"] = "1"
+    resp = webui.session.post(webui.url(WIDGET_PAGE), data=payload, timeout=30)
     assert resp.status_code == 200, f"POST {WIDGET_PAGE} pfblockerngack=1 -> HTTP {resp.status_code} (expected 200)"
     assert not looks_like_login_page(resp.text), "dismiss POST bounced to the login page -- session not authenticated"
 
