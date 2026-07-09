@@ -114,4 +114,64 @@ final class PfbLoggerIsoTimestampTest extends TestCase
 			. var_export($GLOBALS['pfb']['failed'] ?? [], true)
 		);
 	}
+
+	/**
+	 * Issue #1054 (ADR-60's stamped-unit contract amended to the physical LINE,
+	 * not the write): a full line, then two sub-line progress fragments ('.',
+	 * ' completed .'), then a line break followed by another full line -- only
+	 * the writes that actually START a new physical line get a stamp; the
+	 * fragments continuing mid-line must carry NONE. RED on pre-fix code: every
+	 * write got its own stamp, so the fragments would each carry one too.
+	 */
+	public function testMidLineFragmentsCarryNoStampOnlyLineStartsDo(): void
+	{
+		$log = tempnam(sys_get_temp_dir(), 'pfb_logtest_');
+		$this->assertNotFalse($log, 'could not create temp log file');
+		$this->tmpfiles[] = $log;
+		$GLOBALS['pfb']['log'] = $log;
+
+		pfb_logger("Downloading feed", 1);
+		pfb_logger('.', 1);
+		pfb_logger(' completed .', 1);
+		pfb_logger("\nNext [ x ]\n", 1);
+
+		$written = (string) file_get_contents($log);
+		$isoRe   = '\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}';
+		$this->assertMatchesRegularExpression(
+			"/^{$isoRe} Downloading feed\\. completed \\.\n{$isoRe} Next \\[ x \\]\n\$/",
+			$written,
+			"stamps must land exactly at line starts, never mid-line on a progress fragment; got: {$written}"
+		);
+		// Explicit negative check on the fragments themselves (vacuity guard): neither
+		// sub-line write ('.', ' completed .') may carry its own embedded stamp --
+		// exactly one stamp per physical line (2 lines here), never a 3rd mid-line one.
+		$this->assertSame(2, preg_match_all("/{$isoRe}/", $written),
+			"exactly one stamp per physical line (2 lines here) -- got: {$written}"
+		);
+	}
+
+	/**
+	 * Issue #1054, coverage row "fragment at BOL is stamped": a sub-line
+	 * progress fragment written as the VERY FIRST write to a fresh (absent)
+	 * target file starts a new physical line by definition, so it IS stamped --
+	 * proving the BOL tracker's lazy-init (file absent/empty => TRUE), not just
+	 * the leading-newline special case.
+	 */
+	public function testFragmentWrittenFirstToAFreshFileIsStamped(): void
+	{
+		$log = tempnam(sys_get_temp_dir(), 'pfb_logtest_');
+		$this->assertNotFalse($log, 'could not create temp log file');
+		unlink($log); // tempnam() creates it -- start truly absent, per the BOL contract's "absent" case.
+		$this->tmpfiles[] = $log;
+		$GLOBALS['pfb']['log'] = $log;
+
+		pfb_logger('.', 1);
+
+		$written = (string) file_get_contents($log);
+		$this->assertMatchesRegularExpression(
+			'/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \.$/',
+			$written,
+			"a fragment written first to an absent/fresh target must be stamped (it starts a new line); got: {$written}"
+		);
+	}
 }

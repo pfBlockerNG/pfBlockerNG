@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -57,6 +58,16 @@ final class LiveLogStdoutTest extends TestCase
 		return (string) ob_get_clean();
 	}
 
+	/**
+	 * issue #1054: pfb_logger()'s stamp decision is now tracked per-target-path
+	 * for the WHOLE process (beginning-of-line tracking), so this test's own
+	 * setUp() truncating the SHARED bootstrap log via file_put_contents()
+	 * (bypassing pfb_logger()) can leave a stale "mid-line" entry from an
+	 * earlier test's write to the same path. RunInSeparateProcess gives the
+	 * truncate-then-write sequence a fresh process, so the lazy BOL probe
+	 * correctly sees the just-emptied file.
+	 */
+	#[RunInSeparateProcess]
 	public function testMainLogMirrorsToStdoutDuringALifecycleCallback(): void
 	{
 		global $pfb;
@@ -90,6 +101,12 @@ final class LiveLogStdoutTest extends TestCase
 		$this->assertStringContainsString('Removing pfBlockerNG...', (string) @file_get_contents($pfb['log']));
 	}
 
+	/**
+	 * issue #1054: same cross-test static-BOL-cache isolation need as
+	 * testMainLogMirrorsToStdoutDuringALifecycleCallback above (this test
+	 * writes to the SHARED $pfb['errlog'] path via case 2).
+	 */
+	#[RunInSeparateProcess]
 	public function testOverrideForcesTheMirrorOnWithoutALifecycle(): void
 	{
 		global $pfb;
