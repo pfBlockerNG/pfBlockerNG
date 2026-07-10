@@ -39,6 +39,10 @@ while [ $# -gt 0 ]; do
 	esac
 done
 sha="${url##*commits/}"; sha="${sha%%/*}"
+if [ -f "${GH_MOCK_DIR}/${sha}.gh-fail" ]; then
+	echo "gh: HTTP 403 rate limit exceeded" >&2
+	exit 1
+fi
 case "$url" in
 	*check_name=*) f="${GH_MOCK_DIR}/${sha}.filtered.json" ;;
 	*)             f="${GH_MOCK_DIR}/${sha}.unfiltered.json" ;;
@@ -126,5 +130,27 @@ EOF
     When call run_gate
     The status should be failure
     The output should include "No 'All tests passed' check-run found"
+  End
+
+  It 'aborts loudly when the check-runs query itself fails (never walks back)'
+    # A gh failure (rate limit/network/auth) used to read as "no such check",
+    # falling through to a green ancestor while the tip was unverifiable.
+    touch "${GH_MOCK_DIR}/${tip}.gh-fail"
+    payload "$ancestor" '{"check_runs":[{"name":"All tests passed","started_at":"2026-01-01T00:00:00Z","completed_at":"2026-01-01T00:10:00Z","conclusion":"success"}]}'
+    When call run_gate
+    The status should be failure
+    The output should include 'cannot verify CI state'
+    The output should not include "CI green on ${ancestor}"
+    The stderr should include 'rate limit'
+  End
+
+  It 'treats a newer in-progress rerun as pending despite an older completed success'
+    # completed_at is null on the in-progress rerun and null sorts FIRST, so a
+    # completed_at sort let the older success shadow it; sorting by started_at
+    # surfaces the newest attempt, which has not concluded.
+    payload "$tip" '{"check_runs":[{"name":"All tests passed","started_at":"2026-01-01T00:00:00Z","completed_at":"2026-01-01T00:10:00Z","conclusion":"success"},{"name":"All tests passed","started_at":"2026-01-02T00:00:00Z","completed_at":null,"conclusion":null}]}'
+    When call run_gate
+    The status should be failure
+    The output should include 'has not concluded yet'
   End
 End
