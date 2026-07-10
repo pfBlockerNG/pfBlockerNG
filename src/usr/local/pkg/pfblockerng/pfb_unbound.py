@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import csv
 import errno
+import itertools
 import json
 import logging
 import logging.handlers
@@ -2768,6 +2769,10 @@ def get_details_dnsbl(
     # path silently misses it -> per-feed under-count).
     q_name_key = q_name.lower()
     cached = decisionDB.get(q_name_key)
+    # No snap_gen check here (issue #1074): this path only ATTRIBUTES a block operate()
+    # already served for this query -- operate() refreshed the memo first, and gating on
+    # the live generation would drop the log line for a block genuinely served just
+    # before a swap landed.
     dnsbl = cached.dnsbl if cached is not None else UNSET
     if dnsbl is not UNSET and dnsbl.is_found and not dnsbl.in_whitelist:
         # If logging is disabled, do not log blocked DNSBL events (Utilize DNSBL Webserver)
@@ -3693,6 +3698,12 @@ class BuildResult:
     rejects: RejectTally = field(default_factory=dict)
 
 
+# issue #1074: every built Snapshot gets a unique, monotonically-advancing generation
+# so a decisionDB memo can be tied to the snapshot that produced it (id() is unusable:
+# a freed old snapshot's id can be reused by the new one).
+_snapshot_gen = itertools.count(1)
+
+
 @dataclass(frozen=True)
 class Snapshot:
     """ADR-10: the immutable bundle of every matcher stratum a DNS query reads.
@@ -3746,6 +3757,9 @@ class Snapshot:
     counts: int = 0
     regex_count: int = 0
     rejects: RejectTally = field(default_factory=dict)
+    # issue #1074: identity of this snapshot for decisionDB memo stamping; auto-assigned,
+    # never passed by builders.
+    gen: int = field(default_factory=lambda: next(_snapshot_gen))
 
     def containers(self) -> dict[str, Any]:
         """The per-query ``containers`` dict ``evaluate_domain`` reads (legacy keys).
@@ -5390,7 +5404,12 @@ def rebuild_and_swap(build_snapshot: Callable[[], Snapshot | None], *, emit_coun
       2. ``decisionDB.clear()`` -- the unified per-name LRU query memo (#67/#70/#72).
          It is otherwise reset only by ``init`` re-creating it, so a no-restart swap
          MUST clear it or ``operate()`` re-serves a STALE block/allow verdict on a cache
-         miss (a newly-added name would stay unblocked, a newly-removed name blocked);
+         miss (a newly-added name would stay unblocked, a newly-removed name blocked).
+         The clear alone is NOT sufficient (issue #1074): a query thread that captured
+         the OLD snapshot can memoize its verdict AFTER this clear, so every memo is
+         also stamped with its ``Snapshot.gen`` and a reader rejects a foreign-
+         generation entry -- the clear remains as eager eviction, the stamp is the
+         correctness guard;
       3. reset the DNSBL Reports cache through ``_db_reset_cache`` (``_db_lock``-
          serialized, parity with the init-time wipe -- never an off-thread file touch);
       4. re-emit ``pfb_py_count`` / ``pfb_py_regex_count`` (the ``DNSBL_Regex`` UI alias)
@@ -5629,13 +5648,20 @@ class Decision:
     dnsbl: Any = UNSET  # DnsblDecision once the DNSBL stratum evaluated the name
     noaaaa: Any = UNSET  # bool (AAAA-only): True = block, False = allow
     safesearch: Any = UNSET  # matched safeSearchDB {A,AAAA} entry, or None = no match
+    # issue #1074: Snapshot.gen this Decision was computed against. 0 (no real
+    # generation) never matches, so an unstamped entry always reads as stale.
+    snap_gen: int = 0
 
 
-def _decision_for(name: str) -> Decision:
+def _decision_for(name: str, snap_gen: int) -> Decision:
     # Get-or-create the one Decision entry for a name; axes are filled in by the caller.
+    # issue #1074: a memo is only valid for the snapshot generation that produced it --
+    # an entry stamped with another generation is replaced, never extended, so a write
+    # that lost a race with rebuild_and_swap's decisionDB.clear() cannot be extended
+    # into a fresh-looking verdict.
     dec = decisionDB.get(name)
-    if dec is None:
-        dec = Decision()
+    if dec is None or dec.snap_gen != snap_gen:
+        dec = Decision(snap_gen=snap_gen)
         decisionDB[name] = dec
     return dec
 
@@ -6261,7 +6287,7 @@ def safesearch_entry(q_name_original: str) -> Any:
     negative memo). Shared by the pre-resolution (NEW) and post-resolution
     (MODDONE, CNAME redirect) passes so both agree on the same memoized verdict.
     """
-    dec = _decision_for(q_name_original)
+    dec = _decision_for(q_name_original, _snapshot.gen)
     if dec.safesearch is UNSET:
         entry = safeSearchDB.get(q_name_original)
         # Validate 'www.' Domains
@@ -6433,7 +6459,7 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
         # axis): UNSET = not yet evaluated, True = block, False = allow (the old
         # excludeAAAADB negative memo). No separate excludeAAAADB / noAAAADB-memo.
         if qstate_valid and q_type == RR_TYPE_AAAA and pfb["noAAAADB"]:
-            dec = _decision_for(q_name_original)
+            dec = _decision_for(q_name_original, _snapshot.gen)
             if dec.noaaaa is UNSET:
                 dec.noaaaa = evaluate_noaaaa(q_name_original, noAAAADB)
 
@@ -6586,8 +6612,12 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
             # ("let Unbound resolve it" / whitelisted) -- both are decisions, both
             # are memoized. A repeat query (including a CNAME-blocked name, keyed on
             # the original) short-circuits here without re-resolving or re-evaluating.
+            # issue #1074: a memo stamped by ANOTHER snapshot generation is stale --
+            # a thread that raced rebuild_and_swap's clear() can re-insert an
+            # old-snapshot verdict after the swap, so the stamp, not mere presence,
+            # decides validity.
             dec = decisionDB.get(q_name)
-            dnsbl = dec.dnsbl if dec is not None else UNSET
+            dnsbl = dec.dnsbl if dec is not None and dec.snap_gen == snap.gen else UNSET
             if dnsbl is UNSET:
                 # The original query's TLD comes from qstate; a CNAME target (isCNAME)
                 # has its own TLD, so derive it from the target name being evaluated --
@@ -6647,8 +6677,9 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                     q_name = q_name_original
 
                 # Memoize the DNSBL verdict on the name's Decision (block OR allow), so
-                # this name is decided once; the other axes share the same entry.
-                _decision_for(q_name).dnsbl = dnsbl
+                # this name is decided once; the other axes share the same entry. The
+                # memo is stamped with THIS query's snapshot generation (issue #1074).
+                _decision_for(q_name, snap.gen).dnsbl = dnsbl
 
                 # Add domain data to DNSBL cache for Reports tab (fresh block only)
                 if dnsbl.is_found and not dnsbl.in_whitelist:

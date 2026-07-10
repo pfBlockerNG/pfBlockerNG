@@ -113,6 +113,14 @@ class _CountingLock:
         self._lock.__exit__(*exc)
 
 
+def test_each_snapshot_gets_a_fresh_generation() -> None:
+    # issue #1074: the decisionDB memo stamp needs every built Snapshot to carry a
+    # unique, advancing generation -- two builds must never share one (id() reuse is
+    # exactly the trap this replaces).
+    a, b = _snapshot(), _snapshot()
+    assert b.gen > a.gen > 0
+
+
 # --------------------------------------------------------------------------- #
 # Success path: rebind + clear decisionDB + reset Reports + recount
 # --------------------------------------------------------------------------- #
