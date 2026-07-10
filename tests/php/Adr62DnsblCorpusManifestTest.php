@@ -6,23 +6,23 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * ADR-62 Phase 1 -- byte-identity corpus, manifest-writer surface (b).
+ * ADR-62 -- byte-identity corpus, manifest-writer surface (b).
  *
  * Drives the REAL pfb_unbound_python_sources() (ADR-06/07) over the committed
  * tests/fixtures/dnsbl_corpus/txt/*.txt fixtures -- the documented per-feed
  * ".txt" staging output for each coverage-matrix row (ADR.md SS"Coverage
- * matrix"; the download loop itself has no off-appliance driver, ADR.md SS6
- * Phase 1, so these fixtures are the loop's DOCUMENTED output, not an
- * independently re-executed one -- the raw-feed -> ".txt" step is a DEFERRED
- * smoke row per the Phase-1 handoff) -- and asserts the produced ".raw" bytes
- * are byte-identical to the committed golden fixtures under
- * tests/fixtures/dnsbl_corpus/raw/. This is the falsification harness Phases
- * 3-5 must keep green (modulo the ADR's delta table).
+ * matrix"; the download loop itself has no off-appliance driver, so these
+ * fixtures are the loop's DOCUMENTED output, not an independently re-executed
+ * one -- the raw-feed -> ".txt" step is a DEFERRED smoke row) -- and asserts
+ * the produced ".raw" bytes are byte-identical to the committed golden
+ * fixtures under tests/fixtures/dnsbl_corpus/raw/. This is the falsification
+ * harness later phases must keep green (modulo the ADR's delta table).
  *
- * Delta-table rows (D1/D2/D4) assert TODAY's behaviour only at the surface
- * this test owns (manifest-writer passthrough); their PARSED verdict
- * (block/allow/zone/data) is asserted downstream in
- * tests/test_adr62_byte_identity_corpus.py (surface a).
+ * Delta-table rows: D1 asserts origin/devel's TODAY behaviour (Phase 5's
+ * classifier-deletion territory); D2/D4 (mixed_plain/permit_feed) assert
+ * their Phase-4 NEW outcome (verbatim capture) at the surface this test owns
+ * (manifest-writer passthrough) -- their PARSED verdict (block/allow/skip) is
+ * asserted downstream in tests/test_adr62_byte_identity_corpus.py (surface a).
  */
 #[CoversFunction('pfb_unbound_python_sources')]
 final class Adr62DnsblCorpusManifestTest extends TestCase

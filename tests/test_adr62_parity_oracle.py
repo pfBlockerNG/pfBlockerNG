@@ -1,37 +1,24 @@
-"""ADR-62 Phase 3 -- parity oracle for build()'s extended per-line routing.
+"""ADR-62 Phases 3-4 -- parity oracle for build()'s extended per-line routing.
 
-Two halves, per the phase brief:
+Two halves, per the Phase-3 brief:
 
-1. **Corpus parity** (Semantics #1): re-runs the SAME Phase-1 corpus
-   (``tests/fixtures/dnsbl_corpus/``) through ``build()``'s NEWLY EXTENDED
-   routing and asserts the domain/allow SET produced is byte-identical to
-   TODAY's golden set. **No delta row flips here** -- see the BLAST-RADIUS
-   note below.
+1. **Corpus parity** (Semantics #1): re-runs the Phase-1 corpus
+   (``tests/fixtures/dnsbl_corpus/``) through ``build()``'s extended routing
+   and asserts the domain/allow SET produced is byte-identical to
+   ``origin/devel``, modulo the delta table. As of Phase 4 (which wired the
+   broadened PHP capture and regenerated the ``mixed_plain``/``permit_feed``
+   corpus fixtures via the real writer), D2/D4 flip to their NEW outcome here
+   too -- see the golden-set comment below. D1 still does not move (Phase 5's
+   classifier-deletion territory).
 
-2. **Delta-NEW-outcome + hostile-input oracle**: PHP's manifest writer
-   (``pfblockerng.inc:7179-7189``) is UNCHANGED this phase -- for a 'plain'
-   feed it only passes ``||``/``@@||`` lines through verbatim; anything else is
-   CSV-column-extracted or silently dropped (no comma -> ``cols[1]`` unset).
-   So a regex/element-hiding/bare-``@@`` line CANNOT physically reach a
-   'plain' feed's committed ``raw/*.raw`` corpus fixture yet (Phase 1's
-   ``carry-forward #5`` also forbids hand-editing those files -- a "new" raw
-   fixture could only be produced by RUNNING the current, narrow writer, which
-   would just re-drop the shape, not capture it). This section instead feeds
-   Python's build() SYNTHETIC raw content directly (bypassing the writer
-   entirely) to prove the ALREADY-EXTENDED routing produces each delta row's
-   NEW outcome once Phase 4 broadens PHP's capture -- a forward-looking proof
-   of Python's half of the Phase-4 contract, not a claim about today's
-   production ``.raw`` bytes.
-
-BLAST-RADIUS (why no delta flips in section 1): D1 doesn't move because a
-bare domain is never captured by ``_dnsbl_is_abp_rule_line()`` in a plain feed
-(delta D1 is Phase 5's classifier-deletion territory) and an 'abp'-format
-feed's whole-feed route to ``parse_abp()`` is untouched by this phase. D2/D4
-don't move because the corpus's ``mixed_plain``/``permit_feed`` raw fixtures
-already hold PHP's TODAY-truncated result (e.g. ``falsepositive.example``,
-not ``falsepositive.example##.ad-banner``) -- the trigger shape itself never
-reaches ``raw/*.raw``. This is confirmed empirically below (section 1 stays
-green with ZERO changes to ``test_adr62_byte_identity_corpus.py``).
+2. **Delta-NEW-outcome + hostile-input oracle**: a SYNTHETIC-raw-content
+   oracle (bypassing the corpus/manifest writer entirely) that predates the
+   Phase-4 wiring and still stands: it pins the FULL hostile-input matrix
+   (every element-hiding marker variant, `/re/`+`$options`, bare anchors,
+   etc.) at the ``build()`` level, a broader surface than the handful of
+   shapes the corpus fixtures carry. Section 1's corpus-real assertions and
+   this section's synthetic ones now agree on every delta outcome (D2/D4
+   NEW); section 2 is kept for its wider hostile-input coverage.
 """
 
 from __future__ import annotations
@@ -99,10 +86,11 @@ def _run_corpus_build() -> P.BuildResult:
 _NAME_253 = ".".join(["b" * 61] * 4) + "." + "b" * 5
 
 # Golden per-feed domain/allow sets (Semantics #1): captured by running the
-# REAL build() over the Phase-1 corpus's committed raw/*.raw bytes (the same
-# fixtures Adr62DnsblCorpusManifestTest.php's PHP run produced) -- not
-# hand-derived. Every entry equals TODAY's value; the delta table does NOT
-# flip anything here (blast-radius note above).
+# REAL build() over the corpus's committed raw/*.raw bytes (the same fixtures
+# Adr62DnsblCorpusManifestTest.php's PHP run produced) -- not hand-derived.
+# Every entry equals origin/devel's value except mixed_plain/permit_feed,
+# whose D2/D4 rows carry their Phase-4 NEW outcome (the fixtures were
+# regenerated via the real broadened writer -- see feeds.json's "row" note).
 _GOLDEN_PER_FEED: dict[str, dict[str, set[str]]] = {
     "plain_hosts": {"blocked": {"plainhost1.example", "plainhost2.example"}, "allowed": set()},
     "csv_pt": {"blocked": {"ptfeed.example"}, "allowed": set()},
@@ -122,10 +110,15 @@ _GOLDEN_PER_FEED: dict[str, dict[str, set[str]]] = {
         "allowed": {"exception.abp.example", "regexallow.abp.example"},
     },
     "mixed_plain": {
-        "blocked": {"mixedhost.example", "anchor.mixed.example", "falsepositive.example"},
-        "allowed": set(),
+        "blocked": {
+            "mixedhost.example",
+            "anchor.mixed.example",
+            "regexplain.mixed.example",
+            "importantregex.mixed.example",
+        },
+        "allowed": {"allowregex.mixed.example"},
     },
-    "permit_feed": {"blocked": set(), "allowed": {"allowme.example", "accidentalallow.example"}},
+    "permit_feed": {"blocked": set(), "allowed": {"allowme.example"}},
     "oversized_feed": {"blocked": set(), "allowed": set()},  # #752: rejected (wire_cap)
     "wirecap_feed": {"blocked": {_NAME_253}, "allowed": set()},
     "reused_manifest_abp": {"blocked": {"reused.example"}, "allowed": set()},
@@ -134,8 +127,8 @@ _GOLDEN_PER_FEED: dict[str, dict[str, set[str]]] = {
 
 def test_corpus_domain_set_is_byte_identical_aggregate() -> None:
     """Semantics #1, aggregate: the WHOLE domain/allow set the extended routing
-    produces over the Phase-1 corpus equals TODAY's golden set exactly (a
-    stronger check than the per-domain membership assertions in
+    produces over the corpus equals the golden set exactly, modulo the delta
+    table (a stronger check than the per-domain membership assertions in
     test_adr62_byte_identity_corpus.py -- an unexpected EXTRA domain, from a
     mis-route, would also fail this)."""
     result = _run_corpus_build()
@@ -205,11 +198,13 @@ def _allowed(result: P.BuildResult, domain: str) -> bool:
 
 
 def test_delta_d2_new_element_hiding_verbatim_produces_no_false_positive_block() -> None:
-    """delta D2 NEW (contrast with test_adr62_byte_identity_corpus.py's
-    test_mixed_plain_feed_hash_truncation_false_positive_delta_d2, which pins
-    TODAY's PHP-truncation false positive): once the UNTRUNCATED line reaches
-    Python (Phase 4 scenario), the extended predicate routes it to
-    parse_abp(), which skips element-hiding -> NO block for the bare domain."""
+    """delta D2 NEW on synthetic input; now corroborated corpus-real by
+    test_adr62_byte_identity_corpus.py's
+    test_mixed_plain_feed_hash_truncation_false_positive_fixed_delta_d2 (Phase
+    4 wired the broadened PHP capture, so the corpus fixture itself now
+    carries the untruncated line). Once the UNTRUNCATED line reaches Python,
+    the extended predicate routes it to parse_abp(), which skips
+    element-hiding -> NO block for the bare domain."""
     result = _build_synthetic(
         [_plain_feed_row("eh_new")],
         {"eh_new": ["falsepositive2.example##.ad-banner", "realblock.example"]},
@@ -232,11 +227,13 @@ def test_delta_d2_new_every_element_hiding_marker_variant_produces_no_domain(mar
 
 
 def test_delta_d4_new_element_hiding_verbatim_in_permit_feed_produces_no_accidental_allow() -> None:
-    """delta D4 NEW (contrast with test_adr62_byte_identity_corpus.py's
-    test_permit_feed_hash_truncation_accidental_allow_delta_d4): once the
-    UNTRUNCATED line reaches Python, the permit loop's skip set (now sharing
-    _dnsbl_is_abp_rule_line with the plain-block loop) catches it BEFORE
-    parse() ever runs -- no accidental band-2 allow."""
+    """delta D4 NEW on synthetic input; now corroborated corpus-real by
+    test_adr62_byte_identity_corpus.py's
+    test_permit_feed_hash_truncation_accidental_allow_fixed_delta_d4 (Phase 4
+    wired the broadened PHP capture). Once the UNTRUNCATED line reaches
+    Python, the permit loop's skip set (sharing _dnsbl_is_abp_rule_line with
+    the plain-block loop) catches it BEFORE parse() ever runs -- no accidental
+    band-2 allow."""
     result = _build_synthetic(
         [_plain_feed_row("permit_new", mode="permit")],
         {"permit_new": ["accidentalallow2.example##.ad-banner", "realallow.example"]},

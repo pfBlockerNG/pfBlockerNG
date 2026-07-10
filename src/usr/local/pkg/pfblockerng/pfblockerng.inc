@@ -6693,11 +6693,11 @@ function pfb_dnsbl_collect_feed_ip(string $guard_value, string $candidate_value,
 }
 
 
-// ADR-62: blank/comment/ABP-marker capture guard for the (not-yet-wired) universal
-// control-line skip. Mirrors pfb_is_blank_or_comment_line's contract: blank detection is
-// an exact '' match, so the CALLER must trim() first. Deliberately excludes '#' --
-// pfb_dnsbl_hash_line_classify() owns it (side effects). A bracketed IPv6 literal is an
-// ADDRESS, never skipped as an ABP section marker (ADR-62 §2 Decision 4).
+// ADR-62 §2 Decision 4: the universal plain-path control-line skip. Mirrors
+// pfb_is_blank_or_comment_line's contract: blank detection is an exact '' match, so
+// the CALLER must trim() first. Deliberately excludes '#' -- pfb_dnsbl_hash_line_
+// classify() owns it (side effects). A bracketed IPv6 literal is an ADDRESS, never
+// skipped as an ABP section marker.
 function pfb_dnsbl_is_skippable_control_line(string $line): bool {
 	if ($line === '' || str_starts_with($line, '!') || str_starts_with($line, '//')) {
 		return TRUE;
@@ -6709,11 +6709,11 @@ function pfb_dnsbl_is_skippable_control_line(string $line): bool {
 }
 
 
-// ADR-62: capture guard for the (not-yet-broadened) per-line ABP shape set --
-// answers "should Python's parse_abp() decide this line?", never parses it itself.
-// Mirrors parse_abp()/_dnsbl_parse_abp_regex()'s recognised shapes: '||'/'@@' anchors,
-// a '/regex/' (optional trailing '$options') block/allow rule, and the element-hiding
-// marker family. A bare domain line is deliberately FALSE (stays on the plain path).
+// ADR-62 §2 Decision 2: the per-line ABP-shape capture guard -- answers "should
+// Python's parse_abp() decide this line?", never parses it itself. Mirrors parse_abp()/
+// _dnsbl_parse_abp_regex()'s recognised shapes: '||'/'@@' anchors, a '/regex/' (optional
+// trailing '$options') block/allow rule, and the element-hiding marker family. A bare
+// domain line is deliberately FALSE (stays on the plain path, delta D1).
 function pfb_dnsbl_is_abp_rule_line(string $line): bool {
 	if (str_starts_with($line, '||') || str_starts_with($line, '@@')) {
 		return TRUE;
@@ -7183,12 +7183,13 @@ function pfb_unbound_python_sources($feeds) {
 					}
 					continue;
 				}
-				// ADR-21: ABP-anchored verbatim line from a non-ABP feed (the
-				// download loop wrote '||'/'@@||' lines through untouched, NOT as
-				// 6-col CSV) -- pass it straight to the '.raw' without CSV
-				// extraction. Python's build() routes it to parse_abp().
+				// ADR-62 Decision 2: self-identifying ABP-shape verbatim line
+				// from a non-ABP feed (the download loop wrote it through
+				// untouched, NOT as 6-col CSV) -- pass it straight to the
+				// '.raw' without CSV extraction. Python's build() routes it
+				// to parse_abp().
 				$rawline = rtrim($line, "\r\n");
-				if (str_starts_with($rawline, '||') || str_starts_with($rawline, '@@||')) {
+				if (pfb_dnsbl_is_abp_rule_line($rawline)) {
 					@fwrite($raw_h, "{$rawline}\n");
 					continue;
 				}
@@ -16481,21 +16482,17 @@ function sync_package_pfblockerng($cron='') {
 											// Remove invalid charaters
 											$line = trim($line, " \t\n\r\0\x0B\xC2\xA0");
 
-											// ADR-21: ABP-anchored line in a non-ABP feed.
-											// Captured BEFORE CSV autodetection and the
-											// URL/path/'?'-query stripping below, which would
-											// otherwise truncate '||domain/path^' or misparse a
-											// comma-bearing ABP option line as CSV. '||'/'@@||'
-											// are invalid in every plain dialect (pfb_filter()
-											// would drop them), so write them VERBATIM to the
+											// ADR-62 Decision 2: any self-identifying ABP shape
+											// (||/@@ anchors, /regex/[$opts], ##-family) in a
+											// non-ABP feed, captured BEFORE CSV autodetection and
+											// URL/path/'?'-query stripping (which would otherwise
+											// truncate/mangle them) and written VERBATIM to the
 											// '.bk'/'.txt' staging file; the manifest builder
-											// copies them to the '.raw' and Python's build()
-											// routes them to parse_abp() (which returns None for
-											// IP / path / wildcard anchors -> silently skipped).
-											// $easylist feeds already pass ABP lines through
-											// verbatim below, so this is for plain feeds only.
-											if (!$easylist &&
-											    (str_starts_with($line, '||') || str_starts_with($line, '@@||'))) {
+											// copies them to the '.raw' and Python's build() routes
+											// them to parse_abp() (never a domain/IP/path anchor ->
+											// silently skipped). $easylist feeds already pass ABP
+											// lines through verbatim below, so plain feeds only.
+											if (!$easylist && pfb_dnsbl_is_abp_rule_line($line)) {
 												$domain_data = "{$line}\n";
 												@fwrite($dhandle, $domain_data);
 												continue;
@@ -16576,11 +16573,12 @@ function sync_package_pfblockerng($cron='') {
 													continue;
 												}
 
-												// '!' (ABP/uBlock, e.g. DandelionSprouts' mid-body '!#if'/'!#endif' --
-												// the header-scan above only skips these before $validate_header flips
-												// TRUE) and '//' (C-style) comment lines. Neither carries side effects,
-												// unlike '#' above -- safe to merge into one plain skip.
-												if (str_starts_with($line, '!') || str_starts_with($line, '//')) {
+												// ADR-62 Decision 4: universal control-line skip
+												// (blank / '!' / '//' / non-IPv6 '[...]'); the '#'
+												// classifier above already ran (side effects). A
+												// bracketed IPv6 literal is never skipped here --
+												// the helper consults pfb_dnsbl_unbracket_ip6().
+												if (pfb_dnsbl_is_skippable_control_line($line)) {
 													continue;
 												}
 

@@ -1,3 +1,6 @@
 mixedhost.example
 ||anchor.mixed.example^
-falsepositive.example
+falsepositive.example##.ad
+/^regexplain\.mixed\.example$/
+/^importantregex\.mixed\.example$/$important
+@@/^allowregex\.mixed\.example$/

@@ -127,4 +127,19 @@ final class Adr62TldAnalysisCorpusTest extends TestCase
 		$this->assertStringNotContainsString('adline', $data . $zone);
 		$this->assertStringNotContainsString('safe.zzsuffix', $data . $zone);
 	}
+
+	/**
+	 * ADR-62 Phase 4: a broadened-capture verbatim line ('sneaky.zzsuffix.example##.ad',
+	 * pfb_dnsbl_plain.txt) now reaches a PLAIN feed's raw dialect too -- the TLD pass's
+	 * own comma-prefix guard (inc:7887, PR #1066) skips any non-CSV-shaped line
+	 * unconditionally, independent of the '.abp' marker mechanism, so it is never
+	 * CSV-mangled here regardless of feed classification.
+	 */
+	public function testBroadenedCaptureVerbatimLineInPlainFeedIsSkippedNotMangled(): void
+	{
+		tld_analysis();
+		$data = file_get_contents("{$this->tmp}/pfb_py_data.txt");
+		$zone = file_get_contents("{$this->tmp}/pfb_py_zone.txt");
+		$this->assertStringNotContainsString('sneaky', $data . $zone);
+	}
 }

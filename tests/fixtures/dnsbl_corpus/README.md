@@ -1,8 +1,9 @@
 # ADR-62 Phase 1 — DNSBL byte-identity corpus
 
-A committed corpus pinning **today's** (`origin/devel`) DNSBL feed-parsing output across the
-`ADR_62_DNSBL_Unified_Line_Parsing` coverage matrix, so every later phase can prove its
-output is byte-identical modulo the ADR's enumerated delta table (D1-D5).
+A committed corpus pinning DNSBL feed-parsing output across the
+`ADR_62_DNSBL_Unified_Line_Parsing` coverage matrix, byte-identical to `origin/devel` modulo
+the ADR's enumerated delta table (D1-D5) — a row whose delta has already landed (e.g.
+`mixed_plain`/`permit_feed`'s D2/D4, broadened-capture) carries its NEW outcome instead.
 
 ## Layout
 
