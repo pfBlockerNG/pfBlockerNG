@@ -296,9 +296,13 @@ VERIFICATION (must all pass before the phase is done; only gates RUNNABLE in the
 implementer's environment — anything else goes under DEFERRED with its exact
 dispatch command, never as "must pass")
 - <the canonical gates for the touched languages — CLAUDE.md "Canonical gates">
-- red-run (behaviour-changing phase): <named new test> executed against the
-  pre-change code → FAILS (paste command + failure line into HANDOFF), then
-  passes after — an executed run, never "reasoned through"
+- red-run (behaviour-changing phase): AUTHOR <named new test> FIRST, before any
+  production edit, at full suite quality; execute → FAILS for the defect's
+  reason (paste command + failure line into HANDOFF; record `git hash-object`);
+  freeze it byte-identical, implement, re-run the SAME test with zero edits →
+  PASSES; only then add the remaining tests — executed runs, never "reasoned
+  through". (Waived for brand-new code whose only possible red is a missing
+  symbol — an existence test is coverage theater; its tests still ship.)
 - <the per-item acceptance checks: WHEN <command/input> THEN <observable>>
 - diff-read <what to eyeball>
 

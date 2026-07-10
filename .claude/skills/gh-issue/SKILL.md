@@ -153,12 +153,16 @@ Produce an **ordered** list of steps that takes the issue from its current state
 resolved. Keep it minimal and proportionate to Step 4 — most bugs are
 *reproduce-test → fix → verify*, not a sprawling refactor. A typical shape:
 
-1. **Pin the bug with a failing test** (TDD): add the unit/smoke/UI coverage that
-   FAILS on today's code for the reason the issue describes — per CLAUDE.md "Test
-   coverage" (the five non-negotiables: fail-before/pass-after as evidence, every
-   branch, no coverage theater, intent-named).
-2. **Implement the fix** so that test passes, matching the established patterns
-   (CLAUDE.md "Code standards / Naming"), diff kept minimal.
+1. **Pin the bug with a failing test** (test-first — CLAUDE.md "Test coverage" #1):
+   BEFORE any fix edit, add the unit/smoke/UI coverage that FAILS on today's code
+   for the reason the issue describes, at full suite quality (every branch, no
+   coverage theater, intent-named — it ships in the suite and is the defect's
+   in-suite reproduction). Execute it red (paste output; record `git hash-object`
+   of each test file), then freeze it byte-identical until green.
+2. **Implement the fix** so that the SAME test, with zero edits, passes (paste the
+   green run — one run proving both the test and the fix), matching the established
+   patterns (CLAUDE.md "Code standards / Naming"), diff kept minimal; add whatever
+   further tests the fix needs after that.
 3. **Verify + harden**: full gate run, edge cases, docs/labels, self-review of the
    diff against the issue (optionally `/code-review` the diff, `/security-review` if
    security-adjacent).
@@ -184,7 +188,8 @@ the brief a fresh sub-agent could execute with no other context. Each prompt sta
   standards" + "Naming"; "clean the diff"; worktree-only at `<path>`). A PHP fix obeys
   the CLAUDE.md PHP rules — stub a new pfSense function from upstream rather than work
   around it, and keep the PFBL-01 `RequirePfbFilter` sniff green. The brief **never weakens a
-  mandate** (red→green is an executed run with pasted output), and carries the **ESCALATE
+  mandate** (red→green is test-first: reproduction test authored + executed red before any
+  fix edit, frozen byte-identical, green unchanged — pasted runs), and carries the **ESCALATE
   contract**: a brief claim contradicted by the code → STOP, return BLOCKED, don't improvise.
 - **Verification gates** — the **canonical gates** for the touched languages (CLAUDE.md
   "Canonical gates" table, including cross-language consumers), plus the case that proves THIS
@@ -206,8 +211,9 @@ forward — keep it as a scratch artifact, not a committed file):
 - **Step + objective**, and **verdict**: DONE / DONE-WITH-DEVIATION / BLOCKED.
 - **What changed** — files + a one-line why each; the commit hash.
 - **Gates** — the exact commands run and their results (pass/fail counts).
-- **Proof for this step** — the test that now passes (and that it failed before, for
-  a fix step) / the behaviour observed.
+- **Proof for this step** — the test that now passes (for a fix step: its red output
+  from before any fix edit, its green output after, and the red-time `git hash-object`
+  matching the committed file) / the behaviour observed.
 - **Carry-forward** — anything the next step must know (assumptions, follow-ups,
   surprises), or the blocker if BLOCKED.
 
@@ -299,7 +305,9 @@ recorded as SKIPPED with the reason. When the agent returns, in `<path>`:
    language consumers).
 3. **Re-execute the red proof yourself** for a fix step — never accept the handoff's claim:
    `git -C <path> checkout HEAD~1 -- <src paths>` (tests stay), run the pinning test → expect
-   FAIL; `git -C <path> checkout HEAD -- .`, re-run → expect PASS. Record both results.
+   FAIL; `git -C <path> checkout HEAD -- .`, re-run → expect PASS. Record both results, and
+   verify the freeze: `git hash-object` of the committed pinning test equals the handoff's
+   red-time hash — a test edited between red and green proves nothing.
 4. **Read the FULL diff** (`git -C <path> show` — never `--stat` alone) and tick every plan
    item and every coverage-matrix row against what the diff actually does.
 5. **Test honesty**: no weakened assertions; every negative assertion has a fixture that could

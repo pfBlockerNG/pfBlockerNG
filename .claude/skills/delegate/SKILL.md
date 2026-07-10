@@ -66,7 +66,8 @@ Terse prose, full checks; a skipped item is recorded SKIPPED with the reason:
 2. Re-run the canonical gates yourself (diff file types + cross-language consumers).
 3. Re-execute the red proof yourself for behaviour changes
    (`git -C <path> checkout HEAD~1 -- <src paths>` → named test FAILS;
-   `git -C <path> checkout HEAD -- .` → PASSES). Record both results.
+   `git -C <path> checkout HEAD -- .` → PASSES). Record both results; verify the freeze
+   (`git hash-object` of the committed reproduction test == the handoff's red-time hash).
 4. Read the FULL diff (`git show`, never `--stat` alone); tick every plan item and matrix
    row.
 5. Test honesty: vacuity check on negative assertions; no impossible monkeypatched faults;

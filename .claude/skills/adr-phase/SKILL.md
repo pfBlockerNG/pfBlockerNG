@@ -211,9 +211,14 @@ read and edit:
 - "Run the **canonical gates** for everything you touch (CLAUDE.md 'Canonical gates' table —
   including cross-language consumers of artifacts you change). Do not proceed red."
 - "Honour CLAUDE.md **Test coverage** — the five non-negotiables. For any behaviour this
-  phase **adds/changes**, the new test MUST **fail on the pre-change code and pass after** —
-  an **executed run with output pasted into the handoff**, never 'reasoned through'; a
-  **behaviour-preserving** phase instead pins existing behaviour as an oracle that stays green.
+  phase **adds/changes**, the proof is **test-first** (Test coverage #1): author the
+  reproduction test BEFORE any production edit, execute it → FAILS for the defect's reason
+  (paste output; record `git hash-object` of each test file), freeze it byte-identical,
+  implement, re-run the SAME test with zero edits → PASSES (paste output) — executed runs,
+  never 'reasoned through'; only then add the phase's remaining tests. A
+  **behaviour-preserving** phase instead pins existing behaviour as an oracle that stays
+  green; **brand-new code with no pre-existing behaviour to be wrong** needs no red run
+  against a missing symbol (an existence test is coverage theater) — its tests still ship.
   A phase touching `www/` MUST add **Tier A** UI coverage (Tier B only if the change is
   observable *only* there). No change without its test; no coverage theater; tests state intent."
 - "**ESCALATE, don't improvise:** if any factual claim in this brief, the phase prompt, or the
@@ -248,7 +253,9 @@ silently dropped. When the agent returns, in `<path>`:
 3. **Re-execute the red proof yourself** for a behaviour-changing phase — never accept the
    handoff's claim: `git -C <path> checkout HEAD~1 -- <src paths>` (tests stay), run the phase's
    named new test → expect FAIL; `git -C <path> checkout HEAD -- .`, re-run → expect PASS.
-   Record both results in the gate record.
+   Record both results in the gate record. Verify the freeze too: `git hash-object` of each
+   committed reproduction test equals the handoff's red-time hash — a test edited between red
+   and green (or missing its red-time hash) proves nothing.
 4. **Read the FULL diff** (`git -C <path> show` — never `--stat` alone) and tick **every**
    ACTION-PLAN item and **every** coverage-matrix row against what the diff actually does —
    hardcoded values, stubbed branches, and silently dropped plan items live below `--stat`.

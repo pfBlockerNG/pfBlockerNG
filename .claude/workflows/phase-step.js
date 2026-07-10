@@ -27,7 +27,7 @@ const HANDOFF = {
     what_changed: { type: 'array', items: { type: 'object', required: ['file', 'why'], properties: { file: { type: 'string' }, why: { type: 'string' } } } },
     commit: { type: 'string', description: 'the commit hash, or "" when BLOCKED' },
     gates: { type: 'array', items: { type: 'object', required: ['cmd', 'output_tail'], properties: { cmd: { type: 'string' }, output_tail: { type: 'string', description: 'pasted output tail with pass/fail counts — never a bare claim' } } } },
-    red_green: { type: 'object', description: 'behaviour-changing steps only; null otherwise', properties: { red_output: { type: 'string' }, green_output: { type: 'string' } } },
+    red_green: { type: 'object', description: 'behaviour-changing steps only; null otherwise. Test-first: the red run precedes any production edit; the test stays byte-identical red->green', properties: { red_output: { type: 'string' }, green_output: { type: 'string' }, red_test_hashes: { type: 'array', items: { type: 'object', required: ['file', 'hash'], properties: { file: { type: 'string' }, hash: { type: 'string', description: 'git hash-object at red-run time — must equal the committed file' } } } } } },
     coverage_matrix: { type: 'array', items: { type: 'object', required: ['row', 'status'], properties: { row: { type: 'string' }, status: { type: 'string', description: 'test name covering it, or the stated deferral' } } } },
     deviations: { type: 'string', description: '"none" or the judgment calls made' },
     carry_forward: { type: 'string' },
@@ -67,7 +67,7 @@ const handoff = await agent(`${ponytailLine}${brief}
 STANDING CONTRACT (CLAUDE.md "The delegation contract" — these override nothing above, they restate the law):
 - Work ENTIRELY inside the worktree at ${worktree} (git -C ${worktree} ...); never the main checkout. You implement yourself with Read/Edit/Write/Bash and NEVER spawn further agents.
 - Run the gates and do not proceed red: ${gates.length ? gates.join(' · ') : 'the canonical gates for every language you touch (CLAUDE.md "Canonical gates")'}.
-- Red->green is an EXECUTED run with output pasted into your handoff, never "reasoned through".
+- Red->green is TEST-FIRST and EXECUTED (CLAUDE.md Test coverage #1): author the reproduction test(s) BEFORE any production edit, run them -> FAIL for the defect's reason (paste output; record git hash-object of each test file in red_test_hashes), freeze them byte-identical (a temporary skip while developing is fine, but the committed file must match the red-run content exactly), implement, re-run the SAME tests with zero edits -> PASS (paste output). Only then add further tests. Never "reasoned through". Waived only for brand-new code whose sole possible red is a missing symbol (an existence test is coverage theater) — its tests still ship.
 - ESCALATE: if any factual claim in the brief is contradicted by the code or a live probe, STOP and return verdict BLOCKED with the blocker field filled — never silently patch the plan.
 - Commit as the brief instructs (single focused commit, repo commit style), then fill the structured handoff COMPLETELY — an empty field is a gate failure.`,
   { label: 'implement', phase: 'Implement', model: 'sonnet', effort: 'xhigh', schema: HANDOFF })
@@ -81,7 +81,7 @@ if (handoff.verdict === 'BLOCKED') {
 phase('Verify')
 
 const redProofText = redProof
-  ? `RED PROOF (re-execute yourself, never accept the handoff's claim): git -C ${worktree} checkout HEAD~1 -- ${redProof.srcPaths.join(' ')} (tests stay), run ${redProof.testCmd} -> expect FAIL; git -C ${worktree} checkout HEAD -- . , re-run -> expect PASS. Record both outputs as evidence.`
+  ? `RED PROOF (re-execute yourself, never accept the handoff's claim): git -C ${worktree} checkout HEAD~1 -- ${redProof.srcPaths.join(' ')} (tests stay), run ${redProof.testCmd} -> expect FAIL; git -C ${worktree} checkout HEAD -- . , re-run -> expect PASS. Record both outputs as evidence. FREEZE CHECK: run git -C ${worktree} hash-object on each committed reproduction test file and compare against the handoff's red_test_hashes — a mismatch or missing hash means the test was edited between red and green (or the red run never preceded the fix): FAIL.`
   : 'This step is declared behaviour-preserving: confirm the oracle/pinned tests exist and stayed green; record which.'
 
 const gateRecord = await agent(`You are an independent VERIFIER (CLAUDE.md "THE GATE") for one delegated step. You did not write this code; re-derive, never merely re-read. READ-ONLY except the red-proof checkout dance below (which you must fully restore). Worktree: ${worktree}.

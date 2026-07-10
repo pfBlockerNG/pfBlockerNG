@@ -145,8 +145,10 @@ and review.
    oversized values, wrong encoding (#903, #904, #907, #908, #920 were all misses of exactly
    these).
 5. **Constraints** — the do-NOT-touch list, plus the **never-weaken rule**: a brief may never
-   weaken a CLAUDE.md mandate. In particular, red→green is an **executed run with output
-   pasted**, never "reasoned through" or "verified by reading". Comments follow "Comments —
+   weaken a CLAUDE.md mandate. In particular, red→green is **test-first** (Test coverage #1):
+   the reproduction test authored and executed RED before any production edit, frozen
+   byte-identical, re-run GREEN unchanged after — **executed runs with output pasted**, never
+   "reasoned through" or "verified by reading". Comments follow "Comments —
    constraint, not narration" (Code standards): gate-facing justification goes in the
    handoff, never the code.
 6. **Verification** — the canonical gates (table below) plus per-item acceptance checks, each
@@ -168,8 +170,10 @@ and review.
 - **What changed**: files + a one-line why each; the commit hash.
 - **Gates**: the exact commands run + pasted output tails (pass/fail counts) — never bare
   claims.
-- **Red→green proof** (behaviour-changing steps): the new test's FAILING output on the
-  pre-change code AND its PASSING output after — both pasted from executed runs.
+- **Red→green proof** (behaviour-changing steps): the reproduction test's FAILING output —
+  executed BEFORE any production edit — AND its PASSING output after, both pasted from
+  executed runs, plus the test file's `git hash-object` at red time (must equal the committed
+  file — Test coverage #1's freeze).
 - **Coverage matrix**: every brief row ticked with its test, or its stated deferral.
 - **Deviations / judgment calls** (or "none"); **carry-forward** for the next step.
 
@@ -186,7 +190,9 @@ the gate report's wording, never to which checks run.
 2. **Re-execute the red proof yourself** for behaviour changes — never accept the handoff's
    claim: `git -C <path> checkout HEAD~1 -- <src paths>` (tests stay), run the named test →
    expect FAIL; `git -C <path> checkout HEAD -- .` → re-run → expect PASS. Record both
-   results.
+   results. Also verify the freeze: `git hash-object` of each committed reproduction test
+   equals the handoff's red-time hash — a test edited between red and green (or with no
+   red-time hash) proves nothing.
 3. **Read the full diff** (`git show` — never `--stat` alone) and tick **every** ACTION-PLAN
    item and **every** coverage-matrix row against what the diff actually does. `--stat` cannot
    see a hardcoded value, a stubbed branch, or a silently dropped plan item. A mechanism in
@@ -226,12 +232,22 @@ unit, integration, E2E, smoke, or UI. Each is a hard gate: a change that violate
 NOT done, no matter what the line-coverage number says.**
 
 1. **A test is EVIDENCE the change works — for a behaviour change it MUST fail before and pass
-   after.** Run against the **pre-change** code it **FAILS** (for the exact reason the change
-   addresses); against the **post-change** code it **PASSES**. Prove *both* directions —
-   watch it go red on the old code, green on the new (revert/stash the change, or land the
-   test first). A test already green before the change is evidence of nothing. **Sole
-   exception:** behaviour-**PRESERVING** work (refactors, ADR prep phases) pins the *existing*
-   behaviour as an oracle and stays green across the change — still mandatory.
+   after, and the proof is TEST-FIRST.** Author the reproduction test(s) **before touching
+   production code**, at full suite quality (every standard here applies — they ship in the
+   suite and double as the defect's in-suite reproduction), and execute them on the untouched
+   code: they **FAIL for the exact reason the change addresses**. From that red run the tests
+   are **frozen** — byte-identical until green (a temporary skip/disable while developing is
+   fine, but the committed file matches the red-run content exactly; record `git hash-object`
+   of each test file at red time). After the change the SAME tests, **zero edits**, **PASS** —
+   one green run proving both that the tests test the condition and that the fix works. Only
+   then write the further tests the change needs. A test written after the fix, or edited
+   between red and green, is evidence of nothing — same for a test already green before the
+   change. **Two exceptions:** behaviour-**PRESERVING** work (refactors, ADR prep phases) pins
+   the *existing* behaviour as an oracle and stays green across the change — still mandatory;
+   and **brand-new code with no pre-existing behaviour to be wrong** needs no red run against
+   the void — the only possible red there is a missing symbol/file, an *existence* test,
+   itself coverage theater. Its tests still ship with it asserting real behaviour, and any
+   change it makes to EXISTING observable behaviour still gets its red-first proof.
 2. **Every change ships WITH its tests.** "The existing suite still passes" is **not**
    coverage of a new change.
 3. **NEVER coverage theater.** A test must *validate* the code, not merely *execute* it — it
