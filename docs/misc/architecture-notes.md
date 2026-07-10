@@ -244,6 +244,65 @@ live traffic on production hardware.
 
 ---
 
+## IP dedup + reputation: batch recompute (issue #1084)
+
+The incremental per-feed `duplicate()`/`reputation_dmax()` masterfile-surgery pass is retired.
+`pfblockerng.sh recompute` (`pfb_recompute()`) does one deterministic pass **per family**
+(`v4`/`v6`) over pristine per-feed snapshots, owning cross-feed dedup and v4 dMax/pMax
+reputation for every caller `pfb_ip_recompute_matrix()` (`pfblockerng.inc`) routes through it.
+`reputation_pmax()`/`remove()`/`process255()`/`closingprocess()` are untouched and still run
+their own paths where the matrix doesn't route through recompute.
+
+**Snapshot store + memberlist contract.** Each v4-Deny feed's post-`_255`/`_agg`/`_rep`
+preprocessed output is persisted to `$pfb['snapdir']` as `<header>.snap`
+(`pfb_ip_recompute_write_snapshot()`), alongside the `.aggcount` original-count sidecar
+`closingprocess()` sums. `recompute`'s memberlist argument lists these snapshot paths, one per
+line, in **priority order** — the alias is derived by stripping the directory then everything
+from the first `.` onward, and an alias absent from the list is treated as removed (its
+masterfile rows and deny file are not carried forward).
+
+**Invocation matrix** (`pfb_ip_recompute_matrix()`), gated on the feed-changed trigger
+(`$pfb['repcheck'] && !$pfb['save'] && $pfb['enable'] == 'on'` — a quiet pass, e.g. a
+DNSBL-only tick, invokes no recompute at all):
+
+| `enable_dup` | reputation (`drep`/`prep`) | invocation |
+| --- | --- | --- |
+| on | any | full: v4 + v6, cumulative dedup, masterfile/mastercat rebuilt |
+| off | on | v4-only passthrough (overlaps retained, no masterfile — parity with today's dedup-off double-counting) |
+| off | off | not invoked — parse output stands |
+
+Both `drep` and `prep` on is a tie-break: recompute applies dMax, then the caller execs the
+legacy `reputation_pmax()` over the emitted deny files unmodified (`legacy_pmax_followup`).
+
+**Direct vs offender-subset paths.** Offender detection is a hashmap count straight over the
+owned files (no sort). An empty actionmap (no offenders, repmode off, or GeoIP unavailable)
+takes the **direct path** — each owned file is blank-filtered and per-alias sorted straight
+into its `.txt.new` sibling. A non-empty actionmap takes the **offender-subset path** — only
+offender-/24 rows are diverted into one small tagged set, windowed by a priority-attribution
+awk after one small sort, and reinjected into their owners' keep sets before the same per-alias
+emit runs. Reputation cost scales with offender rows, not class size.
+
+**Masterfile is a regenerated per-family artifact.** `masterfile.new` is pre-seeded with the
+live masterfile minus this pass's family-suffixed rows (a sibling family's rows survive
+untouched), then every owned alias's surviving rows are appended — never patched in place.
+
+**Ownership = config priority order.** A row's owning alias is decided by memberlist order
+(`pfb_ip_recompute_family_headers()`, following `$pfb['existing']['deny']`'s config order) —
+a deliberate delta from the old `duplicate()` accretion, where ownership fell out of whichever
+feed's per-run dispatch call happened to run (and therefore land in the masterfile) first.
+
+**v6 joins dedup**, unlike the old incremental path (which only `duplicate()`'d v4):
+`recompute` is invoked for v6 iff `enable_dup` is on (the "full" row above) — never on
+`enable_dup` off, since v6 has no reputation to trigger it standalone. v6 never runs
+reputation (v4-only): when invoked it always takes the direct dedup-only path.
+
+**Upgrade seeding fallback.** A header with no snapshot yet (a pre-#1084 install, or a header
+never recomputed on this box) seeds one from the live deny `.txt`
+(`pfb_ip_recompute_seed_snapshot()`) so an existing alias survives its first post-upgrade pass
+instead of vanishing from the memberlist.
+
+---
+
 ## Web UI test tiers (ADR-14) — `tests/smoke/ui/`
 
 The Web-UI suite **reuses** the smoke `smoke_vm` fixture + `helpers.py` (no separate harness)

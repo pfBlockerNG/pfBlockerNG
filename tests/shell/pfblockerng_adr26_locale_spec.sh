@@ -70,10 +70,10 @@ Describe 'ADR-26 — pfblockerng.sh locale/portability source invariants (Phases
     When call has 'LC_ALL=C sort -u "${pfbdeny}${alias}.txt"'
     The status should be success
   End
-  It 'prefixes the alias-list compare (cut | sort -u) with LC_ALL=C'
-    When call has 'cut -d '"'"' '"'"' -f1 "${masterfile}" | LC_ALL=C sort -u'
-    The status should be success
-  End
+  # The alias-list compare (`cut ... | LC_ALL=C sort -u`) this gate once pinned lived
+  # ONLY in duplicate()'s single-alias-masterfile check -- issue #1084 deleted the whole
+  # function (the batch recompute verb owns cross-feed dedup now), so the call site the
+  # LC_ALL=C prefix protected is gone, not reverted. Nothing left to pin here.
   It 'prefixes the extracted-IP .orig sink with LC_ALL=C'
     When call has 'LC_ALL=C sort -u > "${pfborig}${alias}.orig"'
     The status should be success

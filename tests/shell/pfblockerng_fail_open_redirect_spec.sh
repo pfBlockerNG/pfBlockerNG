@@ -25,31 +25,12 @@
 # suppress()'s OWN producer switched from grepcidr to iprange in ADR-53 Phase
 # 3 (tests/shell/pfblockerng_suppress_spec.sh is the dedicated, comprehensive
 # oracle for that engine swap) -- its Class A/B Describe blocks below follow
-# suit (pathaggregate/IPRANGE_MODE, not pathgrepcidr/GREPCIDR_MODE), staying
-# deliberately redundant with that file's own rc-gating cases, not duplicative
-# (each proves the contract from its own file's self-contained narrative).
-# duplicate()'s Class A stays on the REAL grepcidr producer -- untouched by
-# ADR-53, which only rewrites suppress().
+# suit (pathaggregate/IPRANGE_MODE), staying deliberately redundant with that
+# file's own rc-gating cases, not duplicative (each proves the contract from
+# its own file's self-contained narrative).
 
 Describe 'pfblockerng.sh fail-open feed-list redirects (issue #713 bug 8)'
   BeforeAll 'pfb_source; SHELLSPEC_REAL_AWK="$(command -v awk)"; export SHELLSPEC_REAL_AWK'
-
-  # ---- grepcidr shim: exit code/output selected via GREPCIDR_MODE ----
-  #   success -> two matches on stdout, rc 0
-  #   empty   -> a LEGITIMATE "everything suppressed" empty result, rc 1
-  #   error   -> a real grepcidr error (e.g. malformed filter file), rc 2
-  write_grepcidr_shim() {
-    cat > "$1" <<'SHIM'
-#!/bin/sh
-case "${GREPCIDR_MODE:-}" in
-	success) printf '192.0.2.1\n192.0.2.2\n'; exit 0 ;;
-	empty) exit 1 ;;
-	error) echo 'grepcidr: malformed CIDR in filter file' >&2; exit 2 ;;
-	*) exit 2 ;;
-esac
-SHIM
-    chmod +x "$1"
-  }
 
   # ---- iprange shim (suppress()'s producer post-ADR-53): exit code/output
   # selected via IPRANGE_MODE ----
@@ -193,65 +174,6 @@ SHIM
       The contents of file "${masterfile}" should not include 'PRIOR-1'
       The contents of file "${masterfile}" should include 'DedupList_v4 192.0.2.1'
       The contents of file "${masterfile}" should include 'DedupList_v4 192.0.2.2'
-    End
-  End
-
-  Describe 'duplicate() -- Class A (temp+mv grepcidr variant) + Class B (awk masterfile dedup)'
-    setup() {
-      work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pfbdup.XXXXXX")"
-      alias='DupList_v4'
-      pfbdeny="${work}/deny/"; mkdir -p "${pfbdeny}"
-      pfborig="${work}/orig/"; mkdir -p "${pfborig}"
-      tmpdir="${work}"
-      tempfile="${work}/t1"; tempfile2="${work}/t2"; dupfile="${work}/t3"; dedupfile="${work}/t4"
-      masterfile="${work}/master"; mastercat="${work}/mastercat"
-      errorlog="${work}/error.log"; : > "${errorlog}"
-      pathgrepcidr="${work}/grepcidr"
-      write_grepcidr_shim "${pathgrepcidr}"
-      # shellcheck disable=SC2034  # read by the sourced emptyfiles(), called at duplicate()'s tail
-      ip_placeholder='240.0.0.0'
-      awkshim="${work}/bin"
-      setup_awk_shim "${awkshim}"
-      denyfile="${pfbdeny}${alias}.txt"
-      printf 'DupList_v4 192.0.2.10\nDupList_v4 192.0.2.11\nOtherList_v4 203.0.113.5\n' > "${masterfile}"
-      printf '192.0.2.10\n192.0.2.11\n' > "${denyfile}"
-      : > "${mastercat}"
-    }
-    cleanup() { rm -rf "${work}"; }
-    Before 'setup'
-    After 'cleanup'
-
-    It 'keeps masterfile rows from the dedup step UNCHANGED when awk errors -- pre-fix this truncated masterfile, losing the unrelated OtherList_v4 row'
-      GREPCIDR_MODE='success'; AWK_MODE='error'; export GREPCIDR_MODE AWK_MODE
-      PATH="${awkshim}:${PATH}"
-      When call silently duplicate
-      The status should be success
-      # duplicate()'s own trailing append always re-adds the (here: grepcidr-
-      # succeeded) pfbdeny content -- pre-existing, unrelated to this fix -- so
-      # the fix's proof is that the unrelated OtherList_v4 row is NOT lost, not
-      # that the file is byte-identical to its pre-call state.
-      The contents of file "${masterfile}" should include 'OtherList_v4 203.0.113.5'
-      The contents of file "${masterfile}" should include 'DupList_v4 192.0.2.10'
-    End
-
-    It 'keeps the pfbdeny list UNCHANGED when grepcidr errors (rc>=2) -- Class A temp+mv variant'
-      GREPCIDR_MODE='error'; export GREPCIDR_MODE
-      When call silently duplicate
-      The status should be success
-      The contents of file "${denyfile}" should equal "$(printf '192.0.2.10\n192.0.2.11')"
-      The contents of file "${errorlog}" should include 'grepcidr error'
-    End
-
-    It 'dedups masterfile and publishes the new pfbdeny content on full success'
-      GREPCIDR_MODE='success'; export GREPCIDR_MODE
-      When call silently duplicate
-      The status should be success
-      # DupList_v4's original rows are dedup'd out of masterfile; only the
-      # unrelated OtherList_v4 row plus the freshly-published pfbdeny content
-      # (re-appended by duplicate()'s own trailing step) remain.
-      The contents of file "${masterfile}" should include 'OtherList_v4 203.0.113.5'
-      The contents of file "${masterfile}" should not include '192.0.2.10'
-      The contents of file "${denyfile}" should equal "$(printf '192.0.2.1\n192.0.2.2')"
     End
   End
 

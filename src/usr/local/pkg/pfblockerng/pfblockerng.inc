@@ -4967,8 +4967,7 @@ function pfb_ip_recompute_seed_snapshot(string $header, string $snapdir, string 
 
 // Persist the pristine post-preprocessing snapshot pfb_recompute() reads, plus the
 // '.aggcount' original-count sidecar closingprocess() sums for the FINAL Processing report --
-// both used to live inside duplicate() (pfblockerng.sh:1259-1260), which no longer runs for
-// callers routed through recompute.
+// both used to live inside the now-retired duplicate() (issue #1084).
 function pfb_ip_recompute_write_snapshot(string $src, string $header, string $snapdir, string $origdir): void {
 	if (!file_exists($src)) {
 		return;
