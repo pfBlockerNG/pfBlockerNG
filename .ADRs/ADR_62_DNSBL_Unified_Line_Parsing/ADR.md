@@ -1,14 +1,19 @@
 # ADR-62: Unify DNSBL feed line parsing — retire PHP feed-level ABP classification, make Python the single per-line authority
 
-- **Status:** **Implemented (pending smoke fan-out)** (2026-07-10; revised 2026-07-09 after an
-  evidence audit of the design handoff — the audit corrected the realization plan, see §2 "The
-  realization fork" and §1.5). All 7 phases landed (`RESULTS/01–07_Results.txt`,
-  `RESULTS/01–06_Gate.txt` — Phase 7's own gate record is written by the planner after this
-  handoff); the byte-identity corpus oracle is green with exactly D1–D5 flipped; full
-  PHPUnit/pytest/PHPStan/PHPCS are green; Phase 6's benchmark is PASS (see §3). Flips to
-  **Accepted** only once the CE+Plus live-VM smoke fan-out (§7 rows 1–7,
-  `tests/smoke/test_smoke_adr62.py` + reused existing cases) runs green — per CLAUDE.md "ADR
-  acceptance", that automated evidence is the acceptance gate, not this Status line.
+- **Status:** **Accepted** (2026-07-10, on the green CE+Plus live-VM smoke fan-out — GitHub
+  Actions run 29069638831, both legs + the AND gate green over §7 rows 1–7
+  (`-k "adr62 or test_dnsbl_http_hosts_feed_loads"`, scope=full), corroborated by a local
+  box-pool run of the same module (7/7). Revised 2026-07-09 after an evidence audit of the
+  design handoff — the audit corrected the realization plan, see §2 "The realization fork" and
+  §1.5). All 7 phases landed (`RESULTS/01–07_Results.txt`, `RESULTS/01–07_Gate.txt`); the
+  byte-identity corpus oracle is green with exactly D1–D5 flipped; full
+  PHPUnit/pytest/PHPStan/PHPCS are green; Phase 6's benchmark is PASS (see §3).
+  Acceptance note: the §7 row-7a smoke case shipped by Phase 7 was rewritten post-fan-out-red
+  before acceptance — the original drove a Force-DNSBL trigger, which structurally cannot reach
+  the reuse fork (`$pfbreuse == ''`), and a no-change pass skips the DNSBL rebuild entirely; the
+  accepted design loads two feed rows, changes only the sibling (forcing the rebuild), and
+  proves the unchanged row's staged old-dialect `.txt` is consumed as-is (staged domain blocked,
+  original domain released, sibling re-ingested, stale `.abp` marker swept).
 
   **As-built summary (Phase 7, 2026-07-10):**
   - **Delta table (§2), the user-facing behaviour changes for the next release's notes:** D1 —
