@@ -1,6 +1,6 @@
-,uuid-zone-d1-8f2a.example.com,,DNSBL,ZoneFeed1,ZoneGroup1
-,uuid-zone-d2-8f2a.example.com,,DNSBL,ZoneFeed2,ZoneGroup2
-,uuid-zone-d3-8f2a.example.com,,DNSBL,ZoneFeed3,ZoneGroup3
-,uuid-shared-8f2a.example.com,,DNSBL,SharedFeed,SharedGroup
-,uuid-zonedup-8f2a.example.com,,DNSBL,ZoneDupFirstFeed,ZoneDupFirstGroup
-,uuid-zonedup-8f2a.example.com,,DNSBL,ZoneDupSecondFeed,ZoneDupSecondGroup
+{"kind":"domain","domain":"uuid-zone-d1-8f2a.example.com","log":"DNSBL","feed":"ZoneFeed1","group":"ZoneGroup1"}
+{"kind":"domain","domain":"uuid-zone-d2-8f2a.example.com","log":"DNSBL","feed":"ZoneFeed2","group":"ZoneGroup2"}
+{"kind":"domain","domain":"uuid-zone-d3-8f2a.example.com","log":"DNSBL","feed":"ZoneFeed3","group":"ZoneGroup3"}
+{"kind":"domain","domain":"uuid-shared-8f2a.example.com","log":"DNSBL","feed":"SharedFeed","group":"SharedGroup"}
+{"kind":"domain","domain":"uuid-zonedup-8f2a.example.com","log":"DNSBL","feed":"ZoneDupFirstFeed","group":"ZoneDupFirstGroup"}
+{"kind":"domain","domain":"uuid-zonedup-8f2a.example.com","log":"DNSBL","feed":"ZoneDupSecondFeed","group":"ZoneDupSecondGroup"}

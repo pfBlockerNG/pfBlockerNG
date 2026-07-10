@@ -63,15 +63,16 @@ final class UnboundPythonSourcesTest extends TestCase
 			],
 		]);
 
-		// Plain feed: 6-col CSV, bare domain in column index 1.
+		// Plain feed: NDJSON domain rows (#1083).
 		file_put_contents("{$this->tmp}/dnsbl/feed1.txt",
-			"1,example.com,a,b,c,d\n" .
-			"1,foo.com,a,b,c,d\n" .
-			"1,,a,b,c,d\n");                 // empty col1 => skipped
+			pfb_dnsbl_ndjson_emit_domain_row('example.com', '1', 'f', 'g') .
+			pfb_dnsbl_ndjson_emit_domain_row('foo.com', '1', 'f', 'g') .
+			'{"kind":"domain","domain":"","log":"1","feed":"f","group":"g"}' . "\n");  // empty domain => skipped
 
-		// ABP feed: raw ABP lines passed through verbatim.
+		// ABP feed: NDJSON abp rows, raw payload passed through verbatim.
 		file_put_contents("{$this->tmp}/dnsbl/abpfeed.txt",
-			"||ads.example^\n@@||good.example^\n");
+			pfb_dnsbl_ndjson_emit_abp_row('||ads.example^') .
+			pfb_dnsbl_ndjson_emit_abp_row('@@||good.example^'));
 	}
 
 	protected function tearDown(): void
@@ -132,7 +133,8 @@ final class UnboundPythonSourcesTest extends TestCase
 	// dropped in this remap and only the live-VM smoke caught it.
 	public function testPermitFeedCarriesModeIntoManifest(): void
 	{
-		file_put_contents("{$this->tmp}/dnsbl/permitfeed.txt", "1,allow.example.com,a,b,c,d\n");
+		file_put_contents("{$this->tmp}/dnsbl/permitfeed.txt",
+			pfb_dnsbl_ndjson_emit_domain_row('allow.example.com', '1', 'f', 'g'));
 		$m = pfb_unbound_python_sources([
 			['header' => 'permitfeed', 'group' => 'g', 'log' => '1', 'format' => 'plain', 'provenance' => 'feed', 'mode' => 'permit'],
 		]);
@@ -175,21 +177,21 @@ final class UnboundPythonSourcesTest extends TestCase
 	}
 
 	/**
-	 * Scenario: stale pre-guard verbatim residue in a staged '.txt'.
+	 * Scenario: a non-JSON garbage line in a staged '.txt' (#1083 -- the successor of
+	 * the retired #1067 comma-first-residue class: any undecodable line, from any
+	 * cause, is now silently skipped by pfb_dnsbl_ndjson_parse_row()).
 	 *
-	 * Given:  a '.txt' holding a comma-first cosmetic ABP line captured
-	 *         verbatim BEFORE the issue #1067 leading-comma capture guard,
-	 *         alongside a legit machine CSV row
+	 * Given:  a '.txt' holding one legit NDJSON domain row and one line that is not
+	 *         valid NDJSON at all
 	 * When:   pfb_unbound_python_sources() rebuilds the per-feed raw
-	 * Then:   the residue line is skipped entirely — neither passed verbatim
-	 *         nor CSV-mangled into a bare 'domain' that Python would block —
-	 *         while the legit row still yields its domain
+	 * Then:   the garbage line is skipped entirely — never extracted into a
+	 *         blockable 'domain' — while the legit row still yields its domain
 	 */
-	public function testStaleCommaFirstAbpResidueIsSkippedNotExtracted(): void
+	public function testMalformedNonJsonLineIsSkippedNotExtracted(): void
 	{
 		file_put_contents("{$this->tmp}/dnsbl/stalefeed.txt",
-			"1,legit.example,a,b,c,d\n" .
-			",stale-block.example,stale2.example##.ad\n");
+			pfb_dnsbl_ndjson_emit_domain_row('legit.example', '1', 'f', 'g') .
+			"not valid ndjson,stale-block.example,stale2.example##.ad\n");
 		pfb_unbound_python_sources([
 			['header' => 'stalefeed', 'group' => 'g', 'log' => '1', 'format' => 'plain', 'provenance' => 'feed'],
 		]);
@@ -197,7 +199,7 @@ final class UnboundPythonSourcesTest extends TestCase
 		$this->assertSame(
 			"legit.example\n",
 			$raw,
-			'stale comma-first ABP residue must not leak a blockable domain; got: ' . var_export($raw, TRUE)
+			'a non-JSON garbage line must not leak a blockable domain; got: ' . var_export($raw, TRUE)
 		);
 	}
 
@@ -293,7 +295,8 @@ final class UnboundPythonSourcesTest extends TestCase
 	{
 		// Given a build whose feed list carries one non-\w header among valid rows
 		// (its source file even exists, so only the validation can be the skip cause)
-		file_put_contents("{$this->tmp}/dnsbl/bad.header.txt", "1,example.com,a,b,c,d\n");
+		file_put_contents("{$this->tmp}/dnsbl/bad.header.txt",
+			pfb_dnsbl_ndjson_emit_domain_row('example.com', '1', 'f', 'g'));
 		$feeds = $this->feeds();
 		$feeds[] = ['header' => 'bad.header', 'group' => 'g', 'log' => '1', 'format' => 'plain'];
 		$this->assertSame('', $this->logContents(), 'log must start empty');

@@ -19,7 +19,7 @@ use PHPUnit\Framework\TestCase;
  *
  * Feature: batching the DNSBL data/zone grep lookups preserves per-row semantics
  *   Background:
- *     Given the real DNSBL data/zone file formats (",{domain-or-suffix},,{log},{feed},{group}")
+ *     Given the real DNSBL data/zone file format (NDJSON schema v1, #1083)
  *     And a small fixture of each (tests/php/fixtures/dnsbl_prefetch_{data,zone}.txt)
  *
  *   Differential (oracle) scenarios -- an unseeded per-row exec and a prefetch-seeded
@@ -395,6 +395,26 @@ final class DnsblPrefetchTest extends TestCase
 	}
 
 	/**
+	 * #1083 hostile row: the data fixture carries a non-JSON garbage line embedding the
+	 * literal NDJSON needle text for a domain that has NO real entry ('uuid-spoof-target-
+	 * 8f2a.example.com'). `grep -F` DOES substring-match that line (byte-level, format-
+	 * blind), but pfb_dnsbl_ndjson_parse_row() refuses it (not valid JSON) -- both the
+	 * unseeded per-row site (R5) and the prefetch-seeded consult (R7) must treat this as
+	 * a miss, never as a spoofed match.
+	 */
+	public function test_a_line_embedding_another_domains_needle_text_is_not_treated_as_a_match(): void
+	{
+		$domain = 'uuid-spoof-target-8f2a.example.com';
+
+		$this->assertPrefetchMatchesPerRow($domain, [
+			'pfb_mode'  => 'Unknown',
+			'pfb_group' => 'Unknown',
+			'pfb_final' => 'Unknown',
+			'pfb_feed'  => 'Unknown',
+		], 'a grep hit inside a non-JSON garbage line must never be treated as a match (#1083 post-grep verification)');
+	}
+
+	/**
 	 * Run a PHP body in a genuinely restricted CHILD process (issue #809 review, B3/R1).
 	 *
 	 * Why a child process: `sys_get_temp_dir()` caches its resolved value for the life
@@ -467,7 +487,7 @@ final class DnsblPrefetchTest extends TestCase
 			. '$GLOBALS[\'pfb\'][\'unbound_py_data\'] = ' . var_export($this->dataFile, true) . ';'
 			. '$GLOBALS[\'pfb\'][\'unbound_py_zone\'] = ' . var_export($this->zoneFile, true) . ';'
 			. '$domain = ' . var_export($domain, true) . ';'
-			. '$direct = pfb_dnsbl_prefetch_grep([\',\' . $domain . \',,\'], $GLOBALS[\'pfb\'][\'unbound_py_data\']);'
+			. '$direct = pfb_dnsbl_prefetch_grep([pfb_dnsbl_ndjson_domain_needle($domain)], $GLOBALS[\'pfb\'][\'unbound_py_data\']);'
 			. 'pfb_dnsbl_prefetch([$domain]);'
 			. '$store = pfb_dnsbl_prefetch_store();'
 			. 'echo json_encode([\'direct\' => $direct, \'store\' => $store]);';

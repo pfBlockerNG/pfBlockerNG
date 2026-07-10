@@ -15,13 +15,13 @@ use PHPUnit\Framework\TestCase;
  *   - conversely, a domain that itself carries a metachar and IS present verbatim in the
  *     data/zone file can fail to be found by its own mis-escaped pattern.
  *
- * Fix: both per-row grep sites match with `-F` (fixed string) against the raw, unescaped
- * domain/suffix -- the same shape the batched prefetch pass (pfb_dnsbl_prefetch_grep())
- * already uses.
+ * Fix: both per-row grep sites match with `-F` (fixed string) against a
+ * pfb_dnsbl_ndjson_domain_needle() built from the raw, unescaped domain/suffix -- the same
+ * shape the batched prefetch pass (pfb_dnsbl_prefetch_grep()) already uses.
  *
  * Feature: the per-row DNSBL data/zone lookup treats the query domain as a literal string
  *   Background:
- *     Given the real DNSBL data/zone file line shape ",{domain-or-suffix},,{log},{feed},{group}"
+ *     Given the real DNSBL data/zone file line shape (NDJSON schema v1, #1083)
  *     And pfb_dnsbl_parse_compute() run in a mode that is neither 'alerts' (which caches
  *       ONE SQLite3 handle for the life of the PHP process) nor 'daemon' (which returns a
  *       packed CSV string instead of the assoc array asserted below) -- a fresh SQLite3
@@ -101,7 +101,7 @@ final class DnsblParseComputeMetacharTest extends TestCase
 	public function test_metachar_domain_present_in_data_file_is_found(): void
 	{
 		$domain = 'rv837*m1.com';
-		$this->seedSandbox(",{$domain},,A,FeedX,GroupX\n", '');
+		$this->seedSandbox(pfb_dnsbl_ndjson_emit_domain_row($domain, 'A', 'FeedX', 'GroupX'), '');
 
 		$result = $this->parse($domain);
 
@@ -123,7 +123,7 @@ final class DnsblParseComputeMetacharTest extends TestCase
 	public function test_metachar_domain_cannot_false_match_a_different_literal_domain(): void
 	{
 		$queryDomain = 'a*b837.com';
-		$this->seedSandbox(",b837.com,,A,FeedB,GroupB\n", '');
+		$this->seedSandbox(pfb_dnsbl_ndjson_emit_domain_row('b837.com', 'A', 'FeedB', 'GroupB'), '');
 
 		$result = $this->parse($queryDomain);
 
@@ -141,7 +141,7 @@ final class DnsblParseComputeMetacharTest extends TestCase
 	public function test_plain_domain_still_found_in_data_file(): void
 	{
 		$domain = 'plain837.com';
-		$this->seedSandbox(",{$domain},,A,PlainFeed,PlainGroup\n", '');
+		$this->seedSandbox(pfb_dnsbl_ndjson_emit_domain_row($domain, 'A', 'PlainFeed', 'PlainGroup'), '');
 
 		$result = $this->parse($domain);
 
@@ -165,7 +165,7 @@ final class DnsblParseComputeMetacharTest extends TestCase
 	{
 		$suffix = 'rv837*z1.com';
 		$queryDomain = "sub.{$suffix}";
-		$this->seedSandbox('', ",{$suffix},,A,FeedZ,GroupZ\n");
+		$this->seedSandbox('', pfb_dnsbl_ndjson_emit_domain_row($suffix, 'A', 'FeedZ', 'GroupZ'));
 
 		$result = $this->parse($queryDomain);
 
@@ -184,7 +184,7 @@ final class DnsblParseComputeMetacharTest extends TestCase
 	{
 		$suffix = 'plainzone837.com';
 		$queryDomain = "sub.{$suffix}";
-		$this->seedSandbox('', ",{$suffix},,A,PlainZoneFeed,PlainZoneGroup\n");
+		$this->seedSandbox('', pfb_dnsbl_ndjson_emit_domain_row($suffix, 'A', 'PlainZoneFeed', 'PlainZoneGroup'));
 
 		$result = $this->parse($queryDomain);
 

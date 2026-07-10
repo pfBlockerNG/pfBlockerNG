@@ -1,1 +1,1 @@
-,ponfeed.example,,1,csv_pon,grp_csv
+{"kind":"domain","domain":"ponfeed.example","log":"1","feed":"csv_pon","group":"grp_csv"}

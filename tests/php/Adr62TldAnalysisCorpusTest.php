@@ -11,15 +11,17 @@ use PHPUnit\Framework\TestCase;
  * Drives the REAL tld_analysis() (standalone -- reads "{dnsbl_file}.raw"
  * directly, independent of the download loop) over a committed
  * pfb_dnsbl.raw fixture (tests/fixtures/dnsbl_corpus/tld/) built from the
- * plain 6-col dialect, and asserts the classified pfb_py_data/pfb_py_zone
- * output is byte-identical to the committed golden fixtures.
+ * NDJSON schema v1 dialect (#1083), and asserts the classified
+ * pfb_py_data/pfb_py_zone output is byte-identical to the committed golden
+ * fixtures.
  *
  * Pins: 2-label domain -> unconditional ZONE; a 3-label domain whose 2-label
  * suffix is a known public suffix -> ZONE at the whole domain (tld_search);
  * a deeper sub-domain with NO known-suffix match -> DATA (transparent); any
- * non-comma-first line (a verbatim-captured ABP/regex shape) is skipped by
- * prefix (issue #1060/PR fix); a comma-first row with an empty/unset feed
- * column is skipped UNCONDITIONALLY -- no '.abp'-marker mechanism remains.
+ * non-domain-kind row (a verbatim-captured ABP/regex shape, or undecodable
+ * content) is skipped by pfb_dnsbl_ndjson_parse_row(); a domain row with an
+ * empty feed field can never parse (required-field rejection) -- no
+ * '.abp'-marker mechanism remains.
  */
 #[CoversFunction('tld_analysis')]
 final class Adr62TldAnalysisCorpusTest extends TestCase
@@ -126,9 +128,9 @@ final class Adr62TldAnalysisCorpusTest extends TestCase
 
 	/**
 	 * A broadened-capture verbatim line ('sneaky.zzsuffix.example##.ad',
-	 * pfb_dnsbl_plain.txt) reaches a PLAIN feed's raw dialect too -- the TLD
-	 * pass's comma-prefix guard skips any non-CSV-shaped line unconditionally,
-	 * so it is never CSV-mangled here regardless of which feed it came from.
+	 * pfb_dnsbl_plain.txt) reaches a PLAIN feed's raw dialect too -- it is an
+	 * 'abp' kind row, unconditionally skipped by the TLD pass regardless of
+	 * which feed it came from.
 	 */
 	public function testBroadenedCaptureVerbatimLineInPlainFeedIsSkippedNotMangled(): void
 	{
@@ -139,13 +141,18 @@ final class Adr62TldAnalysisCorpusTest extends TestCase
 	}
 
 	/**
-	 * The empty-feed-column skip fires unconditionally -- no '.abp' marker
-	 * mechanism gates it (issue #1060's latent gate bug: the skip used to fire
-	 * only when at least one marker existed on disk).
+	 * A domain row with an empty feed field can never parse (required-field
+	 * rejection, #1083) -- no '.abp' marker mechanism gates the skip (issue
+	 * #1060's latent gate bug: the skip used to fire only when at least one
+	 * marker existed on disk).
 	 */
 	public function testEmptyFeedColumnRowSkippedUnconditionallyWithNoAbpMarkerPresent(): void
 	{
-		file_put_contents("{$this->tmp}/pfb_dnsbl.raw", ",tldbad.example,,1,,agroup\n", FILE_APPEND);
+		file_put_contents(
+			"{$this->tmp}/pfb_dnsbl.raw",
+			'{"kind":"domain","domain":"tldbad.example","log":"1","feed":"","group":"agroup"}' . "\n",
+			FILE_APPEND
+		);
 
 		tld_analysis();
 

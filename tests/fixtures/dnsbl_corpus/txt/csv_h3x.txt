@@ -1,1 +1,1 @@
-,h3xfeed.example,,1,csv_h3x,grp_csv
+{"kind":"domain","domain":"h3xfeed.example","log":"1","feed":"csv_h3x","group":"grp_csv"}

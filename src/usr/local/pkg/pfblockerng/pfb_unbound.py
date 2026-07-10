@@ -906,38 +906,51 @@ def warn_if_legacy_control_enabled(enabled: bool) -> None:
         )
 
 
+def _load_ndjson_row_into_db(
+    db: dict[str, Any], line: str, path: str, feed_group_db: defaultdict[str, int], feed_group_index: int
+) -> int:
+    """Shared #1083 NDJSON row-into-DB step for ``_load_zone_db``/``_load_data_db``: a
+    'domain' row populates ``db``/``feedGroupIndexDB`` exactly as the legacy CSV loader
+    did; an 'abp' row is a legitimate self-describing line on the TLD-disabled rename
+    path (``pfb_dnsbl.raw`` renamed verbatim to ``pfb_py_data.txt``) and is silently
+    skipped, WITHOUT the undecodable-line diagnostic below. Returns the advanced index."""
+    row = _dnsbl_parse_ndjson_row(line)
+    if row is None:
+        sys.stderr.write("[pfBlockerNG]: Failed to parse: {}: {}".format(path, line))
+        return feed_group_index
+    if row["kind"] == "abp":
+        return feed_group_index
+
+    key = row["feed"] + row["group"]
+    isInFeedGroupDB = feed_group_db.get(key)
+    if isInFeedGroupDB is None:
+        feed_group_db[key] = feed_group_index
+        feedGroupIndexDB[feed_group_index] = {"feed": row["feed"], "group": row["group"]}
+        final_index = feed_group_index
+        feed_group_index += 1
+    else:
+        final_index = isInFeedGroupDB
+
+    db[row["domain"]] = {"log": row["log"], "index": final_index, "important": False}
+    return feed_group_index
+
+
 def _load_zone_db(feed_group_db: defaultdict[str, int], feed_group_index: int) -> int:
-    """Parse the legacy zone CSV (``pfb["pfb_py_zone"]``) into ``zoneDB`` -- skipped
-    when the ADR-06 manifest already built it. Extracted out of ``init_standard``
-    (mirrors ``_load_safesearch_db``) so the load -- and its failure diagnostic --
-    are unit-testable without the full Unbound ``env``/``id`` init rig. Returns the
-    advanced ``feed_group_index`` (shared with ``_load_data_db`` across both files).
-    Behaviour-preserving: same parse rules, same ``pfb["zoneDB"]`` flag."""
+    """Parse the NDJSON zone file (``pfb["pfb_py_zone"]``, #1083) into ``zoneDB`` --
+    skipped when the ADR-06 manifest already built it. Extracted out of
+    ``init_standard`` (mirrors ``_load_safesearch_db``) so the load -- and its failure
+    diagnostic -- are unit-testable without the full Unbound ``env``/``id`` init rig.
+    Returns the advanced ``feed_group_index`` (shared with ``_load_data_db`` across
+    both files). Behaviour-preserving: same DB shape, same ``pfb["zoneDB"]`` flag."""
     if not os.path.isfile(pfb["pfb_py_zone"]):
         pfb_py_status_close("dnsbl", pfb["pfb_py_zone"], "parse")
         return feed_group_index
     try:
-        with open(pfb["pfb_py_zone"]) as csv_file:
-            csv_reader = csv.reader(csv_file, delimiter=",")
-            for row in csv_reader:
-                if row and len(row) == 6:
-                    # Query Feed/Group/index
-                    isInFeedGroupDB = feed_group_db.get(row[4] + row[5])
-
-                    # Add Feed/Group/index
-                    if isInFeedGroupDB is None:
-                        feed_group_db[row[4] + row[5]] = feed_group_index
-                        feedGroupIndexDB[feed_group_index] = {"feed": row[4], "group": row[5]}
-                        final_index = feed_group_index
-                        feed_group_index += 1
-
-                    # Use existing Feed/Group/index
-                    else:
-                        final_index = isInFeedGroupDB
-
-                    zoneDB[row[1]] = {"log": row[3], "index": final_index, "important": False}
-                else:
-                    sys.stderr.write("[pfBlockerNG]: Failed to parse: {}: {}".format(pfb["pfb_py_zone"], row))
+        with open(pfb["pfb_py_zone"]) as ndjson_file:
+            for line in ndjson_file:
+                feed_group_index = _load_ndjson_row_into_db(
+                    zoneDB, line, pfb["pfb_py_zone"], feed_group_db, feed_group_index
+                )
 
             pfb["zoneDB"] = True
             pfb["python_blacklist"] = True
@@ -949,34 +962,18 @@ def _load_zone_db(feed_group_db: defaultdict[str, int], feed_group_index: int) -
 
 
 def _load_data_db(feed_group_db: defaultdict[str, int], feed_group_index: int) -> int:
-    """Parse the legacy data CSV (``pfb["pfb_py_data"]``) into ``dataDB`` -- skipped
-    when the ADR-06 manifest already built it. Same extraction rationale/shape as
-    ``_load_zone_db`` (shares ``feed_group_db``/``feed_group_index`` with it)."""
+    """Parse the NDJSON data file (``pfb["pfb_py_data"]``, #1083) into ``dataDB`` --
+    skipped when the ADR-06 manifest already built it. Same extraction rationale/shape
+    as ``_load_zone_db`` (shares ``feed_group_db``/``feed_group_index`` with it)."""
     if not os.path.isfile(pfb["pfb_py_data"]):
         pfb_py_status_close("dnsbl", pfb["pfb_py_data"], "parse")
         return feed_group_index
     try:
-        with open(pfb["pfb_py_data"]) as csv_file:
-            csv_reader = csv.reader(csv_file, delimiter=",")
-            for row in csv_reader:
-                if row and len(row) == 6:
-                    # Query Feed/Group/index
-                    isInFeedGroupDB = feed_group_db.get(row[4] + row[5])
-
-                    # Add Feed/Group/index
-                    if isInFeedGroupDB is None:
-                        feed_group_db[row[4] + row[5]] = feed_group_index
-                        feedGroupIndexDB[feed_group_index] = {"feed": row[4], "group": row[5]}
-                        final_index = feed_group_index
-                        feed_group_index += 1
-
-                    # Use existing Feed/Group/index
-                    else:
-                        final_index = isInFeedGroupDB
-
-                    dataDB[row[1]] = {"log": row[3], "index": final_index, "important": False}
-                else:
-                    sys.stderr.write("[pfBlockerNG]: Failed to parse: {}: {}".format(pfb["pfb_py_data"], row))
+        with open(pfb["pfb_py_data"]) as ndjson_file:
+            for line in ndjson_file:
+                feed_group_index = _load_ndjson_row_into_db(
+                    dataDB, line, pfb["pfb_py_data"], feed_group_db, feed_group_index
+                )
 
             pfb["dataDB"] = True
             pfb["python_blacklist"] = True

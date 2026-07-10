@@ -1,1 +1,1 @@
-,bbcfeed.example,,1,csv_bbc,grp_csv
+{"kind":"domain","domain":"bbcfeed.example","log":"1","feed":"csv_bbc","group":"grp_csv"}

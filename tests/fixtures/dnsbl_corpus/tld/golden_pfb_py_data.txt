@@ -1,1 +1,1 @@
-,www.biz.co.zzsuffix,,1,tld_plain_feed,tld_plain_feed
+{"kind":"domain","domain":"www.biz.co.zzsuffix","log":"1","feed":"tld_plain_feed","group":"tld_plain_feed"}

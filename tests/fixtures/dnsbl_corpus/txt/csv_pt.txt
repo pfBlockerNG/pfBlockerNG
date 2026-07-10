@@ -1,1 +1,1 @@
-,ptfeed.example,,1,csv_pt,grp_csv
+{"kind":"domain","domain":"ptfeed.example","log":"1","feed":"csv_pt","group":"grp_csv"}
