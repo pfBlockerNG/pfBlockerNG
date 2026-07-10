@@ -3,7 +3,7 @@
 The Sync/IP/General settings handlers passed request fields into string
 functions with no scalar coercion; in PHP 8 an array argument (``field[]=x``,
 valid CSRF) throws ``TypeError`` BEFORE the input-errors gate -- an HTTP 500
-plus a fatal in ``php_error.log``. Two guard layers close the theme:
+plus a fatal in ``php_error.log``. Two guard layers close it for these pages:
 
 * the shared ``pfb_filter()`` rejects an array as invalid up front, so every
   ``ON_OFF``/``WORD``/``NUM``-filtered field (the bulk of the sites) is safe
@@ -11,6 +11,11 @@ plus a fatal in ``php_error.log``. Two guard layers close the theme:
 * the three fields that bypass ``pfb_filter`` (the sync rowhelper loop, the IP
   suppression textareas' ``explode``/``base64_encode``, the General allowlist
   ``trim``) plus the IP ``array_key_exists`` site get inline scalar guards.
+
+Scope: this closes issue #1070's enumerated pages plus the ``pfb_filter``
+root for every filter-routed caller. ``pfblockerng_category_edit.php`` has a
+separate cluster of direct-string sinks that bypass ``pfb_filter`` -- tracked
+in #1106, not covered here.
 
 Each save must respond like any validation failure: HTTP 200, no login
 bounce, and NOT ONE new byte in any candidate ``php_error.log``.
