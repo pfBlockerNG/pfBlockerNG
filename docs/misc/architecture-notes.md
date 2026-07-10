@@ -69,15 +69,20 @@ marker glob (`!empty($abp_feeds)`) — a latent bug (issue #1060) meant a *plain
 `||…^` line was CSV-mangled whenever no feed was ABP-classified. The skip is now unconditional
 on an empty/unset feed column, independent of any marker.
 
-A bare hosts/plain domain line inside a feed that used to be header-classified ABP is the one
-deliberate behaviour change (delta D1, ADR.md §2): it now takes the plain `classify()` path
-(registrable parent → wildcard ZONE, same as before; a deeper sub-domain → exact DATA, changed
-from an unconditional wildcard ZONE) instead of `parse_abp()`'s always-wildcard treatment — bare
-lines are rare in real ABP feeds (`||` dominates), and the plain treatment is the canonical one
-once feeds are no longer classified. Every other line class is byte-identical to `origin/devel`,
-pinned by a corpus oracle (`tests/test_adr62_*`, `tests/php/Adr62*Test.php`) that runs each
-coverage-matrix format through both the old and new paths and asserts equality outside the
-delta table. See `.ADRs/ADR_62_DNSBL_Unified_Line_Parsing/`.
+The deliberate behaviour changes are enumerated in the ADR's delta table (D1–D6, ADR.md §2) —
+the headline rows: a bare hosts/plain domain line inside a feed that used to be
+header-classified ABP now takes the plain `classify()` path (registrable parent → wildcard
+ZONE, same as before; a deeper sub-domain → exact DATA — delta D1); `/re/`, `@@…` and
+element-hiding lines in plain feeds are now honoured via `parse_abp()` (D2); and a plain
+feed's `||<IP>^` anchor now collects to the DNSBLIP firewall alias where it previously
+vanished (D6). The element-hiding capture requires an ABP cosmetic domain-list prefix
+(`[A-Za-z0-9._,~*-]`) before the first marker — a hosts line's mid-line `` ## `` inline
+comment, a `#`-led comment, or a CSV row's `#`-fragment URL is never captured — and `//`-led
+lines are comments, never `/re/` regex rules. Every line class outside the delta table is
+byte-identical to `origin/devel`, pinned by a corpus oracle (`tests/test_adr62_*`,
+`tests/php/Adr62*Test.php`) whose golden fixtures were captured by running the real
+functions at the pre-change base and are regenerated only through those same functions.
+See `.ADRs/ADR_62_DNSBL_Unified_Line_Parsing/`.
 
 ### ADR-10 — zero-downtime DNSBL data swap
 

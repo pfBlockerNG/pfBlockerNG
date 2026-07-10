@@ -12,6 +12,10 @@ declare(strict_types=1);
 $worktree   = $argv[1];
 $sandbox    = $argv[2];
 $iterations = (int) $argv[3];
+if ($iterations < 1) {
+	fwrite(STDERR, "iterations must be a positive integer\n");
+	exit(1);
+}
 
 require_once "{$worktree}/tests/php/bootstrap.php";
 
@@ -52,7 +56,12 @@ printf("isolated_median_seconds=%.4f\n", $durations[$mid]);
 printf("isolated_min_seconds=%.4f\n", $durations[0]);
 printf("isolated_max_seconds=%.4f\n", $durations[count($durations) - 1]);
 
-// Sanity: prove the raw output actually has the expected line count (not silently empty).
+// Sanity: a missing/empty raw output means the pipeline never ran -- fail, never
+// report timings for a no-op (a broken worker must not read as a perf PASS).
 $rawFile = "{$sandbox}/pfb_py_raw/benchfeed.raw";
+if (!is_file($rawFile) || filesize($rawFile) === 0) {
+	fwrite(STDERR, "benchmark output missing or empty: {$rawFile}\n");
+	exit(1);
+}
 $lineCount = (int) exec('wc -l < ' . escapeshellarg($rawFile));
 printf("raw_line_count=%d\n", $lineCount);

@@ -30,7 +30,7 @@ final class Adr62DnsblCollectFeedIpTest extends TestCase
 		// pinning that the SANITIZED value, not the raw candidate, is what lands.
 		$ip4 = [];
 		$ip6 = [];
-		$collected = pfb_dnsbl_collect_feed_ip('10.0.5.9', '10.0.05.9', false, $ip4, $ip6);
+		$collected = pfb_dnsbl_collect_feed_ip('10.0.5.9', '10.0.05.9', FALSE, $ip4, $ip6);
 		$this->assertTrue($collected);
 		$this->assertSame(['10.0.5.9'], $ip4);
 		$this->assertSame([], $ip6);
@@ -44,7 +44,7 @@ final class Adr62DnsblCollectFeedIpTest extends TestCase
 		// never sanitized" (breaking that asymmetry turns this red).
 		$ip4 = [];
 		$ip6 = [];
-		$collected = pfb_dnsbl_collect_feed_ip('0::1', '0::1', false, $ip4, $ip6);
+		$collected = pfb_dnsbl_collect_feed_ip('0::1', '0::1', FALSE, $ip4, $ip6);
 		$this->assertTrue($collected);
 		$this->assertSame(['0::1'], $ip6);
 		$this->assertSame([], $ip4);
@@ -57,7 +57,7 @@ final class Adr62DnsblCollectFeedIpTest extends TestCase
 		// validate_ipv4() rejects it, so nothing is appended.
 		$ip4 = [];
 		$ip6 = [];
-		$collected = pfb_dnsbl_collect_feed_ip('198.51.100.5', 'not-an-ip', false, $ip4, $ip6);
+		$collected = pfb_dnsbl_collect_feed_ip('198.51.100.5', 'not-an-ip', FALSE, $ip4, $ip6);
 		$this->assertFalse($collected);
 		$this->assertSame([], $ip4);
 		$this->assertSame([], $ip6);
@@ -67,7 +67,7 @@ final class Adr62DnsblCollectFeedIpTest extends TestCase
 	{
 		$ip4 = [];
 		$ip6 = [];
-		$collected = pfb_dnsbl_collect_feed_ip('2001:db8::1', 'not-an-ip6', false, $ip4, $ip6);
+		$collected = pfb_dnsbl_collect_feed_ip('2001:db8::1', 'not-an-ip6', FALSE, $ip4, $ip6);
 		$this->assertFalse($collected);
 		$this->assertSame([], $ip4);
 		$this->assertSame([], $ip6);
@@ -80,7 +80,7 @@ final class Adr62DnsblCollectFeedIpTest extends TestCase
 		// 192.0.2.200) -- the appended value must be the CANDIDATE's, not the guard's.
 		$ip4 = [];
 		$ip6 = [];
-		$collected = pfb_dnsbl_collect_feed_ip('192.0.2.9', '192.0.2.200', false, $ip4, $ip6);
+		$collected = pfb_dnsbl_collect_feed_ip('192.0.2.9', '192.0.2.200', FALSE, $ip4, $ip6);
 		$this->assertTrue($collected);
 		$this->assertSame(['192.0.2.200'], $ip4);
 	}
@@ -89,7 +89,7 @@ final class Adr62DnsblCollectFeedIpTest extends TestCase
 	{
 		$ip4 = [];
 		$ip6 = [];
-		$collected = pfb_dnsbl_collect_feed_ip('example.com', 'example.com', false, $ip4, $ip6);
+		$collected = pfb_dnsbl_collect_feed_ip('example.com', 'example.com', FALSE, $ip4, $ip6);
 		$this->assertFalse($collected);
 		$this->assertSame([], $ip4);
 		$this->assertSame([], $ip6);
@@ -102,11 +102,11 @@ final class Adr62DnsblCollectFeedIpTest extends TestCase
 		// Proves $custom rides through the helper unchanged either way.
 		$ip4 = [];
 		$ip6 = [];
-		$this->assertTrue(pfb_dnsbl_collect_feed_ip('0.0.0.0', '0.0.0.0/0', false, $ip4, $ip6));
+		$this->assertTrue(pfb_dnsbl_collect_feed_ip('0.0.0.0', '0.0.0.0/0', FALSE, $ip4, $ip6));
 		$this->assertSame(['0.0.0.0'], $ip4);
 
 		$ip4 = [];
-		$this->assertTrue(pfb_dnsbl_collect_feed_ip('0.0.0.0', '0.0.0.0/0', true, $ip4, $ip6));
+		$this->assertTrue(pfb_dnsbl_collect_feed_ip('0.0.0.0', '0.0.0.0/0', TRUE, $ip4, $ip6));
 		$this->assertSame(['0.0.0.0/0'], $ip4);
 	}
 
@@ -116,8 +116,8 @@ final class Adr62DnsblCollectFeedIpTest extends TestCase
 		// lines -- pins that the helper appends (never resets) the by-ref arrays.
 		$ip4 = [];
 		$ip6 = [];
-		$this->assertTrue(pfb_dnsbl_collect_feed_ip('192.0.2.9', '192.0.2.9', false, $ip4, $ip6));
-		$this->assertTrue(pfb_dnsbl_collect_feed_ip('2001:db8::1', '2001:db8::1', false, $ip4, $ip6));
+		$this->assertTrue(pfb_dnsbl_collect_feed_ip('192.0.2.9', '192.0.2.9', FALSE, $ip4, $ip6));
+		$this->assertTrue(pfb_dnsbl_collect_feed_ip('2001:db8::1', '2001:db8::1', FALSE, $ip4, $ip6));
 		$this->assertSame(['192.0.2.9'], $ip4);
 		$this->assertSame(['2001:db8::1'], $ip6);
 	}

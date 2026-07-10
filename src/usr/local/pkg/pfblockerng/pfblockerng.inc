@@ -6691,15 +6691,30 @@ function pfb_dnsbl_is_skippable_control_line(string $line): bool {
 // _dnsbl_parse_abp_regex()'s recognised shapes: '||'/'@@' anchors, a '/regex/' (optional
 // trailing '$options') block/allow rule, and the element-hiding marker family. A bare
 // domain line is deliberately FALSE (stays on the plain path, delta D1).
+// The element-hiding branch requires everything BEFORE the first marker to be an ABP
+// cosmetic domain-list prefix ([A-Za-z0-9._,~*-]; empty = generic rule) -- a mid-line
+// ' ## ' inline comment (hosts dialect), a '#'-led comment mentioning '##', or a CSV row
+// with a '#'-fragment URL is NOT a cosmetic rule and must keep its plain-path handling
+// (the '#'-classifier's side effects included). '//'-led lines are comments by feed
+// convention, never '/re/' regex rules. Kept in lockstep with _dnsbl_is_abp_rule_line().
 function pfb_dnsbl_is_abp_rule_line(string $line): bool {
 	if (str_starts_with($line, '||') || str_starts_with($line, '@@')) {
 		return TRUE;
 	}
-	if (str_contains($line, '##') || str_contains($line, '#@#') ||
-	    str_contains($line, '#?#') || str_contains($line, '#%#') || str_contains($line, '#$#')) {
-		return TRUE;
+	if (str_contains($line, '#')) {
+		$first = FALSE;
+		foreach (array('##', '#@#', '#?#', '#%#', '#$#') as $eh_marker) {
+			$pos = strpos($line, $eh_marker);
+			if ($pos !== FALSE && ($first === FALSE || $pos < $first)) {
+				$first = $pos;
+			}
+		}
+		if ($first !== FALSE &&
+		    ($first === 0 || strspn($line, 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._,~*-') >= $first)) {
+			return TRUE;
+		}
 	}
-	if (str_starts_with($line, '/')) {
+	if (str_starts_with($line, '/') && !str_starts_with($line, '//')) {
 		if (str_ends_with($line, '/') && strlen($line) > 1) {
 			return TRUE;
 		}
@@ -7101,12 +7116,13 @@ function pfb_feed_manifest_row(string $header, string $group, string $log_flag,
 
 // ADR-06: Build the shell->Python contract: the per-feed manifest ($pfb['unbound_py_sources'])
 // plus a per-feed IP-stripped raw domain file that pfb_unbound.py's dnsbl_build_from_manifest
-// consumes. 'plain' feeds: raw is the bare-domain extraction of the parsed '.txt' (IPs already
-// routed elsewhere). ADR-07: 'abp' feeds copy their RAW '.txt' lines verbatim so Python's
-// parse_abp sees them intact. $feeds rows: header/group/log/format/provenance ('user'
-// Custom_List -> band 5, 'feed' download -> band 1). PFBL-01: RE-validates each header via
-// pfb_sanitise_feed_header() (PFB_FILTER_WORD, not DOMAIN); a failing row is SKIPPED + logged
-// before any file touch; pinned by tests/php/PfbFilterContractTest.php.
+// consumes. Every feed is 'plain' (ADR-62): raw is the bare-domain extraction of the parsed
+// '.txt' (IPs already routed elsewhere), with ABP-shaped lines (pfb_dnsbl_is_abp_rule_line)
+// passed through verbatim so Python's parse_abp sees them intact. $feeds rows:
+// header/group/log/format/provenance ('user' Custom_List -> band 5, 'feed' download -> band 1).
+// PFBL-01: RE-validates each header via pfb_sanitise_feed_header() (PFB_FILTER_WORD, not
+// DOMAIN); a failing row is SKIPPED + logged before any file touch; pinned by
+// tests/php/PfbFilterContractTest.php.
 function pfb_unbound_python_sources($feeds) {
 	global $pfb;
 
@@ -7724,7 +7740,7 @@ function tld_analysis() {
 			$tld	= substr($line, strrpos($line, '.') + 1);
 
 			if (!empty($tld)) {
-				if (!is_array($tlds[$tld])) {
+				if (!isset($tlds[$tld]) || !is_array($tlds[$tld])) {
 					$tlds[$tld] = array();
 				}
 				$tlds[$tld][$line] = '';
@@ -16311,7 +16327,7 @@ function sync_package_pfblockerng($cron='') {
 								// 'plain' now (Python still tolerates a stale 'abp' hint on
 								// an untouched manifest, Semantics #7) -- sweep any leftover
 								// marker opportunistically.
-								unlink_if_exists("{$pfbfolder}/{$header}.abp");
+								unlink_if_exists("{$pfbfolder}/{$header}.abp");	// retired-token-ok: opportunistic stale-marker sweep
 								// ADR-31: delegate to pfb_feed_manifest_row() (deny default).
 								// ADR-31: pass $mode derived from per-row 'action' (above).
 								$pfb_py_feeds[]		= pfb_feed_manifest_row(
@@ -16400,11 +16416,11 @@ function sync_package_pfblockerng($cron='') {
 											// Collect original line
 											$oline = $line;
 
-											// Issue #946: strip a UTF-8 BOM before ANY per-line classification -- the ABP
-											// header sniff handles its own BOM, but the '!' comment skip, the ADR-21
-											// '||' anchor short-circuit and the CSV autodetection below do not; a BOM-led
-											// first line would be misclassified by all three. $oline keeps the original
-											// bytes for the parse-error log. This also strips a BOM from raw ABP body
+											// Issue #946: strip a UTF-8 BOM before ANY per-line classification -- the
+											// control-line skip, the ADR-62 per-line capture guard and the CSV
+											// autodetection below do not handle a BOM themselves; a BOM-led first line
+											// would be misclassified by all three. $oline keeps the original bytes for
+											// the parse-error log. This also strips a BOM from captured ABP-shaped
 											// lines before their verbatim passthrough to Python -- intentional and
 											// harmless (Python's parser is byte-oriented too).
 											$line = pfb_dnsbl_strip_bom($line);
@@ -16867,7 +16883,7 @@ function sync_package_pfblockerng($cron='') {
 								// ADR-62: the '.abp' marker is retired -- sweep any leftover
 								// from a pre-upgrade build (format_hint is always 'plain' now;
 								// Python still tolerates a stale manifest naming 'abp').
-								unlink_if_exists("{$pfbfolder}/{$header}.abp");
+								unlink_if_exists("{$pfbfolder}/{$header}.abp");	// retired-token-ok: opportunistic stale-marker sweep
 
 								// Rename newly downloaded file to final location
 								if (file_exists("{$pfbfolder}/{$header}.bk")) {

@@ -427,6 +427,48 @@ def test_hostile_comment_slash_line_not_routed_to_parse_abp() -> None:
     assert result.data_db == {} and result.zone_db == {}
 
 
+def test_cosmetic_prefix_guard_matches_php_row_for_row() -> None:
+    """The element-hiding capture requires an ABP cosmetic domain-list prefix
+    before the FIRST marker, and '//'-led lines are comments, never regex
+    rules -- mirroring pfb_dnsbl_is_abp_rule_line() row for row (PR #1107
+    review: an unanchored '##' substring capture silently dropped a hosts
+    line's ' ## ' inline-comment block and CSV rows carrying '#'-fragment
+    URLs, and '//path/' comments became live regex rules)."""
+    not_capturable = [
+        "0.0.0.0 example.com ## comment",
+        "example.com ## seen 2024",
+        "12345,http://evil.example/path##frag,phish,online",
+        "http://example.com/##banner",
+        "# note ## x",
+        "# The Spamhaus Project Ltd ## marketing ## banner",
+        "# c#@#d",
+        "\thost.example##.ad",
+        "//cdn.example.com/ads/",
+        "//",
+        "@stray.example",  # single-@ yHost prefix, not an '@@' allow anchor
+    ]
+    capturable = [
+        "####################",  # marker at pos 0: generic-rule shape (documented latent)
+        "##.ad",
+        "example.com##.ad",
+        "a.com,b.com##.ad",
+        "~ex.com##.ad",
+        "EXAMPLE.com##.ad",
+        "/re/",
+        "/re/$important",
+    ]
+    for line in not_capturable:
+        assert _dnsbl_is_abp_rule_line(line) is False, f"must NOT capture: {line!r}"
+    for line in capturable:
+        assert _dnsbl_is_abp_rule_line(line) is True, f"must capture: {line!r}"
+    # Behavioural half for the fail-open class: because the predicate does not
+    # capture a ' ## ' inline-comment line, PHP's plain extraction keeps
+    # producing the bare domain in the .raw (never a verbatim line that
+    # parse_abp would return None for) -- and that bare domain still blocks.
+    result = _build_synthetic([_plain_feed_row("inlinehash")], {"inlinehash": ["keepme.example"]})
+    assert _blocked(result, "keepme.example")
+
+
 def test_hostile_bare_anchors_route_to_parse_abp_and_crash_free() -> None:
     """bare '@@' / bare '||' (brief hostile row): structural capture (Phase-2
     contract) routes both to parse_abp(), which returns None (empty host

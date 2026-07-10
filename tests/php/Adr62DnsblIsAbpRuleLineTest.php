@@ -41,6 +41,26 @@ final class Adr62DnsblIsAbpRuleLineTest extends TestCase
 			'punycode domain'              => ['xn--nxasmq6b.com', false],
 			'control line, not a rule'     => ['[Adblock', false],
 			'single pipe, not an anchor'   => ['|single', false],
+			// Cosmetic-prefix guard: a mid-line ' ## ' inline comment (hosts dialect),
+			// a '#'-led comment mentioning a marker, or a URL/CSV '#'-fragment must
+			// stay on the plain path -- capture would silently drop a working block.
+			'hosts line with inline ## comment'   => ['0.0.0.0 example.com ## comment', false],
+			'bare domain with inline ## comment'  => ['example.com ## seen 2024', false],
+			'csv row with url #-fragment'         => ['12345,http://evil.example/path##frag,phish,online', false],
+			'url with ##-fragment'                => ['http://example.com/##banner', false],
+			'hash comment mentioning ##'          => ['# note ## x', false],
+			'classifier-style comment with ##'    => ['# The Spamhaus Project Ltd ## marketing ## banner', false],
+			'hash comment with exception marker'  => ['# c#@#d', false],
+			'tab-led cosmetic rule (caller trims)' => ["\thost.example##.ad", false],
+			'all-hash banner (marker at pos 0)'   => ['####################', true],
+			'cosmetic rule, domain list'          => ['a.com,b.com##.ad', true],
+			'cosmetic rule, negated domain'       => ['~ex.com##.ad', true],
+			'cosmetic rule, mixed-case domain'    => ['EXAMPLE.com##.ad', true],
+			// '//'-led lines are comments by feed convention, never regex rules --
+			// even with a closing '/' that would otherwise satisfy the /re/ shape.
+			'comment with trailing slash'         => ['//cdn.example.com/ads/', false],
+			'bare double slash'                   => ['//', false],
+			'yhost @-prefix line'                 => ['@stray.example', false],
 		];
 	}
 

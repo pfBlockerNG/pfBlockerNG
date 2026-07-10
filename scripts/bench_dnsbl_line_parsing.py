@@ -132,6 +132,8 @@ def worker_python(worktree: str, raw_path: str, iterations: int) -> int:
         t0 = time.perf_counter()
         result = pfb_unbound.dnsbl_build_from_manifest(manifest_path)
         dt = time.perf_counter() - t0
+        if result is None:
+            raise RuntimeError("DNSBL benchmark build failed (dnsbl_build_from_manifest returned None)")
         durations.append(dt)
         print(f"[py] iter {i}: {dt:.4f}s", file=sys.stderr)
 
@@ -174,9 +176,13 @@ def _run_timed(cmd: list[str]) -> TrialResult:
     key=value lines plus the wrapper's peak-RSS line (bytes, normalised).
     """
     time_bin = shutil.which("time") or "/usr/bin/time"
-    is_macos = sys.platform == "darwin"
-    wrapped = [time_bin, "-l", *cmd] if is_macos else [time_bin, "-v", *cmd]
-    proc = subprocess.run(wrapped, capture_output=True, text=True, check=True)  # noqa: S603
+    # BSD time takes -l, GNU time takes -v; probe instead of assuming per-OS
+    # (a BSD host is not necessarily macOS). LC_ALL=C pins the GNU output
+    # format so the RSS regex cannot miss on a localized label.
+    env = {**os.environ, "LC_ALL": "C"}
+    probe = subprocess.run([time_bin, "-l", "true"], capture_output=True, text=True, env=env, check=False)  # noqa: S603
+    flag = "-l" if probe.returncode == 0 else "-v"
+    proc = subprocess.run([time_bin, flag, *cmd], capture_output=True, text=True, check=True, env=env)  # noqa: S603
 
     values: dict[str, str] = {}
     for line in proc.stdout.splitlines():
@@ -184,14 +190,15 @@ def _run_timed(cmd: list[str]) -> TrialResult:
             k, v = line.split("=", 1)
             values[k] = v
 
-    rss_bytes = 0
     m = _BSD_RSS_RE.search(proc.stderr)
     if m:
         rss_bytes = int(m.group(1))
     else:
         m = _GNU_RSS_RE.search(proc.stderr)
-        if m:
-            rss_bytes = int(m.group(1)) * 1024
+        if m is None:
+            # A silent 0 would make pct_delta(0, 0) read as "no regression".
+            raise RuntimeError(f"could not parse peak RSS from {time_bin} output:\n{proc.stderr}")
+        rss_bytes = int(m.group(1)) * 1024
 
     return TrialResult(
         isolated_median_s=float(values["isolated_median_seconds"]),
@@ -271,8 +278,7 @@ def run(args: argparse.Namespace) -> int:
             py_results[label] = aggregate_trials(trials)
             print(f"# python[{label}]: {py_results[label]}", file=sys.stderr)
 
-        report(php_results, py_results, args.threshold_pct)
-        return 0
+        return 0 if report(php_results, py_results, args.threshold_pct) else 1
     finally:
         if not args.keep:
             subprocess.run(["git", "worktree", "remove", "--force", base_worktree], cwd=REPO_ROOT, check=False)  # noqa: S603
@@ -281,7 +287,7 @@ def run(args: argparse.Namespace) -> int:
             print(f"# --keep: leaving {workdir} and worktree {base_worktree} in place", file=sys.stderr)
 
 
-def report(php_results: dict[str, TrialResult], py_results: dict[str, TrialResult], threshold_pct: float) -> None:
+def report(php_results: dict[str, TrialResult], py_results: dict[str, TrialResult], threshold_pct: float) -> bool:
     print("\n=== ADR-62 perf benchmark ===")
     verdict_pass = True
     surfaces = (
@@ -301,6 +307,14 @@ def report(php_results: dict[str, TrialResult], py_results: dict[str, TrialResul
 
     print(f"\nkill-threshold: >{threshold_pct:.0f}% wall-clock OR RSS (ADR.md SS7 criterion 2)")
     print("VERDICT: PASS" if verdict_pass else "VERDICT: REJECT-criterion-2-triggered")
+    return verdict_pass
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("value must be at least 1")
+    return parsed
 
 
 def main() -> int:
@@ -311,9 +325,11 @@ def main() -> int:
     run_p.add_argument(
         "--base-ref", default=None, help="git ref to compare against (default: merge-base with origin/devel)"
     )
-    run_p.add_argument("--lines", type=int, default=1_000_000)
-    run_p.add_argument("--iterations", type=int, default=5, help="internal repeats per trial process")
-    run_p.add_argument("--trials", type=int, default=2, help="independent process invocations per (ref, surface)")
+    run_p.add_argument("--lines", type=_positive_int, default=1_000_000)
+    run_p.add_argument("--iterations", type=_positive_int, default=5, help="internal repeats per trial process")
+    run_p.add_argument(
+        "--trials", type=_positive_int, default=2, help="independent process invocations per (ref, surface)"
+    )
     run_p.add_argument("--threshold-pct", type=float, default=25.0)
     run_p.add_argument("--keep", action="store_true", help="keep the temp worktree/fixtures for inspection")
 

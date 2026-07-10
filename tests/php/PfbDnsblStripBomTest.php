@@ -68,9 +68,9 @@ final class PfbDnsblStripBomTest extends TestCase
 
 	public function testBomLedCommentLineBecomesCommentDetectable(): void
 	{
-		// Issue #946: same property for the '!' comment skip in the !$validate_header
-		// block -- before the hoist, a BOM-led '! comment' first line fell through as
-		// data and was error-logged instead of skipped.
+		// Issue #946: same property for the '!' comment skip (now the ADR-62
+		// universal control-line skip) -- before the hoist, a BOM-led '! comment'
+		// first line fell through as data and was error-logged instead of skipped.
 		$result = pfb_dnsbl_strip_bom("\xEF\xBB\xBF! Some comment");
 		$this->assertSame('! Some comment', $result);
 		$this->assertTrue(str_starts_with($result, '!'));
