@@ -443,11 +443,12 @@ def test_dnsbl_http_hosts_feed_loads(deployed_vm: SmokeVM, client_vm: SmokeVM, m
 
 
 def test_dnsbl_http_abp_feed_loads(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
-    """DNSBL ABP/EasyList over HTTP: ``dnsbl_abp.txt`` is header-sniffed ABP and loads.
+    """DNSBL ABP/EasyList over HTTP: ``dnsbl_abp.txt``'s ``||``/``@@`` lines load.
 
-    The body starts with ``[Adblock Plus 2.0]`` -> pfBlockerNG sniffs it as ABP
-    (``format_hint='abp'``) and the Python ABP parser runs. The feed BLOCKs
-    ``||uuid-22f166f56cca.com^`` and contains a ``||``/``@@`` pair on
+    The body starts with ``[Adblock Plus 2.0]`` (an ordinary skippable bracket
+    control line, ADR-62) and every ``||``/``@@`` line is captured per-line
+    (``pfb_dnsbl_is_abp_rule_line()``) and routed to the Python ABP parser. The
+    feed BLOCKs ``||uuid-22f166f56cca.com^`` and contains a ``||``/``@@`` pair on
     ``uuid-f26156c6df69.com`` — the feed-allow ``@@`` (band 2) BEATS the feed-block
     ``||`` (band 1), so that name RESOLVES.
 
@@ -495,14 +496,16 @@ def test_dnsbl_http_abp_feed_loads(deployed_vm: SmokeVM, client_vm: SmokeVM, moc
 
 
 # --------------------------------------------------------------------------- #
-# ADR-21 — per-line ABP detection inside a NON-ABP (header-less) feed.
-# The kill-gate/expand cases above feed a WHOLE-FEED ABP body (it STARTS with
-# ``[Adblock Plus 2.0]`` -> ``format_hint='abp'`` -> every line to ``parse_abp``).
-# This case proves the orthogonal ADR-21 path: a feed with NO ABP header (it stays
-# ``format_hint='plain'``) whose individual lines still carry ``||``/``@@||`` anchors
-# is routed line-by-line to the ABP parser (PHP download loop + manifest builder write
-# the anchors verbatim; Python ``build()`` routes them to ``parse_abp`` -> ``abp_rules``)
-# WHILE its plain-domain lines keep the plain pipeline.
+# ADR-21/ADR-62 — per-line ABP detection inside a HEADER-LESS feed.
+# The kill-gate/expand case above feeds a body that carries the ``[Adblock
+# Plus 2.0]`` header line; ADR-62 retired the header sniff, so that header line is
+# now just an ordinary skipped bracket control line -- the SAME per-line capture
+# (``pfb_dnsbl_is_abp_rule_line()``) drives BOTH cases identically. This case
+# proves the same per-line capture holds with NO header line present at all:
+# ``||``/``@@||`` anchors are routed line-by-line to the ABP parser (PHP download
+# loop + manifest builder write the anchors verbatim; Python ``build()`` routes
+# them to ``parse_abp`` -> ``abp_rules``) WHILE plain-domain lines in the SAME
+# feed keep the plain pipeline.
 # --------------------------------------------------------------------------- #
 
 
@@ -587,24 +590,28 @@ def test_abp_perline_detection_in_plain_feed(
 
 
 # --------------------------------------------------------------------------- #
-# ADR-21 hardening — two review fixes, each pinned by a DISTINGUISHING live
-# transition (the pre-fix behaviour would flip the asserted result, so neither is
-# mere execution): (1) the whole-feed ABP header sniff peels a leading UTF-8 BOM;
-# (2) per-line ABP capture is VERBATIM (a path anchor is skipped, never truncated
-# into a domain-wide over-block).
+# ADR-21 hardening — two review fixes, each ORIGINALLY pinned by a DISTINGUISHING
+# live transition: (1) a leading UTF-8 BOM must not mask a ``[...]`` control
+# line's classification; (2) per-line ABP capture is VERBATIM (a path anchor is
+# skipped, never truncated into a domain-wide over-block).
 # --------------------------------------------------------------------------- #
 
 
 @pytest.mark.timeout(300)
 def test_abp_bom_header_still_detected(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
-    """ADR-21: a UTF-8 BOM before ``[Adblock Plus 2.0]`` must not mask ABP detection.
+    """ADR-21/ADR-62: a UTF-8 BOM before ``[Adblock Plus 2.0]`` must not mask a feed ``/regex/``.
 
     Scenario: a feed whose first bytes are a UTF-8 BOM (``EF BB BF``) followed by the
-    ``[Adblock Plus 2.0]`` header and a single feed regex ``/badword/``. Whole-feed ABP
-    detection is the ONLY path that compiles a feed ``/regex/``: it is not a
-    ``||``/``@@||`` line, so ADR-21 per-line routing does not catch it, and the plain
-    pipeline drops it as an invalid domain. So a VIP block on a ``badword``-bearing name
-    proves the BOM was peeled and the header recognised.
+    ``[Adblock Plus 2.0]`` header and a single feed regex ``/badword/``. ADR-62's
+    per-line capture (``pfb_dnsbl_is_abp_rule_line()``) compiles a feed ``/regex/``
+    regardless of a header line's presence, so a VIP block on a ``badword``-bearing
+    name proves per-line ``/regex/`` capture works with a BOM-led header line ahead
+    of it in the SAME feed (a smoke-level sanity, not a strict regression pin: since
+    ADR-62 removed all feed-level state, this test's line-2 outcome no longer
+    depends on line 1's own BOM-classification correctness — the precise BOM-strip
+    regression oracle for a LEADING line is
+    ``test_dnsbl_bom_header_feed_parses_without_error`` below, which asserts the
+    parse-error-log count directly).
 
     Given (before the feed loads) the regex-target name RESOLVES via the controlled stub
       upstream (``STUB_DNS_A``) — the observable before-state.
