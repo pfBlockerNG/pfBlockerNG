@@ -12420,6 +12420,17 @@ function pfb_hash_write($base, $path) {
 	return $ok;
 }
 
+// issue #1098: a pre-#1072 corrupted probe body (.md5.raw) would be reused verbatim by
+// the next sync ingest — purge at install/upgrade.
+function pfb_purge_probe_bodies() {
+	global $pfb;
+	foreach (array($pfb['origdir'], $pfb['dnsorigdir']) as $dir) {
+		foreach (glob("{$dir}/*.md5.raw") ?: array() as $probe_body) {
+			unlink_if_exists($probe_body);
+		}
+	}
+}
+
 // ADR-42: map a probe ('change_detect' mode) download path to the feed's persisted
 // conditional-GET validator baseline.  The detector (pfb_update_check) persists the
 // ETag/Last-Modified sidecars at {header}.orig (pfb_validator_write on its $local_file),
