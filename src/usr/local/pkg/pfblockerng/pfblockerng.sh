@@ -562,7 +562,7 @@ EOF
 
 					if [ -n "${lcheck}" ]; then
 						# Replace masterfile with changes to list. Anchored (^) --
-						# see duplicate()'s sibling grep for the suffix-over-match
+						# see remove()'s sibling grep for the suffix-over-match
 						# rationale (issue #714).
 						grep "^${alias}[[:space:]]" "${masterfile}" > "${tempfile}"
 						# #713: gate the publish on awk's own exit status (awk has no "empty
@@ -741,9 +741,9 @@ pfb_aggregate() {
 
 
 # issue #1084: single-pass batch recompute -- cross-feed v4/v6-Deny dedup +
-# v4 dMax/pMax reputation, replacing duplicate()/remove()'s masterfile surgery
-# and dmax/pmax's incremental per-file mutation for the CALLERS that route
-# through it (both old and new code coexist until the .inc rewiring lands).
+# v4 dMax/pMax reputation, replacing duplicate()/reputation_dmax()'s masterfile
+# surgery and dmax/pmax's incremental per-file mutation for the CALLERS the
+# .inc matrix (pfb_ip_recompute_matrix()) routes through it.
 #
 # Args (mirrors pfb_aggregate's memberlist-file convention):
 #   $2 family      'v4' | 'v6' -- gates the reputation stage (v4-only) and
@@ -752,12 +752,12 @@ pfb_aggregate() {
 #   $3 memberlist  Path to a file listing PRISTINE per-feed snapshot paths,
 #                  one per line, in PRIORITY order (highest priority first).
 #                  CONTRACT: a snapshot is whatever a per-feed file looked
-#                  like right after preprocessing (post _255/_agg/_rep, the
-#                  same input duplicate() reads today) -- recompute never
-#                  reads its own prior output. The alias is derived from the
-#                  snapshot basename exactly as existing code derives a
-#                  header from a file name: strip the directory, then strip
-#                  from the first '.' onward (e.g. ".../FeedA_v4.orig" ->
+#                  like right after preprocessing (post _255/_agg/_rep) --
+#                  recompute never reads its own prior output. The alias is
+#                  derived from the snapshot basename exactly as existing
+#                  code derives a header from a file name: strip the
+#                  directory, then strip from the first '.' onward (e.g.
+#                  ".../FeedA_v4.orig" ->
 #                  "FeedA_v4"). The memberlist MUST list every currently
 #                  configured snapshot for THIS family -- an alias absent
 #                  from the list is treated as removed: its masterfile rows
@@ -774,8 +774,8 @@ pfb_aggregate() {
 #                  double-counting in dMax/pMax) and skips masterfile.
 #   $6 repmode     'off' | 'dmax' | 'pmax' -- v4-only; ignored for v6.
 #   $7 max         dMax/pMax member-per-/24 threshold (repmode != 'off').
-#   $8 cc          dMax only: comma-separated country-code list (as read by
-#                  reputation_dmax's $cc).
+#   $8 cc          dMax only: comma-separated country-code list, matched
+#                  against each offender /24's GeoIP country (below, $rec_cc).
 #   $9 ccwhite     dMax only: 'match' | anything else.
 #  $10 ccblack     dMax only: 'block' | 'match' | anything else.
 #
@@ -817,11 +817,11 @@ pfb_aggregate() {
 #     were already written for this pass's alias roster, and returns
 #     non-zero WITHOUT starting the swap.
 #
-# Callers (step 4, not built here): invoke once per family after per-feed
-# preprocessing; call emptyfiles() afterward exactly as the old dmax/pmax/
-# duplicate dispatch entries do (recompute does not refill an empty deny
-# file with the placeholder -- an alias with zero surviving rows still gets
-# an empty ".txt.new" so emptyfiles() can find and refill it).
+# Callers (pfblockerng.inc's pfb_ip_recompute_matrix()): invoke once per
+# family after per-feed preprocessing. recompute does not refill an empty
+# deny file with the placeholder -- an alias with zero surviving rows still
+# gets an empty ".txt.new" so the closing verb's emptyfiles() call can find
+# and refill it.
 pfb_recompute() {
 	rec_family="${2}"
 	rec_memberlist="${3}"
@@ -1000,7 +1000,7 @@ pfb_recompute_clean_new() {
 
 # Offender detect + classify into rec_actionmap ("<prefix> <action>" rows).
 # Detection is a hashmap count straight over the owned files -- no stream, no
-# sort. Placeholder prefix excluded, exactly like reputation_dmax().
+# sort. Placeholder prefix excluded, same as reputation_pmax()'s class-wide scan.
 pfb_recompute_rep_actionmap() {
 	set --
 	while IFS=' ' read -r rec_alias _; do
@@ -1030,10 +1030,10 @@ pfb_recompute_rep_actionmap() {
 	fi
 
 	{
-		# C2 classify: dMax reuses today's GeoIP loop shape verbatim over just
-		# the offenders (see reputation_dmax()); a missing mmdblookup/db
-		# bails like reputation_depends -- the actionmap stays empty and the
-		# pass rides the direct path. pMax is unconditionally block-only.
+		# C2 classify: dMax reuses reputation_max()'s GeoIP-classify loop shape
+		# verbatim over just the offenders; a missing mmdblookup/db bails like
+		# reputation_depends -- the actionmap stays empty and the pass rides
+		# the direct path. pMax is unconditionally block-only.
 		rec_geoip_ok=1
 		if [ "${rec_repmode}" = 'dmax' ] && [ -s "${rec_offenders}" ]; then
 			if [ ! -x "${pathgeoip}" ] || [ ! -f "${pathgeoipdat}" ]; then
@@ -1286,8 +1286,8 @@ pfb_recompute_finish() {
 	fi
 
 	# The consolidated exempt-country match file: gated on ccwhite='match'
-	# ALONE (mirrors today's asymmetric gate -- see reputation_dmax()), even
-	# though a 'matchexempt' action can also be reached via ccblack='match'.
+	# ALONE (mirrors reputation_max()'s own asymmetric gate), even though a
+	# 'matchexempt' action can also be reached via ccblack='match'.
 	if [ "${rec_repmode}" = 'dmax' ] && [ "${rec_ccwhite}" = 'match' ] && [ -s "${rec_matchexemptcidr}" ]; then
 		rec_matchdedup_new="${pfbmatch}${rec_matchdedup}.new"
 		cat "${rec_matchexemptcidr}" > "${rec_matchdedup_new}"
@@ -1322,86 +1322,6 @@ pfb_recompute_finish() {
 
 	echo "recompute [ ${rec_family} ]: ${rec_prio} feed(s) processed."
 }
-
-
-# Function to remove duplicate entries in each list individually.
-duplicate() {
-	if [ ! -x "${pathgrepcidr}" ]; then
-		log="Application [ grepcidr ] Not found. Cannot proceed."
-		echo "${log}" | tee -a "${errorlog}"
-		return
-	fi
-
-	# "Original" in the stats below is the size ENTERING de-duplication -- i.e. the CIDR-aggregated
-	# feed when aggregation ran, not the raw download. Capture it before the cross-feed grepcidr
-	# prune mutates .txt, and persist it beside the feed so closingprocess() can sum the aggregated
-	# originals for the FINAL Processing report.
-	counto="$(grep -c ^ "${pfbdeny}${alias}.txt")"
-	echo "${counto}" > "${pfborig}${alias}.aggcount"
-
-	dupcheck=1
-	# Check if masterfile is empty
-	hcheck="$(grep -cv ^$ "${masterfile}")"; if [ "${hcheck}" -eq 0 ]; then dupcheck=0; fi
-	# Check if alias exists in masterfile
-	lcheck="$(grep -m1 "${alias}" "${masterfile}")"; if [ -z "${lcheck}" ]; then dupcheck=0; fi
-	# Check for single alias in masterfile
-	aliaslist="$(cut -d ' ' -f1 "${masterfile}" | LC_ALL=C sort -u)"; if [ "${alias}" = "${aliaslist}" ]; then hcheck=0; fi
-
-	# Only execute if 'Alias' exists in masterfile
-	if [ "${dupcheck}" -eq 1 ]; then
-		# Grep alias with a trailing space character. Anchored (^) -- an
-		# unanchored pattern over-matches a shorter alias that is a SUFFIX of
-		# another (e.g. "Ads_v4" inside "BadAds_v4"), pulling the sibling's
-		# masterfile row into the removal set and silently dropping it
-		# (issue #714). Masterfile rows always start with the alias.
-		grep "^${alias}[[:space:]]" "${masterfile}" > "${tempfile}"
-		# #713: gate the publish on awk's own exit status (awk has no "empty
-		# result = rc 1" quirk -- non-zero is a real error) so a failed dedup
-		# can't truncate masterfile via an unconditional mv.
-		awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile}" "${masterfile}" > "${tempfile2}" && mv -f "${tempfile2}" "${masterfile}"
-		cut -d ' ' -f2 "${masterfile}" > "${mastercat}"
-	fi
-
-	# Don't execute when only a single 'Alias' exists in masterfile
-	if [ ! "${hcheck}" -eq 0 ]; then
-		LC_ALL=C sort -u "${pfbdeny}${alias}.txt" > "${tempfile}"; mv -f "${tempfile}" "${pfbdeny}${alias}.txt"
-
-		# #713: gate the publish on grepcidr's exit status -- rc 0 (matches removed)
-		# and rc 1 (everything pruned, a LEGITIMATE empty result) both replace the
-		# list; rc >= 2 is a real grepcidr error, so keep the previous list intact
-		# (no truncation via an unconditional mv) and warn instead.
-		"${pathgrepcidr}" -vf "${mastercat}" "${pfbdeny}${alias}.txt" > "${tempfile}"
-		grc=$?
-		if [ "${grc}" -lt 2 ]; then
-			mv -f "${tempfile}" "${pfbdeny}${alias}.txt"
-		else
-			rm -f "${tempfile}"
-			log="grepcidr error (rc=${grc}) de-duplicating [ ${alias} ]; keeping previous list"
-			echo "${log}" | tee -a "${errorlog}"
-		fi
-	fi
-
-	sed -e 's/^/'"$alias"' /' "${pfbdeny}${alias}.txt" >> "${masterfile}"
-	cut -d ' ' -f2 "${masterfile}" > "${mastercat}"
-
-	countm="$(grep -c "${alias}" "${masterfile}")"
-	countf="$(grep -c ^ "${pfbdeny}${alias}.txt")"
-
-	if [ "${countm}" -eq "${countf}" ]; then
-		sanity='Pass'
-	else
-		sanity=' ==> FAILED <== '
-	fi
-
-	echo '  ------------------------------'
-	printf "%-10s %-10s %-10s\n" '  Original' 'Master' 'Final'
-	echo '  ------------------------------'
-	printf "%-10s %-10s %-10s %-10s\n" "  ${counto}" "${countm}" "${countf}" " [ ${sanity} ]"
-	echo '  -----------------------------------------------------------------'
-
-	emptyfiles # Call emptyfiles function
-}
-
 
 
 # ADR-06: dnsbl_scrub (build-time within/cross-feed De-Duplication + user-
@@ -1679,9 +1599,9 @@ EOF
 	fi
 
 	# If no matches found remove previous matchoutfile if exists.
-	# Derive header from $alias (in scope), matching reputation_dmax/pmax; do not
-	# rely on a stale $header global, and operate on the absolute ${pfbmatch}
-	# path rather than a relative one (issue #27).
+	# Derive header from $alias (in scope), matching reputation_pmax()'s own
+	# header derivation; do not rely on a stale $header global, and operate on
+	# the absolute ${pfbmatch} path rather than a relative one (issue #27).
 	header="${alias##*/}"; header="${header%%.*}"
 	matchoutfile="match${header}.txt"
 	if [ ! -s "${tempmatchfile}" ] && [ -f "${pfbmatch}${matchoutfile}" ]; then rm -f "${pfbmatch}${matchoutfile}"; fi
@@ -1728,158 +1648,6 @@ EOF
 		echo '  ------------------------------'
 		printf "%-8s %-8s %-8s %-8s\n" "  ${count}" "${countb}" "${countr}" "${counts}"
 		echo
-	fi
-}
-
-
-# Reputation function 'dMax' utilizing MaxMind GeoIP Country code.
-reputation_dmax() {
-	echo; echo '===[ Reputation - dMax ]======================================'
-	echo; echo "  Querying for repeat offenders ( dMax=${max} ) [ ${now} ]"
-	data="$(find "${pfbdeny}"*.txt ! -name 'pfB*.txt' ! -name '*_v6.txt' -type f | xargs cut -d '.' -f 1-3 | \
-		awk -v max="${max}" '{a[$0]++}END{for(i in a){if(a[i] > max){print i}}}' | grep -v "^${ip_placeholder3}$")"
-
-	# Classify repeat offenders by Country code
-	if [ -n "${data}" ]; then
-		echo '  Classifying repeat offenders by GeoIP'
-		# Iterate the octet prefixes via a here-doc (no IFS re-splitting) so the
-		# loop body stays in THIS shell -- it accumulates ${count}/${countr} and
-		# appends to ${dupfile}/${matchfile}. Validate each to digits/dots and
-		# skip a malformed token.
-		while IFS= read -r ip; do
-			pfb_is_octet_prefix "${ip}" || continue
-			ccheck="$(${pathgeoip} -f "${pathgeoipdat}" -i "${ip}.1" country iso_code 2>&1 | grep -v 'Could\|Got\|^$' | cut -d '"' -f2)"
-			# A failed GeoIP lookup yields an empty ${ccheck}; an unquoted *${ccheck}*
-			# case pattern would collapse to '**' and match every ${cc}, wrongly
-			# classifying the IP as a country match. Treat unknown as not-in-${cc}
-			# (the block path, mirroring the default branch below).
-			if [ -z "${ccheck}" ]; then
-				count="$((count + 1))"
-				echo "${ip}." >> "${dupfile}"
-				continue
-			fi
-			case "${cc}" in
-				*"${ccheck}"*)
-					countr="$((countr + 1))"
-					if [ "${ccwhite}" = 'match' ] || [ "${ccblack}" = 'match' ]; then
-						echo "${ip}." >> "${matchfile}"
-					fi
-					;;
-				*)
-					count="$((count + 1))"
-					echo "${ip}." >> "${dupfile}"
-					;;
-			esac
-		done <<EOF
-${data}
-EOF
-	else
-		countr=0; count=0
-	fi
-
-	if [ "${ccwhite}" = 'match' ] && [ -s "${matchfile}" ]; then
-		echo '  Processing [ Match ] IPs'
-		# Each matchfile line is a '10.0.0.'-style octet prefix. Read them
-		# directly (no sed pre-escape, no IFS re-split), validate to digits/dots,
-		# and build the anchored '^10\.0\.0\.' pattern via the shared helper so
-		# only a literal prefix reaches grep.
-		while IFS= read -r ip; do
-			pfb_is_octet_prefix "${ip}" || continue
-			grep "$(pfb_anchor_octet_pattern "${ip}")" "${pfbdeny}"*.txt >> "${tempfile}"
-		done < "${matchfile}"
-
-		sed 's/$/0\/24/' "${matchfile}" >> "${tempmatchfile}"
-		sed -e 's/.*://' -e 's/^/\!/' "${tempfile}" >> "${tempmatchfile}"
-		mv -f "${tempmatchfile}" "${pfbmatch}${matchdedup}"
-		countm="$(grep -c ^ "${tempfile}")"
-		counts="$((countm + counts))"
-	fi
-
-	# Find repeat offenders in each individual blocklist outfile
-	if [ "${count}" -gt 0 ]; then
-		echo '  Processing [ Block ] IPs'
-
-		# Each dupfile line is a '10.0.0.'-style octet prefix. Read them directly
-		# from the file (no IFS re-split) so the body stays in THIS shell -- it
-		# sets ${runonce} and appends to ${dedupfile}/${addfile}. Validate each to
-		# digits/dots, then build the anchored '^10\.0\.0\.' pattern via the shared
-		# helper so only a literal prefix reaches grep.
-		while IFS= read -r ip; do
-			pfb_is_octet_prefix "${ip}" || continue
-			runonce=0; ii="$(pfb_anchor_octet_pattern "${ip}")"
-			list="$(find "${pfbdeny}"*.txt ! -name 'pfB*.txt' ! -name '*_v6.txt' -type f | xargs grep -al "${ii}")"
-
-			# Iterate the matched blocklist files via a here-doc (no IFS re-split)
-			# so the inner body's ${runonce}/file accumulation stays in THIS shell.
-			while IFS= read -r blfile; do
-				[ -z "${blfile}" ] && continue
-				header="${blfile##*/}"; header="${header%%.*}"
-				grep "${ii}" "${blfile}" > "${tempfile}"
-
-				if [ "${ccblack}" = 'block' ]; then
-					# #713: gate the publish on awk's own exit status (awk has no "empty
-					# result = rc 1" quirk -- non-zero is a real error) so a failed dedup
-					# can't truncate this blocklist via an unconditional mv.
-					awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile}" "${blfile}" > "${tempfile2}" && mv -f "${tempfile2}" "${blfile}"
-					if [ "${runonce}" -eq 0 ]; then
-						echo "${ip}0/24" >> "${blfile}"
-						echo "${header}" "${ip}" >> "${dedupfile}"
-						echo "${header}" "${ip}0/24" >> "${addfile}"
-						runonce=1
-					else
-						echo "${header}" "${ip}" >> "${dedupfile}"
-					fi
-				else
-					if [ "${runonce}" -eq 0 ]; then
-						matchoutfile="match${header}.txt"
-						echo "${ip}0/24" >> "${pfbmatch}${matchoutfile}"
-						sed 's/^/\!/' "${tempfile}" >> "${pfbmatch}${matchoutfile}"
-						countm="$(grep -c ^ "${pfbmatch}${matchoutfile}")"
-						counts="$((countm + counts))"
-						runonce=1
-					fi
-				fi
-			done <<EOF
-${list}
-EOF
-		done < "${dupfile}"
-
-		# Remove repeat offenders in masterfiles
-		echo '  Removing   [ Block ] IPs'
-		: > "${tempfile}"
-		# Each dedupfile line is '<alias> 10.0.0.'. Anchor it at column 0 and escape
-		# the prefix's dots (via pfb_anchor_octet_pattern; the alias field is \w-only,
-		# so escaping the dots is sufficient) so the removal grep matches ONLY this
-		# alias's own rows in that /24. An unanchored grep -F over-matched a SIBLING
-		# alias whose name ends with this one's (e.g. row 'XMYLIST 1.2.3.9' contains
-		# the substring 'MYLIST 1.2.3.'), silently dropping its masterfile entry (#730).
-		while IFS= read -r ips; do
-			[ -z "${ips}" ] && continue
-			grep "$(pfb_anchor_octet_pattern "${ips}")" "${masterfile}" >> "${tempfile}"
-		done < "${dedupfile}"
-		countb="$(grep -c ^ "${tempfile}")"
-		# #713: gate the publish on awk's own exit status (awk has no "empty
-		# result = rc 1" quirk -- non-zero is a real error) so a failed dedup
-		# can't truncate masterfile via an unconditional mv.
-		awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile}" "${masterfile}" > "${tempfile2}" && mv -f "${tempfile2}" "${masterfile}"
-		cat "${addfile}" >> "${masterfile}"
-		cut -d ' ' -f2 "${masterfile}" > "${mastercat}"
-
-		echo; echo '  Removed the following IP ranges:'
-		sed -e 's/^.* //' -e 's/0\/24//' "${addfile}" | tr '\n' '|'; echo
-	fi
-
-	if [ "${count}" -gt 0 ] || [ "${countr}" -gt 0 ]; then
-		echo; echo '  Reputation - dMax Stats'
-		echo '  ------------------------------'
-		printf "%-17s %-10s\n" '  Blacklisted' 'Match'
-		printf "%-8s %-8s %-8s %-8s\n" '  Ranges' 'IPs' 'Ranges' 'IPs'
-		echo '  ------------------------------'
-		printf "%-8s %-8s %-8s %-8s\n" "  ${count}" "${countb}" "${countr}" "${counts}"
-
-		emptyfiles # Call emptyfiles function
-	else
-		echo '  Reputation -dMax ( None )'
 	fi
 }
 
@@ -2065,9 +1833,9 @@ closingprocess() {
 	counto=0
 	echo; echo '===[ FINAL Processing ]====================================='; echo
 	if [ -d "${pfborig}" ] && [ "$(ls -A "${pfborig}")" ]; then
-		# Sum the per-feed aggregated "Original" counts written by duplicate() -- these reflect the
-		# CIDR-aggregated input when aggregation ran. Fall back to the raw *_v4.orig total when no
-		# sidecars exist (de-duplication disabled, so duplicate() never ran).
+		# Sum the per-feed aggregated "Original" counts written by pfb_ip_recompute_write_snapshot()
+		# (pfblockerng.inc) -- these reflect the CIDR-aggregated input when aggregation ran. Fall back
+		# to the raw *_v4.orig total when no sidecars exist (no snapshot was ever written this pass).
 		counto="$(find "${pfborig}"*_v4.aggcount 2>/dev/null | xargs cat 2>/dev/null | awk '{s += $1} END {print s + 0}')"
 		if [ "${counto}" -eq 0 ]; then
 			counto="$(find "${pfborig}"*_v4.orig 2>/dev/null | xargs cat | grep -cv '^#\|^$')"
@@ -2176,10 +1944,6 @@ case "${1}" in
 		case "${1}" in *_255*) process255 ;; esac
 		case "${1}" in *_agg*) cidr_aggregate ;; esac
 		case "${1}" in *_rep*) reputation_depends; reputation_max ;; esac
-		case "${1}" in *_dup*) duplicate ;; esac
-		;;
-	continent)
-		duplicate
 		;;
 	cidr_aggregate)
 		agg_folder=true
@@ -2205,10 +1969,6 @@ case "${1}" in
 		;;
 	suppress)
 		suppress
-		;;
-	dmax)
-		reputation_depends
-		reputation_dmax
 		;;
 	pmax)
 		reputation_depends
