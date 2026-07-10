@@ -7,6 +7,18 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfb_unbound_include.inc
 
 		-
+			message: '#^Binary operation "\+" between string and 1 results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 2
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Binary operation "\-" between 32 and string results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 1
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
 			message: '#^Call to function unset\(\) contains undefined variable \$output\.$#'
 			identifier: unset.variable
 			count: 3
@@ -22,6 +34,18 @@ parameters:
 			message: '#^Call to function unset\(\) contains undefined variable \$retval\.$#'
 			identifier: unset.variable
 			count: 4
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Call to method setConnectionData\(\) on an unknown class pfsense_xmlrpc_client\.$#'
+			identifier: class.notFound
+			count: 1
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Call to method xmlrpc_method\(\) on an unknown class pfsense_xmlrpc_client\.$#'
+			identifier: class.notFound
+			count: 1
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
@@ -103,44 +127,20 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
-			message: '#^Undefined variable\: \$srcint$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$DDG might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$PIX might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
 			message: '#^Variable \$alias might not be defined\.$#'
 			identifier: variable.undefined
 			count: 1
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
-			message: '#^Variable \$asn_cache might not be defined\.$#'
+			message: '#^Variable \$asn might not be defined\.$#'
 			identifier: variable.undefined
-			count: 1
+			count: 2
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
 			message: '#^Variable \$asn_ex in empty\(\) always exists and is not falsy\.$#'
 			identifier: empty.variable
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$cname_cnt might not be defined\.$#'
-			identifier: variable.undefined
 			count: 1
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
@@ -163,9 +163,27 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
+			message: '#^Variable \$dir might not be defined\.$#'
+			identifier: variable.undefined
+			count: 2
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
 			message: '#^Variable \$folder might not be defined\.$#'
 			identifier: variable.undefined
 			count: 1
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Variable \$geoip might not be defined\.$#'
+			identifier: variable.undefined
+			count: 2
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Variable \$int might not be defined\.$#'
+			identifier: variable.undefined
+			count: 2
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
@@ -207,19 +225,13 @@ parameters:
 		-
 			message: '#^Variable \$log might not be defined\.$#'
 			identifier: variable.undefined
-			count: 3
+			count: 1
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
 			message: '#^Variable \$logtab might not be defined\.$#'
 			identifier: variable.undefined
 			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$mode might not be defined\.$#'
-			identifier: variable.undefined
-			count: 5
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
@@ -235,9 +247,9 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
-			message: '#^Variable \$output in isset\(\) is never defined\.$#'
-			identifier: isset.variable
-			count: 3
+			message: '#^Variable \$pfb_alias might not be defined\.$#'
+			identifier: variable.undefined
+			count: 2
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
@@ -247,21 +259,9 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
-			message: '#^Variable \$pfb_localsub might not be defined\.$#'
+			message: '#^Variable \$pfb_query might not be defined\.$#'
 			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$pfb_output might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$pfb_suffix_match in empty\(\) always exists and is always falsy\.$#'
-			identifier: empty.variable
-			count: 1
+			count: 2
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
@@ -277,21 +277,9 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
-			message: '#^Variable \$result in isset\(\) always exists and is not nullable\.$#'
-			identifier: isset.variable
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$result in isset\(\) is never defined\.$#'
-			identifier: isset.variable
-			count: 1
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$retval in isset\(\) is never defined\.$#'
-			identifier: isset.variable
-			count: 4
+			message: '#^Variable \$resolved_host might not be defined\.$#'
+			identifier: variable.undefined
+			count: 2
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
@@ -312,23 +300,10 @@ parameters:
 			count: 2
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
-
 		-
 			message: '#^Variable \$src_ip in empty\(\) is never defined\.$#'
 			identifier: empty.variable
 			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$ss_cname might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$ss_ex might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
@@ -410,16 +385,52 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng.php
 
 		-
-			message: '#^Variable \$remote_stamp_raw might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng.php
+			message: '#^Call to an undefined method Form\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 3
+			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
 
 		-
-			message: '#^Variable \$remote_tds might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng.php
+			message: '#^Call to an undefined method Form\:\:addGlobal\(\)\.$#'
+			identifier: method.notFound
+			count: 16
+			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+
+		-
+			message: '#^Call to an undefined method Form\:\:setAction\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+
+		-
+			message: '#^Call to an undefined method Form_Button\:\:removeClass\(\)\.$#'
+			identifier: method.notFound
+			count: 3
+			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+
+		-
+			message: '#^Call to an undefined method Form_Group\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 62
+			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+
+		-
+			message: '#^Call to an undefined method Form_Section\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 21
+			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+
+		-
+			message: '#^Call to an undefined method Form_Section\:\:addInput\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+
+		-
+			message: '#^Parameter Form of print cannot be converted to string\.$#'
+			identifier: print.nonString
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
 
 		-
 			message: '#^Variable \$_GET in isset\(\) always exists and is not nullable\.$#'
@@ -449,12 +460,6 @@ parameters:
 			message: '#^Variable \$alert_view in empty\(\) always exists and is not falsy\.$#'
 			identifier: empty.variable
 			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
-			message: '#^Variable \$atype might not be defined\.$#'
-			identifier: variable.undefined
-			count: 4
 			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
 
 		-
@@ -536,12 +541,6 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
 
 		-
-			message: '#^Variable \$pfb_found might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
 			message: '#^Variable \$pfbdenycnt might not be defined\.$#'
 			identifier: variable.undefined
 			count: 2
@@ -596,12 +595,6 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
 
 		-
-			message: '#^Variable \$pfbupdate might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
 			message: '#^Variable \$rtype might not be defined\.$#'
 			identifier: variable.undefined
 			count: 3
@@ -616,26 +609,56 @@ parameters:
 		-
 			message: '#^Variable \$table might not be defined\.$#'
 			identifier: variable.undefined
-			count: 9
+			count: 6
 			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
 
 		-
-			message: '#^Variable \$title_hostname might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
-
-		-
-			message: '#^Variable \$v4suppression_dat might not be defined\.$#'
-			identifier: variable.undefined
+			message: '#^Binary operation "\." between Form_Button and ''&emsp;'' results in an error\.$#'
+			identifier: binaryOp.invalid
 			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+			path: src/usr/local/www/pfblockerng/pfblockerng_blacklist.php
 
 		-
-			message: '#^Variable \$w_line might not be defined\.$#'
-			identifier: variable.undefined
-			count: 3
-			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+			message: '#^Call to an undefined method Form\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 2
+			path: src/usr/local/www/pfblockerng/pfblockerng_blacklist.php
+
+		-
+			message: '#^Call to an undefined method Form_Button\:\:removeClass\(\)\.$#'
+			identifier: method.notFound
+			count: 2
+			path: src/usr/local/www/pfblockerng/pfblockerng_blacklist.php
+
+		-
+			message: '#^Call to an undefined method Form_Group\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 4
+			path: src/usr/local/www/pfblockerng/pfblockerng_blacklist.php
+
+		-
+			message: '#^Call to an undefined method Form_Section\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 2
+			path: src/usr/local/www/pfblockerng/pfblockerng_blacklist.php
+
+		-
+			message: '#^Call to an undefined method Form_Section\:\:addInput\(\)\.$#'
+			identifier: method.notFound
+			count: 9
+			path: src/usr/local/www/pfblockerng/pfblockerng_blacklist.php
+
+		-
+			message: '#^Call to an undefined method Form_Section\:\:addPassword\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_blacklist.php
+
+		-
+			message: '#^Parameter Form of print cannot be converted to string\.$#'
+			identifier: print.nonString
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_blacklist.php
 
 		-
 			message: '#^Variable \$blacklist_types in isset\(\) always exists and is not nullable\.$#'
@@ -662,6 +685,18 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_blacklist.php
 
 		-
+			message: '#^Call to an undefined method Form_Select\:\:setWidth\(\)\.$#'
+			identifier: method.notFound
+			count: 3
+			path: src/usr/local/www/pfblockerng/pfblockerng_category.php
+
+		-
+			message: '#^Parameter Form_Select of print cannot be converted to string\.$#'
+			identifier: print.nonString
+			count: 3
+			path: src/usr/local/www/pfblockerng/pfblockerng_category.php
+
+		-
 			message: '#^Variable \$_GET in isset\(\) always exists and is not nullable\.$#'
 			identifier: isset.variable
 			count: 1
@@ -669,12 +704,6 @@ parameters:
 
 		-
 			message: '#^Variable \$_POST in isset\(\) always exists and is not nullable\.$#'
-			identifier: isset.variable
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_category.php
-
-		-
-			message: '#^Variable \$_REQUEST in isset\(\) always exists and is not nullable\.$#'
 			identifier: isset.variable
 			count: 1
 			path: src/usr/local/www/pfblockerng/pfblockerng_category.php
@@ -710,6 +739,54 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_category.php
 
 		-
+			message: '#^Binary operation "\." between Form_Button and ''&emsp;'' results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
+
+		-
+			message: '#^Call to an undefined method Form\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 7
+			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
+
+		-
+			message: '#^Call to an undefined method Form\:\:addGlobal\(\)\.$#'
+			identifier: method.notFound
+			count: 5
+			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
+
+		-
+			message: '#^Call to an undefined method Form_Button\:\:removeClass\(\)\.$#'
+			identifier: method.notFound
+			count: 2
+			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
+
+		-
+			message: '#^Call to an undefined method Form_Group\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 17
+			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
+
+		-
+			message: '#^Call to an undefined method Form_Group\:\:addClass\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
+
+		-
+			message: '#^Call to an undefined method Form_Section\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 7
+			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
+
+		-
+			message: '#^Call to an undefined method Form_Section\:\:addInput\(\)\.$#'
+			identifier: method.notFound
+			count: 24
+			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
+
+		-
 			message: '#^Function phpsession_begin not found\.$#'
 			identifier: function.notFound
 			count: 2
@@ -719,6 +796,12 @@ parameters:
 			message: '#^Function phpsession_end not found\.$#'
 			identifier: function.notFound
 			count: 3
+			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
+
+		-
+			message: '#^Parameter Form of print cannot be converted to string\.$#'
+			identifier: print.nonString
+			count: 1
 			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
 
 		-
@@ -788,28 +871,52 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
 
 		-
-			message: '#^Variable \$options_aliasaddr_in might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
-
-		-
-			message: '#^Variable \$options_aliasaddr_out might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
-
-		-
-			message: '#^Variable \$pfbarr might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
-
-		-
 			message: '#^Variable \$pre might not be defined\.$#'
 			identifier: variable.undefined
 			count: 2
 			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
+
+		-
+			message: '#^Call to an undefined method Form\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 15
+			path: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+
+		-
+			message: '#^Call to an undefined method Form_Checkbox\:\:setAttribute\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+
+		-
+			message: '#^Call to an undefined method Form_Group\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 14
+			path: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+
+		-
+			message: '#^Call to an undefined method Form_Group\:\:setHelp\(\)\.$#'
+			identifier: method.notFound
+			count: 3
+			path: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+
+		-
+			message: '#^Call to an undefined method Form_Section\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 8
+			path: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+
+		-
+			message: '#^Call to an undefined method Form_Section\:\:addInput\(\)\.$#'
+			identifier: method.notFound
+			count: 55
+			path: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+
+		-
+			message: '#^Parameter Form of print cannot be converted to string\.$#'
+			identifier: print.nonString
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
 
 		-
 			message: '#^Variable \$customlist in empty\(\) always exists and is not falsy\.$#'
@@ -818,14 +925,26 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
 
 		-
+			message: '#^Call to an undefined method Form_Button\:\:removeClass\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_feeds.php
+
+		-
+			message: '#^Call to an undefined method Form_Section\:\:addInput\(\)\.$#'
+			identifier: method.notFound
+			count: 2
+			path: src/usr/local/www/pfblockerng/pfblockerng_feeds.php
+
+		-
 			message: '#^Deprecated in PHP 8\.0\: Required parameter \$a_key follows optional parameter \$alt_register\.$#'
 			identifier: parameter.requiredAfterOptional
 			count: 1
 			path: src/usr/local/www/pfblockerng/pfblockerng_feeds.php
 
 		-
-			message: '#^Variable \$alt_feeds might not be defined\.$#'
-			identifier: variable.undefined
+			message: '#^Parameter Form_Section of print cannot be converted to string\.$#'
+			identifier: print.nonString
 			count: 1
 			path: src/usr/local/www/pfblockerng/pfblockerng_feeds.php
 
@@ -840,6 +959,48 @@ parameters:
 			identifier: variable.undefined
 			count: 1
 			path: src/usr/local/www/pfblockerng/pfblockerng_feeds.php
+
+		-
+			message: '#^Call to an undefined method Form\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 3
+			path: src/usr/local/www/pfblockerng/pfblockerng_general.php
+
+		-
+			message: '#^Call to an undefined method Form_Group\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 8
+			path: src/usr/local/www/pfblockerng/pfblockerng_general.php
+
+		-
+			message: '#^Call to an undefined method Form_Group\:\:addClass\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_general.php
+
+		-
+			message: '#^Call to an undefined method Form_Input\:\:setAttribute\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_general.php
+
+		-
+			message: '#^Call to an undefined method Form_Section\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 3
+			path: src/usr/local/www/pfblockerng/pfblockerng_general.php
+
+		-
+			message: '#^Call to an undefined method Form_Section\:\:addInput\(\)\.$#'
+			identifier: method.notFound
+			count: 9
+			path: src/usr/local/www/pfblockerng/pfblockerng_general.php
+
+		-
+			message: '#^Parameter Form of print cannot be converted to string\.$#'
+			identifier: print.nonString
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_general.php
 
 		-
 			message: '#^Variable \$options_log_max_dnsbl_parse_err might not be defined\.$#'
@@ -908,10 +1069,112 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_general.php
 
 		-
+			message: '#^Call to an undefined method Form\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 2
+			path: src/usr/local/www/pfblockerng/pfblockerng_hooks.php
+
+		-
+			message: '#^Call to an undefined method Form_Button\:\:removeClass\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_hooks.php
+
+		-
+			message: '#^Call to an undefined method Form_Group\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 7
+			path: src/usr/local/www/pfblockerng/pfblockerng_hooks.php
+
+		-
+			message: '#^Call to an undefined method Form_Group\:\:addClass\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_hooks.php
+
+		-
+			message: '#^Call to an undefined method Form_Section\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 2
+			path: src/usr/local/www/pfblockerng/pfblockerng_hooks.php
+
+		-
+			message: '#^Call to an undefined method Form_Section\:\:addInput\(\)\.$#'
+			identifier: method.notFound
+			count: 5
+			path: src/usr/local/www/pfblockerng/pfblockerng_hooks.php
+
+		-
+			message: '#^Parameter Form of print cannot be converted to string\.$#'
+			identifier: print.nonString
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_hooks.php
+
+		-
+			message: '#^Call to an undefined method Form\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 6
+			path: src/usr/local/www/pfblockerng/pfblockerng_ip.php
+
+		-
+			message: '#^Call to an undefined method Form_Group\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 4
+			path: src/usr/local/www/pfblockerng/pfblockerng_ip.php
+
+		-
+			message: '#^Call to an undefined method Form_Section\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 2
+			path: src/usr/local/www/pfblockerng/pfblockerng_ip.php
+
+		-
+			message: '#^Call to an undefined method Form_Section\:\:addInput\(\)\.$#'
+			identifier: method.notFound
+			count: 25
+			path: src/usr/local/www/pfblockerng/pfblockerng_ip.php
+
+		-
+			message: '#^Parameter Form of print cannot be converted to string\.$#'
+			identifier: print.nonString
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_ip.php
+
+		-
 			message: '#^Variable \$v4suppression in empty\(\) always exists and is not falsy\.$#'
 			identifier: empty.variable
 			count: 1
 			path: src/usr/local/www/pfblockerng/pfblockerng_ip.php
+
+		-
+			message: '#^Binary operation "\-" between string and 10000 results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_log.php
+
+		-
+			message: '#^Call to an undefined method Form\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 3
+			path: src/usr/local/www/pfblockerng/pfblockerng_log.php
+
+		-
+			message: '#^Call to an undefined method Form\:\:addGlobal\(\)\.$#'
+			identifier: method.notFound
+			count: 5
+			path: src/usr/local/www/pfblockerng/pfblockerng_log.php
+
+		-
+			message: '#^Call to an undefined method Form_Section\:\:addInput\(\)\.$#'
+			identifier: method.notFound
+			count: 5
+			path: src/usr/local/www/pfblockerng/pfblockerng_log.php
+
+		-
+			message: '#^Parameter Form of print cannot be converted to string\.$#'
+			identifier: print.nonString
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_log.php
 
 		-
 			message: '#^Variable \$_REQUEST in isset\(\) always exists and is not nullable\.$#'
@@ -926,26 +1189,152 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_log.php
 
 		-
+			message: '#^Call to an undefined method Form\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_safesearch.php
+
+		-
+			message: '#^Call to an undefined method Form_Section\:\:addInput\(\)\.$#'
+			identifier: method.notFound
+			count: 4
+			path: src/usr/local/www/pfblockerng/pfblockerng_safesearch.php
+
+		-
+			message: '#^Parameter Form of print cannot be converted to string\.$#'
+			identifier: print.nonString
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_safesearch.php
+
+		-
+			message: '#^Call to an undefined method Form\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 3
+			path: src/usr/local/www/pfblockerng/pfblockerng_software.php
+
+		-
+			message: '#^Call to an undefined method Form_Button\:\:addClass\(\)\.$#'
+			identifier: method.notFound
+			count: 2
+			path: src/usr/local/www/pfblockerng/pfblockerng_software.php
+
+		-
+			message: '#^Call to an undefined method Form_Button\:\:removeClass\(\)\.$#'
+			identifier: method.notFound
+			count: 3
+			path: src/usr/local/www/pfblockerng/pfblockerng_software.php
+
+		-
+			message: '#^Call to an undefined method Form_Section\:\:addInput\(\)\.$#'
+			identifier: method.notFound
+			count: 9
+			path: src/usr/local/www/pfblockerng/pfblockerng_software.php
+
+		-
+			message: '#^Parameter Form of print cannot be converted to string\.$#'
+			identifier: print.nonString
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_software.php
+
+		-
+			message: '#^Call to an undefined method Form\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 2
+			path: src/usr/local/www/pfblockerng/pfblockerng_sync.php
+
+		-
+			message: '#^Call to an undefined method Form_Button\:\:removeClass\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_sync.php
+
+		-
+			message: '#^Call to an undefined method Form_Group\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 8
+			path: src/usr/local/www/pfblockerng/pfblockerng_sync.php
+
+		-
+			message: '#^Call to an undefined method Form_Group\:\:addClass\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_sync.php
+
+		-
+			message: '#^Call to an undefined method Form_Section\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 2
+			path: src/usr/local/www/pfblockerng/pfblockerng_sync.php
+
+		-
+			message: '#^Call to an undefined method Form_Section\:\:addInput\(\)\.$#'
+			identifier: method.notFound
+			count: 5
+			path: src/usr/local/www/pfblockerng/pfblockerng_sync.php
+
+		-
+			message: '#^Parameter Form of print cannot be converted to string\.$#'
+			identifier: print.nonString
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_sync.php
+
+		-
 			message: '#^Variable \$_REQUEST in isset\(\) always exists and is not nullable\.$#'
 			identifier: isset.variable
 			count: 1
 			path: src/usr/local/www/pfblockerng/pfblockerng_threats.php
 
 		-
+			message: '#^Binary operation "\." between Form_Button and Form_Button results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_update.php
+
+		-
+			message: '#^Call to an undefined method Form\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 3
+			path: src/usr/local/www/pfblockerng/pfblockerng_update.php
+
+		-
+			message: '#^Call to an undefined method Form_Button\:\:removeClass\(\)\.$#'
+			identifier: method.notFound
+			count: 2
+			path: src/usr/local/www/pfblockerng/pfblockerng_update.php
+
+		-
+			message: '#^Call to an undefined method Form_Group\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 8
+			path: src/usr/local/www/pfblockerng/pfblockerng_update.php
+
+		-
+			message: '#^Call to an undefined method Form_Group\:\:setHelp\(\)\.$#'
+			identifier: method.notFound
+			count: 2
+			path: src/usr/local/www/pfblockerng/pfblockerng_update.php
+
+		-
+			message: '#^Call to an undefined method Form_Section\:\:add\(\)\.$#'
+			identifier: method.notFound
+			count: 3
+			path: src/usr/local/www/pfblockerng/pfblockerng_update.php
+
+		-
+			message: '#^Call to an undefined method Form_Section\:\:addInput\(\)\.$#'
+			identifier: method.notFound
+			count: 7
+			path: src/usr/local/www/pfblockerng/pfblockerng_update.php
+
+		-
+			message: '#^Parameter Form of print cannot be converted to string\.$#'
+			identifier: print.nonString
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_update.php
+
+		-
 			message: '#^Variable \$_GET in isset\(\) always exists and is not nullable\.$#'
 			identifier: isset.variable
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_update.php
-
-		-
-			message: '#^Variable \$cronreal might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/pfblockerng/pfblockerng_update.php
-
-		-
-			message: '#^Variable \$nextcron might not be defined\.$#'
-			identifier: variable.undefined
 			count: 1
 			path: src/usr/local/www/pfblockerng/pfblockerng_update.php
 
@@ -986,18 +1375,6 @@ parameters:
 			path: src/usr/local/www/widgets/widgets/pfblockerng.widget.php
 
 		-
-			message: '#^Variable \$p_alias might not be defined\.$#'
-			identifier: variable.undefined
-			count: 1
-			path: src/usr/local/www/widgets/widgets/pfblockerng.widget.php
-
-		-
-			message: '#^Variable \$temp_array might not be defined\.$#'
-			identifier: variable.undefined
-			count: 3
-			path: src/usr/local/www/widgets/widgets/pfblockerng.widget.php
-
-		-
 			message: '#^Variable \$type might not be defined\.$#'
 			identifier: variable.undefined
 			count: 1
@@ -1008,44 +1385,3 @@ parameters:
 			identifier: variable.undefined
 			count: 1
 			path: src/usr/local/www/widgets/widgets/pfblockerng.widget.php
-		-
-			message: '#^Variable \$asn might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$dir might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$geoip might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$int might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$pfb_alias might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$pfb_query might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
-
-		-
-			message: '#^Variable \$resolved_host might not be defined\.$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
