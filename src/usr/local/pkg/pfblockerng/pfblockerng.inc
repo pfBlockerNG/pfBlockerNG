@@ -7123,8 +7123,9 @@ function pfb_unbound_python_sources($feeds) {
 		$header	= isset($feed['header']) ? $feed['header'] : '';
 		$group	= isset($feed['group'])  ? $feed['group']  : '';
 		$logf	= isset($feed['log'])    ? (string) $feed['log'] : '1';
-		// ADR-07: 'abp' feeds carry RAW ABP lines verbatim to the Python parser;
-		// every other feed stays 'plain' (PHP-extracted bare domains, ADR-06).
+		// ADR-62: every LIVE caller now tags 'plain'; 'format_hint' below is a pure
+		// pass-through -- Python still tolerates a stale 'abp' hint from an old
+		// manifest (Semantics #7), but this writer no longer branches on it.
 		$format	= (isset($feed['format']) && $feed['format'] === 'abp') ? 'abp' : 'plain';
 
 		if ($header === '') {
@@ -7150,16 +7151,6 @@ function pfb_unbound_python_sources($feeds) {
 		}
 		if (($in_h = @fopen($src, 'r')) !== FALSE) {
 			while (($line = @fgets($in_h)) !== FALSE) {
-				if ($format === 'abp') {
-					// ADR-07: pass the RAW ABP line through unmodified -- the
-					// '.txt' of an 'abp' feed already holds raw ABP lines (the
-					// lite parser is gone). Python's parse_abp does all parsing.
-					$line = rtrim($line, "\r\n");
-					if ($line !== '') {
-						@fwrite($raw_h, "{$line}\n");
-					}
-					continue;
-				}
 				// ADR-62 Decision 2: self-identifying ABP-shape verbatim line
 				// from a non-ABP feed (the download loop wrote it through
 				// untouched, NOT as 6-col CSV) -- pass it straight to the
