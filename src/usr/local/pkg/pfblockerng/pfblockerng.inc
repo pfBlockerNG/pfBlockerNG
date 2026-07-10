@@ -9039,6 +9039,11 @@ function pfb_match_reported_cidr(array $result, string $ip, bool $v4_type): ?arr
 			$validate = FALSE;
 			if ($v4_type) {
 				list($addr, $mask) = explode('/', $line[1]);
+				// issue #1157: skip malformed CIDR candidates -- a bad mask fataled
+				// (TypeError/negative shift) here
+				if (!ctype_digit((string) $mask) || (int) $mask > 32 || !is_ipaddrv4($addr)) {
+					continue;
+				}
 				$mask = (0xffffffff << (32 - $mask)) & 0xffffffff;
 				$validate = ((ip2long($ip) & $mask) == (ip2long($addr) & $mask));
 			}
@@ -9047,6 +9052,10 @@ function pfb_match_reported_cidr(array $result, string $ip, bool $v4_type): ?arr
 				 * https://redmine.pfsense.org/issues/14256
 				 */
 				list($prefix, $length) = explode('/', $line[1]);
+				// issue #1157: skip malformed CIDR candidates -- a bad length false-matched here
+				if (!ctype_digit((string) $length) || (int) $length > 128 || !is_ipaddrv6($prefix)) {
+					continue;
+				}
 				$prefix = gen_subnetv6($prefix, $length);
 				$subnet = "{$prefix}/{$length}";
 
