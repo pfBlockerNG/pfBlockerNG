@@ -981,3 +981,132 @@ def test_py_escaped_quote_keeps_triple_span_open(tmp_path: Path) -> None:
     # version token there must stay masked until the real close.
     content = 'x = """abc \\"""\n' + '_ABI = "' + _FREEBSD15 + '"\n' + '"""\n'
     assert _find_py(tmp_path, content) == [], "prose inside a still-open escape-carrying triple string must stay masked"
+
+
+# --- issue #1090: escaped delimiter inside an open docstring body must not be
+# --- miscounted as a genuine close by _code_lines' CLOSE-side parity check ----
+
+
+def test_py_escaped_delim_inside_open_docstring_does_not_falsely_close(tmp_path: Path) -> None:
+    # issue #1090: a backslash-escaped """ inside an OPEN docstring body is body
+    # text, not a close -- the value-shaped prose line right after it must stay
+    # masked, and only the real code literal after the real close is flagged
+    # (pre-fix: raw count=1 on the escaped line wrongly closed the docstring
+    # there and flagged the prose line instead).
+    content = (
+        '"""Doc.\n'
+        + "escaped: \\"
+        + '"""'
+        + "\n"
+        + 'VERSION = "'
+        + _CE28
+        + '"\n'
+        + '"""\n'
+        + '_ABI = "'
+        + _FREEBSD15
+        + '"\n'
+    )
+    violations = _find_py(tmp_path, content)
+    assert len(violations) == 1, f"expected exactly the real code literal flagged; got {violations}"
+    assert violations[0][1] == 5, f"expected lineno 5 (real code), got {violations[0][1]}"
+
+
+def test_py_escaped_delim_then_real_close_on_same_line_still_closes(tmp_path: Path) -> None:
+    # issue #1090: an escaped """ earlier on the line must not count toward
+    # parity -- only the later REAL """ closes the docstring, so the code right
+    # after it is flagged (pre-fix: raw count=2 on this line kept it "open",
+    # masking the code line -- a parity inversion / false negative).
+    content = '"""Doc.\n' + "\\" + '"""' + " real " + '"""' + "\n" + '_ABI = "' + _FREEBSD15 + '"\n'
+    violations = _find_py(tmp_path, content)
+    assert len(violations) == 1, f"expected the code literal on line 3 flagged; got {violations}"
+    assert violations[0][1] == 3
+
+
+def test_py_escaped_backslash_then_real_close_still_closes(tmp_path: Path) -> None:
+    # Green oracle: an escaped backslash (\\) just before """ does not consume
+    # the delimiter, so the REAL close still closes and code after it is
+    # flagged -- pins that the escape-skip does not overcount (must hold both
+    # pre- and post-fix).
+    content = '"""Doc.\n' + "\\\\" + '"""' + "\n" + '_ABI = "' + _FREEBSD15 + '"\n'
+    violations = _find_py(tmp_path, content)
+    assert len(violations) == 1, f"expected the code literal on line 3 flagged; got {violations}"
+    assert violations[0][1] == 3
+
+
+def test_py_escaped_backslash_then_escaped_quote_keeps_docstring_open(tmp_path: Path) -> None:
+    # issue #1090: \\\" (an escaped backslash, then an escaped quote) leaves
+    # only two bare quotes -- not a close. The docstring stays open, so the
+    # value-shaped prose line right after it must stay masked entirely
+    # (pre-fix: raw count=1 on this line wrongly closed it and flagged the
+    # prose line).
+    content = '"""Doc.\n' + "\\" * 3 + '"""' + "\n" + 'VERSION = "' + _CE28 + '"\n' + '"""\n'
+    violations = _find_py(tmp_path, content)
+    assert violations == [], f"prose after a still-open docstring must stay masked; got {violations}"
+
+
+def test_py_escaped_delim_inside_open_raw_docstring_does_not_falsely_close(tmp_path: Path) -> None:
+    # issue #1090, prefix-transparency: a raw-string docstring (r\"\"\") gets the
+    # same escape-aware close count as a plain one -- the escaped delimiter
+    # inside its body must not falsely close it either.
+    content = (
+        'r"""Doc.\n' + "\\" + '"""' + "\n" + 'VERSION = "' + _CE28 + '"\n' + '"""\n' + '_ABI = "' + _FREEBSD15 + '"\n'
+    )
+    violations = _find_py(tmp_path, content)
+    assert len(violations) == 1, f"expected only the last-line code literal flagged; got {violations}"
+    assert violations[0][1] == 5
+
+
+def test_py_escaped_delim_inside_open_single_quote_docstring_does_not_falsely_close(tmp_path: Path) -> None:
+    # issue #1090, single-quote-token sibling of the """ rows above: the
+    # escaped delimiter sits alone at line start; the same escape-aware count
+    # applies to ''' as it does to """.
+    content = (
+        "'''Doc.\n" + "\\" + "'''" + "\n" + 'VERSION = "' + _CE28 + '"\n' + "'''\n" + '_ABI = "' + _FREEBSD15 + '"\n'
+    )
+    violations = _find_py(tmp_path, content)
+    assert len(violations) == 1, f"expected only the last-line code literal flagged; got {violations}"
+    assert violations[0][1] == 5
+
+
+def test_py_close_and_reopen_on_one_line_still_stays_open(tmp_path: Path) -> None:
+    # Green oracle: two REAL """ on one line (close + reopen) is an EVEN count,
+    # so the docstring stays open per the existing parity semantics -- untouched
+    # by the escape-aware fix. Must hold both pre- and post-fix.
+    content = (
+        '"""Doc.\n'
+        + '"""'
+        + " reopened "
+        + '"""'
+        + "\n"
+        + 'VERSION = "'
+        + _CE28
+        + '"\n'
+        + '"""\n'
+        + '_ABI = "'
+        + _FREEBSD15
+        + '"\n'
+    )
+    violations = _find_py(tmp_path, content)
+    assert len(violations) == 1, f"expected only the code line flagged; got {violations}"
+    assert violations[0][1] == 5
+
+
+def test_py_trailing_backslash_in_open_docstring_does_not_crash(tmp_path: Path) -> None:
+    # Green oracle: a body line ending in a single bare backslash must not
+    # crash the escape-skip (it runs past end-of-line); the docstring stays
+    # open until the real close, then the real code literal is flagged.
+    content = (
+        '"""Doc.\n'
+        + "trailing backslash \\"
+        + "\n"
+        + 'VERSION = "'
+        + _CE28
+        + '"\n'
+        + '"""\n'
+        + '_ABI = "'
+        + _FREEBSD15
+        + '"\n'
+    )
+    violations = _find_py(tmp_path, content)
+    assert len(violations) == 1, f"expected only the code line flagged; got {violations}"
+    assert violations[0][1] == 5

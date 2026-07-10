@@ -283,6 +283,27 @@ def _tracked_files(roots: tuple[str, ...]) -> list[Path]:
 _TRIPLE_QUOTE_TOKENS = ('"""', "'''")
 
 
+def _py_triple_close_count(line: str, token: str) -> int:
+    """Count real, escape-aware ``token`` occurrences in an OPEN docstring line.
+
+    issue #1090: a backslash-escaped delimiter (``\\` + token``) is body text,
+    not a close -- mirrors ``_py_docstring_probe``'s in-triple escape handling,
+    restricted to counting the already-known open token.
+    """
+    count = 0
+    i, n = 0, len(line)
+    while i < n:
+        if line[i] == "\\":
+            i += 2
+            continue
+        if line[i : i + 3] == token:
+            count += 1
+            i += 3
+            continue
+        i += 1
+    return count
+
+
 def _py_docstring_probe(line: str) -> str:
     """Reduce ``line`` to its real triple-quote delimiters plus bare code.
 
@@ -383,7 +404,7 @@ def _code_lines(lines: list[str], suffix: str) -> list[str | None]:
     for line in lines:
         if open_token:
             out.append(None)
-            if line.count(open_token) % 2 == 1:
+            if _py_triple_close_count(line, open_token) % 2 == 1:
                 open_token = ""
             continue
         if line.lstrip().startswith("#"):
