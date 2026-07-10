@@ -897,6 +897,94 @@ pfb_recompute() {
 		fi
 	done < "${rec_memberlist}"
 
+	# masterfile.new is pre-seeded with the live masterfile minus this
+	# family's own rows (a sibling family's rows, from a separate per-family
+	# recompute call, survive untouched) -- only when dedup=on.
+	rec_masterfile_new="${masterfile}.new"
+	rec_mastercat_new="${mastercat}.new"
+	if [ "${rec_dedup}" = 'on' ]; then
+		if [ -f "${masterfile}" ]; then
+			awk -v suf="_${rec_family}" '{
+				al = $1
+				if (length(al) >= length(suf) && substr(al, length(al) - length(suf) + 1) == suf) next
+				print
+			}' "${masterfile}" > "${rec_masterfile_new}"
+		else
+			: > "${rec_masterfile_new}"
+		fi
+		rec_rc=$?
+		if [ "${rec_rc}" -ne 0 ]; then
+			log="recompute [ ${rec_family} ]: masterfile strip pass failed; aborting pass"
+			echo "${log}" | tee -a "${errorlog}"
+			return 1
+		fi
+	fi
+
+	while IFS=' ' read -r rec_alias _; do
+		: > "${pfbdeny}${rec_alias}.txt.new"
+	done < "${rec_priority}"
+
+	rec_countsfile_new="${rec_countsfile}.new"
+	: > "${rec_countsfile_new}"
+
+	rec_do_rep=0
+	if [ "${rec_family}" = 'v4' ]; then
+		case "${rec_repmode}" in
+			dmax|pmax) rec_do_rep=1 ;;
+		esac
+	fi
+
+	if [ "${rec_do_rep}" -eq 0 ]; then
+		# repmode=off / v6: the owned files already ARE the final per-alias
+		# partition -- emit each directly (blank-filter + per-alias sort into
+		# the .txt.new sibling); the class-wide tag/merge/regroup stages only
+		# exist to hand the reputation window an IP-sorted stream.
+		while IFS=' ' read -r rec_alias _; do
+			rec_ownedfile="${rec_scratch}/owned/${rec_alias}.txt"
+			rec_cnt=0
+			if [ -f "${rec_ownedfile}" ]; then
+				awk '$0 != ""' "${rec_ownedfile}" > "${rec_scratch}/direct"
+				rec_rc=$?
+				if [ "${rec_rc}" -eq 0 ]; then
+					LC_ALL=C sort "${rec_scratch}/direct" > "${pfbdeny}${rec_alias}.txt.new"
+					rec_rc=$?
+				fi
+				if [ "${rec_rc}" -eq 0 ] && [ "${rec_dedup}" = 'on' ]; then
+					awk -v a="${rec_alias}" '{ print a " " $0 }' "${pfbdeny}${rec_alias}.txt.new" >> "${rec_masterfile_new}"
+					rec_rc=$?
+				fi
+				if [ "${rec_rc}" -ne 0 ]; then
+					log="recompute [ ${rec_family} ]: direct emit failed for [ ${rec_alias} ]; aborting pass, cleaning up partial artifacts"
+					echo "${log}" | tee -a "${errorlog}"
+					pfb_recompute_clean_new
+					return 1
+				fi
+				# grep -c ^ counts an unterminated final line (wc -l undercounts).
+				rec_cnt="$(grep -c ^ "${pfbdeny}${rec_alias}.txt.new")"
+			fi
+			echo "${rec_alias} ${rec_cnt}" >> "${rec_countsfile_new}"
+		done < "${rec_priority}"
+	elif ! pfb_recompute_stream_emit; then
+		return 1
+	fi
+
+	pfb_recompute_finish
+	return $?
+}
+
+# The recompute .new-sibling cleanup after a mid-emit failure: every artifact
+# this pass may already have written, so an abort leaves the live files whole.
+pfb_recompute_clean_new() {
+	while IFS=' ' read -r rec_alias _; do
+		rm -f "${pfbdeny}${rec_alias}.txt.new"
+	done < "${rec_priority}"
+	rm -f "${rec_masterfile_new}" "${rec_mastercat_new}" "${rec_countsfile_new}"
+}
+
+# The class-wide stream stages (tag -> merge -> reputation -> regroup -> emit):
+# only run when a v4 reputation mode is active; shares pfb_recompute()'s rec_*
+# state and its .new-sibling contract.
+pfb_recompute_stream_emit() {
 	# Stage B: tag each owned file with its alias, sort it individually (the
 	# merge invariant is enforced defensively, never trusted from a caller),
 	# then merge all of them into one class-wide IP-sorted "IP alias" stream.
@@ -936,30 +1024,15 @@ pfb_recompute() {
 		fi
 	fi
 
-	# Stage C: v4 + dmax/pmax reputation only; v6 and repmode=off pass through.
+	# Stage C: the reputation window over the IP-sorted stream.
 	rec_new_stream="${rec_scratch}/new_stream"
-	rec_do_rep=0
-	if [ "${rec_family}" = 'v4' ]; then
-		case "${rec_repmode}" in
-			dmax|pmax) rec_do_rep=1 ;;
-		esac
-	fi
-
 	rec_matchdedup="${matchdedup:-matchdedup_v4.txt}"
 	rec_matchexemptcidr="${rec_scratch}/matchexempt_cidr"
 	rec_matchexemptmembers="${rec_scratch}/matchexempt_members"
 	: > "${rec_matchexemptcidr}"
 	: > "${rec_matchexemptmembers}"
 
-	if [ "${rec_do_rep}" -ne 1 ]; then
-		cp -f "${rec_stream}" "${rec_new_stream}"
-		rec_rc=$?
-		if [ "${rec_rc}" -ne 0 ]; then
-			log="recompute [ ${rec_family} ]: stream passthrough copy failed; aborting pass"
-			echo "${log}" | tee -a "${errorlog}"
-			return 1
-		fi
-	else
+	{
 		# C1 detect: class-wide /24 offender prefixes, placeholder excluded.
 		rec_offenders="${rec_scratch}/offenders"
 		awk -v max="${rec_max}" -v ph="${ip_placeholder3}" '
@@ -1106,7 +1179,7 @@ pfb_recompute() {
 			echo "${log}" | tee -a "${errorlog}"
 			return 1
 		fi
-	fi
+	}
 
 	# Stage D: regroup by alias, stable (IP order preserved within alias).
 	rec_grouped="${rec_scratch}/grouped"
@@ -1118,36 +1191,8 @@ pfb_recompute() {
 		return 1
 	fi
 
-	# Stage E: emit. masterfile.new is pre-seeded with the live masterfile
-	# minus this family's own rows (a sibling family's rows, from a separate
-	# per-family recompute call, survive untouched) -- only when dedup=on.
-	rec_masterfile_new="${masterfile}.new"
-	rec_mastercat_new="${mastercat}.new"
-	if [ "${rec_dedup}" = 'on' ]; then
-		if [ -f "${masterfile}" ]; then
-			awk -v suf="_${rec_family}" '{
-				al = $1
-				if (length(al) >= length(suf) && substr(al, length(al) - length(suf) + 1) == suf) next
-				print
-			}' "${masterfile}" > "${rec_masterfile_new}"
-		else
-			: > "${rec_masterfile_new}"
-		fi
-		rec_rc=$?
-		if [ "${rec_rc}" -ne 0 ]; then
-			log="recompute [ ${rec_family} ]: masterfile strip pass failed; aborting pass"
-			echo "${log}" | tee -a "${errorlog}"
-			return 1
-		fi
-	fi
-
-	while IFS=' ' read -r rec_alias _; do
-		: > "${pfbdeny}${rec_alias}.txt.new"
-	done < "${rec_priority}"
-
-	rec_countsfile_new="${rec_countsfile}.new"
-	: > "${rec_countsfile_new}"
-
+	# Stage E: emit from the grouped stream (masterfile.new pre-seeding and
+	# the .txt.new/counts init already ran before the fork in pfb_recompute).
 	awk -v denydir="${pfbdeny}" -v dodup="${rec_dedup}" -v priofile="${rec_priority}" \
 		-v masterfileNew="${rec_masterfile_new}" \
 		-v countsNew="${rec_countsfile_new}" '
@@ -1179,10 +1224,7 @@ pfb_recompute() {
 	if [ "${rec_rc}" -ne 0 ]; then
 		log="recompute [ ${rec_family} ]: emit pass failed; aborting pass, cleaning up partial artifacts"
 		echo "${log}" | tee -a "${errorlog}"
-		while IFS=' ' read -r rec_alias _; do
-			rm -f "${pfbdeny}${rec_alias}.txt.new"
-		done < "${rec_priority}"
-		rm -f "${rec_masterfile_new}" "${rec_mastercat_new}" "${rec_countsfile_new}"
+		pfb_recompute_clean_new
 		if [ "${rec_repmode}" = 'dmax' ]; then
 			while IFS=' ' read -r rec_alias _; do
 				rm -f "${pfbmatch}match${rec_alias}.txt.new"
@@ -1190,7 +1232,12 @@ pfb_recompute() {
 		fi
 		return 1
 	fi
+	return 0
+}
 
+# The shared recompute artifact tail: mastercat derivation + the atomic
+# ".new" swap batch, used by both the direct-emit and stream-emit paths.
+pfb_recompute_finish() {
 	# mastercat derives from the COMPLETED masterfile.new (today's exact
 	# derivation, both families' rows) -- masterfile.new always exists when
 	# dedup=on, so the swap below can never hit a missing .new sibling.
@@ -1200,10 +1247,7 @@ pfb_recompute() {
 		if [ "${rec_rc}" -ne 0 ]; then
 			log="recompute [ ${rec_family} ]: mastercat derivation failed; aborting pass, cleaning up partial artifacts"
 			echo "${log}" | tee -a "${errorlog}"
-			while IFS=' ' read -r rec_alias _; do
-				rm -f "${pfbdeny}${rec_alias}.txt.new"
-			done < "${rec_priority}"
-			rm -f "${rec_masterfile_new}" "${rec_mastercat_new}" "${rec_countsfile_new}"
+			pfb_recompute_clean_new
 			return 1
 		fi
 	fi
