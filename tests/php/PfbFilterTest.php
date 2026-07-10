@@ -149,6 +149,9 @@ final class PfbFilterTest extends TestCase
 			'WORD'   => [PFB_FILTER_WORD, ''],
 			'NUM'    => [PFB_FILTER_NUM, ''],
 			'DOMAIN' => [PFB_FILTER_DOMAIN, ''],
+			// Non-empty default proves the rejected array returns the CALLER'S default,
+			// not a hardcoded '' -- a bare '' row alone cannot distinguish the two.
+			'WORD non-empty default' => [PFB_FILTER_WORD, 'PFB_ARRAY_REJECT_SENTINEL'],
 		];
 	}
 
