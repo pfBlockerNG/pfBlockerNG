@@ -135,6 +135,29 @@ final class PfbFilterTest extends TestCase
 		$this->assertSame($expected, pfb_filter($input, PFB_FILTER_NUM));
 	}
 
+	/**
+	 * issue #1070: a crafted array POST ('field[]=x') routed through pfb_filter
+	 * must return the default, not TypeError in the scalar string ops
+	 * (htmlspecialchars/preg_match) -- every scalar-expecting filter type.
+	 *
+	 * @return array<string, array{int, mixed}>
+	 */
+	public static function scalarTypeProvider(): array
+	{
+		return [
+			'ON_OFF' => [PFB_FILTER_ON_OFF, ''],
+			'WORD'   => [PFB_FILTER_WORD, ''],
+			'NUM'    => [PFB_FILTER_NUM, ''],
+			'DOMAIN' => [PFB_FILTER_DOMAIN, ''],
+		];
+	}
+
+	#[DataProvider('scalarTypeProvider')]
+	public function testArrayInputReturnsDefaultInsteadOfThrowing(int $type, string $default): void
+	{
+		$this->assertSame($default, pfb_filter(['x'], $type, 'test', $default));
+	}
+
 	public static function tokenProvider(): array
 	{
 		return [
