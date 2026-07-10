@@ -574,3 +574,59 @@ Describe 'pfb_recompute() hostile inputs'
 		The path "${countsfile}" should not be exist
 	End
 End
+
+Describe 'pfb_recompute() mastercat consistency + empty-pass edges'
+	# shellcheck disable=SC2034  # consumed by the sourced pfb_recompute()
+	setup() {
+		work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/reccat.XXXXXX")"
+		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"
+		mkdir -p "$snap" "$pfbdeny" "$pfbmatch"
+		tmpdir="${work}/tmp"; mkdir -p "$tmpdir"
+		masterfile="${work}/master"; mastercat="${work}/mastercat"
+		errorlog="${work}/err.log"
+		ip_placeholder3='240.0.0'
+		pathgrepcidr="${work}/grepcidr"; make_grepcidr_stub "$pathgrepcidr"
+		pathgeoip="${work}/mmdblookup"; pathgeoipdat="${work}/geo.mmdb"; touch "$pathgeoipdat"
+		make_geoip_stub "$pathgeoip" 'Could not find an entry for this IP address'
+		memberlist="${work}/members"
+		countsfile="${work}/counts"
+	}
+	cleanup() { rm -rf "$work"; }
+	BeforeAll 'pfb_source'
+	Before 'setup'
+	After 'cleanup'
+
+	It 'keeps mastercat equal to masterfile column 2 after back-to-back family passes'
+		printf '192.0.2.10\n' > "${snap}/Four_v4.orig"
+		printf '%s\n' "${snap}/Four_v4.orig" > "$memberlist"
+		pfb_recompute recompute v4 "$memberlist" "$countsfile" on off >/dev/null 2>&1
+		printf 'fd99::5\n' > "${snap}/Six_v6.orig"
+		printf '%s\n' "${snap}/Six_v6.orig" > "$memberlist"
+		When call silently pfb_recompute recompute v6 "$memberlist" "$countsfile" on off
+		The status should be success
+		The contents of file "$masterfile" should include 'Four_v4 192.0.2.10'
+		The contents of file "$masterfile" should include 'Six_v6 fd99::5'
+		The contents of file "$mastercat" should include '192.0.2.10'
+		The contents of file "$mastercat" should include 'fd99::5'
+	End
+
+	It 'swaps a consistent empty mastercat when a dedup=on pass emits zero rows'
+		printf 'Stale_v4 198.51.100.9\n' > "$masterfile"
+		printf '198.51.100.9\n' > "$mastercat"
+		: > "${snap}/Empty_v4.orig"
+		printf '%s\n' "${snap}/Empty_v4.orig" > "$memberlist"
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
+		The status should be success
+		The contents of file "$masterfile" should equal ''
+		The contents of file "$mastercat" should equal ''
+	End
+
+	It 'completes an all-empty memberlist under repmode=dmax exactly like repmode=off'
+		: > "${snap}/Empty_v4.orig"
+		printf '%s\n' "${snap}/Empty_v4.orig" > "$memberlist"
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on dmax 2 US off block
+		The status should be success
+		The path "${pfbdeny}Empty_v4.txt" should be exist
+		The contents of file "$countsfile" should include 'Empty_v4 0'
+	End
+End
