@@ -750,16 +750,18 @@ function pfblockerng_sync_cron($force_all = FALSE, $scope = 'both') {
 							continue;
 						}
 
+						// Allow cURL SSL downgrade if user configured. $pflex must be derived
+						// per-row before any update-check call below — PHP loop variables
+						// persist across iterations (issue #1154).
+						$pflex = FALSE;
+						if ($row['state'] == 'Flex') {
+							$pflex = TRUE;
+						}
+
 						// Attempt download, when a previous 'fail' file marker is found.
 						if (file_exists("{$pfbfolder}/{$header}.fail")) {
 							pfb_update_check($header, $row['url'], $pfbfolder, $pfborig, $pflex, $row['format'], $vtype, $srcint);
 							continue;
-						}
-
-						// Allow cURL SSL downgrade if user configured.
-						$pflex = FALSE;
-						if ($row['state'] == 'Flex') {
-							$pflex = TRUE;
 						}
 
 						if ($force_all) {
