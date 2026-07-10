@@ -17,8 +17,10 @@ use PHPUnit\Framework\TestCase;
  * the update flow actually hits; the live #811 fixup) -- landing the line in
  * the MAIN log iff the guard is why vetting failed.
  *
- * pfb_download() as a whole is not off-appliance unit-testable (curl/exec),
- * but its entry early-return path needs neither, so it is exercised directly.
+ * pfb_download()'s post-download stages (MIME/decompress) are not off-appliance
+ * unit-testable (exec); the entry early-return path needs none of that, so it is
+ * exercised directly here (the cURL loop itself is driven for real by
+ * DownloadRetryBodyResetTest against a loopback fixture server).
  * pfb_update_check() lives in a www script the harness cannot load -- its call
  * site is covered by the helper-direct tests plus the live smoke test
  * (test_feed_internal_filter_blocks_then_allowlist_exempts).
