@@ -617,8 +617,20 @@ if ($_POST) {
 			$input_errors[] = 'DNSBL Decision cache max entries must be a whole number between 0 and 5000000.';
 		}
 
+		// issue #1128: an array-valued POST ('pfb_regex_list[]=x' etc.) throws a PHP 8
+		// TypeError in mb_detect_encoding()/explode()/base64_encode() below; reject and
+		// neutralize it here, mirroring the #1106 category_edit.php idiom.
+		foreach (array('pfb_regex_list', 'pfb_noaaaa_list', 'pfb_gp_bypass_list', 'suppression', 'tldexclusion', 'tldblacklist') as $pfb_custom_field) {
+			if (!is_string($_POST[$pfb_custom_field] ?? '')) {
+				$input_errors[] = "Customlist {$pfb_custom_field}: value must not be an array.";
+				$_POST[$pfb_custom_field] = '';
+			}
+		}
+
 		// Non-ascii characters are not allowed for DNSBL Regex
-		if (!mb_detect_encoding($_POST['pfb_regex_list'], 'ASCII', TRUE)) {
+		// issue #1128: a missing key reaches here too (the guard above only fires on a
+		// present-but-non-scalar value) -- avoid an undefined-array-key warning.
+		if (!mb_detect_encoding($_POST['pfb_regex_list'] ?? '', 'ASCII', TRUE)) {
 			$input_errors[] = 'DNSBL Regex list contains non-ascii characters';
 		}
 

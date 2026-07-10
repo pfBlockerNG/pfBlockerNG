@@ -135,13 +135,38 @@ if (!function_exists('is_subnet')) {
 	}
 }
 
+if (!function_exists('is_domain')) {
+	// pfSense util.inc verbatim (master, 2026-07): the domain-shape regex is_hostname() delegates to.
+	function is_domain($domain, $allow_wildcard = false, $trailing_dot = true) {
+		if (!is_string($domain)) {
+			return false;
+		}
+		if (!$trailing_dot && ($domain[strlen($domain) - 1] == '.')) {
+			return false;
+		}
+		if ($allow_wildcard) {
+			$domain_regex = '/^(?:(?:[a-z_0-9\*]|[a-z_0-9][a-z_0-9\-]*[a-z_0-9])\.)*(?:[a-z_0-9]|[a-z_0-9][a-z_0-9\-]*[a-z_0-9\.])$/i';
+		} else {
+			$domain_regex = '/^(?:(?:[a-z_0-9]|[a-z_0-9][a-z_0-9\-]*[a-z_0-9])\.)*(?:[a-z_0-9]|[a-z_0-9][a-z_0-9\-]*[a-z_0-9\.])$/i';
+		}
+		return (bool) preg_match($domain_regex, $domain);
+	}
+}
+
 if (!function_exists('is_hostname')) {
-	// Reached only by PFB_FILTER_HOSTNAME, which the seed suite does not exercise.
-	// Fail fast rather than guess pfSense's semantics (a guessed double could let a
-	// future test pass against behaviour pfSense never had). Port the real
-	// util.inc is_hostname() here when a HOSTNAME path is first tested.
+	// pfSense util.inc verbatim (master, 2026-07): PFB_FILTER_HOSTNAME's validator.
 	function is_hostname($hostname, $allow_wildcard = false) {
-		throw new LogicException(__FUNCTION__ . '() double not implemented — port the real pfSense is_hostname() before testing this path');
+		if (!is_string($hostname)) {
+			return false;
+		}
+		if (is_domain($hostname, $allow_wildcard)) {
+			// A single trailing dot ("test.") is not a valid host in the root domain.
+			if ((substr_count($hostname, '.') == 1) && ($hostname[strlen($hostname) - 1] == '.')) {
+				return false;
+			}
+			return true;
+		}
+		return false;
 	}
 }
 
