@@ -2748,8 +2748,9 @@ def get_details_dnsbl(
     qstate: module_qstate | None,
     rep: reply_info | None,
     kwargs: dict[str, Any] | None,
+    dnsbl: Any,  # DnsblDecision operate() served; UNSET is a defensive no-op guard
 ) -> bool:
-    global pfb, rcodeDB, decisionDB, noAAAADB, maxmindReader, _dnsbl_last_event
+    global pfb, rcodeDB, noAAAADB, maxmindReader, _dnsbl_last_event
 
     if qstate and qstate is not None:
         q_name = get_q_name_qstate(qstate)
@@ -2762,17 +2763,10 @@ def get_details_dnsbl(
     if pfb["sqlite3_resolver_con"]:
         pfb_db_enqueue(("resolver",))
 
-    # Determine if event is a 'reply' or DNSBL block. decisionDB now also holds allow
-    # ("let it resolve"/whitelisted) verdicts, so attribute only an actual block.
-    # operate() stores decisionDB keys lowercased, so normalize the lookup -- otherwise
-    # a mixed-case query is blocked but its block is not attributed here (the log/counter
-    # path silently misses it -> per-feed under-count).
-    q_name_key = q_name.lower()
-    cached = decisionDB.get(q_name_key)
-    # No snap_gen check (issue #1074): this only ATTRIBUTES the block operate() served
-    # -- a live-gen gate would drop the log line for a block served just before a swap;
-    # worst case is a swap-race mis-attributed feed/group in the log, never the answer.
-    dnsbl = cached.dnsbl if cached is not None else UNSET
+    # issue #1094: the served verdict rides in BY VALUE from operate() -- never
+    # re-read the shared decisionDB memo, else a concurrent thread on another
+    # snapshot generation can overwrite/clear the entry between serve and log.
+    q_name_key = q_name.lower()  # feeds the dedup signature below, not a lookup
     if dnsbl is not UNSET and dnsbl.is_found and not dnsbl.in_whitelist:
         # If logging is disabled, do not log blocked DNSBL events (Utilize DNSBL Webserver)
         # except for Python nullblock events
@@ -6750,7 +6744,7 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                 # via get_details_dnsbl (which internally drops the log line for "4");
                 # not cached, for the same #43 reasons as the VIP/null path below.
                 if dnsbl.nxdomain:
-                    get_details_dnsbl("dnsbl", None, qstate, None, {"pfb_addr": q_ip})
+                    get_details_dnsbl("dnsbl", None, qstate, None, {"pfb_addr": q_ip}, dnsbl)
                     qstate.return_rcode = RCODE_NXDOMAIN
                     qstate.no_cache_store = 1
                     qstate.ext_state[id] = MODULE_FINISHED
@@ -6775,9 +6769,9 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                 # Log entry
                 kwargs = {"pfb_addr": q_ip}
                 if qstate.return_msg:
-                    get_details_dnsbl("dnsbl", None, qstate, qstate.return_msg.rep, kwargs)
+                    get_details_dnsbl("dnsbl", None, qstate, qstate.return_msg.rep, kwargs, dnsbl)
                 else:
-                    get_details_dnsbl("dnsbl", None, qstate, None, kwargs)
+                    get_details_dnsbl("dnsbl", None, qstate, None, kwargs, dnsbl)
 
                 qstate.return_rcode = RCODE_NOERROR
                 qstate.return_msg.rep.security = 2

@@ -1,8 +1,11 @@
 import builtins
+import queue
 import random
 import re
+import threading
 import types
 from collections import defaultdict
+from collections.abc import Callable
 from configparser import ConfigParser
 from typing import Any
 
@@ -828,30 +831,28 @@ class TestGetQType:
 
 
 class TestGetDetailsDnsblQtype:
-    """Issue #44: DNSBL reporting must account for query type. The cached decision
-    in decisionDB is qtype-independent, so q_type is folded into the consecutive-dedup
-    signature and appended as the trailing dnsbl.log field. Two same-name blocks
-    that differ only by record type (a client's A+AAAA pair) must each count, and
-    the log must record which record type was blocked."""
+    """Issue #44: DNSBL reporting must account for query type. The served DnsblDecision
+    (issue #1094: carried BY VALUE, not re-read from decisionDB) is qtype-independent,
+    so q_type is folded into the consecutive-dedup signature and appended as the
+    trailing dnsbl.log field. Two same-name blocks that differ only by record type
+    (a client's A+AAAA pair) must each count, and the log must record which record
+    type was blocked."""
 
     @staticmethod
-    def _decision() -> Any:
-        # A composed Decision whose DNSBL axis is a block (decisionDB values are
-        # Decision, the DNSBL verdict lives on .dnsbl).
-        return pfb_unbound.Decision(
-            dnsbl=pfb_unbound.DnsblDecision(
-                is_found=True,
-                in_whitelist=False,
-                in_hsts=False,
-                null_blocking=False,
-                nxdomain=False,
-                log_type="1",
-                b_type="DNSBL_Python",
-                p_type="Python",
-                feed="feedX",
-                group="groupY",
-                b_eval="blocked.com",
-            )
+    def _dnsbl() -> Any:
+        # The served DnsblDecision this class's blocks share.
+        return pfb_unbound.DnsblDecision(
+            is_found=True,
+            in_whitelist=False,
+            in_hsts=False,
+            null_blocking=False,
+            nxdomain=False,
+            log_type="1",
+            b_type="DNSBL_Python",
+            p_type="Python",
+            feed="feedX",
+            group="groupY",
+            b_eval="blocked.com",
         )
 
     def _qstate(self, qtype: str) -> types.SimpleNamespace:
@@ -864,13 +865,12 @@ class TestGetDetailsDnsblQtype:
         monkeypatch.setitem(pfb_unbound.pfb, "python_nolog", False)
         monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_resolver_con", False)
         monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_dnsbl_con", False)
-        monkeypatch.setattr(pfb_unbound, "decisionDB", {"blocked.com": self._decision()})
         lines: list[tuple[str, str]] = []
         monkeypatch.setattr(pfb_unbound, "pfb_log", lambda path, line: lines.append((path, line)))
         return lines
 
     def _block(self, qtype: str) -> None:
-        pfb_unbound.get_details_dnsbl("dnsbl", None, self._qstate(qtype), None, {"pfb_addr": "1.2.3.4"})
+        pfb_unbound.get_details_dnsbl("dnsbl", None, self._qstate(qtype), None, {"pfb_addr": "1.2.3.4"}, self._dnsbl())
 
     @staticmethod
     def _dnsbl_fields(lines: list[tuple[str, str]]) -> list[list[str]]:
@@ -907,7 +907,8 @@ class TestGetDetailsDnsblQtype:
         # DnsblDecision payload (e.g. two subdomains of one blocked zone -> same
         # b_eval). The consecutive-dedup signature must still tell them apart by
         # name, or the second is wrongly marked a duplicate (zone under-count). The
-        # decision is the same object for both, so name is the only differentiator.
+        # same DnsblDecision object is passed by value for both, so name is the only
+        # differentiator.
         monkeypatch.setitem(pfb_unbound.pfb, "python_nolog", False)
         monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_resolver_con", False)
         monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_dnsbl_con", False)
@@ -924,11 +925,6 @@ class TestGetDetailsDnsblQtype:
             group="groupY",
             b_eval="evil.com",
         )
-        monkeypatch.setattr(
-            pfb_unbound,
-            "decisionDB",
-            {"a.evil.com": pfb_unbound.Decision(dnsbl=dec), "b.evil.com": pfb_unbound.Decision(dnsbl=dec)},
-        )
         lines: list[tuple[str, str]] = []
         monkeypatch.setattr(pfb_unbound, "pfb_log", lambda path, line: lines.append((path, line)))
         for name in ("a.evil.com.", "b.evil.com."):
@@ -936,26 +932,27 @@ class TestGetDetailsDnsblQtype:
                 qinfo=types.SimpleNamespace(qname_str=name, qtype_str="A"),
                 return_msg=None,
             )
-            pfb_unbound.get_details_dnsbl("dnsbl", None, qstate, None, {"pfb_addr": "1.2.3.4"})
+            pfb_unbound.get_details_dnsbl("dnsbl", None, qstate, None, {"pfb_addr": "1.2.3.4"}, dec)
         a_fields, b_fields = self._dnsbl_fields(lines)
         assert a_fields[9] == "+"
         assert b_fields[9] == "+"
 
     def test_mixed_case_query_is_attributed(self, monkeypatch: Any) -> None:
-        # operate() stores decisionDB keys lowercased; a mixed-case query must still
-        # be attributed here (lookup normalized), or the block is silently dropped from
-        # dnsbl.log / the per-group counter (per-feed under-count).
+        # issue #1094: the served verdict rides by value now, so a mixed-case query
+        # name no longer risks a lookup miss -- but the lowering still feeds the
+        # dedup signature (q_name_key), so this pins that a mixed-case name is still
+        # logged/counted (per-feed under-count would otherwise silently recur if the
+        # dedup signature were ever re-keyed on the raw, un-lowered name).
         monkeypatch.setitem(pfb_unbound.pfb, "python_nolog", False)
         monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_resolver_con", False)
         monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_dnsbl_con", False)
-        monkeypatch.setattr(pfb_unbound, "decisionDB", {"blocked.com": self._decision()})
         lines: list[tuple[str, str]] = []
         monkeypatch.setattr(pfb_unbound, "pfb_log", lambda path, line: lines.append((path, line)))
         qstate = types.SimpleNamespace(
             qinfo=types.SimpleNamespace(qname_str="Blocked.COM.", qtype_str="A"),
             return_msg=None,
         )
-        pfb_unbound.get_details_dnsbl("dnsbl", None, qstate, None, {"pfb_addr": "1.2.3.4"})
+        pfb_unbound.get_details_dnsbl("dnsbl", None, qstate, None, {"pfb_addr": "1.2.3.4"}, self._dnsbl())
         assert len(self._dnsbl_fields(lines)) == 1  # attributed despite mixed-case query
 
 
@@ -967,7 +964,7 @@ class TestGetDetailsDnsblNxdomain:
     """
 
     def _emit(self, monkeypatch: Any, log_type: str) -> list[tuple[str, str]]:
-        # Given a memoized NXDOMAIN block for blocked.com with the given log flag
+        # Given an NXDOMAIN block served for blocked.com with the given log flag
         monkeypatch.setitem(pfb_unbound.pfb, "python_nolog", False)
         monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_resolver_con", False)
         monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_dnsbl_con", False)
@@ -981,7 +978,6 @@ class TestGetDetailsDnsblNxdomain:
             group="G",
             b_eval="blocked.com",
         )
-        monkeypatch.setattr(pfb_unbound, "decisionDB", {"blocked.com": pfb_unbound.Decision(dnsbl=dnsbl)})
         lines: list[tuple[str, str]] = []
         monkeypatch.setattr(pfb_unbound, "pfb_log", lambda path, line: lines.append((path, line)))
         qstate = types.SimpleNamespace(
@@ -989,7 +985,7 @@ class TestGetDetailsDnsblNxdomain:
             return_msg=None,
         )
         # When the logger runs for that block
-        pfb_unbound.get_details_dnsbl("dnsbl", None, qstate, None, {"pfb_addr": "1.2.3.4"})
+        pfb_unbound.get_details_dnsbl("dnsbl", None, qstate, None, {"pfb_addr": "1.2.3.4"}, dnsbl)
         return lines
 
     def test_nxdomain_logging_writes_a_line(self, monkeypatch: Any) -> None:
@@ -1819,6 +1815,209 @@ class TestOperateDnsbl:
         assert not _is_block(pfb_unbound.decisionDB.get("orig.com"))
         # The sentinel itself must never be memoized as an evaluated decision.
         assert pfb_unbound.decisionDB.get("unknown") is None
+
+
+class _RaceCache(pfb_unbound._LruCache):
+    """decisionDB stand-in that opens a deterministic race window. It arms when the
+    target key is first written (mirrors operate()'s fresh-eval memo write, ~line 6730),
+    then on the NEXT get() of that key blocks on a resume gate -- letting a test inject
+    a foreign write/delete exactly between operate()'s serve and get_details_dnsbl's
+    (pre-fix) re-read. No timing luck: a real thread only proceeds past the gate once
+    signalled."""
+
+    def __init__(self, target: str, window_q: queue.Queue[str], resume: threading.Event) -> None:
+        super().__init__(maxsize=0)
+        self._target = target
+        self._window_q = window_q
+        self._resume = resume
+        self._armed = False
+        self._fired = False
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        super().__setitem__(key, value)
+        if key == self._target:
+            self._armed = True
+
+    def get(self, key: str, default: Any = None) -> Any:
+        if self._armed and not self._fired and key == self._target:
+            self._fired = True
+            self._window_q.put("window")
+            if not self._resume.wait(timeout=10):
+                raise AssertionError("resume gate never opened")
+        return super().get(key, default)
+
+
+class TestAttributionSurvivesRace:
+    """issue #1094: get_details_dnsbl must attribute a served DNSBL block using the
+    verdict operate() actually served, never a live re-read of the shared decisionDB
+    memo -- a concurrent thread holding a DIFFERENT snapshot generation can overwrite
+    or clear the same-name entry in the window between operate() serving the block and
+    the logger attributing it, misattributing the feed/group or dropping the line
+    entirely. The served DNS answer itself is never affected, only its attribution."""
+
+    def _enable(self, monkeypatch: Any) -> None:
+        pfb_unbound.pfb["python_blacklist"] = True
+        pfb_unbound.pfb["python_blocking"] = True
+        monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_dnsbl_con", True)
+
+    def _run_race(
+        self,
+        monkeypatch: Any,
+        name: str,
+        foreign_action: Callable[[_RaceCache], None] | None,
+    ) -> tuple[bool, Any, list[list[str]], list[Any]]:
+        self._enable(monkeypatch)
+        add_data(name, log="1", index=0)
+        set_feed_group(0, "TestFeed", "TestGroup")
+
+        window_q: queue.Queue[str] = queue.Queue()
+        resume = threading.Event()
+        cache = _RaceCache(name, window_q, resume)
+        monkeypatch.setattr(pfb_unbound, "decisionDB", cache)
+
+        lines: list[tuple[str, str]] = []
+        enqueued: list[Any] = []
+        monkeypatch.setattr(pfb_unbound, "pfb_log", lambda path, line: lines.append((path, line)))
+        monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda item: enqueued.append(item))
+
+        def writer_run() -> None:
+            # queue.Empty is deliberately left uncaught: if neither "window" nor "done"
+            # ever arrives, the thread dies loudly instead of hanging silently.
+            msg = window_q.get(timeout=10)
+            if msg == "window":
+                if foreign_action is not None:
+                    foreign_action(cache)
+                resume.set()
+
+        writer = threading.Thread(target=writer_run)
+        writer.start()
+
+        qstate = make_qstate(f"{name}.", qtype=RR_A)
+        rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+
+        window_q.put("done")
+        writer.join(timeout=10)
+        assert not writer.is_alive(), "writer thread failed to terminate"
+
+        dnsbl_fields = [line.split(",") for path, line in lines if path.endswith("dnsbl.log")]
+        return rcd, qstate, dnsbl_fields, enqueued
+
+    @staticmethod
+    def _assert_block_genuinely_served(rcd: bool, qstate: Any) -> None:
+        # Before-state: the served DNS answer is never affected by the race -- only
+        # its attribution is. Prove the block actually happened before checking that.
+        assert rcd is True
+        assert qstate.ext_state[0] == MODULE_FINISHED
+        assert qstate.return_rcode == RCODE_NOERROR
+        answers = DNSMessage.instances[-1].answer
+        assert any(pfb_unbound.pfb["dnsbl_ipv4"] in a for a in answers), answers
+
+    def test_attribution_survives_foreign_generation_block_overwrite(self, monkeypatch: Any) -> None:
+        # Scenario: a thread on a NEWER snapshot generation writes a DIFFERENT block
+        # (different feed/group) for the SAME name into decisionDB while this query's
+        # block is in flight. Given a served TestFeed/TestGroup block, When a foreign
+        # gen+1 block for feed_gen2/grp_gen2 lands mid-flight, Then the logged line must
+        # still attribute TestFeed/TestGroup -- the verdict actually served -- never the
+        # foreign generation's feed/group.
+        live_gen = pfb_unbound._snapshot.gen
+
+        def foreign_overwrite(cache: _RaceCache) -> None:
+            cache["race-r1.com"] = pfb_unbound.Decision(
+                dnsbl=_dnsbl_decision(
+                    is_found=True,
+                    log_type="1",
+                    b_type="DNSBL",
+                    p_type="Python",
+                    feed="feed_gen2",
+                    group="grp_gen2",
+                    b_eval="race-r1.com",
+                ),
+                snap_gen=live_gen + 1,
+            )
+
+        rcd, qstate, dnsbl_fields, enqueued = self._run_race(monkeypatch, "race-r1.com", foreign_overwrite)
+        self._assert_block_genuinely_served(rcd, qstate)
+
+        assert len(dnsbl_fields) == 1, f"expected exactly one dnsbl.log line, got {dnsbl_fields}"
+        feed, group = dnsbl_fields[0][8], dnsbl_fields[0][6]
+        assert (feed, group) == ("TestFeed", "TestGroup"), (
+            f"expected feed=TestFeed group=TestGroup (the SERVED verdict), got "
+            f"feed={feed} group={group} (line={dnsbl_fields[0]})"
+        )
+        assert ("dnsbl", "TestGroup") in enqueued, enqueued
+
+    def test_attribution_survives_foreign_generation_allow_overwrite(self, monkeypatch: Any) -> None:
+        # Scenario: a foreign-generation thread overwrites the same-name entry with an
+        # ALLOW verdict (is_found False) mid-flight. Given a served TestFeed block,
+        # When the foreign allow lands before attribution, Then the line must still be
+        # logged with TestFeed -- a presence-only re-read would see the allow verdict
+        # and silently drop the line (per-feed under-count).
+        live_gen = pfb_unbound._snapshot.gen
+
+        def foreign_allow(cache: _RaceCache) -> None:
+            cache["race-r2.com"] = pfb_unbound.Decision(dnsbl=_dnsbl_decision(), snap_gen=live_gen + 1)
+
+        rcd, qstate, dnsbl_fields, enqueued = self._run_race(monkeypatch, "race-r2.com", foreign_allow)
+        self._assert_block_genuinely_served(rcd, qstate)
+
+        assert len(dnsbl_fields) == 1, f"expected the block to still be logged, got {dnsbl_fields}"
+        feed, group = dnsbl_fields[0][8], dnsbl_fields[0][6]
+        assert (feed, group) == ("TestFeed", "TestGroup"), (
+            f"expected feed=TestFeed group=TestGroup, got feed={feed} group={group} (line={dnsbl_fields[0]})"
+        )
+        assert ("dnsbl", "TestGroup") in enqueued, enqueued
+
+    def test_attribution_survives_swap_clear(self, monkeypatch: Any) -> None:
+        # Scenario: rebuild_and_swap()'s decisionDB.clear() (modelled here as a
+        # single-entry delete) removes the same-name entry mid-flight. Given a served
+        # TestFeed block, When the entry is deleted before attribution, Then the line
+        # must still be logged with TestFeed -- a presence-only re-read would find
+        # nothing and silently drop the line.
+        def foreign_delete(cache: _RaceCache) -> None:
+            del cache["race-r3.com"]
+
+        rcd, qstate, dnsbl_fields, enqueued = self._run_race(monkeypatch, "race-r3.com", foreign_delete)
+        self._assert_block_genuinely_served(rcd, qstate)
+
+        assert len(dnsbl_fields) == 1, f"expected the block to still be logged, got {dnsbl_fields}"
+        feed, group = dnsbl_fields[0][8], dnsbl_fields[0][6]
+        assert (feed, group) == ("TestFeed", "TestGroup"), (
+            f"expected feed=TestFeed group=TestGroup, got feed={feed} group={group} (line={dnsbl_fields[0]})"
+        )
+        assert ("dnsbl", "TestGroup") in enqueued, enqueued
+
+
+class TestAttributionMemoPath:
+    """issue #1094 companion: the by-value plumbing must not regress the ordinary
+    (non-racy) memo-hit path -- a repeat query for an already-memoized block still
+    attributes the served feed via the local ``dnsbl`` operate() re-reads off its OWN
+    memo (line ~6668), not a race."""
+
+    def test_memo_path_repeat_query_logs_served_feed(self, monkeypatch: Any) -> None:
+        # Given a block memoized by a first query (fresh-eval branch),
+        # When a second query for the SAME name hits the memo short-circuit,
+        # Then BOTH dnsbl.log lines attribute the served TestFeed/TestGroup.
+        pfb_unbound.pfb["python_blacklist"] = True
+        pfb_unbound.pfb["python_blocking"] = True
+        monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_dnsbl_con", True)
+        add_data("memo-path.com", log="1", index=0)
+        set_feed_group(0, "TestFeed", "TestGroup")
+
+        lines: list[tuple[str, str]] = []
+        monkeypatch.setattr(pfb_unbound, "pfb_log", lambda path, line: lines.append((path, line)))
+        monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda *a: None)
+
+        for _ in range(2):
+            qstate = make_qstate("memo-path.com.", qtype=RR_A)
+            rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+            assert rcd is True
+            assert qstate.ext_state[0] == MODULE_FINISHED
+
+        dnsbl_fields = [line.split(",") for path, line in lines if path.endswith("dnsbl.log")]
+        assert len(dnsbl_fields) == 2, f"expected one line per query, got {dnsbl_fields}"
+        for fields in dnsbl_fields:
+            feed, group = fields[8], fields[6]
+            assert (feed, group) == ("TestFeed", "TestGroup"), f"line={fields}"
 
 
 class TestOperateEvents:
