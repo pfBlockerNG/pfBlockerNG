@@ -871,9 +871,12 @@ print ($section);
 				<td>
 					<?php
 								// issue #1069: HTML-encode the feed URL before it enters
-								// markup -- pfb_hsc() is not in scope for this file.
+								// markup -- pfb_hsc() is not in scope for this file. Only an
+								// http(s):// scheme becomes a clickable <a href> -- htmlspecialchars
+								// does not neutralise a `javascript:` scheme, so a bare strpos('http')
+								// would render `javascript:...http...` as an executable link.
 								$url_hsc = htmlspecialchars($row['url'], ENT_QUOTES, 'UTF-8');
-								if (strpos($row['url'], 'http') !== FALSE) {
+								if (str_starts_with($row['url'], 'http://') || str_starts_with($row['url'], 'https://')) {
 									print ("<a target=\"_blank\" href=\"{$url_hsc}\">{$url_hsc}</a>");
 								} else {
 									print ("{$url_hsc}");
@@ -883,7 +886,9 @@ print ($section);
 
 				<td>
 					<?php
-								print ($row['header']);
+								// issue #1069: the header is another raw feed-derived sink in
+								// this same table row -- HTML-encode it before it enters markup.
+								print (htmlspecialchars($row['header'], ENT_QUOTES, 'UTF-8'));
 					?>
 				</td>
 			</tr>
