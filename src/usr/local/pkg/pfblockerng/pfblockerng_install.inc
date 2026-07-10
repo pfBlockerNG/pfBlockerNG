@@ -582,6 +582,10 @@ if (file_exists('/var/db/pfblockerng/dnsbl_info') &&
 }
 unlink_if_exists('/var/db/pfblockerng/dnsbl_info');
 
+// issue #1098: purge any leftover change-detect probe body ({header}.md5.raw) so a
+// pre-#1072 corrupted one is never reused verbatim by the next sync ingest.
+pfb_purge_probe_bodies();
+
 // Move dnsbl_levent.sqlite -> /var/unbound folder
 $ufound = FALSE;
 if (file_exists('/var/db/pfblockerng/dnsbl_levent.sqlite') && !file_exists($pfb['dnsbl_resolver'])) {
