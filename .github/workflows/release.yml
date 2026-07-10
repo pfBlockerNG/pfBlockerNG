@@ -140,35 +140,13 @@ jobs:
 
       - name: Require CI green on the branch tip
         # The tag will point at the current HEAD of the channel branch; assert that
-        # CI is green for the code being released. A docs-only tip (e.g. a committed
-        # release-notes commit) skips CI via test.yml's paths-ignore and carries NO
-        # 'All tests passed' check-run, so walk back first-parent ancestors to the most
-        # recent commit that actually ran it and assert THAT is success — the docs-only
-        # commits in between change no code, so the nearest CI'd ancestor is authoritative.
+        # CI is green for the code being released. The walk-back semantics + the
+        # issue #1077 pagination/pending fixes live in scripts/release-ci-gate.sh,
+        # pinned by tests/shell/release_ci_gate_spec.sh.
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          REPO="${{ github.repository }}"
-          CONCLUSION=""
-          CHECK_SHA=""
-          for sha in $(git rev-list --first-parent -n 20 HEAD); do
-            c=$(gh api \
-              "repos/${REPO}/commits/${sha}/check-runs" \
-              --jq '[.check_runs[] | select(.name == "All tests passed")]
-                    | sort_by(.completed_at) | last | .conclusion // ""')
-            if [ -n "$c" ]; then CONCLUSION="$c"; CHECK_SHA="$sha"; break; fi
-          done
-          if [ -z "$CONCLUSION" ]; then
-            echo "::error::No 'All tests passed' check-run found on HEAD or its recent ancestors."
-            echo "Push the commit to a branch first and wait for CI to pass before releasing."
-            exit 1
-          fi
-          if [ "$CONCLUSION" != "success" ]; then
-            echo "::error::'All tests passed' for ${CHECK_SHA} is '${CONCLUSION}'."
-            echo "Push the commit to a branch first and wait for CI to pass before releasing."
-            exit 1
-          fi
-          echo "CI green on ${CHECK_SHA} (conclusion: ${CONCLUSION})"
+          REPO:     ${{ github.repository }}
+        run: sh scripts/release-ci-gate.sh
 
       - name: Detect committed changelog
         id: detect
