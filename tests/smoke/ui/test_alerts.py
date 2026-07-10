@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from .. import helpers
+from .render_oracle import PhpErrorLogGuard
 from .webui import extract_csrf_token, looks_like_login_page, row_containing
 
 if TYPE_CHECKING:
@@ -250,6 +251,29 @@ def test_dnsbl_remove_rejects_missing_type(
         assert helpers.is_vip(after), f"{domain} no longer VIP-blocked after a REJECTED unlock POST: {after}"
     finally:
         helpers.reset(vm)
+
+
+def test_ip_remove_rejects_array_valued_ip(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """issue #1128: the ip_remove Lock/Unlock handler guards an array 'ip'.
+
+    Given the ``ip_remove`` elseif branch (alerts.php:1514 -- a DIFFERENT
+    gate than ``dnsbl_remove`` above, ``isset($_POST['ip_remove']) &&
+    !empty(...)``, but the same ``act``-style POST shape),
+    When 'ip' rides PHP array syntax ('ip[]=crafted') instead of a scalar,
+    Then the handler answers its normal "IP Invalid or table missing"
+    validation reject (HTTP 200, no login bounce) -- never a TypeError-driven
+    500 -- and no candidate ``php_error.log`` gains a byte. Never mutates the
+    box (the empty-``$ip`` early exit precedes both the ``exec()``/pfctl call
+    and ``pfb_unlock()``), so no teardown is needed.
+    """
+    guard = PhpErrorLogGuard(smoke_vm)
+    guard.snapshot()
+
+    resp = _post_action(webui, {"ip_remove": "unlock", "ip[]": "crafted", "table": "pfBlockerNGsmoke"})
+
+    assert resp.status_code == 200, f"ip_remove array POST -> HTTP {resp.status_code}"
+    assert not looks_like_login_page(resp.text), "ip_remove array POST bounced to the login form"
+    guard.assert_no_growth()
 
 
 # --------------------------------------------------------------------------- #

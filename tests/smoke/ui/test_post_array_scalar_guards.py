@@ -17,7 +17,15 @@ root for every filter-routed caller, AND issue #1106's
 ``pfblockerng_category_edit.php`` cluster of direct-string sinks that bypass
 ``pfb_filter`` (an ingress guard blanks any non-scalar POST field; ``atype``
 and ``$_REQUEST[savemsg]`` get their own ``is_string()`` guard since they run
-outside the save block, reachable via a plain GET query).
+outside the save block, reachable via a plain GET query), AND issue #1128's
+alerts/dnsbl/pfblockerng.php cluster: the alerts settings-save ``save`` field
+and dnsbl's six ``base64_encode``-bound customlist fields (both closed
+in-place, no ``pfb_filter`` involved), plus the loopback aliastable
+reflector's ``is_string()`` guard on ``$_REQUEST['pfb']`` (exercised via an
+on-box curl -- unreachable through ``webui``'s SLIRP-hostfwd session, since
+its gate requires literal ``REMOTE_ADDR == 127.0.0.1``). The sibling
+``ip_remove`` site (also #1128) lives in ``test_alerts.py`` beside its own
+``_post_action``-based elseif-chain siblings.
 
 Each save/GET must respond like any validation failure: HTTP 200, no login
 bounce, and NOT ONE new byte in any candidate ``php_error.log``.
@@ -79,7 +87,11 @@ def _post_with_array_field(
     payload[f"{array_field}[]"] = "crafted"
     if extra_fields:
         payload.update(extra_fields)
-    payload["save"] = "Save"
+    # issue #1128: 'save' itself can be the crafted array field (alerts.php's
+    # settings-save gate is a bare `isset($_POST['save'])`) -- overwriting it
+    # back to a scalar here would silently undo the craft.
+    if array_field != "save":
+        payload["save"] = "Save"
 
     resp = webui.session.post(webui.url(page), data=payload, verify=webui._verify, timeout=_POST_TIMEOUT)
 
@@ -116,6 +128,19 @@ _ARRAY_FIELD_CASES: list[tuple[str, str, dict[str, str] | None]] = [
         "url-0",  # strpos/pfb_filter(URL) in the rowhelper state-loop
         {"state-0": "Enabled", "header-0": "hdr", "format-0": "auto"},
     ),
+    # issue #1128: alerts.php's settings-save gate is a bare `isset($_POST['save'])`
+    # -- true for an array too -- so 'save[]' alone reaches its own strstr() sink
+    # (_post_with_array_field skips the trailing scalar 'save' override for this row).
+    ("/pfblockerng/pfblockerng_alerts.php", "save", None),  # strstr
+    # issue #1128: dnsbl.php's six base64_encode-bound customlist fields; their
+    # unguarded mb_detect_encoding()/explode() calls run BEFORE the base64_encode
+    # save gate, so each needs its own row (mirrors #1106's category_edit idiom).
+    ("/pfblockerng/pfblockerng_dnsbl.php", "pfb_regex_list", None),  # mb_detect_encoding/explode
+    ("/pfblockerng/pfblockerng_dnsbl.php", "pfb_noaaaa_list", None),  # explode
+    ("/pfblockerng/pfblockerng_dnsbl.php", "pfb_gp_bypass_list", None),  # explode
+    ("/pfblockerng/pfblockerng_dnsbl.php", "suppression", None),  # explode
+    ("/pfblockerng/pfblockerng_dnsbl.php", "tldexclusion", None),  # explode
+    ("/pfblockerng/pfblockerng_dnsbl.php", "tldblacklist", None),  # explode
 ]
 
 
@@ -155,4 +180,42 @@ def test_get_query_array_value_rejected_gracefully(webui: WebUI, smoke_vm: helpe
 
     assert resp.status_code == 200, f"GET {page} -> HTTP {resp.status_code}"
     assert not looks_like_login_page(resp.text), f"GET {page} bounced to the login form"
+    guard.assert_no_growth()
+
+
+def test_pfblockerng_php_reflector_rejects_array_pfb_query(deployed_vm: helpers.SmokeVM) -> None:
+    """issue #1128: the loopback aliastable reflector guards an array 'pfb' query.
+
+    Given ``pfblockerng.php``'s ``REMOTE_ADDR == 127.0.0.1``-gated file
+    reflector (unreachable through the ``webui`` fixture: QEMU SLIRP hostfwd
+    never presents as the literal loopback address, so this is driven with an
+    ON-BOX curl -- the same access recipe ``test_dnsbl_block_page.py`` uses for
+    a target outside the authenticated webConfigurator session).
+    When 'pfb' rides PHP array syntax ('pfb[]=x', percent-encoded so curl's own
+    URL globbing does not choke on the literal brackets) instead of a scalar,
+    Then the on-box request never comes back HTTP 500 (a TypeError there would
+    fatal before any auth check even runs), and no candidate ``php_error.log``
+    gains a byte.
+    """
+    guard = PhpErrorLogGuard(deployed_vm)
+    guard.snapshot()
+
+    curl_argv = (
+        helpers.GUEST_CURL,
+        "-sS",
+        "-o",
+        "/dev/null",
+        "-w",
+        "%{http_code}",
+        "--connect-timeout",
+        "3",
+        "--max-time",
+        "8",
+        "http://127.0.0.1/pfblockerng/pfblockerng.php?pfb%5B%5D=x",
+    )
+    result = deployed_vm.ssh(*curl_argv, timeout=15.0)
+
+    assert result.returncode == 0, f"on-box curl failed: rc={result.returncode} stderr={result.stderr!r}"
+    status = result.stdout.strip()
+    assert status != "500", f"pfblockerng.php array 'pfb' query -> HTTP {status} (expected NOT a TypeError 500)"
     guard.assert_no_growth()
