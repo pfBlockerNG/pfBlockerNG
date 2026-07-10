@@ -7737,7 +7737,10 @@ function tld_analysis() {
 	if (($t_handle = @fopen("{$pfb['dnsbl_tld_data']}", 'r')) !== FALSE) {
 		while (($line = @fgets($t_handle)) !== FALSE) {
 			$line	= rtrim($line, "\x00..\x1F");
-			$tld	= substr($line, strrpos($line, '.') + 1);
+			$dot	= strrpos($line, '.');
+			// issue #1068: a dot-less line keys under its own full value
+			// (FALSE + 1 would substr off the first char)
+			$tld	= ($dot === FALSE) ? $line : substr($line, $dot + 1);
 
 			if (!empty($tld)) {
 				if (!isset($tlds[$tld]) || !is_array($tlds[$tld])) {
