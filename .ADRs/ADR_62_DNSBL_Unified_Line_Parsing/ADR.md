@@ -14,6 +14,13 @@
   accepted design loads two feed rows, changes only the sibling (forcing the rebuild), and
   proves the unchanged row's staged old-dialect `.txt` is consumed as-is (staged domain blocked,
   original domain released, sibling re-ingested, stale `.abp` marker swept).
+  PR #1107 review revision (2026-07-10, post-acceptance, pre-merge — parallel Sonnet 5/Opus
+  4.8/Fable 5 adversarial reviews + CodeRabbit + Copilot): delta **D6** enumerated (plain-feed
+  `||<IP>^` → DNSBLIP, previously silently dropped), and the capture predicate gained the
+  cosmetic-prefix guard + `//`-comment carve-out (see "Capture-scope refinements" under the
+  delta table) fixing a fail-open class the original unanchored `##` substring capture
+  introduced (a hosts line's `` ## `` inline comment / a CSV row's `#`-fragment URL silently
+  lost their blocks) — corpus-pinned on both sides, red→green executed.
 
   **As-built summary (Phase 7, 2026-07-10):**
   - **Delta table (§2), the user-facing behaviour changes for the next release's notes:** D1 —
@@ -267,6 +274,19 @@ Anything outside this table is a regression (§7 criterion 1/3).
 | D3 | `[…]`-non-IPv6 and `##…` lines (any feed) | plain path error-logs them (#1004) | skipped/captured silently | diagnostics-only; the parse-error log loses noise, not signal |
 | D4 | element-hiding lines in a **permit-mode** feed (ADR-31) | `#`-truncation can extract a domain → accidental band-2 **allow** | captured verbatim → the permit loop skips ABP-shaped lines; captured `##` lines are skipped by Python | accidental allows from cosmetic rules are a defect, not a behaviour to preserve |
 | D5 | `.txt` line counts / "No Domains Found" emptiness check | counts reflect extraction results | newly captured verbatim lines count where drops did before (small shift) | counts are a UI statistic, not a blocking contract |
+| D6 | `\|\|<IP>^` ABP network anchor in a feed that was *never* ABP-classified (DNSBL-IP enabled) | ADR-21 verbatim capture → `parse_abp` returns `None` for IP anchors → the IP **vanishes** (neither DNS-blocked nor firewall-aliased) | `pfb_dnsbl_abp_extract_ip()` runs before the capture for every feed → the IP lands in the DNSBLIP firewall alias | the unconditional extract-first order is *forced* by Semantics #2 (an order swap would drop former-ABP feeds' anchors from DNSBLIP); the feed author plainly intended the IP handled, and silently vanishing was the defect (PR #1107 review) |
+
+**Capture-scope refinements (PR #1107 review; both predicates, corpus-pinned):** the
+element-hiding capture requires everything before the *first* marker to be an ABP cosmetic
+domain-list prefix (`[A-Za-z0-9._,~*-]`; empty = generic rule) — so a hosts line's mid-line
+`` ## `` inline comment, a `#`-led comment mentioning `##`, and a CSV row carrying a
+`#`-fragment URL all keep their plain-path handling (D2's "Today" column applies only to
+genuinely ABP-shaped lines, and the `#`-classifier's side effects stay reachable, Semantics
+item 6). A line whose first marker sits at position 0 (e.g. an all-`#` banner) is still captured —
+a documented latent edge, harmless today. `//`-led lines are comments by feed convention and
+are never captured as `/re/` regex rules (on `origin/devel` a *header-classified* ABP feed sent
+a `//path/` line to `parse_abp` as a live regex; that accidental class is dropped with the
+classifier — cosmetically a sub-case of D1's "former-ABP feeds re-type" rule).
 
 ### Semantics that MUST be preserved (the contract — pin with tests before any swap)
 
@@ -274,9 +294,10 @@ Anything outside this table is a regression (§7 criterion 1/3).
    the set of domains loaded into the DNSBL block dicts (and their log/exact-vs-wildcard
    classification) matches `origin/devel` exactly, except where a delta row applies — proven by
    the Phase-1 corpus oracle, before any wiring change.
-2. **Byte-identical firewall IP set.** The DNSBLIP `$domain_data_ip`/`_ip6` set per feed is
-   unchanged (IP extraction stays in PHP, §1.4) — including ABP-anchored IPs and bracketed
-   IPv6 literals.
+2. **Byte-identical firewall IP set, modulo D6.** The DNSBLIP `$domain_data_ip`/`_ip6` set per
+   feed is unchanged (IP extraction stays in PHP, §1.4) — including ABP-anchored IPs and
+   bracketed IPv6 literals — except the D6 addition (a plain feed's `||<IP>^` anchor, which
+   `origin/devel` silently dropped, now collects).
 3. **Bracketed IPv6 is never skipped as a comment** (Decision 4): `[2604:2dc0::]` collects as
    an IP; only a non-IPv6 `[…]` is dropped.
 4. **ABP rule semantics preserved for ABP-shaped lines:** `||`, `@@` allow, `/regex/`,

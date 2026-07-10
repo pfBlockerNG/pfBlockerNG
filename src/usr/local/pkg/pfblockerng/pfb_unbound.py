@@ -3924,6 +3924,9 @@ def _dnsbl_parse_abp_regex(stripped: str) -> tuple[str, str, str] | None:
     return kind, inner, opts_str
 
 
+_DNSBL_ABP_COSMETIC_PREFIX_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._,~*-")
+
+
 def _dnsbl_is_abp_rule_line(line: str) -> bool:
     """Capture guard: should ``build()`` route ``line`` to ``parse_abp()``?
 
@@ -3931,18 +3934,25 @@ def _dnsbl_is_abp_rule_line(line: str) -> bool:
     row for row -- ``||``/``@@`` anchors, the element-hiding marker family,
     and the ``/regex/`` closing-slash shape (mirroring, not calling,
     ``_dnsbl_parse_abp_regex``: PHP's own predicate is a structural
-    length/marker check, not a full parse -- e.g. bare ``//`` capture=True
-    even though ``_dnsbl_parse_abp_regex('//')`` is None, matching PHP's own
-    capture-vs-accept split). NOT a parser: a captured line can still make
-    ``parse_abp()`` return ``None`` (e.g. bare ``@@``/``||`` -- structural
-    capture, not final accept). A bare domain line is deliberately FALSE
-    (ADR-62 delta D1).
+    length/marker check, not a full parse). NOT a parser: a captured line can
+    still make ``parse_abp()`` return ``None`` (e.g. bare ``@@``/``||`` --
+    structural capture, not final accept). A bare domain line is deliberately
+    FALSE (ADR-62 delta D1). The element-hiding branch requires everything
+    before the FIRST marker to be an ABP cosmetic domain-list prefix
+    ([A-Za-z0-9._,~*-]; empty = generic rule) so a mid-line `` ## `` inline
+    comment, a ``#``-led comment mentioning ``##``, or a CSV row carrying a
+    ``#``-fragment URL keeps its plain-path handling. ``//``-led lines are
+    comments by feed convention, never ``/re/`` regex rules.
     """
     if line.startswith("||") or line.startswith("@@"):
         return True
-    if "#" in line and any(marker in line for marker in _DNSBL_ELEMENT_HIDING_MARKERS):
-        return True
-    if line.startswith("/"):
+    if "#" in line:
+        positions = [p for p in (line.find(m) for m in _DNSBL_ELEMENT_HIDING_MARKERS) if p != -1]
+        if positions:
+            first = min(positions)
+            if first == 0 or all(c in _DNSBL_ABP_COSMETIC_PREFIX_CHARS for c in line[:first]):
+                return True
+    if line.startswith("/") and not line.startswith("//"):
         if line.endswith("/") and len(line) > 1:
             return True
         marker = line.rfind("/$")

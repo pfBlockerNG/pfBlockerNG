@@ -41,7 +41,9 @@ final class Adr62TldAnalysisCorpusTest extends TestCase
 		// run's residue and restore it afterward.
 		$this->hadTlds = array_key_exists('tlds', $GLOBALS);
 		$this->originalTlds = $GLOBALS['tlds'] ?? null;
-		unset($GLOBALS['tlds']);
+		// Seed an empty array (never unset): tld_analysis()'s master-TLD loader
+		// dereferences $tlds[$tld] and warns on a null global (PR #1107 review).
+		$GLOBALS['tlds'] = array();
 
 		$this->tmp = sys_get_temp_dir() . '/adr62_tld_' . uniqid('', true);
 		mkdir("{$this->tmp}/dnsbl", 0777, true);

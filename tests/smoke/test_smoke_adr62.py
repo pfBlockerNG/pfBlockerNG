@@ -163,19 +163,26 @@ def test_adr62_mixed_plain_feed_all_block_delta_d2(deployed_vm: SmokeVM, client_
     hosts_dom = h.unique_domain("adr62r3host")
     anchor_dom = h.unique_domain("adr62r3anchor")
     regex_dom = h.unique_domain("adr62r3rx")
+    inline_dom = h.unique_domain("adr62r3inline")
     regex_line = "/^" + regex_dom.replace(".", "\\.") + "$/"
-    body = "\n".join([f"0.0.0.0 {hosts_dom}", f"||{anchor_dom}^", regex_line]) + "\n"
+    # The ' ## ' inline-comment row guards the PR #1107 fail-open class: an
+    # unanchored '##' capture diverted this line to parse_abp (None) and
+    # silently LOST the block; the cosmetic-prefix guard keeps it plain-path.
+    body = (
+        "\n".join([f"0.0.0.0 {hosts_dom}", f"||{anchor_dom}^", regex_line, f"0.0.0.0 {inline_dom} ## inline comment"])
+        + "\n"
+    )
     feed_url = h.write_local_feed(deployed_vm, "smoke_adr62_row3.txt", body)
     spec = h.DnsblCase(aliasname="adr62row3", feed_url=feed_url, header="adr62row3", mode=h.DnsblMode.VIP)
 
-    for name in (hosts_dom, anchor_dom, regex_dom):
+    for name in (hosts_dom, anchor_dom, regex_dom, inline_dom):
         before = h.dns_probe_client(client_vm, name, "A")
         assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
         assert not h.is_vip(before), f"{name} unexpectedly VIP-blocked before any feed: {before}"
 
     with h.CaseContext(deployed_vm, spec):
         h.unblock_egress()
-        for name in (hosts_dom, anchor_dom, regex_dom):
+        for name in (hosts_dom, anchor_dom, regex_dom, inline_dom):
             h.flush_unbound_name(deployed_vm, name)
             ans = h.dns_probe_client_until(client_vm, name, h.is_vip)
             assert not h.resolves_to(ans, STUB_DNS_A), f"{name} still resolving after the mixed feed loaded: {ans}"
@@ -209,7 +216,8 @@ def test_adr62_bracketed_ipv6_dnsblip_vs_adblock_marker(deployed_vm: SmokeVM, cl
     """
     domain = h.unique_domain("adr62r4dom")
     ipv6_lit = "2001:db8:aaaa:bbbb::"  # RFC 3849 documentation range
-    body = "\n".join([h.ABP_HEADER, f"[{ipv6_lit}]", domain]) + "\n"
+    ipv4_anchor = "192.0.2.77"  # RFC 5737; delta D6: plain-feed ||<IP>^ now collects
+    body = "\n".join([h.ABP_HEADER, f"[{ipv6_lit}]", f"||{ipv4_anchor}^", domain]) + "\n"
     feed_url = h.write_local_feed(deployed_vm, "smoke_adr62_row4.txt", body)
     spec = h.DnsblCase(
         aliasname="adr62row4",
@@ -233,6 +241,13 @@ def test_adr62_bracketed_ipv6_dnsblip_vs_adblock_marker(deployed_vm: SmokeVM, cl
         )
         assert not any("Adblock" in m for m in v6_members), (
             f"the '[Adblock Plus 2.0]' header line leaked into pfB_DNSBLIP_v6 as a member: {v6_members}"
+        )
+
+        # Delta D6 (ADR §2, PR #1107 review): a plain feed's ||<IPv4>^ anchor
+        # collects into the DNSBLIP v4 alias (origin/devel silently dropped it).
+        v4_members = h.wait_pfctl_table(deployed_vm, "pfB_DNSBLIP_v4")
+        assert h.member_present(v4_members, ipv4_anchor), (
+            f"plain-feed ABP IP anchor ||{ipv4_anchor}^ not collected into pfB_DNSBLIP_v4 (delta D6): {v4_members}"
         )
 
 
