@@ -446,12 +446,22 @@ def test_cosmetic_prefix_guard_matches_php_row_for_row() -> None:
         "//cdn.example.com/ads/",
         "//",
         "@stray.example",  # single-@ yHost prefix, not an '@@' allow anchor
+        # issue #1067: a leading comma is never valid ABP syntax (an empty first
+        # cosmetic domain-list entry) -- left uncaught, a comma-first verbatim
+        # capture collides with the plain-CSV dialect on the read side.
+        ",a,b,c,d##x",
+        ",example.com,example.org##.ad",
+        ",a,,1,RealFeed,x##y",  # crafted to mimic the plain-CSV field shape
+        ",||x^",
+        ",",
+        ",,##x",
     ]
     capturable = [
         "####################",  # marker at pos 0: generic-rule shape (documented latent)
         "##.ad",
         "example.com##.ad",
         "a.com,b.com##.ad",
+        "example.com,example.org##.ad",  # comma INSIDE the cosmetic prefix stays valid
         "~ex.com##.ad",
         "EXAMPLE.com##.ad",
         "/re/",

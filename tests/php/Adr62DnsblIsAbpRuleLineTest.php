@@ -61,6 +61,15 @@ final class Adr62DnsblIsAbpRuleLineTest extends TestCase
 			'comment with trailing slash'         => ['//cdn.example.com/ads/', false],
 			'bare double slash'                   => ['//', false],
 			'yhost @-prefix line'                 => ['@stray.example', false],
+			// issue #1067: a leading comma is never valid ABP syntax (an empty first
+			// cosmetic domain-list entry) -- left uncaught, a comma-first verbatim
+			// capture collides with the plain-CSV dialect on the read side.
+			'comma-prefixed cosmetic, 4 commas'      => [',a,b,c,d##x', false],
+			'comma-prefixed cosmetic domain list'    => [',example.com,example.org##.ad', false],
+			'comma-prefixed, mimics CSV field shape' => [',a,,1,RealFeed,x##y', false],
+			'comma-prefixed network anchor'          => [',||x^', false],
+			'bare comma'                             => [',', false],
+			'comma-prefixed, marker at position 1'   => [',,##x', false],
 		];
 	}
 

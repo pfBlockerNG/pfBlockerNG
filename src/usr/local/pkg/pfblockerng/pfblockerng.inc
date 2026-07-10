@@ -6696,8 +6696,16 @@ function pfb_dnsbl_is_skippable_control_line(string $line): bool {
 // ' ## ' inline comment (hosts dialect), a '#'-led comment mentioning '##', or a CSV row
 // with a '#'-fragment URL is NOT a cosmetic rule and must keep its plain-path handling
 // (the '#'-classifier's side effects included). '//'-led lines are comments by feed
-// convention, never '/re/' regex rules. Kept in lockstep with _dnsbl_is_abp_rule_line().
+// convention, never '/re/' regex rules. A leading ',' is never valid ABP syntax (empty
+// first cosmetic domain-list entry), excluded up front. Kept in lockstep with
+// _dnsbl_is_abp_rule_line().
 function pfb_dnsbl_is_abp_rule_line(string $line): bool {
+	// issue #1067: a leading comma is never valid ABP syntax (empty first cosmetic
+	// domain-list entry) -- a comma-first verbatim capture would collide with the
+	// plain CSV dialect downstream.
+	if (str_starts_with($line, ',')) {
+		return FALSE;
+	}
 	if (str_starts_with($line, '||') || str_starts_with($line, '@@')) {
 		return TRUE;
 	}

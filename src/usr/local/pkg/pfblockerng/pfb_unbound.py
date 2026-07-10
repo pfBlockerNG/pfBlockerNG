@@ -3936,8 +3936,15 @@ def _dnsbl_is_abp_rule_line(line: str) -> bool:
     ([A-Za-z0-9._,~*-]; empty = generic rule) so a mid-line `` ## `` inline
     comment, a ``#``-led comment mentioning ``##``, or a CSV row carrying a
     ``#``-fragment URL keeps its plain-path handling. ``//``-led lines are
-    comments by feed convention, never ``/re/`` regex rules.
+    comments by feed convention, never ``/re/`` regex rules. A leading ``,``
+    is never valid ABP syntax (empty first cosmetic domain-list entry) and
+    is excluded up front.
     """
+    # issue #1067: a leading comma is never valid ABP syntax (empty first cosmetic
+    # domain-list entry) -- a comma-first verbatim capture would collide with the
+    # plain CSV dialect downstream.
+    if line.startswith(","):
+        return False
     if line.startswith("||") or line.startswith("@@"):
         return True
     if "#" in line:
