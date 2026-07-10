@@ -1541,12 +1541,16 @@ class TestOperateDnsbl:
         assert dec.dnsbl.is_found is False
 
     def test_stale_generation_write_cannot_extend_a_live_memo(self, monkeypatch: Any) -> None:
-        # issue #1074, writer side: a late _decision_for() call carrying the OLD
+        # issue #1074, writer side: a late _decision_for() call carrying a FOREIGN
         # generation must REPLACE (restamp) the entry, never extend a live one -- and
         # its verdict must then be invisible to a live-generation read.
         self._enable(monkeypatch)
         live_gen = pfb_unbound._snapshot.gen
-        old_gen = live_gen - 1
+        # A REAL generation drawn from the counter, never the live one: live_gen - 1
+        # would collide with the 0 "unstamped" sentinel when this test runs alone,
+        # exercising the wrong case.
+        old_gen = next(pfb_unbound._snapshot_gen)
+        assert old_gen > 0 and old_gen != live_gen
         late = pfb_unbound._decision_for("evil.com", old_gen)
         late.dnsbl = _dnsbl_decision(
             is_found=True, log_type="1", b_type="DNSBL", p_type="Python", feed="F", group="G", b_eval="evil.com"
