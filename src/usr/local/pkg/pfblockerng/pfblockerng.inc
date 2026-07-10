@@ -4891,8 +4891,10 @@ function pfb_ip_preprocess_args(bool $dup_on, bool $agg_on, bool $rep_on): strin
  * then the caller runs the legacy pMax exec afterward over the emitted deny files (today's
  * pMax semantics, unmodified).
  *
- * @param bool $dedup_on    $pfb['dup'] == 'on', already ANDed with $pfb['enable'] == 'on' by
- *                          the caller -- this function knows nothing about pfSense globals.
+ * @param bool $dedup_on    Dedup pass due: $pfb['dup'] == 'on' ANDed by the caller with the
+ *                          feed-changed trigger (repcheck && !save && enable) -- a quiet pass
+ *                          (no IP-Deny snapshot written, no removal) invokes nothing, so the
+ *                          placeholder refill from the closing pass is never truncated away.
  * @param bool $rep_trigger dRep/pRep's shared "changes found" gate: $pfb['repcheck'] &&
  *                          !$pfb['save'] && $pfb['enable'] == 'on'.
  * @param bool $drep_on     $pfb['drep'] == 'on'.
@@ -15844,8 +15846,11 @@ function sync_package_pfblockerng($cron='') {
 					exec("{$pfb['script']} remove x x x {$f_result} {$elog}");
 					// issue #1084: drop each removed header's recompute snapshot too, else it
 					// outlives this removal and feeds the next recompute pass phantom content.
+					// repcheck: a removal must trigger the recompute pass that drops the
+					// header's masterfile rows (memberlist completeness).
 					foreach ($results as $pfb_removed_header) {
 						pfb_ip_recompute_forget_header($pfb_removed_header, $pfb['snapdir'], $pfb['origdir']);
+						$pfb['repcheck'] = TRUE;
 					}
 					$pfb['summary'] = $pfb['remove'] = TRUE;
 					break;
@@ -18259,8 +18264,10 @@ function sync_package_pfblockerng($cron='') {
 											if ($pfbadv) {
 												// Script to Remove failed lists from masterfile
 												exec("{$pfb['script']} remove x x x {$header_esc} {$elog}");
-												// issue #1084: drop the stale recompute snapshot too.
+												// issue #1084: drop the stale recompute snapshot too;
+												// repcheck so the recompute pass rebuilds without it.
 												pfb_ip_recompute_forget_header($header, $pfb['snapdir'], $pfb['origdir']);
+												$pfb['repcheck'] = TRUE;
 											}
 											continue;
 										}
@@ -18636,9 +18643,11 @@ function sync_package_pfblockerng($cron='') {
 								}
 
 								// issue #1084: v6 Deny has no _255/_agg/_rep chain -- the parsed .txt IS
-								// the snapshot the recompute memberlist reads.
+								// the snapshot the recompute memberlist reads. A v6 change must flip
+								// repcheck too (v6 now joins cross-list dedup + the closing pass).
 								if ($pfbadv && $list['vtype'] == '_v6') {
 									pfb_ip_recompute_write_snapshot("{$pfbfolder}/{$header}.txt", $header, $pfb['snapdir'], $pfb['origdir']);
+									$pfb['repcheck'] = TRUE;
 								}
 
 								// Collect updated alias lists ('Reputation' disabled)
@@ -18706,10 +18715,13 @@ function sync_package_pfblockerng($cron='') {
 
 	// issue #1084: batch recompute replaces the incremental duplicate()/dmax/pmax pass.
 	// enable_dup drives a full v4+v6 pass; dedup-off + reputation alone is v4-only; both
-	// off skips recompute (parse output stands) -- see pfb_ip_recompute_matrix().
-	$pfb_rec_matrix = pfb_ip_recompute_matrix(
-		$pfb['dup'] == 'on' && $pfb['enable'] == 'on',
-		$pfb['repcheck'] && !$pfb['save'] && $pfb['enable'] == 'on',
+	// off skips recompute (parse output stands) -- see pfb_ip_recompute_matrix(). The
+	// whole block rides the feed-changed trigger: a quiet pass (no snapshot written, no
+	// removal -- repcheck FALSE) runs no recompute at all.
+	$pfb_rec_trigger = $pfb['repcheck'] && !$pfb['save'] && $pfb['enable'] == 'on';
+	$pfb_rec_matrix  = pfb_ip_recompute_matrix(
+		$pfb['dup'] == 'on' && $pfb_rec_trigger,
+		$pfb_rec_trigger,
 		$pfb['drep'] == 'on',
 		$pfb['prep'] == 'on'
 	);
