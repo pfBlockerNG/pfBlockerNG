@@ -73,7 +73,7 @@ final class Adr62DnsblCollectFeedIpTest extends TestCase
 		$this->assertSame([], $ip6);
 	}
 
-	public function testGuardDiffersFromCandidateMirrorsCsvPonSite(): void
+	public function testGuardDiffersFromCandidateMirrorsPonFeedCsvSite(): void
 	{
 		// the pon-feed CSV site's shape: the family check runs on csvline[0] (here the guard,
 		// 192.0.2.9) but the value collected is csvline[2] (here the candidate,
