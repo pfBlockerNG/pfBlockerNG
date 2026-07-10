@@ -1,20 +1,19 @@
 """issue #1070 -- array-valued $_POST fields must not 500 the settings saves.
 
-Three settings-save handlers passed request fields straight into string
-functions with no scalar coercion; in PHP 8 an array argument
-(``field[]=x``, valid CSRF) throws ``TypeError`` BEFORE the input-errors
-gate -- an HTTP 500 plus a fatal in ``php_error.log``:
+The Sync/IP/General settings handlers passed request fields into string
+functions with no scalar coercion; in PHP 8 an array argument (``field[]=x``,
+valid CSRF) throws ``TypeError`` BEFORE the input-errors gate -- an HTTP 500
+plus a fatal in ``php_error.log``. Two guard layers close the theme:
 
-* ``pfblockerng_sync.php`` rowhelper loop (``varsyncusername-0[]=x`` hit
-  ``preg_match``/``strlen``) -- now rejects non-scalars up front, mirroring
-  the ``hooks.php`` guard;
-* ``pfblockerng_ip.php`` suppression textareas (``explode``/``base64_encode``)
-  -- now rejected as an input error and blanked;
-* ``pfblockerng_general.php`` feed-host allowlist (``trim``) -- now rejected
-  as an input error before the save gate.
+* the shared ``pfb_filter()`` rejects an array as invalid up front, so every
+  ``ON_OFF``/``WORD``/``NUM``-filtered field (the bulk of the sites) is safe
+  in one place;
+* the three fields that bypass ``pfb_filter`` (the sync rowhelper loop, the IP
+  suppression textareas' ``explode``/``base64_encode``, the General allowlist
+  ``trim``) plus the IP ``array_key_exists`` site get inline scalar guards.
 
-Each save must instead respond like any validation failure: HTTP 200, no
-login bounce, and NOT ONE new byte in any candidate ``php_error.log``.
+Each save must respond like any validation failure: HTTP 200, no login
+bounce, and NOT ONE new byte in any candidate ``php_error.log``.
 """
 
 from __future__ import annotations
@@ -75,13 +74,22 @@ def _post_with_array_field(
     guard.assert_no_growth()
 
 
-def test_sync_rowhelper_array_field_rejected_gracefully(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
-    _post_with_array_field(webui, smoke_vm, "/pfblockerng/pfblockerng_sync.php", "varsyncusername-0")
+# (page, field) covering every array-TypeError class the theme spans (issue #1070):
+# the 3 directly-guarded fields (explode/base64/trim), plus representatives of the
+# pfb_filter-routed classes closed by the shared guard -- ON_OFF, WORD, NUM -- and
+# the array_key_exists site. All resolve to the same graceful-reject assertion.
+_ARRAY_FIELD_CASES = [
+    ("/pfblockerng/pfblockerng_sync.php", "varsyncusername-0"),  # rowhelper loop
+    ("/pfblockerng/pfblockerng_sync.php", "varsynctimeout"),  # pfb_filter NUM (pre-loop)
+    ("/pfblockerng/pfblockerng_ip.php", "v4suppression"),  # explode/base64
+    ("/pfblockerng/pfblockerng_ip.php", "enable_dup"),  # pfb_filter ON_OFF
+    ("/pfblockerng/pfblockerng_ip.php", "asn_token"),  # pfb_filter WORD
+    ("/pfblockerng/pfblockerng_ip.php", "pfb_alias_delta_mode"),  # array_key_exists
+    ("/pfblockerng/pfblockerng_general.php", "pfb_feed_internal_allowlist"),  # trim
+    ("/pfblockerng/pfblockerng_general.php", "enable_cb"),  # pfb_filter ON_OFF
+]
 
 
-def test_ip_suppression_array_field_rejected_gracefully(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
-    _post_with_array_field(webui, smoke_vm, "/pfblockerng/pfblockerng_ip.php", "v4suppression")
-
-
-def test_general_allowlist_array_field_rejected_gracefully(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
-    _post_with_array_field(webui, smoke_vm, "/pfblockerng/pfblockerng_general.php", "pfb_feed_internal_allowlist")
+@pytest.mark.parametrize(("page", "field"), _ARRAY_FIELD_CASES)
+def test_array_valued_field_rejected_gracefully(webui: WebUI, smoke_vm: helpers.SmokeVM, page: str, field: str) -> None:
+    _post_with_array_field(webui, smoke_vm, page, field)

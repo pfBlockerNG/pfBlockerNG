@@ -1226,6 +1226,14 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 		}
 	}
 
+	// issue #1070: only the FILE_MIME family consumes an array $input; every other
+	// filter type does scalar string ops (htmlspecialchars/preg_match) below that
+	// PHP 8 TypeErrors on an array, so a crafted array POST ('field[]=x') routed
+	// through pfb_filter would 500 the page. Reject an array as invalid up front.
+	if (is_array($input) && !in_array($type, array(PFB_FILTER_FILE_MIME_COMPARE, PFB_FILTER_FILE_MIME, PFB_FILTER_FILE_MIME_COMPRESSED))) {
+		return $return_type;
+	}
+
 	$result = FALSE;
 	switch ($type) {
 		case PFB_FILTER_HTML:

@@ -254,9 +254,12 @@ if ($_POST) {
 						(array) ($_POST['pfb_agg_types'] ?? array())));
 			PfbConfig::write('pfb_agg_types', implode(',', $agg_types_post));
 
-			// ADR-40: alias-table apply mode (gateway-registered scalar).
-			$delta_mode_post = array_key_exists($_POST['pfb_alias_delta_mode'] ?? '', $options_pfb_alias_delta_mode)
-				? $_POST['pfb_alias_delta_mode']
+			// ADR-40: alias-table apply mode (gateway-registered scalar). issue #1070:
+			// array_key_exists() TypeErrors on an array key, so coerce a crafted
+			// array POST to the 'auto' default via the is_scalar guard.
+			$delta_mode_raw = $_POST['pfb_alias_delta_mode'] ?? '';
+			$delta_mode_post = (is_scalar($delta_mode_raw) && array_key_exists($delta_mode_raw, $options_pfb_alias_delta_mode))
+				? $delta_mode_raw
 				: 'auto';
 			PfbConfig::write('pfb_alias_delta_mode', $delta_mode_post);
 
