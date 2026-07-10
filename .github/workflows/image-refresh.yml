@@ -211,10 +211,11 @@ jobs:
           set -eu
           # Compose the untagged image from the namespace var + per-matrix image_name.
           # Fallback: lowercased owner (GHCR refs MUST be lowercase).
-          # issue #1148: LC_ALL=C tr, not a `case` range — a collating locale
-          # lets [a-z] admit uppercase/accented letters, defeating the guard.
+          # issue #1148: LC_ALL=C tr + '/' sentinel, not a `case` range — a
+          # collating locale lets [a-z] admit uppercase/accented letters, and
+          # an emptiness check would let $(...) strip a trailing newline.
           if [ -z "$MATRIX_IMAGE_NAME" ] || \
-             [ -n "$(printf '%s' "$MATRIX_IMAGE_NAME" | LC_ALL=C tr -d 'a-z0-9._-')" ]; then
+             [ "$(printf '%s/' "$MATRIX_IMAGE_NAME" | LC_ALL=C tr -d 'a-z0-9._-')" != '/' ]; then
             echo "::error::invalid matrix.image_name: '$MATRIX_IMAGE_NAME'"
             exit 1
           fi

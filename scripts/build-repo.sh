@@ -110,9 +110,11 @@ fi
 [ -d "$IN" ] || { echo "build-repo: --in is not a directory: $IN" >&2; exit 1; }
 # The varver becomes a path segment (rm -rf'd + rebuilt) — same safety rule as ABIs.
 # issue #1148: class check via LC_ALL=C tr, not a `case` range — a collating
-# locale lets [a-z] admit uppercase/accented letters, defeating the guard.
+# locale lets [a-z] admit uppercase/accented letters, defeating the guard. The
+# '/' sentinel (outside the class) survives tr, so the remainder is compared
+# against it — an emptiness check would let $(...) strip a trailing newline.
 if [ -z "$VARVER" ] || [ "${VARVER#*..}" != "$VARVER" ] || \
-   [ -n "$(printf '%s' "$VARVER" | LC_ALL=C tr -d 'a-z0-9.-')" ]; then
+   [ "$(printf '%s/' "$VARVER" | LC_ALL=C tr -d 'a-z0-9.-')" != '/' ]; then
     echo "build-repo: unsafe or invalid --varver: '$VARVER' (expect e.g. ce-2.8 / plus-26.03)" >&2
     exit 2
 fi
@@ -192,9 +194,10 @@ done
 # name (${OUT}/${abi}) that is `rm -rf`'d + rebuilt, so `..` / `/` / odd chars could
 # escape $OUT. FreeBSD ABIs look like `FreeBSD:15:amd64` (the `:` is allowed).
 validate_abi() {
-    # issue #1148: LC_ALL=C tr, not a `case` range — see the --varver guard.
+    # issue #1148: LC_ALL=C tr + '/' sentinel, not a `case` range — see the
+    # --varver guard for both traps (locale collation; trailing-newline strip).
     if [ -z "$1" ] || [ "${1#*..}" != "$1" ] || \
-       [ -n "$(printf '%s' "$1" | LC_ALL=C tr -d 'A-Za-z0-9:._+-')" ]; then
+       [ "$(printf '%s/' "$1" | LC_ALL=C tr -d 'A-Za-z0-9:._+-')" != '/' ]; then
         echo "build-repo: unsafe or invalid ABI in package metadata: '$1'" >&2
         exit 1
     fi
