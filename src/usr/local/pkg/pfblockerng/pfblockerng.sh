@@ -977,7 +977,7 @@ pfb_recompute() {
 		fi
 
 		# C2 classify: dMax reuses today's GeoIP loop shape verbatim over just
-		# the offenders (reputation_dmax:1162-1191); a missing mmdblookup/db
+		# the offenders (see reputation_dmax()); a missing mmdblookup/db
 		# bails like reputation_depends -- the actionmap stays empty and C3
 		# applies no reputation this pass. pMax is unconditionally block-only.
 		rec_actionmap="${rec_scratch}/actionmap"
@@ -1036,7 +1036,10 @@ pfb_recompute() {
 			done < "${rec_priority}"
 		fi
 
-		# C3 apply: one windowed pass over the prefix-contiguous stream.
+		# C3 apply: one windowed pass over the prefix-contiguous stream. The
+		# output must exist even when the stream is empty (the awk only
+		# appends), or Stage D's sort aborts an otherwise-valid empty pass.
+		: > "${rec_new_stream}"
 		awk -v actionfile="${rec_actionmap}" -v priofile="${rec_priority}" \
 			-v newstream="${rec_new_stream}" -v matchdir="${pfbmatch}" \
 			-v mexcidr="${rec_matchexemptcidr}" -v mexmem="${rec_matchexemptmembers}" '
@@ -1143,7 +1146,7 @@ pfb_recompute() {
 	: > "${rec_countsfile_new}"
 
 	awk -v denydir="${pfbdeny}" -v dodup="${rec_dedup}" -v priofile="${rec_priority}" \
-		-v masterfileNew="${rec_masterfile_new}" -v mastercatNew="${rec_mastercat_new}" \
+		-v masterfileNew="${rec_masterfile_new}" \
 		-v countsNew="${rec_countsfile_new}" '
 		BEGIN {
 			curalias = ""
@@ -1162,7 +1165,6 @@ pfb_recompute() {
 			cnt[curalias]++
 			if (dodup == "on") {
 				print curalias " " ip >> masterfileNew
-				print ip >> mastercatNew
 			}
 		}
 		END {
@@ -1186,8 +1188,25 @@ pfb_recompute() {
 		return 1
 	fi
 
+	# mastercat derives from the COMPLETED masterfile.new (today's exact
+	# derivation, both families' rows) -- masterfile.new always exists when
+	# dedup=on, so the swap below can never hit a missing .new sibling.
+	if [ "${rec_dedup}" = 'on' ]; then
+		cut -d ' ' -f2 "${rec_masterfile_new}" > "${rec_mastercat_new}"
+		rec_rc=$?
+		if [ "${rec_rc}" -ne 0 ]; then
+			log="recompute [ ${rec_family} ]: mastercat derivation failed; aborting pass, cleaning up partial artifacts"
+			echo "${log}" | tee -a "${errorlog}"
+			while IFS=' ' read -r rec_alias _; do
+				rm -f "${pfbdeny}${rec_alias}.txt.new"
+			done < "${rec_priority}"
+			rm -f "${rec_masterfile_new}" "${rec_mastercat_new}" "${rec_countsfile_new}"
+			return 1
+		fi
+	fi
+
 	# The consolidated exempt-country match file: gated on ccwhite='match'
-	# ALONE (mirrors today's asymmetric gate -- reputation_dmax:1193), even
+	# ALONE (mirrors today's asymmetric gate -- see reputation_dmax()), even
 	# though a 'matchexempt' action can also be reached via ccblack='match'.
 	if [ "${rec_repmode}" = 'dmax' ] && [ "${rec_ccwhite}" = 'match' ] && [ -s "${rec_matchexemptcidr}" ]; then
 		rec_matchdedup_new="${pfbmatch}${rec_matchdedup}.new"
