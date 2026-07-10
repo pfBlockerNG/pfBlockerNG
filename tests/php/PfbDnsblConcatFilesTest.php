@@ -19,6 +19,7 @@ use PHPUnit\Framework\TestCase;
  * uid, unlike a chmod fixture, which root bypasses).
  */
 #[CoversFunction('pfb_dnsbl_concat_files')]
+#[CoversFunction('pfb_dnsbl_concat_write_ok')]
 final class PfbDnsblConcatFilesTest extends TestCase
 {
 	private string $workdir = '';
@@ -130,6 +131,32 @@ final class PfbDnsblConcatFilesTest extends TestCase
 			"1.example.com\n",
 			file_get_contents($dest),
 			'an empty-string source must be skipped, never passed to fopen unguarded'
+		);
+	}
+
+	/**
+	 * The write-outcome predicate must flag a SHORT (partial, non-FALSE) fwrite as a
+	 * failure -- not just a bare FALSE -- so a truncated destination can never advance
+	 * the rebuild bookkeeping as current. A genuine disk-full short write cannot be
+	 * forced deterministically/portably in a unit test (same constraint documented at
+	 * DnsblPrefetchTest::test_write_complete_helper_flags_a_short_write_as_incomplete),
+	 * so this pins the extracted decision predicate directly with fabricated byte counts.
+	 */
+	public function testWriteOkPredicateFlagsShortAndFailedWritesAsIncomplete(): void
+	{
+		$line = "1.example.com\n";
+
+		$this->assertFalse(
+			pfb_dnsbl_concat_write_ok(strlen($line) - 3, $line),
+			'a short byte count must be flagged as an incomplete write'
+		);
+		$this->assertFalse(
+			pfb_dnsbl_concat_write_ok(FALSE, $line),
+			'FALSE must be flagged as an incomplete write'
+		);
+		$this->assertTrue(
+			pfb_dnsbl_concat_write_ok(strlen($line), $line),
+			'an exact full-length write must be flagged as complete'
 		);
 	}
 
