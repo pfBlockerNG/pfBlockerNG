@@ -10336,6 +10336,11 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 					// Attempt 3 Downloads before failing.
 					$hop_ok = FALSE;
 					for ($retries = 1; $retries <= 3; $retries++) {
+						// issue #1072: a failed attempt can leave a partial body in the
+						// file with the write offset at its end; reset so a retry cannot
+						// append and hand off a corrupted concatenation as the download.
+						ftruncate($fhandle, 0);
+						rewind($fhandle);
 						if (curl_exec($ch)) {
 							// Collect remote timestamp.
 							$raw_filetime = curl_getinfo($ch, CURLINFO_FILETIME);
