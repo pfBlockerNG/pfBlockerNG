@@ -216,15 +216,16 @@ class ReferencePipeline:
     # -- classify layer ----------------------------------------------------- #
 
     def _load_tld_master(self) -> None:
-        """Load the public-suffix master, minus blacklisted/excluded TLDs.
+        """Load the public-suffix master, minus blacklisted/single-label-excluded TLDs.
 
         Mirrors PHP's tld_analysis() master-list load loop, which builds
-        tlds[tld][full-suffix]; the TLD blacklist and TLD exclusion remove
-        entries from it.
+        tlds[tld][full-suffix]; the TLD blacklist removes entries from it. A
+        single-label TLD exclusion does too (tld_analysis()'s unset($tlds[$exclude])),
+        but a multi-label exclusion (e.g. "excluded.com") never matches a tld key here
+        -- it stays loaded and is instead force-classified to exact DATA later, in
+        _classify().
         """
         blacklist = {t.strip(".") for t in self.config.get("tld_blacklist", [])}
-        # Exclusions remove the WHOLE-domain key from tlds (tld_analysis()); only
-        # single-label exclusions would match a tld key, but we mirror the unset.
         exclusion_keys = {e.strip(".") for e in self.config.get("tld_exclusion", [])}
         for line in _read_lines("tld_master.txt"):
             suffix = line.strip()
