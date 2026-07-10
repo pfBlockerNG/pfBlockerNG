@@ -6557,9 +6557,8 @@ function pfb_dnsbl_strip_scheme(string $line, bool $strict = FALSE): string|fals
 
 
 // Issue #938: strip a leading UTF-8 BOM (EF BB BF) -- encoding metadata, not content,
-// the same class of noise pfb_text_sanity() strips up front and
-// pfb_dnsbl_is_abp_header() peels per-line (below). Left in place on a feed's first line
-// it defeats the str_starts_with($line, '#') comment check, so a BOM-led '# Title: ...'
+// the same class of noise pfb_text_sanity() strips up front. Left in place on a feed's
+// first line it defeats the str_starts_with($line, '#') comment check, so a BOM-led '# Title: ...'
 // header is treated as data and error-logged instead of skipped as a comment. Strips
 // exactly ONE BOM (a malformed doubled BOM keeps its second copy rather than looping).
 function pfb_dnsbl_strip_bom(string $line): string {
@@ -6627,28 +6626,6 @@ function pfb_dnsbl_scheme_skip_warn($skipped, $header) {
 	if ($skipped > 0) {
 		pfb_logger("\n[ DNSBL ] {$header}: {$skipped} line(s) skipped - strict parsing rejected an invalid scheme or URL path (see DNSBL parse-error log)\n", 1);
 	}
-}
-
-
-// ADR-21: whole-feed ABP header sniff. A line in a feed's leading '!'-comment block
-// that starts (leading whitespace tolerated) with '[Adblock', '[uBlock', or '! Title:'
-// flags the feed as whole-feed ABP ($easylist = TRUE). The three generic prefixes are a
-// SUPERSET of the four legacy magic strings ('[Adblock Plus '/'[Adblock Plus]' -> '[Adblock';
-// '[uBlock Origin' -> '[uBlock'; '! Title: AdGuard' -> '! Title:'), so every feed detected
-// before is still detected. PREFIX match (str_starts_with), NOT the legacy mid-line strpos:
-// a '! Title:' token inside a data line cannot flip the feed. Safe because parse_abp() is a
-// superset parser that still blocks the feed's bare-domain entries (ADR §1.4 / §2.4).
-function pfb_dnsbl_is_abp_header($line) {
-	$hline = ltrim($line);
-	// A UTF-8 BOM on the feed's first line sits before the prefix; ltrim()
-	// does not strip it, so peel it off (the legacy mid-line strpos() matched
-	// regardless of a BOM -- without this a BOM-led header would regress).
-	if (str_starts_with($hline, "\xEF\xBB\xBF")) {
-		$hline = ltrim(substr($hline, 3));
-	}
-	return (str_starts_with($hline, '[Adblock') ||
-		str_starts_with($hline, '[uBlock') ||
-		str_starts_with($hline, '! Title:'));
 }
 
 
@@ -16339,13 +16316,16 @@ function sync_package_pfblockerng($cron='') {
 								// Collect existing list stats
 								$lists_dnsbl_all[]	= "{$row['header']}.txt";
 								$lists_dnsbl_current[]	= "{$row['header']}";
-								// ADR-07: a reused feed isn't re-parsed, so read the
-								// persisted '.abp' marker to carry its format_hint forward.
+								// ADR-62: a reused feed isn't re-parsed; format_hint is always
+								// 'plain' now (Python still tolerates a stale 'abp' hint on
+								// an untouched manifest, Semantics #7) -- sweep any leftover
+								// marker opportunistically.
+								unlink_if_exists("{$pfbfolder}/{$header}.abp");
 								// ADR-31: delegate to pfb_feed_manifest_row() (deny default).
 								// ADR-31: pass $mode derived from per-row 'action' (above).
 								$pfb_py_feeds[]		= pfb_feed_manifest_row(
 									$header, $alias, $logging_type,
-									file_exists("{$pfbfolder}/{$header}.abp") ? 'abp' : 'plain',
+									'plain',
 									$custom ? 'user' : 'feed',
 									$mode);
 								$file_esc		= escapeshellarg("{$pfbfolder}/{$header}.txt");
@@ -16412,12 +16392,6 @@ function sync_package_pfblockerng($cron='') {
 									$liteparser = TRUE;
 								}
 
-								// ADR-07: ABP/EasyList feeds are header-sniffed (below) and
-								// tagged format_hint='abp'; their RAW lines pass through to the
-								// Python parser. The old PHP lite parser ($e_replace token-strip)
-								// is deleted -- $easylist now only flags the feed as ABP.
-								$easylist = $validate_header = FALSE;
-
 								$run_once = $csv_parser = FALSE;
 								$csv_type = '';
 								$ipcount = $ip_cnt = $ip_cnt6 = 0;
@@ -16444,23 +16418,6 @@ function sync_package_pfblockerng($cron='') {
 											// harmless (Python's parser is byte-oriented too).
 											$line = pfb_dnsbl_strip_bom($line);
 
-											// Validate EasyList/AdBlock/uBlock/ADGuard Feeds.
-											// ADR-21: broadened to the generic ABP header
-											// convention ('[Adblock'/'[uBlock'/'! Title:'),
-											// a superset of the four legacy magic strings.
-											if (!$validate_header) {
-												if (pfb_dnsbl_is_abp_header($line)) {
-													$easylist = $validate_header = TRUE;
-													continue;
-												}
-												elseif (str_starts_with($line, '!')) {
-													continue;
-												}
-												else {
-													$validate_header = TRUE;
-												}
-											}
-
 											// Remove any '^M' characters
 											if (strpos($line, "\r") !== FALSE) {
 												$line = rtrim($line, "\x00..\x1F");
@@ -16469,126 +16426,98 @@ function sync_package_pfblockerng($cron='') {
 											// Remove invalid charaters
 											$line = trim($line, " \t\n\r\0\x0B\xC2\xA0");
 
-											// ADR-62 Decision 2: any self-identifying ABP shape
-											// (||/@@ anchors, /regex/[$opts], ##-family) in a
-											// non-ABP feed, captured BEFORE CSV autodetection and
-											// URL/path/'?'-query stripping (which would otherwise
-											// truncate/mangle them) and written VERBATIM to the
-											// '.bk'/'.txt' staging file; the manifest builder
-											// copies them to the '.raw' and Python's build() routes
-											// them to parse_abp() (never a domain/IP/path anchor ->
-											// silently skipped). $easylist feeds already pass ABP
-											// lines through verbatim below, so plain feeds only.
-											if (!$easylist && pfb_dnsbl_is_abp_rule_line($line)) {
+											// ADR-06 fact 7 / ADR-62: an ABP network anchor or
+											// hosts-line target that is itself an IP address is
+											// pulled to the firewall alias here -- never passed to
+											// Python (no double-handling, no leak) -- checked BEFORE
+											// the generic verbatim capture below.
+											if ($pfb['dnsbl_ip'] != 'Disabled') {
+												$abp_ip = pfb_dnsbl_abp_extract_ip($line);
+												if ($abp_ip !== '') {
+													if (pfb_dnsbl_collect_feed_ip($abp_ip, $abp_ip, $custom, $domain_data_ip, $domain_data_ip6)) {
+														$pfb['updateip'] = TRUE;
+														$ipcount++;
+													}
+													continue;
+												}
+											}
+
+											// ADR-62 Decision 2: any self-identifying ABP shape (||/@@
+											// anchors, /regex/[$opts], ##-family) is captured BEFORE
+											// CSV autodetection and URL/path/'?'-query stripping (which
+											// would otherwise truncate/mangle them) and written VERBATIM
+											// to the '.bk'/'.txt' staging file; the manifest builder
+											// copies it to the '.raw' and Python's build() routes it to
+											// parse_abp() (never a domain/IP/path anchor -> silently
+											// skipped).
+											if (pfb_dnsbl_is_abp_rule_line($line)) {
 												$domain_data = "{$line}\n";
 												@fwrite($dhandle, $domain_data);
 												continue;
 											}
 
-											if ($easylist) {
-												// ADR-07: the PHP $easylist lite parser is
-												// DELETED. ABP feeds are tagged format_hint='abp'
-												// and their RAW lines are passed through verbatim
-												// to the Python parser (parse_abp), which is now
-												// the one DNS-only ABP parser (@@/regex/$important/
-												// $badfilter, not just ||domain^). PHP no longer
-												// extracts domains from ABP feeds.
-												//
-												// DNSBL-IP coexistence (ADR-06 fact 7): the firewall
-												// IP pass still runs over ABP feeds -- pull any
-												// ABP-anchored / hosts IP (||1.2.3.4^, <ip> <ip>)
-												// to DNSBLIP_v4/_v6; Python skips IP-valued anchors.
-												if ($pfb['dnsbl_ip'] != 'Disabled') {
-													$abp_ip = pfb_dnsbl_abp_extract_ip($line);
-													if ($abp_ip !== '') {
-														if (pfb_dnsbl_collect_feed_ip($abp_ip, $abp_ip, $custom, $domain_data_ip, $domain_data_ip6)) {
-															$pfb['updateip'] = TRUE;
-															$ipcount++;
-														}
-														// IP -> firewall only; do not pass IP anchors
-														// to Python (no double-handling, no leak).
-														continue;
-													}
+											// If 'tab' character found, replace with whitespace
+											if (strpos($line, "\x09") !== FALSE) {
+												$line = str_replace("\x09", ' ', $line);
+											}
+
+											// If '%20' found, remove.
+											if (strpos($line, '%20') !== FALSE) {
+												$line = str_replace('%20', '', $line);
+											}
+
+											// Remove comment lines and special format considerations. Checked
+											// BEFORE the generic '!'/'//' skip below since these side effects
+											// (hpHosts end marker, Spamhaus format, h3x CSV header) must run.
+											if (str_starts_with($line, '#')) {
+												$pfb_hash_class = pfb_dnsbl_hash_line_classify($line);
+												// Exit (hpHosts) when end of domain names found.
+												if ($pfb_hash_class['stop']) {
+													break;
 												}
 
-												// Skip ABP comment / control lines so the raw feed
-												// passed to Python is dense (Python skips them too).
-												if ($line === '' || str_starts_with($line, '!') ||
-												    str_starts_with($line, '[')) {
-													continue;
+												// Spamhaus format validation
+												if ($pfb_hash_class['rev_format']) {
+													$rev_format = TRUE;
 												}
 
-												// Pass the RAW ABP line through to Python verbatim
-												// (NO domain extraction). The manifest writer copies
-												// 'abp' feed .txt lines into the per-feed raw as-is.
-												@fwrite($dhandle, "{$line}\n");
-												$domain_data = "{$line}\n";
+												if ($pfb_hash_class['csv_type'] !== NULL) {
+													$csv_type	= $pfb_hash_class['csv_type'];
+												}
+												if ($pfb_hash_class['csv_parser']) {
+													$csv_parser	= TRUE;
+												}
 												continue;
 											}
-											else {
-												// If 'tab' character found, replace with whitespace
-												if (strpos($line, "\x09") !== FALSE) {
-													$line = str_replace("\x09", ' ', $line);
-												}
 
-												// If '%20' found, remove.
-												if (strpos($line, '%20') !== FALSE) {
-													$line = str_replace('%20', '', $line);
-												}
+											// ADR-62 Decision 4: universal control-line skip
+											// (blank / '!' / '//' / non-IPv6 '[...]'); the '#'
+											// classifier above already ran (side effects). A
+											// bracketed IPv6 literal is never skipped here --
+											// the helper consults pfb_dnsbl_unbracket_ip6().
+											if (pfb_dnsbl_is_skippable_control_line($line)) {
+												continue;
+											}
 
-												// Remove comment lines and special format considerations. Checked
-												// BEFORE the generic '!'/'//' skip below since these side effects
-												// (hpHosts end marker, Spamhaus format, h3x CSV header) must run.
-												if (str_starts_with($line, '#')) {
-													$pfb_hash_class = pfb_dnsbl_hash_line_classify($line);
-													// Exit (hpHosts) when end of domain names found.
-													if ($pfb_hash_class['stop']) {
-														break;
-													}
+											// Remove any 'End of line' comments (Some contains commas)
+											if (strpos($line, ' #') !== FALSE) {
+												$line = strstr($line, ' #', TRUE);
+											}
 
-													// Spamhaus format validation
-													if ($pfb_hash_class['rev_format']) {
-														$rev_format = TRUE;
-													}
+											// Default per line so $csvline is defined for the count()/index reads below;
+											// str_getcsv overwrites it whenever the CSV path runs. Behaviour-preserving.
+											$csvline = array();
 
-													if ($pfb_hash_class['csv_type'] !== NULL) {
-														$csv_type	= $pfb_hash_class['csv_type'];
-													}
-													if ($pfb_hash_class['csv_parser']) {
-														$csv_parser	= TRUE;
-													}
-													continue;
-												}
-
-												// ADR-62 Decision 4: universal control-line skip
-												// (blank / '!' / '//' / non-IPv6 '[...]'); the '#'
-												// classifier above already ran (side effects). A
-												// bracketed IPv6 literal is never skipped here --
-												// the helper consults pfb_dnsbl_unbracket_ip6().
-												if (pfb_dnsbl_is_skippable_control_line($line)) {
-													continue;
-												}
-
-												// Remove any 'End of line' comments (Some contains commas)
-												if (strpos($line, ' #') !== FALSE) {
-													$line = strstr($line, ' #', TRUE);
-												}
-
-												// Default per line so $csvline is defined for the count()/index reads below;
-												// str_getcsv overwrites it whenever the CSV path runs. Behaviour-preserving.
-												$csvline = array();
-
-												// Convert CSV line into array
-												if ($csv_parser) {
+											// Convert CSV line into array
+											if ($csv_parser) {
+												$csvline = str_getcsv($line, ',', '"', '"');
+											}
+											elseif (!$run_once) {
+												if (substr_count($line, ',') >= 2) {
 													$csvline = str_getcsv($line, ',', '"', '"');
+													$csv_parser = TRUE;
 												}
-												elseif (!$run_once) {
-													if (substr_count($line, ',') >= 2) {
-														$csvline = str_getcsv($line, ',', '"', '"');
-														$csv_parser = TRUE;
-													}
-													$run_once = TRUE;
-												}
+												$run_once = TRUE;
 											}
 
 											// Remove blank lines
@@ -16713,30 +16642,27 @@ function sync_package_pfblockerng($cron='') {
 											}
 											$line = trim($line);
 
-											if (!$easylist) {
+											// Typical Host Feed format - Remove characters before space
+											if (!$rev_format && strpos($line, ' ') !== FALSE) {
+												$line = trim(strstr($line, ' ', FALSE));
+											}
 
-												// Typical Host Feed format - Remove characters before space
-												if (!$rev_format && strpos($line, ' ') !== FALSE) {
-													$line = trim(strstr($line, ' ', FALSE));
-												}
+											// Remove characters after space
+											if (strpos($line, ' ') !== FALSE) {
+												$line = strstr($line, ' ', TRUE);
+											}
 
-												// Remove characters after space
-												if (strpos($line, ' ') !== FALSE) {
-													$line = strstr($line, ' ', TRUE);
-												}
+											// Determine if line contains only an alpha-numeric Domain name
+											if (!$liteparser) {
 
-												// Determine if line contains only an alpha-numeric Domain name
-												if (!$liteparser) {
-
-													$lite = FALSE;
-													if (strpos($line, '.') !== FALSE &&
-													    ctype_alnum(str_replace('.', '', $line))) {
-														$lite = TRUE;
-													}
-												}
-												else {
+												$lite = FALSE;
+												if (strpos($line, '.') !== FALSE &&
+												    ctype_alnum(str_replace('.', '', $line))) {
 													$lite = TRUE;
 												}
+											}
+											else {
+												$lite = TRUE;
 											}
 
 											if (!$lite) {
@@ -16939,24 +16865,18 @@ function sync_package_pfblockerng($cron='') {
 								$pfb['domain_update']	= $pfb['aliasupdate'] = $pfb['summary'] = TRUE;
 								$lists_dnsbl_all[]	= "{$row['header']}.txt";
 								$lists_dnsbl_current[]	= "{$row['header']}";
-								// ADR-07: tag ABP feeds 'abp' so the manifest writer passes
-								// their RAW lines through to the Python parser (parse_abp); all
-								// other feeds stay 'plain' (PHP-extracted bare domains).
 								// ADR-31: delegate to pfb_feed_manifest_row() (deny default).
 								// ADR-31: pass $mode derived from per-row 'action' (above).
 								$pfb_py_feeds[]		= pfb_feed_manifest_row(
 									$header, $alias, $logging_type,
-									$easylist ? 'abp' : 'plain',
+									'plain',
 									$custom ? 'user' : 'feed',
 									$mode);
 
-								// ADR-07: persist the ABP marker so a future reuse build (which
-								// does not re-parse the feed) carries the format_hint forward.
-								if ($easylist) {
-									@touch("{$pfbfolder}/{$header}.abp");
-								} else {
-									unlink_if_exists("{$pfbfolder}/{$header}.abp");
-								}
+								// ADR-62: the '.abp' marker is retired -- sweep any leftover
+								// from a pre-upgrade build (format_hint is always 'plain' now;
+								// Python still tolerates a stale manifest naming 'abp').
+								unlink_if_exists("{$pfbfolder}/{$header}.abp");
 
 								// Rename newly downloaded file to final location
 								if (file_exists("{$pfbfolder}/{$header}.bk")) {

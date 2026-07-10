@@ -7,7 +7,7 @@
 	{"header": "csv_pon",             "group": "grp_csv",    "log": "1", "format": "plain", "provenance": "feed", "row": "CSV type pon (9-col, post-extraction)"},
 	{"header": "csv_et",              "group": "grp_csv",    "log": "1", "format": "plain", "provenance": "feed", "row": "CSV type et (3-col, post-extraction)"},
 	{"header": "custom_list",         "group": "grp_custom", "log": "1", "format": "plain", "provenance": "user", "row": "custom (liteparser) list"},
-	{"header": "abp_feed",            "group": "grp_abp",    "log": "1", "format": "abp",   "provenance": "feed", "row": "ABP/EasyList feed: ||, @@||, /re/, @@/re/, $important, $badfilter, ##-element-hiding (skip), bare-domain (delta D1)"},
+	{"header": "abp_feed",            "group": "grp_abp",    "log": "1", "format": "plain", "provenance": "feed", "row": "former-ABP feed post-classifier-deletion: ||, @@||, /re/, @@/re/, $important, $badfilter, ##-element-hiding (skip) verbatim-captured; bare registrable-parent + bare deeper-sub (delta D1, plain classify() path)"},
 	{"header": "mixed_plain",         "group": "grp_mixed",  "log": "1", "format": "plain", "provenance": "feed", "row": "mixed plain feed: ADR-21 stray ||anchor + delta D2 verbatim capture (##, /re/, /re/$important, @@/re/)"},
 	{"header": "permit_feed",         "group": "grp_permit", "log": "1", "format": "plain", "provenance": "feed", "mode": "permit", "row": "permit-mode feed (ADR-31): host->allow + delta D4 ##-verbatim capture skipped by the permit loop"},
 	{"header": "oversized_feed",      "group": "grp_edge",   "log": "1", "format": "plain", "provenance": "feed", "row": "oversized/#752 undotted 254-char name (KNOWN PHP-accepts/Python-rejects divergence)"},

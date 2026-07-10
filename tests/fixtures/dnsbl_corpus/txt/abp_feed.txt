@@ -5,4 +5,5 @@
 ||important.abp.example^$important
 ||badf.abp.example^$badfilter
 some.abp.example##.ad-banner
-bare-domain.abp.example
+,abproot.example,,1,abp_feed,grp_abp
+,bare-domain.abp.example,,1,abp_feed,grp_abp

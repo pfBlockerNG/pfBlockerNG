@@ -6,23 +6,20 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * ADR-62 Phase 1 -- byte-identity corpus, TLD-analysis surface (c).
+ * ADR-62 -- byte-identity corpus, TLD-analysis surface (c).
  *
- * Drives the REAL tld_analysis() (inc:~7652, standalone -- reads
- * "{dnsbl_file}.raw" directly, independent of the download loop) over a
- * committed pfb_dnsbl.raw fixture (tests/fixtures/dnsbl_corpus/tld/) built
- * from the plain 6-col dialect + a persisted feed carrying the CURRENT '.abp'
- * marker (inc:16910-16911), and asserts the classified pfb_py_data/pfb_py_zone
+ * Drives the REAL tld_analysis() (standalone -- reads "{dnsbl_file}.raw"
+ * directly, independent of the download loop) over a committed
+ * pfb_dnsbl.raw fixture (tests/fixtures/dnsbl_corpus/tld/) built from the
+ * plain 6-col dialect, and asserts the classified pfb_py_data/pfb_py_zone
  * output is byte-identical to the committed golden fixtures.
  *
- * Pins: 2-label domain -> unconditional ZONE (inc:~7865-7867); a 3-label
- * domain whose 2-label suffix is a known public suffix -> ZONE at the whole
- * domain (tld_search, inc:~7639); a deeper sub-domain with NO known-suffix
- * match -> DATA (transparent); an ABP-feed's verbatim lines are SKIPPED via
- * the CURRENT '.abp'-marker-gated unconditional-empty-feed-column rule
- * (inc:7804-7826) -- issue #1060's latent gate bug (only fires when
- * $abp_feeds is non-empty) is pinned here as TODAY's behaviour; Phase 5 fixes
- * it structurally (ADR.md SS1.5).
+ * Pins: 2-label domain -> unconditional ZONE; a 3-label domain whose 2-label
+ * suffix is a known public suffix -> ZONE at the whole domain (tld_search);
+ * a deeper sub-domain with NO known-suffix match -> DATA (transparent); any
+ * non-comma-first line (a verbatim-captured ABP/regex shape) is skipped by
+ * prefix (issue #1060/PR fix); a comma-first row with an empty/unset feed
+ * column is skipped UNCONDITIONALLY -- no '.abp'-marker mechanism remains.
  */
 #[CoversFunction('tld_analysis')]
 final class Adr62TldAnalysisCorpusTest extends TestCase
@@ -55,9 +52,6 @@ final class Adr62TldAnalysisCorpusTest extends TestCase
 		$raw = file_get_contents(self::FIXTURE_DIR . '/pfb_dnsbl_plain.txt')
 			. file_get_contents(self::FIXTURE_DIR . '/pfb_dnsbl_abp.txt');
 		file_put_contents("{$this->tmp}/pfb_dnsbl.raw", $raw);
-		// The ABP feed's persisted marker (inc:16910-16911) -- glob-matched by
-		// tld_analysis()'s CURRENT skip gate (inc:7804-7807).
-		touch("{$this->tmp}/dnsbl/tld_abp_feed.abp");
 
 		$GLOBALS['pfb'] = array_merge($GLOBALS['pfb'] ?? [], [
 			'log'              => "{$this->tmp}/pfblockerng.log",
@@ -118,7 +112,7 @@ final class Adr62TldAnalysisCorpusTest extends TestCase
 		);
 	}
 
-	/** The ABP feed's raw lines never reach data/zone (today's marker-gated skip, ADR.md SS1.5). */
+	/** The ABP feed's raw lines never reach data/zone (they never start with ',', ADR.md SS1.5). */
 	public function testAbpFeedLinesAreSkippedNotMangled(): void
 	{
 		tld_analysis();
@@ -129,11 +123,10 @@ final class Adr62TldAnalysisCorpusTest extends TestCase
 	}
 
 	/**
-	 * ADR-62 Phase 4: a broadened-capture verbatim line ('sneaky.zzsuffix.example##.ad',
-	 * pfb_dnsbl_plain.txt) now reaches a PLAIN feed's raw dialect too -- the TLD pass's
-	 * own comma-prefix guard (inc:7887, PR #1066) skips any non-CSV-shaped line
-	 * unconditionally, independent of the '.abp' marker mechanism, so it is never
-	 * CSV-mangled here regardless of feed classification.
+	 * A broadened-capture verbatim line ('sneaky.zzsuffix.example##.ad',
+	 * pfb_dnsbl_plain.txt) reaches a PLAIN feed's raw dialect too -- the TLD
+	 * pass's comma-prefix guard skips any non-CSV-shaped line unconditionally,
+	 * so it is never CSV-mangled here regardless of which feed it came from.
 	 */
 	public function testBroadenedCaptureVerbatimLineInPlainFeedIsSkippedNotMangled(): void
 	{
@@ -144,14 +137,12 @@ final class Adr62TldAnalysisCorpusTest extends TestCase
 	}
 
 	/**
-	 * ADR-62 Phase 5 commit 1: the empty-feed-column skip must fire even with
-	 * ZERO '.abp' markers anywhere -- today it is gated on `!empty($abp_feeds)`
-	 * (inc:7891), so a comma-first 6-col row with an empty feed column is
-	 * processed into TLD output whenever no ABP feed happens to be configured.
+	 * The empty-feed-column skip fires unconditionally -- no '.abp' marker
+	 * mechanism gates it (issue #1060's latent gate bug: the skip used to fire
+	 * only when at least one marker existed on disk).
 	 */
 	public function testEmptyFeedColumnRowSkippedUnconditionallyWithNoAbpMarkerPresent(): void
 	{
-		unlink("{$this->tmp}/dnsbl/tld_abp_feed.abp");
 		file_put_contents("{$this->tmp}/pfb_dnsbl.raw", ",tldbad.example,,1,,agroup\n", FILE_APPEND);
 
 		tld_analysis();
