@@ -28,7 +28,9 @@
  * limitations under the License.
  */
 
-if ($_SERVER['REMOTE_ADDR'] == '127.0.0.1' && $_REQUEST && $_REQUEST['pfb']) {
+// issue #1128: an array-valued request ('pfb[]=x') throws a PHP 8 TypeError in
+// strpos()/strstr() below; require a string before touching it.
+if ($_SERVER['REMOTE_ADDR'] == '127.0.0.1' && $_REQUEST && is_string($_REQUEST['pfb'] ?? null) && $_REQUEST['pfb']) {
 	if (strpos($_REQUEST['pfb'], ' ') !== FALSE) {
 		$query = basename(htmlspecialchars(trim(strstr($_REQUEST['pfb'], ' ', TRUE))));
 	} else {
