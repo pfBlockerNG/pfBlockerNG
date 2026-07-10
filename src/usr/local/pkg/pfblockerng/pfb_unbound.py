@@ -3809,6 +3809,33 @@ def _dnsbl_parse_abp_line(line: str) -> str | None:
     return line[2:-1]
 
 
+def _dnsbl_parse_ndjson_row(line: str) -> dict[str, Any] | None:
+    """NDJSON interchange schema v1 (#1083) strict reader -- the read-side twin of PHP's
+    pfb_dnsbl_ndjson_parse_row() (pfblockerng.inc carries the full schema contract:
+    kind vocabulary, required fields, determinism guarantees). Python never writes
+    this format. Returns the validated row, or ``None`` on any shape violation
+    (undecodable line, non-object, unknown/missing kind, a missing/empty/non-string
+    required field) -- domain/raw SYNTAX validation stays with the existing validators.
+    """
+    try:
+        row = json.loads(line)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(row, dict) or "kind" not in row:
+        return None
+    if row["kind"] == "domain":
+        required = ("domain", "log", "feed", "group")
+    elif row["kind"] == "abp":
+        required = ("raw",)
+    else:
+        return None
+    for key in required:
+        value = row.get(key)
+        if not isinstance(value, str) or value == "":
+            return None
+    return row
+
+
 # --------------------------------------------------------------------------- #
 # ADR-07 Stage-A: DNS-only ABP option / scope classification. A ``$options``
 # tail is KEPT only if EVERY option is DNS-relevant ($important / $badfilter).

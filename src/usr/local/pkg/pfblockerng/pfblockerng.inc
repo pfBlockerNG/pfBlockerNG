@@ -1938,6 +1938,59 @@ function pfb_dnsbl_concat_files(string $dest, array $sources): bool {
 	return FALSE;
 }
 
+/**
+ * NDJSON interchange schema v1 (#1083). STRICT: fixed vocabulary, no version field, no
+ * forward-compat mechanism. One JSON object per line, two kinds only:
+ *   {"kind":"domain","domain":D,"log":L,"feed":F,"group":G}
+ *   {"kind":"abp","raw":R}
+ * Every value is a string (a numeric/bool/null field is a shape violation the parser
+ * rejects); the required fields per kind are exactly the keys shown above. Encoding is
+ * deterministic and grep-stable: fixed key order (kind first), compact (json_encode
+ * default, no pretty flags), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE, exactly
+ * one trailing "\n" -- callers may grep a line for '"domain":"<value>"' verbatim. JSON
+ * string escaping guarantees the payload itself never carries a raw newline, so a value
+ * holding "\n" still lands on one physical line. Domain/raw SYNTAX (punycode, length,
+ * ...) stays with the existing validators; this format only carries opaque strings.
+ * pfb_dnsbl_ndjson_parse_row() is this schema's strict reader.
+ */
+function pfb_dnsbl_ndjson_emit_domain_row(string $domain, string $log, string $feed, string $group): string {
+	return json_encode(
+		array('kind' => 'domain', 'domain' => $domain, 'log' => $log, 'feed' => $feed, 'group' => $group),
+		JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+	) . "\n";
+}
+
+// Schema v1 abp row -- see pfb_dnsbl_ndjson_emit_domain_row()'s docblock for the contract.
+function pfb_dnsbl_ndjson_emit_abp_row(string $raw): string {
+	return json_encode(
+		array('kind' => 'abp', 'raw' => $raw),
+		JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+	) . "\n";
+}
+
+// Schema v1 strict reader -- see pfb_dnsbl_ndjson_emit_domain_row()'s docblock for the
+// contract. Returns the validated row, or NULL on any shape violation (undecodable
+// line, non-object, unknown/missing kind, a missing/empty/non-string required field).
+function pfb_dnsbl_ndjson_parse_row(string $line): ?array {
+	$row = json_decode($line, TRUE);
+	if (!is_array($row) || !array_key_exists('kind', $row)) {
+		return NULL;
+	}
+	if ($row['kind'] === 'domain') {
+		$required = array('domain', 'log', 'feed', 'group');
+	} elseif ($row['kind'] === 'abp') {
+		$required = array('raw');
+	} else {
+		return NULL;
+	}
+	foreach ($required as $key) {
+		if (!isset($row[$key]) || !is_string($row[$key]) || $row[$key] === '') {
+			return NULL;
+		}
+	}
+	return $row;
+}
+
 // DNSBLIP's "download" is a local-file copy of a just-rebuilt source, not a network
 // fetch -- the reuse-skip optimization (meant for real feeds) must never apply to it,
 // or a same-pass rebuild is silently stranded until the next .ip source change. (#1002)
