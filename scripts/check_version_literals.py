@@ -302,6 +302,11 @@ def _py_docstring_probe(line: str) -> str:
         if triple is not None:
             # content of an open triple span is blanked; only its matching close
             # delimiter is emitted, so a quote or "#" inside it can't mislead us.
+            if line[i] == "\\":
+                # Escapes work inside triple quotes too: \""" is an escaped quote
+                # + two quotes, not a close delimiter.
+                i += 2
+                continue
             if three == triple:
                 out.append(three)
                 triple = None
