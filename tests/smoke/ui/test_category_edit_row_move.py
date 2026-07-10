@@ -8,6 +8,9 @@ NOT the save handler) either persists a real reorder or, for a stale/hostile
 Xmove, causes NO mutation at all -- observable only by re-fetching the box's
 EFFECTIVE rendered state (never inferred from the algorithm alone), which is
 why this is Tier B (``ui_e2e``), not ``ui_render``.
+
+issue #1135 adds one more scenario below: a crafted self-anchor mismatch
+(``Lmove[1]=999`` while ``Xmove=1``) duplicating the checked row on the real box.
 """
 
 from __future__ import annotations
@@ -178,6 +181,68 @@ def test_valid_xmove_anchor_relocates_checked_row(
         assert after != before, "a valid anchor move must change the row order, but it stayed the same"
         assert after == (headers[0], headers[2], headers[1]), (
             f"row1 must land adjacent to anchor row2 ([h0, h2, h1]), got {after!r}"
+        )
+    finally:
+        _del_rowid(vm, CFG_DNSBL, rowid)
+
+
+# --------------------------------------------------------------------------- #
+# THE BUG (issue #1135): a crafted Lmove/Xmove self-anchor mismatch must not
+# duplicate the checked row -- never a genuine UI click (see
+# CategoryEditRowMoveTest::testCraftedSelfAnchorMismatchNoLongerDuplicatesRow).
+# --------------------------------------------------------------------------- #
+
+
+def test_crafted_self_anchor_mismatch_does_not_duplicate_row(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """Scenario: a checked row whose Lmove value is TAMPERED to mismatch its own key.
+
+    Given a 3-row no-sort DNSBL category with distinct headers per row,
+    When a reorder POST checks row key 1 with a value OTHER than its own key
+      (``Lmove[1]='999'``, a crafted/tampered value -- an honest UI click always
+      sends ``Lmove[1]='1'``) and anchors on that SAME checked row
+      (``Xmove='1'``),
+    Then the request answers HTTP 200 with no PHP-error-log growth, and a
+      follow-up GET's headers are IDENTICAL to the pre-move values -- row1 was
+      NOT duplicated into the persisted row set.
+
+    Pre-fix, the outer guard did not reject an anchor that is itself a checked
+    Lmove key, and the mismatched value (``'999' != '1'``) satisfied both the
+    ``$pre``/``!$pre`` re-insertion checks, so ``$final`` gained BOTH the
+    anchor row's own copy AND the merged ``$move`` copy -- row1 appears twice,
+    row2 shifts into a new header-3 slot. That is exactly what this test's
+    final assertion would catch.
+    """
+    vm = smoke_vm
+    rowid = _free_rowid(vm, CFG_DNSBL)
+    headers = ("rowmvdup1", "rowmvdup2", "rowmvdup3")
+    try:
+        _post_form(webui, _three_row_payload(rowid, "smokemvdup", headers))
+
+        # BEFORE: the 3 rows landed exactly as saved (no-sort -> no reorder yet).
+        before = _headers(webui, rowid)
+        assert before == headers, f"3-row create did not persist as saved: got {before!r}"
+
+        guard = PhpErrorLogGuard(vm)
+        guard.snapshot()
+
+        # WHEN: Lmove[1] carries a tampered value ('999', not row1's own key '1'),
+        # Xmove anchors on that same checked row (self-reference) -- the issue
+        # #1135 repro.
+        resp = _post_move(
+            webui,
+            {"type": "dnsbl", "rowid": str(rowid), "Lmove[1]": "999", "Xmove": "1"},
+        )
+        assert resp.status_code == 200, f"crafted self-anchor move POST -> HTTP {resp.status_code} (expected 200)"
+        guard.assert_no_growth()
+
+        # THEN: the row set is UNCHANGED -- row1 was not duplicated.
+        after = _headers(webui, rowid)
+        assert after == before, (
+            f"a crafted Lmove/Xmove self-anchor mismatch must leave the row set unchanged, "
+            f"but it changed: {before!r} -> {after!r}"
         )
     finally:
         _del_rowid(vm, CFG_DNSBL, rowid)

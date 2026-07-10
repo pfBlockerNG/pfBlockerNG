@@ -927,10 +927,13 @@ else {
 
 // Move selected table row(s) to anchor row
 // issue #1129: a stale/hostile Lmove or Xmove must not silently drop rows
+// issue #1135: anchoring on a row that is itself checked is rejected -- it
+// is either a no-op (honest click) or duplicates the row (crafted mismatch)
 if (isset($Lmove) && isset($Xmove) && isset($rowdata[$rowid]['row'])
 	&& is_array($Lmove) && !empty($Lmove)
 	&& is_scalar($Xmove) && array_key_exists($Xmove, $rowdata[$rowid]['row'])
-	&& !array_diff_key($Lmove, $rowdata[$rowid]['row'])) {
+	&& !array_diff_key($Lmove, $rowdata[$rowid]['row'])
+	&& !isset($Lmove[$Xmove])) {
 
 	$disable_move	= TRUE;
 	$move = $final	= array();
@@ -953,13 +956,15 @@ if (isset($Lmove) && isset($Xmove) && isset($rowdata[$rowid]['row'])
 		}
 
 		if ($Xmove == $key) {
-			if ($pre && $Lmove[$key] != $Xmove) {
+			// issue #1135: $key is the anchor's own row -- not necessarily a checked
+			// Lmove key, so read it with a null-coalesce to avoid an undefined-key warning
+			if ($pre && ($Lmove[$key] ?? null) != $Xmove) {
 				$final[] = $row;
 			}
 
 			$final = array_merge($final, $move);
 
-			if (!$pre && $Lmove[$key] != $Xmove) {
+			if (!$pre && ($Lmove[$key] ?? null) != $Xmove) {
 				$final[] = $row;
 			}
 			continue;
