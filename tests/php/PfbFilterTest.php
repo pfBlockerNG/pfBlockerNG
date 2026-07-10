@@ -161,6 +161,39 @@ final class PfbFilterTest extends TestCase
 		$this->assertSame($default, pfb_filter(['x'], $type, 'test', $default));
 	}
 
+	/**
+	 * issue #1139: the control-character loop iterates array elements as
+	 * scalars (preg_match($vline, ...)) and previously ran BEFORE the issue
+	 * #1070 array reject -- a nested array element ('field[0][]=x') is
+	 * itself an array, so it TypeErrors inside that loop instead of ever
+	 * reaching the reject. The reject must run first for every array shape,
+	 * not just a flat one.
+	 *
+	 * @return array<string, array{mixed, int, string}>
+	 */
+	public static function nestedArrayProvider(): array
+	{
+		return [
+			'nested one level'       => [[['x']], PFB_FILTER_WORD, ''],
+			'nested, custom default' => [[['x']], PFB_FILTER_WORD, 'SENTINEL'],
+			'deeply nested'          => [[[['deep']]], PFB_FILTER_HTML, ''],
+			'assoc of arrays'        => [['a' => ['b']], PFB_FILTER_HTML, ''],
+		];
+	}
+
+	#[DataProvider('nestedArrayProvider')]
+	public function testNestedArrayInputReturnsDefaultInsteadOfThrowing(array $input, int $type, string $default): void
+	{
+		$this->assertSame($default, pfb_filter($input, $type, 'test', $default));
+	}
+
+	public function testNestedArrayInputHitsUrlFalseSentinelNotDefault(): void
+	{
+		// PFB_FILTER_URL overrides $return_type to FALSE regardless of the
+		// caller's $default -- a nested array must hit that same override.
+		$this->assertSame(FALSE, pfb_filter([['x']], PFB_FILTER_URL, 'test'));
+	}
+
 	public static function tokenProvider(): array
 	{
 		return [

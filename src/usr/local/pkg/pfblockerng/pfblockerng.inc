@@ -1194,6 +1194,14 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 		}
 	}
 
+	// issue #1070: every non-FILE_MIME type runs scalar string ops below (htmlspecialchars/
+	// preg_match) that PHP 8 TypeErrors on an array -- reject an array up front, before any
+	// such op runs, for those types. issue #1139: must run before the control-char loop
+	// below, which itself TypeErrors on a nested (non-scalar) array element.
+	if (is_array($input) && !in_array($type, array(PFB_FILTER_FILE_MIME_COMPARE, PFB_FILTER_FILE_MIME, PFB_FILTER_FILE_MIME_COMPRESSED))) {
+		return $return_type;
+	}
+
 	// Check for control characters. The /u modifier is required: without it, \p{C}
 	// classifies each raw BYTE as a Latin-1 codepoint, so a valid multibyte UTF-8
 	// character (e.g. "€", "日") whose continuation byte falls in 0x80-0x9F is
@@ -1201,6 +1209,8 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 	// genuinely invalid-UTF-8 subject is silently accepted. With /u, preg_match()
 	// returns FALSE (not 0) on invalid UTF-8, so the check must reject on `!== 0`
 	// to fail closed (this is a PFBL-01 input-sanitisation gate) rather than open.
+	// The reject above already returned for every non-FILE_MIME type, so this array
+	// branch only ever sees FILE_MIME's flat literal-string arrays (ADR-48).
 	if (is_array($input)) {
 		foreach ($input as $vline) {
 			if (preg_match("/[\p{C}]+/u", $vline) !== 0) {
@@ -1224,13 +1234,6 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 			}
 			return $return_type;
 		}
-	}
-
-	// issue #1070: every non-FILE_MIME type runs scalar string ops below (htmlspecialchars/
-	// preg_match) that PHP 8 TypeErrors on an array, so a crafted array POST ('field[]=x')
-	// would 500 the page -- reject an array up front for those types.
-	if (is_array($input) && !in_array($type, array(PFB_FILTER_FILE_MIME_COMPARE, PFB_FILTER_FILE_MIME, PFB_FILTER_FILE_MIME_COMPRESSED))) {
-		return $return_type;
 	}
 
 	$result = FALSE;
