@@ -12,6 +12,9 @@ use PHPUnit\Framework\TestCase;
  * loaded block lists; keep a genuinely public address. Suppression off, or a
  * custom list, keeps the entry unchanged. A downloaded feed's explicit /0 is
  * clamped to a single host; a custom list's /0 is honored (issue #744).
+ * Returns the canonical inet_ntop() form (issue #1084): textual variants of
+ * one address (case, zero-run, leading zeros) collapse to one string, and an
+ * unparseable address is dropped rather than passed through.
  */
 #[CoversFunction('sanitize_ipaddr_v6')]
 final class SanitizeIpaddrV6Test extends TestCase
@@ -250,5 +253,125 @@ final class SanitizeIpaddrV6Test extends TestCase
 	{
 		$GLOBALS['pfb']['supp'] = 'on';
 		$this->assertNull(sanitize_ipaddr_v6('2001:db8::1/16', false, 24));
+	}
+
+	// --- Suppression on: IPv4-mapped is also dropped -------------------------
+	//
+	// Covered by the same reserved/private filter_var() call as ULA/link-local/
+	// loopback above (no separate branch), but had no dedicated pin (issue #1084).
+
+	public function testSuppressionDropsV4Mapped(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
+		$this->assertNull(sanitize_ipaddr_v6('::ffff:1.2.3.4', false));
+	}
+
+	// --- Canonicalization at parse (issue #1084) ------------------------------
+	//
+	// sanitize_ipaddr_v6() now returns the inet_ntop(inet_pton()) round-trip, so
+	// every textual spelling of one address collapses to a single string.
+
+	public function testCanonicalizesUppercaseHex(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'off';
+		$this->assertSame('2001:db8::1', sanitize_ipaddr_v6('2001:DB8::1', false));
+	}
+
+	public function testCanonicalizesZeroRunExpansion(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'off';
+		$this->assertSame('2001:db8::1', sanitize_ipaddr_v6('2001:db8:0:0:0:0:0:1', false));
+	}
+
+	public function testCanonicalizesLeadingZerosInHextet(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'off';
+		$this->assertSame('2001:db8:aa:bb00::5', sanitize_ipaddr_v6('2001:0db8:00aa:bb00::5', false));
+	}
+
+	// An already-canonical address is a no-op round-trip, not merely "no visible
+	// change" by coincidence -- ULA space, so it also proves nothing suppression-
+	// related interferes when suppression is off.
+	public function testAlreadyCanonicalAddressReturnedUnchanged(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'off';
+		$this->assertSame('fd12:3456::1', sanitize_ipaddr_v6('fd12:3456::1', false));
+	}
+
+	public function testCanonicalizesCidrAddressPartMaskPreserved(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'off';
+		$this->assertSame('2001:db8::/32', sanitize_ipaddr_v6('2001:DB8::/32', false));
+	}
+
+	// The feed /0 clamp (issue #744) and canonicalization compose: the mask is
+	// dropped by the clamp, and the surviving host is still canonical text.
+	public function testFeedSlashZeroEmitsCanonicalHost(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'off';
+		$this->assertSame('2001:db8::5', sanitize_ipaddr_v6('2001:DB8::5/0', false));
+	}
+
+	// A custom list's /0 is honored as written (issue #744): the mask survives,
+	// only the address text is canonicalized.
+	public function testCustomSlashZeroKeepsMaskCanonicalizesAddress(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'off';
+		$this->assertSame('2001:db8::5/0', sanitize_ipaddr_v6('2001:DB8::5/0', true));
+	}
+
+	// The Suppression CIDR floor clamp (issue #760 §3) and canonicalization
+	// compose the same way as the /0 clamp above.
+	public function testAdvancedCidrFloorClampEmitsCanonicalHost(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
+		$this->assertSame('2606:4700:4700::ab', sanitize_ipaddr_v6('2606:4700:4700::AB/32', false, 48));
+	}
+
+	// A public address that survives Suppression's reserved/private filter is
+	// still canonicalized, not merely passed through as-written.
+	public function testSuppressionSurvivingPublicAddressCanonicalized(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'on';
+		$this->assertSame('2606:4700:4700::1111', sanitize_ipaddr_v6('2606:4700:4700:0:0:0:0:1111', false));
+	}
+
+	// Canonicalization is independent of the Suppression flag -- Suppression off
+	// still collapses non-canonical text to the canonical form.
+	public function testCanonicalizationAppliesWithSuppressionOff(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'off';
+		$this->assertSame('2001:db8::1', sanitize_ipaddr_v6('2001:DB8:0:0::1', false));
+	}
+
+	// --- Hostile input (issue #1084) ------------------------------------------
+
+	public function testGarbageAddressDropped(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'off';
+		$this->assertNull(sanitize_ipaddr_v6('nonsense', false));
+	}
+
+	public function testEmptyStringDropped(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'off';
+		$this->assertNull(sanitize_ipaddr_v6('', false));
+	}
+
+	// v4-mapped survives inet_pton()/inet_ntop() as mixed notation on this
+	// platform -- pinning the actual round-trip text, not an assumed one.
+	public function testV4MappedAddressCanonicalFormPinned(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'off';
+		$this->assertSame('::ffff:1.2.3.4', sanitize_ipaddr_v6('::ffff:1.2.3.4', false));
+	}
+
+	// issue #1084: a %zone form is dropped explicitly -- inet_pton()'s handling
+	// of it is platform-dependent (FreeBSD/glibc reject it, macOS strips the
+	// zone), so the guard makes the verdict identical everywhere.
+	public function testZoneIdSuffixDropped(): void
+	{
+		$GLOBALS['pfb']['supp'] = 'off';
+		$this->assertNull(sanitize_ipaddr_v6('fe80::1%igb0', false));
 	}
 }

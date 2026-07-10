@@ -8932,6 +8932,9 @@ function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 // filter flags leave routable (issue #760) — explicit prefix checks so behaviour is independent
 // of PHP's patch level (RFC 6890 moved 2001:db8::/32 between filter sets in 8.3.16/8.4.3).
 // $pfbcidr: per-category Advanced "Suppression CIDR Limit" floor (issue #760 §3).
+// Returns the canonical inet_ntop() form (issue #1084): textual variants of one
+// address (case, zero-run, leading zeros) collapse to one string, and an
+// unparseable address is dropped rather than passed through.
 function sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr = 'Disabled') {
 	global $pfb;
 
@@ -8940,13 +8943,26 @@ function sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr = 'Disabled') {
 	$s_ip	= $parts[0];
 	$mask	= $parts[1] ?? '';
 
+	// issue #1084: single inet_pton() per address, reused by the suppression
+	// reserved-prefix checks below; an unparseable address drops the row. A %zone
+	// form is dropped explicitly first -- inet_pton()'s handling of it is
+	// platform-dependent (FreeBSD/glibc reject it, macOS strips the zone).
+	if (strpos($s_ip, '%') !== FALSE) {
+		return;
+	}
+	$bin = inet_pton($s_ip);
+	if ($bin === FALSE) {
+		return;
+	}
+
 	// An explicit /0 covers the entire IPv6 space and is never honored from a
 	// downloaded feed: clamp to a single host so the address itself stays
 	// blocked (issue #744). Custom-list entries are user-authored, so /0 is
 	// kept as written.
+	$mask_clamped = FALSE;
 	if ($mask !== '' && ctype_digit($mask) && (int)$mask === 0 && !$custom) {
 		pfb_logger("\n  Feed /0 CIDR clamped to single host: {$ipaddr}", 1);
-		$ipaddr = $s_ip;
+		$mask_clamped = TRUE;
 	}
 
 	// Exclude private/reserved IPs (bypass exclusion for custom lists)
@@ -8960,7 +8976,7 @@ function sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr = 'Disabled') {
 		// for any direct caller that skips that guard.
 		if ($pfbcidr != 'Disabled' && $mask !== '' && ctype_digit($mask) && (int)$mask > 0 && (int)$mask < (int)$pfbcidr) {
 			pfb_logger("\n  Suppression CIDR Limit: {$s_ip}/{$mask}", 1);
-			$ipaddr = $s_ip;
+			$mask_clamped = TRUE;
 		}
 
 		// Drop ULA (fc00::/7), link-local (fe80::/10), loopback (::1),
@@ -8975,17 +8991,20 @@ function sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr = 'Disabled') {
 		// explicit prefix checks close that gap (issue #760). Judged on the
 		// address part only, same as the filter above -- the CIDR span is not
 		// inspected (issue #760 §4).
-		$bin = inet_pton($s_ip);
-		if ($bin !== FALSE && (
-			substr($bin, 0, 4) === "\x20\x01\x0d\xb8" ||					// 2001:db8::/32 documentation
+		if (substr($bin, 0, 4) === "\x20\x01\x0d\xb8" ||					// 2001:db8::/32 documentation
 			substr($bin, 0, 1) === "\xff" ||								// ff00::/8 multicast
 			substr($bin, 0, 12) === "\x00\x64\xff\x9b" . str_repeat("\x00", 8)	// 64:ff9b::/96 NAT64
-		)) {
+		) {
 			return;
 		}
 	}
 
-	return $ipaddr;
+	// issue #1084: canonical inet_ntop() form; mask re-appended only when
+	// neither clamp above dropped it.
+	if ($mask !== '' && !$mask_clamped) {
+		return inet_ntop($bin) . '/' . $mask;
+	}
+	return inet_ntop($bin);
 }
 
 
