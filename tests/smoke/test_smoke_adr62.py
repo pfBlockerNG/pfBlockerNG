@@ -21,8 +21,14 @@ Row -> test map (ADR.md §7):
   4. Bracketed IPv6 vs [Adblock] -> test_adr62_bracketed_ipv6_dnsblip_vs_adblock_marker (this module)
   5. CSV feed type                -> test_adr62_csv_bambenek_feed_blocks (this module)
   6. IDN/punycode                -> test_adr62_idn_raw_unicode_blocks_under_punycode (this module)
-  7. Reuse + TLD-enabled run      -> test_adr62_reused_feed_old_dialect_txt_resolves_same_verdict
+  7. Reuse + TLD-enabled run      -> test_adr62_reused_feed_current_generation_ndjson_resolves_without_redownload
                                      + test_adr62_tld_enabled_run_keeps_plain_row_classification (this module)
+
+NDJSON interchange format (issue #1083): the per-feed staging '.txt'/'.raw' files are
+schema-v1 NDJSON now (docs/misc/architecture-notes.md "DNSBL interchange format").
+test_adr62_stale_generation_rebuild_hold_row_orig_present and its '.orig'-absent sibling
+below pin the staging-generation guard's rebuild-from-'.orig' fallback (a pre-#1083 '.txt'
+is never verbatim-reused, even on a Held row).
 
 These need the booted ``smoke_vm`` fixture, the branch ``.pkg`` (``SMOKE_PKG``), and
 the smoke deps; without them they skip cleanly.
@@ -31,6 +37,7 @@ the smoke deps; without them they skip cleanly.
 from __future__ import annotations
 
 import os
+import shlex
 from collections.abc import Iterator
 
 import pytest
@@ -39,6 +46,51 @@ from . import helpers as h
 from .conftest import STUB_DNS_A, SmokeVM, _StubDnsServer
 
 pytestmark = pytest.mark.smoke
+
+
+def _feed_log_count(vm: SmokeVM, header: str, phrase: str, *, timeout: float = 30.0) -> int:
+    """Count main-log lines for THIS feed (``[ <header> ]``) that also contain ``phrase``.
+
+    Mirrors ``test_smoke_feeds.py``'s private helper of the same name/shape (kept local
+    here rather than imported across test modules).
+    """
+    cmd = (
+        f"/usr/bin/grep -F {shlex.quote(f'[ {header} ]')} {shlex.quote(h.PFB_LOG)} 2>/dev/null "
+        f"| /usr/bin/grep -Fc {shlex.quote(phrase)}"
+    )
+    res = vm.ssh(cmd, timeout=timeout)
+    try:
+        return int(res.stdout.strip())
+    except ValueError:
+        return 0
+
+
+def _set_dnsbl_row_state(vm: SmokeVM, header: str, state: str, *, timeout: float = 30.0) -> None:
+    """Flip one DNSBL row's ``state`` field in-place, post-:func:`h.inject`.
+
+    ``DnsblCase`` rows are always emitted 'Enabled' (helpers.py:2307/2484) — no per-row state
+    override exists on the dataclass. This reaches into the already-written config for
+    the one test that needs a 'Hold' row, rather than widening ``DnsblCase`` for it.
+    """
+    snippet = (
+        f"$lists = config_get_path({h._php_str(h.CFG_DNSBL_LISTS)}, array());\n"  # noqa: SLF001
+        "foreach ($lists as $li => $l) {\n"
+        "    if (!isset($l['row'])) { continue; }\n"
+        "    foreach ($l['row'] as $ri => $r) {\n"
+        f"        if (($r['header'] ?? '') === {h._php_str(header)}) {{\n"  # noqa: SLF001
+        f"            $lists[$li]['row'][$ri]['state'] = {h._php_str(state)};\n"  # noqa: SLF001
+        "        }\n"
+        "    }\n"
+        "}\n"
+        f"config_set_path({h._php_str(h.CFG_DNSBL_LISTS)}, $lists);\n"  # noqa: SLF001
+        "write_config('pfBlockerNG smoke #1083: DNSBL row state override');\n"
+        "echo 'OK';"
+    )
+    res = h.php_eval(vm, snippet, timeout=timeout)
+    if res.returncode != 0 or "OK" not in res.stdout:
+        raise RuntimeError(
+            f"_set_dnsbl_row_state({header!r}, {state!r}) failed: rc={res.returncode} {res.stderr!r} {res.stdout!r}"
+        )
 
 
 @pytest.fixture(scope="module")
@@ -328,50 +380,48 @@ def test_adr62_idn_raw_unicode_blocks_under_punycode(deployed_vm: SmokeVM, clien
 
 
 # --------------------------------------------------------------------------- #
-# Row 7a — a feed REUSED (not re-downloaded) whose on-disk '.txt' predates this
-# pass resolves the SAME verdict as its pre-placed content, and a stale '.abp'
-# marker (an old install's leftover) is swept opportunistically (Decision 5).
+# Row 7a — a feed REUSED (not re-downloaded) whose on-disk '.txt' is genuinely
+# CURRENT-GENERATION NDJSON resolves the same verdict, with no redownload.
 #
-# NOTE ON SCOPE: this row uses the 6-col plain dialect, unchanged by this ADR
-# (Semantics #7's SAFE sub-case). A bare-domain line inside an OLD raw-ABP-
-# verbatim '.txt' (written by a pre-ADR-62 $easylist feed) hits a genuine,
-# separately-tracked defect on reuse (issue #1105, discovered while building this
-# row) — pfb_unbound_python_sources() drops a comma-less line instead of writing
-# it verbatim, so that specific sub-case is DELIBERATELY NOT asserted here (it
-# would be a documented-red test, not a passing acceptance row); see ADR.md
-# Semantics #7 and issue #1105 for the tracked gap.
+# SUPERSEDES a retired predecessor that staged an old-generation 6-col CSV row and
+# asserted the reuse fork consumed it verbatim: issue #1083 added the staging-
+# generation guard (pfb_dnsbl_staging_is_current_generation), so a pre-#1083
+# '.txt' is NEVER verbatim-reused any more — it is rebuilt from '.orig' instead
+# (see the two rows immediately below). This row keeps the ORIGINAL's staging
+# technique (h.write_local_feed onto the live '.txt') but stages content that
+# genuinely passes the generation guard, so the still-valid "reuse without
+# redownload" happy path stays covered.
 # --------------------------------------------------------------------------- #
 
 
 @pytest.mark.timeout(300)
-def test_adr62_reused_feed_old_dialect_txt_resolves_same_verdict(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
-    """Row 7a (Semantics #7): a reused feed's pre-existing '.txt' resolves unchanged; stale marker swept.
+def test_adr62_reused_feed_current_generation_ndjson_resolves_without_redownload(
+    deployed_vm: SmokeVM, client_vm: SmokeVM
+) -> None:
+    """Row 7a (Semantics #7): a current-generation NDJSON '.txt' reuses without redownload.
 
     Given a configured, already-loaded DNSBL group with TWO feed rows (a normal
       pass downloaded both: the main row blocked domain A, the sibling row
       blocked X1), whose main-row staging file (``{dnsdir}/{header}.txt``) is
-      then OVERWRITTEN with an old-generation 6-col row for a different domain
-      B plus a stale ``{header}.abp`` marker — simulating the on-disk state a
-      pre-ADR-62 install leaves behind across a pkg upgrade — while the SIBLING
-      row's served feed changes content (X1 → X2) and the main row's served
-      feed stays byte-identical.
-    When a genuine cron pass runs with the config UNCHANGED — no alias added or
-      removed, so the change sweep does not ``rmdir_recursive({dnsdir})`` — the
-      changed sibling re-ingests (that is what makes the pass rebuild the DNSBL
-      database at all), while the unchanged main row takes the reuse fork
-      (gated on ``$pfbreuse == ''``: '.txt' present, no ``.update``/``.fail``
-      marker, source hash unchanged, non-force trigger).
-    Then the rebuilt database serves the staged old-dialect row: B is
-      VIP-blocked (the '.txt' was consumed as-is, never re-downloaded or
-      re-parsed), A now RESOLVES again (its row exists only in the '.orig'
-      download cache — a re-parse would have resurrected it), X2 is VIP-blocked
-      (proof the rebuild genuinely ran), and the stale ``.abp`` marker is GONE
-      (Decision 5's opportunistic sweep on the reuse fork).
+      then OVERWRITTEN with a hand-written schema-v1 NDJSON domain row (the exact
+      ``pfb_dnsbl_ndjson_emit_domain_row`` byte shape) for a DIFFERENT domain B —
+      simulating a feed whose staging genuinely already is in the current NDJSON
+      generation — while the SIBLING row's served feed changes content (X1 → X2)
+      and the main row's served feed stays byte-identical.
+    When a genuine cron pass runs with the config UNCHANGED — the changed sibling
+      re-ingests (that is what makes the pass rebuild the DNSBL database at all),
+      while the unchanged main row takes the VERBATIM-REUSE fork (current-
+      generation staging passes the #1083 generation guard, so no rebuild is forced).
+    Then B is VIP-blocked (the staged NDJSON line was consumed as-is, never
+      re-downloaded or re-parsed), A now RESOLVES again (its row exists only in
+      the '.orig' download cache — reuse never touches it), X2 is VIP-blocked
+      (proof the pass genuinely ran), and no new 'Rebuild' log line appears for
+      the header (the generation guard accepted the staging as current).
     """
     header = "adr62row7reuse"
     sib_header = "adr62row7sib"
     loaded_domain = h.unique_domain("adr62r7base")
-    reused_domain = h.unique_domain("adr62r7old")
+    reused_domain = h.unique_domain("adr62r7cur")
     sib1_domain = h.unique_domain("adr62r7sib1")
     sib2_domain = h.unique_domain("adr62r7sib2")
 
@@ -386,9 +436,6 @@ def test_adr62_reused_feed_old_dialect_txt_resolves_same_verdict(deployed_vm: Sm
         mode=h.DnsblMode.VIP,
         extra_rows=[(sib_header, sib_feed_url)],
     )
-
-    dnsbl_dir = f"{h.PFB_DBDIR}/dnsbl"
-    marker = f"{dnsbl_dir}/{header}.abp"
 
     for name in (loaded_domain, reused_domain, sib1_domain, sib2_domain):
         before = h.dns_probe_client(client_vm, name, "A")
@@ -405,16 +452,18 @@ def test_adr62_reused_feed_old_dialect_txt_resolves_same_verdict(deployed_vm: Sm
                 f"baseline feed domain {name} still resolving after the initial load: {ans}"
             )
 
-        # Simulate the pre-upgrade on-disk state for the MAIN row: an
-        # old-generation '.txt' (6-col dialect, different domain) + a stale
-        # '.abp' marker. Its served feed stays byte-identical (no re-download
-        # trigger); the SIBLING feed changes so the cron pass rebuilds.
-        h.write_local_feed(deployed_vm, f"dnsbl/{header}.txt", f",{reused_domain},,1,{header},{header}\n")
-        h.write_local_feed(deployed_vm, f"dnsbl/{header}.abp", "")
-        h.write_local_feed(deployed_vm, sib_feed_name, f"{sib2_domain}\n")
+        rebuild_before = _feed_log_count(deployed_vm, header, "Rebuild")
 
-        marker_before = deployed_vm.ssh("/bin/test", "-e", marker)
-        assert marker_before.returncode == 0, f"test setup failed: stale marker {marker} not present before the pass"
+        # Overwrite the MAIN row's staging with a hand-written, CURRENT-generation
+        # NDJSON domain row for a DIFFERENT domain — the exact byte shape
+        # pfb_dnsbl_ndjson_emit_domain_row() produces for this header/alias/mode.
+        # Its served feed stays byte-identical (no re-download trigger); the
+        # SIBLING feed changes so the cron pass rebuilds the database at all.
+        ndjson_line = (
+            f'{{"kind":"domain","domain":"{reused_domain}","log":"1","feed":"{header}","group":"{spec.alias}"}}\n'
+        )
+        h.write_local_feed(deployed_vm, f"dnsbl/{header}.txt", ndjson_line)
+        h.write_local_feed(deployed_vm, sib_feed_name, f"{sib2_domain}\n")
 
         # Genuine cron pass (non-force): the changed sibling re-ingests and
         # triggers the rebuild; the unchanged main row takes the reuse fork.
@@ -432,8 +481,8 @@ def test_adr62_reused_feed_old_dialect_txt_resolves_same_verdict(deployed_vm: Sm
         h.flush_unbound_name(deployed_vm, reused_domain)
         ans_reused = h.dns_probe_client_until(client_vm, reused_domain, h.is_vip)
         assert not h.resolves_to(ans_reused, STUB_DNS_A), (
-            f"old-dialect reused-'.txt' domain {reused_domain} still resolving after the cron pass "
-            f"(the reuse fork should have consumed the staged '.txt' as-is): {ans_reused}"
+            f"current-generation staged domain {reused_domain} still resolving after the cron pass "
+            f"(the reuse fork should have consumed the staged NDJSON '.txt' as-is): {ans_reused}"
         )
 
         h.flush_unbound_name(deployed_vm, sib2_domain)
@@ -447,15 +496,232 @@ def test_adr62_reused_feed_old_dialect_txt_resolves_same_verdict(deployed_vm: Sm
         ans_loaded_after = h.dns_probe_client(client_vm, loaded_domain, "A")
         assert h.resolves_to(ans_loaded_after, STUB_DNS_A), (
             f"original main-row domain {loaded_domain} still blocked after the reuse pass — its row "
-            f"exists only in the '.orig' cache, so a re-parse (not reuse) must have produced it: "
-            f"{ans_loaded_after}"
+            f"exists only in the '.orig' cache, so reuse must never have re-parsed it: {ans_loaded_after}"
         )
 
-        marker_after = deployed_vm.ssh("/bin/test", "-e", marker)
-        assert marker_after.returncode != 0, (
-            f"stale '.abp' marker {marker} still present after the reuse pass — Decision 5's opportunistic "
-            f"sweep should have removed it: test -e rc={marker_after.returncode}"
+        rebuild_after = _feed_log_count(deployed_vm, header, "Rebuild")
+        assert rebuild_after == rebuild_before, (
+            f"unexpected 'Rebuild' log line for {header} (before={rebuild_before}, after={rebuild_after}) — "
+            f"current-generation NDJSON staging should have passed the #1083 generation guard"
         )
+
+
+# --------------------------------------------------------------------------- #
+# Stale-generation rebuild (issue #1083) — a pre-#1083 '.txt' left over across
+# a pkg upgrade is NEVER verbatim-reused: pfb_dnsbl_staging_is_current_generation
+# rejects it, and the sync loop rebuilds from '.orig' via the same machinery a
+# Reload uses — refetching over the network only when '.orig' itself is absent.
+# Both rows stage a HOLD row (state='Hold') to prove the rebuild reaches even a
+# row pfblockerng_sync_cron()'s own change-detector pass skips outright, and both
+# stage the exact #1083/#1105 old-dialect mix: a 6-col CSV line plus a bare-
+# domain line (the shape a comma-less verbatim-ABP line took pre-#1083 — issue
+# #1105) so a regression that drops the bare line on rebuild is caught here.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.timeout(300)
+def test_adr62_stale_generation_rebuild_hold_row_orig_present(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
+    """#1083 stale-generation rebuild: a Hold row with a pre-#1083 '.txt' rebuilds from '.orig'.
+
+    Given a Hold-state DNSBL row whose feed genuinely serves TWO domains (a
+      6-col-CSV-shaped target and a bare-domain-shaped target — issue #1105's
+      dropped-line shape), downloaded once so '.orig' holds both, alongside a
+      sibling row that will be due this cron pass; the main row's staging
+      '.txt' is then overwritten with old-dialect (pre-#1083) content for the
+      SAME two domains, simulating a pkg-upgrade leftover on a never-
+      redownloaded, held feed.
+    When a genuine cron pass runs (the sibling's change makes the pass rebuild
+      the DNSBL database at all; the Hold row's own state never triggers a
+      redownload attempt for it — pfblockerng_sync_cron() bypasses it outright)
+      and the staging-generation guard rejects the stale '.txt',
+    Then a NEW 'Rebuild' log line appears for the header, '.orig' is BYTE-
+      IDENTICAL before and after (the rebuild reparsed the existing download
+      cache — it never refetched over the network), the rebuilt '.txt' is
+      NDJSON (starts with '{'), and BOTH domains are blocked — including the
+      bare-domain line, proving the #1105 dropped-line class cannot recur once
+      a stale staging file is rebuilt from '.orig' instead of reused verbatim.
+    """
+    header = "adr62rebuilda"
+    sib_header = "adr62rebuildasib"
+    domain_csv = h.unique_domain("adr62rbacsv")
+    domain_bare = h.unique_domain("adr62rbabare")
+    sib1_domain = h.unique_domain("adr62rbasib1")
+    sib2_domain = h.unique_domain("adr62rbasib2")
+
+    feed_name = "smoke_adr62_rebuilda_feed.txt"
+    sib_feed_name = "smoke_adr62_rebuilda_sibling.txt"
+    feed_url = h.write_local_feed(deployed_vm, feed_name, f"{domain_csv}\n{domain_bare}\n")
+    sib_feed_url = h.write_local_feed(deployed_vm, sib_feed_name, f"{sib1_domain}\n")
+    spec = h.DnsblCase(
+        aliasname="adr62rebuilda",
+        feed_url=feed_url,
+        header=header,
+        mode=h.DnsblMode.VIP,
+        extra_rows=[(sib_header, sib_feed_url)],
+    )
+
+    orig_path = f"{h.PFB_DBDIR}/dnsblorig/{header}.orig"
+    txt_path = f"{h.PFB_DBDIR}/dnsbl/{header}.txt"
+
+    for name in (domain_csv, domain_bare, sib1_domain, sib2_domain):
+        before = h.dns_probe_client(client_vm, name, "A")
+        assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
+
+    with h.CaseContext(deployed_vm, spec):
+        h.unblock_egress()
+
+        # Baseline: both rows genuinely loaded via the normal download path — this
+        # is what populates '.orig' with both target domains.
+        for name in (domain_csv, domain_bare, sib1_domain):
+            h.flush_unbound_name(deployed_vm, name)
+            ans = h.dns_probe_client_until(client_vm, name, h.is_vip)
+            assert not h.resolves_to(ans, STUB_DNS_A), f"baseline domain {name} still resolving: {ans}"
+
+        _set_dnsbl_row_state(deployed_vm, header, "Hold")
+
+        orig_before = deployed_vm.ssh("cat", orig_path)
+        assert orig_before.returncode == 0, (
+            f"test setup failed: genuine '.orig' not present at {orig_path}: {orig_before.stderr!r}"
+        )
+
+        rebuild_before = _feed_log_count(deployed_vm, header, "Rebuild")
+
+        # Simulate the pre-#1083 on-disk leftover: a 6-col CSV row plus a bare-
+        # domain row (issue #1105's shape) for the SAME two domains '.orig' holds.
+        h.write_local_feed(deployed_vm, f"dnsbl/{header}.txt", f",{domain_csv},,1,{header},{header}\n{domain_bare}\n")
+        h.write_local_feed(deployed_vm, sib_feed_name, f"{sib2_domain}\n")
+
+        pinned_hour = h.pin_cron_due(deployed_vm)
+        h.reload(deployed_vm, "cron")
+        hour_now = h.guest_hour(deployed_vm)
+        assert hour_now == pinned_hour, (
+            f"guest hour rolled over between pin_cron_due ({pinned_hour}) and cron ({hour_now}) — "
+            f"the EveryDay feeds were never due, this run proves nothing; re-run"
+        )
+
+        rebuild_after = _feed_log_count(deployed_vm, header, "Rebuild")
+        assert rebuild_after > rebuild_before, (
+            f"expected a NEW 'Rebuild' log line for {header} (before={rebuild_before}, after={rebuild_after}) — "
+            f"the staging-generation guard should have rejected the old-dialect '.txt'"
+        )
+
+        orig_after = deployed_vm.ssh("cat", orig_path)
+        assert orig_after.returncode == 0 and orig_after.stdout == orig_before.stdout, (
+            f"'.orig' changed across the rebuild pass — expected byte-identical reuse, no network "
+            f"refetch: before={orig_before.stdout!r} after={orig_after.stdout!r}"
+        )
+
+        txt_content = deployed_vm.ssh("cat", txt_path)
+        assert txt_content.returncode == 0 and txt_content.stdout.startswith("{"), (
+            f"rebuilt staging {txt_path} does not start with NDJSON '{{': {txt_content.stdout[:80]!r}"
+        )
+
+        h.flush_unbound_name(deployed_vm, sib2_domain)
+        ans_sib2 = h.dns_probe_client_until(client_vm, sib2_domain, h.is_vip)
+        assert not h.resolves_to(ans_sib2, STUB_DNS_A), f"sibling {sib2_domain} not re-ingested: {ans_sib2}"
+
+        for name in (domain_csv, domain_bare):
+            h.flush_unbound_name(deployed_vm, name)
+            ans = h.dns_probe_client_until(client_vm, name, h.is_vip)
+            assert not h.resolves_to(ans, STUB_DNS_A), (
+                f"{name} not blocked after the stale-generation rebuild (the #1105 dropped-line class "
+                f"would show here): {ans}"
+            )
+
+
+@pytest.mark.timeout(300)
+def test_adr62_stale_generation_rebuild_orig_absent_triggers_download(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
+    """#1083 stale-generation rebuild: with '.orig' absent, the rebuild fork downloads fresh.
+
+    Given the SAME Hold-row + stale-'.txt' setup as the '.orig'-present sibling
+      case, except '.orig' is removed before the pass (a download cache that
+      never existed, or was purged, alongside a stale pre-#1083 '.txt').
+    When the cron pass runs and the staging-generation guard rejects the stale
+      '.txt' the same way,
+    Then a NEW 'Rebuild' log line appears for the header, '.orig' — ABSENT
+      beforehand — is genuinely refetched (present afterwards: the rebuild fork
+      falls back to a real download when there is nothing in the cache to
+      reuse), the rebuilt '.txt' is NDJSON, and both domains from the live feed
+      are blocked.
+    """
+    header = "adr62rebuildb"
+    sib_header = "adr62rebuildbsib"
+    domain_csv = h.unique_domain("adr62rbbcsv")
+    domain_bare = h.unique_domain("adr62rbbbare")
+    sib1_domain = h.unique_domain("adr62rbbsib1")
+    sib2_domain = h.unique_domain("adr62rbbsib2")
+
+    feed_name = "smoke_adr62_rebuildb_feed.txt"
+    sib_feed_name = "smoke_adr62_rebuildb_sibling.txt"
+    feed_url = h.write_local_feed(deployed_vm, feed_name, f"{domain_csv}\n{domain_bare}\n")
+    sib_feed_url = h.write_local_feed(deployed_vm, sib_feed_name, f"{sib1_domain}\n")
+    spec = h.DnsblCase(
+        aliasname="adr62rebuildb",
+        feed_url=feed_url,
+        header=header,
+        mode=h.DnsblMode.VIP,
+        extra_rows=[(sib_header, sib_feed_url)],
+    )
+
+    orig_path = f"{h.PFB_DBDIR}/dnsblorig/{header}.orig"
+    txt_path = f"{h.PFB_DBDIR}/dnsbl/{header}.txt"
+
+    for name in (domain_csv, domain_bare, sib1_domain, sib2_domain):
+        before = h.dns_probe_client(client_vm, name, "A")
+        assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
+
+    with h.CaseContext(deployed_vm, spec):
+        h.unblock_egress()
+
+        for name in (domain_csv, domain_bare, sib1_domain):
+            h.flush_unbound_name(deployed_vm, name)
+            ans = h.dns_probe_client_until(client_vm, name, h.is_vip)
+            assert not h.resolves_to(ans, STUB_DNS_A), f"baseline domain {name} still resolving: {ans}"
+
+        _set_dnsbl_row_state(deployed_vm, header, "Hold")
+
+        deployed_vm.ssh("/bin/rm", "-f", orig_path)
+        orig_gone = deployed_vm.ssh("/bin/test", "-e", orig_path)
+        assert orig_gone.returncode != 0, f"test setup failed: '.orig' {orig_path} still present after rm"
+
+        rebuild_before = _feed_log_count(deployed_vm, header, "Rebuild")
+
+        h.write_local_feed(deployed_vm, f"dnsbl/{header}.txt", f",{domain_csv},,1,{header},{header}\n{domain_bare}\n")
+        h.write_local_feed(deployed_vm, sib_feed_name, f"{sib2_domain}\n")
+
+        pinned_hour = h.pin_cron_due(deployed_vm)
+        h.reload(deployed_vm, "cron")
+        hour_now = h.guest_hour(deployed_vm)
+        assert hour_now == pinned_hour, (
+            f"guest hour rolled over between pin_cron_due ({pinned_hour}) and cron ({hour_now}) — "
+            f"the EveryDay feeds were never due, this run proves nothing; re-run"
+        )
+
+        rebuild_after = _feed_log_count(deployed_vm, header, "Rebuild")
+        assert rebuild_after > rebuild_before, (
+            f"expected a NEW 'Rebuild' log line for {header} (before={rebuild_before}, after={rebuild_after})"
+        )
+
+        orig_now = deployed_vm.ssh("/bin/test", "-e", orig_path)
+        assert orig_now.returncode == 0, (
+            f"'.orig' {orig_path} still absent after the rebuild pass — the no-cache fallback should have refetched it"
+        )
+
+        txt_content = deployed_vm.ssh("cat", txt_path)
+        assert txt_content.returncode == 0 and txt_content.stdout.startswith("{"), (
+            f"rebuilt staging {txt_path} does not start with NDJSON '{{': {txt_content.stdout[:80]!r}"
+        )
+
+        h.flush_unbound_name(deployed_vm, sib2_domain)
+        ans_sib2 = h.dns_probe_client_until(client_vm, sib2_domain, h.is_vip)
+        assert not h.resolves_to(ans_sib2, STUB_DNS_A), f"sibling {sib2_domain} not re-ingested: {ans_sib2}"
+
+        for name in (domain_csv, domain_bare):
+            h.flush_unbound_name(deployed_vm, name)
+            ans = h.dns_probe_client_until(client_vm, name, h.is_vip)
+            assert not h.resolves_to(ans, STUB_DNS_A), (
+                f"{name} not blocked after the no-cache rebuild (fresh download + reparse): {ans}"
+            )
 
 
 # --------------------------------------------------------------------------- #
