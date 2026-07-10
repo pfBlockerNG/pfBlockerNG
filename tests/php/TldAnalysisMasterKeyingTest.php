@@ -51,12 +51,13 @@ final class TldAnalysisMasterKeyingTest extends TestCase
 		$pfb['alias_dnsbl_all']	= array();
 		$pfb['tld_update']	= array();
 
-		// Master list: a dot-less line ('com'), two dotted lines ('co.om',
-		// 'com.ac') and hostile rows (blank, trailing-dot-only, control-char
-		// only) that must never seed a bucket either way.
+		// Master list: dot-less lines ('com', punycode 'xn--80ak6aa92e'), two
+		// dotted lines ('co.om', 'com.ac'), a single-space line (kept as an
+		// inert garbage bucket) and hostile rows (blank, trailing-dot-only,
+		// control-char only) that must never seed a bucket either way.
 		file_put_contents(
 			$pfb['dnsbl_tld_data'],
-			"com\nco.om\ncom.ac\n\nbad.\n.\n\x01\n"
+			"com\nco.om\ncom.ac\nxn--80ak6aa92e\n \n\nbad.\n.\n\x01\n"
 		);
 
 		file_put_contents(
@@ -108,13 +109,16 @@ final class TldAnalysisMasterKeyingTest extends TestCase
 	/**
 	 * Scenario: the master-list loader buckets a dot-less line.
 	 *
-	 * Given:  a master list with a dot-less 'com' line, dotted siblings
-	 *         ('co.om', 'com.ac'), and hostile rows that carry no usable TLD
+	 * Given:  a master list with dot-less lines ('com', punycode
+	 *         'xn--80ak6aa92e'), dotted siblings ('co.om', 'com.ac'), a
+	 *         single-space line, and hostile rows that carry no usable TLD
 	 * When:   tld_analysis() loads the master list into $tlds
-	 * Then:   'com' is keyed under its own full value, not truncated to 'om';
-	 *         'co.om' keys under 'om' alone (no 'com' pollution); the dotted
-	 *         'com.ac' line still keys under 'ac'; the hostile rows seed no
-	 *         bucket; and the loader itself raises no diagnostic
+	 * Then:   each dot-less line is keyed under its own full value, not
+	 *         truncated ('com' not 'om'); 'co.om' keys under 'om' alone (no
+	 *         'com' pollution); the dotted 'com.ac' line still keys under
+	 *         'ac'; the single-space line keeps its own inert bucket; the
+	 *         zero-TLD hostile rows seed no bucket; and the loader itself
+	 *         raises no diagnostic
 	 */
 	public function testDotLessMasterLineKeysUnderItsOwnFullValue(): void
 	{
@@ -141,11 +145,27 @@ final class TldAnalysisMasterKeyingTest extends TestCase
 			"'com.ac' must key under 'ac'; got tlds: " . var_export($tlds, TRUE)
 		);
 
-		// R4: hostile rows (blank, 'bad.', '.', control-char-only) seed no bucket.
+		// R4a: the dot-less punycode label keys under its own full value too
+		// (same loader branch as 'com' -- documents the IDN class).
+		$this->assertTrue(
+			isset($tlds['xn--80ak6aa92e']['xn--80ak6aa92e']),
+			"'xn--80ak6aa92e' must key under its own full value; got tlds: " . var_export($tlds, TRUE)
+		);
+
+		// R4b: a single-space line keeps its own inert bucket (unreachable by
+		// tld_search; the shipped master file has no whitespace-only lines).
+		$this->assertSame(
+			array(' ' => ''),
+			$tlds[' '] ?? NULL,
+			'a single-space line must keep its own inert bucket; got: ' . var_export($tlds[' '] ?? NULL, TRUE)
+		);
+
+		// R4c: zero-TLD rows (blank, 'bad.', '.', control-char-only) seed no
+		// bucket; exact keyset pins the whole load.
 		$keys = array_keys($tlds);
 		sort($keys);
 		$this->assertSame(
-			array('ac', 'com', 'om'),
+			array(' ', 'ac', 'com', 'om', 'xn--80ak6aa92e'),
 			$keys,
 			'hostile master-list rows must not create extra buckets; got: ' . var_export($keys, TRUE)
 		);
@@ -154,10 +174,12 @@ final class TldAnalysisMasterKeyingTest extends TestCase
 		// dnsbl_save_stats()/rmdir_recursive() warn on this dev/CI box (no
 		// 'unbound' system user, tmpdir not pre-created) -- unrelated to the
 		// loader; filtered so a real loader regression still fails this row.
-		$isKnownNonLoaderNoise = static function (string $w): bool {
+		$tmpDir = $this->tmpDir;
+		$isKnownNonLoaderNoise = static function (string $w) use ($tmpDir): bool {
 			return str_starts_with($w, 'chown(): Unable to find uid for unbound')
 				|| str_starts_with($w, 'chgrp(): Unable to find gid for unbound')
-				|| (str_starts_with($w, 'unlink(') && str_contains($w, 'No such file or directory'));
+				|| (str_starts_with($w, 'unlink(') && str_contains($w, $tmpDir)
+					&& str_contains($w, 'No such file or directory'));
 		};
 		$loaderWarnings = array_values(array_filter($warnings, static fn (string $w): bool => !$isKnownNonLoaderNoise($w)));
 		$this->assertSame(
