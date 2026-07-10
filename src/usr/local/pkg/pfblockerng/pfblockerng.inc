@@ -12424,9 +12424,14 @@ function pfb_hash_write($base, $path) {
 // the next sync ingest — purge at install/upgrade.
 function pfb_purge_probe_bodies() {
 	global $pfb;
-	foreach (array($pfb['origdir'], $pfb['dnsorigdir']) as $dir) {
+	foreach (array($pfb['origdir'] ?? '', $pfb['dnsorigdir'] ?? '') as $dir) {
+		if ($dir === '' || !is_dir($dir)) {	// never glob an empty dir value (would sweep '/')
+			continue;
+		}
+		// Direct @unlink, NOT unlink_if_exists(): the latter re-globs its argument, so a
+		// metachar-named leftover could survive; glob() already resolved a literal path.
 		foreach (glob("{$dir}/*.md5.raw") ?: array() as $probe_body) {
-			unlink_if_exists($probe_body);
+			@unlink($probe_body);
 		}
 	}
 }
