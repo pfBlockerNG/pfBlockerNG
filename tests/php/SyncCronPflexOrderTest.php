@@ -8,9 +8,11 @@ use PHPUnit\Framework\TestCase;
  * issue #1154 — pfblockerng_sync_cron()'s .fail-marker retry called
  * pfb_update_check() BEFORE the per-row `$pflex` derivation ran that
  * iteration. PHP loop variables persist across iterations, so the retry
- * used the PREVIOUS row's $pflex (null on the first row): a Flex feed's
- * retry skipped its configured SSL downgrade, and a non-Flex feed retried
- * right after a Flex row inherited the downgrade it never asked for.
+ * read the PREVIOUS row's $pflex — undefined on the first row, emitting a
+ * PHP undefined-variable warning per cron run. The stale value is never
+ * CONSUMED (pfb_update_check() returns on its own .fail check before any
+ * $pflex use), so this pins warning hygiene and the per-row invariant,
+ * not a TLS behaviour change.
  *
  * pfblockerng.php carries top-level execution and is never require()'d
  * off-appliance (the PHPUnit bootstrap doesn't load www/ dispatcher
@@ -20,6 +22,8 @@ use PHPUnit\Framework\TestCase;
  * instead reads the function's source text and pins the ORDER of the two
  * statements: the first `$pflex = FALSE` derivation line must precede the
  * first `pfb_update_check(` call site (the .fail retry) textually.
+ * Whole-line comments are stripped before scanning so a comment mentioning
+ * either token cannot satisfy or break the ordering assertion.
  */
 final class SyncCronPflexOrderTest extends TestCase
 {
@@ -42,7 +46,9 @@ final class SyncCronPflexOrderTest extends TestCase
 			throw new RuntimeException('test bootstrap: pfblockerng_sync_cron() body not found');
 		}
 
-		self::$functionBody = $m[0];
+		// Scan code only: a whole-line comment naming either token must not
+		// shift the first-occurrence offsets (bit this PR once mid-review).
+		self::$functionBody = preg_replace('#^\s*//.*$#m', '', $m[0]);
 	}
 
 	public function testDerivationAndCallSiteBothPresentExactlyOnceAndTwoOrMoreTimes(): void
