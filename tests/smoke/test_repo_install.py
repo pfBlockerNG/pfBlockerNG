@@ -117,16 +117,16 @@ NETGATE_REPO_NAME = "pfSense"  # the real base-system Netgate repo (left enabled
 GUEST_FILE_LIST = f"{GUEST_SPIKE_DIR}/installed_files.txt"
 
 # Phase-2 (ADR-17) catalog generator under test. ``build-repo.sh`` is the real,
-# reusable per-ABI catalog tool the Phase-3 publish job runs; here it is staged to
-# the guest and run with the guest's libpkg to prove the SCRIPT's output (an
-# <ABI>/ catalog tree it lays out) is accepted by a real pfSense ``pkg update`` +
-# install. (The libpkg-on-Linux half of the build-side premise — that the SAME
-# script + the SAME ``pkg repo`` op runs on a Linux runner — is proven locally in
+# reusable catalog fallback tool; here it is staged to the guest and run with the
+# guest's libpkg to prove the SCRIPT's output (the release/<varver>/<arch>/ tree
+# it lays out, ADR-20) is accepted by a real pfSense ``pkg update`` + install.
+# (The libpkg-on-Linux half of the build-side premise — that the SAME script +
+# the SAME ``pkg repo`` op runs on a Linux runner — is proven locally in
 # RESULTS/02; the script is identical regardless of which libpkg invokes it.)
 BUILD_REPO_SH = Path(__file__).resolve().parents[2] / "scripts" / "build-repo.sh"
 GUEST_BUILD_REPO_SH = f"{GUEST_SPIKE_DIR}/build-repo.sh"
 GUEST_PKG_IN_DIR = f"{GUEST_SPIKE_DIR}/pkg_in"  # the input dir of .pkg for build-repo.sh
-SCRIPT_REPO_ROOT = f"{GUEST_SPIKE_DIR}/script_catalog"  # build-repo.sh --out (per-ABI tree)
+SCRIPT_REPO_ROOT = f"{GUEST_SPIKE_DIR}/script_catalog"  # build-repo.sh --out (varver tree)
 
 # Phase-3a (ADR-17) PURE-PYTHON catalog generator under test. Unlike build-repo.sh
 # (which needs a libpkg ``pkg`` binary), ``build-repo-portable.py`` builds the
@@ -249,17 +249,19 @@ def build_repo_via_script(vm: SmokeVM, pkg_files: list[Path]) -> str:
     """Run the Phase-2 ``scripts/build-repo.sh`` on the guest over ``pkg_files``.
 
     Stages the real ``build-repo.sh`` and the input ``.pkg`` to the guest, runs
-    ``build-repo.sh --in <pkg_in> --out <script_catalog>`` with the guest's own
-    libpkg, then returns the single per-ABI catalog directory it produced. The
-    script lays the release channel under ``<out>/release/<ABI>/`` (ADR-20, symmetric
-    with nightly), so ``<out>`` is the base a ``file://`` repo conf points at and the
-    conf's ``release/${ABI}`` url resolves to the returned dir.
+    ``build-repo.sh --in <pkg_in> --out <script_catalog> --varver <varver>`` with
+    the guest's own libpkg, then returns the catalog directory it produced. The
+    script lays the release channel under ``<out>/release/<varver>/<arch>/``
+    (ADR-20 varver keying, issue #1081 — matching ``build-repo-portable.py`` and
+    the printed conf), so ``<out>`` is the base a ``file://`` repo conf points at
+    and the conf's ``release/<varver>/<arch>`` url resolves to the returned dir.
+    The varver/arch come from the box itself via the ``_box_real_catalog`` oracle.
 
-    This validates the SCRIPT's output (the bucketed ``release/<ABI>/`` tree + the
-    catalog triple ``pkg repo`` emits) is accepted by a real pfSense box, the live
-    half of the build-side premise. The branch ``.pkg`` is a single ABI
-    (``FreeBSD:15:amd64``), so exactly one ``<ABI>/`` dir is expected.
+    This validates the SCRIPT's output (the ``release/<varver>/<arch>/`` tree +
+    the catalog triple ``pkg repo`` emits) is accepted by a real pfSense box, the
+    live half of the build-side premise.
     """
+    real_varver, real_arch = _box_real_catalog(vm).rsplit("/", 1)
     _ssh_check(vm, "/bin/rm", "-rf", GUEST_PKG_IN_DIR, SCRIPT_REPO_ROOT)
     _ssh_check(vm, "/bin/mkdir", "-p", GUEST_PKG_IN_DIR, GUEST_SPIKE_DIR)
     _scp_to_guest(vm, BUILD_REPO_SH, GUEST_BUILD_REPO_SH)
@@ -277,19 +279,16 @@ def build_repo_via_script(vm: SmokeVM, pkg_files: list[Path]) -> str:
         GUEST_PKG_IN_DIR,
         "--out",
         SCRIPT_REPO_ROOT,
+        "--varver",
+        real_varver,
         timeout=240.0,
     )
-    # The script nests the release channel under release/, then buckets by ABI; the
-    # branch .pkg is one ABI -> one release/<ABI>/ subdir.
-    release_root = f"{SCRIPT_REPO_ROOT}/release"
-    listing = _ssh_check(vm, "/bin/ls", "-1", release_root).stdout.split()
-    assert len(listing) == 1, f"build-repo.sh produced {listing!r} ABI buckets under release/, expected exactly 1"
-    abi_dir = f"{release_root}/{listing[0]}"
+    catalog_dir = f"{SCRIPT_REPO_ROOT}/release/{real_varver}/{real_arch}"
     # The catalog triple must be present (what `pkg update` consumes).
     for fname in ("meta.conf", "packagesite.pkg", "data.pkg"):
-        present = vm.ssh("/bin/test", "-f", f"{abi_dir}/{fname}")
-        assert present.returncode == 0, f"build-repo.sh did not emit {fname} under {abi_dir}"
-    return abi_dir
+        present = vm.ssh("/bin/test", "-f", f"{catalog_dir}/{fname}")
+        assert present.returncode == 0, f"build-repo.sh did not emit {fname} under {catalog_dir}"
+    return catalog_dir
 
 
 def build_repo_via_portable(vm: SmokeVM, pkg_files: list[Path], tmp_path: Path) -> str:
@@ -904,7 +903,8 @@ def test_build_repo_script_catalog_is_accepted(repo_vm: SmokeVM) -> None:
     ``pkg repo`` op are identical regardless of which libpkg runs them).
 
     Given the package ABSENT and a catalog produced by ``build-repo.sh`` over the
-      branch ``.pkg`` (its ``<ABI>/`` bucket holds meta.conf/packagesite.pkg/data.pkg),
+      branch ``.pkg`` (its ``release/<varver>/<arch>/`` bucket holds
+      meta.conf/packagesite.pkg/data.pkg),
       enabled via a NONE-signed ``file://`` repo above the pfSense repo,
     When ``pkg update`` reads it and ``pkg install -y`` runs (NO ``-r``, NO ``-f``),
     Then ``pkg update`` accepts the script-generated catalog AND the install comes
