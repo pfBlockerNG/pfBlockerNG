@@ -123,6 +123,23 @@ EOF
     End
   End
 
+  Describe 'trailing-newline bypass'
+    # A TRAILING newline is deleted by $(...) stripping, so an emptiness check
+    # on the tr remainder silently accepts it — the guards compare against a
+    # sentinel instead. Values built via printf: Parameters cannot carry \n.
+    # Only --varver gets a row: argv delivers a raw newline, while an ABI rides
+    # line-based metadata extraction (sed -n 's/^abi=//p'), which cannot emit
+    # one — validate_abi() carries the same sentinel purely as parity.
+    It 'rejects a --varver with a trailing newline'
+      hostile="$(printf 'ce-2.8\nZ')"; hostile="${hostile%Z}"
+      fake_pkg a.pkg pfSense-pkg-pfBlockerNG 4.0.1 FreeBSD:15:amd64 php83
+      When call run_build --varver "$hostile"
+      The status should equal 2
+      The stderr should include 'unsafe or invalid --varver'
+      The path "${work}/out/release" should not be exist
+    End
+  End
+
   It 'fails loud on a mixed-ABI input instead of mixing editions in one bucket'
     fake_pkg a.pkg pfSense-pkg-pfBlockerNG 4.0.1 FreeBSD:15:amd64 php83
     fake_pkg b.pkg pfSense-pkg-pfBlockerNG 4.0.1_1 FreeBSD:16:amd64 php85
