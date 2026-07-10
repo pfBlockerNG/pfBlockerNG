@@ -296,9 +296,11 @@ if (isset($pconfig['logFile']) && !empty($pconfig['logFile']) && (isset($pconfig
 
 		// Python log file must be truncated to not lose python file pointer
 		if (strpos($s_logfile, 'py_error.log') !== FALSE) {
-			$fp = @fopen("{$s_logfile}", 'r+');
-			@ftruncate($fp, 0);
-			@fclose($fp);
+			// issue #1097: 'r+' never creates -- ftruncate(FALSE) throws TypeError on PHP 8, '@' only silences warnings
+			if (($fp = @fopen("{$s_logfile}", 'r+')) !== FALSE) {
+				@ftruncate($fp, 0);
+				@fclose($fp);
+			}
 		} else {
 			unlink_if_exists($s_logfile);
 
@@ -317,21 +319,23 @@ if (isset($pconfig['logFile']) && !empty($pconfig['logFile']) && (isset($pconfig
 	elseif($pconfig['download']) {
 		if (file_exists($s_logfile)) {
 			session_cache_limiter('public');
-			$fd = @fopen($s_logfile, "rb");
-			header("Content-Type: application/octet-stream");
-			header("Content-Length: " . filesize($s_logfile));
-			header("Content-Disposition: attachment; filename=\"" .
-				trim(htmlentities(basename($s_logfile))) . "\"");
-			if (isset($_SERVER['HTTPS'])) {
-				header('Pragma: ');
-				header('Cache-Control: ');
-			} else {
-				header("Pragma: private");
-				header("Cache-Control: private, must-revalidate");
+			// issue #1097: a lost TOCTOU race must skip headers/exit, not throw on fpassthru(FALSE)
+			if (($fd = @fopen($s_logfile, "rb")) !== FALSE) {
+				header("Content-Type: application/octet-stream");
+				header("Content-Length: " . filesize($s_logfile));
+				header("Content-Disposition: attachment; filename=\"" .
+					trim(htmlentities(basename($s_logfile))) . "\"");
+				if (isset($_SERVER['HTTPS'])) {
+					header('Pragma: ');
+					header('Cache-Control: ');
+				} else {
+					header("Pragma: private");
+					header("Cache-Control: private, must-revalidate");
+				}
+				@fpassthru($fd);
+				@fclose($fd);
+				exit;
 			}
-			@fpassthru($fd);
-			@fclose($fd);
-			exit;
 		}
 	}
 } else {
