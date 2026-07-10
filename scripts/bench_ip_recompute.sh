@@ -18,6 +18,11 @@
 # old-vs-new (ownership may differ; membership must not). Extras: a
 # single-feed-change parity run (old re-dedups ONE feed vs one full
 # recompute) and a dMax-enabled recompute run on scenario D.
+#
+# run_old exercises duplicate(), removed by issue #1084 (commit 63ac46e8) --
+# on this tree it is dead (the `duplicate` call fails). To actually run/compare
+# the old arm, check out 12c2b4a2 (the commit immediately before the removal)
+# for that side of the comparison; duplicate() is never resurrected here.
 set -u
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -115,6 +120,13 @@ run_new() { # $1 statedir  $2 orderfile [$3 repmode $4 max $5 cc $6 ccw $7 ccb]
 	pfbdeny="$st/deny/"; pfbmatch="$st/match/"; tmpdir="$st/tmp"
 	errorlog="$st/err.log"; pathgrepcidr="$GREPCIDR"
 	ip_placeholder3='240.0.0'
+	# dMax's offender classify needs pathgeoip/pathgeoipdat DEFINED under `set -u`
+	# (else "unbound variable" aborts the whole script) -- a dev box lacking
+	# mmdblookup; stub it like the shellspec make_geoip_stub helper so the bench
+	# exercises real classification instead of the no-GeoIP bail.
+	pathgeoip="$st/mmdblookup"; pathgeoipdat="$st/geo.mmdb"
+	printf '#!/bin/sh\nprintf %%s "Could not find an entry for this IP address"\n' > "$pathgeoip"
+	chmod +x "$pathgeoip"; touch "$pathgeoipdat"
 	pfb_recompute recompute v4 "$2" "$st/counts" on \
 		"${3:-off}" "${4:-0}" "${5:-}" "${6:-off}" "${7:-off}"
 }
@@ -174,12 +186,13 @@ measure "D single-change old(1 feed)" run_old "$WORK/st-old" "$WORK/order-one"
 setup_state "$WORK/st-new"
 measure "D single-change new(full)" run_new "$WORK/st-new" "$WORK/order"
 
-# Reputation runs on D. dMax on a dev box has no mmdblookup, so classify
-# bails and the pass rides the direct path (detect cost only). pMax needs no
-# GeoIP; max=8 sits below D's ~9 rows-per-/24 average, so tens of thousands
-# of offender windows exercise the divert/window/reinject path for real.
+# Reputation runs on D. run_new's own GeoIP stub reports "not found" for every
+# offender, so ccblack=block classifies + collapses for real (not the no-
+# GeoIP bail). pMax needs no GeoIP; max=8 sits below D's ~9 rows-per-/24
+# average, so tens of thousands of offender windows exercise the divert/
+# window/reinject path for real.
 setup_state "$WORK/st-new"
-measure "D dmax-bail new(recompute)" run_new "$WORK/st-new" "$WORK/order" dmax 50 '' off block
+measure "D dmax new(recompute)" run_new "$WORK/st-new" "$WORK/order" dmax 50 '' off block
 setup_state "$WORK/st-new"
 measure "D pmax-heavy new(recompute)" run_new "$WORK/st-new" "$WORK/order" pmax 8 '' off block
 

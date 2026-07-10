@@ -299,7 +299,41 @@ reputation (v4-only): when invoked it always takes the direct dedup-only path.
 **Upgrade seeding fallback.** A header with no snapshot yet (a pre-#1084 install, or a header
 never recomputed on this box) seeds one from the live deny `.txt`
 (`pfb_ip_recompute_seed_snapshot()`) so an existing alias survives its first post-upgrade pass
-instead of vanishing from the memberlist.
+instead of vanishing from the memberlist. A failed seed copy is logged, never silent.
+
+**GeoIP-outage keep-previous.** If `mmdblookup`/the GeoIP database is unavailable mid-pass,
+dMax's offender classification bails (rides the direct path, no reputation applied) and the
+swap's finish arm **keeps every previous match artifact untouched** rather than reconciling a
+missing `.new` sibling away as "no match this pass" — that reconcile is only safe when GeoIP
+actually ran. A dropped GeoIP feed cannot silently erase yesterday's match files.
+
+**Match-mode multi-alias emission (a deliberate delta).** `ccblack=match` writes
+`match<alias>.txt` for **every** member alias sharing an offender `/24` window, not just one.
+The old `reputation_dmax()` wrote only the first alias in glob order (whichever the filesystem
+happened to enumerate first); the recompute window pass iterates every alias present in that
+window's `winaliases` set, so a shared offender is now visible to every alias whose rows are in
+it — more complete match coverage, not a bug.
+
+**Suppression re-applies whenever recompute ran.** Recompute rewrites every family alias's deny
+file whenever it runs at all — including one resurrected only because a sibling alias's feed
+changed. The suppression pass and the closing report both key off "recompute ran this family
+this pass" (`$pfb_recompute_ran_v4`/`$pfb_recompute_ran_v6`), not "this alias's own feed
+changed", so a quiet alias whose content was rewritten by a sibling's trigger still gets
+suppression/reporting applied to it.
+
+**Both dRep and pRep on: the execution order flipped.** The old incremental path ran pMax's
+`exec` first, then dMax's — the reverse of recompute's order: recompute applies dMax to every
+family alias first (inside its own `pfb_recompute()` pass), and the legacy pMax `exec` runs
+**afterward**, over recompute's already-collapsed deny files. Observable consequence: an offender
+window dMax already collapsed to one `/24` is not something pMax discovers again the old way (it
+now inherits recompute's collapse instead of independently re-detecting the same offender).
+
+**Swap is a checked sequence, not an atomic batch.** Every recompute artifact's `.new` sibling is
+moved into place with its own rc-checked `mv`, in sequence — never one atomic-looking group. A
+stage failure *before* the swap starts cleans up every `.new` sibling this pass wrote and aborts
+cleanly; a `mv` failure *within* the swap itself cannot be rolled back (earlier moves in that same
+sequence may already be live), so it only logs the failing artifact and aborts further swapping —
+the family can be left mixed until the next successful pass.
 
 ---
 

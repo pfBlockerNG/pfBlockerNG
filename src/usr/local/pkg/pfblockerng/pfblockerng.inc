@@ -4967,20 +4967,47 @@ function pfb_ip_recompute_snapshot_path(string $snapdir, string $header): string
 
 /**
  * The recompute memberlist entry for one header -- the existing snapshot when present, else a
- * one-line seed from the live deny .txt (first run after upgrade, or a header whose snapshot
- * was never written on this box). Load-bearing for upgrade continuity: without it, a
- * pre-#1084 deny alias would vanish from the memberlist (and the masterfile) on the first
+ * full copy of the live deny .txt seeded in its place (first run after upgrade, or a header
+ * whose snapshot was never written on this box). Load-bearing for upgrade continuity: without
+ * it, a pre-#1084 deny alias would vanish from the memberlist (and the masterfile) on the first
  * recompute pass instead of carrying its current content forward.
  */
 function pfb_ip_recompute_seed_snapshot(string $header, string $snapdir, string $denydir): string {
 	$snap = pfb_ip_recompute_snapshot_path($snapdir, $header);
 	if (!file_exists($snap)) {
 		$live = "{$denydir}/{$header}.txt";
-		if (file_exists($live)) {
-			@copy($live, $snap);
+		if (file_exists($live) && !@copy($live, $snap)) {
+			pfb_logger("recompute [ {$header} ]: could not seed snapshot from the live deny file [ {$live} ]\n", 2);
 		}
 	}
 	return $snap;
+}
+
+// Streamed line count matching `grep -c ^` (every line, blank ones included, and an
+// unterminated final line still counts -- @file()'s in-memory array did the same, this just
+// avoids materializing the whole file as an array (issue #1084 review: ~68MB peak at 1M lines).
+function pfb_ip_recompute_count_lines(string $path): int {
+	$fh = @fopen($path, 'rb');
+	if ($fh === FALSE) {
+		return 0;
+	}
+	$count    = 0;
+	$sawByte  = FALSE;
+	$lastByte = '';
+	while (!feof($fh)) {
+		$chunk = fread($fh, 1 << 20);
+		if ($chunk === FALSE || $chunk === '') {
+			break;
+		}
+		$sawByte = TRUE;
+		$count  += substr_count($chunk, "\n");
+		$lastByte = substr($chunk, -1);
+	}
+	fclose($fh);
+	if ($sawByte && $lastByte !== "\n") {
+		$count++;
+	}
+	return $count;
 }
 
 // Persist the pristine post-preprocessing snapshot pfb_recompute() reads, plus the
@@ -4991,8 +5018,7 @@ function pfb_ip_recompute_write_snapshot(string $src, string $header, string $sn
 		return;
 	}
 	@copy($src, pfb_ip_recompute_snapshot_path($snapdir, $header));
-	$lines = @file($src, FILE_IGNORE_NEW_LINES);
-	@file_put_contents("{$origdir}/{$header}.aggcount", (is_array($lines) ? count($lines) : 0) . "\n", LOCK_EX);
+	@file_put_contents("{$origdir}/{$header}.aggcount", pfb_ip_recompute_count_lines($src) . "\n", LOCK_EX);
 }
 
 // Drop a header's recompute snapshot (+ aggcount sidecar) on removal/download-failure -- else

@@ -812,10 +812,12 @@ pfb_aggregate() {
 #     a family-scoped recompute untouched) and the per-alias counts lines;
 #     mastercat.new is cut from the completed masterfile.new.
 #   swap -- every artifact above is written as a ".new" sibling of its live
-#     path; the atomic `mv` batch runs ONLY after every stage's exit status
-#     was checked. Any stage failure logs, removes whatever ".new" siblings
-#     were already written for this pass's alias roster, and returns
-#     non-zero WITHOUT starting the swap.
+#     path. Every mv is rc-checked, in sequence: a stage BEFORE the swap
+#     failing logs, cleans up whatever ".new" siblings this pass already
+#     wrote, and returns non-zero WITHOUT starting the swap; a mv WITHIN the
+#     swap failing logs the artifact and returns non-zero WITHOUT rollback --
+#     earlier moves in that same sequence may already be live, so the family
+#     can stay mixed until the next successful pass.
 #
 # Callers (pfblockerng.inc's pfb_ip_recompute_matrix()): invoke once per
 # family after per-feed preprocessing. recompute does not refill an empty
@@ -830,8 +832,11 @@ pfb_recompute() {
 	rec_repmode="${6:-off}"
 	rec_max="${7:-0}"
 	rec_cc="${8:-}"
-	rec_ccwhite="${9:-off}"
-	rec_ccblack="${10:-off}"
+	# The legacy verbs' top-level init case-folds ccwhite/ccblack (never cc
+	# itself) -- match it, or a capitalized config value silently disables
+	# the dMax match/exempt branches below (both compare against 'match').
+	rec_ccwhite="$(echo "${9:-off}" | tr '[:upper:]' '[:lower:]')"
+	rec_ccblack="$(echo "${10:-off}" | tr '[:upper:]' '[:lower:]')"
 
 	if [ -z "${rec_family}" ] || [ -z "${rec_memberlist}" ] || [ -z "${rec_countsfile}" ]; then
 		log="recompute: missing family/memberlist/countsfile argument."
@@ -890,7 +895,12 @@ pfb_recompute() {
 		rec_ownedfile="${rec_scratch}/owned/${rec_alias}.txt"
 
 		if [ "${rec_dedup}" != 'on' ] || [ ! -s "${rec_cumulative}" ]; then
-			cp -f "${rec_snap}" "${rec_ownedfile}"
+			if ! cp -f "${rec_snap}" "${rec_ownedfile}"; then
+				log="recompute [ ${rec_family} ]: could not copy snapshot for [ ${rec_alias} ]; aborting pass, cleaning up partial artifacts"
+				echo "${log}" | tee -a "${errorlog}"
+				pfb_recompute_clean_new
+				return 1
+			fi
 		else
 			"${pathgrepcidr}" -vf "${rec_cumulative}" "${rec_snap}" > "${rec_ownedfile}"
 			rec_grc=$?
@@ -902,7 +912,17 @@ pfb_recompute() {
 		fi
 
 		if [ "${rec_dedup}" = 'on' ]; then
-			cat "${rec_ownedfile}" >> "${rec_cumulative}"
+			# issue #1084: blank-filtered -- an unfiltered blank line still gives
+			# the cumulative nonzero size (the `-s` guard above no longer sees it
+			# as empty), so a later alias hits grepcidr with a pattern-free file,
+			# which prints NOTHING for -vf (not "keep everything"): it would wipe
+			# every row of every lower-priority feed sharing this pass.
+			if ! awk '$0 != ""' "${rec_ownedfile}" >> "${rec_cumulative}"; then
+				log="recompute [ ${rec_family} ]: could not extend cumulative dedup stream for [ ${rec_alias} ]; aborting pass, cleaning up partial artifacts"
+				echo "${log}" | tee -a "${errorlog}"
+				pfb_recompute_clean_new
+				return 1
+			fi
 		fi
 	done < "${rec_memberlist}"
 
@@ -923,8 +943,9 @@ pfb_recompute() {
 		fi
 		rec_rc=$?
 		if [ "${rec_rc}" -ne 0 ]; then
-			log="recompute [ ${rec_family} ]: masterfile strip pass failed; aborting pass"
+			log="recompute [ ${rec_family} ]: masterfile strip pass failed; aborting pass, cleaning up partial artifacts"
 			echo "${log}" | tee -a "${errorlog}"
+			pfb_recompute_clean_new
 			return 1
 		fi
 	fi
@@ -1320,8 +1341,20 @@ pfb_recompute_rep_subset() {
 	return 0
 }
 
-# The shared recompute artifact tail: mastercat derivation + the atomic
-# ".new" swap batch, used by both the direct and offender-subset paths.
+# One rc-checked swap move: a mid-swap failure cannot be rolled back (earlier
+# moves in the same pass may already be live), so this only logs the
+# offending artifact and lets the caller abort further swapping.
+pfb_recompute_swap_mv() { # $1 src  $2 dst  $3 artifact label for the log
+	if ! mv -f "$1" "$2"; then
+		log="recompute [ ${rec_family} ]: swap failed moving [ $3 ] into place -- family may be partially swapped until the next successful pass"
+		echo "${log}" | tee -a "${errorlog}"
+		return 1
+	fi
+}
+
+# The shared recompute artifact tail: mastercat derivation + the rc-checked
+# per-file ".new" swap sequence, used by both the direct and offender-subset
+# paths.
 pfb_recompute_finish() {
 	# mastercat derives from the COMPLETED masterfile.new (today's exact
 	# derivation, both families' rows) -- masterfile.new always exists when
@@ -1346,18 +1379,20 @@ pfb_recompute_finish() {
 		cat "${rec_matchexemptmembers}" >> "${rec_matchdedup_new}"
 	fi
 
-	# Swap: every artifact above is a ".new" sibling; nothing here can fail
-	# for a reason this pass hasn't already checked, so the batch runs whole.
+	# Swap: each artifact's ".new" sibling is moved into place in sequence,
+	# rc-checked -- a failure here cannot be rolled back (earlier moves in
+	# this loop may already be live), so it only logs the failing artifact
+	# and aborts; the family may be mixed until the next successful pass.
 	while IFS=' ' read -r rec_alias _; do
-		mv -f "${pfbdeny}${rec_alias}.txt.new" "${pfbdeny}${rec_alias}.txt"
+		pfb_recompute_swap_mv "${pfbdeny}${rec_alias}.txt.new" "${pfbdeny}${rec_alias}.txt" "${rec_alias}.txt.new" || return 1
 	done < "${rec_priority}"
 
 	if [ "${rec_dedup}" = 'on' ]; then
-		mv -f "${rec_masterfile_new}" "${masterfile}"
-		mv -f "${rec_mastercat_new}" "${mastercat}"
+		pfb_recompute_swap_mv "${rec_masterfile_new}" "${masterfile}" 'masterfile.new' || return 1
+		pfb_recompute_swap_mv "${rec_mastercat_new}" "${mastercat}" 'mastercat.new' || return 1
 	fi
 
-	mv -f "${rec_countsfile_new}" "${rec_countsfile}"
+	pfb_recompute_swap_mv "${rec_countsfile_new}" "${rec_countsfile}" 'countsfile.new' || return 1
 
 	if [ "${rec_repmode}" = 'dmax' ]; then
 		if [ "${rec_geoip_ok:-1}" -eq 1 ]; then
@@ -1366,13 +1401,13 @@ pfb_recompute_finish() {
 			# reconciling away a stale live file here is correct, not destructive.
 			while IFS=' ' read -r rec_alias _; do
 				if [ -f "${pfbmatch}match${rec_alias}.txt.new" ]; then
-					mv -f "${pfbmatch}match${rec_alias}.txt.new" "${pfbmatch}match${rec_alias}.txt"
+					pfb_recompute_swap_mv "${pfbmatch}match${rec_alias}.txt.new" "${pfbmatch}match${rec_alias}.txt" "match${rec_alias}.txt.new" || return 1
 				else
 					rm -f "${pfbmatch}match${rec_alias}.txt"
 				fi
 			done < "${rec_priority}"
 			if [ -f "${pfbmatch}${rec_matchdedup}.new" ]; then
-				mv -f "${pfbmatch}${rec_matchdedup}.new" "${pfbmatch}${rec_matchdedup}"
+				pfb_recompute_swap_mv "${pfbmatch}${rec_matchdedup}.new" "${pfbmatch}${rec_matchdedup}" "${rec_matchdedup}.new" || return 1
 			elif [ "${rec_ccwhite}" = 'match' ]; then
 				rm -f "${pfbmatch}${rec_matchdedup}"
 			fi
@@ -2022,6 +2057,7 @@ case "${1}" in
 		# issue #1084: pfblockerng.sh recompute <family> <memberlist> <countsfile>
 		#              <dedup> <repmode> <max> <cc> <ccwhite> <ccblack>
 		pfb_recompute "$@"
+		exitnow "$?"
 		;;
 	whoisconvert)
 		whoisconvert
