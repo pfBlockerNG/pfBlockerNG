@@ -286,7 +286,7 @@ _TRIPLE_QUOTE_TOKENS = ('"""', "'''")
 def _py_triple_close_count(line: str, token: str) -> int:
     """Count real, escape-aware ``token`` occurrences in an OPEN docstring line.
 
-    issue #1090: a backslash-escaped delimiter (``\\` + token``) is body text,
+    issue #1090: a backslash-escaped delimiter (a backslash before ``token``) is body text,
     not a close -- mirrors ``_py_docstring_probe``'s in-triple escape handling,
     restricted to counting the already-known open token.
     """
