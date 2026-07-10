@@ -51,7 +51,7 @@ final class LogLinecountGuardTest extends TestCase
 		// stripped (plain PHP string stays). If extraction fails the guard block
 		// changed shape — fail loudly rather than skip.
 		if (!function_exists('pfb_log_linecount_oracle')
-			&& preg_match('/(if \(!is_numeric\(\$linecnt\)\).*?Displaying last.*?\n\t{3}\})\n/s', $src, $m)) {
+			&& preg_match('/(if \(!is_numeric\(\$linecnt\)\).*?Displaying last.*?\n[\t ]*\})\n/s', $src, $m)) {
 			$block = strtr($m[1], [
 				'print ('  => '$out .= (',
 				'exit;'    => 'return array($out, NULL, NULL, NULL);',
