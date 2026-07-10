@@ -77,8 +77,12 @@ element-hiding lines in plain feeds are now honoured via `parse_abp()` (D2); and
 feed's `||<IP>^` anchor now collects to the DNSBLIP firewall alias where it previously
 vanished (D6). The element-hiding capture requires an ABP cosmetic domain-list prefix
 (`[A-Za-z0-9._,~*-]`) before the first marker — a hosts line's mid-line `` ## `` inline
-comment, a `#`-led comment, or a CSV row's `#`-fragment URL is never captured — and `//`-led
-lines are comments, never `/re/` regex rules. Every line class outside the delta table is
+comment, a `#`-led comment, or a CSV row's `#`-fragment URL is never captured — a
+comma-first line is never captured either (issue #1067: a leading comma is not valid ABP
+syntax and would collide with the plain `,domain,,log,feed,group` CSV dialect downstream;
+the manifest writer's plain fallback likewise skips non-captured `#`-bearing residue lines
+instead of extracting a blockable column-1 "domain") — and `//`-led lines are comments,
+never `/re/` regex rules. Every line class outside the delta table is
 byte-identical to `origin/devel`, pinned by a corpus oracle (`tests/test_adr62_*`,
 `tests/php/Adr62*Test.php`) whose golden fixtures were captured by running the real
 functions at the pre-change base and are regenerated only through those same functions.

@@ -7188,8 +7188,11 @@ function pfb_unbound_python_sources($feeds) {
 				// 'plain': extract bare domains (col1) from the 6-col CSV; this is
 				// already IP-free (IPs went to the firewall path) and already
 				// cleaned/validated by the download loop.
+				// issue #1067: a non-captured line still carrying '#' is stale verbatim
+				// ABP residue from a pre-guard staging file, never a machine CSV row --
+				// skip it rather than extract col1 into a blockable "domain".
 				$cols = explode(',', $line, 3);
-				if (isset($cols[1]) && $cols[1] !== '') {
+				if (strpos($line, '#') === FALSE && isset($cols[1]) && $cols[1] !== '') {
 					@fwrite($raw_h, "{$cols[1]}\n");
 				}
 			}

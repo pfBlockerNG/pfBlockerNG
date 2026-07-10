@@ -54,6 +54,7 @@ final class Adr62DnsblIsAbpRuleLineTest extends TestCase
 			'tab-led cosmetic rule (caller trims)' => ["\thost.example##.ad", false],
 			'all-hash banner (marker at pos 0)'   => ['####################', true],
 			'cosmetic rule, domain list'          => ['a.com,b.com##.ad', true],
+			'cosmetic rule, longer domain list'   => ['example.com,example.org##.ad', true],
 			'cosmetic rule, negated domain'       => ['~ex.com##.ad', true],
 			'cosmetic rule, mixed-case domain'    => ['EXAMPLE.com##.ad', true],
 			// '//'-led lines are comments by feed convention, never regex rules --

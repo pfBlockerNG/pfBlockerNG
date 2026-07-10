@@ -174,6 +174,33 @@ final class UnboundPythonSourcesTest extends TestCase
 		$this->assertSame("||ads.example^\n@@||good.example^\n", $raw);
 	}
 
+	/**
+	 * Scenario: stale pre-guard verbatim residue in a staged '.txt'.
+	 *
+	 * Given:  a '.txt' holding a comma-first cosmetic ABP line captured
+	 *         verbatim BEFORE the issue #1067 leading-comma capture guard,
+	 *         alongside a legit machine CSV row
+	 * When:   pfb_unbound_python_sources() rebuilds the per-feed raw
+	 * Then:   the residue line is skipped entirely — neither passed verbatim
+	 *         nor CSV-mangled into a bare 'domain' that Python would block —
+	 *         while the legit row still yields its domain
+	 */
+	public function testStaleCommaFirstAbpResidueIsSkippedNotExtracted(): void
+	{
+		file_put_contents("{$this->tmp}/dnsbl/stalefeed.txt",
+			"1,legit.example,a,b,c,d\n" .
+			",stale-block.example,stale2.example##.ad\n");
+		pfb_unbound_python_sources([
+			['header' => 'stalefeed', 'group' => 'g', 'log' => '1', 'format' => 'plain', 'provenance' => 'feed'],
+		]);
+		$raw = file_get_contents("{$this->tmp}/pfb_py_raw/stalefeed.raw");
+		$this->assertSame(
+			"legit.example\n",
+			$raw,
+			'stale comma-first ABP residue must not leak a blockable domain; got: ' . var_export($raw, TRUE)
+		);
+	}
+
 	public function testConfigBlockEmptyWhenUnconfigured(): void
 	{
 		$m = pfb_unbound_python_sources($this->feeds());
