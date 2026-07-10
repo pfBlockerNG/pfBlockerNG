@@ -1984,6 +1984,24 @@ function pfb_hsc($value) {
 	return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
 }
 
+// Compose the resolved-hostname stats cell for the IP src/dst-in stats. The raw
+// hostname is attacker-influenceable, so HTML-encode it; a >=45-char value is
+// truncated for display with the full value kept in the title attribute.
+// issue #1069: truncate the RAW value THEN encode -- encoding first then substr()
+// can split a named entity (&quot; -> &qu) or a multibyte char.
+function pfb_stat_hostname_cell($resolved) {
+	$resolved = (string) $resolved;
+	$full = pfb_hsc($resolved);
+	if (strlen($resolved) >= 45) {
+		$title = "title=\"{$full}\"";
+		$cell  = pfb_hsc(mb_substr($resolved, 0, 45, 'UTF-8')) . "<small>...</small>";
+	} else {
+		$title = '';
+		$cell  = $full;
+	}
+	return "<br /><span {$title}><small>{$cell}</small></span>";
+}
+
 // Function to Filter Alerts report on user defined input
 function pfb_match_filter_field($flent, $fields) {
 
@@ -5098,17 +5116,7 @@ foreach ($stats as $stat_type => $stype):
 
 								// Get external IP hostname and Resolved hostname
 								elseif ($stat_type == 'ipsrcipin' || $stat_type == 'ipdstipout') {
-									$title = '';
-									// issue #1069: escape BEFORE truncation, and fix the stray-brace
-									// `$title}` typo (was never a valid `{$title}` interpolation).
-									$h_subdata2 = pfb_hsc($subdata[2]);
-									if (strlen($subdata[2]) >= 45) {
-										$title = "title=\"{$h_subdata2}\"";
-										$subdata[2] = substr($h_subdata2, 0, 45) . "<small>...</small>";
-									} else {
-										$subdata[2] = $h_subdata2;
-									}
-									$hostname = "<br /><span {$title}><small>{$subdata[2]}</small></span>";
+									$hostname = pfb_stat_hostname_cell($subdata[2]);
 								}
 							}
 
@@ -5281,9 +5289,10 @@ var pieChart_<?=$stat_type?> = new d3pie("pieChart_<?=$stat_type?>", {
 			}
 
 			print("{");
-			// issue #1069: log/feed-derived label into an inline <script> -- JSON_HEX_*
-			// escapes quotes/tags so a domain can't break out of the JS string or the block.
-			print('"label": ' . json_encode($k[$i], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) . ', "value": ');
+			// issue #1069: log/feed-derived label into an inline <script>. pfb_js_string()
+			// JSON-encodes with JSON_HEX_* (quote/tag breakout) + JSON_INVALID_UTF8_SUBSTITUTE
+			// and a FALSE fallback, so a non-UTF8 byte can't emit invalid JS.
+			print('"label": ' . pfb_js_string((string) $k[$i]) . ', "value": ');
 			print((float) $summary[$k[$i]]);
 			print(', "color": "' . $segcolors[$i % $numsegments] . '"');
 			print("}");
