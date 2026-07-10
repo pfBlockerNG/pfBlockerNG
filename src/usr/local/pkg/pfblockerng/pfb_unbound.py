@@ -1669,7 +1669,7 @@ def init_standard(id: int, env: module_env) -> bool:
                 if dataDB or zoneDB or regexDB or allowRegexDB:
                     pfb["python_blacklist"] = True
 
-                # Emit pfb_py_count (the LOADED total) pfb_update_unbound() reads for the UI.
+                # Emit pfb_py_count (the LOADED total) that pfb_update_unbound() reads for the UI.
                 dnsbl_emit_count(pfb["pfb_py_count"], build_result.counts)
                 # ADR-48 (issue #789): emit the per-entry reject tally artifact
                 # alongside the count -- PHP reads it after this run and emits
