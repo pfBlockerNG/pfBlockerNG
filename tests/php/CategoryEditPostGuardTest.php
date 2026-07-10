@@ -385,8 +385,9 @@ final class CategoryEditPostGuardTest extends TestCase
 		} catch (\TypeError $e) {
 			$this->fail('an array custom value must not TypeError explode(): ' . $e->getMessage());
 		}
-		// R10: base64_encode() (save-success path, line ~806) is unreachable with
-		// an empty string too -- shadowed by this same guard, not separately tested.
+		// R10/R11: both save-success sinks -- base64_encode('custom') and the
+		// asn-format htmlentities(url-N) -- are unreachable once the guard raises
+		// input errors (the save block requires empty $input_errors); not separately tested.
 		$this->assertSame([], $errors, 'a blanked custom value adds no further validation errors');
 		$this->assertSame('', $_POST['custom']);
 	}
