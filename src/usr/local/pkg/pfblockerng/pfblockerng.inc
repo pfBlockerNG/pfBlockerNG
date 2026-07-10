@@ -17095,7 +17095,7 @@ function sync_package_pfblockerng($cron='') {
 
 			// Add empty placeholder IP
 			else {
-				@file_put_contents($dnsblip_v4, "{$pfb['ip_ph']}\n", LOCK_EX);
+				$pfb_dnsblip_built = (@file_put_contents($dnsblip_v4, "{$pfb['ip_ph']}\n", LOCK_EX) !== FALSE);
 			}
 			// issue #1097: a failed rebuild must not advance the fingerprint -- a stamped
 			// .fp marks the stale output current and suppresses every future retry.
@@ -17132,7 +17132,7 @@ function sync_package_pfblockerng($cron='') {
 
 			// Add empty placeholder IP
 			else {
-				@file_put_contents($dnsblip_v6, "::{$pfb['ip_ph']}\n", LOCK_EX);
+				$pfb_dnsblip_built = (@file_put_contents($dnsblip_v6, "::{$pfb['ip_ph']}\n", LOCK_EX) !== FALSE);
 			}
 			// issue #1097: same retry-preserving gate as the v4 path above.
 			if ($pfb_dnsblip_built) {
