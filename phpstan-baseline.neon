@@ -115,6 +115,48 @@ parameters:
 			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
 
 		-
+			message: '#^Parameter \#1 \$milliseconds of method SQLite3\:\:busyTimeout\(\) expects int, string given\.$#'
+			identifier: argument.type
+			count: 2
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Parameter \#1 \$string of function htmlspecialchars expects string, int given\.$#'
+			identifier: argument.type
+			count: 2
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Parameter \#1 \$string of function str_pad expects string, int\<0, max\> given\.$#'
+			identifier: argument.type
+			count: 1
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Parameter \#1 \$string of function strlen expects string, \(float\|int\) given\.$#'
+			identifier: argument.type
+			count: 2
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Parameter \#1 \$string of function substr expects string, \(float\|int\) given\.$#'
+			identifier: argument.type
+			count: 2
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Parameter \#2 \$callback of function array_filter expects \(callable\(string\)\: bool\)\|null, ''strlen'' given\.$#'
+			identifier: argument.type
+			count: 3
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Parameter \#3 \$value of function curl_setopt expects 0\|2, false given\.$#'
+			identifier: argument.type
+			count: 1
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
 			message: '#^Undefined variable\: \$logtype$#'
 			identifier: variable.undefined
 			count: 1
@@ -323,6 +365,12 @@ parameters:
 			identifier: variable.undefined
 			count: 1
 			path: src/usr/local/pkg/pfblockerng/pfblockerng_install.inc
+
+		-
+			message: '#^Parameter \#1 \$string of function str_pad expects string, int given\.$#'
+			identifier: argument.type
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng.php
 
 		-
 			message: '#^Undefined variable\: \$coptions4$#'
@@ -799,6 +847,12 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
 
 		-
+			message: '#^Parameter \#1 \$string of function str_pad expects string, \(float\|int\) given\.$#'
+			identifier: argument.type
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
+
+		-
 			message: '#^Parameter Form of print cannot be converted to string\.$#'
 			identifier: print.nonString
 			count: 1
@@ -910,6 +964,12 @@ parameters:
 			message: '#^Call to an undefined method Form_Section\:\:addInput\(\)\.$#'
 			identifier: method.notFound
 			count: 55
+			path: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+
+		-
+			message: '#^Parameter \#2 \$callback of function array_filter expects \(callable\(string\)\: bool\)\|null, ''strlen'' given\.$#'
+			identifier: argument.type
+			count: 1
 			path: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
 
 		-
@@ -1327,6 +1387,18 @@ parameters:
 			path: src/usr/local/www/pfblockerng/pfblockerng_update.php
 
 		-
+			message: '#^Parameter \#1 \$string of function str_pad expects string, int given\.$#'
+			identifier: argument.type
+			count: 3
+			path: src/usr/local/www/pfblockerng/pfblockerng_update.php
+
+		-
+			message: '#^Parameter \#1 \$string of function str_pad expects string, int\<\-59, 59\> given\.$#'
+			identifier: argument.type
+			count: 2
+			path: src/usr/local/www/pfblockerng/pfblockerng_update.php
+
+		-
 			message: '#^Parameter Form of print cannot be converted to string\.$#'
 			identifier: print.nonString
 			count: 1
@@ -1351,6 +1423,12 @@ parameters:
 			path: src/usr/local/www/pfblockerng/www/dnsbl_default.php
 
 		-
+			message: '#^Parameter \#2 \$timestamp of function date expects int\|null, string given\.$#'
+			identifier: argument.type
+			count: 1
+			path: src/usr/local/www/pfblockerng/www/index.php
+
+		-
 			message: '#^Variable \$data in empty\(\) always exists and is not falsy\.$#'
 			identifier: empty.variable
 			count: 1
@@ -1365,6 +1443,18 @@ parameters:
 		-
 			message: '#^Function pfSense_get_pf_rules not found\.$#'
 			identifier: function.notFound
+			count: 1
+			path: src/usr/local/www/widgets/widgets/pfblockerng.widget.php
+
+		-
+			message: '#^Parameter \#1 \$num of function number_format expects float, string given\.$#'
+			identifier: argument.type
+			count: 1
+			path: src/usr/local/www/widgets/widgets/pfblockerng.widget.php
+
+		-
+			message: '#^Parameter \#2 \.\.\.\$arg1 of function min expects non\-empty\-array, 100 given\.$#'
+			identifier: argument.type
 			count: 1
 			path: src/usr/local/www/widgets/widgets/pfblockerng.widget.php
 

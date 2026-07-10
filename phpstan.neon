@@ -13,6 +13,11 @@ parameters:
     # No memory limit is configurable here (probed: 'Unexpected item') — run
     # via `composer phpstan`, which carries the required --memory-limit=1G.
     level: 2
+    # Pulled forward from level 5 (issue #1144): checkFunctionArgumentTypes is a
+    # plain parameter, not level-gated rule registration — probed clean at level
+    # 2 (+24 argument.type, zero collateral noise) vs. jumping the whole level.
+    checkFunctionArgumentTypes: true
+    checkArgumentsPassedByReference: true
     fileExtensions:
         - php
         - inc
