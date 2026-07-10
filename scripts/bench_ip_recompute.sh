@@ -174,9 +174,13 @@ measure "D single-change old(1 feed)" run_old "$WORK/st-old" "$WORK/order-one"
 setup_state "$WORK/st-new"
 measure "D single-change new(full)" run_new "$WORK/st-new" "$WORK/order"
 
-# dMax-enabled recompute on D (GeoIP absent on a dev box: classify bails,
-# detection+apply plumbing still measured)
+# Reputation runs on D. dMax on a dev box has no mmdblookup, so classify
+# bails and the pass rides the direct path (detect cost only). pMax needs no
+# GeoIP; max=8 sits below D's ~9 rows-per-/24 average, so tens of thousands
+# of offender windows exercise the divert/window/reinject path for real.
 setup_state "$WORK/st-new"
-measure "D dmax new(recompute)" run_new "$WORK/st-new" "$WORK/order" dmax 50 '' off block
+measure "D dmax-bail new(recompute)" run_new "$WORK/st-new" "$WORK/order" dmax 50 '' off block
+setup_state "$WORK/st-new"
+measure "D pmax-heavy new(recompute)" run_new "$WORK/st-new" "$WORK/order" pmax 8 '' off block
 
 echo "done. workdir kept at: $WORK"
