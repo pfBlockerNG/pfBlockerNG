@@ -5531,16 +5531,19 @@ function dnsbl_alias_update($mode, $alias, $pfbfolder, $lists_dnsbl_current, $al
 
 		// Create master alias file
 		if ($lists_dnsbl_current != '') {
-			$pfb_output = @fopen("{$pfb['dnsalias']}/{$alias}", 'w');
-			foreach ($lists_dnsbl_current as $clist) {
-				if (($handle = @fopen("{$pfbfolder}/{$clist}.txt", 'r')) !== FALSE) {
-					while (($line = @fgets($handle)) !== FALSE) {
-						@fwrite($pfb_output, $line);
+			// issue #1073: fwrite(FALSE)/fclose(FALSE) throw TypeError on PHP 8 ('@'
+			// only silences warnings), so a failed open must skip its write/close.
+			if (($pfb_output = @fopen("{$pfb['dnsalias']}/{$alias}", 'w')) !== FALSE) {
+				foreach ($lists_dnsbl_current as $clist) {
+					if (($handle = @fopen("{$pfbfolder}/{$clist}.txt", 'r')) !== FALSE) {
+						while (($line = @fgets($handle)) !== FALSE) {
+							@fwrite($pfb_output, $line);
+						}
+						@fclose($handle);
 					}
 				}
-				@fclose($handle);
+				@fclose($pfb_output);
 			}
-			@fclose($pfb_output);
 		}
 
 		// Update DNSBL alias statistics
