@@ -332,68 +332,83 @@ def test_adr62_idn_raw_unicode_blocks_under_punycode(deployed_vm: SmokeVM, clien
 def test_adr62_reused_feed_old_dialect_txt_resolves_same_verdict(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """Row 7a (Semantics #7): a reused feed's pre-existing '.txt' resolves unchanged; stale marker swept.
 
-    Given a domain is pre-written directly into the feed's on-disk staging file
-      (``{dnsdir}/{header}.txt``, the 6-col plain dialect any pfBlockerNG version
-      writes — unchanged by this ADR) BEFORE the DNSBL list is ever configured,
-      alongside a stale ``{header}.abp`` marker (simulating an old install's
-      leftover from before this ADR), and the feed's HTTP-fetchable URL serves a
-      DIFFERENT (decoy) domain.
-    When the DNSBL list is injected and a scheduled-style (NON-force) update
-      pass runs — the FIRST pass for this header finds the ``.txt`` already
-      present with no ``.update``/``.fail`` marker and takes the reuse fork
-      (gated on ``$pfbreuse == ''``, so only a non-force pass reaches it: a
-      Force-DNSBL reload sets ``reuse_dnsbl='on'`` and reloads from the
-      ``.orig`` download cache — absent here — which would download instead),
-    Then the PRE-PLACED domain is VIP-blocked (the reused ``.txt`` was used
-      as-is, never re-parsed), the DECOY domain (which would only appear if the
-      feed were actually re-downloaded) still RESOLVES, and the stale ``.abp``
-      marker is GONE (Decision 5's unconditional sweep on the reuse path).
+    Given a configured, already-loaded DNSBL feed (a normal pass downloaded and
+      blocked domain A), whose on-disk staging file (``{dnsdir}/{header}.txt``)
+      is then OVERWRITTEN with an old-generation 6-col row for a different
+      domain B plus a stale ``{header}.abp`` marker — simulating the on-disk
+      state a pre-ADR-62 install leaves behind across a pkg upgrade — while the
+      feed URL now serves a DIFFERENT (decoy) domain C.
+    When a scheduled-style (NON-force) update pass runs with the config
+      UNCHANGED — no alias was added or removed, so the change sweep does NOT
+      run its ``rmdir_recursive({dnsdir})`` staging wipe, and the pass reaches
+      the reuse fork (gated on ``$pfbreuse == ''``: files present, no
+      ``.update``/``.fail`` marker, non-force trigger),
+    Then the OVERWRITTEN old-dialect domain B is VIP-blocked (the ``.txt`` was
+      used as-is, never re-downloaded or re-parsed), the DECOY domain C (which
+      only a real re-download could load) still RESOLVES, and the stale
+      ``.abp`` marker is GONE (Decision 5's opportunistic sweep on the reuse
+      fork).
     """
     header = "adr62row7reuse"
+    loaded_domain = h.unique_domain("adr62r7base")
     reused_domain = h.unique_domain("adr62r7old")
     decoy_domain = h.unique_domain("adr62r7decoy")
 
-    # Pre-place the OLD-dialect '.txt' + a stale '.abp' marker directly at the
-    # staging path, BEFORE this header has ever been configured/downloaded.
+    feed_name = "smoke_adr62_row7_feed.txt"
+    feed_url = h.write_local_feed(deployed_vm, feed_name, f"{loaded_domain}\n")
+    spec = h.DnsblCase(aliasname="adr62row7reuse", feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
+
     dnsbl_dir = f"{h.PFB_DBDIR}/dnsbl"
-    mk = deployed_vm.ssh("/bin/mkdir", "-p", dnsbl_dir)
-    assert mk.returncode == 0, f"mkdir -p {dnsbl_dir} failed: rc={mk.returncode} {mk.stderr!r}"
-    h.write_local_feed(deployed_vm, f"dnsbl/{header}.txt", f",{reused_domain},,1,{header},{header}\n")
-    h.write_local_feed(deployed_vm, f"dnsbl/{header}.abp", "")
-
     marker = f"{dnsbl_dir}/{header}.abp"
-    marker_before = deployed_vm.ssh("/bin/test", "-e", marker)
-    assert marker_before.returncode == 0, f"test setup failed: stale marker {marker} not present before the case"
 
-    decoy_feed_url = h.write_local_feed(deployed_vm, "smoke_adr62_row7_decoy.txt", f"{decoy_domain}\n")
-    spec = h.DnsblCase(aliasname="adr62row7reuse", feed_url=decoy_feed_url, header=header, mode=h.DnsblMode.VIP)
-
-    for name in (reused_domain, decoy_domain):
+    for name in (loaded_domain, reused_domain, decoy_domain):
         before = h.dns_probe_client(client_vm, name, "A")
         assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
 
-    # scope="update" = scope=both force=false trigger=cron: the ONLY trigger that
-    # reaches the exists-fork; the default force-DNSBL scope reuses .orig/downloads.
-    with h.CaseContext(deployed_vm, spec, scope="update"):
+    with h.CaseContext(deployed_vm, spec):
         h.unblock_egress()  # the decoy "still resolves" probe must reach the controlled stub
+
+        # Baseline: the feed genuinely loaded via the normal download path.
+        h.flush_unbound_name(deployed_vm, loaded_domain)
+        ans_loaded = h.dns_probe_client_until(client_vm, loaded_domain, h.is_vip)
+        assert not h.resolves_to(ans_loaded, STUB_DNS_A), (
+            f"baseline feed domain {loaded_domain} still resolving after the initial load: {ans_loaded}"
+        )
+
+        # Simulate the pre-upgrade on-disk state: an old-generation '.txt' (6-col
+        # dialect, different domain) + a stale '.abp' marker; the served feed now
+        # carries a decoy so any re-download is detectable.
+        h.write_local_feed(deployed_vm, f"dnsbl/{header}.txt", f",{reused_domain},,1,{header},{header}\n")
+        h.write_local_feed(deployed_vm, f"dnsbl/{header}.abp", "")
+        h.write_local_feed(deployed_vm, feed_name, f"{decoy_domain}\n")
+
+        marker_before = deployed_vm.ssh("/bin/test", "-e", marker)
+        assert marker_before.returncode == 0, f"test setup failed: stale marker {marker} not present before the pass"
+
+        # Non-force pass, config unchanged: reaches the reuse ('exists') fork.
+        # A Force-DNSBL reload cannot — it sets reuse_dnsbl='on' and reloads from
+        # the '.orig' download cache, re-parsing the ORIGINAL content instead of
+        # honouring the staged '.txt'.
+        h.reload(deployed_vm, "update")
+
         h.flush_unbound_name(deployed_vm, reused_domain)
         ans_reused = h.dns_probe_client_until(client_vm, reused_domain, h.is_vip)
         assert not h.resolves_to(ans_reused, STUB_DNS_A), (
-            f"pre-placed reused-'.txt' domain {reused_domain} still resolving after Force Update "
-            f"(the reuse fork should have used the pre-existing '.txt' as-is): {ans_reused}"
+            f"old-dialect reused-'.txt' domain {reused_domain} still resolving after the non-force pass "
+            f"(the reuse fork should have used the staged '.txt' as-is): {ans_reused}"
         )
 
         ans_decoy = h.dns_probe_client(client_vm, decoy_domain, "A")
         assert h.resolves_to(ans_decoy, STUB_DNS_A), (
             f"decoy domain {decoy_domain} (only reachable via a real re-download) is blocked — "
-            f"the feed was re-downloaded instead of reusing the pre-existing '.txt': {ans_decoy}"
+            f"the feed was re-downloaded instead of reusing the staged '.txt': {ans_decoy}"
         )
         assert not h.is_vip(ans_decoy), f"decoy domain {decoy_domain} wrongly VIP-blocked: {ans_decoy}"
 
         marker_after = deployed_vm.ssh("/bin/test", "-e", marker)
         assert marker_after.returncode != 0, (
             f"stale '.abp' marker {marker} still present after the reuse pass — Decision 5's opportunistic "
-            f"sweep (pfblockerng.inc:16297) should have removed it: test -e rc={marker_after.returncode}"
+            f"sweep should have removed it: test -e rc={marker_after.returncode}"
         )
 
 
