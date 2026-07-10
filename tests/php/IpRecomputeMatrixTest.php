@@ -59,10 +59,11 @@ final class IpRecomputeMatrixTest extends TestCase
 		$this->assertTrue($m['legacy_pmax_followup'], 'pMax runs afterward via the legacy exec');
 	}
 
-	public function testDedupOnButRepTriggerFalseKeepsRepmodeOffEvenWithTogglesOn(): void
+	public function testDedupOnAndRepTriggerFalseAreIndependentGates(): void
 	{
-		// rep_trigger FALSE (e.g. no feed changed this pass) skips reputation even though
-		// both toggles are on -- dedup still runs unconditionally (matches old duplicate()).
+		// This combination cannot occur via the real caller -- $dedup_on is ANDed with
+		// rep_trigger there (pfblockerng.inc's recompute call site) -- pins the function's
+		// OWN branch in isolation: reputation gates strictly on rep_trigger, dedup does not.
 		$m = pfb_ip_recompute_matrix(true, false, true, true);
 		$this->assertTrue($m['invoke_v4']);
 		$this->assertTrue($m['invoke_v6']);

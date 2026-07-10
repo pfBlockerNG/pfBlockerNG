@@ -116,6 +116,73 @@ final class IpRecomputeSnapshotTest extends TestCase
 		$this->assertSame("3\n", file_get_contents("{$this->origdir}/FeedD_v4.aggcount"), 'blank line counted, matching grep -c ^');
 	}
 
+	public function testWriteSnapshotAggcountCountsAnUnterminatedFinalLineLikeGrepCAnchor(): void
+	{
+		// grep -c ^ counts a final line with no trailing newline (wc -l undercounts it) --
+		// the streamed counter must preserve that, not just the old @file()-array count.
+		$src = "{$this->denydir}/FeedU_v4.txt";
+		file_put_contents($src, "198.51.100.1\n198.51.100.2\n198.51.100.3");
+
+		pfb_ip_recompute_write_snapshot($src, 'FeedU_v4', $this->snapdir, $this->origdir);
+
+		$this->assertSame("3\n", file_get_contents("{$this->origdir}/FeedU_v4.aggcount"));
+	}
+
+	public function testWriteSnapshotAggcountMatchesLineCountOnALargeFixture(): void
+	{
+		// Behaviour-preserving oracle: pins the count on a fixture large enough that the
+		// OLD @file()-array implementation would materialize a real memory cost (issue
+		// #1084 review: ~68MB peak observed at 1M lines) -- the streamed counter must
+		// return the exact same total.
+		$src = "{$this->denydir}/FeedLarge_v4.txt";
+		$fh  = fopen($src, 'wb');
+		$n   = 50000;
+		for ($i = 0; $i < $n; $i++) {
+			fwrite($fh, sprintf("10.%d.%d.%d\n", ($i >> 16) & 0xFF, ($i >> 8) & 0xFF, $i & 0xFF));
+		}
+		fclose($fh);
+
+		pfb_ip_recompute_write_snapshot($src, 'FeedLarge_v4', $this->snapdir, $this->origdir);
+
+		$this->assertSame($n . "\n", file_get_contents("{$this->origdir}/FeedLarge_v4.aggcount"));
+	}
+
+	public function testSeedSnapshotLogsAWarningWhenTheCopyFails(): void
+	{
+		if (function_exists('posix_getuid') && posix_getuid() === 0) {
+			$this->markTestSkipped('root bypasses directory permissions; cannot simulate an unwritable snapshot dir');
+		}
+
+		file_put_contents("{$this->denydir}/FeedF_v4.txt", "198.51.100.5\n");
+
+		$saved = [];
+		foreach (['log', 'errlog', 'pnow', 'runlog', 'runlog_active'] as $k) {
+			$saved[$k] = array_key_exists($k, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$k] : false;
+		}
+		unset($GLOBALS['pfb']['runlog'], $GLOBALS['pfb']['runlog_active']);
+		$GLOBALS['pfb']['log']    = "{$this->root}/pfb.log";
+		$GLOBALS['pfb']['errlog'] = "{$this->root}/pfb_error.log";
+
+		chmod($this->snapdir, 0555);
+		try {
+			$got = pfb_ip_recompute_seed_snapshot('FeedF_v4', $this->snapdir, $this->denydir);
+
+			$this->assertSame("{$this->snapdir}/FeedF_v4.snap", $got, 'the path contract is unchanged even when the seed copy fails');
+			$this->assertFileDoesNotExist($got);
+			$this->assertFileExists($GLOBALS['pfb']['errlog'], 'a failed seed copy must be logged, never silent');
+			$this->assertStringContainsString('FeedF_v4', file_get_contents($GLOBALS['pfb']['errlog']));
+		} finally {
+			chmod($this->snapdir, 0777);
+			foreach ($saved as $k => $prev) {
+				if ($prev === false) {
+					unset($GLOBALS['pfb'][$k]);
+				} else {
+					$GLOBALS['pfb'][$k] = $prev;
+				}
+			}
+		}
+	}
+
 	public function testWriteSnapshotIsANoOpWhenSourceMissing(): void
 	{
 		pfb_ip_recompute_write_snapshot("{$this->denydir}/DoesNotExist_v4.txt", 'DoesNotExist_v4', $this->snapdir, $this->origdir);

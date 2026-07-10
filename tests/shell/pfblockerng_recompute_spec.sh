@@ -7,7 +7,11 @@
 
 # grepcidr(1) v4 stand-in (reused verbatim from the ip_dedup oracle spec):
 # `-vf <patternfile> <targetfile>` -> target lines whose address is NOT
-# inside ANY pattern CIDR/host, via portable integer arithmetic.
+# inside ANY pattern CIDR/host, via portable integer arithmetic. Fidelity
+# probed against the real binary: a pattern file with ZERO parseable
+# patterns (blank lines only, or empty) prints NOTHING and exits 1 --
+# never "no patterns matched, so keep every line" -- so `n == 0` short-
+# circuits to that outcome before the per-line filter ever runs.
 make_grepcidr_stub() {
 	cat > "$1" <<'EOF'
 #!/bin/sh
@@ -30,6 +34,7 @@ BEGIN {
 	}
 	close(patfile)
 }
+n == 0 { next }
 {
 	if ($0 == "") { print; next }
 	split($0, tp, "/")
@@ -39,6 +44,7 @@ BEGIN {
 	}
 	if (!matched) print
 }
+END { if (n == 0) exit 1 }
 ' "$3"
 EOF
 	chmod +x "$1"
@@ -244,13 +250,26 @@ Describe 'pfb_recompute() v4 cross-feed dedup (Stage A/B/D/E)'
 		The contents of file "$countsfile" should include 'Empty_v4 0'
 	End
 
-	It 'tolerates a trailing blank line in a snapshot without emitting a blank member row'
+	It 'tolerates a trailing blank line in a snapshot without emitting a blank member row, or leaking it into the cumulative stream for a later feed (issue #1084 review)'
 		printf '203.0.113.40\n203.0.113.41\n\n' > "${snap}/Blank_v4.orig"
-		printf '%s\n' "${snap}/Blank_v4.orig" > "$memberlist"
+		printf '198.51.100.60\n' > "${snap}/Later_v4.orig"
+		printf '%s\n%s\n' "${snap}/Blank_v4.orig" "${snap}/Later_v4.orig" > "$memberlist"
 		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
 		The status should be success
 		The contents of file "${pfbdeny}Blank_v4.txt" should equal "$(printf '203.0.113.40\n203.0.113.41')"
 		The contents of file "$countsfile" should include 'Blank_v4 2'
+		The contents of file "${pfbdeny}Later_v4.txt" should equal '198.51.100.60'
+	End
+
+	It 'never lets a blank-line-only high-priority snapshot poison the cumulative dedup stream into eating a disjoint lower feed (issue #1084 review)'
+		printf '\n' > "${snap}/OnlyBlank_v4.orig"
+		printf '198.51.100.70\n' > "${snap}/Disjoint_v4.orig"
+		printf '%s\n%s\n' "${snap}/OnlyBlank_v4.orig" "${snap}/Disjoint_v4.orig" > "$memberlist"
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
+		The status should be success
+		The contents of file "${pfbdeny}OnlyBlank_v4.txt" should equal ''
+		The contents of file "${pfbdeny}Disjoint_v4.txt" should equal '198.51.100.70'
+		The contents of file "$countsfile" should include 'Disjoint_v4 1'
 	End
 
 	It 'dedups an internal repeat within a single feed snapshot (within-feed dupes, issue #1084 review)'
@@ -490,6 +509,32 @@ Describe 'pfb_recompute() dMax match-mode + GeoIP-unavailable bail + pMax'
 		The contents of file "${pfbmatch}${matchdedup}" should include '!198.51.100.20'
 	End
 
+	It 'ccwhite passed uppercase (MATCH) still fires the exempt-match path on a cc-list hit (issue #1084 review, case-fold parity with the legacy verb init)'
+		make_geoip_stub "$pathgeoip" 'xx iso_code: "US" xx'
+		printf '198.51.100.40\n198.51.100.41\n' > "${snap}/UP_v4.orig"
+		printf '%s\n' "${snap}/UP_v4.orig" > "$memberlist"
+
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on dmax 1 US MATCH off
+		The status should be success
+		The contents of file "${pfbmatch}${matchdedup}" should include '198.51.100.0/24'
+		The contents of file "${pfbmatch}${matchdedup}" should include '!198.51.100.40'
+	End
+
+	It 'ccblack=match emits match<alias>.txt for EVERY member alias sharing an offender /24 (issue #1084: multi-alias delta from the legacy single-owner write)'
+		make_geoip_stub "$pathgeoip" 'Could not find an entry for this IP address'
+		printf '192.0.2.30\n' > "${snap}/First_v4.orig"
+		printf '192.0.2.31\n192.0.2.32\n' > "${snap}/Second_v4.orig"
+		printf '%s\n%s\n' "${snap}/First_v4.orig" "${snap}/Second_v4.orig" > "$memberlist"
+
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on dmax 2 US off match
+		The status should be success
+		The contents of file "${pfbmatch}matchFirst_v4.txt" should include '192.0.2.0/24'
+		The contents of file "${pfbmatch}matchFirst_v4.txt" should include '!192.0.2.30'
+		The contents of file "${pfbmatch}matchSecond_v4.txt" should include '192.0.2.0/24'
+		The contents of file "${pfbmatch}matchSecond_v4.txt" should include '!192.0.2.31'
+		The contents of file "${pfbmatch}matchSecond_v4.txt" should include '!192.0.2.32'
+	End
+
 	It "ccblack=match (not ccwhite) on a cc-list hit: logs nowhere -- no matchdedup file is written (today's asymmetric gate)"
 		make_geoip_stub "$pathgeoip" 'xx iso_code: "US" xx'
 		printf '198.51.100.30\n198.51.100.31\n' > "${snap}/EX2_v4.orig"
@@ -539,7 +584,9 @@ Describe 'pfb_recompute() hostile inputs'
 		memberlist="${work}/members"
 		countsfile="${work}/counts"
 	}
-	cleanup() { rm -rf "$work"; }
+	# chmod-restore first: a permission-denial example below may leave $work
+	# read-only, which would make a bare rm -rf silently strand debris.
+	cleanup() { chmod -R u+rwx "$work" 2>/dev/null; rm -rf "$work"; }
 	BeforeAll 'pfb_source'
 	Before 'setup'
 	After 'cleanup'
@@ -612,6 +659,53 @@ Describe 'pfb_recompute() hostile inputs'
 		The path "${pfbdeny}ZZZ_v4.txt.new" should not be exist
 		The contents of file "${pfbdeny}AAA_v4.txt" should equal '1.1.1.1'
 		The path "${countsfile}" should not be exist
+	End
+
+	It 'aborts cleanly (log + .new cleanup, live files untouched) when a Stage-A snapshot copy fails (source unreadable, issue #1084 review)'
+		Skip if 'root bypasses file permissions' [ "$(id -u)" -eq 0 ]
+		printf '1.1.1.1\n' > "${pfbdeny}Blocked_v4.txt"
+		printf '9.9.9.9\n' > "${snap}/Blocked_v4.orig"
+		chmod 000 "${snap}/Blocked_v4.orig"
+		printf '%s\n' "${snap}/Blocked_v4.orig" > "$memberlist"
+
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" off off
+		The status should be failure
+		The contents of file "${errorlog}" should include 'could not copy snapshot'
+		The contents of file "${pfbdeny}Blocked_v4.txt" should equal '1.1.1.1'
+		The path "${pfbdeny}Blocked_v4.txt.new" should not be exist
+	End
+
+	It 'aborts the masterfile-strip pass cleanly (no masterfile.new debris) when it fails mid-write (issue #1084 review)'
+		Skip if 'root bypasses file permissions' [ "$(id -u)" -eq 0 ]
+		printf 'Old_v4 9.9.9.9\n' > "$masterfile"
+		# The shell's own output redirect creates (empty) masterfile.new BEFORE
+		# awk ever runs -- an unreadable masterfile then fails awk's OWN open,
+		# leaving that empty file as debris unless the abort path cleans it up.
+		chmod 000 "$masterfile"
+		printf '192.0.2.5\n' > "${snap}/New_v4.orig"
+		printf '%s\n' "${snap}/New_v4.orig" > "$memberlist"
+
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
+		chmod 644 "$masterfile"
+		The status should be failure
+		The path "${masterfile}.new" should not be exist
+	End
+
+	It 'stops the swap and logs the failing artifact -- without rolling anything back -- when the deny dir denies the mv (EACCES mid-swap, issue #1084 review)'
+		Skip if 'root bypasses directory permissions' [ "$(id -u)" -eq 0 ]
+		printf '192.0.2.1\n' > "${snap}/Alpha_v4.orig"
+		printf '%s\n' "${snap}/Alpha_v4.orig" > "$memberlist"
+		# Pre-create the .txt.new sibling: pfb_recompute_emit_alias then only
+		# TRUNCATES an existing file (no directory-write needed), so emit
+		# succeeds while the later mv (a rename -- directory write required)
+		# still fails once pfbdeny itself goes read-only.
+		: > "${pfbdeny}Alpha_v4.txt.new"
+		chmod 555 "$pfbdeny"
+
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
+		chmod 755 "$pfbdeny"
+		The status should be failure
+		The contents of file "${errorlog}" should include 'Alpha_v4.txt.new'
 	End
 End
 
@@ -775,5 +869,66 @@ Describe 'pfb_recompute() finish-arm reputation reconcile (issue #1084 review: s
 		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on dmax 100 US match off
 		The status should be success
 		The path "${pfbmatch}matchdedup_v4.txt" should not be exist
+	End
+End
+
+Describe 'pfb_recompute() coverage-matrix gap rows (issue #1084 review: dedup=off x reputation, placeholder-as-data)'
+	# shellcheck disable=SC2034  # consumed by the sourced pfb_recompute()
+	# Brand-new coverage (no fix landed here) -- every dMax/pMax example above
+	# runs dedup=on; reputation's own gate (rec_do_rep) never reads rec_dedup,
+	# so the passthrough (dedup=off) cells and the deleted duplicate() oracle's
+	# placeholder-as-data row were unpinned. Pins existing behaviour as-is.
+	setup() {
+		work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/recgaprows.XXXXXX")"
+		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"
+		mkdir -p "$snap" "$pfbdeny" "$pfbmatch"
+		tmpdir="${work}/tmp"; mkdir -p "$tmpdir"
+		masterfile="${work}/master"; mastercat="${work}/mastercat"
+		errorlog="${work}/err.log"
+		ip_placeholder3='240.0.0'
+		pathgrepcidr="${work}/grepcidr"; make_grepcidr_stub "$pathgrepcidr"
+		pathgeoip="${work}/mmdblookup"; pathgeoipdat="${work}/geo.mmdb"; touch "$pathgeoipdat"
+		memberlist="${work}/members"
+		countsfile="${work}/counts"
+	}
+	cleanup() { rm -rf "$work"; }
+	BeforeAll 'pfb_source'
+	Before 'setup'
+	After 'cleanup'
+
+	It 'dedup=off + repmode=dmax still classifies/collapses an offender window and writes counts, but never touches masterfile'
+		make_geoip_stub "$pathgeoip" 'Could not find an entry for this IP address'
+		printf 'Stale_v4 1.2.3.4\n' > "$masterfile"
+		printf '192.0.2.10\n192.0.2.11\n192.0.2.12\n' > "${snap}/NoDedup_v4.orig"
+		printf '%s\n' "${snap}/NoDedup_v4.orig" > "$memberlist"
+
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" off dmax 2 US off block
+		The status should be success
+		The contents of file "${pfbdeny}NoDedup_v4.txt" should equal '192.0.2.0/24'
+		The contents of file "$countsfile" should include 'NoDedup_v4 1'
+		The contents of file "$masterfile" should equal 'Stale_v4 1.2.3.4'
+	End
+
+	It 'dedup=off + repmode=pmax still collapses the offender /24 (block-only) and writes counts, but never touches masterfile'
+		printf 'Stale_v4 1.2.3.4\n' > "$masterfile"
+		printf '198.51.100.1\n198.51.100.2\n198.51.100.3\n' > "${snap}/NoDedupP_v4.orig"
+		printf '%s\n' "${snap}/NoDedupP_v4.orig" > "$memberlist"
+
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" off pmax 2
+		The status should be success
+		The contents of file "${pfbdeny}NoDedupP_v4.txt" should equal '198.51.100.0/24'
+		The contents of file "$countsfile" should include 'NoDedupP_v4 1'
+		The contents of file "$masterfile" should equal 'Stale_v4 1.2.3.4'
+	End
+
+	It 'treats a feed already reduced to the placeholder IP as ordinary data, no special-casing (the deleted duplicate() oracle row)'
+		printf '240.0.0.0\n' > "${snap}/PlaceholderRow_v4.orig"
+		printf '%s\n' "${snap}/PlaceholderRow_v4.orig" > "$memberlist"
+
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
+		The status should be success
+		The contents of file "${pfbdeny}PlaceholderRow_v4.txt" should equal '240.0.0.0'
+		The contents of file "$masterfile" should include 'PlaceholderRow_v4 240.0.0.0'
+		The contents of file "$countsfile" should include 'PlaceholderRow_v4 1'
 	End
 End

@@ -86,6 +86,20 @@ Describe 'ADR-26 — pfblockerng.sh locale/portability source invariants (Phases
     When call has 'LC_ALL=C sort -u "${tempfile}" > "${dedupfile}"'
     The status should be success
   End
+  # issue #1084: pfb_recompute()'s three own sort sinks -- previously invisible to
+  # this gate (added after Gate 1 was last extended).
+  It 'prefixes the recompute per-alias emit sort with LC_ALL=C'
+    When call has 'LC_ALL=C sort -u "$2" > "${pfbdeny}$1.txt.new"'
+    The status should be success
+  End
+  It 'prefixes the recompute offender-subset side-channel sort with LC_ALL=C'
+    When call has "LC_ALL=C sort -t ' ' -k1,1 \"\${rec_side}\""
+    The status should be success
+  End
+  It 'prefixes the recompute reinject sort with LC_ALL=C'
+    When call has "LC_ALL=C sort -t ' ' -k2,2 -s \"\${rec_new_stream}\""
+    The status should be success
+  End
 
   # Gate 2 — locale is per-command, NEVER exported process-wide.
   It 'never exports LC_ALL process-wide'
