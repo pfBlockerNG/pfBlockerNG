@@ -154,3 +154,10 @@ divert to the PHP DNSBL-IP firewall path rather than the domain build. The
 egress/binary formats (geoip/asn/whois/rsync) are explicitly out of the hermetic
 smoke (ADR-16 §2) — they need MaxMind/egress. The pre-existing
 `sample_ip_feed.txt` is the ADR-04 scaffolding placeholder, left in place.
+
+**ADR-62 closing rows** (`tests/smoke/test_smoke_adr62.py`) cover a CSV feed type
+(Bambenek `bbc`), a bracketed-IPv6 literal vs. a genuine `[Adblock]` marker, an
+IDN/punycode line, a reused old-dialect `.txt`, and a TLD-enabled run — each
+delivered via `write_local_feed` (not a committed fixture here) because every case
+needs a per-run `unique_domain()` body, matching the established pattern for
+runtime-unique DNSBL bodies (`test_abp_perline_detection_in_plain_feed` et al.).

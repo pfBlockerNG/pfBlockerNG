@@ -14,12 +14,15 @@ pyproject.toml). Run only by the smoke workflow::
 
     python -m pytest tests/smoke -m smoke --override-ini="addopts="
 
-ABP feed delivery (see ``helpers.abp_feed`` / ``write_local_feed``): a feed whose
-body STARTS with ``[Adblock Plus 2.0]`` is header-sniffed by pfBlockerNG
-(``pfblockerng.inc:7934``), tagged ``format_hint='abp'`` in the per-feed manifest
-(``inc:8414``), and its RAW lines flow to the Python ABP parser (``parse_abp``);
-the old PHP lite parser is gone (ADR-07 P8). Detection is CONTENT-based, so each
-DNSBL row's ``format`` stays ``auto``.
+ABP feed delivery (see ``helpers.abp_feed`` / ``write_local_feed``): ADR-62 retired
+PHP's feed-level ``[Adblock Plus 2.0]`` header sniff — there is no more whole-feed
+``format_hint='abp'`` tag. Every feed is tagged ``'plain'``; a PER-LINE predicate
+(``pfb_dnsbl_is_abp_rule_line()``, mirrored in Python's per-line routing) captures
+``||``/``@@``/``/regex/``/element-hiding shapes verbatim wherever they occur and
+routes them to the Python ABP parser (``parse_abp``); the ``[Adblock Plus 2.0]``
+header line itself is now just an ordinary skippable bracket-wrapped control line.
+Detection is still CONTENT-based (per-line, not per-feed), so each DNSBL row's
+``format`` stays ``auto``.
 
 Every expected answer is pinned to the REAL semantics in
 ``src/usr/local/pkg/pfblockerng/pfb_unbound.py`` (verified against source):
@@ -204,8 +207,8 @@ def test_abp_deep_anchor_blocks_subdomains(
 def test_abp_cross_feed_exception(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """Feed A blocks ``||base^``; feed B exempts ``@@||base^`` → ``base`` resolves.
 
-    The two feeds are two ROWS of ONE DNSBL group (each header-sniffed ABP
-    independently); the Python build MERGES their rules. Cross-feed global ``@@`` is
+    The two feeds are two ROWS of ONE DNSBL group (each row's ``||``/``@@`` lines
+    captured per-line, independently); the Python build MERGES their rules. Cross-feed global ``@@`` is
     intended ABP semantics (ADR.md): feed-allow band 2 ≥ feed-block band 1 → resolves
     via the controlled stub upstream. NOTE: no ``control_local_data`` override — it
     would be served as local-data BEFORE the python module and mask a broken

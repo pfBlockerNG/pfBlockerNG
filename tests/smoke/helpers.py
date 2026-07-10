@@ -238,11 +238,11 @@ class DnsblCase:
     byte unchanged; only an ABP case populates them):
 
       extra_rows    -> additional (header, feed_url) ROWS appended to the SAME
-                       DNSBL list group. Each row is downloaded + header-sniffed
-                       INDEPENDENTLY, so two ABP-bodied rows == two ABP feeds whose
-                       rules the Python build MERGES — this is how a cross-feed
-                       ``@@``/``$badfilter`` (an exception/prune in feed B acting on
-                       a block in feed A) is exercised end-to-end.
+                       DNSBL list group. Each row's ``||``/``@@`` lines are captured
+                       per-line INDEPENDENTLY, so two ABP-bodied rows == two ABP
+                       feeds whose rules the Python build MERGES — this is how a
+                       cross-feed ``@@``/``$badfilter`` (an exception/prune in feed
+                       B acting on a block in feed A) is exercised end-to-end.
       user_regex    -> the user "Python Regex List" (CFG_DNSBL_SETTINGS/pfb_regex
                        'on' + pfb_regex_list, newline list, inc:849-850,2711). User
                        regex are sovereign block patterns; they load into regexDB
@@ -312,6 +312,11 @@ class DnsblCase:
     # python_control_legacy, emitted `on` only when BOTH pfb_control and pfb_control_legacy
     # are on, inc:4744). None (default) emits nothing.
     control_legacy: bool | None = None
+    # tld_enabled -> the "TLD Function" toggle (CFG_DNSBL_SETTINGS/pfb_tld -> $pfb['dnsbl_tld'],
+    # inc:15156). On: tld_analysis() runs (inc:8372) with no blacklist/exclusion configured —
+    # a coarse regression guard (ADR-62 issue #1060) that TLD mode coexisting with a plain feed
+    # does not disturb ordinary DNSBL blocking. False (default) emits nothing.
+    tld_enabled: bool = False
 
     @property
     def alias(self) -> str:
@@ -2428,9 +2433,12 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
     if spec.control_legacy is not None:
         # The deprecated DNS-TXT sub-path (pfb_control_legacy -> ini python_control_legacy).
         settings["pfb_control_legacy"] = "on" if spec.control_legacy else ""
+    if spec.tld_enabled:
+        # "TLD Function" (CFG_DNSBL_SETTINGS/pfb_tld -> $pfb['dnsbl_tld'], inc:15156).
+        settings["pfb_tld"] = "on"
     # The primary feed row + any ABP extra rows, all in ONE DNSBL list group. Each
-    # row is downloaded + header-sniffed independently (inc:7934), so an ABP body
-    # per row yields one ABP feed per row whose rules the Python build merges.
+    # row is downloaded and its lines captured per-line independently, so an ABP
+    # body per row yields one ABP feed per row whose rules the Python build merges.
     rows = [{"header": spec.header, "url": spec.feed_url, "state": "Enabled", "format": "auto"}]
     rows += [{"header": hdr, "url": url, "state": "Enabled", "format": "auto"} for (hdr, url) in spec.extra_rows]
     rows_php = "array(" + ", ".join(_php_kv_array(r) for r in rows) + ")"

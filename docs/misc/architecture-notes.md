@@ -25,20 +25,59 @@ start→finish + unbound RSS) — see issue #76 and `.ADRs/ADR_06_DNSBL_Preproce
 
 ### ADR-07 — ABP / EasyList support
 
-ABP/EasyList feeds are parsed **entirely in Python**: PHP header-sniffs an ABP feed, tags it
-`format_hint='abp'`, and passes its raw lines through verbatim (IP anchors `||1.2.3.4^` and
-hosts IPs still divert to the DNSBL-IP firewall pass); the old PHP `$easylist` lite parser is
-deleted. `parse('abp', …)` is the one DNS-only ABP parser — it adds `@@` allow exceptions,
-regex (block `regexDB` / allow `allowRegexDB`, with anchored patterns folded to dicts), and
-`$important`/`$badfilter` precedence resolved by a 6-band numeric scale, with a build-emitted
-`important_rules` flag preserving a byte-identical fast path when no ABP precedence feature is
-loaded. Untrusted feed + user regex is guarded by an opt-in "Limit long/complex regex" static
-cap (drops over-long/nested-quantifier patterns at load) plus an always-on runtime warn/evict
-timer (warn 10 ms / evict 100 ms thread-CPU; snapshot-iterate, evict-after-loop). Pinned by
-`tests/test_adr07_*` (decision spec/oracle, parser, reconcile, matcher strata, emit/wire,
-regex safety, PHP boundary); the regex/ReDoS kill-gate is `benchmarks/spike_adr07_regex.py` —
-it exits non-zero on NO-GO (`--report-only` forces exit 0), runnable via the manual-only CI
-`benchmarks` job. See `.ADRs/ADR_07_ABP_DNSBL_Support/`.
+ABP/EasyList rule shapes are parsed **entirely in Python** — `parse_abp()` is the one DNS-only
+ABP parser: it adds `@@` allow exceptions, regex (block `regexDB` / allow `allowRegexDB`, with
+anchored patterns folded to dicts), and `$important`/`$badfilter` precedence resolved by a
+6-band numeric scale, with a build-emitted `important_rules` flag preserving a byte-identical
+fast path when no ABP precedence feature is loaded. (ADR-62 retired PHP's feed-level detection
+that used to route a whole feed here — see below; which lines reach `parse_abp()` is now a
+per-line decision, not a feed-level one.) Untrusted feed + user regex is guarded by an opt-in
+"Limit long/complex regex" static cap (drops over-long/nested-quantifier patterns at load) plus
+an always-on runtime warn/evict timer (warn 10 ms / evict 100 ms thread-CPU; snapshot-iterate,
+evict-after-loop). Pinned by `tests/test_adr07_*` (decision spec/oracle, parser, reconcile,
+matcher strata, emit/wire, regex safety, PHP boundary); the regex/ReDoS kill-gate is
+`benchmarks/spike_adr07_regex.py` — it exits non-zero on NO-GO (`--report-only` forces exit 0),
+runnable via the manual-only CI `benchmarks` job. See `.ADRs/ADR_07_ABP_DNSBL_Support/`.
+
+### ADR-62 — per-line parse authority (retires PHP's feed-level ABP classification)
+
+The DNSBL download loop used to maintain **feed-level** ABP state: a one-shot header sniff
+(`$easylist`/`pfb_dnsbl_is_abp_header()`, prefix-matching `[Adblock`/`[uBlock`/`! Title:`) set a
+flag that routed the WHOLE feed either through raw-verbatim capture (ABP) or PHP's extraction
+pipeline (plain) — two parallel per-line paths, one classifier, one `.abp` on-disk marker
+recording the decision for a reused (not re-downloaded) feed. ADR-62 deletes all of it:
+`$easylist`, `pfb_dnsbl_is_abp_header()`, `$validate_header`, and the `.abp` marker are gone
+(swept opportunistically where a stale one survives an upgrade); `format_hint` collapses to
+`'plain'` for every domain feed.
+
+**The line itself, not the feed it came from, now decides its parser.** One pure PHP predicate,
+`pfb_dnsbl_is_abp_rule_line()`, is the single capture guard — used at the download loop's
+verbatim-capture site, the manifest writer (`pfb_unbound_python_sources()`), and mirrored by
+Python's per-line routing in `build()` (the ADR-21 `||`/`@@||` short-circuit, broadened to the
+full shape set: `||…`, `@@…`, `/regex/…$options`, and the element-hiding family
+`##`/`#@#`/`#?#`/`#%#`/`#$#`). A matching line is captured verbatim and reaches `parse_abp()`
+regardless of which feed it sits in; PHP never interprets the shapes — it is a capture guard,
+not a parser, so `parse_abp()` stays the sole ABP authority. `pfb_dnsbl_is_skippable_control_line()`
+gives the plain path the same `''`/`!`/`[…]` comment/control skip the old ABP branch had, with a
+bracketed-IPv6 carve-out: `pfb_dnsbl_unbracket_ip6()` runs FIRST, so `[2604:2dc0::]` unwraps and
+collects to the DNSBL-IP firewall pass (never treated as an ABP `[section]` comment); only a
+non-IPv6 `[…]` is dropped as a control line.
+
+The TLD-analysis pass (`tld_analysis()`) reads the same per-feed `.txt` staging files and must
+skip a verbatim-captured line (it is not a 6-col CSV row); this used to gate on the `.abp`
+marker glob (`!empty($abp_feeds)`) — a latent bug (issue #1060) meant a *plain* feed's verbatim
+`||…^` line was CSV-mangled whenever no feed was ABP-classified. The skip is now unconditional
+on an empty/unset feed column, independent of any marker.
+
+A bare hosts/plain domain line inside a feed that used to be header-classified ABP is the one
+deliberate behaviour change (delta D1, ADR.md §2): it now takes the plain `classify()` path
+(registrable parent → wildcard ZONE, same as before; a deeper sub-domain → exact DATA, changed
+from an unconditional wildcard ZONE) instead of `parse_abp()`'s always-wildcard treatment — bare
+lines are rare in real ABP feeds (`||` dominates), and the plain treatment is the canonical one
+once feeds are no longer classified. Every other line class is byte-identical to `origin/devel`,
+pinned by a corpus oracle (`tests/test_adr62_*`, `tests/php/Adr62*Test.php`) that runs each
+coverage-matrix format through both the old and new paths and asserts equality outside the
+delta table. See `.ADRs/ADR_62_DNSBL_Unified_Line_Parsing/`.
 
 ### ADR-10 — zero-downtime DNSBL data swap
 

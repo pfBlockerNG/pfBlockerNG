@@ -1,7 +1,41 @@
 # ADR-62: Unify DNSBL feed line parsing — retire PHP feed-level ABP classification, make Python the single per-line authority
 
-- **Status:** **Proposed** (2026-07-09; revised 2026-07-09 after an evidence audit of the design
-  handoff — the audit corrected the realization plan, see §2 "The realization fork" and §1.5)
+- **Status:** **Implemented (pending smoke fan-out)** (2026-07-10; revised 2026-07-09 after an
+  evidence audit of the design handoff — the audit corrected the realization plan, see §2 "The
+  realization fork" and §1.5). All 7 phases landed (`RESULTS/01–07_Results.txt`,
+  `RESULTS/01–06_Gate.txt` — Phase 7's own gate record is written by the planner after this
+  handoff); the byte-identity corpus oracle is green with exactly D1–D5 flipped; full
+  PHPUnit/pytest/PHPStan/PHPCS are green; Phase 6's benchmark is PASS (see §3). Flips to
+  **Accepted** only once the CE+Plus live-VM smoke fan-out (§7 rows 1–7,
+  `tests/smoke/test_smoke_adr62.py` + reused existing cases) runs green — per CLAUDE.md "ADR
+  acceptance", that automated evidence is the acceptance gate, not this Status line.
+
+  **As-built summary (Phase 7, 2026-07-10):**
+  - **Delta table (§2), the user-facing behaviour changes for the next release's notes:** D1 —
+    a bare hosts/plain line in a feed that *was* header-classified ABP: a registrable-parent
+    line stays a wildcard ZONE block (unchanged); a deeper sub-domain line becomes an exact
+    DATA block instead of an always-wildcard ZONE. D2 — `/re/`/`@@/re/`/`@@…`/`##…` lines in a
+    feed that was *never* ABP-classified are now captured and honoured (regex rules activate;
+    element-hiding is silently skipped instead of a `#`-truncation false-positive block). D3 —
+    `[…]`-non-IPv6 and `##…` lines stop being parse-error-logged (diagnostics-only). D4 —
+    element-hiding lines in a permit-mode feed (ADR-31) no longer produce an accidental
+    band-2 allow. D5 — `.txt` line counts / "No Domains Found" may shift slightly (newly
+    captured verbatim lines count where drops did before) — a UI statistic, not a blocking
+    contract.
+  - **Carried deviations from prior phases** (none silently dropped): P3's corpus-fixture
+    non-flip rationale (`RESULTS/03_Results.txt`); P5's re-scoped commit 1, discharged by the
+    reconciliation notes in §1.5/§6 above; P6's kept `$format` ternary in
+    `pfb_unbound_python_sources()` (the corpus's `format='abp'` tagging assertion still
+    exercises it, `RESULTS/06_Results.txt` DEVIATIONS item 1).
+  - **Discovered during this phase, NOT fixed here (out of Phase 7's docs/smoke scope):**
+    issue #1105 — `pfb_unbound_python_sources()` silently drops a bare-domain line inside an
+    OLD-dialect (pre-ADR-62 `$easylist`-verbatim) `.txt` file the first time a feed is REUSED
+    (not re-downloaded) after upgrading past this ADR — contradicts Semantics #7's literal
+    claim for that one sub-case (the `reused_manifest_abp` corpus fixture never exercised a
+    bare-domain line, only `\|\|reused.example^`). Verified by direct execution against the
+    real function (not reasoned from memory); reproduction, impact, and a fix direction are in
+    the issue. `tests/smoke/test_smoke_adr62.py`'s row-7a reuse test deliberately covers only
+    the SAFE 6-col-dialect sub-case (unaffected by this gap) and documents the exclusion inline.
 - **Date:** 2026-07-09
 - **Branch:** `adr/62-dnsbl-unified-line-parsing` (off `devel`; `{slug}` = sanitised ADR-title
   slug per CLAUDE.md "Branch naming") / **Component(s):** `pfblockerng.inc` (the DNSBL feed
@@ -131,6 +165,14 @@ just Python's input — they are a contract consumed by:
   `!empty($abp_feeds)` @7738, so a *plain* feed's ADR-21 verbatim `||x^` line is CSV-mangled
   by this pass when **no** ABP feed is configured — tracked as issue #1060; Phase 5 makes
   the skip unconditional on an empty feed column, fixing it structurally.)
+  **[2026-07-10 reconciliation, Phase 7]** This paragraph predates `devel` PR #1066 (merged
+  2026-07-09, independent of this ADR's phase work), which already made the comma-prefix guard
+  itself unconditional and closed issue #1060 — its own words: "the marker-based skip by feed
+  name stays for marked feeds (full marker retirement remains ADR-62 Phase 5's)". What actually
+  shipped in Phase 5's own commit 1 is narrower than this paragraph originally scoped: only the
+  SURVIVING `$abp_feeds` marker-glob gate (@7872-7875) and its `isset($abp_feeds[$lfeed])` arm
+  (@7891-7896) — the part PR #1066 explicitly left for this ADR. See `RESULTS/05_Results.txt`
+  "PLANNER RE-SCOPE" for the verified live-tree state at session start.
 - the **Alerts feed-attribution greps** (`inc:13477`, `13504`) and the **prefetch** helper
   (`inc:13316`) — they grep `pfb_py_data`/`pfb_py_zone` (6-col rows) to answer "which feed
   listed this domain".
@@ -300,6 +342,14 @@ name; empty / whitespace-only / BOM-led first line; **reused feed with old-diale
   read as a regression report.
 - Per-line cost on the plain hot path grows by a few `str_starts_with` checks (PHP) and prefix
   checks (Python) — expected ~0; Phase 6 measures against a kill-threshold anyway.
+  **[2026-07-10, Phase 6 closing evidence]** Measured on a synthetic 1M-line 'plain' feed
+  (97% bare-domain / 2% `\|\|` / 1% `@@\|\|`, `scripts/bench_dnsbl_line_parsing.py`): PHP
+  `pfb_unbound_python_sources()` wall +6.12% / peak RSS −0.25%; Python `dnsbl_build_from_manifest()`
+  wall +12.74% / peak RSS −1.67% — both well under the >25% kill-threshold (§7 criterion 2). PASS,
+  not REJECT. The Python-side delta traces to a genuine, expected cost: the broadened
+  `_dnsbl_is_abp_rule_line()` predicate runs a 5-substring element-hiding scan on every bare-domain
+  line that clears the `\|\|`/`@@` fast path — i.e. the 97% majority case. Full methodology,
+  reproducibility run, and dead-code perf-neutrality proof: `RESULTS/06_Results.txt`.
 
 ## 4. Requirements (acceptance)
 
@@ -414,7 +464,13 @@ name; empty / whitespace-only / BOM-led first line; **reused feed with old-diale
 - Prompt: `05_Delete_Classifier.txt`
 - **First commit: the issue #1060 TLD-pass gate fix** — skip on an empty/unset feed column
   unconditionally (drop the `!empty($abp_feeds)` gate + marker glob, @7723-7744), red→green
-  (the marker retirement below depends on it). Then delete `$easylist` (all sites),
+  (the marker retirement below depends on it). **[2026-07-10 reconciliation, Phase 7]** As
+  actually landed: `devel` PR #1066 (merged the day before this phase ran) had already made the
+  comma-prefix guard unconditional and closed issue #1060; commit 1 delivered the SURVIVING
+  piece PR #1066 left for this ADR — dropping the `$abp_feeds` marker-glob gate and its
+  `isset($abp_feeds[$lfeed])` arm, so the empty-feed-column skip is unconditional on BOTH
+  fronts. See `RESULTS/05_Results.txt` for the verified pre-edit state and the red→green proof.
+  Then delete `$easylist` (all sites),
   `pfb_dnsbl_is_abp_header()` (+ `DnsblIsAbpHeaderTest.php`), the `$validate_header` block;
   collapse 16317/16324 into one verbatim path (the ABP branch's `pfb_dnsbl_abp_extract_ip`
   IP-extract survives the collapse, Semantics #2). Retire the `.abp` marker: reuse path

@@ -178,10 +178,15 @@ def test_ip_probe_membership_and_rule(deployed_vm: SmokeVM, mock_feeds: object) 
 
 
 def test_abp_feed_body_has_header_and_lines() -> None:
-    """``abp_feed`` prepends the sniffed ABP header so pfBlockerNG tags it ABP."""
+    """``abp_feed`` prepends the realistic ``[Adblock Plus 2.0]`` header line.
+
+    ADR-62 retired the feed-level header sniff — the header line is now just an
+    ordinary skipped bracket control line (``pfb_dnsbl_is_abp_rule_line()`` never
+    matches it); every ``||``/``@@`` line is captured per-line regardless of
+    whether a header is present. The helper still prepends it so a fixture body
+    documents the shape real ABP feeds ship with.
+    """
     body = h.abp_feed("||evil.example^", "@@||good.example^")
-    # The FIRST line must be the marker pfBlockerNG header-sniffs (inc:7934); a
-    # body that does not start with it is parsed as a plain feed, not ABP.
     assert body.splitlines()[0] == h.ABP_HEADER
     assert "||evil.example^" in body
     assert "@@||good.example^" in body
