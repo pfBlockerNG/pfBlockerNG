@@ -35,7 +35,9 @@ Phase 1 (``RESULTS/01_Results.txt``), with file:line anchors in the docstrings:
     / ``/`` / regex lines are IGNORED today (``pfblockerng.inc:7706-7717``);
   * embedded-IP extraction -> firewall handoff set (generic bare-IP at
     ``inc:7962-7973``), with IP lines stripped from what the domain build
-    receives;
+    receives. (PHP also extracts an embedded IP from CSV-format feeds via
+    ``pfb_dnsbl_collect_feed_ip()`` -- a separate, still-live PHP path this
+    oracle's fixtures don't currently exercise, so it isn't modelled here);
   * domain validation + lower-casing (``inc:1138-1150``);
   * data/zone classification via the public-suffix TLD master (``tld_analysis`` /
     ``tld_search``, ``inc:2805-2877``), incl. TLD blacklist (whole-TLD zone,
@@ -516,8 +518,10 @@ GOLDEN_ABP_CONFORMANT_OVERRIDES: dict[str, dict[str, Any]] = {
 }
 
 # The extracted-IP firewall handoff set (the *_v4.ip -> DNSBLIP_v4 input). Comes
-# from generic bare-IP lines. This is part of the oracle:
-# Phase 5's independent DNSBL-IP pass must produce the SAME set.
+# from generic bare-IP lines (PHP's separate CSV-feed IP extraction isn't
+# modelled by this oracle's current fixtures -- see the module docstring).
+# This is part of the oracle: Phase 5's independent DNSBL-IP pass must
+# produce the SAME set.
 GOLDEN_EXTRACTED_IPS: set[str] = {
     "198.51.100.23",  # hosts feed bare IP
     "203.0.113.45",  # plain feed bare IP
