@@ -962,3 +962,22 @@ def test_py_triple_quote_after_escaped_single_quote_does_not_swallow_next_line(t
     violations = _find_py(tmp_path, tricky + abi_line)
     assert len(violations) == 1, f"literal after an escaped-quote + triple-quote line must be flagged; got {violations}"
     assert violations[0][1] == 2
+
+
+def test_py_escaped_quote_inside_triple_span_is_not_a_close(tmp_path: Path) -> None:
+    # Escapes also work INSIDE a same-line triple span: in x = """abc \""" def"""
+    # the \" is an escaped quote, so the string closes only at the final """ --
+    # one CLOSED string. The ABI literal on the next line must still be flagged.
+    tricky = 'x = """abc \\""" def"""\n'
+    abi_line = '_ABI = "' + _FREEBSD15 + '"\n'
+    violations = _find_py(tmp_path, tricky + abi_line)
+    assert len(violations) == 1, f"literal after a closed escape-carrying triple string: {violations}"
+    assert violations[0][1] == 2
+
+
+def test_py_escaped_quote_keeps_triple_span_open(tmp_path: Path) -> None:
+    # The inverse: x = """abc \""" never closes on its own line (the \" is
+    # escaped, leaving only two quotes), so the next line is string prose and a
+    # version token there must stay masked until the real close.
+    content = 'x = """abc \\"""\n' + '_ABI = "' + _FREEBSD15 + '"\n' + '"""\n'
+    assert _find_py(tmp_path, content) == [], "prose inside a still-open escape-carrying triple string must stay masked"
