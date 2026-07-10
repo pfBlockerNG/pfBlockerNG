@@ -48,6 +48,7 @@ $pfb['denydir']		= "{$pfb['dbdir']}/deny";
 $pfb['matchdir']	= "{$pfb['dbdir']}/match";
 $pfb['permitdir']	= "{$pfb['dbdir']}/permit";
 $pfb['origdir']		= "{$pfb['dbdir']}/original";
+$pfb['snapdir']		= "{$pfb['dbdir']}/snapshot";	// issue #1084: pristine post-preprocessing feed snapshots (recompute memberlist inputs)
 $pfb['dnsdir']		= "{$pfb['dbdir']}/dnsbl";
 $pfb['dnsorigdir']	= "{$pfb['dbdir']}/dnsblorig";
 $pfb['dnsalias']	= "{$pfb['dbdir']}/dnsblalias";
@@ -71,7 +72,7 @@ $pfb['wc']	= '/usr/bin/wc';
 // Folder Array
 $pfb['folder_array'] = array(	"{$pfb['dbdir']}", "{$pfb['logdir']}", "{$pfb['ccdir']}", "{$pfb['origdir']}", "{$pfb['nativedir']}",
 				"{$pfb['denydir']}", "{$pfb['matchdir']}","{$pfb['permitdir']}", "{$pfb['aliasdir']}",
-				"{$pfb['dnsdir']}", "{$pfb['dnsorigdir']}", "{$pfb['dnsalias']}");
+				"{$pfb['dnsdir']}", "{$pfb['dnsorigdir']}", "{$pfb['dnsalias']}", "{$pfb['snapdir']}");
 
 // Files
 $pfb['log']		= "{$pfb['logdir']}/pfblockerng.log";
@@ -4987,6 +4988,129 @@ function pfb_member_file_is_placeholder_only($path, $placeholder) {
 		}
 	}
 	return TRUE;
+}
+
+
+// issue #1084: batch IP dedup/reputation recompute -- caller-side helpers. pfb_recompute()
+// (pfblockerng.sh) replaces duplicate()/dmax/pmax's incremental masterfile surgery with one
+// deterministic pass per family over pristine per-feed snapshots; these functions decide WHEN
+// to invoke it and build its inputs.
+
+// Per-feed v4-Deny shell preprocessing stages to run before snapshotting (post _255/_agg/_rep
+// -- see pfb_recompute()'s memberlist contract). '_dup' is INTENTIONALLY never appended: the
+// batch recompute verb now owns cross-feed dedup, replacing duplicate()'s per-feed call.
+function pfb_ip_preprocess_args(bool $dup_on, bool $agg_on, bool $rep_on): string {
+	$args = '';
+	if ($dup_on || $agg_on) {
+		$args = '_255';
+	}
+	if ($agg_on) {
+		$args .= '_agg';
+	}
+	if ($rep_on) {
+		$args .= '_rep';
+	}
+	return $args;
+}
+
+/**
+ * Decide how the batch `recompute` verb is invoked this pass from the enable_dup / dRep /
+ * pRep toggle state -- the "dedup-off invocation matrix" pinned in issue #1084's benchmark-
+ * plan comment. Both-dRep-and-pRep is a design-decided tie-break: recompute applies dMax,
+ * then the caller runs the legacy pMax exec afterward over the emitted deny files (today's
+ * pMax semantics, unmodified).
+ *
+ * @param bool $dedup_on    $pfb['dup'] == 'on', already ANDed with $pfb['enable'] == 'on' by
+ *                          the caller -- this function knows nothing about pfSense globals.
+ * @param bool $rep_trigger dRep/pRep's shared "changes found" gate: $pfb['repcheck'] &&
+ *                          !$pfb['save'] && $pfb['enable'] == 'on'.
+ * @param bool $drep_on     $pfb['drep'] == 'on'.
+ * @param bool $prep_on     $pfb['prep'] == 'on'.
+ * @return array{invoke_v4:bool,invoke_v6:bool,dedup:string,repmode:string,legacy_pmax_followup:bool}
+ */
+function pfb_ip_recompute_matrix(bool $dedup_on, bool $rep_trigger, bool $drep_on, bool $prep_on): array {
+	$repmode = 'off';
+	$legacy_pmax_followup = FALSE;
+	if ($rep_trigger && $drep_on) {
+		$repmode = 'dmax';
+		$legacy_pmax_followup = $prep_on;
+	} elseif ($rep_trigger && $prep_on) {
+		$repmode = 'pmax';
+	}
+
+	if ($dedup_on) {
+		return array('invoke_v4' => TRUE, 'invoke_v6' => TRUE, 'dedup' => 'on', 'repmode' => $repmode, 'legacy_pmax_followup' => $legacy_pmax_followup);
+	}
+	if ($rep_trigger && ($drep_on || $prep_on)) {
+		return array('invoke_v4' => TRUE, 'invoke_v6' => FALSE, 'dedup' => 'off', 'repmode' => $repmode, 'legacy_pmax_followup' => $legacy_pmax_followup);
+	}
+	return array('invoke_v4' => FALSE, 'invoke_v6' => FALSE, 'dedup' => 'off', 'repmode' => 'off', 'legacy_pmax_followup' => FALSE);
+}
+
+/**
+ * Filter the config-order enabled-Deny header list ($pfb['existing']['deny'], built by the
+ * removal-detection pre-pass) down to one family, preserving order -- the recompute
+ * memberlist's PRIORITY order (config order, not glob/accretion order; a deliberate delta
+ * from today's sticky historical masterfile ownership).
+ *
+ * @param string[] $existing_deny $pfb['existing']['deny'] -- '<header>_v4'/'<header>_v6' names.
+ * @param string   $family        'v4' | 'v6'.
+ * @return string[] Headers ending in "_{$family}", original relative order preserved.
+ */
+function pfb_ip_recompute_family_headers(array $existing_deny, string $family): array {
+	$suffix = "_{$family}";
+	$out = array();
+	foreach ($existing_deny as $header) {
+		if (str_ends_with((string) $header, $suffix)) {
+			$out[] = $header;
+		}
+	}
+	return $out;
+}
+
+// The recompute snapshot path for one header -- basename-strip-at-first-'.' round-trips to
+// $header exactly (pfb_recompute()'s memberlist contract, pfblockerng.sh:754-757).
+function pfb_ip_recompute_snapshot_path(string $snapdir, string $header): string {
+	return "{$snapdir}/{$header}.snap";
+}
+
+/**
+ * The recompute memberlist entry for one header -- the existing snapshot when present, else a
+ * one-line seed from the live deny .txt (first run after upgrade, or a header whose snapshot
+ * was never written on this box). Load-bearing for upgrade continuity: without it, a
+ * pre-#1084 deny alias would vanish from the memberlist (and the masterfile) on the first
+ * recompute pass instead of carrying its current content forward.
+ */
+function pfb_ip_recompute_seed_snapshot(string $header, string $snapdir, string $denydir): string {
+	$snap = pfb_ip_recompute_snapshot_path($snapdir, $header);
+	if (!file_exists($snap)) {
+		$live = "{$denydir}/{$header}.txt";
+		if (file_exists($live)) {
+			@copy($live, $snap);
+		}
+	}
+	return $snap;
+}
+
+// Persist the pristine post-preprocessing snapshot pfb_recompute() reads, plus the
+// '.aggcount' original-count sidecar closingprocess() sums for the FINAL Processing report --
+// both used to live inside duplicate() (pfblockerng.sh:1259-1260), which no longer runs for
+// callers routed through recompute.
+function pfb_ip_recompute_write_snapshot(string $src, string $header, string $snapdir, string $origdir): void {
+	if (!file_exists($src)) {
+		return;
+	}
+	@copy($src, pfb_ip_recompute_snapshot_path($snapdir, $header));
+	$lines = @file($src, FILE_IGNORE_NEW_LINES);
+	@file_put_contents("{$origdir}/{$header}.aggcount", (is_array($lines) ? count($lines) : 0) . "\n", LOCK_EX);
+}
+
+// Drop a header's recompute snapshot (+ aggcount sidecar) on removal/download-failure -- else
+// a stale snapshot would outlive the live deny-file removal ('remove x x x' call sites) and
+// feed the next recompute pass phantom content.
+function pfb_ip_recompute_forget_header(string $header, string $snapdir, string $origdir): void {
+	unlink_if_exists(pfb_ip_recompute_snapshot_path($snapdir, $header));
+	unlink_if_exists("{$origdir}/{$header}.aggcount");
 }
 
 
@@ -14840,6 +14964,7 @@ function pfb_clear_contents() {
 	unlink_if_exists("{$pfb['asn_cache']}");
 	unlink_if_exists("{$pfb['ip_cache']}");
 	rmdir_recursive("{$pfb['origdir']}");
+	rmdir_recursive("{$pfb['snapdir']}");
 	rmdir_recursive("{$pfb['matchdir']}");
 	rmdir_recursive("{$pfb['permitdir']}");
 	rmdir_recursive("{$pfb['denydir']}");
@@ -15786,6 +15911,11 @@ function sync_package_pfblockerng($cron='') {
 				case 'deny':
 					// Script to Remove un-associated List(s)
 					exec("{$pfb['script']} remove x x x {$f_result} {$elog}");
+					// issue #1084: drop each removed header's recompute snapshot too, else it
+					// outlives this removal and feeds the next recompute pass phantom content.
+					foreach ($results as $pfb_removed_header) {
+						pfb_ip_recompute_forget_header($pfb_removed_header, $pfb['snapdir'], $pfb['origdir']);
+					}
 					$pfb['summary'] = $pfb['remove'] = TRUE;
 					break;
 				case 'match':
@@ -17867,9 +17997,10 @@ function sync_package_pfblockerng($cron='') {
 										exec("{$pfb['script']} cidr_aggregate {$cc_alias} {$pfbfolder} {$elog}");
 									}
 
-									// Call Duplication process
-									if ($pfb['dup'] == 'on' && $vtype == '_v4' && $pfbadv) {
-										exec("{$pfb['script']} continent {$cc_alias} {$elog}");
+									// issue #1084: snapshot for the batch recompute memberlist --
+									// replaces the 'continent' duplicate() exec (v4 Deny only).
+									if ($vtype == '_v4' && $pfbadv) {
+										pfb_ip_recompute_write_snapshot("{$pfbfolder}/{$cc_alias}.txt", $cc_alias, $pfb['snapdir'], $pfb['origdir']);
 									}
 
 									// Save Continent data to aliastable folder
@@ -18211,6 +18342,8 @@ function sync_package_pfblockerng($cron='') {
 											if ($pfbadv) {
 												// Script to Remove failed lists from masterfile
 												exec("{$pfb['script']} remove x x x {$header_esc} {$elog}");
+												// issue #1084: drop the stale recompute snapshot too.
+												pfb_ip_recompute_forget_header($header, $pfb['snapdir'], $pfb['origdir']);
 											}
 											continue;
 										}
@@ -18568,26 +18701,14 @@ function sync_package_pfblockerng($cron='') {
 
 								// Call 'shell script' functions (Deny Actions only)
 								if ($pfbadv && $list['vtype'] == '_v4') {
-									$args = '';
-									// Call Process255
-									if ($pfb['dup'] == 'on' || $pfb['agg'] == 'on') {
-										$args  = '_255';
-									}
-									// Call Aggregate process
-									if ($pfb['agg'] == 'on') {
-										$args .= '_agg';
-									}
-									// Call Reputation Max process
-									if ($pfb['rep'] == 'on') {
-										$args .= '_rep';
-									}
-									// Call Duplication process
-									if ($pfb['dup'] == 'on') {
-										$args .= '_dup';
-									}
+									$args = pfb_ip_preprocess_args($pfb['dup'] == 'on', $pfb['agg'] == 'on', $pfb['rep'] == 'on');
 									if (!empty($args)) {
 										exec("{$pfb['script']} {$args} {$header_esc} {$pfb['max']} {$pfb['drep']} {$pfb['ccexclude']} {$pfb['ccwhite']} {$pfb['ccblack']} {$elog}");
 									}
+
+									// issue #1084: snapshot the pristine post-preprocessing feed for the
+									// batch recompute memberlist -- replaces duplicate()'s per-feed write.
+									pfb_ip_recompute_write_snapshot("{$pfbfolder}/{$header}.txt", $header, $pfb['snapdir'], $pfb['origdir']);
 								}
 
 								if (!$pfbadv && $list['vtype'] == '_v4') {
@@ -18595,6 +18716,12 @@ function sync_package_pfblockerng($cron='') {
 									if ($pfb['agg'] == 'on') {
 										exec("{$pfb['script']} cidr_aggregate {$header_esc} {$pfbfolder} {$elog}");
 									}
+								}
+
+								// issue #1084: v6 Deny has no _255/_agg/_rep chain -- the parsed .txt IS
+								// the snapshot the recompute memberlist reads.
+								if ($pfbadv && $list['vtype'] == '_v6') {
+									pfb_ip_recompute_write_snapshot("{$pfbfolder}/{$header}.txt", $header, $pfb['snapdir'], $pfb['origdir']);
 								}
 
 								// Collect updated alias lists ('Reputation' disabled)
@@ -18660,14 +18787,42 @@ function sync_package_pfblockerng($cron='') {
 	#	REPUTATION PROCESSES	#
 	#################################
 
-	// IP Reputation processes (pMax and dMax)
-	if ($pfb['prep'] == 'on' && $pfb['repcheck'] && !$pfb['save'] && $pfb['enable'] == 'on') {
-		// Script to run prep process
-		exec("{$pfb['script']} pmax x {$pfb['pmax']} {$elog}");
+	// issue #1084: batch recompute replaces the incremental duplicate()/dmax/pmax pass.
+	// enable_dup drives a full v4+v6 pass; dedup-off + reputation alone is v4-only; both
+	// off skips recompute (parse output stands) -- see pfb_ip_recompute_matrix().
+	$pfb_rec_matrix = pfb_ip_recompute_matrix(
+		$pfb['dup'] == 'on' && $pfb['enable'] == 'on',
+		$pfb['repcheck'] && !$pfb['save'] && $pfb['enable'] == 'on',
+		$pfb['drep'] == 'on',
+		$pfb['prep'] == 'on'
+	);
+
+	foreach (array('v4', 'v6') as $pfb_rec_family) {
+		if (!$pfb_rec_matrix["invoke_{$pfb_rec_family}"]) {
+			continue;
+		}
+
+		$pfb_rec_paths = array();
+		foreach (pfb_ip_recompute_family_headers($pfb['existing']['deny'] ?? [], $pfb_rec_family) as $pfb_rec_header) {
+			$pfb_rec_paths[] = pfb_ip_recompute_seed_snapshot($pfb_rec_header, $pfb['snapdir'], $pfb['denydir']);
+		}
+		$pfb_rec_memberlist = "{$pfb['dbdir']}/pfb_recompute_{$pfb_rec_family}.members";
+		$pfb_rec_countsfile = "{$pfb['dbdir']}/pfb_recompute_{$pfb_rec_family}.counts";
+		@file_put_contents($pfb_rec_memberlist, $pfb_rec_paths ? (implode("\n", $pfb_rec_paths) . "\n") : '', LOCK_EX);
+
+		// Reputation is v4-only (§1.2); the v6 pass is always a dedup-only passthrough.
+		$pfb_rec_repmode = ($pfb_rec_family === 'v4') ? $pfb_rec_matrix['repmode'] : 'off';
+		$pfb_rec_max     = ($pfb_rec_repmode === 'dmax') ? $pfb['dmax'] : (($pfb_rec_repmode === 'pmax') ? $pfb['pmax'] : '0');
+
+		exec("{$pfb['script']} recompute {$pfb_rec_family} " . escapeshellarg($pfb_rec_memberlist) . ' ' . escapeshellarg($pfb_rec_countsfile)
+			. " {$pfb_rec_matrix['dedup']} {$pfb_rec_repmode} {$pfb_rec_max} {$pfb['ccexclude']} {$pfb['ccwhite']} {$pfb['ccblack']} {$elog}");
 	}
-	if ($pfb['drep'] == 'on' && $pfb['repcheck'] && !$pfb['save'] && $pfb['enable'] == 'on') {
-		// Script to run drep process
-		exec("{$pfb['script']} dmax x {$pfb['dmax']} {$pfb['drep']} {$pfb['ccexclude']} {$pfb['ccwhite']} {$pfb['ccblack']} {$elog}");
+
+	// Both dRep and pRep enabled: recompute already applied dMax (the matrix's tie-break)
+	// above; run the legacy pMax exec over the emitted deny files -- today's pMax
+	// semantics, unmodified (issue #1084).
+	if ($pfb_rec_matrix['legacy_pmax_followup']) {
+		exec("{$pfb['script']} pmax x {$pfb['pmax']} {$elog}");
 	}
 
 	#################################################

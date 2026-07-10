@@ -78,6 +78,8 @@ if [ -z "${PFB_SOURCED:-}" ]; then
 	# now applied at query time).
 	masterfile=/var/db/pfblockerng/masterfile
 	mastercat=/var/db/pfblockerng/mastercat
+	# issue #1084: pristine post-preprocessing feed snapshots (recompute memberlist inputs).
+	pfbsnap=/var/db/pfblockerng/snapshot/
 	geoiplog=/var/log/pfblockerng/geoip.log
 	errorlog=/var/log/pfblockerng/error.log
 	extraslog=/var/log/pfblockerng/extras.log
@@ -118,6 +120,7 @@ if [ -z "${PFB_SOURCED:-}" ]; then
 	if [ ! -d "${pfbdb}" ]; then mkdir "${pfbdb}"; fi
 	if [ ! -d "${pfsensealias}" ]; then mkdir "${pfsensealias}"; fi
 	if [ ! -d "${pfbmatch}" ]; then mkdir "${pfbmatch}"; fi
+	if [ ! -d "${pfbsnap}" ]; then mkdir "${pfbsnap}"; fi
 	if [ ! -d "${etdir}" ]; then mkdir "${etdir}"; fi
 	# tmpxlsx is a fresh subdir of the private mktemp -d tmpdir -- no existence
 	# guard needed (and none wanted: a pre-existing entry there would be a
