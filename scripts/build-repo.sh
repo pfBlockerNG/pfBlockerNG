@@ -200,11 +200,9 @@ validate_abi() {
 }
 
 # ── Lay out the varver bucket + run `pkg repo` ─────────────────────────────────
-# The release channel is nested under <out>/release/<varver>/<arch>/ (ADR-20:
-# the catalog is keyed by varver, matching build-repo-portable.py and this
-# script's own --print-conf url; issue #1081 — the old <out>/release/<ABI>/
-# layout served nothing a printed conf could resolve). One varver per
-# invocation: a mixed-ABI input would silently mix editions, so it fails loud.
+# issue #1081: the catalog lives at <out>/release/<varver>/<arch>/ (ADR-20 varver
+# keying, matching build-repo-portable.py and this script's own --print-conf
+# url); one ABI per invocation — a mixed input would silently mix editions.
 bucket_abi=""
 for f in "$@"; do
     abi="$(pkg_abi "$f")"
@@ -212,7 +210,7 @@ for f in "$@"; do
     if [ -z "$bucket_abi" ]; then
         bucket_abi="$abi"
     elif [ "$abi" != "$bucket_abi" ]; then
-        echo "build-repo: mixed ABIs in one --varver run ('$bucket_abi' vs '$abi') — run once per varver" >&2
+        echo "build-repo: mixed ABIs in one run ('$bucket_abi' vs '$abi') — filter --in to one ABI and invoke once per ABI/arch (keep the same --varver for one edition)" >&2
         exit 1
     fi
 done

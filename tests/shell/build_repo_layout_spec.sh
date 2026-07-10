@@ -82,6 +82,27 @@ EOF
     The stderr should include '--varver'
   End
 
+  Describe 'hostile --varver values'
+    # The value becomes a directory that is rm -rf'd + rebuilt, so anything but
+    # a plain lowercase segment must be rejected before any filesystem work.
+    Parameters
+      '../etc'
+      'ce/2.8'
+      'CE-2.8'
+      'ce_2.8'
+      'ce-2.8;rm -rf x'
+    End
+
+    It "rejects hostile --varver value: $1"
+      fake_pkg a.pkg pfSense-pkg-pfBlockerNG 4.0.1 FreeBSD:15:amd64 php83
+      When call run_build --varver "$1"
+      The status should equal 2
+      The stderr should include 'unsafe or invalid --varver'
+      # No filesystem layout may happen for a rejected value.
+      The path "${work}/out/release" should not be exist
+    End
+  End
+
   It 'fails loud on a mixed-ABI input instead of mixing editions in one bucket'
     fake_pkg a.pkg pfSense-pkg-pfBlockerNG 4.0.1 FreeBSD:15:amd64 php83
     fake_pkg b.pkg pfSense-pkg-pfBlockerNG 4.0.1_1 FreeBSD:16:amd64 php85
