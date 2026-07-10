@@ -1,0 +1,28 @@
+ADR-62 PHASE 7 — ORCHESTRATOR GATE RECORD
+Verdict: PASS
+Route: phase-step workflow wf_54ba7caf-e15 (Sonnet implementer + independent Sonnet verifier); orchestrator validated the schema-forced gate record, ran an extra typing probe, and wrote this file.
+Commit gated: f6926064 ("docs+tests: document ADR-62 per-line parse authority; add smoke fan-out rows (ADR-62 P7)")
+
+1. TRANSACTION — PASS. HEAD == origin == f6926064; tree clean; RESULTS/07_Results.txt committed; all fixed handoff fields present. Verdict DONE-WITH-DEVIATION accepted: the deviation is the correct ESCALATE outcome (see below). Minor typo in one coverage-matrix test name (plural vs singular) — non-blocking, test exists.
+
+2. CANONICAL GATES (verifier re-ran all) — PASS. pytest 2620 passed/4 skipped (P5/P6 baseline); phpunit Tests: 2629, 0 failures (src/ PHP diff empty this phase); phpstan OK; phpcs 0 violations; ruff/mypy clean; markdownlint 0 errors (architecture-notes, ADR.md, fixtures README); check_phase_prompts exit 0 on all 7 prompts; narration/retired-token/version-literal/appliance-python checkers exit 0.
+
+3. RED PROOF — behaviour-preserving: git diff HEAD~1 -- src/ tests/test_* tests/php/ EMPTY (zero production or oracle files touched); both oracle suites re-run green (pytest -k adr62: 47 passed; phpunit --filter Adr62: 58 tests/176 assertions, 0 failures).
+
+4. DIFF VS PLAN (full 963+/61− diff read) — PASS.
+   - §7 row mapping: row 1 → existing test_dnsbl_http_hosts_feed_loads (unmodified, reuse); rows 2–7b → 7 new tests in tests/smoke/test_smoke_adr62.py (collection proof reproduced: 8/637 collected with the -k expr). Each self-encapsulated, asserts before-state (resolves via stub) + falsifiable after-state (VIP block / on-box .abp-marker ABSENCE / DNSBLIP alias membership / decoy still resolving), expected-vs-actual on failure. Fixtures inert (RFC 3849, unique_domain(); fixed-literal IDN follows the documented test_dnsbl_idn_confusable_* precedent).
+   - Row 7a covers the SAFE old-dialect sub-case only; the bare-domain-in-raw-ABP-dialect sub-case exposed a REAL pre-existing-shape defect — pfb_unbound_python_sources() silently drops a bare-domain line inside a reused old-dialect ABP .txt, contradicting ADR Semantics #7's literal claim for that sub-case — filed as issue #1105 (verified OPEN) instead of silently building around it or scope-creeping a production fix into a docs phase. Correct contract behaviour.
+   - Row 7b = coarse live regression guard for the TLD run (deep correctness owned by the PHPUnit Adr62TldAnalysisCorpusTest oracle) — proportionate.
+   - architecture-notes: ADR-62 subsection added + stale ADR-07 header-sniff paragraph corrected; PHP line refs in docstrings spot-verified against live source by the verifier.
+   - ADR.md: Status → Implemented (pending smoke fan-out) with as-built summary + carried deviations + delta table (D1 in two-case shape); §1.5/§6-P5 reconciled with PR #1066 (dated in-place notes; issue #1060 CLOSED); §3 perf risk closed with Phase-6 numbers. NOT flipped to Accepted (fan-out evidence pending — correct).
+   - Stale header-sniff docstrings/comments reconciled across 4 smoke files + 1 fixture header.
+
+5. TEST HONESTY — PASS. No removed assertions (grep over diff: only a docstring prose line); test_abp_bom_header_still_detected assertions untouched, its reduced discriminating power disclosed honestly (carry-forward suggests tightening later); no manufactured faults.
+
+6. CONVENTIONS — PASS. DnsblCase.tld_enabled matches 3 sibling boolean fields exactly (wildcard/regex_cap/cname_validation). ORCHESTRATOR EXTRA PROBE: an IDE Pyright diagnostic claimed 'No parameter named tld_enabled' at test_smoke_adr62.py:425 — probed: the field exists (helpers.py:319), is consumed (helpers.py:2436), and targeted mypy on the new test file is clean ("Success: no issues found in 1 source file") — stale IDE index, not a defect.
+
+7. SKIPPED (recorded): live-VM dispatch of the new rows — out of the phase's scope by design; DEFERRED evidence commands recorded in RESULTS/07_Results.txt. Verifier's residual-risk note logged: row 7a implicitly depends on staging files from earlier rows when run in isolation (traced, not confirmed live) — the planned fan-out filter preserves module order, so it should not manifest; watch for it in the fan-out run.
+
+DEVIATIONS ACCEPTED: (1) issue #1105 filed for the discovered defect (the ESCALATE contract working as designed); (2) DnsblCase.tld_enabled test-infra field (established pattern); (3) row 7b coarse-by-design; (4) regex literals derived from parse_abp's convention, not guessed; (5) BOM-test docstring corrected, logic untouched, honestly flagged.
+
+ACCEPTANCE PATH (orchestrator): dispatch the CE+Plus smoke fan-out — gh workflow run smoke.yml -f pytest_filter="adr62 or test_dnsbl_http_hosts_feed_loads" -f scope=full — and flip ADR Status to Accepted on green rows 1–7. Issue #1105 is tracked follow-up work, not an acceptance blocker (pre-existing-shape edge case, documented in the ADR).
