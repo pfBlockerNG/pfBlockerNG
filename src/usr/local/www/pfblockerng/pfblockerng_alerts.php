@@ -654,6 +654,12 @@ if (isset($_POST) && !empty($_POST)) {
 
 			foreach ($ftypes as $submit_type => $final_type) {
 				if (isset($_POST['filterlogentries_submit_' . $submit_type]) && !empty($_POST['filterlogentries_submit_' . $submit_type])) {
+					// issue #1139: an array-valued POST reaches explode()/pfb_filter() below
+					// with no scalar guard -- skip it instead of TypeError-ing the page.
+					if (!is_string($_POST['filterlogentries_submit_' . $submit_type])) {
+						continue;
+					}
+
 					$final_type = $ftypes[$submit_type];
 
 					// Split SRC/DST In/Outbound field into two filter fields (IP/GeoIP)
