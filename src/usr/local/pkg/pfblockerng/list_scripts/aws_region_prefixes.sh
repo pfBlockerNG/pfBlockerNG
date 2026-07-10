@@ -66,7 +66,13 @@ if [ "${prefix}" = '_v4' ]; then
 		exit 1
 	fi
 else
-	mv -f "${rawfile}" "${tempfile}"
+	# issue #1079: raw jq output repeats a v6 prefix listed for several services;
+	# iprange dedups the v4 side, so dedup here too (ADR-26: LC_ALL=C byte order).
+	if ! LC_ALL=C sort -u "${rawfile}" > "${tempfile}"; then
+		echo "AWS pre-script: IPv6 dedup failed"
+		rm -f "${rawfile}" "${tempfile}"
+		exit 1
+	fi
 fi
 rm -f "${rawfile}"
 

@@ -92,3 +92,23 @@ Describe 'aws_region_prefixes.sh failure handling'
     The contents of file "$awswork" should include '"region":"us-east-1"'
   End
 End
+
+# The v6 path publishes raw jq output; the real ip-ranges.json lists the same
+# ipv6_prefix once per service, so the published list carried duplicates. The
+# v4 path never showed this because iprange aggregates (and so dedups).
+Describe 'aws_region_prefixes.sh v6 dedup (issue #1079)'
+  awswork=""
+  setup()   { awswork="$(mktemp "${SHELLSPEC_TMPBASE:-/tmp}/awsdup.XXXXXX")"; }
+  cleanup() { rm -f "$awswork"; }
+  Before 'setup'
+  After 'cleanup'
+
+  It 'publishes a duplicated v6 prefix exactly once'
+    printf '%s' '{"prefixes":[],"ipv6_prefixes":[{"ipv6_prefix":"2001:db8:13::/48","region":"ap-south-1"},{"ipv6_prefix":"2001:db8:13::/48","region":"ap-south-1"},{"ipv6_prefix":"2001:db8:14::/48","region":"ap-south-1"}]}' > "$awswork"
+    When run sh "${PFB_PKGDIR}/list_scripts/ip_pre_AWS_AP_SOUTH.sh" "$awswork" _v6
+    The status should be success
+    The first line of contents of file "$awswork" should equal "2001:db8:13::/48"
+    The second line of contents of file "$awswork" should equal "2001:db8:14::/48"
+    The lines of contents of file "$awswork" should equal 2
+  End
+End
