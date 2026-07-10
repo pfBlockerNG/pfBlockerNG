@@ -6393,12 +6393,6 @@ function pfb_unbound_python_whitelist($mode='') {
 					$line = substr($line, 4);
 				}
 
-				// Minimize the python whitelist queries to the smallest tld segment count
-				if (!isset($tld_segments)) {
-					$tld_segments = (substr_count($line, '.') +1);
-				}
-				$tld_segments = @min((array((substr_count($line, '.') +1), $tld_segments) ?: 1));
-
 				if (str_starts_with($line, '.')) {
 					$line = ltrim($line, '.');
 					$dnsbl_whitelist .= "{$line},1\n";
@@ -7464,10 +7458,6 @@ function pfb_unbound_python($mode) {
 			pfb_unbound_python_sources_whitelist();
 		}
 
-		if (!isset($tld_segments)) {
-			$tld_segments = '1';
-		}
-
 		$python_reply = 'off';
 		if ($pfb['dnsbl_py_reply'] == 'on') {
 			$python_reply = 'on';
@@ -7558,6 +7548,9 @@ function pfb_unbound_python($mode) {
 
 		$now = date('Y-m-d H:i:s', time());	// ISO-8601 (py_unbound.ini "File created" comment)
 
+		// issue #1155: fixed at 1 -- the min-segment optimization was computed-and-discarded
+		// in pfb_unbound_python_whitelist() since extraction; 1 is behaviourally identical
+		// (only wildcard entries can match the Python suffix walk it gates).
 		$pfb_py_conf = <<<EOF
 ; pfBlockerNG DNSBL Unbound python configuration file
 ; pfb_unbound.ini [ File created: {$now} ]
@@ -7572,7 +7565,7 @@ python_idn	= {$python_idn}
 idn_mode	= {$idn_mode}
 python_idn_block_malicious	= {$python_idn_block_malicious}
 python_idn_escalate_suspicious	= {$python_idn_escalate_suspicious}
-python_tld_seg	= {$tld_segments}
+python_tld_seg	= 1
 decisiondb_max	= {$decisiondb_max}
 python_tld	= {$python_tld}
 python_tlds	= {$python_tlds}
