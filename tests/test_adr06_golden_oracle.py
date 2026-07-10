@@ -383,11 +383,12 @@ def _decision_label(d: pfb_unbound.DnsblDecision) -> str:
       * "pass"        -> not on any list; resolves normally (pass-through).
       * "whitelist"   -> on a list but un-blocked via whiteDB (resolves).
       * "hsts"        -> on a list but bypassed via HSTS (resolves real).
-      * "block-null"  -> blocked and null-routed to the DNSBL sinkhole IP
-                         (log_flag '1', not HSTS -> null_blocking flips to False).
+      * "block-null"  -> blocked and answered with the real DNSBL sinkhole VIP,
+                         NOT the 0.0.0.0/:: null route (log_flag '1', not HSTS ->
+                         null_blocking flips to False).
       * "block-nolog" -> blocked, but log_flag '2' (block-but-skip-log):
-                         null_blocking STAYS True (only log '1' flips it), so the
-                         reply is built but not null-routed and the hit is not
+                         null_blocking STAYS True (only log '1' flips it to False),
+                         so the reply IS null-routed (0.0.0.0/::) and the hit is not
                          logged (get_details_dnsbl()'s log_type suppression). Still a block, distinct
                          from HSTS (which sets in_hsts) and from whitelist.
     """

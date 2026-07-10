@@ -1,7 +1,8 @@
 # Plain-domain feed with log_flag '2' (block-but-skip-log).
 # Feed=NoLogFeed Group=NoLog  log_flag=2
 # Per Phase 1 (1b) + the matcher: log '2' still BLOCKS the domain, but
-# null_blocking stays True (only log '1' flips it to a null-route reply) and
+# null_blocking stays True (only log '1' flips it to False, serving the real
+# VIP instead), so the reply IS null-routed (0.0.0.0/::), and
 # get_details_dnsbl() skips the log line. This pins the
 # distinct "blocked, log '2'" decision shape.
 silentblock.com
