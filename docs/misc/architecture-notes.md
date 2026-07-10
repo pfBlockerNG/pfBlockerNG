@@ -47,8 +47,9 @@ flag that routed the WHOLE feed either through raw-verbatim capture (ABP) or PHP
 pipeline (plain) — two parallel per-line paths, one classifier, one `.abp` on-disk marker
 recording the decision for a reused (not re-downloaded) feed. ADR-62 deletes all of it:
 `$easylist`, `pfb_dnsbl_is_abp_header()`, `$validate_header`, and the `.abp` marker are gone
-(swept opportunistically where a stale one survives an upgrade); `format_hint` collapses to
-`'plain'` for every domain feed.
+entirely (issue #1083 later retired the stale-marker sweeps and `format_hint` end-to-end —
+the NDJSON `kind` field carries the per-line discrimination; see the interchange section
+below).
 
 **The line itself, not the feed it came from, now decides its parser.** One pure PHP predicate,
 `pfb_dnsbl_is_abp_rule_line()`, is the single capture guard — used at the download loop's
@@ -63,11 +64,12 @@ bracketed-IPv6 carve-out: `pfb_dnsbl_unbracket_ip6()` runs FIRST, so `[2604:2dc0
 collects to the DNSBL-IP firewall pass (never treated as an ABP `[section]` comment); only a
 non-IPv6 `[…]` is dropped as a control line.
 
-The TLD-analysis pass (`tld_analysis()`) reads the same per-feed `.txt` staging files and must
-skip a verbatim-captured line (it is not a 6-col CSV row); this used to gate on the `.abp`
+The TLD-analysis pass (`tld_analysis()`) reads the aggregated `pfb_dnsbl.raw` (schema-v1 NDJSON,
+issue #1083 — see below) and must skip a verbatim-captured line; this used to gate on the `.abp`
 marker glob (`!empty($abp_feeds)`) — a latent bug (issue #1060) meant a *plain* feed's verbatim
-`||…^` line was CSV-mangled whenever no feed was ABP-classified. The skip is now unconditional
-on an empty/unset feed column, independent of any marker.
+`||…^` line was CSV-mangled whenever no feed was ABP-classified. The skip is now unconditional on
+the row's `"kind"` field (`pfb_dnsbl_ndjson_parse_row()` returns `NULL`/non-`'domain'` for an ABP
+row), independent of any marker or column count.
 
 The deliberate behaviour changes are enumerated in the ADR's delta table (D1–D6, ADR.md §2) —
 the headline rows: a bare hosts/plain domain line inside a feed that used to be
@@ -79,14 +81,104 @@ vanished (D6). The element-hiding capture requires an ABP cosmetic domain-list p
 (`[A-Za-z0-9._,~*-]`) before the first marker — a hosts line's mid-line `` ## `` inline
 comment, a `#`-led comment, or a CSV row's `#`-fragment URL is never captured — a
 comma-first line is never captured either (issue #1067: a leading comma is not valid ABP
-syntax and would collide with the plain `,domain,,log,feed,group` CSV dialect downstream;
-the manifest writer's plain fallback likewise skips non-captured `#`-bearing residue lines
-instead of extracting a blockable column-1 "domain") — and `//`-led lines are comments,
+syntax; extracting it as a plain domain historically collided with the interchange file's
+positional-CSV dialect, and now instead lands JSON-quoted in an NDJSON `"domain"` field —
+immune to comma-collision by construction; see "DNSBL interchange format" below — but the
+capture guard's own skip predates and is independent of that format change); the manifest
+writer's plain fallback likewise skips non-captured `#`-bearing residue lines instead of
+extracting a blockable column-1 "domain") — and `//`-led lines are comments,
 never `/re/` regex rules. Every line class outside the delta table is
 byte-identical to `origin/devel`, pinned by a corpus oracle (`tests/test_adr62_*`,
 `tests/php/Adr62*Test.php`) whose golden fixtures were captured by running the real
 functions at the pre-change base and are regenerated only through those same functions.
 See `.ADRs/ADR_62_DNSBL_Unified_Line_Parsing/`.
+
+### DNSBL interchange format — NDJSON schema v1 (issue #1083)
+
+Every DNSBL interchange file the sync pass writes or reads between PHP stages — the per-feed
+staging `.txt` (`{dnsdir}/{header}.txt`), the concatenated all-feeds `pfb_dnsbl.raw`, and the
+TLD-analysis outputs `pfb_py_data.txt`/`pfb_py_zone.txt` — is **NDJSON schema v1**: one JSON
+object per physical line, two kinds only:
+
+```text
+{"kind":"domain","domain":D,"log":L,"feed":F,"group":G}
+{"kind":"abp","raw":R}
+```
+
+Every field is a **required, non-empty string**; a numeric/bool/null value or a missing key is a
+shape violation the reader rejects (returns `NULL`), never a partial read. This supersedes the
+pre-#1083 positional 6-column CSV dialect (`,domain,,log,feed,group`) and rides alongside ADR-62's
+retirement of the file-level `.abp` marker (above). The per-feed `pfb_py_raw/*.raw` files the
+ADR-06 manifest (`pfb_py_sources.json`) references, and `dnsbl_build_from_manifest()`/`build()`
+that consume them, are **unaffected** — they stay the old bare-domain/verbatim-ABP-line format;
+`pfb_unbound_python_sources()` is the sole translator, reading NDJSON `.txt` and writing plain
+`.raw` per feed.
+
+**Emit/parse primitives** (`pfblockerng.inc`): `pfb_dnsbl_ndjson_emit_domain_row()` /
+`pfb_dnsbl_ndjson_emit_abp_row()` are the only writers — `json_encode()` with a **fixed key
+order** (`kind` first), `JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE`, no pretty-printing,
+exactly one trailing `"\n"`. This makes an emitted line **grep-stable**:
+`pfb_dnsbl_ndjson_domain_needle()` builds `"domain":<json-encoded-value>`, and a hit is trusted
+only once `pfb_dnsbl_ndjson_domain_row_verified()` re-parses the line AND confirms the `domain`
+field matches exactly (a corrupt/foreign line could still substring-match; JSON's own quoting
+means an `abp` row's `raw` payload can never literally embed the needle).
+`pfb_dnsbl_ndjson_parse_row()` is the strict reader every PHP consumer shares;
+`_dnsbl_parse_ndjson_row()` mirrors it in Python (`pfb_unbound.py`).
+
+**Staging-generation guard + lazy rebuild.** The sync loop's verbatim-reuse fork
+(`pfb_dnsbl_verbatim_reuse_active()`) additionally requires the staged `.txt` to be
+**current-generation**: `pfb_dnsbl_staging_is_current_generation()` checks only the first line's
+first byte (`'{'`, or an absent/empty file — both current; no JSON parse needed to reject). A
+feed whose `.txt` predates the #1083 flip (a pkg-upgrade leftover, never redownloaded since) fails
+that check and is **never verbatim-reused** — the sync loop instead reparses from the existing
+`.orig` download cache via the same machinery a Reload uses (logged `Rebuild`), refetching over
+the network **only** when `.orig` itself is absent too. This runs regardless of the row's `state`
+(`Hold`/`Flex`/`Enabled`) — a `Hold` row only skips `pfblockerng.php`'s own change-detector
+pre-check (`pfblockerng_sync_cron()`, which bypasses a Held row with an existing `.txt` outright),
+never the DNSBL loop's rebuild fork inside `sync_package_pfblockerng()`, which has no `Hold`
+special case. Pinned live-VM (`tests/smoke/test_smoke_adr62.py`):
+`test_adr62_stale_generation_rebuild_hold_row_orig_present` (`.orig` present → byte-identical
+reuse, no refetch) and its `test_adr62_stale_generation_rebuild_orig_absent_triggers_download`
+sibling (`.orig` absent → genuine refetch); off-appliance reproduction:
+`tests/php/DnsblStagingGenerationGuardTest.php`.
+
+**No version marker — every future interchange change must be backwards-compatible.** A
+deliberate design choice (issue #1083): the schema carries no version field and the codebase has
+no migration/back-compat mechanism for a schema bump. Any future change to this interchange
+format must therefore be additive/backwards-compatible with schema v1 as shipped — a breaking
+change would need the staging-generation-guard's rebuild-from-`.orig` pattern again, not a new
+mechanism.
+
+**Accepted transitional window.** A pkg upgrade does **not** trigger an immediate DNSBL rebuild:
+`custom_php_resync_config_command` (`pfblockerng.xml`) calls `sync_package_pfblockerng()`, but
+`pfblockerng_install.inc` sets `$g['pfblockerng_install'] = TRUE` for the whole install/upgrade
+process, and `sync_package_pfblockerng()` early-returns on that flag before reaching the DNSBL
+loop (`pfblockerng.inc:15186`, "Sync terminated during boot process"). The window therefore closes
+at the **first due `cron` tick** after the upgrade — bounded by the feed's own configured Update
+Frequency (`pfb_interval`, default hourly) with a due-check granularity of `pfb_tick_interval`
+(default 15 min, ADR-43). Until then, an alerts feed-attribution grep may still read a
+pre-upgrade positional-CSV `pfb_py_data`; this is accepted as a bounded, self-healing window, not
+a defect.
+
+**Benchmark evidence** (issue #1083, `scripts/bench_dnsbl_line_parsing.py`, 1,000,000 lines,
+5 iterations × 2 trials, base = the pre-#1083 merge-base `e9dda731`):
+
+| Surface | base wall | branch wall | Δ wall | base peak RSS | branch peak RSS | Δ RSS |
+| --- | --- | --- | --- | --- | --- | --- |
+| PHP `pfb_unbound_python_sources()` (per-line `json_decode`) | 1.8409s | 2.4440s | **+32.76%** | 31.7 MiB | 31.9 MiB | +0.44% |
+| Python `dnsbl_build_from_manifest()` (unchanged `.raw` reader) | 3.8041s | 3.7889s | −0.40% | 660.2 MiB | 649.0 MiB | −1.69% |
+
+The PHP surface's per-line `json_decode` **does** regress the staging-parse pass — +32.76%
+wall-clock, above ADR-62's own SS7 criterion-2 kill-threshold (25%) — a real, measured cost of
+the self-describing per-line format, traded off against its grep-stability/attribution
+guarantees; a follow-up optimization (batched decode, a leaner encoding) is a candidate, not
+attempted here. The Python surface — an unrelated code path, since it reads the untouched
+per-feed `.raw` — shows no regression, as expected. On-disk size (1,000,000 domain rows, a realistic domain-length mix per
+`benchmarks/_corpus_raw.py`'s distribution): the old 6-column CSV dialect is 45,719,338 bytes
+(45.72 B/row) vs the new NDJSON's 99,719,338 bytes (99.72 B/row) — a **2.18×** increase.
+`benchmarks/spike_adr06_build.py` (the ADR-06 Phase-1 spike) is unaffected: it drives a
+self-contained synthetic corpus (`benchmarks/_corpus_raw.py:59`) and never imports
+`pfb_unbound.py` or touches the interchange format (`benchmarks/spike_adr06_build.py:53`).
 
 ### ADR-10 — zero-downtime DNSBL data swap
 
