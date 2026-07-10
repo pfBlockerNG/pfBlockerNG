@@ -332,78 +332,109 @@ def test_adr62_idn_raw_unicode_blocks_under_punycode(deployed_vm: SmokeVM, clien
 def test_adr62_reused_feed_old_dialect_txt_resolves_same_verdict(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """Row 7a (Semantics #7): a reused feed's pre-existing '.txt' resolves unchanged; stale marker swept.
 
-    Given a configured, already-loaded DNSBL feed (a normal pass downloaded and
-      blocked domain A), whose on-disk staging file (``{dnsdir}/{header}.txt``)
-      is then OVERWRITTEN with an old-generation 6-col row for a different
-      domain B plus a stale ``{header}.abp`` marker — simulating the on-disk
-      state a pre-ADR-62 install leaves behind across a pkg upgrade — while the
-      feed URL now serves a DIFFERENT (decoy) domain C.
-    When a scheduled-style (NON-force) update pass runs with the config
-      UNCHANGED — no alias was added or removed, so the change sweep does NOT
-      run its ``rmdir_recursive({dnsdir})`` staging wipe, and the pass reaches
-      the reuse fork (gated on ``$pfbreuse == ''``: files present, no
-      ``.update``/``.fail`` marker, non-force trigger),
-    Then the OVERWRITTEN old-dialect domain B is VIP-blocked (the ``.txt`` was
-      used as-is, never re-downloaded or re-parsed), the DECOY domain C (which
-      only a real re-download could load) still RESOLVES, and the stale
-      ``.abp`` marker is GONE (Decision 5's opportunistic sweep on the reuse
-      fork).
+    Given a configured, already-loaded DNSBL group with TWO feed rows (a normal
+      pass downloaded both: the main row blocked domain A, the sibling row
+      blocked X1), whose main-row staging file (``{dnsdir}/{header}.txt``) is
+      then OVERWRITTEN with an old-generation 6-col row for a different domain
+      B plus a stale ``{header}.abp`` marker — simulating the on-disk state a
+      pre-ADR-62 install leaves behind across a pkg upgrade — while the SIBLING
+      row's served feed changes content (X1 → X2) and the main row's served
+      feed stays byte-identical.
+    When a genuine cron pass runs with the config UNCHANGED — no alias added or
+      removed, so the change sweep does not ``rmdir_recursive({dnsdir})`` — the
+      changed sibling re-ingests (that is what makes the pass rebuild the DNSBL
+      database at all), while the unchanged main row takes the reuse fork
+      (gated on ``$pfbreuse == ''``: '.txt' present, no ``.update``/``.fail``
+      marker, source hash unchanged, non-force trigger).
+    Then the rebuilt database serves the staged old-dialect row: B is
+      VIP-blocked (the '.txt' was consumed as-is, never re-downloaded or
+      re-parsed), A now RESOLVES again (its row exists only in the '.orig'
+      download cache — a re-parse would have resurrected it), X2 is VIP-blocked
+      (proof the rebuild genuinely ran), and the stale ``.abp`` marker is GONE
+      (Decision 5's opportunistic sweep on the reuse fork).
     """
     header = "adr62row7reuse"
+    sib_header = "adr62row7sib"
     loaded_domain = h.unique_domain("adr62r7base")
     reused_domain = h.unique_domain("adr62r7old")
-    decoy_domain = h.unique_domain("adr62r7decoy")
+    sib1_domain = h.unique_domain("adr62r7sib1")
+    sib2_domain = h.unique_domain("adr62r7sib2")
 
     feed_name = "smoke_adr62_row7_feed.txt"
+    sib_feed_name = "smoke_adr62_row7_sibling.txt"
     feed_url = h.write_local_feed(deployed_vm, feed_name, f"{loaded_domain}\n")
-    spec = h.DnsblCase(aliasname="adr62row7reuse", feed_url=feed_url, header=header, mode=h.DnsblMode.VIP)
+    sib_feed_url = h.write_local_feed(deployed_vm, sib_feed_name, f"{sib1_domain}\n")
+    spec = h.DnsblCase(
+        aliasname="adr62row7reuse",
+        feed_url=feed_url,
+        header=header,
+        mode=h.DnsblMode.VIP,
+        extra_rows=[(sib_header, sib_feed_url)],
+    )
 
     dnsbl_dir = f"{h.PFB_DBDIR}/dnsbl"
     marker = f"{dnsbl_dir}/{header}.abp"
 
-    for name in (loaded_domain, reused_domain, decoy_domain):
+    for name in (loaded_domain, reused_domain, sib1_domain, sib2_domain):
         before = h.dns_probe_client(client_vm, name, "A")
         assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
 
     with h.CaseContext(deployed_vm, spec):
-        h.unblock_egress()  # the decoy "still resolves" probe must reach the controlled stub
+        h.unblock_egress()  # later "resolves again" probes must reach the controlled stub
 
-        # Baseline: the feed genuinely loaded via the normal download path.
-        h.flush_unbound_name(deployed_vm, loaded_domain)
-        ans_loaded = h.dns_probe_client_until(client_vm, loaded_domain, h.is_vip)
-        assert not h.resolves_to(ans_loaded, STUB_DNS_A), (
-            f"baseline feed domain {loaded_domain} still resolving after the initial load: {ans_loaded}"
-        )
+        # Baseline: both rows genuinely loaded via the normal download path.
+        for name in (loaded_domain, sib1_domain):
+            h.flush_unbound_name(deployed_vm, name)
+            ans = h.dns_probe_client_until(client_vm, name, h.is_vip)
+            assert not h.resolves_to(ans, STUB_DNS_A), (
+                f"baseline feed domain {name} still resolving after the initial load: {ans}"
+            )
 
-        # Simulate the pre-upgrade on-disk state: an old-generation '.txt' (6-col
-        # dialect, different domain) + a stale '.abp' marker; the served feed now
-        # carries a decoy so any re-download is detectable.
+        # Simulate the pre-upgrade on-disk state for the MAIN row: an
+        # old-generation '.txt' (6-col dialect, different domain) + a stale
+        # '.abp' marker. Its served feed stays byte-identical (no re-download
+        # trigger); the SIBLING feed changes so the cron pass rebuilds.
         h.write_local_feed(deployed_vm, f"dnsbl/{header}.txt", f",{reused_domain},,1,{header},{header}\n")
         h.write_local_feed(deployed_vm, f"dnsbl/{header}.abp", "")
-        h.write_local_feed(deployed_vm, feed_name, f"{decoy_domain}\n")
+        h.write_local_feed(deployed_vm, sib_feed_name, f"{sib2_domain}\n")
 
         marker_before = deployed_vm.ssh("/bin/test", "-e", marker)
         assert marker_before.returncode == 0, f"test setup failed: stale marker {marker} not present before the pass"
 
-        # Non-force pass, config unchanged: reaches the reuse ('exists') fork.
-        # A Force-DNSBL reload cannot — it sets reuse_dnsbl='on' and reloads from
-        # the '.orig' download cache, re-parsing the ORIGINAL content instead of
+        # Genuine cron pass (non-force): the changed sibling re-ingests and
+        # triggers the rebuild; the unchanged main row takes the reuse fork.
+        # A Force-DNSBL reload cannot exercise that fork — it sets
+        # reuse_dnsbl='on' and re-parses the '.orig' download cache instead of
         # honouring the staged '.txt'.
-        h.reload(deployed_vm, "update")
+        pinned_hour = h.pin_cron_due(deployed_vm)
+        h.reload(deployed_vm, "cron")
+        hour_now = h.guest_hour(deployed_vm)
+        assert hour_now == pinned_hour, (
+            f"guest hour rolled over between pin_cron_due ({pinned_hour}) and cron ({hour_now}) — "
+            f"the EveryDay feeds were never due, this run proves nothing; re-run"
+        )
 
         h.flush_unbound_name(deployed_vm, reused_domain)
         ans_reused = h.dns_probe_client_until(client_vm, reused_domain, h.is_vip)
         assert not h.resolves_to(ans_reused, STUB_DNS_A), (
-            f"old-dialect reused-'.txt' domain {reused_domain} still resolving after the non-force pass "
-            f"(the reuse fork should have used the staged '.txt' as-is): {ans_reused}"
+            f"old-dialect reused-'.txt' domain {reused_domain} still resolving after the cron pass "
+            f"(the reuse fork should have consumed the staged '.txt' as-is): {ans_reused}"
         )
 
-        ans_decoy = h.dns_probe_client(client_vm, decoy_domain, "A")
-        assert h.resolves_to(ans_decoy, STUB_DNS_A), (
-            f"decoy domain {decoy_domain} (only reachable via a real re-download) is blocked — "
-            f"the feed was re-downloaded instead of reusing the staged '.txt': {ans_decoy}"
+        h.flush_unbound_name(deployed_vm, sib2_domain)
+        ans_sib2 = h.dns_probe_client_until(client_vm, sib2_domain, h.is_vip)
+        assert not h.resolves_to(ans_sib2, STUB_DNS_A), (
+            f"changed sibling domain {sib2_domain} not blocked — the cron pass never re-ingested the "
+            f"sibling feed, so this run rebuilt nothing and proves nothing: {ans_sib2}"
         )
-        assert not h.is_vip(ans_decoy), f"decoy domain {decoy_domain} wrongly VIP-blocked: {ans_decoy}"
+
+        h.flush_unbound_name(deployed_vm, loaded_domain)
+        ans_loaded_after = h.dns_probe_client(client_vm, loaded_domain, "A")
+        assert h.resolves_to(ans_loaded_after, STUB_DNS_A), (
+            f"original main-row domain {loaded_domain} still blocked after the reuse pass — its row "
+            f"exists only in the '.orig' cache, so a re-parse (not reuse) must have produced it: "
+            f"{ans_loaded_after}"
+        )
 
         marker_after = deployed_vm.ssh("/bin/test", "-e", marker)
         assert marker_after.returncode != 0, (
