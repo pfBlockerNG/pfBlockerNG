@@ -10,9 +10,8 @@ Phase 5 slims the shell/PHP DNSBL pipeline. The chosen boundary is:
     (the 6-col CSV's col1). The DNSBL-IP firewall pass already routes embedded IPs
     to the ``*_v4.ip`` / ``DNSBLIP_v4`` path and excludes them from ``.txt``.
   * ``pfb_unbound_python_sources()`` (pfblockerng.inc) then extracts col1 of each
-    ``.txt`` into a per-feed raw file and references it in the manifest with
-    ``format_hint: "plain"`` -- because PHP has ALREADY done the per-format work,
-    Python's ``parse("plain")`` only has to re-validate + lower-case.
+    ``.txt`` into a per-feed raw file -- because PHP has ALREADY done the
+    per-format work, Python's ``parse()`` only has to re-validate + lower-case.
 
 This test proves that boundary is DECISION-EQUIVALENT: it simulates exactly what
 PHP writes (run the reference per-format extractor over each fixture feed to get
@@ -22,9 +21,9 @@ PRODUCTION ``dnsbl_build_from_manifest`` + ``evaluate_domain`` over it, and asse
 EVERY golden decision is reproduced -- for both TOP1M scenarios -- and that no
 firewall IP leaks into the domain build.
 
-If a future change makes PHP hand Python the ORIGINAL raw feed lines per format
-instead (format_hint hosts/abp), the existing test_adr06_init_from_raw.py
-already pins that path; this file pins the Phase-5 ``plain``-only boundary.
+If a future change makes PHP hand Python the ORIGINAL raw feed lines per dialect
+instead (hosts/abp), the existing test_adr06_init_from_raw.py already pins that
+path; this file pins the Phase-5 ``plain``-only boundary.
 """
 
 from __future__ import annotations
@@ -59,7 +58,7 @@ def _php_cleaned_feed_domains(feed_row: dict[str, Any]) -> tuple[list[str], set[
     domains: list[str] = []
     firewall_ips: set[str] = set()
     for raw_line in _read_lines(feed_row["raw"]):
-        value, firewall_ip = pipeline._extract(raw_line, feed_row["format_hint"])
+        value, firewall_ip = pipeline._extract(raw_line, feed_row["dialect"])
         if firewall_ip is not None:
             firewall_ips.add(firewall_ip)
         if value is None:
@@ -96,7 +95,6 @@ def _write_plain_boundary_manifest(tmp_path: Any, *, top1m_enabled: bool) -> tup
                 "raw": raw_path,
                 "feed": row["feed"],
                 "group": row["group"],
-                "format_hint": "plain",  # ADR-06 P5: PHP already extracted the domain
                 "log_flag": row["log_flag"],
             }
         )

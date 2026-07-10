@@ -1,9 +1,10 @@
 """ADR-07 Phase 6 -- Stage-C emit + wired build() + LIVE 6-band matcher.
 
-These tests prove the INTEGRATION: build() routes format_hint='abp' feeds through
-parse_abp (Stage A) -> reconcile (Stage B) -> emit the matcher dicts + compiled
-regex + the important_rules flag, and the PRODUCTION evaluate_domain resolves them
-by the live 6-band precedence -- decision-equal to the Phase-2 oracle decide().
+These tests prove the INTEGRATION: build() routes an ABP-shaped line (per the
+permanent per-line capture guard, #1083 P4) through parse_abp (Stage A) ->
+reconcile (Stage B) -> emit the matcher dicts + compiled regex + the
+important_rules flag, and the PRODUCTION evaluate_domain resolves them by the
+live 6-band precedence -- decision-equal to the Phase-2 oracle decide().
 
 Both directions are gated here:
   * OFF (no abp feature loaded): important_rules stays False and the matcher keeps
@@ -38,28 +39,25 @@ def _build(
     user_unlock: Iterable[str] = (),
     top1m_list: Iterable[str] = (),
     top1m_enabled: bool = False,
-    format_hint: str = "abp",
     user_feeds: Iterable[str] = (),
-    plain_feeds: Iterable[str] = (),
 ) -> P.BuildResult:
-    """Build from an in-memory abp manifest. ``feeds`` maps a feed name -> raw lines.
+    """Build from an in-memory manifest. ``feeds`` maps a feed name -> raw lines;
+    each line is routed by its OWN shape (the permanent per-line capture guard,
+    #1083 P4), never by a feed-level tag -- a feed may freely mix ABP-shaped and
+    bare-domain lines.
 
     ``user_feeds`` names the feeds tagged provenance='user' (a DNSBL Group Custom_List,
-    sovereign band 5); ``plain_feeds`` names those forced format_hint='plain' (the
-    non-ABP path), so a mixed user-plain + downloaded-ABP manifest can be built.
-    ``user_unlock`` is the temporary per-alert unlock set (#51), merged into whiteDB
-    as band-6 user allows exactly like ``user_whitelist``.
+    sovereign band 5). ``user_unlock`` is the temporary per-alert unlock set (#51),
+    merged into whiteDB as band-6 user allows exactly like ``user_whitelist``.
     """
     raw_store = {name: lines for name, lines in feeds.items()}
     user_set = set(user_feeds)
-    plain_set = set(plain_feeds)
     manifest = {
         "feeds": [
             {
                 "raw": name,
                 "feed": name,
                 "group": name,
-                "format_hint": "plain" if name in plain_set else format_hint,
                 "log_flag": "1",
                 "provenance": "user" if name in user_set else "feed",
             }
@@ -441,7 +439,6 @@ class TestUserCustomListSovereign:
         res = _build(
             {"cust": ["x.example.com"], "dl": ["@@||x.example.com^$important"]},
             user_feeds=["cust"],
-            plain_feeds=["cust"],
         )
         assert _live_label(res, "x.example.com") == "block"
 
@@ -460,12 +457,12 @@ class TestUserCustomListSovereign:
 
     def test_user_custom_block_bands_at_5(self) -> None:
         # Direct payload check: a plain user Custom_List entry carries band 5.
-        res = _build({"cust": ["x.example.com"]}, plain_feeds=["cust"], user_feeds=["cust"])
+        res = _build({"cust": ["x.example.com"]}, user_feeds=["cust"])
         entry = res.zone_db.get("example.com") or res.data_db.get("x.example.com")
         assert entry is not None and entry["band"] == P.PRIO_USER_BLOCK == 5
 
     def test_feed_block_still_bands_at_1(self) -> None:
         # Regression: a downloaded plain feed stays band 1 (provenance default 'feed').
-        res = _build({"dl": ["x.example.com"]}, plain_feeds=["dl"])
+        res = _build({"dl": ["x.example.com"]})
         entry = res.zone_db.get("example.com") or res.data_db.get("x.example.com")
         assert entry is not None and entry["band"] == P.PRIO_FEED_BLOCK == 1

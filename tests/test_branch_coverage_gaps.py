@@ -160,7 +160,7 @@ class TestClassifyDepthBranches:
 class TestParseSkipBranches:
     def test_hosts_token_empty_after_strip_skipped(self) -> None:
         # A bare "." strips to empty -> None (no zero-length domain reaches the dicts).
-        assert parse("hosts", ".") is None
+        assert parse(".") is None
 
 
 class TestStripHostsPrefix:
@@ -460,7 +460,7 @@ class TestBuildBranches:
 
     def test_plain_feed_line_failing_normalise_dropped(self) -> None:
         # A single-label feed line parses to a token but fails normalise -> dropped.
-        feed_row = {"feed": "F", "group": "G", "format_hint": "plain", "log_flag": "1", "raw": "r"}
+        feed_row = {"feed": "F", "group": "G", "log_flag": "1", "raw": "r"}
         result = build(
             _manifest([feed_row]),
             {},
@@ -477,7 +477,7 @@ class TestBuildBranches:
         Then the second (band 4) UPGRADES the first (band 2) entry rather than being
           dropped -- the `existing band < a.band` widen branch.
         """
-        feed_row = {"feed": "F", "group": "G", "format_hint": "abp", "log_flag": "1", "raw": "r"}
+        feed_row = {"feed": "F", "group": "G", "log_flag": "1", "raw": "r"}
         result = build(
             _manifest([feed_row]),
             {},
@@ -495,7 +495,7 @@ class TestBuildBranches:
         Then they MERGE rather than first-writer-wins: the wildcard flag survives so
           subdomain coverage is not silently dropped (the same-band widen branch).
         """
-        feed_row = {"feed": "F", "group": "G", "format_hint": "abp", "log_flag": "1", "raw": "r"}
+        feed_row = {"feed": "F", "group": "G", "log_flag": "1", "raw": "r"}
         result = build(
             _manifest([feed_row]),
             {},
@@ -513,7 +513,7 @@ class TestBuildBranches:
         Then the user entry is kept (band 6) -- the feed allow neither upgrades (its
           band is lower) nor merges (bands differ), it is simply skipped.
         """
-        feed_row = {"feed": "F", "group": "G", "format_hint": "abp", "log_flag": "1", "raw": "r"}
+        feed_row = {"feed": "F", "group": "G", "log_flag": "1", "raw": "r"}
         result = build(
             _manifest([feed_row]),
             {"user_whitelist": ["x.com"]},
@@ -535,9 +535,7 @@ class TestManifestErrorBranches:
         # A feeds row missing the "feed" key makes build() raise KeyError -> the
         # except returns None (init then falls back to the legacy CSV load).
         manifest_path = tmp_path / "manifest.json"
-        manifest_path.write_text(
-            json.dumps({"feeds": [{"group": "g", "format_hint": "plain", "log_flag": "1", "raw": "x"}], "config": {}})
-        )
+        manifest_path.write_text(json.dumps({"feeds": [{"group": "g", "log_flag": "1", "raw": "x"}], "config": {}}))
         assert dnsbl_build_from_manifest(str(manifest_path)) is None
 
     def test_build_from_manifest_absent_file_returns_none(self) -> None:

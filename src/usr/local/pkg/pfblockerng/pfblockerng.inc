@@ -2031,6 +2031,37 @@ function pfb_dnsbl_update_marker_clear_active(bool $orig_content_stale): bool {
 	return !$orig_content_stale;
 }
 
+// #1083 P4: a field box upgrading with a pre-NDJSON staging .txt (a feed never
+// redownloaded since the flip) must not verbatim-reuse it -- every interchange
+// reader now expects NDJSON and would silently skip every old-dialect line. Byte
+// check only, no JSON parse: current-generation NDJSON always opens with '{'; an
+// empty/absent file has no stale content to misread either.
+function pfb_dnsbl_staging_is_current_generation(string $first_line): bool {
+	return $first_line === '' || $first_line[0] === '{';
+}
+
+// Reads $path's first line for pfb_dnsbl_staging_is_current_generation(); '' for
+// an absent/empty file (both are current-generation -- nothing stale to reject).
+function pfb_dnsbl_staging_first_line(string $path): string {
+	$fh = @fopen($path, 'r');
+	if ($fh === FALSE) {
+		return '';
+	}
+	$line = fgets($fh);
+	fclose($fh);
+	return $line === FALSE ? '' : rtrim($line, "\r\n");
+}
+
+// The DNSBL verbatim-reuse fork (pfblockerng.inc sync loop): skip re-parsing
+// entirely and reuse the existing staged '.txt' as-is. All five conditions must
+// hold, including that the staging content is current-generation (#1083 P4) --
+// else a pre-NDJSON '.txt' would be reused forever on a never-redownloaded feed.
+function pfb_dnsbl_verbatim_reuse_active(bool $txt_exists, bool $update_exists, bool $fail_exists,
+	bool $reuse_unset, bool $staging_current_generation): bool
+{
+	return $txt_exists && !$update_exists && !$fail_exists && $reuse_unset && $staging_current_generation;
+}
+
 // v6 stays OPTIONAL (ADR-13 §7 pivot): a missing v6 VIP never fails validation, even when
 // the resolver listens on IPv6 — pfb_global surfaces that as a non-blocking warning, not a
 // force-disable. The validator only checks the VIPs that ARE configured (existence,
@@ -7204,15 +7235,14 @@ function pfb_sanitise_feed_header(string $header, string $reference = 'pfb_sanit
 // DNSWL feeds can reuse the same structure as DNSBL. $mode = 'deny' omits the 'mode' key
 // (byte-identical with pre-ADR-31 entries; Python treats absent as deny); $mode = 'permit' adds
 // 'mode' => 'permit'. No file I/O, no exec, no validation side-effects — pure array
-// construction; callers have already validated $header and resolved $format/$provenance.
+// construction; callers have already validated $header and resolved $provenance.
 function pfb_feed_manifest_row(string $header, string $group, string $log_flag,
-	string $format, string $provenance, string $mode = 'deny'): array
+	string $provenance, string $mode = 'deny'): array
 {
 	$row = array(
 		'header'     => $header,
 		'group'      => $group,
 		'log'        => $log_flag,
-		'format'     => $format,
 		'provenance' => $provenance,
 	);
 	// deny (or default absent) → omit the 'mode' key; permit → emit it.
@@ -7225,10 +7255,10 @@ function pfb_feed_manifest_row(string $header, string $group, string $log_flag,
 
 // ADR-06: Build the shell->Python contract: the per-feed manifest ($pfb['unbound_py_sources'])
 // plus a per-feed IP-stripped raw domain file that pfb_unbound.py's dnsbl_build_from_manifest
-// consumes. Every feed is 'plain' (ADR-62): raw is the bare-domain extraction of the parsed
-// '.txt' NDJSON (IPs already routed elsewhere; #1083), with 'abp' rows' raw payload passed
-// through verbatim so Python's parse_abp sees them intact. $feeds rows:
-// header/group/log/format/provenance ('user' Custom_List -> band 5, 'feed' download -> band 1).
+// consumes. raw is the bare-domain extraction of the parsed '.txt' NDJSON (IPs already routed
+// elsewhere; #1083), with 'abp'-kind NDJSON rows' raw payload passed through verbatim so
+// Python's per-line capture guard routes them to parse_abp() intact. $feeds rows:
+// header/group/log/provenance ('user' Custom_List -> band 5, 'feed' download -> band 1).
 // PFBL-01: RE-validates each header via pfb_sanitise_feed_header() (PFB_FILTER_WORD, not
 // DOMAIN); a failing row is SKIPPED + logged before any file touch; pinned by
 // tests/php/PfbFilterContractTest.php.
@@ -7248,10 +7278,6 @@ function pfb_unbound_python_sources($feeds) {
 		$header	= isset($feed['header']) ? $feed['header'] : '';
 		$group	= isset($feed['group'])  ? $feed['group']  : '';
 		$logf	= isset($feed['log'])    ? (string) $feed['log'] : '1';
-		// ADR-62: every LIVE caller now tags 'plain'; 'format_hint' below is a pure
-		// pass-through -- Python still tolerates a stale 'abp' hint from an old
-		// manifest (Semantics #7), but this writer no longer branches on it.
-		$format	= (isset($feed['format']) && $feed['format'] === 'abp') ? 'abp' : 'plain';
 
 		if ($header === '') {
 			continue;
@@ -7308,7 +7334,6 @@ function pfb_unbound_python_sources($feeds) {
 			'raw'		=> basename($pfb['unbound_py_rawdir']) . "/{$header}.raw",
 			'feed'		=> $header,
 			'group'		=> $group,
-			'format_hint'	=> $format,
 			'provenance'	=> (isset($feed['provenance']) && $feed['provenance'] === 'user') ? 'user' : 'feed',
 			'log_flag'	=> $logf
 		);
@@ -16426,10 +16451,17 @@ function sync_package_pfblockerng($cron='') {
 							$pfbreuse	= $pfbarr['reuse'];
 							$logtab		= $pfbarr['logtab'];
 
-							if (file_exists("{$pfbfolder}/{$header}.txt") &&
-							    !file_exists("{$pfbfolder}/{$header}.update") &&
-							    !file_exists("{$pfbfolder}/{$header}.fail") &&
-							    $pfbreuse == '') {
+							$txt_exists	= file_exists("{$pfbfolder}/{$header}.txt");
+							$reuse_unset	= $pfbreuse == '';
+							$staging_current_generation = pfb_dnsbl_staging_is_current_generation(
+								pfb_dnsbl_staging_first_line("{$pfbfolder}/{$header}.txt"));
+
+							if (pfb_dnsbl_verbatim_reuse_active(
+								$txt_exists,
+								file_exists("{$pfbfolder}/{$header}.update"),
+								file_exists("{$pfbfolder}/{$header}.fail"),
+								$reuse_unset,
+								$staging_current_generation)) {
 
 
 								if ($row['state'] == 'Hold') {
@@ -16442,16 +16474,10 @@ function sync_package_pfblockerng($cron='') {
 								// Collect existing list stats
 								$lists_dnsbl_all[]	= "{$row['header']}.txt";
 								$lists_dnsbl_current[]	= "{$row['header']}";
-								// ADR-62: a reused feed isn't re-parsed; format_hint is always
-								// 'plain' now (Python still tolerates a stale 'abp' hint on
-								// an untouched manifest, Semantics #7) -- sweep any leftover
-								// marker opportunistically.
-								unlink_if_exists("{$pfbfolder}/{$header}.abp");	// retired-token-ok: opportunistic stale-marker sweep
 								// ADR-31: delegate to pfb_feed_manifest_row() (deny default).
 								// ADR-31: pass $mode derived from per-row 'action' (above).
 								$pfb_py_feeds[]		= pfb_feed_manifest_row(
 									$header, $alias, $logging_type,
-									'plain',
 									$custom ? 'user' : 'feed',
 									$mode);
 								$file_esc		= escapeshellarg("{$pfbfolder}/{$header}.txt");
@@ -16459,7 +16485,22 @@ function sync_package_pfblockerng($cron='') {
 								$alias_cnt		= $alias_cnt + $list_cnt;
 							}
 							else {
-								if ($pfbreuse == 'on' && file_exists("{$pfborig}/{$header}.orig")) {
+								// #1083 P4: verbatim reuse was rejected ONLY for stale staging
+								// generation (every other reuse condition still holds) -- rebuild
+								// via the same reparse-from-.orig machinery a Reload uses, never a
+								// network refetch when .orig is available.
+								$stale_generation_rebuild = !$staging_current_generation &&
+									pfb_dnsbl_verbatim_reuse_active(
+										$txt_exists,
+										file_exists("{$pfbfolder}/{$header}.update"),
+										file_exists("{$pfbfolder}/{$header}.fail"),
+										$reuse_unset,
+										TRUE);
+								$pfbreuse_effective = $pfbreuse == 'on' || $stale_generation_rebuild;
+
+								if ($stale_generation_rebuild) {
+									$log = "\n[ {$header} ]{$logtab} Rebuild";
+								} elseif ($pfbreuse_effective && file_exists("{$pfborig}/{$header}.orig")) {
 									$log = "\n[ {$header} ]{$logtab} Reload";
 								} else {
 									$log = "\n[ {$header} ]{$logtab} Downloading update";
@@ -16478,7 +16519,7 @@ function sync_package_pfblockerng($cron='') {
 									}
 
 									// Determine if list needs to be downloaded or reuse previously downloaded file.
-									if ($pfbreuse == 'on' && file_exists("{$file_dwn}.orig")) {
+									if ($pfbreuse_effective && file_exists("{$file_dwn}.orig")) {
 										// File exists/reuse
 										pfb_logger(' completed .', 1);
 									} else {
@@ -16995,14 +17036,8 @@ function sync_package_pfblockerng($cron='') {
 								// ADR-31: pass $mode derived from per-row 'action' (above).
 								$pfb_py_feeds[]		= pfb_feed_manifest_row(
 									$header, $alias, $logging_type,
-									'plain',
 									$custom ? 'user' : 'feed',
 									$mode);
-
-								// ADR-62: the '.abp' marker is retired -- sweep any leftover
-								// from a pre-upgrade build (format_hint is always 'plain' now;
-								// Python still tolerates a stale manifest naming 'abp').
-								unlink_if_exists("{$pfbfolder}/{$header}.abp");	// retired-token-ok: opportunistic stale-marker sweep
 
 								// Rename newly downloaded file to final location
 								if (file_exists("{$pfbfolder}/{$header}.bk")) {

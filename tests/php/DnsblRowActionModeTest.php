@@ -36,13 +36,13 @@ final class DnsblRowActionModeTest extends TestCase
 		        'header' => 'SafeList', 'state' => 'Enabled', 'action' => 'Permit'];
 
 		// BEFORE: a Deny row for the same header carries no mode key
-		$deny = pfb_feed_manifest_row('SafeList', 'DNSBL_Safe', '1', 'plain', 'feed', 'deny');
+		$deny = pfb_feed_manifest_row('SafeList', 'DNSBL_Safe', '1', 'feed', 'deny');
 		$this->assertArrayNotHasKey('mode', $deny,
 			'before: a Deny-action row must produce no mode key (byte-identical)');
 
 		// WHEN the mode is derived from the Permit action and the manifest row is built
 		$mode = $this->deriveMode($row);
-		$entry = pfb_feed_manifest_row('SafeList', 'DNSBL_Safe', '1', 'plain', 'feed', $mode);
+		$entry = pfb_feed_manifest_row('SafeList', 'DNSBL_Safe', '1', 'feed', $mode);
 
 		// THEN the manifest entry carries mode='permit'
 		$this->assertSame('permit', $mode,
@@ -61,13 +61,12 @@ final class DnsblRowActionModeTest extends TestCase
 
 		// WHEN the manifest entry is built with the derived mode
 		$mode  = $this->deriveMode($row);
-		$entry = pfb_feed_manifest_row('DNSWL_Test', 'DNSBL_Allow', '1', 'plain', 'feed', $mode);
+		$entry = pfb_feed_manifest_row('DNSWL_Test', 'DNSBL_Allow', '1', 'feed', $mode);
 
-		// THEN all five base fields and mode are present and correct
+		// THEN all four base fields and mode are present and correct
 		$this->assertSame('DNSWL_Test',   $entry['header']);
 		$this->assertSame('DNSBL_Allow',  $entry['group']);
 		$this->assertSame('1',             $entry['log']);
-		$this->assertSame('plain',         $entry['format']);
 		$this->assertSame('feed',          $entry['provenance']);
 		$this->assertSame('permit',        $entry['mode']);
 	}
@@ -82,7 +81,7 @@ final class DnsblRowActionModeTest extends TestCase
 
 		// WHEN the mode is derived and the manifest entry is built
 		$mode  = $this->deriveMode($row);
-		$entry = pfb_feed_manifest_row('BlockList', 'DNSBL_Block', '1', 'plain', 'feed', $mode);
+		$entry = pfb_feed_manifest_row('BlockList', 'DNSBL_Block', '1', 'feed', $mode);
 
 		// THEN mode='deny' and the mode key is OMITTED (byte-identical with pre-ADR-31)
 		$this->assertSame('deny', $mode,
@@ -99,7 +98,7 @@ final class DnsblRowActionModeTest extends TestCase
 
 		// WHEN the mode is derived from an absent action key
 		$mode  = $this->deriveMode($row);
-		$entry = pfb_feed_manifest_row('LegacyFeed', 'DNSBL_Legacy', '1', 'plain', 'feed', $mode);
+		$entry = pfb_feed_manifest_row('LegacyFeed', 'DNSBL_Legacy', '1', 'feed', $mode);
 
 		// THEN absent 'action' defaults to deny — mode key absent, byte-identical
 		$this->assertSame('deny', $mode,

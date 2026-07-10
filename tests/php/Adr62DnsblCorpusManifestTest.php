@@ -84,7 +84,7 @@ final class Adr62DnsblCorpusManifestTest extends TestCase
 		rmdir_recursive($this->tmp);
 	}
 
-	/** Manifest rows in the pfb_unbound_python_sources() input shape (header/group/log/format/provenance/mode). */
+	/** Manifest rows in the pfb_unbound_python_sources() input shape (header/group/log/provenance/mode). */
 	private function feedRows(): array
 	{
 		$rows = [];
@@ -93,7 +93,6 @@ final class Adr62DnsblCorpusManifestTest extends TestCase
 				'header'     => $f['header'],
 				'group'      => $f['group'],
 				'log'        => $f['log'],
-				'format'     => $f['format'],
 				'provenance' => $f['provenance'],
 			];
 			if (isset($f['mode'])) {
@@ -126,7 +125,9 @@ final class Adr62DnsblCorpusManifestTest extends TestCase
 		}
 	}
 
-	/** format_hint/provenance/mode tagging survives the writer unchanged per corpus feed. */
+	/** provenance/mode tagging survives the writer unchanged per corpus feed; the row's
+	 * key set is closed (#1083 P4 retired the per-format tagging key end-to-end -- no
+	 * caller may reintroduce it under any name without this assertion catching it). */
 	public function testManifestTaggingMatchesFeedsJson(): void
 	{
 		$m = pfb_unbound_python_sources($this->feedRows());
@@ -134,10 +135,12 @@ final class Adr62DnsblCorpusManifestTest extends TestCase
 		foreach ($m['feeds'] as $row) {
 			$byHeader[$row['feed']] = $row;
 		}
+		$closedKeySet = ['raw', 'feed', 'group', 'provenance', 'log_flag'];
 		foreach ($this->feeds as $f) {
 			$this->assertArrayHasKey($f['header'], $byHeader, "feed [ {$f['header']} ] missing from manifest");
 			$row = $byHeader[$f['header']];
-			$this->assertSame($f['format'], $row['format_hint'], "format_hint drifted for [ {$f['header']} ]");
+			$this->assertSame($closedKeySet, array_keys(array_diff_key($row, ['mode' => NULL])),
+				"unexpected manifest key set for [ {$f['header']} ]");
 			$this->assertSame($f['provenance'], $row['provenance'], "provenance drifted for [ {$f['header']} ]");
 			if (isset($f['mode'])) {
 				$this->assertSame($f['mode'], $row['mode'] ?? null, "mode drifted for [ {$f['header']} ]");

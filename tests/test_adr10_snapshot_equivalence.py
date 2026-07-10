@@ -59,10 +59,11 @@ def _build(
     feeds: dict[str, list[str]],
     *,
     user_whitelist: Iterable[str] = (),
-    format_hint: str = "abp",
     top1m_enabled: bool = False,
 ) -> P.BuildResult:
-    """Build a BuildResult from an in-memory manifest. ``feeds`` maps name -> raw lines."""
+    """Build a BuildResult from an in-memory manifest. ``feeds`` maps name -> raw lines;
+    each line is routed by its own shape (the permanent per-line capture guard,
+    #1083 P4), never by a feed-level tag."""
     raw_store = dict(feeds)
     manifest = {
         "feeds": [
@@ -70,7 +71,6 @@ def _build(
                 "raw": name,
                 "feed": name,
                 "group": name,
-                "format_hint": format_hint,
                 "log_flag": "1",
                 "provenance": "feed",
             }
@@ -259,17 +259,17 @@ class TestPlainCorpusEquivalence:
     """ABP-off: important_rules MUST be False (the historical fast path)."""
 
     def test_important_rules_off(self) -> None:
-        result = _build(_PLAIN_FEEDS, format_hint="plain")
+        result = _build(_PLAIN_FEEDS)
         # Branch anchor: this corpus exercises the FAST path.
         assert result.important_rules is False
 
     def test_field_for_field_no_whitelist(self) -> None:
-        result = _build(_PLAIN_FEEDS, format_hint="plain")
+        result = _build(_PLAIN_FEEDS)
         _assert_field_for_field(result, _PLAIN_QUERIES, hsts=False, with_white=False)
 
     def test_field_for_field_with_whitelist(self) -> None:
         # whiteDB present -> the fast-path whitelist override branch is taken.
-        result = _build(_PLAIN_FEEDS, format_hint="plain", user_whitelist=["ads.example.com"])
+        result = _build(_PLAIN_FEEDS, user_whitelist=["ads.example.com"])
         assert result.important_rules is False
         assert bool(result.white_db) is True
         _assert_field_for_field(result, _PLAIN_QUERIES, hsts=False, with_white=True)

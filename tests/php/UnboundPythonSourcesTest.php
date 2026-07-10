@@ -8,9 +8,10 @@ use PHPUnit\Framework\TestCase;
 /**
  * pfb_unbound_python_sources() — ADR-06/07 shell->Python manifest writer. Builds
  * the per-feed manifest + per-feed IP-stripped raw files consumed by
- * pfb_unbound.py. This pins the parts the issue calls out: format/provenance
- * tagging, the chroot-relative (basename) raw path, and plain-vs-ABP raw
- * extraction. It runs against a temp $pfb sandbox (no live box).
+ * pfb_unbound.py. This pins the parts the issue calls out: provenance tagging,
+ * the chroot-relative (basename) raw path, and NDJSON-kind-driven (#1083 P4
+ * retired the per-format tagging key end-to-end) plain-vs-ABP raw extraction.
+ * It runs against a temp $pfb sandbox (no live box).
  *
  * Also covers the #51 temporary-unlock plumbing: the full build clears
  * config.user_unlock (Force/Cron re-lock), and pfb_unbound_python_sources_unlock()
@@ -89,8 +90,8 @@ final class UnboundPythonSourcesTest extends TestCase
 	private function feeds(): array
 	{
 		return [
-			['header' => 'feed1',   'group' => 'pfb_grp', 'log' => '1', 'format' => 'plain', 'provenance' => 'feed'],
-			['header' => 'abpfeed', 'group' => 'pfb_abp', 'log' => '0', 'format' => 'abp',   'provenance' => 'user'],
+			['header' => 'feed1',   'group' => 'pfb_grp', 'log' => '1', 'provenance' => 'feed'],
+			['header' => 'abpfeed', 'group' => 'pfb_abp', 'log' => '0', 'provenance' => 'user'],
 			['header' => 'missing', 'group' => 'pfb_x',   'log' => '1'],   // no .txt => skipped
 		];
 	}
@@ -102,17 +103,23 @@ final class UnboundPythonSourcesTest extends TestCase
 		$this->assertSame(1, $m['version']);
 		$this->assertCount(2, $m['feeds'], 'feed without a .txt must be skipped');
 
+		// Closed key set (#1083 P4 retired the per-format tagging key end-to-end --
+		// no other key may reappear under any name without this catching it).
+		$closedKeySet = ['raw', 'feed', 'group', 'provenance', 'log_flag'];
+
 		$plain = $m['feeds'][0];
 		$this->assertSame('feed1', $plain['feed']);
 		$this->assertSame('pfb_grp', $plain['group']);
-		$this->assertSame('plain', $plain['format_hint']);
+		$this->assertSame($closedKeySet, array_keys(array_diff_key($plain, ['mode' => NULL])));
 		$this->assertSame('feed', $plain['provenance']);
 		$this->assertSame('1', $plain['log_flag']);
 		// chroot-relative: basename(rawdir)/<feed>.raw, never host-absolute.
 		$this->assertSame('pfb_py_raw/feed1.raw', $plain['raw']);
 
+		// The 'abpfeed' NDJSON rows are 'abp'-kind; the writer routes their raw payload
+		// verbatim purely from the NDJSON kind tag, independent of any feed-level format.
 		$abp = $m['feeds'][1];
-		$this->assertSame('abp', $abp['format_hint']);
+		$this->assertSame($closedKeySet, array_keys(array_diff_key($abp, ['mode' => NULL])));
 		$this->assertSame('user', $abp['provenance']);
 		$this->assertSame('0', $abp['log_flag']);
 		$this->assertSame('pfb_py_raw/abpfeed.raw', $abp['raw']);
@@ -121,7 +128,7 @@ final class UnboundPythonSourcesTest extends TestCase
 	public function testProvenanceDefaultsToFeedWhenUnset(): void
 	{
 		$m = pfb_unbound_python_sources([
-			['header' => 'feed1', 'group' => 'g', 'log' => '1', 'format' => 'plain'],
+			['header' => 'feed1', 'group' => 'g', 'log' => '1'],
 		]);
 		$this->assertSame('feed', $m['feeds'][0]['provenance']);
 	}
@@ -136,7 +143,7 @@ final class UnboundPythonSourcesTest extends TestCase
 		file_put_contents("{$this->tmp}/dnsbl/permitfeed.txt",
 			pfb_dnsbl_ndjson_emit_domain_row('allow.example.com', '1', 'f', 'g'));
 		$m = pfb_unbound_python_sources([
-			['header' => 'permitfeed', 'group' => 'g', 'log' => '1', 'format' => 'plain', 'provenance' => 'feed', 'mode' => 'permit'],
+			['header' => 'permitfeed', 'group' => 'g', 'log' => '1', 'provenance' => 'feed', 'mode' => 'permit'],
 		]);
 		$this->assertSame('permit', $m['feeds'][0]['mode'] ?? null,
 			'a Permit-action row must carry mode=permit into the manifest JSON');
@@ -147,7 +154,7 @@ final class UnboundPythonSourcesTest extends TestCase
 	public function testAbsentModeOmitsKeyInManifest(): void
 	{
 		$m = pfb_unbound_python_sources([
-			['header' => 'feed1', 'group' => 'g', 'log' => '1', 'format' => 'plain', 'provenance' => 'feed'],
+			['header' => 'feed1', 'group' => 'g', 'log' => '1', 'provenance' => 'feed'],
 		]);
 		$this->assertArrayNotHasKey('mode', $m['feeds'][0], 'absent action => no mode key (byte-identical with pre-ADR-31)');
 	}
@@ -157,7 +164,7 @@ final class UnboundPythonSourcesTest extends TestCase
 	public function testExplicitDenyOmitsModeKeyInManifest(): void
 	{
 		$m = pfb_unbound_python_sources([
-			['header' => 'feed1', 'group' => 'g', 'log' => '1', 'format' => 'plain', 'provenance' => 'feed', 'mode' => 'deny'],
+			['header' => 'feed1', 'group' => 'g', 'log' => '1', 'provenance' => 'feed', 'mode' => 'deny'],
 		]);
 		$this->assertArrayNotHasKey('mode', $m['feeds'][0], 'explicit deny => no mode key (byte-identical with pre-ADR-31)');
 	}
@@ -193,7 +200,7 @@ final class UnboundPythonSourcesTest extends TestCase
 			pfb_dnsbl_ndjson_emit_domain_row('legit.example', '1', 'f', 'g') .
 			"not valid ndjson,stale-block.example,stale2.example##.ad\n");
 		pfb_unbound_python_sources([
-			['header' => 'stalefeed', 'group' => 'g', 'log' => '1', 'format' => 'plain', 'provenance' => 'feed'],
+			['header' => 'stalefeed', 'group' => 'g', 'log' => '1', 'provenance' => 'feed'],
 		]);
 		$raw = file_get_contents("{$this->tmp}/pfb_py_raw/stalefeed.raw");
 		$this->assertSame(
@@ -298,7 +305,7 @@ final class UnboundPythonSourcesTest extends TestCase
 		file_put_contents("{$this->tmp}/dnsbl/bad.header.txt",
 			pfb_dnsbl_ndjson_emit_domain_row('example.com', '1', 'f', 'g'));
 		$feeds = $this->feeds();
-		$feeds[] = ['header' => 'bad.header', 'group' => 'g', 'log' => '1', 'format' => 'plain'];
+		$feeds[] = ['header' => 'bad.header', 'group' => 'g', 'log' => '1'];
 		$this->assertSame('', $this->logContents(), 'log must start empty');
 
 		// When the manifest is built

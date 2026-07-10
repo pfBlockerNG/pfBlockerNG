@@ -114,66 +114,42 @@ def _evaluate_build(result: pfb_unbound.BuildResult, config: dict[str, Any], q_n
 
 
 class TestParse:
+    """#1083 P4: parse() lost its format_hint dispatch -- an ABP-shaped line never
+    reaches it any more (build()'s per-line capture guard routes those to
+    parse_abp() first), so parse() is now the hosts/plain handler only.
+    """
+
     def test_hosts_sink_ip_stripped(self) -> None:
         for line in ("0.0.0.0 tracker.org", "127.0.0.1 tracker.org"):
-            entry = pfb_unbound.parse("hosts", line)
+            entry = pfb_unbound.parse(line)
             assert entry is not None
             assert entry.value == "tracker.org"
             assert entry.kind == pfb_unbound.DNSBL_KIND_BLOCK
 
     def test_hosts_comment_skipped(self) -> None:
-        assert pfb_unbound.parse("hosts", "# a comment") is None
+        assert pfb_unbound.parse("# a comment") is None
 
     def test_hosts_bare_ip_skipped(self) -> None:
         # Bare IP -> firewall path (PHP); parse() must NOT return it.
-        assert pfb_unbound.parse("hosts", "0.0.0.0 198.51.100.23") is None
-        assert pfb_unbound.parse("plain", "203.0.113.45") is None
+        assert pfb_unbound.parse("0.0.0.0 198.51.100.23") is None
+        assert pfb_unbound.parse("203.0.113.45") is None
 
     def test_plain_domain(self) -> None:
-        entry = pfb_unbound.parse("plain", "malware.com")
+        entry = pfb_unbound.parse("malware.com")
         assert entry is not None and entry.value == "malware.com"
 
     def test_plain_leading_dot_stripped(self) -> None:
-        entry = pfb_unbound.parse("plain", ".wildcardish.org")
+        entry = pfb_unbound.parse(".wildcardish.org")
         assert entry is not None and entry.value == "wildcardish.org"
 
     def test_blank_line_skipped(self) -> None:
-        assert pfb_unbound.parse("plain", "   ") is None
-        assert pfb_unbound.parse("abp", "") is None
-
-    def test_abp_block_line(self) -> None:
-        entry = pfb_unbound.parse("abp", "||abpblocked.com^")
-        assert entry is not None
-        assert entry.value == "abpblocked.com"
-        assert entry.kind == pfb_unbound.DNSBL_KIND_BLOCK
-
-    def test_abp_deep_block_line(self) -> None:
-        entry = pfb_unbound.parse("abp", "||sub.abpzone.net^")
-        assert entry is not None and entry.value == "sub.abpzone.net"
-
-    def test_abp_ignored_lines(self) -> None:
-        # Each of these is IGNORED today and must yield None (NOT an allow/regex kind).
-        ignored = [
-            "[Adblock Plus 2.0]",  # control header
-            "! Title: comment",  # comment
-            "@@||abpallowed.com^",  # exception
-            "||abpoptions.com^$third-party",  # $options
-            "example.com##.ad-banner",  # element-hiding
-            "||abpwildcard.*^",  # wildcard '*'
-            "||abppath.com/ads^",  # path '/'
-            "/regex-rule[0-9]/",  # standalone regex
-        ]
-        for line in ignored:
-            assert pfb_unbound.parse("abp", line) is None, line
+        assert pfb_unbound.parse("   ") is None
+        assert pfb_unbound.parse("") is None
 
     def test_kind_is_always_block_this_phase(self) -> None:
         # The ABP-ready seam exists but only BLOCK is ever produced.
-        for fmt, line in [
-            ("hosts", "0.0.0.0 tracker.org"),
-            ("plain", "malware.com"),
-            ("abp", "||abpblocked.com^"),
-        ]:
-            entry = pfb_unbound.parse(fmt, line)
+        for line in ("0.0.0.0 tracker.org", "malware.com"):
+            entry = pfb_unbound.parse(line)
             assert entry is not None and entry.kind == pfb_unbound.DNSBL_KIND_BLOCK
 
 
@@ -194,7 +170,7 @@ class TestNormalise:
         # string is rejected at PARSE via the is_ipaddrv4 check, before validation.
         # normalise() alone treats digits as valid label chars (matches the Phase-2
         # ReferencePipeline._validate_domain), so the IP guard MUST live in parse().
-        assert pfb_unbound.parse("plain", "198.51.100.23") is None
+        assert pfb_unbound.parse("198.51.100.23") is None
         assert pfb_unbound.normalise("198.51.100.23") == "198.51.100.23"
 
     def test_rejects_edge_hyphen_and_bad_chars(self) -> None:
@@ -520,7 +496,7 @@ class TestEntryRejectTally:
         # >253-char total name) among otherwise-healthy accepted entries.
         long_label = "a" * 64
         name_254 = ".".join(["b" * 61] * 4) + "." + "b" * 6
-        feed_row = {"feed": "RejFeed", "group": "RejGroup", "format_hint": "abp", "log_flag": "1", "raw": "r"}
+        feed_row = {"feed": "RejFeed", "group": "RejGroup", "log_flag": "1", "raw": "r"}
         lines = [
             "||good.example.com^",  # accepted -- must not be counted
             "||no-dot-host^",  # shape: no "." in host
@@ -542,7 +518,7 @@ class TestEntryRejectTally:
     def test_plain_feed_tallies_normalise_reject(self) -> None:
         # Given: a plain (non-ABP) feed with exactly 1 shape-rejectable line --
         # proves the plain build path (not just the ABP path) counts too.
-        feed_row = {"feed": "PlainFeed", "group": "PlainGroup", "format_hint": "plain", "log_flag": "1", "raw": "r"}
+        feed_row = {"feed": "PlainFeed", "group": "PlainGroup", "log_flag": "1", "raw": "r"}
         result = pfb_unbound.build(
             {"feeds": [feed_row], "config": {}},
             {},
@@ -560,15 +536,21 @@ class TestSkipClassesTallyZero:
     corpus (its test_skip_invalid_domain lines are EXCLUDED on purpose: those ARE
     genuine normalise() shape rejects, not skips, and must tally -- reusing them
     here would defeat the point of this test).
+
+    #1083 P4: three lines are NOT ABP-shaped per _dnsbl_is_abp_rule_line() (a bare
+    "[...]" control header, and two freeform non-domain strings) -- the capture
+    guard only recognises ||/@@/element-hiding/regex shapes, so these fall to the
+    plain validator like any other malformed line and DO tally (pre-existing
+    per-line-capture-guard behaviour for every feed; format_hint's now-retired
+    whole-feed dispatch used to mask it in this synthetic all-ABP fixture).
     """
 
     def test_skip_only_feed_tallies_nothing(self) -> None:
-        feed_row = {"feed": "SkipFeed", "group": "SkipGroup", "format_hint": "abp", "log_flag": "1", "raw": "r"}
+        feed_row = {"feed": "SkipFeed", "group": "SkipGroup", "log_flag": "1", "raw": "r"}
         skip_lines = [
             "",
             "   ",
             "! Title: comment",
-            "[Adblock Plus 2.0]",
             "# plain comment",
             "example.com##.ad-banner",
             "##.global-ad",
@@ -578,19 +560,20 @@ class TestSkipClassesTallyZero:
             "example.com#$#body { color: red; }",
             "||example.com/ads/*",
             "||cdn.example.net/track.js",
-            "/banners/*.gif",
             "||shop.example^/affiliate?id=",
             "||wild.*^",
-            "not a domain at all",
             "||203.0.113.7^",  # IP-valued anchor -> PHP firewall path
             "||198.51.100.42^",
             "0.0.0.0 203.0.113.99",
             "127.0.0.1 10.0.0.1",
             "||gone.example^$badfilter",  # parses to a Rule, pruned in reconcile()
         ]
+        # Not ABP-shaped -> fall to the plain validator -> genuine shape rejects.
+        not_abp_shaped_junk = ["[Adblock Plus 2.0]", "not a domain at all", "/banners/*.gif"]
+
         result = pfb_unbound.build(
             {"feeds": [feed_row], "config": {}},
             {},
-            line_reader=lambda raw: skip_lines,
+            line_reader=lambda raw: skip_lines + not_abp_shaped_junk,
         )
-        assert result.rejects == {}
+        assert result.rejects == {("SkipFeed", "SkipGroup"): {"shape": 3, "wire_cap": 0}}

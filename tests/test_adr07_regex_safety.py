@@ -250,7 +250,7 @@ class TestStaticCapAtLoad:
         # length cap (not the shape gate) is what the flag toggles, so use a long-but-
         # benign irreducible pattern to prove the flag is threaded.
         manifest = {
-            "feeds": [{"feed": "F", "group": "G", "format_hint": "abp", "log_flag": "1", "raw": "F"}],
+            "feeds": [{"feed": "F", "group": "G", "log_flag": "1", "raw": "F"}],
             "config": {},
         }
         lines = ["/" + _long_benign_pattern() + "/", "/^irreducible-[0-9]+\\.example$/"]

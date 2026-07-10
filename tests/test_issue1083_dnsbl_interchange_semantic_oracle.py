@@ -85,7 +85,6 @@ def _corpus_manifest() -> dict[str, Any]:
             "raw": f"{f['header']}.raw",
             "feed": f["header"],
             "group": f["group"],
-            "format_hint": f["format"],
             "provenance": f["provenance"],
             "log_flag": f["log"],
         }

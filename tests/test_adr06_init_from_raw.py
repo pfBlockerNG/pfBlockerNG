@@ -90,7 +90,6 @@ def _write_onbox_manifest(tmp_path: Any, *, top1m_enabled: bool) -> str:
                 "raw": rel,  # relative -> reader resolves under the manifest dir
                 "feed": row["feed"],
                 "group": row["group"],
-                "format_hint": row["format_hint"],
                 "log_flag": row["log_flag"],
             }
         )
@@ -314,14 +313,12 @@ class TestManifestFallback:
                     "raw": "does_not_exist.txt",
                     "feed": "Gone",
                     "group": "Gone",
-                    "format_hint": "plain",
                     "log_flag": "1",
                 },
                 {
                     "raw": "feed_plain.txt",
                     "feed": "PlainFeed",
                     "group": "Malware",
-                    "format_hint": "plain",
                     "log_flag": "1",
                 },
             ],
@@ -436,7 +433,6 @@ class TestTldMasterPath:
                     "raw": os.path.join(FIXTURES, "feed_plain.txt"),
                     "feed": "PlainFeed",
                     "group": "Malware",
-                    "format_hint": "plain",
                     "log_flag": "1",
                 }
             ],
@@ -478,7 +474,7 @@ class TestUserUnlockManifest:
                 "tld_master": _read_lines("tld_master.txt"),
                 "user_unlock": ["evil.com"],
             },
-            "feeds": [{"raw": "feed.raw", "feed": "F", "group": "G", "format_hint": "plain", "log_flag": "1"}],
+            "feeds": [{"raw": "feed.raw", "feed": "F", "group": "G", "log_flag": "1"}],
         }
         path = os.path.join(str(tmp_path), "pfb_py_sources.json")
         with open(path, "w", encoding="utf-8") as fh:

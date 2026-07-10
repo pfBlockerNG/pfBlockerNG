@@ -36,17 +36,16 @@ def _load_feeds() -> list[dict[str, Any]]:
 
 def _corpus_manifest() -> dict[str, Any]:
     """The real per-feed manifest shape build() consumes, mirroring exactly what
-    pfb_unbound_python_sources() would have written (feed/group/format_hint/
-    log_flag/provenance/mode) -- the ONLY difference from production is the
-    ``raw`` reference resolves through the injected line_reader below instead
-    of a chroot-relative file path."""
+    pfb_unbound_python_sources() would have written (feed/group/log_flag/
+    provenance/mode -- format_hint retired #1083 P4) -- the ONLY difference from
+    production is the ``raw`` reference resolves through the injected line_reader
+    below instead of a chroot-relative file path."""
     feeds = []
     for f in _load_feeds():
         row = {
             "raw": f"{f['header']}.raw",
             "feed": f["header"],
             "group": f["group"],
-            "format_hint": f["format"],
             "provenance": f["provenance"],
             "log_flag": f["log"],
         }
@@ -336,15 +335,15 @@ def test_wirecap_753_boundary_name_accepted_by_python() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 9. reused feed / stale manifest still naming format_hint='abp' (Semantics #7)
+# 9. self-describing ||domain^ line parses regardless of any feed-level tag
 # --------------------------------------------------------------------------- #
 
 
-def test_stale_abp_format_hint_manifest_still_parses() -> None:
-    """Semantics #7 (ADR.md SS2): a manifest row that still names
-    format_hint='abp' (as a stale on-disk manifest from a pre-upgrade build
-    would) is tolerated identically -- build() routes it through parse_abp()
-    exactly as a freshly-tagged 'abp' feed. Phase 5 must keep this green even
-    after format_hint collapses to 'plain' for every NEW build."""
+def test_reused_manifest_abp_shaped_line_still_parses() -> None:
+    """#1083 P4: format_hint's whole-feed dispatch is retired -- the
+    reused_manifest_abp corpus feed's ``||reused.example^`` line still routes to
+    parse_abp() purely because the PERMANENT per-line capture guard
+    (_dnsbl_is_abp_rule_line()) recognises its shape, independent of any
+    feed-level tag."""
     result = _run_corpus_build()
     assert "reused.example" in result.zone_db

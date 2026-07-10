@@ -3659,8 +3659,9 @@ class BuildResult:
     result is safe to atomically swap in later.
 
     Shapes (ADR-07 widened payloads). For a non-ABP (plain/hosts/csv) build every
-    ``important`` is ``False`` and ``band`` is the feed-block band (1); the ABP path
-    (format_hint='abp') sets ``important``/``band`` from the reconciled rule:
+    ``important`` is ``False`` and ``band`` is the feed-block band (1); a line the
+    capture guard routes to parse_abp() sets ``important``/``band`` from the
+    reconciled rule:
         data_db[domain]          = {"log": <"0"|"1"|"2">, "index": <int>, "important": bool, "band": int}
         zone_db[registrable]     = {"log": <flag>,        "index": <int>, "important": bool, "band": int}
         feed_group_index_db[idx] = {"feed": <str>, "group": <str>}
@@ -3786,24 +3787,6 @@ def _dnsbl_is_ipv4(token: str) -> bool:
         if not (p.isascii() and p.isdigit()) or len(p) > 3 or not (0 <= int(p) <= 255) or (len(p) > 1 and p[0] == "0"):
             return False
     return True
-
-
-def _dnsbl_parse_abp_line(line: str) -> str | None:
-    """Legacy basic-ABP token-strip, upgrade-compat only (ADR-62).
-
-    ADR-62 collapsed the live format_hint vocabulary to 'plain' and retired the
-    PHP '.abp' manifest marker that used to produce 'abp' -- this function is
-    reachable only when a pre-upgrade manifest is reused without a redownload.
-    Keeps ONLY a plain ``||domain^`` network line and strips the ``||`` / ``^``
-    tokens to a bare domain. IGNORES everything else: ``@@`` exceptions, ``##`` /
-    ``#@#`` element-hiding, ``$options``, ``*`` and ``/`` (path / regex). Returns
-    the bare domain or ``None``.
-    """
-    if not line.startswith("||") or not line.endswith("^"):
-        return None
-    if "$" in line or "*" in line or "/" in line:
-        return None
-    return line[2:-1]
 
 
 def _dnsbl_parse_ndjson_row(line: str) -> dict[str, Any] | None:
@@ -4175,12 +4158,11 @@ def _dnsbl_strip_hosts_prefix(line: str) -> str:
     return line
 
 
-def parse(format_hint: str, line: str) -> ParsedEntry | None:
-    """Parse one raw feed line into a kind-tagged block entry, or ``None`` to skip.
-
-    ``format_hint`` dispatches the per-format handler (the manifest replaces the old
-    in-loop CSV-type sniffing). This subsumes the current basic-ABP token-strip and
-    reproduces today's per-format behaviour, including which lines are IGNORED.
+def parse(line: str) -> ParsedEntry | None:
+    """Parse one raw hosts/plain feed line into a kind-tagged block entry, or ``None``
+    to skip. An ABP-shaped line never reaches here -- build()'s per-line capture guard
+    (``_dnsbl_is_abp_rule_line()``) routes it to ``parse_abp()`` first (#1083 P4:
+    format_hint's whole-feed dispatch retired, capture guard is the sole ABP router).
 
     Bare-IP lines are NOT returned here -- IP extraction is a PHP/firewall
     concern; a stray bare IP simply yields ``None`` (and would fail domain
@@ -4195,16 +4177,6 @@ def parse(format_hint: str, line: str) -> ParsedEntry | None:
     if not stripped:
         return None
 
-    if format_hint == "abp":
-        # ABP control / comment lines (header, '!', '[') are dropped first.
-        if stripped.startswith("!") or stripped.startswith("["):
-            return None
-        host = _dnsbl_parse_abp_line(stripped)
-        if host is None:
-            return None
-        return ParsedEntry(kind=DNSBL_KIND_BLOCK, value=host, feed="", group="", log="")
-
-    # hosts / plain
     if stripped.startswith("#") or stripped.startswith("!"):
         return None
     token = _dnsbl_strip_hosts_prefix(stripped)
@@ -4991,7 +4963,7 @@ def build(
     """Pure, reentrant DNSBL build: raw feeds + config -> matcher structure-set.
 
     ``manifest`` is the per-feed boundary: one row per
-    raw feed file mapping it to ``{raw, feed, group, format_hint, log_flag}``.
+    raw feed file mapping it to ``{raw, feed, group, log_flag}``.
     ``config`` carries the classification + whitelist inputs (``tld_master`` suffix
     lines, ``tld_blacklist``, ``tld_exclusion``, ``user_whitelist``, ``user_unlock``,
     ``top1m_list``).
@@ -5079,12 +5051,14 @@ def build(
             "band": max(_white_entry_band(existing), _white_entry_band(unlock_entry)),
         }
 
-    # ADR-07: ABP feeds (format_hint='abp') are parsed into the typed Rule stream
-    # (Stage A, parse_abp) and reconciled (Stage B) into the banded pre-emit rule
-    # sets; non-ABP feeds keep the ADR-06 lite parse() -> block-only path unchanged.
-    # The reconciled ABP structures (incl. @@/regex/important/badfilter) are emitted
-    # below alongside the plain blocks. Each ABP rule carries its manifest-row
-    # feed/group/log straight through parse_abp onto the Rule.
+    # ADR-07: an ABP-shaped line (any feed -- #1083 P4 retired the whole-feed
+    # format_hint dispatch) is routed by the per-line capture guard to the typed
+    # Rule stream (Stage A, parse_abp) and reconciled (Stage B) into the banded
+    # pre-emit rule sets; every other line keeps the ADR-06 lite parse() ->
+    # block-only path. The reconciled ABP structures (incl. @@/regex/important/
+    # badfilter) are emitted below alongside the plain blocks. Each ABP rule
+    # carries its manifest-row feed/group/log straight through parse_abp onto
+    # the Rule.
     abp_rules: list[Rule] = []
     # ADR-31 §2.2.3: a permit feed that inserts a band-2 allow must engage the numeric
     # band-aware resolution (exactly as any feed @@ allow does via reconcile, line ~4095),
@@ -5096,7 +5070,6 @@ def build(
     for feed_row in manifest.get("feeds", []):
         feed = feed_row["feed"]
         group = feed_row["group"]
-        fmt = feed_row["format_hint"]
         log_flag = feed_row["log_flag"]
         # ADR-31: permit-mode feeds — every host line is a band-2 wildcard allow.
         # ``mode`` absent or ``'deny'`` falls through to the existing block build path
@@ -5118,7 +5091,7 @@ def build(
                     continue
                 if _dnsbl_is_abp_rule_line(stripped):
                     continue
-                entry = parse(fmt, stripped)
+                entry = parse(stripped)
                 if entry is None:
                     continue
                 domain, bucket = _normalise_verdict(entry.value)
@@ -5155,29 +5128,22 @@ def build(
         # plain path bands the entry directly here.
         provenance = RULE_PROV_USER if feed_row.get("provenance") == "user" else RULE_PROV_FEED
         block_band = PRIO_USER_BLOCK if provenance == RULE_PROV_USER else PRIO_FEED_BLOCK
-        if fmt == "abp":
-            for raw_line in line_reader(feed_row["raw"]):
-                rule = parse_abp(raw_line, provenance=provenance, feed=feed, group=group, log=log_flag, tally=rejects)
-                if rule is not None:
-                    abp_rules.append(rule)
-            continue
         for raw_line in line_reader(feed_row["raw"]):
-            # ADR-62: per-line ABP detection in a non-ABP feed, broadened from ADR-21's
+            # ADR-62/#1083 P4: per-line ABP detection, broadened from ADR-21's
             # '||'/'@@||' to the full Decision-2 capture shape set (regex, element-
             # hiding) via _dnsbl_is_abp_rule_line() -- a self-identifying ABP entry is
             # invalid in every plain dialect, so it would otherwise be dropped by the
             # plain validator. Route it to the full parse_abp() Stage-A parser -> the
-            # abp_rules stream (Stage-B reconcile), with the SAME provenance/feed/
-            # group/log plumbing as the whole-feed ABP path above. parse_abp() returns
-            # None for anything it itself skips (path/wildcard/IP anchors, element-
-            # hiding, non-DNS $options, malformed anchors) -> silently skipped here too.
+            # abp_rules stream (Stage-B reconcile). parse_abp() returns None for
+            # anything it itself skips (path/wildcard/IP anchors, element-hiding,
+            # non-DNS $options, malformed anchors) -> silently skipped here too.
             stripped = raw_line.strip()
             if _dnsbl_is_abp_rule_line(stripped):
                 rule = parse_abp(stripped, provenance=provenance, feed=feed, group=group, log=log_flag, tally=rejects)
                 if rule is not None:
                     abp_rules.append(rule)
                 continue
-            entry = parse(fmt, raw_line)
+            entry = parse(raw_line)
             if entry is None:
                 continue
             domain, bucket = _normalise_verdict(entry.value)

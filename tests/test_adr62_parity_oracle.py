@@ -51,7 +51,6 @@ def _corpus_manifest() -> dict[str, Any]:
             "raw": f"{f['header']}.raw",
             "feed": f["header"],
             "group": f["group"],
-            "format_hint": f["format"],
             "provenance": f["provenance"],
             "log_flag": f["log"],
         }
@@ -179,7 +178,6 @@ def _plain_feed_row(header: str, *, mode: str | None = None) -> dict[str, Any]:
         "raw": header,
         "feed": header,
         "group": f"grp_{header}",
-        "format_hint": "plain",
         "provenance": "feed",
         "log_flag": "1",
     }
@@ -512,23 +510,3 @@ def test_permit_loop_skip_set_covers_the_full_broadened_capture_shape_set() -> N
     assert result.white_db == {
         "realpermithost.example": {"wildcard": True, "important": False, "band": P.PRIO_FEED_ALLOW, "index": 0}
     }
-
-
-# ---- stale format_hint='abp' manifest tolerance (action item 3) ------------ #
-
-
-def test_stale_format_hint_abp_still_routes_to_parse_abp() -> None:
-    """Action item 3: a manifest row still naming format_hint='abp' (as a
-    stale on-disk manifest from a pre-Phase-5 build would) is untouched by
-    this phase's PLAIN-loop extension -- it keeps taking the whole-feed
-    parse_abp() route exactly as before."""
-    stale_row = {
-        "raw": "stale",
-        "feed": "stale",
-        "group": "grp_stale",
-        "format_hint": "abp",
-        "provenance": "feed",
-        "log_flag": "1",
-    }
-    result = _build_synthetic([stale_row], {"stale": ["||stalefmt.example^"]})
-    assert "stalefmt.example" in result.zone_db

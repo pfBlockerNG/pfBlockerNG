@@ -157,7 +157,7 @@ def _ini_regex_pattern(stem: str) -> str:
 class GenSpec:
     """Everything that defines a generation's matcher state, as raw text/lists."""
 
-    plain_feed: list[str]  # plain (format_hint="") feed lines (block lanes m1/m2)
+    plain_feed: list[str]  # plain feed lines (block lanes m1/m2)
     user_feed: list[str]  # plain feed lines on a provenance=user feed (m7)
     abp_feed: list[str]  # ABP feed lines (m3/m4/m5 + allow lanes a11/a12/a13)
     user_whitelist: list[str]  # config.user_whitelist (a9)
@@ -322,16 +322,15 @@ def _manifest_json(tld_master: str, plain_raw: str, user_raw: str, abp_raw: str,
                 "top1m_enabled": False,
             },
             "feeds": [
-                {"raw": plain_raw, "feed": "plainfeed", "group": "G", "format_hint": "", "log_flag": "1"},
+                {"raw": plain_raw, "feed": "plainfeed", "group": "G", "log_flag": "1"},
                 {
                     "raw": user_raw,
                     "feed": "userfeed",
                     "group": "Custom_List",
-                    "format_hint": "",
                     "log_flag": "1",
                     "provenance": "user",
                 },
-                {"raw": abp_raw, "feed": "abpfeed", "group": "G", "format_hint": "abp", "log_flag": "1"},
+                {"raw": abp_raw, "feed": "abpfeed", "group": "G", "log_flag": "1"},
             ],
         }
     )

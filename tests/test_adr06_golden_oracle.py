@@ -331,7 +331,7 @@ class ReferencePipeline:
         for feed_row in self.manifest["feeds"]:
             feed = feed_row["feed"]
             group = feed_row["group"]
-            fmt = feed_row["format_hint"]
+            fmt = feed_row["dialect"]
             log_flag = feed_row["log_flag"]
             for raw_line in _read_lines(feed_row["raw"]):
                 value, firewall_ip = self._extract(raw_line, fmt)

@@ -1,15 +1,14 @@
-"""ADR-21 Phase 1 -- per-line ABP detection in ``build()`` for non-ABP feeds.
+"""ADR-21 Phase 1 -- per-line ABP detection in ``build()``.
 
 WHAT THIS PINS
 --------------
-``build()`` classifies a feed by its ``format_hint``: ``'abp'`` feeds route every
-line through ``parse_abp()``; ``'plain'`` (non-ABP) feeds route every line through
-the lite ``parse()`` block-only path. Before ADR-21, an ``||domain^`` / ``@@||domain^``
-line in a ``'plain'`` feed was dropped (``|``/``^`` are not valid domain chars, so the
-plain validator rejected the line). ADR-21 adds a single per-line routing guard in the
-non-ABP loop: a line that ``startswith("||")`` or ``startswith("@@||")`` is routed to
-``parse_abp()`` (-> ``abp_rules`` -> Stage-B reconcile), with the same provenance / feed /
-group / log plumbing as the whole-feed ABP path; every other line stays on the plain path.
+``build()`` routes every raw line by its OWN shape, not by any feed-level tag
+(format_hint's whole-feed dispatch retired #1083 P4 -- see the ADR-62 amendment):
+a line the capture guard (``_dnsbl_is_abp_rule_line()``) recognises as ``||``/
+``@@||``/element-hiding/regex-shaped is routed to ``parse_abp()`` (-> ``abp_rules``
+-> Stage-B reconcile); every other line stays on the lite ``parse()`` block-only
+path. Before ADR-21, an ``||domain^`` / ``@@||domain^`` line was dropped outright
+(``|``/``^`` are not valid domain chars, so the plain validator rejected the line).
 
 These tests drive ``build()`` via its public call path with a synthetic in-memory
 manifest -- never ``parse_abp()`` directly -- so they pin the ROUTING decision, not the
@@ -38,7 +37,6 @@ import pfb_unbound as P
 def _run_build(
     lines: list[str],
     *,
-    format_hint: str = "plain",
     provenance: str = "feed",
     feed: str = "FEED",
     group: str = "GRP",
@@ -55,7 +53,6 @@ def _run_build(
             {
                 "feed": feed,
                 "group": group,
-                "format_hint": format_hint,
                 "log_flag": log_flag,
                 "provenance": provenance,
                 "raw": raw_key,
@@ -102,8 +99,7 @@ def _allowed(result: P.BuildResult, domain: str) -> bool:
 def test_plain_feed_abp_anchor_block() -> None:
     """Scenario: an ``||domain^`` anchor in a plain feed produces a DNSBL block.
 
-    Background: a ``format_hint='plain'`` feed carrying a plain domain plus an ABP
-        block anchor.
+    Background: a feed carrying a plain domain plus an ABP block anchor.
     Given: with only the plain line present, ``block-me.com`` is NOT in any block DB
         (the BEFORE state -- the anchor has not been added yet).
     When: the feed also contains ``||block-me.com^``.
@@ -236,21 +232,19 @@ def test_plain_path_unchanged_no_abp_lines() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# (f) ABP-header feed unaffected by the new guard  (§4.6; regression pin)
+# (f) mixed ABP + plain lines in one feed  (§4.6; regression pin)
 # --------------------------------------------------------------------------- #
 
 
-def test_abp_header_feed_unchanged() -> None:
-    """Scenario (regression pin): a ``format_hint='abp'`` feed is handled entirely by
-    ``parse_abp()`` -- the new non-ABP per-line guard must NOT run for it.
+def test_mixed_abp_and_plain_lines_in_one_feed() -> None:
+    """Scenario (regression pin): several ABP-shaped lines and a plain domain
+    coexist in a single feed; each line is routed independently by its own shape
+    (no feed-level tag exists -- #1083 P4).
 
-    block.com is blocked; allow.com is allowed (overriding nothing here, just present
-    in the allow DB); the bare plain.com is blocked by parse_abp's bare-domain path.
+    block.com is blocked (per-line capture -> parse_abp); allow.com is allowed
+    (same); the bare plain.com is blocked via the lite parse() path.
     """
-    result = _run_build(
-        ["||block.com^", "@@||allow.com^", "plain.com"],
-        format_hint="abp",
-    )
+    result = _run_build(["||block.com^", "@@||allow.com^", "plain.com"])
     assert _blocked(result, "block.com")
     assert _allowed(result, "allow.com")
     assert _blocked(result, "plain.com")
