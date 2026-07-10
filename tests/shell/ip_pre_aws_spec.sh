@@ -93,9 +93,9 @@ Describe 'aws_region_prefixes.sh failure handling'
   End
 End
 
-# The v6 path publishes raw jq output; the real ip-ranges.json lists the same
-# ipv6_prefix once per service, so the published list carried duplicates. The
-# v4 path never showed this because iprange aggregates (and so dedups).
+# The v6 path used to publish raw jq output; the real ip-ranges.json lists the
+# same ipv6_prefix once per service, so the published list carried duplicates.
+# The v4 path never showed this because iprange aggregates (and so dedups).
 Describe 'aws_region_prefixes.sh v6 dedup (issue #1079)'
   awswork=""
   setup()   { awswork="$(mktemp "${SHELLSPEC_TMPBASE:-/tmp}/awsdup.XXXXXX")"; }
