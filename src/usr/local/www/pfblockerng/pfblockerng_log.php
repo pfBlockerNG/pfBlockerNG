@@ -322,7 +322,10 @@ if (isset($pconfig['logFile']) && !empty($pconfig['logFile']) && (isset($pconfig
 			// issue #1097: a lost TOCTOU race must skip headers/exit, not throw on fpassthru(FALSE)
 			if (($fd = @fopen($s_logfile, "rb")) !== FALSE) {
 				header("Content-Type: application/octet-stream");
-				header("Content-Length: " . filesize($s_logfile));
+				// issue #1097: size from the open handle -- the path can vanish after fopen()
+				if (($fd_stat = fstat($fd)) !== FALSE) {
+					header("Content-Length: " . $fd_stat['size']);
+				}
 				header("Content-Disposition: attachment; filename=\"" .
 					trim(htmlentities(basename($s_logfile))) . "\"");
 				if (isset($_SERVER['HTTPS'])) {
