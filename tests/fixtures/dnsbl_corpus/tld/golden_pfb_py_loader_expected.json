@@ -1,0 +1,34 @@
+{
+    "_doc": "issue #1083 P1 semantic oracle. Format-independent (survives the CSV->NDJSON interchange flip): expected loader-visible membership + feed/group/log attribution, hand-transcribed from reading golden_pfb_py_zone.txt/golden_pfb_py_data.txt and feeds.json -- never computed from those files by the code under test.",
+
+    "legacy_loader": {
+        "_doc": "_load_zone_db/_load_data_db (pfb_unbound.py) parse golden_pfb_py_zone.txt/golden_pfb_py_data.txt, each row ',<domain>,,<log>,<feed>,<group>'. _load_zone_and_data_dbs runs zone before data, sharing one feed_group_db keyed by feed+group -- so index 0 is claimed by the first zone row and reused by every later row sharing that key (both golden files use the same feed='tld_plain_feed'/group='tld_plain_feed').",
+        "zone_db": {
+            "twolabelzone.example": {"log": "1", "index": 0, "important": false},
+            "biz.co.zzsuffix":      {"log": "1", "index": 0, "important": false}
+        },
+        "data_db": {
+            "www.biz.co.zzsuffix": {"log": "1", "index": 0, "important": false}
+        },
+        "feed_group_index_db": {
+            "0": {"feed": "tld_plain_feed", "group": "tld_plain_feed"}
+        }
+    },
+
+    "manifest_attribution": {
+        "_doc": "Per corpus feed (tests/fixtures/dnsbl_corpus/feeds.json), one representative domain build() places in data_db/zone_db/white_db, with its expected {feed, group} resolved through feed_group_index_db, hand-derived from feeds.json's header/group columns. 'log' is asserted only where the entry type carries it: every plain-path/ABP-reconciled block entry carries 'log' (every corpus feed logs '1'); a permit-mode allow (white_db) carries 'index' but NEVER 'log'. wirecap_feed's domain is the 253-char wire-cap boundary name -- computed in the test (same construction as _NAME_253 in test_adr62_byte_identity_corpus.py/test_adr62_parity_oracle.py), not spelled out here. oversized_feed is deliberately absent: every one of its lines is wire-cap-rejected before index_for() ever runs (#752), so it claims no index at all -- not a coverage gap.",
+        "plain_hosts":        {"domain": "plainhost1.example", "feed": "plain_hosts",        "group": "grp_plain",  "log": "1"},
+        "csv_pt":              {"domain": "ptfeed.example",      "feed": "csv_pt",             "group": "grp_csv",    "log": "1"},
+        "csv_bbc":              {"domain": "bbcfeed.example",     "feed": "csv_bbc",            "group": "grp_csv",    "log": "1"},
+        "csv_h3x":              {"domain": "h3xfeed.example",     "feed": "csv_h3x",            "group": "grp_csv",    "log": "1"},
+        "csv_otx":              {"domain": "otxfeed.example",     "feed": "csv_otx",            "group": "grp_csv",    "log": "1"},
+        "csv_pon":              {"domain": "ponfeed.example",     "feed": "csv_pon",            "group": "grp_csv",    "log": "1"},
+        "csv_et":               {"domain": "etfeed.example",      "feed": "csv_et",             "group": "grp_csv",    "log": "1"},
+        "custom_list":          {"domain": "customlist.example",  "feed": "custom_list",        "group": "grp_custom", "log": "1"},
+        "abp_feed":             {"domain": "anchor.abp.example",  "feed": "abp_feed",           "group": "grp_abp",    "log": "1"},
+        "mixed_plain":          {"domain": "mixedhost.example",   "feed": "mixed_plain",        "group": "grp_mixed",  "log": "1"},
+        "permit_feed":          {"domain": "allowme.example",     "feed": "permit_feed",        "group": "grp_permit"},
+        "wirecap_feed":         {"domain": null,                  "feed": "wirecap_feed",       "group": "grp_edge",   "log": "1"},
+        "reused_manifest_abp":  {"domain": "reused.example",      "feed": "reused_manifest_abp","group": "grp_reuse",  "log": "1"}
+    }
+}
