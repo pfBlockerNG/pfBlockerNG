@@ -139,42 +139,43 @@ def unique_domain(label: str = "pfbsmoke") -> str:
 
 
 # --------------------------------------------------------------------------- #
-# ABP feed construction (ADR-07)
+# ABP feed construction (ADR-07/ADR-62)
 # --------------------------------------------------------------------------- #
-# A feed is parsed as Adblock-Plus syntax ONLY when pfBlockerNG header-sniffs an
-# ABP marker on the first non-'!' line of the downloaded body (inc:7934-7938:
-# '[Adblock Plus ' / '[Adblock Plus]' / '[uBlock Origin' / '! Title: AdGuard').
-# That sets $easylist -> the feed is tagged format_hint='abp' in the manifest
-# (inc:8414) and its RAW lines flow to the Python ABP parser (parse_abp); the old
-# PHP lite parser is gone. So an ABP smoke feed is just a plain local feed whose
-# body STARTS with this header line — no per-row 'format' override is needed (the
-# row stays 'auto'; detection is content-based, not config-based).
+# ADR-62 deleted the feed-level ABP header sniff ($easylist/format_hint='abp');
+# every feed now takes the SAME per-line path, and an ABP-shaped line (||/@@
+# anchors, /regex/, ##-family) is captured verbatim regardless of which feed it
+# sits in. The ``[Adblock Plus 2.0]`` header line itself is just an ordinary
+# bracket-wrapped control line now, dropped by the universal control-line skip
+# (pfb_dnsbl_is_skippable_control_line) like any other '[...]' — it carries no
+# special meaning, but keeping it documents the shape real ABP feeds ship with.
 
 ABP_HEADER = "[Adblock Plus 2.0]"
 
 
 def abp_feed(*lines: str) -> str:
-    """Build an ABP-tagged feed body: the ``[Adblock Plus 2.0]`` header sniffed by
-    pfBlockerNG (inc:7934) followed by raw ABP ``lines`` (``||d^`` / ``@@||d^`` /
-    ``/re/`` / ``||d^$important`` / ``0.0.0.0 host`` ...), one per line.
+    """Build a realistic ABP-style feed body: the ``[Adblock Plus 2.0]`` marker
+    line followed by raw ABP ``lines`` (``||d^`` / ``@@||d^`` / ``/re/`` /
+    ``||d^$important`` / ``0.0.0.0 host`` ...), one per line.
 
-    Deliver via :func:`write_local_feed` and pass the path as a feed/extra-row URL;
-    the body's header makes pfBlockerNG tag the feed ABP so the lines reach
-    ``parse_abp`` intact.
+    Deliver via :func:`write_local_feed` and pass the path as a feed/extra-row
+    URL; each ABP-shaped line is captured and routed to ``parse_abp`` on its own
+    merits (ADR-62 per-line capture, not a feed-level header sniff) — the header
+    line itself carries no special meaning, but real ABP feeds ship with one.
     """
     return ABP_HEADER + "\n" + "\n".join(lines) + "\n"
 
 
-# UTF-8 BOM (EF BB BF). Real-world feeds occasionally emit it before the first line;
-# the header sniff (pfb_dnsbl_is_abp_header) must look THROUGH it (ADR-21 hardening).
+# UTF-8 BOM (EF BB BF). Real-world feeds occasionally emit it before the first
+# line; the per-line BOM-strip (pfb_dnsbl_strip_bom) must look THROUGH it so the
+# header line still classifies as an ordinary skippable '[...]' control line.
 ABP_BOM = "\ufeff"
 
 
 def abp_feed_bom(*lines: str) -> str:
     """:func:`abp_feed` with a leading UTF-8 BOM before the ``[Adblock Plus 2.0]``
-    header. A BOM that masked the header would leave the feed tagged ``plain``, so a
-    non-anchor ABP rule (e.g. a feed ``/regex/``) would be DROPPED instead of compiled
-    — the live distinguisher for the header sniff's BOM tolerance."""
+    header. A BOM that masked the bracket shape would leave the header line
+    un-skipped and reaching domain validation as garbage — the live
+    distinguisher for the per-line BOM-strip running before line classification."""
     return ABP_BOM + abp_feed(*lines)
 
 

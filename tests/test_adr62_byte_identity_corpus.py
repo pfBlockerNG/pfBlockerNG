@@ -6,10 +6,10 @@ per-feed metadata in ``feeds.json`` plus the ``raw/<header>.raw`` files, which
 are the ACTUAL bytes ``pfb_unbound_python_sources()`` produces (captured by
 ``tests/php/Adr62DnsblCorpusManifestTest.php`` running the real PHP function --
 never hand-duplicated here). This pins the domain/allow-set per coverage-matrix
-row, byte-identical to ``origin/devel`` modulo the ADR's delta table: D1 stays
-TODAY's behaviour (Phase 5's concern); D2/D4 assert their NEW outcome as of
-Phase 4 (the ``mixed_plain``/``permit_feed`` fixtures were regenerated via the
-real broadened writer -- tagged by delta ID).
+row, byte-identical to ``origin/devel`` modulo the ADR's delta table: D1
+(``abp_feed``), D2, and D4 all assert their NEW outcome (the ``abp_feed``/
+``mixed_plain``/``permit_feed`` fixtures were regenerated via the real
+writer -- tagged by delta ID).
 
 The DNSBL download loop itself has no off-appliance driver (ADR.md SS6 Phase 1);
 the raw-feed -> ".txt"/".raw" step is DEFERRED to a live-VM smoke row (see the
@@ -182,19 +182,33 @@ def test_abp_feed_element_hiding_line_produces_no_domain() -> None:
     assert not _allowed(result, "some.abp.example")
 
 
-def test_abp_feed_bare_domain_is_wildcard_zone_delta_d1() -> None:
-    """delta D1 (ADR.md SS2): a bare hosts/plain line in an ABP-classified feed
-    is TODAY a wildcard ZONE via parse_abp (#718) -- Phase 5 flips this to the
-    plain classify() path (registrable-parent ZONE / deeper-sub DATA) once the
-    feed-level classifier is deleted. This pins the BEFORE state. UNCHANGED by
-    Phase 3: this feed's whole-feed 'abp' route is untouched by the extended
-    plain-loop predicate -- see test_adr62_parity_oracle.py's
-    test_hostile_bare_deep_subdomain_stays_on_plain_path_delta_d1 for the NEW
-    (plain-feed) outcome on synthetic input."""
+def test_abp_feed_bare_registrable_parent_stays_zone_delta_d1() -> None:
+    """delta D1 (ADR.md SS2), registrable-parent case: a bare 2-label line in a
+    feed that WAS header-classified ABP used to reach a wildcard ZONE via
+    parse_abp (#718); the classifier is now deleted, so the same line takes
+    the plain classify() path -- a 2-label domain is UNCONDITIONALLY its own
+    registrable parent, so the observable stays ZONE (same as before)."""
     result = _run_corpus_build()
-    assert "bare-domain.abp.example" in result.zone_db, (
-        "delta D1: TODAY a bare domain inside an ABP feed must be a wildcard ZONE key "
-        "(parse_abp wildcard=True), not a classify()-derived registrable parent"
+    assert "abproot.example" in result.zone_db, (
+        "delta D1: a registrable-parent bare line in a former-ABP feed must still "
+        "land in zone_db under the plain classify() path"
+    )
+
+
+def test_abp_feed_bare_deeper_subdomain_flips_zone_to_data_delta_d1() -> None:
+    """delta D1 (ADR.md SS2), deeper-sub case -- the REAL observable flip: a bare
+    deeper sub-domain line in a former-ABP feed was wildcard ZONE at ANY depth
+    via parse_abp (#718); the plain classify() path only ZONEs a registrable
+    parent (a known public suffix's parent) -- with no matching suffix (this
+    corpus's tld_master is empty) a deeper sub-domain is exact DATA instead."""
+    result = _run_corpus_build()
+    assert "bare-domain.abp.example" in result.data_db, (
+        "delta D1: a deeper bare sub-domain in a former-ABP feed must land in "
+        "data_db (exact), not zone_db (wildcard), under the plain classify() path"
+    )
+    assert "bare-domain.abp.example" not in result.zone_db, (
+        "delta D1: the deeper bare sub-domain must NOT be wildcard-ZONE anymore "
+        "-- that was parse_abp's #718 behaviour, now retired with the classifier"
     )
 
 

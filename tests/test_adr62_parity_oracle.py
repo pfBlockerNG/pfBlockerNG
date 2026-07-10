@@ -2,14 +2,12 @@
 
 Two halves, per the Phase-3 brief:
 
-1. **Corpus parity** (Semantics #1): re-runs the Phase-1 corpus
+1. **Corpus parity** (Semantics #1): re-runs the corpus
    (``tests/fixtures/dnsbl_corpus/``) through ``build()``'s extended routing
    and asserts the domain/allow SET produced is byte-identical to
-   ``origin/devel``, modulo the delta table. As of Phase 4 (which wired the
-   broadened PHP capture and regenerated the ``mixed_plain``/``permit_feed``
-   corpus fixtures via the real writer), D2/D4 flip to their NEW outcome here
-   too -- see the golden-set comment below. D1 still does not move (Phase 5's
-   classifier-deletion territory).
+   ``origin/devel``, modulo the delta table. D2/D4 (mixed_plain/permit_feed)
+   and D1 (abp_feed, classifier now deleted) all carry their NEW outcome here
+   -- see the golden-set comment below.
 
 2. **Delta-NEW-outcome + hostile-input oracle**: a SYNTHETIC-raw-content
    oracle (bypassing the corpus/manifest writer entirely) that predates the
@@ -88,9 +86,12 @@ _NAME_253 = ".".join(["b" * 61] * 4) + "." + "b" * 5
 # Golden per-feed domain/allow sets (Semantics #1): captured by running the
 # REAL build() over the corpus's committed raw/*.raw bytes (the same fixtures
 # Adr62DnsblCorpusManifestTest.php's PHP run produced) -- not hand-derived.
-# Every entry equals origin/devel's value except mixed_plain/permit_feed,
-# whose D2/D4 rows carry their Phase-4 NEW outcome (the fixtures were
-# regenerated via the real broadened writer -- see feeds.json's "row" note).
+# Every entry equals origin/devel's value except mixed_plain/permit_feed
+# (D2/D4) and abp_feed (D1, the classifier-deletion delta -- "abproot.example"
+# is new; "bare-domain.abp.example" stays a member of the set but moves from
+# zone_db to data_db, see test_adr62_byte_identity_corpus.py's dedicated
+# assertion for that finer-grained split), each carrying its NEW outcome (the
+# fixtures were regenerated via the real writer -- see feeds.json's "row" note).
 _GOLDEN_PER_FEED: dict[str, dict[str, set[str]]] = {
     "plain_hosts": {"blocked": {"plainhost1.example", "plainhost2.example"}, "allowed": set()},
     "csv_pt": {"blocked": {"ptfeed.example"}, "allowed": set()},
@@ -105,6 +106,7 @@ _GOLDEN_PER_FEED: dict[str, dict[str, set[str]]] = {
             "anchor.abp.example",
             "regexblock.abp.example",
             "important.abp.example",
+            "abproot.example",
             "bare-domain.abp.example",
         },
         "allowed": {"exception.abp.example", "regexallow.abp.example"},
@@ -405,9 +407,10 @@ def test_hostile_bare_deep_subdomain_stays_on_plain_path_delta_d1() -> None:
     """bare 'sub.deep.example.com' in a plain feed (brief hostile row, delta
     D1): _dnsbl_is_abp_rule_line() is False for a bare domain, so it takes
     classify() (deeper sub with no known public suffix -> exact DATA), NEVER
-    parse_abp's wildcard=True ZONE. Contrast with abp_feed's bare-domain row
-    (test_abp_feed_bare_domain_is_wildcard_zone_delta_d1), whose whole-feed
-    'abp' route is untouched by this phase."""
+    parse_abp's wildcard=True ZONE. Mirrors the corpus's own former-ABP-feed
+    case (test_adr62_byte_identity_corpus.py::
+    test_abp_feed_bare_deeper_subdomain_flips_zone_to_data_delta_d1), now that
+    the classifier is deleted and every feed takes this same plain path."""
     line = "sub.deep.example.com"
     assert _dnsbl_is_abp_rule_line(line) is False
     result = _build_synthetic([_plain_feed_row("bare_deep")], {"bare_deep": [line]})

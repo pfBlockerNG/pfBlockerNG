@@ -18,11 +18,12 @@ use PHPUnit\Framework\TestCase;
  * fixtures under tests/fixtures/dnsbl_corpus/raw/. This is the falsification
  * harness later phases must keep green (modulo the ADR's delta table).
  *
- * Delta-table rows: D1 asserts origin/devel's TODAY behaviour (Phase 5's
- * classifier-deletion territory); D2/D4 (mixed_plain/permit_feed) assert
- * their Phase-4 NEW outcome (verbatim capture) at the surface this test owns
- * (manifest-writer passthrough) -- their PARSED verdict (block/allow/skip) is
- * asserted downstream in tests/test_adr62_byte_identity_corpus.py (surface a).
+ * Delta-table rows: D1 (abp_feed, classifier deleted), D2, and D4
+ * (mixed_plain/permit_feed) all assert their NEW outcome (verbatim capture,
+ * or -- for D1's now-plain bare-domain rows -- the 6-col dialect) at the
+ * surface this test owns (manifest-writer passthrough); their PARSED verdict
+ * (block/allow/skip, zone vs data) is asserted downstream in
+ * tests/test_adr62_byte_identity_corpus.py (surface a).
  */
 #[CoversFunction('pfb_unbound_python_sources')]
 final class Adr62DnsblCorpusManifestTest extends TestCase
