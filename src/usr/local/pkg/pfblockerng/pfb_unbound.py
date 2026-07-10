@@ -3774,10 +3774,10 @@ def _dnsbl_is_ipv4(token: str) -> bool:
     if len(parts) != 4:
         return False
     for p in parts:
-        # issue #1071: gate int() behind an ASCII-decimal test — str.isdigit() is True for
-        # non-decimal Unicode digits (², circled) that int() rejects with ValueError, so a
-        # UTF-8 feed line like "1.1.1.²" would otherwise abort the whole build().
-        if not (p.isascii() and p.isdigit()) or not (0 <= int(p) <= 255) or (len(p) > 1 and p[0] == "0"):
+        # issue #1071: int() runs only behind an ASCII-decimal test and a length cap —
+        # str.isdigit() is True for non-decimal Unicode digits int() rejects, and a >4300
+        # digit octet trips CPython's int-conversion limit; either ValueError aborts build().
+        if not (p.isascii() and p.isdigit()) or len(p) > 3 or not (0 <= int(p) <= 255) or (len(p) > 1 and p[0] == "0"):
             return False
     return True
 
