@@ -1,0 +1,30 @@
+ADR-62 PHASE 5 — ORCHESTRATOR GATE RECORD
+Verdict: PASS
+Route: phase-step workflow wf_4cda0dfe-e3b (Sonnet implementer + independent Sonnet verifier); orchestrator validated the schema-forced gate record and wrote this file.
+Commits gated: d0abc77d ("pfblockerng: TLD pass skips feed-less lines unconditionally (ADR-62 P5)"), 50f7d9c9 ("pfblockerng: retire DNSBL feed-level ABP classification + .abp marker (ADR-62 P5)"), 2e5b2e24 (docs handoff).
+
+0. RE-SCOPE NOTE (planner, pre-briefed). Issue #1060 is CLOSED — devel's PR #1066 comma-prefix guard already fixed the ADR's stated red-test scenario. Commit 1 was re-scoped to the SURVIVING defect: the empty-feed-column skip was gated on !empty($abp_feeds). ADR §1.5/§6-P5 text predates PR #1066 — amendment lands in Phase 7's doc pass (recorded in carry-forward).
+
+1. TRANSACTION — PASS. HEAD == origin == 2e5b2e24; tree clean; RESULTS/05_Results.txt committed; all fixed handoff fields present. Deviation from the one-commit pattern (2 code commits by phase design + separate docs-handoff commit) accepted.
+
+2. CANONICAL GATES (verifier re-ran all) — PASS. phpunit Tests: 2629, Assertions: 19363, 0 failures; phpstan OK; phpcs 0 violations; pytest 0 failures (verifier 2614/5 vs handoff 2620/4 — same documented env-only skip class as P4, dnspython/FreeBSD-ports/build-repo); ruff/mypy clean; narration/retired-token/version-literal checkers exit 0.
+
+3. RED PROOFS — behaviour-changing; verifier RE-EXECUTED both:
+   - Commit 1: checkout d0abc77d~1 -- inc (test kept) → testEmptyFeedColumnRowSkippedUnconditionallyWithNoAbpMarkerPresent FAILED ("does not contain 'tldbad'" — output genuinely contains it; non-vacuous, twolabelzone.example present in same output); restore → GREEN.
+   - Commit 2 / D1: the naive HEAD~1 dance was a no-op (HEAD = docs commit); verifier resolved the correct parent and re-executed the D1 flip red→green against pre-commit-2 code.
+
+4. DIFF VS PLAN (both commits read in full) — PASS.
+   - Commit 1: glob + marker-gate deleted; $lfeed==='' skip unconditional; 11-line marker prose replaced with 4-line current rule.
+   - Commit 2: pfb_dnsbl_is_abp_header() + DnsblIsAbpHeaderTest.php + $validate_header window + $easylist (all sites) deleted; verbatim paths collapsed with pfb_dnsbl_abp_extract_ip IP-extract surviving (Semantics #2 probed: ||1.2.3.4^ and ||2604:2dc0::^ still collect; pure-function oracle 64 tests green); manifest tag + reuse path emit 'plain' unconditionally; marker write/unlink deleted; opportunistic sweep at BOTH reuse and download/update paths.
+   - Corpus: txt/abp_feed.txt re-derived; raw regenerated via real functions; regen byte-diff = only abp_feed changed, 13 feeds byte-unchanged (authoritative delta-budget proof); D1 split into BOTH depth cases (registrable parent stays ZONE; deeper sub flips ZONE→DATA); D2–D5 rows untouched (46-test combined run); reused_manifest_abp stale-'abp' fixture untouched and green (Semantics #7, both Python tolerance tests pasted).
+   - grep proofs: $easylist/pfb_dnsbl_is_abp_header/$validate_header → only an UNRELATED local foreach var named $easylist in pfblockerng_install.inc's config-migration (different symbol, ADR's own carve-out class — verifier-confirmed); '.abp' → only the 2 intentional sweep unlink_if_exists() calls + comment; git grep is_abp_header (excl. .ADRs) → zero live hits (3 stale smoke-helper comments fixed to satisfy it).
+
+5. TEST HONESTY — PASS. Commit-1 negative assertion proven failable by its own red run; TldAnalysisAbpVerbatimTest honestly INVERTED (pins the new stray-marker-must-not-gate guarantee — the old pinned mechanism was deliberately deleted); no monkeypatched faults.
+
+6. CONVENTIONS — PASS. No new public symbols (deletion phase); stale comments reconciled (tld_analysis header, strip_bom dangling ref, 3 smoke-helper docstrings); checkers clean.
+
+7. SKIPPED — none.
+
+DEVIATIONS ACCEPTED: (1) sweep extended to the reuse path (site choice delegated by brief); (2) pfb_unbound_python_sources' now-dead 'abp' branch left for Phase 6's charter (dead-code sweep — inc:~7141); (3) smoke-helper comment fixes to satisfy the grep proof; (4) two pre-existing marker-behaviour tests rewritten to pin the new guarantee.
+
+Carry-forward for Phase 6: dead 'abp' branch @inc:~7141 is prime sweep material; include the former-ABP feed shape class in the perf benchmark mix. For Phase 7: ADR §1.5/§6-P5 amendment (PR #1066 predates text); architecture-notes "DNSBL/ABP pipeline" still describes the retired mechanism; §7 smoke rows (esp. "NO .abp marker present" assertions + D5 line-count row + leading-blank CSV feed if cheap); D1 two-case shape into the release-notes delta table.
