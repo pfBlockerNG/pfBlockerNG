@@ -1319,10 +1319,12 @@ def init_standard(id: int, env: module_env) -> bool:
     # so the writer can confirm execution. Host path /var/unbound/pfb_py_control.applied.
     pfb["pfb_py_control_applied"] = "pfb_py_control.applied"
     pfb["pfb_py_count"] = "pfb_py_count"
-    # ADR-07: the ADMITTED (cap-filtered) feed+user regex total -- the count the
-    # DNSBL_Regex UI alias reads (inc:8329). It is the live size of regexDB +
-    # allowRegexDB AFTER both the user REGEX-ini load and the feed-regex merge, so
-    # patterns the static cap dropped are excluded (value changes by design, ADR §2).
+    # ADR-07: the ADMITTED (cap-filtered) feed+user regex total -- the count
+    # sync_package_pfblockerng()'s DNSBL_Regex alias-update block reads (falling
+    # back to the configured regex-line count when this file is stale/absent). It
+    # is the live size of regexDB + allowRegexDB AFTER both the user REGEX-ini
+    # load and the feed-regex merge, so patterns the static cap dropped are
+    # excluded (value changes by design, ADR §2).
     pfb["pfb_py_regex_count"] = "pfb_py_regex_count"
     # ADR-48 (issue #789): the per-entry reject tally artifact (BuildResult.rejects,
     # a JSON array of nonzero-total {feed, group, shape, wire_cap} rows) -- PHP reads
@@ -1667,7 +1669,7 @@ def init_standard(id: int, env: module_env) -> bool:
                 if dataDB or zoneDB or regexDB or allowRegexDB:
                     pfb["python_blacklist"] = True
 
-                # Emit pfb_py_count (the LOADED total) for the UI (inc:3149).
+                # Emit pfb_py_count (the LOADED total) pfb_update_unbound() reads for the UI.
                 dnsbl_emit_count(pfb["pfb_py_count"], build_result.counts)
                 # ADR-48 (issue #789): emit the per-entry reject tally artifact
                 # alongside the count -- PHP reads it after this run and emits
@@ -1687,13 +1689,14 @@ def init_standard(id: int, env: module_env) -> bool:
             # Whitelist/HSTS dicts -- or close their entries when the blacklist gate is off.
             _load_whitelist_and_hsts_dbs(dnsbl_built)
 
-            # ADR-07: emit the ADMITTED regex total for the DNSBL_Regex UI alias
-            # (inc:8329). regexDB now holds USER regex (REGEX-ini) + FEED block regex
-            # (merged from build()); allowRegexDB holds FEED @@/re/ allow regex. Both
-            # have already had over-cap patterns dropped at load when the static cap is
-            # on, so this live size is the cap-filtered admitted count (value changes by
-            # design, ADR §2). Emitted whenever the plugin is enabled so the alias is
-            # accurate even with feed regex but no user regex.
+            # ADR-07: emit the ADMITTED regex total for sync_package_pfblockerng()'s
+            # DNSBL_Regex alias-update block. regexDB now holds USER regex (REGEX-ini)
+            # + FEED block regex (merged from build()); allowRegexDB holds FEED @@/re/
+            # allow regex. Both have already had over-cap patterns dropped at load
+            # when the static cap is on, so this live size is the cap-filtered
+            # admitted count (value changes by design, ADR §2). Emitted whenever the
+            # plugin is enabled so the alias is accurate even with feed regex but no
+            # user regex.
             dnsbl_emit_count(pfb["pfb_py_regex_count"], len(regexDB) + len(allowRegexDB))
 
             # Validate SQLite3 database connections. A False validate (issue #900)
@@ -3579,8 +3582,8 @@ RULE_TARGET_REGEX = "regex"
 RULE_PROV_USER = "user"
 RULE_PROV_FEED = "feed"
 
-# Lower-cased label alphabet for the domain-shape gate (parity with PFB_FILTER_DOMAIN,
-# pfblockerng.inc:1138-1150, whose regex allows [a-zA-Z0-9_.-]). Underscore is deliberate:
+# Lower-cased label alphabet for the domain-shape gate (parity with pfb_filter()'s
+# PFB_FILTER_DOMAIN case, whose regex allows [a-zA-Z0-9_.-]). Underscore is deliberate:
 # DNS labels carry no protocol charset (RFC 2181 s11), underscored names are standardized
 # practice (RFC 8552) and appear on real blocklists -- this gates BLOCKLIST names matched
 # against QNAMEs, not hostnames, so strict LDH would be a coverage hole (#723).
@@ -3789,12 +3792,15 @@ def _dnsbl_is_ipv4(token: str) -> bool:
 
 
 def _dnsbl_parse_abp_line(line: str) -> str | None:
-    """Current basic-ABP token-strip (pfblockerng.inc:7706-7717).
+    """Legacy basic-ABP token-strip, upgrade-compat only (ADR-62).
 
-    Keep ONLY a plain ``||domain^`` network line and strip the ``||`` / ``^`` tokens
-    to a bare domain. IGNORE everything else exactly as today: ``@@`` exceptions,
-    ``##`` / ``#@#`` element-hiding, ``$options``, ``*`` and ``/`` (path / regex).
-    Returns the bare domain or ``None``. (The future ABP ADR replaces this.)
+    ADR-62 collapsed the live format_hint vocabulary to 'plain' and retired the
+    PHP '.abp' manifest marker that used to produce 'abp' -- this function is
+    reachable only when a pre-upgrade manifest is reused without a redownload.
+    Keeps ONLY a plain ``||domain^`` network line and strips the ``||`` / ``^``
+    tokens to a bare domain. IGNORES everything else: ``@@`` exceptions, ``##`` /
+    ``#@#`` element-hiding, ``$options``, ``*`` and ``/`` (path / regex). Returns
+    the bare domain or ``None``.
     """
     if not line.startswith("||") or not line.endswith("^"):
         return None
@@ -4127,10 +4133,14 @@ def parse_abp(
 
 
 def _dnsbl_strip_hosts_prefix(line: str) -> str:
-    """Hosts format: ``<sink-ip> <domain>`` -> take the domain token (inc:7899-7907).
+    """Hosts-format sink-IP strip: ``<sink-ip> <domain>`` -> take the domain token.
 
-    Handles ``0.0.0.0 domain`` and ``127.0.0.1 domain``; a non-IP first token keeps
-    the chars before the space (PHP's behaviour).
+    Approximates sync_package_pfblockerng()'s 'Typical Host Feed format' pass,
+    which strips per-feed on a Spamhaus-header-detected flag rather than a
+    per-line IP test. Handles ``0.0.0.0 domain`` and ``127.0.0.1 domain`` by
+    testing the first token instead: an IPv4 first token keeps the remainder;
+    anything else keeps the chars before the space. Matches PHP's output for
+    both known feed shapes; decided per-line here rather than per-feed.
     """
     if " " in line:
         first, _, rest = line.partition(" ")
@@ -4228,7 +4238,7 @@ def _normalise_verdict(value: str) -> tuple[str | None, str | None]:
 
 
 def normalise(value: str) -> str | None:
-    """Lower-case + PFB_FILTER_DOMAIN domain-shape gate (inc:1138-1150).
+    """Lower-case + pfb_filter()'s PFB_FILTER_DOMAIN domain-shape gate.
 
     Returns the validated, lower-cased domain or ``None`` when the token is not a
     valid domain (which is how stray non-domain entries -- including any IP that
@@ -4257,8 +4267,8 @@ def _dnsbl_load_tld_master(
     tld_blacklist: Iterable[str],
     tld_exclusion: Iterable[str],
 ) -> dict[str, dict[str, str]]:
-    """Build the public-suffix oracle tlds[tld][full-suffix] (tld_analysis:2630-2642),
-    minus any blacklisted or excluded TLD (inc:2749-2751 / 2791-2793)."""
+    """Build the public-suffix oracle tlds[tld][full-suffix], minus any blacklisted
+    or excluded TLD -- mirrors PHP's tld_analysis() master-list load loop."""
     blacklist = {t.strip(".") for t in tld_blacklist}
     exclusion_keys = {e.strip(".") for e in tld_exclusion}
     tlds: dict[str, dict[str, str]] = {}
@@ -4276,7 +4286,7 @@ def _dnsbl_load_tld_master(
 
 
 def _dnsbl_tld_search(tlds: dict[str, dict[str, str]], tld: str, dparts: list[str], j: int, k: int) -> str | None:
-    """tld_search (inc:2595-2603): if the j-label suffix is a known public suffix,
+    """Mirrors PHP's tld_search(): if the j-label suffix is a known public suffix,
     the registrable parent is the k-label slice."""
     tld_query = ".".join(dparts[-j:])
     if tld_query in tlds.get(tld, {}):
@@ -4287,9 +4297,10 @@ def _dnsbl_tld_search(tlds: dict[str, dict[str, str]], tld: str, dparts: list[st
 def classify(domain: str, tlds: dict[str, dict[str, str]], exclusion: set[str]) -> tuple[str, str]:
     """Return ``(DNSBL_CLASS_ZONE, registrable-parent)`` or ``(DNSBL_CLASS_DATA, domain)``.
 
-    Mirrors tld_analysis:2832-2874 exactly: a registrable parent -> wildcard ZONE; a
-    deeper sub-domain whose parent is not a known public suffix -> exact DATA; a
-    whole-domain TLD exclusion forces exact DATA (transparent, not wildcarded).
+    Mirrors PHP's tld_analysis() zone/data split exactly: a registrable parent ->
+    wildcard ZONE; a deeper sub-domain whose parent is not a known public suffix ->
+    exact DATA; a whole-domain TLD exclusion forces exact DATA (transparent, not
+    wildcarded).
     """
     dparts = domain.split(".")
     dcnt = len(dparts)
@@ -4599,7 +4610,7 @@ def _dnsbl_normalise_whitelist(
     top1m_list: Iterable[str],
     top1m_enabled: bool,
 ) -> dict[str, dict[str, Any]]:
-    """User-whitelist normalisation (pfb_unbound_python_whitelist, inc:2259) into the
+    """User-whitelist normalisation (mirrors PHP's pfb_unbound_python_whitelist()) into the
     query-time whiteDB shape: www-strip; leading-dot -> wildcard True else False.
     TOP1M entries are loaded ONLY when enabled (bare domains -> exact). No build-time
     list pruning -- this only populates whiteDB.
@@ -5006,8 +5017,9 @@ def build(
             next_index += 1
         return idx
 
-    # Whole-TLD block: a blacklisted TLD becomes a synthetic DNSBL_TLD zone entry
-    # (inc:2740 ``,<tld>,,1,DNSBL_TLD,DNSBL_TLD``).
+    # Whole-TLD block: a blacklisted TLD becomes a synthetic DNSBL_TLD zone entry,
+    # matching the row shape PHP's tld_analysis() writes for the same case
+    # (``,<tld>,,1,DNSBL_TLD,DNSBL_TLD``).
     for raw_tld in tld_blacklist:
         tld = raw_tld.strip(".")
         if not tld:
@@ -5369,14 +5381,14 @@ def dnsbl_build_from_manifest(manifest_path: str) -> BuildResult | None:
 
 
 def dnsbl_emit_count(count_path: str, count: int) -> bool:
-    """Write the Python-emitted entry total to ``pfb_py_count`` (the UI reads it at
-    pfblockerng.inc:3149).
+    """Write the Python-emitted entry total to ``pfb_py_count``, which
+    pfb_update_unbound() reads for the UI.
 
     ADR-06 redefines ``pfb_py_count`` to the LOADED entry total (len(dataDB)+len(
-    zoneDB)); its value legitimately RISES vs today because the lists are no longer
-    dedup/collapse/whitelist/TOP1M-pruned. The sync-check at inc:3149-3156 still
-    subtracts this value -- it must be reconciled once shell/PHP is slimmed to
-    match. Returns True on success.
+    zoneDB)); its value legitimately differs from the raw feed line count because
+    the lists are no longer dedup/collapse/whitelist/TOP1M-pruned. PHP's old
+    subtract-and-compare sync-check no longer applies -- pfb_update_unbound() now
+    just reports both numbers for visibility. Returns True on success.
     """
     try:
         with open(count_path, "w", encoding="utf-8") as fh:
