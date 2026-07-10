@@ -1991,6 +1991,25 @@ function pfb_dnsbl_ndjson_parse_row(string $line): ?array {
 	return $row;
 }
 
+// #1083: grep needle for a schema v1 domain row's "domain" field. json_encode's escaping
+// keeps the needle byte-identical to what pfb_dnsbl_ndjson_emit_domain_row() wrote, so a
+// domain carrying a JSON-special character still finds (only) its own row.
+function pfb_dnsbl_ndjson_domain_needle(string $domain): string {
+	return '"domain":' . json_encode($domain, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+}
+
+// #1083: a grep hit is trustworthy only once parsed AND its domain field matches exactly --
+// an 'abp' row's raw payload cannot literally embed the needle (JSON quoting escapes it),
+// but a corrupt/foreign line could still substring-match; refuse anything that doesn't
+// decode to the SAME domain-kind row.
+function pfb_dnsbl_ndjson_domain_row_verified(string $line, string $domain): ?array {
+	$row = pfb_dnsbl_ndjson_parse_row($line);
+	if ($row !== NULL && $row['kind'] === 'domain' && $row['domain'] === $domain) {
+		return $row;
+	}
+	return NULL;
+}
+
 // DNSBLIP's "download" is a local-file copy of a just-rebuilt source, not a network
 // fetch -- the reuse-skip optimization (meant for real feeds) must never apply to it,
 // or a same-pass rebuild is silently stranded until the next .ip source change. (#1002)
@@ -6784,8 +6803,7 @@ function pfb_dnsbl_is_skippable_control_line(string $line): bool {
 // _dnsbl_is_abp_rule_line().
 function pfb_dnsbl_is_abp_rule_line(string $line): bool {
 	// issue #1067: a leading comma is never valid ABP syntax (empty first cosmetic
-	// domain-list entry) -- a comma-first verbatim capture would collide with the
-	// plain CSV dialect downstream.
+	// domain-list entry) -- excluded up front regardless of downstream encoding.
 	if (str_starts_with($line, ',')) {
 		return FALSE;
 	}
@@ -7208,8 +7226,8 @@ function pfb_feed_manifest_row(string $header, string $group, string $log_flag,
 // ADR-06: Build the shell->Python contract: the per-feed manifest ($pfb['unbound_py_sources'])
 // plus a per-feed IP-stripped raw domain file that pfb_unbound.py's dnsbl_build_from_manifest
 // consumes. Every feed is 'plain' (ADR-62): raw is the bare-domain extraction of the parsed
-// '.txt' (IPs already routed elsewhere), with ABP-shaped lines (pfb_dnsbl_is_abp_rule_line)
-// passed through verbatim so Python's parse_abp sees them intact. $feeds rows:
+// '.txt' NDJSON (IPs already routed elsewhere; #1083), with 'abp' rows' raw payload passed
+// through verbatim so Python's parse_abp sees them intact. $feeds rows:
 // header/group/log/format/provenance ('user' Custom_List -> band 5, 'feed' download -> band 1).
 // PFBL-01: RE-validates each header via pfb_sanitise_feed_header() (PFB_FILTER_WORD, not
 // DOMAIN); a failing row is SKIPPED + logged before any file touch; pinned by
@@ -7258,25 +7276,19 @@ function pfb_unbound_python_sources($feeds) {
 		}
 		if (($in_h = @fopen($src, 'r')) !== FALSE) {
 			while (($line = @fgets($in_h)) !== FALSE) {
-				// ADR-62 Decision 2: self-identifying ABP-shape verbatim line
-				// from a non-ABP feed (the download loop wrote it through
-				// untouched, NOT as 6-col CSV) -- pass it straight to the
-				// '.raw' without CSV extraction. Python's build() routes it
-				// to parse_abp().
-				$rawline = rtrim($line, "\r\n");
-				if (pfb_dnsbl_is_abp_rule_line($rawline)) {
-					@fwrite($raw_h, "{$rawline}\n");
+				// #1083: an 'abp' row's raw payload (the download loop captured it
+				// verbatim) passes straight through to the '.raw' -- Python's build()
+				// routes it to parse_abp(). A 'domain' row extracts its bare domain,
+				// already IP-free and cleaned/validated by the download loop. NULL
+				// (undecodable, e.g. stale pre-flip residue) is silently skipped.
+				$row = pfb_dnsbl_ndjson_parse_row($line);
+				if ($row === NULL) {
 					continue;
 				}
-				// 'plain': extract bare domains (col1) from the 6-col CSV; this is
-				// already IP-free (IPs went to the firewall path) and already
-				// cleaned/validated by the download loop.
-				// issue #1067: a non-captured line still carrying '#' is stale verbatim
-				// ABP residue from a pre-guard staging file, never a machine CSV row --
-				// skip it rather than extract col1 into a blockable "domain".
-				$cols = explode(',', $line, 3);
-				if (strpos($line, '#') === FALSE && isset($cols[1]) && $cols[1] !== '') {
-					@fwrite($raw_h, "{$cols[1]}\n");
+				if ($row['kind'] === 'abp') {
+					@fwrite($raw_h, "{$row['raw']}\n");
+				} else {
+					@fwrite($raw_h, "{$row['domain']}\n");
 				}
 			}
 			@fclose($in_h);
@@ -7819,12 +7831,7 @@ function tld_analysis() {
 	$domain_cnt = 0;
 	$pfb_found = FALSE;				// Flag to determine if TLD 'redirect' zones found
 
-	rmdir_recursive("{$pfb['dnsbl_tmpdir']}");
-
 	unlink_if_exists("{$pfb['dnsbl_file']}.tsp");
-	unlink_if_exists("{$pfb['dnsbl_tld_txt']}.*");
-	unlink_if_exists("{$pfb['dnsbl_tmp']}.sup");
-	unlink_if_exists("{$pfb['dnsbl_tmp']}.adup");
 
 	// Master TLD Domain list
 	if (($t_handle = @fopen("{$pfb['dnsbl_tld_data']}", 'r')) !== FALSE) {
@@ -7882,7 +7889,6 @@ function tld_analysis() {
 	// Process TLD Blacklist(s). If configured the whole TLD will be blocked
 	if (!empty($tld_blacklist)) {
 
-		$tld_list	= '';
 		$tld_cnt	= 0;
 		$tld_segments	= 0;
 		pfb_logger(" Blocking full TLD/Sub-Domain(s)... |", 1);
@@ -7899,10 +7905,7 @@ function tld_analysis() {
 			$tld_segments = @max((array((substr_count($tld, '.') +1), $tld_segments) ?: 1));
 
 			pfb_logger("{$tld}|", 1);
-			@fwrite($p_zone, ",{$tld},,1,DNSBL_TLD,DNSBL_TLD\n");
-
-			// Collect List of TLDs and save to DNSBL folder
-			$tld_list .= ",{$tld},,\n";
+			@fwrite($p_zone, pfb_dnsbl_ndjson_emit_domain_row($tld, '1', 'DNSBL_TLD', 'DNSBL_TLD'));
 
 			// Remove any 'TLD Blacklists' from the 'TLD master list'
 			if (isset($tlds[$tld])) {
@@ -7912,10 +7915,7 @@ function tld_analysis() {
 
 		}
 
-		// Save a list of TLDs in DNSBL folder (DNSBL total line count verification)
-		if (!empty($tld_list)) {
-			@file_put_contents("{$pfb['dnsbl_tld_txt']}", $tld_list, LOCK_EX);
-
+		if ($tld_cnt > 0) {
 			// Add 'TLD' to Alias/Feeds array
 			if (!is_array($pfb['tld_update']['DNSBL_TLD'])) {
 				$pfb['tld_update']['DNSBL_TLD'] = array();
@@ -7925,13 +7925,7 @@ function tld_analysis() {
 			$pfb['tld_update']['DNSBL_TLD']['count']	= $tld_cnt;
 			$pfb['alias_dnsbl_all'][]			= 'DNSBL_TLD';
 		}
-		else {
-			unlink_if_exists("{$pfb['dnsbl_tld_txt']}");
-		}
 		pfb_logger(" completed\n", 1);
-	}
-	else {
-		unlink_if_exists("{$pfb['dnsbl_tld_txt']}");
 	}
 
 	// Collect TLD Exclusion list and remove any 'TLD Exclusions' from the 'TLD master list'
@@ -7955,10 +7949,9 @@ function tld_analysis() {
 
 	pfb_logger("TLD analysis", 1);
 
-	// This loop parses ONLY the plain ',domain,,log,feed,group' CSV dialect.
-	// Skip any line that isn't comma-first (issue #1060; cheap, hot loop) or
-	// whose feed column is empty/unset (a verbatim-captured ABP/regex line,
-	// ADR-62) -- Python's own parse_abp/TLD pass classifies those independently.
+	// #1083: a NULL row (undecodable, or a verbatim-captured ABP/regex line --
+	// ADR-62) is skipped -- Python's own parse_abp/TLD pass classifies those
+	// independently.
 
 	// DNSBL python: Analyse DNSBL into data (transparent/exact) and zone (wildcard) files
 
@@ -7968,15 +7961,8 @@ function tld_analysis() {
 				continue;
 			}
 
-			// ADR-07/ADR-21: plain CSV rows (',domain,,log,feed,group') always start
-			// with ','; the known ABP raw shapes (||x^, @@||x^, /re/, '0.0.0.0 h')
-			// don't -- skip those by prefix (issue #1060; cheap, hot loop).
-			if (strncmp($line, ',', 1) !== 0) {
-				continue;
-			}
-			$fparts	= explode(',', $line, 6);
-			$lfeed	= isset($fparts[4]) ? $fparts[4] : '';
-			if ($lfeed === '') {
+			$row = pfb_dnsbl_ndjson_parse_row($line);
+			if ($row === NULL || $row['kind'] !== 'domain') {
 				continue;
 			}
 
@@ -7991,18 +7977,10 @@ function tld_analysis() {
 			}
 
 			// DNSBL python blocking mode
-			$eparts = explode(',', $line, 3);
-
-			// A well-formed row has all three parts; a degenerate comma-first
-			// line (e.g. bare ',') must not become a malformed output row.
-			if (!isset($eparts[2]) || $eparts[1] === '') {
-				continue;
-			}
-			$domain = $eparts[1];
+			$domain = $row['domain'];
 			$dparts = explode('.', $domain);
 			$dcnt   = count($dparts);
 			$tld    = end($dparts);
-			$d_info = $eparts[2]; // Logging Type/Header/Alias group details
 			$dfound	= '';
 
 
@@ -8039,13 +8017,13 @@ function tld_analysis() {
 				$pfb_found = TRUE;
 
 				// DNSBL python blocking mode
-				@fwrite($p_zone, ",{$dfound},{$d_info}");
+				@fwrite($p_zone, pfb_dnsbl_ndjson_emit_domain_row($dfound, $row['log'], $row['feed'], $row['group']));
 			}
 
 			// Create 'transparent zone' for Sub-Domain
 			else {
 				// DNSBL python blocking mode
-				@fwrite($p_data, ",{$domain},{$d_info}");
+				@fwrite($p_data, pfb_dnsbl_ndjson_emit_domain_row($domain, $row['log'], $row['feed'], $row['group']));
 			}
 
 			// Increment Domain counter
@@ -8499,8 +8477,6 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython) {
 	if ($pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on' && !$pfb['save']) {
 		if ($pfb['dnsbl_tld']) {
 			tld_analysis();
-		} else {
-			unlink_if_exists("{$pfb['dnsbl_tld_txt']}");
 		}
 	}
 
@@ -13547,14 +13523,14 @@ function pfb_dnsbl_prefetch_store(?array $seed = NULL): ?array {
 
 
 // Batch the DNSBL/TLD render-time grep lookups for $qdomains ahead of a page render pass
-// (issue #809): one grep pass per file instead of a per-row exec each. Data file: fixed-string
-// ",{domain},," match via `grep -shF` (issue #837 fixed a prior escaped-BRE match that let
-// non-dot metacharacters ride into the regex live). Zone file: batches every longest-first
-// label-suffix of every domain into one fixed-string pass. Negative results are cached too
-// ('covered'/'zone_covered' with no match) so the consult sites serve a genuine miss from
-// cache, never re-exec. A domain enters 'covered' only when it VALIDATES as PFB_FILTER_DOMAIN
-// — guards an embedded control char reaching the pattern file. Seeds
-// pfb_dnsbl_prefetch_store(); the caller resets it once rendering finishes.
+// (issue #809): one grep pass per file instead of a per-row exec each. Data file: the
+// pfb_dnsbl_ndjson_domain_needle() fixed-string match via `grep -shF` (issue #837 fixed a
+// prior escaped-BRE match that let non-dot metacharacters ride into the regex live). Zone
+// file: batches every longest-first label-suffix of every domain into one fixed-string pass.
+// Negative results are cached too ('covered'/'zone_covered' with no match) so the consult
+// sites serve a genuine miss from cache, never re-exec. A domain enters 'covered' only when
+// it VALIDATES as PFB_FILTER_DOMAIN — guards an embedded control char reaching the pattern
+// file. Seeds pfb_dnsbl_prefetch_store(); the caller resets it once rendering finishes.
 function pfb_dnsbl_prefetch(array $qdomains) {
 	global $pfb;
 
@@ -13570,7 +13546,7 @@ function pfb_dnsbl_prefetch(array $qdomains) {
 		}
 
 		$covered[$domain] = TRUE;
-		$data_patterns[] = ",{$domain},,";
+		$data_patterns[] = pfb_dnsbl_ndjson_domain_needle($domain);
 
 		// Label-walk suffixes for this domain -- same longest-first walk as the per-row
 		// zone-grep loop in pfb_dnsbl_parse_compute() (full domain, then each suffix
@@ -13583,7 +13559,7 @@ function pfb_dnsbl_prefetch(array $qdomains) {
 			$suffix = implode('.', $dparts);
 			if (!isset($zone_covered[$suffix])) {
 				$zone_covered[$suffix] = TRUE;
-				$zone_patterns[] = ",{$suffix},,";
+				$zone_patterns[] = pfb_dnsbl_ndjson_domain_needle($suffix);
 			}
 			unset($dparts[$i]);
 		}
@@ -13612,16 +13588,15 @@ function pfb_dnsbl_prefetch(array $qdomains) {
 }
 
 
-// One `grep -shF -f <patternfile>` pass over $file, returning a map of the matched
-// domain/suffix (field [1], same position pfb_dnsbl_parse_compute() destructures per-row) to
-// the FIRST line seen for it — grep preserves file order, so "first seen in this batched pass"
-// matches the per-row `-m1` result. $patterns are raw literal ",{domain-or-suffix},," strings
-// (no regex escaping); the per-row sites are also `-F` fixed-string (issue #837), so both sides
-// match identically by construction. Keying by field [1] works because in the
-// ",domain,,log_type,feed,group" line shape the only double comma is right after the domain
-// slot, so a ",X,," pattern can only match with X there. Returns NULL — distinct from a genuine
-// empty-array no-match — when the pattern file could not be created/written; the caller must
-// leave its store unseeded, never seed a false negative.
+// One `grep -shF -f <patternfile>` pass over $file, returning a map of the matched NDJSON
+// "domain" field to the FIRST parsed+verified row's line seen for it — grep preserves file
+// order, matching the per-row `-m1` result. $patterns are pfb_dnsbl_ndjson_domain_needle()
+// output (issue #837/#1083: fixed-string, no regex escaping); a matched line is kept only
+// once it parses as a domain-kind row (an 'abp' or corrupt line is dropped, never keyed by
+// pattern position -- a foreign line embedding the needle text can never spoof a result).
+// Returns NULL — distinct from a genuine empty-array no-match — when the pattern file could
+// not be created/written; the caller must leave its store unseeded, never seed a false
+// negative.
 function pfb_dnsbl_prefetch_grep(array $patterns, string $file): ?array {
 	global $pfb;
 
@@ -13648,9 +13623,12 @@ function pfb_dnsbl_prefetch_grep(array $patterns, string $file): ?array {
 		exec("{$pfb['grep']} -shF -f {$pattern_file_esc} {$file_esc} 2>&1", $lines);
 
 		foreach ($lines as $line) {
-			$fields = explode(',', $line);
-			$key = $fields[1] ?? NULL;
-			if ($key !== NULL && !isset($result[$key])) {
+			$row = pfb_dnsbl_ndjson_parse_row($line);
+			if ($row === NULL || $row['kind'] !== 'domain') {
+				continue;
+			}
+			$key = $row['domain'];
+			if (!isset($result[$key])) {
 				$result[$key] = $line;
 			}
 		}
@@ -13745,23 +13723,29 @@ function pfb_dnsbl_parse_compute($mode, $domain, $src_ip, $req_agent) {
 			if ($prefetch_store !== NULL && isset($prefetch_store['covered'][$domain])) {
 				$pfb_feed = $prefetch_store['data'][$domain] ?? '';
 			} else {
-				// issue #837: fixed-string match on the raw domain -- no regex escaping,
-				// so no BRE metacharacter (besides the dot this used to hand-escape) can
-				// false-match a different literal line, nor make the domain's own entry
-				// unfindable. Same shape as the batched prefetch grep.
-				$dquery_esc	= escapeshellarg(",{$domain},,");
+				// issue #837/#1083: fixed-string match on the NDJSON "domain" field --
+				// pfb_dnsbl_ndjson_domain_needle()'s docblock carries the escaping
+				// contract. Same shape as the batched prefetch grep.
+				$dquery_esc	= escapeshellarg(pfb_dnsbl_ndjson_domain_needle($domain));
 				$pfb_feed	= exec("{$pfb['grep']} -shm1 -F {$dquery_esc} {$pfb['unbound_py_data']} 2>&1");
 			}
 			$pfb_group = $pfb_mode = $pfb_final = 'Unknown';
 
-			// Exact Domain match found
-			if (!empty($pfb_feed)) {
+			// Exact Domain match found -- verified: a substring hit inside a foreign/
+			// corrupt line (e.g. an 'abp' raw payload) is refused, never treated as a
+			// match (#1083).
+			$dmatch = (!empty($pfb_feed)) ? pfb_dnsbl_ndjson_domain_row_verified($pfb_feed, $domain) : NULL;
+			if ($dmatch !== NULL) {
 
-				list($dummy, $pfb_final, $empty_placeholder, $log_type, $pfb_feed, $pfb_group) = explode(',', $pfb_feed);
-				$pfb_mode = 'DNSBL';
+				$pfb_final	= $dmatch['domain'];
+				$pfb_feed	= $dmatch['feed'];
+				$pfb_group	= $dmatch['group'];
+				$pfb_mode	= 'DNSBL';
 			}
 
 			else {
+				$pfb_feed = '';
+
 				$dparts = explode('.', $domain);
 
 				$dcnt = count($dparts);
@@ -13775,14 +13759,16 @@ function pfb_dnsbl_parse_compute($mode, $domain, $src_ip, $req_agent) {
 					if ($prefetch_store !== NULL && isset($prefetch_store['zone_covered'][$suffix])) {
 						$pfb_feed = $prefetch_store['zone'][$suffix] ?? '';
 					} else {
-						// issue #837: fixed-string match -- see the data-grep site above.
-						$dquery_esc	= escapeshellarg(",{$suffix},,");
+						// issue #837/#1083: fixed-string match -- see the data-grep site above.
+						$dquery_esc	= escapeshellarg(pfb_dnsbl_ndjson_domain_needle($suffix));
 						$pfb_feed	= exec("{$pfb['grep']} -shm1 -F {$dquery_esc} {$pfb['unbound_py_zone']} 2>&1");
 					}
 
-					// Collect Alias Group name
-					if (!empty($pfb_feed)) {
-						list($dummy, $d_found, $empty_placeholder, $log_type, $pfb_feed, $pfb_group) = explode(',', $pfb_feed);
+					// Collect Alias Group name -- verified, see the data-grep site above.
+					$zmatch = (!empty($pfb_feed)) ? pfb_dnsbl_ndjson_domain_row_verified($pfb_feed, $suffix) : NULL;
+					if ($zmatch !== NULL) {
+						$pfb_feed	= $zmatch['feed'];
+						$pfb_group	= $zmatch['group'];
 
 						$pfb_final = $suffix;
 						$pfb_mode = 'TLD';
@@ -13791,6 +13777,7 @@ function pfb_dnsbl_parse_compute($mode, $domain, $src_ip, $req_agent) {
 						}
 						break;
 					}
+					$pfb_feed = '';
 					unset($dparts[$i]);
 				}
 			}
@@ -14738,10 +14725,13 @@ function pfb_unlock($mode, $type, $remove='', $r_type='', $filename_unlock) {
 		$data = array();
 		if (($handle = @fopen("{$filename}", 'r')) !== FALSE) {
 			while (($line = @fgets($handle)) !== FALSE) {
-				if (strpos($line, $remove) !== FALSE) {
-					$data = explode(',', $line);
+				// #1083: $remove is a bare domain; NDJSON row equality (not a
+				// byte-substring match) decides removal.
+				$row = pfb_dnsbl_ndjson_parse_row($line);
+				if ($row !== NULL && $row['kind'] === 'domain' && $row['domain'] === $remove) {
+					$data = $row;
 				} else {
-					$filename_unlock .= "{$line}"; 
+					$filename_unlock .= "{$line}";
 				}
 			}
 		}
@@ -16587,7 +16577,7 @@ function sync_package_pfblockerng($cron='') {
 											// parse_abp() (never a domain/IP/path anchor -> silently
 											// skipped).
 											if (pfb_dnsbl_is_abp_rule_line($line)) {
-												$domain_data = "{$line}\n";
+												$domain_data = pfb_dnsbl_ndjson_emit_abp_row($line);
 												@fwrite($dhandle, $domain_data);
 												continue;
 											}
@@ -16905,8 +16895,8 @@ function sync_package_pfblockerng($cron='') {
 											}
 
 											// For DNSBL python, save domain and Logging type
-											$domain_data = ',' . strtolower($line)
-												. ",,{$logging_type},{$header},{$alias}\n";
+											$domain_data = pfb_dnsbl_ndjson_emit_domain_row(
+												strtolower($line), (string) $logging_type, $header, $alias);
 											@fwrite($dhandle, $domain_data);
 										}
 									}
@@ -17301,7 +17291,7 @@ function sync_package_pfblockerng($cron='') {
 				// stabilises. DO NOT delete pfb_py_wh: pfb_unbound_python() reads it to detect
 				// a whitelist change; missing=FALSE !== '' triggers $pfbpython=TRUE every pass.
 				pfb_unbound_python_sources(array());		// valid feeds:[] manifest + empty rawdir
-				@file_put_contents($pfb['unbound_py_data'], '', LOCK_EX);	// present-but-empty CSV
+				@file_put_contents($pfb['unbound_py_data'], '', LOCK_EX);	// present-but-empty NDJSON
 				unlink_if_exists($pfb['unbound_py_zone']);			// python mode: zone must be absent
 				unlink_if_exists($pfb['unbound_py_count']);
 				unlink_if_exists($pfb['unbound_py_regex_count']);		// ADR-07

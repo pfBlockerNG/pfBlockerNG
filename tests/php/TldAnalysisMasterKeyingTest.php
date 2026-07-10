@@ -68,7 +68,7 @@ final class TldAnalysisMasterKeyingTest extends TestCase
 
 		file_put_contents(
 			"{$pfb['dnsbl_file']}.raw",
-			",example-1068.test,,1,PlainFeed,GroupA\n"
+			pfb_dnsbl_ndjson_emit_domain_row('example-1068.test', '1', 'PlainFeed', 'GroupA')
 		);
 	}
 

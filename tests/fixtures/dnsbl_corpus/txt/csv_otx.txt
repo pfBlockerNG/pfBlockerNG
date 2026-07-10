@@ -1,1 +1,1 @@
-,otxfeed.example,,1,csv_otx,grp_csv
+{"kind":"domain","domain":"otxfeed.example","log":"1","feed":"csv_otx","group":"grp_csv"}

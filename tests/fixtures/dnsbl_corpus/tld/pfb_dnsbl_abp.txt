@@ -1,2 +1,2 @@
-||adline.zzsuffix.example^
-@@||safe.zzsuffix.example^
+{"kind":"abp","raw":"||adline.zzsuffix.example^"}
+{"kind":"abp","raw":"@@||safe.zzsuffix.example^"}

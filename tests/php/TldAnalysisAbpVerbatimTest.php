@@ -9,10 +9,10 @@ use PHPUnit\Framework\TestCase;
  * tld_analysis() — ABP-line skipping in the concatenated pfb_dnsbl.raw.
  *
  * Issue #1060: a plain feed can carry ADR-21 verbatim ABP lines (||x^ /
- * @@||x^) with ZERO '.abp' markers on disk. The empty/unset-feed-column skip
- * must run unconditionally — gated on a non-empty marker set, the verbatim
- * line reached the CSV explode and produced a malformed ',,' row in the
- * python data output.
+ * @@||x^) with ZERO '.abp' markers on disk. The skip must run
+ * unconditionally on any non-domain-kind NDJSON row (#1083) — gated on a
+ * non-empty marker set, the verbatim line reached the CSV explode and
+ * produced a malformed ',,' row in the python data output.
  */
 #[CoversFunction('tld_analysis')]
 final class TldAnalysisAbpVerbatimTest extends TestCase
@@ -99,14 +99,15 @@ final class TldAnalysisAbpVerbatimTest extends TestCase
 	/**
 	 * Scenario: verbatim ABP lines in a plain feed, no ABP feed configured.
 	 *
-	 * Given:  pfb_dnsbl.raw holding one plain CSV row plus verbatim ||x^ and
-	 *         @@||x^ lines — one with >=5 comma-separated ABP options, one a
-	 *         degenerate bare ',' line — and ZERO .abp markers in dnsdir
+	 * Given:  pfb_dnsbl.raw holding one plain NDJSON domain row plus 'abp'-kind
+	 *         rows for ||x^ and @@||x^ lines — one with >=5 comma-separated ABP
+	 *         options — and one line that is not valid NDJSON at all — and
+	 *         ZERO .abp markers in dnsdir
 	 * When:   tld_analysis() runs
-	 * Then:   the CSV row lands in the zone output and every other line is
-	 *         skipped — no malformed row in the data output, and no numeric
-	 *         undefined-array-key warning from the CSV explode (the #1060
-	 *         warning class; the bare ',' row is the fixture that reds it)
+	 * Then:   the domain row lands in the zone output and every other line is
+	 *         skipped — no malformed row in the data output, and no PHP
+	 *         warning (the #1060 warning class; #1083's parse_row() replaces
+	 *         the CSV explode that used to raise it)
 	 */
 	public function testVerbatimAbpLinesSkippedWithZeroAbpMarkers(): void
 	{
@@ -114,11 +115,11 @@ final class TldAnalysisAbpVerbatimTest extends TestCase
 
 		file_put_contents(
 			"{$pfb['dnsbl_file']}.raw",
-			",example.com,,1,PlainFeed,GroupA\n"
-			. "||evil-verbatim.example^\n"
-			. "@@||allow-verbatim.example^\n"
-			. "||opt-verbatim.example^\$script,third-party,domain=x.com,match-case,important,other\n"
-			. ",\n"
+			pfb_dnsbl_ndjson_emit_domain_row('example.com', '1', 'PlainFeed', 'GroupA')
+			. pfb_dnsbl_ndjson_emit_abp_row('||evil-verbatim.example^')
+			. pfb_dnsbl_ndjson_emit_abp_row('@@||allow-verbatim.example^')
+			. pfb_dnsbl_ndjson_emit_abp_row('||opt-verbatim.example^$script,third-party,domain=x.com,match-case,important,other')
+			. "not valid ndjson\n"
 		);
 
 		$warnings = $this->runTldAnalysis();
@@ -129,14 +130,14 @@ final class TldAnalysisAbpVerbatimTest extends TestCase
 			? (string) file_get_contents($pfb['unbound_py_data']) : '';
 
 		$this->assertSame(
-			",example.com,,1,PlainFeed,GroupA\n",
+			pfb_dnsbl_ndjson_emit_domain_row('example.com', '1', 'PlainFeed', 'GroupA'),
 			$zone,
-			"zone output must carry exactly the plain CSV row; got: " . var_export($zone, TRUE)
+			"zone output must carry exactly the plain domain row; got: " . var_export($zone, TRUE)
 		);
 		$this->assertSame(
 			'',
 			$data,
-			"verbatim ABP lines must be skipped, not CSV-mangled; got: " . var_export($data, TRUE)
+			"verbatim ABP lines must be skipped, not mangled into a data row; got: " . var_export($data, TRUE)
 		);
 
 		$numeric = array_values(array_filter(
@@ -146,20 +147,20 @@ final class TldAnalysisAbpVerbatimTest extends TestCase
 		$this->assertSame(
 			[],
 			$numeric,
-			'no verbatim line may reach the CSV explode; got: ' . var_export($numeric, TRUE)
+			'no verbatim line may raise an undefined-array-key warning; got: ' . var_export($numeric, TRUE)
 		);
 	}
 
 	/**
 	 * Scenario: a stray '.abp' marker on disk no longer gates classification.
 	 *
-	 * Given:  an AbpFeed.abp marker and a comma-first row naming that feed in
-	 *         column 4 (a shape the real manifest writer never produces for a
-	 *         marked feed -- verbatim ABP lines carry no comma -- but a marker
-	 *         may still linger from an older on-disk state)
+	 * Given:  an AbpFeed.abp marker and a domain-kind NDJSON row naming that
+	 *         feed (a shape the real manifest writer never produces for a
+	 *         marked feed -- verbatim ABP lines are 'abp'-kind rows -- but a
+	 *         marker may still linger from an older on-disk state)
 	 * When:   tld_analysis() runs
-	 * Then:   the row classifies normally; only the empty/unset-feed-column
-	 *         rule (not marker presence) decides a skip
+	 * Then:   the row classifies normally; only a non-domain-kind or
+	 *         undecodable row (not marker presence) is skipped
 	 */
 	public function testStrayAbpMarkerNoLongerGatesClassification(): void
 	{
@@ -168,8 +169,8 @@ final class TldAnalysisAbpVerbatimTest extends TestCase
 		touch("{$pfb['dnsdir']}/AbpFeed.abp");
 		file_put_contents(
 			"{$pfb['dnsbl_file']}.raw",
-			",example.com,,1,PlainFeed,GroupA\n"
-			. ",abp-carried.example,,1,AbpFeed,GroupB\n"
+			pfb_dnsbl_ndjson_emit_domain_row('example.com', '1', 'PlainFeed', 'GroupA')
+			. pfb_dnsbl_ndjson_emit_domain_row('abp-carried.example', '1', 'AbpFeed', 'GroupB')
 		);
 
 		$this->runTldAnalysis();
@@ -177,7 +178,7 @@ final class TldAnalysisAbpVerbatimTest extends TestCase
 		$this->assertFileExists($pfb['unbound_py_zone']);
 		$zone = (string) file_get_contents($pfb['unbound_py_zone']);
 
-		$this->assertStringContainsString(',example.com,', $zone);
+		$this->assertStringContainsString('"domain":"example.com"', $zone);
 		$this->assertStringContainsString(
 			'abp-carried.example',
 			$zone,

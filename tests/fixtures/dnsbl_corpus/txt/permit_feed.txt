@@ -1,2 +1,2 @@
-,allowme.example,,1,permit_feed,grp_permit
-accidentalallow.example##.ad
+{"kind":"domain","domain":"allowme.example","log":"1","feed":"permit_feed","group":"grp_permit"}
+{"kind":"abp","raw":"accidentalallow.example##.ad"}

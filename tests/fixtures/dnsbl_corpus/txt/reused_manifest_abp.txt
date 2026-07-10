@@ -1,1 +1,1 @@
-||reused.example^
+{"kind":"abp","raw":"||reused.example^"}

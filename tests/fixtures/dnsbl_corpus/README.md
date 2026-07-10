@@ -10,12 +10,15 @@ the ADR's enumerated delta table (D1-D5) — a row whose delta has already lande
 - `feeds.json` — one record per synthetic feed: `header`/`group`/`log`/`format`/`provenance`/
   `mode` (the exact shape `pfb_unbound_python_sources()` and `pfb_unbound.py`'s `build()`
   consume) plus a `row` note naming the coverage-matrix row it represents.
-- `txt/<header>.txt` — the **documented per-feed `.txt` staging output** for that row: the
-  6-col plain dialect (`,domain,,log,feed,group`) or the verbatim ABP/ADR-21-anchor dialect,
-  hand-derived from reading `sync_package_pfblockerng()`'s DNSBL parse loop (the download
-  loop itself has no off-appliance driver — ADR.md §6 Phase 1 — so this is the loop's
-  documented OUTPUT, not independently re-executed; its own raw-feed-to-`.txt` correctness is
-  a DEFERRED smoke row, see the Phase-1 handoff coverage matrix).
+- `txt/<header>.txt` — the **documented per-feed `.txt` staging output** for that row: NDJSON
+  schema v1 (issue #1083) domain rows (`{"kind":"domain","domain":...,"log":...,"feed":...,
+  "group":...}`) or verbatim ABP/ADR-21-anchor rows (`{"kind":"abp","raw":...}`), hand-derived
+  from reading `sync_package_pfblockerng()`'s DNSBL parse loop (the download loop itself has
+  no off-appliance driver — ADR.md §6 Phase 1 — so this is the loop's documented OUTPUT, not
+  independently re-executed; its own raw-feed-to-`.txt` correctness is a DEFERRED smoke row,
+  see the Phase-1 handoff coverage matrix). Encoded via the real
+  `pfb_dnsbl_ndjson_emit_domain_row()`/`pfb_dnsbl_ndjson_emit_abp_row()` helpers, never
+  hand-typed JSON.
 - `raw/<header>.raw` — the **golden** per-feed `.raw` that `pfb_unbound_python_sources()`
   produces from the matching `txt/<header>.txt`, captured by actually running the real
   function once (not hand-derived) so the PHPUnit oracle (re-running the function) and the

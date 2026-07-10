@@ -289,7 +289,9 @@ class TestLoadZoneDbLedgerWiring:
         assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 1
 
         monkeypatch.undo()
-        zone_path.write_text("evil.com,evil.com,0,1,FeedA,GroupA\n", encoding="utf-8")
+        zone_path.write_text(
+            '{"kind":"domain","domain":"evil.com","log":"1","feed":"FeedA","group":"GroupA"}\n', encoding="utf-8"
+        )
 
         pfb_unbound._load_zone_db(_new_feed_group_db(), 0)
 
@@ -381,7 +383,9 @@ class TestLoadDataDbLedgerWiring:
         assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 1
 
         monkeypatch.undo()
-        data_path.write_text("evil.com,evil.com,0,1,FeedA,GroupA\n", encoding="utf-8")
+        data_path.write_text(
+            '{"kind":"domain","domain":"evil.com","log":"1","feed":"FeedA","group":"GroupA"}\n', encoding="utf-8"
+        )
 
         pfb_unbound._load_data_db(_new_feed_group_db(), 0)
 
@@ -444,9 +448,13 @@ class TestLoadZoneAndDataDbsLedgerWiring:
         # dnsbl_built=False must still reach the legacy loaders (wiring check --
         # the manifest-built branch must not swallow the fallback path too).
         zone_path = tmp_path / "zone.txt"
-        zone_path.write_text("evil.com,evil.com,0,1,FeedA,GroupA\n", encoding="utf-8")
+        zone_path.write_text(
+            '{"kind":"domain","domain":"evil.com","log":"1","feed":"FeedA","group":"GroupA"}\n', encoding="utf-8"
+        )
         data_path = tmp_path / "data.txt"
-        data_path.write_text("bad.com,bad.com,0,1,FeedB,GroupB\n", encoding="utf-8")
+        data_path.write_text(
+            '{"kind":"domain","domain":"bad.com","log":"1","feed":"FeedB","group":"GroupB"}\n', encoding="utf-8"
+        )
         pfb_unbound.pfb["pfb_py_zone"] = str(zone_path)
         pfb_unbound.pfb["pfb_py_data"] = str(data_path)
         pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")

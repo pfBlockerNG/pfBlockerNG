@@ -57,12 +57,15 @@ PHP_WORKER = os.path.join(REPO_ROOT, "scripts", "bench_dnsbl_line_parsing.php")
 
 
 def _txt_line(i: int) -> str:
+    """NDJSON schema v1 (issue #1083) row shape -- see pfb_dnsbl_ndjson_emit_domain_row()/
+    pfb_dnsbl_ndjson_emit_abp_row() in pfblockerng.inc for the contract."""
     m = i % 100
     if m < 97:
-        return f",uuid-bench-{i}.example.com,,1,benchfeed,benchfeed\n"
+        domain = f"uuid-bench-{i}.example.com"
+        return f'{{"kind":"domain","domain":"{domain}","log":"1","feed":"benchfeed","group":"benchfeed"}}\n'
     if m < 99:
-        return f"||uuid-bench-{i}.example.com^\n"
-    return f"@@||uuid-bench-{i}.example.com^\n"
+        return f'{{"kind":"abp","raw":"||uuid-bench-{i}.example.com^"}}\n'
+    return f'{{"kind":"abp","raw":"@@||uuid-bench-{i}.example.com^"}}\n'
 
 
 def _raw_line(i: int) -> str:

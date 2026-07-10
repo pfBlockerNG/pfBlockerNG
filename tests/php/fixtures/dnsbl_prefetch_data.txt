@@ -1,4 +1,5 @@
-,uuid-exact-hit-8f2a.example.com,,DNSBL,ExactFeed,ExactGroup
-,uuid-firsthit-8f2a.example.com,,DNSBL,FirstFeed,FirstGroup
-,uuid-firsthit-8f2a.example.com,,DNSBL,SecondFeed,SecondGroup
-,evil.5.example.com,,DNSBL,RealFeed,RealGroup
+{"kind":"domain","domain":"uuid-exact-hit-8f2a.example.com","log":"DNSBL","feed":"ExactFeed","group":"ExactGroup"}
+{"kind":"domain","domain":"uuid-firsthit-8f2a.example.com","log":"DNSBL","feed":"FirstFeed","group":"FirstGroup"}
+{"kind":"domain","domain":"uuid-firsthit-8f2a.example.com","log":"DNSBL","feed":"SecondFeed","group":"SecondGroup"}
+{"kind":"domain","domain":"evil.5.example.com","log":"DNSBL","feed":"RealFeed","group":"RealGroup"}
+garbage line not valid json "domain":"uuid-spoof-target-8f2a.example.com" trailing
