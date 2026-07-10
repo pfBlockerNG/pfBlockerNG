@@ -202,6 +202,12 @@ class TestLoadTldMaster:
         assert "net" not in tlds  # excluded
         assert tlds == {"com": {"com": ""}}
 
+    def test_bare_zero_tld_is_kept(self) -> None:
+        # issue #1116: "0" is a valid dot-less TLD -- not falsy-string dropped.
+        tlds = _dnsbl_load_tld_master(["0", "com"], [], [])
+        assert "0" in tlds
+        assert tlds["0"] == {"0": ""}
+
 
 # --------------------------------------------------------------------------- #
 # ABP option / regex parse helpers

@@ -7780,13 +7780,18 @@ function tld_analysis() {
 	// Master TLD Domain list
 	if (($t_handle = @fopen("{$pfb['dnsbl_tld_data']}", 'r')) !== FALSE) {
 		while (($line = @fgets($t_handle)) !== FALSE) {
-			$line	= rtrim($line, "\x00..\x1F");
+			$line	= trim(rtrim($line, "\x00..\x1F"));
+			// issue #1116: match the Python mirror's contract -- skip comment and
+			// whitespace-only lines; '0' is a valid dot-less TLD key.
+			if ($line === '' || str_starts_with($line, '#')) {
+				continue;
+			}
 			$dot	= strrpos($line, '.');
 			// issue #1068: a dot-less line keys under its own full value
 			// (FALSE + 1 would substr off the first char)
 			$tld	= ($dot === FALSE) ? $line : substr($line, $dot + 1);
 
-			if (!empty($tld)) {
+			if ($tld !== '') {
 				if (!isset($tlds[$tld]) || !is_array($tlds[$tld])) {
 					$tlds[$tld] = array();
 				}
