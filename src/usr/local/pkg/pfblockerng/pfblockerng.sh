@@ -860,8 +860,8 @@ pfb_recompute() {
 
 	rec_cumulative="${rec_scratch}/cumulative"
 	rec_priority="${rec_scratch}/priority"
-	: > "${rec_cumulative}"
-	: > "${rec_priority}"
+	true > "${rec_cumulative}"
+	true > "${rec_priority}"
 
 	# Stage A: cumulative containment-aware dedup (or plain copy when
 	# dedup=off), in memberlist/priority order. Ownership = loop order.
@@ -904,7 +904,7 @@ pfb_recompute() {
 				print
 			}' "${masterfile}" > "${rec_masterfile_new}"
 		else
-			: > "${rec_masterfile_new}"
+			true > "${rec_masterfile_new}"
 		fi
 		rec_rc=$?
 		if [ "${rec_rc}" -ne 0 ]; then
@@ -914,12 +914,25 @@ pfb_recompute() {
 		fi
 	fi
 
+	# 'true >' (a regular built-in), never ': >': a redirection error on a
+	# special built-in exits non-interactive ash/dash entirely (POSIX XCU
+	# 2.8.1), skipping the cleanup path below.
+	rec_countsfile_new="${rec_countsfile}.new"
 	while IFS=' ' read -r rec_alias _; do
-		: > "${pfbdeny}${rec_alias}.txt.new"
+		if ! true > "${pfbdeny}${rec_alias}.txt.new"; then
+			log="recompute [ ${rec_family} ]: cannot create [ ${rec_alias}.txt.new ]; aborting pass, cleaning up partial artifacts"
+			echo "${log}" | tee -a "${errorlog}"
+			pfb_recompute_clean_new
+			return 1
+		fi
 	done < "${rec_priority}"
 
-	rec_countsfile_new="${rec_countsfile}.new"
-	: > "${rec_countsfile_new}"
+	if ! true > "${rec_countsfile_new}"; then
+		log="recompute [ ${rec_family} ]: cannot create countsfile staging; aborting pass, cleaning up partial artifacts"
+		echo "${log}" | tee -a "${errorlog}"
+		pfb_recompute_clean_new
+		return 1
+	fi
 
 	rec_do_rep=0
 	if [ "${rec_family}" = 'v4' ]; then
@@ -933,7 +946,7 @@ pfb_recompute() {
 	# actionmap (no offenders, or GeoIP unavailable) makes reputation a
 	# no-op, so that pass takes the same direct path as repmode=off.
 	rec_actionmap="${rec_scratch}/actionmap"
-	: > "${rec_actionmap}"
+	true > "${rec_actionmap}"
 	if [ "${rec_do_rep}" -eq 1 ]; then
 		if ! pfb_recompute_rep_actionmap; then
 			pfb_recompute_clean_new
@@ -1009,7 +1022,7 @@ pfb_recompute_rep_actionmap() {
 	done < "${rec_priority}"
 
 	rec_offenders="${rec_scratch}/offenders"
-	: > "${rec_offenders}"
+	true > "${rec_offenders}"
 	if [ "$#" -gt 0 ]; then
 		awk -v max="${rec_max}" -v ph="${ip_placeholder3}" '
 			{
@@ -1091,13 +1104,13 @@ pfb_recompute_rep_subset() {
 	rec_matchdedup="${matchdedup:-matchdedup_v4.txt}"
 	rec_matchexemptcidr="${rec_scratch}/matchexempt_cidr"
 	rec_matchexemptmembers="${rec_scratch}/matchexempt_members"
-	: > "${rec_matchexemptcidr}"
-	: > "${rec_matchexemptmembers}"
+	true > "${rec_matchexemptcidr}"
+	true > "${rec_matchexemptmembers}"
 
 	# Divert: blank-free keep file per alias; offender-prefix rows go to the
 	# tagged side set instead.
 	rec_side="${rec_scratch}/side"
-	: > "${rec_side}"
+	true > "${rec_side}"
 	mkdir -p "${rec_scratch}/keep"
 	while IFS=' ' read -r rec_alias _; do
 		rec_ownedfile="${rec_scratch}/owned/${rec_alias}.txt"
@@ -1148,7 +1161,7 @@ pfb_recompute_rep_subset() {
 	# one /24 owned by the highest-priority member alias; match modes emit
 	# their files and pass the rows through.
 	rec_new_stream="${rec_scratch}/new_stream"
-	: > "${rec_new_stream}"
+	true > "${rec_new_stream}"
 	awk -v actionfile="${rec_actionmap}" -v priofile="${rec_priority}" \
 			-v newstream="${rec_new_stream}" -v matchdir="${pfbmatch}" \
 			-v mexcidr="${rec_matchexemptcidr}" -v mexmem="${rec_matchexemptmembers}" '
