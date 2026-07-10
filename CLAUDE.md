@@ -230,7 +230,7 @@ the gate report's wording, never to which checks run.
 | ------- | --------------------- |
 | Python (`*.py`) | `python3 -m pytest` · `ruff check .` · `ruff format --check .` · `mypy tests/` |
 | PHP (`*.php`/`*.inc`) | `php -l` per touched file · `vendor/bin/phpunit` · `composer phpstan` · `composer phpcs -- --standard=phpcs.xml.dist src/` |
-| Shell (`*.sh`) | `sh -n` · `shellcheck` · `shellspec` (where specs exist) |
+| Shell (`*.sh`) | `sh -n` · `shellcheck` · `shellspec --shell "$(command -v dash)"` (where specs exist; dash = strict-POSIX ash sibling of FreeBSD sh — bash-as-sh masks appliance divergences. Dash missing ⇒ the substitution goes empty and shellspec silently auto-detects — INSTALL dash (`brew`/`apt install dash`) instead of dropping the pin; plain `shellspec` is a last resort and says so in the handoff) |
 | Markdown (`*.md`) | `npx markdownlint-cli2` |
 | `www/` | Tier-A `ui_render` coverage exists for the change (test mandate #4) |
 
@@ -419,6 +419,10 @@ lands); escape a genuine need inline with `# narration-ok: <reason>`.
 ### Shell
 
 - POSIX sh only (`#!/bin/sh`); no bash-isms (`[[`, arrays, `$RANDOM`). Quote all expansions.
+  **POSIX-compliant means correct under strict-POSIX SEMANTICS (ash/dash), not merely free of
+  bashisms** — e.g. a redirection error on a special built-in (`:`, `exec`, `set`) exits a
+  non-interactive ash/dash shell entirely while bash continues. bash-as-sh acceptance is not
+  evidence; the shellspec gate executes under dash for exactly this reason.
 - Absolute paths for add-on/privileged binaries (`iprange`/`grepcidr`/`mmdblookup`/`jq`/
   `pfctl`) as `path*` vars (see `pfblockerng.sh`); base utilities may be bare.
 - AWS region pre-scripts: 25 thin wrappers over the shared

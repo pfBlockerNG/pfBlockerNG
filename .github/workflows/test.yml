@@ -274,9 +274,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Install jq
-        # jq drives the ip_pre_AWS_*.sh region filters (required).
-        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Install jq and dash
+        # jq drives the ip_pre_AWS_*.sh region filters (required). dash is
+        # installed explicitly — the shellspec run below pins it as the test
+        # shell; never rely on the runner image happening to carry it.
+        run: sudo apt-get update && sudo apt-get install -y jq dash
 
       - name: Install iprange
         # Real `iprange --except` set-subtraction (ADR-53 P3): the same
@@ -293,8 +295,22 @@ jobs:
           echo "$PWD/shellspec-0.28.1" >> "$GITHUB_PATH"
 
       - name: Run shellspec
-        # Config in .shellspec (--shell sh). Functional gate for the shell scripts.
-        run: shellspec
+        # Functional gate for the shell scripts, pinned to dash — the
+        # strict-POSIX ash sibling of FreeBSD /bin/sh (the appliance shell) —
+        # instead of relying on the runner's /bin/sh happening to be dash.
+        # bash-as-sh masks ash divergences (e.g. a special-builtin
+        # redirection error aborts ash/dash but not bash).
+        # Red canary: prove dash exhibits the divergence this pin exists to
+        # catch, in the same run block, before the real suite. The trailing
+        # SURVIVED marker discriminates a genuine mid-script abort from a
+        # permissive shell (bash prints it) or a missing binary (guarded
+        # separately) — a bare nonzero rc cannot tell those apart.
+        run: |
+          DASH="$(command -v dash)"
+          [ -n "$DASH" ] || { echo 'red canary failed: dash not found'; exit 1; }
+          out="$("$DASH" -c ': > /tmp; echo SURVIVED' 2>/dev/null)" || true
+          [ "$out" != "SURVIVED" ] || { echo 'red canary failed: dash did not abort on special-builtin redirection error'; exit 1; }
+          shellspec --shell "$DASH"
 
       - name: Run parity-guard on .github/workflows
         # PG-1: gate that no workflow bypasses the shared build/smoke scripts.
@@ -351,10 +367,10 @@ jobs:
       - name: Coverage (kcov) — informational
         # Informational only (no floor yet, mirroring #38); never gates CI. Guard on
         # kcov being present so a missing tool does not leave an error annotation.
-        # shellspec's kcov integration refuses .shellspec's `--shell sh` ("Require to
+        # shellspec's kcov integration refuses a plain POSIX shell ("Require to
         # use bash/zsh/ksh to run kcov") — override to bash for this re-run only; the
-        # gating `shellspec` run above stays on sh, and the POSIX specs run unchanged
-        # under bash (a superset) purely to collect coverage.
+        # gating `shellspec` run above stays pinned to dash, and the POSIX specs run
+        # unchanged under bash (a superset) purely to collect coverage.
         continue-on-error: true
         run: |
           if command -v kcov >/dev/null 2>&1; then

@@ -145,9 +145,16 @@ if [ "$staged_sh" = 1 ]; then
 	fi
 
 	# shellspec functional suite (gated on the tool, like shellcheck).
+	# Run under dash when available: strict-POSIX ash sibling of FreeBSD
+	# /bin/sh (the appliance shell). bash-as-sh (macOS) masks divergences —
+	# e.g. a special-builtin redirection error aborts ash/dash but not bash.
 	if have shellspec; then
 		step 'shellspec'
-		shellspec || failed 'shellspec'
+		if have dash; then
+			shellspec --shell "$(command -v dash)" || failed 'shellspec (dash)'
+		else
+			shellspec || failed 'shellspec'
+		fi
 	else
 		skip shellspec
 	fi
