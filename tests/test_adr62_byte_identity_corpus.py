@@ -184,7 +184,11 @@ def test_abp_feed_bare_domain_is_wildcard_zone_delta_d1() -> None:
     """delta D1 (ADR.md SS2): a bare hosts/plain line in an ABP-classified feed
     is TODAY a wildcard ZONE via parse_abp (#718) -- Phase 5 flips this to the
     plain classify() path (registrable-parent ZONE / deeper-sub DATA) once the
-    feed-level classifier is deleted. This pins the BEFORE state."""
+    feed-level classifier is deleted. This pins the BEFORE state. UNCHANGED by
+    Phase 3: this feed's whole-feed 'abp' route is untouched by the extended
+    plain-loop predicate -- see test_adr62_parity_oracle.py's
+    test_hostile_bare_deep_subdomain_stays_on_plain_path_delta_d1 for the NEW
+    (plain-feed) outcome on synthetic input."""
     result = _run_corpus_build()
     assert "bare-domain.abp.example" in result.zone_db, (
         "delta D1: TODAY a bare domain inside an ABP feed must be a wildcard ZONE key "
@@ -215,7 +219,11 @@ def test_mixed_plain_feed_hash_truncation_false_positive_delta_d2() -> None:
     pipeline (inc:16706-16707) into a LIVE block for 'falsepositive.example' --
     an accidental false positive the ADR fixes (verbatim capture + Python skip)
     in Phase 4. This corpus row pins the pre-truncated RESULT ('falsepositive.
-    example', already in the .txt/.raw dialect) as TODAY's behaviour."""
+    example', already in the .txt/.raw dialect) as TODAY's behaviour. UNCHANGED
+    by Phase 3: this fixture's raw bytes hold PHP's already-truncated result,
+    so the extended predicate never sees a '##' shape here -- see
+    test_adr62_parity_oracle.py's test_delta_d2_new_element_hiding_verbatim_
+    produces_no_false_positive_block for the NEW outcome on synthetic input."""
     result = _run_corpus_build()
     assert _blocked(result, "falsepositive.example"), (
         "delta D2: TODAY's '#'-truncation false-positive block must still occur"
@@ -239,7 +247,10 @@ def test_permit_feed_hash_truncation_accidental_allow_delta_d4() -> None:
     element-hiding leftover ('accidentalallow.example', from
     'accidentalallow.example##.ad') reaches the .txt/.raw as an ordinary host
     line -- and build()'s permit loop (@5029-5064) treats EVERY such line as a
-    band-2 allow. Phase 4 fixes this (verbatim capture -> Python skips '##')."""
+    band-2 allow. Phase 4 fixes this (verbatim capture -> Python skips '##').
+    UNCHANGED by Phase 3 for the same reason as D2 above -- see
+    test_adr62_parity_oracle.py's test_delta_d4_new_element_hiding_verbatim_
+    in_permit_feed_produces_no_accidental_allow for the NEW outcome."""
     result = _run_corpus_build()
     assert _allowed(result, "accidentalallow.example"), (
         "delta D4: TODAY's permit-mode accidental allow from '##'-truncation must still occur"

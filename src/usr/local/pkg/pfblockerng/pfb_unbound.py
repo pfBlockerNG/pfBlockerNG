@@ -3887,6 +3887,12 @@ def _dnsbl_classify_options(opts_str: str) -> tuple[tuple[str, ...], bool, bool]
     return tuple(sorted(kept)), important, badfilter
 
 
+# Element-hiding / cosmetic marker family (ADR §2 Decision 2) -- shared by
+# parse_abp()'s skip check and _dnsbl_is_abp_rule_line()'s capture guard so the
+# two never drift apart.
+_DNSBL_ELEMENT_HIDING_MARKERS = ("##", "#@#", "#?#", "#%#", "#$#")
+
+
 def _dnsbl_parse_abp_regex(stripped: str) -> tuple[str, str, str] | None:
     """Recognise a regex rule. Return ``(kind, inner, opts_str)`` for ``/re/`` (block)
     or ``@@/re/`` (allow), with an OPTIONAL ``$options`` suffix after the closing
@@ -3916,6 +3922,32 @@ def _dnsbl_parse_abp_regex(stripped: str) -> tuple[str, str, str] | None:
     if not inner:
         return None
     return kind, inner, opts_str
+
+
+def _dnsbl_is_abp_rule_line(line: str) -> bool:
+    """Capture guard: should ``build()`` route ``line`` to ``parse_abp()``?
+
+    Mirrors PHP's ``pfb_dnsbl_is_abp_rule_line()`` (pfblockerng.inc, ADR-62)
+    row for row -- ``||``/``@@`` anchors, the element-hiding marker family,
+    and the ``/regex/`` closing-slash shape (mirroring, not calling,
+    ``_dnsbl_parse_abp_regex``: PHP's own predicate is a structural
+    length/marker check, not a full parse -- e.g. bare ``//`` capture=True
+    even though ``_dnsbl_parse_abp_regex('//')`` is None, matching PHP's own
+    capture-vs-accept split). NOT a parser: a captured line can still make
+    ``parse_abp()`` return ``None`` (e.g. bare ``@@``/``||`` -- structural
+    capture, not final accept). A bare domain line is deliberately FALSE
+    (ADR-62 delta D1).
+    """
+    if line.startswith("||") or line.startswith("@@"):
+        return True
+    if any(marker in line for marker in _DNSBL_ELEMENT_HIDING_MARKERS):
+        return True
+    if line.startswith("/"):
+        if line.endswith("/") and len(line) > 1:
+            return True
+        marker = line.rfind("/$")
+        return marker != -1 and marker > 0
+    return False
 
 
 def parse_abp(
@@ -3964,7 +3996,7 @@ def parse_abp(
         # a plain-feed ``#`` comment (element-hiding needs a ``##`` token, caught next)
         return None
     # element-hiding / cosmetic (``##`` / ``#@#`` / ``#?#`` / ``#%#`` / ``#$#``) -> SKIP
-    if "##" in s or "#@#" in s or "#?#" in s or "#%#" in s or "#$#" in s:
+    if any(marker in s for marker in _DNSBL_ELEMENT_HIDING_MARKERS):
         return None
 
     # ---- regex rules: /re/ (block) or @@/re/ (allow) --------------------- #
@@ -5045,11 +5077,14 @@ def build(
         if feed_row.get("mode") == "permit":
             for raw_line in line_reader(feed_row["raw"]):
                 # Skip ABP/comment control lines — in a permit feed every plain host is
-                # an allow; ABP directives (@@||, ||, !, [Adblock...) are ignored (v1).
+                # an allow; ABP directives are ignored (v1). The skip set matches the
+                # plain-block loop's broadened capture below (regex/element-hiding, not
+                # just '@@'/'||') so a captured-but-non-host line never becomes an
+                # accidental allow (ADR-62 delta D4).
                 stripped = raw_line.strip()
                 if not stripped or stripped.startswith("!") or stripped.startswith("["):
                     continue
-                if stripped.startswith("@@") or stripped.startswith("||"):
+                if _dnsbl_is_abp_rule_line(stripped):
                     continue
                 entry = parse(fmt, stripped)
                 if entry is None:
@@ -5095,15 +5130,17 @@ def build(
                     abp_rules.append(rule)
             continue
         for raw_line in line_reader(feed_row["raw"]):
-            # ADR-21: per-line ABP detection in a non-ABP feed. A line that anchors
-            # with ``||`` (block) or ``@@||`` (allow) is a self-identifying ABP entry
-            # (invalid in every plain dialect, so it would otherwise be dropped by the
-            # plain validator). Route it to the full parse_abp() Stage-A parser -> the
-            # abp_rules stream (Stage-B reconcile), with the SAME provenance/feed/group/
-            # log plumbing as the whole-feed ABP path above. parse_abp() returns None
-            # for path/wildcard/IP anchors and non-DNS $options -> silently skipped.
+            # ADR-62: per-line ABP detection in a non-ABP feed, broadened from ADR-21's
+            # '||'/'@@||' to the full Decision-2 capture shape set (regex, element-
+            # hiding) via _dnsbl_is_abp_rule_line() -- a self-identifying ABP entry is
+            # invalid in every plain dialect, so it would otherwise be dropped by the
+            # plain validator. Route it to the full parse_abp() Stage-A parser -> the
+            # abp_rules stream (Stage-B reconcile), with the SAME provenance/feed/
+            # group/log plumbing as the whole-feed ABP path above. parse_abp() returns
+            # None for anything it itself skips (path/wildcard/IP anchors, element-
+            # hiding, non-DNS $options, malformed anchors) -> silently skipped here too.
             stripped = raw_line.strip()
-            if stripped.startswith("||") or stripped.startswith("@@||"):
+            if _dnsbl_is_abp_rule_line(stripped):
                 rule = parse_abp(stripped, provenance=provenance, feed=feed, group=group, log=log_flag, tally=rejects)
                 if rule is not None:
                     abp_rules.append(rule)

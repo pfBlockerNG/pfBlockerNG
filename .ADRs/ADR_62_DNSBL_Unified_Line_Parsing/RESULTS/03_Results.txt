@@ -1,0 +1,366 @@
+ADR-62 Phase 3 -- Extend Python's per-line routing + parity oracle -- HANDOFF
+====================================================================
+
+VERDICT: DONE
+
+WORKTREE BASE CHECK
+--------------------
+git fetch origin; git rev-list --count HEAD..origin/devel = 8 at session start
+(worktree was on adr/62-dnsbl-unified-line-parsing, 2 commits ahead of a STALE base
+753f2e7b -- devel had advanced 8 commits, none touching pfb_unbound.py or the ADR-62
+Phase-2 predicate cluster (inc:6564-6721) -- confirmed by `git diff --stat` before
+rebasing). Rebased cleanly onto origin/devel (no conflicts) and force-with-lease
+pushed. All work in this phase is against the freshly-rebased base.
+
+REALITY-OVERRIDE FINDINGS (prompt claims vs live tree/probes)
+-----------------------------------------------------------------
+1. The prompt's premise that "the extended routing's domain set == the golden set
+   PER FORMAT, delta rows asserting their NEW outcome" against the Phase-1 corpus
+   is CONTRADICTED by the live tree: PHP's manifest writer
+   (pfblockerng.inc:7179-7189, unmodified this phase) only passes '||'/'@@||' lines
+   through verbatim for a 'plain' feed -- any other shape (regex, element-hiding,
+   bare '@@') has NO comma, so `cols[1]` is unset and the line is silently DROPPED,
+   never reaching '.raw'. Confirmed by direct source read + Phase-1's carry-forward
+   #5 ("NEVER hand-edit raw/*.raw... regenerate via the real function") -- running
+   the REAL (Phase-3-unmodified) writer over a hand-authored '.txt' containing these
+   shapes would just re-drop them, not capture them. So NONE of D1/D2/D4 can
+   physically flip against the COMMITTED corpus fixtures this phase -- confirmed
+   empirically: the full Phase-1 suite (tests/test_adr62_byte_identity_corpus.py,
+   19 tests, ALL delta rows included) stays green with ZERO changes to its
+   assertions after the routing extension landed (see GATES). This matches the
+   brief's OWN blast-radius constraint ("no production feed's output can change
+   from this phase alone") -- the two brief statements were themselves in tension;
+   resolved in favour of the blast-radius constraint (the factual one) over the
+   "delta rows assert NEW outcome" instruction's literal target (the COMMITTED
+   corpus file). RESOLUTION (not a STOP -- the premise itself is provable, just not
+   via the committed corpus): built a SECOND, SYNTHETIC-input oracle
+   (tests/test_adr62_parity_oracle.py, Section 2) that bypasses PHP's writer
+   entirely and feeds Python's ALREADY-EXTENDED routing the shapes Phase 4 will
+   eventually place in a plain/permit feed's raw -- proving Python's half of the
+   Phase-4 contract now, without violating "don't touch PHP" or "don't hand-edit
+   raw/*.raw". Every delta-tagged test in test_adr62_byte_identity_corpus.py
+   received a doc-only pointer to its NEW-outcome counterpart in the new file (no
+   assertion changed -- flipping them would have asserted something FALSE). Flagged
+   as a DEVIATION below, not silently patched.
+2. Checker false-negative found and fixed mid-phase (process finding, not an ADR
+   claim): `scripts/check_comment_narration.py --diff origin/devel` uses a
+   THREE-DOT diff (`git diff origin/devel...HEAD`) -- against COMMITTED HEAD, not
+   the working tree. Run before staging, it silently missed 3 "Phase N" narration
+   violations I had written into pfb_unbound.py's new comments/docstring (the
+   checker's own stated contract is diff-scoped to ADDED lines, but "added" only
+   means added-and-committed for `--diff`; uncommitted edits are invisible to it).
+   Caught by re-running `--staged` after `git add`, which correctly flagged 6 lines;
+   all 3 comment sites rewritten to drop "Phase N"/"Phase-2 handoff's" language
+   (kept the substantive ADR-62/delta-ID references, which are NOT narration per
+   the checker's own exemplar). Re-verified clean with `--staged`. Not a claim this
+   phase's brief made, but recorded because it nearly shipped a lint violation and
+   is a real gap in how `--diff` is invoked mid-session (before committing).
+
+WHAT CHANGED
+--------------
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py --
+  1. Added `_DNSBL_ELEMENT_HIDING_MARKERS = ("##", "#@#", "#?#", "#%#", "#$#")`
+     module constant (before `_dnsbl_parse_abp_regex`), and switched
+     `parse_abp()`'s inline element-hiding check to iterate it (byte-identical
+     behaviour, DRY: the new predicate below shares the SAME literal set instead
+     of a second hand-copied one -- reduces drift risk between the two).
+  2. Added `_dnsbl_is_abp_rule_line(line: str) -> bool` (after
+     `_dnsbl_parse_abp_regex`, before `parse_abp`) -- the Python mirror of
+     PHP's `pfb_dnsbl_is_abp_rule_line()` (Phase 2), same 3-branch structure:
+     '||'/'@@' prefix, element-hiding substring, '/'-prefixed closing-slash/
+     '$options'-marker shape. Deliberately does NOT delegate to
+     `_dnsbl_parse_abp_regex` for the regex-shape check (would under-capture a
+     bare '//' -- PHP's own predicate is a structural length/marker check, not
+     a full parse; verified this discrepancy empirically before choosing the
+     direct-port approach over "reuse" -- see COVERAGE MATRIX item on this).
+  3. `build()`'s plain-block loop (~line 5114-5131): capture predicate widened
+     from `stripped.startswith("||") or stripped.startswith("@@||")` (ADR-21) to
+     `_dnsbl_is_abp_rule_line(stripped)`.
+  4. `build()`'s permit-mode loop (~line 5061-5070): skip predicate widened from
+     `stripped.startswith("@@") or stripped.startswith("||")` to
+     `_dnsbl_is_abp_rule_line(stripped)` (action item 2 -- keeps the permit
+     loop's skip set a strict superset of everything the plain-block loop now
+     routes to parse_abp, so a captured-but-non-host shape can never become an
+     accidental allow, D4).
+  5. Comments at both call sites updated to describe the broadened shape set
+     (no "Phase N" narration -- see REALITY-OVERRIDE #2).
+- tests/test_adr62_byte_identity_corpus.py -- DOC-ONLY: appended a one-line
+  pointer to each of the 3 delta-tagged tests (D1/D2/D4) noting they stay
+  UNCHANGED by Phase 3 and cross-referencing the new file's NEW-outcome
+  counterpart test. ZERO assertions changed; every row still ticks exactly as
+  Phase 1/2 left it (see REALITY-OVERRIDE #1).
+- tests/test_adr62_parity_oracle.py -- NEW, 23 tests, two sections:
+  Section 1 (corpus parity, Semantics #1): `test_corpus_domain_set_is_byte_
+  identical_aggregate` + `..._per_format` -- an INDEPENDENT, stronger oracle
+  than Phase 1's per-domain membership checks: asserts the WHOLE domain/allow
+  SET the extended routing produces over the Phase-1 corpus equals a
+  hand-verified golden set (captured by an actual `build()` run this session,
+  not hand-derived), aggregate AND per-format. Confirms zero output change
+  (blast-radius).
+  Section 2 (delta-NEW-outcome + hostile-input, synthetic raw content,
+  bypassing PHP's writer -- see REALITY-OVERRIDE #1): 21 tests covering
+  every ACTION-PLAN hostile-input row (IDN/punycode boundary, #752/#753,
+  empty/whitespace/BOM, '@@||', regex family, banded $important/$badfilter,
+  control lines, IP anchors, D1 bare-deep-subdomain, '//comment', bare
+  '@@'/'||', mixed plain+||, permit-loop skip-set consistency, stale
+  format_hint='abp' tolerance) plus the D2/D4 delta rows' NEW outcome on
+  synthetic input simulating Phase 4's future PHP capture.
+
+Commit hash: e70e7bfad1d95fc42ea56d6d53e5c65a8b0592e7 (pre-push amend to backfill
+this field into the same single commit -- same accepted pattern as Phase 1/2's
+handoffs).
+
+GATES (exact commands + pasted tails)
+----------------------------------------
+$ python3 -m pytest -q
+======================= 2588 passed, 4 skipped in 51.13s =======================
+(2565 baseline after rebase onto the 8-commit-advanced devel + 23 new
+test_adr62_parity_oracle.py tests = 2588; 0 failures)
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check .
+210 files already formatted
+
+$ python3 -m mypy tests/
+Success: no issues found in 89 source files
+
+$ php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+No syntax errors detected in src/usr/local/pkg/pfblockerng/pfblockerng.inc
+(same 5 PRE-EXISTING "Optional parameter declared before required" deprecation
+notices Phase 1 already flagged as unrelated -- ZERO PHP source touched this phase)
+
+$ vendor/bin/phpunit
+Tests: 2649, Assertions: 19382, Warnings: 1, Skipped: 4.
+OK, but there were issues!
+(2649 = Phase-2's 2649 baseline, UNCHANGED count -- confirms zero PHP behaviour
+drift; the 1 warning is the SAME pre-existing $tlds-uninitialised notice Phase 1/2
+already flagged, inc:7746, unrelated to this phase; 0 failures/errors)
+
+$ vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+[OK] No errors
+
+$ vendor/bin/phpcs -d memory_limit=1G --standard=phpcs.xml.dist src/
+(no output -- 0 violations)
+
+$ python3 scripts/check_comment_narration.py --staged ; echo exit:$?
+exit:0 (clean AFTER the fix -- see REALITY-OVERRIDE #2 for the false-negative
+found and corrected mid-phase; `--diff origin/devel` alone is NOT sufficient
+before committing, --staged caught it)
+
+$ python3 scripts/check_retired_tokens.py --staged ; echo exit:$?
+exit:0 (clean -- no quoted-literal retirements this phase)
+
+$ python3 scripts/check_version_literals.py --staged ; echo exit:$?
+exit:0 (clean)
+
+PARITY-ORACLE RESULT PER FORMAT
+-----------------------------------
+Byte-identical (modulo the delta table) for EVERY corpus row -- confirmed by
+tests/test_adr62_parity_oracle.py::test_corpus_domain_set_is_byte_identical_
+aggregate + ..._per_format (aggregate exact-set-equality AND per-row breakdown
+against a golden set captured by an actual `build()` run this session). NO
+delta row flips against the committed corpus (D1/D2/D4 all stay at TODAY's
+value -- see REALITY-OVERRIDE #1 for why, empirically confirmed, not assumed).
+D2 and D4's NEW outcome is instead proven on SYNTHETIC raw content (Section 2)
+that simulates what Phase 4's broadened PHP capture will produce:
+  - test_delta_d2_new_element_hiding_verbatim_produces_no_false_positive_block
+    + the 4-marker-variant parametrized sibling: a verbatim '##'/'#@#'/'#?#'/
+    '#%#'/'#$#' line in a plain feed produces NO domain (contrast: Phase 1's
+    TODAY test pins the SAME shape, pre-truncated by PHP, DOES block).
+  - test_delta_d4_new_element_hiding_verbatim_in_permit_feed_produces_no_
+    accidental_allow: same fix, permit-mode context (contrast: Phase 1's TODAY
+    test pins the pre-truncated shape DOES accidentally allow).
+D1 does not move at all this phase (neither on the committed corpus NOR on
+synthetic input) -- an 'abp'-format feed's whole-feed route to parse_abp() is
+untouched by the plain-loop predicate extension; a bare domain in a PLAIN feed
+was ALREADY not captured by the OLD '||'/'@@||' predicate and is STILL not
+captured by the NEW broadened one (deliberately FALSE by design, per the
+Phase-2 handoff's own predicate contract) -- confirmed by
+test_hostile_bare_deep_subdomain_stays_on_plain_path_delta_d1 (D1's actual
+flip is Phase 5's classifier-deletion territory, per ADR SS6).
+
+RED-RUN PROOFS (both executed, pasted)
+------------------------------------------
+(a) New parity-oracle tests FAIL on pre-change (Phase-2) pfb_unbound.py:
+    $ cp src/.../pfb_unbound.py /tmp/.../pfb_unbound.py.phase3.final   # backup
+    $ git checkout HEAD -- src/usr/local/pkg/pfblockerng/pfb_unbound.py
+    $ python3 -m pytest tests/test_adr62_parity_oracle.py -q
+    ImportError while importing test module '.../tests/test_adr62_parity_oracle.py'.
+    E   ImportError: cannot import name '_dnsbl_is_abp_rule_line' from 'pfb_unbound'
+    ERROR tests/test_adr62_parity_oracle.py
+    1 error in 0.07s
+    $ cp /tmp/.../pfb_unbound.py.phase3.final src/.../pfb_unbound.py   # restore
+    $ diff /tmp/.../pfb_unbound.py.phase3.final src/.../pfb_unbound.py && echo CLEAN
+    CLEAN
+    $ python3 -m pytest tests/test_adr62_parity_oracle.py -q
+    23 passed in 0.02s
+    (the RED is a collection-time ImportError, not a runtime assertion failure --
+    this is the CORRECT and exact reason the change addresses: the symbol
+    literally does not exist pre-change. Restore verified byte-identical via
+    `diff` against the pre-mutation backup, not just "tests pass again".)
+
+(b) Deliberate mis-route -> parity oracle goes RED:
+    Mutated `_dnsbl_is_abp_rule_line`'s '||'/'@@' anchor branch to
+    `if False and (line.startswith("||") or line.startswith("@@")): return True`
+    (element-hiding + regex branches left intact) -- simulates a broken anchor
+    check reaching production.
+    $ python3 -m pytest tests/test_adr62_parity_oracle.py -q
+    FAILED test_corpus_domain_set_is_byte_identical_aggregate -- mixed_plain's
+      'anchor.mixed.example' (ADR-21's EXISTING '||' routing) went missing from
+      the blocked set: proves the oracle ALSO protects pre-existing ADR-21
+      behaviour, not just the new shapes.
+    FAILED test_corpus_domain_set_is_byte_identical_per_format (same cause)
+    FAILED test_regex_and_options_verbatim_in_plain_feed_are_honoured
+    FAILED test_hostile_allow_and_regex_shapes_route_to_parse_abp_not_a_block
+    FAILED test_hostile_regex_shapes_route_to_parse_abp
+    FAILED test_hostile_banded_rules_preserve_domain
+    FAILED test_hostile_bare_anchors_route_to_parse_abp_and_crash_free
+    7 failed, 16 passed in 0.06s
+    -> reverted (cp backup back over the file); `diff` against pre-mutation
+    backup: IDENTICAL (clean revert confirmed); re-ran: 23 passed.
+    NOTE (documented finding, not a defect): a first mutation attempt --
+    disabling ONLY the element-hiding branch -- produced ZERO failures, because
+    Python's normalise() char-shape gate (`_DNSBL_LABEL_CHARS`, ASCII-only)
+    independently rejects any '#'-bearing candidate that falls through to
+    parse()'s plain path (defense in depth). This is why the mis-route proof
+    above targets the '||'/'@@' branch instead, which DOES change observable
+    output (a genuinely well-formed anchor, once mis-routed to parse(), is
+    ALSO char-gate-rejected, since '|'/'^' are invalid domain chars -- so ANY
+    routing bug here manifests as a MISSING domain the oracle catches).
+
+HOSTILE-INPUT TABLE (all rows asserted, executed, results pasted above/below)
+-----------------------------------------------------------------------------
+| Row | Expected | Test | Result |
+|-----|----------|------|--------|
+| IDN/punycode (pre-converted vs raw) | punycode blocks; raw non-ASCII rejected (boundary, not conversion) | test_hostile_idn_punycode_boundary_not_a_python_conversion | PASS |
+| #752 undotted 254 | Python rejects (wire_cap), unaffected by Phase 3; PHP still accepts (KNOWN divergence, not fixed) | test_hostile_752_oversized_undotted_unaffected_by_phase3 | PASS |
+| #753 wire-cap (64-char label; 254 dotted total) | both reject | test_hostile_753_wire_cap_label_and_total_variants_reject | PASS |
+| empty/whitespace/BOM-led first line | no domain; BOM gap documented as production-irrelevant | test_hostile_empty_whitespace_and_bom_led_lines_produce_no_domain | PASS |
+| '@@||exception.com^' | allow-rule, not a block | test_hostile_allow_and_regex_shapes_route_to_parse_abp_not_a_block | PASS |
+| '/regex/','@@/re/','/re/$important' | regex rule via parse_abp | test_hostile_regex_shapes_route_to_parse_abp | PASS |
+| '||d^$important' / '$badfilter' | domain preserved, badfilter emits nothing | test_hostile_banded_rules_preserve_domain | PASS |
+| 'd##.ad' + '#@#'/'#?#'/'#%#'/'#$#' | None (D2 false-positive fix) | test_delta_d2_new_*  (+parametrized) | PASS |
+| '[Adblock Plus 2.0]' / '! Title: X' | None (control lines) | test_hostile_control_lines_produce_no_domain | PASS |
+| '||1.2.3.4^' / bare '2604:2dc0::' | None (IP is PHP's job) | test_hostile_ip_anchored_and_bare_ipv6_never_emit_a_domain | PASS |
+| bare 'sub.deep.example.com' (D1) | classify() DATA (not parse_abp wildcard ZONE) | test_hostile_bare_deep_subdomain_stays_on_plain_path_delta_d1 | PASS |
+| mixed plain-hosts + '||d^' same feed | both blocked | test_regex_and_options_verbatim_in_plain_feed_are_honoured (+ existing Phase-1 test) | PASS |
+| '//comment' | not routed to parse_abp; today's outcome preserved | test_hostile_comment_slash_line_not_routed_to_parse_abp | PASS |
+| bare '@@' / bare '||' | routed to parse_abp, returns None, no crash | test_hostile_bare_anchors_route_to_parse_abp_and_crash_free | PASS |
+
+PERMIT-LOOP AND STALE-HINT CHECKS
+--------------------------------------
+- test_permit_loop_skip_set_covers_the_full_broadened_capture_shape_set: a
+  permit feed with '@@||'/'||'/'/regex/'/'##' lines produces NO allow from any
+  of them; only the ordinary host line allows. PASS.
+- test_stale_format_hint_abp_still_routes_to_parse_abp: a manifest row still
+  naming format_hint='abp' (self-contained synthetic construction, independent
+  of the corpus fixture) keeps taking the untouched whole-feed parse_abp()
+  route. PASS. (Also re-confirmed: Phase 1's own
+  test_stale_abp_format_hint_manifest_still_parses stayed green throughout,
+  unmodified.)
+
+REJECT-SIGNAL CHECK (SS7 criterion 1)
+------------------------------------------
+NOT TRIGGERED. Every corpus format's parity holds byte-identically against
+`origin/devel`'s TODAY behaviour (modulo the delta table, which does not flip
+this phase per the blast-radius constraint); the delta rows' NEW outcome is
+independently proven achievable on synthetic input with NO reconciliation gap
+found. The premise (self-identifying-per-line capture, Python-side) is PROVEN,
+not falsified.
+
+DEVIATIONS
+------------
+1. Did NOT flip test_adr62_byte_identity_corpus.py's D1/D2/D4 assertions to
+   "NEW expectations" as the brief's action item 4 literally instructed.
+   REASON: doing so would assert something FALSE -- the committed corpus
+   fixtures' raw bytes are produced by PHP's UNMODIFIED manifest writer, which
+   cannot place a regex/element-hiding/bare-'@@' shape into a 'plain' feed's
+   raw this phase (confirmed by source read + Phase-1's "never hand-edit
+   raw/*.raw" constraint). Empirically verified: after landing the routing
+   extension, ALL 19 of Phase-1's original tests (including the 3 delta rows)
+   stayed green with ZERO code changes needed -- if the delta rows had
+   genuinely flipped, they would have gone RED without a corresponding fixture
+   change. This directly matches the brief's OWN blast-radius constraint
+   ("no production feed's output can change from this phase alone"), which
+   contradicts the literal instruction to flip those specific assertions.
+   RESOLUTION: added doc-only pointers (no assertion change) from each
+   delta-tagged Phase-1 test to its NEW-outcome counterpart in the new
+   Section-2 synthetic-input oracle, which DOES prove the NEW outcome --
+   satisfying the brief's underlying INTENT (prove D2/D4's new outcome is
+   achievable) without asserting a falsehood against the committed fixtures.
+   Per CLAUDE.md's ESCALATE contract ("the fix requires inventing a mechanism
+   the brief never named... escalate, or at minimum return
+   DONE-WITH-DEVIATION") -- flagging this explicitly rather than silently
+   complying with a literal instruction that would have shipped a false test
+   assertion, or silently deviating without flagging it.
+2. `_dnsbl_is_abp_rule_line`'s regex-shape branch is a DIRECT PORT of PHP's own
+   structural check (length>1 + '/$' marker), not a call into
+   `_dnsbl_parse_abp_regex` -- verified this was necessary (not a style choice)
+   by probing `_dnsbl_parse_abp_regex('//')` (returns None, since inner='' is
+   rejected) against PHP's predicate for the same input (str_ends_with('/') &&
+   strlen>1 -> TRUE) -- a real discrepancy if I had "reused" the machinery
+   naively. The brief's "reuse parse_abp's own machinery... do NOT re-implement
+   grammar" is satisfied in spirit (no $options classification, no Rule
+   construction re-implemented -- only the same trivial primitives PHP's own
+   predicate uses) while achieving EXACT PHP<->Python predicate parity, which
+   the brief's item 1 explicitly required ("EXACTLY mirroring... row for row").
+3. Refactored `parse_abp()`'s inline element-hiding check (5-line boolean OR)
+   to iterate the new shared `_DNSBL_ELEMENT_HIDING_MARKERS` constant --
+   touches `parse_abp()`'s body (brief: "do NOT change parse()/parse_abp
+   public contracts unless strictly necessary -- if you must, note it"). This
+   is NOT a contract change (same public signature, same behaviour -- pinned
+   by the full test_adr07_decision_spec.py + test_adr62_byte_identity_corpus.py
+   suites staying green with zero modification) -- an internal DRY refactor
+   only, done to eliminate a second hand-copied literal-marker list that would
+   otherwise be free to drift from the new predicate's copy. Noted per the
+   brief's own "if you must, note it" clause.
+4. Checker false-negative (REALITY-OVERRIDE #2) -- found and fixed mid-phase,
+   not a scope deviation but recorded since it affected how this phase's own
+   gates were run (--staged, not just --diff origin/devel, going forward).
+
+CARRY-FORWARD for Phase 4
+------------------------------
+1. PHP's manifest writer (pfblockerng.inc:7179-7189) and the download-loop
+   capture guard (inc:~16404-16409, ADR-21) are the ONLY remaining pieces that
+   keep this phase's routing extension PRODUCTION-DORMANT. Phase 4 wires
+   `pfb_dnsbl_is_abp_rule_line()` at both PHP sites -- once that lands, EVERY
+   test in tests/test_adr62_parity_oracle.py Section 2 (currently exercising
+   SYNTHETIC raw content) becomes a live, reachable production path. Consider
+   whether Phase 4 should ALSO re-run test_adr62_parity_oracle.py against the
+   REAL corpus (regenerated raw/*.raw via the broadened writer) once it lands,
+   to close the gap between "synthetic proof" and "real proof" -- the Phase-1
+   corpus's txt/*.txt fixtures would need new/extended rows carrying the D2/D4
+   trigger shapes UNTRUNCATED (today's txt/*.txt already holds PHP's
+   pre-truncated result, matching TODAY's loop -- Phase 4 changes what the
+   loop itself would write, which then needs new fixture rows, per Phase 1's
+   carry-forward #5 "Phases 3-5 extend feeds.json + txt/*.txt").
+2. The permit-loop skip-set and plain-block-loop capture-predicate now share
+   ONE call (`_dnsbl_is_abp_rule_line`) -- if Phase 4 or 5 adds ANY further
+   shape to the PHP predicate, both Python call sites inherit it automatically
+   (no second Python site to remember).
+3. D1 remains completely untouched by both Phase 3's routing extension AND
+   Phase 4's planned capture broadening (per ADR SS6 Phase 4's own text: "D1
+   must NOT move... ABP feeds still take the $easylist branch") -- it is
+   EXCLUSIVELY Phase 5's concern (classifier deletion). Do not expect or test
+   for a D1 flip in Phase 4.
+4. The `--staged` vs `--diff origin/devel` gap in check_comment_narration.py
+   (REALITY-OVERRIDE #2): any phase that runs comment-narration checks BEFORE
+   committing should use `--staged` (after `git add`), not `--diff
+   origin/devel` alone, or genuinely-added narration can slip through
+   uncaught until the next phase's session (which WOULD see it, since by then
+   it is committed). Not this phase's bug to fix (the checker's contract is
+   correctly diff-scoped; the gap is in how it is invoked mid-session before a
+   commit exists) -- flagging for whichever phase/session next touches
+   `src/`/`scripts/` comments to remember `--staged` first.
+5. tests/fixtures/dnsbl_corpus/ (Phase 1's asset) is STILL untouched this
+   phase (no new corpus feed/fixture files added) -- Section 2's synthetic
+   oracle intentionally lives OUTSIDE the corpus mechanism (see
+   REALITY-OVERRIDE #1); Phase 4, when it broadens PHP's capture, may want to
+   ALSO extend the corpus per Phase 1's carry-forward #5, separately from
+   anything in this phase.
+
+RETIRED-TOKEN / COMMENT-NARRATION / VERSION-LITERAL checks: all 3 run clean
+against --staged (see GATES above) after the mid-phase narration fix (see
+REALITY-OVERRIDE #2 and DEVIATION #4).
