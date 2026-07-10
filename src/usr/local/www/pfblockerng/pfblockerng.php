@@ -750,8 +750,9 @@ function pfblockerng_sync_cron($force_all = FALSE, $scope = 'both') {
 							continue;
 						}
 
-						// Allow cURL SSL downgrade if user configured.
-						// issue #1154: derive before the .fail retry so the retry uses this row's own flag.
+						// Allow cURL SSL downgrade if user configured. $pflex must be derived
+						// per-row before any pfb_update_check() call — PHP loop variables
+						// persist across iterations (issue #1154).
 						$pflex = FALSE;
 						if ($row['state'] == 'Flex') {
 							$pflex = TRUE;
