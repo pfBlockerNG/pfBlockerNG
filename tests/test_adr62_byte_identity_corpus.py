@@ -5,9 +5,11 @@ Drives the REAL ``build()`` (which threads every raw line through ``parse()``/
 per-feed metadata in ``feeds.json`` plus the ``raw/<header>.raw`` files, which
 are the ACTUAL bytes ``pfb_unbound_python_sources()`` produces (captured by
 ``tests/php/Adr62DnsblCorpusManifestTest.php`` running the real PHP function --
-never hand-duplicated here). This pins TODAY's domain/allow-set per
-coverage-matrix row so Phases 3-5 can prove byte-identity modulo the ADR's
-delta table (D1/D2/D4 asserted here as TODAY's behaviour, tagged by delta ID).
+never hand-duplicated here). This pins the domain/allow-set per coverage-matrix
+row, byte-identical to ``origin/devel`` modulo the ADR's delta table: D1 stays
+TODAY's behaviour (Phase 5's concern); D2/D4 assert their NEW outcome as of
+Phase 4 (the ``mixed_plain``/``permit_feed`` fixtures were regenerated via the
+real broadened writer -- tagged by delta ID).
 
 The DNSBL download loop itself has no off-appliance driver (ADR.md SS6 Phase 1);
 the raw-feed -> ".txt"/".raw" step is DEFERRED to a live-VM smoke row (see the
@@ -197,7 +199,7 @@ def test_abp_feed_bare_domain_is_wildcard_zone_delta_d1() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 5. mixed plain feed -- ADR-21 stray || anchor + delta D2 false-positive
+# 5. mixed plain feed -- ADR-21 stray || anchor + delta D2 verbatim capture
 # --------------------------------------------------------------------------- #
 
 
@@ -213,25 +215,56 @@ def test_mixed_plain_feed_stray_abp_anchor_routes_to_parse_abp() -> None:
     assert "anchor.mixed.example" in result.zone_db
 
 
-def test_mixed_plain_feed_hash_truncation_false_positive_delta_d2() -> None:
-    """delta D2 (ADR.md SS2): TODAY, an element-hiding line like
-    'falsepositive.example##.ad' is '#'-truncated by the plain extraction
-    pipeline (inc:16706-16707) into a LIVE block for 'falsepositive.example' --
-    an accidental false positive the ADR fixes (verbatim capture + Python skip)
-    in Phase 4. This corpus row pins the pre-truncated RESULT ('falsepositive.
-    example', already in the .txt/.raw dialect) as TODAY's behaviour. UNCHANGED
-    by Phase 3: this fixture's raw bytes hold PHP's already-truncated result,
-    so the extended predicate never sees a '##' shape here -- see
-    test_adr62_parity_oracle.py's test_delta_d2_new_element_hiding_verbatim_
-    produces_no_false_positive_block for the NEW outcome on synthetic input."""
+def test_mixed_plain_feed_hash_truncation_false_positive_fixed_delta_d2() -> None:
+    """delta D2 NEW outcome (ADR.md SS2, Phase 4): 'falsepositive.example##.ad'
+    is now captured VERBATIM by the broadened download-loop/manifest-writer
+    predicate (pfb_dnsbl_is_abp_rule_line) instead of '#'-truncated into a live
+    block -- the corpus fixture (tests/fixtures/dnsbl_corpus/txt/mixed_plain.txt)
+    was regenerated via the real (now-broadened) pfb_unbound_python_sources()
+    per the corpus README. Python's parse_abp() skips the '##' element-hiding
+    marker, so NO domain is emitted at all -- the false positive is gone. This
+    was PREVIOUSLY pinned as a TODAY-blocks assertion (Phase 1); Phase 3 proved
+    the NEW outcome only on synthetic input (test_adr62_parity_oracle.py) since
+    the committed corpus couldn't yet carry the verbatim shape -- this is that
+    proof made corpus-real."""
     result = _run_corpus_build()
-    assert _blocked(result, "falsepositive.example"), (
-        "delta D2: TODAY's '#'-truncation false-positive block must still occur"
+    assert not _blocked(result, "falsepositive.example"), (
+        "delta D2 NEW: verbatim '##' capture must produce NO domain, not a block"
     )
+    assert not _allowed(result, "falsepositive.example")
+
+
+def test_mixed_plain_feed_regex_rule_now_honoured_delta_d2() -> None:
+    """delta D2 NEW outcome: a bare '/re/' block-regex line in a never-ABP
+    feed, previously '/'-truncated to nothing by the plain pipeline (dropped,
+    no domain), is now captured verbatim and routed to parse_abp() -- an
+    anchored '^...$' regex reduces to an exact data-db block (mirrors the
+    abp_feed corpus row's regexblock.abp.example)."""
+    result = _run_corpus_build()
+    assert "regexplain.mixed.example" in result.data_db
+    assert "regexplain.mixed.example" not in result.zone_db
+
+
+def test_mixed_plain_feed_regex_important_flag_carried_delta_d2() -> None:
+    """delta D2 NEW outcome: '/re/$important' in a never-ABP feed is captured
+    verbatim and its $important flag survives parse_abp()'s $options parse."""
+    result = _run_corpus_build()
+    assert "importantregex.mixed.example" in result.data_db
+    assert result.data_db["importantregex.mixed.example"]["important"] is True
+
+
+def test_mixed_plain_feed_bare_at_allow_regex_now_honoured_delta_d2() -> None:
+    """delta D2 NEW outcome: a bare '@@/re/' allow-regex line (the broadened
+    '@@' prefix, NOT the pre-existing '@@||' shape) in a never-ABP feed is
+    captured verbatim and produces a real allow -- proves the ADR's "regex
+    rules in plain feeds now honoured" benefit end-to-end via the corpus."""
+    result = _run_corpus_build()
+    assert _allowed(result, "allowregex.mixed.example")
+    assert result.white_db["allowregex.mixed.example"]["wildcard"] is False
 
 
 # --------------------------------------------------------------------------- #
-# 6. permit-mode feed (ADR-31) -- host -> allow + delta D4 accidental allow
+# 6. permit-mode feed (ADR-31) -- host -> allow + delta D4 verbatim capture
 # --------------------------------------------------------------------------- #
 
 
@@ -241,20 +274,19 @@ def test_permit_feed_host_is_allow() -> None:
     assert result.white_db["allowme.example"]["band"] == P.PRIO_FEED_ALLOW
 
 
-def test_permit_feed_hash_truncation_accidental_allow_delta_d4() -> None:
-    """delta D4 (ADR.md SS2): TODAY, a permit-mode feed's plain extraction
-    pipeline runs the SAME '#'-truncation as any plain feed, so an
-    element-hiding leftover ('accidentalallow.example', from
-    'accidentalallow.example##.ad') reaches the .txt/.raw as an ordinary host
-    line -- and build()'s permit loop (@5029-5064) treats EVERY such line as a
-    band-2 allow. Phase 4 fixes this (verbatim capture -> Python skips '##').
-    UNCHANGED by Phase 3 for the same reason as D2 above -- see
-    test_adr62_parity_oracle.py's test_delta_d4_new_element_hiding_verbatim_
-    in_permit_feed_produces_no_accidental_allow for the NEW outcome."""
+def test_permit_feed_hash_truncation_accidental_allow_fixed_delta_d4() -> None:
+    """delta D4 NEW outcome (ADR.md SS2, Phase 4): 'accidentalallow.example##.ad'
+    is now captured VERBATIM by the broadened predicate instead of
+    '#'-truncated into an ordinary host line -- the corpus fixture (tests/
+    fixtures/dnsbl_corpus/txt/permit_feed.txt) was regenerated via the real
+    broadened pfb_unbound_python_sources(). build()'s permit loop skips any
+    ABP-shaped line (_dnsbl_is_abp_rule_line, Phase 3), so the accidental
+    band-2 allow is gone. PREVIOUSLY pinned as a TODAY-allows assertion
+    (Phase 1); Phase 3 proved the NEW outcome only on synthetic input -- this
+    is that proof made corpus-real."""
     result = _run_corpus_build()
-    assert _allowed(result, "accidentalallow.example"), (
-        "delta D4: TODAY's permit-mode accidental allow from '##'-truncation must still occur"
-    )
+    assert not _allowed(result, "accidentalallow.example"), "delta D4 NEW: verbatim '##' capture must produce NO allow"
+    assert not _blocked(result, "accidentalallow.example")
 
 
 # --------------------------------------------------------------------------- #
