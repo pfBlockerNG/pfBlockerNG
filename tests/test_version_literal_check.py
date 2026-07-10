@@ -1069,14 +1069,15 @@ def test_py_escaped_delim_inside_open_single_quote_docstring_does_not_falsely_cl
 
 
 def test_py_close_and_reopen_on_one_line_still_stays_open(tmp_path: Path) -> None:
-    # Green oracle: two REAL """ on one line (close + reopen) is an EVEN count,
-    # so the docstring stays open per the existing parity semantics -- untouched
-    # by the escape-aware fix. Must hold both pre- and post-fix.
+    # Green oracle: two REAL """ on one line (docstring close + a new triple
+    # string reopening) is an EVEN count, so the span stays open per the
+    # existing parity semantics -- untouched by the escape-aware fix. Also pins
+    # an EMPTY line inside the open span staying masked. Must hold both pre-
+    # and post-fix.
     content = (
         '"""Doc.\n'
-        + '"""'
-        + " reopened "
-        + '"""'
+        + '""";y = """'
+        + "\n"
         + "\n"
         + 'VERSION = "'
         + _CE28
@@ -1088,7 +1089,7 @@ def test_py_close_and_reopen_on_one_line_still_stays_open(tmp_path: Path) -> Non
     )
     violations = _find_py(tmp_path, content)
     assert len(violations) == 1, f"expected only the code line flagged; got {violations}"
-    assert violations[0][1] == 5
+    assert violations[0][1] == 6
 
 
 def test_py_trailing_backslash_in_open_docstring_does_not_crash(tmp_path: Path) -> None:
