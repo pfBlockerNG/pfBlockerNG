@@ -1514,10 +1514,13 @@ if (isset($_POST) && !empty($_POST)) {
 	elseif (isset($_POST['ip_remove']) && !empty($_POST['ip_remove'])) {
 
 		$ip = '';
-		// issue #1128: an array-valued POST ('ip[]=x') throws a PHP 8 TypeError in the
-		// strpos() below -- the guard belongs on the outer call, not just the inner one.
-		if (is_string($_POST['ip'] ?? null) && strpos($_POST['ip'], '/') !== FALSE) {
-			if (is_string($_POST['ip']) && preg_match('/^(?:([0-9.]{7,15})|([0-9a-f:]{2,39}|[0-9a-f:]{2,30}[0-9.]{7,15}))\/(\d{1,3})$/i', $_POST['ip'], $parts)) {
+		// issue #1128: a non-string 'ip' (missing, or array-valued incl. NESTED arrays
+		// like 'ip[0][]=x') must never reach strpos() or pfb_filter() -- a nested array
+		// still TypeErrors inside pfb_filter()'s own control-char loop, since that loop
+		// runs before pfb_filter()'s array-reject check. Scalarize once, up front.
+		$pfb_ip = is_string($_POST['ip'] ?? null) ? $_POST['ip'] : '';
+		if (strpos($pfb_ip, '/') !== FALSE) {
+			if (preg_match('/^(?:([0-9.]{7,15})|([0-9a-f:]{2,39}|[0-9a-f:]{2,30}[0-9.]{7,15}))\/(\d{1,3})$/i', $pfb_ip, $parts)) {
 				$ip = pfb_filter($parts[1], PFB_FILTER_IP, 'alerts ip_remove');
 				if (empty($ip) || (count($parts) != 4) || ($parts[3] < 24) || ($parts[3] > 32)) {
 					$ip = '';
@@ -1525,9 +1528,7 @@ if (isset($_POST) && !empty($_POST)) {
 			}
 		}
 		else {
-			// issue #1128: a missing 'ip' key reaches here too (short-circuits the
-			// outer is_string() check above) -- avoid an undefined-array-key warning.
-			$ip = pfb_filter($_POST['ip'] ?? '', PFB_FILTER_IP, 'alerts ip_remove');
+			$ip = pfb_filter($pfb_ip, PFB_FILTER_IP, 'alerts ip_remove');
 		}
 		$table = pfb_filter($_POST['table'], PFB_FILTER_WORD, 'alerts ip_remove');
 

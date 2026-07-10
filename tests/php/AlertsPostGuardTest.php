@@ -139,4 +139,19 @@ final class AlertsPostGuardTest extends TestCase
 		$ip = pfb_alerts_oracle_ip_remove();
 		$this->assertSame('', $ip, 'a missing ip key must yield the blank ip, not a warning');
 	}
+
+	public function testIpNestedArrayValueDoesNotThrowAndYieldsBlankIp(): void
+	{
+		// A nested array ('ip[0][]=x', parse_str-shaped) reached pfb_filter()'s own
+		// control-char preg_match() loop, which TypeErrors on a non-string $vline --
+		// the flat-array case above alone doesn't cover this shape.
+		parse_str('ip[0][]=x', $parsed);
+		$_POST['ip'] = $parsed['ip'];
+		try {
+			$ip = pfb_alerts_oracle_ip_remove();
+		} catch (\TypeError $e) {
+			$this->fail('a nested array ip value must not TypeError: ' . $e->getMessage());
+		}
+		$this->assertSame('', $ip, 'a nested array ip value must resolve to the blank/rejected ip');
+	}
 }
