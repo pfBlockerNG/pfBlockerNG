@@ -6680,7 +6680,7 @@ function pfb_dnsbl_hash_line_classify(string $line): array {
 // pairs). Asymmetric by design (kept, not flattened): v4 sanitizes $candidate_value
 // THEN validates the SANITIZED result; v6 validates $candidate_value RAW (never
 // sanitized) and appends it as-is. $guard_value is the family-check target (equal to
-// $candidate_value at two sites; a distinct CSV column at the csv:pon site).
+// $candidate_value at two sites; a distinct CSV column at the pon-feed CSV site).
 // $pfb['updateip']/$ipcount and any 'continue' differ per call site and stay there;
 // this returns TRUE iff an IP was appended.
 function pfb_dnsbl_collect_feed_ip(string $guard_value, string $candidate_value, bool $custom, array &$domain_data_ip, array &$domain_data_ip6): bool {

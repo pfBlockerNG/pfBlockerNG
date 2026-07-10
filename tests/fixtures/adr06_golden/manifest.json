@@ -5,7 +5,6 @@
     { "raw": "feed_hosts.txt",   "feed": "HostsFeed", "group": "Ads",     "format_hint": "hosts", "log_flag": "1" },
     { "raw": "feed_plain.txt",   "feed": "PlainFeed", "group": "Malware", "format_hint": "plain", "log_flag": "1" },
     { "raw": "feed_abp.txt",     "feed": "AbpFeed",   "group": "AbpAds",  "format_hint": "abp",   "log_flag": "1" },
-    { "raw": "feed_csv_pon.txt", "feed": "PonFeed",   "group": "Threat",  "format_hint": "csv:pon", "log_flag": "1" },
     { "raw": "feed_extra.txt",   "feed": "ExtraFeed", "group": "Extra",   "format_hint": "plain", "log_flag": "1" },
     { "raw": "feed_nolog.txt",   "feed": "NoLogFeed", "group": "NoLog",   "format_hint": "plain", "log_flag": "2" }
   ]

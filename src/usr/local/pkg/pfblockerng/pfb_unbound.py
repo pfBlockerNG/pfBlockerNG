@@ -4148,7 +4148,7 @@ def parse(format_hint: str, line: str) -> ParsedEntry | None:
     in-loop CSV-type sniffing). This subsumes the current basic-ABP token-strip and
     reproduces today's per-format behaviour, including which lines are IGNORED.
 
-    Bare-IP lines and the csv:pon col-0 IP are NOT returned here -- IP extraction is
+    Bare-IP lines are NOT returned here -- IP extraction is
     a PHP/firewall concern; a stray bare IP simply yields ``None`` (and
     would fail domain validation anyway). ``feed`` / ``group`` / ``log`` are attached
     by build() from the manifest row, so parse() only resolves the domain token.
@@ -4169,22 +4169,6 @@ def parse(format_hint: str, line: str) -> ParsedEntry | None:
         if host is None:
             return None
         return ParsedEntry(kind=DNSBL_KIND_BLOCK, value=host, feed="", group="", log="")
-
-    if format_hint == "csv:pon":
-        # 9-col CSV: domain = col2 (always kept). col0 is handled by the PHP DNSBL-IP
-        # pass; Python ignores it here.
-        if stripped.startswith("!") or stripped.lower().startswith("timestamp"):
-            return None
-        try:
-            row = next(csv.reader([stripped]))
-        except (csv.Error, StopIteration):
-            return None
-        if len(row) != 9:
-            return None
-        domain = row[2]
-        if not domain:
-            return None
-        return ParsedEntry(kind=DNSBL_KIND_BLOCK, value=domain, feed="", group="", log="")
 
     # hosts / plain
     if stripped.startswith("#") or stripped.startswith("!"):
