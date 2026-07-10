@@ -28,21 +28,24 @@ WHAT MODELS "THE CURRENT PIPELINE"
 There is no live PHP/Unbound in CI (every prior ADR). So this file contains a
 pure-Python *reference preprocessor* (``ReferencePipeline``) that faithfully
 re-implements the CURRENT shell/PHP preprocessing semantics inventoried in
-Phase 1 (``RESULTS/01_Results.txt``), with file:line anchors in the docstrings:
+Phase 1 (``RESULTS/01_Results.txt``), with PHP-symbol anchors in the docstrings:
 
-  * per-format parse (hosts / plain / basic-ABP), incl. the current
-    basic-ABP token-strip and the rule that ``@@`` / ``##`` / ``$options`` / ``*``
-    / ``/`` / regex lines are IGNORED today (``pfblockerng.inc:7706-7717``);
-  * embedded-IP extraction -> firewall handoff set (generic bare-IP at
-    ``inc:7962-7973``), with IP lines stripped from what the domain build
-    receives. (PHP also extracts an embedded IP from CSV-format feeds via
-    ``pfb_dnsbl_collect_feed_ip()`` -- a separate, still-live PHP path this
-    oracle's fixtures don't currently exercise, so it isn't modelled here);
-  * domain validation + lower-casing (``inc:1138-1150``);
-  * data/zone classification via the public-suffix TLD master (``tld_analysis`` /
-    ``tld_search``, ``inc:2805-2877``), incl. TLD blacklist (whole-TLD zone,
-    ``inc:2740``) and TLD exclusion (force exact data, ``inc:2855``);
-  * user-whitelist normalisation (``pfb_unbound_python_whitelist``, ``inc:2259``:
+  * per-format parse (hosts / plain / basic-ABP), incl. the legacy basic-ABP
+    token-strip (upgrade-compat only since ADR-62 -- live ABP-shaped lines now
+    route verbatim to Python's richer ABP parser) and the rule that ``@@`` /
+    ``##`` / ``$options`` / ``*`` / ``/`` / regex lines are IGNORED by that
+    legacy strip;
+  * embedded-IP extraction -> firewall handoff set (generic bare-IP, handled
+    in ``sync_package_pfblockerng()``'s DNSBL download/parse loop), with IP
+    lines stripped from what the domain build receives. (PHP also extracts an
+    embedded IP from CSV-format feeds via ``pfb_dnsbl_collect_feed_ip()`` -- a
+    separate, still-live PHP path this oracle's fixtures don't currently
+    exercise, so it isn't modelled here);
+  * domain validation + lower-casing (``pfb_filter()``'s ``PFB_FILTER_DOMAIN`` case);
+  * data/zone classification via the public-suffix TLD master (``tld_analysis()``
+    / ``tld_search()``), incl. TLD blacklist (whole-TLD zone) and TLD exclusion
+    (force exact data);
+  * user-whitelist normalisation (``pfb_unbound_python_whitelist()``:
     www-strip, leading-dot -> wildcard) feeding the query-time ``whiteDB``; and
   * TOP1M -> ``whiteDB`` only when enabled.
 
@@ -92,9 +95,9 @@ def _load_json(name: str) -> dict[str, Any]:
 # Reference model of the CURRENT preprocessing pipeline (shell + PHP).
 #
 # Pure, stdlib-only. Re-implements the inventoried semantics so the oracle can run
-# in CI without live PHP/Unbound. Anchors to pfblockerng.inc / .sh line ranges are
-# in the method docstrings. This is the authoritative-today behaviour Phase 3 must
-# match at the DECISION level.
+# in CI without live PHP/Unbound. Anchors to pfblockerng.inc / .sh symbol names
+# are in the method docstrings. This is the authoritative-today behaviour Phase 3
+# must match at the DECISION level.
 # --------------------------------------------------------------------------- #
 
 
@@ -130,15 +133,16 @@ class ReferencePipeline:
 
         self._feed_group_db: dict[str, int] = {}
         self._next_index = 0
-        # Public-suffix oracle: tlds[tld][full-suffix] = '' (tld_analysis:2630-2642),
-        # minus any TLD that is blacklisted or excluded.
+        # Public-suffix oracle: tlds[tld][full-suffix] = '' (mirrors PHP's
+        # tld_analysis() master-list load loop), minus any TLD that is
+        # blacklisted or excluded.
         self._tlds: dict[str, dict[str, str]] = defaultdict(dict)
 
     # -- parse layer -------------------------------------------------------- #
 
     @staticmethod
     def _parse_abp_line(line: str) -> str | None:
-        """Current basic-ABP pass (pfblockerng.inc:7706-7717).
+        """Legacy basic-ABP token-strip, upgrade-compat only (ADR-62).
 
         Keep ONLY a plain ``||domain^`` network line; strip the ``||`` and ``^``
         tokens. IGNORE everything else: ``@@`` exceptions, ``##`` element rules,
@@ -152,7 +156,8 @@ class ReferencePipeline:
 
     @staticmethod
     def _strip_hosts_prefix(line: str) -> str:
-        """Hosts format: "<sink-ip> <domain>" -> take the domain token (inc:7899-7907)."""
+        """Hosts format: "<sink-ip> <domain>" -> take the domain token (approximates
+        sync_package_pfblockerng()'s 'Typical Host Feed format' pass)."""
         if " " in line:
             first, _, rest = line.partition(" ")
             rest = rest.strip()
@@ -168,7 +173,7 @@ class ReferencePipeline:
         Implements the per-format dispatch + the embedded-IP firewall detection of
         the current parse loop. A generic bare-IP line yields ``(None, ip)`` -- the
         IP goes to the firewall and the line is stripped from the domain build
-        (inc:7962-7973).
+        (``sync_package_pfblockerng()``'s DNSBL download/parse loop).
         """
         line = raw_line.strip()
         if not line:
@@ -188,19 +193,19 @@ class ReferencePipeline:
         line = line.strip().strip(".")
         if not line:
             return None, None
-        # Embedded bare-IP -> firewall path (inc:7962-7973); stripped from Python.
+        # Embedded bare-IP -> firewall path (sync_package_pfblockerng()); stripped from Python.
         if _is_ipv4(line):
             return None, line
         return line, None
 
     @staticmethod
     def _validate_domain(host: str) -> str | None:
-        """Lower-case + PFB_FILTER_DOMAIN shape gate (inc:1138-1150)."""
+        """Lower-case + PFB_FILTER_DOMAIN shape gate (mirrors pfb_filter()'s PFB_FILTER_DOMAIN case)."""
         host = host.strip().strip(".").lower()
         if "." not in host:
             return None
         # Representative domain-shape gate (labels of [a-z0-9_-], underscore per
-        # #723 — parity with PFB_FILTER_DOMAIN, pfblockerng.inc:1138-1150).
+        # #723 — parity with pfb_filter()'s PFB_FILTER_DOMAIN case).
         for label in host.split("."):
             if not label or label[0] == "-" or label[-1] == "-":
                 return None
@@ -213,11 +218,12 @@ class ReferencePipeline:
     def _load_tld_master(self) -> None:
         """Load the public-suffix master, minus blacklisted/excluded TLDs.
 
-        tld_analysis:2630-2642 builds tlds[tld][full-suffix]; the TLD blacklist
-        (inc:2749-2751) and TLD exclusion (inc:2791-2793) remove entries.
+        Mirrors PHP's tld_analysis() master-list load loop, which builds
+        tlds[tld][full-suffix]; the TLD blacklist and TLD exclusion remove
+        entries from it.
         """
         blacklist = {t.strip(".") for t in self.config.get("tld_blacklist", [])}
-        # Exclusions remove the WHOLE-domain key from tlds (inc:2791); only
+        # Exclusions remove the WHOLE-domain key from tlds (tld_analysis()); only
         # single-label exclusions would match a tld key, but we mirror the unset.
         exclusion_keys = {e.strip(".") for e in self.config.get("tld_exclusion", [])}
         for line in _read_lines("tld_master.txt"):
@@ -230,7 +236,7 @@ class ReferencePipeline:
             self._tlds[tld][suffix] = ""
 
     def _tld_search(self, tld: str, dparts: list[str], j: int, k: int) -> str | None:
-        """tld_search (inc:2595-2603): if the j-label suffix is a known public
+        """Mirrors PHP's tld_search(): if the j-label suffix is a known public
         suffix, the registrable parent is the k-label slice."""
         tld_query = ".".join(dparts[-j:])
         if tld_query in self._tlds.get(tld, {}):
@@ -240,7 +246,7 @@ class ReferencePipeline:
     def _classify(self, domain: str) -> tuple[str, str]:
         """Return ('zone', registrable-parent) or ('data', domain).
 
-        Mirrors tld_analysis:2832-2874: registrable-parent -> wildcard ZONE;
+        Mirrors PHP's tld_analysis() zone/data split: registrable-parent -> wildcard ZONE;
         deeper sub-domain -> exact DATA; TLD-exclusion -> force exact DATA.
         """
         dparts = domain.split(".")
@@ -271,9 +277,10 @@ class ReferencePipeline:
     # -- whitelist layer ---------------------------------------------------- #
 
     def _build_whitelist(self) -> None:
-        """User-whitelist normalisation (pfb_unbound_python_whitelist, inc:2259):
+        """User-whitelist normalisation (mirrors PHP's pfb_unbound_python_whitelist()):
         www-strip, leading-dot -> wildcard '1' else '0'. TOP1M -> whiteDB only when
-        enabled. whiteDB value is the wildcard bool the loader stores (inc:609-619)."""
+        enabled. whiteDB value is the wildcard bool pfb_unbound.py's
+        _load_whitelist_db() stores from that '1'/'0' encoding."""
         for line in self.config.get("user_whitelist", []):
             line = line.strip()
             if not line:
@@ -306,7 +313,8 @@ class ReferencePipeline:
 
     def _emit_tld_blacklist_zones(self) -> None:
         """Whole-TLD block: a blacklisted TLD becomes a synthetic DNSBL_TLD zone
-        entry (inc:2740 ``,<tld>,,1,DNSBL_TLD,DNSBL_TLD``)."""
+        entry, matching the row shape PHP's tld_analysis() writes for the same
+        case (``,<tld>,,1,DNSBL_TLD,DNSBL_TLD``)."""
         for tld in self.config.get("tld_blacklist", []):
             tld = tld.strip(".")
             if not tld:
@@ -379,7 +387,7 @@ def _decision_label(d: pfb_unbound.DnsblDecision) -> str:
       * "block-nolog" -> blocked, but log_flag '2' (block-but-skip-log):
                          null_blocking STAYS True (only log '1' flips it), so the
                          reply is built but not null-routed and the hit is not
-                         logged (pfb_unbound.py:1134). Still a block, distinct
+                         logged (get_details_dnsbl()'s log_type suppression). Still a block, distinct
                          from HSTS (which sets in_hsts) and from whitelist.
     """
     if not d.is_found:
