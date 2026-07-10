@@ -83,7 +83,7 @@ final class CategoryEditRowMoveTest extends TestCase
 
 	// --- Row 1: regression guard -- the pre-existing correct-move behaviour ----
 
-	public function testValidMoveRelocatesCheckedRowAfterAnchor(): void
+	public function testValidMoveRelocatesCheckedRowNextToAnchor(): void
 	{
 		// Given: three rows, row1 checked to move to anchor row2 (an existing key).
 		$rowdata = $this->rowdata(['row0', 'row1', 'row2']);
@@ -91,8 +91,10 @@ final class CategoryEditRowMoveTest extends TestCase
 		// When: the reorder runs with a valid anchor.
 		[$result, ] = $this->runRowMove($rowdata, 0, [1 => '1'], 2);
 
-		// Then: row1 relocates immediately after row2 -- unchanged since before the fix.
-		$this->assertSame(['row0', 'row2', 'row1'], $result, 'row1 must relocate immediately after the anchor row2');
+		// Then: row1 lands adjacent to row2 -- pins the pre-existing, unchanged-by-this-fix
+		// placement rule (not a before/after claim; see the UI tooltip vs. actual algorithm
+		// discrepancy tracked separately).
+		$this->assertSame(['row0', 'row2', 'row1'], $result, 'row1 must land adjacent to the anchor row2, unchanged from pre-fix behaviour');
 	}
 
 	// --- Row 2: THE BUG -- a stale/out-of-range anchor must not drop rows ------
