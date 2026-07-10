@@ -103,6 +103,26 @@ EOF
     End
   End
 
+  Describe 'hostile ABI metadata'
+    # validate_abi(): the ABI becomes a path segment that is rm -rf'd +
+    # rebuilt. The guard must reject under ANY ambient locale (issue #1148: a
+    # collating UTF-8 locale lets a case-range class admit accented letters).
+    Parameters
+      'FreeBSD:15:amdé64'
+      'FreeBSD/15/amd64'
+      'FreeBSD:..:amd64'
+    End
+
+    It "rejects hostile ABI metadata: $1"
+      fake_pkg a.pkg pfSense-pkg-pfBlockerNG 4.0.1 "$1" php83
+      When call run_build --varver ce-2.8
+      The status should equal 1
+      The stderr should include 'unsafe or invalid ABI'
+      # validate_abi() runs before the bucket is laid out.
+      The path "${work}/out/release" should not be exist
+    End
+  End
+
   It 'fails loud on a mixed-ABI input instead of mixing editions in one bucket'
     fake_pkg a.pkg pfSense-pkg-pfBlockerNG 4.0.1 FreeBSD:15:amd64 php83
     fake_pkg b.pkg pfSense-pkg-pfBlockerNG 4.0.1_1 FreeBSD:16:amd64 php85

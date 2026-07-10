@@ -109,12 +109,13 @@ fi
 }
 [ -d "$IN" ] || { echo "build-repo: --in is not a directory: $IN" >&2; exit 1; }
 # The varver becomes a path segment (rm -rf'd + rebuilt) — same safety rule as ABIs.
-case "$VARVER" in
-    ""|*/*|*".."*|*[!a-z0-9.-]*)
-        echo "build-repo: unsafe or invalid --varver: '$VARVER' (expect e.g. ce-2.8 / plus-26.03)" >&2
-        exit 2
-        ;;
-esac
+# issue #1148: class check via LC_ALL=C tr, not a `case` range — a collating
+# locale lets [a-z] admit uppercase/accented letters, defeating the guard.
+if [ -z "$VARVER" ] || [ "${VARVER#*..}" != "$VARVER" ] || \
+   [ -n "$(printf '%s' "$VARVER" | LC_ALL=C tr -d 'a-z0-9.-')" ]; then
+    echo "build-repo: unsafe or invalid --varver: '$VARVER' (expect e.g. ce-2.8 / plus-26.03)" >&2
+    exit 2
+fi
 
 command -v "$PKG_BIN" >/dev/null 2>&1 || {
     echo "build-repo: '$PKG_BIN' not found on PATH — need a libpkg \`pkg\` binary (set PKG_BIN)" >&2
@@ -191,12 +192,12 @@ done
 # name (${OUT}/${abi}) that is `rm -rf`'d + rebuilt, so `..` / `/` / odd chars could
 # escape $OUT. FreeBSD ABIs look like `FreeBSD:15:amd64` (the `:` is allowed).
 validate_abi() {
-    case "$1" in
-        ""|*/*|*".."*|*[!A-Za-z0-9:._+-]*)
-            echo "build-repo: unsafe or invalid ABI in package metadata: '$1'" >&2
-            exit 1
-            ;;
-    esac
+    # issue #1148: LC_ALL=C tr, not a `case` range — see the --varver guard.
+    if [ -z "$1" ] || [ "${1#*..}" != "$1" ] || \
+       [ -n "$(printf '%s' "$1" | LC_ALL=C tr -d 'A-Za-z0-9:._+-')" ]; then
+        echo "build-repo: unsafe or invalid ABI in package metadata: '$1'" >&2
+        exit 1
+    fi
 }
 
 # ── Lay out the varver bucket + run `pkg repo` ─────────────────────────────────
