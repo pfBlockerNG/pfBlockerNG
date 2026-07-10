@@ -96,11 +96,12 @@ model may implement a fix **directly** when it is relatively small and doable in
 and always handles **docs / config / settings / skills** directly. Delegation is for
 non-trivial, multi-step `src/`/`tests/`/CI work.
 
-- **The implementer implements; it never re-delegates — the split is exactly one level deep.**
-  A Sonnet 5 implementer spawned for a step does the work itself with Read/Edit/Write/Bash and
-  **must not spawn further agents**. This section is read by both roles: **if you are reading
-  it as a spawned implementer, you are the implementer, not a new planner** — build, don't
-  re-delegate.
+- **An implementer may re-delegate when a subtask genuinely splits** (parallel siblings, a
+  verifier per finding) — the platform enforces its own nesting-depth cap, so we add no depth
+  rule of our own. **Accountability never splits**: the spawning agent verifies nested work
+  itself before it enters its handoff, every handoff/gate field stays the spawner's to fill,
+  and a nested delegate's defect is the spawner's defect at the gate above. Delegating the
+  whole brief downward unexamined is still a defect — split work, not responsibility.
 - **The planner's brief to Sonnet 5 follows the delegation contract below** — a vague or wrong
   brief is a planner bug, and a handful of real shipped defects trace directly to brief bugs
   (a half-enumerated axis, a vacuous test spec, an unverified "fact" stated as truth).
