@@ -239,6 +239,14 @@ if (isset($_REQUEST) && isset($_REQUEST['ajax'])) {
 
 			$pfb_logfilename_esc = escapeshellarg($pfb_logfilename);
 			$linecnt = exec("{$pfb['grep']} -c ^ {$pfb_logfilename_esc} 2>&1");
+
+			// issue #1156: 2>&1 puts grep errors in $linecnt; non-numeric must not reach
+			// the subtraction, and silently skipping the cap would stream the whole file --
+			// answer with the handler's error convention instead.
+			if (!is_numeric($linecnt)) {
+				print ("|2|" . gettext('Failed to determine log line count') . "|IA==|");
+				exit;
+			}
 			$maxcnt = 10000; // Max line limit
 
 			$validate = FALSE;
