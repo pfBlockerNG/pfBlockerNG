@@ -5006,6 +5006,9 @@ foreach ($stats as $stat_type => $stype):
 
 							$alert_event = $btnsubmit = $query_port = $hostname = '';
 							$subdata = array();
+							// issue #1069: NULL until a trusted-literal branch below opts the
+							// final <td> out of escaping; otherwise it defaults to pfb_hsc($data).
+							$data_disp = NULL;
 
 							$filter_value = $data;
 							if ($stat_type == 'dnsbltld' || $stat_type == 'replytld' ||
@@ -5048,10 +5051,13 @@ foreach ($stats as $stat_type => $stype):
 							}
 
 							if ($stat_type != 'ipdirection') {
+								// issue #1069: filter_value/data are log-derived -- HTML-encode
+								// both attribute values.
 								$btnsubmit = '<button type="submit" class="fa-solid fa-filter button-icon"'
 										. " name=\"filterlogentries_submit_{$stat_type}\""
 										. " id=\"filterlogentries_submit_{$stat_type}\""
-										. " value=\"{$filter_value}\" title=\"Filter Alerts for [ {$data} ]\"></button>";
+										. " value=\"" . pfb_hsc($filter_value) . "\" title=\"Filter Alerts for [ "
+										. pfb_hsc($data) . " ]\"></button>";
 							}
 
 							// Collect GeoIP or DNSBL Type classification
@@ -5065,9 +5071,11 @@ foreach ($stats as $stat_type => $stype):
 									$data = $subdata[0];
 								}
 
+								// issue #1069: $data rides a URL query segment -- rawurlencode,
+								// not HTML-encode.
 								$alert_event = '<a class="fa-solid fa-info icon-pointer"'
 										. ' title="Click for Threat Lookup." target="_blank"'
-										. ' href="/pfblockerng/pfblockerng_threats.php?' . $stype[4] . '=' . $data . '"></a>';
+										. ' href="/pfblockerng/pfblockerng_threats.php?' . $stype[4] . '=' . rawurlencode($data) . '"></a>';
 							}
 
 							if ($stat_type == 'dnsbldatehr' || $stat_type == 'dnsbldatehrmin') {
@@ -5076,6 +5084,7 @@ foreach ($stats as $stat_type => $stype):
 								// issue #1057: a truncated/corrupt key has no 2nd token.
 								$d = explode (' ', $data);
 								$data = isset($d[1]) ? "{$d[0]}&emsp;({$d[1]})" : $d[0];
+								$data_disp = $data;	// program-generated date/hour token, trusted
 							}
 
 							if (!empty($data) && $data != 'Not available for HTTPS alerts') {
@@ -5083,29 +5092,36 @@ foreach ($stats as $stat_type => $stype):
 								// Report Local hostname if found
 								if ($stat_type == 'ipsrcipout' || $stat_type == 'ipdstipin') {
 									if (isset($local_hosts[$data])) {
-										$hostname = "&emsp;<small>( {$local_hosts[$data]} )</small>";
+										$hostname = "&emsp;<small>( " . pfb_hsc($local_hosts[$data]) . " )</small>";
 									}
 								}
 
 								// Get external IP hostname and Resolved hostname
 								elseif ($stat_type == 'ipsrcipin' || $stat_type == 'ipdstipout') {
 									$title = '';
+									// issue #1069: escape BEFORE truncation, and fix the stray-brace
+									// `$title}` typo (was never a valid `{$title}` interpolation).
+									$h_subdata2 = pfb_hsc($subdata[2]);
 									if (strlen($subdata[2]) >= 45) {
-										$title = "title=\"{$subdata[2]}\"";
-										$subdata[2] = substr($subdata[2], 0, 45) . "<small>...</small>";
+										$title = "title=\"{$h_subdata2}\"";
+										$subdata[2] = substr($h_subdata2, 0, 45) . "<small>...</small>";
+									} else {
+										$subdata[2] = $h_subdata2;
 									}
-									$hostname = "<br /><span $title}><small>{$subdata[2]}</small></span>";
+									$hostname = "<br /><span {$title}><small>{$subdata[2]}</small></span>";
 								}
 							}
 
 							if ($stat_type == 'dnsblagent' && $data == 'Unknown') {
 								$data = 'DNSBL Webserver/VIP';
+								$data_disp = $data;	// literal, trusted
 							}
 
 							if ($stat_type == 'ipdstport') {
+								// issue #1069: href segment rawurlencode'd; title HTML-encoded.
 								$query_port = '&nbsp;<a class="fa-solid fa-search icon-pointer" target="_blank"'
-										. ' href="/pfblockerng/pfblockerng_threats.php?port=' . $data
-										. '" title="Click for Threat Port Lookup [ ' . $data . ' ]"></a>';
+										. ' href="/pfblockerng/pfblockerng_threats.php?port=' . rawurlencode($data)
+										. '" title="Click for Threat Port Lookup [ ' . pfb_hsc($data) . ' ]"></a>';
 							}
 
 							elseif ($stat_type == 'ipdirection') {
@@ -5114,22 +5130,30 @@ foreach ($stats as $stat_type => $stype):
 								} else {
 									$data = 'Outbound packets';
 								}
+								$data_disp = $data;	// literal, trusted
 							}
 
 							if (empty($data)) {
 								$data = 'Unknown';
+								$data_disp = $data;	// literal, trusted
 							}
 
 							$td_type = '';
 							if ($stype[3]) {
-								$td_type = "<td style=\"text-align: center;\">{$subdata[1]}</td>";
+								$td_type = "<td style=\"text-align: center;\">" . pfb_hsc($subdata[1]) . "</td>";
+							}
+
+							// issue #1069: everything NOT opted into a trusted literal above is
+							// attacker-influenceable log/feed data -- HTML-encode it here.
+							if ($data_disp === NULL) {
+								$data_disp = pfb_hsc($data);
 							}
 
 							print ("<tr>
 								<td style=\"text-align: center; white-space: nowrap;\">{$alert_event}{$query_port}{$btnsubmit}</td>
 								<td style=\"text-align: right; padding-right: 15px;\">{$data_count}</td>
 								{$td_type}
-								<td style=\"white-space: nowrap;\">{$data}{$hostname}</td></tr>");
+								<td style=\"white-space: nowrap;\">{$data_disp}{$hostname}</td></tr>");
 						}
 					}
 					?>
@@ -5257,8 +5281,10 @@ var pieChart_<?=$stat_type?> = new d3pie("pieChart_<?=$stat_type?>", {
 			}
 
 			print("{");
-			print('"label": "' . $k[$i] . '", "value": ');
-			print($summary[$k[$i]]);
+			// issue #1069: log/feed-derived label into an inline <script> -- JSON_HEX_*
+			// escapes quotes/tags so a domain can't break out of the JS string or the block.
+			print('"label": ' . json_encode($k[$i], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) . ', "value": ');
+			print((float) $summary[$k[$i]]);
 			print(', "color": "' . $segcolors[$i % $numsegments] . '"');
 			print("}");
 		}
