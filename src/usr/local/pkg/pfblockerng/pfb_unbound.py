@@ -4267,6 +4267,8 @@ def _dnsbl_load_tld_master(
         if not suffix or suffix.startswith("#"):
             continue
         tld = suffix.rsplit(".", 1)[-1]
+        if not tld:
+            continue
         if tld in blacklist or tld in exclusion_keys:
             continue
         tlds.setdefault(tld, {})[suffix] = ""

@@ -194,6 +194,14 @@ class TestLoadTldMaster:
         assert "0" in tlds
         assert tlds["0"] == {"0": ""}
 
+    def test_empty_extracted_tld_dropped(self) -> None:
+        # issue #1134: rsplit('.', 1)[-1] on a trailing-dot/bare-dot row extracts
+        # '' -- must be dropped like PHP's tld_analysis(), not seed a '' bucket.
+        # 'com' (dot-less, unaffected) proves the guard is scoped to the empty case.
+        tlds = _dnsbl_load_tld_master(["bad.", ".", "..", "com"], [], [])
+        assert "" not in tlds
+        assert tlds["com"] == {"com": ""}
+
 
 # --------------------------------------------------------------------------- #
 # ABP option / regex parse helpers
