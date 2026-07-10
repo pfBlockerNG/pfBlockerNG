@@ -870,7 +870,7 @@ class TestGetDetailsDnsblQtype:
         return lines
 
     def _block(self, qtype: str) -> None:
-        pfb_unbound.get_details_dnsbl("dnsbl", None, self._qstate(qtype), None, {"pfb_addr": "1.2.3.4"}, self._dnsbl())
+        pfb_unbound.get_details_dnsbl("dnsbl", None, self._qstate(qtype), {"pfb_addr": "1.2.3.4"}, self._dnsbl())
 
     @staticmethod
     def _dnsbl_fields(lines: list[tuple[str, str]]) -> list[list[str]]:
@@ -932,7 +932,7 @@ class TestGetDetailsDnsblQtype:
                 qinfo=types.SimpleNamespace(qname_str=name, qtype_str="A"),
                 return_msg=None,
             )
-            pfb_unbound.get_details_dnsbl("dnsbl", None, qstate, None, {"pfb_addr": "1.2.3.4"}, dec)
+            pfb_unbound.get_details_dnsbl("dnsbl", None, qstate, {"pfb_addr": "1.2.3.4"}, dec)
         a_fields, b_fields = self._dnsbl_fields(lines)
         assert a_fields[9] == "+"
         assert b_fields[9] == "+"
@@ -952,7 +952,7 @@ class TestGetDetailsDnsblQtype:
             qinfo=types.SimpleNamespace(qname_str="Blocked.COM.", qtype_str="A"),
             return_msg=None,
         )
-        pfb_unbound.get_details_dnsbl("dnsbl", None, qstate, None, {"pfb_addr": "1.2.3.4"}, self._dnsbl())
+        pfb_unbound.get_details_dnsbl("dnsbl", None, qstate, {"pfb_addr": "1.2.3.4"}, self._dnsbl())
         assert len(self._dnsbl_fields(lines)) == 1  # attributed despite mixed-case query
 
 
@@ -985,7 +985,7 @@ class TestGetDetailsDnsblNxdomain:
             return_msg=None,
         )
         # When the logger runs for that block
-        pfb_unbound.get_details_dnsbl("dnsbl", None, qstate, None, {"pfb_addr": "1.2.3.4"}, dnsbl)
+        pfb_unbound.get_details_dnsbl("dnsbl", None, qstate, {"pfb_addr": "1.2.3.4"}, dnsbl)
         return lines
 
     def test_nxdomain_logging_writes_a_line(self, monkeypatch: Any) -> None:
@@ -1015,7 +1015,7 @@ class TestGetDetailsDnsblUnsetGuard:
             return_msg=None,
         )
 
-        result = pfb_unbound.get_details_dnsbl("dnsbl", None, qstate, None, {"pfb_addr": "1.2.3.4"}, pfb_unbound.UNSET)
+        result = pfb_unbound.get_details_dnsbl("dnsbl", None, qstate, {"pfb_addr": "1.2.3.4"}, pfb_unbound.UNSET)
 
         assert result is True
         assert not any(path.endswith("dnsbl.log") for path, _ in lines), lines

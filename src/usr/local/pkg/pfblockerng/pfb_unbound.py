@@ -2746,7 +2746,6 @@ def get_details_dnsbl(
     m_type: str,
     qinfo: query_info | None,
     qstate: module_qstate | None,
-    rep: reply_info | None,
     kwargs: dict[str, Any] | None,
     dnsbl: Any,  # DnsblDecision operate() served; UNSET is a defensive no-op guard
 ) -> bool:
@@ -2990,7 +2989,7 @@ def get_details_reply(
     rep: reply_info | None,
     kwargs: dict[str, Any] | None,
 ) -> bool:
-    global pfb, rcodeDB, decisionDB, noAAAADB, maxmindReader
+    global pfb, rcodeDB, noAAAADB, maxmindReader
 
     if qstate and qstate is not None:
         q_name = get_q_name_qstate(qstate)
@@ -6751,7 +6750,7 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                 # via get_details_dnsbl (which internally drops the log line for "4");
                 # not cached, for the same #43 reasons as the VIP/null path below.
                 if dnsbl.nxdomain:
-                    get_details_dnsbl("dnsbl", None, qstate, None, {"pfb_addr": q_ip}, dnsbl)
+                    get_details_dnsbl("dnsbl", None, qstate, {"pfb_addr": q_ip}, dnsbl)
                     qstate.return_rcode = RCODE_NXDOMAIN
                     qstate.no_cache_store = 1
                     qstate.ext_state[id] = MODULE_FINISHED
@@ -6775,10 +6774,7 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
 
                 # Log entry
                 kwargs = {"pfb_addr": q_ip}
-                if qstate.return_msg:
-                    get_details_dnsbl("dnsbl", None, qstate, qstate.return_msg.rep, kwargs, dnsbl)
-                else:
-                    get_details_dnsbl("dnsbl", None, qstate, None, kwargs, dnsbl)
+                get_details_dnsbl("dnsbl", None, qstate, kwargs, dnsbl)
 
                 qstate.return_rcode = RCODE_NOERROR
                 qstate.return_msg.rep.security = 2
