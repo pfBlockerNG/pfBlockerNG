@@ -39,7 +39,6 @@ final class TldAnalysisMasterKeyingTest extends TestCase
 		$pfb['unbound_py_zone']	= "{$this->tmpDir}/pfb_py_zone";
 		$pfb['dnsdir']		= "{$this->tmpDir}/dnsdir";
 		$pfb['dnsbl_tmpdir']	= "{$this->tmpDir}/tmpdir";
-		$pfb['dnsbl_tld_txt']	= "{$this->tmpDir}/dnsbl_tld.txt";
 		$pfb['dnsbl_tmp']	= "{$this->tmpDir}/dnsbl_tmp";
 		$pfb['dnsbl_info']	= "{$this->tmpDir}/dnsbl_info.db";
 		$pfb['errlog']		= "{$this->tmpDir}/error.log";

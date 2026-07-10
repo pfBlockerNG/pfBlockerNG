@@ -76,6 +76,24 @@ def test_hyphenated_and_abbreviated_phase_idioms_are_flagged() -> None:
     assert _find("src/a.py", ["# the P6 bus register"]) == []
 
 
+def test_issue_phase_number_is_flagged_but_bare_issue_or_bare_p_number_is_clean() -> None:
+    # The repo's third narration spelling: "#NNNN PN" (an issue/PR number, not an
+    # ADR number, followed by a phase abbreviation) -- issue #1083's own review found
+    # this exact spelling shipped uncaught by the two existing phase patterns.
+    v = _find("src/a.inc", ["// #1083 P4: verbatim reuse was rejected"])
+    assert len(v) == 1
+    assert "phase" in v[0].reason.lower()
+    # A bare issue breadcrumb alone, or "P4" merely inside other text, stays legal.
+    assert _find("src/a.py", ["# issue #1083: retired on the working tree"]) == []
+    assert _find("src/a.py", ["# the P4 bus register"]) == []
+
+
+def test_issue_phase_number_needs_trailing_boundary() -> None:
+    # "#1083 P4x" is not a phase reference (mirrors the ADR-NN PN / Phase N boundary rule).
+    assert _find("src/a.py", ["# tuned for #1083 P4x throughput"]) == []
+    assert len(_find("src/a.inc", ["// #1083 P4 rebuild fork"])) == 1
+
+
 def test_number_needs_trailing_boundary() -> None:
     # "Phase 9x"/"PR #9foo" are not phase/PR references; multi-digit ones are.
     assert _find("src/a.py", ["# gets a Phase 9x speedup"]) == []

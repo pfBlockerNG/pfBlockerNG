@@ -127,20 +127,29 @@ means an `abp` row's `raw` payload can never literally embed the needle).
 
 **Staging-generation guard + lazy rebuild.** The sync loop's verbatim-reuse fork
 (`pfb_dnsbl_verbatim_reuse_active()`) additionally requires the staged `.txt` to be
-**current-generation**: `pfb_dnsbl_staging_is_current_generation()` checks only the first line's
-first byte (`'{'`, or an absent/empty file — both current; no JSON parse needed to reject). A
-feed whose `.txt` predates the #1083 flip (a pkg-upgrade leftover, never redownloaded since) fails
-that check and is **never verbatim-reused** — the sync loop instead reparses from the existing
-`.orig` download cache via the same machinery a Reload uses (logged `Rebuild`), refetching over
-the network **only** when `.orig` itself is absent too. This runs regardless of the row's `state`
-(`Hold`/`Flex`/`Enabled`) — a `Hold` row only skips `pfblockerng.php`'s own change-detector
-pre-check (`pfblockerng_sync_cron()`, which bypasses a Held row with an existing `.txt` outright),
-never the DNSBL loop's rebuild fork inside `sync_package_pfblockerng()`, which has no `Hold`
-special case. Pinned live-VM (`tests/smoke/test_smoke_adr62.py`):
-`test_adr62_stale_generation_rebuild_hold_row_orig_present` (`.orig` present → byte-identical
-reuse, no refetch) and its `test_adr62_stale_generation_rebuild_orig_absent_triggers_download`
-sibling (`.orig` absent → genuine refetch); off-appliance reproduction:
-`tests/php/DnsblStagingGenerationGuardTest.php`.
+**current-generation**: `pfb_dnsbl_staging_first_line()` reads the first NON-BLANK physical line
+(a blank leading line must not mask stale content after it), and
+`pfb_dnsbl_staging_is_current_generation()` accepts it only when that line actually PARSES via
+`pfb_dnsbl_ndjson_parse_row()` (or the file is absent/wholly blank) — a leading `'{'` byte alone is
+not proof (a truncated/corrupt line rejects too). A feed whose `.txt` predates the #1083 flip (a
+pkg-upgrade leftover, never redownloaded since) fails that check and is **never verbatim-reused**
+— the sync loop instead reparses from the existing `.orig` download cache via the same machinery a
+Reload uses (logged `Rebuild`), refetching over the network **only** when `.orig` itself is absent
+too. A rebuild that reparses `.orig` and finds ZERO domains (e.g. a corrupted/HTML-error-page
+download) converges staging to empty (`pfb_dnsbl_stale_rebuild_converge_txt()`) rather than
+leaving the stale `.txt` in place — otherwise the guard would re-detect stale-generation and
+re-log `Rebuild` on every subsequent pass, forever, with the stale lines silently double-counted.
+This runs regardless of the row's `state` (`Hold`/`Flex`/`Enabled`) — a `Hold` row only skips
+`pfblockerng.php`'s own change-detector pre-check (`pfblockerng_sync_cron()`, which bypasses a
+Held row with an existing `.txt` outright), never the DNSBL loop's rebuild fork inside
+`sync_package_pfblockerng()`, which has no `Hold` special case. Pinned live-VM
+(`tests/smoke/test_smoke_adr62.py`): `test_adr62_stale_generation_rebuild_hold_row_orig_present`
+(`.orig` present → byte-identical reuse, no refetch) and its
+`test_adr62_stale_generation_rebuild_orig_absent_triggers_download` sibling (`.orig` absent →
+genuine refetch); off-appliance reproduction: `tests/php/DnsblStagingGenerationGuardTest.php`
+(`sync_package_pfblockerng()` itself has no PHPUnit harness, issue #993 — the zero-domain
+convergence is proven by driving the real guard functions through the loop's exact decision
+sequence, not the loop itself).
 
 **No version marker — every future interchange change must be backwards-compatible.** A
 deliberate design choice (issue #1083): the schema carries no version field and the codebase has
@@ -153,12 +162,38 @@ mechanism.
 `custom_php_resync_config_command` (`pfblockerng.xml`) calls `sync_package_pfblockerng()`, but
 `pfblockerng_install.inc` sets `$g['pfblockerng_install'] = TRUE` for the whole install/upgrade
 process, and `sync_package_pfblockerng()` early-returns on that flag before reaching the DNSBL
-loop (`pfblockerng.inc:15186`, "Sync terminated during boot process"). The window therefore closes
-at the **first due `cron` tick** after the upgrade — bounded by the feed's own configured Update
-Frequency (`pfb_interval`, default hourly) with a due-check granularity of `pfb_tick_interval`
-(default 15 min, ADR-43). Until then, an alerts feed-attribution grep may still read a
-pre-upgrade positional-CSV `pfb_py_data`; this is accepted as a bounded, self-healing window, not
-a defect.
+loop (`pfblockerng.inc:15197`, "Sync terminated during boot process").
+
+The window does **not** reliably close at the first `cron` tick, either. `pfblockerng_sync_cron()`
+(`pfblockerng.php`) only calls `sync_package_pfblockerng('cron')` when at least one in-scope feed's
+own Update Frequency check actually ran `pfb_update_check()` this tick (`$pfb['update_cron']`); a
+tick where every feed is still within its own frequency window — or simply has nothing new to
+fetch — instead calls `sync_package_pfblockerng('noupdates')`, which sets `$pfb['save'] = TRUE` and
+skips the entire DNSBL loop (`pfblockerng.inc:15902`'s `!$pfb['save']` gate) as a save-only pass.
+The window actually closes at the **first pass that enters the DNSBL loop**: a tick where some
+feed's frequency is due, an explicit Force (Run Now), or any config-edit-driven sync. On a box
+where every DNSBL row is `Hold`/`Never` (or simply never redue), the window can persist
+indefinitely — it is not a bounded 15-minute-to-hourly window in that case. Impact stays bounded to
+attribution, not blocking: the in-memory `dataDB`/`zoneDB` loaded at the last successful build keep
+blocking unaffected; the Alerts page's per-domain feed/group lookup (`pfblockerng_alerts.php`),
+unable to grep-match the legacy positional-CSV `pfb_py_data`/`pfb_py_zone` against the NDJSON-shaped
+needle, reports the domain's feed/group as literal `Unknown` until the window closes. Accepted as a
+self-healing (if potentially long) window, not a defect.
+
+**Downgrade is unsupported by design (no back-compat rule).** Reverting the package to a
+pre-#1083 build while NDJSON-shaped interchange files remain on disk is not supported — the
+mirror image of "No version marker" above: schema v1 has no forward-compat mechanism, and
+equally no backward one. The old build's `dnsbl_build_from_manifest()`/`build()` read the retired
+`format_hint` manifest key via a bare `feed_row["format_hint"]` index (`KeyError` on a NEW-shaped
+manifest, which never emits it); `dnsbl_build_from_manifest()`'s own `except Exception` catches
+that and returns `None` (fail-closed — no matcher swap), so `init()` falls back to the legacy CSV
+loaders over `pfb_py_data`/`pfb_py_zone` — which, under NEW code, are NDJSON, not CSV. Those
+loaders (`csv.reader` with a strict six-field row gate) split each NDJSON object on commas into
+the wrong field count and skip every line, so `dataDB`/`zoneDB` load EMPTY — nothing crashes and
+nothing bogus loads. Net effect: DNSBL blocking on a downgraded box
+goes silently ineffective (fail-open — the resolver itself stays up, queries simply stop
+matching) until every feed redownloads and reparses through the old build's own dialect again.
+There is no supported downgrade path; the fix is to stay on, or return to, a #1083-or-later build.
 
 **Benchmark evidence** (issue #1083, `scripts/bench_dnsbl_line_parsing.py`, 1,000,000 lines,
 5 iterations × 2 trials, base = the pre-#1083 merge-base `e9dda731`):
@@ -169,13 +204,16 @@ a defect.
 | Python `dnsbl_build_from_manifest()` (unchanged `.raw` reader) | 3.8041s | 3.7889s | −0.40% | 660.2 MiB | 649.0 MiB | −1.69% |
 
 The PHP surface's per-line `json_decode` **does** regress the staging-parse pass — +32.76%
-wall-clock, above ADR-62's own SS7 criterion-2 kill-threshold (25%) — a real, measured cost of
-the self-describing per-line format, traded off against its grep-stability/attribution
-guarantees; a follow-up optimization (batched decode, a leaner encoding) is a candidate, not
-attempted here. The Python surface — an unrelated code path, since it reads the untouched
+wall-clock, above ADR-62's own SS7 criterion-2 kill-threshold (25%). That threshold governed
+ADR-62's build-path change; for this format migration the breach was reviewed and **accepted
+as an explicit owner exception at landing** (issue #1083 / PR #1178) — a real, measured cost
+of the self-describing per-line format, traded off against its grep-stability/attribution
+guarantees, with the follow-up optimization tracked in issue #1177 (batched decode, a leaner
+encoding). The Python surface — an unrelated code path, since it reads the untouched
 per-feed `.raw` — shows no regression, as expected. On-disk size (1,000,000 domain rows, a realistic domain-length mix per
 `benchmarks/_corpus_raw.py`'s distribution): the old 6-column CSV dialect is 45,719,338 bytes
-(45.72 B/row) vs the new NDJSON's 99,719,338 bytes (99.72 B/row) — a **2.18×** increase.
+(45.72 B/row) vs the new NDJSON's 99,719,338 bytes (99.72 B/row) — **2.18× the size**
+(≈ +118%).
 `benchmarks/spike_adr06_build.py` (the ADR-06 Phase-1 spike) is unaffected: it drives a
 self-contained synthetic corpus (`benchmarks/_corpus_raw.py:59`) and never imports
 `pfb_unbound.py` or touches the interchange format (`benchmarks/spike_adr06_build.py:53`).

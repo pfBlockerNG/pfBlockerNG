@@ -3796,10 +3796,14 @@ def _dnsbl_parse_ndjson_row(line: str) -> dict[str, Any] | None:
     this format. Returns the validated row, or ``None`` on any shape violation
     (undecodable line, non-object, unknown/missing kind, a missing/empty/non-string
     required field) -- domain/raw SYNTAX validation stays with the existing validators.
+    A pathologically deep nested value raises RecursionError (verified: CPython's
+    C-accelerated scanner is not immune above ~200_000 levels) -- caught here so one
+    hostile line degrades to a skip, matching PHP's fixed-depth-cap json_decode(),
+    rather than escaping uncaught and aborting the rest of the file's lines.
     """
     try:
         row = json.loads(line)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return None
     if not isinstance(row, dict) or "kind" not in row:
         return None
@@ -4161,7 +4165,7 @@ def _dnsbl_strip_hosts_prefix(line: str) -> str:
 def parse(line: str) -> ParsedEntry | None:
     """Parse one raw hosts/plain feed line into a kind-tagged block entry, or ``None``
     to skip. An ABP-shaped line never reaches here -- build()'s per-line capture guard
-    (``_dnsbl_is_abp_rule_line()``) routes it to ``parse_abp()`` first (#1083 P4:
+    (``_dnsbl_is_abp_rule_line()``) routes it to ``parse_abp()`` first (#1083:
     format_hint's whole-feed dispatch retired, capture guard is the sole ABP router).
 
     Bare-IP lines are NOT returned here -- IP extraction is a PHP/firewall
@@ -5051,7 +5055,7 @@ def build(
             "band": max(_white_entry_band(existing), _white_entry_band(unlock_entry)),
         }
 
-    # ADR-07: an ABP-shaped line (any feed -- #1083 P4 retired the whole-feed
+    # ADR-07: an ABP-shaped line (any feed -- #1083 retired the whole-feed
     # format_hint dispatch) is routed by the per-line capture guard to the typed
     # Rule stream (Stage A, parse_abp) and reconciled (Stage B) into the banded
     # pre-emit rule sets; every other line keeps the ADR-06 lite parse() ->
@@ -5129,7 +5133,7 @@ def build(
         provenance = RULE_PROV_USER if feed_row.get("provenance") == "user" else RULE_PROV_FEED
         block_band = PRIO_USER_BLOCK if provenance == RULE_PROV_USER else PRIO_FEED_BLOCK
         for raw_line in line_reader(feed_row["raw"]):
-            # ADR-62/#1083 P4: per-line ABP detection, broadened from ADR-21's
+            # ADR-62/#1083: per-line ABP detection, broadened from ADR-21's
             # '||'/'@@||' to the full Decision-2 capture shape set (regex, element-
             # hiding) via _dnsbl_is_abp_rule_line() -- a self-identifying ABP entry is
             # invalid in every plain dialect, so it would otherwise be dropped by the

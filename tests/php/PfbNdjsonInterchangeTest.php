@@ -183,4 +183,59 @@ final class PfbNdjsonInterchangeTest extends TestCase
 			pfb_dnsbl_ndjson_emit_abp_row('/^ad[0-9]+\\./')
 		);
 	}
+
+	// =========================================================================
+	// Invalid-UTF-8 bytes -- json_encode() returns FALSE on malformed UTF-8, and
+	// FALSE . "\n" coerces to a bare "\n": without JSON_INVALID_UTF8_SUBSTITUTE the
+	// row is a phantom blank line, not a valid schema-v1 row (issue #1083 review).
+	// =========================================================================
+
+	public static function invalidUtf8ByteProvider(): array
+	{
+		return [
+			'lone continuation byte'      => ["\xFF"],
+			'truncated 2-byte sequence'   => ["\xC3\x28"],
+		];
+	}
+
+	#[DataProvider('invalidUtf8ByteProvider')]
+	public function testEmitDomainRowWithInvalidUtf8DomainStaysAValidRow(string $badBytes): void
+	{
+		$line = pfb_dnsbl_ndjson_emit_domain_row("bad{$badBytes}domain.com", '1', 'feedA', 'groupA');
+
+		$this->assertSame(1, substr_count($line, "\n"), 'exactly one line, never a phantom blank');
+		$this->assertNotSame("\n", $line, 'must never degrade to a bare newline');
+		$this->assertNotFalse(json_decode(rtrim($line, "\n"), TRUE), 'must stay JSON-decodable');
+
+		$row = pfb_dnsbl_ndjson_parse_row(rtrim($line, "\n"));
+		$this->assertIsArray($row, 'the emitted line must parse back as a valid schema-v1 row');
+		$this->assertSame('domain', $row['kind']);
+		$this->assertSame('1', $row['log']);
+		$this->assertSame('feedA', $row['feed']);
+		$this->assertSame('groupA', $row['group']);
+	}
+
+	#[DataProvider('invalidUtf8ByteProvider')]
+	public function testEmitAbpRowWithInvalidUtf8RawStaysAValidRow(string $badBytes): void
+	{
+		$line = pfb_dnsbl_ndjson_emit_abp_row("||bad{$badBytes}domain.example^");
+
+		$this->assertSame(1, substr_count($line, "\n"), 'exactly one line, never a phantom blank');
+		$this->assertNotSame("\n", $line, 'must never degrade to a bare newline');
+		$this->assertNotFalse(json_decode(rtrim($line, "\n"), TRUE), 'must stay JSON-decodable');
+
+		$row = pfb_dnsbl_ndjson_parse_row(rtrim($line, "\n"));
+		$this->assertIsArray($row, 'the emitted line must parse back as a valid schema-v1 row');
+		$this->assertSame('abp', $row['kind']);
+	}
+
+	#[DataProvider('invalidUtf8ByteProvider')]
+	public function testDomainNeedleWithInvalidUtf8DomainIsNeverDegenerate(string $badBytes): void
+	{
+		// Pre-fix: json_encode() of the raw domain returns FALSE and the needle
+		// degrades to the bare, valueless "domain": prefix -- matching every row.
+		$needle = pfb_dnsbl_ndjson_domain_needle("bad{$badBytes}domain.com");
+		$this->assertNotSame('"domain":', $needle, 'the needle must carry an actual encoded value, never degrade to the bare key');
+		$this->assertStringStartsWith('"domain":"', $needle);
+	}
 }

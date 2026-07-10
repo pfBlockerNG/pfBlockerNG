@@ -81,9 +81,9 @@ import pytest
 # --------------------------------------------------------------------------- #
 # Rule model (mirrors RESULTS SS1c / ADR.md SS2 "Intermediate Rule model").
 #
-# parse('abp', line) -> Rule | None in production (Phase 4). Here the pure
-# reference parser produces the same shape so the decision table is authored
-# against the real input model.
+# parse_abp(line, ...) -> Rule | None in production. Here the pure reference
+# parser produces the same shape so the decision table is authored against
+# the real input model.
 # --------------------------------------------------------------------------- #
 
 
@@ -222,8 +222,8 @@ def reduce_regex(inner: str) -> tuple[bool, str] | None:
 # --------------------------------------------------------------------------- #
 # The reference parser: parse_abp_line(line, provenance) -> Rule | None.
 #
-# Pure, no Unbound symbols. Production Phase-4 parse('abp', line) must agree with
-# this on every corpus line (RESULTS SS6). Returns None for any line that is not
+# Pure, no Unbound symbols. Production parse_abp() must agree with this on every
+# corpus line (RESULTS SS6). Returns None for any line that is not
 # an in-scope DNS decision (comment, element-hiding, path/URL, page-context
 # option, non-DNS modifier, IP-anchored).
 # --------------------------------------------------------------------------- #

@@ -12,5 +12,5 @@
 	{"header": "permit_feed",         "group": "grp_permit", "log": "1", "format": "plain", "provenance": "feed", "mode": "permit", "row": "permit-mode feed (ADR-31): host->allow + delta D4 ##-verbatim capture skipped by the permit loop"},
 	{"header": "oversized_feed",      "group": "grp_edge",   "log": "1", "format": "plain", "provenance": "feed", "row": "oversized/#752 undotted 254-char name (KNOWN PHP-accepts/Python-rejects divergence)"},
 	{"header": "wirecap_feed",        "group": "grp_edge",   "log": "1", "format": "plain", "provenance": "feed", "row": "wire-cap (#753) 253-char boundary name (byte-identical accept both sides)"},
-	{"header": "reused_manifest_abp", "group": "grp_reuse",  "log": "1", "format": "abp",   "provenance": "feed", "row": "reused feed / stale manifest still naming format_hint=abp (Semantics #7)"}
+	{"header": "reused_manifest_abp", "group": "grp_reuse",  "log": "1", "provenance": "feed", "row": "self-describing ||domain^ line parses via the per-line capture guard regardless of any feed-level tag"}
 ]

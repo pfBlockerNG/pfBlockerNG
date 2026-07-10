@@ -84,6 +84,39 @@ final class DnsblStagingGenerationGuardTest extends TestCase
 		}
 	}
 
+	// --- review: a blank leading line / an unparseable '{' prefix must not slip
+	// --- through as current-generation (issue #1083 review) -------------------------
+
+	public function testBlankFirstLineThenStaleCsvIsNotCurrentGeneration(): void
+	{
+		$path = sys_get_temp_dir() . '/pfb_staging_' . uniqid('', true) . '.txt';
+		file_put_contents($path, "\n,x.example.com,,1,F,ALIAS\n");
+		try {
+			$firstLine = pfb_dnsbl_staging_first_line($path);
+			$this->assertFalse(
+				pfb_dnsbl_staging_is_current_generation($firstLine),
+				'a blank leading line hiding stale CSV content must not read as current-generation'
+			);
+		} finally {
+			unlink($path);
+		}
+	}
+
+	public function testGarbageBracePrefixIsNotCurrentGeneration(): void
+	{
+		$path = sys_get_temp_dir() . '/pfb_staging_' . uniqid('', true) . '.txt';
+		file_put_contents($path, "{garbage\n");
+		try {
+			$firstLine = pfb_dnsbl_staging_first_line($path);
+			$this->assertFalse(
+				pfb_dnsbl_staging_is_current_generation($firstLine),
+				'a byte-check-only leading "{" must not pass as current-generation without actually parsing'
+			);
+		} finally {
+			unlink($path);
+		}
+	}
+
 	// --- pfb_dnsbl_verbatim_reuse_active() -- the fork condition --------------------
 
 	public function testAllConditionsPassingAndCurrentGenerationReusesVerbatim(): void
@@ -179,6 +212,77 @@ final class DnsblStagingGenerationGuardTest extends TestCase
 		} finally {
 			$pfb = $saved;
 			rmdir_recursive($tmp);
+		}
+	}
+
+	// --- review: stale-generation rebuild non-convergence ---------------------------
+
+	/**
+	 * issue #1083 review: a stale-generation REBUILD (the 'Rebuild' log branch) that
+	 * reparses '.orig' and finds ZERO parseable domains (e.g. an HTML error page) must
+	 * still converge staging to empty/current-generation -- else the pre-NDJSON '.txt'
+	 * survives untouched (the sync loop's 'No Domains Found!' branch only unlinks
+	 * '.bk', never the pre-existing stale '.txt'), its stale lines get silently
+	 * double-counted into $alias_cnt, and the guard re-detects stale-generation on
+	 * every subsequent pass, re-logging 'Rebuild' forever.
+	 *
+	 * sync_package_pfblockerng() has no PHPUnit harness (issue #993 -- confirmed by
+	 * DnsblAliasUpdateChangedTest.php/PfbSyncStatusIpWritersTest.php and, in-session,
+	 * by reading its boot-time config/syslog/VIP dependencies): this drives the REAL
+	 * guard functions (pfb_dnsbl_staging_first_line/_is_current_generation/
+	 * _verbatim_reuse_active) plus pfb_dnsbl_stale_rebuild_converge_txt() (the fix)
+	 * through the exact two-pass decision sequence the loop performs, extending
+	 * testOldDialectStagingWouldSilentlyBlankViaVerbatimReuseButGuardVetoesIt()'s
+	 * technique.
+	 */
+	public function testStaleGenerationRebuildFindingZeroDomainsConverges(): void
+	{
+		$path = sys_get_temp_dir() . '/pfb_1083_item3_' . uniqid('', true) . '.txt';
+		file_put_contents($path,
+			"||ads.example^\n" .
+			",uuid-bare.example.com,,1,F,ALIAS\n");
+		try {
+			// Pass 1: reproduce the loop's actual decision inputs for this file.
+			$firstLine = pfb_dnsbl_staging_first_line($path);
+			$stagingCurrent = pfb_dnsbl_staging_is_current_generation($firstLine);
+			$this->assertFalse($stagingCurrent, 'precondition: staging is stale-generation');
+			$staleGenerationRebuild = !$stagingCurrent &&
+				pfb_dnsbl_verbatim_reuse_active(TRUE, FALSE, FALSE, TRUE, TRUE);
+			$this->assertTrue($staleGenerationRebuild, 'precondition: this pass takes the stale-generation-rebuild fork');
+
+			// The '.orig' reparse found zero parseable domains this pass -- the fix under test.
+			pfb_dnsbl_stale_rebuild_converge_txt($staleGenerationRebuild, $path);
+			// The loop's existing shared placeholder step (unconditional; untouched by this fix).
+			if (!file_exists($path)) {
+				touch($path);
+			}
+
+			$this->assertSame('', file_get_contents($path), 'staging must converge to empty, not retain stale bytes');
+
+			// Pass 2: the guard must read this as current-generation and take the reuse
+			// fork -- never re-detect stale-generation / re-log 'Rebuild' again.
+			$firstLine2 = pfb_dnsbl_staging_first_line($path);
+			$stagingCurrent2 = pfb_dnsbl_staging_is_current_generation($firstLine2);
+			$this->assertTrue($stagingCurrent2, 'pass 2 must read the converged file as current-generation');
+			$staleGenerationRebuild2 = !$stagingCurrent2 &&
+				pfb_dnsbl_verbatim_reuse_active(TRUE, FALSE, FALSE, TRUE, $stagingCurrent2);
+			$this->assertFalse($staleGenerationRebuild2, 'pass 2 must NOT re-trigger Rebuild -- convergence achieved');
+		} finally {
+			unlink_if_exists($path);
+		}
+	}
+
+	public function testConvergeTxtLeavesNonStaleRebuildUntouched(): void
+	{
+		// A non-stale-generation zero-domain result (the pre-existing fail-safe: keep
+		// the previous good '.txt') must be unaffected by this fix.
+		$path = sys_get_temp_dir() . '/pfb_1083_item3_' . uniqid('', true) . '.txt';
+		file_put_contents($path, "{\"kind\":\"domain\",\"domain\":\"kept.example\",\"log\":\"1\",\"feed\":\"F\",\"group\":\"G\"}\n");
+		try {
+			pfb_dnsbl_stale_rebuild_converge_txt(FALSE, $path);
+			$this->assertStringContainsString('kept.example', file_get_contents($path));
+		} finally {
+			unlink_if_exists($path);
 		}
 	}
 }
