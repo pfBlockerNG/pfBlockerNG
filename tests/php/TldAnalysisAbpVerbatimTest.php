@@ -151,14 +151,17 @@ final class TldAnalysisAbpVerbatimTest extends TestCase
 	}
 
 	/**
-	 * Scenario: a marked ABP feed's comma-bearing line is still skipped by name.
+	 * Scenario: a stray '.abp' marker on disk no longer gates classification.
 	 *
-	 * Given:  an AbpFeed.abp marker and a raw line whose column 4 says AbpFeed
+	 * Given:  an AbpFeed.abp marker and a comma-first row naming that feed in
+	 *         column 4 (a shape the real manifest writer never produces for a
+	 *         marked feed -- verbatim ABP lines carry no comma -- but a marker
+	 *         may still linger from an older on-disk state)
 	 * When:   tld_analysis() runs
-	 * Then:   the marked feed's line is skipped; the plain row still processes
-	 *         (pins the marker-based skip across the #1060 refactor)
+	 * Then:   the row classifies normally; only the empty/unset-feed-column
+	 *         rule (not marker presence) decides a skip
 	 */
-	public function testMarkedAbpFeedLineStillSkippedByFeedName(): void
+	public function testStrayAbpMarkerNoLongerGatesClassification(): void
 	{
 		global $pfb;
 
@@ -175,10 +178,10 @@ final class TldAnalysisAbpVerbatimTest extends TestCase
 		$zone = (string) file_get_contents($pfb['unbound_py_zone']);
 
 		$this->assertStringContainsString(',example.com,', $zone);
-		$this->assertStringNotContainsString(
+		$this->assertStringContainsString(
 			'abp-carried.example',
 			$zone,
-			"marked-feed line must be skipped by feed name; got: " . var_export($zone, TRUE)
+			"a stray marker must not suppress a row with a non-empty feed column; got: " . var_export($zone, TRUE)
 		);
 	}
 }

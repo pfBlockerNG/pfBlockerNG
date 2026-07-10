@@ -7870,21 +7870,10 @@ function tld_analysis() {
 
 	pfb_logger("TLD analysis", 1);
 
-	// ADR-07: ABP/EasyList feeds carry RAW ABP lines (||x^, @@||x^, /re/,
-	// '0.0.0.0 host') -- NOT the legacy ',domain,,log,feed,group' CSV shape that
-	// this loop parses. Parsing them as CSV yields garbage/empty domains. ABP feeds
-	// are tagged with a persisted '{$header}.abp' marker and are built ENTIRELY by
-	// the Python ABP parser (parse_abp) via the per-feed manifest -- which is written
-	// unconditionally (inc, pfb_unbound_python_sources call) and does its own TLD
-	// classification, independent of this PHP TLD pass. So SKIP any line whose feed
-	// carries the '.abp' marker: it is never CSV-mangled here, and Python still
-	// builds its domains/regex. Plain feeds keep the legacy TLD behaviour unchanged.
-	// FOLLOW-UP: a later pass should review full ABP x DNSBL-TLD integration (e.g.
-	// folding the PHP TLD pass into the Python build for all feeds).
-	$abp_feeds = array();
-	foreach (glob("{$pfb['dnsdir']}/*.abp") ?: array() as $abp_marker) {
-		$abp_feeds[basename($abp_marker, '.abp')] = '';
-	}
+	// This loop parses ONLY the plain ',domain,,log,feed,group' CSV dialect.
+	// Skip any line that isn't comma-first (issue #1060; cheap, hot loop) or
+	// whose feed column is empty/unset (a verbatim-captured ABP/regex line,
+	// ADR-62) -- Python's own parse_abp/TLD pass classifies those independently.
 
 	// DNSBL python: Analyse DNSBL into data (transparent/exact) and zone (wildcard) files
 
@@ -7900,12 +7889,10 @@ function tld_analysis() {
 			if (strncmp($line, ',', 1) !== 0) {
 				continue;
 			}
-			if (!empty($abp_feeds)) {
-				$fparts	= explode(',', $line, 6);
-				$lfeed	= isset($fparts[4]) ? $fparts[4] : '';
-				if ($lfeed === '' || isset($abp_feeds[$lfeed])) {
-					continue;
-				}
+			$fparts	= explode(',', $line, 6);
+			$lfeed	= isset($fparts[4]) ? $fparts[4] : '';
+			if ($lfeed === '') {
+				continue;
 			}
 
 			// Display progress indicator

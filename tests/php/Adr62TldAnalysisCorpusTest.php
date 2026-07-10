@@ -142,4 +142,23 @@ final class Adr62TldAnalysisCorpusTest extends TestCase
 		$zone = file_get_contents("{$this->tmp}/pfb_py_zone.txt");
 		$this->assertStringNotContainsString('sneaky', $data . $zone);
 	}
+
+	/**
+	 * ADR-62 Phase 5 commit 1: the empty-feed-column skip must fire even with
+	 * ZERO '.abp' markers anywhere -- today it is gated on `!empty($abp_feeds)`
+	 * (inc:7891), so a comma-first 6-col row with an empty feed column is
+	 * processed into TLD output whenever no ABP feed happens to be configured.
+	 */
+	public function testEmptyFeedColumnRowSkippedUnconditionallyWithNoAbpMarkerPresent(): void
+	{
+		unlink("{$this->tmp}/dnsbl/tld_abp_feed.abp");
+		file_put_contents("{$this->tmp}/pfb_dnsbl.raw", ",tldbad.example,,1,,agroup\n", FILE_APPEND);
+
+		tld_analysis();
+
+		$data = file_get_contents("{$this->tmp}/pfb_py_data.txt");
+		$zone = file_get_contents("{$this->tmp}/pfb_py_zone.txt");
+		$this->assertStringContainsString('twolabelzone.example', $zone, 'sanity: a real row must still classify');
+		$this->assertStringNotContainsString('tldbad', $data . $zone);
+	}
 }
