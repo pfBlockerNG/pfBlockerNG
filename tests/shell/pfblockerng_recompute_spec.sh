@@ -555,19 +555,20 @@ Describe 'pfb_recompute() hostile inputs'
 		The path "${masterfile}.new" should not be exist
 	End
 
-	It 'cleans up every already-written .new sibling and leaves live files untouched when a LATER stage fails mid-emit'
+	It 'aborts cleanly (log + .new cleanup, live files untouched) when directory debris blocks a .txt.new staging path'
 		printf '1.1.1.1\n' > "${pfbdeny}AAA_v4.txt"
 		printf '1.1.1.1\n' > "${snap}/AAA_v4.orig"
 		printf '2.2.2.2\n' > "${snap}/ZZZ_v4.orig"
-		# AAA_v4 sorts before ZZZ_v4 in the alias regroup, so its .new gets
-		# written FIRST; MMM_v4's target path is pre-created as a directory
-		# so the emit awk pass dies partway through the alias-sorted stream.
+		# A crash-leftover DIRECTORY at MMM_v4's .txt.new path must abort the
+		# pass through the cleanup path -- never exit the whole shell (POSIX
+		# special-builtin redirection abort on ash/dash) and never limp on.
 		printf '3.3.3.3\n' > "${snap}/MMM_v4.orig"
 		printf '%s\n%s\n%s\n' "${snap}/AAA_v4.orig" "${snap}/MMM_v4.orig" "${snap}/ZZZ_v4.orig" > "$memberlist"
 		mkdir -p "${pfbdeny}MMM_v4.txt.new"
 
 		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
 		The status should be failure
+		The contents of file "${errorlog}" should include 'cannot create'
 		The path "${pfbdeny}AAA_v4.txt.new" should not be exist
 		The path "${pfbdeny}ZZZ_v4.txt.new" should not be exist
 		The contents of file "${pfbdeny}AAA_v4.txt" should equal '1.1.1.1'
