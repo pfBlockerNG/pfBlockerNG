@@ -288,6 +288,16 @@ are never captured as `/re/` regex rules (on `origin/devel` a *header-classified
 a `//path/` line to `parse_abp` as a live regex; that accidental class is dropped with the
 classifier — cosmetically a sub-case of D1's "former-ABP feeds re-type" rule).
 
+**Leading-comma carve-out (issue #1067; both predicates, red→green pinned):** a line starting
+with `,` is never captured. A leading comma would be an empty first entry in the cosmetic
+domain-list (not valid ABP syntax), and a comma-first verbatim capture collides with the plain
+`,domain,,log,feed,group` CSV dialect downstream — a comma-first captured line with >=5 comma
+segments defeated `tld_analysis()`'s feed-column skip and was CSV-mangled into the python
+outputs. Companion hardening: `pfb_unbound_python_sources()`'s plain fallback skips any
+non-captured line still carrying `#` — such a line is stale verbatim residue from a pre-guard
+staging file, never a machine CSV row, and extracting its column 1 would over-block a real
+domain (pinned by `UnboundPythonSourcesTest`).
+
 ### Semantics that MUST be preserved (the contract — pin with tests before any swap)
 
 1. **Byte-identical domain set, modulo the delta table.** For every §"Coverage matrix" format,
