@@ -64,6 +64,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from .. import helpers
+from .render_oracle import body_has_php_error
 from .webui import extract_csrf_token, looks_like_login_page
 
 if TYPE_CHECKING:
@@ -575,6 +576,38 @@ def test_clear_py_error_truncates_in_place(webui: WebUI, smoke_vm: helpers.Smoke
         assert _size(vm, target) == 0, f"py_error.log not truncated to 0 after clear (size={_size(vm, target)})"
     finally:
         _rm(vm, target)
+
+
+def test_clear_absent_py_error_log_degrades_without_php_fatal(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """Clearing an ABSENT py_error.log must not throw a PHP fatal (issue #1097).
+
+    Before the #1097 guard, the py_error.log branch opened the target with
+    ``fopen(..., 'r+')`` -- a mode that never creates -- so a rotated/never-written
+    log made ``@fopen`` return FALSE, and the un-guarded ``ftruncate($fp, 0)`` threw
+    a TypeError on PHP 8 (``@`` only silences warnings/notices, not a thrown
+    exception), producing a PHP fatal in the POST response.
+
+    Transition: BEFORE-state asserts the throwaway target is absent (never seeded),
+    POST clear, then AFTER asserts no PHP diagnostic rendered into the response,
+    the file is still absent (silent no-op, not a crash), and the page still
+    renders on a follow-up GET (the fatal did not wedge the session/handler).
+    """
+    vm = smoke_vm
+    target = _throwaway_log("py_error.log")
+    # BEFORE: never seeded -- the absent-file precondition this test exercises.
+    assert not _exists(vm, target), "throwaway py_error.log target unexpectedly exists before clear"
+
+    token = _csrf(webui)
+    resp = _post_clear(webui, token, target)
+    assert not looks_like_login_page(resp.text), "clear POST returned the login form (session lost)"
+    assert resp.status_code == 200, f"clear of an absent py_error.log did not return 200: {resp.status_code}"
+    # AFTER (oracle): no rendered PHP diagnostic -- the pre-#1097 TypeError fatal is gone.
+    diagnostic = body_has_php_error(resp.text)
+    assert diagnostic is None, f"clear of an absent py_error.log rendered a PHP diagnostic: {diagnostic!r}"
+    # AFTER: silent no-op -- nothing to clear, nothing created.
+    assert not _exists(vm, target), "clearing an absent py_error.log unexpectedly created the file"
+    # AFTER: the handler did not wedge the session -- the page still renders normally.
+    _csrf(webui)
 
 
 def test_clear_dnsbl_log_unlinks_then_retouches_empty(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
