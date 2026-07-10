@@ -243,7 +243,8 @@ if (isset($_REQUEST) && isset($_REQUEST['ajax'])) {
 
 			$validate = FALSE;
 			$line_limit = '';
-			if ($linecnt > $maxcnt) {
+			// issue #1156: 2>&1 puts grep errors in $linecnt; non-numeric must not reach the subtraction
+			if (is_numeric($linecnt) && $linecnt > $maxcnt) {
 				$validate = TRUE;
 				$skipcnt = ($linecnt - $maxcnt);
 				$line_limit = " [ Displaying last {$maxcnt} lines only ]";
