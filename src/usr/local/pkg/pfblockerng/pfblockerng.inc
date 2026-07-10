@@ -4921,6 +4921,24 @@ function pfb_ip_recompute_matrix(bool $dedup_on, bool $rep_trigger, bool $drep_o
 }
 
 /**
+ * issue #1084 review — whether the FINAL REPORTING `closing` verb (emptyfiles() +
+ * closingprocess()) fires this reload, and its alias arg ('on'/'off'). Dedup on always
+ * fires with 'on' (today's masterfile-sanity contract). Dedup off only fires (with 'off',
+ * skipping the masterfile-specific block dedup-off never populates) when the v4 recompute
+ * pass actually ran this pass -- else a dup-off+rep-on alias collapsed to zero rows by
+ * pMax/dMax never gets its emptyfiles() placeholder refill and stays a genuine 0-byte
+ * deny file forever.
+ *
+ * @return array{0:bool,1:string} [invoke, alias_arg]
+ */
+function pfb_ip_closing_pass_active(bool $dup_on, bool $recompute_ran_v4): array {
+	if ($dup_on) {
+		return array(TRUE, 'on');
+	}
+	return array($recompute_ran_v4, 'off');
+}
+
+/**
  * Filter the config-order enabled-Deny header list ($pfb['existing']['deny'], built by the
  * removal-detection pre-pass) down to one family, preserving order -- the recompute
  * memberlist's PRIORITY order (config order, not glob/accretion order; a deliberate delta
@@ -5384,6 +5402,26 @@ function pfb_cross_list_scope(bool $dup_on, bool $rep_on): bool {
  */
 function pfb_supp_update_active(bool $pfbadv, bool $supp_enabled): bool {
 	return $pfbadv && $supp_enabled;
+}
+
+/**
+ * issue #1084 review — whether the per-alias suppression BODY (the v4 `suppress` exec /
+ * the v6 pfb_suppress_file_v6() call) runs this reload. Snapshots are pre-suppression
+ * captures, but recompute rewrites EVERY family alias on any trigger while the
+ * suppression body only ran for a feed-changed alias -- so a suppressed IP recompute
+ * resurrected into an alias whose OWN feed did not change (an unrelated sibling feed
+ * drove the shared family-wide recompute pass) was never re-suppressed. Fix: EITHER
+ * $feed_changed OR $recompute_ran unlocks the body.
+ *
+ * @param bool $supp_on       $pfb['supp'] == 'on'.
+ * @param bool $vtype_matches $vtype == '_v4' (or '_v6' for the sibling call site).
+ * @param bool $supp_update   $pfb['supp_update'].
+ * @param bool $adv           $pfbadv (Deny-folder alias).
+ * @param bool $feed_changed  in_array($alias, $final_alias_old).
+ * @param bool $recompute_ran $pfb_recompute_ran_v4 / _v6 for this family.
+ */
+function pfb_ip_suppress_body_active(bool $supp_on, bool $vtype_matches, bool $supp_update, bool $adv, bool $feed_changed, bool $recompute_ran): bool {
+	return $supp_on && $vtype_matches && $supp_update && $adv && ($feed_changed || $recompute_ran);
 }
 
 // ---------------------------------------------------------------------------
@@ -17918,9 +17956,11 @@ function sync_package_pfblockerng($cron='') {
 										exec("{$pfb['script']} cidr_aggregate {$cc_alias} {$pfbfolder} {$elog}");
 									}
 
-									// issue #1084: snapshot for the batch recompute memberlist --
-									// replaces the 'continent' duplicate() exec (v4 Deny only).
-									if ($vtype == '_v4' && $pfbadv) {
+									// issue #1084: snapshot for the batch recompute memberlist -- replaces the
+									// 'continent' duplicate() exec. Both families: the v6 continent .txt above is
+									// regenerated on every GeoIP change same as v4, so its memberlist entry needs
+									// its own fresh snapshot too, not the one-time upgrade seed forever (#1084 review).
+									if ($pfbadv) {
 										pfb_ip_recompute_write_snapshot("{$pfbfolder}/{$cc_alias}.txt", $cc_alias, $pfb['snapdir'], $pfb['origdir']);
 									}
 
@@ -18725,6 +18765,15 @@ function sync_package_pfblockerng($cron='') {
 		$pfb['prep'] == 'on'
 	);
 
+	// issue #1084 review: whether the recompute exec actually ran THIS pass, per family --
+	// set exactly where the exec fires. Snapshots are pre-suppression captures, but
+	// recompute rewrites EVERY family alias whenever it runs, so a downstream gate keyed
+	// only on "this alias's OWN feed changed" (suppression body, the FINAL REPORTING
+	// closing verb) misses an alias recompute resurrected via an unrelated sibling's
+	// change. Consumed by pfb_ip_suppress_body_active() / pfb_ip_closing_pass_active().
+	$pfb_recompute_ran_v4 = FALSE;
+	$pfb_recompute_ran_v6 = FALSE;
+
 	foreach (array('v4', 'v6') as $pfb_rec_family) {
 		if (!$pfb_rec_matrix["invoke_{$pfb_rec_family}"]) {
 			continue;
@@ -18744,6 +18793,12 @@ function sync_package_pfblockerng($cron='') {
 
 		exec("{$pfb['script']} recompute {$pfb_rec_family} " . escapeshellarg($pfb_rec_memberlist) . ' ' . escapeshellarg($pfb_rec_countsfile)
 			. " {$pfb_rec_matrix['dedup']} {$pfb_rec_repmode} {$pfb_rec_max} {$pfb['ccexclude']} {$pfb['ccwhite']} {$pfb['ccblack']} {$elog}");
+
+		if ($pfb_rec_family === 'v4') {
+			$pfb_recompute_ran_v4 = TRUE;
+		} else {
+			$pfb_recompute_ran_v6 = TRUE;
+		}
 	}
 
 	// Both dRep and pRep enabled: recompute already applied dMax (the matrix's tie-break)
@@ -18880,9 +18935,10 @@ function sync_package_pfblockerng($cron='') {
 										exec("{$pfb['script']} suppress suppressheader {$elog}");
 										$pfbrunonce = FALSE;
 									}
-									// Script to run suppression process (body) — only for feed-changed aliases.
-									if ($pfb['supp'] == 'on' && $vtype == '_v4' && $pfb['supp_update'] && $pfbadv
-									    && in_array($alias, $final_alias_old)) {
+									// Script to run suppression process (body) — feed-changed aliases, OR any
+									// alias recompute rewrote this pass (issue #1084 review: recompute rewrites
+									// every family alias on any trigger, not just feed-changed ones).
+									if (pfb_ip_suppress_body_active($pfb['supp'] == 'on', $vtype == '_v4', $pfb['supp_update'], $pfbadv, in_array($alias, $final_alias_old), $pfb_recompute_ran_v4)) {
 										if ($pfb['dup'] == 'on') {
 											exec("{$pfb['script']} suppress {$header_esc} {$pfbfolder} on {$elog}");
 										} else {
@@ -18904,8 +18960,7 @@ function sync_package_pfblockerng($cron='') {
 										@file_put_contents("{$pfb['log']}", $supp_v6_header, FILE_APPEND);
 										$pfbrunonce = FALSE;
 									}
-									if ($pfb['supp'] == 'on' && $vtype == '_v6' && $pfb['supp_update'] && $pfbadv
-									    && in_array($alias, $final_alias_old)
+									if (pfb_ip_suppress_body_active($pfb['supp'] == 'on', $vtype == '_v6', $pfb['supp_update'], $pfbadv, in_array($alias, $final_alias_old), $pfb_recompute_ran_v6)
 									    && is_readable("{$pfb['supptxt_v6']}") && filesize("{$pfb['supptxt_v6']}") > 0) {
 										$member_file = "{$pfbfolder}/{$header}.txt";
 										$pre_count   = count(@file($member_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: []);
@@ -19552,9 +19607,14 @@ function sync_package_pfblockerng($cron='') {
 
 	// Only run with CRON or Force invoked process
 	if ((!$pfb['save'] && $pfb['repcheck'] && $pfb['enable'] == 'on') || $pfb['summary']) {
-		// Script to run final script processes.
+		// issue #1084 review: dedup off + recompute having run the v4 family (the
+		// dup-off+rep-on passthrough) still invokes 'closing off' so emptyfiles() refills
+		// any alias pMax/dMax collapsed to zero rows -- see pfb_ip_closing_pass_active().
+		[$pfb_closing_invoke, $pfb_closing_alias_arg] = pfb_ip_closing_pass_active($pfb['dup'] == 'on', $pfb_recompute_ran_v4);
+		if ($pfb_closing_invoke) {
+			exec("{$pfb['script']} closing {$pfb_closing_alias_arg} {$elog}");
+		}
 		if ($pfb['dup'] == 'on') {
-			exec("{$pfb['script']} closing on {$elog}");
 			pfb_sync_status_dedup_check($pfb['log'], $pfb['dbdir']);
 		} else {
 			// ADR-61: dedup disabled -- its sanity signal doesn't apply; clear any stale entry.

@@ -217,11 +217,14 @@ Describe 'pfb_recompute() v4 cross-feed dedup (Stage A/B/D/E)'
 		The contents of file "$mastercat" should equal "$(printf '203.0.113.1\n203.0.113.2')"
 	End
 
-	It 'a single-feed class is a plain copy (no grepcidr call needed) and still gets counted'
+	It 'a single-feed class is a plain copy (no grepcidr call needed), dedups an internal repeat, and still gets counted'
 		: > "${work}/grepcidr.never-called"
 		printf '#!/bin/sh\nrm -f "%s/grepcidr.never-called"\n' "$work" > "$pathgrepcidr"
 		chmod +x "$pathgrepcidr"
-		printf '203.0.113.30\n203.0.113.31\n' > "${snap}/Solo_v4.orig"
+		# issue #1084 review: an internal repeat (203.0.113.30 twice) discriminates the
+		# emit's plain `sort` from `sort -u` -- the cp -f short-circuit path never runs
+		# grepcidr, so only the emit's own dedup can prune this repeat.
+		printf '203.0.113.30\n203.0.113.31\n203.0.113.30\n' > "${snap}/Solo_v4.orig"
 		printf '%s\n' "${snap}/Solo_v4.orig" > "$memberlist"
 
 		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
@@ -248,6 +251,42 @@ Describe 'pfb_recompute() v4 cross-feed dedup (Stage A/B/D/E)'
 		The status should be success
 		The contents of file "${pfbdeny}Blank_v4.txt" should equal "$(printf '203.0.113.40\n203.0.113.41')"
 		The contents of file "$countsfile" should include 'Blank_v4 2'
+	End
+
+	It 'dedups an internal repeat within a single feed snapshot (within-feed dupes, issue #1084 review)'
+		printf '192.0.2.9\n192.0.2.9\n192.0.2.10\n' > "${snap}/DupFeed_v4.orig"
+		printf '%s\n' "${snap}/DupFeed_v4.orig" > "$memberlist"
+
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
+		The status should be success
+		The contents of file "${pfbdeny}DupFeed_v4.txt" should equal "$(printf '192.0.2.10\n192.0.2.9')"
+		The contents of file "$masterfile" should equal "$(printf 'DupFeed_v4 192.0.2.10\nDupFeed_v4 192.0.2.9')"
+		The contents of file "$countsfile" should include 'DupFeed_v4 2'
+	End
+
+	It 'self-heals from the live deny file when a memberlist-listed snapshot is missing on disk (dangling snapshot, issue #1084 review)'
+		printf '192.0.2.200\n' > "${pfbdeny}Ghost_v4.txt"
+		# Memberlist names a snapshot that was never written / already removed from disk --
+		# the corresponding live deny file still exists and still serves traffic.
+		printf '%s\n' "${snap}/Ghost_v4.orig" > "$memberlist"
+		printf 'Ghost_v4 192.0.2.200\n' > "$masterfile"
+
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
+		The status should be success
+		The contents of file "${pfbdeny}Ghost_v4.txt" should equal '192.0.2.200'
+		The contents of file "$masterfile" should include 'Ghost_v4 192.0.2.200'
+		The contents of file "$countsfile" should include 'Ghost_v4 1'
+		The contents of file "${errorlog}" should include 'Ghost_v4'
+	End
+
+	It 'still skips (with a logged warning, never silent) an alias with no snapshot AND no live deny file'
+		printf '%s\n' "${snap}/Vanished_v4.orig" > "$memberlist"
+		printf 'Vanished_v4 9.9.9.9\n' > "$masterfile"
+
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
+		The status should be success
+		The contents of file "$masterfile" should not include 'Vanished_v4'
+		The contents of file "${errorlog}" should include 'Vanished_v4'
 	End
 End
 
@@ -629,5 +668,112 @@ Describe 'pfb_recompute() mastercat consistency + empty-pass edges'
 		The status should be success
 		The path "${pfbdeny}Empty_v4.txt" should be exist
 		The contents of file "$countsfile" should include 'Empty_v4 0'
+	End
+End
+
+Describe 'pfb_recompute() continent/Uber alias exclusion from reputation (issue #1084 review)'
+	# shellcheck disable=SC2034  # consumed by the sourced pfb_recompute()
+	setup() {
+		work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/recpfbexcl.XXXXXX")"
+		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"
+		mkdir -p "$snap" "$pfbdeny" "$pfbmatch"
+		tmpdir="${work}/tmp"; mkdir -p "$tmpdir"
+		masterfile="${work}/master"; mastercat="${work}/mastercat"
+		errorlog="${work}/err.log"
+		ip_placeholder3='240.0.0'
+		pathgrepcidr="${work}/grepcidr"; make_grepcidr_stub "$pathgrepcidr"
+		pathgeoip="${work}/mmdblookup"; pathgeoipdat="${work}/geo.mmdb"; touch "$pathgeoipdat"
+		memberlist="${work}/members"
+		countsfile="${work}/counts"
+	}
+	cleanup() { rm -rf "$work"; }
+	BeforeAll 'pfb_source'
+	Before 'setup'
+	After 'cleanup'
+
+	It 'never collapses/diverts a pfB_-prefixed (Continent/Uber) alias, even when its own volume trips the offender threshold'
+		rm -f "$pathgeoip" "$pathgeoipdat"
+		# pfB_Test_v4's OWN two rows in the 192.0.2 prefix exceed max=1 by themselves --
+		# pre-fix, detection counts them and the divert/window collapses the alias to a
+		# bare '192.0.2.0/24', silently losing everything else the real CIDR covered.
+		printf '192.0.2.0/23\n192.0.2.55\n' > "${snap}/pfB_Test_v4.orig"
+		# A real feed with its own, unrelated offender window -- must still collapse
+		# exactly like today (this fix must not blunt reputation for real feeds).
+		printf '198.51.100.10\n198.51.100.11\n198.51.100.12\n' > "${snap}/Feed_v4.orig"
+		printf '%s\n%s\n' "${snap}/pfB_Test_v4.orig" "${snap}/Feed_v4.orig" > "$memberlist"
+
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on pmax 1
+		The status should be success
+		The contents of file "${pfbdeny}pfB_Test_v4.txt" should equal "$(printf '192.0.2.0/23\n192.0.2.55')"
+		The contents of file "${pfbdeny}Feed_v4.txt" should equal '198.51.100.0/24'
+	End
+
+	It "excludes a pfB_-prefixed alias's rows from the offender DETECTION count so a real feed's own (below-threshold) row is never dragged into a false collapse"
+		rm -f "$pathgeoip" "$pathgeoipdat"
+		# Neither alias alone exceeds max=1 in prefix 203.0.113 -- only if the
+		# continent's row is (wrongly) counted alongside the real feed's does the
+		# combined count trip the threshold and collapse the real feed's single IP.
+		printf '203.0.113.9\n' > "${snap}/pfB_Leak_v4.orig"
+		printf '203.0.113.10\n' > "${snap}/RealFeed_v4.orig"
+		printf '%s\n%s\n' "${snap}/pfB_Leak_v4.orig" "${snap}/RealFeed_v4.orig" > "$memberlist"
+
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on pmax 1
+		The status should be success
+		The contents of file "${pfbdeny}RealFeed_v4.txt" should equal '203.0.113.10'
+		The contents of file "${pfbdeny}pfB_Leak_v4.txt" should equal '203.0.113.9'
+	End
+End
+
+Describe 'pfb_recompute() finish-arm reputation reconcile (issue #1084 review: stale .new resurrection + GeoIP-outage destructive reconcile)'
+	# shellcheck disable=SC2034  # consumed by the sourced pfb_recompute()
+	setup() {
+		work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/recfinisharm.XXXXXX")"
+		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"
+		mkdir -p "$snap" "$pfbdeny" "$pfbmatch"
+		tmpdir="${work}/tmp"; mkdir -p "$tmpdir"
+		masterfile="${work}/master"; mastercat="${work}/mastercat"
+		errorlog="${work}/err.log"
+		ip_placeholder3='240.0.0'
+		pathgrepcidr="${work}/grepcidr"; make_grepcidr_stub "$pathgrepcidr"
+		pathgeoip="${work}/mmdblookup"; pathgeoipdat="${work}/geo.mmdb"; touch "$pathgeoipdat"
+		make_geoip_stub "$pathgeoip" 'Could not find an entry for this IP address'
+		memberlist="${work}/members"
+		countsfile="${work}/counts"
+	}
+	cleanup() { rm -rf "$work"; }
+	BeforeAll 'pfb_source'
+	Before 'setup'
+	After 'cleanup'
+
+	It 'never promotes a crash-leftover match<alias>.txt.new debris on a clean no-offender dmax pass (GeoIP healthy)'
+		printf '9.9.9.0/24\n!9.9.9.9\n' > "${pfbmatch}matchSTALE_v4.txt.new"
+		printf '192.0.2.1\n' > "${snap}/STALE_v4.orig"
+		printf '%s\n' "${snap}/STALE_v4.orig" > "$memberlist"
+
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on dmax 100 US off block
+		The status should be success
+		The path "${pfbmatch}matchSTALE_v4.txt" should not be exist
+	End
+
+	It 'keeps ALL previous match artifacts (+ logs) when GeoIP is unavailable this pass, instead of destructively reconciling them away'
+		rm -f "$pathgeoip" "$pathgeoipdat"
+		printf '5.5.5.0/24\n!5.5.5.5\n' > "${pfbmatch}matchALIAS_v4.txt"
+		printf '192.0.2.1\n192.0.2.2\n192.0.2.3\n' > "${snap}/ALIAS_v4.orig"
+		printf '%s\n' "${snap}/ALIAS_v4.orig" > "$memberlist"
+
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on dmax 1 US off block
+		The status should be success
+		The contents of file "${pfbmatch}matchALIAS_v4.txt" should equal "$(printf '5.5.5.0/24\n!5.5.5.5')"
+		The contents of file "${errorlog}" should include 'GeoIP unavailable'
+	End
+
+	It 'clears a stale consolidated matchdedup file once a clean (offender-free) dmax pass confirms zero cc-list matches (matchdedup symmetry, issue #1084 review)'
+		printf '1.1.1.0/24\n!1.1.1.1\n' > "${pfbmatch}matchdedup_v4.txt"
+		printf '192.0.2.1\n' > "${snap}/CLEAN_v4.orig"
+		printf '%s\n' "${snap}/CLEAN_v4.orig" > "$memberlist"
+
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on dmax 100 US match off
+		The status should be success
+		The path "${pfbmatch}matchdedup_v4.txt" should not be exist
 	End
 End

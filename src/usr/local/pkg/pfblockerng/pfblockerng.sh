@@ -860,6 +860,7 @@ pfb_recompute() {
 
 	rec_cumulative="${rec_scratch}/cumulative"
 	rec_priority="${rec_scratch}/priority"
+	rec_matchdedup="${matchdedup:-matchdedup_v4.txt}"
 	true > "${rec_cumulative}"
 	true > "${rec_priority}"
 
@@ -868,8 +869,22 @@ pfb_recompute() {
 	rec_prio=0
 	while IFS= read -r rec_snap; do
 		[ -z "${rec_snap}" ] && continue
-		[ -f "${rec_snap}" ] || continue
 		rec_alias="${rec_snap##*/}"; rec_alias="${rec_alias%%.*}"
+		if [ ! -f "${rec_snap}" ]; then
+			# issue #1084: a dangling memberlist entry must never silently drop this
+			# alias's masterfile rows while its live deny file keeps serving them --
+			# self-heal from the live file (seed-snapshot's own upgrade fallback).
+			rec_livefallback="${pfbdeny}${rec_alias}.txt"
+			if [ -f "${rec_livefallback}" ]; then
+				log="recompute [ ${rec_family} ]: snapshot missing for [ ${rec_alias} ]; falling back to the live deny file"
+				echo "${log}" | tee -a "${errorlog}"
+				rec_snap="${rec_livefallback}"
+			else
+				log="recompute [ ${rec_family} ]: snapshot missing for [ ${rec_alias} ] and no live deny file to fall back to; skipping"
+				echo "${log}" | tee -a "${errorlog}"
+				continue
+			fi
+		fi
 		rec_prio=$((rec_prio + 1))
 		echo "${rec_alias} ${rec_prio}" >> "${rec_priority}"
 		rec_ownedfile="${rec_scratch}/owned/${rec_alias}.txt"
@@ -934,6 +949,15 @@ pfb_recompute() {
 		return 1
 	fi
 
+	# issue #1084 review: clear stale match-reputation ".new" debris (a CRASHED
+	# prior pass, or a window-awk failure mid-write) BEFORE this pass runs -- else
+	# it can survive to be wrongly promoted by a LATER pass that never actually
+	# recomputed reputation for that alias.
+	while IFS=' ' read -r rec_alias _; do
+		rm -f "${pfbmatch}match${rec_alias}.txt.new"
+	done < "${rec_priority}"
+	rm -f "${pfbmatch}${rec_matchdedup}.new"
+
 	rec_do_rep=0
 	if [ "${rec_family}" = 'v4' ]; then
 		case "${rec_repmode}" in
@@ -995,7 +1019,11 @@ pfb_recompute() {
 # row append (dedup=on), and the counts line. grep -c ^ counts an unterminated
 # final line (wc -l undercounts; grepcidr/cp both preserve one).
 pfb_recompute_emit_alias() { # $1 alias  $2 blank-free source file
-	LC_ALL=C sort "$2" > "${pfbdeny}$1.txt.new" || return 1
+	# issue #1084 review: -u -- a within-feed repeat (never pruned by the cross-feed
+	# grepcidr containment, which only strips rows already owned by an EARLIER feed)
+	# must still collapse to one row here, exactly like the retired duplicate()'s own
+	# per-feed `sort -u`.
+	LC_ALL=C sort -u "$2" > "${pfbdeny}$1.txt.new" || return 1
 	if [ "${rec_dedup}" = 'on' ]; then
 		awk -v a="$1" '{ print a " " $0 }' "${pfbdeny}$1.txt.new" >> "${rec_masterfile_new}" || return 1
 	fi
@@ -1017,6 +1045,10 @@ pfb_recompute_clean_new() {
 pfb_recompute_rep_actionmap() {
 	set --
 	while IFS=' ' read -r rec_alias _; do
+		# issue #1084 review: Continent/Uber (pfB_*) aliases never contribute to the
+		# offender count -- legacy duplicate()/pmax excluded them the same way
+		# (`find ! -name 'pfB*.txt'`).
+		case "${rec_alias}" in pfB*) continue ;; esac
 		rec_ownedfile="${rec_scratch}/owned/${rec_alias}.txt"
 		[ -f "${rec_ownedfile}" ] && set -- "$@" "${rec_ownedfile}"
 	done < "${rec_priority}"
@@ -1101,7 +1133,6 @@ pfb_recompute_rep_actionmap() {
 # awk, reinject the survivors/collapsed rows, then emit per alias exactly
 # like the direct path. Cost scales with offender rows, not class size.
 pfb_recompute_rep_subset() {
-	rec_matchdedup="${matchdedup:-matchdedup_v4.txt}"
 	rec_matchexemptcidr="${rec_scratch}/matchexempt_cidr"
 	rec_matchexemptmembers="${rec_scratch}/matchexempt_members"
 	true > "${rec_matchexemptcidr}"
@@ -1115,6 +1146,14 @@ pfb_recompute_rep_subset() {
 	while IFS=' ' read -r rec_alias _; do
 		rec_ownedfile="${rec_scratch}/owned/${rec_alias}.txt"
 		[ -f "${rec_ownedfile}" ] || continue
+		# issue #1084 review: a Continent/Uber (pfB_*) alias rides reputation
+		# untouched -- never diverted/windowed, same class exclusion as detection.
+		case "${rec_alias}" in
+			pfB*)
+				awk '$0 != ""' "${rec_ownedfile}" > "${rec_scratch}/keep/${rec_alias}.keep"
+				continue
+				;;
+		esac
 		awk -v a="${rec_alias}" -v actionfile="${rec_actionmap}" -v side="${rec_side}" '
 			BEGIN {
 				while ((getline line < actionfile) > 0) {
@@ -1321,15 +1360,25 @@ pfb_recompute_finish() {
 	mv -f "${rec_countsfile_new}" "${rec_countsfile}"
 
 	if [ "${rec_repmode}" = 'dmax' ]; then
-		while IFS=' ' read -r rec_alias _; do
-			if [ -f "${pfbmatch}match${rec_alias}.txt.new" ]; then
-				mv -f "${pfbmatch}match${rec_alias}.txt.new" "${pfbmatch}match${rec_alias}.txt"
-			else
-				rm -f "${pfbmatch}match${rec_alias}.txt"
+		if [ "${rec_geoip_ok:-1}" -eq 1 ]; then
+			# GeoIP ran (or there were no offenders to classify) -- a missing ".new"
+			# genuinely means "no reputation match for this alias this pass", so
+			# reconciling away a stale live file here is correct, not destructive.
+			while IFS=' ' read -r rec_alias _; do
+				if [ -f "${pfbmatch}match${rec_alias}.txt.new" ]; then
+					mv -f "${pfbmatch}match${rec_alias}.txt.new" "${pfbmatch}match${rec_alias}.txt"
+				else
+					rm -f "${pfbmatch}match${rec_alias}.txt"
+				fi
+			done < "${rec_priority}"
+			if [ -f "${pfbmatch}${rec_matchdedup}.new" ]; then
+				mv -f "${pfbmatch}${rec_matchdedup}.new" "${pfbmatch}${rec_matchdedup}"
+			elif [ "${rec_ccwhite}" = 'match' ]; then
+				rm -f "${pfbmatch}${rec_matchdedup}"
 			fi
-		done < "${rec_priority}"
-		if [ -f "${pfbmatch}${rec_matchdedup}.new" ]; then
-			mv -f "${pfbmatch}${rec_matchdedup}.new" "${pfbmatch}${rec_matchdedup}"
+		else
+			log="recompute [ ${rec_family} ]: GeoIP unavailable this pass -- keeping previous reputation match artifacts"
+			echo "${log}" | tee -a "${errorlog}"
 		fi
 	fi
 
@@ -1864,10 +1913,13 @@ closingprocess() {
 		countm="$(grep -c ^ "${masterfile}")"
 		echo; echo "   [ Final IP Count  ]  [ ${countm} ]"; echo
 
+		# issue #1084 review: mastercat (s1/s3) now carries BOTH families' rows
+		# (v6 Deny joined cross-list dedup) -- the deny-folder re-scan (s2/s4) must
+		# include v6 Deny files too, else the family mismatch alone fails sanity.
 		s1="$(grep -cv "^${ip_placeholder2}$" "${mastercat}")"
-		s2="$(find "${pfbdeny}"*.txt ! -name '*_v6.txt' -type f 2>/dev/null | xargs cat | grep -cv "^${ip_placeholder2}$")"
+		s2="$(find "${pfbdeny}"*.txt -type f 2>/dev/null | xargs cat | grep -cv "^${ip_placeholder2}$")"
 		s3="$(sort "${mastercat}" | uniq -d | tail -30)"
-		s4="$(find "${pfbdeny}"*.txt ! -name '*_v6.txt' -type f 2>/dev/null | xargs cat | sort | uniq -d | tail -30 | grep -v "^${ip_placeholder2}$")"
+		s4="$(find "${pfbdeny}"*.txt -type f 2>/dev/null | xargs cat | sort | uniq -d | tail -30 | grep -v "^${ip_placeholder2}$")"
 	else
 		echo "   [ Original IP count   ]  [ ${counto} ]"
 	fi
