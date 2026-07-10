@@ -1,23 +1,27 @@
 #!/bin/sh
-# build-repo.sh — turn a directory of pfBlockerNG .pkg files into a per-ABI
-# FreeBSD `pkg` repository tree (ADR-17): reads each .pkg's ABI FROM THE
-# PACKAGE (never the filename), buckets it under <out>/release/<ABI>/
-# (symmetric with the nightly/ subtree, ADR-20), and runs unsigned `pkg repo`
-# per bucket (NONE-signed trust model, ADR §2). Deterministic + re-runnable +
-# no network: each ABI bucket is wiped and rebuilt every run. A flavor
-# collision (same name+version+ABI, different php/py flavor) fails loud — see
-# the guard below. `pkg` must be a real libpkg build on PATH (override PKG_BIN).
+# build-repo.sh — turn a directory of ONE variant/version's pfBlockerNG .pkg
+# files into a FreeBSD `pkg` repository tree (ADR-17): reads each .pkg's ABI
+# FROM THE PACKAGE (never the filename), lays the catalog out under
+# <out>/release/<varver>/<arch>/ (the ADR-20 varver keying — an ABI is NOT
+# 1:1 with an edition/version, so the varver cannot be derived from the
+# package and is supplied by the caller), and runs unsigned `pkg repo` on the
+# bucket (NONE-signed trust model, ADR §2). Deterministic + re-runnable + no
+# network: the bucket is wiped and rebuilt every run. A flavor collision
+# (same name+version+ABI, different php/py flavor) or a mixed-ABI input
+# fails loud — see the guards below. `pkg` must be a real libpkg build on
+# PATH (override PKG_BIN).
 #
 # Usage:
-#   build-repo.sh --in <dir-of-.pkg> --out <dir>      # build the per-ABI tree
-#   build-repo.sh --print-conf [--base-url <url>]     # print the client repo-conf
+#   build-repo.sh --in <dir-of-.pkg> --out <dir> --varver <varver>
+#   build-repo.sh --print-conf --catalog-path <varver>/<arch> [--base-url <url>]
 #
 # Options:
 #   --in DIR          directory holding the input .pkg files (searched, non-recursive)
-#   --out DIR         output root; one release/<ABI>/ catalog subtree is created per ABI
+#   --out DIR         output root; the catalog is created at release/<varver>/<arch>/
+#   --varver NAME     catalog key, e.g. ce-2.8 / plus-26.03 (ADR-20; required with --in)
 #   --print-conf      print the client repo-conf template to stdout and exit
-#   --base-url URL    base URL for --print-conf (default: the ADR Pages base);
-#                     the conf appends the literal ${ABI} pkg variable to it
+#   --catalog-path P  <varver>/<arch> path the printed conf's url resolves to
+#   --base-url URL    base URL for --print-conf (default: the ADR Pages base)
 #
 # Env:
 #   PKG_BIN           the pkg binary to use (default: pkg)
@@ -69,15 +73,18 @@ BASE_URL="$DEFAULT_BASE_URL"
 CATALOG_PATH=""
 PKG_BIN="${PKG_BIN:-pkg}"
 
+VARVER=""
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --in)            IN="$2"; shift 2 ;;
         --out)           OUT="$2"; shift 2 ;;
+        --varver)        VARVER="$2"; shift 2 ;;
         --print-conf)    PRINT_CONF=1; shift ;;
         --base-url)      BASE_URL="$2"; shift 2 ;;
         --catalog-path)  CATALOG_PATH="$2"; shift 2 ;;
         -h|--help)
-            sed -n '11,25p' "$0"   # the Usage/Options/Env block from the header
+            sed -n '14,29p' "$0"   # the Usage/Options/Env block from the header
             exit 0 ;;
         *) echo "build-repo: unknown arg: $1" >&2; exit 2 ;;
     esac
@@ -96,11 +103,18 @@ fi
 # Pure precondition test; the || branch (usage + exit) is the intended else and
 # the && chain is side-effect-free, so SC2015's caveat does not apply.
 # shellcheck disable=SC2015
-[ -n "$IN" ] && [ -n "$OUT" ] || {
-    echo "Usage: $0 --in <dir-of-.pkg> --out <dir>   |   $0 --print-conf [--base-url <url>]" >&2
+[ -n "$IN" ] && [ -n "$OUT" ] && [ -n "$VARVER" ] || {
+    echo "Usage: $0 --in <dir-of-.pkg> --out <dir> --varver <varver>   |   $0 --print-conf --catalog-path <varver>/<arch> [--base-url <url>]" >&2
     exit 2
 }
 [ -d "$IN" ] || { echo "build-repo: --in is not a directory: $IN" >&2; exit 1; }
+# The varver becomes a path segment (rm -rf'd + rebuilt) — same safety rule as ABIs.
+case "$VARVER" in
+    ""|*/*|*".."*|*[!a-z0-9.-]*)
+        echo "build-repo: unsafe or invalid --varver: '$VARVER' (expect e.g. ce-2.8 / plus-26.03)" >&2
+        exit 2
+        ;;
+esac
 
 command -v "$PKG_BIN" >/dev/null 2>&1 || {
     echo "build-repo: '$PKG_BIN' not found on PATH — need a libpkg \`pkg\` binary (set PKG_BIN)" >&2
@@ -125,8 +139,10 @@ pkg_flavor_sig() {
 }
 
 pkg_nv() {
-    # "<name> <version>" of a .pkg.
-    "$PKG_BIN" query -F "$1" '%n %v' 2>/dev/null
+    # "<name>-<version>" of a .pkg — the hyphenated form `pkg repo` records in
+    # the catalog and clients fetch (issue #1081: a space here broke the served
+    # path).
+    "$PKG_BIN" query -F "$1" '%n-%v' 2>/dev/null
 }
 
 # ── Enumerate inputs ───────────────────────────────────────────────────────────
@@ -183,23 +199,28 @@ validate_abi() {
     esac
 }
 
-# ── Lay out per-ABI buckets + run `pkg repo` ───────────────────────────────────
-# The release channel is nested under <out>/release/<ABI>/ (ADR-20, symmetric with the
-# nightly/ subtree), so a client conf whose url carries
-# the explicit `release/${ABI}` prefix resolves against <out> as the base.
-CHANNEL_ROOT="${OUT}/release"
-mkdir -p "$CHANNEL_ROOT"
-# Track which ABI buckets we (re)built, so each is wiped exactly once for
-# determinism even when several .pkg share an ABI.
-built=""
+# ── Lay out the varver bucket + run `pkg repo` ─────────────────────────────────
+# The release channel is nested under <out>/release/<varver>/<arch>/ (ADR-20:
+# the catalog is keyed by varver, matching build-repo-portable.py and this
+# script's own --print-conf url; issue #1081 — the old <out>/release/<ABI>/
+# layout served nothing a printed conf could resolve). One varver per
+# invocation: a mixed-ABI input would silently mix editions, so it fails loud.
+bucket_abi=""
 for f in "$@"; do
     abi="$(pkg_abi "$f")"
     validate_abi "$abi"
-    dir="${CHANNEL_ROOT}/${abi}"
-    case " $built " in
-        *" $abi "*) : ;;                 # already wiped this run
-        *) rm -rf "$dir"; mkdir -p "$dir"; built="$built $abi" ;;
-    esac
+    if [ -z "$bucket_abi" ]; then
+        bucket_abi="$abi"
+    elif [ "$abi" != "$bucket_abi" ]; then
+        echo "build-repo: mixed ABIs in one --varver run ('$bucket_abi' vs '$abi') — run once per varver" >&2
+        exit 1
+    fi
+done
+arch="${bucket_abi##*:}"
+dir="${OUT}/release/${VARVER}/${arch}"
+rm -rf "$dir"
+mkdir -p "$dir"
+for f in "$@"; do
     # Copy under the CANONICAL `<name>-<version>.pkg` name (never the staging input
     # filename), so the catalog path is clean and an identical name+version from
     # another source (branch + release artifact) overwrites to a single file (dedup;
@@ -208,12 +229,9 @@ for f in "$@"; do
     cp "$f" "${dir}/${nv}.pkg"
 done
 
-for abi in $built; do
-    dir="${CHANNEL_ROOT}/${abi}"
-    echo "==> pkg repo ${dir}" >&2
-    # No key argument => an unsigned (NONE-signed) catalog. ASSUME_ALWAYS_YES so
-    # pkg never prompts in CI.
-    env ASSUME_ALWAYS_YES=yes "$PKG_BIN" repo "$dir"
-done
+echo "==> pkg repo ${dir}" >&2
+# No key argument => an unsigned (NONE-signed) catalog. ASSUME_ALWAYS_YES so
+# pkg never prompts in CI.
+env ASSUME_ALWAYS_YES=yes "$PKG_BIN" repo "$dir"
 
-echo "==> built catalogs (release channel) for ABI:${built}" >&2
+echo "==> built catalog (release channel) at release/${VARVER}/${arch}" >&2
