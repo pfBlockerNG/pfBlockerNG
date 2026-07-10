@@ -892,7 +892,7 @@ whoisconvert() {
 			fi
 			;;
 		*)
-			asnips=''
+			asnok=false
 			# Download IPinfo asn databases on first use.
 			if [ ! -f "${pathasncsv}" ]; then
 				printf 'Downloading [ IPinfo databases ] [ %s ]' "${now}"
@@ -918,19 +918,19 @@ whoisconvert() {
 				esac
 				grep -F ",AS${asn}," "${pathasncsv}" | cut -d ',' -f1-2 | tr ',' '-' > "${pfborig}${alias}.wk"
 
-				# Collect only IPv4 or IPv6 for THIS entry (issue #1075: append
-				# below like the domain branch — a `>` here truncated .orig, so
-				# each ASN entry clobbered everything collected before it).
+				# Collect only IPv4 or IPv6 for THIS entry, appending like the
+				# domain branch (issue #1075: a `>` here truncated .orig, so each
+				# ASN entry clobbered everything collected before it). grep exits
+				# 0 iff it appended at least one line.
 				if [ "${vtype}" = '_v4' ]; then
-					asnips="$(grep -v ':' "${pfborig}${alias}.wk")"
+					grep -v ':' "${pfborig}${alias}.wk" >> "${pfborig}${alias}.orig" && asnok=true
 				else
-					asnips="$(grep -v '\.' "${pfborig}${alias}.wk")"
+					grep -v '\.' "${pfborig}${alias}.wk" >> "${pfborig}${alias}.orig" && asnok=true
 				fi
 			fi
 
-			if [ -n "${asnips}" ]; then
+			if [ "${asnok}" = true ]; then
 				found=true
-				printf '%s\n' "${asnips}" >> "${pfborig}${alias}.orig"
 			else
 				printf "... Failed to collect ASN"
 				touch "${pfborig}${alias}.fail"
