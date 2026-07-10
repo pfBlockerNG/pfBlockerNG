@@ -755,6 +755,48 @@ def _php_kv_array(data: dict[str, str]) -> str:
     return f"array({items})"
 
 
+def pin_cron_due(vm: SmokeVM) -> int:
+    """Set pfb_reuse='' and pfb_dailystart=date('G') on the guest so an EveryDay feed is due.
+
+    Returns the guest's wall-clock hour (0-23) pinned into ``pfb_dailystart``, echoed back
+    atomically with the write. Callers that later run ``cron`` should fast-guard against an
+    hour rollover between this pin and the cron run (see :func:`guest_hour`) — if the
+    wall clock ticked over, the EveryDay feed is no longer due and a "not re-ingested"
+    assertion would misread that as a change-detector regression.
+    """
+    sentinel_open, sentinel_close = "<<<HOUR>>>", "<<<END>>>"
+    snippet = (
+        f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
+        "$g['pfb_reuse'] = '';\n"
+        "$hour = date('G');\n"
+        "$g['pfb_dailystart'] = $hour;\n"
+        f"config_set_path({_php_str(CFG_GLOBAL)}, $g);\n"
+        "write_config('pfBlockerNG smoke #538: due cron');\n"
+        f"echo 'OK' . '{sentinel_open}' . $hour . '{sentinel_close}';"
+    )
+    res = php_eval(vm, snippet)
+    if res.returncode != 0 or "OK" not in res.stdout or sentinel_open not in res.stdout:
+        raise RuntimeError(f"pin_cron_due failed: rc={res.returncode} {res.stderr!r} {res.stdout!r}")
+    raw = res.stdout.split(sentinel_open, 1)[1].split(sentinel_close, 1)[0]
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"pin_cron_due: could not parse pinned hour from {res.stdout!r}") from exc
+
+
+def guest_hour(vm: SmokeVM) -> int:
+    """Read the guest's CURRENT wall-clock hour (0-23) via ``date('G')``, delimited."""
+    sentinel_open, sentinel_close = "<<<HOUR>>>", "<<<END>>>"
+    res = php_eval(vm, f"echo '{sentinel_open}' . date('G') . '{sentinel_close}';")
+    if sentinel_open not in res.stdout or sentinel_close not in res.stdout:
+        raise RuntimeError(f"guest_hour: no delimited value in output: {res.stdout!r} {res.stderr!r}")
+    raw = res.stdout.split(sentinel_open, 1)[1].split(sentinel_close, 1)[0]
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"guest_hour: could not parse hour from {res.stdout!r}") from exc
+
+
 # --------------------------------------------------------------------------- #
 # Strict PHP error reporting (BBcan177) — run the VM the way Netgate runs betas
 # --------------------------------------------------------------------------- #

@@ -1328,48 +1328,6 @@ def _feed_log_count(vm: SmokeVM, header: str, phrase: str, *, timeout: float = 3
         return 0
 
 
-def _pin_cron_due(vm: SmokeVM) -> int:
-    """Set pfb_reuse='' and pfb_dailystart=date('G') on the guest so an EveryDay feed is due.
-
-    Returns the guest's wall-clock hour (0-23) pinned into ``pfb_dailystart``, echoed back
-    atomically with the write. Callers that later run ``cron`` should fast-guard against an
-    hour rollover between this pin and the cron run (see :func:`_guest_hour`) — if the
-    wall clock ticked over, the EveryDay feed is no longer due and a "not re-ingested"
-    assertion would misread that as a change-detector regression.
-    """
-    sentinel_open, sentinel_close = "<<<HOUR>>>", "<<<END>>>"
-    snippet = (
-        f"$g = config_get_path({h._php_str(h.CFG_GLOBAL)}, array());\n"  # noqa: SLF001
-        "$g['pfb_reuse'] = '';\n"
-        "$hour = date('G');\n"
-        "$g['pfb_dailystart'] = $hour;\n"
-        f"config_set_path({h._php_str(h.CFG_GLOBAL)}, $g);\n"  # noqa: SLF001
-        "write_config('pfBlockerNG smoke #538: due cron');\n"
-        f"echo 'OK' . '{sentinel_open}' . $hour . '{sentinel_close}';"
-    )
-    res = h.php_eval(vm, snippet)
-    if res.returncode != 0 or "OK" not in res.stdout or sentinel_open not in res.stdout:
-        raise RuntimeError(f"_pin_cron_due failed: rc={res.returncode} {res.stderr!r} {res.stdout!r}")
-    raw = res.stdout.split(sentinel_open, 1)[1].split(sentinel_close, 1)[0]
-    try:
-        return int(raw)
-    except ValueError as exc:
-        raise RuntimeError(f"_pin_cron_due: could not parse pinned hour from {res.stdout!r}") from exc
-
-
-def _guest_hour(vm: SmokeVM) -> int:
-    """Read the guest's CURRENT wall-clock hour (0-23) via ``date('G')``, delimited."""
-    sentinel_open, sentinel_close = "<<<HOUR>>>", "<<<END>>>"
-    res = h.php_eval(vm, f"echo '{sentinel_open}' . date('G') . '{sentinel_close}';")
-    if sentinel_open not in res.stdout or sentinel_close not in res.stdout:
-        raise RuntimeError(f"_guest_hour: no delimited value in output: {res.stdout!r} {res.stderr!r}")
-    raw = res.stdout.split(sentinel_open, 1)[1].split(sentinel_close, 1)[0]
-    try:
-        return int(raw)
-    except ValueError as exc:
-        raise RuntimeError(f"_guest_hour: could not parse hour from {res.stdout!r}") from exc
-
-
 def _bump_feed_mtime(
     vm: SmokeVM, feed_path: str, orig_path: str, *, advance: str | None = None, timeout: float = 30.0
 ) -> None:
@@ -1448,7 +1406,7 @@ def test_cron_detects_changed_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
         h.write_local_feed(deployed_vm, "smoke_cronchg.txt", dom_old + "\n" + dom_new + "\n")
 
         # Pin pfb_reuse=off and dailystart=now (just before cron to dodge hour-rollover race).
-        _pin_cron_due(deployed_vm)
+        h.pin_cron_due(deployed_vm)
 
         # Capture baselines BEFORE the cron run: the per-feed header line (proves the detector
         # actually evaluated THIS feed) and the re-ingest marker.
@@ -1459,7 +1417,7 @@ def test_cron_detects_changed_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
         h.reload(deployed_vm, "cron")
 
         # THEN (fast guard) — the cron actually evaluated this feed. If the EveryDay feed was not
-        # due (e.g. the wall-clock hour rolled over between _pin_cron_due and the cron), no
+        # due (e.g. the wall-clock hour rolled over between pin_cron_due and the cron), no
         # detector line appears; fail HERE with a clear reason instead of a 120s probe timeout.
         hdr_after = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
         assert hdr_after > hdr_before, (
@@ -1538,7 +1496,7 @@ def test_cron_skips_unchanged_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
         # No mtime manipulation is needed: detection is hash-based (ADR-42 Phase 2).
 
         # Pin pfb_reuse=off and dailystart=now.
-        pinned_hour = _pin_cron_due(deployed_vm)
+        pinned_hour = h.pin_cron_due(deployed_vm)
 
         # Capture baselines BEFORE cron. With an unchanged feed the cron takes the noupdates
         # path (sync feed-loop skipped), so the reliable positive signal is the DETECTOR verdict
@@ -1552,11 +1510,11 @@ def test_cron_skips_unchanged_local_feed(deployed_vm: SmokeVM, client_vm: SmokeV
         # THEN (fast guard) — the guest hour must still match the pinned hour. Unlike the
         # changed-feed sibling (test_cron_detects_changed_local_feed), this unchanged/noupdates
         # path logs no "[ header ]" marker to fast-guard on, so guard on the wall clock itself:
-        # a rollover between _pin_cron_due and this cron means the EveryDay feed was never due,
+        # a rollover between pin_cron_due and this cron means the EveryDay feed was never due,
         # and the "no re-ingest" assertions below would prove nothing about the change detector.
-        hour_after = _guest_hour(deployed_vm)
+        hour_after = h.guest_hour(deployed_vm)
         assert hour_after == pinned_hour, (
-            f"guest hour rolled over between _pin_cron_due ({pinned_hour}) and cron "
+            f"guest hour rolled over between pin_cron_due ({pinned_hour}) and cron "
             f"({hour_after}) — the EveryDay feed was not due this run; this proves nothing "
             f"about the change detector, re-run"
         )
@@ -1640,7 +1598,7 @@ def test_cron_skips_local_feed_with_bumped_mtime_but_same_content(deployed_vm: S
         _bump_feed_mtime(deployed_vm, feed_path, orig_path, advance="0200")
 
         # Pin pfb_reuse=off and dailystart=now (just before cron).
-        pinned_hour = _pin_cron_due(deployed_vm)
+        pinned_hour = h.pin_cron_due(deployed_vm)
         notreq_before = h.count_log_marker(deployed_vm, h.PFB_LOG, "Update not required")
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
 
@@ -1650,11 +1608,11 @@ def test_cron_skips_local_feed_with_bumped_mtime_but_same_content(deployed_vm: S
         # THEN (fast guard) — the guest hour must still match the pinned hour. This
         # unchanged-content path (like its `test_cron_skips_unchanged_local_feed` sibling) logs
         # no "[ header ]" marker to fast-guard on, so guard on the wall clock itself: a rollover
-        # between _pin_cron_due and this cron means the EveryDay feed was never due, and the
+        # between pin_cron_due and this cron means the EveryDay feed was never due, and the
         # "Update not required" assertion below would prove nothing about the change detector.
-        hour_after = _guest_hour(deployed_vm)
+        hour_after = h.guest_hour(deployed_vm)
         assert hour_after == pinned_hour, (
-            f"guest hour rolled over between _pin_cron_due ({pinned_hour}) and cron "
+            f"guest hour rolled over between pin_cron_due ({pinned_hour}) and cron "
             f"({hour_after}) — the EveryDay feed was not due this run; this proves nothing "
             f"about the change detector, re-run"
         )
@@ -1751,7 +1709,7 @@ def test_cron_detects_changed_local_feed_same_second(deployed_vm: SmokeVM, clien
         _bump_feed_mtime(deployed_vm, feed_path, orig_path)  # touch -r: source mtime := orig mtime
 
         # Pin pfb_reuse=off and dailystart=now.
-        _pin_cron_due(deployed_vm)
+        h.pin_cron_due(deployed_vm)
 
         hdr_before = h.count_log_marker(deployed_vm, h.PFB_LOG, f"[ {header} ]")
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
@@ -1877,7 +1835,7 @@ def test_cron_304_skips_unchanged_remote_feed(
         # verdict line itself (pfblockerng.php's pfb_update_check now prefixes it "[ header ] ",
         # matching the fetch-time gates' format), so the marker below is scoped by header AND
         # verdict — no separate global count + "fast guard" needed.
-        _pin_cron_due(deployed_vm)
+        h.pin_cron_due(deployed_vm)
         not_mod_marker = f"[ {header} ] ( 304 not modified )"
         not_mod_before = h.count_log_marker(deployed_vm, h.PFB_LOG, not_mod_marker)
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
@@ -1971,7 +1929,7 @@ def test_cron_200_reingest_changed_remote_feed(
         # WHEN — update body + bump ETag on the server.
         mock_feeds.set_content(feed_name, dom_old + "\n" + dom_new + "\n", etag=etag_v2)
 
-        _pin_cron_due(deployed_vm)
+        h.pin_cron_due(deployed_vm)
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
         # "[ header ] ( content changed )" is the Phase-3 hash-compare verdict itself (not
         # merely its re-ingest side effect), header-scoped by #811 — the docstring's RED
@@ -2067,7 +2025,7 @@ def test_cron_no_validator_download_hash_decides(
         # Feed unchanged; no If-None-Match will be sent (no stored ETag). #811 header-scopes
         # the "( content unchanged )" verdict line, so the marker below proves BOTH the
         # verdict and that THIS feed's header was evaluated.
-        _pin_cron_due(deployed_vm)
+        h.pin_cron_due(deployed_vm)
         not_unch_marker = f"[ {header} ] ( content unchanged )"
         not_unch_before = h.count_log_marker(deployed_vm, h.PFB_LOG, not_unch_marker)
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
@@ -2151,7 +2109,7 @@ def test_cron_spurious_200_same_bytes_no_reingest(
             # Pin cron due (inside CaseContext so config is active). #811 header-scopes the
             # "( content unchanged )" verdict, so the marker below proves both the verdict
             # and that THIS feed's marker (aliasname_family) was the one evaluated.
-            _pin_cron_due(deployed_vm)
+            h.pin_cron_due(deployed_vm)
             not_unch_marker = f"[ {feed_marker} ] ( content unchanged )"
             not_unch_before = h.count_log_marker(deployed_vm, h.PFB_LOG, not_unch_marker)
             dl_before = _feed_log_count(deployed_vm, feed_marker, "Downloading update")
@@ -2247,7 +2205,7 @@ def test_cron_lastmod_304_skips_unchanged_feed(
         # Feed unchanged; the stored Last-Modified validator still matches. #811 header-scopes
         # the "( 304 not modified )" verdict line itself, so the marker below is scoped by
         # header AND verdict — no separate global count + "fast guard" needed.
-        _pin_cron_due(deployed_vm)
+        h.pin_cron_due(deployed_vm)
         not_mod_marker = f"[ {header} ] ( 304 not modified )"
         not_mod_before = h.count_log_marker(deployed_vm, h.PFB_LOG, not_mod_marker)
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
