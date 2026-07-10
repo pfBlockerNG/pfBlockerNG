@@ -80,6 +80,7 @@ def deployed_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer)
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.timeout(300)
 def test_adr62_abp_full_shape_set_no_marker(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """Row 2: an ABP-headed feed's ||/regex/element-hiding shapes, with NO '.abp' marker.
 
@@ -145,6 +146,7 @@ def test_adr62_abp_full_shape_set_no_marker(deployed_vm: SmokeVM, client_vm: Smo
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.timeout(300)
 def test_adr62_mixed_plain_feed_all_block_delta_d2(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """Row 3 (delta D2): a header-less mixed feed — hosts + ||anchor^ + /regex/ — all block.
 
@@ -185,6 +187,7 @@ def test_adr62_mixed_plain_feed_all_block_delta_d2(deployed_vm: SmokeVM, client_
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.timeout(300)
 def test_adr62_bracketed_ipv6_dnsblip_vs_adblock_marker(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """Row 4 (Semantics #3): a bracketed IPv6 literal collects; a real [Adblock...] marker does not.
 
@@ -241,6 +244,7 @@ def test_adr62_bracketed_ipv6_dnsblip_vs_adblock_marker(deployed_vm: SmokeVM, cl
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.timeout(300)
 def test_adr62_csv_bambenek_feed_blocks(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """Row 5: a Bambenek Consulting ('bbc') CSV-format DNSBL row extracts and blocks.
 
@@ -280,6 +284,7 @@ def test_adr62_csv_bambenek_feed_blocks(deployed_vm: SmokeVM, client_vm: SmokeVM
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.timeout(300)
 def test_adr62_idn_raw_unicode_blocks_under_punycode(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """Row 6: a raw Unicode IDN feed line blocks when queried under its punycode form.
 
@@ -323,6 +328,7 @@ def test_adr62_idn_raw_unicode_blocks_under_punycode(deployed_vm: SmokeVM, clien
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.timeout(300)
 def test_adr62_reused_feed_old_dialect_txt_resolves_same_verdict(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """Row 7a (Semantics #7): a reused feed's pre-existing '.txt' resolves unchanged; stale marker swept.
 
@@ -400,6 +406,7 @@ def test_adr62_reused_feed_old_dialect_txt_resolves_same_verdict(deployed_vm: Sm
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.timeout(300)
 def test_adr62_tld_enabled_run_keeps_plain_row_classification(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """Row 7b (issue #1060 regression guard): TLD mode + a mixed feed still blocks both rows.
 
