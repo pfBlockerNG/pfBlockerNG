@@ -52,12 +52,15 @@ final class TldAnalysisMasterKeyingTest extends TestCase
 		$pfb['tld_update']	= array();
 
 		// Master list: dot-less lines ('com', punycode 'xn--80ak6aa92e'), two
-		// dotted lines ('co.om', 'com.ac'), a single-space line (kept as an
-		// inert garbage bucket) and hostile rows (blank, trailing-dot-only,
-		// control-char only) that must never seed a bucket either way.
+		// dotted lines ('co.om', 'com.ac'), a whitespace-only line and comment
+		// lines (bare and leading-whitespace -- all SKIPPED, issue #1116's
+		// Python-mirror contract), a bare '0' TLD and a dotted-to-'0' line
+		// (both KEPT -- the !empty() footgun fix), and hostile rows (blank,
+		// trailing-dot-only, control-char only) that must never seed a bucket.
 		file_put_contents(
 			$pfb['dnsbl_tld_data'],
 			"com\nco.om\ncom.ac\nxn--80ak6aa92e\n \n\nbad.\n.\n\x01\n"
+			. "# comment\n  # leading space comment\n0\nexample.0\n"
 		);
 
 		file_put_contents(
@@ -110,15 +113,17 @@ final class TldAnalysisMasterKeyingTest extends TestCase
 	 * Scenario: the master-list loader buckets a dot-less line.
 	 *
 	 * Given:  a master list with dot-less lines ('com', punycode
-	 *         'xn--80ak6aa92e'), dotted siblings ('co.om', 'com.ac'), a
-	 *         single-space line, and hostile rows that carry no usable TLD
+	 *         'xn--80ak6aa92e'), dotted siblings ('co.om', 'com.ac'), comment
+	 *         lines, a whitespace-only line, a bare '0' TLD, a dotted-to-'0'
+	 *         line, and hostile rows that carry no usable TLD
 	 * When:   tld_analysis() loads the master list into $tlds
 	 * Then:   each dot-less line is keyed under its own full value, not
 	 *         truncated ('com' not 'om'); 'co.om' keys under 'om' alone (no
 	 *         'com' pollution); the dotted 'com.ac' line still keys under
-	 *         'ac'; the single-space line keeps its own inert bucket; the
-	 *         zero-TLD hostile rows seed no bucket; and the loader itself
-	 *         raises no diagnostic
+	 *         'ac'; comment and whitespace-only lines seed no bucket; a bare
+	 *         '0' line and a dotted-to-'0' line both key under '0' (the
+	 *         !empty() footgun fix); the remaining zero-TLD hostile rows seed
+	 *         no bucket; and the loader itself raises no diagnostic
 	 */
 	public function testDotLessMasterLineKeysUnderItsOwnFullValue(): void
 	{
@@ -152,22 +157,32 @@ final class TldAnalysisMasterKeyingTest extends TestCase
 			"'xn--80ak6aa92e' must key under its own full value; got tlds: " . var_export($tlds, TRUE)
 		);
 
-		// R4b: a single-space line keeps its own inert bucket (unreachable by
-		// tld_search; the shipped master file has no whitespace-only lines).
-		$this->assertSame(
-			array(' ' => ''),
-			$tlds[' '] ?? NULL,
-			'a single-space line must keep its own inert bucket; got: ' . var_export($tlds[' '] ?? NULL, TRUE)
+		// R4b: a whitespace-only line is SKIPPED (Python-mirror `.strip()`
+		// contract, issue #1116) -- it must seed no bucket at all.
+		$this->assertArrayNotHasKey(
+			' ',
+			$tlds,
+			'a whitespace-only line must not seed a bucket; got: ' . var_export($tlds[' '] ?? NULL, TRUE)
 		);
 
-		// R4c: zero-TLD rows (blank, 'bad.', '.', control-char-only) seed no
-		// bucket; exact keyset pins the whole load.
+		// R4c: zero-TLD rows (blank, 'bad.', '.', control-char-only, and both
+		// comment lines) seed no bucket; exact keyset pins the whole load.
+		// Note: PHP normalises the canonical-integer string key '0' to int 0.
 		$keys = array_keys($tlds);
 		sort($keys);
 		$this->assertSame(
-			array(' ', 'ac', 'com', 'om', 'xn--80ak6aa92e'),
+			array(0, 'ac', 'com', 'om', 'xn--80ak6aa92e'),
 			$keys,
 			'hostile master-list rows must not create extra buckets; got: ' . var_export($keys, TRUE)
+		);
+
+		// R6: the !empty("0") footgun -- a bare '0' line AND a dotted line
+		// whose suffix is '0' (e.g. 'example.0') both bucket under key '0'
+		// (int 0 per PHP's numeric-string key normalisation).
+		$this->assertSame(
+			array(0 => '', 'example.0' => ''),
+			$tlds['0'] ?? NULL,
+			"'0' bucket must hold the bare '0' line and 'example.0'; got: " . var_export($tlds['0'] ?? NULL, TRUE)
 		);
 
 		// R5: diagnostic hygiene -- the loader itself raises no PHP warnings.
