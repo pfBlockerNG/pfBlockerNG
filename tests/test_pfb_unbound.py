@@ -118,15 +118,18 @@ def _dnsbl_decision(**kw: Any) -> Any:
 
 def allow_decision() -> Any:
     # A composed Decision whose DNSBL axis is a not-found (allow) verdict -- seeds the
-    # allow short-circuit path (the old excludeDB membership).
-    return pfb_unbound.Decision(dnsbl=_dnsbl_decision())
+    # allow short-circuit path (the old excludeDB membership). Stamped with the LIVE
+    # snapshot generation: a seeded memo plays a verdict the live snapshot produced
+    # (an unstamped/foreign-generation one reads as stale, issue #1074).
+    return pfb_unbound.Decision(dnsbl=_dnsbl_decision(), snap_gen=pfb_unbound._snapshot.gen)
 
 
 def block_decision(**kw: Any) -> Any:
     # A composed Decision whose DNSBL axis is a block; kw overrides DnsblDecision fields.
+    # Live-generation stamp: same contract as allow_decision above.
     base = {"is_found": True, "log_type": "1", "b_type": "DNSBL", "p_type": "Python", "feed": "F", "group": "G"}
     base.update(kw)
-    return pfb_unbound.Decision(dnsbl=_dnsbl_decision(**base))
+    return pfb_unbound.Decision(dnsbl=_dnsbl_decision(**base), snap_gen=pfb_unbound._snapshot.gen)
 
 
 class TestIsUnknown:
@@ -1344,7 +1347,7 @@ class TestOperateNoAAAA:
     def test_excluded_domain_not_blocked(self) -> None:
         add_noaaaa("example.com", wildcard=False)
         # A cached allow verdict (noaaaa False) short-circuits -- the old excludeAAAADB.
-        pfb_unbound.decisionDB["example.com"] = pfb_unbound.Decision(noaaaa=False)
+        pfb_unbound.decisionDB["example.com"] = pfb_unbound.Decision(noaaaa=False, snap_gen=pfb_unbound._snapshot.gen)
         qstate = make_qstate("example.com.", qtype=RR_AAAA)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert qstate.ext_state[0] == MODULE_WAIT_MODULE
@@ -1510,6 +1513,49 @@ class TestOperateDnsbl:
         assert qstate.ext_state[0] == MODULE_FINISHED
         answers = DNSMessage.instances[-1].answer
         assert any(a.startswith("cached-block.com. ") for a in answers)
+
+    def test_stale_generation_memo_is_recomputed_not_served(self, monkeypatch: Any) -> None:
+        # issue #1074: a query thread that captured the OLD snapshot can memoize its
+        # verdict AFTER rebuild_and_swap()'s decisionDB.clear(), re-inserting a verdict
+        # the new generation no longer agrees with. Scenario: evil.com was blocked by
+        # the old lists, the new snapshot REMOVED it (not in any live list), and the
+        # old-snapshot block verdict sits in decisionDB without the live generation's
+        # stamp. operate() must recompute against the live snapshot -- the query
+        # resolves -- instead of re-serving the stale block.
+        self._enable(monkeypatch)
+        stale = pfb_unbound.Decision(
+            dnsbl=_dnsbl_decision(
+                is_found=True, log_type="1", b_type="DNSBL", p_type="Python", feed="F", group="G", b_eval="evil.com"
+            )
+        )
+        pfb_unbound.decisionDB["evil.com"] = stale
+        qstate = make_qstate("evil.com.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        # Before the fix this served the stale block (MODULE_FINISHED + a reply).
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE
+        # The memo was replaced by a live-generation allow verdict, so the stale one
+        # cannot be served on the next query either.
+        dec = pfb_unbound.decisionDB.get("evil.com")
+        assert dec is not None
+        assert dec.snap_gen == pfb_unbound._snapshot.gen
+        assert dec.dnsbl.is_found is False
+
+    def test_stale_generation_write_cannot_extend_a_live_memo(self, monkeypatch: Any) -> None:
+        # issue #1074, writer side: a late _decision_for() call carrying the OLD
+        # generation must REPLACE (restamp) the entry, never extend a live one -- and
+        # its verdict must then be invisible to a live-generation read.
+        self._enable(monkeypatch)
+        live_gen = pfb_unbound._snapshot.gen
+        old_gen = live_gen - 1
+        late = pfb_unbound._decision_for("evil.com", old_gen)
+        late.dnsbl = _dnsbl_decision(
+            is_found=True, log_type="1", b_type="DNSBL", p_type="Python", feed="F", group="G", b_eval="evil.com"
+        )
+        assert pfb_unbound.decisionDB.get("evil.com").snap_gen == old_gen
+        # A live-generation get-or-create sees the foreign stamp and starts fresh.
+        dec = pfb_unbound._decision_for("evil.com", live_gen)
+        assert dec.snap_gen == live_gen
+        assert dec.dnsbl is pfb_unbound.UNSET
 
     def test_group_policy_bypass(self, monkeypatch: Any) -> None:
         self._enable(monkeypatch)
@@ -2251,7 +2297,7 @@ class TestStage2UnifiedDecision:
         self._enable(monkeypatch)
         add_noaaaa("unrelated.com", wildcard=False)  # enable the path; x.com unlisted
         assert "x.com" not in pfb_unbound.noAAAADB  # absent from source -> only the cache can block
-        pfb_unbound.decisionDB["x.com"] = pfb_unbound.Decision(noaaaa=True)
+        pfb_unbound.decisionDB["x.com"] = pfb_unbound.Decision(noaaaa=True, snap_gen=pfb_unbound._snapshot.gen)
         qstate = make_qstate("x.com.", qtype=RR_AAAA)
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert qstate.ext_state[0] == MODULE_FINISHED
@@ -2262,7 +2308,9 @@ class TestStage2UnifiedDecision:
         self._enable(monkeypatch)
         pfb_unbound.pfb["safeSearchDB"] = True
         assert "x.com" not in pfb_unbound.safeSearchDB  # absent from source -> only the cache rewrites
-        pfb_unbound.decisionDB["x.com"] = pfb_unbound.Decision(safesearch={"A": "1.2.3.4", "AAAA": ""})
+        pfb_unbound.decisionDB["x.com"] = pfb_unbound.Decision(
+            safesearch={"A": "1.2.3.4", "AAAA": ""}, snap_gen=pfb_unbound._snapshot.gen
+        )
         qstate = make_qstate("x.com.", qtype=RR_A)
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert rcd is True
