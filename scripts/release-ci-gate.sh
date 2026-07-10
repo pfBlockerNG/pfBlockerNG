@@ -21,11 +21,16 @@
 # CI still running) fails loudly instead of reading as "no such check" and
 # falling through to the ancestor walk. A failed query (rate limit, network,
 # auth) also aborts loudly -- an unverifiable tip must never read as "never
-# ran CI". Runs sort by started_at: a newer in-progress rerun has
-# completed_at null, which sorts FIRST, so a completed_at sort would let the
-# older completed run shadow it.
+# ran CI". ANY unresolved run for the name reads as pending: recency proxies
+# (completed_at/started_at sorts) let a null-timestamped in-progress or queued
+# rerun sort first and be shadowed by an older completed run.
 
 set -u
+
+if [ -z "${REPO:-}" ]; then
+	echo "::error::REPO env var (owner/repo) is required."
+	exit 1
+fi
 
 CONCLUSION=""
 CHECK_SHA=""
@@ -33,8 +38,10 @@ for sha in $(git rev-list --first-parent -n 20 HEAD); do
 	if ! c=$(gh api \
 		"repos/${REPO}/commits/${sha}/check-runs?check_name=All%20tests%20passed&per_page=100" \
 		--jq '[.check_runs[] | select(.name == "All tests passed")]
-		      | sort_by(.started_at) | last
-		      | if . == null then "" elif .conclusion == null then "pending" else .conclusion end'); then
+		      | if length == 0 then ""
+		        elif any(.[]; .conclusion == null) then "pending"
+		        else (sort_by(.started_at) | last | .conclusion)
+		        end'); then
 		echo "::error::check-runs query failed for ${sha} — cannot verify CI state; aborting instead of walking back."
 		exit 1
 	fi

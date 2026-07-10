@@ -145,12 +145,52 @@ EOF
   End
 
   It 'treats a newer in-progress rerun as pending despite an older completed success'
-    # completed_at is null on the in-progress rerun and null sorts FIRST, so a
-    # completed_at sort let the older success shadow it; sorting by started_at
-    # surfaces the newest attempt, which has not concluded.
+    # ANY unresolved run for the name must read as pending -- a recency sort on
+    # completed_at let the older success shadow the null-timestamped rerun.
     payload "$tip" '{"check_runs":[{"name":"All tests passed","started_at":"2026-01-01T00:00:00Z","completed_at":"2026-01-01T00:10:00Z","conclusion":"success"},{"name":"All tests passed","started_at":"2026-01-02T00:00:00Z","completed_at":null,"conclusion":null}]}'
     When call run_gate
     The status should be failure
     The output should include 'has not concluded yet'
+  End
+
+  It 'treats a QUEUED rerun (null started_at) as pending despite an older completed success'
+    # A queued-but-not-started rerun has null started_at too, so even a
+    # started_at recency sort would let the completed success shadow it; only
+    # the any-unresolved rule catches it.
+    payload "$tip" '{"check_runs":[{"name":"All tests passed","started_at":"2026-01-01T00:00:00Z","completed_at":"2026-01-01T00:10:00Z","conclusion":"success"},{"name":"All tests passed","started_at":null,"completed_at":null,"conclusion":null}]}'
+    When call run_gate
+    The status should be failure
+    The output should include 'has not concluded yet'
+  End
+
+  It 'reports a missing REPO env var, not a bogus no-check-run diagnostic'
+    payload "$tip" '{"check_runs":[{"name":"All tests passed","started_at":"2026-01-01T00:00:00Z","completed_at":"2026-01-01T00:10:00Z","conclusion":"success"}]}'
+    run_gate_no_repo() {
+      ( cd "$repo" && PATH="${work}/bin:${PATH}" GH_TOKEN=x \
+          sh "${PFB_ROOT}/scripts/release-ci-gate.sh" )
+    }
+    When call run_gate_no_repo
+    The status should be failure
+    The output should include 'REPO env var'
+    The output should not include "No 'All tests passed'"
+  End
+
+  It 'does not walk back beyond the 20-commit window'
+    # The only matching run sits on commit 21 in first-parent order; the walk
+    # must exhaust at 20 and fail rather than validate an ancient ancestor.
+    deep="$repo-deep"
+    git init -q -b main "$deep"
+    ( cd "$deep" && for i in $(seq 1 22); do
+        git -c user.name=t -c user.email=t@t commit -q --allow-empty -m "c$i"
+      done )
+    old21="$(git -C "$deep" rev-parse HEAD~21)"
+    payload "$old21" '{"check_runs":[{"name":"All tests passed","started_at":"2026-01-01T00:00:00Z","completed_at":"2026-01-01T00:10:00Z","conclusion":"success"}]}'
+    run_gate_deep() {
+      ( cd "$deep" && PATH="${work}/bin:${PATH}" REPO="own/repo" GH_TOKEN=x \
+          sh "${PFB_ROOT}/scripts/release-ci-gate.sh" )
+    }
+    When call run_gate_deep
+    The status should be failure
+    The output should include "No 'All tests passed' check-run found"
   End
 End
