@@ -195,7 +195,7 @@ final class DnsblNdjsonFlipTest extends TestCase
 	 * pfb_dnsbl_ndjson_domain_row_verified() refuses it (not valid JSON) -- the lookup
 	 * must resolve to a genuine miss, never a spoofed TLD match.
 	 */
-	public function testPfbDnsblParseRefusesAbpEmbeddedNeedleSpoofHostileRow(): void
+	public function testPfbDnsblParseRefusesNeedleTextInsideGarbageLine(): void
 	{
 		$queryDomain = 'sub.uuid-zone-spoof-target.example.com';
 		$suffix = 'uuid-zone-spoof-target.example.com';
@@ -210,5 +210,36 @@ final class DnsblNdjsonFlipTest extends TestCase
 			'expected the grep hit inside a non-JSON garbage line to be refused, never treated as a TLD match; got: '
 				. var_export($result, TRUE)
 		);
+	}
+
+	/**
+	 * Each refusal arm of pfb_dnsbl_ndjson_domain_row_verified(), exercised directly:
+	 * the abp-kind and wrong-domain arms are unreachable through the production files
+	 * (JSON escaping forbids a literal needle inside a string value), so the pure
+	 * helper is the only honest surface for their branch coverage.
+	 */
+	public function testDomainRowVerifiedAcceptsOnlyTheExactDomainKindRow(): void
+	{
+		$domain = 'uuid-verify-arm.example.com';
+		$genuine = pfb_dnsbl_ndjson_emit_domain_row($domain, '1', 'FeedV', 'GroupV');
+
+		$accepted = pfb_dnsbl_ndjson_domain_row_verified($genuine, $domain);
+		$this->assertNotNull($accepted, 'genuine row must verify');
+		$this->assertSame($domain, $accepted['domain']);
+
+		$arms = [
+			'non-JSON garbage embedding the needle text'
+				=> 'garbage "domain":"' . $domain . '" tail' . "\n",
+			'abp-kind row (kind arm)'
+				=> pfb_dnsbl_ndjson_emit_abp_row('||' . $domain . '^'),
+			'domain-kind row for a DIFFERENT domain (equality arm)'
+				=> pfb_dnsbl_ndjson_emit_domain_row('other-' . $domain, '1', 'FeedV', 'GroupV'),
+		];
+		foreach ($arms as $label => $line) {
+			$this->assertNull(
+				pfb_dnsbl_ndjson_domain_row_verified($line, $domain),
+				"refusal arm not taken for: {$label}"
+			);
+		}
 	}
 }
