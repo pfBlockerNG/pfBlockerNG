@@ -737,6 +737,494 @@ pfb_aggregate() {
 }
 
 
+# issue #1084: single-pass batch recompute -- cross-feed v4/v6-Deny dedup +
+# v4 dMax/pMax reputation, replacing duplicate()/remove()'s masterfile surgery
+# and dmax/pmax's incremental per-file mutation for the CALLERS that route
+# through it (both old and new code coexist until the .inc rewiring lands).
+#
+# Args (mirrors pfb_aggregate's memberlist-file convention):
+#   $2 family      'v4' | 'v6' -- gates the reputation stage (v4-only) and
+#                  selects which masterfile rows this pass owns (alias suffix
+#                  "_${family}", e.g. "_v4"/"_v6").
+#   $3 memberlist  Path to a file listing PRISTINE per-feed snapshot paths,
+#                  one per line, in PRIORITY order (highest priority first).
+#                  CONTRACT: a snapshot is whatever a per-feed file looked
+#                  like right after preprocessing (post _255/_agg/_rep, the
+#                  same input duplicate() reads today) -- recompute never
+#                  reads its own prior output. The alias is derived from the
+#                  snapshot basename exactly as existing code derives a
+#                  header from a file name: strip the directory, then strip
+#                  from the first '.' onward (e.g. ".../FeedA_v4.orig" ->
+#                  "FeedA_v4"). The memberlist MUST list every currently
+#                  configured snapshot for THIS family -- an alias absent
+#                  from the list is treated as removed: its masterfile rows
+#                  and deny file are not carried forward by this pass (a
+#                  feed removal or priority reorder is simply "recompute
+#                  with the updated memberlist").
+#   $4 countsfile  Output path for the per-alias row-count artifact ("alias
+#                  count" lines, one per memberlist alias including 0),
+#                  replacing every caller's post-hoc `grep -c` re-read.
+#   $5 dedup       'on' | 'off'. 'on' runs the cumulative grepcidr
+#                  containment prune (Stage A) and emits masterfile/
+#                  mastercat; 'off' plain-copies every snapshot (overlaps
+#                  across feeds are retained -- matches today's dedup-off
+#                  double-counting in dMax/pMax) and skips masterfile.
+#   $6 repmode     'off' | 'dmax' | 'pmax' -- v4-only; ignored for v6.
+#   $7 max         dMax/pMax member-per-/24 threshold (repmode != 'off').
+#   $8 cc          dMax only: comma-separated country-code list (as read by
+#                  reputation_dmax's $cc).
+#   $9 ccwhite     dMax only: 'match' | anything else.
+#  $10 ccblack     dMax only: 'block' | 'match' | anything else.
+#
+# Pipeline (sequential, temp files, no pipes; LC_ALL=C inline per ADR-26):
+#   A cumulative dedup -- for each snapshot in priority order: plain copy
+#     when dedup=off OR the cumulative pattern set is still empty; else
+#     `grepcidr -vf cumulative snapshot` (containment-aware, the #713 rc
+#     gate: rc 0/1 publish, rc>=2 aborts the WHOLE pass, prior artifacts
+#     untouched). Ownership is decided by loop order (memberlist priority).
+#   B tag+merge (always) -- each owned file gets its alias appended as a
+#     trailing column and is individually re-sorted by IP (defensively --
+#     recompute never trusts a pre-tagged/pre-sorted external input), then
+#     `sort -m` merges the already-sorted per-alias files into one class-wide
+#     IP-sorted stream. C-locale prefix ordering keeps every "a.b.c." /24 run
+#     contiguous regardless of numeric IP value.
+#   C reputation (v4 + dmax/pmax only; v6 and repmode=off are a straight
+#     passthrough) -- one awk pass counts stream rows per /24 prefix
+#     class-wide (placeholder excluded); offender prefixes are classified
+#     (dMax: today's GeoIP loop verbatim, over just the offenders; a missing
+#     mmdblookup/db bails like reputation_depends -- the pass still completes
+#     with no reputation applied. pMax: every offender is block, no GeoIP);
+#     then a single windowed awk pass over the (prefix-contiguous) stream
+#     drops block-mode offenders' member rows and emits ONE collapsed
+#     "x.y.z.0/24" row owned by the HIGHEST-PRIORITY alias among that
+#     window's members (a documented delta from today's incidental glob-
+#     order attribution); match-mode offenders leave the stream untouched
+#     and additionally emit match<alias>.txt (ccblack=match) / the single
+#     matchdedup file (ccwhite=match, cc-list hits only -- mirrors today's
+#     asymmetric gate: an exempt hit is logged when EITHER flag is 'match',
+#     but the consolidated file is only written when ccwhite='match').
+#   D regroup -- stable sort by alias (IP order preserved within alias).
+#   E emit -- one awk pass, closing the previous alias's handle on alias
+#     change (3 handles: current alias file, masterfile, mastercat) writes
+#     each alias's "<denydir><alias>.txt.new", appends to masterfile.new
+#     (dedup=on only -- pre-seeded with the LIVE masterfile minus every row
+#     whose alias carries this pass's family suffix, so a second family's
+#     rows already in masterfile survive a family-scoped recompute
+#     untouched) and mastercat.new (masterfile column 2), and the counts
+#     file.
+#   swap -- every artifact above is written as a ".new" sibling of its live
+#     path; the atomic `mv` batch runs ONLY after every stage's exit status
+#     was checked. Any stage failure logs and returns non-zero WITHOUT
+#     starting the swap -- since ".new" files are written only by Stage E
+#     (the last fallible stage), an earlier-stage failure never leaves swap
+#     debris; a Stage E internal failure removes whatever ".new" siblings it
+#     had already written for this pass's alias roster before returning.
+#
+# Callers (step 4, not built here): invoke once per family after per-feed
+# preprocessing; call emptyfiles() afterward exactly as the old dmax/pmax/
+# duplicate dispatch entries do (recompute does not refill an empty deny
+# file with the placeholder -- an alias with zero surviving rows still gets
+# an empty ".txt.new" so emptyfiles() can find and refill it).
+pfb_recompute() {
+	rec_family="${2}"
+	rec_memberlist="${3}"
+	rec_countsfile="${4}"
+	rec_dedup="${5:-off}"
+	rec_repmode="${6:-off}"
+	rec_max="${7:-0}"
+	rec_cc="${8:-}"
+	rec_ccwhite="${9:-off}"
+	rec_ccblack="${10:-off}"
+
+	if [ -z "${rec_family}" ] || [ -z "${rec_memberlist}" ] || [ -z "${rec_countsfile}" ]; then
+		log="recompute: missing family/memberlist/countsfile argument."
+		echo "${log}" | tee -a "${errorlog}"
+		return 1
+	fi
+	if [ ! -f "${rec_memberlist}" ]; then
+		log="recompute [ ${rec_family} ]: member list [ ${rec_memberlist} ] not found."
+		echo "${log}" | tee -a "${errorlog}"
+		return 1
+	fi
+	if [ "${rec_dedup}" = 'on' ] && [ ! -x "${pathgrepcidr}" ]; then
+		log="Application [ grepcidr ] Not found. Cannot proceed."
+		echo "${log}" | tee -a "${errorlog}"
+		return 1
+	fi
+
+	rec_scratch="${tmpdir}/pfb_recompute_${rec_family}"
+	rm -rf "${rec_scratch}"
+	mkdir -p "${rec_scratch}/owned" "${rec_scratch}/tagged"
+	if [ ! -d "${rec_scratch}/tagged" ]; then
+		log="recompute [ ${rec_family} ]: could not create scratch dir [ ${rec_scratch} ]."
+		echo "${log}" | tee -a "${errorlog}"
+		return 1
+	fi
+
+	rec_cumulative="${rec_scratch}/cumulative"
+	rec_priority="${rec_scratch}/priority"
+	: > "${rec_cumulative}"
+	: > "${rec_priority}"
+
+	# Stage A: cumulative containment-aware dedup (or plain copy when
+	# dedup=off), in memberlist/priority order. Ownership = loop order.
+	rec_prio=0
+	while IFS= read -r rec_snap; do
+		[ -z "${rec_snap}" ] && continue
+		[ -f "${rec_snap}" ] || continue
+		rec_alias="${rec_snap##*/}"; rec_alias="${rec_alias%%.*}"
+		rec_prio=$((rec_prio + 1))
+		echo "${rec_alias} ${rec_prio}" >> "${rec_priority}"
+		rec_ownedfile="${rec_scratch}/owned/${rec_alias}.txt"
+
+		if [ "${rec_dedup}" != 'on' ] || [ ! -s "${rec_cumulative}" ]; then
+			cp -f "${rec_snap}" "${rec_ownedfile}"
+		else
+			"${pathgrepcidr}" -vf "${rec_cumulative}" "${rec_snap}" > "${rec_ownedfile}"
+			rec_grc=$?
+			if [ "${rec_grc}" -ge 2 ]; then
+				log="recompute [ ${rec_family} ]: grepcidr error (rc=${rec_grc}) de-duplicating [ ${rec_alias} ]; aborting pass, keeping previous artifacts"
+				echo "${log}" | tee -a "${errorlog}"
+				return 1
+			fi
+		fi
+
+		if [ "${rec_dedup}" = 'on' ]; then
+			cat "${rec_ownedfile}" >> "${rec_cumulative}"
+		fi
+	done < "${rec_memberlist}"
+
+	# Stage B: tag each owned file with its alias, sort it individually (the
+	# merge invariant is enforced defensively, never trusted from a caller),
+	# then merge all of them into one class-wide IP-sorted "IP alias" stream.
+	set --
+	while IFS=' ' read -r rec_alias _; do
+		rec_ownedfile="${rec_scratch}/owned/${rec_alias}.txt"
+		[ -f "${rec_ownedfile}" ] || continue
+		rec_pretag="${rec_scratch}/tagged/${rec_alias}.pretag"
+		rec_tagged="${rec_scratch}/tagged/${rec_alias}.tagged"
+		awk -v a="${rec_alias}" '$0 != "" { print $0 " " a }' "${rec_ownedfile}" > "${rec_pretag}"
+		rec_rc=$?
+		if [ "${rec_rc}" -ne 0 ]; then
+			log="recompute [ ${rec_family} ]: tag pass failed for [ ${rec_alias} ]; aborting pass"
+			echo "${log}" | tee -a "${errorlog}"
+			return 1
+		fi
+		LC_ALL=C sort -t ' ' -k1,1 "${rec_pretag}" > "${rec_tagged}"
+		rec_rc=$?
+		if [ "${rec_rc}" -ne 0 ]; then
+			log="recompute [ ${rec_family} ]: per-alias sort failed for [ ${rec_alias} ]; aborting pass"
+			echo "${log}" | tee -a "${errorlog}"
+			return 1
+		fi
+		set -- "$@" "${rec_tagged}"
+	done < "${rec_priority}"
+
+	rec_stream="${rec_scratch}/stream"
+	if [ "$#" -eq 0 ]; then
+		: > "${rec_stream}"
+	else
+		LC_ALL=C sort -m -t ' ' -k1,1 -s "$@" > "${rec_stream}"
+		rec_rc=$?
+		if [ "${rec_rc}" -ne 0 ]; then
+			log="recompute [ ${rec_family} ]: class-wide merge failed; aborting pass"
+			echo "${log}" | tee -a "${errorlog}"
+			return 1
+		fi
+	fi
+
+	# Stage C: v4 + dmax/pmax reputation only; v6 and repmode=off pass through.
+	rec_new_stream="${rec_scratch}/new_stream"
+	rec_do_rep=0
+	if [ "${rec_family}" = 'v4' ]; then
+		case "${rec_repmode}" in
+			dmax|pmax) rec_do_rep=1 ;;
+		esac
+	fi
+
+	rec_matchdedup="${matchdedup:-matchdedup_v4.txt}"
+	rec_matchexemptcidr="${rec_scratch}/matchexempt_cidr"
+	rec_matchexemptmembers="${rec_scratch}/matchexempt_members"
+	: > "${rec_matchexemptcidr}"
+	: > "${rec_matchexemptmembers}"
+
+	if [ "${rec_do_rep}" -ne 1 ]; then
+		cp -f "${rec_stream}" "${rec_new_stream}"
+		rec_rc=$?
+		if [ "${rec_rc}" -ne 0 ]; then
+			log="recompute [ ${rec_family} ]: stream passthrough copy failed; aborting pass"
+			echo "${log}" | tee -a "${errorlog}"
+			return 1
+		fi
+	else
+		# C1 detect: class-wide /24 offender prefixes, placeholder excluded.
+		rec_offenders="${rec_scratch}/offenders"
+		awk -v max="${rec_max}" -v ph="${ip_placeholder3}" '
+			{
+				n = split($1, o, ".")
+				if (n < 3) next
+				pfx = o[1] "." o[2] "." o[3]
+				if (pfx == ph) next
+				cnt[pfx]++
+			}
+			END { for (p in cnt) if (cnt[p] > max) print p }
+		' "${rec_stream}" > "${rec_offenders}"
+		rec_rc=$?
+		if [ "${rec_rc}" -ne 0 ]; then
+			log="recompute [ ${rec_family} ]: offender-detect pass failed; aborting pass"
+			echo "${log}" | tee -a "${errorlog}"
+			return 1
+		fi
+
+		# C2 classify: dMax reuses today's GeoIP loop shape verbatim over just
+		# the offenders (reputation_dmax:1162-1191); a missing mmdblookup/db
+		# bails like reputation_depends -- the actionmap stays empty and C3
+		# applies no reputation this pass. pMax is unconditionally block-only.
+		rec_actionmap="${rec_scratch}/actionmap"
+		: > "${rec_actionmap}"
+		rec_geoip_ok=1
+		if [ "${rec_repmode}" = 'dmax' ] && [ -s "${rec_offenders}" ]; then
+			if [ ! -x "${pathgeoip}" ] || [ ! -f "${pathgeoipdat}" ]; then
+				reputation_depends
+			fi
+			if [ ! -x "${pathgeoip}" ] || [ ! -f "${pathgeoipdat}" ]; then
+				rec_geoip_ok=0
+			fi
+		fi
+
+		if [ -s "${rec_offenders}" ]; then
+			if [ "${rec_repmode}" = 'pmax' ]; then
+				while IFS= read -r rec_pfx; do
+					pfb_is_octet_prefix "${rec_pfx}" || continue
+					echo "${rec_pfx} block" >> "${rec_actionmap}"
+				done < "${rec_offenders}"
+			elif [ "${rec_geoip_ok}" -eq 1 ]; then
+				while IFS= read -r rec_pfx; do
+					pfb_is_octet_prefix "${rec_pfx}" || continue
+					rec_ccheck="$(${pathgeoip} -f "${pathgeoipdat}" -i "${rec_pfx}.1" country iso_code 2>&1 | grep -v 'Could\|Got\|^$' | cut -d '"' -f2)"
+					if [ -z "${rec_ccheck}" ]; then
+						if [ "${rec_ccblack}" = 'block' ]; then
+							echo "${rec_pfx} block" >> "${rec_actionmap}"
+						elif [ "${rec_ccblack}" = 'match' ]; then
+							echo "${rec_pfx} matchdup" >> "${rec_actionmap}"
+						fi
+						continue
+					fi
+					case "${rec_cc}" in
+						*"${rec_ccheck}"*)
+							if [ "${rec_ccwhite}" = 'match' ] || [ "${rec_ccblack}" = 'match' ]; then
+								echo "${rec_pfx} matchexempt" >> "${rec_actionmap}"
+							fi
+							;;
+						*)
+							if [ "${rec_ccblack}" = 'block' ]; then
+								echo "${rec_pfx} block" >> "${rec_actionmap}"
+							elif [ "${rec_ccblack}" = 'match' ]; then
+								echo "${rec_pfx} matchdup" >> "${rec_actionmap}"
+							fi
+							;;
+					esac
+				done < "${rec_offenders}"
+			fi
+		fi
+
+		# match<alias>.txt is a dMax-owned artifact; start every candidate
+		# fresh so C3's append-only awk writes never carry stale content.
+		if [ "${rec_repmode}" = 'dmax' ]; then
+			while IFS=' ' read -r rec_alias _; do
+				rm -f "${pfbmatch}match${rec_alias}.txt.new"
+			done < "${rec_priority}"
+		fi
+
+		# C3 apply: one windowed pass over the prefix-contiguous stream.
+		awk -v actionfile="${rec_actionmap}" -v priofile="${rec_priority}" \
+			-v newstream="${rec_new_stream}" -v matchdir="${pfbmatch}" \
+			-v mexcidr="${rec_matchexemptcidr}" -v mexmem="${rec_matchexemptmembers}" '
+			BEGIN {
+				while ((getline line < actionfile) > 0) {
+					split(line, f, " "); act[f[1]] = f[2]
+				}
+				close(actionfile)
+				while ((getline line < priofile) > 0) {
+					split(line, f, " "); prio[f[1]] = f[2]
+				}
+				close(priofile)
+				curpfx = ""
+				wincount = 0
+			}
+			function flush(   a, best, bestprio, i, curact, mfile) {
+				if (curpfx == "") return
+				curact = act[curpfx]
+				if (curact == "block") {
+					best = ""; bestprio = 2000000000
+					for (a in winaliases) {
+						if ((a in prio) && prio[a] + 0 < bestprio) { bestprio = prio[a] + 0; best = a }
+					}
+					if (best == "") { for (a in winaliases) { best = a; break } }
+					print curpfx ".0/24 " best >> newstream
+				} else {
+					for (i = 1; i <= wincount; i++) print winrows[i] >> newstream
+					if (curact == "matchdup") {
+						for (a in winaliases) {
+							mfile = matchdir "match" a ".txt.new"
+							print curpfx ".0/24" >> mfile
+							for (i = 1; i <= wincount; i++) {
+								if (winalias[i] == a) print "!" winip[i] >> mfile
+							}
+							close(mfile)
+						}
+					} else if (curact == "matchexempt") {
+						print curpfx ".0/24" >> mexcidr
+						for (i = 1; i <= wincount; i++) print "!" winip[i] >> mexmem
+					}
+				}
+				wincount = 0
+				delete winaliases; delete winrows; delete winip; delete winalias
+			}
+			{
+				if ($0 == "") next
+				n = split($1, o, ".")
+				pfx = (n >= 3) ? o[1] "." o[2] "." o[3] : ""
+				if (pfx != curpfx) { flush(); curpfx = pfx }
+				wincount++
+				winrows[wincount] = $0
+				winip[wincount] = $1
+				winalias[wincount] = $2
+				winaliases[$2] = 1
+			}
+			END { flush() }
+		' "${rec_stream}"
+		rec_rc=$?
+		if [ "${rec_rc}" -ne 0 ]; then
+			log="recompute [ ${rec_family} ]: reputation-apply pass failed; aborting pass"
+			echo "${log}" | tee -a "${errorlog}"
+			return 1
+		fi
+	fi
+
+	# Stage D: regroup by alias, stable (IP order preserved within alias).
+	rec_grouped="${rec_scratch}/grouped"
+	LC_ALL=C sort -t ' ' -k2,2 -s "${rec_new_stream}" > "${rec_grouped}"
+	rec_rc=$?
+	if [ "${rec_rc}" -ne 0 ]; then
+		log="recompute [ ${rec_family} ]: alias regroup sort failed; aborting pass"
+		echo "${log}" | tee -a "${errorlog}"
+		return 1
+	fi
+
+	# Stage E: emit. masterfile.new is pre-seeded with the live masterfile
+	# minus this family's own rows (a sibling family's rows, from a separate
+	# per-family recompute call, survive untouched) -- only when dedup=on.
+	rec_masterfile_new="${masterfile}.new"
+	rec_mastercat_new="${mastercat}.new"
+	if [ "${rec_dedup}" = 'on' ]; then
+		if [ -f "${masterfile}" ]; then
+			awk -v suf="_${rec_family}" '{
+				al = $1
+				if (length(al) >= length(suf) && substr(al, length(al) - length(suf) + 1) == suf) next
+				print
+			}' "${masterfile}" > "${rec_masterfile_new}"
+		else
+			: > "${rec_masterfile_new}"
+		fi
+		rec_rc=$?
+		if [ "${rec_rc}" -ne 0 ]; then
+			log="recompute [ ${rec_family} ]: masterfile strip pass failed; aborting pass"
+			echo "${log}" | tee -a "${errorlog}"
+			return 1
+		fi
+	fi
+
+	while IFS=' ' read -r rec_alias _; do
+		: > "${pfbdeny}${rec_alias}.txt.new"
+	done < "${rec_priority}"
+
+	rec_countsfile_new="${rec_countsfile}.new"
+	: > "${rec_countsfile_new}"
+
+	awk -v denydir="${pfbdeny}" -v dodup="${rec_dedup}" -v priofile="${rec_priority}" \
+		-v masterfileNew="${rec_masterfile_new}" -v mastercatNew="${rec_mastercat_new}" \
+		-v countsNew="${rec_countsfile_new}" '
+		BEGIN {
+			curalias = ""
+			while ((getline line < priofile) > 0) {
+				split(line, f, " "); cnt[f[1]] = 0
+			}
+			close(priofile)
+		}
+		{
+			ip = $1; al = $2
+			if (al != curalias) {
+				if (curalias != "") close(denydir curalias ".txt.new")
+				curalias = al
+			}
+			print ip >> (denydir curalias ".txt.new")
+			cnt[curalias]++
+			if (dodup == "on") {
+				print curalias " " ip >> masterfileNew
+				print ip >> mastercatNew
+			}
+		}
+		END {
+			if (curalias != "") close(denydir curalias ".txt.new")
+			for (a in cnt) print a, cnt[a] >> countsNew
+		}
+	' "${rec_grouped}"
+	rec_rc=$?
+	if [ "${rec_rc}" -ne 0 ]; then
+		log="recompute [ ${rec_family} ]: emit pass failed; aborting pass, cleaning up partial artifacts"
+		echo "${log}" | tee -a "${errorlog}"
+		while IFS=' ' read -r rec_alias _; do
+			rm -f "${pfbdeny}${rec_alias}.txt.new"
+		done < "${rec_priority}"
+		rm -f "${rec_masterfile_new}" "${rec_mastercat_new}" "${rec_countsfile_new}"
+		if [ "${rec_repmode}" = 'dmax' ]; then
+			while IFS=' ' read -r rec_alias _; do
+				rm -f "${pfbmatch}match${rec_alias}.txt.new"
+			done < "${rec_priority}"
+		fi
+		return 1
+	fi
+
+	# The consolidated exempt-country match file: gated on ccwhite='match'
+	# ALONE (mirrors today's asymmetric gate -- reputation_dmax:1193), even
+	# though a 'matchexempt' action can also be reached via ccblack='match'.
+	if [ "${rec_repmode}" = 'dmax' ] && [ "${rec_ccwhite}" = 'match' ] && [ -s "${rec_matchexemptcidr}" ]; then
+		rec_matchdedup_new="${pfbmatch}${rec_matchdedup}.new"
+		cat "${rec_matchexemptcidr}" > "${rec_matchdedup_new}"
+		cat "${rec_matchexemptmembers}" >> "${rec_matchdedup_new}"
+	fi
+
+	# Swap: every artifact above is a ".new" sibling; nothing here can fail
+	# for a reason this pass hasn't already checked, so the batch runs whole.
+	while IFS=' ' read -r rec_alias _; do
+		mv -f "${pfbdeny}${rec_alias}.txt.new" "${pfbdeny}${rec_alias}.txt"
+	done < "${rec_priority}"
+
+	if [ "${rec_dedup}" = 'on' ]; then
+		mv -f "${rec_masterfile_new}" "${masterfile}"
+		mv -f "${rec_mastercat_new}" "${mastercat}"
+	fi
+
+	mv -f "${rec_countsfile_new}" "${rec_countsfile}"
+
+	if [ "${rec_repmode}" = 'dmax' ]; then
+		while IFS=' ' read -r rec_alias _; do
+			if [ -f "${pfbmatch}match${rec_alias}.txt.new" ]; then
+				mv -f "${pfbmatch}match${rec_alias}.txt.new" "${pfbmatch}match${rec_alias}.txt"
+			else
+				rm -f "${pfbmatch}match${rec_alias}.txt"
+			fi
+		done < "${rec_priority}"
+		if [ -f "${pfbmatch}${rec_matchdedup}.new" ]; then
+			mv -f "${pfbmatch}${rec_matchdedup}.new" "${pfbmatch}${rec_matchdedup}"
+		fi
+	fi
+
+	echo "recompute [ ${rec_family} ]: ${rec_prio} feed(s) processed."
+}
+
+
 # Function to remove duplicate entries in each list individually.
 duplicate() {
 	if [ ! -x "${pathgrepcidr}" ]; then
@@ -1601,6 +2089,11 @@ case "${1}" in
 	aggregate)
 		# ADR-11: pfblockerng.sh aggregate <family> <memberlist> <aggout> <consumerout>
 		pfb_aggregate "$@"
+		;;
+	recompute)
+		# issue #1084: pfblockerng.sh recompute <family> <memberlist> <countsfile>
+		#              <dedup> <repmode> <max> <cc> <ccwhite> <ccblack>
+		pfb_recompute "$@"
 		;;
 	whoisconvert)
 		whoisconvert
