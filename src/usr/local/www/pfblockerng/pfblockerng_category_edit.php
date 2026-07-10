@@ -926,7 +926,11 @@ else {
 
 
 // Move selected table row(s) to anchor row
-if (isset($Lmove) and isset($Xmove) && isset($rowdata[$rowid]['row'])) {
+// issue #1129: a stale/hostile Lmove or Xmove must not silently drop rows
+if (isset($Lmove) and isset($Xmove) && isset($rowdata[$rowid]['row'])
+	&& is_array($Lmove) && !empty($Lmove)
+	&& is_scalar($Xmove) && array_key_exists($Xmove, $rowdata[$rowid]['row'])
+	&& !array_diff_key($Lmove, $rowdata[$rowid]['row'])) {
 
 	$disable_move	= TRUE;
 	$move = $final	= array();
