@@ -1902,6 +1902,13 @@ function pfb_dnsblip_mark_reprocess($action, string $vtype): void {
 	}
 }
 
+// Only an exact full-length fwrite() counts as written -- FALSE or a short (disk-full)
+// write must fail the assembly, or a truncated destination would advance the rebuild
+// bookkeeping as current. Same rule as pfb_prefetch_pattern_file_write_ok().
+function pfb_dnsbl_concat_write_ok($written, string $line): bool {
+	return $written !== FALSE && $written === strlen($line);
+}
+
 // issue #1097: fwrite(FALSE)/fclose(FALSE) throw TypeError on PHP 8 ('@' only
 // silences warnings) -- guard both the destination and each source open. An
 // empty $src is skipped before fopen(): PHP 8 throws ValueError for it too.
@@ -1911,7 +1918,12 @@ function pfb_dnsbl_concat_files(string $dest, array $sources): bool {
 			$src = (string) $src;
 			if ($src !== '' && ($in = @fopen($src, 'r')) !== FALSE) {
 				while (($line = @fgets($in)) !== FALSE) {
-					@fwrite($out, $line);
+					if (!pfb_dnsbl_concat_write_ok(@fwrite($out, $line), $line)) {
+						@fclose($in);
+						@fclose($out);
+						pfb_logger("\nDNSBL: write failed for [ {$dest} ] -- assembly aborted", 2);
+						return FALSE;
+					}
 				}
 				@fclose($in);
 			}
