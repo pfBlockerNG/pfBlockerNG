@@ -88,3 +88,26 @@ def test_garbage_line_hits_failed_to_parse_path(tmp_path: Any, capsys: Any) -> N
     err = capsys.readouterr().err
     assert "Failed to parse" in err
     assert path in err
+
+
+def test_recursion_error_line_is_skipped_not_fatal_to_the_rest_of_the_file(tmp_path: Any) -> None:
+    """issue #1083 review: _load_data_db()'s try/except wraps the WHOLE per-line
+    for-loop -- an uncaught RecursionError from one hostile deeply-nested line
+    would abort every line after it in the file, unlike PHP's fixed-depth-cap
+    json_decode() (skips just the one bad line). The domain BEFORE and the domain
+    AFTER the hostile line must both still load."""
+    depth = 300_000
+    hostile = '{"kind":"domain","domain":' + "[" * depth + "]" * depth + ',"log":"1","feed":"f","group":"g"}'
+    content = (
+        '{"kind":"domain","domain":"before.example","log":"1","feed":"FeedA","group":"GroupA"}\n'
+        + hostile
+        + "\n"
+        + '{"kind":"domain","domain":"after.example","log":"1","feed":"FeedA","group":"GroupA"}\n'
+    )
+    P.pfb["pfb_py_data"] = _write(tmp_path, "pfb_py_data.txt", content)
+    feed_group_db: defaultdict[str, Any] = defaultdict(str)
+
+    P._load_data_db(feed_group_db, 0)
+
+    assert "before.example" in P.dataDB
+    assert "after.example" in P.dataDB

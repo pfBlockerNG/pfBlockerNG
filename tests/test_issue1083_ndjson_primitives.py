@@ -49,6 +49,10 @@ _REJECTED_LINES = {
     # Python-only undecodable case: an invalid \escape sequence (verified via a
     # bare json.loads() probe to raise json.JSONDecodeError, a ValueError subclass).
     "malformed escape sequence": '{"kind":"domain","domain":"\\q","log":"1","feed":"f","group":"g"}',
+    # Python's json.loads accepts the NaN/Infinity extension PHP's json_decode refuses;
+    # OUTCOME parity still holds because the non-string value fails the field type check.
+    "NaN constant (type-check rejected)": '{"kind":"domain","domain":NaN,"log":"1","feed":"f","group":"g"}',
+    "Infinity constant (py-accepted, type-check rejected)": '{"kind":"abp","raw":Infinity}',
 }
 
 
@@ -83,6 +87,19 @@ def test_oversized_domain_value_parses_shape_only_syntax_is_not_validated() -> N
     row = P._dnsbl_parse_ndjson_row(f'{{"kind":"domain","domain":"{huge}","log":"1","feed":"f","group":"g"}}')
     assert row is not None
     assert row["domain"] == huge
+
+
+def test_deeply_nested_hostile_line_does_not_raise_recursion_error() -> None:
+    # issue #1083 review: json.loads() on a sufficiently deep nested-array value
+    # raises RecursionError (verified in-session: depth 200_000 reliably triggers it
+    # on CPython's C-accelerated scanner too, not just the pure-Python fallback) --
+    # PHP's json_decode() has a fixed depth cap and returns NULL instead, so an
+    # unguarded RecursionError here is a PHP/Python asymmetry: one hostile line
+    # would escape _dnsbl_parse_ndjson_row() uncaught and abort the WHOLE file load
+    # in _load_zone_db()/_load_data_db() (their try/except wraps the entire for-loop).
+    depth = 300_000
+    hostile = '{"kind":"domain","domain":' + "[" * depth + "]" * depth + ',"log":"1","feed":"f","group":"g"}'
+    assert P._dnsbl_parse_ndjson_row(hostile) is None
 
 
 # --------------------------------------------------------------------------- #

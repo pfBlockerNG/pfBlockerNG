@@ -117,7 +117,6 @@ $pfb['dnsblarchive']	= '/usr/local/etc/pfb_dnsbl_cache.tar';
 // it. See pfb_pending_changes_marker().
 $pfb['pending_marker']	= '/usr/local/etc/pfb_pending_changes';
 
-$pfb['dnsbl_tld_txt']	= "{$pfb['dnsdir']}/DNSBL_TLD.txt";
 $pfb['dnsbl_tld_data']	= '/usr/local/pkg/pfblockerng/dnsbl_tld';
 $pfb['dnsbl_conf']	= '/var/unbound/pfb_dnsbl_lighty.conf';
 $pfb['dnsbl_cert']	= '/var/unbound/dnsbl_cert.pem';
@@ -1950,13 +1949,16 @@ function pfb_dnsbl_concat_files(string $dest, array $sources): bool {
  * one trailing "\n" -- callers may grep a line for '"domain":"<value>"' verbatim. JSON
  * string escaping guarantees the payload itself never carries a raw newline, so a value
  * holding "\n" still lands on one physical line. Domain/raw SYNTAX (punycode, length,
- * ...) stays with the existing validators; this format only carries opaque strings.
+ * ...) stays with the existing validators; this format only carries opaque strings --
+ * an invalid-UTF-8 byte is substituted with U+FFFD (JSON_INVALID_UTF8_SUBSTITUTE), never
+ * left to fail json_encode() into FALSE (which "FALSE . \"\\n\"" would coerce to a bare,
+ * phantom blank line instead of a row).
  * pfb_dnsbl_ndjson_parse_row() is this schema's strict reader.
  */
 function pfb_dnsbl_ndjson_emit_domain_row(string $domain, string $log, string $feed, string $group): string {
 	return json_encode(
 		array('kind' => 'domain', 'domain' => $domain, 'log' => $log, 'feed' => $feed, 'group' => $group),
-		JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+		JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE
 	) . "\n";
 }
 
@@ -1964,7 +1966,7 @@ function pfb_dnsbl_ndjson_emit_domain_row(string $domain, string $log, string $f
 function pfb_dnsbl_ndjson_emit_abp_row(string $raw): string {
 	return json_encode(
 		array('kind' => 'abp', 'raw' => $raw),
-		JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+		JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE
 	) . "\n";
 }
 
@@ -1992,10 +1994,12 @@ function pfb_dnsbl_ndjson_parse_row(string $line): ?array {
 }
 
 // #1083: grep needle for a schema v1 domain row's "domain" field. json_encode's escaping
-// keeps the needle byte-identical to what pfb_dnsbl_ndjson_emit_domain_row() wrote, so a
-// domain carrying a JSON-special character still finds (only) its own row.
+// (incl. JSON_INVALID_UTF8_SUBSTITUTE, matching the emit helpers -- else an invalid-UTF-8
+// domain would degrade this to the bare, valueless '"domain":' prefix) keeps the needle
+// byte-identical to what pfb_dnsbl_ndjson_emit_domain_row() wrote, so a domain carrying a
+// JSON-special character still finds (only) its own row.
 function pfb_dnsbl_ndjson_domain_needle(string $domain): string {
-	return '"domain":' . json_encode($domain, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+	return '"domain":' . json_encode($domain, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 }
 
 // #1083: a grep hit is trustworthy only once parsed AND its domain field matches exactly --
@@ -2031,35 +2035,57 @@ function pfb_dnsbl_update_marker_clear_active(bool $orig_content_stale): bool {
 	return !$orig_content_stale;
 }
 
-// #1083 P4: a field box upgrading with a pre-NDJSON staging .txt (a feed never
+// #1083: a field box upgrading with a pre-NDJSON staging .txt (a feed never
 // redownloaded since the flip) must not verbatim-reuse it -- every interchange
-// reader now expects NDJSON and would silently skip every old-dialect line. Byte
-// check only, no JSON parse: current-generation NDJSON always opens with '{'; an
-// empty/absent file has no stale content to misread either.
+// reader now expects NDJSON and would silently skip every old-dialect line. A
+// leading '{' byte alone is not proof (e.g. a truncated/corrupt "{garbage" line);
+// this actually PARSES the line via the schema-v1 reader (one json_decode per
+// feed per pass) -- an empty/absent file has no stale content to misread either.
 function pfb_dnsbl_staging_is_current_generation(string $first_line): bool {
-	return $first_line === '' || $first_line[0] === '{';
+	return $first_line === '' || pfb_dnsbl_ndjson_parse_row($first_line) !== NULL;
 }
 
-// Reads $path's first line for pfb_dnsbl_staging_is_current_generation(); '' for
-// an absent/empty file (both are current-generation -- nothing stale to reject).
+// Reads $path's first NON-BLANK line for pfb_dnsbl_staging_is_current_generation();
+// '' for an absent file or one with no non-blank line (both current-generation --
+// nothing stale to reject). issue #1083: a blank leading physical line must
+// not mask stale content on the line(s) after it.
 function pfb_dnsbl_staging_first_line(string $path): string {
 	$fh = @fopen($path, 'r');
 	if ($fh === FALSE) {
 		return '';
 	}
-	$line = fgets($fh);
+	while (($line = fgets($fh)) !== FALSE) {
+		$line = rtrim($line, "\r\n");
+		if ($line !== '') {
+			fclose($fh);
+			return $line;
+		}
+	}
 	fclose($fh);
-	return $line === FALSE ? '' : rtrim($line, "\r\n");
+	return '';
 }
 
 // The DNSBL verbatim-reuse fork (pfblockerng.inc sync loop): skip re-parsing
 // entirely and reuse the existing staged '.txt' as-is. All five conditions must
-// hold, including that the staging content is current-generation (#1083 P4) --
+// hold, including that the staging content is current-generation (#1083) --
 // else a pre-NDJSON '.txt' would be reused forever on a never-redownloaded feed.
 function pfb_dnsbl_verbatim_reuse_active(bool $txt_exists, bool $update_exists, bool $fail_exists,
 	bool $reuse_unset, bool $staging_current_generation): bool
 {
 	return $txt_exists && !$update_exists && !$fail_exists && $reuse_unset && $staging_current_generation;
+}
+
+// issue #1083: a stale-generation rebuild ($stale_generation_rebuild, above) that
+// reparses '.orig' and finds ZERO domains must converge staging to empty -- else the
+// pre-NDJSON '.txt' is never touched, its stale lines are silently double-counted, and
+// the guard re-detects stale-generation (re-logs 'Rebuild') on every subsequent pass. A
+// non-stale-generation zero-domain result keeps its existing '.txt' (the pre-existing
+// fail-safe, unaffected). The caller's shared placeholder step (touch if absent) then
+// creates the current-generation empty file this unlink makes room for.
+function pfb_dnsbl_stale_rebuild_converge_txt(bool $stale_generation_rebuild, string $txt_path): void {
+	if ($stale_generation_rebuild) {
+		unlink_if_exists($txt_path);
+	}
 }
 
 // v6 stays OPTIONAL (ADR-13 §7 pivot): a missing v6 VIP never fails validation, even when
@@ -8482,6 +8508,9 @@ function pfb_unbound_clear_work_files() {
 			"/tmp/dnsbl_tld*",
 			"{$pfb['unbound_py_data']}.raw",
 			"{$pfb['unbound_py_zone']}.raw",
+			// issue #1083: opportunistic sweep of the retired DNSBL_TLD.txt diagnostic
+			// -- else a pre-upgrade box's stray copy sits forever (writer/unlink sites retired).
+			"{$pfb['dnsdir']}/DNSBL_TLD.txt",
 			"/var/tmp/unbound_cache_*") as $remove) {
 		unlink_if_exists($remove);
 	}
@@ -14721,8 +14750,6 @@ function pfb_unlock($mode, $type, $remove='', $r_type='', $filename_unlock) {
 		$filename = $pfb['ip_unlock'];
 	} elseif ($type == 'dnsbl') {
 		$filename = $pfb['dnsbl_unlock'];
-	} elseif ($type == 'dnsbl_data') {
-		$filename = "{$pfb['dnsbl_unlock']}.data";
 	} else {
 		return;
 	}
@@ -14744,32 +14771,6 @@ function pfb_unlock($mode, $type, $remove='', $r_type='', $filename_unlock) {
 			unlink_if_exists("{$filename}");
 		}
 		return $filename_unlock;
-	}
-	elseif ($mode == 'dnsbl_data') {
-		$filename_unlock = '';
-		$data = array();
-		if (($handle = @fopen("{$filename}", 'r')) !== FALSE) {
-			while (($line = @fgets($handle)) !== FALSE) {
-				// #1083: $remove is a bare domain; NDJSON row equality (not a
-				// byte-substring match) decides removal.
-				$row = pfb_dnsbl_ndjson_parse_row($line);
-				if ($row !== NULL && $row['kind'] === 'domain' && $row['domain'] === $remove) {
-					$data = $row;
-				} else {
-					$filename_unlock .= "{$line}";
-				}
-			}
-		}
-		if ($handle) {
-			@fclose($handle);
-		}
-
-		if (empty($filename_unlock)) {
-			unlink_if_exists("{$filename}");
-		} else {
-			@file_put_contents("{$filename}", "{$filename_unlock}", LOCK_EX);
-		}
-		return $data;
 	}
 	elseif ($mode == 'unlock' && isset($filename_unlock[$remove])) {
 		return;
@@ -16485,7 +16486,7 @@ function sync_package_pfblockerng($cron='') {
 								$alias_cnt		= $alias_cnt + $list_cnt;
 							}
 							else {
-								// #1083 P4: verbatim reuse was rejected ONLY for stale staging
+								// #1083: verbatim reuse was rejected ONLY for stale staging
 								// generation (every other reuse condition still holds) -- rebuild
 								// via the same reparse-from-.orig machinery a Reload uses, never a
 								// network refetch when .orig is available.
@@ -17022,6 +17023,10 @@ function sync_package_pfblockerng($cron='') {
 									@copy("{$file_dwn}.orig", "/tmp/Error_{$header}_{$ts}.orig");
 
 									unlink_if_exists("{$pfbfolder}/{$header}.bk");
+									// issue #1083: converge a stale-generation rebuild that
+									// found zero domains -- else the pre-NDJSON '.txt' survives and
+									// the guard re-triggers 'Rebuild' every subsequent pass.
+									pfb_dnsbl_stale_rebuild_converge_txt($stale_generation_rebuild, "{$pfbfolder}/{$header}.txt");
 									$result = array('unbound-checkconf: no errors');
 								}
 

@@ -64,7 +64,6 @@ final class Adr62TldAnalysisCorpusTest extends TestCase
 			'dnsbl_file'       => "{$this->tmp}/pfb_dnsbl",
 			'dnsbl_tmpdir'     => "{$this->tmp}/DNSBL_TMP",
 			'dnsbl_tmp'        => "{$this->tmp}/dnsbl_tmp",
-			'dnsbl_tld_txt'    => "{$this->tmp}/dnsbl/DNSBL_TLD.txt",
 			'dnsbl_tld_data'   => self::FIXTURE_DIR . '/tld_master.txt',
 			'unbound_py_data'  => "{$this->tmp}/pfb_py_data.txt",
 			'unbound_py_zone'  => "{$this->tmp}/pfb_py_zone.txt",

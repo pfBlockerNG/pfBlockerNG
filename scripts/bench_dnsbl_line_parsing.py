@@ -122,9 +122,9 @@ def worker_python(worktree: str, raw_path: str, iterations: int) -> int:
                 "group": "grp",
                 "provenance": "feed",
                 "log_flag": "1",
-                # issue #1083: retired on the working tree (dead key there), but a
-                # pre-#1083 base ref's build() still requires it -- 'plain' is the
-                # only live value since ADR-62 (pfblockerng.inc:7186).
+                # issue #1083: retired on the working tree -- pfb_feed_manifest_row()
+                # no longer emits this key -- but a pre-#1083 base ref's build() still
+                # requires it; 'plain' was ADR-62's only live value.
                 "format_hint": "plain",
             }
         ],
