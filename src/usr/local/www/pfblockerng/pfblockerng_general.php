@@ -168,6 +168,13 @@ if ($_POST) {
 			$_POST[$dkey] = (string) $v;
 		}
 
+		// issue #1070: an array-valued POST ('pfb_feed_internal_allowlist[]=x')
+		// throws a PHP 8 TypeError in trim()/base64_encode() below; reject it
+		// here so the save gate blocks and the stored allowlist is preserved.
+		if (!is_string($_POST['pfb_feed_internal_allowlist'] ?? '')) {
+			$input_errors[] = gettext('Invalid feed-host allowlist value.');
+		}
+
 		if (!$input_errors) {
 
 			$pfb['gconfig']['enable_cb']			= pfb_filter($_POST['enable_cb'], PFB_FILTER_ON_OFF, 'general', '');
