@@ -796,7 +796,11 @@ if ($_POST && isset($_POST['save'])) {
 			$aname  = $_POST['aliasname'];
 
 			pfb_determine_list_detail($action, '', $conf_type, $rowid);
-			touch("{$pfbarr['folder']}/{$aname}_custom{$suffix}.update");
+			// issue #1080: an action with no list folder (Disabled) leaves the
+			// detail array empty; an unguarded touch() landed the flag at "/".
+			if (!empty($pfbarr['folder'])) {
+				touch("{$pfbarr['folder']}/{$aname}_custom{$suffix}.update");
+			}
 		}
 
 		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/custom", base64_encode($_POST['custom']) ?: '');
