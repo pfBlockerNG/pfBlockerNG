@@ -10608,7 +10608,9 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 
 	if (file_exists($file_download) && ($http_status == '200' || $http_status == '221' || $http_status == '226')) {
 
-		unset($retval);
+		// issue #1158: fail-safe default -- with unset(), paths that assigned nothing fell
+		// through $retval == 0 as success
+		$retval = 1;
 
 		// Validate File Mime-type
 		$reject_detail = array();
@@ -10743,6 +10745,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 
 					// Create update file indicator for update process
 					touch("{$pfb['dbdir']}/{$filename}/{$filename}.update");
+					$retval = 0;
 				}
 				else {
 					pfb_logger("\n Invalid filename [{$filename}]", 1);
