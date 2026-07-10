@@ -9052,6 +9052,7 @@ function pfb_match_reported_cidr(array $result, string $ip, bool $v4_type): ?arr
 				 * https://redmine.pfsense.org/issues/14256
 				 */
 				list($prefix, $length) = explode('/', $line[1]);
+				// issue #1157: skip malformed CIDR candidates -- a bad length false-matched here
 				if (!ctype_digit((string) $length) || (int) $length > 128 || !is_ipaddrv6($prefix)) {
 					continue;
 				}

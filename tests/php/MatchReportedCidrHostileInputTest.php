@@ -21,9 +21,11 @@ use PHPUnit\Framework\TestCase;
  *          match candidate", not as a fatal error or an always-true stub
  *
  *   Scenario: v4 malformed masks
- *     empty mask, non-numeric mask, oversized mask (>32), and a leading '-' mask all
- *     yield NULL with no thrown error -- pre-fix the first three fatal (TypeError /
- *     ArithmeticError) and are reproduced here as genuine red rows.
+ *     empty mask, non-numeric mask, and oversized mask (>32) yield NULL with no thrown
+ *     error -- pre-fix all three fatal (TypeError / ArithmeticError) and are reproduced
+ *     here as genuine red rows. A leading '-' mask ('-1') did NOT fatal pre-fix: 32-(-1)
+ *     is a positive 33-bit shift whose & 0xffffffff wrap degenerates to mask 0, silently
+ *     matching EVERY v4 host -- the guard now rejects it.
  *
  *   Scenario: v4 valid rows keep their existing behaviour (before-state preserved)
  *     a real /24 containment hit, a real miss, and the boundary mask '/0' (0 is a
@@ -31,20 +33,30 @@ use PHPUnit\Framework\TestCase;
  *     the fix.
  *
  *   Scenario: v4 malformed address
- *     a non-IP address paired with an otherwise well-formed mask is rejected by the
- *     address predicate, not by the arithmetic -- 'banana/24' yields NULL, no throw.
+ *     a non-IP address is rejected by the address predicate, not by the arithmetic.
+ *     'banana/24' happened to be safe pre-fix (masked compare misses) -- preserved
+ *     behaviour; 'banana/0' was the match-everything false positive (ip2long FALSE
+ *     degenerates to 0 == 0 under mask 0) and is the red-class row of this scenario.
+ *
+ *   Scenario: mask/length boundaries pin the guard's comparison operators
+ *     v4 '/32' and v6 '/128' are legal maxima (a future '>' -> '>=' typo must fail
+ *     here); v4 '/33' and v6 '/129' are the true off-by-one rejects; v6 '/0' is legal
+ *     like its v4 sibling.
  *
  *   Scenario: v6 malformed lengths
  *     empty length and non-numeric length are the false-positive-producing rows this
  *     issue names (pre-fix they return a spurious match against the off-appliance
- *     gen_subnetv6()/Net_IPv6 doubles); an oversized length (>128) is also rejected.
+ *     gen_subnetv6()/Net_IPv6 doubles). An oversized length (>200) was already rejected
+ *     pre-fix by gen_subnetv6()'s own bits>128 check -- preserved behaviour, now
+ *     guaranteed by the guard instead of the double's internals.
  *
  *   Scenario: v6 valid rows keep their existing behaviour (before-state preserved)
  *     a real /32 containment hit and a real miss behave exactly as before the fix.
  *
  *   Scenario: v6 malformed prefix
  *     a non-IP prefix paired with an otherwise well-formed length is rejected by the
- *     address predicate -- 'banana/32' yields NULL, no throw.
+ *     address predicate -- 'banana/32' yields NULL, no throw (safe pre-fix too:
+ *     pfb_ip_in_cidr() fails closed on inet_pton -- preserved behaviour).
  *
  *   Scenario: skip, don't abort
  *     a malformed candidate followed by a real matching candidate in the same $result
@@ -177,6 +189,7 @@ final class MatchReportedCidrHostileInputTest extends TestCase
 
 	public function test_v4_garbage_address_yields_null_without_throwing(): void
 	{
+		// Preserved behaviour: '/24' masked the compare into a miss even pre-fix.
 		$result = ['/var/db/pfblockerng/deny/DenyFeed.txt:banana/24'];
 
 		$match = $this->assertNeverWarnsOrThrows(
@@ -186,6 +199,60 @@ final class MatchReportedCidrHostileInputTest extends TestCase
 		$this->assertNull(
 			$match,
 			'expected a non-IP v4 address to be skipped as NULL, got ' . var_export($match, true)
+		);
+	}
+
+	public function test_v4_garbage_address_with_zero_mask_never_matches_every_host(): void
+	{
+		// Pre-fix this was the worst input in the class: ip2long('banana') === FALSE
+		// degenerates to 0, and mask 0 turns the compare into 0 == 0 -- the candidate
+		// matched EVERY IPv4 host. Two unrelated IPs pin the "not a match-everything
+		// stub" property, not just a single lucky miss.
+		$result = ['/var/db/pfblockerng/deny/DenyFeed.txt:banana/0'];
+
+		foreach (['203.0.113.99', '8.8.8.8'] as $ip) {
+			$match = $this->assertNeverWarnsOrThrows(
+				fn () => pfb_match_reported_cidr($result, $ip, TRUE)
+			);
+
+			$this->assertNull(
+				$match,
+				"expected 'banana/0' NOT to match {$ip}, got " . var_export($match, true)
+			);
+		}
+	}
+
+	// ------------------------------------------------------------------------------
+	// v4 -- mask boundaries
+	// ------------------------------------------------------------------------------
+
+	public function test_v4_max_mask_32_boundary_is_legal(): void
+	{
+		$result = ['/var/db/pfblockerng/deny/DenyFeed.txt:1.2.3.4/32'];
+
+		$this->assertSame(
+			['DenyFeed', '1.2.3.4/32'],
+			pfb_match_reported_cidr($result, '1.2.3.4', TRUE),
+			'expected the /32 boundary mask to be accepted and match its exact host'
+		);
+
+		$this->assertNull(
+			pfb_match_reported_cidr($result, '1.2.3.5', TRUE),
+			'expected the /32 boundary mask NOT to match a neighbouring host'
+		);
+	}
+
+	public function test_v4_mask_33_off_by_one_rejected(): void
+	{
+		$result = ['/var/db/pfblockerng/deny/DenyFeed.txt:1.2.3.0/33'];
+
+		$match = $this->assertNeverWarnsOrThrows(
+			fn () => pfb_match_reported_cidr($result, '1.2.3.4', TRUE)
+		);
+
+		$this->assertNull(
+			$match,
+			'expected the /33 off-by-one mask to be rejected as NULL, got ' . var_export($match, true)
 		);
 	}
 
@@ -219,6 +286,8 @@ final class MatchReportedCidrHostileInputTest extends TestCase
 
 	public function test_v6_oversize_length_yields_null(): void
 	{
+		// Preserved behaviour: gen_subnetv6()'s own bits>128 check already rejected
+		// this pre-fix; the guard now owns the reject.
 		$result = ['/var/db/pfblockerng/deny/DenyFeed.txt:2001:db8::/200'];
 
 		$match = pfb_match_reported_cidr($result, '2001:db8::1', FALSE);
@@ -226,6 +295,46 @@ final class MatchReportedCidrHostileInputTest extends TestCase
 		$this->assertNull(
 			$match,
 			'expected an oversized (>128) v6 length to be skipped as NULL, got ' . var_export($match, true)
+		);
+	}
+
+	// ------------------------------------------------------------------------------
+	// v6 -- length boundaries
+	// ------------------------------------------------------------------------------
+
+	public function test_v6_zero_length_is_legal_and_matches_any_host(): void
+	{
+		// '::/0' is the v6 sibling of the v4 '/0' legality row: the guard's
+		// ctype_digit must not treat the falsy-looking '0' as malformed.
+		$result = ['/var/db/pfblockerng/deny/DenyFeed.txt:::/0'];
+
+		$this->assertSame(
+			['DenyFeed', '::/0'],
+			pfb_match_reported_cidr($result, '2001:db8::1', FALSE),
+			'expected the legal ::/0 candidate to match any v6 host'
+		);
+	}
+
+	public function test_v6_max_length_128_boundary_is_legal(): void
+	{
+		$result = ['/var/db/pfblockerng/deny/DenyFeed.txt:2001:db8::1/128'];
+
+		$this->assertSame(
+			['DenyFeed', '2001:db8::1/128'],
+			pfb_match_reported_cidr($result, '2001:db8::1', FALSE),
+			'expected the /128 boundary length to be accepted and match its exact host'
+		);
+	}
+
+	public function test_v6_length_129_off_by_one_rejected(): void
+	{
+		$result = ['/var/db/pfblockerng/deny/DenyFeed.txt:2001:db8::/129'];
+
+		$match = pfb_match_reported_cidr($result, '2001:db8::1', FALSE);
+
+		$this->assertNull(
+			$match,
+			'expected the /129 off-by-one length to be rejected as NULL, got ' . var_export($match, true)
 		);
 	}
 
