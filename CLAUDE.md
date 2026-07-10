@@ -229,7 +229,7 @@ the gate report's wording, never to which checks run.
 | Touched | Gates (all must pass) |
 | ------- | --------------------- |
 | Python (`*.py`) | `python3 -m pytest` · `ruff check .` · `ruff format --check .` · `mypy tests/` |
-| PHP (`*.php`/`*.inc`) | `php -l` per touched file · `vendor/bin/phpunit` · `vendor/bin/phpstan` · `vendor/bin/phpcs --standard=phpcs.xml.dist src/` |
+| PHP (`*.php`/`*.inc`) | `php -l` per touched file · `vendor/bin/phpunit` · `composer phpstan` · `composer phpcs -- --standard=phpcs.xml.dist src/` |
 | Shell (`*.sh`) | `sh -n` · `shellcheck` · `shellspec` (where specs exist) |
 | Markdown (`*.md`) | `npx markdownlint-cli2` |
 | `www/` | Tier-A `ui_render` coverage exists for the change (test mandate #4) |
@@ -480,7 +480,10 @@ Run linters while working; the `.githooks/pre-commit` hook blocks failing commit
 - **Python:** `ruff check .` / `ruff check . --fix` / `ruff format .` (config in
   `pyproject.toml`; `.flake8` mirrors the 120-col limit for IDE Flake8 — keep in sync).
 - **PHP:** Intelephense (`.inc` = PHP via `files.associations`); PHPStan + PHPUnit + PHPCS via
-  `composer install`; run `vendor/bin/phpcs --standard=phpcs.xml.dist src/`. The
+  `composer install`; run PHPStan/PHPCS through the composer scripts — `composer phpstan` and
+  `composer phpcs -- --standard=phpcs.xml.dist src/` — which carry the required
+  `--memory-limit=1G`/`-d memory_limit=1G` (bare `vendor/bin/phpstan` OOMs at PHP's default
+  128M on this codebase, and PHPStan accepts no memory limit in `phpstan.neon`). The
   `stubs/pfsense/` stubs are for PHPStan, NOT runtime doubles (those live in
   `tests/php/pfsense_doubles.php`). Three custom sniffs (`tests/phpcs/PfBlockerNG/`, each
   pinned by its own `*SniffTest.php`): **PFBL-01 `RequirePfbFilter`** (semantic validation
@@ -790,6 +793,12 @@ user. Full policy: [`workflow-reference.md`](docs/misc/workflow-reference.md)
 **Read the whole issue before working it** — title, body, AND every comment
 (`gh issue view <N> --comments`); later comments routinely revise/narrow/downgrade/invalidate
 the original (issue #25). Never act on the opening text alone. Branch: `issue/{NN}-{slug}`.
+
+### TypeError-class tracker (#1143)
+
+Every newly found TypeError-class defect (a request/array value reaching a string-typed sink
+— the array-`$_POST` family: #1070/#1106/#1128/#1139) gets its own issue **and is linked as a
+sub-issue of tracker #1143** (GraphQL `addSubIssue`); never folded into an older issue.
 
 ### Labels (lifecycle)
 
