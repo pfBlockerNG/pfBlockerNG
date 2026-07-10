@@ -53,12 +53,12 @@ def _run_build(
 ) -> P.BuildResult:
     """Build a BlockResult from synthetic in-memory feeds.
 
-    * ``block_lines`` are written into a ``format_hint='abp'`` block feed so
-      that plain ``||domain^`` anchors produce band-1 blocks.  (An ABP feed
-      is used so the ``@@||…`` allow lines in ``allow_lines`` are also parsed
-      by the same ABP path — exactly as a real block feed carrying inline
+    * ``block_lines`` are written into a block feed; each ``||domain^`` anchor
+      is routed by the permanent per-line capture guard (#1083 P4) to produce
+      band-1 blocks. (The ``@@||…`` allow lines in ``allow_lines`` are parsed
+      the same way — exactly as a real block feed carrying inline
       exceptions would produce.)
-    * ``allow_lines`` are written into the SAME abp feed after the block
+    * ``allow_lines`` are written into the SAME block feed after the block
       lines.  ``@@||domain^`` entries go into ``whiteDB`` at band 2 via the
       Stage-B reconcile.
     * ``user_whitelist`` populates ``config.user_whitelist`` — these become
@@ -74,7 +74,6 @@ def _run_build(
             {
                 "feed": "BlockFeed",
                 "group": "TestBlock",
-                "format_hint": "abp",
                 "log_flag": "1",
                 "raw": raw_key,
             }
@@ -353,7 +352,6 @@ class TestOperatorSovereignty:
                 {
                     "feed": "CustomList",
                     "group": "UserGroup",
-                    "format_hint": "abp",
                     "log_flag": "1",
                     "provenance": "user",  # ← band-5 USER block
                     "raw": raw_user_block,
@@ -361,7 +359,6 @@ class TestOperatorSovereignty:
                 {
                     "feed": "BlockAndAllow",
                     "group": "FeedGroup",
-                    "format_hint": "abp",
                     "log_flag": "1",
                     "raw": raw_feed_allow,
                 },

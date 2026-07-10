@@ -120,7 +120,6 @@ def worker_python(worktree: str, raw_path: str, iterations: int) -> int:
                 "raw": os.path.basename(raw_path),
                 "feed": "benchfeed",
                 "group": "grp",
-                "format_hint": "plain",
                 "provenance": "feed",
                 "log_flag": "1",
             }

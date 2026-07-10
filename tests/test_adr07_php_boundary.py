@@ -6,9 +6,9 @@ Phase 8 redraws the shell<->Python boundary for ABP/EasyList feeds to the
 aggressive ADR-06 target:
 
   * The PHP ``$easylist`` lite parser (keep-only ``||domain^`` + the ``$e_replace``
-    token strip) is DELETED. PHP now header-sniffs ABP feeds, tags them
-    ``format_hint = 'abp'`` in the manifest, and passes their RAW lines through
-    VERBATIM to the per-feed raw the manifest references. The full DNS-only ABP
+    token strip) is DELETED. PHP captures an ABP-shaped line VERBATIM per-line
+    (``pfb_dnsbl_is_abp_rule_line()``, #1083 P4 -- no whole-feed tag) and passes
+    it through to the per-feed raw the manifest references. The full DNS-only ABP
     parser is the one in Python (``parse_abp``: ``@@`` / regex / ``$important`` /
     ``$badfilter``), not the PHP lite pass that silently dropped them.
   * DNSBL-IP coexistence (ADR-06 fact 7): the firewall IP pass still runs over the
@@ -106,7 +106,7 @@ def _build_abp(feeds: dict[str, list[str]], *, user_whitelist: Iterable[str] = (
         all_firewall_ips |= ips
 
     manifest = {
-        "feeds": [{"raw": name, "feed": name, "group": name, "format_hint": "abp", "log_flag": "1"} for name in feeds],
+        "feeds": [{"raw": name, "feed": name, "group": name, "log_flag": "1"} for name in feeds],
     }
     config = {
         "tld_master": _TLD_MASTER,

@@ -570,3 +570,40 @@ name; empty / whitespace-only / BOM-led first line; **reused feed with old-diale
   3. Any Semantics test that cannot pass without weakening its assertion, or any output change
      **outside the delta table** → REJECT (a weakened byte-identity assertion is coverage
      theater, not a pass).
+
+## 8. Post-merge amendments (2026-07-10 — issue #1083 Phase 4)
+
+Sections above stay as written for the record; **this section is the authoritative
+correction.** #1083 P4 found the tolerance layer Semantics #7 and Decision item 5 describe was
+itself the hole: a field box upgrading with a pre-#1083-NDJSON staging `.txt` on a
+never-redownloaded feed (group frequency `Never`, row state `Hold`) sailed through the
+verbatim-reuse fork, concatenated the old-dialect content unread, and
+`pfb_unbound_python_sources()` silently skipped every line — a silently blanked feed, not a
+tolerated one. P4 closes the hole with a per-feed staging-generation guard
+(`pfb_dnsbl_staging_is_current_generation()` / `pfb_dnsbl_verbatim_reuse_active()`,
+pfblockerng.inc) ahead of the verbatim-reuse fork: stale-generation staging is rejected from
+reuse and reparsed via the SAME `.orig`-reparse machinery a Reload already uses (no network
+refetch when `.orig` survives). With that guard in place, a manifest naming `format_hint='abp'`
+can no longer be produced or reused by any live path, so **the tolerance layer itself retires
+end-to-end** rather than staying as a safety net for a hole that no longer exists:
+
+- **Semantics #7 is REPLACED, not preserved.** "A stale manifest still naming
+  `format_hint='abp'` still parses" is no longer the mechanism — Python's `parse()` lost its
+  `format_hint` parameter and the `_dnsbl_parse_abp_line()` legacy token-strip it used;
+  `build()` lost `feed_row['format_hint']` and the whole-feed `parse_abp()` dispatch it drove.
+  The corrected guarantee: a reused-but-stale-generation feed is TRANSPARENTLY REBUILT (logged
+  `Rebuild`) before Python ever sees it, so every manifest row Python receives is current-format
+  by construction — no reader-side tolerance is needed or exists.
+- **Decision item 5's stale-`'abp'`-tolerance clause is REPLACED.** `format_hint` does not
+  merely "collapse to `'plain'`" — the field, its manifest key, `pfb_feed_manifest_row()`'s
+  `$format` parameter, and every consumer are deleted. ABP-shaped content (any dialect, any
+  feed) is routed purely by `pfb_dnsbl_is_abp_rule_line()` / `_dnsbl_is_abp_rule_line()`'s
+  permanent per-line capture guard (Decision item 2) — the ONLY ABP routing authority left.
+- **Definition-of-done row 7** ("Reused feed with old-dialect `.txt`... resolves the same
+  verdicts (Semantics #7)") is corrected: the smoke row now asserts the REBUILD path (P4's
+  guard reparses the stale staging from `.orig`, no format_hint tolerance involved) —
+  deferred to the P5 phase of #1083 as a live-VM smoke row.
+- The two `.abp` stale-marker sweep call sites this ADR's Phase 5 added (opportunistic
+  `unlink_if_exists` beside the verbatim-reuse and rebuild-completion sites) are deleted
+  outright — the marker they swept was already retired by Phase 5; sweeping a name that can
+  never reappear is dead code, not tolerance.

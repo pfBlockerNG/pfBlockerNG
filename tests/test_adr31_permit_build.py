@@ -121,7 +121,6 @@ def _build_block_only(block_lines: list[str]) -> P.BuildResult:
             {
                 "feed": "BlockFeed",
                 "group": "TestBlock",
-                "format_hint": "abp",
                 "log_flag": "1",
                 "raw": _RAW_BLOCK,
             }
@@ -143,23 +142,22 @@ def _build_block_and_permit(
 ) -> P.BuildResult:
     """Build with an ABP block feed AND a permit-mode plain feed.
 
-    ``permit_lines`` are loaded by a ``mode='permit'`` feed entry (format_hint='plain')
-    so that plain ``host.example.com`` lines produce band-2 wildcard allows.
-    ``block_lines`` remain in an ABP block feed (``||domain^`` anchors → band-1 blocks).
+    ``permit_lines`` are loaded by a ``mode='permit'`` feed entry so that plain
+    ``host.example.com`` lines produce band-2 wildcard allows.
+    ``block_lines`` remain in a block feed (``||domain^`` anchors → band-1 blocks
+    via the permanent per-line capture guard, #1083 P4).
     """
     manifest: dict[str, Any] = {
         "feeds": [
             {
                 "feed": "BlockFeed",
                 "group": "TestBlock",
-                "format_hint": "abp",
                 "log_flag": "1",
                 "raw": _RAW_BLOCK,
             },
             {
                 "feed": "PermitFeed",
                 "group": "TestPermit",
-                "format_hint": "plain",
                 "log_flag": "1",
                 "mode": "permit",
                 "raw": _RAW_PERMIT,
@@ -475,14 +473,12 @@ class TestDenyModeByteIdentical:
                 {
                     "feed": "BlockFeed",
                     "group": "TestBlock",
-                    "format_hint": "abp",
                     "log_flag": "1",
                     "raw": _RAW_BLOCK,
                 },
                 {
                     "feed": "DenyFeed",
                     "group": "TestDeny",
-                    "format_hint": "plain",
                     "log_flag": "1",
                     "mode": "deny",  # explicit deny — must be block-only
                     "raw": _RAW_PERMIT,
@@ -520,7 +516,6 @@ def _build_user_block_and_permit(domain: str, *, with_permit: bool) -> P.BuildRe
         {
             "feed": "Custom_List",
             "group": "DNSBL_Custom",
-            "format_hint": "plain",
             "log_flag": "1",
             "provenance": "user",  # -> band 5 (PRIO_USER_BLOCK)
             "raw": _RAW_BLOCK,
@@ -532,7 +527,6 @@ def _build_user_block_and_permit(domain: str, *, with_permit: bool) -> P.BuildRe
             {
                 "feed": "PermitFeed",
                 "group": "TestPermit",
-                "format_hint": "plain",
                 "log_flag": "1",
                 "mode": "permit",  # -> band 2 (PRIO_FEED_ALLOW)
                 "raw": _RAW_PERMIT,
