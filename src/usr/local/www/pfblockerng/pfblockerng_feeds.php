@@ -870,10 +870,13 @@ print ($section);
 
 				<td>
 					<?php
+								// issue #1069: HTML-encode the feed URL before it enters
+								// markup -- pfb_hsc() is not in scope for this file.
+								$url_hsc = htmlspecialchars($row['url'], ENT_QUOTES, 'UTF-8');
 								if (strpos($row['url'], 'http') !== FALSE) {
-									print ("<a target=\"_blank\" href=\"{$row['url']}\">{$row['url']}</a>");
+									print ("<a target=\"_blank\" href=\"{$url_hsc}\">{$url_hsc}</a>");
 								} else {
-									print ("{$row['url']}");
+									print ("{$url_hsc}");
 								}
 					?>
 				</td>
