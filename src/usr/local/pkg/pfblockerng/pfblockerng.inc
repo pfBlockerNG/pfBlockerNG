@@ -1902,6 +1902,27 @@ function pfb_dnsblip_mark_reprocess($action, string $vtype): void {
 	}
 }
 
+// issue #1097: fwrite(FALSE)/fclose(FALSE) throw TypeError on PHP 8 ('@' only
+// silences warnings) -- guard both the destination and each source open. An
+// empty $src is skipped before fopen(): PHP 8 throws ValueError for it too.
+function pfb_dnsbl_concat_files(string $dest, array $sources): bool {
+	if (($out = @fopen($dest, 'w')) !== FALSE) {
+		foreach ($sources as $src) {
+			$src = (string) $src;
+			if ($src !== '' && ($in = @fopen($src, 'r')) !== FALSE) {
+				while (($line = @fgets($in)) !== FALSE) {
+					@fwrite($out, $line);
+				}
+				@fclose($in);
+			}
+		}
+		@fclose($out);
+		return TRUE;
+	}
+	pfb_logger("\nDNSBL: failed to open [ {$dest} ] for writing", 2);
+	return FALSE;
+}
+
 // DNSBLIP's "download" is a local-file copy of a just-rebuilt source, not a network
 // fetch -- the reuse-skip optimization (meant for real feeds) must never apply to it,
 // or a same-pass rebuild is silently stranded until the next .ip source change. (#1002)
@@ -17068,20 +17089,7 @@ function sync_package_pfblockerng($cron='') {
 
 		if ($pfb_dnsblip_rebuild) {
 			if (!empty($dnsbl_ip)) {
-				$pfb_ips = @fopen($dnsblip_v4, 'w');
-				foreach ($dnsbl_ip as $d_ip) {
-					if (($handle = @fopen("{$d_ip}", 'r')) !== FALSE) {
-						while (($line = @fgets($handle)) !== FALSE) {
-							@fwrite($pfb_ips, $line);
-						}
-					}
-					if ($handle) {
-						@fclose($handle);
-					}
-				}
-				if ($pfb_ips) {
-					@fclose($pfb_ips);
-				}
+				pfb_dnsbl_concat_files($dnsblip_v4, $dnsbl_ip);
 			}
 
 			// Add empty placeholder IP
@@ -17113,20 +17121,7 @@ function sync_package_pfblockerng($cron='') {
 
 		if ($pfb_dnsblip_rebuild) {
 			if (!empty($dnsbl_ip)) {
-				$pfb_ips = @fopen($dnsblip_v6, 'w');
-				foreach ($dnsbl_ip as $d_ip) {
-					if (($handle = @fopen("{$d_ip}", 'r')) !== FALSE) {
-						while (($line = @fgets($handle)) !== FALSE) {
-							@fwrite($pfb_ips, $line);
-						}
-					}
-					if ($handle) {
-						@fclose($handle);
-					}
-				}
-				if ($pfb_ips) {
-					@fclose($pfb_ips);
-				}
+				pfb_dnsbl_concat_files($dnsblip_v6, $dnsbl_ip);
 			}
 
 			// Add empty placeholder IP
@@ -17158,20 +17153,11 @@ function sync_package_pfblockerng($cron='') {
 
 			pfb_logger('Assembling DNSBL database...', 1);
 			unlink_if_exists("{$pfb['dnsbl_file']}.raw");
-			$pfb_output = @fopen("{$pfb['dnsbl_file']}.raw", 'w');
-			foreach ($lists_dnsbl_all as $current_list) {
-				if (($handle = @fopen("{$pfb['dnsdir']}/{$current_list}", 'r')) !== FALSE) {
-					while (($line = @fgets($handle)) !== FALSE) {
-						@fwrite($pfb_output, $line);
-					}
-				}
-				if ($handle) {
-					@fclose($handle);
-				}
-			}
-			if ($pfb_output) {
-				@fclose($pfb_output);
-			}
+			$pfb_dnsbl_sources = array_map(
+				static fn(string $current_list): string => "{$pfb['dnsdir']}/{$current_list}",
+				$lists_dnsbl_all
+			);
+			pfb_dnsbl_concat_files("{$pfb['dnsbl_file']}.raw", $pfb_dnsbl_sources);
 			pfb_logger("... completed", 1);
 
 			// DNSBL Python blocking mode, if TLD is not enabled
