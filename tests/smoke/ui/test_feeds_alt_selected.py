@@ -46,22 +46,29 @@ def test_path_bearing_alt_selected_token_writes_no_config_node(
       (oracle: config.xml over SSH, never the HTTP body).
     """
     vm = smoke_vm
-    spliced_parent = "installedpackages/pfblockerngglobal/feed_alt_a"
+    # A test-unique token so the spliced parent cannot collide with anything a
+    # sibling flow (or an earlier run on the shared VM) left in config.xml.
+    token = "iss1076crafted/b"
+    spliced_parent = "installedpackages/pfblockerngglobal/feed_alt_iss1076crafted"
 
+    # Clean baseline: drop any node a pre-guard build may have left behind.
+    _config_del(vm, spliced_parent)
     try:
+        assert helpers.config_get(vm, spliced_parent) == "", f"{spliced_parent} not empty before the POST"
+
         resp = webui.post(
             FEEDS_PAGE_IPV4,
-            {"alt_selected": "a/b", "alt_a/b": "EvilWord"},
+            {"alt_selected": token, f"alt_{token}": "EvilWord"},
             timeout=120.0,
         )
         assert not looks_like_login_page(resp.text), "Feeds alt_selected POST returned the login form"
 
         assert helpers.config_get(vm, spliced_parent) == "", (
-            "a path-bearing alt_selected token must not splice a feed_alt_a node into config.xml"
+            f"a path-bearing alt_selected token must not splice {spliced_parent} into config.xml"
         )
         assert helpers.config_get(vm, f"{spliced_parent}/b") == "", (
-            "no nested child may appear under the spliced parent either"
+            f"no nested child may appear under {spliced_parent} either"
         )
     finally:
-        # Sweep any node a pre-guard build may have written on the shared VM.
+        # Sweep whatever this run may have written on the shared VM.
         _config_del(vm, spliced_parent)

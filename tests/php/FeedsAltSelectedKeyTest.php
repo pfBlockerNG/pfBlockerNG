@@ -74,6 +74,24 @@ final class FeedsAltSelectedKeyTest extends TestCase
 		return is_array($nodes) ? $nodes : [];
 	}
 
+	/** Run the oracle while capturing PHP warnings/notices (PHPUnit passes them by default). */
+	private function runOracleCapturingWarnings(array &$warnings): array
+	{
+		$warnings = [];
+		set_error_handler(
+			static function (int $errno, string $errstr) use (&$warnings): bool {
+				$warnings[] = $errstr;
+				return true;
+			},
+			E_WARNING | E_NOTICE
+		);
+		try {
+			return pfb_feeds_oracle_alt_selected();
+		} finally {
+			restore_error_handler();
+		}
+	}
+
 	public function testPathBearingTokenWritesNoConfigNode(): void
 	{
 		// Given: a crafted token carrying a path separator, with a matching
@@ -108,14 +126,17 @@ final class FeedsAltSelectedKeyTest extends TestCase
 	public function testWordTokenWithMissingAltFieldIsRejectedNotFatal(): void
 	{
 		// A word-charset token with no matching alt_ field must produce the
-		// existing 'Invalid Alternative Alias Name' error (and no PHP 8
-		// undefined-key warning turned fatal by a handler).
+		// existing 'Invalid Alternative Alias Name' error -- with NO PHP 8
+		// "Undefined array key" warning (PHPUnit passes warnings by default,
+		// so they are captured and asserted explicitly).
 		$_POST['alt_selected'] = 'GhostAlias';
 		unset($_POST['alt_GhostAlias']);
 
-		$errors = pfb_feeds_oracle_alt_selected();
+		$warnings = [];
+		$errors = $this->runOracleCapturingWarnings($warnings);
 
 		$this->assertSame([], $this->globalNodes());
 		$this->assertNotEmpty($errors);
+		$this->assertSame([], $warnings, 'the missing alt_ field read must not warn');
 	}
 }
