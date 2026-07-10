@@ -4148,9 +4148,9 @@ def parse(format_hint: str, line: str) -> ParsedEntry | None:
     in-loop CSV-type sniffing). This subsumes the current basic-ABP token-strip and
     reproduces today's per-format behaviour, including which lines are IGNORED.
 
-    Bare-IP lines are NOT returned here -- IP extraction is
-    a PHP/firewall concern; a stray bare IP simply yields ``None`` (and
-    would fail domain validation anyway). ``feed`` / ``group`` / ``log`` are attached
+    Bare-IP lines are NOT returned here -- IP extraction is a PHP/firewall
+    concern; a stray bare IP simply yields ``None`` (and would fail domain
+    validation anyway). ``feed`` / ``group`` / ``log`` are attached
     by build() from the manifest row, so parse() only resolves the domain token.
 
     NOTE: the ABP-ready ``kind`` field is always ``DNSBL_KIND_BLOCK`` in this phase;
