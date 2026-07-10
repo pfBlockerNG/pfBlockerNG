@@ -59,6 +59,16 @@ Next number = `max + 1`, zero-padded to two digits (`NN`). Agree a short
 `Snake_Case` name with the user. The ADR directory is
 `.ADRs/ADR_{NN}_{Name}/`. Confirm both before writing anything.
 
+**Set up the worktree now, before Step 3 writes any file** — CLAUDE.md "Worktrees" has no
+carve-out for ADR *authoring*: it is dev-only (no PR — commits/push straight to `devel`) but
+still **never the primary checkout**. `{slug}` = the sanitised `{Name}` per CLAUDE.md "Branch
+naming". `git worktree list` first — reuse only a worktree **you created this run**; a foreign
+one may belong to a live parallel session (`git -C <path> status`; foreign uncommitted changes
+⇒ cut a fresh `-{epoch}`-suffixed one instead). Otherwise:
+`git worktree add <path> -b adr/{NN}-{slug} origin/devel` (fetch first). This is the **same**
+branch name `/adr-phase` reuses for the phase-implementation work later — creating it now for
+the ADR text is reuse, not a collision. Do all Step 3/4 file-writing inside `<path>`.
+
 ## Step 2 — Interactive elicitation (the core; expect many turns)
 
 The user feeds you the idea incrementally ("here's what I have so far"). For
@@ -361,13 +371,20 @@ Rules:
 time. Do not stub them. Creating an empty `RESULTS/` dir is optional (adr-phase
 will create it).
 
-## Step 6 — Report back
+## Step 6 — Land the ADR text, then report back
+
+**Land it before reporting done** — an ADR only the local worktree can see is not "created".
+From `<path>`: `git add .ADRs/ADR_{NN}_{Name}/`, commit
+(`adr: propose ADR-{NN} {title}`), `git fetch origin devel` + rebase if it moved (dev-only
+class — CLAUDE.md "Worktrees" exception: commit/push **directly to `devel`**, no PR), then
+`git push origin HEAD:devel`. Confirm the push landed (`git log origin/devel -1 --
+.ADRs/ADR_{NN}_{Name}/ADR.md`) — do not just trust a non-erroring push. Leave the worktree in
+place (`/adr-phase` reuses its branch for the phase-implementation work); do not delete it.
 
 Tell the user: the assigned number, the directory, the `ADR.md`, the ordered
-list of phase-prompt files, and how to implement it — `/adr-phase {NN} 1` for a
-single phase, or `/adr-phase {NN} all` to build the whole ADR end-to-end on a
-clean branch off the base (each phase reviewed against its objectives before its
-handoff), landing as a PR (default) or a rebase onto the base when complete.
-Restate that Status is **Proposed** until they accept the plan, and that
-acceptance ultimately depends on the validation evidence / manual smoke defined
-in §7.
+list of phase-prompt files, confirmation it landed on `devel` (commit hash), and how to
+implement it — `/adr-phase {NN} 1` for a single phase, or `/adr-phase {NN} all` to build the
+whole ADR end-to-end (each phase reviewed against its objectives before its handoff), landing
+as a PR (default) or a rebase onto the base when complete. Restate that Status is **Proposed**
+until they accept the plan, and that acceptance ultimately depends on the validation evidence /
+manual smoke defined in §7.
