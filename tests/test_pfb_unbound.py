@@ -1000,6 +1000,27 @@ class TestGetDetailsDnsblNxdomain:
         assert lines == []
 
 
+class TestGetDetailsDnsblUnsetGuard:
+    def test_unset_verdict_is_a_silent_noop(self, monkeypatch: Any) -> None:
+        # issue #1094: UNSET (never evaluated) must short-circuit before any dnsbl.log
+        # line or per-group counter (the totalqueries counter deliberately precedes the
+        # guard) -- the defensive guard on the by-value verdict argument.
+        monkeypatch.setitem(pfb_unbound.pfb, "python_nolog", False)
+        monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_resolver_con", False)
+        monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_dnsbl_con", False)
+        lines: list[tuple[str, str]] = []
+        monkeypatch.setattr(pfb_unbound, "pfb_log", lambda path, line: lines.append((path, line)))
+        qstate = types.SimpleNamespace(
+            qinfo=types.SimpleNamespace(qname_str="blocked.com.", qtype_str="A"),
+            return_msg=None,
+        )
+
+        result = pfb_unbound.get_details_dnsbl("dnsbl", None, qstate, None, {"pfb_addr": "1.2.3.4"}, pfb_unbound.UNSET)
+
+        assert result is True
+        assert not any(path.endswith("dnsbl.log") for path, _ in lines), lines
+
+
 class TestGetOType:
     def test_return_msg_rrset_branch(self) -> None:
         rk = types.SimpleNamespace(type_str="A")
@@ -1817,36 +1838,6 @@ class TestOperateDnsbl:
         assert pfb_unbound.decisionDB.get("unknown") is None
 
 
-class _RaceCache(pfb_unbound._LruCache):
-    """decisionDB stand-in that opens a deterministic race window. It arms when the
-    target key is first written (mirrors operate()'s fresh-eval memo write, ~line 6730),
-    then on the NEXT get() of that key blocks on a resume gate -- letting a test inject
-    a foreign write/delete exactly between operate()'s serve and get_details_dnsbl's
-    (pre-fix) re-read. No timing luck: a real thread only proceeds past the gate once
-    signalled."""
-
-    def __init__(self, target: str, window_q: queue.Queue[str], resume: threading.Event) -> None:
-        super().__init__(maxsize=0)
-        self._target = target
-        self._window_q = window_q
-        self._resume = resume
-        self._armed = False
-        self._fired = False
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        super().__setitem__(key, value)
-        if key == self._target:
-            self._armed = True
-
-    def get(self, key: str, default: Any = None) -> Any:
-        if self._armed and not self._fired and key == self._target:
-            self._fired = True
-            self._window_q.put("window")
-            if not self._resume.wait(timeout=10):
-                raise AssertionError("resume gate never opened")
-        return super().get(key, default)
-
-
 class TestAttributionSurvivesRace:
     """issue #1094: get_details_dnsbl must attribute a served DNSBL block using the
     verdict operate() actually served, never a live re-read of the shared decisionDB
@@ -1864,21 +1855,35 @@ class TestAttributionSurvivesRace:
         self,
         monkeypatch: Any,
         name: str,
-        foreign_action: Callable[[_RaceCache], None] | None,
+        foreign_action: Callable[[pfb_unbound._LruCache], None] | None,
     ) -> tuple[bool, Any, list[list[str]], list[Any]]:
         self._enable(monkeypatch)
         add_data(name, log="1", index=0)
         set_feed_group(0, "TestFeed", "TestGroup")
 
+        # Plain decisionDB stand-in -- foreign_action mutates it directly. The race
+        # window (below) is anchored on operate()'s "cache" enqueue, a seam that
+        # fires in both the pre-fix and fixed code (unlike a logger-re-read hook).
+        cache = pfb_unbound._LruCache(maxsize=0)
+        monkeypatch.setattr(pfb_unbound, "decisionDB", cache)
+
         window_q: queue.Queue[str] = queue.Queue()
         resume = threading.Event()
-        cache = _RaceCache(name, window_q, resume)
-        monkeypatch.setattr(pfb_unbound, "decisionDB", cache)
+        fired = threading.Event()
 
         lines: list[tuple[str, str]] = []
         enqueued: list[Any] = []
         monkeypatch.setattr(pfb_unbound, "pfb_log", lambda path, line: lines.append((path, line)))
-        monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda item: enqueued.append(item))
+
+        def enqueue_hook(item: Any) -> None:
+            enqueued.append(item)
+            if not fired.is_set() and item[0] == "cache":
+                fired.set()
+                window_q.put("window")
+                if not resume.wait(timeout=10):
+                    raise AssertionError("resume gate never opened")
+
+        monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", enqueue_hook)
 
         def writer_run() -> None:
             # queue.Empty is deliberately left uncaught: if neither "window" nor "done"
@@ -1898,6 +1903,8 @@ class TestAttributionSurvivesRace:
         window_q.put("done")
         writer.join(timeout=10)
         assert not writer.is_alive(), "writer thread failed to terminate"
+        # If the "cache" seam ever moves, this must fail loudly, not pass vacuously.
+        assert fired.is_set(), "race window never opened -- foreign injection never engaged"
 
         dnsbl_fields = [line.split(",") for path, line in lines if path.endswith("dnsbl.log")]
         return rcd, qstate, dnsbl_fields, enqueued
@@ -1921,7 +1928,7 @@ class TestAttributionSurvivesRace:
         # foreign generation's feed/group.
         live_gen = pfb_unbound._snapshot.gen
 
-        def foreign_overwrite(cache: _RaceCache) -> None:
+        def foreign_overwrite(cache: pfb_unbound._LruCache) -> None:
             cache["race-r1.com"] = pfb_unbound.Decision(
                 dnsbl=_dnsbl_decision(
                     is_found=True,
@@ -1954,7 +1961,7 @@ class TestAttributionSurvivesRace:
         # and silently drop the line (per-feed under-count).
         live_gen = pfb_unbound._snapshot.gen
 
-        def foreign_allow(cache: _RaceCache) -> None:
+        def foreign_allow(cache: pfb_unbound._LruCache) -> None:
             cache["race-r2.com"] = pfb_unbound.Decision(dnsbl=_dnsbl_decision(), snap_gen=live_gen + 1)
 
         rcd, qstate, dnsbl_fields, enqueued = self._run_race(monkeypatch, "race-r2.com", foreign_allow)
@@ -1973,7 +1980,7 @@ class TestAttributionSurvivesRace:
         # TestFeed block, When the entry is deleted before attribution, Then the line
         # must still be logged with TestFeed -- a presence-only re-read would find
         # nothing and silently drop the line.
-        def foreign_delete(cache: _RaceCache) -> None:
+        def foreign_delete(cache: pfb_unbound._LruCache) -> None:
             del cache["race-r3.com"]
 
         rcd, qstate, dnsbl_fields, enqueued = self._run_race(monkeypatch, "race-r3.com", foreign_delete)
