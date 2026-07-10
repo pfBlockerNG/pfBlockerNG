@@ -211,12 +211,13 @@ jobs:
           set -eu
           # Compose the untagged image from the namespace var + per-matrix image_name.
           # Fallback: lowercased owner (GHCR refs MUST be lowercase).
-          case "$MATRIX_IMAGE_NAME" in
-            ''|*[!a-z0-9._-]*)
-              echo "::error::invalid matrix.image_name: '$MATRIX_IMAGE_NAME'"
-              exit 1
-              ;;
-          esac
+          # issue #1148: LC_ALL=C tr, not a `case` range — a collating locale
+          # lets [a-z] admit uppercase/accented letters, defeating the guard.
+          if [ -z "$MATRIX_IMAGE_NAME" ] || \
+             [ -n "$(printf '%s' "$MATRIX_IMAGE_NAME" | LC_ALL=C tr -d 'a-z0-9._-')" ]; then
+            echo "::error::invalid matrix.image_name: '$MATRIX_IMAGE_NAME'"
+            exit 1
+          fi
           REPO="${SMOKE_IMAGE_REPO:-ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')}"
           IMAGE="${REPO%/}/${MATRIX_IMAGE_NAME}"
           printf 'image=%s\n' "$IMAGE" >> "$GITHUB_OUTPUT"
