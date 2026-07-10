@@ -173,17 +173,27 @@ For every phase `M` to run (the loop body in `all`):
 **Default route — the `phase-step` workflow (use it whenever the Workflow tool is
 available; hand-spawning 6a/6b while it is available requires a recorded reason in your
 report — PR #937 bypassed it silently and produced no fixed-field gate record, #943).** Run
-6a+6b as ONE call: `Workflow({name: 'phase-step', args: {worktree: '<path>', brief: <the full
-6a brief below>, gates: [<canonical gate commands for the phase's languages>], redProof:
-{srcPaths: [<the phase's src paths>], testCmd: '<the named new test>'} | null (behaviour-
-preserving), planItems: [<the phase prompt's ACTION-PLAN items>], ponytailLevel: <active
-level or null>}})`. It runs the Sonnet implementer then an independent Sonnet verifier and
-returns `{handoff, gateRecord}` — both schema-forced. You then: reject a handoff/record with
-any failed or missing item, write `RESULTS/{MM}_Gate.txt` from the gateRecord and commit+push
-it, and keep ALL judgment (HALT/continue/redo, Step 7 landing). A BLOCKED handoff or a FAIL
-gate record → **HALT and report**, exactly as below. When the Workflow tool is unavailable,
-run 6a/6b inline as specified below — the contract is identical; the workflow only packages
-it.
+the whole phase as ONE call, passing **pointers, not a composed brief** (issue #1089 — the
+brief is written by the workflow's fresh higher-model Brief stage, so your own context stays
+flat across a long `all` run): `Workflow({name: 'phase-step', args: {worktree: '<path>',
+briefSpec: {adrDir: '<ADR_DIR relative to the worktree>', phase: M, notes: '<session
+constraints the disk cannot show — base override, user instructions; omit if none>'},
+ponytailLevel: <active level or null>}})`. The Brief stage reads `ADR.md`, the phase prompt,
+and every prior `RESULTS/` file just-in-time, runs the enumeration greps itself, and returns
+a schema-forced `briefRecord` (coverage matrix rows each citing their grep source, hostile
+rows, gates, red proof, plan items, cross-phase `drift_flags`); the workflow then pipes it
+through the Sonnet implementer and a fresh higher-model verifier and returns `{briefRecord,
+handoff, gateRecord}` — all schema-forced. You then: **validate the briefRecord
+non-vacuously** (re-run at least one cited coverage-matrix `source` and confirm it yields the
+row; judge any `drift_flags`), reject a record with any failed or missing item, write
+`RESULTS/{MM}_Gate.txt` from the gateRecord and commit+push it, and keep ALL judgment
+(HALT/continue/redo, Step 7 landing). A BLOCKED briefRecord or handoff, or a FAIL gate
+record → **HALT and report**, exactly as below. The legacy `brief:` argument (you compose 6a
+yourself) remains supported but is not the default for ADR phases. When the Workflow tool is
+unavailable, run the same contract inline: **first spawn a fresh brief-writer Agent** (omit
+`model` so it inherits the higher model; effort `xhigh`) with the Brief-stage instructions
+and required output fields above, validate its brief, then run 6a/6b as specified below —
+the contract is identical; the workflow only packages it.
 
 **6a. Delegate to a clean sub-agent.** Spawn an Agent (`subagent_type:
 general-purpose`, **`model: sonnet`**) — **without** `isolation: "worktree"`, since

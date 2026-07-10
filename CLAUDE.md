@@ -104,6 +104,16 @@ non-trivial, multi-step `src/`/`tests/`/CI work.
 - **The planner's brief to Sonnet 5 follows the delegation contract below** — a vague or wrong
   brief is a planner bug, and a handful of real shipped defects trace directly to brief bugs
   (a half-enumerated axis, a vacuous test spec, an unverified "fact" stated as truth).
+- **ADR phases: the brief itself is written fresh-context (issue #1089).** The default
+  `/adr-phase` route passes `briefSpec` (pointers: ADR dir + phase number) to the
+  `phase-step` workflow, whose **Brief stage** — a fresh higher-model agent — reads the ADR,
+  phase prompt, and prior `RESULTS/`/Gate records just-in-time, runs the enumeration greps
+  itself, and returns a schema-forced brief (matrix rows citing their grep source, hostile
+  rows, gates, red proof, plan items, cross-phase drift flags); the workflow's verifier also
+  runs at the higher model. The main session validates the records non-vacuously, commits the
+  Gate file, and keeps HALT/continue/landing — its context stays flat across a long `all`
+  run. Composing an ADR-phase brief in the main session is a recorded deviation, exactly like
+  hand-spawning 6a/6b.
 - **Mode propagation to delegates is mechanical** — the `SubagentStart` hook
   (`.claude/settings.json`) injects the ponytail + caveman capsule into every spawned
   sub-agent; the capsule itself carries the rules (reviewer carve-out; "terse prose,

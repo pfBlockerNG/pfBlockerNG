@@ -1,23 +1,43 @@
 export const meta = {
   name: 'phase-step',
-  description: 'One delegated step under the delegation contract: Sonnet implementer -> independent Sonnet verifier, schema-forced handoff + gate record',
-  whenToUse: 'Called by /adr-phase (per phase) and /gh-issue --fix (per step) instead of hand-spawning 6a/6b or 7a/7b. Args: {worktree, brief, gates: [cmd...], redProof: {srcPaths: [...], testCmd} | null, planItems: [...], ponytailLevel: "full" | null}. The caller keeps ALL judgment: it validates the returned gate record, commits the RESULTS/Gate files, and decides HALT/continue/landing.',
+  description: 'One delegated step under the delegation contract: optional fresh higher-model Brief stage -> Sonnet implementer -> independent higher-model verifier, all schema-forced',
+  whenToUse: 'Called by /adr-phase (per phase) and /gh-issue --fix (per step) instead of hand-spawning 6a/6b or 7a/7b. Args: {worktree, brief | briefSpec: {adrDir, phase, notes?}, gates: [cmd...], redProof: {srcPaths: [...], testCmd} | null, planItems: [...], ponytailLevel: "full" | null}. With briefSpec (ADR phases — issue #1089) the Brief stage derives brief/gates/redProof/planItems itself from disk, so the caller passes only pointers. The caller keeps ALL judgment: it validates the returned records, commits the RESULTS/Gate files, and decides HALT/continue/landing.',
   phases: [
-    { title: 'Implement', detail: 'one Sonnet implementer executes the brief' },
-    { title: 'Verify', detail: 'fresh Sonnet verifier re-derives every gate item' },
+    { title: 'Brief', detail: 'fresh higher-model planner enumerates the matrix + hostile rows and composes the brief (briefSpec callers only)' },
+    { title: 'Implement', detail: 'one Sonnet implementer executes the brief', model: 'sonnet' },
+    { title: 'Verify', detail: 'fresh higher-model verifier re-derives every gate item' },
   ],
 }
 
 // The mechanical core of CLAUDE.md "The delegation contract": the implementer
 // never grades its own work; the verifier re-derives (re-runs gates, re-executes
 // the red proof, reads the full diff) and returns a fixed-field gate record. The
-// calling skill owns HALT/resume/landing — a workflow cannot ask the user anything.
+// Brief stage (issue #1089) moves brief-writing into a fresh higher-model context
+// too — the calling session passes pointers, not a composed brief, so its context
+// stays flat across a long run. The calling skill owns HALT/resume/landing — a
+// workflow cannot ask the user anything.
 
 // Callers sometimes deliver args JSON-string-encoded (killed review-fanout on PR #937,
 // issue #942) — normalize before destructuring instead of trusting caller discipline.
 const input = typeof args === 'string' ? JSON.parse(args) : (args ?? {})
-const { worktree, brief, gates = [], redProof = null, planItems = [], ponytailLevel = null } = input
-if (!worktree || !brief) throw new Error('args must include {worktree, brief}; see meta.whenToUse')
+let { worktree, brief = null, briefSpec = null, gates = [], redProof = null, planItems = [], ponytailLevel = null } = input
+if (!worktree || (!brief && !briefSpec) || (brief && briefSpec)) throw new Error('args must include {worktree} and exactly ONE of {brief, briefSpec}; see meta.whenToUse')
+
+const BRIEF_RECORD = {
+  type: 'object',
+  required: ['verdict', 'brief_text', 'coverage_matrix', 'hostile_rows', 'gates', 'red_proof', 'plan_items', 'drift_flags'],
+  properties: {
+    verdict: { type: 'string', enum: ['OK', 'BLOCKED'] },
+    brief_text: { type: 'string', description: 'the complete self-contained implementer brief — all seven CLAUDE.md THE-BRIEF sections' },
+    coverage_matrix: { type: 'array', minItems: 1, items: { type: 'object', required: ['row', 'source', 'mapping'], properties: { row: { type: 'string' }, source: { type: 'string', description: 'the executed grep command / file:line this row was enumerated from — never memory' }, mapping: { type: 'string', description: 'the test that covers it, or the explicit justified deferral' } } }, description: 'phase touches no sibling axes at all -> exactly one row stating that, with the source evidence proving it' },
+    hostile_rows: { type: 'array', minItems: 1, items: { type: 'object', required: ['input', 'expected'], properties: { input: { type: 'string' }, expected: { type: 'string' } } }, description: 'phase touches no parser/regex/guard -> exactly one row stating that, with the evidence' },
+    gates: { type: 'array', minItems: 1, items: { type: 'string' }, description: 'canonical gate commands for the languages the phase touches (CLAUDE.md table) plus cross-language consumers' },
+    red_proof: { type: ['object', 'null'], required: ['srcPaths', 'testCmd'], properties: { srcPaths: { type: 'array', items: { type: 'string' } }, testCmd: { type: 'string' } }, description: 'null ONLY for a behaviour-preserving phase — and brief_text must say so' },
+    plan_items: { type: 'array', minItems: 1, items: { type: 'string' }, description: 'the phase prompt ACTION-PLAN items the verifier ticks against the diff' },
+    drift_flags: { type: 'array', items: { type: 'string' }, description: 'soft contradictions between prior RESULTS/Gate records and this phase plan, for the caller to judge; empty = none. A hard contradiction is verdict BLOCKED instead' },
+    blocker: { type: 'string', description: 'BLOCKED only: which claim reality contradicted, with the probe evidence' },
+  },
+}
 
 const HANDOFF = {
   type: 'object',
@@ -57,6 +77,37 @@ const GATE_RECORD = {
   },
 }
 
+let briefRecord = null
+if (briefSpec) {
+  phase('Brief')
+  const { adrDir, phase: phaseNum, notes = '' } = briefSpec
+  if (!adrDir || !phaseNum) throw new Error('briefSpec must include {adrDir, phase}')
+
+  briefRecord = await agent(`You are the PLANNER writing THE BRIEF (CLAUDE.md "The delegation contract" — all seven mandatory sections) for ONE ADR phase, with a fresh context: read everything just-in-time from disk; trust nothing from memory. You write the brief only — you implement nothing and spawn no agents.
+
+Worktree: ${worktree}. ADR directory: ${adrDir} (relative to the worktree). Phase: ${phaseNum}.
+
+READ (all inside the worktree): CLAUDE.md ("The delegation contract", "Test coverage", "Code standards", "Canonical gates"); ${adrDir}/ADR.md; the phase prompt ${adrDir}/<MM>_*.txt for phase ${phaseNum} (MM = zero-padded phase number); and EVERY prior ${adrDir}/RESULTS/*_Results.txt and *_Gate.txt — cross-phase state lives on disk there, not in anyone's memory.${notes ? `\nSESSION NOTES from the caller: ${notes}` : ''}
+
+DERIVE, never copy: run the enumeration greps YOURSELF (git -C ${worktree} grep ...) for every sibling axis the phase touches (v4/v6, address/port, CE/Plus versions, parse modes, every caller of a touched symbol, every branch of a touched conditional) — each coverage_matrix row cites the executed command or file:line it came from. Supply hostile_rows with expected outcomes for any parser/regex/guard the phase touches (CLAUDE.md THE BRIEF section 4 input classes). Derive gates from the languages the phase touches (CLAUDE.md "Canonical gates" table, plus cross-language consumers of artifacts it changes), red_proof {srcPaths, testCmd} (null ONLY if the phase is behaviour-preserving — then brief_text says so and names the oracle tests), and plan_items from the prompt's ACTION PLAN.
+
+DRIFT CHECK: put in drift_flags every soft contradiction between the prior RESULTS/Gate records and this phase's plan (e.g. this phase would undo an invariant an earlier phase pinned). A HARD contradiction — the phase prompt or ADR refuted by the code or a prior record — is verdict BLOCKED with the blocker field filled, not a brief.
+
+brief_text must be fully self-contained for a Sonnet implementer that has this worktree but no other context: name the phase prompt file and the prior handoff as mandatory required reading (reference paths, do not paste bodies); carry the coverage matrix, hostile rows, constraints (do-NOT-touch list), verification commands with expected observables, and the ESCALATE contract; never weaken a CLAUDE.md mandate (red->green is TEST-FIRST and EXECUTED, output pasted); and instruct the implementer to write ${adrDir}/RESULTS/<MM>_Results.txt with the fixed HANDOFF fields, make ONE focused commit (code + handoff, repo commit style), and push it (git -C ${worktree} push -u origin HEAD).`,
+    { label: 'brief', phase: 'Brief', effort: 'xhigh', schema: BRIEF_RECORD })
+
+  if (!briefRecord) throw new Error('brief agent returned nothing (skipped or terminal error)')
+  if (briefRecord.verdict === 'BLOCKED') {
+    log('brief stage BLOCKED — returning without implementing')
+    return { briefRecord, handoff: null, gateRecord: null }
+  }
+  if (briefRecord.drift_flags.length) log(`drift flags for the caller: ${briefRecord.drift_flags.join(' | ')}`)
+  brief = briefRecord.brief_text
+  gates = briefRecord.gates
+  redProof = briefRecord.red_proof
+  planItems = briefRecord.plan_items
+}
+
 phase('Implement')
 
 // The SubagentStart hook injects the mode capsule at the repo default (full);
@@ -75,7 +126,7 @@ STANDING CONTRACT (CLAUDE.md "The delegation contract" — these override nothin
 if (!handoff) throw new Error('implementer returned nothing (skipped or terminal error)')
 if (handoff.verdict === 'BLOCKED') {
   log('implementer BLOCKED — returning without verification')
-  return { handoff, gateRecord: null }
+  return { briefRecord, handoff, gateRecord: null }
 }
 
 phase('Verify')
@@ -101,6 +152,6 @@ MANDATORY CHECKS — one items[] entry each, with executed evidence; a skipped c
 6. conventions: each new public symbol beside 3 sibling symbols proving the name matches; stale comments/docs about touched symbols reconciled.
 
 Verdict FAIL iff any item fails; list blocking_reasons. Your structured output IS the gate record.`,
-  { label: 'verify', phase: 'Verify', model: 'sonnet', effort: 'xhigh', schema: GATE_RECORD })
+  { label: 'verify', phase: 'Verify', effort: 'xhigh', schema: GATE_RECORD })
 
-return { handoff, gateRecord }
+return { briefRecord, handoff, gateRecord }
