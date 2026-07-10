@@ -10,62 +10,64 @@ One commit, pushed to the branch. Implement yourself; do NOT spawn sub-agents. T
 BEHAVIOUR-PRESERVING (docs + smoke-wiring only): it pins Phases 1-4's already-landed behaviour
 into the CE+Plus automated fan-out as an oracle, it does not change any production behaviour.
 Blast-radius note for the gate: NONE beyond consolidating already-landed behaviour into
-documented, automated smoke coverage and docs -- no new production behaviour change in this
-phase.
+documented, automated smoke coverage and docs — no new production behaviour change.
 
 WHY THIS PHASE EXISTS
 Phases 1-4 landed the mechanism; this phase makes it discoverable (docs) and durably verified
-(the §7 automated smoke rows, on the live CE+Plus VM fan-out -- CLAUDE.md "ADR acceptance":
-Accepted status requires automated coverage, not a manual sign-off) and records the user-facing
-delta for release notes.
+(the §7 automated smoke rows on the live CE+Plus VM fan-out — CLAUDE.md "ADR acceptance":
+Accepted requires automated coverage, not a manual sign-off) and records the user-facing delta
+for release notes.
 
 REQUIRED READING
 - FIRST, read all four prior handoffs:
-  .ADRs/ADR_63_Category_Reorder_UX/RESULTS/{01,02,03,04}_Results.txt -- Phase 4's carry-forward
-  in particular names what belongs in release notes and architecture-notes. If any is missing,
-  the corresponding phase is not complete; STOP and report.
-- .ADRs/ADR_63_Category_Reorder_UX/ADR.md §7 (the six smoke rows to automate) and §3
-  Consequences.
-- docs/misc/architecture-notes.md -- grep for any existing mention of category reorder,
-  Lmove/Xmove, or roworderdragging; add a short section if none exists (this ADR retires a real
-  code path future readers may look for by its old symbol names).
-- tests/smoke/ -- how other ADRs' §7 rows are wired into the CE+Plus fan-out (grep an existing
-  `-k adrNN` pytest marker convention, e.g. ADR-62's smoke rows, for the pattern to follow).
+  .ADRs/ADR_63_Category_Reorder_UX/RESULTS/{01,02,03,04}_Results.txt — Phase 4's carry-forward
+  names what belongs in release notes and architecture-notes. If any is missing, STOP and
+  report.
+- .ADRs/ADR_63_Category_Reorder_UX/ADR.md §7 (the six smoke rows) and §3 Consequences.
+- docs/misc/architecture-notes.md — grep for any existing mention of category reorder,
+  Lmove/Xmove, or roworderdragging; add a short section if none exists.
+- tests/smoke/ — how other ADRs' §7 rows are wired into the CE+Plus fan-out (the file-name
+  `-k` convention, e.g. tests/smoke/test_smoke_adr62.py — follow that pattern for naming so
+  one `-k` filter selects this ADR's rows).
 
 REALITY OVERRIDE (standing rule)
 Line numbers and code-state claims in this prompt predate this phase; RESULTS/01-04 and the
-live tree override this prompt on any conflict -- verify each claim before acting, flag
+live tree override this prompt on any conflict — verify each claim before acting, flag
 contradictions loudly in the handoff.
 
 ACTION PLAN
 1. Add/extend docs/misc/architecture-notes.md with a short section covering: the shared
-   client-side reorder component and which two pages use it, the roworderdragging read-only
-   reuse, and the retirement of the $Lmove/$Xmove/$pre mechanism (name the deleted symbols so a
-   future grep for them finds this note instead of dead code).
-2. Draft the release-notes delta (wherever this repo's release-notes pipeline expects committed
-   deltas -- grep docs/release-notes/ or the workflow-reference "Release notes pipeline"
-   section): mobile/touch users can now reorder category lists (fixes #1147); category-edit row
-   reorder (no-sort mode) is now instant/staged with a single Save instead of one page-reload
-   per move.
+   client-side reorder component and which two pages use it; the TWO persistence shapes it
+   feeds (category.php ids[]-at-Save; category_edit positional-field-names via core
+   renumber() after every staged move) and why they differ (ADR §1.3); the roworderdragging
+   read-only reuse; and the retirement of the $Lmove/$Xmove/$pre/$disable_move mechanism —
+   name the deleted symbols so a future grep finds this note instead of dead code; note that
+   pfblockerng_category.php's ids[] hostile-order validation is deliberately NOT this ADR's
+   scope (issue #1152).
+2. Draft the release-notes delta (grep docs/release-notes/ + workflow-reference "Release notes
+   pipeline" for where committed deltas go): mobile/touch users can now reorder the category
+   list and category-edit rows (#1147); category-edit manual row reorder (no-sort mode) is now
+   instant/staged with a single Save instead of one page-reload-and-config-write per move.
 3. Ensure every §7 smoke row (1-6) exists as an automated tests/smoke/ui/ test (most should
-   already exist from Phases 1/3/4 -- this phase's job is to confirm the full set runs together
-   under one marker/filter for the CE+Plus fan-out dispatch, and add any row not yet covered as
-   its own test rather than retrofitting an existing one to serve double duty).
+   already exist from Phases 1/3/4 — this phase's job is to confirm the full set runs together
+   under one `-k` filter for the CE+Plus fan-out dispatch, and add any row not yet covered as
+   its own test rather than retrofitting an existing one to serve double duty). Row 6's
+   roworderdragging fixture must restore the prior value in a loud teardown (ADR §5).
 4. Update this ADR's Status header once the live-VM CE+Plus fan-out (dispatched via the normal
-   smoke workflow, `-k` filtered to this ADR's rows) is confirmed green -- cite the run URL/ID,
+   smoke workflow, `-k` filtered to this ADR's rows) is confirmed green — cite the run URL/ID,
    per the house convention (see ADR-62's Status header for the citation format).
 
 CONSTRAINTS
 - Documentation-only + smoke-wiring changes; no further production src/ changes in this phase
-  (if Phase 4's carry-forward reveals a genuine gap requiring a src/ fix, STOP and report it as
-  a deviation rather than silently expanding this phase's scope).
+  (if Phase 4's carry-forward reveals a genuine gap requiring a src/ fix, STOP and report it
+  as a deviation rather than silently expanding this phase's scope).
 - Markdown: blank line around headings/lists/fences, language on every fence, single trailing
-  newline (`npx markdownlint-cli2`).
+  newline (npx markdownlint-cli2).
 
 VERIFICATION (all must pass)
 - npx markdownlint-cli2 clean on touched docs.
-- The full §7 row set (1-6) green on a `-k` filtered live-VM CE+Plus smoke dispatch -- paste the
-  run URL/ID and pass count for both editions.
+- The full §7 row set (1-6) green on a `-k` filtered live-VM CE+Plus smoke dispatch — paste
+  the run URL/ID and pass count for both editions.
 - python3 -m pytest full suite still green (no accidental regression from the doc/wiring pass).
 
 EXPECTED RESULT
@@ -78,4 +80,4 @@ Push directly to adr/63-category-reorder-ux; open a PR only if the direct push i
 
 HANDOFF — write .ADRs/ADR_63_Category_Reorder_UX/RESULTS/05_Results.txt with the fixed fields:
 verdict; what changed + commit; the live-VM fan-out run URL/ID + pass counts for CE and Plus;
-gates with pasted output; deviations (or "none"); carry-forward (none expected -- final phase).
+gates with pasted output; deviations (or "none"); carry-forward (none expected — final phase).

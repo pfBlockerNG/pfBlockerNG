@@ -1,97 +1,130 @@
 ================================================================================
 PHASE 2 PROMPT — Shared client-side reorder component (drag + anchor-click, staged, dormant)
 Target model: Claude Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
-ADR: .ADRs/ADR_63_Category_Reorder_UX/ADR.md   (read §1.2, §1.3, §2 Decision 1-2 first)
+ADR: .ADRs/ADR_63_Category_Reorder_UX/ADR.md   (read §1.2, §1.3, §2 Decision 1-2, §7 reject
+criterion 1 first)
 ================================================================================
 
 ROLE
 You are the IMPLEMENTER. Work in the per-ADR worktree on branch adr/63-category-reorder-ux.
 One commit, pushed to the branch. Implement yourself; do NOT spawn sub-agents.
 Blast-radius note for the gate: PRODUCTION-DORMANT. This phase builds the shared JS component
-and proves it in isolation (a scratch/fixture HTML page); it is not wired into either live page
-(Phase 3/4) and cannot change any production page's behaviour yet.
+and proves it in isolation (a fixture page served from the live VM); it is not wired into
+either live page (Phase 3/4) and cannot change any production page's behaviour yet.
 
 WHY THIS PHASE EXISTS
-ADR §1.2/§1.3 (read before writing any code): pfSense core's firewall_rules.php pattern (drag +
-anchor-click, both staged client-side, one Save write) is worth copying; its helper functions
-(reindex_rules/fr_toggle/save_separators, core js/pfSenseHelpers.js) are NOT reusable — verified
-hard-coded to firewall_rules.php's own DOM ids. pfBlockerNG's OWN pfblockerng_category.php
-already implements the correct persistence shape (stable row id + one order array, computed at
-Save time, never renumbering other per-row fields) — this phase's component must follow THAT
-shape, not port reindex_rules()'s "relabel every attribute of the moved row on every move"
-approach, which does not fit pfblockerng_category_edit.php's several independently-named
-per-row fields (state-{id}/format-{id}/url-{id}/header-{id}, ADR §1.3).
+ADR §1.2/§1.3 (read before writing any code): the component shares only the INPUT UX between
+the two pages — drag + anchor-click, staged client-side. Persistence stays per-page:
+category.php reads DOM order into ids[] at Save; category_edit relies on pfSense core's
+repeatable machinery (renumber() after every staged move keeps field names positional — the
+same channel client-side delete already persists through today). This phase must also PROVE
+the load-bearing premise of the whole ADR (reject criterion 1): core renumber()/add_row()/
+delete_row() compose correctly with a staged reorder on digit-suffixed fields shaped like
+category_edit's — BEFORE any production page is touched.
 
 REQUIRED READING
 - FIRST, read the prior phase's handoff: .ADRs/ADR_63_Category_Reorder_UX/RESULTS/01_Results.txt
-  — confirm the stable row-id convention and coverage matrix it recorded. If missing, Phase 1
-  is not complete; STOP and report.
-- .ADRs/ADR_63_Category_Reorder_UX/ADR.md §1.2, §1.3, §2 Decision 1-2, Consequences (JS-harness
-  risk paragraph).
+  — the row markup and field-naming patterns it recorded. If missing, Phase 1 is not complete;
+  STOP and report.
+- .ADRs/ADR_63_Category_Reorder_UX/ADR.md §1.2, §1.3, §2 Decision 1-2, §3 Consequences
+  (renumber-contract risk), §7 reject criterion 1.
 - src/usr/local/www/pfblockerng/pfblockerng_category.php — the EXISTING sortable init (~:687)
-  and save_new_changes()'s ids-serialize (~:611-664) as the shape to generalise, not replace.
-- src/usr/local/www/pfblockerng/pfBlockerNG.js (or wherever the page's existing custom JS
-  lives — grep `<script src=` in both pages) — confirm the right file/location for a new shared
-  helper (a new js/ file vs an addition to the existing one; your call, document why).
-- CLAUDE.md "Code standards" www/ JS row of the code-quality table (const enums/booleans,
-  String.prototype over RegExp where applicable).
+  and save_new_changes()'s ids-serialize (~:640-684): the drag options to generalise and the
+  ids[] wire format ("ids[]=rN&ids[]=rM&…") the order-read helper must reproduce exactly.
+- src/usr/local/www/pfblockerng/pfblockerng_category_edit.php — the repeatable row markup
+  (~:1130), digit-suffixed field names (state-{N}/format-{N}/url-{N}/header-{N}), the row
+  number gutter (~:1140), addrow (~:1341) / deleterow{N} (~:1226) buttons.
+- pfSense core js/pfSenseHelpers.js ON THE VM (/usr/local/www/js/pfSenseHelpers.js) —
+  renumber(), add_row(), delete_row(), and how [id^=addrow]/[id^=delete] get auto-bound. Read
+  the VM's actual file, not a memory of it.
+- src/usr/local/www/pfblockerng/pfBlockerNG.js — the existing custom-JS home; decide (and
+  document why) whether the component lands there or in a new js/ file.
+- CLAUDE.md "Code standards" www/ JS row (const enums/booleans lowercase, String.prototype
+  over RegExp where applicable), comment budget.
 
 REALITY OVERRIDE (standing rule)
 Line numbers and code-state claims in this prompt were written before this phase ran; Phase 1's
 RESULTS and the live tree override this prompt on any conflict — verify each claim before
 acting, flag contradictions loudly in the handoff.
 
+COMPONENT CONTRACT (§2 Decision 1 — implement exactly this surface)
+- init takes: container selector, ROW selector ('tr.sortable' on one page,
+  '.form-group.repeatable' on the other), an onAfterMove callback, and a boolean enabling drag
+  (the roworderdragging read happens server-side in Phase 3/4 and arrives here as a plain
+  parameter).
+- Drag: thin generalisation of category.php's existing .sortable() options; init only when the
+  drag boolean allows.
+- Anchor-click: checkbox-per-row + per-row anchor button; click = move checked rows BEFORE the
+  clicked row, shift-click = AFTER (firewall_rules.php UX, re-implemented on our markup).
+  Anchor buttons are type="button" — NEVER type="submit" (the old category_edit anchor
+  submitted the form per click; copying that markup is a regression).
+- After EVERY completed move (drag stop or anchor-click), call onAfterMove.
+- Order-read helper: returns the current DOM order of row ids in the exact ids[] wire format
+  ("ids[]=rN&…"), computed from the DOM directly — it must work when .sortable() was NEVER
+  initialised (ADR §1.8: sortable('serialize') throws in that case; this helper replaces it).
+- Event handling is DELEGATED (bound on the container): core renumber() rewrites the name/id
+  of every input/select/button inside repeatable groups, so per-element bindings go stale.
+- Any control the component injects per row carries a trailing-digit-suffixed name/id (so
+  renumber() rewrites it consistently on the repeatable page).
+- The component NEVER reads or writes any other per-row named field, and NEVER
+  disables/enables any Save button (both pages' Save buttons are general-purpose — ADR §1.8).
+
 ACTION PLAN
-1. Design the component's public surface: a function/module taking a table selector, the
-   per-row stable-id attribute/prefix, the checkbox name pattern, and the hidden order-field
-   name to populate at Save time. It must expose: drag init (thin wrapper generalising
-   category.php's existing `.sortable()` options), anchor-click wiring (checkbox + per-row
-   anchor button; click = move checked rows before the clicked row, shift-click = after —
-   mirrors firewall_rules.php's UX, re-implemented against pfBlockerNG's own row markup), a
-   `dirty` flag + Save-button enable/disable, and an order-read function returning the current
-   DOM order of stable row ids (the ids[]-equivalent, computed only at Save time — never
-   renumbering any other per-row field name).
-2. Read `system/webgui/roworderdragging` SERVER-SIDE (PHP, via config_path_enabled) — this
-   phase only needs to accept a boolean parameter deciding whether the component's drag init
-   runs; the actual read-and-pass-in wiring happens in Phase 3/4. Do not read this pref
-   client-side.
-3. Prove the component in isolation: a scratch/fixture HTML page (not either production page)
-   with a handful of rows, exercised via Playwright — drag, anchor-click single-row,
-   anchor-click multiple-rows-straddling-the-anchor (the client-side analogue of the #1145 edge
-   case: with the whole move happening in the DOM before any server round-trip, there is no
-   server-side vote-tally to get wrong, but the CLIENT-side insertBefore/insertAfter sequencing
-   for multiple checked rows must still produce a well-defined, correct final order — assert it
-   for at least: all-checked-rows-before-target, all-after, and straddling both sides).
-4. Do NOT wire this into pfblockerng_category.php or pfblockerng_category_edit.php in this
-   phase — confirm via diff that neither production PHP page changes.
+1. Implement the component per the contract above.
+2. Prove it on a fixture page SERVED FROM THE LIVE VM (this is what makes the proof real: the
+   box's own jQuery, jQuery-UI, and pfSenseHelpers.js, exact shipped versions):
+   - Upload a static fixture HTML via the harness SSH to the VM webroot; discover the vendor
+     script URLs by fetching an authenticated production page and parsing its <script src=>
+     tags (do NOT hardcode versioned filenames like jquery-X.Y.Z.min.js — they drift); include
+     pfSenseHelpers.js the same way. Remove the fixture file in teardown.
+   - Fixture rows mirror category_edit's shape: .form-group.repeatable divs, digit-suffixed
+     input/select names (state-N/url-N/…), a row-number gutter element, an addrow button and
+     per-row deleterow{N} buttons (so core's auto-binding drives real add_row()/delete_row()).
+   - No CDN, no file:// page, no bundler.
+3. Playwright proof scenarios (each asserting the exact final DOM state; drag via
+   mouse.down / mouse.move(..., steps>=2) / mouse.up — jQuery UI sortable has distance:10 and
+   page.drag_and_drop() may not satisfy it):
+   a. drag a row; assert row order.
+   b. anchor-click, single checked row, before + shift-after; assert order.
+   c. anchor-click, multiple checked rows straddling the anchor (all-before, all-after,
+      straddling both sides); assert a well-defined final order for each.
+   d. RENUMBER COMPOSITION (reject criterion 1's probe — the phase fails without it): with
+      onAfterMove wired to core renumber() + a gutter refresh: stage a move, then core
+      add_row(), then core delete_row(), in one session; assert after EACH step that field
+      names are positional 0..N-1 in DOM order, no name collision exists, every field kept its
+      value, and the gutter numbers match positions.
+   e. order-read helper returns the correct ids[] string with drag NEVER initialised
+      (anchor-only mode — the §1.8 serialize trap).
+4. Do NOT wire this into pfblockerng_category.php or pfblockerng_category_edit.php — confirm
+   via diff that neither production PHP page changes.
 
 CONSTRAINTS
-- No new front-end dependency (jQuery + jQuery UI only, already loaded platform-wide) — do not
-  add a package manager, bundler, or JS test framework.
-- The component must NOT read or write any other per-row named field (state-{id}, format-{id},
-  etc.) — order is the ONLY thing it computes; that is the whole point of the design (ADR §1.3).
-- `const`/boolean literals lowercase per CLAUDE.md's www/ JS row.
-- Comment budget <=3 lines per CLAUDE.md.
+- No new front-end dependency; no package manager, bundler, or JS test framework.
+- www/ JS conventions (lowercase booleans/const); comment budget <=3 lines.
+- If scenario (d) FAILS in a way that contradicts the ADR's renumber-contract premise: STOP,
+  return BLOCKED with the evidence — that is §7 reject criterion 1 firing, and the fallback
+  (Option B + locks, ADR §1.3) is the ORCHESTRATOR's call, not yours.
 
 VERIFICATION (all must pass)
-- php -l on any touched PHP (if the pref-read helper lands as a small PHP function this phase —
-  optional, your call whether to add it now or in Phase 3/4).
-- The scratch-page Playwright proof: drag, anchor-click single, anchor-click multi-straddle —
-  each asserting the exact final DOM order, pasted output.
+- The fixture Playwright proof: scenarios a-e, pasted output.
+- No coverage-theater: at least the multi-straddle assertion demonstrated red on a
+  deliberately wrong component behaviour (temporarily swap insertBefore/insertAfter, paste the
+  red, revert, paste the green).
 - Diff review: zero changes to pfblockerng_category.php or pfblockerng_category_edit.php.
-- No coverage-theater: each scratch-page assertion must be shown to fail on a deliberately wrong
-  component behaviour (e.g. temporarily swap insertBefore for insertAfter in the anchor-click
-  path, confirm the multi-straddle test goes red, then revert) — paste the red-run proof.
+- Canonical gates for touched languages (Python tests: python3 -m pytest, ruff check .,
+  ruff format --check ., mypy tests/).
 
 EXPECTED RESULT
-A production-dormant, isolated-proven shared JS reorder component ready for Phase 3
-(pfblockerng_category.php, lower risk) to wire up first.
+A production-dormant shared reorder component whose input UX AND whose renumber-composition
+premise are both proven against the real platform JS, ready for Phase 3 (category.php, lower
+risk) to wire up first.
 
 COMMIT (single)
     www: add shared client-side drag+anchor-click reorder component (ADR-63 P2)
 Push directly to adr/63-category-reorder-ux; open a PR only if the direct push is rejected.
 
 HANDOFF — write .ADRs/ADR_63_Category_Reorder_UX/RESULTS/02_Results.txt with the fixed fields:
-verdict; what changed + commit; gates with pasted output; the scratch-page proof (all three
-scenarios, including the red-run for the multi-straddle case); the component's exact public
-surface (function names/params) for Phase 3/4 to call; deviations (or "none"); carry-forward.
+verdict; what changed + commit; gates with pasted output; the fixture proof (scenarios a-e,
+including the red-run for multi-straddle); the component's exact public surface (function
+names/params) for Phase 3/4 to call; deviations (or "none"); carry-forward (in particular: the
+exact onAfterMove/order-read contract and any renumber() quirks observed on the real VM).
