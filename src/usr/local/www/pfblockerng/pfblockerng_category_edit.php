@@ -99,7 +99,7 @@ if (isset($_GET)) {
 			$action = 'addgroup';
 		}
 	}
-	if (isset($_GET['atype']) && !empty($_GET['atype'])) {
+	if (isset($_GET['atype']) && !empty($_GET['atype']) && is_string($_GET['atype'])) {
 		$raw_atype = $_GET['atype'];
 		if (str_starts_with($raw_atype, 'Whitelist|')) {
 			$atype = pfb_filter_whitelist_atype($raw_atype);
@@ -138,7 +138,7 @@ if (isset($_POST)) {
 			$action = 'addgroup';
 		}
 	}
-	if (isset($_POST['atype']) && !empty($_POST['atype'])) {
+	if (isset($_POST['atype']) && !empty($_POST['atype']) && is_string($_POST['atype'])) {
 		$raw_atype = $_POST['atype'];
 		if (str_starts_with($raw_atype, 'Whitelist|')) {
 			$atype = pfb_filter_whitelist_atype($raw_atype);
@@ -496,6 +496,19 @@ if ($_POST && isset($_POST['save'])) {
 		}
 		elseif (is_array(${"options_$s_option"}) && !array_key_exists($_POST[$s_option], ${"options_$s_option"})) {
 			$_POST[$s_option] = $s_default;
+		}
+	}
+
+	// issue #1106: reject an array-valued field ('aliasname[]=x') before any string
+	// sink below TypeErrors on it. 'Lmove' is the page's one legitimate array field
+	// (row-move checkboxes, checked-then-Save posts it alongside 'save') and stays exempt.
+	foreach ($_POST as $pfb_post_key => $pfb_post_value) {
+		if ($pfb_post_key === 'Lmove') {
+			continue;
+		}
+		if (!is_scalar($pfb_post_value)) {
+			$input_errors[] = gettext('Invalid value submitted for field:') . ' ' . htmlspecialchars((string) $pfb_post_key);
+			$_POST[$pfb_post_key] = '';
 		}
 	}
 
@@ -1003,7 +1016,7 @@ if (isset($savemsg)) {
 	print_info_box($savemsg);
 }
 
-if (isset($_REQUEST['savemsg'])) {
+if (isset($_REQUEST['savemsg']) && is_string($_REQUEST['savemsg'])) {
 	$savemsg = htmlspecialchars($_REQUEST['savemsg']);
 	print_info_box($savemsg);
 }
