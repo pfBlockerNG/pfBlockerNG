@@ -937,16 +937,19 @@ if (isset($Lmove) && isset($Xmove) && isset($rowdata[$rowid]['row'])
 
 	$disable_move	= TRUE;
 	$move = $final	= array();
+	$pre_votes = $post_votes = 0;
 	foreach ($rowdata[$rowid]['row'] as $key => $row) {
 		if (isset($Lmove[$key])) {
 			$move[] = $row;	// Collect row(s) to move
 
-			$pre = TRUE;
 			if ($Lmove[$key] > $Xmove) {
-				$pre = FALSE;
+				$post_votes++;
+			} else {
+				$pre_votes++;
 			}
 		}
 	}
+	$pre = ($post_votes > $pre_votes) ? FALSE : TRUE;
 
 	foreach ($rowdata[$rowid]['row'] as $key => $row) {
 

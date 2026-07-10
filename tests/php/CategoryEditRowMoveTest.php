@@ -249,4 +249,87 @@ final class CategoryEditRowMoveTest extends TestCase
 			'a crafted Lmove/Xmove self-anchor mismatch must skip the reorder, not duplicate the checked row'
 		);
 	}
+
+	// --- Row 10: issue #1145 -- multiple checked rows straddling the anchor ----
+
+	public function testStraddleTieDefaultsToPreTrue(): void
+	{
+		// Given: five rows, two checked (key1 before anchor, key3 after anchor) --
+		// an equal before/after vote split.
+		$rowdata = $this->rowdata(['row0', 'row1', 'row2', 'row3', 'row4']);
+
+		// When: the reorder runs with the straddling checked set.
+		[$result, ] = $this->runRowMove($rowdata, 0, [1 => '1', 3 => '3'], 2);
+
+		// Then: a tied vote defaults to pre=TRUE (moved block lands after the anchor) --
+		// every checked row's own placement vote counts, not just the last-iterated one.
+		$this->assertSame(['row0', 'row2', 'row1', 'row3', 'row4'], $result, 'a tied before/after vote must default to pre=TRUE');
+	}
+
+	public function testStraddleMajorityBeforeWins(): void
+	{
+		// Given: three checked rows straddling the anchor, two voting before (0,1)
+		// and one voting after (3).
+		$rowdata = $this->rowdata(['row0', 'row1', 'row2', 'row3', 'row4']);
+
+		// When: the reorder runs.
+		[$result, ] = $this->runRowMove($rowdata, 0, [0 => '0', 1 => '1', 3 => '3'], 2);
+
+		// Then: the before-majority wins -- moved block lands after the anchor.
+		$this->assertSame(['row2', 'row0', 'row1', 'row3', 'row4'], $result, 'a before-majority vote must win over a single after-voter');
+	}
+
+	public function testStraddleMajorityAfterWins(): void
+	{
+		// Given: three checked rows straddling the anchor, one voting before (1)
+		// and two voting after (3,4).
+		$rowdata = $this->rowdata(['row0', 'row1', 'row2', 'row3', 'row4']);
+
+		// When: the reorder runs.
+		[$result, ] = $this->runRowMove($rowdata, 0, [1 => '1', 3 => '3', 4 => '4'], 2);
+
+		// Then: the after-majority wins -- moved block lands before the anchor.
+		$this->assertSame(['row0', 'row1', 'row3', 'row4', 'row2'], $result, 'an after-majority vote must win over a single before-voter');
+	}
+
+	public function testAllCheckedRowsBeforeAnchorUnaffectedByFix(): void
+	{
+		// Given: two checked rows, both before the anchor -- a unanimous vote,
+		// so majority-vote tallying must agree with the pre-existing behaviour.
+		$rowdata = $this->rowdata(['row0', 'row1', 'row2', 'row3', 'row4']);
+
+		// When: the reorder runs.
+		[$result, ] = $this->runRowMove($rowdata, 0, [0 => '0', 1 => '1'], 3);
+
+		// Then: the moved block lands after the anchor, same as before this fix.
+		$this->assertSame(['row2', 'row3', 'row0', 'row1', 'row4'], $result, 'a unanimous before vote must be unaffected by the fix');
+	}
+
+	public function testAllCheckedRowsAfterAnchorUnaffectedByFix(): void
+	{
+		// Given: two checked rows, both after the anchor -- a unanimous vote,
+		// so majority-vote tallying must agree with the pre-existing behaviour.
+		$rowdata = $this->rowdata(['row0', 'row1', 'row2', 'row3', 'row4']);
+
+		// When: the reorder runs.
+		[$result, ] = $this->runRowMove($rowdata, 0, [3 => '3', 4 => '4'], 1);
+
+		// Then: the moved block lands before the anchor, same as before this fix.
+		$this->assertSame(['row0', 'row3', 'row4', 'row1', 'row2'], $result, 'a unanimous after vote must be unaffected by the fix');
+	}
+
+	public function testSingleCheckedRowAfterAnchorMovesBeforeIt(): void
+	{
+		// Given: the mirror of testValidMoveRelocatesCheckedRowNextToAnchor --
+		// the single checked row (key3) is now AFTER the anchor (key1). Anchor is
+		// deliberately non-zero: a zero-keyed unchecked anchor hits an unrelated,
+		// pre-existing loose-comparison quirk in the untouched second loop.
+		$rowdata = $this->rowdata(['row0', 'row1', 'row2', 'row3']);
+
+		// When: the reorder runs.
+		[$result, ] = $this->runRowMove($rowdata, 0, [3 => '3'], 1);
+
+		// Then: row3 lands adjacent to the anchor, before it this time.
+		$this->assertSame(['row0', 'row3', 'row1', 'row2'], $result, 'a single checked row after the anchor must land adjacent to it, before it');
+	}
 }
