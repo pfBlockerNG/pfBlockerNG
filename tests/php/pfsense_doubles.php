@@ -207,11 +207,18 @@ if (!function_exists('rmdir_recursive')) {
 }
 
 if (!function_exists('unlink_if_exists')) {
-	function unlink_if_exists($path) {
-		if (is_file($path) || is_link($path)) {
-			return @unlink($path);
+	// Mirrors the real pfSense util.inc implementation: the argument is a glob
+	// PATTERN, not a literal path — matches are unlinked, an empty match falls
+	// back to a literal @unlink. Tests must model that re-glob behaviour.
+	function unlink_if_exists($fn) {
+		$to_do = glob($fn);
+		if (is_array($to_do) && count($to_do) > 0) {
+			$results = @array_map("unlink", $to_do);
+			$result = !in_array(false, $results, true);
+		} else {
+			$result = @unlink($fn);
 		}
-		return false;
+		return $result;
 	}
 }
 

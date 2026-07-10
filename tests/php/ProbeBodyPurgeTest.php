@@ -141,8 +141,8 @@ final class ProbeBodyPurgeTest extends TestCase
 	}
 
 	/**
-	 * R4: a nonexistent dir produces no error/warning — glob() on a missing path
-	 * returns FALSE, which the `?: array()` fallback must absorb silently.
+	 * R4: a nonexistent dir is skipped by the is_dir guard — the purge completes
+	 * silently without raising a warning/error.
 	 *
 	 *  GIVEN origdir points at a path that does not exist on disk;
 	 *   WHEN pfb_purge_probe_bodies() is called;
@@ -157,8 +157,11 @@ final class ProbeBodyPurgeTest extends TestCase
 			$raised = $errstr;
 			return TRUE;
 		});
-		pfb_purge_probe_bodies();
-		restore_error_handler();
+		try {
+			pfb_purge_probe_bodies();
+		} finally {
+			restore_error_handler();
+		}
 
 		$this->assertNull(
 			$raised,
@@ -167,9 +170,45 @@ final class ProbeBodyPurgeTest extends TestCase
 	}
 
 	/**
-	 * R5: a hostile filename (embedded space) is purged correctly — glob()/unlink()
-	 * are native filesystem calls, not shell, so no escaping is required or possible
-	 * to bypass.
+	 * R7: an UNSET dir key is skipped silently (no "Undefined array key" warning) and
+	 * must not abort the sweep of the other dir — an unset/empty value must never
+	 * widen the glob towards '/'.
+	 *
+	 *  GIVEN $pfb['origdir'] is unset and a stale probe body sits in dnsorigdir;
+	 *   WHEN pfb_purge_probe_bodies() is called;
+	 *   THEN no warning is raised AND the dnsorigdir probe body is still purged.
+	 */
+	public function test_unset_dir_key_skipped_and_other_dir_still_purged(): void
+	{
+		unset($GLOBALS['pfb']['origdir']);
+		$probe = "{$this->dnsorigdir}/feedD.md5.raw";
+		file_put_contents($probe, 'stale probe body');
+		$this->assertFileExists($probe, 'Precondition: probe body must exist before purge');
+
+		$raised = NULL;
+		set_error_handler(function (int $errno, string $errstr) use (&$raised): bool {
+			$raised = $errstr;
+			return TRUE;
+		});
+		try {
+			pfb_purge_probe_bodies();
+		} finally {
+			restore_error_handler();
+		}
+
+		$this->assertNull(
+			$raised,
+			sprintf('pfb_purge_probe_bodies() must not warn on an unset dir key, got: %s', $raised)
+		);
+		$this->assertFileDoesNotExist(
+			$probe,
+			'an unset origdir must not stop the dnsorigdir sweep'
+		);
+	}
+
+	/**
+	 * R5: a hostile filename (embedded space) is purged correctly — glob() and
+	 * unlink() take literal paths here, no shell is involved.
 	 *
 	 *  GIVEN a probe body named with an embedded space;
 	 *   WHEN pfb_purge_probe_bodies() is called;
@@ -190,12 +229,44 @@ final class ProbeBodyPurgeTest extends TestCase
 	}
 
 	/**
+	 * R8: a glob-metacharacter filename is purged, alongside a coincidental sibling
+	 * the bracket pattern would match. Pins the direct-@unlink contract: re-globbing
+	 * the resolved path (unlink_if_exists() behaviour) would delete only the sibling
+	 * and leave the bracket-named leftover on disk.
+	 *
+	 *  GIVEN probe bodies 'weird[z].md5.raw' and 'weirdz.md5.raw' in origdir
+	 *        ('[' sorts before 'z', so the sweep reaches the bracket name first);
+	 *   WHEN pfb_purge_probe_bodies() is called;
+	 *   THEN both files are removed.
+	 */
+	public function test_purges_glob_metachar_filename_and_its_glob_decoy(): void
+	{
+		$target = "{$this->origdir}/weird[z].md5.raw";
+		$decoy  = "{$this->origdir}/weirdz.md5.raw";
+		file_put_contents($target, 'stale probe body (bracket name)');
+		file_put_contents($decoy, 'stale probe body (decoy)');
+		$this->assertFileExists($target, 'Precondition: bracket-named probe body must exist before purge');
+		$this->assertFileExists($decoy, 'Precondition: decoy probe body must exist before purge');
+
+		pfb_purge_probe_bodies();
+
+		$this->assertFileDoesNotExist(
+			$target,
+			'a glob-metachar-named probe body must be unlinked literally, not re-globbed away'
+		);
+		$this->assertFileDoesNotExist(
+			$decoy,
+			'the decoy probe body matches *.md5.raw and must be purged too'
+		);
+	}
+
+	/**
 	 * R6: source-pin (install.inc is not loadable by the unit harness — see
 	 * InstallDnsblMoveRestartGuardTest). Pins the install-time wiring the harness
-	 * cannot execute: pfb_purge_probe_bodies() must actually be called.
+	 * cannot execute: a LIVE (uncommented) pfb_purge_probe_bodies() call.
 	 *
 	 *  GIVEN the pfblockerng_install.inc source;
-	 *   THEN it contains the literal call 'pfb_purge_probe_bodies();'.
+	 *   THEN a line calls pfb_purge_probe_bodies(); with no comment marker before it.
 	 */
 	public function test_install_inc_calls_purge_probe_bodies(): void
 	{
@@ -203,10 +274,10 @@ final class ProbeBodyPurgeTest extends TestCase
 		$src = @file_get_contents($path);
 		$this->assertIsString($src, "could not read {$path}");
 
-		$this->assertStringContainsString(
-			'pfb_purge_probe_bodies();',
+		$this->assertMatchesRegularExpression(
+			'/^[ \t]*pfb_purge_probe_bodies\(\);/m',
 			$src,
-			'pfblockerng_install.inc must call pfb_purge_probe_bodies() at install/upgrade'
+			'pfblockerng_install.inc must contain a live (uncommented, statement-position) pfb_purge_probe_bodies() call'
 		);
 	}
 }

@@ -115,6 +115,9 @@ final class CreateSuppressionFileTest extends TestCase
 	{
 		$warnings = [];
 		set_error_handler(static function (int $errno, string $errstr) use (&$warnings): bool {
+			if ((error_reporting() & $errno) === 0) {
+				return true; // @-suppressed (production-silent, e.g. unlink_if_exists' @unlink) -- not a finding
+			}
 			$warnings[] = $errstr;
 			return true; // swallow -- we assert on the collected list instead
 		}, E_WARNING);
