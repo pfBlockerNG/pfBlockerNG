@@ -231,7 +231,7 @@ the full ABP × DNSBL-TLD-mode integration (ideally folding the PHP TLD pass int
 the Python build for all feeds).
 
 The decision-equivalence of the ADR-06 move (block/resolve/whitelist/HSTS/noAAAA
-across hosts/plain/csv:pon, plus feed/group attribution and the emitted count) is
+across hosts/plain, plus feed/group attribution and the emitted count) is
 pinned by the golden + build unit tests, and the ADR-07 ABP semantics + the
 no-regression fast path by the `test_adr07_*` suite — all in the default `pytest`
 run:

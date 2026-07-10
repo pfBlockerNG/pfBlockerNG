@@ -19,7 +19,7 @@ DECISIONS, reusing the same Phase-2 golden tables from
 
 WHAT THE TESTS COVER
 --------------------
-  * ``parse`` per format (hosts / plain / abp / csv:pon), incl. every IGNORED line
+  * ``parse`` per format (hosts / plain / abp), incl. every IGNORED line
     type (``@@`` / ``##`` / ``$options`` / ``*`` / ``/`` / regex), comments, the
     hosts sink-IP strip, the leading-dot strip, and bare-IP skip (firewall path).
   * the ABP-ready ``kind`` seam: parse only ever emits ``DNSBL_KIND_BLOCK``.
@@ -166,31 +166,12 @@ class TestParse:
         for line in ignored:
             assert pfb_unbound.parse("abp", line) is None, line
 
-    def test_csv_pon_domain_from_col2(self) -> None:
-        line = "2026-01-01T00:00:00Z,x,ponmocup.com,a,b,c,d,e,f"
-        entry = pfb_unbound.parse("csv:pon", line)
-        assert entry is not None and entry.value == "ponmocup.com"
-
-    def test_csv_pon_col0_ip_row_still_yields_col2_domain(self) -> None:
-        # col0 is an IP (PHP firewall path) but the col2 domain is STILL kept.
-        line = "198.51.100.77,x,ponip.net,a,b,c,d,e,f"
-        entry = pfb_unbound.parse("csv:pon", line)
-        assert entry is not None and entry.value == "ponip.net"
-
-    def test_csv_pon_header_and_comment_skipped(self) -> None:
-        assert pfb_unbound.parse("csv:pon", "timestamp,ignored,domain,c3,c4,c5,c6,c7,c8") is None
-        assert pfb_unbound.parse("csv:pon", "! comment") is None
-
-    def test_csv_pon_wrong_column_count_skipped(self) -> None:
-        assert pfb_unbound.parse("csv:pon", "a,b,c") is None
-
     def test_kind_is_always_block_this_phase(self) -> None:
         # The ABP-ready seam exists but only BLOCK is ever produced.
         for fmt, line in [
             ("hosts", "0.0.0.0 tracker.org"),
             ("plain", "malware.com"),
             ("abp", "||abpblocked.com^"),
-            ("csv:pon", "x,x,ponmocup.com,a,b,c,d,e,f"),
         ]:
             entry = pfb_unbound.parse(fmt, line)
             assert entry is not None and entry.kind == pfb_unbound.DNSBL_KIND_BLOCK

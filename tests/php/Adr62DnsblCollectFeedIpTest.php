@@ -10,8 +10,8 @@ use PHPUnit\Framework\TestCase;
  * call sites (3 v4 + 3 v6 pairs) into one helper. Pins the asymmetry the 6 original
  * blocks shared: v4 sanitizes the candidate THEN validates the sanitized result; v6
  * validates the candidate RAW and appends it unsanitized. $guard_value drives family
- * detection and can differ from $candidate_value (the csv:pon site's shape, where the
- * family check runs on one CSV column but the collected value is another).
+ * detection and can differ from $candidate_value (the pon-feed CSV site's shape, where
+ * the family check runs on one CSV column but the collected value is another).
  */
 #[CoversFunction('pfb_dnsbl_collect_feed_ip')]
 final class Adr62DnsblCollectFeedIpTest extends TestCase
@@ -75,7 +75,7 @@ final class Adr62DnsblCollectFeedIpTest extends TestCase
 
 	public function testGuardDiffersFromCandidateMirrorsCsvPonSite(): void
 	{
-		// csv:pon's shape: the family check runs on csvline[0] (here the guard,
+		// the pon-feed CSV site's shape: the family check runs on csvline[0] (here the guard,
 		// 192.0.2.9) but the value collected is csvline[2] (here the candidate,
 		// 192.0.2.200) -- the appended value must be the CANDIDATE's, not the guard's.
 		$ip4 = [];

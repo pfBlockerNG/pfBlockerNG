@@ -23,7 +23,7 @@ EVERY golden decision is reproduced -- for both TOP1M scenarios -- and that no
 firewall IP leaks into the domain build.
 
 If a future change makes PHP hand Python the ORIGINAL raw feed lines per format
-instead (format_hint hosts/abp/csv:pon), the existing test_adr06_init_from_raw.py
+instead (format_hint hosts/abp), the existing test_adr06_init_from_raw.py
 already pins that path; this file pins the Phase-5 ``plain``-only boundary.
 """
 

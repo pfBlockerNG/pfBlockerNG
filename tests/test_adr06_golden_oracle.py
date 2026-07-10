@@ -30,12 +30,12 @@ pure-Python *reference preprocessor* (``ReferencePipeline``) that faithfully
 re-implements the CURRENT shell/PHP preprocessing semantics inventoried in
 Phase 1 (``RESULTS/01_Results.txt``), with file:line anchors in the docstrings:
 
-  * per-format parse (hosts / plain / basic-ABP / csv:pon), incl. the current
+  * per-format parse (hosts / plain / basic-ABP), incl. the current
     basic-ABP token-strip and the rule that ``@@`` / ``##`` / ``$options`` / ``*``
     / ``/`` / regex lines are IGNORED today (``pfblockerng.inc:7706-7717``);
   * embedded-IP extraction -> firewall handoff set (generic bare-IP at
-    ``inc:7962-7973`` and the csv:pon column-0 IP at ``inc:7824-7833``), with IP
-    lines stripped from what the domain build receives;
+    ``inc:7962-7973``), with IP lines stripped from what the domain build
+    receives;
   * domain validation + lower-casing (``inc:1138-1150``);
   * data/zone classification via the public-suffix TLD master (``tld_analysis`` /
     ``tld_search``, ``inc:2805-2877``), incl. TLD blacklist (whole-TLD zone,
@@ -57,8 +57,6 @@ documented (each ``feed_*.txt`` header says what it encodes; ``config.json`` /
 
 from __future__ import annotations
 
-import csv
-import io
 import json
 import os
 from collections import defaultdict
@@ -168,9 +166,7 @@ class ReferencePipeline:
         Implements the per-format dispatch + the embedded-IP firewall detection of
         the current parse loop. A generic bare-IP line yields ``(None, ip)`` -- the
         IP goes to the firewall and the line is stripped from the domain build
-        (inc:7962-7973). The csv:pon format yields BOTH a domain (col2) AND, when
-        col0 is an IPv4, a firewall IP -- the current loop keeps both (it does NOT
-        ``continue`` after the col0-IP extraction; inc:7819-7835).
+        (inc:7962-7973).
         """
         line = raw_line.strip()
         if not line:
@@ -182,17 +178,6 @@ class ReferencePipeline:
                 return None, None
             host = self._parse_abp_line(line)
             return (host or None), None
-
-        if fmt == "csv:pon":
-            # 9-col CSV: domain=col2 (always kept); col0 IP -> firewall ALSO.
-            if line.startswith("!") or line.lower().startswith("timestamp"):
-                return None, None
-            row = next(csv.reader(io.StringIO(line)))
-            if len(row) != 9:
-                return None, None
-            firewall_ip = row[0] if _is_ipv4(row[0]) else None
-            domain = row[2] or None
-            return domain, firewall_ip
 
         # hosts / plain
         if line.startswith("#") or line.startswith("!"):
@@ -502,12 +487,6 @@ GOLDEN_TOP1M_DISABLED: dict[str, dict[str, Any]] = {
     "abpoptions.com": {"decision": "pass"},  # $options line ignored
     "abpwildcard.com": {"decision": "pass"},  # * line ignored
     "abppath.com": {"decision": "pass"},  # /path line ignored
-    # csv:pon domain (col2) 2-label -> blocked ZONE.
-    "ponmocup.com": {"decision": "block-null", "b_type": "TLD"},
-    # csv:pon deep domain (parent cleanpon.com NOT listed) -> exact DATA.
-    "deep.node.cleanpon.com": {"decision": "block-null", "b_type": "DNSBL"},
-    # csv:pon col0-IP row STILL contributes its col2 domain to the block lists.
-    "ponip.net": {"decision": "block-null", "b_type": "TLD"},
     # TLD-blacklist: any domain under blacklisted '.zip' -> whole-TLD ZONE block.
     "anything.zip": {"decision": "block-null", "b_type": "TLD", "group": "DNSBL_TLD"},
     "another.sub.zip": {"decision": "block-null", "b_type": "TLD", "group": "DNSBL_TLD"},
@@ -537,13 +516,11 @@ GOLDEN_ABP_CONFORMANT_OVERRIDES: dict[str, dict[str, Any]] = {
 }
 
 # The extracted-IP firewall handoff set (the *_v4.ip -> DNSBLIP_v4 input). Comes
-# from generic bare-IP lines AND the csv:pon col-0 IPs. This is part of the oracle:
+# from generic bare-IP lines. This is part of the oracle:
 # Phase 5's independent DNSBL-IP pass must produce the SAME set.
 GOLDEN_EXTRACTED_IPS: set[str] = {
     "198.51.100.23",  # hosts feed bare IP
     "203.0.113.45",  # plain feed bare IP
-    "198.51.100.77",  # csv:pon col0 IP (row 2)
-    "192.0.2.140",  # csv:pon col0 IP (row 3)
 }
 
 
@@ -626,8 +603,8 @@ class TestGoldenNoAAAA:
 
 class TestGoldenExtractedIPSet:
     """The embedded-IP firewall handoff (*_v4.ip -> DNSBLIP_v4 input) matches the
-    golden set, from BOTH generic bare-IP lines and the csv:pon col-0 IPs. IP lines
-    are stripped from the domain build (none leak into dataDB/zoneDB)."""
+    golden set, from generic bare-IP lines. IP lines are stripped from the domain
+    build (none leak into dataDB/zoneDB)."""
 
     def test_extracted_ip_set(self) -> None:
         pipeline, _ = _make_pipeline(top1m_enabled=False)

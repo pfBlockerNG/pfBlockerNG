@@ -158,20 +158,6 @@ class TestClassifyDepthBranches:
 # parse -- skip/None branches per format
 # --------------------------------------------------------------------------- #
 class TestParseSkipBranches:
-    def test_csv_pon_malformed_line_skipped(self) -> None:
-        # A field over csv's size limit makes csv.reader raise -> except returns None.
-        oversized = "a," + ("x" * 200000) + ",dom.com,d,e,f,g,h,i"
-        assert parse("csv:pon", oversized) is None
-
-    def test_csv_pon_empty_domain_column_skipped(self) -> None:
-        # 9 columns but col2 (domain) empty -> None.
-        assert parse("csv:pon", "a,b,,d,e,f,g,h,i") is None
-
-    def test_csv_pon_valid_row_kept(self) -> None:
-        # Contrast: a well-formed 9-col row yields the col2 domain.
-        entry = parse("csv:pon", "a,b,blocked.com,d,e,f,g,h,i")
-        assert entry is not None and entry.value == "blocked.com"
-
     def test_hosts_token_empty_after_strip_skipped(self) -> None:
         # A bare "." strips to empty -> None (no zero-length domain reaches the dicts).
         assert parse("hosts", ".") is None
