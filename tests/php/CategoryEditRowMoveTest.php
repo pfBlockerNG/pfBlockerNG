@@ -221,15 +221,8 @@ final class CategoryEditRowMoveTest extends TestCase
 		// When: the reorder runs with Xmove referencing the same checked row.
 		[$result, ] = $this->runRowMove($rowdata, 0, [1 => '1'], '1');
 
-		// Then: the row set is unchanged. This was already a no-duplicate no-op
-		// pre-fix (the honest Lmove[key]===key value keeps the merge from
-		// duplicating); post-fix the new outer-guard clause additionally makes
-		// this a clean whole-block skip. The extracted oracle stops before the
-		// side effects (config_set_path/write_config/header/exit) that would
-		// distinguish "entered, no-op" from "skipped", so this row's array
-		// assertion does not itself flip red-to-green -- it is a behaviour-
-		// preservation pin, the same distinction row 1 documents for its own
-		// baseline assertion.
+		// Then: the row set is unchanged -- pre-fix already a no-op here, post-fix
+		// the outer guard explicitly skips; a behaviour-preservation pin either way.
 		$this->assertSame(
 			['row0', 'row1', 'row2'],
 			$result,
