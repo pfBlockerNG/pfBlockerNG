@@ -1561,6 +1561,25 @@ class TestOperateDnsbl:
         assert dec.snap_gen == live_gen
         assert dec.dnsbl is pfb_unbound.UNSET
 
+    def test_older_generation_straggler_neither_evicts_nor_extends(self, monkeypatch: Any) -> None:
+        # issue #1074 hardening: a straggler carrying an OLDER generation gets a
+        # throwaway Decision -- the newer resident entry is neither evicted (cache
+        # thrash) nor extended, and the straggler's verdict is invisible to readers.
+        self._enable(monkeypatch)
+        older_gen = pfb_unbound._snapshot.gen
+        newer_gen = next(pfb_unbound._snapshot_gen)
+        resident = pfb_unbound._decision_for("evil.com", newer_gen)
+        resident.dnsbl = _dnsbl_decision()  # a live not-found (allow) verdict
+        straggler = pfb_unbound._decision_for("evil.com", older_gen)
+        assert straggler is not resident
+        assert straggler.snap_gen == older_gen
+        straggler.dnsbl = _dnsbl_decision(
+            is_found=True, log_type="1", b_type="DNSBL", p_type="Python", feed="F", group="G", b_eval="evil.com"
+        )
+        stored = pfb_unbound.decisionDB.get("evil.com")
+        assert stored is resident
+        assert stored.dnsbl.is_found is False
+
     def test_group_policy_bypass(self, monkeypatch: Any) -> None:
         self._enable(monkeypatch)
         add_data("evil.com", log="1", index=0)
@@ -2321,6 +2340,31 @@ class TestStage2UnifiedDecision:
         assert qstate.ext_state[0] == MODULE_FINISHED
         answers = DNSMessage.instances[-1].answer
         assert any("1.2.3.4" in a for a in answers)
+
+    def test_stale_generation_noaaaa_memo_is_recomputed(self, monkeypatch: Any) -> None:
+        # issue #1074 sibling axis: a foreign-generation noaaaa=True memo for a name
+        # NOT in the live noAAAADB must be recomputed (query proceeds), not re-served
+        # as a block -- same staleness gate as the dnsbl axis.
+        self._enable(monkeypatch)
+        add_noaaaa("unrelated.com", wildcard=False)  # enable the path; x.com unlisted
+        assert "x.com" not in pfb_unbound.noAAAADB
+        pfb_unbound.decisionDB["x.com"] = pfb_unbound.Decision(noaaaa=True)  # unstamped -> stale
+        qstate = make_qstate("x.com.", qtype=RR_AAAA)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE
+
+    def test_stale_generation_safesearch_memo_is_recomputed(self, monkeypatch: Any) -> None:
+        # issue #1074 sibling axis: a foreign-generation safesearch memo for a name
+        # NOT in the live safeSearchDB must be recomputed (no rewrite), not re-served.
+        self._enable(monkeypatch)
+        pfb_unbound.pfb["safeSearchDB"] = True
+        assert "x.com" not in pfb_unbound.safeSearchDB
+        pfb_unbound.decisionDB["x.com"] = pfb_unbound.Decision(
+            safesearch={"A": "1.2.3.4", "AAAA": ""}  # unstamped -> stale
+        )
+        qstate = make_qstate("x.com.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE
 
     def test_operate_respects_decisiondb_cap(self, monkeypatch: Any) -> None:
         # decisionDB is the LRU; with cap 1, querying a second blocked name evicts the

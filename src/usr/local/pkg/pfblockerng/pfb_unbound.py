@@ -2769,10 +2769,9 @@ def get_details_dnsbl(
     # path silently misses it -> per-feed under-count).
     q_name_key = q_name.lower()
     cached = decisionDB.get(q_name_key)
-    # No snap_gen check here (issue #1074): this path only ATTRIBUTES a block operate()
-    # already served for this query -- operate() refreshed the memo first, and gating on
-    # the live generation would drop the log line for a block genuinely served just
-    # before a swap landed.
+    # No snap_gen check (issue #1074): this only ATTRIBUTES the block operate() served
+    # -- a live-gen gate would drop the log line for a block served just before a swap;
+    # worst case is a swap-race mis-attributed feed/group in the log, never the answer.
     dnsbl = cached.dnsbl if cached is not None else UNSET
     if dnsbl is not UNSET and dnsbl.is_found and not dnsbl.in_whitelist:
         # If logging is disabled, do not log blocked DNSBL events (Utilize DNSBL Webserver)
@@ -5655,11 +5654,14 @@ class Decision:
 
 def _decision_for(name: str, snap_gen: int) -> Decision:
     # Get-or-create the one Decision entry for a name; axes are filled in by the caller.
-    # issue #1074: a memo is only valid for the snapshot generation that produced it --
-    # an entry stamped with another generation is replaced, never extended, so a write
-    # that lost a race with rebuild_and_swap's decisionDB.clear() cannot be extended
-    # into a fresh-looking verdict.
+    # issue #1074: a memo is only valid for the generation that produced it -- a
+    # foreign-generation entry is replaced, never extended.
     dec = decisionDB.get(name)
+    if dec is not None and dec.snap_gen > snap_gen:
+        # An older-generation straggler neither evicts the newer entry nor extends it:
+        # it writes into a throwaway Decision no reader will ever see (gen advances
+        # monotonically, so its verdict can never become current again).
+        return Decision(snap_gen=snap_gen)
     if dec is None or dec.snap_gen != snap_gen:
         dec = Decision(snap_gen=snap_gen)
         decisionDB[name] = dec
@@ -6612,10 +6614,9 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
             # ("let Unbound resolve it" / whitelisted) -- both are decisions, both
             # are memoized. A repeat query (including a CNAME-blocked name, keyed on
             # the original) short-circuits here without re-resolving or re-evaluating.
-            # issue #1074: a memo stamped by ANOTHER snapshot generation is stale --
-            # a thread that raced rebuild_and_swap's clear() can re-insert an
-            # old-snapshot verdict after the swap, so the stamp, not mere presence,
-            # decides validity.
+            # issue #1074: a foreign-generation memo is stale -- a thread racing
+            # rebuild_and_swap's clear() can re-insert an old-snapshot verdict after
+            # the swap, so the stamp, not mere presence, decides validity.
             dec = decisionDB.get(q_name)
             dnsbl = dec.dnsbl if dec is not None and dec.snap_gen == snap.gen else UNSET
             if dnsbl is UNSET:
