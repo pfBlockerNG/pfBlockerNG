@@ -199,8 +199,7 @@ class TestLoadTldMaster:
         # '' -- must be dropped like PHP's tld_analysis(), not seed a '' bucket.
         # 'com' (dot-less, unaffected) proves the guard is scoped to the empty case.
         tlds = _dnsbl_load_tld_master(["bad.", ".", "..", "com"], [], [])
-        assert "" not in tlds
-        assert tlds["com"] == {"com": ""}
+        assert tlds == {"com": {"com": ""}}
 
 
 # --------------------------------------------------------------------------- #
