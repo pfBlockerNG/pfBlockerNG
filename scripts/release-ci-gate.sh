@@ -19,18 +19,25 @@
 # fan-out legs cannot make the run fall off the page and green-light an
 # ancestor instead; and a PRESENT but not-yet-concluded run (conclusion null,
 # CI still running) fails loudly instead of reading as "no such check" and
-# falling through to the ancestor walk.
+# falling through to the ancestor walk. A failed query (rate limit, network,
+# auth) also aborts loudly -- an unverifiable tip must never read as "never
+# ran CI". Runs sort by started_at: a newer in-progress rerun has
+# completed_at null, which sorts FIRST, so a completed_at sort would let the
+# older completed run shadow it.
 
 set -u
 
 CONCLUSION=""
 CHECK_SHA=""
 for sha in $(git rev-list --first-parent -n 20 HEAD); do
-	c=$(gh api \
+	if ! c=$(gh api \
 		"repos/${REPO}/commits/${sha}/check-runs?check_name=All%20tests%20passed&per_page=100" \
 		--jq '[.check_runs[] | select(.name == "All tests passed")]
-		      | sort_by(.completed_at) | last
-		      | if . == null then "" elif .conclusion == null then "pending" else .conclusion end')
+		      | sort_by(.started_at) | last
+		      | if . == null then "" elif .conclusion == null then "pending" else .conclusion end'); then
+		echo "::error::check-runs query failed for ${sha} — cannot verify CI state; aborting instead of walking back."
+		exit 1
+	fi
 	if [ -n "$c" ]; then CONCLUSION="$c"; CHECK_SHA="$sha"; break; fi
 done
 if [ -z "$CONCLUSION" ]; then
