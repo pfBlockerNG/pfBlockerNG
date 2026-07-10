@@ -1,0 +1,93 @@
+================================================================================
+PHASE 3 PROMPT — Wire pfblockerng_category.php (adds anchor-click; drag path preserved)
+Target model: Claude Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_63_Category_Reorder_UX/ADR.md   (read §1.1, §2 Decision 2-3, §4 Requirement 6 first)
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch adr/63-category-reorder-ux.
+One commit, pushed to the branch. Implement yourself; do NOT spawn sub-agents.
+Blast-radius note for the gate: BEHAVIOUR-CHANGING, scoped narrowly. This phase adds a new
+input path (anchor-click) to a live page. Delta budget: it may change how a user CAN produce a
+given row order (mobile/touch users gain a working reorder method — fixes #1147); it must NOT
+change what order gets PERSISTED for a given final visual state reached via the EXISTING drag
+path (Semantics #1) — the Phase-1 drag oracle must stay green, unmodified, byte-identical.
+
+WHY THIS PHASE EXISTS
+pfblockerng_category.php already has the correct persistence shape (stable pfb_r{id} + ids[]
+order array, computed once at Save) — issue #1147 (mobile drag broken) is purely a missing
+INPUT method, not a persistence problem. This is the lower-risk of the two pages (no
+server-side change at all) and lands before Phase 4 (which also changes a save handler) to
+prove the Phase-2 component against a real page first.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_63_Category_Reorder_UX/RESULTS/02_Results.txt — the component's exact public
+  surface (function/param names) you must call. If missing, Phase 2 is not complete; STOP and
+  report. Also read RESULTS/01_Results.txt for the Phase-1 category.php ids[] oracle you must
+  keep green.
+- .ADRs/ADR_63_Category_Reorder_UX/ADR.md §1.1, §1.4 (geoip/gtype axis), §2 Decision 2-3,
+  Semantics #1/#3/#6/#7, §4 Requirement 6.
+- src/usr/local/www/pfblockerng/pfblockerng_category.php — the tr id="pfb_r{r_id}" convention
+  (~:426), the existing sortable init (~:687), save_new_changes() (~:611-664), the server-side
+  ids[] handler (~:276-303, UNCHANGED by this phase — confirm via diff it stays untouched).
+- tests/smoke/ui/test_browser_category.py (the existing Playwright harness to extend, not
+  replace).
+- CLAUDE.md "Smoke tests" Tier A/B rules.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt predate this phase; RESULTS/01-02 and the
+live tree override this prompt on any conflict — verify each claim before acting, flag
+contradictions loudly in the handoff.
+
+ACTION PLAN
+1. Read `system/webgui/roworderdragging` via `config_path_enabled('system/webgui',
+   'roworderdragging')` server-side; pass the resulting boolean into the page's JS (a small
+   inline JS variable, matching the page's existing `var pagetype = null;`-style convention) so
+   the Phase-2 component knows whether to init drag, anchor-click, or both.
+2. Render the anchor-click UI (checkbox + per-row anchor button) using the component's expected
+   markup/id contract from Phase 2's handoff, reusing the EXISTING pfb_r{r_id} stable id — do
+   not introduce a second id scheme for the same row.
+3. Wire the Phase-2 component's Save-time order-read into `save_new_changes()` in place of (or
+   alongside — your call, document why) the current direct `sortable('serialize')` call, so the
+   SAME `ids[]` value is produced whether the user dragged, anchor-clicked, or both in the same
+   session before Save.
+4. Confirm via diff that the server-side ids[] handler (~:276-303) is byte-identical to
+   `origin/devel` — this phase is client-only.
+
+CONSTRAINTS
+- No server-side PHP change beyond the single roworderdragging read (item 1) — the save
+  handler itself is unchanged.
+- Do not touch the geoip-specific per-row-field save branch (~:261) — unrelated to reorder.
+- Comment budget <=3 lines; www/ JS conventions (lowercase booleans/const).
+
+VERIFICATION (all must pass)
+- php -l on the touched file; composer phpstan; composer phpcs -- --standard=phpcs.xml.dist src/.
+- Tier A (`ui_render`): the page renders 200, no PHP errors, both UI affordances present when
+  roworderdragging is unset.
+- Tier B (`ui_browser`, Playwright): across the §2 gtype axis {ipv4, ipv6, geoip, dnsbl} --
+  (a) drag-only reorder + Save: assert against the Phase-1 golden oracle, UNCHANGED
+      (regression proof: this is the same scenario Phase 1 pinned, now exercised through a page
+      that also has anchor-click available and must still behave identically for a pure-drag
+      sequence).
+  (b) anchor-click-only reorder (single row, then multiple rows straddling the anchor target) +
+      Save, with NO drag interaction: assert final persisted order matches DOM order at Save
+      time (new coverage, proves #1147 fixed without simulating touch/drag).
+  (c) mixed drag-then-anchor-click in the same session + Save: assert final order matches.
+  (d) roworderdragging SET: assert only anchor-click renders (no drag handles/sortable init).
+- Diff review: server-side ids[] handler byte-identical to origin/devel.
+
+EXPECTED RESULT
+pfblockerng_category.php offers both drag and anchor-click reorder, gated by
+roworderdragging, with identical persisted-order semantics regardless of input method; #1147
+is fixed as a direct consequence.
+
+COMMIT (single)
+    www: add anchor-click reorder to pfblockerng_category.php, closes #1147 (ADR-63 P3)
+Push directly to adr/63-category-reorder-ux; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_63_Category_Reorder_UX/RESULTS/03_Results.txt with the fixed fields:
+verdict; what changed + commit; gates with pasted output; the four Tier-B scenario results
+(a-d) with pasted output; confirmation the server-side handler diff is empty; deviations (or
+"none"); carry-forward for Phase 4 (in particular: exactly how roworderdragging was wired, so
+Phase 4 mirrors it, not reinvents it).

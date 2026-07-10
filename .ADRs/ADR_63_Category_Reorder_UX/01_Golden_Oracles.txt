@@ -1,0 +1,95 @@
+================================================================================
+PHASE 1 PROMPT — Golden oracles for both pages' CURRENT reorder behaviour
+Target model: Claude Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_63_Category_Reorder_UX/ADR.md   (read §1.1, §1.4, §1.5, §2 coverage matrix first)
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch adr/63-category-reorder-ux.
+One commit, pushed to the branch. Implement yourself; do NOT spawn sub-agents. This phase is
+BEHAVIOUR-PRESERVING — it adds tests only, touches zero production code.
+Blast-radius note for the gate: NONE. This phase adds test coverage only; no production file
+changes, no persisted-behaviour change possible.
+
+WHY THIS PHASE EXISTS
+Later phases delete pfblockerng_category_edit.php's $Lmove/$Xmove reorder block and change how
+both pages persist row order. Before touching either, this phase captures TODAY's exact
+behaviour as a falsification harness: pfblockerng_category.php's ids[] AJAX order-save path has
+NO existing test coverage at all (confirmed by grep — a real pre-existing gap, not caused by
+this ADR but blocking safe measurement of it); pfblockerng_category_edit.php's sort=='sort' and
+no-sort $Lmove/$Xmove behaviour IS already covered (tests/php/CategoryEditRowMoveTest.php,
+tests/smoke/ui/test_category_edit_row_move.py, post-#1145-fix) but must be reconfirmed green
+here as the explicit "before" snapshot every later phase is measured against.
+
+REQUIRED READING
+- .ADRs/ADR_63_Category_Reorder_UX/ADR.md (§1.1-§1.5, §2 Decision + coverage matrix + Semantics
+  #1-#7).
+- src/usr/local/www/pfblockerng/pfblockerng_category.php — the "Save new Table order format
+  (via AJAX)" block (~:276-303), the ids[] JS serialize + save_new_changes() (~:611-664), the
+  sortable tr id convention (id="pfb_r{r_id}", ~:426).
+- src/usr/local/www/pfblockerng/pfblockerng_category_edit.php — the sort/no-sort field
+  (~:413, ~:1458-1460), the auto-sort branch (~:1096), the no-sort move_anchor UI (~:1132), the
+  $Lmove/$Xmove reorder block (~:928-980).
+- tests/php/CategoryEditRowMoveTest.php (existing oracle, do not modify).
+- tests/smoke/ui/test_category_edit_row_move.py, tests/smoke/ui/test_category.py,
+  tests/smoke/ui/test_browser_category.py, tests/smoke/ui/test_browser_category_edit.py (the
+  existing Tier-B/Playwright harness conventions to reuse — do not invent a new harness).
+- CLAUDE.md "Test coverage" (mandatory five), "Smoke tests" (Tier A/B rules, fixture rules —
+  helpers.unique_domain(), inert data only).
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before any phase ran; the live
+tree and prior RESULTS override this prompt on any conflict — verify each claim before acting on it, and flag
+contradictions loudly in the handoff.
+
+ACTION PLAN
+1. Re-derive the §2 coverage matrix from a fresh grep of both files' current code (gtype
+   handling, sort field, row id conventions) — record any discrepancy from the ADR's matrix in
+   the handoff.
+2. Add Tier-B (ui_e2e or ui_browser, match the existing test_category.py/test_browser_category.py
+   convention for HTTP-POST vs real-browser-drag as appropriate) coverage for
+   pfblockerng_category.php's ids[] AJAX order-save path: for each gtype in {ipv4, ipv6, geoip,
+   dnsbl}, POST a crafted ids[] reflecting a specific new order, reload, assert the persisted
+   row order matches. Include a vacuity check (mutate one golden expected order — the oracle
+   must go red) per CLAUDE.md's coverage-theater guard.
+3. Confirm (do not modify) tests/php/CategoryEditRowMoveTest.php and
+   tests/smoke/ui/test_category_edit_row_move.py are green on the current tree — this is the
+   "before" snapshot; paste the run in the handoff.
+4. Add one small oracle (PHPUnit or Tier-B, your call — document which and why) explicitly
+   pinning pfblockerng_category_edit.php's sort=='sort' output (auto-order by header then
+   state) for a mixed enabled/disabled, out-of-alphabetical-order fixture, across the same
+   gtype axis — this is Semantics #2's byte-identity baseline every later phase must not move.
+
+CONSTRAINTS
+- Zero production-code changes in this phase. Test files only.
+- Fixtures: inert data only (RFC 5737/3849 IPs, helpers.unique_domain() where a Tier-B test
+  touches DNS-resolvable names) — never RFC 6761 TLDs or HSTS-preload names.
+- Do not touch tests/php/CategoryEditRowMoveTest.php or test_category_edit_row_move.py's
+  content — Phase 4 deletes them; this phase only re-runs them.
+- New tests are intent-named (what "today's" behaviour is being pinned), not mechanics-named.
+
+VERIFICATION (all must pass)
+- Canonical gates for touched languages (PHP tests: php -l, vendor/bin/phpunit, composer
+  phpstan, composer phpcs -- --standard=phpcs.xml.dist src/ if any src/ touched — none expected
+  this phase; Python tests: python3 -m pytest, ruff check ., ruff format --check ., mypy tests/).
+- New category.php ids[] oracle: green, with its vacuity check demonstrated (mutate → red,
+  paste the failure; restore → green).
+- Existing CategoryEditRowMoveTest.php + test_category_edit_row_move.py: green, unmodified,
+  pasted output.
+- New sort=='sort' oracle: green.
+- No existing test file's assertions weakened.
+
+EXPECTED RESULT
+A complete, evidenced "before" snapshot of both pages' current reorder behaviour, including the
+previously-uncovered category.php ids[] path, ready to gate every later phase's claim of
+behaviour-preservation (Phases 2-3) or intentional, evidenced delta (Phase 4).
+
+COMMIT (single)
+    tests: pin current category-list and category-edit reorder behaviour (ADR-63 P1)
+Push directly to adr/63-category-reorder-ux; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_63_Category_Reorder_UX/RESULTS/01_Results.txt with the fixed fields
+(CLAUDE.md "THE HANDOFF"): verdict; what changed + commit; gates with pasted output; the
+re-derived coverage matrix (confirm or correct the ADR's); the four new/reconfirmed oracles
+with pasted green (and vacuity-red) output; deviations (or "none"); carry-forward for Phase 2
+(in particular: the exact stable row-id convention and field-naming pattern Phase 4 must match).

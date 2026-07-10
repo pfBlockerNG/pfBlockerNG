@@ -1,0 +1,152 @@
+================================================================================
+PHASE 4 PROMPT — Wire pfblockerng_category_edit.php + retire $Lmove/$Xmove
+Target model: Claude Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_63_Category_Reorder_UX/ADR.md   (read §1.1, §1.3, §1.7, §2 Decision 4-5, §4 first)
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch adr/63-category-reorder-ux.
+One commit, pushed to the branch. Implement yourself; do NOT spawn sub-agents.
+Blast-radius note for the gate: BEHAVIOUR-CHANGING, the ADR's core delta. Delta budget: (a) the
+manual (no-sort) reorder INPUT method changes from full-page-POST-per-move to staged
+drag+anchor-click+single-Save (mobile/touch gains a working method; desktop UX changes from
+one-reload-per-move to instant, only committed on Save); (b) the persisted ORDER for a given
+final visual state must be unchanged from what the old mechanism would have produced for the
+same visual outcome (no reordering-semantics change, only mechanism); (c) sort=='sort'
+(Semantics #2) must NOT move at all -- zero delta there, not even mechanism.
+
+WHY THIS PHASE EXISTS
+The $Lmove/$Xmove/$pre server-side placement-vote logic (pfblockerng_category_edit.php:928-980)
+is the exact code class issue #1145 (majority-vote bug, just fixed, PR #1150) and issue #1149
+(loose-comparison anchor-drop, still open) both live in. This phase does not fix #1149 again --
+it deletes the code class both bugs belong to, replacing server-side placement math with "the
+client already computed the final order; the server validates and persists it," mirroring
+pfblockerng_category.php's already-correct design (ADR §1.3) via the Phase-2 shared component.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_63_Category_Reorder_UX/RESULTS/03_Results.txt -- exactly how roworderdragging was
+  wired (mirror it here, do not reinvent) and the component's confirmed public surface. Also
+  read RESULTS/01_Results.txt for the sort=='sort' oracle and the existing
+  CategoryEditRowMoveTest.php/test_category_edit_row_move.py "before" snapshot this phase must
+  outlive (in coverage, not in code) before deleting them. If either is missing, STOP and report.
+- .ADRs/ADR_63_Category_Reorder_UX/ADR.md §1.1, §1.3, §1.7, §2 Decision 4-5, Semantics
+  #2/#3/#4/#7, Coverage matrix, §4 Requirements 2-6, §7 reject criterion 2.
+- src/usr/local/www/pfblockerng/pfblockerng_category_edit.php -- the sort field (~:413,
+  ~:1458-1460), the auto-sort branch (~:1096, DO NOT TOUCH), the no-sort move_anchor UI
+  (~:1132), the $Lmove/$Xmove/$pre_votes/$post_votes reorder block (~:928-980, TO DELETE), the
+  save-handler's per-row field loop reading state-{id}/format-{id}/url-{id}/header-{id}
+  (~:546-607, the "key_1" suffix-parse pattern -- your new order-validation guard runs in this
+  same save path, ahead of or alongside this loop; read it fully before deciding exactly where).
+- tests/php/CategoryEditRowMoveTest.php (the file being deleted -- read it fully first, to
+  confirm your new coverage is a strict superset of what it pinned, per the ADR's reject
+  criterion 2).
+- tests/smoke/ui/test_category_edit_row_move.py (also being deleted -- same discipline).
+- issue #1129 (`gh issue view 1129 --comments`) for the ORIGINAL hostile-input intent your new
+  guard must preserve: a stale/hostile posted row reference must never silently drop or
+  duplicate a row.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt predate this phase; RESULTS/01-03 and the
+live tree override this prompt on any conflict -- verify each claim before acting, flag
+contradictions loudly in the handoff.
+
+ACTION PLAN (ordered -- new coverage proven a superset BEFORE deleting old tests)
+1. Add a stable per-row id (mirroring category.php's pfb_r{r_id} convention -- name it
+   consistently, e.g. pfb_er{r_id}) to each row's <tr>, rendered only when sort=='no-sort'.
+2. Wire the Phase-2 shared component (drag + anchor-click, gated by roworderdragging exactly as
+   Phase 3 wired it) in place of the current checkbox+anchor-submit-button UI, ONLY inside the
+   sort=='no-sort' branch. The sort=='sort' branch and its rendering path are UNTOUCHED.
+3. Add the order-validation guard to the EXISTING save handler (the isset($_POST['save'])
+   branch): read the posted order array (name it consistently with the component's Phase-2/3
+   contract, e.g. a hidden `row_order[]` field the component populates at Save time -- distinct
+   from category.php's `ids[]` name only if the field-naming differs per page's existing
+   convention; document your choice). Validate: is_array, non-empty when rows exist, every
+   posted index exists in the CURRENT row set, no duplicates, no missing index versus the
+   current row set. On ANY validation failure: skip the reorder (row order stays as currently
+   persisted) but still process every OTHER posted field normally (Semantics #3/#4 -- a bad
+   order must never abort or corrupt the rest of the save). On success: reorder
+   $rowdata[$rowid]['row'] by the validated posted order BEFORE the existing per-field loop
+   applies field edits to it (so a save that both reorders AND edits a field in the same
+   request applies both correctly).
+4. DELETE the $Lmove/$Xmove/$pre_votes/$post_votes reorder block (~:928-980) entirely, including
+   its Location-redirect-per-move step. Confirm via
+   `grep -n '\$Lmove\|\$Xmove\|\$pre_votes\|\$post_votes\|\$pre\b'
+   src/usr/local/www/pfblockerng/pfblockerng_category_edit.php` -- zero hits (Requirement 3).
+5. ONLY once step 6's new tests are green and independently confirmed a strict superset (per
+   coverage, not per line count) of what tests/php/CategoryEditRowMoveTest.php and
+   tests/smoke/ui/test_category_edit_row_move.py pinned: delete both files. If you cannot
+   confirm superset coverage, STOP -- do not delete them; report DONE-WITH-DEVIATION and the ADR
+   §7 reject-criterion-2 fallback (keep the guard alongside; do not force the deletion).
+
+HOSTILE-INPUT ROWS (REQUIRED test data -- fill in the observed result for each; the guard from
+step 3 must handle every one without dropping/duplicating/corrupting a row, and without
+aborting the rest of the save):
+- Posted order array missing an index that exists in the current row set (e.g. 3 rows, posted
+  order names only 2 of them) -> reorder skipped, all 3 rows survive unchanged in original order.
+- Posted order array with a duplicate index (e.g. [0, 1, 1]) -> reorder skipped, no row
+  duplicated in $rowdata.
+- Posted order array with a foreign/stale index (references a row key from a PRIOR page state,
+  e.g. a row deleted in a concurrent tab) -> reorder skipped, current row set unchanged.
+- Posted order field is a non-array (string, int, bool) -> reorder skipped, no TypeError, no
+  crash (mirrors #1106/#1128/#1139-class array-valued-field guard discipline already
+  established elsewhere in this file -- grep the existing pfb_filter/array guards for the
+  house pattern before inventing a new one).
+- Posted order field is empty/absent -> reorder skipped silently (no manual-reorder attempted,
+  e.g. the request came from sort=='sort' mode or a non-reorder save) -- must NOT be treated as
+  an error, just "nothing to reorder."
+- A VALID posted order combined with a field edit (e.g. changing header-1's value) in the SAME
+  request -> both apply correctly: the row is both reordered AND has its edited field reflected
+  at its NEW position.
+
+CONSTRAINTS
+- sort=='sort' rendering and behaviour: byte-identical, zero lines touched in that branch.
+- The order-validation guard is new $_POST-derived logic inside pfblockerng_category_edit.php's
+  input handling -- if the PFBL-01 RequirePfbFilter sniff's scopeFunctions list requires this
+  new capture site to be added, add it (grep tests/phpcs/PfBlockerNG/RequirePfbFilterSniff* and
+  its scope list first).
+- Do not change the geoip-specific per-row-field save logic; only the reorder-specific guard is
+  new.
+- Comment budget <=3 lines; PHP tabs; uppercase TRUE/FALSE.
+- Do not delete tests/php/CategoryEditRowMoveTest.php or test_category_edit_row_move.py until
+  step 5's superset confirmation is explicit in the handoff.
+
+VERIFICATION (all must pass)
+- php -l; vendor/bin/phpunit (full suite); composer phpstan; composer phpcs --
+  --standard=phpcs.xml.dist src/.
+- Requirement 3: the four-symbol grep returns zero hits.
+- PHPUnit: a new pure-function or handler-level test for the order-validation guard covering
+  every hostile-input row above, plus a valid-reorder-plus-field-edit case.
+- Tier A (`ui_render`): the page renders 200 for both sort modes, no PHP errors.
+- Tier B (`ui_browser`, Playwright), across the §2 gtype axis {ipv4, ipv6, geoip, dnsbl}:
+  (a) sort=='no-sort': drag-only reorder + Save -- assert final order.
+  (b) sort=='no-sort': anchor-click-only (single row, then multiple rows straddling the anchor
+      target -- the client-side analogue of #1145's edge case) + Save, NO drag -- assert final
+      order; assert NO full-page reload happened per individual move (only on Save).
+  (c) sort=='sort': verify no manual-reorder UI renders and the auto-sorted order is
+      byte-identical to the Phase-1 oracle (Semantics #2 regression -- this MUST show zero
+      delta).
+  (d) roworderdragging SET: only anchor-click renders on this page too.
+- The hostile-input table: every row's guard behaviour pasted from an executed run (PHPUnit or
+  direct POST simulation mirroring how #1129/#1135's retired tests drove the old mechanism).
+- Superset confirmation: an explicit statement in the handoff mapping every scenario
+  tests/php/CategoryEditRowMoveTest.php and test_category_edit_row_move.py exercised to its
+  equivalent (or stronger) coverage in this phase's new tests, before either old file is deleted.
+
+EXPECTED RESULT
+pfblockerng_category_edit.php's no-sort mode offers drag+anchor-click reorder, staged and
+committed only on Save, with zero server-side placement math (and therefore #1145's bug class
+and #1149's bug both retired by deletion); sort=='sort' is byte-identical to before.
+
+COMMIT (single)
+    www: replace category-edit row-move with staged drag+anchor-click reorder, retires
+    $pre placement math (#1145 class, #1149) (ADR-63 P4)
+Push directly to adr/63-category-reorder-ux; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_63_Category_Reorder_UX/RESULTS/04_Results.txt with the fixed fields:
+verdict; what changed + commit; gates with pasted output; the hostile-input table with observed
+results; the four Tier-B scenario results (a-d) with pasted output, (c) explicitly showing ZERO
+delta; the superset-confirmation mapping old-test-scenario -> new-test-equivalent; confirmation
+of the Requirement-3 zero-hit grep; deviations (or "none", including whether old test files were
+actually deleted or kept per the reject-criterion-2 fallback); carry-forward for Phase 5 (which
+issues/behaviours to mention in release notes and architecture-notes).
