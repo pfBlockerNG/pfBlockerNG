@@ -66,6 +66,13 @@ if ($_POST) {
 
 			// Parse 'rowhelper' fields and save new values
 			if (strpos($key, '-') !== FALSE) {
+				// issue #1070: the scalar validators below (preg_match/strlen/is_port)
+				// throw a PHP 8 TypeError on an array value ('field-0[]=x') before the
+				// input-errors gate. Reject non-scalars up front (mirrors hooks.php).
+				if (!is_scalar($value)) {
+					$input_errors[] = gettext('Invalid sync field value.');
+					continue;
+				}
 				$k_field = explode('-', $key);
 
 				// Collect all rowhelper keys
