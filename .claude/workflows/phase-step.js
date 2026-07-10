@@ -41,13 +41,13 @@ const BRIEF_RECORD = {
 
 const HANDOFF = {
   type: 'object',
-  required: ['verdict', 'what_changed', 'commit', 'gates', 'coverage_matrix', 'deviations', 'carry_forward'],
+  required: ['verdict', 'what_changed', 'commit', 'gates', 'red_green', 'coverage_matrix', 'deviations', 'carry_forward'],
   properties: {
     verdict: { type: 'string', enum: ['DONE', 'DONE-WITH-DEVIATION', 'BLOCKED'] },
     what_changed: { type: 'array', items: { type: 'object', required: ['file', 'why'], properties: { file: { type: 'string' }, why: { type: 'string' } } } },
     commit: { type: 'string', description: 'the commit hash, or "" when BLOCKED' },
     gates: { type: 'array', items: { type: 'object', required: ['cmd', 'output_tail'], properties: { cmd: { type: 'string' }, output_tail: { type: 'string', description: 'pasted output tail with pass/fail counts — never a bare claim' } } } },
-    red_green: { type: 'object', description: 'behaviour-changing steps only; null otherwise. Test-first: the red run precedes any production edit; the test stays byte-identical red->green', properties: { red_output: { type: 'string' }, green_output: { type: 'string' }, red_test_hashes: { type: 'array', items: { type: 'object', required: ['file', 'hash'], properties: { file: { type: 'string' }, hash: { type: 'string', description: 'git hash-object at red-run time — must equal the committed file' } } } } } },
+    red_green: { type: 'array', minItems: 1, description: 'MANDATORY, one entry per behaviour-changing item: PASTED executed red output (run BEFORE any production edit), pasted green output, and git hash-object of each test file at red time. An item with no red run carries carve_out naming the CLAUDE.md exception (brand-new code / behaviour-preserving oracle) instead — never an empty entry. Implementers reliably drop this when optional; it is schema-required for that reason.', items: { type: 'object', required: ['item'], properties: { item: { type: 'string', description: 'which plan item this proves' }, red_output: { type: 'string' }, green_output: { type: 'string' }, red_test_hashes: { type: 'array', items: { type: 'object', required: ['file', 'hash'], properties: { file: { type: 'string' }, hash: { type: 'string', description: 'git hash-object at red-run time — must equal the committed file' } } } }, carve_out: { type: 'string', description: 'the named CLAUDE.md exception, ONLY when no red run applies to this item' } } } },
     coverage_matrix: { type: 'array', items: { type: 'object', required: ['row', 'status'], properties: { row: { type: 'string' }, status: { type: 'string', description: 'test name covering it, or the stated deferral' } } } },
     deviations: { type: 'string', description: '"none" or the judgment calls made' },
     carry_forward: { type: 'string' },
