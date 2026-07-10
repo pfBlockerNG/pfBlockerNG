@@ -5543,6 +5543,8 @@ function dnsbl_alias_update($mode, $alias, $pfbfolder, $lists_dnsbl_current, $al
 					}
 				}
 				@fclose($pfb_output);
+			} else {
+				pfb_logger("\nDNSBL [ {$alias} ]: failed to open master alias file for writing", 2);
 			}
 		}
 

@@ -34,10 +34,13 @@ final class DnsblAliasUpdateTest extends TestCase
 		$this->assertTrue(unlink($workdir) && mkdir($workdir, 0700));
 		$this->workdir = $workdir;
 
-		foreach (['dnsalias', 'dnsbl_info_stats'] as $k) {
+		foreach (['dnsalias', 'dnsbl_info_stats', 'log', 'errlog', 'runlog', 'runlog_active'] as $k) {
 			$this->saved[$k] = array_key_exists($k, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$k] : false;
 		}
 		$GLOBALS['pfb']['dnsbl_info_stats'] = [];
+		$GLOBALS['pfb']['log']    = "{$workdir}/pfblockerng.log";
+		$GLOBALS['pfb']['errlog'] = "{$workdir}/error.log";
+		unset($GLOBALS['pfb']['runlog'], $GLOBALS['pfb']['runlog_active']);
 	}
 
 	protected function tearDown(): void
@@ -101,6 +104,9 @@ final class DnsblAliasUpdateTest extends TestCase
 			$this->statsEntryFor('TestGroup'),
 			'the stats bookkeeping after the copy must still run on a failed open'
 		);
+		// The skip is loud: the operator can see the alias stopped updating.
+		$logged = @file_get_contents($GLOBALS['pfb']['errlog']) . @file_get_contents($GLOBALS['pfb']['log']);
+		$this->assertStringContainsString('failed to open master alias file', $logged);
 	}
 
 	public function testVanishedSourceListIsSkippedNotFatal(): void
