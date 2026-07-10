@@ -3940,7 +3940,7 @@ def _dnsbl_is_abp_rule_line(line: str) -> bool:
     """
     if line.startswith("||") or line.startswith("@@"):
         return True
-    if any(marker in line for marker in _DNSBL_ELEMENT_HIDING_MARKERS):
+    if "#" in line and any(marker in line for marker in _DNSBL_ELEMENT_HIDING_MARKERS):
         return True
     if line.startswith("/"):
         if line.endswith("/") and len(line) > 1:
@@ -3996,7 +3996,7 @@ def parse_abp(
         # a plain-feed ``#`` comment (element-hiding needs a ``##`` token, caught next)
         return None
     # element-hiding / cosmetic (``##`` / ``#@#`` / ``#?#`` / ``#%#`` / ``#$#``) -> SKIP
-    if any(marker in s for marker in _DNSBL_ELEMENT_HIDING_MARKERS):
+    if "#" in s and any(marker in s for marker in _DNSBL_ELEMENT_HIDING_MARKERS):
         return None
 
     # ---- regex rules: /re/ (block) or @@/re/ (allow) --------------------- #
