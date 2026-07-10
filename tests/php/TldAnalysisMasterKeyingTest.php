@@ -52,15 +52,18 @@ final class TldAnalysisMasterKeyingTest extends TestCase
 		$pfb['tld_update']	= array();
 
 		// Master list: dot-less lines ('com', punycode 'xn--80ak6aa92e'), two
-		// dotted lines ('co.om', 'com.ac'), a whitespace-only line and comment
-		// lines (bare and leading-whitespace -- all SKIPPED, issue #1116's
-		// Python-mirror contract), a bare '0' TLD and a dotted-to-'0' line
-		// (both KEPT -- the !empty() footgun fix), and hostile rows (blank,
-		// trailing-dot-only, control-char only) that must never seed a bucket.
+		// dotted lines ('co.om', 'com.ac'), a leading-whitespace real content
+		// line (trimmed and keyed clean, not the raw padded value), whitespace-
+		// only lines (single space AND tab-mixed) and comment lines (bare and
+		// leading-whitespace -- all SKIPPED, issue #1116's Python-mirror
+		// contract), a bare '0' TLD and a dotted-to-'0' line (both KEPT -- the
+		// !empty() footgun fix), and hostile rows (blank, trailing-dot-only,
+		// control-char only) that must never seed a bucket.
 		file_put_contents(
 			$pfb['dnsbl_tld_data'],
 			"com\nco.om\ncom.ac\nxn--80ak6aa92e\n \n\nbad.\n.\n\x01\n"
 			. "# comment\n  # leading space comment\n0\nexample.0\n"
+			. "\t \t\n indented.example.com\n"
 		);
 
 		file_put_contents(
@@ -113,14 +116,16 @@ final class TldAnalysisMasterKeyingTest extends TestCase
 	 * Scenario: the master-list loader buckets a dot-less line.
 	 *
 	 * Given:  a master list with dot-less lines ('com', punycode
-	 *         'xn--80ak6aa92e'), dotted siblings ('co.om', 'com.ac'), comment
-	 *         lines, a whitespace-only line, a bare '0' TLD, a dotted-to-'0'
+	 *         'xn--80ak6aa92e'), dotted siblings ('co.om', 'com.ac'), a
+	 *         leading-whitespace real content line, comment lines, whitespace-
+	 *         only lines (space and tab-mixed), a bare '0' TLD, a dotted-to-'0'
 	 *         line, and hostile rows that carry no usable TLD
 	 * When:   tld_analysis() loads the master list into $tlds
 	 * Then:   each dot-less line is keyed under its own full value, not
 	 *         truncated ('com' not 'om'); 'co.om' keys under 'om' alone (no
 	 *         'com' pollution); the dotted 'com.ac' line still keys under
-	 *         'ac'; comment and whitespace-only lines seed no bucket; a bare
+	 *         'ac'; leading whitespace on real content is trimmed before
+	 *         keying; comment and whitespace-only lines seed no bucket; a bare
 	 *         '0' line and a dotted-to-'0' line both key under '0' (the
 	 *         !empty() footgun fix); the remaining zero-TLD hostile rows seed
 	 *         no bucket; and the loader itself raises no diagnostic
@@ -144,6 +149,14 @@ final class TldAnalysisMasterKeyingTest extends TestCase
 			"'om' bucket must hold only 'co.om'; got: " . var_export($tlds['om'] ?? NULL, TRUE)
 		);
 
+		// R2b: leading whitespace on a real content line is trimmed BEFORE
+		// keying -- ' indented.example.com' keys as the clean, unpadded value.
+		$this->assertTrue(
+			isset($tlds['com']['indented.example.com']),
+			"leading whitespace must be trimmed before keying; got tlds['com']: "
+				. var_export($tlds['com'] ?? NULL, TRUE)
+		);
+
 		// R3: dotted-line regression pin -- 'com.ac' keys under 'ac' either way.
 		$this->assertTrue(
 			isset($tlds['ac']['com.ac']),
@@ -158,11 +171,18 @@ final class TldAnalysisMasterKeyingTest extends TestCase
 		);
 
 		// R4b: a whitespace-only line is SKIPPED (Python-mirror `.strip()`
-		// contract, issue #1116) -- it must seed no bucket at all.
+		// contract, issue #1116) -- it must seed no bucket at all. Covers both
+		// a single space and a tab-mixed line (CLAUDE.md hostile-input class).
 		$this->assertArrayNotHasKey(
 			' ',
 			$tlds,
 			'a whitespace-only line must not seed a bucket; got: ' . var_export($tlds[' '] ?? NULL, TRUE)
+		);
+		$this->assertArrayNotHasKey(
+			"\t \t",
+			$tlds,
+			'a tab-mixed whitespace-only line must not seed a bucket; got: '
+				. var_export($tlds["\t \t"] ?? NULL, TRUE)
 		);
 
 		// R4c: zero-TLD rows (blank, 'bad.', '.', control-char-only, and both
