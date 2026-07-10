@@ -276,6 +276,29 @@ def test_ip_remove_rejects_array_valued_ip(webui: WebUI, smoke_vm: helpers.Smoke
     guard.assert_no_growth()
 
 
+def test_filter_selection_rejects_array_valued_submit_field(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """issue #1139: the 'Filter selection' preprocessor guards an array submit field.
+
+    Given the ``foreach ($ftypes as ...)`` loop (alerts.php, runs only when
+    no ``save`` and no ``filterlogentries_submit`` key are posted -- the
+    'Alert Statistics' Filter-action shape, not the settings-save form),
+    When ``filterlogentries_submit_replysrcipd`` rides PHP array syntax
+    instead of a scalar,
+    Then the page answers HTTP 200 (never a TypeError-driven 500), the
+    session survives, and no candidate ``php_error.log`` gains a byte. The
+    block only populates ``$_POST``/render state, never ``write_config()``,
+    so no teardown is needed.
+    """
+    guard = PhpErrorLogGuard(smoke_vm)
+    guard.snapshot()
+
+    resp = _post_action(webui, {"filterlogentries_submit_replysrcipd[]": "crafted"})
+
+    assert resp.status_code == 200, f"filter-selection array POST -> HTTP {resp.status_code}"
+    assert not looks_like_login_page(resp.text), "filter-selection array POST bounced to the login form"
+    guard.assert_no_growth()
+
+
 # --------------------------------------------------------------------------- #
 # addwhitelistdom (alerts.php:947): adds a domain to the DNSBL Whitelist
 # (``suppression`` node) when ``dnsbl_exclude != 'true'``, OR to the TLD Exclusion

@@ -2,10 +2,11 @@
 
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Alerts-page array-request guard (issue #1128).
+ * Alerts-page array-request guard (issue #1128, #1139).
  *
  * A crafted request submitting an array-valued 'save' or 'ip' field
  * ('save[]=x', 'ip[]=x') reached a strictly-typed string sink
@@ -13,6 +14,10 @@ use PHPUnit\Framework\TestCase;
  * (HTTP 500). The fix defaults 'save' to '' (matching the file's existing
  * default-on-bad-input style) and adds is_string() to the outer 'ip' strpos()
  * guard (the inner check at the nested preg_match() already had one).
+ *
+ * Issue #1139 adds region 3: the 'Filter selection' preprocessor's three
+ * explode(',', $_POST[...]) sinks TypeError the same way on an array-valued
+ * 'filterlogentries_submit_*' field.
  *
  * The page carries top-level execution and cannot be require()d off-appliance,
  * so each region below is eval-extracted verbatim from the REAL source,
@@ -62,6 +67,23 @@ final class AlertsPostGuardTest extends TestCase
 				. ' $ip = \'\';'
 				. $m[1]
 				. ' return $ip; }'
+			);
+		}
+
+		// Region 3: the 'Filter selection' preprocessor -> mutated $_POST.
+		if (!function_exists('pfb_alerts_oracle_filter_selection')) {
+			if (!preg_match(
+				'/\$filter_type = array\(\);\n(.*?)\n\t\/\/ Filter Alerts based on user defined/s',
+				$src,
+				$m
+			)) {
+				throw new RuntimeException('test bootstrap: filter-selection region not found');
+			}
+			eval(
+				'function pfb_alerts_oracle_filter_selection(): array {'
+				. ' $filter_type = array();'
+				. $m[1]
+				. ' return $_POST; }'
 			);
 		}
 	}
@@ -153,5 +175,97 @@ final class AlertsPostGuardTest extends TestCase
 			$this->fail('a nested array ip value must not TypeError: ' . $e->getMessage());
 		}
 		$this->assertSame('', $ip, 'a nested array ip value must resolve to the blank/rejected ip');
+	}
+
+	// --- site 3: 'Filter selection' preprocessor -------------------------
+
+	public function testFilterSelectionReplySrcIpdArrayValueDoesNotThrowAndSkipsField(): void
+	{
+		$_POST['filterlogentries_submit_replysrcipd'] = ['x', 'y'];
+		try {
+			$post = pfb_alerts_oracle_filter_selection();
+		} catch (\TypeError $e) {
+			$this->fail('an array replysrcipd value must not TypeError explode(): ' . $e->getMessage());
+		}
+		$this->assertArrayNotHasKey('filterlogentries_submit', $post, 'an array value must not flip filterlogentries_submit to Apply Filter');
+		$this->assertArrayNotHasKey('filterlogentries_replydomain', $post, 'a skipped field must not set the split domain key');
+		$this->assertArrayNotHasKey('filterlogentries_replysrcip', $post, 'a skipped field must not set the split ip key');
+	}
+
+	public static function ipPairFieldProvider(): array
+	{
+		return [
+			'ipsrcipin'  => ['ipsrcipin', 'filterlogentries_ipsrcip'],
+			'ipsrcipout' => ['ipsrcipout', 'filterlogentries_ipsrcip'],
+			'ipdstipin'  => ['ipdstipin', 'filterlogentries_ipdstip'],
+			'ipdstipout' => ['ipdstipout', 'filterlogentries_ipdstip'],
+		];
+	}
+
+	#[DataProvider('ipPairFieldProvider')]
+	public function testFilterSelectionIpPairArrayValueDoesNotThrowAndSkipsField(string $submitType, string $finalKey): void
+	{
+		$_POST['filterlogentries_submit_' . $submitType] = ['x', 'y'];
+		try {
+			$post = pfb_alerts_oracle_filter_selection();
+		} catch (\TypeError $e) {
+			$this->fail("an array {$submitType} value must not TypeError explode(): " . $e->getMessage());
+		}
+		$this->assertArrayNotHasKey('filterlogentries_submit', $post, 'an array value must not flip filterlogentries_submit to Apply Filter');
+		$this->assertArrayNotHasKey($finalKey, $post, 'a skipped field must not set its split ip key');
+		$this->assertArrayNotHasKey('filterlogentries_ipgeoip', $post, 'a skipped field must not set the split geoip key');
+	}
+
+	public function testFilterSelectionNestedArrayValueDoesNotThrowAndSkipsField(): void
+	{
+		// A nested array ('...replysrcipd[0][]=x', parse_str-shaped) reaches the same
+		// explode() sink as the flat-array case -- covered separately since parse_str()
+		// shapes it differently than a literal PHP array.
+		parse_str('filterlogentries_submit_replysrcipd[0][]=x', $parsed);
+		$_POST['filterlogentries_submit_replysrcipd'] = $parsed['filterlogentries_submit_replysrcipd'];
+		try {
+			$post = pfb_alerts_oracle_filter_selection();
+		} catch (\TypeError $e) {
+			$this->fail('a nested array replysrcipd value must not TypeError explode(): ' . $e->getMessage());
+		}
+		$this->assertArrayNotHasKey('filterlogentries_submit', $post, 'a nested array value must not flip filterlogentries_submit to Apply Filter');
+	}
+
+	public function testFilterSelectionReplySrcIpdScalarValueStillSplits(): void
+	{
+		$_POST['filterlogentries_submit_replysrcipd'] = 'dom.com,1.2.3.4';
+		$post = pfb_alerts_oracle_filter_selection();
+		$this->assertSame('dom.com', $post['filterlogentries_replydomain'] ?? null, 'a scalar value must still split into the domain field');
+		$this->assertSame('1.2.3.4', $post['filterlogentries_replysrcip'] ?? null, 'a scalar value must still split into the ip field');
+		$this->assertSame('Apply Filter', $post['filterlogentries_submit'] ?? null, 'a scalar value must still flip filterlogentries_submit');
+	}
+
+	public function testFilterSelectionIpSrcIpInScalarValueStillSplits(): void
+	{
+		$_POST['filterlogentries_submit_ipsrcipin'] = '1.2.3.4,US';
+		$post = pfb_alerts_oracle_filter_selection();
+		$this->assertSame('1.2.3.4', $post['filterlogentries_ipsrcip'] ?? null, 'a scalar value must still split into the ip field');
+		$this->assertSame('US', $post['filterlogentries_ipgeoip'] ?? null, 'a scalar value must still split into the geoip field');
+		$this->assertSame('Apply Filter', $post['filterlogentries_submit'] ?? null, 'a scalar value must still flip filterlogentries_submit');
+	}
+
+	public function testFilterSelectionElseBranchScalarValueStillApplies(): void
+	{
+		$_POST['filterlogentries_submit_ipdate'] = 'Jul 10';
+		$post = pfb_alerts_oracle_filter_selection();
+		$this->assertSame('Jul 10', $post['filterlogentries_ipdate'] ?? null, 'a scalar value must still reach the else/pfb_filter branch');
+		$this->assertSame('Apply Filter', $post['filterlogentries_submit'] ?? null, 'a scalar value must still flip filterlogentries_submit');
+	}
+
+	public function testFilterSelectionElseBranchArrayValueSkipsFieldInsteadOfApplying(): void
+	{
+		// pfb_filter() is already array-safe post-#1070/#1139 (returns the caller
+		// default instead of throwing), so this is not a TypeError repro -- it pins
+		// that the new top-level guard skips the field instead of silently applying
+		// a blanked-out value and flipping filterlogentries_submit anyway.
+		$_POST['filterlogentries_submit_ipdate'] = ['x'];
+		$post = pfb_alerts_oracle_filter_selection();
+		$this->assertArrayNotHasKey('filterlogentries_ipdate', $post, 'an array value must not set the else-branch field, even to a blanked default');
+		$this->assertArrayNotHasKey('filterlogentries_submit', $post, 'an array value must not flip filterlogentries_submit to Apply Filter');
 	}
 }
