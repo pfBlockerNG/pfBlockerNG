@@ -131,8 +131,16 @@ if ($_POST) {
 			foreach ($selected as $value) {
 
 				if (!empty($value)) {
+					// issue #1076: the token becomes a config_set_path() KEY below -- vet
+					// it like the alt_ value, or a crafted request splices path separators
+					// into the config tree (feed_alt_a/b writes a nested node).
+					$value = pfb_filter($value, PFB_FILTER_WORD, 'feeds');
+					if (empty($value)) {
+						$input_errors[] = 'Invalid Alternative Alias Name';
+						continue;
+					}
 					// Save Alternative Aliasnames to pfblockerngglobal in config.xml
-					$post = pfb_filter($_POST['alt_' . $value], PFB_FILTER_WORD, 'feeds');
+					$post = pfb_filter($_POST['alt_' . $value] ?? '', PFB_FILTER_WORD, 'feeds');
 					if (!empty($post)) {
 						$value					= strtolower($value);		// config XML tag needs to be lowercase
 						${"feed_alt_$value"}			= $post;
