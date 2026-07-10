@@ -338,10 +338,12 @@ def test_adr62_reused_feed_old_dialect_txt_resolves_same_verdict(deployed_vm: Sm
       alongside a stale ``{header}.abp`` marker (simulating an old install's
       leftover from before this ADR), and the feed's HTTP-fetchable URL serves a
       DIFFERENT (decoy) domain.
-    When the DNSBL list is injected and a Force Update runs — the FIRST pass for
-      this header finds the ``.txt`` already present with no ``.update``/``.fail``
-      marker, taking the reuse fork (``pfblockerng.inc:16277-16308``) instead of
-      downloading,
+    When the DNSBL list is injected and a scheduled-style (NON-force) update
+      pass runs — the FIRST pass for this header finds the ``.txt`` already
+      present with no ``.update``/``.fail`` marker and takes the reuse fork
+      (gated on ``$pfbreuse == ''``, so only a non-force pass reaches it: a
+      Force-DNSBL reload sets ``reuse_dnsbl='on'`` and reloads from the
+      ``.orig`` download cache — absent here — which would download instead),
     Then the PRE-PLACED domain is VIP-blocked (the reused ``.txt`` was used
       as-is, never re-parsed), the DECOY domain (which would only appear if the
       feed were actually re-downloaded) still RESOLVES, and the stale ``.abp``
@@ -370,7 +372,9 @@ def test_adr62_reused_feed_old_dialect_txt_resolves_same_verdict(deployed_vm: Sm
         before = h.dns_probe_client(client_vm, name, "A")
         assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
 
-    with h.CaseContext(deployed_vm, spec):
+    # scope="update" = scope=both force=false trigger=cron: the ONLY trigger that
+    # reaches the exists-fork; the default force-DNSBL scope reuses .orig/downloads.
+    with h.CaseContext(deployed_vm, spec, scope="update"):
         h.unblock_egress()  # the decoy "still resolves" probe must reach the controlled stub
         h.flush_unbound_name(deployed_vm, reused_domain)
         ans_reused = h.dns_probe_client_until(client_vm, reused_domain, h.is_vip)
