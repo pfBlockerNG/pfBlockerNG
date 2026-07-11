@@ -8,11 +8,14 @@ Dispatch (when ready):
     gh workflow run smoke.yml -f pytest_marker="tick"
 
 Tests:
-    test_tick_dispatches_due_feed     — tick fires a due feed (ledger past)
-    test_tick_skips_non_due_feed      — tick skips a feed whose next_due is future
-    test_tick_wiped_ledger_jittered   — wiped ledger gives due-now but jittered next_due
-    test_tick_reboot_persists_ledger  — clean reboot with MFS /var keeps the schedule
-                                        (ledger restored via the #468 earlyshellcmd)
+    test_tick_cron_entry_installed         — the installed cron entry is the cron-tick verb (#1204)
+    test_cron_tick_respects_disable_flag   — cron-tick honours .pfb_cron_disable (#1204)
+    test_tick_verb_ignores_disable_flag    — the direct tick verb is never gated (#1204)
+    test_tick_dispatches_due_feed          — tick fires a due feed (ledger past)
+    test_tick_skips_non_due_feed           — tick skips a feed whose next_due is future
+    test_tick_wiped_ledger_jittered        — wiped ledger gives due-now but jittered next_due
+    test_tick_reboot_persists_ledger       — clean reboot with MFS /var keeps the schedule
+                                              (ledger restored via the #468 earlyshellcmd)
 """
 
 import json
@@ -196,9 +199,170 @@ def _reset_ss_extdns(vm) -> None:
         raise RuntimeError(f"_reset_ss_extdns failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
+# issue #1204: needles distinguishing the two possible installed cron commands.
+# 'pfblockerng.php tick' does NOT substring-match '...cron-tick' (a hyphen sits where
+# the legacy needle expects a space) -- mirrors pfblockerng_configure_tick_cron's own
+# trailing-space needle rationale (pfblockerng.inc).
+_CRON_TICK_NEEDLE = "pfblockerng.php cron-tick"
+_LEGACY_TICK_NEEDLE = "pfblockerng.php tick"
+
+
+def _read_pfb_tick_cron_items(vm) -> list[str]:
+    """Return the 'command' string of every config.xml cron/item naming the
+    tick-family verb (the current cron-tick, or the legacy bare tick)."""
+    snippet = (
+        "$out = array();\n"
+        "foreach (config_get_path('cron/item', array()) as $i) {\n"
+        "    $cmd = $i['command'] ?? '';\n"
+        f"    if (strpos($cmd, {h._php_str(_CRON_TICK_NEEDLE)}) !== FALSE"
+        f" || strpos($cmd, {h._php_str(_LEGACY_TICK_NEEDLE)}) !== FALSE) {{ $out[] = $cmd; }}\n"
+        "}\n"
+        "echo json_encode($out);"
+    )
+    result = h.php_eval(vm, snippet)
+    if result.returncode != 0:
+        raise RuntimeError(f"_read_pfb_tick_cron_items failed: rc={result.returncode} {result.stderr!r}")
+    return json.loads(result.stdout.strip())
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.smoke
+@pytest.mark.tick
+@pytest.mark.timeout(180)  # two foreground sync passes (master switch off, then on)
+def test_tick_cron_entry_installed(deployed_vm: SmokeVM):
+    """The installed scheduled-tick cron entry is the #1204 cron-tick verb.
+
+    Guards pfblockerng_configure_tick_cron's trailing-space teardown needle
+    ('pfblockerng.php cron ', not the bare 'pfblockerng.php cron'): the bare needle
+    substring-matches the just-installed 'cron-tick' command too, so
+    install_cron_job() would delete it on every sync pass, leaving NO tick cron
+    installed at all.
+
+    Scenario:
+        Background: pfBlockerNG's master switch driven OFF then synced (before-state).
+            Given no tick-family cron/item entry exists,
+            When the master switch is turned ON and a sync pass runs,
+            Then EXACTLY ONE tick-family cron/item entry exists, its command is the
+                cron-tick verb, and no legacy 'pfblockerng.php tick >>' entry survives.
+    """
+    vm = deployed_vm
+    try:
+        h.set_package_enabled(vm, False)
+        h.reload(vm, "update")
+        before = _read_pfb_tick_cron_items(vm)
+        assert before == [], (
+            f"before: no tick-family cron/item entry should exist while pfBlockerNG is disabled; found {before}"
+        )
+
+        h.set_package_enabled(vm, True)
+        h.reload(vm, "update")
+        after = _read_pfb_tick_cron_items(vm)
+        assert len(after) == 1, f"after: expected exactly one tick-family cron/item entry, found {len(after)}: {after}"
+        assert _CRON_TICK_NEEDLE in after[0], f"the installed entry must be the cron-tick verb; got {after[0]!r}"
+        assert "pfblockerng.php tick >>" not in after[0], (
+            f"the legacy 'pfblockerng.php tick' entry must not survive; got {after[0]!r}"
+        )
+    finally:
+        h.set_package_enabled(vm, False)
+        h.reload(vm, "update")
+
+
+@pytest.mark.smoke
+@pytest.mark.tick
+@pytest.mark.timeout(120)
+def test_cron_tick_respects_disable_flag(deployed_vm: SmokeVM):
+    """The cron-tick verb honours the harness's .pfb_cron_disable sentinel.
+
+    Branch PAIR (CLAUDE.md branch coverage): the same due-ledger precondition is
+    replayed with the flag present, then absent, so a broken gate flips ONE side red.
+
+    Scenario:
+        Background: the 'cron' ledger entry is due (next_due in the past).
+            Given the harness flag PRESENT (deploy()'s default state),
+            When 'pfblockerng.php cron-tick' runs,
+            Then it prints the disabled banner and the ledger 'cron' entry is
+                UNCHANGED (no dispatch) -- the before-state that makes this pairing
+                non-vacuous.
+            Given the flag REMOVED,
+            When 'cron-tick' runs again,
+            Then it prints no banner and the ledger 'cron' entry ADVANCES (real
+                dispatch) -- proving the flag, not something else, gated the first call.
+        The flag is restored in a finally (issue #1179: a leaked removal re-arms the flake).
+    """
+    vm = deployed_vm
+    flag = h.PFB_CRON_DISABLE_PATH
+    assert vm.ssh("test", "-f", flag).returncode == 0, f"precondition: deploy() must have written {flag}"
+
+    try:
+        now_ts = int(vm.ssh("date +%s").stdout.strip())
+
+        # --- flag present: cron-tick must NOT dispatch. ---
+        _write_ledger_entry(vm, "cron", now_ts - 90000, now_ts - 1)
+        before = _read_ledger(vm)
+        result = vm.ssh(_PHP, _PFB_PHP, "cron-tick")
+        assert result.returncode == 0, f"cron-tick (flag present) rc={result.returncode} stderr={result.stderr!r}"
+        assert f"[ Disabled by {flag} ]" in result.stdout, (
+            f"cron-tick (flag present) must print the disabled banner; got {result.stdout!r}"
+        )
+        after = _read_ledger(vm)
+        assert after.get("cron") == before.get("cron"), (
+            f"cron-tick (flag present) must not dispatch -- ledger 'cron' entry changed: "
+            f"before={before.get('cron')} after={after.get('cron')}"
+        )
+
+        # --- flag absent: cron-tick DOES dispatch (the non-vacuous other half). ---
+        rm = vm.ssh("rm", "-f", flag)
+        assert rm.returncode == 0, f"failed to remove {flag}: rc={rm.returncode} {rm.stderr!r}"
+        result2 = vm.ssh(_PHP, _PFB_PHP, "cron-tick")
+        assert result2.returncode == 0, f"cron-tick (flag absent) rc={result2.returncode} stderr={result2.stderr!r}"
+        assert "[ Disabled by" not in result2.stdout, (
+            f"cron-tick (flag absent) must not print the disabled banner; got {result2.stdout!r}"
+        )
+        assert h.wait_until(
+            lambda: _read_ledger(vm).get("cron", {}).get("next_due", 0) > now_ts,
+            timeout=30,
+            interval=2,
+        ), f"cron-tick (flag absent) should dispatch the due feed cron; ledger={_read_ledger(vm)}"
+    finally:
+        touch = vm.ssh("/usr/bin/touch", flag)
+        if touch.returncode != 0:
+            raise AssertionError(f"failed to restore {flag}: rc={touch.returncode} {touch.stderr!r}")
+
+
+@pytest.mark.smoke
+@pytest.mark.tick
+@pytest.mark.timeout(90)
+def test_tick_verb_ignores_disable_flag(deployed_vm: SmokeVM):
+    """The direct 'tick' verb is NEVER gated by .pfb_cron_disable -- only 'cron-tick' is.
+
+    Scenario:
+        Background: the harness flag is PRESENT (its normal, always-on state during
+            the suite) and the 'cron' ledger entry is due.
+            When 'pfblockerng.php tick' runs directly,
+            Then it dispatches the due feed cron (ledger 'cron' next_due advances) and
+                prints no '[ Disabled by ... ]' banner.
+    """
+    vm = deployed_vm
+    flag = h.PFB_CRON_DISABLE_PATH
+    assert vm.ssh("test", "-f", flag).returncode == 0, f"precondition: {flag} must be present for this test"
+
+    now_ts = int(vm.ssh("date +%s").stdout.strip())
+    _write_ledger_entry(vm, "cron", now_ts - 90000, now_ts - 1)
+
+    result = vm.ssh(_PHP, _PFB_PHP, "tick")
+    assert result.returncode == 0, f"tick rc={result.returncode} stderr={result.stderr!r}"
+    assert "[ Disabled by" not in result.stdout, (
+        f"the direct 'tick' verb must never print the cron-tick disabled banner; got {result.stdout!r}"
+    )
+    assert h.wait_until(
+        lambda: _read_ledger(vm).get("cron", {}).get("next_due", 0) > now_ts,
+        timeout=30,
+        interval=2,
+    ), f"the direct 'tick' verb must dispatch the due feed cron regardless of the flag; ledger={_read_ledger(vm)}"
 
 
 @pytest.mark.smoke
