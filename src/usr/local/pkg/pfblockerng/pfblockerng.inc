@@ -16728,7 +16728,9 @@ function sync_package_pfblockerng($cron='') {
 									$mode);
 								$file_esc		= escapeshellarg("{$pfbfolder}/{$header}.txt");
 								$list_cnt		= exec("{$pfb['grep']} -c ^ {$file_esc}");
-								$alias_cnt		= $alias_cnt + $list_cnt;
+								// issue #1162: failed grep returns a non-numeric string -- (int) so it
+								// cannot reach + arithmetic (PHP 8 TypeError)
+								$alias_cnt		= $alias_cnt + (int) $list_cnt;
 							}
 							else {
 								// #1083: verbatim reuse was rejected ONLY for stale staging
@@ -17300,7 +17302,9 @@ function sync_package_pfblockerng($cron='') {
 								}
 
 								$list_cnt	= exec("{$pfb['grep']} -c ^ " . escapeshellarg("{$pfbfolder}/{$header}.txt"));
-								$alias_cnt	= $alias_cnt + $list_cnt;
+								// issue #1162: failed grep returns a non-numeric string -- (int) so it
+								// cannot reach + arithmetic (PHP 8 TypeError)
+								$alias_cnt	= $alias_cnt + (int) $list_cnt;
 
 								// Remove update file indicator -- skip if this row fell through to
 								// the stale-.orig download-failure fallback, else a pending rebuild
