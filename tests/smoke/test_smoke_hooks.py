@@ -664,8 +664,11 @@ def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -
 
     Also proves (issue #988): the normal-pass branch's #973 persist call
     (``pfb_persist_hook_output``) fires exactly ONCE for this hook into the PERSISTED
-    ``pfblockerng.log`` — a stray second call (a wrongly-placed lifecycle-branch persist
-    call sitting outside its own branch) would double the marker count there.
+    ``pfblockerng.log``. A duplicate here has two possible causes: a wrongly-placed
+    lifecycle-branch persist call double-firing production code, or a scheduled
+    ADR-43 tick dispatching a feed-cron pass that re-fires this still-registered hook
+    mid-test (issue #1179's confirmed root cause; ``helpers.disable_scheduled_dispatch``
+    gates that dispatch off for the whole suite).
     """
     token = "stream"
     stream_marker = f"STREAM_{token}_MARK"
@@ -734,13 +737,15 @@ def test_post_hook_output_streams_into_runlog_during_run(deployed_vm: SmokeVM) -
         persisted_delta = h.count_log_marker(deployed_vm, h.PFB_LOG, stream_marker) - persisted_before
         assert persisted_delta == 1, (
             f"hook marker {stream_marker!r} was persisted into {h.PFB_LOG} {persisted_delta} time(s) "
-            "for one hook run (expected exactly 1 — pfb_persist_hook_output double-fired):\n"
+            "for one hook run (expected exactly 1 — either pfb_persist_hook_output double-fired or a "
+            "concurrent/tick-dispatched pass re-fired the hook: issue #1179):\n"
             f"{deployed_vm.ssh('cat', h.PFB_LOG).stdout[-4000:]}"
         )
         persisted_delta_done = h.count_log_marker(deployed_vm, h.PFB_LOG, done_marker) - persisted_before_done
         assert persisted_delta_done == 1, (
             f"hook marker {done_marker!r} was persisted into {h.PFB_LOG} {persisted_delta_done} time(s) "
-            "for one hook run (expected exactly 1 — pfb_persist_hook_output double-fired):\n"
+            "for one hook run (expected exactly 1 — either pfb_persist_hook_output double-fired or a "
+            "concurrent/tick-dispatched pass re-fired the hook: issue #1179):\n"
             f"{deployed_vm.ssh('cat', h.PFB_LOG).stdout[-4000:]}"
         )
         h.clear_update_hooks(deployed_vm)
@@ -1260,3 +1265,77 @@ def test_hooks_ip_changed_unlock_forced(deployed_vm: SmokeVM) -> None:
     )
 
     h.clear_update_hooks(deployed_vm)
+
+
+# --------------------------------------------------------------------------- #
+# 13) issue #1179 — a pending tick-cron pass must not re-fire a registered hook
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.timeout(90)  # the negative proof below always burns its full settle window
+def test_hooks_tick_cron_gate_suppresses_pending_refire(deployed_vm: SmokeVM) -> None:
+    """A pending 'cron' due-ledger entry must NOT let a tick re-fire a registered hook.
+
+    THE BUG (issue #1179): the box's own */15 tick can dispatch feed-cron
+    (``sync_package_pfblockerng('cron')`` -> ``pfb_run_hooks('post', ...)``) mid-module
+    whenever ``!$cron_disabled && ($due['cron'] || pfb_due_ledger_is_pending('cron',
+    $dbdir))`` (extra.inc's tick gate) — re-firing a hook another test just registered
+    and double-persisting its markers (misdiagnosed as a ``pfb_persist_hook_output``
+    double-fire in ``test_post_hook_output_streams_into_runlog_during_run`` before this
+    fix). This probe forces the PENDING branch deterministically (no real 15-minute
+    wait, via ``pfb_due_ledger_set_pending``) and fires ONE tick directly.
+
+    It pins the harness-wide gate (``helpers.disable_scheduled_dispatch``, applied by
+    ``helpers.deploy`` for every smoke module): with it, ``$cron_disabled`` is TRUE and
+    short-circuits the ``||`` gate regardless of due/pending — no dispatch, no marker.
+    Without it, the forced pending flag alone dispatches feed-cron, the hook fires and
+    the marker appears — this test FAILS, which is exactly the flake #1179 reported.
+    """
+    token = "tickgate"
+    marker = h.hook_marker_path(token, "post")
+
+    h.wait_no_active_pfb_task(deployed_vm)  # clean baseline before forcing pending
+    h.set_update_hooks(deployed_vm, [h.env_dump_hook(token, "post")])
+    h.clear_hook_markers(deployed_vm, token)
+    assert not h.hook_marker_exists(deployed_vm, marker), "marker present before the tick (stale state?)"
+
+    try:
+        pend = h.php_eval(
+            deployed_vm,
+            f"require_once({h._php_str(h.PFB_EXTRA_INC)});"
+            f"pfb_due_ledger_set_pending('cron', {h._php_str(h.PFB_DBDIR)});"
+            "echo 'OK';",
+        )
+        assert pend.returncode == 0 and "OK" in pend.stdout, (
+            f"pfb_due_ledger_set_pending('cron') failed: rc={pend.returncode} {pend.stderr!r} {pend.stdout!r}"
+        )
+
+        deployed_vm.ssh(h.PHP_BIN, h.PFB_CLI, "tick", timeout=60.0)
+
+        # extra.inc's cron dispatch is a detached background exec: poll for the marker
+        # to APPEAR (proof of a re-fire) within a bounded settle window, rather than
+        # reading it once right after tick returns (which would race a dispatch that
+        # simply hasn't started yet — "not dispatched" vs "not dispatched YET").
+        refired = h.wait_until(lambda: h.hook_marker_exists(deployed_vm, marker), timeout=20.0, interval=4.0)
+        assert not refired, (
+            "a pending 'cron' ledger entry re-fired the registered hook via a "
+            "tick-dispatched feed-cron pass (issue #1179): "
+            f"{deployed_vm.ssh('cat', h.PFB_LOG, timeout=30.0).stdout[-2000:]}"
+        )
+    finally:
+        # Let any dispatched pass finish before the next test's clean-baseline check.
+        h.wait_no_active_pfb_task(deployed_vm, timeout=60.0)
+        # The gated branch never consumes pending_apply itself — clear it with a
+        # wholesale ledger rewrite (the package's own writer) so it cannot leak forward.
+        cleanup = h.php_eval(
+            deployed_vm,
+            f"require_once({h._php_str(h.PFB_EXTRA_INC)});"
+            "pfb_due_ledger_write_entry('cron', array("
+            "'last_run' => time(), 'next_due' => time() + 86400, 'jitter' => 0"
+            f"), {h._php_str(h.PFB_DBDIR)});"
+            "echo 'OK';",
+        )
+        assert cleanup.returncode == 0 and "OK" in cleanup.stdout, (
+            f"cron ledger cleanup failed: rc={cleanup.returncode} {cleanup.stderr!r} {cleanup.stdout!r}"
+        )
+        h.clear_update_hooks(deployed_vm)
