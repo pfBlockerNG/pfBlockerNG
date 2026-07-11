@@ -26,7 +26,6 @@ require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
 
 global $pfb;
 pfb_global();
-$disable_move = FALSE;
 
 $pfb['dconfig'] = PfbConfig::readSection('installedpackages/pfblockerngdnsblsettings/config/0');
 
@@ -3561,7 +3560,6 @@ print_callout('<strong>Setting changes are applied via CRON or \'Force Update|Re
 //<![CDATA[
 
 var pagetype = 'advanced';
-var disable_move = "<?=$disable_move?>";
 
 // Auto-Complete for Adv. In/Out Address Select boxes
 var plist = "<?=$ports_list?>";

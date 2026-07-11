@@ -77,7 +77,6 @@ $rowdata	= array();
 $rowid		= 0;
 $id		= 0;
 $action		= $gtype = $atype = $chg_state = '';
-$disable_move	= FALSE;
 
 if (isset($_GET)) {
 	if (isset($_GET['rowid']) && !empty($_GET['rowid'])) {
@@ -152,11 +151,6 @@ if (isset($_POST)) {
 	if (isset($_POST['chgstate']) && $_POST['chgstate'] == 'Enable All') {
 		$chg_state = TRUE;
 	}
-
-	if (isset($_POST['Lmove']) && isset($_POST['Xmove'])) {
-		$Lmove = $_POST['Lmove'];
-		$Xmove = $_POST['Xmove'];
-	}
 }
 
 // Define variables for page
@@ -196,7 +190,6 @@ if (!empty($gtype)) {
 if (($action == 'add' || $action == 'addgroup') && !empty($atype) && !isset($_POST['save'])) {
 
 	$pfb_found	= FALSE;
-	$disable_move	= TRUE;
 	$all_group	= $new_group = array();
 
 	$rowdata	= PfbConfig::readSection("installedpackages/{$conf_type}/config");
@@ -500,12 +493,8 @@ if ($_POST && isset($_POST['save'])) {
 	}
 
 	// issue #1106: reject an array-valued field ('aliasname[]=x') before any string
-	// sink below TypeErrors on it. 'Lmove' is the page's one legitimate array field
-	// (row-move checkboxes, checked-then-Save posts it alongside 'save') and stays exempt.
+	// sink below TypeErrors on it. Every field is scalar in normal use; no field is exempt.
 	foreach ($_POST as $pfb_post_key => $pfb_post_value) {
-		if ($pfb_post_key === 'Lmove') {
-			continue;
-		}
 		if (!is_scalar($pfb_post_value)) {
 			$input_errors[] = gettext('Invalid value submitted for field:') . ' ' . htmlspecialchars((string) $pfb_post_key);
 			$_POST[$pfb_post_key] = '';
@@ -925,63 +914,6 @@ else {
 }
 
 
-// Move selected table row(s) to anchor row
-// issue #1129: a stale/hostile Lmove or Xmove must not silently drop rows
-// issue #1135: anchoring on a row that is itself checked is rejected -- it
-// is either a no-op (honest click) or duplicates the row (crafted mismatch)
-if (isset($Lmove) && isset($Xmove) && isset($rowdata[$rowid]['row'])
-	&& is_array($Lmove) && !empty($Lmove)
-	&& is_scalar($Xmove) && array_key_exists($Xmove, $rowdata[$rowid]['row'])
-	&& !array_diff_key($Lmove, $rowdata[$rowid]['row'])
-	&& !isset($Lmove[$Xmove])) {
-
-	$disable_move	= TRUE;
-	$move = $final	= array();
-	foreach ($rowdata[$rowid]['row'] as $key => $row) {
-		if (isset($Lmove[$key])) {
-			$move[] = $row;	// Collect row(s) to move
-
-			$pre = TRUE;
-			if ($Lmove[$key] > $Xmove) {
-				$pre = FALSE;
-			}
-		}
-	}
-
-	foreach ($rowdata[$rowid]['row'] as $key => $row) {
-
-		// Skip moved row(s)
-		if (isset($Lmove[$key]) && $Xmove != $key) {
-			continue;
-		}
-
-		if ($Xmove == $key) {
-			// issue #1135: $key is the anchor's own row -- not necessarily a checked
-			// Lmove key, so read it with a null-coalesce to avoid an undefined-key warning
-			if ($pre && ($Lmove[$key] ?? null) != $Xmove) {
-				$final[] = $row;
-			}
-
-			$final = array_merge($final, $move);
-
-			if (!$pre && ($Lmove[$key] ?? null) != $Xmove) {
-				$final[] = $row;
-			}
-			continue;
-		}
-		$final[] = $row;
-	}
-
-	$rowdata[$rowid]['row'] = $final;
-	// foreign structure: list row data not in registry
-	config_set_path("installedpackages/{$conf_type}/config/{$rowid}/row", $rowdata[$rowid]['row']);
-	$savemsg = 'The selected row(s) have been moved.';
-	write_config("pfBlockerNG: {$gtype} - Rows(s) moved");
-	pfb_mark_pending_changes();	// applies on the next Update, not on save
-	header("Location: /pfblockerng/pfblockerng_category_edit.php?type={$gtype}&rowid={$rowid}&savemsg={$savemsg}");
-	exit;
-}
-
 if ($input_errors) {
 	print_input_errors($input_errors);
 }
@@ -1081,7 +1013,7 @@ $section->addInput(new Form_StaticText(
 $form->add($section);
 
 // Build 'Source Definitions' section
-$section = new Form_Section("{$type} Source Definitions");
+$section = new Form_Section("{$type} Source Definitions", 'sourcedefinitions');
 
 // Add empty row placeholder if no rows defined
 if (empty($rowdata[$rowid]['row'])) {
@@ -1131,13 +1063,12 @@ foreach ($rowdata[$rowid] as $tags) {
 
 		if ($rowdata[$rowid]['sort'] == 'no-sort') {
 
-			$move_anchor = "<input type=\"checkbox\" name=\"Lmove[{$r_id}]\" value=\"{$r_id}\" id=\"{$r_id}\" />
-						<button type=\"submit\" class=\"fa-solid fa-anchor button-icon\" name=\"Xmove\" value=\"{$r_id}\" id=\"{$r_id}\"
-						title=\"Move checked entries before this anchor\"></button>";
-
+			// ADR-63: the gutter number is refreshed client-side after every staged
+			// drag/anchor-click move (pfb_reorder_init's onAfterMove); '.pfb-gutter' is
+			// its refresh target.
 			$group->add(new Form_StaticText(
 					'',
-					"&nbsp;<sub>" . str_replace('X', '&nbsp; ', str_pad($r_id +1, 2, 'X', STR_PAD_LEFT)) . "</sub>&nbsp;" . $move_anchor
+					"&nbsp;<sub class=\"pfb-gutter\">" . str_replace('X', '&nbsp; ', str_pad($r_id +1, 2, 'X', STR_PAD_LEFT)) . "</sub>&nbsp;"
 			))->setWidth(1);
 		}
 
@@ -1756,7 +1687,6 @@ else {
 //<![CDATA[
 
 var gtype = "<?=$gtype?>";
-var disable_move = "<?=$disable_move?>";
 var pagetype = null;
 
 if (gtype == 'ipv4' || gtype == 'ipv6') {
@@ -1779,6 +1709,20 @@ if (gtype == 'ipv4' || gtype == 'ipv6') {
 else if (gtype == 'dnsbl') {
 	var pagetype = 'dnsbl';
 }
+
+<?php if ($rowdata[$rowid]['sort'] == 'no-sort') { ?>
+// ADR-63: staged reorder via shared component; renumber() keeps field names positional
+var pfb_drag_enabled = <?=config_path_enabled('system/webgui', 'roworderdragging') ? 'false' : 'true';?>;
+events.push(function() {
+	pfb_reorder_init('#sourcedefinitions .panel-body', '.form-group.repeatable', function() {
+		renumber();
+		$('#sourcedefinitions .panel-body .form-group.repeatable').each(function(i) {
+			var n = i + 1;
+			$(this).find('.pfb-gutter').html((n < 10 ? '&nbsp; ' : '') + n);
+		});
+	}, pfb_drag_enabled);
+});
+<?php } ?>
 
 //]]
 </script>

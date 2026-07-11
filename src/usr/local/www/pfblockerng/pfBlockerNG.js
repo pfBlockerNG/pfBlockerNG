@@ -153,6 +153,20 @@ function pfb_reorder_init(container, rowSelector, onAfterMove, dragEnabled) {
 	var anchorClass = 'pfb-reorder-anchor';
 	var chkClass = 'pfb-reorder-chk';
 
+	// The injected control is inline/static; inside a float-based Form_Group
+	// (.form-group.repeatable, category_edit.php) it paints BEHIND the page
+	// container and becomes visible-but-unclickable. Lift it into its own paint
+	// layer so the checkbox/anchor receive pointer events on every row shape.
+	if (!document.getElementById('pfb-reorder-style')) {
+		$('head').append(
+			'<style id="pfb-reorder-style">' +
+			'.pfb-reorder-ctl{position:relative;z-index:5;white-space:nowrap;' +
+			'display:inline-block;margin-left:4px}' +
+			'.pfb-reorder-ctl .' + chkClass + '{margin:0 3px;vertical-align:middle}' +
+			'</style>'
+		);
+	}
+
 	function fire() {
 		if (typeof onAfterMove === 'function') {
 			onAfterMove();
@@ -229,18 +243,6 @@ function pfb_reorder_read_order(container, rowSelector) {
 
 
 events.push(function() {
-
-	// Disable the 'Row move anchor' when adding a new Feed or whole Alias/Group; until a config save
-	if ((pagetype == 'dnsbl' || pagetype == 'advanced') && disable_move) {
-		$('[name^=Lmove]').each(function () {
-			$(this).prop('disabled', true);
-			$(this).attr('title', 'Save changes before Row move allowed!');
-		})
-		$('[name^=Xmove]').each(function () {
-			$(this).prop('disabled', true);
-			$(this).attr('title', '');
-		})
-	}
 
 	pfb_remove_label();
 
