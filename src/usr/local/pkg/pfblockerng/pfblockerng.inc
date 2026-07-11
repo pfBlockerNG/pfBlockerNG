@@ -10997,12 +10997,21 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 					unlink_if_exists($file_download);
 					return FALSE;
 				}
-				exec("/usr/bin/tar -xzf {$file_dwn_esc} --strip=1 -C {$pfb['geoipshare']} >/dev/null 2>&1");
+				exec("/usr/bin/tar -xzf {$file_dwn_esc} --strip=1 -C {$pfb['geoipshare']} >/dev/null 2>&1", $output, $retval);
 				unlink_if_exists($file_download);
+				if ($retval != 0) {
+					pfb_logger("\n[pfb_download] geoip extraction failed (tar exit {$retval})", 2);
+					return FALSE;
+				}
 				return TRUE;
 			}
 			elseif ($type == 'asn') {
 				exec("/usr/bin/gunzip -c {$file_dwn_esc} > {$header_esc}", $output, $retval);
+				if ($retval != 0) {
+					pfb_logger("\n[pfb_download] asn extraction failed (gunzip exit {$retval})", 2);
+					unlink_if_exists($file_download);
+					return FALSE;
+				}
 
 				// Update ASN Lookup table definitions
 				exec("{$pfb['script']} asn_table {$elog}");
@@ -11015,6 +11024,10 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				// the destination CSV pfblockerng_top1m() reads (no rename/staging).
 				exec("/usr/bin/gunzip -c {$file_dwn_esc} > {$header_esc}", $output, $retval);
 				unlink_if_exists($file_download);
+				if ($retval != 0) {
+					pfb_logger("\n[pfb_download] top1m extraction failed (gunzip exit {$retval})", 2);
+					return FALSE;
+				}
 				return TRUE;
 			}
 			elseif ($type == 'blacklist') {
@@ -11040,7 +11053,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 					// Extract Blacklist categories from sub-folders into a single folder structure
 					$cmd = "--include='*domains' -s',.*/\\(.*\\)/\\(.*\\)/domains,{$filename}_\\1_\\2,' -s',.*/\\(.*\\)/domains,{$filename}_\\1,'";
 					$filename_esc = escapeshellarg("{$pfb['dbdir']}/{$filename}/");
-					exec("/usr/bin/tar -xf " . escapeshellarg("{$file_dwn}") . " {$cmd} -C {$filename_esc} >/dev/null 2>&1");
+					exec("/usr/bin/tar -xf " . escapeshellarg("{$file_dwn}") . " {$cmd} -C {$filename_esc} >/dev/null 2>&1", $output, $retval);
 
 					// Rename any Category files with dashes
 					$verifydir = "{$pfb['dbdir']}/{$filename}";
@@ -11056,8 +11069,9 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 					}
 
 					// Create update file indicator for update process
-					touch("{$pfb['dbdir']}/{$filename}/{$filename}.update");
-					$retval = 0;
+					if ($retval == 0) {
+						touch("{$pfb['dbdir']}/{$filename}/{$filename}.update");
+					}
 				}
 				else {
 					pfb_logger("\n Invalid filename [{$filename}]", 1);
@@ -11109,11 +11123,16 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 						unlink_if_exists($file_download);
 						return FALSE;
 					}
-					exec("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C {$header_esc} >/dev/null 2>&1");
+					exec("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C {$header_esc} >/dev/null 2>&1", $output, $retval);
 				} else {
 					// ADR-46: stdout extraction -- member names never reach the
 					// filesystem, so no member-name guard is needed here.
-					exec("/usr/bin/tar -xOf {$file_dwn_esc} > {$header_esc}");
+					exec("/usr/bin/tar -xOf {$file_dwn_esc} > {$header_esc}", $output, $retval);
+				}
+				if ($retval != 0) {
+					pfb_logger("\n[pfb_download] {$type} zip extraction failed (tar exit {$retval})", 2);
+					unlink_if_exists($file_download);
+					return FALSE;
 				}
 				return TRUE;
 			}
@@ -11191,7 +11210,11 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				// Extras - MaxMind/TOP1M/ASN downloads. ADR-59: a 'plain' container
 				// provider's body IS the destination CSV -- rename straight to it, same
 				// as geoip/asn (no intermediate '.orig' staging needed).
-				@rename("{$file_download}", "{$head_download}");
+				$renamed = @rename("{$file_download}", "{$head_download}");
+				if (!$renamed) {
+					pfb_logger("\n[pfb_download] {$type} rename to destination failed", 2);
+					return FALSE;
+				}
 				return TRUE;
 			}
 			elseif ($type == 'blacklist') {
