@@ -5,7 +5,8 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * pfb_download()'s extraction sites must route a nonzero exec() exit to the
+ * pfb_download()'s extraction sites must route a nonzero exec() exit -- and,
+ * for the uncompressed branches, a failed @rename() (issue #1188) -- to the
  * function's existing failure paths (issue #1166), not report success blind.
  *
  * Same off-appliance constraint as DownloadRetvalFailsafeTest: pfb_download()
@@ -184,5 +185,30 @@ final class DownloadExtractionExitCodeTest extends TestCase
 			. 'report success; segment: ' . json_encode($segment));
 		$this->assertStringContainsString('return FALSE', $segment,
 			'a failed rename() must have a return FALSE path; segment: ' . json_encode($segment));
+	}
+
+	// -----------------------------------------------------------------------
+	// Row 8 -- generic uncompressed feeds: @rename() to .orig result must be
+	// checked before the branch falls into the $retval == 0 success gate.
+	// -----------------------------------------------------------------------
+
+	public function testGenericUncompressedRenameResultChecked(): void
+	{
+		$commentPos = strpos(self::$body, "Rename file to 'orig' format");
+		$this->assertNotFalse($commentPos, 'vacuity: the generic-uncompressed orig-rename comment must exist');
+
+		$secondPos = strpos(self::$body, "Rename file to 'orig' format", $commentPos + 1);
+		$this->assertFalse($secondPos, 'vacuity: "Rename file to \'orig\' format" must appear exactly once');
+
+		$gatePos = strpos(self::$body, 'if ($retval == 0) {', $commentPos);
+		$this->assertNotFalse($gatePos, 'vacuity: the $retval == 0 success gate must follow the generic-uncompressed branch');
+
+		$segment = substr(self::$body, $commentPos, $gatePos - $commentPos);
+
+		$this->assertDoesNotMatchRegularExpression('/@rename\([^;]*\);\s*\$retval\s*=\s*0;/', $segment,
+			'a bare @rename(...); $retval = 0; ignores rename()\'s own failure -- a failed rename must not '
+			. 'enter the $retval == 0 success gate; segment: ' . json_encode($segment));
+		$this->assertStringContainsString('return FALSE', $segment,
+			'a failed rename() must have a return FALSE path before the success gate; segment: ' . json_encode($segment));
 	}
 }
