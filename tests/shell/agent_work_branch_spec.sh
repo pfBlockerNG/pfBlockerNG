@@ -36,6 +36,12 @@ Describe 'work-branch.sh branch naming'
     The output should equal 'issue/99'
   End
 
+  It 'rejects --base given without a value'
+    When run sh "$script" issue 5 title --base
+    The status should equal 2
+    The stderr should include 'usage'
+  End
+
   It 'rejects a non-numeric issue number'
     When run sh "$script" issue abc "title"
     The status should equal 2

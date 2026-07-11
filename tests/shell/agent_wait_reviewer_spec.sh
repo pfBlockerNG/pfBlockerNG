@@ -51,6 +51,31 @@ Describe 'wait-reviewer.sh classify()'
     The output should equal 'QUOTA 999'
   End
 
+  It 'reports QUOTA on the PR-review-limit phrasing (no "rate" in the notice)'
+    issuec='@user, you have reached your PR review limit. Next review available in: **46 minutes**'
+    When call classify
+    The output should equal 'QUOTA 46'
+  End
+
+  It 'reports QUOTA on the rate-limited-by-coderabbit phrasing'
+    issuec='This PR is rate limited by CodeRabbit.'
+    When call classify
+    The output should equal 'QUOTA 999'
+  End
+
+  Parameters
+    action_required
+    timed_out
+    cancelled
+    stale
+  End
+  It "reports QUOTA for the non-verdict Snyk state $1"
+    handle='snyk'
+    sinfo="$1 scan did not complete"
+    When call classify
+    The output should equal 'QUOTA 999'
+  End
+
   It 'reports DECLINE on a review-skipped-for-base-branch notice'
     issuec='Review skipped: reviews are limited to specific base branches.'
     When call classify

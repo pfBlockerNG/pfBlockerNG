@@ -1,7 +1,6 @@
 #!/bin/sh
-# work-branch.sh -- derive the canonical work-item branch name (CLAUDE.md "Branch naming"
-# sanitiser, implemented once so it is never hand-derived) and optionally cut the
-# worktree for it.
+# work-branch.sh -- derive the canonical work-item branch name (the CLAUDE.md
+# "Branch naming" sanitiser) and optionally cut the worktree for it.
 #
 # Usage: work-branch.sh <issue|adr> <NN> [TITLE ...] [--worktree] [--path PATH] [--base REF]
 #   Prints the branch name (`issue/NN-slug` / `adr/NN-slug`; empty slug -> bare `type/NN`).
@@ -50,8 +49,8 @@ main() {
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			--worktree) do_worktree=1; shift ;;
-			--path) path=$2; shift 2 ;;
-			--base) base=$2; shift 2 ;;
+			--path) [ $# -ge 2 ] || usage; path=$2; shift 2 ;;
+			--base) [ $# -ge 2 ] || usage; base=$2; shift 2 ;;
 			*) title="$title $1"; shift ;;
 		esac
 	done

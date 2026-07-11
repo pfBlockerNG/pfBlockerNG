@@ -36,7 +36,14 @@ main() {
 		case "$1" in
 			--worktree) worktree=$2; shift 2 ;;
 			--test-cmd) test_cmd=$2; shift 2 ;;
-			--src) srcs="$srcs $2"; shift 2 ;;
+			--src)
+				# $srcs is later word-split into git pathspecs and an expanded trap --
+				# reject anything outside the safe filename set at the door.
+				case "$2" in *[!A-Za-z0-9._/-]*|'')
+					echo "unsafe --src path: $2" >&2
+					exit 2 ;;
+				esac
+				srcs="$srcs $2"; shift 2 ;;
 			--hash) hashes="$hashes $2"; shift 2 ;;
 			*) usage ;;
 		esac

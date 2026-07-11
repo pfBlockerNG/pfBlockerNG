@@ -12,7 +12,8 @@
 #   --interval SECONDS    poll interval (default 30)
 #   --max-iter N          hard iteration cap (default: 20 ack / 60 finished)
 #
-# The LAST stdout line is the verdict; recent handle comments precede it as detail:
+# The LAST stdout line is the verdict; the handle's recent ISSUE comments (the notice
+# bodies the verdicts parse) precede it as detail:
 #   ACK | NOACK | FINISHED | QUOTA <mins> | DECLINE | PAUSE | NOTPRESENT | TIMEOUT
 # Handle matching is case-insensitive and ANCHORED, so `--handle copilot` matches
 # copilot-pull-request-reviewer[bot] and `coderabbitai` matches coderabbitai[bot], but a
@@ -57,7 +58,7 @@ classify() {
 		printf 'FINISHED'
 		return 0
 	fi
-	if printf '%s' "$issuec" | grep -Eqi 'run out of usage credits|review limit reached|rate limited by coderabbit|reached your .*review rate limit'; then
+	if printf '%s' "$issuec" | grep -Eqi 'run out of usage credits|review limit reached|rate limited by coderabbit|reached your .*review (rate )?limit'; then
 		mins=$(printf '%s' "$issuec" | grep -oEi 'available in:.{0,10}[0-9]+ *(minute|hour)' | grep -oE '[0-9]+' | head -1)
 		if printf '%s' "$issuec" | grep -oEi 'available in:.{0,10}[0-9]+ *hour' | grep -q .; then
 			mins=$(( ${mins:-1} * 60 ))
