@@ -1272,7 +1272,9 @@ def test_hooks_ip_changed_unlock_forced(deployed_vm: SmokeVM) -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.timeout(90)  # the negative proof below always burns its full settle window
+# Budget: two wait_no_active_pfb_task guards (90s + 60s worst case) plus the negative
+# proof's full 20s settle window — the default 30s per-test cap would abort the cleanup.
+@pytest.mark.timeout(180)
 def test_hooks_tick_cron_gate_suppresses_pending_refire(deployed_vm: SmokeVM) -> None:
     """A pending 'cron' due-ledger entry must NOT let a tick re-fire a registered hook.
 
