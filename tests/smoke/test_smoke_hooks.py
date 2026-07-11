@@ -1312,7 +1312,13 @@ def test_hooks_tick_cron_gate_suppresses_pending_refire(deployed_vm: SmokeVM) ->
             f"pfb_due_ledger_set_pending('cron') failed: rc={pend.returncode} {pend.stderr!r} {pend.stdout!r}"
         )
 
-        deployed_vm.ssh(h.PHP_BIN, h.PFB_CLI, "tick", timeout=60.0)
+        # rc is the positive control: a tick that never ran (SSH/CLI error, PHP fatal) would
+        # leave the marker absent and turn the negative proof below into a false green.
+        tick = deployed_vm.ssh(h.PHP_BIN, h.PFB_CLI, "tick", timeout=60.0)
+        assert tick.returncode == 0, (
+            f"the tick verb itself failed — the negative proof below would be vacuous: "
+            f"rc={tick.returncode} stdout={tick.stdout[-800:]!r} stderr={tick.stderr!r}"
+        )
 
         # extra.inc's cron dispatch is a detached background exec: poll for the marker
         # to APPEAR (proof of a re-fire) within a bounded settle window, rather than
