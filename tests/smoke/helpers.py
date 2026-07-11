@@ -387,6 +387,11 @@ def deploy(vm: SmokeVM, pkg_path: str | None = None, *, timeout: float = 300.0) 
     portable Linux build job (build-pkg-linux.yml); its path is ``pkg_path`` or ``SMOKE_PKG``.
     install-pkg.sh polls ``unbound-control status`` after POST-INSTALL, so on
     return Unbound is ready.
+
+    Also writes the :data:`PFB_CRON_DISABLE_PATH` sentinel: the box's own wall-clock
+    cron-tick must never dispatch an update pass mid-suite (issue #1179's flake) — the
+    suite drives every dispatch explicitly via the ``tick``/``cron-tick`` verbs, which
+    the sentinel never gates (issue #1204).
     """
     pkg = pkg_path or os.environ.get("SMOKE_PKG")
     if not pkg or not Path(pkg).is_file():
@@ -407,6 +412,13 @@ def deploy(vm: SmokeVM, pkg_path: str | None = None, *, timeout: float = 300.0) 
     if result.returncode != 0:
         raise RuntimeError(
             f"install-pkg.sh failed (rc={result.returncode})\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+    # mkdir -p first: a fresh POST-INSTALL does not create dbdir (see write_local_feed).
+    flag = vm.ssh(f"/bin/mkdir -p {PFB_DBDIR} && /usr/bin/touch {PFB_CRON_DISABLE_PATH}", timeout=timeout)
+    if flag.returncode != 0:
+        raise RuntimeError(
+            f"deploy: failed to write {PFB_CRON_DISABLE_PATH}: rc={flag.returncode} "
+            f"stdout={flag.stdout!r} stderr={flag.stderr!r}"
         )
 
 
@@ -537,6 +549,10 @@ def deinstall_debug(vm: SmokeVM, *, timeout: float = 30.0) -> str:
 
 
 PFB_DBDIR = "/var/db/pfblockerng"
+# issue #1204: presence-only sentinel pfb_cron_disabled() checks — mirrors
+# pfb_cron_disable_path()'s default (pfblockerng.inc). Written by deploy() so the
+# guest's own wall-clock cron-tick never races the suite; never gates the tick verb.
+PFB_CRON_DISABLE_PATH = f"{PFB_DBDIR}/.pfb_cron_disable"
 
 
 def write_local_feed(vm: SmokeVM, name: str, contents: str, *, timeout: float = 30.0) -> str:

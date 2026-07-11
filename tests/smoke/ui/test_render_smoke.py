@@ -463,6 +463,75 @@ def test_update_hooks_subtab_relocation(webui: WebUI) -> None:
     assert _UPDATE_PAGE in body, "the General page no longer links the Update tab"
 
 
+def test_update_page_cron_status_reports_harness_disable_flag(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:  # noqa: ARG001
+    """The Update page's cron-status line names the harness's .pfb_cron_disable sentinel (#1204).
+
+    Read-only (no config write) — the flag is deploy()'s always-on harness state, so
+    this needs no ``ui_e2e`` isolation. Pairs with the flag-absent test below (branch
+    coverage): together they prove the flag outranks the enabled/missing-cron arms
+    of the cron-status line, not just that SOME text renders.
+
+    Given the harness flag present (deploy()'s default state),
+    When GET pfblockerng_update.php,
+    Then the cron-status line names the exact sentinel path.
+    """
+    flag = helpers.PFB_CRON_DISABLE_PATH
+    assert smoke_vm.ssh("test", "-f", flag).returncode == 0, (
+        f"precondition: {flag} must be present (deploy() writes it)"
+    )
+
+    resp = webui.get(_UPDATE_PAGE)
+    result = evaluate_render(_UPDATE_PAGE, resp.status_code, resp.text, ("NEXT Scheduled CRON Event",))
+    assert result.ok, f"Update page render oracle failed: {result.detail}"
+    assert f"[ Disabled by {flag} ]" in resp.text, (
+        f"Update page cron-status line is missing the harness disable banner for {flag}"
+    )
+
+
+@pytest.mark.ui_e2e
+def test_update_page_cron_status_without_flag_never_misreports_missing_cron(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:  # noqa: ARG001
+    """Without the flag, an enabled+synced pfBlockerNG never shows '[ Missing cron task ]' (#1204).
+
+    Guards step 2's probe-command fix (pfblockerng_update.php's ``pfblockerng_cron_exists``
+    check now targets the cron-tick command): the OLD probe still searched for the legacy
+    'pfblockerng.php tick' command while sync installs 'cron-tick', so a perfectly healthy,
+    enabled box misreported '[ Missing cron task ]' on every load. Drives enabled+synced
+    state itself (never relies on session-order state an earlier UI test may have left) —
+    the ``ui_e2e`` marker rides ``_ui_pfb_isolation``'s post-test config.xml restore, so no
+    manual config cleanup is needed; the harness flag (outside config.xml) still needs its
+    own restore.
+
+    Given the master switch ON, a fresh sync pass (installs the current cron-tick entry),
+        and the harness flag removed,
+    When GET pfblockerng_update.php,
+    Then the cron-status line shows neither the harness banner nor '[ Missing cron task ]'.
+    """
+    flag = helpers.PFB_CRON_DISABLE_PATH
+    helpers.set_package_enabled(smoke_vm, True)
+    helpers.reload(smoke_vm, "update")
+    rm = smoke_vm.ssh("rm", "-f", flag)
+    assert rm.returncode == 0, f"failed to remove {flag}: rc={rm.returncode} {rm.stderr!r}"
+    try:
+        resp = webui.get(_UPDATE_PAGE)
+        result = evaluate_render(_UPDATE_PAGE, resp.status_code, resp.text, ("NEXT Scheduled CRON Event",))
+        assert result.ok, f"Update page render oracle failed: {result.detail}"
+        assert f"[ Disabled by {flag} ]" not in resp.text, (
+            "Update page still shows the harness disable banner after the flag was removed"
+        )
+        assert "[ Missing cron task ]" not in resp.text, (
+            "Update page misreports '[ Missing cron task ]' on a healthy, enabled, synced box -- "
+            "the cron-tick probe-command fix regressed"
+        )
+    finally:
+        touch = smoke_vm.ssh("/usr/bin/touch", flag)
+        if touch.returncode != 0:
+            raise AssertionError(f"failed to restore {flag}: rc={touch.returncode} {touch.stderr!r}")
+
+
 def test_general_page_keep_help_upgrade_warning(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
     """The General page's 'Keep Settings' help warns that keep=off wipes settings on a version upgrade (#697).
 

@@ -15,14 +15,17 @@ with:
      an older release resolves list scripts against the package ROOT only, so a moved
      script silently stops running. They are moved back to the root (shipped AWS wrappers
      are left in place, recognised by name — no pkg query).
-  2. The ADR-43 ``pfblockerng.php tick`` cron entry is removed via ``pfSsh.php`` (the
-     shipped ``install_cron_job()``), so the downgraded release re-establishes its own
-     schedule instead of leaving an orphan tick cron behind.
+  2. The ADR-43 scheduled-tick cron entry — ``pfblockerng.php cron-tick`` (current,
+     issue #1204) or the legacy pre-#1204 ``pfblockerng.php tick`` (an un-upgraded box)
+     — is removed via ``pfSsh.php`` (the shipped ``install_cron_job()``), so the
+     downgraded release re-establishes its own schedule instead of leaving an orphan
+     tick cron behind.
 
 WHAT THIS PROVES on a REAL box that the off-box shellspec suite
 (``tests/shell/pfb_downgrade_prep_spec.sh``) cannot: the tool runs end-to-end on the
 appliance — it moves a real file inside the real package dir, LEAVES the shipped AWS
-wrapper in place, and removes the real tick cron from config.xml via ``install_cron_job``.
+wrapper in place, and removes the real tick-family cron entry from config.xml via
+``install_cron_job``.
 
 DESELECTED from the default ``python -m pytest`` (``--ignore=tests/smoke`` in
 pyproject.toml). Run only via its own dispatch::
@@ -74,6 +77,15 @@ _USER_SCRIPT = "ip_pre_pfbdgsmoke.sh"
 _SHIPPED_SCRIPT = "ip_pre_AWS_US.sh"
 
 _TICK_CMD = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php tick >> /var/log/pfblockerng.log 2>&1"
+# issue #1204: the current shipped cron entry — the tool must remove this ONE too,
+# via its own second install_cron_job('pfblockerng.php cron-tick', FALSE) needle
+# (a bare 'pfblockerng.php tick' does not substring-match it — see
+# pfb-downgrade-prep.sh's pfb_remove_tick_cron).
+_CRON_TICK_CMD = (
+    "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron-tick >> /var/log/pfblockerng.log 2>&1"
+)
+_CRON_TICK_NEEDLE = "pfblockerng.php cron-tick"
+_LEGACY_TICK_NEEDLE = "pfblockerng.php tick"
 
 _TICK_OPEN = "<<<TICK>>>"
 _TICK_CLOSE = "<<<TICKEND>>>"
@@ -108,58 +120,66 @@ def _scp_to_guest(vm: SmokeVM, local: Path, remote: str) -> None:
         raise RuntimeError(f"scp {local} -> {remote} failed: rc={result.returncode} {result.stderr!r}")
 
 
-def _seed_tick_cron(vm: SmokeVM) -> None:
-    """Plant the ADR-43 tick cron item directly into config.xml (the precondition the
-    tool must remove). Direct config_set_path append — no dependency on install_cron_job
-    being reachable from the pfSsh.php context."""
+def _seed_tick_cron(vm: SmokeVM, cmd: str = _TICK_CMD) -> None:
+    """Plant a tick-family cron item directly into config.xml (the precondition the
+    tool must remove). ``cmd`` selects which entry shape — the legacy bare ``tick``
+    (default) or the current #1204 ``cron-tick`` (:data:`_CRON_TICK_CMD`) — since
+    the tool must remove EITHER (its own needle is an OR of both). Direct
+    config_set_path append — no dependency on install_cron_job being reachable from
+    the pfSsh.php context."""
     snippet = (
         "$items = config_get_path('cron/item', array());\n"
         "$items[] = array('minute' => '*/15', 'hour' => '*', 'mday' => '*', "
         "'month' => '*', 'wday' => '*', 'who' => 'root', "
-        f"'command' => {h._php_str(_TICK_CMD)});\n"
+        f"'command' => {h._php_str(cmd)});\n"
         "config_set_path('cron/item', $items);\n"
-        "write_config('pfBlockerNG downgrade smoke: seed ADR-43 tick cron');\n"
+        "write_config('pfBlockerNG downgrade smoke: seed a tick-family cron');\n"
         "echo 'OK';"
     )
     result = h.php_eval(vm, snippet, timeout=60.0)
     if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(f"_seed_tick_cron failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+        raise RuntimeError(
+            f"_seed_tick_cron({cmd!r}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
 
 
-def _tick_cron_present(vm: SmokeVM) -> bool:
-    """Scan config.xml cron items for the tick command."""
+def _tick_cron_present(vm: SmokeVM, needle: str = _LEGACY_TICK_NEEDLE) -> bool:
+    """Scan config.xml cron items for a command containing ``needle``."""
     snippet = (
         "$present = '0';\n"
         "foreach (config_get_path('cron/item', array()) as $i) {\n"
-        "    if (strpos($i['command'] ?? '', 'pfblockerng.php tick') !== false) { $present = '1'; break; }\n"
+        f"    if (strpos($i['command'] ?? '', {h._php_str(needle)}) !== false) {{ $present = '1'; break; }}\n"
         "}\n"
         f"echo {h._php_str(_TICK_OPEN)} . $present . {h._php_str(_TICK_CLOSE)};"
     )
     result = h.php_eval(vm, snippet, timeout=60.0)
     if result.returncode != 0:
-        raise RuntimeError(f"_tick_cron_present failed: rc={result.returncode} {result.stderr!r}")
+        raise RuntimeError(f"_tick_cron_present({needle!r}) failed: rc={result.returncode} {result.stderr!r}")
     out = result.stdout
     start = out.find(_TICK_OPEN)
     end = out.find(_TICK_CLOSE)
     if start == -1 or end == -1:
-        raise RuntimeError(f"_tick_cron_present: no delimited value in output: {out!r}")
+        raise RuntimeError(f"_tick_cron_present({needle!r}): no delimited value in output: {out!r}")
     return out[start + len(_TICK_OPEN) : end] == "1"
 
 
 def _remove_tick_cron(vm: SmokeVM) -> None:
-    """Strip any pfBlockerNG tick cron item from config.xml (teardown safety net).
+    """Strip any pfBlockerNG tick-family cron item from config.xml (teardown safety net).
 
-    The tool removes it on the happy path, but a body assertion that fires AFTER
-    ``_seed_tick_cron`` would otherwise leave the seeded item on the module-scoped
-    ``repo_vm`` — dirtying config.xml for a sibling test. Self-encapsulation.
+    Matches EITHER needle (legacy ``tick`` or the #1204 ``cron-tick``) — a body
+    assertion that fires AFTER ``_seed_tick_cron`` would otherwise leave a seeded
+    item on the module-scoped ``repo_vm`` — dirtying config.xml for a sibling test.
+    Self-encapsulation.
     """
     snippet = (
         "$kept = array();\n"
         "foreach (config_get_path('cron/item', array()) as $i) {\n"
-        "    if (strpos($i['command'] ?? '', 'pfblockerng.php tick') === false) { $kept[] = $i; }\n"
+        "    $cmd = $i['command'] ?? '';\n"
+        f"    if (strpos($cmd, {h._php_str(_LEGACY_TICK_NEEDLE)}) === false"
+        f" && strpos($cmd, {h._php_str(_CRON_TICK_NEEDLE)}) === false) {{ $kept[] = $i; }}\n"
         "}\n"
         "config_set_path('cron/item', $kept);\n"
-        "write_config('pfBlockerNG downgrade smoke: cleanup seeded tick cron');\n"
+        "write_config('pfBlockerNG downgrade smoke: cleanup seeded tick-family cron(s)');\n"
         "echo 'OK';"
     )
     h.php_eval(vm, snippet, timeout=60.0)
@@ -168,21 +188,24 @@ def _remove_tick_cron(vm: SmokeVM) -> None:
 @pytest.mark.timeout(600)  # one pkg install cycle + a few ssh probes > the 30s default cap
 def test_downgrade_tool_restores_scripts_and_removes_tick_cron(repo_vm: SmokeVM) -> None:
     """DOWNGRADE-PREPARATION CONTRACT: ``pfb-downgrade-prep.sh`` restores a relocated
-    custom list script to the package root and removes the ADR-43 tick cron, WITHOUT
-    moving a shipped AWS wrapper.
+    custom list script to the package root and removes BOTH the legacy tick cron AND
+    the current #1204 cron-tick entry, WITHOUT moving a shipped AWS wrapper.
 
     Scenario: an admin prepares a 4.0.x box for a downgrade to a pre-4.0.x release.
       Background: our NONE-signed file:// repo above the Netgate ``pfSense`` repo.
 
     Given the branch build installed, the dev tool staged on the box, a custom user
       script ``ip_pre_pfbdgsmoke.sh`` sitting in list_scripts/ (as a prior upgrade would
-      have relocated it), the shipped ``ip_pre_AWS_US.sh`` also in list_scripts/, and an
-      ADR-43 tick cron in config.xml,
+      have relocated it), the shipped ``ip_pre_AWS_US.sh`` also in list_scripts/, and
+      BOTH a legacy ``pfblockerng.php tick`` cron item AND a current
+      ``pfblockerng.php cron-tick`` cron item in config.xml (issue #1204 — a box
+      upgraded from a pre-#1204 release could carry the legacy entry; a #1204+ release
+      installs the cron-tick one — the tool must remove either shape it finds),
 
     When ``pfb-downgrade-prep.sh`` is run on the box as root,
 
     Then the custom script is back at the package ROOT and gone from list_scripts/, the
-      shipped AWS wrapper is left untouched in list_scripts/, and the tick cron entry is
+      shipped AWS wrapper is left untouched in list_scripts/, and BOTH cron entries are
       removed from config.xml.
     """
     pkg = os.environ.get("SMOKE_PKG")
@@ -222,13 +245,21 @@ def test_downgrade_tool_restores_scripts_and_removes_tick_cron(repo_vm: SmokeVM)
         repo_vm.ssh("/usr/bin/touch", list_user, timeout=30.0)
         repo_vm.ssh("/bin/chmod", "0755", list_user, timeout=30.0)
 
-        # Seed the ADR-43 tick cron.
-        _seed_tick_cron(repo_vm)
+        # Seed BOTH tick-family cron shapes (issue #1204: the legacy tick verb AND
+        # the current cron-tick verb) so the tool is proven to remove either.
+        _seed_tick_cron(repo_vm, _TICK_CMD)
+        _seed_tick_cron(repo_vm, _CRON_TICK_CMD)
 
-        # BEFORE: user script only in list_scripts/, not at the root; tick cron present.
+        # BEFORE: user script only in list_scripts/, not at the root; both tick-family
+        # cron entries present.
         assert _file_exists(repo_vm, list_user), f"precondition: {_USER_SCRIPT} must be in list_scripts/"
         assert not _file_exists(repo_vm, root_user), f"precondition: {_USER_SCRIPT} must NOT be at the package root yet"
-        assert _tick_cron_present(repo_vm), "precondition: the tick cron must be present before the tool runs"
+        assert _tick_cron_present(repo_vm, _LEGACY_TICK_NEEDLE), (
+            "precondition: the legacy tick cron must be present before the tool runs"
+        )
+        assert _tick_cron_present(repo_vm, _CRON_TICK_NEEDLE), (
+            "precondition: the cron-tick cron must be present before the tool runs"
+        )
 
         # ------------------------------------------------------------------ #
         # WHEN: the admin runs the downgrade-preparation tool as root         #
@@ -259,8 +290,13 @@ def test_downgrade_tool_restores_scripts_and_removes_tick_cron(repo_vm: SmokeVM)
         assert not _file_exists(repo_vm, root_shipped), (
             f"AFTER: shipped {_SHIPPED_SCRIPT} must NOT be moved to the package root"
         )
-        # Tick cron removed.
-        assert not _tick_cron_present(repo_vm), "AFTER: the ADR-43 tick cron must be removed from config.xml"
+        # Both tick-family cron entries removed.
+        assert not _tick_cron_present(repo_vm, _LEGACY_TICK_NEEDLE), (
+            "AFTER: the legacy tick cron must be removed from config.xml"
+        )
+        assert not _tick_cron_present(repo_vm, _CRON_TICK_NEEDLE), (
+            "AFTER: the cron-tick cron must be removed from config.xml"
+        )
 
     finally:
         # Remove the user script from both possible locations and the staged tool, strip
