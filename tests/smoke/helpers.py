@@ -2844,9 +2844,10 @@ def reset_pfb_baseline(vm: SmokeVM, *, timeout: float = 300.0) -> None:
         the resolver config so the live daemon matches;
       * drops the derived state — ``clearip``/``cleardnsbl`` (tables/sqlite) then a blocking
         ``apply_filter_sync`` (pf rules);
-      * pushes every tick job out of due (:func:`seed_scheduled_jobs_not_due`) so the guest's
-        scheduled tick cannot dispatch a pass in the gap before the next module's deploy
-        re-applies :func:`disable_scheduled_dispatch` (issue #1179).
+      * pushes every tick job out of due (:func:`seed_scheduled_jobs_not_due`) **first**, so the
+        guest's scheduled tick cannot dispatch a pass once the wipe below puts ``pfb_interval``
+        back at its enabled default, nor in the gap before the next module's deploy re-applies
+        :func:`disable_scheduled_dispatch` (issue #1179).
 
     **Never leave a key set in ``config/0`` here** (that is why the gap above is closed with
     the ledger, a file, and not by writing ``pfb_interval`` back): the next module's ``pkg``
@@ -2860,6 +2861,12 @@ def reset_pfb_baseline(vm: SmokeVM, *, timeout: float = 300.0) -> None:
     autouse teardown in ``conftest.py``; safe to call
     directly. Raises on a non-zero ``pfSsh.php`` eval so a broken baseline surfaces loudly.
     """
+    installed = pkg_installed(vm)
+    # BEFORE the wipe, not after: unsetting pfb_interval puts it back at its enabled default
+    # '1', so from that instant a due-or-pending job is dispatchable again. Seeding first
+    # means the ledger is already not-due when the key flips (issue #1179).
+    if installed:
+        seed_scheduled_jobs_not_due(vm)
     del_sections = "".join(f"config_del_path({_php_str(s)});\n" for s in _BASELINE_DEL_SECTIONS)
     unset_keys = "".join(f"unset($g[{_php_str(k)}]);\n" for k in _BASELINE_GLOBAL_KEYS)
     snippet = (
@@ -2892,15 +2899,13 @@ def reset_pfb_baseline(vm: SmokeVM, *, timeout: float = 300.0) -> None:
     # pfBlockerNG derived state left to clear; the config-section wipe above ran via pfSsh.php
     # (core, no package needed). Without this guard the module-scoped teardown ERRORs after any
     # uninstall test that happens to be last in its module.
-    if pkg_installed(vm):
+    if installed:
         for verb in ("clearip", "cleardnsbl"):
             cleared = vm.ssh(PHP_BIN, PFB_CLI, verb, timeout=120.0)
             if cleared.returncode != 0:
                 raise RuntimeError(
                     f"reset_pfb_baseline {verb} failed: rc={cleared.returncode} stderr={cleared.stderr!r}"
                 )
-        # Same guard: the seed runs the package's own ledger writer, so it needs the package.
-        seed_scheduled_jobs_not_due(vm)
     apply_filter_sync(vm)
 
 
