@@ -55,7 +55,7 @@ You alone cover ALL of the following lenses — none may be skipped:
 
 1. CONTRACT CONFORMANCE. Map every spec claim/acceptance criterion to where the diff satisfies it; flag unimplemented or narrowed items. Enumerate sibling axes the change touches (v4/v6, ports, CE/Plus, parse modes, every caller of touched symbols — from grep, not memory) and flag uncovered rows. Flag hardcoded env-derived literals.
 
-2. CORRECTNESS + HOSTILE INPUTS. Hunt logic errors, unreachable/dead branches, error paths (every filesystem/subprocess/network result checked or deliberately best-effort), races, and — for any parser/regex/guard — attack it with the CLAUDE.md hostile-input classes (punycode/IDN, empty, header/no-header, metacharacters, tabs/consecutive spaces, oversized, wrong encoding), EXECUTING probes.
+2. CORRECTNESS + HOSTILE INPUTS. Hunt logic errors, unreachable/dead branches, error paths (every filesystem/subprocess/network result checked or deliberately best-effort), races, security holes, CLAUDE.md/code-standard violations, stale comments/docs about touched symbols, and — for any parser/regex/guard — attack it with the CLAUDE.md hostile-input classes (punycode/IDN, empty, header/no-header, metacharacters, tabs/consecutive spaces, oversized, wrong encoding), EXECUTING probes.
 
 3. TEST HONESTY. For each new/changed test: does it carry an assertion that fails on regression; does every negative assertion have a fixture that could fail it (vacuity); is any red-run manufactured via a fault production cannot produce; are failure modes exercised through the production surface; is red->green evidence real (re-execute it: check out the pre-change tree for the src paths, run the named tests, restore). Also: does anything touch www/ without Tier-A coverage.
 

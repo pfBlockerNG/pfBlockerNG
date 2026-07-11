@@ -724,12 +724,11 @@ squash. History stays strictly linear (`main` always an ancestor of `devel`).
 
 **Default landing flow — `/pr-merge-flow N`** after completing any issue, ADR, or code
 change: review feedback first, then merge. A **Claude adversarial review runs on EVERY PR
-as ONE reviewer sub-agent** at effort `xhigh` (never below, never `max`): the latest Sonnet
-(Sonnet 5 or newer) by default, the latest Fable (Fable 5 or newer) for a large/complex PR —
-spawned via the bare `model: sonnet` / `model: fable` aliases (they resolve to the latest
-generation; never pin a dated model ID), preferably as the committed `review-single`
-workflow — **never Opus, never a multi-agent fan-out** (the
-`review-fanout` workflow runs only on explicit user request) — in addition to **GitHub
+as the committed `review-single` workflow** — ONE reviewer sub-agent at effort `xhigh`
+(never below, never `max`), latest Sonnet by default / latest Fable for a large/complex PR,
+**never Opus, never a multi-agent fan-out** (`review-fanout` only on explicit user request);
+the full reviewer contract lives in `.claude/workflows/review-single.js`, not here — in
+addition to **GitHub
 Copilot** (its review is *requested* when available, skipped
 if already reviewing, and waited on, bounded) and **CodeRabbit** when it reviews. A CodeRabbit
 rate-limit notice follows the **5-minute rule** (its stated resume time > 5 min ⇒ proceed

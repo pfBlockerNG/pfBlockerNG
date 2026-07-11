@@ -6,10 +6,10 @@ description: >
   feedback, validate + apply each finding and reply, and ONLY if that completes
   cleanly, rebase the head onto the live base, wait for the real CI to go green
   (EXCLUDING the bot), merge `--rebase` (never a merge commit, never squash) and
-  delete the branch. The review step ALWAYS runs ONE Claude sub-agent as an
-  ADVERSARIAL, maximally thorough reviewer IN ADDITION TO CodeRabbit — never as a mere
-  fallback — at reasoning effort xhigh (never below, never max): the latest Sonnet
-  (5 or newer) by default, the latest Fable (5 or newer) for a large/complex PR
+  delete the branch. The review step ALWAYS runs the committed `review-single`
+  workflow — ONE Claude sub-agent as an ADVERSARIAL reviewer IN ADDITION TO CodeRabbit,
+  never a mere fallback — at reasoning effort xhigh (never below, never max): the latest
+  Sonnet (5 or newer) by default, the latest Fable (5 or newer) for a large/complex PR
   (orchestrator's pick; never Opus, never a multi-agent fan-out). In parallel it
   gives CodeRabbit ~10 minutes to acknowledge the PR: if it does, wait on its review
   too; if it stays silent, nudge it once with `@coderabbitai review` and wait 10 more
@@ -174,57 +174,32 @@ Runs on **every** PR — spawn it at the **start of Step 1**, in the background,
 parallel with the CodeRabbit wait. It is additive: CodeRabbit reviewing does not skip
 it, and it does not replace CodeRabbit; when CodeRabbit never reviews it stands alone.
 
-1. **Spawn ONE sub-agent** (model per the shape rule below), briefed as an independent **ADVERSARIAL**
-   reviewer — its job is to try to **break the change**, not to rubber-stamp it. The brief
-   MUST include **the work item's intent** — the issue/ADR link, its acceptance criteria /
-   coverage matrix, and the PR body — because a diff-only reviewer can never catch "asked for
-   ALL X, delivered a subset, claimed completeness"; the diff is internally consistent, only
-   diff-vs-spec exposes it. The reviewer: reviews the PR's diff
-   (`git diff origin/<BASE>...HEAD` in the PR's worktree/branch), grounded
-   in the **current** code (read the surrounding files, not just the hunk), and hunts as
-   thoroughly as the PR allows for bugs, unhandled edge cases and input classes, races,
-   security holes, CLAUDE.md/code-standard violations, and **coverage theater** (tests
-   that execute but cannot fail on a regression; missing fail-before/pass-after
-   evidence; negative assertions with no fixture that could fail them; red-runs
-   manufactured via faults production cannot produce). Mandatory hunt items:
-   **spec coverage** — each acceptance criterion / matrix row mapped to where the diff
-   satisfies it, silently narrowed scope flagged; **per-file verdict** — every changed
-   file gets findings / considered-and-fine / not-examined-because (a review missing
-   files is incomplete — re-run it); **hostile inputs** — any new/changed parser, regex,
-   or guard probed with the CLAUDE.md "THE BRIEF" §4 input classes; **hardcoding** —
-   env-derived literals (versions, ABIs, paths, column indexes) that the spec or matrix
-   says must be enumerated or resolved at runtime; **`www/` touched → Tier-A UI test
-   present, else a `blocking` finding** (test mandate #4); **stale comments/docs** about
-   touched symbols. The VENDORED plugin trees (`.claude/skills/ponytail/`,
-   `.claude/skills/caveman/`) are OUT of review scope — byte-identical upstream copies (see
-   their UPSTREAM files); only byte-identity with the pinned ref and the provenance itself
-   are reviewable, never their content or style. The reviewer **executes, not just reads**: it MAY run the gates and
-   MUST ground each `blocking` correctness claim in an executed probe (command + output —
-   the "Empirically verified:" standard) wherever the claim is executable off-appliance.
-   Each finding: severity (`blocking` / `nitpick` / `outside-diff`), `file:line`, the
-   grounded explanation + how-to-reproduce, and a concrete suggested fix. Tell it the
-   result IS its final message and not to edit anything.
-   **Reasoning effort: `xhigh` — NEVER lower, and NEVER `max`. Always ONE sub-agent —
-   never a multi-agent fan-out** (user directive 2026-07-11; the old `review-fanout`
-   default is retired — that committed workflow now runs only on an explicit user
-   request). You (the orchestrator) pick the **model** by the PR's size and complexity —
-   and record the chosen model + the size metric that drove it in the Step-1d.5 audit
-   comment: a small/simple PR → `model: sonnet`; a large or complex PR
-   (roughly: >300 changed lines, >6 files, or any behaviour change in `src/`'s
-   parsing/guard/scheduling logic) → `model: fable` — **never Opus**. Always the bare
-   family alias, which resolves to the LATEST generation (Sonnet 5 / Fable 5 or newer);
-   never pin a dated model ID — a pinned ID silently ages. The single
-   reviewer covers all three lenses itself (contract-conformance vs the spec,
-   correctness + hostile inputs, test honesty). **Preferred mechanics — the committed
-   `review-single` workflow** (script: `.claude/workflows/review-single.js`; it carries
-   this whole reviewer contract as its prompt and schema-forces the findings):
+1. **Run the committed `review-single` workflow** — the reviewer contract (adversarial
+   brief, the three lenses, hostile-input classes, execution-grounded blocking claims,
+   per-file verdicts, vendored-tree exclusion, schema-forced findings) lives in
+   `.claude/workflows/review-single.js`, the single source of truth — do NOT restate or
+   re-improvise it:
    `Workflow({name: 'review-single', args: {pr: N, base: '<base>', worktree: '<path>',
-   spec: '<the work item's intent/acceptance criteria>', model: 'sonnet'|'fable'}})` —
-   treat its `findings` list as the review and check `per_file` covers every changed
-   file. Workflow tool unavailable → spawn a plain Agent sub-agent with the same brief,
-   model, and effort. Do **not** propagate ponytail
-   to the reviewer (CLAUDE.md: ponytail governs what you build; a reviewer builds
-   nothing — thoroughness and finding detail are outside its scope).
+   spec: '<see below>', model: 'sonnet'|'fable'}})`.
+   Your (orchestrator) duties around that call:
+   - **Build the `spec`** from the work item's intent — the issue/ADR link, its
+     acceptance criteria / coverage matrix, and the PR body. A diff-only reviewer can
+     never catch "asked for ALL X, delivered a subset, claimed completeness"; only
+     diff-vs-spec exposes it.
+   - **Pick the model** by the PR's size and complexity, and record the chosen model +
+     the size metric that drove it in the Step-1d.5 audit comment: small/simple →
+     `model: sonnet`; large/complex (roughly: >300 changed lines, >6 files, or any
+     behaviour change in `src/`'s parsing/guard/scheduling logic) → `model: fable`.
+     **Never Opus, never a multi-agent fan-out** (user directive 2026-07-11 —
+     `review-fanout` runs only on an explicit user request), never below `xhigh`,
+     never `max`; the bare family alias resolves to the LATEST generation (Sonnet 5 /
+     Fable 5 or newer) — never pin a dated model ID.
+   - **Validate the result**: treat `findings` as the review; `per_file` must cover
+     every changed file (a review missing files is incomplete — re-run it).
+   - **Fallback** (Workflow tool unavailable): spawn ONE plain Agent sub-agent with the
+     same model and effort, briefed from the workflow script's PROMPT; do **not**
+     propagate ponytail to it (CLAUDE.md: ponytail governs what you build; a reviewer
+     builds nothing).
 2. **When the sub-agent finishes, resolve the CodeRabbit outcome (Steps 1a–1c).** If
    CodeRabbit reviewed — or turns up late (re-check the PR) — wait for its review to
    finish (the `pr-comments` `--wait-for=coderabbitai` wait, or poll until a terminal
