@@ -348,3 +348,15 @@ by `tests/shell/agent_*_spec.sh`.
   scrub the hook-exported `GIT_DIR`/`GIT_INDEX_FILE`/… via
   `scripts/lib/git-env-scrub.sh` (ADR-47) — inherited hook env otherwise aims fixture
   git ops at the live repository.
+- **Gate re-runs vs the pre-commit hook (recorded-skip carve-out).** THE GATE item 1's
+  `run-gates.sh` re-run may be recorded as SKIPPED for a gate the pre-commit hook
+  **provably just executed identically**: the gater watched that gate's `[pre-commit]`
+  step line pass on the exact commits being gated, same session, no `--no-verify`. Two
+  hook properties keep this narrow: the hook **skips missing tools instead of failing**
+  (a green commit is not proof a gate ran — only its step line is), and its shellspec
+  run is **impacted-scoped**, not the full suite, so it never satisfies the canonical
+  full-suite shellspec gate. In practice the carve-out covers whole-tree
+  `markdownlint`, the per-file `sh -n`/`shellcheck`/`php -l` lint gates, and the
+  phpstan/phpcs analyses (the hook runs both, memory-capped, off the same configs);
+  the unit suites (`pytest`, `phpunit`) and the full shellspec run exist only in
+  `run-gates.sh` and are never satisfied by pre-commit.
