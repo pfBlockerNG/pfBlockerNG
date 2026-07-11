@@ -14657,6 +14657,78 @@ function pfb_update_autotail(bool $task_running, bool $run_dispatch, bool $logvi
 }
 
 
+// issue #1175: cross-process, non-blocking mutual exclusion for a feed pass --
+// pfb_feed_task_running()/pfb_update_pass_running() above are ps-scan guards
+// (advisory-by-process-list); this flock-based sibling actually serializes two
+// overlapping passes so they cannot corrupt shared recompute staging. Reentrant
+// within a process: a second acquire by the same process is a no-op success.
+function pfb_feed_pass_acquire(): bool {
+	global $pfb;
+
+	if (isset($GLOBALS['pfb_feed_pass_lock']) && is_resource($GLOBALS['pfb_feed_pass_lock'])) {
+		return TRUE;
+	}
+
+	$lockpath = "{$pfb['dbdir']}/pfb_feed_pass.lock";
+	$lock = @fopen($lockpath, 'c');	// 'c': create if absent, no truncate
+	if ($lock === FALSE) {
+		// An unwritable dbdir must never block legitimate work -- fail open.
+		pfb_logger("\nFeed pass lock: open failed [ {$lockpath} ], proceeding unlocked", 2);
+		return TRUE;
+	}
+	if (!@flock($lock, LOCK_EX | LOCK_NB)) {
+		@fclose($lock);
+		return FALSE;
+	}
+
+	$GLOBALS['pfb_feed_pass_lock'] = $lock;
+	if (empty($GLOBALS['pfb_feed_pass_lock_shutdown_registered'])) {
+		// flock also auto-releases on process death (kernel); this just keeps
+		// the window tight in a long-lived web worker that acquired but never
+		// explicitly released.
+		register_shutdown_function('pfb_feed_pass_release');
+		$GLOBALS['pfb_feed_pass_lock_shutdown_registered'] = TRUE;
+	}
+	return TRUE;
+}
+
+// Release the lock acquired by pfb_feed_pass_acquire(). No-op unless this
+// process holds it -- safe to call from an unconditional cleanup path.
+function pfb_feed_pass_release(): void {
+	if (!isset($GLOBALS['pfb_feed_pass_lock']) || !is_resource($GLOBALS['pfb_feed_pass_lock'])) {
+		return;
+	}
+	@flock($GLOBALS['pfb_feed_pass_lock'], LOCK_UN);
+	@fclose($GLOBALS['pfb_feed_pass_lock']);
+	unset($GLOBALS['pfb_feed_pass_lock']);
+}
+
+// TRUE iff ANOTHER process currently holds the feed-pass lock. This process's
+// own hold (via pfb_feed_pass_acquire()) never reads as busy to itself. The
+// probe takes a momentary LOCK_NB hold to test contention, then releases
+// immediately -- never left locked.
+function pfb_feed_pass_busy(): bool {
+	global $pfb;
+
+	if (isset($GLOBALS['pfb_feed_pass_lock']) && is_resource($GLOBALS['pfb_feed_pass_lock'])) {
+		return FALSE;
+	}
+
+	$lockpath = "{$pfb['dbdir']}/pfb_feed_pass.lock";
+	$probe = @fopen($lockpath, 'c');
+	if ($probe === FALSE) {
+		return FALSE;	// fail open: an unwritable dbdir never reports busy
+	}
+	if (!@flock($probe, LOCK_EX | LOCK_NB)) {
+		@fclose($probe);
+		return TRUE;
+	}
+	@flock($probe, LOCK_UN);
+	@fclose($probe);
+	return FALSE;
+}
+
+
 // Encode a string as a JavaScript string literal (including the surrounding double quotes) for
 // assignment to a textarea's plain-text .value. json_encode gives correct JS-string escaping --
 // unlike htmlspecialchars(), which HTML-entity-escapes (so a '>' would render as a literal
