@@ -98,7 +98,8 @@ function pfb_runnow(string $scope, bool $force): void {
 	pfbupdate_status(gettext("Running: scope={$scope} force={$force_val}"));
 
 	// Remove the tick cron to prevent overlap; sync_package_pfblockerng() restores it.
-	install_cron_job('pfblockerng.php tick', FALSE);
+	install_cron_job('pfblockerng.php cron-tick', FALSE);
+	install_cron_job('pfblockerng.php tick', FALSE);	// issue #1204: legacy pre-#1204 entry, if present
 
 	pfb_logger("\n [ Run Now - scope={$scope} force={$force_val} trigger={$trigger} ]\n", 1);
 
@@ -149,7 +150,8 @@ function pfb_runnow_forcecheck(string $scope): void {
 
 	pfbupdate_status(gettext("Running: scope={$scope} force=download/both (on-demand detector)"));
 
-	install_cron_job('pfblockerng.php tick', FALSE);
+	install_cron_job('pfblockerng.php cron-tick', FALSE);
+	install_cron_job('pfblockerng.php tick', FALSE);	// issue #1204: legacy pre-#1204 entry, if present
 
 	pfb_logger("\n [ Force check - scope={$scope} ]\n", 1);
 
@@ -237,11 +239,16 @@ if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On) {
 	$nextcron	= "{$hour_final}:{$min_final}:{$sec_final}";
 }
 
-// Probe for the exact tick signature install_cron_job() registers in pfblockerng.inc, so an
-// installed tick is not misreported as "[ Missing cron task ]".
-$pfb_cmd = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php tick >> {$pfb['log']} 2>&1";
+// Probe for the exact cron-tick signature install_cron_job() registers in pfblockerng.inc, so
+// an installed cron-tick is not misreported as "[ Missing cron task ]".
+$pfb_cmd = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron-tick >> {$pfb['log']} 2>&1";
 
-if (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On) {
+// issue #1204: the suppression sentinel outranks the enabled/missing-cron checks below, so a
+// stray .pfb_cron_disable file is always visible even on an otherwise-healthy schedule.
+if (pfb_cron_disabled()) {
+	$cronreal = ' [ Disabled by ' . pfb_cron_disable_path() . ' ]';
+	$nextcron = '--';
+} elseif (pfb_cfg_toggle_read($pfb['enable']) === PfbToggle::On) {
 	if (!pfblockerng_cron_exists($pfb_cmd, '*/' . $pfb_tick_min, '*', '*', '*')) {
 		$cronreal = ' [ Missing cron task ]';
 		$nextcron = '--';

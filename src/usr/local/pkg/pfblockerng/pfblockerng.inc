@@ -3958,6 +3958,18 @@ function pfb_software_provenance_ok(): bool {
 	return pfb_software_is_our_build(pfb_pkg_installed_repo(pfb_pkg_installed_name()));
 }
 
+// issue #1204: hidden dbdir sentinel suppressing the scheduled cron-tick verb without
+// touching config.xml (house pattern: PFB_SOFTWARE_PANEL_OVERRIDE above). Presence-only
+// -- the file's content is never read. $path/$dbdir are injectable for off-box tests.
+function pfb_cron_disable_path(?string $dbdir = NULL): string {
+	global $pfb;
+	return ($dbdir ?? $pfb['dbdir']) . '/.pfb_cron_disable';
+}
+
+function pfb_cron_disabled(?string $path = NULL): bool {
+	return is_file($path ?? pfb_cron_disable_path());
+}
+
 /*
  * Pending-changes flag. A save on a DEFERRED settings page (DNSBL/IP/Feeds) writes config.xml
  * but does NOT apply — only a real Update/cron pass applies it. The flag drives a GUI banner
@@ -5787,20 +5799,23 @@ function pfblockerng_cron_exists($pfb_cmd, $pfb_min, $pfb_hour, $pfb_mday, $pfb_
 // tick cron's install/teardown behaviour without driving the whole sync pass.
 function pfblockerng_configure_tick_cron(bool $enabled, int $tick_min, string $log): void {
 	$pfb_tick_min = '*/' . $tick_min;
-	$pfb_tick_cmd = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php tick >> {$log} 2>&1";
+	$pfb_tick_cmd = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron-tick >> {$log} 2>&1";
 
 	if ($enabled) {
 		if (!pfblockerng_cron_exists($pfb_tick_cmd, $pfb_tick_min, '*', '*', '*')) {
-			install_cron_job('pfblockerng.php tick', FALSE);	// remove stale tick (interval changed)
+			install_cron_job('pfblockerng.php cron-tick', FALSE);	// remove stale cron-tick (interval changed)
+			install_cron_job('pfblockerng.php tick', FALSE);	// remove legacy pre-#1204 entry
 			install_cron_job($pfb_tick_cmd, TRUE, $pfb_tick_min, '*', '*', '*', '*', 'root');
 		}
 	}
 	else {
+		install_cron_job('pfblockerng.php cron-tick', FALSE);
 		install_cron_job('pfblockerng.php tick', FALSE);
 	}
 
-	// Migration teardown: remove old fleet jobs from pre-ADR-43 installs.
-	install_cron_job('pfblockerng.php cron', FALSE);
+	// issue #1204: trailing space -- a bare 'pfblockerng.php cron' needle substring-matches
+	// 'pfblockerng.php cron-tick' and would delete the just-installed entry every sync.
+	install_cron_job('pfblockerng.php cron ', FALSE);
 	install_cron_job('pfblockerng.php dcc', FALSE);
 	install_cron_job('pfblockerng.php ss_refresh', FALSE);
 	install_cron_job('pfblockerng.php bl', FALSE);

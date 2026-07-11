@@ -15,10 +15,10 @@
 #   1. Custom list pre/post scripts relocated into list_scripts/ on upgrade — a
 #      pre-4.0.x release resolves list scripts against the package ROOT only, so a
 #      moved script silently stops running. They are moved back to the root.
-#   2. The ADR-43 `pfblockerng.php tick` cron entry (which replaced the older
-#      cron/dcc/ss_refresh/bl fleet) is removed, so the downgraded release
-#      re-establishes its own schedule on its next sync instead of leaving an
-#      orphan tick cron behind that it has no verb to run.
+#   2. The ADR-43 scheduled-tick cron entry (`pfblockerng.php cron-tick`, or the
+#      legacy `pfblockerng.php tick` on an older build -- issue #1204) is removed, so
+#      the downgraded release re-establishes its own schedule on its next sync instead
+#      of leaving an orphan tick cron behind that it has no verb to run.
 #
 # Everything else the upgrade changed is already downgrade-safe: new-in-4.0.x config
 # keys are ignored by an older release (inert, preserved for roll-forward), and the
@@ -102,10 +102,13 @@ pfb_restore_list_scripts() {
 }
 
 # pfb_remove_tick_cron
-# Remove the ADR-43 `pfblockerng.php tick` cron entry via pfSsh.php, which calls the
-# shipped install_cron_job() so config.xml + the live crontab are rewritten cleanly.
-# Prints "removed" / "absent" to stdout; returns non-zero (and prints to stderr) if
-# pfSsh.php is unavailable.
+# Remove the ADR-43 scheduled-tick cron entry via pfSsh.php, which calls the shipped
+# install_cron_job() so config.xml + the live crontab are rewritten cleanly. Checks
+# BOTH the current `pfblockerng.php cron-tick` verb and the legacy pre-#1204
+# `pfblockerng.php tick` verb -- install_cron_job() matches by SUBSTRING and 'tick'
+# does not match 'cron-tick', so each needs its own needle. Prints "removed" /
+# "absent" to stdout; returns non-zero (and prints to stderr) if pfSsh.php is
+# unavailable.
 pfb_remove_tick_cron() {
 	if [ ! -f "$PFB_PFSSH" ]; then
 		echo "pfb-downgrade-prep: pfSsh.php not found at ${PFB_PFSSH}; cannot remove the tick cron" >&2
@@ -118,10 +121,17 @@ pfb_remove_tick_cron() {
 	_out=$(timeout 120 "$PFB_PFSSH" <<'PHP'
 $present = FALSE;
 foreach (config_get_path('cron/item', array()) as $i) {
-	if (strpos($i['command'] ?? '', 'pfblockerng.php tick') !== FALSE) { $present = TRUE; break; }
+	$cmd = $i['command'] ?? '';
+	if (strpos($cmd, 'pfblockerng.php cron-tick') !== FALSE || strpos($cmd, 'pfblockerng.php tick') !== FALSE) {
+		$present = TRUE;
+		break;
+	}
 }
-if ($present) { install_cron_job('pfblockerng.php tick', FALSE); echo "PFB_TICK_REMOVED\n"; }
-else { echo "PFB_TICK_ABSENT\n"; }
+if ($present) {
+	install_cron_job('pfblockerng.php cron-tick', FALSE);
+	install_cron_job('pfblockerng.php tick', FALSE);
+	echo "PFB_TICK_REMOVED\n";
+} else { echo "PFB_TICK_ABSENT\n"; }
 exec
 exit
 PHP

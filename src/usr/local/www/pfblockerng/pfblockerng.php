@@ -108,6 +108,17 @@ if (isset($argv[1])) {
 		pfblockerng_tick();
 		exit;
 	}
+	// issue #1204: cron-only verb the installed crontab entry calls. A present
+	// .pfb_cron_disable sentinel suppresses just this scheduled dispatch -- the
+	// direct 'tick' verb above stays fully live regardless.
+	elseif ($argv[1] == 'cron-tick') {
+		if (pfb_cron_disabled()) {
+			print '[ Disabled by ' . pfb_cron_disable_path() . " ]\n";
+			exit;
+		}
+		pfblockerng_tick();
+		exit;
+	}
 	// PFBL-03: root-only DNSBL-control entrypoint. Writes a validated command to the
 	// local privileged command channel consumed by pfb_unbound.py.
 	// Usage: pfblockerng.php dnsbl-control <disable [sec] | enable |
