@@ -128,4 +128,19 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The output should not include 'gone.sh'
     The output should include 'GATES: PASS'
   End
+
+  # issue #1194: a gate command that reads stdin (the full PHPUnit suite does) must
+  # not consume the command loop's remaining gate lines — they silently vanished
+  # with neither a GATE line nor a SKIP, and GATES: PASS still printed.
+  It 'runs the gates queued after a stdin-reading gate command'
+    stdin_eating_gate() {
+      printf '#!/bin/sh\ncat >/dev/null\nexit 0\n' > "$stubdir/shellcheck"
+      sh "$script" --worktree "$repo" --diff "$base_sha"
+    }
+    When call stdin_eating_gate
+    The status should equal 0
+    The output should include 'GATE PASS: shellcheck kept.sh'
+    The output should include 'GATE PASS: shellspec'
+    Assert [ -e "$marker" ]
+  End
 End
