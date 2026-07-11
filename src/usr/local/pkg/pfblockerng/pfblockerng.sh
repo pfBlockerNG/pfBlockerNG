@@ -442,8 +442,14 @@ remove() {
 
 # Function to remove IPs if exists over 253 IPs in a range and replace with a single /24 block. (excl. '0' & '255')
 process255() {
-	true > "${dedupfile}"
-	data255="$(cut -d '.' -f 1-3 "${pfbdeny}${alias}.txt" | awk '{a[$0]++}END{for(i in a){if(a[i] > 253){print i}}}')" 
+	# issue #1172: rc-checked truncate-create (see pfb_recompute()'s 'true >'
+	# rationale) -- abort before the #713 publish gate instead of falling through.
+	if ! true > "${dedupfile}"; then
+		log="process255 [ ${alias} ]: cannot create [ ${dedupfile} ]; aborting."
+		echo "${log}" | tee -a "${errorlog}"
+		return
+	fi
+	data255="$(cut -d '.' -f 1-3 "${pfbdeny}${alias}.txt" | awk '{a[$0]++}END{for(i in a){if(a[i] > 253){print i}}}')"
 
 	if [ -n "${data255}" ]; then
 		cp "${pfbdeny}${alias}.txt" "${tempfile}"
@@ -509,7 +515,11 @@ suppress() {
 				# reach it. The suppression list is user free-text; the member file
 				# is already-sanitised feed data, filtered again here as
 				# defense-in-depth, not because it is expected to need it.
-				true > "${dupfile}"
+				if ! true > "${dupfile}"; then
+					log=" Suppression ${alias}: cannot create [ ${dupfile} ]; aborting suppression pass, keeping unsuppressed list."
+					echo "${log}" | tee -a "${errorlog}"
+					return
+				fi
 				while IFS= read -r ip; do
 					if pfb_is_cidr_token "${ip}"; then
 						echo "${ip}" >> "${dupfile}"
@@ -682,12 +692,20 @@ pfb_aggregate() {
 	fi
 
 	# Concatenate every existing member file, then dedup (sort -u) into the temp file.
-	true > "${tempfile}"
+	if ! true > "${tempfile}"; then
+		log="aggregate [ ${agg_family} ]: cannot create [ ${tempfile} ]; failed; keeping existing."
+		echo "${log}" | tee -a "${errorlog}"
+		return
+	fi
 	while IFS= read -r agg_member; do
 		[ -z "${agg_member}" ] && continue
 		[ -f "${agg_member}" ] && cat "${agg_member}" >> "${tempfile}"
 	done < "${agg_memberlist}"
-	LC_ALL=C sort -u "${tempfile}" > "${dedupfile}"
+	if ! LC_ALL=C sort -u "${tempfile}" > "${dedupfile}"; then
+		log="aggregate [ ${agg_family} ]: union sort of [ ${tempfile} ] failed; keeping existing."
+		echo "${log}" | tee -a "${errorlog}"
+		return
+	fi
 
 	# CIDR-collapse the deduped union into a temp, then mv into place only on success -- so a
 	# failure in ANY branch (iprange error, or a write/copy failure) cannot clobber a previously
@@ -1707,7 +1725,11 @@ EOF
 
 	# Find repeat offenders in each individual blocklist outfile
 	if [ -s "${dupfile}" ]; then
-		true > "${tempfile2}"
+		if ! true > "${tempfile2}"; then
+			log="reputation_max [ ${alias} ]: cannot create [ ${tempfile2} ]; aborting, keeping existing list."
+			echo "${log}" | tee -a "${errorlog}"
+			return
+		fi
 		# Each dupfile line is a '10.0.0.'-style octet prefix. Read them directly
 		# (no sed pre-escape, no IFS re-split), validate to digits/dots, and build
 		# the anchored '^10\.0\.0\.' pattern via the shared helper so only a
@@ -1800,7 +1822,11 @@ EOF
 
 		# Remove repeat offenders in masterfile
 		echo '  Removing   [ Block ] IPs'
-		true > "${tempfile}"
+		if ! true > "${tempfile}"; then
+			log="reputation_pmax: cannot create [ ${tempfile} ]; aborting, keeping existing masterfile."
+			echo "${log}" | tee -a "${errorlog}"
+			return
+		fi
 		# Each dedupfile line is '<alias> 10.0.0.'. Anchor it at column 0 and escape
 		# the prefix's dots (via pfb_anchor_octet_pattern; the alias field is \w-only,
 		# so escaping the dots is sufficient) so the removal grep matches ONLY this
@@ -1840,7 +1866,11 @@ processet() {
 	if [ -s "${pfborig}${alias}.orig" ]; then
 		# Remove previous ET IPRep files
 		[ -d "${etdir}" ] && [ "$(ls -A "${etdir}")" ] && rm -r "${etdir}/ET_"*
-		true > "${tempfile}"; true > "${tempfile2}"
+		if ! true > "${tempfile}" || ! true > "${tempfile2}"; then
+			log="processet [ ${alias} ]: cannot create ET scratch file(s); aborting ET processing."
+			echo "${log}" | tee -a "${errorlog}"
+			return
+		fi
 
 		# ET CSV format (IP, Category, Score)
 		echo; echo; echo 'Compiling ET IPREP IQRisk based upon user selected categories'
