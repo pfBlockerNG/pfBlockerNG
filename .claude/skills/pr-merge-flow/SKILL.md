@@ -215,7 +215,14 @@ it, and it does not replace CodeRabbit; when CodeRabbit never reviews it stands 
    family alias, which resolves to the LATEST generation (Sonnet 5 / Fable 5 or newer);
    never pin a dated model ID — a pinned ID silently ages. The single
    reviewer covers all three lenses itself (contract-conformance vs the spec,
-   correctness + hostile inputs, test honesty). Do **not** propagate ponytail
+   correctness + hostile inputs, test honesty). **Preferred mechanics — the committed
+   `review-single` workflow** (script: `.claude/workflows/review-single.js`; it carries
+   this whole reviewer contract as its prompt and schema-forces the findings):
+   `Workflow({name: 'review-single', args: {pr: N, base: '<base>', worktree: '<path>',
+   spec: '<the work item's intent/acceptance criteria>', model: 'sonnet'|'fable'}})` —
+   treat its `findings` list as the review and check `per_file` covers every changed
+   file. Workflow tool unavailable → spawn a plain Agent sub-agent with the same brief,
+   model, and effort. Do **not** propagate ponytail
    to the reviewer (CLAUDE.md: ponytail governs what you build; a reviewer builds
    nothing — thoroughness and finding detail are outside its scope).
 2. **When the sub-agent finishes, resolve the CodeRabbit outcome (Steps 1a–1c).** If

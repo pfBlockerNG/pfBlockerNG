@@ -727,7 +727,8 @@ change: review feedback first, then merge. A **Claude adversarial review runs on
 as ONE reviewer sub-agent** at effort `xhigh` (never below, never `max`): the latest Sonnet
 (Sonnet 5 or newer) by default, the latest Fable (Fable 5 or newer) for a large/complex PR —
 spawned via the bare `model: sonnet` / `model: fable` aliases (they resolve to the latest
-generation; never pin a dated model ID) — **never Opus, never a multi-agent fan-out** (the
+generation; never pin a dated model ID), preferably as the committed `review-single`
+workflow — **never Opus, never a multi-agent fan-out** (the
 `review-fanout` workflow runs only on explicit user request) — in addition to **GitHub
 Copilot** (its review is *requested* when available, skipped
 if already reviewing, and waited on, bounded) and **CodeRabbit** when it reviews. A CodeRabbit
