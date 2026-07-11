@@ -1,6 +1,10 @@
 # ADR-63: Staged client-side reorder (drag + anchor-click) for category and category-row lists
 
-- **Status:** **Proposed** (2026-07-10; amended same day after design review — see §1.8)
+- **Status:** **Accepted** (2026-07-12, on the green CE+Plus live-VM smoke fan-out — GitHub
+  Actions run 29170634245, both browser legs green: `ce-2.8` 43 passed / `plus-26.03` 43
+  passed, over the §7 reorder rows via `-k "reorder or sort_mode"`. Proposed 2026-07-10;
+  amended same day after design review — see §1.8; §1.4/Semantics-#7 + §4 Req 3 amended
+  during Phase 1/4 implementation.)
 - **Date:** 2026-07-10
 - **Branch:** `adr/63-category-reorder-ux` (off `devel`) / **Component(s):**
   `src/usr/local/www/pfblockerng/pfblockerng_category.php`,
