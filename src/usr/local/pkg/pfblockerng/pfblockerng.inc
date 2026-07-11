@@ -5101,6 +5101,15 @@ function pfb_ip_recompute_memberlist_content(array $paths): string {
 	return $paths ? implode("\n", $paths) . "\n" : '';
 }
 
+// issue #1184: log a failed memberlist write -- a silent failure re-ran the full recompute every tick.
+function pfb_ip_recompute_memberlist_write(string $memberlist_path, array $paths): int|false {
+	$result = @file_put_contents($memberlist_path, pfb_ip_recompute_memberlist_content($paths), LOCK_EX);
+	if ($result === FALSE) {
+		pfb_logger("\nIP-Recompute: write failed for [ {$memberlist_path} ] -- recompute still runs this pass", 2);
+	}
+	return $result;
+}
+
 /**
  * issue #1173: a pure IPv4/IPv6 Deny-list priority reorder flips no feed-change repcheck --
  * no feed content changed -- yet recompute ownership follows memberlist ORDER
@@ -19064,7 +19073,7 @@ function sync_package_pfblockerng($cron='') {
 		}
 		$pfb_rec_memberlist = "{$pfb['dbdir']}/pfb_recompute_{$pfb_rec_family}.members";
 		$pfb_rec_countsfile = "{$pfb['dbdir']}/pfb_recompute_{$pfb_rec_family}.counts";
-		@file_put_contents($pfb_rec_memberlist, pfb_ip_recompute_memberlist_content($pfb_rec_paths), LOCK_EX);
+		pfb_ip_recompute_memberlist_write($pfb_rec_memberlist, $pfb_rec_paths);
 
 		// Reputation is v4-only (§1.2); the v6 pass is always a dedup-only passthrough.
 		$pfb_rec_repmode = ($pfb_rec_family === 'v4') ? $pfb_rec_matrix['repmode'] : 'off';
