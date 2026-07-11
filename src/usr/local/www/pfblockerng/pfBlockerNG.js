@@ -142,8 +142,8 @@ function pfb_chg_state_bkgd() {
 	pfb_greyout("select[id^='state-']");
 }
 
-// ADR-63: shared drag+anchor-click reorder component. PRODUCTION-DORMANT --
-// defining these functions is inert; no page calls pfb_reorder_init() yet.
+// ADR-63: shared drag+anchor-click reorder component, wired into
+// pfblockerng_category.php and pfblockerng_category_edit.php (sort=='no-sort').
 // Row identity for anchor-click move logic is resolved via DOM traversal
 // (closest()/find()), never by parsing an injected control's own id: core's
 // add_row() (pfSenseHelpers.js) only renumbers <input>/<select>/[id^=deleterow],
@@ -153,15 +153,16 @@ function pfb_reorder_init(container, rowSelector, onAfterMove, dragEnabled) {
 	var anchorClass = 'pfb-reorder-anchor';
 	var chkClass = 'pfb-reorder-chk';
 
-	// The injected control is inline/static; inside a float-based Form_Group
-	// (.form-group.repeatable, category_edit.php) it paints BEHIND the page
-	// container and becomes visible-but-unclickable. Lift it into its own paint
-	// layer so the checkbox/anchor receive pointer events on every row shape.
+	// The injected control (a <span>) is inline/static; inside a float-based
+	// Form_Group (.form-group.repeatable, category_edit.php) it paints BEHIND the
+	// page container and becomes visible-but-unclickable. Lift the <span> into its
+	// own paint layer so the checkbox/anchor receive pointer events. A <tr> row
+	// (category.php) instead gets a real <td> (a natural cell needs no lift).
 	if (!document.getElementById('pfb-reorder-style')) {
 		$('head').append(
 			'<style id="pfb-reorder-style">' +
-			'.pfb-reorder-ctl{position:relative;z-index:5;white-space:nowrap;' +
-			'display:inline-block;margin-left:4px}' +
+			'.pfb-reorder-ctl{white-space:nowrap}' +
+			'span.pfb-reorder-ctl{position:relative;z-index:5;display:inline-block;margin-left:4px}' +
 			'.pfb-reorder-ctl .' + chkClass + '{margin:0 3px;vertical-align:middle}' +
 			'</style>'
 		);
@@ -177,13 +178,20 @@ function pfb_reorder_init(container, rowSelector, onAfterMove, dragEnabled) {
 		if ($(this).find('.' + chkClass).length) {
 			return;
 		}
-		$(this).append(
-			'<span class="pfb-reorder-ctl">' +
-			'<input type="checkbox" class="' + chkClass + '" id="pfb_reorder_chk-' + i + '">' +
+		// aria-label: the arrow glyph alone has no accessible name.
+		var controls =
+			'<input type="checkbox" class="' + chkClass + '" id="pfb_reorder_chk-' + i + '" ' +
+			'aria-label="Select this entry to move">' +
 			'<button type="button" class="' + anchorClass + '" id="pfb_reorder_anchor-' + i + '" ' +
-			'title="Move checked entries before this row (shift-click: after)">&#8645;</button>' +
-			'</span>'
-		);
+			'aria-label="Move checked entries before this entry (shift-click: after)" ' +
+			'title="Move checked entries before this row (shift-click: after)">&#8645;</button>';
+		// A <tr> must carry a <td> (valid table markup + aligns under the header
+		// column); other row shapes get a <span>.
+		if (this.tagName === 'TR') {
+			$(this).append('<td class="pfb-reorder-ctl">' + controls + '</td>');
+		} else {
+			$(this).append('<span class="pfb-reorder-ctl">' + controls + '</span>');
+		}
 	});
 
 	// Delegated (container-level): survives renumber()'s id/name rewrite of
