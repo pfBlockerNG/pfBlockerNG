@@ -48,7 +48,7 @@ main() {
 			*) usage ;;
 		esac
 	done
-	[ -n "$worktree" ] && [ -n "$test_cmd" ] && [ -n "$srcs" ] || usage
+	{ [ -n "$worktree" ] && [ -n "$test_cmd" ] && [ -n "$srcs" ]; } || usage
 	require_tool git
 
 	if [ -n "$(git -C "$worktree" status --porcelain)" ]; then

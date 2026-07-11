@@ -53,7 +53,7 @@ main() {
 			*) usage ;;
 		esac
 	done
-	[ -n "$repo" ] && [ -n "$pr" ] || usage
+	{ [ -n "$repo" ] && [ -n "$pr" ]; } || usage
 	require_gh
 	require_tool jq
 
