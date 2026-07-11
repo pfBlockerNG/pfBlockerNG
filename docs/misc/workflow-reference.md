@@ -305,3 +305,29 @@ the Claude Code managed-remote environment this is platform-provided (every comm
 the platform key under the `claude` committer identity, human as author). Only a bare /
 self-hosted agent setup must provision the key + email itself (until then commits land
 correctly attributed but read *Unverified*).
+
+## Agent-ops scripts (`scripts/agent/`)
+
+The mechanical procedures the skills used to restate in prose live once, tested, in
+`scripts/agent/`: `wait-reviewer.sh` (reviewer-wait state machine), `wait-checks.sh`
+(CI wait), `verify-red-proof.sh` (red→green re-execution + freeze hash),
+`run-gates.sh` (canonical-gates runner), `work-branch.sh` (branch sanitiser +
+worktree cutter). Shared contract in `scripts/agent/agent_env.sh`; behaviour pinned
+by `tests/shell/agent_*_spec.sh`.
+
+- **Portability contract.** All network access rides the `gh`/`git` CLIs — managed
+  cloud environments route git/ssh/https through a localhost proxy that only those
+  CLIs inherit; never call raw endpoints. `gh` absent → the script exits **3** with a
+  `GH-UNAVAILABLE` message: the agent falls back to `mcp__github__*` tools with
+  wakeup-paced checks (CLAUDE.md "No orphaned waits" #4) — MCP tools are harness
+  tools, unreachable from inside a shell, so the fallback cannot live in the script.
+  Any other missing tool → exit **4** (`TOOL-MISSING`). Exit **2** = usage/precondition,
+  **1** = the check itself failed, **0** = verdict reached.
+- **Agent-maintained.** These scripts encode environment mechanics that drift. When an
+  environment change breaks one, the agent fixes the script **in the same session** and
+  lands it via the normal flow (scripts are code-bearing: worktree + PR) — never works
+  around it silently in a transcript.
+- **Hook-context safety.** Git-touching scripts (and any spec whose fixtures run git)
+  scrub the hook-exported `GIT_DIR`/`GIT_INDEX_FILE`/… via
+  `scripts/lib/git-env-scrub.sh` (ADR-47) — inherited hook env otherwise aims fixture
+  git ops at the live repository.

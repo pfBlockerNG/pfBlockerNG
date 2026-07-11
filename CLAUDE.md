@@ -174,6 +174,13 @@ and review.
    state machine, a heuristic): escalate, or at minimum return DONE-WITH-DEVIATION — never
    plain DONE. PR #937's only blocking bug lived in an improvised exemption layer that had
    no hostile-input rows because nobody had planned for it to exist (#943).
+8. **Implementer scope — trust the brief, don't re-investigate it.** The brief embeds its
+   evidence (facts carry their run artifacts), so the implementer's reading scope is the
+   brief + its named refs + the code it edits: no re-fetching the issue/ADR, no re-running
+   the brief's enumeration greps, no re-deriving its matrix — the independent verifier and
+   the PR review carry the skepticism, and duplicating them in the implementer is pure
+   step-budget burn. ESCALATE (item 7) is reactive: an *encountered* contradiction
+   triggers it; proactively auditing the brief does not.
 
 #### THE HANDOFF (implementer → planner) — fixed fields, missing field = gate reject
 
@@ -199,11 +206,12 @@ the gate report's wording, never to which checks run.
    file types **plus cross-language consumers** — a suite that parses an artifact the diff
    changes runs regardless of its language).
 2. **Re-execute the red proof yourself** for behaviour changes — never accept the handoff's
-   claim: `git -C <path> checkout HEAD~1 -- <src paths>` (tests stay), run the named test →
-   expect FAIL; `git -C <path> checkout HEAD -- .` → re-run → expect PASS. Record both
-   results. Also verify the freeze: `git hash-object` of each committed reproduction test
-   equals the handoff's red-time hash — a test edited between red and green (or with no
-   red-time hash) proves nothing.
+   claim. Run `scripts/agent/verify-red-proof.sh --worktree <path> --test-cmd '<cmd>'
+   --src <path>... --hash <test>=<red-time-sha>...` — it reverts the src paths to HEAD~1
+   (tests stay), requires the test to FAIL, restores, requires PASS, and enforces the
+   freeze (`git hash-object` of each committed reproduction test equals the handoff's
+   red-time hash — a test edited between red and green, or with no red-time hash, proves
+   nothing). Record its verdict lines.
 3. **Read the full diff** (`git show` — never `--stat` alone) and tick **every** ACTION-PLAN
    item and **every** coverage-matrix row against what the diff actually does. `--stat` cannot
    see a hardcoded value, a stubbed branch, or a silently dropped plan item. A mechanism in
@@ -225,6 +233,9 @@ the gate report's wording, never to which checks run.
    the SKIPPED list. This artifact is what makes a skipped check auditable.
 
 #### Canonical gates (single source of truth — briefs and gates reference THIS table)
+
+Mechanical runner: `scripts/agent/run-gates.sh [--diff <base>]` (`--plan` to preview) —
+change the table and the runner together.
 
 | Touched | Gates (all must pass) |
 | ------- | --------------------- |
@@ -777,7 +788,10 @@ files. Cheapest before the PR exists.
 4. Truncate ≤30 chars at a `-` boundary (never trailing `-`).
 5. Empty slug → omit it (bare `adr/{NN}` / `issue/{NN}`).
 
-Output is `[a-z0-9-]` only. **On collision** with an *unrelated* branch, append `-{epoch}`
+Output is `[a-z0-9-]` only. **Never hand-derive it**: `scripts/agent/work-branch.sh
+<issue|adr> <NN> [title...]` implements the sanitiser (pinned by
+`tests/shell/agent_work_branch_spec.sh`); `--worktree` also cuts the worktree at an
+absolute path. **On collision** with an *unrelated* branch, append `-{epoch}`
 (epoch seconds). An ADR reusing its own `adr/{NN}-*` branch across phases is reuse, not a
 collision. Examples: `ADR_10_Zero_Downtime_DNSBL` → `adr/10-zero-downtime-dnsbl`; issue #43
 "TLD-Allow KeyError on …" → `issue/43-tld-allow-keyerror-on`.
@@ -842,8 +856,8 @@ platform-level timeout on polls/cron/`ScheduleWakeup`/subscriptions, so the guar
 ours. Three, ALL mandatory:
 
 1. **Self-terminating by construction.** Every background wait carries a hard iteration cap
-   AND a wall-clock deadline *inside the loop itself* (the skills' poll snippets are the
-   exemplars) so it dies on its own even if orphaned. A wait without a cap is a defect —
+   AND a wall-clock deadline *inside the loop itself* (`scripts/agent/wait-*.sh` are the
+   exemplars — and the standard transport when `gh` exists) so it dies on its own even if orphaned. A wait without a cap is a defect —
    never launch one. Event waits also follow the heartbeat ladder (10, 10/10/15/15/30/30 min,
    ≈2 h total, then give up + report the wait abandoned; never re-arm past it).
 2. **Cancel-on-resolution sweep.** The instant a work item reaches a terminal state by ANY

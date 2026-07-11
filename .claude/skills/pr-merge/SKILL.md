@@ -83,27 +83,18 @@ git rebase "origin/$BASE"                # replay onto the LIVE base tip
 
 ## Step 4 — Wait for CI to pass (excluding CodeRabbit)
 
-Poll `gh pr checks` until every **required** check has completed — excluding
+Poll the PR's checks until every **required** check has completed — excluding
 **CodeRabbit** (advisory bot) and **Snyk** (advisory security scan; its quota/infra `error`
-state must never gate a merge) — then decide.
-Run the loop as a **Bash command with `run_in_background: true`** (a background
-`until`-style loop that self-exits gives a single wake — do not foreground-`sleep`),
-then read `$RESULT`:
+state must never gate a merge) — via **`scripts/agent/wait-checks.sh`** (the single
+implementation; pinned by `tests/shell/agent_wait_checks_spec.sh`). Run it as a **Bash
+command with `run_in_background: true`** (self-exiting, ~40 min cap), stdout to a result
+file; the file's LAST line is the verdict:
 
 ```sh
-# Set first: PR  EXCLUDE(regex, default 'coderabbit|snyk')  RESULT(tmpfile)
-i=0
-while [ "$i" -lt 80 ]; do                                  # ~40 min at 30s/poll
-  json=$(gh pr checks "$PR" --json name,bucket 2>/dev/null)
-  rel=$(printf '%s' "$json" | jq -c "[.[] | select((.name|ascii_downcase|test(\"$EXCLUDE\"))|not)]")
-  total=$(printf '%s' "$rel" | jq 'length')
-  fail=$(printf '%s' "$rel" | jq '[.[]|select(.bucket=="fail" or .bucket=="cancel")]|length')
-  pend=$(printf '%s' "$rel" | jq '[.[]|select(.bucket=="pending")]|length')
-  if [ "$fail" -gt 0 ]; then { echo FAIL;    printf '%s\n' "$rel"; } > "$RESULT"; exit 0; fi
-  if [ "$total" -gt 0 ] && [ "$pend" -eq 0 ]; then { echo PASS; printf '%s\n' "$rel"; } > "$RESULT"; exit 0; fi
-  i=$((i + 1)); sleep 30
-done
-echo TIMEOUT > "$RESULT"
+sh scripts/agent/wait-checks.sh --repo "$OWNER_REPO" --pr "$PR" > "$RESULT" 2>&1
+# --exclude REGEX to change the advisory set (default 'coderabbit|snyk').
+# Exit 3 = gh unavailable (managed env): fall back to mcp__github__* wakeup-paced
+# checks (CLAUDE.md "No orphaned waits" #4).
 ```
 
 `bucket` is one of `pass` / `fail` / `pending` / `skipping` / `cancel`; `skipping`

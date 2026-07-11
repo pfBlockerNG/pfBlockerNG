@@ -92,33 +92,16 @@ message whatsoever**, do not yet assume it is absent → **Step 1c** (nudge it f
 the PR is already older than 10 minutes when you start and CodeRabbit has posted nothing,
 conclude `NOACK` immediately — no need to wait.)
 
-Run the wait as a background Bash command (a self-exiting loop = one wake; never a
-foreground `sleep`), then read `$RESULT`:
+Run the wait via **`scripts/agent/wait-reviewer.sh`** as a background Bash command
+(self-exiting), stdout to a result file; its LAST line is the verdict:
 
 ```sh
-# Set first: OWNER_REPO  PR  RESULT(tmpfile). Waits until 10 min past PR creation for
-# ANY CodeRabbit ("coderabbit" login) message; ACK as soon as one appears, else NOACK.
-created=$(gh pr view "$PR" --repo "$OWNER_REPO" --json createdAt -q .createdAt)
-# createdAt + 600s as epoch. BSD date (macOS): -juf; GNU date: the `date -d` fallback.
-deadline=$(( $(date -juf "%Y-%m-%dT%H:%M:%SZ" "$created" +%s 2>/dev/null || date -d "$created" +%s) + 600 ))
-while :; do
-  hits=$(
-    { gh api "repos/$OWNER_REPO/issues/$PR/comments" --paginate \
-        -q '.[]|select((.user.login|ascii_downcase)|test("coderabbit"))|.id'
-      gh api "repos/$OWNER_REPO/pulls/$PR/reviews" --paginate \
-        -q '.[]|select((.user.login|ascii_downcase)|test("coderabbit"))|.id'
-      gh api "repos/$OWNER_REPO/pulls/$PR/comments" --paginate \
-        -q '.[]|select((.user.login|ascii_downcase)|test("coderabbit"))|.id'
-    } 2>/dev/null)
-  # ANY CodeRabbit message = ACK — including a usage/rate-limit notice. Do NOT short-circuit a
-  # quota phrase to "won't review" here: CodeRabbit routinely posts a transient rate-limit (or a
-  # stale notice from an earlier push) and then completes the review, so the QUOTA verdict belongs
-  # to Step 1b's CONTENT-FIRST wait (which reports FINISHED the moment real review content appears,
-  # and QUOTA only if none appears for the whole window). 1a just detects engagement.
-  [ -n "$hits" ] && { echo ACK > "$RESULT"; exit 0; }
-  [ "$(date -u +%s)" -ge "$deadline" ] && { echo NOACK > "$RESULT"; exit 0; }
-  sleep 30
-done
+sh scripts/agent/wait-reviewer.sh --repo "$OWNER_REPO" --pr "$PR" \
+  --handle coderabbitai --until ack > "$RESULT" 2>&1
+# ack mode: ANY CodeRabbit message = ACK (including a quota notice — 1b's content-first
+# wait decides FINISHED vs QUOTA); silent for the cap (default 20 polls x 30 s = the
+# 10-minute window) = NOACK. Exit 3 = gh unavailable: mcp__github__* wakeup-paced
+# checks instead (CLAUDE.md "No orphaned waits" #4).
 ```
 
 - **`ACK`** (any CodeRabbit message appeared — including a quota/rate-limit notice) → **Step 1b**.
@@ -159,7 +142,8 @@ a **fresh** 10-minute deadline (anchored on *now*, not the PR's creation time):
 gh pr comment "$PR" --repo "$OWNER_REPO" --body '@coderabbitai review'
 ```
 
-Re-run the Step-1a loop with `deadline=$(( $(date -u +%s) + 600 ))`. On the result:
+Re-run the Step-1a wait with a fresh window: the same `wait-reviewer.sh --until ack`
+command plus `--since "$(date -u +%Y-%m-%dT%H:%M:%SZ)"`. On the result:
 
 - **`ACK`** (CodeRabbit posted something after the nudge) → **Step 1b**.
 - **`NOACK`** (still silent 10 min after the nudge) → CodeRabbit is unavailable; the
@@ -226,8 +210,8 @@ it, and it does not replace CodeRabbit; when CodeRabbit never reviews it stands 
    the **canonical gates** (CLAUDE.md table) for whatever the fixes touch, commit
    (`<scope>: <imperative summary>`) and push to the PR head branch. **Review-fix commits are
    new unreviewed code** — two of the audited defect chains entered through them — so for any
-   non-trivial APPLY, re-run a focused review of the fix delta (same reviewer contract, scoped
-   to the fix commits) before the Gate below.
+   non-trivial APPLY, re-run `review-single` scoped to the fix delta (same args, `base` set
+   to the pre-fix head SHA so the diff is exactly the fix commits) before the Gate below.
 5. **Record the review on the PR** — post one comment summarising the Claude adversarial
    review (and noting CodeRabbit's, if one arrived) plus the per-finding
    resolution (applied + commit / skipped + reason / deferred + tracking-issue link), so there is an
@@ -268,10 +252,10 @@ CodeRabbit wait:
    `gh api --method POST repos/OWNER/REPO/pulls/N/requested_reviewers -f 'reviewers[]=copilot-pull-request-reviewer[bot]'`).
    If both fail, Copilot code review is not available on this repo/plan — **skip this step
    and note it**; never stall.
-3. **Wait (bounded)** for its review: poll `.../pulls/N/reviews` for a copilot login
-   submission since the request — Copilot typically reviews within a few minutes; use a
-   self-exiting background loop with a ~10-minute window. Timeout → proceed and note it
-   (the pre-merge catch-all sweep will still pick up a late review).
+3. **Wait (bounded)** for its review: `sh scripts/agent/wait-reviewer.sh --repo O/R
+   --pr N --handle copilot --until finished --max-iter 20` in the background (~10-minute
+   window; the handle substring-matches `copilot-pull-request-reviewer[bot]`). TIMEOUT →
+   proceed and note it (the pre-merge catch-all sweep still picks up a late review).
 4. **Triage its findings** exactly like any other review (APPLY / SKIP / DEFER + reply per
    thread) — a summary-only "generated no comments" review is just noted in the audit trail.
    **A confirmed-real finding the reviewer itself downgrades to "pre-existing / out of scope /

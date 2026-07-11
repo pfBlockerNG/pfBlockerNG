@@ -69,17 +69,36 @@ conversation), a follow-up `--fix` — whether as `/gh-issue N --fix` or as the 
 answering the presented plan in any wording ("fix it", "go ahead", "do it") — **resumes**:
 skip Steps 2–5 entirely and jump to Step 6 with the existing verdict and plan as-is.
 Re-running the investigation discards paid-for evidence and can only drift from the plan
-the user just approved. The only staleness re-check allowed: Step 6's fetch is mandatory
-anyway — if `origin/devel` gained commits since the triage that touch the files the
-verdict cites (`git log --oneline <triage-tip>..origin/devel -- <cited paths>`), spot-check
-just the contradicted claims against those commits (targeted diff read, not a fresh
-investigation); a genuine contradiction is reported and only that claim is re-triaged.
-Zero new commits on the cited paths ⇒ execute the plan unchanged.
+the user just approved. The `issue-triage` artifact is built for this resume: its
+`base_tip` is the staleness anchor and each claim carries `cited_paths`. The only
+staleness re-check allowed: Step 6's fetch is mandatory anyway — run
+`git log --oneline <base_tip>..origin/devel -- <union of cited_paths>`; if commits
+landed there, spot-check just the affected claims against those commits (targeted diff
+read, not a fresh investigation); a genuine contradiction is reported and only that
+claim is re-triaged. Zero new commits on the cited paths ⇒ execute the plan unchanged.
+
+## Steps 2–5 — default route: the `issue-triage` workflow
+
+*(Skip Steps 2–5 entirely on a same-session resume — see Step 1; a completed triage is
+never re-run by `--fix`.)*
+
+When the Workflow tool is available, Steps 2–5 run as ONE fresh agent via the committed
+workflow: `Workflow({name: 'issue-triage', args: {issue: N, worktree: '<an up-to-date
+checkout — the primary is fine, the agent reads origin/<base> refs read-only>', base:
+'devel', model: 'fable'}})`. It returns the schema-forced triage artifact — `verdict`,
+`claims[]` (each with executed `evidence` and `cited_paths`), `alternatives`, `impact`,
+`repro`, `plan_steps[]`, `base_tip` — which is both the deliverable (no `--fix`) and the
+durable resume anchor (`--fix` later in the session consumes it per Step 1).
+
+**Validate it non-vacuously before acting on it**: a claim whose `evidence` is prose
+rather than a run artifact, or a CONFIRMED verdict with neither `repro.output` nor
+`repro.infeasible_reason`, rejects the artifact — re-run or fall back inline. You keep
+every judgment call: labels, `AskUserQuestion` forks, and the `--fix` decision stay here.
+
+Steps 2–5 below are the CONTRACT the workflow implements — read them to validate its
+output, and execute them inline only when the Workflow tool is unavailable.
 
 ## Step 2 — Triage: read the WHOLE issue
-
-*(Skip Steps 2–5 on a same-session resume — see Step 1; a completed triage is never
-re-run by `--fix`.)*
 
 Per CLAUDE.md "GitHub issues": **read the title, body, AND every comment**
 (`gh issue view <N> --comments`) — never act on the opening text alone. Later
@@ -213,6 +232,12 @@ the brief a fresh sub-agent could execute with no other context. Each prompt sta
 - **Hypothesis ledger** (debugging-shaped steps) — before any fix edit: ≥2 candidate
   hypotheses, the discriminating probe for each, the probe run and its actual output recorded;
   only a CONFIRMED hypothesis gets a fix, and the ledger rides the handoff.
+- **Implementer scope (trust the brief)** — the brief embeds its evidence, so the
+  implementer's reading scope is the brief + its named `file:line` refs + the code it
+  edits: it must NOT re-fetch the issue from GitHub, re-run the brief's enumeration
+  greps, or re-derive the coverage matrix (the independent verifier and the PR review
+  carry the skepticism). ESCALATE stays reactive — it fires on an encountered
+  contradiction, never as a proactive audit of the brief.
 - **Expected result + handoff** — what the diff/tests should look like, and the
   instruction to **return a handoff document** (see format below).
 
@@ -241,9 +266,10 @@ Step-3 verdict, more than one defensible approach, an architecturally-significan
 change, or unclear issue intent → **`AskUserQuestion` first** and proceed on the
 answer. A small, unambiguous, single-approach fix needs no prompt; act.
 
-Only with `--fix`, and only for an actionable verdict. Compute `{slug}` from the
-issue title via the CLAUDE.md sanitiser (lowercase; strip emoji/non-ASCII; `[a-z0-9-]`
-only; collapse runs to `-`; ≤30 chars at a `-` boundary; empty → bare `issue/{NN}`).
+Only with `--fix`, and only for an actionable verdict. Derive the branch (and cut the
+worktree in one step) with `sh scripts/agent/work-branch.sh issue {NN} "<title>"
+--worktree` — it implements the CLAUDE.md sanitiser (never hand-derive the slug) and
+handles the collision `-{epoch}` suffix and absolute-path rules.
 Set up idempotently (mirrors `/adr-phase` Step 3):
 
 - **Managed-remote session — fresh branch per issue (check FIRST).** Per CLAUDE.md
@@ -320,10 +346,10 @@ recorded as SKIPPED with the reason. When the agent returns, in `<path>`:
 2. **Re-run the canonical gates yourself** for everything the diff touches (file types + cross-
    language consumers).
 3. **Re-execute the red proof yourself** for a fix step — never accept the handoff's claim:
-   `git -C <path> checkout HEAD~1 -- <src paths>` (tests stay), run the pinning test → expect
-   FAIL; `git -C <path> checkout HEAD -- .`, re-run → expect PASS. Record both results, and
-   verify the freeze: `git hash-object` of the committed pinning test equals the handoff's
-   red-time hash — a test edited between red and green proves nothing.
+   `sh scripts/agent/verify-red-proof.sh --worktree <path> --test-cmd '<pinning test>'
+   --src <src path>... --hash <test file>=<red-time hash>` (reverts src to HEAD~1 with tests
+   kept → FAIL required; restores → PASS required; enforces the freeze hash). Record its
+   verdict lines.
 4. **Read the FULL diff** (`git -C <path> show` — never `--stat` alone) and tick every plan
    item and every coverage-matrix row against what the diff actually does.
 5. **Test honesty**: no weakened assertions; every negative assertion has a fixture that could

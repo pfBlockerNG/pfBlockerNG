@@ -86,85 +86,21 @@ knows the bot was skipped rather than that the PR is clean.
   against the bare handle silently misses the real `…[bot]` login and the wait times
   out with the review actually done (this bit us).
 
-**Mechanism — one self-exiting background poll per wait, then act on the result.**
-Set the env, run the script below as a **Bash command with `run_in_background: true`**
-(per the harness, a background `until`-style loop that exits when the condition is
-true gives you a single wake — do not use a foreground `sleep`), then read
-`$RESULT` when it wakes you:
+**Mechanism — `scripts/agent/wait-reviewer.sh` (the single implementation of this
+state machine; its behaviour is pinned by `tests/shell/agent_wait_reviewer_spec.sh`).**
+Run it as a **Bash command with `run_in_background: true`** (self-exiting: hard
+iteration cap × interval bounds the wall clock), redirecting stdout to a result file;
+read the file's LAST line as the verdict when it wakes you:
 
 ```sh
-# Set first: OWNER_REPO  PR  HANDLE(lowercased)  MODE(full|finished)  SINCE(ISO8601)
-#            SHA(head sha, for Snyk's check-run)  PRESENCE(polls before "not present"; ~10 for a
-#            bot, raise/disable for a human who may start late)  RESULT(tmpfile)
-# First wait: MODE=full, SINCE=head commit time → `gh pr view "$PR" --json commits -q '.commits[-1].committedDate'`,
-#             SHA=`gh pr view "$PR" --json headRefOid -q .headRefOid` (anchors on the current code).
-i=0; seen=0
-while [ "$i" -lt 60 ]; do                       # ~30 min at 30s/poll
-  inline=$(gh api "repos/$OWNER_REPO/pulls/$PR/comments" --paginate \
-    -q ".[] | select((.user.login|ascii_downcase)==\"$HANDLE\" or (.user.login|ascii_downcase)==\"${HANDLE}[bot]\") | select(.created_at > \"$SINCE\") | .id" 2>/dev/null)
-  review=$(gh api "repos/$OWNER_REPO/pulls/$PR/reviews" --paginate \
-    -q ".[] | select((.user.login|ascii_downcase)==\"$HANDLE\" or (.user.login|ascii_downcase)==\"${HANDLE}[bot]\") | select(.submitted_at > \"$SINCE\") | (.body // \"x\")" 2>/dev/null)
-  issuec=$(gh api "repos/$OWNER_REPO/issues/$PR/comments" --paginate \
-    -q ".[] | select((.user.login|ascii_downcase)==\"$HANDLE\" or (.user.login|ascii_downcase)==\"${HANDLE}[bot]\") | select(.updated_at > \"$SINCE\") | (.body // \"\")" 2>/dev/null)
-  # Snyk often posts ONLY a PR check, no comment: a completed Snyk check-run = finished; ANY Snyk
-  # check (even in-progress) = engaged. (ponytail: one completed check ⇒ done; a Snyk that finishes
-  # piecemeal across several checks is close enough — tighten only if it ever misfires.)
-  scheck=""; sinfo=""
-  if [ "$HANDLE" = snyk ]; then
-    # Snyk posts NO review comments — it surfaces as a commit STATUS ("code/snyk (…)" on the head
-    # SHA; some setups use a check-run). state/conclusion success|failure = a real verdict (FINISHED);
-    # state=error (e.g. "Code test limit reached") = Snyk did NOT run → QUOTA below, never a clean pass.
-    sinfo=$(gh api "repos/$OWNER_REPO/commits/$SHA/status" \
-      -q '.statuses[] | select((.context|ascii_downcase)|test("snyk")) | "\(.state) \(.description)"' 2>/dev/null)
-    sinfo="$sinfo
-$(gh api "repos/$OWNER_REPO/commits/$SHA/check-runs" --paginate \
-      -q '.check_runs[] | select((.name|ascii_downcase)|test("snyk")) | "\(.conclusion // .status) \(.output.title // "")"' 2>/dev/null)"
-    [ -n "$(printf '%s' "$sinfo" | tr -dc 'a-z')" ] && seen=1
-    printf '%s' "$sinfo" | grep -Eqi '^(success|failure|neutral|completed)' && scheck=1
-  fi
-  [ -n "$inline$review$issuec" ] && seen=1
-  # Snyk's status is TERMINAL + authoritative (Snyk has no separate review content): an `error`
-  # state ("Code test limit reached") means it did NOT run → QUOTA now, never a clean pass.
-  if printf '%s' "$sinfo" | grep -Eqi 'limit reached|^(error|action_required|timed_out|cancelled|stale)'; then
-    { echo QUOTA; printf '%s\n' "$sinfo"; } > "$RESULT"; exit 0
-  fi
-  # FINISHED WINS over any CodeRabbit quota phrase. Real review content — an inline thread, a
-  # submitted review, a terminal Snyk verdict, the "Actionable comments posted: N" header, or a
-  # clean "No actionable comments were generated" pass — means it REVIEWED, so report FINISHED even
-  # if a usage/rate-limit phrase is ALSO present. (This is the bug this fixes: a transient
-  # rate-limit / a stale notice from an earlier push must never short-circuit to QUOTA before — or
-  # alongside — CodeRabbit's actual inline comments. Checking content FIRST is what guarantees it.)
-  if [ -n "$inline" ] || [ -n "$review" ] || [ -n "$scheck" ] \
-       || printf '%s' "$issuec" | grep -qiE 'actionable comments posted|no actionable comments'; then
-    { echo FINISHED; printf '%s\n' "$issuec"; } > "$RESULT"; exit 0
-  fi
-  # A CodeRabbit rate-limit notice with NO review content THIS iteration (content is checked
-  # FIRST above, so a notice sitting next to real comments still reports FINISHED) is TERMINAL
-  # for this wait: the notice states when reviews resume ("**Next review available in:** **N
-  # minutes**"), so exit now carrying that number and let the caller apply the 5-minute rule.
-  # Hours convert to minutes; an unparsable time reports 999 (treated as "long").
-  if printf '%s' "$issuec" | grep -Eqi 'run out of usage credits|review limit reached|rate limited by coderabbit|reached your .*review rate limit'; then
-    mins=$(printf '%s' "$issuec" | grep -oEi 'available in:.{0,10}[0-9]+ *(minute|hour)' | grep -oE '[0-9]+' | head -1)
-    printf '%s' "$issuec" | grep -oEi 'available in:.{0,10}[0-9]+ *hour' | grep -q . && mins=$(( ${mins:-1} * 60 ))
-    { echo "QUOTA ${mins:-999}"; printf '%s\n' "$issuec" | head -c 2000; } > "$RESULT"; exit 0
-  fi
-  # DECLINE (MODE=full) = "Review skipped" because the base isn't the default branch.
-  if [ "$MODE" = full ] && printf '%s' "$issuec" | grep -qi 'review skipped' \
-       && printf '%s' "$issuec" | grep -Eqi 'base branch|base branches|default branch'; then
-    { echo DECLINE; printf '%s\n' "$issuec"; } > "$RESULT"; exit 0
-  fi
-  # PAUSE (MODE=full) = CodeRabbit paused reviews (branch too active); it won't review again until
-  # resumed, so without this it would just TIMEOUT. Resolve like DECLINE (ask it to resume).
-  if [ "$MODE" = full ] && printf '%s' "$issuec" | grep -Eqi 'reviews? paused|paused .*review|review.*paused|⏸'; then
-    { echo PAUSE; printf '%s\n' "$issuec"; } > "$RESULT"; exit 0
-  fi
-  # NOTPRESENT = zero engagement after the presence window ⇒ this handle isn't reviewing the PR
-  # (typically a Snyk that isn't enabled here). Skip it instead of blocking out to TIMEOUT.
-  [ "$seen" -eq 0 ] && [ "$i" -ge "$PRESENCE" ] && { echo NOTPRESENT > "$RESULT"; exit 0; }
-  i=$((i + 1)); sleep 30
-done
-# Window exhausted with no review content and no terminal notice: a real TIMEOUT.
-echo TIMEOUT > "$RESULT"
+sh scripts/agent/wait-reviewer.sh --repo "$OWNER_REPO" --pr "$PR" \
+  --handle coderabbitai --until finished > "$RESULT" 2>&1
+# Handle matching is a case-insensitive substring of the login (coderabbitai[bot],
+# copilot-pull-request-reviewer[bot] via --handle copilot). --handle snyk reads the
+# head-SHA status/check-runs instead of comments. Re-arm after a nudge with
+# --since "$(date -u +%Y-%m-%dT%H:%M:%SZ)" so only fresh activity counts.
+# Exit 3 = gh unavailable (managed env): fall back to mcp__github__* wakeup-paced
+# checks (CLAUDE.md "No orphaned waits" #4) — same verdicts, MCP transport.
 ```
 
 CodeRabbit's exact wording drifts — if the markers above don't fire when you can
@@ -292,16 +228,16 @@ it arrived in.
 
 ## Step 5 — Validate each finding against the CURRENT code (the crux)
 
-**Big batches (≈10+ findings): fan the validation out.** When the Workflow tool is
-available, run `Workflow({name: 'triage-findings', args: {worktree: '<path>', base:
+**Default route — the `triage-findings` workflow, for ANY number of findings.** When
+the Workflow tool is available, run `Workflow({name: 'triage-findings', args: {worktree: '<path>', base:
 '<base>', findings: [<the Step-4 list: {id, source, severity, path, line, body,
 suggested_fix}>], lintNotes: '<the repo's unenforced-rule notes below>'}})` — one
 independent read-only validator per finding, returning verdict + executed evidence +
 blame-based scope + a sanity check of the suggested fix. You remain the judge: adopt each
 verdict only with its evidence in hand (the skip asymmetry below still binds), apply fixes
 yourself **sequentially** (Step 6), and reply per thread (Step 7). Any finding in the
-returned `unvalidated` list is validated inline. Small batches, or no Workflow tool → inline
-as follows.
+returned `unvalidated` list is validated inline. No Workflow tool → inline as follows;
+the per-finding contract below is also what you validate the workflow's verdicts against.
 
 For every finding, decide a verdict — do **not** auto-apply:
 

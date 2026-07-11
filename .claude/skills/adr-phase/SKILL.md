@@ -261,9 +261,10 @@ silently dropped. When the agent returns, in `<path>`:
 2. **Re-run the canonical gates yourself** for everything the diff touches, computed from the
    diff's file types plus cross-language consumers (CLAUDE.md "Canonical gates") — green.
 3. **Re-execute the red proof yourself** for a behaviour-changing phase — never accept the
-   handoff's claim: `git -C <path> checkout HEAD~1 -- <src paths>` (tests stay), run the phase's
-   named new test → expect FAIL; `git -C <path> checkout HEAD -- .`, re-run → expect PASS.
-   Record both results in the gate record. Verify the freeze too: `git hash-object` of each
+   handoff's claim — `sh scripts/agent/verify-red-proof.sh --worktree <path> --test-cmd
+   '<the phase's pinning test>' --src <src path>... --hash <test file>=<red-time hash>`
+   (revert→FAIL, restore→PASS, freeze hash enforced). Record its verdict lines in the gate
+   record.
    committed reproduction test equals the handoff's red-time hash — a test edited between red
    and green (or missing its red-time hash) proves nothing.
 4. **Read the FULL diff** (`git -C <path> show` — never `--stat` alone) and tick **every**
