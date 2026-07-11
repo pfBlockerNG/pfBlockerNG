@@ -83,6 +83,7 @@ PHP_BIN = "/usr/local/bin/php"
 # loaded + locked), so config_set_path/write_config persist a valid config.xml.
 PFSSH_BIN = "/usr/local/sbin/pfSsh.php"
 PFB_CLI = "/usr/local/www/pfblockerng/pfblockerng.php"
+PFB_EXTRA_INC = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
 PFCTL = "/sbin/pfctl"
 
 # pfSense config API roots (see pfblockerng.inc).
@@ -1556,6 +1557,64 @@ def set_feed_sanity(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
     result = php_eval(vm, snippet, timeout=timeout)
     if result.returncode != 0 or "OK" not in result.stdout:
         raise RuntimeError(f"set_feed_sanity({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+
+
+def set_feed_cron_interval(vm: SmokeVM, value: str, *, timeout: float = 60.0) -> None:
+    """Set Update Frequency (``pfb_interval``): an hour count as a string, or ``'Disabled'``.
+
+    ``'Disabled'`` short-circuits ``pfblockerng_tick()``'s feed-cron branch (its
+    ``!$cron_disabled`` guard), so no tick — the box's scheduled one or an explicit
+    ``tick`` verb — dispatches a feed pass. The ``cron`` VERB is unaffected: the CLI
+    coerces a non-numeric interval back to ``'1'`` (pfblockerng.inc). Pass an hour
+    count ('1', '4', …) to re-enable dispatch for a module that exercises scheduling.
+    """
+    snippet = (
+        f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
+        f"$g['pfb_interval'] = {_php_str(value)};\n"
+        f"config_set_path({_php_str(CFG_GLOBAL)}, $g);\n"
+        "write_config('pfBlockerNG smoke: set pfb_interval');\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"set_feed_cron_interval({value!r}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
+def disable_scheduled_dispatch(vm: SmokeVM, *, timeout: float = 60.0) -> None:
+    """Stop the box's own ADR-43 tick from dispatching an update pass (issue #1179).
+
+    The guest runs a real ``*/pfb_tick_interval`` cron tick. Left armed, it fires
+    mid-test and dispatches a full feed pass — re-running update hooks a test just
+    registered, reloading aliases/DNSBL under a test's feet — a wall-clock flake no test
+    can defend against. The suite therefore drives scheduling ITSELF (every scheduling
+    test invokes the ``tick``/``cron`` verb directly), and this gate, applied by
+    :func:`deploy` for every module, closes all three of the tick's dispatch branches:
+    ``pfb_interval='Disabled'`` (feed cron) plus a far-future due-ledger entry for
+    ``dcc`` and ``bl``. That the tick IS scheduled is asserted separately
+    (``test_smoke_tick.test_tick_cron_entry_installed``).
+
+    Deleting the cron entry instead would not hold: every ``sync_package_pfblockerng()``
+    re-installs it while the package is enabled, and pfSense's ``configure_cron()``
+    restarts a stopped cron daemon — the tick's own config/ledger gates are the only
+    durable off switch. A module that EXERCISES the scheduler re-arms what it needs
+    (:func:`set_feed_cron_interval`).
+    """
+    set_feed_cron_interval(vm, "Disabled", timeout=timeout)
+    snippet = (
+        f"require_once({_php_str(PFB_EXTRA_INC)});\n"
+        "foreach (array('dcc', 'bl') as $job) {\n"
+        "  pfb_due_ledger_write_entry($job, array('last_run' => time(), "
+        f"'next_due' => time() + 86400, 'jitter' => 0), {_php_str(PFB_DBDIR)});\n"
+        "}\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"disable_scheduled_dispatch failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
 
 
 @timed_step("use_system_dns_upstream")
