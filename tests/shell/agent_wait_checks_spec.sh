@@ -53,7 +53,7 @@ End
 Describe 'wait-checks.sh loop verdicts (stub gh)'
   setup_stub() {
     stubdir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/ghstub.XXXXXX")"
-    printf '#!/bin/sh\necho "$GH_STUB_CHECKS"\n' > "$stubdir/gh"
+    printf '#!/bin/sh\n[ -n "${GH_STUB_FAIL:-}" ] && exit 1\necho "$GH_STUB_CHECKS"\n' > "$stubdir/gh"
     chmod +x "$stubdir/gh"
     PATH="$stubdir:$PATH"
   }
@@ -73,5 +73,23 @@ Describe 'wait-checks.sh loop verdicts (stub gh)'
     export PFB_WAIT_DEADLINE=1
     When run sh "$script" --repo o/r --pr 1 --interval 0 --max-iter 3
     The line 1 of output should equal 'TIMEOUT'
+  End
+End
+
+Describe 'wait-checks.sh gh-failure detection'
+  setup_stub() {
+    stubdir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/ghstub.XXXXXX")"
+    printf '#!/bin/sh\nexit 1\n' > "$stubdir/gh"
+    chmod +x "$stubdir/gh"
+    PATH="$stubdir:$PATH"
+  }
+  cleanup_stub() { rm -rf "$stubdir"; }
+  Before 'setup_stub'
+  After 'cleanup_stub'
+
+  It 'reports GH-ERROR after repeated gh failures instead of polling to a blind TIMEOUT'
+    When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --interval 0 --max-iter 10
+    The status should equal 1
+    The line 1 of output should equal 'GH-ERROR'
   End
 End

@@ -38,7 +38,7 @@ Describe 'run-gates.sh gates_for()'
     The line 1 of output should equal 'sh -n scripts/agent/x.sh'
     The line 2 of output should equal 'shellcheck scripts/agent/x.sh'
     # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
-    The line 3 of output should equal 'shellspec --shell $(command -v dash)'
+    The line 3 of output should equal 'shellspec --shell $(command -v dash || command -v sh)'
     The lines of output should equal 3
   End
 
@@ -56,6 +56,12 @@ Describe 'run-gates.sh gates_for()'
     When call gates_for
     The output should include 'python3 -m pytest'
     The output should include 'shellcheck b.sh'
+  End
+
+  It 'refuses to build a command from a path with shell metacharacters'
+    Data "evil\$(touch pwned).sh"
+    When call gates_for
+    The line 1 of output should equal "printf 'unsafe filename in diff\\n' >&2; false"
   End
 
   It 'emits nothing for file types with no gates'

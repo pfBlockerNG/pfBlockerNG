@@ -61,11 +61,24 @@ main() {
 	# PFB_WAIT_DEADLINE (epoch seconds) overrides for tests/ops.
 	deadline=${PFB_WAIT_DEADLINE:-$(( $(date +%s) + max_iter * interval + 300 ))}
 	i=0
+	ghfail=0
 	while [ "$i" -lt "$max_iter" ]; do
 		if [ "$(date +%s)" -ge "$deadline" ]; then
 			break
 		fi
-		json=$(gh pr checks "$pr" --repo "$repo" --json name,bucket 2>/dev/null)
+		if ! json=$(gh pr checks "$pr" --repo "$repo" --json name,bucket 2>&1); then
+			# 3 consecutive gh failures = a real problem (bad repo/pr, auth, outage),
+			# not "no checks yet" -- fail loudly instead of polling to a blind TIMEOUT.
+			ghfail=$((ghfail + 1))
+			if [ "$ghfail" -ge 3 ]; then
+				printf 'GH-ERROR\n%s\n' "$json"
+				exit 1
+			fi
+			i=$((i + 1))
+			sleep "$interval"
+			continue
+		fi
+		ghfail=0
 		[ -n "$json" ] || json='[]'
 		v=$(evaluate_checks "$json")
 		case "$v" in

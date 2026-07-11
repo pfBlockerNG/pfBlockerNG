@@ -72,6 +72,23 @@ Describe 'verify-red-proof.sh'
     The output should equal ''
   End
 
+  It 'rejects a fix that does not satisfy its own pin (GREEN-FAIL)'
+    make_repo BAD BAD
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src src.txt
+    The status should equal 1
+    The output should include 'RED-OK'
+    The output should include 'GREEN-FAIL'
+    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+  End
+
+  It 'rejects a --src path with shell metacharacters at parse time'
+    make_repo BAD GOOD
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src 'src.txt; touch PWNED'
+    The status should equal 2
+    The stderr should include 'unsafe'
+    Assert [ ! -e "$repo/PWNED" ]
+  End
+
   It 'refuses a dirty tree (the gate re-derives from committed state)'
     make_repo BAD GOOD
     echo scratch > "$repo/uncommitted.txt"

@@ -29,6 +29,13 @@ gates_for() {
 	out=''
 	nl='
 '
+	# Per-file commands are re-parsed by run_gate's `sh -c`; a diff filename carrying
+	# shell metacharacters would inject there. Replace its gates with a loud failure.
+	unsafe=$(printf '%s\n' "$files" | grep '[^A-Za-z0-9._/-]' || true)
+	files=$(printf '%s\n' "$files" | grep -v '[^A-Za-z0-9._/-]' || true)
+	if [ -n "$unsafe" ]; then
+		out="${out}printf 'unsafe filename in diff\\n' >&2; false${nl}"
+	fi
 	if printf '%s\n' "$files" | grep -q '\.py$'; then
 		out="${out}python3 -m pytest${nl}ruff check .${nl}ruff format --check .${nl}mypy tests/${nl}"
 	fi
@@ -42,7 +49,7 @@ gates_for() {
 		for f in $(printf '%s\n' "$files" | grep '\.sh$'); do
 			out="${out}sh -n $f${nl}shellcheck $f${nl}"
 		done
-		out="${out}shellspec --shell \$(command -v dash)${nl}"
+		out="${out}shellspec --shell \$(command -v dash || command -v sh)${nl}"
 	fi
 	if printf '%s\n' "$files" | grep -q '\.md$'; then
 		out="${out}npx markdownlint-cli2${nl}"
