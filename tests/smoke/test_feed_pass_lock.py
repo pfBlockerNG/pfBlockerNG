@@ -91,7 +91,11 @@ def _log_size(vm: SmokeVM) -> int:
 
 def _log_delta(vm: SmokeVM, offset: int) -> str:
     """Log content appended after byte ``offset`` (whole log when it rotated shorter)."""
-    result = vm.ssh(f"[ -f {_PFB_LOG} ] && tail -c +{offset + 1} {_PFB_LOG} || true")
+    result = vm.ssh(
+        f"[ -f {_PFB_LOG} ] || exit 0; "
+        f'if [ "$(wc -c < {_PFB_LOG})" -ge {offset} ]; then tail -c +{offset + 1} {_PFB_LOG}; '
+        f"else cat {_PFB_LOG}; fi"
+    )
     return result.stdout
 
 
