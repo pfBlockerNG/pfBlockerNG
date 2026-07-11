@@ -1587,6 +1587,30 @@ def set_feed_cron_interval(vm: SmokeVM, value: str, *, timeout: float = 60.0) ->
         )
 
 
+def seed_scheduled_jobs_not_due(vm: SmokeVM, *, timeout: float = 60.0) -> None:
+    """Push every ADR-43 tick job's ``next_due`` a day out, clearing any pending flag.
+
+    The due-ledger is a FILE (``pfb_due_ledger.json``), not config — which is what makes
+    this safe to call at module teardown, where a config write is not (see
+    :func:`reset_pfb_baseline`). ``pfb_due_ledger_write_entry`` replaces the whole entry,
+    so a ``pending_apply`` a case left behind is dropped with it: a tick then finds every
+    job neither due nor pending and dispatches nothing, whatever ``pfb_interval`` says.
+    """
+    snippet = (
+        f"require_once({_php_str(PFB_EXTRA_INC)});\n"
+        "foreach (array('cron', 'dcc', 'bl') as $job) {\n"
+        "  pfb_due_ledger_write_entry($job, array('last_run' => time(), "
+        f"'next_due' => time() + 86400, 'jitter' => 0), {_php_str(PFB_DBDIR)});\n"
+        "}\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"seed_scheduled_jobs_not_due failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
 def disable_scheduled_dispatch(vm: SmokeVM, *, timeout: float = 60.0) -> None:
     """Stop the box's own ADR-43 tick from dispatching an update pass (issue #1179).
 
@@ -1596,7 +1620,7 @@ def disable_scheduled_dispatch(vm: SmokeVM, *, timeout: float = 60.0) -> None:
     can defend against. The suite therefore drives scheduling ITSELF (every scheduling
     test invokes the ``tick``/``cron`` verb directly), and this gate, applied by
     :func:`deploy` for every module, closes all three of the tick's dispatch branches:
-    ``pfb_interval='Disabled'`` (feed cron) plus a far-future due-ledger entry for
+    ``pfb_interval='Disabled'`` (feed cron) plus a not-due due-ledger for ``cron``,
     ``dcc`` and ``bl``. That the tick IS scheduled is asserted separately
     (``test_smoke_tick.test_tick_cron_entry_installed``).
 
@@ -1604,22 +1628,10 @@ def disable_scheduled_dispatch(vm: SmokeVM, *, timeout: float = 60.0) -> None:
     re-installs it while the package is enabled, and pfSense's ``configure_cron()``
     restarts a stopped cron daemon — the tick's own config/ledger gates are the only
     durable off switch. A module that EXERCISES the scheduler re-arms what it needs
-    (:func:`set_feed_cron_interval`).
+    (:func:`set_feed_cron_interval`) and forces its own ledger state.
     """
     set_feed_cron_interval(vm, "Disabled", timeout=timeout)
-    snippet = (
-        f"require_once({_php_str(PFB_EXTRA_INC)});\n"
-        "foreach (array('dcc', 'bl') as $job) {\n"
-        "  pfb_due_ledger_write_entry($job, array('last_run' => time(), "
-        f"'next_due' => time() + 86400, 'jitter' => 0), {_php_str(PFB_DBDIR)});\n"
-        "}\n"
-        "echo 'OK';"
-    )
-    result = php_eval(vm, snippet, timeout=timeout)
-    if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(
-            f"disable_scheduled_dispatch failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
-        )
+    seed_scheduled_jobs_not_due(vm, timeout=timeout)
 
 
 @timed_step("use_system_dns_upstream")
@@ -2793,11 +2805,12 @@ _BASELINE_GLOBAL_KEYS = (
     "pfb_agg_types",
     "pfb_quiet_hours",
     "pfb_tick_interval",
-    # NOT pfb_interval: it is harness-owned now (disable_scheduled_dispatch, issue #1179).
-    # Unsetting it would revert to the registry default '1' — re-arming the guest's
-    # scheduled feed-cron dispatch for the whole gap until the next module's deploy();
-    # this reset re-applies the gate instead, so a scheduling module's opt-in cannot leak
-    # forward either (a leaked value bit test_smoke_apply_on_change — issue #805).
+    # Update Frequency: deploy() writes 'Disabled' (disable_scheduled_dispatch) and the two
+    # scheduling modules re-arm an hour count; unset here so each module's own deploy
+    # re-establishes it (a leaked value bit test_smoke_apply_on_change — issue #805). The
+    # gap this leaves — the key is back at its default '1' until the next deploy — is
+    # covered by the ledger seed below, NOT by writing the key back (see the docstring).
+    "pfb_interval",
     # ADR-40 apply-path mode: test_smoke_adr40 writes 'delta'/'auto'/'replace' via
     # PfbConfig (General section, issue #804); unset so later modules read the
     # box's own default (end-state is mode-invariant, but the apply path is not).
@@ -2831,8 +2844,15 @@ def reset_pfb_baseline(vm: SmokeVM, *, timeout: float = 300.0) -> None:
         the resolver config so the live daemon matches;
       * drops the derived state — ``clearip``/``cleardnsbl`` (tables/sqlite) then a blocking
         ``apply_filter_sync`` (pf rules);
-      * re-applies :func:`disable_scheduled_dispatch` (issue #1179) — the scheduled tick must
-        stay gated across the module boundary too, not only from the next ``deploy()`` on.
+      * pushes every tick job out of due (:func:`seed_scheduled_jobs_not_due`) so the guest's
+        scheduled tick cannot dispatch a pass in the gap before the next module's deploy
+        re-applies :func:`disable_scheduled_dispatch` (issue #1179).
+
+    **Never leave a key set in ``config/0`` here** (that is why the gap above is closed with
+    the ledger, a file, and not by writing ``pfb_interval`` back): the next module's ``pkg``
+    install grandfathers ``pfb_feed_internal_filter`` to ``'off'`` for any box whose General
+    section is a non-empty array without that key (``pfb_feed_filter_install_default``) — the
+    SSRF-guard cases then run with the guard silently disabled and pass for the wrong reason.
 
     NO forced ``update``: the config is now empty, so there is nothing to rebuild — the next
     module's ``deployed_vm`` re-establishes the VIP/DNS/feed config it needs. (Like :func:`reset`,
@@ -2879,8 +2899,8 @@ def reset_pfb_baseline(vm: SmokeVM, *, timeout: float = 300.0) -> None:
                 raise RuntimeError(
                     f"reset_pfb_baseline {verb} failed: rc={cleared.returncode} stderr={cleared.stderr!r}"
                 )
-        # Same guard: the gate reads the package's own ledger writer, so it needs the package.
-        disable_scheduled_dispatch(vm)
+        # Same guard: the seed runs the package's own ledger writer, so it needs the package.
+        seed_scheduled_jobs_not_due(vm)
     apply_filter_sync(vm)
 
 
