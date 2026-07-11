@@ -13,7 +13,7 @@ use PHPUnit\Framework\TestCase;
  * (HTTP 500). The fix normalizes 'logtype'/'logFile' to '' right after the
  * $pconfig = $_POST; ingress (one guard covers every downstream sink) and
  * guards $_REQUEST['file'] at its own ajax sink, mirroring the is_string
- * idiom landed for #1106/#1125/#1128.
+ * idiom landed for #1106/#1128/#1139.
  *
  * The page carries top-level execution and cannot be require()d
  * off-appliance, so each region below is eval-extracted verbatim from the
@@ -46,7 +46,7 @@ final class LogArrayRequestGuardTest extends TestCase
 			eval('function pfb_log_oracle_pconfig(): array { $pconfig = array(); ' . $m[1] . ' return $pconfig; }');
 		}
 
-		// Region 2: ajax 'file' -> $pfb_logfilename (site :234).
+		// Region 2: ajax 'file' -> $pfb_logfilename sink.
 		if (!function_exists('pfb_log_oracle_ajax_filename')) {
 			if (!preg_match(
 				'/\/\/ Send logfile to screen\nif \(isset\(\$_REQUEST\) && isset\(\$_REQUEST\[\'ajax\'\]\)\) \{\n\n'
@@ -67,7 +67,7 @@ final class LogArrayRequestGuardTest extends TestCase
 			eval('function pfb_log_oracle_action_is_load(): bool { ' . $m[1] . ' return TRUE; } return FALSE; }');
 		}
 
-		// Region 4: 'logFile' download/clear gate + htmlspecialchars() sink (site :303/:435).
+		// Region 4: 'logFile' download/clear gate + htmlspecialchars() sink.
 		if (!function_exists('pfb_log_oracle_logfile_sink')) {
 			if (!preg_match(
 				'/\/\/ Download\/Clear logfile\n(if \(isset\(\$pconfig\[\'logFile\'\]\) && !empty\(\$pconfig\[\'logFile\'\]\) && '
@@ -85,7 +85,7 @@ final class LogArrayRequestGuardTest extends TestCase
 			);
 		}
 
-		// Region 5: 'logtype' -> $selected -> $pfb_logtypes[$selected] offset (site :406-407).
+		// Region 5: 'logtype' -> $selected -> $pfb_logtypes[$selected] offset.
 		if (!function_exists('pfb_log_oracle_selected_logtype')) {
 			if (!preg_match(
 				'/\/\/ Collect selected logs\n\$logs = array\(\);\n\$clearable = \$downloadable = FALSE;\n'
@@ -128,7 +128,7 @@ final class LogArrayRequestGuardTest extends TestCase
 		];
 	}
 
-	// --- site :234 -- ajax 'file' -> htmlspecialchars() ---------------------
+	// --- ajax 'file' -> htmlspecialchars() ----------------------------------
 
 	public function testAjaxFileArrayValueDoesNotThrowAndFailsValidation(): void
 	{
@@ -194,7 +194,7 @@ final class LogArrayRequestGuardTest extends TestCase
 		$this->assertTrue(pfb_validate_filepath($filename, $this->logtypes()));
 	}
 
-	// --- site :241 -- 'action' loose compare, array-safe, no guard needed ---
+	// --- 'action' loose compare, array-safe, no guard needed ----------------
 
 	public function testActionArrayValueIsNotLoadWithoutThrowing(): void
 	{
@@ -268,7 +268,7 @@ final class LogArrayRequestGuardTest extends TestCase
 		$this->assertSame('', $pconfig['logFile']);
 	}
 
-	// --- site :303/:435 -- download/clear gate + htmlspecialchars() sink ----
+	// --- download/clear gate + htmlspecialchars() sink ----------------------
 
 	public function testLogfileArrayValueWithClearSetDoesNotThrowAndSkipsGate(): void
 	{
@@ -311,7 +311,7 @@ final class LogArrayRequestGuardTest extends TestCase
 		);
 	}
 
-	// --- site :406-407 -- $pfb_logtypes[$selected] array-offset access ------
+	// --- $pfb_logtypes[$selected] array-offset access -----------------------
 
 	public function testSelectedLogtypeArrayValueDoesNotThrowAndFallsBackToDefault(): void
 	{
