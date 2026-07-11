@@ -14697,15 +14697,17 @@ function pfb_dnsbl_lastevent($p_group, $p_entry, $p_details) {
 function pfb_feed_task_running(): bool {
 	$result_ps = array();
 	exec('/bin/ps -wax', $result_ps);
-	return (bool) preg_grep('/pfblockerng[.]php\s+?(cron|update|pfb_trigger|tick|forcecheck)/', $result_ps);
+	return (bool) preg_grep('/pfblockerng[.]php\s+?(cron-tick|cron|update|pfb_trigger|tick|forcecheck)/', $result_ps);
 }
 
 
 // TRUE when a pfBlockerNG UPDATE pass (cron/update/pfb_trigger/forcecheck/dcc/bl) is
 // currently running -- deliberately narrower than pfb_feed_task_running() above:
-//   - EXCLUDES 'tick': the only caller is pfblockerng_tick() itself (the scheduled log
-//     maintenance gate at its tail), and a tick always sees its OWN process in `ps` --
-//     including it here would make the gate permanently closed.
+//   - EXCLUDES 'tick' AND 'cron-tick' (the scheduled tick's own verb): the only caller is
+//     pfblockerng_tick() itself (the scheduled log maintenance gate at its tail), and a tick
+//     always sees its OWN process in `ps` -- including it here would make the gate permanently
+//     closed. Hence (?![-\w]) rather than \b: a hyphen SATISFIES \b, so a bare 'cron' arm would
+//     match the 'cron-tick' process (issue #1204).
 //   - INCLUDES 'dcc'/'bl': both append to $pfb['extraslog'] for potentially minutes,
 //     the same log pfb_log_mgmt()'s tail-to-temp-then-cat-over trim can race and lose
 //     lines from, so a due-ledger-dispatched dcc/bl pass must also hold this gate closed.
@@ -14714,7 +14716,7 @@ function pfb_update_pass_running(?array $ps_lines = NULL): bool {
 	if ($ps_lines === NULL) {
 		exec('/bin/ps -wax', $ps_lines);
 	}
-	return (bool) preg_grep('/pfblockerng[.]php\s+?(cron|update(ip|dnsbl)?|pfb_trigger|forcecheck|dcc|bl)\b/', $ps_lines);
+	return (bool) preg_grep('/pfblockerng[.]php\s+?(cron|update(ip|dnsbl)?|pfb_trigger|forcecheck|dcc|bl)(?![-\w])/', $ps_lines);
 }
 
 
