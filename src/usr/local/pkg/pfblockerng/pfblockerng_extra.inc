@@ -2575,8 +2575,9 @@ function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir): bool
  * Lives here (not in the www/ dispatcher script) rather than the reverse so the
  * PHPUnit bootstrap can load and call the real entrypoint off-appliance: the www
  * script is never require()'d by the test suite, so before this move the tick had
- * zero off-box coverage (review finding ADR43-5). The www dispatch
- * (`pfblockerng.php tick`) still just calls this function.
+ * zero off-box coverage (review finding ADR43-5). Both www dispatch verbs -- the direct
+ * `pfblockerng.php tick` and the crontab's `cron-tick` (gated by .pfb_cron_disable) -- just
+ * call this function.
  *
  * Apply-on-change (ADR-40 IP / ADR-10 DNSBL): a due job dispatches pfb_trigger, which
  * calls sync_package_pfblockerng() — ADR-40 gates alias apply on pfb_alias_set_different()

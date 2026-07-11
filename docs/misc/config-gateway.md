@@ -159,9 +159,10 @@ reverse and that do **not** self-heal on an older release:
    `{ip,dnsbl}_{pre,post}_*.{sh,py}` scripts from the package root into `list_scripts/`. A
    pre-4.0.x release resolves list scripts against the package **root only**, so a moved script
    silently stops running after a downgrade.
-2. **The ADR-43 `tick` cron.** The `pfblockerng.php tick` entry replaced the older
-   `cron`/`dcc`/`ss_refresh`/`bl` fleet; an older release has no `tick` verb, so the entry becomes
-   an orphan and the update fleet is absent until the older release re-syncs.
+2. **The ADR-43 tick cron.** The `pfblockerng.php cron-tick` entry (issue #1204; `pfblockerng.php
+   tick` on a pre-#1204 build) replaced the older `cron`/`dcc`/`ss_refresh`/`bl` fleet; an older
+   release has neither verb, so the entry becomes an orphan and the update fleet is absent until
+   the older release re-syncs.
 
 Everything else the upgrade changed is already downgrade-safe: new-in-4.0.x config keys are
 **ignored** by an older release (inert, preserved for roll-forward), and the `.md5` →

@@ -133,8 +133,9 @@ A standing feature request asks for **DNSBL blocking by schedule** — "enable/d
 during school hours". pfSense already ships a native scheduler: the `<schedules>` config
 section (Firewall > Schedules), referenced by firewall rules via a `sched` name and evaluated
 by `filter_get_time_based_rule_status()`. None of it is wired into the DNSBL decision path.
-(Updated 2026-07-03 for ADR-43: package scheduling is now **one cron tick** —
-`pfblockerng.php tick` every `pfb_tick_interval` minutes reading the due-ledger — and an
+(Updated 2026-07-03 for ADR-43, amended 2026-07-12 for issue #1204: package scheduling is now
+**one cron tick** — `pfblockerng.php cron-tick` every `pfb_tick_interval` minutes reading the
+due-ledger — and an
 already-landed PHP time-window evaluator exists, `pfb_quiet_hours` +
 `pfb_quiet_hours_in_window()` in `pfblockerng_extra.inc`, a precedent/possible reuse for this
 ADR's schedule serialisation. Both still govern *refresh/apply timing*, not whether blocking
