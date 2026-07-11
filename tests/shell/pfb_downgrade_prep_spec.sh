@@ -3,7 +3,9 @@
 #
 # Covers the file-move logic (restore user list scripts to the package root) and the
 # shipped-name gate, plus the tick-cron removal's OUTPUT PARSING via a fake pfSsh.php.
-# The real install_cron_job() effect of the tick removal is exercised on a live VM by
+# The fake ignores the piped PHP body (just echoes a fixed marker), so it exercises the
+# marker contract only -- not the real cron-tick + legacy-tick two-needle removal
+# (issue #1204), which install_cron_job() effect is exercised on a live VM by
 # tests/smoke/test_downgrade_prepare.py (this suite runs off-appliance, no pfSsh.php).
 #
 # The tool is sourced as a library: PFB_DOWNGRADE_PREP_SOURCED=1 makes its source guard
