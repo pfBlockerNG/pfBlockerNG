@@ -9,7 +9,9 @@ declare(strict_types=1);
  * $pfb_logtypes as a plain PARAMETER (not a global read) and calls no pfSense
  * runtime function -- so no surrounding top-level wiring or fixture is needed:
  * extract just the function's own span (its `function` line up to the next
- * top-level statement, `$pconfig = array();`) and eval it.
+ * top-level statement, `$pconfig = ...`) and eval it. The end marker stops at the
+ * assignment operator, like AlertsPageLoader's, so rewriting the initialiser
+ * (array() -> []) cannot strand it.
  */
 function pfb_test_load_log_page_functions(): void
 {
@@ -23,7 +25,7 @@ function pfb_test_load_log_page_functions(): void
 		throw new RuntimeException('failed to read pfblockerng_log.php');
 	}
 	$start = strpos($src, "\nfunction pfb_validate_filepath");
-	$end   = strpos($src, "\n\$pconfig = array();");
+	$end   = strpos($src, "\n\$pconfig = ");
 	if ($start === false || $end === false || $end <= $start) {
 		throw new RuntimeException('could not locate pfb_validate_filepath() in pfblockerng_log.php');
 	}
