@@ -5094,6 +5094,34 @@ function pfb_ip_recompute_snapshot_path(string $snapdir, string $header): string
 	return "{$snapdir}/{$header}.snap";
 }
 
+// Single source of the memberlist serialization -- the invocation loop's write site and
+// pfb_ip_recompute_order_changed() both route through this so their formats can never
+// drift (issue #1173).
+function pfb_ip_recompute_memberlist_content(array $paths): string {
+	return $paths ? implode("\n", $paths) . "\n" : '';
+}
+
+/**
+ * issue #1173: a pure IPv4/IPv6 Deny-list priority reorder flips no feed-change repcheck --
+ * no feed content changed -- yet recompute ownership follows memberlist ORDER
+ * (pfb_ip_recompute_family_headers()'s config order), so a reorder-only save still needs a
+ * recompute. Baseline is the memberlist the invocation loop wrote on its last attempt
+ * (write-time, not read-time -- same failure semantics as feed-change repcheck); a missing
+ * or unreadable baseline is a fail-safe TRUE.
+ */
+function pfb_ip_recompute_order_changed(array $family_headers, string $snapdir, string $memberlist_path): bool {
+	$paths = array();
+	foreach ($family_headers as $header) {
+		$paths[] = pfb_ip_recompute_snapshot_path($snapdir, $header);
+	}
+	$expected = pfb_ip_recompute_memberlist_content($paths);
+	$stored   = @file_get_contents($memberlist_path);
+	if ($stored === FALSE) {
+		return TRUE;
+	}
+	return $stored !== $expected;
+}
+
 /**
  * The recompute memberlist entry for one header -- the existing snapshot when present, else a
  * full copy of the live deny .txt seeded in its place (first run after upgrade, or a header
@@ -18861,6 +18889,25 @@ function sync_package_pfblockerng($cron='') {
 	#	REPUTATION PROCESSES	#
 	#################################
 
+	// issue #1173: a pure priority reorder flips no feed-change repcheck; ownership
+	// follows memberlist order, so compare against the last recompute's memberlist and
+	// recompute on mismatch.
+	if (!$pfb['save'] && $pfb['enable'] == 'on' &&
+	    pfb_cross_list_scope($pfb['dup'] == 'on', $pfb['drep'] == 'on' || $pfb['prep'] == 'on')) {
+		foreach (array('v4', 'v6') as $pfb_rec_family) {
+			if ($pfb_rec_family === 'v6' && $pfb['dup'] != 'on') {
+				continue;
+			}
+			if (pfb_ip_recompute_order_changed(
+			    pfb_ip_recompute_family_headers($pfb['existing']['deny'] ?? [], $pfb_rec_family),
+			    $pfb['snapdir'],
+			    "{$pfb['dbdir']}/pfb_recompute_{$pfb_rec_family}.members")) {
+				$pfb['repcheck'] = TRUE;
+				break;
+			}
+		}
+	}
+
 	// issue #1084: batch recompute replaces the incremental duplicate()/dmax/pmax pass.
 	// enable_dup drives a full v4+v6 pass; dedup-off + reputation alone is v4-only; both
 	// off skips recompute (parse output stands) -- see pfb_ip_recompute_matrix(). The
@@ -18894,7 +18941,7 @@ function sync_package_pfblockerng($cron='') {
 		}
 		$pfb_rec_memberlist = "{$pfb['dbdir']}/pfb_recompute_{$pfb_rec_family}.members";
 		$pfb_rec_countsfile = "{$pfb['dbdir']}/pfb_recompute_{$pfb_rec_family}.counts";
-		@file_put_contents($pfb_rec_memberlist, $pfb_rec_paths ? (implode("\n", $pfb_rec_paths) . "\n") : '', LOCK_EX);
+		@file_put_contents($pfb_rec_memberlist, pfb_ip_recompute_memberlist_content($pfb_rec_paths), LOCK_EX);
 
 		// Reputation is v4-only (§1.2); the v6 pass is always a dedup-only passthrough.
 		$pfb_rec_repmode = ($pfb_rec_family === 'v4') ? $pfb_rec_matrix['repmode'] : 'off';
