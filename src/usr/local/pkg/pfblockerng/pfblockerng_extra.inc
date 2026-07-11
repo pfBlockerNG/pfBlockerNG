@@ -2643,10 +2643,10 @@ function pfblockerng_tick(): void
 	// see pfb_log_mgmt() at the end of this function.
 	if (!$cron_disabled && ($due['cron'] || pfb_due_ledger_is_pending('cron', $dbdir))) {
 		if ($in_win && pfb_feed_pass_busy()) {
-			// issue #1175: another feed pass is already running -- dispatching a
-			// second one would race the shared recompute staging. Defer via the
-			// existing pending mechanism so the NEXT tick retries.
-			logger(LOG_INFO, localize_text('Tick: feed cron deferred (update pass running).'), LOG_PREFIX_PKG_PFBLOCKERNG);
+			// issue #1175: a running feed pass would race the shared recompute staging --
+			// defer via pending so the NEXT tick retries. busy() is advisory only: the
+			// child's atomic begin() may still lose a dispatcher race and skip one cycle.
+			logger(LOG_INFO, localize_text('Tick: feed cron deferred (another feed pass is running).'), LOG_PREFIX_PKG_PFBLOCKERNG);
 			pfb_due_ledger_set_pending('cron', $dbdir);
 		} elseif ($in_win) {
 			logger(LOG_NOTICE, localize_text('Tick: dispatching feed cron.'), LOG_PREFIX_PKG_PFBLOCKERNG);

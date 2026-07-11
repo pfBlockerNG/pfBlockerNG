@@ -1129,6 +1129,16 @@ scheduling logic: it reads the due-ledger, dispatches each **due** job through t
 non-pfB cron jobs are left untouched; install/teardown stays idempotent via `pfblockerng_cron_exists`,
 and a pre-ADR-43 install's old fleet jobs are removed on the next `sync_package_pfblockerng()`.
 
+**Feed-pass serialization (issue #1175):** feed passes are mutually exclusive via a cross-process,
+non-blocking flock (`pfb_feed_pass.lock` under `$pfb['dbdir']`; helpers `pfb_feed_pass_*` in
+`pfblockerng.inc`). Both funnels — `sync_package_pfblockerng()` and `pfblockerng_sync_cron()` —
+acquire it at entry (`pfb_feed_pass_begin()`) and skip with a logged message when another pass
+holds it; the tick pre-checks a busy probe and **defers** (not skips) a busy feed-cron dispatch via
+the existing `pending` mechanism, so the run retries next tick. The `bl`/`bls`/`dcc` download verbs
+are deliberately unguarded (`bls` runs synchronously inside a pass — a pass-level lock there would
+deadlock the parent). The lock is kernel-released on process death; a crashed pass never wedges
+scheduling.
+
 **The due-ledger** is a single JSON sidecar `pfb_due_ledger.json` under `$pfb['dbdir']`, one entry
 per job/feed: `{last_run, next_due, jitter}`. Pure, clock+seed-injectable helpers in
 `pfblockerng_extra.inc` (`pfb_due_ledger_*`); the tick wrapper `pfb_tick_due_jobs()` decides due-ness:

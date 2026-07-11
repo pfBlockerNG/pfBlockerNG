@@ -17,8 +17,8 @@ use PHPUnit\Framework\TestCase;
  * path conflict even within one process -- that is what makes the same-process
  * contention tests below (Rows 1/2/5/6) valid without a second process. The
  * kernel releases the lock automatically when the holding process dies, so a
- * crashed feed pass can never wedge the system (Row 10 exercises this via a
- * real child process rather than asserting it abstractly).
+ * crashed feed pass can never wedge the system (Row 10b SIGKILLs a real
+ * holder child and asserts the lock frees).
  *
  * Brand-new code (CLAUDE.md Test coverage #1 exception): pfb_feed_pass_* did
  * not exist before this change, so there is no pre-existing behaviour to pin
@@ -389,5 +389,57 @@ final class FeedPassLockTest extends TestCase
 		} finally {
 			chmod($denydir, 0755);
 		}
+	}
+
+	// -----------------------------------------------------------------------
+	// Row 10b -- crash release: SIGKILL the holder, the kernel frees the lock.
+	// -----------------------------------------------------------------------
+
+	/**
+	 * A feed pass that dies without releasing (crash, OOM-kill) must never
+	 * wedge the box: the kernel drops a flock with its last open descriptor.
+	 * Spawns the same holder child, SIGKILLs it mid-hold, and asserts the
+	 * lock becomes acquirable again (bounded poll that fails loudly -- a
+	 * deadlock guard, never a fixed wait).
+	 */
+	public function testCrossProcessLockReleasedWhenHolderKilled(): void
+	{
+		$childCode = <<<'PHP'
+			$fp = fopen($argv[1], 'c');
+			if ($fp === false) { fwrite(STDOUT, "openfail\n"); exit(1); }
+			if (!flock($fp, LOCK_EX)) { fwrite(STDOUT, "lockfail\n"); exit(1); }
+			fwrite(STDOUT, "ready\n");
+			fflush(STDOUT);
+			fgets(STDIN);	// never EOF'd in this test -- the parent kills us instead
+			PHP;
+
+		$descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['file', '/dev/null', 'w']];
+		$proc = proc_open([PHP_BINARY, '-r', $childCode, $this->lockPath()], $descriptors, $pipes);
+		$this->assertTrue(is_resource($proc), 'test setup: failed to spawn the child process');
+
+		$read = [$pipes[1]];
+		$write = $except = NULL;
+		$this->assertSame(1, stream_select($read, $write, $except, 10),
+			'deadlock guard: child never signalled readiness within 10s');
+		$this->assertSame("ready\n", fgets($pipes[1]), 'child did not report holding the lock');
+		$this->assertTrue($this->rawProbeStillLocked(), 'child must genuinely hold the lock before the kill');
+
+		proc_terminate($proc, 9);	// SIGKILL: no cleanup path runs in the child
+
+		// Kernel releases the flock with the process; poll acquire under a 10s
+		// deadline that fails loudly (deadlock guard, not a fixed wait).
+		$deadline = microtime(TRUE) + 10.0;
+		$freed = FALSE;
+		while (microtime(TRUE) < $deadline) {
+			if (pfb_feed_pass_acquire()) {
+				$freed = TRUE;
+				break;
+			}
+			usleep(50000);
+		}
+		fclose($pipes[0]);
+		fclose($pipes[1]);
+		proc_close($proc);
+		$this->assertTrue($freed, 'the lock must be released by the kernel when the holder is SIGKILLed');
 	}
 }

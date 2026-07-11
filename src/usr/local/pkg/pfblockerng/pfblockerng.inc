@@ -14735,7 +14735,7 @@ function pfb_feed_pass_begin(string $label): bool {
 		return TRUE;
 	}
 	pfb_logger("\nFeed pass [ {$label} ] skipped -- another pfBlockerNG feed pass is running.\n", 1);
-	logger(LOG_NOTICE, localize_text('Feed pass skipped - another pfBlockerNG feed pass is running.'),
+	logger(LOG_NOTICE, localize_text('Feed pass [ %s ] skipped - another pfBlockerNG feed pass is running.', $label),
 		LOG_PREFIX_PKG_PFBLOCKERNG);
 	return FALSE;
 }
