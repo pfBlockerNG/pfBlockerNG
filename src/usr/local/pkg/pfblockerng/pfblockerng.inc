@@ -11222,7 +11222,11 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			}
 			else {
 				// Rename file to 'orig' format
-				@rename("{$file_download}", "{$orig_download}");
+				$renamed = @rename("{$file_download}", "{$orig_download}");
+				if (!$renamed) {
+					pfb_logger("\n[pfb_download] rename to .orig failed", 2);
+					return FALSE;
+				}
 				$retval = 0;
 			}
 		}
