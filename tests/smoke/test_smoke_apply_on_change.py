@@ -34,16 +34,10 @@ pytestmark = [pytest.mark.apply_on_change]
 
 @pytest.fixture(scope="module")
 def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:  # noqa: ARG001
-    """Deploy the branch .pkg once for the apply_on_change module, feed-cron dispatch re-armed.
-
-    ``h.deploy`` disables the tick's feed-cron dispatch for the suite (issue #1179); the
-    quiet-hours cases below drive exactly that branch, so this module opts back in with an
-    hour count (a leaked 'Disabled' already bit it once — issue #805).
-    """
+    """Deploy the branch .pkg once for the apply_on_change module."""
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
-    h.set_feed_cron_interval(smoke_vm, "1")
     h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
     try:
@@ -62,6 +56,7 @@ _PHP = "/usr/local/bin/php"
 _PFB_PHP = "/usr/local/www/pfblockerng/pfblockerng.php"
 # The ledger lives at $pfb['dbdir']/pfb_due_ledger.json (dbdir = /var/db/pfblockerng).
 _LEDGER_DIR = "/var/db/pfblockerng"
+_PFB_EXTRA = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +80,7 @@ def _write_ledger_entry(vm, job_key: str, last_run: int, next_due: int, jitter: 
     ``pfb_due_ledger_write_entry()`` (PHP) is the right tool — not a here-doc Python snippet.
     """
     snippet = (
-        f"require_once('{h.PFB_EXTRA_INC}');"
+        f"require_once('{_PFB_EXTRA}');"
         f"pfb_due_ledger_write_entry('{job_key}', array("
         f"'last_run' => {int(last_run)}, 'next_due' => {int(next_due)}, 'jitter' => {int(jitter)}"
         f"), '{_LEDGER_DIR}');"
@@ -100,7 +95,7 @@ def _set_quiet_hours(vm, window: str) -> None:
     """Set pfb_quiet_hours in config.xml via pfSsh.php."""
     # Use the config gateway rather than direct xml munging.
     snippet = (
-        f"require_once('{h.PFB_EXTRA_INC}');"
+        f"require_once('{_PFB_EXTRA}');"
         f"PfbConfig::write('pfb_quiet_hours', {json.dumps(window)});"
         "write_config('ADR-43 smoke: set quiet-hours');"
         "echo 'OK';"
@@ -292,7 +287,7 @@ def test_apply_pending_cleared_by_window_open(deployed_vm: SmokeVM):
     _force_cron_due(vm)
     pend = h.php_eval(
         vm,
-        f"require_once('{h.PFB_EXTRA_INC}');pfb_due_ledger_set_pending('cron', '{_LEDGER_DIR}');echo 'OK';",
+        f"require_once('{_PFB_EXTRA}');pfb_due_ledger_set_pending('cron', '{_LEDGER_DIR}');echo 'OK';",
     )
     assert pend.returncode == 0 and "OK" in pend.stdout, (
         f"set_pending failed: rc={pend.returncode} {pend.stderr!r} {pend.stdout!r}"
