@@ -617,6 +617,45 @@ lives in shared scripts that run identically locally and in CI:
 
 ---
 
+## Category list reorder UX (ADR-63)
+
+Both category pages reorder rows with **one shared client-side component**
+(`pfb_reorder_init` / `pfb_reorder_read_order` in `pfBlockerNG.js`): drag
+(jQuery-UI `.sortable()`) **plus** anchor-click (a per-row checkbox + a
+`type="button"` anchor; click = move checked rows before it, shift-click = after —
+mirroring core `firewall_rules.php`'s UX). Staging is client-side; nothing persists
+until the page's normal Save. `system/webgui/roworderdragging` is reused **read-only**
+(`config_path_enabled()`) — set ⇒ anchor-click only, no `.sortable()` init. The
+component injects a one-time `<style>` lifting `.pfb-reorder-ctl` into its own paint
+layer (`position:relative; z-index`) so the injected control stays clickable inside
+`category_edit.php`'s float-based `Form_Group` rows (it was otherwise painted behind
+the page container and unclickable — a real touch/mobile failure, #1147).
+
+**Two different persistence shapes feed it — deliberate, each page's own:**
+
+- **`pfblockerng_category.php`** (the Summary list): the component's order-read helper
+  emits the `ids[]=rN&…` wire format (byte-identical to jQuery-UI
+  `sortable('serialize')`, but works when `.sortable()` was never initialised), Saved
+  in one AJAX POST to the page's **existing, byte-unchanged** `ids[]` server handler.
+- **`pfblockerng_category_edit.php`** (a category's member rows): rows are
+  `Form_Group.repeatable` divs. After every staged move `onAfterMove` calls core
+  `renumber()` (already load-bearing here for client-side delete) + refreshes the
+  visible row-number gutter, so field names stay positional `0..N-1` in DOM order; the
+  page's **existing, byte-unchanged** per-field save loop persists that order on the
+  normal Save. There is **no `ids[]` concept on this page** — a staged reorder composes
+  with core `add_row()`/`delete_row()` by construction (ADR-63 §1.3).
+
+**Retired by ADR-63 (grep landing pad for a future reader):** the old
+`pfblockerng_category_edit.php` full-page-POST-per-move mechanism — `$Lmove`, `$Xmove`,
+`$pre` (server-side placement math, which carried the live #1145 multi-row bug plus
+issue #1149), the `$disable_move` flag, and the `move_anchor` checkbox + `type="submit"`
+anchor UI — is **deleted**, not re-fixed. Retiring its array-reject-loop exemption
+restored the full #1106 array-field guard. `pfblockerng_category.php`'s `ids[]`
+hostile-order validation gap is **deliberately out of ADR-63 scope** (issue #1152); its
+GeoIP order-persist is a pre-existing silent no-op (issue #1201).
+
+---
+
 ## Alerts/Reports render pipeline — `pfblockerng_alerts.php`
 
 Reported events are attributed **twice**: once at event time by the log writers
