@@ -50,7 +50,7 @@ final class AliasCntGrepCountGuardTest extends TestCase
 		$count = preg_match_all(self::ACCUMULATION_RE, self::$src);
 		$this->assertSame(2, $count,
 			'expected exactly 2 $alias_cnt = $alias_cnt + $list_cnt; accumulation sites '
-			. "(Site A ~16702-16703, Site B ~17274-17275); found {$count}");
+			. "(list-reuse branch and downloaded/rebuilt branch); found {$count}");
 	}
 
 	public function testBothAccumulationSitesCastListCntToInt(): void
