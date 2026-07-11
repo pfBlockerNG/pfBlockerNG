@@ -11224,7 +11224,7 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				// Rename file to 'orig' format
 				$renamed = @rename("{$file_download}", "{$orig_download}");
 				if (!$renamed) {
-					pfb_logger("\n[pfb_download] rename to .orig failed", 2);
+					pfb_logger("\n[pfb_download] {$header} rename to .orig failed", 2);
 					return FALSE;
 				}
 				$retval = 0;
