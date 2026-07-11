@@ -58,10 +58,27 @@ Describe 'run-gates.sh gates_for()'
     The output should include 'shellcheck b.sh'
   End
 
-  It 'refuses to build a command from a path with shell metacharacters'
+  It 'refuses to build a command from an unsafe path that feeds a per-file gate'
     Data "evil\$(touch pwned).sh"
     When call gates_for
     The line 1 of output should equal "printf 'unsafe filename in diff\\n' >&2; false"
+  End
+
+  It 'keeps aggregate gates for an unsafe-named Python file (no per-file interpolation)'
+    Data "my file.py"
+    When call gates_for
+    The line 1 of output should equal 'python3 -m pytest'
+    The lines of output should equal 4
+  End
+
+  It 'ignores an unsafe-named file that has no gates at all'
+    Data
+      #|.ADRs/ADR_04/07_Unbound_(next_only).txt
+      #|scripts/ok.py
+    End
+    When call gates_for
+    The line 1 of output should equal 'python3 -m pytest'
+    The output should not include 'unsafe filename'
   End
 
   It 'emits nothing for file types with no gates'
@@ -77,7 +94,7 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     scrub_git_env
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/rungates.XXXXXX")"
     git -C "$repo" init -q
-    printf '#!/bin/sh\ntrue\n' > "$repo/gone.sh"
+    printf '#!/bin/sh\n# gone-marker: content distinct from kept.sh so git reports a\n# genuine deletion (identical content collapses to an R100 rename)\ntrue\n' > "$repo/gone.sh"
     gitc add -A; gitc commit -qm base
     base_sha=$(gitc rev-parse HEAD)
     gitc rm -q gone.sh
