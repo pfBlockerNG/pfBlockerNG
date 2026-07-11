@@ -63,7 +63,23 @@ Args string: `{{ args }}`
   gating and land it (Steps 6–9).
 - Reject anything else with a one-line usage note rather than guessing.
 
+**Same-session resume — `--fix` after a completed triage NEVER re-triages.** If THIS
+session already ran Steps 2–5 for this issue (a verdict + resolution plan are in the
+conversation), a follow-up `--fix` — whether as `/gh-issue N --fix` or as the user
+answering the presented plan in any wording ("fix it", "go ahead", "do it") — **resumes**:
+skip Steps 2–5 entirely and jump to Step 6 with the existing verdict and plan as-is.
+Re-running the investigation discards paid-for evidence and can only drift from the plan
+the user just approved. The only staleness re-check allowed: Step 6's fetch is mandatory
+anyway — if `origin/devel` gained commits since the triage that touch the files the
+verdict cites (`git log --oneline <triage-tip>..origin/devel -- <cited paths>`), spot-check
+just the contradicted claims against those commits (targeted diff read, not a fresh
+investigation); a genuine contradiction is reported and only that claim is re-triaged.
+Zero new commits on the cited paths ⇒ execute the plan unchanged.
+
 ## Step 2 — Triage: read the WHOLE issue
+
+*(Skip Steps 2–5 on a same-session resume — see Step 1; a completed triage is never
+re-run by `--fix`.)*
 
 Per CLAUDE.md "GitHub issues": **read the title, body, AND every comment**
 (`gh issue view <N> --comments`) — never act on the opening text alone. Later
