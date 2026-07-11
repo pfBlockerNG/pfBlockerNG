@@ -8158,7 +8158,6 @@ function tld_analysis() {
 	if (!empty($tld_blacklist)) {
 
 		$tld_cnt	= 0;
-		$tld_segments	= 0;
 		pfb_logger(" Blocking full TLD/Sub-Domain(s)... |", 1);
 
 		foreach ($tld_blacklist as $tld => $key) {
@@ -8170,7 +8169,6 @@ function tld_analysis() {
 			// DNSBL python - TLD Blacklist (Set logging type to enabled '1')
 			$tld_cnt++;
 			$pfb_found = TRUE;
-			$tld_segments = @max((array((substr_count($tld, '.') +1), $tld_segments) ?: 1));
 
 			pfb_logger("{$tld}|", 1);
 			@fwrite($p_zone, pfb_dnsbl_ndjson_emit_domain_row($tld, '1', 'DNSBL_TLD', 'DNSBL_TLD'));
