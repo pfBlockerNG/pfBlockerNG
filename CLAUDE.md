@@ -202,7 +202,8 @@ Every item below is mandatory; a skipped item is recorded as SKIPPED with the re
 unrun check is visible instead of silent. **Terse prose, full checks** — brevity applies to
 the gate report's wording, never to which checks run.
 
-1. **Re-run the canonical gates yourself** (table below; "touched" is computed from the diff's
+1. **Re-run the canonical gates yourself** — `scripts/agent/run-gates.sh --diff <base>`
+   (table below; "touched" is computed from the diff's
    file types **plus cross-language consumers** — a suite that parses an artifact the diff
    changes runs regardless of its language).
 2. **Re-execute the red proof yourself** for behaviour changes — never accept the handoff's

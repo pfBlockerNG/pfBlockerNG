@@ -119,7 +119,8 @@ checkout is never edited by phases. Set it up idempotently:
     the local base branch has commits not on the remote, WARN the user and ask
     whether to push them first** before the ADR branch is cut — cutting from
     `origin/<base>` would otherwise omit them. Only after that resolve:
-    `git worktree add <path> -b adr/{NN}-{slug} origin/<base>` (push first if the user
+    `sh scripts/agent/work-branch.sh adr {NN} "<ADR Name>" --worktree --base origin/<base>`
+    (implements the CLAUDE.md sanitiser + collision suffix; push first if the user
     agreed; if they decline, state explicitly that those local-only base commits
     are excluded from `adr/{NN}-{slug}`).
 
@@ -258,7 +259,8 @@ silently dropped. When the agent returns, in `<path>`:
 1. **Transaction**: `RESULTS/{MM}_Results.txt` committed and pushed (`git -C <path> log`,
    `status`, remote ref updated), and the handoff carries **every fixed field** (CLAUDE.md "THE
    HANDOFF") — a missing/empty field rejects the handoff.
-2. **Re-run the canonical gates yourself** for everything the diff touches, computed from the
+2. **Re-run the canonical gates yourself** — `scripts/agent/run-gates.sh --worktree <path>
+   --diff <base>` — for everything the diff touches, computed from the
    diff's file types plus cross-language consumers (CLAUDE.md "Canonical gates") — green.
 3. **Re-execute the red proof yourself** for a behaviour-changing phase — never accept the
    handoff's claim — `sh scripts/agent/verify-red-proof.sh --worktree <path> --test-cmd

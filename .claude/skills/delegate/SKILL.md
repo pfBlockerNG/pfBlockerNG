@@ -65,7 +65,8 @@ summary>`), and returns the handoff with every fixed field.
 Terse prose, full checks; a skipped item is recorded SKIPPED with the reason:
 
 1. Handoff carries every fixed field — missing/empty field rejects it.
-2. Re-run the canonical gates yourself (diff file types + cross-language consumers).
+2. Re-run the canonical gates yourself: `scripts/agent/run-gates.sh --worktree <path> --diff <base>`
+   (plus any cross-language consumers the runner cannot infer).
 3. Re-execute the red proof yourself for behaviour changes
    (`sh scripts/agent/verify-red-proof.sh --worktree <path> --test-cmd '<test>' --src ...
    --hash <test>=<red-hash>` — revert → named test FAILS;

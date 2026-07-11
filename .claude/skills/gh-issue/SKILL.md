@@ -343,7 +343,8 @@ recorded as SKIPPED with the reason. When the agent returns, in `<path>`:
 
 1. **Transaction**: commit exists (`git -C <path> log`, clean `status`); the handoff carries
    every fixed field — a missing/empty field rejects it.
-2. **Re-run the canonical gates yourself** for everything the diff touches (file types + cross-
+2. **Re-run the canonical gates yourself** — `scripts/agent/run-gates.sh --worktree <path>
+   --diff <base>` — for everything the diff touches (file types + cross-
    language consumers).
 3. **Re-execute the red proof yourself** for a fix step — never accept the handoff's claim:
    `sh scripts/agent/verify-red-proof.sh --worktree <path> --test-cmd '<pinning test>'
