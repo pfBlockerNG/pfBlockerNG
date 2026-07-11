@@ -393,7 +393,11 @@ masterfile rows and deny file are not carried forward).
 
 **Invocation matrix** (`pfb_ip_recompute_matrix()`), gated on the feed-changed trigger
 (`$pfb['repcheck'] && !$pfb['save'] && $pfb['enable'] == 'on'` — a quiet pass, e.g. a
-DNSBL-only tick, invokes no recompute at all):
+DNSBL-only tick, invokes no recompute at all). `$pfb['repcheck']` also flips TRUE on a pure
+IPv4/IPv6 Deny-list priority reorder (issue #1173, `pfb_ip_recompute_order_changed()`:
+the would-be memberlist compared against the one the last recompute pass wrote), scoped to
+`pfb_cross_list_scope()` and, for v6, to dedup-on — so a reorder-only save is picked up by
+the next real pass instead of waiting for an unrelated feed change:
 
 | `enable_dup` | reputation (`drep`/`prep`) | invocation |
 | --- | --- | --- |
