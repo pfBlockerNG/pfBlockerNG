@@ -25,7 +25,10 @@ reflector's ``is_string()`` guard on ``$_REQUEST['pfb']`` (exercised via an
 on-box curl -- unreachable through ``webui``'s SLIRP-hostfwd session, since
 its gate requires literal ``REMOTE_ADDR == 127.0.0.1``). The sibling
 ``ip_remove`` site (also #1128) lives in ``test_alerts.py`` beside its own
-``_post_action``-based elseif-chain siblings.
+``_post_action``-based elseif-chain siblings. Issue #1183's
+``pfblockerng_log.php`` cluster closes the ``$pconfig['logtype']``/``logFile``
+ingress normalization (POST) and the ajax ``$_REQUEST['file']``
+``htmlspecialchars()`` sink (GET query).
 
 Each save/GET must respond like any validation failure: HTTP 200, no login
 bounce, and NOT ONE new byte in any candidate ``php_error.log``.
@@ -141,6 +144,11 @@ _ARRAY_FIELD_CASES: list[tuple[str, str, dict[str, str] | None]] = [
     ("/pfblockerng/pfblockerng_dnsbl.php", "suppression", None),  # explode
     ("/pfblockerng/pfblockerng_dnsbl.php", "tldexclusion", None),  # explode
     ("/pfblockerng/pfblockerng_dnsbl.php", "tldblacklist", None),  # explode
+    # issue #1183: pfblockerng_log.php's $pconfig ingress normalizes logtype/logFile
+    # to '' for a non-string value -- 'clear' mirrors the page's own JS
+    # ($('#clear').val('clear')) so the download/clear gate is exercised too.
+    ("/pfblockerng/pfblockerng_log.php", "logFile", {"clear": "clear"}),  # ingress normalize + clear gate
+    ("/pfblockerng/pfblockerng_log.php", "logtype", None),  # ingress normalize + $pfb_logtypes[] offset
 ]
 
 
@@ -161,6 +169,8 @@ def test_array_valued_field_rejected_gracefully(
 _GET_ARRAY_QUERY_CASES = [
     "/pfblockerng/pfblockerng_category_edit.php?type=dnsbl&savemsg[]=crafted",
     "/pfblockerng/pfblockerng_category_edit.php?type=dnsbl&atype[]=crafted",
+    # issue #1183: the ajax 'file' sink guards a non-string value at htmlspecialchars().
+    "/pfblockerng/pfblockerng_log.php?ajax=1&file[]=crafted",
 ]
 
 
