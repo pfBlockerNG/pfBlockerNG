@@ -220,10 +220,12 @@ if ($_POST) {
 	$pconfig = $_POST;
 }
 
-if (!isset($pconfig['logtype'])) {
+// issue #1183: an array-valued logtype/logFile POST field reaches string
+// sinks (htmlspecialchars(), an array offset) below -- normalize here.
+if (!isset($pconfig['logtype']) || !is_string($pconfig['logtype'])) {
 	$pconfig['logtype'] = '';
 }
-if (!isset($pconfig['logFile'])) {
+if (!isset($pconfig['logFile']) || !is_string($pconfig['logFile'])) {
 	$pconfig['logFile'] = '';
 }
 
@@ -231,7 +233,8 @@ if (!isset($pconfig['logFile'])) {
 if (isset($_REQUEST) && isset($_REQUEST['ajax'])) {
 
 	clearstatcache();
-	$pfb_logfilename = htmlspecialchars($_REQUEST['file']);
+	// issue #1183: an array-valued file request field TypeErrors htmlspecialchars() -- guard it.
+	$pfb_logfilename = htmlspecialchars(is_string($_REQUEST['file'] ?? null) ? $_REQUEST['file'] : '');
 	if (!pfb_validate_filepath($pfb_logfilename, $pfb_logtypes)) {
 		print ("|3|" . gettext('Invalid filename/path') . "|IA==|");
 		exit;
