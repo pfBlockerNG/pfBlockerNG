@@ -135,8 +135,8 @@ final class PythonWhitelistTldSegTest extends TestCase
 	/**
 	 * Brace-counts from `function {$name}(` to its matching closing brace,
 	 * so the assertions below inspect ONLY that function's body — never a
-	 * neighbour (tld_analysis() has its own, differently-purposed
-	 * $tld_segments and must stay untouched).
+	 * neighbour (tld_analysis()'s own write-only $tld_segments was removed
+	 * by issue #1168, pinned by TldAnalysisTldSegTest).
 	 */
 	private function functionBody(string $name): string
 	{
