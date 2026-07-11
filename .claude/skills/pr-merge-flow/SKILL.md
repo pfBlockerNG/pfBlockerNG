@@ -60,9 +60,10 @@ Args: `{{ args }}`
 
 **Review sources on every PR:**
 
-- **Claude adversarial review (Step 1d) — ALWAYS.** Spawn it **first**, in the
-  background, before starting the CodeRabbit wait; it is independent of CodeRabbit's
-  availability and never a mere fallback.
+- **Claude adversarial review (Step 1d) — ALWAYS.** Spawn it **first**, before
+  starting the CodeRabbit wait (the Workflow tool is already asynchronous — it returns
+  immediately; `run_in_background` is not a Workflow parameter, never pass it); it is
+  independent of CodeRabbit's availability and never a mere fallback.
 - **GitHub Copilot (Step 1f) — request + wait when available.** If Copilot is not already
   reviewing the PR, request its review at the start of Step 1; either way, wait for it
   (bounded) and triage its findings. If the request fails (Copilot review unavailable),
@@ -152,9 +153,11 @@ do not loop on it.
 
 ### Step 1d — Claude adversarial review (EVERY PR, ONE sub-agent, in addition to CodeRabbit)
 
-Runs on **every** PR — spawn it at the **start of Step 1**, in the background, in
-parallel with the CodeRabbit wait. It is additive: CodeRabbit reviewing does not skip
-it, and it does not replace CodeRabbit; when CodeRabbit never reviews it stands alone.
+Runs on **every** PR — spawn it at the **start of Step 1**, in parallel with the
+CodeRabbit wait; the Workflow call is already asynchronous (returns immediately), so
+pass no extra parameter — `run_in_background` is not a Workflow parameter and fails
+validation. It is additive: CodeRabbit reviewing does not skip it, and it does not
+replace CodeRabbit; when CodeRabbit never reviews it stands alone.
 
 1. **Run the committed `review-single` workflow** — the reviewer contract (adversarial
    brief, the three lenses, hostile-input classes, execution-grounded blocking claims,
