@@ -108,13 +108,12 @@ non-trivial, multi-step `src/`/`tests/`/CI work.
 - **ADR phases: the brief itself is written fresh-context (issue #1089).** The default
   `/adr-phase` route passes `briefSpec` (pointers: ADR dir + phase number) to the
   `phase-step` workflow, whose **Brief stage** — a fresh higher-model agent — reads the ADR,
-  phase prompt, and prior `RESULTS/`/Gate records just-in-time, runs the enumeration greps
-  itself, and returns a schema-forced brief (matrix rows citing their grep source, hostile
-  rows, gates, red proof, plan items, cross-phase drift flags); the workflow's verifier also
-  runs at the higher model. The main session validates the records non-vacuously, commits the
-  Gate file, and keeps HALT/continue/landing — its context stays flat across a long `all`
-  run. Composing an ADR-phase brief in the main session is a recorded deviation, exactly like
-  hand-spawning 6a/6b.
+  phase prompt, and prior records just-in-time and runs the enumeration greps itself (the
+  brief's field contract is schema-forced in `.claude/workflows/phase-step.js`); the
+  workflow's verifier also runs at the higher model. The main session validates the records
+  non-vacuously, commits the Gate file, and keeps HALT/continue/landing — its context stays
+  flat across a long `all` run. Composing an ADR-phase brief in the main session is a
+  recorded deviation, exactly like hand-spawning the implementer/verifier yourself.
 - **Mode propagation to delegates is mechanical** — the `SubagentStart` hook
   (`.claude/settings.json`) injects the ponytail + caveman capsule into every spawned
   sub-agent; the capsule itself carries the rules (reviewer carve-out; "terse prose,
@@ -739,16 +738,11 @@ change: review feedback first, then merge. A **Claude adversarial review runs on
 as the committed `review-single` workflow** — ONE reviewer sub-agent at effort `xhigh`
 (never below, never `max`), latest Sonnet by default / latest Fable for a large/complex PR,
 **never Opus, never a multi-agent fan-out** (`review-fanout` only on explicit user request);
-the full reviewer contract lives in `.claude/workflows/review-single.js`, not here — in
-addition to **GitHub
-Copilot** (its review is *requested* when available, skipped
-if already reviewing, and waited on, bounded) and **CodeRabbit** when it reviews. A CodeRabbit
-rate-limit notice follows the **5-minute rule** (its stated resume time > 5 min ⇒ proceed
-without it; ≤ 5 min ⇒ wait, nudge once, drop it on any further problem). **Snyk is advisory**
-— never waited on, never a required check; only a terminal `failure` verdict where it actually
-ran and flagged something is handled (as a security finding). A bot quota notice is an
-acknowledgement with **no review** — surface the skipped reviewer; never read it as "PR is
-clean". Only the dev-only no-PR classes are exempt.
+the full reviewer contract lives in `.claude/workflows/review-single.js`, not here. External
+reviewers — CodeRabbit, GitHub Copilot, advisory Snyk — are requested / waited on (bounded) /
+skipped per the `pr-merge-flow` skill; a bot quota notice is an acknowledgement with **no
+review** — surface the skipped reviewer, never read it as "PR is clean". Only the dev-only
+no-PR classes are exempt.
 
 **Applying review findings follows the coverage-matrix discipline.** A finding that names a
 *class* ("the X clauses", "all Y", "… etc.") is fixed by re-enumerating the class **from the

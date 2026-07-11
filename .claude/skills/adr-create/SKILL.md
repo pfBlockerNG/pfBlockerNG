@@ -28,11 +28,9 @@ Read these so the new ADR matches the **current** house style (conventions have
 evolved across ADRs — always mirror the most recent one rather than this file's
 embedded snippets if they diverge):
 
-- **Sync FIRST — `git fetch origin` before anything else, every invocation** (even if you
-  authored another ADR or handled an issue earlier in this session): ground on the current
-  `origin/devel` and the latest ADRs across refs, never a stale local `devel` or an in-session
-  snapshot left over from a previous item. The remote advances out of band; a stale base re-runs
-  already-fixed bugs (CLAUDE.md "Rebase onto the latest base BEFORE opening a PR"). The
+- **Sync FIRST — `git fetch origin` before anything else, every invocation**: ground on the
+  current `origin/devel` and the latest ADRs across refs, never a stale local branch or an
+  earlier in-session snapshot (CLAUDE.md "Rebase onto the latest base"). The
   `adr/{NN}-{slug}` branch that `/adr-phase` later cuts inherits this base.
 - `CLAUDE.md` — code standards, branch/release model, commit style, the exact
   test/lint commands, and the "no live Unbound in CI" reality.
@@ -60,14 +58,13 @@ Next number = `max + 1`, zero-padded to two digits (`NN`). Agree a short
 `.ADRs/ADR_{NN}_{Name}/`. Confirm both before writing anything.
 
 **Set up the worktree now, before Step 3 writes any file** — CLAUDE.md "Worktrees" has no
-carve-out for ADR *authoring*: it is dev-only (no PR — commits/push straight to `devel`) but
-still **never the primary checkout**. `{slug}` = the sanitised `{Name}` per CLAUDE.md "Branch
-naming". `git worktree list` first — reuse only a worktree **you created this run**; a foreign
-one may belong to a live parallel session (`git -C <path> status`; foreign uncommitted changes
-⇒ cut a fresh `-{epoch}`-suffixed one instead). Otherwise:
-`git worktree add <path> -b adr/{NN}-{slug} origin/devel` (fetch first). This is the **same**
-branch name `/adr-phase` reuses for the phase-implementation work later — creating it now for
-the ADR text is reuse, not a collision. Do all Step 3/4 file-writing inside `<path>`.
+carve-out for ADR *authoring*: dev-only (no PR — commits/push straight to `devel`) but
+still **never the primary checkout**. `{slug}` = the sanitised `{Name}` per CLAUDE.md
+"Branch naming"; reuse per CLAUDE.md "Worktrees" (`git worktree list` first — only your own
+from this run; foreign ⇒ fresh `-{epoch}`), else
+`git worktree add <abs path> -b adr/{NN}-{slug} origin/devel` (fetch first). `/adr-phase`
+later reuses this branch for the phase work — creating it now is reuse, not a collision. Do
+all Step 3/4 file-writing inside `<path>`.
 
 ## Step 2 — Interactive elicitation (the core; expect many turns)
 

@@ -42,10 +42,8 @@ supplements your judgement, it never replaces it.
 - Resolve `OWNER/REPO` with `gh repo view --json nameWithOwner -q .nameWithOwner`.
 - Be on the PR's **head** branch (checkout if needed) so fixes land on it.
 - **Transport check (managed environments):** `command -v gh && gh auth status` once. `gh`
-  absent → GitHub reads/writes via the session's `mcp__github__*` tools, and every wait below
-  runs as **wakeup-paced MCP checks** instead of a background bash loop (same rungs, caps, and
-  give-up budget — CLAUDE.md "No orphaned waits" §4 / workflow-reference "Managed
-  environments"). Neither `gh` nor a GitHub MCP server → stop and report.
+  absent → `mcp__github__*` tools + wakeup-paced waits per workflow-reference "Managed
+  environments" (§4); neither `gh` nor a GitHub MCP server → stop and report.
 - Parse flags: `--wait-for=<handle>` (also accept `--wait-for <handle>`) turns on the
   wait in Step 2. It is **repeatable** and also accepts a **comma-separated list** —
   `--wait-for=coderabbitai,snyk` or `--wait-for=coderabbitai --wait-for=snyk` — so you can
@@ -95,8 +93,9 @@ read the file's LAST line as the verdict when it wakes you:
 ```sh
 sh scripts/agent/wait-reviewer.sh --repo "$OWNER_REPO" --pr "$PR" \
   --handle coderabbitai --until finished > "$RESULT" 2>&1
-# Handle matching is a case-insensitive substring of the login (coderabbitai[bot],
-# copilot-pull-request-reviewer[bot] via --handle copilot). --handle snyk reads the
+# Handle matching is case-insensitive and ANCHORED — == handle, == handle[bot], or
+# startswith(handle-), so --handle copilot matches copilot-pull-request-reviewer[bot]
+# but a login merely CONTAINING the handle does not. --handle snyk reads the
 # head-SHA status/check-runs instead of comments. Re-arm after a nudge with
 # --since "$(date -u +%Y-%m-%dT%H:%M:%SZ)" so only fresh activity counts.
 # Exit 3 = gh unavailable (managed env): fall back to mcp__github__* wakeup-paced
@@ -281,8 +280,9 @@ For every finding, decide a verdict — do **not** auto-apply:
 - **A fix that changes behaviour carries its own test** — CLAUDE.md "Test coverage" applies
   to review fixes too: fail-before/pass-after, no coverage theater, and **Tier A** UI coverage
   for a `www/` change. (A pure-comment/lint nit needs none.)
-- Re-run the gates: `python -m pytest`, `ruff check .` / `ruff format .`, `php -l`
-  / ShellCheck for any PHP/shell touched. Nothing red.
+- Re-run the gates for whatever the fixes touched:
+  `scripts/agent/run-gates.sh --diff <base>` (the CLAUDE.md canonical-gates runner).
+  Nothing red.
 - Commit (`<scope>: <imperative summary>`) and push to the PR head branch (direct
   push; the PR updates itself).
 
@@ -338,10 +338,7 @@ Summarize: findings by source (inline / nitpick / outside-diff-range), how many
 **applied** (+ commit hash), **skipped** (with reasons), **deferred** (+ tracking
 issue links, and any follow-up PR); gate results; and any thread you could not resolve.
 
-**Trigger sweep (mandatory — CLAUDE.md "No orphaned waits").** The waits this skill armed (Step 2 polls) are now
-resolved, so kill every wait tied to it NOW, by class: `TaskStop` each background
-poll you started for it; `CronDelete` every remaining heartbeat rung; unsubscribe any
-PR/event subscription. Any `ScheduleWakeup` you armed cannot be cancelled — confirm its
-prompt was self-invalidating and let it no-op. Then `TaskList` once: stop anything stale
-you own from earlier items. Report the sweep in one line (what was stopped / "nothing
-pending").
+**Trigger sweep (mandatory).** The waits this skill armed (Step 2 polls) are now resolved:
+run the cancel-on-resolution sweep — CLAUDE.md "No orphaned waits" / workflow-reference
+"Bounded waits" §3 (kill every trigger class, then `TaskList` once for stale waits you
+own) — and report it in one line (what was stopped / "nothing pending").

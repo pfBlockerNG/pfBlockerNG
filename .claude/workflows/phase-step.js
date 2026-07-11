@@ -1,7 +1,7 @@
 export const meta = {
   name: 'phase-step',
   description: 'One delegated step under the delegation contract: optional fresh higher-model Brief stage -> Sonnet implementer -> independent higher-model verifier, all schema-forced',
-  whenToUse: 'Called by /adr-phase (per phase) and /gh-issue --fix (per step) instead of hand-spawning 6a/6b or 7a/7b. Args: {worktree, brief | briefSpec: {adrDir, phase, notes?}, gates: [cmd...], redProof: {srcPaths: [...], testCmd} | null, planItems: [...], ponytailLevel: "full" | null}. With briefSpec (ADR phases — issue #1089) the Brief stage derives brief/gates/redProof/planItems itself from disk, so the caller passes only pointers. The caller keeps ALL judgment: it validates the returned records, commits the RESULTS/Gate files, and decides HALT/continue/landing.',
+  whenToUse: 'Called by /adr-phase (per phase) and /gh-issue --fix (per step) instead of hand-spawning the implementer/verifier stages yourself. Args: {worktree, brief | briefSpec: {adrDir, phase, notes?}, gates: [cmd...], redProof: {srcPaths: [...], testCmd} | null, planItems: [...], ponytailLevel: "full" | null}. With briefSpec (ADR phases — issue #1089) the Brief stage derives brief/gates/redProof/planItems itself from disk, so the caller passes only pointers. The caller keeps ALL judgment: it validates the returned records, commits the RESULTS/Gate files, and decides HALT/continue/landing.',
   phases: [
     { title: 'Brief', detail: 'fresh higher-model planner enumerates the matrix + hostile rows and composes the brief (briefSpec callers only)' },
     { title: 'Implement', detail: 'one Sonnet implementer executes the brief', model: 'sonnet' },

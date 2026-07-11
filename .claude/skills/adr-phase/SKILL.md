@@ -44,15 +44,13 @@ across phases whether you call each phase yourself or `all` loops them.
 
 ## Step 0 — Sync to the latest remote base FIRST (before parsing or planning)
 
-Before anything else — **every invocation, including when you already implemented another ADR or
-issue earlier in this session** — `git fetch origin` and base all work on the just-fetched
-`origin/<base>` (default `origin/devel`). The remote advances out of band (parallel agents land
-commits), so re-fetch and re-base each time; never plan or branch off a stale local `devel` or an
-in-session snapshot left over from a previous item. A stale base re-runs bugs the base has already
-fixed and sends you chasing a phantom regression (CLAUDE.md "Rebase onto the latest base BEFORE
-opening a PR"). This governs Step 3: cut a fresh `adr/{NN}-{slug}` from `origin/<base>`, and when
-**reusing/resuming** an existing branch, rebase it onto the freshly-fetched `origin/<base>`
-(`git -C <path> rebase origin/<base>`; `--force-with-lease` to push) **before** running any phase.
+`git fetch origin` before anything else, **every invocation** — base all work on the
+just-fetched `origin/<base>` (default `origin/devel`), never a stale local branch or an
+earlier in-session snapshot (CLAUDE.md "Rebase onto the latest base"; the remote advances
+out of band). Governs Step 3: cut a fresh `adr/{NN}-{slug}` from `origin/<base>`; when
+**reusing/resuming** an existing branch, rebase it onto the freshly-fetched base
+(`git -C <path> rebase origin/<base>`; `--force-with-lease` to push) **before** running any
+phase.
 
 ## Step 1 — Parse args
 
@@ -76,20 +74,12 @@ numerically — their count is the total phase count.
 All phase work happens in a dedicated worktree checked out to `adr/{NN}-{slug}`; the main
 checkout is never edited by phases. Set it up idempotently:
 
-- **Managed-remote sessions (check FIRST).** Per CLAUDE.md "Managed-remote sessions: branch
-  policy + cross-session resume": if the environment permits pushing to the canonical
-  `adr/{NN}-{slug}` branch (the **preferred** config), use it as normal — resume is native, no
-  special-casing. Only if push is **hard-pinned** to a minted `claude/<slug>-<rand>` branch does
-  the pinned branch replace `adr/{NN}-{slug}`: then work in the primary checkout (not a separate
-  worktree), `git fetch origin` and **discover** any prior branch carrying this ADR's
-  `RESULTS/{NN}_*` handoffs + an `ADR-RESUME:` sentinel; if exactly one unambiguous candidate
-  exists, **fast-forward its commits onto the current pinned branch** and continue at its
-  `next-phase` (no prompt). Ask only on genuine ambiguity. Record/carry the `ADR-RESUME` sentinel
-  in the handoff. **But if the pinned branch was minted/named for a different item** (its name
-  references another ADR/issue, e.g. `claude/gh-issue-7-…` while you start ADR-12), do **not**
-  overload it: cut a **new** branch named for **this** ADR and push there if the policy allows;
-  only when pushes are hard-pinned to that one stale branch may you reuse it, and then **flag the
-  name/item mismatch to the user first** (CLAUDE.md "One branch per work item").
+- **Managed-remote sessions (check FIRST).** Per CLAUDE.md "Managed-remote sessions" (full
+  text in workflow-reference, including the `ADR-RESUME:` sentinel + prior-work discovery +
+  fast-forward resume mechanics): the canonical `adr/{NN}-{slug}` when the push policy
+  allows it — resume is then native. A hard-pinned `claude/*` branch replaces it only when
+  minted for THIS item — one branch per work item; reusing a stale-named pinned branch
+  requires flagging the name/item mismatch to the user first.
 - **Resolve the branch name first.** Compute `{slug}` from the ADR title per CLAUDE.md
   "Branch naming (ADRs and issues)" → the target branch `adr/{NN}-{slug}`. This is
   deterministic, so it matches whatever a prior phase already created.
@@ -105,10 +95,9 @@ checkout is never edited by phases. Set it up idempotently:
 - **Create or reuse** (check `git worktree list` first; match this ADR's branch by the
   `adr/{NN}-*` prefix — and the legacy bare `adr/{NN}` — so a branch cut before the
   slug scheme is still picked up rather than duplicated):
-  - If a worktree for this ADR's branch already exists **and you created it earlier in THIS
-    run** → reuse it. If it exists but you did **not** create it this run, it may be a live
-    parallel session's — `git -C <path> status`; foreign uncommitted changes ⇒ do not touch
-    or `--force`-remove it, fall through to a fresh uniquely-named worktree (suffix `-{epoch}`).
+  - An existing worktree for this ADR's branch: reuse per CLAUDE.md "Worktrees" — only one
+    you created earlier in THIS run; foreign uncommitted changes ⇒ fall through to a fresh
+    `-{epoch}`-suffixed worktree.
   - Else if the branch exists → `git worktree add <path> <branch>`.
   - **On either reuse path, rebase the branch onto the freshly-fetched `origin/<base>` (Step 0)
     before running any phase** (`git -C <path> rebase origin/<base>`; `--force-with-lease` to
@@ -167,128 +156,50 @@ Bring `adr/{NN}-{slug}` to a clean transaction boundary:
 If the resume point is past the last phase, the ADR is already implemented — skip
 to Step 7.
 
-## Step 6 — Run each phase in a fresh sub-agent, then gate
+## Step 6 — Run each phase via the `phase-step` workflow, then validate and gate
 
 For every phase `M` to run (the loop body in `all`):
 
-**Default route — the `phase-step` workflow (use it whenever the Workflow tool is
-available; hand-spawning 6a/6b while it is available requires a recorded reason in your
-report — PR #937 bypassed it silently and produced no fixed-field gate record, #943).** Run
-the whole phase as ONE call, passing **pointers, not a composed brief** (issue #1089 — the
-brief is written by the workflow's fresh higher-model Brief stage, so your own context stays
-flat across a long `all` run): `Workflow({name: 'phase-step', args: {worktree: '<path>',
-briefSpec: {adrDir: '<ADR_DIR relative to the worktree>', phase: M, notes: '<session
-constraints the disk cannot show — base override, user instructions; omit if none>'},
-ponytailLevel: <active level or null>}})`. The Brief stage reads `ADR.md`, the phase prompt,
-the previous phase's `RESULTS/` records plus the carry_forward chain just-in-time (full
-earlier records only when explicitly referenced), evaluates the previous phase's landed
-diff against the ADR's invariants (the broadened drift check), runs the enumeration greps
-itself, and returns
-a schema-forced `briefRecord` (coverage matrix rows each citing their grep source, hostile
-rows, gates, red proof, plan items, cross-phase `drift_flags`); the workflow then pipes it
-through the Sonnet implementer and a fresh higher-model verifier and returns `{briefRecord,
-handoff, gateRecord}` — all schema-forced. You then: **validate the briefRecord
-non-vacuously** (re-run at least one cited coverage-matrix `source` and confirm it yields the
-row; judge any `drift_flags`), **validate the gateRecord without re-deriving it** (fields
-non-empty, evidence = executed commands + pasted output, spot-read the load-bearing diff
-hunks — never a third run of the gates or the red proof the verifier just executed), reject
-a record with any failed or missing item, write `RESULTS/{MM}_Gate.txt` from the gateRecord
-and commit+push it, and keep ALL judgment (HALT/continue/redo, Step 7 landing). A BLOCKED briefRecord or handoff, or a FAIL gate
-record → **HALT and report**, exactly as below. The legacy `brief:` argument (you compose 6a
-yourself) remains supported but is not the default for ADR phases. When the Workflow tool is
-unavailable, run the same contract inline: **first spawn a fresh brief-writer Agent** (omit
-`model` so it inherits the higher model; effort `xhigh`) with the Brief-stage instructions
-and required output fields above, validate its brief, then run 6a/6b as specified below —
-the contract is identical; the workflow only packages it.
+**Default route — the `phase-step` workflow (hand-spawning the stages while it is
+available requires a recorded reason in your report — PR #937 bypassed it silently and
+produced no fixed-field gate record, #943).** Run the whole phase as ONE call, passing
+**pointers, not a composed brief** (issue #1089 — the brief is written by the workflow's
+fresh higher-model Brief stage, so your own context stays flat across a long `all` run):
+`Workflow({name: 'phase-step', args: {worktree: '<path>', briefSpec: {adrDir: '<ADR_DIR
+relative to the worktree>', phase: M, notes: '<session constraints the disk cannot show —
+base override, user instructions; omit if none>'}, ponytailLevel: <active level or
+null>}})`. The Brief stage reads `ADR.md`, the phase prompt, and the prior `RESULTS/`
+records + carry_forward chain just-in-time, runs the enumeration greps itself, and
+evaluates the previous phase's landed diff against the ADR's invariants (the broadened
+drift check); the workflow pipes the schema-forced brief through the Sonnet implementer
+and a fresh higher-model verifier and returns `{briefRecord, handoff, gateRecord}` — all
+schema-forced (field contracts in `.claude/workflows/phase-step.js`).
 
-**6a. Delegate to a clean sub-agent.** Spawn an Agent (`subagent_type:
-general-purpose`, **`model: sonnet`**) — **without** `isolation: "worktree"`, since
-the worktree already exists. Per CLAUDE.md "Plan with a higher model, implement with
-Sonnet 5", **you are the higher-model planner/gater and the implementer runs on Sonnet 5**;
-your brief must be self-contained, accurate, and well-referenced (the cheaper implementer
-is only safe because you gate every step). Give it a **self-contained** brief — no
-carry-over from this conversation, though it has the full worktree (the whole codebase) to
-read and edit:
+Your duties on return:
 
-- The **full text** of the phase prompt `{ADR_DIR}/{MM}_*.txt`.
-- "Work **entirely inside** the worktree at `<path>` — all edits and all git
-  commands there (`git -C <path> …`). Do not touch the main checkout."
-- "Follow the prompt exactly. Do its REQUIRED READING, including `CLAUDE.md` and
-  the prior handoff `RESULTS/{M-1}_Results.txt` (if that gate is in the prompt and
-  the file is missing, STOP and report). Implement the ACTION PLAN under its
-  CONSTRAINTS."
-- The brief follows **CLAUDE.md "The delegation contract"** — all seven BRIEF sections. In
-  particular you (the planner) supply, inside the brief: the **coverage matrix** (sibling axes /
-  callers / branches enumerated from grep or the version matrix, never from memory — each row
-  mapped to a test or an explicit deferral) and, for any parser/regex/guard work, the
-  **hostile-input rows** with expected outcomes. If the phase prompt already carries them, pass
-  them through; if it doesn't and the phase plausibly needs them, deriving them is YOUR job
-  before spawning — a brief that says "all X" without the list is invalid.
-- "Run the **canonical gates** for everything you touch (CLAUDE.md 'Canonical gates' table —
-  including cross-language consumers of artifacts you change). Do not proceed red."
-- "Honour CLAUDE.md **Test coverage** — the five non-negotiables. For any behaviour this
-  phase **adds/changes**, the proof is **test-first** (Test coverage #1): author the
-  reproduction test BEFORE any production edit, execute it → FAILS for the defect's reason
-  (paste output; record `git hash-object` of each test file), freeze it byte-identical,
-  implement, re-run the SAME test with zero edits → PASSES (paste output) — executed runs,
-  never 'reasoned through'; only then add the phase's remaining tests. A
-  **behaviour-preserving** phase instead pins existing behaviour as an oracle that stays
-  green; **brand-new code with no pre-existing behaviour to be wrong** needs no red run
-  against a missing symbol (an existence test is coverage theater) — its tests still ship.
-  A phase touching `www/` MUST add **Tier A** UI coverage (Tier B only if the change is
-  observable *only* there). No change without its test; no coverage theater; tests state intent."
-- "**ESCALATE, don't improvise:** if any factual claim in this brief, the phase prompt, or the
-  ADR is contradicted by the code or a live probe, STOP and return a BLOCKED handoff saying so —
-  the live tree and prior RESULTS files override the prompt on any conflict. Never silently
-  patch the plan."
-- "**Review your own work against the phase objectives BEFORE writing the
-  handoff:** read your actual `git diff`; confirm the phase added the test cases it
-  should (new/preserved behaviour + edge cases, not just 'existing tests pass'),
-  every ACTION-PLAN / EXPECTED-RESULT objective is met, the ADR's preserved-
-  semantics contract holds, and scope is clean. Fix and re-verify if anything is
-  off."
-- "Then write `RESULTS/{MM}_Results.txt` **with the fixed HANDOFF fields from CLAUDE.md 'THE
-  HANDOFF'** (verdict; what changed; gates with pasted output; red→green proof; coverage-matrix
-  ticks; deviations; carry-forward), make a **single commit** (code + handoff)
-  with the COMMIT-block message, and **push**: `git -C <path> push -u origin
-  adr/{NN}-{slug}`."
-- "Report back: gate results, commit hash, push status, handoff path, and any
-  deviation or STOP."
-- Spawn with **`model: sonnet`** and **effort `xhigh`** stated explicitly (never rely on
-  inheritance).
+1. **Transaction**: `RESULTS/{MM}_Results.txt` committed and **pushed**
+   (`git -C <path> log`/`status`, remote ref updated) — the crash-safe boundary.
+2. **Validate the briefRecord non-vacuously**: re-run at least one cited coverage-matrix
+   `source` and confirm it yields the row; judge any `drift_flags`.
+3. **Validate the handoff + gateRecord** per workflow-reference "Validating workflow
+   records" (fields non-empty, evidence executed + pasted, spot-read the load-bearing diff
+   hunks — never a third run of the gates or red proof the verifier just executed). Reject
+   a record with any failed or missing item.
+4. **Write the gate record** `RESULTS/{MM}_Gate.txt` from the gateRecord (fixed fields:
+   commands + results, red/green re-execution evidence, per-item diff verdicts, matrix
+   confirmation, SKIPPED list) and commit + push it as its own small commit
+   (`docs: ADR-NN phase M gate record`). On resume, a phase with a Results file but no
+   Gate record gets its gate run retroactively before the next phase starts.
+5. Keep ALL judgment: HALT/continue/redo and the Step 7 landing.
 
-**6b. Orchestrator gate (independent, mechanical — CLAUDE.md "THE GATE").** Terse prose, full
-checks: every item below runs; a skipped item is recorded as SKIPPED with the reason, never
-silently dropped. When the agent returns, in `<path>`:
+The legacy `brief:` argument (you compose the brief yourself) remains supported but is not
+the default for ADR phases. **Workflow tool unavailable** → play the Brief, Implement, and
+Verify stages from `.claude/workflows/phase-step.js` yourself with plain Agents (its
+prompts + schemas ARE the contract; Brief and Verify on the higher model, implementer
+`model: sonnet`, effort `xhigh` stated explicitly on every spawn), then run the duties
+above — the contract is identical; the workflow only packages it.
 
-1. **Transaction**: `RESULTS/{MM}_Results.txt` committed and pushed (`git -C <path> log`,
-   `status`, remote ref updated), and the handoff carries **every fixed field** (CLAUDE.md "THE
-   HANDOFF") — a missing/empty field rejects the handoff.
-2. **Re-run the canonical gates yourself** — `scripts/agent/run-gates.sh --worktree <path>
-   --diff <base>` — for everything the diff touches, computed from the
-   diff's file types plus cross-language consumers (CLAUDE.md "Canonical gates") — green.
-3. **Re-execute the red proof yourself** for a behaviour-changing phase — never accept the
-   handoff's claim — `sh scripts/agent/verify-red-proof.sh --worktree <path> --test-cmd
-   '<the phase's pinning test>' --src <src path>... --hash <test file>=<red-time hash>`
-   (revert→FAIL, restore→PASS, freeze hash enforced). Record its verdict lines in the gate
-   record.
-   committed reproduction test equals the handoff's red-time hash — a test edited between red
-   and green (or missing its red-time hash) proves nothing.
-4. **Read the FULL diff** (`git -C <path> show` — never `--stat` alone) and tick **every**
-   ACTION-PLAN item and **every** coverage-matrix row against what the diff actually does —
-   hardcoded values, stubbed branches, and silently dropped plan items live below `--stat`.
-5. **Test honesty**: no weakened assertions; every negative assertion has a fixture that could
-   make it fail; no red-run via a monkeypatched fault production cannot produce; a
-   `www/`-touching phase has **Tier A** UI coverage.
-6. **Conventions**: new public symbols named like their siblings (list 3); stale
-   comments/docs about touched symbols reconciled.
-7. **Write the gate record** `RESULTS/{MM}_Gate.txt` (fixed fields: commands + results,
-   red/green re-execution evidence, per-item diff verdicts, matrix confirmation, SKIPPED list)
-   and commit + push it as its own small commit (`docs: ADR-NN phase M gate record`). On
-   resume, a phase with a Results file but no Gate record gets its gate run retroactively
-   before the next phase starts.
-
-If the agent reported a STOP/failure, the handoff is missing a field, or any gate item fails →
+A BLOCKED briefRecord or handoff, a FAIL gate record, or any missing fixed field →
 **HALT and report**; do not start `M+1`. (You verify the transaction and the content against
 the plan; you do not re-implement it.) When a phase's executed reality contradicts the ADR's
 own text (a falsified claim, an overturned decision — the ESCALATE contract's trigger), the
@@ -305,7 +216,7 @@ Reach this when the ADR is now **fully implemented** — the phase just finished
 single run, or the last `all` iteration) was the final phase, or Step 5 found
 nothing left. Identical whether reached via `all` or the single-phase run that
 completed the last phase. For an intermediate single-phase run that did **not**
-complete the ADR, stop after Step 6b and report — the branch is already pushed.
+complete the ADR, stop after Step 6 and report — the branch is already pushed.
 
 The branch `adr/{NN}-{slug}` is already on the remote (pushed each phase). **Ask the
 user** (AskUserQuestion) how to land it — confirm the base if unclear:
@@ -342,10 +253,7 @@ Summarize:
   green, not pending a manual sign-off.
 - Any blockers or deviations.
 
-**Trigger sweep (mandatory — CLAUDE.md "No orphaned waits").** The task just reached a
-terminal state, so kill every wait tied to it NOW, by class: `TaskStop` each background
-poll you started for it; `CronDelete` every remaining heartbeat rung; unsubscribe any
-PR/event subscription. Any `ScheduleWakeup` you armed cannot be cancelled — confirm its
-prompt was self-invalidating and let it no-op. Then `TaskList` once: stop anything stale
-you own from earlier items. Report the sweep in one line (what was stopped / "nothing
-pending").
+**Trigger sweep (mandatory).** The task just reached a terminal state: run the
+cancel-on-resolution sweep — CLAUDE.md "No orphaned waits" / workflow-reference "Bounded
+waits" §3 (kill every trigger class, then `TaskList` once for stale waits you own) — and
+report it in one line (what was stopped / "nothing pending").

@@ -31,10 +31,10 @@ Args: `{{ args }}`
 When the Workflow tool is available, run Steps 2–3 as ONE call after writing the brief:
 `Workflow({name: 'phase-step', args: {worktree, brief, gates, redProof, planItems,
 ponytailLevel}})` — Sonnet implementer + fresh higher-model verifier, schema-forced
-`{handoff, gateRecord}`. Validate the returned record (fields non-empty, evidence =
-executed commands + pasted output, spot-read the load-bearing hunks — do NOT re-run the
-gates or the red proof the verifier just executed); the Step 3 items below bind the inline
-route only.
+`{handoff, gateRecord}`. Validate the returned record per workflow-reference "Validating
+workflow records" (fields non-empty, evidence executed + pasted, spot-read the load-bearing
+hunks — never a third derivation of the gates or red proof); the Step 3–4 items below bind
+the inline route only.
 
 ## Step 1 — Investigate, then write THE BRIEF
 
@@ -56,7 +56,9 @@ ASSUMED with a verification step in the brief.
 
 ## Step 2 — Worktree and branch
 
-`git worktree add -b <branch> .claude/worktrees/<name> origin/<base>`. Branch: reuse the
+`git worktree add -b <branch> "$(git rev-parse --show-toplevel)/.claude/worktrees/<name>"
+origin/<base>` — the path must be **absolute** (a relative path resolves against whatever
+the cwd currently is and has nested worktrees inside worktrees). Branch: reuse the
 work-item convention when one applies; otherwise `task/{slug}` with the CLAUDE.md "Branch
 naming" sanitiser. All work happens in the worktree; never the main checkout.
 

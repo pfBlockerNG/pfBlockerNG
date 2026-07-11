@@ -41,10 +41,8 @@ Args: `{{ args }}`
 - Resolve `OWNER/REPO`: `gh repo view --json nameWithOwner -q .nameWithOwner`.
 - Record `HEAD` (`headRefName`) and `BASE` (`baseRefName`).
 - **Transport check (managed environments):** `command -v gh && gh auth status` once. `gh`
-  absent → GitHub reads/writes via the session's `mcp__github__*` tools, and every wait below
-  runs as **wakeup-paced MCP checks** instead of a background bash loop (same rungs, caps, and
-  give-up budget — CLAUDE.md "No orphaned waits" §4 / workflow-reference "Managed
-  environments"). Neither `gh` nor a GitHub MCP server → stop and report.
+  absent → `mcp__github__*` tools + wakeup-paced waits per workflow-reference "Managed
+  environments" (§4); neither `gh` nor a GitHub MCP server → stop and report.
 
 ## Step 2 — Preflight: refuse the cases that must not merge
 
@@ -60,11 +58,9 @@ Only continue when the PR is OPEN, ready, and mergeable.
 
 ## Step 3 — Rebase the head branch onto its base, push
 
-Do this in a **dedicated worktree** (never the primary checkout). Reuse a worktree for `HEAD`
-**only if you created it earlier in this run** — if one exists at the path but you did not
-create it (possibly a live parallel session's: `git -C <path> status` shows foreign uncommitted
-changes), do **not** touch or `--force`-remove it; create your own at a fresh path. Otherwise
-create one:
+Do this in a **dedicated worktree** (never the primary checkout); reuse per CLAUDE.md
+"Worktrees" — only a worktree you created earlier in this run; a foreign one ⇒ create your
+own at a fresh path. Otherwise create one:
 
 ```sh
 git fetch origin
@@ -97,9 +93,7 @@ sh scripts/agent/wait-checks.sh --repo "$OWNER_REPO" --pr "$PR" > "$RESULT" 2>&1
 # checks (CLAUDE.md "No orphaned waits" #4).
 ```
 
-`bucket` is one of `pass` / `fail` / `pending` / `skipping` / `cancel`; `skipping`
-counts as done-not-failed. Requiring `total > 0` avoids declaring PASS before any
-check has registered. When it wakes you, read `$RESULT`:
+When it wakes you, read `$RESULT` (verdict semantics are documented in the script header):
 
 - **`PASS`** → every required check is green. One post-pass read of the excluded Snyk
   status (`gh pr checks "$PR" | grep -i snyk`): a terminal **`fail` whose description is a
@@ -134,13 +128,10 @@ gh pr merge "$PR" --rebase
   the tree): `git worktree remove <path>`. If you created a throwaway branch only
   to hold the worktree, delete it too.
 
-**Trigger sweep (mandatory — CLAUDE.md "No orphaned waits").** The task just reached a
-terminal state, so kill every wait tied to it NOW, by class: `TaskStop` each background
-poll you started for it; `CronDelete` every remaining heartbeat rung; unsubscribe any
-PR/event subscription. Any `ScheduleWakeup` you armed cannot be cancelled — confirm its
-prompt was self-invalidating and let it no-op. Then `TaskList` once: stop anything stale
-you own from earlier items. Report the sweep in one line (what was stopped / "nothing
-pending").
+**Trigger sweep (mandatory).** The task just reached a terminal state: run the
+cancel-on-resolution sweep — CLAUDE.md "No orphaned waits" / workflow-reference "Bounded
+waits" §3 (kill every trigger class, then `TaskList` once for stale waits you own) — and
+report it in one line (what was stopped / "nothing pending").
 
 ## Step 7 — Report back
 

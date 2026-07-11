@@ -110,7 +110,7 @@ the moment the awaited item reaches ANY terminal state, and again at work-item p
 | Background Bash poll (`run_in_background`) | `TaskStop <task-id>` | Also self-terminating by construction: a hard iteration cap + wall-clock deadline INSIDE the loop. A poll without both is a defect — never launch it. |
 | Cron check-in | `CronDelete` | The heartbeat ladder's rungs are crons — delete every remaining rung on resolution, not just the next. |
 | PR/event subscription | unsubscribe | A user-driven check supersedes the subscription — kill it then and there. |
-| `ScheduleWakeup` | **none — cannot be cancelled** | Fires regardless. Therefore: (a) FALLBACK only — harness completion notifications are the primary wake; (b) **short rung + minimal check + re-arm**, never one long wakeup at a speculative future time: arm the shortest sensible delay, and on firing do a minimal state check and re-arm the next ladder rung only if still unresolved (cache note: rungs ≤ 270 s keep the prompt cache warm for active polling; slow externals take 10 min+ rungs — pick by how fast the watched state actually changes); (c) fixed self-invalidating prompt template: `CHECK <concrete state/command>; IF RESOLVED: no-op, do NOT re-arm; ELSE <next action> + re-arm <n> min` — a stale firing then costs one cheap turn. |
+| `ScheduleWakeup` | **none — cannot be cancelled** | Fires regardless. Therefore: (a) FALLBACK only — harness completion notifications are the primary wake; (b) **short rung + minimal check + re-arm**, never one long wakeup at a speculative future time: arm the shortest sensible delay, and on firing do a minimal state check and re-arm the next ladder rung only if still unresolved (pick the rung by how fast the watched state actually changes; slow externals take 10 min+ rungs); (c) fixed self-invalidating prompt template: `CHECK <concrete state/command>; IF RESOLVED: no-op, do NOT re-arm; ELSE <next action> + re-arm <n> min` — a stale firing then costs one cheap turn. |
 
 The sweep is an explicit terminal step in every wait-spawning skill (`/pr-merge`,
 `/pr-merge-flow`, `/pr-comments`, `/gh-issue`, `/adr-phase`) — mechanical, not remembered.
@@ -305,6 +305,23 @@ the Claude Code managed-remote environment this is platform-provided (every comm
 the platform key under the `claude` committer identity, human as author). Only a bare /
 self-hosted agent setup must provision the key + email itself (until then commits land
 correctly attributed but read *Unverified*).
+
+## Validating workflow records
+
+What the calling session does with the schema-forced records a delegation workflow returns
+(`phase-step`'s `{briefRecord, handoff, gateRecord}` — `/adr-phase`, `/gh-issue --fix`, and
+`/delegate` all point here). **Validate, don't re-derive**: the workflow's independent
+verifier just re-ran the gates, re-executed the red proof, and read the full diff, with
+pasted evidence — a third derivation is redundant spend.
+
+- Every fixed field non-empty and internally consistent — a missing/empty field rejects
+  the record, never a judgment call.
+- Every evidence entry is an executed command + pasted output, not prose.
+- Spot-read the load-bearing diff hunks the verdicts rest on.
+- Do NOT re-run the gates, re-execute the red proof, or re-read the whole diff the
+  verifier just processed.
+- Reject a record with any failed or missing item; rejection means HALT (or one corrected
+  re-run) — never patch the record yourself.
 
 ## Agent-ops scripts (`scripts/agent/`)
 

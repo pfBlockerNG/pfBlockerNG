@@ -50,10 +50,8 @@ Args: `{{ args }}`
   none, stop and ask.
 - Resolve `OWNER/REPO`: `gh repo view --json nameWithOwner -q .nameWithOwner`.
 - **Transport check (managed environments):** `command -v gh && gh auth status` once. `gh`
-  absent → GitHub reads/writes via the session's `mcp__github__*` tools, and every wait below
-  runs as **wakeup-paced MCP checks** instead of a background bash loop (same rungs, caps, and
-  give-up budget — CLAUDE.md "No orphaned waits" §4 / workflow-reference "Managed
-  environments"). Neither `gh` nor a GitHub MCP server → stop and report.
+  absent → `mcp__github__*` tools + wakeup-paced waits per workflow-reference "Managed
+  environments" (§4); neither `gh` nor a GitHub MCP server → stop and report.
 - This skill is for **code-bearing PRs**. If the work is a dev-only class that lands
   straight on `devel` with no PR (documentation-only, `CLAUDE.md`, ADR text, skills
   — see `CLAUDE.md` → "Worktrees"), this skill does not apply: say so and stop.
@@ -258,7 +256,8 @@ CodeRabbit wait:
    and note it**; never stall.
 3. **Wait (bounded)** for its review: `sh scripts/agent/wait-reviewer.sh --repo O/R
    --pr N --handle copilot --until finished --max-iter 20` in the background (~10-minute
-   window; the handle substring-matches `copilot-pull-request-reviewer[bot]`). TIMEOUT →
+   window; anchored handle matching — `copilot` matches `copilot-pull-request-reviewer[bot]`
+   via its `handle-` prefix). TIMEOUT →
    proceed and note it (the pre-merge catch-all sweep still picks up a late review).
 4. **Triage its findings** exactly like any other review (APPLY / SKIP / DEFER + reply per
    thread) — a summary-only "generated no comments" review is just noted in the audit trail.
@@ -312,11 +311,8 @@ it may not be clean.
   `failure` finding); PR merged by rebase; remote branch deleted.
 - Sync the work item's labels (an issue's `Waiting PR` removed on merge), per
   `CLAUDE.md` → "Labels (lifecycle)".
-- **Trigger sweep (mandatory — CLAUDE.md "No orphaned waits").** The task just reached a
-  terminal state, so kill every wait tied to it NOW, by class: `TaskStop` each background
-  poll you started for it; `CronDelete` every remaining heartbeat rung; unsubscribe any
-  PR/event subscription. Any `ScheduleWakeup` you armed cannot be cancelled — confirm its
-  prompt was self-invalidating and let it no-op. Then `TaskList` once: stop anything stale
-  you own from earlier items. Report the sweep in one line (what was stopped / "nothing
-  pending").
+- **Trigger sweep (mandatory).** The task just reached a terminal state: run the
+  cancel-on-resolution sweep — CLAUDE.md "No orphaned waits" / workflow-reference "Bounded
+  waits" §3 (kill every trigger class, then `TaskList` once for stale waits you own) — and
+  report it in one line (what was stopped / "nothing pending").
 - If you stopped before merging, state exactly why and what is needed to proceed.
