@@ -14728,6 +14728,18 @@ function pfb_feed_pass_busy(): bool {
 	return FALSE;
 }
 
+// issue #1175: acquire-or-log-skip choke point both sync funnels call, so a
+// busy pass is skipped with the SAME logged message regardless of dispatcher.
+function pfb_feed_pass_begin(string $label): bool {
+	if (pfb_feed_pass_acquire()) {
+		return TRUE;
+	}
+	pfb_logger("\nFeed pass [ {$label} ] skipped -- another pfBlockerNG feed pass is running.\n", 1);
+	logger(LOG_NOTICE, localize_text('Feed pass skipped - another pfBlockerNG feed pass is running.'),
+		LOG_PREFIX_PKG_PFBLOCKERNG);
+	return FALSE;
+}
+
 
 // Encode a string as a JavaScript string literal (including the surrounding double quotes) for
 // assignment to a textarea's plain-text .value. json_encode gives correct JS-string escaping --
@@ -15434,6 +15446,13 @@ function sync_package_pfblockerng($cron='') {
 	global $g, $pfb, $pfbarr;
 	pfb_global();
 
+	// issue #1175: serialize feed passes. Capture ownership BEFORE acquiring -- only the
+	// invocation that transitions the lock releases it (a nested reentrant call no-ops).
+	$pfb_feed_pass_owner = !isset($GLOBALS['pfb_feed_pass_lock']);
+	if (!pfb_feed_pass_begin('sync')) {
+		return;
+	}
+
 	// Open the per-run log window for the live viewer (no-op if pfblockerng_sync_cron() already
 	// opened it for a Force Check / cron pass -- see pfb_runlog_begin).
 	pfb_runlog_begin();
@@ -15506,6 +15525,9 @@ function sync_package_pfblockerng($cron='') {
 		$log = 'Sync terminated during boot process.';
 		pfb_logger("\n{$log}\nUPDATE PROCESS ENDED\n", 1);
 		logger(LOG_INFO, localize_text($log), LOG_PREFIX_PKG_PFBLOCKERNG);
+		if ($pfb_feed_pass_owner) {
+			pfb_feed_pass_release();
+		}
 		return;
 	}
 
@@ -19919,6 +19941,11 @@ function sync_package_pfblockerng($cron='') {
 
 	if ($pfb['enable'] == 'on' && !$pfb['save'] || $pfb['summary']) {
 		pfb_logger("\n UPDATE PROCESS ENDED\n", 1);
+	}
+
+	// issue #1175: release only if this call transitioned the lock (see head of function).
+	if ($pfb_feed_pass_owner) {
+		pfb_feed_pass_release();
 	}
 }
 

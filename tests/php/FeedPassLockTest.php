@@ -303,4 +303,91 @@ final class FeedPassLockTest extends TestCase
 			$this->assertSame(0, $exitCode, 'the child process must have exited cleanly');
 		}
 	}
+
+	// -----------------------------------------------------------------------
+	// issue #1175 STEP 2 -- pfb_feed_pass_begin(), the acquire-or-log-skip
+	// choke point both sync funnels (sync_package_pfblockerng(),
+	// pfblockerng_sync_cron()) call. Brand-new code (CLAUDE.md Test coverage
+	// #1 exception): asserts real behaviour directly, no red-first proof.
+	// -----------------------------------------------------------------------
+
+	// Coverage-matrix row 10 -- begin() on a free lock.
+	public function testBeginOnFreeLockReturnsTrueAndHoldsTheLock(): void
+	{
+		$this->assertTrue(pfb_feed_pass_begin('sync'), 'begin() on a free lock must return TRUE');
+		$this->assertTrue($this->rawProbeStillLocked(),
+			'a second raw-fd flock(LOCK_EX|LOCK_NB) must fail while begin() holds the lock');
+	}
+
+	// Coverage-matrix row 11 -- begin() while another handle holds it: FALSE + a
+	// logged skip line (failable -- asserts actual log content, not just the return).
+	public function testBeginWhileAnotherHandleHoldsReturnsFalseAndLogsSkip(): void
+	{
+		$holder = fopen($this->lockPath(), 'c');
+		$this->rawFps[] = $holder;
+		$this->assertTrue(flock($holder, LOCK_EX), 'test setup: failed to flock the holder fd');
+
+		$this->assertFalse(pfb_feed_pass_begin('sync'), 'begin() must FALSE while another handle holds the lock');
+
+		$this->assertFileExists($GLOBALS['pfb']['log'], 'a skip must write to the main pfBlockerNG log');
+		$this->assertStringContainsString(
+			'skipped',
+			(string) file_get_contents($GLOBALS['pfb']['log']),
+			'the skip line must record that the pass was skipped'
+		);
+
+		// Holder undisturbed: the skip never touches the lock the other side owns.
+		$this->assertTrue(flock($holder, LOCK_EX | LOCK_NB),
+			'the original holder must remain able to operate on its own lock afterwards');
+	}
+
+	// Coverage-matrix row 12 -- ownership discipline: mirrors the exact pattern the
+	// two funnels use ($owner = !isset($GLOBALS['pfb_feed_pass_lock']); begin(); ...;
+	// if ($owner) release();). A nested (reentrant) call's owner flag is FALSE, so its
+	// guarded release must NOT free the lock; only the outer, transitioning call's does.
+	public function testNestedBeginOwnershipOnlyTheTransitioningCallReleases(): void
+	{
+		$outerOwner = !isset($GLOBALS['pfb_feed_pass_lock']);
+		$this->assertTrue($outerOwner, 'test setup: process must not already hold the lock');
+		$this->assertTrue(pfb_feed_pass_begin('sync'), 'outer begin() must acquire the free lock');
+
+		// Simulates sync_package_pfblockerng() being reentered from inside
+		// pfblockerng_sync_cron() -- the inner call observes the lock already held.
+		$innerOwner = !isset($GLOBALS['pfb_feed_pass_lock']);
+		$this->assertFalse($innerOwner, 'inner call must observe the lock already held by this process');
+		$this->assertTrue(pfb_feed_pass_begin('cron'), 'reentrant inner begin() must no-op TRUE');
+
+		if ($innerOwner) {
+			pfb_feed_pass_release();
+		}
+		$this->assertTrue($this->rawProbeStillLocked(),
+			'the inner guarded release (owner flag FALSE) must NOT free the lock');
+
+		if ($outerOwner) {
+			pfb_feed_pass_release();
+		}
+		$this->assertFalse($this->rawProbeStillLocked(),
+			'the outer guarded release (owner flag TRUE) must free the lock');
+	}
+
+	// Hostile row -- lock file unopenable: begin() inherits acquire()'s fail-open
+	// (an unwritable dbdir must never block a legitimate pass).
+	public function testBeginFailsOpenWhenLockFileUnopenable(): void
+	{
+		if (function_exists('posix_getuid') && posix_getuid() === 0) {
+			$this->markTestSkipped('root bypasses directory permissions; cannot simulate an unwritable dbdir');
+		}
+
+		$denydir = "{$this->dbdir}/deny_begin";
+		mkdir($denydir, 0755, TRUE);
+		$GLOBALS['pfb']['dbdir'] = $denydir;
+		chmod($denydir, 0555);
+
+		try {
+			$this->assertTrue(pfb_feed_pass_begin('sync'),
+				'an unwritable dbdir must fail OPEN -- begin() returns TRUE rather than blocking legitimate work');
+		} finally {
+			chmod($denydir, 0755);
+		}
+	}
 }
