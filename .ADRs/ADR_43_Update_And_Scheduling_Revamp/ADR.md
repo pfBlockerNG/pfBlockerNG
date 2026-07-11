@@ -150,6 +150,13 @@ window, and revamp the Update page onto the clean API.
 | **F — Update page revamp** | Rebuild the Update tab on the new API: explicit **scope** (ip/dnsbl/both) + **force** toggles (replacing the opaque Force/Update/Cron/Reload buttons), a **per-feed/job "next run" view** read from the ledger, a **"run now"** that calls the new request, and a cleaned-up update-log pane. Focused functional cleanup, **not** a visual redesign. |
 | **G — Back-compat (config)** | Existing config (`pfb_interval`/`pfb_min`/`pfb_dailystart`, per-feed `freq`/`updatefreq`) is **read at the ADR-28/29 boundary** and **reinterpreted as ledger seed cadence** (a feed's `freq` becomes its next-due interval; the global interval seeds the default). No `config.xml` schema migration; the tick frequency is a new knob with a safe default. Any new registered field goes through `PfbConfig` (ADR-29). |
 
+**Amended 2026-07-12 (issue #1204).** Rows D/E still hold — one cron entry, no scheduling logic in
+crontab — but the entry now calls the cron-only wrapper verb **`pfblockerng.php cron-tick`**, which
+runs the tick unless `/var/db/pfblockerng/.pfb_cron_disable` exists (then it logs
+`[ Disabled by … ]` and dispatches nothing; the Update page reports the suppression). The direct
+`pfblockerng.php tick` verb and the tick's own semantics are unchanged. The cron generator's
+removal signatures are needle-tightened because `install_cron_job()` matches by **substring**.
+
 ### Semantics that MUST be preserved (the contract — pin with tests before changing)
 
 1. **Every old verb maps to exactly one documented request and still works.** `cron`/`update`/

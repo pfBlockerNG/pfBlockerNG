@@ -1170,7 +1170,11 @@ window. `PFB_TRIGGER` values are unchanged across the migration, so the ADR-12 h
 ### One trigger-tick + the due-ledger
 
 The four legacy cron families (`cron`/`dcc`/`bl`/`ss_refresh`) collapse to **one** crontab entry —
-`*/<pfb_tick_interval> … pfblockerng.php tick` (default every **15 min**). The tick carries **no**
+`*/<pfb_tick_interval> … pfblockerng.php cron-tick` (default every **15 min**). `cron-tick` is the
+cron-only wrapper: it runs the tick unless `/var/db/pfblockerng/.pfb_cron_disable` exists, in which
+case it logs `[ Disabled by … ]` and dispatches nothing (issue #1204 — the smoke suite's scheduler
+off switch; the Update page reports the suppression). The direct `pfblockerng.php tick` verb is
+never gated. The tick carries **no**
 scheduling logic: it reads the due-ledger, dispatches each **due** job through the new API
 (`pfb_trigger scope=both force=false trigger=cron` for the feed pass), runs `ss_refresh` every tick
 (cheap DNS re-resolution), then `mark_ran`s each dispatched job. `clearip`/`cleardnsbl` (ADR-30) and
