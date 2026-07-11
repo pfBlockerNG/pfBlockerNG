@@ -1015,9 +1015,9 @@ Describe 'pfb_recompute() renders a per-feed Original/Final stats table on stdou
 	End
 
 	It 'a blank line in the .counts artifact is skipped -- never rendered as an empty/garbage row (hostile input)'
-		# shellcheck disable=SC2034  # rec_countsfile/rec_family read by the sourced renderer
 		rec_countsfile="${work}/hostile.counts"
 		printf 'Real_v4 3\n\n' > "$rec_countsfile"
+		# shellcheck disable=SC2034  # read by the sourced renderer
 		rec_family='v4'
 
 		When call pfb_recompute_render_stats

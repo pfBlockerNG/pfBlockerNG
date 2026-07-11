@@ -455,6 +455,15 @@ this pass" (`$pfb_recompute_ran_v4`/`$pfb_recompute_ran_v6`), not "this alias's 
 changed", so a quiet alias whose content was rewritten by a sibling's trigger still gets
 suppression/reporting applied to it.
 
+**Per-feed update-log stats table (issue #1174).** After a successful swap,
+`pfb_recompute_render_stats()` renders the pass's own `.counts` artifact as a per-feed
+Alias/Original/Final table on stdout (the caller's `{$elog}` pipes it into the update log),
+restoring the table the retired `duplicate()` printed. Original comes from the same-pass
+`.aggcount` sidecar (falling back to the `.orig` row count, then `?`); the legacy Master
+column is retired — recompute appends deny rows to the masterfile verbatim, so Master always
+equals Final. Like the legacy table, the numbers are pre-suppression; `closingprocess()`
+keeps its own post-suppression re-reads and never consumes `.counts`.
+
 **Both dRep and pRep on: the execution order flipped.** The old incremental path ran pMax's
 `exec` first, then dMax's — the reverse of recompute's order: recompute applies dMax to every
 family alias first (inside its own `pfb_recompute()` pass), and the legacy pMax `exec` runs
