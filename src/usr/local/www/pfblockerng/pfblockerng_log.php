@@ -193,6 +193,13 @@ if ($pfb['blconfig'] &&
 // Function to validate file/path
 function pfb_validate_filepath($validate, $pfb_logtypes) {
 
+	// issue #1126: a NUL rides the basename, unseen by the dirname check below, and
+	// throws at fopen()/glob()/unlink() -- an @-unsuppressible ValueError raised
+	// INSIDE the call, so no FALSE-return guard can catch it. Reject ahead of them.
+	if (str_contains($validate, "\0")) {
+		return FALSE;
+	}
+
 	$allowed_path = array();
 	foreach ($pfb_logtypes as $type) {
 		$allowed_path[$type['logdir']] = '';

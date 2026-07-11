@@ -668,3 +668,132 @@ def test_clear_rejects_path_outside_allowed_dirs(webui: WebUI, smoke_vm: helpers
     assert _exists(vm, EVIL_PATH), "/etc/passwd was removed by a rejected clear (validator failed!)"
     assert _size(vm, EVIL_PATH) == before_size, "/etc/passwd was truncated by a rejected clear (validator failed!)"
     assert _cat(vm, EVIL_PATH) == before, "/etc/passwd content changed after a rejected clear"
+
+
+# --------------------------------------------------------------------------- #
+# NUL-byte hostile paths (issue #1126) -- pfb_validate_filepath() validates only
+# pathinfo()'s DIRNAME, never rejecting an embedded "\x00", so pre-fix a
+# NUL-laced logFile/file reached a filesystem call (fopen()/glob()) that throws
+# an uncaught PHP 8 ValueError (@ cannot suppress it), an HTTP 500 PHP fatal.
+# Every row puts a real "\x00" in the Python form value: requests percent-encodes
+# it to "%00" in the urlencoded body and PHP's own form parsing decodes it back to
+# a raw NUL in $_POST/$_REQUEST. Passing the literal TEXT "%00" would NOT work --
+# the handler never URL-decodes its input a second time.
+# --------------------------------------------------------------------------- #
+
+
+def test_clear_rejects_nul_byte_path_without_php_fatal(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """Clearing a plain log path with a trailing NUL byte is rejected -- no PHP fatal.
+
+    Pre-fix sink: the non-py_error ``else`` branch calls ``unlink_if_exists()`` ->
+    ``glob()``, which throws on a NUL-laced pattern. Transition: seed an
+    unrelated, NUL-free file under the same allowed dir (BEFORE), POST a
+    NUL-suffixed path, then assert (AFTER) the reject envelope, no PHP
+    diagnostic, and the neighboring seeded file untouched (the reject never
+    reached any real filesystem call).
+    """
+    vm = smoke_vm
+    clean_target = _throwaway_log("ip_block.log")
+    payload = f"pfb-ui-nul-clear-{helpers.unique_domain('nul')}\n"
+    _seed_file(vm, clean_target, payload)
+    try:
+        assert _cat(vm, clean_target) == payload, "seed not present on the box before the NUL clear POST"
+        before_size = _size(vm, clean_target)
+
+        token = _csrf(webui)
+        nul_target = clean_target + "\x00"
+        resp = _post_clear(webui, token, nul_target)
+        assert not looks_like_login_page(resp.text), "clear POST returned the login form (session lost)"
+        assert resp.status_code == 200, f"NUL-byte clear did not return 200: {resp.status_code}"
+        diagnostic = body_has_php_error(resp.text)
+        assert diagnostic is None, f"NUL-byte clear rendered a PHP diagnostic: {diagnostic!r}"
+        code, _ = _decode_load_body(resp.text)
+        assert code == "3", f"NUL-byte clear did not return the reject code: {resp.text!r}"
+        assert "Invalid filename/path" in resp.text, f"reject envelope missing the message: {resp.text!r}"
+        # AFTER: the neighboring seeded file (a DIFFERENT, NUL-free path) is untouched.
+        assert _exists(vm, clean_target), "neighboring seeded file vanished after a rejected NUL clear"
+        assert _size(vm, clean_target) == before_size, "neighboring seeded file size changed after a rejected NUL clear"
+        assert _cat(vm, clean_target) == payload, "neighboring seeded file content changed after a rejected NUL clear"
+    finally:
+        _rm(vm, clean_target)
+
+
+def test_clear_py_error_rejects_nul_byte_path_without_php_fatal(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """Clearing a py_error.log-suffixed path with a trailing NUL is rejected -- no PHP fatal.
+
+    Distinct pre-fix sink from the plain-log case above: the py_error.log branch
+    reaches ``@fopen($s_logfile, 'r+')`` instead of ``unlink_if_exists()``/glob()
+    -- both throw an uncaught ValueError pre-fix, so this row proves the guard
+    closes BOTH reachable sinks, not just one.
+    """
+    vm = smoke_vm
+    clean_target = _throwaway_log("py_error.log")
+    payload = f"pfb-ui-nul-clear-py-{helpers.unique_domain('nulpy')}\n"
+    _seed_file(vm, clean_target, payload)
+    try:
+        assert _cat(vm, clean_target) == payload, "seed not present on the box before the NUL clear POST"
+        before_size = _size(vm, clean_target)
+
+        token = _csrf(webui)
+        nul_target = clean_target + "\x00"
+        resp = _post_clear(webui, token, nul_target)
+        assert not looks_like_login_page(resp.text), "clear POST returned the login form (session lost)"
+        assert resp.status_code == 200, f"NUL-byte clear did not return 200: {resp.status_code}"
+        diagnostic = body_has_php_error(resp.text)
+        assert diagnostic is None, f"NUL-byte clear rendered a PHP diagnostic: {diagnostic!r}"
+        code, _ = _decode_load_body(resp.text)
+        assert code == "3", f"NUL-byte clear did not return the reject code: {resp.text!r}"
+        assert "Invalid filename/path" in resp.text, f"reject envelope missing the message: {resp.text!r}"
+        assert _exists(vm, clean_target), "neighboring seeded py_error.log vanished after a rejected NUL clear"
+        assert _size(vm, clean_target) == before_size, (
+            "neighboring seeded py_error.log size changed after a rejected NUL clear"
+        )
+        assert _cat(vm, clean_target) == payload, (
+            "neighboring seeded py_error.log content changed after a rejected NUL clear"
+        )
+    finally:
+        _rm(vm, clean_target)
+
+
+def test_load_rejects_nul_byte_path(webui: WebUI) -> None:
+    """``act=load`` of a NUL-suffixed path is rejected by the validator -- code '3'.
+
+    Before the #1126 fix, ``file_exists()`` on the NUL-laced path merely returns
+    FALSE (no PHP fatal reaches this branch -- unlike the clear shapes above), so
+    the handler's OLD reply was the generic 'Log file does not exist' code '1',
+    not a reject. After the fix the validator refuses the NUL first, so the
+    reply is the dedicated '3' invalid-path envelope instead.
+    """
+    target = _throwaway_log("pfblockerng.log") + "\x00"
+
+    token = _csrf(webui)
+    resp = _post_load(webui, token, target)
+    assert not looks_like_login_page(resp.text), "load POST returned the login form (session lost)"
+    diagnostic = body_has_php_error(resp.text)
+    assert diagnostic is None, f"NUL-byte load rendered a PHP diagnostic: {diagnostic!r}"
+    code, _ = _decode_load_body(resp.text)
+    assert code == "3", f"NUL-byte load did not return the reject code: {resp.text!r}"
+    assert "Invalid filename/path" in resp.text, f"reject envelope missing the message: {resp.text!r}"
+
+
+def test_download_rejects_nul_byte_path(webui: WebUI) -> None:
+    """Download of a NUL-suffixed path is rejected by the validator -- code '3'.
+
+    Before the #1126 fix, ``file_exists()`` on the NUL-laced path returns FALSE,
+    so the download branch silently falls through (the page just re-renders, no
+    attachment, no fatal). After the fix the validator refuses the NUL up front,
+    so the reply is the dedicated '3' invalid-path envelope instead of a bare
+    silent no-op.
+    """
+    target = _throwaway_log("pfblockerng.log") + "\x00"
+
+    token = _csrf(webui)
+    resp = _post_download(webui, token, target)
+    assert not looks_like_login_page(resp.text), "download POST returned the login form (session lost)"
+    diagnostic = body_has_php_error(resp.text)
+    assert diagnostic is None, f"NUL-byte download rendered a PHP diagnostic: {diagnostic!r}"
+    assert "Invalid filename/path" in resp.text, f"reject envelope missing the message: {resp.text!r}"
+    code, _ = _decode_load_body(resp.text)
+    assert code == "3", f"NUL-byte download did not return the reject code: {resp.text!r}"
+    disp = resp.headers.get("Content-Disposition", "")
+    assert "attachment" not in disp, f"NUL-byte download unexpectedly streamed an attachment: {disp!r}"
