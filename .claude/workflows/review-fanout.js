@@ -1,17 +1,18 @@
 export const meta = {
   name: 'review-fanout',
   description: 'Deterministic multi-agent adversarial PR review: 3 lenses -> dedup -> execution-grounded verify per finding',
-  whenToUse: 'The pr-merge-flow "large/complex PR" review shape (>300 lines, >6 files, or src/ parsing/guard/scheduling behaviour). Args: {pr: <number>, base: <branch>, worktree: <path>, spec: <intent/acceptance text>}.',
+  whenToUse: 'ONLY on explicit user request for a multi-agent review — retired as pr-merge-flow\'s default (2026-07-11): the flow now runs ONE reviewer sub-agent (Sonnet 5, or Fable for a large/complex PR) at xhigh. Args: {pr: <number>, base: <branch>, worktree: <path>, spec: <intent/acceptance text>}.',
   phases: [
     { title: 'Find', detail: 'three independent lenses over the diff' },
     { title: 'Verify', detail: 'adversarial, execution-grounded check of every finding' },
   ],
 }
 
-// Deterministic encoding of pr-merge-flow Step 1d for large PRs. Every agent is
-// Sonnet at xhigh (the flow's floor and ceiling); no ponytail (reviewers build
-// nothing). Findings must be execution-grounded; the verify stage tries to
-// REFUTE each finding, so plausible-but-wrong ones die here instead of in triage.
+// Multi-agent review shape, run only on explicit user request (pr-merge-flow's default
+// is a single reviewer sub-agent since 2026-07-11). Every agent is Sonnet at xhigh (this
+// workflow's floor and ceiling); no ponytail (reviewers build nothing). Findings must be
+// execution-grounded; the verify stage tries to REFUTE each finding, so
+// plausible-but-wrong ones die here instead of in triage.
 
 // Callers sometimes deliver args JSON-string-encoded (killed this workflow on PR #937,
 // issue #942) — normalize before destructuring instead of trusting caller discipline.

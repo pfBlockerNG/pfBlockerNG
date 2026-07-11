@@ -6,13 +6,14 @@ description: >
   feedback, validate + apply each finding and reply, and ONLY if that completes
   cleanly, rebase the head onto the live base, wait for the real CI to go green
   (EXCLUDING the bot), merge `--rebase` (never a merge commit, never squash) and
-  delete the branch. The review step ALWAYS runs a Claude Sonnet 5 sub-agent as an
+  delete the branch. The review step ALWAYS runs ONE Claude sub-agent as an
   ADVERSARIAL, maximally thorough reviewer IN ADDITION TO CodeRabbit — never as a mere
-  fallback — at reasoning effort xhigh, or as an ultracode multi-agent review for a
-  large/complex PR (orchestrator's pick; never below xhigh, never max). In parallel it
+  fallback — at reasoning effort xhigh (never below, never max): Sonnet 5 by default,
+  Fable for a large/complex PR (orchestrator's pick; never Opus, never a multi-agent
+  fan-out). In parallel it
   gives CodeRabbit ~10 minutes to acknowledge the PR: if it does, wait on its review
   too; if it stays silent, nudge it once with `@coderabbitai review` and wait 10 more
-  minutes; if it is STILL silent the Sonnet 5 review stands alone (folding CodeRabbit's
+  minutes; if it is STILL silent the Claude review stands alone (folding CodeRabbit's
   review in if it shows up late); a CodeRabbit rate-limit notice follows the 5-minute
   rule (resume > 5 min = proceed without it; else wait 5 min, nudge once, and drop it on
   any further problem). GitHub Copilot's review is REQUESTED when available (skipped if
@@ -33,8 +34,8 @@ It is roughly:
 /pr-comments N --wait-for=coderabbitai && /pr-merge N
 ```
 
-with two adaptations: a **Claude Sonnet 5 adversarial review always runs in addition
-to CodeRabbit** (Step 1d — never a mere substitute), and the CodeRabbit wait adapts to
+with two adaptations: a **single-sub-agent Claude adversarial review always runs in
+addition to CodeRabbit** (Step 1d — never a mere substitute), and the CodeRabbit wait adapts to
 whether **CodeRabbit is available for this repository** (Steps 1a–1c). The `&&` is
 load-bearing: **never start the merge until the review step has completed cleanly.**
 Where this delegates to the existing `pr-comments` / `pr-merge` skills, invoke each via
@@ -61,7 +62,7 @@ Args: `{{ args }}`
 
 **Review sources on every PR:**
 
-- **Claude Sonnet 5 adversarial review (Step 1d) — ALWAYS.** Spawn it **first**, in the
+- **Claude adversarial review (Step 1d) — ALWAYS.** Spawn it **first**, in the
   background, before starting the CodeRabbit wait; it is independent of CodeRabbit's
   availability and never a mere fallback.
 - **GitHub Copilot (Step 1f) — request + wait when available.** If Copilot is not already
@@ -126,7 +127,7 @@ done
 - **`NOACK`** (silent for the full window) → **Step 1c** (nudge before giving up).
 - **`QUOTA`** is no longer emitted by 1a (it is decided in 1b). When Step 1b's wait returns
   `QUOTA` — a genuine usage/rate-limit with **no** review content for the whole window —
-  CodeRabbit will not review: the Step-1d Sonnet 5 review (already running) stands alone;
+  CodeRabbit will not review: the Step-1d Claude review (already running) stands alone;
   **surface** that CodeRabbit was skipped for quota.
 
 ### Step 1b — CodeRabbit acknowledged → wait on + handle its review
@@ -140,12 +141,12 @@ done
   one resumed wait, and **any further problem on the nudged wait drops CodeRabbit** —
   never block on it twice.
 - If that wait **times out** (CodeRabbit acknowledged but never finished the review),
-  do not stall the flow — proceed on the Step-1d Sonnet 5 review (already running) and
+  do not stall the flow — proceed on the Step-1d Claude review (already running) and
   note the timeout; the nudge in Step 1c is for the *no-acknowledgement* case, so it
   won't help once it has already acknowledged.
 - If the wait resolves to CodeRabbit dropped under the **5-minute rule** (`QUOTA` with a
   long resume time, or a failed post-nudge wait — see Step 2 of `pr-comments`), proceed on
-  the Step-1d Sonnet review + Step-1f Copilot review and note the quota skip in the final
+  the Step-1d Claude review + Step-1f Copilot review and note the quota skip in the final
   report.
 
 ### Step 1c — No ack → nudge `@coderabbitai review`, then wait 10 more minutes
@@ -162,18 +163,18 @@ Re-run the Step-1a loop with `deadline=$(( $(date -u +%s) + 600 ))`. On the resu
 
 - **`ACK`** (CodeRabbit posted something after the nudge) → **Step 1b**.
 - **`NOACK`** (still silent 10 min after the nudge) → CodeRabbit is unavailable; the
-  Step-1d Sonnet 5 review and the Step-1f Copilot review carry the review step.
+  Step-1d Claude review and the Step-1f Copilot review carry the review step.
 
 Nudge **once only** — a second silent window means CodeRabbit is genuinely unavailable;
 do not loop on it.
 
-### Step 1d — Claude Sonnet 5 adversarial review (EVERY PR, in addition to CodeRabbit)
+### Step 1d — Claude adversarial review (EVERY PR, ONE sub-agent, in addition to CodeRabbit)
 
 Runs on **every** PR — spawn it at the **start of Step 1**, in the background, in
 parallel with the CodeRabbit wait. It is additive: CodeRabbit reviewing does not skip
 it, and it does not replace CodeRabbit; when CodeRabbit never reviews it stands alone.
 
-1. **Spawn one sub-agent**, `model: sonnet`, briefed as an independent **ADVERSARIAL**
+1. **Spawn ONE sub-agent** (model per the shape rule below), briefed as an independent **ADVERSARIAL**
    reviewer — its job is to try to **break the change**, not to rubber-stamp it. The brief
    MUST include **the work item's intent** — the issue/ADR link, its acceptance criteria /
    coverage matrix, and the PR body — because a diff-only reviewer can never catch "asked for
@@ -203,28 +204,24 @@ it, and it does not replace CodeRabbit; when CodeRabbit never reviews it stands 
    Each finding: severity (`blocking` / `nitpick` / `outside-diff`), `file:line`, the
    grounded explanation + how-to-reproduce, and a concrete suggested fix. Tell it the
    result IS its final message and not to edit anything.
-   **Reasoning effort: `xhigh` minimum — NEVER lower, and NEVER `max`.** You (the
-   orchestrator) pick the shape by the PR's size and complexity — and record the chosen
-   shape + the size metric that drove it in the Step-1d.5 audit comment: a small/simple
-   PR → one sub-agent at effort `xhigh` (e.g. a Workflow `agent()` call with
-   `effort: 'xhigh'` when the spawning tool cannot set effort directly); a large or
-   complex PR (roughly: >300 changed lines, >6 files, or any behaviour change in
-   `src/`'s parsing/guard/scheduling logic) → the **committed `review-fanout` workflow**:
-   `Workflow({name: 'review-fanout', args: {pr: N, base: '<base>', worktree: '<path>',
-   spec: '<the work item's intent/acceptance criteria>'}})` — three independent lenses
-   (contract-conformance vs the spec, correctness + hostile inputs, test honesty) with
-   execution-grounded adversarial verification of every finding, agents capped at
-   `xhigh` (script: `.claude/workflows/review-fanout.js`; treat its `confirmed` list as
-   the review findings and note the `refuted` list in the audit trail rather than
-   re-improvising the fan-out shape each time). Do **not** propagate ponytail
+   **Reasoning effort: `xhigh` — NEVER lower, and NEVER `max`. Always ONE sub-agent —
+   never a multi-agent fan-out** (user directive 2026-07-11; the old `review-fanout`
+   default is retired — that committed workflow now runs only on an explicit user
+   request). You (the orchestrator) pick the **model** by the PR's size and complexity —
+   and record the chosen model + the size metric that drove it in the Step-1d.5 audit
+   comment: a small/simple PR → `model: sonnet` (Sonnet 5); a large or complex PR
+   (roughly: >300 changed lines, >6 files, or any behaviour change in `src/`'s
+   parsing/guard/scheduling logic) → `model: fable` (Fable) — **never Opus**. The single
+   reviewer covers all three lenses itself (contract-conformance vs the spec,
+   correctness + hostile inputs, test honesty). Do **not** propagate ponytail
    to the reviewer (CLAUDE.md: ponytail governs what you build; a reviewer builds
    nothing — thoroughness and finding detail are outside its scope).
 2. **When the sub-agent finishes, resolve the CodeRabbit outcome (Steps 1a–1c).** If
    CodeRabbit reviewed — or turns up late (re-check the PR) — wait for its review to
    finish (the `pr-comments` `--wait-for=coderabbitai` wait, or poll until a terminal
    CodeRabbit result), so you hold **both** reviews. If it never did, you have only the
-   Sonnet 5 review.
-3. **Triage and handle EACH comment of EACH review you received** — every Sonnet 5
+   Claude review.
+3. **Triage and handle EACH comment of EACH review you received** — every Claude-review
    finding, plus every CodeRabbit finding if one arrived. The per-comment handling is
    unchanged: **APPLY** (valid, in scope, safe) · **SKIP** (stale / unenforced /
    wrong-premise / suggestion-unsafe — record the reason) · **DEFER** (valid but
@@ -234,7 +231,7 @@ it, and it does not replace CodeRabbit; when CodeRabbit never reviews it stands 
    lint config and `CLAUDE.md`. **Anti-self-grading asymmetry (you wrote or gated this
    code — you don't get to wave its review away):** a `blocking` correctness/security
    finding is closed only by **APPLY** (with its test) or **explicit user sign-off** —
-   the Snyk rule, applied to the Sonnet review; SKIPping one requires **reproduction
+   the Snyk rule, applied to the Claude review; SKIPping one requires **reproduction
    evidence that its premise is wrong** (a command + output demonstrating it, recorded
    in the reply), never prose alone; and a finding that cites a CLAUDE.md mandate
    cannot be self-skipped by the agent whose code it flags — fix it or escalate to the
@@ -247,7 +244,7 @@ it, and it does not replace CodeRabbit; when CodeRabbit never reviews it stands 
    new unreviewed code** — two of the audited defect chains entered through them — so for any
    non-trivial APPLY, re-run a focused review of the fix delta (same reviewer contract, scoped
    to the fix commits) before the Gate below.
-5. **Record the review on the PR** — post one comment summarising the Sonnet 5 adversarial
+5. **Record the review on the PR** — post one comment summarising the Claude adversarial
    review (and noting CodeRabbit's, if one arrived) plus the per-finding
    resolution (applied + commit / skipped + reason / deferred + tracking-issue link), so there is an
    audit trail. Use `gh pr comment N --body-file` and append the attribution footer
@@ -276,7 +273,7 @@ below, read its state once from the head SHA:
 
 ### Step 1f — GitHub Copilot review (request + wait when available)
 
-Runs on **every** PR, started at the beginning of Step 1 alongside the Sonnet spawn and the
+Runs on **every** PR, started at the beginning of Step 1 alongside the reviewer spawn and the
 CodeRabbit wait:
 
 1. **Already reviewing?** Check for an existing Copilot review or a pending request:
@@ -301,17 +298,17 @@ CodeRabbit wait:
 ### Gate before Step 2 (all paths)
 
 Continue to the merge ONLY if the review step finished cleanly: every finding from **every**
-review received — the always-on Sonnet 5 adversarial review, Copilot when it reviewed,
+review received — the always-on Claude adversarial review, Copilot when it reviewed,
 CodeRabbit when it reviewed, and any **terminal Snyk `failure` finding** (Step 1e; a Snyk
 quota/infra error is ignored, not gated) — triaged, any accepted fixes committed and pushed,
-and nothing left that needs a human decision. The Sonnet 5 review is **mandatory** — never
+and nothing left that needs a human decision. The Claude review is **mandatory** — never
 merge without its findings triaged, even when every bot came back clean. **Produce the findings ledger before invoking `pr-merge`:**
 a numbered list of every finding with its outcome — `fixed@<commit>` / `skipped: <evidence>` /
 `deferred: <issue link>` — folded into the Step-1d.5 audit comment; refuse to merge while any
 item lacks an outcome. **When NO external reviewer reviewed a substantive PR** (CodeRabbit dropped under the
 5-minute rule AND Copilot unavailable/timed out), **escalate instead of merging on the single
-Sonnet pass** — the `review-fanout` workflow shape, a focused second Sonnet pass over the
-final diff, or pace the merge; the audited defect window coincided exactly with a
+Claude pass** — a focused second single-agent pass over the final diff (Fable at `xhigh` if
+the first pass ran Sonnet), or pace the merge; the audited defect window coincided exactly with a
 bots-quota batch-merge cadence. If a finding is unresolved, contested, or needs the user,
 **stop here and report** — do not merge.
 
@@ -337,8 +334,8 @@ it may not be clean.
 
 ## Definition of done
 
-- Review resolved (note which reviews landed — the always-on Sonnet 5 adversarial
-  review and its effort shape (`xhigh` single-agent or the `review-fanout` workflow),
+- Review resolved (note which reviews landed — the always-on single-agent Claude
+  adversarial review and its model (`sonnet` or `fable`, always `xhigh`),
   Copilot when it reviewed, CodeRabbit when it reviewed, plus any terminal Snyk
   `failure` finding); PR merged by rebase; remote branch deleted.
 - Sync the work item's labels (an issue's `Waiting PR` removed on merge), per

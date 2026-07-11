@@ -723,9 +723,11 @@ distribution".
 squash. History stays strictly linear (`main` always an ancestor of `devel`).
 
 **Default landing flow — `/pr-merge-flow N`** after completing any issue, ADR, or code
-change: review feedback first, then merge. A **Claude Sonnet 5 adversarial review runs on
-EVERY PR** at effort `xhigh` or as the `review-fanout` workflow (never below `xhigh`, never
-`max`) — in addition to **GitHub Copilot** (its review is *requested* when available, skipped
+change: review feedback first, then merge. A **Claude adversarial review runs on EVERY PR
+as ONE reviewer sub-agent** at effort `xhigh` (never below, never `max`): Sonnet 5 by
+default, Fable for a large/complex PR — **never Opus, never a multi-agent fan-out** (the
+`review-fanout` workflow runs only on explicit user request) — in addition to **GitHub
+Copilot** (its review is *requested* when available, skipped
 if already reviewing, and waited on, bounded) and **CodeRabbit** when it reviews. A CodeRabbit
 rate-limit notice follows the **5-minute rule** (its stated resume time > 5 min ⇒ proceed
 without it; ≤ 5 min ⇒ wait, nudge once, drop it on any further problem). **Snyk is advisory**
