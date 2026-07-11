@@ -144,16 +144,32 @@ if [ "$staged_sh" = 1 ]; then
 		skip shellcheck
 	fi
 
-	# shellspec functional suite (gated on the tool, like shellcheck).
+	# shellspec functional suite (gated on the tool, like shellcheck), scoped to the
+	# IMPACTED specs: staged spec files plus any spec that names a staged script's
+	# basename. The full suite runs minutes (and an interrupted run can strand
+	# spec-mutated state); CI remains the full-suite hard gate.
 	# Run under dash when available: strict-POSIX ash sibling of FreeBSD
 	# /bin/sh (the appliance shell). bash-as-sh (macOS) masks divergences —
 	# e.g. a special-builtin redirection error aborts ash/dash but not bash.
 	if have shellspec; then
-		step 'shellspec'
-		if have dash; then
-			shellspec --shell "$(command -v dash)" || failed 'shellspec (dash)'
+		staged_shell=$(printf '%s\n' "$staged" | grep '\.sh$' || true)
+		specs=$(printf '%s\n' "$staged_shell" | grep '^tests/shell/.*_spec\.sh$' || true)
+		for f in $(printf '%s\n' "$staged_shell" | grep -v '^tests/shell/'); do
+			specs="$specs
+$(grep -l -F "$(basename "$f")" tests/shell/*_spec.sh 2>/dev/null || true)"
+		done
+		specs=$(printf '%s\n' "$specs" | grep -v '^$' | sort -u)
+		if [ -n "$specs" ]; then
+			step 'shellspec (impacted)'
+			if have dash; then
+				# shellcheck disable=SC2086 # specs is a newline list of repo paths
+				shellspec --shell "$(command -v dash)" $specs || failed 'shellspec (dash)'
+			else
+				# shellcheck disable=SC2086
+				shellspec $specs || failed 'shellspec'
+			fi
 		else
-			shellspec || failed 'shellspec'
+			skip 'shellspec(no-impacted-specs)'
 		fi
 	else
 		skip shellspec
