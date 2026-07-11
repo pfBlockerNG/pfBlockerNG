@@ -180,9 +180,9 @@ D5_DOMAIN = "rv809-up1.com"
 # brief's own suggestion of an underscore does NOT trigger this: PFB_FILTER_DOMAIN's
 # charset explicitly includes '_', so an underscore domain WOULD be covered/batched.
 # D7 is nowhere on disk (total miss -> Unknown); D8 below is its positive counterpart
-# (present verbatim in pfb_py_data.txt -- proves issue #837's per-row fixed-string
-# fallback actually FINDS a covered metachar domain, not just that an uncovered one
-# renders the same 'Unknown' shape as a covered total miss).
+# (its NDJSON row IS in pfb_py_data.txt, #1083/PR #1178 -- proves issue #837's per-row
+# needle fallback actually FINDS a covered metachar domain, not just that an uncovered
+# one renders the same 'Unknown' shape as a covered total miss).
 D7_DOMAIN = "rv809*m1.com"
 D8_DOMAIN = "rv809*p1.com"
 
@@ -393,14 +393,26 @@ def _unified_lines() -> list[str]:
     return lines
 
 
+def _ndjson_domain_row(domain: str, feed: str, group: str) -> str:
+    """Schema v1 domain row (#1189/#1083/PR #1178), byte-compatible with
+    pfb_dnsbl_ndjson_emit_domain_row(): compact, key order kind/domain/log/feed/group,
+    unescaped slashes/unicode -- Python's json.dumps defaults already match both.
+    """
+    row = {"kind": "domain", "domain": domain, "log": "1", "feed": feed, "group": group}
+    return json.dumps(row, separators=(",", ":"), ensure_ascii=False) + "\n"
+
+
 def _py_data_appendix() -> str:
-    lines = [f"x,{D2_DOMAIN},,A,{D2_DATA_FEED},{D2_DATA_GROUP}", f"x,{D8_DOMAIN},,A,{D8_DATA_FEED},{D8_DATA_GROUP}"]
-    lines += [f"x,{d},,A,{FILLER_DNSBL_FEED},{FILLER_DNSBL_GROUP}" for d in FILLER_DNSBL_DOMAINS]
-    return "\n".join(lines) + "\n"
+    lines = [
+        _ndjson_domain_row(D2_DOMAIN, D2_DATA_FEED, D2_DATA_GROUP),
+        _ndjson_domain_row(D8_DOMAIN, D8_DATA_FEED, D8_DATA_GROUP),
+    ]
+    lines += [_ndjson_domain_row(d, FILLER_DNSBL_FEED, FILLER_DNSBL_GROUP) for d in FILLER_DNSBL_DOMAINS]
+    return "".join(lines)
 
 
 def _py_zone_appendix() -> str:
-    return f"x,{D3_PARENT},,A,{D3_FEED},{D3_GROUP}\n"
+    return _ndjson_domain_row(D3_PARENT, D3_FEED, D3_GROUP)
 
 
 # --------------------------------------------------------------------------- #
@@ -1055,15 +1067,15 @@ def test_d8_covered_metachar_domain_found_via_per_row_fallback(
     """D8: a metachar domain the per-row fallback CAN find, unlike D7's total miss.
 
     Given: 'rv809*p1.com' contains '*' so it also fails PFB_FILTER_DOMAIN and is
-    excluded from the batched prefetch, exactly like D7 -- but unlike D7 it IS
-    present verbatim in pfb_py_data.txt.
+    excluded from the batched prefetch, exactly like D7 -- but unlike D7 its
+    NDJSON row IS present in pfb_py_data.txt.
     When: the alert view renders.
-    Then: pfb_dnsbl_parse_compute()'s per-row fixed-string fallback (issue #837:
-    `grep -F` on the raw domain, not a hand-escaped BRE) actually FINDS its own
-    entry -- the row struck-shows the logged group/feed and displays the
-    data-file ones, never 'Unknown'. Red on a pre-#837 package (the per-row BRE
-    mis-escapes the '*' and misses the domain's own data-file line -> Unknown),
-    green post-fix; the offline red->green proof is
+    Then: pfb_dnsbl_parse_compute()'s per-row fallback (issue #837/#1083: `grep -F`
+    on the NDJSON "domain" field needle, not a hand-escaped BRE on the raw domain)
+    actually FINDS its own entry -- the row struck-shows the logged group/feed and
+    displays the data-file ones, never 'Unknown'. Red on a pre-#837 package (the
+    per-row BRE mis-escapes the '*' and misses the domain's own data-file line ->
+    Unknown), green post-fix; the offline red->green proof is
     tests/php/DnsblParseComputeMetacharTest.php.
     """
     body = render_diff_state["captures"]["alert"].body
