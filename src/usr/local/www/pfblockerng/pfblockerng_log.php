@@ -406,7 +406,7 @@ $section->addInput(new Form_Select(
 // Collect selected logs
 $logs = array();
 $clearable = $downloadable = FALSE;
-// issue #1198: array_key_exists() rejects an unknown scalar (subsumes !empty()'s '' and '0' rejects too).
+// issue #1198: a scalar logtype that is not a key here warns at the offset below -- fall back.
 $selected = array_key_exists($pconfig['logtype'], $pfb_logtypes) ? $pconfig['logtype'] : 'defaultlogs';
 $pfb_sel = $pfb_logtypes[$selected];
 
