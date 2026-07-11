@@ -216,14 +216,98 @@ EOT;
 	{
 		$source = $this->source();
 		$this->assertStringContainsString(
-			"\t\t@file_put_contents(\$pfb_rec_memberlist, pfb_ip_recompute_memberlist_content(\$pfb_rec_paths), LOCK_EX);",
+			"\t\tpfb_ip_recompute_memberlist_write(\$pfb_rec_memberlist, \$pfb_rec_paths);",
 			$source,
-			'the invocation loop must write the memberlist through the shared helper, not an inline implode'
+			'the invocation loop must write the memberlist through the failure-checked helper (issue #1184)'
+		);
+		$this->assertStringNotContainsString(
+			'@file_put_contents($pfb_rec_memberlist',
+			$source,
+			'the raw suppressed write must be gone -- a write failure must be logged, not silently swallowed'
 		);
 		$this->assertStringNotContainsString(
 			"\$pfb_rec_paths ? (implode(\"\\n\", \$pfb_rec_paths) . \"\\n\") : ''",
 			$source,
 			'the old inline implode ternary must be gone -- otherwise the checker and the writer could drift out of format sync'
 		);
+	}
+
+	// --- Part C: pfb_ip_recompute_memberlist_write() behaviour rows (issue #1184) --------
+
+	/** Count of $marker in the CURRENT log (see AliasDeltaApplyTest::countLogMarker). */
+	private function countLogMarker(string $marker): int
+	{
+		global $pfb;
+		@mkdir($pfb['logdir'], 0777, TRUE);
+		$contents = @file_get_contents($pfb['log'] ?? '');
+		if ($contents === FALSE || $contents === '') {
+			return 0;
+		}
+		return substr_count($contents, $marker);
+	}
+
+	public function testWriteSucceedsSilentlyAndRoundTripsThroughOrderChanged(): void
+	{
+		$headers = array('FeedA_v4', 'FeedB_v4');
+		$paths   = array();
+		foreach ($headers as $header) {
+			$paths[] = pfb_ip_recompute_snapshot_path($this->snapdir, $header);
+		}
+		$marker = "write failed for [ {$this->memberlist} ]";
+		$before = $this->countLogMarker($marker);
+
+		$got = pfb_ip_recompute_memberlist_write($this->memberlist, $paths);
+
+		$this->assertNotFalse($got, 'a writable target must not report failure');
+		$this->assertSame($before, $this->countLogMarker($marker), 'a successful write must not log a failure');
+		$this->assertSame(
+			pfb_ip_recompute_memberlist_content($paths),
+			file_get_contents($this->memberlist),
+			'the written content must be exactly the shared serialization'
+		);
+		$this->assertFalse(
+			pfb_ip_recompute_order_changed($headers, $this->snapdir, $this->memberlist),
+			'the just-written memberlist must round-trip as unchanged against its own headers'
+		);
+	}
+
+	public function testWriteToNonexistentParentDirLogsTheTargetPath(): void
+	{
+		$target = "{$this->root}/missing-parent/pfb_recompute_v4.members";
+		$marker = "write failed for [ {$target} ]";
+		$before = $this->countLogMarker($marker);
+
+		$got = pfb_ip_recompute_memberlist_write($target, array('a'));
+
+		$this->assertFalse($got, 'a nonexistent parent directory must fail the write');
+		$this->assertSame($before + 1, $this->countLogMarker($marker), 'the failure must be logged with the target path');
+	}
+
+	public function testWriteToReadOnlyTargetLogsFailure(): void
+	{
+		if (function_exists('posix_getuid') && posix_getuid() === 0) {
+			$this->markTestSkipped('root bypasses file permissions; cannot simulate a write-denied target');
+		}
+		file_put_contents($this->memberlist, 'stale');
+		chmod($this->memberlist, 0444);
+		$marker = "write failed for [ {$this->memberlist} ]";
+		$before = $this->countLogMarker($marker);
+
+		$got = pfb_ip_recompute_memberlist_write($this->memberlist, array('a'));
+
+		$this->assertFalse($got, 'a 0444 target must fail the write');
+		$this->assertSame($before + 1, $this->countLogMarker($marker), 'the failure must be logged');
+	}
+
+	public function testEmptyPathsWritesZeroByteContentWithoutLogging(): void
+	{
+		$marker = "write failed for [ {$this->memberlist} ]";
+		$before = $this->countLogMarker($marker);
+
+		$got = pfb_ip_recompute_memberlist_write($this->memberlist, array());
+
+		$this->assertSame(0, $got, 'file_put_contents of an empty string returns int 0, not FALSE');
+		$this->assertNotFalse($got, 'int 0 must not be misread as a failure by a loose comparison');
+		$this->assertSame($before, $this->countLogMarker($marker), 'int 0 (zero bytes written) must never be logged as a failure');
 	}
 }
