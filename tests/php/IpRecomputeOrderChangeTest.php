@@ -16,8 +16,12 @@ use PHPUnit\Framework\TestCase;
  *   pfb_ip_recompute_order_changed()      TRUE when the family's would-be recompute
  *                                         memberlist order differs from the memberlist file
  *                                         the last recompute pass wrote (or none exists yet).
+ *   pfb_ip_recompute_memberlist_write()   the invocation loop's baseline write: LOCK_EX via
+ *                                         the shared serializer, strict FALSE check, logged
+ *                                         failure (issue #1184).
  *
- * Part A exercises both pure helpers directly. Part B is a source tripwire suite: the
+ * Part A exercises the pure helpers directly; Part C does the same for the write helper's
+ * success/failure/empty-content behaviour. Part B is a source tripwire suite: the
  * detection wiring lives in sync_package_pfblockerng(), thousands of lines of top-level
  * script code that PHPUnit cannot call as a function -- so wiring correctness is pinned by
  * exact substring assertions against the CURRENT file content (house pattern:
@@ -25,6 +29,7 @@ use PHPUnit\Framework\TestCase;
  * actually shipped.
  */
 #[CoversFunction('pfb_ip_recompute_memberlist_content')]
+#[CoversFunction('pfb_ip_recompute_memberlist_write')]
 #[CoversFunction('pfb_ip_recompute_order_changed')]
 final class IpRecomputeOrderChangeTest extends TestCase
 {
