@@ -80,6 +80,23 @@ final class PfbUpdatePassRunningTest extends TestCase
 		$this->assertFalse(pfb_update_pass_running($this->psLine('tick')));
 	}
 
+	/**
+	 * The SCHEDULED tick runs as the 'cron-tick' verb (issue #1204) and must be excluded
+	 * for the same reason 'tick' is: it is the log-maintenance gate's own caller. A verb
+	 * prefix match ('cron' + a word boundary the hyphen satisfies) would leave the gate
+	 * permanently closed on every real box, silently stopping scheduled log maintenance.
+	 */
+	public function testCronTickLineIsNotRunning(): void
+	{
+		$this->assertFalse(pfb_update_pass_running($this->psLine('cron-tick')));
+	}
+
+	/** The legacy 'cron' verb still counts as a running pass, hyphen-suffix guard notwithstanding. */
+	public function testCronLineWithTrailingArgsIsRunning(): void
+	{
+		$this->assertTrue(pfb_update_pass_running($this->psLine('cron >> /var/log/pfblockerng/pfblockerng.log')));
+	}
+
 	public function testUnrelatedProcessLineIsNotRunning(): void
 	{
 		$this->assertFalse(pfb_update_pass_running(['  999  -  Ss    0:00.01 /usr/sbin/cron -s']));
