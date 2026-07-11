@@ -784,7 +784,8 @@ pfb_aggregate() {
 #                  with the updated memberlist").
 #   $4 countsfile  Output path for the per-alias row-count artifact ("alias
 #                  count" lines, one per memberlist alias including 0),
-#                  replacing every caller's post-hoc `grep -c` re-read.
+#                  rendered at pass end by pfb_recompute_render_stats() as
+#                  the per-feed update-log stats table (issue #1174).
 #   $5 dedup       'on' | 'off'. 'on' runs the cumulative grepcidr
 #                  containment prune (Stage A) and emits masterfile/
 #                  mastercat; 'off' plain-copies every snapshot (overlaps
