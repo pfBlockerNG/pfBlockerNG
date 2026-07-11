@@ -140,6 +140,18 @@ row ids needed. The server diff on this page is **pure deletion** of the old mec
 - `geoip` rows are **not** `gtype`-excluded from either page's row-list/reorder code paths
   (only excluded from the generic per-row-field save loop on `category.php:261`, an unrelated
   branch) — the coverage matrix (§2) includes `geoip` alongside `ipv4`/`ipv6`/`dnsbl`.
+  **Phase-1 correction (2026-07-11):** on `category.php` the `ids[]` **order-persist sink is
+  a silent no-op for GeoIP** — `$rowdata_path` is assigned only in the non-GeoIP branch
+  (`:117-118`), the persist is guarded `isset($rowdata_path)` (`:302`), and GeoIP rows are
+  rebuilt from `$pfb['continents']` on every request. Pre-existing (drag+Save already
+  doesn't persist today), pinned by the Phase-1 oracle
+  `test_category_ids_order_save_geoip_is_silent_no_op`, tracked as **issue #1201**. This ADR
+  keeps the handler byte-identical, so the new anchor-click UI inherits the same no-op;
+  Semantics #7 reads accordingly (identical *UI/code-path* behaviour; order persistence on
+  `category.php` stays the pinned no-op). Also: `category_edit.php`'s gtype switch has **no
+  `geoip` case** (`ipv4`/`ipv6`/`dnsbl`-default; `category.php` renders no edit link for
+  geoip rows), so the §2 gtype axis is `{ipv4, ipv6, dnsbl}` wherever it crosses
+  `category_edit.php`.
 
 ### 1.5 Existing test coverage this ADR must reconcile
 
@@ -277,7 +289,10 @@ design driven by core's own repeatable-row machinery (`renumber()` on every stag
 6. **`system/webgui/roworderdragging` is read-only from pfBlockerNG** — never written by
    either page.
 7. **`geoip` rows behave identically to `ipv4`/`ipv6`/`dnsbl` rows for reorder purposes** on
-   both pages (§1.4) — no `gtype`-specific carve-out is introduced by this ADR.
+   both pages (§1.4) — no `gtype`-specific carve-out is introduced by this ADR. *Phase-1
+   qualification:* identical at the UI/code-path level; on `category.php` the GeoIP
+   order-persist sink is a pre-existing silent no-op (pinned, issue #1201 — §1.4) and stays
+   byte-unchanged, and `category_edit.php` has no `geoip` gtype at all (§1.4).
 
 ### Coverage matrix (Phase-1 re-derives from source; every row maps to a phase/test)
 
