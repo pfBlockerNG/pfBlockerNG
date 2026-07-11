@@ -360,10 +360,19 @@ design driven by core's own repeatable-row machinery (`renumber()` on every stag
    `origin/devel` (Semantics #2) — the Phase-1 oracle stays green through the final phase.
 3. The old mechanism is **fully retired**: `grep -n '\$Lmove\|\$Xmove\|\$disable_move\|\$pre\b'
    src/usr/local/www/pfblockerng/pfblockerng_category_edit.php` returns zero hits, AND the
-   tree-wide sweep `git grep -n 'Lmove\|Xmove\|disable_move' -- ':!.ADRs'` returns zero hits
-   (covers `pfBlockerNG.js:148-158` and every test/doc reference — the #1047 straggler class).
-   `CategoryEditRowMoveTest.php` and `test_category_edit_row_move.py` are deleted in the same
-   commit; `CategoryEditPostGuardTest.php`'s R15 is updated test-first (§1.5).
+   sweep over **production/live code** (`git grep -n 'Lmove\|Xmove\|disable_move' -- 'src/'`,
+   the mechanically-enforced retired-token scope of `src/`+`scripts/`+`.github/workflows/`)
+   returns zero hits — retiring `pfBlockerNG.js`'s `disable_move` block and every production
+   reference (the #1047 straggler class). **Phase-4 qualification (2026-07-11):** the tree-wide
+   `git grep … -- ':!.ADRs'` is NOT literally zero, and correctly so — the surviving hits are
+   **retirement-ENFORCING tests**, the opposite of stragglers: `CategoryEditPostGuardTest`'s
+   R15 pins that an array `Lmove` field is now *rejected* (must name the field to prove it),
+   and `test_render_smoke.py` asserts `name="Lmove"`/`name="Xmove"` are *absent* from the
+   rendered page (must name the token to prove its removal). Removing those would delete the
+   retirement proof. The zero-hit requirement therefore binds production code (0 `src/` hits,
+   verified); absence-asserting/rejection tests naming the retired token are expected and
+   required. `CategoryEditRowMoveTest.php` and `test_category_edit_row_move.py` are deleted in
+   the same commit; `CategoryEditPostGuardTest.php`'s R15 is updated test-first (§1.5).
 4. On category_edit, a staged reorder composed with client-side add and delete in one session
    persists exactly the visual state at Save — no row lost, duplicated, or corrupted
    (Semantics #3), across the §2 mutation axis.
