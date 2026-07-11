@@ -3420,7 +3420,7 @@ def wait_boot_complete(vm: SmokeVM, *, timeout: float = 180.0, delay: float = 3.
 
 
 # Mirrors the Update page's active-task guard (pfblockerng_update.php pfb_active_task_running).
-_PFB_TASK_RE = re.compile(r"pfblockerng[.]php\s+(cron|update|pfb_trigger|tick|forcecheck)")
+_PFB_TASK_RE = re.compile(r"pfblockerng[.]php\s+(cron-tick|cron|update|pfb_trigger|tick|forcecheck)")
 
 
 def wait_no_active_pfb_task(vm: SmokeVM, *, timeout: float = 90.0, delay: float = 1.0) -> None:
