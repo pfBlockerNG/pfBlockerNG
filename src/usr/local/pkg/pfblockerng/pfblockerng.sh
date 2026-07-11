@@ -1051,7 +1051,9 @@ pfb_recompute() {
 	fi
 
 	pfb_recompute_finish
-	return $?
+	rec_rc=$?
+	[ "${rec_rc}" -eq 0 ] && pfb_recompute_render_stats
+	return "${rec_rc}"
 }
 
 # One alias's final emit: per-alias sort into the .txt.new sibling, masterfile
@@ -1436,6 +1438,32 @@ pfb_recompute_finish() {
 	fi
 
 	echo "recompute [ ${rec_family} ]: ${rec_prio} feed(s) processed."
+}
+
+# issue #1174: renders the .counts artifact as a per-feed Original/Final table
+# on stdout (pre-suppression, like the retired duplicate() table) -- the PHP
+# caller already pipes recompute's stdout into the update log.
+pfb_recompute_render_stats() {
+	[ -f "${rec_countsfile}" ] || return 0
+
+	echo
+	echo "===[ Recompute Stats [ ${rec_family} ] ]====================="
+	echo '  ------------------------------------------------------'
+	printf '%-36s %-10s %-10s\n' '  Alias' 'Original' 'Final'
+	echo '  ------------------------------------------------------'
+	while IFS=' ' read -r rec_alias rec_countf; do
+		[ -z "${rec_alias}" ] && continue
+		if [ -f "${pfborig}${rec_alias}.aggcount" ]; then
+			rec_orig="$(cat "${pfborig}${rec_alias}.aggcount")"
+		elif [ -f "${pfborig}${rec_alias}.orig" ]; then
+			rec_orig="$(grep -cv '^#\|^$' "${pfborig}${rec_alias}.orig")"
+		else
+			rec_orig='?'
+		fi
+		printf '%-36s %-10s %-10s\n' "  ${rec_alias}" "${rec_orig}" "${rec_countf}"
+	done < "${rec_countsfile}"
+	echo '  ------------------------------------------------------'
+	return 0
 }
 
 

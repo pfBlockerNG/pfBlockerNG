@@ -932,3 +932,110 @@ Describe 'pfb_recompute() coverage-matrix gap rows (issue #1084 review: dedup=of
 		The contents of file "$countsfile" should include 'PlaceholderRow_v4 1'
 	End
 End
+
+Describe 'pfb_recompute() renders a per-feed Original/Final stats table on stdout from its own .counts artifact (issue #1174)'
+	# shellcheck disable=SC2034  # consumed by the sourced pfb_recompute()
+	setup() {
+		work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/recstats.XXXXXX")"
+		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"
+		pfborig="${work}/orig/"
+		mkdir -p "$snap" "$pfbdeny" "$pfbmatch" "$pfborig"
+		tmpdir="${work}/tmp"; mkdir -p "$tmpdir"
+		masterfile="${work}/master"; mastercat="${work}/mastercat"
+		errorlog="${work}/err.log"
+		ip_placeholder3='240.0.0'
+		pathgrepcidr="${work}/grepcidr"; make_grepcidr_stub "$pathgrepcidr"
+		memberlist="${work}/members"
+		countsfile="${work}/counts"
+	}
+	cleanup() { rm -rf "$work"; }
+	BeforeAll 'pfb_source'
+	Before 'setup'
+	After 'cleanup'
+
+	It 'v4: renders the title, the Alias/Original/Final header, and one row per fixture feed with its Original (.aggcount) and Final numbers'
+		printf '192.0.2.10\n192.0.2.11\n' > "${snap}/FeedA_v4.orig"
+		printf '192.0.2.10\n192.0.2.12\n' > "${snap}/FeedB_v4.orig"
+		printf '2\n' > "${pfborig}FeedA_v4.aggcount"
+		printf '2\n' > "${pfborig}FeedB_v4.aggcount"
+		printf '%s\n%s\n' "${snap}/FeedA_v4.orig" "${snap}/FeedB_v4.orig" > "$memberlist"
+		row_a="$(printf '%-36s %-10s %-10s' '  FeedA_v4' '2' '2')"
+		row_b="$(printf '%-36s %-10s %-10s' '  FeedB_v4' '2' '1')"
+
+		When call pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
+		The status should be success
+		The output should include '===[ Recompute Stats [ v4 ] ]'
+		The output should include "$(printf '%-36s %-10s %-10s' '  Alias' 'Original' 'Final')"
+		The output should include "$row_a"
+		The output should include "$row_b"
+	End
+
+	It 'v6: renders the same table shape for a v6 pass'
+		printf '2001:db8::/32\n' > "${snap}/SixA_v6.orig"
+		printf '1\n' > "${pfborig}SixA_v6.aggcount"
+		printf '%s\n' "${snap}/SixA_v6.orig" > "$memberlist"
+		row="$(printf '%-36s %-10s %-10s' '  SixA_v6' '1' '1')"
+
+		When call pfb_recompute recompute v6 "$memberlist" "$countsfile" on off
+		The status should be success
+		The output should include '===[ Recompute Stats [ v6 ] ]'
+		The output should include "$row"
+	End
+
+	It 'a zero-final-count feed still renders its row with Final 0 (Original also 0, from its .aggcount)'
+		: > "${snap}/ZeroFeed_v4.orig"
+		printf '0\n' > "${pfborig}ZeroFeed_v4.aggcount"
+		printf '%s\n' "${snap}/ZeroFeed_v4.orig" > "$memberlist"
+		row="$(printf '%-36s %-10s %-10s' '  ZeroFeed_v4' '0' '0')"
+
+		When call pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
+		The status should be success
+		The output should include "$row"
+	End
+
+	It 'falls back to the raw .orig row count when the .aggcount sidecar is missing (pre-1084 upgrade case)'
+		printf '192.0.2.20\n' > "${snap}/OrigOnly_v4.orig"
+		printf '192.0.2.20\n192.0.2.21\n192.0.2.22\n#comment\n\n' > "${pfborig}OrigOnly_v4.orig"
+		printf '%s\n' "${snap}/OrigOnly_v4.orig" > "$memberlist"
+		row="$(printf '%-36s %-10s %-10s' '  OrigOnly_v4' '3' '1')"
+
+		When call pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
+		The status should be success
+		The output should include "$row"
+	End
+
+	It "renders '?' for Original when neither .aggcount nor .orig exists for the alias"
+		printf '203.0.113.5\n' > "${snap}/NoOrigin_v4.orig"
+		printf '%s\n' "${snap}/NoOrigin_v4.orig" > "$memberlist"
+		row="$(printf '%-36s %-10s %-10s' '  NoOrigin_v4' '?' '1')"
+
+		When call pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
+		The status should be success
+		The output should include "$row"
+	End
+
+	It 'a blank line in the .counts artifact is skipped -- never rendered as an empty/garbage row (hostile input)'
+		# shellcheck disable=SC2034  # rec_countsfile/rec_family read by the sourced renderer
+		rec_countsfile="${work}/hostile.counts"
+		printf 'Real_v4 3\n\n' > "$rec_countsfile"
+		rec_family='v4'
+
+		When call pfb_recompute_render_stats
+		The status should be success
+		The output should include "$(printf '%-36s %-10s %-10s' '  Real_v4' '?' '3')"
+		The lines of output should equal 7
+	End
+
+	It 'aborts the whole pass (grepcidr rc>=2): the .counts artifact never gets swapped in, so no stats table renders and the failure status is unaffected'
+		printf '5.5.5.5\n' > "${snap}/A_v4.orig"
+		printf '9.9.9.9\n' > "${snap}/B_v4.orig"
+		printf '%s\n%s\n' "${snap}/A_v4.orig" "${snap}/B_v4.orig" > "$memberlist"
+		printf '#!/bin/sh\nexit 2\n' > "$pathgrepcidr"
+		chmod +x "$pathgrepcidr"
+
+		When call pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
+		The status should be failure
+		The output should not include '===[ Recompute Stats'
+		The path "$countsfile" should not be exist
+	End
+End
