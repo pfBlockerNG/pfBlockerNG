@@ -5783,6 +5783,29 @@ function pfblockerng_cron_exists($pfb_cmd, $pfb_min, $pfb_hour, $pfb_mday, $pfb_
 	return FALSE;
 }
 
+// issue #1204: extracted from sync_package_pfblockerng() so PHPUnit can pin the
+// tick cron's install/teardown behaviour without driving the whole sync pass.
+function pfblockerng_configure_tick_cron(bool $enabled, int $tick_min, string $log): void {
+	$pfb_tick_min = '*/' . $tick_min;
+	$pfb_tick_cmd = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php tick >> {$log} 2>&1";
+
+	if ($enabled) {
+		if (!pfblockerng_cron_exists($pfb_tick_cmd, $pfb_tick_min, '*', '*', '*')) {
+			install_cron_job('pfblockerng.php tick', FALSE);	// remove stale tick (interval changed)
+			install_cron_job($pfb_tick_cmd, TRUE, $pfb_tick_min, '*', '*', '*', '*', 'root');
+		}
+	}
+	else {
+		install_cron_job('pfblockerng.php tick', FALSE);
+	}
+
+	// Migration teardown: remove old fleet jobs from pre-ADR-43 installs.
+	install_cron_job('pfblockerng.php cron', FALSE);
+	install_cron_job('pfblockerng.php dcc', FALSE);
+	install_cron_job('pfblockerng.php ss_refresh', FALSE);
+	install_cron_job('pfblockerng.php bl', FALSE);
+}
+
 
 // Calculate the cron task base hour setting
 function pfb_cron_base_hour($freq) {
@@ -19831,24 +19854,7 @@ function sync_package_pfblockerng($cron='') {
 	// A single */pfb_tick_interval cron entry fires; the tick reads the due-ledger
 	// and dispatches each job only when its entry says "due". clearip/cleardnsbl
 	// are out of scope (ADR-30 territory) and remain as separate jobs below.
-	$pfb_tick_min = '*/' . pfb_tick_interval_clamp(PfbConfig::read('pfb_tick_interval'));
-	$pfb_tick_cmd = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php tick >> {$pfb['log']} 2>&1";
-
-	if ($pfb['enable'] == 'on') {
-		if (!pfblockerng_cron_exists($pfb_tick_cmd, $pfb_tick_min, '*', '*', '*')) {
-			install_cron_job('pfblockerng.php tick', FALSE);	// remove stale tick (interval changed)
-			install_cron_job($pfb_tick_cmd, TRUE, $pfb_tick_min, '*', '*', '*', '*', 'root');
-		}
-	}
-	else {
-		install_cron_job('pfblockerng.php tick', FALSE);
-	}
-
-	// Migration teardown: remove old fleet jobs from pre-ADR-43 installs.
-	install_cron_job('pfblockerng.php cron', FALSE);
-	install_cron_job('pfblockerng.php dcc', FALSE);
-	install_cron_job('pfblockerng.php ss_refresh', FALSE);
-	install_cron_job('pfblockerng.php bl', FALSE);
+	pfblockerng_configure_tick_cron($pfb['enable'] == 'on', pfb_tick_interval_clamp(PfbConfig::read('pfb_tick_interval')), $pfb['log']);
 
 	// Define pfBlockerNG clear [ dnsbl and/or IP ] counter CRON job
 	foreach (array( 'clearip', 'cleardnsbl') as $type) {

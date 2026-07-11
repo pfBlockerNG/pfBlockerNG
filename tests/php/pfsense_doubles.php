@@ -1247,3 +1247,41 @@ if (!class_exists('Net_IPv6')) {
 		}
 	}
 }
+
+// --- services.inc cron doubles (issue #1204) ---
+//
+// pfblockerng_configure_tick_cron() (pfblockerng.inc) drives install_cron_job() to
+// install/remove the scheduled tick and tear down legacy verb entries. Faithful to
+// the real services.inc control flow: the FIRST cron/item whose command SUBSTRING-
+// matches $command (strstr, not equality) is "the" entry; $active=true installs or
+// overwrites it (appends when none matched); $active=false removes it and reindexes.
+
+if (!function_exists('configure_cron')) {
+	// pfSense services.inc: rewrites /etc/crontab from config/cron/item. Nothing to
+	// render off-appliance; tests assert state via config_get_path('cron/item').
+	function configure_cron() {
+	}
+}
+
+if (!function_exists('install_cron_job')) {
+	function install_cron_job($command, $active = false, $minute = '0', $hour = '*', $mday = '*', $month = '*', $wday = '*', $who = 'root', $write_config = true) {
+		$items = config_get_path('cron/item', []);
+		$found = null;
+		foreach ($items as $idx => $item) {
+			if (strstr($item['command'] ?? '', $command)) {
+				$found = $idx;
+				break;
+			}
+		}
+
+		if ($active) {
+			$entry = compact('minute', 'hour', 'mday', 'month', 'wday', 'who', 'command');
+			config_set_path('cron/item/' . ($found ?? count($items)), $entry);
+		} elseif ($found !== null) {
+			config_del_path("cron/item/{$found}");
+			config_set_path('cron/item', array_values(config_get_path('cron/item', [])));
+		}
+
+		configure_cron();
+	}
+}
