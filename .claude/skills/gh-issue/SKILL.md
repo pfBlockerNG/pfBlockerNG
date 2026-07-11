@@ -313,13 +313,19 @@ available).** Run 7a+7b as ONE call: `Workflow({name: 'phase-step', args: {workt
 brief: <the full step prompt + handoff-format instructions>, gates: [<canonical gates for the
 touched languages>], redProof: {srcPaths: [...], testCmd: '<the pinning test>'} | null,
 planItems: [<the step's plan items>], ponytailLevel: <active level or null>}})` — implementer
-plus fresh verifier, schema-forced `{handoff, gateRecord}`. You still validate the record, record
-it in your report, and keep HALT/continue/landing judgment; BLOCKED or FAIL → HALT as below.
+plus fresh verifier, schema-forced `{handoff, gateRecord}`. **Validating the record means:
+every fixed field non-empty; every evidence entry an executed command + pasted output, not
+prose; spot-read the diff hunks the verdicts rest on. It does NOT mean re-running the gates,
+re-executing the red proof, or re-reading the whole diff — the workflow's independent
+verifier just did all of that with pasted evidence, and a third derivation is redundant
+spend.** Record the validation in your report and keep HALT/continue/landing judgment;
+BLOCKED or FAIL → HALT as below.
 **Hand-spawning 7a/7b while the tool is available requires a recorded reason in your report**
 — PR #937 bypassed it silently and neither step produced the fixed-field gate record (#943).
 Workflow tool unavailable → run 7a/7b inline as specified below (same contract; 7b item 7's
 fixed-field gate record is what the workflow would have schema-forced — an empty field is a
-gate failure).
+gate failure). **The 7b items below bind the INLINE route only** — on the workflow route
+they are the verifier's job, and yours is the record validation above.
 
 **7a. Delegate to a clean sub-agent.** Spawn an Agent (`subagent_type:
 general-purpose`, **`model: sonnet`**, effort **`xhigh`** stated explicitly, no `isolation` —

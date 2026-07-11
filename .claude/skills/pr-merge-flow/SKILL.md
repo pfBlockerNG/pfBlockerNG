@@ -189,8 +189,12 @@ it, and it does not replace CodeRabbit; when CodeRabbit never reviews it stands 
    finish (the `pr-comments` `--wait-for=coderabbitai` wait, or poll until a terminal
    CodeRabbit result), so you hold **both** reviews. If it never did, you have only the
    Claude review.
-3. **Triage and handle EACH comment of EACH review you received** — every Claude-review
-   finding, plus every CodeRabbit finding if one arrived. The per-comment handling is
+3. **Dedupe across reviewers, then triage every finding.** First MERGE the findings of
+   all reviews received (the Claude review, CodeRabbit, Copilot, a terminal Snyk failure)
+   by file:line + substance — reviewers routinely flag the same defect, and triaging each
+   copy separately wastes a validation and splinters the audit trail. One verdict per
+   underlying finding; every reviewer's thread still gets its reply (pointing at the
+   shared resolution). Then handle EACH deduped finding. The per-finding handling is
    unchanged: **APPLY** (valid, in scope, safe) · **SKIP** (stale / unenforced /
    wrong-premise / suggestion-unsafe — record the reason) · **DEFER** (valid but
    pre-existing/orthogonal → **open a tracking GitHub Issue** per `pr-comments` Step 8,

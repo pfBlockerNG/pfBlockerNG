@@ -180,15 +180,20 @@ flat across a long `all` run): `Workflow({name: 'phase-step', args: {worktree: '
 briefSpec: {adrDir: '<ADR_DIR relative to the worktree>', phase: M, notes: '<session
 constraints the disk cannot show — base override, user instructions; omit if none>'},
 ponytailLevel: <active level or null>}})`. The Brief stage reads `ADR.md`, the phase prompt,
-and every prior `RESULTS/` file just-in-time, runs the enumeration greps itself, and returns
+the previous phase's `RESULTS/` records plus the carry_forward chain just-in-time (full
+earlier records only when explicitly referenced), evaluates the previous phase's landed
+diff against the ADR's invariants (the broadened drift check), runs the enumeration greps
+itself, and returns
 a schema-forced `briefRecord` (coverage matrix rows each citing their grep source, hostile
 rows, gates, red proof, plan items, cross-phase `drift_flags`); the workflow then pipes it
 through the Sonnet implementer and a fresh higher-model verifier and returns `{briefRecord,
 handoff, gateRecord}` — all schema-forced. You then: **validate the briefRecord
 non-vacuously** (re-run at least one cited coverage-matrix `source` and confirm it yields the
-row; judge any `drift_flags`), reject a record with any failed or missing item, write
-`RESULTS/{MM}_Gate.txt` from the gateRecord and commit+push it, and keep ALL judgment
-(HALT/continue/redo, Step 7 landing). A BLOCKED briefRecord or handoff, or a FAIL gate
+row; judge any `drift_flags`), **validate the gateRecord without re-deriving it** (fields
+non-empty, evidence = executed commands + pasted output, spot-read the load-bearing diff
+hunks — never a third run of the gates or the red proof the verifier just executed), reject
+a record with any failed or missing item, write `RESULTS/{MM}_Gate.txt` from the gateRecord
+and commit+push it, and keep ALL judgment (HALT/continue/redo, Step 7 landing). A BLOCKED briefRecord or handoff, or a FAIL gate
 record → **HALT and report**, exactly as below. The legacy `brief:` argument (you compose 6a
 yourself) remains supported but is not the default for ADR phases. When the Workflow tool is
 unavailable, run the same contract inline: **first spawn a fresh brief-writer Agent** (omit

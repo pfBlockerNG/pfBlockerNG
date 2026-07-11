@@ -26,6 +26,16 @@ Args: `{{ args }}`
   those directly — docs/config/skills always), do it yourself in a worktree with the same
   verification discipline, and say so. Delegation is for non-trivial `src/`/`tests/`/CI work.
 
+## Step 0.5 — Default route: the `phase-step` workflow
+
+When the Workflow tool is available, run Steps 2–3 as ONE call after writing the brief:
+`Workflow({name: 'phase-step', args: {worktree, brief, gates, redProof, planItems,
+ponytailLevel}})` — Sonnet implementer + fresh higher-model verifier, schema-forced
+`{handoff, gateRecord}`. Validate the returned record (fields non-empty, evidence =
+executed commands + pasted output, spot-read the load-bearing hunks — do NOT re-run the
+gates or the red proof the verifier just executed); the Step 3 items below bind the inline
+route only.
+
 ## Step 1 — Investigate, then write THE BRIEF
 
 Read the actual code first (Working principles — never brief from memory). Then produce the
