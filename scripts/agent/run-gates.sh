@@ -29,11 +29,14 @@ gates_for() {
 	out=''
 	nl='
 '
-	# Per-file commands are re-parsed by run_gate's `sh -c`; a diff filename carrying
-	# shell metacharacters would inject there. Replace its gates with a loud failure.
-	unsafe=$(printf '%s\n' "$files" | grep '[^A-Za-z0-9._/-]' || true)
-	files=$(printf '%s\n' "$files" | grep -v '[^A-Za-z0-9._/-]' || true)
+	# Per-file commands (php -l / sh -n / shellcheck) are re-parsed by run_gate's
+	# `sh -c`; a diff filename carrying shell metacharacters would inject there.
+	# The guard applies ONLY to those buckets -- aggregate gates (.py/.md suites)
+	# and gate-less file types never embed the filename, so an unusual name there
+	# must neither fail the run nor drop the aggregate gates.
+	unsafe=$(printf '%s\n' "$files" | grep -E '\.(php|inc|sh)$' | grep '[^A-Za-z0-9._/-]' || true)
 	if [ -n "$unsafe" ]; then
+		files=$(printf '%s\n' "$files" | grep -v '[^A-Za-z0-9._/-]' || true)
 		out="${out}printf 'unsafe filename in diff\\n' >&2; false${nl}"
 	fi
 	if printf '%s\n' "$files" | grep -q '\.py$'; then

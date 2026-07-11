@@ -55,6 +55,9 @@ staged_py=0;  staged_has '\.py$'        && staged_py=1
 staged_md=0;  staged_has '\.md$'        && staged_md=1
 staged_php=0; staged_has '\.(php|inc)$' && staged_php=1
 staged_sh=0;  staged_has '\.sh$'        && staged_sh=1
+# Spec plumbing (helper, extensionless bin/ shims, fixtures) impacts every shellspec
+# run but need not end in .sh -- it must open the shell block on its own.
+staged_specplumb=0; staged_has '^tests/shell/(spec_helper\.sh|bin/|fixtures/)' && staged_specplumb=1
 staged_yaml=0; staged_has '\.ya?ml$'    && staged_yaml=1
 staged_adrtxt=0; staged_has '^\.ADRs/.*\.txt$' && staged_adrtxt=1
 
@@ -112,7 +115,7 @@ if [ "$staged_md" = 1 ]; then
 fi
 
 # =============================== Shell (*.sh) =============================== #
-if [ "$staged_sh" = 1 ]; then
+if [ "$staged_sh" = 1 ] || [ "$staged_specplumb" = 1 ]; then
 	# Forbid bash shebangs. The repo is #!/bin/sh POSIX (the FreeBSD/pfSense target
 	# has no /bin/bash, and macOS /bin/bash is the ancient 3.2). Scans ALL tracked
 	# files, so it also covers tests/ (not lint-globbed below).
@@ -155,8 +158,7 @@ if [ "$staged_sh" = 1 ]; then
 	# e.g. a special-builtin redirection error aborts ash/dash but not bash.
 	if have shellspec; then
 		staged_shell=$(printf '%s\n' "$staged" | grep '\.sh$' || true)
-		if printf '%s\n' "$staged_shell" | grep -q '^src/' ||
-		   printf '%s\n' "$staged" | grep -qE '^tests/shell/(spec_helper\.sh|bin/|fixtures/)'; then
+		if printf '%s\n' "$staged_shell" | grep -q '^src/' || [ "$staged_specplumb" = 1 ]; then
 			specs=$(ls tests/shell/*_spec.sh)
 		else
 			specs=$(printf '%s\n' "$staged_shell" | grep '^tests/shell/.*_spec\.sh$' || true)
