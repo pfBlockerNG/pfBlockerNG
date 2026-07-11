@@ -1,7 +1,7 @@
 export const meta = {
   name: 'review-fanout',
   description: 'Deterministic multi-agent adversarial PR review: 3 lenses -> dedup -> execution-grounded verify per finding',
-  whenToUse: 'ONLY on explicit user request for a multi-agent review — retired as pr-merge-flow\'s default (2026-07-11): the flow now runs ONE reviewer sub-agent (Sonnet 5, or Fable for a large/complex PR) at xhigh. Args: {pr: <number>, base: <branch>, worktree: <path>, spec: <intent/acceptance text>}.',
+  whenToUse: 'ONLY on explicit user request for a multi-agent review — retired as pr-merge-flow\'s default (2026-07-11): the flow now runs ONE reviewer sub-agent (latest Sonnet, or latest Fable for a large/complex PR) at xhigh. Args: {pr: <number>, base: <branch>, worktree: <path>, spec: <intent/acceptance text>}.',
   phases: [
     { title: 'Find', detail: 'three independent lenses over the diff' },
     { title: 'Verify', detail: 'adversarial, execution-grounded check of every finding' },

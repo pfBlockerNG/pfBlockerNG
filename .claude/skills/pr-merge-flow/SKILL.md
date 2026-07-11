@@ -8,9 +8,9 @@ description: >
   (EXCLUDING the bot), merge `--rebase` (never a merge commit, never squash) and
   delete the branch. The review step ALWAYS runs ONE Claude sub-agent as an
   ADVERSARIAL, maximally thorough reviewer IN ADDITION TO CodeRabbit — never as a mere
-  fallback — at reasoning effort xhigh (never below, never max): Sonnet 5 by default,
-  Fable for a large/complex PR (orchestrator's pick; never Opus, never a multi-agent
-  fan-out). In parallel it
+  fallback — at reasoning effort xhigh (never below, never max): the latest Sonnet
+  (5 or newer) by default, the latest Fable (5 or newer) for a large/complex PR
+  (orchestrator's pick; never Opus, never a multi-agent fan-out). In parallel it
   gives CodeRabbit ~10 minutes to acknowledge the PR: if it does, wait on its review
   too; if it stays silent, nudge it once with `@coderabbitai review` and wait 10 more
   minutes; if it is STILL silent the Claude review stands alone (folding CodeRabbit's
@@ -209,9 +209,11 @@ it, and it does not replace CodeRabbit; when CodeRabbit never reviews it stands 
    default is retired — that committed workflow now runs only on an explicit user
    request). You (the orchestrator) pick the **model** by the PR's size and complexity —
    and record the chosen model + the size metric that drove it in the Step-1d.5 audit
-   comment: a small/simple PR → `model: sonnet` (Sonnet 5); a large or complex PR
+   comment: a small/simple PR → `model: sonnet`; a large or complex PR
    (roughly: >300 changed lines, >6 files, or any behaviour change in `src/`'s
-   parsing/guard/scheduling logic) → `model: fable` (Fable) — **never Opus**. The single
+   parsing/guard/scheduling logic) → `model: fable` — **never Opus**. Always the bare
+   family alias, which resolves to the LATEST generation (Sonnet 5 / Fable 5 or newer);
+   never pin a dated model ID — a pinned ID silently ages. The single
    reviewer covers all three lenses itself (contract-conformance vs the spec,
    correctness + hostile inputs, test honesty). Do **not** propagate ponytail
    to the reviewer (CLAUDE.md: ponytail governs what you build; a reviewer builds
