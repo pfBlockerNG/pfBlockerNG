@@ -107,6 +107,11 @@ When it wakes you, read `$RESULT` (verdict semantics are documented in the scrip
 
 ## Step 5 — Merge with rebase
 
+**This merge is user-directed, not agent-initiated.** Invoking `/pr-merge` — directly,
+or via `/pr-merge-flow` or `/gh-issue --fix`, which land through it — IS the user's
+explicit standing instruction to merge the PR once this skill's own gates (open,
+ready, mergeable, CI green) pass. No additional per-merge confirmation is required.
+
 ```sh
 gh pr merge "$PR" --rebase
 ```

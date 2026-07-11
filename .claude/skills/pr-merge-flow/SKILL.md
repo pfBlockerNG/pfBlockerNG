@@ -299,6 +299,9 @@ it may not be clean.
 
 ## Step 2 — Land it (`/pr-merge N`)
 
+- The merge is **user-directed**: the user's invocation of this flow (directly or via
+  `/gh-issue --fix`) is the standing authorization for the merge step, provided the
+  Step-1 review gate completed cleanly.
 - Invoke the **pr-merge** skill with `N`. It rebases the head onto the live base,
   waits for the real CI checks to go green (CodeRabbit excluded — never block on the
   bot), merges with `--rebase` (never a merge commit, never squash), and deletes the

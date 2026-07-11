@@ -30,6 +30,9 @@
     }
   },
   "permissions": {
+    "allow": [
+      "Bash(gh pr merge:*)"
+    ],
     "deny": [
       "Bash(git stash)",
       "Bash(git stash:*)"
