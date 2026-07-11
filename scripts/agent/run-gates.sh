@@ -82,7 +82,9 @@ main() {
 	require_tool git
 	[ -n "$worktree" ] || worktree=$(git rev-parse --show-toplevel) || exit 2
 
-	files=$(git -C "$worktree" diff --name-only "$base...HEAD") || exit 2
+	# --diff-filter=ACMR: a pure deletion stages nothing to lint (same rule as the
+	# pre-commit hook) -- per-file gates against ghost paths would always fail.
+	files=$(git -C "$worktree" diff --name-only --diff-filter=ACMR "$base...HEAD") || exit 2
 	# The shellspec gate must also fire when only spec files changed (cross-language
 	# consumers rule): specs are .sh files, so the extension mapping already covers it.
 	cmds=$(printf '%s\n' "$files" | gates_for)
@@ -94,7 +96,7 @@ main() {
 
 	# Pipelines run in subshells under POSIX sh, so `overall` cannot propagate out of a
 	# `| while` loop -- run the loop in one subshell and carry the flag in its output.
-	report=$(printf '%s' "$cmds" | {
+	report=$(printf '%s\n' "$cmds" | {
 		overall=0
 		while IFS= read -r c; do
 			[ -n "$c" ] && run_gate "$c"

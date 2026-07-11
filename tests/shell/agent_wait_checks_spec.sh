@@ -49,3 +49,29 @@ Describe 'wait-checks.sh evaluate_checks()'
     The output should equal 'EMPTY'
   End
 End
+
+Describe 'wait-checks.sh loop verdicts (stub gh)'
+  setup_stub() {
+    stubdir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/ghstub.XXXXXX")"
+    printf '#!/bin/sh\necho "$GH_STUB_CHECKS"\n' > "$stubdir/gh"
+    chmod +x "$stubdir/gh"
+    PATH="$stubdir:$PATH"
+  }
+  cleanup_stub() { rm -rf "$stubdir"; }
+  Before 'setup_stub'
+  After 'cleanup_stub'
+  script="scripts/agent/wait-checks.sh"
+
+  It 'reports TIMEOUT when checks stay pending through the cap'
+    export GH_STUB_CHECKS='[{"name":"pytest","bucket":"pending"}]'
+    When run sh "$script" --repo o/r --pr 1 --interval 0 --max-iter 2
+    The line 1 of output should equal 'TIMEOUT'
+  End
+
+  It 'honours the wall-clock deadline even when a verdict would be reached'
+    export GH_STUB_CHECKS='[{"name":"pytest","bucket":"pass"}]'
+    export PFB_WAIT_DEADLINE=1
+    When run sh "$script" --repo o/r --pr 1 --interval 0 --max-iter 3
+    The line 1 of output should equal 'TIMEOUT'
+  End
+End

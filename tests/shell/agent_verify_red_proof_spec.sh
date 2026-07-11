@@ -58,6 +58,20 @@ Describe 'verify-red-proof.sh'
     The output should include 'test edited between red and green'
   End
 
+  It 'restores the src paths when SIGTERM interrupts the red run (dash semantics)'
+    make_repo BAD GOOD
+    interrupt_case() {
+      dash "$script" --worktree "$repo" --test-cmd 'sleep 30' --src src.txt >/dev/null 2>&1 &
+      pid=$!
+      sleep 1
+      kill -TERM "$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      git -C "$repo" status --porcelain
+    }
+    When call interrupt_case
+    The output should equal ''
+  End
+
   It 'refuses a dirty tree (the gate re-derives from committed state)'
     make_repo BAD GOOD
     echo scratch > "$repo/uncommitted.txt"

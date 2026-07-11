@@ -146,18 +146,25 @@ if [ "$staged_sh" = 1 ]; then
 
 	# shellspec functional suite (gated on the tool, like shellcheck), scoped to the
 	# IMPACTED specs: staged spec files plus any spec that names a staged script's
-	# basename. The full suite runs minutes (and an interrupted run can strand
-	# spec-mutated state); CI remains the full-suite hard gate.
+	# basename. The basename heuristic is blind to the pfb_source indirection, so a
+	# staged src/ shell script — or any staged spec-plumbing file (spec_helper, bin/,
+	# fixtures/) — runs the FULL suite instead. The full suite runs minutes (and an
+	# interrupted run can strand spec-mutated state); CI remains the full-suite hard gate.
 	# Run under dash when available: strict-POSIX ash sibling of FreeBSD
 	# /bin/sh (the appliance shell). bash-as-sh (macOS) masks divergences —
 	# e.g. a special-builtin redirection error aborts ash/dash but not bash.
 	if have shellspec; then
 		staged_shell=$(printf '%s\n' "$staged" | grep '\.sh$' || true)
-		specs=$(printf '%s\n' "$staged_shell" | grep '^tests/shell/.*_spec\.sh$' || true)
-		for f in $(printf '%s\n' "$staged_shell" | grep -v '^tests/shell/'); do
-			specs="$specs
+		if printf '%s\n' "$staged_shell" | grep -q '^src/' ||
+		   printf '%s\n' "$staged" | grep -qE '^tests/shell/(spec_helper\.sh|bin/|fixtures/)'; then
+			specs=$(ls tests/shell/*_spec.sh)
+		else
+			specs=$(printf '%s\n' "$staged_shell" | grep '^tests/shell/.*_spec\.sh$' || true)
+			for f in $(printf '%s\n' "$staged_shell" | grep -v '^tests/shell/'); do
+				specs="$specs
 $(grep -l -F "$(basename "$f")" tests/shell/*_spec.sh 2>/dev/null || true)"
-		done
+			done
+		fi
 		specs=$(printf '%s\n' "$specs" | grep -v '^$' | sort -u)
 		if [ -n "$specs" ]; then
 			step 'shellspec (impacted)'
