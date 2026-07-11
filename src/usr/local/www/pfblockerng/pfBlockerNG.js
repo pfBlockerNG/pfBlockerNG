@@ -142,6 +142,91 @@ function pfb_chg_state_bkgd() {
 	pfb_greyout("select[id^='state-']");
 }
 
+// ADR-63: shared drag+anchor-click reorder component. PRODUCTION-DORMANT --
+// defining these functions is inert; no page calls pfb_reorder_init() yet.
+// Row identity for anchor-click move logic is resolved via DOM traversal
+// (closest()/find()), never by parsing an injected control's own id: core's
+// add_row() (pfSenseHelpers.js) only renumbers <input>/<select>/[id^=deleterow],
+// not a generic <button>, so an anchor button's own id can go briefly stale.
+function pfb_reorder_init(container, rowSelector, onAfterMove, dragEnabled) {
+	var $container = $(container);
+	var anchorClass = 'pfb-reorder-anchor';
+	var chkClass = 'pfb-reorder-chk';
+
+	function fire() {
+		if (typeof onAfterMove === 'function') {
+			onAfterMove();
+		}
+	}
+
+	$container.find(rowSelector).each(function(i) {
+		if ($(this).find('.' + chkClass).length) {
+			return;
+		}
+		$(this).append(
+			'<span class="pfb-reorder-ctl">' +
+			'<input type="checkbox" class="' + chkClass + '" id="pfb_reorder_chk-' + i + '">' +
+			'<button type="button" class="' + anchorClass + '" id="pfb_reorder_anchor-' + i + '" ' +
+			'title="Move checked entries before this row (shift-click: after)">&#8645;</button>' +
+			'</span>'
+		);
+	});
+
+	// Delegated (container-level): survives renumber()'s id/name rewrite of
+	// per-row controls, unlike a per-element binding (ADR-63 S2 Decision 1).
+	$container.off('click.pfb_reorder').on('click.pfb_reorder', '.' + anchorClass, function(e) {
+		var anchorRow = $(this).closest(rowSelector);
+		var rows = $container.find(rowSelector);
+		var checked = rows.filter(function() {
+			return $(this).find('.' + chkClass).is(':checked');
+		}).not(anchorRow).toArray();
+
+		// Preserve the checked rows' relative order: "before" walks top-to-bottom
+		// inserting each just before the anchor; "after" walks bottom-to-top
+		// inserting each just after it (reversing the walk keeps insertion order).
+		if (e.shiftKey) {
+			for (var i = checked.length - 1; i >= 0; i--) {
+				$(checked[i]).insertAfter(anchorRow);
+			}
+		} else {
+			for (var j = 0; j < checked.length; j++) {
+				$(checked[j]).insertBefore(anchorRow);
+			}
+		}
+		fire();
+	});
+
+	if (dragEnabled) {
+		$container.sortable({
+			items: rowSelector,
+			cursor: 'move',
+			distance: 10,
+			opacity: 0.8,
+			helper: function(e, ui) {
+				ui.children().each(function() {
+					$(this).width($(this).width());
+				});
+				return ui;
+			},
+			stop: fire
+		});
+	}
+}
+
+// Sortable-independent DOM-order read, byte-format-identical to
+// $(container).sortable('serialize', {key:'ids[]'}) -- works even when
+// .sortable() was never initialised (ADR-63 S1.8's serialize trap).
+function pfb_reorder_read_order(container, rowSelector) {
+	var parts = [];
+	$(container).find(rowSelector).each(function() {
+		var m = /(.+)[-=_](.+)/.exec(this.id);
+		if (m) {
+			parts.push('ids[]=' + encodeURIComponent(m[2]));
+		}
+	});
+	return parts.join('&');
+}
+
 
 events.push(function() {
 
