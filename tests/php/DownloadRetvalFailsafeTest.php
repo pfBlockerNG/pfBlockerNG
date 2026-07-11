@@ -20,6 +20,13 @@ use PHPUnit\Framework\TestCase;
  * exist: the ZIP xlsx-conversion-failure branch (the reported defect -- a
  * failed conversion must FAIL, not succeed) and the gzip 'blacklist' success
  * branch (which must keep succeeding under the new fail-safe default).
+ *
+ * issue #1166: the gzip-blacklist branch's unconditional `$retval = 0;` after
+ * the .update touch is itself a defect superseding this file's original pin
+ * -- it reported success even when the preceding tar extraction failed. The
+ * route now derives $retval from tar's real captured exit code and guards
+ * the .update touch with it; see DownloadExtractionExitCodeTest for the full
+ * per-site exit-code coverage.
  */
 final class DownloadRetvalFailsafeTest extends TestCase
 {
@@ -96,18 +103,23 @@ final class DownloadRetvalFailsafeTest extends TestCase
 	// Red row B -- Route 2 (gzip-blacklist) keeps succeeding under the new default.
 	// -----------------------------------------------------------------------
 
-	public function testGzipBlacklistSuccessExplicitlyAssignsZeroAfterUpdateTouch(): void
+	public function testGzipBlacklistUpdateTouchGuardedByCapturedRetvalNotUnconditionalAssignment(): void
 	{
 		$touchPos = strpos(self::$body, '{$filename}/{$filename}.update');
 		$this->assertNotFalse($touchPos, 'the .update touch marker must be locatable (vacuity re-check)');
 
-		// Whitespace-tolerant proximity window: the touch call's closing ");"
-		// through ~200 chars ahead must contain an explicit $retval = 0;
-		// (mirrors the uncompressed-blacklist sibling at pfblockerng.inc:10874).
+		// issue #1166: success no longer comes from a hardcoded $retval = 0;
+		// after the touch -- it comes from the tar extraction's own captured
+		// exit code, and the touch itself is now gated on that code being 0.
+		$preWindow = substr(self::$body, max(0, $touchPos - 100), 100);
+		$this->assertMatchesRegularExpression('/if\s*\(\s*\$retval\s*==\s*0\s*\)/', $preWindow,
+			'the .update touch must be guarded by if ($retval == 0); found before touch: '
+			. json_encode($preWindow));
+
 		$window = substr(self::$body, $touchPos, 200);
-		$this->assertMatchesRegularExpression('/\$retval\s*=\s*0\s*;/', $window,
-			"gzip-blacklist success must explicitly set \$retval = 0 after its .update touch "
-			. "(preserving its outcome under the new fail-safe default); found near touch: "
+		$this->assertDoesNotMatchRegularExpression('/\$retval\s*=\s*0\s*;/', $window,
+			'no unconditional $retval = 0; may remain near the .update touch -- the new fail-safe default is '
+			. 'satisfied by tar\'s own captured exit code, not a hardcoded override; found near touch: '
 			. json_encode($window));
 	}
 
