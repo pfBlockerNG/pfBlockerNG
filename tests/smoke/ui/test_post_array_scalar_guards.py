@@ -28,7 +28,10 @@ its gate requires literal ``REMOTE_ADDR == 127.0.0.1``). The sibling
 ``_post_action``-based elseif-chain siblings. Issue #1183's
 ``pfblockerng_log.php`` cluster closes the ``$pconfig['logtype']``/``logFile``
 ingress normalization (POST) and the ajax ``$_REQUEST['file']``
-``htmlspecialchars()`` sink (GET query).
+``htmlspecialchars()`` sink (GET query). Issue #1198 closes a DIFFERENT input
+class on the same page: a *scalar but unknown* ``logtype`` (e.g. ``zzz``)
+passes #1183's ``is_string()`` guard yet still hit an unguarded
+``$pfb_logtypes[$selected]`` offset -- 6 warnings per request.
 
 Each save/GET must respond like any validation failure: HTTP 200, no login
 bounce, and NOT ONE new byte in any candidate ``php_error.log``.
@@ -161,6 +164,37 @@ def test_array_valued_field_rejected_gracefully(
     extra_fields: dict[str, str] | None,
 ) -> None:
     _post_with_array_field(webui, smoke_vm, page, field, extra_fields)
+
+
+def test_unknown_scalar_logtype_rejected_gracefully(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """issue #1198: a scalar but UNKNOWN 'logtype' must fall back silently.
+
+    Given pfblockerng_log.php's own scraped form (valid CSRF token),
+    When 'logtype' is resubmitted as the plain scalar 'zzz' (not an array --
+      that class is #1183's row above; this is a DIFFERENT input class: a
+      string that passes the is_string() ingress guard but has no entry in
+      $pfb_logtypes),
+    Then the page still answers HTTP 200, the session survives, and no
+      candidate php_error.log gains a byte (pre-fix: 6 E_WARNINGs per
+      request from the unguarded $pfb_logtypes[$selected] offset).
+    """
+    guard = PhpErrorLogGuard(smoke_vm)
+    guard.snapshot()
+
+    page = "/pfblockerng/pfblockerng_log.php"
+    got = webui.get(page)
+    assert got.status_code == 200, f"GET {page} -> HTTP {got.status_code}"
+    assert not looks_like_login_page(got.text), f"GET {page} bounced to the login form"
+
+    payload = scrape_form_fields(got.text)
+    payload["logtype"] = "zzz"
+    payload["save"] = "Save"
+
+    resp = webui.session.post(webui.url(page), data=payload, verify=webui._verify, timeout=_POST_TIMEOUT)
+
+    assert resp.status_code == 200, f"POST {page} with logtype=zzz -> HTTP {resp.status_code}"
+    assert not looks_like_login_page(resp.text), f"POST {page} with logtype=zzz bounced to the login form"
+    guard.assert_no_growth()
 
 
 # issue #1106: 'atype' (GET) and '$_REQUEST[savemsg]' are read outside the save
