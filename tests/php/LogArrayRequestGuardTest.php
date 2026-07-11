@@ -150,10 +150,12 @@ final class LogArrayRequestGuardTest extends TestCase
 		try {
 			$pfb_sel = pfb_log_oracle_selected_logtype($pconfig, $pfb_logtypes);
 		} catch (\TypeError $e) {
-			restore_error_handler();
 			$this->fail('an unknown/hostile logtype must not TypeError the $pfb_logtypes[] offset: ' . $e->getMessage());
+		} finally {
+			// finally, not the happy path: any other throwable would otherwise leak the
+			// handler into sibling tests (self-encapsulation).
+			restore_error_handler();
 		}
-		restore_error_handler();
 		$this->assertSame([], $warnings, 'an unknown/hostile logtype must emit zero warnings, got: ' . implode('; ', $warnings));
 		return $pfb_sel;
 	}
