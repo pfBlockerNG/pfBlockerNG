@@ -123,7 +123,7 @@ main() {
 			*) usage ;;
 		esac
 	done
-	[ -n "$repo" ] && [ -n "$pr" ] && [ -n "$handle" ] || usage
+	{ [ -n "$repo" ] && [ -n "$pr" ] && [ -n "$handle" ]; } || usage
 	case "$mode" in ack|finished) ;; *) usage ;; esac
 	require_gh
 
