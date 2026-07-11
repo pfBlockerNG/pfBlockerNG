@@ -1061,7 +1061,7 @@ foreach ($rowdata[$rowid] as $tags) {
 		$group = new Form_Group($line_label);
 		$group->addClass('repeatable');
 
-		if ($rowdata[$rowid]['sort'] == 'no-sort') {
+		if (($rowdata[$rowid]['sort'] ?? '') == 'no-sort') {
 
 			// ADR-63: the gutter number is refreshed client-side after every staged
 			// drag/anchor-click move (pfb_reorder_init's onAfterMove); '.pfb-gutter' is
@@ -1710,7 +1710,7 @@ else if (gtype == 'dnsbl') {
 	var pagetype = 'dnsbl';
 }
 
-<?php if ($rowdata[$rowid]['sort'] == 'no-sort') { ?>
+<?php if (($rowdata[$rowid]['sort'] ?? '') == 'no-sort') { ?>
 // ADR-63: staged reorder via shared component; renumber() keeps field names positional
 var pfb_drag_enabled = <?=config_path_enabled('system/webgui', 'roworderdragging') ? 'false' : 'true';?>;
 events.push(function() {

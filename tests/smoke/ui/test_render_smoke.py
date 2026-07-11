@@ -1318,7 +1318,9 @@ _CATEGORY_GEOIP_PAGE = "/pfblockerng/pfblockerng_category.php?type=geoip"
         pytest.param(_CATEGORY_GEOIP_PAGE, False, id="geoip"),
     ),
 )
-def test_category_page_renders_reorder_wiring(path: str, expect_reorder_th: bool, webui: WebUI) -> None:
+def test_category_page_renders_reorder_wiring(
+    path: str, expect_reorder_th: bool, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:  # noqa: ARG001
     """The Category page wires the shared anchor-click reorder component (issue #1147).
 
     Hermetic. GET the page and assert: (1) ``pfb_reorder_init(`` (the component

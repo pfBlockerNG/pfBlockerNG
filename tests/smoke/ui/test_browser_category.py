@@ -435,6 +435,20 @@ def test_reorder_anchor_click_single_row_then_save_persists_dom_order(
         before = _row_names(page)
         assert before == names, f"seeded rows did not render in order {names}, got {before!r}"
 
+        # On a <tr> page the injected control must be a real <td> (valid table
+        # markup, aligns under the Reorder <th>), and the checkbox/anchor must
+        # carry an accessible name -- not the bare arrow glyph (PR #1205 review).
+        assert page.locator("tr.sortable td.pfb-reorder-ctl").count() == len(names), (
+            f"reorder control must be a <td> per row on {gtype}: "
+            f"found {page.locator('tr.sortable td.pfb-reorder-ctl').count()}, expected {len(names)}"
+        )
+        assert page.locator("tr.sortable td.pfb-reorder-ctl .pfb-reorder-chk[aria-label]").count() == len(names), (
+            "each injected reorder checkbox must carry an aria-label"
+        )
+        assert page.locator("tr.sortable td.pfb-reorder-ctl .pfb-reorder-anchor[aria-label]").count() == len(names), (
+            "each injected reorder anchor must carry an aria-label"
+        )
+
         # Check row 2 (c), plain-anchor-click row 0 (a) -> c moves before a: [c, a, b].
         _check_row(page, 2)
         _click_anchor(page, 0, shift=False)
