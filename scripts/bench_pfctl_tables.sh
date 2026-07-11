@@ -89,7 +89,7 @@ CTRL_PROBE_OUT="${TMP}/ctrl_probe.txt"
 CTRL_PROBE_PID=""
 
 start_ctrl_probe() {
-    : > "${CTRL_PROBE_OUT}"
+    true > "${CTRL_PROBE_OUT}"
     touch "${TMP}/ctrl_probe_run"
     (
         while [ -f "${TMP}/ctrl_probe_run" ]; do

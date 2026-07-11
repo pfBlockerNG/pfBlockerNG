@@ -346,7 +346,7 @@ _rl_scrub() {
         -e 's/\\/\\\\/g' -e 's/\./\\./g' -e 's/\*/\\*/g' \
         -e 's/\[/\\[/g' -e 's/\]/\\]/g' -e 's/\^/\\^/g' \
         -e 's/\$/\\$/g' -e 's/#/\\#/g'; }
-    : > redact.sed
+    true > redact.sed
     printf '%s\n' "$SMOKE_REDACT_VALUES" | while IFS= read -r _v; do
         [ -n "$_v" ] || continue
         printf 's#%s#REDACTED#gI;\n' "$(_esc "$_v")" >> redact.sed

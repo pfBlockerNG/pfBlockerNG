@@ -442,7 +442,7 @@ remove() {
 
 # Function to remove IPs if exists over 253 IPs in a range and replace with a single /24 block. (excl. '0' & '255')
 process255() {
-	: > "${dedupfile}"
+	true > "${dedupfile}"
 	data255="$(cut -d '.' -f 1-3 "${pfbdeny}${alias}.txt" | awk '{a[$0]++}END{for(i in a){if(a[i] > 253){print i}}}')" 
 
 	if [ -n "${data255}" ]; then
@@ -509,7 +509,7 @@ suppress() {
 				# reach it. The suppression list is user free-text; the member file
 				# is already-sanitised feed data, filtered again here as
 				# defense-in-depth, not because it is expected to need it.
-				: > "${dupfile}"
+				true > "${dupfile}"
 				while IFS= read -r ip; do
 					if pfb_is_cidr_token "${ip}"; then
 						echo "${ip}" >> "${dupfile}"
@@ -682,7 +682,7 @@ pfb_aggregate() {
 	fi
 
 	# Concatenate every existing member file, then dedup (sort -u) into the temp file.
-	: > "${tempfile}"
+	true > "${tempfile}"
 	while IFS= read -r agg_member; do
 		[ -z "${agg_member}" ] && continue
 		[ -f "${agg_member}" ] && cat "${agg_member}" >> "${tempfile}"
@@ -706,7 +706,7 @@ pfb_aggregate() {
 	# An empty union writes an empty aggregate (the never-empty consumer placeholder is below).
 	agg_tmp="${agg_out}.tmp"
 	if [ ! -s "${dedupfile}" ]; then
-		: > "${agg_tmp}"
+		true > "${agg_tmp}"
 	elif [ "${agg_family}" = 'v6' ] || [ "${agg_collapsed}" = 'on' ]; then
 		cp -f "${dedupfile}" "${agg_tmp}"
 	else
@@ -1707,7 +1707,7 @@ EOF
 
 	# Find repeat offenders in each individual blocklist outfile
 	if [ -s "${dupfile}" ]; then
-		: > "${tempfile2}"
+		true > "${tempfile2}"
 		# Each dupfile line is a '10.0.0.'-style octet prefix. Read them directly
 		# (no sed pre-escape, no IFS re-split), validate to digits/dots, and build
 		# the anchored '^10\.0\.0\.' pattern via the shared helper so only a
@@ -1800,7 +1800,7 @@ EOF
 
 		# Remove repeat offenders in masterfile
 		echo '  Removing   [ Block ] IPs'
-		: > "${tempfile}"
+		true > "${tempfile}"
 		# Each dedupfile line is '<alias> 10.0.0.'. Anchor it at column 0 and escape
 		# the prefix's dots (via pfb_anchor_octet_pattern; the alias field is \w-only,
 		# so escaping the dots is sufficient) so the removal grep matches ONLY this
@@ -1840,7 +1840,7 @@ processet() {
 	if [ -s "${pfborig}${alias}.orig" ]; then
 		# Remove previous ET IPRep files
 		[ -d "${etdir}" ] && [ "$(ls -A "${etdir}")" ] && rm -r "${etdir}/ET_"*
-		: > "${tempfile}"; : > "${tempfile2}"
+		true > "${tempfile}"; true > "${tempfile2}"
 
 		# ET CSV format (IP, Category, Score)
 		echo; echo; echo 'Compiling ET IPREP IQRisk based upon user selected categories'
