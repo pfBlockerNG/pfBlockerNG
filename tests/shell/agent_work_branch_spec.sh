@@ -63,4 +63,9 @@ Describe 'work-branch.sh slugify() truncation edges'
     When call slugify "ip-recompute-a-priority-reorder"
     The output should equal 'ip-recompute-a-priority'
   End
+
+  It 'keeps a token whose end lands exactly on the 30-character cut'
+    When call slugify "aaaaaaaaaa-bbbbbbbbbb-cccccccc-ddd"
+    The output should equal 'aaaaaaaaaa-bbbbbbbbbb-cccccccc'
+  End
 End

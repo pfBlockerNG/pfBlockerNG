@@ -11,7 +11,9 @@
 # The LAST stdout line is the verdict: PASS | FAIL | TIMEOUT. On PASS/FAIL the relevant
 # checks JSON precedes it as detail. `bucket` semantics: skipping counts as done-not-
 # failed; PASS requires at least one relevant check registered (never green-by-absence).
-# Exit codes: see agent_env.sh. Self-terminating (CLAUDE.md "No orphaned waits" #1).
+# Exit codes: see agent_env.sh. Self-terminating: iteration cap AND wall-clock deadline
+# (max-iter x interval + 300 s slack; PFB_WAIT_DEADLINE overrides) per CLAUDE.md
+# "No orphaned waits" #1.
 
 repo='' pr='' exclude='coderabbit|snyk' interval=30 max_iter=80
 
@@ -55,8 +57,14 @@ main() {
 	require_gh
 	require_tool jq
 
+	# Wall-clock deadline alongside the cap (CLAUDE.md "No orphaned waits" #1);
+	# PFB_WAIT_DEADLINE (epoch seconds) overrides for tests/ops.
+	deadline=${PFB_WAIT_DEADLINE:-$(( $(date +%s) + max_iter * interval + 300 ))}
 	i=0
 	while [ "$i" -lt "$max_iter" ]; do
+		if [ "$(date +%s)" -ge "$deadline" ]; then
+			break
+		fi
 		json=$(gh pr checks "$pr" --repo "$repo" --json name,bucket 2>/dev/null)
 		[ -n "$json" ] || json='[]'
 		v=$(evaluate_checks "$json")

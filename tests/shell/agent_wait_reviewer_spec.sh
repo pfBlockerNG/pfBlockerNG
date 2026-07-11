@@ -63,6 +63,12 @@ Describe 'wait-reviewer.sh classify()'
     The output should equal 'PAUSE'
   End
 
+  It 'reports PAUSE on the emoji-only pause marker'
+    issuec='⏸ CodeRabbit'
+    When call classify
+    The output should equal 'PAUSE'
+  End
+
   It 'keeps polling (empty verdict) on unrelated chatter'
     issuec='Walkthrough coming soon...'
     When call classify
@@ -103,5 +109,79 @@ Describe 'wait-reviewer.sh gh-unavailable contract'
     The status should equal 3
     The stderr should include 'GH-UNAVAILABLE'
     The stderr should include 'mcp__github__'
+  End
+End
+
+Describe 'wait-reviewer.sh login matching (anchored substring)'
+  # shellcheck disable=SC2034
+  AGENT_SOURCE_ONLY=1
+  Include scripts/agent/wait-reviewer.sh
+  since=''
+
+  match_ids() {
+    # $1 = handle, $2 = fixture JSON; prints matched ids via the REAL jq filter
+    handle=$1
+    printf '%s' "$2" | jq "[$(jq_filter created_at) | .id] | join(\",\")" -r
+  }
+  FIXTURE='[{"user":{"login":"coderabbitai[bot]"},"id":1},{"user":{"login":"not-coderabbitai"},"id":2},{"user":{"login":"copilot-pull-request-reviewer[bot]"},"id":3}]'
+
+  It 'matches the [bot]-suffixed login from the bare handle'
+    When call match_ids coderabbitai "$FIXTURE"
+    The output should equal '1'
+  End
+
+  It 'matches the prefixed bot login from the short handle'
+    When call match_ids copilot "$FIXTURE"
+    The output should equal '3'
+  End
+
+  It 'matches a full bracketed login given verbatim (no regex-metachar breakage)'
+    When call match_ids 'copilot-pull-request-reviewer[bot]' "$FIXTURE"
+    The output should equal '3'
+  End
+
+  It 'does NOT match a login that merely contains the handle (anchored, not free substring)'
+    When call match_ids coderabbitai '[{"user":{"login":"not-coderabbitai"},"id":2}]'
+    The output should equal ''
+  End
+End
+
+Describe 'wait-reviewer.sh loop verdicts (stub gh)'
+  setup_stub() {
+    stubdir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/ghstub.XXXXXX")"
+    printf '#!/bin/sh\ncase "$*" in *pulls/*/comments*) cat "$GH_STUB_INLINE" 2>/dev/null;; *) exit 0;; esac\n' > "$stubdir/gh"
+    chmod +x "$stubdir/gh"
+    PATH="$stubdir:$PATH"
+  }
+  cleanup_stub() { rm -rf "$stubdir"; }
+  Before 'setup_stub'
+  After 'cleanup_stub'
+  script="scripts/agent/wait-reviewer.sh"
+
+  It 'reports NOACK when the cap expires in ack mode with zero engagement'
+    unset GH_STUB_INLINE
+    When run sh "$script" --repo o/r --pr 1 --handle coderabbitai --until ack --interval 0 --max-iter 2 --presence 0
+    The line 1 of output should equal 'NOACK'
+  End
+
+  It 'reports NOTPRESENT after the presence window with zero engagement'
+    unset GH_STUB_INLINE
+    When run sh "$script" --repo o/r --pr 1 --handle coderabbitai --until finished --since x --interval 0 --max-iter 9 --presence 1
+    The line 1 of output should equal 'NOTPRESENT'
+  End
+
+  It 'reports FINISHED when an inline comment id appears'
+    export GH_STUB_INLINE="$stubdir/inline.txt"
+    echo 42 > "$GH_STUB_INLINE"
+    When run sh "$script" --repo o/r --pr 1 --handle coderabbitai --until finished --since x --interval 0 --max-iter 3
+    The output should include 'FINISHED'
+  End
+
+  It 'honours the wall-clock deadline even when content would be found (No-orphaned-waits #1)'
+    export GH_STUB_INLINE="$stubdir/inline.txt"
+    echo 42 > "$GH_STUB_INLINE"
+    export PFB_WAIT_DEADLINE=1
+    When run sh "$script" --repo o/r --pr 1 --handle coderabbitai --until finished --since x --interval 0 --max-iter 3
+    The line 1 of output should equal 'TIMEOUT'
   End
 End

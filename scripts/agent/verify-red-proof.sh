@@ -61,8 +61,12 @@ main() {
 
 	# shellcheck disable=SC2086 # srcs is a space-separated path list by construction
 	git -C "$worktree" checkout HEAD~1 -- $srcs || fail "REVERT-FAIL: could not check out HEAD~1 src paths"
-	# shellcheck disable=SC2064,SC2086 # expand now: restore exactly these paths on any exit
+	# shellcheck disable=SC2064,SC2086 # expand now: restore exactly these paths on any exit.
+	# INT/TERM trapped explicitly: under dash (Linux /bin/sh) an EXIT trap does NOT run
+	# on an untrapped signal, which would strand the src paths at HEAD~1.
 	trap "git -C '$worktree' checkout HEAD -- $srcs" EXIT
+	# shellcheck disable=SC2064,SC2086 # expand now, deliberately (same paths as above)
+	trap "git -C '$worktree' checkout HEAD -- $srcs; trap - EXIT; exit 130" INT TERM
 
 	if (cd "$worktree" && sh -c "$test_cmd" >/dev/null 2>&1); then
 		fail "RED-FAIL: test passed against HEAD~1 src -- it does not pin the defect"
@@ -71,7 +75,7 @@ main() {
 
 	# shellcheck disable=SC2086
 	git -C "$worktree" checkout HEAD -- $srcs || fail "RESTORE-FAIL"
-	trap - EXIT
+	trap - EXIT INT TERM
 
 	if ! (cd "$worktree" && sh -c "$test_cmd" >/dev/null 2>&1); then
 		fail "GREEN-FAIL: test fails against HEAD -- the fix does not satisfy its own pin"

@@ -64,3 +64,45 @@ Describe 'run-gates.sh gates_for()'
     The output should equal ''
   End
 End
+
+Describe 'run-gates.sh main (fixture repo, stubbed tools)'
+  gitc() { git -C "$repo" -c user.email=t@t -c user.name=t "$@"; }
+  make_repo() {
+    scrub_git_env
+    repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/rungates.XXXXXX")"
+    git -C "$repo" init -q
+    printf '#!/bin/sh\ntrue\n' > "$repo/gone.sh"
+    gitc add -A; gitc commit -qm base
+    base_sha=$(gitc rev-parse HEAD)
+    gitc rm -q gone.sh
+    printf '#!/bin/sh\ntrue\n' > "$repo/kept.sh"
+    gitc add -A; gitc commit -qm head
+    # Tool stubs: the LAST planned gate (shellspec) records that it actually ran.
+    stubdir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gatestub.XXXXXX")"
+    marker="$stubdir/last-gate-ran"
+    printf '#!/bin/sh\ntouch "%s"\n' "$marker" > "$stubdir/shellspec"
+    printf '#!/bin/sh\nexit 0\n' > "$stubdir/shellcheck"
+    chmod +x "$stubdir/shellspec" "$stubdir/shellcheck"
+    PATH="$stubdir:$PATH"
+  }
+  cleanup() { rm -rf "$repo" "$stubdir"; }
+  Before 'make_repo'
+  After 'cleanup'
+  script="scripts/agent/run-gates.sh"
+
+  It 'executes EVERY planned gate including the last one, and passes'
+    When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The status should equal 0
+    The output should include 'GATE PASS: sh -n kept.sh'
+    The output should include 'GATE PASS: shellspec'
+    The line 4 of output should equal 'GATES: PASS'
+    Assert [ -e "$marker" ]
+  End
+
+  It 'ignores deleted files instead of failing on their ghosts'
+    When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The status should equal 0
+    The output should not include 'gone.sh'
+    The output should include 'GATES: PASS'
+  End
+End

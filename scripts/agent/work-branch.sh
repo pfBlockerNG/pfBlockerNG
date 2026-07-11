@@ -24,9 +24,16 @@ slugify() {
 	s=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | LC_ALL=C tr -c 'a-z0-9' '-' \
 		| LC_ALL=C sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')
 	if [ "${#s}" -gt 30 ]; then
-		s=$(printf '%.30s' "$s")
-		case "$s" in
-			*-*) s=${s%-*} ;;   # drop the truncated last token: cut back to the last '-'
+		head30=$(printf '%.30s' "$s")
+		rest=${s#"$head30"}
+		case "$rest" in
+			-*) s=$head30 ;;   # the cut lands exactly on a token boundary: keep the prefix
+			*)
+				case "$head30" in
+					*-*) s=${head30%-*} ;;   # drop the straddling token: back to the last '-'
+					*) s=$head30 ;;
+				esac
+				;;
 		esac
 		s=$(printf '%s' "$s" | LC_ALL=C sed 's/-$//')
 	fi

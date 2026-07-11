@@ -14,13 +14,17 @@
 #
 # The LAST stdout line is the verdict; recent handle comments precede it as detail:
 #   ACK | NOACK | FINISHED | QUOTA <mins> | DECLINE | PAUSE | NOTPRESENT | TIMEOUT
-# Handle matching is a case-insensitive substring of the login, so `--handle copilot`
-# matches copilot-pull-request-reviewer[bot] and `coderabbitai` matches coderabbitai[bot].
+# Handle matching is case-insensitive and ANCHORED, so `--handle copilot` matches
+# copilot-pull-request-reviewer[bot] and `coderabbitai` matches coderabbitai[bot], but a
+# login that merely CONTAINS the handle does not count.
 # `--handle snyk` reads the head-SHA commit status/check-runs instead of comments (Snyk
 # posts no review comments); its `error` state reports QUOTA, never a clean pass.
+# Login match is ANCHORED: == handle, == handle[bot], or startswith(handle-).
+# A wall-clock deadline (max-iter x interval + 300 s slack; PFB_WAIT_DEADLINE overrides)
+# bounds the wait even when individual gh calls stall.
 # Exit codes: see agent_env.sh (0 verdict, 2 usage, 3 gh unavailable -> MCP fallback).
-# Self-terminating by construction (CLAUDE.md "No orphaned waits" #1): the cap and the
-# interval bound total wall clock; run it in the background and read the verdict.
+# Self-terminating by construction (CLAUDE.md "No orphaned waits" #1): iteration cap AND
+# wall-clock deadline; run it in the background and read the verdict.
 
 repo='' pr='' handle='' mode='finished' since='' presence=10 interval=30 max_iter=''
 inline='' review='' issuec='' sinfo=''
@@ -66,20 +70,25 @@ classify() {
 		printf 'DECLINE'
 		return 0
 	fi
-	if printf '%s' "$issuec" | grep -Eqi 'reviews? paused|paused .*review|review.*paused'; then
+	if printf '%s' "$issuec" | grep -Eqi 'reviews? paused|paused .*review|review.*paused|⏸'; then
 		printf 'PAUSE'
 		return 0
 	fi
 	return 0
 }
 
-# jq filter for one comment source: substring login match + optional time floor.
+# jq filter for one comment source: ANCHORED login match + optional time floor.
+# Anchored (== handle, == handle[bot], startswith(handle-)) rather than free substring:
+# a public account whose login merely CONTAINS the handle must not satisfy the wait,
+# and a verbatim bracketed login must match itself (no regex-metachar surface).
 jq_filter() {
 	# $1 = timestamp field name
+	# shellcheck disable=SC2016 # $l is jq syntax, not a shell expansion
+	m=$(printf '((.user.login|ascii_downcase) as $l | ($l == "%s") or ($l == "%s[bot]") or ($l | startswith("%s-")))' "$handle" "$handle" "$handle")
 	if [ -n "$since" ]; then
-		printf '.[] | select((.user.login|ascii_downcase)|test("%s")) | select(.%s > "%s")' "$handle" "$1" "$since"
+		printf '.[] | select(%s) | select(.%s > "%s")' "$m" "$1" "$since"
 	else
-		printf '.[] | select((.user.login|ascii_downcase)|test("%s"))' "$handle"
+		printf '.[] | select(%s)' "$m"
 	fi
 }
 
@@ -124,9 +133,16 @@ main() {
 		since=$(gh pr view "$pr" --repo "$repo" --json commits -q '.commits[-1].committedDate' 2>/dev/null)
 	fi
 
+	# Wall-clock deadline alongside the iteration cap (CLAUDE.md "No orphaned waits" #1):
+	# stalled gh calls must not stretch the wait past its budget. PFB_WAIT_DEADLINE
+	# (epoch seconds) overrides for tests/ops.
+	deadline=${PFB_WAIT_DEADLINE:-$(( $(date +%s) + max_iter * interval + 300 ))}
 	i=0
 	seen=0
 	while [ "$i" -lt "$max_iter" ]; do
+		if [ "$(date +%s)" -ge "$deadline" ]; then
+			break
+		fi
 		fetch_state
 		[ -n "${inline}${review}${issuec}$(printf '%s' "$sinfo" | tr -dc '[:lower:]')" ] && seen=1
 		v=$(classify)
