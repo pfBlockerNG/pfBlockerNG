@@ -35,6 +35,7 @@ import pytest
 
 from .. import helpers
 from .render_oracle import PhpErrorLogGuard, evaluate_render
+from .test_category_edit import CFG_DNSBL, _del_rowid, _free_rowid
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -1338,6 +1339,82 @@ def test_category_page_renders_reorder_wiring(path: str, expect_reorder_th: bool
         assert has_reorder_th, f"reorder <th> column missing on {path}"
     else:
         assert not has_reorder_th, f"GeoIP page must NOT render the reorder <th> column, found on {path}"
+
+
+# ADR-63 Phase 4 (issue #1147): pfblockerng_category_edit.php's staged reorder
+# wiring is gated server-side on sort=='no-sort' -- a fresh (hermetic) box
+# always renders sort mode, so the wiring's ABSENCE there is a hermetic check;
+# its PRESENCE needs one seeded no-sort row (dual-marked ui_e2e, like the
+# maxmind_key never-leak test above -- it mutates config.xml as setup).
+_CATEGORY_EDIT_IPV4_PAGE = "/pfblockerng/pfblockerng_category_edit.php?type=ipv4"
+_CATEGORY_EDIT_DNSBL_PAGE = "/pfblockerng/pfblockerng_category_edit.php?type=dnsbl"
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        pytest.param(_CATEGORY_EDIT_IPV4_PAGE, id="ipv4"),
+        pytest.param(_CATEGORY_EDIT_DNSBL_PAGE, id="dnsbl"),
+    ),
+)
+def test_category_edit_sort_mode_renders_no_reorder_wiring(
+    path: str, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """ADR-63 P4: a fresh (sort-mode, no seeded rows) category-edit page emits NO
+    staged-reorder wiring and NO retired Lmove/Xmove markup (issue #1147's old
+    mechanism, deleted this phase).
+
+    Hermetic -- a fresh box has no saved alias, so ``$rowdata[$rowid]['sort']``
+    is unset (never 'no-sort'), the branch this phase gates the wiring on.
+    """
+    resp = webui.get(path)
+    assert resp.status_code == 200, f"GET {path} -> HTTP {resp.status_code} (expected 200)"
+    body = resp.text
+    assert "pfb_reorder_init(" not in body, f"pfb_reorder_init( must not render in sort mode on {path}"
+    assert 'class="pfb-gutter"' not in body, f"pfb-gutter container class must not render in sort mode on {path}"
+    assert 'name="Lmove' not in body, f"retired Lmove markup found on {path}"
+    assert 'name="Xmove' not in body, f"retired Xmove markup found on {path}"
+
+
+@pytest.mark.ui_e2e
+def test_category_edit_no_sort_mode_renders_reorder_wiring(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:  # noqa: ARG001
+    """ADR-63 P4: a no-sort category-edit page emits the staged-reorder wiring +
+    the gutter container class, still with zero retired Lmove/Xmove markup.
+
+    Seeds one DNSBL alias row with ``sort='no-sort'`` directly via config (the
+    render gate itself, not the save path -- Tier B covers the save/persist path).
+    """
+    vm = smoke_vm
+    rowid = _free_rowid(vm, CFG_DNSBL)
+    base = f"{CFG_DNSBL}/{rowid}"
+    seed = helpers.php_eval(
+        vm,
+        f"config_set_path({helpers._php_str(f'{base}/aliasname')}, 'pfbrenderns');\n"
+        f"config_set_path({helpers._php_str(f'{base}/action')}, 'unbound');\n"
+        f"config_set_path({helpers._php_str(f'{base}/sort')}, 'no-sort');\n"
+        f"config_set_path({helpers._php_str(f'{base}/row/0/format')}, 'Auto');\n"
+        f"config_set_path({helpers._php_str(f'{base}/row/0/state')}, 'Disabled');\n"
+        f"config_set_path({helpers._php_str(f'{base}/row/0/url')}, '');\n"
+        f"config_set_path({helpers._php_str(f'{base}/row/0/header')}, 'pfbrenderns0');\n"
+        "write_config('ADR-63 P4 smoke: seed no-sort render row');\n"
+        "echo 'OK';",
+    )
+    assert "OK" in seed.stdout, f"failed to seed no-sort category row: {seed.stdout!r}"
+    try:
+        path = f"/pfblockerng/pfblockerng_category_edit.php?type=dnsbl&rowid={rowid}"
+        resp = webui.get(path)
+        assert resp.status_code == 200, f"GET {path} -> HTTP {resp.status_code} (expected 200)"
+        body = resp.text
+        assert "pfb_reorder_init('#sourcedefinitions .panel-body'" in body, (
+            f"pfb_reorder_init wiring missing in no-sort mode on {path}"
+        )
+        assert 'class="pfb-gutter"' in body, f"pfb-gutter container class missing in no-sort mode on {path}"
+        assert 'name="Lmove' not in body, f"retired Lmove markup found on {path}"
+        assert 'name="Xmove' not in body, f"retired Xmove markup found on {path}"
+    finally:
+        _del_rowid(vm, CFG_DNSBL, rowid)
 
 
 # ADR-23: the setup wizard's DNSBL step now surfaces ADR-13's pfb_dnsvip_auto auto-VIP

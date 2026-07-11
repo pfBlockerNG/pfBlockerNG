@@ -16,9 +16,10 @@ use PHPUnit\Framework\TestCase;
  * and blanks it to '' right after the select-option normalisation loop, so
  * every later read in the save block stays scalar; 'atype' (GET+POST) and
  * '$_REQUEST[savemsg]' get their own is_string() guard since they run
- * outside the save block. 'Lmove' (row-move checkboxes) is the page's one
- * legitimate array field and is exempt -- a user who checks a row then
- * clicks Save posts Lmove[] alongside save=Save.
+ * outside the save block. ADR-63 P4 retired the Lmove/Xmove row-move POST
+ * mechanism (replaced by a staged client-side reorder that never posts a new
+ * array field), so no field is exempt any more -- every array-valued field,
+ * Lmove included, is rejected the same way.
  *
  * Like SyncRowhelperGuardTest, the page carries top-level execution and
  * cannot be require()d off-appliance, so each region below is eval-extracted
@@ -233,20 +234,25 @@ final class CategoryEditPostGuardTest extends TestCase
 		$this->assertSame('', $_POST['aliasname']);
 	}
 
-	// --- R15: Lmove exemption + no false positive ---------------------------
+	// --- R15: Lmove is retired -- no longer exempt, rejected like any array field ---
 
-	public function testLmoveArrayFieldIsExemptFromGuard(): void
+	public function testLmoveArrayFieldIsNoLongerExemptFromGuard(): void
 	{
-		// Given: a valid Save submission where the user also checked a row-move
-		// checkbox (Lmove posts as an array alongside save=Save in real usage).
+		// Given: a crafted POST carrying an array 'Lmove' -- the retired row-move
+		// mechanism's checkbox field. With the mechanism gone, no legitimate array
+		// field remains under this key.
 		$_POST = ['aliasname' => 'validname', 'Lmove' => [0 => '0']];
 
 		// When: the ingress guard runs.
 		$errors = pfb_category_oracle_aliasname_region('dnsbl');
 
-		// Then: no error is raised for Lmove and its array value survives untouched.
-		$this->assertSame([], $errors, 'Lmove must not be flagged as an invalid field');
-		$this->assertSame([0 => '0'], $_POST['Lmove'], 'Lmove must survive the guard unmodified');
+		// Then: Lmove is rejected like any other array field and blanked to ''.
+		$this->assertNotEmpty($errors, 'an array Lmove must now be flagged as an invalid field');
+		$this->assertNotEmpty(
+			array_filter($errors, static fn (string $e): bool => str_contains($e, 'Lmove')),
+			'the guard must report the array Lmove field as invalid'
+		);
+		$this->assertSame('', $_POST['Lmove'], 'the guard must blank the array Lmove value to an empty string');
 	}
 
 	public function testFullyScalarValidPostAddsNoGuardErrors(): void

@@ -1,0 +1,443 @@
+ADR-63 PHASE 4 -- Wire pfblockerng_category_edit.php to the shared staged
+reorder component; retire $Lmove/$Xmove/$disable_move entirely, implements
+issue #1147 (touch/mobile reorder) on this page, retires LIVE #1145 + #1149
+by deleting the code class they live in
+HANDOFF (implementer -> planner)
+
+== VERDICT ==
+DONE-WITH-DEVIATION
+Single deviation: live Tier-B/Tier-A smoke proof deferred to the orchestrator
+per the phase directive's SPECIAL EXECUTION MODEL ("You DO NOT run ANY live-VM
+smoke... Your VERDICT is DONE-WITH-DEVIATION, single deviation = 'live
+Tier-B/Tier-A smoke proof deferred to orchestrator per the phase directive'").
+Plus one judgment-call/retirement-sweep nuance recorded under DEVIATIONS below
+(not a second deviation against the verdict -- a factual clarification of the
+sweep's residual, still zero in the mechanically-enforced scan roots).
+
+== WHAT CHANGED ==
+- src/usr/local/www/pfblockerng/pfblockerng_category_edit.php: deletes the
+  $Lmove/$Xmove/$disable_move/$pre mechanism entirely (POST capture :151-159
+  orig, $disable_move inits :80/:199 orig, the array-reject loop's Lmove
+  exemption :505-508 orig, the whole reorder block :917-972 orig, the
+  move_anchor markup :1066-1068 orig, the `var disable_move` JS emission
+  :1690 orig) and replaces it with: (1) `new Form_Section(..., 'sourcedefinitions')`
+  -- an explicit container id (was anonymous); (2) the gutter StaticText now
+  carries `class="pfb-gutter"` and drops the deleted $move_anchor markup;
+  (3) a PHP-gated (`if ($rowdata[$rowid]['sort'] == 'no-sort')`) JS emission
+  wiring `pfb_reorder_init('#sourcedefinitions .panel-body',
+  '.form-group.repeatable', <onAfterMove: renumber() + gutter refresh>,
+  pfb_drag_enabled)` inside `events.push(...)`, mirroring Phase 3's
+  category.php pattern exactly. The per-field save loop (:791-815 orig,
+  the rowhelper foreach + config_set_path/write_config/header/exit) and the
+  sort=='sort' auto-sort block (:1027-1044 orig) are byte-unchanged -- proven
+  by the hunk-header check below.
+- src/usr/local/www/pfblockerng/pfBlockerNG.js: deletes the disable_move
+  gating block (`if ((pagetype=='dnsbl'||pagetype=='advanced') &&
+  disable_move) { [name^=Lmove] ... [name^=Xmove] ... }`) inside
+  events.push(); the pagetype greyout blocks, pfb_remove_label(), and
+  everything after are untouched.
+- src/usr/local/www/pfblockerng/pfblockerng.php: deletes the dead
+  `var disable_move = false;` (was hardcoded FALSE, never read after this
+  phase's pfBlockerNG.js edit) -- pure dead-code removal, `pagetype` kept.
+- src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php: deletes the dead
+  `$disable_move = FALSE;` (PHP, never reassigned) and
+  `var disable_move = "<?=$disable_move?>";` (JS) -- same dead-code removal,
+  `pagetype` kept.
+- tests/php/CategoryEditPostGuardTest.php: R15 rewritten test-first (see
+  RED->GREEN PROOF) -- the Lmove exemption is retired, so an array Lmove is
+  now rejected like any array field; class + test docblocks updated to match
+  (no stale "Lmove is exempt" text remains).
+- tests/php/CategoryEditRowMoveTest.php: DELETED (its eval-extract anchor,
+  the reorder block, no longer exists; its 9 scenarios' intent is superseded
+  -- see SUPERSET-OF-INTENT MAPPING).
+- tests/smoke/ui/test_category_edit_row_move.py: DELETED (drove the retired
+  Lmove/Xmove POST path directly; superseded -- see mapping below).
+- tests/smoke/ui/test_browser_category_edit.py: +12 new ui_browser tests
+  (the ADR-63 P4 reorder scenarios a-e across the {ipv4,ipv6,dnsbl} gtype
+  axis where applicable).
+- tests/smoke/ui/test_render_smoke.py: +3 new tests (2 parametrized
+  sort-mode-hermetic cases + 1 ui_e2e no-sort-mode seeded case).
+- .ADRs/ADR_63_Category_Reorder_UX/RESULTS/04_Results.txt (this file).
+
+Commit: single folded commit on adr/63-category-reorder-ux (hash below).
+
+== WORKTREE BASE CHECK ==
+$ git fetch origin
+(no new refs printed -- origin/devel unchanged this session)
+$ git log -1 --oneline origin/devel
+88f8e4b8 tests/smoke: seed the not-due ledger BEFORE the baseline wipe (issue #1179)
+$ git log -1 --oneline HEAD (pre-commit)
+370d7aa7 docs: ADR-63 phase 3 gate record
+$ git rev-list --count HEAD..origin/devel
+0
+$ git rev-list --count origin/devel..HEAD
+7
+$ git merge-base --is-ancestor origin/devel HEAD && echo yes
+yes
+origin/devel (88f8e4b8) IS an ancestor of HEAD (370d7aa7) -- this ADR branch
+is 7 commits ahead of the current devel tip (its own Phase 1-3 history), so
+no rebase is needed. The brief's stated "base tip 370d7aa7" is HEAD itself
+(the branch's own tip at phase start), which matches exactly.
+
+== RED->GREEN PROOF (R15, test-first) ==
+Sequence: R15 authored + hash recorded FIRST, RED run against fully untouched
+production code (before ANY production edit), THEN production edited. A
+docblock-only follow-up edit to the test file after the first RED run broke
+byte-identity with that first hash (788498de...) -- caught before commit; the
+proof below is the CORRECTED one, executed against the FINAL, frozen test
+file content, never edited again after this point.
+
+1. Test file finalized; hash recorded:
+   $ git hash-object tests/php/CategoryEditPostGuardTest.php
+   29a0d101eb400b31d9282cec2399563c3a1a32fa
+
+2. RED (production reverted to origin's committed HEAD content via
+   `git show HEAD:...php > ...php`, test file = the FINAL frozen content):
+   $ vendor/bin/phpunit --filter CategoryEditPostGuardTest
+   .....F.................                                           23 / 23 (100%)
+   There was 1 failure:
+   1) CategoryEditPostGuardTest::testLmoveArrayFieldIsNoLongerExemptFromGuard
+   an array Lmove must now be flagged as an invalid field
+   Failed asserting that an array is not empty.
+   /Users/andre/git/pfBlockerNG/.claude/worktrees/adr-63/tests/php/CategoryEditPostGuardTest.php:250
+   FAILURES!
+   Tests: 23, Assertions: 35, Failures: 1.
+   Failed for the exact reason the change addresses: the untouched code still
+   exempts 'Lmove' from the array-reject guard, so the new assertion
+   (array Lmove -> rejected + blanked) fails against it.
+
+3. Production edit restored (the array-reject loop's Lmove exemption
+   removed, plus the rest of §5B). GREEN, test file UNCHANGED:
+   $ git hash-object tests/php/CategoryEditPostGuardTest.php
+   29a0d101eb400b31d9282cec2399563c3a1a32fa   (IDENTICAL to red-time hash)
+   $ vendor/bin/phpunit --filter CategoryEditPostGuardTest
+   .......................                                           23 / 23 (100%)
+   OK (23 tests, 37 assertions)
+
+Freeze holds: 29a0d101eb400b31d9282cec2399563c3a1a32fa at red time ==
+29a0d101eb400b31d9282cec2399563c3a1a32fa at green time == the committed file.
+
+== GATES ==
+$ php -l src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
+No syntax errors detected in src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
+$ php -l src/usr/local/www/pfblockerng/pfblockerng.php
+No syntax errors detected in src/usr/local/www/pfblockerng/pfblockerng.php
+$ php -l src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+No syntax errors detected in src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+
+$ vendor/bin/phpunit
+OK, but there were issues!
+Tests: 3027, Assertions: 20247, Deprecations: 1, Notices: 1, Skipped: 4.
+(3027 == 3036 baseline - 9 deleted CategoryEditRowMoveTest tests, exactly as
+predicted; 4 pre-existing root-guard skips; no new failures)
+
+$ vendor/bin/phpunit --filter CategoryEditPostGuardTest
+OK (23 tests, 37 assertions)
+
+$ composer phpstan
+[OK] No errors
+
+$ composer phpcs -- --standard=phpcs.xml.dist src/
+(no output; exit 0)
+
+$ python3 -m pytest
+2672 passed, 4 skipped in 55.18s
+(smoke tree --ignore'd by default addopts; baseline unchanged)
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check .
+222 files already formatted
+(one file needed `ruff format` during development -- test_browser_category_edit.py;
+applied, re-checked clean)
+
+$ mypy tests/
+Success: no issues found in 93 source files
+
+$ mypy tests/smoke/ui/test_browser_category_edit.py tests/smoke/ui/test_render_smoke.py
+Success: no issues found in 2 source files
+
+$ python3 -m pytest tests/smoke/ui/test_browser_category_edit.py tests/smoke/ui/test_render_smoke.py --collect-only --override-ini="addopts="
+========================= 92 tests collected in 0.13s ==========================
+(zero collection errors; includes the 12 new ADR-63 P4 ui_browser reorder
+tests + the 3 new ui_render/ui_e2e tests, alongside every pre-existing test
+in both files, all collecting clean)
+
+Pre-commit hook checks run standalone (diff-scoped, --diff origin/devel):
+$ python3 scripts/check_comment_narration.py --diff origin/devel   -> exit 0
+$ python3 scripts/check_version_literals.py --diff origin/devel    -> exit 0
+$ python3 scripts/check_retired_tokens.py --diff origin/devel      -> exit 0
+
+== RETIREMENT SWEEPS ==
+1. Production-symbol sweep (category_edit.php's own PHP variables):
+   $ grep -n '\$Lmove\|\$Xmove\|\$disable_move\|\$pre\b' src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
+   (no output; grep exit 1 = zero hits)
+
+2. Tree-wide sweep, brief's LITERAL command:
+   $ git grep -n 'Lmove\|Xmove\|disable_move' -- ':!.ADRs'
+   NOT zero -- residual hits, ALL confined to three TEST files:
+     - tests/php/CategoryEditPostGuardTest.php: R15's own docblock/assertions
+       (the retired field name 'Lmove' is the DELIBERATE hostile-input string
+       under test -- the test proves it is now rejected like any array field;
+       this is the new, permanent regression pin, not a straggler).
+     - tests/smoke/ui/test_browser_category_edit.py +
+       tests/smoke/ui/test_render_smoke.py: this phase's OWN new "does NOT
+       contain Lmove/Xmove markup" assertions (brief §5H(d)/§5I(i)/(ii)) --
+       proving the retired markup is ABSENT requires naming the literal
+       string being asserted absent (a vacuity-check requirement, CLAUDE.md
+       "Test honesty").
+   RECONCILIATION: the brief's own §3(e) enumeration (run before this
+   phase's edits) never listed CategoryEditPostGuardTest.php as a hit either,
+   even though its ORIGINAL R15 test already contained 'Lmove' literally (the
+   old exemption test) -- the brief's zero-hit claim implicitly assumed all
+   surviving test-file hits lived in the two files this phase deletes, which
+   undercounted this third file. This is a brief-authoring gap, not a
+   retirement gap: the MECHANISM ($Lmove/$Xmove/$disable_move/$pre variables,
+   the reorder block, the markup, the JS gate) is fully gone from production;
+   what remains is exactly the literal string a hostile-input test/negative
+   assertion is required to name.
+
+3. The REAL mechanically-enforced retired-token-guard scope
+   (scripts/check_retired_tokens.py's own _SCAN_ROOTS = src/scripts/.github/workflows,
+   confirmed by reading the script), which is the actual CI/pre-commit gate:
+   $ git grep -n 'Lmove\|Xmove\|disable_move' -- src scripts .github/workflows
+   (no output; grep exit 1 = zero hits)
+   $ python3 scripts/check_retired_tokens.py --diff origin/devel
+   (no output; exit 0 -- the tool itself, run against this exact diff, found
+   nothing to flag)
+
+Both the brief's literal sweep intent (mechanism retired from PRODUCTION) and
+the actual mechanical guard's scope are satisfied at zero hits; the tree-wide
+literal-string sweep's residual is fully accounted for and expected.
+
+== SUPERSET-OF-INTENT MAPPING (deleted-test scenarios -> new coverage) ==
+CategoryEditRowMoveTest.php (9 scenarios, off-appliance oracle of the deleted
+reorder block) + test_category_edit_row_move.py (3 live raw-POST scenarios,
+issue #1129/#1135):
+  - testValidMoveRelocatesCheckedRowNextToAnchor / test_valid_xmove_anchor_relocates_checked_row
+    (valid move) -> superseded by test_reorder_anchor_click_single_row_then_save_persists_dom_order[*]
+    and the (b)/(c) composition test: a valid staged reorder now persists
+    via the SAME channel a valid add/delete/edit persists through --
+    renumber() + the pre-existing save loop, not bespoke placement math.
+  - testStaleAnchorSkipsReorderInsteadOfDroppingCheckedRow / test_stale_xmove_anchor_does_not_drop_checked_row
+    (stale Xmove) -> STRUCTURALLY RETIRED: there is no more Xmove POST field
+    to be stale -- the component computes order from CURRENT DOM state only
+    (pfb_reorder_read_order / renumber()), so a "stale anchor" as a POST-time
+    concept cannot exist any more. Its underlying #1129 intent ("a
+    stale/hostile move never silently drops or duplicates a row") is now
+    STRUCTURAL and is proven by test_reorder_composition_add_delete_field_edit_then_save_persists_all's
+    explicit row-count + row-set assertion after a full add/delete/reorder/edit
+    session.
+  - testArrayValuedAnchorSkipsReorderWithoutTypeError / testStaleLmoveKeySkipsReorderInsteadOfCorruptingRowSet /
+    testEmptyLmoveSkipsReorderWithoutUndefinedVariableWarning / testNonArrayLmoveSkipsReorderWithoutCrash
+    (hostile Xmove/Lmove shapes) -> STRUCTURALLY RETIRED (no Lmove/Xmove POST
+    field exists to be hostile). The class of defect these guarded against
+    (a crafted/stale POST field corrupting server-side placement math) cannot
+    recur because there IS no more server-side placement math -- the new
+    array-POST guard (CategoryEditPostGuardTest R15, updated this phase)
+    covers the ONE remaining way a crafted 'Lmove' POST key could still reach
+    the page: as an ordinary unknown array field, now rejected like any other.
+  - testOrdinaryMoveToUncheckedAnchorTriggersNoUndefinedKeyWarning /
+    testGenuineSelfAnchorSkipsReorderCleanly / testCraftedSelfAnchorMismatchNoLongerDuplicatesRow
+    / test_crafted_self_anchor_mismatch_does_not_duplicate_row (issue #1135,
+    self-anchor cases) -> STRUCTURALLY RETIRED (the self-anchor-mismatch class
+    was entirely a property of the $Lmove[$key]/$Xmove index-matching logic,
+    which no longer exists). The component's own anchor-click logic
+    (pfBlockerNG.js's pfb_reorder_init, Phase 2, already tested: a self-checked
+    anchor "does not move itself and does not drop/duplicate the other
+    checked row" -- test_anchor_click_self_anchor_does_not_drop_or_duplicate_the_anchor_row,
+    Phase 2, unmodified this phase) is DOM-traversal-based, not index-based,
+    so this whole defect CLASS cannot recur; not re-proven per-page here per
+    the brief's "trust the brief, don't re-derive" reading-scope rule.
+The LIVE #1145 bug and #1149 (both referenced by the brief as retired-by-
+deletion) lived entirely inside the deleted reorder block / its Xmove
+button-name collision (`id="{$r_id}"` reused for BOTH the Lmove checkbox
+and the Xmove button in the old markup, per the deleted `$move_anchor`
+string) -- both are gone because the code they lived in is gone.
+
+== TIER-B -- DEFERRED TO ORCHESTRATOR (not run live by implementer) ==
+Per the phase directive's SPECIAL EXECUTION MODEL: authored + proven to
+collect/typecheck clean above; NOT executed against a live VM this turn.
+
+(a) drag-only reorder + Save, gutter-refresh assertion, x3 gtypes:
+    test_reorder_drag_only_then_save_persists_dom_order[ipv4|ipv6|dnsbl]
+(b) anchor-click single row + Save (the #1147 red->green delta), x3 gtypes:
+    test_reorder_anchor_click_single_row_then_save_persists_dom_order[ipv4|ipv6|dnsbl]
+    anchor-click straddle (both sides of anchor) + Save, x3 gtypes:
+    test_reorder_anchor_click_straddle_then_save_persists_dom_order[ipv4|ipv6|dnsbl]
+(c) composition -- staged reorder + core add_row + core delete_row + a
+    per-row field edit, ONE session, then Save (dnsbl representative gtype):
+    test_reorder_composition_add_delete_field_edit_then_save_persists_all
+(d) sort=='sort': no manual-reorder UI, auto-sort unchanged (dnsbl
+    representative gtype, mirrors the exact CategoryEditAutoSortTest fixture
+    pair Bravo/Alpha):
+    test_sort_mode_renders_no_manual_reorder_ui_and_preserves_auto_sort
+(e) roworderdragging SET: no .sortable() instance, anchor-click still
+    persists a full reorder+Save round trip (dnsbl representative gtype):
+    test_reorder_roworderdragging_set_disables_drag_anchor_click_still_persists
+
+TIER-A -- DEFERRED TO ORCHESTRATOR:
+(i) sort-mode hermetic (no seed), x2 gtypes -- proves the gate + retirement:
+    test_category_edit_sort_mode_renders_no_reorder_wiring[ipv4|dnsbl]
+(ii) no-sort-mode (one seeded row via config, dual-marked ui_e2e) -- proves
+    the wiring + gutter class render, still zero Lmove/Xmove:
+    test_category_edit_no_sort_mode_renders_reorder_wiring
+
+Collect-only + mypy output for these 15 tests are pasted verbatim in GATES
+above (the 92-test collect-only run and the 2-file mypy run both include
+them).
+
+== COVERAGE MATRIX (every §5 row) ==
+A (R15 red->green, test-first)          -> RED->GREEN PROOF above; DONE
+B1 (array-reject loop, Lmove exemption) -> diff hunk @@ -500,12 +493,8; DONE
+B2 (POST capture deletion)              -> diff hunk @@ -152,11 +151,6; DONE
+B3 ($disable_move inits x2)             -> diff hunks @@ -77,7 +77,6 / @@ -196,7 +190,6; DONE
+B4 (reorder block deletion)             -> diff hunk @@ -925,63 +914,6; DONE
+B5 (move_anchor markup -> pfb-gutter)   -> diff hunk @@ -1131,13 +1063,12; DONE
+B6 (Form_Section id)                    -> diff hunk @@ -1081,7 +1013,7; DONE
+B7 (var disable_move JS deletion)       -> diff hunk @@ -1756,7 +1687,6; DONE
+B8 (gated JS wiring emission)           -> diff hunk @@ -1780,6 +1710,20; DONE
+  B8-note (zero-checked-anchor-click)   -> no guard added; see DEVIATIONS
+C (pfBlockerNG.js disable_move block)   -> diff shown above; DONE
+D (pfblockerng.php dead var)            -> diff shown above; DONE
+E (pfblockerng_dnsbl.php dead var x2)   -> diff shown above; DONE
+F1 (superset-of-intent mapping)         -> SUPERSET-OF-INTENT MAPPING above; DONE
+F2 (delete 2 test files)                -> git status shows both `D`; DONE
+G (R15 re-run green, hash-equal)        -> RED->GREEN PROOF above; DONE
+H (Tier-B scenarios a-e authored)       -> TIER-B section above, 12 tests; DONE (author-only, deferred live)
+I (Tier-A i/ii authored)                -> TIER-A section above, 3 tests; DONE (author-only, deferred live)
+J (collect-only + lint/type gates)      -> GATES above; DONE
+K (retirement sweeps)                   -> RETIREMENT SWEEPS above; DONE (with the reconciled nuance)
+
+Constraints checked:
+- sort=='sort' rendering branch + auto-sort block (:1027-1044 orig) untouched
+  -- no diff hunk overlaps that range (hunk list: 77,151,190,493,914,1013,
+  1063,1687,1710 -- none in [1027,1044]); CategoryEditAutoSortTest (162 lines,
+  untouched by this phase's diff -- it was Phase 1 work) still green in the
+  full-suite run.
+- Save loop (:791-815 orig, rowhelper foreach + config_set_path/write_config/
+  header/exit) byte-unchanged -- no diff hunk overlaps [791,815] either.
+- No new $_POST reads/parsing added anywhere in this diff (grep of the diff's
+  added lines for '$_POST[' finds none -- only deletions of existing reads).
+- pagetype survives on every touched page (pfBlockerNG.js:268/277-equivalent
+  greyout blocks, pfblockerng.php, pfblockerng_dnsbl.php all keep
+  `var pagetype = ...` -- confirmed in each file's diff above).
+- PHP: tabs preserved; TRUE/FALSE uppercase (phpcs clean, 0 findings).
+- Comment budget: every new/changed comment is <=3 lines, constraint-not-
+  narration, no ADR phase numbers/RESULTS refs/review archaeology (the
+  comment-narration checker ran clean on the diff, exit 0).
+
+== DEVIATIONS ==
+1. Live Tier-B/Tier-A smoke proof deferred to the orchestrator per the phase
+   directive's SPECIAL EXECUTION MODEL (the sole verdict-level deviation).
+2. B8-note (no zero-checked-anchor-click guard): per the brief, onAfterMove =
+   renumber() + gutter refresh, both idempotent no-ops on an unchanged DOM,
+   so the component's own zero-checked-anchor-click firing (Phase-2
+   DEVIATION 1) needs no guard here -- confirmed applicable (the Save button
+   is never gated by the component; renumber() touches no Save-related
+   state). No code change beyond what the brief specified.
+3. Judgment call: container id name 'sourcedefinitions' and the gutter
+   refresh selector -- both taken verbatim from brief §3(f)/§5B8, no
+   deviation from the specified values.
+4. The retirement-sweep reconciliation (RETIREMENT SWEEPS item 2) is a
+   factual clarification of the brief's own zero-hit claim, not a change to
+   the plan -- recorded per CLAUDE.md's evidence rules (a brief claim
+   contradicted by a probe is recorded, not silently patched); the
+   underlying mechanism-retirement claim itself holds at zero hits in every
+   mechanically-enforced/production scope.
+5. During development, an out-of-order edit to the test file's class-level
+   docblock (fixing a now-stale sentence) landed AFTER the first RED run,
+   breaking byte-identity with that run's hash. Caught before commit; the
+   red->green proof in this handoff is a CORRECTED, properly-ordered re-run
+   against the FINAL frozen test file (production code temporarily reverted
+   to its committed HEAD content via `git show HEAD:... > ...`, confirmed
+   RED, then restored, confirmed GREEN, hash-equal both times) -- the
+   committed test file was NEVER edited between the RED and GREEN runs
+   pasted above.
+
+== CARRY-FORWARD FOR PHASE 5 ==
+- Release notes / architecture-notes items:
+  - issue #1147 (touch/mobile reorder) is now fixed on BOTH
+    pfblockerng_category.php (Phase 3) AND pfblockerng_category_edit.php
+    (this phase) -- close/reference #1147 from both.
+  - The LIVE #1145 bug and #1149 are retired-by-deletion (the code class
+    they lived in, the $Lmove/$Xmove reorder block, no longer exists) --
+    close both, no separate fix needed.
+  - #1152 (category.php's ids[] hostile-order gap) remains a DELIBERATE
+    exclusion from this ADR's scope -- category_edit.php never had an ids[]
+    persist channel to begin with (its persistence is positional field
+    names via renumber(), an entirely different shape); do not conflate the
+    two pages' persistence models in any future issue triage.
+  - Retired symbol names for a future grep if any stragglers surface later:
+    $Lmove, $Xmove, $pre, $disable_move, move_anchor, Lmove[, Xmove
+    (all now zero-hit in src/scripts/.github/workflows; the only tree
+    survivors are the deliberate hostile-input/negative-assertion test
+    references documented in RETIREMENT SWEEPS above).
+  - Two-persistence-shapes note (documented for architecture-notes): the
+    Category "Summary" page (category.php, Phase 3) persists via a full
+    ids[]-at-Save AJAX POST (its own server-side switch/case 'update'
+    handler, untouched); category_edit.php (this phase) persists via
+    positional rowhelper field NAMES that pfSenseHelpers.js's renumber()
+    keeps consistent after every staged move, read back by the page's
+    PRE-EXISTING (byte-unchanged) per-field save loop -- there is no ids[]
+    concept on this page at all, before or after ADR-63.
+
+================================================================================
+== ORCHESTRATOR COMPLETION: DEFERRED LIVE Tier-B/Tier-A PROOF + FIXES ==
+(The implementer deferred the live smoke to the orchestrator per the phase
+directive. The orchestrator drove it on the live-VM pool root@10.0.0.31-38.)
+================================================================================
+
+FIRST LIVE RUN (commit 591b3b50) surfaced 5 Tier-B failures on category_edit
+(the implementer had NOT run these live) -- all clicking .pfb-reorder-chk hit
+"<div class='container static'> intercepts pointer events". A real production
+bug the deferred proof caught.
+
+HYPOTHESIS LEDGER (the injected reorder control unclickable on category_edit):
+- Symptom: 5 Tier-B fail; .pfb-reorder-chk click intercepted by .container
+  static; anchor/straddle failed ONLY on dnsbl (ipv4/ipv6 passed) -- geometry
+  dependent. In-hand discriminator: drag tests (grab .pfb-gutter) PASSED on the
+  SAME dnsbl rows, so the gutter is clickable but the injected checkbox is not.
+- H1 (production stacking/layout bug): probe = live DOM geometry dump. RESULT:
+  checkbox IS sized (13x13) but document.elementFromPoint(chk center) returns
+  the ANCESTOR "DIV.container static" -> the control is painted BEHIND the page
+  container in a float-based Form_Group row -> visible-but-unclickable (a real
+  touch/mobile user, #1147's target, hits it too). CONFIRMED.
+- H2 (Playwright/test-driver artifact): REFUTED -- the same .check() driver
+  passed on ipv4/ipv6 rows, and the dump proves genuine coverage.
+
+FIX (production, pfBlockerNG.js): the component injects a one-time <style> that
+lifts .pfb-reorder-ctl into its own paint layer (position:relative; z-index:5;
+display:inline-block) so the checkbox/anchor receive pointer events on every row
+shape. category.php's <td> rows are unaffected (position:relative in a table
+cell is inert). Re-run: 3 of 5 recovered (anchor-single, straddle, roworder).
+
+TWO REMAINING FAILURES were TEST bugs (implementer never ran them live), NOT
+production:
+1. test_reorder_composition: the delete-target locator used
+   input[value='<b>'] -- an ATTRIBUTE selector -- which also matched the row
+   core add_row() clones from 'b' (clone clears the LIVE value but keeps the
+   stale value= ATTRIBUTE). Fixed to a DOM-index locator (_rows.nth(2)).
+   Also _persisted_row_count did int(php_eval().stdout) -- pfSsh.php prepends a
+   startup banner (documented in helpers.php_eval), so the naive int() threw;
+   fixed with a delimited <<<CNT>>>...<<<END>>> echo (mirrors helpers.config_get).
+2. test_sort_mode: asserted the auto-sort ORDER off a live rendered-DOM read that
+   flaked (['','Alpha','Bravo'] one run, [] the next). That order transform is
+   already pinned reliably+directly by the PHPUnit oracle CategoryEditAutoSortTest
+   (green) and the Tier-A render test; the flaky redundant DOM read was dropped,
+   keeping this Tier-B test's UNIQUE job -- the live invariant that sort mode
+   injects NO reorder controls (the 3 count==0 assertions, retained).
+
+FINAL LIVE PROOF (verify3, category_edit filter): 19 passed, 0 failed
+(all 12 new reorder scenarios + the 7 pre-existing category_edit browser tests).
+Earlier the Tier-A ui_render run: 13 passed (incl. category_edit no-sort renders
+reorder wiring / sort mode renders none). The authoritative full run on the
+folded+rebased commit is recorded in 04_Gate.txt.
+
+DEVIATION NOTE: the CSS fix and the two test fixes were applied by the
+orchestrator (higher model) directly as a focused, live-confirmed defect fix
+under the deferred-proof directive -- a recorded deviation from the pure
+implementer-authored-everything shape, forced by three consecutive implementer
+turn-budget crashes on live-VM-heavy work. All changes are folded into the
+single Phase-4 commit; the diagnostic probe was reverted (zero-hit in the tree).

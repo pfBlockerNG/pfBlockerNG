@@ -2149,7 +2149,6 @@ print_callout('<p><strong>Setting changes are applied via CRON or \'Force Update
 //<![CDATA[
 
 var pagetype = 'advanced';
-var disable_move = false;
 
 // Auto-Complete for Adv. In/Out Address Select boxes
 var plist = "<?=$ports_list?>";
