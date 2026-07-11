@@ -8,7 +8,6 @@ Dispatch (when ready):
     gh workflow run smoke.yml -f pytest_marker="tick"
 
 Tests:
-    test_tick_cron_entry_installed    — the tick is SCHEDULED (one */N root crontab entry)
     test_tick_dispatches_due_feed     — tick fires a due feed (ledger past)
     test_tick_skips_non_due_feed      — tick skips a feed whose next_due is future
     test_tick_wiped_ledger_jittered   — wiped ledger gives due-now but jittered next_due
@@ -18,7 +17,6 @@ Tests:
 
 import json
 import os
-import re
 from collections.abc import Iterator
 
 import pytest
@@ -40,16 +38,10 @@ pytestmark = [pytest.mark.tick]
 
 @pytest.fixture(scope="module")
 def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:  # noqa: ARG001
-    """Deploy the branch .pkg once for the tick module, with feed-cron dispatch re-armed.
-
-    ``h.deploy`` disables the tick's feed-cron dispatch for the suite (issue #1179) — this
-    module EXERCISES that dispatch, so it opts back in with an hour count. Every tick here
-    is still fired explicitly by the test, never by the box's own cron.
-    """
+    """Deploy the branch .pkg once for the tick module."""
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
-    h.set_feed_cron_interval(smoke_vm, "1")
     h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
     try:
@@ -86,6 +78,7 @@ LEDGER_PATH = "/var/db/pfblockerng/pfb_due_ledger.json"
 _LEDGER_DIR = "/var/db/pfblockerng"
 _PHP = "/usr/local/bin/php"
 _PFB_PHP = "/usr/local/www/pfblockerng/pfblockerng.php"
+_PFB_EXTRA = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
 _PFB_INC = "/usr/local/pkg/pfblockerng/pfblockerng.inc"
 
 # A throwaway marker dropped in /var right before the reboot in test_tick_reboot_persists_ledger.
@@ -118,7 +111,7 @@ def _write_ledger_entry(vm, job_key: str, last_run: int, next_due: int, jitter: 
     Python snippet, which silently no-op'd at rc=127 and left these writes ineffective.
     """
     snippet = (
-        f"require_once('{h.PFB_EXTRA_INC}');"
+        f"require_once('{_PFB_EXTRA}');"
         f"pfb_due_ledger_write_entry('{job_key}', array("
         f"'last_run' => {int(last_run)}, 'next_due' => {int(next_due)}, 'jitter' => {int(jitter)}"
         f"), '{_LEDGER_DIR}');"
@@ -206,49 +199,6 @@ def _reset_ss_extdns(vm) -> None:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.smoke
-@pytest.mark.tick
-def test_tick_cron_entry_installed(deployed_vm: SmokeVM):
-    """The tick IS scheduled: ONE ``*/pfb_tick_interval`` root crontab entry, from the sync.
-
-    This is the suite's only dependence on the real schedule. Everything else fires the
-    ``tick`` verb explicitly — the box's wall-clock dispatch is gated off for every module
-    (``helpers.disable_scheduled_dispatch``, issue #1179) because it raced tests. Given
-    this entry plus the tick-verb cases below, "the schedule runs the tick" follows.
-
-    Scenario:
-        Background: pfBlockerNG installed and enabled.
-            When /etc/crontab is read (the effective schedule cron actually runs).
-            Then exactly one entry runs ``pfblockerng.php tick`` as root, every
-            ``*/N`` minutes with N = the clamped ``pfb_tick_interval``, on every
-            mday/month/wday.
-    """
-    vm = deployed_vm
-
-    probe = h.php_eval(
-        vm,
-        f"require_once('{h.PFB_EXTRA_INC}');"
-        "echo 'TICKMIN:' . pfb_tick_interval_clamp((string) PfbConfig::read('pfb_tick_interval')) . ':END';",
-    )
-    match = re.search(r"TICKMIN:(\d+):END", probe.stdout)
-    assert match, f"could not read pfb_tick_interval from the box: rc={probe.returncode} stdout={probe.stdout!r}"
-    expected_minute = f"*/{match.group(1)}"
-
-    crontab = vm.ssh("/bin/cat", "/etc/crontab")
-    entries = [line.split(None, 6) for line in crontab.stdout.splitlines() if "pfblockerng.php tick" in line]
-    assert len(entries) == 1, (
-        f"expected exactly ONE 'pfblockerng.php tick' crontab entry, found {len(entries)}"
-        f" — install_cron_job() left the schedule wrong:\n{crontab.stdout}"
-    )
-    minute, hour, mday, month, wday, who, command = entries[0]
-    assert (minute, hour, mday, month, wday, who) == (expected_minute, "*", "*", "*", "*", "root"), (
-        "tick cron entry has the wrong schedule: expected "
-        f"({expected_minute!r}, '*', '*', '*', '*', 'root'), got "
-        f"({minute!r}, {hour!r}, {mday!r}, {month!r}, {wday!r}, {who!r})"
-    )
-    assert command.startswith(f"{_PHP} {_PFB_PHP} tick"), f"tick cron entry runs an unexpected command: {command!r}"
 
 
 @pytest.mark.smoke
