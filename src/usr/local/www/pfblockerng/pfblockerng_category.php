@@ -416,6 +416,9 @@ if (isset($savemsg)) {
 						<th><?=gettext('Logging');?></th>
 					<?php endif; ?>
 					<th><!----- Buttons -----></th>
+					<?php if ($gtype != 'geoip'): ?>
+					<th><!----- Reorder -----></th>
+					<?php endif; ?>
 				</tr>
 			</thead>
 			<tbody>
@@ -628,6 +631,9 @@ else {
 //<![CDATA[
 
 var pagetype = null;
+// ADR-63: mirrors system/webgui/roworderdragging -- OFF (default) keeps drag
+// enabled alongside anchor-click; ON restricts reordering to anchor-click only.
+var pfb_drag_enabled = <?=config_path_enabled('system/webgui', 'roworderdragging') ? 'false' : 'true';?>;
 
 function pfb_rownamedelete() {
 	if (confirm('Delete selected entry?')) {
@@ -642,7 +648,7 @@ events.push(function() {
 		if ($('#pfb_table table tbody').length == 0) {
 			var ids = '';
 		} else {
-			var ids = $('#pfb_table table tbody').sortable('serialize', {key:"ids[]"});
+			var ids = pfb_reorder_read_order('#pfb_table table tbody', 'tr.sortable');
 		}
 		var postdata = $('#iform').serialize();
 
@@ -683,19 +689,9 @@ events.push(function() {
 		}
 	}
 
-	// Move line (User mouse drag)
-	$('#pfb_table table tbody').sortable({
-		items: 'tr.sortable',
-		cursor: 'move',
-		distance: 10,
-		opacity: 0.8,
-		helper: function(e, ui) {
-			ui.children().each(function() {
-				$(this).width($(this).width());
-			});
-			return ui;
-			},
-	});
+	// Move line (User mouse drag) + anchor-click (issue #1147); drag stays
+	// gated by pfb_drag_enabled (system/webgui/roworderdragging).
+	pfb_reorder_init('#pfb_table table tbody', 'tr.sortable', null, pfb_drag_enabled);
 
 	$('#savemsg_json').hide();
 	$('#btnsave').click(function() {

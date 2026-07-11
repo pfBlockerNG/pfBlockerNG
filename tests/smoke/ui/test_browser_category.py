@@ -61,16 +61,25 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from .. import helpers
+
 # Tier-B dep: guard the import so collecting this module without Playwright
 # installed (this dev venv, or any host that skips the browser tier) does not
 # hard-error. Everything below references `expect` from the imported module.
 from .conftest import mask_page_identity
+from .test_category import (
+    CONF_NODE_BY_GTYPE,
+    _page_url,
+    _restore_node,
+    _seed_three_rows,
+    _snapshot_node,
+)
 
 sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed (Tier-B browser dep)")
 expect = sync_api.expect
 
 if TYPE_CHECKING:
-    from playwright.sync_api import Page
+    from playwright.sync_api import Locator, Page
 
     from .webui import WebUI
 
@@ -252,3 +261,396 @@ def test_row_delete_helper_is_wired_and_confirm_gates_it(
     # form submit -> no navigation, no delete).
     assert DELETE_CONFIRM_MSG in seen, f"delete confirm() did not fire; dialogs seen: {seen!r}"
     assert "pfblockerng_category.php" in page.url, f"cancel still navigated away (url={page.url!r})"
+
+
+# --------------------------------------------------------------------------- #
+# ADR-63 Phase 3 (issue #1147): anchor-click reorder wired onto the LIVE
+# category.php page (drag preserved). Unlike test_reorder_component.py (the
+# standalone component contract against static fixtures), these drive the
+# real page's AJAX Save -> config.xml persistence, seeding/restoring rows the
+# same way test_category.py's ids[] oracles do.
+# --------------------------------------------------------------------------- #
+
+
+def _names(gtype: str) -> list[str]:
+    """Three short (< 20 char), word-only aliasnames -- render unabridged."""
+    return [f"pfbr{gtype}a", f"pfbr{gtype}b", f"pfbr{gtype}c"]
+
+
+def _rows(page: Page) -> Locator:
+    return page.locator("tr.sortable")
+
+
+def _row_names(page: Page) -> list[str]:
+    """Rendered Name-column text for every row, in current DOM order."""
+    return [t.strip() for t in page.locator("tr.sortable td:first-child").all_text_contents()]
+
+
+def _check_row(page: Page, i: int) -> None:
+    _rows(page).nth(i).locator(".pfb-reorder-chk").check()
+
+
+def _click_anchor(page: Page, i: int, *, shift: bool = False) -> None:
+    _rows(page).nth(i).locator(".pfb-reorder-anchor").click(modifiers=["Shift"] if shift else None)
+
+
+def _drag_row(page: Page, src: int, dst: int) -> None:
+    """Drag row ``src`` to below row ``dst`` via real mouse events (distance:10 threshold).
+
+    Grabs the first (Name) ``<td>`` -- plain text, not a form control -- since
+    jQuery UI sortable's default ``cancel`` selector excludes
+    input/textarea/button/select/option from starting a drag.
+    """
+    handle = _rows(page).nth(src).locator("td").first
+    target = _rows(page).nth(dst)
+    hb = handle.bounding_box()
+    tb = target.bounding_box()
+    assert hb is not None and tb is not None, "could not compute bounding boxes for drag handle/target"
+    start_x, start_y = hb["x"] + hb["width"] / 2, hb["y"] + hb["height"] / 2
+    page.mouse.move(start_x, start_y)
+    page.mouse.down()
+    page.mouse.move(start_x, start_y + 20, steps=5)
+    page.mouse.move(tb["x"] + tb["width"] / 2, tb["y"] + tb["height"] + 5, steps=10)
+    page.mouse.up()
+
+
+def _save_via_ui(page: Page) -> None:
+    """Click #btnsave, ACCEPT the save confirm(), wait for the resulting reload.
+
+    Unlike the cancel-only tests above, this drives the real AJAX POST ->
+    ``$('form').submit()`` -> full-page reload path (save_new_changes(),
+    category.php:646-671), so the persisted config can be verified over SSH.
+    """
+    seen: list[str] = []
+
+    def _on_dialog(dialog: object) -> None:
+        seen.append(dialog.message)  # type: ignore[attr-defined]
+        dialog.accept()  # type: ignore[attr-defined]
+
+    page.on("dialog", _on_dialog)
+    with page.expect_navigation(wait_until="networkidle", timeout=JS_TIMEOUT_MS * 3):
+        page.locator("#btnsave").click()
+    page.remove_listener("dialog", _on_dialog)
+    assert SAVE_CONFIRM_MSG in seen, f"save confirm() did not fire; dialogs seen: {seen!r}"
+
+
+def _persisted_names(vm: helpers.SmokeVM, node: str) -> list[str]:
+    """The three seeded rows' aliasname, read from config.xml over SSH, in index order."""
+    return [helpers.config_get(vm, f"{node}/{i}/aliasname") for i in range(3)]
+
+
+_ROWORDER_PATH = "system/webgui/roworderdragging"
+
+
+def _roworderdragging_enabled(vm: helpers.SmokeVM) -> bool:
+    """Whether system/webgui/roworderdragging is present (pfSense checkbox: presence = ON)."""
+    result = helpers.php_eval(vm, "echo config_path_enabled('system/webgui', 'roworderdragging') ? '1' : '0';")
+    return result.stdout.strip().endswith("1")
+
+
+def _set_roworderdragging(vm: helpers.SmokeVM, enabled: bool) -> None:
+    """Set/clear the checkbox node -- presence = ON, matches config_path_enabled semantics."""
+    if enabled:
+        snippet = (
+            f"config_set_path({helpers._php_str(_ROWORDER_PATH)}, '');\n"
+            "write_config('pfBlockerNG smoke: set roworderdragging');\n"
+            "echo 'OK';"
+        )
+    else:
+        snippet = (
+            f"config_del_path({helpers._php_str(_ROWORDER_PATH)});\n"
+            "write_config('pfBlockerNG smoke: clear roworderdragging');\n"
+            "echo 'OK';"
+        )
+    result = helpers.php_eval(vm, snippet)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_set_roworderdragging({enabled}) failed: rc={result.returncode} {result.stderr!r}")
+
+
+@pytest.mark.parametrize("gtype", sorted(CONF_NODE_BY_GTYPE))
+def test_reorder_drag_only_then_save_persists_dom_order(
+    browser_page: Page,
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    gtype: str,
+) -> None:
+    """Drag-only reorder (no anchor-click), then Save: persisted order == DOM order.
+
+    Behaviour-preserving regression: drag continues to reorder exactly as
+    before this wiring landed -- only the client-side order-READ swapped from
+    ``sortable('serialize')`` to ``pfb_reorder_read_order()``; the drag
+    mechanics themselves (jQuery UI sortable options) are unchanged.
+    """
+    vm = smoke_vm
+    node = CONF_NODE_BY_GTYPE[gtype]
+    names = _names(gtype)
+    snap = _snapshot_node(vm, node)
+    try:
+        _seed_three_rows(vm, node, gtype, names)
+        page = browser_page
+        _open(page, webui, _page_url(gtype))
+
+        before = _row_names(page)
+        assert before == names, f"seeded rows did not render in order {names}, got {before!r}"
+
+        # Drag row 0 (a) below row 2 (c) -> DOM order becomes [b, c, a].
+        _drag_row(page, 0, 2)
+        after_drag = _row_names(page)
+        expected = [names[1], names[2], names[0]]
+        assert after_drag == expected, f"drag did not relocate row 0: got {after_drag!r}, expected {expected!r}"
+
+        _save_via_ui(page)
+
+        persisted = _persisted_names(vm, node)
+        assert persisted == expected, (
+            f"drag-only Save did not persist the DOM order for gtype={gtype!r}: "
+            f"expected {expected!r}, got {persisted!r}"
+        )
+    finally:
+        _restore_node(vm, node, snap)
+
+
+@pytest.mark.parametrize("gtype", sorted(CONF_NODE_BY_GTYPE))
+def test_reorder_anchor_click_single_row_then_save_persists_dom_order(
+    browser_page: Page,
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    gtype: str,
+) -> None:
+    """Anchor-click (single checked row, no drag) reorder, then Save: persisted == DOM order.
+
+    This is the red->green delta (issue #1147): before this phase's wiring the
+    page offered NO anchor-click control -- a touch/mobile user had no way to
+    reorder rows at all.
+    """
+    vm = smoke_vm
+    node = CONF_NODE_BY_GTYPE[gtype]
+    names = _names(gtype)
+    snap = _snapshot_node(vm, node)
+    try:
+        _seed_three_rows(vm, node, gtype, names)
+        page = browser_page
+        _open(page, webui, _page_url(gtype))
+
+        before = _row_names(page)
+        assert before == names, f"seeded rows did not render in order {names}, got {before!r}"
+
+        # Check row 2 (c), plain-anchor-click row 0 (a) -> c moves before a: [c, a, b].
+        _check_row(page, 2)
+        _click_anchor(page, 0, shift=False)
+        after_click = _row_names(page)
+        expected = [names[2], names[0], names[1]]
+        assert after_click == expected, (
+            f"anchor-click did not relocate row 2: got {after_click!r}, expected {expected!r}"
+        )
+
+        _save_via_ui(page)
+
+        persisted = _persisted_names(vm, node)
+        assert persisted == expected, (
+            f"anchor-click-only Save did not persist the DOM order for gtype={gtype!r}: "
+            f"expected {expected!r}, got {persisted!r}"
+        )
+    finally:
+        _restore_node(vm, node, snap)
+
+
+@pytest.mark.parametrize("gtype", sorted(CONF_NODE_BY_GTYPE))
+def test_reorder_anchor_click_straddle_then_save_persists_dom_order(
+    browser_page: Page,
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    gtype: str,
+) -> None:
+    """Checked rows straddling the anchor on both sides, then Save: persisted == DOM order.
+
+    Given [a, b, c] (indices 0,1,2). Check a (0) and c (2); plain-anchor-click
+    b (1): both relocate immediately before b, preserving their relative
+    order (a before c) -- final order [a, c, b].
+    """
+    vm = smoke_vm
+    node = CONF_NODE_BY_GTYPE[gtype]
+    names = _names(gtype)
+    snap = _snapshot_node(vm, node)
+    try:
+        _seed_three_rows(vm, node, gtype, names)
+        page = browser_page
+        _open(page, webui, _page_url(gtype))
+
+        before = _row_names(page)
+        assert before == names, f"seeded rows did not render in order {names}, got {before!r}"
+
+        _check_row(page, 0)
+        _check_row(page, 2)
+        _click_anchor(page, 1, shift=False)
+        after_click = _row_names(page)
+        expected = [names[0], names[2], names[1]]
+        assert after_click == expected, f"straddle anchor-click produced {after_click!r}, expected {expected!r}"
+
+        _save_via_ui(page)
+
+        persisted = _persisted_names(vm, node)
+        assert persisted == expected, (
+            f"straddle anchor-click Save did not persist the DOM order for gtype={gtype!r}: "
+            f"expected {expected!r}, got {persisted!r}"
+        )
+    finally:
+        _restore_node(vm, node, snap)
+
+
+@pytest.mark.parametrize("gtype", sorted(CONF_NODE_BY_GTYPE))
+def test_reorder_mixed_drag_then_anchor_click_then_save_persists_dom_order(
+    browser_page: Page,
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    gtype: str,
+) -> None:
+    """One drag move, then one anchor-click move, in the SAME session, then Save.
+
+    Given [a, b, c]. Drag a (0) below b (1) -> [b, a, c]. Then check a (now
+    index 1), shift-anchor-click c (now index 2, after) -> a relocates after
+    c -> [b, c, a].
+    """
+    vm = smoke_vm
+    node = CONF_NODE_BY_GTYPE[gtype]
+    names = _names(gtype)
+    snap = _snapshot_node(vm, node)
+    try:
+        _seed_three_rows(vm, node, gtype, names)
+        page = browser_page
+        _open(page, webui, _page_url(gtype))
+
+        before = _row_names(page)
+        assert before == names, f"seeded rows did not render in order {names}, got {before!r}"
+
+        # Drag: a (0) below b (1) -> [b, a, c]
+        _drag_row(page, 0, 1)
+        after_drag = _row_names(page)
+        expected_after_drag = [names[1], names[0], names[2]]
+        assert after_drag == expected_after_drag, f"drag step produced {after_drag!r}, expected {expected_after_drag!r}"
+
+        # Anchor-click: check a (now index 1), shift-click c (now index 2) -> after c: [b, c, a]
+        _check_row(page, 1)
+        _click_anchor(page, 2, shift=True)
+        after_click = _row_names(page)
+        expected_final = [names[1], names[2], names[0]]
+        assert after_click == expected_final, f"mixed drag+anchor produced {after_click!r}, expected {expected_final!r}"
+
+        _save_via_ui(page)
+
+        persisted = _persisted_names(vm, node)
+        assert persisted == expected_final, (
+            f"mixed drag+anchor Save did not persist the DOM order for gtype={gtype!r}: "
+            f"expected {expected_final!r}, got {persisted!r}"
+        )
+    finally:
+        _restore_node(vm, node, snap)
+
+
+def test_reorder_roworderdragging_set_disables_drag_anchor_click_still_persists(
+    browser_page: Page,
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """system/webgui/roworderdragging SET: no drag handles render; anchor-click still persists.
+
+    Decision 2 (ADR-63): dragEnabled = !roworderdragging. When the admin has
+    globally disabled row-drag, the Category page must still offer the
+    anchor-click reorder as a full-fidelity fallback -- proving both the
+    render gate (no .sortable() instance) and the FULL reorder+Save+reload
+    round trip (a render check alone would miss a serialize-time regression).
+    """
+    vm = smoke_vm
+    node = CONF_NODE_BY_GTYPE["ipv4"]
+    names = _names("ipv4")
+    was_enabled = _roworderdragging_enabled(vm)
+    snap = _snapshot_node(vm, node)
+    try:
+        _set_roworderdragging(vm, True)
+        _seed_three_rows(vm, node, "ipv4", names)
+        page = browser_page
+        _open(page, webui, _page_url("ipv4"))
+
+        has_instance = page.evaluate("() => $('#pfb_table table tbody').sortable('instance') !== undefined")
+        assert has_instance is False, "roworderdragging SET must never initialise .sortable()"
+
+        before = _row_names(page)
+        assert before == names, f"seeded rows did not render in order {names}, got {before!r}"
+
+        _check_row(page, 2)
+        _click_anchor(page, 0, shift=False)
+        after_click = _row_names(page)
+        expected = [names[2], names[0], names[1]]
+        assert after_click == expected, f"anchor-click (drag disabled) produced {after_click!r}, expected {expected!r}"
+
+        _save_via_ui(page)
+
+        persisted = _persisted_names(vm, node)
+        assert persisted == expected, (
+            f"anchor-click Save under roworderdragging=SET did not persist: expected {expected!r}, got {persisted!r}"
+        )
+    finally:
+        _restore_node(vm, node, snap)
+        _set_roworderdragging(vm, was_enabled)
+
+
+def test_reorder_save_with_field_edit_only_and_zero_reorder_still_persists_field(
+    browser_page: Page,
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """A Save with a per-row field edit and NO drag/anchor-click still lands the edit.
+
+    Proves #btnsave is never gated by a staged reorder (Constraints: onAfterMove
+    is passed as null, so a staged or zero-checked anchor-click can never touch
+    Save-button/dirty state).
+    """
+    vm = smoke_vm
+    node = CONF_NODE_BY_GTYPE["ipv4"]
+    names = _names("ipv4")
+    snap = _snapshot_node(vm, node)
+    try:
+        _seed_three_rows(vm, node, "ipv4", names)
+        page = browser_page
+        _open(page, webui, _page_url("ipv4"))
+
+        before = _row_names(page)
+        assert before == names, f"seeded rows did not render in order {names}, got {before!r}"
+        before_action = helpers.config_get(vm, f"{node}/0/action")
+        assert before_action == "Deny_Inbound", f"seed action must start Deny_Inbound, got {before_action!r}"
+
+        # Field edit only -- no checkbox, no anchor-click, no drag.
+        page.locator("select[id='action-0']").select_option("Permit_Both")
+
+        _save_via_ui(page)
+
+        persisted_order = _persisted_names(vm, node)
+        assert persisted_order == names, (
+            f"a field-edit-only Save (zero reorder staged) must leave row order unchanged: "
+            f"expected {names!r}, got {persisted_order!r}"
+        )
+        persisted_action = helpers.config_get(vm, f"{node}/0/action")
+        assert persisted_action == "Permit_Both", (
+            f"field-edit-only Save did not persist the action edit, got {persisted_action!r}"
+        )
+    finally:
+        _restore_node(vm, node, snap)
+
+
+def test_reorder_geoip_page_injects_no_anchor_ui(
+    browser_page: Page,
+    webui: WebUI,
+) -> None:
+    """GeoIP renders NO reorder anchor/checkbox controls (container '#pfb_table' resolves empty).
+
+    issue #1201: GeoIP has no ids[] persist sink; pfb_reorder_init('#pfb_table
+    ...') on the GeoIP page (whose table id is 'pfb_table_geoip') matches zero
+    elements, so it injects nothing -- proven directly against the rendered DOM.
+    """
+    page = browser_page
+    _open(page, webui, _page_url("geoip"))
+
+    anchors = page.locator(".pfb-reorder-anchor")
+    assert anchors.count() == 0, f"GeoIP page must inject NO reorder anchors, found {anchors.count()}"
+    checks = page.locator(".pfb-reorder-chk")
+    assert checks.count() == 0, f"GeoIP page must inject NO reorder checkboxes, found {checks.count()}"

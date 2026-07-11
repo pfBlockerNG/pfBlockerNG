@@ -1304,6 +1304,42 @@ def test_states_removal_help_references_ip_tab(webui: WebUI, php_error_log_guard
     )
 
 
+_CATEGORY_IPV4_PAGE = "/pfblockerng/pfblockerng_category.php?type=ipv4"
+_CATEGORY_DNSBL_PAGE = "/pfblockerng/pfblockerng_category.php?type=dnsbl"
+_CATEGORY_GEOIP_PAGE = "/pfblockerng/pfblockerng_category.php?type=geoip"
+
+
+@pytest.mark.parametrize(
+    ("path", "expect_reorder_th"),
+    (
+        pytest.param(_CATEGORY_IPV4_PAGE, True, id="ipv4"),
+        pytest.param(_CATEGORY_DNSBL_PAGE, True, id="dnsbl"),
+        pytest.param(_CATEGORY_GEOIP_PAGE, False, id="geoip"),
+    ),
+)
+def test_category_page_renders_reorder_wiring(path: str, expect_reorder_th: bool, webui: WebUI) -> None:
+    """The Category page wires the shared anchor-click reorder component (issue #1147).
+
+    Hermetic. GET the page and assert: (1) ``pfb_reorder_init(`` (the component
+    call, ADR-63) is present; (2) the ``pfb_drag_enabled`` boolean var (mirrors
+    ``system/webgui/roworderdragging``) is emitted -- both unconditional, so
+    they render on every gtype including GeoIP; (3) the new reorder ``<th>``
+    column is gated ``$gtype != 'geoip'`` (branch coverage: present on
+    ipv4/dnsbl, ABSENT on GeoIP, whose container never receives the injected
+    controls -- issue #1201).
+    """
+    resp = webui.get(path)
+    assert resp.status_code == 200, f"GET {path} -> HTTP {resp.status_code} (expected 200)"
+    body = resp.text
+    assert "pfb_reorder_init(" in body, f"pfb_reorder_init( wiring call missing on {path}"
+    assert "pfb_drag_enabled" in body, f"pfb_drag_enabled boolean var missing on {path}"
+    has_reorder_th = "<!----- Reorder -----></th>" in body
+    if expect_reorder_th:
+        assert has_reorder_th, f"reorder <th> column missing on {path}"
+    else:
+        assert not has_reorder_th, f"GeoIP page must NOT render the reorder <th> column, found on {path}"
+
+
 # ADR-23: the setup wizard's DNSBL step now surfaces ADR-13's pfb_dnsvip_auto auto-VIP
 # toggle. Core wizard.php renders ONE step per GET, indexed by a 0-based `stepid` (verified
 # against pfSense upstream wizard.php: `$stepid` defaults to "0" and indexes $pkg['step']
