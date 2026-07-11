@@ -2642,7 +2642,13 @@ function pfblockerng_tick(): void
 	// fast. The scheduled log trim no longer rides this dispatch (issue #573) --
 	// see pfb_log_mgmt() at the end of this function.
 	if (!$cron_disabled && ($due['cron'] || pfb_due_ledger_is_pending('cron', $dbdir))) {
-		if ($in_win) {
+		if ($in_win && pfb_feed_pass_busy()) {
+			// issue #1175: another feed pass is already running -- dispatching a
+			// second one would race the shared recompute staging. Defer via the
+			// existing pending mechanism so the NEXT tick retries.
+			logger(LOG_INFO, localize_text('Tick: feed cron deferred (update pass running).'), LOG_PREFIX_PKG_PFBLOCKERNG);
+			pfb_due_ledger_set_pending('cron', $dbdir);
+		} elseif ($in_win) {
 			logger(LOG_NOTICE, localize_text('Tick: dispatching feed cron.'), LOG_PREFIX_PKG_PFBLOCKERNG);
 			exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron >> {$pfb['runlog']} 2>&1 &");
 			pfb_due_ledger_mark_ran_anchored('cron', $cron_secs, $now, $seed, 0, $dbdir);
