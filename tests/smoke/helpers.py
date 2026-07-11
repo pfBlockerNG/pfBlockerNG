@@ -2793,11 +2793,11 @@ _BASELINE_GLOBAL_KEYS = (
     "pfb_agg_types",
     "pfb_quiet_hours",
     "pfb_tick_interval",
-    # Update Frequency: deploy() writes 'Disabled' (disable_scheduled_dispatch) and the
-    # scheduling modules re-arm an hour count; unset here so each module's own deploy
-    # re-establishes the value it wants instead of inheriting the previous module's
-    # (a leaked 'Disabled' bit test_smoke_apply_on_change — issue #805).
-    "pfb_interval",
+    # NOT pfb_interval: it is harness-owned now (disable_scheduled_dispatch, issue #1179).
+    # Unsetting it would revert to the registry default '1' — re-arming the guest's
+    # scheduled feed-cron dispatch for the whole gap until the next module's deploy();
+    # this reset re-applies the gate instead, so a scheduling module's opt-in cannot leak
+    # forward either (a leaked value bit test_smoke_apply_on_change — issue #805).
     # ADR-40 apply-path mode: test_smoke_adr40 writes 'delta'/'auto'/'replace' via
     # PfbConfig (General section, issue #804); unset so later modules read the
     # box's own default (end-state is mode-invariant, but the apply path is not).
@@ -2830,7 +2830,9 @@ def reset_pfb_baseline(vm: SmokeVM, *, timeout: float = 300.0) -> None:
         row cannot answer a later module's probe before the DNSBL module) and regenerates
         the resolver config so the live daemon matches;
       * drops the derived state — ``clearip``/``cleardnsbl`` (tables/sqlite) then a blocking
-        ``apply_filter_sync`` (pf rules).
+        ``apply_filter_sync`` (pf rules);
+      * re-applies :func:`disable_scheduled_dispatch` (issue #1179) — the scheduled tick must
+        stay gated across the module boundary too, not only from the next ``deploy()`` on.
 
     NO forced ``update``: the config is now empty, so there is nothing to rebuild — the next
     module's ``deployed_vm`` re-establishes the VIP/DNS/feed config it needs. (Like :func:`reset`,
@@ -2877,6 +2879,8 @@ def reset_pfb_baseline(vm: SmokeVM, *, timeout: float = 300.0) -> None:
                 raise RuntimeError(
                     f"reset_pfb_baseline {verb} failed: rc={cleared.returncode} stderr={cleared.stderr!r}"
                 )
+        # Same guard: the gate reads the package's own ledger writer, so it needs the package.
+        disable_scheduled_dispatch(vm)
     apply_filter_sync(vm)
 
 

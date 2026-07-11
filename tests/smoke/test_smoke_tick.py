@@ -86,7 +86,6 @@ LEDGER_PATH = "/var/db/pfblockerng/pfb_due_ledger.json"
 _LEDGER_DIR = "/var/db/pfblockerng"
 _PHP = "/usr/local/bin/php"
 _PFB_PHP = "/usr/local/www/pfblockerng/pfblockerng.php"
-_PFB_EXTRA = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
 _PFB_INC = "/usr/local/pkg/pfblockerng/pfblockerng.inc"
 
 # A throwaway marker dropped in /var right before the reboot in test_tick_reboot_persists_ledger.
@@ -119,7 +118,7 @@ def _write_ledger_entry(vm, job_key: str, last_run: int, next_due: int, jitter: 
     Python snippet, which silently no-op'd at rc=127 and left these writes ineffective.
     """
     snippet = (
-        f"require_once('{_PFB_EXTRA}');"
+        f"require_once('{h.PFB_EXTRA_INC}');"
         f"pfb_due_ledger_write_entry('{job_key}', array("
         f"'last_run' => {int(last_run)}, 'next_due' => {int(next_due)}, 'jitter' => {int(jitter)}"
         f"), '{_LEDGER_DIR}');"
@@ -230,7 +229,7 @@ def test_tick_cron_entry_installed(deployed_vm: SmokeVM):
 
     probe = h.php_eval(
         vm,
-        f"require_once('{_PFB_EXTRA}');"
+        f"require_once('{h.PFB_EXTRA_INC}');"
         "echo 'TICKMIN:' . pfb_tick_interval_clamp((string) PfbConfig::read('pfb_tick_interval')) . ':END';",
     )
     match = re.search(r"TICKMIN:(\d+):END", probe.stdout)

@@ -62,7 +62,6 @@ _PHP = "/usr/local/bin/php"
 _PFB_PHP = "/usr/local/www/pfblockerng/pfblockerng.php"
 # The ledger lives at $pfb['dbdir']/pfb_due_ledger.json (dbdir = /var/db/pfblockerng).
 _LEDGER_DIR = "/var/db/pfblockerng"
-_PFB_EXTRA = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +85,7 @@ def _write_ledger_entry(vm, job_key: str, last_run: int, next_due: int, jitter: 
     ``pfb_due_ledger_write_entry()`` (PHP) is the right tool — not a here-doc Python snippet.
     """
     snippet = (
-        f"require_once('{_PFB_EXTRA}');"
+        f"require_once('{h.PFB_EXTRA_INC}');"
         f"pfb_due_ledger_write_entry('{job_key}', array("
         f"'last_run' => {int(last_run)}, 'next_due' => {int(next_due)}, 'jitter' => {int(jitter)}"
         f"), '{_LEDGER_DIR}');"
@@ -101,7 +100,7 @@ def _set_quiet_hours(vm, window: str) -> None:
     """Set pfb_quiet_hours in config.xml via pfSsh.php."""
     # Use the config gateway rather than direct xml munging.
     snippet = (
-        f"require_once('{_PFB_EXTRA}');"
+        f"require_once('{h.PFB_EXTRA_INC}');"
         f"PfbConfig::write('pfb_quiet_hours', {json.dumps(window)});"
         "write_config('ADR-43 smoke: set quiet-hours');"
         "echo 'OK';"
@@ -293,7 +292,7 @@ def test_apply_pending_cleared_by_window_open(deployed_vm: SmokeVM):
     _force_cron_due(vm)
     pend = h.php_eval(
         vm,
-        f"require_once('{_PFB_EXTRA}');pfb_due_ledger_set_pending('cron', '{_LEDGER_DIR}');echo 'OK';",
+        f"require_once('{h.PFB_EXTRA_INC}');pfb_due_ledger_set_pending('cron', '{_LEDGER_DIR}');echo 'OK';",
     )
     assert pend.returncode == 0 and "OK" in pend.stdout, (
         f"set_pending failed: rc={pend.returncode} {pend.stderr!r} {pend.stdout!r}"
