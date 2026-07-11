@@ -1254,7 +1254,9 @@ if (!class_exists('Net_IPv6')) {
 // install/remove the scheduled tick and tear down legacy verb entries. Faithful to
 // the real services.inc control flow: the FIRST cron/item whose command SUBSTRING-
 // matches $command (strstr, not equality) is "the" entry; $active=true installs or
-// overwrites it (appends when none matched); $active=false removes it and reindexes.
+// overwrites it (appends when none matched); $active=false removes it. The removal
+// reindexes (the real one leaves the hole) -- harmless: no caller indexes cron items,
+// they only iterate. write_config() is not called; these tests assert cron state only.
 
 if (!function_exists('configure_cron')) {
 	// pfSense services.inc: rewrites /etc/crontab from config/cron/item. Nothing to
