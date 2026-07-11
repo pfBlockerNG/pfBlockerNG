@@ -140,7 +140,7 @@ echo
 # --- 3. aggregate: collapse overlapping/adjacent CIDRs -----------------------
 echo "[3/4] aggregate (cidr_aggregate primitive) ..."
 union_agg="${workdir}/union.agg"
-: > "${time_log}"   # reset timing capture for this step
+true > "${time_log}"   # reset timing capture for this step
 if [ "${use_iprange}" -eq 1 ]; then
 	# iprange handles mixed input but is family-agnostic; pfBlockerNG calls it
 	# per-family. We split, aggregate each, recombine — matching production.

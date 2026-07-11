@@ -89,7 +89,7 @@ order_files() { # $1 datadir  $2 listed|reversed|interleaved
 setup_state() { # $1 statedir
 	rm -rf "$1"
 	mkdir -p "$1/deny" "$1/orig" "$1/match" "$1/tmp"
-	: > "$1/master"; : > "$1/mastercat"; : > "$1/err.log"
+	true > "$1/master"; true > "$1/mastercat"; true > "$1/err.log"
 }
 
 # old path: per-feed accretion through the sourced duplicate()
