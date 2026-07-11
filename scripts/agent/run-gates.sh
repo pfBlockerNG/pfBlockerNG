@@ -68,7 +68,9 @@ run_gate() {
 		[ "$allow_missing" -eq 1 ] || overall=1
 		return 0
 	fi
-	if (cd "$worktree" && sh -c "$1" >/dev/null 2>&1); then
+	# issue #1194: </dev/null -- a stdin-reading gate (full PHPUnit) otherwise eats
+	# the command loop's remaining gate lines, silently skipping those gates.
+	if (cd "$worktree" && sh -c "$1" </dev/null >/dev/null 2>&1); then
 		printf 'GATE PASS: %s\n' "$1"
 	else
 		printf 'GATE FAIL: %s\n' "$1"
