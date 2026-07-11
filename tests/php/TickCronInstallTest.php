@@ -117,13 +117,18 @@ final class TickCronInstallTest extends TestCase
 
 	public function testMigrationTeardownRemovesLegacyCronButSparesCronTick(): void
 	{
-		// strstr regression (issue #1204): the bare 'pfblockerng.php cron' needle must
-		// NOT substring-match 'pfblockerng.php cron-tick' and delete the just-installed entry.
+		// strstr regression (issue #1204): the bare 'pfblockerng.php cron' needle must NOT
+		// substring-match 'pfblockerng.php cron-tick' and delete the just-installed entry.
+		// The SECOND call is what discriminates: on the first pass the legacy entry absorbs
+		// install_cron_job()'s first-match-wins removal, so only a steady-state resync (no
+		// legacy entry left to absorb it) exposes a too-loose needle.
 		$this->seedCronItem(0, '/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron >> ' . self::LOG . ' 2>&1', '0');
 
 		pfblockerng_configure_tick_cron(true, 15, self::LOG);
+		$this->assertSame([self::CRON_TICK_CMD], $this->cronCommands(), 'first sync: legacy cron removed, cron-tick installed');
 
-		$this->assertSame([self::CRON_TICK_CMD], $this->cronCommands());
+		pfblockerng_configure_tick_cron(true, 15, self::LOG);
+		$this->assertSame([self::CRON_TICK_CMD], $this->cronCommands(), 'steady-state resync: the cron-tick entry must survive the migration teardown');
 	}
 
 	public function testMigrationTeardownRemovesLegacyDccSsRefreshBlAndCronTickSurvives(): void
