@@ -17,6 +17,8 @@ export const meta = {
 // issue #942) — normalize before destructuring instead of trusting caller discipline.
 const input = typeof args === 'string' ? JSON.parse(args) : (args ?? {})
 const { pr, base = 'devel', worktree, spec = '(no spec provided — flag that as a finding)', model = 'sonnet' } = input
+// A bare SHA base reviews a fix delta (pr-merge-flow 1d.4); a branch name gets origin/.
+const baseRef = /^[0-9a-f]{7,40}$/.test(base) ? base : `origin/${base}`
 if (!pr || !worktree) throw new Error('args must be {pr, worktree, base?, spec?, model?}')
 if (model !== 'sonnet' && model !== 'fable') throw new Error(`model must be "sonnet" or "fable" (never Opus, never a dated ID); got "${model}"`)
 
@@ -49,7 +51,7 @@ const FINDINGS = {
   },
 }
 
-const PROMPT = `You are an independent ADVERSARIAL reviewer of PR #${pr} (base ${base}) in a READ-ONLY checkout at ${worktree}. Diff: git -C ${worktree} diff origin/${base}...HEAD. Read surrounding code, not just hunks; you may run commands/gates but never edit, commit, or push. Ground every blocking correctness claim in an EXECUTED probe (command + output) where executable off-appliance — create scratch fixtures under /tmp, never inside the checkout. Probes are TARGETED: never re-run whole test suites for their own sake (CI and the delegation gate already run them); a suite run is justified only when a specific finding needs exactly that evidence. Files under .claude/skills/ponytail/ and .claude/skills/caveman/ are VENDORED byte-identical third-party trees (see their UPSTREAM provenance files) — do NOT review their content or style; only byte-identity with the pinned upstream ref and the UPSTREAM provenance are reviewable. Return structured findings; your output is the review. THE SPEC (review the diff AGAINST this; silently narrowed scope is a blocking finding): ${spec}
+const PROMPT = `You are an independent ADVERSARIAL reviewer of PR #${pr} (base ${baseRef}) in a READ-ONLY checkout at ${worktree}. Diff: git -C ${worktree} diff ${baseRef}...HEAD. Read surrounding code, not just hunks; you may run commands/gates but never edit, commit, or push. Ground every blocking correctness claim in an EXECUTED probe (command + output) where executable off-appliance — create scratch fixtures under /tmp, never inside the checkout. Probes are TARGETED: never re-run whole test suites for their own sake (CI and the delegation gate already run them); a suite run is justified only when a specific finding needs exactly that evidence. Files under .claude/skills/ponytail/ and .claude/skills/caveman/ are VENDORED byte-identical third-party trees (see their UPSTREAM provenance files) — do NOT review their content or style; only byte-identity with the pinned upstream ref and the UPSTREAM provenance are reviewable. Return structured findings; your output is the review. THE SPEC (review the diff AGAINST this; silently narrowed scope is a blocking finding): ${spec}
 
 You alone cover ALL of the following lenses — none may be skipped:
 
