@@ -48,8 +48,6 @@ pytestmark = pytest.mark.smoke
 PFB_LOGDIR = "/var/log/pfblockerng"
 PFB_DBDIR = "/var/db/pfblockerng"
 
-_PFB_EXTRA_INC = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
-
 # Host-side (non-chrooted) PHP-written CSV log; timestamp at CSV field 0.
 LOG_IP_BLOCKLOG = f"{PFB_LOGDIR}/ip_block.log"
 
@@ -76,17 +74,15 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     Mirrors the retired ADR-30 ``test_log_rotate.py``'s own ``deployed_vm``: age-based
     log retention runs from ``pfblockerng_tick()`` and needs neither DNSBL nor feed
     infrastructure, only ``enable_cb=on`` (so the tick body executes) and every tick in
-    this module being idle-only (Disabled feed cron + not-due dcc/bl), so
-    ``pfb_update_pass_running()``'s "nothing dispatched" gate stays open and
-    ``pfb_log_mgmt()`` runs on every ``tick`` call below.
+    this module being idle-only, so ``pfb_update_pass_running()``'s "nothing dispatched"
+    gate stays open and ``pfb_log_mgmt()`` runs on every ``tick`` call below. Idle-only
+    is the harness default: ``h.deploy`` -> ``disable_scheduled_dispatch`` closes all
+    three dispatch branches (Disabled feed cron + not-due dcc/bl).
     """
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
     _set_enable_cb(smoke_vm)
-    _set_pfb_interval_disabled(smoke_vm)
-    _seed_future_ledger_entry(smoke_vm, "dcc")
-    _seed_future_ledger_entry(smoke_vm, "bl")
     smoke_vm.ssh("/bin/mkdir", "-p", PFB_LOGDIR, timeout=30)
     smoke_vm.ssh("/bin/mkdir", "-p", PFB_DBDIR, timeout=30)
     try:
@@ -122,49 +118,6 @@ def _set_enable_cb(vm: SmokeVM, *, timeout: float = 60.0) -> None:
     result = h.php_eval(vm, snippet, timeout=timeout)
     if result.returncode != 0 or "OK" not in result.stdout:
         raise RuntimeError(f"_set_enable_cb failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
-
-
-def _set_pfb_interval_disabled(vm: SmokeVM, *, timeout: float = 60.0) -> None:
-    """Set pfb_interval='Disabled' so the tick's feed-cron branch never dispatches.
-
-    Part of making every tick in this module idle-only (see the ``deployed_vm`` fixture
-    docstring) — this is also the setting issue #573 fixed (log maintenance used to
-    silently stop with a Disabled Update Frequency).
-    """
-    snippet = (
-        f"$g = config_get_path({h._php_str(CFG_GENERAL)}, array());\n"
-        "$g['pfb_interval'] = 'Disabled';\n"
-        f"config_set_path({h._php_str(CFG_GENERAL)}, $g);\n"
-        "write_config('pfBlockerNG smoke: pfb_interval Disabled');\n"
-        "echo 'OK';"
-    )
-    result = h.php_eval(vm, snippet, timeout=timeout)
-    if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(
-            f"_set_pfb_interval_disabled failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
-        )
-
-
-def _seed_future_ledger_entry(vm: SmokeVM, job_key: str, *, timeout: float = 60.0) -> None:
-    """Seed a due-ledger entry for ``job_key`` whose next_due is far in the future.
-
-    Drives the box via PHP (CLAUDE.md hard constraint: no appliance python) —
-    ``pfb_due_ledger_write_entry()`` is the package's own ledger writer. Keeps
-    'dcc'/'bl' from dispatching on the 'tick' verb so every tick in this module is
-    maintenance-only.
-    """
-    snippet = (
-        f"require_once('{_PFB_EXTRA_INC}');"
-        f"pfb_due_ledger_write_entry({h._php_str(job_key)}, array("
-        "'last_run' => time(), 'next_due' => time() + 86400, 'jitter' => 0"
-        f"), {h._php_str(PFB_DBDIR)});"
-        "echo 'OK';"
-    )
-    result = h.php_eval(vm, snippet, timeout=timeout)
-    if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(
-            f"_seed_future_ledger_entry({job_key!r}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
-        )
 
 
 def _set_log_max_days(vm: SmokeVM, values: dict[str, str], *, timeout: float = 60.0) -> None:

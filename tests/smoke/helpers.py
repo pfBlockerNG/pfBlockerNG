@@ -388,6 +388,10 @@ def deploy(vm: SmokeVM, pkg_path: str | None = None, *, timeout: float = 300.0) 
     portable Linux build job (build-pkg-linux.yml); its path is ``pkg_path`` or ``SMOKE_PKG``.
     install-pkg.sh polls ``unbound-control status`` after POST-INSTALL, so on
     return Unbound is ready.
+
+    POST-INSTALL also arms the ADR-43 cron tick, so every deploy ends with
+    :func:`disable_scheduled_dispatch` — the suite drives scheduling explicitly (the
+    ``tick``/``cron`` verbs) and must never race the box's wall-clock one (issue #1179).
     """
     pkg = pkg_path or os.environ.get("SMOKE_PKG")
     if not pkg or not Path(pkg).is_file():
@@ -409,6 +413,7 @@ def deploy(vm: SmokeVM, pkg_path: str | None = None, *, timeout: float = 300.0) 
         raise RuntimeError(
             f"install-pkg.sh failed (rc={result.returncode})\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
+    disable_scheduled_dispatch(vm)
 
 
 def pkg_installed(vm: SmokeVM, *, timeout: float = 30.0) -> bool:
@@ -2788,9 +2793,10 @@ _BASELINE_GLOBAL_KEYS = (
     "pfb_agg_types",
     "pfb_quiet_hours",
     "pfb_tick_interval",
-    # Update Frequency: test_log_rotate writes 'Disabled' to gate the tick's feed-cron
-    # dispatch; leaked forward it silently disables dispatch for every later module
-    # (bit test_smoke_apply_on_change — issue #805).
+    # Update Frequency: deploy() writes 'Disabled' (disable_scheduled_dispatch) and the
+    # scheduling modules re-arm an hour count; unset here so each module's own deploy
+    # re-establishes the value it wants instead of inheriting the previous module's
+    # (a leaked 'Disabled' bit test_smoke_apply_on_change — issue #805).
     "pfb_interval",
     # ADR-40 apply-path mode: test_smoke_adr40 writes 'delta'/'auto'/'replace' via
     # PfbConfig (General section, issue #804); unset so later modules read the

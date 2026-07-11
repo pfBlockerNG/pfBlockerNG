@@ -34,10 +34,16 @@ pytestmark = [pytest.mark.apply_on_change]
 
 @pytest.fixture(scope="module")
 def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:  # noqa: ARG001
-    """Deploy the branch .pkg once for the apply_on_change module."""
+    """Deploy the branch .pkg once for the apply_on_change module, feed-cron dispatch re-armed.
+
+    ``h.deploy`` disables the tick's feed-cron dispatch for the suite (issue #1179); the
+    quiet-hours cases below drive exactly that branch, so this module opts back in with an
+    hour count (a leaked 'Disabled' already bit it once — issue #805).
+    """
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
+    h.set_feed_cron_interval(smoke_vm, "1")
     h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
     try:
