@@ -703,6 +703,13 @@ function pfblockerng_download_extras($timeout=600, $type='') {
 function pfblockerng_sync_cron($force_all = FALSE, $scope = 'both') {
 	global $pfb, $pfbarr;
 
+	// issue #1175: serialize feed passes -- same ownership discipline as
+	// sync_package_pfblockerng(); its tail call below reenters the SAME lock.
+	$pfb_feed_pass_owner = !isset($GLOBALS['pfb_feed_pass_lock']);
+	if (!pfb_feed_pass_begin('cron')) {
+		return;
+	}
+
 	// Open the per-run log window BEFORE the first log line so the live viewer mirrors the whole
 	// feed pass. Force Check / cron dispatch through here (not sync_package_pfblockerng directly,
 	// which is only reached at the very end); without this the tail would stay silent until then.
@@ -820,6 +827,12 @@ function pfblockerng_sync_cron($force_all = FALSE, $scope = 'both') {
 	// not affect the feed cron timing/outcome. Provenance-gated: a no-op on a
 	// Netgate-installed build.
 	pfb_software_update_check();
+
+	// issue #1175: release only if this call transitioned the lock (see head of function) --
+	// the tail sync_package_pfblockerng() calls above reentered the SAME lock and no-op'd.
+	if ($pfb_feed_pass_owner) {
+		pfb_feed_pass_release();
+	}
 }
 
 
