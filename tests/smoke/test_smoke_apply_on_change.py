@@ -40,6 +40,10 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     h.deploy(smoke_vm)
     h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
+    # Own this module's precondition instead of trusting the box default: a sibling module
+    # (test_log_age_retention) writes pfb_interval='Disabled' to make its ticks idle-only,
+    # and a leak forward silently stops every dispatch this module asserts (issue #805).
+    _set_pfb_interval(smoke_vm, "1")
     try:
         yield smoke_vm
     finally:
@@ -62,6 +66,32 @@ _PFB_EXTRA = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+_CFG_GENERAL = "installedpackages/pfblockerng/config/0"
+
+
+def _set_pfb_interval(vm: SmokeVM, value: str, *, timeout: float = 60.0) -> None:
+    """Set the feed-cron Update Frequency, so this module's ticks actually dispatch.
+
+    Verifies the write took: a silently-ignored value would turn every dispatch
+    assertion in this module into a false negative.
+    """
+    snippet = (
+        f"$g = config_get_path({h._php_str(_CFG_GENERAL)}, array());\n"
+        f"$g['pfb_interval'] = {h._php_str(value)};\n"
+        f"config_set_path({h._php_str(_CFG_GENERAL)}, $g);\n"
+        "write_config('pfBlockerNG smoke: pfb_interval');\n"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"_set_pfb_interval({value!r}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+    readback = h.config_get(vm, f"{_CFG_GENERAL}/pfb_interval")
+    if readback != value:
+        raise RuntimeError(f"_set_pfb_interval({value!r}) did not take: config reads {readback!r}")
 
 
 def _read_ledger(vm) -> dict:
