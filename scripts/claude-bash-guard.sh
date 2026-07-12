@@ -1,9 +1,10 @@
 #!/bin/sh
-# scripts/claude-bash-guard.sh -- PreToolUse Bash guard: deny 3 agent git bypasses.
+# scripts/claude-bash-guard.sh -- PreToolUse Bash guard: deny 4 agent footguns.
 #
 # Wired in .claude/settings.json as a PreToolUse hook matching the Bash tool.
-# Denies, at the TOOL layer (before the command ever runs), three git
-# operations CLAUDE.md forbids an AGENT from running even though a human may:
+# Denies, at the TOOL layer (before the command ever runs), four operations an
+# AGENT must not run -- three git bypasses a human may legitimately use, plus a
+# wait-launch shape that silently strands the turn:
 #
 #   Rule A -- `git commit` with `--no-verify`   : the pre-commit lint gate's
 #             --no-verify bypass is for humans, not agents (CLAUDE.md "Git
@@ -15,9 +16,17 @@
 #             clobber another session's in-flight PR (CLAUDE.md "Worktrees").
 #   Rule C -- `git worktree remove` with a force flag : CLAUDE.md forbids
 #             force-removing a worktree an agent does not own.
+#   Rule D -- a `wait-*.sh` backgrounded with the shell's `&` : backgrounding
+#             is a property of the TOOL CALL (run_in_background: true), not of
+#             shell syntax, so a wait started with `&` inside a foreground call
+#             is never harness-tracked -- no completion notification fires and
+#             the turn stalls while the wait has already finished (#1225).
+#             Whole-payload, not per-segment: `&` is one of the characters
+#             $segs splits on.
 #
-# First matching (segment, rule) pair wins: segments are scanned left to
-# right (see MATCHING below); within one segment, A, then B, then C.
+# Rule D runs first (whole-payload). Then the per-segment rules: segments are
+# scanned left to right (see MATCHING below); within one segment, A, then B,
+# then C. First matching pair wins.
 #
 # FAIL-OPEN CONTRACT: this hook must NEVER block a legitimate Bash call
 # because of a parsing failure. Empty stdin, garbled/non-JSON stdin, or no
@@ -107,6 +116,12 @@ norm="$(printf '%s' "$payload" | tr -d '\\"' | tr -s '[:space:]' ' ')"
 # delimiter here is unambiguous.
 segs="$(printf '%s' "$norm" | tr ';&|()' '\n')"
 
+# norm_bg -- $norm with the two `&` LOOKALIKES neutralized, so a surviving `&` is
+# unambiguously the shell's background operator: a redirection (`2>&1`, `>&2`,
+# `&>`) and the `&&` list operator. Rule D matches on THIS, never on $segs: `&` is
+# one of the characters $segs splits on, so backgrounding is invisible per-segment.
+norm_bg="$(printf '%s' "$norm" | sed -e 's/[0-9]*>&[0-9-]*//g' -e 's/&>//g' -e 's/&&/ /g')"
+
 # _contains <needle> -- true (rc 0) iff the CURRENT SEGMENT ($seg, set by
 # the per-segment loop below) contains <needle> as a literal substring.
 _contains() {
@@ -165,7 +180,13 @@ _deny() {
 	exit 0
 }
 
-# Walk $segs one segment at a time, applying all three rules to each ($seg
+# Rule D (whole-payload, not per-segment -- see norm_bg above). `[^;]*` keeps the
+# `&` bound to the wait's OWN command: an `&` after a `;` backgrounds a later one.
+if printf '%s' "$norm_bg" | grep -Eq 'wait-[a-z0-9_-]*\.sh[^;]*&'; then
+	_deny "a wait script backgrounded with & is invisible to the harness: no completion notification fires, so the turn stalls while the wait has already finished (issue #1225). Launch it as its OWN Bash call with run_in_background: true -- backgrounding is a property of the tool call, not of shell syntax (CLAUDE.md No orphaned waits)"
+fi
+
+# Walk $segs one segment at a time, applying rules A-C to each ($seg
 # is read by _contains / _has_force_flag above). Fed via a heredoc (not a
 # `| while`) so this loop runs in the CURRENT shell, not a subshell: dash (the
 # box's /bin/sh) forks a subshell for the reader end of a pipe, which would
