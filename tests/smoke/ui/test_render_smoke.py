@@ -16,8 +16,8 @@ passes -- proven by ``test_render_oracle.py`` feeding the oracle a broken body.
 Hermeticity (ADR §2 "Hermetic where it claims to be"): every page in the table
 renders from local config alone -- none triggers a feed download to produce its
 chrome. The GeoIP/Reputation per-continent pages ``pfblockerng.php`` WRITES via its
-credential-free, network-free `ugc` verb (issue #1219) are seeded with a synthetic
-MaxMind-schema dataset (:func:`~tests.smoke.helpers.seed_geoip_dataset`, wired into
+credential-free, network-free `ugc` verb (issue #1219) are seeded with MaxMind's own
+public test corpus (:func:`~tests.smoke.helpers.seed_geoip_dataset`, wired into
 :data:`~tests.smoke.ui.conftest.deployed_vm`) and included in the table below. Only
 the DNSBL-VIP sinkhole pages (served by a separate lighttpd, unreachable from this
 authenticated session) are recorded in :data:`EXCLUDED_FROM_TIER_A` with the reason
@@ -206,59 +206,60 @@ PAGE_TABLE: tuple[Page, ...] = (
         "/widgets/widgets/pfblockerng.widget.php",
         ('id="pfblockerngack"', "Alias", "Show Aggregated Aliases"),
     ),
-    # issue #1219: pfblockerng.php is a CLI dispatcher + a TEMPLATE that WRITES these 9
+    # issue #1219/#1228: pfblockerng.php is a CLI dispatcher + a TEMPLATE that WRITES these 9
     # continent/category pages (+ Reputation, below) via `ugc` (pfblockerng_uc_countries()
     # + pfblockerng_get_countries()) -- a credential-free, network-free LOCAL conversion of
     # MaxMind-schema CSVs (pfblockerng.php:398-406; the MaxMind key/account gate lives in
-    # the DOWNLOAD verbs `dc`/`dcc`/`bu` only). The UI session seeds SYNTHETIC CSVs and runs
-    # `ugc` once (helpers.seed_geoip_dataset, wired into the `deployed_vm` fixture) so these
-    # pages exist and render hermetically, same as every other Tier-A page. Each Form_Section
-    # title is "Continent - {continent_display}" (pfblockerng.php:1919). The second marker of
-    # each pair is a seeded country's <option> text, but the oracle matches with any(), so it
-    # is documentation, NOT a gate — the seeded data is pinned by
+    # the DOWNLOAD verbs `dc`/`dcc`/`bu` only). The UI session seeds MaxMind's official test
+    # corpus and runs `ugc` once (helpers.seed_geoip_dataset, wired into the `deployed_vm`
+    # fixture) so these pages exist and render hermetically, same as every other Tier-A page.
+    # Each Form_Section title is "Continent - {continent_display}" (pfblockerng.php:1919). The
+    # second marker of each pair is a seeded country's <option> text, but the oracle matches
+    # with any(), so it is documentation, NOT a gate — the seeded data is pinned by
     # test_geoip_pages_render_the_seeded_csv_rows.
+    # Libya is the corpus's ONLY African country, and it has v6 networks only -- its v4 select
+    # renders (0) and its v6 select (1).
     Page(
         "geoip_africa",
         "/pfblockerng/pfblockerng_Africa.php",
-        ("Continent - Africa", "Nigeria [900001] NG (1)"),
+        ("Continent - Africa", "Libya [2215636] LY (1)"),
     ),
+    # The corpus has NO Antarctic/Oceanian/South American networks (tests/smoke/fixtures/
+    # README.md), so every country on these three pages renders (0) -- the page still builds.
     Page(
         "geoip_antarctica",
         "/pfblockerng/pfblockerng_Antarctica.php",
-        ("Continent - Antarctica", "Antarctica [900003] AQ (1)"),
+        ("Continent - Antarctica", "Antarctica [6697173] AQ (0)"),
     ),
-    # "Japan [900005] JP (2)" -- 2 networks, not 1: the exclave row's geoname_id also resolves to
-    # JP, so it lands a SECOND direct-match hit here. That pins the row, not the represented-
-    # country branch it also triggers -- "GB_rep (1)" on Europe is what pins that.
     Page(
         "geoip_asia",
         "/pfblockerng/pfblockerng_Asia.php",
-        ("Continent - Asia", "Japan [900005] JP (2)"),
+        ("Continent - Asia", "Bhutan [1252634] BT (1)"),
     ),
-    # "GB_rep" is the *_rep-path artifact of the same exclave row (registered_country side).
     Page(
         "geoip_europe",
         "/pfblockerng/pfblockerng_Europe.php",
-        ("Continent - Europe", "United Kingdom [900007] GB_rep (1)"),
+        ("Continent - Europe", "United Kingdom [2635167] GB (5)"),
     ),
     Page(
         "geoip_north_america",
         "/pfblockerng/pfblockerng_North_America.php",
-        ("Continent - North America", "Mexico [900009] MX (1)"),
+        ("Continent - North America", "United States [6252001] US (3)"),
     ),
     Page(
         "geoip_oceania",
         "/pfblockerng/pfblockerng_Oceania.php",
-        ("Continent - Oceania", "Australia [900011] AU (1)"),
+        ("Continent - Oceania", "Australia [2077456] AU (0)"),
     ),
     Page(
         "geoip_south_america",
         "/pfblockerng/pfblockerng_South_America.php",
-        ("Continent - South America", "Brazil [900013] BR (1)"),
+        ("Continent - South America", "Brazil [3469034] BR (0)"),
     ),
     # The A1/A2 ISOs themselves are synthesized unconditionally (pfblockerng.php:929-932), so
-    # 'value="A1"' is structural chrome, unique to this page; their seeded MEMBER COUNTS are
-    # what the data test pins. Real GeoLite2 carries no flagged rows at all -- issue #1221.
+    # 'value="A1"' is structural chrome, unique to this page. Real GeoLite2 -- this corpus
+    # included -- carries no flagged rows at all (issue #1221), so both aggregates render (0);
+    # the data test pins that shape.
     Page(
         "geoip_proxy_and_satellite",
         "/pfblockerng/pfblockerng_Proxy_and_Satellite.php",
@@ -269,7 +270,7 @@ PAGE_TABLE: tuple[Page, ...] = (
     Page(
         "geoip_top_spammers",
         "/pfblockerng/pfblockerng_Top_Spammers.php",
-        ("Continent - Top Spammers", "United Kingdom (900007) GB (1)"),
+        ("Continent - Top Spammers", "United Kingdom (2635167) GB (5)"),
     ),
     # Reputation is written unconditionally by pfb_build_reputation_tab() at the end of
     # pfblockerng_get_countries() -- no MaxMind/network dependency either.
@@ -640,13 +641,13 @@ def test_update_page_cron_status_without_flag_never_misreports_missing_cron(
 
 
 def test_geoip_pages_render_the_seeded_csv_rows(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
-    """Scenario: the GeoIP pages carry the SEEDED data, not just their chrome (issue #1219).
+    """Scenario: the GeoIP pages carry the SEEDED data, not just their chrome (issue #1219/#1228).
 
-    Given the UI session seeded the synthetic MaxMind-schema CSVs and ran `ugc`,
-    When the GeoIP pages that carry seeded rows are fetched (the six below; the other GeoIP
-         pages are covered for RENDER by PAGE_TABLE, and hold no needle a fixture row pins),
-    Then every needle below renders — and each one is produced by ONE specific fixture row, so
-         deleting that row (or gutting a whole CSV) fails this test.
+    Given the UI session seeded MaxMind's official test corpus and ran `ugc`,
+    When the GeoIP pages that carry seeded rows are fetched (the seven below; the other GeoIP
+         pages are covered for RENDER by PAGE_TABLE),
+    Then every needle below renders — and each one is produced by specific corpus rows, so
+         deleting them (or gutting a whole CSV) fails this test.
 
     These assertions cannot live in ``PAGE_TABLE``: the render oracle matches markers with
     ``any()`` (``render_oracle.py``), and every GeoIP page already carries a data-INDEPENDENT
@@ -656,32 +657,44 @@ def test_geoip_pages_render_the_seeded_csv_rows(webui: WebUI, php_error_log_guar
 
     EVERY needle carries its member COUNT, and that is load-bearing: an ``{ISO}_rep`` entry is
     appended unconditionally for any country that has a direct row (pfblockerng.php:1301-1312),
-    so a bare ``NG_rep``/``GB_rep`` string still matches — rendering ``(0)`` — even if the
-    represented-country computation were deleted outright. Only the count separates a real
-    represented-country match from that always-present placeholder.
+    so a bare ``GB_rep``/``US_rep`` string still matches — rendering ``(0)`` — even if the
+    registered-country computation were deleted outright. Only the count separates a real
+    registered-country match from that always-present placeholder.
 
-    The needles, and the row each one pins:
-      * ``NG (1)``     — Nigeria's IPv4 row                     (geoip_blocks_ipv4.csv)
-      * ``NG (2)``     — Nigeria's TWO IPv6 rows: the only count that differs between the v4 and
-                         v6 selects, so it is what proves the IPv6 CSV reached the render at all
-      * ``NG_rep (1)`` — the empty-``geoname_id`` row falling back to its registered country
-      * ``JP (2)``     — the exclave row, counted toward Japan's own direct match alongside its
-                         direct row (this pins the ROW; the represented-country BRANCH is pinned
-                         by ``GB_rep (1)`` below)
-      * ``GB_rep (1)`` — the represented side of that same exclave row
-      * ``A1 (1)`` / ``A2 (1)`` — the anonymous-proxy / satellite-provider rows (these only reach
-                         the A1/A2 aggregates when the row carries NO country, per pfblockerng.php)
-      * ``GB (1)``     — a $top_20 ISO reaching the Top Spammers tab
-      * Reputation's ``NG (1)`` — the same seeded data through a SEPARATE serialization path
+    The needles, and the rows each one pins:
+      * ``GB (5)`` / ``GB (21)`` — the United Kingdom's 5 IPv4 vs. 21 IPv6 networks: the counts
+                         differ between the two selects, so the pair proves BOTH Blocks CSVs
+                         reached the render (a v6-select fed from the v4 file could not pass)
+      * ``GB_rep (1)`` — the registered-country ("exclave") path: 216.160.83.56/29 is a US
+                         network registered to GB
+      * ``US (3)`` / ``US_rep (4)`` — the United States' 3 direct IPv4 rows, plus the 4 GB
+                         networks registered to the US
+      * ``LY (1)``     — Libya, the corpus's only African country, has IPv6 networks ONLY, so its
+                         count can only come from the IPv6 CSV
+      * ``BT (1)``     — Bhutan's 67.43.156.0/24, the row the dMax reputation leg classifies
+      * ``Proxy A1 (0)`` — the anonymous-proxy aggregate is EMPTY by data: real GeoLite2 (this
+                         corpus included) ships no is_anonymous_proxy/is_satellite_provider rows
+                         (issue #1221), so ``(0)`` is the honest, asserted shape — the same holds
+                         for the A2 satellite aggregate
+      * Top Spammers' ``GB (5)`` — a $top_20 ISO through the "(id)" rendering path
+      * Reputation's ``BT (1)`` — the same seeded data through a SEPARATE serialization path
                          (``pfb_build_reputation_tab()``), which the continent pages never touch
     """
     expected: dict[str, tuple[str, ...]] = {
-        "/pfblockerng/pfblockerng_Africa.php": ("NG (1)", "NG (2)", "NG_rep (1)"),
-        "/pfblockerng/pfblockerng_Asia.php": ("JP (2)",),
-        "/pfblockerng/pfblockerng_Europe.php": ("GB_rep (1)",),
-        "/pfblockerng/pfblockerng_Proxy_and_Satellite.php": ("A1 (1)", "A2 (1)"),
-        "/pfblockerng/pfblockerng_Top_Spammers.php": ("GB (1)",),
-        "/pfblockerng/pfblockerng_reputation.php": ("NG (1)",),
+        "/pfblockerng/pfblockerng_Africa.php": ("Libya [2215636] LY (1)",),
+        "/pfblockerng/pfblockerng_Asia.php": ("Bhutan [1252634] BT (1)",),
+        "/pfblockerng/pfblockerng_Europe.php": (
+            "United Kingdom [2635167] GB (5)",
+            "United Kingdom [2635167] GB (21)",
+            "United Kingdom [2635167] GB_rep (1)",
+        ),
+        "/pfblockerng/pfblockerng_North_America.php": (
+            "United States [6252001] US (3)",
+            "United States [6252001] US_rep (4)",
+        ),
+        "/pfblockerng/pfblockerng_Proxy_and_Satellite.php": ("Proxy A1 (0)",),
+        "/pfblockerng/pfblockerng_Top_Spammers.php": ("United Kingdom (2635167) GB (5)",),
+        "/pfblockerng/pfblockerng_reputation.php": ("Bhutan [1252634] BT (1)",),
     }
     for path, needles in expected.items():
         resp = webui.get(path)
@@ -692,23 +705,6 @@ def test_geoip_pages_render_the_seeded_csv_rows(webui: WebUI, php_error_log_guar
                 f"{path} is missing the seeded-data needle {needle!r} — the GeoIP fixture row it "
                 f"pins never reached the render (page rendered, but on empty/incomplete data)"
             )
-
-
-def test_zzz_probe_geoip_needles(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
-    """TEMP PROBE -- dumps real rendered option text; deleted before landing."""
-    import re
-
-    pat = re.compile(r"<option[^>]*>([^<]*)</option>")
-    for path in (
-        "/pfblockerng/pfblockerng_Proxy_and_Satellite.php",
-        "/pfblockerng/pfblockerng_Antarctica.php",
-    ):
-        resp = webui.get(path)
-        found = sorted({t.strip() for t in pat.findall(resp.text) if t.strip()})
-        print(f"\n=== {path} ({len(found)} options) ===")
-        for f in found[:80]:
-            print(f"  {f!r}")
-    assert False, "probe dump above"  # noqa: B011,PT015
 
 
 def test_general_page_keep_help_upgrade_warning(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
