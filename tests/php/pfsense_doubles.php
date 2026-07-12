@@ -1266,7 +1266,7 @@ if (!function_exists('configure_cron')) {
 }
 
 if (!function_exists('install_cron_job')) {
-	function install_cron_job($command, $active = false, $minute = '0', $hour = '*', $mday = '*', $month = '*', $wday = '*', $who = 'root', $write_config = true) {
+	function install_cron_job($command, $active = FALSE, $minute = '0', $hour = '*', $mday = '*', $month = '*', $wday = '*', $who = 'root', $write_config = TRUE) {
 		$items = config_get_path('cron/item', []);
 		$found = null;
 		foreach ($items as $idx => $item) {

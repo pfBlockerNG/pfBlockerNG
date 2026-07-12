@@ -205,6 +205,7 @@ def _reset_ss_extdns(vm) -> None:
 # trailing-space needle rationale (pfblockerng.inc).
 _CRON_TICK_NEEDLE = "pfblockerng.php cron-tick"
 _LEGACY_TICK_NEEDLE = "pfblockerng.php tick"
+_ENABLE_CB_CFG = "installedpackages/pfblockerng/config/0/enable_cb"
 
 
 # pfSsh.php prints a startup banner on stdout, so a snippet that READS a value must
@@ -261,6 +262,9 @@ def test_tick_cron_entry_installed(deployed_vm: SmokeVM):
                 cron-tick verb, and no legacy 'pfblockerng.php tick >>' entry survives.
     """
     vm = deployed_vm
+    # deployed_vm is module-scoped: restore the master switch to whatever this module
+    # was left in, never to a hardcoded state (the later tests here need it enabled).
+    original_enabled = h.config_get(vm, _ENABLE_CB_CFG)
     try:
         h.set_package_enabled(vm, False)
         h.reload(vm, "update")
@@ -278,7 +282,7 @@ def test_tick_cron_entry_installed(deployed_vm: SmokeVM):
             f"the legacy 'pfblockerng.php tick' entry must not survive; got {after[0]!r}"
         )
     finally:
-        h.set_package_enabled(vm, False)
+        h.set_package_enabled(vm, original_enabled == "on")
         h.reload(vm, "update")
 
 
