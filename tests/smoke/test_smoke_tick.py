@@ -207,6 +207,12 @@ _CRON_TICK_NEEDLE = "pfblockerng.php cron-tick"
 _LEGACY_TICK_NEEDLE = "pfblockerng.php tick"
 
 
+# pfSsh.php prints a startup banner on stdout, so a snippet that READS a value must
+# delimit it (helpers.php_eval's contract; same idiom as helpers.config_get).
+_CRON_JSON_OPEN = "<<<PFBCRON>>>"
+_CRON_JSON_CLOSE = "<<<ENDPFBCRON>>>"
+
+
 def _read_pfb_tick_cron_items(vm) -> list[str]:
     """Return the 'command' string of every config.xml cron/item naming the
     tick-family verb (the current cron-tick, or the legacy bare tick)."""
@@ -217,12 +223,17 @@ def _read_pfb_tick_cron_items(vm) -> list[str]:
         f"    if (strpos($cmd, {h._php_str(_CRON_TICK_NEEDLE)}) !== FALSE"
         f" || strpos($cmd, {h._php_str(_LEGACY_TICK_NEEDLE)}) !== FALSE) {{ $out[] = $cmd; }}\n"
         "}\n"
-        "echo json_encode($out);"
+        f"echo {h._php_str(_CRON_JSON_OPEN)} . json_encode($out) . {h._php_str(_CRON_JSON_CLOSE)};"
     )
     result = h.php_eval(vm, snippet)
     if result.returncode != 0:
         raise RuntimeError(f"_read_pfb_tick_cron_items failed: rc={result.returncode} {result.stderr!r}")
-    return json.loads(result.stdout.strip())
+    out = result.stdout
+    start = out.find(_CRON_JSON_OPEN)
+    end = out.find(_CRON_JSON_CLOSE)
+    if start == -1 or end == -1:
+        raise RuntimeError(f"_read_pfb_tick_cron_items: no delimited value in pfSsh.php output: {out!r}")
+    return json.loads(out[start + len(_CRON_JSON_OPEN) : end])
 
 
 # ---------------------------------------------------------------------------
