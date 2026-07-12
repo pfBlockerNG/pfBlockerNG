@@ -558,6 +558,27 @@ Describe 'claude-bash-guard.sh'
       The status should be success
       The output should equal ""
     End
+
+    # A newline separates commands exactly like a `;`, and a multi-line command
+    # reaches the hook as the JSON escape \n -- which normalization would otherwise
+    # dissolve (it strips backslashes), silently welding two commands into one.
+    It 'D7: MULTI-LINE, wait in the foreground, a LATER line backgrounded -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"sh scripts/agent/wait-checks.sh --repo o/r --pr 1\necho done &"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'D8: MULTI-LINE, the WAIT ITSELF backgrounded on its own line -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"echo arming\nsh scripts/agent/wait-checks.sh --repo o/r --pr 1 &"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
   End
 
   # ── plain git, no rule in scope ─────────────────────────────────────────────
