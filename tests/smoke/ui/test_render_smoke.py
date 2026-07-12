@@ -213,9 +213,9 @@ PAGE_TABLE: tuple[Page, ...] = (
         "/pfblockerng/pfblockerng_Antarctica.php",
         ("Continent - Antarctica", "Antarctica [900003] AQ (1)"),
     ),
-    # "Japan [900005] JP (2)" -- 2 networks, not 1: proves the represented/registered-country
-    # ("*_rep") code path (pfblockerng.php:1316) actually ran, not just the direct-match path
-    # (geoip_blocks_ipv4.csv carries a JP-geoname_id/GB-registered exclave row for this).
+    # "Japan [900005] JP (2)" -- 2 networks, not 1: the exclave row's geoname_id also resolves to
+    # JP, so it lands a SECOND direct-match hit here. That pins the row, not the represented-
+    # country branch it also triggers -- "GB_rep (1)" on Europe is what pins that.
     Page(
         "geoip_asia",
         "/pfblockerng/pfblockerng_Asia.php",
