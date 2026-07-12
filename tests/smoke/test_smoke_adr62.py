@@ -774,3 +774,68 @@ def test_adr62_tld_enabled_run_keeps_plain_row_classification(deployed_vm: Smoke
             assert not h.resolves_to(ans, STUB_DNS_A), (
                 f"{name} still resolving with pfb_tld=on (TLD mode broke ordinary plain-row blocking): {ans}"
             )
+
+
+# --------------------------------------------------------------------------- #
+# Row 8 — issue #1117: the first line of a formerly-"liteparser"-trusted feed
+# that needs host-munging must be salvaged, not silently dropped.
+#
+# Pre-fix, $liteparser=TRUE (set when a feed autodetects as bbc/pon/et, or for a
+# user custom list) forced the per-line $lite fast path, skipping the ADR-22
+# scheme strip. So a trusted feed's FIRST line carrying a URL-form value in its
+# extracted domain column failed pfb_filter(PFB_FILTER_DOMAIN) on the raw string
+# and was dropped+logged; the failure flipped the flag FALSE, and a SECOND such
+# line was then munged and salvaged. This is the only end-to-end driver of that
+# bug: the ADR-62 corpus oracle consumes post-munging .raw fixtures, so it is
+# structurally blind to the PHP download/parse loop (its own docstring says so).
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.timeout(300)
+def test_adr62_liteparser_first_url_line_salvaged_not_dropped(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
+    """Row 8 (issue #1117): the FIRST URL-form line of a bbc-trusted feed blocks.
+
+    Scenario: the $liteparser fast path skipped host-munging for feeds it trusted
+      (custom/bbc/pon/et), silently dropping the first line munging would have fixed.
+    Given two bbc-CSV rows whose extracted domain (col 0) is a URL — ``https://<first>``
+      then ``https://<second>`` — both RESOLVING via the stub before the feed loads,
+    When the feed loads (col 3 carries the Bambenek marker that selects the formerly
+      liteparser-trusted 'bbc' type),
+    Then BOTH domains are VIP-blocked. Pre-#1117 the SECOND URL line was salvaged (the
+      adaptive reset had flipped the flag) while the FIRST was dropped — so the
+      second-line block is the control proving the feed loaded and the URL pipeline
+      works, and the first-line block is the fix.
+    """
+    first_dom = h.unique_domain("adr62r8first")  # first URL line — dropped pre-#1117
+    second_dom = h.unique_domain("adr62r8second")  # second URL line — salvaged pre-#1117 (control)
+    marker = "http://osint.bambenekconsulting.com/manual/index.php"  # bbc detector, pfblockerng.inc
+    body = (
+        f"https://{first_dom},bambenek-comment,20260101,{marker}\n"
+        f"https://{second_dom},bambenek-comment,20260102,{marker}\n"
+    )
+    feed_url = h.write_local_feed(deployed_vm, "smoke_adr62_row8.txt", body)
+    spec = h.DnsblCase(aliasname="adr62row8", feed_url=feed_url, header="adr62row8", mode=h.DnsblMode.VIP)
+
+    for name in (first_dom, second_dom):
+        before = h.dns_probe_client(client_vm, name, "A")
+        assert h.resolves_to(before, STUB_DNS_A), f"{name} should resolve via stub BEFORE listing, got {before}"
+
+    with h.CaseContext(deployed_vm, spec):
+        # Control: the SECOND URL line is salvaged even pre-fix. Poll it to VIP — this is
+        # the feed-load/settle transition; once it holds, the whole feed is in place.
+        h.flush_unbound_name(deployed_vm, second_dom)
+        ans_second = h.dns_probe_client_until(client_vm, second_dom, h.is_vip)
+        assert not h.resolves_to(ans_second, STUB_DNS_A), (
+            f"control: second URL line {second_dom} did not block — the feed failed to load, "
+            f"so this test cannot isolate the #1117 first-line bug: {ans_second}"
+        )
+        # The fix: with the feed settled, the FIRST line's block state is authoritative on
+        # the first read (smoke rule: do not loop for the expected value). Pre-#1117 it was
+        # dropped and stays resolving via the stub; after the fix it is VIP-blocked.
+        h.flush_unbound_name(deployed_vm, first_dom)
+        ans_first = h.dns_probe_client(client_vm, first_dom, "A")
+        assert h.is_vip(ans_first), (
+            f"issue #1117: first URL-form line {first_dom} was dropped, not salvaged — "
+            f"$liteparser skipped host-munging for the feed's first trusted line; "
+            f"expected VIP block, got {ans_first}"
+        )
