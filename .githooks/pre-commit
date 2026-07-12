@@ -54,6 +54,7 @@ staged_has() { printf '%s\n' "$staged" | grep -qE "$1"; }
 staged_py=0;  staged_has '\.py$'        && staged_py=1
 staged_md=0;  staged_has '\.md$'        && staged_md=1
 staged_php=0; staged_has '\.(php|inc)$' && staged_php=1
+staged_xml=0; staged_has '\.xml$'       && staged_xml=1
 staged_sh=0;  staged_has '\.sh$'        && staged_sh=1
 # Spec plumbing (helper, extensionless bin/ shims, fixtures) impacts every shellspec
 # run but need not end in .sh -- it must open the shell block on its own.
@@ -194,6 +195,18 @@ if [ "$staged_sh" = 1 ] || [ "$staged_md" = 1 ]; then
 		"$py_bin" scripts/check_url_encoding.py || failed 'url-encoding'
 	else
 		skip url-encoding
+	fi
+fi
+
+# --- Forbid a target="_blank" link with no adjacent rel="noopener noreferrer"
+#     (issue #1217, reverse-tabnabbing defence). Relevant to the Web UI surface:
+#     PHP/inc pages and the wizard XML under src/usr/local/www. ---
+if [ "$staged_php" = 1 ] || [ "$staged_xml" = 1 ]; then
+	if [ -n "$py_bin" ]; then
+		step 'noopener (target=_blank needs adjacent rel=noopener noreferrer)'
+		"$py_bin" scripts/check_noopener.py || failed 'noopener'
+	else
+		skip noopener
 	fi
 fi
 

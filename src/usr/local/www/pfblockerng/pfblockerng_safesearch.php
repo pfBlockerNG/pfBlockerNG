@@ -118,9 +118,9 @@ $section = new Form_Section('SafeSearch settings');
 $section->addInput(new Form_StaticText(
 	'Links',
 	'<small>'
-	. '<a href="/firewall_aliases.php" target="_blank">Firewall Aliases</a>&emsp;'
-	. '<a href="/firewall_rules.php" target="_blank">Firewall Rules</a>&emsp;'
-	. '<a href="/status_logs_filter.php" target="_blank">Firewall Logs</a></small>'
+	. '<a href="/firewall_aliases.php" target="_blank" rel="noopener noreferrer">Firewall Aliases</a>&emsp;'
+	. '<a href="/firewall_rules.php" target="_blank" rel="noopener noreferrer">Firewall Rules</a>&emsp;'
+	. '<a href="/status_logs_filter.php" target="_blank" rel="noopener noreferrer">Firewall Logs</a></small>'
 ));
 
 $section->addInput(new Form_StaticText(
@@ -144,7 +144,7 @@ $section->addInput(new Form_Select(
 	$pconfig['safesearch_youtube'],
 	$options_safesearch_youtube
 ))->setHelp('Select YouTube Restrictions. You can check it by visiting: '
-		. '<a target="_blank" href="https://www.youtube.com/check_content_restrictions">Check Youtube Content Restrictions</a>.')
+		. '<a target="_blank" rel="noopener noreferrer" href="https://www.youtube.com/check_content_restrictions">Check Youtube Content Restrictions</a>.')
   ->setAttribute('style', 'width: auto');
 $form->add($section);
 print($form);

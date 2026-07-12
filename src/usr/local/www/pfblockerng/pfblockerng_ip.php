@@ -327,9 +327,9 @@ $section = new Form_Section('IP Configuration');
 $section->addInput(new Form_StaticText(
 	'Links',
 	'<small>'
-	. '<a href="/firewall_aliases.php" target="_blank">Firewall Aliases</a>&emsp;'
-	. '<a href="/firewall_rules.php" target="_blank">Firewall Rules</a>&emsp;'
-	. '<a href="/status_logs_filter.php" target="_blank">Firewall Logs</a></small>'
+	. '<a href="/firewall_aliases.php" target="_blank" rel="noopener noreferrer">Firewall Aliases</a>&emsp;'
+	. '<a href="/firewall_rules.php" target="_blank" rel="noopener noreferrer">Firewall Rules</a>&emsp;'
+	. '<a href="/status_logs_filter.php" target="_blank" rel="noopener noreferrer">Firewall Logs</a></small>'
 ));
 
 $section->addInput(new Form_Checkbox(
@@ -443,7 +443,7 @@ $section->addInput(new Form_StaticText(
 	'Attribution',
 	'<small>'
 	. 'ASN database distributed under the Creative Commons Attribution-ShareAlike 4.0 International License by: '
-	. '<a target="_blank" href="https://ipinfo.io">IPinfo</a><br />'
+	. '<a target="_blank" rel="noopener noreferrer" href="https://ipinfo.io">IPinfo</a><br />'
 	. 'The ASN database is automatically updated each day at a random hour.</small>'
 ));
 
@@ -463,7 +463,7 @@ $section->addInput(new Form_Input(
         $pconfig['asn_token'],
         ['placeholder' => 'Enter your IPinfo Token']
 ))->setHelp('To utilize the free IPinfo ASN functionality, you must first register for a free IPinfo user account. Visit the following '
-        . '<a href="https://ipinfo.io/signup" target="_blank">Link to Register</a> for a free IPinfo user account. '
+        . '<a href="https://ipinfo.io/signup" target="_blank" rel="noopener noreferrer">Link to Register</a> for a free IPinfo user account. '
         . '<strong>NOTE: If you use Snort/Suricata, check for IPinfo blocked events!</strong>')
   ->setAttribute('autocomplete', 'off');
 
@@ -474,7 +474,7 @@ $section->addInput(new Form_StaticText(
         'Attribution',
         '<small>'
         . 'GeoIP database GeoLite2 distributed under the Creative Commons Attribution-ShareAlike 4.0 International License by: '
-	. '<a target="_blank" href="https://www.maxmind.com">MaxMind Inc.</a><br />'
+	. '<a target="_blank" rel="noopener noreferrer" href="https://www.maxmind.com">MaxMind Inc.</a><br />'
 	. 'The GeoIP database is automatically updated each day at a random hour.</small>'
 ));
 
@@ -485,7 +485,7 @@ $section->addInput(new Form_Input(
 	$pconfig['maxmind_account'],
 	['placeholder' => 'Enter your MaxMind GeoLite2 Account ID']
 ))->setHelp('To utilize the free MaxMind GeoLite2 GeoIP functionality, you must first register for a free MaxMind user account. Visit the following '
-	. '<a href="https://www.maxmind.com/en/geolite2/signup" target="_blank">Link to Register</a> for a free MaxMind user account. '
+	. '<a href="https://www.maxmind.com/en/geolite2/signup" target="_blank" rel="noopener noreferrer">Link to Register</a> for a free MaxMind user account. '
 	. '<strong>Use the GeoIP Update version 3.1.1 or newer registration option.</strong>')
   ->setAttribute('autocomplete', 'off');
 
@@ -496,7 +496,7 @@ $section->addInput(new Form_Input(
 	$pconfig['maxmind_key'] ?? '',
 	['placeholder' => 'Enter your MaxMind GeoLite2 License Key -- leave blank to keep the current key']
 ))->setHelp('To utilize the free MaxMind GeoLite2 GeoIP functionality, you must first register for a free MaxMind user account. Visit the following '
-	. '<a href="https://www.maxmind.com/en/geolite2/signup" target="_blank">Link to Register</a> for a free MaxMind user account. '
+	. '<a href="https://www.maxmind.com/en/geolite2/signup" target="_blank" rel="noopener noreferrer">Link to Register</a> for a free MaxMind user account. '
 	. '<strong>Utilize the GeoIP Update version 3.1.1 or newer registration option.</strong>'
 	. ' The stored key is never displayed here; leaving this field blank on Save keeps the existing key unchanged.')
   ->setAttribute('autocomplete', 'off');

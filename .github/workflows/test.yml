@@ -240,6 +240,12 @@ jobs:
         # fences (the checker's defaults). ubuntu-latest ships python3.
         run: python3 scripts/check_url_encoding.py
 
+      - name: Forbid target="_blank" links with no adjacent rel="noopener noreferrer"
+        # Reverse-tabnabbing defence-in-depth (issue #1217): a new-tab link whose
+        # page can reach back via window.opener. Scans tracked src/usr/local/www
+        # .php/.inc/.xml (the checker's defaults). ubuntu-latest ships python3.
+        run: python3 scripts/check_noopener.py
+
       - name: Forbid Python on the pfSense appliance
         # The appliance ships python3.11 with no `python3` symlink, so a
         # `/usr/local/bin/python*` invocation is rc=127 (and silent under check=False

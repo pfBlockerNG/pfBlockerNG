@@ -603,7 +603,7 @@ if (isset($savemsg)) {
 <?php
 if ($gtype == 'geoip') {
 	print_callout('GeoIP database GeoLite2 distributed under the Creative Commons Attribution-ShareAlike 4.0 International License by:
-			<a target="_blank" href="https://www.maxmind.com">MaxMind Inc.</a><br /><br />
+			<a target="_blank" rel="noopener noreferrer" href="https://www.maxmind.com">MaxMind Inc.</a><br /><br />
 			The GeoIP database is automatically updated each day at a random hour.<br /><br />
 
 			<span class="text-danger"><strong>Note:&emsp;</strong></span>

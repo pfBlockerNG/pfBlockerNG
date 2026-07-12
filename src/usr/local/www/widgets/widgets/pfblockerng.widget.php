@@ -929,7 +929,7 @@ function pfBlockerNG_get_header($mode='') {
 
 			// Print 'Click to Open Logs tab' icon
 			if ($key == 0) {
-				print("{$tab5}<td>\n{$tab6}<a target='_blank' href='pfblockerng/pfblockerng_log.php' "
+				print("{$tab5}<td>\n{$tab6}<a target='_blank' rel='noopener noreferrer' href='pfblockerng/pfblockerng_log.php' "
 					. "title='" . gettext("Click to open Logs tab") . "'>\n{$tab7}<i class='fa-regular fa-rectangle-list'></i>\n{$tab5}</a></td>\n"
 					. "{$tab4}</tr>");
 			}

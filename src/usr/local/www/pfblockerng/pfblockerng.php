@@ -1920,16 +1920,16 @@ $section = new Form_Section("Continent - {$continent_display}");
 $section->addInput(new Form_StaticText(
 	'Links',
 	'<small>'
-	. '<a href="/firewall_aliases.php" target="_blank">Firewall Alias</a>&emsp;'
-	. '<a href="/firewall_rules.php" target="_blank">Firewall Rules</a>&emsp;'
-	. '<a href="/status_logs_filter.php" target="_blank">Firewall Logs</a></small>'
+	. '<a href="/firewall_aliases.php" target="_blank" rel="noopener noreferrer">Firewall Alias</a>&emsp;'
+	. '<a href="/firewall_rules.php" target="_blank" rel="noopener noreferrer">Firewall Rules</a>&emsp;'
+	. '<a href="/status_logs_filter.php" target="_blank" rel="noopener noreferrer">Firewall Logs</a></small>'
 ));
 
 $section->addInput(new Form_StaticText(
 	'NOTES:',
 	'GeoIP data by MaxMind Inc. - GeoLite2<br />'
 	. 'Click here for IMPORTANT info&emsp;-->&emsp;'
-	. '<a target="_blank" href="https://dev.maxmind.com/geoip/whats-new-in-geoip2/">'
+	. '<a target="_blank" rel="noopener noreferrer" href="https://dev.maxmind.com/geoip/whats-new-in-geoip2/">'
 	. '<span class="text-danger"><strong>What\'s new in GeoIP2</strong></span></a>'
 
 	. '<hr style="height: 1px; border: none; background-color: #d6d6d6;"/>'
@@ -2124,7 +2124,7 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		"Custom {$custom_location}",
 		'text',
 		$pconfig['aliasaddr_' . $advmode]
-	))->sethelp('<a target="_blank" href="/firewall_aliases.php?tab=ip">Click Here to add/edit Aliases</a>'
+	))->sethelp('<a target="_blank" rel="noopener noreferrer" href="/firewall_aliases.php?tab=ip">Click Here to add/edit Aliases</a>'
 		. 'Do not manually enter Addresses(es).<br />Do not use \'pfB_\' in the address-type (Host/Network/URL/URL Table) Alias name.<br />'
 		. "Select 'invert' to invert the sense of the match. ie - Not (!) {$custom_location} Address(es)"
 	)->setWidth(8);
@@ -2457,9 +2457,9 @@ $section = new Form_Section('IPv4 Reputation');
 $section->addInput(new Form_StaticText(
 	'Links',
 	'<small>'
-	. '<a href="/firewall_aliases.php" target="_blank">Firewall Alias</a>&emsp;'
-	. '<a href="/firewall_rules.php" target="_blank">Firewall Rules</a>&emsp;'
-	. '<a href="/status_logs_filter.php" target="_blank">Firewall Logs</a></small>'
+	. '<a href="/firewall_aliases.php" target="_blank" rel="noopener noreferrer">Firewall Alias</a>&emsp;'
+	. '<a href="/firewall_rules.php" target="_blank" rel="noopener noreferrer">Firewall Rules</a>&emsp;'
+	. '<a href="/status_logs_filter.php" target="_blank" rel="noopener noreferrer">Firewall Logs</a></small>'
 ));
 
 $section->addInput(new Form_StaticText(
@@ -2608,7 +2608,7 @@ $section->addInput(new Form_StaticText(
 	. '<ul>https://rules.emergingthreatspro.com/XXXXXXXXXXXXXXXX/reputation/iprepdata.txt.gz</ul>'
 	. 'Select the <strong>Auto</strong> format. The URL should use the .gz File type.<br />'
 	. 'Enter your "ETPRO" code in URL. Further information can be found @ '
-	. '<a target="_blank" href="https://www.proofpoint.com/us/solutions/products/threat-intelligence">Proofpoint IQRisk</a><br /><br />'
+	. '<a target="_blank" rel="noopener noreferrer" href="https://www.proofpoint.com/us/solutions/products/threat-intelligence">Proofpoint IQRisk</a><br /><br />'
 	. 'To use <strong>Match</strong> Lists, Create a new Alias and select one of the <strong>'
 	. 'Action Match</strong> Formats and <br />'
 	. 'enter the <strong>Localfile</strong> as: <ul>/var/db/pfblockerng/match/ETMatch.txt</ul>'
