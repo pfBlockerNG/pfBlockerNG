@@ -101,10 +101,11 @@ def deployed_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
     try:
         yield smoke_vm
     finally:
-        # Leave no dedup/reputation/suppression knob set for the next module's reloads.
+        # Leave no dedup/reputation/suppression/placeholder knob set for the next module.
         h.set_ip_dedup(smoke_vm, False)
         h.set_ip_reputation(smoke_vm)
         h.set_ip_suppression(smoke_vm, enabled=False)
+        _set_placeholder(smoke_vm, "")
         h.collect_host_diagnostics(smoke_vm)
 
 
