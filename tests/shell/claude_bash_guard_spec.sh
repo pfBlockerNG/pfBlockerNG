@@ -582,6 +582,30 @@ Describe 'claude-bash-guard.sh'
       The output should include '"permissionDecision":"deny"'
     End
 
+    # The same fusion, one character further along: a quoted `>` + the real `&` + any
+    # digit from the NEXT token reads exactly like a real `N>&M` redirect. Only a
+    # MANDATORY leading fd digit tells them apart -- a real redirect always has one.
+    It 'D16: a fused >& followed by a digit is not a redirection -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"sh scripts/agent/wait-checks.sh --threshold \">\"&2"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    # And the mirror image: the real background & fusing with a FOLLOWING quoted `>`
+    # into `&>`. No repo flow uses `&>file`, so that lookalike is not neutralized at
+    # all -- eating it would erase the very & the rule exists to find.
+    It 'D17: a background & fused with a following quoted > still denies -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"sh scripts/agent/wait-checks.sh --pr 1 &\">\" foo"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
     # ACCEPTED FALSE POSITIVE. Treating a newline as a separator (so this would pass)
     # is what a text scan cannot do safely: it cannot tell a newline that ends a
     # command from one inside a quoted argument, and getting that wrong the other way

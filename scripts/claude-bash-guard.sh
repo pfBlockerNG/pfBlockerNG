@@ -149,10 +149,18 @@ segs="$(printf '%s' "$norm" | tr ';&|()' '\n')"
 # worse than useless; one that over-denies costs a call split in two. So ANY background
 # `&` after a wait script denies, whatever sits between (pinned by D6/D7/D14).
 #
-# The redirection neutralizer needs a digit AFTER `>&` for the same reason: quote-strip
-# can fuse a quoted `>` with the real trailing `&` into a bare `>&`, and eating that as
-# a "redirection" would erase the command's only `&` (pinned by D15).
-norm_bg="$(printf '%s' "$norm" | sed -e 's/[0-9]*>&[0-9-][0-9-]*//g' -e 's/&>//g' -e 's/&&/ /g')"
+# Only ONE `&` lookalike is neutralized, and only in its unmistakable form: an fd
+# redirection carrying a MANDATORY leading fd number (`2>&1`, `1>&2`). That anchor is
+# what a quote-fused `>` can never fake -- the character before a fused `>` is the space
+# that preceded the quote, not a digit (pinned by D15/D16). `&>file` gets no exemption at
+# all: no flow here uses it, and eating that lookalike would erase the very `&` the rule
+# exists to find when the `>` came from a quoted value (pinned by D17). `&&` is a list
+# operator, not a background, and is the one other form that must not read as one.
+#
+# A quoted value ending in a DIGIT and a `>` immediately before the `&` (`--x \"1>\"&2`)
+# is textually identical to a real redirect even so. That is payload construction to
+# defeat the control, which the ACCEPTED LIMITATION above already places out of scope.
+norm_bg="$(printf '%s' "$norm" | sed -e 's/[0-9][0-9]*>&[0-9-][0-9-]*//g' -e 's/&&/ /g')"
 
 # _contains <needle> -- true (rc 0) iff the CURRENT SEGMENT ($seg, set by
 # the per-segment loop below) contains <needle> as a literal substring.
