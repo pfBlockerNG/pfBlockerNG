@@ -130,6 +130,11 @@ def _lines(vm: SmokeVM, path: str) -> list[str]:
     return [ln.strip() for ln in result.stdout.splitlines() if ln.strip()]
 
 
+def _raw(vm: SmokeVM, path: str) -> str:
+    """Raw on-box file content -- for byte-identity checks a line-set cannot make."""
+    return vm.ssh("cat", path).stdout
+
+
 # --------------------------------------------------------------------------- #
 # R1 -- cross-feed dedup ownership (CIDR containment + exact repeat)
 # --------------------------------------------------------------------------- #
@@ -166,8 +171,8 @@ def test_recompute_dedup_ownership_across_overlapping_feeds(deployed_vm: SmokeVM
 
     a_lines = _lines(deployed_vm, f"{DENYDIR}/r1a_v4.txt")
     b_lines = _lines(deployed_vm, f"{DENYDIR}/r1b_v4.txt")
-    assert set(a_lines) == {"203.0.113.0/24", "198.51.100.211"}, f"feed A perturbed: {a_lines}"
-    assert set(b_lines) == {"198.51.100.212"}, f"feed B ownership wrong (overlap not pruned): {b_lines}"
+    assert sorted(a_lines) == sorted(["203.0.113.0/24", "198.51.100.211"]), f"feed A perturbed: {a_lines}"
+    assert b_lines == ["198.51.100.212"], f"feed B ownership wrong (overlap not pruned): {b_lines}"
 
     master = _lines(deployed_vm, MASTERFILE)
     assert "r1a_v4 203.0.113.0/24" in master, f"masterfile missing A's /24 row: {master}"
@@ -222,9 +227,10 @@ def test_recompute_v6_snapshot_round_trips_across_static_pass(deployed_vm: Smoke
     h.reload(deployed_vm, "updateip", wait_unbound=False)
     snap_lines = _lines(deployed_vm, f"{SNAPDIR}/r2v6_v6.snap")
     deny_lines_pass1 = _lines(deployed_vm, f"{DENYDIR}/r2v6_v6.txt")
-    expected = {"2001:db8:5678::/64", "2001:db8:5678:1::42"}
-    assert set(snap_lines) == expected, f"snapshot content wrong after first ingest: {snap_lines}"
-    assert set(deny_lines_pass1) == expected, f"deny file content wrong after first ingest: {deny_lines_pass1}"
+    deny_raw_pass1 = _raw(deployed_vm, f"{DENYDIR}/r2v6_v6.txt")
+    expected = sorted(["2001:db8:5678::/64", "2001:db8:5678:1::42"])
+    assert sorted(snap_lines) == expected, f"snapshot content wrong after first ingest: {snap_lines}"
+    assert sorted(deny_lines_pass1) == expected, f"deny file content wrong after first ingest: {deny_lines_pass1}"
     members_pass1 = h.wait_pfctl_table(deployed_vm, spec.alias)
     assert h.member_present(members_pass1, "2001:db8:5678:1::42"), f"pf table missing bare host: {members_pass1}"
     assert h.member_covers(members_pass1, "2001:db8:5678::1"), f"pf table missing /64 coverage: {members_pass1}"
@@ -232,9 +238,9 @@ def test_recompute_v6_snapshot_round_trips_across_static_pass(deployed_vm: Smoke
     # Held static: no edit, no force_ip_refetch -- updateip's force=true alone
     # reprocesses this alias again from its cached raw body.
     h.reload(deployed_vm, "updateip", wait_unbound=False)
-    deny_lines_pass2 = _lines(deployed_vm, f"{DENYDIR}/r2v6_v6.txt")
-    assert set(deny_lines_pass2) == set(deny_lines_pass1), (
-        f"deny file changed across a static pass: pass1={deny_lines_pass1} pass2={deny_lines_pass2}"
+    deny_raw_pass2 = _raw(deployed_vm, f"{DENYDIR}/r2v6_v6.txt")
+    assert deny_raw_pass2 == deny_raw_pass1, (
+        f"deny file not byte-identical across a static pass: pass1={deny_raw_pass1!r} pass2={deny_raw_pass2!r}"
     )
     master = _lines(deployed_vm, MASTERFILE)
     assert "r2v6_v6 2001:db8:5678::/64" in master, f"masterfile missing v6 /64 row after round-trip: {master}"
@@ -283,8 +289,8 @@ def test_recompute_rewrites_unchanged_sibling_across_passes(deployed_vm: SmokeVM
     # BEFORE: both settle correctly.
     a_before = _lines(deployed_vm, f"{DENYDIR}/r4a_v4.txt")
     b_before = _lines(deployed_vm, f"{DENYDIR}/r4b_v4.txt")
-    assert set(a_before) == {"198.51.100.31"}, f"A did not settle before the change: {a_before}"
-    assert set(b_before) == {"198.51.100.41"}, f"B did not settle before the change: {b_before}"
+    assert a_before == ["198.51.100.31"], f"A did not settle before the change: {a_before}"
+    assert b_before == ["198.51.100.41"], f"B did not settle before the change: {b_before}"
 
     # CHANGE: A gains a row via a REAL re-download; B is left completely alone.
     h.write_local_feed(deployed_vm, "r4_feed_a.txt", "198.51.100.31\n198.51.100.32\n")
@@ -293,10 +299,8 @@ def test_recompute_rewrites_unchanged_sibling_across_passes(deployed_vm: SmokeVM
 
     a_after = _lines(deployed_vm, f"{DENYDIR}/r4a_v4.txt")
     b_after = _lines(deployed_vm, f"{DENYDIR}/r4b_v4.txt")
-    assert set(a_after) == {"198.51.100.31", "198.51.100.32"}, f"A's change was not applied: {a_after}"
-    assert set(b_after) == {"198.51.100.41"}, (
-        f"B (never touched) was dropped/perturbed by the family rewrite: {b_after}"
-    )
+    assert sorted(a_after) == sorted(["198.51.100.31", "198.51.100.32"]), f"A's change was not applied: {a_after}"
+    assert b_after == ["198.51.100.41"], f"B (never touched) was dropped/perturbed by the family rewrite: {b_after}"
 
     master = _lines(deployed_vm, MASTERFILE)
     assert "r4a_v4 198.51.100.32" in master, f"masterfile missing A's new row: {master}"
