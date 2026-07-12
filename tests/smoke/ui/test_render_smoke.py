@@ -598,7 +598,7 @@ def test_geoip_pages_render_the_seeded_csv_rows(webui: WebUI, php_error_log_guar
     """Scenario: the GeoIP pages carry the SEEDED data, not just their chrome (issue #1219).
 
     Given the UI session seeded the synthetic MaxMind-schema CSVs and ran `ugc`,
-    When the GeoIP pages that carry seeded rows are fetched (the five below; the other GeoIP
+    When the GeoIP pages that carry seeded rows are fetched (the six below; the other GeoIP
          pages are covered for RENDER by PAGE_TABLE, and hold no needle a fixture row pins),
     Then every needle below renders — and each one is produced by ONE specific fixture row, so
          deleting that row (or gutting a whole CSV) fails this test.
@@ -609,23 +609,34 @@ def test_geoip_pages_render_the_seeded_csv_rows(webui: WebUI, php_error_log_guar
     marker added beside it would gate nothing (coverage theater). Same shape as
     ``test_feeds_custom_panel_heading_renders``.
 
+    EVERY needle carries its member COUNT, and that is load-bearing: an ``{ISO}_rep`` entry is
+    appended unconditionally for any country that has a direct row (pfblockerng.php:1301-1312),
+    so a bare ``NG_rep``/``GB_rep`` string still matches — rendering ``(0)`` — even if the
+    represented-country computation were deleted outright. Only the count separates a real
+    represented-country match from that always-present placeholder.
+
     The needles, and the row each one pins:
       * ``NG (1)``     — Nigeria's IPv4 row                     (geoip_blocks_ipv4.csv)
       * ``NG (2)``     — Nigeria's TWO IPv6 rows: the only count that differs between the v4 and
                          v6 selects, so it is what proves the IPv6 CSV reached the render at all
-      * ``NG_rep``     — the empty-``geoname_id`` row, which falls back to its registered country
-      * ``JP (2)``     — Japan's direct row + the exclave row (represented-country path)
-      * ``GB_rep``     — the represented side of that same exclave row
+      * ``NG_rep (1)`` — the empty-``geoname_id`` row falling back to its registered country
+      * ``JP (2)``     — the exclave row, counted toward Japan's own direct match alongside its
+                         direct row (this pins the ROW; the represented-country BRANCH is pinned
+                         by ``GB_rep (1)`` below)
+      * ``GB_rep (1)`` — the represented side of that same exclave row
       * ``A1 (1)`` / ``A2 (1)`` — the anonymous-proxy / satellite-provider rows (these only reach
                          the A1/A2 aggregates when the row carries NO country, per pfblockerng.php)
       * ``GB (1)``     — a $top_20 ISO reaching the Top Spammers tab
+      * Reputation's ``NG (1)`` — the same seeded data through a SEPARATE serialization path
+                         (``pfb_build_reputation_tab()``), which the continent pages never touch
     """
     expected: dict[str, tuple[str, ...]] = {
-        "/pfblockerng/pfblockerng_Africa.php": ("NG (1)", "NG (2)", "NG_rep"),
+        "/pfblockerng/pfblockerng_Africa.php": ("NG (1)", "NG (2)", "NG_rep (1)"),
         "/pfblockerng/pfblockerng_Asia.php": ("JP (2)",),
-        "/pfblockerng/pfblockerng_Europe.php": ("GB_rep",),
+        "/pfblockerng/pfblockerng_Europe.php": ("GB_rep (1)",),
         "/pfblockerng/pfblockerng_Proxy_and_Satellite.php": ("A1 (1)", "A2 (1)"),
         "/pfblockerng/pfblockerng_Top_Spammers.php": ("GB (1)",),
+        "/pfblockerng/pfblockerng_reputation.php": ("NG (1)",),
     }
     for path, needles in expected.items():
         resp = webui.get(path)
