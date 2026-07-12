@@ -163,6 +163,20 @@ PAGE_TABLE: tuple[Page, ...] = (
     # `if ($gtype == 'ipv6')`, a code path the ipv4/dnsbl entries above never exercise) --
     # this entry guards it against a PHP render regression.
     Page("category_edit_ipv6", "/pfblockerng/pfblockerng_category_edit.php?type=ipv6", ("Advanced Tuneables",)),
+    # issue #1211: the fresh add/addgroup-row $pconfig block (:868-914) reads keys a
+    # fresh row never populates. This GET exercises that exact path (no config write --
+    # act=addgroup/atype without $_POST['save'] never persists). NOTE: this tier CANNOT
+    # observe the "Undefined array key" defect class itself -- the smoke guest runs at
+    # error_reporting E_ALL ^ (E_WARNING|E_NOTICE|E_DEPRECATED) with display_errors=off
+    # (issue #1218), so a regression here would only be caught by a FATAL (a bad `??`
+    # default that breaks rendering). CategoryEditFreshRowPconfigTest (PHPUnit, full
+    # error_reporting) is the oracle for the guard itself; this entry is render-hermeticity
+    # coverage only.
+    Page(
+        "category_edit_fresh_addgroup_whitelist",
+        "/pfblockerng/pfblockerng_category_edit.php?type=ipv4&act=addgroup&atype=Whitelist%7C192.0.2.55%7Csmoke-1211",
+        ("Advanced Tuneables",),
+    ),
     # threats.php REQUIRES a host/domain/port param -- with none it print_info_box()es and exit()s
     # before rendering $pgtitle. A syntactically-valid param renders the lookup page chrome; the
     # threat links it draws are <a href> only (no server-side network call), so it stays hermetic.

@@ -867,50 +867,52 @@ else {
 
 	$pconfig				= array();
 
-	$pconfig['aliasname']			= $rowdata[$rowid]['aliasname'];
-	$pconfig['description']			= $rowdata[$rowid]['description'];
-	$pconfig['action']			= $rowdata[$rowid]['action'];
-	$pconfig['cron']			= $rowdata[$rowid]['cron'];
-	$pconfig['dow']				= $rowdata[$rowid]['dow'];
-	$pconfig['sort']			= $rowdata[$rowid]['sort'];
+	// issue #1211: a fresh add/addgroup row only populates a handful of
+	// $rowdata[$rowid] keys -- every other read needs its save-path default (:743-790).
+	$pconfig['aliasname']			= $rowdata[$rowid]['aliasname'] ?? '';
+	$pconfig['description']			= $rowdata[$rowid]['description'] ?? '';
+	$pconfig['action']			= $rowdata[$rowid]['action'] ?? 'Disabled';
+	$pconfig['cron']			= $rowdata[$rowid]['cron'] ?? 'Never';
+	$pconfig['dow']				= $rowdata[$rowid]['dow'] ?? '';
+	$pconfig['sort']			= $rowdata[$rowid]['sort'] ?? '';
 
-	$pconfig['srcint']			= $rowdata[$rowid]['srcint'];
-	$pconfig['script_pre']			= $rowdata[$rowid]['script_pre'];
-	$pconfig['script_post']			= $rowdata[$rowid]['script_post'];
+	$pconfig['srcint']			= $rowdata[$rowid]['srcint'] ?? '';
+	$pconfig['script_pre']			= $rowdata[$rowid]['script_pre'] ?? '';
+	$pconfig['script_post']			= $rowdata[$rowid]['script_post'] ?? '';
 
 	if ($gtype == 'ipv4' || $gtype == 'ipv6') {
-		$pconfig['aliaslog']		= $rowdata[$rowid]['aliaslog'];
-		$pconfig['stateremoval']	= $rowdata[$rowid]['stateremoval'];
+		$pconfig['aliaslog']		= $rowdata[$rowid]['aliaslog'] ?? 'enabled';
+		$pconfig['stateremoval']	= $rowdata[$rowid]['stateremoval'] ?? 'enabled';
 
-		$pconfig['autoaddrnot_in']	= $rowdata[$rowid]['autoaddrnot_in'];
-		$pconfig['autoports_in']	= $rowdata[$rowid]['autoports_in'];
-		$pconfig['aliasports_in']	= $rowdata[$rowid]['aliasports_in'];
-		$pconfig['autoaddr_in']		= $rowdata[$rowid]['autoaddr_in'];
-		$pconfig['autonot_in']		= $rowdata[$rowid]['autonot_in'];
-		$pconfig['aliasaddr_in']	= $rowdata[$rowid]['aliasaddr_in'];
-		$pconfig['autoproto_in']	= $rowdata[$rowid]['autoproto_in'];
-		$pconfig['agateway_in']		= $rowdata[$rowid]['agateway_in'];
+		$pconfig['autoaddrnot_in']	= $rowdata[$rowid]['autoaddrnot_in'] ?? '';
+		$pconfig['autoports_in']	= $rowdata[$rowid]['autoports_in'] ?? '';
+		$pconfig['aliasports_in']	= $rowdata[$rowid]['aliasports_in'] ?? '';
+		$pconfig['autoaddr_in']		= $rowdata[$rowid]['autoaddr_in'] ?? '';
+		$pconfig['autonot_in']		= $rowdata[$rowid]['autonot_in'] ?? '';
+		$pconfig['aliasaddr_in']	= $rowdata[$rowid]['aliasaddr_in'] ?? '';
+		$pconfig['autoproto_in']	= $rowdata[$rowid]['autoproto_in'] ?? 'any';
+		$pconfig['agateway_in']		= $rowdata[$rowid]['agateway_in'] ?? 'default';
 
-		$pconfig['autoaddrnot_out']	= $rowdata[$rowid]['autoaddrnot_out'];
-		$pconfig['autoports_out']	= $rowdata[$rowid]['autoports_out'];
-		$pconfig['aliasports_out']	= $rowdata[$rowid]['aliasports_out'];
-		$pconfig['autoaddr_out']	= $rowdata[$rowid]['autoaddr_out'];
-		$pconfig['autonot_out']		= $rowdata[$rowid]['autonot_out'];
-		$pconfig['aliasaddr_out']	= $rowdata[$rowid]['aliasaddr_out'];
-		$pconfig['autoproto_out']	= $rowdata[$rowid]['autoproto_out'];
-		$pconfig['agateway_out']	= $rowdata[$rowid]['agateway_out'];
+		$pconfig['autoaddrnot_out']	= $rowdata[$rowid]['autoaddrnot_out'] ?? '';
+		$pconfig['autoports_out']	= $rowdata[$rowid]['autoports_out'] ?? '';
+		$pconfig['aliasports_out']	= $rowdata[$rowid]['aliasports_out'] ?? '';
+		$pconfig['autoaddr_out']	= $rowdata[$rowid]['autoaddr_out'] ?? '';
+		$pconfig['autonot_out']		= $rowdata[$rowid]['autonot_out'] ?? '';
+		$pconfig['aliasaddr_out']	= $rowdata[$rowid]['aliasaddr_out'] ?? '';
+		$pconfig['autoproto_out']	= $rowdata[$rowid]['autoproto_out'] ?? 'any';
+		$pconfig['agateway_out']	= $rowdata[$rowid]['agateway_out'] ?? 'default';
 
-		$pconfig['suppression_cidr']	= $rowdata[$rowid]['suppression_cidr'];
+		$pconfig['suppression_cidr']	= $rowdata[$rowid]['suppression_cidr'] ?? 'Disabled';
 		$pconfig['suppression_cidr_v6']	= $rowdata[$rowid]['suppression_cidr_v6'] ?? 'Disabled';
-		$pconfig['whois_convert']	= $rowdata[$rowid]['whois_convert'];
+		$pconfig['whois_convert']	= $rowdata[$rowid]['whois_convert'] ?? '';
 	}
 	else {
-		$pconfig['logging']		= $rowdata[$rowid]['logging'];
-		$pconfig['order']		= $rowdata[$rowid]['order'];
-		$pconfig['filter_alexa']	= $rowdata[$rowid]['filter_alexa'];
+		$pconfig['logging']		= $rowdata[$rowid]['logging'] ?? 'Enabled';
+		$pconfig['order']		= $rowdata[$rowid]['order'] ?? 'default';
+		$pconfig['filter_alexa']	= $rowdata[$rowid]['filter_alexa'] ?? '';
 	}
 
-	$pconfig['custom']			= base64_decode($rowdata[$rowid]['custom']);
+	$pconfig['custom']			= base64_decode($rowdata[$rowid]['custom'] ?? '');
 }
 
 
