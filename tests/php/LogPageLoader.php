@@ -15,6 +15,14 @@ declare(strict_types=1);
  */
 function pfb_test_load_log_page_functions(): void
 {
+	// issue #1207: getlogs() (pfblockerng_log.php:45) is defined ABOVE pfb_validate_filepath
+	// and never loaded below -- a minimal double lets Region 5's oracle observe the downstream
+	// warnings on a hostile logtype instead of fataling on an undefined function.
+	if (!function_exists('getlogs')) {
+		function getlogs($logdir, $log_extentions = array('log')) {
+			return array('a.log');
+		}
+	}
 	if (function_exists('pfb_validate_filepath')) {
 		return;
 	}

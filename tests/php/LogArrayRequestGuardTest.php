@@ -85,15 +85,27 @@ final class LogArrayRequestGuardTest extends TestCase
 			);
 		}
 
-		// Region 5: 'logtype' -> $selected -> $pfb_logtypes[$selected] offset.
+		// Region 5: 'logtype' -> $selected -> $pfb_logtypes[$selected] offset,
+		// through $logs/getlogs()/$clearable/$downloadable (issue #1207).
 		if (!function_exists('pfb_log_oracle_selected_logtype')) {
 			// issue #1198: non-greedy $selected assignment (+ optional leading
 			// comment) matches both the pre-fix !empty() and post-fix
-			// array_key_exists() source, so the region survives the fix.
+			// array_key_exists() source. The downstream text is byte-identical
+			// pre/post-fix, so it is matched literally (no wildcard needed).
 			if (!preg_match(
 				'/\/\/ Collect selected logs\n\$logs = array\(\);\n\$clearable = \$downloadable = FALSE;\n'
 				. '((?:\/\/[^\n]*\n)*\$selected = .*?;\n'
-				. '\$pfb_sel = \$pfb_logtypes\[\$selected\];)/',
+				. '\$pfb_sel = \$pfb_logtypes\[\$selected\];\n'
+				. '\n'
+				. 'if \(isset\(\$pfb_sel\[\'logs\'\]\)\) \{\n'
+				. '\t\$logs = \$pfb_sel\[\'logs\'\];\n'
+				. '\} else \{\n'
+				. '\t\$logs = getlogs\(\$pfb_sel\[\'logdir\'\], \$pfb_sel\[\'ext\'\]\);\n'
+				. '\}\n'
+				. '\n'
+				. '\$logdir\t\t= \$pfb_sel\[\'logdir\'\] \?: \'\/var\/db\/pfblockerng\';\n'
+				. '\$clearable\t= \$pfb_sel\[\'clear\'\] \?: FALSE;\n'
+				. '\$downloadable\t= \$pfb_sel\[\'download\'\] \?: FALSE;)/',
 				$src,
 				$m
 			)) {
@@ -102,7 +114,7 @@ final class LogArrayRequestGuardTest extends TestCase
 			eval(
 				'function pfb_log_oracle_selected_logtype(array $pconfig, array $pfb_logtypes): array { '
 				. $m[1]
-				. ' return $pfb_sel; }'
+				. ' return compact(\'pfb_sel\', \'logs\', \'clearable\', \'downloadable\'); }'
 			);
 		}
 	}
@@ -122,16 +134,20 @@ final class LogArrayRequestGuardTest extends TestCase
 		$_REQUEST = $this->savedRequest;
 	}
 
-	/** A $pfb_logtypes fixture shaped like the real page's (LogValidateFilepathNulByteTest sibling shape). */
+	/**
+	 * A $pfb_logtypes fixture shaped like the real page's (LogValidateFilepathNulByteTest
+	 * sibling shape). issue #1207: every entry carries 'logs'/'clear'/'download', like the
+	 * real page's defaultlogs/masterfiles -- keeps the getlogs() double unreachable on green.
+	 */
 	private function logtypes(): array
 	{
 		return [
-			'defaultlogs' => ['logdir' => '/var/log/pfblockerng/'],
-			'python'      => ['logdir' => '/var/unbound/'],
+			'defaultlogs' => ['logdir' => '/var/log/pfblockerng/', 'logs' => ['pfblockerng.log', 'error.log'], 'clear' => TRUE, 'download' => TRUE],
+			'python'      => ['logdir' => '/var/unbound/', 'logs' => ['py_error.log'], 'clear' => TRUE, 'download' => TRUE],
 			// mixed-case static key (real page has 'GeoIP') -- pins case-sensitivity.
-			'GeoIP'       => ['logdir' => '/var/db/pfblockerng/GeoIP/'],
+			'GeoIP'       => ['logdir' => '/var/db/pfblockerng/GeoIP/', 'logs' => ['GeoLite2-Country.mmdb'], 'clear' => FALSE, 'download' => TRUE],
 			// dynamic blacklist-title key shape (`<Title>logs`, merged in at :189).
-			'MyFeedlogs'  => ['logdir' => '/var/db/pfblockerng/myfeed/'],
+			'MyFeedlogs'  => ['logdir' => '/var/db/pfblockerng/myfeed/', 'logs' => ['myfeed.log'], 'clear' => TRUE, 'download' => FALSE],
 		];
 	}
 
@@ -148,7 +164,7 @@ final class LogArrayRequestGuardTest extends TestCase
 			return TRUE;
 		}, E_WARNING | E_DEPRECATED);
 		try {
-			$pfb_sel = pfb_log_oracle_selected_logtype($pconfig, $pfb_logtypes);
+			$result = pfb_log_oracle_selected_logtype($pconfig, $pfb_logtypes);
 		} catch (\TypeError $e) {
 			$this->fail('an unknown/hostile logtype must not TypeError the $pfb_logtypes[] offset: ' . $e->getMessage());
 		} finally {
@@ -157,7 +173,7 @@ final class LogArrayRequestGuardTest extends TestCase
 			restore_error_handler();
 		}
 		$this->assertSame([], $warnings, 'an unknown/hostile logtype must emit zero warnings, got: ' . implode('; ', $warnings));
-		return $pfb_sel;
+		return $result;
 	}
 
 	// --- ajax 'file' -> htmlspecialchars() ----------------------------------
@@ -350,13 +366,13 @@ final class LogArrayRequestGuardTest extends TestCase
 		$_POST['logtype'] = ['y'];
 		$pconfig = pfb_log_oracle_pconfig();
 		try {
-			$pfb_sel = pfb_log_oracle_selected_logtype($pconfig, $this->logtypes());
+			$result = pfb_log_oracle_selected_logtype($pconfig, $this->logtypes());
 		} catch (\TypeError $e) {
 			$this->fail('an array logtype value must not TypeError the $pfb_logtypes[] offset: ' . $e->getMessage());
 		}
 		$this->assertSame(
 			$this->logtypes()['defaultlogs'],
-			$pfb_sel,
+			$result['pfb_sel'],
 			'an array logtype value must fall back to defaultlogs'
 		);
 	}
@@ -365,8 +381,8 @@ final class LogArrayRequestGuardTest extends TestCase
 	{
 		$_POST['logtype'] = 'python';
 		$pconfig = pfb_log_oracle_pconfig();
-		$pfb_sel = pfb_log_oracle_selected_logtype($pconfig, $this->logtypes());
-		$this->assertSame($this->logtypes()['python'], $pfb_sel, 'a scalar logtype value must still resolve its own entry');
+		$result = pfb_log_oracle_selected_logtype($pconfig, $this->logtypes());
+		$this->assertSame($this->logtypes()['python'], $result['pfb_sel'], 'a scalar logtype value must still resolve its own entry');
 	}
 
 	// --- issue #1198: unknown-scalar coverage matrix + hostile inputs -------
@@ -375,36 +391,41 @@ final class LogArrayRequestGuardTest extends TestCase
 	{
 		// No $_POST at all -- ingress leaves $pconfig['logtype'] === ''.
 		$pconfig = pfb_log_oracle_pconfig();
-		$pfb_sel = $this->runSelectedLogtypeExpectingNoWarnings($pconfig, $this->logtypes());
-		$this->assertSame($this->logtypes()['defaultlogs'], $pfb_sel);
+		$result = $this->runSelectedLogtypeExpectingNoWarnings($pconfig, $this->logtypes());
+		$this->assertSame($this->logtypes()['defaultlogs'], $result['pfb_sel']);
 	}
 
 	public function testSelectedLogtypeEmptyStringFallsBackToDefaultNoWarnings(): void
 	{
 		$_POST['logtype'] = '';
 		$pconfig = pfb_log_oracle_pconfig();
-		$pfb_sel = $this->runSelectedLogtypeExpectingNoWarnings($pconfig, $this->logtypes());
-		$this->assertSame($this->logtypes()['defaultlogs'], $pfb_sel);
+		$result = $this->runSelectedLogtypeExpectingNoWarnings($pconfig, $this->logtypes());
+		$this->assertSame($this->logtypes()['defaultlogs'], $result['pfb_sel']);
 	}
 
 	public function testSelectedLogtypeDefaultLogsKeyResolvesItsOwnEntryNoWarnings(): void
 	{
 		$_POST['logtype'] = 'defaultlogs';
 		$pconfig = pfb_log_oracle_pconfig();
-		$pfb_sel = $this->runSelectedLogtypeExpectingNoWarnings($pconfig, $this->logtypes());
-		$this->assertSame($this->logtypes()['defaultlogs'], $pfb_sel);
+		$result = $this->runSelectedLogtypeExpectingNoWarnings($pconfig, $this->logtypes());
+		$this->assertSame($this->logtypes()['defaultlogs'], $result['pfb_sel']);
 	}
 
 	public function testSelectedLogtypeDynamicKeyResolvesItsOwnEntryNoWarnings(): void
 	{
 		$_POST['logtype'] = 'MyFeedlogs';
 		$pconfig = pfb_log_oracle_pconfig();
-		$pfb_sel = $this->runSelectedLogtypeExpectingNoWarnings($pconfig, $this->logtypes());
+		$result = $this->runSelectedLogtypeExpectingNoWarnings($pconfig, $this->logtypes());
 		$this->assertSame(
 			$this->logtypes()['MyFeedlogs'],
-			$pfb_sel,
+			$result['pfb_sel'],
 			'a valid dynamic-title logtype key must resolve its own entry, not be clobbered to defaultlogs'
 		);
+		// issue #1207: own-entry resolution -- $logs/$clearable/$downloadable must come
+		// from MyFeedlogs, not leak a defaultlogs fallback.
+		$this->assertSame($this->logtypes()['MyFeedlogs']['logs'], $result['logs']);
+		$this->assertSame($this->logtypes()['MyFeedlogs']['clear'], $result['clearable']);
+		$this->assertSame($this->logtypes()['MyFeedlogs']['download'], $result['downloadable']);
 	}
 
 	public function testSelectedLogtypeUnknownScalarFallsBackToDefaultNoWarnings(): void
@@ -412,8 +433,12 @@ final class LogArrayRequestGuardTest extends TestCase
 		// issue #1198: the reported defect -- a scalar but unknown logtype.
 		$_POST['logtype'] = 'zzz';
 		$pconfig = pfb_log_oracle_pconfig();
-		$pfb_sel = $this->runSelectedLogtypeExpectingNoWarnings($pconfig, $this->logtypes());
-		$this->assertSame($this->logtypes()['defaultlogs'], $pfb_sel);
+		$result = $this->runSelectedLogtypeExpectingNoWarnings($pconfig, $this->logtypes());
+		$this->assertSame($this->logtypes()['defaultlogs'], $result['pfb_sel']);
+		// issue #1207: the fallback must carry defaultlogs' own $logs/$clearable/$downloadable.
+		$this->assertSame($this->logtypes()['defaultlogs']['logs'], $result['logs']);
+		$this->assertSame($this->logtypes()['defaultlogs']['clear'], $result['clearable']);
+		$this->assertSame($this->logtypes()['defaultlogs']['download'], $result['downloadable']);
 	}
 
 	public function testSelectedLogtypeNumericZeroStringDoesNotDivergeFromOldGuard(): void
@@ -422,8 +447,8 @@ final class LogArrayRequestGuardTest extends TestCase
 		// have disagreed (empty('0') === TRUE); pins that neither matches.
 		$_POST['logtype'] = '0';
 		$pconfig = pfb_log_oracle_pconfig();
-		$pfb_sel = $this->runSelectedLogtypeExpectingNoWarnings($pconfig, $this->logtypes());
-		$this->assertSame($this->logtypes()['defaultlogs'], $pfb_sel);
+		$result = $this->runSelectedLogtypeExpectingNoWarnings($pconfig, $this->logtypes());
+		$this->assertSame($this->logtypes()['defaultlogs'], $result['pfb_sel']);
 	}
 
 	public function testSelectedLogtypeLowercaseCaseVariantFallsBackToDefaultNoWarnings(): void
@@ -431,39 +456,39 @@ final class LogArrayRequestGuardTest extends TestCase
 		// keys are case-sensitive; a real key is mixed-case ('GeoIP').
 		$_POST['logtype'] = 'geoip';
 		$pconfig = pfb_log_oracle_pconfig();
-		$pfb_sel = $this->runSelectedLogtypeExpectingNoWarnings($pconfig, $this->logtypes());
-		$this->assertSame($this->logtypes()['defaultlogs'], $pfb_sel);
+		$result = $this->runSelectedLogtypeExpectingNoWarnings($pconfig, $this->logtypes());
+		$this->assertSame($this->logtypes()['defaultlogs'], $result['pfb_sel']);
 	}
 
 	public function testSelectedLogtypeTrailingSpaceNearMissFallsBackToDefaultNoWarnings(): void
 	{
 		$_POST['logtype'] = 'defaultlogs ';
 		$pconfig = pfb_log_oracle_pconfig();
-		$pfb_sel = $this->runSelectedLogtypeExpectingNoWarnings($pconfig, $this->logtypes());
-		$this->assertSame($this->logtypes()['defaultlogs'], $pfb_sel);
+		$result = $this->runSelectedLogtypeExpectingNoWarnings($pconfig, $this->logtypes());
+		$this->assertSame($this->logtypes()['defaultlogs'], $result['pfb_sel']);
 	}
 
 	public function testSelectedLogtypeEmbeddedNulFallsBackToDefaultNoWarnings(): void
 	{
 		$_POST['logtype'] = "zz\0z";
 		$pconfig = pfb_log_oracle_pconfig();
-		$pfb_sel = $this->runSelectedLogtypeExpectingNoWarnings($pconfig, $this->logtypes());
-		$this->assertSame($this->logtypes()['defaultlogs'], $pfb_sel);
+		$result = $this->runSelectedLogtypeExpectingNoWarnings($pconfig, $this->logtypes());
+		$this->assertSame($this->logtypes()['defaultlogs'], $result['pfb_sel']);
 	}
 
 	public function testSelectedLogtypeOversizedValueFallsBackToDefaultNoWarnings(): void
 	{
 		$_POST['logtype'] = str_repeat('a', 8192);
 		$pconfig = pfb_log_oracle_pconfig();
-		$pfb_sel = $this->runSelectedLogtypeExpectingNoWarnings($pconfig, $this->logtypes());
-		$this->assertSame($this->logtypes()['defaultlogs'], $pfb_sel);
+		$result = $this->runSelectedLogtypeExpectingNoWarnings($pconfig, $this->logtypes());
+		$this->assertSame($this->logtypes()['defaultlogs'], $result['pfb_sel']);
 	}
 
 	public function testSelectedLogtypePathTraversalMetacharsFallsBackToDefaultNoWarnings(): void
 	{
 		$_POST['logtype'] = '../../etc/passwd';
 		$pconfig = pfb_log_oracle_pconfig();
-		$pfb_sel = $this->runSelectedLogtypeExpectingNoWarnings($pconfig, $this->logtypes());
-		$this->assertSame($this->logtypes()['defaultlogs'], $pfb_sel);
+		$result = $this->runSelectedLogtypeExpectingNoWarnings($pconfig, $this->logtypes());
+		$this->assertSame($this->logtypes()['defaultlogs'], $result['pfb_sel']);
 	}
 }
