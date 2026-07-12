@@ -615,6 +615,30 @@ Describe 'claude-bash-guard.sh'
       The status should be success
       The output should equal ""
     End
+
+    # A backslash before a newline is a LINE CONTINUATION: it JOINS the two lines
+    # with no separator, the opposite of a `;`. Treating it as one lets the common
+    # "split a long command across lines" idiom hide the trailing background &.
+    It 'D12: a line continuation before the background & does not hide it -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"sh scripts/agent/wait-checks.sh --repo o/r --pr 1 \\\n&"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    # The backslash-parking sentinel must be a byte a JSON string payload cannot
+    # carry verbatim, or a command containing the sentinel's text would rewrite the
+    # guard's own view of that command.
+    It 'D13: a command containing the parking sentinel text still denies -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --exclude @PFB_BS@ > /tmp/x 2>&1 &"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
   End
 
   # ── plain git, no rule in scope ─────────────────────────────────────────────

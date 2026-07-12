@@ -128,28 +128,38 @@ norm="$(printf '%s' "$payload" | tr -d '\\"' | tr -s '[:space:]' ' ')"
 # delimiter here is unambiguous.
 segs="$(printf '%s' "$norm" | tr ';&|()' '\n')"
 
+# _BS -- the parking sentinel for a literal backslash (step 1 below). A raw control
+# byte, because a JSON string payload cannot carry one verbatim: a printable token
+# could occur in a command's own text and be rewritten into a backslash on unparking.
+_BS="$(printf '\001')"
+
 # norm_bg -- the view Rule D matches on. Built from $payload, NOT from $norm, and
 # never split into $segs: `&` is one of the characters $segs splits on, so
-# backgrounding is invisible per-segment, and $norm has already dissolved one of the
-# two things Rule D must see. Each step is load-bearing:
-#   1. Park every ESCAPED backslash (`\\` in the payload = one literal backslash in
-#      the command). JSON spells a real newline `\n` and a literal backslash-n `\\n`,
-#      so step 2 would otherwise read the latter's tail as a newline and inject a fake
-#      `;` INSIDE an argument -- which, landing between the wait script and its `&`,
+# backgrounding is invisible per-segment, and $norm has already dissolved what Rule D
+# must see. Each step is load-bearing:
+#   1. Park every ESCAPED backslash (`\\` in the payload = one literal backslash in the
+#      command). JSON spells a real newline `\n` and a literal backslash-n `\\n`, so
+#      step 2 would otherwise read the latter's tail as a newline and inject a fake `;`
+#      INSIDE an argument -- which, landing between the wait script and its `&`,
 #      silently un-denies a genuinely backgrounded wait.
 #   2. A NEWLINE ENDS A COMMAND, exactly like `;`. A multi-line command arrives as the
 #      JSON escape `\n`, which $norm's backslash-strip turns into a bare `n` -- welding
 #      two commands into one, so a FOREGROUND wait whose only sin is a later
 #      backgrounded line would deny. Both newline forms become `;` here.
-#   3. Unpark the literal backslashes, then $norm's own steps: strip quotes/backslashes
+#   3. A backslash IMMEDIATELY BEFORE a newline is the opposite of a separator: it is a
+#      LINE CONTINUATION, joining the two lines into one command. It reaches here as a
+#      parked backslash followed by step 2's `;`, and becomes a space -- else splitting
+#      a long backgrounded wait across lines would hide its trailing `&` behind a `;`.
+#   4. Unpark the literal backslashes, then $norm's own steps: strip quotes/backslashes
 #      and collapse whitespace runs.
-#   4. Neutralize the two `&` LOOKALIKES -- a redirection (`2>&1`, `>&2`, `&>`) and
-#      the `&&` list operator -- so a surviving `&` is unambiguously a background.
+#   5. Neutralize the two `&` LOOKALIKES -- a redirection (`2>&1`, `>&2`, `&>`) and the
+#      `&&` list operator -- so a surviving `&` is unambiguously a background.
 norm_bg="$(printf '%s' "$payload" \
-	| sed -e 's/\\\\/@PFB_BS@/g' \
+	| sed -e 's/\\\\/'"${_BS}"'/g' \
 	| sed -e 's/\\n/;/g' \
 	| tr '\n' ';' \
-	| sed -e 's/@PFB_BS@/\\/g' \
+	| sed -e 's/'"${_BS}"';/ /g' \
+	| sed -e 's/'"${_BS}"'/\\/g' \
 	| tr -d '\\"' \
 	| tr -s '[:space:]' ' ' \
 	| sed -e 's/[0-9]*>&[0-9-]*//g' -e 's/&>//g' -e 's/&&/ /g')"
