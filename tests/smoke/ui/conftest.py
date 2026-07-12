@@ -199,10 +199,11 @@ def deployed_vm(smoke_vm: SmokeVM) -> SmokeVM:
     (issue #810). ``ensure_dnsbl_vip`` is idempotent on its fixed uniqid, so the
     tests that also call it directly (e.g. ``dnsbl_vip_ready``) stay digest-clean.
 
-    issue #1219: also seeds a synthetic MaxMind-schema GeoIP dataset and runs the
-    credential-free `ugc` conversion verb here (:func:`~tests.smoke.helpers.seed_geoip_dataset`)
-    so the GeoIP continent pages exist for the whole session's PAGE_TABLE sweep --
-    same one-time-per-session shape as the VIP above.
+    issue #1219/#1228: also seeds MaxMind's official test corpus (CSVs + the binary mmdb)
+    and runs the credential-free `ugc` conversion verb here
+    (:func:`~tests.smoke.helpers.seed_geoip_dataset`) so the GeoIP continent pages exist
+    for the whole session's PAGE_TABLE sweep -- same one-time-per-session shape as the VIP
+    above.
     """
     from .. import helpers
 
