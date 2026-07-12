@@ -1938,6 +1938,59 @@ function pfb_dnsbl_concat_files(string $dest, array $sources): bool {
 	return FALSE;
 }
 
+// Non-lite DNSBL host-munging pipeline, extracted pure out of the download/parse loop's
+// `if (!$lite)` branch. Order is load-bearing: scheme strip -> '/'/'#'/'?' truncation ->
+// ';'-parse_url -> trailing-port strip -> IPv6-unbracket LAST. Returns FALSE when
+// pfb_dnsbl_scheme_line rejects (strict mode) -- caller must skip the line.
+function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, string $oline,
+	int $dnsbl_lineno, string &$parse_err, int &$scheme_skipped): string|false {
+
+	// ADR-22: strip the '<scheme>://' prefix. Lenient (toggle ON, the migrated/legacy
+	// default) keeps today's permissive strip; strict (toggle OFF, the new-install default)
+	// validates the scheme against RFC 3986 and rejects URL paths -- a rejected line is
+	// skipped, recorded per-line in the parse-error log, and counted for the once-per-feed
+	// summary WARNING below.
+	$line = pfb_dnsbl_scheme_line($line, $strict, $header, $oline, $dnsbl_lineno, $parse_err,
+		$scheme_skipped);
+	if ($line === FALSE) {
+		return FALSE;
+	}
+
+	// If '/' character found, remove characters after '/'
+	if (strpos($line, '/') !== FALSE) {
+		$line = strstr($line, '/', TRUE);
+	}
+
+	// If '#' character found, remove characters after '#'
+	if (strpos($line, '#') !== FALSE) {
+		$line = strstr($line, '#', TRUE);
+	}
+
+	// If '?' character found, remove characters after '?'
+	if (strpos($line, '?') !== FALSE) {
+		$line = strstr($line, '?', TRUE);
+	}
+
+	// If special characters found, parse line for host
+	if (strpos($line, ';') !== FALSE) {
+		$host = parse_url($line);
+		if (isset($host['host'])) {
+			$line = $host['host'];
+		} else {
+			$line = strstr($line, ';', TRUE);
+		}
+	}
+
+	// Remove any Port numbers at end of line (IPv6-safe:
+	// never mangle a bare IPv6 literal's trailing hextet).
+	$line = pfb_strip_trailing_port($line);
+
+	// Issue #938: unwrap a bracketed IPv6 literal (e.g. a
+	// URI-style '[2604:2dc0::]') so the is_ipaddrv6($line)
+	// collection branch below recognises it.
+	return pfb_dnsbl_unbracket_ip6($line);
+}
+
 /**
  * NDJSON interchange schema v1 (#1083). STRICT: fixed vocabulary, no version field, no
  * forward-compat mechanism. One JSON object per line, two kinds only:
@@ -17250,53 +17303,12 @@ function sync_package_pfblockerng($cron='') {
 											}
 
 											if (!$lite) {
-
-												// ADR-22: strip the '<scheme>://' prefix. Lenient (toggle ON,
-												// the migrated/legacy default) keeps today's permissive strip;
-												// strict (toggle OFF, the new-install default) validates the
-												// scheme against RFC 3986 and rejects URL paths -- a rejected
-												// line is skipped, recorded per-line in the parse-error log, and
-												// counted for the once-per-feed summary WARNING below.
 												$strict = ($pfb['dnsbl_lenient'] !== PfbLenient::On);
-												$line = pfb_dnsbl_scheme_line($line, $strict, $header, $oline,
+												$line = pfb_dnsbl_extract_host($line, $strict, $header, $oline,
 													$dnsbl_lineno, $pfb['dnsbl_parse_err'], $pfb_scheme_skipped);
 												if ($line === FALSE) {
 													continue;
 												}
-
-												// If '/' character found, remove characters after '/'
-												if (strpos($line, '/') !== FALSE) {
-													$line = strstr($line, '/', TRUE);
-												}
-
-												// If '#' character found, remove characters after '#'
-												if (strpos($line, '#') !== FALSE) {
-													$line = strstr($line, '#', TRUE);
-												}
-
-												// If '?' character found, remove characters after '?'
-												if (strpos($line, '?') !== FALSE) {
-													$line = strstr($line, '?', TRUE);
-												}
-
-												// If special characters found, parse line for host
-												if (strpos($line, ';') !== FALSE) {
-													$host = parse_url($line);
-													if (isset($host['host'])) {
-														$line = $host['host'];
-													} else {
-														$line = strstr($line, ';', TRUE);
-													}
-												}
-
-												// Remove any Port numbers at end of line (IPv6-safe:
-												// never mangle a bare IPv6 literal's trailing hextet).
-												$line = pfb_strip_trailing_port($line);
-
-												// Issue #938: unwrap a bracketed IPv6 literal (e.g. a
-												// URI-style '[2604:2dc0::]') so the is_ipaddrv6($line)
-												// collection branch below recognises it.
-												$line = pfb_dnsbl_unbracket_ip6($line);
 											}
 											$line = trim($line);
 
