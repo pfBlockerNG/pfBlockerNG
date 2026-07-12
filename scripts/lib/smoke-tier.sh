@@ -49,15 +49,40 @@ pfb_playwright_cache_root() {
     printf '%s\n' "${PLAYWRIGHT_BROWSERS_PATH:-${HOME:-/root}/.cache/ms-playwright}"
 }
 
+# pfb_chromium_provision <cache_root> <playwright_cmd...> — install the Tier-B browser.
+#
+# `--with-deps` FIRST, so a healthy box always gets whatever OS libs the current Chromium
+# revision wants. Its apt-get half runs even when nothing needs installing, though, so
+# unrelated package breakage on the box used to fail a run that needed no packages at all
+# (#1226) — survivable IFF a build is already cached, since the libs then came from an
+# earlier --with-deps on this box: retry without that half. With nothing cached the box
+# genuinely cannot run the tier, so say so and fail rather than skip silently.
+pfb_chromium_provision() {
+    _pfb_cp_cache="$1"
+    shift
+    "$@" install --with-deps chromium && return 0
+
+    if ! pfb_chromium_cached "$_pfb_cp_cache"; then
+        printf 'smoke-on-box: playwright install --with-deps failed and no Chromium is cached in %s — this box cannot be provisioned (apt/dpkg state? no cached build to fall back on)\n' \
+            "$_pfb_cp_cache" >&2
+        unset _pfb_cp_cache
+        return 1
+    fi
+
+    printf 'smoke-on-box: --with-deps failed (apt/dpkg state?) but Chromium is cached in %s — retrying without the OS-dependency half\n' \
+        "$_pfb_cp_cache" >&2
+    unset _pfb_cp_cache
+    "$@" install chromium
+}
+
 # pfb_chromium_cached <cache_root> — exit 0 iff a Chromium build is present in the
 # playwright cache (`<cache_root>/chromium-<rev>`); non-zero otherwise.
 #
-# The caller asks this only AFTER `playwright install --with-deps` has failed, to decide
-# whether the failure is survivable: a build being there means an earlier --with-deps run
-# already put this box's OS libs in place, so the apt breakage is unrelated to us and the
-# browser-only retry suffices (#1226). It deliberately does NOT try to match the revision
-# the pinned playwright wants, nor validate the build: a stale or partial one is simply
-# re-downloaded by that retry.
+# Consulted only after a --with-deps failure, to judge whether it is survivable: a build
+# being there is TAKEN to mean an earlier --with-deps on this box already put its OS libs
+# in place (the pool's boxes are long-lived and leased, not reprovisioned per run). It
+# deliberately does NOT match the revision the pinned playwright wants, nor validate the
+# build: a stale or partial one is simply re-downloaded by the retry.
 pfb_chromium_cached() {
     for _pfb_cc_build in "$1"/chromium-*; do
         if [ -d "$_pfb_cc_build" ]; then
