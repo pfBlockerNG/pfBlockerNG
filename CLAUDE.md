@@ -647,6 +647,15 @@ pfBlockerNG end-to-end. **Run it locally first** (no workflow spent):
 [`docs/misc/local-smoke-debian.md`](docs/misc/local-smoke-debian.md), wrapped by
 `scripts/local-smoke.sh` — it already exists; reach for it before asking.
 
+**The live-VM smoke ALWAYS runs locally — never claim it "needs CI" or "cannot run on this
+host".** `scripts/local-smoke.sh` leases a box from the **`PFB_BOXES`** pool (ADR-47) and runs
+the whole leg — images, build, pytest — **on that box** over ssh, so the dev machine needs
+nothing but `ssh` (macOS included). `PFB_BOXES` is the owner's ssh-target list and is the one
+input the repo cannot supply: get it from the owner (or your session memory) and export it —
+the addresses in the doc are illustrative, not a live inventory. A red→green proof for
+`tests/smoke/**` is EXECUTED on a leased box (`--marker`/`--filter` to scope it), never
+dispatched to CI and never reasoned through.
+
 Non-obvious truths, each costly to relearn:
 
 - **Probe ON-BOX** (`drill @127.0.0.1` over SSH), never the runner-side SLIRP hostfwd.
