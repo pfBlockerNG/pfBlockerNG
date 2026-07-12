@@ -116,11 +116,23 @@ norm="$(printf '%s' "$payload" | tr -d '\\"' | tr -s '[:space:]' ' ')"
 # delimiter here is unambiguous.
 segs="$(printf '%s' "$norm" | tr ';&|()' '\n')"
 
-# norm_bg -- $norm with the two `&` LOOKALIKES neutralized, so a surviving `&` is
-# unambiguously the shell's background operator: a redirection (`2>&1`, `>&2`,
-# `&>`) and the `&&` list operator. Rule D matches on THIS, never on $segs: `&` is
-# one of the characters $segs splits on, so backgrounding is invisible per-segment.
-norm_bg="$(printf '%s' "$norm" | sed -e 's/[0-9]*>&[0-9-]*//g' -e 's/&>//g' -e 's/&&/ /g')"
+# norm_bg -- the view Rule D matches on. Built from $payload, NOT from $norm, and
+# never split into $segs: `&` is one of the characters $segs splits on, so
+# backgrounding is invisible per-segment, and $norm has already dissolved one of the
+# two things Rule D must see. Each step is load-bearing:
+#   1. A NEWLINE ENDS A COMMAND, exactly like `;`. A multi-line command reaches the
+#      hook as the JSON escape `\n`, which $norm's backslash-strip turns into a bare
+#      `n` -- welding two commands into one, so a FOREGROUND wait whose only sin is a
+#      later backgrounded line would deny. Both newline forms become `;` here.
+#   2-3. Then $norm's own steps: strip quotes/backslashes, collapse whitespace runs.
+#   4. Neutralize the two `&` LOOKALIKES -- a redirection (`2>&1`, `>&2`, `&>`) and
+#      the `&&` list operator -- so a surviving `&` is unambiguously a background.
+norm_bg="$(printf '%s' "$payload" \
+	| sed -e 's/\\n/;/g' \
+	| tr '\n' ';' \
+	| tr -d '\\"' \
+	| tr -s '[:space:]' ' ' \
+	| sed -e 's/[0-9]*>&[0-9-]*//g' -e 's/&>//g' -e 's/&&/ /g')"
 
 # _contains <needle> -- true (rc 0) iff the CURRENT SEGMENT ($seg, set by
 # the per-segment loop below) contains <needle> as a literal substring.
