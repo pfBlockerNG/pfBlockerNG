@@ -669,7 +669,9 @@ def seed_geoip_dataset(vm: SmokeVM, *, timeout: float = 120.0) -> None:
         raise RuntimeError(f"seed_geoip_dataset: mkdir {GEOIP_SHARE_DIR} failed: rc={mk.returncode} {mk.stderr!r}")
 
     for fixture_name in _GEOIP_CSV_FIXTURES:
-        contents = (FIXTURES_DIR / fixture_name).read_text()
+        # utf-8 explicitly: the generator writes these as utf-8, and MaxMind country
+        # names carry non-ASCII (Curaçao, Åland) whenever the pinned corpus grows one.
+        contents = (FIXTURES_DIR / fixture_name).read_text(encoding="utf-8")
         path = f"{GEOIP_SHARE_DIR}/{fixture_name}"
         result = subprocess.run(
             vm.ssh_argv("tee", path),
@@ -730,7 +732,7 @@ def seed_geoip_dataset(vm: SmokeVM, *, timeout: float = 120.0) -> None:
         "iso_code",
         timeout=timeout,
     )
-    if _GEOIP_MMDB_PROBE_CC not in lookup.stdout:
+    if lookup.returncode != 0 or _GEOIP_MMDB_PROBE_CC not in lookup.stdout:
         raise RuntimeError(
             f"seed_geoip_dataset: mmdblookup sanity check failed: rc={lookup.returncode} "
             f"stdout={lookup.stdout!r} stderr={lookup.stderr!r}"

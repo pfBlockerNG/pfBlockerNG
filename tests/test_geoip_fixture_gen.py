@@ -18,6 +18,7 @@ tests/test_update_tld_lists.py.
 from __future__ import annotations
 
 import csv
+import hashlib
 import importlib.util
 import sys
 from pathlib import Path
@@ -318,3 +319,66 @@ def test_traitless_record_renders_zero_zero_empty(tmp_path: Path) -> None:
     m.write_blocks_csv(path, v4)
     rows = list(csv.reader(path.open(newline="", encoding="utf-8")))
     assert rows[1] == ["67.43.156.0/24", "1252634", "", "", "0", "0", ""]
+
+
+# --------------------------------------------------------------------------- #
+# The two FAIL-LOUD guards the script's header advertises: a download whose
+# sha256 does not match the pinned digest, and a corpus whose row counts drifted
+# from the pinned commit's. Both must raise -- a silently reconciled fixture is
+# exactly the drift these constants exist to catch.
+# --------------------------------------------------------------------------- #
+
+
+def test_sha256_mismatch_raises_and_writes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Resp:
+        def __enter__(self) -> _Resp:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b"not the pinned bytes"
+
+    monkeypatch.setattr(m.urllib.request, "urlopen", lambda *_a, **_k: _Resp())
+    with pytest.raises(m.GeneratorError, match="sha256 mismatch"):
+        m.fetch_verified(m.MMDB_SRC_PATH, m.MMDB_SRC_SHA256)
+
+
+def test_sha256_match_returns_the_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = b"pinned"
+    digest = hashlib.sha256(payload).hexdigest()
+
+    class _Resp:
+        def __enter__(self) -> _Resp:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return payload
+
+    monkeypatch.setattr(m.urllib.request, "urlopen", lambda *_a, **_k: _Resp())
+    assert m.fetch_verified("any/path", digest) == payload
+
+
+@pytest.mark.parametrize(
+    ("locations", "v4", "v6", "expected"),
+    [
+        (m.LOCATIONS_COUNT - 1, m.BLOCKS_V4_COUNT, m.BLOCKS_V6_COUNT, "Locations count drifted"),
+        (m.LOCATIONS_COUNT, m.BLOCKS_V4_COUNT + 1, m.BLOCKS_V6_COUNT, "Blocks-IPv4 count drifted"),
+        (m.LOCATIONS_COUNT, m.BLOCKS_V4_COUNT, m.BLOCKS_V6_COUNT - 1, "Blocks-IPv6 count drifted"),
+    ],
+)
+def test_row_count_drift_raises_per_file(locations: int, v4: int, v6: int, expected: str) -> None:
+    row = m.BlockRow(network="1.2.3.0/24", geoname_id="1", registered_geoname_id="", represented_geoname_id="")
+    loc = m.LocationRow(1, "EU", "Europe", "GB", "United Kingdom", False)
+    with pytest.raises(m.GeneratorError, match=expected):
+        m.check_counts(dict.fromkeys(range(locations), loc), [row] * v4, [row] * v6)
+
+
+def test_pinned_counts_pass_the_drift_check() -> None:
+    row = m.BlockRow(network="1.2.3.0/24", geoname_id="1", registered_geoname_id="", represented_geoname_id="")
+    loc = m.LocationRow(1, "EU", "Europe", "GB", "United Kingdom", False)
+    m.check_counts(dict.fromkeys(range(m.LOCATIONS_COUNT), loc), [row] * m.BLOCKS_V4_COUNT, [row] * m.BLOCKS_V6_COUNT)

@@ -164,7 +164,7 @@ classify loop (`pfblockerng.sh:1148`) — the same command shape, same corpus, s
 | --- | --- | --- |
 | `GeoLite2-Country.mmdb` | Byte-verbatim copy of MaxMind's `GeoLite2-Country-Test.mmdb` (18012 bytes) | Backs `mmdblookup -f … country iso_code` — the exact call `pfblockerng.sh`'s dMax classify loop makes |
 | `GeoLite2-Country-Locations-en.csv` | 46 countries, one row per geoname that is some record's `country` (never a bare `registered_country`/`represented_country` — those carry no continent of their own) | Every continent gets real content EXCEPT Oceania/South America/Antarctica, which this corpus has zero networks for |
-| `GeoLite2-Country-Blocks-IPv4.csv` | 14 rows: 1 represented-country row (`202.196.224.0/20`, PH network, US represented) + 5 registered≠country "exclave" rows (GB/FR, GB/US ×4, SE/DE ×2, BT/RO, US/GB) | Exercises the Blocks-CSV `*_rep` path (`pfblockerng.php:1285-1288,1314-1317`) on real MaxMind data |
+| `GeoLite2-Country-Blocks-IPv4.csv` | 14 rows: 1 represented-country row (`202.196.224.0/20`, PH network, US represented) + 9 registered≠country "exclave" rows across 5 country pairs (GB/FR, GB/US ×4, SE/DE ×2, BT/RO, US/GB) | Exercises the Blocks-CSV `*_rep` path (`pfblockerng.php:1285-1288,1314-1317`) on real MaxMind data |
 | `GeoLite2-Country-Blocks-IPv6.csv` | 230 rows, incl. 2 country-less rows (`2a02:d500::/29`, `2a02:ec80::/29`) | Exercises the empty-`geoname_id` branch (`!empty($cc[1])` false) |
 
 This corpus carries **zero** `is_anonymous_proxy`/`is_satellite_provider` rows — real GeoLite2
