@@ -1514,13 +1514,13 @@ def set_ip_continent(
     timeout: float = 60.0,
 ) -> None:
     """Set one GeoIP continent's action/ISO lists at
-    ``installedpackages/pfblockerng<continent>/config/0`` (pfblockerng.inc:18147-18152's
-    ``$cont_key = 'pfblockerng' . strtolower(str_replace(' ', '', $continent))``).
+    ``installedpackages/pfblockerng<continent>/config/0`` -- pfblockerng.inc derives that root
+    as ``$cont_key = 'pfblockerng' . strtolower(str_replace(' ', '', $continent))``.
 
-    ``continent`` is the GUI continent name (``$pfb['continents']`` keys, pfblockerng.inc:
-    160-169 -- e.g. ``'Africa'``, ``'North America'``); ``countries4``/``countries6`` are
-    comma-separated ISO codes (``$cont_types``, inc:15791). Read-modify-write like
-    :func:`set_ip_reputation` -- any other key already in the section survives untouched.
+    ``continent`` is the GUI continent name (a ``$pfb['continents']`` key -- e.g. ``'Africa'``,
+    ``'North America'``); ``countries4``/``countries6`` are comma-separated ISO codes (the
+    ``$cont_types`` fields). Read-modify-write like :func:`set_ip_reputation` -- any other key
+    already in the section survives untouched.
     """
     root = f"installedpackages/pfblockerng{continent.lower().replace(' ', '')}/config/0"
     settings = {"action": action, "countries4": countries4, "countries6": countries6}
