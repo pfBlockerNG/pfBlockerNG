@@ -551,13 +551,14 @@ def test_recompute_continent_snapshot_both_families(deployed_vm: SmokeVM) -> Non
         f"v6 must carry 3 rows (NG's 2 + ZA's 1) vs v4's 2 -- got v4={v4_lines} v6={v6_lines}"
     )
 
-    v4_txt = _raw(deployed_vm, f"{DENYDIR}/{v4_alias}.txt")
-    v6_txt = _raw(deployed_vm, f"{DENYDIR}/{v6_alias}.txt")
-    v4_snap = _raw(deployed_vm, f"{SNAPDIR}/{v4_alias}.snap")
-    v6_snap = _raw(deployed_vm, f"{SNAPDIR}/{v6_alias}.snap")
-    assert v4_snap == v4_txt, f"v4 continent snapshot != its built .txt: snap={v4_snap!r} txt={v4_txt!r}"
-    assert v6_snap == v6_txt, (
-        f"v6 continent snapshot != its built .txt (v4-only snapshot-gate regression): snap={v6_snap!r} txt={v6_txt!r}"
+    # The snapshot is the PRISTINE pre-processing capture; the deny file is the emitted
+    # `LC_ALL=C sort -u` set. Same members, different line order -- so pin the member set,
+    # not the bytes (the counts below pin the v4/v6 asymmetry).
+    v4_snap = sorted(_lines(deployed_vm, f"{SNAPDIR}/{v4_alias}.snap"))
+    v6_snap = sorted(_lines(deployed_vm, f"{SNAPDIR}/{v6_alias}.snap"))
+    assert v4_snap == expected_v4, f"v4 continent snapshot members != its built .txt: {v4_snap}"
+    assert v6_snap == expected_v6, (
+        f"v6 continent snapshot members != its built .txt (v4-only snapshot-gate regression): {v6_snap}"
     )
     assert v6_snap != v4_snap, "v4/v6 snapshots must differ -- an identical pair cannot prove the v6 write happened"
 
