@@ -8,6 +8,12 @@
 - **Date:** 2026-06-20
 - **Branch:** `adr/32-ipinfo-geoip` (off `devel`)
 - **Folds in:** issue #291 ("Add IPinfo GeoIP")
+- **Prerequisite (blocking, 2026-07-12):** issue **#1235** — the country/continent truth
+  moves in-tree (GeoNames-generated, ISO-keyed, provider-independent) **before** Phase 2.
+  Until it lands, this ADR's §2.1 rows for the country build and locale names are unsound:
+  they let the *provider* define which countries exist and what they are called, so switching
+  provider (or a provider dropping a country) would silently change a user's configured
+  aliases. See §2.5.
 - **Component(s):** `src/usr/local/www/pfblockerng/pfblockerng.php` (GeoIP/Reputation/ASN
   build + IP-tab settings), `src/usr/local/pkg/pfblockerng/pfblockerng.inc` (MMDB log
   enrichment, ASN, reputation), `src/usr/local/pkg/pfblockerng/pfblockerng.sh` (DB
@@ -109,9 +115,9 @@ support "MaxMind for logs but IPinfo for reputation". Concretely:
 | Lookup seam | direct `mmdblookup` / IPinfo calls scattered | a `GeoipProvider` interface returning a **normalized record** (`country_iso`, `country_name`, `continent`, `asn`, `as_org`, flags map); MaxMind + IPinfo implementations |
 | GeoIP source | MaxMind only | `geoip_provider` setting selects one provider for **all** GeoIP consumers |
 | ASN source | IPinfo only | `asn_provider` setting selects one provider for ASN (default `ipinfo` = today) |
-| Country/continent build | MaxMind `geoname` | provider yields the country→continent map; MaxMind keeps `geoname`, IPinfo supplies its own equivalent, both normalized to the same option-list shape |
+| Country/continent build | MaxMind `geoname` | **the truth is ours, not the provider's** (§2.5, issue #1235): an in-tree GeoNames-generated table (ISO 3166-1 alpha-2 → name, continent) defines which countries exist and what they are called; the provider only supplies **network → ISO**. MaxMind's Locations CSV degrades to a `geoname_id → ISO` lookup; IPinfo emits ISO directly |
 | Deprecated MaxMind flags | `is_anonymous_proxy`/`is_satellite_provider`/`is_anycast` | exposed only when the active provider supplies them; absent providers report "unavailable" — never a fatal |
-| Locale country names | MaxMind only | provider capability flag `supports_locale`; IPinfo → English only, surfaced in the UI |
+| Locale country names | MaxMind only | names (and their locales) come from the **in-tree table** (§2.5), so the UI language no longer depends on the provider — this removes the `supports_locale` capability flag and the "IPinfo → English only" degradation. A provider's own localized names, where it ships them, are optional enrichment, never the source |
 | `config.xml` deprecated fields | n/a | **kept inert, never migrated** (ADR-28); a GUI/`file_notice` flags settings that the active provider can't honour |
 
 ### 2.2 Semantics that MUST be preserved (the contract — pin with tests before any swap)
@@ -145,6 +151,50 @@ stored value is preserved for roll-forward/rollback.
 - **A new GeoIP UI redesign** — out; reuse the existing IP-tab settings + per-continent
   pages, adding only the provider selectors + capability notices.
 - **`config.xml` migration / field removal** — out (frozen store); notices only.
+
+### 2.5 The country/continent truth is OURS, not the provider's (prerequisite: issue #1235)
+
+Recorded 2026-07-12, after the maintainer's review of #1235: *"The predefined Geoname should be
+the ultimate truth. Especially once we look at adding IPinfo or potentially any other GeoIP
+provider."*
+
+A provider abstraction that lets each provider define **which countries exist** is not an
+abstraction — it leaks the vendor straight into the user's configuration:
+
+- A country present in one provider/release/plan can be absent from the next. If the country
+  list is the provider's, an alias the user configured yesterday can silently evaporate on
+  tomorrow's download. A blocklist that quietly stops blocking is the worst failure mode this
+  package has.
+- Providers disagree on **names**: MaxMind renders geoname `248816` as "Hashemite Kingdom of
+  Jordan"; GeoNames — and `$pfb_geoip_all` today — call it "Jordan". Whichever the UI shows
+  would change with the provider.
+- Locales differ per provider (MaxMind ships localized Locations files; IPinfo ships none), so
+  provider-sourced names make the **UI language** a function of the provider setting.
+
+Therefore, before Phase 2:
+
+1. **The truth is a committed, generated table** — GeoNames `countryInfo.txt` (CC BY 4.0; 252
+   countries; ISO, name, continent, geonameid) via a pinned, checksum-verified generator, the
+   same shape as `scripts/update-geoip-fixtures.py`. Note this is not a new dependency: the
+   `geoname_id`s in today's hardcoded `$pfb_geoip_all` **are** GeoNames ids (`JO`=248816,
+   `US`=6252001, `BT`=1252634, `AQ`=6697173) — the table was scraped from GeoNames once and
+   never refreshed.
+2. **The canonical key is the ISO 3166-1 alpha-2 code**, never a provider's `geoname_id` —
+   which is where the data model already points (`config.xml` stores `countries4="US,BT"`).
+3. **A provider supplies network → ISO, nothing else.** MaxMind's Locations CSV becomes a
+   `geoname_id → ISO` lookup; IPinfo needs no lookup at all. This shrinks the provider seam
+   to the one thing providers genuinely differ on.
+4. **Disagreement is surfaced, never silently applied** — a country the provider has no
+   networks for renders `(0)` (honest); a **configured** country the provider dropped raises a
+   notice; an ISO the provider emits that our table does not know raises a notice.
+5. **Provider-specific pseudo-countries stay in the provider adapter** — MaxMind's `A1`/`A2`
+   (anonymous proxy / satellite) are not countries and are not in GeoNames (see #1221, where
+   they are already provably empty against real GeoLite2 data).
+
+Open questions #1235 must settle (they do not block this ADR's other phases): which locales the
+table carries and where the localized names come from (GeoNames `alternateNames` vs CLDR),
+whether MaxMind's locale files stay as optional enrichment for MaxMind users, and the refresh
+cadence.
 
 ## 3. Consequences
 
