@@ -17769,7 +17769,7 @@ function sync_package_pfblockerng($cron='') {
 			if (pfb_dnsbl_concat_files("{$pfb['dnsbl_file']}.raw", $pfb_dnsbl_sources)) {
 				pfb_logger("... completed", 1);
 
-				pfb_dnsbl_py_swap($pfb['dnsbl_tld'], "{$pfb['dnsbl_file']}.raw", $pfb['unbound_py_data'], $pfb['unbound_py_zone']);
+				pfb_dnsbl_py_swap((bool) $pfb['dnsbl_tld'], "{$pfb['dnsbl_file']}.raw", $pfb['unbound_py_data'], $pfb['unbound_py_zone']);
 
 				// ADR-06: Write the per-feed manifest + IP-stripped raw that the Python
 				// plugin's init builds the DNSBL structures from. Python then owns
