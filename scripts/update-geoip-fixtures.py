@@ -130,6 +130,9 @@ class BlockRow:
     geoname_id: str
     registered_geoname_id: str
     represented_geoname_id: str
+    is_anonymous_proxy: bool = False
+    is_satellite_provider: bool = False
+    is_anycast: bool = False
 
 
 def load_records(json_bytes: bytes) -> list[tuple[str, dict[str, Any]]]:
@@ -143,7 +146,7 @@ def load_records(json_bytes: bytes) -> list[tuple[str, dict[str, Any]]]:
 
 
 def build_locations(records: list[tuple[str, dict[str, Any]]]) -> dict[int, LocationRow]:
-    """One row per geoname that appears as a record's ``country`` (F4).
+    """One row per geoname that appears as a record's ``country``.
 
     A ``registered_country``/``represented_country`` sub-record carries no
     continent of its own — deriving a row from one would silently assign the
@@ -172,7 +175,7 @@ def build_locations(records: list[tuple[str, dict[str, Any]]]) -> dict[int, Loca
         if existing is not None and existing != row:
             raise GeneratorError(
                 f"{network}: geoname {gid} already has a conflicting Locations row "
-                f"({existing} vs {row}) — refusing to guess a continent (F4)"
+                f"({existing} vs {row}) — refusing to guess a continent"
             )
         locations[gid] = row
     return locations
@@ -180,7 +183,7 @@ def build_locations(records: list[tuple[str, dict[str, Any]]]) -> dict[int, Loca
 
 def _require_known(gid: int | None, network: str, role: str, locations: dict[int, LocationRow]) -> None:
     if gid is not None and gid not in locations:
-        raise GeneratorError(f"{network}: {role} geoname {gid} has no Locations row (F4)")
+        raise GeneratorError(f"{network}: {role} geoname {gid} has no Locations row")
 
 
 def build_blocks(
@@ -200,18 +203,22 @@ def build_blocks(
         for role, g in (("country", gid), ("registered_country", reg_gid), ("represented_country", rep_gid)):
             _require_known(g, network, role, locations)
 
+        traits = rec.get("traits") or {}
         row = BlockRow(
             network=network,
             geoname_id="" if gid is None else str(gid),
             registered_geoname_id="" if reg_gid is None else str(reg_gid),
             represented_geoname_id="" if rep_gid is None else str(rep_gid),
+            is_anonymous_proxy=bool(traits.get("is_anonymous_proxy", False)),
+            is_satellite_provider=bool(traits.get("is_satellite_provider", False)),
+            is_anycast=bool(traits.get("is_anycast", False)),
         )
         target = v4 if ipaddress.ip_network(network).version == 4 else v6
         target.append(row)
     return v4, v6
 
 
-# ── CSV writers (F3 schema: header + column order verbatim) ────────────────
+# ── CSV writers (MaxMind schema: header + column order verbatim) ──────────
 
 
 def write_locations_csv(path: Path, locations: dict[int, LocationRow]) -> None:
@@ -244,9 +251,10 @@ def write_blocks_csv(path: Path, rows: list[BlockRow]) -> None:
                     row.geoname_id,
                     row.registered_geoname_id,
                     row.represented_geoname_id,
-                    "0",  # is_anonymous_proxy — zero rows in real GeoLite2 too (issue #1221)
-                    "0",  # is_satellite_provider — same
-                    "",  # is_anycast — empty-when-false; this corpus carries no traits.is_anycast
+                    # MaxMind renders the two legacy flags 0/1 and is_anycast 1-or-empty.
+                    "1" if row.is_anonymous_proxy else "0",
+                    "1" if row.is_satellite_provider else "0",
+                    "1" if row.is_anycast else "",
                 ]
             )
 
@@ -277,11 +285,11 @@ def main() -> None:
     blocks_v4, blocks_v6 = build_blocks(records, locations)
 
     if len(locations) != LOCATIONS_COUNT:
-        raise GeneratorError(f"Locations count drifted: expected {LOCATIONS_COUNT}, got {len(locations)} (F5)")
+        raise GeneratorError(f"Locations count drifted: expected {LOCATIONS_COUNT}, got {len(locations)}")
     if len(blocks_v4) != BLOCKS_V4_COUNT:
-        raise GeneratorError(f"Blocks-IPv4 count drifted: expected {BLOCKS_V4_COUNT}, got {len(blocks_v4)} (F5)")
+        raise GeneratorError(f"Blocks-IPv4 count drifted: expected {BLOCKS_V4_COUNT}, got {len(blocks_v4)}")
     if len(blocks_v6) != BLOCKS_V6_COUNT:
-        raise GeneratorError(f"Blocks-IPv6 count drifted: expected {BLOCKS_V6_COUNT}, got {len(blocks_v6)} (F5)")
+        raise GeneratorError(f"Blocks-IPv6 count drifted: expected {BLOCKS_V6_COUNT}, got {len(blocks_v6)}")
 
     (out_dir / OUTPUT_FILENAMES["mmdb"]).write_bytes(mmdb_bytes)
     write_locations_csv(out_dir / OUTPUT_FILENAMES["locations"], locations)
