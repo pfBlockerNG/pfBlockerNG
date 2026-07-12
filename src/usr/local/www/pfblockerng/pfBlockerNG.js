@@ -277,10 +277,9 @@ events.push(function() {
 
 	if (pagetype == 'dnsbl') {
 
+		// issue #1209: gutter renumbering lives in category_edit.php's own
+		// events.push wiring now (index-recomputed, padding-correct on add/delete).
 		$('#addrow').click(function() {
-			$('.repeatable:last').find('sub').each(function() {
-				$(this).append('&nbsp; ').text(Number($(this).text()) + 1 );
-			});
 			pfb_remove_label();
 		})
 	}
@@ -290,10 +289,6 @@ events.push(function() {
 			pfb_autocomplete();
 			$('#addrow').click(function() {
 				pfb_autocomplete();
-
-				$('.repeatable:last').find('sub').each(function() {
-					$(this).append('&nbsp; ').text(Number($(this).text()) + 1 );
-				});
 				pfb_remove_label();
 			})
 		}
