@@ -81,10 +81,9 @@ DENYDIR = f"{h.PFB_DBDIR}/deny"
 SNAPDIR = f"{h.PFB_DBDIR}/snapshot"
 MASTERFILE = f"{h.PFB_DBDIR}/masterfile"
 
-# A fixed, known placeholder (default is PHP-side only — pfblockerng.sh reads the RAW
-# config node via read_xml_tag.sh, with no fallback — see pfb['ip_ph']'s pfb_filter
-# default vs. the shell's direct XML read) so R5/R9's collapse assertion compares
-# against an EXACT string instead of an ambiguous default.
+# Pin ip_placeholder explicitly (PHP and pfblockerng.sh both default to this value) so
+# R5/R9's collapse assertion compares against an exact string no matter what an earlier
+# module left in the shared config.
 PLACEHOLDER_IP = "127.1.7.7"
 
 
@@ -324,7 +323,12 @@ def test_recompute_closing_refills_placeholder_dup_on(deployed_vm: SmokeVM) -> N
       When dedup is ON and a single ``updateip`` reload runs,
       Then the alias's deny file equals the placeholder EXACTLY (not empty, not
         the raw IP -- a broken suppression pass would leave the raw IP; a broken
-        closing pass would leave 0 bytes) and the pf table carries the placeholder.
+        closing pass would leave 0 bytes).
+
+    No pf-table assertion: the alias loop reads the still-empty deny file and unlinks
+    the aliastables mirror for a brand-new alias (pfblockerng.inc, empty $alias_ips +
+    empty $pfctlck) BEFORE the closing pass writes the placeholder, so no table exists
+    this pass.
     """
     h.set_ip_dedup(deployed_vm, True)
     h.set_ip_reputation(deployed_vm)
@@ -339,8 +343,6 @@ def test_recompute_closing_refills_placeholder_dup_on(deployed_vm: SmokeVM) -> N
 
     deny_lines = _lines(deployed_vm, f"{DENYDIR}/r5_v4.txt")
     assert deny_lines == [PLACEHOLDER_IP], f"suppression-collapsed alias not placeholder-refilled: {deny_lines}"
-    members = h.wait_pfctl_table(deployed_vm, spec.alias)
-    assert h.member_present(members, PLACEHOLDER_IP), f"pf table missing the placeholder: {members}"
 
 
 # --------------------------------------------------------------------------- #
@@ -387,8 +389,9 @@ def test_recompute_closing_refills_placeholder_dup_off_pmax(deployed_vm: SmokeVM
     assert anchor_lines == ["192.0.2.0/24"], f"pMax offender did not collapse to the anchor's /24: {anchor_lines}"
     assert collapse_lines == [PLACEHOLDER_IP], f"pMax-collapsed alias not placeholder-refilled: {collapse_lines}"
 
-    collapse_members = h.wait_pfctl_table(deployed_vm, spec_collapse.alias)
-    assert h.member_present(collapse_members, PLACEHOLDER_IP), f"pf table missing the placeholder: {collapse_members}"
+    # No pf-table assertion for the collapsed alias: its mirror is unlinked while the
+    # deny file is still empty, before the closing pass refills the placeholder (see
+    # test_recompute_closing_refills_placeholder_dup_on).
     anchor_members = h.wait_pfctl_table(deployed_vm, spec_anchor.alias)
     assert h.member_covers(anchor_members, "192.0.2.21"), (
         f"pf table lost the anchor's own offending host: {anchor_members}"
