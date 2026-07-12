@@ -1905,6 +1905,19 @@ function pfb_dnsblip_mark_reprocess($action, string $vtype): void {
 	}
 }
 
+// issue #1097/#1127: DNSBLIP v4/v6 post-build bookkeeping, extracted verbatim out of the
+// two call sites so it is unit-testable. A failed rebuild ($built = FALSE) must not
+// advance the fingerprint -- a stamped .fp marks the stale output current and suppresses
+// every future retry.
+function pfb_dnsblip_finalize(string $dnsblip, string $fp, bool $built, string $ip_cache, $action, string $vtype): void {
+	if (!$built) {
+		return;
+	}
+	@file_put_contents("{$dnsblip}.fp", $fp, LOCK_EX);
+	unlink_if_exists($ip_cache);
+	pfb_dnsblip_mark_reprocess($action, $vtype);
+}
+
 // Only an exact full-length fwrite() counts as written -- FALSE or a short (disk-full)
 // write must fail the assembly, or a truncated destination would advance the rebuild
 // bookkeeping as current. Same rule as pfb_prefetch_pattern_file_write_ok().
@@ -1936,6 +1949,24 @@ function pfb_dnsbl_concat_files(string $dest, array $sources): bool {
 	}
 	pfb_logger("\nDNSBL: failed to open [ {$dest} ] for writing", 2);
 	return FALSE;
+}
+
+// DNSBL Python blocking mode publish, if TLD is not enabled -- extracted verbatim out of
+// the concat-success branch (issue #1097/#1127) so it is unit-testable.
+function pfb_dnsbl_py_swap(bool $dnsbl_tld, string $raw, string $py_data, string $py_zone): void {
+	if ($dnsbl_tld) {
+		return;
+	}
+	unlink_if_exists($py_data);
+	unlink_if_exists($py_zone);
+	// ADR-10: keep pfb_py_count across a feed/cron rebuild. The zero-downtime
+	// fast path's RAM gate (pfb_unbound_py_swap_fits_ram) reads this LIVE count
+	// to project the build's ~2x transient; removing it mid-update fail-closed the
+	// gate to a RESTART on EVERY feed/cron update, so the swap could never engage
+	// for the most common case. The Python build overwrites it with the new count
+	// on swap, so the stale value lives only for the brief publish->swap window.
+	// The clear-all-feeds path (DNSBL going empty -> restart) still clears it.
+	rename($raw, $py_data);
 }
 
 // Non-lite DNSBL host-munging pipeline, extracted pure out of the download/parse loop's
@@ -17674,13 +17705,7 @@ function sync_package_pfblockerng($cron='') {
 			else {
 				$pfb_dnsblip_built = (@file_put_contents($dnsblip_v4, "{$pfb['ip_ph']}\n", LOCK_EX) !== FALSE);
 			}
-			// issue #1097: a failed rebuild must not advance the fingerprint -- a stamped
-			// .fp marks the stale output current and suppresses every future retry.
-			if ($pfb_dnsblip_built) {
-				@file_put_contents("{$dnsblip_v4}.fp", $pfb_dnsblip_fp, LOCK_EX);
-				unlink_if_exists($pfb['ip_cache']);
-				pfb_dnsblip_mark_reprocess($pfb['dnsbl_ip'], '_v4');
-			}
+			pfb_dnsblip_finalize($dnsblip_v4, $pfb_dnsblip_fp, $pfb_dnsblip_built, $pfb['ip_cache'], $pfb['dnsbl_ip'], '_v4');
 		}
 	}
 
@@ -17711,12 +17736,7 @@ function sync_package_pfblockerng($cron='') {
 			else {
 				$pfb_dnsblip_built = (@file_put_contents($dnsblip_v6, "::{$pfb['ip_ph']}\n", LOCK_EX) !== FALSE);
 			}
-			// issue #1097: same retry-preserving gate as the v4 path above.
-			if ($pfb_dnsblip_built) {
-				@file_put_contents("{$dnsblip_v6}.fp", $pfb_dnsblip_fp, LOCK_EX);
-				unlink_if_exists($pfb['ip_cache']);
-				pfb_dnsblip_mark_reprocess($pfb['dnsbl_ip'], '_v6');
-			}
+			pfb_dnsblip_finalize($dnsblip_v6, $pfb_dnsblip_fp, $pfb_dnsblip_built, $pfb['ip_cache'], $pfb['dnsbl_ip'], '_v6');
 		}
 	}
 
@@ -17749,19 +17769,7 @@ function sync_package_pfblockerng($cron='') {
 			if (pfb_dnsbl_concat_files("{$pfb['dnsbl_file']}.raw", $pfb_dnsbl_sources)) {
 				pfb_logger("... completed", 1);
 
-				// DNSBL Python blocking mode, if TLD is not enabled
-				if (!$pfb['dnsbl_tld']) {
-					unlink_if_exists($pfb['unbound_py_data']);
-					unlink_if_exists($pfb['unbound_py_zone']);
-					// ADR-10: keep pfb_py_count across a feed/cron rebuild. The zero-downtime
-					// fast path's RAM gate (pfb_unbound_py_swap_fits_ram) reads this LIVE count
-					// to project the build's ~2x transient; removing it mid-update fail-closed the
-					// gate to a RESTART on EVERY feed/cron update, so the swap could never engage
-					// for the most common case. The Python build overwrites it with the new count
-					// on swap, so the stale value lives only for the brief publish->swap window.
-					// The clear-all-feeds path (DNSBL going empty -> restart) still clears it.
-					rename("{$pfb['dnsbl_file']}.raw", $pfb['unbound_py_data']);
-				}
+				pfb_dnsbl_py_swap($pfb['dnsbl_tld'], "{$pfb['dnsbl_file']}.raw", $pfb['unbound_py_data'], $pfb['unbound_py_zone']);
 
 				// ADR-06: Write the per-feed manifest + IP-stripped raw that the Python
 				// plugin's init builds the DNSBL structures from. Python then owns
