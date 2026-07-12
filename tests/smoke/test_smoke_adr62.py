@@ -341,7 +341,7 @@ def test_adr62_csv_bambenek_feed_blocks(deployed_vm: SmokeVM, client_vm: SmokeVM
 
 # --------------------------------------------------------------------------- #
 # Row 6 — a raw (non-punycode) IDN feed line blocks under its punycode form.
-# PHP's idn_to_ascii() converts at parse time (pfblockerng.inc:16713); Python
+# PHP's idn_to_ascii() converts at parse time (pfblockerng.inc); Python
 # never converts (ADR §1.5) — the query MUST use the already-converted form.
 # ``café-adr62row6.com`` -> ``xn--caf-adr62row6-dhb.com``, verified against the
 # REAL idn_to_ascii() this session (`php -r 'echo idn_to_ascii(...)'`) — a fixed
