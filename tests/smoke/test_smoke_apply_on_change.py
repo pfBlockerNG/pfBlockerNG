@@ -146,7 +146,14 @@ def _force_cron_due(vm) -> None:
 
 
 def _run_tick(vm) -> str:
-    """Fire one tick synchronously and return combined stdout+stderr."""
+    """Fire one tick synchronously and return combined stdout+stderr.
+
+    Drains any in-flight pfBlockerNG pass first: the tick defers its feed cron while
+    another feed pass holds the cross-process lock ("Tick: feed cron deferred (another
+    feed pass is running)"), which would silently turn this module's dispatch
+    assertions into false negatives (issue #1202).
+    """
+    h.wait_no_active_pfb_task(vm)
     return vm.ssh(f"{_PHP} {_PFB_PHP} tick 2>&1").stdout
 
 
