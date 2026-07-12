@@ -408,17 +408,29 @@ def deploy(vm: SmokeVM, pkg_path: str | None = None, *, timeout: float = 300.0) 
         "--ssh-key",
         vm.ssh_key_path,
     ]
+    # BEFORE the installer: POST-INSTALL arms the cron entry, so a sentinel written only
+    # afterwards leaves a window in which the box's own cron-tick can dispatch a pass.
+    _write_cron_disable_flag(vm, timeout=timeout)
+
     result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
     if result.returncode != 0:
         raise RuntimeError(
             f"install-pkg.sh failed (rc={result.returncode})\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
-    # mkdir -p first: a fresh POST-INSTALL does not create dbdir (see write_local_feed).
-    flag = vm.ssh(f"/bin/mkdir -p {PFB_DBDIR} && /usr/bin/touch {PFB_CRON_DISABLE_PATH}", timeout=timeout)
-    if flag.returncode != 0:
+    # Re-assert after POST-INSTALL: idempotent, and it fails loudly if the install removed dbdir.
+    _write_cron_disable_flag(vm, timeout=timeout)
+
+
+def _write_cron_disable_flag(vm: SmokeVM, *, timeout: float = 60.0) -> None:
+    """Write the cron-disable sentinel on the guest, raising loudly on failure.
+
+    mkdir -p first: dbdir does not exist before the package's first install.
+    """
+    result = vm.ssh(f"/bin/mkdir -p {PFB_DBDIR} && /usr/bin/touch {PFB_CRON_DISABLE_PATH}", timeout=timeout)
+    if result.returncode != 0:
         raise RuntimeError(
-            f"deploy: failed to write {PFB_CRON_DISABLE_PATH}: rc={flag.returncode} "
-            f"stdout={flag.stdout!r} stderr={flag.stderr!r}"
+            f"deploy: failed to write {PFB_CRON_DISABLE_PATH}: rc={result.returncode} "
+            f"stdout={result.stdout!r} stderr={result.stderr!r}"
         )
 
 
@@ -2745,7 +2757,7 @@ _BASELINE_GLOBAL_KEYS = (
     "pfb_agg_types",
     "pfb_quiet_hours",
     "pfb_tick_interval",
-    # Update Frequency: test_log_rotate writes 'Disabled' to gate the tick's feed-cron
+    # Update Frequency: test_log_age_retention writes 'Disabled' to gate the tick's feed-cron
     # dispatch; leaked forward it silently disables dispatch for every later module
     # (bit test_smoke_apply_on_change — issue #805).
     "pfb_interval",
