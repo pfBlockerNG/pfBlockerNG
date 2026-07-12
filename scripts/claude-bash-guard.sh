@@ -82,10 +82,10 @@
 #     lines needs a separator the scan cannot trust (see norm_bg): every attempt to
 #     read a newline as one re-opened a silent bypass, and a rule that fails open is
 #     worse than no rule. Split the call in two, which is the right shape anyway.
-#   * A wait reached through INDIRECTION (a variable, a function, an alias) is
-#     invisible: the literal `wait-*.sh` token never sits in the backgrounded
-#     statement. Pinned by spec D11 -- the same class as the git-alias case below,
-#     and out of scope for the same reason.
+#   * A wait whose PATH IS NEVER NAMED (assembled from pieces, or hidden behind an
+#     alias) is invisible -- the same class as the git-alias case below, and out of
+#     scope for the same reason. Indirection that still spells the path out, e.g.
+#     through a variable, IS caught (pinned by D11).
 #
 # ACCEPTED LIMITATION (issue #923 review F4): being a static text scan, this
 # guard cannot defend against ACTIVE circumvention -- e.g. an agent that
@@ -139,16 +139,20 @@ segs="$(printf '%s' "$norm" | tr ';&|()' '\n')"
 # Never $segs: `&` is one of the characters $segs splits on, so backgrounding is
 # invisible per-segment.
 #
-# A NEWLINE IS NOT TREATED AS A SEPARATOR HERE, deliberately, and that is the whole
-# design. Treating it as one (`\n` -> `;`) is what a text scan cannot do safely: it
-# cannot tell a newline that ends a command from one inside a quoted argument, from one
-# a backslash continues onto the next line, or from a literal backslash-n in an argument
-# -- and each of those, mistaken for a separator, drops a `;` between a wait script and
-# its trailing `&`, silently un-denying it. A rule that fails OPEN is worse than useless;
-# a rule that over-denies costs one restructured call. So a multi-line command that both
-# mentions a wait script and backgrounds ANYTHING denies (pinned by D7) -- consistent
-# with the guard's own "erring toward blocking" stance.
-norm_bg="$(printf '%s' "$norm" | sed -e 's/[0-9]*>&[0-9-]*//g' -e 's/&>//g' -e 's/&&/ /g')"
+# NO SEPARATOR IS TRUSTED HERE, deliberately, and that is the whole design. $norm has
+# already deleted the quote markers WITHOUT knowing what they protected, so a `;` or a
+# `>` sitting in an argument VALUE is indistinguishable from a real one. Every attempt
+# to read one as a boundary re-opened a silent bypass: a newline mistaken for a
+# separator (whether a real one, one a backslash continued, or a literal backslash-n),
+# and a quoted `;` ending the wait's statement early, each dropped a false boundary
+# between a wait script and its trailing `&` and un-denied it. A rule that fails OPEN is
+# worse than useless; one that over-denies costs a call split in two. So ANY background
+# `&` after a wait script denies, whatever sits between (pinned by D6/D7/D14).
+#
+# The redirection neutralizer needs a digit AFTER `>&` for the same reason: quote-strip
+# can fuse a quoted `>` with the real trailing `&` into a bare `>&`, and eating that as
+# a "redirection" would erase the command's only `&` (pinned by D15).
+norm_bg="$(printf '%s' "$norm" | sed -e 's/[0-9]*>&[0-9-][0-9-]*//g' -e 's/&>//g' -e 's/&&/ /g')"
 
 # _contains <needle> -- true (rc 0) iff the CURRENT SEGMENT ($seg, set by
 # the per-segment loop below) contains <needle> as a literal substring.
@@ -208,9 +212,10 @@ _deny() {
 	exit 0
 }
 
-# Rule D (whole-payload, not per-segment -- see norm_bg above). `[^;]*` keeps the
-# `&` bound to the wait's OWN command: an `&` after a `;` backgrounds a later one.
-if printf '%s' "$norm_bg" | grep -Eq 'wait-[a-z0-9_-]*\.sh[^;]*&'; then
+# Rule D (whole-payload, not per-segment -- see norm_bg above). ANY background `&` after
+# a wait script denies: the `;` that would prove the `&` belongs to a LATER command is
+# not trustworthy in a quote-blind view, and trusting it let a real one through (D14).
+if printf '%s' "$norm_bg" | grep -Eq 'wait-[a-z0-9_-]*\.sh.*&'; then
 	_deny "a wait script backgrounded with & is invisible to the harness: no completion notification fires, so the turn stalls while the wait has already finished (issue #1225). Launch it as its OWN Bash call with run_in_background: true -- backgrounding is a property of the tool call, not of shell syntax (CLAUDE.md No orphaned waits)"
 fi
 
