@@ -426,7 +426,7 @@ if (isset($savemsg)) {
 				<?php if (!empty($rowdata) && !empty($rowdata[0])):
 					foreach ($rowdata as $r_id => $row): ?>
 
-				<tr style="vertical-align: top" class="sortable" id="pfb_r<?=$r_id;?>">
+				<tr style="vertical-align: top"<?php if ($gtype != 'geoip'): ?> class="sortable"<?php endif; ?> id="pfb_r<?=$r_id;?>">
 					<td>
 					<?php
 						$row['aliasname'] = htmlspecialchars($row['aliasname']);
