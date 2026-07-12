@@ -42,6 +42,39 @@ Describe 'run-gates.sh gates_for()'
     The lines of output should equal 3
   End
 
+  It 'syntax-checks an out-of-scope shell file but does not shellcheck it'
+    # The hook + CI shellcheck only src/, scripts/ and .claude/hooks/; tests/ specs and
+    # vendored skill scripts trip SC2034 false-positives, so the runner must skip them too.
+    Data
+      #|tests/shell/pfb_downgrade_prep_spec.sh
+      #|.claude/skills/ponytail/hooks/ponytail-statusline.sh
+    End
+    When call gates_for
+    The line 1 of output should equal 'sh -n tests/shell/pfb_downgrade_prep_spec.sh'
+    The line 2 of output should equal 'sh -n .claude/skills/ponytail/hooks/ponytail-statusline.sh'
+    # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
+    The line 3 of output should equal 'shellspec --shell $(command -v dash || command -v sh)'
+    The lines of output should equal 3
+    The output should not include 'shellcheck'
+  End
+
+  It 'shellchecks only the in-scope files of a mixed in/out-of-scope shell diff'
+    Data
+      #|src/usr/local/pkg/pfblockerng/pfblockerng.sh
+      #|.claude/hooks/x.sh
+      #|tests/shell/y_spec.sh
+    End
+    When call gates_for
+    The line 1 of output should equal 'sh -n src/usr/local/pkg/pfblockerng/pfblockerng.sh'
+    The line 2 of output should equal 'shellcheck src/usr/local/pkg/pfblockerng/pfblockerng.sh'
+    The line 3 of output should equal 'sh -n .claude/hooks/x.sh'
+    The line 4 of output should equal 'shellcheck .claude/hooks/x.sh'
+    The line 5 of output should equal 'sh -n tests/shell/y_spec.sh'
+    # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
+    The line 6 of output should equal 'shellspec --shell $(command -v dash || command -v sh)'
+    The lines of output should equal 6
+  End
+
   It 'maps Markdown to markdownlint'
     Data "docs/misc/notes.md"
     When call gates_for
@@ -51,11 +84,11 @@ Describe 'run-gates.sh gates_for()'
   It 'combines gate families for a mixed diff'
     Data
       #|a.py
-      #|b.sh
+      #|scripts/b.sh
     End
     When call gates_for
     The output should include 'python3 -m pytest'
-    The output should include 'shellcheck b.sh'
+    The output should include 'shellcheck scripts/b.sh'
   End
 
   It 'refuses to build a command from an unsafe path that feeds a per-file gate'
@@ -94,11 +127,14 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     scrub_git_env
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/rungates.XXXXXX")"
     git -C "$repo" init -q
-    printf '#!/bin/sh\n# gone-marker: content distinct from kept.sh so git reports a\n# genuine deletion (identical content collapses to an R100 rename)\ntrue\n' > "$repo/gone.sh"
+    # Under scripts/ so the files are in shellcheck's scope (src, scripts, .claude/hooks).
+    mkdir -p "$repo/scripts"
+    printf '#!/bin/sh\n# gone-marker: content distinct from kept.sh so git reports a\n# genuine deletion (identical content collapses to an R100 rename)\ntrue\n' > "$repo/scripts/gone.sh"
     gitc add -A; gitc commit -qm base
     base_sha=$(gitc rev-parse HEAD)
-    gitc rm -q gone.sh
-    printf '#!/bin/sh\ntrue\n' > "$repo/kept.sh"
+    gitc rm -q scripts/gone.sh   # also prunes the now-empty scripts/ dir
+    mkdir -p "$repo/scripts"
+    printf '#!/bin/sh\ntrue\n' > "$repo/scripts/kept.sh"
     gitc add -A; gitc commit -qm head
     # Tool stubs: the LAST planned gate (shellspec) records that it actually ran.
     stubdir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gatestub.XXXXXX")"
@@ -116,7 +152,7 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
   It 'executes EVERY planned gate including the last one, and passes'
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 0
-    The output should include 'GATE PASS: sh -n kept.sh'
+    The output should include 'GATE PASS: sh -n scripts/kept.sh'
     The output should include 'GATE PASS: shellspec'
     The line 4 of output should equal 'GATES: PASS'
     Assert [ -e "$marker" ]
@@ -139,7 +175,7 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     }
     When call stdin_eating_gate
     The status should equal 0
-    The output should include 'GATE PASS: shellcheck kept.sh'
+    The output should include 'GATE PASS: shellcheck scripts/kept.sh'
     The output should include 'GATE PASS: shellspec'
     Assert [ -e "$marker" ]
   End

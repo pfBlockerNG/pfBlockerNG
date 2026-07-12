@@ -50,7 +50,12 @@ gates_for() {
 	fi
 	if printf '%s\n' "$files" | grep -q '\.sh$'; then
 		for f in $(printf '%s\n' "$files" | grep '\.sh$'); do
-			out="${out}sh -n $f${nl}shellcheck $f${nl}"
+			out="${out}sh -n $f${nl}"
+			# issue #1210: shellcheck scope mirrors .githooks/pre-commit + test.yml
+			# (src, scripts, .claude/hooks); tests/ specs trip SC2034 false-positives.
+			case "$f" in
+			src/* | scripts/* | .claude/hooks/*) out="${out}shellcheck $f${nl}" ;;
+			esac
 		done
 		out="${out}shellspec --shell \$(command -v dash || command -v sh)${nl}"
 	fi
