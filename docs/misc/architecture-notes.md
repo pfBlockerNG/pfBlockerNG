@@ -652,7 +652,9 @@ issue #1149), the `$disable_move` flag, and the `move_anchor` checkbox + `type="
 anchor UI — is **deleted**, not re-fixed. Retiring its array-reject-loop exemption
 restored the full #1106 array-field guard. `pfblockerng_category.php`'s `ids[]`
 hostile-order validation gap is **deliberately out of ADR-63 scope** (issue #1152); its
-GeoIP order-persist is a pre-existing silent no-op (issue #1201).
+GeoIP order-persist was a silent no-op, resolved by issue #1201 (2026-07-12) by disallowing
+reorder on the GeoIP tab — `category.php` drops the row `class="sortable"` marker for
+`gtype == 'geoip'`.
 
 ---
 
