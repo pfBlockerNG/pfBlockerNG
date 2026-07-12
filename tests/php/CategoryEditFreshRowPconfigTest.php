@@ -38,8 +38,8 @@ final class CategoryEditFreshRowPconfigTest extends TestCase
 			// Non-greedy up through the FULL 'custom' assignment line, whatever its
 			// RHS is (pre-fix bare read or post-fix `?? ''`-guarded) -- survives the fix.
 			if (!preg_match(
-				'/\t\$pconfig\t+= array\(\);\n'
-				. '(.*?\n\t\$pconfig\[\'custom\'\][^\n]*\n)\}/s',
+				'/\$pconfig\s*= array\(\);\n'
+				. '(.*?\n\s*\$pconfig\[\'custom\'\][^\n]*\n)\}/s',
 				$src,
 				$m
 			)) {
@@ -104,7 +104,7 @@ final class CategoryEditFreshRowPconfigTest extends TestCase
 
 		// Every absent key falls back to its save-path default (:743-790).
 		$this->assertSame('', $pconfig['dow']);
-		$this->assertSame('', $pconfig['sort']);
+		$this->assertSame('sort', $pconfig['sort']);
 		$this->assertSame('', $pconfig['srcint']);
 		$this->assertSame('', $pconfig['script_pre']);
 		$this->assertSame('', $pconfig['script_post']);
@@ -153,7 +153,7 @@ final class CategoryEditFreshRowPconfigTest extends TestCase
 		// guard fires regardless of which branch below it runs.
 		$this->assertSame('Disabled', $pconfig['action']);
 		$this->assertSame('', $pconfig['dow']);
-		$this->assertSame('', $pconfig['sort']);
+		$this->assertSame('sort', $pconfig['sort']);
 		$this->assertSame('', $pconfig['srcint']);
 		$this->assertSame('', $pconfig['script_pre']);
 		$this->assertSame('', $pconfig['script_post']);

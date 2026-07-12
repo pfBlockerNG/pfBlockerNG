@@ -874,7 +874,7 @@ else {
 	$pconfig['action']			= $rowdata[$rowid]['action'] ?? 'Disabled';
 	$pconfig['cron']			= $rowdata[$rowid]['cron'] ?? 'Never';
 	$pconfig['dow']				= $rowdata[$rowid]['dow'] ?? '';
-	$pconfig['sort']			= $rowdata[$rowid]['sort'] ?? '';
+	$pconfig['sort']			= $rowdata[$rowid]['sort'] ?? 'sort';
 
 	$pconfig['srcint']			= $rowdata[$rowid]['srcint'] ?? '';
 	$pconfig['script_pre']			= $rowdata[$rowid]['script_pre'] ?? '';
