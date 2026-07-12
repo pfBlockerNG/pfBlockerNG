@@ -259,6 +259,17 @@ def write_blocks_csv(path: Path, rows: list[BlockRow]) -> None:
             )
 
 
+def check_counts(locations: dict[int, LocationRow], blocks_v4: list[BlockRow], blocks_v6: list[BlockRow]) -> None:
+    """Refuse to write fixtures whose row counts drifted from the pinned commit's."""
+    for label, actual, expected in (
+        ("Locations", len(locations), LOCATIONS_COUNT),
+        ("Blocks-IPv4", len(blocks_v4), BLOCKS_V4_COUNT),
+        ("Blocks-IPv6", len(blocks_v6), BLOCKS_V6_COUNT),
+    ):
+        if actual != expected:
+            raise GeneratorError(f"{label} count drifted: expected {expected}, got {actual}")
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 
@@ -283,13 +294,7 @@ def main() -> None:
     records = load_records(json_bytes)
     locations = build_locations(records)
     blocks_v4, blocks_v6 = build_blocks(records, locations)
-
-    if len(locations) != LOCATIONS_COUNT:
-        raise GeneratorError(f"Locations count drifted: expected {LOCATIONS_COUNT}, got {len(locations)}")
-    if len(blocks_v4) != BLOCKS_V4_COUNT:
-        raise GeneratorError(f"Blocks-IPv4 count drifted: expected {BLOCKS_V4_COUNT}, got {len(blocks_v4)}")
-    if len(blocks_v6) != BLOCKS_V6_COUNT:
-        raise GeneratorError(f"Blocks-IPv6 count drifted: expected {BLOCKS_V6_COUNT}, got {len(blocks_v6)}")
+    check_counts(locations, blocks_v4, blocks_v6)
 
     (out_dir / OUTPUT_FILENAMES["mmdb"]).write_bytes(mmdb_bytes)
     write_locations_csv(out_dir / OUTPUT_FILENAMES["locations"], locations)
