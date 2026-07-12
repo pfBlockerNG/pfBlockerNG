@@ -519,7 +519,8 @@ AFRICA_ISOS = "NG,ZA"
 
 def test_recompute_continent_snapshot_both_families(deployed_vm: SmokeVM) -> None:
     """A Deny_Both continent list writes a fresh recompute snapshot for its v4 alias
-    AND, independently, its v6 alias -- the ``$pfbadv`` gate (pfblockerng.inc:18272)
+    AND, independently, its v6 alias -- the continent loop's ``$pfbadv`` gate around
+    ``pfb_ip_recompute_write_snapshot()`` (pfblockerng.inc)
     carries no ``$vtype`` restriction, so BOTH families must snapshot, not just v4.
 
     Scenario: the Africa continent (NG + ZA) enabled for both families.

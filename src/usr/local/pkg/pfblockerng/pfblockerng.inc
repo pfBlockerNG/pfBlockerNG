@@ -16106,8 +16106,7 @@ function sync_package_pfblockerng($cron='') {
 
 		// issue #1232: recompute's per-alias reputation artifacts ('match<header>_<fam>.txt')
 		// sit in matchdir but are not Match-type lists -- keep them while their Deny alias
-		// exists, else this sweep reaps them before the GeoIP-outage branch can preserve them.
-		// An artifact whose alias is gone stays un-associated here, so it is still reaped.
+		// exists (a gone alias's artifact stays un-associated here, so it is still reaped).
 		if (!empty($pfb['existing']['deny'])) {
 			foreach ($pfb['existing']['deny'] as $pfb_deny_name) {
 				$pfb['existing']['match'][] = "match{$pfb_deny_name}";
