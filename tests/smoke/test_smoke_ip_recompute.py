@@ -774,8 +774,8 @@ def test_recompute_geoip_restored_clears_match_artifacts(deployed_vm: SmokeVM) -
 
     matchdedup_path = f"{MATCHDIR}/matchdedup_v4.txt"
     match_alias_path = f"{MATCHDIR}/matchd2_v4.txt"
-    # issue #760/#1228 hostile input: a stale artifact from an earlier module run
-    # would make the before-state assertion below meaningless -- start clean, loudly.
+    # A stale artifact from an earlier module run would make the before-state
+    # assertion below meaningless -- start clean, loudly.
     for stale in (matchdedup_path, match_alias_path):
         rm = deployed_vm.ssh("/bin/rm", "-f", stale)
         assert rm.returncode == 0, f"could not clear stale artifact {stale}: rc={rm.returncode} {rm.stderr!r}"
