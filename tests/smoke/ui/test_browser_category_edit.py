@@ -735,6 +735,17 @@ def _gutter_numbers(page: Page) -> list[str]:
     return [(guts.nth(i).text_content() or "").replace("\xa0", " ").strip() for i in range(guts.count())]
 
 
+def _gutter_raw_texts(page: Page) -> list[str]:
+    """Un-normalised ``.pfb-gutter`` text (nbsp preserved), DOM order -- pins padding, not just value."""
+    guts = page.locator("#sourcedefinitions .panel-body .pfb-gutter")
+    return [guts.nth(i).text_content() or "" for i in range(guts.count())]
+
+
+def _expected_gutter_texts(n_rows: int) -> list[str]:
+    """PHP :1071 / JS :1721 padded-gutter format: nbsp+space prefix for single digits."""
+    return [(f"\xa0 {i + 1}" if (i + 1) < 10 else str(i + 1)) for i in range(n_rows)]
+
+
 def _check_row(page: Page, i: int) -> None:
     _rows(page).nth(i).locator(".pfb-reorder-chk").check()
 
@@ -1110,3 +1121,97 @@ def test_reorder_roworderdragging_set_disables_drag_anchor_click_still_persists(
     finally:
         _del_rowid(vm, cfg_root, rowid)
         _set_roworderdragging(vm, was_enabled)
+
+
+@pytest.mark.parametrize("gtype", ["dnsbl", "ipv4"])
+def test_delete_middle_row_without_prior_move_renumbers_gutter(
+    browser_page: Page,
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    gtype: str,
+) -> None:
+    """Deleting the middle of 3 rows, with NO prior reorder move, must renumber
+    the visible ``.pfb-gutter`` labels to [1, 2] (correctly padded per :1071) --
+    not leave the stale [1, 3] (issue #1209). ``onAfterMove`` (the only existing
+    gutter-refresh hook) is wired to the anchor-click/drag paths only, never to
+    a bare ``deleterow`` click, so a standalone delete is the regression this
+    guards -- on BOTH gtype families (dnsbl's own ``#addrow`` handler vs.
+    advanced's GeoIP-gated one; neither ever bound a delete handler at all).
+    """
+    vm = smoke_vm
+    cfg_root = _CFG_BY_GTYPE[gtype]
+    names = _reorder_names(gtype)
+    rowid = _free_rowid(vm, cfg_root)
+    try:
+        _post_form(webui, _three_row_payload(gtype, rowid, f"pfbregutterdel{gtype}", names))
+        page = browser_page
+        _open(page, webui, _edit_page_url(gtype, rowid))
+
+        before_headers = _row_headers(page)
+        assert before_headers == list(names), f"seeded rows did not render in order {names}, got {before_headers!r}"
+        before_gutters = _gutter_raw_texts(page)
+        expected_before = _expected_gutter_texts(3)
+        assert before_gutters == expected_before, (
+            f"seeded gutters were not {expected_before!r} before delete: {before_gutters!r}"
+        )
+
+        # Delete the MIDDLE row directly -- no reorder move precedes this click.
+        _rows(page).nth(1).locator("button[id^='deleterow']").click()
+        expect(_rows(page)).to_have_count(2, timeout=JS_TIMEOUT_MS)
+
+        after_headers = _row_headers(page)
+        assert after_headers == [names[0], names[2]], f"delete did not remove the middle row: got {after_headers!r}"
+        after_gutters = _gutter_raw_texts(page)
+        expected_after = _expected_gutter_texts(2)
+        assert after_gutters == expected_after, (
+            f"gutter numbers went stale after a client-side delete with no prior move (gtype={gtype!r}): "
+            f"expected {expected_after!r}, got {after_gutters!r}"
+        )
+    finally:
+        _del_rowid(vm, cfg_root, rowid)
+
+
+@pytest.mark.parametrize("gtype", ["ipv4", "dnsbl"])
+def test_add_row_without_prior_move_gives_new_row_its_own_padded_gutter(
+    browser_page: Page,
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    gtype: str,
+) -> None:
+    """Adding a 4th row, with NO prior reorder move, must give the new row its
+    own gutter number correctly padded per :1071/:1721 -- not a stale duplicate
+    of row 3's (advanced+GeoIP-disabled: core's ``.clone()`` copies the source
+    row's gutter verbatim, no handler bumps it) and not a right-but-unpadded
+    number (dnsbl: the legacy handler's ``.text()`` bump drops the ``&nbsp;``
+    padding) (issue #1209). ``onAfterMove`` is wired to the anchor-click/drag
+    paths only, never to ``#addrow``.
+    """
+    vm = smoke_vm
+    cfg_root = _CFG_BY_GTYPE[gtype]
+    names = _reorder_names(gtype)
+    rowid = _free_rowid(vm, cfg_root)
+    try:
+        _post_form(webui, _three_row_payload(gtype, rowid, f"pfbregutteradd{gtype}", names))
+        page = browser_page
+        _open(page, webui, _edit_page_url(gtype, rowid))
+
+        before_headers = _row_headers(page)
+        assert before_headers == list(names), f"seeded rows did not render in order {names}, got {before_headers!r}"
+        before_gutters = _gutter_raw_texts(page)
+        expected_before = _expected_gutter_texts(3)
+        assert before_gutters == expected_before, (
+            f"seeded gutters were not {expected_before!r} before add: {before_gutters!r}"
+        )
+
+        # Add via core's #addrow directly -- no reorder move precedes this click.
+        page.locator("#addrow").click()
+        expect(_rows(page)).to_have_count(4, timeout=JS_TIMEOUT_MS)
+
+        after_gutters = _gutter_raw_texts(page)
+        expected_after = _expected_gutter_texts(4)
+        assert after_gutters == expected_after, (
+            f"new row's gutter went stale/unpadded after a client-side add with no prior move (gtype={gtype!r}): "
+            f"expected {expected_after!r}, got {after_gutters!r}"
+        )
+    finally:
+        _del_rowid(vm, cfg_root, rowid)
