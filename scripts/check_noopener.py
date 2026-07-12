@@ -53,8 +53,11 @@ from typing import NamedTuple
 _TARGET_BLANK_RE = re.compile(r'(?<![\w-])target=(?P<q>["\']?)_blank(?P=q)')
 
 # `rel="noopener…"` (or single-quoted / unquoted), immediately after `target=…`
-# with only whitespace between -- the strict-adjacency house convention.
-_REL_NOOPENER_ADJACENT_RE = re.compile(r'\s+rel=(["\']?)noopener\b')
+# with only whitespace between -- the strict-adjacency house convention. The
+# `(?![\w-])` token-end guard (not `\b`) is required so `rel="noopener-evil"` -- a
+# DIFFERENT rel token that grants none of noopener's protection -- is NOT accepted
+# (a `\b` boundary treats the hyphen as a token end and would pass it).
+_REL_NOOPENER_ADJACENT_RE = re.compile(r'\s+rel=(["\']?)noopener(?![\w-])')
 
 # Escape hatch, mirroring check_comment_narration.py's `narration-ok`.
 _ESCAPE_MARKER = "noopener-ok"
@@ -114,7 +117,21 @@ def _scan_path(path: str) -> list[Violation]:
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns 0 (clean) or 1 (violations found)."""
     args = list(sys.argv[1:] if argv is None else argv)
-    paths = args if args else _git_tracked_www()
+    if args:
+        paths = args
+    else:
+        paths = _git_tracked_www()
+        # Fail CLOSED: an empty default scan set means `git ls-files` could not
+        # enumerate the Web UI tree (git absent / not a checkout) -- this repo always
+        # has such files -- so error rather than exit 0 and silently skip the gate.
+        if not paths:
+            print(
+                "check_noopener: `git ls-files src/usr/local/www` returned nothing "
+                "(git unavailable or not a checkout) -- failing closed rather than "
+                "skipping the gate.",
+                file=sys.stderr,
+            )
+            return 2
 
     violations: list[Violation] = []
     for path in paths:
