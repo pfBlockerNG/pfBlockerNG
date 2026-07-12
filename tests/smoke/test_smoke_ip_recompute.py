@@ -8,8 +8,10 @@ pass: real feeds parse -> a pristine post-preprocessing snapshot per header
 snapshot -> the rewritten deny files load into their pf tables. This module drives
 that whole pipeline through the real CLI (``helpers.reload``) on a real pfSense VM
 and observes the on-box deny/master files + live ``pfctl`` tables — the CI-runnable,
-credential-free half (Part 1 of issue #1170); Continent/GeoIP-dependent rows are
-Part 2.
+credential-free half (Part 1 of issue #1170). Part 2 (R3/R7/R8-outage below) adds the
+Continent/GeoIP-adjacent rows that stay credential-free by riding the issue #1219
+``seed_geoip_dataset`` local-CSV fixture (R3/R7) or the box's natural no-``.mmdb``
+state (R8-outage) — never a real MaxMind account.
 
 WHAT THIS FILE AUTOMATES:
 
@@ -36,6 +38,23 @@ WHAT THIS FILE AUTOMATES:
   suppressed even after an UNRELATED sibling B's genuine change drives a
   family-wide recompute that rewrites A too (recompute's snapshot is a
   PRE-suppression capture, so a stale suppression gate would resurrect it).
+* **R3 — continent snapshot write, BOTH families** — a GeoIP Continent list
+  (Deny_Both, seeded from the issue #1219 fixture CSVs) writes a fresh ``.snap`` +
+  ``.aggcount`` for its v4 alias AND, independently, its v6 alias — pinned against
+  the fixture's asymmetric second-Nigeria v6 row so a v4-only snapshot bug (the
+  pre-fix state ``IpRecomputeRanWiringTest`` guards against) cannot pass vacuously.
+* **R7 — v6 continent snapshot TRACKING across two regens** — the same v6
+  ``.snap`` genuinely changes content across two passes when the underlying
+  continent membership changes, proving the snapshot follows live regens rather
+  than freezing at a one-time seed (issue #1084 review; ``c3fc39d3``).
+* **R8-outage — a GeoIP-unavailable pass preserves the reputation match
+  artifacts** — dMax with offenders present, on a box with no
+  ``GeoLite2-Country.mmdb`` (the box's natural, never-baked state):
+  ``pfb_recompute_finish()`` takes the GeoIP-unavailable branch and leaves a
+  pre-existing per-alias match file byte-identical, never swapping/removing it.
+  The RESTORED-GeoIP leg (the clean pass that clears ``matchdedup``) needs a real
+  binary ``.mmdb`` a CSV fixture cannot produce and stays real MaxMind
+  credential-gated — tracked as issue #1228, not attempted here.
 
 Reload-scope note: R1/R2/R5/R9 are single-pass (or repeat-input) cases and use
 ``reload(scope='updateip')`` — its ``force=true`` sets ``$pfb['reuse']='on'`` for the
@@ -46,12 +65,11 @@ alias's OWN feed did not change" from "recompute ran anyway" — the exact axis
 `force=true` collapses (every alias becomes `$feed_changed` every pass) — so they use
 the ADR-40-proven two-pass shape instead: ``reload(scope='update')`` (respects the
 per-alias reuse-skip) + ``force_ip_refetch()`` on ONLY the alias that must genuinely
-re-ingest.
-
-WHAT STAYS FOR STEP 2 (Continent/GeoIP-dependent, per the issue #1170 brief):
-
-* R3/R7/R8 — anything requiring a real MaxMind GeoIP database (dMax/match-mode
-  country classification, Continent-list interaction with recompute).
+re-ingest. R3/R7 use ``reload(scope='update')`` too (matches the
+``test_smoke_714_asn_geoip.py`` c8 precedent for continent builds — the continent
+loop's own md5-comparison change detector, not the feed-reuse cache, gates the
+snapshot write). R8-outage uses ``reload(scope='updateip')`` (matches R9's dMax/pMax
+sibling: `force=true` reliably fires `repcheck` without a marker touch).
 
 DESELECTED from the default ``python -m pytest`` (``--ignore=tests/smoke``). Run via
 the smoke workflow or locally::
@@ -80,6 +98,10 @@ CFG_IP_SETTINGS = h.CFG_IP_SETTINGS
 DENYDIR = f"{h.PFB_DBDIR}/deny"
 SNAPDIR = f"{h.PFB_DBDIR}/snapshot"
 MASTERFILE = f"{h.PFB_DBDIR}/masterfile"
+# pfblockerng.inc:50 $pfb['origdir'] -- the recompute snapshot's '.aggcount' sidecar dir (R3).
+ORIGDIR = f"{h.PFB_DBDIR}/original"
+# pfblockerng.sh:92 pfbmatch -- the dMax per-alias 'match<alias>.txt' reputation artifact dir (R8-outage).
+MATCHDIR = f"{h.PFB_DBDIR}/match"
 
 # Pin ip_placeholder explicitly (PHP and pfblockerng.sh both default to this value) so
 # R5/R9's collapse assertion compares against an exact string no matter what an earlier
@@ -101,11 +123,13 @@ def deployed_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
     try:
         yield smoke_vm
     finally:
-        # Leave no dedup/reputation/suppression/placeholder knob set for the next module.
+        # Leave no dedup/reputation/suppression/placeholder/continent knob set for the next module.
         h.set_ip_dedup(smoke_vm, False)
         h.set_ip_reputation(smoke_vm)
         h.set_ip_suppression(smoke_vm, enabled=False)
         _set_placeholder(smoke_vm, "")
+        h.set_ip_continent(smoke_vm, "Africa", action="Disabled")
+        h.set_ip_continent(smoke_vm, "Oceania", action="Disabled")
         h.collect_host_diagnostics(smoke_vm)
 
 
@@ -478,3 +502,176 @@ def test_recompute_suppression_realigns_across_sibling_change(deployed_vm: Smoke
 
     b_after = _lines(deployed_vm, f"{DENYDIR}/r6b_v4.txt")
     assert b_after == ["172.104.92.31"], f"B's own change was not applied -- the sibling trigger is not real: {b_after}"
+
+
+# --------------------------------------------------------------------------- #
+# R3 -- continent snapshot write, BOTH families (issue #1219 fixture, credential-free)
+# --------------------------------------------------------------------------- #
+
+# tests/smoke/fixtures/README.md "GeoIP continent-page fixtures": Africa = NG + ZA.
+# v4 Blocks has ONE direct row per ISO; v6 Blocks carries a SECOND Nigeria row on
+# purpose, so NG's v6 file (and therefore the built continent file) genuinely
+# differs in content AND line count from its v4 sibling -- the asymmetry this row
+# is built to distinguish (a v4-only snapshot bug could not pass this).
+AFRICA_ISOS = "NG,ZA"
+
+
+def test_recompute_continent_snapshot_both_families(deployed_vm: SmokeVM) -> None:
+    """A Deny_Both continent list writes a fresh recompute snapshot for its v4 alias
+    AND, independently, its v6 alias -- the ``$pfbadv`` gate (pfblockerng.inc:18272)
+    carries no ``$vtype`` restriction, so BOTH families must snapshot, not just v4.
+
+    Scenario: the Africa continent (NG + ZA) enabled for both families.
+      Given the issue #1219 GeoIP CSV fixtures are seeded and Africa's countries4/6
+        are both set to "NG,ZA",
+      When a single real update pass builds the continent,
+      Then BOTH the v4 and v6 continent ``.snap`` files exist with content matching
+        their own built ``.txt`` (not mere existence), each with the correct
+        ``.aggcount`` line-count sidecar -- and the v6 content/count genuinely differs
+        from v4's (NG's extra v6 row), proving the v6 write was read from the v6
+        source specifically, not a copy of v4's.
+    """
+    h.seed_geoip_dataset(deployed_vm)
+    h.set_package_enabled(deployed_vm, True)
+    h.set_ip_continent(deployed_vm, "Africa", action="Deny_Both", countries4=AFRICA_ISOS, countries6=AFRICA_ISOS)
+    h.reload(deployed_vm, "update", wait_unbound=False)
+
+    v4_alias = "pfB_Africa_v4"
+    v6_alias = "pfB_Africa_v6"
+    v4_txt = _raw(deployed_vm, f"{DENYDIR}/{v4_alias}.txt")
+    v6_txt = _raw(deployed_vm, f"{DENYDIR}/{v6_alias}.txt")
+    expected_v4 = "192.0.2.0/28\n192.0.2.16/28\n"
+    expected_v6 = "2001:db8:0::/36\n2001:db8:e::/36\n2001:db8:1::/36\n"
+    assert v4_txt == expected_v4, f"Africa v4 continent content wrong (NG then ZA): {v4_txt!r}"
+    assert v6_txt == expected_v6, f"Africa v6 continent content wrong (NG's 2 rows then ZA's 1): {v6_txt!r}"
+
+    v4_snap = _raw(deployed_vm, f"{SNAPDIR}/{v4_alias}.snap")
+    v6_snap = _raw(deployed_vm, f"{SNAPDIR}/{v6_alias}.snap")
+    assert v4_snap == v4_txt, f"v4 continent snapshot != its built .txt: snap={v4_snap!r} txt={v4_txt!r}"
+    assert v6_snap == v6_txt, (
+        f"v6 continent snapshot != its built .txt (v4-only snapshot-gate regression): snap={v6_snap!r} txt={v6_txt!r}"
+    )
+    assert v6_snap != v4_snap, "v4/v6 snapshots must differ -- an identical pair cannot prove the v6 write happened"
+
+    v4_aggcount = _raw(deployed_vm, f"{ORIGDIR}/{v4_alias}.aggcount")
+    v6_aggcount = _raw(deployed_vm, f"{ORIGDIR}/{v6_alias}.aggcount")
+    assert v4_aggcount == "2\n", f"v4 .aggcount sidecar wrong: {v4_aggcount!r}"
+    assert v6_aggcount == "3\n", f"v6 .aggcount sidecar wrong (must count NG's 2nd row): {v6_aggcount!r}"
+
+
+# --------------------------------------------------------------------------- #
+# R7 -- v6 continent snapshot TRACKS across two regens (not frozen at the seed)
+# --------------------------------------------------------------------------- #
+
+
+def test_recompute_continent_v6_snapshot_tracks_regens(deployed_vm: SmokeVM) -> None:
+    """The v6 continent snapshot follows the LIVE regenerated content across two
+    passes -- it must not freeze at whatever the first pass (or an upgrade seed)
+    wrote (issue #1084 review, ``c3fc39d3``).
+
+    Uses the Oceania continent (AU/NZ) so this test's continent config is
+    independent of R3's Africa config -- self-encapsulated, no order dependence.
+
+    Scenario: Oceania's countries6 swapped between two passes.
+      Given (BEFORE) countries6="AU" and a real update pass builds the continent,
+      Then the v6 snapshot holds ONLY AU's network,
+      When countries6 is changed to "NZ" (a genuinely different membership) and a
+        SECOND real update pass runs,
+      Then the v6 snapshot now holds ONLY NZ's network -- DIFFERENT from pass 1's
+        content, proving the snapshot tracks the regen rather than staying frozen.
+    """
+    h.seed_geoip_dataset(deployed_vm)
+    h.set_package_enabled(deployed_vm, True)
+    v6_alias = "pfB_Oceania_v6"
+
+    h.set_ip_continent(deployed_vm, "Oceania", action="Deny_Both", countries4="", countries6="AU")
+    h.reload(deployed_vm, "update", wait_unbound=False)
+    snap_pass1 = _raw(deployed_vm, f"{SNAPDIR}/{v6_alias}.snap")
+    assert snap_pass1 == "2001:db8:a::/36\n", f"pass 1 v6 snapshot wrong (AU only): {snap_pass1!r}"
+
+    h.set_ip_continent(deployed_vm, "Oceania", action="Deny_Both", countries4="", countries6="NZ")
+    h.reload(deployed_vm, "update", wait_unbound=False)
+    snap_pass2 = _raw(deployed_vm, f"{SNAPDIR}/{v6_alias}.snap")
+    assert snap_pass2 == "2001:db8:b::/36\n", f"pass 2 v6 snapshot wrong (NZ only): {snap_pass2!r}"
+    assert snap_pass2 != snap_pass1, (
+        f"v6 continent snapshot did not track the regenerated membership (frozen-snapshot "
+        f"regression): pass1={snap_pass1!r} pass2={snap_pass2!r}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# R8-outage -- GeoIP unavailable this pass: preserve the previous reputation
+# match artifacts, never swap/remove them (issue #1228 tracks the restored leg)
+# --------------------------------------------------------------------------- #
+
+# pfblockerng.sh's window-awk match-file format (pfb_recompute_rep_subset): one
+# "<pfx>.0/24" header line, then one "!<ip>" line per exempted/dup'd member. A
+# realistic prior-pass artifact for the SAME offending /24 this test's feed creates.
+_R8_MATCH_STAGE = "198.51.100.0/24\n!198.51.100.10\n"
+# pfblockerng.sh's pfb_recompute_finish() log line (rec_geoip_ok==0 branch) --
+# family-qualified so it cannot be confused with a sibling family's line.
+GEOIP_OUTAGE_MARKER = "recompute [ v4 ]: GeoIP unavailable this pass -- keeping previous reputation match artifacts"
+
+
+def test_recompute_geoip_outage_preserves_match_artifacts(deployed_vm: SmokeVM) -> None:
+    """dMax repmode with an offender present, but no ``GeoLite2-Country.mmdb`` on box
+    (the box's natural, never-baked state -- ``mmdblookup`` is baked, the database is
+    not): ``pfb_recompute_finish()`` must take the GeoIP-unavailable branch and leave
+    a PRE-EXISTING per-alias reputation match file untouched, never swap/remove it.
+
+    STAGED PRECONDITION (documented, not a fake of the code path under test): this box
+    can never produce a real ``match<alias>.txt`` through a GeoIP-UP pass (no
+    ``.mmdb`` ever exists here -- the restored-GeoIP leg needs real MaxMind
+    credentials to fetch a binary database a CSV fixture cannot substitute for;
+    tracked as issue #1228). The file staged below stands in for "what a prior pass
+    wrote while GeoIP was up" -- realistic content in the real on-disk format, not a
+    fabricated code path: the property under test is that THIS pass, with GeoIP
+    down, leaves it alone.
+
+    Scenario: one v4 Deny alias with an offending /24 (dmax=2, 3 members present).
+      Given (before) a pre-existing match file for that alias's own offending /24,
+      When dRep/dMax is on, an offender is present, and a real Force-IP pass runs
+        with no ``.mmdb`` on box,
+      Then the match file is BYTE-IDENTICAL afterwards (the rec_geoip_ok==1 reconcile
+        that would have swapped/removed it never ran) and the pfBlockerNG log gained
+        the GeoIP-unavailable line.
+    """
+    mmdb_path = f"{h.GEOIP_SHARE_DIR}/GeoLite2-Country.mmdb"
+    probe = deployed_vm.ssh("/bin/test", "-f", mmdb_path)
+    assert probe.returncode != 0, (
+        f"precondition violated: {mmdb_path} exists on this box -- R8-outage needs the box's "
+        "natural (never-baked) no-.mmdb state to exercise the GeoIP-unavailable branch"
+    )
+
+    h.set_ip_dedup(deployed_vm, False)
+    h.set_ip_reputation(deployed_vm, drep=True, dmax=2)
+    h.set_ip_suppression(deployed_vm, enabled=False)
+
+    feed = h.write_local_feed(deployed_vm, "r8_feed.txt", "198.51.100.10\n198.51.100.11\n198.51.100.12\n")
+    spec = h.IpCase(aliasname="r8", feed_url=feed, header="r8", action="Deny_Both")
+    h.inject_ip_lists(deployed_vm, [spec])
+
+    match_path = f"{MATCHDIR}/match{spec.alias}.txt"
+    stage_snippet = (
+        f"@mkdir({h._php_str(MATCHDIR)}, 0755, TRUE);\n"  # noqa: SLF001
+        f"file_put_contents({h._php_str(match_path)}, {h._php_str(_R8_MATCH_STAGE)});\n"  # noqa: SLF001
+        "echo 'OK';"
+    )
+    stage_res = h.php_eval(deployed_vm, stage_snippet)
+    assert "OK" in stage_res.stdout, f"could not stage the match artifact: {stage_res.stdout!r} {stage_res.stderr!r}"
+
+    # BEFORE: the staged artifact round-tripped exactly, and the outage line hasn't fired yet.
+    before_content = _raw(deployed_vm, match_path)
+    assert before_content == _R8_MATCH_STAGE, f"staged match file did not round-trip: {before_content!r}"
+    before_marker = h.count_log_marker(deployed_vm, h.PFB_LOG, GEOIP_OUTAGE_MARKER)
+
+    h.reload(deployed_vm, "updateip", wait_unbound=False)
+
+    after_content = _raw(deployed_vm, match_path)
+    assert after_content == before_content, (
+        f"GeoIP-outage pass perturbed the previous match artifact: before={before_content!r} after={after_content!r}"
+    )
+    after_marker = h.count_log_marker(deployed_vm, h.PFB_LOG, GEOIP_OUTAGE_MARKER)
+    assert after_marker > before_marker, (
+        f"expected a new {GEOIP_OUTAGE_MARKER!r} line in {h.PFB_LOG} (before={before_marker}, after={after_marker})"
+    )
