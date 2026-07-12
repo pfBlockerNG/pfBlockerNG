@@ -70,6 +70,18 @@
 #
 # Erring toward blocking is the intended tradeoff in both cases.
 #
+# Rule D inherits both surfaces, and adds nothing new in kind:
+#
+#   * An `&` inside an ARGUMENT VALUE (`--exclude "a&b"`) denies a foreground
+#     wait, for the same reason B10's --no-verify-in-a-message denies: no argv
+#     parse, so data and operator look alike. Pinned by spec D10. No flag of any
+#     wait-*.sh takes an `&`-bearing value today, so the trigger is theoretical --
+#     and erring toward blocking is the stated tradeoff.
+#   * A wait reached through INDIRECTION (a variable, a function, an alias) is
+#     invisible: the literal `wait-*.sh` token never sits in the backgrounded
+#     statement. Pinned by spec D11 -- the same class as the git-alias case below,
+#     and out of scope for the same reason.
+#
 # ACCEPTED LIMITATION (issue #923 review F4): being a static text scan, this
 # guard cannot defend against ACTIVE circumvention -- e.g. an agent that
 # pre-defines a git alias (`git config alias.p 'push --force'; git p`) so the
@@ -120,16 +132,24 @@ segs="$(printf '%s' "$norm" | tr ';&|()' '\n')"
 # never split into $segs: `&` is one of the characters $segs splits on, so
 # backgrounding is invisible per-segment, and $norm has already dissolved one of the
 # two things Rule D must see. Each step is load-bearing:
-#   1. A NEWLINE ENDS A COMMAND, exactly like `;`. A multi-line command reaches the
-#      hook as the JSON escape `\n`, which $norm's backslash-strip turns into a bare
-#      `n` -- welding two commands into one, so a FOREGROUND wait whose only sin is a
-#      later backgrounded line would deny. Both newline forms become `;` here.
-#   2-3. Then $norm's own steps: strip quotes/backslashes, collapse whitespace runs.
+#   1. Park every ESCAPED backslash (`\\` in the payload = one literal backslash in
+#      the command). JSON spells a real newline `\n` and a literal backslash-n `\\n`,
+#      so step 2 would otherwise read the latter's tail as a newline and inject a fake
+#      `;` INSIDE an argument -- which, landing between the wait script and its `&`,
+#      silently un-denies a genuinely backgrounded wait.
+#   2. A NEWLINE ENDS A COMMAND, exactly like `;`. A multi-line command arrives as the
+#      JSON escape `\n`, which $norm's backslash-strip turns into a bare `n` -- welding
+#      two commands into one, so a FOREGROUND wait whose only sin is a later
+#      backgrounded line would deny. Both newline forms become `;` here.
+#   3. Unpark the literal backslashes, then $norm's own steps: strip quotes/backslashes
+#      and collapse whitespace runs.
 #   4. Neutralize the two `&` LOOKALIKES -- a redirection (`2>&1`, `>&2`, `&>`) and
 #      the `&&` list operator -- so a surviving `&` is unambiguously a background.
 norm_bg="$(printf '%s' "$payload" \
+	| sed -e 's/\\\\/@PFB_BS@/g' \
 	| sed -e 's/\\n/;/g' \
 	| tr '\n' ';' \
+	| sed -e 's/@PFB_BS@/\\/g' \
 	| tr -d '\\"' \
 	| tr -s '[:space:]' ' ' \
 	| sed -e 's/[0-9]*>&[0-9-]*//g' -e 's/&>//g' -e 's/&&/ /g')"
