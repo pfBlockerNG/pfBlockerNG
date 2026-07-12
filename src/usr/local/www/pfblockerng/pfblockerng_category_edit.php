@@ -1715,14 +1715,35 @@ else if (gtype == 'dnsbl') {
 <?php if (($rowdata[$rowid]['sort'] ?? '') == 'no-sort') { ?>
 // ADR-63: staged reorder via shared component; renumber() keeps field names positional
 var pfb_drag_enabled = <?=config_path_enabled('system/webgui', 'roworderdragging') ? 'false' : 'true';?>;
+
+function pfb_gutter_refresh() {
+	$('#sourcedefinitions .panel-body .form-group.repeatable').each(function(i) {
+		var n = i + 1;
+		$(this).find('.pfb-gutter').html((n < 10 ? '&nbsp; ' : '') + n);
+	});
+}
+
+// issue #1209: core delete_row() binds directly on the button and removes it
+// synchronously -- a container-delegated handler misses the row. Bind
+// directly, rebinding after every add_row() clone (clone() copies no handlers).
+function pfb_gutter_bind_delete() {
+	$('#sourcedefinitions .panel-body [id^=deleterow]').off('click.pfbGutter').on('click.pfbGutter', function() {
+		pfb_gutter_refresh();
+	});
+}
+
 events.push(function() {
 	pfb_reorder_init('#sourcedefinitions .panel-body', '.form-group.repeatable', function() {
 		renumber();
-		$('#sourcedefinitions .panel-body .form-group.repeatable').each(function(i) {
-			var n = i + 1;
-			$(this).find('.pfb-gutter').html((n < 10 ? '&nbsp; ' : '') + n);
-		});
+		pfb_gutter_refresh();
 	}, pfb_drag_enabled);
+
+	$('#addrow').click(function() {
+		renumber();
+		pfb_gutter_refresh();
+		pfb_gutter_bind_delete();
+	});
+	pfb_gutter_bind_delete();
 });
 <?php } ?>
 
