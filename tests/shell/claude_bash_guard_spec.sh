@@ -497,6 +497,69 @@ Describe 'claude-bash-guard.sh'
     End
   End
 
+  # ── Rule D: a wait script backgrounded with & ───────────────────────────────
+  #
+  # Backgrounding is a property of the TOOL CALL (run_in_background: true), not of
+  # shell syntax: a wait launched with `&` inside a foreground call is not tracked
+  # by the harness, so no completion notification ever fires and the turn stalls
+  # while the wait has already finished (#1225, observed on PR #1222).
+
+  Describe 'Rule D: wait-*.sh backgrounded with &'
+    It 'D1: wait-checks.sh backgrounded, output redirected -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"sh scripts/agent/wait-checks.sh --repo o/r --pr 1 > /tmp/ci.txt 2>&1 &"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'D2: wait-reviewer.sh backgrounded with a command after the & -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"sh scripts/agent/wait-reviewer.sh --handle copilot > /tmp/r.txt 2>&1 & echo armed"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'D3: wait-checks.sh in the FOREGROUND (the run_in_background shape) -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"sh scripts/agent/wait-checks.sh --repo o/r --pr 1 > /tmp/ci.txt 2>&1"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'D4: the & backgrounds something ELSE, the wait runs in the foreground -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"sleep 1 & sh scripts/agent/wait-checks.sh --repo o/r --pr 1"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'D5: a && after the wait script is a list operator, not a background -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"sh scripts/agent/wait-checks.sh --repo o/r --pr 1 && gh pr merge 1 --rebase"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'D6: a & belonging to a LATER command (after a ;) does not background the wait -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"sh scripts/agent/wait-checks.sh --repo o/r --pr 1 ; sleep 5 &"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+  End
+
   # ── plain git, no rule in scope ─────────────────────────────────────────────
 
   It 'P9: plain git status -> PASS'
