@@ -182,4 +182,18 @@ FAKEEOF
     End
   End
 
+  # ── SHA ref: fetch-by-SHA falls back to a full fetch + checkout ──────────── #
+  # `git fetch origin <sha>` is refused (the server won't advertise a bare
+  # commit), so the bootstrap must fall back to a full fetch then check the
+  # reachable commit out — otherwise a red->green probe on HEAD~N of a pushed
+  # branch dies with "couldn't find remote ref <sha>".
+  Describe 'bootstrap tolerates a bare commit SHA ref'
+    It 'emits an if/else that falls back to a full fetch + checkout of the ref'
+      When call run_and_diag --ref 0123abc --shards 1
+      The line 1 of output should equal 'exit=0'
+      The output should include "if git fetch --quiet origin '0123abc'"
+      The output should include "else git fetch --quiet origin && git checkout --quiet --force '0123abc'"
+    End
+  End
+
 End

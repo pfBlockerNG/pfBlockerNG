@@ -98,8 +98,15 @@ if [ "${PFB_ONBOX_REEXEC:-}" != "1" ]; then
         # Check out the FETCHED TIP, not a bare `git checkout <ref>` — the latter
         # lands the box's possibly-stale LOCAL branch (git fetch only moves the
         # remote-tracking ref), which can predate files added upstream.
-        git fetch --quiet origin "$_REF"
-        git checkout --quiet --force FETCH_HEAD
+        # A branch/tag name fetches directly; a bare commit SHA is refused by
+        # `git fetch origin <sha>`, so fall back to a full fetch + checkout of the
+        # (now-reachable) commit.
+        if git fetch --quiet origin "$_REF" 2>/dev/null; then
+            git checkout --quiet --force FETCH_HEAD
+        else
+            git fetch --quiet origin
+            git checkout --quiet --force "$_REF"
+        fi
     fi
 
     # Re-exec the now-checked-out version with properly quoted args.

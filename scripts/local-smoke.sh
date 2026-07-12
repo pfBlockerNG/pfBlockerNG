@@ -163,13 +163,17 @@ fi
 #      bare `git checkout <ref>`, which lands the box's possibly-stale LOCAL branch
 #      (a clone whose local devel predates an upstream commit would miss files added
 #      since, e.g. scripts/smoke-on-box.sh itself → "cannot open" + no run).
+#      A branch/tag name fetches directly; a bare commit SHA is refused by
+#      `git fetch origin <sha>` (the server won't advertise it), so fall back to a
+#      full fetch + checkout of the (now-reachable) commit — this lets a red→green
+#      probe target HEAD~N of a pushed branch without minting a throwaway ref.
 #   3. exec smoke-on-box.sh (which re-fetches + re-execs at that ref's version)
 # Ref-stable: the one-liner is the only part that has to work across refs;
 # smoke-on-box.sh handles everything else.
 # shellcheck disable=SC2089  # quoting: _ob_flags is pre-encoded for remote sh
 _bootstrap="cd /root/pfBlockerNG \
- && git fetch --quiet origin '$_REF_Q' \
- && git checkout --quiet --force FETCH_HEAD \
+ && if git fetch --quiet origin '$_REF_Q' 2>/dev/null; then git checkout --quiet --force FETCH_HEAD; \
+ else git fetch --quiet origin && git checkout --quiet --force '$_REF_Q'; fi \
  && exec sh scripts/smoke-on-box.sh $_ob_flags"
 
 printf 'local-smoke: leasing box (REF=%s marker=%s%s)\n' \
