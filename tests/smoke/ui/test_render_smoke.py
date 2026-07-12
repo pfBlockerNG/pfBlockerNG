@@ -694,6 +694,23 @@ def test_geoip_pages_render_the_seeded_csv_rows(webui: WebUI, php_error_log_guar
             )
 
 
+def test_zzz_probe_geoip_needles(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
+    """TEMP PROBE -- dumps real rendered option text; deleted before landing."""
+    import re
+
+    pat = re.compile(r"<option[^>]*>([^<]*)</option>")
+    for path in (
+        "/pfblockerng/pfblockerng_Proxy_and_Satellite.php",
+        "/pfblockerng/pfblockerng_Antarctica.php",
+    ):
+        resp = webui.get(path)
+        found = sorted({t.strip() for t in pat.findall(resp.text) if t.strip()})
+        print(f"\n=== {path} ({len(found)} options) ===")
+        for f in found[:80]:
+            print(f"  {f!r}")
+    assert False, "probe dump above"  # noqa: B011,PT015
+
+
 def test_general_page_keep_help_upgrade_warning(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
     """The General page's 'Keep Settings' help warns that keep=off wipes settings on a version upgrade (#697).
 

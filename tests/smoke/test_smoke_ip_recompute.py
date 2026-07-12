@@ -39,10 +39,11 @@ WHAT THIS FILE AUTOMATES:
   family-wide recompute that rewrites A too (recompute's snapshot is a
   PRE-suppression capture, so a stale suppression gate would resurrect it).
 * **R3 — continent snapshot write, BOTH families** — a GeoIP Continent list
-  (Deny_Both, seeded from the issue #1219 fixture CSVs) writes a fresh ``.snap`` +
-  ``.aggcount`` for its v4 alias AND, independently, its v6 alias — pinned against
-  the fixture's asymmetric second-Nigeria v6 row so a v4-only snapshot bug (the
-  pre-fix state ``IpRecomputeRanWiringTest`` guards against) cannot pass vacuously.
+  (Deny_Both, seeded from the official MaxMind-DB test corpus, issue #1219/#1228)
+  writes a fresh ``.snap`` + ``.aggcount`` for its v4 alias AND, independently, its
+  v6 alias — pinned against the corpus's North-America asymmetry (US carries 3 v4
+  rows vs. 1 v6 row) so a v4-only snapshot bug (the pre-fix state
+  ``IpRecomputeRanWiringTest`` guards against) cannot pass vacuously.
 * **R7 — v6 continent snapshot TRACKING across two regens** — the same v6
   ``.snap`` genuinely changes content across two passes when the underlying
   continent membership changes, proving the snapshot follows live regens rather
@@ -53,9 +54,11 @@ WHAT THIS FILE AUTOMATES:
   shared VM is hidden for the pass and restored after):
   ``pfb_recompute_finish()`` takes the GeoIP-unavailable branch and leaves a
   pre-existing per-alias match file byte-identical, never swapping/removing it.
-  The RESTORED-GeoIP leg (the clean pass that clears ``matchdedup``) needs a real
-  binary ``.mmdb`` a CSV fixture cannot produce and stays real MaxMind
-  credential-gated — tracked as issue #1228, not attempted here.
+* **R8-restored — a clean pass with GeoIP UP clears the reputation match
+  artifacts (issue #1228)** — with a real binary ``.mmdb`` seeded, a cc-list HIT
+  (``ccwhite=match``) writes the consolidated ``matchdedup`` file and a SIBLING
+  cc-list MISS (``ccblack=match``) writes a per-alias ``match<alias>.txt``; a
+  SECOND pass whose cc-list matches neither offender reconciles BOTH away.
 
 Reload-scope note: R1/R2/R5/R9 are single-pass (or repeat-input) cases and use
 ``reload(scope='updateip')`` — its ``force=true`` sets ``$pfb['reuse']='on'`` for the
@@ -130,8 +133,8 @@ def deployed_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
         h.set_ip_reputation(smoke_vm)
         h.set_ip_suppression(smoke_vm, enabled=False)
         _set_placeholder(smoke_vm, "")
-        h.set_ip_continent(smoke_vm, "Africa", action="Disabled")
-        h.set_ip_continent(smoke_vm, "Oceania", action="Disabled")
+        h.set_ip_continent(smoke_vm, "North America", action="Disabled")
+        h.set_ip_continent(smoke_vm, "Europe", action="Disabled")
         h.collect_host_diagnostics(smoke_vm)
 
 
@@ -155,6 +158,12 @@ def _lines(vm: SmokeVM, path: str) -> list[str]:
     ``_member_lines`` -- generalised here to any deny/master/snapshot file)."""
     result = vm.ssh("cat", path)
     return [ln.strip() for ln in result.stdout.splitlines() if ln.strip()]
+
+
+def _exists(vm: SmokeVM, path: str) -> bool:
+    """Whether an on-box file exists (R8-restored's reconcile assertions -- a
+    reconciled-away artifact must be genuinely GONE, not merely empty)."""
+    return vm.ssh("/bin/test", "-f", path).returncode == 0
 
 
 def _raw(vm: SmokeVM, path: str) -> str:
@@ -507,15 +516,15 @@ def test_recompute_suppression_realigns_across_sibling_change(deployed_vm: Smoke
 
 
 # --------------------------------------------------------------------------- #
-# R3 -- continent snapshot write, BOTH families (issue #1219 fixture, credential-free)
+# R3 -- continent snapshot write, BOTH families (official MaxMind-DB test corpus,
+# issue #1219/#1228 fixture, credential-free)
 # --------------------------------------------------------------------------- #
 
-# tests/smoke/fixtures/README.md "GeoIP continent-page fixtures": Africa = NG + ZA.
-# v4 Blocks has ONE direct row per ISO; v6 Blocks carries a SECOND Nigeria row on
-# purpose, so NG's v6 file (and therefore the built continent file) genuinely
-# differs in content AND line count from its v4 sibling -- the asymmetry this row
-# is built to distinguish (a v4-only snapshot bug could not pass this).
-AFRICA_ISOS = "NG,ZA"
+# tests/smoke/fixtures/README.md "GeoIP fixtures -- CSV + binary mmdb, one corpus":
+# North America = US. v4 Blocks has 3 direct US rows; v6 Blocks has exactly 1 --
+# the asymmetry this row is built to distinguish (a v4-only snapshot bug could not
+# pass this).
+NORTH_AMERICA_ISOS = "US"
 
 
 def test_recompute_continent_snapshot_both_families(deployed_vm: SmokeVM) -> None:
@@ -524,33 +533,37 @@ def test_recompute_continent_snapshot_both_families(deployed_vm: SmokeVM) -> Non
     ``pfb_ip_recompute_write_snapshot()`` (pfblockerng.inc)
     carries no ``$vtype`` restriction, so BOTH families must snapshot, not just v4.
 
-    Scenario: the Africa continent (NG + ZA) enabled for both families.
-      Given the issue #1219 GeoIP CSV fixtures are seeded and Africa's countries4/6
-        are both set to "NG,ZA",
+    Scenario: the North America continent (US) enabled for both families.
+      Given the official MaxMind-DB test corpus is seeded and North America's
+        countries4/6 are both set to "US",
       When a single real update pass builds the continent,
       Then BOTH the v4 and v6 continent ``.snap`` files exist with content matching
         their own built ``.txt`` (not mere existence), each with the correct
         ``.aggcount`` line-count sidecar -- and the v6 content/count genuinely differs
-        from v4's (NG's extra v6 row), proving the v6 write was read from the v6
-        source specifically, not a copy of v4's. Member SETS are pinned (sorted lines,
-        not raw concatenation order) -- the continent build's own ISO-to-ISO join
-        order is an internal implementation detail this row does not pin.
+        from v4's (3 US v4 rows vs. 1 v6 row), proving the v6 write was read from the
+        v6 source specifically, not a copy of v4's. Member SETS are pinned (sorted
+        lines, not raw concatenation order) -- the continent build's own ISO-to-ISO
+        join order is an internal implementation detail this row does not pin.
     """
     h.seed_geoip_dataset(deployed_vm)
     h.set_package_enabled(deployed_vm, True)
-    h.set_ip_continent(deployed_vm, "Africa", action="Deny_Both", countries4=AFRICA_ISOS, countries6=AFRICA_ISOS)
+    h.set_ip_continent(
+        deployed_vm, "North America", action="Deny_Both", countries4=NORTH_AMERICA_ISOS, countries6=NORTH_AMERICA_ISOS
+    )
     h.reload(deployed_vm, "update", wait_unbound=False)
 
-    v4_alias = "pfB_Africa_v4"
-    v6_alias = "pfB_Africa_v6"
+    # pfblockerng.inc:165 abbreviates this continent's alias base to 'pfB_NAmerica' (NOT the
+    # page/config name) -- the alias name is what every on-box artifact below is keyed by.
+    v4_alias = "pfB_NAmerica_v4"
+    v6_alias = "pfB_NAmerica_v6"
     v4_lines = _lines(deployed_vm, f"{DENYDIR}/{v4_alias}.txt")
     v6_lines = _lines(deployed_vm, f"{DENYDIR}/{v6_alias}.txt")
-    expected_v4 = sorted(["192.0.2.0/28", "192.0.2.16/28"])
-    expected_v6 = sorted(["2001:db8:0::/36", "2001:db8:e::/36", "2001:db8:1::/36"])
-    assert sorted(v4_lines) == expected_v4, f"Africa v4 continent members wrong: {v4_lines}"
-    assert sorted(v6_lines) == expected_v6, f"Africa v6 continent members wrong (must include NG's 2nd row): {v6_lines}"
-    assert len(v6_lines) == 3 and len(v4_lines) == 2, (
-        f"v6 must carry 3 rows (NG's 2 + ZA's 1) vs v4's 2 -- got v4={v4_lines} v6={v6_lines}"
+    expected_v4 = sorted(["50.114.0.0/22", "214.78.0.0/19", "216.160.83.56/29"])
+    expected_v6 = sorted(["2001:480::/43"])
+    assert sorted(v4_lines) == expected_v4, f"North America v4 continent members wrong: {v4_lines}"
+    assert sorted(v6_lines) == expected_v6, f"North America v6 continent members wrong: {v6_lines}"
+    assert len(v4_lines) == 3 and len(v6_lines) == 1, (
+        f"v4 must carry US's 3 rows vs v6's 1 -- got v4={v4_lines} v6={v6_lines}"
     )
 
     # The snapshot is the PRISTINE pre-processing capture; the deny file is the emitted
@@ -566,8 +579,8 @@ def test_recompute_continent_snapshot_both_families(deployed_vm: SmokeVM) -> Non
 
     v4_aggcount = _raw(deployed_vm, f"{ORIGDIR}/{v4_alias}.aggcount")
     v6_aggcount = _raw(deployed_vm, f"{ORIGDIR}/{v6_alias}.aggcount")
-    assert v4_aggcount == "2\n", f"v4 .aggcount sidecar wrong: {v4_aggcount!r}"
-    assert v6_aggcount == "3\n", f"v6 .aggcount sidecar wrong (must count NG's 2nd row): {v6_aggcount!r}"
+    assert v4_aggcount == "3\n", f"v4 .aggcount sidecar wrong: {v4_aggcount!r}"
+    assert v6_aggcount == "1\n", f"v6 .aggcount sidecar wrong: {v6_aggcount!r}"
 
 
 # --------------------------------------------------------------------------- #
@@ -580,30 +593,31 @@ def test_recompute_continent_v6_snapshot_tracks_regens(deployed_vm: SmokeVM) -> 
     passes -- it must not freeze at whatever the first pass (or an upgrade seed)
     wrote (issue #1084 review, ``c3fc39d3``).
 
-    Uses the Oceania continent (AU/NZ) so this test's continent config is
-    independent of R3's Africa config -- self-encapsulated, no order dependence.
+    Uses the Europe continent (GI/IM) so this test's continent config is
+    independent of R3's North America config -- self-encapsulated, no order
+    dependence.
 
-    Scenario: Oceania's countries6 swapped between two passes.
-      Given (BEFORE) countries6="AU" and a real update pass builds the continent,
-      Then the v6 snapshot holds ONLY AU's network,
-      When countries6 is changed to "NZ" (a genuinely different membership) and a
+    Scenario: Europe's countries6 swapped between two passes.
+      Given (BEFORE) countries6="GI" and a real update pass builds the continent,
+      Then the v6 snapshot holds ONLY GI's network,
+      When countries6 is changed to "IM" (a genuinely different membership) and a
         SECOND real update pass runs,
-      Then the v6 snapshot now holds ONLY NZ's network -- DIFFERENT from pass 1's
+      Then the v6 snapshot now holds ONLY IM's network -- DIFFERENT from pass 1's
         content, proving the snapshot tracks the regen rather than staying frozen.
     """
     h.seed_geoip_dataset(deployed_vm)
     h.set_package_enabled(deployed_vm, True)
-    v6_alias = "pfB_Oceania_v6"
+    v6_alias = "pfB_Europe_v6"
 
-    h.set_ip_continent(deployed_vm, "Oceania", action="Deny_Both", countries4="", countries6="AU")
+    h.set_ip_continent(deployed_vm, "Europe", action="Deny_Both", countries4="", countries6="GI")
     h.reload(deployed_vm, "update", wait_unbound=False)
     snap_pass1 = _raw(deployed_vm, f"{SNAPDIR}/{v6_alias}.snap")
-    assert snap_pass1 == "2001:db8:a::/36\n", f"pass 1 v6 snapshot wrong (AU only): {snap_pass1!r}"
+    assert snap_pass1 == "2a02:ffc0::/29\n", f"pass 1 v6 snapshot wrong (GI only): {snap_pass1!r}"
 
-    h.set_ip_continent(deployed_vm, "Oceania", action="Deny_Both", countries4="", countries6="NZ")
+    h.set_ip_continent(deployed_vm, "Europe", action="Deny_Both", countries4="", countries6="IM")
     h.reload(deployed_vm, "update", wait_unbound=False)
     snap_pass2 = _raw(deployed_vm, f"{SNAPDIR}/{v6_alias}.snap")
-    assert snap_pass2 == "2001:db8:b::/36\n", f"pass 2 v6 snapshot wrong (NZ only): {snap_pass2!r}"
+    assert snap_pass2 == "2a02:ff40::/29\n", f"pass 2 v6 snapshot wrong (IM only): {snap_pass2!r}"
     assert snap_pass2 != snap_pass1, (
         f"v6 continent snapshot did not track the regenerated membership (frozen-snapshot "
         f"regression): pass1={snap_pass1!r} pass2={snap_pass2!r}"
@@ -715,3 +729,99 @@ def test_recompute_geoip_outage_preserves_match_artifacts(deployed_vm: SmokeVM) 
     finally:
         if stashed:
             deployed_vm.ssh("/bin/mv", stash_path, mmdb_path)
+
+
+# --------------------------------------------------------------------------- #
+# R8-restored -- GeoIP available, cc-list stops matching: a clean pass clears
+# the reputation match artifacts (issue #1228)
+# --------------------------------------------------------------------------- #
+
+
+def test_recompute_geoip_restored_clears_match_artifacts(deployed_vm: SmokeVM) -> None:
+    """dMax with GeoIP UP: a clean pass (no cc-list match for any offender)
+    reconciles away BOTH the consolidated ``matchdedup`` file and a per-alias
+    ``match<alias>.txt`` -- ``pfb_recompute_finish()``'s ``rec_geoip_ok=1`` branch
+    (issue #1228; the CSV-only fixture could never reach this leg).
+
+    Two offending /24s classify to DIFFERENT actions in the SAME pass -- a cc-list
+    HIT can only ever emit ``matchexempt`` (-> the consolidated ``matchdedup``
+    file), never a per-alias file (pfblockerng.sh's classify ``case``); only a
+    cc-list MISS with ``ccblack=match`` emits ``matchdup`` (-> the per-alias file).
+    Both offenders are needed to pin BOTH artifacts' clearing in one pass.
+
+    Scenario: GeoIP is available; the cc-list stops matching either offender.
+      Given a v4 Deny feed with two offending /24s whose ``.1`` resolve in the
+        seeded database (``67.43.156.0/24`` -> BT, ``111.235.160.0/24`` -> CN;
+        dmax below each's member count), and dMax with ``ccwhite='match'``,
+        ``ccblack='match'``, ``ccexclude='BT'`` (a HIT for the first, a MISS for
+        the second),
+      When a real update pass runs,
+      Then (BEFORE-STATE, asserted) ``matchdedup_v4.txt`` EXISTS carrying the
+        HIT offender's /24 (the ``matchexempt`` action) and the per-alias
+        ``match<alias>.txt`` EXISTS carrying the MISS offender's /24 (the
+        ``matchdup`` action), and the GeoIP-unavailable log line did NOT fire
+        (this pass had GeoIP),
+      When ``ccexclude`` is changed to a country neither offender is in
+        (``GI``) and ``ccblack`` is turned off (so neither offender classifies
+        into ANY action -- a genuinely clean pass) and a SECOND real pass runs,
+      Then both ``matchdedup_v4.txt`` and the per-alias ``match<alias>.txt`` are
+        GONE -- the clean pass reconciled them away, and the GeoIP-unavailable
+        line STILL did not fire.
+    """
+    h.seed_geoip_dataset(deployed_vm)
+    h.set_ip_dedup(deployed_vm, False)
+    h.set_ip_suppression(deployed_vm, enabled=False)
+
+    matchdedup_path = f"{MATCHDIR}/matchdedup_v4.txt"
+    match_alias_path = f"{MATCHDIR}/matchd2_v4.txt"
+    # issue #760/#1228 hostile input: a stale artifact from an earlier module run
+    # would make the before-state assertion below meaningless -- start clean, loudly.
+    for stale in (matchdedup_path, match_alias_path):
+        rm = deployed_vm.ssh("/bin/rm", "-f", stale)
+        assert rm.returncode == 0, f"could not clear stale artifact {stale}: rc={rm.returncode} {rm.stderr!r}"
+
+    feed = h.write_local_feed(
+        deployed_vm,
+        "d2_feed.txt",
+        "67.43.156.10\n67.43.156.11\n67.43.156.12\n111.235.160.10\n111.235.160.11\n111.235.160.12\n",
+    )
+    spec = h.IpCase(aliasname="d2", feed_url=feed, header="d2", action="Deny_Both")
+    h.inject_ip_lists(deployed_vm, [spec])
+
+    # PASS 1: ccexclude="BT" -- a HIT for 67.43.156 (-> matchexempt/matchdedup),
+    # a MISS for 111.235.160 with ccblack='match' (-> matchdup/per-alias file).
+    h.set_ip_reputation(deployed_vm, drep=True, dmax=2, ccwhite="match", ccblack="match", ccexclude="BT")
+    before_marker = h.count_log_marker(deployed_vm, h.PFB_LOG, GEOIP_OUTAGE_MARKER)
+    h.reload(deployed_vm, "updateip", wait_unbound=False)
+
+    matchdedup_pass1 = _raw(deployed_vm, matchdedup_path)
+    assert matchdedup_pass1 == "67.43.156.0/24\n!67.43.156.10\n!67.43.156.11\n!67.43.156.12\n", (
+        f"matchdedup_v4.txt wrong after the HIT pass (expected the BT offender's /24 + members): {matchdedup_pass1!r}"
+    )
+    match_alias_pass1 = _raw(deployed_vm, match_alias_path)
+    assert match_alias_pass1 == "111.235.160.0/24\n!111.235.160.10\n!111.235.160.11\n!111.235.160.12\n", (
+        f"per-alias match file wrong after the MISS+ccblack=match pass (expected the CN offender's "
+        f"/24 + members): {match_alias_pass1!r}"
+    )
+    marker_pass1 = h.count_log_marker(deployed_vm, h.PFB_LOG, GEOIP_OUTAGE_MARKER)
+    assert marker_pass1 == before_marker, (
+        f"GeoIP-unavailable line fired on a pass that HAD GeoIP: before={before_marker} after={marker_pass1}"
+    )
+
+    # PASS 2: ccexclude="GI" (a substring of neither BT nor CN) + ccblack='off' --
+    # NEITHER offender classifies into any action, so the reconcile clears both.
+    h.set_ip_reputation(deployed_vm, drep=True, dmax=2, ccwhite="match", ccblack="off", ccexclude="GI")
+    h.reload(deployed_vm, "updateip", wait_unbound=False)
+
+    assert not _exists(deployed_vm, matchdedup_path), (
+        f"matchdedup_v4.txt survived a clean pass (no cc-list match) -- reconcile did not fire: "
+        f"content={_raw(deployed_vm, matchdedup_path)!r}"
+    )
+    assert not _exists(deployed_vm, match_alias_path), (
+        f"per-alias match file survived a clean pass (no cc-list match) -- reconcile did not fire: "
+        f"content={_raw(deployed_vm, match_alias_path)!r}"
+    )
+    marker_pass2 = h.count_log_marker(deployed_vm, h.PFB_LOG, GEOIP_OUTAGE_MARKER)
+    assert marker_pass2 == before_marker, (
+        f"GeoIP-unavailable line fired on the restored/clean pass: before={before_marker} after={marker_pass2}"
+    )
