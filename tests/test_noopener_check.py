@@ -121,6 +121,14 @@ def test_row13_noopener_with_hyphen_suffix_is_flagged() -> None:
     assert len(v) == 1
 
 
+def test_row14_noopener_with_wordchar_suffix_is_flagged() -> None:
+    # Pins the `\w` half of the `(?![\w-])` guard independently of the hyphen half
+    # (test_row13): `noopener_evil` is a distinct, unprotected token and must flag.
+    # Without this, a guard narrowed to hyphen-only would pass the suite yet accept it.
+    v = _find('<a target="_blank" rel="noopener_evil" href="x">')
+    assert len(v) == 1
+
+
 # --------------------------------------------------------------------------- #
 # Additional branch coverage: line numbers, multiple violations, quote forms
 # --------------------------------------------------------------------------- #
