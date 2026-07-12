@@ -1395,10 +1395,11 @@ def test_category_page_renders_reorder_wiring(
     Hermetic. GET the page and assert: (1) ``pfb_reorder_init(`` (the component
     call, ADR-63) is present; (2) the ``pfb_drag_enabled`` boolean var (mirrors
     ``system/webgui/roworderdragging``) is emitted -- both unconditional, so
-    they render on every gtype including GeoIP; (3) the new reorder ``<th>``
-    column is gated ``$gtype != 'geoip'`` (branch coverage: present on
-    ipv4/dnsbl, ABSENT on GeoIP, whose container never receives the injected
-    controls -- issue #1201).
+    they render on every gtype including GeoIP; (3) the reorder ``<th>`` column
+    is gated ``$gtype != 'geoip'`` (branch coverage: present on ipv4/dnsbl,
+    ABSENT on GeoIP); (4) the row ``class="sortable"`` drag marker is gated the
+    same way -- GeoIP rows must NOT carry it, so the GeoIP tab offers no reorder
+    (issue #1201: reorder disallowed on GeoIP, whose order never persisted).
     """
     resp = webui.get(path)
     assert resp.status_code == 200, f"GET {path} -> HTTP {resp.status_code} (expected 200)"
@@ -1406,10 +1407,18 @@ def test_category_page_renders_reorder_wiring(
     assert "pfb_reorder_init(" in body, f"pfb_reorder_init( wiring call missing on {path}"
     assert "pfb_drag_enabled" in body, f"pfb_drag_enabled boolean var missing on {path}"
     has_reorder_th = "<!----- Reorder -----></th>" in body
+    # The <tr> drag marker rendered as ``class="sortable" id="pfb_rN"`` for a
+    # reorderable row (anchored to the id so the table's own
+    # ``sortable-theme-bootstrap`` class can't false-match).
+    sortable_row = 'class="sortable" id="pfb_r' in body
     if expect_reorder_th:
         assert has_reorder_th, f"reorder <th> column missing on {path}"
     else:
         assert not has_reorder_th, f"GeoIP page must NOT render the reorder <th> column, found on {path}"
+        # Non-vacuous: GeoIP always renders built-in continent rows -- assert they
+        # exist, then that NONE is a sortable (drag-reorderable) row (issue #1201).
+        assert 'id="pfb_r' in body, f"GeoIP page rendered no continent rows on {path}"
+        assert not sortable_row, f'GeoIP rows must NOT carry class="sortable" (reorder disallowed, issue #1201): {path}'
 
 
 # ADR-63 Phase 4 (issue #1147): pfblockerng_category_edit.php's staged reorder
