@@ -85,6 +85,7 @@ deploy shape.
 from __future__ import annotations
 
 import os
+import subprocess
 from collections.abc import Iterator
 
 import pytest
@@ -529,7 +530,9 @@ def test_recompute_continent_snapshot_both_families(deployed_vm: SmokeVM) -> Non
         their own built ``.txt`` (not mere existence), each with the correct
         ``.aggcount`` line-count sidecar -- and the v6 content/count genuinely differs
         from v4's (NG's extra v6 row), proving the v6 write was read from the v6
-        source specifically, not a copy of v4's.
+        source specifically, not a copy of v4's. Member SETS are pinned (sorted lines,
+        not raw concatenation order) -- the continent build's own ISO-to-ISO join
+        order is an internal implementation detail this row does not pin.
     """
     h.seed_geoip_dataset(deployed_vm)
     h.set_package_enabled(deployed_vm, True)
@@ -538,13 +541,18 @@ def test_recompute_continent_snapshot_both_families(deployed_vm: SmokeVM) -> Non
 
     v4_alias = "pfB_Africa_v4"
     v6_alias = "pfB_Africa_v6"
+    v4_lines = _lines(deployed_vm, f"{DENYDIR}/{v4_alias}.txt")
+    v6_lines = _lines(deployed_vm, f"{DENYDIR}/{v6_alias}.txt")
+    expected_v4 = sorted(["192.0.2.0/28", "192.0.2.16/28"])
+    expected_v6 = sorted(["2001:db8:0::/36", "2001:db8:e::/36", "2001:db8:1::/36"])
+    assert sorted(v4_lines) == expected_v4, f"Africa v4 continent members wrong: {v4_lines}"
+    assert sorted(v6_lines) == expected_v6, f"Africa v6 continent members wrong (must include NG's 2nd row): {v6_lines}"
+    assert len(v6_lines) == 3 and len(v4_lines) == 2, (
+        f"v6 must carry 3 rows (NG's 2 + ZA's 1) vs v4's 2 -- got v4={v4_lines} v6={v6_lines}"
+    )
+
     v4_txt = _raw(deployed_vm, f"{DENYDIR}/{v4_alias}.txt")
     v6_txt = _raw(deployed_vm, f"{DENYDIR}/{v6_alias}.txt")
-    expected_v4 = "192.0.2.0/28\n192.0.2.16/28\n"
-    expected_v6 = "2001:db8:0::/36\n2001:db8:e::/36\n2001:db8:1::/36\n"
-    assert v4_txt == expected_v4, f"Africa v4 continent content wrong (NG then ZA): {v4_txt!r}"
-    assert v6_txt == expected_v6, f"Africa v6 continent content wrong (NG's 2 rows then ZA's 1): {v6_txt!r}"
-
     v4_snap = _raw(deployed_vm, f"{SNAPDIR}/{v4_alias}.snap")
     v6_snap = _raw(deployed_vm, f"{SNAPDIR}/{v6_alias}.snap")
     assert v4_snap == v4_txt, f"v4 continent snapshot != its built .txt: snap={v4_snap!r} txt={v4_txt!r}"
@@ -613,6 +621,27 @@ _R8_MATCH_STAGE = "198.51.100.0/24\n!198.51.100.10\n"
 GEOIP_OUTAGE_MARKER = "recompute [ v4 ]: GeoIP unavailable this pass -- keeping previous reputation match artifacts"
 
 
+def _stage_match_file(vm: SmokeVM, alias: str, contents: str, *, timeout: float = 30.0) -> str:
+    """Write ``contents`` verbatim to ``MATCHDIR/match<alias>.txt`` via ``tee`` (mirrors
+    ``write_local_feed``'s mkdir-then-tee). R8-outage's local one-off: a leading '!' line
+    (the real match-file format) sent through ``php_eval``/``file_put_contents`` gets
+    mangled -- pfSsh.php's REPL treats a '!'-led line as a raw shell-escape -- so this
+    writes bytes over SSH stdin instead, with no PHP-source line reinterpretation.
+    """
+    path = f"{MATCHDIR}/match{alias}.txt"
+    mk = subprocess.run(
+        vm.ssh_argv("/bin/mkdir", "-p", MATCHDIR), capture_output=True, text=True, timeout=timeout, check=False
+    )
+    if mk.returncode != 0:
+        raise RuntimeError(f"_stage_match_file: mkdir {MATCHDIR} failed: rc={mk.returncode} {mk.stderr!r}")
+    result = subprocess.run(
+        vm.ssh_argv("tee", path), input=contents, capture_output=True, text=True, timeout=timeout, check=False
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"_stage_match_file({path}) failed: rc={result.returncode} {result.stderr!r}")
+    return path
+
+
 def test_recompute_geoip_outage_preserves_match_artifacts(deployed_vm: SmokeVM) -> None:
     """dMax repmode with an offender present, but no ``GeoLite2-Country.mmdb`` on box
     (the box's natural, never-baked state -- ``mmdblookup`` is baked, the database is
@@ -651,14 +680,7 @@ def test_recompute_geoip_outage_preserves_match_artifacts(deployed_vm: SmokeVM) 
     spec = h.IpCase(aliasname="r8", feed_url=feed, header="r8", action="Deny_Both")
     h.inject_ip_lists(deployed_vm, [spec])
 
-    match_path = f"{MATCHDIR}/match{spec.alias}.txt"
-    stage_snippet = (
-        f"@mkdir({h._php_str(MATCHDIR)}, 0755, TRUE);\n"  # noqa: SLF001
-        f"file_put_contents({h._php_str(match_path)}, {h._php_str(_R8_MATCH_STAGE)});\n"  # noqa: SLF001
-        "echo 'OK';"
-    )
-    stage_res = h.php_eval(deployed_vm, stage_snippet)
-    assert "OK" in stage_res.stdout, f"could not stage the match artifact: {stage_res.stdout!r} {stage_res.stderr!r}"
+    match_path = _stage_match_file(deployed_vm, spec.alias, _R8_MATCH_STAGE)
 
     # BEFORE: the staged artifact round-tripped exactly, and the outage line hasn't fired yet.
     before_content = _raw(deployed_vm, match_path)
