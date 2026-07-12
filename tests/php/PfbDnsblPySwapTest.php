@@ -52,7 +52,11 @@ final class PfbDnsblPySwapTest extends TestCase
 
 		pfb_dnsbl_py_swap(TRUE, $raw, $pyData, $pyZone);
 
-		$this->assertFileExists($raw, 'TLD mode must leave the .raw untouched');
+		$this->assertSame(
+			'RAW-CONTENT',
+			file_get_contents($raw),
+			'TLD mode must leave the .raw untouched (byte-exact)'
+		);
 		$this->assertSame(
 			'OLD-PY-DATA',
 			file_get_contents($pyData),

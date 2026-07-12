@@ -1905,10 +1905,9 @@ function pfb_dnsblip_mark_reprocess($action, string $vtype): void {
 	}
 }
 
-// issue #1097/#1127: DNSBLIP v4/v6 post-build bookkeeping, extracted verbatim out of the
-// two call sites so it is unit-testable. A failed rebuild ($built = FALSE) must not
-// advance the fingerprint -- a stamped .fp marks the stale output current and suppresses
-// every future retry.
+// DNSBLIP v4/v6 post-build bookkeeping (.fp stamp / ip_cache flush / reprocess marker).
+// issue #1097: a failed rebuild ($built = FALSE) must NOT advance the fingerprint -- a
+// stamped .fp marks the stale output current and suppresses every future retry.
 function pfb_dnsblip_finalize(string $dnsblip, string $fp, bool $built, string $ip_cache, $action, string $vtype): void {
 	if (!$built) {
 		return;
@@ -1951,8 +1950,8 @@ function pfb_dnsbl_concat_files(string $dest, array $sources): bool {
 	return FALSE;
 }
 
-// DNSBL Python blocking mode publish, if TLD is not enabled -- extracted verbatim out of
-// the concat-success branch (issue #1097/#1127) so it is unit-testable.
+// DNSBL Python blocking-mode publish (ADR-10 stage step), if TLD mode is off. issue #1097:
+// only ever called from the concat-success branch, so the rename source .raw exists.
 function pfb_dnsbl_py_swap(bool $dnsbl_tld, string $raw, string $py_data, string $py_zone): void {
 	if ($dnsbl_tld) {
 		return;
