@@ -191,10 +191,45 @@ Therefore, before Phase 2:
    (anonymous proxy / satellite) are not countries and are not in GeoNames (see #1221, where
    they are already provably empty against real GeoLite2 data).
 
+#### Continents are a second truth — and a *structural* one
+
+`countryInfo.txt` gives a continent **code** (`AF`/`AN`/`AS`/`EU`/`NA`/`OC`/`SA`), not a name.
+Continent identity is already in-tree today, in two places, and one of them is load-bearing in a
+way country names are not:
+
+| Thing | Example | May it change? |
+| --- | --- | --- |
+| **Structural binding** | alias prefix `pfB_NAmerica` (`pfblockerng.inc:160-171`), config section root `installedpackages/pfblockerng<continent>` , generated page `pfblockerng_North_America.php` | **No.** These are stored config keys and alias names. Renaming one breaks existing `config.xml` and firewall rules — and ADR-28 forbids migrations. They are frozen, whatever any provider calls a continent. |
+| **Display name** | "North America"; localized variants | Per locale, yes — but never per *provider*. |
+
+So the continent table (7 rows, in-tree) carries: **code** (the stable key) → **GeoNames id** →
+**structural slug** (frozen) → **display name(s)**. The GeoNames continent ids are already in
+this tree — `pfblockerng.php:935-938` keys its "AA ASIA/EUROPE UNDEFINED" buckets on `6255147`
+and `6255148`. Verified at the source (`geonames.org/<id>`, 2026-07-12):
+
+```text
+6255146 Africa   6255147 Asia    6255148 Europe   6255149 North America
+6255150 South America            6255151 Oceania  6255152 Antarctica
+```
+
+Consequences for this ADR:
+
+- **Country → continent comes from GeoNames' `Continent` column, not from the provider.** A
+  provider's own continent field is ignored for the build; where it disagrees with the table, that
+  is a notice (a provider bug or a stale table), never a silent re-bucketing of a user's alias.
+- **A provider can never rename an alias or a config section.** MaxMind localizes "North America";
+  IPinfo may not; neither may touch `pfB_NAmerica`.
+- **Two entries in `$pfb['continents']` are not continents at all** and must not enter the
+  GeoNames-derived table: **"Top Spammers"** (`pfB_Top`) is our editorial `$top_20` bucket, and
+  **"Proxy and Satellite"** (`pfB_PS`) is a MaxMind construct (see #1221) that belongs to the
+  MaxMind adapter. They keep their structural bindings; they just are not geography.
+
 Open questions #1235 must settle (they do not block this ADR's other phases): which locales the
-table carries and where the localized names come from (GeoNames `alternateNames` vs CLDR),
-whether MaxMind's locale files stay as optional enrichment for MaxMind users, and the refresh
-cadence.
+table carries and where the localized names come from (GeoNames `alternateNames` vs CLDR — for
+countries **and** the 7 continents), whether MaxMind's locale files stay as optional enrichment
+for MaxMind users, the refresh cadence, and what becomes of the two "AA \<CONTINENT\> UNDEFINED"
+pseudo-countries (they exist only for Asia and Europe today — generalize to all seven, or retire
+them).
 
 ## 3. Consequences
 
