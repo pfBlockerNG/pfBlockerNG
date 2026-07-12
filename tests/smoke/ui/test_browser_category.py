@@ -437,7 +437,7 @@ def test_reorder_anchor_click_single_row_then_save_persists_dom_order(
 
         # On a <tr> page the injected control must be a real <td> (valid table
         # markup, aligns under the Reorder <th>), and the checkbox/anchor must
-        # carry an accessible name -- not the bare arrow glyph (PR #1205 review).
+        # carry an accessible name -- not the bare arrow glyph (issue #1147 a11y).
         assert page.locator("tr.sortable td.pfb-reorder-ctl").count() == len(names), (
             f"reorder control must be a <td> per row on {gtype}: "
             f"found {page.locator('tr.sortable td.pfb-reorder-ctl').count()}, expected {len(names)}"
