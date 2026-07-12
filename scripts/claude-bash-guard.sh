@@ -77,6 +77,10 @@
 #     parse, so data and operator look alike. Pinned by spec D10. No flag of any
 #     wait-*.sh takes an `&`-bearing value today, so the trigger is theoretical --
 #     and erring toward blocking is the stated tradeoff.
+#   * A `&&` chain after a wait denies (D5), and so does a foreground wait using the
+#     digit-less `>&N` redirect shorthand (D19). Both fall out of refusing to trust
+#     any operator a quoted value could have forged -- see norm_bg. A wait belongs in
+#     its own call, and nothing here writes `>&N` without its fd.
 #   * A MULTI-LINE call that mentions a wait script and backgrounds anything at all
 #     -- even on a different line -- denies. Pinned by spec D7. Distinguishing those
 #     lines needs a separator the scan cannot trust (see norm_bg): every attempt to
@@ -149,18 +153,20 @@ segs="$(printf '%s' "$norm" | tr ';&|()' '\n')"
 # worse than useless; one that over-denies costs a call split in two. So ANY background
 # `&` after a wait script denies, whatever sits between (pinned by D6/D7/D14).
 #
-# Only ONE `&` lookalike is neutralized, and only in its unmistakable form: an fd
-# redirection carrying a MANDATORY leading fd number (`2>&1`, `1>&2`). That anchor is
-# what a quote-fused `>` can never fake -- the character before a fused `>` is the space
-# that preceded the quote, not a digit (pinned by D15/D16). `&>file` gets no exemption at
-# all: no flow here uses it, and eating that lookalike would erase the very `&` the rule
-# exists to find when the `>` came from a quoted value (pinned by D17). `&&` is a list
-# operator, not a background, and is the one other form that must not read as one.
+# EXACTLY ONE `&` lookalike is neutralized, in the only form a quoted value cannot fake:
+# an fd redirection carrying a MANDATORY leading fd number (`2>&1`, `1>&2`). The digit is
+# the anchor -- the character before a quote-fused `>` is the space that preceded the
+# quote, never a digit (pinned by D15/D16). Every other lookalike is left alone, because
+# each can be forged out of inert argument data fused with the REAL `&` by quote-strip:
+# `&>file` (D17), and `&&` itself, which a value ending in `&` completes (D18). Deleting
+# either would erase the very `&` the rule exists to find. The cost is that a `&&` chain
+# after a wait denies (D5) -- a wait belongs in its own call regardless.
 #
-# A quoted value ending in a DIGIT and a `>` immediately before the `&` (`--x \"1>\"&2`)
-# is textually identical to a real redirect even so. That is payload construction to
-# defeat the control, which the ACCEPTED LIMITATION above already places out of scope.
-norm_bg="$(printf '%s' "$norm" | sed -e 's/[0-9][0-9]*>&[0-9-][0-9-]*//g' -e 's/&&/ /g')"
+# One shape still slips: a quoted value ending in a DIGIT and a `>` immediately before the
+# `&` (`--x \"1>\"&2`) is textually identical to a real redirect. That is payload
+# construction to defeat the control, which the ACCEPTED LIMITATION above places out of
+# scope; no honest command produces it.
+norm_bg="$(printf '%s' "$norm" | sed -e 's/[0-9][0-9]*>&[0-9-][0-9-]*//g')"
 
 # _contains <needle> -- true (rc 0) iff the CURRENT SEGMENT ($seg, set by
 # the per-segment loop below) contains <needle> as a literal substring.

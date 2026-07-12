@@ -541,13 +541,39 @@ Describe 'claude-bash-guard.sh'
       The output should equal ""
     End
 
-    It 'D5: a && after the wait script is a list operator, not a background -> PASS'
+    # ACCEPTED FALSE POSITIVE. Collapsing `&&` as a list operator is not safe either: an
+    # argument value ending in `&`, fused by quote-stripping with the REAL background `&`,
+    # reads as `&&` and would be collapsed away -- erasing the operator the rule hunts
+    # (D18). A wait therefore gets its own call, chained to nothing, which is the shape
+    # run_in_background wants anyway.
+    It 'D5: a && chain after the wait script -> DENY'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"sh scripts/agent/wait-checks.sh --repo o/r --pr 1 && gh pr merge 1 --rebase"}}
       End
       When run script "$GUARD"
       The status should be success
-      The output should equal ""
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'D18: an argument ending in & cannot fuse with the real & into a fake && -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"sh scripts/agent/wait-checks.sh --pr 1 --exclude \"coderabbit&\"&"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    # ACCEPTED FALSE POSITIVE: the fd-redirect lookalike now needs a MANDATORY leading fd
+    # digit (D16), so the digit-less `>&N` shorthand no longer reads as a redirection and
+    # a FOREGROUND wait using it denies. Nothing in this repo writes it that way.
+    It 'D19: a foreground wait using the digit-less >&2 shorthand -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"sh scripts/agent/wait-checks.sh --repo o/r --pr 1 >&2"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
     End
 
     # ACCEPTED FALSE POSITIVE, same family as D7. The `;` that would prove this & belongs
