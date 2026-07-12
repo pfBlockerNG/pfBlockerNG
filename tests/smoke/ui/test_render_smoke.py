@@ -360,6 +360,37 @@ def test_page_renders_clean(page: Page, webui: WebUI, php_error_log_guard: PhpEr
     assert result.ok, f"render oracle failed for {page.name} ({path}): {result.detail}"
 
 
+# issue #1217: pfBlockerNG-OWNED external new-tab links that must render with the
+# reverse-tabnabbing rel. Scoped to specific pfBlockerNG hrefs on purpose -- the
+# pfSense framework chrome (head.inc menu/footer, on every page) carries its own
+# out-of-scope target="_blank" links, so a whole-body sweep would false-positive.
+# Each url is a stable href in the named page's source.
+_NOOPENER_RENDER_CASES: tuple[tuple[str, str], ...] = (
+    ("/pfblockerng/pfblockerng_general.php", "http://pfblockerng.com"),
+    ("/pfblockerng/pfblockerng_general.php", "https://forum.netgate.com/user/bbcan177"),
+    # ?type=geoip: the MaxMind attribution callout only prints in the category page's
+    # GeoIP view (source guards it with `$gtype == 'geoip'`).
+    ("/pfblockerng/pfblockerng_category.php?type=geoip", "https://www.maxmind.com"),
+    ("/pfblockerng/pfblockerng_ip.php", "https://ipinfo.io"),
+)
+
+
+@pytest.mark.parametrize(("path", "url"), _NOOPENER_RENDER_CASES, ids=lambda v: v)
+def test_pfblockerng_new_tab_link_renders_with_noopener_rel(path: str, url: str, webui: WebUI) -> None:
+    """A pfBlockerNG-owned target="_blank" link renders with rel="noopener noreferrer" (#1217).
+
+    Tier-A render-layer proof that the source tripwire's rel actually reaches the SHIPPED
+    HTML. Scoped to pfBlockerNG's OWN external links -- the pfSense framework chrome carries
+    its own out-of-scope new-tab links, so a whole-body sweep would false-positive. Asserts
+    the link renders (non-vacuity) THEN that its anchor carries the rel adjacent to target.
+    """
+    body = webui.get(path).text
+    assert f'href="{url}"' in body, f"pfBlockerNG link {url} did not render on {path}"
+    assert f'target="_blank" rel="noopener noreferrer" href="{url}"' in body, (
+        f'link {url} on {path} renders without the adjacent rel="noopener noreferrer"'
+    )
+
+
 # ADR-11: the IP page's pfb_agg_types multi-select must render with ALL FOUR
 # option branches (Deny/Permit/Match/Native) AND its no-rule help caveat. Asserting
 # every option proves each branch of the select is emitted (not just the label), and the
