@@ -49,16 +49,22 @@ pfb_playwright_cache_root() {
     printf '%s\n' "${PLAYWRIGHT_BROWSERS_PATH:-${HOME:-/root}/.cache/ms-playwright}"
 }
 
-# pfb_chromium_cached <cache_root> — exit 0 iff a Chromium build is already in the
+# pfb_chromium_cached <cache_root> — exit 0 iff a Chromium build is present in the
 # playwright cache (`<cache_root>/chromium-<rev>`); non-zero otherwise.
 #
-# The caller uses this to skip `playwright install --with-deps`, whose OS-dependency
-# half shells out to apt-get on EVERY run — so a broken package on the box fails a run
-# that needed no packages at all (#1226). The browser download half is a genuine no-op
-# when cached; only --with-deps is not.
+# The caller asks this only AFTER `playwright install --with-deps` has failed, to decide
+# whether the failure is survivable: a build being there means an earlier --with-deps run
+# already put this box's OS libs in place, so the apt breakage is unrelated to us and the
+# browser-only retry suffices (#1226). It deliberately does NOT try to match the revision
+# the pinned playwright wants, nor validate the build: a stale or partial one is simply
+# re-downloaded by that retry.
 pfb_chromium_cached() {
     for _pfb_cc_build in "$1"/chromium-*; do
-        [ -d "$_pfb_cc_build" ] && return 0
+        if [ -d "$_pfb_cc_build" ]; then
+            unset _pfb_cc_build   # POSIX sh has no function scope; do not leak the iterator
+            return 0
+        fi
     done
+    unset _pfb_cc_build
     return 1
 }
