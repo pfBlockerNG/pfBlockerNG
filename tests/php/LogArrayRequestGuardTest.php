@@ -152,9 +152,9 @@ final class LogArrayRequestGuardTest extends TestCase
 	}
 
 	/**
-	 * Runs Region 5 capturing E_WARNING/E_DEPRECATED; fails loudly on a
-	 * TypeError (the pre-#1198 undefined-array-key -> non-nullable return-type
-	 * mismatch an unknown/hostile logtype throws).
+	 * Runs Region 5 capturing E_WARNING/E_DEPRECATED; fails loudly on a TypeError,
+	 * which now only a non-string $selected reaching the $pfb_logtypes[] offset can
+	 * throw -- issue #1183's ingress guard is what keeps that unreachable.
 	 */
 	private function runSelectedLogtypeExpectingNoWarnings(array $pconfig, array $pfb_logtypes): array
 	{
