@@ -10,8 +10,8 @@ that whole pipeline through the real CLI (``helpers.reload``) on a real pfSense 
 and observes the on-box deny/master files + live ``pfctl`` tables — the CI-runnable,
 credential-free half (Part 1 of issue #1170). Part 2 (R3/R7/R8-outage below) adds the
 Continent/GeoIP-adjacent rows that stay credential-free by riding the issue #1219
-``seed_geoip_dataset`` local-CSV fixture (R3/R7) or the box's natural no-``.mmdb``
-state (R8-outage) — never a real MaxMind account.
+``seed_geoip_dataset`` local-CSV fixture (R3/R7) or by hiding any GeoIP database for the
+pass (R8-outage) — never a real MaxMind account.
 
 WHAT THIS FILE AUTOMATES:
 
@@ -48,8 +48,9 @@ WHAT THIS FILE AUTOMATES:
   continent membership changes, proving the snapshot follows live regens rather
   than freezing at a one-time seed (issue #1084 review; ``c3fc39d3``).
 * **R8-outage — a GeoIP-unavailable pass preserves the reputation match
-  artifacts** — dMax with offenders present, on a box with no
-  ``GeoLite2-Country.mmdb`` (the box's natural, never-baked state):
+  artifacts** — dMax with offenders present and no ``GeoLite2-Country.mmdb``
+  reachable (the image bakes none; one a credentialed sibling downloaded into the
+  shared VM is hidden for the pass and restored after):
   ``pfb_recompute_finish()`` takes the GeoIP-unavailable branch and leaves a
   pre-existing per-alias match file byte-identical, never swapping/removing it.
   The RESTORED-GeoIP leg (the clean pass that clears ``matchdedup``) needs a real
