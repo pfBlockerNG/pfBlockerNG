@@ -113,6 +113,14 @@ def test_row12_wrong_rel_value_is_flagged() -> None:
     assert len(v) == 1
 
 
+def test_row13_noopener_with_hyphen_suffix_is_flagged() -> None:
+    # `noopener-evil` is a DIFFERENT rel token, not `noopener` -- a browser grants it
+    # none of noopener's protection, so the tripwire must flag it (fail-safe). Guards
+    # against a `\b` boundary that would treat the hyphen as a token end and pass it.
+    v = _find('<a target="_blank" rel="noopener-evil" href="x">')
+    assert len(v) == 1
+
+
 # --------------------------------------------------------------------------- #
 # Additional branch coverage: line numbers, multiple violations, quote forms
 # --------------------------------------------------------------------------- #
@@ -158,6 +166,18 @@ def test_main_returns_0_on_clean_file(tmp_path: Path, capsys: pytest.CaptureFixt
     rc = cno.main([str(f)])
     assert rc == 0
     assert capsys.readouterr().err == ""
+
+
+def test_main_fails_closed_when_default_scan_set_unenumerable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A policy gate must FAIL CLOSED: when `git ls-files` cannot enumerate the default
+    # scan set (git absent / not a checkout), main() must error instead of exiting 0
+    # and silently passing. Reproduce by running argless main() from a non-git dir.
+    monkeypatch.chdir(tmp_path)
+    rc = cno.main([])
+    assert rc == 2
+    assert "failing closed" in capsys.readouterr().err
 
 
 # --------------------------------------------------------------------------- #
