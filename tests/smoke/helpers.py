@@ -1362,8 +1362,9 @@ def set_ip_reputation(
     the dMax/pMax repmode selectors); ``dmax``/``pmax`` -> ``p24_dmax_var``/``p24_pmax_var``
     (the per-/24 offender-count thresholds); ``ccwhite``/``ccblack``/``ccexclude`` -> the
     GeoIP classify action + exempt-country CSV (unused by pMax's GeoIP-free block-only path,
-    ``pfblockerng.sh`` ``pfb_recompute_rep_actionmap``). A full REPLACE (not merge) of the
-    config root, so a prior test's values can never leak into this one.
+    ``pfblockerng.sh`` ``pfb_recompute_rep_actionmap``). Every knob above is written on every
+    call, so a prior test's values never leak; the section's other keys (``et_header``) are
+    merged through untouched.
     """
     settings = {
         "enable_dedup": "on" if drep else "",
@@ -1374,8 +1375,11 @@ def set_ip_reputation(
         "ccblack": ccblack,
         "ccexclude": ccexclude,
     }
+    assigns = "".join(f"$rep[{_php_str(k)}] = {_php_str(v)};\n" for k, v in settings.items())
     snippet = (
-        f"config_set_path({_php_str(CFG_IP_REPUTATION)}, {_php_kv_array(settings)});\n"
+        f"$rep = config_get_path({_php_str(CFG_IP_REPUTATION)}, array());\n"
+        f"{assigns}"
+        f"config_set_path({_php_str(CFG_IP_REPUTATION)}, $rep);\n"
         "write_config('pfBlockerNG smoke: IP reputation knobs');\n"
         "echo 'OK';"
     )
