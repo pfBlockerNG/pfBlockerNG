@@ -649,7 +649,7 @@ def seed_geoip_dataset(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     that would let a 404 reach the Tier-A sweep uninformed.
     """
     mk = subprocess.run(
-        vm.ssh_argv("mkdir", "-p", GEOIP_SHARE_DIR),
+        vm.ssh_argv("/bin/mkdir", "-p", GEOIP_SHARE_DIR),
         capture_output=True,
         text=True,
         timeout=timeout,

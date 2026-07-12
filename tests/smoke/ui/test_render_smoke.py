@@ -598,7 +598,8 @@ def test_geoip_pages_render_the_seeded_csv_rows(webui: WebUI, php_error_log_guar
     """Scenario: the GeoIP pages carry the SEEDED data, not just their chrome (issue #1219).
 
     Given the UI session seeded the synthetic MaxMind-schema CSVs and ran `ugc`,
-    When each generated GeoIP page is fetched,
+    When the GeoIP pages that carry seeded rows are fetched (the five below; the other GeoIP
+         pages are covered for RENDER by PAGE_TABLE, and hold no needle a fixture row pins),
     Then every needle below renders — and each one is produced by ONE specific fixture row, so
          deleting that row (or gutting a whole CSV) fails this test.
 
