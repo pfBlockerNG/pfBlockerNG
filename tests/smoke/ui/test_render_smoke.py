@@ -199,9 +199,10 @@ PAGE_TABLE: tuple[Page, ...] = (
     # the DOWNLOAD verbs `dc`/`dcc`/`bu` only). The UI session seeds SYNTHETIC CSVs and runs
     # `ugc` once (helpers.seed_geoip_dataset, wired into the `deployed_vm` fixture) so these
     # pages exist and render hermetically, same as every other Tier-A page. Each Form_Section
-    # title is "Continent - {continent_display}" (pfblockerng.php:1919); the second marker is
-    # a synthetic country's rendered <option> text (`geoip_locations.csv` /
-    # `geoip_blocks_ipv4.csv`), proving the seeded CSV data actually reached the page render.
+    # title is "Continent - {continent_display}" (pfblockerng.php:1919). The second marker of
+    # each pair is a seeded country's <option> text, but the oracle matches with any(), so it
+    # is documentation, NOT a gate — the seeded data is pinned by
+    # test_geoip_pages_render_the_seeded_csv_rows.
     Page(
         "geoip_africa",
         "/pfblockerng/pfblockerng_Africa.php",
@@ -241,9 +242,9 @@ PAGE_TABLE: tuple[Page, ...] = (
         "/pfblockerng/pfblockerng_South_America.php",
         ("Continent - South America", "Brazil [900013] BR (1)"),
     ),
-    # Proxy/Satellite ISOs (A1/A2) are synthesized unconditionally by pfblockerng_uc_countries()
-    # regardless of feed data (pfblockerng.php:929-932) -- 'value="A1"' is a guaranteed
-    # structural marker, unique to this page among the sweep.
+    # The A1/A2 ISOs themselves are synthesized unconditionally (pfblockerng.php:929-932), so
+    # 'value="A1"' is structural chrome, unique to this page; their seeded MEMBER COUNTS are
+    # what the data test pins. Real GeoLite2 carries no flagged rows at all -- issue #1221.
     Page(
         "geoip_proxy_and_satellite",
         "/pfblockerng/pfblockerng_Proxy_and_Satellite.php",
