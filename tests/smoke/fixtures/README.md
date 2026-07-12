@@ -161,13 +161,17 @@ space throughout: RFC 5737 (`192.0.2.0/24`, `198.51.100.0/24`) for the IPv4 Bloc
 | --- | --- | --- |
 | `geoip_locations.csv` | 14 synthetic countries, 2 per continent (all 7, incl. Antarctica/`AQ`) — 7-column MaxMind Locations schema | Every continent gets real (non-placeholder) content; 7 of the 14 (`JP`/`IN`/`GB`/`DE`/`MX`/`BR`/`AR`) are `$top_20` ISOs so the Top Spammers tab is non-empty too |
 | `geoip_blocks_ipv4.csv` | 14 direct per-country `/28` rows (`192.0.2.0/24`) + 4 special rows (`198.51.100.0/24`): an empty-`geoname_id` row, a geoname/registered-country mismatch ("exclave") row exercising the `*_rep` path, an `is_anonymous_proxy=1` row, an `is_satellite_provider=1` row | Every Blocks-CSV parse axis (empty geoname_id, the represented/registered-country code path, both proxy flags) — 7-column MaxMind Blocks schema (network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider,is_anycast) |
-| `geoip_blocks_ipv6.csv` | 14 direct per-country `/36` rows (`2001:db8::/32`) | The IPv6 sibling of the direct-match rows (the parser loops `array('4','6')` over the SAME geoname_ids) |
+| `geoip_blocks_ipv6.csv` | 15 rows over `2001:db8::/32`: one `/36` per country, plus a SECOND Nigeria row | The IPv6 sibling of the direct-match rows (the parser loops `array('4','6')` over the same geoname_ids). The second Nigeria row makes the v6 count `(2)` differ from the v4 count `(1)`, which is what lets a test pin the IPv6 file specifically — with equal counts, no rendered string could distinguish the two selects |
 
-Verified on a live pfSense CE 2.8 box (issue #1219): after seeding + `ugc`, every continent
-page renders real per-country `<option>` text (e.g. `Nigeria [900001] NG (1)`), and the
-exclave row produces `Japan [900005] JP (2)` on Asia (direct + `*_rep` match) alongside
-`United Kingdom [900007] GB_rep (1)` on Europe (the represented-country side) — proving the
-seeded data, not just chrome, reaches the render.
+The proxy/satellite rows carry **no** country columns on purpose: a flagged row that also has a
+country is keyed `A1_A1`/`A2_A2` and never reaches the bare `A1`/`A2` aggregate
+(`pfblockerng.php:1252-1262`), so only the empty-country shape gives those aliases a non-zero
+member count. Real GeoLite2 ships zero flagged rows of either shape — see issue #1221.
+
+Verified on a live pfSense CE 2.8 box: after seeding + `ugc`, the continent pages render real
+per-country `<option>` text, and `test_geoip_pages_render_the_seeded_csv_rows` asserts each
+seeded needle individually (the Tier-A render oracle matches markers with `any()`, so a marker
+in `PAGE_TABLE` beside a page's data-independent title could not pin data on its own).
 
 ## Omitted formats (and why)
 
