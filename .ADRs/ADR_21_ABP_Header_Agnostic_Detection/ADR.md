@@ -209,7 +209,8 @@ contract (CSV dialects, IP extraction, IDN) — out of ADR-21's scope; a candida
 - Cosmetic rules (`x.com##.ad`) in undetected feeds keep today's behaviour (the
   `#`-fragment strip yields a plain block for `x.com`). The broadened sniff shrinks this
   pre-existing hazard to title-less feeds; a per-line cosmetic guard is out of scope.
-- The `$liteparser` PHP variable and lite/non-lite path are NOT changed.
+- The `$liteparser` PHP variable and lite/non-lite path are NOT changed. *(Scope note for
+  ADR-21 only; `$liteparser` was later removed entirely by issue #1117.)*
 - PHP DNSBL-IP extraction for non-ABP feeds (lines 9710–9731) is NOT changed.
 - **Existing `test_adr07_*` tests are a frozen regression oracle:** no existing test
   function in any `test_adr07_*.py` file is modified, renamed, deleted, re-parametrized,
