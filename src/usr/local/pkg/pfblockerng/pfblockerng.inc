@@ -16825,7 +16825,6 @@ function sync_package_pfblockerng($cron='') {
 							}
 							$header_esc	= escapeshellarg($header);
 
-							$liteparser	= FALSE;	// Minimal DNSBL Parser
 							$rev_format	= FALSE;	// Host style format is reversed
 							$domain_data_ip	= array();	// Array of IPs found in feed
 							$domain_data_ip6 = array();	// Array of IPv6 IPs found in feed
@@ -16985,7 +16984,6 @@ function sync_package_pfblockerng($cron='') {
 									$custom_list = pfbng_text_area_decode($row['custom'], FALSE, TRUE, TRUE);
 									@file_put_contents("{$file_dwn}.orig", $custom_list, LOCK_EX);
 									unset($custom_list);
-									$liteparser = TRUE;
 								}
 
 								$run_once = $csv_parser = FALSE;
@@ -17198,28 +17196,24 @@ function sync_package_pfblockerng($cron='') {
 															$csv_type	= 'bbc';
 															$line		= $csvline[0];
 															$csv_found	= TRUE;
-															$liteparser	= TRUE;
 														}
 
 														// Parse Alienvault OTX pulse Feed
 														elseif ($line == 'Indicator type,Indicator,'
 																. 'Description') {
 															$csv_type	= 'otx';
-															$liteparser	= FALSE;
 															continue 2;
 														}
 
 														// Parse Ponomocup Feed
 														elseif (strpos($csvline[0], 'timestamp') !== FALSE) {
 															$csv_type	= 'pon';
-															$liteparser	= TRUE;
 															continue 2;
 														}
 
 														// Parse Proofpoint/ET IQRisk IPRep Feed
 														elseif ($line == 'domain, category, score') {
 															$csv_type	= 'et';
-															$liteparser	= TRUE;
 															continue 2;
 														}
 
@@ -17249,15 +17243,9 @@ function sync_package_pfblockerng($cron='') {
 											}
 
 											// Determine if line contains only an alpha-numeric Domain name
-											if (!$liteparser) {
-
-												$lite = FALSE;
-												if (strpos($line, '.') !== FALSE &&
-												    ctype_alnum(str_replace('.', '', $line))) {
-													$lite = TRUE;
-												}
-											}
-											else {
+											$lite = FALSE;
+											if (strpos($line, '.') !== FALSE &&
+											    ctype_alnum(str_replace('.', '', $line))) {
 												$lite = TRUE;
 											}
 
@@ -17348,9 +17336,6 @@ function sync_package_pfblockerng($cron='') {
 
 											// Domain Validation
 											if (empty(pfb_filter($line, PFB_FILTER_DOMAIN, 'DNSBL_Download'))) {
-
-												// Reset lite parser
-												$liteparser = FALSE;
 
 												// Skip yHost '@' prefixed lines
 												if (str_starts_with($line, '@')) {

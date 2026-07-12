@@ -118,7 +118,7 @@ def test_csv_type_domains_are_blocked() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 3. custom (liteparser) list -- provenance='user' -> USER block band
+# 3. custom (user-entered) list -- provenance='user' -> USER block band
 # --------------------------------------------------------------------------- #
 
 
