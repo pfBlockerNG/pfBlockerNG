@@ -251,19 +251,24 @@ printf 'smoke-on-box: provisioning test venv (.venv)...\n' >&2
 "${REPO_ROOT}/.venv/bin/python" -m pip install --quiet -r "${REPO_ROOT}/tests/smoke/requirements.txt" pytest
 
 # The Tier-B browser marker needs the Chromium BINARY (the pip wheel above ships the
-# bindings only); mirrors ui-tests.yml. `--with-deps` is reserved for a box that lacks
-# the browser: its OS-dependency half runs apt-get EVERY time, so an unrelated broken
-# package failed runs that needed no packages at all (#1226). The download half is a
-# genuine no-op when cached.
+# bindings only); mirrors ui-tests.yml. `--with-deps` still runs first, so a new browser
+# revision always gets whatever OS libs it wants — but its apt-get half runs even when
+# nothing needs installing, so unrelated package breakage on the box failed runs that
+# needed no packages at all (#1226). Survivable IFF the browser is already there: the
+# box's libs came from an earlier --with-deps, and the plain install is a no-op (it still
+# fetches the headless-shell build the tier launches, if that is what is missing).
 if pfb_smoke_tier_needs_browser "$_MARKER"; then
     _PW_CACHE="$(pfb_playwright_cache_root)"
-    if pfb_chromium_cached "$_PW_CACHE"; then
-        printf 'smoke-on-box: headless Chromium already cached (%s) — skipping apt deps\n' \
+    printf 'smoke-on-box: provisioning headless Chromium (browser tier)...\n' >&2
+    if ! "${REPO_ROOT}/.venv/bin/python" -m playwright install --with-deps chromium; then
+        if ! pfb_chromium_cached "$_PW_CACHE"; then
+            printf 'smoke-on-box: playwright install --with-deps failed and no Chromium is cached in %s — this box cannot be provisioned; check its apt/dpkg state\n' \
+                "$_PW_CACHE" >&2
+            exit 1
+        fi
+        printf 'smoke-on-box: --with-deps failed (apt/dpkg state?) but Chromium is cached in %s — retrying without the OS-dependency half\n' \
             "$_PW_CACHE" >&2
         "${REPO_ROOT}/.venv/bin/python" -m playwright install chromium
-    else
-        printf 'smoke-on-box: installing headless Chromium + OS deps (browser tier)...\n' >&2
-        "${REPO_ROOT}/.venv/bin/python" -m playwright install --with-deps chromium
     fi
 fi
 
