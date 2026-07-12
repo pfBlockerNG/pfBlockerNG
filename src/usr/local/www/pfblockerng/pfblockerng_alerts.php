@@ -2614,7 +2614,7 @@ function convert_dnsbl_log($mode, $fields) {
 	// Threat Lookup Icon
 	$alert_dom = '';
 	if ($fields[6] != 'Unknown') {
-		$alert_dom = '<a class="fa-solid fa-info icon-pointer" title="Click for Threat Domain Lookup." target="_blank" ' .
+		$alert_dom = '<a class="fa-solid fa-info icon-pointer" title="Click for Threat Domain Lookup." target="_blank" rel="noopener noreferrer" ' .
 				'href="/pfblockerng/pfblockerng_threats.php?domain=' . pfb_hsc($qdomain) . '"></a>';
 	}
 
@@ -2743,7 +2743,7 @@ function convert_dns_reply_log($mode, $fields) {
 		list($supp_dom, $ex_dom, $isWhitelist_found) = dnsbl_whitelist_type($dns_fields, $clists, $isExclusion, FALSE, $fields[6]);
 
 		// Threat Lookup Icon
-		$icons = '<a class="fa-solid fa-info icon-pointer" title="Click for Threat Domain Lookup." target="_blank" ' .
+		$icons = '<a class="fa-solid fa-info icon-pointer" title="Click for Threat Domain Lookup." target="_blank" rel="noopener noreferrer" ' .
 				'href="/pfblockerng/pfblockerng_threats.php?domain=' . pfb_hsc($fields[6]) . '"></a>';
 
 		if (!empty($supp_dom)) {
@@ -3164,7 +3164,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	$h_eval_ip	= pfb_hsc($eval_ip);
 	$h_table	= pfb_hsc($table);
 
-	$alert_ip = '<a class="fa-solid fa-info icon-pointer" target="_blank" href="/pfblockerng/pfblockerng_threats.php?host=' .
+	$alert_ip = '<a class="fa-solid fa-info icon-pointer" target="_blank" rel="noopener noreferrer" href="/pfblockerng/pfblockerng_threats.php?host=' .
 			$h_host . '" title="Click for Threat source IP Lookup for [ ' . $h_host . ' ]"></a>';
 
 	// Suppression Icon -- any family, any mask (ADR-53 follow-up, issue #422).
@@ -3294,7 +3294,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 	$query_port = '';
 	if ($p_query_port != $fields[10]) {
 		$h_dstport_q = pfb_hsc($fields[10]);
-		$query_port = '<a class="fa-solid fa-search icon-pointer" target="_blank" '
+		$query_port = '<a class="fa-solid fa-search icon-pointer" target="_blank" rel="noopener noreferrer" '
 				. 'href="/pfblockerng/pfblockerng_threats.php?port=' . $h_dstport_q
 				. '" title="Click for Threat Port Lookup [ ' . $h_dstport_q . ' ]"></a>';
 	}
@@ -3536,9 +3536,9 @@ if ($alert_summary && strpos($alert_view, 'ip_') !== FALSE) {
 	$section->addInput(new Form_StaticText(
 		'Links',
 		'<small>'
-		. '<a href="/firewall_aliases.php" target="_blank">Firewall Alias</a>&emsp;'
-		. '<a href="/firewall_rules.php" target="_blank">Firewall Rules</a>&emsp;'
-		. '<a href="/status_logs_filter.php" target="_blank">Firewall Logs</a></small>'
+		. '<a href="/firewall_aliases.php" target="_blank" rel="noopener noreferrer">Firewall Alias</a>&emsp;'
+		. '<a href="/firewall_rules.php" target="_blank" rel="noopener noreferrer">Firewall Rules</a>&emsp;'
+		. '<a href="/status_logs_filter.php" target="_blank" rel="noopener noreferrer">Firewall Logs</a></small>'
 		. "{$extra_txt}"
 	));
 	$form->add($section);
@@ -4142,7 +4142,7 @@ if (!$alert_summary) {
 		'',
 		'( Save disabled during <strong>Apply Filter</strong>)'
 		. '&emsp;<div class="infoblock">'
-		. '<h6>Regex Style Matching Only! Do not prefix/suffix field with a backslash! <a href="https://regexr.com/" target="_blank">Regular Expression Help link</a>. '
+		. '<h6>Regex Style Matching Only! Do not prefix/suffix field with a backslash! <a href="https://regexr.com/" target="_blank" rel="noopener noreferrer">Regular Expression Help link</a>. '
 		. 'Precede with exclamation (!) as first character to exclude match.)</h6>'
 		. '<h6>Example: ( ^80$ - Match Port 80, ^80$|^8080$ - Match both port 80 & 8080 )</h6>'
 		. '</div>'
@@ -4203,14 +4203,14 @@ if (!$alert_summary):
 							. '" title="Re-Lock ' . htmlspecialchars($data[1]) . ': [ ' . htmlspecialchars($entry) . ' ] back into Aliastable [ '
 							. htmlspecialchars($type) . ' ]? "></i>';
 
-					$alert = '<a class="fa-solid fa-info icon-pointer" target="_blank"'
+					$alert = '<a class="fa-solid fa-info icon-pointer" target="_blank" rel="noopener noreferrer"'
 							. ' href="/pfblockerng/pfblockerng_threats.php?host='
 							. htmlspecialchars($entry) . '" title="Click for Threat source IP Lookup for [ ' . htmlspecialchars($entry) . ' ]"></a>';
 				} else {
 					$unlock = '<i class="fa-solid fa-unlock text-primary" id="DNSBL_LCK|' . htmlspecialchars($entry) . '|' . htmlspecialchars($type)
 							. '" title="Re-Lock ' . htmlspecialchars($data[1]) . ': [ ' . htmlspecialchars($entry) . ' ] back into DNSBL? "></i>';
 
-					$alert = '<a class="fa-solid fa-info icon-pointer" target="_blank"'
+					$alert = '<a class="fa-solid fa-info icon-pointer" target="_blank" rel="noopener noreferrer"'
 							. ' href="/pfblockerng/pfblockerng_threats.php?domain='
 							. htmlspecialchars($entry) . '" title="Click for Threat source Domain Lookup for [ ' . htmlspecialchars($entry) . ' ]"></a>';
 				}
@@ -5106,7 +5106,7 @@ foreach ($stats as $stat_type => $stype):
 								// issue #1069: $data rides a URL query segment -- rawurlencode,
 								// not HTML-encode.
 								$alert_event = '<a class="fa-solid fa-info icon-pointer"'
-										. ' title="Click for Threat Lookup." target="_blank"'
+										. ' title="Click for Threat Lookup." target="_blank" rel="noopener noreferrer"'
 										. ' href="/pfblockerng/pfblockerng_threats.php?' . $stype[4] . '=' . rawurlencode($data) . '"></a>';
 							}
 
@@ -5141,7 +5141,7 @@ foreach ($stats as $stat_type => $stype):
 
 							if ($stat_type == 'ipdstport') {
 								// issue #1069: href segment rawurlencode'd; title HTML-encoded.
-								$query_port = '&nbsp;<a class="fa-solid fa-search icon-pointer" target="_blank"'
+								$query_port = '&nbsp;<a class="fa-solid fa-search icon-pointer" target="_blank" rel="noopener noreferrer"'
 										. ' href="/pfblockerng/pfblockerng_threats.php?port=' . rawurlencode($data)
 										. '" title="Click for Threat Port Lookup [ ' . pfb_hsc($data) . ' ]"></a>';
 							}

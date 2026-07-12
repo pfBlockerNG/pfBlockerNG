@@ -205,9 +205,9 @@ $section = new Form_Section('XMLRPC Sync Settings');
 $section->addInput(new Form_StaticText(
 	'Links',
 	'<small>'
-	. '<a href="/firewall_aliases.php" target="_blank">Firewall Aliases</a>&emsp;'
-	. '<a href="/firewall_rules.php" target="_blank">Firewall Rules</a>&emsp;'
-	. '<a href="/status_logs_filter.php" target="_blank">Firewall Logs</a></small>'
+	. '<a href="/firewall_aliases.php" target="_blank" rel="noopener noreferrer">Firewall Aliases</a>&emsp;'
+	. '<a href="/firewall_rules.php" target="_blank" rel="noopener noreferrer">Firewall Rules</a>&emsp;'
+	. '<a href="/status_logs_filter.php" target="_blank" rel="noopener noreferrer">Firewall Logs</a></small>'
 ));
 
 $section->addInput(new Form_Select(

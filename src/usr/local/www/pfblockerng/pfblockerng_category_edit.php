@@ -976,9 +976,9 @@ $section = new Form_Section('Info');
 $section->addInput(new Form_StaticText(
 	'Links',
 	'<small>'
-	. '<a href="/firewall_aliases.php" target="_blank">Firewall Aliases</a>&emsp;'
-	. '<a href="/firewall_rules.php" target="_blank">Firewall Rules</a>&emsp;'
-	. '<a href="/status_logs_filter.php" target="_blank">Firewall Logs</a></small>'
+	. '<a href="/firewall_aliases.php" target="_blank" rel="noopener noreferrer">Firewall Aliases</a>&emsp;'
+	. '<a href="/firewall_rules.php" target="_blank" rel="noopener noreferrer">Firewall Rules</a>&emsp;'
+	. '<a href="/status_logs_filter.php" target="_blank" rel="noopener noreferrer">Firewall Logs</a></small>'
 ));
 
 $group = new Form_Group('Name / Description');
@@ -1203,9 +1203,9 @@ $infotxt .= '	</dd>
 
 if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 	$infotxt .= '			<dd>External link to source&emsp;(ie:&nbsp;
-						<a target="_blank" href="https://rules.emergingthreats.net/blockrules/compromised-ips.txt">ET Compromised</a>,
-						<a target="_blank" href="https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt">ET Blocked</a>,
-						<a target="_blank" href="https://www.spamhaus.org/drop/drop.txt">Spamhaus Drop</a>)
+						<a target="_blank" rel="noopener noreferrer" href="https://rules.emergingthreats.net/blockrules/compromised-ips.txt">ET Compromised</a>,
+						<a target="_blank" rel="noopener noreferrer" href="https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt">ET Blocked</a>,
+						<a target="_blank" rel="noopener noreferrer" href="https://www.spamhaus.org/drop/drop.txt">Spamhaus Drop</a>)
 					</dd>
 				<dt>Local file:</dt>
 					<dd>http(s)://127.0.0.1/filename
@@ -1219,15 +1219,15 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 				<dt>Whois:</dt><dd>Domain name to IP Address&emsp;(ie: facebook.com)<br />
 					Note: This will only return a partial list of resolved IPs for each Domain!</dd>
 				<dt>ASN:</dt><dd>ASN to IP Address&emsp;(ie: AS32934)
-						&emsp;(<a target="_blank" href="https://asn.cymru.com/">Click for IP<->ASN Lookup via Team Cymru.com</a>)</dd>
+						&emsp;(<a target="_blank" rel="noopener noreferrer" href="https://asn.cymru.com/">Click for IP<->ASN Lookup via Team Cymru.com</a>)</dd>
 			</dl>
 		</dd>';
 }
 else {
 	$infotxt .= '			<dd>External link to source&emsp;(ie:&nbsp;
-						<a target="_blank" href="https://pgl.yoyo.org/adservers/serverlist.php?hostformat=;showintro=0">yoyo</a>,&nbsp;
-						<a target="_blank" href="https://someonewhocares.org/hosts/hosts">SomeoneWhoCares</a>,&nbsp;
-						<a target="_blank" href="https://adaway.org/hosts.txt">Adaway</a>)
+						<a target="_blank" rel="noopener noreferrer" href="https://pgl.yoyo.org/adservers/serverlist.php?hostformat=;showintro=0">yoyo</a>,&nbsp;
+						<a target="_blank" rel="noopener noreferrer" href="https://someonewhocares.org/hosts/hosts">SomeoneWhoCares</a>,&nbsp;
+						<a target="_blank" rel="noopener noreferrer" href="https://adaway.org/hosts.txt">Adaway</a>)
 					</dd>
 				<dt>Local file:</dt>
 					<dd>http(s)://127.0.0.1/filename &emsp;<strong>or</strong>&emsp; /var/db/pfblockerng/filename
@@ -1452,7 +1452,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 			'Custom Port',
 			'text',
 			$pconfig["aliasports_{$advmode}"]
-		))->setHelp('<a target="_blank" href="/firewall_aliases.php?tab=port">Click Here to add/edit Aliases</a>
+		))->setHelp('<a target="_blank" rel="noopener noreferrer" href="/firewall_aliases.php?tab=port">Click Here to add/edit Aliases</a>
 				Do not manually enter port numbers.<br />Do not use \'pfB_\' in the Port Alias name.<br />Must be a Port-type alias.')
 		  ->setWidth(8);
 		$section->add($group);
@@ -1485,7 +1485,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 			"Custom {$custom_location}",
 			'text',
 			$pconfig['aliasaddr_' . $advmode]
-		))->sethelp('<a target="_blank" href="/firewall_aliases.php?tab=ip">Click Here to add/edit Aliases</a>'
+		))->sethelp('<a target="_blank" rel="noopener noreferrer" href="/firewall_aliases.php?tab=ip">Click Here to add/edit Aliases</a>'
 			. 'Do not manually enter Addresses(es).<br />Do not use \'pfB_\' in the address-type (Host/Network/URL/URL Table) Alias name.<br />'
 			. "Select 'invert' to invert the sense of the match. ie - Not (!) {$custom_location} Address(es)<br />Must be an address-type (Host, Network, URL or URL Table) alias.")
 		  ->setWidth(8);

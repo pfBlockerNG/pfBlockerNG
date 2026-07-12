@@ -544,7 +544,7 @@ function pfb_feeds_render_predefined_type($ftype, $info) {
 
 			<td>
 				<?=$feed_alternate;?>
-				<a target="_blank" href="<?=$feed['website'];?>"><?=$feed['feed'];?></a>
+				<a target="_blank" rel="noopener noreferrer" href="<?=$feed['website'];?>"><?=$feed['feed'];?></a>
 					<?php
 						// Add any Alternate Feed icons
 						if (!empty($feed_alternate)) {
@@ -585,7 +585,7 @@ function pfb_feeds_render_predefined_type($ftype, $info) {
 
 			<td>
 				<?=$feed_radio;?>
-				<a target="_blank" href="<?=$feed['url'];?>"
+				<a target="_blank" rel="noopener noreferrer" href="<?=$feed['url'];?>"
 					onclick="return confirm('Download feed [ <?=$feed['url'];?> ] ?')"><?=$feed_header;?>
 				</a>
 			</td>
@@ -674,9 +674,9 @@ print ($section);
 		<h2 class="panel-title"><?=gettext("Pre-defined Alias/Group/Feeds")?></h2>
 	</div>
 
-	&emsp;Links:&emsp;<small><a href="/firewall_aliases.php" target="_blank">Firewall Aliases</a>&emsp;
-	<a href="/firewall_rules.php" target="_blank">Firewall Rules</a>&emsp;
-	<a href="/status_logs_filter.php" target="_blank">Firewall Logs</a></small><br /><br />
+	&emsp;Links:&emsp;<small><a href="/firewall_aliases.php" target="_blank" rel="noopener noreferrer">Firewall Aliases</a>&emsp;
+	<a href="/firewall_rules.php" target="_blank" rel="noopener noreferrer">Firewall Rules</a>&emsp;
+	<a href="/status_logs_filter.php" target="_blank" rel="noopener noreferrer">Firewall Logs</a></small><br /><br />
 
 	<div class="panel-body bg-info">
 		<div style="margin: 10px 10px 10px 30px;">

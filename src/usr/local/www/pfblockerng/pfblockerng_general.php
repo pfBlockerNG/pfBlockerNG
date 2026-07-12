@@ -274,9 +274,9 @@ $section = new Form_Section('General Settings');
 $section->addInput(new Form_StaticText(
 	'Links',
 	'<small>'
-	. '<a href="/firewall_aliases.php" target="_blank">Firewall Aliases</a>&emsp;'
-	. '<a href="/firewall_rules.php" target="_blank">Firewall Rules</a>&emsp;'
-	. '<a href="/status_logs_filter.php" target="_blank">Firewall Logs</a></small>'
+	. '<a href="/firewall_aliases.php" target="_blank" rel="noopener noreferrer">Firewall Aliases</a>&emsp;'
+	. '<a href="/firewall_rules.php" target="_blank" rel="noopener noreferrer">Firewall Rules</a>&emsp;'
+	. '<a href="/status_logs_filter.php" target="_blank" rel="noopener noreferrer">Firewall Logs</a></small>'
 ));
 
 $section->addInput(new Form_Checkbox(
@@ -450,27 +450,27 @@ $section->addInput(new Form_StaticText(
 <div>
 <div style="width: 75%; height: 180px; float: left;">
 	<strong>pfBlockerNG</strong> is created, designed, developed, supported and maintained by:
-	<a target="_blank" href="https://forum.netgate.com/user/bbcan177">BBcan177</a><br />
+	<a target="_blank" rel="noopener noreferrer" href="https://forum.netgate.com/user/bbcan177">BBcan177</a><br />
 
 	<ul class="list-inline" style="margin-top: 4px; margin-bottom: -2px; border-style: outset; border-bottom-color: #8B181B; border-right-color: #8B181B; border-width: 2px;">
-		<li class="list-inline-item"><a target="_blank" href="http://pfblockerng.com">
+		<li class="list-inline-item"><a target="_blank" rel="noopener noreferrer" href="http://pfblockerng.com">
 			<span style="color: #8B181B;" class="fa-solid fa-globe"></span> HomePage</a></li>
-		<li class="list-inline-item"><a target="_blank" href="https://twitter.com/intent/follow?screen_name=BBcan177">
+		<li class="list-inline-item"><a target="_blank" rel="noopener noreferrer" href="https://twitter.com/intent/follow?screen_name=BBcan177">
 			<span style="color: #8B181B;" class="fa-brands fa-twitter"></span> Follow on X formerly Twitter</a></li>
-		<li class="list-inline-item"><a target="_blank" href="https://www.reddit.com/r/pfBlockerNG/new/">
+		<li class="list-inline-item"><a target="_blank" rel="noopener noreferrer" href="https://www.reddit.com/r/pfBlockerNG/new/">
 			<span style="color: #8B181B;" class="fa-brands fa-reddit"></span> Reddit</a></li>
-		<li class="list-inline-item"><a target="_blank" href="https://infosec.exchange/@BBcan177#">
+		<li class="list-inline-item"><a target="_blank" rel="noopener noreferrer" href="https://infosec.exchange/@BBcan177#">
 			<span style="color: #8B181B;" class="fa-solid fa-globe"></span> Mastodon</a></li>
-		<li class="list-inline-item"><a target="_blank" href="https://github.com/BBcan177">
+		<li class="list-inline-item"><a target="_blank" rel="noopener noreferrer" href="https://github.com/BBcan177">
 			<span style="color: #8B181B;" class="fa-brands fa-github"></span> GitHub</a></li>
-		<li class="list-inline-item"><a target="_blank" href="mailto:bbcan177@gmail.com?Subject=pfBlockerNG%20Support">
+		<li class="list-inline-item"><a target="_blank" rel="noopener noreferrer" href="mailto:bbcan177@gmail.com?Subject=pfBlockerNG%20Support">
 			<span style="color: #8B181B;" class="fa-regular fa-envelope"></span> Contact Us</a></li>
 	</ul>
 	<span class="pull-right"><small>Based upon pfBlocker by Marcello Coutinho and Tom Schaefer.</small></span>
 </div>
 
 <div style="width: 25%; height: 170px; float: right;">
-	<a target="_blank" href="http://pfblockerng.com">
+	<a target="_blank" rel="noopener noreferrer" href="http://pfblockerng.com">
 
 <svg width="180.0pt" height="180.0pt" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
 	 viewBox="30 225 560 470" style="enable-background:new 30 225 560 470;" xml:space="preserve">

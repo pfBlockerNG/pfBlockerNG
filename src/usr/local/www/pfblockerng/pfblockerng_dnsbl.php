@@ -986,9 +986,9 @@ $section = new Form_Section('DNSBL');
 $section->addInput(new Form_StaticText(
 	'Links',
 	'<small>'
-	. '<a href="/firewall_aliases.php" target="_blank">Firewall Aliases</a>&emsp;'
-	. '<a href="/firewall_rules.php" target="_blank">Firewall Rules</a>&emsp;'
-	. '<a href="/status_logs_filter.php" target="_blank">Firewall Logs</a></small>'
+	. '<a href="/firewall_aliases.php" target="_blank" rel="noopener noreferrer">Firewall Aliases</a>&emsp;'
+	. '<a href="/firewall_rules.php" target="_blank" rel="noopener noreferrer">Firewall Rules</a>&emsp;'
+	. '<a href="/status_logs_filter.php" target="_blank" rel="noopener noreferrer">Firewall Logs</a></small>'
 ));
 
 $dnsbl_text = '<div class="infoblock">
@@ -2684,11 +2684,11 @@ $section->addInput(new Form_Checkbox(
 		. '<div id="dnsbl_python_tld_allow_text">'
 		. '<strong>By default</strong> \'ARPA\' and the pfSense TLD \'' . strtoupper($local_tld) . '\' are allowed.<br />'
 		. 'If no TLDs are selected, the following are added by default [ COM, NET, ORG, EDU, CA, CO, IO ]<br /><br />'
-		. 'Detailed TLD listings : <a target=_blank href="http://www.iana.org/domains/root/db">Root Zone Top-Level Domains.</a><br />'
+		. 'Detailed TLD listings : <a target=_blank rel="noopener noreferrer" href="http://www.iana.org/domains/root/db">Root Zone Top-Level Domains.</a><br />'
 		. 'Changes to this option will require a Force Update to take effect.<br /><br />'
 		. '<strong>Legend</strong>:<br />'
 		. '(*) TLD is used by atleast one DNSBL Feed in the Feeds Tab. Confirm the TLDs used by the selected Feeds.<br />'
-		. '(!) TLD is listed by <a target=_blank href="https://www.spamhaus.org/statistics/tlds/">Spamhaus (Most Abused TLDs)</a><br /></div>'
+		. '(!) TLD is listed by <a target=_blank rel="noopener noreferrer" href="https://www.spamhaus.org/statistics/tlds/">Spamhaus (Most Abused TLDs)</a><br /></div>'
 		);
 
 $section->addInput(new Form_Checkbox(
@@ -2903,7 +2903,7 @@ $section->addInput(new Form_Input(
 	$pconfig['dnsbl_redir_exclude'],
 	['placeholder' => 'Firewall alias name (optional)']
 ))->setHelp('Optional. Name of an existing Firewall Alias. Hosts/subnets in this alias bypass the DNS redirect.<br />'
-		. 'The alias must be created separately at <a href="/firewall_aliases.php" target="_blank">Firewall &gt; Aliases</a>.');
+		. 'The alias must be created separately at <a href="/firewall_aliases.php" target="_blank" rel="noopener noreferrer">Firewall &gt; Aliases</a>.');
 
 $form->add($section);
 
@@ -2925,7 +2925,7 @@ $group->add(new Form_Checkbox(
 		. 'DoH is addressed by the DoH-IP feed and DNSBL domain blocking.<br />'
 		. 'The firewall itself is always exempt. Hosts in the exception alias are also exempt.<br />'
 		. 'The exception alias must exist at '
-		. '<a href="/firewall_aliases.php" target="_blank">Firewall &gt; Aliases</a> before use.');
+		. '<a href="/firewall_aliases.php" target="_blank" rel="noopener noreferrer">Firewall &gt; Aliases</a> before use.');
 
 // [ ADR-37 ] Quick-fill interface union -- identical to the ADR-36 DNS Redirect fill above
 // ($options_dnsbl_dot_block_int is the same interface list as $options_dnsbl_redir_int), so
@@ -2949,7 +2949,7 @@ $section->addInput(new Form_Input(
 	$pconfig['dnsbl_dot_block_exclude'],
 	['placeholder' => 'Firewall alias name (optional)']
 ))->setHelp('Optional. Name of an existing Firewall Alias. Hosts/subnets in this alias bypass the DoT/DoQ block.<br />'
-		. 'The alias must be created separately at <a href="/firewall_aliases.php" target="_blank">Firewall &gt; Aliases</a>.');
+		. 'The alias must be created separately at <a href="/firewall_aliases.php" target="_blank" rel="noopener noreferrer">Firewall &gt; Aliases</a>.');
 
 $section->addInput(new Form_Select(
 	'dnsbl_dot_block_action',
@@ -2983,7 +2983,7 @@ $section->addInput(new Form_Select(
 	$options_safesearch_doh
 ))->setHelp('Block well-known DNS over HTTPS/TLS/QUIC (DoH/DoT/DoQ) providers. Modern browsers and devices often use encrypted DNS that bypasses DNSBL; blocking these providers keeps clients on the local resolver so DNSBL stays effective.<br />'
 		. 'DNS requests to these domains will return NXDOMAIN.<br />'
-		. 'A DoH/DoT/DoQ <a href="/pfblockerng/pfblockerng_feeds.php" target="_blank">Feed</a> may cover more providers and update more often than this built-in list.')
+		. 'A DoH/DoT/DoQ <a href="/pfblockerng/pfblockerng_feeds.php" target="_blank" rel="noopener noreferrer">Feed</a> may cover more providers and update more often than this built-in list.')
   ->setAttribute('style', 'width: auto');
 
 $section->addInput(new Form_Select(
@@ -3115,7 +3115,7 @@ $pfb_vip_help = 'Select the DNSBL VIP address — rejected DNS requests are forw
 	. 'It should be in an isolated range not already used on the network.<br />'
 	. 'Enable <strong>Create VIPs automatically</strong> to have pfBlockerNG manage it, or select one '
 	. 'manually — create it first at '
-	. '<a target="_blank" href="/firewall_virtual_ip.php">Firewall &gt; Virtual IPs</a>.';
+	. '<a target="_blank" rel="noopener noreferrer" href="/firewall_virtual_ip.php">Firewall &gt; Virtual IPs</a>.';
 if ($pfb_auto_exhausted) {
 	$pfb_vip_help .= '<br /><i class="fa fa-exclamation-triangle text-warning"></i> '
 		. '<span class="text-warning">No free auto-create address is available — free one in the '
@@ -3260,16 +3260,16 @@ $top1m_text = 'The TOP1M feed can be used to whitelist the most popular Domain n
 		Whitelist(s) available:<br />
 
 		<ul>
-			<li><a target="_blank" href="https://tranco-list.eu/">Tranco TOP1M</a></li>
-			<li><a target="_blank" href="https://s3-us-west-1.amazonaws.com/umbrella-static/index.html">Cisco Umbrella TOP1M</a></li>
-			<li><a target="_blank" href="https://openpagerank.keywordseverywhere.com/top-10-million-domains">OpenPageRank TOP1M</a></li>
-			<li><a target="_blank" href="https://majestic.com/reports/majestic-million">Majestic Million TOP1M</a> --
+			<li><a target="_blank" rel="noopener noreferrer" href="https://tranco-list.eu/">Tranco TOP1M</a></li>
+			<li><a target="_blank" rel="noopener noreferrer" href="https://s3-us-west-1.amazonaws.com/umbrella-static/index.html">Cisco Umbrella TOP1M</a></li>
+			<li><a target="_blank" rel="noopener noreferrer" href="https://openpagerank.keywordseverywhere.com/top-10-million-domains">OpenPageRank TOP1M</a></li>
+			<li><a target="_blank" rel="noopener noreferrer" href="https://majestic.com/reports/majestic-million">Majestic Million TOP1M</a> --
 				distributed under the <strong>Creative Commons Attribution (CC BY) 3.0</strong> License by:
-				<a target="_blank" href="https://majestic.com">Majestic</a>, attribution required.</li>
-			<li><a target="_blank" href="https://radar.cloudflare.com/domains">Cloudflare Radar</a> --
+				<a target="_blank" rel="noopener noreferrer" href="https://majestic.com">Majestic</a>, attribution required.</li>
+			<li><a target="_blank" rel="noopener noreferrer" href="https://radar.cloudflare.com/domains">Cloudflare Radar</a> --
 				distributed under the <strong>Creative Commons Attribution-NonCommercial (CC BY-NC) 4.0</strong> License by:
-				<a target="_blank" href="https://www.cloudflare.com">Cloudflare</a>, non-commercial use, attribution required.
-				Requires a free <a target="_blank" href="https://developers.cloudflare.com/fundamentals/api/get-started/create-token/">Cloudflare API Token</a>
+				<a target="_blank" rel="noopener noreferrer" href="https://www.cloudflare.com">Cloudflare</a>, non-commercial use, attribution required.
+				Requires a free <a target="_blank" rel="noopener noreferrer" href="https://developers.cloudflare.com/fundamentals/api/get-started/create-token/">Cloudflare API Token</a>
 				entered below.</li>
 		</ul>
 		To use this feature, select the number of \'Top Domains\' to whitelist. You can also \'include\' which TLDs to whitelist.
@@ -3329,7 +3329,7 @@ $section->addInput(new Form_Select(
 	TRUE
 ))->setHelp('Select the TLDs for Whitelist. (Only showing the Top 150 TLDs)<br />'
 		. '<strong>Default: COM, NET, ORG, CA, CO, IO</strong><br /><br />'
-		. 'Detailed listing : <a target=_blank href="http://www.iana.org/domains/root/db">Root Zone Top-Level Domains.</a>'
+		. 'Detailed listing : <a target=_blank rel="noopener noreferrer" href="http://www.iana.org/domains/root/db">Root Zone Top-Level Domains.</a>'
 )->setAttribute('size', '20')
  ->setWidth(3);
 
@@ -3521,7 +3521,7 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		"Custom {$custom_location}",
 		'text',
 		$pconfig['aliasaddr_' . $advmode]
-	))->sethelp('<a target="_blank" href="/firewall_aliases.php?tab=ip">Click Here to add/edit Aliases</a>'
+	))->sethelp('<a target="_blank" rel="noopener noreferrer" href="/firewall_aliases.php?tab=ip">Click Here to add/edit Aliases</a>'
 		. 'Do not manually enter Addresses(es).<br />Do not use \'pfB_\' in the address-type (Host/Network/URL/URL Table) Alias name.<br />'
 		. "Select 'invert' to invert the sense of the match. ie - Not (!) {$custom_location} Address(es)"
 	)->setWidth(8)
