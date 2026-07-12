@@ -40,3 +40,17 @@ pfb_smoke_tier_needs_browser() {
         *)            return 1 ;;
     esac
 }
+
+# pfb_chromium_cached <cache_root> — exit 0 iff a Chromium build is already in the
+# playwright cache (`<cache_root>/chromium-<rev>`); non-zero otherwise.
+#
+# The caller uses this to skip `playwright install --with-deps`, whose OS-dependency
+# half shells out to apt-get on EVERY run — so a broken package on the box fails a run
+# that needed no packages at all (#1226). The browser download half is a genuine no-op
+# when cached; only --with-deps is not.
+pfb_chromium_cached() {
+    for _pfb_cc_build in "$1"/chromium-*; do
+        [ -d "$_pfb_cc_build" ] && return 0
+    done
+    return 1
+}

@@ -106,4 +106,42 @@ Describe 'smoke-tier.sh'
       The status should be failure
     End
   End
+
+  # `playwright install --with-deps` shells out to apt-get on EVERY run, even when the
+  # browser is already cached and nothing needs installing -- so an unrelated broken
+  # package on the leased box failed runs that needed no packages at all (#1226). The
+  # OS-dependency half is therefore reserved for a box that genuinely lacks the browser.
+  Describe 'pfb_chromium_cached'
+    # NOT named setup()/cleanup(): those are the OUTER Describe's hooks, which source the
+    # library under test -- redefining them here would silently unload it.
+    cache_setup() { CACHE="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pwcache.XXXXXX")"; }
+    cache_cleanup() { rm -rf "$CACHE"; }
+    Before 'cache_setup'
+    After 'cache_cleanup'
+
+    It 'is true when a chromium build is already cached'
+      # Scenario: the real layout on a provisioned box -- ~/.cache/ms-playwright/chromium-<rev>.
+      mkdir_build() { mkdir -p "${CACHE}/chromium-1223"; pfb_chromium_cached "$CACHE"; }
+      When call mkdir_build
+      The status should be success
+    End
+
+    It 'is false for an EMPTY cache directory (browser absent, deps needed)'
+      # Branch coverage: the directory existing is not enough -- a build must be in it.
+      When call pfb_chromium_cached "$CACHE"
+      The status should be failure
+    End
+
+    It 'is false when the cache directory does not exist at all'
+      When call pfb_chromium_cached "${CACHE}/nope"
+      The status should be failure
+    End
+
+    It 'ignores a NON-chromium build in the cache (e.g. ffmpeg only)'
+      # A cache holding only ffmpeg/firefox must still install chromium + its deps.
+      mkdir_other() { mkdir -p "${CACHE}/ffmpeg-1011"; pfb_chromium_cached "$CACHE"; }
+      When call mkdir_other
+      The status should be failure
+    End
+  End
 End
