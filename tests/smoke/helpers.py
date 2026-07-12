@@ -1504,6 +1504,41 @@ def set_ip_suppression(
         raise RuntimeError(f"set_ip_suppression failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
+def set_ip_continent(
+    vm: SmokeVM,
+    continent: str,
+    *,
+    action: str = "Deny_Both",
+    countries4: str = "",
+    countries6: str = "",
+    timeout: float = 60.0,
+) -> None:
+    """Set one GeoIP continent's action/ISO lists at
+    ``installedpackages/pfblockerng<continent>/config/0`` (pfblockerng.inc:18147-18152's
+    ``$cont_key = 'pfblockerng' . strtolower(str_replace(' ', '', $continent))``).
+
+    ``continent`` is the GUI continent name (``$pfb['continents']`` keys, pfblockerng.inc:
+    160-169 -- e.g. ``'Africa'``, ``'North America'``); ``countries4``/``countries6`` are
+    comma-separated ISO codes (``$cont_types``, inc:15791). Read-modify-write like
+    :func:`set_ip_reputation` -- any other key already in the section survives untouched.
+    """
+    root = f"installedpackages/pfblockerng{continent.lower().replace(' ', '')}/config/0"
+    settings = {"action": action, "countries4": countries4, "countries6": countries6}
+    assigns = "".join(f"$c[{_php_str(k)}] = {_php_str(v)};\n" for k, v in settings.items())
+    snippet = (
+        f"$c = config_get_path({_php_str(root)}, array());\n"
+        f"{assigns}"
+        f"config_set_path({_php_str(root)}, $c);\n"
+        "write_config('pfBlockerNG smoke: continent config');\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"set_ip_continent({continent!r}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
 def set_dnsbl_interface(vm: SmokeVM, iface: str, *, timeout: float = 60.0) -> None:
     """Set the DNSBL interface (``dnsbl_interface``) in the DNSBL-settings section.
 
