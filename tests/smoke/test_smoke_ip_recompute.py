@@ -411,9 +411,9 @@ def test_recompute_suppression_realigns_across_sibling_change(deployed_vm: Smoke
     change drives a family-wide recompute that rewrites the suppressed alias too.
 
     Regression pin for the #1084-review resurrection bug: ``pfb_recompute()``'s
-    snapshot is a PRE-suppression capture (issue #1084 review comment,
-    pfblockerng.inc ~5065), so recompute alone would resurrect a suppressed IP on
-    ANY pass that rewrites that alias -- ``pfb_ip_suppress_body_active()``'s
+    snapshot is a PRE-suppression capture (see ``pfb_ip_suppress_body_active()``'s
+    docblock in pfblockerng.inc), so recompute alone would resurrect a suppressed IP
+    on ANY pass that rewrites that alias -- ``pfb_ip_suppress_body_active()``'s
     ``$feed_changed || $recompute_ran`` clause is what re-applies suppression even
     when the SUPPRESSED alias's OWN feed did not change.
 
