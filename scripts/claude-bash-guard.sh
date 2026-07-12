@@ -162,10 +162,11 @@ segs="$(printf '%s' "$norm" | tr ';&|()' '\n')"
 # either would erase the very `&` the rule exists to find. The cost is that a `&&` chain
 # after a wait denies (D5) -- a wait belongs in its own call regardless.
 #
-# One shape still slips: a quoted value ending in a DIGIT and a `>` immediately before the
-# `&` (`--x \"1>\"&2`) is textually identical to a real redirect. That is payload
-# construction to defeat the control, which the ACCEPTED LIMITATION above places out of
-# scope; no honest command produces it.
+# Two shapes still slip, both pinned (D20/D21) and both requiring a payload no honest
+# command produces -- the ACCEPTED LIMITATION above: a quoted value ending in a DIGIT and
+# a `>` right before the `&` (`--x \"1>\"&2`) is textually identical to a real redirect,
+# and an `&` written as the JSON escape `\u0026` is never decoded by a scan that reads raw
+# bytes.
 norm_bg="$(printf '%s' "$norm" | sed -e 's/[0-9][0-9]*>&[0-9-][0-9-]*//g')"
 
 # _contains <needle> -- true (rc 0) iff the CURRENT SEGMENT ($seg, set by

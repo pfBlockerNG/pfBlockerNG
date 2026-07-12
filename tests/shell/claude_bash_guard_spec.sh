@@ -576,6 +576,35 @@ Describe 'claude-bash-guard.sh'
       The output should include '"permissionDecision":"deny"'
     End
 
+    # ── Rule D's two ACCEPTED BYPASSES, pinned so a future edit cannot widen them ──
+    #
+    # Both need a payload no honest command produces, which is the guard's existing
+    # ACCEPTED LIMITATION (a text scan cannot beat deliberate payload construction).
+    # They are pinned, not merely described, because every other accepted surface here
+    # is -- prose drifts, tests do not.
+
+    It 'D20: ACCEPTED BYPASS -- a quoted value ending in a DIGIT and > forges a real redirect'
+      # `--threshold "1>"&2` quote-strips to `1>&2`, textually identical to a genuine fd
+      # redirect, so the only surviving lookalike-neutralizer eats the real background &.
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"sh scripts/agent/wait-checks.sh --threshold \"1>\"&2"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'D21: ACCEPTED BYPASS -- an & written as the JSON escape \u0026 is never decoded'
+      # The scan reads raw payload bytes and never JSON-decodes, so an escaped & is
+      # invisible. No serializer the harness uses emits this for a plain ASCII &.
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"sh scripts/agent/wait-checks.sh --pr 1 \u0026"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
     # ACCEPTED FALSE POSITIVE, same family as D7. The `;` that would prove this & belongs
     # to a LATER command is indistinguishable from a `;` sitting inside a quoted argument
     # (the guard strips quote markers without knowing what they protected), and trusting
