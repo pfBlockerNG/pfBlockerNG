@@ -648,9 +648,10 @@ def _stage_match_file(vm: SmokeVM, rec_alias: str, contents: str, *, timeout: fl
 
 
 def test_recompute_geoip_outage_preserves_match_artifacts(deployed_vm: SmokeVM) -> None:
-    """dMax repmode with an offender present, but no ``GeoLite2-Country.mmdb`` on box
-    (the box's natural, never-baked state -- ``mmdblookup`` is baked, the database is
-    not): ``pfb_recompute_finish()`` must take the GeoIP-unavailable branch and leave
+    """dMax repmode with an offender present and no ``GeoLite2-Country.mmdb`` reachable
+    (the image bakes ``mmdblookup`` but never a database; a database a credentialed
+    sibling module downloaded into the shared VM is hidden for this pass and restored
+    after): ``pfb_recompute_finish()`` must take the GeoIP-unavailable branch and leave
     a PRE-EXISTING per-alias reputation match file untouched, never swap/remove it.
 
     STAGED PRECONDITION (documented, not a fake of the code path under test): this box
@@ -670,38 +671,46 @@ def test_recompute_geoip_outage_preserves_match_artifacts(deployed_vm: SmokeVM) 
         that would have swapped/removed it never ran) and the pfBlockerNG log gained
         the GeoIP-unavailable line.
     """
+    # The outage is the box's natural state (the image bakes mmdblookup, never a database),
+    # but a credentialed sibling module can have downloaded one into the session-shared VM --
+    # hide it for this pass and put it back, so the branch under test is reached either way.
     mmdb_path = f"{h.GEOIP_SHARE_DIR}/GeoLite2-Country.mmdb"
-    probe = deployed_vm.ssh("/bin/test", "-f", mmdb_path)
-    assert probe.returncode != 0, (
-        f"precondition violated: {mmdb_path} exists on this box -- R8-outage needs the box's "
-        "natural (never-baked) no-.mmdb state to exercise the GeoIP-unavailable branch"
-    )
+    stash_path = f"{mmdb_path}.r8-stash"
+    stashed = deployed_vm.ssh("/bin/test", "-f", mmdb_path).returncode == 0
+    if stashed:
+        moved = deployed_vm.ssh("/bin/mv", mmdb_path, stash_path)
+        assert moved.returncode == 0, f"could not hide {mmdb_path}: {moved.stderr!r}"
 
-    h.set_ip_dedup(deployed_vm, False)
-    h.set_ip_reputation(deployed_vm, drep=True, dmax=2)
-    h.set_ip_suppression(deployed_vm, enabled=False)
+    try:
+        h.set_ip_dedup(deployed_vm, False)
+        h.set_ip_reputation(deployed_vm, drep=True, dmax=2)
+        h.set_ip_suppression(deployed_vm, enabled=False)
 
-    feed = h.write_local_feed(deployed_vm, "r8_feed.txt", "198.51.100.10\n198.51.100.11\n198.51.100.12\n")
-    spec = h.IpCase(aliasname="r8", feed_url=feed, header="r8", action="Deny_Both")
-    h.inject_ip_lists(deployed_vm, [spec])
+        feed = h.write_local_feed(deployed_vm, "r8_feed.txt", "198.51.100.10\n198.51.100.11\n198.51.100.12\n")
+        spec = h.IpCase(aliasname="r8", feed_url=feed, header="r8", action="Deny_Both")
+        h.inject_ip_lists(deployed_vm, [spec])
 
-    # The reconcile keys on the memberlist's snapshot-derived name (<header>_<family>),
-    # never the pf table's pfB_* name -- staging under the latter could never fail.
-    rec_alias = f"{spec.header}_{spec.family}"
-    match_path = _stage_match_file(deployed_vm, rec_alias, _R8_MATCH_STAGE)
+        # The reconcile keys on the memberlist's snapshot-derived name (<header>_<family>),
+        # never the pf table's pfB_* name -- staging under the latter could never fail.
+        rec_alias = f"{spec.header}_{spec.family}"
+        match_path = _stage_match_file(deployed_vm, rec_alias, _R8_MATCH_STAGE)
 
-    # BEFORE: the staged artifact round-tripped exactly, and the outage line hasn't fired yet.
-    before_content = _raw(deployed_vm, match_path)
-    assert before_content == _R8_MATCH_STAGE, f"staged match file did not round-trip: {before_content!r}"
-    before_marker = h.count_log_marker(deployed_vm, h.PFB_LOG, GEOIP_OUTAGE_MARKER)
+        # BEFORE: the staged artifact round-tripped exactly, and the outage line hasn't fired yet.
+        before_content = _raw(deployed_vm, match_path)
+        assert before_content == _R8_MATCH_STAGE, f"staged match file did not round-trip: {before_content!r}"
+        before_marker = h.count_log_marker(deployed_vm, h.PFB_LOG, GEOIP_OUTAGE_MARKER)
 
-    h.reload(deployed_vm, "updateip", wait_unbound=False)
+        h.reload(deployed_vm, "updateip", wait_unbound=False)
 
-    after_content = _raw(deployed_vm, match_path)
-    assert after_content == before_content, (
-        f"GeoIP-outage pass perturbed the previous match artifact: before={before_content!r} after={after_content!r}"
-    )
-    after_marker = h.count_log_marker(deployed_vm, h.PFB_LOG, GEOIP_OUTAGE_MARKER)
-    assert after_marker > before_marker, (
-        f"expected a new {GEOIP_OUTAGE_MARKER!r} line in {h.PFB_LOG} (before={before_marker}, after={after_marker})"
-    )
+        after_content = _raw(deployed_vm, match_path)
+        assert after_content == before_content, (
+            f"GeoIP-outage pass perturbed the previous match artifact: "
+            f"before={before_content!r} after={after_content!r}"
+        )
+        after_marker = h.count_log_marker(deployed_vm, h.PFB_LOG, GEOIP_OUTAGE_MARKER)
+        assert after_marker > before_marker, (
+            f"expected a new {GEOIP_OUTAGE_MARKER!r} line in {h.PFB_LOG} (before={before_marker}, after={after_marker})"
+        )
+    finally:
+        if stashed:
+            deployed_vm.ssh("/bin/mv", stash_path, mmdb_path)
