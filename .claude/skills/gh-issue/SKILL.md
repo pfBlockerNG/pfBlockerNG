@@ -86,7 +86,7 @@ lives in `.claude/workflows/issue-triage.js` (its Triage prompt + schema), the s
 source of truth. Do NOT restate or re-improvise it. Run it as ONE fresh agent:
 `Workflow({name: 'issue-triage', args: {issue: N, worktree: '<an up-to-date
 checkout — the primary is fine, the agent reads origin/<base> refs read-only>', base:
-'devel', model: 'fable'}})`. It returns the schema-forced triage artifact — `verdict`,
+'devel', model: 'sonnet'}})` (Fable — the preferred triage model — is temporarily unavailable). It returns the schema-forced triage artifact — `verdict`,
 `claims[]` (each with executed `evidence` and `cited_paths`), `alternatives`, `impact`,
 `repro`, `plan_steps[]`, `base_tip` — which is both the deliverable (no `--fix`) and the
 durable resume anchor (`--fix` later in the session consumes it per Step 1). Workflow tool

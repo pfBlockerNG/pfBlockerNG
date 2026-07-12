@@ -87,7 +87,7 @@ pfSense-provided PHP functions".
 
 ### Plan with a higher model, implement with Sonnet 5
 
-Substantial coding work is **planned and gated by a higher model** (Opus / Fable) and
+Substantial coding work is **planned and gated by a higher model** (Opus; Fable temporarily unavailable) and
 **implemented by Sonnet 5** sub-agents: the planner splits the task into steps, a Sonnet 5
 implementer executes each, and the planner **independently checks every step** before the next
 — that per-step gating is what makes a cheaper implementer safe. The skills already wire this
@@ -736,7 +736,7 @@ squash. History stays strictly linear (`main` always an ancestor of `devel`).
 **Default landing flow — `/pr-merge-flow N`** after completing any issue, ADR, or code
 change: review feedback first, then merge. A **Claude adversarial review runs on EVERY PR
 as the committed `review-single` workflow** — ONE reviewer sub-agent at effort `xhigh`
-(never below, never `max`), latest Sonnet by default / latest Fable for a large/complex PR,
+(never below, never `max`), latest Sonnet (Fable — preferred for a large/complex PR — is temporarily unavailable),
 **never Opus, never a multi-agent fan-out** (`review-fanout` only on explicit user request);
 the full reviewer contract lives in `.claude/workflows/review-single.js`, not here. External
 reviewers — CodeRabbit, GitHub Copilot, advisory Snyk — are requested / waited on (bounded) /

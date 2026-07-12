@@ -1,7 +1,7 @@
 export const meta = {
   name: 'issue-triage',
   description: 'One agent triages a GitHub issue: whole-issue read, claims verified against fresh origin base with executed evidence, impact, ordered resolution plan — schema-forced',
-  whenToUse: 'gh-issue Steps 2-5 (triage + plan). The returned artifact is DURABLE: a same-session --fix resumes from it (base_tip + per-claim cited_paths feed the targeted staleness check) instead of re-triaging. Args: {issue: <number>, worktree: <path to an up-to-date checkout>, base?: <branch, default devel>, model?: "fable" | "sonnet" (default fable — verdict quality is the product), notes?: <caller context>}.',
+  whenToUse: 'gh-issue Steps 2-5 (triage + plan). The returned artifact is DURABLE: a same-session --fix resumes from it (base_tip + per-claim cited_paths feed the targeted staleness check) instead of re-triaging. Args: {issue: <number>, worktree: <path to an up-to-date checkout>, base?: <branch, default devel>, model?: "sonnet" (default; Fable — the preferred verdict-quality model — is temporarily unavailable, restore when its quota returns), notes?: <caller context>}.',
   phases: [
     { title: 'Triage', detail: 'one agent: read whole issue, verify claims, size impact, plan' },
   ],
@@ -16,9 +16,10 @@ export const meta = {
 // Callers sometimes deliver args JSON-string-encoded (killed review-fanout on PR #937,
 // issue #942) — normalize before destructuring instead of trusting caller discipline.
 const input = typeof args === 'string' ? JSON.parse(args) : (args ?? {})
-const { issue, worktree, base = 'devel', model = 'fable', notes = '' } = input
+const { issue, worktree, base = 'devel', model = 'sonnet', notes = '' } = input
 if (!issue || !worktree) throw new Error('args must be {issue, worktree, base?, model?, notes?}')
-if (model !== 'fable' && model !== 'sonnet') throw new Error(`model must be "fable" or "sonnet"; got "${model}"`)
+// Fable (the preferred verdict-quality model) is temporarily unavailable — sonnet only. Restore fable when its quota returns.
+if (model !== 'sonnet') throw new Error(`model must be "sonnet" (Fable temporarily unavailable); got "${model}"`)
 
 const TRIAGE = {
   type: 'object',

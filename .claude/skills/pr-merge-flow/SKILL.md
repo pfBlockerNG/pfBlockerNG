@@ -9,8 +9,8 @@ description: >
   delete the branch. The review step ALWAYS runs the committed `review-single`
   workflow — ONE Claude sub-agent as an ADVERSARIAL reviewer IN ADDITION TO CodeRabbit,
   never a mere fallback — at reasoning effort xhigh (never below, never max): the latest
-  Sonnet (5 or newer) by default, the latest Fable (5 or newer) for a large/complex PR
-  (orchestrator's pick; never Opus, never a multi-agent fan-out). In parallel it
+  Sonnet (5 or newer) — Fable (5 or newer), preferred for a large/complex PR, is temporarily
+  unavailable, so use Sonnet (never Opus, never a multi-agent fan-out). In parallel it
   gives CodeRabbit ~10 minutes to acknowledge the PR: if it does, wait on its review
   too; if it stays silent, nudge it once with `@coderabbitai review` and wait 10 more
   minutes; if it is STILL silent the Claude review stands alone (folding CodeRabbit's
@@ -165,20 +165,21 @@ replace CodeRabbit; when CodeRabbit never reviews it stands alone.
    `.claude/workflows/review-single.js`, the single source of truth — do NOT restate or
    re-improvise it:
    `Workflow({name: 'review-single', args: {pr: N, base: '<base>', worktree: '<path>',
-   spec: '<see below>', model: 'sonnet'|'fable'}})`.
+   spec: '<see below>', model: 'sonnet'}})`.
    Your (orchestrator) duties around that call:
    - **Build the `spec`** from the work item's intent — the issue/ADR link, its
      acceptance criteria / coverage matrix, and the PR body. A diff-only reviewer can
      never catch "asked for ALL X, delivered a subset, claimed completeness"; only
      diff-vs-spec exposes it.
    - **Pick the model** by the PR's size and complexity, and record the chosen model +
-     the size metric that drove it in the Step-1d.5 audit comment: small/simple →
-     `model: sonnet`; large/complex (roughly: >300 changed lines, >6 files, or any
-     behaviour change in `src/`'s parsing/guard/scheduling logic) → `model: fable`.
-     **Never Opus, never a multi-agent fan-out** (user directive 2026-07-11 —
-     `review-fanout` runs only on an explicit user request), never below `xhigh`,
-     never `max`; the bare family alias resolves to the LATEST generation (Sonnet 5 /
-     Fable 5 or newer) — never pin a dated model ID.
+     the size metric that drove it in the Step-1d.5 audit comment: `model: sonnet`
+     for every PR. (Fable is normally the pick for a large/complex PR — >300 changed
+     lines, >6 files, or any behaviour change in `src/`'s parsing/guard/scheduling
+     logic — but is temporarily unavailable; restore the large/complex → `fable`
+     split when its quota returns.) **Never Opus, never a multi-agent fan-out** (user
+     directive 2026-07-11 — `review-fanout` runs only on an explicit user request),
+     never below `xhigh`, never `max`; the bare family alias resolves to the LATEST
+     generation (Sonnet 5 or newer) — never pin a dated model ID.
    - **Validate the result**: treat `findings` as the review; `per_file` must cover
      every changed file (a review missing files is incomplete — re-run it).
    - **Fallback** (Workflow tool unavailable): spawn ONE plain Agent sub-agent with the
@@ -281,8 +282,8 @@ a numbered list of every finding with its outcome — `fixed@<commit>` / `skippe
 `deferred: <issue link>` — folded into the Step-1d.5 audit comment; refuse to merge while any
 item lacks an outcome. **When NO external reviewer reviewed a substantive PR** (CodeRabbit dropped under the
 5-minute rule AND Copilot unavailable/timed out), **escalate instead of merging on the single
-Claude pass** — a focused second single-agent pass over the final diff (Fable at `xhigh` if
-the first pass ran Sonnet), or pace the merge; the audited defect window coincided exactly with a
+Claude pass** — a focused second single-agent Sonnet pass over the final diff (Fable would be
+preferred here but is temporarily unavailable), or pace the merge; the audited defect window coincided exactly with a
 bots-quota batch-merge cadence. If a finding is unresolved, contested, or needs the user,
 **stop here and report** — do not merge.
 
@@ -312,7 +313,7 @@ it may not be clean.
 ## Definition of done
 
 - Review resolved (note which reviews landed — the always-on single-agent Claude
-  adversarial review and its model (`sonnet` or `fable`, always `xhigh`),
+  adversarial review and its model (`sonnet`; Fable temporarily unavailable; always `xhigh`),
   Copilot when it reviewed, CodeRabbit when it reviewed, plus any terminal Snyk
   `failure` finding); PR merged by rebase; remote branch deleted.
 - Sync the work item's labels (an issue's `Waiting PR` removed on merge), per

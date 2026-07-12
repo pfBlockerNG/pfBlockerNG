@@ -1,7 +1,7 @@
 export const meta = {
   name: 'review-single',
   description: 'Single-agent adversarial PR review: ONE reviewer covers contract, correctness/hostile-inputs, and test-honesty; schema-forced findings',
-  whenToUse: 'pr-merge-flow Step 1d\'s default review shape. Args: {pr: <number>, base: <branch>, worktree: <path>, spec: <intent/acceptance text>, model?: "sonnet" | "fable" (default sonnet; fable for a large/complex PR — >300 lines, >6 files, or src/ parsing/guard/scheduling behaviour)}.',
+  whenToUse: 'pr-merge-flow Step 1d\'s default review shape. Args: {pr: <number>, base: <branch>, worktree: <path>, spec: <intent/acceptance text>, model?: "sonnet" (default; Fable — preferred for a large/complex PR: >300 lines, >6 files, or src/ parsing/guard/scheduling behaviour — is temporarily unavailable, use sonnet)}.',
   phases: [
     { title: 'Review', detail: 'one adversarial reviewer over the whole diff' },
   ],
@@ -20,7 +20,8 @@ const { pr, base = 'devel', worktree, spec = '(no spec provided — flag that as
 // A bare SHA base reviews a fix delta (pr-merge-flow 1d.4); a branch name gets origin/.
 const baseRef = /^[0-9a-f]{7,40}$/.test(base) ? base : `origin/${base}`
 if (!pr || !worktree) throw new Error('args must be {pr, worktree, base?, spec?, model?}')
-if (model !== 'sonnet' && model !== 'fable') throw new Error(`model must be "sonnet" or "fable" (never Opus, never a dated ID); got "${model}"`)
+// Fable (preferred for large/complex PRs) is temporarily unavailable — sonnet only, never Opus. Restore fable when its quota returns.
+if (model !== 'sonnet') throw new Error(`model must be "sonnet" (Fable temporarily unavailable; never Opus, never a dated ID); got "${model}"`)
 
 const FINDINGS = {
   type: 'object',
