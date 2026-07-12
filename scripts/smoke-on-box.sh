@@ -256,7 +256,7 @@ printf 'smoke-on-box: provisioning test venv (.venv)...\n' >&2
 # package failed runs that needed no packages at all (#1226). The download half is a
 # genuine no-op when cached.
 if pfb_smoke_tier_needs_browser "$_MARKER"; then
-    _PW_CACHE="${PLAYWRIGHT_BROWSERS_PATH:-${HOME}/.cache/ms-playwright}"
+    _PW_CACHE="$(pfb_playwright_cache_root)"
     if pfb_chromium_cached "$_PW_CACHE"; then
         printf 'smoke-on-box: headless Chromium already cached (%s) — skipping apt deps\n' \
             "$_PW_CACHE" >&2

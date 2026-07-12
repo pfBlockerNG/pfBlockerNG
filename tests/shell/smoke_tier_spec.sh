@@ -144,4 +144,28 @@ Describe 'smoke-tier.sh'
       The status should be failure
     End
   End
+
+  # smoke-on-box.sh runs under `set -eu`, where a bare ${HOME} aborts the whole script if
+  # HOME is unset (as it can be in a non-login execution context). Resolving the cache root
+  # here keeps that expansion out of the caller and lets the fallbacks be pinned.
+  Describe 'pfb_playwright_cache_root'
+    It 'honours PLAYWRIGHT_BROWSERS_PATH when set'
+      env_override() { PLAYWRIGHT_BROWSERS_PATH=/opt/pw pfb_playwright_cache_root; }
+      When call env_override
+      The output should equal '/opt/pw'
+    End
+
+    It 'falls back to the HOME cache when the override is unset'
+      home_default() { unset PLAYWRIGHT_BROWSERS_PATH; HOME=/home/tester pfb_playwright_cache_root; }
+      When call home_default
+      The output should equal '/home/tester/.cache/ms-playwright'
+    End
+
+    It 'falls back to root when HOME is unset too (never trips set -u)'
+      # Branch coverage: the box runs the harness as root; an unset HOME must not abort it.
+      no_home() { unset PLAYWRIGHT_BROWSERS_PATH; unset HOME; pfb_playwright_cache_root; }
+      When call no_home
+      The output should equal '/root/.cache/ms-playwright'
+    End
+  End
 End

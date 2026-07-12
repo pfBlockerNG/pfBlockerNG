@@ -41,6 +41,14 @@ pfb_smoke_tier_needs_browser() {
     esac
 }
 
+# pfb_playwright_cache_root — echo the playwright browser cache directory: the
+# PLAYWRIGHT_BROWSERS_PATH override, else `$HOME/.cache/ms-playwright` (playwright's own
+# default), else `/root/…` — the box runs the harness as root, and the caller runs under
+# `set -eu`, where a bare ${HOME} aborts the whole script when HOME is unset.
+pfb_playwright_cache_root() {
+    printf '%s\n' "${PLAYWRIGHT_BROWSERS_PATH:-${HOME:-/root}/.cache/ms-playwright}"
+}
+
 # pfb_chromium_cached <cache_root> — exit 0 iff a Chromium build is already in the
 # playwright cache (`<cache_root>/chromium-<rev>`); non-zero otherwise.
 #
