@@ -156,6 +156,14 @@ row ids needed. The server diff on this page is **pure deletion** of the old mec
   `geoip` case** (`ipv4`/`ipv6`/`dnsbl`-default; `category.php` renders no edit link for
   geoip rows), so the §2 gtype axis is `{ipv4, ipv6, dnsbl}` wherever it crosses
   `category_edit.php`.
+- **Amendment (issue #1201, 2026-07-12):** the GeoIP order-persist no-op above was resolved
+  by *disallowing* reorder on the GeoIP tab rather than persisting it — the maintainer's call
+  ("disallow ordering in the GeoIP tab at all"). `category.php` now drops the row-level
+  `class="sortable"` drag marker for `gtype == 'geoip'` (the reorder `<th>` and the
+  drag/anchor-click wiring were already GeoIP-gated), so GeoIP rows **are** now
+  `gtype`-excluded from the reorder DOM path. This supersedes the "not `gtype`-excluded" claim
+  here, the §2 matrix "no exclusions" note, and Semantics #7 "behave identically" — for
+  `category.php` only. GeoIP entries added on the IPv4/IPv6 tabs remain orderable there.
 
 ### 1.5 Existing test coverage this ADR must reconcile
 
@@ -297,13 +305,16 @@ design driven by core's own repeatable-row machinery (`renumber()` on every stag
    qualification:* identical at the UI/code-path level; on `category.php` the GeoIP
    order-persist sink is a pre-existing silent no-op (pinned, issue #1201 — §1.4) and stays
    byte-unchanged, and `category_edit.php` has no `geoip` gtype at all (§1.4).
+   *Superseded for `category.php` by issue #1201 (2026-07-12, §1.4 amendment):* GeoIP rows are
+   now `gtype`-excluded from the reorder path (no row `class="sortable"`), so "no carve-out /
+   behave identically" no longer holds there.
 
 ### Coverage matrix (Phase-1 re-derives from source; every row maps to a phase/test)
 
 | Axis | Values | Notes |
 | --- | --- | --- |
 | Page | `pfblockerng_category.php`, `pfblockerng_category_edit.php` | different persistence shapes (§1.3) |
-| `gtype` | `ipv4`, `ipv6`, `geoip`, `dnsbl` | §1.4 — no exclusions |
+| `gtype` | `ipv4`, `ipv6`, `geoip`, `dnsbl` | §1.4 — GeoIP later `gtype`-excluded from `category.php` reorder (issue #1201 amendment) |
 | `sort` (category_edit only) | `sort` (unchanged, Semantics #2), `no-sort` (new UI) | category.php has no such field |
 | Reorder input | drag, anchor-click (single row), anchor-click (multiple rows straddling the anchor), mixed drag+anchor in one session | all must persist the visual order |
 | `roworderdragging` | unset (both offered), set (anchor-click only) | the SET case includes a full reorder + **Save** on both pages (§1.8 serialize trap), not a render check alone |
