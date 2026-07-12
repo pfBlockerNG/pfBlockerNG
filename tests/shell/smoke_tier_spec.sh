@@ -157,6 +157,7 @@ Describe 'smoke-tier.sh'
       CACHE="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pwprov.XXXXXX")"
       LOG="${CACHE}/calls"
       : > "$LOG"
+      unset _pfb_cp_cache   # the leak probe below must measure THIS call, not a sibling's
     }
     prov_cleanup() { rm -rf "$CACHE"; }
     Before 'prov_setup'
@@ -212,6 +213,16 @@ Describe 'smoke-tier.sh'
       When call retry_dies
       The status should equal 42
       The stderr should include 'retrying without the OS-dependency half'
+    End
+    It 'leaves no temp var behind in the caller on ANY exit path'
+      # POSIX sh has no function scope: a leaked var would be visible to the whole harness.
+      # The success path is the easy one to forget -- it returns before any cleanup.
+      leak_probe() {
+        APT_BROKEN=0 pfb_chromium_provision "$CACHE" fake_pw >/dev/null 2>&1
+        printf 'leftover=[%s]\n' "${_pfb_cp_cache+set}"
+      }
+      When call leak_probe
+      The output should equal 'leftover=[]'
     End
   End
 

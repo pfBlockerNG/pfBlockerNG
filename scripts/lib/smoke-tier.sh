@@ -60,7 +60,10 @@ pfb_playwright_cache_root() {
 pfb_chromium_provision() {
     _pfb_cp_cache="$1"
     shift
-    "$@" install --with-deps chromium && return 0
+    if "$@" install --with-deps chromium; then
+        unset _pfb_cp_cache   # POSIX sh has no function scope; do not leak it on ANY exit
+        return 0
+    fi
 
     if ! pfb_chromium_cached "$_pfb_cp_cache"; then
         printf 'smoke-on-box: playwright install --with-deps failed and no Chromium is cached in %s — this box cannot be provisioned (apt/dpkg state? no cached build to fall back on)\n' \
