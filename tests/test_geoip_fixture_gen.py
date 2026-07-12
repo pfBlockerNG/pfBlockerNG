@@ -2,7 +2,7 @@
 
 The generator turns MaxMind-DB's own public test-corpus JSON into the smoke
 suite's GeoIP CSV fixtures. Every guard here pins a hard-fail the generator
-must never silently work around (F4's continent trap chief among them: a
+must never silently work around (the continent trap chief among them: a
 ``registered_country``/``represented_country`` sub-record carries no continent
 of its own, so deriving a Locations row from one would assign the wrong
 continent).
@@ -84,7 +84,7 @@ def test_ipv6_network_lands_in_the_v6_split() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# write_locations_csv / write_blocks_csv -- F3 schema: column order, en
+# write_locations_csv / write_blocks_csv -- MaxMind schema: column order, en
 # locale, is_in_european_union 0/1, is_anycast empty-when-false
 # --------------------------------------------------------------------------- #
 
@@ -120,7 +120,7 @@ def test_write_blocks_csv_is_anycast_empty_when_false(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# F4 -- a geoname referenced only as registered_country/represented_country
+# A geoname referenced only as registered_country/represented_country
 # (never its own record's `country`) has no continent of its own: raise,
 # never guess.
 # --------------------------------------------------------------------------- #
@@ -243,7 +243,7 @@ def test_non_ascii_country_name_is_utf8_and_unmangled(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Continent authority (F4's real corpus shape): the same geoname appears as a
+# Continent authority (the real corpus shape): the same geoname appears as a
 # `country` under one continent AND as a `registered_country` under another
 # record's DIFFERENT continent -- the country-role record wins, always.
 # --------------------------------------------------------------------------- #
@@ -252,7 +252,7 @@ def test_non_ascii_country_name_is_utf8_and_unmangled(tmp_path: Path) -> None:
 def test_continent_authority_country_role_wins_over_registered_country_role() -> None:
     # Given: US is the network's own `country` in one record (continent NA)
     # and merely the `registered_country` of an unrelated GB-country record
-    # whose OWN continent is EU (F4: US appears under {NA, AS, EU} in the real
+    # whose OWN continent is EU (US appears under {NA, AS, EU} in the real
     # corpus, entirely via registered_country/represented_country contexts).
     us_home = (
         "50.114.0.0/22",
@@ -274,3 +274,47 @@ def test_continent_authority_country_role_wins_over_registered_country_role() ->
     # either flip this to EU or raise a spurious "conflicting row" error.
     assert locations[6252001].continent_code == "NA"
     assert locations[2635167].continent_code == "EU"
+
+
+# --------------------------------------------------------------------------- #
+# traits -- the flag columns come FROM the record, never from a constant. The
+# pinned GeoLite2 corpus carries none (issue #1221: real GeoLite2 ships zero
+# proxy/satellite rows), so a hardcoded "0,0," would look right today and go
+# silently wrong the moment the pin moves to a corpus that does carry them.
+# --------------------------------------------------------------------------- #
+
+
+def test_traits_bearing_record_renders_its_flag_columns(tmp_path: Path) -> None:
+    records = [
+        (
+            "212.47.235.81/32",
+            {
+                "continent": _continent("EU", 6255148, "Europe"),
+                "country": _country(2635167, "GB", "United Kingdom"),
+                "traits": {"is_anonymous_proxy": True, "is_satellite_provider": True, "is_anycast": True},
+            },
+        ),
+    ]
+    locations = m.build_locations(records)
+    v4, _ = m.build_blocks(records, locations)
+    assert v4[0].is_anonymous_proxy and v4[0].is_satellite_provider and v4[0].is_anycast
+
+    path = tmp_path / "blocks.csv"
+    m.write_blocks_csv(path, v4)
+    rows = list(csv.reader(path.open(newline="", encoding="utf-8")))
+    assert rows[1] == ["212.47.235.81/32", "2635167", "", "", "1", "1", "1"]
+
+
+def test_traitless_record_renders_zero_zero_empty(tmp_path: Path) -> None:
+    records = [
+        (
+            "67.43.156.0/24",
+            {"continent": _continent("AS", 6255147, "Asia"), "country": _country(1252634, "BT", "Bhutan")},
+        ),
+    ]
+    locations = m.build_locations(records)
+    v4, _ = m.build_blocks(records, locations)
+    path = tmp_path / "blocks.csv"
+    m.write_blocks_csv(path, v4)
+    rows = list(csv.reader(path.open(newline="", encoding="utf-8")))
+    assert rows[1] == ["67.43.156.0/24", "1252634", "", "", "0", "0", ""]
