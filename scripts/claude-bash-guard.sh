@@ -77,6 +77,11 @@
 #     parse, so data and operator look alike. Pinned by spec D10. No flag of any
 #     wait-*.sh takes an `&`-bearing value today, so the trigger is theoretical --
 #     and erring toward blocking is the stated tradeoff.
+#   * A MULTI-LINE call that mentions a wait script and backgrounds anything at all
+#     -- even on a different line -- denies. Pinned by spec D7. Distinguishing those
+#     lines needs a separator the scan cannot trust (see norm_bg): every attempt to
+#     read a newline as one re-opened a silent bypass, and a rule that fails open is
+#     worse than no rule. Split the call in two, which is the right shape anyway.
 #   * A wait reached through INDIRECTION (a variable, a function, an alias) is
 #     invisible: the literal `wait-*.sh` token never sits in the backgrounded
 #     statement. Pinned by spec D11 -- the same class as the git-alias case below,
@@ -128,41 +133,22 @@ norm="$(printf '%s' "$payload" | tr -d '\\"' | tr -s '[:space:]' ' ')"
 # delimiter here is unambiguous.
 segs="$(printf '%s' "$norm" | tr ';&|()' '\n')"
 
-# _BS -- the parking sentinel for a literal backslash (step 1 below). A raw control
-# byte, because a JSON string payload cannot carry one verbatim: a printable token
-# could occur in a command's own text and be rewritten into a backslash on unparking.
-_BS="$(printf '\001')"
-
-# norm_bg -- the view Rule D matches on. Built from $payload, NOT from $norm, and
-# never split into $segs: `&` is one of the characters $segs splits on, so
-# backgrounding is invisible per-segment, and $norm has already dissolved what Rule D
-# must see. Each step is load-bearing:
-#   1. Park every ESCAPED backslash (`\\` in the payload = one literal backslash in the
-#      command). JSON spells a real newline `\n` and a literal backslash-n `\\n`, so
-#      step 2 would otherwise read the latter's tail as a newline and inject a fake `;`
-#      INSIDE an argument -- which, landing between the wait script and its `&`,
-#      silently un-denies a genuinely backgrounded wait.
-#   2. A NEWLINE ENDS A COMMAND, exactly like `;`. A multi-line command arrives as the
-#      JSON escape `\n`, which $norm's backslash-strip turns into a bare `n` -- welding
-#      two commands into one, so a FOREGROUND wait whose only sin is a later
-#      backgrounded line would deny. Both newline forms become `;` here.
-#   3. A backslash IMMEDIATELY BEFORE a newline is the opposite of a separator: it is a
-#      LINE CONTINUATION, joining the two lines into one command. It reaches here as a
-#      parked backslash followed by step 2's `;`, and becomes a space -- else splitting
-#      a long backgrounded wait across lines would hide its trailing `&` behind a `;`.
-#   4. Unpark the literal backslashes, then $norm's own steps: strip quotes/backslashes
-#      and collapse whitespace runs.
-#   5. Neutralize the two `&` LOOKALIKES -- a redirection (`2>&1`, `>&2`, `&>`) and the
-#      `&&` list operator -- so a surviving `&` is unambiguously a background.
-norm_bg="$(printf '%s' "$payload" \
-	| sed -e 's/\\\\/'"${_BS}"'/g' \
-	| sed -e 's/\\n/;/g' \
-	| tr '\n' ';' \
-	| sed -e 's/'"${_BS}"';/ /g' \
-	| sed -e 's/'"${_BS}"'/\\/g' \
-	| tr -d '\\"' \
-	| tr -s '[:space:]' ' ' \
-	| sed -e 's/[0-9]*>&[0-9-]*//g' -e 's/&>//g' -e 's/&&/ /g')"
+# norm_bg -- the view Rule D matches on: $norm (quotes/backslashes stripped, whitespace
+# collapsed) with the two `&` LOOKALIKES neutralized -- a redirection (`2>&1`, `>&2`,
+# `&>`) and the `&&` list operator -- so a surviving `&` is unambiguously a background.
+# Never $segs: `&` is one of the characters $segs splits on, so backgrounding is
+# invisible per-segment.
+#
+# A NEWLINE IS NOT TREATED AS A SEPARATOR HERE, deliberately, and that is the whole
+# design. Treating it as one (`\n` -> `;`) is what a text scan cannot do safely: it
+# cannot tell a newline that ends a command from one inside a quoted argument, from one
+# a backslash continues onto the next line, or from a literal backslash-n in an argument
+# -- and each of those, mistaken for a separator, drops a `;` between a wait script and
+# its trailing `&`, silently un-denying it. A rule that fails OPEN is worse than useless;
+# a rule that over-denies costs one restructured call. So a multi-line command that both
+# mentions a wait script and backgrounds ANYTHING denies (pinned by D7) -- consistent
+# with the guard's own "erring toward blocking" stance.
+norm_bg="$(printf '%s' "$norm" | sed -e 's/[0-9]*>&[0-9-]*//g' -e 's/&>//g' -e 's/&&/ /g')"
 
 # _contains <needle> -- true (rc 0) iff the CURRENT SEGMENT ($seg, set by
 # the per-segment loop below) contains <needle> as a literal substring.

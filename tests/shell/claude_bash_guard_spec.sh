@@ -559,16 +559,28 @@ Describe 'claude-bash-guard.sh'
       The output should equal ""
     End
 
-    # A newline separates commands exactly like a `;`, and a multi-line command
-    # reaches the hook as the JSON escape \n -- which normalization would otherwise
-    # dissolve (it strips backslashes), silently welding two commands into one.
-    It 'D7: MULTI-LINE, wait in the foreground, a LATER line backgrounded -> PASS'
+    # ACCEPTED FALSE POSITIVE. Treating a newline as a separator (so this would pass)
+    # is what a text scan cannot do safely: it cannot tell a newline that ends a
+    # command from one inside a quoted argument, and getting that wrong the other way
+    # SILENTLY UN-DENIES a backgrounded wait -- the rule failing open, which is far
+    # worse than denying a call the agent can simply split into two. Blocking is the
+    # deliberate direction here, as it is for B10.
+    It 'D7: MULTI-LINE, wait in the foreground, a LATER line backgrounded -> DENY'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"sh scripts/agent/wait-checks.sh --repo o/r --pr 1\necho done &"}}
       End
       When run script "$GUARD"
       The status should be success
-      The output should equal ""
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'D7b: a NEWLINE INSIDE A QUOTED ARGUMENT cannot hide the background & -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"sh scripts/agent/wait-checks.sh --pr 1 --msg \"a\nb\" &"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
     End
 
     It 'D8: MULTI-LINE, the WAIT ITSELF backgrounded on its own line -> DENY'
@@ -628,10 +640,8 @@ Describe 'claude-bash-guard.sh'
       The output should include '"permissionDecision":"deny"'
     End
 
-    # The backslash-parking sentinel must be a byte a JSON string payload cannot
-    # carry verbatim, or a command containing the sentinel's text would rewrite the
-    # guard's own view of that command.
-    It 'D13: a command containing the parking sentinel text still denies -> DENY'
+    # An argument value carrying odd text must not perturb the scan.
+    It 'D13: an odd-looking argument value does not perturb the verdict -> DENY'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --exclude @PFB_BS@ > /tmp/x 2>&1 &"}}
       End
