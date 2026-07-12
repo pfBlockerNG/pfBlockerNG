@@ -16095,9 +16095,23 @@ function sync_package_pfblockerng($cron='') {
 			}
 		}
 
-		// Add 'Reputation - ccwhite Action' if found
-		if ($pfb['ccwhite'] == 'match' && file_exists("{$pfb['matchdir']}/matchdedup_v4.txt")) {
-			$pfb['existing']['match'][] = 'matchdedup_v4';
+		// Add 'Reputation - ccwhite Action' if found. Both families: only the v4 dedup file
+		// has a writer today, but a name for an absent file is a no-op, so the keep-list is
+		// not the place to hardcode that.
+		foreach (array('matchdedup_v4', 'matchdedup_v6') as $pfb_dedup) {
+			if ($pfb['ccwhite'] == 'match' && file_exists("{$pfb['matchdir']}/{$pfb_dedup}.txt")) {
+				$pfb['existing']['match'][] = $pfb_dedup;
+			}
+		}
+
+		// issue #1232: recompute's per-alias reputation artifacts ('match<header>_<fam>.txt')
+		// sit in matchdir but are not Match-type lists -- keep them while their Deny alias
+		// exists, else this sweep reaps them before the GeoIP-outage branch can preserve them.
+		// An artifact whose alias is gone stays un-associated here, so it is still reaped.
+		if (!empty($pfb['existing']['deny'])) {
+			foreach ($pfb['existing']['deny'] as $pfb_deny_name) {
+				$pfb['existing']['match'][] = "match{$pfb_deny_name}";
+			}
 		}
 
 		// Add enabled 'DNSBL Blacklist categories'
