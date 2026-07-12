@@ -112,9 +112,41 @@ final class PfbDnsblPySwapTest extends TestCase
 	}
 
 	/**
-	 * issue #1241: a FAILED rename() must never have already destroyed py_zone. Force a
-	 * real, unmocked rename() failure by occupying the destination py_data path with a
-	 * directory -- rename(file, existing dir) fails EISDIR/ENOTDIR even as root.
+	 * Run the swap and record every diagnostic it lets ESCAPE unsuppressed. PHP calls a
+	 * custom handler even for a '@'-suppressed diagnostic, so suppression is read off
+	 * error_reporting()'s mask -- which only discriminates under E_ALL, because PHPUnit's
+	 * own runtime mask already excludes E_WARNING.
+	 *
+	 * @return list<string> the escaped diagnostics, one "<errno>: <message>" per entry
+	 */
+	private function swapCapturingEscapedDiagnostics(
+		bool $dnsblTld,
+		string $raw,
+		string $pyData,
+		string $pyZone
+	): array {
+		$escaped  = [];
+		$prevMask = error_reporting(E_ALL);
+		set_error_handler(static function (int $errno, string $errstr) use (&$escaped): bool {
+			if ((error_reporting() & $errno) !== 0) {
+				$escaped[] = "{$errno}: {$errstr}";
+			}
+			return TRUE;
+		});
+		try {
+			pfb_dnsbl_py_swap($dnsblTld, $raw, $pyData, $pyZone);
+		} finally {
+			restore_error_handler();
+			error_reporting($prevMask);
+		}
+		return $escaped;
+	}
+
+	/**
+	 * issue #1241: a FAILED rename() must never have already destroyed py_zone, and must
+	 * not leak a raw PHP warning to the caller. Force a real, unmocked rename() failure by
+	 * occupying the destination py_data path with a directory -- rename(file, existing dir)
+	 * fails EISDIR/ENOTDIR even as root.
 	 */
 	public function testRenameFailurePreservesPyZoneAndRawWhenPyDataOccupiedByDirectory(): void
 	{
@@ -125,7 +157,7 @@ final class PfbDnsblPySwapTest extends TestCase
 		file_put_contents($pyZone, 'LIVE-PY-ZONE-ROW4');
 		$this->assertTrue(mkdir($pyData, 0700), 'setup: occupy py_data with a directory');
 
-		pfb_dnsbl_py_swap(FALSE, $raw, $pyData, $pyZone);
+		$escaped = $this->swapCapturingEscapedDiagnostics(FALSE, $raw, $pyData, $pyZone);
 
 		$this->assertSame(
 			'LIVE-PY-ZONE-ROW4',
@@ -134,6 +166,11 @@ final class PfbDnsblPySwapTest extends TestCase
 		);
 		$this->assertFileExists($raw, 'a failed rename must not consume the .raw source');
 		$this->assertDirectoryExists($pyData, 'the occupying py_data directory must survive a failed rename');
+		$this->assertSame(
+			[],
+			$escaped,
+			'a failed rename must be handled + logged by the swap, never leak a PHP warning'
+		);
 	}
 
 	/** issue #1241: same failed-rename path with py_zone absent -- must stay absent, not fabricated. */
@@ -146,9 +183,14 @@ final class PfbDnsblPySwapTest extends TestCase
 		$this->assertTrue(mkdir($pyData, 0700), 'setup: occupy py_data with a directory');
 		$this->assertFileDoesNotExist($pyZone, 'before-state: no py_zone');
 
-		pfb_dnsbl_py_swap(FALSE, $raw, $pyData, $pyZone);
+		$escaped = $this->swapCapturingEscapedDiagnostics(FALSE, $raw, $pyData, $pyZone);
 
 		$this->assertFileDoesNotExist($pyZone, 'py_zone must not be fabricated by a failed swap');
 		$this->assertFileExists($raw, 'a failed rename must not consume the .raw source');
+		$this->assertSame(
+			[],
+			$escaped,
+			'a failed rename must be handled + logged by the swap, never leak a PHP warning'
+		);
 	}
 }
