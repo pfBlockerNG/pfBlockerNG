@@ -635,9 +635,9 @@ _GEOIP_CSV_FIXTURES = (
     "GeoLite2-Country-Blocks-IPv6.csv",
 )
 _GEOIP_MMDB_FIXTURE = "GeoLite2-Country.mmdb"
-# issue #1228: 67.43.156.0/24 -> BT in the pinned MaxMind-DB test corpus (F2/F5 of the
-# generating brief) -- the exact `mmdblookup ... country iso_code` shape pfblockerng.sh's
-# dMax classify loop runs (~:1148).
+# issue #1228: 67.43.156.0/24 -> BT in the pinned MaxMind-DB test corpus (see
+# tests/smoke/fixtures/README.md) -- the exact `mmdblookup ... country iso_code` shape
+# pfblockerng.sh's dMax classify loop runs (~:1148).
 _GEOIP_MMDB_PROBE_IP = "67.43.156.1"
 _GEOIP_MMDB_PROBE_CC = "BT"
 
