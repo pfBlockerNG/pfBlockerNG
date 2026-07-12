@@ -621,14 +621,17 @@ _R8_MATCH_STAGE = "198.51.100.0/24\n!198.51.100.10\n"
 GEOIP_OUTAGE_MARKER = "recompute [ v4 ]: GeoIP unavailable this pass -- keeping previous reputation match artifacts"
 
 
-def _stage_match_file(vm: SmokeVM, alias: str, contents: str, *, timeout: float = 30.0) -> str:
-    """Write ``contents`` verbatim to ``MATCHDIR/match<alias>.txt`` via ``tee`` (mirrors
-    ``write_local_feed``'s mkdir-then-tee). R8-outage's local one-off: a leading '!' line
-    (the real match-file format) sent through ``php_eval``/``file_put_contents`` gets
-    mangled -- pfSsh.php's REPL treats a '!'-led line as a raw shell-escape -- so this
-    writes bytes over SSH stdin instead, with no PHP-source line reinterpretation.
+def _stage_match_file(vm: SmokeVM, rec_alias: str, contents: str, *, timeout: float = 30.0) -> str:
+    """Write ``contents`` verbatim to ``MATCHDIR/match<rec_alias>.txt`` via ``tee`` (mirrors
+    ``write_local_feed``'s mkdir-then-tee). ``rec_alias`` is the SNAPSHOT-derived name
+    pfblockerng.sh reconciles on (``rec_alias="${rec_snap##*/}"; rec_alias="${rec_alias%%.*}"``,
+    pfblockerng.sh:896) -- i.e. ``<header>_<family>``, NOT the pf table's ``pfB_*`` name.
+
+    R8-outage's local one-off: a leading '!' line (the real match-file format) sent through
+    ``php_eval``/``file_put_contents`` gets mangled -- pfSsh.php's REPL treats a '!'-led line
+    as a raw shell-escape -- so this writes bytes over SSH stdin instead.
     """
-    path = f"{MATCHDIR}/match{alias}.txt"
+    path = f"{MATCHDIR}/match{rec_alias}.txt"
     mk = subprocess.run(
         vm.ssh_argv("/bin/mkdir", "-p", MATCHDIR), capture_output=True, text=True, timeout=timeout, check=False
     )
@@ -680,7 +683,10 @@ def test_recompute_geoip_outage_preserves_match_artifacts(deployed_vm: SmokeVM) 
     spec = h.IpCase(aliasname="r8", feed_url=feed, header="r8", action="Deny_Both")
     h.inject_ip_lists(deployed_vm, [spec])
 
-    match_path = _stage_match_file(deployed_vm, spec.alias, _R8_MATCH_STAGE)
+    # The reconcile keys on the memberlist's snapshot-derived name (<header>_<family>),
+    # never the pf table's pfB_* name -- staging under the latter could never fail.
+    rec_alias = f"{spec.header}_{spec.family}"
+    match_path = _stage_match_file(deployed_vm, rec_alias, _R8_MATCH_STAGE)
 
     # BEFORE: the staged artifact round-tripped exactly, and the outage line hasn't fired yet.
     before_content = _raw(deployed_vm, match_path)
