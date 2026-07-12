@@ -17,6 +17,8 @@ use PHPUnit\Framework\TestCase;
  *     * dnsbl_tld=TRUE  -> no-op: .raw, py_data, py_zone all untouched
  *     * dnsbl_tld=FALSE, py_data/py_zone pre-existing -> both dropped, .raw renamed in
  *     * dnsbl_tld=FALSE, py_data/py_zone absent -> unlink_if_exists no-ops, rename still lands
+ *     * issue #1241: dnsbl_tld=FALSE, rename() FAILS (py_data occupied by a directory,
+ *       EISDIR) -> py_zone/.raw must survive untouched, whether py_zone pre-exists or not
  */
 #[CoversFunction('pfb_dnsbl_py_swap')]
 final class PfbDnsblPySwapTest extends TestCase
@@ -35,7 +37,8 @@ final class PfbDnsblPySwapTest extends TestCase
 	{
 		if ($this->workdir !== '' && is_dir($this->workdir)) {
 			foreach ((array) glob("{$this->workdir}/*") as $f) {
-				@unlink((string) $f);
+				$f = (string) $f;
+				is_dir($f) ? @rmdir($f) : @unlink($f);
 			}
 			rmdir($this->workdir);
 		}
@@ -106,5 +109,46 @@ final class PfbDnsblPySwapTest extends TestCase
 			file_get_contents($pyData),
 			'rename must still succeed when py_data/py_zone never existed'
 		);
+	}
+
+	/**
+	 * issue #1241: a FAILED rename() must never have already destroyed py_zone. Force a
+	 * real, unmocked rename() failure by occupying the destination py_data path with a
+	 * directory -- rename(file, existing dir) fails EISDIR/ENOTDIR even as root.
+	 */
+	public function testRenameFailurePreservesPyZoneAndRawWhenPyDataOccupiedByDirectory(): void
+	{
+		$raw    = "{$this->workdir}/dnsbl_file.raw";
+		$pyData = "{$this->workdir}/py_data";
+		$pyZone = "{$this->workdir}/py_zone";
+		file_put_contents($raw, 'FRESH-RAW-CONTENT-ROW4');
+		file_put_contents($pyZone, 'LIVE-PY-ZONE-ROW4');
+		$this->assertTrue(mkdir($pyData, 0700), 'setup: occupy py_data with a directory');
+
+		pfb_dnsbl_py_swap(FALSE, $raw, $pyData, $pyZone);
+
+		$this->assertSame(
+			'LIVE-PY-ZONE-ROW4',
+			file_get_contents($pyZone),
+			'a failed rename must leave py_zone byte-identical, not pre-deleted'
+		);
+		$this->assertFileExists($raw, 'a failed rename must not consume the .raw source');
+		$this->assertDirectoryExists($pyData, 'the occupying py_data directory must survive a failed rename');
+	}
+
+	/** issue #1241: same failed-rename path with py_zone absent -- must stay absent, not fabricated. */
+	public function testRenameFailureWithAbsentPyZoneStaysAbsentAndRawSurvives(): void
+	{
+		$raw    = "{$this->workdir}/dnsbl_file.raw";
+		$pyData = "{$this->workdir}/py_data";
+		$pyZone = "{$this->workdir}/py_zone";
+		file_put_contents($raw, 'FRESH-RAW-CONTENT-ROW5');
+		$this->assertTrue(mkdir($pyData, 0700), 'setup: occupy py_data with a directory');
+		$this->assertFileDoesNotExist($pyZone, 'before-state: no py_zone');
+
+		pfb_dnsbl_py_swap(FALSE, $raw, $pyData, $pyZone);
+
+		$this->assertFileDoesNotExist($pyZone, 'py_zone must not be fabricated by a failed swap');
+		$this->assertFileExists($raw, 'a failed rename must not consume the .raw source');
 	}
 }
