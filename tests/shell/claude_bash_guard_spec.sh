@@ -550,13 +550,36 @@ Describe 'claude-bash-guard.sh'
       The output should equal ""
     End
 
-    It 'D6: a & belonging to a LATER command (after a ;) does not background the wait -> PASS'
+    # ACCEPTED FALSE POSITIVE, same family as D7. The `;` that would prove this & belongs
+    # to a LATER command is indistinguishable from a `;` sitting inside a quoted argument
+    # (the guard strips quote markers without knowing what they protected), and trusting
+    # it let a genuinely backgrounded wait through -- see D14. Any & after the wait script
+    # therefore denies.
+    It 'D6: a & belonging to a LATER command (after a ;) -> DENY'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"sh scripts/agent/wait-checks.sh --repo o/r --pr 1 ; sleep 5 &"}}
       End
       When run script "$GUARD"
       The status should be success
-      The output should equal ""
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'D14: a ; inside a QUOTED ARGUMENT cannot end the wait statement early -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"sh scripts/agent/wait-checks.sh --exclude 'coderabbit;snyk' &"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'D15: a quoted > must not fuse with the background & into a fake redirection -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"sh scripts/agent/wait-checks.sh --threshold \">\"&"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
     End
 
     # ACCEPTED FALSE POSITIVE. Treating a newline as a separator (so this would pass)
@@ -619,13 +642,17 @@ Describe 'claude-bash-guard.sh'
       The output should include '"permissionDecision":"deny"'
     End
 
-    It 'D11: ACCEPTED LIMITATION -- a wait reached through a variable evades the rule'
+    # Indirection through a variable no longer evades: the script's PATH still appears in
+    # the payload, and any & after it denies. Only an invocation that never names the
+    # script at all (a path assembled from pieces) escapes -- the guard's documented
+    # ACCEPTED LIMITATION for deliberate circumvention.
+    It 'D11: a wait reached through a variable still denies -> DENY'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"W=scripts/agent/wait-checks.sh; sh \"$W\" --repo o/r --pr 1 > /tmp/ci.txt 2>&1 &"}}
       End
       When run script "$GUARD"
       The status should be success
-      The output should equal ""
+      The output should include '"permissionDecision":"deny"'
     End
 
     # A backslash before a newline is a LINE CONTINUATION: it JOINS the two lines
