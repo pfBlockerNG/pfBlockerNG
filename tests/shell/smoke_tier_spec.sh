@@ -148,6 +148,73 @@ Describe 'smoke-tier.sh'
   # smoke-on-box.sh runs under `set -eu`, where a bare ${HOME} aborts the whole script if
   # HOME is unset (as it can be in a non-login execution context). Resolving the cache root
   # here keeps that expansion out of the caller and lets the fallbacks be pinned.
+  # The provisioning order is the load-bearing bit (#1226): --with-deps runs FIRST so a
+  # healthy box keeps its OS libs current, and the cache is consulted ONLY to judge whether
+  # an apt failure is survivable. Each branch is stubbed here -- the real playwright would
+  # need a box.
+  Describe 'pfb_chromium_provision'
+    prov_setup() {
+      CACHE="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pwprov.XXXXXX")"
+      LOG="${CACHE}/calls"
+      : > "$LOG"
+    }
+    prov_cleanup() { rm -rf "$CACHE"; }
+    Before 'prov_setup'
+    After 'prov_cleanup'
+
+    # Stand-in for the venv python: records its argv, and fails --with-deps iff APT_BROKEN.
+    fake_pw() {
+      printf '%s\n' "$*" >> "$LOG"
+      case "$*" in
+          *--with-deps*) [ "${APT_BROKEN:-0}" = 1 ] && return 100 ;;
+          *)             [ "${RETRY_BROKEN:-0}" = 1 ] && return 42 ;;
+      esac
+      return 0
+    }
+
+    It 'installs with OS deps on a healthy box, and does not retry'
+      healthy() { APT_BROKEN=0 pfb_chromium_provision "$CACHE" fake_pw; }
+      When call healthy
+      The status should be success
+      The contents of file "$LOG" should include 'install --with-deps chromium'
+      The lines of contents of file "$LOG" should equal 1
+    End
+
+    It 'survives a broken apt when a build is cached: retries WITHOUT the OS deps'
+      # Scenario: the #1226 incident -- unrelated dpkg breakage, browser already there.
+      recovers() {
+        mkdir -p "${CACHE}/chromium-1223"
+        APT_BROKEN=1 pfb_chromium_provision "$CACHE" fake_pw
+      }
+      When call recovers
+      The status should be success
+      The stderr should include 'retrying without the OS-dependency half'
+      The contents of file "$LOG" should include 'install chromium'
+      The lines of contents of file "$LOG" should equal 2
+    End
+
+    It 'FAILS LOUDLY when apt breaks and no build is cached (box unprovisionable)'
+      # Branch coverage: without a cached browser the box genuinely cannot run the tier --
+      # never a silent skip, which would surface later as a confusing Tier-B failure.
+      unprovisionable() { APT_BROKEN=1 pfb_chromium_provision "$CACHE" fake_pw; }
+      When call unprovisionable
+      The status should be failure
+      The stderr should include 'cannot be provisioned'
+      The lines of contents of file "$LOG" should equal 1
+    End
+
+    It 'propagates the retry failure rather than swallowing it'
+      # The fallback must not turn a genuinely failed install into a green provision.
+      retry_dies() {
+        mkdir -p "${CACHE}/chromium-1223"
+        APT_BROKEN=1 RETRY_BROKEN=1 pfb_chromium_provision "$CACHE" fake_pw
+      }
+      When call retry_dies
+      The status should equal 42
+      The stderr should include 'retrying without the OS-dependency half'
+    End
+  End
+
   Describe 'pfb_playwright_cache_root'
     It 'honours PLAYWRIGHT_BROWSERS_PATH when set'
       env_override() { PLAYWRIGHT_BROWSERS_PATH=/opt/pw pfb_playwright_cache_root; }
