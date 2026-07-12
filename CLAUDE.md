@@ -241,7 +241,7 @@ change the table and the runner together.
 | ------- | --------------------- |
 | Python (`*.py`) | `python3 -m pytest` · `ruff check .` · `ruff format --check .` · `mypy tests/` |
 | PHP (`*.php`/`*.inc`) | `php -l` per touched file · `vendor/bin/phpunit` · `composer phpstan` · `composer phpcs -- --standard=phpcs.xml.dist src/` |
-| Shell (`*.sh`) | `sh -n` · `shellcheck` (only `src/`, `scripts/`, `.claude/hooks/` — the scope `.githooks/pre-commit` + CI use; `tests/` shellspec specs trip SC2034 false-positives) · `shellspec --shell "$(command -v dash)"` (where specs exist; dash = strict-POSIX ash sibling of FreeBSD sh — bash-as-sh masks appliance divergences. Dash missing ⇒ the substitution goes empty and shellspec silently auto-detects — INSTALL dash (`brew`/`apt install dash`) instead of dropping the pin; plain `shellspec` is a last resort and says so in the handoff) |
+| Shell (`*.sh`) | `sh -n` · `shellcheck` (only `src/`, `scripts/`, `.claude/hooks/` — the scope `.githooks/pre-commit` + CI use; `tests/` shellspec specs trip SC2034 false-positives) · `shellspec --shell "$(command -v dash)"` (where specs exist; dash = strict-POSIX ash sibling of FreeBSD sh — bash-as-sh masks appliance divergences. Dash missing ⇒ this hand-run substitution goes empty and shellspec silently auto-detects, while the runner's own `$(command -v dash \|\| command -v sh)` falls back to `sh` — either way, INSTALL dash (`brew`/`apt install dash`) instead of dropping the pin; plain `shellspec` is a last resort and says so in the handoff) |
 | Markdown (`*.md`) | `npx markdownlint-cli2` |
 | `www/` | Tier-A `ui_render` coverage exists for the change (test mandate #4) |
 
