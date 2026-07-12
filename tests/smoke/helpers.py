@@ -58,6 +58,7 @@ from typing import Any, NamedTuple
 from ..timing import step_min_seconds, timed, timed_step  # issue #605 — per-step timing (PFB_TIMING)
 from .conftest import (
     DEFAULT_BOOT_TIMEOUT,
+    FIXTURES_DIR,
     GUEST_TO_HOST_ALIAS,
     SMOKE_DIR,
     STUB_DNS_A,
@@ -83,7 +84,12 @@ PHP_BIN = "/usr/local/bin/php"
 # loaded + locked), so config_set_path/write_config persist a valid config.xml.
 PFSSH_BIN = "/usr/local/sbin/pfSsh.php"
 PFB_CLI = "/usr/local/www/pfblockerng/pfblockerng.php"
+PFB_WWW_DIR = "/usr/local/www/pfblockerng"
 PFCTL = "/sbin/pfctl"
+
+# issue #1219: where `ugc` (pfblockerng_uc_countries() + pfblockerng_get_countries())
+# reads its MaxMind-schema CSVs from — a purely local conversion, no credential gate.
+GEOIP_SHARE_DIR = "/usr/local/share/GeoIP"
 
 # pfSense config API roots (see pfblockerng.inc).
 CFG_GLOBAL = "installedpackages/pfblockerng/config/0"
@@ -605,6 +611,86 @@ def write_local_feed(vm: SmokeVM, name: str, contents: str, *, timeout: float = 
     if result.returncode != 0:
         raise RuntimeError(f"write_local_feed({path}) failed: rc={result.returncode} {result.stderr!r}")
     return path
+
+
+# The 9 continent/category pages `ugc` -> pfblockerng_get_countries() writes ($geoip_files,
+# pfblockerng.php:1470-1478) + the Reputation page pfb_build_reputation_tab() always writes
+# alongside them (issue #1219).
+GEOIP_CONTINENT_PAGES = (
+    "pfblockerng_Africa.php",
+    "pfblockerng_Antarctica.php",
+    "pfblockerng_Asia.php",
+    "pfblockerng_Europe.php",
+    "pfblockerng_North_America.php",
+    "pfblockerng_Oceania.php",
+    "pfblockerng_South_America.php",
+    "pfblockerng_Proxy_and_Satellite.php",
+    "pfblockerng_Top_Spammers.php",
+    "pfblockerng_reputation.php",
+)
+
+_GEOIP_LOCATIONS_FIXTURE = "geoip_locations.csv"
+_GEOIP_BLOCKS_V4_FIXTURE = "geoip_blocks_ipv4.csv"
+_GEOIP_BLOCKS_V6_FIXTURE = "geoip_blocks_ipv6.csv"
+
+
+def seed_geoip_dataset(vm: SmokeVM, *, timeout: float = 120.0) -> None:
+    """Seed synthetic MaxMind-schema GeoIP CSVs, then run the credential-free `ugc` verb.
+
+    issue #1219: `ugc` (pfblockerng_uc_countries() + pfblockerng_get_countries(),
+    pfblockerng.php:398-406) reads ONLY local files under GEOIP_SHARE_DIR -- no MaxMind
+    key/account is checked (that gate lives in the DOWNLOAD verbs `dc`/`dcc`/`bu` only) --
+    so seeding synthetic CSVs here makes the GeoIP continent + Reputation pages Tier-A
+    renderable with no network access and no real GeoLite2 data. Mirrors
+    :func:`write_local_feed`'s mkdir-then-tee round trip (mkdir first, as its own request,
+    so `tee` keeps stdin free).
+
+    FAILS LOUDLY on a nonzero `ugc` exit or a missing generated page -- never a silent skip
+    that would let a 404 reach the Tier-A sweep uninformed.
+    """
+    mk = subprocess.run(
+        vm.ssh_argv("mkdir", "-p", GEOIP_SHARE_DIR),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    if mk.returncode != 0:
+        raise RuntimeError(f"seed_geoip_dataset: mkdir {GEOIP_SHARE_DIR} failed: rc={mk.returncode} {mk.stderr!r}")
+
+    remote_to_fixture = {
+        "GeoLite2-Country-Locations-en.csv": _GEOIP_LOCATIONS_FIXTURE,
+        "GeoLite2-Country-Blocks-IPv4.csv": _GEOIP_BLOCKS_V4_FIXTURE,
+        "GeoLite2-Country-Blocks-IPv6.csv": _GEOIP_BLOCKS_V6_FIXTURE,
+    }
+    for remote_name, fixture_name in remote_to_fixture.items():
+        contents = (FIXTURES_DIR / fixture_name).read_text()
+        path = f"{GEOIP_SHARE_DIR}/{remote_name}"
+        result = subprocess.run(
+            vm.ssh_argv("tee", path),
+            input=contents,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"seed_geoip_dataset({path}) failed: rc={result.returncode} {result.stderr!r}")
+
+    result = vm.ssh(PHP_BIN, PFB_CLI, "ugc", timeout=timeout)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"seed_geoip_dataset: 'ugc' failed: rc={result.returncode} "
+            f"stdout={result.stdout[-2000:]!r} stderr={result.stderr!r}"
+        )
+
+    missing = [
+        page
+        for page in GEOIP_CONTINENT_PAGES
+        if vm.ssh("test", "-f", f"{PFB_WWW_DIR}/{page}", timeout=timeout).returncode != 0
+    ]
+    if missing:
+        raise RuntimeError(f"seed_geoip_dataset: 'ugc' ran (rc=0) but page(s) missing: {missing}")
 
 
 # --------------------------------------------------------------------------- #
