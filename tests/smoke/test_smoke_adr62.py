@@ -306,8 +306,9 @@ def test_adr62_bracketed_ipv6_dnsblip_vs_adblock_marker(deployed_vm: SmokeVM, cl
 # --------------------------------------------------------------------------- #
 # Row 5 — a representative CSV feed type (Bambenek Consulting 'bbc': 4-col CSV,
 # domain detected via csvline[3] containing 'osint.bambenekconsulting.com'). The
-# CSV switch (inc:16508-16609) is untouched by this ADR (§2 item 3, "Explicitly
-# kept / out of scope" — CSV column extraction stays in PHP unchanged).
+# CSV classify/extract switch is now pfb_dnsbl_csv_extract() (issue #1118),
+# unit-tested off-appliance by PfbDnsblCsvExtractTest; this row is its live
+# end-to-end wiring proof (the download loop has no other off-appliance driver).
 # --------------------------------------------------------------------------- #
 
 
@@ -317,9 +318,8 @@ def test_adr62_csv_bambenek_feed_blocks(deployed_vm: SmokeVM, client_vm: SmokeVM
 
     Given the CSV row's domain (col 0) RESOLVES via the stub before the feed loads.
     When a single-line 4-column CSV body (``domain,comment,date,url``, with col 3
-      containing ``osint.bambenekconsulting.com`` — the detection marker
-      ``pfblockerng.inc:16574-16580``) loads,
-    Then the domain is VIP-blocked — the CSV switch (untouched by this ADR)
+      containing ``osint.bambenekconsulting.com`` — the bbc detection marker) loads,
+    Then the domain is VIP-blocked — ``pfb_dnsbl_csv_extract()`` (issue #1118)
       extracts col 0 and the extracted domain flows through the SAME plain
       pipeline (host-prefix/scheme/IDN/pfb_filter) as any other domain line.
     """
