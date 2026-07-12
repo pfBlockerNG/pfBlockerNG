@@ -579,6 +579,42 @@ Describe 'claude-bash-guard.sh'
       The status should be success
       The output should include '"permissionDecision":"deny"'
     End
+
+    # A LITERAL backslash-n inside an argument is TWO backslashes in the JSON payload,
+    # where a real newline is one. Conflating them let a genuinely backgrounded wait
+    # slip through: the fake `;` the escape produced fell between the script and its &.
+    It 'D9: a literal backslash-n in an argument does NOT hide a real background & -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --exclude \"foo\\\\nbar\" > /tmp/x 2>&1 &"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    # ── Rule D's two ACCEPTED surfaces, pinned so they cannot drift silently ──
+    #
+    # Both follow from the guard being a raw text scan (see its header): it has no
+    # argv parse and cannot follow indirection. They are pinned as EXPECTED, exactly
+    # as B10 pins the --no-verify-in-a-commit-message false positive.
+
+    It 'D10: ACCEPTED FALSE POSITIVE -- an & inside an argument value denies a foreground wait'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --exclude \"coderabbit&snyk\""}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'D11: ACCEPTED LIMITATION -- a wait reached through a variable evades the rule'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"W=scripts/agent/wait-checks.sh; sh \"$W\" --repo o/r --pr 1 > /tmp/ci.txt 2>&1 &"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
   End
 
   # ── plain git, no rule in scope ─────────────────────────────────────────────
