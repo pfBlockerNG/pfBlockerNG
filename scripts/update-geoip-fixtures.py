@@ -193,12 +193,15 @@ def build_blocks(
     v4: list[BlockRow] = []
     v6: list[BlockRow] = []
     for network, rec in records:
-        country = rec.get("country")
-        gid = country["geoname_id"] if country else None
-        registered = rec.get("registered_country")
-        reg_gid = registered["geoname_id"] if registered else None
-        represented = rec.get("represented_country")
-        rep_gid = represented["geoname_id"] if represented else None
+        try:
+            country = rec.get("country")
+            gid = country["geoname_id"] if country else None
+            registered = rec.get("registered_country")
+            reg_gid = registered["geoname_id"] if registered else None
+            represented = rec.get("represented_country")
+            rep_gid = represented["geoname_id"] if represented else None
+        except KeyError as exc:
+            raise GeneratorError(f"{network}: country sub-record missing {exc}") from exc
 
         for role, g in (("country", gid), ("registered_country", reg_gid), ("represented_country", rep_gid)):
             _require_known(g, network, role, locations)

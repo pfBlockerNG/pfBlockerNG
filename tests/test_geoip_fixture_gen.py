@@ -382,3 +382,21 @@ def test_pinned_counts_pass_the_drift_check() -> None:
     row = m.BlockRow(network="1.2.3.0/24", geoname_id="1", registered_geoname_id="", represented_geoname_id="")
     loc = m.LocationRow(1, "EU", "Europe", "GB", "United Kingdom", False)
     m.check_counts(dict.fromkeys(range(m.LOCATIONS_COUNT), loc), [row] * m.BLOCKS_V4_COUNT, [row] * m.BLOCKS_V6_COUNT)
+
+
+def test_blocks_sub_record_missing_geoname_id_raises() -> None:
+    # A country/registered/represented sub-record with no geoname_id must fail loud as a
+    # GeneratorError naming the network -- never the raw KeyError a direct read would throw.
+    records = [
+        (
+            "81.2.69.0/24",
+            {
+                "continent": _continent("EU", 6255148, "Europe"),
+                "country": _country(2635167, "GB", "United Kingdom"),
+                "registered_country": {"iso_code": "US", "names": {"en": "United States"}},
+            },
+        ),
+    ]
+    locations = m.build_locations(records)
+    with pytest.raises(m.GeneratorError, match=r"81\.2\.69\.0/24: country sub-record missing"):
+        m.build_blocks(records, locations)
