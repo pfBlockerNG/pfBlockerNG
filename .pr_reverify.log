@@ -1,0 +1,418 @@
+local-smoke: leasing box (REF=adr/63-category-reorder-ux marker=ui_browser filter=reorder or category_edit or category)
+RUN_ID=local-100031-1783813432-964d522b30415190
+PFB_BOX=root@10.0.0.31
+PFB_RUN_DIR=/var/tmp/pfb-runs/local-100031-1783813432-964d522b30415190
+PFB_OUT_DIR=/var/tmp/pfb-runs/local-100031-1783813432-964d522b30415190/out
+PFB_DIAG_DIR=/var/tmp/pfb-runs/local-100031-1783813432-964d522b30415190/smoke-diag
+SMOKE_LANE=0
+select-box: leased root@10.0.0.31 (RUN_ID=local-100031-1783813432-964d522b30415190)
+smoke-on-box: fetching + checking out ref adr/63-category-reorder-ux
+smoke-on-box: updating FreeBSD-ports at /root/FreeBSD-ports (php=8.3 py311)
+From https://github.com/pfBlockerNG/FreeBSD-ports
+ * branch                pfblockerng/use-github -> FETCH_HEAD
+HEAD is now at 0a12ea264 net/pfSense-pkg-pfBlockerNG-{devel,nightly}: update to 4.0.0.alpha.21
+smoke-on-box: pfSense image up-to-date at /root/images/pfsense
+smoke-on-box: civm image up-to-date at /root/images/civm
+smoke-on-box: building .pkg (abi=FreeBSD:15:amd64)...
+From https://github.com/pfBlockerNG/FreeBSD-ports
+ * branch                pfblockerng/use-github -> FETCH_HEAD
+HEAD is now at 0a12ea264 net/pfSense-pkg-pfBlockerNG-{devel,nightly}: update to 4.0.0.alpha.21
+==> source: local working tree /root/pfBlockerNG/src
+==> wrote /var/tmp/pfb-runs/local-pfbbox1-1783813442-25da4afc85e86499/out/pfSense-pkg-pfBlockerNG-devel-4.0.0.alpha.21.pkg  (2013859 bytes, 71 files)
+smoke-on-box: pkg built: /var/tmp/pfb-runs/local-pfbbox1-1783813442-25da4afc85e86499/out/pfSense-pkg-pfBlockerNG-devel-4.0.0.alpha.21.pkg
+smoke-on-box: provisioning test venv (.venv)...
+smoke-on-box: installing headless Chromium (browser tier)...
+Installing dependencies...
+Get:1 file:/etc/apt/mirrors/debian.list Mirrorlist [30 B]
+Get:2 file:/etc/apt/mirrors/debian-security.list Mirrorlist [39 B]
+Get:7 https://cli.github.com/packages stable InRelease [3917 B]
+Hit:3 https://deb.debian.org/debian trixie InRelease
+Get:4 https://deb.debian.org/debian trixie-updates InRelease [47.3 kB]
+Get:5 https://deb.debian.org/debian trixie-backports InRelease [54.0 kB]
+Hit:6 https://deb.debian.org/debian-security trixie-security InRelease
+Get:8 https://deb.debian.org/debian trixie-backports/main Sources.diff/Index [63.3 kB]
+Get:9 https://deb.debian.org/debian trixie-backports/main amd64 Packages.diff/Index [63.3 kB]
+Get:10 https://deb.debian.org/debian trixie-backports/main Translation-en.diff/Index [63.3 kB]
+Get:11 https://deb.debian.org/debian trixie-backports/main Sources T-2026-07-11-2000.26-F-2026-07-11-2000.26.pdiff [33 B]
+Get:12 https://deb.debian.org/debian trixie-backports/main amd64 Packages T-2026-07-11-2000.26-F-2026-07-11-2000.26.pdiff [2973 B]
+Get:11 https://deb.debian.org/debian trixie-backports/main Sources T-2026-07-11-2000.26-F-2026-07-11-2000.26.pdiff [33 B]
+Get:12 https://deb.debian.org/debian trixie-backports/main amd64 Packages T-2026-07-11-2000.26-F-2026-07-11-2000.26.pdiff [2973 B]
+Get:13 https://deb.debian.org/debian trixie-backports/main Translation-en T-2026-07-11-2000.26-F-2026-07-11-2000.26.pdiff [768 B]
+Get:13 https://deb.debian.org/debian trixie-backports/main Translation-en T-2026-07-11-2000.26-F-2026-07-11-2000.26.pdiff [768 B]
+Fetched 299 kB in 1s (464 kB/s)
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+libasound2t64 is already the newest version (1.2.14-1).
+libatk-bridge2.0-0t64 is already the newest version (2.56.2-1+deb13u1).
+libatk1.0-0t64 is already the newest version (2.56.2-1+deb13u1).
+libatspi2.0-0t64 is already the newest version (2.56.2-1+deb13u1).
+libcairo2 is already the newest version (1.18.4-1+b1).
+libcups2t64 is already the newest version (2.4.10-3+deb13u2).
+libdbus-1-3 is already the newest version (1.16.2-2).
+libdrm2 is already the newest version (2.4.124-2).
+libgbm1 is already the newest version (25.0.7-2+deb13u1).
+libglib2.0-0t64 is already the newest version (2.84.4-3~deb13u3).
+libnspr4 is already the newest version (2:4.36-1).
+libnss3 is already the newest version (2:3.110-1+deb13u3).
+libpango-1.0-0 is already the newest version (1.56.3-1).
+libx11-6 is already the newest version (2:1.8.12-1).
+libxcb1 is already the newest version (1.17.0-2+b1).
+libxcomposite1 is already the newest version (1:0.4.6-1).
+libxdamage1 is already the newest version (1:1.1.6-1+b2).
+libxext6 is already the newest version (2:1.3.4-1+b3).
+libxfixes3 is already the newest version (1:6.0.0-2+b4).
+libxkbcommon0 is already the newest version (1.7.0-2).
+libxrandr2 is already the newest version (2:1.5.4-1+b3).
+xvfb is already the newest version (2:21.1.16-1.3+deb13u3).
+fonts-noto-color-emoji is already the newest version (2.051-0+deb13u1).
+fonts-unifont is already the newest version (1:15.1.01-1).
+libfontconfig1 is already the newest version (2.15.0-2.3).
+libfreetype6 is already the newest version (2.13.3+dfsg-1+deb13u1).
+xfonts-scalable is already the newest version (1:1.0.3-1.3).
+fonts-liberation is already the newest version (1:2.1.5-3).
+fonts-ipafont-gothic is already the newest version (00303-23).
+fonts-wqy-zenhei is already the newest version (0.9.45-8).
+fonts-tlwg-loma-otf is already the newest version (1:0.7.3-1).
+fonts-freefont-ttf is already the newest version (20211204+svn4273-2).
+0 upgraded, 0 newly installed, 0 to remove and 32 not upgraded.
+smoke-on-box: running smoke (marker=ui_browser paths=tests/smoke/ui timeout=300 filter=reorder or category_edit or category)
+============================= test session starts ==============================
+platform linux -- Python 3.13.5, pytest-9.1.1, pluggy-1.6.0 -- /root/pfBlockerNG/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /root/pfBlockerNG
+configfile: pyproject.toml
+plugins: timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: True
+collecting ... collected 407 items / 354 deselected / 53 selected
+
+tests/smoke/ui/test_browser_category.py::test_savemsg_banner_hidden_and_save_button_wired_on_load boot-to-ready: 41 seconds
+PFB_TIMING boot_and_probe 44.95s
+PFB_TIMING deploy 1.13s
+PFB_TIMING ensure_dnsbl_vip 0.46s
+PASSED [  1%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category.py::test_save_button_click_opens_confirm_and_cancel_is_a_noop PASSED [  3%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category.py::test_row_delete_helper_is_wired_and_confirm_gates_it PASSED [  5%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category.py::test_reorder_drag_only_then_save_persists_dom_order[dnsbl] PASSED [  7%]PFB_TIMING php_eval 1.67s
+PFB_TIMING apply_filter_sync 0.29s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category.py::test_reorder_drag_only_then_save_persists_dom_order[ipv4] PASSED [  9%]PFB_TIMING php_eval 1.67s
+PFB_TIMING apply_filter_sync 0.39s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category.py::test_reorder_drag_only_then_save_persists_dom_order[ipv6] PASSED [ 11%]PFB_TIMING php_eval 1.94s
+PFB_TIMING apply_filter_sync 0.39s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category.py::test_reorder_anchor_click_single_row_then_save_persists_dom_order[dnsbl] PASSED [ 13%]PFB_TIMING php_eval 2.18s
+PFB_TIMING apply_filter_sync 0.43s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category.py::test_reorder_anchor_click_single_row_then_save_persists_dom_order[ipv4] PASSED [ 15%]PFB_TIMING php_eval 2.02s
+PFB_TIMING apply_filter_sync 0.48s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category.py::test_reorder_anchor_click_single_row_then_save_persists_dom_order[ipv6] PASSED [ 16%]PFB_TIMING php_eval 1.94s
+PFB_TIMING apply_filter_sync 0.44s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category.py::test_reorder_anchor_click_straddle_then_save_persists_dom_order[dnsbl] PASSED [ 18%]PFB_TIMING php_eval 1.85s
+PFB_TIMING apply_filter_sync 0.46s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category.py::test_reorder_anchor_click_straddle_then_save_persists_dom_order[ipv4] PASSED [ 20%]PFB_TIMING php_eval 1.93s
+PFB_TIMING apply_filter_sync 0.38s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category.py::test_reorder_anchor_click_straddle_then_save_persists_dom_order[ipv6] PASSED [ 22%]PFB_TIMING php_eval 1.90s
+PFB_TIMING apply_filter_sync 0.37s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category.py::test_reorder_mixed_drag_then_anchor_click_then_save_persists_dom_order[dnsbl] PASSED [ 24%]PFB_TIMING php_eval 1.97s
+PFB_TIMING apply_filter_sync 0.41s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category.py::test_reorder_mixed_drag_then_anchor_click_then_save_persists_dom_order[ipv4] PASSED [ 26%]PFB_TIMING php_eval 1.86s
+PFB_TIMING apply_filter_sync 0.41s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category.py::test_reorder_mixed_drag_then_anchor_click_then_save_persists_dom_order[ipv6] PASSED [ 28%]PFB_TIMING php_eval 1.85s
+PFB_TIMING apply_filter_sync 0.47s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category.py::test_reorder_roworderdragging_set_disables_drag_anchor_click_still_persists PASSED [ 30%]PFB_TIMING php_eval 1.83s
+PFB_TIMING apply_filter_sync 0.43s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category.py::test_reorder_save_with_field_edit_only_and_zero_reorder_still_persists_field PASSED [ 32%]PFB_TIMING php_eval 1.86s
+PFB_TIMING apply_filter_sync 0.38s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category.py::test_reorder_geoip_page_injects_no_anchor_ui PASSED [ 33%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category_edit.py::test_enable_change_out_toggle_disables_then_enables_targets PASSED [ 35%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category_edit.py::test_autoports_in_toggle_disables_then_enables_field PASSED [ 37%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category_edit.py::test_autoports_out_toggle_disables_then_enables_field PASSED [ 39%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category_edit.py::test_chgstate_button_click_sets_enable_all_value PASSED [ 41%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category_edit.py::test_chgstate_click_populates_act_atype_when_present PASSED [ 43%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category_edit.py::test_addrow_clones_a_source_row_and_renumbers PASSED [ 45%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category_edit.py::test_alias_type_port_field_normalizes_network_alias_away PASSED [ 47%]PFB_TIMING php_eval 1.82s
+PFB_TIMING apply_filter_sync 0.39s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category_edit.py::test_reorder_drag_only_then_save_persists_dom_order[dnsbl] PASSED [ 49%]PFB_TIMING php_eval 2.09s
+PFB_TIMING apply_filter_sync 0.44s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category_edit.py::test_reorder_drag_only_then_save_persists_dom_order[ipv4] PASSED [ 50%]PFB_TIMING php_eval 2.16s
+PFB_TIMING apply_filter_sync 0.42s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category_edit.py::test_reorder_drag_only_then_save_persists_dom_order[ipv6] PASSED [ 52%]PFB_TIMING php_eval 1.92s
+PFB_TIMING apply_filter_sync 0.46s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category_edit.py::test_reorder_anchor_click_single_row_then_save_persists_dom_order[dnsbl] PASSED [ 54%]PFB_TIMING php_eval 1.83s
+PFB_TIMING apply_filter_sync 0.44s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category_edit.py::test_reorder_anchor_click_single_row_then_save_persists_dom_order[ipv4] PASSED [ 56%]PFB_TIMING php_eval 1.83s
+PFB_TIMING apply_filter_sync 0.39s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category_edit.py::test_reorder_anchor_click_single_row_then_save_persists_dom_order[ipv6] PASSED [ 58%]PFB_TIMING php_eval 2.04s
+PFB_TIMING apply_filter_sync 0.40s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category_edit.py::test_reorder_anchor_click_straddle_then_save_persists_dom_order[dnsbl] PASSED [ 60%]PFB_TIMING php_eval 1.92s
+PFB_TIMING apply_filter_sync 0.40s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category_edit.py::test_reorder_anchor_click_straddle_then_save_persists_dom_order[ipv4] PASSED [ 62%]PFB_TIMING php_eval 1.94s
+PFB_TIMING apply_filter_sync 0.42s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category_edit.py::test_reorder_anchor_click_straddle_then_save_persists_dom_order[ipv6] PASSED [ 64%]PFB_TIMING php_eval 1.86s
+PFB_TIMING apply_filter_sync 0.39s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category_edit.py::test_reorder_composition_add_delete_field_edit_then_save_persists_all PASSED [ 66%]PFB_TIMING php_eval 1.81s
+PFB_TIMING apply_filter_sync 0.47s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category_edit.py::test_sort_mode_renders_no_manual_reorder_ui_and_preserves_auto_sort PASSED [ 67%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_browser_category_edit.py::test_reorder_roworderdragging_set_disables_drag_anchor_click_still_persists PASSED [ 69%]PFB_TIMING php_eval 1.85s
+PFB_TIMING apply_filter_sync 0.49s
+PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_reorder_component.py::test_scenario_a_drag_reorders_rows_and_fires_on_after_move PASSED [ 71%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_reorder_component.py::test_scenario_b_anchor_click_before_moves_checked_row_ahead_of_anchor PASSED [ 73%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_reorder_component.py::test_scenario_b_shift_anchor_click_moves_checked_row_after_anchor PASSED [ 75%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_reorder_component.py::test_scenario_c_multiple_checked_rows_all_above_anchor PASSED [ 77%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_reorder_component.py::test_scenario_c_multiple_checked_rows_all_below_anchor PASSED [ 79%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_reorder_component.py::test_scenario_c_multiple_checked_rows_straddle_both_sides_of_anchor PASSED [ 81%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_reorder_component.py::test_scenario_d_move_then_add_row_then_delete_row_keeps_fields_positional PASSED [ 83%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_reorder_component.py::test_scenario_e_order_read_matches_real_sortable_serialize PASSED [ 84%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_reorder_component.py::test_scenario_e_order_read_works_when_sortable_never_initialised PASSED [ 86%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_reorder_component.py::test_scenario_e_order_read_empty_container_returns_empty_string PASSED [ 88%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_reorder_component.py::test_scenario_e_order_read_parser_hostile_inputs[no-separator-skipped] PASSED [ 90%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_reorder_component.py::test_scenario_e_order_read_parser_hostile_inputs[multi-separator-splits-on-last] PASSED [ 92%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_reorder_component.py::test_scenario_e_order_read_parser_hostile_inputs[metachar-token-url-encoded] PASSED [ 94%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_reorder_component.py::test_anchor_click_drag_disabled_never_initialises_sortable_but_still_works PASSED [ 96%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_reorder_component.py::test_anchor_click_zero_checked_is_a_noop_but_still_fires_callback PASSED [ 98%]PFB_TIMING unblock_egress 0.00s
+
+tests/smoke/ui/test_reorder_component.py::test_anchor_click_self_anchor_does_not_drop_or_duplicate_the_anchor_row PASSED [100%]PFB_TIMING unblock_egress 0.00s
+
+PFB_TIMING_SUMMARY smoke-diag/timing.log (108 steps)
+
+
+============================== slowest durations ===============================
+49.84s setup    tests/smoke/ui/test_browser_category.py::test_savemsg_banner_hidden_and_save_button_wired_on_load
+5.57s call     tests/smoke/ui/test_browser_category_edit.py::test_reorder_roworderdragging_set_disables_drag_anchor_click_still_persists
+5.49s call     tests/smoke/ui/test_browser_category_edit.py::test_reorder_composition_add_delete_field_edit_then_save_persists_all
+5.35s call     tests/smoke/ui/test_browser_category.py::test_reorder_roworderdragging_set_disables_drag_anchor_click_still_persists
+5.12s call     tests/smoke/ui/test_browser_category_edit.py::test_reorder_drag_only_then_save_persists_dom_order[dnsbl]
+5.08s call     tests/smoke/ui/test_browser_category_edit.py::test_reorder_drag_only_then_save_persists_dom_order[ipv6]
+5.07s call     tests/smoke/ui/test_browser_category.py::test_reorder_mixed_drag_then_anchor_click_then_save_persists_dom_order[ipv4]
+5.05s call     tests/smoke/ui/test_browser_category.py::test_reorder_save_with_field_edit_only_and_zero_reorder_still_persists_field
+5.05s call     tests/smoke/ui/test_browser_category_edit.py::test_reorder_drag_only_then_save_persists_dom_order[ipv4]
+5.00s call     tests/smoke/ui/test_browser_category_edit.py::test_alias_type_port_field_normalizes_network_alias_away
+4.84s call     tests/smoke/ui/test_browser_category.py::test_reorder_mixed_drag_then_anchor_click_then_save_persists_dom_order[dnsbl]
+4.83s call     tests/smoke/ui/test_browser_category_edit.py::test_reorder_anchor_click_single_row_then_save_persists_dom_order[ipv4]
+4.83s call     tests/smoke/ui/test_browser_category_edit.py::test_reorder_anchor_click_single_row_then_save_persists_dom_order[ipv6]
+4.82s call     tests/smoke/ui/test_browser_category_edit.py::test_reorder_anchor_click_straddle_then_save_persists_dom_order[dnsbl]
+4.67s call     tests/smoke/ui/test_browser_category_edit.py::test_reorder_anchor_click_single_row_then_save_persists_dom_order[dnsbl]
+4.65s call     tests/smoke/ui/test_browser_category.py::test_reorder_mixed_drag_then_anchor_click_then_save_persists_dom_order[ipv6]
+4.62s call     tests/smoke/ui/test_browser_category.py::test_reorder_drag_only_then_save_persists_dom_order[ipv6]
+4.59s call     tests/smoke/ui/test_browser_category.py::test_reorder_anchor_click_single_row_then_save_persists_dom_order[ipv4]
+4.55s call     tests/smoke/ui/test_browser_category.py::test_reorder_anchor_click_straddle_then_save_persists_dom_order[dnsbl]
+4.52s call     tests/smoke/ui/test_browser_category_edit.py::test_reorder_anchor_click_straddle_then_save_persists_dom_order[ipv6]
+4.50s call     tests/smoke/ui/test_browser_category_edit.py::test_reorder_anchor_click_straddle_then_save_persists_dom_order[ipv4]
+4.41s call     tests/smoke/ui/test_browser_category.py::test_reorder_anchor_click_straddle_then_save_persists_dom_order[ipv6]
+4.40s call     tests/smoke/ui/test_browser_category.py::test_reorder_anchor_click_single_row_then_save_persists_dom_order[dnsbl]
+4.39s call     tests/smoke/ui/test_browser_category.py::test_reorder_anchor_click_straddle_then_save_persists_dom_order[ipv4]
+4.39s call     tests/smoke/ui/test_browser_category.py::test_reorder_anchor_click_single_row_then_save_persists_dom_order[ipv6]
+3.78s teardown tests/smoke/ui/test_browser_category_edit.py::test_reorder_drag_only_then_save_persists_dom_order[ipv4]
+3.74s teardown tests/smoke/ui/test_browser_category_edit.py::test_reorder_drag_only_then_save_persists_dom_order[dnsbl]
+3.74s teardown tests/smoke/ui/test_browser_category.py::test_reorder_anchor_click_single_row_then_save_persists_dom_order[dnsbl]
+3.70s teardown tests/smoke/ui/test_browser_category.py::test_reorder_anchor_click_single_row_then_save_persists_dom_order[ipv6]
+3.69s teardown tests/smoke/ui/test_browser_category.py::test_reorder_anchor_click_single_row_then_save_persists_dom_order[ipv4]
+3.64s teardown tests/smoke/ui/test_browser_category_edit.py::test_reorder_anchor_click_single_row_then_save_persists_dom_order[ipv6]
+3.57s teardown tests/smoke/ui/test_browser_category.py::test_reorder_mixed_drag_then_anchor_click_then_save_persists_dom_order[dnsbl]
+3.57s teardown tests/smoke/ui/test_browser_category_edit.py::test_reorder_roworderdragging_set_disables_drag_anchor_click_still_persists
+3.54s teardown tests/smoke/ui/test_browser_category_edit.py::test_reorder_anchor_click_straddle_then_save_persists_dom_order[ipv4]
+3.53s teardown tests/smoke/ui/test_browser_category.py::test_reorder_mixed_drag_then_anchor_click_then_save_persists_dom_order[ipv6]
+3.51s teardown tests/smoke/ui/test_browser_category_edit.py::test_reorder_anchor_click_straddle_then_save_persists_dom_order[dnsbl]
+3.50s teardown tests/smoke/ui/test_browser_category_edit.py::test_reorder_anchor_click_single_row_then_save_persists_dom_order[dnsbl]
+3.49s teardown tests/smoke/ui/test_browser_category_edit.py::test_reorder_drag_only_then_save_persists_dom_order[ipv6]
+3.49s teardown tests/smoke/ui/test_browser_category_edit.py::test_reorder_anchor_click_straddle_then_save_persists_dom_order[ipv6]
+3.46s teardown tests/smoke/ui/test_browser_category.py::test_reorder_save_with_field_edit_only_and_zero_reorder_still_persists_field
+3.44s teardown tests/smoke/ui/test_browser_category.py::test_reorder_drag_only_then_save_persists_dom_order[ipv6]
+3.44s teardown tests/smoke/ui/test_browser_category.py::test_reorder_anchor_click_straddle_then_save_persists_dom_order[ipv4]
+3.41s teardown tests/smoke/ui/test_browser_category.py::test_reorder_mixed_drag_then_anchor_click_then_save_persists_dom_order[ipv4]
+3.40s teardown tests/smoke/ui/test_browser_category_edit.py::test_reorder_anchor_click_single_row_then_save_persists_dom_order[ipv4]
+3.40s call     tests/smoke/ui/test_browser_category.py::test_reorder_drag_only_then_save_persists_dom_order[ipv4]
+3.39s teardown tests/smoke/ui/test_browser_category.py::test_reorder_anchor_click_straddle_then_save_persists_dom_order[ipv6]
+3.38s teardown tests/smoke/ui/test_browser_category_edit.py::test_reorder_composition_add_delete_field_edit_then_save_persists_all
+3.37s teardown tests/smoke/ui/test_browser_category.py::test_reorder_roworderdragging_set_disables_drag_anchor_click_still_persists
+3.37s teardown tests/smoke/ui/test_browser_category_edit.py::test_alias_type_port_field_normalizes_network_alias_away
+3.34s call     tests/smoke/ui/test_browser_category.py::test_reorder_drag_only_then_save_persists_dom_order[dnsbl]
+3.22s teardown tests/smoke/ui/test_browser_category.py::test_reorder_anchor_click_straddle_then_save_persists_dom_order[dnsbl]
+3.10s teardown tests/smoke/ui/test_browser_category.py::test_reorder_drag_only_then_save_persists_dom_order[ipv4]
+2.81s teardown tests/smoke/ui/test_browser_category.py::test_reorder_drag_only_then_save_persists_dom_order[dnsbl]
+2.22s call     tests/smoke/ui/test_browser_category_edit.py::test_autoports_out_toggle_disables_then_enables_field
+2.20s call     tests/smoke/ui/test_browser_category_edit.py::test_chgstate_click_populates_act_atype_when_present
+2.01s call     tests/smoke/ui/test_browser_category_edit.py::test_sort_mode_renders_no_manual_reorder_ui_and_preserves_auto_sort
+1.96s call     tests/smoke/ui/test_browser_category_edit.py::test_chgstate_button_click_sets_enable_all_value
+1.93s call     tests/smoke/ui/test_browser_category_edit.py::test_autoports_in_toggle_disables_then_enables_field
+1.78s call     tests/smoke/ui/test_browser_category_edit.py::test_enable_change_out_toggle_disables_then_enables_targets
+1.72s call     tests/smoke/ui/test_browser_category_edit.py::test_addrow_clones_a_source_row_and_renumbers
+1.11s call     tests/smoke/ui/test_reorder_component.py::test_scenario_a_drag_reorders_rows_and_fires_on_after_move
+1.00s call     tests/smoke/ui/test_browser_category.py::test_reorder_geoip_page_injects_no_anchor_ui
+0.98s call     tests/smoke/ui/test_reorder_component.py::test_scenario_d_move_then_add_row_then_delete_row_keeps_fields_positional
+0.97s call     tests/smoke/ui/test_browser_category.py::test_savemsg_banner_hidden_and_save_button_wired_on_load
+0.91s call     tests/smoke/ui/test_browser_category.py::test_save_button_click_opens_confirm_and_cancel_is_a_noop
+0.89s teardown tests/smoke/ui/test_reorder_component.py::test_anchor_click_self_anchor_does_not_drop_or_duplicate_the_anchor_row
+0.88s call     tests/smoke/ui/test_browser_category.py::test_row_delete_helper_is_wired_and_confirm_gates_it
+0.85s call     tests/smoke/ui/test_reorder_component.py::test_scenario_c_multiple_checked_rows_straddle_both_sides_of_anchor
+0.83s call     tests/smoke/ui/test_reorder_component.py::test_anchor_click_self_anchor_does_not_drop_or_duplicate_the_anchor_row
+0.83s call     tests/smoke/ui/test_reorder_component.py::test_scenario_c_multiple_checked_rows_all_above_anchor
+0.83s call     tests/smoke/ui/test_reorder_component.py::test_scenario_b_anchor_click_before_moves_checked_row_ahead_of_anchor
+0.80s setup    tests/smoke/ui/test_reorder_component.py::test_scenario_a_drag_reorders_rows_and_fires_on_after_move
+0.79s call     tests/smoke/ui/test_reorder_component.py::test_scenario_b_shift_anchor_click_moves_checked_row_after_anchor
+0.77s call     tests/smoke/ui/test_reorder_component.py::test_anchor_click_drag_disabled_never_initialises_sortable_but_still_works
+0.76s call     tests/smoke/ui/test_reorder_component.py::test_scenario_c_multiple_checked_rows_all_below_anchor
+0.73s call     tests/smoke/ui/test_reorder_component.py::test_anchor_click_zero_checked_is_a_noop_but_still_fires_callback
+0.64s call     tests/smoke/ui/test_reorder_component.py::test_scenario_e_order_read_matches_real_sortable_serialize
+0.62s call     tests/smoke/ui/test_reorder_component.py::test_scenario_e_order_read_parser_hostile_inputs[metachar-token-url-encoded]
+0.61s call     tests/smoke/ui/test_reorder_component.py::test_scenario_e_order_read_works_when_sortable_never_initialised
+0.60s call     tests/smoke/ui/test_reorder_component.py::test_scenario_e_order_read_parser_hostile_inputs[no-separator-skipped]
+0.60s call     tests/smoke/ui/test_reorder_component.py::test_scenario_e_order_read_parser_hostile_inputs[multi-separator-splits-on-last]
+0.60s call     tests/smoke/ui/test_reorder_component.py::test_scenario_e_order_read_empty_container_returns_empty_string
+0.21s teardown tests/smoke/ui/test_browser_category.py::test_reorder_geoip_page_injects_no_anchor_ui
+0.20s teardown tests/smoke/ui/test_browser_category_edit.py::test_enable_change_out_toggle_disables_then_enables_targets
+0.20s teardown tests/smoke/ui/test_reorder_component.py::test_scenario_e_order_read_parser_hostile_inputs[multi-separator-splits-on-last]
+0.20s teardown tests/smoke/ui/test_reorder_component.py::test_scenario_b_anchor_click_before_moves_checked_row_ahead_of_anchor
+0.19s teardown tests/smoke/ui/test_reorder_component.py::test_scenario_a_drag_reorders_rows_and_fires_on_after_move
+0.19s teardown tests/smoke/ui/test_reorder_component.py::test_scenario_c_multiple_checked_rows_straddle_both_sides_of_anchor
+0.19s teardown tests/smoke/ui/test_reorder_component.py::test_scenario_d_move_then_add_row_then_delete_row_keeps_fields_positional
+0.19s teardown tests/smoke/ui/test_reorder_component.py::test_scenario_e_order_read_parser_hostile_inputs[metachar-token-url-encoded]
+0.19s teardown tests/smoke/ui/test_reorder_component.py::test_scenario_e_order_read_parser_hostile_inputs[no-separator-skipped]
+0.19s teardown tests/smoke/ui/test_reorder_component.py::test_anchor_click_drag_disabled_never_initialises_sortable_but_still_works
+0.19s teardown tests/smoke/ui/test_reorder_component.py::test_scenario_e_order_read_empty_container_returns_empty_string
+0.19s teardown tests/smoke/ui/test_reorder_component.py::test_scenario_e_order_read_matches_real_sortable_serialize
+0.19s teardown tests/smoke/ui/test_reorder_component.py::test_scenario_b_shift_anchor_click_moves_checked_row_after_anchor
+0.19s teardown tests/smoke/ui/test_reorder_component.py::test_scenario_c_multiple_checked_rows_all_above_anchor
+0.19s teardown tests/smoke/ui/test_reorder_component.py::test_scenario_e_order_read_works_when_sortable_never_initialised
+0.18s teardown tests/smoke/ui/test_reorder_component.py::test_anchor_click_zero_checked_is_a_noop_but_still_fires_callback
+0.16s teardown tests/smoke/ui/test_browser_category_edit.py::test_autoports_in_toggle_disables_then_enables_field
+0.14s teardown tests/smoke/ui/test_browser_category_edit.py::test_autoports_out_toggle_disables_then_enables_field
+0.14s teardown tests/smoke/ui/test_browser_category_edit.py::test_chgstate_button_click_sets_enable_all_value
+0.13s teardown tests/smoke/ui/test_browser_category_edit.py::test_addrow_clones_a_source_row_and_renumbers
+0.13s teardown tests/smoke/ui/test_reorder_component.py::test_scenario_c_multiple_checked_rows_all_below_anchor
+0.12s teardown tests/smoke/ui/test_browser_category_edit.py::test_chgstate_click_populates_act_atype_when_present
+0.11s teardown tests/smoke/ui/test_browser_category.py::test_save_button_click_opens_confirm_and_cancel_is_a_noop
+0.11s teardown tests/smoke/ui/test_browser_category.py::test_savemsg_banner_hidden_and_save_button_wired_on_load
+0.11s teardown tests/smoke/ui/test_browser_category_edit.py::test_sort_mode_renders_no_manual_reorder_ui_and_preserves_auto_sort
+0.10s teardown tests/smoke/ui/test_browser_category.py::test_row_delete_helper_is_wired_and_confirm_gates_it
+0.09s setup    tests/smoke/ui/test_browser_category_edit.py::test_autoports_in_toggle_disables_then_enables_field
+0.09s setup    tests/smoke/ui/test_reorder_component.py::test_scenario_e_order_read_parser_hostile_inputs[metachar-token-url-encoded]
+0.09s setup    tests/smoke/ui/test_browser_category_edit.py::test_addrow_clones_a_source_row_and_renumbers
+0.08s setup    tests/smoke/ui/test_browser_category_edit.py::test_enable_change_out_toggle_disables_then_enables_targets
+0.08s setup    tests/smoke/ui/test_reorder_component.py::test_scenario_b_anchor_click_before_moves_checked_row_ahead_of_anchor
+0.08s setup    tests/smoke/ui/test_browser_category.py::test_reorder_anchor_click_single_row_then_save_persists_dom_order[ipv4]
+0.08s setup    tests/smoke/ui/test_reorder_component.py::test_anchor_click_zero_checked_is_a_noop_but_still_fires_callback
+0.08s setup    tests/smoke/ui/test_browser_category_edit.py::test_reorder_anchor_click_single_row_then_save_persists_dom_order[ipv6]
+0.08s setup    tests/smoke/ui/test_reorder_component.py::test_scenario_e_order_read_parser_hostile_inputs[multi-separator-splits-on-last]
+0.08s setup    tests/smoke/ui/test_reorder_component.py::test_scenario_c_multiple_checked_rows_straddle_both_sides_of_anchor
+0.08s setup    tests/smoke/ui/test_reorder_component.py::test_scenario_e_order_read_works_when_sortable_never_initialised
+0.08s setup    tests/smoke/ui/test_reorder_component.py::test_scenario_e_order_read_matches_real_sortable_serialize
+0.08s setup    tests/smoke/ui/test_browser_category.py::test_reorder_save_with_field_edit_only_and_zero_reorder_still_persists_field
+0.08s setup    tests/smoke/ui/test_browser_category_edit.py::test_reorder_anchor_click_single_row_then_save_persists_dom_order[ipv4]
+0.08s setup    tests/smoke/ui/test_browser_category_edit.py::test_reorder_anchor_click_straddle_then_save_persists_dom_order[ipv6]
+0.08s setup    tests/smoke/ui/test_browser_category_edit.py::test_reorder_anchor_click_straddle_then_save_persists_dom_order[dnsbl]
+0.08s setup    tests/smoke/ui/test_reorder_component.py::test_scenario_d_move_then_add_row_then_delete_row_keeps_fields_positional
+0.08s setup    tests/smoke/ui/test_browser_category.py::test_reorder_anchor_click_straddle_then_save_persists_dom_order[dnsbl]
+0.08s setup    tests/smoke/ui/test_reorder_component.py::test_scenario_e_order_read_parser_hostile_inputs[no-separator-skipped]
+0.08s setup    tests/smoke/ui/test_browser_category.py::test_reorder_mixed_drag_then_anchor_click_then_save_persists_dom_order[ipv4]
+0.08s setup    tests/smoke/ui/test_reorder_component.py::test_scenario_b_shift_anchor_click_moves_checked_row_after_anchor
+0.08s setup    tests/smoke/ui/test_browser_category.py::test_reorder_mixed_drag_then_anchor_click_then_save_persists_dom_order[ipv6]
+0.08s setup    tests/smoke/ui/test_browser_category_edit.py::test_alias_type_port_field_normalizes_network_alias_away
+0.08s setup    tests/smoke/ui/test_browser_category_edit.py::test_chgstate_click_populates_act_atype_when_present
+0.08s setup    tests/smoke/ui/test_reorder_component.py::test_scenario_c_multiple_checked_rows_all_below_anchor
+0.08s setup    tests/smoke/ui/test_browser_category_edit.py::test_autoports_out_toggle_disables_then_enables_field
+0.08s setup    tests/smoke/ui/test_browser_category_edit.py::test_reorder_drag_only_then_save_persists_dom_order[dnsbl]
+0.08s setup    tests/smoke/ui/test_browser_category_edit.py::test_reorder_drag_only_then_save_persists_dom_order[ipv4]
+0.08s setup    tests/smoke/ui/test_browser_category_edit.py::test_reorder_drag_only_then_save_persists_dom_order[ipv6]
+0.08s setup    tests/smoke/ui/test_browser_category_edit.py::test_chgstate_button_click_sets_enable_all_value
+0.08s setup    tests/smoke/ui/test_browser_category.py::test_reorder_drag_only_then_save_persists_dom_order[ipv6]
+0.08s setup    tests/smoke/ui/test_reorder_component.py::test_scenario_e_order_read_empty_container_returns_empty_string
+0.08s setup    tests/smoke/ui/test_reorder_component.py::test_anchor_click_drag_disabled_never_initialises_sortable_but_still_works
+0.07s setup    tests/smoke/ui/test_reorder_component.py::test_anchor_click_self_anchor_does_not_drop_or_duplicate_the_anchor_row
+0.07s setup    tests/smoke/ui/test_reorder_component.py::test_scenario_c_multiple_checked_rows_all_above_anchor
+0.07s setup    tests/smoke/ui/test_browser_category_edit.py::test_reorder_anchor_click_single_row_then_save_persists_dom_order[dnsbl]
+0.07s setup    tests/smoke/ui/test_browser_category.py::test_reorder_anchor_click_straddle_then_save_persists_dom_order[ipv6]
+0.07s setup    tests/smoke/ui/test_browser_category_edit.py::test_reorder_roworderdragging_set_disables_drag_anchor_click_still_persists
+0.07s setup    tests/smoke/ui/test_browser_category.py::test_reorder_roworderdragging_set_disables_drag_anchor_click_still_persists
+0.06s setup    tests/smoke/ui/test_browser_category_edit.py::test_sort_mode_renders_no_manual_reorder_ui_and_preserves_auto_sort
+0.06s setup    tests/smoke/ui/test_browser_category.py::test_reorder_mixed_drag_then_anchor_click_then_save_persists_dom_order[dnsbl]
+0.06s setup    tests/smoke/ui/test_browser_category.py::test_reorder_geoip_page_injects_no_anchor_ui
+0.05s setup    tests/smoke/ui/test_browser_category_edit.py::test_reorder_anchor_click_straddle_then_save_persists_dom_order[ipv4]
+0.04s setup    tests/smoke/ui/test_browser_category.py::test_row_delete_helper_is_wired_and_confirm_gates_it
+0.03s setup    tests/smoke/ui/test_browser_category.py::test_save_button_click_opens_confirm_and_cancel_is_a_noop
+0.03s setup    tests/smoke/ui/test_browser_category.py::test_reorder_anchor_click_single_row_then_save_persists_dom_order[dnsbl]
+0.03s setup    tests/smoke/ui/test_browser_category.py::test_reorder_anchor_click_single_row_then_save_persists_dom_order[ipv6]
+0.03s setup    tests/smoke/ui/test_browser_category_edit.py::test_reorder_composition_add_delete_field_edit_then_save_persists_all
+0.03s setup    tests/smoke/ui/test_browser_category.py::test_reorder_anchor_click_straddle_then_save_persists_dom_order[ipv4]
+0.03s setup    tests/smoke/ui/test_browser_category.py::test_reorder_drag_only_then_save_persists_dom_order[ipv4]
+0.02s setup    tests/smoke/ui/test_browser_category.py::test_reorder_drag_only_then_save_persists_dom_order[dnsbl]
+================ 53 passed, 354 deselected in 302.29s (0:05:02) ================
+select-box: released local-100031-1783813432-964d522b30415190 on root@10.0.0.31
