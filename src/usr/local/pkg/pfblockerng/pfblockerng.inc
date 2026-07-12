@@ -7236,8 +7236,9 @@ function pfb_dnsbl_csv_extract(string $line, array $csvline, string $csv_type, b
 				return $result('skip');
 			}
 
-			// Parse Bambenek Consulting Feed
-			elseif (strpos($csvline[3], 'osint.'
+			// Parse Bambenek Consulting Feed (issue #1118: guard $csvline[3] -- the
+			// otx/et header lines that reach this sniff are only 3 columns).
+			elseif (strpos($csvline[3] ?? '', 'osint.'
 				. 'bambenekconsulting.com') !== FALSE) {
 				$csv_type	= 'bbc';
 				$line		= $csvline[0];

@@ -315,4 +315,23 @@ final class PfbDnsblCsvExtractTest extends TestCase
 		$this->assertFalse($r['run_once'], 'no header match must reset run_once to FALSE');
 		$this->assertStringContainsString($line, (string) file_get_contents($this->parseErr));
 	}
+
+	// issue #1118: the real otx/et feed headers are 3-column lines, so the default
+	// case's bbc sniff must not access an undefined $csvline[3] (a spurious PHP
+	// warning on every otx/et feed's header line). Any E_WARNING fails this test.
+	public function testShortFirstLineDoesNotWarnOnBbcSniffColumnThree(): void
+	{
+		$line = 'Indicator type,Indicator,Description';   // real otx header: 3 fields, no $csvline[3]
+		$csvline = str_getcsv($line, ',', '"', '"');
+		set_error_handler(static function (int $errno, string $errstr): bool {
+			throw new \RuntimeException("unexpected PHP warning: {$errstr}");
+		}, E_WARNING);
+		try {
+			$r = $this->extract($line, $csvline, '', TRUE);
+		} finally {
+			restore_error_handler();
+		}
+		$this->assertSame('skip', $r['action']);
+		$this->assertSame('otx', $r['csv_type'], 'the 3-column line must still classify as otx');
+	}
 }
