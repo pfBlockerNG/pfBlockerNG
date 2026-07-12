@@ -593,6 +593,49 @@ def test_update_page_cron_status_without_flag_never_misreports_missing_cron(
             raise AssertionError(f"failed to restore {flag}: rc={touch.returncode} {touch.stderr!r}")
 
 
+def test_geoip_pages_render_the_seeded_csv_rows(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
+    """Scenario: the GeoIP pages carry the SEEDED data, not just their chrome (issue #1219).
+
+    Given the UI session seeded the synthetic MaxMind-schema CSVs and ran `ugc`,
+    When each generated GeoIP page is fetched,
+    Then every needle below renders — and each one is produced by ONE specific fixture row, so
+         deleting that row (or gutting a whole CSV) fails this test.
+
+    These assertions cannot live in ``PAGE_TABLE``: the render oracle matches markers with
+    ``any()`` (``render_oracle.py``), and every GeoIP page already carries a data-INDEPENDENT
+    "Continent - X" title that pfblockerng.php emits from its hardcoded page list — so a data
+    marker added beside it would gate nothing (coverage theater). Same shape as
+    ``test_feeds_custom_panel_heading_renders``.
+
+    The needles, and the row each one pins:
+      * ``NG (1)``     — Nigeria's IPv4 row                     (geoip_blocks_ipv4.csv)
+      * ``NG (2)``     — Nigeria's TWO IPv6 rows: the only count that differs between the v4 and
+                         v6 selects, so it is what proves the IPv6 CSV reached the render at all
+      * ``NG_rep``     — the empty-``geoname_id`` row, which falls back to its registered country
+      * ``JP (2)``     — Japan's direct row + the exclave row (represented-country path)
+      * ``GB_rep``     — the represented side of that same exclave row
+      * ``A1 (1)`` / ``A2 (1)`` — the anonymous-proxy / satellite-provider rows (these only reach
+                         the A1/A2 aggregates when the row carries NO country, per pfblockerng.php)
+      * ``GB (1)``     — a $top_20 ISO reaching the Top Spammers tab
+    """
+    expected: dict[str, tuple[str, ...]] = {
+        "/pfblockerng/pfblockerng_Africa.php": ("NG (1)", "NG (2)", "NG_rep"),
+        "/pfblockerng/pfblockerng_Asia.php": ("JP (2)",),
+        "/pfblockerng/pfblockerng_Europe.php": ("GB_rep",),
+        "/pfblockerng/pfblockerng_Proxy_and_Satellite.php": ("A1 (1)", "A2 (1)"),
+        "/pfblockerng/pfblockerng_Top_Spammers.php": ("GB (1)",),
+    }
+    for path, needles in expected.items():
+        resp = webui.get(path)
+        assert resp.status_code == 200, f"{path}: status {resp.status_code} != 200"
+        body = resp.text
+        for needle in needles:
+            assert needle in body, (
+                f"{path} is missing the seeded-data needle {needle!r} — the GeoIP fixture row it "
+                f"pins never reached the render (page rendered, but on empty/incomplete data)"
+            )
+
+
 def test_general_page_keep_help_upgrade_warning(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
     """The General page's 'Keep Settings' help warns that keep=off wipes settings on a version upgrade (#697).
 
