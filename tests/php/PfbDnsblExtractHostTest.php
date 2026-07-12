@@ -19,7 +19,7 @@ final class PfbDnsblExtractHostTest extends TestCase
 
 	protected function setUp(): void
 	{
-		$this->parseErr = tempnam(sys_get_temp_dir(), 'pfbextracthost') . '.log';
+		$this->parseErr = tempnam(sys_get_temp_dir(), 'pfbextracthost');
 		@unlink($this->parseErr);
 	}
 

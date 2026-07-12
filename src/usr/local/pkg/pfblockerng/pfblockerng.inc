@@ -1943,7 +1943,7 @@ function pfb_dnsbl_concat_files(string $dest, array $sources): bool {
 // ';'-parse_url -> trailing-port strip -> IPv6-unbracket LAST. Returns FALSE when
 // pfb_dnsbl_scheme_line rejects (strict mode) -- caller must skip the line.
 function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, string $oline,
-	int $dnsbl_lineno, string &$parse_err, int &$scheme_skipped): string|false {
+	int $dnsbl_lineno, string $parse_err, int &$scheme_skipped): string|false {
 
 	// ADR-22: strip the '<scheme>://' prefix. Lenient (toggle ON, the migrated/legacy
 	// default) keeps today's permissive strip; strict (toggle OFF, the new-install default)
