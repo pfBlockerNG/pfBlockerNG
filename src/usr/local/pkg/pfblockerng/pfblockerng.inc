@@ -7146,6 +7146,140 @@ function pfb_dnsbl_collect_feed_ip(string $guard_value, string $candidate_value,
 }
 
 
+// issue #1118: the 6-type upstream-CSV classify/extract switch, pulled pure out of
+// the download/parse loop's `if ($csv_parser) { ... }` block (mirrors
+// pfb_dnsbl_extract_host()'s sentinel-action pattern). $csv_parser=FALSE is a pure
+// passthrough (nothing ran in the original block either). Every `continue 2` site
+// becomes action='skip' -- the caller's own `continue` replaces it, same as the
+// fail-path (pfb_parsed_fail() moved in here, mirroring pfb_dnsbl_scheme_line()'s
+// own logging inside pfb_dnsbl_extract_host()).
+function pfb_dnsbl_csv_extract(string $line, array $csvline, string $csv_type, bool $csv_parser,
+	bool $run_once, array $alienvault_types, bool $dnsbl_ip_enabled, bool $custom,
+	array &$domain_data_ip, array &$domain_data_ip6, string $header, string $oline,
+	int $dnsbl_lineno, string $parse_err): array {
+
+	$result = function (string $action, bool $ip_collected = FALSE) use (&$line, &$csv_type,
+		&$csv_parser, &$run_once): array {
+		return ['action' => $action, 'line' => $line, 'csv_type' => $csv_type,
+			'csv_parser' => $csv_parser, 'run_once' => $run_once, 'ip_collected' => $ip_collected];
+	};
+
+	if (!$csv_parser) {
+		return $result('use');
+	}
+
+	$csv_found = FALSE;
+	$csv_count = count($csvline);
+	$ip_collected = FALSE;
+
+	switch ($csv_type) {
+		case 'pt':
+			if ($csv_count == 8) {
+				if (strpos($csvline[1], ' ') !== FALSE) {
+					$line = str_replace(' ', '', $csvline[1]);
+				} else {
+					$line = $csvline[1];
+				}
+				$csv_found = TRUE;
+			}
+			break;
+		case 'bbc':
+			if ($csv_count == 4) {
+				$line		= $csvline[0];
+				$csv_found	= TRUE;
+			}
+			break;
+		case 'h3x':
+			if ($csv_count == 8) {
+				$line		= $csvline[2];
+				if (strpos($line, 'btc://') !== FALSE) {
+					return $result('skip');
+				}
+				$csv_found	= TRUE;
+			}
+			break;
+		case 'otx':
+			if ($csv_count == 3) {
+				if (isset($alienvault_types[$csvline[0]])) {
+					$line		= $csvline[1];
+					$csv_found	= TRUE;
+				} else {
+					return $result('skip');
+				}
+			}
+			break;
+		case 'pon':
+			if ($csv_count == 9) {
+				$line		= $csvline[2];
+				$csv_found	= TRUE;
+
+				// Collect additional IP csv entry (guard value is
+				// csvline[0], the collected value is line).
+				if ($dnsbl_ip_enabled &&
+				    pfb_dnsbl_collect_feed_ip($csvline[0], $line, $custom, $domain_data_ip, $domain_data_ip6)) {
+					$ip_collected = TRUE;
+				}
+			}
+			break;
+		case 'et':
+			if ($csv_count == 3) {
+				$line		= $csvline[0];
+				$csv_found	= TRUE;
+			}
+			break;
+		default:
+
+			// Parse Phishtank Feed
+			if (strpos($line, 'phish_id,url,'
+					. 'phish_detail_url') !== FALSE) {
+				$csv_type = 'pt';
+				return $result('skip');
+			}
+
+			// Parse Bambenek Consulting Feed
+			elseif (strpos($csvline[3], 'osint.'
+				. 'bambenekconsulting.com') !== FALSE) {
+				$csv_type	= 'bbc';
+				$line		= $csvline[0];
+				$csv_found	= TRUE;
+			}
+
+			// Parse Alienvault OTX pulse Feed
+			elseif ($line == 'Indicator type,Indicator,'
+					. 'Description') {
+				$csv_type	= 'otx';
+				return $result('skip');
+			}
+
+			// Parse Ponomocup Feed
+			elseif (strpos($csvline[0], 'timestamp') !== FALSE) {
+				$csv_type	= 'pon';
+				return $result('skip');
+			}
+
+			// Parse Proofpoint/ET IQRisk IPRep Feed
+			elseif ($line == 'domain, category, score') {
+				$csv_type	= 'et';
+				return $result('skip');
+			}
+
+			// Reset variables for CSV determination
+			else {
+				$csv_parser = $run_once = FALSE;
+			}
+			break;
+	}
+
+	// Record Failed CSV Parse event
+	if (!$csv_found || empty($csv_type)) {
+		pfb_parsed_fail($header, '', $oline, $parse_err, $dnsbl_lineno);
+		return $result('skip');
+	}
+
+	return $result('use', $ip_collected);
+}
+
+
 // ADR-62 §2 Decision 4: the universal plain-path control-line skip. Mirrors
 // pfb_is_blank_or_comment_line's contract: blank detection is an exact '' match, so
 // the CALLER must trim() first. Deliberately excludes '#' -- pfb_dnsbl_hash_line_
@@ -17172,116 +17306,23 @@ function sync_package_pfblockerng($cron='') {
 												continue;
 											}
 
-											// CSV parser
-											if ($csv_parser) {
-
-												$csv_found = FALSE;
-												$csv_count = count($csvline);
-
-												switch ($csv_type) {
-													case 'pt':
-														if ($csv_count == 8) {
-															if (strpos($csvline[1], ' ') !== FALSE) {
-																$line = str_replace(' ', '', $csvline[1]);
-															} else {
-																$line = $csvline[1];
-															}
-															$csv_found = TRUE;
-														}
-														break;
-													case 'bbc':
-														if ($csv_count == 4) {
-															$line		= $csvline[0];
-															$csv_found	= TRUE;
-														}
-														break;
-													case 'h3x':
-														if ($csv_count == 8) {
-															$line		= $csvline[2];
-															if (strpos($line, 'btc://') !== FALSE) {
-																continue 2;
-															}
-															$csv_found	= TRUE;
-														}
-														break;
-													case 'otx':
-														if ($csv_count == 3) {
-															if (isset($alienvault_types[$csvline[0]])) {
-																$line		= $csvline[1];
-																$csv_found	= TRUE;
-															} else {
-																continue 2;
-															}
-														}
-														break;
-													case 'pon':
-														if ($csv_count == 9) {
-															$line		= $csvline[2];
-															$csv_found	= TRUE;
-
-															// Collect additional IP csv entry (guard value is
-															// csvline[0], the collected value is line).
-															if ($pfb['dnsbl_ip'] != 'Disabled' &&
-															    pfb_dnsbl_collect_feed_ip($csvline[0], $line, $custom, $domain_data_ip, $domain_data_ip6)) {
-																$pfb['updateip'] = TRUE;
-																$ipcount++;
-															}
-														}
-														break;
-													case 'et':
-														if ($csv_count == 3) {
-															$line		= $csvline[0];
-															$csv_found	= TRUE;
-														}
-														break;
-													default:
-
-														// Parse Phishtank Feed
-														if (strpos($line, 'phish_id,url,'
-																. 'phish_detail_url') !== FALSE) {
-															$csv_type = 'pt';
-															continue 2;
-														}
-
-														// Parse Bambenek Consulting Feed
-														elseif (strpos($csvline[3], 'osint.'
-															. 'bambenekconsulting.com') !== FALSE) {
-															$csv_type	= 'bbc';
-															$line		= $csvline[0];
-															$csv_found	= TRUE;
-														}
-
-														// Parse Alienvault OTX pulse Feed
-														elseif ($line == 'Indicator type,Indicator,'
-																. 'Description') {
-															$csv_type	= 'otx';
-															continue 2;
-														}
-
-														// Parse Ponomocup Feed
-														elseif (strpos($csvline[0], 'timestamp') !== FALSE) {
-															$csv_type	= 'pon';
-															continue 2;
-														}
-
-														// Parse Proofpoint/ET IQRisk IPRep Feed
-														elseif ($line == 'domain, category, score') {
-															$csv_type	= 'et';
-															continue 2;
-														}
-
-														// Reset variables for CSV determination
-														else {
-															$csv_parser = $run_once = FALSE;
-														}
-														break;
-												}
-
-												// Record Failed CSV Parse event
-												if (!$csv_found || empty($csv_type)) {
-													pfb_parsed_fail($header, '', $oline, $pfb['dnsbl_parse_err'], $dnsbl_lineno);
-													continue;
-												}
+											// issue #1118: pfb_dnsbl_csv_extract() owns the whole upstream-CSV
+											// classify/extract switch (unit-tested off-appliance); action='skip'
+											// matches every one of the original block's `continue`/`continue 2` sites.
+											$csv_result = pfb_dnsbl_csv_extract($line, $csvline, $csv_type, $csv_parser,
+												$run_once, $alienvault_types, $pfb['dnsbl_ip'] != 'Disabled', $custom,
+												$domain_data_ip, $domain_data_ip6, $header, $oline, $dnsbl_lineno,
+												$pfb['dnsbl_parse_err']);
+											$line		= $csv_result['line'];
+											$csv_type	= $csv_result['csv_type'];
+											$csv_parser	= $csv_result['csv_parser'];
+											$run_once	= $csv_result['run_once'];
+											if ($csv_result['ip_collected']) {
+												$pfb['updateip'] = TRUE;
+												$ipcount++;
+											}
+											if ($csv_result['action'] === 'skip') {
+												continue;
 											}
 											$line = trim($line);
 
