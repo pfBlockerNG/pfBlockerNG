@@ -35,7 +35,9 @@ args, resolves the file list via ``git ls-files`` — every tracked
 surface `target="_blank"` links live in; deliberately excludes ``tests/`` so
 this checker's own bad-input fixtures never trip its tree scan) — or scans
 the explicit paths passed as args. It prints ``path:line: <message>`` to
-stderr, exiting 1 if any violation is found.
+stderr, exiting 1 if any violation is found, or 2 if the default (argless)
+scan set could not be enumerated (git absent / not a checkout) — failing
+closed rather than silently passing a gate it could not run.
 
 This is dev-only tooling (release archives contain only ``src/``); it lives
 under ``scripts/`` and is wired into ``.githooks/pre-commit`` and CI.
@@ -115,7 +117,8 @@ def _scan_path(path: str) -> list[Violation]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry point. Returns 0 (clean) or 1 (violations found)."""
+    """CLI entry point. Returns 0 (clean), 1 (violations found), or 2 (the argless
+    default scan set could not be enumerated — fail-closed)."""
     args = list(sys.argv[1:] if argv is None else argv)
     if args:
         paths = args
