@@ -92,6 +92,8 @@ CFG_DNSBL_LISTS = "installedpackages/pfblockerngdnsbl/config"
 CFG_IP_V4_LISTS = "installedpackages/pfblockernglistsv4/config"
 CFG_IP_V6_LISTS = "installedpackages/pfblockernglistsv6/config"
 CFG_IP_SETTINGS = "installedpackages/pfblockerngipsettings/config/0"
+# issue #1084: dRep/pRep/dMax/pMax knobs the batch `recompute` matrix reads (pfblockerng.inc ~15746).
+CFG_IP_REPUTATION = "installedpackages/pfblockerngreputation/config/0"
 # DNS-Resolver Host Overrides: control names go here (see set_control_records).
 CFG_UNBOUND_HOSTS = "unbound/hosts"
 
@@ -1321,6 +1323,95 @@ def set_pfb_keep(vm: SmokeVM, keep: bool, *, timeout: float = 60.0) -> None:
     result = php_eval(vm, snippet, timeout=timeout)
     if result.returncode != 0 or "OK" not in result.stdout:
         raise RuntimeError(f"set_pfb_keep({keep}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+
+
+def set_ip_dedup(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
+    """Toggle IP-side Deduplication (``enable_dup`` -> ``$pfb['dup']``) at ``CFG_IP_SETTINGS``.
+
+    issue #1084: ``dup=='on'`` drives the batch ``recompute`` verb for BOTH v4+v6
+    (``pfb_ip_recompute_matrix()``); dedup off + dRep/pRep alone still recomputes v4-only.
+    """
+    val = "on" if on else ""
+    snippet = (
+        f"$ip = config_get_path({_php_str(CFG_IP_SETTINGS)}, array());\n"
+        f"$ip['enable_dup'] = {_php_str(val)};\n"
+        f"config_set_path({_php_str(CFG_IP_SETTINGS)}, $ip);\n"
+        "write_config('pfBlockerNG smoke: toggle enable_dup');\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"set_ip_dedup({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+
+
+def set_ip_reputation(
+    vm: SmokeVM,
+    *,
+    drep: bool = False,
+    prep: bool = False,
+    dmax: int = 0,
+    pmax: int = 0,
+    ccwhite: str = "off",
+    ccblack: str = "off",
+    ccexclude: str = "",
+    timeout: float = 60.0,
+) -> None:
+    """Set the batch-``recompute`` reputation knobs (issue #1084) at ``CFG_IP_REPUTATION``.
+
+    ``drep``/``prep`` -> ``enable_dedup``/``enable_pdup`` (``$pfb['drep']``/``$pfb['prep']``,
+    the dMax/pMax repmode selectors); ``dmax``/``pmax`` -> ``p24_dmax_var``/``p24_pmax_var``
+    (the per-/24 offender-count thresholds); ``ccwhite``/``ccblack``/``ccexclude`` -> the
+    GeoIP classify action + exempt-country CSV (unused by pMax's GeoIP-free block-only path,
+    ``pfblockerng.sh`` ``pfb_recompute_rep_actionmap``). A full REPLACE (not merge) of the
+    config root, so a prior test's values can never leak into this one.
+    """
+    settings = {
+        "enable_dedup": "on" if drep else "",
+        "enable_pdup": "on" if prep else "",
+        "p24_dmax_var": str(dmax),
+        "p24_pmax_var": str(pmax),
+        "ccwhite": ccwhite,
+        "ccblack": ccblack,
+        "ccexclude": ccexclude,
+    }
+    snippet = (
+        f"config_set_path({_php_str(CFG_IP_REPUTATION)}, {_php_kv_array(settings)});\n"
+        "write_config('pfBlockerNG smoke: IP reputation knobs');\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"set_ip_reputation failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+
+
+def set_ip_suppression(
+    vm: SmokeVM,
+    *,
+    enabled: bool = False,
+    v4: list[str] | None = None,
+    v6: list[str] | None = None,
+    timeout: float = 60.0,
+) -> None:
+    """Toggle the global "Enable Suppression" checkbox + set BOTH v4/v6 customlists at
+    ``CFG_IP_SETTINGS`` (``suppression``/``v4suppression``/``v6suppression``).
+
+    Every suppression line needs an explicit CIDR mask (a bare host is rejected) --
+    ``f"{ip}/32"``/``f"{ip}/128"``. Always writes all three keys (never a merge), so a
+    prior test's toggle/list can never leak into this one -- same shape as
+    ``test_smoke_suppression.py``'s own module-local ``_set_suppression``.
+    """
+    snippet = (
+        f"$ip = config_get_path({_php_str(CFG_IP_SETTINGS)}, array());\n"
+        f"$ip['suppression'] = {_php_str('on' if enabled else '')};\n"
+        f"$ip['v4suppression'] = {_php_str(_b64_textarea(v4 or []))};\n"
+        f"$ip['v6suppression'] = {_php_str(_b64_textarea(v6 or []))};\n"
+        f"config_set_path({_php_str(CFG_IP_SETTINGS)}, $ip);\n"
+        "write_config('pfBlockerNG smoke: IP suppression');\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"set_ip_suppression failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
 def set_dnsbl_interface(vm: SmokeVM, iface: str, *, timeout: float = 60.0) -> None:
