@@ -68,9 +68,9 @@ Describe 'processet() ET category selection (issue #713 bug 6)'
       # (matching the etblock case's stdout check + closing the shellspec output gap).
       The stdout should include 'Match:   ET_P2Pcnc'
       The stdout should not include 'Match:   ET_P2P '
-      The path "${pfbmatchgen}/ETMatch.txt" should be file
-      The contents of file "${pfbmatchgen}/ETMatch.txt" should include '10.0.0.31'
-      The contents of file "${pfbmatchgen}/ETMatch.txt" should not include '10.0.0.15'
+      The path "${pfbmatchgen}/pfB_Match_ET_v4.txt" should be file
+      The contents of file "${pfbmatchgen}/pfB_Match_ET_v4.txt" should include '10.0.0.31'
+      The contents of file "${pfbmatchgen}/pfB_Match_ET_v4.txt" should not include '10.0.0.15'
     End
   End
 
@@ -79,7 +79,7 @@ Describe 'processet() ET category selection (issue #713 bug 6)'
   # category is ever literally named 'x', but a naive unpadded anchor could still
   # accidentally line up on a bare 'x' substring somewhere in a real token.
   Describe 'the x no-selection sentinel'
-    It 'blocks nothing and writes no ETMatch.txt when neither is selected'
+    It 'blocks nothing and writes no pfB_Match_ET_v4.txt when neither is selected'
       etblock='x'
       etmatch='x'
       When call processet
@@ -88,16 +88,16 @@ Describe 'processet() ET category selection (issue #713 bug 6)'
       # (closes the shellspec unchecked-output gap for the sentinel case).
       The stdout should not include 'Block:'
       The stdout should not include 'Match:'
-      The path "${pfbmatchgen}/ETMatch.txt" should not be exist
+      The path "${pfbmatchgen}/pfB_Match_ET_v4.txt" should not be exist
       The contents of file "${pfborig}${alias}.orig" should not include '10.0.0.15'
       The contents of file "${pfborig}${alias}.orig" should not include '10.0.0.31'
     End
   End
 
   # issue #1250: a user Match-type list literally headed 'ETMatch' collides
-  # with processet()'s own ETMatch.txt artifact under the single ${pfbmatch}
-  # namespace -- the ET write must never touch a pre-existing user file, and
-  # lands in ${pfbmatchgen} instead.
+  # with processet()'s own ET artifact under the single ${pfbmatch} namespace
+  # -- the ET write must never touch a pre-existing user file, and lands in
+  # ${pfbmatchgen} instead.
   Describe 'a pre-existing user Match-list ETMatch.txt survives processet() (issue #1250)'
     It 'leaves the user file byte-unchanged and writes the ET output to pfbmatchgen instead'
       etblock='x'
@@ -111,8 +111,8 @@ Describe 'processet() ET category selection (issue #713 bug 6)'
       The stdout should include 'Match:   ET_P2Pcnc'
       The value "$before_content" should equal '203.0.113.77'
       The contents of file "${pfbmatch}/ETMatch.txt" should equal '203.0.113.77'
-      The contents of file "${pfbmatchgen}/ETMatch.txt" should include '10.0.0.31'
-      The contents of file "${pfbmatchgen}/ETMatch.txt" should not include '10.0.0.15'
+      The contents of file "${pfbmatchgen}/pfB_Match_ET_v4.txt" should include '10.0.0.31'
+      The contents of file "${pfbmatchgen}/pfB_Match_ET_v4.txt" should not include '10.0.0.15'
     End
   End
 End

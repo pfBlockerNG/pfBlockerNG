@@ -28,21 +28,21 @@ Describe 'reputation_max() match output (issue #27)'
     max=999999
     printf '1.2.3.4\n1.2.3.5\n9.9.9.9\n' > "${pfbdeny}${alias}.txt"
     # Stale match output the run must clean up at its absolute ${pfbmatchgen} path.
-    printf 'old\n' > "${pfbmatchgen}match${alias}.txt"
+    printf 'old\n' > "${pfbmatchgen}pfB_Match_Rep_${alias}.txt"
     When call reputation_max
     The status should be success
-    The path "${pfbmatchgen}match${alias}.txt" should not be exist
+    The path "${pfbmatchgen}pfB_Match_Rep_${alias}.txt" should not be exist
   End
 
-  It 'writes match output to ${pfbmatchgen}match<alias>.txt (repeat offenders, ccwhite=match)'
+  It 'writes match output to ${pfbmatchgen}pfB_Match_Rep_<alias>.txt (repeat offenders, ccwhite=match)'
     alias="MYLIST"
     max=1
     make_geoip_stub "$pathgeoip" 'xx iso_code: "US" xx'
     printf '1.2.3.4\n1.2.3.5\n1.2.3.6\n' > "${pfbdeny}${alias}.txt"
     When call reputation_max
     The status should be success
-    The path "${pfbmatchgen}match${alias}.txt" should be file
-    The contents of file "${pfbmatchgen}match${alias}.txt" should include "1.2.3.0/24"
+    The path "${pfbmatchgen}pfB_Match_Rep_${alias}.txt" should be file
+    The contents of file "${pfbmatchgen}pfB_Match_Rep_${alias}.txt" should include "1.2.3.0/24"
     The stdout should include "Reputation -Max Stats"
   End
 
@@ -65,7 +65,7 @@ Describe 'reputation_max() match output (issue #27)'
     When call reputation_max
     The status should be success
     # Not matched/whitelisted: no match-output file is produced for this alias.
-    The path "${pfbmatchgen}match${alias}.txt" should not be exist
+    The path "${pfbmatchgen}pfB_Match_Rep_${alias}.txt" should not be exist
     # Counted as a blocked repeat-offender range (the block branch ran).
     The stdout should include "Reputation -Max Stats"
   End
