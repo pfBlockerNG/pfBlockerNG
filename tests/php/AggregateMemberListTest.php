@@ -62,6 +62,11 @@ final class AggregateMemberListTest extends TestCase
 		foreach ($it as $f) {
 			@unlink($f);
 		}
+		// issue #1250: the matchgendir-exclusion test nests 'generated' under match/.
+		foreach (@glob("{$this->root}/match/generated/*") ?: [] as $f) {
+			@unlink($f);
+		}
+		@rmdir("{$this->root}/match/generated");
 		foreach (['deny', 'permit', 'match', 'native'] as $d) {
 			@rmdir("{$this->root}/{$d}");
 		}
@@ -297,6 +302,32 @@ final class AggregateMemberListTest extends TestCase
 
 		$got = pfb_aggregate_member_list('Deny', 'v4');
 		$this->assertSame([$a, $m, $z], $got, 'members returned in sorted (ascending path) order');
+	}
+
+	/**
+	 * R6 (issue #1250): a machine-generated Reputation artifact staged under matchdir's
+	 * 'generated' subdirectory must NOT enter the Match aggregate merely because its name also
+	 * matches '*_v4.txt' -- glob() does not descend into subdirectories, so relocating those
+	 * artifacts off matchdir's top level (steps 1/1b) already excludes them; this pins that
+	 * membership as a deliberate, user-visible narrowing (a reputation artifact was never a
+	 * genuine Match-type list).
+	 *
+	 *   Given matchdir holds a genuine user Match-list member AND matchdir/generated holds a
+	 *         reputation artifact that also matches '*_v4.txt'
+	 *   When  the Match/v4 member list is computed
+	 *   Then  the before-state is asserted first (the user member IS present), then the
+	 *         artifact is confirmed ABSENT -- proving exclusion, not an accidentally-empty result.
+	 */
+	public function testMatchExcludesGeneratedReputationArtifact(): void
+	{
+		$userMember = $this->touchMember('matchdir', 'userlist_v4.txt');
+		$genDir = "{$GLOBALS['pfb']['matchdir']}/generated";
+		@mkdir($genDir, 0777, true);
+		$this->assertNotFalse(@file_put_contents("{$genDir}/pfB_Match_Rep_Spam_v4.txt", ''));
+
+		$got = pfb_aggregate_member_list('Match', 'v4');
+		$this->assertContains($userMember, $got, 'precondition: the genuine user Match-list member is present');
+		$this->assertSame([$userMember], $got, 'a matchgendir artifact must NOT enter the Match aggregate');
 	}
 
 	/**

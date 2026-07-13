@@ -442,7 +442,8 @@ missing `.new` sibling away as "no match this pass" — that reconcile is only s
 actually ran. A dropped GeoIP feed cannot silently erase yesterday's match files.
 
 **Match-mode multi-alias emission (a deliberate delta).** `ccblack=match` writes
-`match<alias>.txt` for **every** member alias sharing an offender `/24` window, not just one.
+`pfB_Match_Rep_<alias>.txt` (under `matchdir/generated` — issue #1250) for **every** member
+alias sharing an offender `/24` window, not just one.
 The old `reputation_dmax()` wrote only the first alias in glob order (whichever the filesystem
 happened to enumerate first); the recompute window pass iterates every alias present in that
 window's `winaliases` set, so a shared offender is now visible to every alias whose rows are in

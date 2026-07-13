@@ -2255,6 +2255,45 @@ def test_page_table_covers_every_pfblockerng_page() -> None:
     assert "dnsbl_vip_sinkhole_pages" in excluded_names
 
 
+def test_reputation_page_help_text_names_relocated_matchgen_paths(
+    webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:  # noqa: ARG001
+    """issue #1250: the Reputation page's ccwhite/ET help text pointed at the machine-generated
+    artifacts' OLD matchdir names/location; both moved under matchdir/generated with new names.
+
+    Scenario: Reputation page help text names the relocated matchgen paths.
+      Given the Reputation page (written by pfblockerng.php's `ugc`, pfblockerng.php:2562/2614)
+            renders cleanly
+      When  the body is inspected
+      Then  it names the NEW matchgendir paths for the ccwhite exempt file and the ET match
+            file, and does NOT name either OLD matchdir path (before/after: the old paths were
+            the literal help text prior to this change; `matchdedup.txt` was never a real
+            filename any writer produced, only `matchdedup_v4.txt` -- so the old help text was
+            already unfollowable, not merely stale).
+    """
+    resp = webui.get("/pfblockerng/pfblockerng_reputation.php")
+    result = evaluate_render(
+        "/pfblockerng/pfblockerng_reputation.php",
+        resp.status_code,
+        resp.text,
+        ("IPv4 Reputation", "Individual List Reputation"),
+    )
+    assert result.ok, f"Reputation page render oracle failed: {result.detail}"
+    body = resp.text
+
+    for needle in (
+        "/var/db/pfblockerng/match/generated/pfB_Match_Exempt_v4.txt",
+        "/var/db/pfblockerng/match/generated/pfB_Match_ET_v4.txt",
+    ):
+        assert needle in body, f"relocated matchgen path {needle!r} missing from Reputation help text"
+
+    for needle in (
+        "/var/db/pfblockerng/match/matchdedup.txt",
+        "/var/db/pfblockerng/match/ETMatch.txt",
+    ):
+        assert needle not in body, f"stale pre-#1250 matchdir path {needle!r} still present in help text"
+
+
 # ---------------------------------------------------------------------------
 # Tier-B tests — ui_e2e marker; schedule/dispatch-only, NOT PR-blocking.
 # These require VM state setup (seeding files or multi-step POST → GET flows).
