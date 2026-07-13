@@ -148,7 +148,7 @@ if [ "${use_iprange}" -eq 1 ]; then
 	# per-family. We split, aggregate each, recombine — matching production.
 	grep -F ':' "${union_sorted}" > "${workdir}/u6.txt" || true
 	grep -Fv ':' "${union_sorted}" > "${workdir}/u4.txt" || true
-	run_timed sh -c "\"${pathaggregate}\" \"${workdir}/u4.txt\" > \"${workdir}/a4.txt\"; \"${pathaggregate}\" \"${workdir}/u6.txt\" > \"${workdir}/a6.txt\"; cat \"${workdir}/a4.txt\" \"${workdir}/a6.txt\" > \"${union_agg}\""
+	run_timed sh -c "\"${pathaggregate}\" \"${workdir}/u4.txt\" > \"${workdir}/a4.txt\"; \"${pathaggregate}\" \"${workdir}/u6.txt\" > \"${workdir}/a6.txt\"; awk 1 \"${workdir}/a4.txt\" \"${workdir}/a6.txt\" > \"${union_agg}\""
 else
 	# Portable stand-in: identical collapse semantics via ipaddress.
 	run_timed python3 - "${union_sorted}" "${union_agg}" <<'PY'

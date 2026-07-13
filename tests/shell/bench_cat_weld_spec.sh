@@ -90,3 +90,43 @@ Describe 'bench_aggregate_union.sh member concat: the committed lines never weld
     The variable linecount should equal 3
   End
 End
+
+Describe 'bench_aggregate_union.sh: the iprange recombine never welds v4 onto v6 (issue #1263 site 10)'
+  # The straggler the brief's own enumeration missed: `cat a4.txt a6.txt > union_agg`
+  # recombines the per-family aggregates. An unterminated a4.txt welds its last IPv4
+  # CIDR onto a6.txt's first IPv6 CIDR, fusing a garbage record into the union.
+  # $pathaggregate is an external binary and is not invoked here -- the CONCAT is the
+  # unit under test, so its exact committed text is extracted and exercised directly.
+  extract_recombine() {
+    grep -F 'a4.txt' "$1" | sed -e 's/.*; *//' -e 's/\\"/"/g' -e 's/"$//'
+  }
+
+  setup() {
+    workdir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/bau.XXXXXX")"
+    union_agg="${workdir}/union.agg"
+    # a4 UNTERMINATED -- its last record welds onto a6's first without the fix.
+    printf '192.0.2.0/24\n198.51.100.0/24' > "${workdir}/a4.txt"
+    printf '2001:db8::/32\n' > "${workdir}/a6.txt"
+    stmt="$(extract_recombine "${PFB_ROOT}/scripts/misc/bench_aggregate_union.sh")"
+  }
+  cleanup() { rm -rf "$workdir"; }
+  Before 'setup'
+  After 'cleanup'
+
+  It 'the committed recombine statement is extractable (vacuity guard)'
+    When call test -n "${stmt}"
+    The status should be success
+  End
+
+  It 'the union holds all three real CIDRs and no fused v4/v6 record'
+    eval "$stmt"
+    The path "${union_agg}" should be file
+    The contents of file "${union_agg}" should include '192.0.2.0/24'
+    The contents of file "${union_agg}" should include '198.51.100.0/24'
+    The contents of file "${union_agg}" should include '2001:db8::/32'
+    The contents of file "${union_agg}" should not include '198.51.100.0/242001:db8::/32'
+    linecount="$(grep -c ^ "${union_agg}")"
+    The variable linecount should equal 3
+  End
+End
+
