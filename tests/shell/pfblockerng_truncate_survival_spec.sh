@@ -323,7 +323,7 @@ STUB
     End
   End
 
-  Describe 'processet(): tempfile2 debris corrupts ETMatch.txt into a directory'
+  Describe 'processet(): tempfile2 debris corrupts pfB_Match_ET_v4.txt into a directory'
     setup() {
       work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/truncF.XXXXXX")"
       pfborig="${work}/orig/"; pfbmatch="${work}/match/"; etdir="${work}/ET"
@@ -346,13 +346,13 @@ STUB
     Before 'setup'
     After 'cleanup'
 
-    It 'aborts ET processing, leaving the .orig file unchanged and never creating ETMatch.txt'
+    It 'aborts ET processing, leaving the .orig file unchanged and never creating pfB_Match_ET_v4.txt'
       When run _truncF_run
       The status should be success
       The output should include 'SURVIVED_F'
       The contents of file "${errorlog}" should include 'cannot create'
       The contents of file "${pfborig}${alias}.orig" should equal "${expected_orig}"
-      The path "${pfbmatchgen}/ETMatch.txt" should not be exist
+      The path "${pfbmatchgen}/pfB_Match_ET_v4.txt" should not be exist
     End
   End
 End
