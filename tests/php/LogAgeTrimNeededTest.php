@@ -7,11 +7,10 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * pfb_log_age_trim_needed() -- issue #1052/#1109: probe-before-copy for the
- * age-cap pass, renamed+generalised from pfb_log_age_nolimit_pass_needed
- * (which only ever gated the 'nolimit' branch) to also gate the numeric-cap
- * branch via pfb_log_trim_needed(). $margin_pct widens the cutoff window;
- * margin=0 is byte-identical to the pre-#1109 pfb_log_age_nolimit_pass_needed
- * formula, so every #1052 case is re-pinned here at margin=0.
+ * age-cap pass, renamed+generalised from the original #1052 'nolimit'-only
+ * probe to also gate the numeric-cap branch via pfb_log_trim_needed().
+ * $margin_pct widens the cutoff window; margin=0 is byte-identical to the
+ * pre-#1109 formula, so every #1052 case is re-pinned here at margin=0.
  */
 #[CoversFunction('pfb_log_age_trim_needed')]
 final class LogAgeTrimNeededTest extends TestCase
