@@ -41,7 +41,7 @@ Describe 'closingprocess() Match List IP Counts section (#1250)'
     # Given one user Match-type list file and one machine-generated artifact,
     # each now living in its own directory.
     printf '198.51.100.0/24\n' > "${pfbmatch}Ads_v4.txt"
-    printf '192.0.2.0/24\n'    > "${pfbmatchgen}matchSpam_v4.txt"
+    printf '192.0.2.0/24\n'    > "${pfbmatchgen}pfB_Match_Rep_Spam_v4.txt"
 
     # When the final report runs.
     When call closingprocess
@@ -51,6 +51,6 @@ Describe 'closingprocess() Match List IP Counts section (#1250)'
     The status should be success
     The stdout should include 'Match List IP Counts'
     The stdout should include 'Ads_v4.txt'
-    The stdout should include 'matchSpam_v4.txt'
+    The stdout should include 'pfB_Match_Rep_Spam_v4.txt'
   End
 End
