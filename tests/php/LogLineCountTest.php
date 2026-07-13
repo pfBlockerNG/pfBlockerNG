@@ -6,11 +6,13 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * pfb_log_line_count() -- issue #1109: pure-PHP '\n' byte count feeding
- * pfb_log_trim_needed()'s line-cap high-water check (no exec()/wc). Any
- * probe failure (unopenable path, short/failed read) -> PHP_INT_MAX so the
- * guard FIRES -- fail-open, same direction as #1052's probe: a probe failure
- * must never silently disable retention.
+ * pfb_log_line_count() -- issue #1109: pure-PHP, tail(1)-compatible line count
+ * feeding pfb_log_trim_needed()'s line-cap high-water check (no exec()/wc). It
+ * gates a tail(1) rewrite, so it counts a line as tail does: an unterminated
+ * trailing chunk IS a line (ADR-60 S8 item 5). Any probe failure (unopenable
+ * path, short/failed read) -> PHP_INT_MAX so the guard FIRES -- fail-open, same
+ * direction as #1052's probe: a probe failure must never silently disable
+ * retention.
  */
 #[CoversFunction('pfb_log_line_count')]
 final class LogLineCountTest extends TestCase
