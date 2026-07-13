@@ -35,12 +35,13 @@ final class LogLineCountTest extends TestCase
 		$this->assertSame(3, pfb_log_line_count($this->tmpFile), '3 newline-terminated lines must count as 3');
 	}
 
-	public function testNoTrailingNewlineUndercountsByOneHarmlessly(): void
+	public function testDanglingLastLineCountsAsALineLikeTail(): void
 	{
-		// Documented, harmless undercount at a cap x (1+margin) threshold --
-		// pinned as intended (issue #1109); no added complexity to fix it.
+		// The count gates a tail(1)-based rewrite, so it must agree with tail's
+		// own notion of a line: an unterminated trailing chunk IS a line. Counting
+		// bare "\n" bytes undercounts it and silently skips a needed trim (#1109).
 		file_put_contents($this->tmpFile, "a\nb\nc");
-		$this->assertSame(2, pfb_log_line_count($this->tmpFile), '3 lines with no trailing newline must count as 2');
+		$this->assertSame(3, pfb_log_line_count($this->tmpFile), '3 lines with no trailing newline must count as 3');
 	}
 
 	public function testEmptyFileCountsZero(): void

@@ -600,7 +600,12 @@ Related, same window: the array-path short-write gap the stream sibling already 
 5. **Read cost is bounded and asymmetric with the write it replaces.** The line high-water
    probe reads the whole file once per tick to decide; that is a read, not a write. Flash/SSD
    wear is write-dominated, so a per-tick full-file read traded for an elided per-tick
-   full-file write is the intended trade, not an oversight.
+   full-file write is the intended trade, not an oversight. **`pfb_log_line_count()` counts a
+   line the way `tail(1)` does** — an unterminated trailing chunk is a line, not a fragment —
+   because the count gates a `tail`-based rewrite and the two must agree. Counting bare `\n`
+   bytes undercounts a log left mid-line (the state `pfb_logger('.', 1)`'s progress fragments
+   leave, and what `pfb_logger_target_starts_at_bol()` exists to detect), which reads as "at
+   cap" when the log is really over it and silently skips a trim the write path would perform.
 6. **Rejected alternatives (do not re-litigate).** In-place head eviction (`memmove` +
    `ftruncate` on the line cap) was rejected: it opens a torn-write window §1.5 doesn't cover
    today and is a materially different write path from the existing tail-and-replace trim.
