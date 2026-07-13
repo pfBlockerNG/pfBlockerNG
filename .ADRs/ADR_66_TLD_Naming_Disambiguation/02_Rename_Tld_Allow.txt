@@ -1,0 +1,82 @@
+================================================================================
+PHASE 2 PROMPT -- Rename Feature A (TLD Allow) to the `tld_allow` stem (behaviour-preserving)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_66_TLD_Naming_Disambiguation/ADR.md   (read SS2.1 + Semantics 1,3,5,6 + delta R-A)
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch
+adr/66-tld-naming-disambiguation. Implement yourself; never spawn sub-agents. Inline, one
+commit, push directly. Test mode: behaviour-preserving -- the Phase-1 oracle is the ORACLE;
+it MUST stay byte-identical GREEN across this rename (no test edits to make it pass).
+
+Blast-radius note for the gate: NONE (behaviour-preserving pure rename; delta budget R-A --
+the Feature-A identifier set ONLY). If this phase lands alone, Feature A is renamed end to end
+and every decision is byte-identical; nothing else moves.
+
+WHY THIS PHASE EXISTS
+Feature A ("TLD Allow") is told apart from Feature B today only by a misleading `py`/`python_`
+prefix (both features run in Python). This phase gives it the self-describing `tld_allow` stem
+across PHP, Python, and the .inc<->.py ini bridge, so the name states the feature.
+
+REQUIRED READING
+- FIRST, read RESULTS/01_Results.txt -- the oracle entry symbols + the ini-bridge round-trip
+  this rename must keep green. If it is missing, Phase 1 is not complete; STOP and report.
+- .ADRs/ADR_66_TLD_Naming_Disambiguation/ADR.md -- SS2.1 (the Feature-A rename map), Semantics
+  1 (Feature A decisions unchanged), 3 (ini bridge atomic), 5 (no stored-key change), 6 (no
+  substring over-reach), delta budget R-A.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc -- the python_tld/python_tlds ini WRITER
+  (~:8153-8217), $pfb['dnsbl_pytld'] (~:2675), pytld_cnt/pytld locals (~:17686-17698).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py -- python_tld/python_tlds ini READER (~:1458-
+  1461), parse_python_tlds (~:860), python_tld_seg, evaluate_domain TLD-Allow arm (~:6078).
+- src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php -- any INTERNAL var derived from the
+  Feature-A config keys (the config KEYS pfb_pytld* STAY; only derived internal vars rename).
+- CLAUDE.md -- Naming (house style), Python/PHP standards, the delegation contract.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases ran; the
+prior RESULTS files and the live tree override this prompt on any conflict -- verify before
+acting and flag contradictions in the handoff. If a symbol the map names does not exist (or a
+new occurrence appears), re-grep and ESCALATE rather than trust the count.
+
+ACTION PLAN (ordered)
+1. Re-grep every Feature-A occurrence FROM SOURCE (python_tlds, python_tld, python_tld_seg,
+   parse_python_tlds, pytld_cnt, dnsbl_pytld) across .inc + .py + www; reconcile against SS2.1.
+2. Rename per SS2.1: dnsbl_pytld->dnsbl_tld_allow; ini/pfb python_tld->tld_allow,
+   python_tlds->tld_allow_list; python_tld_seg->tld_allow_seg; parse_python_tlds->parse_tld_allow;
+   pytld_cnt->tld_allow_cnt, pytld locals->tld_allow. Rename the ini keys on BOTH the .inc
+   writer AND the .py reader in this SAME commit (Semantic 3 -- atomic; a half-renamed bridge
+   is a broken build).
+3. Do NOT touch stored config keys (pfb_pytld, pfb_pytld_sort, pfb_pytlds_*) or www POST field
+   names (Semantic 5). Do NOT touch any Feature-B identifier (delta R-A).
+4. Reconcile comments/docstrings mentioning the renamed Feature-A symbols.
+
+CONSTRAINTS
+- Delta budget R-A ONLY. No behaviour change; no stored-key/POST change; no Feature-B edits.
+- Match house naming: dnsbl_tld_allow beside dnsbl_* siblings; lowercase snake_case ini/pfb keys.
+- No new comments beyond reconciling stale ones ("Comments -- constraint, not narration").
+
+VERIFICATION (executed -- paste output)
+- test mode: behaviour-preserving -- the Phase-1 oracle re-run UNCHANGED is GREEN (paste
+  `python3 -m pytest <oracle path>`); the ini-bridge round-trip test passes with the NEW keys
+  (proves the atomic rename).
+- grep proof: zero surviving python_tld*/parse_python_tlds/dnsbl_pytld/pytld_cnt in production;
+  the stored keys pfb_pytld* STILL present unchanged.
+- `python3 -m pytest`, `ruff check .`, `ruff format --check .`, `mypy tests/`;
+  `php -l` on touched .inc/.php; `vendor/bin/phpunit`; `composer phpstan`;
+  `composer phpcs -- --standard=phpcs.xml.dist src/`.
+- `scripts/agent/run-gates.sh --diff origin/devel`.
+- diff-read: pure rename; no behaviour/logic line changed; no stored key touched.
+
+EXPECTED RESULT
+Feature A is `tld_allow` end to end; decisions byte-identical; the ini bridge renamed atomically.
+
+COMMIT (single)
+    pfblockerng: rename the TLD Allow feature to the tld_allow stem (ADR-66 P2)
+Push directly to adr/66-tld-naming-disambiguation; open a PR only if the direct push is rejected.
+
+HANDOFF -- write .ADRs/ADR_66_TLD_Naming_Disambiguation/RESULTS/02_Results.txt with the fixed
+fields: Verdict; What changed (files + one-line why + commit hash); Gates (commands + pasted
+tails); the oracle-unchanged-green proof + the ini-bridge round-trip proof; Coverage-matrix
+(every SS2.1 row renamed, every "stays" row confirmed unchanged by grep); Deviations / judgment
+calls (or "none"); Carry-forward for Phase 3.

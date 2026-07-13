@@ -1,0 +1,97 @@
+================================================================================
+PHASE 1 PROMPT -- Oracle: pin both TLD features + the bridges (behaviour-preserving)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_66_TLD_Naming_Disambiguation/ADR.md   (read SS1 + SS2 "Semantics that MUST be preserved" first)
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch
+adr/66-tld-naming-disambiguation (off the latest devel). Implement yourself with
+Read/Edit/Write/Bash -- never spawn sub-agents. Inline on the branch, one commit, push
+directly. Test mode: behaviour-preserving -- you author an ORACLE that pins existing
+behaviour and stays GREEN across every later phase (no production code changes this phase).
+
+PREREQUISITE GATE
+This ADR assumes issue #1255 has landed (the "Wildcard Blocking (TLD)" toggle gates the
+Python/manifest path via a chroot oracle file + config.tld_wildcard). Confirm the base
+includes #1255 (grep for `tld_wildcard` in the manifest config writer / classify gate). If
+#1255 is NOT present, STOP and report BLOCKED -- do not rename against the pre-#1255 tree.
+
+Blast-radius note for the gate: NONE. Tests only; no production file is edited, so no
+production behaviour can change when this phase lands alone.
+
+WHY THIS PHASE EXISTS
+Phases 2/3 rename ~90 identifiers across PHP + Python + two cross-language bridges. Every one
+claims "decisions are unchanged". Those claims need a falsification harness that exists BEFORE
+any identifier moves: a golden oracle of what Feature A (TLD Allow) and Feature B (TLD
+Wildcard) decide today, plus round-trip pins on the .inc<->.py ini bridge and the manifest
+bridge (a half-renamed bridge must fail loudly), plus a guard against substring over-reach.
+
+REQUIRED READING
+- .ADRs/ADR_66_TLD_Naming_Disambiguation/ADR.md IN FULL -- especially SS2.1/SS2.2 (the rename
+  maps), SS2.3 (Semantics 1-6), SS1.1 (the inventory).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py -- evaluate_domain TLD-Allow arm (~:6078-6088),
+  classify (~:4297-4327), _dnsbl_load_tld_master (~:4265), _dnsbl_tld_search (~:4288),
+  _dnsbl_config_from_manifest (~:5285-5324), parse_python_tlds (~:860).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc -- the ini writer for python_tld/python_tlds
+  (~:8153-8217), the manifest config block (~:7937-7954), $pfb['dnsbl_tld'] (:16005),
+  $pfb['dnsbl_pytld'] (:2675).
+- tests/ -- find the existing DNSBL decision/build tests (build()/dnsbl_build_from_manifest/
+  evaluate_domain) and MIRROR their harness + fixture style; do not invent a new pattern.
+- CLAUDE.md -- Test coverage mandate ("oracle / behaviour-preserving"), Python standards.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before implementation and before
+#1255 rebased the tree; the live tree and any prior RESULTS file override this prompt on any
+conflict -- verify each symbol/line before acting, and flag contradictions loudly in the
+handoff. If the live matcher disagrees with an ADR "fact", the CODE wins and you ESCALATE.
+
+ACTION PLAN (ordered -- oracle FIRST; this whole phase is the oracle)
+1. Oracle A (Feature A -- TLD Allow): drive evaluate_domain over a corpus exercising the
+   TLD-Allow arm -- feature enabled with tld IN the allow list (resolves), enabled with tld
+   NOT in the list (blocked, feed=TLD_Allow group=DNSBL_TLD_Allow), disabled (no TLD-Allow
+   effect). Snapshot verdict + log fields. Use inert fixtures (uuid-style, RFC-5737/3849).
+2. Oracle B (Feature B -- TLD Wildcard): drive classify() over 2-label (evil.com -> ZONE),
+   multi-label suffix (example.co.uk -> ZONE), deeper sub (sub.evil.com -> DATA), exclusion
+   member (-> DATA), >5 labels (-> DATA). Snapshot (class, key).
+3. Bridge round-trips: pin that the ini keys (python_tld/python_tlds) survive the .inc
+   writer -> .py reader hop, and the manifest keys (tld_master/tld_exclusion) survive the
+   writer -> _dnsbl_config_from_manifest reader hop, with the CURRENT names -- so Phases 2/3
+   re-run these with the NEW names and prove the atomic rename.
+4. Semantic-6 guard: a fixture that would FAIL if a substring rename over-reached -- assert a
+   `dnsbl_tld_data`-shaped path var and a `classify_idn`-shaped symbol are NOT mutated (these
+   stay). (This may be a grep-based structural assertion in the test, documented as such.)
+5. Name the tests for intent (what behaviour/round-trip they pin), BDD where non-trivial.
+
+CONSTRAINTS
+- Python: 4-space indent, from __future__ import annotations, type hints, no bare except;
+  stdlib + the suite's existing helpers only.
+- DO NOT edit any production file this phase. If pinning the oracle seems to require a
+  production change, STOP and ESCALATE.
+- No coverage theater: every assertion must be able to fail on a regression (the bridge
+  round-trips actually compare values; the guard fixture actually distinguishes the
+  kept-vs-renamed symbols).
+
+VERIFICATION (must all pass; only gates runnable here)
+- test mode: behaviour-preserving ORACLE -- the new tests are GREEN on today's untouched tree
+  (paste `python3 -m pytest <new test path>` output). No red run this phase (no behaviour
+  change; the oracle pins current behaviour).
+- `python3 -m pytest` (whole suite green), `ruff check .`, `ruff format --check .`,
+  `mypy tests/`.
+- `scripts/agent/run-gates.sh --diff origin/devel`.
+- diff-read: confirm the diff is tests-only (no src/ change).
+
+EXPECTED RESULT
+Committed oracle test module(s) pinning Feature A + Feature B decisions and both cross-language
+bridge round-trips, green on the untouched tree, ready to gate the rename phases.
+
+COMMIT (single)
+    tests: pin TLD Allow + TLD Wildcard decision + bridge oracle (ADR-66 P1)
+Push directly to adr/66-tld-naming-disambiguation; open a PR only if the direct push is rejected.
+
+HANDOFF -- write .ADRs/ADR_66_TLD_Naming_Disambiguation/RESULTS/01_Results.txt (plain .txt)
+with the fixed fields (CLAUDE.md "THE HANDOFF"): Verdict; What changed (files + one-line why +
+commit hash); Gates (exact commands + pasted output tails); the ORACLE-green proof (paste);
+the bridge round-trip + Semantic-6 guard confirmation; Coverage-matrix (each decision arm +
+each bridge ticked to a case); Deviations / judgment calls (or "none"); Carry-forward for
+Phase 2 (the oracle entry symbols the rename must keep green) and Phase 3.

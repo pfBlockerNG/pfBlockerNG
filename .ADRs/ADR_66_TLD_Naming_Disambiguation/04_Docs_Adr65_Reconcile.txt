@@ -1,0 +1,75 @@
+================================================================================
+PHASE 4 PROMPT -- Docs + ADR-65 reconciliation (behaviour-preserving)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_66_TLD_Naming_Disambiguation/ADR.md   (read SS4 + SS7 Definition of done)
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch
+adr/66-tld-naming-disambiguation. Implement yourself; never spawn sub-agents. Inline, one
+commit, push directly. Test mode: behaviour-preserving -- this phase edits docs + ADR text +
+already-reconciled code comments; it changes NO production behaviour (the Phase-1 oracle stays
+green untouched).
+
+Blast-radius note for the gate: NONE (production). Docs / ADR-text / comment reconciliation
+only; no src/ runtime logic change. The oracle is re-run only to prove nothing moved.
+
+WHY THIS PHASE EXISTS
+The rename (Phases 2-3) leaves stale names in prose: architecture docs, and ADR-65's phase
+prompts (which reference the old classify()/tld_master/python_tld* names and will be executed
+AFTER this ADR lands). Reconcile them so the record matches the code.
+
+REQUIRED READING
+- FIRST, read RESULTS/03_Results.txt AND RESULTS/02_Results.txt -- the final new names. If
+  missing, the previous phase is not complete; STOP and report.
+- .ADRs/ADR_66_TLD_Naming_Disambiguation/ADR.md -- SS2.1/SS2.2 (the authoritative new names),
+  SS4, SS7.
+- docs/misc/architecture-notes.md -- the DNSBL/manifest section (TLD wildcard + TLD Allow).
+- .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md AND its phase prompts
+  (01_*.txt .. 07_*.txt) -- every reference to classify/tld_master/_load_zone*/python_tld*/
+  $pfb['dnsbl_tld'] that the new names supersede.
+- CLAUDE.md -- "Comments -- constraint, not narration"; "Updating documentation"; the
+  dev-only-class rule (ADR text + docs commit directly to devel, no PR).
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases ran; the
+prior RESULTS files and the live tree override this prompt on any conflict -- verify each new
+name against RESULTS/03 before writing it into prose, and flag contradictions in the handoff.
+
+ACTION PLAN (ordered)
+1. grep docs/misc + .ADRs/ADR_65_* for every old name (python_tld*, parse_python_tlds,
+   dnsbl_pytld, classify [wildcard], tld_master, tld_exclusion, $pfb['dnsbl_tld']); replace
+   with the Phase-2/3 new names, preserving meaning. Do NOT rewrite ADR-65's DECISIONS -- only
+   reconcile the identifier names it cites.
+2. Sweep production comments/docstrings for any residual old name the rename phases missed
+   (esp. the "mirrors PHP's tld_analysis()" notes -- tld_analysis STAYS by name per ADR-66
+   SS1.2, so those references are correct; do not "fix" them).
+3. Confirm the ADR-65 phase prompts still make sense with the new names (their reality-override
+   lines already tolerate drift, but update them for honesty).
+
+CONSTRAINTS
+- Documentation-class grammar (normal, concise); markdownlint clean.
+- No production LOGIC change; if a doc edit seems to need a code change, STOP and ESCALATE.
+- Do not touch stored config keys or behaviour; do not alter ADR-65's decision body.
+
+VERIFICATION (executed -- paste output)
+- test mode: behaviour-preserving -- the Phase-1 oracle re-run UNCHANGED is GREEN (paste),
+  proving this phase moved no behaviour.
+- grep proof: zero old Feature-A/Feature-B names remain in docs/misc or .ADRs/ADR_65_* (except
+  the intentionally-kept tld_analysis/pfb_dnsbl_py_swap references).
+- `npx markdownlint-cli2` on the changed docs + ADR files.
+- `scripts/agent/run-gates.sh --diff origin/devel`.
+- diff-read: docs/ADR/comment reconciliation only; no runtime logic touched.
+
+EXPECTED RESULT
+Docs + ADR-65 references speak the new names; no stale identifier left in prose; the oracle
+proves behaviour is unchanged. ADR-66 ready to flip to Accepted on the green rename.
+
+COMMIT (single)
+    docs: reconcile TLD names in docs + ADR-65 to the tld_allow/tld_wildcard stems (ADR-66 P4)
+Push directly to adr/66-tld-naming-disambiguation; open a PR only if the direct push is rejected.
+
+HANDOFF -- write .ADRs/ADR_66_TLD_Naming_Disambiguation/RESULTS/04_Results.txt with the fixed
+fields: Verdict; What changed (files + one-line why + commit hash); Gates (commands + pasted
+tails); the oracle-unchanged-green proof; the grep-zero-stale-names proof; Coverage-matrix (docs
++ ADR-65 references reconciled); Deviations / judgment calls (or "none"); the final DoD state.
