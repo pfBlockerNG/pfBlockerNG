@@ -115,9 +115,9 @@ support "MaxMind for logs but IPinfo for reputation". Concretely:
 | Lookup seam | direct `mmdblookup` / IPinfo calls scattered | a `GeoipProvider` interface returning a **normalized record** (`country_iso`, `country_name`, `continent`, `asn`, `as_org`, flags map); MaxMind + IPinfo implementations |
 | GeoIP source | MaxMind only | `geoip_provider` setting selects one provider for **all** GeoIP consumers |
 | ASN source | IPinfo only | `asn_provider` setting selects one provider for ASN (default `ipinfo` = today) |
-| Country/continent build | MaxMind `geoname` | **the truth is ours, not the provider's** (§2.5, issue #1235): an in-tree GeoNames-generated table (ISO 3166-1 alpha-2 → name, continent) defines which countries exist and what they are called; the provider only supplies **network → ISO**. MaxMind's Locations CSV degrades to a `geoname_id → ISO` lookup; IPinfo emits ISO directly |
-| Deprecated MaxMind flags | `is_anonymous_proxy`/`is_satellite_provider`/`is_anycast` | exposed only when the active provider supplies them; absent providers report "unavailable" — never a fatal |
-| Locale country names | MaxMind only | names (and their locales) come from the **in-tree table** (§2.5), so the UI language no longer depends on the provider — this removes the `supports_locale` capability flag and the "IPinfo → English only" degradation. A provider's own localized names, where it ships them, are optional enrichment, never the source |
+| Country/continent build | MaxMind `geoname` | **ADR-64 owns it** — identity (which countries exist, their names, their continent) comes from the in-tree truth table; the provider supplies only **network → ISO**. See §2.5. |
+| Deprecated MaxMind flags | `is_anonymous_proxy`/`is_satellite_provider`/`is_anycast` | provider-adapter concern, never the truth table (ADR-64 §2.5); exposed only when the active provider supplies them — absent providers report "unavailable", never a fatal. Note #1221: real GeoLite2 ships **zero** flagged rows. |
+| Locale country names | MaxMind only | **ADR-64 owns it** — names and locales come from the truth table, so the UI language does not depend on the provider. The `supports_locale` capability flag is therefore **dropped**. |
 | `config.xml` deprecated fields | n/a | **kept inert, never migrated** (ADR-28); a GUI/`file_notice` flags settings that the active provider can't honour |
 
 ### 2.2 Semantics that MUST be preserved (the contract — pin with tests before any swap)
@@ -152,220 +152,38 @@ stored value is preserved for roll-forward/rollback.
   pages, adding only the provider selectors + capability notices.
 - **`config.xml` migration / field removal** — out (frozen store); notices only.
 
-### 2.5 The country/continent truth is OURS, not the provider's (prerequisite: issue #1235)
+### 2.5 The country/continent truth is NOT this ADR's to define — see ADR-64
 
-Recorded 2026-07-12, after the maintainer's review of #1235: *"The predefined Geoname should be
-the ultimate truth. Especially once we look at adding IPinfo or potentially any other GeoIP
-provider."*
+**ADR-64 ("Own the GeoIP country/continent truth in-tree") is a blocking prerequisite for Phase 2
+and the single source of truth for everything below. Read it; do not restate it here.**
 
-A provider abstraction that lets each provider define **which countries exist** is not an
-abstraction — it leaks the vendor straight into the user's configuration:
+The short version, and the only part this ADR needs: a provider abstraction that lets each provider
+define *which countries exist* and *what they are called* leaks the vendor into the user's
+configuration — a country a provider drops can silently empty a configured alias, and names and
+locales would move with the provider. So the country set, the display/localized names, the
+ISO→continent mapping, the frozen structural bindings (`pfB_NAmerica`, the config-section roots,
+the page filenames) and the per-continent unknown-country buckets all come from the **in-tree
+truth table**, keyed by ISO 3166-1 alpha-2.
 
-- A country present in one provider/release/plan can be absent from the next. If the country
-  list is the provider's, an alias the user configured yesterday can silently evaporate on
-  tomorrow's download. A blocklist that quietly stops blocking is the worst failure mode this
-  package has.
-- Providers disagree on **names**. Measured against a **real, licensed GeoLite2 dataset**
-  (maintainer's box, 2026-07-13; the earlier "Hashemite Kingdom of Jordan" example in this
-  section was wrong — it came from MaxMind's 2023 *GeoIP2* example file, and current GeoLite2
-  says "Jordan"):
-  **17 of 250** country names differ between GeoLite2 and GeoNames — `Türkiye`/`Turkey`,
-  `Curaçao`/`Curacao`, `Réunion`/`Reunion`, `Congo (DRC)`/`Democratic Republic of the Congo`,
-  `Palestine`/`Palestinian Territory`, `Bonaire`/`Bonaire, Saint Eustatius and Saba`, … .
-  Whichever the UI shows today changes if the provider changes.
-- Locales differ per provider (MaxMind ships localized Locations files; IPinfo ships none), so
-  provider-sourced names make the **UI language** a function of the provider setting.
+**What that changes for THIS ADR:**
 
-Therefore, before Phase 2:
-
-1. **The truth is a committed, generated table**, built by a pinned, checksum-verified generator
-   (same shape as `scripts/update-geoip-fixtures.py`) from **two** free, machine-readable sources
-   — each used for the one thing it is authoritative about (all figures measured 2026-07-13):
-
-   | Source | Licence | Supplies | Why it, and not the others |
-   | --- | --- | --- | --- |
-   | **`iso-codes`** (Debian; ISO 3166-1 data) | LGPL-2.1 | the **country base set** (249 officially-assigned codes), **current official names**, and **localized names** | It *is* the ISO 3166-1 list, machine-readable and maintained — ISO's own paid collection file (300 CHF) buys nothing extra, and the ISO OBP web UI does not need scraping. Names are current and correctly accented (`Türkiye`, `Cabo Verde`, `North Macedonia`, `Eswatini`, `Curaçao`). Ships `.po` translations for **every locale pfBlockerNG offers** (`fr de pt_BR ja zh_CN es ru` — e.g. `Türkiye` → `トルコ`), which retires the "locale support depends on the provider" problem outright. |
-   | **GeoNames** `countryInfo.txt` | CC BY 4.0 | the **ISO → continent** mapping (+ the continent geoname ids) | ISO 3166 has no concept of a continent, so this is the one thing `iso-codes` cannot answer. GeoNames' 7-continent model is the one the GeoIP pages already use (UN M.49 / CLDR splits the Americas differently and would not map onto our pages). Its *names* are not used — they are ASCII-folded and partly stale (`Curacao`, `Reunion`, `Turkey`). |
-
-   This is not a new dependency, it is the original one made explicit: the `geoname_id`s in
-   today's hardcoded `$pfb_geoip_all` **are** GeoNames ids (`JO`=248816, `US`=6252001,
-   `BT`=1252634, `AQ`=6697173) — the table is a GeoNames snapshot, scraped once and never
-   refreshed.
-
-   **The set is a UNION; the names have a PRECEDENCE.** The set arithmetic (measured):
-
-   ```text
-   ISO 3166-1 official : 249
-   MaxMind GeoLite2    : 250  = 249 + XK              (user-assigned code, not official ISO)
-   $pfb_geoip_all      : 250  = 249 + XK              (our table already matches MaxMind)
-   GeoNames countryInfo: 252  = 249 + XK + AN + CS    (AN/CS retired: 2010, 2006)
-   ```
-
-   - **Set = ISO ∪ (every SUPPORTED provider's code set)**, computed at generation and committed.
-     Today that is 250 (ISO + `XK`). A strict-ISO table would **drop Kosovo** — which MaxMind
-     ships and users may already have selected — i.e. a silently emptied alias, the exact failure
-     this section exists to prevent. Note the union also excludes GeoNames' retired `AN`/`CS` for
-     free: neither ISO nor any provider lists them, so no "filter the dead codes" rule is needed.
-     Union over **all** supported providers, not the active one — otherwise switching provider
-     would change which countries exist.
-   - **Name precedence: ISO → GeoNames → provider.** ISO is authoritative where it has an entry;
-     GeoNames covers what ISO does not (`XK` → "Kosovo", continent `EU`, geoname `831053` — the
-     same id MaxMind uses); the provider is the last resort. Localized names follow the same
-     ladder (`iso-codes` `.po` → provider's localized Locations → English), which is the only
-     place the provider is genuinely load-bearing today: `iso-codes` has no `XK` translations,
-     while MaxMind ships them (`ja` → コソボ).
-   - **A provider code the committed table does not know is a NOTICE, never a silent new country.**
-     The table is regenerated deliberately (a reviewed commit); until then such networks are
-     simply unassigned, and the tracker below opens an issue naming the code. Runtime never
-     invents a country — that is what "a subsequent provider DB could alter the user's config"
-     means, and it is the thing being prevented.
-   **How stale, measured (2026-07-13):** our table's ISO set (250) matches GeoLite2's exactly, but
-   **6 names** disagree with current GeoNames — and four of those are renames the world actually
-   made: the UI still says **Swaziland** (Eswatini), **Macedonia** (North Macedonia),
-   **Cape Verde** (Cabo Verde), **East Timor** (Timor Leste). Against current GeoLite2, **21**
-   names disagree.
-2. **The canonical key is the ISO 3166-1 alpha-2 code**, never a provider's `geoname_id` —
-   which is where the data model already points (`config.xml` stores `countries4="US,BT"`).
-3. **A provider supplies network → ISO, nothing else.** MaxMind's Locations CSV becomes a
-   `geoname_id → ISO` lookup; IPinfo needs no lookup at all. This shrinks the provider seam
-   to the one thing providers genuinely differ on.
-4. **Disagreement is surfaced, never silently applied** — a country the provider has no
-   networks for renders `(0)` (honest); a **configured** country the provider dropped raises a
-   notice; an ISO the provider emits that our table does not know raises a notice.
-5. **Provider-specific pseudo-countries stay in the provider adapter** — MaxMind's `A1`/`A2`
-   (anonymous proxy / satellite) are not countries and are not in GeoNames (see #1221, where
-   they are already provably empty against real GeoLite2 data).
-6. **The table is refreshed by a scheduled tracker, not by hand.** A monthly workflow re-derives
-   the table from the pinned sources and, on any diff (a new/retired ISO code, a rename, a moved
-   continent), **opens an issue** with the delta — the house pattern already used by
-   `version-tracker.yml`, `top1m-healthcheck.yml` and `nightly-failure-alert.yml`. Regeneration
-   stays a reviewed commit; the tracker only tells us one is due. This is also where a *provider*
-   drift shows up: the same job can diff the active provider's country set against the table
-   (today that would report MaxMind's `XK` and the two GeoNames-only retired codes).
-
-#### Continents are a second truth — and a *structural* one
-
-`countryInfo.txt` gives a continent **code** (`AF`/`AN`/`AS`/`EU`/`NA`/`OC`/`SA`), not a name.
-Continent identity is already in-tree today, in two places, and one of them is load-bearing in a
-way country names are not:
-
-| Thing | Example | May it change? |
-| --- | --- | --- |
-| **Structural binding** | alias prefix `pfB_NAmerica` (`pfblockerng.inc:160-171`), config section root `installedpackages/pfblockerng<continent>` , generated page `pfblockerng_North_America.php` | **No.** These are stored config keys and alias names. Renaming one breaks existing `config.xml` and firewall rules — and ADR-28 forbids migrations. They are frozen, whatever any provider calls a continent. |
-| **Display name** | "North America"; localized variants | Per locale, yes — but never per *provider*. |
-
-So the continent table (7 rows, in-tree) carries: **code** (the stable key) → **GeoNames id** →
-**structural slug** (frozen) → **display name(s)**. The GeoNames continent ids are already in
-this tree — `pfblockerng.php:935-938` keys its "AA ASIA/EUROPE UNDEFINED" buckets on `6255147`
-and `6255148`. Verified at the source (`geonames.org/<id>`, 2026-07-12):
-
-```text
-6255146 Africa   6255147 Asia    6255148 Europe   6255149 North America
-6255150 South America            6255151 Oceania  6255152 Antarctica
-```
-
-Consequences for this ADR:
-
-- **Country → continent comes from GeoNames' `Continent` column, not from the provider.** A
-  provider's own continent field is ignored for the build; where it disagrees with the table, that
-  is a notice (a provider bug or a stale table), never a silent re-bucketing of a user's alias.
-- **A provider can never rename an alias or a config section.** MaxMind localizes "North America";
-  IPinfo may not; neither may touch `pfB_NAmerica`.
-- **Two entries in `$pfb['continents']` are not continents at all** and must not enter the
-  GeoNames-derived table: **"Top Spammers"** (`pfB_Top`) is our editorial `$top_20` bucket, and
-  **"Proxy and Satellite"** (`pfB_PS`) is a MaxMind construct (see #1221) that belongs to the
-  MaxMind adapter. They keep their structural bindings; they just are not geography.
-
-#### Continent-level rows: what the "AA \<CONTINENT\> UNDEFINED" buckets actually are
-
-`pfblockerng.php:935-938` hardcodes two pseudo-countries keyed on **continent** geoname ids —
-`6255147` ("AA ASIA UNDEFINED") and `6255148` ("AA EUROPE UNDEFINED") — and none for the other
-five continents. They are not arbitrary: MaxMind emits **continent-level location rows** for
-addresses it can only place to a continent (the legacy `AP` = Asia/Pacific and `EU` = Europe
-pseudo-countries). MaxMind's own published example carries exactly such a row — the only one in
-the file with an empty `country_iso_code`:
-
-```text
-6255148,en,EU,Europe,,,0        <- geoname_id IS the continent; no country
-```
-
-A Blocks row may then reference `geoname_id = 6255148`, which is not a country. Our Locations
-parse **drops** that row (`:898` requires a non-empty `country_iso_code` *and* `country_name`),
-so the two hardcoded entries re-add what the parse discarded — without them, such a Blocks row
-would index `$pfb_geoip['country'][6255148]['iso'][0]` on a missing key. MaxMind's current
-documentation does not mention continent-level `geoname_id`s or the `EU`/`AP` codes at all
-(checked 2026-07-12), so this behaviour is known only from the data.
-
-**Measured on a real, licensed GeoLite2 dataset (maintainer's box, 2026-07-13) — these rows are
-live, not legacy residue:**
-
-```text
-Locations-en.csv, rows with an empty country_iso_code:   exactly two
-  6255147,en,AS,Asia,,,0
-  6255148,en,EU,Europe,,,0
-
-Blocks rows whose geoname_id IS one of those continents:
-  IPv4: 539     IPv6: 158        (as registered_country: 0 in both families)
-```
-
-So the two hardcoded buckets are neither arbitrary nor dead: they cover ~700 real networks, and
-they match the provider's data exactly (Asia and Europe, no other continent). "Retire them" is
-therefore **not** an option while MaxMind is a supported provider.
-
-**Decision (@BBcan177, #1235, 2026-07-13): keep them PER CONTINENT — one "unknown country"
-bucket per continent, not one global one.** *"When a data source can identify the continent but
-not a specific country, that information still has value. Discarding it entirely feels like
-losing useful signal."* Each continent page then offers exactly one unknown entry, and the user
-decides what rule to write for it.
-
-Volume, so the choice is made on data (same live dataset):
-
-```text
-IPv4:  Asia 181 rows, Europe 358 rows  (of 567,713 = 0.095%)   ~220k addresses (0.005% of IPv4)
-IPv6:  Asia  88 rows, Europe  70 rows  (of 561,061)
-Other continents used this way: 0
-```
-
-**Generalizing to all seven is free, because the stored key is already provider-independent.**
-The bucket's `iso` value — what `config.xml` stores and what names the alias file — **is the
-GeoNames continent id**:
-
-```text
-/usr/local/share/GeoIP/cc/6255147_v4.txt
-  # Country: AA ASIA UNDEFINED
-  # ISO Code: 6255147
-```
-
-So the truth table models an unknown-country bucket for **every** continent, keyed by that
-continent's GeoNames id (`6255146`…`6255152`). The two live keys (`6255147`, `6255148`) keep
-their exact stored values — **no migration** — and the other five become selectable entries that
-render `(0)` until a provider emits rows for them. Per @BBcan177: *"Currently MaxMind only
-surfaces this for Asia and Europe. Maybe we just watch for changes"* — so a provider emitting a
-continent-unknown row for a continent we do not yet surface is a **notice**, exactly like any
-other provider/table disagreement (point 4 above). The display name deserves better than
-`AA ASIA UNDEFINED` (that string exists to sort to the top of the old list) — naming is a UI
-detail for #1235 to settle.
-
-This matters for the provider abstraction: **"the country is unknown, only the continent is
-known" is a real state a provider can report**, and the in-tree truth must model it explicitly
-(a country-less, continent-only bucket per continent) rather than leave it as two hardcoded
-MaxMind-shaped special cases. IPinfo's equivalent state, if any, must map onto the same model.
-
-Note the coverage gap this exposes: the smoke corpus (#1228) carries **no** continent-level row
-(zero references to any of the seven continent ids across both Blocks CSVs), so this path is
-currently exercised by nothing.
-
-Open questions #1235 must settle (they do not block this ADR's other phases): the **continent**
-display names and their locales (`iso-codes` covers countries, not continents — seven strings ×
-seven locales, so a small in-tree table is the likely answer), whether MaxMind's locale files
-stay as optional enrichment for MaxMind users (they should not be needed — `iso-codes` covers
-every locale we offer), the tracker's exact cadence, and the display name of the per-continent
-unknown bucket (today's `AA <CONTINENT> UNDEFINED`).
-
-**Renaming a country is user-visible, and the four stale names above will change on the first
-regeneration** (Swaziland → Eswatini, …). Display strings are not config keys — the stored value
-is the ISO code — so nothing in `config.xml` moves; but the change is worth a release note rather
-than a silent flip.
+1. **The GeoIP seam shrinks to one thing: `network → ISO code`.** MaxMind's Locations CSV degrades
+   to a `geoname_id → ISO` lookup; IPinfo emits ISO directly and needs none. Country identity is
+   never asked of a provider — which makes the §2.0 fork (MMDB-as-seam vs a PHP interface) a purely
+   mechanical question about lookups, not about data ownership.
+2. **`supports_locale` is deleted from §2.1.** Localized names come from the table, so an IPinfo
+   user gets the same localized UI as a MaxMind user. There is no "IPinfo → English only"
+   degradation to design, and no reason to download MaxMind's locale files for an IPinfo install.
+3. **Provider disagreement is a notice, never a silent change** (ADR-64 §2.3): a configured country
+   the active provider dropped, an ISO code it emits that the table does not know, or a
+   continent-level row for a continent the table does not surface. Runtime never invents a country.
+   This ADR's §2.3 (`config.xml` "cleanup" → notice, not migration) is the same rule, applied to
+   the same surface.
+4. **`A1`/`A2` (anonymous proxy / satellite) are provider constructs, not countries** — they live in
+   the MaxMind adapter, not the table (and per #1221 they are provably empty on real GeoLite2 data).
+5. **Phase ordering:** ADR-64 lands first. Any phase of this ADR that touches the country build
+   must read ADR-64's "Accepted user-visible deltas" — those deltas are ADR-64's to produce, and a
+   further change to a country name, alias name or config key from *this* ADR is a defect.
 
 ## 3. Consequences
 
