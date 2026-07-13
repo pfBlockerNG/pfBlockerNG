@@ -746,20 +746,21 @@ def test_general_log_trim_margin_pct_hostile_digit_guard_coerces_to_default(
     assert got == "0", f"bogus pfb_log_trim_margin_pct={bogus!r} should coerce to default 0, got {got!r}"
 
 
-def test_general_log_trim_margin_pct_oversized_value_saves_without_crash(
+def test_general_log_trim_margin_pct_oversized_value_is_canonicalized_on_save(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
     margin_pct_original: str,  # noqa: ARG001 -- restore-and-prove fixture
 ) -> None:
-    """issue #1109: an oversized digit string passes ``ctype_digit`` and stores verbatim.
+    """issue #1109: an out-of-range margin is clamped when SAVED, not just when read.
 
-    The UI has no upper-bound rejection (by design -- the backend parser
-    ``pfb_log_trim_margin_pct()`` clamps to 1000 when it is READ, not at save time; already
-    pinned by ``LogTrimMarginPctTest``). This only proves the save/re-render round-trip
-    itself never crashes on an oversized value.
+    Storing it raw would leave config.xml claiming 999999999 while the runtime parser
+    clamps to 1000 -- and the field would re-render the raw value, so the page shows a
+    number the system does not actually use. The save canonicalizes through the same
+    ``pfb_log_trim_margin_pct()`` parser the backend reads with, so the stored value IS
+    the effective value.
     """
     got = _post_and_confirm_general(webui, smoke_vm, {"pfb_log_trim_margin_pct": "999999999"}, MARGIN_CFG)
-    assert got == "999999999", f"oversized pfb_log_trim_margin_pct should store verbatim, got {got!r}"
+    assert got == "1000", f"an oversized margin must be clamped to the 1000 bound on save, got {got!r}"
 
 
 def test_general_log_trim_margin_pct_save_preserves_log_max_days_sibling(
