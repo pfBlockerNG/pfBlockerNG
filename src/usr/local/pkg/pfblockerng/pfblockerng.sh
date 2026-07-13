@@ -1266,7 +1266,7 @@ pfb_recompute_rep_subset() {
 	rec_new_stream="${rec_scratch}/new_stream"
 	true > "${rec_new_stream}"
 	awk -v actionfile="${rec_actionmap}" -v priofile="${rec_priority}" \
-			-v newstream="${rec_new_stream}" -v matchdir="${pfbmatchgen}" \
+			-v newstream="${rec_new_stream}" -v matchgendir="${pfbmatchgen}" \
 			-v mexcidr="${rec_matchexemptcidr}" -v mexmem="${rec_matchexemptmembers}" '
 			BEGIN {
 				while ((getline line < actionfile) > 0) {
@@ -1294,7 +1294,7 @@ pfb_recompute_rep_subset() {
 					for (i = 1; i <= wincount; i++) print winrows[i] >> newstream
 					if (curact == "matchdup") {
 						for (a in winaliases) {
-							mfile = matchdir "pfB_Match_Rep_" a ".txt.new"
+							mfile = matchgendir "pfB_Match_Rep_" a ".txt.new"
 							print curpfx ".0/24" >> mfile
 							for (i = 1; i <= wincount; i++) {
 								if (winalias[i] == a) print "!" winip[i] >> mfile
