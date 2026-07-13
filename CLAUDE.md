@@ -595,7 +595,10 @@ Activate once after cloning: `sh scripts/setup-hooks.sh` (sets `core.hooksPath`)
   via `CLAUDE_CODE_USER_EMAIL` (managed-remote) or
   `git config pfblockerng.allowprimarycommit true`), then appends the owner's
   `Co-authored-by:` trailer (see Commit style); runs even under `--no-verify`.
-- **`pre-push`** — enforces the release tag scheme via `scripts/release-version.sh`.
+- **`pre-push`** — enforces the release tag scheme via `scripts/release-version.sh`; also
+  denies an agent (`CLAUDECODE=1`) branch push that would rewrite remote history the agent
+  never fetched (advertised remote oid must equal the remote-tracking ref — issue #1307,
+  `--force-with-lease`'s check enforced by effect).
 
 ---
 
