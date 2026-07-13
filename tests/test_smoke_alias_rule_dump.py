@@ -51,29 +51,41 @@ class _FakeVM:
     grep_rc: int | None = None
     sr_rc: int = 0
     tables_rc: int = 0
+    # issue #1252: probe keys ("grep"/"sr"/"tables") whose ssh call stalls the transport
+    # instead of returning — TimeoutExpired, not a returncode.
+    timeout_on: frozenset[str] = field(default_factory=frozenset)
     calls: list[tuple[str, ...]] = field(default_factory=list)
 
     def ssh(self, *remote: str, timeout: float = 60.0) -> _FakeResult:
         self.calls.append(remote)
         if remote[0] == "/usr/bin/grep":
+            if "grep" in self.timeout_on:
+                raise subprocess.TimeoutExpired(cmd=list(remote), timeout=timeout)
             # grep exits 1 on no match — the dump must treat that as "absent", not as an error.
             rc = self.grep_rc if self.grep_rc is not None else (0 if self.rules_debug else 1)
             return _FakeResult(returncode=rc, stdout=self.rules_debug)
         if remote[:2] == (helpers.PFCTL, "-sr"):
+            if "sr" in self.timeout_on:
+                raise subprocess.TimeoutExpired(cmd=list(remote), timeout=timeout)
             return _FakeResult(returncode=self.sr_rc, stdout=self.live_rules)
         if remote[:2] == (helpers.PFCTL, "-sTables"):
+            if "tables" in self.timeout_on:
+                raise subprocess.TimeoutExpired(cmd=list(remote), timeout=timeout)
             return _FakeResult(returncode=self.tables_rc, stdout=self.tables)
         raise AssertionError(f"unexpected ssh command: {remote}")
 
 
-def _fake_php_eval(rows: str, *, returncode: int = 0, raw: str | None = None) -> object:
+def _fake_php_eval(rows: str, *, returncode: int = 0, raw: str | None = None, raises_timeout: bool = False) -> object:
     """Return a php_eval stand-in emitting the dump's ``<<CFG>>``-delimited config rows.
 
     ``raw`` replaces the whole stdout, so a test can simulate pfSsh.php fatalling before it
     printed the sentinels (it still exits 0 — the sentinels are the only completion proof).
+    ``raises_timeout`` (issue #1252) simulates the transport stalling instead.
     """
 
     def _run(_vm: object, _snippet: str, *, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
+        if raises_timeout:
+            raise subprocess.TimeoutExpired(cmd=["/usr/local/sbin/pfSsh.php"], timeout=timeout)
         stdout = raw if raw is not None else f"banner\n<<CFG>>{rows}<<END>>\n"
         return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr="")
 
@@ -192,6 +204,97 @@ def test_a_failed_probe_is_unproven_never_an_accusation(
     assert "UNPROVEN" in stage_line, f"a failed probe did not yield UNPROVEN: {stage_line!r}"
     assert broken in stage_line, f"the broken probe {broken!r} is not named: {stage_line!r}"
     assert "NEVER generated" not in stage_line, f"a failed probe accused the product: {stage_line!r}"
+
+
+def test_config_probe_timeout_is_unproven_not_a_raw_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given the pfSsh.php transport stalling (subprocess.TimeoutExpired)
+    When alias_rule_dump runs
+    Then the verdict is UNPROVEN naming CONFIG(pfSsh) — the exception must NOT escape and
+    wreck the other three layers' diagnostic output (issue #1252).
+    """
+    monkeypatch.setattr(helpers, "php_eval", _fake_php_eval(CFG_ROW, raises_timeout=True))
+    vm = _FakeVM(rules_debug=DEBUG_ROW, live_rules=LIVE_ROW, tables=ALIAS)
+
+    dump = helpers.alias_rule_dump(vm, ALIAS)  # type: ignore[arg-type]
+
+    stage_line = next(ln for ln in dump.splitlines() if ln.startswith("[STAGE LOST]"))
+    assert "UNPROVEN" in stage_line, f"a stalled probe did not yield UNPROVEN: {stage_line!r}"
+    assert "CONFIG(pfSsh)" in stage_line, f"the stalled probe is not named: {stage_line!r}"
+    assert "pfSsh=124" in stage_line, f"the timeout rc is not reported as 124: {stage_line!r}"
+
+
+def test_rules_debug_probe_timeout_is_unproven_not_a_raw_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given the rules.debug grep stalling
+    When alias_rule_dump runs
+    Then the verdict is UNPROVEN naming RULES.DEBUG(grep) (issue #1252).
+    """
+    monkeypatch.setattr(helpers, "php_eval", _fake_php_eval(CFG_ROW))
+    vm = _FakeVM(live_rules=LIVE_ROW, tables=ALIAS, timeout_on=frozenset({"grep"}))
+
+    dump = helpers.alias_rule_dump(vm, ALIAS)  # type: ignore[arg-type]
+
+    stage_line = next(ln for ln in dump.splitlines() if ln.startswith("[STAGE LOST]"))
+    assert "UNPROVEN" in stage_line, f"a stalled probe did not yield UNPROVEN: {stage_line!r}"
+    assert "RULES.DEBUG(grep)" in stage_line, f"the stalled probe is not named: {stage_line!r}"
+    assert "grep=124" in stage_line, f"the timeout rc is not reported as 124: {stage_line!r}"
+
+
+def test_live_pf_probe_timeout_is_unproven_not_a_raw_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given the ``pfctl -sr`` read stalling
+    When alias_rule_dump runs
+    Then the verdict is UNPROVEN naming LIVE PF(pfctl -sr) (issue #1252).
+    """
+    monkeypatch.setattr(helpers, "php_eval", _fake_php_eval(CFG_ROW))
+    vm = _FakeVM(rules_debug=DEBUG_ROW, tables=ALIAS, timeout_on=frozenset({"sr"}))
+
+    dump = helpers.alias_rule_dump(vm, ALIAS)  # type: ignore[arg-type]
+
+    stage_line = next(ln for ln in dump.splitlines() if ln.startswith("[STAGE LOST]"))
+    assert "UNPROVEN" in stage_line, f"a stalled probe did not yield UNPROVEN: {stage_line!r}"
+    assert "LIVE PF(pfctl -sr)" in stage_line, f"the stalled probe is not named: {stage_line!r}"
+    assert "pfctl-sr=124" in stage_line, f"the timeout rc is not reported as 124: {stage_line!r}"
+
+
+def test_table_existence_probe_timeout_does_not_flip_the_verdict_to_unproven(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Given ONLY the ``pfctl -sTables`` read stalling, with the rule present at all 3 layers
+    When alias_rule_dump runs
+    Then the verdict stays the normal layer verdict (NONE here) — table existence is not one
+    of the three UNPROVEN causes today, and a stalled table read must not change that. A naive
+    "catch every TimeoutExpired into broken" implementation fails this (issue #1252).
+    """
+    monkeypatch.setattr(helpers, "php_eval", _fake_php_eval(CFG_ROW))
+    vm = _FakeVM(rules_debug=DEBUG_ROW, live_rules=LIVE_ROW, timeout_on=frozenset({"tables"}))
+
+    dump = helpers.alias_rule_dump(vm, ALIAS)  # type: ignore[arg-type]
+
+    stage_line = next(ln for ln in dump.splitlines() if ln.startswith("[STAGE LOST]"))
+    assert "UNPROVEN" not in stage_line, f"a stalled table read wrongly flipped the verdict: {stage_line!r}"
+    assert "NONE" in stage_line, f"expected the normal NONE verdict: {stage_line!r}"
+    assert "[pf table pfB_DNSBLIP_v4 exists] UNKNOWN (pfctl -sTables failed)" in dump, (
+        f"the stalled table read is not reported as UNKNOWN:\n{dump}"
+    )
+
+
+def test_all_three_verdict_probes_stalling_names_all_three(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given CONFIG, RULES.DEBUG and LIVE PF all stalling at once
+    When alias_rule_dump runs
+    Then the single UNPROVEN verdict names all three — mirrors today's multi-rc-failure
+    behaviour (issue #1252).
+    """
+    monkeypatch.setattr(helpers, "php_eval", _fake_php_eval(CFG_ROW, raises_timeout=True))
+    vm = _FakeVM(tables=ALIAS, timeout_on=frozenset({"grep", "sr"}))
+
+    dump = helpers.alias_rule_dump(vm, ALIAS)  # type: ignore[arg-type]
+
+    stage_line = next(ln for ln in dump.splitlines() if ln.startswith("[STAGE LOST]"))
+    assert "UNPROVEN" in stage_line, f"stalled probes did not yield UNPROVEN: {stage_line!r}"
+    for name in ("CONFIG(pfSsh)", "RULES.DEBUG(grep)", "LIVE PF(pfctl -sr)"):
+        assert name in stage_line, f"{name!r} missing from: {stage_line!r}"
+    assert "pfSsh=124" in stage_line and "grep=124" in stage_line and "pfctl-sr=124" in stage_line, (
+        f"not all rc fields report 124: {stage_line!r}"
+    )
 
 
 def test_a_rule_naming_the_alias_only_in_its_descr_does_not_count_as_a_reference() -> None:

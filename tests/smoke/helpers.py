@@ -545,6 +545,14 @@ def pf_state_dump(vm: SmokeVM, *, timeout: float = 30.0) -> str:
 _ALIAS_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 
+def _tolerate_timeout(call: Callable[[], subprocess.CompletedProcess[str]]) -> subprocess.CompletedProcess[str]:
+    """issue #1252: a stalled TRANSPORT is a FAILED PROBE, not a raw exception wrecking the dump."""
+    try:
+        return call()
+    except subprocess.TimeoutExpired as exc:
+        return subprocess.CompletedProcess(exc.cmd, 124, "", f"transport timeout after {exc.timeout}s")
+
+
 def alias_rule_dump(vm: SmokeVM, alias: str, *, timeout: float = 30.0) -> str:
     """Return a layered snapshot naming WHERE a pfB alias's auto-rule was lost.
 
@@ -567,9 +575,10 @@ def alias_rule_dump(vm: SmokeVM, alias: str, *, timeout: float = 30.0) -> str:
     poll read stale state.
 
     A FAILED PROBE is never a missing rule: if the config read, the rules.debug grep or the
-    pfctl read errors out, the verdict is ``UNPROVEN`` — a broken probe reads as an empty
-    layer, and silently blaming the product for a pfSsh.php error is exactly the
-    misdiagnosis this helper exists to prevent (issue #1239).
+    pfctl read errors out OR the transport stalls (``subprocess.TimeoutExpired``), the verdict
+    is ``UNPROVEN`` — a broken or stalled probe reads as an empty layer, and silently blaming
+    the product for a pfSsh.php error or a hung SSH is exactly the misdiagnosis this helper
+    exists to prevent (issue #1239, #1252).
 
     The ruleset layers use :func:`rule_line_references`, the same match rule
     :func:`rule_references` applies, so the dump cannot contradict the assertion it explains.
@@ -593,7 +602,7 @@ def alias_rule_dump(vm: SmokeVM, alias: str, *, timeout: float = 30.0) -> str:
         "}\n"
         "echo '<<CFG>>'.implode(' ## ',$o).'<<END>>';"
     )
-    cfg_res = php_eval(vm, snippet, timeout=timeout)
+    cfg_res = _tolerate_timeout(lambda: php_eval(vm, snippet, timeout=timeout))
     cfg = ""
     # The sentinels are the ONLY proof the snippet ran to completion: pfSsh.php exits 0 even
     # when the PHP inside it fatals, so rc alone cannot tell a clean empty result from a crash.
@@ -603,14 +612,14 @@ def alias_rule_dump(vm: SmokeVM, alias: str, *, timeout: float = 30.0) -> str:
 
     # grep: rc 0 = matched, rc 1 = no match (a real answer), rc >= 2 = the grep itself failed
     # (missing/unreadable /tmp/rules.debug) — only the last is an unusable probe.
-    dbg = vm.ssh("/usr/bin/grep", "-n", alias, "/tmp/rules.debug", timeout=timeout)
-    sr = vm.ssh(PFCTL, "-sr", timeout=timeout)
+    dbg = _tolerate_timeout(lambda: vm.ssh("/usr/bin/grep", "-n", alias, "/tmp/rules.debug", timeout=timeout))
+    sr = _tolerate_timeout(lambda: vm.ssh(PFCTL, "-sr", timeout=timeout))
     dbg_ok = dbg.returncode in (0, 1)
     sr_ok = sr.returncode == 0
     dbg_lines = [ln for ln in dbg.stdout.splitlines() if rule_line_references(ln, alias)]
     live = [ln for ln in sr.stdout.splitlines() if rule_line_references(ln, alias)]
 
-    tables_res = vm.ssh(PFCTL, "-sTables", timeout=timeout)
+    tables_res = _tolerate_timeout(lambda: vm.ssh(PFCTL, "-sTables", timeout=timeout))
     tables_ok = tables_res.returncode == 0
     table_exists = alias in [ln.strip() for ln in tables_res.stdout.splitlines()] if tables_ok else None
 
