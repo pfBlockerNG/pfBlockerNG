@@ -99,14 +99,16 @@ def _write_plain_boundary_manifest(tmp_path: Any, *, top1m_enabled: bool) -> tup
             }
         )
 
-    # tld_master must resolve UNDER the manifest dir (the build confines manifest
-    # paths to their base dir) -- copy it alongside the feeds and reference by name.
-    shutil.copyfile(os.path.join(FIXTURES, "tld_master.txt"), os.path.join(str(tmp_path), "tld_master.txt"))
+    # issue #1255: the public-suffix oracle is a SHIPPED file gated by an ini flag,
+    # not a manifest key (HSTS parity) -- stage it exactly like dnsbl_cache_stage().
+    oracle = os.path.join(str(tmp_path), "pfb_py_tld.txt")
+    shutil.copyfile(os.path.join(FIXTURES, "tld_master.txt"), oracle)
+    pfb_unbound.pfb["python_tld_wildcard"] = True
+    pfb_unbound.pfb["pfb_py_tld"] = oracle
 
     manifest = {
         "version": 1,
         "config": {
-            "tld_master": "tld_master.txt",
             "tld_blacklist": src_config.get("tld_blacklist", []),
             "tld_exclusion": src_config.get("tld_exclusion", []),
             "user_whitelist": src_config.get("user_whitelist", []),

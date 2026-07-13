@@ -19,7 +19,9 @@ Mechanism map (each produced via the manifest/ini/config; bands per ADR-07 SS2)
 -----------------------------------------------------------------------------------
 BLOCK (gen1 blocked, gen2 allowed -- except the per-mechanism CONTROL, still blocked):
   m1 generic exact   -> dataDB  band 1  (plain feed, 3-part name -> classify DATA)
-  m2 generic zone    -> zoneDB  band 1  (plain feed, 2-part name + tld_master -> ZONE)
+  m2 generic exact   -> dataDB  band 1  (plain feed, 2-part name; issue #1255: the
+                                          oracle is no longer manifest-driven, so this
+                                          lane now exercises dataDB, not zoneDB)
   m3 abp anchored    -> dataDB  band 1  (||sub.d.com^, 3-part -> DATA)
   m4 abp regex       -> regexDB band 1  (irreducible /re/)
   m5 abp $important  -> dataDB  band 3  (||sub.d.com^$important)

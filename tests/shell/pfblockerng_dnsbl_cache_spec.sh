@@ -44,6 +44,10 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     echo 'PY-CODE-v1' > "${pfbpkgdir}/pfb_unbound.py"
     echo 'INC-CODE-v1' > "${pfbpkgdir}/pfb_unbound_include.inc"
     echo 'HSTS-v1' > "${pfbpkgdir}/pfb_py_hsts.txt"
+    # issue #1255: the TLD-Wildcard public-suffix oracle -- name-mapped (source
+    # basename 'dnsbl_tld', chroot copy 'pfb_py_tld.txt'), NOT in PFB_PY_SHIPPED
+    # (whose same-basename cp -f loop cannot rename).
+    echo 'TLD-ORACLE-v1' > "${pfbpkgdir}/dnsbl_tld"
   }
 
   cleanup_sandbox() {
@@ -76,6 +80,25 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     cleanup_sandbox
   End
 
+  It 'stage copies the TLD oracle from dnsbl_tld to pfb_py_tld.txt (name-mapped, issue #1255)'
+    setup_sandbox
+    When call dc stage
+    The contents of file "${pfbchroot}/pfb_py_tld.txt" should equal 'TLD-ORACLE-v1'
+    # The shipped file itself is NEVER renamed (PFB_PY_SHIPPED's same-basename cp
+    # loop is untouched -- this is a separate, explicit name-mapped copy).
+    The contents of file "${pfbpkgdir}/dnsbl_tld" should equal 'TLD-ORACLE-v1'
+    cleanup_sandbox
+  End
+
+  It 'stage is a no-op for the TLD oracle when the shipped file is absent'
+    setup_sandbox
+    rm -f "${pfbpkgdir}/dnsbl_tld"
+    When call dc stage
+    The status should be success
+    The path "${pfbchroot}/pfb_py_tld.txt" should not be exist
+    cleanup_sandbox
+  End
+
   It 'save archives the generated set only (never the shipped files)'
     setup_sandbox
     dc stage
@@ -93,6 +116,9 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     # ... and NOT the shipped files (re-staged from /usr/local on restore).
     The result of "tar_list()" should not include 'pfb_py_hsts.txt'
     The result of "tar_list()" should not include 'pfb_unbound_include.inc'
+    # ... nor the name-mapped TLD oracle (issue #1255: matches the pfb_py_* glob
+    # but is shipped, not generated -- archiving it would reinstate a stale oracle).
+    The result of "tar_list()" should not include 'pfb_py_tld.txt'
     cleanup_sandbox
   End
 
@@ -129,6 +155,18 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     The contents of file "${pfbchroot}/pfb_unbound.py" should equal 'PY-CODE-v2'
     # Mount-point dirs are present again after restore.
     The path "${pfbchroot}/lib" should be directory
+    cleanup_sandbox
+  End
+
+  It 're-stages the CURRENT TLD oracle on restore, not a stale archived copy (issue #1255)'
+    setup_sandbox
+    dc stage
+    dc save
+    rm -rf "${pfbchroot}"
+    # Bump the shipped oracle to prove restore re-stages CURRENT code, like pfb_unbound.py.
+    echo 'TLD-ORACLE-v2' > "${pfbpkgdir}/dnsbl_tld"
+    When call dc restore
+    The contents of file "${pfbchroot}/pfb_py_tld.txt" should equal 'TLD-ORACLE-v2'
     cleanup_sandbox
   End
 

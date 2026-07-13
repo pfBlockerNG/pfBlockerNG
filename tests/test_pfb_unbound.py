@@ -37,7 +37,11 @@ from unboundmodule import (
 
 import pfb_unbound
 from pfb_unbound import (
+    DNSBL_CLASS_DATA,
+    DNSBL_CLASS_ZONE,
+    _dnsbl_load_tld_master,
     _parse_ini_int,
+    classify,
     convert_ipv4,
     convert_ipv6,
     convert_other,
@@ -3686,3 +3690,63 @@ class TestADR02PythonOnlyBlocking:
         assert entry is not None
         assert entry.dnsbl.b_type == "TLD"
         assert entry.dnsbl.feed == "ZoneFeed"
+
+
+class TestClassifyTldWildcardOffEmptyOracle:
+    """issue #1255: DNSBL Wildcard Blocking (TLD) OFF must force EXACT matching
+    for every domain, including a bare 2-label registrable name -- the dcnt==2
+    branch never consulted ``tlds``, so an empty oracle alone did not gate it.
+
+    Scenario: TLD-Wildcard toggled OFF (empty oracle) vs ON (oracle loaded)
+      Given a 2-label domain (evil.com) and a 3-label public-suffix domain
+        (example.co.uk)
+      When the oracle is empty (OFF)  Then both classify as exact DATA
+      When the oracle is populated (ON)  Then both classify as wildcard ZONE
+        (unchanged, proving the guard only fires when the oracle is empty)
+    """
+
+    def test_tld_wildcard_off_empty_oracle_two_label_is_data(self) -> None:
+        # Before the #1255 fix this returned (DNSBL_CLASS_ZONE, "evil.com") --
+        # the RED proof: the dcnt==2 branch never consulted tlds.
+        assert classify("evil.com", {}, set()) == (DNSBL_CLASS_DATA, "evil.com")
+
+    def test_tld_wildcard_off_empty_oracle_public_suffix_is_data(self) -> None:
+        assert classify("example.co.uk", {}, set()) == (DNSBL_CLASS_DATA, "example.co.uk")
+
+    def test_two_label_domain_stays_zone_when_oracle_populated(self) -> None:
+        # Before-state proven above (empty oracle -> DATA); with the SAME domain
+        # and a populated oracle, the guard must not fire -- ON-side is unchanged.
+        tlds = _dnsbl_load_tld_master(["com"], [], [])
+        assert classify("evil.com", tlds, set()) == (DNSBL_CLASS_ZONE, "evil.com")
+
+
+class TestAbpWildcardUnaffectedByTldWildcardToggle:
+    """issue #1255: reconcile()/ABP explicit-wildcard classification (||host^) is
+    driven by the ABP anchor shape (parse_abp), never by ``tlds`` -- the
+    TLD-Wildcard toggle (an empty vs. populated oracle) must leave it unchanged
+    in BOTH states, proving no ABP regression from the classify() guard.
+
+    Scenario: TLD-Wildcard toggled OFF (empty oracle) vs ON (oracle populated)
+      Given an ABP feed line ``||evil.com^`` (explicit wildcard anchor)
+      When the oracle is empty (OFF)  Then it still lands in zone_db
+      When the oracle is populated (ON)  Then it still lands in zone_db (unchanged)
+    """
+
+    def _build(self, tld_master: list[str]) -> pfb_unbound.BuildResult:
+        manifest = {"feeds": [{"raw": "f.raw", "feed": "F", "group": "G", "log_flag": "1"}]}
+        config: dict[str, object] = {
+            "tld_master": tld_master,
+            "tld_blacklist": [],
+            "tld_exclusion": [],
+            "user_whitelist": [],
+            "top1m_list": [],
+        }
+        return pfb_unbound.build(manifest, config, line_reader=lambda raw: ["||evil.com^"])
+
+    def test_abp_explicit_wildcard_is_zone_with_oracle_empty(self) -> None:
+        result = self._build([])
+        assert "evil.com" in result.zone_db, "||evil.com^ must stay ZONE with an empty oracle (TLD-Wildcard OFF)"
+
+    def test_abp_explicit_wildcard_is_zone_with_oracle_populated(self) -> None:
+        result = self._build(["com"])
+        assert "evil.com" in result.zone_db, "||evil.com^ must stay ZONE with a populated oracle (TLD-Wildcard ON)"
