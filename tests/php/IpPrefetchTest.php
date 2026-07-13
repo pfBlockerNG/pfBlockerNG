@@ -691,6 +691,21 @@ final class IpPrefetchTest extends TestCase
 		);
 	}
 
+	/**
+	 * issue #1250: the match-artifact dirs are defined ONCE, in pfb_ip_match_folders(), and
+	 * shared by the Alerts query (above) and pfb_daemon_filterlog()'s live tail. The daemon
+	 * copy sits inside an unbounded php://stdin loop that cannot be unit-tested, so pinning
+	 * the shared helper is what covers it -- the daemon's correctness reduces to calling this.
+	 */
+	public function test_match_folders_helper_names_both_match_dirs_and_nothing_else(): void
+	{
+		$this->assertSame(
+			"{$GLOBALS['pfb']['matchdir']}/*.txt {$GLOBALS['pfb']['matchgendir']}/*.txt",
+			pfb_ip_match_folders(),
+			'expected pfb_ip_match_folders() to name matchdir + matchgendir, got: ' . pfb_ip_match_folders()
+		);
+	}
+
 	public function test_prefetch_seeds_an_empty_aliastables_result_on_a_genuine_total_miss(): void
 	{
 		$fields = $this->buildBlockFields('198.51.100.222');

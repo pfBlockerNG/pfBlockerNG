@@ -9863,6 +9863,17 @@ function pfb_match_reported_cidr(array $result, string $ip, bool $v4_type): ?arr
 }
 
 
+// issue #1250: the feed dirs a 'match' event is attributed against -- matchdir holds the user's
+// own Match lists, matchgendir the machine-generated reputation/ET artifacts. Globs '.txt'
+// because matchdir NESTS matchgendir: a bare '/*' would hand grep the subdirectory itself.
+// Callers append their own nativedir glob (the two call sites differ in its suffix).
+function pfb_ip_match_folders(): string {
+	global $pfb;
+
+	return "{$pfb['matchdir']}/*.txt {$pfb['matchgendir']}/*.txt";
+}
+
+
 // issue #809: the exact per-row query derivation convert_ip_log() (pfblockerng_alerts.php)
 // needs before validating/re-locating a reported IP — extracted VERBATIM so the batched
 // prefetch pass (pfb_ip_prefetch()) derives IDENTICAL lookup groups from the same $fields.
@@ -9919,9 +9930,7 @@ function pfb_ip_render_query(array $fields): array {
 	} elseif ($fields[3] == 'pass') {
 		$folder = "{$pfb['permitdir']}/*.txt {$pfb['nativedir']}/*.txt";
 	} elseif ($fields[3] == 'match') {
-		// issue #1250: reputation artifacts now live in matchgendir -- include it so a
-		// Deny-list match event still attributes to its feed.
-		$folder = "{$pfb['matchdir']}/*.txt {$pfb['matchgendir']}/*.txt {$pfb['nativedir']}/*.txt";
+		$folder = pfb_ip_match_folders() . " {$pfb['nativedir']}/*.txt";
 	}
 
 	// Determine if event IP still exists in Feed Aliastable -- builds the exact validate
@@ -13824,9 +13833,7 @@ function pfb_daemon_filterlog() {
 					}
 					elseif ($d[6] == 'unkn(%u)') {
 						$d[6]	= 'match';
-						// issue #1250: matchdir now nests matchgendir -- glob '.txt' so grep
-						// never opens the subdirectory entry itself; include matchgendir too.
-						$folder = "{$pfb['matchdir']}/*.txt {$pfb['matchgendir']}/*.txt {$pfb['nativedir']}/*";
+						$folder = pfb_ip_match_folders() . " {$pfb['nativedir']}/*";
 						$iplog	= "{$pfb['ip_matchlog']}";
 						$l_type = 'Match';
 					}
