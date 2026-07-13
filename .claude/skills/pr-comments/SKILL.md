@@ -230,7 +230,8 @@ it arrived in.
 **Default route — the `triage-findings` workflow, for ANY number of findings.** When
 the Workflow tool is available, run `Workflow({name: 'triage-findings', args: {worktree: '<path>', base:
 '<base>', findings: [<the Step-4 list: {id, source, severity, path, line, body,
-suggested_fix}>], lintNotes: '<the repo's unenforced-rule notes below>'}})` — one
+suggested_fix}>], lintNotes: '<the repo's unenforced-rule notes below>'}})` — pass no extra
+parameter: `run_in_background` is not a Workflow parameter and fails validation. One
 independent read-only validator per finding, returning verdict + executed evidence +
 blame-based scope + a sanity check of the suggested fix. You remain the judge: adopt each
 verdict only with its evidence in hand (the skip asymmetry below still binds), apply fixes

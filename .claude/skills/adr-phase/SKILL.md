@@ -168,7 +168,9 @@ fresh higher-model Brief stage, so your own context stays flat across a long `al
 `Workflow({name: 'phase-step', args: {worktree: '<path>', briefSpec: {adrDir: '<ADR_DIR
 relative to the worktree>', phase: M, notes: '<session constraints the disk cannot show —
 base override, user instructions; omit if none>'}, ponytailLevel: <active level or
-null>}})`. The Brief stage reads `ADR.md`, the phase prompt, and the prior `RESULTS/`
+null>}})` — pass no extra parameter: the call is already asynchronous, and
+`run_in_background` is not a Workflow parameter (it fails validation).
+The Brief stage reads `ADR.md`, the phase prompt, and the prior `RESULTS/`
 records + carry_forward chain just-in-time, runs the enumeration greps itself, and
 evaluates the previous phase's landed diff against the ADR's invariants (the broadened
 drift check); the workflow pipes the schema-forced brief through the Sonnet implementer

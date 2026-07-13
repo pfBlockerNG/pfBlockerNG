@@ -86,7 +86,9 @@ lives in `.claude/workflows/issue-triage.js` (its Triage prompt + schema), the s
 source of truth. Do NOT restate or re-improvise it. Run it as ONE fresh agent:
 `Workflow({name: 'issue-triage', args: {issue: N, worktree: '<an up-to-date
 checkout — the primary is fine, the agent reads origin/<base> refs read-only>', base:
-'devel', model: 'sonnet'}})` (Fable — the preferred triage model — is temporarily unavailable). It returns the schema-forced triage artifact — `verdict`,
+'devel', model: 'sonnet'}})` (Fable — the preferred triage model — is temporarily unavailable;
+the Workflow tool is already asynchronous, and `run_in_background` is NOT a Workflow parameter
+— passing it fails validation). It returns the schema-forced triage artifact — `verdict`,
 `claims[]` (each with executed `evidence` and `cited_paths`), `alternatives`, `impact`,
 `repro`, `plan_steps[]`, `base_tip` — which is both the deliverable (no `--fix`) and the
 durable resume anchor (`--fix` later in the session consumes it per Step 1). Workflow tool
@@ -167,7 +169,8 @@ For each plan step `M`, in order:
    brief: <the step brief>, gates: [<canonical gates for the touched languages>],
    redProof: {srcPaths: [...], testCmd: '<the pinning test>'} | null, planItems: [<the
    step's plan items>], ponytailLevel: <active level or null>}})` — Sonnet implementer
-   plus fresh higher-model verifier, schema-forced `{handoff, gateRecord}`.
+   plus fresh higher-model verifier, schema-forced `{handoff, gateRecord}`. Pass no extra
+   parameter: `run_in_background` is not a Workflow parameter and fails validation.
 3. **Validate the returned record** per workflow-reference "Validating workflow records"
    (fields non-empty, evidence executed + pasted, spot-read the load-bearing diff hunks —
    never a third run of the gates or red proof the verifier just executed). Record the

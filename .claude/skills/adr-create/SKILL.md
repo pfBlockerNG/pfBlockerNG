@@ -75,7 +75,8 @@ is coherent, the contract is explicit, and the validation plan is falsifiable.**
 **Big ADRs (spanning more than ~2 components): fan the investigation out.** When the
 Workflow tool is available, run `Workflow({name: 'adr-investigate', args: {topic: '<one-line
 ADR topic>', repoRoot: '<worktree/checkout path>', areas: [{key, focus, hints}...]}})` — one
-read-only reader per area, returning **evidence-tagged** facts (`verified` with the command/
+read-only reader per area (pass no extra parameter — `run_in_background` is not a Workflow
+parameter and fails validation), returning **evidence-tagged** facts (`verified` with the command/
 `file:line` that proved it; `assumed` with the probe that would). Use only `verified` facts as
 §1 load-bearing facts; every `assumed` fact is either probed by you now or carried into the
 plan as an explicit verification step. The design judgment — scrutiny, contract, phases —
