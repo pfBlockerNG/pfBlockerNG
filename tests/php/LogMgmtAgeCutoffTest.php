@@ -1116,6 +1116,51 @@ final class LogMgmtAgeCutoffTest extends TestCase
 	}
 
 	/**
+	 * Scenario: a log left ending mid-line still gets the trim it is owed.
+	 *
+	 * Given a log whose last line is unterminated (no trailing newline) -- the state
+	 *   pfb_logger('.', 1)'s sub-line progress fragments leave behind, and exactly what
+	 *   pfb_logger_target_starts_at_bol() exists to detect,
+	 * When  it sits one line over its line cap at margin=0,
+	 * Then  the trim FIRES and cuts to the same content tail(1) itself would keep.
+	 *
+	 * The high-water guard gates a tail(1) rewrite, so it must count lines the way
+	 * tail does: an unterminated trailing chunk IS a line. Counting bare "\n" bytes
+	 * undercounts by one, the guard reads "at cap" instead of "over cap", and the
+	 * needed trim is silently skipped -- the log overshoots its cap (#1109).
+	 */
+	public function testDanglingLastLineStillTrimsToTailsOwnResult(): void
+	{
+		$this->seedMinimalConfig();
+		$this->setLogCaps('log', '5', '0');
+		$this->setMarginPct('0');
+		$this->ensureLogDir();
+		pfb_global();
+
+		$logPath = $this->logPath('log');
+		// 5 newline-terminated lines + a 6th, unterminated -- tail(1) sees SIX lines.
+		file_put_contents($logPath, "l1\nl2\nl3\nl4\nl5\nDANGLING");
+
+		// The oracle is the real write path: whatever `tail -n 5` keeps is what the
+		// trim must leave behind. Captured BEFORE the trim overwrites the file.
+		$expected = shell_exec('/usr/bin/tail -n 5 ' . escapeshellarg($logPath));
+		$this->assertStringNotContainsString('l1', (string) $expected,
+			'before: tail -n 5 must already be dropping l1 -- else this fixture proves nothing'
+		);
+
+		pfb_log_mgmt();
+
+		clearstatcache(TRUE, $logPath);
+		$after = file_get_contents($logPath);
+		$this->assertSame($expected, $after,
+			'a log ending mid-line must be trimmed to exactly what tail(1) keeps -- '
+			. 'counting only "\n" bytes undercounts the dangling line and skips the trim'
+		);
+		$this->assertStringNotContainsString('l1', (string) $after, 'the over-cap head line must be gone');
+		$this->assertStringContainsString('DANGLING', (string) $after, 'the unterminated tail line must survive');
+	}
+
+	/**
 	 * Mandatory hostile row: an unclamped absurd log_max_log value (numeric
 	 * but saturates pfb_log_max_lines() to PHP_INT_MAX) combined with a
 	 * margin must never crash pfb_log_mgmt() (the intdiv()-on-float TypeError
