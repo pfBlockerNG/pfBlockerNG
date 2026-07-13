@@ -124,9 +124,10 @@ def convert_suffix(line: str) -> str | None:
 
     Skips blank lines, '//' comments, '*.' wildcard rules, and '!' exception rules
     (owner decision, issue #1272 -- no parser/format extension for either), plus any
-    malformed line carrying internal whitespace (PSL never ships one). A dot-less
-    bare TLD passes through unchanged (issue #1068: consumers key it under its own
-    full value).
+    malformed line carrying internal whitespace or a label the idna codec rejects
+    (past the 63-octet DNS cap) -- PSL never ships either. A dot-less bare TLD
+    passes through unchanged (issue #1068: consumers key it under its own full
+    value).
     """
     if not line or line.startswith("//") or line.startswith("*.") or line.startswith("!"):
         return None
