@@ -25,6 +25,26 @@ Describe 'verify-red-proof.sh'
     gitc commit -qm v2
     pin_hash=$(gitc hash-object test_pin.sh)
   }
+  make_repo3() {
+    # $1 = v1 (pre-fix) src, $2 = v2 (the fix) src, $3 = v3 (unrelated follow-up,
+    # src.txt unchanged) -- mirrors PR #1247's da2d7820 (fix) + 501deb92 (follow-up).
+    scrub_git_env
+    repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/redproof3.XXXXXX")"
+    git -C "$repo" init -q
+    printf '%s\n' "$1" > "$repo/src.txt"
+    printf 'grep -q GOOD src.txt\n' > "$repo/test_pin.sh"
+    gitc add -A
+    gitc commit -qm v1
+    fix_base_sha=$(gitc rev-parse HEAD)
+    printf '%s\n' "$2" > "$repo/src.txt"
+    echo other > "$repo/other.txt"
+    gitc add -A
+    gitc commit -qm v2-fix
+    printf '%s\n' "$3" > "$repo/followup.txt"
+    gitc add -A
+    gitc commit -qm v3-followup
+    pin_hash=$(gitc hash-object test_pin.sh)
+  }
   cleanup() { rm -rf "$repo"; }
   After 'cleanup'
 
@@ -95,5 +115,81 @@ Describe 'verify-red-proof.sh'
     When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src src.txt
     The status should equal 2
     The stderr should include 'DIRTY-TREE'
+  End
+
+  It 'verifies a genuine red->green proof against an explicit --base-ref (3-commit fixture, mirrors PR #1247)'
+    make_repo3 BAD GOOD FOLLOWUP
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' \
+      --src src.txt --hash "test_pin.sh=$pin_hash" --base-ref "$fix_base_sha"
+    The status should equal 0
+    The output should include 'RED-OK'
+    The output should include 'GREEN-OK'
+    The line 4 of output should equal 'VERDICT: PASS'
+    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+  End
+
+  It 'without --base-ref, the same 3-commit fixture still falsely reports RED-FAIL (documents the default HEAD~1 bug)'
+    make_repo3 BAD GOOD FOLLOWUP
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' \
+      --src src.txt --hash "test_pin.sh=$pin_hash"
+    The status should equal 1
+    The output should include 'RED-FAIL'
+    The output should include 'VERDICT: FAIL'
+  End
+
+  It 'still enforces the freeze hash when --base-ref is passed'
+    make_repo3 BAD GOOD FOLLOWUP
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' \
+      --src src.txt --hash 'test_pin.sh=0000000000000000000000000000000000000000' \
+      --base-ref "$fix_base_sha"
+    The status should equal 1
+    The output should include 'FREEZE-FAIL'
+  End
+
+  It 'rejects a --base-ref that looks like a git option ("-q")'
+    make_repo BAD GOOD
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src src.txt --base-ref '-q'
+    The status should equal 2
+    The stderr should include 'BAD-BASE-REF'
+    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+  End
+
+  It 'rejects a --base-ref that looks like a git option ("--force")'
+    make_repo BAD GOOD
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src src.txt --base-ref '--force'
+    The status should equal 2
+    The stderr should include 'BAD-BASE-REF'
+    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+  End
+
+  It 'rejects an empty --base-ref at parse time'
+    make_repo BAD GOOD
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src src.txt --base-ref ''
+    The status should equal 2
+    The stderr should include 'usage:'
+  End
+
+  It 'rejects a nonexistent --base-ref'
+    make_repo BAD GOOD
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src src.txt --base-ref 'no-such-ref'
+    The status should equal 2
+    The stderr should include 'BAD-BASE-REF'
+    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+  End
+
+  It 'rejects a --base-ref that is a revision range, not a single ref ("HEAD~2..HEAD")'
+    make_repo BAD GOOD
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src src.txt --base-ref 'HEAD~2..HEAD'
+    The status should equal 2
+    The stderr should include 'BAD-BASE-REF'
+    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
+  End
+
+  It 'rejects a --base-ref that is a revision range, not a single ref ("a...b")'
+    make_repo BAD GOOD
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src src.txt --base-ref 'a...b'
+    The status should equal 2
+    The stderr should include 'BAD-BASE-REF'
+    Assert [ -z "$(git -C "$repo" status --porcelain)" ]
   End
 End

@@ -207,11 +207,14 @@ the gate report's wording, never to which checks run.
    changes runs regardless of its language).
 2. **Re-execute the red proof yourself** for behaviour changes — never accept the handoff's
    claim. Run `scripts/agent/verify-red-proof.sh --worktree <path> --test-cmd '<cmd>'
-   --src <path>... --hash <test>=<red-time-sha>...` — it reverts the src paths to HEAD~1
-   (tests stay), requires the test to FAIL, restores, requires PASS, and enforces the
-   freeze (`git hash-object` of each committed reproduction test equals the handoff's
-   red-time hash — a test edited between red and green, or with no red-time hash, proves
-   nothing). Record its verdict lines.
+   --src <path>... --hash <test>=<red-time-sha>... [--base-ref <pre-fix-commit>]` — it
+   reverts the src paths to `--base-ref` (default `HEAD~1`; tests stay), requires the test
+   to FAIL, restores, requires PASS, and enforces the freeze (`git hash-object` of each
+   committed reproduction test equals the handoff's red-time hash — a test edited between
+   red and green, or with no red-time hash, proves nothing). A step that lands more than
+   one commit (a follow-up doc/ADR reconciliation, a review fix) passes the true pre-fix
+   commit explicitly via `--base-ref` — `HEAD~1` then names the wrong baseline. Record its
+   verdict lines.
 3. **Read the full diff** (`git show` — never `--stat` alone) and tick **every** ACTION-PLAN
    item and **every** coverage-matrix row against what the diff actually does. `--stat` cannot
    see a hardcoded value, a stubbed branch, or a silently dropped plan item. A mechanism in
