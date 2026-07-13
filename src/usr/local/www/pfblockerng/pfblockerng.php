@@ -1410,7 +1410,8 @@ function pfblockerng_uc_countries() {
 										}
 
 										if (file_exists($iso_file)) {
-											$networks = exec("{$pfb['grep']} -c ^ {$iso_file_esc} 2>&1");
+											// issue #1261: display-only total -- NULL (read failure) -> 0.
+											$networks = pfb_count_lines($iso_file) ?? 0;
 											$iso_header  = "# Country: {$geoip['name']}{$geoip_id}\n";
 											$iso_header .= "# ISO Code: {$iso}\n";
 											$iso_header .= "# Total Networks: {$networks}\n";
@@ -1506,8 +1507,9 @@ function pfblockerng_get_countries() {
 				$file = str_replace('v4', 'v6', $file);
 			}
 
-			$file_esc		= escapeshellarg($file);
-			$lastline		= exec("{$pfb['grep']} -c ^ {$file_esc}") ?: 0;
+			// issue #1261: NULL (read failure) -> 0, matching the exec()-era `?: 0`
+			// fallback (a legitimately-empty file also yields 0).
+			$lastline		= pfb_count_lines($file) ?? 0;
 			$pfb['complete']	= FALSE;
 			$linenum		= 1;
 			$total			= 0;
@@ -1568,8 +1570,8 @@ function pfblockerng_get_countries() {
 					elseif (!str_starts_with($line, '#')) {
 						if (!empty(pfb_filter($isocode, PFB_FILTER_WORD, 'php'))) {
 							if ($cont == 'Top Spammers') {
-								$isocode_esc = escapeshellarg("{$pfb['ccdir']}/{$isocode}_v{$type}.txt");
-								$total = exec("{$pfb['grep']} -c ^ {$isocode_esc} 2>&1");
+								// issue #1261: display-only total -- NULL (read failure) -> 0.
+								$total = pfb_count_lines("{$pfb['ccdir']}/{$isocode}_v{$type}.txt") ?? 0;
 							} else {
 								$total++;
 								if (!empty($line)) {

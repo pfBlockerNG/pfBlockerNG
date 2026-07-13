@@ -247,13 +247,12 @@ if (isset($_REQUEST) && isset($_REQUEST['ajax'])) {
 		}
 		elseif (($fhandle = @fopen("{$pfb_logfilename}", 'r')) !== FALSE) {
 
-			$pfb_logfilename_esc = escapeshellarg($pfb_logfilename);
-			$linecnt = exec("{$pfb['grep']} -c ^ {$pfb_logfilename_esc} 2>&1");
+			$linecnt = pfb_count_lines($pfb_logfilename);
 
-			// issue #1156: 2>&1 puts grep errors in $linecnt; non-numeric must not reach
-			// the subtraction, and silently skipping the cap would stream the whole file --
-			// answer with the handler's error convention instead.
-			if (!is_numeric($linecnt)) {
+			// issue #1156/#1261: pfb_count_lines() returns NULL on a read failure (e.g.
+			// a TOCTOU race after the fopen() above); silently skipping the cap would
+			// stream the whole file unbounded, so answer with the handler's error convention.
+			if ($linecnt === NULL) {
 				print ("|2|" . gettext('Failed to determine log line count') . "|IA==|");
 				exit;
 			}

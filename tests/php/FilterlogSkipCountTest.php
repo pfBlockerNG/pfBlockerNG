@@ -6,34 +6,31 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Tests for pfb_filterlog_skip_count() — the pure parser for
- * `grep -c ^ /var/log/filter.log`'s raw exec() output (issue #713, bug 14).
+ * Tests for pfb_filterlog_skip_count() -- the pure "lines to skip on daemon
+ * (re)start" derivation (issue #713, bug 14; issue #1261: input is now
+ * pfb_count_lines()'s ?int, not exec()'s raw string).
  *
- * The old call site computed `max(exec(...) - 1, 0)` with no cast: when
- * filter.log is momentarily absent (log rotation racing the daemon restart),
- * the merged 2>&1 output is a grep error STRING, and PHP 8 throws
- * "Unsupported operand types: string - int" out of the daemon -- a crash loop.
- * (int) casting the exec() output first makes any non-numeric string coerce to
- * 0 instead of throwing.
+ * pfb_count_lines() returns NULL when it cannot read filter.log (e.g. a
+ * TOCTOU race between the caller's file_exists() guard and the read). NULL
+ * must skip nothing -- the daemon reprocesses the whole log rather than
+ * silently dropping lines it never actually parsed.
  *
  * Scenario A: a normal numeric count -> count - 1
  * Scenario B: a zero count -> 0 (never negative)
- * Scenario C: empty output -> 0
- * Scenario D: the grep error string (filter.log absent) -> 0, no exception
+ * Scenario C: NULL (pfb_count_lines() read failure) -> 0, no exception
  */
 #[CoversFunction('pfb_filterlog_skip_count')]
 final class FilterlogSkipCountTest extends TestCase
 {
-	// ---------- Scenario A — normal numeric grep count ----------
+	// ---------- Scenario A — normal numeric count ----------
 
 	public function testNumericCount_ReturnsCountMinusOne(): void
 	{
-		// Given: grep -c reports 1234 matching lines (includes the trailing
-		// blank-line artifact the call site's "-1" already accounted for).
-		$grepOutput = '1234';
+		// Given: pfb_count_lines() read 1234 matching lines.
+		$count = 1234;
 
 		// When
-		$skip = pfb_filterlog_skip_count($grepOutput);
+		$skip = pfb_filterlog_skip_count($count);
 
 		// Then
 		$this->assertSame(1233, $skip,
@@ -45,50 +42,34 @@ final class FilterlogSkipCountTest extends TestCase
 	public function testZeroCount_ReturnsZeroNotNegative(): void
 	{
 		// Given
-		$grepOutput = '0';
+		$count = 0;
 
 		// When
-		$skip = pfb_filterlog_skip_count($grepOutput);
+		$skip = pfb_filterlog_skip_count($count);
 
 		// Then: max(0 - 1, 0) = 0, never -1.
 		$this->assertSame(0, $skip,
 			"expected: 0 (clamped, never negative);\nactual: {$skip}");
 	}
 
-	// ---------- Scenario C — empty output ----------
-
-	public function testEmptyOutput_ReturnsZero(): void
-	{
-		// Given
-		$grepOutput = '';
-
-		// When
-		$skip = pfb_filterlog_skip_count($grepOutput);
-
-		// Then
-		$this->assertSame(0, $skip,
-			"expected: 0 (empty output);\nactual: {$skip}");
-	}
-
-	// ---------- Scenario D — the regression: grep's error string must not throw ----------
+	// ---------- Scenario C — the regression: a read failure must not throw ----------
 
 	/**
 	 * The regression this bug fixes: when filter.log is momentarily absent,
-	 * exec()'s merged 2>&1 output is grep's error text, not a number. The old
-	 * un-cast `$output - 1` threw a PHP 8 TypeError for this exact input,
-	 * crash-looping the daemon. This must return 0 with no exception.
+	 * pfb_count_lines() returns NULL. The old string-typed signature could
+	 * only represent that as a magic string (or, called with NULL under
+	 * strict_types, a TypeError) -- this must return 0 with no exception.
 	 */
-	public function testGrepErrorString_ReturnsZeroWithoutThrowing(): void
+	public function testNullCount_ReturnsZeroWithoutThrowing(): void
 	{
-		// Given: filter.log does not exist, so grep -c wrote its error to stderr,
-		// merged into $output by the caller's 2>&1.
-		$grepOutput = 'grep: /var/log/filter.log: No such file or directory';
+		// Given: pfb_count_lines('/var/log/filter.log') could not read the file.
+		$count = NULL;
 
-		// When / Then: must not throw (the old bare `$output - 1` did).
-		$skip = pfb_filterlog_skip_count($grepOutput);
+		// When / Then: must not throw.
+		$skip = pfb_filterlog_skip_count($count);
 
 		$this->assertSame(0, $skip,
-			"expected: 0, and no TypeError, for a non-numeric grep error string;\n"
+			"expected: 0, and no TypeError, for a NULL (unreadable file) count;\n"
 			. "actual: {$skip}");
 	}
 }

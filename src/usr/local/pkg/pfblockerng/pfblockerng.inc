@@ -13398,17 +13398,15 @@ function pfb_asn_cache_window(string $asn_reporting): string {
 }
 
 
-// Number of already-processed filter.log lines to skip on daemon (re)start, derived
-// from `grep -c ^ /var/log/filter.log`'s raw output. (int) casts so a grep error
-// string (e.g. filter.log momentarily absent between rotation and daemon restart)
-// coerces to 0 instead of throwing PHP 8's "Unsupported operand types: string - int"
-// TypeError out of the daemon (issue #713 -- a crash loop). Callers must also guard
-// with file_exists('/var/log/filter.log') so the exec() is skipped entirely when the
-// file is absent.
+// Number of already-processed filter.log lines to skip on daemon (re)start.
+// issue #713/#1261: $count is pfb_count_lines()'s ?int -- NULL (e.g. a TOCTOU
+// race between the caller's file_exists() guard and the read) means "count
+// unknown", so skip nothing: the daemon reprocesses the whole log rather than
+// silently dropping lines it never actually parsed.
 //
 // PURE -- no I/O, no globals, no side effects.
-function pfb_filterlog_skip_count(string $grep_output): int {
-	return max((int) $grep_output - 1, 0);
+function pfb_filterlog_skip_count(?int $count): int {
+	return $count === NULL ? 0 : max($count - 1, 0);
 }
 
 
@@ -13453,10 +13451,9 @@ function pfb_daemon_filterlog() {
 		if (!file_exists($pfb['ip_blocklog']) && !file_exists($pfb['ip_permitlog']) && !file_exists($pfb['ip_matchlog'])) {
 			$filter_cnt = 0;
 		} elseif (file_exists('/var/log/filter.log')) {
-			// issue #713: guarded by file_exists() -- an absent filter.log made exec()
-			// return a grep error string, and pfb_filterlog_skip_count() (int)-casts it
-			// so it can never throw the old bare-subtraction TypeError.
-			$filter_cnt = pfb_filterlog_skip_count(exec("{$pfb['grep']} -c ^ /var/log/filter.log 2>&1"));
+			// issue #713/#1261: pfb_count_lines() replaces the exec()+grep fork;
+			// pfb_filterlog_skip_count() treats its NULL (read failure) as skip-nothing.
+			$filter_cnt = pfb_filterlog_skip_count(pfb_count_lines('/var/log/filter.log'));
 		} else {
 			$filter_cnt = 0;
 		}
@@ -17174,11 +17171,10 @@ function sync_package_pfblockerng($cron='') {
 									$header, $alias, $logging_type,
 									$custom ? 'user' : 'feed',
 									$mode);
-								$file_esc		= escapeshellarg("{$pfbfolder}/{$header}.txt");
-								$list_cnt		= exec("{$pfb['grep']} -c ^ {$file_esc}");
-								// issue #1162: failed grep returns a non-numeric string -- (int) so it
-								// cannot reach + arithmetic (PHP 8 TypeError)
-								$alias_cnt		= $alias_cnt + (int) $list_cnt;
+								// issue #1162/#1261: pfb_count_lines() returns NULL on a read
+								// failure -- 0 preserves the exec()-era fallback.
+								$list_cnt		= pfb_count_lines("{$pfbfolder}/{$header}.txt") ?? 0;
+								$alias_cnt		= $alias_cnt + $list_cnt;
 							}
 							else {
 								// #1083: verbatim reuse was rejected ONLY for stale staging
@@ -17516,7 +17512,8 @@ function sync_package_pfblockerng($cron='') {
 								if (!empty($domain_data_ip)) {
 									$domain_data_ip = implode("\n", array_unique($domain_data_ip)) . "\n";
 									@file_put_contents("{$pfbfolder}/{$header}_v4.ip", $domain_data_ip, LOCK_EX);
-									$ip_cnt = exec("{$pfb['grep']} -c ^ " . escapeshellarg("{$pfbfolder}/{$header}_v4.ip"));
+									// issue #1261: display/log-gate only -- NULL (read failure) -> 0.
+									$ip_cnt = pfb_count_lines("{$pfbfolder}/{$header}_v4.ip") ?? 0;
 								}
 								else {
 									// Remove previous IP feed
@@ -17527,7 +17524,8 @@ function sync_package_pfblockerng($cron='') {
 								if (!empty($domain_data_ip6)) {
 									$domain_data_ip6 = implode("\n", array_unique($domain_data_ip6)) . "\n";
 									@file_put_contents("{$pfbfolder}/{$header}_v6.ip", $domain_data_ip6, LOCK_EX);
-									$ip_cnt6 = exec("{$pfb['grep']} -c ^ " . escapeshellarg("{$pfbfolder}/{$header}_v6.ip"));
+									// issue #1261: display/log-gate only -- NULL (read failure) -> 0.
+									$ip_cnt6 = pfb_count_lines("{$pfbfolder}/{$header}_v6.ip") ?? 0;
 								}
 								else {
 									// Remove previous IPv6 feed
@@ -17601,10 +17599,10 @@ function sync_package_pfblockerng($cron='') {
 									touch("{$pfbfolder}/{$header}.txt");
 								}
 
-								$list_cnt	= exec("{$pfb['grep']} -c ^ " . escapeshellarg("{$pfbfolder}/{$header}.txt"));
-								// issue #1162: failed grep returns a non-numeric string -- (int) so it
-								// cannot reach + arithmetic (PHP 8 TypeError)
-								$alias_cnt	= $alias_cnt + (int) $list_cnt;
+								// issue #1162/#1261: pfb_count_lines() returns NULL on a read
+								// failure -- 0 preserves the exec()-era fallback.
+								$list_cnt	= pfb_count_lines("{$pfbfolder}/{$header}.txt") ?? 0;
+								$alias_cnt	= $alias_cnt + $list_cnt;
 
 								// Remove update file indicator -- skip if this row fell through to
 								// the stale-.orig download-failure fallback, else a pending rebuild
