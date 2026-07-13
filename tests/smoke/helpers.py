@@ -2864,26 +2864,12 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
     if spec.custom_domains:
         crlf = "\r\n".join(spec.custom_domains)
         custom_line = f"$list['custom'] = base64_encode({_php_str(crlf)});\n"
-    # DNSBL-IP reuses the IP-side rule builder, so it needs the SAME inbound/outbound
-    # interface config `_ip_inject_snippet` sets: without it pfBlockerNG builds the
-    # pfB_DNSBLIP_* tables but NO rule (inc:10132). Setting it here — not in the tests —
-    # is what keeps a DNSBL-IP case from depending on an IpCase sibling having run first
-    # and left the interfaces behind in the shared config (issue #1239).
-    ip_iface_line = ""
-    if spec.dnsbl_ip_action:
-        ipset = {"inbound_interface": SMOKE_IP_IFACE, "outbound_interface": SMOKE_IP_IFACE}
-        ip_iface_line = (
-            f"$ip = config_get_path({_php_str(CFG_IP_SETTINGS)}, array());\n"
-            f"$ip = array_merge($ip, {_php_kv_array(ipset)});\n"
-            f"config_set_path({_php_str(CFG_IP_SETTINGS)}, $ip);\n"
-        )
     return (
         # pfBlockerNG must be globally enabled for the DNSBL (and DNSBL-IP)
         # paths to run (inc:793 reads enable_cb; inc:3389/9307 gate on it).
         f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
         "$g['enable_cb'] = 'on';\n"
         f"config_set_path({_php_str(CFG_GLOBAL)}, $g);\n"
-        f"{ip_iface_line}"
         f"{_dnsbl_settings_replace_php(settings)}"
         f"$list = {_php_kv_array(listcfg)};\n"
         f"$list['row'] = {rows_php};\n"
