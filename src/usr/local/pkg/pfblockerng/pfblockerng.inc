@@ -3259,9 +3259,8 @@ function pfb_log_age_trim_needed(string $path, int $agedays, string $logtype, in
 // issue #1109: pure PHP line count (no exec()/wc -- off-appliance-testable, no
 // per-tick process spawn across 11 log types). Fail (unopenable/short read) ->
 // PHP_INT_MAX so the high-water guard FIRES -- same fail-open direction as #1052.
-// Counts as tail(1) does -- an unterminated trailing chunk IS a line (the state
-// pfb_logger('.', 1)'s progress fragments leave) -- else the guard undercounts a
-// mid-line log by one, reads "at cap" for "over cap", and skips a needed trim.
+// Counts a line as tail(1) does (ADR-60 S8 item 5): an unterminated trailing
+// chunk IS a line, so track the final byte of the read we already do.
 function pfb_log_line_count(string $path): int {
 	$fh = @fopen($path, 'r');
 	if ($fh === FALSE) {
@@ -3269,8 +3268,10 @@ function pfb_log_line_count(string $path): int {
 	}
 
 	$lines = 0;
+	$last_byte = '';
 	while (($chunk = fread($fh, 1048576)) !== FALSE && $chunk !== '') {
 		$lines += substr_count($chunk, "\n");
+		$last_byte = $chunk[-1];
 	}
 	$ok = feof($fh);
 	fclose($fh);
@@ -3279,7 +3280,7 @@ function pfb_log_line_count(string $path): int {
 		return PHP_INT_MAX;
 	}
 
-	return $lines + (pfb_logger_target_starts_at_bol($path) ? 0 : 1);
+	return $lines + ($last_byte === '' || $last_byte === "\n" ? 0 : 1);
 }
 
 // issue #1109: ONE unified high-water guard for both pfb_log_mgmt() branches --

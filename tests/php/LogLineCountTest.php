@@ -44,6 +44,15 @@ final class LogLineCountTest extends TestCase
 		$this->assertSame(3, pfb_log_line_count($this->tmpFile), '3 lines with no trailing newline must count as 3');
 	}
 
+	public function testSingleUnterminatedLineNoNewlineCountsAsOne(): void
+	{
+		// The boundary between "empty" and "one dangling line": zero newline bytes,
+		// but tail(1) (and grep -c '^') both call this one line. Counting newlines
+		// alone would call it zero and never trim a single-line-over-cap log.
+		file_put_contents($this->tmpFile, 'abc');
+		$this->assertSame(1, pfb_log_line_count($this->tmpFile), 'one unterminated line with no newline must count as 1');
+	}
+
 	public function testEmptyFileCountsZero(): void
 	{
 		file_put_contents($this->tmpFile, '');
