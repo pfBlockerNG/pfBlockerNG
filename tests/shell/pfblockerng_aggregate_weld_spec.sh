@@ -8,6 +8,8 @@
 Describe 'pfb_aggregate() member union never welds records across an unterminated file (issue #1263)'
   setup() {
     work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/aggweld.XXXXXX")"
+    # tempfile/dedupfile/errorlog deliberately shadow pfb_aggregate()'s own globals
+    # (normally seeded by pfb_make_tmpdir(), which PFB_SOURCED=1 sourcing skips).
     tempfile="${work}/t1"
     dedupfile="${work}/dedup"
     errorlog="${work}/err.log"
