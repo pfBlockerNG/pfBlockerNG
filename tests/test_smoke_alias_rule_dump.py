@@ -54,23 +54,29 @@ class _FakeVM:
     # issue #1252: probe keys ("grep"/"sr"/"tables") whose ssh call stalls the transport
     # instead of returning — TimeoutExpired, not a returncode.
     timeout_on: frozenset[str] = field(default_factory=frozenset)
+    # What the stalled probe had already written before it hung. CPython attaches this to
+    # TimeoutExpired UNDECODED (bytes) even under text=True, so bytes is the realistic value.
+    timeout_output: dict[str, bytes | str] = field(default_factory=dict)
     calls: list[tuple[str, ...]] = field(default_factory=list)
+
+    def _stall(self, key: str, remote: tuple[str, ...], timeout: float) -> None:
+        raise subprocess.TimeoutExpired(cmd=list(remote), timeout=timeout, output=self.timeout_output.get(key))
 
     def ssh(self, *remote: str, timeout: float = 60.0) -> _FakeResult:
         self.calls.append(remote)
         if remote[0] == "/usr/bin/grep":
             if "grep" in self.timeout_on:
-                raise subprocess.TimeoutExpired(cmd=list(remote), timeout=timeout)
+                self._stall("grep", remote, timeout)
             # grep exits 1 on no match — the dump must treat that as "absent", not as an error.
             rc = self.grep_rc if self.grep_rc is not None else (0 if self.rules_debug else 1)
             return _FakeResult(returncode=rc, stdout=self.rules_debug)
         if remote[:2] == (helpers.PFCTL, "-sr"):
             if "sr" in self.timeout_on:
-                raise subprocess.TimeoutExpired(cmd=list(remote), timeout=timeout)
+                self._stall("sr", remote, timeout)
             return _FakeResult(returncode=self.sr_rc, stdout=self.live_rules)
         if remote[:2] == (helpers.PFCTL, "-sTables"):
             if "tables" in self.timeout_on:
-                raise subprocess.TimeoutExpired(cmd=list(remote), timeout=timeout)
+                self._stall("tables", remote, timeout)
             return _FakeResult(returncode=self.tables_rc, stdout=self.tables)
         raise AssertionError(f"unexpected ssh command: {remote}")
 
@@ -294,6 +300,54 @@ def test_all_three_verdict_probes_stalling_names_all_three(monkeypatch: pytest.M
         assert name in stage_line, f"{name!r} missing from: {stage_line!r}"
     assert "pfSsh=124" in stage_line and "grep=124" in stage_line and "pfctl-sr=124" in stage_line, (
         f"not all rc fields report 124: {stage_line!r}"
+    )
+
+
+def test_output_written_before_a_stall_still_reaches_the_dump(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given a probe that printed part of its answer and THEN hung
+    When alias_rule_dump runs
+    Then the partial output still appears in its layer — a stalled probe is unusable as
+    PROOF (the verdict stays UNPROVEN), but what it did manage to say is exactly the
+    diagnostic this helper exists to surface, so it must not be thrown away (issue #1252).
+    """
+    monkeypatch.setattr(helpers, "php_eval", _fake_php_eval(CFG_ROW))
+    vm = _FakeVM(
+        live_rules=LIVE_ROW,
+        tables=ALIAS,
+        timeout_on=frozenset({"grep"}),
+        # CPython hands back the pre-stall buffer as raw BYTES even under text=True.
+        timeout_output={"grep": DEBUG_ROW.encode()},
+    )
+
+    dump = helpers.alias_rule_dump(vm, ALIAS)  # type: ignore[arg-type]
+
+    stage_line = next(ln for ln in dump.splitlines() if ln.startswith("[STAGE LOST]"))
+    assert "UNPROVEN" in stage_line, f"a stalled probe did not yield UNPROVEN: {stage_line!r}"
+    assert f"[RULES.DEBUG {ALIAS}: 1] {DEBUG_ROW}" in dump, (
+        f"the output the probe managed to write before stalling was discarded:\n{dump}"
+    )
+
+
+def test_a_stall_mid_utf8_sequence_does_not_crash_the_dump(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given a probe that hung mid-way through a multi-byte character
+    When alias_rule_dump runs
+    Then the dump still renders — a transport stall truncates at an arbitrary BYTE, so the
+    pre-stall buffer routinely ends inside a UTF-8 sequence and must never raise (issue #1252).
+    """
+    monkeypatch.setattr(helpers, "php_eval", _fake_php_eval(CFG_ROW))
+    vm = _FakeVM(
+        rules_debug=DEBUG_ROW,
+        tables=ALIAS,
+        timeout_on=frozenset({"sr"}),
+        timeout_output={"sr": LIVE_ROW.encode() + "é".encode()[:1]},  # dangling lead byte
+    )
+
+    dump = helpers.alias_rule_dump(vm, ALIAS)  # type: ignore[arg-type]
+
+    stage_line = next(ln for ln in dump.splitlines() if ln.startswith("[STAGE LOST]"))
+    assert "UNPROVEN" in stage_line, f"a stalled probe did not yield UNPROVEN: {stage_line!r}"
+    assert f"[LIVE PF -sr {ALIAS}: 1] {LIVE_ROW}" in dump, (
+        f"the decodable part of the pre-stall buffer was lost:\n{dump}"
     )
 
 
