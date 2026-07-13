@@ -2559,7 +2559,7 @@ $section->addInput(new Form_StaticText(
 	. '\'<strong>ccblack</strong>\' are all other Countries that are not selected.<br /><br />'
 	. 'To use <strong>Match</strong> Lists, Create a new \'Alias\''
 	. 'and select one of the <strong>Action Match</strong> Formats and<br /> enter the <strong>Localfile</strong> as:'
-	. '<ul>/var/db/pfblockerng/match/matchdedup.txt</ul><br />' 
+	. '<ul>/var/db/pfblockerng/match/matchdedup_v4.txt</ul><br />'
 	. '<strong>These Country Code options are only available when the MaxMind key has been entered and MaxMind database has been downloaded and updated</strong>'
 	. '</div>'
 ));

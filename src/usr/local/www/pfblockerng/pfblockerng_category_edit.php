@@ -549,6 +549,13 @@ if ($_POST && isset($_POST['save'])) {
 							. "Header field cannot contain spaces, special or international characters.";
 			}
 
+			if ($value != 'Disabled') {
+				$pfb_header_reserved = pfb_header_reserved_error($_POST["header-{$key_1}"], $_POST['action'] ?? '');
+				if ($pfb_header_reserved !== '') {
+					$input_errors[] = "{$type} Source Definitions, Line {$line}: {$pfb_header_reserved}";
+				}
+			}
+
 			if ($value != 'Disabled' && strpos($_POST["url-{$key_1}"], '_API_KEY_') !== FALSE) {
 				$input_errors[] = "{$type} Source Definitions, Line {$line}: "
 							. "API key not defined! Add your subscripton API Key to the Source field URL or disable/remove feed.";

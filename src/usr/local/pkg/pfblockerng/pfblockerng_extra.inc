@@ -1861,6 +1861,15 @@ function pfb_adv_alias_field_errors(array $post): array
 	return $errors;
 }
 
+// issue #1234: 'dedup' header + a Deny action collides with the reserved
+// matchdedup_v4.txt recompute artifact (pfblockerng.sh) -- reject at save.
+function pfb_header_reserved_error(string $header, string $action): string {
+	if ($header === 'dedup' && strpos($action, 'Deny') !== FALSE) {
+		return "Header field cannot be 'dedup' when Action is set to Deny (reserved filename).";
+	}
+	return '';
+}
+
 // ---------------------------------------------------------------------------
 // ADR-38: pure key=value syslog event formatters (pfb_syslog_format_ip() etc.) — the fixed
 // key order, empty-value omission rules, and quoting/escaping are specified in
