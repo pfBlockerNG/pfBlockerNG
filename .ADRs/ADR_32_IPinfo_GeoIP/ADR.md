@@ -276,8 +276,41 @@ Blocks rows whose geoname_id IS one of those continents:
 
 So the two hardcoded buckets are neither arbitrary nor dead: they cover ~700 real networks, and
 they match the provider's data exactly (Asia and Europe, no other continent). "Retire them" is
-therefore **not** an option while MaxMind is a supported provider — the question is only whether
-the truth models the continent-only bucket generically (all seven) or keeps the provider's two.
+therefore **not** an option while MaxMind is a supported provider.
+
+**Decision (@BBcan177, #1235, 2026-07-13): keep them PER CONTINENT — one "unknown country"
+bucket per continent, not one global one.** *"When a data source can identify the continent but
+not a specific country, that information still has value. Discarding it entirely feels like
+losing useful signal."* Each continent page then offers exactly one unknown entry, and the user
+decides what rule to write for it.
+
+Volume, so the choice is made on data (same live dataset):
+
+```text
+IPv4:  Asia 181 rows, Europe 358 rows  (of 567,713 = 0.095%)   ~220k addresses (0.005% of IPv4)
+IPv6:  Asia  88 rows, Europe  70 rows  (of 561,061)
+Other continents used this way: 0
+```
+
+**Generalizing to all seven is free, because the stored key is already provider-independent.**
+The bucket's `iso` value — what `config.xml` stores and what names the alias file — **is the
+GeoNames continent id**:
+
+```text
+/usr/local/share/GeoIP/cc/6255147_v4.txt
+  # Country: AA ASIA UNDEFINED
+  # ISO Code: 6255147
+```
+
+So the truth table models an unknown-country bucket for **every** continent, keyed by that
+continent's GeoNames id (`6255146`…`6255152`). The two live keys (`6255147`, `6255148`) keep
+their exact stored values — **no migration** — and the other five become selectable entries that
+render `(0)` until a provider emits rows for them. Per @BBcan177: *"Currently MaxMind only
+surfaces this for Asia and Europe. Maybe we just watch for changes"* — so a provider emitting a
+continent-unknown row for a continent we do not yet surface is a **notice**, exactly like any
+other provider/table disagreement (point 4 above). The display name deserves better than
+`AA ASIA UNDEFINED` (that string exists to sort to the top of the old list) — naming is a UI
+detail for #1235 to settle.
 
 This matters for the provider abstraction: **"the country is unknown, only the continent is
 known" is a real state a provider can report**, and the in-tree truth must model it explicitly
@@ -292,9 +325,8 @@ Open questions #1235 must settle (they do not block this ADR's other phases): th
 source** and its locales (GeoNames' own names are ASCII-folded and partly stale, so CLDR is the
 likely pick — for countries **and** the 7 continents), whether MaxMind's locale files stay as
 optional enrichment for MaxMind users, the refresh cadence, whether the country *set* comes from
-GeoNames minus its retired codes or from a current ISO 3166-1 source, and whether the
-continent-only bucket is modelled generically (all seven) or kept as the provider's Asia/Europe
-pair.
+GeoNames minus its retired codes or from a current ISO 3166-1 source, and the display name of the
+per-continent unknown bucket (today's `AA <CONTINENT> UNDEFINED`).
 
 **Renaming a country is user-visible, and the four stale names above will change on the first
 regeneration** (Swaziland → Eswatini, …). Display strings are not config keys — the stored value
