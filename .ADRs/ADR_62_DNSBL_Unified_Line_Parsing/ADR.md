@@ -116,7 +116,7 @@ depends on which one a line uses:
   written after the full PHP extraction pipeline: tab/`%20` munging, `#`-classifier, `!`/`//`
   skip, inline `' #'` strip, CSV column pick, hosts-prefix strip, ADR-22 scheme strip
   (strict/lenient + per-line parse-error log, issue #1004, + per-feed WARNING), `/`/`#`/`?`
-  truncation, `;`-`parse_url`, trailing-port strip, bracketed-IPv6 unwrap, IP collection, IDN
+  truncation, `;`-truncation, trailing-port strip, bracketed-IPv6 unwrap, IP collection, IDN
   `idn_to_ascii` (@16673-16690), `pfb_filter(PFB_FILTER_DOMAIN)` validation with parse-fail
   logging, and `strtolower`.
 - **verbatim ABP lines** — written raw, no extraction: the whole body of an `$easylist` feed
