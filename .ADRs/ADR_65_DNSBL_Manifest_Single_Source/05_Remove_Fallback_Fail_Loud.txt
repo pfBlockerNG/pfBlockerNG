@@ -20,9 +20,11 @@ manifest is decision-complete (Phase-1 Oracle B proved it). Remove the fallback 
 the ONLY matcher source, and make a manifest failure a loud outage, never a silent stale-serve.
 
 REQUIRED READING
-- FIRST, read RESULTS/04_Results.txt AND RESULTS/01_Results.txt (Oracle B: manifest==fallback
-  equality is the premise for removing the fallback without changing decisions). If either is
-  missing, STOP and report.
+- FIRST, read RESULTS/04_Results.txt AND RESULTS/01_Results.txt (Oracle B CHARACTERIZED the
+  manifest-vs-fallback DIVERGENCE -- they are NOT equal; the safety of removing the fallback is that
+  this phase does not touch the manifest BUILD path, so production decisions are unchanged, and the
+  divergent failure-only fallback is replaced by fail-loud, D3). If either is missing, STOP and
+  report.
 - .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md -- SS1.1 (manifest decision-complete), SS1.5/SS1.7
   (the status ledger + file_notice already exist), SS2.3 (fail loud), delta D3, Semantics 1 + 4.
 - src/usr/local/pkg/pfblockerng/pfb_unbound.py -- init_standard's build-vs-fallback branch (~:1640-
@@ -37,8 +39,10 @@ REQUIRED READING
 REALITY OVERRIDE (standing rule)
 Line numbers and code-state claims predate implementation; the prior RESULTS files and the live tree
 override this prompt on any conflict -- verify before acting and flag contradictions in the handoff.
-If Oracle B did NOT prove manifest==fallback equality, STOP -- removing the fallback is unsafe until
-it does.
+The safety of this phase is that it does NOT touch the manifest BUILD path -- so re-run the Phase-1
+manifest-built oracle and confirm those decisions are byte-identical before/after. If removing the
+fallback somehow changes a MANIFEST-BUILT decision, STOP and ESCALATE (it means you touched more than
+the fallback).
 
 ACTION PLAN (ordered -- red assertion FIRST)
 1. RED test: on a build failure (manifest absent / unparseable / build() raises), assert TODAY's

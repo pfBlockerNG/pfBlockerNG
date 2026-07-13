@@ -34,9 +34,33 @@ ADR-06 moved parse/normalise/classify into Python. `init_standard()` prefers the
 it returns `None` — manifest **absent** (`:5341`), **unparseable** (`:5350`), or `build()`
 **threw** (`:5368`) — does init fall back to the legacy on-disk CSV/NDJSON loaders
 `_load_zone_and_data_dbs()` (`:1037`, gated `if not dnsbl_built`) and `_load_whitelist_db()`
-(`:1057`). The manifest embeds `tld_master`/`tld_blacklist`/`tld_exclusion` **unconditionally**
-(`pfblockerng.inc:7879-7906`), so `build()`'s `classify()` (`pfb_unbound.py:4297`) always produces
-the wildcard `zoneDB` + exact `dataDB` — the manifest path is decision-complete on its own.
+(`:1057`).
+
+**The manifest build IS decision-complete — and its zone/data split is derived, not stored.** The
+wildcard(zone) vs exact(data) distinction comes from two mechanisms: (a) **ABP** feed lines carry it
+**intrinsically** — the manifest raw is the verbatim ABP line (`pfblockerng.inc:7820`), and
+`parse_abp()` maps `||domain^` → zone, exact → data; (b) **plain** feed lines are bare domains (no
+per-entry flag), and `build()`'s `classify()` (`pfb_unbound.py:4297`, `DNSBL_CLASS_ZONE`/`_DATA`)
+computes the split from the embedded `tld_master` public-suffix list. The manifest embeds
+`tld_master`/`tld_blacklist`/`tld_exclusion` gated only on `file_exists($pfb['dnsbl_tld_data'])`
+(`pfblockerng.inc:7879`) — a **shipped static file** — so it is present **unconditionally**, and
+`classify()` is called **without any `pfb_tld` gate** (`:5162`). For a 2-label domain `classify()`
+returns **ZONE without even consulting `tld_master`** (`:4315`), so `evil.com` → `zoneDB` (wildcard)
+in every manifest build.
+
+**Two consequences that correct an earlier assumption:**
+
+- The manifest build is **NOT decision-equal to the `.txt` fallback when `pfb_tld` is OFF.** With
+  `pfb_tld` OFF the `.txt` swap (`pfb_dnsbl_py_swap`, §1.2) puts the whole raw into `py_data` (exact,
+  `py_zone` absent), so `evil.com` → exact-only there — while the manifest build wildcards it. The
+  fallback is therefore not merely *redundant*, it is *divergent* — a second reason to remove it.
+  (This is why the Phase-1 oracle pins the **manifest-built production decisions** and *characterizes*
+  the fallback's divergence, rather than asserting equality.)
+- **`pfb_tld` ("Enable TLD Function") does not gate wildcarding in the manifest era** — the manifest
+  wildcards registrable domains regardless of the toggle; `pfb_tld` OFF now only reshaped the
+  now-fallback `.txt`. `pfb_tld` is effectively **vestigial** in production. This is *orthogonal* to
+  this ADR (it changes no decision here — production already wildcards), but the Phase-1 oracle work
+  will expose it; Phase 7 files a tracking issue rather than resolving it in scope.
 
 ### 1.2 What writes the `.txt` files, and the two-producer split
 
@@ -167,7 +191,7 @@ next successful tick.
 | - | ----- | -------------------- |
 | **D1** | `py_data.txt`/`py_zone.txt` are no longer written or read; `tld_analysis`'s `.txt` classification pass and `pfb_dnsbl_py_swap` are removed | The manifest build already produces the identical `dataDB`/`zoneDB` (§1.1); this is dead-weight removal. **Net DNS block/resolve decisions are unchanged** — pinned by the Phase-1 decision oracle. Dissolves #1244 + #1245. |
 | **D2** | Reports/Alerts DNSBL rows no longer show the "not currently listed / feed-changed / TLD-carve-out" refinement badges; feed-name **filtering** now matches the **logged** feed, not the current one | The refinement rode a grep that could not reproduce the real matcher — it was an approximation shown as truth. Rendering the logged verdict is honest; filtering on what actually blocked the domain is arguably more correct. Release-note it. |
-| **D3** | A manifest that is absent/unparseable/unbuildable now yields an **empty DNSBL + a loud notice** instead of a silent fallback to the last on-disk `.txt` | The fallback masked failures and was the #1245 stale-serve vector. Loud-fail + the ADR-10 self-heal is safer for a blocklist. |
+| **D3** | A manifest that is absent/unparseable/unbuildable now yields an **empty DNSBL + a loud notice** instead of a silent fallback to the last on-disk `.txt` | The fallback masked failures, was the #1245 stale-serve vector, AND **diverged** from the manifest when `pfb_tld` was OFF (exact-only vs the manifest's wildcard, §1.1) — so it could serve *different* blocking than production. Loud-fail + the ADR-10 self-heal is safer for a blocklist. |
 | **D4** | Webserver-hit (VIP block-page) attribution + its widget counter group now come from the **live matcher** (query channel) instead of a `.txt` grep | Strictly more accurate (full matcher vs classified-subset grep); identical group for a domain the matcher blocks. |
 
 Anything else changing — a net block/resolve decision, a per-group **DNS-block** counter, a stored
@@ -175,9 +199,12 @@ config key, an alias name, the IP re-check, the log line schema — is a **defec
 
 ### Semantics that MUST be preserved (pin with tests BEFORE any swap)
 
-1. **Net DNS decisions are unchanged.** Every domain the manifest-built matcher blocks/allows today
-   it blocks/allows after — the `.txt` fallback removal changes no decision (the manifest is
-   decision-complete, §1.1). Pinned by the Phase-1 decision oracle over a corpus.
+1. **Net PRODUCTION (manifest-built) DNS decisions are unchanged.** Every domain the manifest build
+   blocks/allows today it blocks/allows after — this is the production path (the `.txt` fallback ran
+   only on a manifest-build FAILURE, §1.1). Removing the fallback does **not** claim manifest ==
+   fallback (they diverge when `pfb_tld` is OFF, §1.1); it replaces a divergent, rarely-hit path with
+   fail-loud (D3). Pinned by the Phase-1 decision oracle over a corpus, which pins the manifest-built
+   decisions and characterizes — does not equate — the fallback.
 2. **The query channel is decision-equal to a real query.** For any `(domain, qtype)`, the reply's
    `blocked` + `{b_type,group,b_eval,feed,p_type}` equal what `operate()` would log for the same
    name against the same DBs.
@@ -260,10 +287,14 @@ config key, an alias name, the IP re-check, the log line schema — is a **defec
   path (block/allow verdict + the `{b_type,group,b_eval,feed,p_type}` it would log), covering
   exact/zone/regex/ABP/allow/whitelist/TOP1M/`$important`/HSTS/homoglyph/not-blocked. This is the
   falsification harness Phases 2/5/6 are gated on (Semantics 1, 2).
-- Oracle proving `dnsbl_build_from_manifest` output is **decision-equal** to the legacy
-  `_load_zone_and_data_dbs` load on the same feeds — the evidence that removing the fallback
-  (Phase 5) changes no decision. Test surface: `tests/test_adr65_decision_oracle.py` driving the
-  real functions; pin the entry symbols from source.
+- Oracle **characterizing** `dnsbl_build_from_manifest` vs the legacy `_load_zone_and_data_dbs` load
+  on the same feeds — it pins the manifest-built decisions AND documents the **divergence** the
+  fallback introduces (with `pfb_tld` OFF the fallback is exact-only while the manifest wildcards a
+  registrable domain, §1.1). It does NOT assert equality (they are not equal). This is the evidence
+  that Phase 5 removes a *divergent*, manifest-failure-only path (replaced by fail-loud, D3), not a
+  decision-equal twin. Test surface: `tests/test_adr65_decision_oracle.py` driving the real
+  functions; pin the entry symbols from source. If a 2-label plain domain does NOT land in `zoneDB`
+  from the manifest build, STOP and ESCALATE — the §1.1 wildcard-unconditional fact is falsified.
 - Blast radius: NONE (tests only).
 
 ### Phase 2 — The read-only query channel in `pfb_unbound.py` (new; PRODUCTION-DORMANT)
@@ -323,8 +354,9 @@ config key, an alias name, the IP re-check, the log line schema — is a **defec
   (D4). CE + Plus fan-out.
 - Docs: rewrite `docs/misc/alerts-reports-pipeline.md` to the one-phase log-driven model; update
   architecture-notes; **amend ADR-06 §8** (manifest = single source, `.txt` retired, fail-loud);
-  release-note D2; close #1244/#1245; file the follow-up issue for retiring `dnsblcache`/the
-  `pfb_dnsbl_parse` grep helpers.
+  release-note D2; close #1244/#1245; file the follow-up issues for (a) retiring `dnsblcache`/the
+  `pfb_dnsbl_parse` grep helpers and (b) the **vestigial `pfb_tld`** toggle (does not gate
+  wildcarding in the manifest era, §1.1) — both out of scope here.
 
 ## 7. Definition of done
 
