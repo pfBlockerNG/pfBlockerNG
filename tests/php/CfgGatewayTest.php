@@ -784,6 +784,28 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('50', config_get_path($path), "write(read('50'))=='50' for pfb_log_trim_margin_pct");
 	}
 
+	public function testPfbLogTrimMarginPctSurvivesSectionWrite(): void
+	{
+		// The UI saves the whole section (writeSection), never a per-field write, so the
+		// per-field round-trip above cannot catch a key dropped on the section path. Tier-B
+		// covers the real save, but it is schedule-only -- this is the PR-gated guard.
+		$path = 'installedpackages/pfblockerng/config/0/pfb_log_trim_margin_pct';
+
+		$this->seedConfig($path, '0');
+		$this->assertSame('0', config_get_path($path), "before: pfb_log_trim_margin_pct seed is '0'");
+
+		// The exact shape pfblockerng_general.php uses (:52 read, :243 write).
+		$gen = 'installedpackages/pfblockerng/config/0';
+		$section = PfbConfig::readSection($gen);
+		$section['pfb_log_trim_margin_pct'] = '50';
+		PfbConfig::writeSection($gen, $section);
+
+		$this->assertSame('50', config_get_path($path),
+			'the section write must carry pfb_log_trim_margin_pct -- a key dropped here saves nothing from the UI'
+		);
+		$this->assertSame('50', PfbConfig::read('pfb_log_trim_margin_pct'), 'and the gateway must read it back');
+	}
+
 	// ADR-38 — log_syslog (toggle; Amendment 1: facility/priority removed)
 	// -----------------------------------------------------------------------
 
