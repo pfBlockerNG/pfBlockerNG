@@ -47,7 +47,7 @@ scenario() { # $1 name  $2 nfeeds  $3 rows  $4 shared
 	sh_file="$d/.shared"; gen_range 0 "$4" > "$sh_file"
 	own=$(( $3 - $4 )); i=1
 	while [ "$i" -le "$2" ]; do
-		{ cat "$sh_file"; gen_range "$(( $4 + i * own ))" "$own"; } \
+		{ awk 1 "$sh_file"; gen_range "$(( $4 + i * own ))" "$own"; } \
 			| LC_ALL=C sort -u > "$d/feed$(printf %02d "$i")_v4.txt"
 		i=$(( i + 1 ))
 	done
