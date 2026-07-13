@@ -108,8 +108,14 @@ final class CountLinesTest extends TestCase
 
 	public function testShortReadThatNeverReachesEofReturnsNull(): void
 	{
-		// issue #1257 B2: a read that stalls/aborts mid-stream (feof() never
-		// goes TRUE) must never be reported as a completed, trustworthy count.
+		// issue #1257 B2: a read that stalls/aborts mid-stream (feof() never goes TRUE)
+		// must never be reported as a completed, trustworthy count.
+		//
+		// The scenario is SYNTHETIC and defence-in-depth: for a real local file an
+		// fread() returning '' always coincides with feof() === TRUE, so production
+		// reaches the sibling fread()===FALSE branch (e.g. a directory), not this one.
+		// The guard still ships because the fail direction here is destructive -- an
+		// undercount silently skips a trim -- and a future non-local stream would hit it.
 		require_once __DIR__ . '/PfbTruncatedReadStreamWrapper.php';
 		stream_wrapper_register('pfbtrunc', PfbTruncatedReadStreamWrapper::class);
 		PfbTruncatedReadStreamWrapper::setData("a\nb\nc\n");
@@ -154,13 +160,14 @@ final class CountLinesTest extends TestCase
 		}
 	}
 
-	public function testTwoHundredMegabyteFileStaysWithinBoundedMemory(): void
+	public function testManyTimesOneChunkStaysWithinBoundedMemory(): void
 	{
 		// issue #1027 discipline: must stream, never slurp (file()/file_get_contents()
-		// peaked at ~68MB on a 1M-line file per issue #1084's review).
+		// peaked at ~68MB on a 1M-line file per issue #1084's review). 32 chunks is
+		// already 32x any per-chunk buffer, so a slurp cannot hide inside the headroom.
 		$lineWidth  = 16; // 15 'x' + "\n"
 		$chunk      = str_repeat(str_repeat('x', 15) . "\n", 65536); // exactly 1048576 bytes
-		$chunkCount = 200; // 200 * 1048576 bytes =~ 200 MiB
+		$chunkCount = 32; // 32 MiB -- enough to prove streaming without 200MiB of CI disk churn
 		$fh         = fopen($this->tmpFile, 'wb');
 		for ($i = 0; $i < $chunkCount; $i++) {
 			fwrite($fh, $chunk);
@@ -172,11 +179,11 @@ final class CountLinesTest extends TestCase
 		$count  = pfb_count_lines($this->tmpFile);
 		$peak   = memory_get_peak_usage(true);
 
-		$this->assertSame($chunkCount * (1048576 / $lineWidth), $count, 'a 200MiB file must still count exactly');
+		$this->assertSame($chunkCount * (1048576 / $lineWidth), $count, 'a multi-chunk file must still count exactly');
 		$this->assertLessThan(
 			$before + (10 * 1048576),
 			$peak,
-			'peak memory for a 200MiB file must stay near one chunk (~1MiB), not scale with file size'
+			'peak memory must stay near one chunk (~1MiB), not scale with file size'
 		);
 	}
 }

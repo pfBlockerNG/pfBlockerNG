@@ -3306,6 +3306,11 @@ function pfb_log_mgmt() {
 
 	$chroot_folder = '/var/unbound';
 
+	// The RAW value, never a parsed one: the guards clamp it themselves (#1258), so no
+	// caller can hand them an out-of-range margin. Hoisting the read is fine; hoisting
+	// the parse is what let an unclamped margin reach the window arithmetic.
+	$margin_raw = $pfb['config']['pfb_log_trim_margin_pct'] ?? '';
+
 	foreach (array(	'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog', 'ip_matchlog',
 			'ip_parse_err', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog') as $logtype) {
 
@@ -3337,7 +3342,7 @@ function pfb_log_mgmt() {
 				if (file_exists($final_log_file)) {
 					// issue #1109: skip this tick's whole pass unless an active cap is
 					// past its margin-widened high-water mark (the hysteresis trigger).
-					if (!pfb_log_trim_needed($logmax, $agedays, $final_log_file, $logtype, $pfb['config']['pfb_log_trim_margin_pct'] ?? '')) {
+					if (!pfb_log_trim_needed($logmax, $agedays, $final_log_file, $logtype, $margin_raw)) {
 						unlink_if_exists($temp);
 						continue;
 					}
@@ -3375,7 +3380,7 @@ function pfb_log_mgmt() {
 			else {
 				$temp = tempnam("{$g['tmp_path']}/", 'pfb_log_');
 				// issue #1109: same unified high-water guard as the chroot branch above.
-				if (!pfb_log_trim_needed($logmax, $agedays, $pfb[$logtype], $logtype, $pfb['config']['pfb_log_trim_margin_pct'] ?? '')) {
+				if (!pfb_log_trim_needed($logmax, $agedays, $pfb[$logtype], $logtype, $margin_raw)) {
 					unlink_if_exists($temp);
 					continue;
 				}
