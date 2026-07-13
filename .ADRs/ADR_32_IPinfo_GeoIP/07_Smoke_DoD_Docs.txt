@@ -16,6 +16,13 @@ unchanged, provider switch), writes the maintainer manual checklist for the rest
 the DoD + reject criteria.
 
 REQUIRED READING
+- Issue #1235 IN FULL, including every comment (`gh issue view 1235 --comments`) — the in-tree,
+  provider-independent country/continent truth. It is a BLOCKING PREREQUISITE for this ADR
+  (ADR.md SS2.5): the country SET (ISO union every supported provider, incl. XK), the NAMES and
+  their locales (iso-codes -> GeoNames -> provider), the ISO->continent mapping, the frozen
+  structural bindings (pfB_NAmerica, the config sections), and the per-continent unknown-country
+  buckets all come from the truth table -- NEVER from the provider. A provider code the table
+  does not know is a notice, never a silent new country.
 - FIRST, read .ADRs/ADR_32_IPinfo_GeoIP/RESULTS/06_Results.txt AND 05_/04_/01_. If missing,
   STOP and report.
 - .ADRs/ADR_32_IPinfo_GeoIP/ADR.md (SS7 DoD + reject criteria).
