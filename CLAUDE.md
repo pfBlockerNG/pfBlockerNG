@@ -855,9 +855,17 @@ is author (`--author=`), and the `prepare-commit-msg` hook injects the owner's
 
 ## No orphaned waits — every trigger dies with its task
 
+**First — is there anything to wait on at all?** Harness-tracked work re-invokes you when it
+finishes: a `Workflow`, an `Agent`, a Bash call with `run_in_background: true`. For those,
+**arm nothing** — no sleep, no poll, no `ScheduleWakeup`; end the turn and answer the
+completion notification. A wait is for state the harness cannot see (a reviewer bot, a CI
+run, a remote queue). Polling your own tracked work is pure waste, and each expiring timer
+re-invokes you into thinking the wait is still unresolved — that loop, not the first sleep,
+is the real defect.
+
 Background waits have been found running **20+ hours** after their task ended; there is no
 platform-level timeout on polls/cron/`ScheduleWakeup`/subscriptions, so the guarantees are
-ours. Three, ALL mandatory:
+ours. Four, ALL mandatory:
 
 1. **Self-terminating by construction.** Every background wait carries a hard iteration cap
    AND a wall-clock deadline *inside the loop itself* (`scripts/agent/wait-*.sh` are the

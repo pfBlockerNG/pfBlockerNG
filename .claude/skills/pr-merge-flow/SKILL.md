@@ -62,8 +62,10 @@ Args: `{{ args }}`
 
 - **Claude adversarial review (Step 1d) — ALWAYS.** Spawn it **first**, before
   starting the CodeRabbit wait (the Workflow tool is already asynchronous — it returns
-  immediately; `run_in_background` is not a Workflow parameter, never pass it); it is
-  independent of CodeRabbit's availability and never a mere fallback.
+  immediately; `run_in_background` is not a Workflow parameter, never pass it). The review
+  Workflow is **harness-tracked** — never arm a wait for it; the CodeRabbit wait beside it is
+  for an **untracked** external, which is why that one gets a bounded poll and this one does
+  not. It is independent of CodeRabbit's availability and never a mere fallback.
 - **GitHub Copilot (Step 1f) — request + wait when available.** If Copilot is not already
   reviewing the PR, request its review at the start of Step 1; either way, wait for it
   (bounded) and triage its findings. If the request fails (Copilot review unavailable),
@@ -156,7 +158,9 @@ do not loop on it.
 Runs on **every** PR — spawn it at the **start of Step 1**, in parallel with the
 CodeRabbit wait; the Workflow call is already asynchronous (returns immediately), so
 pass no extra parameter — `run_in_background` is not a Workflow parameter and fails
-validation. It is additive: CodeRabbit reviewing does not skip it, and it does not
+validation. Being harness-tracked, it needs no wait of its own: end the turn and answer its
+completion notification (only the untracked CodeRabbit/CI legs get a bounded wait). It is
+additive: CodeRabbit reviewing does not skip it, and it does not
 replace CodeRabbit; when CodeRabbit never reviews it stands alone.
 
 1. **Run the committed `review-single` workflow** — the reviewer contract (adversarial

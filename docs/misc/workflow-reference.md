@@ -67,7 +67,29 @@ generator in `scripts/update-pfsense-stubs.py`.
 
 ## Bounded waits — the full ladder
 
-Expansion of CLAUDE.md "Bounded waits". Two independent guards, **both required**:
+Expansion of CLAUDE.md "Bounded waits". Two independent guards, **both required** — but
+only once §0 says a wait is warranted at all:
+
+### 0 — First: is the awaited thing harness-tracked? Then do not wait on it
+
+`Workflow`, `Agent`, and Bash with `run_in_background: true` are **tracked**: their
+completion re-invokes you. Arm **nothing** for them — no background `sleep`, no poll, no
+`ScheduleWakeup`. Launch, end the turn, answer the notification.
+
+Only **untracked** state gets a wait, and it is always a wait on something the harness has
+no visibility into:
+
+| Awaited thing | Tracked? | Correct move |
+| ------------- | -------- | ------------ |
+| A `Workflow` you launched (`issue-triage`, `phase-step`, `review-single`, …) | yes | end the turn; the completion notification wakes you |
+| An `Agent` / subagent you spawned | yes | same |
+| `wait-checks.sh` / `wait-reviewer.sh` run with `run_in_background: true` | yes | same — the script self-exits and notifies; do not also poll it |
+| CodeRabbit / Copilot posting a review; a CI run; a remote queue | **no** | a bounded wait: the script above, or the ladder in §1 |
+
+The ladder's self-invalidating discipline applies to **every** timer you arm, not just
+`ScheduleWakeup`: on firing, CHECK the concrete state first; if resolved, no-op and do NOT
+re-arm. A chain of re-armed sleeps with no resolution check is an unbounded ladder wearing a
+cap — the cap is per-rung, and the loop never ends.
 
 ### 1 — Never trust the event trigger alone: arm a self-check heartbeat ladder
 

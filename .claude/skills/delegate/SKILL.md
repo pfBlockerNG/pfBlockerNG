@@ -32,7 +32,8 @@ When the Workflow tool is available, run Steps 2–3 as ONE call after writing t
 `Workflow({name: 'phase-step', args: {worktree, brief, gates, redProof, planItems,
 ponytailLevel}})` — Sonnet implementer + fresh higher-model verifier, schema-forced
 `{handoff, gateRecord}`; pass no extra parameter (`run_in_background` is not a Workflow
-parameter and fails validation). Validate the returned record per workflow-reference "Validating
+parameter and fails validation; it is harness-tracked — end the turn and answer its
+completion notification, never poll it). Validate the returned record per workflow-reference "Validating
 workflow records" (fields non-empty, evidence executed + pasted, spot-read the load-bearing
 hunks — never a third derivation of the gates or red proof); the Step 3–4 items below bind
 the inline route only.
