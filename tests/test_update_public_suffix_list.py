@@ -378,3 +378,9 @@ def test_render_output_stays_one_suffix_per_line_with_oversized_entry() -> None:
     junk = "a" * 4096
     out = upsl.render_output("v", "c", ["ac", junk, "com"])
     assert out.splitlines()[4:] == ["ac", junk, "com"]
+
+
+def test_convert_suffix_skips_oversized_non_ascii_label_instead_of_crashing() -> None:
+    # A non-ASCII label past the 63-octet DNS cap makes the stdlib idna codec
+    # raise; a malformed line must be skipped like the whitespace ones, never crash.
+    assert upsl.convert_suffix("a." + "ä" * 64) is None

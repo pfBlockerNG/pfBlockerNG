@@ -78,8 +78,8 @@ HEADER_TEMPLATE = (
 
 
 def normalise_lines(text: str) -> list[str]:
-    """Split into lines, stripping a trailing \\r and surrounding whitespace from each."""
-    return [line.replace("\r", "").strip() for line in text.split("\n")]
+    """Split into lines (any newline convention), stripping surrounding whitespace."""
+    return [line.strip() for line in text.splitlines()]
 
 
 def extract_header(lines: list[str]) -> tuple[str, str]:
@@ -132,7 +132,11 @@ def convert_suffix(line: str) -> str | None:
         return None
     if any(c.isspace() for c in line):
         return None
-    return ".".join(_punycode_label(label) for label in line.split("."))
+    try:
+        return ".".join(_punycode_label(label) for label in line.split("."))
+    except UnicodeError:
+        # idna refuses a label past the 63-octet DNS cap -- malformed, skip it.
+        return None
 
 
 def build_body(icann_lines: list[str]) -> list[str]:
