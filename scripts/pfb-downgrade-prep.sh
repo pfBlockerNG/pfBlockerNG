@@ -9,13 +9,21 @@
 #   ssh root@<box> 'sh /tmp/pfb-downgrade-prep.sh'
 #   ssh root@<box> 'pkg delete pfSense-pkg-pfBlockerNG-devel && pkg install <older>'
 #
-# It reverses the two 4.0.x changes a pre-4.0.x release cannot cope with and that do
+# It reverses the three 4.0.x changes a pre-4.0.x release cannot cope with and that do
 # NOT self-heal:
 #
 #   1. Custom list pre/post scripts relocated into list_scripts/ on upgrade — a
 #      pre-4.0.x release resolves list scripts against the package ROOT only, so a
 #      moved script silently stops running. They are moved back to the root.
-#   2. The ADR-43 scheduled-tick cron entry (`pfblockerng.php cron-tick`, or the
+#   2. Machine-owned match artifacts relocated + renamed from the match folder into
+#      its generated/ subdirectory on upgrade (issue #1250) — a pre-4.0.x release
+#      resolves match artifacts against the match folder ROOT only, under their old
+#      names; a leftover generated/ subdirectory pollutes its `*` glob and
+#      permanently satisfies its `ls -A` presence check. Recognised artifacts are
+#      moved back under their pre-4.0.x names, any `*.txt.new` write-in-progress
+#      stray is deleted (the old release has no cleaner for it), and generated/ is
+#      removed once emptied.
+#   3. The ADR-43 scheduled-tick cron entry (`pfblockerng.php cron-tick`, or the
 #      legacy `pfblockerng.php tick` on an older build -- issue #1204) is removed, so
 #      the downgraded release re-establishes its own schedule on its next sync instead
 #      of leaving an orphan tick cron behind that it has no verb to run.
@@ -25,8 +33,8 @@
 # .md5 -> .xxhash128 feed sidecars and the .tar.bz2 -> .tar.zst MFS archive self-heal
 # on the next feed update / rebuild.
 #
-# Idempotent: a second run restores nothing (scripts already at the root) and reports
-# the tick cron already gone.
+# Idempotent: a second run restores nothing (scripts and match artifacts already at
+# their pre-4.0.x locations) and reports the tick cron already gone.
 #
 # Tests: tests/shell/pfb_downgrade_prep_spec.sh (shellspec — the file-move logic and
 # the shipped-name gate) and tests/smoke/test_downgrade_prepare.py (the live tool
@@ -35,6 +43,8 @@
 # Paths are env-overridable so the pure functions are unit-testable off-appliance.
 PFB_PKGDIR="${PFB_PKGDIR:-/usr/local/pkg/pfblockerng}"
 PFB_LISTDIR="${PFB_LISTDIR:-${PFB_PKGDIR}/list_scripts}"
+PFB_MATCHDIR="${PFB_MATCHDIR:-/var/db/pfblockerng/match}"
+PFB_MATCHGENDIR="${PFB_MATCHGENDIR:-${PFB_MATCHDIR}/generated}"
 PFB_PFSSH="${PFB_PFSSH:-/usr/local/sbin/pfSsh.php}"
 
 # The {ip,dnsbl}_{pre,post}_*.{sh,py} name space, enumerated (POSIX sh has no brace
@@ -101,6 +111,59 @@ pfb_restore_list_scripts() {
 	return "$_rc"
 }
 
+# pfb_restore_matchgen_artifacts
+# Reverse the 4.0.x matchdir->matchgendir relocation (issue #1250): move recognised
+# machine-owned match artifacts (pfB_Match_ET_v4 / _Exempt_v4 / _Rep_<header>_<fam>)
+# from matchgendir back to their pre-4.0.x matchdir names, deleting `*.txt.new`
+# write-in-progress strays first (the old release has no cleaner for them). An
+# unrecognised file is left in place and reported; matchgendir is removed once
+# emptied, else left with a report (not a failure). Prints the number restored to
+# stdout; diagnostics go to stderr. Returns non-zero iff a move/delete actually
+# failed; a no-clobber skip is NOT a failure.
+pfb_restore_matchgen_artifacts() {
+	_restored=0
+	_rc=0
+	[ -d "$PFB_MATCHGENDIR" ] || { echo "$_restored"; return 0; }
+
+	for _stray in "$PFB_MATCHGENDIR"/*.txt.new; do
+		[ -f "$_stray" ] || continue
+		if ! rm -f "$_stray"; then
+			echo "pfb-downgrade-prep: failed to remove stray ${_stray}" >&2
+			_rc=1
+		fi
+	done
+
+	for _src in "$PFB_MATCHGENDIR"/*.txt; do
+		[ -f "$_src" ] || continue
+		_name=$(basename "$_src")
+		case "$_name" in
+			pfB_Match_ET_v4.txt) _dest_name=ETMatch.txt ;;
+			pfB_Match_Exempt_v4.txt) _dest_name=matchdedup_v4.txt ;;
+			pfB_Match_Rep_*.txt) _dest_name="match${_name#pfB_Match_Rep_}" ;;
+			*) continue ;;
+		esac
+		_dest="${PFB_MATCHDIR}/${_dest_name}"
+		if [ -e "$_dest" ]; then
+			echo "pfb-downgrade-prep: not overwriting existing ${_dest}; left ${_name} in matchgendir/" >&2
+			continue
+		fi
+		if mv "$_src" "$_dest"; then
+			_restored=$((_restored + 1))
+		else
+			echo "pfb-downgrade-prep: failed to move ${_src} -> ${_dest}" >&2
+			_rc=1
+		fi
+	done
+
+	if ! rmdir "$PFB_MATCHGENDIR" 2>/dev/null; then
+		_leftover=$(find "$PFB_MATCHGENDIR" -mindepth 1 -maxdepth 1 -exec basename {} \; 2>/dev/null | tr '\n' ' ')
+		echo "pfb-downgrade-prep: matchgendir not empty after restore; left in place -- remove manually before the downgrade if desired: ${_leftover}" >&2
+	fi
+
+	echo "$_restored"
+	return "$_rc"
+}
+
 # pfb_remove_tick_cron
 # Remove the ADR-43 scheduled-tick cron entry via pfSsh.php, which calls the shipped
 # install_cron_job() so config.xml + the live crontab are rewritten cleanly. Checks
@@ -163,6 +226,7 @@ pfb_downgrade_prep_main() {
 
 	_rc=0
 	_restored=$(pfb_restore_list_scripts) || _rc=1
+	_matchgen=$(pfb_restore_matchgen_artifacts) || _rc=1
 	if _tick=$(pfb_remove_tick_cron); then
 		:
 	else
@@ -172,6 +236,7 @@ pfb_downgrade_prep_main() {
 
 	echo "pfBlockerNG downgrade preparation:"
 	echo "  Custom list scripts restored to package root: ${_restored}"
+	echo "  Machine match artifacts restored to the match folder: ${_matchgen}"
 	echo "  ADR-43 tick cron entry: ${_tick}"
 	return "$_rc"
 }
