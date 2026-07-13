@@ -1780,6 +1780,43 @@ def set_dnsbl_lenient(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
         )
 
 
+def set_dnsbl_tld_wildcard(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
+    """Toggle DNSBL Wildcard Blocking (TLD) (``pfb_tld`` -> ini ``python_tld_wildcard``).
+
+    issue #1255: ``pfb_tld`` is read as a bare truthy check (``$pfb['dnsbl_tld']``), so
+    off is the empty string, matching :func:`set_dnsbl_control`. On: the next reload's
+    ini carries ``python_tld_wildcard = on`` and the shipped public-suffix oracle
+    (``pfb_py_tld.txt``) gates classify()'s 2-label wildcard branch; off: the oracle is
+    never opened, so classify() forces exact DATA for every domain.
+    """
+    val = "on" if on else ""
+    snippet = (
+        f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
+        f"$d['pfb_tld'] = {_php_str(val)};\n"
+        f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $d);\n"
+        "write_config('pfBlockerNG smoke: toggle pfb_tld');\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"set_dnsbl_tld_wildcard({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
+def assert_tld_wildcard_ini(vm: SmokeVM, *, on: bool, timeout: float = 30.0) -> None:
+    """Precondition guard: the generated ini's ``python_tld_wildcard`` matches ``on``.
+
+    issue #1255: attributes a wildcard-vs-exact drill assertion to the toggle's ini
+    gate (not a config-write miss) -- ``pfb_unbound.py`` reads
+    ``pfb['python_tld_wildcard']`` to decide whether to open the shipped oracle.
+    """
+    ini = vm.ssh("cat", UNBOUND_PFB_INI, timeout=timeout)
+    want = "on" if on else "off"
+    if not re.search(rf"(?im)^\s*python_tld_wildcard\s*=\s*{want}\b", ini.stdout):
+        raise AssertionError(f"python_tld_wildcard != {want} in {UNBOUND_PFB_INI}:\n{ini.stdout}")
+
+
 def read_log_file(vm: SmokeVM, path: str, *, timeout: float = 30.0) -> str:
     """Return the full text of a guest log file (empty string if absent).
 
