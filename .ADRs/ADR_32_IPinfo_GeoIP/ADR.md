@@ -184,7 +184,7 @@ Therefore, before Phase 2:
 
    | Source | Licence | Supplies | Why it, and not the others |
    | --- | --- | --- | --- |
-   | **`iso-codes`** (Debian; ISO 3166-1 data) | LGPL-2.1 | the **country set** (249 officially-assigned codes), **current official names**, and **localized names** | It *is* the ISO 3166-1 list, machine-readable and maintained — ISO's own paid collection file (300 CHF) buys nothing extra, and the ISO OBP web UI does not need scraping. Names are current and correctly accented (`Türkiye`, `Cabo Verde`, `North Macedonia`, `Eswatini`, `Curaçao`). Ships `.po` translations for **every locale pfBlockerNG offers** (`fr de pt_BR ja zh_CN es ru` — e.g. `Türkiye` → `トルコ`), which retires the "locale support depends on the provider" problem outright. |
+   | **`iso-codes`** (Debian; ISO 3166-1 data) | LGPL-2.1 | the **country base set** (249 officially-assigned codes), **current official names**, and **localized names** | It *is* the ISO 3166-1 list, machine-readable and maintained — ISO's own paid collection file (300 CHF) buys nothing extra, and the ISO OBP web UI does not need scraping. Names are current and correctly accented (`Türkiye`, `Cabo Verde`, `North Macedonia`, `Eswatini`, `Curaçao`). Ships `.po` translations for **every locale pfBlockerNG offers** (`fr de pt_BR ja zh_CN es ru` — e.g. `Türkiye` → `トルコ`), which retires the "locale support depends on the provider" problem outright. |
    | **GeoNames** `countryInfo.txt` | CC BY 4.0 | the **ISO → continent** mapping (+ the continent geoname ids) | ISO 3166 has no concept of a continent, so this is the one thing `iso-codes` cannot answer. GeoNames' 7-continent model is the one the GeoIP pages already use (UN M.49 / CLDR splits the Americas differently and would not map onto our pages). Its *names* are not used — they are ASCII-folded and partly stale (`Curacao`, `Reunion`, `Turkey`). |
 
    This is not a new dependency, it is the original one made explicit: the `geoname_id`s in
@@ -192,18 +192,33 @@ Therefore, before Phase 2:
    `BT`=1252634, `AQ`=6697173) — the table is a GeoNames snapshot, scraped once and never
    refreshed.
 
-   **`XK` (Kosovo) must be carried explicitly.** The set arithmetic:
+   **The set is a UNION; the names have a PRECEDENCE.** The set arithmetic (measured):
 
    ```text
    ISO 3166-1 official : 249
-   MaxMind GeoLite2    : 250  = 249 + XK      (user-assigned code, not official ISO)
-   $pfb_geoip_all      : 250  = 249 + XK      (same set as MaxMind)
-   GeoNames countryInfo: 252  = 249 + XK + AN + CS   (two retired codes — filter them)
+   MaxMind GeoLite2    : 250  = 249 + XK              (user-assigned code, not official ISO)
+   $pfb_geoip_all      : 250  = 249 + XK              (our table already matches MaxMind)
+   GeoNames countryInfo: 252  = 249 + XK + AN + CS    (AN/CS retired: 2010, 2006)
    ```
 
-   A strict-ISO generation would **drop Kosovo**, which MaxMind ships and users may already have
-   selected — a silently emptied alias, the exact failure this section exists to prevent. `XK` is
-   a documented, deliberate addition to the ISO set.
+   - **Set = ISO ∪ (every SUPPORTED provider's code set)**, computed at generation and committed.
+     Today that is 250 (ISO + `XK`). A strict-ISO table would **drop Kosovo** — which MaxMind
+     ships and users may already have selected — i.e. a silently emptied alias, the exact failure
+     this section exists to prevent. Note the union also excludes GeoNames' retired `AN`/`CS` for
+     free: neither ISO nor any provider lists them, so no "filter the dead codes" rule is needed.
+     Union over **all** supported providers, not the active one — otherwise switching provider
+     would change which countries exist.
+   - **Name precedence: ISO → GeoNames → provider.** ISO is authoritative where it has an entry;
+     GeoNames covers what ISO does not (`XK` → "Kosovo", continent `EU`, geoname `831053` — the
+     same id MaxMind uses); the provider is the last resort. Localized names follow the same
+     ladder (`iso-codes` `.po` → provider's localized Locations → English), which is the only
+     place the provider is genuinely load-bearing today: `iso-codes` has no `XK` translations,
+     while MaxMind ships them (`ja` → コソボ).
+   - **A provider code the committed table does not know is a NOTICE, never a silent new country.**
+     The table is regenerated deliberately (a reviewed commit); until then such networks are
+     simply unassigned, and the tracker below opens an issue naming the code. Runtime never
+     invents a country — that is what "a subsequent provider DB could alter the user's config"
+     means, and it is the thing being prevented.
    **How stale, measured (2026-07-13):** our table's ISO set (250) matches GeoLite2's exactly, but
    **6 names** disagree with current GeoNames — and four of those are renames the world actually
    made: the UI still says **Swaziland** (Eswatini), **Macedonia** (North Macedonia),
