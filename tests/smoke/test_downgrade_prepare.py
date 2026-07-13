@@ -8,14 +8,20 @@ rolling the package back to a pre-4.0.x release clean — and carries the ``repo
 
 THE TOOL (``scripts/pfb-downgrade-prep.sh``) is a dev/ops-only script — NOT shipped in
 the package — that an operator copies to the appliance and runs as root before the
-``pkg`` downgrade. It reverses the two 4.0.x changes a pre-4.0.x release cannot cope
+``pkg`` downgrade. It reverses the three 4.0.x changes a pre-4.0.x release cannot cope
 with:
 
   1. Custom list pre/post transform scripts relocated into ``list_scripts/`` on upgrade —
      an older release resolves list scripts against the package ROOT only, so a moved
      script silently stops running. They are moved back to the root (shipped AWS wrappers
      are left in place, recognised by name — no pkg query).
-  2. The ADR-43 scheduled-tick cron entry — ``pfblockerng.php cron-tick`` (current,
+  2. Machine-owned match artifacts relocated + renamed from the match folder into its
+     ``generated/`` subdirectory on upgrade (issue #1250) — an older release resolves
+     match artifacts against the match folder ROOT only, under their old names, and a
+     leftover ``generated/`` subdirectory pollutes its glob. Recognised artifacts are
+     moved back under their pre-4.0.x names; a stray ``*.txt.new`` write-in-progress
+     file is deleted; ``generated/`` is removed once emptied.
+  3. The ADR-43 scheduled-tick cron entry — ``pfblockerng.php cron-tick`` (current,
      issue #1204) or the legacy pre-#1204 ``pfblockerng.php tick`` (an un-upgraded box)
      — is removed via ``pfSsh.php`` (the shipped ``install_cron_job()``), so the
      downgraded release re-establishes its own schedule instead of leaving an orphan
@@ -40,6 +46,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import uuid
 from pathlib import Path
 
 import pytest
@@ -76,6 +83,16 @@ _USER_SCRIPT = "ip_pre_pfbdgsmoke.sh"
 # A shipped AWS region wrapper — the tool must leave it in list_scripts/ (name gate).
 _SHIPPED_SCRIPT = "ip_pre_AWS_US.sh"
 
+# Machine match artifacts (issue #1250): matchdir/matchgendir and inert RFC 5737
+# TEST-NET-3 fixture content, one distinguishable line per artifact.
+_MATCHDIR = "/var/db/pfblockerng/match"
+_MATCHGENDIR = f"{_MATCHDIR}/generated"
+_ET_CONTENT = "203.0.113.10\n"
+_EXEMPT_CONTENT = "203.0.113.11\n"
+_REP_CONTENT = "203.0.113.12\n"
+_COLLISION_OLD_CONTENT = "203.0.113.13\n"  # already at the pre-4.0.x name in matchdir
+_COLLISION_NEW_CONTENT = "203.0.113.14\n"  # the generated/ file that must be LEFT
+
 _TICK_CMD = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php tick >> /var/log/pfblockerng.log 2>&1"
 # issue #1204: the current shipped cron entry — the tool must remove this ONE too,
 # via its own second install_cron_job('pfblockerng.php cron-tick', FALSE) needle
@@ -94,6 +111,28 @@ _TICK_CLOSE = "<<<TICKEND>>>"
 def _file_exists(vm: SmokeVM, path: str) -> bool:
     """TRUE iff ``path`` is a regular file on the guest (driven via /bin/sh -c by ssh)."""
     return vm.ssh("test", "-f", path, timeout=30.0).returncode == 0
+
+
+def _dir_exists(vm: SmokeVM, path: str) -> bool:
+    """TRUE iff ``path`` is a directory on the guest."""
+    return vm.ssh("test", "-d", path, timeout=30.0).returncode == 0
+
+
+def _write_guest_file(vm: SmokeVM, path: str, contents: str, *, timeout: float = 30.0) -> None:
+    """Write ``contents`` to ``path`` on the guest via ``tee`` over SSH (parent dir must exist)."""
+    result = subprocess.run(
+        vm.ssh_argv("tee", path), input=contents, capture_output=True, text=True, timeout=timeout, check=False
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"_write_guest_file({path}) failed: rc={result.returncode} {result.stderr!r}")
+
+
+def _read_guest_file(vm: SmokeVM, path: str) -> str:
+    """Read ``path`` on the guest and return its content (raises on a missing file/rc!=0)."""
+    result = vm.ssh("/bin/cat", path, timeout=30.0)
+    if result.returncode != 0:
+        raise RuntimeError(f"_read_guest_file({path}) failed: rc={result.returncode} {result.stderr!r}")
+    return result.stdout
 
 
 def _scp_to_guest(vm: SmokeVM, local: Path, remote: str) -> None:
@@ -308,5 +347,133 @@ def test_downgrade_tool_restores_scripts_and_removes_tick_cron(repo_vm: SmokeVM)
             _remove_tick_cron(repo_vm)
         except Exception as exc:  # noqa: BLE001 -- cleanup must not mask the real test outcome
             print(f"[smoke] _remove_tick_cron failed (non-fatal): {exc}")
+        pkg_delete(repo_vm)
+        repo_vm.ssh("/bin/rm", "-rf", UPGRADE_REPO_DIR, timeout=60.0)
+
+
+@pytest.mark.timeout(600)  # one pkg install cycle + a few ssh probes > the 30s default cap
+def test_downgrade_tool_reverses_matchgen_relocation(repo_vm: SmokeVM) -> None:
+    """DOWNGRADE-PREPARATION CONTRACT (issue #1250): ``pfb-downgrade-prep.sh`` reverses the
+    matchdir->matchgendir relocation — recognised machine artifacts move back to their
+    pre-4.0.x names in the match folder ROOT, a stray write-in-progress file is deleted,
+    and a genuine name collision is left in place (never silently overwritten).
+
+    Scenario: an admin prepares a 4.0.x box for a downgrade to a pre-4.0.x release.
+      Background: our NONE-signed file:// repo above the Netgate ``pfSense`` repo.
+
+    Given the branch build installed and, staged directly in
+      matchdir/generated/ (as a prior upgrade migration would have left them): the ET
+      match artifact, the consolidated exempt artifact, a per-alias reputation
+      artifact (a fresh uuid-suffixed alias name), a stray ``*.txt.new``
+      write-in-progress file, AND a genuine name collision — a file already sitting at
+      the OLD name in matchdir plus a same-mapping file in generated/,
+
+    When ``pfb-downgrade-prep.sh`` is run on the box as root,
+
+    Then the ET/exempt/reputation artifacts are back at their pre-4.0.x names in
+      matchdir with byte-identical content and gone from generated/, the stray
+      ``*.txt.new`` is deleted, the collision is left untouched on BOTH sides with a
+      stderr report naming both paths, and generated/ still exists (not emptied — the
+      collision file remains inside).
+    """
+    pkg = os.environ.get("SMOKE_PKG")
+    assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file — repo_vm already gated this"
+    assert _TOOL_SRC.is_file(), f"dev tool not found at {_TOOL_SRC}"
+
+    pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
+
+    rep_alias = f"uuidalias{uuid.uuid4().hex[:8]}"
+    gen_et, old_et = f"{_MATCHGENDIR}/pfB_Match_ET_v4.txt", f"{_MATCHDIR}/ETMatch.txt"
+    gen_exempt, old_exempt = f"{_MATCHGENDIR}/pfB_Match_Exempt_v4.txt", f"{_MATCHDIR}/matchdedup_v4.txt"
+    gen_rep, old_rep = f"{_MATCHGENDIR}/pfB_Match_Rep_{rep_alias}_v4.txt", f"{_MATCHDIR}/match{rep_alias}_v4.txt"
+    stray = f"{_MATCHGENDIR}/foo.txt.new"
+    gen_collision, old_collision = f"{_MATCHGENDIR}/pfB_Match_Rep_Spam_v4.txt", f"{_MATCHDIR}/matchSpam_v4.txt"
+
+    try:
+        # ------------------------------------------------------------------ #
+        # GIVEN: branch build installed; tool staged; matchgen fixtures seeded #
+        # ------------------------------------------------------------------ #
+        pkg_delete(repo_vm)
+        build_guest_repo(repo_vm, UPGRADE_REPO_DIR, [Path(pkg)])
+        write_repo_conf(repo_vm, UPGRADE_REPO_DIR, ours_priority=pfsense_prio + 100)
+        pkg_update(repo_vm)
+        pkg_install_from_repo(repo_vm)
+        installed = pkg_installed_version(repo_vm)
+        expected = read_compact_version(Path(pkg))
+        assert installed == expected, f"expected branch build {expected!r} installed, got {installed!r}"
+
+        _scp_to_guest(repo_vm, _TOOL_SRC, _TOOL_DEST)
+
+        repo_vm.ssh("/bin/mkdir", "-p", _MATCHGENDIR, timeout=30.0)
+        _write_guest_file(repo_vm, gen_et, _ET_CONTENT)
+        _write_guest_file(repo_vm, gen_exempt, _EXEMPT_CONTENT)
+        _write_guest_file(repo_vm, gen_rep, _REP_CONTENT)
+        _write_guest_file(repo_vm, stray, "stray write-in-progress\n")
+        _write_guest_file(repo_vm, old_collision, _COLLISION_OLD_CONTENT)
+        _write_guest_file(repo_vm, gen_collision, _COLLISION_NEW_CONTENT)
+
+        # BEFORE: every fixture at its GENERATED location; none at its pre-4.0.x name
+        # (except the deliberate collision, which already occupies the old name).
+        for gen_path in (gen_et, gen_exempt, gen_rep, stray, gen_collision):
+            assert _file_exists(repo_vm, gen_path), f"precondition: {gen_path} must be staged in generated/"
+        assert not _file_exists(repo_vm, old_et), f"precondition: {old_et} must NOT exist yet"
+        assert not _file_exists(repo_vm, old_exempt), f"precondition: {old_exempt} must NOT exist yet"
+        assert not _file_exists(repo_vm, old_rep), f"precondition: {old_rep} must NOT exist yet"
+
+        # ------------------------------------------------------------------ #
+        # WHEN: the admin runs the downgrade-preparation tool as root         #
+        # ------------------------------------------------------------------ #
+        proc = repo_vm.ssh("/bin/sh", _TOOL_DEST, timeout=120.0)
+        assert proc.returncode == 0, (
+            f"pfb-downgrade-prep.sh failed: rc={proc.returncode} stdout={proc.stdout[-2000:]!r} stderr={proc.stderr!r}"
+        )
+        assert "Machine match artifacts restored to the match folder: 3" in proc.stdout, (
+            f"tool did not report restoring exactly 3 matchgen artifacts: {proc.stdout!r}"
+        )
+
+        # ------------------------------------------------------------------ #
+        # THEN: recognised artifacts restored; stray gone; collision left     #
+        # ------------------------------------------------------------------ #
+        et_content = _read_guest_file(repo_vm, old_et)
+        assert et_content == _ET_CONTENT, f"AFTER {old_et}: expected {_ET_CONTENT!r}, got {et_content!r}"
+        assert not _file_exists(repo_vm, gen_et), f"AFTER: {gen_et} must be gone from generated/"
+
+        exempt_content = _read_guest_file(repo_vm, old_exempt)
+        assert exempt_content == _EXEMPT_CONTENT, (
+            f"AFTER {old_exempt}: expected {_EXEMPT_CONTENT!r}, got {exempt_content!r}"
+        )
+        assert not _file_exists(repo_vm, gen_exempt), f"AFTER: {gen_exempt} must be gone from generated/"
+
+        rep_content = _read_guest_file(repo_vm, old_rep)
+        assert rep_content == _REP_CONTENT, f"AFTER {old_rep}: expected {_REP_CONTENT!r}, got {rep_content!r}"
+        assert not _file_exists(repo_vm, gen_rep), f"AFTER: {gen_rep} must be gone from generated/"
+
+        assert not _file_exists(repo_vm, stray), f"AFTER: stray {stray} must be deleted"
+
+        # Collision: neither side moved; the pre-existing matchdir file keeps its OWN
+        # content, and the generated/ collider is left for the operator to resolve.
+        collision_content = _read_guest_file(repo_vm, old_collision)
+        assert collision_content == _COLLISION_OLD_CONTENT, (
+            f"AFTER {old_collision}: no-clobber must leave the pre-existing content — "
+            f"expected {_COLLISION_OLD_CONTENT!r}, got {collision_content!r}"
+        )
+        assert _file_exists(repo_vm, gen_collision), f"AFTER: collider {gen_collision} must remain in generated/"
+        assert "not overwriting" in proc.stderr, f"tool did not report the no-clobber skip: {proc.stderr!r}"
+        assert old_collision in proc.stderr, f"no-clobber report must name the matchdir path: {proc.stderr!r}"
+        assert "pfB_Match_Rep_Spam_v4.txt" in proc.stderr, (
+            f"no-clobber report must name the generated/ file: {proc.stderr!r}"
+        )
+
+        # generated/ is NOT emptied (the collision file is still inside) -> left in place.
+        assert _dir_exists(repo_vm, _MATCHGENDIR), (
+            "AFTER: generated/ must still exist — the collision file blocks its removal"
+        )
+
+    finally:
+        # Self-encapsulation: leave no state for a sibling. The tick-cron/list-script
+        # reversals are exercised by the sibling test above; this leg only seeds/cleans
+        # matchdir/generated/.
+        repo_vm.ssh("/bin/rm", "-rf", _MATCHDIR, timeout=30.0)
+        repo_vm.ssh("/bin/rm", "-f", _TOOL_DEST, timeout=30.0)
         pkg_delete(repo_vm)
         repo_vm.ssh("/bin/rm", "-rf", UPGRADE_REPO_DIR, timeout=60.0)

@@ -20,7 +20,9 @@ Describe 'pfb-downgrade-prep.sh'
     PFBDG_WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pfbdg.XXXXXX")"
     PFB_PKGDIR="${PFBDG_WORK}/pkg"
     PFB_LISTDIR="${PFB_PKGDIR}/list_scripts"
-    mkdir -p "${PFB_LISTDIR}"
+    PFB_MATCHDIR="${PFBDG_WORK}/match"
+    PFB_MATCHGENDIR="${PFB_MATCHDIR}/generated"
+    mkdir -p "${PFB_LISTDIR}" "${PFB_MATCHGENDIR}"
   }
   cleanup() { rm -rf "${PFBDG_WORK}"; }
   BeforeEach 'setup'
@@ -124,6 +126,100 @@ EOF
     End
   End
 
+  Describe 'pfb_restore_matchgen_artifacts'
+    It 'restores the ET match artifact to its pre-4.0.x name, content byte-identical'
+      printf ET-CONTENT > "${PFB_MATCHGENDIR}/pfB_Match_ET_v4.txt"
+      When call pfb_restore_matchgen_artifacts
+      The output should equal 1
+      The path "${PFB_MATCHDIR}/ETMatch.txt" should be file
+      The contents of file "${PFB_MATCHDIR}/ETMatch.txt" should equal ET-CONTENT
+      The path "${PFB_MATCHGENDIR}/pfB_Match_ET_v4.txt" should not be exist
+    End
+
+    It 'restores the consolidated exempt artifact to its pre-4.0.x name'
+      touch "${PFB_MATCHGENDIR}/pfB_Match_Exempt_v4.txt"
+      When call pfb_restore_matchgen_artifacts
+      The output should equal 1
+      The path "${PFB_MATCHDIR}/matchdedup_v4.txt" should be file
+    End
+
+    It 'restores a v4 reputation artifact to its pre-4.0.x name'
+      touch "${PFB_MATCHGENDIR}/pfB_Match_Rep_Spam_v4.txt"
+      When call pfb_restore_matchgen_artifacts
+      The output should equal 1
+      The path "${PFB_MATCHDIR}/matchSpam_v4.txt" should be file
+    End
+
+    It 'restores a v6 reputation artifact the same as v4 (family-agnostic rule)'
+      touch "${PFB_MATCHGENDIR}/pfB_Match_Rep_Spam_v6.txt"
+      When call pfb_restore_matchgen_artifacts
+      The output should equal 1
+      The path "${PFB_MATCHDIR}/matchSpam_v6.txt" should be file
+    End
+
+    It 'strips only the fixed prefix, never field-splitting an embedded underscore'
+      touch "${PFB_MATCHGENDIR}/pfB_Match_Rep_Spam_Feed_v4.txt"
+      When call pfb_restore_matchgen_artifacts
+      The output should equal 1
+      The path "${PFB_MATCHDIR}/matchSpam_Feed_v4.txt" should be file
+    End
+
+    It 'never clobbers a same-named file already in the match folder'
+      printf OLD > "${PFB_MATCHDIR}/matchSpam_v4.txt"
+      touch "${PFB_MATCHGENDIR}/pfB_Match_Rep_Spam_v4.txt"
+      When call pfb_restore_matchgen_artifacts
+      The output should equal 0
+      The contents of file "${PFB_MATCHDIR}/matchSpam_v4.txt" should equal OLD
+      The path "${PFB_MATCHGENDIR}/pfB_Match_Rep_Spam_v4.txt" should be file
+      The stderr should include 'not overwriting'
+      The stderr should include "${PFB_MATCHDIR}/matchSpam_v4.txt"
+      The stderr should include 'pfB_Match_Rep_Spam_v4.txt'
+    End
+
+    It 'deletes a stray *.txt.new file without counting it as restored'
+      touch "${PFB_MATCHGENDIR}/pfB_Match_Rep_Spam_v4.txt.new"
+      When call pfb_restore_matchgen_artifacts
+      The output should equal 0
+      The path "${PFB_MATCHGENDIR}/pfB_Match_Rep_Spam_v4.txt.new" should not be exist
+    End
+
+    It 'leaves an unrecognised file in place and reports the blocked rmdir'
+      touch "${PFB_MATCHGENDIR}/pfB_Match_ET_v6.txt" "${PFB_MATCHGENDIR}/other.txt"
+      When call pfb_restore_matchgen_artifacts
+      The output should equal 0
+      The path "${PFB_MATCHGENDIR}/pfB_Match_ET_v6.txt" should be file
+      The path "${PFB_MATCHGENDIR}/other.txt" should be file
+      The path "${PFB_MATCHGENDIR}" should be directory
+      The stderr should include 'not empty'
+      The stderr should include 'pfB_Match_ET_v6.txt'
+      The stderr should include 'other.txt'
+    End
+
+    It 'removes matchgendir once emptied; a re-run afterward is idempotent'
+      touch "${PFB_MATCHGENDIR}/pfB_Match_ET_v4.txt"
+      pfb_restore_matchgen_artifacts >/dev/null   # first run: moves the file, rmdir's the empty dir
+      When call pfb_restore_matchgen_artifacts    # second run: matchgendir already gone
+      The output should equal 0
+      The status should be success
+      The path "${PFB_MATCHDIR}/ETMatch.txt" should be file
+      The path "${PFB_MATCHGENDIR}" should not be exist
+    End
+
+    It 'restores a filename containing a space intact (quoting proof)'
+      touch "${PFB_MATCHGENDIR}/pfB_Match_Rep_a b_v4.txt"
+      When call pfb_restore_matchgen_artifacts
+      The output should equal 1
+      The path "${PFB_MATCHDIR}/matcha b_v4.txt" should be file
+    End
+
+    It 'is a no-op when matchgendir is absent'
+      rm -rf "${PFB_MATCHGENDIR}"
+      When call pfb_restore_matchgen_artifacts
+      The output should equal 0
+      The status should be success
+    End
+  End
+
   Describe 'pfb_remove_tick_cron (output parsing)'
     It 'reports "removed" when pfSsh.php signals removal'
       PFB_PFSSH="$(fake_pfssh removed PFB_TICK_REMOVED)"
@@ -183,6 +279,29 @@ EOF
       The stderr should include 'pfSsh.php not found'
       # The script restore still happened; only the exit status signals the partial failure.
       The path "${PFB_PKGDIR}/ip_pre_custom.sh" should be file
+    End
+
+    It 'reports the machine match artifacts restored line'
+      shim_id 0
+      touch "${PFB_MATCHGENDIR}/pfB_Match_Rep_Spam_v4.txt"
+      PFB_PFSSH="$(fake_pfssh matchgen PFB_TICK_REMOVED)"
+      When call pfb_downgrade_prep_main
+      The status should be success
+      The output should include 'Machine match artifacts restored to the match folder: 1'
+      The path "${PFB_MATCHDIR}/matchSpam_v4.txt" should be file
+    End
+
+    It 'fails (non-zero exit) when the matchgen restore fails'
+      shim_id 0
+      touch "${PFB_MATCHGENDIR}/pfB_Match_Rep_Spam_v4.txt"
+      PFB_MATCHDIR="${PFBDG_WORK}/nonexistent-match"   # dest dir missing -> forced mv failure
+      PFB_PFSSH="$(fake_pfssh matchgenfail PFB_TICK_REMOVED)"
+      When call pfb_downgrade_prep_main
+      The status should be failure
+      The stderr should include 'failed to move'
+      # The other two reversals still ran and are still reported; only the exit status
+      # signals the partial failure.
+      The output should include 'match folder: 0'
     End
   End
 End
