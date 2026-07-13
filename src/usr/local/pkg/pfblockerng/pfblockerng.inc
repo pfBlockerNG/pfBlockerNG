@@ -5363,7 +5363,7 @@ function pfb_matchdir_config_headers(array $lists_by_vtype, array $dnsbl_config,
  * @param array<int,array{list:string,header:string,url:string}> $rows Flattened
  *        pfblockernglistsv4/v6 rows (any action, any state -- any alias can consume a local file).
  * @param string   $matchdir        The OLD matchdir path (no trailing slash).
- * @param string[] $moved_basenames Basenames (with '.txt') pfb_matchdir_migrate_plan() actually moved this run.
+ * @param string[] $moved_basenames Basenames (with '.txt') pfb_matchdir_apply_moves() actually moved this run.
  * @return array<int,array{list:string,header:string,url:string}> The rows that reference one of them.
  */
 function pfb_matchdir_stale_localfile_refs(array $rows, string $matchdir, array $moved_basenames): array {
@@ -5401,7 +5401,6 @@ function pfb_matchdir_apply_moves(array $moves, string $matchdir, string $matchg
 	}
 	return $applied;
 }
-
 
 // issue #1084: batch IP dedup/reputation recompute -- caller-side helpers. pfb_recompute()
 // (pfblockerng.sh) replaces duplicate()/dmax/pmax's incremental masterfile surgery with one
