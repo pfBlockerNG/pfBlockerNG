@@ -304,26 +304,27 @@ _bare_force_after_last_lease() {
 		| grep -Eq "(^|${_SEP})(--force|${_FORCE_CLUSTER})(\$|${_SEP})"
 }
 
-# _E_TARGET_LEAD -- leading-boundary class for E1's `git -C `/`cd ` search. A
-# target only counts in COMMAND POSITION: preceded by start-of-payload, the JSON
-# scaffold's `:` (normalization strips the quotes, so `"command":"cd ...`
-# collapses to `command:cd ...`), or a command separator -- optionally followed
-# by spaces, so `&& cd /wt` still reads as a target.
+# _E_TARGET_LEAD -- leading-boundary class for E1's `git -C `/`cd ` search. A target
+# only counts in COMMAND POSITION: preceded by start-of-payload, the JSON scaffold's
+# `command:` key, or a real shell command separator -- optionally followed by spaces,
+# so `&& cd /wt` still reads as a target.
 #
-# A bare SPACE is deliberately NOT a boundary here: a space before `cd ` means it
-# sits inside an ARGUMENT, and honouring it would let a commit message reading
-# `-m fix: cd into the worktree` forge a target and ALLOW an otherwise target-less
-# mutating command. That direction fails OPEN -- the one direction this file never
-# accepts (every other documented false positive errs toward denying). Pinned by
-# E-h6/E-h7.
-_E_TARGET_LEAD='[:;|&(){}<>,]'
+# Neither a bare SPACE nor a bare COLON is a boundary here, and both exclusions are
+# load-bearing. A space before `cd ` means it sits inside an ARGUMENT. A bare colon is
+# worse: `fix:`/`feat:` open almost every conventional-commit message, so accepting one
+# let `-m "fix: cd /tmp"` forge a target and ALLOW an otherwise target-less mutating
+# command. Both fail OPEN -- the one direction this file never accepts (every other
+# documented false positive errs toward denying). Only the literal `command:` scaffold
+# counts, which normalization leaves intact (`"command":"cd ...` -> `command:cd ...`).
+# Pinned by E-h6/E-h7/E-h8/E-h10.
+_E_TARGET_LEAD='[;|&({]'
 
 # _has_explicit_target -- true iff $norm (the WHOLE payload) names a target
 # via `git -C ` or `cd ` IN COMMAND POSITION (see _E_TARGET_LEAD above).
 # Whole-payload, not $seg: the target can sit in a different segment than the
 # verb it covers (E-b3/E-b4).
 _has_explicit_target() {
-	printf '%s' "$norm" | grep -Eq "(^|${_E_TARGET_LEAD})[[:space:]]*(git -C |cd )"
+	printf '%s' "$norm" | grep -Eq "(^|command:|${_E_TARGET_LEAD})[[:space:]]*(git -C |cd )"
 }
 
 # _TARGET_SEP -- trailing-boundary glob class for _targets_primary_checkout:
@@ -352,9 +353,15 @@ _targets_primary_checkout() {
 # the very syntax Rule E asks callers to use would itself evade detection
 # (E-c2). `git worktree add/remove` needs no exemption clause: neither "add"
 # nor "remove" is in this list.
+#
+# The trailing `[^a-z-]` boundary keeps a verb from matching as a PREFIX of a
+# longer, read-only plumbing subcommand: without it `git merge-base` (read-only)
+# is denied by `merge`, and `git commit-tree` by `commit` (E-h9). Excluding `-`
+# is what distinguishes them; a real verb is followed by a space or the payload's
+# closing brace, never by a hyphen.
 _seg_has_mutating_verb() {
 	printf '%s' "$seg" \
-		| grep -Eq 'git (-C [^ ]+ )?(commit|push|rebase|merge|reset|checkout|switch|cherry-pick|revert|stash|am|clean)'
+		| grep -Eq 'git (-C [^ ]+ )?(commit|push|rebase|merge|reset|checkout|switch|cherry-pick|revert|stash|am|clean)([^a-z-]|$)'
 }
 
 # _deny <reason> -- print the PreToolUse deny JSON and exit 0 (exit 0 is

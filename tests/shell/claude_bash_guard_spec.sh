@@ -1122,6 +1122,38 @@ Describe 'claude-bash-guard.sh'
       The status should be success
       The output should equal ''
     End
+
+    It 'E-h8: a conventional-commit message (fix: cd ...) must NOT forge a target -> DENY'
+      # The `:` that lets the JSON scaffold (command:cd ...) name a target also appears in
+      # ordinary commit prose. `fix:`/`feat:` are ubiquitous, so accepting a bare `:` as a
+      # command-position boundary let a target-less mutating command through -- fail-OPEN.
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git commit -m \"fix: cd /tmp\""}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E-h9: git merge-base is READ-ONLY and must not be denied by the merge verb -> ALLOW'
+      # Verb matching must carry a trailing boundary: `merge-base`/`commit-tree` are
+      # read-only plumbing and must not be caught by the `merge`/`commit` prefix.
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git merge-base HEAD origin/devel"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ''
+    End
+
+    It 'E-h10: the JSON scaffold still names a target (the E-h8 boundary is not too tight)'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"cd /abs/wt && git commit -m \"fix: something\""}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ''
+    End
   End
 
   # ── plain git, no rule in scope ─────────────────────────────────────────────
