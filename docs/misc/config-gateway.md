@@ -152,14 +152,19 @@ when `SMOKE_PKG`/`repo_vm` is absent.
 ## Downgrade-preparation tool — structural reversals the config layer can't cover
 
 The adapter/rollback contract above covers **config.xml scalar values**. A 4.0.x → pre-4.0.x
-downgrade also has two **structural** (filesystem / cron) changes that a config adapter cannot
+downgrade also has three **structural** (filesystem / cron) changes that a config adapter cannot
 reverse and that do **not** self-heal on an older release:
 
 1. **Relocated custom list scripts.** On upgrade, `pfblockerng_install.inc` moves a user's
    `{ip,dnsbl}_{pre,post}_*.{sh,py}` scripts from the package root into `list_scripts/`. A
    pre-4.0.x release resolves list scripts against the package **root only**, so a moved script
    silently stops running after a downgrade.
-2. **The ADR-43 tick cron.** The `pfblockerng.php cron-tick` entry (issue #1204; `pfblockerng.php
+2. **Relocated machine match artifacts (issue #1250).** On upgrade, `pfblockerng_install.inc`
+   moves the machine-owned match artifacts into `match/generated/` under `pfB_Match_*` names. A
+   pre-4.0.x release knows only the old names in the match-folder root, and the leftover
+   `generated/` subdirectory pollutes its alerts glob and permanently satisfies its `ls -A`
+   matchdir presence check.
+3. **The ADR-43 tick cron.** The `pfblockerng.php cron-tick` entry (issue #1204; `pfblockerng.php
    tick` on a pre-#1204 build) replaced the older `cron`/`dcc`/`ss_refresh`/`bl` fleet; an older
    release has neither verb, so the entry becomes an orphan and the update fleet is absent until
    the older release re-syncs.
@@ -169,7 +174,7 @@ Everything else the upgrade changed is already downgrade-safe: new-in-4.0.x conf
 `.xxhash128` feed sidecars and the `.tar.bz2` → `.tar.zst` MFS archive **self-heal** on the next
 feed update / rebuild.
 
-**`scripts/pfb-downgrade-prep.sh`** reverses exactly those two non-self-healing changes. It is a
+**`scripts/pfb-downgrade-prep.sh`** reverses exactly those three non-self-healing changes. It is a
 **dev/ops-only** POSIX-sh tool — **not shipped** in the package (release archives are `src/` only) —
 that an operator copies to the appliance and runs as **root, before** the `pkg` downgrade (never
 fired automatically — a normal upgrade or uninstall must not trigger it):
@@ -179,6 +184,11 @@ fired automatically — a normal upgrade or uninstall must not trigger it):
   so a shipped AWS wrapper is never moved. No pkg query is involved. Caveat: a user script named
   exactly like a shipped wrapper is treated as shipped and left in place — the shipped namespace is
   reserved.
+- Restores the machine match artifacts to their pre-4.0.x names in the match-folder root
+  (`pfB_Match_ET_v4.txt` → `ETMatch.txt`, `pfB_Match_Exempt_v4.txt` → `matchdedup_v4.txt`,
+  `pfB_Match_Rep_<H>_<fam>.txt` → `match<H>_<fam>.txt`), never clobbering a same-named user file,
+  deletes `*.txt.new` strays, and removes `generated/` once emptied (a blocked removal is reported,
+  not forced).
 - Removes the `tick` cron via `pfSsh.php` (the shipped `install_cron_job()`), so config.xml and the
   live crontab are rewritten cleanly.
 
@@ -186,9 +196,10 @@ It is **idempotent** (a second run restores nothing and reports the tick cron al
 prints a short report of what it did.
 
 Coverage: `tests/shell/pfb_downgrade_prep_spec.sh` (shellspec — the file-move logic, the shipped-name
-gate, before/after, idempotency, skip-shipped, skip-existing, and the tick-cron output parsing via a
-fake `pfSsh.php`) and `tests/smoke/test_downgrade_prepare.py` (the tool end-to-end on a live VM,
-`repo` marker — real file moves + real `install_cron_job` tick removal).
+gate, the matchgen reverse-rename map with its no-clobber/stray/rmdir rules, before/after,
+idempotency, skip-shipped, skip-existing, and the tick-cron output parsing via a fake `pfSsh.php`)
+and `tests/smoke/test_downgrade_prepare.py` (the tool end-to-end on a live VM, `repo` marker — real
+file moves, the matchgen reversal, + real `install_cron_job` tick removal).
 
 ## Foreign-key exclusion list (use `config_*_path` directly — NOT via `PfbConfig`)
 
