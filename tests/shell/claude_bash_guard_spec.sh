@@ -129,7 +129,7 @@ Describe 'claude-bash-guard.sh'
 
     It 'P3: normal commit, no --no-verify (git commit -m x) -> PASS'
       Data
-        #|{"tool_name":"Bash","tool_input":{"command":"git commit -m x"}}
+        #|{"tool_name":"Bash","tool_input":{"command":"git -C /abs/wt commit -m x"}}
       End
       When run script "$GUARD"
       The status should be success
@@ -138,7 +138,7 @@ Describe 'claude-bash-guard.sh'
 
     It 'P10: git commit --amend, no --no-verify -> PASS'
       Data
-        #|{"tool_name":"Bash","tool_input":{"command":"git commit --amend"}}
+        #|{"tool_name":"Bash","tool_input":{"command":"git -C /abs/wt commit --amend"}}
       End
       When run script "$GUARD"
       The status should be success
@@ -232,7 +232,7 @@ Describe 'claude-bash-guard.sh'
 
     It 'H10: --force-with-lease with a trailing metachar (;true) -> PASS (lease still wins)'
       Data
-        #|{"tool_name":"Bash","tool_input":{"command":"git push --force-with-lease;true"}}
+        #|{"tool_name":"Bash","tool_input":{"command":"git -C /abs/wt push --force-with-lease;true"}}
       End
       When run script "$GUARD"
       The status should be success
@@ -250,7 +250,7 @@ Describe 'claude-bash-guard.sh'
 
     It 'P1: --force-with-lease alone -> PASS (contains substring --force but lease wins)'
       Data
-        #|{"tool_name":"Bash","tool_input":{"command":"git push --force-with-lease"}}
+        #|{"tool_name":"Bash","tool_input":{"command":"git -C /abs/wt push --force-with-lease"}}
       End
       When run script "$GUARD"
       The status should be success
@@ -259,7 +259,7 @@ Describe 'claude-bash-guard.sh'
 
     It 'P2: --force-with-lease with args -> PASS'
       Data
-        #|{"tool_name":"Bash","tool_input":{"command":"git push --force-with-lease origin main"}}
+        #|{"tool_name":"Bash","tool_input":{"command":"git -C /abs/wt push --force-with-lease origin main"}}
       End
       When run script "$GUARD"
       The status should be success
@@ -268,7 +268,7 @@ Describe 'claude-bash-guard.sh'
 
     It 'P4: normal push, no force flag (git push origin main) -> PASS'
       Data
-        #|{"tool_name":"Bash","tool_input":{"command":"git push origin main"}}
+        #|{"tool_name":"Bash","tool_input":{"command":"git -C /abs/wt push origin main"}}
       End
       When run script "$GUARD"
       The status should be success
@@ -304,7 +304,7 @@ Describe 'claude-bash-guard.sh'
 
     It 'P14 (issue #1058): bare force BEFORE --force-with-lease -> PASS (the lease, last, wins)'
       Data
-        #|{"tool_name":"Bash","tool_input":{"command":"git push --force --force-with-lease origin main"}}
+        #|{"tool_name":"Bash","tool_input":{"command":"git -C /abs/wt push --force --force-with-lease origin main"}}
       End
       When run script "$GUARD"
       The status should be success
@@ -313,7 +313,7 @@ Describe 'claude-bash-guard.sh'
 
     It 'P15 (issue #1058): --force-with-lease --force-if-includes -> PASS (lease companion, not a bare force)'
       Data
-        #|{"tool_name":"Bash","tool_input":{"command":"git push --force-with-lease --force-if-includes"}}
+        #|{"tool_name":"Bash","tool_input":{"command":"git -C /abs/wt push --force-with-lease --force-if-includes"}}
       End
       When run script "$GUARD"
       The status should be success
@@ -426,7 +426,7 @@ Describe 'claude-bash-guard.sh'
   Describe 'per-segment scoping (compound commands): a rule only fires when its trigger and its force flag share ONE segment'
     It 'C1 (Rule C FP, Copilot case): unforced worktree remove && leased push -> PASS'
       Data
-        #|{"tool_name":"Bash","tool_input":{"command":"git worktree remove ../wt && git push --force-with-lease"}}
+        #|{"tool_name":"Bash","tool_input":{"command":"git worktree remove ../wt && git -C /abs/wt push --force-with-lease"}}
       End
       When run script "$GUARD"
       The status should be success
@@ -435,7 +435,7 @@ Describe 'claude-bash-guard.sh'
 
     It 'C2 (Rule C FP, reversed order): leased push && unforced worktree remove -> PASS'
       Data
-        #|{"tool_name":"Bash","tool_input":{"command":"git push --force-with-lease && git worktree remove ../wt"}}
+        #|{"tool_name":"Bash","tool_input":{"command":"git -C /abs/wt push --force-with-lease && git worktree remove ../wt"}}
       End
       When run script "$GUARD"
       The status should be success
@@ -444,7 +444,7 @@ Describe 'claude-bash-guard.sh'
 
     It 'C3 (Rule B FP): git clean --force && normal git push -> PASS (force belongs to git clean, not the push)'
       Data
-        #|{"tool_name":"Bash","tool_input":{"command":"git clean --force && git push origin main"}}
+        #|{"tool_name":"Bash","tool_input":{"command":"git -C /abs/wt clean --force && git -C /abs/wt push origin main"}}
       End
       When run script "$GUARD"
       The status should be success
@@ -453,7 +453,7 @@ Describe 'claude-bash-guard.sh'
 
     It 'C4 (Rule B FP, subshell boundary): (git clean --force); git push origin main -> PASS'
       Data
-        #|{"tool_name":"Bash","tool_input":{"command":"(git clean --force); git push origin main"}}
+        #|{"tool_name":"Bash","tool_input":{"command":"(git -C /abs/wt clean --force); git -C /abs/wt push origin main"}}
       End
       When run script "$GUARD"
       The status should be success
@@ -757,6 +757,373 @@ Describe 'claude-bash-guard.sh'
     End
   End
 
+  # ── Rule E: a mutating git command depends on the ambient cwd, which the ──
+  #    hook cannot see -- deny unless the call names its target explicitly,
+  #    and deny when that target IS the primary checkout (issue #1262: a
+  #    stray `cd` into the primary checkout silently misdirected a
+  #    rebase+push, and the misfire was caught only by luck).
+
+  Describe 'Rule E: mutating git command depends on the ambient cwd'
+    PROJ="/home/agent/pfBlockerNG"
+
+    Describe 'E1: no explicit -C/cd target anywhere in the payload -> DENY (one row per mutating verb)'
+      It 'E-a1: git commit -m x -> DENY'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"git commit -m x"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+      End
+
+      It 'E-a2: git push origin main -> DENY'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"git push origin main"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+      End
+
+      It 'E-a3: git rebase origin/devel -> DENY'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"git rebase origin/devel"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+      End
+
+      It 'E-a4: git merge foo -> DENY'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"git merge foo"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+      End
+
+      It 'E-a5: git reset --hard HEAD~1 -> DENY'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"git reset --hard HEAD~1"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+      End
+
+      It 'E-a6: git checkout devel -> DENY'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"git checkout devel"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+      End
+
+      It 'E-a7: git switch devel -> DENY'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"git switch devel"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+      End
+
+      It 'E-a8: git cherry-pick abc123 -> DENY'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"git cherry-pick abc123"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+      End
+
+      It 'E-a9: git revert abc123 -> DENY'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"git revert abc123"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+      End
+
+      It 'E-a10: git stash -> DENY'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"git stash"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+      End
+
+      It 'E-a11: git am file.patch -> DENY'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"git am file.patch"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+      End
+
+      It 'E-a12: git clean -fd -> DENY'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"git clean -fd"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+      End
+
+      It 'E-a13 (the real bug, issue #1262): fetch+rebase+push with no -C/cd anywhere -> DENY'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"git fetch -q origin && git rebase origin/devel && git push --force-with-lease origin issue/1257-x"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+      End
+    End
+
+    Describe 'E1 satisfied: an explicit -C/cd target is present -> ALLOW'
+      It 'E-b1: git -C /abs/wt commit -m x -> ALLOW'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"git -C /abs/wt commit -m x"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should equal ""
+      End
+
+      It 'E-b2: cd /abs/wt && git commit -m x -> ALLOW'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"cd /abs/wt && git commit -m x"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should equal ""
+      End
+
+      It 'E-b3: cd /abs/wt, then add+commit+push all in one call -> ALLOW'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"cd /abs/wt && git add -A && git commit -q -m x && git push"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should equal ""
+      End
+
+      It 'E-b4: git -C /abs/wt on every mutating segment -> ALLOW'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"git -C /abs/wt rebase origin/devel && git -C /abs/wt push --force-with-lease origin b"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should equal ""
+      End
+    End
+
+    Describe 'E2: the named target IS the primary checkout ($CLAUDE_PROJECT_DIR) -> DENY'
+      setup_proj() { export CLAUDE_PROJECT_DIR="$PROJ"; }
+      BeforeEach 'setup_proj'
+
+      It 'E-c1: cd $PROJ && git commit -m x -> DENY'
+        Data "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cd $PROJ && git commit -m x\"}}"
+        When run script "$GUARD"
+        The status should be success
+        The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+      End
+
+      It 'E-c2: git -C $PROJ push -> DENY'
+        Data "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $PROJ push\"}}"
+        When run script "$GUARD"
+        The status should be success
+        The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+      End
+
+      It 'E-c3: cd $PROJ&&git reset --hard, no spaces -> DENY'
+        Data "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cd $PROJ&&git reset --hard\"}}"
+        When run script "$GUARD"
+        The status should be success
+        The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+      End
+
+      It 'E-c4: cd $PROJ alone, no git verb -> ALLOW (nothing mutating)'
+        Data "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cd $PROJ\"}}"
+        When run script "$GUARD"
+        The status should be success
+        The output should equal ""
+      End
+    End
+
+    Describe 'THE PREFIX TRAP: a worktree lives UNDER the project dir -> ALLOW'
+      setup_proj() { export CLAUDE_PROJECT_DIR="$PROJ"; }
+      BeforeEach 'setup_proj'
+
+      It 'E-d1: cd into a worktree under the project dir -> ALLOW (the / after $PROJ disqualifies the match)'
+        Data "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cd $PROJ/.claude/worktrees/issue-1262 && git commit -m x\"}}"
+        When run script "$GUARD"
+        The status should be success
+        The output should equal ""
+      End
+
+      It 'E-d2: git -C into a worktree under the project dir -> ALLOW'
+        Data "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $PROJ/.claude/worktrees/issue-1262 push --force-with-lease origin b\"}}"
+        When run script "$GUARD"
+        The status should be success
+        The output should equal ""
+      End
+
+      It 'E-d3: a SIBLING dir sharing the project-dir prefix (not a subdirectory) -> ALLOW'
+        Data "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $PROJ-other commit -m x\"}}"
+        When run script "$GUARD"
+        The status should be success
+        The output should equal ""
+      End
+    End
+
+    Describe 'exemptions: git worktree add/remove and every read-only verb -> ALLOW'
+      It 'E-e1: git worktree add /abs/wt branch -> ALLOW'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"git worktree add /abs/wt branch"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should equal ""
+      End
+
+      It 'E-e2: git worktree remove /abs/wt -> ALLOW'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"git worktree remove /abs/wt"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should equal ""
+      End
+
+      It 'E-e3: git status -> ALLOW'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"git status"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should equal ""
+      End
+
+      It 'E-e4: git log --oneline -5 -> ALLOW'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"git log --oneline -5"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should equal ""
+      End
+
+      It 'E-e5: git fetch origin -> ALLOW'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"git fetch origin"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should equal ""
+      End
+
+      It 'E-e6: git rev-parse HEAD -> ALLOW'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"git rev-parse HEAD"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should equal ""
+      End
+
+      It 'E-e7: git diff origin/devel...HEAD -> ALLOW'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"git diff origin/devel...HEAD"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should equal ""
+      End
+
+      It 'E-e8: git grep -n foo -- src -> ALLOW'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"git grep -n foo -- src"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should equal ""
+      End
+    End
+
+    Describe 'hostile inputs (issue #1262 brief section 4)'
+      It 'E-h1 (accepted false positive, same class as B10): a commit MESSAGE containing text that looks like a cd to the primary checkout -> DENY'
+        export CLAUDE_PROJECT_DIR="$PROJ"
+        Data "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cd /abs/wt && git commit -m 'reminder: never cd $PROJ directly'\"}}"
+        When run script "$GUARD"
+        The status should be success
+        The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+      End
+
+      It 'E-h2: cd to a RELATIVE path -> ALLOW (a cd is present; the guard cannot resolve it and must not try)'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"cd ../wt && git commit -m x"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should equal ""
+      End
+
+      It 'E-h3: git -C with the path in a VARIABLE -> ALLOW (git -C  is present, whatever it resolves to)'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"git -C \"$WT\" commit -m x"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should equal ""
+      End
+
+      It 'E-h4 (most likely false positive, must not fire): a mutating verb word as an ARGUMENT VALUE -> ALLOW'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"git log --grep=commit"}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should equal ""
+      End
+
+      It 'E-h5 (accepted false positive): git push inside a quoted string passed to another tool -> DENY'
+        Data
+          #|{"tool_name":"Bash","tool_input":{"command":"sh -c \"git push\""}}
+        End
+        When run script "$GUARD"
+        The status should be success
+        The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+      End
+    End
+
+    It 'E-h6: a commit MESSAGE containing a cd-shaped token must NOT forge a target -> DENY'
+      # The fail-OPEN direction: a bare space before `cd ` means it sits in an ARGUMENT,
+      # not command position. Honouring it would let `-m "cd into the worktree"` satisfy
+      # E1 and wave a target-less mutating command through (issue #1262).
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git commit -m run cd /tmp first"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E-h7: a real target in command position still ALLOWs (the E-h6 boundary is not too tight)'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git add -A && cd /abs/wt && git commit -m x"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ''
+    End
+  End
+
   # ── plain git, no rule in scope ─────────────────────────────────────────────
 
   It 'P9: plain git status -> PASS'
@@ -787,6 +1154,35 @@ Describe 'claude-bash-guard.sh'
       When run script "$GUARD"
       The status should be success
       The output should equal ""
+    End
+
+    It 'E-f2 (Rule E hostile input): garbled non-JSON stdin containing a mutating-verb pair, no cd/-C -> DENY (documented accepted false positive, same class as B10/D10)'
+      Data
+        #|not json at all {{{ git commit
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'E-f3 (Rule E): CLAUDE_PROJECT_DIR unset, explicit target present -> ALLOW (E2 skipped, E1 satisfied)'
+      unset CLAUDE_PROJECT_DIR
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"cd /abs/wt && git commit -m x"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'E-f4 (Rule E): CLAUDE_PROJECT_DIR unset, no explicit target -> DENY (E1 still applies, unset never crashes or denies wrongly)'
+      unset CLAUDE_PROJECT_DIR
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git commit -m x"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
     End
   End
 End

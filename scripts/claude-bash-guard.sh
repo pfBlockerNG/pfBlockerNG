@@ -2,9 +2,10 @@
 # scripts/claude-bash-guard.sh -- PreToolUse Bash guard: deny 4 agent footguns.
 #
 # Wired in .claude/settings.json as a PreToolUse hook matching the Bash tool.
-# Denies, at the TOOL layer (before the command ever runs), four operations an
-# AGENT must not run -- three git bypasses a human may legitimately use, plus a
-# wait-launch shape that silently strands the turn:
+# Denies, at the TOOL layer (before the command ever runs), five operations an
+# AGENT must not run -- three git bypasses a human may legitimately use, a
+# wait-launch shape that silently strands the turn, and a mutating git command
+# whose target the hook cannot verify:
 #
 #   Rule A -- `git commit` with `--no-verify`   : the pre-commit lint gate's
 #             --no-verify bypass is for humans, not agents (CLAUDE.md "Git
@@ -23,10 +24,36 @@
 #             the turn stalls while the wait has already finished (#1225).
 #             Whole-payload, not per-segment: `&` is one of the characters
 #             $segs splits on.
+#   Rule E -- a MUTATING git command (commit, push, rebase, merge, reset,
+#             checkout, switch, cherry-pick, revert, stash, am, clean) that
+#             depends on the AMBIENT working directory : the PreToolUse
+#             payload carries no cwd (see WHY BELOW), so the hook cannot
+#             detect "you are in the wrong directory" -- it can only refuse
+#             a mutating command whose target is UNSTATED, making the bad
+#             state unrepresentable instead of detected (issue #1262: a
+#             stray `cd` into the primary checkout, left over from an
+#             unrelated fix, silently redirected a rebase+push at the wrong
+#             repo; the rebase reported "up to date" and the push was a
+#             silent no-op, hiding that the real branch was a commit
+#             behind). DENIES when neither `git -C <path>` nor `cd <path>`
+#             names a target anywhere in the payload (E1), and DENIES when
+#             the named target IS the primary checkout -- $CLAUDE_PROJECT_DIR,
+#             exported into this hook by .claude/settings.json (E2) --
+#             CLAUDE.md "Worktrees": all repository work happens in a
+#             dedicated worktree, never there. `git worktree add`/`remove`
+#             are exempt from Rule E entirely, and need no special-case code
+#             for it: neither "add" nor "remove" is one of the mutating
+#             verbs above, so a `git worktree ...` segment never matches the
+#             verb check that would trigger E1/E2 in the first place.
 #
-# Rule D runs first (whole-payload). Then the per-segment rules: segments are
-# scanned left to right (see MATCHING below); within one segment, A, then B,
-# then C. First matching pair wins.
+# Rule D runs first (whole-payload). Rule E's target checks (E1: is a
+# `-C`/`cd` target named anywhere; E2: does that target equal the primary
+# checkout) are ALSO whole-payload and precomputed once, right after Rule D,
+# for the same reason Rule D itself is whole-payload -- see THE WHOLE-PAYLOAD
+# CRUX below. Only Rule E's MUTATING-VERB detection runs per-segment. Then
+# the per-segment rules: segments are scanned left to right (see MATCHING
+# below); within one segment, A, then B, then C, then E's verb check against
+# the precomputed E1/E2 booleans. First matching pair wins.
 #
 # FAIL-OPEN CONTRACT: this hook must NEVER block a legitimate Bash call
 # because of a parsing failure. Empty stdin, garbled/non-JSON stdin, or no
@@ -117,6 +144,65 @@
 # containing `f` (`-uf`, `-fu`, ...) are matched with an explicit boundary so
 # they do NOT fire inside --force, --force-with-lease, -force, or a filename
 # ending in "-f" (e.g. my-f-dir) -- see _has_force_flag below.
+#
+# WHY BELOW (Rule E, issue #1262): the PreToolUse payload is
+# {"tool_name":"Bash","tool_input":{"command":"..."}} -- there is no cwd
+# field, and the harness's Bash working directory PERSISTS across calls (a
+# `cd` two calls ago is still in effect). The hook therefore cannot compare
+# "the cwd" against anything; it can only refuse a mutating git command whose
+# target is never named, which makes the dangerous state (running a mutating
+# command against whatever directory the shell happens to be sitting in)
+# unrepresentable rather than something the hook detects after the fact.
+#
+# THE WHOLE-PAYLOAD CRUX: `cd /path && git commit` splits into segments
+# `cd /path ` and ` git commit` (see $segs below) -- the `cd` and the verb
+# are in DIFFERENT segments. So E1's "is a target named at all" test and
+# E2's "does that target equal the primary checkout" test both run against
+# $norm (the whole payload), exactly as Rule D's background-`&` test does,
+# and for the identical reason: the thing being looked for can sit in a
+# different segment than the verb that triggers the rule. Only the
+# MUTATING-VERB check itself is per-segment (_seg_has_mutating_verb, run
+# inside the A-C loop against $seg) -- pinned by E-b3/E-b4 (a `cd` naming the
+# target once at the front of a compound command covers every mutating verb
+# in every later segment of that SAME payload).
+#
+# THE PREFIX TRAP: worktrees live UNDER the project dir
+# ($CLAUDE_PROJECT_DIR/.claude/worktrees/<slug>), so E2 must never match
+# $CLAUDE_PROJECT_DIR as a plain substring prefix -- that would deny every
+# worktree command and make the hook unusable. _targets_primary_checkout
+# requires the character immediately after $CLAUDE_PROJECT_DIR to be a
+# genuine separator (space/&/;/|/(/)/{/}/</>/,) or end-of-payload (a
+# synthetic trailing space is appended before matching so end-of-payload
+# reads as that same separator class, collapsing two cases into one glob
+# pattern) -- a worktree path's next character is always `/`, which is NOT
+# in that class, so `cd $CLAUDE_PROJECT_DIR/.claude/worktrees/x` and
+# `git -C $CLAUDE_PROJECT_DIR-other` (a SIBLING dir sharing the prefix) both
+# correctly fail to match. Pinned by E-d1/E-d2/E-d3.
+#
+# JSON-ADJACENCY BOUNDARY: E1's target search needs a LEADING boundary too
+# (so `cd ` embedded inside a longer word, e.g. `abcd `, cannot forge a
+# target and wrongly ALLOW a mutating command with no real target -- the
+# dangerous direction, unlike this file's other accepted false positives
+# which all err toward denying). But the real payload is JSON, and
+# normalization (above) strips its quotes, so `"command":"cd ...` collapses
+# to `command:cd ...` -- the character immediately before a target sitting at
+# the very start of the command value is `:`, not whitespace. E1's boundary
+# class (_E_TARGET_LEAD) therefore adds `:` to $_SEP's separator set, for the
+# same structural reason $_SEP itself already carries `{`/`}` (a flag can sit
+# directly against the JSON's closing `}}`, see above). This is a narrower,
+# deliberate widening of the general acceptance already documented above (a
+# raw text scan is not a real parse) -- a literal `:cd ` sequence inside an
+# argument VALUE (not the JSON scaffold) could in theory forge a target, but
+# no realistic git invocation produces that token sequence.
+#
+# ACCEPTED FALSE POSITIVES (E, same family as B10/D10): E2's target-equality
+# check has no leading boundary of its own (only the trailing one above), so
+# a commit MESSAGE that merely CONTAINS text shaped like
+# "cd $CLAUDE_PROJECT_DIR " denies even when the command's REAL cd target is
+# a worktree (pinned by E-h1) -- and a mutating verb phrase sitting inside a
+# quoted argument to another tool (`sh -c "git push"`) denies with no target
+# check able to save it, same as B10 (pinned by E-h5). Both directions err
+# toward blocking, the stated tradeoff throughout this file.
 set -u
 
 payload="$(cat)"
@@ -218,6 +304,59 @@ _bare_force_after_last_lease() {
 		| grep -Eq "(^|${_SEP})(--force|${_FORCE_CLUSTER})(\$|${_SEP})"
 }
 
+# _E_TARGET_LEAD -- leading-boundary class for E1's `git -C `/`cd ` search. A
+# target only counts in COMMAND POSITION: preceded by start-of-payload, the JSON
+# scaffold's `:` (normalization strips the quotes, so `"command":"cd ...`
+# collapses to `command:cd ...`), or a command separator -- optionally followed
+# by spaces, so `&& cd /wt` still reads as a target.
+#
+# A bare SPACE is deliberately NOT a boundary here: a space before `cd ` means it
+# sits inside an ARGUMENT, and honouring it would let a commit message reading
+# `-m fix: cd into the worktree` forge a target and ALLOW an otherwise target-less
+# mutating command. That direction fails OPEN -- the one direction this file never
+# accepts (every other documented false positive errs toward denying). Pinned by
+# E-h6/E-h7.
+_E_TARGET_LEAD='[:;|&(){}<>,]'
+
+# _has_explicit_target -- true iff $norm (the WHOLE payload) names a target
+# via `git -C ` or `cd ` IN COMMAND POSITION (see _E_TARGET_LEAD above).
+# Whole-payload, not $seg: the target can sit in a different segment than the
+# verb it covers (E-b3/E-b4).
+_has_explicit_target() {
+	printf '%s' "$norm" | grep -Eq "(^|${_E_TARGET_LEAD})[[:space:]]*(git -C |cd )"
+}
+
+# _TARGET_SEP -- trailing-boundary glob class for _targets_primary_checkout:
+# a real separator, or (via the caller's synthetic trailing space) end of
+# payload -- see THE PREFIX TRAP above. Case globbing, not grep -E, so
+# $CLAUDE_PROJECT_DIR's `/` and `.` never need escaping.
+_TARGET_SEP='[ &;|(){}<>,]'
+
+# _targets_primary_checkout -- true iff $norm names $CLAUDE_PROJECT_DIR
+# itself (never a subdirectory or a sibling sharing its prefix) as a `cd `/
+# `git -C ` target. Unset CLAUDE_PROJECT_DIR -> false, never a crash (fail-open
+# under set -u): E2 has nothing to compare against.
+_targets_primary_checkout() {
+	[ -n "${CLAUDE_PROJECT_DIR:-}" ] || return 1
+	case "${norm} " in
+	*"cd ${CLAUDE_PROJECT_DIR}"${_TARGET_SEP}* | *"git -C ${CLAUDE_PROJECT_DIR}"${_TARGET_SEP}*) return 0 ;;
+	esac
+	return 1
+}
+
+# _seg_has_mutating_verb -- true iff the CURRENT SEGMENT ($seg) contains a
+# Rule E mutating verb as the pair `git <verb>` OR `git -C <path> <verb>` --
+# never a bare verb word, so `git log --grep=commit` (the verb as an ARGUMENT
+# VALUE) does not match (E-h4). The `-C <path>` skip is required: without it,
+# the verb in `git -C /wt push` sits two tokens after `git`, not adjacent, so
+# the very syntax Rule E asks callers to use would itself evade detection
+# (E-c2). `git worktree add/remove` needs no exemption clause: neither "add"
+# nor "remove" is in this list.
+_seg_has_mutating_verb() {
+	printf '%s' "$seg" \
+		| grep -Eq 'git (-C [^ ]+ )?(commit|push|rebase|merge|reset|checkout|switch|cherry-pick|revert|stash|am|clean)'
+}
+
 # _deny <reason> -- print the PreToolUse deny JSON and exit 0 (exit 0 is
 # required even for a deny: Claude Code reads the decision from stdout, not
 # from the process exit status). <reason> must contain no " or \ so it can
@@ -234,8 +373,14 @@ if printf '%s' "$norm_bg" | grep -Eq 'wait-[a-z0-9_-]*\.sh.*&'; then
 	_deny "a wait script backgrounded with & is invisible to the harness: no completion notification fires, so the turn stalls while the wait has already finished (issue #1225). Launch it as its OWN Bash call with run_in_background: true -- backgrounding is a property of the tool call, not of shell syntax (CLAUDE.md No orphaned waits)"
 fi
 
-# Walk $segs one segment at a time, applying rules A-C to each ($seg
-# is read by _contains / _has_force_flag above). Fed via a heredoc (not a
+# Rule E's target checks (whole-payload, precomputed once -- see THE
+# WHOLE-PAYLOAD CRUX above; only the verb check below is per-segment).
+if _has_explicit_target; then _e_has_target=1; else _e_has_target=0; fi
+if _targets_primary_checkout; then _e_targets_primary=1; else _e_targets_primary=0; fi
+
+# Walk $segs one segment at a time, applying rules A, B, C, and E's
+# per-segment verb check to each ($seg is read by _contains /
+# _has_force_flag / _seg_has_mutating_verb above). Fed via a heredoc (not a
 # `| while`) so this loop runs in the CURRENT shell, not a subshell: dash (the
 # box's /bin/sh) forks a subshell for the reader end of a pipe, which would
 # swallow _deny's `exit 0` instead of ending the whole script.
@@ -252,6 +397,15 @@ while IFS= read -r seg; do
 
 	if _contains 'git worktree remove' && _has_force_flag; then
 		_deny "CLAUDE.md forbids force-removing a worktree you do not own"
+	fi
+
+	if _seg_has_mutating_verb; then
+		if [ "$_e_has_target" = 0 ]; then
+			_deny "a mutating git command depends on the ambient working directory, which this hook cannot see: name the target explicitly with git -C <path> or cd <path> first (CLAUDE.md Worktrees, issue #1262)"
+		fi
+		if [ "$_e_targets_primary" = 1 ]; then
+			_deny "the named target is the primary checkout: every AI agent must do repository work in its own dedicated worktree, never the primary checkout (CLAUDE.md Worktrees)"
+		fi
 	fi
 done <<_PFB_SEGS_
 $segs
