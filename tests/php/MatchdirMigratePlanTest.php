@@ -192,7 +192,7 @@ final class MatchdirMigratePlanTest extends TestCase
 	}
 
 	/**
-	 * M15 / issue #1250 F2: NO candidate at all (ccwhite off, no Deny "dedup", no Match
+	 * M15 / issue #1250: NO candidate at all (ccwhite off, no Deny "dedup", no Match
 	 * "matchdedup") -> a plain orphan, LEFT -- not a silent move-then-reap through Exempt.
 	 */
 	public function testM15DedupLeftAsOrphanWhenNoCandidateExists(): void
@@ -205,7 +205,7 @@ final class MatchdirMigratePlanTest extends TestCase
 	}
 
 	/**
-	 * M16 / issue #1250 F2: a Deny list literally headed 'dedup' is configured (ccwhite off,
+	 * M16 / issue #1250: a Deny list literally headed 'dedup' is configured (ccwhite off,
 	 * no Match) -> the Deny Rep artifact, never Exempt -- the old code ignored Deny here.
 	 */
 	public function testM16DedupMovesToRepWhenOnlyDenyDedupConfigured(): void
@@ -216,7 +216,7 @@ final class MatchdirMigratePlanTest extends TestCase
 		$this->assertSame([], $plan['undecidable']);
 	}
 
-	/** M17 / issue #1250 F2: the v6 stem gets the SAME Deny-Rep treatment as v4, not an unconditional leave. */
+	/** M17 / issue #1250: the v6 stem gets the SAME Deny-Rep treatment as v4, not an unconditional leave. */
 	public function testM17DedupV6MovesToRepWhenDenyDedupV6Configured(): void
 	{
 		$plan = pfb_matchdir_migrate_plan(['matchdedup_v6.txt'], ['dedup_v6'], [], FALSE, []);
@@ -226,7 +226,7 @@ final class MatchdirMigratePlanTest extends TestCase
 	}
 
 	/**
-	 * M18 / issue #1250 F2: ccwhite ON AND a Deny list "dedup" both exist -> undecidable
+	 * M18 / issue #1250: ccwhite ON AND a Deny list "dedup" both exist -> undecidable
 	 * between the Exempt write and the Deny Rep artifact, never silently moved to Exempt.
 	 */
 	public function testM18DedupExemptAndDenyBothCandidateIsUndecidable(): void
@@ -242,7 +242,7 @@ final class MatchdirMigratePlanTest extends TestCase
 		$this->assertStringContainsString('Exempt', $pfb_joined);
 	}
 
-	/** M19 / issue #1250 F2: Deny "dedup" + Match "matchdedup" + ccwhite ON -> all THREE candidates, none dropped. */
+	/** M19 / issue #1250: Deny "dedup" + Match "matchdedup" + ccwhite ON -> all THREE candidates, none dropped. */
 	public function testM19DedupAllThreeCandidatesIsUndecidable(): void
 	{
 		$plan = pfb_matchdir_migrate_plan(['matchdedup_v4.txt'], ['dedup_v4'], ['matchdedup_v4'], TRUE, []);

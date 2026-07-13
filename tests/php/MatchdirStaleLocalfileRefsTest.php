@@ -17,7 +17,7 @@ use PHPUnit\Framework\TestCase;
  *   And   the basenames the migration actually moved this run
  *   When  a row's 'url' resolves to matchdir + one of those basenames
  *   Then  that row is reported; anything else — including a same-shaped file that was NOT
- *         moved (a live user list) — is not (issue #1250 F6: shape-keying false-flagged a
+ *         moved (a live user list) — is not (issue #1250: shape-keying false-flagged a
  *         working, never-moved user list).
  */
 #[CoversFunction('pfb_matchdir_stale_localfile_refs')]
@@ -68,7 +68,7 @@ final class MatchdirStaleLocalfileRefsTest extends TestCase
 	}
 
 	/**
-	 * S1 / issue #1250 F6 [RED]: a user's OWN never-moved 'matchFoo_v4.txt' Localfile ref must
+	 * S1 / issue #1250: a user's OWN never-moved 'matchFoo_v4.txt' Localfile ref must
 	 * NOT be flagged just because its NAME has the old machine-artifact shape -- only an
 	 * actually-moved basename triggers the warning. The pre-fix shape-regex flagged this and
 	 * sent the admin to break a working list by repointing it at a path that never existed.

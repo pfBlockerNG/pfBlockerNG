@@ -61,7 +61,7 @@ final class MatchdirConfigHeadersTest extends TestCase
 		$this->assertNotContains('Ads_v4', $out['deny']);
 	}
 
-	/** H3 / issue #1250 F3: a Disabled LIST's row still counts toward the match set (a stale user file must never adopt), but not deny. */
+	/** H3 / issue #1250: a Disabled LIST's row still counts toward the match set (a stale user file must never adopt), but not deny. */
 	public function testH3DisabledListRowInMatchSetOnlyRowsStillCollected(): void
 	{
 		$v4 = array($this->list('Spam', 'Disabled', 'Spam'));
@@ -73,7 +73,7 @@ final class MatchdirConfigHeadersTest extends TestCase
 		$this->assertCount(1, $out['rows']);
 	}
 
-	/** H4 / issue #1250 F3: a Disabled ROW inside an ENABLED Deny list still counts toward BOTH sets and is still collected. */
+	/** H4 / issue #1250: a Disabled ROW inside an ENABLED Deny list still counts toward BOTH sets and is still collected. */
 	public function testH4DisabledRowInsideEnabledDenyListStillCounted(): void
 	{
 		$v4 = array($this->list('Spam', 'Deny', 'Spam', '/x', 'Disabled'));
