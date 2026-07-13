@@ -12,6 +12,13 @@ REPRODUCE-FIRST: assert the domain sinkholes BEFORE the reboot, then require it 
 still sinkhole AFTER a RAM-disk reboot (pfb_unbound.py re-staged + matcher rebuilt
 from the restored manifest), with NO manual update. Verified RED on pre-fix code.
 
+Issue #1255 rides the SAME reboot cycle: the shipped TLD-Wildcard public-suffix
+oracle (``pfb_py_tld.txt``) is archive-EXCLUDED (re-staged fresh from the package
+dir by ``dnsbl_cache_stage()``, like ``pfb_py_hsts.txt``) while the ini
+(``python_tld_wildcard = on``) rides the archived ``pfb_unbound*`` set -- so a
+wildcard-blocked sub-domain must ALSO still sinkhole post-reboot, proving both
+halves were restored.
+
 All slow VM I/O (inject -> reload -> reboot -> recovery poll) lives in the MODULE
 FIXTURE, never the test body: the smoke workflow caps the test BODY at 30s
 (``--timeout=30 timeout_func_only=true``) but fixtures are exempt (same reason the
@@ -39,6 +46,7 @@ pytestmark = pytest.mark.reboot
 
 VAR_WIPE_SENTINEL = "/var/PFB_SMOKE_468_WIPE"
 PFB_UNBOUND = "/var/unbound/pfb_unbound.py"
+PFB_PY_TLD = "/var/unbound/pfb_py_tld.txt"  # issue #1255: TLD-Wildcard oracle, archive-EXCLUDED, re-staged
 RECOVERY_DEADLINE = 240  # seconds to wait for DNSBL to self-heal post-reboot
 
 
@@ -53,6 +61,11 @@ class DnsblRebootObservation:
     var_unbound_ls: str
     recovered: bool
     recovered_after_s: int
+    # issue #1255: TLD-Wildcard blocking observed over the SAME reboot cycle.
+    wild_sub_domain: str
+    wild_sinkholes_before: bool
+    tld_oracle_staged_after: bool
+    wild_recovered: bool
 
 
 def _sinkholes(vm: SmokeVM, domain: str) -> bool:
@@ -98,24 +111,35 @@ def dnsbl_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]: 
 def reboot_observation(dnsbl_vm: SmokeVM) -> DnsblRebootObservation:
     """ALL slow VM I/O for the #468 scenario — runs in the fixture (no 30s body cap).
 
-    Given a DNSBL feed blocking a unique domain with RAM-disk /var enabled,
-      And the domain sinkholes (DNSBL works before the reboot),
+    Given a DNSBL feed blocking a unique domain (TLD-Wildcard ON, so a second listed
+      2-label domain wildcard-blocks a never-listed sub-domain too) with RAM-disk
+      /var enabled, and both sinkhole (DNSBL works before the reboot),
     When the guest is rebooted (MFS wipes /var/unbound; the boot re-stage runs),
-    Then capture: /var really wiped (MFS), pfb_unbound.py re-staged, and whether the
-      domain self-recovers to the sinkhole within RECOVERY_DEADLINE (no manual update).
+    Then capture: /var really wiped (MFS), pfb_unbound.py re-staged, the TLD-Wildcard
+      oracle re-staged, and whether the domain AND the wildcard sub-domain self-recover
+      to the sinkhole within RECOVERY_DEADLINE (no manual update).
     """
     vm = dnsbl_vm
     domain = h.unique_domain("pfb468")
+    # issue #1255: a 2-label registrable domain -- TLD-Wildcard ON wildcard-blocks it
+    # AND every sub-domain; `wild_sub_domain` is never itself listed, so it sinkholing
+    # proves the ZONE match survived the reboot, not a coincidental exact hit.
+    wild_domain = h.unique_domain("pfb468tld")
+    wild_sub_domain = "x." + wild_domain
 
-    # Given: RAM disks ON before the reload; a DNSBL feed blocking `domain`, applied.
+    # Given: RAM disks ON before the reload; a DNSBL feed blocking `domain` and
+    # `wild_domain`, TLD-Wildcard ON, applied.
     h.set_ramdisk(vm, True)
-    feed_url = h.write_local_feed(vm, "issue468.txt", f"{domain}\n")
-    spec = h.DnsblCase(aliasname="smoke468", feed_url=feed_url, header="smoke468", mode=h.DnsblMode.VIP)
+    feed_url = h.write_local_feed(vm, "issue468.txt", f"{domain}\n{wild_domain}\n")
+    spec = h.DnsblCase(
+        aliasname="smoke468", feed_url=feed_url, header="smoke468", mode=h.DnsblMode.VIP, tld_enabled=True
+    )
     h.inject(vm, spec)
     h.reload(vm, "update")
     h.wait_unbound_ready(vm)
 
     sinkholes_before = _sinkholes(vm, domain)
+    wild_sinkholes_before = _sinkholes(vm, wild_sub_domain)
 
     # MFS proof sentinel, then reboot.
     vm.ssh("/usr/bin/touch", VAR_WIPE_SENTINEL)
@@ -124,14 +148,18 @@ def reboot_observation(dnsbl_vm: SmokeVM) -> DnsblRebootObservation:
 
     var_wiped = vm.ssh("test", "-e", VAR_WIPE_SENTINEL).returncode != 0
     staged_after = vm.ssh("test", "-f", PFB_UNBOUND).returncode == 0
+    tld_oracle_staged_after = vm.ssh("test", "-f", PFB_PY_TLD).returncode == 0
     var_unbound_ls = vm.ssh("/bin/ls", "-la", "/var/unbound").stdout
 
-    # Poll for self-recovery (pfb_unbound.py staged AND sinkholing) with NO manual update.
+    # Poll for self-recovery (pfb_unbound.py staged AND both sinkholes) with NO manual update.
     waited = 0
     recovered = False
+    wild_recovered = False
     while waited <= RECOVERY_DEADLINE:
-        if vm.ssh("test", "-f", PFB_UNBOUND).returncode == 0 and _sinkholes(vm, domain):
-            recovered = True
+        staged_now = vm.ssh("test", "-f", PFB_UNBOUND).returncode == 0
+        recovered = recovered or (staged_now and _sinkholes(vm, domain))
+        wild_recovered = wild_recovered or (staged_now and _sinkholes(vm, wild_sub_domain))
+        if recovered and wild_recovered:
             break
         time.sleep(10)
         waited += 10
@@ -144,6 +172,10 @@ def reboot_observation(dnsbl_vm: SmokeVM) -> DnsblRebootObservation:
         var_unbound_ls=var_unbound_ls,
         recovered=recovered,
         recovered_after_s=waited,
+        wild_sub_domain=wild_sub_domain,
+        wild_sinkholes_before=wild_sinkholes_before,
+        tld_oracle_staged_after=tld_oracle_staged_after,
+        wild_recovered=wild_recovered,
     )
 
 
@@ -165,4 +197,33 @@ def test_dnsbl_survives_ramdisk_var_reboot(reboot_observation: DnsblRebootObserv
     assert obs.recovered, (
         f"#468: {obs.domain} did not sinkhole again within {RECOVERY_DEADLINE}s of a RAM-disk reboot "
         f"(staged_after={obs.staged_after}); DNSBL stays down until a manual update"
+    )
+
+
+def test_dnsbl_tld_wildcard_survives_ramdisk_var_reboot(reboot_observation: DnsblRebootObservation) -> None:
+    """issue #1255: TLD-Wildcard blocking (oracle + ini) survives a RAM-disk /var reboot.
+
+    Given TLD-Wildcard ON wildcard-blocks a never-listed sub-domain of a listed
+    2-label domain BEFORE the reboot,
+    When the RAM-disk /var reboot wipes /var/unbound,
+    Then the shipped oracle is re-staged fresh (``dnsbl_cache_stage()``, archive-
+    EXCLUDED like ``pfb_py_hsts.txt``) and the archived ini (``python_tld_wildcard =
+    on``) is restored, so the sub-domain STILL sinkholes with NO manual update.
+    """
+    obs = reboot_observation
+
+    # Precondition: the wildcard ZONE covered the sub-domain BEFORE the reboot.
+    assert obs.wild_sinkholes_before, (
+        f"precondition: {obs.wild_sub_domain} must sinkhole (TLD-Wildcard ON) before the reboot"
+    )
+    # issue #1255 core: the shipped oracle re-staged into the chroot after the wipe.
+    assert obs.tld_oracle_staged_after, (
+        f"issue #1255: {PFB_PY_TLD} missing after RAM-disk reboot (TLD-Wildcard oracle not re-staged)."
+        f"\n/var/unbound:\n{obs.var_unbound_ls}"
+    )
+    # End-state: still sinkholing — the wildcard ZONE survived the reboot, no manual update.
+    assert obs.wild_recovered, (
+        f"issue #1255: {obs.wild_sub_domain} did not sinkhole again within {RECOVERY_DEADLINE}s of a "
+        f"RAM-disk reboot (oracle_staged={obs.tld_oracle_staged_after}); TLD-Wildcard blocking stays "
+        "down until a manual update"
     )
