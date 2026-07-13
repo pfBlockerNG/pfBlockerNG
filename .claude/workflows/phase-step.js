@@ -134,15 +134,17 @@ if (handoff.verdict === 'BLOCKED') {
 
 phase('Verify')
 
-// The handoff is agent-authored text that ends up inside a shell command the verifier runs:
-// anything interpolated below is shape-checked here, at the boundary, or the step dies.
+// The handoff is agent-authored text that ends up inside a shell command the verifier runs.
+// Identifier-shaped fields are shape-checked at the boundary or the step dies; testCmd is a
+// free-form command (spaces, quotes, $(...) are legitimate) so it gets quoted, not restricted.
 const safe = (value, pattern, field) => {
   if (typeof value !== 'string' || !pattern.test(value)) {
     throw new Error(`unsafe ${field} in handoff: ${JSON.stringify(value)}`)
   }
   return value
 }
-const baseSha = redProof ? safe(handoff.base_sha, /^[0-9a-f]{7,40}$/, 'base_sha') : ''
+const shq = s => `'${String(s).replace(/'/g, "'\\''")}'`
+const baseSha = redProof ? safe(handoff.base_sha, /^[0-9a-f]{40}$/, 'base_sha') : ''
 const redHashArgs = (handoff.red_green || [])
   .flatMap(e => e.red_test_hashes || [])
   .map(h => `--hash ${safe(h.file, /^[A-Za-z0-9._/-]+$/, 'red_test_hashes.file')}=${safe(h.hash, /^[0-9a-f]{40}$/, 'red_test_hashes.hash')}`)
@@ -155,7 +157,7 @@ FIRST, BASELINE SANITY — the script trusts whatever ref you hand it, so earn t
 
 THEN run the single implementation — do NOT hand-roll the checkout dance:
 
-  sh scripts/agent/verify-red-proof.sh --worktree ${worktree} --test-cmd '${redProof.testCmd}' ${redProof.srcPaths.map(p => `--src ${safe(p, /^[A-Za-z0-9._/-]+$/, 'redProof.srcPaths')}`).join(' ')} ${redHashArgs} --base-ref ${baseSha}
+  sh scripts/agent/verify-red-proof.sh --worktree ${worktree} --test-cmd ${shq(redProof.testCmd)} ${redProof.srcPaths.map(p => `--src ${safe(p, /^[A-Za-z0-9._/-]+$/, 'redProof.srcPaths')}`).join(' ')} ${redHashArgs} --base-ref ${baseSha}
 
 It reverts the src paths to --base-ref (tests stay) and requires FAIL, restores HEAD and requires PASS, and enforces the freeze (git hash-object of each committed reproduction test == the handoff's red-time hash — a test edited between red and green, or with no red-time hash, proves nothing). Record its FREEZE-OK / RED-OK / GREEN-OK / VERDICT lines as evidence; a non-PASS verdict fails this item.`
   : 'This step is declared behaviour-preserving: confirm the oracle/pinned tests exist and stayed green; record which.'
