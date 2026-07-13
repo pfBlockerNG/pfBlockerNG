@@ -6,18 +6,20 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * $alias_cnt accumulation from `grep -c ^ <file>` output (issue #1162).
+ * $alias_cnt accumulation from a per-file line count (issue #1162; issue
+ * #1261: the exec("grep -c ^ <file>") fork is replaced by pfb_count_lines()).
  *
- * sync_package_pfblockerng() has two sites that feed a raw exec("grep -c ^
- * <file>") result straight into `+` arithmetic: `$alias_cnt = $alias_cnt +
- * $list_cnt;`. exec() on a failed grep (no 2>&1 capture) returns "" (or a
- * non-numeric error string), and PHP 8's `+` operator throws TypeError:
- * "Unsupported operand types: string + int" on a non-numeric string operand
- * -- fatalling the whole sync pass. Both sites are inside
- * sync_package_pfblockerng(), not unit-reachable directly -- pinned here via
- * source-inspection (house precedent: tests/php/DownloadRetvalFailsafeTest.php)
- * plus a mirrored-expression data provider (house precedent:
- * tests/php/IpRegexPrefilterGuardTest.php).
+ * sync_package_pfblockerng() has two sites that feed a file's line count into
+ * `+` arithmetic: `$alias_cnt = $alias_cnt + $list_cnt;`. Before #1261,
+ * $list_cnt came from exec()'s raw output (a non-numeric string on a failed
+ * grep, needing an inline (int) cast). Now pfb_count_lines() returns ?int
+ * directly, and NULL (read failure) is coerced to 0 at the assignment
+ * (`?? 0`) -- so $list_cnt is always a plain int by the time it reaches the
+ * accumulation, and the accumulation itself needs no cast. Both sites are
+ * inside sync_package_pfblockerng(), not unit-reachable directly -- pinned
+ * here via source-inspection (house precedent:
+ * tests/php/DownloadRetvalFailsafeTest.php) plus a mirrored-expression data
+ * provider (house precedent: tests/php/IpRegexPrefilterGuardTest.php).
  */
 final class AliasCntGrepCountGuardTest extends TestCase
 {
@@ -34,16 +36,13 @@ final class AliasCntGrepCountGuardTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// Source-inspection pin -- both $alias_cnt accumulation sites exist,
-	// both cast $list_cnt to int, and no uncast form survives.
+	// Source-inspection pin -- both $alias_cnt accumulation sites exist, both
+	// feed from pfb_count_lines() with a `?? 0` NULL fallback, and no exec()
+	// grep fork survives at either site.
 	// -----------------------------------------------------------------------
 
-	/**
-	 * `$alias_cnt = $alias_cnt + $list_cnt;` (uncast) or
-	 * `$alias_cnt = $alias_cnt + (int) $list_cnt;` (cast) -- matches either
-	 * form so the count assertion holds both before and after the fix.
-	 */
-	private const ACCUMULATION_RE = '/\$alias_cnt\s*=\s*\$alias_cnt\s*\+\s*(\(int\)\s*)?\$list_cnt\s*;/';
+	private const ACCUMULATION_RE = '/\$alias_cnt\s*=\s*\$alias_cnt\s*\+\s*\$list_cnt\s*;/';
+	private const COUNT_ASSIGN_RE = '/\$list_cnt\s*=\s*pfb_count_lines\([^;]*\)\s*\?\?\s*0\s*;/';
 
 	public function testVacuityExactlyTwoAccumulationSitesExist(): void
 	{
@@ -53,24 +52,20 @@ final class AliasCntGrepCountGuardTest extends TestCase
 			. "(list-reuse branch and downloaded/rebuilt branch); found {$count}");
 	}
 
-	public function testBothAccumulationSitesCastListCntToInt(): void
+	public function testBothSitesAssignListCntFromPfbCountLinesWithNullFallback(): void
 	{
-		preg_match_all(self::ACCUMULATION_RE, self::$src, $m);
-		$this->assertCount(2, $m[0], 'vacuity re-check: exactly 2 accumulation sites must be found');
-		foreach ($m[0] as $i => $statement) {
-			$this->assertNotSame('', $m[1][$i],
-				"accumulation site #{$i} does not cast \$list_cnt with (int) -- "
-				. 'PHP 8 TypeError hazard on a failed grep (issue #1162); statement: ' . $statement);
-		}
+		$count = preg_match_all(self::COUNT_ASSIGN_RE, self::$src);
+		$this->assertSame(2, $count,
+			'expected exactly 2 `$list_cnt = pfb_count_lines(...) ?? 0;` assignments feeding '
+			. "the accumulation sites (issue #1261); found {$count}");
 	}
 
-	public function testNoUncastAccumulationSurvives(): void
+	public function testNoExecGrepForkSurvivesForListCnt(): void
 	{
 		$this->assertDoesNotMatchRegularExpression(
-			'/\$alias_cnt\s*=\s*\$alias_cnt\s*\+\s*\$list_cnt\s*;/',
+			'/\$list_cnt\s*=\s*exec\(/',
 			self::$src,
-			'an uncast $alias_cnt = $alias_cnt + $list_cnt; accumulation remains -- '
-			. 'PHP 8 TypeError hazard on a failed grep (issue #1162)'
+			'a $list_cnt = exec(...) fork survives -- issue #1261 must replace it with pfb_count_lines()'
 		);
 	}
 
@@ -79,62 +74,22 @@ final class AliasCntGrepCountGuardTest extends TestCase
 	// the happy path). Mirrors the production expressions exactly.
 	// -----------------------------------------------------------------------
 
-	public static function unguardedRows(): array
+	public static function accumulationRows(): array
 	{
 		return [
-			'empty exec result (grep failure)' => ['', TRUE],
-			'grep error string (no such file)' => ['grep: /x: No such file or directory', TRUE],
-			'happy path count'                 => ['42', FALSE],
-			'zero count'                       => ['0', FALSE],
-			'exec() total failure (FALSE)'     => [FALSE, FALSE],
+			'NULL count (pfb_count_lines() read failure)' => [NULL, 0],
+			'happy path count'                             => [42, 42],
+			'zero count (empty file)'                      => [0, 0],
 		];
 	}
 
-	/** Unguarded mirror of the pre-fix `$alias_cnt = $alias_cnt + $list_cnt;`. */
-	#[DataProvider('unguardedRows')]
-	public function testUnguardedMirrorThrowsOnlyForNonNumericGrepOutput(string|bool $listCnt, bool $expectThrow): void
-	{
-		if ($expectThrow) {
-			$this->expectException(TypeError::class);
-			$this->expectExceptionMessage('Unsupported operand types');
-		}
-		$alias_cnt = 0;
-		$alias_cnt = $alias_cnt + $listCnt;
-		if (!$expectThrow) {
-			$this->assertIsInt($alias_cnt);
-		}
-	}
-
-	public static function guardedRows(): array
-	{
-		return [
-			'empty exec result (grep failure)' => ['', 0],
-			'grep error string (no such file)' => ['grep: /x: No such file or directory', 0],
-			'happy path count'                 => ['42', 42],
-			'zero count'                       => ['0', 0],
-			'exec() total failure (FALSE)'     => [FALSE, 0],
-		];
-	}
-
-	/** Guarded mirror of the post-fix `$alias_cnt = $alias_cnt + (int) $list_cnt;` -- never throws. */
-	#[DataProvider('guardedRows')]
-	public function testGuardedMirrorCoercesNonNumericGrepOutputToZero(string|bool $listCnt, int $expect): void
+	/** Mirror of the post-#1261 `$list_cnt = pfb_count_lines(...) ?? 0; $alias_cnt = $alias_cnt + $list_cnt;`. */
+	#[DataProvider('accumulationRows')]
+	public function testAccumulationNeverThrowsAndCoercesNullToZero(?int $pfbCountLinesResult, int $expect): void
 	{
 		$alias_cnt = 0;
-		$alias_cnt = $alias_cnt + (int) $listCnt;
+		$list_cnt  = $pfbCountLinesResult ?? 0;
+		$alias_cnt = $alias_cnt + $list_cnt;
 		$this->assertSame($expect, $alias_cnt);
-	}
-
-	// -----------------------------------------------------------------------
-	// Motivating-semantics assertion -- the exact PHP 8 hazard the (int)
-	// casts defend against.
-	// -----------------------------------------------------------------------
-
-	public function testEmptyStringPlusIntThrowsTypeErrorBackingTheGuard(): void
-	{
-		$this->expectException(TypeError::class);
-		$this->expectExceptionMessage('Unsupported operand types');
-		// phpcs:ignore -- deliberately unguarded: this IS the hazard the (int) cast defends against.
-		$unused = 0 + '';
 	}
 }

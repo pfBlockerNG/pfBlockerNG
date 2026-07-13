@@ -1826,7 +1826,9 @@ if ($alert_summary) {
 	// below stays IN the loop body -- if every stat type is hidden the loop body
 	// never runs, so $alert_stats['count'] must stay unset for this view exactly
 	// as it does today.
-	$alert_log_total_count = file_exists($alert_log) ? (exec("{$pfb['grep']} -c ^ {$alert_log} 2>&1") ?: 0) : 0;
+	// issue #1261: display-only total -- NULL (read failure) -> 0, same as the
+	// exec()-era `?: 0` fallback (a legitimately-empty file also yields 0).
+	$alert_log_total_count = file_exists($alert_log) ? (pfb_count_lines($alert_log) ?? 0) : 0;
 
 	foreach ($stat_info as $stat_type => $column) {
 		if (isset($stat_hidden[$stat_type])) {
