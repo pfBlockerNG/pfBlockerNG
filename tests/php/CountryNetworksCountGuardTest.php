@@ -6,8 +6,8 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * $networks / $total -- the per-ISO "Total Networks" line count in
- * pfblockerng.php's continent-file rebuild (issue #1261).
+ * $networks / $total / $lastline -- the per-ISO "Total Networks" line counts
+ * in pfblockerng.php's continent-file rebuild (issue #1261).
  *
  * $networks (line ~1414) is NOT display-only: it is written into a header
  * line that is later re-parsed, and "Total Networks: 0" or "...: NA" trips a
@@ -176,6 +176,44 @@ final class CountryNetworksCountGuardTest extends TestCase
 			self::$src,
 			'a $total = exec(...) fork survives -- issue #1261 must replace it with pfb_count_lines()'
 		);
+	}
+
+	// -----------------------------------------------------------------------
+	// Rows 5+6: $lastline (line ~1514) -- the EOF-flush trigger
+	// (`$linenum == $lastline`). `?? 0` preserves the exec()-era `?: 0`: a
+	// failed count yields 0, which $linenum (starts at 1) can never equal, so
+	// the flush stays unreachable -- and the fopen() of the same file fails
+	// too, so the loop never runs.
+	// -----------------------------------------------------------------------
+
+	public function testLastlineAssignedFromPfbCountLinesWithZeroFallback(): void
+	{
+		$this->assertMatchesRegularExpression(
+			'/\$lastline\s*=\s*pfb_count_lines\(\$file\)\s*\?\?\s*0\s*;/',
+			self::$src,
+			'$lastline must be assigned from pfb_count_lines($file) ?? 0 (EOF-flush trigger, issue #1261)'
+		);
+	}
+
+	public function testNoExecGrepForkSurvivesForLastline(): void
+	{
+		$this->assertDoesNotMatchRegularExpression(
+			'/\$lastline\s*=\s*exec\(/',
+			self::$src,
+			'a $lastline = exec(...) fork survives -- issue #1261 must replace it with pfb_count_lines()'
+		);
+	}
+
+	/** A real, unmocked read failure (a directory) must fall back to 0, never
+	 *  NULL/error text reaching the `$linenum == $lastline` comparison. */
+	public function testLastlineReadFailureFallsBackToZero(): void
+	{
+		$dir = self::$tmpDir . '/unreadable_dir_lastline';
+		@mkdir($dir, 0777, TRUE);
+		$this->assertNull(pfb_count_lines($dir), 'fixture must reproduce a real pfb_count_lines() read failure');
+
+		$lastline = pfb_count_lines($dir) ?? 0;
+		$this->assertSame(0, $lastline, 'a failed count must fall back to 0 (the exec()-era behaviour): the EOF flush stays unreachable');
 	}
 
 	public static function totalRenderRows(): array
