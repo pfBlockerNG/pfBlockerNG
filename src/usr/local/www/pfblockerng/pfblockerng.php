@@ -2563,7 +2563,7 @@ $section->addInput(new Form_StaticText(
 	. '\'<strong>ccblack</strong>\' are all other Countries that are not selected.<br /><br />'
 	. 'To use <strong>Match</strong> Lists, Create a new \'Alias\''
 	. 'and select one of the <strong>Action Match</strong> Formats and<br /> enter the <strong>Localfile</strong> as:'
-	. '<ul>/var/db/pfblockerng/match/matchdedup.txt</ul><br />' 
+	. '<ul>/var/db/pfblockerng/match/generated/pfB_Match_Exempt_v4.txt</ul><br />'
 	. '<strong>These Country Code options are only available when the MaxMind key has been entered and MaxMind database has been downloaded and updated</strong>'
 	. '</div>'
 ));
@@ -2615,7 +2615,7 @@ $section->addInput(new Form_StaticText(
 	. '<a target="_blank" rel="noopener noreferrer" href="https://www.proofpoint.com/us/solutions/products/threat-intelligence">Proofpoint IQRisk</a><br /><br />'
 	. 'To use <strong>Match</strong> Lists, Create a new Alias and select one of the <strong>'
 	. 'Action Match</strong> Formats and <br />'
-	. 'enter the <strong>Localfile</strong> as: <ul>/var/db/pfblockerng/match/ETMatch.txt</ul>'
+	. 'enter the <strong>Localfile</strong> as: <ul>/var/db/pfblockerng/match/generated/pfB_Match_ET_v4.txt</ul>'
 	. 'ET IQRisk Individual Match Lists can be found in the following folder:<br />'
 	. '<ul>/var/db/pfblockerng/ET</ul>'
 ));

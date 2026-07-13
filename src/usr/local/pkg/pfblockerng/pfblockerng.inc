@@ -5158,6 +5158,46 @@ function pfb_member_file_is_placeholder_only($path, $placeholder) {
 }
 
 
+/**
+ * issue #1250: sweep matchgendir's machine-generated artifacts -- Reputation dMax's per-alias
+ * 'pfB_Match_Rep_<header>_<fam>.txt', the ccwhite consolidated exempt file, and the ET/
+ * Proofpoint match file all moved off pfbmatch, so the generic per-type reaper (keyed on
+ * config headers) can never reap them; this is their own keep-list + sweep, extracted so it
+ * is unit-testable outside sync_package_pfblockerng() (MatchGenReapTest).
+ *
+ * @param string[] $existing_deny $pfb['existing']['deny'] -- '<header>_v4'/'<header>_v6' names.
+ * @param bool     $ccwhite_match TRUE iff $pfb['ccwhite'] == 'match' (the exempt file's only writer).
+ * @param string   $matchgendir   Absolute matchgendir path (no trailing slash).
+ * @return string[] Basenames (no '.txt') actually reaped this pass.
+ */
+function pfb_matchgen_reap(array $existing_deny, bool $ccwhite_match, string $matchgendir): array {
+	// pfB_Match_ET_v4 is always kept: the reaper runs before processet() in
+	// sync_package_pfblockerng(), so gating on "did ET run this pass" reaped a live file
+	// on any pass ET did not execute (issue #1269).
+	$keep = array('pfB_Match_ET_v4');
+	if ($ccwhite_match) {
+		$keep[] = 'pfB_Match_Exempt_v4';
+	}
+	foreach ($existing_deny as $pfb_deny_name) {
+		$keep[] = "pfB_Match_Rep_{$pfb_deny_name}";
+	}
+
+	$actual = array();
+	foreach (glob("{$matchgendir}/*.txt") ?: [] as $pfb_file) {
+		$actual[] = basename($pfb_file, '.txt');
+	}
+
+	$reaped = array();
+	foreach (array_diff($actual, $keep) as $pfb_orphan) {
+		if (!empty(pfb_filter($pfb_orphan, PFB_FILTER_WORD, 'Remove un-associated matchgen artifact'))) {
+			unlink_if_exists("{$matchgendir}/{$pfb_orphan}.txt");
+			$reaped[] = $pfb_orphan;
+		}
+	}
+	return $reaped;
+}
+
+
 // issue #1084: batch IP dedup/reputation recompute -- caller-side helpers. pfb_recompute()
 // (pfblockerng.sh) replaces duplicate()/dmax/pmax's incremental masterfile surgery with one
 // deterministic pass per family over pristine per-feed snapshots; these functions decide WHEN
@@ -9758,7 +9798,9 @@ function pfb_ip_render_query(array $fields): array {
 	} elseif ($fields[3] == 'pass') {
 		$folder = "{$pfb['permitdir']}/*.txt {$pfb['nativedir']}/*.txt";
 	} elseif ($fields[3] == 'match') {
-		$folder = "{$pfb['matchdir']}/*.txt {$pfb['nativedir']}/*.txt";
+		// issue #1250: reputation artifacts now live in matchgendir -- include it so a
+		// Deny-list match event still attributes to its feed.
+		$folder = "{$pfb['matchdir']}/*.txt {$pfb['matchgendir']}/*.txt {$pfb['nativedir']}/*.txt";
 	}
 
 	// Determine if event IP still exists in Feed Aliastable -- builds the exact validate
@@ -13661,7 +13703,9 @@ function pfb_daemon_filterlog() {
 					}
 					elseif ($d[6] == 'unkn(%u)') {
 						$d[6]	= 'match';
-						$folder = "{$pfb['matchdir']}/* {$pfb['nativedir']}/*";
+						// issue #1250: matchdir now nests matchgendir -- glob '.txt' so grep
+						// never opens the subdirectory entry itself; include matchgendir too.
+						$folder = "{$pfb['matchdir']}/*.txt {$pfb['matchgendir']}/*.txt {$pfb['nativedir']}/*";
 						$iplog	= "{$pfb['ip_matchlog']}";
 						$l_type = 'Match';
 					}
@@ -16364,23 +16408,9 @@ function sync_package_pfblockerng($cron='') {
 			}
 		}
 
-		// Add 'Reputation - ccwhite Action' if found. Both families: only the v4 dedup file
-		// has a writer today, but a name for an absent file is a no-op, so the keep-list is
-		// not the place to hardcode that.
-		foreach (array('matchdedup_v4', 'matchdedup_v6') as $pfb_dedup) {
-			if ($pfb['ccwhite'] == 'match' && file_exists("{$pfb['matchdir']}/{$pfb_dedup}.txt")) {
-				$pfb['existing']['match'][] = $pfb_dedup;
-			}
-		}
-
-		// issue #1232: recompute's per-alias reputation artifacts ('match<header>_<fam>.txt')
-		// sit in matchdir but are not Match-type lists -- keep them while their Deny alias
-		// exists (a gone alias's artifact stays un-associated here, so it is still reaped).
-		if (!empty($pfb['existing']['deny'])) {
-			foreach ($pfb['existing']['deny'] as $pfb_deny_name) {
-				$pfb['existing']['match'][] = "match{$pfb_deny_name}";
-			}
-		}
+		// issue #1250: matchgendir artifacts (dMax outputs, ccwhite exempt, ET match) match no
+		// config header, so the per-type sweep below can't reap them -- own keep-list/sweep.
+		pfb_matchgen_reap($pfb['existing']['deny'], $pfb['ccwhite'] == 'match', $pfb['matchgendir']);
 
 		// Add enabled 'DNSBL Blacklist categories'
 		if (isset($pfb['blconfig']) &&

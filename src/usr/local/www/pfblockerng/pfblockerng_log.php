@@ -125,6 +125,13 @@ $pfb_logtypes = array(	'defaultlogs'	=> array('name'		=> 'Log Files',
 						'download'	=> TRUE,
 						'clear'		=> TRUE
 						),
+			// issue #1250: machine-generated match artifacts, relocated off matchdir.
+			'matchgenlogs'	=> array('name'		=> 'Match Generated Files',
+						'ext'		=> 'txt',
+						'logdir'	=> "{$pfb['matchgendir']}/",
+						'download'	=> TRUE,
+						'clear'		=> TRUE
+						),
 			'nativelogs'	=> array('name'		=> 'Native Files',
 						'ext'		=> 'txt',
 						'logdir'	=> "{$pfb['nativedir']}/",
