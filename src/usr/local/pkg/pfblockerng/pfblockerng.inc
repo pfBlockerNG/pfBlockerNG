@@ -3064,6 +3064,18 @@ function pfb_log_max_days($raw): int {
 	return 0;
 }
 
+// Resolve a stored 'pfb_log_trim_margin_pct' config value to the hysteresis
+// margin percent pfb_log_trim_needed() applies (issue #1109). Mirrors
+// pfb_log_max_days()'s fallback shape: non-numeric/garbage/absent -> 0 (off). PURE.
+function pfb_log_trim_margin_pct($raw): int {
+	if (is_scalar($raw) && preg_match('/^[0-9]+$/', (string) $raw)) {
+		// Clamp: 1000% keeps the age high-water arithmetic exact well under
+		// PHP_INT_MAX even at pfb_log_max_days()'s own 3650000-day clamp.
+		return min((int) $raw, 1000);
+	}
+	return 0;
+}
+
 // ADR-60 S2.1: where a log type's Y-m-d H:i:s timestamp lives in a line -- a
 // leading line-prefix for the free-text logs, else a fixed CSV field (verified
 // per writer: pfb_logger()/pfb_daemon_filterlog()/pfb_parsed_fail()/dnsbl.log's
@@ -3221,12 +3233,10 @@ function pfb_log_age_trim_write_ok($written, string $content): bool {
 	return $written !== FALSE && $written === strlen($content);
 }
 
-// issue #1052: probe-before-copy for the 'nolimit'+age-cap path -- log lines are
-// chronologically appended, so an unexpired FIRST line means nothing in $path can
-// be expired; the caller skips its whole copy()+age-trim pass this tick. An
-// unparseable/legacy first line falls through to TRUE (pass must run), matching
-// pfb_log_age_cutoff()'s own "unparseable = expired" rule.
-function pfb_log_age_nolimit_pass_needed(string $path, int $agedays, string $logtype): bool {
+// issue #1052/#1109: probe-before-copy for the age-cap pass (both branches) --
+// an unexpired FIRST line means nothing is expired (skip this tick); unparseable/
+// empty/unopenable fall through TRUE. $margin_pct widens the cutoff (0=exact).
+function pfb_log_age_trim_needed(string $path, int $agedays, string $logtype, int $margin_pct = 0): bool {
 	$fh = @fopen($path, 'r');
 	if ($fh === FALSE) {
 		return TRUE;
@@ -3242,7 +3252,41 @@ function pfb_log_age_nolimit_pass_needed(string $path, int $agedays, string $log
 		return TRUE; // unparseable/legacy first line -- must run the full pass
 	}
 
-	return $ts < (time() - ($agedays * 86400));
+	$window = (int) ($agedays * 86400 * (1 + $margin_pct / 100));
+	return $ts < (time() - $window);
+}
+
+// issue #1109: pure PHP '\n' count (no exec()/wc -- off-appliance-testable, no
+// per-tick process spawn across 11 log types). Fail (unopenable/short read) ->
+// PHP_INT_MAX so the high-water guard FIRES -- same fail-open direction as #1052.
+function pfb_log_line_count(string $path): int {
+	$fh = @fopen($path, 'r');
+	if ($fh === FALSE) {
+		return PHP_INT_MAX;
+	}
+
+	$lines = 0;
+	while (($chunk = fread($fh, 1048576)) !== FALSE && $chunk !== '') {
+		$lines += substr_count($chunk, "\n");
+	}
+	$ok = feof($fh);
+	fclose($fh);
+
+	return $ok ? $lines : PHP_INT_MAX;
+}
+
+// issue #1109: ONE unified high-water guard for both pfb_log_mgmt() branches --
+// fires iff an active cap is past its margin-widened high-water mark. Float math
+// (ADR-28 #2 short-circuit): $logmax is unclamped so intdiv() could get a float.
+function pfb_log_trim_needed(int|string $logmax, int $agedays, string $path, string $logtype, int $margin_pct): bool {
+	if ($logmax !== 'nolimit') {
+		$high_water = (float) $logmax * (1.0 + ($margin_pct / 100.0));
+		if ((float) pfb_log_line_count($path) > $high_water) {
+			return TRUE;
+		}
+	}
+
+	return $agedays > 0 && pfb_log_age_trim_needed($path, $agedays, $logtype, $margin_pct);
 }
 
 // Manage log files line limit + age-based retention (ADR-60)
@@ -3251,6 +3295,8 @@ function pfb_log_mgmt() {
 	pfb_global();
 
 	$chroot_folder = '/var/unbound';
+	// issue #1109: global hysteresis margin, read once for every log type.
+	$margin_pct = pfb_log_trim_margin_pct($pfb['config']['pfb_log_trim_margin_pct'] ?? '');
 
 	foreach (array(	'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog', 'ip_matchlog',
 			'ip_parse_err', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog') as $logtype) {
@@ -3281,9 +3327,9 @@ function pfb_log_mgmt() {
 				}
 
 				if (file_exists($final_log_file)) {
-					// issue #1052: 'nolimit'+age-cap -- skip the whole copy()+age-trim
-					// pass this tick when the first (oldest) line hasn't expired yet.
-					if ($logmax === 'nolimit' && !pfb_log_age_nolimit_pass_needed($final_log_file, $agedays, $logtype)) {
+					// issue #1109: skip this tick's whole pass unless an active cap is
+					// past its margin-widened high-water mark (the hysteresis trigger).
+					if (!pfb_log_trim_needed($logmax, $agedays, $final_log_file, $logtype, $margin_pct)) {
 						unlink_if_exists($temp);
 						continue;
 					}
@@ -3320,8 +3366,8 @@ function pfb_log_mgmt() {
 			}
 			else {
 				$temp = tempnam("{$g['tmp_path']}/", 'pfb_log_');
-				// issue #1052: same nolimit+age-cap skip as the chroot branch above.
-				if ($logmax === 'nolimit' && !pfb_log_age_nolimit_pass_needed($pfb[$logtype], $agedays, $logtype)) {
+				// issue #1109: same unified high-water guard as the chroot branch above.
+				if (!pfb_log_trim_needed($logmax, $agedays, $pfb[$logtype], $logtype, $margin_pct)) {
 					unlink_if_exists($temp);
 					continue;
 				}

@@ -103,6 +103,8 @@ class RequireConfigGatewaySniff implements Sniff
 		// ADR-43: tick-cron dispatch interval + apply-on-change window
 		'installedpackages/pfblockerng/config/0/pfb_tick_interval',
 		'installedpackages/pfblockerng/config/0/pfb_quiet_hours',
+		// issue #1109: log-retention trim hysteresis margin percent
+		'installedpackages/pfblockerng/config/0/pfb_log_trim_margin_pct',
 		// installedpackages/pfblockerngdnsblsettings/config/0 (DNSBL settings)
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto',
