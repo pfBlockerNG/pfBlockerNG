@@ -102,6 +102,9 @@ PAGE_TABLE: tuple[Page, ...] = (
             "Interface(s)",
             "no-AAAA",
             "pfb_dnsbl_nonat",  # issue-#381 NAT opt-out checkbox (name= attr in rendered HTML)
+            # issue #1255: corrected Wildcard Blocking (TLD) help — no more stale "Force
+            # Reload required" claim; toggling now applies on the next DNSBL update.
+            "Enabling or disabling this option takes effect on the next DNSBL update",
             "pfB_DNSBLIP_v4",  # DNSBL IPs help text names the real alias (was stale 'pfB_DNSBL_IP')
             # Permit-rules help renders as one flowing sentence — a stray <br /> split
             # "...to access<br />the DNSBL Webserver", so this space-joined phrase is the
