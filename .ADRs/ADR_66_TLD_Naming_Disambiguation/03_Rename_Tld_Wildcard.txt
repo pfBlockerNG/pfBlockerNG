@@ -31,8 +31,9 @@ REQUIRED READING
   (~:4265), _dnsbl_tld_search (~:4288), tld_master usages, _dnsbl_config_from_manifest reader
   (~:5285-5324), the classify() call site (~:5162).
 - src/usr/local/pkg/pfblockerng/pfblockerng.inc -- $pfb['dnsbl_tld'] (:16005 assign + all
-  readers), the manifest config WRITER embedding tld_master/tld_exclusion/tld_blacklist
-  (~:7937-7954).
+  readers), the manifest config WRITER embedding tld_exclusion/tld_blacklist (~:7937-7954;
+  NO tld_master key -- #1255: the oracle rides the shipped pfb_py_tld file, loaded
+  reader-side in _dnsbl_config_from_manifest).
 - CLAUDE.md -- Naming, Python/PHP standards, the delegation contract.
 
 REALITY OVERRIDE (standing rule)
@@ -52,9 +53,10 @@ ACTION PLAN (ordered)
    _dnsbl_load_tld_master->_dnsbl_load_tld_wildcard_master; _dnsbl_tld_search->
    _dnsbl_tld_wildcard_search; tld_master->tld_wildcard_master; tld_exclusion->
    tld_wildcard_exclusion; tld_blacklist->tld_wildcard_blacklist (a sub-feature of Wildcard
-   Blocking -- SS2.2). Rename the manifest keys (tld_master, tld_exclusion, tld_blacklist) on
-   BOTH the writer (.inc) AND the reader (_dnsbl_config_from_manifest) in this SAME commit
-   (Semantic 4).
+   Blocking -- SS2.2). Rename the manifest keys (tld_exclusion, tld_blacklist) on BOTH the
+   writer (.inc) AND the reader (_dnsbl_config_from_manifest) in this SAME commit (Semantic 4).
+   tld_master is NOT a manifest key (#1255) -- rename the internal build-blob key + variable
+   reader-side only (_dnsbl_config_from_manifest's returned dict + build()'s read).
 3. Do NOT touch: config.tld_wildcard (already the stem, #1255), the stored keys (pfb_tld,
    tldexclusion, tldblacklist), TOP1M/safesearch/hsts, or any Feature-A identifier (delta R-B).
    Do NOT rename the doomed function names tld_analysis/pfb_dnsbl_py_swap (SS1.2).
