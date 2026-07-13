@@ -530,7 +530,11 @@ def _build_swap_snapshot() -> Snapshot | None:
         try:
             with open(pfb["pfb_py_hsts"]) as hsts:
                 for line in hsts:
-                    hsts_db[line.rstrip("\r\n")] = 0
+                    # match _dnsbl_load_tld_master(): skip comment/whitespace-only lines; '0' stays a valid key
+                    key = line.strip()
+                    if not key or key.startswith("#"):
+                        continue
+                    hsts_db[key] = 0
         except Exception as e:
             sys.stderr.write("[pfBlockerNG]: reload: failed to load {}: {}".format(pfb["pfb_py_hsts"], e))
 
@@ -1026,7 +1030,11 @@ def _load_hsts_db() -> None:
     try:
         with open(pfb["pfb_py_hsts"]) as hsts:
             for line in hsts:
-                hstsDB[line.rstrip("\r\n")] = 0
+                # match _dnsbl_load_tld_master(): skip comment/whitespace-only lines; '0' stays a valid key
+                key = line.strip()
+                if not key or key.startswith("#"):
+                    continue
+                hstsDB[key] = 0
             pfb["hstsDB"] = True
         pfb_py_status_close("dnsbl", pfb["pfb_py_hsts"], "parse")
     except Exception as e:
