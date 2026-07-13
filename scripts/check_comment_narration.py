@@ -40,6 +40,9 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"#[0-9]+ P[0-9]+\b"), "issue phase narration (#NNNN PN)"),
     (re.compile(r"review-fanout", re.IGNORECASE), "review archaeology (review-fanout)"),
     (re.compile(r"\bPR ?#[0-9]+\b"), "review archaeology (PR #N)"),
+    (re.compile(r"issue #[0-9]+ [FCR][0-9]+\b"), "review archaeology (issue #NNNN finding tag)"),
+    (re.compile(r"\((?:F|C|R)[0-9]+\)"), "review archaeology (finding tag)"),
+    (re.compile(r"\[(?:RED|GREEN-KEEP|NEW)\]"), "delegation handoff artifact (coverage-matrix marker)"),
 )
 
 # Matched case-insensitively so a differently-cased escape still exempts.

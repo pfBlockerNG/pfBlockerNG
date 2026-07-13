@@ -118,6 +118,69 @@ def test_review_fanout_is_case_insensitive() -> None:
     assert len(_find("src/a.inc", ["// Review-Fanout C9 pinned this"])) == 1
 
 
+def test_issue_finding_tag_is_flagged_but_bare_issue_breadcrumb_is_clean() -> None:
+    # Verbatim string that leaked into a committed comment (commit 875e8a41,
+    # issue #1250) before being manually stripped.
+    v = _find(
+        "src/a.inc",
+        ["// (issue #1250 F2 -- the old special case ignored Deny/ccwhite state entirely)"],
+    )
+    assert len(v) == 1
+    assert "F2" in v[0].reason or "finding" in v[0].reason.lower() or "issue #" in v[0].reason.lower()
+    # The legal regression-breadcrumb form (no finding letter+number) stays clean.
+    assert _find("src/a.inc", ["// issue #1250: decode UTF-16 BOM first"]) == []
+
+
+def test_issue_finding_tag_needs_trailing_boundary() -> None:
+    assert _find("src/a.inc", ["// issue #1250 F2x is not a finding tag"]) == []
+
+
+def test_parenthesised_finding_tag_is_flagged() -> None:
+    # Verbatim string from commit 875e8a41 (issue #1250): a bare "(F6)" with
+    # no "issue #" on its line -- same-line context would miss this shape.
+    assert len(_find("src/a.inc", ["// not a filename shape (F6) -- a same-shaped user"])) == 1
+    assert len(_find("src/a.inc", ["// (C5) needs a second look"])) == 1
+    assert len(_find("src/a.inc", ["// (R3) reviewer request"])) == 1
+
+
+def test_parenthesised_finding_tag_multidigit_is_flagged() -> None:
+    assert len(_find("src/a.inc", ["// see (F23) for detail"])) == 1
+    assert len(_find("src/a.inc", ["// see (C104) for detail"])) == 1
+
+
+def test_parenthesised_finding_tag_is_case_sensitive() -> None:
+    # Lowercase "(f6)" is not the finding-tag shape; the pattern stays deliberately
+    # case-sensitive since every real leaked tag was uppercase.
+    assert _find("src/a.inc", ["// (f6) is not a tag"]) == []
+
+
+def test_parenthesised_finding_tag_accepts_a_known_false_positive() -> None:
+    # "(F12)" also matches a keyboard-shortcut reference (pre-existing text at
+    # src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php:1007, grandfathered
+    # because it predates this diff-scoped gate). A NEWLY ADDED line with the
+    # same shape is still flagged -- accepted false positive, escape via
+    # `# narration-ok:` if it recurs.
+    assert len(_find("src/a.inc", ["// press (F12) to open dev tools"])) == 1
+
+
+def test_coverage_matrix_bracket_marker_is_flagged() -> None:
+    # [RED] token from commit 875e8a41; the full leaked line would also match the
+    # issue-finding-tag pattern (first match wins), leaving this branch unpinned.
+    assert len(_find("src/a.inc", ["// marked [RED] in the matrix"])) == 1
+    assert len(_find("src/a.inc", ["// marked [GREEN-KEEP] in the matrix"])) == 1
+    assert len(_find("src/a.inc", ["// marked [NEW] in the matrix"])) == 1
+
+
+def test_coverage_matrix_bracket_marker_near_miss_is_clean() -> None:
+    # The pattern requires the exact bracket-closed token, not a prefix match.
+    assert _find("src/a.inc", ["// content is [REDACTED] here"]) == []
+    assert _find("src/a.inc", ["// tracked under [NEW FEATURE] flag"]) == []
+
+
+def test_coverage_matrix_bracket_marker_is_case_sensitive() -> None:
+    assert _find("src/a.inc", ["// marked [red] in the matrix"]) == []
+
+
 # --------------------------------------------------------------------------- #
 # Scope — roots, extensions, self-exclusions, escape hatch
 # --------------------------------------------------------------------------- #
