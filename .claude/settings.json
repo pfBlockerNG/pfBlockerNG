@@ -2,9 +2,7 @@
   "effortLevel": "xhigh",
   "env": {
     "SHELL": "bash",
-    "MCP_TIMEOUT": "120000",
-    "TS_BASH_COMPACT": "0",
-    "TS_BASH_REWRITE": "1"
+    "MCP_TIMEOUT": "120000"
   },
   "enableAllProjectMcpServers": true,
   "statusLine": {
@@ -49,11 +47,6 @@
           },
           {
             "type": "command",
-            "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/scripts/ts-hook.sh\" bash_rewriter_hook",
-            "timeout": 2000
-          },
-          {
-            "type": "command",
             "command": "cd \"${CLAUDE_PROJECT_DIR:-.}\" && python3 scripts/check_retired_tokens.py --claude-hook || true"
           }
         ]
@@ -61,7 +54,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash|WebFetch|Read|Grep|mcp__playwright__.*|mcp__token-savior-recall__(search_codebase|get_function_source|get_class_source)",
+        "matcher": "Bash|WebFetch|Read|Grep|mcp__playwright__.*",
         "hooks": [
           {
             "type": "command",
@@ -120,7 +113,7 @@
           },
           {
             "type": "command",
-            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"DISCIPLINE (CLAUDE.md, every turn): (1) Evidence before conclusion — a claim without a run artifact is ASSUMED; probe environmental facts before writing them into code/comments/workflows. (2) Debugging: >=2 hypotheses + a discriminating probe BEFORE any fix edit. (3) Scope: enumerate EVERY sibling axis (v4/v6, ports, CE/Plus versions, callers, parse modes) from grep or the version matrix — never from memory; never hardcode env-derived values. (4) Done = executed verification with pasted output; red->green is run, never reasoned. (5) No self-exemption from MUST rules — deviation requires quoting the authorizing user message. (6) Delegation follows CLAUDE.md The delegation contract (brief/handoff/gate fields). (7) Output stays caveman-terse + ponytail-lazy; terse prose, FULL checks.\"}}'"
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"DISCIPLINE (CLAUDE.md, every turn): (1) Evidence before conclusion — a claim without a run artifact is ASSUMED; probe environmental facts before writing them into code/comments/workflows. (2) Debugging: >=2 hypotheses + a discriminating probe BEFORE any fix edit. (3) Scope: enumerate EVERY sibling axis (v4/v6, ports, CE/Plus versions, callers, parse modes) from grep or the version matrix — never from memory; never hardcode env-derived values. (4) Done = executed verification with pasted output; red->green is run, never reasoned. (5) No self-exemption from MUST rules — deviation requires quoting the authorizing user message. (6) Delegation follows CLAUDE.md The delegation contract (brief/handoff/gate fields). (7) Output stays caveman-terse + ponytail-lazy; terse prose, FULL checks. (8) CODE LOOKUP — prefer the token-savior-recall MCP tools (search_codebase, find_symbol, get_function_source, get_call_chain; load via ToolSearch) over raw Grep/Read whole-file dumps when locating a symbol or reading a single function/class body; fall back to Grep/Read only for files the index does not cover.\"}}'"
           }
         ]
       }

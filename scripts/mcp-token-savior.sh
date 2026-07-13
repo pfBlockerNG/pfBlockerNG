@@ -6,6 +6,9 @@
 #   WORKSPACE_ROOTS        comma-separated project roots (default: current directory)
 #   TOKEN_SAVIOR_PROFILE   server tool profile (default: optimized)
 #   TS_VENV                venv location (default: ${XDG_CACHE_HOME:-$HOME/.cache}/token-savior/venv)
+#   INCLUDE_PATTERNS       colon-separated index globs; the default below REPLACES the
+#                          server's built-in list, which lacks .php/.inc/.sh — this repo's
+#                          main languages (globs from the git ls-files extension histogram)
 set -eu
 
 venv="${TS_VENV:-${XDG_CACHE_HOME:-$HOME/.cache}/token-savior/venv}"
@@ -20,5 +23,6 @@ fi
 WORKSPACE_ROOTS="${WORKSPACE_ROOTS:-$PWD}"
 TOKEN_SAVIOR_CLIENT="${TOKEN_SAVIOR_CLIENT:-claude-code}"
 TOKEN_SAVIOR_PROFILE="${TOKEN_SAVIOR_PROFILE:-optimized}"
-export WORKSPACE_ROOTS TOKEN_SAVIOR_CLIENT TOKEN_SAVIOR_PROFILE
+INCLUDE_PATTERNS="${INCLUDE_PATTERNS:-**/*.py:**/*.php:**/*.inc:**/*.sh:**/*.js:**/*.md:**/*.txt:**/*.json:**/*.jsonc:**/*.yml:**/*.yaml:**/*.xml:**/*.conf:**/*.toml:**/*.neon}"
+export WORKSPACE_ROOTS TOKEN_SAVIOR_CLIENT TOKEN_SAVIOR_PROFILE INCLUDE_PATTERNS
 exec "$bin"
