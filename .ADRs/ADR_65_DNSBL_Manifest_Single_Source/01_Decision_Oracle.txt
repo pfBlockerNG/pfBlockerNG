@@ -1,0 +1,89 @@
+================================================================================
+PHASE 1 PROMPT -- Oracle: pin today's DNSBL decision + manifest==fallback equality (behaviour-preserving)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md   (read SS1 + SS2 "Semantics that MUST be preserved" first)
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch
+adr/65-dnsbl-manifest-single-source (off the latest devel; create if absent). Implement yourself
+with Read/Edit/Write/Bash -- never spawn sub-agents. Inline on the branch, one commit, push
+directly. Test mode: behaviour-preserving -- you author an ORACLE that pins existing behaviour and
+stays GREEN across this phase (no production code changes at all this phase).
+Blast-radius note for the gate: NONE. This phase adds tests only; no production file is edited, so
+no production behaviour can change when it lands alone.
+
+WHY THIS PHASE EXISTS
+Every later phase claims "net DNS decisions are unchanged" and "the query channel is decision-equal
+to a real query." Those claims need a falsification harness that exists BEFORE any code moves. This
+phase builds it: a golden oracle of what the production matcher decides + would log today, and proof
+that the manifest build is already decision-equal to the legacy .txt fallback (so Phase 5's removal
+of the fallback changes no decision).
+
+REQUIRED READING
+- .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md IN FULL -- especially SS1.1 (manifest is
+  decision-complete), SS1.4/SS1.5 (the log fields + the side-effect sinks), and SS2 "Semantics that
+  MUST be preserved" (items 1-3).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py -- evaluate_domain (~:6014), highest_block_band
+  (~:5817), get_details_dnsbl (~:2745, where the log line + counter/cache enqueues live), the
+  csv_line field order (~:2812), dnsbl_build_from_manifest (~:5327), _load_zone_and_data_dbs
+  (~:1037) and _load_zone_db/_load_data_db (~:938/:964).
+- tests/ -- find the existing DNSBL decision/build tests (e.g. tests touching build()/
+  dnsbl_build_from_manifest / evaluate_domain) and MIRROR their harness + fixture style; do not
+  invent a new pattern.
+- CLAUDE.md -- Test coverage mandate (esp. "brand-new code / oracle" and no coverage theater),
+  Python standards.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before implementation; the live tree
+and any prior RESULTS file override this prompt on any conflict -- verify each symbol/line before
+acting, and flag
+contradictions loudly in the handoff. If the live matcher disagrees with an ADR "fact", the CODE
+wins and you ESCALATE rather than encode the ADR's number as truth.
+
+ACTION PLAN (ordered -- oracle FIRST; this whole phase is the oracle)
+1. Build a representative corpus of (domain, qtype) inputs exercising EVERY decision arm: exact
+   dataDB hit, zoneDB suffix hit, feed regex, ABP block, ABP allow / whitelist override, TOP1M
+   whitelist, $important precedence, HSTS, homoglyph, and a clean NOT-BLOCKED name. Use inert
+   fixtures (RFC-5737/3849, uuid-style names) -- never RFC 6761 TLDs or HSTS-preload names except
+   where a case is specifically testing HSTS.
+2. Oracle A (decision): drive the production decision path over the corpus and snapshot, per input,
+   the verdict (blocked/allowed) + the exact fields a block would log
+   ({b_type, group, b_eval, feed, p_type}). This is the frozen expectation Phases 2/4/6 re-run.
+3. Oracle B (manifest==fallback): build the SAME feeds two ways -- via dnsbl_build_from_manifest and
+   via the legacy _load_zone_and_data_dbs loaders -- and assert the resulting dataDB/zoneDB/whiteDB
+   are decision-equal (same membership + payload for every key). This is the evidence Phase 5 relies
+   on. If they are NOT equal, STOP and ESCALATE -- that is a load-bearing ADR premise falsified.
+4. Name the tests for intent (what behaviour they pin), BDD-structured where non-trivial.
+
+CONSTRAINTS
+- Python: 4-space indent, from __future__ import annotations, type hints, no bare except; stdlib +
+  the suite's existing helpers only.
+- DO NOT edit any production file this phase. If pinning the oracle seems to require a production
+  change, STOP and ESCALATE -- it means an extraction belongs in a later phase.
+- No coverage theater: every assertion must be able to fail on a regression (Oracle B must actually
+  compare payloads, not just key presence).
+
+VERIFICATION (must all pass; only gates runnable here)
+- test mode: behaviour-preserving ORACLE -- the new tests are GREEN on today's untouched tree
+  (paste `python3 -m pytest <new test path>` output). There is no red run this phase (no behaviour
+  changes; the oracle pins current behaviour).
+- `python3 -m pytest` (whole suite green), `ruff check .`, `ruff format --check .`, `mypy tests/`.
+- `scripts/agent/run-gates.sh --diff origin/devel`.
+- diff-read: confirm the diff is tests-only (no src/ change).
+
+EXPECTED RESULT
+Two committed oracle test modules (decision snapshot + manifest==fallback equality), green on the
+untouched tree, ready to gate every later phase.
+
+COMMIT (single)
+    tests: pin DNSBL decision oracle + manifest==fallback equality (ADR-65 P1)
+Push directly to adr/65-dnsbl-manifest-single-source; open a PR only if the direct push is rejected.
+
+HANDOFF -- write .ADRs/ADR_65_DNSBL_Manifest_Single_Source/RESULTS/01_Results.txt (plain .txt) with
+the fixed fields (CLAUDE.md "THE HANDOFF"): Verdict; What changed (files + one-line why each +
+commit hash); Gates (exact commands + pasted output tails); the ORACLE-green proof (paste); the
+Oracle-B equality result (equal / ESCALATE with evidence); Coverage-matrix (every decision arm from
+ACTION PLAN step 1 ticked to a case, or a justified deferral); Deviations / judgment calls (or
+"none"); Carry-forward for Phase 2 (the oracle entry symbols + corpus location the query channel
+must match).

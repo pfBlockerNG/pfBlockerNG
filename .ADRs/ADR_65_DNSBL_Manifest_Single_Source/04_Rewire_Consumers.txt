@@ -1,0 +1,93 @@
+================================================================================
+PHASE 4 PROMPT -- Rewire consumers: webserver-hit -> query channel; gate off the alerts re-check (behaviour-CHANGING: D2 + D4)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md   (read SS1.3, SS2.2, the D2/D4 deltas)
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch
+adr/65-dnsbl-manifest-single-source. Implement yourself; never spawn sub-agents. Inline, one commit,
+push directly. Test mode: red->green -- author the delta assertions FIRST (they fail on today's grep
+behaviour), then make them pass by swapping to the query client + gating the re-check.
+Blast-radius note for the gate: behaviour-CHANGING, delta budget D2 + D4 ONLY. If this phase lands
+alone: (D4) webserver-hit attribution + its widget group counter come from the live matcher (query
+channel) instead of the .txt grep; (D2) Alerts/Reports/Unified DNSBL rows stop showing the
+"currently listed / feed-changed / TLD-carve-out" refinement and render the logged feed/group, and
+feed-name FILTERING matches the logged feed. Net DNS decisions, DNS-block counters, config keys, log
+schema, and the IP re-check are UNCHANGED -- any of those moving is a defect.
+
+WHY THIS PHASE EXISTS
+The .txt files can only die once nothing greps them. Two grep consumers remain (ADR SS1.3): the
+webserver-hit attribution (pfb_log_event) and the alerts render-time re-check. This phase moves the
+first onto the authoritative query channel and gates the second off (the logs are self-sufficient).
+
+REQUIRED READING
+- FIRST, read RESULTS/03_Results.txt (the client signature + NULL-on-miss contract) AND
+  RESULTS/01_Results.txt (the decision oracle). If either is missing, STOP and report.
+- .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md -- SS1.3 (the consumers), SS1.4 (the log line is
+  self-sufficient: group@6, feed@8), SS2.2 (the rewire table), the D2 + D4 delta rows, and the
+  Semantics that MUST be preserved (5, 6, 8).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc -- pfb_log_event (~:14803), its grep via
+  pfb_dnsbl_parse('daemon', ...) (~:14819) and the widget counter UPDATE (~:14838); pfb_dnsbl_parse
+  (~:14225) and pfb_dnsbl_parse_compute (~:14254) -- KEEP these defined, just stop the alerts path
+  calling them; the batched prefetch pfb_dnsbl_prefetch (~:14112).
+- src/usr/local/www/pfblockerng/pfblockerng_alerts.php -- convert_dnsbl_log (~:2260), the re-check
+  block (~:2328-2369, gated !$isPython/!$isUpstream/!$isWhitelist_found), the unified dispatch
+  switch (~:4390), dnsbl_whitelist_type (~:2318, INDEPENDENT of the grep -- keep it), the prefetch
+  setup (~:4446/:4494).
+- docs/misc/alerts-reports-pipeline.md -- the two-phase model being collapsed to one.
+- tests/php/ + tests/smoke/ui/ -- the PHPUnit + Tier-A ui_render harnesses to mirror.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims predate implementation; the prior RESULTS files and the live tree
+override this prompt on any conflict -- verify each site before acting and flag contradictions in the
+handoff. If a claimed grep call site is already gone, say so; do not fabricate a change.
+
+ACTION PLAN (ordered -- red assertions FIRST)
+1. Author the RED tests first: (a) a PHPUnit test that drives pfb_log_event and asserts the
+   dnsbl.log line + widget counter carry the QUERY client's group/feed (fails today: it carries the
+   grep's), plus `Unknown` when the client returns NULL; (b) a render test asserting a DNSBL alerts
+   row shows the LOGGED feed/group with the re-check gated off. Execute -> RED (paste, record
+   git hash-object).
+2. pfb_log_event: replace pfb_dnsbl_parse('daemon', ...) with pfb_dnsbl_query(); use the returned
+   group/feed for the log line and the counter UPDATE; NULL/blocked=false -> 'Unknown'. Do NOT
+   change the counter mechanism, only its group source (Semantic 5).
+3. convert_dnsbl_log: stop calling pfb_dnsbl_parse('alerts', ...) for DNSBL rows in BOTH the
+   non-unified and 'Unified' paths; render the logged fields directly. Remove the now-dead DNSBL
+   prefetch wiring. KEEP dnsbl_whitelist_type (whitelist display is independent). KEEP the IP
+   re-check untouched.
+4. Re-run the tests -> GREEN, unchanged. Re-run the Phase-1 oracle: net decisions must be identical.
+
+CONSTRAINTS
+- Delta budget D2 + D4 ONLY. pfb_dnsbl_parse stays DEFINED (daemon-mode + non-python/main still
+  reference it) -- gate the alerts call, do not delete the function.
+- PHP 8.3, tabs, TRUE/FALSE, PfbConfig, PFBL-01; no die()/exit().
+- Do NOT touch convert_ip_log or any IP path (Semantic 8).
+
+VERIFICATION (executed -- paste output)
+- red->green: the delta assertions RED on today's code (paste + git hash-object at red time), GREEN
+  after the swap (paste, unchanged).
+- Phase-1 decision oracle re-run: GREEN (net decisions unchanged) -- paste.
+- `php -l` each touched file; `vendor/bin/phpunit`; `composer phpstan`;
+  `composer phpcs -- --standard=phpcs.xml.dist src/`.
+- Tier-A `ui_render` (SMOKE_ADMIN_PASSWORD set): Alerts, Reports, and Unified pages 200 with their
+  markers, no new php_error.log line, and a DNSBL row shows the logged feed/group. Command:
+  `python3 -m pytest tests/smoke/ui -m ui_render --override-ini="addopts="` (DEFERRED to a leased
+  box if not runnable here -- record the exact dispatch command, never claim it passed unrun).
+- `scripts/agent/run-gates.sh --diff origin/devel`.
+- diff-read: pfb_dnsbl_parse still defined; IP path untouched; no counter/log-schema change.
+
+EXPECTED RESULT
+Webserver-hit attribution comes from the live matcher; the alerts/unified DNSBL rows render from
+their own log lines; no .txt grep runs for DNSBL rendering or hit-attribution; decisions unchanged.
+
+COMMIT (single)
+    pfblockerng: attribute DNSBL hits via the query channel; drop the alerts grep re-check (ADR-65 P4)
+Push directly to adr/65-dnsbl-manifest-single-source; open a PR only if the direct push is rejected.
+
+HANDOFF -- write .ADRs/ADR_65_DNSBL_Manifest_Single_Source/RESULTS/04_Results.txt with the fixed
+fields: Verdict; What changed (files + one-line why + commit hash); Gates (commands + pasted tails);
+the RED->GREEN proof (delta assertions failing before, passing after, with red-time git hash-object)
+AND the Phase-1 oracle re-run (net decisions unchanged); the Tier-A ui_render result (or its
+DEFERRED dispatch command); Coverage-matrix (D2 + D4 ticked; IP path + pfb_dnsbl_parse-defined
+confirmed untouched); Deviations / judgment calls (or "none"); Carry-forward for Phase 5.

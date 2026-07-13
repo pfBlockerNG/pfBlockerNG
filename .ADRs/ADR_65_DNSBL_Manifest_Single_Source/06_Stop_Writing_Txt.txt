@@ -1,0 +1,94 @@
+================================================================================
+PHASE 6 PROMPT -- Stop writing py_data/py_zone; move the health check onto the manifest (behaviour-CHANGING: D1; dissolves #1244)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md   (read SS1.2, SS1.3, delta D1)
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch
+adr/65-dnsbl-manifest-single-source. Implement yourself; never spawn sub-agents. Inline, one commit,
+push directly. Test mode: red->green -- author a test that the .txt files are NO LONGER written after
+a DNSBL run (and that the health check keys on the manifest, not py_zone/py_data), red on today's
+code, green after.
+Blast-radius note for the gate: behaviour-CHANGING, delta budget D1 ONLY. If this phase lands alone:
+py_data.txt/py_zone.txt are no longer written; tld_analysis's .txt classification + finalize
+rename() loop and pfb_dnsbl_py_swap are removed; the health check ($dnsbl_missing) keys on manifest
+presence/generation instead of .txt presence. Net DNS decisions (produced by the manifest build) are
+UNCHANGED; tld_analysis's alias/stat bookkeeping is retained. Dissolves #1244 (no unchecked rename,
+no false "completed").
+
+WHY THIS PHASE EXISTS
+By Phase 5 nothing READS the .txt for the matcher, and by Phase 4 nothing greps them for reports or
+hit-attribution. This phase removes the last thing keeping them alive: the WRITERS and the health
+check that watches their presence. The manifest already carries the classification (SS1.1), so the
+.txt files are pure dead weight -- and their unchecked writes are #1244.
+
+REQUIRED READING
+- FIRST, read RESULTS/05_Results.txt AND RESULTS/04_Results.txt AND RESULTS/01_Results.txt. If any is
+  missing, STOP and report.
+- .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md -- SS1.1 (manifest decision-complete), SS1.2 (the
+  two .txt writers + the #1244/#1245 sites), SS2.2 (health check onto the manifest), delta D1,
+  Semantics 1 + 7.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc -- tld_analysis (~:8352): the .txt classification +
+  the finalize rename() loop (~:8585, #1244) go; its tld_blacklist / tld_update / DNSBL_TLD alias
+  bookkeeping STAYS (grep for tld_update / dnsbl_alias_update within it -- keep those). pfb_dnsbl_py_
+  swap (~:1955) is removed. The #546 no-feeds path (~:17801-17811) and the disable path (~:17815)
+  that unlink/write the .txt. The health check (~:16548-16607): $dnsbl_missing (~:16582 keys on
+  py_zone/py_data presence) and its rebuild trigger (~:16607). The manifest + its ADR-10 generation
+  (pfb_py_sources / pfb_py_reload) as the new health signal.
+- CLAUDE.md -- PHP standards, the delegation contract.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims predate implementation; the prior RESULTS files and the live tree
+override this prompt on any conflict -- verify each site before acting and flag contradictions in the
+handoff. If tld_analysis's structure differs from this prompt (Phase 5 or an out-of-band change may
+have touched it), the live code wins -- do NOT remove bookkeeping you cannot prove is .txt I/O.
+
+ACTION PLAN (ordered -- red assertion FIRST)
+1. RED test: after a DNSBL run (drive the relevant path off-appliance where a driver exists; else a
+   focused unit around the writer), assert py_data.txt/py_zone.txt are NOT written and that
+   $dnsbl_missing keys on the manifest. Red on today's code (paste, git hash-object).
+2. Remove the .txt writers: tld_analysis's classification-to-.txt + the finalize rename() loop
+   (#1244); pfb_dnsbl_py_swap; the #546/disable-path .txt writes/unlinks. RETAIN tld_analysis's
+   non-.txt alias/stat bookkeeping (tld_update, DNSBL_TLD blacklist alias, dnsbl_alias_update).
+3. Health check: $dnsbl_missing keys on manifest presence + its ADR-10 generation, not
+   py_zone/py_data on disk; keep the rebuild trigger (~:16607) semantics.
+4. GREEN: the .txt files are gone; decisions (manifest-built) unchanged (Phase-1 oracle).
+
+CONSTRAINTS
+- Delta budget D1 ONLY. The manifest build must still produce identical dataDB/zoneDB (Semantic 1);
+  do NOT touch the manifest writer's classification inputs (tld_master/blacklist/exclusion).
+- Retain every tld_analysis side effect that is NOT .txt I/O (alias updates, stats). Removing one is
+  a defect.
+- No stored config key / alias name / page filename / log schema change (Semantic 7).
+- PHP 8.3, tabs, TRUE/FALSE, PfbConfig, PFBL-01; no die()/exit().
+
+VERIFICATION (executed -- paste output)
+- red->green: the ".txt no longer written / health on manifest" test RED before (paste + git
+  hash-object), GREEN after (paste).
+- Phase-1 decision oracle: GREEN, net decisions unchanged (paste).
+- Assert tld_analysis's alias/stat bookkeeping still runs (a test that the DNSBL_TLD alias / tld
+  counts are still updated) -- paste.
+- `php -l` each touched file; `vendor/bin/phpunit`; `composer phpstan`;
+  `composer phpcs -- --standard=phpcs.xml.dist src/`; `python3 -m pytest` if any .py touched.
+- DEFERRED live-VM (no off-appliance driver for the full sync loop -- record, never claim unrun):
+  `scripts/local-smoke.sh --marker smoke --filter dnsbl` proving a DNSBL run blocks correctly with
+  NO py_data.txt/py_zone.txt on disk.
+- `scripts/agent/run-gates.sh --diff origin/devel`.
+- diff-read: no py_data.txt/py_zone.txt write remains; tld_analysis bookkeeping intact; health check
+  reads the manifest.
+
+EXPECTED RESULT
+The py_data/py_zone interchange files are never written; the health check watches the manifest; the
+manifest is the sole DNSBL classification producer; #1244's unchecked rename is gone.
+
+COMMIT (single)
+    pfblockerng: stop writing py_data/py_zone; health-check on the manifest (ADR-65 P6)
+Push directly to adr/65-dnsbl-manifest-single-source; open a PR only if the direct push is rejected.
+
+HANDOFF -- write .ADRs/ADR_65_DNSBL_Manifest_Single_Source/RESULTS/06_Results.txt with the fixed
+fields: Verdict; What changed (files + one-line why + commit hash); Gates (commands + pasted tails);
+the RED->GREEN proof (.txt-gone before/after, red-time git hash-object) AND the Phase-1 oracle
+(decisions unchanged) AND the tld_analysis-bookkeeping-intact proof; Coverage-matrix (D1 ticked; every
+retained tld_analysis side effect listed); Deviations / judgment calls (or "none"); Carry-forward for
+Phase 7.

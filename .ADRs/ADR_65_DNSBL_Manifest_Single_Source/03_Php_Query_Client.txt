@@ -1,0 +1,81 @@
+================================================================================
+PHASE 3 PROMPT -- The PHP query-channel client in pfblockerng_extra.inc (new; PRODUCTION-DORMANT)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md   (read SS2.1 first)
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch
+adr/65-dnsbl-manifest-single-source. Implement yourself; never spawn sub-agents. Inline, one commit,
+push directly. Test mode: brand-new code (a client with no pre-existing behaviour) pinned by PHPUnit
+against a faked on-disk channel; not a red->green defect fix.
+Blast-radius note for the gate: PRODUCTION-DORMANT. The client function is defined but nothing calls
+it yet (the first caller is Phase 4). If this phase lands alone, no page or daemon behaviour
+changes.
+
+WHY THIS PHASE EXISTS
+Phase 4 rewires the webserver-hit attribution off the .txt grep onto the query channel. It needs a
+PHP client that writes a request, waits (bounded) for the reply, and returns the verdict -- built
+and tested on its own first, so Phase 4 is a call-site swap, not a channel bring-up.
+
+REQUIRED READING
+- FIRST, read the prior handoff .ADRs/ADR_65_DNSBL_Manifest_Single_Source/RESULTS/02_Results.txt --
+  it names the request/reply file paths + JSON schema this client must speak. If missing, Phase 2 is
+  not complete; STOP and report.
+- .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md -- SS2.1 (request/reply shape, transport, perms).
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc -- an atomic-write helper to reuse
+  (pfb_unbound_py_atomic_write and friends) and the bounded-wait/applied-marker pattern PHP already
+  uses for the reload path; the PfbConfig gateway idioms.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc -- pfb_filter usage + PFBL-01 RequirePfbFilter scope
+  (validate the domain input before it rides into the request file).
+- tests/php/ -- README + a sibling PHPUnit test that drives a file-backed helper; MIRROR it. The
+  bootstrap's shims/doubles pattern (tests/php/pfsense_doubles.php).
+- CLAUDE.md -- PHP standards, "No orphaned waits / bounded waits", the delegation contract.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims here predate implementation; the prior RESULTS file and the live
+tree override this prompt on any conflict -- verify before acting and flag contradictions in the
+handoff. If the reply schema in RESULTS/02 differs from this prompt, RESULTS/02 wins.
+
+ACTION PLAN (ordered)
+1. Add pfb_dnsbl_query(string $domain, string $qtype): ?array -- validate the domain (pfb_filter,
+   the DNSBL domain class), write the request atomically with a unique `id`, bounded-wait for the
+   reply file matching that `id`, parse it, return the verdict array or NULL on timeout / malformed
+   reply / id mismatch.
+2. The bounded wait carries a hard deadline AND a poll cap (CLAUDE.md "No orphaned waits"); a
+   timeout returns NULL loudly-logged, never hangs, never fabricates a verdict.
+3. Clean up the request/reply files for the `id` after reading (no leak).
+
+CONSTRAINTS
+- PHP 8.3, tabs, TRUE/FALSE, no die()/exit() in library code; PfbConfig for any registered key;
+  PFBL-01 validate the domain at the choke point before it enters the request.
+- The reply PARSER is a hostile-input surface -- a truncated/garbage/oversized/foreign reply returns
+  NULL, never a fatal or a wrong verdict.
+- Bounded wait only -- no unbounded loop; the timeout is a deadlock guard that returns NULL.
+
+VERIFICATION (executed -- paste output)
+- test mode: brand-new-code PHPUnit against a FAKED channel -- a test harness that plays the Python
+  side (writes a canned reply for a request `id`) and asserts the client returns the parsed verdict;
+  plus the timeout path returns NULL. (No red-run against the void -- the only red is a missing
+  symbol; the real assertions are round-trip + timeout + hostile-reply handling.)
+- HOSTILE-INPUT rows for the reply parser (REQUIRED test data): no reply (timeout -> NULL);
+  truncated JSON; non-JSON bytes; `id` mismatch; blocked=false (empty attribution); oversized reply;
+  a reply with a missing field. Each -> NULL or the correct empty verdict, never a fatal.
+- `php -l` on each touched file; `vendor/bin/phpunit`; `composer phpstan`;
+  `composer phpcs -- --standard=phpcs.xml.dist src/`.
+- `scripts/agent/run-gates.sh --diff origin/devel`.
+- diff-read: confirm the bounded wait cannot spin unbounded and cleans its files.
+
+EXPECTED RESULT
+A tested, dormant PHP client that round-trips one domain through the query channel and degrades to
+NULL safely, ready for Phase 4 to call.
+
+COMMIT (single)
+    pfblockerng: add the PHP client for the DNSBL query channel (ADR-65 P3)
+Push directly to adr/65-dnsbl-manifest-single-source; open a PR only if the direct push is rejected.
+
+HANDOFF -- write .ADRs/ADR_65_DNSBL_Manifest_Single_Source/RESULTS/03_Results.txt with the fixed
+fields: Verdict; What changed (files + one-line why + commit hash); Gates (commands + pasted tails);
+the round-trip + timeout proof (paste); the hostile-reply row table with results; Coverage-matrix
+(every reply row handled); Deviations / judgment calls (or "none"); Carry-forward for Phase 4 (the
+client signature + NULL-on-miss contract).
