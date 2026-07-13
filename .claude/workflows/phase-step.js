@@ -153,11 +153,11 @@ const redHashArgs = (handoff.red_green || [])
 const redProofText = redProof
   ? `RED PROOF (re-execute yourself, never accept the handoff's claim).
 
-FIRST, BASELINE SANITY — the script trusts whatever ref you hand it, so earn that trust before you run it: the handoff's base_sha (${baseSha}) must be a real commit, an ANCESTOR of HEAD, and NOT equal to HEAD — else the implementer captured it after editing and the red run would prove nothing. Check: git -C ${worktree} merge-base --is-ancestor ${baseSha} HEAD && [ "$(git -C ${worktree} rev-parse ${baseSha})" != "$(git -C ${worktree} rev-parse HEAD)" ]. Either check failing = FAIL this item; do not substitute HEAD~1 to make it pass.
+FIRST, BASELINE SANITY — the script trusts whatever ref you hand it, so earn that trust before you run it: the handoff's base_sha (${baseSha}) must be a real commit, an ANCESTOR of HEAD, and NOT equal to HEAD — else the implementer captured it after editing and the red run would prove nothing. Check: git -C ${shq(worktree)} merge-base --is-ancestor ${baseSha} HEAD && [ "$(git -C ${shq(worktree)} rev-parse ${baseSha})" != "$(git -C ${shq(worktree)} rev-parse HEAD)" ]. Either check failing = FAIL this item; do not substitute HEAD~1 to make it pass.
 
 THEN run the single implementation — do NOT hand-roll the checkout dance:
 
-  sh scripts/agent/verify-red-proof.sh --worktree ${worktree} --test-cmd ${shq(redProof.testCmd)} ${redProof.srcPaths.map(p => `--src ${safe(p, /^[A-Za-z0-9._/-]+$/, 'redProof.srcPaths')}`).join(' ')} ${redHashArgs} --base-ref ${baseSha}
+  sh scripts/agent/verify-red-proof.sh --worktree ${shq(worktree)} --test-cmd ${shq(redProof.testCmd)} ${redProof.srcPaths.map(p => `--src ${safe(p, /^[A-Za-z0-9._/-]+$/, 'redProof.srcPaths')}`).join(' ')} ${redHashArgs} --base-ref ${baseSha}
 
 It reverts the src paths to --base-ref (tests stay) and requires FAIL, restores HEAD and requires PASS, and enforces the freeze (git hash-object of each committed reproduction test == the handoff's red-time hash — a test edited between red and green, or with no red-time hash, proves nothing). Record its FREEZE-OK / RED-OK / GREEN-OK / VERDICT lines as evidence; a non-PASS verdict fails this item.`
   : 'This step is declared behaviour-preserving: confirm the oracle/pinned tests exist and stayed green; record which.'
