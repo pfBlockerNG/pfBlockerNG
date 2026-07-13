@@ -13,6 +13,61 @@ use PHPUnit\Framework\TestCase;
  * Brand-new function (no prior behaviour to be wrong) -- tests assert real
  * behaviour, not mere existence.
  */
+/**
+ * Seekable stream whose every read returns '' -- the fread()-after-fseek()
+ * short-read shape (a racing truncation, a device path). Records fopen()
+ * modes so a test can assert no append-mode reopen happens. Single-consumer,
+ * so it lives in this file (unlike the shared PfbTruncatedReadStreamWrapper).
+ */
+final class PfbEmptyReadSeekableStream
+{
+	/** @var resource|null */
+	public $context;
+	/** @var list<string> */
+	public static array $openModes = [];
+
+	public function stream_open(string $path, string $mode, int $options, ?string &$openedPath): bool
+	{
+		self::$openModes[] = $mode;
+		return TRUE;
+	}
+
+	public function stream_read(int $count): string
+	{
+		return '';
+	}
+
+	public function stream_write(string $data): int
+	{
+		return strlen($data);
+	}
+
+	public function stream_seek(int $offset, int $whence = SEEK_SET): bool
+	{
+		return TRUE;
+	}
+
+	public function stream_tell(): int
+	{
+		return 0;
+	}
+
+	public function stream_eof(): bool
+	{
+		return TRUE;
+	}
+
+	/** @return array<string,int> */
+	public function stream_stat(): array
+	{
+		return [];
+	}
+
+	public function stream_close(): void
+	{
+	}
+}
+
 #[CoversFunction('pfb_ensure_trailing_newline')]
 final class EnsureTrailingNewlineTest extends TestCase
 {
@@ -82,5 +137,27 @@ final class EnsureTrailingNewlineTest extends TestCase
 		file_put_contents($this->tmpFile, "\n");
 		$this->assertFalse(pfb_ensure_trailing_newline($this->tmpFile));
 		$this->assertSame("\n", file_get_contents($this->tmpFile));
+	}
+
+	/** A short/failed last-byte read (fread '' after a successful open+seek --
+	 *  probed via the wrapper above) cannot tell terminated from not: the file
+	 *  must be left alone and never reopened for append. */
+	public function testShortReadLeavesFileAloneAndReportsNoChange(): void
+	{
+		stream_wrapper_register('pfbemptyread', PfbEmptyReadSeekableStream::class);
+		try {
+			PfbEmptyReadSeekableStream::$openModes = [];
+			$this->assertFalse(
+				pfb_ensure_trailing_newline('pfbemptyread://feed'),
+				'a failed/short read must report no change -- a spurious append here would corrupt a stored feed'
+			);
+			$this->assertSame(
+				['rb'],
+				PfbEmptyReadSeekableStream::$openModes,
+				'the file must never be reopened for append after a failed/short last-byte read'
+			);
+		} finally {
+			stream_wrapper_unregister('pfbemptyread');
+		}
 	}
 }
