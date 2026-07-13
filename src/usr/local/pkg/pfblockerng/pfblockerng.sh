@@ -1011,9 +1011,7 @@ pfb_recompute() {
 	# prior pass, or a window-awk failure mid-write) BEFORE this pass runs -- else
 	# it can survive to be wrongly promoted by a LATER pass that never actually
 	# recomputed reputation for that alias.
-	while IFS=' ' read -r rec_alias _; do
-		rm -f "${pfbmatchgen}pfB_Match_Rep_${rec_alias}.txt.new"
-	done < "${rec_priority}"
+	pfb_recompute_clean_rep_new
 	rm -f "${pfbmatchgen}${rec_matchexemptfile}.new"
 
 	rec_do_rep=0
@@ -1097,6 +1095,14 @@ pfb_recompute_clean_new() {
 		rm -f "${pfbdeny}${rec_alias}.txt.new"
 	done < "${rec_priority}"
 	rm -f "${rec_masterfile_new}" "${rec_mastercat_new}" "${rec_countsfile_new}"
+}
+
+# Same cleanup for the per-alias reputation artifacts' .new siblings (dMax emits
+# them into matchgendir); the consolidated exempt file's .new stays caller-owned.
+pfb_recompute_clean_rep_new() {
+	while IFS=' ' read -r rec_alias _; do
+		rm -f "${pfbmatchgen}pfB_Match_Rep_${rec_alias}.txt.new"
+	done < "${rec_priority}"
 }
 
 # Offender detect + classify into rec_actionmap ("<prefix> <action>" rows).
@@ -1251,9 +1257,7 @@ pfb_recompute_rep_subset() {
 	# pfB_Match_Rep_<alias>.txt is a dMax-owned artifact; start every candidate
 	# fresh so the window awk's append-only writes never carry stale content.
 	if [ "${rec_repmode}" = 'dmax' ]; then
-		while IFS=' ' read -r rec_alias _; do
-			rm -f "${pfbmatchgen}pfB_Match_Rep_${rec_alias}.txt.new"
-		done < "${rec_priority}"
+		pfb_recompute_clean_rep_new
 	fi
 
 	# Window pass over the diverted subset: block-mode offenders collapse to
@@ -1348,9 +1352,7 @@ pfb_recompute_rep_subset() {
 		echo "${log}" | tee -a "${errorlog}"
 		pfb_recompute_clean_new
 		if [ "${rec_repmode}" = 'dmax' ]; then
-			while IFS=' ' read -r rec_alias _; do
-				rm -f "${pfbmatchgen}pfB_Match_Rep_${rec_alias}.txt.new"
-			done < "${rec_priority}"
+			pfb_recompute_clean_rep_new
 		fi
 		return 1
 	fi
@@ -1370,9 +1372,7 @@ pfb_recompute_rep_subset() {
 			echo "${log}" | tee -a "${errorlog}"
 			pfb_recompute_clean_new
 			if [ "${rec_repmode}" = 'dmax' ]; then
-				while IFS=' ' read -r rec_alias _; do
-					rm -f "${pfbmatchgen}pfB_Match_Rep_${rec_alias}.txt.new"
-				done < "${rec_priority}"
+				pfb_recompute_clean_rep_new
 			fi
 			return 1
 		fi
