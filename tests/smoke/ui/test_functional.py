@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from .. import helpers
+from .render_oracle import PhpErrorLogGuard
 from .webui import looks_like_login_page
 
 if TYPE_CHECKING:
@@ -680,6 +681,107 @@ def test_general_skipfeed_bogus_scalar_resets_to_default(
         assert got == "0", f"bogus skipfeed should reset to default 0, got {got!r}"
     finally:
         webui.post(GENERAL_PAGE, {"skipfeed": original or "0"}, timeout=SAVE_TIMEOUT)
+
+
+def test_general_log_trim_margin_pct_valid_and_bogus_coerces_to_default(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """issue #1109: ``pfb_log_trim_margin_pct`` persists a valid percent, coerces garbage to 0.
+
+    Save loop mirrors ``log_max_days_*``'s ``is_array()``/``!ctype_digit`` guard (a plain
+    number input, not a select -- no ``array_key_exists``). BEFORE: the registered default
+    is '0' on config/0, asserted first (transition-test rule). VALID '50' stores verbatim,
+    restored (asserted), THEN bogus 'abc' fails ``ctype_digit`` -> coerced to default '0'
+    (the save still SUCCEEDS -- soft coerce, not an abort).
+    """
+    vm = smoke_vm
+    cfg = "installedpackages/pfblockerng/config/0/pfb_log_trim_margin_pct"
+    original = helpers.config_get(vm, cfg)
+    try:
+        assert (original or "0") == "0", (
+            f"pfb_log_trim_margin_pct already non-default before the save (original={original!r})"
+        )
+        assert _post_and_confirm_general(webui, vm, {"pfb_log_trim_margin_pct": "50"}, cfg) == "50"
+        assert _post_and_confirm_general(webui, vm, {"pfb_log_trim_margin_pct": original or "0"}, cfg) == (
+            original or "0"
+        )
+        got = _post_and_confirm_general(webui, vm, {"pfb_log_trim_margin_pct": "abc"}, cfg)
+        assert got == "0", f"bogus pfb_log_trim_margin_pct should coerce to default 0, got {got!r}"
+    finally:
+        webui.post(GENERAL_PAGE, {"pfb_log_trim_margin_pct": original or "0"}, timeout=SAVE_TIMEOUT)
+
+
+@pytest.mark.parametrize("bogus", ["-5", "1.5", "  50 ", ""])
+def test_general_log_trim_margin_pct_hostile_digit_guard_coerces_to_default(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    bogus: str,
+) -> None:
+    """issue #1109: every ``ctype_digit``-rejected shape (sign, decimal, padding, empty)
+    coerces to the default '0' -- same guard, same outcome as the 'abc' case above.
+    """
+    vm = smoke_vm
+    cfg = "installedpackages/pfblockerng/config/0/pfb_log_trim_margin_pct"
+    original = helpers.config_get(vm, cfg)
+    try:
+        got = _post_and_confirm_general(webui, vm, {"pfb_log_trim_margin_pct": bogus}, cfg)
+        assert got == "0", f"bogus pfb_log_trim_margin_pct={bogus!r} should coerce to default 0, got {got!r}"
+    finally:
+        webui.post(GENERAL_PAGE, {"pfb_log_trim_margin_pct": original or "0"}, timeout=SAVE_TIMEOUT)
+
+
+def test_general_log_trim_margin_pct_oversized_value_saves_without_crash(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """issue #1109: an oversized digit string passes ``ctype_digit`` and stores verbatim.
+
+    The UI has no upper-bound rejection (by design -- the backend parser
+    ``pfb_log_trim_margin_pct()`` clamps to 1000 when it is READ, not at save time; already
+    pinned by ``LogTrimMarginPctTest``). This only proves the save/re-render round-trip
+    itself never crashes on an oversized value.
+    """
+    vm = smoke_vm
+    cfg = "installedpackages/pfblockerng/config/0/pfb_log_trim_margin_pct"
+    original = helpers.config_get(vm, cfg)
+    try:
+        got = _post_and_confirm_general(webui, vm, {"pfb_log_trim_margin_pct": "999999999"}, cfg)
+        assert got == "999999999", f"oversized pfb_log_trim_margin_pct should store verbatim, got {got!r}"
+    finally:
+        webui.post(GENERAL_PAGE, {"pfb_log_trim_margin_pct": original or "0"}, timeout=SAVE_TIMEOUT)
+
+
+def test_general_log_trim_margin_pct_save_preserves_log_max_days_sibling(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """The margin save must not disturb a sibling ``log_max_days_*`` value in the same POST
+    (persist-loop ordering, #1109), and raises no new ``php_error.log`` line across the POST.
+    """
+    vm = smoke_vm
+    margin_cfg = "installedpackages/pfblockerng/config/0/pfb_log_trim_margin_pct"
+    days_cfg = "installedpackages/pfblockerng/config/0/log_max_days_log"
+    margin_original = helpers.config_get(vm, margin_cfg)
+    days_original = helpers.config_get(vm, days_cfg)
+    guard = PhpErrorLogGuard(vm)
+    guard.snapshot()
+    try:
+        resp = webui.post(
+            GENERAL_PAGE,
+            {"pfb_log_trim_margin_pct": "25", "log_max_days_log": "7"},
+            timeout=SAVE_TIMEOUT,
+        )
+        assert not looks_like_login_page(resp.text), "POST to General page bounced to the login form"
+        assert helpers.config_get(vm, margin_cfg) == "25"
+        assert helpers.config_get(vm, days_cfg) == "7", "log_max_days_log sibling was disturbed by the margin save"
+        guard.assert_no_growth()
+    finally:
+        webui.post(
+            GENERAL_PAGE,
+            {"pfb_log_trim_margin_pct": margin_original or "0", "log_max_days_log": days_original or "0"},
+            timeout=SAVE_TIMEOUT,
+        )
 
 
 def _post_and_confirm_general(

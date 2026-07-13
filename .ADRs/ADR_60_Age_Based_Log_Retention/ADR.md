@@ -572,3 +572,38 @@ left as written for the historical record; **this section is the authoritative c
 
 Related, same window: the array-path short-write gap the stream sibling already guarded
 (#1053) and the Log Settings absent-POST-key warning (#1056).
+
+**2026-07-13 — issue #1109: a hysteresis margin on both trim caps.**
+
+1. **`pfb_log_trim_margin_pct` — a single global percent (0-1000, default `'0'`), applying
+   uniformly to both caps.** High-water **trigger**, low-water **cut**: the margin only
+   delays *when* a trim fires (the file is left alone until its line count or oldest-line
+   age exceeds `cap × (1 + margin/100)`); once it fires, the trim still cuts back to the
+   **exact** cap, exactly as before. `margin=0` reproduces today's trigger point verbatim.
+   Deliberately **not** per-log-type and **not** per-cap-unit: one field, both caps.
+2. **Why a percentage, not an absolute count.** One global knob has to widen both a *line*
+   count (Max lines) and a *days* count (Max days) with the same value; a percentage is the
+   only unit expressible against either. An absolute offset (`+N lines` / `+N days`) would
+   need two separate fields, reintroducing the per-cap-unit split item 1 rejects.
+3. **The `margin=0` nuance — a byte-identical CONTENT change in I/O behaviour, not output.**
+   §2.2's original line high-water was implicit at "any excess" per tick; `pfb_log_trim_needed()`
+   now checks line count strictly `>` the cap (matching the age arm's existing strict `>`), so
+   a file already sitting exactly at its cap is no longer rewritten every idle tick. The
+   trimmed log's CONTENT is unchanged byte-for-byte in either case; only a redundant no-op
+   full-file rewrite (and its mtime bump) is elided. Nothing in this codebase keys on a log
+   file's mtime — ADR-42's content hashing covers feed sidecars, not logs.
+4. **`pfb_log_age_nolimit_pass_needed()` renamed to `pfb_log_age_trim_needed()`.** #1052's
+   probe (2026-07-09 item 3 above) was framed `nolimit`-only; the margin makes it the general age-trim
+   decision for every type, `nolimit` or capped. **`pfb_log_trim_needed()` is now the single
+   guard called from both `pfb_log_mgmt()` branches**, replacing the two duplicated #1052
+   skip lines with one call each; `margin=0` on the age arm is exactly #1052's original case.
+5. **Read cost is bounded and asymmetric with the write it replaces.** The line high-water
+   probe reads the whole file once per tick to decide; that is a read, not a write. Flash/SSD
+   wear is write-dominated, so a per-tick full-file read traded for an elided per-tick
+   full-file write is the intended trade, not an oversight.
+6. **Rejected alternatives (do not re-litigate).** In-place head eviction (`memmove` +
+   `ftruncate` on the line cap) was rejected: it opens a torn-write window §1.5 doesn't cover
+   today and is a materially different write path from the existing tail-and-replace trim.
+   A calendar-boundary or marker-file scheme (e.g. "only trim once per UTC day") was rejected
+   because it reintroduces exactly the mtime/marker-file fragility §1.1 and §2.1 deleted this
+   ADR to get away from, plus ADR-30's clock-skew sawtooth (§1.2).

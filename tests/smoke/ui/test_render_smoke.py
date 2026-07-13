@@ -752,6 +752,42 @@ def test_general_page_renders_ip_parse_error_log_row(webui: WebUI, php_error_log
     )
 
 
+def test_general_page_renders_log_trim_margin_field(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
+    """issue #1109 Step 2: the General page gains a single global ``pfb_log_trim_margin_pct``
+    hysteresis-margin field, section-level (outside the per-log-type loop).
+
+    Given the General page,
+    When GET,
+    Then the new field renders with its help copy, its row label is NOT hidden by the
+    desktop ``label.form-label { display: none; }`` media query (its label is the
+    Form_Group's own ``control-label``, not a per-control ``label-start``), and the
+    pre-existing 3-needle intro wording survives this edit unchanged.
+
+    Fail-before / pass-after: none of these markers exist in the pre-#1109 markup.
+    """
+    resp = webui.get(_GENERAL_PAGE)
+    body = resp.text
+    result = evaluate_render(_GENERAL_PAGE, resp.status_code, body, ("General Settings",))
+    assert result.ok, f"General page render oracle failed: {result.detail}"
+
+    assert 'name="pfb_log_trim_margin_pct"' in body, "General page is missing the pfb_log_trim_margin_pct field"
+    assert "less flash/SSD wear" in body, "General page is missing the Trim Margin help copy"
+
+    # §2d label-class probe: the field's row label must be a Form_Group control-label
+    # (visible on desktop), never a per-control label-start (hidden by the media query).
+    # Live-rendered markup (verified on-box): '<label class="col-sm-2 control-label">
+    # <span>Trim Margin</span></label>' -- no per-input label-start/form-label involved.
+    label_re = re.compile(r'<label class="col-sm-2 control-label">\s*<span>Trim Margin</span>\s*</label>')
+    assert label_re.search(body), (
+        "pfb_log_trim_margin_pct row label is not the expected visible control-label -- "
+        "check it is not hidden by the desktop label.form-label media query"
+    )
+
+    # the pre-existing intro needles must survive this edit unchanged (behaviour-preserving)
+    for needle in ("rolling cap", "trims lines older than", "whichever cap is more restrictive"):
+        assert needle in body, f"Log Settings intro wording {needle!r} regressed by the #1109 edit"
+
+
 def test_hooks_page_documents_lifecycle_env_vars(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
     """The hooks page lists the PFB_POST_INSTALL / PFB_PRE_UNINSTALL env vars (#684 doc gap, #687).
 

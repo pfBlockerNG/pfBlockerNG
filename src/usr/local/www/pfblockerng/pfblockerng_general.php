@@ -91,6 +91,10 @@ foreach ($log_suffixes as $log_suffix) {
 // log_syslog uses the PfbToggle adapter — extract the scalar .value for pfb_cfg_toggle_read().
 $pconfig['log_syslog']			= PfbConfig::read('log_syslog')->value;
 
+// issue #1109: log-trim hysteresis margin (percent, global). Read via PfbConfig::read so
+// the registered default ('0') applies when the key is absent (new install / upgrade).
+$pconfig['pfb_log_trim_margin_pct']	= PfbConfig::read('pfb_log_trim_margin_pct');
+
 // Select field options
 $options_pfb_interval	= [	'1' => 'Every hour',
 				'2' => 'Every 2 hours',
@@ -168,6 +172,14 @@ if ($_POST) {
 			$_POST[$dkey] = (string) $v;
 		}
 
+		// issue #1109: validate the log-trim hysteresis margin the same way (non-negative
+		// integer string; the backend parser independently clamps it to 0-1000).
+		$margin_v = $_POST['pfb_log_trim_margin_pct'] ?? '0';
+		if (is_array($margin_v) || !ctype_digit((string) $margin_v)) {
+			$margin_v = '0';
+		}
+		$_POST['pfb_log_trim_margin_pct'] = (string) $margin_v;
+
 		// issue #1070: an array-valued POST ('pfb_feed_internal_allowlist[]=x')
 		// throws a PHP 8 TypeError in trim()/base64_encode() below; reject it
 		// here so the save gate blocks and the stored allowlist is preserved.
@@ -214,6 +226,11 @@ if ($_POST) {
 			foreach ($log_suffixes as $log_suffix) {
 				$pfb['gconfig']['log_max_days_' . $log_suffix]	= $_POST['log_max_days_' . $log_suffix]	?: '0';
 			}
+
+			// issue #1109: persist the log-trim hysteresis margin (validated above; default
+			// '0'). Written into $pfb['gconfig'] so writeSection() below includes it -- a bare
+			// PfbConfig::write() would be overwritten by writeSection.
+			$pfb['gconfig']['pfb_log_trim_margin_pct']	= $_POST['pfb_log_trim_margin_pct']	?: '0';
 
 			// ADR-38: persist syslog export toggle. Written into $pfb['gconfig'] so the
 			// writeSection() call below includes it; a bare PfbConfig::write() before
@@ -393,8 +410,26 @@ $section->addInput(new Form_StaticText(
 	. '<li><strong>Max lines</strong> &mdash; rolling cap; the log keeps only its most recent N lines.</li>'
 	. '<li><strong>Max days</strong> &mdash; trims lines older than this many days (0 = disabled); '
 	. 'independent of Max lines &mdash; whichever cap is more restrictive wins.</li>'
+	. '<li><strong>Trim Margin</strong> &mdash; percent tolerance above whichever cap is active; '
+	. 'the log is rewritten only once it drifts past cap + margin% (0 = trim as soon as exceeded), '
+	. 'then trimmed back to the exact cap &mdash; a larger margin means fewer, larger rewrites and '
+	. 'less flash/SSD wear.</li>'
 	. '</ul>'
 ));
+
+// issue #1109: log-trim hysteresis margin -- a single global percentage applying to both
+// the line and age caps (see the intro list above for the trigger/cut semantics).
+$section->addInput((new Form_Input(
+	'pfb_log_trim_margin_pct',
+	'Trim Margin',
+	'number',
+	$pconfig['pfb_log_trim_margin_pct']
+))->setAttribute('min', '0')->setAttribute('max', '1000'))->setHelp(
+	'Percent tolerance above whichever cap (Max lines or Max days) is active. The log is '
+	. 'rewritten only once it drifts past cap + margin%, then trimmed back to the exact cap. '
+	. '<strong>0</strong> (default) trims as soon as the cap is exceeded. A larger margin means '
+	. 'fewer, larger rewrites &mdash; less flash/SSD wear.'
+);
 
 foreach ($log_types as $logdescr => $logtype) {
 	// Header row: shaded category divider; the StaticText children label the columns on
