@@ -5198,6 +5198,127 @@ function pfb_matchgen_reap(array $existing_deny, bool $ccwhite_match, string $ma
 }
 
 
+/**
+ * issue #1250: upgrade migration -- decide the fate of every top-level *.txt in the OLD
+ * matchdir before machine-owned artifacts move into matchgendir under pfB_Match_* names. A
+ * user's own Match-list file always carries a family suffix ('<header>_v4'/'_v6',
+ * pfblockerng.inc's Download/Collect header build), so the un-suffixed 'ETMatch.txt' is
+ * unambiguous; 'matchdedup_v4'/'match<header>_<fam>' can collide with a same-named user list
+ * and are cross-referenced against the configured Deny/Match headers -- same shape as
+ * pfb_matchgen_reap()'s keep-list, extended with the Match side for the collision check.
+ * Pure: no filesystem writes, so the whole decision table is unit-testable.
+ *
+ * @param string[] $matchdir_files    Top-level basenames (with '.txt') found in matchdir.
+ * @param string[] $existing_deny     $pfb['existing']['deny'] -- '<header>_v4'/'<header>_v6'.
+ * @param string[] $existing_match    $pfb['existing']['match'] -- same shape, Match lists.
+ * @param bool     $ccwhite_match     TRUE iff $pfb['ccwhite'] == 'match'.
+ * @param string[] $matchgendir_files Basenames (with '.txt') already in matchgendir (no-clobber).
+ * @return array{move: array<string,string>, leave: string[],
+ *               undecidable: array<int,array{file:string,candidate_a:string,candidate_b:string}>}
+ */
+function pfb_matchdir_migrate_plan(array $matchdir_files, array $existing_deny, array $existing_match, bool $ccwhite_match, array $matchgendir_files): array {
+	$plan = array('move' => array(), 'leave' => array(), 'undecidable' => array());
+
+	// No-clobber: record the move unless the destination already exists in matchgendir --
+	// covers both a genuine name clash and a re-run against an already-migrated file.
+	$plan_move = function (string $src, string $dest) use (&$plan, $matchgendir_files): void {
+		if (in_array($dest, $matchgendir_files, TRUE)) {
+			$plan['leave'][] = $src;
+		} else {
+			$plan['move'][$src] = $dest;
+		}
+	};
+
+	foreach ($matchdir_files as $pfb_file) {
+		if (substr($pfb_file, -4) !== '.txt') {
+			$plan['leave'][] = $pfb_file;
+			continue;
+		}
+		$pfb_stem = substr($pfb_file, 0, -4);
+
+		if ($pfb_stem === 'ETMatch') {
+			// No family suffix: unreachable by any user list -- always the ET artifact.
+			$plan_move($pfb_file, 'pfB_Match_ET_v4.txt');
+			continue;
+		}
+
+		if ($pfb_stem === 'matchdedup_v4' || $pfb_stem === 'matchdedup_v6') {
+			if ($pfb_stem !== 'matchdedup_v4') {
+				// Only the _v4 stem has ever had a writer -- _v6 can only be a user file.
+				$plan['leave'][] = $pfb_file;
+				continue;
+			}
+			$match_has_dedup = in_array('matchdedup_v4', $existing_match, TRUE);
+			if ($match_has_dedup && $ccwhite_match) {
+				$plan['undecidable'][] = array(
+					'file'        => $pfb_file,
+					'candidate_a' => 'the consolidated ccwhite Exempt write',
+					'candidate_b' => 'Match list "matchdedup"',
+				);
+			} elseif ($match_has_dedup) {
+				$plan['leave'][] = $pfb_file;
+			} else {
+				$plan_move($pfb_file, 'pfB_Match_Exempt_v4.txt');
+			}
+			continue;
+		}
+
+		// Anchored at the end, so an embedded underscore in the header (e.g.
+		// 'match_Spam_Feed_v4') never gets mis-split at the FIRST underscore.
+		if (preg_match('/^match(.*)_(v4|v6)$/', $pfb_stem, $pfb_m)) {
+			$pfb_header    = $pfb_m[1];
+			$pfb_fam       = $pfb_m[2];
+			$pfb_deny_hit  = in_array("{$pfb_header}_{$pfb_fam}", $existing_deny, TRUE);
+			$pfb_match_hit = in_array("match{$pfb_header}_{$pfb_fam}", $existing_match, TRUE);
+
+			if ($pfb_deny_hit && $pfb_match_hit) {
+				$plan['undecidable'][] = array(
+					'file'        => $pfb_file,
+					'candidate_a' => "Deny list \"{$pfb_header}\"",
+					'candidate_b' => "Match list \"match{$pfb_header}\"",
+				);
+			} elseif ($pfb_deny_hit) {
+				$plan_move($pfb_file, "pfB_Match_Rep_{$pfb_header}_{$pfb_fam}.txt");
+			} else {
+				// Match-only (the user's file) or neither (an orphan -- the matchgendir
+				// reaper's problem, never re-homed into the namespace it'd be reaped from).
+				$plan['leave'][] = $pfb_file;
+			}
+			continue;
+		}
+
+		$plan['leave'][] = $pfb_file;
+	}
+
+	return $plan;
+}
+
+/**
+ * issue #1250: upgrade migration -- find every configured IP-list row whose Localfile/`url`
+ * still points at an OLD matchdir artifact path. The GUI once instructed admins to point a
+ * Match alias's Localfile at e.g. '/var/db/pfblockerng/match/ETMatch.txt'; any such row breaks
+ * the moment that artifact moves, and we do not rewrite the admin's config for them. Pure.
+ *
+ * @param array<int,array{list:string,header:string,url:string}> $rows Flattened
+ *        pfblockernglistsv4/v6 rows (any action -- any alias can consume a local file).
+ * @param string $matchdir The OLD matchdir path (no trailing slash).
+ * @return array<int,array{list:string,header:string,url:string}> The rows that reference it.
+ */
+function pfb_matchdir_stale_localfile_refs(array $rows, string $matchdir): array {
+	$hits = array();
+	foreach ($rows as $pfb_row) {
+		if (empty($pfb_row['url']) || dirname($pfb_row['url']) !== $matchdir) {
+			continue;
+		}
+		$pfb_basename = basename($pfb_row['url']);
+		if ($pfb_basename === 'ETMatch.txt' || preg_match('/^match.*_v[46]\.txt$/', $pfb_basename)) {
+			$hits[] = $pfb_row;
+		}
+	}
+	return $hits;
+}
+
+
 // issue #1084: batch IP dedup/reputation recompute -- caller-side helpers. pfb_recompute()
 // (pfblockerng.sh) replaces duplicate()/dmax/pmax's incremental masterfile surgery with one
 // deterministic pass per family over pristine per-feed snapshots; these functions decide WHEN

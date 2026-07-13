@@ -228,6 +228,107 @@ foreach (glob("{$pfb_pkgdir}/{ip,dnsbl}_{pre,post}_*.{sh,py}", GLOB_BRACE) ?: []
 }
 update_status(($pfb_moved > 0 ? " moved {$pfb_moved} ... done.\n" : " none ... done.\n"));
 
+// issue #1250: BREAKING CHANGE -- relocate machine-owned match artifacts (ETMatch.txt,
+// matchdedup_v4.txt, match<Header>_<fam>.txt) into matchgendir under their new pfB_Match_*
+// names; a same-named user Match-list file is left in place. See pfb_matchdir_migrate_plan().
+update_status(" Relocating machine-generated match artifacts...");
+$pfb_matchgen_warn = array();
+if (is_dir($pfb['matchdir'])) {
+	// pfb_global() (above) already safe_mkdir()'d matchgendir at 0755 via folder_array, so
+	// the perm-sync below runs unconditionally rather than gated on "did I just create it" --
+	// it still ends up matching matchdir's LIVE mode/owner/group either way.
+	if (!is_dir($pfb['matchgendir'])) {
+		@mkdir($pfb['matchgendir'], 0755, TRUE);
+	}
+	$pfb_mg_mode = @fileperms($pfb['matchdir']);
+	if ($pfb_mg_mode !== FALSE) {
+		@chmod($pfb['matchgendir'], $pfb_mg_mode & 0777);
+	}
+	$pfb_mg_uid = @fileowner($pfb['matchdir']);
+	if ($pfb_mg_uid !== FALSE) {
+		@chown($pfb['matchgendir'], $pfb_mg_uid);
+	}
+	$pfb_mg_gid = @filegroup($pfb['matchdir']);
+	if ($pfb_mg_gid !== FALSE) {
+		@chgrp($pfb['matchgendir'], $pfb_mg_gid);
+	}
+
+	// Same config sections + header-build rule sync_package_pfblockerng() uses (header =
+	// "{$row['header']}{$vtype}") -- install.inc runs standalone, before any sync pass
+	// populates $pfb['existing'].
+	$pfb_deny_headers  = array();
+	$pfb_match_headers = array();
+	$pfb_list_rows     = array();
+	foreach (array('pfblockernglistsv4' => '_v4', 'pfblockernglistsv6' => '_v6') as $pfb_ltype => $pfb_vtype) {
+		foreach (config_get_path("installedpackages/{$pfb_ltype}/config", []) as $pfb_list) { // foreign key — out of ADR-29 gateway scope
+			if (empty($pfb_list['row']) || ($pfb_list['action'] ?? '') === 'Disabled') {
+				continue;
+			}
+			foreach ($pfb_list['row'] as $pfb_row) {
+				if (empty($pfb_row['url']) || ($pfb_row['state'] ?? '') === 'Disabled') {
+					continue;
+				}
+				$pfb_header = "{$pfb_row['header']}{$pfb_vtype}";
+				if (strpos($pfb_list['action'], 'Match') !== FALSE) {
+					$pfb_match_headers[] = $pfb_header;
+				} elseif (strpos($pfb_list['action'], 'Deny') !== FALSE) {
+					$pfb_deny_headers[] = $pfb_header;
+				}
+				$pfb_list_rows[] = array('list' => $pfb_list['aliasname'] ?? '', 'header' => $pfb_row['header'], 'url' => $pfb_row['url']);
+			}
+		}
+	}
+	$pfb_rep_config = config_get_path('installedpackages/pfblockerngreputation/config/0', []); // foreign key — out of ADR-29 gateway scope, static display section (no registered keys)
+
+	$pfb_matchdir_listing = array();
+	foreach (glob("{$pfb['matchdir']}/*.txt") ?: [] as $pfb_f) {
+		$pfb_matchdir_listing[] = basename($pfb_f);
+	}
+	$pfb_matchgendir_listing = array();
+	foreach (glob("{$pfb['matchgendir']}/*.txt") ?: [] as $pfb_f) {
+		$pfb_matchgendir_listing[] = basename($pfb_f);
+	}
+
+	$pfb_plan = pfb_matchdir_migrate_plan($pfb_matchdir_listing, $pfb_deny_headers, $pfb_match_headers,
+		($pfb_rep_config['ccwhite'] ?? '') === 'match', $pfb_matchgendir_listing);
+
+	$pfb_moved_match = 0;
+	foreach ($pfb_plan['move'] as $pfb_old => $pfb_new) {
+		// Live re-check mirrors the list_scripts relocation above: the plan's no-clobber
+		// check ran against a snapshot, this is the guard at the actual rename() (issue #1250).
+		$pfb_dest = "{$pfb['matchgendir']}/{$pfb_new}";
+		if (!file_exists($pfb_dest) && @rename("{$pfb['matchdir']}/{$pfb_old}", $pfb_dest)) {
+			$pfb_moved_match++;
+		}
+	}
+
+	$pfb_stale_refs = pfb_matchdir_stale_localfile_refs($pfb_list_rows, $pfb['matchdir']);
+
+	if ($pfb_moved_match > 0 || !empty($pfb_plan['undecidable']) || !empty($pfb_stale_refs)) {
+		$pfb_matchgen_warn[] = 'BREAKING CHANGE: machine-generated match artifacts moved from';
+		$pfb_matchgen_warn[] = "  {$pfb['matchdir']}  to  {$pfb['matchgendir']}  (renamed to pfB_Match_*).";
+		if (!empty($pfb_plan['move'])) {
+			$pfb_matchgen_warn[] = 'Moved: ' . implode(', ', array_keys($pfb_plan['move']));
+		}
+		foreach ($pfb_plan['undecidable'] as $pfb_u) {
+			$pfb_matchgen_warn[] = "AMBIGUOUS, left in place: {$pfb_u['file']} could belong to {$pfb_u['candidate_a']} OR {$pfb_u['candidate_b']} -- rename one to disambiguate.";
+		}
+		foreach ($pfb_stale_refs as $pfb_r) {
+			$pfb_matchgen_warn[] = "List \"{$pfb_r['list']}\" (header \"{$pfb_r['header']}\") Localfile still points at the OLD path {$pfb_r['url']} -- you must repoint it yourself.";
+		}
+	}
+}
+update_status(($pfb_moved_match ?? 0) > 0 ? " moved {$pfb_moved_match} ... done.\n" : " none ... done.\n");
+
+if (!empty($pfb_matchgen_warn)) {
+	$pfb_warn_text = implode("\n", $pfb_matchgen_warn);
+	update_status("\n****************************************************************\n");
+	update_status("*  BREAKING CHANGE -- pfBlockerNG match artifacts relocated!      *\n");
+	update_status("****************************************************************\n");
+	update_status("{$pfb_warn_text}\n\n");
+	file_notice('pfBlockerNG Match', $pfb_warn_text, 'pfBlockerNG', '/pfblockerng/pfblockerng_ip.php', 2);
+}
+
 // ADR-12 update hooks live in their own dir (PFB_HOOK_SCRIPT_DIR = hooks/), separate
 // from list_scripts/. No files ship there (hooks are admin-authored), so create the
 // empty dir here for the picker to scan and admins to drop scripts into.
