@@ -1236,6 +1236,28 @@ Describe 'claude-bash-guard.sh'
       The status should be success
       The output should include '"permissionDecision":"deny"'
     End
+
+    It 'E-h19: a message QUOTING a git -C command must not forge an in-place target -> DENY'
+      # This repo's own commit messages discuss git commands, so this is not hypothetical.
+      # The -C must be in COMMAND POSITION in its segment, not merely present in it.
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push origin main -m \"use git -C /wt commit next time\""}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E-h20: git global options must not hide the verb from Rule E -> DENY'
+      # `git --work-tree=X commit` never matched the verb, so Rule E never ran at all --
+      # a bypass, not a false negative. Verb detection now survives the global options.
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git --work-tree=/wt commit -m x"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
   End
 
   # ── plain git, no rule in scope ─────────────────────────────────────────────

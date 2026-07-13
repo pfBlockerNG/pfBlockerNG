@@ -351,7 +351,7 @@ _has_leading_cd() {
 # would otherwise forge an in-place target for an unrelated bare verb. Defined
 # after _E_VERBS (below), which it shares -- one verb list, never two that drift.
 _seg_has_inplace_target() {
-	printf '%s' "$seg" | grep -Eq "git -C [^ ]+ ${_E_VERBS}${_E_VERB_END}"
+	printf '%s' "$seg" | grep -Eq "(command:|^)[[:space:]]*git -C [^ ]+ ${_E_VERBS}${_E_VERB_END}"
 }
 
 # _TARGET_SEP -- trailing-boundary glob class for _targets_primary_checkout:
@@ -404,7 +404,7 @@ _E_VERBS='(commit|push|rebase|merge|reset|checkout|switch|cherry-pick|revert|sta
 _E_VERB_END='([^a-z-]|$)'
 
 _seg_has_mutating_verb() {
-	printf '%s' "$seg" | grep -Eq "git (-C [^ ]+ )?${_E_VERBS}${_E_VERB_END}"
+	printf '%s' "$seg" | grep -Eq "git ([^ ]+ )*${_E_VERBS}${_E_VERB_END}"
 }
 
 # _deny <reason> -- print the PreToolUse deny JSON and exit 0 (exit 0 is
