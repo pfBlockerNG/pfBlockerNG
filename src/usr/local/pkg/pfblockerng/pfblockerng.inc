@@ -5245,10 +5245,8 @@ function pfb_matchdir_migrate_plan(array $matchdir_files, array $existing_deny, 
 		}
 
 		// Anchored at the end, so an embedded underscore in the header (e.g.
-		// 'match_Spam_Feed_v4') never gets mis-split at the FIRST underscore. 'dedup_v4' is
-		// not special-cased separately: the consolidated ccwhite Exempt write is just a
-		// third candidate source alongside Deny/Match, cross-referenced the same way
-		// (issue #1250 F2 -- the old special case ignored Deny/ccwhite state entirely).
+		// 'match_Spam_Feed_v4') never gets mis-split at the FIRST underscore; the ccwhite
+		// Exempt write is just a third candidate source cross-referenced like Deny/Match.
 		if (preg_match('/^match(.*)_(v4|v6)$/', $pfb_stem, $pfb_m)) {
 			$pfb_header     = $pfb_m[1];
 			$pfb_fam        = $pfb_m[2];
@@ -5296,7 +5294,7 @@ function pfb_matchdir_migrate_plan(array $matchdir_files, array $existing_deny, 
  * SAME names the disk actually contains -- install.inc runs standalone, before any sync pass
  * populates $pfb['existing']. Match-set membership ignores list/row Disabled state: a stale
  * user file's own list may since have been disabled or retyped, so its history is unknowable
- * and every configured name must count (issue #1250 F3). Pure: no filesystem/config writes.
+ * and every configured name must count (issue #1250). Pure: no filesystem/config writes.
  *
  * @param array<string,array<int,array<string,mixed>>> $lists_by_vtype ['_v4' => v4 list
  *        config rows, '_v6' => v6 list config rows] -- installedpackages/pfblockernglistsv{4,6}/config.
@@ -5358,7 +5356,7 @@ function pfb_matchdir_config_headers(array $lists_by_vtype, array $dnsbl_config,
  * still points at a matchdir artifact THIS RUN ACTUALLY MOVED. The GUI once instructed admins
  * to point a Match alias's Localfile at e.g. '/var/db/pfblockerng/match/ETMatch.txt'; any such
  * row breaks the moment that artifact moves, and we do not rewrite the admin's config for
- * them. Keyed on the plan's actual move list, not a filename shape (F6) -- a same-shaped user
+ * them. Keyed on the plan's actual move list, not a filename shape -- a same-shaped user
  * file that was never moved must never trigger a repoint warning for a path that still exists.
  * Pure.
  *
