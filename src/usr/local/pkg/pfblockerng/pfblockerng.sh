@@ -2038,9 +2038,12 @@ closingprocess() {
 		echo; echo '===[ Permit List IP Counts ]========================='; echo
 		wc -l "${pfbpermit}"*.txt 2>/dev/null | sort -n -r
 	fi
-	if [ -d "${pfbmatch}" ] && [ "$(ls -A "${pfbmatch}")" ]; then
+	# issue #1250: key on the .txt files themselves -- `ls -A "${pfbmatch}"` is now always
+	# non-empty (the generated/ subdir always exists), and `wc -l` emits a "total" line
+	# even when every glob is unmatched. The generated artifacts still belong in this count.
+	if [ -n "$(ls -A "${pfbmatch}"*.txt "${pfbmatchgen}"*.txt 2>/dev/null)" ]; then
 		echo; echo '===[ Match List IP Counts ]=========================='; echo
-		wc -l "${pfbmatch}"*.txt 2>/dev/null | sort -n -r
+		wc -l "${pfbmatch}"*.txt "${pfbmatchgen}"*.txt 2>/dev/null | sort -n -r
 	fi
 	if [ -d "${pfbdeny}" ] && [ "$(ls -A "${pfbdeny}")" ]; then
 		echo; echo '===[ Deny List IP Counts ]==========================='; echo
