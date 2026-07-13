@@ -10,6 +10,7 @@ keep it current. It is the sibling of [`tld-lists.md`](tld-lists.md) (issue #127
 - `https://publicsuffix.org/list/public_suffix_list.dat` — authoritative suffix set, ICANN
   section only (between the `// ===BEGIN ICANN DOMAINS===` / `// ===END ICANN DOMAINS===`
   markers).
+- **License:** MPL 2.0 — <https://mozilla.org/MPL/2.0/>.
 
 ## What is automated vs manual
 
