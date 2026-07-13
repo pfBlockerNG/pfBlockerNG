@@ -9,9 +9,8 @@
 # to invoke wholesale.
 #
 # pfb_recompute_finish()'s matchexempt concat is deliberately NOT covered here:
-# both its inputs are written by awk/grep, which always terminate their own
-# output, so it cannot weld. Left untouched to avoid colliding with the
-# in-flight matchdedup work on that function.
+# both its inputs are written exclusively by awk `print ... >> file`, which
+# terminates every record, so it cannot weld.
 
 extract_stmt() {
   # $1 = file  $2 = literal anchor substring
