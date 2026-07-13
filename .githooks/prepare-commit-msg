@@ -22,15 +22,14 @@
 
 set -u
 
-# Agent worktree guard (issue #1262): an agent commit (CLAUDECODE=1) in the
-# PRIMARY checkout aborts — agents commit only in linked worktrees (CLAUDE.md
-# "Worktrees"). Lives HERE because this hook still runs when verification is
-# skipped. Git STATE decides (never command text): --git-dir equals
-# --git-common-dir only in the primary checkout. Skipped when the checkout is
-# agent-dedicated: managed-remote sessions (CLAUDE_CODE_USER_EMAIL set) or an
-# explicit `git config pfblockerng.allowprimarycommit true`.
+# Agent worktree guard (issue #1262): abort an agent commit (CLAUDECODE=1) in
+# the primary checkout (--git-dir == --git-common-dir; agents commit only in
+# linked worktrees). Lives in THIS hook because it still runs when verification
+# is skipped. Exempt: managed-remote sessions (CLAUDE_CODE_USER_EMAIL set) or an
+# explicit `git config pfblockerng.allowprimarycommit true` (agent-dedicated).
 if [ "${CLAUDECODE:-}" = "1" ] && [ -z "${CLAUDE_CODE_USER_EMAIL:-}" ] &&
 	[ "$(git config --bool --get pfblockerng.allowprimarycommit 2>/dev/null)" != "true" ]; then
+	unset CDPATH # a CDPATH hit makes cd echo the dir, corrupting $(cd ... && pwd -P)
 	git_dir=$(cd "$(git rev-parse --git-dir)" && pwd -P)
 	common_dir=$(cd "$(git rev-parse --git-common-dir)" && pwd -P)
 	if [ "$git_dir" = "$common_dir" ]; then

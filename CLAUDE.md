@@ -592,9 +592,9 @@ Activate once after cloning: `sh scripts/setup-hooks.sh` (sets `core.hooksPath`)
 - **`prepare-commit-msg`** — first aborts an agent commit (`CLAUDECODE=1`) in the **primary
   checkout** (agents commit only in linked worktrees — issue #1262; state-checked via
   `--git-dir` vs `--git-common-dir`, never command text; agent-dedicated checkouts opt out
-  via `CLAUDE_CODE_USER_EMAIL` (managed-remote) or `git config
-  pfblockerng.allowprimarycommit true`), then appends the owner's `Co-authored-by:` trailer
-  (see Commit style); runs even under `--no-verify`.
+  via `CLAUDE_CODE_USER_EMAIL` (managed-remote) or
+  `git config pfblockerng.allowprimarycommit true`), then appends the owner's
+  `Co-authored-by:` trailer (see Commit style); runs even under `--no-verify`.
 - **`pre-push`** — enforces the release tag scheme via `scripts/release-version.sh`.
 
 ---
