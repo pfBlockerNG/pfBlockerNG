@@ -354,11 +354,15 @@ final class PfbSyncStatusIpWritersTest extends TestCase
 	 * below the file size -- the old @file()-array approach scales its
 	 * memory with file size, the bounded-tail read does not (same proof
 	 * shape as LogAgeCutoffStreamTest::testStreamingTrimStaysMemoryBounded...).
-	 * Bound justification (measured this session on this machine): the old
-	 * @file()-array approach costs a +7,065,600 byte (~6.7 MiB) delta on this
-	 * exact fixture; the bounded-tail read costs 0 bytes. 1 MiB sits
-	 * comfortably between the two, cleanly separating old-code-fails from
-	 * new-code-passes.
+	 * Bound justification: the old @file()-array approach costs a +7,065,600
+	 * byte (~6.7 MiB) memory_get_peak_usage(true) delta on this exact fixture;
+	 * the bounded-tail read costs ~0. The bound is 4 MiB, not 1: (true) reports
+	 * real memory in 2 MiB emalloc chunks, so the bounded read shows either 0
+	 * or one 2 MiB chunk depending on where $memBefore sits relative to a chunk
+	 * boundary -- 4 MiB clears that quantization noise yet stays well under the
+	 * ~6.7 MiB old cost, keeping old-code-fails / new-code-passes cleanly split.
+	 * issue #1255: the old 1 MiB bound flaked on PHP 8.5 when an unrelated
+	 * baseline shift tipped $memBefore across a chunk boundary.
 	 */
 	#[RunInSeparateProcess]
 	public function testDedupSanityCheckStaysMemoryBoundedOnLargeLog(): void
@@ -390,8 +394,8 @@ final class PfbSyncStatusIpWritersTest extends TestCase
 			. var_export($open, true));
 		$this->assertStringContainsString('FAILED', $open[0]['message']);
 
-		$this->assertLessThan(1024 * 1024, $memDelta,
-			"dedup check's memory_get_peak_usage(true) delta must stay under 1 MiB on a several-MB log, got {$memDelta} bytes"
+		$this->assertLessThan(4 * 1024 * 1024, $memDelta,
+			"dedup check's memory_get_peak_usage(true) delta must stay under 4 MiB on a several-MB log, got {$memDelta} bytes"
 		);
 	}
 
