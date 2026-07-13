@@ -519,6 +519,69 @@ final class CategoryEditPostGuardTest extends TestCase
 		], 'DNSBL', 'dnsbl');
 	}
 
+	// -- issue #1104: the remaining format-N axis rows (regex/rsync/whois-reject) --
+
+	public function testUrlSaveGuardRegexFormatRejectsScriptInQuery(): void
+	{
+		$this->assertGuardRejects([
+			'aliasname' => 'validname',
+			'state-0'   => 'Enabled',
+			'header-0'  => 'validheader',
+			'url-0'     => 'http://192.0.2.1/?x=<script>alert(1)</script>',
+			'format-0'  => 'regex',
+		]);
+	}
+
+	public function testUrlSaveGuardRegexFormatAcceptsValidQuery(): void
+	{
+		$value = 'http://192.0.2.1/list?a=1&b=2%20c';
+		$post = [
+			'aliasname' => 'validname',
+			'state-0'   => 'Enabled',
+			'header-0'  => 'validheader',
+			'url-0'     => $value,
+			'format-0'  => 'regex',
+		];
+		$this->assertGuardAccepts($post);
+		$this->assertSame($value, $_POST['url-0'], 'the guard must never transform the persisted value');
+	}
+
+	public function testUrlSaveGuardRsyncFormatRejectsScriptTag(): void
+	{
+		$this->assertGuardRejects([
+			'aliasname' => 'validname',
+			'state-0'   => 'Enabled',
+			'header-0'  => 'validheader',
+			'url-0'     => 'rsync://192.0.2.1/mod/<script>',
+			'format-0'  => 'rsync',
+		]);
+	}
+
+	public function testUrlSaveGuardRsyncFormatAcceptsValidPath(): void
+	{
+		$value = 'rsync://192.0.2.1/module/path';
+		$post = [
+			'aliasname' => 'validname',
+			'state-0'   => 'Enabled',
+			'header-0'  => 'validheader',
+			'url-0'     => $value,
+			'format-0'  => 'rsync',
+		];
+		$this->assertGuardAccepts($post);
+		$this->assertSame($value, $_POST['url-0'], 'the guard must never transform the persisted value');
+	}
+
+	public function testUrlSaveGuardWhoisFormatRejectsQuoteBreakout(): void
+	{
+		$this->assertGuardRejects([
+			'aliasname' => 'validname',
+			'state-0'   => 'Enabled',
+			'header-0'  => 'validheader',
+			'url-0'     => 'example.com/x"onerror=',
+			'format-0'  => 'whois',
+		]);
+	}
+
 	// -- hostile-input rows -----------------------------------------------
 
 	public function testUrlSaveGuardRejectsEmbeddedControlCharacter(): void

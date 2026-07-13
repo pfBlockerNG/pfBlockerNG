@@ -222,6 +222,157 @@ def test_dnsbl_alias_bad_name_rejected_leaves_config_unchanged(
 
 
 # --------------------------------------------------------------------------- #
+# issue #1104: the save-time url-N character guard, end-to-end through a real
+# CSRF POST + config.xml round-trip. format=geoip is deliberate -- its OWN
+# validation reads only the space-delimited PREFIX (PFB_FILTER_ALNUM), leaving
+# a crafted SUFFIX gated solely by the new guard (auto/regex/rsync additionally
+# route the whole value through pfb_filter(..., PFB_FILTER_URL), which could
+# reject a hostile RFC 5737 literal for an unrelated reason and manufacture a
+# false-red test). Every geoip-format row ALSO trips an unrelated MaxMind
+# credential-notice check (pfblockerng.inc:pfb_maxmind_credential_notice,
+# called unconditionally for format=geoip) that aborts the save when the box
+# has no MaxMind key/account configured -- placeholder creds are seeded around
+# each test so that check never fires and the guard is the sole variable.
+# --------------------------------------------------------------------------- #
+
+_IPSETTINGS_CFG = "installedpackages/pfblockerngipsettings/config/0"
+
+
+def _set_maxmind_test_creds(vm: helpers.SmokeVM) -> tuple[str, str]:
+    """Seed placeholder MaxMind key/account; return the ORIGINAL (key, account) to restore.
+
+    A geoip-format row unconditionally runs pfb_maxmind_credential_notice()
+    (category_edit.php ~line 604) regardless of url-N content; on a box with
+    no MaxMind credentials configured that check alone aborts the save, which
+    would confound the url-N guard tests below. The values need not be real --
+    the check only tests non-emptiness, never calls the MaxMind API.
+    """
+    orig_key = helpers.config_get(vm, f"{_IPSETTINGS_CFG}/maxmind_key")
+    orig_account = helpers.config_get(vm, f"{_IPSETTINGS_CFG}/maxmind_account")
+    snippet = (
+        f"config_set_path({helpers._php_str(f'{_IPSETTINGS_CFG}/maxmind_key')}, 'smoketestkey');\n"
+        f"config_set_path({helpers._php_str(f'{_IPSETTINGS_CFG}/maxmind_account')}, 'smoketestaccount');\n"
+        "write_config('pfBlockerNG smoke: seed test MaxMind credentials');\n"
+        "echo 'OK';"
+    )
+    result = helpers.php_eval(vm, snippet, timeout=SAVE_TIMEOUT)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_set_maxmind_test_creds failed: rc={result.returncode} {result.stdout!r}")
+    return orig_key, orig_account
+
+
+def _restore_maxmind_creds(vm: helpers.SmokeVM, key: str, account: str) -> None:
+    """Restore the MaxMind key/account values captured by :func:`_set_maxmind_test_creds`."""
+    snippet = (
+        f"config_set_path({helpers._php_str(f'{_IPSETTINGS_CFG}/maxmind_key')}, {helpers._php_str(key)});\n"
+        f"config_set_path({helpers._php_str(f'{_IPSETTINGS_CFG}/maxmind_account')}, {helpers._php_str(account)});\n"
+        "write_config('pfBlockerNG smoke: restore MaxMind credentials');\n"
+        "echo 'OK';"
+    )
+    result = helpers.php_eval(vm, snippet, timeout=SAVE_TIMEOUT)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_restore_maxmind_creds failed: rc={result.returncode} {result.stdout!r}")
+
+
+def test_dnsbl_url_geoip_breakout_char_rejected_leaves_config_unchanged(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """A '<script>' suffix on a geoip url-N aborts the save -> config UNCHANGED.
+
+    Scenario: the save-time character guard (pfblockerng_category_edit.php,
+    issue #1104) rejects control/HTML-breakout chars in url-N for every
+    format; geoip's own validation only checks the prefix before the first
+    space, so the suffix is gated SOLELY by this guard.
+
+    Given:
+        A known-good geoip row ``'US CA'`` is saved at a free rowid (the
+        precondition asserted).
+    When:
+        The SAME rowid is re-posted with url-0 = ``'US <script>alert(1)</script>'``
+        (every other field identical).
+    Then:
+        The guard's ``$input_errors`` aborts the whole save, so
+        ``row/0/url`` in config.xml stays ``'US CA'`` -- UNCHANGED.
+    """
+    vm = smoke_vm
+    rowid = _free_rowid(vm, CFG_DNSBL)
+    cfg = f"{CFG_DNSBL}/{rowid}/row/0/url"
+    orig_key, orig_account = _set_maxmind_test_creds(vm)
+    try:
+        # GOOD: a valid geoip row persists (precondition).
+        _post_form(
+            webui,
+            _dnsbl_payload(
+                rowid, "smokeurlok", **{"state-0": "Enabled", "header-0": "hdr", "format-0": "geoip", "url-0": "US CA"}
+            ),
+        )
+        assert helpers.config_get(vm, cfg) == "US CA", "precondition: valid geoip url-0 did not persist"
+
+        # REJECT: a '<script>' suffix must abort the save (url UNCHANGED at 'US CA').
+        _post_form(
+            webui,
+            _dnsbl_payload(
+                rowid,
+                "smokeurlok",
+                **{
+                    "state-0": "Enabled",
+                    "header-0": "hdr",
+                    "format-0": "geoip",
+                    "url-0": "US <script>alert(1)</script>",
+                },
+            ),
+        )
+        assert helpers.config_get(vm, cfg) == "US CA", (
+            "a '<script>' breakout in url-0 must abort the save (row/0/url unchanged), but it changed"
+        )
+    finally:
+        _del_rowid(vm, CFG_DNSBL, rowid)
+        _restore_maxmind_creds(vm, orig_key, orig_account)
+
+
+def test_dnsbl_url_geoip_value_persists_byte_identical(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """A legitimate multi-country geoip url-N persists byte-identical (issue #1104).
+
+    Scenario: the save-time character guard must accept a well-formed geoip
+    value and never transform it -- proves the guard neither false-rejects a
+    legitimate value nor mangles it end-to-end through
+    ``config_set_path``/``write_config``.
+
+    Given:
+        A free DNSBL rowid (``row/0/url`` reads '').
+    When:
+        A geoip row is saved with url-0 = ``'US CA MX GB'``.
+    Then:
+        ``row/0/url`` in config.xml reads ``'US CA MX GB'`` -- byte-identical
+        to the posted value.
+    """
+    vm = smoke_vm
+    rowid = _free_rowid(vm, CFG_DNSBL)
+    cfg = f"{CFG_DNSBL}/{rowid}/row/0/url"
+    orig_key, orig_account = _set_maxmind_test_creds(vm)
+    try:
+        # BEFORE: free slot, no source row url stored (the save must CAUSE it).
+        assert helpers.config_get(vm, cfg) == "", f"rowid {rowid} not free (row/0/url already set)"
+
+        _post_form(
+            webui,
+            _dnsbl_payload(
+                rowid,
+                "smokeurlpersist",
+                **{"state-0": "Enabled", "header-0": "hdr", "format-0": "geoip", "url-0": "US CA MX GB"},
+            ),
+        )
+        assert helpers.config_get(vm, cfg) == "US CA MX GB", "geoip url-0 not persisted byte-identical"
+    finally:
+        _del_rowid(vm, CFG_DNSBL, rowid)
+        _restore_maxmind_creds(vm, orig_key, orig_account)
+
+
+# --------------------------------------------------------------------------- #
 # DNSBL scalar selects/toggle: logging (valid + bogus-coerce), order, filter_alexa.
 # --------------------------------------------------------------------------- #
 
