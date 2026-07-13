@@ -794,7 +794,7 @@ final class CfgGatewayTest extends TestCase
 		$this->seedConfig($path, '0');
 		$this->assertSame('0', config_get_path($path), "before: pfb_log_trim_margin_pct seed is '0'");
 
-		// The exact shape pfblockerng_general.php uses (:52 read, :243 write).
+		// The exact readSection/writeSection shape pfblockerng_general.php saves with.
 		$gen = 'installedpackages/pfblockerng/config/0';
 		$section = PfbConfig::readSection($gen);
 		$section['pfb_log_trim_margin_pct'] = '50';
