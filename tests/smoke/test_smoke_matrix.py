@@ -993,6 +993,10 @@ def test_dnsbl_fail_closed_broken_manifest(
 # --------------------------------------------------------------------------- #
 
 
+# The 30s default body cap cannot cover reload + two 30s table polls + two ~20s
+# rule_references polls + the on-failure dump: it kills the diagnostic before it prints
+# (issue #1239). The budget is a deadlock guard here, not a pacer.
+@pytest.mark.timeout(180)
 def test_dnsblip_dual_stack_partition(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """A DNSBL feed with BOTH families -> pfB_DNSBLIP_v4 AND pfB_DNSBLIP_v6.
 
@@ -1046,9 +1050,15 @@ def test_dnsblip_dual_stack_partition(deployed_vm: SmokeVM, mock_feeds: _MockFee
         assert any(":" in m for m in v6_members), f"no IPv6 in pfB_DNSBLIP_v6: {v6_members}"
         assert not any(_is_v4_literal(m) for m in v6_members), f"IPv4 leaked into pfB_DNSBLIP_v6: {v6_members}"
 
-        # Then: inet/inet6 rules reference the matching per-family table.
-        assert h.rule_references(deployed_vm, "pfB_DNSBLIP_v4"), "no rule references pfB_DNSBLIP_v4"
-        assert h.rule_references(deployed_vm, "pfB_DNSBLIP_v6"), "no rule references pfB_DNSBLIP_v6"
+        # Then: inet/inet6 rules reference the matching per-family table. rule_references
+        # already polls, so a False here is NOT an early read — dump the three layers so the
+        # failure says WHICH one lost the rule (issue #1239) instead of being re-guessed.
+        assert h.rule_references(deployed_vm, "pfB_DNSBLIP_v4"), (
+            "no rule references pfB_DNSBLIP_v4\n" + h.alias_rule_dump(deployed_vm, "pfB_DNSBLIP_v4")
+        )
+        assert h.rule_references(deployed_vm, "pfB_DNSBLIP_v6"), (
+            "no rule references pfB_DNSBLIP_v6\n" + h.alias_rule_dump(deployed_vm, "pfB_DNSBLIP_v6")
+        )
 
 
 def _is_v4_literal(member: str) -> bool:
