@@ -106,6 +106,23 @@ final class CountLinesTest extends TestCase
 		$this->assertNull(pfb_count_lines($missing), 'a missing/unopenable path must return NULL, not a hardcoded default');
 	}
 
+	public function testUnreadableFileReturnsNullNotZero(): void
+	{
+		// A file that EXISTS but cannot be opened must fail the same way a missing one does.
+		// Returning 0 here would read as "no lines" -- a count every caller would believe.
+		if (function_exists('posix_getuid') && posix_getuid() === 0) {
+			$this->markTestSkipped('root bypasses file permissions; cannot simulate an unreadable file');
+		}
+
+		file_put_contents($this->tmpFile, "a\nb\nc\n");
+		chmod($this->tmpFile, 0000);
+		try {
+			$this->assertNull(pfb_count_lines($this->tmpFile), 'an unreadable file must return NULL, never a count');
+		} finally {
+			chmod($this->tmpFile, 0644);
+		}
+	}
+
 	public function testShortReadThatNeverReachesEofReturnsNull(): void
 	{
 		// issue #1257 B2: a read that stalls/aborts mid-stream (feof() never goes TRUE)
