@@ -165,20 +165,38 @@ abstraction — it leaks the vendor straight into the user's configuration:
   list is the provider's, an alias the user configured yesterday can silently evaporate on
   tomorrow's download. A blocklist that quietly stops blocking is the worst failure mode this
   package has.
-- Providers disagree on **names**: MaxMind renders geoname `248816` as "Hashemite Kingdom of
-  Jordan"; GeoNames — and `$pfb_geoip_all` today — call it "Jordan". Whichever the UI shows
-  would change with the provider.
+- Providers disagree on **names**. Measured against a **real, licensed GeoLite2 dataset**
+  (maintainer's box, 2026-07-13; the earlier "Hashemite Kingdom of Jordan" example in this
+  section was wrong — it came from MaxMind's 2023 *GeoIP2* example file, and current GeoLite2
+  says "Jordan"):
+  **17 of 250** country names differ between GeoLite2 and GeoNames — `Türkiye`/`Turkey`,
+  `Curaçao`/`Curacao`, `Réunion`/`Reunion`, `Congo (DRC)`/`Democratic Republic of the Congo`,
+  `Palestine`/`Palestinian Territory`, `Bonaire`/`Bonaire, Saint Eustatius and Saba`, … .
+  Whichever the UI shows today changes if the provider changes.
 - Locales differ per provider (MaxMind ships localized Locations files; IPinfo ships none), so
   provider-sourced names make the **UI language** a function of the provider setting.
 
 Therefore, before Phase 2:
 
-1. **The truth is a committed, generated table** — GeoNames `countryInfo.txt` (CC BY 4.0; 252
-   countries; ISO, name, continent, geonameid) via a pinned, checksum-verified generator, the
-   same shape as `scripts/update-geoip-fixtures.py`. Note this is not a new dependency: the
-   `geoname_id`s in today's hardcoded `$pfb_geoip_all` **are** GeoNames ids (`JO`=248816,
-   `US`=6252001, `BT`=1252634, `AQ`=6697173) — the table was scraped from GeoNames once and
-   never refreshed.
+1. **The truth is a committed, generated table** — GeoNames `countryInfo.txt` (CC BY 4.0; ISO,
+   name, continent, geonameid) via a pinned, checksum-verified generator, the same shape as
+   `scripts/update-geoip-fixtures.py`. This is not a new dependency: the `geoname_id`s in today's
+   hardcoded `$pfb_geoip_all` **are** GeoNames ids (`JO`=248816, `US`=6252001, `BT`=1252634,
+   `AQ`=6697173) — the table is a GeoNames snapshot, scraped once and never refreshed.
+   **How stale, measured (2026-07-13):** our table's ISO set (250) matches GeoLite2's exactly, but
+   **6 names** disagree with current GeoNames — and four of those are renames the world actually
+   made: the UI still says **Swaziland** (Eswatini), **Macedonia** (North Macedonia),
+   **Cape Verde** (Cabo Verde), **East Timor** (Timor Leste). Against current GeoLite2, **21**
+   names disagree.
+   Two source caveats the generator must handle, both measured on the live data:
+   - `countryInfo.txt` carries **252** codes, including the retired **`AN`** (Netherlands
+     Antilles, dissolved 2010) and **`CS`** (Serbia and Montenegro, dissolved 2006). GeoLite2
+     lists 250 and omits both. A naive generation would add two dead countries to the UI —
+     filter them, or take the country *set* from a current ISO 3166-1 source.
+   - GeoNames' names are **ASCII-folded and partly non-current** (`Aland Islands`, `Curacao`,
+     `Reunion`, `Sao Tome and Principe`, `Turkey`). They are fine as a key/mapping source, poor
+     as display strings — which is why the display-name source is an open question below
+     (CLDR is the obvious candidate).
 2. **The canonical key is the ISO 3166-1 alpha-2 code**, never a provider's `geoname_id` —
    which is where the data model already points (`config.xml` stores `countries4="US,BT"`).
 3. **A provider supplies network → ISO, nothing else.** MaxMind's Locations CSV becomes a
@@ -244,6 +262,23 @@ would index `$pfb_geoip['country'][6255148]['iso'][0]` on a missing key. MaxMind
 documentation does not mention continent-level `geoname_id`s or the `EU`/`AP` codes at all
 (checked 2026-07-12), so this behaviour is known only from the data.
 
+**Measured on a real, licensed GeoLite2 dataset (maintainer's box, 2026-07-13) — these rows are
+live, not legacy residue:**
+
+```text
+Locations-en.csv, rows with an empty country_iso_code:   exactly two
+  6255147,en,AS,Asia,,,0
+  6255148,en,EU,Europe,,,0
+
+Blocks rows whose geoname_id IS one of those continents:
+  IPv4: 539     IPv6: 158        (as registered_country: 0 in both families)
+```
+
+So the two hardcoded buckets are neither arbitrary nor dead: they cover ~700 real networks, and
+they match the provider's data exactly (Asia and Europe, no other continent). "Retire them" is
+therefore **not** an option while MaxMind is a supported provider — the question is only whether
+the truth models the continent-only bucket generically (all seven) or keeps the provider's two.
+
 This matters for the provider abstraction: **"the country is unknown, only the continent is
 known" is a real state a provider can report**, and the in-tree truth must model it explicitly
 (a country-less, continent-only bucket per continent) rather than leave it as two hardcoded
@@ -253,12 +288,18 @@ Note the coverage gap this exposes: the smoke corpus (#1228) carries **no** cont
 (zero references to any of the seven continent ids across both Blocks CSVs), so this path is
 currently exercised by nothing.
 
-Open questions #1235 must settle (they do not block this ADR's other phases): which locales the
-table carries and where the localized names come from (GeoNames `alternateNames` vs CLDR — for
-countries **and** the 7 continents), whether MaxMind's locale files stay as optional enrichment
-for MaxMind users, the refresh cadence, and how the continent-only bucket is modelled (one per
-continent, generalizing today's Asia/Europe pair — or retired, if no provider still emits the
-rows).
+Open questions #1235 must settle (they do not block this ADR's other phases): the **display-name
+source** and its locales (GeoNames' own names are ASCII-folded and partly stale, so CLDR is the
+likely pick — for countries **and** the 7 continents), whether MaxMind's locale files stay as
+optional enrichment for MaxMind users, the refresh cadence, whether the country *set* comes from
+GeoNames minus its retired codes or from a current ISO 3166-1 source, and whether the
+continent-only bucket is modelled generically (all seven) or kept as the provider's Asia/Europe
+pair.
+
+**Renaming a country is user-visible, and the four stale names above will change on the first
+regeneration** (Swaziland → Eswatini, …). Display strings are not config keys — the stored value
+is the ISO code — so nothing in `config.xml` moves; but the change is worth a release note rather
+than a silent flip.
 
 ## 3. Consequences
 
