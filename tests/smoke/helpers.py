@@ -566,7 +566,7 @@ def _tolerate_timeout(call: Callable[[], subprocess.CompletedProcess[str]]) -> s
     try:
         return call()
     except subprocess.TimeoutExpired as exc:
-        stderr = f"transport timeout after {exc.timeout}s: {_pre_stall_text(exc.stderr)}"
+        stderr = f"transport timeout after {exc.timeout}s"
         return subprocess.CompletedProcess(exc.cmd, 124, _pre_stall_text(exc.stdout), stderr)
 
 
