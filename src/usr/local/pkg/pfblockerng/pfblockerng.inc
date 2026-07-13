@@ -1105,7 +1105,9 @@ function pfb_ensure_trailing_newline(string $path): bool {
 	}
 	$last = @fread($fh, 1);
 	fclose($fh);
-	if ($last === "\n") {
+	// A failed/short read can't tell terminated from not -- leave the file alone
+	// rather than risk a spurious append.
+	if ($last === FALSE || $last === '' || $last === "\n") {
 		return FALSE;
 	}
 
@@ -1113,9 +1115,11 @@ function pfb_ensure_trailing_newline(string $path): bool {
 	if ($ap === FALSE) {
 		return FALSE;
 	}
-	fwrite($ap, "\n");
+	$written = @fwrite($ap, "\n");
 	fclose($ap);
-	return TRUE;
+	// Only a full 1-byte write counts as success -- else a failed append would
+	// report TRUE, masking the exact unterminated-file condition this exists to fix.
+	return $written !== FALSE && $written === 1;
 }
 
 // ADR-49: content-sanity gate for a downloaded text feed's first 64-KiB chunk; pinned by
@@ -18662,6 +18666,9 @@ function sync_package_pfblockerng($cron='') {
 
 								if ($continent != 'md5_0') {
 									@rename("{$pfb['geoip_tmp']}", "{$pfborig}/{$cc_alias}.orig");
+									// issue #1263: this GeoIP continent builder writes '.orig'
+									// outside pfb_download(), bypassing its newline guarantee.
+									pfb_ensure_trailing_newline("{$pfborig}/{$cc_alias}.orig");
 									@copy("{$pfborig}/{$cc_alias}.orig", "{$pfbfolder}/{$cc_alias}.txt");
 
 									// Call Aggregate process
@@ -18986,6 +18993,9 @@ function sync_package_pfblockerng($cron='') {
 											$file_dwn_esc = escapeshellarg("{$file_dwn}.raw");
 											$file_org_esc = escapeshellarg("{$file_dwn}.orig");
 											exec("/usr/bin/gunzip -c {$file_dwn_esc} > {$file_org_esc}");
+											// issue #1263: this reuse path rebuilds '.orig' outside pfb_download(),
+											// bypassing its normal newline-termination guarantee.
+											pfb_ensure_trailing_newline("{$file_dwn}.orig");
 										}
 										exec("{$pfb['script']} et {$header_esc} x x x x x {$pfb['etblock']} {$pfb['etmatch']} {$elog}");
 									}

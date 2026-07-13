@@ -1,14 +1,20 @@
 #shellcheck shell=sh
-# issue #1263, sites 7-9: dev-only benchmark tooling (scripts/bench_ip_recompute.sh,
+# issue #1263: dev-only benchmark tooling (scripts/bench_ip_recompute.sh,
 # scripts/misc/bench_aggregate_union.sh) hit the identical multi-file `cat` weld as
-# the production sites -- fixed with the same `awk 1` drop-in. Both scripts have
-# zero pre-existing test harness (heavy synthetic-data generation, `bench_aggregate_union.sh`
-# runs under `set -eu`) and are never invoked by CI, so a full-script run is out of
-# scope; each spec below extracts the exact COMMITTED text (never a hand-retyped
-# copy) of the isolable unit under test and exercises it directly against a
-# real weld fixture.
+# the production sites -- fixed with the same `awk 1` drop-in. These scripts are
+# NOT pfBlockerNG production code and are never invoked by CI; this file's
+# coverage is a courtesy for dev tooling only. It is NOT a substitute for the
+# real ADR-11 union site (pfb_aggregate() in pfblockerng.sh, covered by
+# pfblockerng_aggregate_weld_spec.sh) -- a prior revision of this file mislabeled
+# the bench_aggregate_union.sh coverage below as counting toward the production
+# site enumeration, which let the real pfb_aggregate() site ship unfixed.
+# Both scripts have zero pre-existing test harness (heavy synthetic-data
+# generation, `bench_aggregate_union.sh` runs under `set -eu`), so a full-script
+# run is out of scope; each spec below extracts the exact COMMITTED text (never a
+# hand-retyped copy) of the isolable unit under test and exercises it directly
+# against a real weld fixture.
 
-Describe 'bench_ip_recompute.sh union_cksum(): the committed function never welds member records (issue #1263 site 7)'
+Describe 'bench_ip_recompute.sh union_cksum(): the committed function never welds member records (issue #1263, dev-tooling only)'
   extract_union_cksum() {
     sed -n '/^union_cksum() {/,/^}/p' "$1"
   }
@@ -40,7 +46,7 @@ Describe 'bench_ip_recompute.sh union_cksum(): the committed function never weld
   End
 End
 
-Describe 'bench_aggregate_union.sh member concat: the committed lines never weld member records (issue #1263 sites 8/9)'
+Describe 'bench_aggregate_union.sh member concat: the committed lines never weld member records (issue #1263, dev-tooling only -- NOT the production pfb_aggregate() site)'
   extract_stmt() {
     # $1 = file  $2 = anchor grep pattern
     line="$(grep -n "$2" "$1" | head -n 1 | cut -d: -f1)"
@@ -68,13 +74,13 @@ Describe 'bench_aggregate_union.sh member concat: the committed lines never weld
     The status should be success
   End
 
-  It 'site 8: input_count is the true 3 lines, never a welded 1'
+  It 'input_count is the true 3 lines, never a welded 1'
     eval "$countstmt"
     When call test "$input_count" = 3
     The status should be success
   End
 
-  It 'site 9: the written union file holds the true 3 unique members, never a fused record'
+  It 'the written union file holds the true 3 unique members, never a fused record'
     # run_timed isn't defined here (it just wraps timing) -- strip the
     # wrapper and eval the inner `sh -c "..."` payload directly. The payload
     # was written escaped for ITS OWN enclosing double quotes (\"...\"); undo
@@ -91,7 +97,7 @@ Describe 'bench_aggregate_union.sh member concat: the committed lines never weld
   End
 End
 
-Describe 'bench_aggregate_union.sh: the iprange recombine never welds v4 onto v6 (issue #1263 site 10)'
+Describe 'bench_aggregate_union.sh: the iprange recombine never welds v4 onto v6 (issue #1263, dev-tooling only)'
   # The straggler the brief's own enumeration missed: `cat a4.txt a6.txt > union_agg`
   # recombines the per-family aggregates. An unterminated a4.txt welds its last IPv4
   # CIDR onto a6.txt's first IPv6 CIDR, fusing a garbage record into the union.

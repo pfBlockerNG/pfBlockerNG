@@ -717,7 +717,9 @@ pfb_aggregate() {
 	fi
 	while IFS= read -r agg_member; do
 		[ -z "${agg_member}" ] && continue
-		[ -f "${agg_member}" ] && cat "${agg_member}" >> "${tempfile}"
+		# issue #1263: awk 1 supplies a record terminator cat doesn't -- an
+		# unterminated member no longer welds onto the next member's first line.
+		[ -f "${agg_member}" ] && awk 1 "${agg_member}" >> "${tempfile}"
 	done < "${agg_memberlist}"
 	if ! LC_ALL=C sort -u "${tempfile}" > "${dedupfile}"; then
 		log="aggregate [ ${agg_family} ]: union sort of [ ${tempfile} ] failed; keeping existing."
@@ -1888,7 +1890,9 @@ EOF
 		# result = rc 1" quirk -- non-zero is a real error) so a failed dedup
 		# can't truncate masterfile via an unconditional mv.
 		awk 'FNR==NR{a[$0];next}!($0 in a)' "${tempfile}" "${masterfile}" > "${tempfile2}" && mv -f "${tempfile2}" "${masterfile}"
-		cat "${addfile}" >> "${masterfile}"
+		# issue #1263: awk 1 guarantees masterfile stays newline-terminated --
+		# cat would silently inherit addfile's bare tail if it lacked one.
+		awk 1 "${addfile}" >> "${masterfile}"
 		cut -d ' ' -f2 "${masterfile}" > "${mastercat}"
 
 		echo; echo '  Removed the following IP ranges:'
@@ -1956,13 +1960,15 @@ processet() {
 			case ", ${etblock}, " in
 				*", ${list}, "*)
 					printf "%-10s %-25s\n" '  Block: ' "${list}"
-					cat "${etdir}/${list}.txt" >> "${tempfile}"
+					# issue #1263: awk 1 supplies a record terminator cat doesn't --
+					# a category file no longer welds onto the next one accumulated.
+					awk 1 "${etdir}/${list}.txt" >> "${tempfile}"
 					;;
 			esac
 			case ", ${etmatch}, " in
 				*", ${list}, "*)
 					printf "%-10s %-25s\n" '  Match: ' "${list}"
-					cat "${etdir}/${list}.txt" >> "${tempfile2}"
+					awk 1 "${etdir}/${list}.txt" >> "${tempfile2}"
 					;;
 			esac
 		done
