@@ -553,8 +553,10 @@ def alias_rule_dump(vm: SmokeVM, alias: str, *, timeout: float = 30.0) -> str:
     Two very different causes produce that, and only the layer that still has the rule
     tells them apart, so dump all three:
 
-      * CONFIG — ``filter/rule`` rows whose source/destination is ``alias`` (what the
-        pfBlockerNG sync wrote to config.xml);
+      * CONFIG — ``filter/rule`` rows whose source/destination address IS ``alias`` (what the
+        pfBlockerNG sync wrote to config.xml). A rule merely NAMING the alias in its ``descr``
+        does not count: descr is a label, and a label must never satisfy "a rule references
+        this table" — that would report the rule as generated when nothing enforces it;
       * RULES.DEBUG — ``alias`` in ``/tmp/rules.debug`` (what filter_configure emitted);
       * LIVE PF — ``alias`` in ``pfctl -sr``, plus whether the pf table itself exists.
 
@@ -564,40 +566,63 @@ def alias_rule_dump(vm: SmokeVM, alias: str, *, timeout: float = 30.0) -> str:
     applied it yet (genuine lag) or pfctl rejected the ruleset; present at all three ⇒ the
     poll read stale state.
 
-    issue #1239: this flake was filed with a fabricated cause ("rule_references does not
-    poll" — it does), so the NEXT occurrence must localise itself instead of being re-guessed.
+    A FAILED PROBE is never a missing rule: if the config read, the rules.debug grep or the
+    pfctl read errors out, the verdict is ``UNPROVEN`` — a broken probe reads as an empty
+    layer, and silently blaming the product for a pfSsh.php error is exactly the
+    misdiagnosis this helper exists to prevent (issue #1239).
+
+    The ruleset layers use :func:`rule_line_references`, the same match rule
+    :func:`rule_references` applies, so the dump cannot contradict the assertion it explains.
     """
     if not _ALIAS_RE.match(alias):
         raise ValueError(f"alias must be a bare pf table name ([A-Za-z0-9_]+), got {alias!r}")
 
-    # CONFIG: pfBlockerNG's auto-rules carry the table name in source/destination address
-    # (descr is a human label), so match the address fields — a descr-only match would miss
-    # a rule whose label was renamed. pfSsh.php, not `php -r`: only it can read the config.
+    # pfSsh.php, not `php -r`: only it can read the config.
     snippet = (
         f"$a='{alias}';\n"
         "$o=array();\n"
         "foreach(config_get_path('filter/rule',array()) as $r){\n"
         "  $s=(string)($r['source']['address']??'');\n"
         "  $d=(string)($r['destination']['address']??'');\n"
-        "  $c=(string)($r['descr']??'');\n"
-        "  if($s===$a||$d===$a||strpos($c,$a)!==FALSE){\n"
-        "    $o[]=$c.'|'.($r['type']??'').'|if='.($r['interface']??'').'|'.($r['ipprotocol']??'')\n"
-        "      .'|src='.$s.'|dst='.$d.'|disabled='.(isset($r['disabled'])?'1':'0');}\n"
+        "  if($s===$a||$d===$a){\n"
+        "    $o[]=(string)($r['descr']??'').'|'.($r['type']??'').'|if='.($r['interface']??'')\n"
+        "      .'|'.($r['ipprotocol']??'').'|src='.$s.'|dst='.$d\n"
+        "      .'|disabled='.(isset($r['disabled'])?'1':'0');}\n"
         "}\n"
         "echo '<<CFG>>'.implode(' ## ',$o).'<<END>>';"
     )
     cfg_res = php_eval(vm, snippet, timeout=timeout)
     cfg = ""
-    if "<<CFG>>" in cfg_res.stdout and "<<END>>" in cfg_res.stdout:
+    # The sentinels are the ONLY proof the snippet ran to completion: pfSsh.php exits 0 even
+    # when the PHP inside it fatals, so rc alone cannot tell a clean empty result from a crash.
+    cfg_ok = cfg_res.returncode == 0 and "<<CFG>>" in cfg_res.stdout and "<<END>>" in cfg_res.stdout
+    if cfg_ok:
         cfg = cfg_res.stdout.split("<<CFG>>", 1)[1].split("<<END>>", 1)[0]
 
+    # grep: rc 0 = matched, rc 1 = no match (a real answer), rc >= 2 = the grep itself failed
+    # (missing/unreadable /tmp/rules.debug) — only the last is an unusable probe.
     dbg = vm.ssh("/usr/bin/grep", "-n", alias, "/tmp/rules.debug", timeout=timeout)
     sr = vm.ssh(PFCTL, "-sr", timeout=timeout)
-    dbg_lines = [ln for ln in dbg.stdout.splitlines() if ln.strip()]
-    live = [ln for ln in sr.stdout.splitlines() if alias in ln]
-    table_exists = alias in pfctl_tables(vm, timeout=timeout)
+    dbg_ok = dbg.returncode in (0, 1)
+    sr_ok = sr.returncode == 0
+    dbg_lines = [ln for ln in dbg.stdout.splitlines() if rule_line_references(ln, alias)]
+    live = [ln for ln in sr.stdout.splitlines() if rule_line_references(ln, alias)]
 
-    if not cfg.strip():
+    tables_res = vm.ssh(PFCTL, "-sTables", timeout=timeout)
+    tables_ok = tables_res.returncode == 0
+    table_exists = alias in [ln.strip() for ln in tables_res.stdout.splitlines()] if tables_ok else None
+
+    broken = [
+        name
+        for name, ok in (("CONFIG(pfSsh)", cfg_ok), ("RULES.DEBUG(grep)", dbg_ok), ("LIVE PF(pfctl -sr)", sr_ok))
+        if not ok
+    ]
+    if broken:
+        stage = (
+            f"UNPROVEN — a probe FAILED ({', '.join(broken)}), so an empty layer below proves nothing. "
+            f"rc: pfSsh={cfg_res.returncode} grep={dbg.returncode} pfctl-sr={sr.returncode}"
+        )
+    elif not cfg.strip():
         stage = f"CONFIG — no filter/rule references {alias}: the rule was NEVER generated (product bug, not lag)"
     elif not dbg_lines:
         stage = "RULES.DEBUG — in config.xml but never emitted into the ruleset (rule generator dropped it)"
@@ -611,7 +636,7 @@ def alias_rule_dump(vm: SmokeVM, alias: str, *, timeout: float = 30.0) -> str:
         f"[CONFIG rows] {cfg.strip()}\n"
         f"[RULES.DEBUG {alias}: {len(dbg_lines)}] " + " || ".join(dbg_lines[:12]) + "\n"
         f"[LIVE PF -sr {alias}: {len(live)}] " + " || ".join(live[:6]) + "\n"
-        f"[pf table {alias} exists] {table_exists}"
+        f"[pf table {alias} exists] {'UNKNOWN (pfctl -sTables failed)' if table_exists is None else table_exists}"
     )
 
 
@@ -2864,12 +2889,26 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
     if spec.custom_domains:
         crlf = "\r\n".join(spec.custom_domains)
         custom_line = f"$list['custom'] = base64_encode({_php_str(crlf)});\n"
+    # DNSBL-IP reuses the IP-side rule builder, so it needs the SAME inbound/outbound
+    # interface config `_ip_inject_snippet` sets: without it pfBlockerNG builds the
+    # pfB_DNSBLIP_* tables but NO rule (inc:10132). Setting it here — not in the tests —
+    # is what keeps a DNSBL-IP case from depending on an IpCase sibling having run first
+    # and left the interfaces behind in the shared config (issue #1239).
+    ip_iface_line = ""
+    if spec.dnsbl_ip_action:
+        ipset = {"inbound_interface": SMOKE_IP_IFACE, "outbound_interface": SMOKE_IP_IFACE}
+        ip_iface_line = (
+            f"$ip = config_get_path({_php_str(CFG_IP_SETTINGS)}, array());\n"
+            f"$ip = array_merge($ip, {_php_kv_array(ipset)});\n"
+            f"config_set_path({_php_str(CFG_IP_SETTINGS)}, $ip);\n"
+        )
     return (
         # pfBlockerNG must be globally enabled for the DNSBL (and DNSBL-IP)
         # paths to run (inc:793 reads enable_cb; inc:3389/9307 gate on it).
         f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
         "$g['enable_cb'] = 'on';\n"
         f"config_set_path({_php_str(CFG_GLOBAL)}, $g);\n"
+        f"{ip_iface_line}"
         f"{_dnsbl_settings_replace_php(settings)}"
         f"$list = {_php_kv_array(listcfg)};\n"
         f"$list['row'] = {rows_php};\n"
@@ -4671,16 +4710,23 @@ def rule_references(vm: SmokeVM, alias: str, *, timeout: float = 30.0, attempts:
     a baked ``CI HARNESS RULE`` or the floating ``REJECT ALL OUT MGT1``. A non-``pfB_``
     alias is still honoured, via the exact table-reference match alone.
     """
-    pfb_owned = alias.startswith("pfB_")
     for attempt in range(attempts):
         result = vm.ssh(PFCTL, "-sr", timeout=timeout)
         if result.returncode != 0:
             raise RuntimeError(f"pfctl -sr failed: rc={result.returncode} stderr={result.stderr!r}")
-        if any(f"<{alias}>" in line or (pfb_owned and alias in line) for line in result.stdout.splitlines()):
+        if any(rule_line_references(line, alias) for line in result.stdout.splitlines()):
             return True
         if attempt < attempts - 1:
             time.sleep(delay)
     return False
+
+
+def rule_line_references(line: str, alias: str) -> bool:
+    """True iff one ruleset line references table ``alias`` — the match rule of
+    :func:`rule_references`, shared so :func:`alias_rule_dump` (which exists to EXPLAIN a
+    rule_references failure) cannot disagree with it about what "references" means.
+    """
+    return f"<{alias}>" in line or (alias.startswith("pfB_") and alias in line)
 
 
 def wait_until(predicate: Callable[[], bool], *, timeout: float = 12.0, interval: float = 2.0) -> bool:
