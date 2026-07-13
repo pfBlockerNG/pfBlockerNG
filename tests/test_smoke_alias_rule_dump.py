@@ -48,25 +48,34 @@ class _FakeVM:
     rules_debug: str = ""
     live_rules: str = ""
     tables: str = ""
+    grep_rc: int | None = None
+    sr_rc: int = 0
+    tables_rc: int = 0
     calls: list[tuple[str, ...]] = field(default_factory=list)
 
     def ssh(self, *remote: str, timeout: float = 60.0) -> _FakeResult:
         self.calls.append(remote)
         if remote[0] == "/usr/bin/grep":
             # grep exits 1 on no match — the dump must treat that as "absent", not as an error.
-            return _FakeResult(returncode=0 if self.rules_debug else 1, stdout=self.rules_debug)
+            rc = self.grep_rc if self.grep_rc is not None else (0 if self.rules_debug else 1)
+            return _FakeResult(returncode=rc, stdout=self.rules_debug)
         if remote[:2] == (helpers.PFCTL, "-sr"):
-            return _FakeResult(stdout=self.live_rules)
+            return _FakeResult(returncode=self.sr_rc, stdout=self.live_rules)
         if remote[:2] == (helpers.PFCTL, "-sTables"):
-            return _FakeResult(stdout=self.tables)
+            return _FakeResult(returncode=self.tables_rc, stdout=self.tables)
         raise AssertionError(f"unexpected ssh command: {remote}")
 
 
-def _fake_php_eval(rows: str) -> object:
-    """Return a php_eval stand-in emitting the dump's ``<<CFG>>``-delimited config rows."""
+def _fake_php_eval(rows: str, *, returncode: int = 0, raw: str | None = None) -> object:
+    """Return a php_eval stand-in emitting the dump's ``<<CFG>>``-delimited config rows.
+
+    ``raw`` replaces the whole stdout, so a test can simulate pfSsh.php fatalling before it
+    printed the sentinels (it still exits 0 — the sentinels are the only completion proof).
+    """
 
     def _run(_vm: object, _snippet: str, *, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess(args=[], returncode=0, stdout=f"banner\n<<CFG>>{rows}<<END>>\n", stderr="")
+        stdout = raw if raw is not None else f"banner\n<<CFG>>{rows}<<END>>\n"
+        return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr="")
 
     return _run
 
@@ -145,6 +154,89 @@ def test_missing_pf_table_is_reported_rather_than_assumed(monkeypatch: pytest.Mo
     dump = helpers.alias_rule_dump(vm, ALIAS)  # type: ignore[arg-type]
 
     assert "[pf table pfB_DNSBLIP_v4 exists] False" in dump, f"absent table not reported:\n{dump}"
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "vm_kwargs", "broken"),
+    [
+        # pfSsh.php exits 0 even when the PHP inside it fatals, so a missing sentinel — not
+        # the return code — is what proves the config read never completed.
+        ({"raw": "banner\nPHP Fatal error: something\n"}, {}, "CONFIG(pfSsh)"),
+        ({"returncode": 1}, {}, "CONFIG(pfSsh)"),
+        # grep rc>=2 = the grep itself failed (e.g. /tmp/rules.debug missing); rc 1 is a real
+        # "no match" answer and must NOT be treated as a broken probe (covered elsewhere).
+        ({}, {"grep_rc": 2}, "RULES.DEBUG(grep)"),
+        ({}, {"sr_rc": 1}, "LIVE PF(pfctl -sr)"),
+    ],
+    ids=["pfssh-fatal", "pfssh-nonzero-rc", "grep-error", "pfctl-error"],
+)
+def test_a_failed_probe_is_unproven_never_an_accusation(
+    monkeypatch: pytest.MonkeyPatch,
+    kwargs: dict[str, object],
+    vm_kwargs: dict[str, object],
+    broken: str,
+) -> None:
+    """Given a probe that ERRORS rather than returning an answer
+    When alias_rule_dump runs
+    Then the verdict is UNPROVEN and names the broken probe — it must NEVER read a failed
+    probe's empty output as "the rule was never generated". Blaming the product for a
+    pfSsh.php error is precisely the misdiagnosis this helper exists to prevent, so the
+    accusing CONFIG verdict must be absent.
+    """
+    monkeypatch.setattr(helpers, "php_eval", _fake_php_eval(CFG_ROW, **kwargs))  # type: ignore[arg-type]
+    vm = _FakeVM(rules_debug=DEBUG_ROW, live_rules=LIVE_ROW, tables=ALIAS, **vm_kwargs)  # type: ignore[arg-type]
+
+    dump = helpers.alias_rule_dump(vm, ALIAS)  # type: ignore[arg-type]
+
+    stage_line = next(ln for ln in dump.splitlines() if ln.startswith("[STAGE LOST]"))
+    assert "UNPROVEN" in stage_line, f"a failed probe did not yield UNPROVEN: {stage_line!r}"
+    assert broken in stage_line, f"the broken probe {broken!r} is not named: {stage_line!r}"
+    assert "NEVER generated" not in stage_line, f"a failed probe accused the product: {stage_line!r}"
+
+
+def test_a_rule_naming_the_alias_only_in_its_descr_does_not_count_as_a_reference() -> None:
+    """The CONFIG layer must match the source/destination ADDRESS, never the descr label.
+
+    A rule whose descr merely mentions the table enforces nothing. Counting it would report
+    the rule as generated while no traffic is actually filtered — the exact false-negative
+    that would have hidden #1239's real defect. Pinned on the emitted PHP, which is where
+    the matching happens.
+    """
+    php = _php_snippet_for(ALIAS)
+
+    assert "$s===$a||$d===$a" in php, f"CONFIG no longer matches on the address fields:\n{php}"
+    assert "strpos" not in php, f"CONFIG still admits a descr substring match:\n{php}"
+
+
+def _php_snippet_for(alias: str) -> str:
+    """Capture the PHP the dump feeds pfSsh.php (the snippet is built inline, not exported)."""
+    captured: list[str] = []
+
+    def _capture(_vm: object, snippet: str, *, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
+        captured.append(snippet)
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout="<<CFG>><<END>>", stderr="")
+
+    original = helpers.php_eval
+    helpers.php_eval = _capture  # type: ignore[assignment]
+    try:
+        helpers.alias_rule_dump(_FakeVM(), alias)  # type: ignore[arg-type]
+    finally:
+        helpers.php_eval = original  # type: ignore[assignment]
+    return captured[0]
+
+
+def test_ruleset_layers_use_the_same_match_rule_as_the_assertion_they_explain() -> None:
+    """The dump explains a rule_references failure, so it must not disagree with it.
+
+    If the dump applied a looser (or stricter) match than rule_references, it could report
+    the rule as PRESENT at live pf on the very run where rule_references declared it absent —
+    a self-contradicting diagnostic. Both route through rule_line_references.
+    """
+    assert helpers.rule_line_references(f"block drop in quick from <{ALIAS}> to any", ALIAS)
+    assert not helpers.rule_line_references("block drop in quick from <pfB_Other_v4> to any", ALIAS)
+    # A non-pfB_ alias gets the exact table-reference match ONLY — a bare token must not
+    # match a foreign rule (the baked CI harness rules mention plenty of generic words).
+    assert not helpers.rule_line_references("block drop in quick on em0 # mentions harness", "harness")
 
 
 @pytest.mark.parametrize(
