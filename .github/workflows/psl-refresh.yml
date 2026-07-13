@@ -50,6 +50,7 @@ jobs:
   refresh:
     name: Refresh dnsbl_tld and open PR on change
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write        # push the automation branch (NOT devel)
       pull-requests: write    # open/label the PR
@@ -94,7 +95,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          COMMIT_SHA=$(grep -m1 '^# COMMIT:' src/usr/local/pkg/pfblockerng/dnsbl_tld | sed 's/^# COMMIT: //')
+          # No pipeline: a missing header must fail loudly under set -e, not
+          # yield an empty sha in the commit message.
+          COMMIT_SHA=$(grep -m1 '^# COMMIT:' src/usr/local/pkg/pfblockerng/dnsbl_tld)
+          COMMIT_SHA="${COMMIT_SHA#\# COMMIT: }"
           TODAY=$(date -u +%Y-%m-%d)
           SYNC_MSG="dnsbl_tld: sync with publicsuffix/list @ $COMMIT_SHA ($TODAY)"
 
@@ -114,13 +118,15 @@ jobs:
           if [ -n "$PR_NUMBER" ]; then
             echo "An open PR from $BRANCH already exists (#$PR_NUMBER) — the force-push updated it."
           else
-            gh pr create \
+            # gh pr create has no --json; its stdout is the PR URL — derive the
+            # number from it rather than re-querying (list can lag the create).
+            PR_URL=$(gh pr create \
               --base devel \
               --head "$BRANCH" \
               --title "$SYNC_MSG" \
               --label "enhancement" \
-              --body "Automated weekly refresh of the DNSBL wildcard public-suffix snapshot (\`dnsbl_tld\`) from the [Public Suffix List](https://publicsuffix.org/list/public_suffix_list.dat) (ICANN section only — wildcard/exception rules skipped by design), via \`scripts/misc/update_public_suffix_list.py\`. Review the data diff. GitHub runs no automatic CI on a GITHUB_TOKEN-created PR, and dispatched runs do not appear in this PR's Checks tab — the workflow dispatches the unit suite (\`test.yml\`) onto this branch's head and links the run in a comment below (also visible in the repo's Actions tab). This diff touches only a data file, so the Tier-A \`ui_render\` gate is not required. Merge once the linked run is green. Part of #1272 — see docs/misc/public-suffix-list.md."
-            PR_NUMBER=$(gh pr list --head "$BRANCH" --base devel --state open --json number --jq '.[0].number')
+              --body "Automated weekly refresh of the DNSBL wildcard public-suffix snapshot (\`dnsbl_tld\`) from the [Public Suffix List](https://publicsuffix.org/list/public_suffix_list.dat) (ICANN section only — wildcard/exception rules skipped by design), via \`scripts/misc/update_public_suffix_list.py\`. Review the data diff. GitHub runs no automatic CI on a GITHUB_TOKEN-created PR, and dispatched runs do not appear in this PR's Checks tab — the workflow dispatches the unit suite (\`test.yml\`) onto this branch's head and links the run in a comment below (also visible in the repo's Actions tab). This diff touches only a data file, so the Tier-A \`ui_render\` gate is not required. Merge once the linked run is green. Part of #1272 — see docs/misc/public-suffix-list.md.")
+            PR_NUMBER="${PR_URL##*/}"
           fi
 
           # GITHUB_TOKEN-created pushes/PRs trigger no workflow runs, so the
