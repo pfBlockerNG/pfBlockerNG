@@ -542,6 +542,79 @@ def pf_state_dump(vm: SmokeVM, *, timeout: float = 30.0) -> str:
     )
 
 
+_ALIAS_RE = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+def alias_rule_dump(vm: SmokeVM, alias: str, *, timeout: float = 30.0) -> str:
+    """Return a layered snapshot naming WHERE a pfB alias's auto-rule was lost.
+
+    :func:`rule_references` already polls, so its failure does NOT mean "we read too
+    early" — no rule naming ``alias`` reached live pf within the whole poll window.
+    Two very different causes produce that, and only the layer that still has the rule
+    tells them apart, so dump all three:
+
+      * CONFIG — ``filter/rule`` rows whose source/destination is ``alias`` (what the
+        pfBlockerNG sync wrote to config.xml);
+      * RULES.DEBUG — ``alias`` in ``/tmp/rules.debug`` (what filter_configure emitted);
+      * LIVE PF — ``alias`` in ``pfctl -sr``, plus whether the pf table itself exists.
+
+    The reported ``[STAGE LOST]`` is the verdict: absent from CONFIG ⇒ the rule was never
+    generated (a product bug, NOT reload lag); in CONFIG but not RULES.DEBUG ⇒ the pfSense
+    rule generator dropped it; in RULES.DEBUG but not LIVE PF ⇒ filter_configure has not
+    applied it yet (genuine lag) or pfctl rejected the ruleset; present at all three ⇒ the
+    poll read stale state.
+
+    issue #1239: this flake was filed with a fabricated cause ("rule_references does not
+    poll" — it does), so the NEXT occurrence must localise itself instead of being re-guessed.
+    """
+    if not _ALIAS_RE.match(alias):
+        raise ValueError(f"alias must be a bare pf table name ([A-Za-z0-9_]+), got {alias!r}")
+
+    # CONFIG: pfBlockerNG's auto-rules carry the table name in source/destination address
+    # (descr is a human label), so match the address fields — a descr-only match would miss
+    # a rule whose label was renamed. pfSsh.php, not `php -r`: only it can read the config.
+    snippet = (
+        f"$a='{alias}';\n"
+        "$o=array();\n"
+        "foreach(config_get_path('filter/rule',array()) as $r){\n"
+        "  $s=(string)($r['source']['address']??'');\n"
+        "  $d=(string)($r['destination']['address']??'');\n"
+        "  $c=(string)($r['descr']??'');\n"
+        "  if($s===$a||$d===$a||strpos($c,$a)!==FALSE){\n"
+        "    $o[]=$c.'|'.($r['type']??'').'|if='.($r['interface']??'').'|'.($r['ipprotocol']??'')\n"
+        "      .'|src='.$s.'|dst='.$d.'|disabled='.(isset($r['disabled'])?'1':'0');}\n"
+        "}\n"
+        "echo '<<CFG>>'.implode(' ## ',$o).'<<END>>';"
+    )
+    cfg_res = php_eval(vm, snippet, timeout=timeout)
+    cfg = ""
+    if "<<CFG>>" in cfg_res.stdout and "<<END>>" in cfg_res.stdout:
+        cfg = cfg_res.stdout.split("<<CFG>>", 1)[1].split("<<END>>", 1)[0]
+
+    dbg = vm.ssh("/usr/bin/grep", "-n", alias, "/tmp/rules.debug", timeout=timeout)
+    sr = vm.ssh(PFCTL, "-sr", timeout=timeout)
+    dbg_lines = [ln for ln in dbg.stdout.splitlines() if ln.strip()]
+    live = [ln for ln in sr.stdout.splitlines() if alias in ln]
+    table_exists = alias in pfctl_tables(vm, timeout=timeout)
+
+    if not cfg.strip():
+        stage = f"CONFIG — no filter/rule references {alias}: the rule was NEVER generated (product bug, not lag)"
+    elif not dbg_lines:
+        stage = "RULES.DEBUG — in config.xml but never emitted into the ruleset (rule generator dropped it)"
+    elif not live:
+        stage = "LIVE PF — emitted but not loaded: filter_configure has not applied it yet (lag), or pfctl refused it"
+    else:
+        stage = "NONE — the rule is present at all three layers; the poll read stale state"
+
+    return (
+        f"[STAGE LOST] {stage}\n"
+        f"[CONFIG rows] {cfg.strip()}\n"
+        f"[RULES.DEBUG {alias}: {len(dbg_lines)}] " + " || ".join(dbg_lines[:12]) + "\n"
+        f"[LIVE PF -sr {alias}: {len(live)}] " + " || ".join(live[:6]) + "\n"
+        f"[pf table {alias} exists] {table_exists}"
+    )
+
+
 def deinstall_debug(vm: SmokeVM, *, timeout: float = 30.0) -> str:
     """Return deinstall-sweep evidence for the uninstall-survival failures.
 
