@@ -1,5 +1,6 @@
 #!/bin/sh
-# prepare-commit-msg: credit the human owner as a Co-Authored-By trailer.
+# prepare-commit-msg: agent worktree guard, then credit the human owner as a
+# Co-Authored-By trailer.
 #
 # In agent / managed-remote environments the *committer* is the agent (e.g.
 # Claude) and GitHub attributes the commit — and the contribution credit it
@@ -20,6 +21,24 @@
 # Enable: git config core.hooksPath .githooks
 
 set -u
+
+# Agent worktree guard (issue #1262): an agent commit (CLAUDECODE=1) in the
+# PRIMARY checkout aborts — agents commit only in linked worktrees (CLAUDE.md
+# "Worktrees"). Lives HERE because this hook still runs when verification is
+# skipped. Git STATE decides (never command text): --git-dir equals
+# --git-common-dir only in the primary checkout. Skipped when the checkout is
+# agent-dedicated: managed-remote sessions (CLAUDE_CODE_USER_EMAIL set) or an
+# explicit `git config pfblockerng.allowprimarycommit true`.
+if [ "${CLAUDECODE:-}" = "1" ] && [ -z "${CLAUDE_CODE_USER_EMAIL:-}" ] &&
+	[ "$(git config --bool --get pfblockerng.allowprimarycommit 2>/dev/null)" != "true" ]; then
+	git_dir=$(cd "$(git rev-parse --git-dir)" && pwd -P)
+	common_dir=$(cd "$(git rev-parse --git-common-dir)" && pwd -P)
+	if [ "$git_dir" = "$common_dir" ]; then
+		echo "prepare-commit-msg: agent commit in the primary checkout blocked — agents commit only in a linked worktree (issue #1262)." >&2
+		echo "If this checkout is dedicated to the agent: git config pfblockerng.allowprimarycommit true" >&2
+		exit 1
+	fi
+fi
 
 msg_file=$1
 msg_type=${2:-}
