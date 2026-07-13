@@ -3233,10 +3233,11 @@ function pfb_log_age_trim_write_ok($written, string $content): bool {
 	return $written !== FALSE && $written === strlen($content);
 }
 
-// issue #1052/#1109: probe-before-copy for the age-cap pass (both branches) --
-// an unexpired FIRST line means nothing is expired (skip this tick); unparseable/
-// empty/unopenable fall through TRUE. $margin_pct widens the cutoff (0=exact).
-function pfb_log_age_trim_needed(string $path, int $agedays, string $logtype, int $margin_pct = 0): bool {
+// issue #1052/#1109: probe-before-copy (both branches); unparseable/empty/
+// unopenable fall through TRUE. issue #1258: parses $margin_raw HERE
+// (self-defending) -- no caller can hand an unclamped margin.
+function pfb_log_age_trim_needed(string $path, int $agedays, string $logtype, $margin_raw = 0): bool {
+	$margin_pct = pfb_log_trim_margin_pct($margin_raw);
 	$fh = @fopen($path, 'r');
 	if ($fh === FALSE) {
 		return TRUE;
@@ -3282,10 +3283,11 @@ function pfb_count_lines(string $path): ?int {
 	return $lines + ($last_byte === '' || $last_byte === "\n" ? 0 : 1);
 }
 
-// issue #1109: ONE unified high-water guard for both pfb_log_mgmt() branches --
-// fires iff an active cap is past its margin-widened high-water mark. Float math
-// (ADR-28 #2 short-circuit): $logmax is unclamped so intdiv() could get a float.
-function pfb_log_trim_needed(int|string $logmax, int $agedays, string $path, string $logtype, int $margin_pct): bool {
+// issue #1109/#1258: ONE unified high-water guard for both pfb_log_mgmt()
+// branches -- fires past a margin-widened high-water mark; $margin_raw is
+// parsed HERE (self-defending). $logmax unclamped -- float math, not intdiv().
+function pfb_log_trim_needed(int|string $logmax, int $agedays, string $path, string $logtype, $margin_raw): bool {
+	$margin_pct = pfb_log_trim_margin_pct($margin_raw);
 	if ($logmax !== 'nolimit') {
 		$high_water = (float) $logmax * (1.0 + ($margin_pct / 100.0));
 		// fail HIGH: a count failure must never silently skip a trim that IS needed.
@@ -3303,8 +3305,6 @@ function pfb_log_mgmt() {
 	pfb_global();
 
 	$chroot_folder = '/var/unbound';
-	// issue #1109: global hysteresis margin, read once for every log type.
-	$margin_pct = pfb_log_trim_margin_pct($pfb['config']['pfb_log_trim_margin_pct'] ?? '');
 
 	foreach (array(	'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog', 'ip_matchlog',
 			'ip_parse_err', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog') as $logtype) {
@@ -3337,7 +3337,7 @@ function pfb_log_mgmt() {
 				if (file_exists($final_log_file)) {
 					// issue #1109: skip this tick's whole pass unless an active cap is
 					// past its margin-widened high-water mark (the hysteresis trigger).
-					if (!pfb_log_trim_needed($logmax, $agedays, $final_log_file, $logtype, $margin_pct)) {
+					if (!pfb_log_trim_needed($logmax, $agedays, $final_log_file, $logtype, $pfb['config']['pfb_log_trim_margin_pct'] ?? '')) {
 						unlink_if_exists($temp);
 						continue;
 					}
@@ -3375,7 +3375,7 @@ function pfb_log_mgmt() {
 			else {
 				$temp = tempnam("{$g['tmp_path']}/", 'pfb_log_');
 				// issue #1109: same unified high-water guard as the chroot branch above.
-				if (!pfb_log_trim_needed($logmax, $agedays, $pfb[$logtype], $logtype, $margin_pct)) {
+				if (!pfb_log_trim_needed($logmax, $agedays, $pfb[$logtype], $logtype, $pfb['config']['pfb_log_trim_margin_pct'] ?? '')) {
 					unlink_if_exists($temp);
 					continue;
 				}

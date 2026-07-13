@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -1211,6 +1212,93 @@ final class LogMgmtAgeCutoffTest extends TestCase
 		clearstatcache(TRUE, $logPath);
 		$this->assertSame($content, file_get_contents($logPath),
 			'an array pfb_log_trim_margin_pct value must parse to 0 and must not crash pfb_log_mgmt()'
+		);
+	}
+
+	// -----------------------------------------------------------------------
+	// issue #1258 -- end-to-end proof that a hostile pfb_log_trim_margin_pct
+	// config value can no longer reach the guards unclamped, on BOTH
+	// pfb_log_mgmt() branches. Age cap left OFF (0) so only the line-cap
+	// guard's own high-water math is in play; content stays well under cap.
+	// -----------------------------------------------------------------------
+
+	public static function hostileMarginConfigValues(): array
+	{
+		return [
+			'oversized numeric (PHP_INT_MAX)' => [(string) PHP_INT_MAX],
+			'oversized numeric (999999999)'   => ['999999999'],
+			'negative'                        => ['-5'],
+		];
+	}
+
+	#[DataProvider('hostileMarginConfigValues')]
+	public function testHostileMarginConfigValueDoesNotCrashPlainBranch(string $marginRaw): void
+	{
+		$this->seedMinimalConfig();
+		$this->setLogCaps('log', '10', '0');
+		$this->setMarginPct($marginRaw);
+		$this->ensureLogDir();
+		pfb_global();
+
+		$logPath = $this->logPath('log');
+		$content = "l0\nl1\nl2\nl3\nl4\n"; // 5 lines, well under the 10-line cap
+		file_put_contents($logPath, $content);
+
+		pfb_log_mgmt();
+
+		clearstatcache(TRUE, $logPath);
+		$this->assertSame($content, file_get_contents($logPath),
+			"a hostile pfb_log_trim_margin_pct ('{$marginRaw}') must not crash pfb_log_mgmt() and must not wipe a within-cap log"
+		);
+	}
+
+	#[DataProvider('hostileMarginConfigValues')]
+	public function testHostileMarginConfigValueDoesNotCrashChrootBranch(string $marginRaw): void
+	{
+		$this->seedMinimalConfig();
+		$this->setLogCaps('dnslog', '10', '0');
+		$this->setMarginPct($marginRaw);
+		$this->ensureLogDir();
+		pfb_global();
+
+		$logPath = $this->logPath('dnslog');
+		$lines = [];
+		for ($i = 0; $i < 3; $i++) {
+			$lines[] = 'DNSBL-python,' . $this->now() . ",d{$i}.example.com,127.0.0.1,Python,Block,Feed,eval,feed,+,A";
+		}
+		$content = implode("\n", $lines) . "\n"; // 3 rows, well under the 10-row cap
+		file_put_contents($logPath, $content);
+
+		pfb_log_mgmt();
+
+		clearstatcache(TRUE, $logPath);
+		$this->assertSame($content, file_get_contents($logPath),
+			"chroot branch: a hostile pfb_log_trim_margin_pct ('{$marginRaw}') must not crash and must not wipe a within-cap log"
+		);
+	}
+
+	/** Chroot-branch companion to testMarginConfigValueAsArrayDoesNotCrash() (plain branch only). */
+	public function testHostileArrayMarginConfigValueDoesNotCrashChrootBranch(): void
+	{
+		$this->seedMinimalConfig();
+		$this->setLogCaps('dnslog', '10', '0');
+		config_set_path('installedpackages/pfblockerng/config/0/pfb_log_trim_margin_pct', ['50']);
+		$this->ensureLogDir();
+		pfb_global();
+
+		$logPath = $this->logPath('dnslog');
+		$lines = [];
+		for ($i = 0; $i < 3; $i++) {
+			$lines[] = 'DNSBL-python,' . $this->now() . ",d{$i}.example.com,127.0.0.1,Python,Block,Feed,eval,feed,+,A";
+		}
+		$content = implode("\n", $lines) . "\n";
+		file_put_contents($logPath, $content);
+
+		pfb_log_mgmt();
+
+		clearstatcache(TRUE, $logPath);
+		$this->assertSame($content, file_get_contents($logPath),
+			'chroot branch: an array pfb_log_trim_margin_pct value must parse to 0 and must not crash pfb_log_mgmt()'
 		);
 	}
 }
