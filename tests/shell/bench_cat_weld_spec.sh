@@ -48,8 +48,8 @@ End
 
 Describe 'bench_aggregate_union.sh member concat: the committed lines never weld member records (issue #1263, dev-tooling only -- NOT the production pfb_aggregate() site)'
   extract_stmt() {
-    # $1 = file  $2 = anchor grep pattern
-    line="$(grep -n "$2" "$1" | head -n 1 | cut -d: -f1)"
+    # $1 = file  $2 = literal anchor substring (-F: anchors are committed text, not regexes)
+    line="$(grep -Fn "$2" "$1" | head -n 1 | cut -d: -f1)"
     [ -n "$line" ] || return 1
     sed -n "${line}p" "$1"
   }
@@ -62,7 +62,7 @@ Describe 'bench_aggregate_union.sh member concat: the committed lines never weld
     printf '10.0.0.1' > "${memberdir}/deny_a.txt"
     printf '10.0.0.2' > "${memberdir}/deny_b.txt"
     printf '10.0.0.3' > "${memberdir}/deny_c.txt"
-    countstmt="$(extract_stmt "${PFB_ROOT}/scripts/misc/bench_aggregate_union.sh" 'input_count="\$(')"
+    countstmt="$(extract_stmt "${PFB_ROOT}/scripts/misc/bench_aggregate_union.sh" 'input_count="$(')"
     unionstmt="$(extract_stmt "${PFB_ROOT}/scripts/misc/bench_aggregate_union.sh" 'run_timed sh -c')"
   }
   cleanup() { rm -rf "$work"; }
