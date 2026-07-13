@@ -43,6 +43,8 @@ final class AlertsIpConvertPrefetchParityTest extends TestCase
 	private string $ccdir;
 	private string $etdir;
 	private string $aliasdir;
+	private string $matchdir;
+	private string $matchgendir;
 
 	/** @var array<string, mixed> */
 	private array $savedGlobals = [];
@@ -70,12 +72,24 @@ final class AlertsIpConvertPrefetchParityTest extends TestCase
 		$this->ccdir     = "{$this->tmpDir}/geoip";
 		$this->etdir     = "{$this->tmpDir}/et";
 		$this->aliasdir  = "{$this->tmpDir}/alias";
-		foreach ([$this->denydir, $this->nativedir, $this->ccdir, $this->etdir, $this->aliasdir] as $d) {
+		$this->matchdir  = "{$this->tmpDir}/match";
+		// issue #1250: a real subdirectory of matchdir (mirrors production -- matchdir
+		// nests matchgendir on-disk), distinct enough to prove the 'match' folder
+		// derivation names BOTH, not just one.
+		$this->matchgendir = "{$this->matchdir}/generated";
+		foreach ([
+			$this->denydir, $this->nativedir, $this->ccdir, $this->etdir, $this->aliasdir,
+			$this->matchdir, $this->matchgendir,
+		] as $d) {
 			mkdir($d, 0777, TRUE);
 		}
-		// Keeps nativedir non-empty (avoids the shell literal-glob edge case on an
-		// otherwise-empty dir); mirrors IpPrefetchTest's fixtures/ip_prefetch/native.
+		// Keeps nativedir/matchdir/matchgendir non-empty (avoids the shell literal-glob
+		// edge case on an otherwise-empty dir); mirrors IpPrefetchTest's
+		// fixtures/ip_prefetch/native. Every 'match'-action case below adds its own file
+		// to ONE of matchdir/matchgendir, leaving the other empty otherwise.
 		file_put_contents("{$this->nativedir}/NativePlaceholder.txt", "placeholder\n");
+		file_put_contents("{$this->matchdir}/MatchPlaceholder.txt", "placeholder\n");
+		file_put_contents("{$this->matchgendir}/MatchGenPlaceholder.txt", "placeholder\n");
 		// ccdir/etdir/aliasdir each need a SECOND, non-matching file: grep only
 		// prefixes a matched line with "path:" when >1 file is searched, and
 		// find_reported_header()'s pfb_parse_query() (feed/alias name split) and
@@ -90,8 +104,9 @@ final class AlertsIpConvertPrefetchParityTest extends TestCase
 			'grep'             => '/usr/bin/grep',
 			'denydir'          => $this->denydir,
 			'nativedir'        => $this->nativedir,
-			'permitdir'        => "{$this->tmpDir}/permit",	// unused by these cases (Action is always 'block')
-			'matchdir'         => "{$this->tmpDir}/match",	// unused by these cases
+			'permitdir'        => "{$this->tmpDir}/permit",	// unused by these cases (Action is 'block' or 'match')
+			'matchdir'         => $this->matchdir,
+			'matchgendir'      => $this->matchgendir,
 			'etdir'            => $this->etdir,
 			'ccdir'            => $this->ccdir,
 			'aliasdir'         => $this->aliasdir,
@@ -457,6 +472,69 @@ final class AlertsIpConvertPrefetchParityTest extends TestCase
 			'pfB_LoneNewAlias_v4',
 			$html,
 			"expected the rendered row to show the real new alias name 'pfB_LoneNewAlias_v4', got:\n{$html}"
+		);
+	}
+
+	/**
+	 * Case 10 -- issue #1250: a 'match' event whose IP was relocated to a matchgendir
+	 * reputation artifact (the logged feed name is the OLD one, before the relocation
+	 * renamed/moved it -- same "moved feed" shape as case 3, but over the branch that
+	 * was widened to search matchgendir).
+	 *
+	 * Given: the reported IP lives ONLY in a matchgendir artifact
+	 *        (pfB_Match_Rep_Spam_v4.txt), not under the event's originally-logged feed
+	 *        name.
+	 * When: convert_ip_log() renders the 'match' event, both prefetch-seeded and cold.
+	 * Then: parity holds, AND the rendered HTML attributes the event to the real
+	 *       matchgendir feed -- not "Not listed!" (which is what a folder derivation
+	 *       missing matchgendir would render).
+	 */
+	public function test_match_event_reputation_artifact_in_matchgendir_attributes_to_that_feed(): void
+	{
+		file_put_contents("{$this->matchgendir}/pfB_Match_Rep_Spam_v4.txt", "192.0.2.60\n");
+
+		$fields = $this->rawFields([
+			4 => 'match', 8 => '192.0.2.60', 15 => '192.0.2.60',
+			14 => 'pfB_OldMatchAlias_v4', 16 => 'MatchFeedOldSpam',
+		]);
+
+		$html = $this->assertParity($fields, 'Match', 'match event, reputation artifact relocated to matchgendir');
+
+		$this->assertStringContainsString(
+			'pfB_Match_Rep_Spam_v4',
+			$html,
+			"expected the rendered row to attribute this match event to the matchgendir feed "
+				. "'pfB_Match_Rep_Spam_v4' (issue #1250), got:\n{$html}"
+		);
+	}
+
+	/**
+	 * Case 11 -- issue #1250: a 'match' event caused by a user-chosen Match-list still
+	 * attributes correctly -- the widening that added matchgendir must not have
+	 * regressed the pre-existing matchdir half of the branch (same "still-listed"
+	 * shape as case 1).
+	 *
+	 * Given: the reported IP is still an exact line in its logged user Match-list file
+	 *        (Ads_v4.txt), which stays in matchdir (never relocated).
+	 * When: convert_ip_log() renders the 'match' event, both prefetch-seeded and cold.
+	 * Then: parity holds, AND the rendered HTML still attributes to the logged feed.
+	 */
+	public function test_match_event_user_list_in_matchdir_still_attributes_to_that_feed(): void
+	{
+		file_put_contents("{$this->matchdir}/Ads_v4.txt", "198.51.100.77\n");
+
+		$fields = $this->rawFields([
+			4 => 'match', 8 => '198.51.100.77', 15 => '198.51.100.77',
+			14 => 'pfB_Ads_v4', 16 => 'Ads_v4',
+		]);
+
+		$html = $this->assertParity($fields, 'Match', 'match event, user Match-list in matchdir');
+
+		$this->assertStringContainsString(
+			'Ads_v4',
+			$html,
+			"expected the rendered row to still attribute this match event to the matchdir feed "
+				. "'Ads_v4', got:\n{$html}"
 		);
 	}
 }
