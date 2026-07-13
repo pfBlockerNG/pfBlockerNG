@@ -46,6 +46,9 @@ $pfb['etdir']		= "{$pfb['dbdir']}/ET";
 $pfb['nativedir']	= "{$pfb['dbdir']}/native";
 $pfb['denydir']		= "{$pfb['dbdir']}/deny";
 $pfb['matchdir']	= "{$pfb['dbdir']}/match";
+// issue #1250: machine-generated match artifacts, kept out of matchdir so a
+// user-chosen Match-list header can never collide with them.
+$pfb['matchgendir']	= "{$pfb['matchdir']}/generated";
 $pfb['permitdir']	= "{$pfb['dbdir']}/permit";
 $pfb['origdir']		= "{$pfb['dbdir']}/original";
 $pfb['snapdir']		= "{$pfb['dbdir']}/snapshot";	// issue #1084: pristine post-preprocessing feed snapshots (recompute memberlist inputs)
@@ -72,7 +75,8 @@ $pfb['wc']	= '/usr/bin/wc';
 // Folder Array
 $pfb['folder_array'] = array(	"{$pfb['dbdir']}", "{$pfb['logdir']}", "{$pfb['ccdir']}", "{$pfb['origdir']}", "{$pfb['nativedir']}",
 				"{$pfb['denydir']}", "{$pfb['matchdir']}","{$pfb['permitdir']}", "{$pfb['aliasdir']}",
-				"{$pfb['dnsdir']}", "{$pfb['dnsorigdir']}", "{$pfb['dnsalias']}", "{$pfb['snapdir']}");
+				"{$pfb['dnsdir']}", "{$pfb['dnsorigdir']}", "{$pfb['dnsalias']}", "{$pfb['snapdir']}",
+				"{$pfb['matchgendir']}");
 
 // Files
 $pfb['log']		= "{$pfb['logdir']}/pfblockerng.log";

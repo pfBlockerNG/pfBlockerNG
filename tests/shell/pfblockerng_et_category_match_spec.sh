@@ -16,7 +16,8 @@ Describe 'processet() ET category selection (issue #713 bug 6)'
     pfborig="${work}/orig/"
     etdir="${work}/ET"
     pfbmatch="${work}/match"
-    mkdir -p "$pfborig" "$etdir" "$pfbmatch"
+    pfbmatchgen="${work}/match/generated/"
+    mkdir -p "$pfborig" "$etdir" "$pfbmatch" "$pfbmatchgen"
     tempfile="${work}/t1"; tempfile2="${work}/t2"
     alias='MYLIST'
     ip_placeholder='240.0.0.0'
@@ -67,9 +68,9 @@ Describe 'processet() ET category selection (issue #713 bug 6)'
       # (matching the etblock case's stdout check + closing the shellspec output gap).
       The stdout should include 'Match:   ET_P2Pcnc'
       The stdout should not include 'Match:   ET_P2P '
-      The path "${pfbmatch}/ETMatch.txt" should be file
-      The contents of file "${pfbmatch}/ETMatch.txt" should include '10.0.0.31'
-      The contents of file "${pfbmatch}/ETMatch.txt" should not include '10.0.0.15'
+      The path "${pfbmatchgen}/ETMatch.txt" should be file
+      The contents of file "${pfbmatchgen}/ETMatch.txt" should include '10.0.0.31'
+      The contents of file "${pfbmatchgen}/ETMatch.txt" should not include '10.0.0.15'
     End
   End
 
@@ -87,9 +88,31 @@ Describe 'processet() ET category selection (issue #713 bug 6)'
       # (closes the shellspec unchecked-output gap for the sentinel case).
       The stdout should not include 'Block:'
       The stdout should not include 'Match:'
-      The path "${pfbmatch}/ETMatch.txt" should not be exist
+      The path "${pfbmatchgen}/ETMatch.txt" should not be exist
       The contents of file "${pfborig}${alias}.orig" should not include '10.0.0.15'
       The contents of file "${pfborig}${alias}.orig" should not include '10.0.0.31'
+    End
+  End
+
+  # issue #1250: a user Match-type list literally headed 'ETMatch' collides
+  # with processet()'s own ETMatch.txt artifact under the single ${pfbmatch}
+  # namespace -- the ET write must never touch a pre-existing user file, and
+  # lands in ${pfbmatchgen} instead.
+  Describe 'a pre-existing user Match-list ETMatch.txt survives processet() (issue #1250)'
+    It 'leaves the user file byte-unchanged and writes the ET output to pfbmatchgen instead'
+      etblock='x'
+      etmatch='ET_P2Pcnc'
+      # The user's OWN Match-type list content -- RFC 5737, unrelated to any ET IP.
+      printf '203.0.113.77\n' > "${pfbmatch}/ETMatch.txt"
+      before_content="$(cat "${pfbmatch}/ETMatch.txt")"
+
+      When call processet
+      The status should be success
+      The stdout should include 'Match:   ET_P2Pcnc'
+      The value "$before_content" should equal '203.0.113.77'
+      The contents of file "${pfbmatch}/ETMatch.txt" should equal '203.0.113.77'
+      The contents of file "${pfbmatchgen}/ETMatch.txt" should include '10.0.0.31'
+      The contents of file "${pfbmatchgen}/ETMatch.txt" should not include '10.0.0.15'
     End
   End
 End

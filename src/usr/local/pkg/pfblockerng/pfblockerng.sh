@@ -90,6 +90,9 @@ if [ -z "${PFB_SOURCED:-}" ]; then
 	pfbdeny=/var/db/pfblockerng/deny/
 	pfborig=/var/db/pfblockerng/original/
 	pfbmatch=/var/db/pfblockerng/match/
+	# issue #1250: machine-generated match artifacts, kept out of pfbmatch so a
+	# user-chosen Match-list header can never collide with them.
+	pfbmatchgen=/var/db/pfblockerng/match/generated/
 	pfbpermit=/var/db/pfblockerng/permit/
 	pfbnative=/var/db/pfblockerng/native/
 	pfsensealias=/var/db/aliastables/
@@ -120,6 +123,7 @@ if [ -z "${PFB_SOURCED:-}" ]; then
 	if [ ! -d "${pfbdb}" ]; then mkdir "${pfbdb}"; fi
 	if [ ! -d "${pfsensealias}" ]; then mkdir "${pfsensealias}"; fi
 	if [ ! -d "${pfbmatch}" ]; then mkdir "${pfbmatch}"; fi
+	if [ ! -d "${pfbmatchgen}" ]; then mkdir "${pfbmatchgen}"; fi
 	if [ ! -d "${pfbsnap}" ]; then mkdir "${pfbsnap}"; fi
 	if [ ! -d "${etdir}" ]; then mkdir "${etdir}"; fi
 	# tmpxlsx is a fresh subdir of the private mktemp -d tmpdir -- no existence
@@ -1007,9 +1011,9 @@ pfb_recompute() {
 	# it can survive to be wrongly promoted by a LATER pass that never actually
 	# recomputed reputation for that alias.
 	while IFS=' ' read -r rec_alias _; do
-		rm -f "${pfbmatch}match${rec_alias}.txt.new"
+		rm -f "${pfbmatchgen}match${rec_alias}.txt.new"
 	done < "${rec_priority}"
-	rm -f "${pfbmatch}${rec_matchdedup}.new"
+	rm -f "${pfbmatchgen}${rec_matchdedup}.new"
 
 	rec_do_rep=0
 	if [ "${rec_family}" = 'v4' ]; then
@@ -1247,7 +1251,7 @@ pfb_recompute_rep_subset() {
 	# fresh so the window awk's append-only writes never carry stale content.
 	if [ "${rec_repmode}" = 'dmax' ]; then
 		while IFS=' ' read -r rec_alias _; do
-			rm -f "${pfbmatch}match${rec_alias}.txt.new"
+			rm -f "${pfbmatchgen}match${rec_alias}.txt.new"
 		done < "${rec_priority}"
 	fi
 
@@ -1257,7 +1261,7 @@ pfb_recompute_rep_subset() {
 	rec_new_stream="${rec_scratch}/new_stream"
 	true > "${rec_new_stream}"
 	awk -v actionfile="${rec_actionmap}" -v priofile="${rec_priority}" \
-			-v newstream="${rec_new_stream}" -v matchdir="${pfbmatch}" \
+			-v newstream="${rec_new_stream}" -v matchdir="${pfbmatchgen}" \
 			-v mexcidr="${rec_matchexemptcidr}" -v mexmem="${rec_matchexemptmembers}" '
 			BEGIN {
 				while ((getline line < actionfile) > 0) {
@@ -1344,7 +1348,7 @@ pfb_recompute_rep_subset() {
 		pfb_recompute_clean_new
 		if [ "${rec_repmode}" = 'dmax' ]; then
 			while IFS=' ' read -r rec_alias _; do
-				rm -f "${pfbmatch}match${rec_alias}.txt.new"
+				rm -f "${pfbmatchgen}match${rec_alias}.txt.new"
 			done < "${rec_priority}"
 		fi
 		return 1
@@ -1366,7 +1370,7 @@ pfb_recompute_rep_subset() {
 			pfb_recompute_clean_new
 			if [ "${rec_repmode}" = 'dmax' ]; then
 				while IFS=' ' read -r rec_alias _; do
-					rm -f "${pfbmatch}match${rec_alias}.txt.new"
+					rm -f "${pfbmatchgen}match${rec_alias}.txt.new"
 				done < "${rec_priority}"
 			fi
 			return 1
@@ -1408,7 +1412,7 @@ pfb_recompute_finish() {
 	# ALONE (mirrors reputation_max()'s own asymmetric gate), even though a
 	# 'matchexempt' action can also be reached via ccblack='match'.
 	if [ "${rec_repmode}" = 'dmax' ] && [ "${rec_ccwhite}" = 'match' ] && [ -s "${rec_matchexemptcidr}" ]; then
-		rec_matchdedup_new="${pfbmatch}${rec_matchdedup}.new"
+		rec_matchdedup_new="${pfbmatchgen}${rec_matchdedup}.new"
 		cat "${rec_matchexemptcidr}" > "${rec_matchdedup_new}"
 		cat "${rec_matchexemptmembers}" >> "${rec_matchdedup_new}"
 	fi
@@ -1434,16 +1438,16 @@ pfb_recompute_finish() {
 			# genuinely means "no reputation match for this alias this pass", so
 			# reconciling away a stale live file here is correct, not destructive.
 			while IFS=' ' read -r rec_alias _; do
-				if [ -f "${pfbmatch}match${rec_alias}.txt.new" ]; then
-					pfb_recompute_swap_mv "${pfbmatch}match${rec_alias}.txt.new" "${pfbmatch}match${rec_alias}.txt" "match${rec_alias}.txt.new" || return 1
+				if [ -f "${pfbmatchgen}match${rec_alias}.txt.new" ]; then
+					pfb_recompute_swap_mv "${pfbmatchgen}match${rec_alias}.txt.new" "${pfbmatchgen}match${rec_alias}.txt" "match${rec_alias}.txt.new" || return 1
 				else
-					rm -f "${pfbmatch}match${rec_alias}.txt"
+					rm -f "${pfbmatchgen}match${rec_alias}.txt"
 				fi
 			done < "${rec_priority}"
-			if [ -f "${pfbmatch}${rec_matchdedup}.new" ]; then
-				pfb_recompute_swap_mv "${pfbmatch}${rec_matchdedup}.new" "${pfbmatch}${rec_matchdedup}" "${rec_matchdedup}.new" || return 1
+			if [ -f "${pfbmatchgen}${rec_matchdedup}.new" ]; then
+				pfb_recompute_swap_mv "${pfbmatchgen}${rec_matchdedup}.new" "${pfbmatchgen}${rec_matchdedup}" "${rec_matchdedup}.new" || return 1
 			elif [ "${rec_ccwhite}" = 'match' ]; then
-				rm -f "${pfbmatch}${rec_matchdedup}"
+				rm -f "${pfbmatchgen}${rec_matchdedup}"
 			fi
 		else
 			log="recompute [ ${rec_family} ]: GeoIP unavailable this pass -- keeping previous reputation match artifacts"
@@ -1756,14 +1760,13 @@ EOF
 	fi
 
 	# If no matches found remove previous matchoutfile if exists.
-	# Derive header from $alias (in scope), matching reputation_pmax()'s own
-	# header derivation; do not rely on a stale $header global, and operate on
-	# the absolute ${pfbmatch} path rather than a relative one (issue #27).
+	# Derive header from $alias (mirrors reputation_pmax()); operate on the
+	# absolute ${pfbmatchgen} path, not a relative one (issue #27).
 	header="${alias##*/}"; header="${header%%.*}"
 	matchoutfile="match${header}.txt"
-	if [ ! -s "${tempmatchfile}" ] && [ -f "${pfbmatch}${matchoutfile}" ]; then rm -f "${pfbmatch}${matchoutfile}"; fi
+	if [ ! -s "${tempmatchfile}" ] && [ -f "${pfbmatchgen}${matchoutfile}" ]; then rm -f "${pfbmatchgen}${matchoutfile}"; fi
 	# Move match file to the match folder by individual blocklist name
-	if [ -s "${tempmatchfile}" ]; then mv -f "${tempmatchfile}" "${pfbmatch}${matchoutfile}"; fi
+	if [ -s "${tempmatchfile}" ]; then mv -f "${tempmatchfile}" "${pfbmatchgen}${matchoutfile}"; fi
 
 	# Find repeat offenders in each individual blocklist outfile
 	if [ -s "${dupfile}" ]; then
@@ -1965,7 +1968,7 @@ processet() {
 		echo '-------------------------------------------'
 
 		if [ -f "${tempfile}" ]; then mv -f "${tempfile}" "${pfborig}${alias}.orig"; fi
-		if [ "${etmatch}" != 'x' ]; then mv -f "${tempfile2}" "${pfbmatch}/ETMatch.txt"; fi
+		if [ "${etmatch}" != 'x' ]; then mv -f "${tempfile2}" "${pfbmatchgen}ETMatch.txt"; fi
 		counto="$(cat "${etdir}"/ET_* | grep -cv '^#\|^$')"; countf="$(grep -cv "^${ip_placeholder2}$" "${pfborig}${alias}.orig")"
 		echo; echo "All ET Folder count [ ${counto} ]  Final count [ ${countf} ]"
 	else
