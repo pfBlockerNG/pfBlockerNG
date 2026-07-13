@@ -1970,7 +1970,9 @@ processet() {
 
 		if [ -f "${tempfile}" ]; then mv -f "${tempfile}" "${pfborig}${alias}.orig"; fi
 		if [ "${etmatch}" != 'x' ]; then mv -f "${tempfile2}" "${pfbmatchgen}pfB_Match_ET_v4.txt"; fi
-		counto="$(cat "${etdir}"/ET_* | grep -cv '^#\|^$')"; countf="$(grep -cv "^${ip_placeholder2}$" "${pfborig}${alias}.orig")"
+		# issue #1263: awk 1 supplies a record terminator cat doesn't -- an
+		# unterminated ET_* file no longer welds its last row onto the next file's first.
+		counto="$(awk 1 "${etdir}"/ET_* | grep -cv '^#\|^$')"; countf="$(grep -cv "^${ip_placeholder2}$" "${pfborig}${alias}.orig")"
 		echo; echo "All ET Folder count [ ${counto} ]  Final count [ ${countf} ]"
 	else
 		echo; echo 'No ET .orig File Found!'
@@ -2009,9 +2011,12 @@ closingprocess() {
 		# Sum the per-feed aggregated "Original" counts written by pfb_ip_recompute_write_snapshot()
 		# (pfblockerng.inc) -- these reflect the CIDR-aggregated input when aggregation ran. Fall back
 		# to the raw *_v4.orig total when no sidecars exist (no snapshot was ever written this pass).
-		counto="$(find "${pfborig}"*_v4.aggcount 2>/dev/null | xargs cat 2>/dev/null | awk '{s += $1} END {print s + 0}')"
+		# issue #1263: awk 1 (not cat) supplies a missing record terminator --
+		# a welded pair of unterminated counts would otherwise concatenate
+		# digits (e.g. "100" + "200" -> "100200") instead of summing to 300.
+		counto="$(find "${pfborig}"*_v4.aggcount 2>/dev/null | xargs awk 1 2>/dev/null | awk '{s += $1} END {print s + 0}')"
 		if [ "${counto}" -eq 0 ]; then
-			counto="$(find "${pfborig}"*_v4.orig 2>/dev/null | xargs cat | grep -cv '^#\|^$')"
+			counto="$(find "${pfborig}"*_v4.orig 2>/dev/null | xargs awk 1 | grep -cv '^#\|^$')"
 		fi
 	fi
 
@@ -2028,9 +2033,10 @@ closingprocess() {
 		# (v6 Deny joined cross-list dedup) -- the deny-folder re-scan (s2/s4) must
 		# include v6 Deny files too, else the family mismatch alone fails sanity.
 		s1="$(grep -cv "^${ip_placeholder2}$" "${mastercat}")"
-		s2="$(find "${pfbdeny}"*.txt -type f 2>/dev/null | xargs cat | grep -cv "^${ip_placeholder2}$")"
+		# issue #1263: awk 1 -- an unterminated deny file no longer welds into its neighbour.
+		s2="$(find "${pfbdeny}"*.txt -type f 2>/dev/null | xargs awk 1 | grep -cv "^${ip_placeholder2}$")"
 		s3="$(sort "${mastercat}" | uniq -d | tail -30)"
-		s4="$(find "${pfbdeny}"*.txt -type f 2>/dev/null | xargs cat | sort | uniq -d | tail -30 | grep -v "^${ip_placeholder2}$")"
+		s4="$(find "${pfbdeny}"*.txt -type f 2>/dev/null | xargs awk 1 | sort | uniq -d | tail -30 | grep -v "^${ip_placeholder2}$")"
 	else
 		echo "   [ Original IP count   ]  [ ${counto} ]"
 	fi
