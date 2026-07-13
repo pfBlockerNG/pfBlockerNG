@@ -94,9 +94,10 @@ def strip_json_comments(text: str) -> str:
 def parse_entries(text: str) -> list[dict[str, object]]:
     """Parse the comment-stripped body and return the raw 'entries' list.
 
-    Raises SystemExit if the body isn't valid JSON, or has no 'entries' key --
-    a captive-portal/HTML page or a truncated fetch must never be silently
-    treated as an empty entry list.
+    Raises SystemExit if the body isn't valid JSON, has no 'entries' key, or
+    'entries' is not a list of objects -- a captive-portal/HTML page, a truncated
+    fetch, or an upstream schema change must never be silently treated as an
+    empty entry list.
     """
     try:
         data = json.loads(text)
