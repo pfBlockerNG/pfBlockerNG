@@ -5171,12 +5171,14 @@ function pfb_member_file_is_placeholder_only($path, $placeholder) {
  * @return string[] Basenames (no '.txt') actually reaped this pass.
  */
 function pfb_matchgen_reap(array $existing_deny, bool $ccwhite_match, string $matchgendir): array {
-	// pfB_Match_ET_v4 is always kept: the reaper runs before processet() in
+	// pfB_Match_ET_v4/_v6 are always kept: the reaper runs before processet() in
 	// sync_package_pfblockerng(), so gating on "did ET run this pass" reaped a live file
-	// on any pass ET did not execute (issue #1269).
-	$keep = array('pfB_Match_ET_v4');
+	// on any pass ET did not execute (issue #1269). Family-complete: a keep entry for an
+	// absent file is a no-op, a MISSING entry is a deletion the day a v6 writer lands.
+	$keep = array('pfB_Match_ET_v4', 'pfB_Match_ET_v6');
 	if ($ccwhite_match) {
 		$keep[] = 'pfB_Match_Exempt_v4';
+		$keep[] = 'pfB_Match_Exempt_v6';
 	}
 	foreach ($existing_deny as $pfb_deny_name) {
 		$keep[] = "pfB_Match_Rep_{$pfb_deny_name}";
@@ -5214,7 +5216,7 @@ function pfb_matchgen_reap(array $existing_deny, bool $ccwhite_match, string $ma
  * @param bool     $ccwhite_match     TRUE iff $pfb['ccwhite'] == 'match'.
  * @param string[] $matchgendir_files Basenames (with '.txt') already in matchgendir (no-clobber).
  * @return array{move: array<string,string>, leave: string[],
- *               undecidable: array<int,array{file:string,candidate_a:string,candidate_b:string}>}
+ *               undecidable: array<int,array{file:string,candidates:string[]}>}
  */
 function pfb_matchdir_migrate_plan(array $matchdir_files, array $existing_deny, array $existing_match, bool $ccwhite_match, array $matchgendir_files): array {
 	$plan = array('move' => array(), 'leave' => array(), 'undecidable' => array());
@@ -5242,43 +5244,36 @@ function pfb_matchdir_migrate_plan(array $matchdir_files, array $existing_deny, 
 			continue;
 		}
 
-		if ($pfb_stem === 'matchdedup_v4' || $pfb_stem === 'matchdedup_v6') {
-			if ($pfb_stem !== 'matchdedup_v4') {
-				// Only the _v4 stem has ever had a writer -- _v6 can only be a user file.
-				$plan['leave'][] = $pfb_file;
-				continue;
-			}
-			$match_has_dedup = in_array('matchdedup_v4', $existing_match, TRUE);
-			if ($match_has_dedup && $ccwhite_match) {
-				$plan['undecidable'][] = array(
-					'file'        => $pfb_file,
-					'candidate_a' => 'the consolidated ccwhite Exempt write',
-					'candidate_b' => 'Match list "matchdedup"',
-				);
-			} elseif ($match_has_dedup) {
-				$plan['leave'][] = $pfb_file;
-			} else {
-				$plan_move($pfb_file, 'pfB_Match_Exempt_v4.txt');
-			}
-			continue;
-		}
-
 		// Anchored at the end, so an embedded underscore in the header (e.g.
-		// 'match_Spam_Feed_v4') never gets mis-split at the FIRST underscore.
+		// 'match_Spam_Feed_v4') never gets mis-split at the FIRST underscore. 'dedup_v4' is
+		// not special-cased separately: the consolidated ccwhite Exempt write is just a
+		// third candidate source alongside Deny/Match, cross-referenced the same way
+		// (issue #1250 F2 -- the old special case ignored Deny/ccwhite state entirely).
 		if (preg_match('/^match(.*)_(v4|v6)$/', $pfb_stem, $pfb_m)) {
-			$pfb_header    = $pfb_m[1];
-			$pfb_fam       = $pfb_m[2];
-			$pfb_deny_hit  = in_array("{$pfb_header}_{$pfb_fam}", $existing_deny, TRUE);
-			$pfb_match_hit = in_array("match{$pfb_header}_{$pfb_fam}", $existing_match, TRUE);
+			$pfb_header     = $pfb_m[1];
+			$pfb_fam        = $pfb_m[2];
+			$pfb_deny_hit   = in_array("{$pfb_header}_{$pfb_fam}", $existing_deny, TRUE);
+			$pfb_match_hit  = in_array("match{$pfb_header}_{$pfb_fam}", $existing_match, TRUE);
+			// The consolidated write only ever produced the _v4 stem -- _v6 never collides.
+			$pfb_exempt_hit = ($pfb_header === 'dedup' && $pfb_fam === 'v4' && $ccwhite_match);
 
-			if ($pfb_deny_hit && $pfb_match_hit) {
-				$plan['undecidable'][] = array(
-					'file'        => $pfb_file,
-					'candidate_a' => "Deny list \"{$pfb_header}\"",
-					'candidate_b' => "Match list \"match{$pfb_header}\"",
-				);
+			$pfb_candidates = array();
+			if ($pfb_deny_hit) {
+				$pfb_candidates[] = "Deny list \"{$pfb_header}\"";
+			}
+			if ($pfb_match_hit) {
+				$pfb_candidates[] = "Match list \"match{$pfb_header}\"";
+			}
+			if ($pfb_exempt_hit) {
+				$pfb_candidates[] = 'the consolidated ccwhite Exempt write';
+			}
+
+			if (count($pfb_candidates) >= 2) {
+				$plan['undecidable'][] = array('file' => $pfb_file, 'candidates' => $pfb_candidates);
 			} elseif ($pfb_deny_hit) {
 				$plan_move($pfb_file, "pfB_Match_Rep_{$pfb_header}_{$pfb_fam}.txt");
+			} elseif ($pfb_exempt_hit) {
+				$plan_move($pfb_file, 'pfB_Match_Exempt_v4.txt');
 			} else {
 				// Match-only (the user's file) or neither (an orphan -- the matchgendir
 				// reaper's problem, never re-homed into the namespace it'd be reaped from).
@@ -5294,24 +5289,92 @@ function pfb_matchdir_migrate_plan(array $matchdir_files, array $existing_deny, 
 }
 
 /**
+ * issue #1250: upgrade migration -- build the Deny/Match header-name sets and the flattened
+ * real-row list pfb_matchdir_migrate_plan() and pfb_matchdir_stale_localfile_refs() need,
+ * mirroring sync_package_pfblockerng()'s own header build ("{header}{vtype}", \W-stripped;
+ * the '<alias>_custom' / DNSBLIP / GeoIP-continent synthetic rows) so the migration is fed the
+ * SAME names the disk actually contains -- install.inc runs standalone, before any sync pass
+ * populates $pfb['existing']. Match-set membership ignores list/row Disabled state: a stale
+ * user file's own list may since have been disabled or retyped, so its history is unknowable
+ * and every configured name must count (issue #1250 F3). Pure: no filesystem/config writes.
+ *
+ * @param array<string,array<int,array<string,mixed>>> $lists_by_vtype ['_v4' => v4 list
+ *        config rows, '_v6' => v6 list config rows] -- installedpackages/pfblockernglistsv{4,6}/config.
+ * @param array<string,mixed>              $dnsbl_config      installedpackages/pfblockerngdnsblsettings/config/0.
+ * @param array<string,array<string,mixed>> $continent_configs Continent alias => its config/0 (or []).
+ * @return array{deny: string[], match: string[], rows: array<int,array{list:string,header:string,url:string}>}
+ */
+function pfb_matchdir_config_headers(array $lists_by_vtype, array $dnsbl_config, array $continent_configs): array {
+	$deny  = array();
+	$match = array();
+	$rows  = array();
+
+	foreach ($lists_by_vtype as $pfb_vtype => $pfb_lists) {
+		foreach ($pfb_lists as $pfb_list) {
+			$pfb_is_deny = strpos((string) ($pfb_list['action'] ?? ''), 'Deny') !== FALSE;
+
+			if (!empty($pfb_list['custom'])) {
+				$pfb_alias_norm = preg_replace('/\W/', '', (string) ($pfb_list['aliasname'] ?? ''));
+				if ($pfb_alias_norm !== '') {
+					$match[] = "{$pfb_alias_norm}_custom{$pfb_vtype}";
+					if ($pfb_is_deny) {
+						$deny[] = "{$pfb_alias_norm}_custom{$pfb_vtype}";
+					}
+				}
+			}
+
+			foreach ($pfb_list['row'] ?? [] as $pfb_row) {
+				$pfb_header_norm = preg_replace('/\W/', '', (string) ($pfb_row['header'] ?? ''));
+				if ($pfb_header_norm !== '') {
+					$match[] = "{$pfb_header_norm}{$pfb_vtype}";
+					if ($pfb_is_deny) {
+						$deny[] = "{$pfb_header_norm}{$pfb_vtype}";
+					}
+				}
+				if (!empty($pfb_row['url'])) {
+					$rows[] = array('list' => $pfb_list['aliasname'] ?? '', 'header' => $pfb_row['header'] ?? '', 'url' => $pfb_row['url']);
+				}
+			}
+		}
+	}
+
+	if (strpos((string) ($dnsbl_config['action'] ?? ''), 'Deny') !== FALSE) {
+		$deny[] = 'DNSBLIP_v4';
+		$deny[] = 'DNSBLIP_v6';
+	}
+
+	foreach ($continent_configs as $pfb_alias => $pfb_cont_config) {
+		if (strpos((string) ($pfb_cont_config['action'] ?? ''), 'Deny') !== FALSE) {
+			$deny[] = "{$pfb_alias}_v4";
+			$deny[] = "{$pfb_alias}_v6";
+		}
+	}
+
+	return array('deny' => $deny, 'match' => $match, 'rows' => $rows);
+}
+
+/**
  * issue #1250: upgrade migration -- find every configured IP-list row whose Localfile/`url`
- * still points at an OLD matchdir artifact path. The GUI once instructed admins to point a
- * Match alias's Localfile at e.g. '/var/db/pfblockerng/match/ETMatch.txt'; any such row breaks
- * the moment that artifact moves, and we do not rewrite the admin's config for them. Pure.
+ * still points at a matchdir artifact THIS RUN ACTUALLY MOVED. The GUI once instructed admins
+ * to point a Match alias's Localfile at e.g. '/var/db/pfblockerng/match/ETMatch.txt'; any such
+ * row breaks the moment that artifact moves, and we do not rewrite the admin's config for
+ * them. Keyed on the plan's actual move list, not a filename shape (F6) -- a same-shaped user
+ * file that was never moved must never trigger a repoint warning for a path that still exists.
+ * Pure.
  *
  * @param array<int,array{list:string,header:string,url:string}> $rows Flattened
- *        pfblockernglistsv4/v6 rows (any action -- any alias can consume a local file).
- * @param string $matchdir The OLD matchdir path (no trailing slash).
- * @return array<int,array{list:string,header:string,url:string}> The rows that reference it.
+ *        pfblockernglistsv4/v6 rows (any action, any state -- any alias can consume a local file).
+ * @param string   $matchdir        The OLD matchdir path (no trailing slash).
+ * @param string[] $moved_basenames Basenames (with '.txt') pfb_matchdir_migrate_plan() actually moved this run.
+ * @return array<int,array{list:string,header:string,url:string}> The rows that reference one of them.
  */
-function pfb_matchdir_stale_localfile_refs(array $rows, string $matchdir): array {
+function pfb_matchdir_stale_localfile_refs(array $rows, string $matchdir, array $moved_basenames): array {
 	$hits = array();
 	foreach ($rows as $pfb_row) {
 		if (empty($pfb_row['url']) || dirname($pfb_row['url']) !== $matchdir) {
 			continue;
 		}
-		$pfb_basename = basename($pfb_row['url']);
-		if ($pfb_basename === 'ETMatch.txt' || preg_match('/^match.*_v[46]\.txt$/', $pfb_basename)) {
+		if (in_array(basename($pfb_row['url']), $moved_basenames, TRUE)) {
 			$hits[] = $pfb_row;
 		}
 	}

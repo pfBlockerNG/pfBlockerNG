@@ -22,6 +22,7 @@ use PHPUnit\Framework\TestCase;
  *   fix prevents); H3 ccwhite='match' exempt file kept; H4 ET file always kept (issue #1269);
  *   H5 no cross-directory reach (a matchdir user file is untouched); H6 a stray artifact with
  *   no owning alias is reaped; H7 both v4 and v6 families are enumerated, not just v4.
+ *   R1-R3: the ET/Exempt keep-list is family-complete (v4 AND v6), not v4-only.
  */
 #[CoversFunction('pfb_matchgen_reap')]
 final class MatchGenReapTest extends TestCase
@@ -203,5 +204,46 @@ final class MatchGenReapTest extends TestCase
 
 		$this->assertFileExists($artifact, 'the v6 family axis must be enumerated, not just v4');
 		$this->assertNotContains('pfB_Match_Rep_Spam_v6', $reaped);
+	}
+
+	/**
+	 * R1 / issue #1250 P2: pfB_Match_ET_v6.txt -- the keep-list was v4-only, so the day a v6 ET
+	 * writer lands its first artifact was silently unlinked. Same unconditional keep as v4 (H4).
+	 *
+	 *   Given the ET v6 match file exists and NO Deny alias / ccwhite state names it
+	 *   When  the sweep runs
+	 *   Then  it is kept unconditionally.
+	 */
+	public function testAlwaysKeepsEtMatchFileV6Family(): void
+	{
+		$artifact = $this->touchGen('pfB_Match_ET_v6');
+
+		$reaped = pfb_matchgen_reap([], FALSE, $this->matchgendir);
+
+		$this->assertFileExists($artifact, 'the v6 ET match file must survive too, not just v4');
+		$this->assertNotContains('pfB_Match_ET_v6', $reaped);
+	}
+
+	/**
+	 * R2 + R3 / issue #1250 P2: the ccwhite exempt file's v6 family gets the SAME gate as v4
+	 * (H3) -- kept while ccwhite='match', reaped once ccwhite stops being 'match'.
+	 *
+	 *   Given the v6 exempt file exists and ccwhite IS 'match'
+	 *   When  the sweep runs
+	 *   Then  it is kept.
+	 *   But   (contrast) when ccwhite is NOT 'match', the same v6 file is reaped.
+	 */
+	public function testKeepsExemptFileOnlyWhenCcwhiteIsMatchV6Family(): void
+	{
+		$artifact = $this->touchGen('pfB_Match_Exempt_v6');
+
+		$reaped = pfb_matchgen_reap([], TRUE, $this->matchgendir);
+		$this->assertFileExists($artifact, 'ccwhite=match must keep the v6 consolidated exempt file too');
+		$this->assertNotContains('pfB_Match_Exempt_v6', $reaped);
+
+		// Recreate for the contrast leg (the prior call left it in place).
+		$reaped = pfb_matchgen_reap([], FALSE, $this->matchgendir);
+		$this->assertFileDoesNotExist($artifact, 'ccwhite off must reap a now-orphaned v6 exempt file');
+		$this->assertContains('pfB_Match_Exempt_v6', $reaped);
 	}
 }

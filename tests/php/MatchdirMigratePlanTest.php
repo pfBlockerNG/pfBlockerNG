@@ -85,8 +85,10 @@ final class MatchdirMigratePlanTest extends TestCase
 		$this->assertArrayNotHasKey('matchSpam_v4.txt', $plan['move']);
 		$this->assertCount(1, $plan['undecidable']);
 		$this->assertSame('matchSpam_v4.txt', $plan['undecidable'][0]['file']);
-		$this->assertStringContainsString('Spam', $plan['undecidable'][0]['candidate_a']);
-		$this->assertStringContainsString('matchSpam', $plan['undecidable'][0]['candidate_b']);
+		$this->assertCount(2, $plan['undecidable'][0]['candidates']);
+		$pfb_joined = implode('|', $plan['undecidable'][0]['candidates']);
+		$this->assertStringContainsString('Spam', $pfb_joined);
+		$this->assertStringContainsString('matchSpam', $pfb_joined);
 	}
 
 	/** M6: neither configured -> an orphan; left for the matchgendir reaper's problem, never re-homed. */
@@ -116,7 +118,8 @@ final class MatchdirMigratePlanTest extends TestCase
 		$this->assertSame([], $plan['move']);
 		$this->assertCount(1, $plan['undecidable']);
 		$this->assertSame('matchdedup_v4.txt', $plan['undecidable'][0]['file']);
-		$this->assertStringContainsString('matchdedup', $plan['undecidable'][0]['candidate_b']);
+		$this->assertCount(2, $plan['undecidable'][0]['candidates']);
+		$this->assertStringContainsString('matchdedup', implode('|', $plan['undecidable'][0]['candidates']));
 	}
 
 	/** M9: ccwhite is NOT 'match' -> only the user's file is possible, left silently. */
@@ -188,6 +191,81 @@ final class MatchdirMigratePlanTest extends TestCase
 		$this->assertSame(['move' => [], 'leave' => [], 'undecidable' => []], $second);
 	}
 
+	/**
+	 * M15 / issue #1250 F2: NO candidate at all (ccwhite off, no Deny "dedup", no Match
+	 * "matchdedup") -> a plain orphan, LEFT -- not a silent move-then-reap through Exempt.
+	 */
+	public function testM15DedupLeftAsOrphanWhenNoCandidateExists(): void
+	{
+		$plan = pfb_matchdir_migrate_plan(['matchdedup_v4.txt'], [], [], FALSE, []);
+
+		$this->assertSame([], $plan['move']);
+		$this->assertContains('matchdedup_v4.txt', $plan['leave']);
+		$this->assertSame([], $plan['undecidable']);
+	}
+
+	/**
+	 * M16 / issue #1250 F2: a Deny list literally headed 'dedup' is configured (ccwhite off,
+	 * no Match) -> the Deny Rep artifact, never Exempt -- the old code ignored Deny here.
+	 */
+	public function testM16DedupMovesToRepWhenOnlyDenyDedupConfigured(): void
+	{
+		$plan = pfb_matchdir_migrate_plan(['matchdedup_v4.txt'], ['dedup_v4'], [], FALSE, []);
+
+		$this->assertSame(['matchdedup_v4.txt' => 'pfB_Match_Rep_dedup_v4.txt'], $plan['move']);
+		$this->assertSame([], $plan['undecidable']);
+	}
+
+	/** M17 / issue #1250 F2: the v6 stem gets the SAME Deny-Rep treatment as v4, not an unconditional leave. */
+	public function testM17DedupV6MovesToRepWhenDenyDedupV6Configured(): void
+	{
+		$plan = pfb_matchdir_migrate_plan(['matchdedup_v6.txt'], ['dedup_v6'], [], FALSE, []);
+
+		$this->assertSame(['matchdedup_v6.txt' => 'pfB_Match_Rep_dedup_v6.txt'], $plan['move']);
+		$this->assertSame([], $plan['undecidable']);
+	}
+
+	/**
+	 * M18 / issue #1250 F2: ccwhite ON AND a Deny list "dedup" both exist -> undecidable
+	 * between the Exempt write and the Deny Rep artifact, never silently moved to Exempt.
+	 */
+	public function testM18DedupExemptAndDenyBothCandidateIsUndecidable(): void
+	{
+		$plan = pfb_matchdir_migrate_plan(['matchdedup_v4.txt'], ['dedup_v4'], [], TRUE, []);
+
+		$this->assertSame([], $plan['move']);
+		$this->assertCount(1, $plan['undecidable']);
+		$this->assertSame('matchdedup_v4.txt', $plan['undecidable'][0]['file']);
+		$pfb_joined = implode('|', $plan['undecidable'][0]['candidates']);
+		$this->assertCount(2, $plan['undecidable'][0]['candidates']);
+		$this->assertStringContainsString('dedup', $pfb_joined);
+		$this->assertStringContainsString('Exempt', $pfb_joined);
+	}
+
+	/** M19 / issue #1250 F2: Deny "dedup" + Match "matchdedup" + ccwhite ON -> all THREE candidates, none dropped. */
+	public function testM19DedupAllThreeCandidatesIsUndecidable(): void
+	{
+		$plan = pfb_matchdir_migrate_plan(['matchdedup_v4.txt'], ['dedup_v4'], ['matchdedup_v4'], TRUE, []);
+
+		$this->assertSame([], $plan['move']);
+		$this->assertCount(1, $plan['undecidable']);
+		$this->assertCount(3, $plan['undecidable'][0]['candidates']);
+		$pfb_joined = implode('|', $plan['undecidable'][0]['candidates']);
+		$this->assertStringContainsString('dedup', $pfb_joined);
+		$this->assertStringContainsString('matchdedup', $pfb_joined);
+		$this->assertStringContainsString('Exempt', $pfb_joined);
+	}
+
+	/** M20: the v6 dedup stem never gets an Exempt candidate -- that writer only ever produced _v4. */
+	public function testM20DedupV6NeverGetsAnExemptCandidate(): void
+	{
+		$plan = pfb_matchdir_migrate_plan(['matchdedup_v6.txt'], [], [], TRUE, []);
+
+		$this->assertSame([], $plan['move']);
+		$this->assertContains('matchdedup_v6.txt', $plan['leave']);
+		$this->assertSame([], $plan['undecidable']);
+	}
+
 	// --- Hostile-input rows: the stem parser is a parser, treat it as one. ---
 
 	/** H-a: stem exactly 'match_v4' (empty header) with neither side configured -> parses cleanly, left as an orphan. */
@@ -244,5 +322,17 @@ final class MatchdirMigratePlanTest extends TestCase
 
 		$this->assertSame([], $plan['move']);
 		$this->assertContains('ETMatch', $plan['leave']);
+	}
+
+	/**
+	 * H-g / A12: the '.txt' suffix check is case-sensitive (basename() is byte-exact on the
+	 * appliance's case-sensitive filesystem) -- an uppercase extension never matches, always left.
+	 */
+	public function testHostileUppercaseExtensionIsNeverACandidate(): void
+	{
+		$plan = pfb_matchdir_migrate_plan(['MATCHFOO_V4.TXT'], ['FOO_V4'], [], FALSE, []);
+
+		$this->assertSame([], $plan['move']);
+		$this->assertContains('MATCHFOO_V4.TXT', $plan['leave']);
 	}
 }

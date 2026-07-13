@@ -254,30 +254,24 @@ if (is_dir($pfb['matchdir'])) {
 	}
 
 	// Same config sections + header-build rule sync_package_pfblockerng() uses (header =
-	// "{$row['header']}{$vtype}") -- install.inc runs standalone, before any sync pass
-	// populates $pfb['existing'].
-	$pfb_deny_headers  = array();
-	$pfb_match_headers = array();
-	$pfb_list_rows     = array();
-	foreach (array('pfblockernglistsv4' => '_v4', 'pfblockernglistsv6' => '_v6') as $pfb_ltype => $pfb_vtype) {
-		foreach (config_get_path("installedpackages/{$pfb_ltype}/config", []) as $pfb_list) { // foreign key — out of ADR-29 gateway scope
-			if (empty($pfb_list['row']) || ($pfb_list['action'] ?? '') === 'Disabled') {
-				continue;
-			}
-			foreach ($pfb_list['row'] as $pfb_row) {
-				if (empty($pfb_row['url']) || ($pfb_row['state'] ?? '') === 'Disabled') {
-					continue;
-				}
-				$pfb_header = "{$pfb_row['header']}{$pfb_vtype}";
-				if (strpos($pfb_list['action'], 'Match') !== FALSE) {
-					$pfb_match_headers[] = $pfb_header;
-				} elseif (strpos($pfb_list['action'], 'Deny') !== FALSE) {
-					$pfb_deny_headers[] = $pfb_header;
-				}
-				$pfb_list_rows[] = array('list' => $pfb_list['aliasname'] ?? '', 'header' => $pfb_row['header'], 'url' => $pfb_row['url']);
-			}
-		}
+	// "{$row['header']}{$vtype}", \W-stripped, plus the custom/DNSBLIP/continent synthetic
+	// names) -- install.inc runs standalone, before any sync pass populates $pfb['existing'].
+	$pfb_continent_configs = array();
+	foreach ($pfb['continents'] as $pfb_cont_name => $pfb_cont_alias) {
+		$pfb_cont_key = 'pfblockerng' . strtolower(str_replace(' ', '', $pfb_cont_name));
+		$pfb_continent_configs[$pfb_cont_alias] = config_get_path("installedpackages/{$pfb_cont_key}/config/0", []); // foreign key — out of ADR-29 gateway scope
 	}
+	$pfb_headers = pfb_matchdir_config_headers(
+		array(
+			'_v4' => config_get_path('installedpackages/pfblockernglistsv4/config', []), // foreign key — out of ADR-29 gateway scope
+			'_v6' => config_get_path('installedpackages/pfblockernglistsv6/config', []), // foreign key — out of ADR-29 gateway scope
+		),
+		config_get_path('installedpackages/pfblockerngdnsblsettings/config/0', []), // foreign key — out of ADR-29 gateway scope
+		$pfb_continent_configs
+	);
+	$pfb_deny_headers  = $pfb_headers['deny'];
+	$pfb_match_headers = $pfb_headers['match'];
+	$pfb_list_rows     = $pfb_headers['rows'];
 	$pfb_rep_config = config_get_path('installedpackages/pfblockerngreputation/config/0', []); // foreign key — out of ADR-29 gateway scope, static display section (no registered keys)
 
 	$pfb_matchdir_listing = array();
@@ -302,7 +296,7 @@ if (is_dir($pfb['matchdir'])) {
 		}
 	}
 
-	$pfb_stale_refs = pfb_matchdir_stale_localfile_refs($pfb_list_rows, $pfb['matchdir']);
+	$pfb_stale_refs = pfb_matchdir_stale_localfile_refs($pfb_list_rows, $pfb['matchdir'], array_keys($pfb_plan['move']));
 
 	if ($pfb_moved_match > 0 || !empty($pfb_plan['undecidable']) || !empty($pfb_stale_refs)) {
 		$pfb_matchgen_warn[] = 'BREAKING CHANGE: machine-generated match artifacts moved from';
@@ -311,7 +305,7 @@ if (is_dir($pfb['matchdir'])) {
 			$pfb_matchgen_warn[] = 'Moved: ' . implode(', ', array_keys($pfb_plan['move']));
 		}
 		foreach ($pfb_plan['undecidable'] as $pfb_u) {
-			$pfb_matchgen_warn[] = "AMBIGUOUS, left in place: {$pfb_u['file']} could belong to {$pfb_u['candidate_a']} OR {$pfb_u['candidate_b']} -- rename one to disambiguate.";
+			$pfb_matchgen_warn[] = "AMBIGUOUS, left in place: {$pfb_u['file']} could belong to " . implode(' OR ', $pfb_u['candidates']) . ' -- rename one to disambiguate.';
 		}
 		foreach ($pfb_stale_refs as $pfb_r) {
 			$pfb_matchgen_warn[] = "List \"{$pfb_r['list']}\" (header \"{$pfb_r['header']}\") Localfile still points at the OLD path {$pfb_r['url']} -- you must repoint it yourself.";
