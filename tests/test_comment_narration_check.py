@@ -127,6 +127,9 @@ def test_issue_finding_tag_is_flagged_but_bare_issue_breadcrumb_is_clean() -> No
     )
     assert len(v) == 1
     assert "F2" in v[0].reason or "finding" in v[0].reason.lower() or "issue #" in v[0].reason.lower()
+    # C- and R-lettered tags are the same class; each letter needs its own pin.
+    assert len(_find("src/a.inc", ["// issue #1250 C4 needs review"])) == 1
+    assert len(_find("src/a.inc", ["// issue #1250 R1 open question"])) == 1
     # The legal regression-breadcrumb form (no finding letter+number) stays clean.
     assert _find("src/a.inc", ["// issue #1250: decode UTF-16 BOM first"]) == []
 
