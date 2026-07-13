@@ -162,11 +162,15 @@ Describe 'verify-red-proof.sh'
     Assert [ -z "$(git -C "$repo" status --porcelain)" ]
   End
 
-  It 'rejects an empty --base-ref at parse time'
+  # An empty value is caught by the parse-time guard, NOT by the later rev-parse check:
+  # the absence of BAD-BASE-REF is what discriminates the two (drop the guard and the empty
+  # ref reaches rev-parse, which rejects it with that message instead).
+  It 'rejects an empty --base-ref at parse time, before the ref ever reaches git'
     make_repo BAD GOOD
     When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src src.txt --base-ref ''
     The status should equal 2
     The stderr should include 'usage:'
+    The stderr should not include 'BAD-BASE-REF'
   End
 
   It 'rejects a nonexistent --base-ref'
@@ -177,17 +181,19 @@ Describe 'verify-red-proof.sh'
     Assert [ -z "$(git -C "$repo" status --porcelain)" ]
   End
 
-  It 'rejects a --base-ref that is a revision range, not a single ref ("HEAD~2..HEAD")'
-    make_repo BAD GOOD
+  # The 3-commit fixture is what makes these pin RANGE rejection rather than merely
+  # unknown-ref rejection: both endpoints resolve here, so only the range syntax is at fault.
+  It 'rejects a --base-ref that is a revision range whose endpoints both exist ("HEAD~2..HEAD")'
+    make_repo3 BAD GOOD FOLLOWUP
     When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src src.txt --base-ref 'HEAD~2..HEAD'
     The status should equal 2
     The stderr should include 'BAD-BASE-REF'
     Assert [ -z "$(git -C "$repo" status --porcelain)" ]
   End
 
-  It 'rejects a --base-ref that is a revision range, not a single ref ("a...b")'
-    make_repo BAD GOOD
-    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src src.txt --base-ref 'a...b'
+  It 'rejects a --base-ref that is a symmetric revision range whose endpoints both exist ("HEAD~2...HEAD")'
+    make_repo3 BAD GOOD FOLLOWUP
+    When run sh "$script" --worktree "$repo" --test-cmd 'sh test_pin.sh' --src src.txt --base-ref 'HEAD~2...HEAD'
     The status should equal 2
     The stderr should include 'BAD-BASE-REF'
     Assert [ -z "$(git -C "$repo" status --porcelain)" ]

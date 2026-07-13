@@ -45,7 +45,7 @@ const HANDOFF = {
   properties: {
     verdict: { type: 'string', enum: ['DONE', 'DONE-WITH-DEVIATION', 'BLOCKED'] },
     what_changed: { type: 'array', items: { type: 'object', required: ['file', 'why'], properties: { file: { type: 'string' }, why: { type: 'string' } } } },
-    base_sha: { type: 'string', description: 'git rev-parse HEAD captured BEFORE the first edit of this step — the true pre-fix baseline the verifier reverts src to. NOT HEAD~1: a step that lands a follow-up commit (doc/ADR reconciliation, a review fix) makes HEAD~1 the wrong baseline (issue #1249).' },
+    base_sha: { type: 'string', description: 'git rev-parse HEAD captured BEFORE the first edit of this step — the true pre-fix baseline the verifier reverts src to, or "" if BLOCKED before you ran it. NOT HEAD~1: a step that lands a follow-up commit (doc/ADR reconciliation, a review fix) makes HEAD~1 the wrong baseline (issue #1249).' },
     commit: { type: 'string', description: 'the commit hash, or "" when BLOCKED' },
     gates: { type: 'array', items: { type: 'object', required: ['cmd', 'output_tail'], properties: { cmd: { type: 'string' }, output_tail: { type: 'string', description: 'pasted output tail with pass/fail counts — never a bare claim' } } } },
     red_green: { type: 'array', minItems: 1, description: 'MANDATORY, one entry per behaviour-changing item: PASTED executed red output (run BEFORE any production edit), pasted green output, and git hash-object of each test file at red time. An item with no red run carries carve_out naming the CLAUDE.md exception (brand-new code / behaviour-preserving oracle) instead — never an empty entry. Implementers reliably drop this when optional; it is schema-required for that reason.', items: { type: 'object', required: ['item'], properties: { item: { type: 'string', description: 'which plan item this proves' }, red_output: { type: 'string' }, green_output: { type: 'string' }, red_test_hashes: { type: 'array', items: { type: 'object', required: ['file', 'hash'], properties: { file: { type: 'string' }, hash: { type: 'string', description: 'git hash-object at red-run time — must equal the committed file' } } } }, carve_out: { type: 'string', description: 'the named CLAUDE.md exception, ONLY when no red run applies to this item' } } } },
@@ -134,19 +134,30 @@ if (handoff.verdict === 'BLOCKED') {
 
 phase('Verify')
 
+// The handoff is agent-authored text that ends up inside a shell command the verifier runs:
+// anything interpolated below is shape-checked here, at the boundary, or the step dies.
+const safe = (value, pattern, field) => {
+  if (typeof value !== 'string' || !pattern.test(value)) {
+    throw new Error(`unsafe ${field} in handoff: ${JSON.stringify(value)}`)
+  }
+  return value
+}
+const baseSha = redProof ? safe(handoff.base_sha, /^[0-9a-f]{7,40}$/, 'base_sha') : ''
 const redHashArgs = (handoff.red_green || [])
   .flatMap(e => e.red_test_hashes || [])
-  .map(h => `--hash ${h.file}=${h.hash}`)
+  .map(h => `--hash ${safe(h.file, /^[A-Za-z0-9._/-]+$/, 'red_test_hashes.file')}=${safe(h.hash, /^[0-9a-f]{40}$/, 'red_test_hashes.hash')}`)
   .join(' ')
 
 const redProofText = redProof
-  ? `RED PROOF (re-execute yourself, never accept the handoff's claim). Run the single implementation — do NOT hand-roll the checkout dance:
+  ? `RED PROOF (re-execute yourself, never accept the handoff's claim).
 
-  sh scripts/agent/verify-red-proof.sh --worktree ${worktree} --test-cmd '${redProof.testCmd}' ${redProof.srcPaths.map(p => `--src ${p}`).join(' ')} ${redHashArgs} --base-ref ${handoff.base_sha}
+FIRST, BASELINE SANITY — the script trusts whatever ref you hand it, so earn that trust before you run it: the handoff's base_sha (${baseSha}) must be a real commit, an ANCESTOR of HEAD, and NOT equal to HEAD — else the implementer captured it after editing and the red run would prove nothing. Check: git -C ${worktree} merge-base --is-ancestor ${baseSha} HEAD && [ "$(git -C ${worktree} rev-parse ${baseSha})" != "$(git -C ${worktree} rev-parse HEAD)" ]. Either check failing = FAIL this item; do not substitute HEAD~1 to make it pass.
 
-It reverts the src paths to --base-ref (tests stay) and requires FAIL, restores HEAD and requires PASS, and enforces the freeze (git hash-object of each committed reproduction test == the handoff's red-time hash — a test edited between red and green, or with no red-time hash, proves nothing). Record its FREEZE-OK / RED-OK / GREEN-OK / VERDICT lines as evidence; a non-PASS verdict fails this item.
+THEN run the single implementation — do NOT hand-roll the checkout dance:
 
-BASELINE SANITY (the script trusts the ref you give it, so verify it first): the handoff's base_sha (${handoff.base_sha}) must be a real commit, an ANCESTOR of HEAD, and NOT equal to HEAD — else the implementer captured it after editing and the red run would prove nothing. Check: git -C ${worktree} merge-base --is-ancestor ${handoff.base_sha} HEAD && [ "$(git -C ${worktree} rev-parse ${handoff.base_sha})" != "$(git -C ${worktree} rev-parse HEAD)" ]. Either check failing = FAIL this item; do not substitute HEAD~1 to make it pass.`
+  sh scripts/agent/verify-red-proof.sh --worktree ${worktree} --test-cmd '${redProof.testCmd}' ${redProof.srcPaths.map(p => `--src ${safe(p, /^[A-Za-z0-9._/-]+$/, 'redProof.srcPaths')}`).join(' ')} ${redHashArgs} --base-ref ${baseSha}
+
+It reverts the src paths to --base-ref (tests stay) and requires FAIL, restores HEAD and requires PASS, and enforces the freeze (git hash-object of each committed reproduction test == the handoff's red-time hash — a test edited between red and green, or with no red-time hash, proves nothing). Record its FREEZE-OK / RED-OK / GREEN-OK / VERDICT lines as evidence; a non-PASS verdict fails this item.`
   : 'This step is declared behaviour-preserving: confirm the oracle/pinned tests exist and stayed green; record which.'
 
 const gateRecord = await agent(`You are an independent VERIFIER (CLAUDE.md "THE GATE") for one delegated step. You did not write this code; re-derive, never merely re-read. READ-ONLY except the red-proof checkout dance below (which you must fully restore). Worktree: ${worktree}.
