@@ -56,9 +56,15 @@ WHAT THIS FILE AUTOMATES:
   pre-existing per-alias match file byte-identical, never swapping/removing it.
 * **R8-restored — a clean pass with GeoIP UP clears the reputation match
   artifacts (issue #1228)** — with a real binary ``.mmdb`` seeded, a cc-list HIT
-  (``ccwhite=match``) writes the consolidated ``matchdedup`` file and a SIBLING
-  cc-list MISS (``ccblack=match``) writes a per-alias ``match<alias>.txt``; a
-  SECOND pass whose cc-list matches neither offender reconciles BOTH away.
+  (``ccwhite=match``) writes the consolidated ``pfB_Match_Exempt_v4.txt`` file
+  and a SIBLING cc-list MISS (``ccblack=match``) writes a per-alias
+  ``pfB_Match_Rep_<alias>.txt``; a SECOND pass whose cc-list matches neither
+  offender reconciles BOTH away.
+* **R10 — Alerts attribution rides the relocated artifact (issue #1250)** — the
+  Alerts page's ``find_reported_header()`` reader (fed by
+  ``pfb_ip_match_folders()``) attributes a reported IP to a staged
+  ``pfB_Match_Rep_<alias>.txt`` artifact under matchgendir — a direct PHP probe
+  of the reader path, no reload needed.
 
 Reload-scope note: R1/R2/R5/R9 are single-pass (or repeat-input) cases and use
 ``reload(scope='updateip')`` — its ``force=true`` sets ``$pfb['reuse']='on'`` for the
@@ -90,6 +96,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import uuid
 from collections.abc import Iterator
 
 import pytest
@@ -105,8 +112,11 @@ SNAPDIR = f"{h.PFB_DBDIR}/snapshot"
 MASTERFILE = f"{h.PFB_DBDIR}/masterfile"
 # pfblockerng.inc:50 $pfb['origdir'] -- the recompute snapshot's '.aggcount' sidecar dir (R3).
 ORIGDIR = f"{h.PFB_DBDIR}/original"
-# pfblockerng.sh:92 pfbmatch -- the dMax per-alias 'match<alias>.txt' reputation artifact dir (R8-outage).
+# pfblockerng.sh:92 pfbmatch -- the user's own Match List feed dir.
 MATCHDIR = f"{h.PFB_DBDIR}/match"
+# pfblockerng.sh:95 pfbmatchgen -- the dMax per-alias 'pfB_Match_Rep_<alias>.txt' reputation
+# artifact dir (R8-outage) + the consolidated 'pfB_Match_Exempt_v4.txt' (R8-restored).
+MATCHGENDIR = f"{MATCHDIR}/generated"
 
 # Pin ip_placeholder explicitly (PHP and pfblockerng.sh both default to this value) so
 # R5/R9's collapse assertion compares against an exact string no matter what an earlier
@@ -639,21 +649,21 @@ GEOIP_OUTAGE_MARKER = "recompute [ v4 ]: GeoIP unavailable this pass -- keeping 
 
 
 def _stage_match_file(vm: SmokeVM, rec_alias: str, contents: str, *, timeout: float = 30.0) -> str:
-    """Write ``contents`` verbatim to ``MATCHDIR/match<rec_alias>.txt`` via ``tee`` (mirrors
-    ``write_local_feed``'s mkdir-then-tee). ``rec_alias`` is the SNAPSHOT-derived name
+    """Write ``contents`` verbatim to ``MATCHGENDIR/pfB_Match_Rep_<rec_alias>.txt`` via ``tee``
+    (mirrors ``write_local_feed``'s mkdir-then-tee). ``rec_alias`` is the SNAPSHOT-derived name
     pfblockerng.sh reconciles on (``rec_alias="${rec_snap##*/}"; rec_alias="${rec_alias%%.*}"``,
-    pfblockerng.sh:896) -- i.e. ``<header>_<family>``, NOT the pf table's ``pfB_*`` name.
+    pfblockerng.sh:901) -- i.e. ``<header>_<family>``, NOT the pf table's ``pfB_*`` name.
 
     R8-outage's local one-off: a leading '!' line (the real match-file format) sent through
     ``php_eval``/``file_put_contents`` gets mangled -- pfSsh.php's REPL treats a '!'-led line
     as a raw shell-escape -- so this writes bytes over SSH stdin instead.
     """
-    path = f"{MATCHDIR}/match{rec_alias}.txt"
+    path = f"{MATCHGENDIR}/pfB_Match_Rep_{rec_alias}.txt"
     mk = subprocess.run(
-        vm.ssh_argv("/bin/mkdir", "-p", MATCHDIR), capture_output=True, text=True, timeout=timeout, check=False
+        vm.ssh_argv("/bin/mkdir", "-p", MATCHGENDIR), capture_output=True, text=True, timeout=timeout, check=False
     )
     if mk.returncode != 0:
-        raise RuntimeError(f"_stage_match_file: mkdir {MATCHDIR} failed: rc={mk.returncode} {mk.stderr!r}")
+        raise RuntimeError(f"_stage_match_file: mkdir {MATCHGENDIR} failed: rc={mk.returncode} {mk.stderr!r}")
     result = subprocess.run(
         vm.ssh_argv("tee", path), input=contents, capture_output=True, text=True, timeout=timeout, check=False
     )
@@ -670,7 +680,7 @@ def test_recompute_geoip_outage_preserves_match_artifacts(deployed_vm: SmokeVM) 
     a PRE-EXISTING per-alias reputation match file untouched, never swap/remove it.
 
     STAGED PRECONDITION (documented, not a fake of the code path under test): this box
-    can never produce a real ``match<alias>.txt`` through a GeoIP-UP pass (no
+    can never produce a real ``pfB_Match_Rep_<alias>.txt`` through a GeoIP-UP pass (no
     ``.mmdb`` ever exists here -- the restored-GeoIP leg needs real MaxMind
     credentials to fetch a binary database a CSV fixture cannot substitute for;
     tracked as issue #1228). The file staged below stands in for "what a prior pass
@@ -739,15 +749,17 @@ def test_recompute_geoip_outage_preserves_match_artifacts(deployed_vm: SmokeVM) 
 
 def test_recompute_geoip_restored_clears_match_artifacts(deployed_vm: SmokeVM) -> None:
     """dMax with GeoIP UP: a clean pass (no cc-list match for any offender)
-    reconciles away BOTH the consolidated ``matchdedup`` file and a per-alias
-    ``match<alias>.txt`` -- ``pfb_recompute_finish()``'s ``rec_geoip_ok=1`` branch
-    (issue #1228; the CSV-only fixture could never reach this leg).
+    reconciles away BOTH the consolidated ``pfB_Match_Exempt_v4.txt`` file and a
+    per-alias ``pfB_Match_Rep_<alias>.txt`` -- ``pfb_recompute_finish()``'s
+    ``rec_geoip_ok=1`` branch (issue #1228; the CSV-only fixture could never
+    reach this leg).
 
     Two offending /24s classify to DIFFERENT actions in the SAME pass -- a cc-list
-    HIT can only ever emit ``matchexempt`` (-> the consolidated ``matchdedup``
-    file), never a per-alias file (pfblockerng.sh's classify ``case``); only a
-    cc-list MISS with ``ccblack=match`` emits ``matchdup`` (-> the per-alias file).
-    Both offenders are needed to pin BOTH artifacts' clearing in one pass.
+    HIT can only ever emit ``matchexempt`` (-> the consolidated
+    ``pfB_Match_Exempt_v4.txt`` file), never a per-alias file (pfblockerng.sh's
+    classify ``case``); only a cc-list MISS with ``ccblack=match`` emits
+    ``matchdup`` (-> the per-alias file). Both offenders are needed to pin BOTH
+    artifacts' clearing in one pass.
 
     Scenario: GeoIP is available; the cc-list stops matching either offender.
       Given a v4 Deny feed with two offending /24s whose ``.1`` resolve in the
@@ -756,24 +768,24 @@ def test_recompute_geoip_restored_clears_match_artifacts(deployed_vm: SmokeVM) -
         ``ccblack='match'``, ``ccexclude='BT'`` (a HIT for the first, a MISS for
         the second),
       When a real update pass runs,
-      Then (BEFORE-STATE, asserted) ``matchdedup_v4.txt`` EXISTS carrying the
-        HIT offender's /24 (the ``matchexempt`` action) and the per-alias
-        ``match<alias>.txt`` EXISTS carrying the MISS offender's /24 (the
+      Then (BEFORE-STATE, asserted) ``pfB_Match_Exempt_v4.txt`` EXISTS carrying
+        the HIT offender's /24 (the ``matchexempt`` action) and the per-alias
+        ``pfB_Match_Rep_d2_v4.txt`` EXISTS carrying the MISS offender's /24 (the
         ``matchdup`` action), and the GeoIP-unavailable log line did NOT fire
         (this pass had GeoIP),
       When ``ccexclude`` is changed to a country neither offender is in
         (``GI``) and ``ccblack`` is turned off (so neither offender classifies
         into ANY action -- a genuinely clean pass) and a SECOND real pass runs,
-      Then both ``matchdedup_v4.txt`` and the per-alias ``match<alias>.txt`` are
-        GONE -- the clean pass reconciled them away, and the GeoIP-unavailable
-        line STILL did not fire.
+      Then both ``pfB_Match_Exempt_v4.txt`` and the per-alias
+        ``pfB_Match_Rep_d2_v4.txt`` are GONE -- the clean pass reconciled them
+        away, and the GeoIP-unavailable line STILL did not fire.
     """
     h.seed_geoip_dataset(deployed_vm)
     h.set_ip_dedup(deployed_vm, False)
     h.set_ip_suppression(deployed_vm, enabled=False)
 
-    matchdedup_path = f"{MATCHDIR}/matchdedup_v4.txt"
-    match_alias_path = f"{MATCHDIR}/matchd2_v4.txt"
+    matchdedup_path = f"{MATCHGENDIR}/pfB_Match_Exempt_v4.txt"
+    match_alias_path = f"{MATCHGENDIR}/pfB_Match_Rep_d2_v4.txt"
     # A stale artifact from an earlier module run would make the before-state
     # assertion below meaningless -- start clean, loudly.
     for stale in (matchdedup_path, match_alias_path):
@@ -788,7 +800,7 @@ def test_recompute_geoip_restored_clears_match_artifacts(deployed_vm: SmokeVM) -
     spec = h.IpCase(aliasname="d2", feed_url=feed, header="d2", action="Deny_Both")
     h.inject_ip_lists(deployed_vm, [spec])
 
-    # PASS 1: ccexclude="BT" -- a HIT for 67.43.156 (-> matchexempt/matchdedup),
+    # PASS 1: ccexclude="BT" -- a HIT for 67.43.156 (-> matchexempt/pfB_Match_Exempt),
     # a MISS for 111.235.160 with ccblack='match' (-> matchdup/per-alias file).
     h.set_ip_reputation(deployed_vm, drep=True, dmax=2, ccwhite="match", ccblack="match", ccexclude="BT")
     before_marker = h.count_log_marker(deployed_vm, h.PFB_LOG, GEOIP_OUTAGE_MARKER)
@@ -796,11 +808,12 @@ def test_recompute_geoip_restored_clears_match_artifacts(deployed_vm: SmokeVM) -
 
     matchdedup_pass1 = _raw(deployed_vm, matchdedup_path)
     assert matchdedup_pass1 == "67.43.156.0/24\n!67.43.156.10\n!67.43.156.11\n!67.43.156.12\n", (
-        f"matchdedup_v4.txt wrong after the HIT pass (expected the BT offender's /24 + members): {matchdedup_pass1!r}"
+        f"pfB_Match_Exempt_v4.txt wrong after the HIT pass (expected the BT offender's /24 + members): "
+        f"{matchdedup_pass1!r}"
     )
     match_alias_pass1 = _raw(deployed_vm, match_alias_path)
     assert match_alias_pass1 == "111.235.160.0/24\n!111.235.160.10\n!111.235.160.11\n!111.235.160.12\n", (
-        f"per-alias match file wrong after the MISS+ccblack=match pass (expected the CN offender's "
+        f"pfB_Match_Rep_d2_v4.txt wrong after the MISS+ccblack=match pass (expected the CN offender's "
         f"/24 + members): {match_alias_pass1!r}"
     )
     marker_pass1 = h.count_log_marker(deployed_vm, h.PFB_LOG, GEOIP_OUTAGE_MARKER)
@@ -814,14 +827,65 @@ def test_recompute_geoip_restored_clears_match_artifacts(deployed_vm: SmokeVM) -
     h.reload(deployed_vm, "updateip", wait_unbound=False)
 
     assert not _exists(deployed_vm, matchdedup_path), (
-        f"matchdedup_v4.txt survived a clean pass (no cc-list match) -- reconcile did not fire: "
+        f"pfB_Match_Exempt_v4.txt survived a clean pass (no cc-list match) -- reconcile did not fire: "
         f"content={_raw(deployed_vm, matchdedup_path)!r}"
     )
     assert not _exists(deployed_vm, match_alias_path), (
-        f"per-alias match file survived a clean pass (no cc-list match) -- reconcile did not fire: "
+        f"pfB_Match_Rep_d2_v4.txt survived a clean pass (no cc-list match) -- reconcile did not fire: "
         f"content={_raw(deployed_vm, match_alias_path)!r}"
     )
     marker_pass2 = h.count_log_marker(deployed_vm, h.PFB_LOG, GEOIP_OUTAGE_MARKER)
     assert marker_pass2 == before_marker, (
         f"GeoIP-unavailable line fired on the restored/clean pass: before={before_marker} after={marker_pass2}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# R10 -- end-to-end match-event attribution through the relocated artifact
+# (issue #1250: the Alerts page's find_reported_header() reader must resolve a
+# staged pfB_Match_Rep_<alias>.txt exactly as it used to resolve match<alias>.txt)
+# --------------------------------------------------------------------------- #
+
+
+def test_find_reported_header_attributes_relocated_match_rep_artifact(deployed_vm: SmokeVM) -> None:
+    """``find_reported_header()`` (the Alerts page's reader, fed by
+    ``pfb_ip_match_folders()``) attributes a reported IP to a staged
+    ``pfB_Match_Rep_<alias>.txt`` artifact -- pinning the user-visible rename
+    end-to-end: the Alerts column used to render ``match<alias>_v4`` and now
+    renders ``pfB_Match_Rep_<alias>_v4``.
+
+    A direct PHP probe of the reader path -- no reload, no live feed needed.
+
+    Scenario: one reported IP inside a freshly staged reputation CIDR.
+      Given (BEFORE) no artifact exists yet for a fresh, uuid-scoped alias,
+      When ``find_reported_header()`` queries a host inside the CIDR the
+        artifact WILL cover,
+      Then attribution MISSES this alias (nothing staged to match),
+      When a ``pfB_Match_Rep_<alias>.txt`` artifact carrying an RFC 5737 /24
+        (``203.0.113.0/24`` -- distinct from every OTHER match-artifact test in
+        this module, so a stale sibling artifact can never cause a false match)
+        is staged under matchgendir and the SAME query re-runs,
+      Then the returned header names THIS artifact's stem.
+    """
+    rec_alias = f"r10attr{uuid.uuid4().hex[:10]}_v4"
+    artifact_stem = f"pfB_Match_Rep_{rec_alias}"
+    host_ip = "203.0.113.99"
+    pre = "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\npfb_global();\n"
+    query = f"implode('|', find_reported_header({h._php_str(host_ip)}, pfb_ip_match_folders()))"
+
+    # BEFORE: nothing staged under this uuid-scoped alias yet.
+    before = h._php_read_scalar(deployed_vm, pre, query)
+    assert artifact_stem not in before, f"attribution matched an artifact never staged: {before!r}"
+
+    match_path = None
+    try:
+        match_path = _stage_match_file(deployed_vm, rec_alias, "203.0.113.0/24\n")
+
+        after = h._php_read_scalar(deployed_vm, pre, query)
+        assert artifact_stem in after, (
+            f"find_reported_header() did not attribute {host_ip} to the staged {artifact_stem}.txt "
+            f"via pfb_ip_match_folders(): before={before!r} after={after!r}"
+        )
+    finally:
+        if match_path is not None:
+            deployed_vm.ssh("/bin/rm", "-f", match_path)
