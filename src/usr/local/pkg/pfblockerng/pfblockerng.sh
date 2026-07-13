@@ -96,7 +96,6 @@ if [ -z "${PFB_SOURCED:-}" ]; then
 	pfbdomain=/var/db/pfblockerng/dnsbl/
 	pfbdomainorig=/var/db/pfblockerng/dnsblorig/
 
-	# Store 'Match' d-dedups in matchdedup.txt file
 	matchdedup=matchdedup_v4.txt
 
 	# Create a private per-run temp directory (sets tempfile, tempfile2, ...,
