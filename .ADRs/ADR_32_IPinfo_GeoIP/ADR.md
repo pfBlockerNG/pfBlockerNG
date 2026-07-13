@@ -8,15 +8,12 @@
 - **Date:** 2026-06-20
 - **Branch:** `adr/32-ipinfo-geoip` (off `devel`)
 - **Folds in:** issue #291 ("Add IPinfo GeoIP")
-- **Prerequisite (blocking, 2026-07-12) + REQUIRED READING for every phase:** issue **#1235**,
-  **in full, including every comment** (`gh issue view 1235 --comments`) — the in-tree,
-  provider-independent country/continent truth. It must land **before Phase 2**. Until it does,
-  this ADR's §2.1 rows for the country build and locale names are unsound: they let the
-  *provider* define which countries exist and what they are called, so switching provider (or a
-  provider dropping a country) would silently change a user's configured aliases. The design
-  settled on that issue — the country set, the name/locale precedence, the ISO→continent
-  mapping, the frozen structural bindings, and the per-continent unknown-country buckets — is
-  summarised in §2.5, but **the issue thread is the record**; read it, not just the summary.
+- **Prerequisite (blocking) — ADR-64:** the country/continent truth moves in-tree
+  (`.ADRs/ADR_64_GeoIP_Truth_Table/ADR.md`, folding in the closed issue #1235). **ADR-64 must land
+  before Phase 2.** Until it does, this ADR's §2.1 rows for the country build and locale names are
+  unsound: they let the *provider* define which countries exist and what they are called, so
+  switching provider (or a provider dropping a country) would silently change a user's configured
+  aliases. §2.5 summarises the consequences for this ADR; **ADR-64 is the record** — read it.
 - **Component(s):** `src/usr/local/www/pfblockerng/pfblockerng.php` (GeoIP/Reputation/ASN
   build + IP-tab settings), `src/usr/local/pkg/pfblockerng/pfblockerng.inc` (MMDB log
   enrichment, ASN, reputation), `src/usr/local/pkg/pfblockerng/pfblockerng.sh` (DB

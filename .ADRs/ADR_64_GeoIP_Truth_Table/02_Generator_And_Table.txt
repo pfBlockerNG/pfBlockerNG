@@ -1,0 +1,78 @@
+================================================================================
+PHASE 2 PROMPT -- The generator + the committed table (behaviour-preserving; nothing consumes it yet)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_64_GeoIP_Truth_Table/ADR.md
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch adr/64-geoip-truth-table (off the
+latest devel; create if absent). You implement yourself with Read/Edit/Write/Bash -- you NEVER
+spawn sub-agents. Phase 2 adds the generator + the committed table. It wires nothing.
+Test mode: BEHAVIOUR-PRESERVING -- the table is generated and committed but NOT yet read by production. New code with no pre-existing behaviour: no red run against the void, but every guard ships with a test that FAILS when the guard is removed (prove it by mutation).
+Blast-radius note for the gate: NONE user-visible -- new dev tooling + a committed data file; no consumer reads it yet. The Phase-1 oracle must stay green.
+Follow CLAUDE.md in full.
+
+WHY THIS PHASE EXISTS
+The truth table is the whole ADR. Landing it unconsumed keeps the risky half (Phase 3's swap)
+isolated: if the table is wrong, the oracle catches it with no user-visible change in flight.
+
+REQUIRED READING
+- .ADRs/ADR_64_GeoIP_Truth_Table/ADR.md IN FULL -- especially SS1.3/SS1.4 (the measured facts),
+  SS2.1 (the table + its sources), SS2.2 (per-continent unknown buckets), SS2.3 (notices),
+  "Accepted user-visible deltas" (D1-D4: the ONLY permitted output changes) and "Semantics that
+  MUST be preserved".
+- Issue #1235 IN FULL, including every comment (`gh issue view 1235 --comments`) -- the design
+  record this ADR was distilled from. Read it, not just the ADR summary.
+- CLAUDE.md in full -- PHP standards, Test coverage mandate, the delegation contract.
+- src/usr/local/www/pfblockerng/pfblockerng.php -- pfblockerng_uc_countries() (~:855-1460),
+  pfblockerng_get_countries(), $pfb_geoip_all (~:941-1191), $top_20 (~:883), the two hardcoded
+  continent-level buckets (~:935-938), the Locations parse gate (~:898), the Blocks parse
+  (~:1223-1330).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc -- $pfb['continents'] / $pfb['continent_list']
+  (~:160-171): the FROZEN structural bindings (alias prefixes, config-section roots).
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before implementation; the live
+tree and any prior RESULTS/ file override this prompt on any conflict -- verify each claim before
+acting, and flag contradictions loudly in the handoff. The ADR's measured facts came from a real
+licensed dataset on the maintainer's box; if the live code disagrees, the CODE wins and you
+ESCALATE rather than patch around it.
+
+ACTION PLAN (ordered)
+1. `scripts/update-country-table.py` -- stdlib only (urllib/json/csv/hashlib), NO new dependency,
+   dev-side only (CLAUDE.md: no Python on the appliance). Pinned + sha256-verified sources; a
+   `--check` mode that exits non-zero when the committed table differs (CI uses it).
+   Sources per ADR SS2.1: GeoNames countryInfo.txt (ISO -> continent, + XK); the ISO 3166-1 set
+   (iso-codes); CLDR (or iso-codes .po) for localized names; the SUPPORTED PROVIDERS' code sets
+   for the union. Display names (en) are CURATED in-tree, seeded once -- the generator must NOT
+   overwrite a curated name; it REPORTS an upstream rename (that is Phase 5's tracker signal).
+2. The committed table under src/usr/local/pkg/pfblockerng/ -- pick the format the PHP consumer can
+   read cheaply and state why in the handoff; deterministic, byte-stable, one trailing newline.
+   It carries: ISO -> {name, continent code}; the 7 continents (code, GeoNames id, frozen
+   structural slug, display name); the per-continent unknown-country buckets keyed by continent
+   geoname id; XK.
+3. Unit tests (tests/) over the pure derivation, no network -- and the hostile-input set:
+   checksum mismatch; a code with no continent; a code in no source's name table; a retired code
+   (AN/CS) offered by GeoNames -- must NOT enter the union; a provider code absent from ISO (XK) --
+   must be carried; comma-in-name; non-ASCII name; a continent id the table does not know; row-count
+   drift.
+4. Wire `--check` into CI so the committed table cannot silently drift from its sources.
+
+CONSTRAINTS
+- Do NOT change any consumer yet: pfblockerng.php/.inc stay byte-identical this phase.
+- The generator NEVER guesses: every failure above is a hard error with the offending key named.
+- No new runtime dependency; the appliance reads a committed artifact only.
+
+VERIFICATION (executed -- paste the output, never "reasoned through")
+- `python3 -m pytest tests/test_update_country_table.py -v` -- paste the summary.
+- Run the generator twice: `git status --short` must be clean the second time (byte-stable).
+- MUTATION PROOF for every guard: disable it, show the test goes RED, restore, show GREEN. Paste.
+- `scripts/agent/run-gates.sh --diff origin/devel`.
+- The Phase-1 oracle must still be GREEN (nothing consumes the table yet).
+
+HANDOFF
+Write .ADRs/ADR_64_GeoIP_Truth_Table/RESULTS/02_Results.txt with the fixed fields from
+CLAUDE.md "THE HANDOFF": Verdict; What changed (files + one-line why each + commit hash); Gates
+(exact commands + pasted output tails); the mutation proof for EVERY guard (guard disabled -> its test RED; restored -> GREEN); Coverage matrix (every row of this prompt's
+ACTION PLAN ticked, or an explicit justified deferral); Deviations / judgment calls (or "none");
+Carry-forward for the next phase.

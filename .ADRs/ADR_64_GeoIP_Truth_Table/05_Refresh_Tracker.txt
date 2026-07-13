@@ -1,0 +1,73 @@
+================================================================================
+PHASE 5 PROMPT -- The monthly refresh tracker (.github/workflows/)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_64_GeoIP_Truth_Table/ADR.md
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch adr/64-geoip-truth-table (off the
+latest devel; create if absent). You implement yourself with Read/Edit/Write/Bash -- you NEVER
+spawn sub-agents. Phase 5 automates 'the table is stale' detection.
+Test mode: RED->GREEN via an in-job RED CANARY (CLAUDE.md CI-gate rule) -- the job proves its red
+path in the same run: a synthetic upstream delta must drive it down the issue-opening path, and a
+clean run must open nothing. A workflow whose green path is the only one ever exercised ships
+untested wiring.
+Blast-radius note for the gate: CI only. If this phase lands alone: a monthly job starts running and may open an issue. No runtime behaviour changes.
+Follow CLAUDE.md in full.
+
+WHY THIS PHASE EXISTS
+The table is only as good as its refresh. Hand-refreshing is what produced Swaziland and Macedonia
+in today's UI. A scheduled job that opens an issue on any upstream delta makes staleness loud and
+keeps regeneration a reviewed commit.
+
+REQUIRED READING
+- .ADRs/ADR_64_GeoIP_Truth_Table/ADR.md IN FULL -- especially SS1.3/SS1.4 (the measured facts),
+  SS2.1 (the table + its sources), SS2.2 (per-continent unknown buckets), SS2.3 (notices),
+  "Accepted user-visible deltas" (D1-D4: the ONLY permitted output changes) and "Semantics that
+  MUST be preserved".
+- Issue #1235 IN FULL, including every comment (`gh issue view 1235 --comments`) -- the design
+  record this ADR was distilled from. Read it, not just the ADR summary.
+- CLAUDE.md in full -- PHP standards, Test coverage mandate, the delegation contract.
+- src/usr/local/www/pfblockerng/pfblockerng.php -- pfblockerng_uc_countries() (~:855-1460),
+  pfblockerng_get_countries(), $pfb_geoip_all (~:941-1191), $top_20 (~:883), the two hardcoded
+  continent-level buckets (~:935-938), the Locations parse gate (~:898), the Blocks parse
+  (~:1223-1330).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc -- $pfb['continents'] / $pfb['continent_list']
+  (~:160-171): the FROZEN structural bindings (alias prefixes, config-section roots).
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before implementation; the live
+tree and any prior RESULTS/ file override this prompt on any conflict -- verify each claim before
+acting, and flag contradictions loudly in the handoff. The ADR's measured facts came from a real
+licensed dataset on the maintainer's box; if the live code disagrees, the CODE wins and you
+ESCALATE rather than patch around it.
+
+ACTION PLAN (ordered)
+1. Read the Phase-2 RESULTS (the generator's `--check` mode is what this job drives).
+2. `.github/workflows/` -- a MONTHLY scheduled job (+ workflow_dispatch) that re-derives the table
+   from the pinned sources and, on any delta, OPENS a GitHub issue with the diff: new/retired ISO
+   code, an upstream RENAME (a curated display name upstream disagrees with), a moved continent, a
+   provider code the table does not know.
+3. Mirror the house pattern: read version-tracker.yml, top1m-healthcheck.yml and
+   nightly-failure-alert.yml FIRST and follow their shape (idempotent issue handling -- do not open
+   a duplicate every month).
+4. The job never commits the table. Regeneration stays a reviewed PR.
+
+CONSTRAINTS
+- Idempotent: an unchanged upstream opens nothing; an unresolved delta does not spam a new issue
+  each run.
+- No secrets beyond the default GITHUB_TOKEN's issue scope.
+
+VERIFICATION (executed -- paste the output, never "reasoned through")
+- RED CANARY, in-job: feed a synthetic delta (a stubbed source) and show the job takes the
+  issue-opening path; then the clean path with no delta opens nothing. Paste both runs
+  (`gh workflow run` / `act`, or the job's own dry-run mode -- state which).
+- shellcheck / actionlint per the repo's CI conventions.
+- `scripts/agent/run-gates.sh --diff origin/devel`.
+
+HANDOFF
+Write .ADRs/ADR_64_GeoIP_Truth_Table/RESULTS/05_Results.txt with the fixed fields from
+CLAUDE.md "THE HANDOFF": Verdict; What changed (files + one-line why each + commit hash); Gates
+(exact commands + pasted output tails); the red-canary evidence (synthetic delta -> issue path taken; clean run -> nothing opened); Coverage matrix (every row of this prompt's
+ACTION PLAN ticked, or an explicit justified deferral); Deviations / judgment calls (or "none");
+Carry-forward for the next phase.

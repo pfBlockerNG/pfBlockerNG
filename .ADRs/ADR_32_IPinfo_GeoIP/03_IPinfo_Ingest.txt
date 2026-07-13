@@ -16,13 +16,13 @@ MMDB. This phase converts that DB into the Phase-2 normalized record, modelling 
 capabilities (locale, deprecated flags) as "unavailable".
 
 REQUIRED READING
-- Issue #1235 IN FULL, including every comment (`gh issue view 1235 --comments`) — the in-tree,
-  provider-independent country/continent truth. It is a BLOCKING PREREQUISITE for this ADR
-  (ADR.md SS2.5): the country SET (ISO union every supported provider, incl. XK), the NAMES and
-  their locales (iso-codes -> GeoNames -> provider), the ISO->continent mapping, the frozen
-  structural bindings (pfB_NAmerica, the config sections), and the per-continent unknown-country
-  buckets all come from the truth table -- NEVER from the provider. A provider code the table
-  does not know is a notice, never a silent new country.
+- .ADRs/ADR_64_GeoIP_Truth_Table/ADR.md IN FULL -- the in-tree, provider-independent
+  country/continent truth. It is a BLOCKING PREREQUISITE for this ADR: the country SET (ISO union
+  every supported provider, incl. XK), the NAMES and their locales, the ISO->continent mapping, the
+  frozen structural bindings (pfB_NAmerica, the config sections), and the per-continent
+  unknown-country buckets all come from the truth table -- NEVER from the provider. A provider code
+  the table does not know is a notice, never a silent new country. (Issue #1235 is its closed design
+  thread: `gh issue view 1235 --comments` for the reasoning.)
 - FIRST, read .ADRs/ADR_32_IPinfo_GeoIP/RESULTS/02_Results.txt — the normalized record shape.
   If missing, STOP and report.
 - .ADRs/ADR_32_IPinfo_GeoIP/ADR.md

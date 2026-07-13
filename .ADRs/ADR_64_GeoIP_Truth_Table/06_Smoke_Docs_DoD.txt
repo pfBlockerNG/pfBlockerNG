@@ -1,0 +1,72 @@
+================================================================================
+PHASE 6 PROMPT -- Smoke + UI coverage, docs, and the ADR's definition of done
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_64_GeoIP_Truth_Table/ADR.md
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch adr/64-geoip-truth-table (off the
+latest devel; create if absent). You implement yourself with Read/Edit/Write/Bash -- you NEVER
+spawn sub-agents. Phase 6 closes the coverage and documentation debts this ADR opened.
+Test mode: BEHAVIOUR-PRESERVING -- coverage and documentation only. The suites must be GREEN before and after; a new test that passes on the pre-ADR code proves nothing and must be justified.
+Blast-radius note for the gate: Tests + docs only. If this phase lands alone: no production behaviour changes; CI gains coverage.
+Follow CLAUDE.md in full.
+
+WHY THIS PHASE EXISTS
+An ADR is Accepted on green automated coverage (CLAUDE.md "ADR acceptance"). This phase supplies
+the live-VM proof and the docs, and closes issue #1246.
+
+REQUIRED READING
+- .ADRs/ADR_64_GeoIP_Truth_Table/ADR.md IN FULL -- especially SS1.3/SS1.4 (the measured facts),
+  SS2.1 (the table + its sources), SS2.2 (per-continent unknown buckets), SS2.3 (notices),
+  "Accepted user-visible deltas" (D1-D4: the ONLY permitted output changes) and "Semantics that
+  MUST be preserved".
+- Issue #1235 IN FULL, including every comment (`gh issue view 1235 --comments`) -- the design
+  record this ADR was distilled from. Read it, not just the ADR summary.
+- CLAUDE.md in full -- PHP standards, Test coverage mandate, the delegation contract.
+- src/usr/local/www/pfblockerng/pfblockerng.php -- pfblockerng_uc_countries() (~:855-1460),
+  pfblockerng_get_countries(), $pfb_geoip_all (~:941-1191), $top_20 (~:883), the two hardcoded
+  continent-level buckets (~:935-938), the Locations parse gate (~:898), the Blocks parse
+  (~:1223-1330).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc -- $pfb['continents'] / $pfb['continent_list']
+  (~:160-171): the FROZEN structural bindings (alias prefixes, config-section roots).
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before implementation; the live
+tree and any prior RESULTS/ file override this prompt on any conflict -- verify each claim before
+acting, and flag contradictions loudly in the handoff. The ADR's measured facts came from a real
+licensed dataset on the maintainer's box; if the live code disagrees, the CODE wins and you
+ESCALATE rather than patch around it.
+
+ACTION PLAN (ordered)
+1. Read every prior RESULTS file. If any is missing, STOP.
+2. Tier-A (ui_render): the 7 continent pages + Top Spammers + Proxy/Satellite + Reputation render
+   with the table's data -- including a populated unknown-country bucket AND a (0) one. Needles must
+   be non-vacuous (a page title could pass vacuously; a country's option text + count cannot).
+3. Smoke: the continent-level Blocks row end-to-end (the fixture added in Phase 1) -- it must land
+   in the right unknown-country bucket's alias file and pf table. This is what closes #1246.
+4. Upgrade stability: a box with GeoIP continents configured (incl. an unknown-bucket selection)
+   keeps config.xml byte-identical across the package upgrade.
+5. Docs: docs/misc/architecture-notes.md (the truth table + its sources + the tracker);
+   tests/smoke/fixtures/README.md (the continent-level addendum row); a release-note paragraph for
+   D1 (the corrected country names -- user-visible).
+6. Close #1246; verify ADR-32's SS2.5 prerequisite now points at this ADR as satisfied.
+
+CONSTRAINTS
+- Tier-B (ui_browser) only if a change is observable ONLY there (ADR-14).
+- Docs state constraints, not narration; no ADR phase numbers in committed code comments.
+
+VERIFICATION (executed -- paste the output, never "reasoned through")
+- `scripts/local-smoke.sh --marker ui_render` and `--marker smoke --filter geoip` on a leased
+  PFB_BOXES box -- paste BOTH pytest summary lines.
+- The upgrade-stability check: paste the config.xml digest before/after.
+- `scripts/agent/run-gates.sh --diff origin/devel`; `npx markdownlint-cli2`.
+- Re-run the Phase-1 oracle one last time: the diff vs the pre-ADR baseline must still be exactly
+  D1-D4. Paste it.
+
+HANDOFF
+Write .ADRs/ADR_64_GeoIP_Truth_Table/RESULTS/06_Results.txt with the fixed fields from
+CLAUDE.md "THE HANDOFF": Verdict; What changed (files + one-line why each + commit hash); Gates
+(exact commands + pasted output tails); the two live-VM pytest summaries, the config.xml before/after digests, and the final oracle diff (exactly D1-D4); Coverage matrix (every row of this prompt's
+ACTION PLAN ticked, or an explicit justified deferral); Deviations / judgment calls (or "none");
+Carry-forward for the next phase.
