@@ -224,12 +224,41 @@ Consequences for this ADR:
   **"Proxy and Satellite"** (`pfB_PS`) is a MaxMind construct (see #1221) that belongs to the
   MaxMind adapter. They keep their structural bindings; they just are not geography.
 
+#### Continent-level rows: what the "AA \<CONTINENT\> UNDEFINED" buckets actually are
+
+`pfblockerng.php:935-938` hardcodes two pseudo-countries keyed on **continent** geoname ids —
+`6255147` ("AA ASIA UNDEFINED") and `6255148` ("AA EUROPE UNDEFINED") — and none for the other
+five continents. They are not arbitrary: MaxMind emits **continent-level location rows** for
+addresses it can only place to a continent (the legacy `AP` = Asia/Pacific and `EU` = Europe
+pseudo-countries). MaxMind's own published example carries exactly such a row — the only one in
+the file with an empty `country_iso_code`:
+
+```text
+6255148,en,EU,Europe,,,0        <- geoname_id IS the continent; no country
+```
+
+A Blocks row may then reference `geoname_id = 6255148`, which is not a country. Our Locations
+parse **drops** that row (`:898` requires a non-empty `country_iso_code` *and* `country_name`),
+so the two hardcoded entries re-add what the parse discarded — without them, such a Blocks row
+would index `$pfb_geoip['country'][6255148]['iso'][0]` on a missing key. MaxMind's current
+documentation does not mention continent-level `geoname_id`s or the `EU`/`AP` codes at all
+(checked 2026-07-12), so this behaviour is known only from the data.
+
+This matters for the provider abstraction: **"the country is unknown, only the continent is
+known" is a real state a provider can report**, and the in-tree truth must model it explicitly
+(a country-less, continent-only bucket per continent) rather than leave it as two hardcoded
+MaxMind-shaped special cases. IPinfo's equivalent state, if any, must map onto the same model.
+
+Note the coverage gap this exposes: the smoke corpus (#1228) carries **no** continent-level row
+(zero references to any of the seven continent ids across both Blocks CSVs), so this path is
+currently exercised by nothing.
+
 Open questions #1235 must settle (they do not block this ADR's other phases): which locales the
 table carries and where the localized names come from (GeoNames `alternateNames` vs CLDR — for
 countries **and** the 7 continents), whether MaxMind's locale files stay as optional enrichment
-for MaxMind users, the refresh cadence, and what becomes of the two "AA \<CONTINENT\> UNDEFINED"
-pseudo-countries (they exist only for Asia and Europe today — generalize to all seven, or retire
-them).
+for MaxMind users, the refresh cadence, and how the continent-only bucket is modelled (one per
+continent, generalizing today's Asia/Europe pair — or retired, if no provider still emits the
+rows).
 
 ## 3. Consequences
 
