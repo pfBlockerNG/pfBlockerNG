@@ -169,6 +169,39 @@ def test_ip_probe_membership_and_rule(deployed_vm: SmokeVM, mock_feeds: object) 
         assert h.rule_references(deployed_vm, spec.alias), f"no rule references {spec.alias}"
 
 
+# The dump's own body runs two full three-layer probes on top of the case reload, so the
+# 30s default cap would kill it mid-probe (issue #1239).
+@pytest.mark.timeout(180)
+def test_alias_rule_dump_localises_a_present_and_an_absent_rule(deployed_vm: SmokeVM, mock_feeds: object) -> None:
+    """``alias_rule_dump``'s [STAGE LOST] verdict must be right against the REAL box.
+
+    A future rule_references failure will be BELIEVED on this verdict — "the rule was never
+    generated" accuses the product, "not loaded yet" accuses the test — so the verdict is
+    pinned on the live surface, where the pfSsh.php config read, the rules.debug grep and the
+    pfctl reads must genuinely work (fakes cannot prove any of those three).
+
+    Scenario: the two verdicts that decide the accusation.
+      Given a fed IP list whose alias HAS a loaded rule
+      Then the dump reports STAGE NONE, carrying the rule as evidence
+      And given an alias pfBlockerNG never created
+      Then it reports STAGE CONFIG — the rule was never generated.
+    The PAIRING is the point: a dump that always said CONFIG would "confirm" a product bug
+    on every lag, so the present-rule case is what proves the verdict discriminates.
+    """
+    feed_url = h.write_local_feed(deployed_vm, "smoke_dump_selftest.txt", "198.51.100.9\n")
+    spec = h.IpCase(aliasname="smokedump", feed_url=feed_url, header="smokedump")
+    with h.CaseContext(deployed_vm, spec):
+        assert h.wait_pfctl_table(deployed_vm, spec.alias), f"{spec.alias} never populated"
+        assert h.rule_references(deployed_vm, spec.alias), f"no rule references {spec.alias}"
+
+        present = h.alias_rule_dump(deployed_vm, spec.alias)
+        assert "[STAGE LOST] NONE" in present, f"a rule loaded at every layer was misreported:\n{present}"
+        assert spec.alias in present, f"dump carries no evidence rows for {spec.alias}:\n{present}"
+
+        absent = h.alias_rule_dump(deployed_vm, "pfB_NeverCreated_v4")
+        assert "[STAGE LOST] CONFIG" in absent, f"an alias that was never generated was misreported:\n{absent}"
+
+
 # --------------------------------------------------------------------------- #
 # 6) ABP harness extensions (ADR-07) — PURE, no VM
 #    Pin the feed-body builder + the config-injection snippet so a regression in
