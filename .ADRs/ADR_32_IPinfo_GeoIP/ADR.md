@@ -178,25 +178,37 @@ abstraction — it leaks the vendor straight into the user's configuration:
 
 Therefore, before Phase 2:
 
-1. **The truth is a committed, generated table** — GeoNames `countryInfo.txt` (CC BY 4.0; ISO,
-   name, continent, geonameid) via a pinned, checksum-verified generator, the same shape as
-   `scripts/update-geoip-fixtures.py`. This is not a new dependency: the `geoname_id`s in today's
-   hardcoded `$pfb_geoip_all` **are** GeoNames ids (`JO`=248816, `US`=6252001, `BT`=1252634,
-   `AQ`=6697173) — the table is a GeoNames snapshot, scraped once and never refreshed.
+1. **The truth is a committed, generated table**, built by a pinned, checksum-verified generator
+   (same shape as `scripts/update-geoip-fixtures.py`) from **two** free, machine-readable sources
+   — each used for the one thing it is authoritative about (all figures measured 2026-07-13):
+
+   | Source | Licence | Supplies | Why it, and not the others |
+   | --- | --- | --- | --- |
+   | **`iso-codes`** (Debian; ISO 3166-1 data) | LGPL-2.1 | the **country set** (249 officially-assigned codes), **current official names**, and **localized names** | It *is* the ISO 3166-1 list, machine-readable and maintained — ISO's own paid collection file (300 CHF) buys nothing extra, and the ISO OBP web UI does not need scraping. Names are current and correctly accented (`Türkiye`, `Cabo Verde`, `North Macedonia`, `Eswatini`, `Curaçao`). Ships `.po` translations for **every locale pfBlockerNG offers** (`fr de pt_BR ja zh_CN es ru` — e.g. `Türkiye` → `トルコ`), which retires the "locale support depends on the provider" problem outright. |
+   | **GeoNames** `countryInfo.txt` | CC BY 4.0 | the **ISO → continent** mapping (+ the continent geoname ids) | ISO 3166 has no concept of a continent, so this is the one thing `iso-codes` cannot answer. GeoNames' 7-continent model is the one the GeoIP pages already use (UN M.49 / CLDR splits the Americas differently and would not map onto our pages). Its *names* are not used — they are ASCII-folded and partly stale (`Curacao`, `Reunion`, `Turkey`). |
+
+   This is not a new dependency, it is the original one made explicit: the `geoname_id`s in
+   today's hardcoded `$pfb_geoip_all` **are** GeoNames ids (`JO`=248816, `US`=6252001,
+   `BT`=1252634, `AQ`=6697173) — the table is a GeoNames snapshot, scraped once and never
+   refreshed.
+
+   **`XK` (Kosovo) must be carried explicitly.** The set arithmetic:
+
+   ```text
+   ISO 3166-1 official : 249
+   MaxMind GeoLite2    : 250  = 249 + XK      (user-assigned code, not official ISO)
+   $pfb_geoip_all      : 250  = 249 + XK      (same set as MaxMind)
+   GeoNames countryInfo: 252  = 249 + XK + AN + CS   (two retired codes — filter them)
+   ```
+
+   A strict-ISO generation would **drop Kosovo**, which MaxMind ships and users may already have
+   selected — a silently emptied alias, the exact failure this section exists to prevent. `XK` is
+   a documented, deliberate addition to the ISO set.
    **How stale, measured (2026-07-13):** our table's ISO set (250) matches GeoLite2's exactly, but
    **6 names** disagree with current GeoNames — and four of those are renames the world actually
    made: the UI still says **Swaziland** (Eswatini), **Macedonia** (North Macedonia),
    **Cape Verde** (Cabo Verde), **East Timor** (Timor Leste). Against current GeoLite2, **21**
    names disagree.
-   Two source caveats the generator must handle, both measured on the live data:
-   - `countryInfo.txt` carries **252** codes, including the retired **`AN`** (Netherlands
-     Antilles, dissolved 2010) and **`CS`** (Serbia and Montenegro, dissolved 2006). GeoLite2
-     lists 250 and omits both. A naive generation would add two dead countries to the UI —
-     filter them, or take the country *set* from a current ISO 3166-1 source.
-   - GeoNames' names are **ASCII-folded and partly non-current** (`Aland Islands`, `Curacao`,
-     `Reunion`, `Sao Tome and Principe`, `Turkey`). They are fine as a key/mapping source, poor
-     as display strings — which is why the display-name source is an open question below
-     (CLDR is the obvious candidate).
 2. **The canonical key is the ISO 3166-1 alpha-2 code**, never a provider's `geoname_id` —
    which is where the data model already points (`config.xml` stores `countries4="US,BT"`).
 3. **A provider supplies network → ISO, nothing else.** MaxMind's Locations CSV becomes a
@@ -208,6 +220,13 @@ Therefore, before Phase 2:
 5. **Provider-specific pseudo-countries stay in the provider adapter** — MaxMind's `A1`/`A2`
    (anonymous proxy / satellite) are not countries and are not in GeoNames (see #1221, where
    they are already provably empty against real GeoLite2 data).
+6. **The table is refreshed by a scheduled tracker, not by hand.** A monthly workflow re-derives
+   the table from the pinned sources and, on any diff (a new/retired ISO code, a rename, a moved
+   continent), **opens an issue** with the delta — the house pattern already used by
+   `version-tracker.yml`, `top1m-healthcheck.yml` and `nightly-failure-alert.yml`. Regeneration
+   stays a reviewed commit; the tracker only tells us one is due. This is also where a *provider*
+   drift shows up: the same job can diff the active provider's country set against the table
+   (today that would report MaxMind's `XK` and the two GeoNames-only retired codes).
 
 #### Continents are a second truth — and a *structural* one
 
@@ -321,12 +340,12 @@ Note the coverage gap this exposes: the smoke corpus (#1228) carries **no** cont
 (zero references to any of the seven continent ids across both Blocks CSVs), so this path is
 currently exercised by nothing.
 
-Open questions #1235 must settle (they do not block this ADR's other phases): the **display-name
-source** and its locales (GeoNames' own names are ASCII-folded and partly stale, so CLDR is the
-likely pick — for countries **and** the 7 continents), whether MaxMind's locale files stay as
-optional enrichment for MaxMind users, the refresh cadence, whether the country *set* comes from
-GeoNames minus its retired codes or from a current ISO 3166-1 source, and the display name of the
-per-continent unknown bucket (today's `AA <CONTINENT> UNDEFINED`).
+Open questions #1235 must settle (they do not block this ADR's other phases): the **continent**
+display names and their locales (`iso-codes` covers countries, not continents — seven strings ×
+seven locales, so a small in-tree table is the likely answer), whether MaxMind's locale files
+stay as optional enrichment for MaxMind users (they should not be needed — `iso-codes` covers
+every locale we offer), the tracker's exact cadence, and the display name of the per-continent
+unknown bucket (today's `AA <CONTINENT> UNDEFINED`).
 
 **Renaming a country is user-visible, and the four stale names above will change on the first
 regeneration** (Swaziland → Eswatini, …). Display strings are not config keys — the stored value
