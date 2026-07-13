@@ -327,7 +327,8 @@ STUB
     setup() {
       work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/truncF.XXXXXX")"
       pfborig="${work}/orig/"; pfbmatch="${work}/match/"; etdir="${work}/ET"
-      mkdir -p "${pfborig}" "${pfbmatch}" "${etdir}"
+      pfbmatchgen="${work}/match/generated/"
+      mkdir -p "${pfborig}" "${pfbmatch}" "${pfbmatchgen}" "${etdir}"
       alias='WipeF'
       ip_placeholder2=''
       now='now'
@@ -351,7 +352,7 @@ STUB
       The output should include 'SURVIVED_F'
       The contents of file "${errorlog}" should include 'cannot create'
       The contents of file "${pfborig}${alias}.orig" should equal "${expected_orig}"
-      The path "${pfbmatch}/ETMatch.txt" should not be exist
+      The path "${pfbmatchgen}/ETMatch.txt" should not be exist
     End
   End
 End

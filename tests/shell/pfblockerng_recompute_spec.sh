@@ -468,7 +468,8 @@ Describe 'pfb_recompute() dMax match-mode + GeoIP-unavailable bail + pMax'
 	setup() {
 		work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/recdmaxmatch.XXXXXX")"
 		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"
-		mkdir -p "$snap" "$pfbdeny" "$pfbmatch"
+		pfbmatchgen="${work}/match/generated/"
+		mkdir -p "$snap" "$pfbdeny" "$pfbmatch" "$pfbmatchgen"
 		tmpdir="${work}/tmp"; mkdir -p "$tmpdir"
 		masterfile="${work}/master"; mastercat="${work}/mastercat"
 		errorlog="${work}/err.log"
@@ -492,9 +493,9 @@ Describe 'pfb_recompute() dMax match-mode + GeoIP-unavailable bail + pMax'
 		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on dmax 1 US off match
 		The status should be success
 		The contents of file "${pfbdeny}ONE_v4.txt" should equal "$(printf '192.0.2.20\n192.0.2.21')"
-		The contents of file "${pfbmatch}matchONE_v4.txt" should include '192.0.2.0/24'
-		The contents of file "${pfbmatch}matchONE_v4.txt" should include '!192.0.2.20'
-		The contents of file "${pfbmatch}matchONE_v4.txt" should include '!192.0.2.21'
+		The contents of file "${pfbmatchgen}matchONE_v4.txt" should include '192.0.2.0/24'
+		The contents of file "${pfbmatchgen}matchONE_v4.txt" should include '!192.0.2.20'
+		The contents of file "${pfbmatchgen}matchONE_v4.txt" should include '!192.0.2.21'
 	End
 
 	It "ccwhite=match on a cc-list hit: writes the consolidated matchdedup file, leaves the stream untouched"
@@ -505,8 +506,8 @@ Describe 'pfb_recompute() dMax match-mode + GeoIP-unavailable bail + pMax'
 		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on dmax 1 US match off
 		The status should be success
 		The contents of file "${pfbdeny}EX_v4.txt" should equal "$(printf '198.51.100.20\n198.51.100.21')"
-		The contents of file "${pfbmatch}${matchdedup}" should include '198.51.100.0/24'
-		The contents of file "${pfbmatch}${matchdedup}" should include '!198.51.100.20'
+		The contents of file "${pfbmatchgen}${matchdedup}" should include '198.51.100.0/24'
+		The contents of file "${pfbmatchgen}${matchdedup}" should include '!198.51.100.20'
 	End
 
 	It 'ccwhite passed uppercase (MATCH) still fires the exempt-match path on a cc-list hit (issue #1084 review, case-fold parity with the legacy verb init)'
@@ -516,8 +517,8 @@ Describe 'pfb_recompute() dMax match-mode + GeoIP-unavailable bail + pMax'
 
 		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on dmax 1 US MATCH off
 		The status should be success
-		The contents of file "${pfbmatch}${matchdedup}" should include '198.51.100.0/24'
-		The contents of file "${pfbmatch}${matchdedup}" should include '!198.51.100.40'
+		The contents of file "${pfbmatchgen}${matchdedup}" should include '198.51.100.0/24'
+		The contents of file "${pfbmatchgen}${matchdedup}" should include '!198.51.100.40'
 	End
 
 	It 'ccblack=match emits match<alias>.txt for EVERY member alias sharing an offender /24 (issue #1084: multi-alias delta from the legacy single-owner write)'
@@ -528,11 +529,11 @@ Describe 'pfb_recompute() dMax match-mode + GeoIP-unavailable bail + pMax'
 
 		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on dmax 2 US off match
 		The status should be success
-		The contents of file "${pfbmatch}matchFirst_v4.txt" should include '192.0.2.0/24'
-		The contents of file "${pfbmatch}matchFirst_v4.txt" should include '!192.0.2.30'
-		The contents of file "${pfbmatch}matchSecond_v4.txt" should include '192.0.2.0/24'
-		The contents of file "${pfbmatch}matchSecond_v4.txt" should include '!192.0.2.31'
-		The contents of file "${pfbmatch}matchSecond_v4.txt" should include '!192.0.2.32'
+		The contents of file "${pfbmatchgen}matchFirst_v4.txt" should include '192.0.2.0/24'
+		The contents of file "${pfbmatchgen}matchFirst_v4.txt" should include '!192.0.2.30'
+		The contents of file "${pfbmatchgen}matchSecond_v4.txt" should include '192.0.2.0/24'
+		The contents of file "${pfbmatchgen}matchSecond_v4.txt" should include '!192.0.2.31'
+		The contents of file "${pfbmatchgen}matchSecond_v4.txt" should include '!192.0.2.32'
 	End
 
 	It "ccblack=match (not ccwhite) on a cc-list hit: logs nowhere -- no matchdedup file is written (today's asymmetric gate)"
@@ -542,7 +543,7 @@ Describe 'pfb_recompute() dMax match-mode + GeoIP-unavailable bail + pMax'
 
 		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on dmax 1 US off match
 		The status should be success
-		The path "${pfbmatch}${matchdedup}" should not be exist
+		The path "${pfbmatchgen}${matchdedup}" should not be exist
 	End
 
 	It 'GeoIP unavailable: dMax bails like reputation_depends, the pass still completes with no reputation applied'
@@ -565,7 +566,47 @@ Describe 'pfb_recompute() dMax match-mode + GeoIP-unavailable bail + pMax'
 		The status should be success
 		The contents of file "${pfbdeny}PALIAS_v4.txt" should equal '198.51.100.0/24'
 		The contents of file "$masterfile" should include 'PALIAS_v4 198.51.100.0/24'
-		The path "${pfbmatch}matchPALIAS_v4.txt" should not be exist
+		The path "${pfbmatchgen}matchPALIAS_v4.txt" should not be exist
+	End
+
+	# issue #1250: a Match-type list and a Deny-type list can share the same
+	# header, so their on-disk artifacts collided under the single ${pfbmatch}
+	# namespace -- the reputation-apply write must never touch a pre-existing
+	# user Match-list file, and lands in ${pfbmatchgen} instead.
+	It "a pre-existing user Match-list file at pfbmatch survives a same-named Deny alias's reputation match write (issue #1250)"
+		make_geoip_stub "$pathgeoip" 'Could not find an entry for this IP address'
+		# Two hosts in the same /24 (> max=1) so the Deny alias is a genuine
+		# offender and the reputation-apply write actually fires.
+		printf '192.0.2.50\n192.0.2.51\n' > "${snap}/Spam_v4.orig"
+		printf '%s\n' "${snap}/Spam_v4.orig" > "$memberlist"
+		# The user's OWN Match-type list content -- RFC 5737, unrelated to the
+		# reputation output the Deny alias 'Spam_v4' is about to produce.
+		printf '203.0.113.99\n' > "${pfbmatch}matchSpam_v4.txt"
+		before_content="$(cat "${pfbmatch}matchSpam_v4.txt")"
+
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on dmax 1 US off match
+		The status should be success
+		The value "$before_content" should equal '203.0.113.99'
+		The contents of file "${pfbmatch}matchSpam_v4.txt" should equal '203.0.113.99'
+		The contents of file "${pfbmatchgen}matchSpam_v4.txt" should include '192.0.2.0/24'
+		The contents of file "${pfbmatchgen}matchSpam_v4.txt" should include '!192.0.2.50'
+		The contents of file "${pfbmatchgen}matchSpam_v4.txt" should include '!192.0.2.51'
+	End
+
+	It 'a pre-existing user Match-list file headed matchdedup survives the ccwhite=match consolidated write (issue #1250)'
+		make_geoip_stub "$pathgeoip" 'xx iso_code: "US" xx'
+		# Alias name deliberately avoids any "dedup" substring: on a case-insensitive
+		# filesystem match<ALIAS>.txt.new would collide with matchdedup_v4.txt.new.
+		printf '198.51.100.50\n198.51.100.51\n' > "${snap}/CCHIT_v4.orig"
+		printf '%s\n' "${snap}/CCHIT_v4.orig" > "$memberlist"
+		printf '203.0.113.88\n' > "${pfbmatch}${matchdedup}"
+		before_content="$(cat "${pfbmatch}${matchdedup}")"
+
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on dmax 1 US match off
+		The status should be success
+		The value "$before_content" should equal '203.0.113.88'
+		The contents of file "${pfbmatch}${matchdedup}" should equal '203.0.113.88'
+		The contents of file "${pfbmatchgen}${matchdedup}" should include '198.51.100.0/24'
 	End
 End
 
@@ -823,7 +864,8 @@ Describe 'pfb_recompute() finish-arm reputation reconcile (issue #1084 review: s
 	setup() {
 		work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/recfinisharm.XXXXXX")"
 		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"
-		mkdir -p "$snap" "$pfbdeny" "$pfbmatch"
+		pfbmatchgen="${work}/match/generated/"
+		mkdir -p "$snap" "$pfbdeny" "$pfbmatch" "$pfbmatchgen"
 		tmpdir="${work}/tmp"; mkdir -p "$tmpdir"
 		masterfile="${work}/master"; mastercat="${work}/mastercat"
 		errorlog="${work}/err.log"
@@ -840,35 +882,35 @@ Describe 'pfb_recompute() finish-arm reputation reconcile (issue #1084 review: s
 	After 'cleanup'
 
 	It 'never promotes a crash-leftover match<alias>.txt.new debris on a clean no-offender dmax pass (GeoIP healthy)'
-		printf '9.9.9.0/24\n!9.9.9.9\n' > "${pfbmatch}matchSTALE_v4.txt.new"
+		printf '9.9.9.0/24\n!9.9.9.9\n' > "${pfbmatchgen}matchSTALE_v4.txt.new"
 		printf '192.0.2.1\n' > "${snap}/STALE_v4.orig"
 		printf '%s\n' "${snap}/STALE_v4.orig" > "$memberlist"
 
 		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on dmax 100 US off block
 		The status should be success
-		The path "${pfbmatch}matchSTALE_v4.txt" should not be exist
+		The path "${pfbmatchgen}matchSTALE_v4.txt" should not be exist
 	End
 
 	It 'keeps ALL previous match artifacts (+ logs) when GeoIP is unavailable this pass, instead of destructively reconciling them away'
 		rm -f "$pathgeoip" "$pathgeoipdat"
-		printf '5.5.5.0/24\n!5.5.5.5\n' > "${pfbmatch}matchALIAS_v4.txt"
+		printf '5.5.5.0/24\n!5.5.5.5\n' > "${pfbmatchgen}matchALIAS_v4.txt"
 		printf '192.0.2.1\n192.0.2.2\n192.0.2.3\n' > "${snap}/ALIAS_v4.orig"
 		printf '%s\n' "${snap}/ALIAS_v4.orig" > "$memberlist"
 
 		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on dmax 1 US off block
 		The status should be success
-		The contents of file "${pfbmatch}matchALIAS_v4.txt" should equal "$(printf '5.5.5.0/24\n!5.5.5.5')"
+		The contents of file "${pfbmatchgen}matchALIAS_v4.txt" should equal "$(printf '5.5.5.0/24\n!5.5.5.5')"
 		The contents of file "${errorlog}" should include 'GeoIP unavailable'
 	End
 
 	It 'clears a stale consolidated matchdedup file once a clean (offender-free) dmax pass confirms zero cc-list matches (matchdedup symmetry, issue #1084 review)'
-		printf '1.1.1.0/24\n!1.1.1.1\n' > "${pfbmatch}matchdedup_v4.txt"
+		printf '1.1.1.0/24\n!1.1.1.1\n' > "${pfbmatchgen}matchdedup_v4.txt"
 		printf '192.0.2.1\n' > "${snap}/CLEAN_v4.orig"
 		printf '%s\n' "${snap}/CLEAN_v4.orig" > "$memberlist"
 
 		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on dmax 100 US match off
 		The status should be success
-		The path "${pfbmatch}matchdedup_v4.txt" should not be exist
+		The path "${pfbmatchgen}matchdedup_v4.txt" should not be exist
 	End
 End
 
