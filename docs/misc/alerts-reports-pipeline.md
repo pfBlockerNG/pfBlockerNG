@@ -155,8 +155,9 @@ Page level:
 - one full `tail -r` log copy per table per load;
 - the Unified loop reads the reversed log to EOF even after all row limits are filled
   (the converters no-op, but `fgetcsv` still parses every remaining line);
-- stat views (`*_stat`): ~14 `cut|sort|uniq|sed` pipelines over the full log per view,
-  and the `grep -c ^` total recomputed inside the per-stat loop instead of once.
+- stat views (`*_stat`): ~14 `cut|sort|uniq|sed` pipelines over the full log per view.
+  The total is no longer a `grep -c ^` fork (issue #1261 — it is `pfb_count_lines()`, in-process),
+  but it is still recomputed inside the per-stat loop rather than once.
 
 ## Why load time varies day to day
 
