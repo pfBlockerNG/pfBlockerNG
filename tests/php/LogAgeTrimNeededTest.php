@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/PfbNoPhpWarningTrait.php';
+
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -21,6 +23,8 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_log_age_trim_needed')]
 final class LogAgeTrimNeededTest extends TestCase
 {
+	use PfbNoPhpWarningTrait;
+
 	private string $tmpFile;
 
 	protected function setUp(): void
@@ -43,23 +47,6 @@ final class LogAgeTrimNeededTest extends TestCase
 	private function secondsAgo(int $seconds): string
 	{
 		return date('Y-m-d H:i:s', time() - $seconds);
-	}
-
-	/** Runs $fn under a handler that records E_WARNING instead of printing it; fails the test if any fired. */
-	private function assertNoPhpWarning(callable $fn): mixed
-	{
-		$warnings = [];
-		set_error_handler(static function (int $errno, string $errstr) use (&$warnings): bool {
-			$warnings[] = $errstr;
-			return TRUE;
-		}, E_WARNING);
-		try {
-			$result = $fn();
-		} finally {
-			restore_error_handler();
-		}
-		$this->assertSame([], $warnings, 'must not trigger a PHP warning: ' . implode('; ', $warnings));
-		return $result;
 	}
 
 	/** margin=0, oldest line NOT expired -- identical to #1052 today. */
