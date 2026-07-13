@@ -1410,8 +1410,10 @@ function pfblockerng_uc_countries() {
 										}
 
 										if (file_exists($iso_file)) {
-											// issue #1261: display-only total -- NULL (read failure) -> 0.
-											$networks = pfb_count_lines($iso_file) ?? 0;
+											// issue #1261: NULL (read failure) -> 'ERROR', not 0 -- "0" trips the
+											// placeholder-blank branch below and would empty a country's list on
+											// a transient read error.
+											$networks = pfb_count_lines($iso_file) ?? 'ERROR';
 											$iso_header  = "# Country: {$geoip['name']}{$geoip_id}\n";
 											$iso_header .= "# ISO Code: {$iso}\n";
 											$iso_header .= "# Total Networks: {$networks}\n";
