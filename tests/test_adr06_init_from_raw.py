@@ -13,9 +13,9 @@ new init-from-raw path is decision-equivalent to BOTH:
 over the golden fixtures -- for both TOP1M scenarios, the noAAAA surface, and the
 no-IP-leak guarantee. It also pins the on-box wiring:
 
-  * ``dnsbl_build_from_manifest`` reads a per-feed manifest JSON whose ``config``
-    block carries ``tld_master`` as a FILE PATH (read here, not a Python list) and
-    whose feeds reference raw files relative to the manifest dir;
+  * ``dnsbl_build_from_manifest`` reads a per-feed manifest JSON whose feeds
+    reference raw files relative to the manifest dir; the public-suffix oracle
+    (issue #1255) is a SHIPPED file gated by an ini flag, not a manifest key;
   * ``top1m_enabled`` is driven by ``config["top1m_enabled"]`` in the manifest;
   * ``dnsbl_emit_count`` writes the LOADED total (len(dataDB)+len(zoneDB)) to
     ``pfb_py_count`` in the format the UI reads (pfblockerng.inc:3149); and
@@ -53,7 +53,6 @@ from tests.test_adr06_golden_oracle import (
     _decision_label,
     _evaluate,
     _load_json,
-    _read_lines,
 )
 
 # --------------------------------------------------------------------------- #
@@ -64,16 +63,27 @@ from tests.test_adr06_golden_oracle import (
 # --------------------------------------------------------------------------- #
 
 
+def _stage_tld_oracle(tmp_path: Any) -> None:
+    """issue #1255: stage the public-suffix oracle the way dnsbl_cache_stage() does
+    (a shipped file) and flip the ini flag -- the manifest no longer carries
+    tld_master at all (HSTS parity)."""
+    oracle = os.path.join(str(tmp_path), "pfb_py_tld.txt")
+    shutil.copyfile(os.path.join(FIXTURES, "tld_master.txt"), oracle)
+    pfb_unbound.pfb["python_tld_wildcard"] = True
+    pfb_unbound.pfb["pfb_py_tld"] = oracle
+
+
 def _write_onbox_manifest(tmp_path: Any, *, top1m_enabled: bool) -> str:
     """Write a single manifest JSON (feeds + config) with its raw files copied under
     the manifest directory.
 
     This mirrors the PRODUCTION shape (pfblockerng.inc): the manifest lives at the
-    chroot root and every feed ``raw`` / ``tld_master`` it references resolves UNDER
-    that directory (the build now confines manifest paths to the manifest's base dir,
-    so an out-of-base reference is skipped). The committed fixtures are copied into a
-    ``pfb_py_raw/`` subdir of tmp_path and referenced RELATIVELY, and ``tld_master``
-    is copied alongside and referenced by name -- the build reads it as a PATH.
+    chroot root and every feed ``raw`` it references resolves UNDER that directory
+    (the build confines manifest paths to the manifest's base dir, so an out-of-base
+    reference is skipped). The committed fixtures are copied into a ``pfb_py_raw/``
+    subdir of tmp_path and referenced RELATIVELY. issue #1255: the public-suffix
+    oracle (formerly ``config.tld_master``) is staged as a shipped file + ini flag
+    instead (``_stage_tld_oracle``) -- the manifest no longer carries it.
     """
     src_manifest = _load_json("manifest.json")
     src_config = _load_json("config.json")
@@ -94,12 +104,11 @@ def _write_onbox_manifest(tmp_path: Any, *, top1m_enabled: bool) -> str:
             }
         )
 
-    shutil.copyfile(os.path.join(FIXTURES, "tld_master.txt"), os.path.join(str(tmp_path), "tld_master.txt"))
+    _stage_tld_oracle(tmp_path)
 
     manifest = {
         "version": 1,
         "config": {
-            "tld_master": "tld_master.txt",  # PATH (in-base), read on build
             "tld_blacklist": src_config.get("tld_blacklist", []),
             "tld_exclusion": src_config.get("tld_exclusion", []),
             "user_whitelist": src_config.get("user_whitelist", []),
@@ -303,11 +312,11 @@ class TestManifestFallback:
         # OTHER feeds rather than aborting (the bad feed is logged + skipped). All
         # referenced paths live UNDER the manifest dir (the production/confined shape).
         path = os.path.join(str(tmp_path), "m.json")
-        shutil.copyfile(os.path.join(FIXTURES, "tld_master.txt"), os.path.join(str(tmp_path), "tld_master.txt"))
+        _stage_tld_oracle(tmp_path)
         shutil.copyfile(os.path.join(FIXTURES, "feed_plain.txt"), os.path.join(str(tmp_path), "feed_plain.txt"))
         manifest = {
             "version": 1,
-            "config": {"tld_master": "tld_master.txt"},
+            "config": {},
             "feeds": [
                 {
                     "raw": "does_not_exist.txt",
@@ -408,38 +417,28 @@ class TestInitGlobalAssignment:
         assert _decision_label(dec) == "whitelist"
 
 
-class TestTldMasterPath:
-    def test_tld_master_path_is_read(self, tmp_path: Any) -> None:
-        # With the public-suffix master read from the PATH, co.uk classifies as a
-        # multi-label public suffix -> shop.co.uk is a ZONE (registrable parent).
+class TestTldWildcardOracleWiring:
+    """issue #1255: the public-suffix oracle is a SHIPPED file gated by
+    ``python_tld_wildcard`` (staged by ``_stage_tld_oracle``), never a manifest
+    key -- end-to-end through the real ``dnsbl_build_from_manifest`` path."""
+
+    def test_oracle_staged_and_on_classifies_public_suffix_as_zone(self, tmp_path: Any) -> None:
+        # With the oracle staged and the flag on, co.uk classifies as a multi-label
+        # public suffix -> shop.co.uk is a ZONE (registrable parent).
         result = _build_from_manifest(tmp_path, top1m_enabled=False)
         assert "shop.co.uk" in result.zone_db
         assert "tracker.org" in result.zone_db
 
-    def test_tld_master_lines_also_supported(self) -> None:
-        # The build config also accepts tld_master as a list of lines directly
-        # (used by the Phase-3 unit tests); the path form must be equivalent.
-        manifest = {
-            "version": 1,
-            "config": {
-                "tld_master": _read_lines("tld_master.txt"),
-                "tld_blacklist": [],
-                "tld_exclusion": [],
-                "user_whitelist": [],
-                "top1m_list": [],
-            },
-            "feeds": [
-                {
-                    "raw": os.path.join(FIXTURES, "feed_plain.txt"),
-                    "feed": "PlainFeed",
-                    "group": "Malware",
-                    "log_flag": "1",
-                }
-            ],
-        }
-        # Reach into the helper that shapes config so the list path is exercised.
-        config = pfb_unbound._dnsbl_config_from_manifest(manifest, FIXTURES)
-        assert config["tld_master"] == _read_lines("tld_master.txt")
+    def test_oracle_off_forces_exact_data_even_when_file_is_staged(self, tmp_path: Any) -> None:
+        # Before-state: ON classifies as ZONE (proven above). With the SAME staged
+        # file but the flag OFF, the domain must flip to exact DATA -- the toggle
+        # gates the WHOLE wildcard-blocking contribution (the bug issue #1255 fixes).
+        manifest_path = _write_onbox_manifest(tmp_path, top1m_enabled=False)
+        pfb_unbound.pfb["python_tld_wildcard"] = False  # override the helper's ON default
+        result = pfb_unbound.dnsbl_build_from_manifest(manifest_path)
+        assert result is not None
+        assert "shop.co.uk" in result.data_db
+        assert "shop.co.uk" not in result.zone_db
 
 
 class TestUserUnlockManifest:
@@ -450,7 +449,6 @@ class TestUserUnlockManifest:
         manifest = {
             "version": 1,
             "config": {
-                "tld_master": [],
                 "user_unlock": ["evil.com", ".wild.net"],
             },
             "feeds": [],
@@ -471,7 +469,6 @@ class TestUserUnlockManifest:
         manifest = {
             "version": 1,
             "config": {
-                "tld_master": _read_lines("tld_master.txt"),
                 "user_unlock": ["evil.com"],
             },
             "feeds": [{"raw": "feed.raw", "feed": "F", "group": "G", "log_flag": "1"}],
@@ -487,9 +484,10 @@ class TestUserUnlockManifest:
             "important": True,
             "band": pfb_unbound.PRIO_USER_ALLOW,
         }
-        # The feed still records the block (evil.com is a registrable zone); the
-        # allow overrides it at query time.
-        assert "evil.com" in result.zone_db
+        # issue #1255: no oracle staged here -> exact DATA (not a wildcard zone); the
+        # feed still records the block either way -- the allow overrides at query time.
+        assert "evil.com" in result.data_db
+        assert "evil.com" not in result.zone_db
         config = pfb_unbound._dnsbl_config_from_manifest(manifest, str(tmp_path))
         got = _evaluate_result(result, {**config, "hsts_domains": []}, "evil.com")
         assert got["decision"] == "whitelist"

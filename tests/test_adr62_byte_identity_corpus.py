@@ -93,10 +93,14 @@ def _allowed(result: P.BuildResult, domain: str) -> bool:
 
 
 def test_plain_hosts_feed_domains_are_blocked() -> None:
+    # issue #1255: this corpus's tld_master is empty (TLD-Wildcard OFF) -- a 2-label
+    # domain no longer auto-zones; it lands in data_db (exact), same as any other
+    # domain with no known public-suffix parent.
     result = _run_corpus_build()
     for domain in ("plainhost1.example", "plainhost2.example"):
         assert _blocked(result, domain), domain
-        assert domain in result.zone_db, f"{domain}: 2-label domain must auto-zone"
+        assert domain in result.data_db, f"{domain}: exact DATA with an empty (TLD-Wildcard OFF) oracle"
+        assert domain not in result.zone_db
 
 
 # --------------------------------------------------------------------------- #
@@ -181,17 +185,19 @@ def test_abp_feed_element_hiding_line_produces_no_domain() -> None:
     assert not _allowed(result, "some.abp.example")
 
 
-def test_abp_feed_bare_registrable_parent_stays_zone_delta_d1() -> None:
+def test_abp_feed_bare_registrable_parent_stays_data_delta_d1() -> None:
     """delta D1 (ADR.md SS2), registrable-parent case: a bare 2-label line in a
     feed that WAS header-classified ABP used to reach a wildcard ZONE via
     parse_abp (#718); the classifier is now deleted, so the same line takes
-    the plain classify() path -- a 2-label domain is UNCONDITIONALLY its own
-    registrable parent, so the observable stays ZONE (same as before)."""
+    the plain classify() path. issue #1255: this corpus's tld_master is empty
+    (TLD-Wildcard OFF), so classify()'s top guard forces exact DATA -- the same
+    outcome as any other domain with no known public-suffix parent."""
     result = _run_corpus_build()
-    assert "abproot.example" in result.zone_db, (
-        "delta D1: a registrable-parent bare line in a former-ABP feed must still "
-        "land in zone_db under the plain classify() path"
+    assert "abproot.example" in result.data_db, (
+        "delta D1 + issue #1255: a registrable-parent bare line in a former-ABP feed "
+        "is exact DATA under the plain classify() path with an empty (OFF) oracle"
     )
+    assert "abproot.example" not in result.zone_db
 
 
 def test_abp_feed_bare_deeper_subdomain_flips_zone_to_data_delta_d1() -> None:

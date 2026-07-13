@@ -74,6 +74,9 @@ def reset_pfb_globals() -> None:
         "python_hsts": False,
         "python_idn": False,
         "python_tld": False,
+        # issue #1255: DNSBL Wildcard Blocking (TLD) gate -- distinct from python_tld
+        # (a DIFFERENT feature, "TLD Allow"); mirrors python_hsts's shipped-file gate.
+        "python_tld_wildcard": False,
         "python_maxmind": False,
         "python_tld_seg": 2,
         "python_tlds": [],

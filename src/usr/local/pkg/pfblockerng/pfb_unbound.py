@@ -1246,6 +1246,10 @@ def init_standard(id: int, env: module_env) -> bool:
     pfb["python_tld"] = False
     pfb["python_tlds"] = []
     pfb["python_tld_seg"] = 0
+    # issue #1255: DNSBL Wildcard Blocking (TLD) -- a DIFFERENT feature from
+    # python_tld ("TLD Allow") above. Gates the public-suffix oracle exactly like
+    # python_hsts/pfb_py_hsts below (shipped file + ini enable flag).
+    pfb["python_tld_wildcard"] = False
     # Max entries in the per-domain decision cache (LRU); 0 = unbounded. WebUI-configurable.
     pfb["decisiondb_max"] = 10000
     pfb["python_hsts"] = False
@@ -1278,6 +1282,9 @@ def init_standard(id: int, env: module_env) -> bool:
     pfb["pfb_py_zone"] = "pfb_py_zone.txt"
     pfb["pfb_py_data"] = "pfb_py_data.txt"
     pfb["pfb_py_hsts"] = "pfb_py_hsts.txt"
+    # issue #1255: shipped TLD-Wildcard public-suffix oracle -- staged by
+    # dnsbl_cache_stage() exactly like pfb_py_hsts above.
+    pfb["pfb_py_tld"] = "pfb_py_tld.txt"
     pfb["pfb_py_ss"] = "pfb_py_ss.txt"
     # ADR-06: per-feed manifest (the new shell->Python boundary) and the
     # Python-emitted entry count. When the manifest is present, init builds the
@@ -1418,6 +1425,8 @@ def init_standard(id: int, env: module_env) -> bool:
                 pfb["python_blocking"] = config.getboolean("MAIN", "python_blocking")
             if config.has_option("MAIN", "python_hsts"):
                 pfb["python_hsts"] = config.getboolean("MAIN", "python_hsts")
+            if config.has_option("MAIN", "python_tld_wildcard"):
+                pfb["python_tld_wildcard"] = config.getboolean("MAIN", "python_tld_wildcard")
             if config.has_option("MAIN", "python_idn"):
                 pfb["python_idn"] = config.getboolean("MAIN", "python_idn")
             # ADR-08: the IDN mode. The PHP ini writer emits an explicit
@@ -4301,7 +4310,14 @@ def classify(domain: str, tlds: dict[str, dict[str, str]], exclusion: set[str]) 
     wildcard ZONE; a deeper sub-domain whose parent is not a known public suffix ->
     exact DATA; a whole-domain TLD exclusion forces exact DATA (transparent, not
     wildcarded).
+
+    issue #1255: an empty ``tlds`` (TLD-Wildcard OFF, or no oracle staged) forces
+    exact DATA for every domain -- defense-in-depth, since the dcnt==2 branch below
+    never consults ``tlds`` (a 2-label name is trivially its own registrable form).
     """
+    if not tlds:
+        return DNSBL_CLASS_DATA, domain
+
     dparts = domain.split(".")
     dcnt = len(dparts)
     tld = dparts[-1]
@@ -5282,29 +5298,26 @@ def _dnsbl_file_line_reader(base_dir: str) -> Callable[[str], Iterable[str]]:
 def _dnsbl_config_from_manifest(manifest: dict[str, Any], base_dir: str) -> dict[str, Any]:
     """Shape the manifest's ``config`` block into the build() config blob.
 
-    The on-box manifest carries ``tld_master`` as a FILE PATH (the public-suffix
-    oracle); the build takes the suffix LINES directly (pure, filesystem-decoupled),
-    so read the file here. ``tld_blacklist`` / ``tld_exclusion`` / ``user_whitelist``
-    / ``user_unlock`` / ``top1m_list`` are passed through as lists. Missing keys default
-    empty so a partial manifest still builds.
+    issue #1255: the public-suffix oracle (``tld_master`` suffix lines) is NOT part
+    of the manifest -- HSTS parity: a SHIPPED file (``pfb["pfb_py_tld"]``) gated by
+    ``pfb["python_tld_wildcard"]``, mirroring ``pfb["pfb_py_hsts"]``/
+    ``pfb["python_hsts"]``. A manifest ``config.tld_master`` key (a stale pre-#1255
+    shape) is ignored entirely -- an absent oracle is expected, not a warning.
+    ``tld_blacklist`` / ``tld_exclusion`` / ``user_whitelist`` / ``user_unlock`` /
+    ``top1m_list`` are passed through as lists. Missing keys default empty so a
+    partial manifest still builds.
     """
     config = manifest.get("config", {})
 
     tld_master_lines: list[str] = []
-    tld_master = config.get("tld_master")
-    if isinstance(tld_master, list):
-        tld_master_lines = list(tld_master)
-    elif isinstance(tld_master, str) and tld_master:
-        path = tld_master if os.path.isabs(tld_master) else os.path.join(base_dir, tld_master)
-        if not _dnsbl_path_within_base(path, base_dir):
-            # The tld_master path escapes the manifest directory -- skip it (do not open).
-            sys.stderr.write("[pfBlockerNG]: Refusing tld_master outside base dir: '{}'".format(path))
-        else:
+    if pfb.get("python_tld_wildcard", False):
+        tld_path = pfb.get("pfb_py_tld", "")
+        if tld_path and os.path.isfile(tld_path):
             try:
-                with open(path, encoding="utf-8", errors="replace") as fh:
+                with open(tld_path, encoding="utf-8", errors="replace") as fh:
                     tld_master_lines = fh.read().splitlines()
             except OSError as e:
-                sys.stderr.write("[pfBlockerNG]: Failed to read tld_master '{}': {}".format(path, e))
+                sys.stderr.write("[pfBlockerNG]: Failed to read TLD-Wildcard oracle '{}': {}".format(tld_path, e))
 
     # ADR-07: the static-cap flag reaches build() via the ini-derived pfb setting
     # (the cap setting lives in pfb_unbound.ini MAIN, not the manifest); a manifest

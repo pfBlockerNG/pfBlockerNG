@@ -127,6 +127,7 @@ $pfb['unbound_py_data']	= '/var/unbound/pfb_py_data.txt';
 $pfb['unbound_py_zone'] = '/var/unbound/pfb_py_zone.txt';
 $pfb['unbound_py_ss']	= '/var/unbound/pfb_py_ss.txt';
 $pfb['unbound_py_hsts']	= '/var/unbound/pfb_py_hsts.txt';	// SHIPPED file re-staged by dnsbl_cache_stage() cp -f; fingerprinted so a package update ships a new list and triggers a zero-downtime reload
+$pfb['unbound_py_tld']	= '/var/unbound/pfb_py_tld.txt';	// issue #1255: SHIPPED TLD-Wildcard public-suffix oracle, staged/fingerprinted exactly like unbound_py_hsts above
 $pfb['unbound_py_count']= '/var/unbound/pfb_py_count';
 $pfb['unbound_py_regex_count']= '/var/unbound/pfb_py_regex_count';	// ADR-07: Python-emitted ADMITTED (cap-filtered) feed+user regex total for the DNSBL_Regex alias
 $pfb['unbound_py_reject_stats']= '/var/unbound/pfb_py_reject_stats.json';	// ADR-48: Python-emitted per-entry reject tally (issue #789), read by pfb_emit_entry_reject_stats()
@@ -1827,9 +1828,23 @@ function pfb_dnsbl_loaded_input_paths(array $pfb): array {
 	$raw_files = glob("{$pfb['unbound_py_rawdir']}/*.raw") ?: array();
 	sort($raw_files, SORT_STRING);
 	return array_merge(
-		array($pfb['unbound_py_data'], $pfb['unbound_py_zone'], $pfb['unbound_py_wh'], $pfb['unbound_py_sources'], $pfb['unbound_py_hsts']),
+		array($pfb['unbound_py_data'], $pfb['unbound_py_zone'], $pfb['unbound_py_wh'], $pfb['unbound_py_sources'], $pfb['unbound_py_hsts'], $pfb['unbound_py_tld']),
 		$raw_files
 	);
+}
+
+/* issue #1255: the reload fingerprint, narrowed for TLD mode. tld_analysis() rewrites
+   unbound_py_data/unbound_py_zone INSIDE pfb_update_unbound(), strictly AFTER this
+   fingerprint is taken (both the fp_old and fp_new call sites run before that), so
+   their content is unrelated to THIS pass and is excluded when dnsbl_tld is on; every
+   other input (the TLD-Wildcard oracle included) still gates the reload normally.
+   Pure (no global access). */
+function pfb_dnsbl_reload_fingerprint(array $pfb): string {
+	$paths = pfb_dnsbl_loaded_input_paths($pfb);
+	if ($pfb['dnsbl_tld']) {
+		$paths = array_diff($paths, array($pfb['unbound_py_data'], $pfb['unbound_py_zone']));
+	}
+	return pfb_dnsbl_loaded_fingerprint($paths);
 }
 
 /* TRUE iff genuine FEED-derived DNSBL content is currently loaded — i.e. a non-empty
@@ -6863,6 +6878,7 @@ function pfb_unbound_dnsbl($mode) {
 			unlink_if_exists("{$g['unbound_chroot_path']}/pfb_unbound.py");
 			unlink_if_exists("{$g['unbound_chroot_path']}/pfb_unbound_include.inc");
 			unlink_if_exists("{$g['unbound_chroot_path']}/pfb_py_hsts.txt");
+			unlink_if_exists("{$g['unbound_chroot_path']}/pfb_py_tld.txt");
 		}
 
 		// Save changes to unbound.conf
@@ -7898,25 +7914,23 @@ function pfb_unbound_python_sources($feeds) {
 		}
 	}
 
-	$tld_blacklist	= pfbng_text_area_decode($pfb['dnsblconfig']['tldblacklist'], TRUE, FALSE, TRUE) ?: array();
-	$tld_exclusion	= pfbng_text_area_decode($pfb['dnsblconfig']['tldexclusion'], TRUE, FALSE, TRUE) ?: array();
-
-	// Embed the public-suffix master list as LINES, not a path: pfb_unbound.py runs
-	// chrooted in /var/unbound and cannot read /usr/local/pkg/... (outside the
-	// chroot). _dnsbl_config_from_manifest() accepts tld_master as a list. Empty
-	// when the file is absent (the TLD feature then simply has no suffixes).
-	$tld_master_lines = array();
-	if (file_exists($pfb['dnsbl_tld_data'])) {
-		$tld_master_file = @file($pfb['dnsbl_tld_data'], FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-		if (is_array($tld_master_file)) {
-			$tld_master_lines = $tld_master_file;
-		}
+	// issue #1255: TLD-Wildcard toggle gates the WHOLE wildcard-blocking contribution --
+	// tld_blacklist/tld_exclusion (user config, stay in the manifest) are emptied when
+	// off, even if configured. The public-suffix oracle itself (tld_master) no longer
+	// rides the manifest at all: it is a SHIPPED file (unbound_py_tld) gated by the same
+	// toggle's ini flag (python_tld_wildcard), mirroring HSTS (unbound_py_hsts /
+	// python_hsts) -- see pfb_unbound_python()'s ini emit and pfb_unbound.py's
+	// _dnsbl_config_from_manifest().
+	$tld_blacklist = array();
+	$tld_exclusion = array();
+	if (!empty($pfb['dnsbl_tld'])) {
+		$tld_blacklist = pfbng_text_area_decode($pfb['dnsblconfig']['tldblacklist'], TRUE, FALSE, TRUE) ?: array();
+		$tld_exclusion = pfbng_text_area_decode($pfb['dnsblconfig']['tldexclusion'], TRUE, FALSE, TRUE) ?: array();
 	}
 
 	$manifest = array(
 		'version'	=> 1,
 		'config'	=> array(
-			'tld_master'	=> array_values($tld_master_lines),
 			'tld_blacklist'	=> array_values($tld_blacklist),
 			'tld_exclusion'	=> array_values($tld_exclusion),
 			'user_whitelist'=> pfb_dnsbl_whitelist_lines(),
@@ -8095,6 +8109,14 @@ function pfb_unbound_python($mode) {
 			$python_hsts = 'on';
 		}
 
+		// issue #1255: DNSBL Wildcard Blocking (TLD) -- HSTS parity (shipped file +
+		// ini enable flag). $pfb['dnsbl_tld'] is used as a bare truthy check elsewhere
+		// (tld_analysis() gate, pfb_dnsbl_py_swap()), not an == 'on' comparison.
+		$python_tld_wildcard = 'off';
+		if ($pfb['dnsbl_tld']) {
+			$python_tld_wildcard = 'on';
+		}
+
 		// ADR-08: emit the IDN mode + the legacy python_idn flag + the Confusable sub-toggles.
 		// python_idn = on ONLY for All-IDN, so the legacy flag (and its blacklist side-effect)
 		// stays byte-identical to today; Confusable rides the explicit idn_mode key instead.
@@ -8186,6 +8208,7 @@ python_enable	= {$python_enable}
 python_reply	= {$python_reply}
 python_blocking	= {$python_blocking}
 python_hsts	= {$python_hsts}
+python_tld_wildcard	= {$python_tld_wildcard}
 python_idn	= {$python_idn}
 idn_mode	= {$idn_mode}
 python_idn_block_malicious	= {$python_idn_block_malicious}
@@ -16557,7 +16580,7 @@ function sync_package_pfblockerng($cron='') {
 	$pfb['updateip']		= FALSE;	// Flag to signal updates to DNSBL IP lists
 	$pfb_py_feeds			= array();	// ADR-06: per-feed manifest rows [header,group,log] for pfb_unbound_python_sources()
 	$safesearch_update		= FALSE;	// Flag: SafeSearch CSV changed -> force an Unbound restart (issue #149)
-	$pfb_fp_old			= null;		// Fingerprint of loaded input files BEFORE this pass (null => TLD mode or DNSBL not active)
+	$pfb_fp_old			= null;		// Fingerprint of loaded input files BEFORE this pass (null => DNSBL not active this pass)
 
 	$dnsbl_error = FALSE;
 	if ($pfb['enable'] == 'on' && $pfb['dnsbl'] == 'on' && !$pfb['save']) {
@@ -16787,10 +16810,10 @@ function sync_package_pfblockerng($cron='') {
 			pfb_logger("{$s_log}{$CNAME_LOG}", 1);
 
 			// Fingerprint the Python-loaded input files BEFORE this pass rewrites them.
-			// TLD mode builds data/zone inside pfb_update_unbound (after the gate), so
-			// the fingerprint can't see those writes yet — leave null and fall back to the
-			// domain_update / domain_clear flags for the gate decision.
-			$pfb_fp_old = $pfb['dnsbl_tld'] ? null : pfb_dnsbl_loaded_fingerprint(pfb_dnsbl_loaded_input_paths($pfb));
+			// issue #1255: pfb_dnsbl_reload_fingerprint() narrows the path set (excludes
+			// data/zone) in TLD mode instead of nulling the whole comparison -- see its
+			// docblock.
+			$pfb_fp_old = pfb_dnsbl_reload_fingerprint($pfb);
 
 			// Collect Whitelist, create string, and save to file (for grep -vF -f cmd)
 			pfb_logger("\n Loading DNSBL Whitelist...", 1);
@@ -18129,12 +18152,11 @@ function sync_package_pfblockerng($cron='') {
 
 	// Fingerprint the loaded input files AFTER this pass rebuilt them.
 	// Equal fingerprints => Python would produce a byte-identical blocklist => skip reload.
-	// TLD mode (fp_old === null): tld_analysis() writes data/zone INSIDE pfb_update_unbound
-	// (after this gate), so the post fingerprint can't see those writes yet — fall back to
-	// domain_update / domain_clear as before.
+	// fp_old === null => DNSBL was not active this pass (the block above never ran) --
+	// fall back to domain_update / domain_clear as before.
 	// The all-missing stable sentinel means empty→empty always yields equal fingerprints,
 	// so an unchanged no-feeds steady state no longer triggers a reload every pass.
-	$pfb_fp_new = ($pfb_fp_old === null) ? null : pfb_dnsbl_loaded_fingerprint(pfb_dnsbl_loaded_input_paths($pfb));
+	$pfb_fp_new = ($pfb_fp_old === null) ? null : pfb_dnsbl_reload_fingerprint($pfb);
 	$pfb_data_changed = ($pfb_fp_old === null || $pfb_fp_new === null)
 		? ($pfb['domain_update'] || $pfb['domain_clear'])
 		: ($pfb_fp_old !== $pfb_fp_new);
@@ -20240,6 +20262,7 @@ function pfblockerng_php_pre_deinstall_command() {
 	unlink_if_exists("{$g['unbound_chroot_path']}/pfb_unbound.py");
 	unlink_if_exists("{$g['unbound_chroot_path']}/pfb_unbound_include.inc");
 	unlink_if_exists("{$g['unbound_chroot_path']}/pfb_py_hsts.txt");
+	unlink_if_exists("{$g['unbound_chroot_path']}/pfb_py_tld.txt");
 
 	// Remove widget (code from Snort deinstall)
 	$pfb['widgets'] = config_get_path('widgets/sequence', '');

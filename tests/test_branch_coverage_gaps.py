@@ -42,7 +42,6 @@ from pfb_unbound import (
     NameVerdict,
     Rule,
     _dnsbl_classify_options,
-    _dnsbl_config_from_manifest,
     _dnsbl_load_tld_master,
     _dnsbl_normalise_whitelist,
     _dnsbl_parse_abp_regex,
@@ -526,10 +525,10 @@ class TestBuildBranches:
 # manifest I/O error branches
 # --------------------------------------------------------------------------- #
 class TestManifestErrorBranches:
-    def test_config_from_manifest_unreadable_tld_master_yields_empty(self) -> None:
-        # A tld_master FILE path that cannot be opened -> logged + empty list (no raise).
-        cfg = _dnsbl_config_from_manifest({"config": {"tld_master": "/no/such/file/xyz"}}, "/tmp")
-        assert cfg["tld_master"] == []
+    # issue #1255: tld_master is no longer read from the manifest at all (retired
+    # with the manifest-path confinement mechanism) -- the oracle's own
+    # missing/unreadable-file fail-safe is pinned in
+    # test_manifest_path_confinement.py::TestTldWildcardOracleGating.
 
     def test_build_from_manifest_returns_none_when_build_raises(self, tmp_path: Path) -> None:
         # A feeds row missing the "feed" key makes build() raise KeyError -> the

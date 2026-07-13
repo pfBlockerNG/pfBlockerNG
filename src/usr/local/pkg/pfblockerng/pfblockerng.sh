@@ -317,7 +317,9 @@ aliastables() {
 # (re-run on every save/restore, never restored stale); save = stage then archive ONLY the
 # GENERATED set (pfb_unbound*/pfb_py_*/pfb_unbound.ini); restore = boot earlyshellcmd, untar
 # the generated set THEN stage. Naming contract: a new generated file MUST keep the
-# pfb_unbound*/pfb_py_* prefix; a new shipped file goes in PFB_PY_SHIPPED + pkg-plist wiring.
+# pfb_unbound*/pfb_py_* prefix; a new shipped file goes in PFB_PY_SHIPPED + pkg-plist wiring
+# (a NAME-MAPPED shipped file -- source basename != chroot basename -- is the sole
+# exception: it needs its own explicit stage/save handling instead; see pfb_py_tld.txt).
 dnsbl_cache() {
 	# Overridable for unit tests; default to the live locations.
 	pfbchroot="${pfbchroot:-/var/unbound}"
@@ -341,6 +343,13 @@ dnsbl_cache() {
 				chown -f unbound:unbound "${pfbchroot}/${_f}"
 			fi
 		done
+		# issue #1255: the TLD-Wildcard public-suffix oracle -- NAME-MAPPED (source
+		# basename 'dnsbl_tld' stays as-is; chroot copy is 'pfb_py_tld.txt'), so it
+		# cannot ride PFB_PY_SHIPPED's same-basename cp loop above.
+		if [ -f "${pfbpkgdir}/dnsbl_tld" ]; then
+			cp -f "${pfbpkgdir}/dnsbl_tld" "${pfbchroot}/pfb_py_tld.txt"
+			chown -f unbound:unbound "${pfbchroot}/pfb_py_tld.txt"
+		fi
 	}
 
 	case "${1}" in
@@ -360,6 +369,10 @@ dnsbl_cache() {
 				for _s in ${PFB_PY_SHIPPED}; do
 					[ "${_g}" = "${pfbchroot}/${_s}" ] && _skip=1 && break
 				done
+				# issue #1255: the name-mapped TLD oracle (source 'dnsbl_tld' isn't in
+				# PFB_PY_SHIPPED since its chroot basename differs) -- shipped, not
+				# generated, so it is excluded the same way.
+				[ "${_g}" = "${pfbchroot}/pfb_py_tld.txt" ] && _skip=1
 				[ -z "${_skip}" ] && set -- "$@" "${_g}"
 			done
 			if [ "$#" -gt 0 ]; then
