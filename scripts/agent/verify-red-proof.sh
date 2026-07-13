@@ -72,7 +72,8 @@ main() {
 		printf 'FREEZE-OK: %s\n' "$file"
 	done
 
-	base_sha=$(git -C "$worktree" rev-parse --verify --quiet "${base_ref}^{commit}") || {
+	# --end-of-options: a ref is data, never a git option, whatever it looks like.
+	base_sha=$(git -C "$worktree" rev-parse --verify --quiet --end-of-options "${base_ref}^{commit}") || {
 		echo "BAD-BASE-REF: '$base_ref' does not resolve to a single existing commit" >&2
 		exit 2
 	}
