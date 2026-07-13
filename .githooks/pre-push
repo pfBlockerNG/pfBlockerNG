@@ -67,22 +67,19 @@ done <<PFB_TAG_UPDATES
 $updates
 PFB_TAG_UPDATES
 
-# Agent lease-by-effect guard (issue #1307): a branch push whose advertised
-# remote oid is NOT an ancestor of the local oid rewrites remote history; an
-# agent may do that only over history it has fetched (remote oid == the
-# remote-tracking ref). An unknown remote oid fails the ancestor check and,
-# never fetched, the tracking match too -> deny. Humans are untouched.
+# Agent lease-by-effect guard (issue #1307): deny an agent branch rewrite over
+# remote history it never fetched (advertised remote oid != remote-tracking ref).
 if [ "${CLAUDECODE:-}" = "1" ]; then
     remote_name="${1:-origin}"
-    while IFS=' ' read -r _lref lsha rref rsha; do
-        case "$rref" in refs/heads/*) ;; *) continue ;; esac
-        [ "$lsha" = "$z40" ] && continue   # branch deletion
-        [ "$rsha" = "$z40" ] && continue   # branch creation
-        git merge-base --is-ancestor "$rsha" "$lsha" 2>/dev/null && continue
-        branch="${rref#refs/heads/}"
+    while IFS=' ' read -r _local_ref local_sha remote_ref remote_sha; do
+        case "$remote_ref" in refs/heads/*) ;; *) continue ;; esac
+        [ "$local_sha" = "$z40" ] && continue   # branch deletion
+        [ "$remote_sha" = "$z40" ] && continue  # branch creation
+        git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null && continue
+        branch="${remote_ref#refs/heads/}"
         tracking=$(git rev-parse --verify "refs/remotes/${remote_name}/${branch}" 2>/dev/null) || tracking=""
-        if [ "$rsha" != "$tracking" ]; then
-            echo "error: agent force-push over unfetched history of '${branch}' blocked (issue #1307)." >&2
+        if [ "$remote_sha" != "$tracking" ]; then
+            echo "error: agent push would rewrite unfetched history of '${branch}' (issue #1307)." >&2
             echo "       The remote moved past your remote-tracking ref: run 'git fetch ${remote_name}'," >&2
             echo "       rebase onto the new tip, then push with --force-with-lease." >&2
             exit 1
