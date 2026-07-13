@@ -59,3 +59,6 @@ so it never goes stale.
 
 Fetching the lists at runtime / on package update is a possible future enhancement, explicitly
 deferred (issue #872). The arrays remain a static, reviewed snapshot.
+
+For the separate `dnsbl_tld` public-suffix master list (DNSBL Wildcard Blocking), see the
+sibling doc [`public-suffix-list.md`](public-suffix-list.md) (issue #1272).

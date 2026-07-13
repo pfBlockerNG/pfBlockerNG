@@ -1,0 +1,167 @@
+name: PSL Refresh (dnsbl_tld)
+
+# Weekly refresh of the DNSBL wildcard public-suffix master list from the
+# Public Suffix List (ICANN section only; PRIVATE-section entries and PSL
+# wildcard/exception lines are dropped by design, issue #1272).
+# scripts/misc/update_public_suffix_list.py rewrites
+# src/usr/local/pkg/pfblockerng/dnsbl_tld in place. When the upstream list
+# drifts, this workflow opens/updates a PR against devel — it NEVER pushes to
+# devel directly.
+#
+# GitHub suppresses push/pull_request-triggered workflow runs for events
+# created by GITHUB_TOKEN, so test.yml's own pull_request gate never fires on
+# this PR — and a workflow_dispatch run's checks do NOT attach to a PR's
+# Checks tab either (only pull_request-triggered runs do; verified on #911).
+# So this workflow dispatches the real gate (test.yml's unit suite) onto the
+# branch head after opening/updating the PR, then posts a PR comment linking
+# the run. Unlike the sibling tld-refresh.yml, this diff touches only a data
+# file (no www/), so it dispatches test.yml ONLY -- no Tier-A ui_render gate.
+# NOTE: the dry_run self-test validates the PSL diff only; the push / PR /
+# dispatch / comment path is exercised only by a real (non-dry) run. See
+# issue #1272 and docs/misc/public-suffix-list.md.
+
+on:
+  # Weekly, Monday 06:30 UTC -- offset 30m from tld-refresh.yml's 06:00 so the
+  # two refreshes never contend for the same runners/branch-race window.
+  schedule:
+    - cron: "30 6 * * 1"
+
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: >
+          If 'true', log the drift that WOULD be proposed but open no PR and
+          push nothing. Self-tests the PSL diff only — the push/PR/CI-dispatch
+          path runs only on a real (non-dry) run.
+        required: false
+        default: "false"
+
+# Least-privilege default; the refresh job elevates to write the automation
+# branch and open the PR. It never writes devel/main.
+permissions:
+  contents: read
+
+# One refresh at a time — a slow scheduled run must not race a manual dispatch.
+concurrency:
+  group: psl-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: Refresh dnsbl_tld and open PR on change
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # push the automation branch (NOT devel)
+      pull-requests: write    # open/label the PR
+      actions: write          # dispatch the CI gate onto the branch head
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: psl-refresh/auto
+      DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: devel
+
+      # Automated commits must hit the same local gates as a human commit.
+      - name: Activate git hooks
+        run: sh scripts/setup-hooks.sh
+
+      - name: Refresh dnsbl_tld from the Public Suffix List
+        id: refresh
+        run: |
+          set -eu
+          # Plain run only: --check's exit 1 can't distinguish "drift" from a
+          # refusal (implausible count / missing ICANN markers) -- both raise
+          # SystemExit(str), which Python maps to exit 1 either way. A plain
+          # run's own exit code IS unambiguous (0 only on success; a refusal
+          # or network error is nonzero), and its churn guard already no-ops
+          # on a header-only VERSION/COMMIT bump, so gate on the file diff.
+          python3 scripts/misc/update_public_suffix_list.py
+          if git diff --quiet -- src/usr/local/pkg/pfblockerng/dnsbl_tld; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "dnsbl_tld already matches the Public Suffix List — nothing to propose."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "PSL drift detected:"
+            git diff --stat -- src/usr/local/pkg/pfblockerng/dnsbl_tld
+          fi
+
+      - name: Open or update the refresh PR
+        if: steps.refresh.outputs.changed == 'true' && env.DRY_RUN != 'true'
+        run: |
+          set -eu
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          COMMIT_SHA=$(grep -m1 '^# COMMIT:' src/usr/local/pkg/pfblockerng/dnsbl_tld | sed 's/^# COMMIT: //')
+          TODAY=$(date -u +%Y-%m-%d)
+          SYNC_MSG="dnsbl_tld: sync with publicsuffix/list @ $COMMIT_SHA ($TODAY)"
+
+          # Rebuild the bot-owned automation branch from the current change and
+          # force-push it (no human works on it, so a reset+force is safe).
+          git checkout -B "$BRANCH"
+          git add src/usr/local/pkg/pfblockerng/dnsbl_tld
+          git commit -m "$SYNC_MSG"
+          git push --force origin "$BRANCH"
+          HEAD_SHA=$(git rev-parse HEAD)
+
+          # PR first, CI dispatch after: the PR is the primary side effect — a
+          # transient dispatch failure must not leave a pushed branch with no
+          # PR until next Monday. One open PR at a time: the force-push above
+          # already updated any existing one.
+          PR_NUMBER=$(gh pr list --head "$BRANCH" --base devel --state open --json number --jq '.[0].number // empty')
+          if [ -n "$PR_NUMBER" ]; then
+            echo "An open PR from $BRANCH already exists (#$PR_NUMBER) — the force-push updated it."
+          else
+            gh pr create \
+              --base devel \
+              --head "$BRANCH" \
+              --title "$SYNC_MSG" \
+              --label "enhancement" \
+              --body "Automated weekly refresh of the DNSBL wildcard public-suffix snapshot (\`dnsbl_tld\`) from the [Public Suffix List](https://publicsuffix.org/list/public_suffix_list.dat) (ICANN section only — wildcard/exception rules skipped by design), via \`scripts/misc/update_public_suffix_list.py\`. Review the data diff. GitHub runs no automatic CI on a GITHUB_TOKEN-created PR, and dispatched runs do not appear in this PR's Checks tab — the workflow dispatches the unit suite (\`test.yml\`) onto this branch's head and links the run in a comment below (also visible in the repo's Actions tab). This diff touches only a data file, so the Tier-A \`ui_render\` gate is not required. Merge once the linked run is green. Part of #1272 — see docs/misc/public-suffix-list.md."
+            PR_NUMBER=$(gh pr list --head "$BRANCH" --base devel --state open --json number --jq '.[0].number')
+          fi
+
+          # GITHUB_TOKEN-created pushes/PRs trigger no workflow runs, so the
+          # branch head gets no automatic CI. workflow_dispatch is the
+          # documented exception — dispatch the real gate onto the branch.
+          # --ref only accepts a branch/tag (a bare SHA is rejected with HTTP
+          # 422 "No ref found"), so dispatch by branch and pin the run to
+          # HEAD_SHA when resolving it below. Data-file-only diff -- no www/
+          # touch, so no Tier-A ui_render dispatch (unlike tld-refresh.yml).
+          # Loud on failure: no `|| true`, `set -eu` is active (issue #902).
+          gh workflow run test.yml --ref "$BRANCH"
+
+          # A workflow_dispatch run's checks never attach to the PR's Checks
+          # tab (only pull_request-triggered runs do), so without this comment
+          # the PR looks unchecked. Resolve the dispatched run's URL — runs
+          # take a few seconds to appear — and link it on the PR.
+          find_run_url() {
+            # $1 = workflow file; poll for the dispatched run at OUR head SHA.
+            _i=0
+            while [ "$_i" -lt 6 ]; do
+              _url=$(gh run list --workflow "$1" --branch "$BRANCH" \
+                       --event workflow_dispatch --limit 5 --json url,headSha \
+                       --jq ".[] | select(.headSha == \"$HEAD_SHA\") | .url" | head -n 1)
+              if [ -n "$_url" ]; then
+                printf '%s\n' "$_url"
+                return 0
+              fi
+              _i=$((_i + 1))
+              sleep 5
+            done
+            return 1
+          }
+          UNIT_URL=$(find_run_url test.yml) || {
+            echo "::warning::could not resolve the dispatched test.yml run for $HEAD_SHA — find it in the Actions tab."
+            UNIT_URL="not resolved — see the repo's Actions tab (workflow: Tests, branch: $BRANCH)"
+          }
+          gh pr comment "$PR_NUMBER" --body "CI for head \`$HEAD_SHA\` was dispatched by the refresh workflow (GitHub runs no automatic checks on a GITHUB_TOKEN-created PR, and dispatched runs do not appear in this PR's Checks tab): unit CI: $UNIT_URL. Merge once the run is green."
+
+      - name: Dry-run summary
+        if: steps.refresh.outputs.changed == 'true' && env.DRY_RUN == 'true'
+        run: |
+          set -eu
+          echo "=== DRY-RUN: drift detected, but no branch pushed and no PR opened ==="
+          git diff -- src/usr/local/pkg/pfblockerng/dnsbl_tld | head -60
