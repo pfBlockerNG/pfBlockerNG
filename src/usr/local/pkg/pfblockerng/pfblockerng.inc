@@ -1968,7 +1968,7 @@ function pfb_dnsbl_py_swap(bool $dnsbl_tld, string $raw, string $py_data, string
 
 // Non-lite DNSBL host-munging pipeline, extracted pure out of the download/parse loop's
 // `if (!$lite)` branch. Order is load-bearing: scheme strip -> '/'/'#'/'?' truncation ->
-// ';'-parse_url -> trailing-port strip -> IPv6-unbracket LAST. Returns FALSE when
+// ';'-truncation -> trailing-port strip -> IPv6-unbracket LAST. Returns FALSE when
 // pfb_dnsbl_scheme_line rejects (strict mode) -- caller must skip the line.
 function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, string $oline,
 	int $dnsbl_lineno, string $parse_err, int &$scheme_skipped): string|false {
@@ -1999,14 +1999,10 @@ function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, stri
 		$line = strstr($line, '?', TRUE);
 	}
 
-	// If special characters found, parse line for host
+	// issue #1237: a URL-authority parse used to mis-detect 'host;param:digits' as a
+	// hostname, keeping the ';param' remainder -- always truncate at the first ';' instead.
 	if (strpos($line, ';') !== FALSE) {
-		$host = parse_url($line);
-		if (isset($host['host'])) {
-			$line = $host['host'];
-		} else {
-			$line = strstr($line, ';', TRUE);
-		}
+		$line = strstr($line, ';', TRUE);
 	}
 
 	// Remove any Port numbers at end of line (IPv6-safe:
