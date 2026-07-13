@@ -5379,6 +5379,29 @@ function pfb_matchdir_stale_localfile_refs(array $rows, string $matchdir, array 
 	return $hits;
 }
 
+/**
+ * issue #1250: upgrade migration -- apply the plan's renames with a live no-clobber
+ * re-check (the plan's check ran against a snapshot; this is the guard at the actual
+ * rename()). Returns the OLD basenames actually renamed: the stale-Localfile warning and
+ * the 'Moved:' banner must be keyed on real outcomes, never the planned set -- a skipped
+ * rename leaves the old file live and valid, so warning on it would be a false alarm.
+ *
+ * @param array<string,string> $moves       Old basename => new basename (the plan's 'move').
+ * @param string               $matchdir    Source dir (no trailing slash).
+ * @param string               $matchgendir Destination dir (no trailing slash).
+ * @return string[] The old basenames whose rename actually succeeded.
+ */
+function pfb_matchdir_apply_moves(array $moves, string $matchdir, string $matchgendir): array {
+	$applied = array();
+	foreach ($moves as $pfb_old => $pfb_new) {
+		$pfb_dest = "{$matchgendir}/{$pfb_new}";
+		if (!file_exists($pfb_dest) && @rename("{$matchdir}/{$pfb_old}", $pfb_dest)) {
+			$applied[] = $pfb_old;
+		}
+	}
+	return $applied;
+}
+
 
 // issue #1084: batch IP dedup/reputation recompute -- caller-side helpers. pfb_recompute()
 // (pfblockerng.sh) replaces duplicate()/dmax/pmax's incremental masterfile surgery with one
@@ -16598,8 +16621,12 @@ function sync_package_pfblockerng($cron='') {
 		}
 
 		// issue #1250: matchgendir artifacts (dMax outputs, ccwhite exempt, ET match) match no
-		// config header, so the per-type sweep below can't reap them -- own keep-list/sweep.
-		pfb_matchgen_reap($pfb['existing']['deny'], $pfb['ccwhite'] == 'match', $pfb['matchgendir']);
+		// config header, so the per-type sweep below can't reap them -- own keep-list/sweep,
+		// logged like that sweep so orphan cleanup stays visible in pfblockerng.log.
+		$pfb_matchgen_reaped = pfb_matchgen_reap($pfb['existing']['deny'], $pfb['ccwhite'] == 'match', $pfb['matchgendir']);
+		if (!empty($pfb_matchgen_reaped)) {
+			pfb_logger("\n[ Removing 'matchgen' \tArtifact(s) : " . implode(',', $pfb_matchgen_reaped) . ' ]', 1);
+		}
 
 		// Add enabled 'DNSBL Blacklist categories'
 		if (isset($pfb['blconfig']) &&

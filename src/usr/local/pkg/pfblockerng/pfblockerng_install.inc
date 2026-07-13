@@ -286,23 +286,18 @@ if (is_dir($pfb['matchdir'])) {
 	$pfb_plan = pfb_matchdir_migrate_plan($pfb_matchdir_listing, $pfb_deny_headers, $pfb_match_headers,
 		($pfb_rep_config['ccwhite'] ?? '') === 'match', $pfb_matchgendir_listing);
 
-	$pfb_moved_match = 0;
-	foreach ($pfb_plan['move'] as $pfb_old => $pfb_new) {
-		// Live re-check mirrors the list_scripts relocation above: the plan's no-clobber
-		// check ran against a snapshot, this is the guard at the actual rename() (issue #1250).
-		$pfb_dest = "{$pfb['matchgendir']}/{$pfb_new}";
-		if (!file_exists($pfb_dest) && @rename("{$pfb['matchdir']}/{$pfb_old}", $pfb_dest)) {
-			$pfb_moved_match++;
-		}
-	}
+	// Warnings below are keyed on the renames that actually happened, never the plan --
+	// a rename skipped by the live no-clobber guard leaves the old file valid (issue #1250).
+	$pfb_moved_files = pfb_matchdir_apply_moves($pfb_plan['move'], $pfb['matchdir'], $pfb['matchgendir']);
+	$pfb_moved_match = count($pfb_moved_files);
 
-	$pfb_stale_refs = pfb_matchdir_stale_localfile_refs($pfb_list_rows, $pfb['matchdir'], array_keys($pfb_plan['move']));
+	$pfb_stale_refs = pfb_matchdir_stale_localfile_refs($pfb_list_rows, $pfb['matchdir'], $pfb_moved_files);
 
 	if ($pfb_moved_match > 0 || !empty($pfb_plan['undecidable']) || !empty($pfb_stale_refs)) {
 		$pfb_matchgen_warn[] = 'BREAKING CHANGE: machine-generated match artifacts moved from';
 		$pfb_matchgen_warn[] = "  {$pfb['matchdir']}  to  {$pfb['matchgendir']}  (renamed to pfB_Match_*).";
-		if (!empty($pfb_plan['move'])) {
-			$pfb_matchgen_warn[] = 'Moved: ' . implode(', ', array_keys($pfb_plan['move']));
+		if (!empty($pfb_moved_files)) {
+			$pfb_matchgen_warn[] = 'Moved: ' . implode(', ', $pfb_moved_files);
 		}
 		foreach ($pfb_plan['undecidable'] as $pfb_u) {
 			$pfb_matchgen_warn[] = "AMBIGUOUS, left in place: {$pfb_u['file']} could belong to " . implode(' OR ', $pfb_u['candidates']) . ' -- rename one to disambiguate.';
