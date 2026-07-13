@@ -104,12 +104,27 @@ def parse_entries(text: str) -> list[dict[str, object]]:
         raise SystemExit(f"Refusing to rewrite: fetched body is not valid JSON after comment-stripping: {e}") from None
     if not isinstance(data, dict) or "entries" not in data:
         raise SystemExit("Refusing to rewrite: fetched JSON has no 'entries' key.")
-    return data["entries"]
+    entries = data["entries"]
+    if not isinstance(entries, list) or not all(isinstance(e, dict) for e in entries):
+        raise SystemExit("Refusing to rewrite: 'entries' is not a list of objects (upstream schema changed?).")
+    return entries
 
 
 def extract_names(entries: list[dict[str, object]]) -> list[str]:
-    """Raw names of force-https entries only (pinning-only rows have no 'mode')."""
-    return [e["name"] for e in entries if e.get("mode") == "force-https"]  # type: ignore[misc]
+    """Raw names of force-https entries only (pinning-only rows have no 'mode').
+
+    A force-https row without a string 'name' means the upstream schema moved --
+    refuse loudly rather than crash with a KeyError.
+    """
+    names = []
+    for e in entries:
+        if e.get("mode") != "force-https":
+            continue
+        name = e.get("name")
+        if not isinstance(name, str):
+            raise SystemExit(f"Refusing to rewrite: force-https entry without a string 'name': {e!r:.100}")
+        names.append(name)
+    return names
 
 
 def _punycode_label(label: str) -> str:
