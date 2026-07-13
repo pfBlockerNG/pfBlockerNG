@@ -545,12 +545,29 @@ def pf_state_dump(vm: SmokeVM, *, timeout: float = 30.0) -> str:
 _ALIAS_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 
+def _pre_stall_text(buf: str | bytes | None) -> str:
+    """Decode what a probe wrote before it hung.
+
+    TimeoutExpired carries the pre-stall buffer UNDECODED (bytes) even under ``text=True``,
+    and the stall truncates at an arbitrary byte — so it routinely ends mid-UTF-8 sequence.
+    """
+    if buf is None:
+        return ""
+    return buf if isinstance(buf, str) else buf.decode("utf-8", errors="replace")
+
+
 def _tolerate_timeout(call: Callable[[], subprocess.CompletedProcess[str]]) -> subprocess.CompletedProcess[str]:
-    """issue #1252: a stalled TRANSPORT is a FAILED PROBE, not a raw exception wrecking the dump."""
+    """issue #1252: a stalled TRANSPORT is a FAILED PROBE, not a raw exception wrecking the dump.
+
+    rc 124 (the conventional timeout code) is what makes every rc-based verdict branch below
+    treat the stall as the failed probe it is. The partial output is kept: unusable as PROOF,
+    but it is precisely the diagnostic this dump exists to surface.
+    """
     try:
         return call()
     except subprocess.TimeoutExpired as exc:
-        return subprocess.CompletedProcess(exc.cmd, 124, "", f"transport timeout after {exc.timeout}s")
+        stderr = f"transport timeout after {exc.timeout}s: {_pre_stall_text(exc.stderr)}"
+        return subprocess.CompletedProcess(exc.cmd, 124, _pre_stall_text(exc.stdout), stderr)
 
 
 def alias_rule_dump(vm: SmokeVM, alias: str, *, timeout: float = 30.0) -> str:
@@ -574,11 +591,13 @@ def alias_rule_dump(vm: SmokeVM, alias: str, *, timeout: float = 30.0) -> str:
     applied it yet (genuine lag) or pfctl rejected the ruleset; present at all three ⇒ the
     poll read stale state.
 
-    A FAILED PROBE is never a missing rule: if the config read, the rules.debug grep or the
-    pfctl read errors out OR the transport stalls (``subprocess.TimeoutExpired``), the verdict
-    is ``UNPROVEN`` — a broken or stalled probe reads as an empty layer, and silently blaming
-    the product for a pfSsh.php error or a hung SSH is exactly the misdiagnosis this helper
-    exists to prevent (issue #1239, #1252).
+    A FAILED PROBE is never a missing rule: if one of the three VERDICT probes — the config
+    read, the rules.debug grep, or ``pfctl -sr`` — errors out OR its transport stalls
+    (``subprocess.TimeoutExpired``), the verdict is ``UNPROVEN``: a broken or stalled probe
+    reads as an empty layer, and silently blaming the product for a pfSsh.php error or a hung
+    SSH is exactly the misdiagnosis this helper exists to prevent (issue #1239, #1252). The
+    fourth probe, ``pfctl -sTables``, only annotates whether the table exists — a failure
+    there reports that line as ``UNKNOWN`` and leaves the verdict to the three layers.
 
     The ruleset layers use :func:`rule_line_references`, the same match rule
     :func:`rule_references` applies, so the dump cannot contradict the assertion it explains.
