@@ -554,6 +554,13 @@ if ($_POST && isset($_POST['save'])) {
 							. "API key not defined! Add your subscripton API Key to the Source field URL or disable/remove feed.";
 			}
 
+			// issue #1104: reject control chars + HTML-breakout <>" in url-N for
+			// every format -- geoip/asn gate only a PREFIX below, leaving this the sole gate.
+			if ($value != 'Disabled' && preg_match('/[\p{C}<>"]/u', $_POST["url-{$key_1}"]) !== 0) {
+				$input_errors[] = "{$type} Source Definitions, Line {$line}: "
+							. "Source field contains a disallowed character (control character or < > \")!";
+			}
+
 			// Validate URL
 			if ($value != 'Disabled' && in_array($_POST["format-{$key_1}"], array( 'auto', 'regex', 'rsync' ))) {
 				if (!pfb_filter($_POST["url-{$key_1}"], PFB_FILTER_URL, 'Category_edit')) {

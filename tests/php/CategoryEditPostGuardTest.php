@@ -380,6 +380,272 @@ final class CategoryEditPostGuardTest extends TestCase
 		$this->assertSame('', $_POST['url-0']);
 	}
 
+	// --- url-N save-time character guard (issue #1104): the state loop must
+	// REJECT control chars + HTML-breakout <>" in url-N for EVERY format,
+	// never transform the stored value. Distinguishing substring for the
+	// guard's own message: 'disallowed character'. --------------------------
+
+	private function assertGuardRejects(array $post, string $type = 'DNSBL', string $gtype = 'dnsbl'): array
+	{
+		$_POST = $post;
+		pfb_category_oracle_aliasname_region($gtype);
+		$errors = pfb_category_oracle_state_loop($type);
+		$this->assertNotEmpty(
+			array_filter($errors, static fn (string $e): bool => str_contains($e, 'disallowed character')),
+			'expected the url-N character guard to reject: ' . var_export($post['url-0'] ?? null, true)
+		);
+		$this->assertNotEmpty($errors, 'a rejected row must leave $input_errors non-empty (blocks the atomic save)');
+		return $errors;
+	}
+
+	private function assertGuardAccepts(array $post, string $type = 'DNSBL', string $gtype = 'dnsbl'): array
+	{
+		$_POST = $post;
+		pfb_category_oracle_aliasname_region($gtype);
+		$errors = pfb_category_oracle_state_loop($type);
+		$this->assertEmpty(
+			array_filter($errors, static fn (string $e): bool => str_contains($e, 'disallowed character')),
+			'expected the url-N character guard to accept: ' . var_export($post['url-0'] ?? null, true)
+		);
+		return $errors;
+	}
+
+	// -- coverage matrix: one REJECT + one ACCEPT per format's current gate --
+
+	public function testUrlSaveGuardAutoFormatRejectsScriptInQuery(): void
+	{
+		// RFC 5737 literal host -- is_ipaddr() short-circuits pfb_filter()'s
+		// PFB_FILTER_URL host check before any DNS resolution is attempted.
+		$this->assertGuardRejects([
+			'aliasname' => 'validname',
+			'state-0'   => 'Enabled',
+			'header-0'  => 'validheader',
+			'url-0'     => 'http://192.0.2.1/?x=<script>alert(1)</script>',
+			'format-0'  => 'auto',
+		]);
+	}
+
+	public function testUrlSaveGuardAutoFormatAcceptsUrlWithUserinfoPortQueryEncoding(): void
+	{
+		$value = 'http://user:pass@192.0.2.1:8443/path?a=1&b=2%20c';
+		$post = [
+			'aliasname' => 'validname',
+			'state-0'   => 'Enabled',
+			'header-0'  => 'validheader',
+			'url-0'     => $value,
+			'format-0'  => 'auto',
+		];
+		$this->assertGuardAccepts($post);
+		$this->assertSame($value, $_POST['url-0'], 'the guard must never transform the persisted value');
+	}
+
+	public function testUrlSaveGuardGeoipFormatRejectsScriptSuffix(): void
+	{
+		$this->assertGuardRejects([
+			'aliasname' => 'validname',
+			'state-0'   => 'Enabled',
+			'header-0'  => 'validheader',
+			'url-0'     => 'US <script>alert(document.cookie)</script>',
+			'format-0'  => 'geoip',
+		]);
+	}
+
+	public function testUrlSaveGuardGeoipFormatAcceptsMultiCountryList(): void
+	{
+		$value = 'US CA MX GB';
+		$post = [
+			'aliasname' => 'validname',
+			'state-0'   => 'Enabled',
+			'header-0'  => 'validheader',
+			'url-0'     => $value,
+			'format-0'  => 'geoip',
+		];
+		$this->assertGuardAccepts($post);
+		$this->assertSame($value, $_POST['url-0']);
+	}
+
+	public function testUrlSaveGuardAsnFormatRejectsScriptSuffix(): void
+	{
+		$this->assertGuardRejects([
+			'aliasname' => 'validname',
+			'state-0'   => 'Enabled',
+			'header-0'  => 'validheader',
+			'url-0'     => '12345 <script>',
+			'format-0'  => 'asn',
+		]);
+	}
+
+	public function testUrlSaveGuardAsnFormatAcceptsApiKeyPlaceholderValue(): void
+	{
+		// '_API_KEY_' trips the PRE-EXISTING, unrelated API-key-placeholder
+		// check (line ~552) regardless of our guard -- assert only that OUR
+		// guard adds no error, not that $errors is empty overall.
+		$value = '12345 _API_KEY_';
+		$post = [
+			'aliasname' => 'validname',
+			'state-0'   => 'Enabled',
+			'header-0'  => 'validheader',
+			'url-0'     => $value,
+			'format-0'  => 'asn',
+		];
+		$this->assertGuardAccepts($post);
+		$this->assertSame($value, $_POST['url-0']);
+	}
+
+	public function testUrlSaveGuardWhoisFormatAcceptsPlainDomain(): void
+	{
+		$value = 'example.com';
+		$post = [
+			'aliasname' => 'validname',
+			'state-0'   => 'Enabled',
+			'header-0'  => 'validheader',
+			'url-0'     => $value,
+			'format-0'  => 'whois',
+		];
+		$this->assertGuardAccepts($post);
+		$this->assertSame($value, $_POST['url-0']);
+	}
+
+	public function testUrlSaveGuardDnsblGtypeAutoFormatRejectsScriptInQuery(): void
+	{
+		// Same code path as ipv4/ipv6 auto (single file; gtype only changes
+		// the format dropdown) -- prove the guard fires on the dnsbl tab too.
+		$this->assertGuardRejects([
+			'aliasname' => 'validname',
+			'state-0'   => 'Enabled',
+			'header-0'  => 'validheader',
+			'url-0'     => 'http://192.0.2.1/?x=<script>alert(1)</script>',
+			'format-0'  => 'auto',
+		], 'DNSBL', 'dnsbl');
+	}
+
+	// -- hostile-input rows -----------------------------------------------
+
+	public function testUrlSaveGuardRejectsEmbeddedControlCharacter(): void
+	{
+		$this->assertGuardRejects([
+			'aliasname' => 'validname',
+			'state-0'   => 'Enabled',
+			'header-0'  => 'validheader',
+			'url-0'     => "US\x01CA",
+			'format-0'  => 'geoip',
+		]);
+	}
+
+	public function testUrlSaveGuardRejectsEmbeddedTabCharacter(): void
+	{
+		$this->assertGuardRejects([
+			'aliasname' => 'validname',
+			'state-0'   => 'Enabled',
+			'header-0'  => 'validheader',
+			'url-0'     => "US\tCA",
+			'format-0'  => 'geoip',
+		]);
+	}
+
+	public function testUrlSaveGuardRejectsRawDoubleQuoteAttributeBreakout(): void
+	{
+		$this->assertGuardRejects([
+			'aliasname' => 'validname',
+			'state-0'   => 'Enabled',
+			'header-0'  => 'validheader',
+			'url-0'     => 'http://192.0.2.1/x"onerror=alert(1)',
+			'format-0'  => 'auto',
+		]);
+	}
+
+	public function testUrlSaveGuardRejectsGeoipBareSuffixWithNoInternalSpaces(): void
+	{
+		$this->assertGuardRejects([
+			'aliasname' => 'validname',
+			'state-0'   => 'Enabled',
+			'header-0'  => 'validheader',
+			'url-0'     => 'US <script>alert(1)</script>',
+			'format-0'  => 'geoip',
+		]);
+	}
+
+	public function testUrlSaveGuardRejectsInvalidUtf8FailClosed(): void
+	{
+		// preg_match() with /u returns FALSE (not 0) on invalid UTF-8; the
+		// guard's `!== 0` compare must treat FALSE as a reject (fail closed).
+		$this->assertGuardRejects([
+			'aliasname' => 'validname',
+			'state-0'   => 'Enabled',
+			'header-0'  => 'validheader',
+			'url-0'     => "\xFF\xFE",
+			'format-0'  => 'auto',
+		]);
+	}
+
+	public function testUrlSaveGuardAcceptsSingleQuoteSubDelim(): void
+	{
+		// Deliberate: ' is a valid RFC-3986 sub-delim and cannot break the
+		// double-quoted href attribute (the display sink already runs
+		// htmlspecialchars(ENT_QUOTES)) -- documents the conscious exclusion.
+		$value = "http://192.0.2.1/?q='onmouseover='foo";
+		$post = [
+			'aliasname' => 'validname',
+			'state-0'   => 'Enabled',
+			'header-0'  => 'validheader',
+			'url-0'     => $value,
+			'format-0'  => 'auto',
+		];
+		$this->assertGuardAccepts($post);
+		$this->assertSame($value, $_POST['url-0']);
+	}
+
+	public function testUrlSaveGuardSkipsDisabledRowWithEmptyUrl(): void
+	{
+		$_POST = [
+			'aliasname' => 'validname',
+			'state-0'   => 'Disabled',
+			'header-0'  => '',
+			'url-0'     => '',
+			'format-0'  => 'auto',
+		];
+		pfb_category_oracle_aliasname_region('dnsbl');
+		$errors = pfb_category_oracle_state_loop('DNSBL');
+		$this->assertEmpty($errors, 'a Disabled row must skip every url-N check, including the new guard');
+	}
+
+	public function testUrlSaveGuardAcceptsIdnPunycodeHost(): void
+	{
+		// whois format (PFB_FILTER_DOMAIN, pure regex, no DNS) exercises the
+		// guard on a punycode domain string without touching resolve_host_addresses.
+		$value = 'xn--e1aybc.tld';
+		$post = [
+			'aliasname' => 'validname',
+			'state-0'   => 'Enabled',
+			'header-0'  => 'validheader',
+			'url-0'     => $value,
+			'format-0'  => 'whois',
+		];
+		$this->assertGuardAccepts($post);
+		$this->assertSame($value, $_POST['url-0']);
+	}
+
+	public function testUrlSaveGuardArrayValuedUrlDoesNotThrowAndAddsNoNewError(): void
+	{
+		$_POST = [
+			'aliasname' => 'validname',
+			'state-0'   => 'Enabled',
+			'header-0'  => 'validheader',
+			'url-0'     => ['x'],
+			'format-0'  => 'auto',
+		];
+		pfb_category_oracle_aliasname_region('dnsbl');	// blanks url-0 to ''
+		try {
+			$errors = pfb_category_oracle_state_loop('DNSBL');
+		} catch (\TypeError $e) {
+			$this->fail('an array url-0 must not TypeError the new character guard: ' . $e->getMessage());
+		}
+		$this->assertEmpty(
+			array_filter($errors, static fn (string $e): bool => str_contains($e, 'disallowed character')),
+			'a blanked (empty-string) url-0 must not trip the new character guard'
+		);
+	}
+
 	// --- R9/R10: custom list --------------------------------------------------
 
 	public function testCustomArrayValueDoesNotThrow(): void
