@@ -43,6 +43,9 @@ final class IpRecomputeSnapshotTest extends TestCase
 
 	protected function tearDown(): void
 	{
+		if (in_array('pfbtrunc', stream_get_wrappers(), TRUE)) {
+			stream_wrapper_unregister('pfbtrunc');
+		}
 		foreach ([$this->snapdir, $this->denydir, $this->origdir] as $d) {
 			foreach (@glob("{$d}/*") ?: [] as $f) {
 				@unlink($f);
@@ -208,5 +211,43 @@ final class IpRecomputeSnapshotTest extends TestCase
 		// unconditionally whenever a header is removed, snapshotted or not).
 		pfb_ip_recompute_forget_header('NeverSnapshotted_v4', $this->snapdir, $this->origdir);
 		$this->assertFileDoesNotExist("{$this->snapdir}/NeverSnapshotted_v4.snap");
+	}
+
+	public function testWriteSnapshotAggcountIsZeroWhenSourceReadNeverReachesEof(): void
+	{
+		// issue #1257 B2: a read that stalls/aborts mid-file (never a clean EOF) must not
+		// leave a plausible-looking PARTIAL count in the sidecar -- it must fail to 0.
+		require_once __DIR__ . '/PfbTruncatedReadStreamWrapper.php';
+		stream_wrapper_register('pfbtrunc', PfbTruncatedReadStreamWrapper::class);
+		PfbTruncatedReadStreamWrapper::setData("198.51.100.1\n198.51.100.2\n198.51.100.3\n");
+		$src = 'pfbtrunc://short-read-source';
+
+		pfb_ip_recompute_write_snapshot($src, 'FeedTrunc_v4', $this->snapdir, $this->origdir);
+
+		$this->assertSame(
+			"0\n",
+			file_get_contents("{$this->origdir}/FeedTrunc_v4.aggcount"),
+			'a read that never reaches EOF must fail to 0, never a silent partial count'
+		);
+	}
+
+	public function testWriteSnapshotAggcountIsZeroWhenSourceUnreadable(): void
+	{
+		if (function_exists('posix_getuid') && posix_getuid() === 0) {
+			$this->markTestSkipped('root bypasses file permissions; cannot simulate an unreadable source');
+		}
+		$src = "{$this->denydir}/FeedUnreadable_v4.txt";
+		file_put_contents($src, "198.51.100.1\n198.51.100.2\n");
+		chmod($src, 0000);
+		try {
+			pfb_ip_recompute_write_snapshot($src, 'FeedUnreadable_v4', $this->snapdir, $this->origdir);
+			$this->assertSame(
+				"0\n",
+				file_get_contents("{$this->origdir}/FeedUnreadable_v4.aggcount"),
+				'an unopenable source must fail to 0, matching the sidecar default (issue #1257 C2)'
+			);
+		} finally {
+			chmod($src, 0644);
+		}
 	}
 }

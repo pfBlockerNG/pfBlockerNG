@@ -228,4 +228,18 @@ final class LogTrimNeededTest extends TestCase
 		$result = pfb_log_trim_needed(PHP_INT_MAX, 0, $this->tmpFile, 'log', 50);
 		$this->assertFalse($result, 'an absurd cap must never fire for a normal-sized file, and must not throw');
 	}
+
+	// -----------------------------------------------------------------------
+	// issue #1257 C1: an unopenable path must fail HIGH (guard fires), never
+	// silently skip a needed trim.
+	// -----------------------------------------------------------------------
+
+	public function testUnopenableLogPathWithLineCapActiveFires(): void
+	{
+		$missing = $this->tmpFile . '-does-not-exist';
+		$this->assertTrue(
+			pfb_log_trim_needed(10, 0, $missing, 'log', 0),
+			'an unopenable log path with a line cap active must fire the trim guard, never skip it'
+		);
+	}
 }
