@@ -99,7 +99,7 @@ config / www-POST changes; no config migration.
 | py `classify()` (the wildcard classifier only) | `tld_wildcard_classify()` |
 | py `_dnsbl_load_tld_master` | `_dnsbl_load_tld_wildcard_master` |
 | py `_dnsbl_tld_search` | `_dnsbl_tld_wildcard_search` |
-| manifest `config.tld_master` + py `tld_master` var | `tld_wildcard_master` |
+| py `tld_master` (build-config blob key + var; per #1255 the oracle rides the shipped `pfb_py_tld` file loaded reader-side — a manifest `config.tld_master` key is ignored, so there is NO manifest-writer rename for it) | `tld_wildcard_master` |
 | manifest `config.tld_exclusion` + py/inc `tld_exclusion` | `tld_wildcard_exclusion` |
 | manifest `config.tld_blacklist` + py/inc `tld_blacklist` (whole-TLD block; a sub-feature of Wildcard Blocking — UI-gated on `pfb_tld`, `dnsbl.php:3639-3644`, and gated OFF with the toggle per #1255) | `tld_wildcard_blacklist` |
 | **stays (already the stem / #1255):** `config.tld_wildcard` (the enable flag) | — |
@@ -114,9 +114,11 @@ config / www-POST changes; no config migration.
    every input; the zone/data split and the `tld_wildcard_exclusion` opt-out behave identically.
 3. **`.inc↔.py` ini bridge round-trips** — the ini keys renamed on BOTH sides (`.inc` writer +
    `.py` reader) still hand the same values across; a half-renamed bridge is a broken build.
-4. **Manifest bridge round-trips** — `config.tld_master`/`config.tld_exclusion`/
-   `config.tld_blacklist` renamed on the writer (`pfblockerng.inc`) AND reader
-   (`_dnsbl_config_from_manifest`) together.
+4. **Manifest bridge round-trips** — `config.tld_exclusion`/`config.tld_blacklist` renamed on
+   the writer (`pfblockerng.inc`) AND reader (`_dnsbl_config_from_manifest`) together. Per
+   #1255 there is no `config.tld_master` manifest key (the oracle rides the shipped
+   `pfb_py_tld` file, loaded reader-side); the internal `tld_master` build-blob key + var
+   rename is reader-side only.
 5. **No stored-config / www-POST change** — `config.xml` round-trips byte-identically; existing
    installs are unaffected; the UI posts the same field names.
 6. **TOP1M / SafeSearch / HSTS untouched** — no accidental capture by a substring rename
@@ -191,9 +193,10 @@ Prompt: `02_Rename_Tld_Allow.txt`
 
 Prompt: `03_Rename_Tld_Wildcard.txt`
 
-- Rename the §2.2 identifiers, including `config.tld_master`/`config.tld_exclusion`/
-  `config.tld_blacklist` on BOTH the manifest writer (`pfblockerng.inc`) and reader
-  (`_dnsbl_config_from_manifest`) — atomic (Semantic 4). Rename `$pfb['dnsbl_tld']` exactly (NOT `dnsbl_tld_data`/`_remove`/`_txt`); rename
+- Rename the §2.2 identifiers, including `config.tld_exclusion`/`config.tld_blacklist` on BOTH
+  the manifest writer (`pfblockerng.inc`) and reader (`_dnsbl_config_from_manifest`) — atomic
+  (Semantic 4); the internal `tld_master` build-blob key + var is reader-side only (no
+  manifest key, #1255). Rename `$pfb['dnsbl_tld']` exactly (NOT `dnsbl_tld_data`/`_remove`/`_txt`); rename
   `classify` exactly (NOT `classify_idn`/`classify_label`/`classify_upstream_block`). Delta budget
   R-B only.
 - Oracle byte-identical green; the manifest-bridge round-trip + Semantic-6 guard tests prove no
