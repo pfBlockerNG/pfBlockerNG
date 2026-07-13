@@ -89,6 +89,7 @@ use PHPUnit\Framework\TestCase;
  *     correctly SEEDED instead of merely left alone.
  */
 #[CoversFunction('pfb_match_reported_cidr')]
+#[CoversFunction('pfb_ip_match_folders')]
 #[CoversFunction('pfb_ip_render_query')]
 #[CoversFunction('pfb_ip_render_memos')]
 #[CoversFunction('pfb_ip_render_memos_reset')]
@@ -116,14 +117,17 @@ final class IpPrefetchTest extends TestCase
 		// these keys; a minimal $pfb is enough (unlike the Alerts page itself, which reads
 		// many more unrelated keys at load time).
 		$GLOBALS['pfb'] = [
-			'grep'       => '/usr/bin/grep',
-			'denydir'    => "{$this->fixturesDir}/deny",
-			'nativedir'  => "{$this->fixturesDir}/native",
-			'permitdir'  => "{$this->fixturesDir}/deny",	// unused by these tests' rows
-			'matchdir'   => "{$this->fixturesDir}/deny",	// unused by these tests' rows
-			'etdir'      => "{$this->fixturesDir}/deny",	// unused by these tests' rows
-			'ccdir'      => "{$this->fixturesDir}/geoip",
-			'aliasdir'   => "{$this->fixturesDir}/alias",
+			'grep'        => '/usr/bin/grep',
+			'denydir'     => "{$this->fixturesDir}/deny",
+			'nativedir'   => "{$this->fixturesDir}/native",
+			'permitdir'   => "{$this->fixturesDir}/deny",	// unused by these tests' rows
+			'matchdir'    => "{$this->fixturesDir}/deny",	// unused by these tests' rows
+			// issue #1250: distinct from matchdir/nativedir so the folder-derivation
+			// test below can prove all three are present, not just two.
+			'matchgendir' => "{$this->fixturesDir}/deny/generated",
+			'etdir'       => "{$this->fixturesDir}/deny",	// unused by these tests' rows
+			'ccdir'       => "{$this->fixturesDir}/geoip",
+			'aliasdir'    => "{$this->fixturesDir}/alias",
 		];
 
 		// Same continents registry pfblockerng_alerts.php builds (array_flip of the
@@ -661,6 +665,29 @@ final class IpPrefetchTest extends TestCase
 			$memos['miss'][$missKey],
 			'expected [pfb_query, raw_validate] to be ' . var_export([['DenyFeed', '192.0.2.0/24'], $expectedRawValidate], true)
 				. ', got ' . var_export($memos['miss'][$missKey], true)
+		);
+	}
+
+	/**
+	 * issue #1250: reputation/dMax artifacts relocated to matchgendir -- a 'match'
+	 * event's folder set must still search matchdir/nativedir (unchanged) AND now
+	 * also matchgendir (widened), or an event caused by a relocated artifact
+	 * attributes to nothing on the Alerts page.
+	 */
+	public function test_match_action_folder_includes_matchdir_matchgendir_and_nativedir(): void
+	{
+		$fields = $this->buildBlockFields('192.0.2.90');
+		$fields[3] = 'match';	// Action -- the branch under test
+
+		$rq = pfb_ip_render_query($fields);
+
+		// Then: the derived folder glob names all three dirs -- dropping matchgendir
+		// silences attribution for every reputation-artifact match; dropping matchdir
+		// or nativedir would silence the pre-existing two.
+		$this->assertSame(
+			"{$GLOBALS['pfb']['matchdir']}/*.txt {$GLOBALS['pfb']['matchgendir']}/*.txt {$GLOBALS['pfb']['nativedir']}/*.txt",
+			$rq['folder'],
+			"expected the 'match' folder to be matchdir+matchgendir+nativedir, got: {$rq['folder']}"
 		);
 	}
 
