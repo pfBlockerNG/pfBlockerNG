@@ -296,6 +296,23 @@ def test_parse_entries_raises_when_entries_key_missing() -> None:
         uhpl.parse_entries('{"pinsets": []}')
 
 
+def test_parse_entries_raises_when_entries_is_not_a_list() -> None:
+    with pytest.raises(SystemExit):
+        uhpl.parse_entries('{"entries": "not-a-list"}')
+
+
+def test_parse_entries_raises_when_an_entry_row_is_not_a_dict() -> None:
+    with pytest.raises(SystemExit):
+        uhpl.parse_entries('{"entries": [{"name": "a.com", "mode": "force-https"}, "junk-row"]}')
+
+
+def test_extract_names_raises_when_a_force_https_entry_lacks_a_string_name() -> None:
+    with pytest.raises(SystemExit):
+        uhpl.extract_names([{"mode": "force-https"}])
+    with pytest.raises(SystemExit):
+        uhpl.extract_names([{"mode": "force-https", "name": 7}])
+
+
 def test_main_refuses_on_non_base64_response(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "pfb_py_hsts.txt"
     monkeypatch.setattr(uhpl, "DEFAULT_HSTS_FILE", target)
