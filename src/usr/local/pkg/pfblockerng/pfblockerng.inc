@@ -1999,8 +1999,8 @@ function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, stri
 		$line = strstr($line, '?', TRUE);
 	}
 
-	// issue #1237: a URL-authority parse used to mis-detect 'host;param:digits' as a
-	// hostname, keeping the ';param' remainder -- always truncate at the first ';' instead.
+	// issue #1237: parse_url()'s scheme-less host:port heuristic (no '//' authority needed)
+	// mis-picked 'host;param:digits' as a hostname, keeping the ';param' remainder in it.
 	if (strpos($line, ';') !== FALSE) {
 		$line = strstr($line, ';', TRUE);
 	}
