@@ -113,6 +113,12 @@ final class LogMgmtAgeCutoffTest extends TestCase
 		config_set_path("{$gen}/log_max_days_{$logtype}", $maxDays);
 	}
 
+	/** Set the GLOBAL hysteresis margin percent (issue #1109; applies to every log type). */
+	private function setMarginPct(string $pct): void
+	{
+		config_set_path('installedpackages/pfblockerng/config/0/pfb_log_trim_margin_pct', $pct);
+	}
+
 	private function logPath(string $logtype): string
 	{
 		return $GLOBALS['pfb'][$logtype];
@@ -868,5 +874,298 @@ final class LogMgmtAgeCutoffTest extends TestCase
 
 		$complete = pfb_log_age_trim_write_ok(strlen($content), $content);
 		$this->assertTrue($complete, 'expected an exact full-length write to be flagged as complete');
+	}
+
+	// -----------------------------------------------------------------------
+	// issue #1109 -- pfb_log_trim_margin_pct hysteresis, wired through the
+	// real pfb_log_mgmt() on both the plain and chroot-fallback branches.
+	// -----------------------------------------------------------------------
+
+	/**
+	 * RED->GREEN PROOF (line-cap hysteresis, plain branch): a file at 1.2x its
+	 * numeric line cap, margin=50 (high-water=1.5x), must be left untouched.
+	 *
+	 * Fails pre-#1109: today's code has no margin concept and always
+	 * tail -n's a numeric cap unconditionally -- 12 lines would be cut to 10.
+	 *
+	 * Scenario:
+	 *   Given log_max_log='10'; pfb_log_trim_margin_pct='50'.
+	 *   And   12 lines (1.2x cap, under the 1.5x high-water).
+	 *   Before: 12 lines; inode = I.
+	 *   When  pfb_log_mgmt() is called.
+	 *   Then  content is BYTE-IDENTICAL (still 12 lines) and inode is unchanged.
+	 */
+	public function testMarginHysteresisSkipsLineCapTrimWithinHighWaterPlainBranch(): void
+	{
+		$this->seedMinimalConfig();
+		$this->setLogCaps('log', '10', '0');
+		$this->setMarginPct('50');
+		$this->ensureLogDir();
+		pfb_global();
+
+		$logPath = $this->logPath('log');
+		$lines = [];
+		for ($i = 0; $i < 12; $i++) {
+			$lines[] = "l{$i}";
+		}
+		$content = implode("\n", $lines) . "\n";
+		file_put_contents($logPath, $content);
+		$inodeBefore = fileinode($logPath);
+
+		pfb_log_mgmt();
+
+		clearstatcache(TRUE, $logPath);
+		$this->assertSame($content, file_get_contents($logPath),
+			'12 lines (1.2x a 10-line cap) under the 1.5x margin high-water must be left byte-identical'
+		);
+		$this->assertSame($inodeBefore, fileinode($logPath), 'inode must be unchanged when the pass is skipped');
+	}
+
+	/**
+	 * Same proof as above on the CHROOT-fallback branch ('dnslog') -- Matrix
+	 * row E: every behavioural row exercised through both pfb_log_mgmt()
+	 * branches (chroot dir absent off-appliance -> falls back to the host
+	 * path, per LogRotateResetTest's established note).
+	 */
+	public function testMarginHysteresisSkipsLineCapTrimWithinHighWaterChrootBranch(): void
+	{
+		$this->seedMinimalConfig();
+		$this->setLogCaps('dnslog', '10', '0');
+		$this->setMarginPct('50');
+		$this->ensureLogDir();
+		pfb_global();
+
+		$logPath = $this->logPath('dnslog');
+		$lines = [];
+		for ($i = 0; $i < 12; $i++) {
+			$lines[] = 'DNSBL-python,' . $this->now() . ",d{$i}.example.com,127.0.0.1,Python,Block,Feed,eval,feed,+,A";
+		}
+		$content = implode("\n", $lines) . "\n";
+		file_put_contents($logPath, $content);
+		$inodeBefore = fileinode($logPath);
+
+		pfb_log_mgmt();
+
+		clearstatcache(TRUE, $logPath);
+		$this->assertSame($content, file_get_contents($logPath),
+			'chroot branch: 12 rows (1.2x a 10-row cap) under the 1.5x margin high-water must be byte-identical'
+		);
+		$this->assertSame($inodeBefore, fileinode($logPath), 'inode must be unchanged when the pass is skipped');
+	}
+
+	/**
+	 * Pinning companion (NOT a red proof -- pre-#1109 code already tails a
+	 * numeric cap to the exact count unconditionally, so this result is
+	 * unchanged before/after): once the high-water fires, the LOW-WATER cut
+	 * is still exact -- 16 lines (1.6x cap, over the 1.5x high-water) trim
+	 * down to precisely the 10-line cap, not to 15.
+	 */
+	public function testMarginHysteresisFiresLineCapTrimOverHighWaterCutsToExactCapPlainBranch(): void
+	{
+		$this->seedMinimalConfig();
+		$this->setLogCaps('log', '10', '0');
+		$this->setMarginPct('50');
+		$this->ensureLogDir();
+		pfb_global();
+
+		$logPath = $this->logPath('log');
+		$lines = [];
+		for ($i = 0; $i < 16; $i++) {
+			$lines[] = "l{$i}";
+		}
+		file_put_contents($logPath, implode("\n", $lines) . "\n");
+
+		pfb_log_mgmt();
+
+		clearstatcache(TRUE, $logPath);
+		$linesAfter = array_values(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
+		$this->assertSame(array_slice($lines, 6), $linesAfter,
+			'16 lines over the 1.5x high-water must cut to EXACTLY the 10-line cap (low-water), got '
+			. var_export($linesAfter, TRUE)
+		);
+	}
+
+	/**
+	 * RED->GREEN PROOF (age-cap hysteresis, plain branch): 'nolimit' + an age
+	 * cap, head past the cap but inside the margin-widened window, must be
+	 * left untouched.
+	 *
+	 * Fails pre-#1109: the pre-rename #1052 probe ignores margin -- a
+	 * 12-day-old head past a 10-day cap is judged expired, the pass runs,
+	 * and the old line is dropped.
+	 *
+	 * Scenario:
+	 *   Given log_max_log='nolimit'; log_max_days_log='10'; margin='50' (window=15d).
+	 *   And   1 line 12 days old (past cap, inside window) + 1 fresh line.
+	 *   Before: 2 lines.
+	 *   When  pfb_log_mgmt() is called.
+	 *   Then  content is BYTE-IDENTICAL (both lines survive).
+	 */
+	public function testMarginHysteresisSkipsAgeCapTrimWithinWindowPlainBranch(): void
+	{
+		$this->seedMinimalConfig();
+		$this->setLogCaps('log', 'nolimit', '10');
+		$this->setMarginPct('50');
+		$this->ensureLogDir();
+		pfb_global();
+
+		$logPath = $this->logPath('log');
+		$old = $this->daysAgo(12) . ' still-in-window';
+		$new = $this->now() . ' fresh';
+		$content = $old . "\n" . $new . "\n";
+		file_put_contents($logPath, $content);
+
+		pfb_log_mgmt();
+
+		clearstatcache(TRUE, $logPath);
+		$this->assertSame($content, file_get_contents($logPath),
+			'a 12-day-old head (age-cap=10d, margin=50 -> window=15d) must be left byte-identical'
+		);
+	}
+
+	/** Same proof as above on the CHROOT-fallback branch ('dnslog'). */
+	public function testMarginHysteresisSkipsAgeCapTrimWithinWindowChrootBranch(): void
+	{
+		$this->seedMinimalConfig();
+		$this->setLogCaps('dnslog', 'nolimit', '10');
+		$this->setMarginPct('50');
+		$this->ensureLogDir();
+		pfb_global();
+
+		$logPath = $this->logPath('dnslog');
+		$old = 'DNSBL-python,' . $this->daysAgo(12) . ',old.example.com,127.0.0.1,Python,Block,Feed,eval,feed,+,A';
+		$new = 'DNSBL-python,' . $this->now()       . ',new.example.com,127.0.0.1,Python,Block,Feed,eval,feed,+,A';
+		$content = $old . "\n" . $new . "\n";
+		file_put_contents($logPath, $content);
+
+		pfb_log_mgmt();
+
+		clearstatcache(TRUE, $logPath);
+		$this->assertSame($content, file_get_contents($logPath),
+			'chroot branch: a 12-day-old head within the margin window must be left byte-identical'
+		);
+	}
+
+	/**
+	 * Pinning companion (NOT a red proof -- pre-#1109 code already drops a
+	 * head past the exact cap; a head past the WIDENED window is past the
+	 * exact cap too, so this result is unchanged before/after): a head
+	 * beyond the 1.5x window still fires and is dropped.
+	 */
+	public function testMarginHysteresisFiresAgeCapTrimBeyondWindowPlainBranch(): void
+	{
+		$this->seedMinimalConfig();
+		$this->setLogCaps('log', 'nolimit', '10');
+		$this->setMarginPct('50');
+		$this->ensureLogDir();
+		pfb_global();
+
+		$logPath = $this->logPath('log');
+		$old = $this->daysAgo(20) . ' past-window';
+		$new = $this->now() . ' fresh';
+		file_put_contents($logPath, $old . "\n" . $new . "\n");
+
+		pfb_log_mgmt();
+
+		clearstatcache(TRUE, $logPath);
+		$linesAfter = array_values(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
+		$this->assertSame([$new], $linesAfter,
+			'a 20-day-old head beyond the 15-day window must still be dropped, got ' . var_export($linesAfter, TRUE)
+		);
+	}
+
+	/**
+	 * RED->GREEN PROOF (the elision itself -- headline row): a file already
+	 * within its numeric cap, margin='0', no age cap, must not even be
+	 * REWRITTEN this tick -- asserted via mtime (a rewrite bumps it to now)
+	 * so the proof cannot pass on today's code (unconditional rewrite) and
+	 * cannot flake on sub-second timing (an old, force-set mtime is compared
+	 * for exact equality, never a "did it change recently" window).
+	 *
+	 * Scenario:
+	 *   Given log_max_log='10'; log_max_days_log unset (0, off); margin='0'.
+	 *   And   5 lines (under cap); mtime forced to 1 hour ago.
+	 *   Before: mtime = M (1h ago).
+	 *   When  pfb_log_mgmt() is called.
+	 *   Then  mtime is STILL M and content is byte-identical (pass never ran).
+	 */
+	public function testMarginElisionLeavesFileUntouchedIncludingMtime(): void
+	{
+		$this->seedMinimalConfig();
+		$this->setLogCaps('log', '10', '0');
+		$this->setMarginPct('0');
+		$this->ensureLogDir();
+		pfb_global();
+
+		$logPath = $this->logPath('log');
+		$content = "l0\nl1\nl2\nl3\nl4\n";
+		file_put_contents($logPath, $content);
+		$forcedMtime = time() - 3600;
+		touch($logPath, $forcedMtime);
+		clearstatcache(TRUE, $logPath);
+		$this->assertSame($forcedMtime, filemtime($logPath), 'before: forced mtime must take');
+
+		pfb_log_mgmt();
+
+		clearstatcache(TRUE, $logPath);
+		$this->assertSame($content, file_get_contents($logPath), 'content must be byte-identical (pass never ran)');
+		$this->assertSame($forcedMtime, filemtime($logPath),
+			'a file already within its cap must not even be rewritten (mtime unchanged) -- '
+			. 'today\'s code rewrites unconditionally and would bump this to "now"'
+		);
+	}
+
+	/**
+	 * Mandatory hostile row: an unclamped absurd log_max_log value (numeric
+	 * but saturates pfb_log_max_lines() to PHP_INT_MAX) combined with a
+	 * margin must never crash pfb_log_mgmt() (the intdiv()-on-float TypeError
+	 * trap the float-math design in pfb_log_trim_needed() avoids) and must
+	 * leave a normal-sized file untouched.
+	 */
+	public function testOversizedLogMaxWithMarginDoesNotCrash(): void
+	{
+		$this->seedMinimalConfig();
+		$this->setLogCaps('log', '99999999999999999999999999999999', '0');
+		$this->setMarginPct('50');
+		$this->ensureLogDir();
+		pfb_global();
+
+		$logPath = $this->logPath('log');
+		$content = "l0\nl1\nl2\nl3\nl4\n";
+		file_put_contents($logPath, $content);
+
+		pfb_log_mgmt();
+
+		clearstatcache(TRUE, $logPath);
+		$this->assertSame($content, file_get_contents($logPath),
+			'an absurd log_max_log value with a margin set must not crash, and must not touch a normal file'
+		);
+	}
+
+	/**
+	 * #1143 TypeError-class hostile row: an array raw config value for
+	 * pfb_log_trim_margin_pct (a crafted/corrupted config.xml) must parse to
+	 * 0 (is_scalar() guard) and must not crash pfb_log_mgmt() with a
+	 * TypeError. Bypasses the normal string-write path to inject the array
+	 * directly at the raw config path, as a hostile config.xml would.
+	 */
+	public function testMarginConfigValueAsArrayDoesNotCrash(): void
+	{
+		$this->seedMinimalConfig();
+		$this->setLogCaps('log', '10', '0');
+		config_set_path('installedpackages/pfblockerng/config/0/pfb_log_trim_margin_pct', ['50']);
+		$this->ensureLogDir();
+		pfb_global();
+
+		$logPath = $this->logPath('log');
+		$content = "l0\nl1\nl2\nl3\nl4\n";
+		file_put_contents($logPath, $content);
+
+		pfb_log_mgmt();
+
+		clearstatcache(TRUE, $logPath);
+		$this->assertSame($content, file_get_contents($logPath),
+			'an array pfb_log_trim_margin_pct value must parse to 0 and must not crash pfb_log_mgmt()'
+		);
 	}
 }

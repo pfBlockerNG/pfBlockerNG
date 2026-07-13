@@ -623,6 +623,16 @@ function pfb_cfg_registry(): array
 
 	$registry = $registry + [
 
+		// issue #1109: log-retention trim hysteresis margin percent (global,
+		// applies uniformly to both the line-count and age caps). Default '0'.
+		'pfb_log_trim_margin_pct' => [
+			'section'       => $gen,
+			'default'       => '0',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'since'         => '4.0.0',
+		],
+
 		// Software update check last-seen version (string or null). Default ''.
 		'pfb_software_check' => [
 			'section'       => $gen,

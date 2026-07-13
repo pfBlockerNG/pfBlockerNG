@@ -730,6 +730,60 @@ final class CfgGatewayTest extends TestCase
 			"write(read('02:00-06:00'))=='02:00-06:00' for pfb_quiet_hours");
 	}
 
+	// -----------------------------------------------------------------------
+	// issue #1109 — pfb_log_trim_margin_pct (global hysteresis margin percent)
+	// -----------------------------------------------------------------------
+
+	/**
+	 * pfb_log_trim_margin_pct absent key returns the registered default '0'
+	 * (no hysteresis -- today's exact-cap trim behaviour).
+	 *
+	 * Scenario:
+	 *   Background: pfb_log_trim_margin_pct is a plain-string field; default = '0'.
+	 *     Given no stored value.
+	 *     When PfbConfig::read('pfb_log_trim_margin_pct').
+	 *     Then '0' is returned.
+	 */
+	public function testPfbLogTrimMarginPctAbsentKeyReturnsDefaultZero(): void
+	{
+		$path = 'installedpackages/pfblockerng/config/0/pfb_log_trim_margin_pct';
+
+		// Before: absent.
+		$this->assertNull(config_get_path($path), 'before: pfb_log_trim_margin_pct must be absent');
+
+		// When/Then: absent -> default '0'.
+		$result = PfbConfig::read('pfb_log_trim_margin_pct');
+		$this->assertSame('0', $result, 'pfb_log_trim_margin_pct absent -> default 0');
+	}
+
+	/**
+	 * pfb_log_trim_margin_pct round-trips losslessly for a non-default value.
+	 *
+	 * Scenario:
+	 *   Background: pfb_log_trim_margin_pct is a plain-string field (no adapter).
+	 *     Given stored = '50'.
+	 *     When PfbConfig::write('pfb_log_trim_margin_pct', PfbConfig::read('pfb_log_trim_margin_pct')).
+	 *     Then stored string == '50' (write(read('50')) == '50').
+	 */
+	public function testPfbLogTrimMarginPctRoundTrip(): void
+	{
+		$path = 'installedpackages/pfblockerng/config/0/pfb_log_trim_margin_pct';
+
+		// Given: '50' stored.
+		$this->seedConfig($path, '50');
+
+		// Before: raw value is '50'.
+		$this->assertSame('50', config_get_path($path), "before: pfb_log_trim_margin_pct seed is '50'");
+
+		// When: read -> write.
+		$val = PfbConfig::read('pfb_log_trim_margin_pct');
+		$this->assertSame('50', $val, "read: pfb_log_trim_margin_pct '50' -> '50'");
+
+		// After: write back produces '50'.
+		PfbConfig::write('pfb_log_trim_margin_pct', $val);
+		$this->assertSame('50', config_get_path($path), "write(read('50'))=='50' for pfb_log_trim_margin_pct");
+	}
+
 	// ADR-38 — log_syslog (toggle; Amendment 1: facility/priority removed)
 	// -----------------------------------------------------------------------
 
@@ -974,6 +1028,8 @@ final class CfgGatewayTest extends TestCase
 			// ADR-43: tick-cron dispatch interval + apply-on-change window
 			'pfb_tick_interval',
 			'pfb_quiet_hours',
+			// issue #1109: log-retention trim hysteresis margin percent
+			'pfb_log_trim_margin_pct',
 			// ADR-38: syslog export toggle
 			'log_syslog',
 
