@@ -9,7 +9,7 @@ use PHPUnit\Framework\TestCase;
  * pfb_dnsbl_extract_host() -- issue #1119 (folded into #1117) extraction of the DNSBL
  * download/parse loop's `if (!$lite)` host-munging branch into a pure, unit-testable
  * helper. Pins the pipeline's load-bearing ORDER (scheme strip -> '/'/'#'/'?' truncation
- * -> ';'-parse_url -> trailing-port strip -> IPv6-unbracket LAST -- issue #938) and the
+ * -> ';'-truncation -> trailing-port strip -> IPv6-unbracket LAST -- issue #938) and the
  * FALSE-propagation contract when pfb_dnsbl_scheme_line() rejects a strict-mode URL path.
  */
 #[CoversFunction('pfb_dnsbl_extract_host')]
@@ -100,14 +100,62 @@ final class PfbDnsblExtractHostTest extends TestCase
 		$this->assertSame('d.com', $this->extract('d.com?q=1', TRUE));
 	}
 
-	// -- ';' parse_url host branch ------------------------------------------------------
+	// -- ';' strstr-only truncation (issue #1237: the parse_url host-pick branch was
+	// dropped -- every ';' line now takes the plain strstr-before-';' path) -----------------
 
 	public function testSemicolonWithoutParseUrlHostFallsBackToStrstr(): void
 	{
 		// parse_url('d.com;jsessionid=x') has no scheme/authority marker, so it never
-		// sets 'host' -- the strstr-before-';' fallback is the branch actually taken.
+		// set 'host' even under the old code -- this shape was already strstr-only.
 		$this->assertSame('d.com', $this->extract('d.com;jsessionid=x', FALSE));
 		$this->assertSame('d.com', $this->extract('d.com;jsessionid=x', TRUE));
+	}
+
+	public function testSemicolonParamWithPortLikeSuffixIsTruncatedNotParsed(): void
+	{
+		// issue #1237: 'host;param:digits' used to hit parse_url()'s isset('host') branch,
+		// which mis-parsed the ';param' remainder AS the authority -- e.g.
+		// 'd.com;jsessionid=1:80' resolved to 'd.com;jsessionid=1' (still containing ';',
+		// so pfb_filter() drops the whole line downstream). Plain strstr-before-';' now
+		// yields the clean domain instead.
+		$this->assertSame('d.com', $this->extract('d.com;jsessionid=1:80', FALSE));
+		$this->assertSame('d.com', $this->extract('d.com;jsessionid=1:80', TRUE));
+	}
+
+	public function testSemicolonParamWithPortLikeSuffixShorterLabels(): void
+	{
+		$this->assertSame('evilhost', $this->extract('evilhost;x:99', FALSE));
+		$this->assertSame('evilhost', $this->extract('evilhost;x:99', TRUE));
+		$this->assertSame('a', $this->extract('a;b:2', FALSE));
+		$this->assertSame('a', $this->extract('a;b:2', TRUE));
+	}
+
+	public function testSemicolonSlashCombinationsUnaffectedByTruncationOrder(): void
+	{
+		// '/' truncation (an earlier pipeline step) already empties or shortens these
+		// before the ';' step ever runs -- must stay unchanged by this fix.
+		$this->assertSame('', $this->extract('//d.com;jsessionid=x', FALSE));
+		$this->assertSame('', $this->extract('//d.com;jsessionid=x', TRUE));
+		$this->assertSame('d.com', $this->extract('d.com;jsessionid=1/extra', FALSE));
+		$this->assertSame('d.com', $this->extract('d.com;jsessionid=1/extra', TRUE));
+	}
+
+	public function testSemicolonEdgeShapesTrailingAndLeading(): void
+	{
+		$this->assertSame('d.com', $this->extract('d.com;', FALSE));
+		$this->assertSame('d.com', $this->extract('d.com;', TRUE));
+		// Leading ';' truncates to an empty STRING, never FALSE (FALSE is reserved for
+		// the strict scheme-reject contract).
+		$this->assertSame('', $this->extract(';x', FALSE));
+		$this->assertSame('', $this->extract(';x', TRUE));
+	}
+
+	public function testBracketedIpv6WithSemicolonUnaffectedByThisStep(): void
+	{
+		// parse_url() never sets 'host' for a bracketed-v6-plus-';' shape (only 'path'),
+		// so the isset branch was already dead here -- confirms the v6 axis is untouched.
+		$this->assertSame('2604:2dc0::', $this->extract('[2604:2dc0::];x', FALSE));
+		$this->assertSame('2604:2dc0::', $this->extract('[2604:2dc0::];x', TRUE));
 	}
 
 	// -- trailing port (IPv6-safe) -------------------------------------------------------
