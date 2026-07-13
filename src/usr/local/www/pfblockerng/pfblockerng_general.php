@@ -172,13 +172,10 @@ if ($_POST) {
 			$_POST[$dkey] = (string) $v;
 		}
 
-		// issue #1109: validate the log-trim hysteresis margin the same way (non-negative
-		// integer string; the backend parser independently clamps it to 0-1000).
-		$margin_v = $_POST['pfb_log_trim_margin_pct'] ?? '0';
-		if (is_array($margin_v) || !ctype_digit((string) $margin_v)) {
-			$margin_v = '0';
-		}
-		$_POST['pfb_log_trim_margin_pct'] = (string) $margin_v;
+		// issue #1109: canonicalize the log-trim hysteresis margin through the same parser
+		// the backend reads it with, so the STORED value is the effective one -- storing an
+		// out-of-range '999999999' would render a number the runtime clamp never uses.
+		$_POST['pfb_log_trim_margin_pct'] = (string) pfb_log_trim_margin_pct($_POST['pfb_log_trim_margin_pct'] ?? '0');
 
 		// issue #1070: an array-valued POST ('pfb_feed_internal_allowlist[]=x')
 		// throws a PHP 8 TypeError in trim()/base64_encode() below; reject it
