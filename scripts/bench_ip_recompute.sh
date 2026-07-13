@@ -159,7 +159,8 @@ measure() { # $1 label  $2... runner+args
 # a fully-pruned feed with the placeholder IP; recompute leaves it empty and
 # the production caller runs emptyfiles() itself — not a membership difference.
 union_cksum() {
-	cat "$1"/*.txt 2>/dev/null | grep -v '^127\.1\.7\.7$' | LC_ALL=C sort -u | cksum
+	# issue #1263: awk 1, not cat -- an unterminated member file must not weld into its neighbour.
+	awk 1 "$1"/*.txt 2>/dev/null | grep -v '^127\.1\.7\.7$' | LC_ALL=C sort -u | cksum
 }
 
 echo "generating data..."; gen_all

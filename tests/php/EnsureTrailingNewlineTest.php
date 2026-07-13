@@ -1,0 +1,86 @@
+<?php
+
+declare(strict_types=1);
+
+use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\TestCase;
+
+/**
+ * pfb_ensure_trailing_newline() -- issue #1263: cat concatenates bytes, not
+ * records. A downloaded/extracted feed with no trailing newline welds its
+ * last line onto the next file's first line in every downstream multi-file
+ * `cat` pipeline. This guarantees the stored '.orig' always ends in '\n'.
+ * Brand-new function (no prior behaviour to be wrong) -- tests assert real
+ * behaviour, not mere existence.
+ */
+#[CoversFunction('pfb_ensure_trailing_newline')]
+final class EnsureTrailingNewlineTest extends TestCase
+{
+	private string $tmpFile;
+
+	protected function setUp(): void
+	{
+		$this->tmpFile = (string) tempnam(sys_get_temp_dir(), 'pfb_ensure_nl_');
+	}
+
+	protected function tearDown(): void
+	{
+		if (is_file($this->tmpFile)) {
+			unlink($this->tmpFile);
+		}
+	}
+
+	public function testAppendsNewlineWhenLastLineIsUnterminated(): void
+	{
+		file_put_contents($this->tmpFile, "1.2.3.4\n5.6.7.8");
+		$this->assertTrue(pfb_ensure_trailing_newline($this->tmpFile), 'an unterminated file must be reported as changed');
+		$this->assertSame("1.2.3.4\n5.6.7.8\n", file_get_contents($this->tmpFile), 'content must be preserved with exactly one appended newline');
+	}
+
+	public function testSingleByteFileNoNewlineGetsTerminated(): void
+	{
+		file_put_contents($this->tmpFile, 'x');
+		$this->assertTrue(pfb_ensure_trailing_newline($this->tmpFile));
+		$this->assertSame("x\n", file_get_contents($this->tmpFile));
+	}
+
+	public function testAlreadyTerminatedFileIsUntouched(): void
+	{
+		file_put_contents($this->tmpFile, "a\nb\n");
+		$this->assertFalse(pfb_ensure_trailing_newline($this->tmpFile), 'an already-terminated file must report no change');
+		$this->assertSame("a\nb\n", file_get_contents($this->tmpFile), 'content must be byte-identical -- no double newline');
+	}
+
+	public function testEmptyFileIsUntouched(): void
+	{
+		file_put_contents($this->tmpFile, '');
+		$this->assertFalse(pfb_ensure_trailing_newline($this->tmpFile), 'an empty file has nothing to weld -- must not gain a spurious blank line');
+		$this->assertSame('', file_get_contents($this->tmpFile));
+	}
+
+	public function testMissingPathReturnsFalseWithoutError(): void
+	{
+		$missing = $this->tmpFile . '-does-not-exist';
+		$this->assertFalse(pfb_ensure_trailing_newline($missing));
+	}
+
+	public function testDirectoryPathReturnsFalseWithoutError(): void
+	{
+		// Probed: fopen(dir, 'rb') succeeds and fseek(-1, SEEK_END) even returns 0,
+		// but fopen(dir, 'ab') fails -- the append branch is the real guard here.
+		$dir = sys_get_temp_dir() . '/pfb_ensure_nl_dir_' . uniqid();
+		mkdir($dir);
+		try {
+			$this->assertFalse(pfb_ensure_trailing_newline($dir), 'a directory must never be written to');
+		} finally {
+			rmdir($dir);
+		}
+	}
+
+	public function testLoneNewlineByteIsUntouched(): void
+	{
+		file_put_contents($this->tmpFile, "\n");
+		$this->assertFalse(pfb_ensure_trailing_newline($this->tmpFile));
+		$this->assertSame("\n", file_get_contents($this->tmpFile));
+	}
+}

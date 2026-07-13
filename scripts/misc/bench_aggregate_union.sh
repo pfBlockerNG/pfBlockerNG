@@ -122,15 +122,17 @@ for fh in fhs:
 print(f"      wrote {members} member files, {n} IPv4 + {m} IPv6 lines")
 PY
 
-input_count="$(cat "${memberdir}"/deny_*.txt | grep -c ^)"
+# issue #1263: awk 1, not cat -- an unterminated member file must not weld into its neighbour.
+input_count="$(awk 1 "${memberdir}"/deny_*.txt | grep -c ^)"
 echo "      total input lines (with duplicates/overlap): ${input_count}"
 echo
 
-# --- 2. union: cat -> sort -u (the dedup half) -------------------------------
-echo "[2/4] cat members -> sort -u ..."
+# --- 2. union: awk 1 -> sort -u (the dedup half) ------------------------------
+echo "[2/4] concat members -> sort -u ..."
 union_sorted="${workdir}/union.sorted"
-# `sort` is a base utility (bare per CLAUDE.md shell rules).
-run_timed sh -c "cat \"${memberdir}\"/deny_*.txt | LC_ALL=C sort -u > \"${union_sorted}\""
+# `sort`/`awk` are base utilities (bare per CLAUDE.md shell rules).
+# issue #1263: awk 1, not cat -- an unterminated member file must not weld into its neighbour.
+run_timed sh -c "awk 1 \"${memberdir}\"/deny_*.txt | LC_ALL=C sort -u > \"${union_sorted}\""
 sortu_wall="$(awk '/^WALL/{w=$2} END{print w}' "${time_log}")"
 sortu_rss="$(awk '/^MAXRSS_BYTES/{r=$2} END{print r}' "${time_log}")"
 sortu_count="$(grep -c ^ "${union_sorted}")"

@@ -1090,6 +1090,34 @@ function pfb_utf16_transcode_file(string $path): bool {
 	return TRUE;
 }
 
+// issue #1263: append '\n' if the stored file's last byte isn't one -- cat
+// concatenates bytes, not records, and welds an unterminated feed's last line
+// onto the next file's first downstream. Only reads the last byte (feeds can
+// be tens of MB). Empty/unreadable file -> FALSE, untouched (nothing to weld).
+function pfb_ensure_trailing_newline(string $path): bool {
+	$fh = @fopen($path, 'rb');
+	if ($fh === FALSE) {
+		return FALSE;
+	}
+	if (@fseek($fh, -1, SEEK_END) !== 0) {
+		fclose($fh);
+		return FALSE;
+	}
+	$last = @fread($fh, 1);
+	fclose($fh);
+	if ($last === "\n") {
+		return FALSE;
+	}
+
+	$ap = @fopen($path, 'ab');
+	if ($ap === FALSE) {
+		return FALSE;
+	}
+	fwrite($ap, "\n");
+	fclose($ap);
+	return TRUE;
+}
+
 // ADR-49: content-sanity gate for a downloaded text feed's first 64-KiB chunk; pinned by
 // PfbTextSanityTest. Reason order (first hit wins): 'nul_bytes' (any NUL byte) >
 // 'html_error_page' (opens as HTML AND no line is blocklist-shaped: an IPv4/IPv6/CIDR
@@ -3300,6 +3328,18 @@ function pfb_count_lines(string $path): ?int {
 	}
 
 	return $lines + ($last_byte === '' || $last_byte === "\n" ? 0 : 1);
+}
+
+// issue #1263: per-file pfb_count_lines() sum over a '*.txt' glob, replacing
+// `cat *.txt | grep -c ^` -- cat welds an unterminated file's last line onto
+// the next file's first, undercounting; summing per-file counts cannot weld.
+// Missing dir / empty glob -> 0, never a warning or TypeError.
+function pfb_dnsbl_feed_count(string $dir): int {
+	$total = 0;
+	foreach ((glob("{$dir}/*.txt") ?: array()) as $file) {
+		$total += pfb_count_lines($file) ?? 0;
+	}
+	return $total;
 }
 
 // issue #1109/#1258: ONE unified high-water guard for both pfb_log_mgmt()
@@ -9395,7 +9435,10 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython) {
 		restart_service('pfb_dnsbl');
 	}
 
-	$dnsbl_cnt = exec("/bin/cat {$pfb['dnsdir']}/*.txt 2>/dev/null | {$pfb['grep']} -c ^");
+	// issue #1263: per-file sum, not cat|grep -c ^ -- differs from the old count
+	// when a stored feed lacks a trailing newline (the old command welded two
+	// records into one and undercounted); the sum is the correct total.
+	$dnsbl_cnt = pfb_dnsbl_feed_count($pfb['dnsdir']);
 
 	// ADR-06: pfb_py_count is now Python-emitted and means the LOADED entry total
 	// (len(dataDB)+len(zoneDB)), written by pfb_unbound.py dnsbl_emit_count(). The
@@ -11831,6 +11874,12 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 			// change-probe's wire hash and re-ingest the feed every cron. No-op (FALSE,
 			// file untouched) for every feed that isn't UTF-16/32-BOM-marked.
 			pfb_utf16_transcode_file("{$orig_download}");
+
+			// issue #1263: guarantee a trailing newline on the STORED .orig -- after
+			// transcode (operates on final bytes) and after the hash write (ADR-42
+			// digest must stay over the untouched wire/raw body, same reasoning as
+			// the transcode-ordering comment above).
+			pfb_ensure_trailing_newline("{$orig_download}");
 
 			// Process Emerging Threats IQRisk if required
 			if (strpos($list_url, 'iprepdata.txt') !== FALSE) {
