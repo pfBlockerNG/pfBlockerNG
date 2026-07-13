@@ -3256,28 +3256,27 @@ function pfb_log_age_trim_needed(string $path, int $agedays, string $logtype, in
 	return $ts < (time() - $window);
 }
 
-// issue #1109: pure PHP line count (no exec()/wc -- off-appliance-testable, no
-// per-tick process spawn across 11 log types). Fail (unopenable/short read) ->
-// PHP_INT_MAX so the high-water guard FIRES -- same fail-open direction as #1052.
-// Counts a line as tail(1) does (ADR-60 S8 item 5): an unterminated trailing
-// chunk IS a line, so track the final byte of the read we already do.
-function pfb_log_line_count(string $path): int {
-	$fh = @fopen($path, 'r');
+// issue #1257: ONE line-count primitive, replacing two counters that disagreed.
+// Streamed, tail(1)/grep -c ^ semantics: an unterminated final line IS a line.
+// NULL = could not count reliably -- the CALLER picks the safe fail direction.
+function pfb_count_lines(string $path): ?int {
+	$fh = @fopen($path, 'rb');
 	if ($fh === FALSE) {
-		return PHP_INT_MAX;
+		return NULL;
 	}
 
 	$lines = 0;
 	$last_byte = '';
-	while (($chunk = fread($fh, 1048576)) !== FALSE && $chunk !== '') {
+	while (($chunk = @fread($fh, 1048576)) !== FALSE && $chunk !== '') {
 		$lines += substr_count($chunk, "\n");
 		$last_byte = $chunk[-1];
 	}
+	$read_failed = $chunk === FALSE;
 	$ok = feof($fh);
 	fclose($fh);
 
-	if (!$ok) {
-		return PHP_INT_MAX;
+	if ($read_failed || !$ok) {
+		return NULL;
 	}
 
 	return $lines + ($last_byte === '' || $last_byte === "\n" ? 0 : 1);
@@ -3289,7 +3288,8 @@ function pfb_log_line_count(string $path): int {
 function pfb_log_trim_needed(int|string $logmax, int $agedays, string $path, string $logtype, int $margin_pct): bool {
 	if ($logmax !== 'nolimit') {
 		$high_water = (float) $logmax * (1.0 + ($margin_pct / 100.0));
-		if ((float) pfb_log_line_count($path) > $high_water) {
+		// fail HIGH: a count failure must never silently skip a trim that IS needed.
+		if ((float) (pfb_count_lines($path) ?? PHP_INT_MAX) > $high_water) {
 			return TRUE;
 		}
 	}
@@ -5292,33 +5292,6 @@ function pfb_ip_recompute_seed_snapshot(string $header, string $snapdir, string 
 	return $snap;
 }
 
-// Streamed line count matching `grep -c ^` (every line, blank ones included, and an
-// unterminated final line still counts -- @file()'s in-memory array did the same, this just
-// avoids materializing the whole file as an array (issue #1084 review: ~68MB peak at 1M lines).
-function pfb_ip_recompute_count_lines(string $path): int {
-	$fh = @fopen($path, 'rb');
-	if ($fh === FALSE) {
-		return 0;
-	}
-	$count    = 0;
-	$sawByte  = FALSE;
-	$lastByte = '';
-	while (!feof($fh)) {
-		$chunk = fread($fh, 1 << 20);
-		if ($chunk === FALSE || $chunk === '') {
-			break;
-		}
-		$sawByte = TRUE;
-		$count  += substr_count($chunk, "\n");
-		$lastByte = substr($chunk, -1);
-	}
-	fclose($fh);
-	if ($sawByte && $lastByte !== "\n") {
-		$count++;
-	}
-	return $count;
-}
-
 // Persist the pristine post-preprocessing snapshot pfb_recompute() reads, plus the
 // '.aggcount' original-count sidecar closingprocess() sums for the FINAL Processing report --
 // both used to live inside the now-retired duplicate() (issue #1084).
@@ -5327,7 +5300,8 @@ function pfb_ip_recompute_write_snapshot(string $src, string $header, string $sn
 		return;
 	}
 	@copy($src, pfb_ip_recompute_snapshot_path($snapdir, $header));
-	@file_put_contents("{$origdir}/{$header}.aggcount", pfb_ip_recompute_count_lines($src) . "\n", LOCK_EX);
+	// fail to 0: this is a report/sidecar count, not a retention guard.
+	@file_put_contents("{$origdir}/{$header}.aggcount", (pfb_count_lines($src) ?? 0) . "\n", LOCK_EX);
 }
 
 // Drop a header's recompute snapshot (+ aggcount sidecar) on removal/download-failure -- else
