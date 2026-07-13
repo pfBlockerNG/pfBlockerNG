@@ -238,8 +238,23 @@ def test_dnsbl_alias_bad_name_rejected_leaves_config_unchanged(
 _IPSETTINGS_CFG = "installedpackages/pfblockerngipsettings/config/0"
 
 
-def _set_maxmind_test_creds(vm: helpers.SmokeVM) -> tuple[str, str]:
-    """Seed placeholder MaxMind key/account; return the ORIGINAL (key, account) to restore.
+def _capture_maxmind_creds(vm: helpers.SmokeVM) -> tuple[str, str]:
+    """Read the current MaxMind (key, account) so a test can restore them (read-only).
+
+    Called BEFORE the test's ``try:`` so the values are captured without any
+    write; the placeholder seed (:func:`_seed_maxmind_test_creds`) then runs
+    INSIDE the ``try:`` whose ``finally`` restores these -- so even a seed that
+    writes then fails its confirmation cannot leak placeholder creds onto the box
+    (mirrors the ``_mk_alias`` inside-try convention below).
+    """
+    return (
+        helpers.config_get(vm, f"{_IPSETTINGS_CFG}/maxmind_key"),
+        helpers.config_get(vm, f"{_IPSETTINGS_CFG}/maxmind_account"),
+    )
+
+
+def _seed_maxmind_test_creds(vm: helpers.SmokeVM) -> None:
+    """Seed placeholder MaxMind key/account (write only; capture originals first).
 
     A geoip-format row unconditionally runs pfb_maxmind_credential_notice()
     (category_edit.php ~line 604) regardless of url-N content; on a box with
@@ -247,8 +262,6 @@ def _set_maxmind_test_creds(vm: helpers.SmokeVM) -> tuple[str, str]:
     would confound the url-N guard tests below. The values need not be real --
     the check only tests non-emptiness, never calls the MaxMind API.
     """
-    orig_key = helpers.config_get(vm, f"{_IPSETTINGS_CFG}/maxmind_key")
-    orig_account = helpers.config_get(vm, f"{_IPSETTINGS_CFG}/maxmind_account")
     snippet = (
         f"config_set_path({helpers._php_str(f'{_IPSETTINGS_CFG}/maxmind_key')}, 'smoketestkey');\n"
         f"config_set_path({helpers._php_str(f'{_IPSETTINGS_CFG}/maxmind_account')}, 'smoketestaccount');\n"
@@ -257,12 +270,11 @@ def _set_maxmind_test_creds(vm: helpers.SmokeVM) -> tuple[str, str]:
     )
     result = helpers.php_eval(vm, snippet, timeout=SAVE_TIMEOUT)
     if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(f"_set_maxmind_test_creds failed: rc={result.returncode} {result.stdout!r}")
-    return orig_key, orig_account
+        raise RuntimeError(f"_seed_maxmind_test_creds failed: rc={result.returncode} {result.stdout!r}")
 
 
 def _restore_maxmind_creds(vm: helpers.SmokeVM, key: str, account: str) -> None:
-    """Restore the MaxMind key/account values captured by :func:`_set_maxmind_test_creds`."""
+    """Restore the MaxMind key/account values captured by :func:`_capture_maxmind_creds`."""
     snippet = (
         f"config_set_path({helpers._php_str(f'{_IPSETTINGS_CFG}/maxmind_key')}, {helpers._php_str(key)});\n"
         f"config_set_path({helpers._php_str(f'{_IPSETTINGS_CFG}/maxmind_account')}, {helpers._php_str(account)});\n"
@@ -298,8 +310,9 @@ def test_dnsbl_url_geoip_breakout_char_rejected_leaves_config_unchanged(
     vm = smoke_vm
     rowid = _free_rowid(vm, CFG_DNSBL)
     cfg = f"{CFG_DNSBL}/{rowid}/row/0/url"
-    orig_key, orig_account = _set_maxmind_test_creds(vm)
+    orig_key, orig_account = _capture_maxmind_creds(vm)
     try:
+        _seed_maxmind_test_creds(vm)
         # GOOD: a valid geoip row persists (precondition).
         _post_form(
             webui,
@@ -353,8 +366,9 @@ def test_dnsbl_url_geoip_value_persists_byte_identical(
     vm = smoke_vm
     rowid = _free_rowid(vm, CFG_DNSBL)
     cfg = f"{CFG_DNSBL}/{rowid}/row/0/url"
-    orig_key, orig_account = _set_maxmind_test_creds(vm)
+    orig_key, orig_account = _capture_maxmind_creds(vm)
     try:
+        _seed_maxmind_test_creds(vm)
         # BEFORE: free slot, no source row url stored (the save must CAUSE it).
         assert helpers.config_get(vm, cfg) == "", f"rowid {rowid} not free (row/0/url already set)"
 
