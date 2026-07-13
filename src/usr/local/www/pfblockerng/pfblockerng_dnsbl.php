@@ -1037,15 +1037,15 @@ $dnsbl_text = 'This is an <strong>Advanced process</strong> to determine if all 
 		To exclude a TLD/Domain from the TLD process, add the TLD/Domain to the <strong>TLD Exclusion</strong> custom list:<br />
 		&#8226&emsp;This only excludes the domain from the TLD process, it doesn\'t whitelist the domain.<br />
 		&#8226&emsp;Only the specific Sub-Domains/Domains listed in the DNSBL Feeds will be blocked.<br />
-		&#8226&emsp;A Force Reload - DNSBL, is required after manually adding to the TLD Exclusion<br /><br />
+		&#8226&emsp;Changes to the TLD Exclusion take effect on the next DNSBL update.<br /><br />
 		<strong>Note:</strong>
-		&emsp;Whitelisting a "sub-Domain" for a TLD Blocked "Domain" in the <strong>Custom Domain Whitelist</strong>
-		will not whitelist a TLD Wildcard Blocked domain!<br />
-		&emsp;&emsp;&emsp;&emsp;Either add the domain to the TLD Exclusion, or wildcard Whitelist the whole domain.<br /><br />
+		&emsp;A specific sub-Domain added to the <strong>Custom Domain Whitelist</strong> is exempted from a TLD
+		Wildcard Blocked domain (that exact name resolves).<br />
+		&emsp;&emsp;&emsp;&emsp;To exempt the whole domain (all sub-Domains), add it to the TLD Exclusion, or add a wildcard Whitelist entry for the domain.<br /><br />
 
 		<strong>TLD Blacklist</strong>, can be used to block whole TLDs. &emsp;IE: <strong>xyz</strong><br />
 
-		When Enabling/Disabling this option, a <strong>Force Reload - DNSBL</strong> is required.<br /><br />
+		Enabling or disabling this option takes effect on the next DNSBL update.<br /><br />
 
 	</div>';
 
