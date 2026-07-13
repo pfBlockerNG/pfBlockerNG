@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -11,6 +12,11 @@ use PHPUnit\Framework\TestCase;
  * probe to also gate the numeric-cap branch via pfb_log_trim_needed().
  * $margin_pct widens the cutoff window; margin=0 is byte-identical to the
  * pre-#1109 formula, so every #1052 case is re-pinned here at margin=0.
+ *
+ * issue #1258: the margin parameter is now a RAW value, parsed internally via
+ * pfb_log_trim_margin_pct() -- an out-of-range/hostile margin is no longer
+ * constructible. The hostile rows below prove no caller, present or future,
+ * can hand this guard an unclamped margin.
  */
 #[CoversFunction('pfb_log_age_trim_needed')]
 final class LogAgeTrimNeededTest extends TestCase
@@ -32,6 +38,28 @@ final class LogAgeTrimNeededTest extends TestCase
 	private function daysAgo(int $days): string
 	{
 		return date('Y-m-d H:i:s', time() - ($days * 86400));
+	}
+
+	private function secondsAgo(int $seconds): string
+	{
+		return date('Y-m-d H:i:s', time() - $seconds);
+	}
+
+	/** Runs $fn under a handler that records E_WARNING instead of printing it; fails the test if any fired. */
+	private function assertNoPhpWarning(callable $fn): mixed
+	{
+		$warnings = [];
+		set_error_handler(static function (int $errno, string $errstr) use (&$warnings): bool {
+			$warnings[] = $errstr;
+			return TRUE;
+		}, E_WARNING);
+		try {
+			$result = $fn();
+		} finally {
+			restore_error_handler();
+		}
+		$this->assertSame([], $warnings, 'must not trigger a PHP warning: ' . implode('; ', $warnings));
+		return $result;
 	}
 
 	/** margin=0, oldest line NOT expired -- identical to #1052 today. */
@@ -103,6 +131,67 @@ final class LogAgeTrimNeededTest extends TestCase
 		$this->assertTrue(
 			pfb_log_age_trim_needed($missing, 10, 'log', 50),
 			'an unopenable path must fall through to TRUE'
+		);
+	}
+
+	// -----------------------------------------------------------------------
+	// issue #1258 hostile rows -- an out-of-range/hostile raw margin must be
+	// unconstructible: no warning, no TypeError, resolves via the ONE clamp.
+	// -----------------------------------------------------------------------
+
+	/**
+	 * At pfb_log_max_days()'s own 3650000-day clamp, an unclamped PHP_INT_MAX
+	 * margin overflows the window arithmetic to a float, and (int) of an
+	 * unrepresentable float is 0 -- a same-second cutoff that wipes the log.
+	 * Must instead clamp to 1000%, giving a huge (never-expiring) window.
+	 */
+	public function testHostilePhpIntMaxRawMarginNeverCollapsesWindowToZero(): void
+	{
+		file_put_contents($this->tmpFile, $this->daysAgo(100) . " x\n");
+		$result = $this->assertNoPhpWarning(
+			fn () => pfb_log_age_trim_needed($this->tmpFile, 3650000, 'log', PHP_INT_MAX)
+		);
+		$this->assertFalse($result, 'PHP_INT_MAX margin must clamp to 1000%, never collapse the window to 0');
+	}
+
+	public static function hostileOversizedMarginRows(): array
+	{
+		// agedays=10, margin clamps to 1000% -> window = 10*86400*11 = 110 days.
+		return [
+			'within clamped 110-day window (109d)' => [109 * 86400, FALSE],
+			'beyond clamped 110-day window (111d)'  => [111 * 86400, TRUE],
+		];
+	}
+
+	/** A huge-but-numeric string margin must clamp to the SAME 1000% boundary as the literal. */
+	#[DataProvider('hostileOversizedMarginRows')]
+	public function testHostileOversizedStringRawMarginClampsToBoundary(int $secondsAgo, bool $expected): void
+	{
+		file_put_contents($this->tmpFile, $this->secondsAgo($secondsAgo) . " x\n");
+		$this->assertSame($expected, pfb_log_age_trim_needed($this->tmpFile, 10, 'log', '999999999'));
+	}
+
+	/**
+	 * -5 must resolve to margin=0 (10-day exact window), not a literal
+	 * negative margin (window=820800s/~9.5d) that would shrink the window
+	 * and put a false-expired verdict on a line that is genuinely in range.
+	 */
+	public function testHostileNegativeRawMarginResolvesToZeroNotLiteralNegativeMargin(): void
+	{
+		file_put_contents($this->tmpFile, $this->secondsAgo(850000) . " x\n");
+		$this->assertFalse(
+			pfb_log_age_trim_needed($this->tmpFile, 10, 'log', -5),
+			'-5 must resolve to margin=0, not a literal negative margin that shrinks the window'
+		);
+	}
+
+	/** #1143 TypeError class: an array raw margin must fall back to 0 (is_scalar guard), never TypeError. */
+	public function testHostileArrayRawMarginFallsBackToZeroNotTypeError(): void
+	{
+		file_put_contents($this->tmpFile, $this->daysAgo(15) . " x\n");
+		$this->assertTrue(
+			pfb_log_age_trim_needed($this->tmpFile, 10, 'log', ['50']),
+			'an array raw margin must fall back to 0, not TypeError'
 		);
 	}
 }

@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -15,6 +16,10 @@ use PHPUnit\Framework\TestCase;
  * clamp, so $logmax can be an absurd int -- intdiv() throws TypeError on a
  * float argument, and integer overflow promotes to float in PHP. The
  * mandatory hostile row below pins that this never crashes.
+ *
+ * issue #1258: the margin parameter is now a RAW value, parsed internally via
+ * pfb_log_trim_margin_pct() -- an out-of-range/hostile margin is no longer
+ * constructible, including via the internal call to pfb_log_age_trim_needed().
  */
 #[CoversFunction('pfb_log_trim_needed')]
 final class LogTrimNeededTest extends TestCase
@@ -36,6 +41,23 @@ final class LogTrimNeededTest extends TestCase
 	private function daysAgo(int $days): string
 	{
 		return date('Y-m-d H:i:s', time() - ($days * 86400));
+	}
+
+	/** Runs $fn under a handler that records E_WARNING instead of printing it; fails the test if any fired. */
+	private function assertNoPhpWarning(callable $fn): mixed
+	{
+		$warnings = [];
+		set_error_handler(static function (int $errno, string $errstr) use (&$warnings): bool {
+			$warnings[] = $errstr;
+			return TRUE;
+		}, E_WARNING);
+		try {
+			$result = $fn();
+		} finally {
+			restore_error_handler();
+		}
+		$this->assertSame([], $warnings, 'must not trigger a PHP warning: ' . implode('; ', $warnings));
+		return $result;
 	}
 
 	private function seedLines(int $count): void
@@ -241,5 +263,64 @@ final class LogTrimNeededTest extends TestCase
 			pfb_log_trim_needed(10, 0, $missing, 'log', 0),
 			'an unopenable log path with a line cap active must fire the trim guard, never skip it'
 		);
+	}
+
+	// -----------------------------------------------------------------------
+	// issue #1258 hostile rows -- an out-of-range/hostile raw margin must be
+	// unconstructible: no warning, no TypeError, resolves via the ONE clamp.
+	// -----------------------------------------------------------------------
+
+	/**
+	 * PHP_INT_MAX must clamp through the internal pfb_log_age_trim_needed()
+	 * call too -- 'nolimit' isolates the age branch so the line-cap branch
+	 * never short-circuits the propagation.
+	 */
+	public function testHostilePhpIntMaxRawMarginPropagatesClampIntoInternalAgeCall(): void
+	{
+		file_put_contents($this->tmpFile, $this->daysAgo(100) . " x\n");
+		$result = $this->assertNoPhpWarning(
+			fn () => pfb_log_trim_needed('nolimit', 3650000, $this->tmpFile, 'log', PHP_INT_MAX)
+		);
+		$this->assertFalse($result, 'PHP_INT_MAX margin must clamp to 1000% inside the internal age call too');
+	}
+
+	/**
+	 * -5 must resolve to margin=0 (exact high-water=cap), not a literal
+	 * negative margin (high_water=9.5) that fires the guard early.
+	 */
+	public function testHostileNegativeRawMarginResolvesToZeroNotLiteralNegativeMargin(): void
+	{
+		$this->seedLines(10); // exactly at cap
+		$this->assertFalse(
+			pfb_log_trim_needed(10, 0, $this->tmpFile, 'log', -5),
+			'-5 must resolve to margin=0, not a literal negative margin that lowers the high-water'
+		);
+	}
+
+	/** #1143 TypeError class: an array raw margin must fall back to 0 (is_scalar guard), never TypeError. */
+	public function testHostileArrayRawMarginFallsBackToZeroNotTypeError(): void
+	{
+		$this->seedLines(12); // over a 10-line cap even at margin=0
+		$this->assertTrue(
+			pfb_log_trim_needed(10, 0, $this->tmpFile, 'log', ['50']),
+			'an array raw margin must fall back to 0, not TypeError'
+		);
+	}
+
+	public static function hostileOversizedMarginHighWaterRows(): array
+	{
+		// logmax=10, margin clamps to 1000% -> high_water = 10*11 = 110.
+		return [
+			'within clamped 110 high-water (109 lines)' => [109, FALSE],
+			'beyond clamped 110 high-water (111 lines)'  => [111, TRUE],
+		];
+	}
+
+	/** A huge-but-numeric string margin must clamp to the SAME 1000% boundary as the literal. */
+	#[DataProvider('hostileOversizedMarginHighWaterRows')]
+	public function testHostileOversizedStringRawMarginClampsHighWaterToBoundary(int $lineCount, bool $expected): void
+	{
+		$this->seedLines($lineCount);
+		$this->assertSame($expected, pfb_log_trim_needed(10, 0, $this->tmpFile, 'log', '999999999'));
 	}
 }
