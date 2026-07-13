@@ -1,5 +1,5 @@
 #!/bin/sh
-# scripts/claude-bash-guard.sh -- PreToolUse Bash guard: deny 4 agent footguns.
+# scripts/claude-bash-guard.sh -- PreToolUse Bash guard: deny 5 agent footguns.
 #
 # Wired in .claude/settings.json as a PreToolUse hook matching the Bash tool.
 # Denies, at the TOOL layer (before the command ever runs), five operations an
@@ -35,10 +35,15 @@
 #             unrelated fix, silently redirected a rebase+push at the wrong
 #             repo; the rebase reported "up to date" and the push was a
 #             silent no-op, hiding that the real branch was a commit
-#             behind). DENIES when neither `git -C <path>` nor `cd <path>`
-#             names a target anywhere in the payload (E1), and DENIES when
-#             the named target IS the primary checkout -- $CLAUDE_PROJECT_DIR,
-#             exported into this hook by .claude/settings.json (E2) --
+#             behind). A target counts ONLY where it actually GOVERNS the
+#             verb: `git -C <path> <verb>` in the SAME segment, or a `cd`
+#             that is the FIRST command of the call. DENIES when neither
+#             holds (E1) -- a cd found anywhere else does not count, because
+#             a subshell cd does not persist to its siblings and a cd in a
+#             commit MESSAGE is indistinguishable from a real one once quotes
+#             are stripped. DENIES when the named target IS the primary
+#             checkout -- $CLAUDE_PROJECT_DIR, exported by .claude/settings.json
+#             (E2) --
 #             CLAUDE.md "Worktrees": all repository work happens in a
 #             dedicated worktree, never there. `git worktree add`/`remove`
 #             are exempt from Rule E entirely, and need no special-case code
@@ -46,11 +51,11 @@
 #             verbs above, so a `git worktree ...` segment never matches the
 #             verb check that would trigger E1/E2 in the first place.
 #
-# Rule D runs first (whole-payload). Rule E's target checks (E1: is a
-# `-C`/`cd` target named anywhere; E2: does that target equal the primary
-# checkout) are ALSO whole-payload and precomputed once, right after Rule D,
-# for the same reason Rule D itself is whole-payload -- see THE WHOLE-PAYLOAD
-# CRUX below. Only Rule E's MUTATING-VERB detection runs per-segment. Then
+# Rule D runs first (whole-payload). Rule E is split by SCOPE, which is the
+# whole point: a leading `cd` governs every later segment, so that check (and
+# E2's primary-checkout check) is whole-payload and precomputed once; a
+# `git -C <path>` governs only its own command, so that check -- and the
+# mutating-verb detection it pairs with -- runs per-segment. Then
 # the per-segment rules: segments are scanned left to right (see MATCHING
 # below); within one segment, A, then B, then C, then E's verb check against
 # the precomputed E1/E2 booleans. First matching pair wins.
@@ -317,14 +322,36 @@ _bare_force_after_last_lease() {
 # documented false positive errs toward denying). Only the literal `command:` scaffold
 # counts, which normalization leaves intact (`"command":"cd ...` -> `command:cd ...`).
 # Pinned by E-h6/E-h7/E-h8/E-h10.
-_E_TARGET_LEAD='[;|&({]'
+# A target counts ONLY where it actually GOVERNS the verb. "A cd/-C appears
+# somewhere in the payload" is not that, and every attempt to approximate it with a
+# boundary class leaked: quote-stripping makes data and operators identical, so a
+# commit MESSAGE could forge whatever character the class trusted -- first a bare
+# space, then a bare `:` (`fix: cd /tmp`), then the `command:` token itself. Each
+# leak failed OPEN, the one direction this file never accepts. So the class is gone;
+# only two shapes name a target, and neither is forgeable from an argument value:
+#
+#   1. `git -C <path> <verb>` -- the target sits in the SAME segment as the verb it
+#      governs, adjacent to it (_seg_has_inplace_target).
+#   2. A `cd` that is the FIRST command of the payload (_has_leading_cd), anchored to
+#      the JSON scaffold. Only a leading cd governs the later top-level commands.
+#
+# A `cd` anywhere else does NOT count, and that is deliberate, not an approximation:
+#   * `(cd /wt) && git commit` -- a subshell cd does NOT persist to its siblings
+#     (`sh -c '(cd /tmp); pwd'` prints the ORIGINAL cwd), so the commit really would
+#     run against the ambient cwd. Trusting it would have re-admitted the exact issue
+#     #1262 shape: `(cd /wt && git fetch); git rebase … && git push --force-with-lease`.
+#   * `git add -A && cd /wt && git commit` -- legal, and denied. Put the cd first.
+# Pinned by E-h6..E-h10, E-h15, E-h16.
+_has_leading_cd() {
+	printf '%s' "$norm" | grep -Eq 'tool_input:[{]command:[[:space:]]*cd '
+}
 
-# _has_explicit_target -- true iff $norm (the WHOLE payload) names a target
-# via `git -C ` or `cd ` IN COMMAND POSITION (see _E_TARGET_LEAD above).
-# Whole-payload, not $seg: the target can sit in a different segment than the
-# verb it covers (E-b3/E-b4).
-_has_explicit_target() {
-	printf '%s' "$norm" | grep -Eq "(^|command:|${_E_TARGET_LEAD})[[:space:]]*(git -C |cd )"
+# The `-C` must be ADJACENT to the verb it governs, never merely present in the
+# segment: a message reading `-m "note: git -C x is nice"` contains `git -C ` and
+# would otherwise forge an in-place target for an unrelated bare verb. Defined
+# after _E_VERBS (below), which it shares -- one verb list, never two that drift.
+_seg_has_inplace_target() {
+	printf '%s' "$seg" | grep -Eq "git -C [^ ]+ ${_E_VERBS}${_E_VERB_END}"
 }
 
 # _TARGET_SEP -- trailing-boundary glob class for _targets_primary_checkout:
@@ -333,14 +360,21 @@ _has_explicit_target() {
 # $CLAUDE_PROJECT_DIR's `/` and `.` never need escaping.
 _TARGET_SEP='[ &;|(){}<>,]'
 
-# _targets_primary_checkout -- true iff $norm names $CLAUDE_PROJECT_DIR
-# itself (never a subdirectory or a sibling sharing its prefix) as a `cd `/
-# `git -C ` target. Unset CLAUDE_PROJECT_DIR -> false, never a crash (fail-open
-# under set -u): E2 has nothing to compare against.
+# _targets_primary_checkout -- true iff $norm names $CLAUDE_PROJECT_DIR ITSELF
+# (never a subdirectory, never a sibling sharing its prefix) as a `cd `/`git -C `
+# target. Unset CLAUDE_PROJECT_DIR -> false, never a crash (fail-open under set -u).
+#
+# The trailing slash is matched explicitly, and is not cosmetic: shell tab-completion
+# APPENDS one, and without this `cd $PROJ/ && git commit` reads as a subdirectory --
+# the single easiest way to defeat E2 entirely. `$PROJ`, `$PROJ/`, and `$PROJ/sub`
+# must each be classified correctly (E-h17); the `%/` strip normalizes a
+# CLAUDE_PROJECT_DIR that itself carries one.
 _targets_primary_checkout() {
 	[ -n "${CLAUDE_PROJECT_DIR:-}" ] || return 1
+	_proj="${CLAUDE_PROJECT_DIR%/}"
 	case "${norm} " in
-	*"cd ${CLAUDE_PROJECT_DIR}"${_TARGET_SEP}* | *"git -C ${CLAUDE_PROJECT_DIR}"${_TARGET_SEP}*) return 0 ;;
+	*"cd ${_proj}"${_TARGET_SEP}* | *"cd ${_proj}/"${_TARGET_SEP}* \
+	| *"git -C ${_proj}"${_TARGET_SEP}* | *"git -C ${_proj}/"${_TARGET_SEP}*) return 0 ;;
 	esac
 	return 1
 }
@@ -359,9 +393,18 @@ _targets_primary_checkout() {
 # is denied by `merge`, and `git commit-tree` by `commit` (E-h9). Excluding `-`
 # is what distinguishes them; a real verb is followed by a space or the payload's
 # closing brace, never by a hyphen.
+#
+# The hyphenated MUTATORS must therefore be named in full, or that same boundary
+# waves them through: `checkout-index` overwrites the working tree, `update-ref`
+# and `symbolic-ref` move refs, `update-index`/`read-tree` rewrite the index --
+# each as destructive as the porcelain verbs, and each against whatever repo the
+# cwd happens to be. POSIX grep -E is leftmost-longest, so listing them beside
+# their own prefixes resolves to the longer match (E-h11).
+_E_VERBS='(commit|push|rebase|merge|reset|checkout|switch|cherry-pick|revert|stash|am|clean|apply|checkout-index|update-ref|update-index|symbolic-ref|read-tree|merge-file|merge-index|merge-one-file)'
+_E_VERB_END='([^a-z-]|$)'
+
 _seg_has_mutating_verb() {
-	printf '%s' "$seg" \
-		| grep -Eq 'git (-C [^ ]+ )?(commit|push|rebase|merge|reset|checkout|switch|cherry-pick|revert|stash|am|clean)([^a-z-]|$)'
+	printf '%s' "$seg" | grep -Eq "git (-C [^ ]+ )?${_E_VERBS}${_E_VERB_END}"
 }
 
 # _deny <reason> -- print the PreToolUse deny JSON and exit 0 (exit 0 is
@@ -380,9 +423,10 @@ if printf '%s' "$norm_bg" | grep -Eq 'wait-[a-z0-9_-]*\.sh.*&'; then
 	_deny "a wait script backgrounded with & is invisible to the harness: no completion notification fires, so the turn stalls while the wait has already finished (issue #1225). Launch it as its OWN Bash call with run_in_background: true -- backgrounding is a property of the tool call, not of shell syntax (CLAUDE.md No orphaned waits)"
 fi
 
-# Rule E's target checks (whole-payload, precomputed once -- see THE
-# WHOLE-PAYLOAD CRUX above; only the verb check below is per-segment).
-if _has_explicit_target; then _e_has_target=1; else _e_has_target=0; fi
+# Rule E's whole-payload facts, precomputed once. The leading-cd check is
+# whole-payload because a leading cd governs every later segment; the in-place
+# `-C` check is per-segment (below) because it governs only its own command.
+if _has_leading_cd; then _e_leading_cd=1; else _e_leading_cd=0; fi
 if _targets_primary_checkout; then _e_targets_primary=1; else _e_targets_primary=0; fi
 
 # Walk $segs one segment at a time, applying rules A, B, C, and E's
@@ -407,8 +451,8 @@ while IFS= read -r seg; do
 	fi
 
 	if _seg_has_mutating_verb; then
-		if [ "$_e_has_target" = 0 ]; then
-			_deny "a mutating git command depends on the ambient working directory, which this hook cannot see: name the target explicitly with git -C <path> or cd <path> first (CLAUDE.md Worktrees, issue #1262)"
+		if [ "$_e_leading_cd" = 0 ] && ! _seg_has_inplace_target; then
+			_deny "a mutating git command depends on the ambient working directory, which this hook cannot see: name the target with git -C <path>, or put a cd <path> FIRST in the call (CLAUDE.md Worktrees, issue #1262)"
 		fi
 		if [ "$_e_targets_primary" = 1 ]; then
 			_deny "the named target is the primary checkout: every AI agent must do repository work in its own dedicated worktree, never the primary checkout (CLAUDE.md Worktrees)"

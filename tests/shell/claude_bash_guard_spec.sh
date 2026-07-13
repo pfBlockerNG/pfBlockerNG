@@ -934,6 +934,15 @@ Describe 'claude-bash-guard.sh'
         The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
       End
 
+      It 'E-c1b: a TRAILING SLASH on the primary checkout must not defeat E2 -> DENY'
+        # Shell tab-completion appends the slash, so without this it is the single
+        # easiest way to run a mutating command straight in the primary checkout.
+        Data "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cd $PROJ/ && git commit -m x\"}}"
+        When run script "$GUARD"
+        The status should be success
+        The output should include '"permissionDecision":"deny"'
+      End
+
       It 'E-c2: git -C $PROJ push -> DENY'
         Data "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C $PROJ push\"}}"
         When run script "$GUARD"
@@ -1116,7 +1125,7 @@ Describe 'claude-bash-guard.sh'
 
     It 'E-h7: a real target in command position still ALLOWs (the E-h6 boundary is not too tight)'
       Data
-        #|{"tool_name":"Bash","tool_input":{"command":"git add -A && cd /abs/wt && git commit -m x"}}
+        #|{"tool_name":"Bash","tool_input":{"command":"cd /abs/wt && git add -A && git commit -m x"}}
       End
       When run script "$GUARD"
       The status should be success
@@ -1153,6 +1162,79 @@ Describe 'claude-bash-guard.sh'
       When run script "$GUARD"
       The status should be success
       The output should equal ''
+    End
+
+    It 'E-h11: git checkout-index overwrites the working tree -> DENY (the hyphen boundary must not wave it through)'
+      # The [^a-z-] boundary that stops `merge-base` being denied by `merge` would also
+      # wave through the hyphenated MUTATORS, so each is named in full. checkout-index
+      # rewrites the working tree of whatever repo the cwd points at.
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git checkout-index -a -f"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E-h12: git update-ref moves a ref -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git update-ref refs/heads/x abc123"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E-h13: git apply writes the working tree -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git apply p.patch"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E-h14: git commit-tree is read-only plumbing -> ALLOW (the boundary is not too tight)'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git commit-tree abc123"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ''
+    End
+
+    It 'E-h15: a MID-CHAIN cd does not govern a later verb -> DENY (only a leading cd does)'
+      # Deliberate behaviour change: `git add -A && cd /wt && git commit` is legal shell,
+      # but trusting a cd found anywhere in the payload is what let a commit MESSAGE forge
+      # one. Only a cd that is the FIRST command counts. Put the cd first.
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git add -A && cd /abs/wt && git commit -m x"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E-h16: a SUBSHELL cd does not persist to its siblings -> DENY'
+      # `sh -c '(cd /tmp); pwd'` prints the ORIGINAL cwd. Trusting a subshell cd would
+      # re-admit the exact issue #1262 shape with the cd scoped out of the mutating segments.
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"(cd /abs/wt && git fetch); git rebase origin/devel && git push --force-with-lease"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+
+    It 'E-h18: `git -C` inside a MESSAGE must not forge an in-place target -> DENY'
+      # The -C must be adjacent to the verb it governs, never merely present in the segment.
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push origin main -m \"note: git -C x is nice\""}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
     End
   End
 
