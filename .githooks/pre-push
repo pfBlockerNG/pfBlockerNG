@@ -1,11 +1,16 @@
 #!/bin/sh
-# Enforces the release tag scheme before any push reaches the remote.
-# Single source of truth for the scheme: scripts/release-version.sh.
+# Enforces the release tag scheme before any push reaches the remote, and — for
+# agent pushes — force-with-lease semantics by EFFECT (issue #1307).
+# Single source of truth for the tag scheme: scripts/release-version.sh.
 #
 # Rules:
 #   - vX.Y.Z                       -> commit must be reachable from origin/main   (stable)
 #   - vX.Y.Z.alpha.N|.beta.N|.rc.N -> commit on origin/devel but NOT origin/main  (prerelease)
 #   - neither branch, or a malformed version tag -> rejected
+#   - agent (CLAUDECODE=1) branch push rewriting remote history -> allowed only
+#     when the advertised remote oid equals the local remote-tracking ref, i.e.
+#     the history being overwritten was fetched (--force-with-lease's check,
+#     applied to the push's effect regardless of how it was spelled)
 #
 # Enable: git config core.hooksPath .githooks
 
@@ -13,7 +18,10 @@ z40="0000000000000000000000000000000000000000"
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || ROOT="."
 CLASSIFY="${ROOT}/scripts/release-version.sh"
 
-while IFS=' ' read -r local_ref local_sha remote_ref _remote_sha; do
+# Both loops below consume the per-ref update list, so capture stdin once.
+updates=$(cat)
+
+while IFS=' ' read -r _local_ref local_sha remote_ref _remote_sha; do
     # Only inspect tag pushes
     case "$remote_ref" in refs/tags/*) ;; *) continue ;; esac
 
@@ -55,6 +63,33 @@ while IFS=' ' read -r local_ref local_sha remote_ref _remote_sha; do
         printf '%s\n' "$err" | sed 's/^/       /' >&2
         exit 1
     fi
-done
+done <<PFB_TAG_UPDATES
+$updates
+PFB_TAG_UPDATES
+
+# Agent lease-by-effect guard (issue #1307): a branch push whose advertised
+# remote oid is NOT an ancestor of the local oid rewrites remote history; an
+# agent may do that only over history it has fetched (remote oid == the
+# remote-tracking ref). An unknown remote oid fails the ancestor check and,
+# never fetched, the tracking match too -> deny. Humans are untouched.
+if [ "${CLAUDECODE:-}" = "1" ]; then
+    remote_name="${1:-origin}"
+    while IFS=' ' read -r _lref lsha rref rsha; do
+        case "$rref" in refs/heads/*) ;; *) continue ;; esac
+        [ "$lsha" = "$z40" ] && continue   # branch deletion
+        [ "$rsha" = "$z40" ] && continue   # branch creation
+        git merge-base --is-ancestor "$rsha" "$lsha" 2>/dev/null && continue
+        branch="${rref#refs/heads/}"
+        tracking=$(git rev-parse --verify "refs/remotes/${remote_name}/${branch}" 2>/dev/null) || tracking=""
+        if [ "$rsha" != "$tracking" ]; then
+            echo "error: agent force-push over unfetched history of '${branch}' blocked (issue #1307)." >&2
+            echo "       The remote moved past your remote-tracking ref: run 'git fetch ${remote_name}'," >&2
+            echo "       rebase onto the new tip, then push with --force-with-lease." >&2
+            exit 1
+        fi
+    done <<PFB_LEASE_UPDATES
+$updates
+PFB_LEASE_UPDATES
+fi
 
 exit 0
