@@ -41,10 +41,11 @@ const BRIEF_RECORD = {
 
 const HANDOFF = {
   type: 'object',
-  required: ['verdict', 'what_changed', 'commit', 'gates', 'red_green', 'coverage_matrix', 'deviations', 'carry_forward'],
+  required: ['verdict', 'what_changed', 'base_sha', 'commit', 'gates', 'red_green', 'coverage_matrix', 'deviations', 'carry_forward'],
   properties: {
     verdict: { type: 'string', enum: ['DONE', 'DONE-WITH-DEVIATION', 'BLOCKED'] },
     what_changed: { type: 'array', items: { type: 'object', required: ['file', 'why'], properties: { file: { type: 'string' }, why: { type: 'string' } } } },
+    base_sha: { type: 'string', description: 'git rev-parse HEAD captured BEFORE the first edit of this step — the true pre-fix baseline the verifier reverts src to. NOT HEAD~1: a step that lands a follow-up commit (doc/ADR reconciliation, a review fix) makes HEAD~1 the wrong baseline (issue #1249).' },
     commit: { type: 'string', description: 'the commit hash, or "" when BLOCKED' },
     gates: { type: 'array', items: { type: 'object', required: ['cmd', 'output_tail'], properties: { cmd: { type: 'string' }, output_tail: { type: 'string', description: 'pasted output tail with pass/fail counts — never a bare claim' } } } },
     red_green: { type: 'array', minItems: 1, description: 'MANDATORY, one entry per behaviour-changing item: PASTED executed red output (run BEFORE any production edit), pasted green output, and git hash-object of each test file at red time. An item with no red run carries carve_out naming the CLAUDE.md exception (brand-new code / behaviour-preserving oracle) instead — never an empty entry. Implementers reliably drop this when optional; it is schema-required for that reason.', items: { type: 'object', required: ['item'], properties: { item: { type: 'string', description: 'which plan item this proves' }, red_output: { type: 'string' }, green_output: { type: 'string' }, red_test_hashes: { type: 'array', items: { type: 'object', required: ['file', 'hash'], properties: { file: { type: 'string' }, hash: { type: 'string', description: 'git hash-object at red-run time — must equal the committed file' } } } }, carve_out: { type: 'string', description: 'the named CLAUDE.md exception, ONLY when no red run applies to this item' } } } },
@@ -121,6 +122,7 @@ STANDING CONTRACT (CLAUDE.md "The delegation contract" — these override nothin
 - Red->green is TEST-FIRST and EXECUTED (CLAUDE.md Test coverage #1): author the reproduction test(s) BEFORE any production edit, run them -> FAIL for the defect's reason (paste output; record git hash-object of each test file in red_test_hashes), freeze them byte-identical (a temporary skip while developing is fine, but the committed file must match the red-run content exactly), implement, re-run the SAME tests with zero edits -> PASS (paste output). Only then add further tests. Never "reasoned through". Waived only for brand-new code whose sole possible red is a missing symbol (an existence test is coverage theater) — its tests still ship.
 - TRUST THE BRIEF — do NOT re-investigate it. The brief's facts were verified by the planner and carry their evidence; an independent verifier re-derives every gate item after you, and an adversarial review re-checks the PR. Your reading scope is: the brief itself, its named required-reading refs, and the code you are about to edit. Do NOT re-fetch the issue/ADR/PR from GitHub, do NOT re-run the brief's enumeration greps, do NOT re-derive its coverage matrix — that spends the step's budget re-doing the planner's work.
 - ESCALATE is REACTIVE, not an audit mandate: when code you are editing (or a probe you needed anyway) contradicts a brief claim, STOP and return verdict BLOCKED with the blocker field filled — never silently patch the plan. Encountering a contradiction triggers it; going looking for one does not.
+- FIRST, before any edit: run git -C ${worktree} rev-parse HEAD and report it verbatim as base_sha. That is the pre-fix baseline the verifier reverts to; it stays correct even if you land a follow-up commit on top of the fix, which HEAD~1 would not.
 - Commit as the brief instructs (single focused commit, repo commit style), then fill the structured handoff COMPLETELY — an empty field is a gate failure.`,
   { label: 'implement', phase: 'Implement', model: 'sonnet', effort: 'xhigh', schema: HANDOFF })
 
@@ -132,8 +134,19 @@ if (handoff.verdict === 'BLOCKED') {
 
 phase('Verify')
 
+const redHashArgs = (handoff.red_green || [])
+  .flatMap(e => e.red_test_hashes || [])
+  .map(h => `--hash ${h.file}=${h.hash}`)
+  .join(' ')
+
 const redProofText = redProof
-  ? `RED PROOF (re-execute yourself, never accept the handoff's claim): git -C ${worktree} checkout HEAD~1 -- ${redProof.srcPaths.join(' ')} (tests stay), run ${redProof.testCmd} -> expect FAIL; git -C ${worktree} checkout HEAD -- . , re-run -> expect PASS. Record both outputs as evidence. FREEZE CHECK: run git -C ${worktree} hash-object on each committed reproduction test file and compare against the handoff's red_test_hashes — a mismatch or missing hash means the test was edited between red and green (or the red run never preceded the fix): FAIL.`
+  ? `RED PROOF (re-execute yourself, never accept the handoff's claim). Run the single implementation — do NOT hand-roll the checkout dance:
+
+  sh scripts/agent/verify-red-proof.sh --worktree ${worktree} --test-cmd '${redProof.testCmd}' ${redProof.srcPaths.map(p => `--src ${p}`).join(' ')} ${redHashArgs} --base-ref ${handoff.base_sha}
+
+It reverts the src paths to --base-ref (tests stay) and requires FAIL, restores HEAD and requires PASS, and enforces the freeze (git hash-object of each committed reproduction test == the handoff's red-time hash — a test edited between red and green, or with no red-time hash, proves nothing). Record its FREEZE-OK / RED-OK / GREEN-OK / VERDICT lines as evidence; a non-PASS verdict fails this item.
+
+BASELINE SANITY (the script trusts the ref you give it, so verify it first): the handoff's base_sha (${handoff.base_sha}) must be a real commit, an ANCESTOR of HEAD, and NOT equal to HEAD — else the implementer captured it after editing and the red run would prove nothing. Check: git -C ${worktree} merge-base --is-ancestor ${handoff.base_sha} HEAD && [ "$(git -C ${worktree} rev-parse ${handoff.base_sha})" != "$(git -C ${worktree} rev-parse HEAD)" ]. Either check failing = FAIL this item; do not substitute HEAD~1 to make it pass.`
   : 'This step is declared behaviour-preserving: confirm the oracle/pinned tests exist and stayed green; record which.'
 
 const gateRecord = await agent(`You are an independent VERIFIER (CLAUDE.md "THE GATE") for one delegated step. You did not write this code; re-derive, never merely re-read. READ-ONLY except the red-proof checkout dance below (which you must fully restore). Worktree: ${worktree}.
