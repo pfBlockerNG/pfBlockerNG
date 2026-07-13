@@ -574,7 +574,9 @@ def alias_rule_dump(vm: SmokeVM, alias: str, *, timeout: float = 30.0) -> str:
     The ruleset layers use :func:`rule_line_references`, the same match rule
     :func:`rule_references` applies, so the dump cannot contradict the assertion it explains.
     """
-    if not _ALIAS_RE.match(alias):
+    # fullmatch, not match: `$` also matches just before a TRAILING newline, so `match()` would
+    # admit "pfB_x\n" into the PHP string literal below.
+    if not _ALIAS_RE.fullmatch(alias):
         raise ValueError(f"alias must be a bare pf table name ([A-Za-z0-9_]+), got {alias!r}")
 
     # pfSsh.php, not `php -r`: only it can read the config.
@@ -2800,6 +2802,7 @@ def inject_dnsbl_lists(
         f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
         "$g['enable_cb'] = 'on';\n"
         f"config_set_path({_php_str(CFG_GLOBAL)}, $g);\n"
+        f"{_dnsbl_ip_iface_php(primary_spec.dnsbl_ip_action)}"
         f"{_dnsbl_settings_replace_php(settings)}"
         f"config_set_path({_php_str(CFG_DNSBL_LISTS)}, array({lists_php}));\n"
         "write_config('pfBlockerNG smoke: DNSBL multi-list (ADR-31)');\n"
@@ -2808,6 +2811,25 @@ def inject_dnsbl_lists(
     result = php_eval(vm, snippet, timeout=timeout)
     if result.returncode != 0 or "OK" not in result.stdout:
         raise RuntimeError(f"inject_dnsbl_lists failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+
+
+def _dnsbl_ip_iface_php(dnsbl_ip_action: str | None) -> str:
+    """PHP configuring the firewall interfaces a DNSBL-IP case needs — '' when it isn't one.
+
+    DNSBL-IP reuses the IP-side rule builder, so it needs the SAME inbound/outbound interface
+    config ``_ip_inject_snippet`` sets: without it pfBlockerNG builds the pfB_DNSBLIP_* tables
+    but NO rule (inc:10132). Shared by EVERY DNSBL-IP injection path, so a case can never
+    depend on an IpCase sibling having run first and left the interfaces in the shared config
+    (issue #1239). A domain-only DNSBL case emits nothing and leaves the firewall alone.
+    """
+    if not dnsbl_ip_action:
+        return ""
+    ipset = {"inbound_interface": SMOKE_IP_IFACE, "outbound_interface": SMOKE_IP_IFACE}
+    return (
+        f"$ip = config_get_path({_php_str(CFG_IP_SETTINGS)}, array());\n"
+        f"$ip = array_merge($ip, {_php_kv_array(ipset)});\n"
+        f"config_set_path({_php_str(CFG_IP_SETTINGS)}, $ip);\n"
+    )
 
 
 def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
@@ -2889,19 +2911,7 @@ def _dnsbl_inject_snippet(spec: DnsblCase) -> str:
     if spec.custom_domains:
         crlf = "\r\n".join(spec.custom_domains)
         custom_line = f"$list['custom'] = base64_encode({_php_str(crlf)});\n"
-    # DNSBL-IP reuses the IP-side rule builder, so it needs the SAME inbound/outbound
-    # interface config `_ip_inject_snippet` sets: without it pfBlockerNG builds the
-    # pfB_DNSBLIP_* tables but NO rule (inc:10132). Setting it here — not in the tests —
-    # is what keeps a DNSBL-IP case from depending on an IpCase sibling having run first
-    # and left the interfaces behind in the shared config (issue #1239).
-    ip_iface_line = ""
-    if spec.dnsbl_ip_action:
-        ipset = {"inbound_interface": SMOKE_IP_IFACE, "outbound_interface": SMOKE_IP_IFACE}
-        ip_iface_line = (
-            f"$ip = config_get_path({_php_str(CFG_IP_SETTINGS)}, array());\n"
-            f"$ip = array_merge($ip, {_php_kv_array(ipset)});\n"
-            f"config_set_path({_php_str(CFG_IP_SETTINGS)}, $ip);\n"
-        )
+    ip_iface_line = _dnsbl_ip_iface_php(spec.dnsbl_ip_action)
     return (
         # pfBlockerNG must be globally enabled for the DNSBL (and DNSBL-IP)
         # paths to run (inc:793 reads enable_cb; inc:3389/9307 gate on it).

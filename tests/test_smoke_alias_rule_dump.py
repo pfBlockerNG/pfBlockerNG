@@ -241,8 +241,34 @@ def test_ruleset_layers_use_the_same_match_rule_as_the_assertion_they_explain() 
 
 @pytest.mark.parametrize(
     "hostile",
-    ["pfB_x'; system('id'); $z='", "pfB_x\nfoo", "pfB-x", "", "pfB_x; rm -rf /", "pfB_x'", "../etc/passwd"],
-    ids=["php-quote-break", "newline", "dash", "empty", "shell-metachars", "bare-quote", "path-traversal"],
+    [
+        "pfB_x'; system('id'); $z='",
+        "pfB_x\nfoo",
+        # A TRAILING newline is the shape a `$`-anchored re.match() silently admits (it matches
+        # just before a final \n) — the guard must use fullmatch, so this rejects too.
+        "pfB_x\n",
+        "pfB-x",
+        "",
+        "pfB_x; rm -rf /",
+        "pfB_x'",
+        "../etc/passwd",
+        "pfB_$var",
+        "pfB_x\\",
+        "pfB_ünïcode",
+    ],
+    ids=[
+        "php-quote-break",
+        "embedded-newline",
+        "trailing-newline",
+        "dash",
+        "empty",
+        "shell-metachars",
+        "bare-quote",
+        "path-traversal",
+        "php-var-interpolation",
+        "backslash",
+        "unicode",
+    ],
 )
 def test_alias_is_validated_before_it_reaches_the_php_snippet(hostile: str) -> None:
     """Given an alias carrying quotes, newlines, shell metacharacters or path separators
