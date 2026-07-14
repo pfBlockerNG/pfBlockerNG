@@ -2267,13 +2267,10 @@ function convert_dnsbl_log($mode, $fields) {
 		return TRUE;
 	}
 
-	// Counter/limit gate (issue #809): only the non-filter limit check is
-	// order-independent of the render-time re-check below (pfb_dnsbl_parse() +
-	// dnsbl_whitelist_type()), so it is hoisted here, output-identical to
-	// evaluating it after the parse. The filter-mode limit gate stays after the
-	// filter-MATCH gate below -- it only trips on rows that pass the match, so
-	// hoisting it would mis-flag a post-limit tail of non-matching rows (see the
-	// "Ordering constraint" note below in this function).
+	// Counter/limit gate (issue #809): the non-filter limit check runs first,
+	// unconditionally. The filter-mode limit gate stays after the filter-MATCH gate
+	// below -- it only trips on rows that pass the match, so hoisting it would
+	// mis-flag a post-limit tail of non-matching rows.
 	if (!$pfb['filterlogentries'] &&
 		$counter[$mode == 'Unified' && !$pfb['filterlogentries'] ? 'Unified' : 'DNSBL'] >= $pfbentries) {
 		$dnsblfilterlimit = TRUE;
@@ -2319,63 +2316,9 @@ function convert_dnsbl_log($mode, $fields) {
 	// Determine Whitelist type
 	list ( $supp_dom, $ex_dom, $isWhitelist_found ) = dnsbl_whitelist_type($fields, $clists, $isExclusion, $isTLD, $qdomain);
 
-	$isMatch = TRUE;
-	$p_group = $p_domain = $p_feed = $p_mode = '';
-	$p_feed_disp = $p_group_disp = '';
-
-	// Collect current details about domain. Skip for upstream blocks: the domain is
-	// not in a local feed, so pfb_dnsbl_parse() would rewrite group/feed/mode to
-	// 'Unknown', corrupting the row. Cost + memoization + batched-prefetch behaviour:
-	// docs/misc/alerts-reports-pipeline.md.
-	if (!$isPython && !$isUpstream && !$isWhitelist_found) {
-		$domain_details = pfb_dnsbl_parse('alerts', $qdomain, '', '');
-		$pfb_mode	= $domain_details['pfb_mode']	?: 'Unknown';
-		$pfb_group	= $domain_details['pfb_group']	?: 'Unknown';
-		$pfb_final	= $domain_details['pfb_final']	?: 'Unknown';
-		$pfb_feed	= $domain_details['pfb_feed']	?: 'Unknown';
-
-		// Determine if log entry 'Group' has changed
-		if ("{$fields[6]}" != "{$pfb_group}") {
-			$isMatch	= FALSE;
-			$p_group	= $fields[6];
-			$fields[6]	= $pfb_group;
-		}
-
-		// Determine if log entry 'Domain' has changed
-		if ("{$fields[7]}" != "{$pfb_final}") {
-			$isMatch	= FALSE;
-			$p_domain	= $fields[7];
-			$fields[7]	= $pfb_final;
-		}
-
-		// Determine if log entry 'Feed' has changed
-		if ("{$fields[8]}" != "{$pfb_feed}") {
-			$isMatch	= FALSE;
-			$p_feed		= $fields[8];
-			$fields[8]	= $pfb_feed;
-		}
-
-		// Determine if log entry 'Blocking mode' has changed
-		if ($isTLD) {
-			if (strpos($pfb_mode, 'TLD') === FALSE) {
-				$isMatch	= FALSE;
-				$p_mode		= $fields[5];
-				$fields[5]	= $pfb_mode;
-			}
-		} else {
-			if (strpos($pfb_mode, 'DNSBL') === FALSE) {
-				$isMatch	= FALSE;
-				$p_mode		= $fields[5];
-				$fields[5]	= $pfb_mode;
-			}
-		}
-	}
-
-	// On failed Match verification, re-evaluate parameters
-	if (!$isMatch) {
-		list ( $isTLD, $isCNAME, $isPython, $isExclusion, $pfb_python, $qdomain, $wt_line ) = dnsbl_log_details($fields);
-		list ( $supp_dom, $ex_dom, $isWhitelist_found ) = dnsbl_whitelist_type($fields, $clists, $isExclusion, $isTLD, $qdomain);
-	}
+	// ADR-65: rows render their OWN logged fields -- the render-time re-check
+	// against the (retired) interchange files is gone; no group/feed/mode/domain
+	// drift refinement runs here anymore.
 
 	// Upstream block: override icon to cloud (uses raw fields[7]/[8] before truncation below).
 	if ($isUpstream) {
@@ -2417,21 +2360,6 @@ function convert_dnsbl_log($mode, $fields) {
 		$pfbalertdnsbl[17]	= '';
 	}
 
-	if (!empty($p_domain)) {
-		if (strpos($p_domain, 'xn--') !== FALSE) {
-			$p_domain = "{$p_domain} [" . idn_to_utf8($p_domain) . "]";
-		}
-
-		$p_domain_title = pfb_hsc($p_domain);
-		if (strlen($p_domain) >= ($mode != 'unified' ? 60 : 40)) {
-			$p_domain = "<s title=\"Previous Domain: {$p_domain_title}\">"
-					. pfb_hsc(substr($p_domain, 0, ($mode != 'unified' ? 59 : 39)))
-					. "</s><small>...</small><br />";
-		} else {
-			$p_domain = "<s title=\"Previous Domain: {$p_domain_title}\">" . pfb_hsc($p_domain) . "</s><br />";
-		}
-	}
-
 	$f2 = $fields[2];
 	if (strpos($f2, 'xn--') !== FALSE) {
 		$f2 = "{$f2} [" . idn_to_utf8($f2) . "]";
@@ -2452,9 +2380,9 @@ function convert_dnsbl_log($mode, $fields) {
 		} else {
 			$f7		= pfb_hsc($f7);
 		}
-		$pfbalertdnsbl[8]	= "{$p_domain}Domain: {$f2}<br />CNAME: {$f7}";
+		$pfbalertdnsbl[8]	= "Domain: {$f2}<br />CNAME: {$f7}";
 	} else {
-		$pfbalertdnsbl[8]	= "{$p_domain}{$f2}";
+		$pfbalertdnsbl[8]	= "{$f2}";
 	}
 
 	$f_g_title = '';
@@ -2471,38 +2399,18 @@ function convert_dnsbl_log($mode, $fields) {
 		$f_g_title = "The Feed and Group that blocked the indicated Domain:";
 	}
 
-	if (!empty($p_feed)) {
-		$f_g_title .= "&#013;Previous Feed: " . pfb_hsc($p_feed);
-		if (strlen($p_feed) >= 25) {
-			$p_feed	= pfb_hsc(substr($p_feed, 0, 24)) . "<small>...</small>";
-		} else {
-			$p_feed	= pfb_hsc($p_feed);
-		}
-		$p_feed_disp = $p_feed;
-		$p_feed	= "<s>{$p_feed}</s><br />";
-	}
 	if (!empty($fields[8])) {
 		$f_g_title .= "&#013;Feed: " . pfb_hsc($fields[8]);
-	}
-	if (!empty($p_group)) {
-		$f_g_title .= "&#013;Previous Group: " . pfb_hsc($p_group);
-		if (strlen($p_group) >= 25) {
-			$p_group = pfb_hsc(substr($p_group, 0, 24)) . "<small>...</small>";
-		} else {
-			$p_group = pfb_hsc($p_group);
-		}
-		$p_group_disp = $p_group;
-		$p_group = "<s>{$p_group}</s><br />";
 	}
 	if (!empty($fields[6])) {
 		$f_g_title .= "&#013;Group: " . pfb_hsc($fields[6]);
 	}
 
-	$pfbalertdnsbl[13]	= "{$p_group}" . pfb_hsc($fields[6]);
-	$pfbalertdnsbl[15]	= "{$p_feed}" . pfb_hsc($fields[8]);
+	$pfbalertdnsbl[13]	= pfb_hsc($fields[6]);
+	$pfbalertdnsbl[15]	= pfb_hsc($fields[8]);
 
-	// Group the Feed/Group cell by record when both changed, mirroring the IP cell.
-	$feed_group_cell = pfb_dnsbl_feed_group_cell($p_feed_disp, pfb_hsc($fields[8]), $p_group_disp, pfb_hsc($fields[6]));
+	// Group the Feed/Group cell by record; no previous value to strike anymore (ADR-65).
+	$feed_group_cell = pfb_dnsbl_feed_group_cell('', pfb_hsc($fields[8]), '', pfb_hsc($fields[6]));
 
 	// Query type suffix (Python mode logs the record type as field [10]; older
 	// Unbound-mode lines carry it in the b_type suffix [5] and lack field [10]).
@@ -2526,20 +2434,13 @@ function convert_dnsbl_log($mode, $fields) {
 		$pfbalertdnsbl[19] = pfb_hsc($fields[0]) . "{$qtype_sfx}";
 	}
 
-	if (!empty($p_mode)) {
-		$p_mode = "<s title=\"Previous Blocking Mode\">" . pfb_hsc($p_mode) . "</s> | ";
-	}
-	$pfbalertdnsbl[20]	= "{$p_mode}" . pfb_hsc($fields[5]);
+	$pfbalertdnsbl[20]	= pfb_hsc($fields[5]);
 
 	$pfbalertdnsbl[99]	= pfb_hsc($fields[1]);	// Timestamp
 
-	// If alerts filtering is selected, process filters as required.
-	// Ordering constraint: this filter matches CORRECTED fields ($pfbalertdnsbl is
-	// built from post-pfb_dnsbl_parse values), so the filter-MATCH gate cannot move
-	// above the parse -- a feed-name filter must match the domain's current feed, not
-	// the stale logged one. The filter-mode limit gate shares that constraint (only
-	// trips after a match); issue #809 hoists only the non-filter limit gate above,
-	// since that one is parse-independent (see the comment there).
+	// If alerts filtering is selected, process filters as required. ADR-65: a
+	// feed/group-name filter now matches the LOGGED value ($pfbalertdnsbl is built
+	// straight from $fields), not a re-derived current one.
 	if ($pfb['filterlogentries']) {
 		if (empty($filterfieldsarray[1])) {
 			return TRUE;
@@ -4442,85 +4343,10 @@ if (!$alert_summary):
 			</thead>
 			<tbody>
 	<?php
-			// issue #809 scope guard: batching (below) only ever applies in non-filter
-			// mode. Filtered mode keeps today's single-pass streaming loop -- the
-			// Alert-filter match runs against the CORRECTED fields (post
-			// pfb_dnsbl_parse()), so a row can't be pre-collected without parsing it
-			// first; see the "Ordering constraint" note in convert_dnsbl_log() and
-			// docs/misc/alerts-reports-pipeline.md.
-			if ($pfb['filterlogentries']) {
-				if (($handle = @popen('/usr/bin/tail -r ' . escapeshellarg($pfb_log), 'r')) !== FALSE) {
-					while (($fields = @fgetcsv($handle)) !== FALSE) {
-
-						// Remove and record duplicate entries
-						if ($fields[9] == '-') {
-							$dup['DNSBL']++;
-							continue;
-						}
-						if (convert_dnsbl_log('non_unified', $fields)) {
-							break;
-						}
-						$dup['DNSBL'] = 0;
-					}
-				}
-				if ($handle) {
-					@pclose($handle);
-				}
-			} else {
-				// Non-filter mode: two passes over the reversed log instead of one, so DNSBL
-				// data/zone-file lookups for every row this render will walk are batched into
-				// at most one grep pass each (pfb_dnsbl_prefetch()) instead of one exec per row.
-				// Pass 1 buffers up to ($pfbentries + 1) non-dup rows, run-length compressing
-				// '-' duplicate lines to an int count -- append rule + bound proof:
-				// pfb_alerts_dnsbl_buffer_push() (pfblockerng.inc), pinned by AlertsBufferReplayTest.
-				$dnsbl_buffered	 = array();
-				$dnsbl_qdomains	 = array();
-				$dnsbl_nondup_seen = 0;
-				if (($handle = @popen('/usr/bin/tail -r ' . escapeshellarg($pfb_log), 'r')) !== FALSE) {
-					while (($fields = @fgetcsv($handle)) !== FALSE) {
-
-						// Run-length compress consecutive duplicate-marker lines.
-						if ($fields[9] == '-') {
-							pfb_alerts_dnsbl_buffer_push($dnsbl_buffered, TRUE, NULL);
-							continue;
-						}
-
-						pfb_alerts_dnsbl_buffer_push($dnsbl_buffered, FALSE, $fields);
-						$dnsbl_nondup_seen++;
-
-						// dnsbl_log_details() is cheap and pure w.r.t. the globals it reads;
-						// index [5] is its $qdomain return slot. A superset domain set is fine
-						// here (python/upstream/whitelist rows' domains ride along too) --
-						// convert_dnsbl_log() below simply won't consult the prefetch for a
-						// row it skips for its own reasons.
-						$dnsbl_qdomains[] = dnsbl_log_details($fields)[5];
-
-						if ($dnsbl_nondup_seen >= ($pfbentries + 1)) {
-							break;
-						}
-					}
-				}
-				if ($handle) {
-					@pclose($handle);
-				}
-
-				// Prefetch (between passes): seed the page-scope store every
-				// pfb_dnsbl_parse_compute() call in pass 2 below transparently consults.
-				pfb_dnsbl_prefetch($dnsbl_qdomains);
-
-				// Pass 2 (render): replay the buffer in the same (reversed) order via
-				// pfb_alerts_dnsbl_replay_step() (pfblockerng.inc; decode contract documented
-				// there), unit-pinned by AlertsBufferReplayTest -- 'render' steps run today's
-				// exact loop body verbatim (its dup-marker check can never fire for a buffered
-				// row, but keeping it keeps the body identical to the streamed loop's).
-				foreach ($dnsbl_buffered as $dnsbl_entry) {
-
-					$dnsbl_step = pfb_alerts_dnsbl_replay_step($dnsbl_entry);
-					if (isset($dnsbl_step['dup'])) {
-						$dup['DNSBL'] += $dnsbl_step['dup'];
-						continue;
-					}
-					$fields = $dnsbl_step['render'];
+			// ADR-65: a single streaming pass -- rows render straight from their own
+			// logged fields now, so there is nothing left to batch-prefetch between passes.
+			if (($handle = @popen('/usr/bin/tail -r ' . escapeshellarg($pfb_log), 'r')) !== FALSE) {
+				while (($fields = @fgetcsv($handle)) !== FALSE) {
 
 					// Remove and record duplicate entries
 					if ($fields[9] == '-') {
@@ -4532,15 +4358,9 @@ if (!$alert_summary):
 					}
 					$dup['DNSBL'] = 0;
 				}
-
-				// Clear the prefetch store now that this table's render pass is done.
-				// Defensive hygiene, not a live fix: the $alert_view switch above renders
-				// at most ONE pfb_dnsbl_parse-consuming table per request (each other
-				// $alert_view/$logtype combination hits `continue 2` before reaching this
-				// loop), so no later same-process consumer can actually see a stale seed
-				// today. The reset just guarantees that stays true if a future change adds
-				// a second consumer to this request.
-				pfb_dnsbl_prefetch_store(NULL);
+			}
+			if ($handle) {
+				@pclose($handle);
 			}
 		}
 
