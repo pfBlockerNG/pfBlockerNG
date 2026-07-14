@@ -11,8 +11,8 @@ use PHPUnit\Framework\TestCase;
  * tests/test_adr66_tld_bridges.py, sharing the same key-name seam so a
  * half-renamed bridge fails loudly in Phases 2/3).
  *
- * C1 -- ini bridge writer: pfb_unbound_python() derives python_tld/
- * python_tlds from $pfb['dnsbl_pytld'] + the four pfb_pytlds_{gtld,cctld,
+ * C1 -- ini bridge writer: pfb_unbound_python() derives tld_allow/
+ * tld_allow_list from $pfb['dnsbl_tld_allow'] + the four pfb_pytlds_{gtld,cctld,
  * itld,bgtld} config fields and emits them into the MAIN-ini heredoc
  * (mirrors PythonTldWildcardIniEmitTest.php's structural pin -- no lighter
  * harness exists for pfb_unbound_python(), a live pfSense/VIP/DNS
@@ -113,9 +113,9 @@ final class TldBridgeEmitTest extends TestCase
 	{
 		$body = $this->functionBody('pfb_unbound_python');
 		$this->assertMatchesRegularExpression(
-			"/\\\$python_tld\s*=\s*'off';\s*\\\$python_tlds\s*=\s*'';\s*if\s*\(\s*\\\$pfb\['dnsbl_pytld'\]\s*==\s*'on'\s*\)/s",
+			"/\\\$tld_allow\s*=\s*'off';\s*\\\$tld_allow_list\s*=\s*'';\s*if\s*\(\s*\\\$pfb\['dnsbl_tld_allow'\]\s*==\s*'on'\s*\)/s",
 			$body,
-			'the python_tld/python_tlds pair must default off/empty and derive from $pfb[\'dnsbl_pytld\']'
+			'the tld_allow/tld_allow_list pair must default off/empty and derive from $pfb[\'dnsbl_tld_allow\']'
 		);
 	}
 
@@ -126,7 +126,7 @@ final class TldBridgeEmitTest extends TestCase
 			$this->assertStringContainsString(
 				"dnsblconfig']['{$field}']",
 				$body,
-				"pfb_unbound_python() must read dnsblconfig['{$field}'] into python_tlds"
+				"pfb_unbound_python() must read dnsblconfig['{$field}'] into tld_allow_list"
 			);
 		}
 	}
@@ -135,14 +135,14 @@ final class TldBridgeEmitTest extends TestCase
 	{
 		$body = $this->functionBody('pfb_unbound_python');
 		$this->assertMatchesRegularExpression(
-			'/python_tld\s*=\s*\{\$python_tld\}/',
+			'/tld_allow\s*=\s*\{\$tld_allow\}/',
 			$body,
-			'the ini heredoc must carry a python_tld key'
+			'the ini heredoc must carry a tld_allow key'
 		);
 		$this->assertMatchesRegularExpression(
-			'/python_tlds\s*=\s*\{\$python_tlds\}/',
+			'/tld_allow_list\s*=\s*\{\$tld_allow_list\}/',
 			$body,
-			'the ini heredoc must carry a python_tlds key'
+			'the ini heredoc must carry a tld_allow_list key'
 		);
 	}
 

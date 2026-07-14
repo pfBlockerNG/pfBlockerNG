@@ -35,8 +35,8 @@ import pfb_unbound
 # --------------------------------------------------------------------------- #
 # THE SEAM -- update ONLY these when the underlying identifier renames.
 # --------------------------------------------------------------------------- #
-TLD_ALLOW_ENABLE_KEY = "python_tld"  # Phase 2: cfg/pfb/ini enable-flag key
-TLD_ALLOW_LIST_KEY = "python_tlds"  # Phase 2: cfg/pfb/ini allow-list key
+TLD_ALLOW_ENABLE_KEY = "tld_allow"  # Phase 2: cfg/pfb/ini enable-flag key
+TLD_ALLOW_LIST_KEY = "tld_allow_list"  # Phase 2: cfg/pfb/ini allow-list key
 TLD_WILDCARD_INI_KEY = "python_tld_wildcard"  # ADR "stays" row -- unchanged by P2 or P3
 MANIFEST_TLD_KEYS = ("tld_blacklist", "tld_exclusion")  # Phase 3: manifest config + return-blob keys
 
@@ -56,7 +56,7 @@ def _read(path: str) -> str:
 
 # --------------------------------------------------------------------------- #
 # C1/C2 -- .inc ini writer -> .py reader bridge.
-# C1 (the .inc side: python_tld/python_tlds keys derived + emitted) is pinned
+# C1 (the .inc side: tld_allow/tld_allow_list keys derived + emitted) is pinned
 # structurally by tests/php/TldBridgeEmitTest.php (mirrors
 # PythonTldWildcardIniEmitTest.php). C2 (here): the .py READER survives the
 # hop -- driven through the real init_standard() (not a re-implementation of

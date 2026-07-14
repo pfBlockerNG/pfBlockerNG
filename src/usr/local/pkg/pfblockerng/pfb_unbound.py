@@ -861,8 +861,8 @@ def pfb_control_watcher() -> None:
             waiter.close()
 
 
-def parse_python_tlds(raw: str) -> list[str]:
-    """Parse the MAIN-ini ``python_tlds`` value into a cleaned TLD-Allow list.
+def parse_tld_allow(raw: str) -> list[str]:
+    """Parse the MAIN-ini ``tld_allow_list`` value into a cleaned TLD-Allow list.
 
     issue #713: the previous unconditional ``raw.split(",")`` left a degenerate value
     (absent/empty ini key -- "") as ``['']`` -- a non-empty LIST holding one blank
@@ -870,7 +870,7 @@ def parse_python_tlds(raw: str) -> list[str]:
     ALWAYS True) which force-enabled the TLD-Allow blacklist even with no TLDs
     configured -- "empty TLD-Allow blocks all". Splitting, stripping, and dropping
     blank entries here makes an empty/whitespace-only value parse to ``[]`` (falsy),
-    so the caller's plain truthiness guard (``if python_tld and python_tlds:``) behaves
+    so the caller's plain truthiness guard (``if tld_allow and tld_allow_list:``) behaves
     correctly.
 
     issue #720: entries are lowercased too. The GUI's TLD checkboxes are lowercase,
@@ -1246,16 +1246,16 @@ def init_standard(id: int, env: module_env) -> bool:
     # TLD-Allow defaults. The PHP ini writer always emits these three MAIN keys, so
     # the config.has_option() loads below normally populate them -- but default them
     # here too so a hand-edited/corrupted ini that drops the keys can't KeyError on
-    # the unconditional reads (TLD-Allow check + manifest cfg). ``python_tlds`` is a
-    # list (the ini load below populates it via ``parse_python_tlds()``, issue #713);
-    # evaluate_domain's TLD-Allow arm requires a non-empty ``cfg["python_tlds"]`` before
-    # testing ``tld not in cfg["python_tlds"]``, so the empty-list default here is a
+    # the unconditional reads (TLD-Allow check + manifest cfg). ``tld_allow_list`` is a
+    # list (the ini load below populates it via ``parse_tld_allow()``, issue #713);
+    # evaluate_domain's TLD-Allow arm requires a non-empty ``cfg["tld_allow_list"]`` before
+    # testing ``tld not in cfg["tld_allow_list"]``, so the empty-list default here is a
     # no-op rather than a block-everything trap.
-    pfb["python_tld"] = False
-    pfb["python_tlds"] = []
+    pfb["tld_allow"] = False
+    pfb["tld_allow_list"] = []
     pfb["python_tld_seg"] = 0
     # issue #1255: DNSBL Wildcard Blocking (TLD) -- a DIFFERENT feature from
-    # python_tld ("TLD Allow") above. Gates the public-suffix oracle exactly like
+    # tld_allow ("TLD Allow") above. Gates the public-suffix oracle exactly like
     # python_hsts/pfb_py_hsts below (shipped file + ini enable flag).
     pfb["python_tld_wildcard"] = False
     # Max entries in the per-domain decision cache (LRU); 0 = unbounded. WebUI-configurable.
@@ -1472,10 +1472,10 @@ def init_standard(id: int, env: module_env) -> bool:
                 if parsed_decisiondb_max is not None:
                     pfb["decisiondb_max"] = parsed_decisiondb_max
                     decisionDB.maxsize = pfb["decisiondb_max"]
-            if config.has_option("MAIN", "python_tld"):
-                pfb["python_tld"] = config.getboolean("MAIN", "python_tld")
-            if config.has_option("MAIN", "python_tlds"):
-                pfb["python_tlds"] = parse_python_tlds(config.get("MAIN", "python_tlds"))
+            if config.has_option("MAIN", "tld_allow"):
+                pfb["tld_allow"] = config.getboolean("MAIN", "tld_allow")
+            if config.has_option("MAIN", "tld_allow_list"):
+                pfb["tld_allow_list"] = parse_tld_allow(config.get("MAIN", "tld_allow_list"))
             if config.has_option("MAIN", "dnsbl_ipv4"):
                 pfb["dnsbl_ipv4"] = config.get("MAIN", "dnsbl_ipv4")
             if config.has_option("MAIN", "dnsbl_ipv6"):
@@ -1545,12 +1545,12 @@ def init_standard(id: int, env: module_env) -> bool:
             if pfb["python_idn"] or pfb["idn_mode"] is not IdnMode.Off:
                 pfb["python_blacklist"] = True
 
-            # Enable the Blacklist functions (TLD Allow). issue #713: python_tlds is a
-            # LIST (parse_python_tlds()'s output) -- `!= ""` compares a list to a str,
+            # Enable the Blacklist functions (TLD Allow). issue #713: tld_allow_list is a
+            # LIST (parse_tld_allow()'s output) -- `!= ""` compares a list to a str,
             # which is ALWAYS True, so an empty/degenerate TLD-Allow value used to force
             # this on regardless of content. Plain truthiness is the correct guard: an
             # empty list (no configured TLDs) must NOT enable the blacklist gate.
-            if pfb["python_tld"] and pfb["python_tlds"]:
+            if pfb["tld_allow"] and pfb["tld_allow_list"]:
                 pfb["python_blacklist"] = True
 
             # Collect user-defined Regex patterns
@@ -2295,7 +2295,7 @@ def get_tld(qstate: module_qstate) -> str:
     try:
         if qstate and qstate.qinfo and len(qstate.qinfo.qname_list) > 1:
             # RFC 4343: DNS name comparison is case-insensitive, but production Unbound's
-            # qname_list preserves the client's wire case (e.g. dns0x20). python_tlds /
+            # qname_list preserves the client's wire case (e.g. dns0x20). tld_allow_list /
             # hsts_tlds are stored lowercase-only, so lowercase here at the source rather
             # than at every membership-test call site (#720).
             tld = qstate.qinfo.qname_list[-2].lower()
@@ -2323,7 +2323,7 @@ def get_tld_from_name(q_name: str) -> str:
     # target (VIP instead of NULL). (#706)
     #
     # Lowercased for the same reason as get_tld() (RFC 4343 case-insensitive compare
-    # against the lowercase-only python_tlds/hsts_tlds; #720). The current caller
+    # against the lowercase-only tld_allow_list/hsts_tlds; #720). The current caller
     # already passes a lowercased q_name, so this is a no-op there -- it keeps the
     # pair's contract (both always return a lowercase TLD) consistent for any future
     # caller that doesn't pre-lowercase.
@@ -6098,11 +6098,11 @@ def evaluate_domain(
 
     if not is_found:
         if (
-            cfg["python_tld"]
-            and cfg["python_tlds"]
+            cfg["tld_allow"]
+            and cfg["tld_allow_list"]
             and tld != ""
             and q_name not in (cfg["dnsbl_ipv4"], cfg["dnsbl_ipv6"])
-            and tld not in cfg["python_tlds"]
+            and tld not in cfg["tld_allow_list"]
         ):
             is_found = True
             feed = "TLD_Allow"
@@ -6701,8 +6701,8 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                     "python_blocking": pfb["python_blocking"],
                     "dataDB": bool(snap.data_db),
                     "zoneDB": bool(snap.zone_db),
-                    "python_tld": pfb["python_tld"],
-                    "python_tlds": pfb["python_tlds"],
+                    "tld_allow": pfb["tld_allow"],
+                    "tld_allow_list": pfb["tld_allow_list"],
                     "dnsbl_ipv4": pfb["dnsbl_ipv4"],
                     "dnsbl_ipv6": pfb["dnsbl_ipv6"],
                     "python_idn": pfb["python_idn"],
