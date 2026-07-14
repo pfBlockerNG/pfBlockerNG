@@ -18,6 +18,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dnsbl_staging_is_current_generation')]
 #[CoversFunction('pfb_dnsbl_staging_first_line')]
 #[CoversFunction('pfb_dnsbl_verbatim_reuse_active')]
+#[CoversFunction('pfb_dnsbl_hold_stale_rebuild_skip')]
 final class DnsblStagingGenerationGuardTest extends TestCase
 {
 	// --- pfb_dnsbl_staging_is_current_generation() ---------------------------------
@@ -284,5 +285,53 @@ final class DnsblStagingGenerationGuardTest extends TestCase
 		} finally {
 			unlink_if_exists($path);
 		}
+	}
+
+	// --- pfb_dnsbl_hold_stale_rebuild_skip() --- (issue #1278)
+
+	public function testStaleRebuildHoldNoOrigSkipsFetch(): void
+	{
+		// The bug scenario: Hold + stale-generation rebuild + no '.orig' baseline
+		// must skip, never fall through to pfb_download().
+		$this->assertTrue(pfb_dnsbl_hold_stale_rebuild_skip(TRUE, TRUE, FALSE));
+	}
+
+	public function testStaleRebuildHoldWithOrigDoesNotSkip(): void
+	{
+		// '.orig' present -- the existing reparse-from-orig path already avoids
+		// the network; this guard must stay silent.
+		$this->assertFalse(pfb_dnsbl_hold_stale_rebuild_skip(TRUE, TRUE, TRUE));
+	}
+
+	public function testStaleRebuildNonHoldNoOrigDoesNotSkip(): void
+	{
+		$this->assertFalse(pfb_dnsbl_hold_stale_rebuild_skip(TRUE, FALSE, FALSE));
+	}
+
+	public function testStaleRebuildNonHoldWithOrigDoesNotSkip(): void
+	{
+		$this->assertFalse(pfb_dnsbl_hold_stale_rebuild_skip(TRUE, FALSE, TRUE));
+	}
+
+	public function testNoStaleRebuildHoldNoOrigDoesNotSkip(): void
+	{
+		// Not in the stale-generation-rebuild fork at all (plain Hold, current-
+		// generation staging) -- the verbatim-reuse fork already handles this.
+		$this->assertFalse(pfb_dnsbl_hold_stale_rebuild_skip(FALSE, TRUE, FALSE));
+	}
+
+	public function testNoStaleRebuildHoldWithOrigDoesNotSkip(): void
+	{
+		$this->assertFalse(pfb_dnsbl_hold_stale_rebuild_skip(FALSE, TRUE, TRUE));
+	}
+
+	public function testNoStaleRebuildNonHoldNoOrigDoesNotSkip(): void
+	{
+		$this->assertFalse(pfb_dnsbl_hold_stale_rebuild_skip(FALSE, FALSE, FALSE));
+	}
+
+	public function testNoStaleRebuildNonHoldWithOrigDoesNotSkip(): void
+	{
+		$this->assertFalse(pfb_dnsbl_hold_stale_rebuild_skip(FALSE, FALSE, TRUE));
 	}
 }
