@@ -2217,9 +2217,9 @@ function pfb_dnsbl_stale_rebuild_converge_txt(bool $stale_generation_rebuild, st
 	}
 }
 
-// issue #1278: Hold means "download once, never again" (mirrors pfblockerng.php:766-769's
-// unconditional Hold bypass) -- a stale-generation rebuild (#1083) must never fall through
-// to the network when no '.orig' baseline survives to reparse locally.
+// issue #1278: Hold means "download once, never again" (mirrors pfblockerng.php's
+// Hold bypass) -- a stale-generation rebuild (#1083) must never fall through to the
+// network when no '.orig' baseline survives to reparse locally.
 function pfb_dnsbl_hold_stale_rebuild_skip(bool $stale_generation_rebuild, bool $is_hold, bool $orig_exists): bool {
 	return $stale_generation_rebuild && $is_hold && !$orig_exists;
 }
@@ -17513,7 +17513,7 @@ function sync_package_pfblockerng($cron='') {
 								// issue #1278: Hold means "download once, never again" -- skip the network
 								// fallback entirely and retry next pass; staging stays untouched.
 								if (pfb_dnsbl_hold_stale_rebuild_skip($stale_generation_rebuild, $row['state'] == 'Hold', file_exists("{$file_dwn}.orig"))) {
-									pfb_logger(" -- Hold: no baseline, will not fetch.\n", 1);
+									pfb_logger(" -- Hold: staying held, no baseline to reparse.\n", 1);
 									continue;
 								}
 
