@@ -97,6 +97,30 @@ Describe 'work-branch.sh --worktree anchors at the primary checkout'
     The output should equal "$(printf 'issue/9-tld\t%s/.claude/worktrees/issue-9' "$primary")"
     The stderr should include 'Preparing worktree'
   End
+
+  It 'is immune to an inherited CDPATH when resolving the primary root'
+    # A CDPATH hit makes cd echo the destination AND resolve relative to the
+    # CDPATH entry instead of $PWD — either corrupts the derived root.
+    When run sh -c 'mkdir -p "$3/.git" && cd "$1" && CDPATH=$3 exec sh "$2" issue 10 tld --worktree --base HEAD' _ "$primary" "$script_abs" "$fixture/decoy"
+    The status should equal 0
+    The output should equal "$(printf 'issue/10-tld\t%s/.claude/worktrees/issue-10' "$primary")"
+    The stderr should include 'Preparing worktree'
+  End
+
+  It 'refuses a --separate-git-dir layout instead of anchoring outside the checkout'
+    When run sh -c 'git init -q --separate-git-dir "$1/gitmeta" "$1/sep" &&
+      git -C "$1/sep" -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit -q --allow-empty -m init &&
+      cd "$1/sep" && exec sh "$2" issue 11 tld --worktree --base HEAD' _ "$fixture" "$script_abs"
+    The status should equal 2
+    The stderr should include 'separate-git-dir'
+  End
+
+  It 'leaves an absolute --path untouched when run from a linked worktree'
+    When run sh -c 'cd "$1" && exec sh "$2" issue 12 tld --worktree --base HEAD --path "$3"' _ "$fixture/session" "$script_abs" "$fixture/abs-target"
+    The status should equal 0
+    The output should equal "$(printf 'issue/12-tld\t%s/abs-target' "$fixture")"
+    The stderr should include 'Preparing worktree'
+  End
 End
 
 Describe 'work-branch.sh slugify() truncation edges'
