@@ -465,6 +465,12 @@ def test_cosmetic_prefix_guard_matches_php_row_for_row() -> None:
         "##\rSection",
         "##\x0bsection",
         "##\x0csection",
+        "##\xa0Section",  # NBSP right after the marker -- .isspace() already catches it
+        # PR #1343 review: every element-hiding marker sibling gets a position-0
+        # row, not just '##'/'#@#' -- the guard branch is shared by all five.
+        "#?# note",
+        "#%# note",
+        "#$# note",
     ]
     capturable = [
         "####################",  # marker at pos 0: generic-rule shape (documented latent)
@@ -477,6 +483,9 @@ def test_cosmetic_prefix_guard_matches_php_row_for_row() -> None:
         "/re/",
         "/re/$important",
         "#@#selector",  # marker+non-space, no space -- proves guard scope isn't a marker-family regression
+        "#?#selector",
+        "#%#selector",
+        "#$#selector",
     ]
     for line in not_capturable:
         assert _dnsbl_is_abp_rule_line(line) is False, f"must NOT capture: {line!r}"
