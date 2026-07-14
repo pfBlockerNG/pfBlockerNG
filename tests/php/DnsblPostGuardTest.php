@@ -109,7 +109,7 @@ final class DnsblPostGuardTest extends TestCase
 	}
 
 	#[DataProvider('customlistFieldProvider')]
-	public function testMissingKeyDoesNotWarnOrThrow(string $field, string $validValue): void
+	public function testMissingKeyDoesNotWarnOrThrow(string $field, string $unusedValidValue): void
 	{
 		unset($_POST[$field]);
 		try {
