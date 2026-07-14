@@ -48,8 +48,8 @@ WHAT CHANGED
 - tests/php/AlertsDnsblLoggedFieldsRenderTest.php (NEW) -- drives the REAL
   convert_dnsbl_log() via AlertsPageLoader + the grep-path sandbox; 4 methods
   pin the render/filter delta.
-- Commit: (filled after `git commit`, see below) -- single commit, code + both
-  new test files + this handoff.
+- Commit: 25a09c04e14bf55feeba57cc5eff883049283e1f -- single commit, code +
+  both new test files + this handoff.
 
 --------------------------------------------------------------------------------
 RED -> GREEN PROOF
