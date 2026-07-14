@@ -69,7 +69,12 @@ main() {
 	# session worktree, where --show-toplevel would nest the new worktree in a tree
 	# whose lifecycle the harness owns (pinned by agent_work_branch_spec.sh).
 	common=$(git rev-parse --git-common-dir) || exit 2
-	root=$(cd "$common/.." && pwd -P) || exit 2
+	# CDPATH= : a CDPATH hit would echo the dir and hijack a relative cd.
+	root=$(CDPATH='' cd "$common/.." && pwd -P) || exit 2
+	if [ ! -e "$root/.git" ]; then
+		echo "work-branch.sh: cannot locate the primary checkout from '$common' (unsupported layout, e.g. --separate-git-dir)" >&2
+		exit 2
+	fi
 	git fetch origin >/dev/null 2>&1
 	if git show-ref --verify -q "refs/heads/$branch" ||
 	   git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
