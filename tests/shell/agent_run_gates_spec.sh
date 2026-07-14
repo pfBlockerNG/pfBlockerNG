@@ -232,4 +232,17 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The line 4 of output should equal 'GATES: PASS'
     The lines of output should equal 4
   End
+
+  # CodeRabbit review of #1293's fix: neither `diff --cached` nor bare `diff`
+  # surfaces a file that was never `git add`ed at all.
+  It 'plans gates for a brand-new file that was never git add-ed'
+    head_sha=$(gitc rev-parse HEAD)
+    printf '#!/bin/sh\n# never staged, never committed\ntrue\n' > "$repo/scripts/brand_new.sh"
+    When run sh "$script" --worktree "$repo" --diff "$head_sha"
+    The status should equal 0
+    The output should include 'GATE PASS: sh -n scripts/brand_new.sh'
+    The output should include 'GATE PASS: shellcheck scripts/brand_new.sh'
+    The line 4 of output should equal 'GATES: PASS'
+    The lines of output should equal 4
+  End
 End
