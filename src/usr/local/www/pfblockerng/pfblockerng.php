@@ -1420,7 +1420,9 @@ function pfblockerng_uc_countries() {
 											@file_put_contents($pfb_file, $iso_header, FILE_APPEND | LOCK_EX);
 
 											// Concat ISO Networks to Continent file
-											exec("{$pfb['cat']} {$iso_file_esc} >> {$pfb_file_esc} 2>&1");
+											// issue #1299: no 2>&1 -- merging cat's stderr into this
+											// data file lets a cat failure corrupt it on reparse.
+											exec("{$pfb['cat']} {$iso_file_esc} >> {$pfb_file_esc}");
 										}
 										else {
 											// Create placeholder file for undefined 'ISO Represented' or undefined Countries
