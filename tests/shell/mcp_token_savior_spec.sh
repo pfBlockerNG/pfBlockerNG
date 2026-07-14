@@ -99,7 +99,7 @@ Describe 'Token Savior vendor wiring'
   End
 
   It 'captures only the approved tool classes and Playwright MCP output in Codex'
-    When run python3 -c 'import json, re, sys; groups=json.load(open(sys.argv[1]))["hooks"]["PostToolUse"]; pattern=next(g["matcher"] for g in groups if any("tool_capture_hook" in h["command"] for h in g["hooks"])); approved=("Bash", "Read", "Grep", "WebFetch", "mcp__playwright__browser_snapshot"); rejected=("mcp__token-savior-recall__capture_get", "mcp__github__get_file_contents", "mcp__other__read"); assert all(re.fullmatch(pattern, name) for name in approved); assert not any(re.fullmatch(pattern, name) for name in rejected)' "${PFB_ROOT}/.codex/hooks.json"
+    When run python3 -c 'import json, re, sys; groups=json.load(open(sys.argv[1]))["hooks"]["PostToolUse"]; pattern=next(g["matcher"] for g in groups if any("tool_capture_hook" in h["command"] for h in g["hooks"])); approved=("Bash", "Read", "Grep", "WebFetch", "mcp__playwright__browser_snapshot"); rejected=("PrefixBash", "BashSuffix", "mcp__token-savior-recall__capture_get", "mcp__github__get_file_contents", "mcp__other__read"); assert all(re.search(pattern, name) for name in approved); assert not any(re.search(pattern, name) for name in rejected)' "${PFB_ROOT}/.codex/hooks.json"
     The status should be success
   End
 End

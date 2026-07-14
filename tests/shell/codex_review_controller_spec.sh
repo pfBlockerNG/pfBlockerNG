@@ -11,11 +11,17 @@ Describe 'codex-review.sh trusted controller'
     controller="$work/controller"
     target="$work/target"
     capture="$work/codex-capture"
-    mkdir -p "$controller/scripts/agent" "$controller/.claude/workflows" \
+    launch_log="$work/codex-launches"
+    mkdir -p "$controller/scripts/agent" "$controller/.claude/workflows/schemas" \
       "$controller/.agents" "$controller/.codex/agents" "$work/bin" || return 1
     cp "${PFB_ROOT}/scripts/agent/codex-review.sh" "$controller/scripts/agent/" || return 1
+    cp "${PFB_ROOT}/scripts/agent/codex_review_aggregate.py" "$controller/scripts/agent/" || return 1
+    cp "${PFB_ROOT}/.claude/workflows/schemas/review-findings.schema.json" \
+      "${PFB_ROOT}/.claude/workflows/schemas/review-verdict.schema.json" \
+      "$controller/.claude/workflows/schemas/" || return 1
     chmod +x "$controller/scripts/agent/codex-review.sh" || return 1
     printf '%s\n' 'TRUSTED_WORKFLOW_SOURCE' > "$controller/.claude/workflows/review-single.js"
+    printf '%s\n' 'TRUSTED_FANOUT_WORKFLOW_SOURCE' > "$controller/.claude/workflows/review-fanout.js"
     printf '%s\n' 'LOW_CODEX=gpt-5.6-luna' 'MEDIUM_CODEX=gpt-5.6-terra' \
       'HIGH_CODEX=gpt-5.6-sol' > "$controller/.agents/model-tiers.conf"
     cat > "$controller/.codex/agents/adversarial-reviewer.toml" <<'EOF'
@@ -51,23 +57,54 @@ EOF
     cat > "$work/bin/codex" <<EOF
 #!/bin/sh
 capture='$capture'
+launch_log='$launch_log'
+output=''
+schema=''
 printf 'ARGS' > "\$capture"
 while [ "\$#" -gt 0 ]; do
-  printf ' <%s>' "\$1" >> "\$capture"
-  if [ "\$1" = '-C' ]; then
-    shift
-    printf ' <%s>' "\$1" >> "\$capture"
-    cd "\$1" || exit 2
-  fi
+  arg=\$1
+  printf ' <%s>' "\$arg" >> "\$capture"
   shift
+  case "\$arg" in
+    -C)
+      printf ' <%s>' "\$1" >> "\$capture"
+      cd "\$1" || exit 2
+      shift
+      ;;
+    --output-schema)
+      schema=\$1
+      printf ' <%s>' "\$1" >> "\$capture"
+      shift
+      ;;
+    --output-last-message)
+      output=\$1
+      printf ' <%s>' "\$1" >> "\$capture"
+      shift
+      ;;
+  esac
 done
 printf '\nCWD<%s>\nENV_BEGIN\n' "\$PWD" >> "\$capture"
 env | sort >> "\$capture"
 printf 'ENV_END\nPROMPT_BEGIN\n' >> "\$capture"
 cat >> "\$capture"
 printf '\nPROMPT_END\n' >> "\$capture"
+printf '%s\n' "\${schema##*/}" >> "\$launch_log"
+case "\${schema##*/}" in
+  review-verdict.schema.json)
+    printf '%s\n' '{"holds":true,"evidence":"verified probe","revised_severity":null}' > "\$output"
+    ;;
+  *)
+    printf '%s\n' '{"findings":[{"severity":"blocking","location":"a:1","explanation":"same defect","reproduce":"probe output","suggested_fix":"fix it"}],"per_file":[{"file":"a","verdict":"finding"}]}' > "\$output"
+    ;;
+esac
 EOF
     chmod +x "$work/bin/codex"
+    cat > "$work/bin/git" <<EOF
+#!/bin/sh
+printf 'hostile PATH git ran\n' > '$work/hostile-git-ran'
+exit 97
+EOF
+    chmod +x "$work/bin/git"
   }
 
   cleanup() {
@@ -79,15 +116,16 @@ EOF
   AfterEach 'cleanup'
 
   run_hostile_fixture() {
-    GH_TOKEN=secret GITHUB_TOKEN=also-secret ATTACK_SECRET=never-inherit \
-      PATH="$work/bin:$PATH" sh "$controller/scripts/agent/codex-review.sh" \
+    output=$(GH_TOKEN=secret GITHUB_TOKEN=also-secret ATTACK_SECRET=never-inherit \
+      CODEX_REVIEW_TEST_MODE=1 CODEX_REVIEW_TEST_CODEX_BIN="$work/bin/codex" \
+      PATH="$work/bin:$PATH" /bin/sh "$controller/scripts/agent/codex-review.sh" \
       --target-worktree "$target" \
       --trusted-policy-sha "$trusted_policy_sha" \
       --diff-base "$diff_base" \
       --pr 1348 \
       --workflow single \
       --tier low \
-      --spec-file "$work/spec" || return 1
+      --spec-file "$work/spec") || return 1
 
     python3 - "$capture" "$trusted_policy_sha" "$diff_base" "$target" "$controller" <<'PY'
 from pathlib import Path
@@ -95,20 +133,36 @@ import sys
 
 text = Path(sys.argv[1]).read_text()
 trusted_sha, diff_base, target, controller = sys.argv[2:]
+target = str(Path(target).resolve())
+controller = str(Path(controller).resolve())
 args, remainder = text.split("\nCWD<", 1)
 cwd, remainder = remainder.split(">\nENV_BEGIN\n", 1)
 environment, prompt = remainder.split("ENV_END\nPROMPT_BEGIN\n", 1)
 
 for flag in ("<--ephemeral>", "<--ignore-user-config>", "<--ignore-rules>",
-             "<--sandbox> <read-only>", "<--skip-git-repo-check>",
-             "<-m> <gpt-5.6-luna>"):
+             "<--skip-git-repo-check>", "<--output-schema>",
+             "review-findings.schema.json>", "<-m> <gpt-5.6-luna>",
+             '<default_permissions="codex_review">',
+             '<shell_environment_policy.inherit="none">',
+             '<shell_environment_policy.set=',
+             '<permissions.codex_review.extends=":read-only">',
+             '<permissions.codex_review.network.enabled=false>'):
     assert flag in args, flag
+assert "<--sandbox>" not in args
+assert f'"{target}"="read"' in args
+assert '="write"' in args
+assert '="deny"' in args
+assert 'GIT_CONFIG_GLOBAL="/dev/null"' in args
+assert 'GIT_DIR="' in args and '/review.git"' in args
 assert "/codex-review." in cwd
 assert target not in cwd and controller not in cwd
 for secret in ("GH_TOKEN=", "GITHUB_TOKEN=", "ATTACK_SECRET=", "secret"):
     assert secret not in environment
 assert "HOME=" in environment and "HOME=\n" not in environment
 assert "CODEX_HOME=" in environment and "CODEX_HOME=\n" not in environment
+path = next(line for line in environment.splitlines() if line.startswith("PATH="))
+assert path.endswith("/usr/bin:/bin:/usr/sbin:/sbin"), path
+assert str(Path(target).parent / "bin") not in path
 for trusted in ("TRUSTED_WORKFLOW_SOURCE", "TRUSTED_ROLE_RESTRICTIONS",
                 "EXPECTED_SPEC_DATA", trusted_sha, diff_base):
     assert trusted in prompt, trusted
@@ -118,7 +172,9 @@ for hostile in ("MALICIOUS_AGENTS_INSTRUCTIONS", "MALICIOUS_WORKFLOW_SOURCE",
     assert hostile not in prompt, hostile
 assert "DIFF_BASE is " + diff_base in prompt
 assert "TRUSTED_POLICY_SHA is " + trusted_sha in prompt
+assert "END UNTRUSTED SPEC DATA" in prompt
 PY
+    test ! -e "$work/hostile-git-ran"
   }
 
   It 'keeps hostile target policy out of the reviewer launch and prompt'
@@ -129,8 +185,9 @@ PY
 
   It 'derives a non-empty reviewer HOME from an absolute CODEX_HOME'
     mkdir -p "$work/auth/.codex"
-    When run env -u HOME CODEX_HOME="$work/auth/.codex" PATH="$work/bin:$PATH" \
-      sh "$controller/scripts/agent/codex-review.sh" \
+    When run env -u HOME CODEX_HOME="$work/auth/.codex" \
+      CODEX_REVIEW_TEST_MODE=1 CODEX_REVIEW_TEST_CODEX_BIN="$work/bin/codex" \
+      PATH="$work/bin:$PATH" /bin/sh "$controller/scripts/agent/codex-review.sh" \
       --target-worktree "$target" \
       --trusted-policy-sha "$trusted_policy_sha" \
       --diff-base "$diff_base" \
@@ -139,13 +196,15 @@ PY
       --tier low \
       --spec-file "$work/spec"
     The status should be success
+    The stdout should include '"findings"'
     The contents of file "$capture" should include "HOME=$work/auth"
     The contents of file "$capture" should include "CODEX_HOME=$work/auth/.codex"
   End
 
   It 'fails before launch when neither HOME nor CODEX_HOME is available'
-    When run env -u HOME -u CODEX_HOME PATH="$work/bin:$PATH" \
-      sh "$controller/scripts/agent/codex-review.sh" \
+    When run env -u HOME -u CODEX_HOME \
+      CODEX_REVIEW_TEST_MODE=1 CODEX_REVIEW_TEST_CODEX_BIN="$work/bin/codex" \
+      PATH="$work/bin:$PATH" /bin/sh "$controller/scripts/agent/codex-review.sh" \
       --target-worktree "$target" \
       --trusted-policy-sha "$trusted_policy_sha" \
       --diff-base "$diff_base" \
@@ -159,7 +218,9 @@ PY
   End
 
   It 'rejects using the PR-controlled delta SHA as the trusted policy SHA'
-    When run env PATH="$work/bin:$PATH" sh "$controller/scripts/agent/codex-review.sh" \
+    When run env CODEX_REVIEW_TEST_MODE=1 \
+      CODEX_REVIEW_TEST_CODEX_BIN="$work/bin/codex" PATH="$work/bin:$PATH" \
+      /bin/sh "$controller/scripts/agent/codex-review.sh" \
       --target-worktree "$target" \
       --trusted-policy-sha "$diff_base" \
       --diff-base "$diff_base" \
@@ -170,5 +231,51 @@ PY
     The status should equal 2
     The stderr should include 'does not match trusted policy SHA'
     The file "$capture" should not be exist
+  End
+
+  It 'rejects the test binary seam unless test mode is explicit'
+    When run env CODEX_REVIEW_TEST_CODEX_BIN="$work/bin/codex" \
+      /bin/sh "$controller/scripts/agent/codex-review.sh" \
+      --target-worktree "$target" \
+      --trusted-policy-sha "$trusted_policy_sha" \
+      --diff-base "$diff_base" \
+      --pr 1348 \
+      --workflow single \
+      --tier low \
+      --spec-file "$work/spec"
+    The status should equal 2
+    The stderr should include 'accepted only in test mode'
+    The file "$capture" should not be exist
+  End
+
+  run_fanout_fixture() {
+    output=$(CODEX_REVIEW_TEST_MODE=1 \
+      CODEX_REVIEW_TEST_CODEX_BIN="$work/bin/codex" \
+      /bin/sh "$controller/scripts/agent/codex-review.sh" \
+      --target-worktree "$target" \
+      --trusted-policy-sha "$trusted_policy_sha" \
+      --diff-base "$diff_base" \
+      --pr 1348 \
+      --workflow fanout \
+      --tier low \
+      --spec-file "$work/spec") || return 1
+    python3 - "$launch_log" "$output" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+launches = Path(sys.argv[1]).read_text().splitlines()
+result = json.loads(sys.argv[2])
+assert launches.count("review-findings.schema.json") == 3, launches
+assert launches.count("review-verdict.schema.json") == 1, launches
+assert result["lenses_returned"] == 3
+assert len(result["confirmed"]) == 1
+assert result["confirmed"][0]["verified"]["holds"] is True
+PY
+  }
+
+  It 'enforces findings on each fanout lens and verdict on each verifier'
+    When call run_fanout_fixture
+    The status should be success
   End
 End

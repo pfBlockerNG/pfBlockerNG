@@ -14,6 +14,9 @@ trusted orchestration checkout at `trusted_policy_sha` and run its
 workflow, tier, and role policy from that checkout and launches from an empty
 directory, so PR-controlled `AGENTS.md`, hooks, MCP servers, skills, custom roles,
 and `.codex` config are data rather than reviewer instructions. Use only when the
-user explicitly requests fan-out. Preserve the trusted lenses, read-only and
-credential-free restrictions, finding verification, and normal `$review-single`
-default.
+user explicitly requests fan-out. The controller launches each lens as a
+separate Codex process with the trusted FINDINGS `--output-schema`, deduplicates
+their results, and launches one separately schema-constrained VERDICT process per
+finding. Preserve the fixed executable path, least-privilege filesystem profile,
+credential-deny boundary, trusted lenses, finding verification, and normal
+`$review-single` default.

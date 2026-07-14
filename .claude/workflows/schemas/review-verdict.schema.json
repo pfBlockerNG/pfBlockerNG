@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["holds", "evidence", "revised_severity"],
+  "properties": {
+    "holds": {"type": "boolean", "description": "true iff the finding survives an attempt to refute it"},
+    "evidence": {"type": "string", "description": "the executed probe (command + output) that settles it"},
+    "revised_severity": {
+      "type": ["string", "null"],
+      "enum": ["blocking", "nitpick", "outside-diff", null]
+    }
+  }
+}

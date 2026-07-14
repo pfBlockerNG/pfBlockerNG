@@ -34,7 +34,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash|Read|Grep|WebFetch|mcp__playwright__.*",
+      "matcher": "^(Bash|Read|Grep|WebFetch|mcp__playwright__.*)$",
         "hooks": [
           {
             "type": "command",

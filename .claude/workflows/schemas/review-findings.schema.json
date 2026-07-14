@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["findings", "per_file"],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "location", "explanation", "reproduce", "suggested_fix"],
+        "properties": {
+          "severity": {"type": "string", "enum": ["blocking", "nitpick", "outside-diff"]},
+          "location": {"type": "string"},
+          "explanation": {"type": "string"},
+          "reproduce": {"type": "string", "description": "executed command + output for blocking claims"},
+          "suggested_fix": {"type": "string"}
+        }
+      }
+    },
+    "per_file": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file", "verdict"],
+        "properties": {
+          "file": {"type": "string"},
+          "verdict": {"type": "string"}
+        }
+      }
+    }
+  }
+}

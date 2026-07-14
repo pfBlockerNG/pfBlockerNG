@@ -30,34 +30,43 @@ if (!pr || !worktree) throw new Error('args must be {pr, worktree, base?, spec?,
 if (model !== 'sonnet' && model !== 'fable' && model !== 'opus') throw new Error(`model must be "sonnet", "fable", or "opus" (opus only as the dual-fallback second pass; never a dated ID); got "${model}"`)
 if (profile !== 'full' && profile !== 'verify') throw new Error(`profile must be "full" or "verify"; got "${profile}"`)
 
-const FINDINGS = {
-  type: 'object',
-  required: ['findings', 'per_file'],
-  properties: {
-    findings: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['severity', 'location', 'explanation', 'reproduce', 'suggested_fix'],
-        properties: {
-          severity: { type: 'string', enum: ['blocking', 'nitpick', 'outside-diff'] },
-          location: { type: 'string' },
-          explanation: { type: 'string' },
-          reproduce: { type: 'string', description: 'executed command + output for blocking claims' },
-          suggested_fix: { type: 'string' },
-        },
-      },
+// Mirrored byte-for-byte as JSON in schemas/review-findings.schema.json for
+// Codex CLI --output-schema enforcement; tests reject drift between the two.
+const FINDINGS = JSON.parse(String.raw`{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["findings", "per_file"],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "location", "explanation", "reproduce", "suggested_fix"],
+        "properties": {
+          "severity": {"type": "string", "enum": ["blocking", "nitpick", "outside-diff"]},
+          "location": {"type": "string"},
+          "explanation": {"type": "string"},
+          "reproduce": {"type": "string", "description": "executed command + output for blocking claims"},
+          "suggested_fix": {"type": "string"}
+        }
+      }
     },
-    per_file: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['file', 'verdict'],
-        properties: { file: { type: 'string' }, verdict: { type: 'string' } },
-      },
-    },
-  },
-}
+    "per_file": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file", "verdict"],
+        "properties": {
+          "file": {"type": "string"},
+          "verdict": {"type": "string"}
+        }
+      }
+    }
+  }
+}`)
 
 // Shared tooling + output discipline (both profiles). TS covers this repo's PHP/inc/sh
 // since the fork pin; rtk proxies compact common command output (a PreToolUse hook also

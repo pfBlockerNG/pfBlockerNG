@@ -22,44 +22,58 @@ const { pr, base = 'devel', worktree, spec = '(no spec provided — flag that as
 const baseRef = /^[0-9a-f]{7,40}$/.test(base) ? base : `origin/${base}`
 if (!pr || !worktree) throw new Error('args must be {pr, worktree, base?, spec?}')
 
-const FINDINGS = {
-  type: 'object',
-  required: ['findings', 'per_file'],
-  properties: {
-    findings: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['severity', 'location', 'explanation', 'reproduce', 'suggested_fix'],
-        properties: {
-          severity: { type: 'string', enum: ['blocking', 'nitpick', 'outside-diff'] },
-          location: { type: 'string' },
-          explanation: { type: 'string' },
-          reproduce: { type: 'string', description: 'executed command + output for blocking claims' },
-          suggested_fix: { type: 'string' },
-        },
-      },
+// Mirrored byte-for-byte as JSON in schemas/ for Codex CLI --output-schema
+// enforcement; tests reject drift between the workflow and shared schema files.
+const FINDINGS = JSON.parse(String.raw`{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["findings", "per_file"],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "location", "explanation", "reproduce", "suggested_fix"],
+        "properties": {
+          "severity": {"type": "string", "enum": ["blocking", "nitpick", "outside-diff"]},
+          "location": {"type": "string"},
+          "explanation": {"type": "string"},
+          "reproduce": {"type": "string", "description": "executed command + output for blocking claims"},
+          "suggested_fix": {"type": "string"}
+        }
+      }
     },
-    per_file: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['file', 'verdict'],
-        properties: { file: { type: 'string' }, verdict: { type: 'string' } },
-      },
-    },
-  },
-}
+    "per_file": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file", "verdict"],
+        "properties": {
+          "file": {"type": "string"},
+          "verdict": {"type": "string"}
+        }
+      }
+    }
+  }
+}`)
 
-const VERDICT = {
-  type: 'object',
-  required: ['holds', 'evidence'],
-  properties: {
-    holds: { type: 'boolean', description: 'true iff the finding survives an attempt to refute it' },
-    evidence: { type: 'string', description: 'the executed probe (command + output) that settles it' },
-    revised_severity: { type: 'string', enum: ['blocking', 'nitpick', 'outside-diff'] },
-  },
-}
+const VERDICT = JSON.parse(String.raw`{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["holds", "evidence", "revised_severity"],
+  "properties": {
+    "holds": {"type": "boolean", "description": "true iff the finding survives an attempt to refute it"},
+    "evidence": {"type": "string", "description": "the executed probe (command + output) that settles it"},
+    "revised_severity": {
+      "type": ["string", "null"],
+      "enum": ["blocking", "nitpick", "outside-diff", null]
+    }
+  }
+}`)
 
 const COMMON = `You are an independent ADVERSARIAL reviewer of PR #${pr} (base ${baseRef}) in a READ-ONLY checkout at ${worktree}. Diff: git -C ${worktree} diff ${baseRef}...HEAD. Read surrounding code, not just hunks; you may run commands/gates but never edit, commit, or push. Ground every blocking correctness claim in an EXECUTED probe (command + output) where executable off-appliance — create scratch fixtures under /tmp, never inside the checkout. Probes are TARGETED: never re-run whole test suites for their own sake (CI and the delegation gate already run them); a suite run is justified only when a specific finding needs exactly that evidence. Files under .claude/skills/ponytail/ and .claude/skills/caveman/ are VENDORED byte-identical third-party trees (see their UPSTREAM provenance files) — do NOT review their content or style; only byte-identity with the pinned upstream ref and the UPSTREAM provenance are reviewable. Return structured findings; your output is the review. THE SPEC (review the diff AGAINST this; silently narrowed scope is a blocking finding): ${spec}`
 
