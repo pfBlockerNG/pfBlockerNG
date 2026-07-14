@@ -85,7 +85,11 @@ const GATE_RECORD = {
   },
 }
 
+// Both briefSpec routes hand the implementer a POINTER brief: the constraints
+// (do-NOT-touch) and acceptance checks live in the phase prompt on disk, so the
+// verifier must read that file too or it gates against half a contract.
 let reconcileRecord = null
+let promptRef = null
 if (briefSpec) {
   const { adrDir, phase: phaseNum, notes = '', weight = 'full' } = briefSpec
   if (!adrDir || !phaseNum) throw new Error('briefSpec must include {adrDir, phase}')
@@ -99,6 +103,7 @@ if (briefSpec) {
     if (redProof) throw new Error('weight "light" is for behaviour-preserving phases only — redProof must be null (a behaviour-changing phase is full-weight)')
     log('light-weight phase: Reconcile stage skipped — the phase prompt on disk is the brief')
     const mm = String(phaseNum).padStart(2, '0')
+    promptRef = `${adrDir}/${mm}_*.txt`
     brief = `LIGHT-WEIGHT ADR PHASE (weight: light — mechanical execution of an already-enumerated, oracle-pinned plan). Your brief lives ON DISK, not in this message. Worktree: ${worktree}; ADR directory: ${adrDir} (relative to the worktree); phase ${phaseNum}.
 
 MANDATORY READING (in order): the phase prompt ${adrDir}/${mm}_*.txt — it IS the brief: its ACTION PLAN is your plan, its VERIFICATION section your acceptance checks, its CONSTRAINTS/stays lists your do-NOT-touch list; the previous phase's Results + Gate files in ${adrDir}/RESULTS/ plus the carry_forward line of every earlier Results file; the ADR.md sections the prompt names.
@@ -112,6 +117,7 @@ Write ${adrDir}/RESULTS/${mm}_Results.txt with the fixed HANDOFF fields, make ON
   } else {
   phase('Reconcile')
   const mm = String(phaseNum).padStart(2, '0')
+  promptRef = `${adrDir}/${mm}_*.txt`
 
   reconcileRecord = await agent(`You are the RECONCILER for ONE ADR phase (CLAUDE.md "The delegation contract" — you produce THE BRIEF's content, split between the phase prompt on disk and your structured fields), with a fresh context: read everything just-in-time from disk; trust nothing from memory. You plan only — you implement nothing and spawn no agents. The phase prompt IS the implementer's brief: your job is to bring it up to date with the live tree and derive the enumerations, NOT to re-author it as a new document.
 
@@ -121,7 +127,7 @@ READ (all inside the worktree): the phase prompt ${adrDir}/${mm}_*.txt; the ADR.
 
 DRIFT CHECK — scoped, not a re-review: evaluate the PREVIOUS phase's LANDED DIFF (git -C ${worktree} show of its commit) ONLY against (a) the ADR invariants it touches and (b) this phase's premises. The previous Verify stage already re-derived that phase's gate mechanically and the whole-PR review re-reads every diff — do not re-review the diff generally. Soft findings go in drift_flags (this phase would undo a pinned invariant; the previous diff strains an ADR invariant; a carry_forward contradicts the ADR). A HARD contradiction — the phase prompt or ADR refuted by the code or a prior record — is verdict BLOCKED with the blocker field filled; stop there. Phase 1 of a run has no previous diff: skip the diff read, still reconcile the prompt below (this also covers an ADR authored long before the run).
 
-RECONCILE THE PROMPT (edit the file in place — smallest diff, never a rewrite): verify every file:line ref and code-state claim in the prompt against the live tree (git -C ${worktree} grep / read the named sites); fix what is stale; fold in any prior carry_forward fact the implementer must see; add a load-bearing fact you discovered ONLY if acting without it would ship a defect. Keep the prompt's structure and contract blocks intact and run python3 scripts/check_phase_prompts.py on the file after editing — it must stay clean. Do NOT restate what is already correct, and do NOT write the coverage matrix / hostile rows / gates into the prompt (they live in your structured fields; the workflow renders them for the implementer). If you changed the file, commit ONLY that file (message style: docs: ADR-NN phase ${phaseNum} prompt reconciled), do not push; report prompt_status accordingly with one corrections[] entry per fixed claim {claim, correction, evidence}.
+RECONCILE THE PROMPT (edit the file in place — smallest diff, never a rewrite): verify every file:line ref and code-state claim in the prompt against the live tree (git -C ${worktree} grep / read the named sites); fix what is stale; fold in any prior carry_forward fact the implementer must see; add a load-bearing fact you discovered ONLY if acting without it would ship a defect. Keep the prompt's structure and contract blocks intact and run python3 ${worktree}/scripts/check_phase_prompts.py <the prompt's absolute path> after editing — it must stay clean (it takes explicit paths from any cwd). Do NOT restate what is already correct, and do NOT write the coverage matrix / hostile rows / gates into the prompt (they live in your structured fields; the workflow renders them for the implementer). If you changed the file, commit ONLY that file (message style: docs: ADR-NN phase ${phaseNum} prompt reconciled), do not push; report prompt_status accordingly with one corrections[] entry per fixed claim {claim, correction, evidence}.
 
 DERIVE, never copy: run the enumeration greps YOURSELF (git -C ${worktree} grep ...) for every sibling axis the phase touches (v4/v6, address/port, CE/Plus versions, parse modes, every caller of a touched symbol, every branch of a touched conditional) — each coverage_matrix row cites the executed command or file:line it came from. Supply hostile_rows with expected outcomes for any parser/regex/guard the phase touches (CLAUDE.md THE BRIEF section 4 input classes). Derive gates from the languages the phase touches (CLAUDE.md "Canonical gates" table, plus cross-language consumers of artifacts it changes), red_proof {srcPaths, testCmd} (null ONLY if the phase is behaviour-preserving — the prompt must say so and name the oracle tests), and plan_items from the prompt's ACTION PLAN. implementer_notes carries transient session facts only (verified branch/base state, environment gotchas from prior handoffs) — never a restatement of the structured fields.`,
     { label: 'reconcile', phase: 'Reconcile', effort: 'xhigh', schema: RECONCILE_RECORD, ...(briefModel ? { model: briefModel } : {}) })
@@ -215,7 +221,7 @@ ${JSON.stringify(handoff, null, 2)}
 
 THE BRIEF IT EXECUTED (check the diff against every plan item):
 ${brief}
-
+${promptRef ? `\nThat brief is a POINTER: READ the phase prompt ${promptRef} in the worktree before you gate. Its CONSTRAINTS section is the do-NOT-touch list you check the diff against, and its VERIFICATION section the acceptance checks you tick — they exist nowhere else in this message.\n` : ''}
 MANDATORY CHECKS — one items[] entry each, with executed evidence; a skipped check goes in skipped[] with its reason:
 1. handoff-fields: every required field non-empty and internally consistent (commit exists: git -C ${worktree} log -1).
 2. gate-rerun: re-run ${gates.length ? gates.join(' · ') : 'the canonical gates for every language the diff touches, plus cross-language consumers'} yourself; paste output tails.
