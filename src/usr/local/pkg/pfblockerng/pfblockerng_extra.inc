@@ -1871,6 +1871,56 @@ function pfb_adv_alias_field_errors(array $post): array
 	return $errors;
 }
 
+/**
+ * pfb_header_reserved_error — reject a source Header that collides with a
+ * package-synthesized name (issue #1270): DNSBL-IP and the 9 GeoIP continent
+ * aliases write to the SAME <header><vtype>.txt path a user list's Header
+ * would use (pfb_determine_list_detail() folder routing), so an identical
+ * Header silently collides last-writer-wins on disk. Unconditional (not
+ * action-scoped) — the collision does not depend on which action/folder the
+ * offending list itself routes to.
+ *
+ * The reserved set is read from $pfb['continents'] (its 9 VALUES) — never
+ * $pfb['continent_list'], which is missing pfB_PS — so a future continent
+ * addition is automatically covered.
+ *
+ * @param  string $header  Candidate Header value (already normalised by the
+ *                          caller when judging a stored/imported value).
+ * @return string          Human-readable error, or '' when not reserved.
+ */
+function pfb_header_reserved_error(string $header): string
+{
+	if ($header === '') {
+		return '';
+	}
+	global $pfb;
+	$reserved = array_merge(['DNSBLIP'], array_values($pfb['continents']));
+	if (in_array($header, $reserved, TRUE)) {
+		return "Header field '{$header}' is reserved by pfBlockerNG (DNSBL-IP or a GeoIP continent alias) and cannot be used.";
+	}
+	return '';
+}
+
+/**
+ * pfb_normalize_row_header — apply the SAME \W-strip sync_package_pfblockerng()
+ * persists onto a stored list-row Header, then judge the RESULT against
+ * pfb_header_reserved_error() (issue #1270): a Header arriving via config
+ * import/HA-sync (never through the GUI) can normalise onto a reserved name
+ * with no save-time check ever having run.
+ *
+ * @param  string $header  Raw (possibly punctuated) stored Header.
+ * @return array{header: string, changed: bool, reserved_error: string}
+ */
+function pfb_normalize_row_header(string $header): array
+{
+	$normalized = preg_replace('/\W/', '', $header);
+	return [
+		'header'         => $normalized,
+		'changed'        => $normalized !== $header,
+		'reserved_error' => pfb_header_reserved_error($normalized),
+	];
+}
+
 // ---------------------------------------------------------------------------
 // ADR-38: pure key=value syslog event formatters (pfb_syslog_format_ip() etc.) — the fixed
 // key order, empty-value omission rules, and quoting/escaping are specified in

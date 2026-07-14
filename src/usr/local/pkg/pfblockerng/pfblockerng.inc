@@ -16593,8 +16593,10 @@ function sync_package_pfblockerng($cron='') {
 					);
 
 		$pfb_invalid = FALSE;
+		$pfb_reserved_skips = array();	// issue #1270: headers skipped as reserved (batched into one notice below)
 		foreach ($list_types as $ltype => $vtype) {
 			$lists = array();
+			$dnsblip_lists_key = NULL;	// issue #1270: exempts the package's OWN synthesized DNSBLIP row below
 
 			$type_config = config_get_path("installedpackages/{$ltype}/config");
 			if (!empty($type_config) && $pfb['enable'] == 'on') {
@@ -16625,6 +16627,7 @@ function sync_package_pfblockerng($cron='') {
 							'url'		=> "{$pfb['dbdir']}/DNSBLIP{$vtype}.txt",
 							'header'	=> 'DNSBLIP');
 				$lists[] = $list;
+				$dnsblip_lists_key = array_key_last($lists);
 			}
 
 			if (!empty($lists)) {
@@ -16648,10 +16651,17 @@ function sync_package_pfblockerng($cron='') {
 
 						foreach ($list['row'] as $hkey => $row) {
 
-							// Remove any spaces or special characters in existing Header names
-							if (preg_match("/\W/", $row['header'])) {
+							// issue #1270: normalize (same \W-strip as before) + reject a header
+							// colliding with a package-owned name; the DNSBLIP synthesized row is exempt.
+							$pfb_norm_hdr = pfb_normalize_row_header($row['header']);
+							if ($pfb_norm_hdr['reserved_error'] !== '' && $key !== $dnsblip_lists_key) {
+								$pfb_reserved_skips[] = "{$pfb_norm_hdr['header']} ({$ltype})";
+								continue;
+							}
+
+							if ($pfb_norm_hdr['changed']) {
 								$pfb_invalid	= TRUE;
-								$row['header']	= preg_replace("/\W/", '', $row['header']);
+								$row['header']	= $pfb_norm_hdr['header'];
 								config_set_path("installedpackages/{$ltype}/config/{$key}/row/{$hkey}/header", $row['header']);
 							}
 
@@ -16688,6 +16698,13 @@ function sync_package_pfblockerng($cron='') {
 		// Save any existing Alias/Header names that have spaces or special characters
 		if ($pfb_invalid) {
 			write_config('pfBlockerNG: Remove spaces/special characters in Alias/Header names');
+		}
+
+		// issue #1270: one batched notice for every header skipped as reserved this pass
+		if (!empty($pfb_reserved_skips)) {
+			$pfb_reserved_msg = 'pfBlockerNG: skipped reserved header(s) (collides with a package-owned name): ' . implode(', ', $pfb_reserved_skips);
+			pfb_logger("\n\nURGENT:\n    {$pfb_reserved_msg}\n", 1);
+			file_notice('pfBlockerNG Header', $pfb_reserved_msg, 'pfBlockerNG', '/pfblockerng/pfblockerng_category_edit.php', 2);
 		}
 
 		// If 'TLD' enabled and TLD Blacklists are defined, add to enabled DNSBL lists
