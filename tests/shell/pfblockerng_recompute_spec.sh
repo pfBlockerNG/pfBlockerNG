@@ -9,9 +9,11 @@
 # `-vf <patternfile> <targetfile>` -> target lines whose address is NOT
 # inside ANY pattern CIDR/host, via portable integer arithmetic. Fidelity
 # probed against the real binary: a pattern file with ZERO parseable
-# patterns (blank lines only, or empty) prints NOTHING and exits 1 --
-# never "no patterns matched, so keep every line" -- so `n == 0` short-
-# circuits to that outcome before the per-line filter ever runs.
+# patterns (blank OR whitespace-only lines, or empty) prints NOTHING and
+# exits 1 -- never "no patterns matched, so keep every line" -- so a
+# whitespace-only pattern line is skipped like a blank one (issue #1279)
+# and `n == 0` short-circuits to that outcome before the per-line filter
+# ever runs.
 make_grepcidr_stub() {
 	cat > "$1" <<'EOF'
 #!/bin/sh
@@ -26,7 +28,7 @@ function net(ipint, bits,   div) {
 }
 BEGIN {
 	while ((getline line < patfile) > 0) {
-		if (line == "") continue
+		if (line ~ /^[ \t]*$/) continue
 		split(line, parts, "/")
 		n++
 		pbits[n] = (parts[2] == "" ? 32 : parts[2])
@@ -270,6 +272,47 @@ Describe 'pfb_recompute() v4 cross-feed dedup (Stage A/B/D/E)'
 		The contents of file "${pfbdeny}OnlyBlank_v4.txt" should equal ''
 		The contents of file "${pfbdeny}Disjoint_v4.txt" should equal '198.51.100.70'
 		The contents of file "$countsfile" should include 'Disjoint_v4 1'
+	End
+
+	It 'never lets a whitespace-only (spaces) high-priority snapshot poison the cumulative dedup stream into eating a disjoint lower feed (issue #1279)'
+		printf '   \n' > "${snap}/OnlySpaces_v4.orig"
+		printf '198.51.100.71\n' > "${snap}/Disjoint_v4.orig"
+		printf '%s\n%s\n' "${snap}/OnlySpaces_v4.orig" "${snap}/Disjoint_v4.orig" > "$memberlist"
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
+		The status should be success
+		# the whitespace-only row's OWN emitted file is governed by the unrelated,
+		# out-of-scope :1053/:1221 blank-filter sites -- only the cumulative-dedup
+		# wipe of the disjoint feed is this fix's contract.
+		The contents of file "${pfbdeny}Disjoint_v4.txt" should equal '198.51.100.71'
+		The contents of file "$countsfile" should include 'Disjoint_v4 1'
+	End
+
+	It 'never lets a whitespace-only (tabs) high-priority snapshot poison the cumulative dedup stream into eating a disjoint lower feed (issue #1279)'
+		printf '\t\t\n' > "${snap}/OnlyTabs_v4.orig"
+		printf '198.51.100.72\n' > "${snap}/Disjoint_v4.orig"
+		printf '%s\n%s\n' "${snap}/OnlyTabs_v4.orig" "${snap}/Disjoint_v4.orig" > "$memberlist"
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
+		The status should be success
+		The contents of file "${pfbdeny}Disjoint_v4.txt" should equal '198.51.100.72'
+		The contents of file "$countsfile" should include 'Disjoint_v4 1'
+	End
+
+	It 'a whitespace-only line mixed with a valid row in the same snapshot never wipes a later disjoint feed (issue #1279)'
+		printf '203.0.113.50\n   \n' > "${snap}/Mixed_v4.orig"
+		printf '198.51.100.73\n' > "${snap}/Disjoint_v4.orig"
+		printf '%s\n%s\n' "${snap}/Mixed_v4.orig" "${snap}/Disjoint_v4.orig" > "$memberlist"
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
+		The status should be success
+		The contents of file "${pfbdeny}Disjoint_v4.txt" should equal '198.51.100.73'
+	End
+
+	It 'a pattern row with surrounding whitespace still counts as valid content and dedups a later feed exact repeat (issue #1279 -- do not over-fix into stripping valid rows)'
+		printf '  198.51.100.75  \n' > "${snap}/Padded_v4.orig"
+		printf '198.51.100.75\n198.51.100.76\n' > "${snap}/PaddedLower_v4.orig"
+		printf '%s\n%s\n' "${snap}/Padded_v4.orig" "${snap}/PaddedLower_v4.orig" > "$memberlist"
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
+		The status should be success
+		The contents of file "${pfbdeny}PaddedLower_v4.txt" should equal '198.51.100.76'
 	End
 
 	It 'dedups an internal repeat within a single feed snapshot (within-feed dupes, issue #1084 review)'

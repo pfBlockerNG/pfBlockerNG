@@ -956,7 +956,7 @@ pfb_recompute() {
 			# as empty), so a later alias hits grepcidr with a pattern-free file,
 			# which prints NOTHING for -vf (not "keep everything"): it would wipe
 			# every row of every lower-priority feed sharing this pass.
-			if ! awk '$0 != ""' "${rec_ownedfile}" >> "${rec_cumulative}"; then
+			if ! awk 'NF' "${rec_ownedfile}" >> "${rec_cumulative}"; then
 				log="recompute [ ${rec_family} ]: could not extend cumulative dedup stream for [ ${rec_alias} ]; aborting pass, cleaning up partial artifacts"
 				echo "${log}" | tee -a "${errorlog}"
 				pfb_recompute_clean_new
