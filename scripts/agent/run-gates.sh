@@ -108,7 +108,9 @@ main() {
 	# reads the WORKING TREE, so a staged-then-worktree-reverted file is invisible.
 	staged=$(git -C "$worktree" diff --name-only --diff-filter=ACMR --cached) || exit 2
 	unstaged=$(git -C "$worktree" diff --name-only --diff-filter=ACMR) || exit 2
-	files=$(printf '%s\n%s\n%s\n' "$committed" "$staged" "$unstaged" | LC_ALL=C sort -u | grep -v '^$')
+	# neither diff form surfaces a brand-new file never `git add`ed.
+	untracked=$(git -C "$worktree" ls-files --others --exclude-standard) || exit 2
+	files=$(printf '%s\n%s\n%s\n%s\n' "$committed" "$staged" "$unstaged" "$untracked" | LC_ALL=C sort -u | grep -v '^$')
 	# The shellspec gate must also fire when only spec files changed (cross-language
 	# consumers rule): specs are .sh files, so the extension mapping already covers it.
 	cmds=$(printf '%s\n' "$files" | gates_for)
