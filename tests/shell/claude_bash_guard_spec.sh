@@ -9,13 +9,20 @@
 # asserts the exit status + stdout shape.
 #
 # Contracts pinned here:
-#   Rule A  -- git commit + --no-verify                       -> DENY
-#   Rule B  -- git push + force flag (--force / standalone -f /
+#   Rule A  -- git commit + --no-verify (long flag, standalone -n, or a
+#              clustered short flag like -an, -anm)            -> DENY
+#              (#1292: -n is git's own short form of --no-verify on
+#              `git commit`, and clusters exactly like Rule B's f-cluster)
+#   Rule B  -- git push + EITHER a force flag (--force / standalone -f /
 #              a clustered short flag like -uf, -fu, -4f)
-#              WITHOUT --force-with-lease                     -> DENY
+#              WITHOUT --force-with-lease, OR a `+`-prefixed force
+#              REFSPEC (`git push origin +branch:branch`)      -> DENY
 #              (lease present AND no bare force flag after the LAST
 #              --force-with-lease -> PASS; git honors the last force
-#              flag, so a bare force AFTER the lease still denies, #1058)
+#              flag, so a bare force AFTER the lease still denies, #1058.
+#              #1292: a `+` refspec is git's OTHER force syntax -- no flag
+#              at all, and NEVER lease-protected, so it denies even
+#              alongside --force-with-lease)
 #   Rule C  -- git worktree remove + force flag                -> DENY
 #   fail-open -- empty / garbled stdin, no rule match           -> PASS
 #   -f boundary -- standalone -f / an f-bearing short-flag cluster,
@@ -112,6 +119,51 @@ Describe 'claude-bash-guard.sh'
       When run script "$GUARD"
       The status should be success
       The output should equal '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"the pre-commit lint gate'"'"'s --no-verify bypass is for humans, not agents (CLAUDE.md)"}}'
+    End
+
+    It 'B11 (#1292): standalone short flag (git commit -n -m x) -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git commit -n -m x"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'B12 (#1292): clustered short flag, n mid-cluster (git commit -anm x) -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git commit -anm x"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'H15 (#1292 F3 clustered short flag, other order): git commit -an -m x -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git commit -an -m x"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'H16 (#1292 F1 whitespace evasion): double space before a short -n (git  commit -n -m x) -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git  commit -n -m x"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'H17 (#1292 F2 metachar boundary): git commit -n;true -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git commit -n;true"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
     End
 
     It 'B10 (documented accepted false-positive): --no-verify inside the commit MESSAGE text -> DENY'
@@ -319,6 +371,51 @@ Describe 'claude-bash-guard.sh'
       The status should be success
       The output should equal ""
     End
+
+    It 'B13 (#1292): + force refspec, no flag at all (git push origin +branch:branch) -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push origin +branch:branch"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'B14 (#1292): + force refspec, src != dst (git push origin +feature:main) -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push origin +feature:main"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'B15 (#1292, load-bearing): + force refspec ALONGSIDE --force-with-lease still DENIES (the lease never protects it)'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push --force-with-lease origin +branch:branch"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'H18 (#1292 F2 metachar boundary): git push origin +branch:branch;true -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push origin +branch:branch;true"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'H19 (#1292 F1 quoting evasion): a quoted refspec (git push origin \"+branch:branch\") -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push origin \"+branch:branch\""}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
   End
 
   # ── Rule C: git worktree remove + force flag ────────────────────────────────
@@ -494,6 +591,24 @@ Describe 'claude-bash-guard.sh'
       When run script "$GUARD"
       The status should be success
       The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'C9 (#1292, still caught): git status && a + force refspec push in its own segment -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git status && git push origin +branch:branch"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'C10 (#1292, no leak): a literal + in an unrelated segment does not force an unforced push -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"echo +1 && git push origin main"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
     End
   End
 

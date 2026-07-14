@@ -6,13 +6,17 @@
 # AGENT must not run -- three git bypasses a human may legitimately use, plus a
 # wait-launch shape that silently strands the turn:
 #
-#   Rule A -- `git commit` with `--no-verify`   : the pre-commit lint gate's
-#             --no-verify bypass is for humans, not agents (CLAUDE.md "Git
-#             hooks").
-#   Rule B -- `git push` with a force flag (--force, --force-with-lease,
-#             standalone -f, or a clustered short flag like -uf/-fu) and
-#             WITHOUT --force-with-lease        : the rebase-only landing
-#             flow uses --force-with-lease exclusively; a bare force-push can
+#   Rule A -- `git commit` with `--no-verify` (long flag, standalone -n, or a
+#             clustered short flag like -an/-anm)   : the pre-commit lint
+#             gate's --no-verify bypass is for humans, not agents (CLAUDE.md
+#             "Git hooks").
+#   Rule B -- `git push` with EITHER a force flag (--force,
+#             --force-with-lease, standalone -f, or a clustered short flag
+#             like -uf/-fu) WITHOUT --force-with-lease, OR a `+`-prefixed
+#             force REFSPEC (`git push origin +branch:branch`) -- git's
+#             OTHER force syntax, with no flag at all and NEVER
+#             --force-with-lease-protected : the rebase-only landing flow
+#             uses --force-with-lease exclusively; a bare force-push can
 #             clobber another session's in-flight PR (CLAUDE.md "Worktrees").
 #   Rule C -- `git worktree remove` with a force flag : CLAUDE.md forbids
 #             force-removing a worktree an agent does not own.
@@ -117,6 +121,13 @@
 # containing `f` (`-uf`, `-fu`, ...) are matched with an explicit boundary so
 # they do NOT fire inside --force, --force-with-lease, -force, or a filename
 # ending in "-f" (e.g. my-f-dir) -- see _has_force_flag below.
+#
+# Standalone `-n` (short form of --no-verify on `git commit`) and a clustered
+# short flag containing `n` (`-an`, `-anm`, ...) use the IDENTICAL boundary
+# mechanism -- see _has_noverify_flag below. A `+`-prefixed force refspec
+# (`git push origin +branch:branch`) is git's OTHER force syntax on `git
+# push`, independent of any flag and NEVER --force-with-lease-protected --
+# see _has_force_refspec below (issue #1292).
 set -u
 
 payload="$(cat)"
@@ -218,6 +229,37 @@ _bare_force_after_last_lease() {
 		| grep -Eq "(^|${_SEP})(--force|${_FORCE_CLUSTER})(\$|${_SEP})"
 }
 
+# _has_noverify_flag -- true iff the CURRENT SEGMENT ($seg) carries a
+# --no-verify bypass on `git commit`:
+#   * the literal substring --no-verify, OR
+#   * a single-dash short-flag CLUSTER containing n (-n, -an, -anm, ...) --
+#     -n is git's own short form of --no-verify on `git commit` (`git
+#     commit -h`), and clusters exactly like _has_force_flag's f-cluster
+#     (issue #1292). The same mandatory single leading dash is why this
+#     never matches --no-verify/--amend -- identical double-dash-boundary
+#     argument as _FORCE_CLUSTER above.
+_NOVERIFY_CLUSTER="-[a-z0-9]*n[a-z0-9]*"
+_has_noverify_flag() {
+	_contains '--no-verify' && return 0
+	printf '%s' "$seg" | grep -Eq "(^|${_SEP})${_NOVERIFY_CLUSTER}(\$|${_SEP})"
+}
+
+# _SEP_NOT -- the complement of _SEP: any character that is NOT a boundary
+# separator. Used by _has_force_refspec so the character right after a
+# leading `+` must belong to a ref-name token, not another separator (a bare
+# `+`, or one glued mid-token, doesn't match).
+_SEP_NOT='[^[:space:];|&(){}<>,]'
+
+# _has_force_refspec -- true iff the CURRENT SEGMENT ($seg) carries a
+# `+`-prefixed force REFSPEC on `git push` (`git push origin
+# +branch:branch`) -- git's OTHER force syntax, with no flag at all (`git
+# help push`: a leading `+` on a refspec forces a non-fast-forward update).
+# NEVER --force-with-lease-protected -- the lease guards a FLAG, not this
+# refspec shorthand, so callers must check it unconditionally (issue #1292).
+_has_force_refspec() {
+	printf '%s' "$seg" | grep -Eq "(^|${_SEP})\\+${_SEP_NOT}"
+}
+
 # _deny <reason> -- print the PreToolUse deny JSON and exit 0 (exit 0 is
 # required even for a deny: Claude Code reads the decision from stdout, not
 # from the process exit status). <reason> must contain no " or \ so it can
@@ -240,7 +282,7 @@ fi
 # box's /bin/sh) forks a subshell for the reader end of a pipe, which would
 # swallow _deny's `exit 0` instead of ending the whole script.
 while IFS= read -r seg; do
-	if _contains 'git commit' && _contains '--no-verify'; then
+	if _contains 'git commit' && _has_noverify_flag; then
 		_deny "the pre-commit lint gate's --no-verify bypass is for humans, not agents (CLAUDE.md)"
 	fi
 
@@ -248,6 +290,12 @@ while IFS= read -r seg; do
 		if ! _contains '--force-with-lease' || _bare_force_after_last_lease; then
 			_deny "the rebase-only landing flow uses --force-with-lease exclusively; a bare force-push can clobber another session's PR (CLAUDE.md)"
 		fi
+	fi
+
+	# A `+` force refspec (issue #1292) is NEVER lease-protected -- unconditional,
+	# unlike the flag check above which --force-with-lease can clear.
+	if _contains 'git push' && _has_force_refspec; then
+		_deny "the rebase-only landing flow uses --force-with-lease exclusively; a bare force-push can clobber another session's PR (CLAUDE.md)"
 	fi
 
 	if _contains 'git worktree remove' && _has_force_flag; then
