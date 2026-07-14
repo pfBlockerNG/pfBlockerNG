@@ -18886,6 +18886,15 @@ function sync_package_pfblockerng($cron='') {
 
 				foreach	($list['row'] as $row) {
 					if (!empty($row['url']) && $row['state'] != 'Disabled') {
+
+						// issue #1270: a header colliding with a reserved package-owned name (e.g.
+						// foreign config that bypassed GUI validation) must not download+write to
+						// that name's own file; the synthesized DNSBLIP list (below) is exempt.
+						if (!isset($list['dnsblip']) && pfb_header_reserved_error($row['header'] ?? '') !== '') {
+							pfb_logger("\n Reserved Header:{$row['header']}, *skipping*", 1);
+							continue;
+						}
+
 						$header = "{$row['header']}{$list['vtype']}";	// Capture Header/Label name
 						if (empty(pfb_filter($header, PFB_FILTER_WORD, 'Download and Collect IPv4/IPv6 lists'))) {
 							pfb_logger("\n Invalid Aliasname:{$list['aliasname']}{$list['vtype']} | Header:{$row['header']}{$list['vtype']}, *skipping*", 1);
