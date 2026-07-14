@@ -1,11 +1,17 @@
-# CLAUDE.md — pfBlockerNG
+# Shared agent policy — pfBlockerNG
+
+`CLAUDE.md` is the historical discovery filename and the canonical policy source
+for every supported agent client. Claude Code reads it directly; Codex reads it
+through [`AGENTS.md`](AGENTS.md), whose only job is translating runtime surfaces.
+Shared behavior belongs here or in the referenced annexes, never in a duplicated
+vendor summary.
 
 ## Scope — the pfBlockerNG-org default
 
-These rules, **plus** the project + user `.claude/settings.json` (the `SessionStart`/
-`UserPromptSubmit` hooks), are the **default way of working for every repository in the
-`pfBlockerNG` GitHub organization** — not only `pfBlockerNG/pfBlockerNG`. A repo-local
-`CLAUDE.md` rule wins for that repo, and only there.
+These rules, **plus** the active client's project + user settings and lifecycle hooks,
+are the **default way of working for every repository in the `pfBlockerNG` GitHub
+organization** — not only `pfBlockerNG/pfBlockerNG`. A repo-local canonical-policy rule
+wins for that repo, and only there.
 
 **Carries over (how we work):** communication, Working principles, the delegation contract,
 worktrees + the rebase-only landing flow + `/pr-merge-flow`, branch naming, the test-coverage
@@ -85,11 +91,17 @@ pfSense-provided PHP functions".
   actual output. Only a CONFIRMED hypothesis gets a fix; the ledger rides the handoff so the
   gate can audit the causal chain instead of trusting the patch.
 
-### Plan with a higher model, implement with Sonnet 5
+### Plan high, implement low
 
-Substantial coding work is **planned and gated by a higher model** (the session's top tier —
-currently Fable, else Opus) and
-**implemented by Sonnet 5** sub-agents: the planner splits the task into steps, a Sonnet 5
+Provider-neutral procedures name three capability tiers. The machine-readable
+mapping is `.agents/model-tiers.conf`: **high reasoning** means Fable in Claude
+and GPT-5.6-Sol in Codex; **medium reasoning** means Opus and GPT-5.6-Terra;
+**low reasoning** means Sonnet and GPT-5.6-Luna. A tier selects the model, not
+the effort knob: workflows still set their required effort independently.
+
+Substantial coding work is **planned and gated by the high tier** (falling back
+to medium when high is unavailable) and **implemented by low-tier** sub-agents:
+the planner splits the task into steps, a low-tier
 implementer executes each, and the planner **independently checks every step** before the next
 — that per-step gating is what makes a cheaper implementer safe. The skills already wire this
 (`/adr-phase` and `/gh-issue --fix`); for ad-hoc coding, follow the same shape. The higher
@@ -97,8 +109,8 @@ model may implement a fix **directly** when it is relatively small and doable in
 and always handles **docs / config / settings / skills** directly. Delegation is for
 non-trivial, multi-step `src/`/`tests/`/CI work.
 
-- **The per-step verifier is always Sonnet** (owner directive 2026-07-14) — never the
-  higher model that authored the brief; a different model reads with different blind
+- **The per-step verifier is always low tier** (owner directive 2026-07-14) — never the
+  high-tier model that authored the brief; a different model reads with different blind
   spots, and the step gate doesn't need the top tier. `phase-step.js` pins it. The top
   model's cross-referencing is reserved for the **whole-PR review** (`review-single` with
   `model: "fable"` on a large/complex PR), where it sees every phase's diff at once.
@@ -109,7 +121,7 @@ non-trivial, multi-step `src/`/`tests/`/CI work.
   itself before it enters its handoff, every handoff/gate field stays the spawner's to fill,
   and a nested delegate's defect is the spawner's defect at the gate above. Delegating the
   whole brief downward unexamined is still a defect — split work, not responsibility.
-- **The planner's brief to Sonnet 5 follows the delegation contract below** — a vague or wrong
+- **The planner's brief to the low-tier implementer follows the delegation contract below** — a vague or wrong
   brief is a planner bug, and a handful of real shipped defects trace directly to brief bugs
   (a half-enumerated axis, a vacuous test spec, an unverified "fact" stated as truth).
 - **ADR phases: the brief itself is written fresh-context (issue #1089).** The default
@@ -131,7 +143,7 @@ non-trivial, multi-step `src/`/`tests/`/CI work.
   (`.claude/settings.json`) injects the ponytail + caveman capsule into every spawned
   sub-agent; the capsule itself carries the rules (reviewer carve-out; "terse prose,
   verbatim evidence"). Briefs add a mode line only for a non-default level (e.g. `ultra`).
-- **Sonnet 5 follows every directive in this file.** The implementer is cheaper, not exempt.
+- **The low tier follows every directive in this file.** The implementer is cheaper, not exempt.
 - **Run at effort xhigh or better** — the session default in `.claude/settings.json`
   (`effortLevel: xhigh`), and stated explicitly in every spawn (never rely on inheritance).
 
@@ -576,11 +588,12 @@ branch — then that branch replaces the convention per
 [`workflow-reference.md`](docs/misc/workflow-reference.md) "Managed-remote sessions".
 
 **Exception — dev-only classes need no PR.** Classes never shipped to users skip the PR
-stage: **ADR text** (`.ADRs/`), **skills** (`.claude/skills/`), **agent workflows**
-(`.claude/workflows/`), and **documentation-only** changes (`**/*.md`, `docs/`). Each still
-uses a worktree but commits/pushes **directly to `devel`** (fetch + rebase first). Anything
-touching `src/`, `tests/`, or CI — ADR *implementation* included — uses the full worktree +
-rebase-only-PR flow.
+stage: **ADR text** (`.ADRs/`), **skills** (`.claude/skills/`, `.agents/skills/`), **agent
+workflows/configuration** (`.claude/workflows/`, `.codex/`), and **documentation-only**
+changes (`**/*.md`, `docs/`, `AGENTS.md`, `CLAUDE.md`). Each still uses a worktree but
+commits/pushes **directly to `devel`** (fetch + rebase first). Anything touching `src/`,
+`tests/`, or CI — ADR *implementation* included — uses the full worktree + rebase-only-PR
+flow.
 
 ```sh
 git worktree add -b <branch> <path> origin/devel   # branch off the latest base
@@ -590,6 +603,11 @@ git worktree remove <path>            # run from any directory OUTSIDE <path>
 
 - Branch off the **current** base (`git fetch` first); a stale-tip worktree needs a rebase
   before it can land.
+- **A rebase needs a visible merge base.** In a shallow checkout, a normal fetch can move
+  `origin/devel` beyond the retained history while an older worktree still points behind the
+  shallow boundary; plain `git rebase origin/devel` then mistakes base commits for work and
+  replays them. If `git merge-base HEAD origin/devel` produces no commit, deepen/unshallow
+  the fetch first and retry the ancestry check. Never start the rebase without it.
 - **Reuse only YOUR OWN worktree — never adopt one you merely found.** A worktree at the
   conventional path that you did not create this run may belong to a live parallel session:
   `git -C <path> status` — foreign uncommitted changes ⇒ not yours; never `--force`-remove
@@ -606,9 +624,9 @@ git worktree remove <path>            # run from any directory OUTSIDE <path>
 
 ## Git hooks
 
-Activate once after cloning: `sh scripts/setup-hooks.sh` (sets `core.hooksPath`).
-**Claude: if `git config core.hooksPath` is not `.githooks`, run it at session start
-(idempotent).** Any GitHub Actions workflow that commits code runs it after checkout too.
+Activate once after cloning: `sh scripts/setup-hooks.sh` (sets `core.hooksPath`). If
+`git config core.hooksPath` is not `.githooks`, an agent runs it at session start
+(idempotent). Any GitHub Actions workflow that commits code runs it after checkout too.
 
 - **`pre-commit`** — the fast linters/static-analysis, path-scoped to staged file types
   (Python → ruff + `mypy tests/`; Markdown → markdownlint; shell → shebang gate + `sh -n` +
@@ -616,16 +634,17 @@ Activate once after cloning: `sh scripts/setup-hooks.sh` (sets `core.hooksPath`)
   `*.sh`/`*.md` staged). NOT the unit suites — run `python3 -m pytest` yourself while
   iterating; CI is the hard gate. Missing tool = reported + skipped. The `--no-verify` bypass
   is for humans, not agents.
-- **`prepare-commit-msg`** — first aborts an agent commit (`CLAUDECODE=1`) in the **primary
-  checkout** (agents commit only in linked worktrees — issue #1262; state-checked via
-  `--git-dir` vs `--git-common-dir`, never command text; agent-dedicated checkouts opt out
-  via `CLAUDE_CODE_USER_EMAIL` (managed-remote) or
+- **`prepare-commit-msg`** — first aborts an agent commit (`CLAUDECODE=1` or
+  `CODEX_THREAD_ID` set) in the **primary checkout** (agents commit only in linked
+  worktrees — issue #1262; state-checked via `--git-dir` vs `--git-common-dir`, never
+  command text; agent-dedicated checkouts opt out via `CLAUDE_CODE_USER_EMAIL`
+  (managed-remote) or
   `git config pfblockerng.allowprimarycommit true`), then appends the owner's
   `Co-authored-by:` trailer (see Commit style); runs even under `--no-verify`.
 - **`pre-push`** — enforces the release tag scheme via `scripts/release-version.sh`; also
-  denies an agent (`CLAUDECODE=1`) branch push that would rewrite remote history the agent
-  never fetched (advertised remote oid must equal the remote-tracking ref — issue #1307,
-  `--force-with-lease`'s check enforced by effect).
+  denies an agent (`CLAUDECODE=1` or `CODEX_THREAD_ID` set) branch push that would rewrite
+  remote history the agent never fetched (advertised remote oid must equal the
+  remote-tracking ref — issue #1307, `--force-with-lease`'s check enforced by effect).
 
 ---
 
@@ -785,14 +804,14 @@ as the committed `review-single` workflow** — ONE reviewer sub-agent at effort
 for the `full` profile / `high` for the mechanically-gated `verify` profile (data/pin/
 config-only diffs, objective no-new-control-flow classifier in `pr-merge-flow`; owner
 authorization 2026-07-14 "do all 6"; never below the profile's floor, never `max`),
-latest Sonnet by default; the highest-tier model (currently
-Fable) for a large/complex PR — its whole-PR cross-referencing is why it reviews the PR
-rather than the per-step gates. Top tier unavailable on such a PR ⇒ TWO `review-single`
-passes (one Sonnet + one Opus), findings unioned. Feedback-fix re-reviews are
-**delta-scoped** (`base` = the pre-fix head SHA) on Sonnet — never a whole-PR re-run —
+the low tier by default; the high tier for a large/complex PR — its whole-PR
+cross-referencing is why it reviews the PR
+rather than the per-step gates. High tier unavailable on such a PR ⇒ TWO `review-single`
+passes (one low + one medium), findings unioned. Feedback-fix re-reviews are
+**delta-scoped** (`base` = the pre-fix head SHA) on the low tier — never a whole-PR re-run —
 and the fix→re-review loop **converges**: it continues only while the latest round
 returned a `blocking` finding; an all-nitpick (or clean) round closes it.
-**Never Opus as a sole reviewer, never a multi-agent fan-out** (`review-fanout` only on
+**Never the medium tier as a sole reviewer, never a multi-agent fan-out** (`review-fanout` only on
 explicit user request);
 the full reviewer contract lives in `.claude/workflows/review-single.js`, not here. External
 reviewers — CodeRabbit, GitHub Copilot, advisory Snyk — are requested / waited on (bounded) /
@@ -891,11 +910,15 @@ non-obvious changes.
 
 **Attribution:** both environments keep the human owner visible and earn a GitHub
 **Verified** badge. On a box with the **user's own signing key**, the user
-authors/commits/signs as themselves and Claude is credited via a `Co-authored-by:` trailer
-with its GitHub-recognized identity (mandatory — never a user-signed commit with no mention
-of Claude). In **agent/managed-remote** environments, Claude is committer+signer, the human
-is author (`--author=`), and the `prepare-commit-msg` hook injects the owner's
-`Co-authored-by:` trailer automatically. Full two-model spec + badge preconditions:
+authors/commits/signs as themselves. Credit the active AI client with a
+`Co-authored-by:` trailer only when its provider adapter defines a verified,
+GitHub-recognized identity; otherwise disclose it in the PR audit/footer and never
+fabricate or borrow another provider's identity. Claude's adapter uses
+`Claude <noreply@anthropic.com>`; Codex's current mapping in `AGENTS.md` has no
+verified coauthor identity. In **agent/managed-remote** environments, the active
+agent is committer+signer, the human is author (`--author=`), and the
+`prepare-commit-msg` hook injects the owner's `Co-authored-by:` trailer automatically.
+Full two-model spec + badge preconditions:
 [`workflow-reference.md`](docs/misc/workflow-reference.md) "Author, committer, and signing".
 
 ---

@@ -1,5 +1,6 @@
 #!/bin/sh
-# mcp-token-savior.sh — stdio launcher for the token-savior MCP server (wired via .mcp.json).
+# mcp-token-savior.sh — shared Claude/Codex stdio launcher for the token-savior MCP
+# server (wired via .mcp.json and .codex/config.toml).
 # Installs TS_SOURCE into a per-user cached venv, then execs it. The default TS_SOURCE is the
 # andrebrait/token-savior fork's `integration` branch pinned by commit — it carries fixes and
 # language support not yet merged upstream (Mibayy/token-savior PRs #47 #53 #54 #57 #58 #59
@@ -8,7 +9,10 @@
 # a mkdir lock serializes concurrent sessions racing that rebuild (the venv is one shared
 # per-user cache). Requires python3 >= 3.11 and git (pip installs from a git URL).
 # Env (all optional):
-#   WORKSPACE_ROOTS        comma-separated project roots (default: current directory)
+#   WORKSPACE_ROOTS        comma-separated project roots (default: Git worktree root
+#                          when resolvable, otherwise current directory)
+#   TOKEN_SAVIOR_CLIENT    telemetry client label (default: claude-code; Codex config
+#                          passes codex explicitly)
 #   TOKEN_SAVIOR_PROFILE   server tool profile (default: optimized)
 #   TS_VENV                venv location (default: ${XDG_CACHE_HOME:-$HOME/.cache}/token-savior/venv)
 #   TS_SOURCE              pip requirement to install (default: the pinned fork commit)
@@ -73,7 +77,12 @@ if [ ! -x "$bin" ] || [ "$(cat "$stamp" 2>/dev/null || true)" != "$TS_SOURCE" ];
 	fi
 fi
 
-WORKSPACE_ROOTS="${WORKSPACE_ROOTS:-$PWD}"
+workspace_root=$PWD
+if command -v git >/dev/null 2>&1; then
+	repo_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+	[ -z "$repo_root" ] || workspace_root=$repo_root
+fi
+WORKSPACE_ROOTS="${WORKSPACE_ROOTS:-$workspace_root}"
 TOKEN_SAVIOR_CLIENT="${TOKEN_SAVIOR_CLIENT:-claude-code}"
 TOKEN_SAVIOR_PROFILE="${TOKEN_SAVIOR_PROFILE:-optimized}"
 INCLUDE_PATTERNS="${INCLUDE_PATTERNS:-**/*.py:**/*.php:**/*.inc:**/*.sh:**/*.js:**/*.md:**/*.txt:**/*.json:**/*.jsonc:**/*.yml:**/*.yaml:**/*.xml:**/*.conf:**/*.toml:**/*.neon}"

@@ -32,6 +32,9 @@ description: >
 ---
 
 You run this repo's standard land-a-PR flow: **review feedback first, then merge.**
+Capability prose uses the high / medium / low tiers from
+`.agents/model-tiers.conf`. The `fable`, `opus`, and `sonnet` literals below are
+Claude runtime encodings; the Codex adapter selects Sol, Terra, and Luna.
 It is roughly:
 
 ```text

@@ -1,0 +1,49 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "root=$(git rev-parse --show-toplevel) && python3 -c \"import hashlib,sys; p,e=sys.argv[1:]; a=hashlib.sha256(open(p,'rb').read()).hexdigest(); print(f'codex-hook-integrity: {p} hash {a}, expected {e}',file=sys.stderr) if a != e else None; sys.exit(a != e)\" \"$root/.claude/hooks/session-branch-sync.sh\" 0b76ca04b33cf66cdaca56bdf77c26002129b3b5248195b0fc9ef1ce97230ed4 && exec sh \"$root/.claude/hooks/session-branch-sync.sh\"",
+            "timeout": 120,
+            "statusMessage": "Checking branch freshness"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "root=$(git rev-parse --show-toplevel) && python3 -c \"import hashlib,sys; p,e=sys.argv[1:]; a=hashlib.sha256(open(p,'rb').read()).hexdigest(); print(f'codex-hook-integrity: {p} hash {a}, expected {e}',file=sys.stderr) if a != e else None; sys.exit(a != e)\" \"$root/scripts/claude-bash-guard.sh\" 7a776a40f47d000f1d4db4a1ff0bdc7602c3c5944f751307066f46ac103667c8 && exec sh \"$root/scripts/claude-bash-guard.sh\"",
+            "timeout": 10,
+            "statusMessage": "Checking repository Git policy"
+          },
+          {
+            "type": "command",
+            "command": "root=$(git rev-parse --show-toplevel) && python3 -c \"import hashlib,sys; p,e=sys.argv[1:]; a=hashlib.sha256(open(p,'rb').read()).hexdigest(); print(f'codex-hook-integrity: {p} hash {a}, expected {e}',file=sys.stderr) if a != e else None; sys.exit(a != e)\" \"$root/scripts/check_retired_tokens.py\" 7f671b73835f8e8c39cdb244489cdcbc471ecdc8a4cc361a5d8de4680284b97a && exec python3 \"$root/scripts/check_retired_tokens.py\" --claude-hook",
+            "timeout": 30,
+            "statusMessage": "Checking retired tokens"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|Read|Grep|WebFetch|mcp__playwright__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "root=$(git rev-parse --show-toplevel) && python3 -c \"import hashlib,sys; p,e=sys.argv[1:]; a=hashlib.sha256(open(p,'rb').read()).hexdigest(); print(f'codex-hook-integrity: {p} hash {a}, expected {e}',file=sys.stderr) if a != e else None; sys.exit(a != e)\" \"$root/scripts/ts-hook.sh\" 545f9fd2662557af9a9fb0a32cde9d95fcbe19857784d674088876c066c4cde9 && exec sh \"$root/scripts/ts-hook.sh\" tool_capture_hook",
+            "timeout": 5,
+            "statusMessage": "Capturing large tool output with Token Savior"
+          }
+        ]
+      }
+    ]
+  }
+}

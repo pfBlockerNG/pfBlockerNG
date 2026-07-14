@@ -9,9 +9,12 @@
 # appends a Co-Authored-By trailer for the human so they are credited, while
 # the agent stays the committer/signer (e.g. for a Verified signature).
 #
-# The human is resolved GENERICALLY — no hardcoded identity — in order:
-#   1. git config coauthor.email / coauthor.name   (explicit per-clone override)
-#   2. $CLAUDE_CODE_USER_EMAIL                      (managed-remote owner)
+# The coauthor is resolved without hardcoding an identity. Provider-specific
+# coauthor.<provider>.* keys win. The legacy coauthor.* key remains the Claude
+# and human-session fallback, but is deliberately ignored in Codex sessions so
+# a clone configured to credit Claude cannot misattribute Codex work. Then:
+#   1. the matching provider-specific / legacy git config
+#   2. $CLAUDE_CODE_USER_EMAIL (managed-remote owner)
 #   3. the commit author, when it differs from the committer
 # The display name falls back to a prior commit by that email, then the email's
 # local-part. The hook is a NO-OP when the human is already the committer (a
@@ -22,12 +25,15 @@
 
 set -u
 
-# Agent worktree guard (issue #1262): abort an agent commit (CLAUDECODE=1) in
-# the primary checkout (--git-dir == --git-common-dir; agents commit only in
-# linked worktrees). Lives in THIS hook because it still runs when verification
-# is skipped. Exempt: managed-remote sessions (CLAUDE_CODE_USER_EMAIL set) or an
+# Agent worktree guard (issue #1262): abort a Claude Code or Codex commit in the
+# primary checkout (--git-dir == --git-common-dir; agents commit only in linked
+# worktrees). Lives in THIS hook because it still runs when verification is
+# skipped. Exempt: managed-remote sessions (CLAUDE_CODE_USER_EMAIL set) or an
 # explicit `git config pfblockerng.allowprimarycommit true` (agent-dedicated).
-if [ "${CLAUDECODE:-}" = "1" ] && [ -z "${CLAUDE_CODE_USER_EMAIL:-}" ] &&
+agent_runtime=0
+[ "${CLAUDECODE:-}" = "1" ] && agent_runtime=1
+[ -n "${CODEX_THREAD_ID:-}" ] && agent_runtime=1
+if [ "$agent_runtime" = "1" ] && [ -z "${CLAUDE_CODE_USER_EMAIL:-}" ] &&
 	[ "$(git config --bool --get pfblockerng.allowprimarycommit 2>/dev/null)" != "true" ]; then
 	unset CDPATH # a CDPATH hit makes cd echo the dir, corrupting $(cd ... && pwd -P)
 	git_dir=$(cd "$(git rev-parse --git-dir)" && pwd -P)
@@ -38,6 +44,7 @@ if [ "${CLAUDECODE:-}" = "1" ] && [ -z "${CLAUDE_CODE_USER_EMAIL:-}" ] &&
 		exit 1
 	fi
 fi
+unset agent_runtime
 
 msg_file=$1
 msg_type=${2:-}
@@ -55,8 +62,19 @@ ident_email() {
 committer_ident=$(git var GIT_COMMITTER_IDENT 2>/dev/null) || exit 0
 committer_email=$(ident_email "$committer_ident")
 
-# Resolve the human's email, most specific source first.
-email=$(git config --get coauthor.email 2>/dev/null || true)
+# Resolve the coauthor's email, most specific source first. CODEX_THREAD_ID
+# takes precedence if an unusual nested environment exposes both markers.
+provider=''
+[ "${CLAUDECODE:-}" = "1" ] && provider=claude
+[ -n "${CODEX_THREAD_ID:-}" ] && provider=codex
+case "$provider" in
+	codex) email=$(git config --get coauthor.codex.email 2>/dev/null || true) ;;
+	claude)
+		email=$(git config --get coauthor.claude.email 2>/dev/null || true)
+		[ -n "$email" ] || email=$(git config --get coauthor.email 2>/dev/null || true)
+		;;
+	*) email=$(git config --get coauthor.email 2>/dev/null || true) ;;
+esac
 [ -n "$email" ] || email=${CLAUDE_CODE_USER_EMAIL:-}
 if [ -z "$email" ]; then
 	author_email=$(ident_email "$(git var GIT_AUTHOR_IDENT 2>/dev/null || true)")
@@ -73,7 +91,14 @@ if grep -i 'co-authored-by:' "$msg_file" 2>/dev/null | grep -qiF "<$email>"; the
 fi
 
 # Resolve a display name (cosmetic — GitHub matches the co-author by email).
-name=$(git config --get coauthor.name 2>/dev/null || true)
+case "$provider" in
+	codex) name=$(git config --get coauthor.codex.name 2>/dev/null || true) ;;
+	claude)
+		name=$(git config --get coauthor.claude.name 2>/dev/null || true)
+		[ -n "$name" ] || name=$(git config --get coauthor.name 2>/dev/null || true)
+		;;
+	*) name=$(git config --get coauthor.name 2>/dev/null || true) ;;
+esac
 [ -n "$name" ] || name=$(git log -1 --author="$email" --format='%an' 2>/dev/null || true)
 [ -n "$name" ] || name=${email%@*}
 
