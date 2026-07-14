@@ -70,9 +70,12 @@ final class NormalizeRowHeaderTest extends TestCase
 	public function testUnguardedMissingHeaderKeyThrowsTypeError(): void
 	{
 		$row = ['url' => 'http://example.test'];
+		// Isolates the hazard from the missing-key access itself: $missing is the
+		// SAME null a bare $row['header'] would yield, without an extra warning.
+		$missing = $row['header'] ?? null;
 		$this->expectException(\TypeError::class);
 		/** @phpstan-ignore-next-line intentionally uncast -- reproduces the pre-fix call site */
-		pfb_normalize_row_header($row['header']);
+		pfb_normalize_row_header($missing);
 	}
 
 	/** The call-site's guard pattern -- (string) ($row['header'] ?? '') -- is safe. */
