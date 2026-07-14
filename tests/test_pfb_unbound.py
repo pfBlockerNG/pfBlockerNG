@@ -52,7 +52,7 @@ from pfb_unbound import (
     hsts_check_domain,
     is_unknown,
     iter_domain_suffixes,
-    parse_python_tlds,
+    parse_tld_allow,
     python_control_duration,
     resolve_feed_group,
     whitelist_check_domain,
@@ -1074,7 +1074,7 @@ class TestGetTld:
     def test_mixed_case_wire_label_is_lowercased(self) -> None:
         # RFC 4343: DNS name comparison is case-insensitive, but production Unbound's
         # qname_list preserves the CLIENT's wire case (e.g. dns0x20 case
-        # randomization). python_tlds/hsts_tlds are stored lowercase-only, so a
+        # randomization). tld_allow_list/hsts_tlds are stored lowercase-only, so a
         # mixed-case wire label must still resolve to the lowercase TLD -- else a
         # membership test against those lists silently mismatches (#720).
         qstate = types.SimpleNamespace(qinfo=types.SimpleNamespace(qname_list=["sub", "ExAmPlE", "CoM", ""]))
@@ -1111,7 +1111,7 @@ class TestGetTldFromName:
 
     def test_mixed_case_name_is_lowercased(self) -> None:
         # Same RFC 4343 contract as get_tld(): a CNAME target string carrying mixed
-        # case must still resolve to the lowercase TLD python_tlds/hsts_tlds compare
+        # case must still resolve to the lowercase TLD tld_allow_list/hsts_tlds compare
         # against (#720).
         assert pfb_unbound.get_tld_from_name("sub.ExAmPlE.CoM") == "com"
 
@@ -1739,8 +1739,8 @@ class TestOperateDnsbl:
         # green post-fix (allowed).
         self._enable(monkeypatch)
         pfb_unbound.pfb["python_cname"] = True
-        pfb_unbound.pfb["python_tld"] = True
-        pfb_unbound.pfb["python_tlds"] = ["com", "net"]
+        pfb_unbound.pfb["tld_allow"] = True
+        pfb_unbound.pfb["tld_allow_list"] = ["com", "net"]
         monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: "good.net")
         qstate = make_qstate("orig.com.", qtype=RR_A, return_msg=self._cname_reply("orig.com."))
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
@@ -1756,8 +1756,8 @@ class TestOperateDnsbl:
         # target's TLD, not an always-pass or a check against the original.
         self._enable(monkeypatch)
         pfb_unbound.pfb["python_cname"] = True
-        pfb_unbound.pfb["python_tld"] = True
-        pfb_unbound.pfb["python_tlds"] = ["com"]
+        pfb_unbound.pfb["tld_allow"] = True
+        pfb_unbound.pfb["tld_allow_list"] = ["com"]
         monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: "good.net")
         qstate = make_qstate("orig.com.", qtype=RR_A, return_msg=self._cname_reply("orig.com."))
         rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
@@ -2879,39 +2879,39 @@ class TestHstsCheckDomain:
         assert result == (False, "Python")
 
 
-class TestParsePythonTlds:
-    """issue #713: the MAIN-ini ``python_tlds`` value must parse to a CLEANED list so
-    an empty/degenerate value is falsy -- the caller's guard (``python_tld and
-    python_tlds``) then correctly skips enabling the TLD-Allow blacklist gate instead
+class TestParseTldAllow:
+    """issue #713: the MAIN-ini ``tld_allow_list`` value must parse to a CLEANED list so
+    an empty/degenerate value is falsy -- the caller's guard (``tld_allow and
+    tld_allow_list``) then correctly skips enabling the TLD-Allow blacklist gate instead
     of force-enabling it (the old ``!= ""`` list-vs-str compare was always True)."""
 
     def test_empty_value_parses_to_empty_list(self) -> None:
-        assert parse_python_tlds("") == []
+        assert parse_tld_allow("") == []
 
     def test_whitespace_only_value_parses_to_empty_list(self) -> None:
-        assert parse_python_tlds("   ") == []
+        assert parse_tld_allow("   ") == []
 
     def test_populated_value_parses_and_strips_entries(self) -> None:
-        assert parse_python_tlds("com, net ,org") == ["com", "net", "org"]
+        assert parse_tld_allow("com, net ,org") == ["com", "net", "org"]
 
     def test_entries_are_lowercased(self) -> None:
         # issue #720: the value can carry the case-preserved system-domain TLD
         # (free-text `system/domain`, e.g. "MyLab.LOCAL" -> "LOCAL"); the membership
         # test compares against the lowercased qname label (RFC 4343), so the config
         # side must normalise at the same read boundary.
-        assert parse_python_tlds("CoM, LOCAL") == ["com", "local"]
+        assert parse_tld_allow("CoM, LOCAL") == ["com", "local"]
 
     def test_empty_parsed_list_does_not_enable_tld_blacklist(self) -> None:
-        # Reproduces init_standard's guard verbatim: `if python_tld and python_tlds:`.
+        # Reproduces init_standard's guard verbatim: `if tld_allow and tld_allow_list:`.
         # An empty/degenerate TLD-Allow value must NOT force python_blacklist on.
-        python_tlds = parse_python_tlds("")
-        python_tld = True
-        assert bool(python_tld and python_tlds) is False
+        tld_allow_list = parse_tld_allow("")
+        tld_allow = True
+        assert bool(tld_allow and tld_allow_list) is False
 
     def test_populated_parsed_list_enables_tld_blacklist(self) -> None:
-        python_tlds = parse_python_tlds("com,net")
-        python_tld = True
-        assert bool(python_tld and python_tlds) is True
+        tld_allow_list = parse_tld_allow("com,net")
+        tld_allow = True
+        assert bool(tld_allow and tld_allow_list) is True
 
 
 class TestParseIniInt:
@@ -3077,8 +3077,8 @@ def _make_cfg(**overrides: Any) -> dict:
         "python_blocking": True,
         "dataDB": False,
         "zoneDB": False,
-        "python_tld": False,
-        "python_tlds": [],
+        "tld_allow": False,
+        "tld_allow_list": [],
         "dnsbl_ipv4": "10.10.10.1",
         "dnsbl_ipv6": "::1",
         "python_idn": False,
@@ -3156,7 +3156,7 @@ class TestEvaluateDomainGolden:
         assert dec.b_eval == "example.com"
 
     def test_tld_allow(self) -> None:
-        cfg = _make_cfg(python_tld=True, python_tlds=["com", "net"])
+        cfg = _make_cfg(tld_allow=True, tld_allow_list=["com", "net"])
         containers = _make_containers()
         # "com" NOT in allowed list → block
         dec = evaluate_domain("example.org", "example.org", "example", False, cfg, containers)
@@ -3165,19 +3165,19 @@ class TestEvaluateDomainGolden:
         assert dec.group == "DNSBL_TLD_Allow"
 
     def test_tld_allow_passthrough_when_tld_allowed(self) -> None:
-        cfg = _make_cfg(python_tld=True, python_tlds=["com"])
+        cfg = _make_cfg(tld_allow=True, tld_allow_list=["com"])
         containers = _make_containers()
         dec = evaluate_domain("example.com", "example.com", "com", False, cfg, containers)
         assert dec.is_found is False
 
     def test_tld_allow_empty_list_is_a_noop(self) -> None:
-        """issue #713: an empty ``python_tlds`` (TLD-Allow enabled but no TLDs
+        """issue #713: an empty ``tld_allow_list`` (TLD-Allow enabled but no TLDs
         configured) must NOT block every domain. Pre-fix, ``tld not in []`` is
         always True, so this arm fired for any query regardless of tld -- the
         "empty TLD-Allow blocks all" bug, still reachable here even after the
         config-load ``python_blacklist`` enable guard was fixed, because this
-        decision site only gates on ``cfg["python_tld"]``."""
-        cfg = _make_cfg(python_tld=True, python_tlds=[])
+        decision site only gates on ``cfg["tld_allow"]``."""
+        cfg = _make_cfg(tld_allow=True, tld_allow_list=[])
         containers = _make_containers()
         dec = evaluate_domain("example.com", "example.com", "com", False, cfg, containers)
         assert dec.is_found is False
@@ -3186,7 +3186,7 @@ class TestEvaluateDomainGolden:
         """With a populated TLD-Allow list, a disallowed tld is still blocked
         (the empty-list guard must not swallow the real case) and an allowed
         tld still passes through."""
-        cfg = _make_cfg(python_tld=True, python_tlds=["com"])
+        cfg = _make_cfg(tld_allow=True, tld_allow_list=["com"])
         containers = _make_containers()
 
         dec_blocked = evaluate_domain("example.net", "example.net", "net", False, cfg, containers)
@@ -3198,13 +3198,13 @@ class TestEvaluateDomainGolden:
         assert dec_allowed.is_found is False
 
     def test_tld_allow_mixed_case_query_gets_same_verdict_as_lowercase(self) -> None:
-        # #720: python_tlds is stored lowercase-only ("com"); operate() derives ``tld``
+        # #720: tld_allow_list is stored lowercase-only ("com"); operate() derives ``tld``
         # via get_tld(qstate), which reads production Unbound's qname_list -- carrying
         # the CLIENT's wire case (RFC 4343 case-insensitive compare, e.g. dns0x20). A
         # mixed-case query for an ALLOWED tld must resolve exactly like its lowercase
         # form, not be falsely TLD-Allow-blocked because the raw-case label ("CoM")
         # never matched the lowercase list.
-        cfg = _make_cfg(python_tld=True, python_tlds=["com"])
+        cfg = _make_cfg(tld_allow=True, tld_allow_list=["com"])
         containers = _make_containers()
 
         # Before-state: the lowercase wire form's tld ("com") is allowed -> passes.
@@ -3614,7 +3614,7 @@ class TestADR02PythonOnlyBlocking:
     def test_tld_allow_still_evaluates_when_python_blocking_is_false(self) -> None:
         # TLD-Allow also lives outside the python_blocking gate.
         containers = _make_containers()
-        cfg = _make_cfg(python_tld=True, python_tlds=["com", "net"], python_blocking=False)
+        cfg = _make_cfg(tld_allow=True, tld_allow_list=["com", "net"], python_blocking=False)
         # "org" is not in the allowed list → fires TLD-Allow block
         dec = evaluate_domain("example.org", "example.org", "example", False, cfg, containers)
         assert dec.is_found is True

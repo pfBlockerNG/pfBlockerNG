@@ -381,7 +381,7 @@ def _wire_module(monkeypatch: Any, *, live_manifest: str, live_ini: str, sentine
     P.pfb["regex_evict_ms"] = 1.0e9
     P.pfb["mod_threading"] = True
     P.pfb["python_blocking"] = True
-    P.pfb["python_tld"] = False
+    P.pfb["tld_allow"] = False
     P.pfb["python_idn"] = False
     P.pfb["python_tld_seg"] = 2
     P.pfb["pfb_py_count"] = "pfb_py_count"
@@ -402,8 +402,8 @@ def _scan(snap: Any) -> dict[str, bool]:
         "python_blocking": P.pfb["python_blocking"],
         "dataDB": bool(snap.data_db),
         "zoneDB": bool(snap.zone_db),
-        "python_tld": P.pfb["python_tld"],
-        "python_tlds": P.pfb["python_tlds"],
+        "tld_allow": P.pfb["tld_allow"],
+        "tld_allow_list": P.pfb["tld_allow_list"],
         "dnsbl_ipv4": P.pfb["dnsbl_ipv4"],
         "dnsbl_ipv6": P.pfb["dnsbl_ipv6"],
         "python_idn": P.pfb["python_idn"],

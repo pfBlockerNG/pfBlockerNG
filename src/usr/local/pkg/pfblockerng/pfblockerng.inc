@@ -2730,7 +2730,7 @@ function pfb_global() {
 	$pfb['dnsbl_regex_list']= $pfb['dnsblconfig']['pfb_regex_list'];		// DNSBL Resolver python regex list
 	$pfb['dnsbl_regex_cap']	= PfbConfig::read('pfb_regex_cap');			// DNSBL Resolver python opt-in "Limit long/complex regex" static cap
 	$pfb['dnsbl_cname']	= $pfb['dnsblconfig']['pfb_cname'];			// DNSBL Resolver python CNAME Validation
-	$pfb['dnsbl_pytld']	= $pfb['dnsblconfig']['pfb_pytld'];			// DNSBL Resolver python TLD Allow option
+	$pfb['dnsbl_tld_allow']	= $pfb['dnsblconfig']['pfb_pytld'];			// DNSBL Resolver TLD Allow option
 	$pfb['dnsbl_py_nolog']	= $pfb['dnsblconfig']['pfb_py_nolog'];			// DNSBL Resolver python - Log events via DNSBL Webserver vs python
 	$pfb['dnsbl_noaaaa']	= $pfb['dnsblconfig']['pfb_noaaaa'];			// DNSBL Resolver python no AAAA
 	$pfb['dnsbl_noaaaa_list']=$pfb['dnsblconfig']['pfb_noaaaa_list'];		// DNSBL Resolver python no AAAA list
@@ -8450,26 +8450,26 @@ function pfb_unbound_python($mode) {
 			$python_noaaaa = 'on';
 		}
 
-		$python_tld = 'off';
-		$python_tlds = '';
-		if ($pfb['dnsbl_pytld'] == 'on') {
+		$tld_allow = 'off';
+		$tld_allow_list = '';
+		if ($pfb['dnsbl_tld_allow'] == 'on') {
 			if (!empty($pfb['dnsblconfig']['pfb_pytlds_gtld'])) {
-				$python_tld = 'on';
-				$python_tlds = $pfb['dnsblconfig']['pfb_pytlds_gtld'];
+				$tld_allow = 'on';
+				$tld_allow_list = $pfb['dnsblconfig']['pfb_pytlds_gtld'];
 			}
 			if (!empty($pfb['dnsblconfig']['pfb_pytlds_cctld'])) {
-				$python_tld = 'on';
-				$python_tlds .= ',' . $pfb['dnsblconfig']['pfb_pytlds_cctld'];
+				$tld_allow = 'on';
+				$tld_allow_list .= ',' . $pfb['dnsblconfig']['pfb_pytlds_cctld'];
 			}
 			if (!empty($pfb['dnsblconfig']['pfb_pytlds_itld'])) {
-				$python_tld = 'on';
-				$python_tlds .= ',' . $pfb['dnsblconfig']['pfb_pytlds_itld'];
+				$tld_allow = 'on';
+				$tld_allow_list .= ',' . $pfb['dnsblconfig']['pfb_pytlds_itld'];
 			}
 			if (!empty($pfb['dnsblconfig']['pfb_pytlds_bgtld'])) {
-				$python_tld = 'on';
-				$python_tlds .= ',' . $pfb['dnsblconfig']['pfb_pytlds_bgtld'];
+				$tld_allow = 'on';
+				$tld_allow_list .= ',' . $pfb['dnsblconfig']['pfb_pytlds_bgtld'];
 			}
-			$python_tlds = ltrim($python_tlds, ',');
+			$tld_allow_list = ltrim($tld_allow_list, ',');
 		}
 
 		$python_nolog = 'off';
@@ -8514,8 +8514,8 @@ python_idn_block_malicious	= {$python_idn_block_malicious}
 python_idn_escalate_suspicious	= {$python_idn_escalate_suspicious}
 python_tld_seg	= 1
 decisiondb_max	= {$decisiondb_max}
-python_tld	= {$python_tld}
-python_tlds	= {$python_tlds}
+tld_allow	= {$tld_allow}
+tld_allow_list	= {$tld_allow_list}
 python_nolog	= {$python_nolog}
 python_cname	= {$python_cname}
 python_control	= {$python_control}
@@ -18002,19 +18002,19 @@ function sync_package_pfblockerng($cron='') {
 			$pfb['alias_dnsbl_all'][] = 'DNSBL_Homoglyph_Suspect';
 			dnsbl_alias_update('update', 'DNSBL_Homoglyph_Suspect', '', '', 1);
 		}
-		if ($pfb['dnsbl_pytld'] == 'on') {
-			$pytld_cnt = 0;
-			foreach (array('gtld', 'cctld', 'itld', 'bgtld') as $pytld) {
-				if (isset($pfb['dnsblconfig']['pfb_pytlds_' . $pytld]) && !empty($pfb['dnsblconfig']['pfb_pytlds_' . $pytld])) {
-					$p_cnt = count(explode(',', $pfb['dnsblconfig']['pfb_pytlds_' . $pytld]));
+		if ($pfb['dnsbl_tld_allow'] == 'on') {
+			$tld_allow_cnt = 0;
+			foreach (array('gtld', 'cctld', 'itld', 'bgtld') as $tld_allow) {
+				if (isset($pfb['dnsblconfig']['pfb_pytlds_' . $tld_allow]) && !empty($pfb['dnsblconfig']['pfb_pytlds_' . $tld_allow])) {
+					$p_cnt = count(explode(',', $pfb['dnsblconfig']['pfb_pytlds_' . $tld_allow]));
 					if (is_numeric($p_cnt) && $p_cnt > 0) {
-						$pytld_cnt += $p_cnt;
+						$tld_allow_cnt += $p_cnt;
 					}
 				}
 			}
 
 			$pfb['alias_dnsbl_all'][] = 'DNSBL_TLD_Allow';
-			dnsbl_alias_update('update', 'DNSBL_TLD_Allow', '', '', $pytld_cnt);
+			dnsbl_alias_update('update', 'DNSBL_TLD_Allow', '', '', $tld_allow_cnt);
 		}
 		// ADR-07: the DNSBL_Regex alias count now reflects the ADMITTED
 		// (cap-filtered) feed + user regex total emitted by Python (regexDB +

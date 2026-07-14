@@ -54,8 +54,8 @@ def _cfg(**overrides: Any) -> dict[str, Any]:
         "python_blocking": True,
         "dataDB": False,
         "zoneDB": False,
-        "python_tld": False,
-        "python_tlds": [],
+        "tld_allow": False,
+        "tld_allow_list": [],
         "dnsbl_ipv4": "10.10.10.1",
         "dnsbl_ipv6": "::1",
         "python_idn": False,
@@ -288,7 +288,7 @@ class TestTldAllowNumericBand:
     """Scenario: a query whose TLD is not on the TLD-allow list stays blocked even
     when the numeric ``important_rules`` resolution is engaged.
 
-    Background: ``python_tld`` on with allow-list ``{"com"}``; ``important_rules`` True
+    Background: ``tld_allow`` on with allow-list ``{"com"}``; ``important_rules`` True
     (an ABP ``@@`` / feed-regex / ``$important`` rule is loaded); no data/zone/regex hit.
     """
 
@@ -296,8 +296,8 @@ class TestTldAllowNumericBand:
         import re
 
         cfg = _cfg(
-            python_tld=True,
-            python_tlds=["com"],
+            tld_allow=True,
+            tld_allow_list=["com"],
             allowRegexDB=bool(allow_regex_db),
             important_rules=True,
         )

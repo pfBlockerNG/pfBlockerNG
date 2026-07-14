@@ -73,13 +73,13 @@ def reset_pfb_globals() -> None:
         "python_control_legacy": False,
         "python_hsts": False,
         "python_idn": False,
-        "python_tld": False,
-        # issue #1255: DNSBL Wildcard Blocking (TLD) gate -- distinct from python_tld
+        "tld_allow": False,
+        # issue #1255: DNSBL Wildcard Blocking (TLD) gate -- distinct from tld_allow
         # (a DIFFERENT feature, "TLD Allow"); mirrors python_hsts's shipped-file gate.
         "python_tld_wildcard": False,
         "python_maxmind": False,
         "python_tld_seg": 2,
-        "python_tlds": [],
+        "tld_allow_list": [],
         "dnsbl_ipv4": "10.10.10.1",
         "dnsbl_ipv6": "::1",
         "dataDB": False,
