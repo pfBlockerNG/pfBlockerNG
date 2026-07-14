@@ -16,8 +16,8 @@
   `pfb_py_zone`) — both dissolve when the files stop existing; this session's investigation thread
   is the design record that produced §2.
 - **Amends:** **ADR-06** (DNSBL preprocessing → Python). ADR-06 §"the legacy data/zone CSV load …
-  FALLBACK … used only when no manifest is present" is retired here; ADR-06 gets a §8 post-merge
-  amendment in Phase 7 (CLAUDE.md "ADR amendments after merge").
+  FALLBACK … used only when no manifest is present" is retired here; ADR-06 carries the §8
+  post-merge amendment recording it (CLAUDE.md "ADR amendments after merge").
 - **Component(s):** `src/usr/local/pkg/pfblockerng/pfb_unbound.py` (the query channel, the
   fallback-loader removal, fail-loud), `src/usr/local/pkg/pfblockerng/pfblockerng.inc`
   (`tld_analysis`, `pfb_dnsbl_py_swap`, `pfb_log_event`, the health check, `pfb_dnsbl_parse`),
