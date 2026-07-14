@@ -6,7 +6,8 @@
 # Usage: run-gates.sh [--worktree PATH] [--diff BASE] [--plan] [--allow-missing]
 #   --worktree       repo checkout to run in (default: cwd's repo root)
 #   --diff BASE      compute touched files: BASE...HEAD merge-base diff UNIONED with
-#                     any uncommitted (staged+unstaged) changes vs HEAD (default origin/devel)
+#                     any uncommitted (staged+unstaged+untracked, .gitignore-filtered)
+#                     changes vs HEAD (default origin/devel)
 #   --plan           print the gate commands that WOULD run, one per line, and exit
 #   --allow-missing  a missing tool reports SKIP without failing the run (default: fails)
 #
