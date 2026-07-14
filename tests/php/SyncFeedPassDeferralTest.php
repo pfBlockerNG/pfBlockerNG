@@ -25,6 +25,10 @@ final class SyncFeedPassDeferralTest extends TestCase
 	private string $dbdir = '';
 	private bool $hadPfb = FALSE;
 	private array $originalPfb = [];
+	private bool $hadConfig = FALSE;
+	private mixed $originalConfig = NULL;
+	private bool $hadChrootPath = FALSE;
+	private mixed $originalChrootPath = NULL;
 
 	/** Raw fd simulating another process holding the feed-pass lock. */
 	private $lockFp = NULL;
@@ -33,6 +37,10 @@ final class SyncFeedPassDeferralTest extends TestCase
 	{
 		$this->hadPfb      = array_key_exists('pfb', $GLOBALS);
 		$this->originalPfb = $GLOBALS['pfb'] ?? [];
+		$this->hadConfig      = array_key_exists('config', $GLOBALS);
+		$this->originalConfig = $GLOBALS['config'] ?? NULL;
+		$this->hadChrootPath      = array_key_exists('unbound_chroot_path', $GLOBALS['g'] ?? []);
+		$this->originalChrootPath = $GLOBALS['g']['unbound_chroot_path'] ?? NULL;
 
 		$this->dbdir = sys_get_temp_dir() . '/pfb_sync_feedpass_' . uniqid('', TRUE);
 		mkdir($this->dbdir, 0755, TRUE);
@@ -62,6 +70,18 @@ final class SyncFeedPassDeferralTest extends TestCase
 			$GLOBALS['pfb'] = $this->originalPfb;
 		} else {
 			unset($GLOBALS['pfb']);
+		}
+		// issue #1277 review: setUp() mutates these two shared globals too --
+		// restore them so a later test never inherits this fixture's state.
+		if ($this->hadConfig) {
+			$GLOBALS['config'] = $this->originalConfig;
+		} else {
+			unset($GLOBALS['config']);
+		}
+		if ($this->hadChrootPath) {
+			$GLOBALS['g']['unbound_chroot_path'] = $this->originalChrootPath;
+		} else {
+			unset($GLOBALS['g']['unbound_chroot_path']);
 		}
 		$this->rrmdir($this->dbdir);
 	}
