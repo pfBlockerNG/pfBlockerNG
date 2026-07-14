@@ -299,16 +299,24 @@ def test_query_channel_verdict_matches_block_with_no_side_effects(adr65_vm: Smok
 # --------------------------------------------------------------------------- #
 
 
-def _restart_unbound(vm: SmokeVM, *, timeout: float = 120.0) -> None:
-    """Restart Unbound through pfSense's own service path so ``init()`` re-runs against
-    the current on-disk manifest state.
+def _unbound_pid(vm: SmokeVM, *, timeout: float = 30.0) -> str:
+    """Current Unbound PID ('' when it is not running)."""
+    res = vm.ssh("pgrep -x unbound || true", timeout=timeout)
+    return res.stdout.strip().split("\n")[0].strip()
 
-    ``services_unbound_configure()`` is what the package itself uses (helpers.py drives it
-    the same way for the upstream-DNS switch). A hand-rolled ``kill`` + bare
-    ``/usr/local/sbin/unbound -c ...`` start looked fine locally but left the resolver
-    unreachable on the CI boxes ("could not send or receive"), so the service path is the
-    only restart this row trusts.
+
+def _restart_unbound(vm: SmokeVM, *, timeout: float = 120.0) -> None:
+    """Restart Unbound through pfSense's own service path and wait for the NEW process to
+    serve DNS -- RAISE loudly on timeout.
+
+    ``services_unbound_configure()`` restarts asynchronously. Waiting for "unbound-control
+    answers" or even "some answer comes back" is NOT enough: the OUTGOING process keeps
+    serving during the gap, satisfies the check, and then dies under the next query (that
+    is precisely how the CI legs failed with "could not send or receive"). So pin the
+    handover: the PID must CHANGE, and the new process must answer a throwaway name --
+    never the name under test, whose first post-restart answer must stay authoritative.
     """
+    before = _unbound_pid(vm)
     res = h.php_eval(vm, "services_unbound_configure();\necho 'OK';", timeout=timeout)
     if res.returncode != 0 or "OK" not in res.stdout:
         raise RuntimeError(
@@ -317,16 +325,29 @@ def _restart_unbound(vm: SmokeVM, *, timeout: float = 120.0) -> None:
         )
     h.wait_unbound_ready(vm)
 
+    ready_name = h.unique_domain("adr65ready")
+    deadline = time.monotonic() + timeout
+    last = ""
+    while time.monotonic() < deadline:
+        now = _unbound_pid(vm)
+        if now and now != before:
+            try:
+                h.dns_probe(vm, ready_name)
+                return
+            except RuntimeError as exc:
+                last = str(exc)
+        else:
+            last = f"pid still {now!r} (was {before!r})"
+        time.sleep(2.0)
+    raise AssertionError(f"Unbound never handed over to a new, answering process within {timeout:.0f}s: {last}")
+
 
 def _wait_resolver_answers(vm: SmokeVM, *, deadline_s: float = 120.0) -> None:
-    """Block until the resolver actually ANSWERS a query again -- RAISE loudly on timeout.
+    """Block until the resolver answers again -- RAISE loudly on timeout.
 
-    ``services_unbound_configure()`` restarts Unbound asynchronously, and
-    ``unbound-control status`` can still be answered by the outgoing process while the new
-    one is not yet listening (locally the gap is invisible; on the CI boxes a probe lands
-    inside it and drill reports "could not send or receive"). This is a READINESS gate, not
-    a poll for an expected value: it queries a THROWAWAY name (never the name under test,
-    whose first post-restart answer must stay authoritative and uncached).
+    Used after a DNSBL update pass, which can also leave the resolver briefly unreachable
+    on the CI boxes. Queries a THROWAWAY name so the name under test keeps its first
+    authoritative answer (a readiness gate, never a poll for an expected value).
     """
     ready_name = h.unique_domain("adr65ready")
     deadline = time.monotonic() + deadline_s
@@ -338,7 +359,7 @@ def _wait_resolver_answers(vm: SmokeVM, *, deadline_s: float = 120.0) -> None:
         except RuntimeError as exc:
             last = str(exc)
             time.sleep(2.0)
-    raise AssertionError(f"resolver never answered again within {deadline_s:.0f}s of the restart: {last}")
+    raise AssertionError(f"resolver never answered again within {deadline_s:.0f}s: {last}")
 
 
 def _sync_status_list_open(
@@ -436,7 +457,6 @@ def test_manifest_absent_fails_loud_and_force_reload_self_heals(adr65_vm: SmokeV
             rm = adr65_vm.ssh(f"rm -f {_MANIFEST_PATH}")
             assert rm.returncode == 0, f"failed to remove {_MANIFEST_PATH}: rc={rm.returncode} stderr={rm.stderr!r}"
             _restart_unbound(adr65_vm)
-            _wait_resolver_answers(adr65_vm)
 
             # NO STALE BLOCK: with the manifest absent, DNSBL is empty -- egress is
             # blocked inside CaseContext, so the honest expectation for a domain that
