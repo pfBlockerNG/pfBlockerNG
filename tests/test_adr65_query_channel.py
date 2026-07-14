@@ -1,13 +1,14 @@
-"""ADR-65 Phase 2 -- the read-only DNSBL decision query channel.
+"""ADR-65 -- the read-only DNSBL decision query channel.
 
 WHY THIS FILE EXISTS
 --------------------
-Phase 2 adds an always-on, read-only file channel to ``pfb_unbound.py``: a local
+ADR-65 adds an always-on, read-only file channel to ``pfb_unbound.py``: a local
 consumer writes a JSON request to ``pfb_py_query``, and the query watcher answers
 into ``pfb_py_query.reply`` with the LIVE matcher's verdict -- the exact
 attribution fields ``dnsbl.log`` carries -- with NONE of a real query's side
 effects except the decisionDB LRU memo. PRODUCTION-DORMANT: nothing writes the
-request file until Phase 4, so this suite is the only thing exercising it.
+request file until the consumers are rewired (ADR-65 SS2.2), so this suite is
+the only thing exercising it.
 
 Three things must be pinned:
   * DECISION EQUALITY (Axis 1): ``dnsbl_query_answer`` must match an INDEPENDENTLY
