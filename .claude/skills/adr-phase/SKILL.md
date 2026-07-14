@@ -168,7 +168,12 @@ fresh higher-model Brief stage, so your own context stays flat across a long `al
 `Workflow({name: 'phase-step', args: {worktree: '<path>', briefSpec: {adrDir: '<ADR_DIR
 relative to the worktree>', phase: M, notes: '<session constraints the disk cannot show —
 base override, user instructions; omit if none>'}, ponytailLevel: <active level or
-null>}})` — pass no extra parameter: the call is already asynchronous, and
+null>}})`. **Light phases:** when the phase prompt's banner carries a `WEIGHT: light` line
+AND every earlier phase's gate record is PASS, add `weight: 'light'` to `briefSpec` — the
+workflow skips the Brief stage and the implementer executes the phase prompt directly,
+re-deriving its enumerations from source (in-workflow guards BLOCK a mis-tagged call);
+never pass it for a prompt without the marker, and never for a behaviour-changing phase.
+Pass no other extra parameter: the call is already asynchronous, and
 `run_in_background` is not a Workflow parameter (it fails validation). It is harness-tracked —
 end the turn and answer its completion notification; never arm a sleep/poll to await it.
 The Brief stage reads `ADR.md`, the phase prompt, and the prior `RESULTS/`

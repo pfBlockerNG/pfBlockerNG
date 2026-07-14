@@ -1,9 +1,9 @@
 export const meta = {
   name: 'phase-step',
   description: 'One delegated step under the delegation contract: optional fresh higher-model Brief stage -> Sonnet implementer -> independent Sonnet verifier, all schema-forced',
-  whenToUse: 'Called by /adr-phase (per phase) and /gh-issue --fix (per step) instead of hand-spawning the implementer/verifier stages yourself. Args: {worktree, brief | briefSpec: {adrDir, phase, notes?}, gates: [cmd...], redProof: {srcPaths: [...], testCmd} | null, planItems: [...], ponytailLevel: "full" | null}. The Verify stage always runs on Sonnet — a fresh set of model-eyes distinct from the higher-model brief author (owner directive 2026-07-14). With briefSpec (ADR phases — issue #1089) the Brief stage derives brief/gates/redProof/planItems itself from disk, so the caller passes only pointers. The caller keeps ALL judgment: it validates the returned records, commits the RESULTS/Gate files, and decides HALT/continue/landing.',
+  whenToUse: 'Called by /adr-phase (per phase) and /gh-issue --fix (per step) instead of hand-spawning the implementer/verifier stages yourself. Args: {worktree, brief | briefSpec: {adrDir, phase, notes?, weight?: "full" (default) | "light"}, gates: [cmd...], redProof: {srcPaths: [...], testCmd} | null, planItems: [...], ponytailLevel: "full" | null}. The Verify stage always runs on Sonnet — a fresh set of model-eyes distinct from the higher-model brief author (owner directive 2026-07-14). With briefSpec (ADR phases — issue #1089) the Brief stage derives brief/gates/redProof/planItems itself from disk, so the caller passes only pointers. weight "light" (owner directive 2026-07-14; ONLY when the phase prompt itself carries a WEIGHT: light line — behaviour-preserving mechanical execution pinned by an earlier gate-passed oracle) skips the Brief stage: the implementer executes the phase prompt directly and re-derives its enumerations from source; the Verify stage is unchanged. The caller keeps ALL judgment: it validates the returned records, commits the RESULTS/Gate files, and decides HALT/continue/landing.',
   phases: [
-    { title: 'Brief', detail: 'fresh higher-model planner enumerates the matrix + hostile rows and composes the brief (briefSpec callers only)' },
+    { title: 'Brief', detail: 'fresh higher-model planner enumerates the matrix + hostile rows and composes the brief (briefSpec callers only; skipped for weight: light)' },
     { title: 'Implement', detail: 'one Sonnet implementer executes the brief', model: 'sonnet' },
     { title: 'Verify', detail: 'fresh Sonnet verifier (never the brief author\'s model) re-derives every gate item', model: 'sonnet' },
   ],
@@ -80,9 +80,30 @@ const GATE_RECORD = {
 
 let briefRecord = null
 if (briefSpec) {
-  phase('Brief')
-  const { adrDir, phase: phaseNum, notes = '' } = briefSpec
+  const { adrDir, phase: phaseNum, notes = '', weight = 'full' } = briefSpec
   if (!adrDir || !phaseNum) throw new Error('briefSpec must include {adrDir, phase}')
+  if (weight !== 'full' && weight !== 'light') throw new Error(`briefSpec.weight must be "full" or "light"; got "${weight}"`)
+
+  if (weight === 'light') {
+    // Owner directive (2026-07-14): mechanical phases skip the separate Brief stage — the
+    // phase prompt on disk IS the brief; the implementer re-derives its enumerations from
+    // source (there is no planner enumeration to trust). Verify stage unchanged. In-workflow
+    // guards below make a mis-tagged light call fail BLOCKED instead of running under-briefed.
+    if (redProof) throw new Error('weight "light" is for behaviour-preserving phases only — redProof must be null (a behaviour-changing phase is full-weight)')
+    log('light-weight phase: Brief stage skipped — the phase prompt on disk is the brief')
+    const mm = String(phaseNum).padStart(2, '0')
+    brief = `LIGHT-WEIGHT ADR PHASE (weight: light — mechanical execution of an already-enumerated, oracle-pinned plan). Your brief lives ON DISK, not in this message. Worktree: ${worktree}; ADR directory: ${adrDir} (relative to the worktree); phase ${phaseNum}.
+
+MANDATORY READING (in order): the phase prompt ${adrDir}/${mm}_*.txt — it IS the brief: its ACTION PLAN is your plan, its VERIFICATION section your acceptance checks, its CONSTRAINTS/stays lists your do-NOT-touch list; the previous phase's Results + Gate files in ${adrDir}/RESULTS/ plus the carry_forward line of every earlier Results file; the ADR.md sections the prompt names.
+
+LIGHT-WEIGHT GUARDS (each is a BLOCKED trigger, not a judgment call):
+1. The phase prompt must contain a line starting "WEIGHT: light". Absent -> verdict BLOCKED (the caller mis-tagged a full-weight phase).
+2. Light weight covers ONLY behaviour-preserving mechanical work pinned by an existing oracle from an earlier phase. If the prompt demands new behaviour, a new parser/regex/input guard, or a red->green proof -> verdict BLOCKED.
+3. There is no planner enumeration to trust here: re-derive the prompt's identifier/site lists FROM SOURCE (git -C ${worktree} grep) before editing — prompt line refs may be stale (reality-override). A prompt claim the source refutes -> verdict BLOCKED with the probe evidence.${notes ? `\n\nSESSION NOTES from the caller: ${notes}` : ''}
+
+Write ${adrDir}/RESULTS/${mm}_Results.txt with the fixed HANDOFF fields, make ONE focused commit (code + handoff, repo commit style), and push it (git -C ${worktree} push -u origin HEAD).`
+  } else {
+  phase('Brief')
 
   briefRecord = await agent(`You are the PLANNER writing THE BRIEF (CLAUDE.md "The delegation contract" — all seven mandatory sections) for ONE ADR phase, with a fresh context: read everything just-in-time from disk; trust nothing from memory. You write the brief only — you implement nothing and spawn no agents.
 
@@ -107,6 +128,7 @@ brief_text must be fully self-contained for a Sonnet implementer that has this w
   gates = briefRecord.gates
   redProof = briefRecord.red_proof
   planItems = briefRecord.plan_items
+  }
 }
 
 phase('Implement')

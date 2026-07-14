@@ -279,6 +279,13 @@ ADR: .ADRs/ADR_NN_Name/ADR.md   (read <relevant section> first)
 ROLE
 <which branch; which phase; behaviour-preserving? ; "inline on <branch>, one
  commit, push directly">
+WEIGHT: light   <-- OPTIONAL (owner directive 2026-07-14). Only for a
+ behaviour-preserving MECHANICAL phase (pure renames/moves/retirement sweeps
+ executing an already-enumerated plan) whose correctness is pinned by an oracle
+ an EARLIER phase froze. /adr-phase then skips the fresh-context Brief stage
+ (~1/3 of the phase's cost): the implementer executes this prompt directly and
+ re-derives its site lists from source. NEVER on an oracle-building phase, the
+ first phase, or anything touching a parser/regex/guard or new behaviour.
 Blast-radius note for the gate: <what production behaviour can change when this
  phase lands alone — "NONE" / "PRODUCTION-DORMANT until Phase N" stated, never
  implied; a behaviour-changing phase names its delta budget here>

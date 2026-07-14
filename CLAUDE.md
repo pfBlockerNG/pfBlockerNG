@@ -121,6 +121,12 @@ non-trivial, multi-step `src/`/`tests/`/CI work.
   non-vacuously, commits the Gate file, and keeps HALT/continue/landing — its context stays
   flat across a long `all` run. Composing an ADR-phase brief in the main session is a
   recorded deviation, exactly like hand-spawning the implementer/verifier yourself.
+  **Light phases** (owner directive 2026-07-14): a phase prompt whose banner carries
+  `WEIGHT: light` — behaviour-preserving mechanical execution pinned by an earlier
+  phase's gate-passed oracle — runs with `briefSpec.weight: 'light'`: the Brief stage is
+  skipped, the implementer executes the prompt directly and re-derives its enumerations
+  from source, and in-workflow guards BLOCK a mis-tagged call. The Verify stage never
+  lightens.
 - **Mode propagation to delegates is mechanical** — the `SubagentStart` hook
   (`.claude/settings.json`) injects the ponytail + caveman capsule into every spawned
   sub-agent; the capsule itself carries the rules (reviewer carve-out; "terse prose,
