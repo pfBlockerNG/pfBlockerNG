@@ -18004,9 +18004,9 @@ function sync_package_pfblockerng($cron='') {
 		}
 		if ($pfb['dnsbl_tld_allow'] == 'on') {
 			$tld_allow_cnt = 0;
-			foreach (array('gtld', 'cctld', 'itld', 'bgtld') as $tld_allow) {
-				if (isset($pfb['dnsblconfig']['pfb_pytlds_' . $tld_allow]) && !empty($pfb['dnsblconfig']['pfb_pytlds_' . $tld_allow])) {
-					$p_cnt = count(explode(',', $pfb['dnsblconfig']['pfb_pytlds_' . $tld_allow]));
+			foreach (array('gtld', 'cctld', 'itld', 'bgtld') as $tld_allow_bucket) {
+				if (isset($pfb['dnsblconfig']['pfb_pytlds_' . $tld_allow_bucket]) && !empty($pfb['dnsblconfig']['pfb_pytlds_' . $tld_allow_bucket])) {
+					$p_cnt = count(explode(',', $pfb['dnsblconfig']['pfb_pytlds_' . $tld_allow_bucket]));
 					if (is_numeric($p_cnt) && $p_cnt > 0) {
 						$tld_allow_cnt += $p_cnt;
 					}
