@@ -6,14 +6,14 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * issue #1255 — pfb_unbound_python() must emit the `python_tld_wildcard` ini
- * flag, derived from $pfb['dnsbl_tld'] via the SAME on/off pattern as the
+ * flag, derived from $pfb['dnsbl_tld_wildcard'] via the SAME on/off pattern as the
  * sibling `python_hsts` key (HSTS parity: a shipped static file + an ini
  * boolean enable flag). pfb_unbound_python() needs a live pfSense/VIP/DNS
  * environment to execute end-to-end (no lighter harness exists for ANY of
  * its ini keys — python_hsts/python_idn/python_cname are pinned the same
  * source-inspection way in PythonWhitelistTldSegTest.php; true end-to-end
  * ini + Python behaviour is proven by the live-VM smoke suite), so this pins
- * the wiring at the source level: the derivation reads dnsbl_tld and the
+ * the wiring at the source level: the derivation reads dnsbl_tld_wildcard and the
  * heredoc emits the key.
  */
 final class PythonTldWildcardIniEmitTest extends TestCase
@@ -58,9 +58,9 @@ final class PythonTldWildcardIniEmitTest extends TestCase
 	{
 		$body = $this->functionBody('pfb_unbound_python');
 		$this->assertMatchesRegularExpression(
-			"/\\\$python_tld_wildcard\s*=\s*'off';.*if\s*\(\s*\\\$pfb\['dnsbl_tld'\]/s",
+			"/\\\$python_tld_wildcard\s*=\s*'off';.*if\s*\(\s*\\\$pfb\['dnsbl_tld_wildcard'\]/s",
 			$body,
-			'issue #1255: python_tld_wildcard must default off and flip on $pfb[\'dnsbl_tld\'] (mirrors python_hsts @ $pfb[\'dnsbl_hsts\'])'
+			'issue #1255: python_tld_wildcard must default off and flip on $pfb[\'dnsbl_tld_wildcard\'] (mirrors python_hsts @ $pfb[\'dnsbl_hsts\'])'
 		);
 	}
 

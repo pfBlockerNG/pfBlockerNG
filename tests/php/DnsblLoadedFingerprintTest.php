@@ -415,12 +415,12 @@ final class DnsblLoadedFingerprintTest extends TestCase
 	// -----------------------------------------------------------------------
 	// pfb_dnsbl_reload_fingerprint (issue #1255)
 	//
-	// The dnsbl_tld fp_old bypass (@16793) used to null the WHOLE fingerprint in
+	// The dnsbl_tld_wildcard fp_old bypass (@16793) used to null the WHOLE fingerprint in
 	// TLD mode because tld_analysis() rewrites unbound_py_data/unbound_py_zone
 	// INSIDE pfb_update_unbound(), strictly AFTER the fingerprint is taken -- so
 	// a package update shipping a new TLD oracle (fingerprinted like HSTS) never
 	// triggered a reload. This helper narrows instead of nulling: excludes ONLY
-	// unbound_py_data/unbound_py_zone when dnsbl_tld is on; every other input
+	// unbound_py_data/unbound_py_zone when dnsbl_tld_wildcard is on; every other input
 	// (the oracle included) still gates normally.
 	// -----------------------------------------------------------------------
 
@@ -440,7 +440,7 @@ final class DnsblLoadedFingerprintTest extends TestCase
 	public function testTldModeIgnoresDataZoneChangeButOracleChangeStillTriggersReload(): void
 	{
 		$pfb = $this->reloadFpBasePfb();
-		$pfb['dnsbl_tld'] = 'on';
+		$pfb['dnsbl_tld_wildcard'] = 'on';
 		file_put_contents($pfb['unbound_py_data'], 'stale-legacy-data');
 		file_put_contents($pfb['unbound_py_tld'], "com\n");
 
@@ -462,7 +462,7 @@ final class DnsblLoadedFingerprintTest extends TestCase
 	public function testNonTldModeIncludesDataZoneChange(): void
 	{
 		$pfb = $this->reloadFpBasePfb();
-		$pfb['dnsbl_tld'] = '';
+		$pfb['dnsbl_tld_wildcard'] = '';
 		file_put_contents($pfb['unbound_py_data'], 'v1');
 
 		$fp_before = pfb_dnsbl_reload_fingerprint($pfb);

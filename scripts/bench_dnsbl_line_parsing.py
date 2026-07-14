@@ -107,9 +107,9 @@ def worker_python(worktree: str, raw_path: str, iterations: int) -> int:
     manifest = {
         "version": 1,
         "config": {
-            "tld_master": [],
-            "tld_blacklist": [],
-            "tld_exclusion": [],
+            "tld_wildcard_master": [],
+            "tld_wildcard_blacklist": [],
+            "tld_wildcard_exclusion": [],
             "user_whitelist": [],
             "user_unlock": [],
             "top1m_list": [],

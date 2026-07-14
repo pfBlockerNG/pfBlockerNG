@@ -530,7 +530,7 @@ def _build_swap_snapshot() -> Snapshot | None:
         try:
             with open(pfb["pfb_py_hsts"]) as hsts:
                 for line in hsts:
-                    # match _dnsbl_load_tld_master(): skip comment/whitespace-only lines; '0' stays a valid key
+                    # match _dnsbl_load_tld_wildcard_master(): skip comment/whitespace-only lines; '0' stays a valid key
                     key = line.strip()
                     if not key or key.startswith("#"):
                         continue
@@ -1030,7 +1030,7 @@ def _load_hsts_db() -> None:
     try:
         with open(pfb["pfb_py_hsts"]) as hsts:
             for line in hsts:
-                # match _dnsbl_load_tld_master(): skip comment/whitespace-only lines; '0' stays a valid key
+                # match _dnsbl_load_tld_wildcard_master(): skip comment/whitespace-only lines; '0' stays a valid key
                 key = line.strip()
                 if not key or key.startswith("#"):
                     continue
@@ -4279,15 +4279,15 @@ def normalise(value: str) -> str | None:
     return domain
 
 
-def _dnsbl_load_tld_master(
+def _dnsbl_load_tld_wildcard_master(
     suffix_lines: Iterable[str],
-    tld_blacklist: Iterable[str],
-    tld_exclusion: Iterable[str],
+    tld_wildcard_blacklist: Iterable[str],
+    tld_wildcard_exclusion: Iterable[str],
 ) -> dict[str, dict[str, str]]:
     """Build the public-suffix oracle tlds[tld][full-suffix], minus any blacklisted
     or excluded TLD -- mirrors PHP's tld_analysis() master-list load loop."""
-    blacklist = {t.strip(".") for t in tld_blacklist}
-    exclusion_keys = {e.strip(".") for e in tld_exclusion}
+    blacklist = {t.strip(".") for t in tld_wildcard_blacklist}
+    exclusion_keys = {e.strip(".") for e in tld_wildcard_exclusion}
     tlds: dict[str, dict[str, str]] = {}
     for line in suffix_lines:
         suffix = line.strip()
@@ -4302,7 +4302,9 @@ def _dnsbl_load_tld_master(
     return tlds
 
 
-def _dnsbl_tld_search(tlds: dict[str, dict[str, str]], tld: str, dparts: list[str], j: int, k: int) -> str | None:
+def _dnsbl_tld_wildcard_search(
+    tlds: dict[str, dict[str, str]], tld: str, dparts: list[str], j: int, k: int
+) -> str | None:
     """Mirrors PHP's tld_search(): if the j-label suffix is a known public suffix,
     the registrable parent is the k-label slice."""
     tld_query = ".".join(dparts[-j:])
@@ -4311,7 +4313,7 @@ def _dnsbl_tld_search(tlds: dict[str, dict[str, str]], tld: str, dparts: list[st
     return None
 
 
-def classify(domain: str, tlds: dict[str, dict[str, str]], exclusion: set[str]) -> tuple[str, str]:
+def tld_wildcard_classify(domain: str, tlds: dict[str, dict[str, str]], exclusion: set[str]) -> tuple[str, str]:
     """Return ``(DNSBL_CLASS_ZONE, registrable-parent)`` or ``(DNSBL_CLASS_DATA, domain)``.
 
     Mirrors PHP's tld_analysis() zone/data split exactly: a registrable parent ->
@@ -4334,11 +4336,11 @@ def classify(domain: str, tlds: dict[str, dict[str, str]], exclusion: set[str]) 
     if dcnt > 5:
         dfound = ""
     elif dcnt == 5:
-        dfound = _dnsbl_tld_search(tlds, tld, dparts, 4, 5) or ""
+        dfound = _dnsbl_tld_wildcard_search(tlds, tld, dparts, 4, 5) or ""
     elif dcnt == 4:
-        dfound = _dnsbl_tld_search(tlds, tld, dparts, 3, 4) or ""
+        dfound = _dnsbl_tld_wildcard_search(tlds, tld, dparts, 3, 4) or ""
     elif dcnt == 3:
-        dfound = _dnsbl_tld_search(tlds, tld, dparts, 2, 3) or ""
+        dfound = _dnsbl_tld_wildcard_search(tlds, tld, dparts, 2, 3) or ""
     elif dcnt == 2:
         dfound = ".".join(dparts[-2:])
 
@@ -4352,7 +4354,7 @@ def classify(domain: str, tlds: dict[str, dict[str, str]], exclusion: set[str]) 
 
 
 # --------------------------------------------------------------------------- #
-# ADR-07 Stage-B reconcile: $badfilter prune + regex reduction + classify +
+# ADR-07 Stage-B reconcile: $badfilter prune + regex reduction + tld_wildcard_classify +
 # priority bands. PURE / reentrant -- consumes the typed ``Rule`` stream from
 # Stage-A (parse_abp) into the pre-emit rule sets build() folds in; NEVER
 # compiles/executes a regex itself. Reference oracle:
@@ -4514,9 +4516,10 @@ def reconcile(
       4. ASSIGN priority BANDS to every surviving rule (``_dnsbl_rule_band``).
 
     ``exclusion`` is the TLD-exclusion set (same shape build() uses). ``tlds`` is
-    kept for signature stability but no longer consulted: classify's registrable-
-    parent rule is a plain/hosts-path concept (ADR-06) that must not demote an ABP
-    anchor. Matches the reference oracle ``reconcile`` + ``decide`` precedence.
+    kept for signature stability but no longer consulted: tld_wildcard_classify's
+    registrable-parent rule is a plain/hosts-path concept (ADR-06) that must not
+    demote an ABP anchor. Matches the reference oracle ``reconcile`` + ``decide``
+    precedence.
 
     ``tally`` (ADR-48, issue #789): optional out-param -- when not ``None``,
     the #753 wire-cap fold-drop (a reducible regex whose folded key is unqueryable)
@@ -4600,8 +4603,8 @@ def reconcile(
             # BLOCK domain -> data vs zone. ABP wildcard semantics come from the
             # rule itself: ``||host^`` (and a wildcard-shaped regex fold) covers
             # host + ALL subdomains, so it emits a ZONE keyed at the anchor at any
-            # depth (#718) -- classify's registrable-parent rule is a plain/hosts
-            # path concept and must not demote an ABP anchor. TLD exclusion still
+            # depth (#718) -- tld_wildcard_classify's registrable-parent rule is a
+            # plain/hosts path concept and must not demote an ABP anchor. TLD exclusion still
             # opts a domain out of wildcarding (transparent exact DATA), and a
             # wildcard=False fold (exact /^D$/) stays forced to DATA.
             if wildcard and domain not in exclusion:
@@ -4992,9 +4995,9 @@ def build(
 
     ``manifest`` is the per-feed boundary: one row per
     raw feed file mapping it to ``{raw, feed, group, log_flag}``.
-    ``config`` carries the classification + whitelist inputs (``tld_master`` suffix
-    lines, ``tld_blacklist``, ``tld_exclusion``, ``user_whitelist``, ``user_unlock``,
-    ``top1m_list``).
+    ``config`` carries the classification + whitelist inputs (``tld_wildcard_master``
+    suffix lines, ``tld_wildcard_blacklist``, ``tld_wildcard_exclusion``,
+    ``user_whitelist``, ``user_unlock``, ``top1m_list``).
     ``line_reader`` yields the raw lines for a feed's ``raw`` reference -- injected so
     this stays pure and side-effect-free (no filesystem coupling, unit-testable; the
     init wiring supplies a file-backed reader).
@@ -5011,16 +5014,16 @@ def build(
     are tallied into ``BuildResult.rejects`` (bucket 'shape' | 'wire_cap', keyed
     (feed, group)) -- accounting only, no gate DECISION changes.
     """
-    suffix_lines = list(config.get("tld_master", []))
-    tld_blacklist = list(config.get("tld_blacklist", []))
-    tld_exclusion = list(config.get("tld_exclusion", []))
-    exclusion = {e.strip(".") for e in tld_exclusion}
+    suffix_lines = list(config.get("tld_wildcard_master", []))
+    tld_wildcard_blacklist = list(config.get("tld_wildcard_blacklist", []))
+    tld_wildcard_exclusion = list(config.get("tld_wildcard_exclusion", []))
+    exclusion = {e.strip(".") for e in tld_wildcard_exclusion}
 
     # ADR-07: the opt-in static cap (drop over-long / nested-quantifier feed regex
     # at load). Read from the manifest config; OFF by default so nothing is dropped.
     static_cap = bool(config.get("regex_cap", False))
 
-    tlds = _dnsbl_load_tld_master(suffix_lines, tld_blacklist, tld_exclusion)
+    tlds = _dnsbl_load_tld_wildcard_master(suffix_lines, tld_wildcard_blacklist, tld_wildcard_exclusion)
 
     data_db: dict[str, dict[str, Any]] = {}
     zone_db: dict[str, dict[str, Any]] = {}
@@ -5044,7 +5047,7 @@ def build(
     # Whole-TLD block: a blacklisted TLD becomes a synthetic DNSBL_TLD zone entry,
     # matching the row shape PHP's tld_analysis() writes for the same case
     # (``,<tld>,,1,DNSBL_TLD,DNSBL_TLD``).
-    for raw_tld in tld_blacklist:
+    for raw_tld in tld_wildcard_blacklist:
         tld = raw_tld.strip(".")
         if not tld:
             continue
@@ -5183,7 +5186,7 @@ def build(
             if entry.kind != DNSBL_KIND_BLOCK:
                 continue
             idx = index_for(feed, group)
-            cls, key = classify(domain, tlds, exclusion)
+            cls, key = tld_wildcard_classify(domain, tlds, exclusion)
             # Non-ABP block: band 1 (downloaded feed) or 5 (USER Custom_List); never
             # $important (the plain path has no $options grammar).
             payload = {"log": log_flag, "index": idx, "important": False, "band": block_band}
@@ -5306,24 +5309,24 @@ def _dnsbl_file_line_reader(base_dir: str) -> Callable[[str], Iterable[str]]:
 def _dnsbl_config_from_manifest(manifest: dict[str, Any], base_dir: str) -> dict[str, Any]:
     """Shape the manifest's ``config`` block into the build() config blob.
 
-    issue #1255: the public-suffix oracle (``tld_master`` suffix lines) is NOT part
-    of the manifest -- HSTS parity: a SHIPPED file (``pfb["pfb_py_tld"]``) gated by
-    ``pfb["python_tld_wildcard"]``, mirroring ``pfb["pfb_py_hsts"]``/
+    issue #1255: the public-suffix oracle (``tld_wildcard_master`` suffix lines) is
+    NOT part of the manifest -- HSTS parity: a SHIPPED file (``pfb["pfb_py_tld"]``)
+    gated by ``pfb["python_tld_wildcard"]``, mirroring ``pfb["pfb_py_hsts"]``/
     ``pfb["python_hsts"]``. A manifest ``config.tld_master`` key (a stale pre-#1255
     shape) is ignored entirely -- an absent oracle is expected, not a warning.
-    ``tld_blacklist`` / ``tld_exclusion`` / ``user_whitelist`` / ``user_unlock`` /
-    ``top1m_list`` are passed through as lists. Missing keys default empty so a
-    partial manifest still builds.
+    ``tld_wildcard_blacklist`` / ``tld_wildcard_exclusion`` / ``user_whitelist`` /
+    ``user_unlock`` / ``top1m_list`` are passed through as lists. Missing keys
+    default empty so a partial manifest still builds.
     """
     config = manifest.get("config", {})
 
-    tld_master_lines: list[str] = []
+    tld_wildcard_master_lines: list[str] = []
     if pfb.get("python_tld_wildcard", False):
         tld_path = pfb.get("pfb_py_tld", "")
         if tld_path and os.path.isfile(tld_path):
             try:
                 with open(tld_path, encoding="utf-8", errors="replace") as fh:
-                    tld_master_lines = fh.read().splitlines()
+                    tld_wildcard_master_lines = fh.read().splitlines()
             except OSError as e:
                 sys.stderr.write("[pfBlockerNG]: Failed to read TLD-Wildcard oracle '{}': {}".format(tld_path, e))
 
@@ -5334,9 +5337,9 @@ def _dnsbl_config_from_manifest(manifest: dict[str, Any], base_dir: str) -> dict
     regex_cap = bool(config.get("regex_cap", pfb.get("regex_cap", False)))
 
     return {
-        "tld_master": tld_master_lines,
-        "tld_blacklist": list(config.get("tld_blacklist", [])),
-        "tld_exclusion": list(config.get("tld_exclusion", [])),
+        "tld_wildcard_master": tld_wildcard_master_lines,
+        "tld_wildcard_blacklist": list(config.get("tld_wildcard_blacklist", [])),
+        "tld_wildcard_exclusion": list(config.get("tld_wildcard_exclusion", [])),
         "user_whitelist": list(config.get("user_whitelist", [])),
         # ADR-06 (#51): the temporary per-alert unlock set -> band-6 whiteDB allows.
         "user_unlock": list(config.get("user_unlock", [])),

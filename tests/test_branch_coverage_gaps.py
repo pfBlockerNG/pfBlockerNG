@@ -42,7 +42,7 @@ from pfb_unbound import (
     NameVerdict,
     Rule,
     _dnsbl_classify_options,
-    _dnsbl_load_tld_master,
+    _dnsbl_load_tld_wildcard_master,
     _dnsbl_normalise_whitelist,
     _dnsbl_parse_abp_regex,
     _dnsbl_reduce_regex,
@@ -53,7 +53,6 @@ from pfb_unbound import (
     _scan_allow_regex_band,
     _scan_block_band,
     build,
-    classify,
     classify_idn,
     dnsbl_build_from_manifest,
     dnsbl_emit_count,
@@ -62,6 +61,7 @@ from pfb_unbound import (
     parse,
     parse_abp,
     reconcile,
+    tld_wildcard_classify,
     whitelist_lookup_band,
 )
 
@@ -128,28 +128,28 @@ def _reset_regex_runtime_state() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# classify -- label-depth branches (>5, ==5, single-label fall-through)
+# tld_wildcard_classify -- label-depth branches (>5, ==5, single-label fall-through)
 # --------------------------------------------------------------------------- #
 class TestClassifyDepthBranches:
     def test_more_than_five_labels_is_exact_data(self) -> None:
         # >5 labels: no public-suffix search runs -> exact DATA (the dcnt>5 arm).
-        cls, key = classify("a.b.c.d.e.f.example", {}, set())
+        cls, key = tld_wildcard_classify("a.b.c.d.e.f.example", {}, set())
         assert (cls, key) == (DNSBL_CLASS_DATA, "a.b.c.d.e.f.example")
 
     def test_five_labels_registrable_parent_is_zone(self) -> None:
         # dcnt==5 arm: a 4-label public suffix makes the whole 5-label name the zone.
         tlds = {"com": {"b.c.d.com": ""}}
-        cls, key = classify("a.b.c.d.com", tlds, set())
+        cls, key = tld_wildcard_classify("a.b.c.d.com", tlds, set())
         assert (cls, key) == (DNSBL_CLASS_ZONE, "a.b.c.d.com")
 
     def test_five_labels_unknown_suffix_is_exact_data(self) -> None:
         # dcnt==5 arm, suffix NOT public -> exact DATA (the `or ""` fallthrough).
-        cls, key = classify("a.b.c.d.com", {}, set())
+        cls, key = tld_wildcard_classify("a.b.c.d.com", {}, set())
         assert (cls, key) == (DNSBL_CLASS_DATA, "a.b.c.d.com")
 
     def test_single_label_falls_through_to_data(self) -> None:
         # dcnt==1: no depth arm matches -> dfound stays "" -> exact DATA.
-        cls, key = classify("com", {}, set())
+        cls, key = tld_wildcard_classify("com", {}, set())
         assert (cls, key) == (DNSBL_CLASS_DATA, "com")
 
 
@@ -172,16 +172,16 @@ class TestStripHostsPrefix:
 
 
 # --------------------------------------------------------------------------- #
-# _dnsbl_load_tld_master -- comment/blank skip + blacklist/exclusion drop
+# _dnsbl_load_tld_wildcard_master -- comment/blank skip + blacklist/exclusion drop
 # --------------------------------------------------------------------------- #
 class TestLoadTldMaster:
     def test_comment_blank_and_blacklisted_tld_dropped(self) -> None:
         # Comment + blank lines are skipped; a blacklisted/excluded TLD is dropped;
         # everything else loads under tlds[tld][suffix].
-        tlds = _dnsbl_load_tld_master(
+        tlds = _dnsbl_load_tld_wildcard_master(
             ["# a comment", "", "com", "co.uk", "net"],
-            tld_blacklist=["uk"],
-            tld_exclusion=["net"],
+            tld_wildcard_blacklist=["uk"],
+            tld_wildcard_exclusion=["net"],
         )
         assert "uk" not in tlds  # blacklisted
         assert "net" not in tlds  # excluded
@@ -189,7 +189,7 @@ class TestLoadTldMaster:
 
     def test_bare_zero_tld_is_kept(self) -> None:
         # issue #1116: "0" is a valid dot-less TLD -- not falsy-string dropped.
-        tlds = _dnsbl_load_tld_master(["0", "com"], [], [])
+        tlds = _dnsbl_load_tld_wildcard_master(["0", "com"], [], [])
         assert "0" in tlds
         assert tlds["0"] == {"0": ""}
 
@@ -197,7 +197,7 @@ class TestLoadTldMaster:
         # issue #1134: rsplit('.', 1)[-1] on a trailing-dot/bare-dot row extracts
         # '' -- must be dropped like PHP's tld_analysis(), not seed a '' bucket.
         # 'com' (dot-less, unaffected) proves the guard is scoped to the empty case.
-        tlds = _dnsbl_load_tld_master(["bad.", ".", "..", "com"], [], [])
+        tlds = _dnsbl_load_tld_wildcard_master(["bad.", ".", "..", "com"], [], [])
         assert tlds == {"com": {"com": ""}}
 
 
@@ -452,7 +452,7 @@ class TestBuildBranches:
         # A "." blacklist entry strips to "" -> no synthetic zone entry, no crash.
         result = build(
             _manifest([]),
-            {"tld_blacklist": ["."]},
+            {"tld_wildcard_blacklist": ["."]},
             line_reader=lambda raw: [],
         )
         assert result.zone_db == {}

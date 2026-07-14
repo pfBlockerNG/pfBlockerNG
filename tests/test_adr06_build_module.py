@@ -62,13 +62,13 @@ from tests.test_adr06_golden_oracle import (
 def _build_config(config: dict[str, Any]) -> dict[str, Any]:
     """Shape the golden config.json into the build() config blob.
 
-    The golden config.json carries ``tld_master`` as a fixture file name; the build
-    takes the suffix lines directly (no filesystem coupling), so expand it here.
+    The golden config.json carries ``tld_wildcard_master`` as a fixture file name; the
+    build takes the suffix lines directly (no filesystem coupling), so expand it here.
     """
     return {
-        "tld_master": _read_lines("tld_master.txt"),
-        "tld_blacklist": config.get("tld_blacklist", []),
-        "tld_exclusion": config.get("tld_exclusion", []),
+        "tld_wildcard_master": _read_lines("tld_master.txt"),
+        "tld_wildcard_blacklist": config.get("tld_wildcard_blacklist", []),
+        "tld_wildcard_exclusion": config.get("tld_wildcard_exclusion", []),
         "user_whitelist": config.get("user_whitelist", []),
         "top1m_list": config.get("top1m_list", []),
     }
@@ -245,30 +245,30 @@ class TestNormaliseVerdictBucket:
 
 
 # --------------------------------------------------------------------------- #
-# classify()
+# tld_wildcard_classify()
 # --------------------------------------------------------------------------- #
 
 
 class TestClassify:
     def _tlds(self) -> dict[str, dict[str, str]]:
-        return pfb_unbound._dnsbl_load_tld_master(_read_lines("tld_master.txt"), [], [])
+        return pfb_unbound._dnsbl_load_tld_wildcard_master(_read_lines("tld_master.txt"), [], [])
 
     def test_two_label_is_zone(self) -> None:
-        cls, key = pfb_unbound.classify("tracker.org", self._tlds(), set())
+        cls, key = pfb_unbound.tld_wildcard_classify("tracker.org", self._tlds(), set())
         assert (cls, key) == (pfb_unbound.DNSBL_CLASS_ZONE, "tracker.org")
 
     def test_multi_label_public_suffix_is_zone_on_registrable(self) -> None:
         # co.uk is a public suffix -> shop.co.uk is the registrable parent.
-        cls, key = pfb_unbound.classify("shop.co.uk", self._tlds(), set())
+        cls, key = pfb_unbound.tld_wildcard_classify("shop.co.uk", self._tlds(), set())
         assert (cls, key) == (pfb_unbound.DNSBL_CLASS_ZONE, "shop.co.uk")
 
     def test_deep_subdomain_unknown_parent_is_data(self) -> None:
         # cleandata.com is NOT a public suffix -> only the exact name is DATA.
-        cls, key = pfb_unbound.classify("deep.host.cleandata.com", self._tlds(), set())
+        cls, key = pfb_unbound.tld_wildcard_classify("deep.host.cleandata.com", self._tlds(), set())
         assert (cls, key) == (pfb_unbound.DNSBL_CLASS_DATA, "deep.host.cleandata.com")
 
     def test_tld_exclusion_forces_exact_data(self) -> None:
-        cls, key = pfb_unbound.classify("excluded.com", self._tlds(), {"excluded.com"})
+        cls, key = pfb_unbound.tld_wildcard_classify("excluded.com", self._tlds(), {"excluded.com"})
         assert (cls, key) == (pfb_unbound.DNSBL_CLASS_DATA, "excluded.com")
 
 

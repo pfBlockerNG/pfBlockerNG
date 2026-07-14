@@ -93,8 +93,8 @@ class TestPathWithinBaseHelper:
 
 
 class TestTldWildcardOracleGating:
-    """issue #1255: the public-suffix oracle (``tld_master`` suffix lines fed to
-    ``_dnsbl_load_tld_master``) is sourced from a SHIPPED file
+    """issue #1255: the public-suffix oracle (``tld_wildcard_master`` suffix lines
+    fed to ``_dnsbl_load_tld_wildcard_master``) is sourced from a SHIPPED file
     (``pfb["pfb_py_tld"]``) gated by ``pfb["python_tld_wildcard"]`` -- HSTS parity
     -- never from the manifest. A manifest carrying a stale/malicious
     ``config.tld_master`` key (an old install, or a crafted manifest) is ignored
@@ -113,7 +113,7 @@ class TestTldWildcardOracleGating:
 
         config = pfb_unbound._dnsbl_config_from_manifest({"config": {}}, str(tmp_path))
 
-        assert config["tld_master"] == [], "OFF must never load the oracle, even though the file exists"
+        assert config["tld_wildcard_master"] == [], "OFF must never load the oracle, even though the file exists"
 
     def test_oracle_loaded_when_flag_on_and_file_present(self, tmp_path: Any) -> None:
         oracle = tmp_path / "pfb_py_tld.txt"
@@ -123,7 +123,7 @@ class TestTldWildcardOracleGating:
 
         config = pfb_unbound._dnsbl_config_from_manifest({"config": {}}, str(tmp_path))
 
-        assert config["tld_master"] == ["com", "net"]
+        assert config["tld_wildcard_master"] == ["com", "net"]
 
     def test_oracle_empty_when_flag_on_but_file_missing(self, tmp_path: Any) -> None:
         # Fail-safe: ON but no oracle staged yet -> empty, never a raise/crash.
@@ -132,7 +132,7 @@ class TestTldWildcardOracleGating:
 
         config = pfb_unbound._dnsbl_config_from_manifest({"config": {}}, str(tmp_path))
 
-        assert config["tld_master"] == []
+        assert config["tld_wildcard_master"] == []
 
     def test_manifest_tld_master_key_is_ignored_regardless_of_flag(self, tmp_path: Any) -> None:
         # A manifest embedding tld_master (stale pre-#1255 shape, or crafted) must
@@ -142,4 +142,4 @@ class TestTldWildcardOracleGating:
 
         config = pfb_unbound._dnsbl_config_from_manifest(manifest, str(tmp_path))
 
-        assert config["tld_master"] == []
+        assert config["tld_wildcard_master"] == []

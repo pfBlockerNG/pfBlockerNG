@@ -21,8 +21,8 @@ use PHPUnit\Framework\TestCase;
  *
  * C3 -- manifest bridge writer: a LIVE call of pfb_unbound_python_sources()
  * (mirrors UnboundPythonSourcesTest.php's $pfb setup) proving
- * config.tld_blacklist/tld_exclusion carry the configured values when
- * $pfb['dnsbl_tld'] is truthy, and are emptied when falsy.
+ * config.tld_wildcard_blacklist/tld_wildcard_exclusion carry the configured
+ * values when $pfb['dnsbl_tld_wildcard'] is truthy, and are emptied when falsy.
  */
 #[CoversFunction('pfb_unbound_python')]
 #[CoversFunction('pfb_unbound_python_sources')]
@@ -53,7 +53,7 @@ final class TldBridgeEmitTest extends TestCase
 			'dnsbl_top1m'        => 'off',
 			'dnsbl_tld_data'     => "{$this->tmp}/does_not_exist",
 			'dnsbl_unlock'       => "{$this->tmp}/dnsbl_unlock",
-			'dnsbl_tld'          => '',
+			'dnsbl_tld_wildcard' => '',
 			'dnsblconfig'        => [
 				'tldblacklist' => '',
 				'tldexclusion' => '',
@@ -151,25 +151,25 @@ final class TldBridgeEmitTest extends TestCase
 	// ------------------------------------------------------------------ //
 	public function testManifestTldKeysEmptyWhenDnsblTldOff(): void
 	{
-		$GLOBALS['pfb']['dnsbl_tld'] = '';
+		$GLOBALS['pfb']['dnsbl_tld_wildcard'] = '';
 		$GLOBALS['pfb']['dnsblconfig']['tldblacklist'] = base64_encode('evil-tld');
 		$GLOBALS['pfb']['dnsblconfig']['tldexclusion'] = base64_encode('good.example');
 
 		$m = pfb_unbound_python_sources([]);
 
-		$this->assertSame([], $m['config']['tld_blacklist'], 'OFF must empty tld_blacklist even though it was configured');
-		$this->assertSame([], $m['config']['tld_exclusion'], 'OFF must empty tld_exclusion even though it was configured');
+		$this->assertSame([], $m['config']['tld_wildcard_blacklist'], 'OFF must empty tld_wildcard_blacklist even though it was configured');
+		$this->assertSame([], $m['config']['tld_wildcard_exclusion'], 'OFF must empty tld_wildcard_exclusion even though it was configured');
 	}
 
 	public function testManifestTldKeysPopulatedWhenDnsblTldOn(): void
 	{
-		$GLOBALS['pfb']['dnsbl_tld'] = 'on';
+		$GLOBALS['pfb']['dnsbl_tld_wildcard'] = 'on';
 		$GLOBALS['pfb']['dnsblconfig']['tldblacklist'] = base64_encode('evil-tld');
 		$GLOBALS['pfb']['dnsblconfig']['tldexclusion'] = base64_encode('good.example');
 
 		$m = pfb_unbound_python_sources([]);
 
-		$this->assertSame(['evil-tld'], $m['config']['tld_blacklist'], 'ON must populate tld_blacklist from config');
-		$this->assertSame(['good.example'], $m['config']['tld_exclusion'], 'ON must populate tld_exclusion from config');
+		$this->assertSame(['evil-tld'], $m['config']['tld_wildcard_blacklist'], 'ON must populate tld_wildcard_blacklist from config');
+		$this->assertSame(['good.example'], $m['config']['tld_wildcard_exclusion'], 'ON must populate tld_wildcard_exclusion from config');
 	}
 }

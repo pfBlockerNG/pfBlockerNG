@@ -38,10 +38,10 @@ import pfb_unbound
 TLD_ALLOW_ENABLE_KEY = "tld_allow"  # Phase 2: cfg/pfb/ini enable-flag key
 TLD_ALLOW_LIST_KEY = "tld_allow_list"  # Phase 2: cfg/pfb/ini allow-list key
 TLD_WILDCARD_INI_KEY = "python_tld_wildcard"  # ADR "stays" row -- unchanged by P2 or P3
-MANIFEST_TLD_KEYS = ("tld_blacklist", "tld_exclusion")  # Phase 3: manifest config + return-blob keys
+MANIFEST_TLD_KEYS = ("tld_wildcard_blacklist", "tld_wildcard_exclusion")  # Phase 3: manifest config + return-blob keys
 
-tld_wildcard_classify = pfb_unbound.classify  # Phase 3 rename target
-load_tld_wildcard_master = pfb_unbound._dnsbl_load_tld_master  # Phase 3 rename target
+tld_wildcard_classify = pfb_unbound.tld_wildcard_classify  # Phase 3 rename target
+load_tld_wildcard_master = pfb_unbound._dnsbl_load_tld_wildcard_master  # Phase 3 rename target
 
 
 _SRC_DIR = os.path.join(os.path.dirname(__file__), "..", "src", "usr", "local", "pkg", "pfblockerng")

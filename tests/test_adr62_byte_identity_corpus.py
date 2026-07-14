@@ -66,9 +66,9 @@ def _corpus_line_reader() -> Callable[[str], Iterable[str]]:
 
 def _run_corpus_build() -> P.BuildResult:
     config: dict[str, Any] = {
-        "tld_master": [],
-        "tld_blacklist": [],
-        "tld_exclusion": [],
+        "tld_wildcard_master": [],
+        "tld_wildcard_blacklist": [],
+        "tld_wildcard_exclusion": [],
         "user_whitelist": [],
         "top1m_list": [],
     }
@@ -93,7 +93,7 @@ def _allowed(result: P.BuildResult, domain: str) -> bool:
 
 
 def test_plain_hosts_feed_domains_are_blocked() -> None:
-    # issue #1255: this corpus's tld_master is empty (TLD-Wildcard OFF) -- a 2-label
+    # issue #1255: this corpus's tld_wildcard_master is empty (TLD-Wildcard OFF) -- a 2-label
     # domain no longer auto-zones; it lands in data_db (exact), same as any other
     # domain with no known public-suffix parent.
     result = _run_corpus_build()
@@ -189,13 +189,14 @@ def test_abp_feed_bare_registrable_parent_stays_data_delta_d1() -> None:
     """delta D1 (ADR.md SS2), registrable-parent case: a bare 2-label line in a
     feed that WAS header-classified ABP used to reach a wildcard ZONE via
     parse_abp (#718); the classifier is now deleted, so the same line takes
-    the plain classify() path. issue #1255: this corpus's tld_master is empty
-    (TLD-Wildcard OFF), so classify()'s top guard forces exact DATA -- the same
-    outcome as any other domain with no known public-suffix parent."""
+    the plain tld_wildcard_classify() path. issue #1255: this corpus's
+    tld_wildcard_master is empty (TLD-Wildcard OFF), so tld_wildcard_classify()'s
+    top guard forces exact DATA -- the same outcome as any other domain with no
+    known public-suffix parent."""
     result = _run_corpus_build()
     assert "abproot.example" in result.data_db, (
         "delta D1 + issue #1255: a registrable-parent bare line in a former-ABP feed "
-        "is exact DATA under the plain classify() path with an empty (OFF) oracle"
+        "is exact DATA under the plain tld_wildcard_classify() path with an empty (OFF) oracle"
     )
     assert "abproot.example" not in result.zone_db
 
@@ -203,13 +204,14 @@ def test_abp_feed_bare_registrable_parent_stays_data_delta_d1() -> None:
 def test_abp_feed_bare_deeper_subdomain_flips_zone_to_data_delta_d1() -> None:
     """delta D1 (ADR.md SS2), deeper-sub case -- the REAL observable flip: a bare
     deeper sub-domain line in a former-ABP feed was wildcard ZONE at ANY depth
-    via parse_abp (#718); the plain classify() path only ZONEs a registrable
-    parent (a known public suffix's parent) -- with no matching suffix (this
-    corpus's tld_master is empty) a deeper sub-domain is exact DATA instead."""
+    via parse_abp (#718); the plain tld_wildcard_classify() path only ZONEs a
+    registrable parent (a known public suffix's parent) -- with no matching suffix
+    (this corpus's tld_wildcard_master is empty) a deeper sub-domain is exact DATA
+    instead."""
     result = _run_corpus_build()
     assert "bare-domain.abp.example" in result.data_db, (
         "delta D1: a deeper bare sub-domain in a former-ABP feed must land in "
-        "data_db (exact), not zone_db (wildcard), under the plain classify() path"
+        "data_db (exact), not zone_db (wildcard), under the plain tld_wildcard_classify() path"
     )
     assert "bare-domain.abp.example" not in result.zone_db, (
         "delta D1: the deeper bare sub-domain must NOT be wildcard-ZONE anymore "

@@ -71,9 +71,9 @@ def _corpus_line_reader() -> Callable[[str], Iterable[str]]:
 
 def _run_corpus_build() -> P.BuildResult:
     config: dict[str, Any] = {
-        "tld_master": [],
-        "tld_blacklist": [],
-        "tld_exclusion": [],
+        "tld_wildcard_master": [],
+        "tld_wildcard_blacklist": [],
+        "tld_wildcard_exclusion": [],
         "user_whitelist": [],
         "top1m_list": [],
     }
@@ -164,9 +164,9 @@ def _build_synthetic(feeds: list[dict[str, Any]], lines_by_header: dict[str, lis
     exercise a shape PHP cannot yet place in a 'plain' feed's raw."""
     manifest = {"feeds": feeds}
     config: dict[str, Any] = {
-        "tld_master": [],
-        "tld_blacklist": [],
-        "tld_exclusion": [],
+        "tld_wildcard_master": [],
+        "tld_wildcard_blacklist": [],
+        "tld_wildcard_exclusion": [],
         "user_whitelist": [],
         "top1m_list": [],
     }
@@ -404,7 +404,7 @@ def test_hostile_ip_anchored_and_bare_ipv6_never_emit_a_domain() -> None:
 def test_hostile_bare_deep_subdomain_stays_on_plain_path_delta_d1() -> None:
     """bare 'sub.deep.example.com' in a plain feed (brief hostile row, delta
     D1): _dnsbl_is_abp_rule_line() is False for a bare domain, so it takes
-    classify() (deeper sub with no known public suffix -> exact DATA), NEVER
+    tld_wildcard_classify() (deeper sub with no known public suffix -> exact DATA), NEVER
     parse_abp's wildcard=True ZONE. Mirrors the corpus's own former-ABP-feed
     case (test_adr62_byte_identity_corpus.py::
     test_abp_feed_bare_deeper_subdomain_flips_zone_to_data_delta_d1), now that

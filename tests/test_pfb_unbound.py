@@ -39,9 +39,8 @@ import pfb_unbound
 from pfb_unbound import (
     DNSBL_CLASS_DATA,
     DNSBL_CLASS_ZONE,
-    _dnsbl_load_tld_master,
+    _dnsbl_load_tld_wildcard_master,
     _parse_ini_int,
-    classify,
     convert_ipv4,
     convert_ipv6,
     convert_other,
@@ -55,6 +54,7 @@ from pfb_unbound import (
     parse_tld_allow,
     python_control_duration,
     resolve_feed_group,
+    tld_wildcard_classify,
     whitelist_check_domain,
 )
 
@@ -3708,23 +3708,23 @@ class TestClassifyTldWildcardOffEmptyOracle:
     def test_tld_wildcard_off_empty_oracle_two_label_is_data(self) -> None:
         # Before the #1255 fix this returned (DNSBL_CLASS_ZONE, "evil.com") --
         # the RED proof: the dcnt==2 branch never consulted tlds.
-        assert classify("evil.com", {}, set()) == (DNSBL_CLASS_DATA, "evil.com")
+        assert tld_wildcard_classify("evil.com", {}, set()) == (DNSBL_CLASS_DATA, "evil.com")
 
     def test_tld_wildcard_off_empty_oracle_public_suffix_is_data(self) -> None:
-        assert classify("example.co.uk", {}, set()) == (DNSBL_CLASS_DATA, "example.co.uk")
+        assert tld_wildcard_classify("example.co.uk", {}, set()) == (DNSBL_CLASS_DATA, "example.co.uk")
 
     def test_two_label_domain_stays_zone_when_oracle_populated(self) -> None:
         # Before-state proven above (empty oracle -> DATA); with the SAME domain
         # and a populated oracle, the guard must not fire -- ON-side is unchanged.
-        tlds = _dnsbl_load_tld_master(["com"], [], [])
-        assert classify("evil.com", tlds, set()) == (DNSBL_CLASS_ZONE, "evil.com")
+        tlds = _dnsbl_load_tld_wildcard_master(["com"], [], [])
+        assert tld_wildcard_classify("evil.com", tlds, set()) == (DNSBL_CLASS_ZONE, "evil.com")
 
 
 class TestAbpWildcardUnaffectedByTldWildcardToggle:
     """issue #1255: reconcile()/ABP explicit-wildcard classification (||host^) is
     driven by the ABP anchor shape (parse_abp), never by ``tlds`` -- the
     TLD-Wildcard toggle (an empty vs. populated oracle) must leave it unchanged
-    in BOTH states, proving no ABP regression from the classify() guard.
+    in BOTH states, proving no ABP regression from the tld_wildcard_classify() guard.
 
     Scenario: TLD-Wildcard toggled OFF (empty oracle) vs ON (oracle populated)
       Given an ABP feed line ``||evil.com^`` (explicit wildcard anchor)
@@ -3735,9 +3735,9 @@ class TestAbpWildcardUnaffectedByTldWildcardToggle:
     def _build(self, tld_master: list[str]) -> pfb_unbound.BuildResult:
         manifest = {"feeds": [{"raw": "f.raw", "feed": "F", "group": "G", "log_flag": "1"}]}
         config: dict[str, object] = {
-            "tld_master": tld_master,
-            "tld_blacklist": [],
-            "tld_exclusion": [],
+            "tld_wildcard_master": tld_master,
+            "tld_wildcard_blacklist": [],
+            "tld_wildcard_exclusion": [],
             "user_whitelist": [],
             "top1m_list": [],
         }
