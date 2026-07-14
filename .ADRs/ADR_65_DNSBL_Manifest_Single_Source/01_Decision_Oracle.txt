@@ -1,5 +1,5 @@
 ================================================================================
-PHASE 1 PROMPT -- Oracle: pin today's DNSBL decision + manifest==fallback equality (behaviour-preserving)
+PHASE 1 PROMPT -- Oracle: pin today's DNSBL decision + characterize the legacy fallback (behaviour-preserving)
 Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
 ADR: .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md   (read SS1 + SS2 "Semantics that MUST be preserved" first)
 ================================================================================
@@ -17,20 +17,26 @@ WHY THIS PHASE EXISTS
 Every later phase claims "net PRODUCTION (manifest-built) decisions are unchanged" and "the query
 channel is decision-equal to a real query." Those claims need a falsification harness that exists
 BEFORE any code moves. This phase builds it: a golden oracle of what the production (manifest-built)
-matcher decides + would log today, plus a CHARACTERIZATION of how the legacy .txt fallback DIVERGES
-from the manifest (it is NOT decision-equal -- with pfb_tld OFF the fallback is exact-only while the
-manifest wildcards a registrable domain; ADR SS1.1). Phase 5 removes the fallback precisely because
-it is a divergent, manifest-failure-only path -- so this oracle pins the manifest decisions, it does
-NOT assert manifest==fallback.
+matcher decides + would log today, plus a CHARACTERIZATION of the legacy interchange-file fallback
+(ADR SS1.1, re-derived 2026-07-14): the fallback runs ONLY on a manifest-build failure, it is LOSSY
+(the loaders skip every NDJSON 'abp' row -- _load_ndjson_row_into_db :925 -- and regexDB/allowRegexDB
+come only from the manifest build :1672, so ABP-feed rules are absent), and it is STALE-ABLE (it
+reads whatever pfb_py_data.txt/pfb_py_zone.txt exist, no freshness check). Fresh plain-domain rows
+DO agree with the manifest classification in both TLD-toggle states. Phase 5 removes the fallback
+because it is a degraded, failure-only path -- this oracle pins the manifest decisions and records
+those facts; it does NOT assert manifest==fallback equality.
 
 REQUIRED READING
 - .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md IN FULL -- especially SS1.1 (manifest is
   decision-complete), SS1.4/SS1.5 (the log fields + the side-effect sinks), and SS2 "Semantics that
   MUST be preserved" (items 1-3).
-- src/usr/local/pkg/pfblockerng/pfb_unbound.py -- evaluate_domain (~:6014), highest_block_band
-  (~:5817), get_details_dnsbl (~:2745, where the log line + counter/cache enqueues live), the
-  csv_line field order (~:2812), dnsbl_build_from_manifest (~:5327), _load_zone_and_data_dbs
-  (~:1037) and _load_zone_db/_load_data_db (~:938/:964).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py -- evaluate_domain (~:6038), _scan_block_band
+  (~:5834; renamed from highest_block_band), get_details_dnsbl (~:2762, where the log line +
+  counter/cache enqueues live), the csv_line field order (~:2829), dnsbl_build_from_manifest
+  (~:5351, called ~:1658), _load_zone_and_data_dbs (~:1045), _load_zone_db/_load_data_db
+  (~:942/:968), _load_ndjson_row_into_db (~:913, the 'abp'-row skip ~:925),
+  tld_wildcard_classify (~:4316, empty-oracle guard ~:4328, 2-label ZONE ~:4344) and its
+  python_tld_wildcard gating (~:1260/:1436/:5324).
 - tests/ -- find the existing DNSBL decision/build tests (e.g. tests touching build()/
   dnsbl_build_from_manifest / evaluate_domain) and MIRROR their harness + fixture style; do not
   invent a new pattern.
@@ -47,20 +53,29 @@ wins and you ESCALATE rather than encode the ADR's number as truth.
 ACTION PLAN (ordered -- oracle FIRST; this whole phase is the oracle)
 1. Build a representative corpus of (domain, qtype) inputs exercising EVERY decision arm: exact
    dataDB hit, zoneDB suffix hit, feed regex, ABP block, ABP allow / whitelist override, TOP1M
-   whitelist, $important precedence, HSTS, homoglyph, and a clean NOT-BLOCKED name. Use inert
-   fixtures (RFC-5737/3849, uuid-style names) -- never RFC 6761 TLDs or HSTS-preload names except
-   where a case is specifically testing HSTS.
+   whitelist, $important precedence, HSTS, homoglyph, and a clean NOT-BLOCKED name -- and cover
+   BOTH TLD-toggle states (python_tld_wildcard on: oracle loaded, 2-label plain domain -> ZONE;
+   off: oracle empty, everything plain -> DATA). Use inert fixtures (RFC-5737/3849, uuid-style
+   names) -- never RFC 6761 TLDs or HSTS-preload names except where a case is specifically
+   testing HSTS.
 2. Oracle A (decision): drive the production decision path over the corpus and snapshot, per input,
    the verdict (blocked/allowed) + the exact fields a block would log
    ({b_type, group, b_eval, feed, p_type}). This is the frozen expectation Phases 2/4/6 re-run.
-3. Oracle B (manifest-vs-fallback CHARACTERIZATION -- NOT an equality assertion): build the SAME
-   feeds two ways -- via dnsbl_build_from_manifest and via the legacy _load_zone_and_data_dbs loaders
-   -- and RECORD the difference. Assert the KNOWN divergence explicitly: a 2-label plain domain
-   (e.g. a uuid-style `<uuid>.com`) lands in zoneDB from the manifest build (wildcard, ADR SS1.1
-   `:4315`) but in dataDB from the pfb_tld-OFF fallback swap (exact). Also assert that the ABP-syntax
-   cases (`||domain^` -> zone) match between the two (the ABP distinction is intrinsic, not
-   pfb_tld-dependent). If the manifest build does NOT wildcard the 2-label domain, STOP and ESCALATE
-   -- the SS1.1 unconditional-wildcard fact is falsified and the whole safety argument changes.
+3. Oracle B (fallback CHARACTERIZATION -- NOT an equality assertion): pin the four ADR SS1.1
+   facts, each as its own test:
+   (a) TRIGGER -- the legacy loaders populate the DBs only when dnsbl_build_from_manifest
+       returned None (and never when it built).
+   (b) LOSSINESS -- with an ABP feed among the same inputs, the fallback-loaded DBs carry NO
+       ABP-derived entries and regexDB/allowRegexDB stay empty, while the manifest build carries
+       them (assert on actual payloads, not key presence).
+   (c) STALENESS -- seed pfb_py_data.txt/pfb_py_zone.txt with content that no longer matches the
+       manifest inputs; on a build failure that stale content IS served verbatim. This test is
+       Phase 5's red baseline -- name it for that intent.
+   (d) FRESH PLAIN-DOMAIN PARITY -- freshly-produced interchange files agree with the manifest
+       build's zone/data classes in BOTH toggle states (2-label, 3-label, sub-domain rows; ON:
+       both wildcard the registrable parent; OFF: both exact-only).
+   If (d) fails, or a fallback load runs while the manifest built, STOP and ESCALATE -- an ADR
+   SS1.1 fact is falsified and the removal argument must be re-examined.
 4. Name the tests for intent (what behaviour they pin), BDD-structured where non-trivial.
 
 CONSTRAINTS
@@ -80,19 +95,19 @@ VERIFICATION (must all pass; only gates runnable here)
 - diff-read: confirm the diff is tests-only (no src/ change).
 
 EXPECTED RESULT
-Two committed oracle test modules (decision snapshot + manifest==fallback equality), green on the
+Two committed oracle test modules (decision snapshot + fallback characterization), green on the
 untouched tree, ready to gate every later phase.
 
 COMMIT (single)
-    tests: pin DNSBL decision oracle + manifest==fallback equality (ADR-65 P1)
+    tests: pin DNSBL decision oracle + characterize the legacy fallback (ADR-65 P1)
 Push directly to adr/65-dnsbl-manifest-single-source; open a PR only if the direct push is rejected.
 
 HANDOFF -- write .ADRs/ADR_65_DNSBL_Manifest_Single_Source/RESULTS/01_Results.txt (plain .txt) with
 the fixed fields (CLAUDE.md "THE HANDOFF"): Verdict; What changed (files + one-line why each +
 commit hash); Gates (exact commands + pasted output tails); the ORACLE-green proof (paste); the
-Oracle-B CHARACTERIZATION result (the recorded manifest-vs-fallback divergence: the 2-label
-wildcard-vs-exact difference confirmed, ABP cases matching; ESCALATE if the manifest does not
-wildcard); Coverage-matrix (every decision arm from ACTION PLAN step 1 ticked to a case, or a
+Oracle-B CHARACTERIZATION result (facts a-d each confirmed with its test: trigger, lossiness,
+staleness, fresh plain-domain parity; ESCALATE on any SS1.1 contradiction); Coverage-matrix (every
+decision arm from ACTION PLAN step 1 ticked to a case -- both toggle states -- plus facts a-d, or a
 justified deferral); Deviations / judgment calls (or "none"); Carry-forward for Phase 2 (the oracle
-entry symbols + corpus location the query channel must match) and Phase 5 (the characterized
-divergence it removes).
+entry symbols + corpus location the query channel must match) and Phase 5 (the staleness test that
+becomes its red baseline).

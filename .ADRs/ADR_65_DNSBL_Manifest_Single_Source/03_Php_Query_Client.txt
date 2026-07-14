@@ -23,9 +23,13 @@ REQUIRED READING
   it names the request/reply file paths + JSON schema this client must speak. If missing, Phase 2 is
   not complete; STOP and report.
 - .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md -- SS2.1 (request/reply shape, transport, perms).
-- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc -- an atomic-write helper to reuse
-  (pfb_unbound_py_atomic_write and friends) and the bounded-wait/applied-marker pattern PHP already
-  uses for the reload path; the PfbConfig gateway idioms.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc -- the atomic-write helper to reuse:
+  pfb_unbound_py_atomic_write (~:7725; NOTE it lives in pfblockerng.inc, NOT extra.inc) and the
+  bounded-wait/applied-marker pattern PHP already uses for the reload path:
+  pfb_unbound_py_wait_applied (~:7845) / pfb_unbound_py_wait_control_applied (~:7857), both over
+  the shared pfb_unbound_py_wait_marker helper.
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc -- the PfbConfig gateway idioms; the new
+  client function lives here.
 - src/usr/local/pkg/pfblockerng/pfblockerng.inc -- pfb_filter usage + PFBL-01 RequirePfbFilter scope
   (validate the domain input before it rides into the request file).
 - tests/php/ -- README + a sibling PHPUnit test that drives a file-backed helper; MIRROR it. The

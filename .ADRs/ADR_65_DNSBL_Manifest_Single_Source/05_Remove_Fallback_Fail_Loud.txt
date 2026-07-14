@@ -15,24 +15,29 @@ a file_notice, instead of silently loading the legacy .txt. HSTS still loads; ne
 GOOD manifest are unchanged; nothing else moves. Dissolves #1245 (no fallback read of a stale zone).
 
 WHY THIS PHASE EXISTS
-The .txt fallback is a second, drifting source of truth and the #1245 stale-serve vector. The
-manifest is decision-complete (Phase-1 Oracle B proved it). Remove the fallback so the manifest is
-the ONLY matcher source, and make a manifest failure a loud outage, never a silent stale-serve.
+The interchange-file fallback is a degraded second source of truth: LOSSY (no ABP/regex/allow
+rules -- Phase-1 Oracle B fact b), STALE-ABLE (the #1245 vector -- fact c), and failure-masking.
+Remove it so the manifest is the ONLY matcher source, and make a manifest failure a loud outage,
+never a silent stale-serve.
 
 REQUIRED READING
 - FIRST, read RESULTS/04_Results.txt AND RESULTS/01_Results.txt (Oracle B CHARACTERIZED the
-  manifest-vs-fallback DIVERGENCE -- they are NOT equal; the safety of removing the fallback is that
-  this phase does not touch the manifest BUILD path, so production decisions are unchanged, and the
-  divergent failure-only fallback is replaced by fail-loud, D3). If either is missing, STOP and
-  report.
+  fallback: failure-only trigger, lossy, stale-able, fresh plain-domain parity. The safety of
+  removing it is that this phase does not touch the manifest BUILD path, so production decisions
+  are unchanged, and the degraded failure-only fallback is replaced by fail-loud, D3. Its
+  staleness test is this phase's red baseline). If either is missing, STOP and report.
 - .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md -- SS1.1 (manifest decision-complete), SS1.5/SS1.7
   (the status ledger + file_notice already exist), SS2.3 (fail loud), delta D3, Semantics 1 + 4.
-- src/usr/local/pkg/pfblockerng/pfb_unbound.py -- init_standard's build-vs-fallback branch (~:1640-
-  1687): dnsbl_build_from_manifest (~:5327) and its None returns (~:5341/:5350/:5368) which already
-  call pfb_py_status_open; _load_zone_and_data_dbs (~:1037), _load_zone_db/_load_data_db (~:938/:964),
-  _load_whitelist_and_hsts_dbs (~:1050) -- KEEP the HSTS load (~:1060, HSTS is NOT in the manifest),
-  keep the status-close bookkeeping; the atomic manifest write (pfb_unbound_python_sources ->
-  pfb_unbound_py_atomic_write, pfblockerng.inc ~:7916).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py -- init_standard's build-vs-fallback branch
+  (~:1658-1704): dnsbl_build_from_manifest (~:5351) and its None returns (~:5365 absent --
+  status_close only; ~:5374 unparseable and ~:5392 build-threw -- both call pfb_py_status_open);
+  _load_zone_and_data_dbs (~:1045), _load_zone_db/_load_data_db (~:942/:968), _load_whitelist_db
+  (~:991), _load_ndjson_row_into_db (~:913 -- delete only if no other caller, grep first),
+  _load_whitelist_and_hsts_dbs (~:1058) -- KEEP the HSTS load (_load_hsts_db ~:1023, gated on
+  python_hsts, NOT on the manifest), keep the status-close bookkeeping (the loaders' own
+  pfb_py_status_close calls need a home or a successor); the manifest write to harden:
+  pfb_unbound_python_sources (pfblockerng.inc ~:8109) calls pfb_unbound_py_atomic_write (~:7725)
+  UNCHECKED at ~:8258 -- the sibling patcher ~:8293 is the checked exemplar.
 - CLAUDE.md -- Python standards, "the box has no python3 symlink" (drive the VM via PHP/sh in smoke),
   the delegation contract.
 

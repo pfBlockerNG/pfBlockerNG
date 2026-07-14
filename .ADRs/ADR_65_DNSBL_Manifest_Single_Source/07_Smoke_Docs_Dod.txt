@@ -24,8 +24,8 @@ REQUIRED READING
 - .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md -- SS7 Definition of done (the smoke checklist +
   reject criteria) and the D1-D4 deltas.
 - .ADRs/ADR_06_DNSBL_Preprocessing_To_Python/ADR.md -- add a SS8 post-merge amendment recording:
-  manifest = single DNSBL source of truth, the .txt fallback retired, fail-loud contract, reports
-  render block-time attribution (no right-now re-check), the query channel.
+  manifest = single DNSBL source of truth, the interchange-file fallback retired, fail-loud
+  contract, reports render block-time attribution (no right-now re-check), the query channel.
 - docs/misc/alerts-reports-pipeline.md -- rewrite to the ONE-phase (log-driven) attribution model;
   docs/misc/architecture-notes.md -- update the DNSBL/manifest section.
 - tests/smoke/ + tests/smoke/ui/ -- CLAUDE.md "Smoke tests" section; mirror an existing smoke module
@@ -53,6 +53,8 @@ ACTION PLAN (ordered)
    SS8; add release-note text for D2 (refinement badges gone, feed-filter matches logged feed).
 4. Close #1244 and #1245 with a comment pointing at this ADR; FILE the follow-up tracking issue for
    retiring dnsblcache + the pfb_dnsbl_parse grep helpers (out of scope here, SS"Explicitly kept").
+   Do NOT file the originally-planned "vestigial pfb_tld" issue -- #1255 already made the toggle
+   gate the manifest path (ADR SS1.1, reworked 2026-07-14).
 
 CONSTRAINTS
 - Smoke fixtures: unique_domain() / RFC-5737/3849 only; never RFC 6761 TLDs or HSTS-preload names
