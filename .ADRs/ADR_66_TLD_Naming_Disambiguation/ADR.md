@@ -1,6 +1,6 @@
 # ADR-66: Disambiguate the two TLD features — `tld_allow` vs `tld_wildcard`
 
-- **Status:** **Proposed** (2026-07-13)
+- **Status:** **Implemented** (PR #1321, merged 2026-07-14; Accepted on the next green live-VM CE+Plus fan-out — behaviour-preserving rename, unit/PHPUnit coverage green)
 - **Date:** 2026-07-13
 - **Branch:** `adr/66-tld-naming-disambiguation` (off `devel`)
 - **Component(s):** `src/usr/local/pkg/pfblockerng/pfblockerng.inc`,
