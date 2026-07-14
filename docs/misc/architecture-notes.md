@@ -73,7 +73,7 @@ row), independent of any marker or column count.
 
 The deliberate behaviour changes are enumerated in the ADR's delta table (D1–D6, ADR.md §2) —
 the headline rows: a bare hosts/plain domain line inside a feed that used to be
-header-classified ABP now takes the plain `classify()` path (registrable parent → wildcard
+header-classified ABP now takes the plain `tld_wildcard_classify()` path (registrable parent → wildcard
 ZONE, same as before; a deeper sub-domain → exact DATA — delta D1); `/re/`, `@@…` and
 element-hiding lines in plain feeds are now honoured via `parse_abp()` (D2); and a plain
 feed's `||<IP>^` anchor now collects to the DNSBLIP firewall alias where it previously

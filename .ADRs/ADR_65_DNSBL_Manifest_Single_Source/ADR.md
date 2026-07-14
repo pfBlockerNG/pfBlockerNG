@@ -40,12 +40,14 @@ it returns `None` — manifest **absent** (`:5341`), **unparseable** (`:5350`), 
 wildcard(zone) vs exact(data) distinction comes from two mechanisms: (a) **ABP** feed lines carry it
 **intrinsically** — the manifest raw is the verbatim ABP line (`pfblockerng.inc:7820`), and
 `parse_abp()` maps `||domain^` → zone, exact → data; (b) **plain** feed lines are bare domains (no
-per-entry flag), and `build()`'s `classify()` (`pfb_unbound.py:4297`, `DNSBL_CLASS_ZONE`/`_DATA`)
-computes the split from the embedded `tld_master` public-suffix list. The manifest embeds
-`tld_master`/`tld_blacklist`/`tld_exclusion` gated only on `file_exists($pfb['dnsbl_tld_data'])`
-(`pfblockerng.inc:7879`) — a **shipped static file** — so it is present **unconditionally**, and
-`classify()` is called **without any `pfb_tld` gate** (`:5162`). For a 2-label domain `classify()`
-returns **ZONE without even consulting `tld_master`** (`:4315`), so `evil.com` → `zoneDB` (wildcard)
+per-entry flag), and `build()`'s `tld_wildcard_classify()` (`pfb_unbound.py:4297`,
+`DNSBL_CLASS_ZONE`/`_DATA`) computes the split from the `tld_wildcard_master` public-suffix
+oracle (post-#1255 the shipped `pfb_py_tld` file, not a manifest key — see the update note
+below). The manifest embeds `tld_wildcard_blacklist`/`tld_wildcard_exclusion` gated only on
+`file_exists($pfb['dnsbl_tld_data'])` (`pfblockerng.inc:7879`) — a **shipped static file** —
+so it was present **unconditionally**, and `tld_wildcard_classify()` is called **without any
+`pfb_tld` gate** (`:5162`). For a 2-label domain `tld_wildcard_classify()` returns **ZONE
+without even consulting `tld_wildcard_master`** (`:4315`), so `evil.com` → `zoneDB` (wildcard)
 in every manifest build.
 
 **Two consequences that correct an earlier assumption:**
@@ -62,10 +64,22 @@ in every manifest build.
   this ADR (it changes no decision here — production already wildcards), but the Phase-1 oracle work
   will expose it; Phase 7 files a tracking issue rather than resolving it in scope.
 
+> **Post-#1255 / ADR-66 update (2026-07-14):** the facts above changed after this
+> ADR was written. The public-suffix oracle is no longer embedded in the manifest —
+> it rides the shipped `pfb_py_tld` chroot file, loaded reader-side into the
+> internal `tld_wildcard_master` build key and gated by the `python_tld_wildcard`
+> ini flag (HSTS parity), so the "Enable TLD Function" toggle (`pfb_tld` /
+> `$pfb['dnsbl_tld_wildcard']`) now gates manifest-era wildcard classification too —
+> the "vestigial toggle" consequence above is superseded. The manifest embeds only
+> `tld_wildcard_blacklist`/`tld_wildcard_exclusion` (emptied when the toggle is
+> off), and ADR-66 renamed the classifier/loader to `tld_wildcard_classify()` /
+> `_dnsbl_load_tld_wildcard_master()`. This ADR's decisions are unaffected; its
+> phase prompts' reality-override lines govern remaining detail drift.
+
 ### 1.2 What writes the `.txt` files, and the two-producer split
 
 `pfb_py_data.txt` (exact) and `pfb_py_zone.txt` (wildcard-incl-self suffix) are produced two ways,
-mode-exclusive on the `pfb_tld` ("Enable TLD Function") setting `$pfb['dnsbl_tld']`
+mode-exclusive on the `pfb_tld` ("Enable TLD Function") setting `$pfb['dnsbl_tld_wildcard']`
 (`pfblockerng.inc:15955`):
 
 - `pfb_tld` **ON** → `tld_analysis()` (`:8352`) classifies the assembled `.raw` into
@@ -76,9 +90,10 @@ mode-exclusive on the `pfb_tld` ("Enable TLD Function") setting `$pfb['dnsbl_tld
   `unlink_if_exists($py_zone)` on a **checked** success (`:1962`, the **#1241** crash-safety fix);
   a failed rename leaves a stale `py_zone.txt` (the **#1245** window).
 
-The `dnsbl_build_from_manifest` path does **not** carry `pfb_tld` — it always wildcard-classifies
-via `tld_master`. So `pfb_tld` OFF only reshapes the on-disk `.txt` files; it does not change the
-manifest-built decision.
+The `dnsbl_build_from_manifest` path does **not** carry `pfb_tld` — it wildcard-classifies
+via `tld_wildcard_master` (post-#1255 gated by the `python_tld_wildcard` ini flag — see the
+§1.1 update note). So `pfb_tld` OFF only reshapes the on-disk `.txt` files; it does not change
+the manifest-built decision.
 
 ### 1.3 Three consumers of the `.txt` files (all replaceable)
 

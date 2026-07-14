@@ -1,12 +1,13 @@
 """Live-VM smoke for issue #1255 -- DNSBL Wildcard Blocking (TLD) toggle.
 
 ``pfb_tld`` (ini ``python_tld_wildcard``) gates whether ``pfb_unbound.py``'s
-``classify()`` opens the shipped public-suffix oracle (``pfb_py_tld.txt``, staged
-from ``dnsbl_tld`` by ``dnsbl_cache_stage()``, mirroring HSTS). ON: a listed 2-label
-registrable domain (e.g. ``label-<uuid>.com``) classifies into a wildcard ZONE, which
-blocks the domain AND every sub-domain at any depth. OFF: the oracle is never opened
-(``tlds`` is empty), so ``classify()`` forces EXACT DATA for every domain -- only the
-literally-listed name blocks; an unlisted sub-domain resolves normally.
+``tld_wildcard_classify()`` opens the shipped public-suffix oracle (``pfb_py_tld.txt``,
+staged from ``dnsbl_tld`` by ``dnsbl_cache_stage()``, mirroring HSTS). ON: a listed
+2-label registrable domain (e.g. ``label-<uuid>.com``) classifies into a wildcard ZONE,
+which blocks the domain AND every sub-domain at any depth. OFF: the oracle is never
+opened (``tlds`` is empty), so ``tld_wildcard_classify()`` forces EXACT DATA for every
+domain -- only the literally-listed name blocks; an unlisted sub-domain resolves
+normally.
 
 The toggle applies on the NEXT NORMAL Update (``reload(vm, "update")`` -- scope=both
 force=false trigger=cron), NOT a Force Reload: ``pfb_unbound_python()`` rewrites the

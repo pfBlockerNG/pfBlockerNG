@@ -1,7 +1,7 @@
 # Public Suffix List — maintenance (dev-only)
 
 `src/usr/local/pkg/pfblockerng/dnsbl_tld` is the flat, one-suffix-per-line public-suffix
-master list that `tld_analysis()` (PHP) and `_dnsbl_load_tld_master()` (Python) use to derive
+master list that `tld_analysis()` (PHP) and `_dnsbl_load_tld_wildcard_master()` (Python) use to derive
 each domain's registrable parent for DNSBL Wildcard Blocking (TLD). This note records how to
 keep it current. It is the sibling of [`tld-lists.md`](tld-lists.md) (issue #1272).
 

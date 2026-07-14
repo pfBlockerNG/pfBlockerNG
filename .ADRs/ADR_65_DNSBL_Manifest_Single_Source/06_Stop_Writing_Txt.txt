@@ -57,7 +57,9 @@ ACTION PLAN (ordered -- red assertion FIRST)
 
 CONSTRAINTS
 - Delta budget D1 ONLY. The manifest build must still produce identical dataDB/zoneDB (Semantic 1);
-  do NOT touch the manifest writer's classification inputs (tld_master/blacklist/exclusion).
+  do NOT touch the manifest writer's classification inputs (tld_wildcard_blacklist/
+  tld_wildcard_exclusion; post-#1255 the public-suffix oracle is not a manifest input — it
+  rides the shipped pfb_py_tld file reader-side).
 - Retain every tld_analysis side effect that is NOT .txt I/O (alias updates, stats). Removing one is
   a defect.
 - No stored config key / alias name / page filename / log schema change (Semantic 7).
