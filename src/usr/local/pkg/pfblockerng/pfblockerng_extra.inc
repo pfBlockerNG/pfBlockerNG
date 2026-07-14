@@ -1921,6 +1921,25 @@ function pfb_normalize_row_header(string $header): array
 	];
 }
 
+/**
+ * pfb_reserved_header_skip_active — TRUE iff a list-row Header collides with a
+ * reserved package-owned name (issue #1270) and the row is NOT the package's
+ * own synthesized entry for that name. sync_package_pfblockerng() reads
+ * config independently in more than one loop (the download loop and the
+ * alias/firewall-rule loop, besides the header-normalize loop); each must
+ * refuse the same collision, so the check is one shared, directly-callable
+ * predicate rather than re-inlined per loop.
+ *
+ * @param  bool   $is_reserved_owner  TRUE for the loop's OWN synthesized
+ *                                     DNSBLIP row (its `isset($list['dnsblip'])`
+ *                                     marker) — exempt from its own guard.
+ * @param  string $header             The row's raw Header value.
+ */
+function pfb_reserved_header_skip_active(bool $is_reserved_owner, string $header): bool
+{
+	return !$is_reserved_owner && pfb_header_reserved_error($header) !== '';
+}
+
 // ---------------------------------------------------------------------------
 // ADR-38: pure key=value syslog event formatters (pfb_syslog_format_ip() etc.) — the fixed
 // key order, empty-value omission rules, and quoting/escaping are specified in

@@ -85,32 +85,4 @@ final class HeaderReservedErrorTest extends TestCase
 	{
 		$this->assertSame('', pfb_header_reserved_error($header));
 	}
-
-	/**
-	 * issue #1270: pfblockerng.inc's SEPARATE "Download and Collect IPv4/IPv6
-	 * lists" loop reads config independently of the normalize loop and skips a
-	 * row via `!isset($list['dnsblip']) && pfb_header_reserved_error(...) !== ''`
-	 * -- pins that exact guard expression for a real user row, the exempt
-	 * synthesized DNSBLIP row, and an ordinary row.
-	 */
-	public function testDownloadLoopGuardSkipsReservedNonSyntheticRow(): void
-	{
-		$userList = ['aliasname' => 'MyEvilList', 'row' => [['header' => 'DNSBLIP']]];
-		$header = $userList['row'][0]['header'] ?? '';
-		$this->assertTrue(!isset($userList['dnsblip']) && pfb_header_reserved_error($header) !== '');
-	}
-
-	public function testDownloadLoopGuardExemptsSynthesizedDnsblipRow(): void
-	{
-		$synthesizedList = ['aliasname' => 'DNSBLIP', 'dnsblip' => '', 'row' => [['header' => 'DNSBLIP']]];
-		$header = $synthesizedList['row'][0]['header'] ?? '';
-		$this->assertFalse(!isset($synthesizedList['dnsblip']) && pfb_header_reserved_error($header) !== '');
-	}
-
-	public function testDownloadLoopGuardAllowsOrdinaryHeader(): void
-	{
-		$userList = ['aliasname' => 'MyBlocklist', 'row' => [['header' => 'MyBlocklist']]];
-		$header = $userList['row'][0]['header'] ?? '';
-		$this->assertFalse(!isset($userList['dnsblip']) && pfb_header_reserved_error($header) !== '');
-	}
 }

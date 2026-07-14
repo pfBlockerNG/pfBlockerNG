@@ -18890,7 +18890,7 @@ function sync_package_pfblockerng($cron='') {
 						// issue #1270: a header colliding with a reserved package-owned name (e.g.
 						// foreign config that bypassed GUI validation) must not download+write to
 						// that name's own file; the synthesized DNSBLIP list (below) is exempt.
-						if (!isset($list['dnsblip']) && pfb_header_reserved_error($row['header'] ?? '') !== '') {
+						if (pfb_reserved_header_skip_active(isset($list['dnsblip']), $row['header'] ?? '')) {
 							pfb_logger("\n Reserved Header:{$row['header']}, *skipping*", 1);
 							continue;
 						}
@@ -19713,6 +19713,14 @@ function sync_package_pfblockerng($cron='') {
 					if (isset($list['row'])) {
 						foreach ($list['row'] as $row) {
 							if (!empty($row['url']) && $row['state'] != 'Disabled') {
+
+								// issue #1270: this loop reads config independently of the
+								// download loop above -- a reserved header must not be read
+								// into an alias/firewall rule here either.
+								if (pfb_reserved_header_skip_active(isset($list['dnsblip']), $row['header'] ?? '')) {
+									pfb_logger("\n Reserved Header:{$row['header']}, *skipping*", 1);
+									continue;
+								}
 
 								$header = "{$row['header']}{$vtype}";
 								if (empty(pfb_filter($header, PFB_FILTER_WORD, 'Configure Aliases and Firewall Rules'))) {

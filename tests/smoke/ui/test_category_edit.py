@@ -27,9 +27,10 @@ cannot faithfully reproduce, so these flows do NOT route through
 ``__csrf_magic`` token, then POSTs a FULLY-enumerated payload via
 ``webui.session.post`` (every field the handler reads is supplied a valid value,
 so no select coerces and no rowhelper row is dropped). The single placeholder
-source row is posted ``state-0='Disabled'`` so the URL/header validation arm
-(``$value != 'Disabled'``) is skipped -- a clean, hermetic save with no feed
-download.
+source row is posted ``state-0='Disabled'`` with an empty header/url, so the
+non-empty-gated format checks skip (nothing to check) and the state-gated
+checks skip too (``$value != 'Disabled'``) -- a clean, hermetic save with no
+feed download.
 """
 
 from __future__ import annotations
@@ -116,9 +117,10 @@ def _dnsbl_payload(rowid: int, aliasname: str, **overrides: str) -> dict[str, st
     Every <select> the validator inspects (action/cron/dow/sort/order/logging +
     the ip-only ones) is given a value that is a KEY of its options map, so the
     select-coercion loop (lines 478-488) never rewrites it; the lone source row is
-    ``state-0='Disabled'`` so the URL/header validation arm is skipped. ``custom``
-    is empty so the custom-list validator is skipped and ``pfb_determine_list_detail``
-    is NOT triggered (the base64('')=='' "unchanged" branch).
+    ``state-0='Disabled'`` with an empty header/url, so every header/url check
+    skips (empty -> the non-empty-gated ones; Disabled -> the state-gated ones).
+    ``custom`` is empty so the custom-list validator is skipped and
+    ``pfb_determine_list_detail`` is NOT triggered (the base64('')=='' "unchanged" branch).
     """
     payload = {
         "type": "dnsbl",
