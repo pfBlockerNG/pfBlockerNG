@@ -179,6 +179,27 @@ Describe 'claude-bash-guard.sh'
       The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
     End
 
+    It 'B16 (#1292, documented accepted false-positive): -n inside the commit MESSAGE text -> DENY'
+      # Same accepted class as B10, one letter over: a message quoting a real
+      # -n flag from another tool (grep -n, sed -n, ...) also denies -- the
+      # guard cannot distinguish "the flag" from "prose about a flag".
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git commit -am \"use grep -n to show line numbers\""}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'H20 (#1292 F3 clustered short flag, n FIRST): git commit -na -m x -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git commit -na -m x"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
     It 'P3: normal commit, no --no-verify (git commit -m x) -> PASS'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"git commit -m x"}}
@@ -416,6 +437,18 @@ Describe 'claude-bash-guard.sh'
       The status should be success
       The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
     End
+
+    It 'B17 (#1292, documented accepted false-positive): a `+` opening a push option VALUE -> DENY'
+      # `-o "+1 note"` is a normal push option whose value happens to start
+      # with +. Double-quote stripping (normalization) exposes it at a
+      # segment boundary, same accepted class as B10/B16 one char over.
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git push origin main -o \"+1 note\""}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
   End
 
   # ── Rule C: git worktree remove + force flag ────────────────────────────────
@@ -605,6 +638,24 @@ Describe 'claude-bash-guard.sh'
     It 'C10 (#1292, no leak): a literal + in an unrelated segment does not force an unforced push -> PASS'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"echo +1 && git push origin main"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'C11 (#1292, still caught): git status && a -n commit bypass in its own segment -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git status && git commit -n -m x"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
+    End
+
+    It 'C12 (#1292, no leak): a literal -n in an unrelated segment does not bypass an unforced commit -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"echo -n && git commit -m x"}}
       End
       When run script "$GUARD"
       The status should be success
