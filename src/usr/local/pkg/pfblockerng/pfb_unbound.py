@@ -154,6 +154,14 @@ pfb_reload_stop: Any
 pfb_control_watcher_thread: Any
 pfb_control_stop: Any
 
+# ADR-65: the always-on, read-only DNSBL decision query channel reader daemon + its
+# stop handle. Mirrors the control watcher's directory-watch shape, but is stateless
+# (no seq/baseline) and gated on ``pfb["mod_threading"]`` ONLY -- no feature toggle
+# (ADR.md SS2.1 "always-on"). Declared here; created in init_standard and joined in
+# deinit.
+pfb_query_watcher_thread: Any
+pfb_query_stop: Any
+
 if TYPE_CHECKING:
     # Modules imported defensively in the try/except guards below. Declared here
     # unconditionally so static checkers treat them as always bound (the runtime
@@ -861,6 +869,106 @@ def pfb_control_watcher() -> None:
             waiter.close()
 
 
+# --------------------------------------------------------------------------- #
+# ADR-65: the always-on, read-only DNSBL decision query channel (reader daemon).
+# Mirrors the control watcher's directory-watch shape, but is STATELESS (no seq/
+# baseline -- a request already on disk at startup IS answered) and unconditionally
+# started (no feature gate). A fresh request is answered via dnsbl_query_answer(),
+# the SAME live matcher operate() uses, with no counter/log/cache side effects.
+# --------------------------------------------------------------------------- #
+
+
+def _pfb_write_query_reply(reply: dict[str, Any]) -> None:
+    """Publish ``reply`` as the query channel's JSON reply (atomic temp + ``os.replace``,
+    mirrors ``_control_write_applied``). Mode 0640: Python owns this file (unlike the
+    request, which is the writer's to create/perm). Best-effort: a write failure is
+    logged; the watcher stays alive."""
+    path = pfb.get("pfb_py_query_reply")
+    if not path:
+        return
+    tmp = "{}.tmp".format(path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(reply))
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, 0o640)
+        os.replace(tmp, path)
+    except OSError as e:
+        sys.stderr.write("[pfBlockerNG]: failed to write query reply [ {} ]: {}\n".format(path, e))
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+def _pfb_answer_query_request(rec: dict[str, Any]) -> None:
+    """Validate one query-channel request and, when correlatable, write its reply.
+
+    ``id`` must be a non-empty str -- else there is nothing to correlate a reply to,
+    so none is written. ``domain`` must be a non-empty str (after stripping a
+    trailing root dot), else a deterministic miss-shaped reply (blocked=false, every
+    attribution field empty) is written."""
+    req_id = rec.get("id")
+    if not isinstance(req_id, str) or req_id == "":
+        return
+    domain = rec.get("domain")
+    if not isinstance(domain, str) or domain.rstrip(".").strip() == "":
+        _pfb_write_query_reply(
+            {"id": req_id, "blocked": False, "b_type": "", "group": "", "b_eval": "", "feed": "", "p_type": ""}
+        )
+        return
+    answer = dnsbl_query_answer(domain, rec.get("qtype"))
+    answer["id"] = req_id
+    _pfb_write_query_reply(answer)
+
+
+def pfb_query_watcher() -> None:
+    """Daemon body: answer each request on the query channel until the stop Event is set.
+
+    Stateless (no seq/baseline, unlike the control watcher) -- a request already on
+    disk at startup IS answered. The last-answered record is remembered so the reply
+    write's own directory event (both files share a dir) does not re-answer an
+    unchanged request; a changed record (even same id) is answered again."""
+    channel = pfb["pfb_py_query"]
+    watch_dir = os.path.dirname(os.path.abspath(channel)) or "."
+
+    last_record: dict[str, Any] | None = None
+
+    def drain_and_answer() -> None:
+        nonlocal last_record
+        while not pfb_query_stop.is_set():
+            rec = _control_read_record(channel)
+            if rec is None or rec == last_record:
+                return
+            last_record = rec
+            _pfb_answer_query_request(rec)
+
+    waiter = _ReloadKqueueWaiter(watch_dir) if hasattr(select, "kqueue") else None
+    if waiter is not None and not waiter.is_active():
+        waiter.close()
+        waiter = None
+    try:
+        while not pfb_query_stop.is_set():
+            drain_and_answer()
+            if pfb_query_stop.is_set():
+                break
+            if waiter is not None:
+                waiter.wait(RELOAD_POLL_INTERVAL)
+            else:
+                pfb_query_stop.wait(RELOAD_POLL_INTERVAL)
+    except Exception as e:
+        err = sys.__stderr__
+        if err is not None:
+            try:
+                err.write("[pfBlockerNG]: query watcher error: {}\n".format(e))
+            except Exception:
+                pass
+    finally:
+        if waiter is not None:
+            waiter.close()
+
+
 def parse_tld_allow(raw: str) -> list[str]:
     """Parse the MAIN-ini ``tld_allow_list`` value into a cleaned TLD-Allow list.
 
@@ -1130,7 +1238,9 @@ def init_standard(id: int, env: module_env) -> bool:
         pfb_reload_watcher_thread, \
         pfb_reload_stop, \
         pfb_control_watcher_thread, \
-        pfb_control_stop
+        pfb_control_stop, \
+        pfb_query_watcher_thread, \
+        pfb_query_stop
 
     if not register_inplace_cb_reply(inplace_cb_reply, env, id):
         log_info("[pfBlockerNG]: Failed register_inplace_cb_reply")
@@ -1282,6 +1392,7 @@ def init_standard(id: int, env: module_env) -> bool:
     pfb["async_worker"] = False
     pfb["reload_watcher"] = False
     pfb["control_watcher"] = False
+    pfb["query_watcher"] = False
     pfb["forwarding"] = False
 
     # DNSBL Python files
@@ -1330,6 +1441,11 @@ def init_standard(id: int, env: module_env) -> bool:
     # control-watcher applies a record with seq N it writes N here (atomic temp+rename),
     # so the writer can confirm execution. Host path /var/unbound/pfb_py_control.applied.
     pfb["pfb_py_control_applied"] = "pfb_py_control.applied"
+    # ADR-65: the read-only DNSBL decision query channel. A local consumer writes a
+    # JSON request here; the query watcher answers into the reply path below. Chroot-
+    # relative, same reasoning as pfb_py_control above.
+    pfb["pfb_py_query"] = "pfb_py_query"
+    pfb["pfb_py_query_reply"] = "pfb_py_query.reply"
     pfb["pfb_py_count"] = "pfb_py_count"
     # ADR-07: the ADMITTED (cap-filtered) feed+user regex total -- the count
     # sync_package_pfblockerng()'s DNSBL_Regex alias-update block reads (falling
@@ -1835,6 +1951,20 @@ def init_standard(id: int, env: module_env) -> bool:
         except Exception as e:
             pfb["control_watcher"] = False
             sys.stderr.write("[pfBlockerNG]: Failed to start control watcher: {}".format(e))
+
+    # ADR-65: start the read-only DNSBL decision query channel (daemon), always-on --
+    # gated on ``mod_threading`` only, no feature toggle (unlike the control watcher
+    # above). It answers a local consumer's request with the live matcher's verdict,
+    # off the query threads, with no counter/log/cache side effects.
+    if pfb["mod_threading"] and not pfb.get("query_watcher"):
+        try:
+            pfb_query_stop = threading.Event()
+            pfb_query_watcher_thread = threading.Thread(name="pfb_query_watcher", target=pfb_query_watcher, daemon=True)
+            pfb_query_watcher_thread.start()
+            pfb["query_watcher"] = True
+        except Exception as e:
+            pfb["query_watcher"] = False
+            sys.stderr.write("[pfBlockerNG]: Failed to start query watcher: {}".format(e))
 
     pfb_setup_logging()
 
@@ -3478,7 +3608,9 @@ def deinit(id: int) -> bool:
         pfb_reload_watcher_thread, \
         pfb_reload_stop, \
         pfb_control_watcher_thread, \
-        pfb_control_stop
+        pfb_control_stop, \
+        pfb_query_watcher_thread, \
+        pfb_query_stop
 
     if pfb["python_maxmind"]:
         maxmindReader.close()
@@ -3504,6 +3636,16 @@ def deinit(id: int) -> bool:
         except Exception:
             pass
         pfb["control_watcher"] = False
+
+    # ADR-65: stop the query-channel reader cleanly (same pattern as the control
+    # watcher above).
+    if pfb.get("query_watcher"):
+        try:
+            pfb_query_stop.set()
+            pfb_query_watcher_thread.join(timeout=5)
+        except Exception:
+            pass
+        pfb["query_watcher"] = False
 
     # Drain and stop the background DB-write worker, then close connections
     if pfb.get("db_worker"):
@@ -6312,6 +6454,83 @@ def evaluate_domain(
     )
 
 
+def _evaluate_cfg(snap: Snapshot) -> dict[str, Any]:
+    # ADR-65: operate()'s per-query cfg assembly, extracted so it and the query
+    # channel (dnsbl_query_answer) share ONE copy -- a future new key can no longer
+    # drift between two hand-kept duplicates.
+    #
+    # ADR-10: the per-stratum presence gates + the ``important_rules`` fast-path flag
+    # MUST come from the captured snapshot ``snap`` -- NOT from the ``pfb[...]``
+    # booleans, which are written ONLY in init_standard and are NOT refreshed by a
+    # background swap. Reading them from ``pfb`` froze the gate at the last restart's
+    # state: a zero-downtime swap that introduced a NEW stratum (e.g. feed/user regex,
+    # or data/zone when the prior init had none) left its gate False, so
+    # evaluate_domain skipped that stratum and the newly-swapped block never applied
+    # (the regex/important/custom-list smoke failures). Deriving them from ``snap``
+    # (the same object the dicts come from) keeps the gate consistent with the live
+    # lists on every swap, and is decision-identical at idle (init sets snapshot + pfb
+    # flags together, so bool(snap.data_db) == pfb["dataDB"], etc.). The remaining keys
+    # are genuine config (not list-presence) and correctly stay sourced from ``pfb``.
+    return {
+        "python_blocking": pfb["python_blocking"],
+        "dataDB": bool(snap.data_db),
+        "zoneDB": bool(snap.zone_db),
+        "tld_allow": pfb["tld_allow"],
+        "tld_allow_list": pfb["tld_allow_list"],
+        "dnsbl_ipv4": pfb["dnsbl_ipv4"],
+        "dnsbl_ipv6": pfb["dnsbl_ipv6"],
+        "python_idn": pfb["python_idn"],
+        # ADR-08: derive defensively so a pfb that predates the key (a
+        # hand-edited ini, or a test seeding only python_idn) still resolves
+        # to today's mode rather than KeyError-ing.
+        "idn_mode": pfb.get("idn_mode") or idn_mode_from_legacy(pfb.get("python_idn", False)),
+        # ADR-08: the Confusable sub-toggles (only read in IDN_MODE_CONFUSABLE).
+        # Default-ON malicious block, opt-in suspicious escalation.
+        "python_idn_block_malicious": pfb.get("python_idn_block_malicious", True),
+        "python_idn_escalate_suspicious": pfb.get("python_idn_escalate_suspicious", False),
+        "regexDB": bool(snap.regex_db),
+        "whiteDB": bool(snap.white_db),
+        "allowRegexDB": bool(snap.allow_regex_db),
+        "important_rules": bool(snap.important_rules),
+        "regex_warn_ms": pfb["regex_warn_ms"],
+        "regex_evict_ms": pfb["regex_evict_ms"],
+        "python_tld_seg": pfb["python_tld_seg"],
+        "hstsDB": bool(snap.hsts_db),
+        "hsts_tlds": pfb["hsts_tlds"],
+    }
+
+
+def dnsbl_query_answer(domain: str, qtype: Any) -> dict[str, Any]:
+    """ADR-65: pure, read-only DNSBL verdict for the local query channel.
+
+    The SAME live matcher operate() uses (its :6692-6755 per-name evaluation), with
+    NONE of its side effects except the decisionDB LRU memo (the ONE allowed write --
+    mirrors operate()'s own memoize call). Never calls operate()/get_details_dnsbl, so
+    no counter/log/cache sink is reachable from here. ``qtype`` is accepted but
+    ignored: evaluate_domain has no qtype axis.
+    """
+    snap = _snapshot
+    # Parity with operate(): get_q_name_qstate rstrips "." before lowering (:2206);
+    # no CNAME chain on the channel, so q_name_original == q_name, is_cname == False.
+    q_name = domain.rstrip(".").lower()
+    tld = get_tld_from_name(q_name)
+    cfg = _evaluate_cfg(snap)
+    dnsbl = evaluate_domain(q_name, q_name, tld, False, cfg, snap.containers())
+    _decision_for(q_name, snap.gen).dnsbl = dnsbl
+
+    if not (dnsbl.is_found and not dnsbl.in_whitelist):
+        return {"blocked": False, "b_type": "", "group": "", "b_eval": "", "feed": "", "p_type": ""}
+    # Same "{}".format(v) str-coercion csv_line uses for these fields (:2829-2843).
+    return {
+        "blocked": True,
+        "b_type": "{}".format(dnsbl.b_type),
+        "group": "{}".format(dnsbl.group),
+        "b_eval": "{}".format(dnsbl.b_eval),
+        "feed": "{}".format(dnsbl.feed),
+        "p_type": "{}".format(dnsbl.p_type),
+    }
+
+
 def evaluate_noaaaa(q_name: str, noaaaa_db: dict[str, Any]) -> bool:
     if noaaaa_db.get(q_name) is not None:
         return True
@@ -6696,46 +6915,9 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                 # has its own TLD, so derive it from the target name being evaluated --
                 # else the TLD-Allow / HSTS checks use the wrong TLD for the target.
                 tld = get_tld_from_name(q_name) if isCNAME else get_tld(qstate)
-                # ADR-10: the per-stratum presence gates + the ``important_rules``
-                # fast-path flag MUST come from the captured snapshot ``snap`` -- NOT from
-                # the ``pfb[...]`` booleans, which are written ONLY in init_standard and are
-                # NOT refreshed by a background swap. Reading them from ``pfb`` froze the
-                # gate at the last restart's state: a zero-downtime swap that introduced a
-                # NEW stratum (e.g. feed/user regex, or data/zone when the prior init had
-                # none) left its gate False, so evaluate_domain skipped that stratum and the
-                # newly-swapped block never applied (the regex/important/custom-list smoke
-                # failures). Deriving them from ``snap`` (the same object the dicts come
-                # from) keeps the gate consistent with the live lists on every swap, and is
-                # decision-identical at idle (init sets snapshot + pfb flags together, so
-                # bool(snap.data_db) == pfb["dataDB"], etc.). The remaining keys are genuine
-                # config (not list-presence) and correctly stay sourced from ``pfb``.
-                cfg = {
-                    "python_blocking": pfb["python_blocking"],
-                    "dataDB": bool(snap.data_db),
-                    "zoneDB": bool(snap.zone_db),
-                    "tld_allow": pfb["tld_allow"],
-                    "tld_allow_list": pfb["tld_allow_list"],
-                    "dnsbl_ipv4": pfb["dnsbl_ipv4"],
-                    "dnsbl_ipv6": pfb["dnsbl_ipv6"],
-                    "python_idn": pfb["python_idn"],
-                    # ADR-08: derive defensively so a pfb that predates the key (a
-                    # hand-edited ini, or a test seeding only python_idn) still resolves
-                    # to today's mode rather than KeyError-ing.
-                    "idn_mode": pfb.get("idn_mode") or idn_mode_from_legacy(pfb.get("python_idn", False)),
-                    # ADR-08: the Confusable sub-toggles (only read in IDN_MODE_CONFUSABLE).
-                    # Default-ON malicious block, opt-in suspicious escalation.
-                    "python_idn_block_malicious": pfb.get("python_idn_block_malicious", True),
-                    "python_idn_escalate_suspicious": pfb.get("python_idn_escalate_suspicious", False),
-                    "regexDB": bool(snap.regex_db),
-                    "whiteDB": bool(snap.white_db),
-                    "allowRegexDB": bool(snap.allow_regex_db),
-                    "important_rules": bool(snap.important_rules),
-                    "regex_warn_ms": pfb["regex_warn_ms"],
-                    "regex_evict_ms": pfb["regex_evict_ms"],
-                    "python_tld_seg": pfb["python_tld_seg"],
-                    "hstsDB": bool(snap.hsts_db),
-                    "hsts_tlds": pfb["hsts_tlds"],
-                }
+                # ADR-65: shared with the query channel (dnsbl_query_answer) -- one
+                # copy so a future new key cannot drift between two duplicates.
+                cfg = _evaluate_cfg(snap)
                 # ADR-10: read every matcher stratum off the ONE captured snapshot
                 # ref (``snap``, taken once at the top of this per-name loop) instead of
                 # re-assembling ``containers`` from separate module globals. ``snap`` is
