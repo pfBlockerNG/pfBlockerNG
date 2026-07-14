@@ -61,4 +61,27 @@ final class NormalizeRowHeaderTest extends TestCase
 		$out = pfb_normalize_row_header('x');
 		$this->assertSame(['header', 'changed', 'reserved_error'], array_keys($out));
 	}
+
+	/**
+	 * issue #1270: a config row missing 'header' (foreign/malformed config --
+	 * exactly the audience this fix defends against) evaluates to NULL, which
+	 * TypeErrors on the strict $header param -- pins WHY the call site casts.
+	 */
+	public function testUnguardedMissingHeaderKeyThrowsTypeError(): void
+	{
+		$row = ['url' => 'http://example.test'];
+		$this->expectException(\TypeError::class);
+		/** @phpstan-ignore-next-line intentionally uncast -- reproduces the pre-fix call site */
+		pfb_normalize_row_header($row['header']);
+	}
+
+	/** The call-site's guard pattern -- (string) ($row['header'] ?? '') -- is safe. */
+	public function testCallSiteCastPatternHandlesMissingHeaderKeySafely(): void
+	{
+		$row = ['url' => 'http://example.test'];
+		$this->assertSame(
+			['header' => '', 'changed' => FALSE, 'reserved_error' => ''],
+			pfb_normalize_row_header((string) ($row['header'] ?? ''))
+		);
+	}
 }
