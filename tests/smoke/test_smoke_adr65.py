@@ -299,28 +299,22 @@ def test_query_channel_verdict_matches_block_with_no_side_effects(adr65_vm: Smok
 # --------------------------------------------------------------------------- #
 
 
-def _raw_bounce_unbound(vm: SmokeVM, *, timeout: float = 90.0) -> None:
-    """Kill + restart Unbound directly (mirrors helpers.py's raw-bounce block used by
-    ``inject_safesearch_cname_entries``) so ``init()`` re-runs against the just-edited
-    on-disk manifest state.
+def _restart_unbound(vm: SmokeVM, *, timeout: float = 120.0) -> None:
+    """Restart Unbound through pfSense's own service path so ``init()`` re-runs against
+    the current on-disk manifest state.
 
-    Fed to ``/bin/sh`` on stdin (never the ``ssh_argv`` one-arg convention): pfSense
-    root's login shell is tcsh, which mangles ``$(...)``/for-loops -- feeding a POSIX
-    script on stdin to an explicit ``/bin/sh`` sidesteps it entirely.
+    ``services_unbound_configure()`` is what the package itself uses (helpers.py drives it
+    the same way for the upstream-DNS switch). A hand-rolled ``kill`` + bare
+    ``/usr/local/sbin/unbound -c ...`` start looked fine locally but left the resolver
+    unreachable on the CI boxes ("could not send or receive"), so the service path is the
+    only restart this row trusts.
     """
-    bounce_cmd = (
-        "kill -TERM $(cat /var/run/unbound.pid)\n"
-        "for i in $(seq 1 30); do\n"
-        "  pgrep -x unbound >/dev/null || break\n"
-        "  sleep 1\n"
-        "done\n"
-        "/usr/local/sbin/unbound -c /var/unbound/unbound.conf\n"
-    )
-    bounce = subprocess.run(
-        vm.ssh_argv("/bin/sh"), input=bounce_cmd, capture_output=True, text=True, timeout=timeout, check=False
-    )
-    if bounce.returncode != 0:
-        raise RuntimeError(f"_raw_bounce_unbound: Unbound bounce failed: rc={bounce.returncode} {bounce.stderr!r}")
+    res = h.php_eval(vm, "services_unbound_configure();\necho 'OK';", timeout=timeout)
+    if res.returncode != 0 or "OK" not in res.stdout:
+        raise RuntimeError(
+            f"_restart_unbound: services_unbound_configure failed: rc={res.returncode} "
+            f"stdout={res.stdout!r} stderr={res.stderr!r}"
+        )
     h.wait_unbound_ready(vm)
 
 
@@ -418,7 +412,7 @@ def test_manifest_absent_fails_loud_and_force_reload_self_heals(adr65_vm: SmokeV
             # dnsbl_build_from_manifest against the now-absent file.
             rm = adr65_vm.ssh(f"rm -f {_MANIFEST_PATH}")
             assert rm.returncode == 0, f"failed to remove {_MANIFEST_PATH}: rc={rm.returncode} stderr={rm.stderr!r}"
-            _raw_bounce_unbound(adr65_vm)
+            _restart_unbound(adr65_vm)
 
             # NO STALE BLOCK: with the manifest absent, DNSBL is empty -- egress is
             # blocked inside CaseContext, so the honest expectation for a domain that
@@ -451,7 +445,7 @@ def test_manifest_absent_fails_loud_and_force_reload_self_heals(adr65_vm: SmokeV
             h.unblock_egress()
             # data_path=True waits on the zero-downtime swap-applied signal (and RAISES if
             # it never appears). The default only polls `unbound-control status`, which the
-            # raw bounce already satisfied -- the probe would race the module's rebuild.
+            # restart already satisfied -- the probe would race the module's rebuild.
             h.reload(adr65_vm, "updatednsbl", data_path=True)
             # The no-stale-block probe above provoked an NXDOMAIN for this exact name, which
             # Unbound negative-caches; a feed allow->block is TTL-bounded by design, so clear
