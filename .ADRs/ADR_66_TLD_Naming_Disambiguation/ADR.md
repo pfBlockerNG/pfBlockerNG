@@ -62,6 +62,14 @@ tell which feature is meant without tracing the whole path. This ADR gives each 
 
 ### 1.2 Explicitly NOT part of this ADR
 
+- **`python_tld_seg`** — the WHITELIST wildcard suffix-walk gate, not a TLD-feature
+  identifier: its only consumers are `whitelist_lookup_domain`/`whitelist_check_domain`/
+  `whitelist_lookup_band` (`pfb_unbound.py:5607/:5633/:5970`), its only cfg reads are the
+  whitelist call sites (`:6019/:6224`), the ini writer emits it hardcoded `= 1` (#1155),
+  and `PythonWhitelistTldSegTest.php` already pins it as whitelist mechanics. The §1.1
+  prefix-grep inventory misbucketed it into Feature A; renaming it to the `tld_allow` stem
+  would attach the wrong feature's name. A whitelist-stem rename (fixing its wrong-language
+  `python_` prefix) is a candidate follow-up, out of scope here.
 - **TOP1M** (`alexa_inclusion`/`alexa_count`/`top1m_token`) — a third TLD-adjacent feature, already
   distinctly named; untouched.
 - **`safesearch_tlds`** (SafeSearch) and **`hsts_tlds`** (HSTS preload) — separate features that
@@ -86,10 +94,10 @@ config / www-POST changes; no config migration.
 | `$pfb['dnsbl_pytld']` | `$pfb['dnsbl_tld_allow']` |
 | ini/pfb `python_tld` (enable flag) | `tld_allow` |
 | ini/pfb/cfg `python_tlds` (allow list) | `tld_allow_list` |
-| `python_tld_seg` (ini + inc + py) | `tld_allow_seg` |
 | py `parse_python_tlds()` | `parse_tld_allow()` |
 | inc `pytld_cnt` / `pytld` locals | `tld_allow_cnt` / `tld_allow` |
 | **stays (stored config / POST):** `pfb_pytld`, `pfb_pytld_sort`, `pfb_pytlds_{gtld,cctld,itld,bgtld}` | — |
+| **stays (not Feature A — misbucketed by the §1.1 prefix inventory):** `python_tld_seg` | — |
 
 ### 2.2 Feature B — "Wildcard Blocking (TLD)" → stem `tld_wildcard`
 
@@ -213,9 +221,13 @@ Prompt: `04_Docs_Adr65_Reconcile.txt`
 
 ## 7. Definition of done
 
-- All §2.1/§2.2 identifiers renamed; grep shows zero surviving `python_tld*`/`parse_python_tlds`/
-  `dnsbl_pytld` and zero Feature-B `classify(`/`tld_master`/`_dnsbl_tld_search` old names in
-  production (excluding the intentionally-kept ADR-65-doomed writers).
+- All §2.1/§2.2 identifiers renamed; grep shows zero surviving `python_tld`/`python_tlds`/
+  `parse_python_tlds`/`dnsbl_pytld` (exact tokens) and zero Feature-B
+  `classify(`/`tld_master`/`_dnsbl_tld_search` old names in production (excluding the
+  intentionally-kept ADR-65-doomed writers). Two `python_tld`-prefixed tokens survive by
+  design and are pinned by tests: `python_tld_wildcard` (Feature B's #1255 ini gate,
+  mirroring `python_hsts` — Phase-1 G3/G4) and `python_tld_seg` (whitelist mechanics,
+  §1.2).
 - The Phase-1 oracle is byte-identical green after Phases 2 and 3 (paste both runs).
 - `config.xml` round-trip proves no stored-key change.
 - Full canonical gates green for every touched language.

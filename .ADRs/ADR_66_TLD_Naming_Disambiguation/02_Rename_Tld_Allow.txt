@@ -28,7 +28,8 @@ REQUIRED READING
 - src/usr/local/pkg/pfblockerng/pfblockerng.inc -- the python_tld/python_tlds ini WRITER
   (~:8153-8217), $pfb['dnsbl_pytld'] (~:2675), pytld_cnt/pytld locals (~:17686-17698).
 - src/usr/local/pkg/pfblockerng/pfb_unbound.py -- python_tld/python_tlds ini READER (~:1458-
-  1461), parse_python_tlds (~:860), python_tld_seg, evaluate_domain TLD-Allow arm (~:6078).
+  1461), parse_python_tlds (~:860), evaluate_domain TLD-Allow arm (~:6078). python_tld_seg is
+  NOT Feature A (whitelist suffix-walk mechanics -- SS1.2); do not touch it.
 - src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php -- any INTERNAL var derived from the
   Feature-A config keys (the config KEYS pfb_pytld* STAY; only derived internal vars rename).
 - CLAUDE.md -- Naming (house style), Python/PHP standards, the delegation contract.
@@ -40,15 +41,17 @@ acting and flag contradictions in the handoff. If a symbol the map names does no
 new occurrence appears), re-grep and ESCALATE rather than trust the count.
 
 ACTION PLAN (ordered)
-1. Re-grep every Feature-A occurrence FROM SOURCE (python_tlds, python_tld, python_tld_seg,
+1. Re-grep every Feature-A occurrence FROM SOURCE (python_tlds, python_tld,
    parse_python_tlds, pytld_cnt, dnsbl_pytld) across .inc + .py + www; reconcile against SS2.1.
 2. Rename per SS2.1: dnsbl_pytld->dnsbl_tld_allow; ini/pfb python_tld->tld_allow,
-   python_tlds->tld_allow_list; python_tld_seg->tld_allow_seg; parse_python_tlds->parse_tld_allow;
+   python_tlds->tld_allow_list; parse_python_tlds->parse_tld_allow;
    pytld_cnt->tld_allow_cnt, pytld locals->tld_allow. Rename the ini keys on BOTH the .inc
    writer AND the .py reader in this SAME commit (Semantic 3 -- atomic; a half-renamed bridge
    is a broken build).
 3. Do NOT touch stored config keys (pfb_pytld, pfb_pytld_sort, pfb_pytlds_*) or www POST field
-   names (Semantic 5). Do NOT touch any Feature-B identifier (delta R-A).
+   names (Semantic 5). Do NOT touch any Feature-B identifier (delta R-A). Do NOT touch
+   python_tld_seg or python_tld_wildcard -- designed survivors (SS1.2 / SS2.2, pinned by
+   Phase-1 G3/G4).
 4. Reconcile comments/docstrings mentioning the renamed Feature-A symbols.
 
 CONSTRAINTS
@@ -60,8 +63,9 @@ VERIFICATION (executed -- paste output)
 - test mode: behaviour-preserving -- the Phase-1 oracle re-run UNCHANGED is GREEN (paste
   `python3 -m pytest <oracle path>`); the ini-bridge round-trip test passes with the NEW keys
   (proves the atomic rename).
-- grep proof: zero surviving python_tld*/parse_python_tlds/dnsbl_pytld/pytld_cnt in production;
-  the stored keys pfb_pytld* STILL present unchanged.
+- grep proof: zero surviving python_tld/python_tlds/parse_python_tlds/dnsbl_pytld/pytld_cnt
+  (exact tokens) in production; the designed survivors python_tld_seg + python_tld_wildcard
+  AND the stored keys pfb_pytld* STILL present unchanged.
 - `python3 -m pytest`, `ruff check .`, `ruff format --check .`, `mypy tests/`;
   `php -l` on touched .inc/.php; `vendor/bin/phpunit`; `composer phpstan`;
   `composer phpcs -- --standard=phpcs.xml.dist src/`.
