@@ -177,18 +177,28 @@ _CACHE_OPEN, _CACHE_CLOSE = "<<<ADR65CACHE>>>", "<<<ADR65CACHEEND>>>"
 
 
 def _cache_row_count(vm: SmokeVM, domain: str, *, timeout: float = 60.0) -> int:
+    # The DB file and its dnsblcache table are created lazily by the module's first
+    # queued flush: "absent" is a legitimate zero, NOT an error. Any OTHER failure echoes
+    # its message so the caller raises with the real cause instead of a bare sentinel.
     snippet = (
-        "$__n = -1;\n"
-        "try {\n"
-        f"    $__db = new SQLite3({h._php_str(_DNSBL_CACHE_DB)});\n"
-        "    $__db->enableExceptions(TRUE);\n"
-        "    $__db->busyTimeout(15000);\n"
-        f"    $__d = $__db->escapeString({h._php_str(domain)});\n"
-        "    $__r = $__db->querySingle(\"SELECT COUNT(*) FROM dnsblcache WHERE domain = '{$__d}'\");\n"
-        "    $__n = ($__r === FALSE || $__r === NULL) ? -2 : (int) $__r;\n"
-        "    try { $__db->close(); } catch (Throwable $__ignored) {}\n"
-        "} catch (Throwable $__e) { $__n = -2; }\n"
-        f"echo '{_CACHE_OPEN}' . $__n . '{_CACHE_CLOSE}';\n"
+        "$__n = 0;\n"
+        "$__err = '';\n"
+        f"if (file_exists({h._php_str(_DNSBL_CACHE_DB)})) {{\n"
+        "    try {\n"
+        f"        $__db = new SQLite3({h._php_str(_DNSBL_CACHE_DB)}, SQLITE3_OPEN_READONLY);\n"
+        "        $__db->enableExceptions(TRUE);\n"
+        "        $__db->busyTimeout(15000);\n"
+        "        $__q = \"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='dnsblcache'\";\n"
+        "        $__t = $__db->querySingle($__q);\n"
+        "        if ((int) $__t > 0) {\n"
+        f"            $__d = $__db->escapeString({h._php_str(domain)});\n"
+        "            $__r = $__db->querySingle(\"SELECT COUNT(*) FROM dnsblcache WHERE domain = '{$__d}'\");\n"
+        "            $__n = (int) $__r;\n"
+        "        }\n"
+        "        try { $__db->close(); } catch (Throwable $__ignored) {}\n"
+        "    } catch (Throwable $__e) { $__err = $__e->getMessage(); }\n"
+        "}\n"
+        f"echo '{_CACHE_OPEN}' . $__n . '|' . $__err . '{_CACHE_CLOSE}';\n"
     )
     res = h.php_eval(vm, snippet, timeout=timeout)
     out = res.stdout or ""
@@ -197,7 +207,27 @@ def _cache_row_count(vm: SmokeVM, domain: str, *, timeout: float = 60.0) -> int:
         raise RuntimeError(
             f"_cache_row_count({domain!r}) failed: rc={res.returncode} stdout={out!r} stderr={res.stderr!r}"
         )
-    return int(out[start + len(_CACHE_OPEN) : end])
+    count, _, err = out[start + len(_CACHE_OPEN) : end].partition("|")
+    if err:
+        raise RuntimeError(f"_cache_row_count({domain!r}) sqlite error: {err}")
+    return int(count)
+
+
+def _wait_cache_row_count(vm: SmokeVM, domain: str, expected: int, *, deadline_s: float = 30.0) -> int:
+    """Poll until ``domain`` has ``expected`` dnsblcache rows; RAISE loudly on timeout.
+
+    The module writes the row through its async queue, so the row lands shortly AFTER the
+    DNS answer -- the only unsignalable step in this path (there is no applied-marker for a
+    cache flush). Bounded, and it never returns a wrong-but-passing value.
+    """
+    deadline = time.monotonic() + deadline_s
+    seen = -1
+    while time.monotonic() < deadline:
+        seen = _cache_row_count(vm, domain)
+        if seen == expected:
+            return seen
+        time.sleep(1.0)
+    raise AssertionError(f"dnsblcache rows for {domain}: expected {expected}, still {seen} after {deadline_s:.0f}s")
 
 
 def _query_domain(vm: SmokeVM, domain: str, *, timeout: float = 60.0) -> dict[str, Any]:
@@ -285,7 +315,8 @@ def test_query_channel_verdict_matches_block_with_no_side_effects(adr65_vm: Smok
             f"query feed {verdict['feed']!r} != dnsbl.log feed {feed1!r} for {domain1!r} (line: {line1!r})"
         )
 
-        cache1_before_barrier = _cache_row_count(adr65_vm, domain1)
+        # The row rides the module's async flush queue -- bounded wait, raises on timeout.
+        cache1_before_barrier = _wait_cache_row_count(adr65_vm, domain1, 1)
         assert cache1_before_barrier == 1, (
             f"expected exactly one dnsblcache row for {domain1} right after its own block, got {cache1_before_barrier}"
         )
@@ -497,6 +528,10 @@ def test_manifest_absent_fails_loud_and_force_reload_self_heals(adr65_vm: SmokeV
             # it never appears). The default only polls `unbound-control status`, which the
             # raw bounce already satisfied -- the probe would race the module's rebuild.
             h.reload(adr65_vm, "updatednsbl", data_path=True)
+            # The no-stale-block probe above provoked an NXDOMAIN for this exact name, which
+            # Unbound negative-caches; a feed allow->block is TTL-bounded by design, so clear
+            # that one cached answer to observe the swapped block inside the test window.
+            h.flush_unbound_name(adr65_vm, domain)
 
             healed = h.dns_probe(adr65_vm, domain)
             assert h.is_vip(healed), f"expected VIP block for {domain!r} again after the self-heal, got {healed!r}"
