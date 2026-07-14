@@ -15204,10 +15204,24 @@ function pfb_log_event($type, $domain, $src_ip, $req_agent) {
 	// If not duplicate entry, determine TLD type, Group Name and Feed name
 	else {
 		$dup_entry	= '+';
-		$data		= pfb_dnsbl_parse('daemon', $domain, $src_ip, $req_agent);
-		$pfb_group	= $data[0];
-		$details	= $data[1];
-		$req_agent	= $data[2];
+
+		// ADR-65: attribute via the live query channel instead of grepping the
+		// retired interchange files; NULL and blocked=false are both "no verdict".
+		$verdict = pfb_dnsbl_query($domain);
+		if ($verdict !== NULL && $verdict['blocked']) {
+			$pfb_mode	= $verdict['b_type']	?: 'Unknown';
+			$pfb_group	= $verdict['group']	?: 'Unknown';
+			$pfb_final	= $verdict['b_eval']	?: 'Unknown';
+			$pfb_feed	= $verdict['feed']	?: 'Unknown';
+		} else {
+			$pfb_mode = $pfb_group = $pfb_final = $pfb_feed = 'Unknown';
+		}
+
+		$log_domain	= pfb_filter($domain, PFB_FILTER_HTML, 'pfb_log_event');
+		$pfb_group	= pfb_filter($pfb_group, PFB_FILTER_HTML, 'pfb_log_event');
+		$pfb_final	= pfb_filter($pfb_final, PFB_FILTER_HTML, 'pfb_log_event');
+		$pfb_feed	= pfb_filter($pfb_feed, PFB_FILTER_HTML, 'pfb_log_event');
+		$details	= "{$log_domain},{$src_ip},{$req_agent},{$pfb_mode},{$pfb_group},{$pfb_final},{$pfb_feed}";
 
 		// Save new lastevent
 		pfb_dnsbl_lastevent($pfb_group, "{$domain}{$src_ip}", $details);
