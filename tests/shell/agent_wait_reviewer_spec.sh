@@ -174,7 +174,19 @@ End
 Describe 'wait-reviewer.sh loop verdicts (stub gh)'
   setup_stub() {
     stubdir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/ghstub.XXXXXX")"
-    printf '#!/bin/sh\ncase "$*" in *pulls/*/comments*) cat "$GH_STUB_INLINE" 2>/dev/null;; *) exit 0;; esac\n' > "$stubdir/gh"
+    cat > "$stubdir/gh" <<'STUB'
+#!/bin/sh
+case "$*" in
+	*pulls/*/comments*) cat "$GH_STUB_INLINE" 2>/dev/null ;;
+	*pulls/*/reviews*)
+		case "$*" in
+			*'select(.submitted_at >'*) cat "$GH_STUB_REVIEW_SINCE" 2>/dev/null ;;
+			*) cat "$GH_STUB_REVIEW_ANY" 2>/dev/null ;;
+		esac
+		;;
+	*) exit 0 ;;
+esac
+STUB
     chmod +x "$stubdir/gh"
     PATH="$stubdir:$PATH"
   }
@@ -207,6 +219,13 @@ Describe 'wait-reviewer.sh loop verdicts (stub gh)'
     echo 42 > "$GH_STUB_INLINE"
     export PFB_WAIT_DEADLINE=1
     When run sh "$script" --repo o/r --pr 1 --handle coderabbitai --until finished --since x --interval 0 --max-iter 3
+    The line 1 of output should equal 'TIMEOUT'
+  End
+
+  It 'treats a review posted before --since as presence: TIMEOUT, not NOTPRESENT (issue #1325)'
+    export GH_STUB_REVIEW_ANY="$stubdir/review_any.txt"
+    echo 99 > "$GH_STUB_REVIEW_ANY"
+    When run sh "$script" --repo o/r --pr 1 --handle coderabbitai --until finished --since x --interval 0 --max-iter 3 --presence 1
     The line 1 of output should equal 'TIMEOUT'
   End
 End

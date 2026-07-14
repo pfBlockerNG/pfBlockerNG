@@ -29,6 +29,7 @@
 
 repo='' pr='' handle='' mode='finished' since='' presence=10 interval=30 max_iter=''
 inline='' review='' issuec='' sinfo=''
+inline_any='' review_any='' issuec_any=''
 
 usage() {
 	echo "usage: wait-reviewer.sh --repo O/R --pr N --handle LOGIN [--until ack|finished] [--since ISO] [--presence N] [--interval S] [--max-iter N]" >&2
@@ -83,10 +84,11 @@ classify() {
 # a public account whose login merely CONTAINS the handle must not satisfy the wait,
 # and a verbatim bracketed login must match itself (no regex-metachar surface).
 jq_filter() {
-	# $1 = timestamp field name
+	# $1 = timestamp field name, $2 = "notime" to skip the --since floor.
+	# issue #1325: presence must survive a rebase moving $since past a real prior review.
 	# shellcheck disable=SC2016 # $l is jq syntax, not a shell expansion
 	m=$(printf '((.user.login|ascii_downcase) as $l | ($l == "%s") or ($l == "%s[bot]") or ($l | startswith("%s-")))' "$handle" "$handle" "$handle")
-	if [ -n "$since" ]; then
+	if [ -n "$since" ] && [ "$2" != "notime" ]; then
 		printf '.[] | select(%s) | select(.%s > "%s")' "$m" "$1" "$since"
 	else
 		printf '.[] | select(%s)' "$m"
@@ -97,6 +99,17 @@ fetch_state() {
 	inline=$(gh api "repos/$repo/pulls/$pr/comments" --paginate -q "$(jq_filter created_at) | .id" 2>/dev/null)
 	review=$(gh api "repos/$repo/pulls/$pr/reviews" --paginate -q "$(jq_filter submitted_at) | (.body // \"x\")" 2>/dev/null)
 	issuec=$(gh api "repos/$repo/issues/$pr/comments" --paginate -q "$(jq_filter updated_at) | (.body // \"\")" 2>/dev/null)
+	# Presence (any commit) vs content (since $since) split (issue #1325): only fetched
+	# when $since narrows the content query, else presence == content already.
+	if [ -n "$since" ]; then
+		inline_any=$(gh api "repos/$repo/pulls/$pr/comments" --paginate -q "$(jq_filter created_at notime) | .id" 2>/dev/null)
+		review_any=$(gh api "repos/$repo/pulls/$pr/reviews" --paginate -q "$(jq_filter submitted_at notime) | .id" 2>/dev/null)
+		issuec_any=$(gh api "repos/$repo/issues/$pr/comments" --paginate -q "$(jq_filter updated_at notime) | .id" 2>/dev/null)
+	else
+		inline_any=$inline
+		review_any=$review
+		issuec_any=$issuec
+	fi
 	if [ "$handle" = "snyk" ]; then
 		sha=$(gh pr view "$pr" --repo "$repo" --json headRefOid -q .headRefOid 2>/dev/null)
 		sinfo=$(gh api "repos/$repo/commits/$sha/status" \
@@ -145,7 +158,7 @@ main() {
 			break
 		fi
 		fetch_state
-		[ -n "${inline}${review}${issuec}$(printf '%s' "$sinfo" | tr -dc '[:lower:]')" ] && seen=1
+		[ -n "${inline_any}${review_any}${issuec_any}$(printf '%s' "$sinfo" | tr -dc '[:lower:]')" ] && seen=1
 		v=$(classify)
 		if [ -n "$v" ]; then
 			printf '%s\n' "$issuec" | head -c 3000
