@@ -154,4 +154,30 @@ EOF
     The stderr should include 'refusing'
     The file "${WORK}/sandbox/marker" should be exist
   End
+
+  It 'refuses a TS_VENV containing a .. traversal segment'
+    # Contained: an unguarded launcher resolves the .. at rm -rf time and
+    # deletes the sibling directory's contents.
+    mkdir -p "${WORK}/keep/other"
+    printf 'keep\n' > "${WORK}/keep/other/marker"
+    When run env PATH="${WORK}/shim:${PATH}" TS_VENV="${WORK}/keep/subdir/../other" sh "${SCRIPT}"
+    The status should be failure
+    The stderr should include 'refusing'
+    The file "${WORK}/keep/other/marker" should be exist
+  End
+
+  It 'refuses a TS_VENV containing a double slash'
+    When run env PATH="${WORK}/shim:${PATH}" TS_VENV="${WORK}//venv2" sh "${SCRIPT}"
+    The status should be failure
+    The stderr should include 'refusing'
+  End
+
+  It 'accepts a trailing-slash TS_VENV and still installs fresh'
+    # A trailing slash once nested the lock inside the not-yet-created venv,
+    # sending an uncontended first install into the concurrent-wait failure.
+    When run env PATH="${WORK}/shim:${PATH}" TS_VENV="${WORK}/venv/" sh "${SCRIPT}"
+    The status should be success
+    The output should equal 'INSTALLED'
+    The stderr should equal ''
+  End
 End

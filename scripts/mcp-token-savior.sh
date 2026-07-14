@@ -21,12 +21,22 @@
 set -eu
 
 venv="${TS_VENV:-${XDG_CACHE_HOME:-$HOME/.cache}/token-savior/venv}"
-# The rebuild path below rm -rf's $venv — refuse anything but an absolute,
-# non-root path so a mis-set TS_VENV ('.', '', '/') can never aim it wrong.
+# Trim trailing slashes so the lock and dirname derivations below treat $venv
+# as the final path component (a trailing slash once nested the lock inside
+# the not-yet-created venv and broke every fresh install).
+while :; do case "$venv" in */) venv="${venv%/}" ;; *) break ;; esac; done
+# The rebuild path below rm -rf's $venv — string checks never resolve '..'
+# (only the kernel does, at rm time), so refuse '..' segments and '//' along
+# with anything non-absolute ('.', '', '/', relative paths).
 case "$venv" in
-	/?*) ;;
-	*) echo "mcp-token-savior: refusing venv path '$venv' — TS_VENV must be an absolute path" >&2; exit 1 ;;
+	*//*|*/..|*/../*) venv_bad=1 ;;
+	/?*) venv_bad=0 ;;
+	*) venv_bad=1 ;;
 esac
+if [ "$venv_bad" = 1 ]; then
+	echo "mcp-token-savior: refusing venv path '$venv' — TS_VENV must be an absolute path without '..' or '//' segments" >&2
+	exit 1
+fi
 bin="$venv/bin/token-savior"
 stamp="$venv/.pfb-ts-source"
 TS_SOURCE="${TS_SOURCE:-token-savior-recall[mcp] @ git+https://github.com/andrebrait/token-savior@10aa65543995e4cfbc6aa341eae4d6dd31348da6}"
