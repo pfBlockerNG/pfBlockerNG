@@ -1857,48 +1857,36 @@ function pfb_resolve_list_script($name, $dirs = null) {
    via cp -f between the two fingerprint snapshots, so a package update that ships a new
    list is detected (old chroot copy vs freshly staged copy differ) and triggers a reload.
    Excluded: unbound_py_count / unbound_py_regex_count (Python-emitted outputs —
-   including them makes every pass look changed) and unbound_py_ss (has its own
-   md5 gate via $safesearch_update; double-gating would suppress SafeSearch restarts).
+   including them makes every pass look changed), unbound_py_ss (has its own
+   md5 gate via $safesearch_update; double-gating would suppress SafeSearch restarts), and
+   unbound_py_data/unbound_py_zone (ADR-65: retired writer targets, never written again).
    Pure (no global access): caller passes $pfb explicitly so tests can inject any paths. */
 function pfb_dnsbl_loaded_input_paths(array $pfb): array {
 	$raw_files = glob("{$pfb['unbound_py_rawdir']}/*.raw") ?: array();
 	sort($raw_files, SORT_STRING);
 	return array_merge(
-		array($pfb['unbound_py_data'], $pfb['unbound_py_zone'], $pfb['unbound_py_wh'], $pfb['unbound_py_sources'], $pfb['unbound_py_hsts'], $pfb['unbound_py_tld']),
+		array($pfb['unbound_py_wh'], $pfb['unbound_py_sources'], $pfb['unbound_py_hsts'], $pfb['unbound_py_tld']),
 		$raw_files
 	);
 }
 
-/* issue #1255: the reload fingerprint, narrowed for TLD mode. tld_analysis() rewrites
-   unbound_py_data/unbound_py_zone INSIDE pfb_update_unbound(), strictly AFTER this
-   fingerprint is taken (both the fp_old and fp_new call sites run before that), so
-   their content is unrelated to THIS pass and is excluded when dnsbl_tld_wildcard is on; every
-   other input (the TLD-Wildcard oracle included) still gates the reload normally.
+/* issue #1255: the reload fingerprint. Thin wrapper -- ADR-65 retired
+   unbound_py_data/unbound_py_zone as writer targets, so they are excluded from
+   pfb_dnsbl_loaded_input_paths() unconditionally now; the TLD-mode-only narrowing this
+   helper used to apply is gone (a no-op once the base path list never carries them).
    Pure (no global access). */
 function pfb_dnsbl_reload_fingerprint(array $pfb): string {
-	$paths = pfb_dnsbl_loaded_input_paths($pfb);
-	if ($pfb['dnsbl_tld_wildcard']) {
-		$paths = array_diff($paths, array($pfb['unbound_py_data'], $pfb['unbound_py_zone']));
-	}
-	return pfb_dnsbl_loaded_fingerprint($paths);
+	return pfb_dnsbl_loaded_fingerprint(pfb_dnsbl_loaded_input_paths($pfb));
 }
 
-/* TRUE iff genuine FEED-derived DNSBL content is currently loaded — i.e. a non-empty
-   pfb_py_data, an existing pfb_py_zone, or at least one per-feed *.raw file. Deliberately
-   EXCLUDES the shipped pfb_py_hsts and the always-present manifest/whitelist, which are NOT
-   feed-derived: counting them makes a no-feed setup look "loaded" and triggers a clear+reload
-   every cron pass (#546). Pure (no global access). */
+/* TRUE iff genuine FEED-derived DNSBL content is currently loaded — i.e. at least one
+   per-feed *.raw file in the rawdir. Deliberately EXCLUDES the shipped pfb_py_hsts, the
+   always-present manifest/whitelist, and (ADR-65) a stale retired pfb_py_data.txt/
+   pfb_py_zone.txt: none are feed-derived, and counting any of them makes a no-feed setup
+   look "loaded" forever, triggering a clear+reload every cron pass (#546).
+   Pure (no global access). */
 function pfb_dnsbl_has_loaded_feeds(array $pfb): bool {
-	if (is_file($pfb['unbound_py_data']) && filesize($pfb['unbound_py_data']) > 0) {
-		return TRUE;
-	}
-	if (is_file($pfb['unbound_py_zone'])) {
-		return TRUE;
-	}
-	if (!empty(glob("{$pfb['unbound_py_rawdir']}/*.raw") ?: array())) {
-		return TRUE;
-	}
-	return FALSE;
+	return !empty(glob("{$pfb['unbound_py_rawdir']}/*.raw") ?: array());
 }
 
 /* Return a stable fingerprint of the given input-file set.
@@ -2002,22 +1990,6 @@ function pfb_dnsbl_concat_files(string $dest, array $sources): bool {
 	}
 	pfb_logger("\nDNSBL: failed to open [ {$dest} ] for writing", 2);
 	return FALSE;
-}
-
-// DNSBL Python blocking-mode publish (ADR-10 stage step), if TLD mode is off. issue #1097:
-// only ever called from the concat-success branch, so the rename source .raw exists.
-function pfb_dnsbl_py_swap(bool $dnsbl_tld, string $raw, string $py_data, string $py_zone): void {
-	if ($dnsbl_tld) {
-		return;
-	}
-	// issue #1241: rename() replaces py_data atomically; only a checked SUCCESS drops
-	// py_zone, so a failed publish leaves both live. ADR-10: pfb_py_count stays --
-	// the RAM gate (pfb_unbound_py_swap_fits_ram) reads it LIVE during the transient.
-	if (@rename($raw, $py_data)) {
-		unlink_if_exists($py_zone);
-		return;
-	}
-	pfb_logger("\nDNSBL: failed to publish [ {$py_data} ] -- keeping the live python data/zone", 2);
 }
 
 // Non-lite DNSBL host-munging pipeline, extracted pure out of the download/parse loop's
@@ -8432,8 +8404,8 @@ function pfb_unbound_python($mode) {
 		}
 
 		// issue #1255: DNSBL Wildcard Blocking (TLD) -- HSTS parity (shipped file +
-		// ini enable flag). $pfb['dnsbl_tld_wildcard'] is used as a bare truthy check elsewhere
-		// (tld_analysis() gate, pfb_dnsbl_py_swap()), not an == 'on' comparison.
+		// ini enable flag). $pfb['dnsbl_tld_wildcard'] is used as a bare truthy check
+		// elsewhere (the tld_update deferral branch), not an == 'on' comparison.
 		$python_tld_wildcard = 'off';
 		if ($pfb['dnsbl_tld_wildcard']) {
 			$python_tld_wildcard = 'on';
@@ -8710,73 +8682,14 @@ function pfb_unbound_python_unmount() {
 }
 
 
-// Search for TLD match
-function tld_search($tld, $dparts, $j, $k) {
-	global $tlds;
-
-	$tld_query = implode('.', array_slice($dparts, -$j, $j, TRUE));
-	if (isset($tlds[$tld][$tld_query])) {
-		return implode('.', array_slice($dparts, -$k, $k, TRUE));
-	}
-	return NULL;
-}
-
-
-// Function to determine if each Domain is a Sub-Domain ('transparent' zone) or a whole Domain ('redirect' zone)
+// ADR-65: TLD-mode DNSBL alias/stat bookkeeping only -- Domain vs Sub-Domain
+// classification now lives solely in the manifest build (pfb_unbound_python_sources()
+// / pfb_unbound.py's tld_wildcard_classify()); this function never writes the
+// interchange files.
 function tld_analysis() {
-	global $pfb, $tlds;
+	global $pfb;
 
-	if (!file_exists("{$pfb['dnsbl_file']}.raw")) {
-		pfb_logger("\n\nTLD Analysis not required.", 1);
-		return;
-	}
-
-	pfb_logger("\nTLD:\n", 1);
-
-	$domain_cnt = 0;
-	$pfb_found = FALSE;				// Flag to determine if TLD 'redirect' zones found
-
-	unlink_if_exists("{$pfb['dnsbl_file']}.tsp");
-
-	// Master TLD Domain list
-	if (($t_handle = @fopen("{$pfb['dnsbl_tld_data']}", 'r')) !== FALSE) {
-		while (($line = @fgets($t_handle)) !== FALSE) {
-			$line	= trim(rtrim($line, "\x00..\x1F"));
-			// issue #1116: match the Python mirror's contract -- skip comment and
-			// whitespace-only lines; '0' is a valid dot-less TLD key.
-			if ($line === '' || str_starts_with($line, '#')) {
-				continue;
-			}
-			$dot	= strrpos($line, '.');
-			// issue #1068: a dot-less line keys under its own full value
-			// (FALSE + 1 would substr off the first char)
-			$tld	= ($dot === FALSE) ? $line : substr($line, $dot + 1);
-
-			if ($tld !== '') {
-				if (!isset($tlds[$tld]) || !is_array($tlds[$tld])) {
-					$tlds[$tld] = array();
-				}
-				$tlds[$tld][$line] = '';
-			}
-		}
-		@fclose($t_handle);
-	} else {
-		pfb_logger("\n ** TLD Master data file missing. Terminating TLD **\n", 1);
-		return;
-	}
-
-	// DNSBL python - create file handles for data and zone files
-	$p_data = @fopen("{$pfb['unbound_py_data']}.raw", 'w');
-	$p_zone = @fopen("{$pfb['unbound_py_zone']}.raw", 'w');
-
-	if ($p_data === FALSE || $p_zone === FALSE) {
-
-		pfb_logger("\nFailed to create DNSBL python data|zone file handles! Exiting\n", 1);
-		foreach (array($p_data, $p_zone) as $handlex) {
-			if ($handlex) {
-				@fclose($handlex);
-			}
-		}
+	if (!$pfb['domain_update']) {
 		return;
 	}
 
@@ -8786,16 +8699,10 @@ function tld_analysis() {
 		$tld_blacklist = array_flip($tld_blacklist);
 	}
 
-	// ADR-06: The native-mode 'static local-zone' TLD-whitelist resolver block
-	// (drill-resolve a whitelisted domain to a user/real IP) was a leftover from
-	// the removed native Unbound mode -- '$whitelist' was always empty and it is
-	// not required for python-mode blocking. It has been removed.
-
 	// Process TLD Blacklist(s). If configured the whole TLD will be blocked
 	if (!empty($tld_blacklist)) {
 
 		$tld_cnt	= 0;
-		pfb_logger(" Blocking full TLD/Sub-Domain(s)... |", 1);
 
 		foreach ($tld_blacklist as $tld => $key) {
 
@@ -8803,17 +8710,7 @@ function tld_analysis() {
 			$tld = trim($tld, '.');				// Remove any leading/trailing dots
 			$tld_blacklist[$tld] = '';			// Add new TLD entry
 
-			// DNSBL python - TLD Blacklist (Set logging type to enabled '1')
 			$tld_cnt++;
-			$pfb_found = TRUE;
-
-			pfb_logger("{$tld}|", 1);
-			@fwrite($p_zone, pfb_dnsbl_ndjson_emit_domain_row($tld, '1', 'DNSBL_TLD', 'DNSBL_TLD'));
-
-			// Remove any 'TLD Blacklists' from the 'TLD master list'
-			if (isset($tlds[$tld])) {
-				unset($tlds[$tld]);
-			}
 			continue;
 
 		}
@@ -8828,164 +8725,23 @@ function tld_analysis() {
 			$pfb['tld_update']['DNSBL_TLD']['count']	= $tld_cnt;
 			$pfb['alias_dnsbl_all'][]			= 'DNSBL_TLD';
 		}
-		pfb_logger(" completed\n", 1);
 	}
 
-	// Collect TLD Exclusion list and remove any 'TLD Exclusions' from the 'TLD master list'
-	$exclusion = pfbng_text_area_decode($pfb['dnsblconfig']['tldexclusion'], TRUE, FALSE, TRUE);
-	$tld_exclusion = array();
-	if (!empty($exclusion)) {
-		foreach ($exclusion as $key => $exclude) {
-			$exclude = trim($exclude, '.');		// Remove any leading/trailing dots
+	// Update DNSBL Alias and Widget Stats
+	if (!empty($pfb['tld_update'])) {
+		foreach ($pfb['tld_update'] as $alias => $data) {
 
-			// Collect exclusion
-			if (strpos($exclude, '.') !== FALSE) {
-				$tld_exclusion[$exclude] = '';
+			// Create Alias summary file for each DNSBL Alias
+			$lists_dnsbl_current = array();
+			foreach ($data['feeds'] as $feed) {
+				$lists_dnsbl_current[] = "{$feed}";
 			}
-
-			// Remove Exclusion from TLDS array
-			if (isset($tlds[$exclude])) {
-				unset($tlds[$exclude]);
-			}
+			dnsbl_alias_update('update', $alias, $pfb['dnsdir'], $lists_dnsbl_current, $data['count']);
 		}
-	}
-
-	pfb_logger("TLD analysis", 1);
-
-	// #1083: a NULL row (undecodable, or a verbatim-captured ABP/regex line --
-	// ADR-62) is skipped -- Python's own parse_abp/TLD pass classifies those
-	// independently.
-
-	// DNSBL python: Analyse DNSBL into data (transparent/exact) and zone (wildcard) files
-
-	if (($fhandle = @fopen("{$pfb['dnsbl_file']}.raw", 'r')) !== FALSE) {
-		while (($line = @fgets($fhandle)) !== FALSE) {
-			if (empty($line)) {
-				continue;
-			}
-
-			$row = pfb_dnsbl_ndjson_parse_row($line);
-			if ($row === NULL || $row['kind'] !== 'domain') {
-				continue;
-			}
-
-			// Display progress indicator
-			if ($domain_cnt % 100000 == 0) {
-				// Memory limitation exceeded for 'redirect' zones
-				if ($domain_cnt >= $pfb['domain_max_cnt']) {
-					pfb_logger('x', 1);
-				} else {
-					pfb_logger('.', 1);
-				}
-			}
-
-			// DNSBL python blocking mode
-			$domain = $row['domain'];
-			$dparts = explode('.', $domain);
-			$dcnt   = count($dparts);
-			$tld    = end($dparts);
-			$dfound	= '';
-
-
-
-			if ($domain_cnt <= $pfb['domain_max_cnt']) {
-
-				// Search TLD master list (Levels 1-4)
-				// If Domain is a Sub-Domain, create 'transparent' zone. Otherwise create 'redirect' zone
-				switch($dcnt) {
-					case ($dcnt > 5):
-						break;
-					case '5':
-						$dfound = tld_search($tld, $dparts, 4, 5);
-						break;
-					case '4':
-						$dfound = tld_search($tld, $dparts, 3, 4);
-						break;
-					case '3':
-						$dfound = tld_search($tld, $dparts, 2, 3);
-						break;
-					case '2':
-						$dfound = implode('.', array_slice($dparts, -2, 2, TRUE));
-						break;
-				}
-			}
-
-			// If Domain is in the TLD Exclusion(s), use 'transparent zone'
-			if (!empty($domain) && isset($tld_exclusion[$domain])) {
-				$dfound = '';
-			}
-
-			// Create 'redirect' zone for Domain
-			if (!empty($dfound)) {
-				$pfb_found = TRUE;
-
-				// DNSBL python blocking mode
-				@fwrite($p_zone, pfb_dnsbl_ndjson_emit_domain_row($dfound, $row['log'], $row['feed'], $row['group']));
-			}
-
-			// Create 'transparent zone' for Sub-Domain
-			else {
-				// DNSBL python blocking mode
-				@fwrite($p_data, pfb_dnsbl_ndjson_emit_domain_row($domain, $row['log'], $row['feed'], $row['group']));
-			}
-
-			// Increment Domain counter
-			$domain_cnt++;
-		}
-	}
-
-	foreach (array($fhandle, $p_data, $p_zone) as $handlex) {
-		if ($handlex) {
-			@fclose($handlex);
-		}
-	}
-	unset($tlds, $tld_blacklist, $tld_exclusion);
-
-	// TLD 'redirect zones' found. Finalize TLD function
-	if ($pfb_found) {
-		$log = " completed\n";
-		// Print TLD exceedance error message
-		if ($domain_cnt >= $pfb['domain_max_cnt']) {
-			$log .= "\n  ** TLD Domain count exceeded. [ {$pfb['domain_max_cnt']} ] All subsequent Domains listed as-is **\n\n";
-		}
-		$log .= "TLD finalize";
-		pfb_logger("{$log}", 1);
-
-		// ADR-06: The shell domaintldpy pass (sort -u dedup + subdomain COLLAPSE via
-		// ggrep -vF dnsbl_tld_remove + pfb_py_count write) is DROPPED -- the Python
-		// dict load dedups keys for free and a redundant sub-domain is matched by its
-		// parent zone, so no collapse is needed. Promote the classified .raw files to
-		// their final paths directly; Python emits pfb_py_count itself at load.
-		foreach (array($pfb['unbound_py_data'], $pfb['unbound_py_zone']) as $py_final) {
-			if (file_exists("{$py_final}.raw")) {
-				@rename("{$py_final}.raw", $py_final);
-			}
-		}
-		pfb_logger("\nTLD finalize... completed\n", 1);
-
-		// Update DNSBL Alias and Widget Stats
-		if (!empty($pfb['tld_update'])) {
-			foreach ($pfb['tld_update'] as $alias => $data) {
-
-				// Create Alias summary file for each DNSBL Alias
-				$lists_dnsbl_current = array();
-				foreach ($data['feeds'] as $feed) {
-					$lists_dnsbl_current[] = "{$feed}";
-				}
-				dnsbl_alias_update('update', $alias, $pfb['dnsdir'], $lists_dnsbl_current, $data['count']);
-			}
-		}
-	}
-	else {
-		pfb_logger(" no changes\n", 1);
 	}
 
 	// Save DNSBL Alias statistics
 	dnsbl_save_stats();
-
-	if (file_exists("{$pfb['dnsbl_file']}.raw")) {
-		unlink_if_exists("{$pfb['dnsbl_file']}.raw");
-	}
 }
 
 // Function to Start Unbound
@@ -9111,6 +8867,19 @@ function pfb_unbound_py_marker_generation(string $path): int {
 		return 0;
 	}
 	return (int) $first;
+}
+
+// ADR-65: the DNSBL health check re-keyed onto the manifest boundary -- TRUE iff the
+// per-feed manifest is absent, or the reload/applied marker generations disagree (a
+// stuck zero-downtime apply). Presence-only: manifest content validity is the ADR-61
+// parse ledger's job. Pure read, no writes.
+function pfb_dnsbl_manifest_missing(array $pfb): bool {
+	if (!file_exists($pfb['unbound_py_sources'])) {
+		return TRUE;
+	}
+	$sentinel = pfb_unbound_py_marker_generation("{$pfb['dnsbldir']}/pfb_py_reload");
+	$applied  = pfb_unbound_py_marker_generation("{$pfb['dnsbldir']}/pfb_py_reload.applied");
+	return $sentinel !== $applied;
 }
 
 // ADR-61: is DNSBL's live matcher state actually caught up with what it was told to
@@ -9383,6 +9152,9 @@ function pfb_unbound_clear_work_files() {
 			// issue #1083: opportunistic sweep of the retired DNSBL_TLD.txt diagnostic
 			// -- else a pre-upgrade box's stray copy sits forever (writer/unlink sites retired).
 			"{$pfb['dnsdir']}/DNSBL_TLD.txt",
+			// ADR-65: same opportunistic-sweep rationale for the retired interchange files.
+			$pfb['unbound_py_data'],
+			$pfb['unbound_py_zone'],
 			"/var/tmp/unbound_cache_*") as $remove) {
 		unlink_if_exists($remove);
 	}
@@ -17020,32 +16792,10 @@ function sync_package_pfblockerng($cron='') {
 			}
 
 
-			// When DNSBL python blocking mode is enabled, zone should not exist, and data should exist
-			if (!$pfb['dnsbl_tld_wildcard']) {
-				if (file_exists($pfb['unbound_py_zone'])) {
-					$dnsbl_missing = TRUE;
-				}
-				if (!file_exists($pfb['unbound_py_data'])) {
-					$dnsbl_missing = TRUE;
-				}
+			// ADR-65: the health check reads the manifest boundary directly.
+			if (pfb_dnsbl_manifest_missing($pfb)) {
+				$dnsbl_missing = TRUE;
 			}
-
-			// When DNSBL python blocking mode is enabled, atleast one 'data or zone' file must exist
-			else {
-				$found = FALSE;
-				if (file_exists($pfb['unbound_py_data'])) {
-					$found = TRUE;
-				}
-				if (file_exists($pfb['unbound_py_zone'])) {
-					$found = TRUE;
-				} 
-				if (!$found) {
-					$dnsbl_missing = TRUE;
-				}
-			}
-
-			// Check if DNSBL database is missing, when DNSBL python blocking mode is not enabled
-
 
 			if ($dnsbl_missing) {
 				$log = "\n Missing DNSBL stats and/or Unbound DNSBL files - Rebuilding\n";
@@ -18206,28 +17956,13 @@ function sync_package_pfblockerng($cron='') {
 			pfb_logger("\n------------------------------------------------------------------------\n", 1);
 
 			pfb_logger('Assembling DNSBL database...', 1);
-			unlink_if_exists("{$pfb['dnsbl_file']}.raw");
-			$pfb_dnsbl_sources = array_map(
-				static fn(string $current_list): string => "{$pfb['dnsdir']}/{$current_list}",
-				$lists_dnsbl_all
-			);
-			// issue #1097: a failed assembly must keep the live python data/zone files --
-			// deleting them ahead of a rename() of a never-created .raw destroys blocking
-			// data the next tick would otherwise keep serving until the rebuild succeeds.
-			if (pfb_dnsbl_concat_files("{$pfb['dnsbl_file']}.raw", $pfb_dnsbl_sources)) {
-				pfb_logger("... completed", 1);
 
-				pfb_dnsbl_py_swap((bool) $pfb['dnsbl_tld_wildcard'], "{$pfb['dnsbl_file']}.raw", $pfb['unbound_py_data'], $pfb['unbound_py_zone']);
-
-				// ADR-06: Write the per-feed manifest + IP-stripped raw that the Python
-				// plugin's init builds the DNSBL structures from. Python then owns
-				// parse/normalise/classify (the dropped shell/PHP passes) and emits
-				// pfb_py_count itself.
-				pfb_unbound_python_sources($pfb_py_feeds);
-			}
-			else {
-				pfb_logger("\nDNSBL not Updated!\n", 1);
-			}
+			// ADR-06: Write the per-feed manifest + IP-stripped raw that the Python
+			// plugin's init builds the DNSBL structures from. Python then owns
+			// parse/normalise/classify (the dropped shell/PHP passes) and emits
+			// pfb_py_count itself.
+			pfb_unbound_python_sources($pfb_py_feeds);
+			pfb_logger("... completed", 1);
 		}
 
 		else {
@@ -18249,21 +17984,19 @@ function sync_package_pfblockerng($cron='') {
 					$pfb['domain_clear'] = TRUE;
 				}
 
-				// Materialize canonical files as present-but-EMPTY rather than deleting them
-				// (#546). Empty-but-present files are byte-identical pass-to-pass, so the
+				// Materialize the manifest/rawdir as present-but-EMPTY rather than deleting
+				// them (#546). Empty-but-present files are byte-identical pass-to-pass, so the
 				// fingerprint gate treats empty→empty as unchanged (no reload). A genuine
 				// loaded→empty transition still diverges on the first pass (one reload), then
 				// stabilises. DO NOT delete pfb_py_wh: pfb_unbound_python() reads it to detect
 				// a whitelist change; missing=FALSE !== '' triggers $pfbpython=TRUE every pass.
 				pfb_unbound_python_sources(array());		// valid feeds:[] manifest + empty rawdir
-				@file_put_contents($pfb['unbound_py_data'], '', LOCK_EX);	// present-but-empty NDJSON
-				unlink_if_exists($pfb['unbound_py_zone']);			// python mode: zone must be absent
 				unlink_if_exists($pfb['unbound_py_count']);
 				unlink_if_exists($pfb['unbound_py_regex_count']);		// ADR-07
 			}
 		}
 		else {
-			foreach (array("{$pfb['dnsbl_file']}.conf", $pfb['unbound_py_data'], $pfb['unbound_py_zone']) as $pfb_file) {
+			foreach (array("{$pfb['dnsbl_file']}.conf") as $pfb_file) {
 				if (file_exists($pfb_file)) {
 					$pfb['domain_clear'] = TRUE;
 					@unlink($pfb_file);

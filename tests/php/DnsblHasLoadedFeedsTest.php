@@ -90,49 +90,51 @@ final class DnsblHasLoadedFeedsTest extends TestCase
 	}
 
 	/**
-	 * Scenario: non-empty py_data → feeds are loaded.
+	 * Scenario: non-empty py_data (a stale retired interchange file) → no longer counts.
 	 *
-	 * Given:  pfb_py_data contains at least one byte of CSV content
+	 * Given:  pfb_py_data contains at least one byte of content
 	 * When:   pfb_dnsbl_has_loaded_feeds() is called
-	 * Then:   returns TRUE
+	 * Then:   returns FALSE (ADR-65: the retired interchange file is never
+	 *         written again, so a stray on-disk copy must not look "loaded")
 	 *
-	 * Before-state assertion (empty → FALSE) proves the non-empty file caused the flip.
+	 * Before-state assertion (empty → FALSE) proves this is not a vacuous always-FALSE.
 	 */
-	public function testNonEmptyDataFileReturnsTrue(): void
+	public function testNonEmptyDataFileNoLongerCountsAsLoaded(): void
 	{
 		$pfb = $this->makePfb();
 
 		// Before: no file → FALSE.
 		$this->assertFalse(pfb_dnsbl_has_loaded_feeds($pfb), 'Before: absent py_data → FALSE');
 
-		// Write feed content.
+		// Write stale retired-interchange-file content.
 		file_put_contents($pfb['unbound_py_data'], "blocked.example.com,127.0.0.1\n");
 
-		// After: non-empty py_data → TRUE.
-		$this->assertTrue(pfb_dnsbl_has_loaded_feeds($pfb), 'Non-empty py_data → TRUE');
+		// After: still FALSE -- py_data content is no longer read at all.
+		$this->assertFalse(pfb_dnsbl_has_loaded_feeds($pfb), 'Non-empty py_data → still FALSE (retired, ADR-65)');
 	}
 
 	/**
-	 * Scenario: py_zone present → feeds are loaded (TLD mode).
+	 * Scenario: py_zone present (a stale retired interchange file) → no longer counts.
 	 *
 	 * Given:  pfb_py_zone exists (even with no py_data)
 	 * When:   pfb_dnsbl_has_loaded_feeds() is called
-	 * Then:   returns TRUE
+	 * Then:   returns FALSE (ADR-65: the retired interchange file is never
+	 *         written again, so a stray on-disk copy must not look "loaded")
 	 *
-	 * Before-state assertion (no zone → FALSE) proves the zone caused the flip.
+	 * Before-state assertion (no zone → FALSE) proves this is not a vacuous always-FALSE.
 	 */
-	public function testZoneFilePresentReturnsTrue(): void
+	public function testZoneFilePresentNoLongerCountsAsLoaded(): void
 	{
 		$pfb = $this->makePfb();
 
 		// Before: no zone → FALSE.
 		$this->assertFalse(pfb_dnsbl_has_loaded_feeds($pfb), 'Before: absent py_zone → FALSE');
 
-		// Create zone file (TLD mode writes this).
+		// Create stale retired-interchange zone file.
 		file_put_contents($pfb['unbound_py_zone'], "local-zone: example.com redirect\n");
 
-		// After: zone present → TRUE.
-		$this->assertTrue(pfb_dnsbl_has_loaded_feeds($pfb), 'py_zone present → TRUE');
+		// After: still FALSE -- py_zone presence is no longer read at all.
+		$this->assertFalse(pfb_dnsbl_has_loaded_feeds($pfb), 'py_zone present → still FALSE (retired, ADR-65)');
 	}
 
 	/**

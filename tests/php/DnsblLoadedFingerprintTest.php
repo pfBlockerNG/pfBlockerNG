@@ -187,11 +187,13 @@ final class DnsblLoadedFingerprintTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Scenario: returns the five flat inputs (incl. HSTS) plus sorted *.raw from rawdir.
+	 * Scenario: returns the four flat inputs (incl. HSTS + TLD oracle) plus sorted
+	 * *.raw from rawdir -- NOT the retired unbound_py_data/unbound_py_zone (ADR-65).
 	 *
 	 * Given:  a $pfb array with the standard keys and two .raw files in rawdir
 	 * When:   pfb_dnsbl_loaded_input_paths() is called
-	 * Then:   result contains data/zone/wh/sources/hsts plus both .raw paths, in sorted order
+	 * Then:   result contains wh/sources/hsts/tld plus both .raw paths, in sorted
+	 *         order, and excludes the retired data/zone paths
 	 */
 	public function testReturnsFlatInputsPlusSortedRaws(): void
 	{
@@ -215,9 +217,11 @@ final class DnsblLoadedFingerprintTest extends TestCase
 
 		$result = pfb_dnsbl_loaded_input_paths($pfb);
 
-		// The six flat inputs must be present (incl. HSTS + TLD-Wildcard oracle).
-		$this->assertContains($pfb['unbound_py_data'],    $result, 'unbound_py_data must be in the path list');
-		$this->assertContains($pfb['unbound_py_zone'],    $result, 'unbound_py_zone must be in the path list');
+		// The four flat inputs must be present (incl. HSTS + TLD-Wildcard oracle).
+		// ADR-65: unbound_py_data/unbound_py_zone are retired writer targets --
+		// they must NOT appear (a stray on-disk copy must never gate the reload).
+		$this->assertNotContains($pfb['unbound_py_data'], $result, 'retired unbound_py_data must NOT be in the path list (ADR-65)');
+		$this->assertNotContains($pfb['unbound_py_zone'], $result, 'retired unbound_py_zone must NOT be in the path list (ADR-65)');
 		$this->assertContains($pfb['unbound_py_wh'],      $result, 'unbound_py_wh must be in the path list');
 		$this->assertContains($pfb['unbound_py_sources'], $result, 'unbound_py_sources must be in the path list');
 		$this->assertContains($pfb['unbound_py_hsts'],    $result, 'unbound_py_hsts must be in the path list (shipped HSTS preload; #520)');
@@ -240,11 +244,12 @@ final class DnsblLoadedFingerprintTest extends TestCase
 	}
 
 	/**
-	 * Scenario: empty rawdir — no .raw files, just the six flat inputs (incl. HSTS + TLD).
+	 * Scenario: empty rawdir — no .raw files, just the four flat inputs (incl. HSTS + TLD).
 	 *
 	 * Given:  a rawdir that is empty (no .raw files)
 	 * When:   pfb_dnsbl_loaded_input_paths() is called
-	 * Then:   result has exactly 6 entries (the flat inputs only, including HSTS + TLD)
+	 * Then:   result has exactly 4 entries (wh/sources/hsts/tld only -- ADR-65
+	 *         retired unbound_py_data/unbound_py_zone are never in the returned list)
 	 */
 	public function testEmptyRawdirReturnsOnlyFlatInputs(): void
 	{
@@ -263,7 +268,7 @@ final class DnsblLoadedFingerprintTest extends TestCase
 
 		$result = pfb_dnsbl_loaded_input_paths($pfb);
 
-		$this->assertCount(6, $result, 'With no .raw files, exactly the six flat inputs are returned (data/zone/wh/sources/hsts/tld)');
+		$this->assertCount(4, $result, 'With no .raw files, exactly the four flat inputs are returned (wh/sources/hsts/tld)');
 	}
 
 	/**
@@ -413,15 +418,15 @@ final class DnsblLoadedFingerprintTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// pfb_dnsbl_reload_fingerprint (issue #1255)
+	// pfb_dnsbl_reload_fingerprint (issue #1255; ADR-65)
 	//
-	// The dnsbl_tld_wildcard fp_old bypass (@16793) used to null the WHOLE fingerprint in
-	// TLD mode because tld_analysis() rewrites unbound_py_data/unbound_py_zone
-	// INSIDE pfb_update_unbound(), strictly AFTER the fingerprint is taken -- so
-	// a package update shipping a new TLD oracle (fingerprinted like HSTS) never
-	// triggered a reload. This helper narrows instead of nulling: excludes ONLY
-	// unbound_py_data/unbound_py_zone when dnsbl_tld_wildcard is on; every other input
-	// (the oracle included) still gates normally.
+	// unbound_py_data/unbound_py_zone are retired writer targets (never written
+	// again) and are excluded from pfb_dnsbl_loaded_input_paths() unconditionally --
+	// the TLD-mode-only array_diff narrowing this helper used to apply is gone
+	// (a no-op once the base path list never carried them). A content change to
+	// either retired file therefore never moves the fingerprint, in EITHER
+	// dnsbl_tld_wildcard state; every other input (the TLD oracle included)
+	// still gates the reload normally.
 	// -----------------------------------------------------------------------
 
 	private function reloadFpBasePfb(): array
@@ -446,11 +451,12 @@ final class DnsblLoadedFingerprintTest extends TestCase
 
 		$fp_before = pfb_dnsbl_reload_fingerprint($pfb);
 
-		// tld_analysis()'s late write to data/zone must NOT move the fingerprint...
-		file_put_contents($pfb['unbound_py_data'], 'a-different-late-tld-analysis-write');
+		// A retired unbound_py_data file is never in the path set -- its content must
+		// NOT move the fingerprint...
+		file_put_contents($pfb['unbound_py_data'], 'a-different-write-to-the-retired-file');
 		$fp_after_data_write = pfb_dnsbl_reload_fingerprint($pfb);
 		$this->assertSame($fp_before, $fp_after_data_write,
-			'TLD mode must exclude unbound_py_data -- tld_analysis() rewrites it after this fingerprint is taken');
+			'a retired unbound_py_data write must never move the fingerprint (ADR-65)');
 
 		// ...but a staged oracle content change (dnsbl_cache_stage cp -f) MUST.
 		file_put_contents($pfb['unbound_py_tld'], "com\nnet\n");
@@ -459,7 +465,12 @@ final class DnsblLoadedFingerprintTest extends TestCase
 			'issue #1255: a TLD oracle content change must still flip the fingerprint in TLD mode (the upgrade requirement)');
 	}
 
-	public function testNonTldModeIncludesDataZoneChange(): void
+	/**
+	 * ADR-65: renamed + inverted from testNonTldModeIncludesDataZoneChange --
+	 * unbound_py_data is a retired writer target excluded from the path set
+	 * UNCONDITIONALLY now, so non-TLD mode no longer differs from TLD mode here.
+	 */
+	public function testNonTldModeAlsoExcludesRetiredDataZoneChange(): void
 	{
 		$pfb = $this->reloadFpBasePfb();
 		$pfb['dnsbl_tld_wildcard'] = '';
@@ -469,7 +480,7 @@ final class DnsblLoadedFingerprintTest extends TestCase
 		file_put_contents($pfb['unbound_py_data'], 'v2');
 		$fp_after = pfb_dnsbl_reload_fingerprint($pfb);
 
-		$this->assertNotSame($fp_before, $fp_after,
-			'Non-TLD mode must NOT narrow the path set -- unbound_py_data changes gate the reload normally');
+		$this->assertSame($fp_before, $fp_after,
+			'Non-TLD mode must ALSO exclude the retired unbound_py_data -- it is never in the path set (ADR-65)');
 	}
 }
