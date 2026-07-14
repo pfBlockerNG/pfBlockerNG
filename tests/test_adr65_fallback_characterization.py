@@ -1,10 +1,10 @@
-"""ADR-65 Phase 1 -- Oracle B: characterize (never equate) the legacy
+"""ADR-65 Oracle B: characterize (never equate) the legacy
 py_data/py_zone interchange-file fallback.
 
 WHY THIS FILE EXISTS
 --------------------
 ADR.md SS1.1 (re-derived phase 0, 2026-07-14) makes four factual claims about
-the fallback that ONLY runs on a manifest-build failure -- Phase 5 removes it
+the fallback that ONLY runs on a manifest-build failure -- ADR-65 SS2.3 removes it
 entirely (fail-loud instead), so those claims need pinning BEFORE the removal,
 not asserted-and-trusted:
 
@@ -15,7 +15,7 @@ not asserted-and-trusted:
                    ``allowRegexDB`` are populated ONLY by the manifest build.
   (c) STALE-ABLE -- the loaders read whatever ``.txt`` exists, no freshness
                    check -- serves orphaned content verbatim on a build
-                   failure. This is Phase 5's RED baseline.
+                   failure. This is the fail-loud change's RED baseline (ADR-65 SS2.3).
   (d) FRESH PLAIN-DOMAIN PARITY -- a freshly-produced interchange file agrees
                    with the manifest build's zone/data split for every PLAIN
                    domain, in BOTH toggle states (the ONLY respect in which the
@@ -155,7 +155,7 @@ class TestFactBLossiness:
 # --------------------------------------------------------------------------- #
 # Fact (c) -- STALE-ABLE: on a build failure, the loaders serve whatever
 # content sits on disk verbatim, even a domain absent from every CURRENT
-# manifest input. This is Phase 5's RED baseline -- named for that intent.
+# manifest input. This is the fail-loud change's RED baseline (ADR-65 SS2.3).
 # --------------------------------------------------------------------------- #
 
 
@@ -165,7 +165,7 @@ class TestFactCStaleness:
         manifest, dnsbl_build_from_manifest:5365-5369) still runs the legacy
         loaders (dnsbl_built stays False, init wiring :1657-1698), which serve
         an ORPHANED domain -- one no current manifest input carries -- verbatim.
-        Phase 5 removes this path (fail-loud instead of stale-serve, ADR.md SS2.3)."""
+        ADR-65 SS2.3 removes this path (fail-loud instead of stale-serve)."""
         manifest_path = tmp_path / "pfb_py_sources.json"  # never written -> absent manifest
         stale_row = {
             "kind": "domain",
