@@ -3991,7 +3991,7 @@ def _dnsbl_is_abp_rule_line(line: str) -> bool:
             first, marker_len = min(hits)
             if first == 0:
                 after = line[marker_len : marker_len + 1]
-                if after and after not in (" ", "\t"):
+                if after and not after.isspace():
                     return True
             elif all(c in _DNSBL_ABP_COSMETIC_PREFIX_CHARS for c in line[:first]):
                 return True

@@ -460,6 +460,11 @@ def test_cosmetic_prefix_guard_matches_php_row_for_row() -> None:
         "##\tSection",
         "#@# note",
         "##",  # marker alone, nothing after -- no non-whitespace char to require
+        # PR #1343 review: the space/tab guard missed other whitespace a malformed
+        # feed can embed mid-line (CR/VT/FF survive the caller's edge-only trim).
+        "##\rSection",
+        "##\x0bsection",
+        "##\x0csection",
     ]
     capturable = [
         "####################",  # marker at pos 0: generic-rule shape (documented latent)

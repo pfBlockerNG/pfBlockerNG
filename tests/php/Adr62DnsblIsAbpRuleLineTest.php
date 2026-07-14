@@ -80,6 +80,11 @@ final class Adr62DnsblIsAbpRuleLineTest extends TestCase
 			'sibling marker hosts-dialect, marker+space' => ['#@# note', false],
 			'sibling marker exception rule, no space'    => ['#@#selector', true],
 			'bare marker, nothing after'                 => ['##', false],
+			// PR #1343 review: the space/tab guard missed other whitespace a malformed
+			// feed can embed mid-line (CR/VT/FF survive the caller's edge-only trim).
+			'hosts-dialect header, marker+CR'            => ["##\rSection", false],
+			'hosts-dialect header, marker+vertical tab'  => ["##\x0Bsection", false],
+			'hosts-dialect header, marker+form feed'     => ["##\x0Csection", false],
 		];
 	}
 
