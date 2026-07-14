@@ -1,0 +1,79 @@
+ADR-65 Phase 9 -- GATE RECORD
+================================================================================
+
+VERDICT: PASS (verifier verdict PASS, zero blockers; one deferred deviation
+closed by the orchestrator -- see REMEDIATION)
+
+--------------------------------------------------------------------------------
+COMMANDS + RESULTS (verifier re-ran independently)
+--------------------------------------------------------------------------------
+- npx markdownlint-cli2: 164 files, 0 errors.
+- PATH-shimmed sh scripts/agent/run-gates.sh --diff origin/devel: every GATE
+  PASS line, GATES: PASS (this phase's own src/tests diff verified EMPTY --
+  docs/ADR text only; the www/ reminder stays branch-cumulative).
+- Narration/version-literal checkers: exit 0. check_retired_tokens.py: the
+  identical 24 warn-only FP groups, zero drift vs the RESULTS/08 baseline.
+- gh issue create: retirement-inventory tracking issue filed --
+  https://github.com/pfBlockerNG/pfBlockerNG/issues/1349 (pfb_dnsbl_parse/
+  _compute + prefetch grep helpers, vestigial dnsblcache, the Python
+  close-only wrappers + interchange path defs both sides, domain_max_cnt
+  orphan; body states it unblocks when this ADR's PR merges).
+- Both commits pushed (code 1202a8f6, handoff 038cc388); branch in sync.
+
+--------------------------------------------------------------------------------
+RED/GREEN EVIDENCE
+--------------------------------------------------------------------------------
+Behaviour-preserving documentation-only phase (zero src/tests diff proven by
+git diff --stat) -- the carve-out legitimately applies; no red run exists or
+is required. Full suite remains the oracle (gates green above).
+
+--------------------------------------------------------------------------------
+PER-ITEM DIFF VERDICTS (verifier read both full diffs)
+--------------------------------------------------------------------------------
+- alerts-reports-pipeline.md rewritten to the one-phase log-driven DNSBL
+  model (IP side keeps its two-phase story, cross-refs made self-contained);
+  every kept claim spot-verified against source; dnsblcache described as
+  vestigial with the #1349 pointer -- PASS.
+- architecture-notes: transitional-window attribution claim and the
+  downgrade-fallback mechanism corrected to post-retirement reality -- PASS.
+- ADR-06 "## 8. Post-merge amendments (2026-07-14 -- ADR-65)" appended in
+  the ADR-62 house shape (sections above stay as written) -- PASS.
+- ADR-65 Status block gained the D2 release-note bullet (house pattern);
+  SS7's manual checklist rows (a)-(c) repointed at the automating tests --
+  PASS.
+- #1244/#1245 closure comments DRAFTED into the handoff (not posted; they
+  close once the PR merges and the fan-out is green) -- PASS.
+- Conventions + narration checkers clean; no new symbols -- PASS.
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX
+--------------------------------------------------------------------------------
+All R1-R11 doc/artifact rows ticked in the handoff and verified against the
+diffs; the two disclosed line-citation nits resolved with re-derived
+references. No deferrals beyond the standing acceptance run.
+
+--------------------------------------------------------------------------------
+BRIEF VALIDATION (orchestrator, non-vacuous)
+--------------------------------------------------------------------------------
+Spot-checked R-row claims during gating: pfb_dnsbl_parse has zero src/ call
+sites (grep) and the ADR-62 SS8 exemplar shape matches the appended ADR-06
+section. No drift_flags. NOTE (process): despite briefModel:
+"claude-opus-4-8" in the args, the phase-8/9 briefs ran on FABLE -- the
+engine relaunched the persisted pre-655b0c6a script, which silently dropped
+the unknown arg (the phase-9 brief header names its own planner). Recorded
+in the brief-overhead analysis; hardening (unknown-arg rejection) is a
+follow-up outside this ADR.
+
+--------------------------------------------------------------------------------
+SKIPPED
+--------------------------------------------------------------------------------
+- Live-VM execution: the CE+Plus acceptance fan-out is the next step (ADR
+  SS6 "Acceptance execution") -- Tier-A ui_render + the reconciled ui_e2e
+  rows + the four new smoke rows.
+
+--------------------------------------------------------------------------------
+REMEDIATION (orchestrator)
+--------------------------------------------------------------------------------
+1. The handoff's deferred deviation -- the ADR-65 head-block's stale claim
+   that the ADR-06 SS8 amendment lands "in Phase 7" -- fixed (the amendment
+   is recorded without a phase pointer); committed with this gate record.
