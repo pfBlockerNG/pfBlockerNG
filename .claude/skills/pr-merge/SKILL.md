@@ -79,6 +79,12 @@ git rebase "origin/$BASE"                # replay onto the LIVE base tip
 
 ## Step 4 — Wait for CI to pass (excluding CodeRabbit)
 
+**Early-verdict shortcut:** when the caller (`pr-merge-flow`) hands over a CI wait it
+armed at review start that already returned `PASS`, verify it is still current — the
+watched SHA equals `gh pr view "$PR" --json headRefOid -q .headRefOid` AND Step 3's
+rebase was a no-op (no new push) — then skip this wait entirely. Any push, rebase, or
+SHA mismatch invalidates the early verdict: wait normally below.
+
 Poll the PR's checks until every **required** check has completed — excluding
 **CodeRabbit** (advisory bot) and **Snyk** (advisory security scan; its quota/infra `error`
 state must never gate a merge) — via **`scripts/agent/wait-checks.sh`** (the single

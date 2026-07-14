@@ -762,11 +762,16 @@ squash. History stays strictly linear (`main` always an ancestor of `devel`).
 **Default landing flow — `/pr-merge-flow N`** after completing any issue, ADR, or code
 change: review feedback first, then merge. A **Claude adversarial review runs on EVERY PR
 as the committed `review-single` workflow** — ONE reviewer sub-agent at effort `xhigh`
-(never below, never `max`), latest Sonnet by default; the highest-tier model (currently
+for the `full` profile / `high` for the mechanically-gated `verify` profile (data/pin/
+config-only diffs, objective no-new-control-flow classifier in `pr-merge-flow`; owner
+authorization 2026-07-14 "do all 6"; never below the profile's floor, never `max`),
+latest Sonnet by default; the highest-tier model (currently
 Fable) for a large/complex PR — its whole-PR cross-referencing is why it reviews the PR
 rather than the per-step gates. Top tier unavailable on such a PR ⇒ TWO `review-single`
 passes (one Sonnet + one Opus), findings unioned. Feedback-fix re-reviews are
-**delta-scoped** (`base` = the pre-fix head SHA) on Sonnet — never a whole-PR re-run.
+**delta-scoped** (`base` = the pre-fix head SHA) on Sonnet — never a whole-PR re-run —
+and the fix→re-review loop **converges**: it continues only while the latest round
+returned a `blocking` finding; an all-nitpick (or clean) round closes it.
 **Never Opus as a sole reviewer, never a multi-agent fan-out** (`review-fanout` only on
 explicit user request);
 the full reviewer contract lives in `.claude/workflows/review-single.js`, not here. External

@@ -8,7 +8,8 @@ description: >
   (EXCLUDING the bot), merge `--rebase` (never a merge commit, never squash) and
   delete the branch. The review step ALWAYS runs the committed `review-single`
   workflow — ONE Claude sub-agent as an ADVERSARIAL reviewer IN ADDITION TO CodeRabbit,
-  never a mere fallback — at reasoning effort xhigh (never below, never max): the latest
+  never a mere fallback — at reasoning effort xhigh for the full profile / high for the
+  mechanically-gated verify profile (never below the profile's floor, never max): the latest
   Sonnet (5 or newer) by default; the highest-tier model (currently Fable) for a
   large/complex PR; if the top tier is unavailable for such a PR, run TWO review-single
   passes — one Sonnet and one Opus — and union their findings (never Opus as a sole
@@ -61,6 +62,15 @@ Args: `{{ args }}`
 
 ## Step 1 — Review feedback
 
+**Arm the CI wait NOW, in parallel with the reviews.** CI runs on the pushed head
+regardless of review state, so start `sh scripts/agent/wait-checks.sh --repo "$OWNER_REPO"
+--pr "$PR"` as a background command (stdout to a result file) at the top of Step 1 — by
+the time the review gate closes, a clean PR's checks are already green and Step 2 merges
+without a second wait. Rules: a fix push re-triggers CI — re-arm the wait after the LAST
+fix push (stop the stale one first); the early verdict is only valid for the head SHA it
+watched (compare before reusing it in Step 2); and if the flow aborts anywhere, `TaskStop`
+this wait as part of the trigger sweep — no orphaned waits.
+
 **Review sources on every PR:**
 
 - **Claude adversarial review (Step 1d) — ALWAYS.** Spawn it **first**, before
@@ -108,9 +118,13 @@ sh scripts/agent/wait-reviewer.sh --repo "$OWNER_REPO" --pr "$PR" \
 # checks instead (CLAUDE.md "No orphaned waits" #4).
 ```
 
-- **`ACK`** (any CodeRabbit message appeared — including a quota/rate-limit notice) → **Step 1b**.
-  Step 1b's content-first wait decides FINISHED vs QUOTA; a quota notice alone is NOT treated as
-  "won't review" here, because CR often posts one transiently and then reviews.
+- **`ACK`** (any CodeRabbit message appeared) → **QUOTA fast-path check first**: read the
+  CodeRabbit messages once. If the ONLY content is a rate-limit notice (no inline comments,
+  no submitted review, no "actionable comments" header) whose own "Next review available
+  in" time is **> 5 minutes**, apply the 5-minute rule immediately — CodeRabbit is dropped
+  for this flow, do NOT arm the Step-1b finished wait at all; surface the skip. A notice
+  quoting **≤ 5 minutes**, or any real review content beside the notice, → **Step 1b** as
+  normal (content-first: CR often posts a transient notice and then reviews).
 - **`NOACK`** (silent for the full window) → **Step 1c** (nudge before giving up).
 - **`QUOTA`** is no longer emitted by 1a (it is decided in 1b). When Step 1b's wait returns
   `QUOTA` — a genuine usage/rate-limit with **no** review content for the whole window —
@@ -172,12 +186,23 @@ replace CodeRabbit; when CodeRabbit never reviews it stands alone.
    `.claude/workflows/review-single.js`, the single source of truth — do NOT restate or
    re-improvise it:
    `Workflow({name: 'review-single', args: {pr: N, base: '<base>', worktree: '<path>',
-   spec: '<see below>', model: 'sonnet'}})`.
+   spec: '<see below>', model: 'sonnet', profile: '<full|verify>'}})`.
    Your (orchestrator) duties around that call:
    - **Build the `spec`** from the work item's intent — the issue/ADR link, its
      acceptance criteria / coverage matrix, and the PR body. A diff-only reviewer can
      never catch "asked for ALL X, delivered a subset, claimed completeness"; only
      diff-vs-spec exposes it.
+   - **Pick the profile mechanically** (owner authorization 2026-07-14, "do all 6").
+     `profile: verify` — the lighter claims-verification pass at effort `high` — is
+     allowed IFF the diff is objectively data/pin/config-only: run
+     `git diff <base>...HEAD -- ':!*.md' | grep '^+' | grep -vE '^\+\+\+|^\+\s*(#|//)'`
+     and confirm ZERO added lines contain shell/PHP/Python/JS control flow or
+     definitions (`if`/`for`/`while`/`case`/`function`/`def`/`=>`/`&&`/`||`/pipes/
+     subshells) — paste the (empty) grep into the audit comment as the classifier
+     evidence. ANY hit, any doubt, or any `src/` behaviour surface → `profile: full`
+     at `xhigh` (the default). The verify prompt re-checks the classification itself
+     and returns a blocking "profile escalation required" finding on a miss — treat
+     that finding as mandatory: re-run with `profile: full`, never argue with it.
    - **Pick the model** by the PR's size and complexity, and record the chosen model +
      the size metric that drove it in the Step-1d.5 audit comment: `model: sonnet`
      by default; the highest-tier model (currently `fable`) for a large/complex PR —
@@ -188,7 +213,9 @@ replace CodeRabbit; when CodeRabbit never reviews it stands alone.
      `model: opus` — and treat the UNION of findings as the review (dedup by
      file/line before triage). **Never Opus as a sole reviewer, never a multi-agent
      fan-out** (user directive 2026-07-11 — `review-fanout` runs only on an explicit
-     user request), never below `xhigh`, never `max`; the bare family alias resolves
+     user request), never `max`; effort floor is `xhigh` for `profile: full` and
+     `high` for `profile: verify` (owner authorization 2026-07-14) — never below the
+     profile's floor; the bare family alias resolves
      to the LATEST generation (Sonnet 5 or newer) — never pin a dated model ID.
    - **Validate the result**: treat `findings` as the review; `per_file` must cover
      every changed file (a review missing files is incomplete — re-run it).
@@ -231,7 +258,14 @@ replace CodeRabbit; when CodeRabbit never reviews it stands alone.
    **The re-review is ALWAYS delta-scoped and runs `model: sonnet`** regardless of the
    original pass's tier (owner directive 2026-07-14) — re-reviewing the entire PR after a
    feedback fix wastes the wall-clock the fix was meant to save; the whole-PR pass already
-   happened and stands.
+   happened and stands. **Convergence rule (owner authorization 2026-07-14): the
+   fix→delta-re-review loop continues only while the latest round returned a `blocking`
+   finding.** A round whose findings are all nitpicks (or none) closes the recursion —
+   triage its nits inline (APPLY trivially or SKIP/DEFER with reason) with NO further
+   re-review round; record the closing round in the audit comment. Rationale: the
+   delta rounds exist to catch regressions in fix commits; a blocking-free round is
+   convergence, and unbounded recursion was the observed cost (PR #1311 round 3: 9 min
+   for one cosmetic nit).
 5. **Record the review on the PR** — post one comment summarising the Claude adversarial
    review (and noting CodeRabbit's, if one arrived) plus the per-finding
    resolution (applied + commit / skipped + reason / deferred + tracking-issue link), so there is an
@@ -321,13 +355,19 @@ it may not be clean.
   waits for the real CI checks to go green (CodeRabbit excluded — never block on the
   bot), merges with `--rebase` (never a merge commit, never squash), and deletes the
   remote branch.
+- **Hand over the early CI verdict** (armed at the top of Step 1): when that wait
+  already returned `PASS` AND the head SHA it watched is still the PR head (no pushes
+  or rebase since — compare `gh pr view --json headRefOid` against the SHA the wait
+  saw), tell `pr-merge` so it can skip its own wait. A rebase or fix push invalidates
+  the early verdict — `pr-merge` then waits normally on the re-triggered run.
 - `pr-merge` already refuses a draft / red / conflicting PR — honour its abort and
   report rather than forcing.
 
 ## Definition of done
 
 - Review resolved (note which reviews landed — the always-on single-agent Claude
-  adversarial review and its model (`sonnet`, or `fable` on a large/complex PR; always `xhigh`),
+  adversarial review with its model and profile (`sonnet`, or `fable` on a large/complex
+  PR; `xhigh` for `full`, `high` for `verify` + the classifier grep evidence),
   Copilot when it reviewed, CodeRabbit when it reviewed, plus any terminal Snyk
   `failure` finding); PR merged by rebase; remote branch deleted.
 - Sync the work item's labels (an issue's `Waiting PR` removed on merge), per
