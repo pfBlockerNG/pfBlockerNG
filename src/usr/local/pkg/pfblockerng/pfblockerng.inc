@@ -16653,7 +16653,8 @@ function sync_package_pfblockerng($cron='') {
 
 							// issue #1270: normalize (same \W-strip as before) + reject a header
 							// colliding with a package-owned name; the DNSBLIP synthesized row is exempt.
-							$pfb_norm_hdr = pfb_normalize_row_header($row['header']);
+							// Cast: a row missing 'header' (foreign config) is NULL, which TypeErrors below.
+							$pfb_norm_hdr = pfb_normalize_row_header((string) ($row['header'] ?? ''));
 							if ($pfb_norm_hdr['reserved_error'] !== '' && $key !== $dnsblip_lists_key) {
 								$pfb_reserved_skips[] = "{$pfb_norm_hdr['header']} ({$ltype})";
 								continue;
