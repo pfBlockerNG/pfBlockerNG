@@ -340,8 +340,40 @@ $ python3 -m mypy tests/
   Success: no issues found in 102 source files
 
 $ bash scripts/agent/run-gates.sh --diff origin/devel   (run AFTER the
-  gate-repair commit, same gotcha as the original phase-1 GATES section
-  above: the diff-detection needs the commit to exist)
+  gate-repair commit; --diff origin/devel walks the WHOLE branch diff since
+  origin/devel, i.e. also 8ef9d145's + 2112d62d's files, not just this
+  commit's 3)
+  GATE PASS: python3 -m pytest
+  GATE PASS: ruff check .
+  GATE PASS: ruff format --check .
+  GATE SKIP: mypy tests/ (TOOL-MISSING: mypy)
+  GATE PASS: php -l tests/php/TldBridgeEmitTest.php
+  GATE PASS: vendor/bin/phpunit
+  GATE PASS: composer phpstan
+  GATE PASS: composer phpcs -- --standard=phpcs.xml.dist src/
+  GATE PASS: npx markdownlint-cli2
+  GATES: FAIL (script default: any SKIP fails the run)
+  Environment gotcha, not a real defect: this worktree has mypy installed
+  as a pip package with no bare `mypy` executable on PATH (only
+  `python3 -m mypy` resolves -- confirmed: `command -v mypy` -> exit 1,
+  `python3 -m mypy --version` -> "mypy 2.1.0"), and the script's mypy gate
+  command is the bare `mypy tests/`. Pre-existing, not introduced by this
+  fix pass -- the pre-commit hook hit the identical gap on THIS commit
+  ("[pre-commit] skipped (tool not found): mypy"), and it is diff-independent
+  (an environment fact, would reproduce identically against 8ef9d145 or
+  2112d62d). The actual check already ran and passed manually above
+  (`python3 -m mypy tests/` -> "Success: no issues found in 102 source
+  files"). Re-running with the script's documented escape hatch:
+$ bash scripts/agent/run-gates.sh --diff origin/devel --allow-missing
+  GATE PASS: python3 -m pytest
+  GATE PASS: ruff check .
+  GATE PASS: ruff format --check .
+  GATE SKIP: mypy tests/ (TOOL-MISSING: mypy)
+  GATE PASS: php -l tests/php/TldBridgeEmitTest.php
+  GATE PASS: vendor/bin/phpunit
+  GATE PASS: composer phpstan
+  GATE PASS: composer phpcs -- --standard=phpcs.xml.dist src/
+  GATE PASS: npx markdownlint-cli2
   GATES: PASS
 
 BEHAVIOUR-PRESERVING ORACLE, NO RED RUN (fix pass): same CLAUDE.md Test
