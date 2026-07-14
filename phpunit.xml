@@ -14,9 +14,17 @@
     </testsuites>
     <source>
         <include>
-            <!-- The behavioural target: the core package include. Coverage is
+            <!-- Every file defining a #[CoversFunction]/#[CoversClass] target must be
+                 listed: php-code-coverage >= 12 rejects targets outside <source> (a
+                 warning per test, and warnings fail the run). Coverage itself stays
                  informational for now (no enforced floor — see issue #39 / #38). -->
             <file>src/usr/local/pkg/pfblockerng/pfblockerng.inc</file>
+            <file>src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc</file>
+            <file>src/usr/local/www/pfblockerng/pfblockerng_alerts.php</file>
+            <file>src/usr/local/www/pfblockerng/pfblockerng_log.php</file>
+            <file>src/usr/local/www/widgets/include/widget-pfblockerng.inc</file>
+            <file>src/usr/local/www/widgets/widgets/pfblockerng.widget.php</file>
+            <file>src/usr/local/www/wizards/pfblockerng_wizard.inc</file>
         </include>
     </source>
 </phpunit>

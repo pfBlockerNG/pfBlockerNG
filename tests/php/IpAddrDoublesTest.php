@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
@@ -28,12 +27,11 @@ use PHPUnit\Framework\TestCase;
  *     so a non-link-local zoned address ('2001:db8::1%em0') was wrongly
  *     accepted by the old double instead of failing validation. This flip IS
  *     observable off-appliance (confirmed red on the old double, green here).
+ *
+ * No #[CoversFunction] here: the covered functions are the test doubles in
+ * tests/php/pfsense_doubles.php, and coverage targets must live in phpunit.xml's
+ * <source> (production files only) — php-code-coverage >= 12 warns otherwise.
  */
-#[CoversFunction('is_ipaddrv4')]
-#[CoversFunction('is_ipaddrv6')]
-#[CoversFunction('is_ipaddr')]
-#[CoversFunction('is_linklocal')]
-#[CoversFunction('is_port')]
 final class IpAddrDoublesTest extends TestCase
 {
 	// --- is_ipaddrv4() --------------------------------------------------------
