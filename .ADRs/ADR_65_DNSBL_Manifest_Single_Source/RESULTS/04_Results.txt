@@ -200,9 +200,20 @@ GATES
   every gate line `GATE PASS`, final `GATES: PASS` (also ran php -l on
   pfblockerng_extra.inc/DnsblQueryClientTest.php -- Phase-3 commits already on
   this branch vs. origin/devel, unrelated to this phase's own diff).
-- `python3 scripts/check_comment_narration.py --diff origin/devel`,
-  `check_version_literals.py --diff origin/devel`,
-  `check_retired_tokens.py --diff origin/devel`: all exit 0, no findings.
+- `python3 scripts/check_comment_narration.py --diff origin/devel` and
+  `check_version_literals.py --diff origin/devel`: exit 0, no findings.
+- `check_retired_tokens.py --diff origin/devel`: CORRECTION (gate finding --
+  the original handoff wrongly claimed exit 0/no findings): it exits 1 with
+  two warn-only token findings, both false positives of the >=3-removals
+  retirement heuristic. Removing the strike-render blocks dropped >=3 lines
+  quoting '</s><br />' and '<small>...</small>', and the surviving sites are
+  UNRELATED uses of the same generic HTML fragments: the kept
+  pfb_dnsbl_feed_group_cell strike renderer (:2790-2798), the DNS-reply
+  converter's own strike renderer (:2760-2768), an IP-alias-rule strike
+  (:3272), and truncation-ellipsis sites (:2013/:2351/:2368 and siblings) --
+  none is a leftover of the removed re-check. Checker is warn-only during
+  rollout (CLAUDE.md); no code change required. Verified independently by the
+  phase verifier and the orchestrator (both runs identical).
 - `git grep -n "pfb_dnsbl_parse('alerts'" -- src/` -> zero hits (exit 1).
   `git grep -n "pfb_dnsbl_parse('daemon'" -- src/` -> zero hits (exit 1).
   `git grep -n 'function pfb_dnsbl_parse' -- src/` -> both definitions present
