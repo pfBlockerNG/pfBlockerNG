@@ -21,15 +21,18 @@ printf '%s\n' "${TOKEN_SAVIOR_MAX_FILE_SIZE:-UNSET}"
 EOF
     chmod +x "${WORK}/venv/bin/token-savior"
     default_source="$(sed -n 's/^TS_SOURCE="\${TS_SOURCE:-\(.*\)}"$/\1/p' "${SCRIPT}")"
+    # Loud guard: an empty extraction (launcher assignment reformatted) would
+    # silently send every example down the slow venv-rebuild path.
+    [ -n "${default_source}" ] || { echo "TS_SOURCE extraction failed — launcher line reformatted?" >&2; return 1; }
     printf '%s\n' "${default_source}" > "${WORK}/venv/.pfb-ts-source"
   }
 
-  cleanup() { rm -rf "${WORK}"; }
+  cleanup() { [ -n "${WORK}" ] && rm -rf "${WORK}"; [ ! -d "${WORK}" ] || return 1; }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
   It 'exports an index-glob default covering the languages the server misses'
-    When run env -u INCLUDE_PATTERNS TS_VENV="${WORK}/venv" sh "${SCRIPT}"
+    When run env INCLUDE_PATTERNS="" TS_VENV="${WORK}/venv" sh "${SCRIPT}"
     The status should be success
     The output should include '**/*.php'
     The output should include '**/*.inc'
@@ -44,7 +47,7 @@ EOF
   End
 
   It 'raises the index size cap so pfblockerng.inc (~844 KB) gets indexed'
-    When run env -u TOKEN_SAVIOR_MAX_FILE_SIZE TS_VENV="${WORK}/venv" sh "${SCRIPT}"
+    When run env TOKEN_SAVIOR_MAX_FILE_SIZE="" TS_VENV="${WORK}/venv" sh "${SCRIPT}"
     The status should be success
     The line 2 of output should equal '2000000'
   End
@@ -82,7 +85,7 @@ EOF
     chmod +x "${WORK}/shim/python3"
   }
 
-  cleanup() { rm -rf "${WORK}"; }
+  cleanup() { [ -n "${WORK}" ] && rm -rf "${WORK}"; [ ! -d "${WORK}" ] || return 1; }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
@@ -115,5 +118,40 @@ EOF
     The status should be success
     The output should equal 'KEPT'
     The file "${WORK}/venv/pip-args.log" should not be exist
+  End
+
+  It 'waits on a concurrent rebuild lock and proceeds once the holder finishes'
+    # Holder simulation: a background job plants the finished venv and releases
+    # the lock; the launcher must wait instead of racing the rebuild.
+    When run env PATH="${WORK}/shim:${PATH}" TS_VENV="${WORK}/venv" TS_SOURCE='custom-source' TS_LOCK_WAIT=10 sh -c '
+      mkdir -p "${TS_VENV}.rebuild.lock"
+      (
+        sleep 1
+        mkdir -p "${TS_VENV}/bin"
+        printf "#!/bin/sh\nprintf WAITED\n" > "${TS_VENV}/bin/token-savior"
+        chmod +x "${TS_VENV}/bin/token-savior"
+        printf "%s\n" "custom-source" > "${TS_VENV}/.pfb-ts-source"
+        rmdir "${TS_VENV}.rebuild.lock"
+      ) &
+      exec sh "$1"' _ "${SCRIPT}"
+    The status should be success
+    The output should equal 'WAITED'
+  End
+
+  It 'fails loudly when a concurrent rebuild lock never clears'
+    mkdir -p "${WORK}/venv.rebuild.lock"
+    When run env PATH="${WORK}/shim:${PATH}" TS_VENV="${WORK}/venv" TS_LOCK_WAIT=1 sh "${SCRIPT}"
+    The status should be failure
+    The stderr should include 'concurrent rebuild'
+  End
+
+  It 'refuses a non-absolute TS_VENV instead of rm -rf-ing a relative path'
+    # Contained sandbox: an unguarded launcher would rm -rf . right here.
+    mkdir -p "${WORK}/sandbox"
+    printf 'keep\n' > "${WORK}/sandbox/marker"
+    When run sh -c 'cd "$1" && PATH="$3" TS_VENV=. exec sh "$2"' _ "${WORK}/sandbox" "${SCRIPT}" "${WORK}/shim:${PATH}"
+    The status should be failure
+    The stderr should include 'refusing'
+    The file "${WORK}/sandbox/marker" should be exist
   End
 End
