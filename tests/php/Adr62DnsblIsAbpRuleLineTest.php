@@ -71,6 +71,15 @@ final class Adr62DnsblIsAbpRuleLineTest extends TestCase
 			'comma-prefixed network anchor'          => [',||x^', false],
 			'bare comma'                             => [',', false],
 			'comma-prefixed, marker at position 1'   => [',,##x', false],
+			// issue #1276: a hosts-dialect whole-line comment ('## Section', a
+			// marker at position 0 followed by whitespace) shares its shape with
+			// a real generic cosmetic rule ('##selector') -- must stay on the
+			// plain '#'-comment path, not be captured as an ABP element-hiding row.
+			'hosts-dialect header, marker+space'         => ['## Section header', false],
+			'hosts-dialect header, marker+tab'           => ["##\tSection", false],
+			'sibling marker hosts-dialect, marker+space' => ['#@# note', false],
+			'sibling marker exception rule, no space'    => ['#@#selector', true],
+			'bare marker, nothing after'                 => ['##', false],
 		];
 	}
 

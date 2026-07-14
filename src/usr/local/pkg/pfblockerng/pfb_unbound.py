@@ -3972,6 +3972,10 @@ def _dnsbl_is_abp_rule_line(line: str) -> bool:
     comments by feed convention, never ``/re/`` regex rules. A leading ``,``
     is never valid ABP syntax (empty first cosmetic domain-list entry) and
     is excluded up front.
+
+    issue #1276: a marker AT position 0 also needs a non-whitespace char right
+    after it -- else a hosts-dialect '## Section' whole-line comment is
+    wrongly captured as a rule.
     """
     # issue #1067: a leading comma is never valid ABP syntax (empty first cosmetic
     # domain-list entry) -- a comma-first verbatim capture would collide with the
@@ -3981,10 +3985,15 @@ def _dnsbl_is_abp_rule_line(line: str) -> bool:
     if line.startswith("||") or line.startswith("@@"):
         return True
     if "#" in line:
-        positions = [p for p in (line.find(m) for m in _DNSBL_ELEMENT_HIDING_MARKERS) if p != -1]
-        if positions:
-            first = min(positions)
-            if first == 0 or all(c in _DNSBL_ABP_COSMETIC_PREFIX_CHARS for c in line[:first]):
+        hits = [(line.find(m), len(m)) for m in _DNSBL_ELEMENT_HIDING_MARKERS]
+        hits = [(p, marker_len) for p, marker_len in hits if p != -1]
+        if hits:
+            first, marker_len = min(hits)
+            if first == 0:
+                after = line[marker_len : marker_len + 1]
+                if after and after not in (" ", "\t"):
+                    return True
+            elif all(c in _DNSBL_ABP_COSMETIC_PREFIX_CHARS for c in line[:first]):
                 return True
     if line.startswith("/") and not line.startswith("//"):
         if line.endswith("/") and len(line) > 1:
