@@ -281,8 +281,8 @@ Describe 'pfb_recompute() v4 cross-feed dedup (Stage A/B/D/E)'
 		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
 		The status should be success
 		# the whitespace-only row's OWN emitted file is governed by the unrelated,
-		# out-of-scope :1053/:1221 blank-filter sites -- only the cumulative-dedup
-		# wipe of the disjoint feed is this fix's contract.
+		# out-of-scope per-alias direct-emit/reputation-keep blank filters -- only
+		# the cumulative-dedup wipe of the disjoint feed is this fix's contract.
 		The contents of file "${pfbdeny}Disjoint_v4.txt" should equal '198.51.100.71'
 		The contents of file "$countsfile" should include 'Disjoint_v4 1'
 	End
@@ -297,13 +297,19 @@ Describe 'pfb_recompute() v4 cross-feed dedup (Stage A/B/D/E)'
 		The contents of file "$countsfile" should include 'Disjoint_v4 1'
 	End
 
-	It 'a whitespace-only line mixed with a valid row in the same snapshot never wipes a later disjoint feed (issue #1279)'
+	It 'a whitespace-only line mixed with a valid row in the same snapshot never wipes a later disjoint feed, and the valid row still dedups (issue #1279)'
 		printf '203.0.113.50\n   \n' > "${snap}/Mixed_v4.orig"
 		printf '198.51.100.73\n' > "${snap}/Disjoint_v4.orig"
-		printf '%s\n%s\n' "${snap}/Mixed_v4.orig" "${snap}/Disjoint_v4.orig" > "$memberlist"
+		# a third, lowest-priority repeat of Mixed's OWN valid row: proves that row
+		# reached rec_cumulative (not just that Disjoint survived) -- a bad fix that
+		# skips a whole owned-file on any embedded blank line would leave this repeat
+		# undeduped instead of empty.
+		printf '203.0.113.50\n' > "${snap}/Repeat_v4.orig"
+		printf '%s\n%s\n%s\n' "${snap}/Mixed_v4.orig" "${snap}/Disjoint_v4.orig" "${snap}/Repeat_v4.orig" > "$memberlist"
 		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
 		The status should be success
 		The contents of file "${pfbdeny}Disjoint_v4.txt" should equal '198.51.100.73'
+		The contents of file "${pfbdeny}Repeat_v4.txt" should equal ''
 	End
 
 	It 'a pattern row with surrounding whitespace still counts as valid content and dedups a later feed exact repeat (issue #1279 -- do not over-fix into stripping valid rows)'

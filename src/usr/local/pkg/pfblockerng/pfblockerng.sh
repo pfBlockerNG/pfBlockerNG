@@ -951,11 +951,12 @@ pfb_recompute() {
 		fi
 
 		if [ "${rec_dedup}" = 'on' ]; then
-			# issue #1084: blank-filtered -- an unfiltered blank line still gives
-			# the cumulative nonzero size (the `-s` guard above no longer sees it
-			# as empty), so a later alias hits grepcidr with a pattern-free file,
-			# which prints NOTHING for -vf (not "keep everything"): it would wipe
-			# every row of every lower-priority feed sharing this pass.
+			# issue #1084/#1279: blank/whitespace-filtered -- an unfiltered blank
+			# OR whitespace-only line still gives the cumulative nonzero size (the
+			# `-s` guard above no longer sees it as empty), so a later alias hits
+			# grepcidr with a pattern-free file, which prints NOTHING for -vf (not
+			# "keep everything"): it would wipe every row of every lower-priority
+			# feed sharing this pass.
 			if ! awk 'NF' "${rec_ownedfile}" >> "${rec_cumulative}"; then
 				log="recompute [ ${rec_family} ]: could not extend cumulative dedup stream for [ ${rec_alias} ]; aborting pass, cleaning up partial artifacts"
 				echo "${log}" | tee -a "${errorlog}"
