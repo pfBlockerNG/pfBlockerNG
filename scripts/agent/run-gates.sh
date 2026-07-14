@@ -103,12 +103,9 @@ main() {
 	# --diff-filter=ACMR: a pure deletion stages nothing to lint (same rule as the
 	# pre-commit hook) -- per-file gates against ghost paths would always fail.
 	committed=$(git -C "$worktree" diff --name-only --diff-filter=ACMR "$base...HEAD") || exit 2
-	# issue #1293: union with uncommitted (staged+unstaged) changes -- else gates
-	# run pre-commit see nothing and print a vacuous bare GATES: PASS. Staged and
-	# unstaged are unioned SEPARATELY (not via a single `diff HEAD`): `git diff
-	# <commit>` compares the WORKING TREE to that commit, so a file staged then
-	# reverted back to HEAD's content in the working tree (index != HEAD, worktree
-	# == HEAD) is invisible to `diff HEAD` alone though `git status` still flags it.
+	# issue #1293: union with uncommitted changes, else gates see nothing pre-commit.
+	# staged/unstaged unioned SEPARATELY, not via one `diff HEAD` -- `diff <commit>`
+	# reads the WORKING TREE, so a staged-then-worktree-reverted file is invisible.
 	staged=$(git -C "$worktree" diff --name-only --diff-filter=ACMR --cached) || exit 2
 	unstaged=$(git -C "$worktree" diff --name-only --diff-filter=ACMR) || exit 2
 	files=$(printf '%s\n%s\n%s\n' "$committed" "$staged" "$unstaged" | LC_ALL=C sort -u | grep -v '^$')

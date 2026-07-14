@@ -216,10 +216,8 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The lines of output should equal 4
   End
 
-  # A `git diff <commit>` (no --cached) compares the WORKING TREE to that commit,
-  # not the index -- so a file staged then reverted back to HEAD's content in the
-  # working tree (index != HEAD, worktree == HEAD) is invisible to a lone `diff
-  # HEAD`, though `git status`/`diff --cached` still show it as staged.
+  # See run-gates.sh's staged/unstaged split comment for why: a lone `diff HEAD`
+  # misses this shape.
   It 'plans gates for a staged edit whose working-tree copy was reverted back to HEAD'
     head_sha=$(gitc rev-parse HEAD)
     printf '#!/bin/sh\n# staged edit\ntrue\n' > "$repo/scripts/kept.sh"
