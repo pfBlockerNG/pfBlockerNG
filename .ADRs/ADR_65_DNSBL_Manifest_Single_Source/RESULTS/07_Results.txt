@@ -1,0 +1,335 @@
+ADR-65 PHASE 7 -- RESULTS
+================================================================================
+VERDICT: DONE-WITH-DEVIATION
+Commit:  5c20efe3e9542198777b361f84fd95cc4c456131 (tests only -- the
+         functional change this phase implements) plus a follow-up doc-only
+         commit landing this handoff file itself -- the brief asked for ONE
+         commit; writing this RESULTS file necessarily happens after the
+         gates it reports on finish, so it could not be part of the same
+         commit as the code it describes without a self-referential
+         placeholder (the P1/P5/P6 precedent this file's own brief
+         pre-authorized). Recorded as the deviation; both commits are on
+         this branch, in order.
+Branch:  adr/65-dnsbl-manifest-single-source
+base_sha (pre-fix baseline for the verifier): c4ec742075d509791b04d7c4ca170f8194f339bb
+         (post-rebase tip -- see DEVIATIONS #1 for the rebase itself).
+
+--------------------------------------------------------------------------------
+WHAT CHANGED
+--------------------------------------------------------------------------------
+tests/smoke/ui/test_alerts_render_verify.py
+  - Module docstring: DNSBL rows no longer go through a re-validation
+    pipeline (only the IP-side rows still do); DNSBL rows render the logged
+    group/feed verbatim and the cache/data/zone seeds are now BAIT the page
+    must ignore.
+  - Constants comments: D7/D8 narrative reworded to historical past tense
+    (what pfb_dnsbl_prefetch/parse_compute USED to exercise; both now pin
+    logged-fields rendering with metachar domains regardless). D3_GROUP/
+    D3_FEED comment: "isolates mode+domain drift" -> "mode+domain are the
+    bait discriminators".
+  - GET_MATRIX ("alert_filterdnsbl" entry): filter value D1_CACHE_GROUP ->
+    D1_LOGGED_GROUP (filtering now matches the LOGGED group, ADR-65 D2).
+  - _sqlite_open_guarded() docstring: "the exact opener the Alerts page
+    itself runs" -> "the package's own opener" (the page no longer opens
+    this DB on render at all).
+  - _seed_dnsbl_cache() docstring: "so the render deterministically drifts
+    (strikes...)" -> "bait: the render must IGNORE it (ADR-65 D2)".
+  - render_diff_state fixture comment (GET-matrix rerun): dropped the
+    "dnsblcache side effect from GET #1" framing (the page never writes to
+    dnsblcache on render post-D2) -> "the idempotent re-render check".
+  - test_baseline_excludes_seed_tokens: url_echoed's alert_filterdnsbl entry
+    + the token tuple updated to D1_LOGGED_GROUP (still exempts/asserts
+    D1_CACHE_GROUP too -- it stays seeded bait that must be absent
+    pre-seed).
+  - SIX RECONCILED + RENAMED TESTS (the phase's core deliverable):
+    * test_d1_cache_hit_drift_renders_cache_groupname ->
+      test_d1_cache_bait_ignored_renders_logged_fields: asserts LOGGED
+      group/feed present, no "<s>", cache-bait group/feed absent.
+    * test_d2_data_hit_drift_renders_data_feed ->
+      test_d2_data_bait_ignored_renders_logged_fields: same shape, data-bait
+      absent.
+    * test_d3_zone_hit_renders_tld_mode ->
+      test_d3_zone_bait_ignored_renders_logged_mode_and_domain: asserts no
+      struck-mode/struck-domain markup, "TLD" absent (mode stays DNSBL), the
+      LOGGED-domain threat href present, the re-attributed PARENT href
+      absent (substring-safe: "...=rv809-z1.com" is not a substring of
+      "...=sub.rv809-z1.com", the '=' vs '.' boundary).
+    * test_d4_delisted_renders_unknown ->
+      test_d4_total_miss_renders_logged_fields_not_unknown: LOGGED
+      group/feed present, no "<s>", "Unknown" ABSENT (was asserted present).
+    * test_d7_uncovered_metachar_domain_renders_unknown ->
+      test_d7_uncovered_metachar_domain_renders_logged_fields: same
+      not-Unknown shape as D4.
+    * test_d8_covered_metachar_domain_found_via_per_row_fallback ->
+      test_d8_covered_metachar_domain_data_bait_ignored: LOGGED group/feed
+      present, no "<s>", data-bait absent, "Unknown" absent.
+  - test_filterdnsbl_narrows_to_group: reworded docstring (filterdnsbl sets
+    filterfieldsarray[1][13] -- the LOGGED group, ADR-65 D2); assertion now
+    checks D1_LOGGED_GROUP present (was D1_CACHE_GROUP), D2_LOGGED_GROUP
+    absent (unchanged), NEW: D1_CACHE_GROUP absent (the filtered view must
+    not resurrect a cached value).
+  - test_alert_view_stable_across_cache_populate_rerender: NOT renamed (not
+    one of the six; assertions byte-unchanged). Docstring reworded from
+    "dnsblcache round-trip stability" to "idempotent re-render" (the page
+    never touches dnsblcache on render post-D2, so GET#12 vs GET#1 is now a
+    plain re-render pin, not a cache-round-trip pin).
+
+tests/smoke/test_smoke_matrix.py
+  - Two docstrings (module-level + test_dnsbl_python_exact_vip) reworded:
+    "the feed is written to pfb_py_data.txt as EXACT entries (inc:8966-8970;
+    ...)" -> "the manifest build loads the feed into dataDB as EXACT
+    entries" (post-ADR-65-D1 reality; pfb_py_data.txt is no longer written).
+    Assertions (DNS probes) untouched.
+
+.ADRs/ADR_65_DNSBL_Manifest_Single_Source/RESULTS/07_Results.txt
+  - This handoff (follow-up doc-only commit, see DEVIATIONS #1).
+
+--------------------------------------------------------------------------------
+GATES (exact commands + pasted tails)
+--------------------------------------------------------------------------------
+1) Collection proof (executed BEFORE the commit, re-confirmed after):
+   $ sh -c 'python3 -m pytest tests/smoke/ui/test_alerts_render_verify.py \
+       tests/smoke/ui/test_alerts.py tests/smoke/test_smoke_matrix.py \
+       --collect-only -q --override-ini="addopts="'
+     ... (tail) ...
+     71 tests collected in 0.10s
+
+   Two-file total (the six renames must not change the count):
+   $ sh -c 'python3 -m pytest tests/smoke/ui/test_alerts_render_verify.py \
+       tests/smoke/ui/test_alerts.py --collect-only -q --override-ini="addopts="'
+     51 tests collected in 0.03s
+   IDENTICAL to the pre-edit baseline (brief section 3: "51 tests collected
+   in 0.03s") -- renames only, zero add/remove.
+
+2) sh scripts/agent/run-gates.sh --diff origin/devel (gateshim dir with a
+   `mypy` wrapper prepended to PATH):
+     GATE PASS: python3 -m pytest
+     GATE PASS: ruff check .
+     GATE PASS: ruff format --check .
+     GATE PASS: mypy tests/
+     GATE PASS: php -l (16 files, listed)
+     GATE PASS: vendor/bin/phpunit
+     GATE PASS: composer phpstan
+     GATE PASS: composer phpcs -- --standard=phpcs.xml.dist src/
+     GATE PASS: npx markdownlint-cli2
+     REMINDER: www/ touched -- Tier-A ui_render coverage is required and
+       cannot be script-checked (test mandate #4) -- this reflects the
+       WHOLE branch's cumulative diff vs origin/devel (prior phases touched
+       www/); this phase's own diff touches ZERO www/ files (`git diff
+       --stat -- src/usr/local/www/` against base_sha is empty).
+     GATES: PASS
+
+3) POST-COMMIT (per RESULTS/06's process learning -- these diff committed
+   history, a pre-commit run is vacuous):
+   $ python3 scripts/check_comment_narration.py --diff origin/devel
+     exit=0
+   $ python3 scripts/check_version_literals.py --diff origin/devel
+     exit=0
+
+4) POST-COMMIT, WARN-ONLY: python3 scripts/check_retired_tokens.py --diff origin/devel
+     exit=1 (findings, not a tool error -- expected per the tool's contract)
+     24 token-groups reported, IDENTICAL SET to RESULTS/06's documented
+     24-token FP baseline:
+       ' completed\n' (1), '</s><br />' (7), '<small>...</small>' (12),
+       'DNSBL' (1184), 'DNSBL_TLD' (21), 'Domain' (269, was 270),
+       'Failed to load: {}: {}' (4), 'Feed' (228), 'Group' (1092),
+       '[pfBlockerNG]: Failed to load: {}: {}' (2), 'alerts' (205),
+       'domain_max_cnt' (1), 'important' (155), 'index' (240),
+       'pfb_feed' (124), 'pfb_final' (12), 'pfb_group' (19), 'pfb_mode' (12),
+       'python_blacklist' (15), 'redirect' (133), 'render' (177),
+       'transparent' (5), 'unified' (95), 'wildcard' (174).
+     ZERO NEW token-groups introduced by this phase's commit. The lone count
+     drift ('Domain' 270->269) is NOT from this phase's own diff -- verified:
+       $ git show <base_sha>:tests/smoke/ui/test_alerts_render_verify.py | grep -c Domain
+         5
+       $ grep -c Domain tests/smoke/ui/test_alerts_render_verify.py
+         5   (unchanged)
+       $ git show <base_sha>:tests/smoke/test_smoke_matrix.py | grep -c Domain
+         1
+       $ grep -c Domain tests/smoke/test_smoke_matrix.py
+         1   (unchanged)
+     Both touched files show the IDENTICAL 'Domain'-word count before/after
+     this phase's edits -- the tree-wide -1 comes from the 2 dev-only commits
+     this phase rebased onto (d66ad85a/36d37848, landed on origin/devel after
+     P6's RESULTS/06 was written), unrelated to this diff. Never claiming a
+     clean run -- every finding is the same class RESULTS/06 already
+     classified as FP, re-verified here rather than re-litigated from memory.
+
+--------------------------------------------------------------------------------
+RED->GREEN PROOF (behaviour-preserving test-maintenance; NO on-appliance run)
+--------------------------------------------------------------------------------
+This phase is pure test reconciliation: the production behaviour it pins
+(ADR-65 D2, landed in Phase 4/6) already exists on this branch; there is no
+off-appliance harness for ui_e2e (live-VM only), so no red/green pair can be
+executed in this session -- stated explicitly per the brief and the phase
+prompt's declared test mode ("behaviour-preserving test maintenance").
+
+Executed off-appliance evidence (the closest thing to red/green available
+here): the OLD six tests' literal assertions (`<s>{LOGGED}</s>` present,
+`Unknown` present for D4/D7, the struck-mode/domain markup for D3) are
+exactly the assertions that would FAIL against the current (Phase-4/6)
+production code -- they are the "red" this phase exists to fix, but that red
+can only be observed on a live VM, never claimed as run here. The reconciled
+assertions are, symmetrically, only provably "green" on that same live VM.
+
+DEFERRED, NEVER CLAIMED RUN: the reconciled tests execute on the live-VM
+CE+Plus fan-out in the ADR acceptance step:
+  python3 -m pytest tests/smoke/ui -m ui_e2e
+via the orchestrator's `scripts/local-smoke.sh` run (PFB_BOXES pool).
+
+Existence/collection carve-out invoked: brand-new-shape test maintenance
+with no off-appliance oracle (CLAUDE.md Test coverage #1's exception) --
+collection success (gate 1 above) is the only executable existence proof;
+coverage-theater is avoided because the assertions themselves encode the
+real branch conditions (verified against tests/php/
+AlertsDnsblLoggedFieldsRenderTest.php's SAME off-appliance-pinned contract:
+logged group/feed render, no "<s>", no "Previous Feed/Group/Domain"
+refinement text, filter matches the logged value -- read before editing,
+per the brief's required reading).
+
+--------------------------------------------------------------------------------
+SWEEP ENUMERATION (step 4 -- cite the grep)
+--------------------------------------------------------------------------------
+$ git grep -n -E 'pfb_py_data|pfb_py_zone|dnsblcache|pfb_dnsbl_parse|drift|struck|strike|<s>|re-check' \
+    -- tests/smoke/ ':!tests/smoke/ui/test_alerts_render_verify.py'
+
+FIXED this phase:
+  - tests/smoke/test_smoke_matrix.py:21-23, :185-187 -- stale present-tense
+    "the feed is written to pfb_py_data.txt as EXACT entries (inc:8966-8970)"
+    -> "the manifest build loads the feed into dataDB as EXACT entries".
+
+LEFT, each independently justified (matches the brief's pre-verified list,
+re-confirmed by the grep above):
+  - tests/smoke/helpers.py:3651,3691,5280-5295 -- tolerant `2>/dev/null`
+    diagnostic-harvest snippets; these also run against main-channel boxes
+    where the retired files may still exist, and :5295 already carries an
+    ADR-06 manifest-comment reconciliation from Phase 6. No behavioural
+    assertion rides these lines.
+  - tests/smoke/ui/test_alerts.py:1335-1449 -- the upstream-guard test
+    (comments name `pfb_dnsbl_parse`); BYTE-UNTOUCHED per this phase's
+    explicit constraint (`git diff <base_sha>..HEAD --stat -- tests/smoke/
+    ui/test_alerts.py` is empty -- confirmed below).
+  - tests/smoke/test_dnsbl_empty_feed.py:12 -- explicit past-tense "On
+    pre-fix code, ... the empty-feed branch deleted pfb_py_data/pfb_py_wh/
+    manifest each pass" -- describes issue #546's OWN historical pre-fix
+    behaviour, unrelated to the D2 alerts re-check.
+  - tests/smoke/ui/test_render_widget_ledger.py:360,456-469 -- a synthetic
+    ledger-fixture literal ("pfb_py_zone.txt" as an inert widget-message
+    string), pinning the widget's render contract over seeded data, not the
+    alerts re-check.
+  - IP-side "Not listed!"/struck-feed sites (test_alerts.py + this module's
+    S1-S10 series) -- Semantic 8 ("The IP alerts re-check is untouched");
+    left byte-identical by design.
+  - Every other "drift"/"re-check" hit above (conftest.py, fixtures/
+    README.md, test_smoke_adr40.py, test_smoke_feeds.py's ZIP re-check,
+    test_smoke_safesearch.py, test_software_update.py, test_stub_shapes.py,
+    test_upgrade_config_stability.py, test_reorder_component.py,
+    test_blacklist.py) -- unrelated features (config-stability drift,
+    ZIP-payload re-check, JS-version drift, etc.), not the DNSBL alerts
+    re-check this phase retires.
+
+Byte-untouched proof:
+  $ git diff c4ec742075d509791b04d7c4ca170f8194f339bb..HEAD --stat -- tests/smoke/ui/test_alerts.py
+    (empty)
+  $ git diff c4ec742075d509791b04d7c4ca170f8194f339bb..HEAD -- tests/smoke/ui/test_alerts_render_verify.py | grep '^@@'
+    @@ -1,17 +1,21 @@                                            (module docstring)
+    @@ -174,15 +178,13 @@ D3_DOMAIN = "sub.rv809-z1.com"              (D7/D8 comment)
+    @@ -190,7 +192,7 @@ D1_CACHE_GROUP, D1_CACHE_FEED = ...          (D3_GROUP comment)
+    @@ -440,7 +442,7 @@ GET_MATRIX: ...                              (filterdnsbl value)
+    @@ -549,7 +551,7 @@ def _seed_feed_files(vm: ...                 (_sqlite_open_guarded doc)
+    @@ -602,9 +604,8 @@ def _sqlite_open_guarded() -> str:           (_seed_dnsbl_cache doc)
+    @@ -710,9 +711,9 @@ def render_diff_state(...                    (fixture comment)
+    @@ -782,11 +783,11 @@ def test_baseline_excludes_seed_tokens(...   (url_echoed + token loop)
+    @@ -953,80 +954,80 @@ def test_match_still_listed_and_delisted(... (D1-D4 reconciled)
+    @@ -1042,50 +1043,42 @@ def test_d5_upstream_renders_cloud_icon...   (D7/D8 reconciled; D5 itself
+                                                    appears only as unchanged
+                                                    context, no hunk touches
+                                                    its body)
+    @@ -1170,12 +1163,13 @@ def test_filterdnsbl_narrows_to_group(...    (filterdnsbl test)
+    @@ -1228,16 +1222,14 @@ def test_reply_view_renders_seeded_domains(..(stability-test docstring)
+  Zero hunks between lines ~800-953 (the S1-S10 IP-side tests) or touching
+  test_d5_upstream_renders_cloud_icon_and_group's body -- both confirmed
+  byte-untouched.
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX
+--------------------------------------------------------------------------------
+| Brief row                                                    | Status |
+| ------------------------------------------------------------ | ------ |
+| test_d1: cache bait ignored, logged fields render             | reconciled + renamed test_d1_cache_bait_ignored_renders_logged_fields |
+| test_d2: data-file bait ignored, logged fields render         | reconciled + renamed test_d2_data_bait_ignored_renders_logged_fields |
+| test_d3: zone bait ignored, logged mode+domain kept           | reconciled + renamed test_d3_zone_bait_ignored_renders_logged_mode_and_domain |
+| test_d4: total miss no longer rewrites to Unknown             | reconciled + renamed test_d4_total_miss_renders_logged_fields_not_unknown |
+| test_d7: uncovered metachar domain, same contract             | reconciled + renamed test_d7_uncovered_metachar_domain_renders_logged_fields |
+| test_d8: covered metachar domain, data-bait ignored           | reconciled + renamed test_d8_covered_metachar_domain_data_bait_ignored |
+| Filter axis: GET_MATRIX :443 / url_echoed :785 / token loop :789 / test_filterdnsbl_narrows_to_group :1169-1178 | all four sites updated to D1_LOGGED_GROUP; new D1_CACHE_GROUP-absent assertion added |
+| Stability-test narrative (test_alert_view_stable_across_cache_populate_rerender) | docstring reworded to idempotent-re-render; assertions byte-unchanged; NOT renamed (not one of the six) |
+| In-module docstring/comment sites (module header, D7/D8 constants, D3_GROUP comment, _sqlite_open_guarded, _seed_dnsbl_cache, fixture GET-matrix comment) | all reconciled, see WHAT CHANGED |
+| test_smoke_matrix.py docstrings (:21-23, :185-187)            | reworded to manifest-build reality |
+| LEAVE: helpers.py diagnostic harvesters                        | justified in SWEEP ENUMERATION, unchanged |
+| LEAVE: test_alerts.py upstream-guard test (byte-untouched)     | `git diff --stat` empty, confirmed above |
+| LEAVE: test_dnsbl_empty_feed.py:12 (past-tense, unrelated)     | justified in SWEEP ENUMERATION, unchanged |
+| LEAVE: test_render_widget_ledger.py synthetic ledger literal   | justified in SWEEP ENUMERATION, unchanged |
+| Byte-untouched constraint (S-series, upstream test_d5, test_alerts.py) | hunk-location proof above: zero hunks in those regions |
+| Deferred-execution row (live-VM ui_e2e fan-out)                | stated verbatim in RED->GREEN PROOF, never claimed run |
+
+--------------------------------------------------------------------------------
+DEVIATIONS / JUDGMENT CALLS
+--------------------------------------------------------------------------------
+1. Rebase: this worktree was 2 commits behind origin/devel (d66ad85a "agents:
+   add Codex configuration equivalents", 36d37848 "skills: adr-create --
+   hard phase-size budget..."), both dev-only/unrelated to this ADR. Rebased
+   cleanly, no conflicts. base_sha above is the POST-rebase pre-edit tip.
+2. Two-commit shape (code commit + this follow-up doc-only handoff commit) --
+   pre-authorized by the brief, same P1/P5/P6 precedent RESULTS/06 itself
+   recorded.
+3. No ESCALATE triggered: every factual claim in the brief (the six test
+   names/line ranges, the filter-axis quadruple, the fixture/comment sites,
+   AlertsDnsblLoggedFieldsRenderTest.php's asserted contract, the 51-test
+   collection baseline) matched the live tree exactly after the rebase.
+4. No red/green run exists or is claimed for ui_e2e off-appliance (brief
+   constraint) -- see RED->GREEN PROOF section; the deferred live-VM
+   acceptance run is the only place these assertions execute.
+5. Retired-token checker: WARN-ONLY per its contract; the single count drift
+   ('Domain' 270->269) is honestly attributed to the intervening rebase
+   commits, not this phase's diff (mechanically verified above), and no new
+   token-group was introduced.
+
+--------------------------------------------------------------------------------
+CARRY-FORWARD (Phase 8 -- smoke-row authoring)
+--------------------------------------------------------------------------------
+- The reconciled logged-fields ui_e2e rows in
+  tests/smoke/ui/test_alerts_render_verify.py (six renamed tests + the
+  filter-axis + the stability-test narrative) depend on the live-VM CE+Plus
+  acceptance run to ever go green -- Phase 8/9 or the ADR acceptance step
+  must execute `python3 -m pytest tests/smoke/ui -m ui_e2e` (or a scoped
+  `--filter`) on a leased PFB_BOXES box and confirm PASS before ADR-65 can
+  flip to Accepted per the "ADR acceptance -- automated tests" rule.
+- Passed through UNTOUCHED from RESULTS/06's carry-forward (still pending,
+  explicitly NOT actioned this phase per the brief's constraints):
+  * The Python close-only wrappers (_load_zone_and_data_dbs /
+    _load_whitelist_and_hsts_dbs) and the pfb["pfb_py_data"]/
+    pfb["pfb_py_zone"] path defs in pfb_unbound.py (:1047-1048/:1065-1066/
+    :1279-1280) -- fully orphaned, a future phase's retirement candidate.
+  * The g5 grep-helper sites (pfb_dnsbl_prefetch_grep +
+    pfb_dnsbl_parse_compute's exec-grep fallback, pfblockerng.inc
+    :14336-14337/14498/14532) -- kept untouched, needs its own retirement
+    issue/phase.
+  * $pfb['unbound_py_data']/['unbound_py_zone'] path DEFS
+    (pfblockerng.inc :130-131) -- still exist; a future retirement needs the
+    g4 sweep entries in pfb_unbound_clear_work_files() updated in lockstep.
+  * $pfb['domain_max_cnt'] -- write-only orphaned config key (setter at
+    pfblockerng.inc:16353), explicitly left alone.
+  * DEFERRED smoke row: `scripts/local-smoke.sh --marker smoke --filter
+    dnsbl` on a leased PFB_BOXES box, asserting a DNSBL run blocks with NO
+    pfb_py_data.txt/pfb_py_zone.txt ever appearing on disk, and that a stuck
+    zero-downtime apply still triggers the health-check rebuild live.
+  * Retired-token FP ledger: still the 24 documented token-groups (this
+    phase re-verified the identical set, one count re-baselined:
+    'Domain' now 269, was 270 -- see GATES item 4).
+  * docs/misc/alerts-reports-pipeline.md still describes the two-phase
+    (batched-prefetch + per-row re-check) model this phase's PREDECESSOR
+    (Phase 4/6) collapsed to one streaming pass with no re-check -- a future
+    phase rewrites it; NOT touched this phase (docs are out of this
+    tests-only phase's diff budget; the brief's CONSTRAINTS list production
+    files + docs as do-NOT-touch beyond the handoff itself).
