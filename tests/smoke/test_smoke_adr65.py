@@ -475,6 +475,10 @@ def test_manifest_absent_fails_loud_and_force_reload_self_heals(adr65_vm: SmokeV
             # Unbound negative-caches; a feed allow->block is TTL-bounded by design, so clear
             # that one cached answer to observe the swapped block inside the test window.
             h.flush_unbound_name(adr65_vm, domain)
+            # The update pass can leave the resolver briefly unreachable on the CI boxes too
+            # (same async-restart gap as above) -- gate on a real answer before the probe
+            # whose value we assert.
+            _wait_resolver_answers(adr65_vm)
 
             healed = h.dns_probe(adr65_vm, domain)
             assert h.is_vip(healed), f"expected VIP block for {domain!r} again after the self-heal, got {healed!r}"
