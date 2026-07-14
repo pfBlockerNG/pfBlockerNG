@@ -132,7 +132,7 @@ class TestIniBridgeRoundTrip:
 # --------------------------------------------------------------------------- #
 # C3/C4 -- manifest writer -> reader bridge.
 # C3 (the .inc side: pfb_unbound_python_sources() derives + emits
-# config.tld_blacklist/tld_exclusion) is pinned by
+# config.tld_wildcard_blacklist/tld_wildcard_exclusion) is pinned by
 # tests/php/TldBridgeEmitTest.php (mirrors UnboundPythonSourcesTest.php). C4
 # (here): the .py READER (_dnsbl_config_from_manifest -- function name itself
 # is NOT renamed) survives the hop.

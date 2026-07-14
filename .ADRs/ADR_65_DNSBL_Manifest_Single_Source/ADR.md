@@ -90,10 +90,12 @@ mode-exclusive on the `pfb_tld` ("Enable TLD Function") setting `$pfb['dnsbl_tld
   `unlink_if_exists($py_zone)` on a **checked** success (`:1962`, the **#1241** crash-safety fix);
   a failed rename leaves a stale `py_zone.txt` (the **#1245** window).
 
-The `dnsbl_build_from_manifest` path does **not** carry `pfb_tld` — it wildcard-classifies
-via `tld_wildcard_master` (post-#1255 gated by the `python_tld_wildcard` ini flag — see the
-§1.1 update note). So `pfb_tld` OFF only reshapes the on-disk `.txt` files; it does not change
-the manifest-built decision.
+The `dnsbl_build_from_manifest` path does **not** carry `pfb_tld` directly — it
+wildcard-classifies via `tld_wildcard_master`, which post-#1255 is populated from the shipped
+`pfb_py_tld` file only when the `python_tld_wildcard` ini flag (derived from `pfb_tld`) is on
+— see the §1.1 update note. So `pfb_tld` OFF now empties the oracle and forces exact/DATA
+classification: it **does** change the manifest-built decision, superseding the pre-#1255
+claim that the toggle only reshaped the on-disk `.txt` files.
 
 ### 1.3 Three consumers of the `.txt` files (all replaceable)
 

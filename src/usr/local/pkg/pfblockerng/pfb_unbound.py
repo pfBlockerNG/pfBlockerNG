@@ -4354,7 +4354,7 @@ def tld_wildcard_classify(domain: str, tlds: dict[str, dict[str, str]], exclusio
 
 
 # --------------------------------------------------------------------------- #
-# ADR-07 Stage-B reconcile: $badfilter prune + regex reduction + tld_wildcard_classify +
+# ADR-07 Stage-B reconcile: $badfilter prune + regex reduction + data/zone classify +
 # priority bands. PURE / reentrant -- consumes the typed ``Rule`` stream from
 # Stage-A (parse_abp) into the pre-emit rule sets build() folds in; NEVER
 # compiles/executes a regex itself. Reference oracle:

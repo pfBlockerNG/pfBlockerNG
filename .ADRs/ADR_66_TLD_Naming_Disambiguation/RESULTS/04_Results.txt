@@ -182,7 +182,9 @@ NOT touched by this phase per constraints)
   P2/P3; this phase adds a THIRD green run (V1/V2 above) proving Phase 4 moved no
   behaviour either.
 - "Full canonical gates green for every touched language" -- SATISFIED this phase
-  (Markdown gate; Python gate for the two tests/smoke/*.py comment/docstring edits).
+  (Markdown gate; Python gate for the two tests/smoke/*.py comment/docstring edits),
+  modulo the documented mypy-PATH tool-availability gap (strict run-gates.sh FAIL,
+  --allow-missing PASS + manual python3 -m mypy clean -- see GATES above).
 - Remaining SS7 items (grep-zero-surviving-old-names in production, config.xml
   round-trip) were P2/P3's responsibility and are unaffected by this doc-only phase.
 - ADR-66 Status field left as "Proposed" -- flipping to Accepted is the orchestrator's

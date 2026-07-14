@@ -70,8 +70,9 @@ $ git diff origin/devel --stat -- src/
   (empty output -- confirmed no production change)
 
 $ python3 -m pytest -q
-  ... 2859 passed, 4 skipped in 55.88s [pre-commit baseline run; identical
-  after commit -- see red/green-equivalent oracle-green proof below]
+  ... 2859 passed, 4 skipped in 55.88s [pre-commit baseline run at 8ef9d145;
+  superseded by the 2868 pre-fix baseline measured in the fix-pass session --
+  see the reconciliation note near the end of this file]
 
 $ ruff check .
   All checks passed!
