@@ -227,14 +227,8 @@ def test_dnsbl_disabled_row_reserved_header_rejected_leaves_config_unchanged(
 ) -> None:
     """A Disabled row's Header='DNSBLIP' aborts the save -> config UNCHANGED (issue #1270).
 
-    Before #1270, the header-format/reserved checks were gated on
-    ``state-N != 'Disabled'`` (pfblockerng_category_edit.php), so a row saved
-    while Disabled skipped validation entirely and a raw 'DNSBLIP' header could
-    reach config.xml unvalidated -- colliding with the package's own
-    DNSBLIP_v4.txt/_v6.txt list on disk. ``pfb_header_reserved_error()`` now
-    runs whenever the field is non-empty, regardless of row state; this is the
-    ONLY tier that can observe it (save-time POST behaviour, invisible to a
-    GET-only ui_render check).
+    Tier B only: this is save-time POST behaviour, invisible to a GET-only
+    Tier-A ``ui_render`` check.
 
     Given:
         A known-good DNSBL alias with one Disabled placeholder row (header
