@@ -1,0 +1,338 @@
+ADR-65 PHASE 5 -- RESULTS
+================================================================================
+VERDICT: DONE
+Commit:  aa03c6a7423644f35abe0893f5f174562ccbd396
+Branch:  adr/65-dnsbl-manifest-single-source
+Push:    origin/adr/65-dnsbl-manifest-single-source updated 02a33121..aa03c6a7
+         (git push -u origin HEAD -- NOT denied; no deviation needed).
+base_sha (pre-fix baseline for the verifier): 02a33121c3f749363956c810f266e234c2f50d8a
+
+--------------------------------------------------------------------------------
+WHAT CHANGED
+--------------------------------------------------------------------------------
+src/usr/local/pkg/pfblockerng/pfb_unbound.py
+  - DELETED _load_ndjson_row_into_db, _load_zone_db, _load_data_db,
+    _load_whitelist_db (:1021-1129 old numbering) -- the retired fallback
+    loaders; no other src/ caller existed (verified by the brief's enumeration,
+    trusted per brief).
+  - _load_zone_and_data_dbs / _load_whitelist_and_hsts_dbs: body replaced --
+    now ALWAYS close-only (both dnsbl_built states), never read a file. HSTS
+    load in the whitelist wrapper no longer gated on python_blacklist
+    (Semantic 4: HSTS independent of manifest/blacklist state).
+  - dnsbl_build_from_manifest's absent-manifest arm: pfb_py_status_close ->
+    pfb_py_status_open (fail LOUD, D3).
+  - Reconciled the stale ADR-06 FALLBACK comment block at init wiring and the
+    function's docstring to the new no-fallback contract.
+  - KEPT byte-identical: _load_hsts_db, _close_dnsbl_loader_entries_when_disabled,
+    _dnsbl_parse_ndjson_row (now production-dead, still defined + tested), the
+    manifest BUILD path (build()/reconcile/etc.), the watcher/swap path.
+
+src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  - pfb_unbound_python_sources(): the manifest publish write is now checked --
+    a pfb_unbound_py_atomic_write() failure logs + fires a file_notice (issue
+    #331 pattern), where it was previously silently swallowed.
+  - NEW pfb_dnsbl_manifest_failure_notice(): bool -- reads the ADR-61 ledger
+    (pfb_py_sync_status_list_open), surfaces the manifest's open parse-stage
+    entry as a file_notice (basename match on item, 'parse' stage).
+  - pfb_update_unbound(): wired the new helper, gated on
+    pfb_unbound_py_mode_active(), adjacent to the existing loaded-count read.
+
+tests/test_adr65_fallback_characterization.py (FROZEN red-set, file 1/2)
+  - INVERTED TestFactCStaleness (absent manifest now opens the ledger + leaves
+    DBs empty, renamed test), INVERTED TestFactATrigger's False-arm test
+    (renamed, close-only), ADDED TestFactDHstsIndependence (HSTS loads when
+    manifest did not build). DELETED TestFactBLossiness's
+    test_legacy_loader_drops_every_abp_derived_rule and BOTH
+    TestFactDFreshPlainDomainParity tests (drove the deleted loaders directly).
+    Kept test_manifest_build_over_the_same_abp_content_carries_it zero-edit.
+    Rewrote module docstring to the fail-loud contract.
+
+tests/php/DnsblManifestPublishFailureNoticeTest.php (FROZEN red-set, file 2/2, NEW)
+  - Drives the REAL pfb_unbound_python_sources(array()) against a 0555 dir;
+    asserts the notice fires on publish failure + a success-path contrast
+    asserting no notice (vacuity pairing). Root-skipped (tempnam succeeds for
+    root in a 0555 dir).
+
+tests/php/DnsblManifestFailureNoticeTest.php (NEW, brand-new-code green-only,
+no red run required per CLAUDE.md carve-out)
+  - 8 tests covering pfb_dnsbl_manifest_failure_notice(): open/absent/corrupt
+    ledger, wrong item, wrong stage, empty message, hostile message
+    (HTML/quotes/$()/newline/10KB), absolute-path basename match.
+
+tests/test_adr61_py_status.py (reconciliation, behaviour this phase changes)
+  - DELETED TestLoadZoneDbLedgerWiring, TestLoadDataDbLedgerWiring,
+    TestLoadWhitelistDbLedgerWiring (drove the deleted loaders directly).
+  - RECONCILED TestLoadZoneAndDataDbsLedgerWiring's False-arm test (now
+    close-only, renamed) and TestLoadWhitelistAndHstsDbsLedgerWiring's
+    blacklist-ON/not-built test (now closes whitelist + still loads HSTS,
+    renamed). True-arm tests in both classes stayed zero-edit (behaviour
+    unchanged for that arm).
+  - RECONCILED TestDnsblBuildFromManifestLedgerWiring's two missing-manifest
+    tests: now assert OPEN (not never-open) and OPEN-STAYS-OPEN-until-a-good-
+    build (not silent-close). unparseable/threw/success tests zero-edit.
+  - Updated module + class docstrings; kept _load_hsts_db classes zero-edit.
+
+tests/test_issue1083_ndjson_flip.py -- DELETED whole file (all 5 tests drove
+  the deleted _load_zone_db/_load_data_db directly).
+
+tests/test_issue1083_dnsbl_interchange_semantic_oracle.py -- DELETED Scenario A
+  (test_legacy_loaders_membership_and_attribution_match_golden_fixture, drove
+  the deleted loaders); kept Scenario B zero-edit; updated docstring/imports
+  (dropped now-unused `defaultdict` import). Fixture file left untouched per
+  brief (manifest_attribution key still feeds Scenario B).
+
+tests/test_adr06_golden_oracle.py, tests/test_issue1083_ndjson_primitives.py,
+tests/test_branch_coverage_gaps.py -- stale-comment reconciliation only
+(mentions of deleted _load_whitelist_db/_load_zone_db/_load_data_db symbols
+and "falls back to the legacy CSV load" narration); no assertion changes.
+test_branch_coverage_gaps.py's absent-manifest test still asserts return-None
+only (untouched assertion), confirmed still green with the new open() behind it.
+
+--------------------------------------------------------------------------------
+GATES (exact commands + pasted tails)
+--------------------------------------------------------------------------------
+NOTE: every pytest/mypy invocation below used the mandated thin wrapper
+(scratchpad pt.sh/my.sh + a gateshim PATH dir for run-gates.sh's bare `mypy`/
+`pytest`), never committed. Canonical (non-sandbox) command forms given too.
+
+1) python3 -m pytest tests/test_adr65_fallback_characterization.py -q \
+   && vendor/bin/phpunit tests/php/DnsblManifestPublishFailureNoticeTest.php
+   -- see RED->GREEN proof below.
+
+2) python3 -m pytest (whole suite):
+     2933 passed, 2 skipped in 72.80s
+   BEFORE this phase's edits (the tree with ONLY test_adr65_fallback_
+   characterization.py's red-set edits applied, i.e. the true P4 baseline +
+   that one file's -2 delta): 2929 passed, 2 skipped, 20 failed (2951
+   collected) -- the 20 failures are exactly the AttributeError/assertion
+   breaks in test_adr61_py_status.py / test_issue1083_ndjson_flip.py /
+   test_issue1083_dnsbl_interchange_semantic_oracle.py the brief predicted.
+   True P4 baseline (before ANY Phase-5 edit) = 2953 collected tests.
+   Net honest count: 2953 -> 2935 (-18: -2 fallback_characterization.py,
+   -5 test_issue1083_ndjson_flip.py deleted whole, -1 Scenario A,
+   -10 the three deleted test_adr61_py_status.py classes), zero new failures.
+
+3) vendor/bin/phpunit (whole suite):
+     Tests: 3446, Assertions: 21233, Deprecations: 1, Notices: 1, Skipped: 4.
+     "OK, but there were issues!" -- the issues are PRE-EXISTING environmental
+     noise (macOS FileMtimeTest VFS-stat note, a geoip fixture "Is a directory"
+     stderr capture, missing /usr/bin/drill, a permission-denied extras.log
+     path under /var/folders) unrelated to this diff; zero test FAILURES.
+     P4 baseline was 3436; +10 = the two new PHP test files (2 + 8 tests).
+
+4) sh scripts/agent/run-gates.sh --diff origin/devel (mypy/pytest PATH shim):
+     GATE PASS: python3 -m pytest
+     GATE PASS: ruff check .
+     GATE PASS: ruff format --check .
+     GATE PASS: mypy tests/
+     GATE PASS: php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+     GATE PASS: php -l src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+     GATE PASS: php -l src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+     GATE PASS: php -l tests/php/AlertsDnsblLoggedFieldsRenderTest.php
+     GATE PASS: php -l tests/php/DnsblLogEventQueryAttributionTest.php
+     GATE PASS: php -l tests/php/DnsblManifestFailureNoticeTest.php
+     GATE PASS: php -l tests/php/DnsblManifestPublishFailureNoticeTest.php
+     GATE PASS: php -l tests/php/DnsblQueryClientTest.php
+     GATE PASS: vendor/bin/phpunit
+     GATE PASS: composer phpstan
+     GATE PASS: composer phpcs -- --standard=phpcs.xml.dist src/
+     GATE PASS: npx markdownlint-cli2
+     REMINDER: www/ touched -- Tier-A ui_render coverage required (test
+       mandate #4) -- this REMINDER reflects the WHOLE branch's cumulative
+       diff vs origin/devel (prior phases touched www/ query-channel/alerts
+       code); this phase's own diff touches ONLY the files listed above.
+     GATES: PASS
+
+5) ruff check . -> [] (clean). ruff format --check . -> 240 files already
+   formatted. mypy tests/ -> Success: no issues found in 104 source files.
+
+6) php -l on every touched PHP file -> "No syntax errors detected" for all
+   (pfblockerng.inc's 4 unrelated PRE-EXISTING deprecation notices about
+   optional-before-required params on lines 4987/11170/14647/15788, untouched
+   by this diff, are noise from php -l itself, not a lint failure).
+
+7) composer phpstan -> [OK] No errors. composer phpcs -- --standard=
+   phpcs.xml.dist src/ -> exit 0, no output.
+
+8) python3 scripts/check_comment_narration.py --diff origin/devel -> exit 0.
+   python3 scripts/check_version_literals.py --diff origin/devel -> exit 0.
+
+9) python3 scripts/check_retired_tokens.py --diff origin/devel -> exit 1
+   (WARN-ONLY, matches CLAUDE.md "report findings honestly, never claim a
+   clean run that wasn't"). Full honest breakdown:
+
+   PRE-EXISTING from Phases 1-4 (verified via a run BEFORE this phase's
+   commit, when origin/devel...HEAD was pure P1-4 history -- NOT new to
+   Phase 5): '</s><br />' (7), '<small>...</small>' (12) -- the two P4-
+   documented false positives -- plus 'DNSBL' (1190), 'Domain' (278),
+   'Feed' (231), 'Group' (1098), 'alerts' (205), 'pfb_feed' (124),
+   'pfb_final' (12), 'pfb_group' (19), 'pfb_mode' (12), 'render' (177),
+   'unified' (95) -- all common English/dict-key words with 3-digit-to-
+   4-digit surviving-site counts (i.e. very much alive elsewhere in the
+   tree), each a coincidental "removed 3x, not re-added as the identical
+   literal in that OLDER phase's diff" false positive of the exact class
+   RESULTS/04 already documented for the two named tokens -- not a new
+   finding of this phase, and not actionable here.
+
+   NEW cumulative-diff hits introduced by THIS phase's own commit (present
+   in the post-commit --diff origin/devel run, absent from the pre-commit
+   P1-4-only run): 'Failed to load: {}: {}' (4 remain), '[pfBlockerNG]:
+   Failed to load: {}: {}' (2 remain), 'important' (155 remain), 'index'
+   (240 remain), 'python_blacklist' (15 remain), 'wildcard' (178 remain).
+   Every one is the SAME false-positive class: a generic log-format string
+   or a common dict-key/field name that the deleted loaders happened to
+   spell out 3+ times as literals, while the identifier/format itself
+   remains genuinely alive at the surviving-site counts shown (e.g.
+   'important' at 155 sites, 'python_blacklist' at 15 sites -- these are
+   not retired features, they are words). None represents an actual
+   feature-retirement straggler; none needs a fix, an allowlist entry, or
+   an inline escape. (The staged/pre-commit-hook view of this same commit,
+   scoped to ONLY this phase's own diff rather than the whole branch,
+   additionally flagged 'dataDB'/'zoneDB'/'whiteDB'/'feed'/'group' --
+   these do NOT appear in the whole-branch cumulative report because an
+   EARLIER phase's added lines already re-add the identical quoted literal
+   elsewhere in the branch history, which is exactly the tool's designed
+   false-positive cancellation for a still-very-much-alive global/key name.)
+
+--------------------------------------------------------------------------------
+RED -> GREEN PROOF
+--------------------------------------------------------------------------------
+RED (executed on the untouched tree, BEFORE any production edit):
+
+$ sh <scratch>/pt.sh tests/test_adr65_fallback_characterization.py -q
+tests/test_adr65_fallback_characterization.py .F.FF   [100%]
+FAILED ...TestFactATrigger::test_dnsbl_built_false_populates_nothing_and_closes_ledger
+  AssertionError: assert {'seeded-zone...tant': False}} == {}  (zoneDB NOT empty
+  -- the old loader populated it from the seeded stale file)
+FAILED ...TestFactCStaleness::test_manifest_absent_opens_the_ledger_and_keeps_dbs_empty
+  FileNotFoundError: pfb_py_status.json (old code CLOSE-only on absent -> no
+  file ever written -- the "loud open" this test demands never happened)
+FAILED ...TestFactDHstsIndependence::test_hsts_loads_when_the_manifest_did_not_build
+  AssertionError: 'bad.uuidb004.example' not in hstsDB (old python_blacklist
+  gate skipped the HSTS load entirely)
+3 failed, 2 passed in 0.06s
+
+$ vendor/bin/phpunit tests/php/DnsblManifestPublishFailureNoticeTest.php
+F.  (2 / 2)
+1) DnsblManifestPublishFailureNoticeTest::testPublishFailureIntoReadOnlyDirFiresANotice
+   exactly one notice raised on publish failure
+   Failed asserting that actual size 0 matches expected size 1.
+Tests: 2, Assertions: 3, Failures: 1.
+
+git hash-object (RED time, frozen -- must equal committed file):
+  tests/test_adr65_fallback_characterization.py:
+    e135a3f88a55e12e8bc9009d5ef9b01f20af2d85
+  tests/php/DnsblManifestPublishFailureNoticeTest.php:
+    20f3fad795199019017f04b5a65170d63bbba45f
+
+GREEN (same two files, ZERO edits, after the production fix):
+
+$ sh <scratch>/pt.sh tests/test_adr65_fallback_characterization.py -q
+tests/test_adr65_fallback_characterization.py .....   [100%]
+5 passed in 0.51s
+
+$ vendor/bin/phpunit tests/php/DnsblManifestPublishFailureNoticeTest.php
+..  (2 / 2)
+OK (2 tests, 8 assertions)
+
+git hash-object (GREEN time -- IDENTICAL to red-time, confirming the freeze):
+  tests/test_adr65_fallback_characterization.py:
+    e135a3f88a55e12e8bc9009d5ef9b01f20af2d85
+  tests/php/DnsblManifestPublishFailureNoticeTest.php:
+    20f3fad795199019017f04b5a65170d63bbba45f
+
+Oracle A (D3 "byte-identical GOOD-manifest decisions" proof, zero edits):
+$ sh <scratch>/pt.sh tests/test_adr65_decision_oracle.py -q
+22 passed in 0.06s
+$ git diff --stat HEAD -- tests/test_adr65_decision_oracle.py
+(empty -- no output)
+
+HSTS built/not-built proof (both arms of Semantic 4, pasted from the same
+green run above): TestFactDHstsIndependence::test_hsts_loads_when_the_
+manifest_did_not_build passes (HSTS loads when NOT built); the pre-existing
+TestLoadHstsDbLedgerWiring class (test_adr61_py_status.py, kept zero-edit)
+continues to pass unchanged, pinning the built/normal-path case.
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX
+--------------------------------------------------------------------------------
+| Row (brief SS9, restated)                                    | Test / deferral |
+| -------------------------------------------------------------- | --------------- |
+| TRIGGER: dnsbl_built=True closes, populates nothing (unchanged) | test_dnsbl_built_true_populates_nothing_and_closes_ledger (zero-edit) |
+| TRIGGER: dnsbl_built=False now ALSO closes-only, no read       | test_dnsbl_built_false_populates_nothing_and_closes_ledger (inverted, RED->GREEN) |
+| BUILD still carries ABP content (unaffected by this phase)     | test_manifest_build_over_the_same_abp_content_carries_it (zero-edit) |
+| FAIL LOUD: absent manifest opens ledger + DBs stay empty        | test_manifest_absent_opens_the_ledger_and_keeps_dbs_empty (inverted, RED->GREEN) |
+| HSTS loads when manifest did NOT build (gate-drop, Semantic 4) | test_hsts_loads_when_the_manifest_did_not_build (new, RED->GREEN) |
+| Manifest publish failure -> notice fires                       | DnsblManifestPublishFailureNoticeTest::testPublishFailureIntoReadOnlyDirFiresANotice (RED->GREEN) |
+| Manifest publish success -> no notice (vacuity pairing)        | DnsblManifestPublishFailureNoticeTest::testPublishSuccessFiresNoNotice |
+| pfb_dnsbl_manifest_failure_notice: open manifest entry -> fires | DnsblManifestFailureNoticeTest::testOpenManifestParseEntryFiresExactlyOneNotice |
+| ... absent ledger -> no notice                                 | testAbsentLedgerFileFiresNoNotice |
+| ... corrupt JSON ledger -> no notice                            | testCorruptJsonLedgerFiresNoNotice |
+| ... open entry for a DIFFERENT item -> no notice                | testOpenEntryForADifferentItemFiresNoNotice |
+| ... manifest item, wrong stage -> no notice                     | testManifestItemWithWrongStageFiresNoNotice |
+| ... empty message -> still fires, no warning                   | testEmptyMessageStillFiresANoticeWithoutWarning |
+| ... hostile message (HTML/quotes/$()/newline/10KB) passthrough  | testHostileMessageContentPassesThroughUnharmed |
+| ... absolute-path item -> basename match fires                  | testAbsolutePathItemMatchesOnBasename |
+| Oracle A: GOOD-manifest decisions byte-identical (D3)           | test_adr65_decision_oracle.py, 22 passed, zero-edit diff |
+| dnsbl_build_from_manifest: absent now OPENS (not close-only)    | test_missing_manifest_opens_an_entry (test_adr61_py_status.py, inverted) |
+| ... absent KEEPS a preexisting entry open until a later good build | test_missing_manifest_keeps_a_preexisting_entry_open_until_a_good_build (inverted) |
+| ... unparseable/threw/success arms unchanged                   | zero-edit, still green |
+| _load_zone_and_data_dbs / _load_whitelist_and_hsts_dbs wiring   | TestLoadZoneAndDataDbsLedgerWiring / TestLoadWhitelistAndHstsDbsLedgerWiring (test_adr61_py_status.py, reconciled) |
+| pfb_update_unbound wiring of the new notice helper              | DEFERRED to Phase 7 smoke (pfb_update_unbound restarts real services --
+  not unit-drivable; proof = the diff-read above + this deferral, per brief SS3(f)) |
+| No .txt read remains on the init path                           | git grep -n 'pfb_py_zone\|pfb_py_data' -- pfb_unbound.py (§8 self-check, only close-bookkeeping/path-def/comment hits) |
+| _dnsbl_parse_ndjson_row kept defined, now production-dead       | its own suite (tests/test_issue1083_ndjson_primitives.py) stays green, zero-edit |
+
+--------------------------------------------------------------------------------
+DEVIATIONS / JUDGMENT CALLS
+--------------------------------------------------------------------------------
+1. python_blacklist-gate drop in _load_whitelist_and_hsts_dbs: decision-neutral
+   per the brief's own framing -- hstsDB is consulted only on block paths that
+   already gate on python_blacklist separately (:6854), so dropping the gate
+   here only changes WHETHER hstsDB gets populated at init, never whether a
+   populated hstsDB is consulted. Exactly as the brief specified (3b).
+2. dnsbl_build_from_manifest's absent-manifest arm now OPENS (never
+   close-only) -- exactly as brief 3(c) specified; the old close-only
+   rationale (verbatim-pinned in the old test_adr61_py_status.py fixture)
+   dies with the fallback, as anticipated.
+3. Renamed 5 existing test methods (in test_adr65_fallback_characterization.py
+   and test_adr61_py_status.py) beyond the brief's literal wording, so a test
+   name never claims behaviour the body no longer pins (CLAUDE.md "Tests
+   express the change's INTENT"). No assertion-shape deviation beyond what
+   the brief's INVERT instructions already specified.
+4. Retired-token findings: as detailed in GATES item 9 above -- all warn-only,
+   all the same false-positive class as the two P4-documented tokens, none
+   actionable. Recorded honestly per brief SS6 item 7's explicit instruction.
+Push: NOT denied. No other deviation.
+
+--------------------------------------------------------------------------------
+CARRY-FORWARD (for Phase 6 / Phase 7)
+--------------------------------------------------------------------------------
+- _dnsbl_parse_ndjson_row (pfb_unbound.py) is now PRODUCTION-DEAD (no src/
+  caller remains anywhere) but stays DEFINED with its own suite
+  (tests/test_issue1083_ndjson_primitives.py) -- a Phase-7 retirement
+  candidate, mirroring the ADR's "kept defined" PHP-side pattern.
+- The fixture golden_pfb_py_loader_expected.json's orphaned "legacy_loader"
+  key (its "manifest_attribution" key is still live, feeding Scenario B in
+  test_issue1083_dnsbl_interchange_semantic_oracle.py) -- a Phase-7 cleanup
+  candidate; left untouched this phase per the brief's explicit instruction.
+- _load_zone_and_data_dbs / _load_whitelist_and_hsts_dbs are now CLOSE-ONLY
+  wrappers (the loaders they used to call are gone) -- also Phase-7 retirement
+  inventory: their names/signatures were kept ONLY to make this phase's
+  red->green invertible; once Phase 6/7 retires the .txt WRITERS too, these
+  wrappers' remaining purpose (closing a pre-ADR-65 orphaned ledger entry)
+  becomes a one-time migration concern, not a steady-state one.
+- The .txt WRITERS (pfb_dnsbl_py_swap, the shell/PHP interchange-file
+  production side) are STILL LIVE -- Phase 6's target, untouched here per the
+  brief's constraints.
+- pfb_dnsbl_manifest_failure_notice()'s wiring into pfb_update_unbound is
+  NOT unit-drivable (pfb_update_unbound restarts real services) -- its
+  live-fire proof is a Phase-7 smoke-test row (an absent/corrupt manifest on
+  a real box surfaces a GUI notice), per brief SS3(f)'s explicit deferral.
+- The retired-token checker's 19 warn-only findings (2 from P4, 11 pre-existing
+  from P1-4, 6 new from this phase) are ALL the "common word/format-string,
+  high surviving-site-count" false-positive class -- no action item, but
+  future phases should expect the list to keep growing as more of the legacy
+  interchange-file code is deleted (Phase 6/7 will very likely add more of
+  the same class; the mechanical backstop is explicitly warn-only during the
+  issue #1059 rollout for exactly this reason).
