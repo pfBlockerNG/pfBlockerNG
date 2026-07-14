@@ -1,10 +1,10 @@
-"""ADR-65 Phase 1 -- Oracle A: pin what the production manifest-built matcher
+"""ADR-65 Oracle A: pin what the production manifest-built matcher
 decides + would log TODAY.
 
 WHY THIS FILE EXISTS
 --------------------
-ADR-65 retires the legacy `.txt` interchange-file fallback (Phase 5) and adds a
-read-only query channel (Phase 2). Every later phase's "net PRODUCTION decisions
+ADR-65 retires the legacy `.txt` interchange-file fallback and adds a read-only
+query channel (ADR.md SS2). Every later change's "net PRODUCTION decisions
 are unchanged" claim needs a falsification harness that exists BEFORE any code
 moves (ADR.md SS2 items 1-2). This module drives the REAL decision function,
 ``evaluate_domain`` (``pfb_unbound.py:6038``, called by ``operate()`` for every
