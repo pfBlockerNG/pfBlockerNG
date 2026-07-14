@@ -12,8 +12,8 @@ use PHPUnit\Framework\TestCase;
  * existing suite.
  *
  * The file carries top-level execution and cannot be require()d
- * off-appliance (house precedent: CountryNetworksCountGuardTest.php). The
- * two-statement block is eval-extracted verbatim so the oracle tracks
+ * off-appliance (house precedent: CountryNetworksCountGuardTest.php). Each
+ * bucket assignment is eval-extracted independently so the oracle tracks
  * whichever literal is actually in source.
  *
  * Feature: the Asia/Europe "undefined" pseudo-country buckets are built
@@ -24,41 +24,39 @@ use PHPUnit\Framework\TestCase;
  */
 final class GeoipContinentUndefinedBucketTest extends TestCase
 {
-	private static string $src;
-
-	public static function setUpBeforeClass(): void
+	// Oracle: each hardcoded bucket-assignment statement extracted independently
+	// (not as one adjacency-bound pair), so an unrelated edit between the two
+	// real lines can't spuriously break this test.
+	private static function extractBucketOracle(string $geonameId): array
 	{
-		$path = dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng.php';
-		$src = file_get_contents($path);
-		if ($src === FALSE) {
-			throw new RuntimeException('test bootstrap: failed to read pfblockerng.php');
-		}
-		self::$src = $src;
-
-		// Oracle: the two hardcoded bucket-assignment statements, extracted
-		// verbatim so the test tracks whichever literal is actually in source.
-		if (!function_exists('pfb_geoip_undefined_continent_oracle')) {
+		$fn = "pfb_geoip_undefined_continent_oracle_{$geonameId}";
+		if (!function_exists($fn)) {
+			$path = dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng.php';
+			$src = file_get_contents($path);
+			if ($src === FALSE) {
+				throw new RuntimeException('test bootstrap: failed to read pfblockerng.php');
+			}
 			if (!preg_match(
-				'/\$pfb_geoip\[\'country\'\]\[\'6255147\'\]\s*=\s*array\(.*?\);'
-				. '\s*\$pfb_geoip\[\'country\'\]\[\'6255148\'\]\s*=\s*array\(.*?\);/s',
+				'/\$pfb_geoip\[\'country\'\]\[\'' . preg_quote($geonameId, '/') . '\'\]\s*=\s*array\(.*?\);/s',
 				$src,
 				$m
 			)) {
-				throw new RuntimeException('oracle extraction failed: the 6255147/6255148 bucket assignments were not found in pfblockerng.php');
+				throw new RuntimeException("oracle extraction failed: the {$geonameId} bucket assignment was not found in pfblockerng.php");
 			}
 			eval(
-				'function pfb_geoip_undefined_continent_oracle(): array {'
+				"function {$fn}(): array {"
 				. ' $pfb_geoip = ["country" => []];'
 				. ' ' . $m[0]
 				. ' return $pfb_geoip["country"];'
 				. ' }'
 			);
 		}
+		return $fn();
 	}
 
 	public function testAsiaUndefinedBucketShape(): void
 	{
-		$country = pfb_geoip_undefined_continent_oracle();
+		$country = self::extractBucketOracle('6255147');
 		$this->assertArrayHasKey(
 			'6255147',
 			$country,
@@ -72,7 +70,7 @@ final class GeoipContinentUndefinedBucketTest extends TestCase
 
 	public function testEuropeUndefinedBucketShape(): void
 	{
-		$country = pfb_geoip_undefined_continent_oracle();
+		$country = self::extractBucketOracle('6255148');
 		$this->assertArrayHasKey(
 			'6255148',
 			$country,
