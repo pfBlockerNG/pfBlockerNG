@@ -544,9 +544,18 @@ if ($_POST && isset($_POST['save'])) {
 				$input_errors[] = "{$type} Source Definitions, Line {$line}: Header field must be defined.";
 			}
 
-			if ($value != 'Disabled' && preg_match("/\W/", $_POST["header-{$key_1}"])) {
+			if (!empty($_POST["header-{$key_1}"]) && preg_match("/\W/", $_POST["header-{$key_1}"])) {
 				$input_errors[] = "{$type} Source Definitions, Line {$line}: "
 							. "Header field cannot contain spaces, special or international characters.";
+			}
+
+			// issue #1270: reserved regardless of row state -- a Disabled row's raw header still
+			// reaches disk unvalidated via config import/HA-sync (pfb_normalize_row_header()).
+			if (!empty($_POST["header-{$key_1}"])) {
+				$pfb_header_reserved = pfb_header_reserved_error($_POST["header-{$key_1}"]);
+				if ($pfb_header_reserved !== '') {
+					$input_errors[] = "{$type} Source Definitions, Line {$line}: {$pfb_header_reserved}";
+				}
 			}
 
 			if ($value != 'Disabled' && strpos($_POST["url-{$key_1}"], '_API_KEY_') !== FALSE) {
@@ -556,7 +565,9 @@ if ($_POST && isset($_POST['save'])) {
 
 			// issue #1104: reject control chars + HTML-breakout <>" in url-N for
 			// every format -- geoip/asn gate only a PREFIX below, leaving this the sole gate.
-			if ($value != 'Disabled' && preg_match('/[\p{C}<>"]/u', $_POST["url-{$key_1}"]) !== 0) {
+			// issue #1270: non-empty-gated (not state-gated) -- a Disabled row's raw url still
+			// persists unvalidated.
+			if (!empty($_POST["url-{$key_1}"]) && preg_match('/[\p{C}<>"]/u', $_POST["url-{$key_1}"]) !== 0) {
 				$input_errors[] = "{$type} Source Definitions, Line {$line}: "
 							. "Source field contains a disallowed character (control character or < > \")!";
 			}
