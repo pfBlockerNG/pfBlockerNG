@@ -1,10 +1,19 @@
 ADR-65 PHASE 5 -- RESULTS
 ================================================================================
-VERDICT: DONE
-Commit:  aa03c6a7423644f35abe0893f5f174562ccbd396
+VERDICT: DONE-WITH-DEVIATION
+Commit:  aa03c6a7423644f35abe0893f5f174562ccbd396 (code + tests; the
+         functional change this phase implements) plus a follow-up doc-only
+         commit landing this handoff file itself (docs: ADR-65 phase 5
+         handoff record) -- the brief asked for ONE commit; writing this
+         RESULTS file necessarily happens after the gates it reports on
+         finish, so it could not be part of the same commit as the code it
+         describes without a self-referential placeholder (the exact P1
+         precedent this file's own CARRY-FORWARD section reads). Recorded
+         as the deviation; both commits are on this branch, in order.
 Branch:  adr/65-dnsbl-manifest-single-source
-Push:    origin/adr/65-dnsbl-manifest-single-source updated 02a33121..aa03c6a7
-         (git push -u origin HEAD -- NOT denied; no deviation needed).
+Push:    origin/adr/65-dnsbl-manifest-single-source updated
+         02a33121..aa03c6a7..38c98c87 (two `git push` calls, neither denied;
+         no --force-with-lease needed -- both were plain fast-forwards).
 base_sha (pre-fix baseline for the verifier): 02a33121c3f749363956c810f266e234c2f50d8a
 
 --------------------------------------------------------------------------------
@@ -303,6 +312,8 @@ DEVIATIONS / JUDGMENT CALLS
 4. Retired-token findings: as detailed in GATES item 9 above -- all warn-only,
    all the same false-positive class as the two P4-documented tokens, none
    actionable. Recorded honestly per brief SS6 item 7's explicit instruction.
+5. Two commits, not one (see VERDICT header): aa03c6a7 (code+tests) then
+   38c98c87 (this handoff file, doc-only). Neither push was denied.
 Push: NOT denied. No other deviation.
 
 --------------------------------------------------------------------------------
