@@ -1,7 +1,7 @@
 export const meta = {
   name: 'review-single',
   description: 'Single-agent adversarial PR review: ONE reviewer covers contract, correctness/hostile-inputs, and test-honesty; schema-forced findings',
-  whenToUse: 'pr-merge-flow Step 1d\'s default review shape. Args: {pr: <number>, base: <branch>, worktree: <path>, spec: <intent/acceptance text>, model?: "sonnet" (default) | "fable" (use for a large/complex PR: >300 lines, >6 files, or src/ parsing/guard/scheduling behaviour — the highest-tier model cross-references the whole PR best; fall back to sonnet when it is unavailable)}.',
+  whenToUse: 'pr-merge-flow Step 1d\'s default review shape. Args: {pr: <number>, base: <branch, or a bare pre-fix SHA to review ONLY the fix delta — mandatory scoping for feedback-fix re-reviews>, worktree: <path>, spec: <intent/acceptance text>, model?: "sonnet" (default; also the model for every delta re-review) | "fable" (large/complex PR: >300 lines, >6 files, or src/ parsing/guard/scheduling behaviour — whole-PR cross-referencing) | "opus" (ONLY as the second pass of the dual fallback: top tier unavailable on a fable-grade PR -> run once with sonnet and once with opus, union the findings)}.',
   phases: [
     { title: 'Review', detail: 'one adversarial reviewer over the whole diff' },
   ],
@@ -10,8 +10,8 @@ export const meta = {
 // Single-agent variant of review-fanout (pr-merge-flow's default since 2026-07-11):
 // same schema-forced findings contract, no fan-out and no separate verify stage — the
 // one reviewer must ground its own blocking claims in executed probes. Model is the
-// bare family alias (resolves to the latest generation); Opus is rejected, effort is
-// pinned xhigh (the flow's floor and ceiling); no ponytail (reviewers build nothing).
+// bare family alias (resolves to the latest generation); effort is pinned xhigh (the
+// flow's floor and ceiling); no ponytail (reviewers build nothing).
 
 // Callers sometimes deliver args JSON-string-encoded (killed review-fanout on PR #937,
 // issue #942) — normalize before destructuring instead of trusting caller discipline.
@@ -20,10 +20,12 @@ const { pr, base = 'devel', worktree, spec = '(no spec provided — flag that as
 // A bare SHA base reviews a fix delta (pr-merge-flow 1d.4); a branch name gets origin/.
 const baseRef = /^[0-9a-f]{7,40}$/.test(base) ? base : `origin/${base}`
 if (!pr || !worktree) throw new Error('args must be {pr, worktree, base?, spec?, model?}')
-// Owner directive (2026-07-14): the highest-tier model (currently fable) is the preferred
-// reviewer for large/complex PRs — whole-PR cross-referencing; sonnet stays the small-PR
-// default and the fallback when the top tier is unavailable. Never Opus.
-if (model !== 'sonnet' && model !== 'fable') throw new Error(`model must be "sonnet" or "fable" (never Opus, never a dated ID); got "${model}"`)
+// Owner directive (2026-07-14): fable (the highest tier) reviews large/complex PRs —
+// whole-PR cross-referencing; sonnet is the default AND the model for every delta
+// re-review. opus is valid ONLY as the second pass of the dual fallback (top tier
+// unavailable on a fable-grade PR: one sonnet + one opus run, findings unioned by the
+// caller) — never a sole reviewer.
+if (model !== 'sonnet' && model !== 'fable' && model !== 'opus') throw new Error(`model must be "sonnet", "fable", or "opus" (opus only as the dual-fallback second pass; never a dated ID); got "${model}"`)
 
 const FINDINGS = {
   type: 'object',

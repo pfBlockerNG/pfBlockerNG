@@ -97,13 +97,11 @@ model may implement a fix **directly** when it is relatively small and doable in
 and always handles **docs / config / settings / skills** directly. Delegation is for
 non-trivial, multi-step `src/`/`tests/`/CI work.
 
-- **The per-step verifier never runs on the brief author's model** (owner directive
-  2026-07-14): a Fable-authored brief gets an Opus (or Sonnet) verifier; an Opus-authored
-  brief gets a Sonnet verifier — a different model reads with different blind spots.
-  `phase-step.js` wires this as `verifierModel` (default `opus`; a session whose own model
-  IS Opus passes `sonnet`). The top model's cross-referencing is reserved for the
-  **whole-PR review** (`review-single` with `model: "fable"` on a large/complex PR), where
-  it sees every phase's diff at once.
+- **The per-step verifier is always Sonnet** (owner directive 2026-07-14) — never the
+  higher model that authored the brief; a different model reads with different blind
+  spots, and the step gate doesn't need the top tier. `phase-step.js` pins it. The top
+  model's cross-referencing is reserved for the **whole-PR review** (`review-single` with
+  `model: "fable"` on a large/complex PR), where it sees every phase's diff at once.
 
 - **An implementer may re-delegate when a subtask genuinely splits** (parallel siblings, a
   verifier per finding) — the platform enforces its own nesting-depth cap, so we add no depth
@@ -119,7 +117,7 @@ non-trivial, multi-step `src/`/`tests/`/CI work.
   `phase-step` workflow, whose **Brief stage** — a fresh higher-model agent — reads the ADR,
   phase prompt, and prior records just-in-time and runs the enumeration greps itself (the
   brief's field contract is schema-forced in `.claude/workflows/phase-step.js`); the
-  workflow's verifier also runs at the higher model. The main session validates the records
+  workflow's verifier runs on Sonnet (never the brief author's model). The main session validates the records
   non-vacuously, commits the Gate file, and keeps HALT/continue/landing — its context stays
   flat across a long `all` run. Composing an ADR-phase brief in the main session is a
   recorded deviation, exactly like hand-spawning the implementer/verifier yourself.
@@ -766,8 +764,11 @@ change: review feedback first, then merge. A **Claude adversarial review runs on
 as the committed `review-single` workflow** — ONE reviewer sub-agent at effort `xhigh`
 (never below, never `max`), latest Sonnet by default; the highest-tier model (currently
 Fable) for a large/complex PR — its whole-PR cross-referencing is why it reviews the PR
-rather than the per-step gates;
-**never Opus, never a multi-agent fan-out** (`review-fanout` only on explicit user request);
+rather than the per-step gates. Top tier unavailable on such a PR ⇒ TWO `review-single`
+passes (one Sonnet + one Opus), findings unioned. Feedback-fix re-reviews are
+**delta-scoped** (`base` = the pre-fix head SHA) on Sonnet — never a whole-PR re-run.
+**Never Opus as a sole reviewer, never a multi-agent fan-out** (`review-fanout` only on
+explicit user request);
 the full reviewer contract lives in `.claude/workflows/review-single.js`, not here. External
 reviewers — CodeRabbit, GitHub Copilot, advisory Snyk — are requested / waited on (bounded) /
 skipped per the `pr-merge-flow` skill; a bot quota notice is an acknowledgement with **no

@@ -30,7 +30,7 @@ Args: `{{ args }}`
 
 When the Workflow tool is available, run Steps 2–3 as ONE call after writing the brief:
 `Workflow({name: 'phase-step', args: {worktree, brief, gates, redProof, planItems,
-ponytailLevel}})` — Sonnet implementer + fresh higher-model verifier, schema-forced
+ponytailLevel}})` — Sonnet implementer + fresh Sonnet verifier (never the brief author's model), schema-forced
 `{handoff, gateRecord}`; pass no extra parameter (`run_in_background` is not a Workflow
 parameter and fails validation; it is harness-tracked — end the turn and answer its
 completion notification, never poll it). Validate the returned record per workflow-reference "Validating

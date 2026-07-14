@@ -1,11 +1,11 @@
 export const meta = {
   name: 'phase-step',
-  description: 'One delegated step under the delegation contract: optional fresh higher-model Brief stage -> Sonnet implementer -> independent higher-model verifier, all schema-forced',
-  whenToUse: 'Called by /adr-phase (per phase) and /gh-issue --fix (per step) instead of hand-spawning the implementer/verifier stages yourself. Args: {worktree, brief | briefSpec: {adrDir, phase, notes?}, gates: [cmd...], redProof: {srcPaths: [...], testCmd} | null, planItems: [...], ponytailLevel: "full" | null, verifierModel?: "opus" (default) | "sonnet" — the Verify stage never runs on the brief author\'s model, so a caller whose session model is Opus passes "sonnet"}. With briefSpec (ADR phases — issue #1089) the Brief stage derives brief/gates/redProof/planItems itself from disk, so the caller passes only pointers. The caller keeps ALL judgment: it validates the returned records, commits the RESULTS/Gate files, and decides HALT/continue/landing.',
+  description: 'One delegated step under the delegation contract: optional fresh higher-model Brief stage -> Sonnet implementer -> independent Sonnet verifier, all schema-forced',
+  whenToUse: 'Called by /adr-phase (per phase) and /gh-issue --fix (per step) instead of hand-spawning the implementer/verifier stages yourself. Args: {worktree, brief | briefSpec: {adrDir, phase, notes?}, gates: [cmd...], redProof: {srcPaths: [...], testCmd} | null, planItems: [...], ponytailLevel: "full" | null}. The Verify stage always runs on Sonnet — a fresh set of model-eyes distinct from the higher-model brief author (owner directive 2026-07-14). With briefSpec (ADR phases — issue #1089) the Brief stage derives brief/gates/redProof/planItems itself from disk, so the caller passes only pointers. The caller keeps ALL judgment: it validates the returned records, commits the RESULTS/Gate files, and decides HALT/continue/landing.',
   phases: [
     { title: 'Brief', detail: 'fresh higher-model planner enumerates the matrix + hostile rows and composes the brief (briefSpec callers only)' },
     { title: 'Implement', detail: 'one Sonnet implementer executes the brief', model: 'sonnet' },
-    { title: 'Verify', detail: 'fresh verifier (never the brief author\'s model: opus default, sonnet when the session model is Opus) re-derives every gate item' },
+    { title: 'Verify', detail: 'fresh Sonnet verifier (never the brief author\'s model) re-derives every gate item', model: 'sonnet' },
   ],
 }
 
@@ -20,14 +20,8 @@ export const meta = {
 // Callers sometimes deliver args JSON-string-encoded (killed review-fanout on PR #937,
 // issue #942) — normalize before destructuring instead of trusting caller discipline.
 const input = typeof args === 'string' ? JSON.parse(args) : (args ?? {})
-let { worktree, brief = null, briefSpec = null, gates = [], redProof = null, planItems = [], ponytailLevel = null, verifierModel = 'opus' } = input
+let { worktree, brief = null, briefSpec = null, gates = [], redProof = null, planItems = [], ponytailLevel = null } = input
 if (!worktree || (!brief && !briefSpec) || (brief && briefSpec)) throw new Error('args must include {worktree} and exactly ONE of {brief, briefSpec}; see meta.whenToUse')
-// Owner directive (2026-07-14): the Verify stage never runs on the brief author's model —
-// the Brief stage inherits the session's higher model, so the caller passes the split:
-// default 'opus' fits a Fable/other-top-tier session; a session whose own model IS Opus
-// MUST pass verifierModel: 'sonnet'. The top model's cross-referencing is reserved for
-// the whole-PR review (review-single), not the per-step gate.
-if (verifierModel !== 'opus' && verifierModel !== 'sonnet') throw new Error(`verifierModel must be "opus" or "sonnet"; got "${verifierModel}"`)
 
 const BRIEF_RECORD = {
   type: 'object',
@@ -185,6 +179,9 @@ MANDATORY CHECKS — one items[] entry each, with executed evidence; a skipped c
 6. conventions: each new public symbol beside 3 sibling symbols proving the name matches; stale comments/docs about touched symbols reconciled.
 
 Verdict FAIL iff any item fails; list blocking_reasons. Your structured output IS the gate record.`,
-  { label: 'verify', phase: 'Verify', model: verifierModel, effort: 'xhigh', schema: GATE_RECORD })
+  // Owner directive (2026-07-14): the verifier never runs on the brief author's (higher)
+  // model — Sonnet re-derives the gate; the top tier's cross-referencing is reserved for
+  // the whole-PR review (review-single).
+  { label: 'verify', phase: 'Verify', model: 'sonnet', effort: 'xhigh', schema: GATE_RECORD })
 
 return { briefRecord, handoff, gateRecord }

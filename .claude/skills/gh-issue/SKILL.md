@@ -172,7 +172,7 @@ For each plan step `M`, in order:
    brief: <the step brief>, gates: [<canonical gates for the touched languages>],
    redProof: {srcPaths: [...], testCmd: '<the pinning test>'} | null, planItems: [<the
    step's plan items>], ponytailLevel: <active level or null>}})` — Sonnet implementer
-   plus fresh higher-model verifier, schema-forced `{handoff, gateRecord}`. Pass no extra
+   plus fresh Sonnet verifier (never the brief author's model), schema-forced `{handoff, gateRecord}`. Pass no extra
    parameter: `run_in_background` is not a Workflow parameter and fails validation. It is
    harness-tracked — end the turn and answer its completion notification; never poll it.
 3. **Validate the returned record** per workflow-reference "Validating workflow records"

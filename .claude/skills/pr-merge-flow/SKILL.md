@@ -9,8 +9,11 @@ description: >
   delete the branch. The review step ALWAYS runs the committed `review-single`
   workflow — ONE Claude sub-agent as an ADVERSARIAL reviewer IN ADDITION TO CodeRabbit,
   never a mere fallback — at reasoning effort xhigh (never below, never max): the latest
-  Sonnet (5 or newer) — Fable (5 or newer), preferred for a large/complex PR, is temporarily
-  unavailable, so use Sonnet (never Opus, never a multi-agent fan-out). In parallel it
+  Sonnet (5 or newer) by default; the highest-tier model (currently Fable) for a
+  large/complex PR; if the top tier is unavailable for such a PR, run TWO review-single
+  passes — one Sonnet and one Opus — and union their findings (never Opus as a sole
+  reviewer, never a multi-agent fan-out). Feedback-fix re-reviews are DELTA-scoped
+  (base = the pre-fix head SHA), never a whole-PR re-run. In parallel it
   gives CodeRabbit ~10 minutes to acknowledge the PR: if it does, wait on its review
   too; if it stays silent, nudge it once with `@coderabbitai review` and wait 10 more
   minutes; if it is STILL silent the Claude review stands alone (folding CodeRabbit's
@@ -179,11 +182,14 @@ replace CodeRabbit; when CodeRabbit never reviews it stands alone.
      the size metric that drove it in the Step-1d.5 audit comment: `model: sonnet`
      by default; the highest-tier model (currently `fable`) for a large/complex PR —
      >300 changed lines, >6 files, or any behaviour change in `src/`'s
-     parsing/guard/scheduling logic — where whole-PR cross-referencing pays
-     (fall back to sonnet when the top tier is unavailable). **Never Opus, never a multi-agent fan-out** (user
-     directive 2026-07-11 — `review-fanout` runs only on an explicit user request),
-     never below `xhigh`, never `max`; the bare family alias resolves to the LATEST
-     generation (Sonnet 5 or newer) — never pin a dated model ID.
+     parsing/guard/scheduling logic — where whole-PR cross-referencing pays.
+     **Top tier unavailable on a large/complex PR** (owner directive 2026-07-14): run
+     TWO `review-single` passes over the same diff — one `model: sonnet`, one
+     `model: opus` — and treat the UNION of findings as the review (dedup by
+     file/line before triage). **Never Opus as a sole reviewer, never a multi-agent
+     fan-out** (user directive 2026-07-11 — `review-fanout` runs only on an explicit
+     user request), never below `xhigh`, never `max`; the bare family alias resolves
+     to the LATEST generation (Sonnet 5 or newer) — never pin a dated model ID.
    - **Validate the result**: treat `findings` as the review; `per_file` must cover
      every changed file (a review missing files is incomplete — re-run it).
    - **Fallback** (Workflow tool unavailable): spawn ONE plain Agent sub-agent with the
@@ -222,6 +228,10 @@ replace CodeRabbit; when CodeRabbit never reviews it stands alone.
    new unreviewed code** — two of the audited defect chains entered through them — so for any
    non-trivial APPLY, re-run `review-single` scoped to the fix delta (same args, `base` set
    to the pre-fix head SHA so the diff is exactly the fix commits) before the Gate below.
+   **The re-review is ALWAYS delta-scoped and runs `model: sonnet`** regardless of the
+   original pass's tier (owner directive 2026-07-14) — re-reviewing the entire PR after a
+   feedback fix wastes the wall-clock the fix was meant to save; the whole-PR pass already
+   happened and stands.
 5. **Record the review on the PR** — post one comment summarising the Claude adversarial
    review (and noting CodeRabbit's, if one arrived) plus the per-finding
    resolution (applied + commit / skipped + reason / deferred + tracking-issue link), so there is an

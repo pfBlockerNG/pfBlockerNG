@@ -175,7 +175,7 @@ The Brief stage reads `ADR.md`, the phase prompt, and the prior `RESULTS/`
 records + carry_forward chain just-in-time, runs the enumeration greps itself, and
 evaluates the previous phase's landed diff against the ADR's invariants (the broadened
 drift check); the workflow pipes the schema-forced brief through the Sonnet implementer
-and a fresh higher-model verifier and returns `{briefRecord, handoff, gateRecord}` — all
+and a fresh Sonnet verifier (never the brief author's model) and returns `{briefRecord, handoff, gateRecord}` — all
 schema-forced (field contracts in `.claude/workflows/phase-step.js`).
 
 Your duties on return:
