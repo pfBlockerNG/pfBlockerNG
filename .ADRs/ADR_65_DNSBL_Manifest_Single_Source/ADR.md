@@ -404,28 +404,46 @@ config key, an alias name, the IP re-check, the log line schema — is a **defec
   `pfb_py_zone`/`pfb_py_data`; rebuild-trigger semantics (`:16968-16972`) stay.
 - Red→green against the Phase-1 oracle (decisions unchanged, D1). Delta budget: **D1 only**.
 
-### Phase 7 — Smoke, docs, ADR-06 amendment, DoD
+### Phase 7 — Reconcile the six re-check ui_e2e tests (test maintenance)
 
-- Live-VM smoke: a query-channel round-trip returns the correct verdict with **no** counter/log
-  side effect; a manifest-absent run shows empty DNSBL + notice + widget out-of-sync + no stale
-  block, then self-heals (D3); reports render from logs (D2); webserver-hit attribution via query
-  (D4). CE + Plus fan-out.
-- Docs: rewrite `docs/misc/alerts-reports-pipeline.md` to the one-phase log-driven model; update
-  architecture-notes; **amend ADR-06 §8** (manifest = single source, interchange files retired,
-  fail-loud); release-note D2; close #1244/#1245; file the follow-up issue for retiring
-  `dnsblcache`/the `pfb_dnsbl_parse` grep helpers — out of scope here. (The originally planned
-  "vestigial `pfb_tld`" issue is moot: #1255 made the toggle gate the manifest path.)
+- `tests/smoke/ui/test_alerts_render_verify.py`'s six re-check tests pin removed D2 behaviour;
+  reconcile them to the logged-fields model and sweep `tests/smoke/**` for any other stale
+  re-check/interchange assertion. Tests only; on-box execution rides the acceptance run.
+
+### Phase 8 — Author the ADR-65 live-VM smoke rows (execution deferred)
+
+- Four new smoke rows automating §7's checklist: (a) query round-trip with zero counter/log
+  side effect (D4/Semantic 3); (b) manifest-absent fail-loud + no stale block + self-heal
+  (D3); (c) VIP-hit widget counter via the query-derived group (D4); (d) reports render the
+  logged fields (D2). Authored + collection-checked off-appliance; executed in the
+  acceptance run.
+
+### Phase 9 — Docs, ADR-06 §8 amendment, release note, issue prep
+
+- Rewrite `docs/misc/alerts-reports-pipeline.md` to the one-phase log-driven model; update
+  architecture-notes; **amend ADR-06 §8** (manifest = single source, interchange files
+  retired, fail-loud); stage the D2 release note; draft #1244/#1245 closure comments (closed
+  at PR merge) and file the retirement-inventory tracking issue (`dnsblcache`, the
+  `pfb_dnsbl_parse`/prefetch grep helpers, the Python close-only wrappers + path defs). (The
+  originally planned "vestigial `pfb_tld`" issue is moot: #1255 made the toggle gate the
+  manifest path.)
+
+### Acceptance execution (orchestrator, after Phase 9)
+
+- The live-VM **CE + Plus fan-out** (`scripts/local-smoke.sh` on leased `PFB_BOXES`) executes
+  the Phase-7/8 rows plus Tier-A `ui_render` — the deferred hard gate from the consumer
+  rewire. Failures fold back as fixes on the branch; §7's DoD flips on the green run.
 
 ## 7. Definition of done
 
-- All seven phases landed; canonical gates green (`scripts/agent/run-gates.sh --diff origin/devel`).
+- All nine phases landed; canonical gates green (`scripts/agent/run-gates.sh --diff origin/devel`).
 - The Phase-1 decision oracle re-runs GREEN — zero net decision changes; the query channel is
   decision-equal and side-effect-free (except LRU).
 - The four accepted deltas D1–D4 are the ONLY observable output changes.
 - **Live-VM CE + Plus fan-out** (the org-default matrix) green on the query-channel, fail-loud,
   reports-from-logs, and webserver-hit-attribution smoke rows.
 - `config.xml` byte-identical across an upgrade.
-- ADR-06 §8 amended; #1244/#1245 closed; the `dnsblcache`/grep-helper cleanup issue filed.
+- ADR-06 §8 amended; #1244/#1245 closed at PR merge; the retirement-inventory cleanup issue filed.
 - **Manual smoke checklist (owner: maintainer)** — CI cannot run the module: (a) `drill` a
   uuid-domain feed match on-box, confirm the block AND that `dnsbl.log` gets exactly one line while
   a `pfb_dnsbl_query` of the same name adds **none**; (b) remove the manifest, confirm empty DNSBL +
