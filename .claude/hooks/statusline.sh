@@ -26,7 +26,9 @@ else
 		printf '%s' "$badge" | sed "s/]/ ${saved}↓]/"
 	else
 		printf '%s' "$badge"
-		[ -n "$saved" ] && printf ' \033[38;5;172m⛏ %s\033[0m' "$saved" || :
+		if [ -n "$saved" ]; then
+			printf ' \033[38;5;172m⛏ %s\033[0m' "$saved"
+		fi
 	fi
 fi
 

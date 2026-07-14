@@ -28,6 +28,13 @@ pytest-timeout==2.4.0
 # tests/smoke -- never needs it.
 # >=2.33.0 fixes CVE-2026-25645 (predictable tmp filenames in extract_zipped_paths).
 requests==2.34.2
+# Transitive floor (via requests): >=3.15 fixes CVE-2026-45409 (idna.encode()
+# bypass of the CVE-2024-3651 DoS fix). A persistent venv keeps a stale
+# already-satisfying transitive dep forever without this floor.
+idna>=3.15
+# Transitive floor (via pytest, installed alongside this file): >=2.20.0 fixes
+# CVE-2026-4539 (ReDoS in the GUID-matching regex).
+pygments>=2.20.0
 # ADR-14 Tier-B (browser): headless Chromium drives the JS-only UX
 # (tests/smoke/ui/test_browser.py) + captures per-page screenshot artifacts.
 # Imported lazily via pytest.importorskip (conftest + the test module), so a host

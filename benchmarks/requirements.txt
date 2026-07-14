@@ -2,3 +2,4 @@
 # Install:  python -m pip install -r benchmarks/requirements.txt
 pytest-benchmark>=5,<6   # latency/throughput (the `benchmark` fixture)
 pympler>=1,<2            # asizeof: deep retained object-graph size (memory)
+pygments>=2.20.0         # transitive floor (via pytest): CVE-2026-4539 ReDoS fix
