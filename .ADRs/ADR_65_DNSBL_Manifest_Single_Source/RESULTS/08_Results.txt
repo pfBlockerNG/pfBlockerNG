@@ -244,8 +244,11 @@ DEVIATIONS / JUDGMENT CALLS
 PUSH
 --------------------------------------------------------------------------------
 $ git -C /Users/andre/git/pfBlockerNG-adr65 push --force-with-lease origin HEAD
-(recorded after this handoff commit lands, per the brief's ordering: author ->
-collect -> commit -> post-commit checks -> handoff commit -> push)
+  To github.com:pfBlockerNG/pfBlockerNG.git
+   + a8305314...07492cea HEAD -> adr/65-dnsbl-manifest-single-source (forced update)
+  ok adr/65-dnsbl-manifest-single-source
+Accepted (rewrote history via the rebase; lease held against the fetched
+remote tip) -- no denial to record.
 
 --------------------------------------------------------------------------------
 CARRY-FORWARD (Phase 9 -- docs, ADR-06 SS8 amendment, release note, issue prep)
