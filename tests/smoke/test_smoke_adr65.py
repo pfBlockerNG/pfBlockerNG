@@ -532,20 +532,22 @@ def test_vip_hit_increments_widget_counter_with_query_group(adr65_vm: SmokeVM) -
     # The webserver-hit event exists ONLY under pfb_py_nolog: it is what makes the sinkhole's
     # lighttpd emit the accesslog pipe that feeds pfb_log_event(). Set it BEFORE the update
     # pass below, which regenerates the lighttpd conf; restore it afterwards.
-    prev_nolog = _set_py_nolog(adr65_vm, "on")
+    prev_nolog = h.config_get(adr65_vm, f"{_DNSBL_SETTINGS_PATH}/pfb_py_nolog")
     try:
-        persisted = h.config_get(adr65_vm, f"{_DNSBL_SETTINGS_PATH}/pfb_py_nolog")
-        assert persisted == "on", f"pfb_py_nolog did not persist: config reads {persisted!r}, expected 'on'"
-
         # scope="update" (not the default "updatednsbl"): only a FULL update pass
         # provisions the sinkhole NAT/lighttpd-conf/restart -- test_dnsbl_block_page.py
         # documents the same split.
         with h.CaseContext(adr65_vm, spec, scope="update"):
-            # The update pass regenerates the sinkhole's lighttpd conf. Under pfb_py_nolog
-            # it MUST carry the accesslog pipe -- that pipe IS the webserver-hit event
-            # path this row pins, so assert the precondition rather than mis-blaming a
-            # missing log line later.
+            # pfb_py_nolog MUST be set INSIDE the case: inject() REPLACES the DNSBL
+            # settings node (keeping only the VIP/port infra keys) so a case cannot
+            # inherit a prior one's toggles -- a value set before CaseContext is wiped.
+            # The extra update pass then regenerates the sinkhole conf WITH the accesslog
+            # pipe, and that pipe IS the webserver-hit event path this row pins.
+            _set_py_nolog(adr65_vm, "on")
+            h.reload(adr65_vm, "update")
+
             still_on = h.config_get(adr65_vm, f"{_DNSBL_SETTINGS_PATH}/pfb_py_nolog")
+            assert still_on == "on", f"pfb_py_nolog did not survive the update pass: reads {still_on!r}"
             conf = adr65_vm.ssh("cat", "/var/unbound/pfb_dnsbl_lighty.conf", timeout=15.0)
             assert "accesslog.filename" in conf.stdout, (
                 "the regenerated sinkhole conf carries no accesslog pipe, so no webserver-hit "
