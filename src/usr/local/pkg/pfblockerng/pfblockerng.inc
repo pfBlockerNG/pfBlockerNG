@@ -7707,11 +7707,12 @@ function pfb_dnsbl_is_abp_rule_line(string $line): bool {
 		if ($first !== FALSE) {
 			if ($first === 0) {
 				// issue #1276: a hosts-dialect '## Section' comment shares the
-				// marker-at-position-0 shape with a real cosmetic rule -- require
-				// a non-whitespace char (ctype_space, or a UTF-8 NBSP) after the marker.
+				// marker-at-position-0 shape with a cosmetic rule -- require a
+				// non-whitespace char after it (explicit set, not ctype_space: ADR-26).
 				$after = substr($line, $marker_len, 1);
-				$after_nbsp = substr($line, $marker_len, 2) === "\xC2\xA0";
-				if ($after !== '' && !ctype_space($after) && !$after_nbsp) {
+				$after_is_content = $after !== '' && strspn($after, " \t\n\r\x0B\x0C") === 0;
+				$after_is_nbsp = substr($line, $marker_len, 2) === "\xC2\xA0";
+				if ($after_is_content && !$after_is_nbsp) {
 					return TRUE;
 				}
 			} elseif (strspn($line, 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._,~*-') >= $first) {
