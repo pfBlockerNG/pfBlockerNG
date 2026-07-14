@@ -25,7 +25,10 @@ since they, too, must track a rename.
 from __future__ import annotations
 
 import os
+import sys
 from typing import Any
+
+import unboundmodule
 
 import pfb_unbound
 
@@ -56,92 +59,74 @@ def _read(path: str) -> str:
 # C1 (the .inc side: python_tld/python_tlds keys derived + emitted) is pinned
 # structurally by tests/php/TldBridgeEmitTest.php (mirrors
 # PythonTldWildcardIniEmitTest.php). C2 (here): the .py READER survives the
-# hop -- a real ini file using the seam key names, read through the
-# production MAIN-section slice, feeding a real evaluate_domain block.
+# hop -- driven through the real init_standard() (not a re-implementation of
+# its MAIN-section read slice), so a forgotten production read goes red here.
 # --------------------------------------------------------------------------- #
 class TestIniBridgeRoundTrip:
-    """C2 -- ini keys written under the seam names survive the .py reader hop
-    and reach a real block decision."""
+    """C2 -- ini keys written under the seam names survive init_standard()'s
+    real MAIN-section read and reach a real block decision."""
 
-    def _read_main_tld_keys(self, tmp_path: Any, ini_body: str) -> dict[str, Any]:
-        ini_path = tmp_path / "pfb_unbound.ini"
-        ini_path.write_text(ini_body, encoding="utf-8")
-        pfb_unbound.pfb["pfb_unbound.ini"] = str(ini_path)
-        config = pfb_unbound._load_ini_config()
-        assert config is not None
-        assert config.has_section("MAIN")
+    def _init_from_ini(self, tmp_path: Any, monkeypatch: Any, ini_body: str) -> bool:
+        (tmp_path / "pfb_unbound.ini").write_text(ini_body, encoding="utf-8")
+        # init_standard() resets the ini path to the chroot-relative bare name;
+        # CWD is the lookup root off-appliance.
+        monkeypatch.chdir(tmp_path)
+        # init_standard() replaces sys.stderr; register monkeypatch's auto-restore.
+        monkeypatch.setattr(sys, "stderr", sys.stderr)
+        # The autouse reset fixture omits the mod_*_e strings; the (test-forced)
+        # False maxmind flag reads this one during init -- KeyError without it.
+        pfb_unbound.pfb["mod_maxminddb_e"] = "stub"
+        return pfb_unbound.init_standard(0, unboundmodule.module_env())
 
-        out: dict[str, Any] = {}
-        # Mirrors pfb_unbound.py's init_standard() MAIN-section read slice
-        # (python_tld_wildcard / python_tld / python_tlds reads) verbatim: same
-        # has_option guards, same production parser calls (getboolean /
-        # parse_python_tlds), keyed through the seam so a rename updates both
-        # the ini body above and this slice together.
-        if config.has_option("MAIN", TLD_WILDCARD_INI_KEY):
-            out[TLD_WILDCARD_INI_KEY] = config.getboolean("MAIN", TLD_WILDCARD_INI_KEY)
-        if config.has_option("MAIN", TLD_ALLOW_ENABLE_KEY):
-            out[TLD_ALLOW_ENABLE_KEY] = config.getboolean("MAIN", TLD_ALLOW_ENABLE_KEY)
-        if config.has_option("MAIN", TLD_ALLOW_LIST_KEY):
-            out[TLD_ALLOW_LIST_KEY] = pfb_unbound.parse_python_tlds(config.get("MAIN", TLD_ALLOW_LIST_KEY))
-        return out
-
-    def test_values_survive_the_writer_to_reader_hop(self, tmp_path: Any) -> None:
+    def test_values_survive_the_writer_to_reader_hop(self, tmp_path: Any, monkeypatch: Any) -> None:
         ini_body = (
             "[MAIN]\n"
+            "python_enable\t= false\n"
             f"{TLD_WILDCARD_INI_KEY}\t= true\n"
             f"{TLD_ALLOW_ENABLE_KEY}\t= true\n"
             f"{TLD_ALLOW_LIST_KEY}\t= com, net\n"
         )
-        got = self._read_main_tld_keys(tmp_path, ini_body)
-        assert got[TLD_WILDCARD_INI_KEY] is True
-        assert got[TLD_ALLOW_ENABLE_KEY] is True
-        assert got[TLD_ALLOW_LIST_KEY] == ["com", "net"]
+        try:
+            assert self._init_from_ini(tmp_path, monkeypatch, ini_body) is True
+            assert pfb_unbound.pfb[TLD_WILDCARD_INI_KEY] is True
+            assert pfb_unbound.pfb[TLD_ALLOW_ENABLE_KEY] is True
+            assert pfb_unbound.pfb[TLD_ALLOW_LIST_KEY] == ["com", "net"]
+        finally:
+            pfb_unbound.deinit(0)
 
-    def test_a_half_renamed_bridge_would_fail_loudly(self, tmp_path: Any) -> None:
-        # Given: an ini body using the CURRENT keys but the reader asked for a
-        # key that does not exist (simulating a half-renamed writer/reader
-        # pair -- one side renamed, the other not).
-        ini_body = f"[MAIN]\n{TLD_ALLOW_ENABLE_KEY}\t= true\n{TLD_ALLOW_LIST_KEY}\t= com\n"
-        ini_path = tmp_path / "pfb_unbound.ini"
-        ini_path.write_text(ini_body, encoding="utf-8")
-        pfb_unbound.pfb["pfb_unbound.ini"] = str(ini_path)
-        config = pfb_unbound._load_ini_config()
-        assert config is not None
-        # A key the writer never emitted (stand-in for an un-renamed reader
-        # probing a renamed writer key, or vice versa) is simply absent --
-        # has_option is False, never a silent stale/default value.
-        assert config.has_option("MAIN", "tld_allow") is False
-
-    def test_values_flow_into_a_real_block_decision(self, tmp_path: Any) -> None:
-        ini_body = f"[MAIN]\n{TLD_ALLOW_ENABLE_KEY}\t= true\n{TLD_ALLOW_LIST_KEY}\t= com\n"
-        got = self._read_main_tld_keys(tmp_path, ini_body)
-        cfg: dict[str, Any] = {
-            "python_blocking": False,
-            "dataDB": False,
-            "zoneDB": False,
-            "regexDB": False,
-            "whiteDB": False,
-            "hstsDB": False,
-            "dnsbl_ipv4": "10.10.10.1",
-            "dnsbl_ipv6": "::1",
-            TLD_ALLOW_ENABLE_KEY: got[TLD_ALLOW_ENABLE_KEY],
-            TLD_ALLOW_LIST_KEY: got[TLD_ALLOW_LIST_KEY],
-        }
-        containers: dict[str, Any] = {
-            "dataDB": {},
-            "zoneDB": {},
-            "whiteDB": {},
-            "hstsDB": {},
-            "regexDB": {},
-            "feedGroupIndexDB": {},
-        }
-        # A tld NOT on the ini-loaded allow-list is a real TLD_Allow block --
-        # proving the ini-derived value actually gates the decision, not just
-        # that it parsed.
-        dec = pfb_unbound.evaluate_domain("uuid-bridge.net", "uuid-bridge.net", "net", False, cfg, containers)
-        assert dec.is_found is True
-        assert dec.feed == "TLD_Allow"
-        assert dec.group == "DNSBL_TLD_Allow"
+    def test_values_flow_into_a_real_block_decision(self, tmp_path: Any, monkeypatch: Any) -> None:
+        ini_body = f"[MAIN]\npython_enable\t= false\n{TLD_ALLOW_ENABLE_KEY}\t= true\n{TLD_ALLOW_LIST_KEY}\t= com\n"
+        try:
+            assert self._init_from_ini(tmp_path, monkeypatch, ini_body) is True
+            cfg: dict[str, Any] = {
+                "python_blocking": False,
+                "dataDB": False,
+                "zoneDB": False,
+                "regexDB": False,
+                "whiteDB": False,
+                "hstsDB": False,
+                "dnsbl_ipv4": "10.10.10.1",
+                "dnsbl_ipv6": "::1",
+                TLD_ALLOW_ENABLE_KEY: pfb_unbound.pfb[TLD_ALLOW_ENABLE_KEY],
+                TLD_ALLOW_LIST_KEY: pfb_unbound.pfb[TLD_ALLOW_LIST_KEY],
+            }
+            containers: dict[str, Any] = {
+                "dataDB": {},
+                "zoneDB": {},
+                "whiteDB": {},
+                "hstsDB": {},
+                "regexDB": {},
+                "feedGroupIndexDB": {},
+            }
+            # A tld NOT on the ini-loaded allow-list is a real TLD_Allow block --
+            # proving the ini-derived value actually gates the decision, not just
+            # that it parsed.
+            dec = pfb_unbound.evaluate_domain("uuid-bridge.net", "uuid-bridge.net", "net", False, cfg, containers)
+            assert dec.is_found is True
+            assert dec.feed == "TLD_Allow"
+            assert dec.group == "DNSBL_TLD_Allow"
+        finally:
+            pfb_unbound.deinit(0)
 
 
 # --------------------------------------------------------------------------- #
