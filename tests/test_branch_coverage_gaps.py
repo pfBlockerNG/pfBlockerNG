@@ -532,13 +532,14 @@ class TestManifestErrorBranches:
 
     def test_build_from_manifest_returns_none_when_build_raises(self, tmp_path: Path) -> None:
         # A feeds row missing the "feed" key makes build() raise KeyError -> the
-        # except returns None (init then falls back to the legacy CSV load).
+        # except returns None (ADR-65: fail loud, no fallback load).
         manifest_path = tmp_path / "manifest.json"
         manifest_path.write_text(json.dumps({"feeds": [{"group": "g", "log_flag": "1", "raw": "x"}], "config": {}}))
         assert dnsbl_build_from_manifest(str(manifest_path)) is None
 
     def test_build_from_manifest_absent_file_returns_none(self) -> None:
-        # Contrast: a missing manifest also yields None (the legacy-fallback signal).
+        # Contrast: a missing manifest also yields None (ADR-65 opens a loud ledger
+        # entry too -- pinned in test_adr61_py_status.py, out of scope here).
         assert dnsbl_build_from_manifest("/no/such/manifest.json") is None
 
     def test_emit_count_returns_false_on_write_error(self) -> None:

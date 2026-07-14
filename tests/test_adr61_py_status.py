@@ -11,10 +11,10 @@ failures become enumerable the same way the PHP-side ledger's entries are.
 Covers:
   * pfb_py_status_open / pfb_py_status_close -- the pure open/refresh/close
     library (mirrors PfbSyncStatusLedgerTest.php's coverage shape).
-  * Fail-before/pass-after wiring at the 4 MANDATORY sites: _load_zone_db,
-    _load_data_db, _load_whitelist_db, _load_hsts_db (extracted out of
+  * Fail-before/pass-after wiring at _load_hsts_db (extracted out of
     init_standard for testability, mirroring the existing
-    _load_safesearch_db precedent).
+    _load_safesearch_db precedent). ADR-65 retires _load_zone_db/_load_data_db/
+    _load_whitelist_db -- their wrappers now only close ledger entries.
   * Fail-before/pass-after wiring at the 2 STRONGLY-ENCOURAGED sites:
     _load_safesearch_db, and _load_ini_config (pfb_unbound.ini -- newly
     extracted out of init_standard this round, same rationale).
@@ -228,200 +228,10 @@ def _new_feed_group_db() -> defaultdict[str, int]:
     return defaultdict(int)
 
 
-class TestLoadZoneDbLedgerWiring:
-    """_load_zone_db(): fail-before/pass-after against the ledger, plus the
-    UNCHANGED freetext sys.stderr.write diagnostic."""
-
-    def setup_method(self) -> None:
-        pfb_unbound.zoneDB = defaultdict(list)
-        pfb_unbound.feedGroupIndexDB = defaultdict(list)
-        pfb_unbound.pfb["zoneDB"] = False
-        pfb_unbound.pfb["python_blacklist"] = False
-
-    def test_load_failure_opens_entry_and_keeps_freetext_log(
-        self, tmp_path: Any, monkeypatch: Any, capsys: Any
-    ) -> None:
-        zone_path = tmp_path / "pfb_py_zone.txt"
-        zone_path.write_text("a,b,c,d,e,f\n", encoding="utf-8")
-        pfb_unbound.pfb["pfb_py_zone"] = str(zone_path)
-        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
-
-        real_open = open
-
-        def _boom_open(path: Any, *a: Any, **k: Any) -> Any:
-            if str(path) == str(zone_path):
-                raise OSError("simulated read failure")
-            return real_open(path, *a, **k)
-
-        monkeypatch.setattr("builtins.open", _boom_open)
-
-        pfb_unbound._load_zone_db(_new_feed_group_db(), 0)
-
-        err = capsys.readouterr().err
-        assert str(zone_path) in err, "the existing freetext diagnostic must be unchanged"
-        entries = _read_status_file(pfb_unbound.pfb["pfb_py_status"])
-        assert len(entries) == 1
-        assert entries[0] == {
-            "facility": "dnsbl",
-            "item": str(zone_path),
-            "stage": "parse",
-            "message": "Failed to load: {}: simulated read failure".format(zone_path),
-            "first_seen": entries[0]["first_seen"],
-            "last_seen": entries[0]["last_seen"],
-        }
-
-    def test_success_after_failure_clears_the_entry(self, tmp_path: Any, monkeypatch: Any) -> None:
-        zone_path = tmp_path / "pfb_py_zone.txt"
-        zone_path.write_text("a,b,c,d,e,f\n", encoding="utf-8")
-        pfb_unbound.pfb["pfb_py_zone"] = str(zone_path)
-        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
-
-        real_open = open
-
-        def _boom_open(path: Any, *a: Any, **k: Any) -> Any:
-            if str(path) == str(zone_path):
-                raise OSError("simulated read failure")
-            return real_open(path, *a, **k)
-
-        monkeypatch.setattr("builtins.open", _boom_open)
-        pfb_unbound._load_zone_db(_new_feed_group_db(), 0)
-        # Before-state: the entry is genuinely open first.
-        assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 1
-
-        monkeypatch.undo()
-        zone_path.write_text(
-            '{"kind":"domain","domain":"evil.com","log":"1","feed":"FeedA","group":"GroupA"}\n', encoding="utf-8"
-        )
-
-        pfb_unbound._load_zone_db(_new_feed_group_db(), 0)
-
-        assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
-        assert pfb_unbound.zoneDB["evil.com"]["log"] == "1"
-
-    def test_file_removed_after_failure_closes_the_orphaned_entry(self, tmp_path: Any, monkeypatch: Any) -> None:
-        zone_path = tmp_path / "pfb_py_zone.txt"
-        zone_path.write_text("a,b,c,d,e,f\n", encoding="utf-8")
-        pfb_unbound.pfb["pfb_py_zone"] = str(zone_path)
-        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
-
-        real_open = open
-
-        def _boom_open(path: Any, *a: Any, **k: Any) -> Any:
-            if str(path) == str(zone_path):
-                raise OSError("simulated read failure")
-            return real_open(path, *a, **k)
-
-        monkeypatch.setattr("builtins.open", _boom_open)
-        pfb_unbound._load_zone_db(_new_feed_group_db(), 0)
-        # Before-state: the entry is genuinely open first.
-        assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 1
-
-        monkeypatch.undo()
-        os.remove(zone_path)
-
-        pfb_unbound._load_zone_db(_new_feed_group_db(), 0)
-
-        assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
-
-    def test_no_file_present_leaves_ledger_untouched(self, tmp_path: Any) -> None:
-        pfb_unbound.pfb["pfb_py_zone"] = str(tmp_path / "does_not_exist.txt")
-        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
-
-        pfb_unbound._load_zone_db(_new_feed_group_db(), 0)
-
-        assert not os.path.isfile(pfb_unbound.pfb["pfb_py_status"])
-
-
-class TestLoadDataDbLedgerWiring:
-    """_load_data_db(): same fail-before/pass-after shape as zone, different item key."""
-
-    def setup_method(self) -> None:
-        pfb_unbound.dataDB = defaultdict(list)
-        pfb_unbound.feedGroupIndexDB = defaultdict(list)
-        pfb_unbound.pfb["dataDB"] = False
-        pfb_unbound.pfb["python_blacklist"] = False
-
-    def test_load_failure_opens_entry(self, tmp_path: Any, monkeypatch: Any, capsys: Any) -> None:
-        data_path = tmp_path / "pfb_py_data.txt"
-        data_path.write_text("a,b,c,d,e,f\n", encoding="utf-8")
-        pfb_unbound.pfb["pfb_py_data"] = str(data_path)
-        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
-
-        real_open = open
-
-        def _boom_open(path: Any, *a: Any, **k: Any) -> Any:
-            if str(path) == str(data_path):
-                raise OSError("simulated read failure")
-            return real_open(path, *a, **k)
-
-        monkeypatch.setattr("builtins.open", _boom_open)
-
-        pfb_unbound._load_data_db(_new_feed_group_db(), 0)
-
-        err = capsys.readouterr().err
-        assert str(data_path) in err
-        entries = _read_status_file(pfb_unbound.pfb["pfb_py_status"])
-        assert len(entries) == 1
-        assert entries[0]["item"] == str(data_path)
-        assert entries[0]["stage"] == "parse"
-
-    def test_success_after_failure_clears_the_entry(self, tmp_path: Any, monkeypatch: Any) -> None:
-        data_path = tmp_path / "pfb_py_data.txt"
-        data_path.write_text("a,b,c,d,e,f\n", encoding="utf-8")
-        pfb_unbound.pfb["pfb_py_data"] = str(data_path)
-        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
-
-        real_open = open
-
-        def _boom_open(path: Any, *a: Any, **k: Any) -> Any:
-            if str(path) == str(data_path):
-                raise OSError("simulated read failure")
-            return real_open(path, *a, **k)
-
-        monkeypatch.setattr("builtins.open", _boom_open)
-        pfb_unbound._load_data_db(_new_feed_group_db(), 0)
-        assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 1
-
-        monkeypatch.undo()
-        data_path.write_text(
-            '{"kind":"domain","domain":"evil.com","log":"1","feed":"FeedA","group":"GroupA"}\n', encoding="utf-8"
-        )
-
-        pfb_unbound._load_data_db(_new_feed_group_db(), 0)
-
-        assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
-        assert pfb_unbound.dataDB["evil.com"]["log"] == "1"
-
-    def test_file_removed_after_failure_closes_the_orphaned_entry(self, tmp_path: Any, monkeypatch: Any) -> None:
-        data_path = tmp_path / "pfb_py_data.txt"
-        data_path.write_text("a,b,c,d,e,f\n", encoding="utf-8")
-        pfb_unbound.pfb["pfb_py_data"] = str(data_path)
-        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
-
-        real_open = open
-
-        def _boom_open(path: Any, *a: Any, **k: Any) -> Any:
-            if str(path) == str(data_path):
-                raise OSError("simulated read failure")
-            return real_open(path, *a, **k)
-
-        monkeypatch.setattr("builtins.open", _boom_open)
-        pfb_unbound._load_data_db(_new_feed_group_db(), 0)
-        # Before-state: the entry is genuinely open first.
-        assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 1
-
-        monkeypatch.undo()
-        os.remove(data_path)
-
-        pfb_unbound._load_data_db(_new_feed_group_db(), 0)
-
-        assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
-
-
 class TestLoadZoneAndDataDbsLedgerWiring:
-    """_load_zone_and_data_dbs(): the 7th orphan site (issue #1049) -- a
-    manifest-built init (dnsbl_built=True) skips BOTH CSV loaders, so their
-    parse-stage entries must close instead of staying orphaned."""
+    """_load_zone_and_data_dbs(): ADR-65 retires the legacy CSV loaders entirely --
+    BOTH ``dnsbl_built`` states now only close the parse-stage entries they used
+    to own (issue #1049 orphan class); neither state reads a file."""
 
     def setup_method(self) -> None:
         pfb_unbound.zoneDB = defaultdict(list)
@@ -444,9 +254,9 @@ class TestLoadZoneAndDataDbsLedgerWiring:
 
         assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
 
-    def test_manifest_not_built_still_runs_the_csv_loaders(self, tmp_path: Any) -> None:
-        # dnsbl_built=False must still reach the legacy loaders (wiring check --
-        # the manifest-built branch must not swallow the fallback path too).
+    def test_manifest_not_built_also_closes_preexisting_entries_and_loads_nothing(self, tmp_path: Any) -> None:
+        # ADR-65: dnsbl_built=False no longer reaches the (retired) legacy loaders --
+        # the seeded files are ignored, only the ledger entries close.
         zone_path = tmp_path / "zone.txt"
         zone_path.write_text(
             '{"kind":"domain","domain":"evil.com","log":"1","feed":"FeedA","group":"GroupA"}\n', encoding="utf-8"
@@ -458,90 +268,13 @@ class TestLoadZoneAndDataDbsLedgerWiring:
         pfb_unbound.pfb["pfb_py_zone"] = str(zone_path)
         pfb_unbound.pfb["pfb_py_data"] = str(data_path)
         pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
+        pfb_unbound.pfb_py_status_open("dnsbl", str(zone_path), "parse", "boom")
+        pfb_unbound.pfb_py_status_open("dnsbl", str(data_path), "parse", "boom")
 
         pfb_unbound._load_zone_and_data_dbs(False, _new_feed_group_db(), 0)
 
-        assert pfb_unbound.zoneDB["evil.com"]["log"] == "1"
-        assert pfb_unbound.dataDB["bad.com"]["log"] == "1"
-
-
-class TestLoadWhitelistDbLedgerWiring:
-    """_load_whitelist_db(): fail-before/pass-after."""
-
-    def setup_method(self) -> None:
-        pfb_unbound.whiteDB = defaultdict(str)
-        pfb_unbound.pfb["whiteDB"] = False
-
-    def test_load_failure_opens_entry(self, tmp_path: Any, monkeypatch: Any, capsys: Any) -> None:
-        wl_path = tmp_path / "pfb_py_whitelist.txt"
-        wl_path.write_text("a,1\n", encoding="utf-8")
-        pfb_unbound.pfb["pfb_py_whitelist"] = str(wl_path)
-        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
-
-        real_open = open
-
-        def _boom_open(path: Any, *a: Any, **k: Any) -> Any:
-            if str(path) == str(wl_path):
-                raise OSError("simulated read failure")
-            return real_open(path, *a, **k)
-
-        monkeypatch.setattr("builtins.open", _boom_open)
-
-        pfb_unbound._load_whitelist_db()
-
-        err = capsys.readouterr().err
-        assert str(wl_path) in err
-        entries = _read_status_file(pfb_unbound.pfb["pfb_py_status"])
-        assert len(entries) == 1
-        assert entries[0]["item"] == str(wl_path)
-
-    def test_success_after_failure_clears_the_entry(self, tmp_path: Any, monkeypatch: Any) -> None:
-        wl_path = tmp_path / "pfb_py_whitelist.txt"
-        wl_path.write_text("a,1\n", encoding="utf-8")
-        pfb_unbound.pfb["pfb_py_whitelist"] = str(wl_path)
-        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
-
-        real_open = open
-
-        def _boom_open(path: Any, *a: Any, **k: Any) -> Any:
-            if str(path) == str(wl_path):
-                raise OSError("simulated read failure")
-            return real_open(path, *a, **k)
-
-        monkeypatch.setattr("builtins.open", _boom_open)
-        pfb_unbound._load_whitelist_db()
-        assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 1
-
-        monkeypatch.undo()
-
-        pfb_unbound._load_whitelist_db()
-
-        assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
-        assert pfb_unbound.whiteDB["a"] == {"wildcard": True, "important": True}
-
-    def test_file_removed_after_failure_closes_the_orphaned_entry(self, tmp_path: Any, monkeypatch: Any) -> None:
-        wl_path = tmp_path / "pfb_py_whitelist.txt"
-        wl_path.write_text("a,1\n", encoding="utf-8")
-        pfb_unbound.pfb["pfb_py_whitelist"] = str(wl_path)
-        pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
-
-        real_open = open
-
-        def _boom_open(path: Any, *a: Any, **k: Any) -> Any:
-            if str(path) == str(wl_path):
-                raise OSError("simulated read failure")
-            return real_open(path, *a, **k)
-
-        monkeypatch.setattr("builtins.open", _boom_open)
-        pfb_unbound._load_whitelist_db()
-        # Before-state: the entry is genuinely open first.
-        assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 1
-
-        monkeypatch.undo()
-        os.remove(wl_path)
-
-        pfb_unbound._load_whitelist_db()
-
+        assert dict(pfb_unbound.zoneDB) == {}
+        assert dict(pfb_unbound.dataDB) == {}
         assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
 
 
@@ -666,9 +399,10 @@ class TestLoadHstsDbLedgerWiring:
 
 
 class TestLoadWhitelistAndHstsDbsLedgerWiring:
-    """_load_whitelist_and_hsts_dbs(): issue #1049's other two skip axes --
-    (a) manifest-built skips only the whitelist loader; (b) python_blacklist OFF
-    skips both loaders. Either skip must close the owned entry, not orphan it."""
+    """_load_whitelist_and_hsts_dbs(): ADR-65 retires the legacy whitelist loader --
+    every ``dnsbl_built`` state now only closes its parse-stage entry (issue #1049
+    orphan class); HSTS is INDEPENDENT of ``python_blacklist`` (Semantic 4) and
+    still self-gates on ``python_hsts``/file presence via ``_load_hsts_db``."""
 
     def setup_method(self) -> None:
         pfb_unbound.whiteDB = defaultdict(str)
@@ -711,9 +445,10 @@ class TestLoadWhitelistAndHstsDbsLedgerWiring:
 
         assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
 
-    def test_blacklist_on_manifest_not_built_still_runs_both_loaders(self, tmp_path: Any) -> None:
-        # dnsbl_built=False + blacklist ON must still reach both legacy loaders
-        # (wiring check -- the skip branches must not swallow the normal path).
+    def test_manifest_not_built_closes_whitelist_but_still_loads_hsts(self, tmp_path: Any) -> None:
+        # ADR-65: dnsbl_built=False no longer reaches the (retired) whitelist
+        # loader -- the seeded file is ignored, only its entry closes. HSTS is
+        # unaffected -- it loads regardless of python_blacklist.
         wl_path = tmp_path / "whitelist.txt"
         wl_path.write_text("allow.example,0\n", encoding="utf-8")
         hsts_path = tmp_path / "hsts.txt"
@@ -722,10 +457,12 @@ class TestLoadWhitelistAndHstsDbsLedgerWiring:
         pfb_unbound.pfb["pfb_py_hsts"] = str(hsts_path)
         pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
         pfb_unbound.pfb["python_blacklist"] = True
+        pfb_unbound.pfb_py_status_open("dnsbl", str(wl_path), "parse", "boom")
 
         pfb_unbound._load_whitelist_and_hsts_dbs(False)
 
-        assert pfb_unbound.whiteDB["allow.example"]["important"] is True
+        assert dict(pfb_unbound.whiteDB) == {}
+        assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
         assert "bad.example" in pfb_unbound.hstsDB
 
 
@@ -890,31 +627,41 @@ class TestLoadIniConfigLedgerWiring:
 
 
 class TestDnsblBuildFromManifestLedgerWiring:
-    """dnsbl_build_from_manifest(): the ADR-06 manifest path -- fail-before/
-    pass-after for BOTH failure shapes (unparseable JSON, build() exception),
-    funneled into the SAME (facility, item, stage) key."""
+    """dnsbl_build_from_manifest(): the manifest path -- fail-before/pass-after
+    for ALL THREE failure shapes (absent, unparseable JSON, build() exception),
+    funneled into the SAME (facility, item, stage) key (ADR-65: absent is now a
+    loud failure too, no legacy CSV fallback)."""
 
-    def test_missing_manifest_never_opens_an_entry(self, tmp_path: Any) -> None:
-        # The legitimate "not using the manifest path" case (init falls back to
-        # the legacy CSV loaders) must NOT be treated as a parse failure.
+    def test_missing_manifest_opens_an_entry(self, tmp_path: Any) -> None:
+        # ADR-65: the "no manifest -> legacy CSV fallback" case is RETIRED --
+        # an absent manifest is now a LOUD failure, same as unparseable JSON.
         pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
         manifest_path = str(tmp_path / "nope.json")
 
         assert pfb_unbound.dnsbl_build_from_manifest(manifest_path) is None
-        assert not os.path.isfile(pfb_unbound.pfb["pfb_py_status"])
 
-    def test_missing_manifest_closes_a_preexisting_orphaned_entry(self, tmp_path: Any) -> None:
-        # issue #1049 site 7: an earlier corrupt-manifest run left this key open;
-        # the manifest is now gone -- the absent-manifest return must close it.
+        entries = _read_status_file(pfb_unbound.pfb["pfb_py_status"])
+        assert len(entries) == 1
+        assert entries[0]["item"] == manifest_path
+        assert entries[0]["stage"] == "parse"
+
+    def test_missing_manifest_keeps_a_preexisting_entry_open_until_a_good_build(self, tmp_path: Any) -> None:
+        # A prior corrupt-manifest run left this key open; the manifest is STILL
+        # absent -- ADR-65 keeps it open (refreshed), never silently closes it.
         pfb_unbound.pfb["pfb_py_status"] = str(tmp_path / "pfb_py_status.json")
-        manifest_path = str(tmp_path / "nope.json")
-        pfb_unbound.pfb_py_status_open("dnsbl", manifest_path, "parse", "boom")
+        manifest_path = tmp_path / "nope.json"
+        pfb_unbound.pfb_py_status_open("dnsbl", str(manifest_path), "parse", "boom")
         # Before-state: the entry is genuinely open first.
         assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 1
 
-        assert pfb_unbound.dnsbl_build_from_manifest(manifest_path) is None
+        assert pfb_unbound.dnsbl_build_from_manifest(str(manifest_path)) is None
 
-        assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []
+        assert len(_read_status_file(pfb_unbound.pfb["pfb_py_status"])) == 1  # still open, not closed
+
+        manifest_path.write_text(json.dumps({"version": 1, "config": {}, "feeds": []}), encoding="utf-8")
+
+        assert pfb_unbound.dnsbl_build_from_manifest(str(manifest_path)) is not None
+        assert _read_status_file(pfb_unbound.pfb["pfb_py_status"]) == []  # a later good build closes it
 
     def test_corrupt_json_opens_entry_and_keeps_freetext_log(self, tmp_path: Any, capsys: Any) -> None:
         manifest_path = tmp_path / "pfb_py_sources.json"

@@ -8271,7 +8271,14 @@ function pfb_unbound_python_sources($feeds) {
 		// sentinel flip that ACTS on it is driven by pfb_reload_unbound's data
 		// fast path (so a full feed update advances the generation exactly once,
 		// after every manifest+raw file is in place), not here.
-		pfb_unbound_py_atomic_write($pfb['unbound_py_sources'], $json);
+		if (!pfb_unbound_py_atomic_write($pfb['unbound_py_sources'], $json)) {
+			// ADR-65: a swallowed publish failure left Python running on a stale/absent
+			// manifest with no operator-visible signal -- surface it like the existing
+			// MaxMind/VIP credential notices (issue #331 pattern).
+			$manifest_notice = "DNSBL manifest publish failed: {$pfb['unbound_py_sources']}";
+			pfb_logger("\n{$manifest_notice}", 2);
+			file_notice('pfBlockerNG DNSBL', $manifest_notice, 'pfBlockerNG', '/pfblockerng/pfblockerng_dnsbl.php', 2);
+		}
 	}
 
 	return $manifest;
@@ -9171,6 +9178,26 @@ function pfb_dnsbl_apply_retry(): void {
 	pfb_dnsbl_apply_ledger_update();
 }
 
+// ADR-65: surface a still-open DNSBL manifest parse-stage ledger entry (Python's
+// pfb_py_status.json -- fail-loud absent/unparseable/build-failed manifest) as a
+// GUI file_notice, the same visibility the MaxMind/VIP credential notices get
+// (issue #331 pattern). Read-only; never writes the ledger. Returns TRUE iff a
+// notice fired.
+function pfb_dnsbl_manifest_failure_notice(): bool {
+	global $pfb;
+
+	foreach (pfb_py_sync_status_list_open($pfb['dnsbldir']) as $entry) {
+		if ($entry['stage'] === 'parse' && basename($entry['item']) === basename($pfb['unbound_py_sources'])) {
+			$manifest_notice = "DNSBL manifest not loaded: {$entry['message']}";
+			pfb_logger("\n{$manifest_notice}", 2);
+			file_notice('pfBlockerNG DNSBL', $manifest_notice, 'pfBlockerNG', '/pfblockerng/pfblockerng_dnsbl.php', 2);
+			return TRUE;
+		}
+	}
+
+	return FALSE;
+}
+
 // Reload Resolver. ADR-10: $datapath signals a pure DNSBL-DATA update (feed/cron or a #51
 // custom-list edit) already published atomically to the manifest. When python is live, unbound
 // is running, no config change is pending, and the RAM gate fits, this takes the ZERO-DOWNTIME
@@ -9477,6 +9504,13 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython) {
 	$loaded_cnt = trim((string) @file_get_contents($pfb['unbound_py_count']));
 	$log = "\nDNSBL update [ feed lines: {$dnsbl_cnt} | loaded entries: {$loaded_cnt} ]... completed";
 	pfb_logger("{$log}", 1);
+
+	// ADR-65: the manifest is Python's sole DNSBL source now -- surface a fail-loud
+	// parse-stage ledger entry (absent/unparseable/build-failed manifest) here, the
+	// same per-update-pass cadence the MaxMind/VIP notices already use.
+	if (pfb_unbound_py_mode_active()) {
+		pfb_dnsbl_manifest_failure_notice();
+	}
 
 	// ADR-48 (issue #789): emit stage=entries reject lines for any feed
 	// with a nonzero per-entry tally, BEFORE clearing work files.

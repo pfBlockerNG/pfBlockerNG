@@ -280,8 +280,8 @@ class ReferencePipeline:
     def _build_whitelist(self) -> None:
         """User-whitelist normalisation (mirrors PHP's pfb_unbound_python_whitelist()):
         www-strip, leading-dot -> wildcard '1' else '0'. TOP1M -> whiteDB only when
-        enabled. whiteDB value is the wildcard bool pfb_unbound.py's
-        _load_whitelist_db() stores from that '1'/'0' encoding."""
+        enabled. whiteDB value is the wildcard bool the manifest build's
+        user_whitelist entries carry from that '1'/'0' encoding."""
         for line in self.config.get("user_whitelist", []):
             line = line.strip()
             if not line:

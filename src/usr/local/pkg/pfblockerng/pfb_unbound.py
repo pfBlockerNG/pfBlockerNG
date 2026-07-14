@@ -1018,116 +1018,6 @@ def warn_if_legacy_control_enabled(enabled: bool) -> None:
         )
 
 
-def _load_ndjson_row_into_db(
-    db: dict[str, Any], line: str, path: str, feed_group_db: defaultdict[str, int], feed_group_index: int
-) -> int:
-    """Shared #1083 NDJSON row-into-DB step for ``_load_zone_db``/``_load_data_db``: a
-    'domain' row populates ``db``/``feedGroupIndexDB`` exactly as the legacy CSV loader
-    did; an 'abp' row is a legitimate self-describing line on the TLD-disabled rename
-    path (``pfb_dnsbl.raw`` renamed verbatim to ``pfb_py_data.txt``) and is silently
-    skipped, WITHOUT the undecodable-line diagnostic below. Returns the advanced index."""
-    row = _dnsbl_parse_ndjson_row(line)
-    if row is None:
-        sys.stderr.write("[pfBlockerNG]: Failed to parse: {}: {}".format(path, line))
-        return feed_group_index
-    if row["kind"] == "abp":
-        return feed_group_index
-
-    key = row["feed"] + row["group"]
-    isInFeedGroupDB = feed_group_db.get(key)
-    if isInFeedGroupDB is None:
-        feed_group_db[key] = feed_group_index
-        feedGroupIndexDB[feed_group_index] = {"feed": row["feed"], "group": row["group"]}
-        final_index = feed_group_index
-        feed_group_index += 1
-    else:
-        final_index = isInFeedGroupDB
-
-    db[row["domain"]] = {"log": row["log"], "index": final_index, "important": False}
-    return feed_group_index
-
-
-def _load_zone_db(feed_group_db: defaultdict[str, int], feed_group_index: int) -> int:
-    """Parse the NDJSON zone file (``pfb["pfb_py_zone"]``, #1083) into ``zoneDB`` --
-    skipped when the ADR-06 manifest already built it. Extracted out of
-    ``init_standard`` (mirrors ``_load_safesearch_db``) so the load -- and its failure
-    diagnostic -- are unit-testable without the full Unbound ``env``/``id`` init rig.
-    Returns the advanced ``feed_group_index`` (shared with ``_load_data_db`` across
-    both files). Behaviour-preserving: same DB shape, same ``pfb["zoneDB"]`` flag."""
-    if not os.path.isfile(pfb["pfb_py_zone"]):
-        pfb_py_status_close("dnsbl", pfb["pfb_py_zone"], "parse")
-        return feed_group_index
-    try:
-        with open(pfb["pfb_py_zone"]) as ndjson_file:
-            for line in ndjson_file:
-                feed_group_index = _load_ndjson_row_into_db(
-                    zoneDB, line, pfb["pfb_py_zone"], feed_group_db, feed_group_index
-                )
-
-            pfb["zoneDB"] = True
-            pfb["python_blacklist"] = True
-            pfb_py_status_close("dnsbl", pfb["pfb_py_zone"], "parse")
-    except Exception as e:
-        sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}".format(pfb["pfb_py_zone"], e))
-        pfb_py_status_open("dnsbl", pfb["pfb_py_zone"], "parse", "Failed to load: {}: {}".format(pfb["pfb_py_zone"], e))
-    return feed_group_index
-
-
-def _load_data_db(feed_group_db: defaultdict[str, int], feed_group_index: int) -> int:
-    """Parse the NDJSON data file (``pfb["pfb_py_data"]``, #1083) into ``dataDB`` --
-    skipped when the ADR-06 manifest already built it. Same extraction rationale/shape
-    as ``_load_zone_db`` (shares ``feed_group_db``/``feed_group_index`` with it)."""
-    if not os.path.isfile(pfb["pfb_py_data"]):
-        pfb_py_status_close("dnsbl", pfb["pfb_py_data"], "parse")
-        return feed_group_index
-    try:
-        with open(pfb["pfb_py_data"]) as ndjson_file:
-            for line in ndjson_file:
-                feed_group_index = _load_ndjson_row_into_db(
-                    dataDB, line, pfb["pfb_py_data"], feed_group_db, feed_group_index
-                )
-
-            pfb["dataDB"] = True
-            pfb["python_blacklist"] = True
-            pfb_py_status_close("dnsbl", pfb["pfb_py_data"], "parse")
-    except Exception as e:
-        sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}".format(pfb["pfb_py_data"], e))
-        pfb_py_status_open("dnsbl", pfb["pfb_py_data"], "parse", "Failed to load: {}: {}".format(pfb["pfb_py_data"], e))
-    return feed_group_index
-
-
-def _load_whitelist_db() -> None:
-    """Parse the legacy user whitelist CSV (``pfb["pfb_py_whitelist"]``) into
-    ``whiteDB`` -- skipped when the ADR-06 manifest already built it. Same
-    extraction rationale as ``_load_zone_db``."""
-    if not os.path.isfile(pfb["pfb_py_whitelist"]):
-        pfb_py_status_close("dnsbl", pfb["pfb_py_whitelist"], "parse")
-        return
-    try:
-        with open(pfb["pfb_py_whitelist"]) as csv_file:
-            csv_reader = csv.reader(csv_file, delimiter=",")
-            for row in csv_reader:
-                if row and len(row) == 2:
-                    if row[1] == "1":
-                        wildcard = True
-                    else:
-                        wildcard = False
-                    # ADR-07: whiteDB value widens to
-                    # {"wildcard", "important"}; the legacy CSV is the
-                    # USER whitelist -> important=True (sovereignty).
-                    whiteDB[row[0]] = {"wildcard": wildcard, "important": True}
-                    pfb["whiteDB"] = True
-                else:
-                    sys.stderr.write("[pfBlockerNG]: Failed to parse: {}: {}".format(pfb["pfb_py_whitelist"], row))
-
-        pfb_py_status_close("dnsbl", pfb["pfb_py_whitelist"], "parse")
-    except Exception as e:
-        sys.stderr.write("[pfBlockerNG]: Failed to load: {}: {}".format(pfb["pfb_py_whitelist"], e))
-        pfb_py_status_open(
-            "dnsbl", pfb["pfb_py_whitelist"], "parse", "Failed to load: {}: {}".format(pfb["pfb_py_whitelist"], e)
-        )
-
-
 def _load_hsts_db() -> None:
     """Parse the HSTS preload file (``pfb["pfb_py_hsts"]``) into ``hstsDB`` --
     gated on ``pfb["python_hsts"]`` (not on the ADR-06 manifest: hstsDB is NOT
@@ -1151,32 +1041,20 @@ def _load_hsts_db() -> None:
 
 
 def _load_zone_and_data_dbs(dnsbl_built: bool, feed_group_db: defaultdict[str, int], feed_group_index: int) -> int:
-    """Run the legacy zone/data CSV loaders when the ADR-06 manifest build did NOT
-    already supply them; otherwise close the parse-stage entries they would own --
-    a manifest-built init means neither loader ran this pass (issue #1049)."""
-    if not dnsbl_built:
-        feed_group_index = _load_zone_db(feed_group_db, feed_group_index)
-        feed_group_index = _load_data_db(feed_group_db, feed_group_index)
-    else:
-        pfb_py_status_close("dnsbl", pfb["pfb_py_zone"], "parse")
-        pfb_py_status_close("dnsbl", pfb["pfb_py_data"], "parse")
+    """ADR-65: the legacy zone/data CSV loaders are RETIRED (fail loud, no stale
+    fallback) -- this only closes parse-stage entries a pre-ADR-65 init could have
+    left open (issue #1049 orphan class); ``feed_group_index`` passes through."""
+    pfb_py_status_close("dnsbl", pfb["pfb_py_zone"], "parse")
+    pfb_py_status_close("dnsbl", pfb["pfb_py_data"], "parse")
     return feed_group_index
 
 
 def _load_whitelist_and_hsts_dbs(dnsbl_built: bool) -> None:
-    """Run whitelist/HSTS loading when the blacklist gate is on -- whitelist is
-    skipped when the manifest already built it (ADR-06); otherwise (blacklist
-    OFF) close both parse-stage entries, since neither loader runs this pass
-    (issue #1049)."""
-    if pfb["python_blacklist"]:
-        if not dnsbl_built:
-            _load_whitelist_db()
-        else:
-            pfb_py_status_close("dnsbl", pfb["pfb_py_whitelist"], "parse")
-        _load_hsts_db()
-    else:
-        pfb_py_status_close("dnsbl", pfb["pfb_py_whitelist"], "parse")
-        pfb_py_status_close("dnsbl", pfb["pfb_py_hsts"], "parse")
+    """ADR-65: the legacy whitelist CSV loader is RETIRED -- close its parse-stage
+    entry unconditionally. HSTS is INDEPENDENT of the manifest/blacklist gate
+    (Semantic 4): ``_load_hsts_db`` self-gates on ``python_hsts`` + file presence."""
+    pfb_py_status_close("dnsbl", pfb["pfb_py_whitelist"], "parse")
+    _load_hsts_db()
 
 
 def _close_dnsbl_loader_entries_when_disabled() -> None:
@@ -1759,17 +1637,9 @@ def init_standard(id: int, env: module_env) -> bool:
             # Collect SafeSearch Redirection list
             _load_safesearch_db()
 
-            # ADR-06: prefer BUILDING the DNSBL structures from the raw feeds via
-            # the pure build() layer (the new shell->Python boundary). When the
-            # per-feed manifest is present, Python parses -> normalises -> classifies
-            # (data/zone) -> builds dataDB/zoneDB/feedGroupIndexDB/whiteDB and emits
-            # the entry count -- it is now the source of truth for the built
-            # structures. The legacy data/zone/whitelist CSV load below is the
-            # FALLBACK (shell/PHP still produce those files for this fallback),
-            # used only when no manifest is present. Python ignores
-            # stray IP lines and never touches the firewall/IP path (DNSBL-IP stays
-            # in PHP). The build call site is the future zero-downtime swap point;
-            # no background-thread/restart-free behaviour is added here.
+            # ADR-65: the manifest is the SOLE DNSBL source -- an absent/unparseable/
+            # unbuildable manifest leaves dataDB/zoneDB/whiteDB EMPTY (no fallback);
+            # the loud ledger entry opened below signals the failure instead.
             dnsbl_built = False
             build_result = dnsbl_build_from_manifest(pfb["pfb_py_sources"])
             if build_result is not None:
@@ -5510,13 +5380,15 @@ def dnsbl_build_from_manifest(manifest_path: str) -> BuildResult | None:
 
     The manifest carries ``feeds`` (one row per raw feed file) and a ``config`` block.
     ``top1m_enabled`` is taken from ``config["top1m_enabled"]``. Returns ``None`` when
-    the manifest is absent or cannot be parsed (init then falls back to the legacy
-    CSV load -- shell/PHP still produce those files for that fallback).
+    the manifest is absent or cannot be parsed -- ADR-65: init then leaves
+    dataDB/zoneDB/whiteDB EMPTY (no fallback); the open ledger entry is the signal.
     """
     if not os.path.isfile(manifest_path):
-        # issue #1049: close an orphaned prior parse-stage entry -- mirrors the
-        # 6 CSV-loader sites' absent-file close (af3da0ec).
-        pfb_py_status_close("dnsbl", manifest_path, "parse")
+        # ADR-65: fail LOUD, never stale-serve -- open (never close-only) so the
+        # missing manifest surfaces via the ledger instead of silently doing nothing.
+        pfb_py_status_open(
+            "dnsbl", manifest_path, "parse", "DNSBL manifest absent: {} -- DNSBL not loaded".format(manifest_path)
+        )
         return None
 
     try:

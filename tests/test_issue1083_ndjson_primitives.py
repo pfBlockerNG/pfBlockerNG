@@ -95,8 +95,8 @@ def test_deeply_nested_hostile_line_does_not_raise_recursion_error() -> None:
     # on CPython's C-accelerated scanner too, not just the pure-Python fallback) --
     # PHP's json_decode() has a fixed depth cap and returns NULL instead, so an
     # unguarded RecursionError here is a PHP/Python asymmetry: one hostile line
-    # would escape _dnsbl_parse_ndjson_row() uncaught and abort the WHOLE file load
-    # in _load_zone_db()/_load_data_db() (their try/except wraps the entire for-loop).
+    # would escape _dnsbl_parse_ndjson_row() uncaught and abort a per-line caller's
+    # WHOLE file load if its try/except wraps the entire for-loop.
     depth = 300_000
     hostile = '{"kind":"domain","domain":' + "[" * depth + "]" * depth + ',"log":"1","feed":"f","group":"g"}'
     assert P._dnsbl_parse_ndjson_row(hostile) is None
