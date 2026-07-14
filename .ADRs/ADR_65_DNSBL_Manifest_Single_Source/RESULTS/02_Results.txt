@@ -35,7 +35,7 @@ WHAT CHANGED
   lives) instead of `P.operate`, plus a new assertion that operate() actually
   delegates to it (`"cfg = _evaluate_cfg(snap)" in inspect.getsource(P.operate)`).
 
-Commit hash: (recorded after `git commit`, see structured output `commit` field)
+Commit hash: 2334b297
 
 --------------------------------------------------------------------------------
 GATES (all executed; output tails pasted)
