@@ -8682,10 +8682,9 @@ function pfb_unbound_python_unmount() {
 }
 
 
-// ADR-65: TLD-mode DNSBL alias/stat bookkeeping only -- Domain vs Sub-Domain
-// classification now lives solely in the manifest build (pfb_unbound_python_sources()
-// / pfb_unbound.py's tld_wildcard_classify()); this function never writes the
-// interchange files.
+// ADR-65: TLD-mode DNSBL alias/stat bookkeeping only -- zone/data classification
+// lives solely in the manifest build (pfb_unbound.py's tld_wildcard_classify());
+// this function never writes the interchange files.
 function tld_analysis() {
 	global $pfb;
 

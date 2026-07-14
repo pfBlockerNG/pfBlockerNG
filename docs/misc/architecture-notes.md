@@ -96,9 +96,10 @@ See `.ADRs/ADR_62_DNSBL_Unified_Line_Parsing/`.
 ### DNSBL interchange format — NDJSON schema v1 (issue #1083)
 
 Every DNSBL interchange file the sync pass writes or reads between PHP stages — the per-feed
-staging `.txt` (`{dnsdir}/{header}.txt`), the concatenated all-feeds `pfb_dnsbl.raw`, and the
-TLD-analysis outputs `pfb_py_data.txt`/`pfb_py_zone.txt` — is **NDJSON schema v1**: one JSON
-object per physical line, two kinds only:
+staging `.txt` (`{dnsdir}/{header}.txt`) — is **NDJSON schema v1**: one JSON object per
+physical line, two kinds only (the all-feeds `pfb_dnsbl.raw` concat and the TLD-analysis
+outputs `pfb_py_data.txt`/`pfb_py_zone.txt` were retired by ADR-65 — zone/data classification
+lives in the Python manifest build):
 
 ```text
 {"kind":"domain","domain":D,"log":L,"feed":F,"group":G}
