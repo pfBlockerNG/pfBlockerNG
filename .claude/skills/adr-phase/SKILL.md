@@ -163,32 +163,39 @@ For every phase `M` to run (the loop body in `all`):
 **Default route — the `phase-step` workflow (hand-spawning the stages while it is
 available requires a recorded reason in your report — PR #937 bypassed it silently and
 produced no fixed-field gate record, #943).** Run the whole phase as ONE call, passing
-**pointers, not a composed brief** (issue #1089 — the brief is written by the workflow's
-fresh higher-model Brief stage, so your own context stays flat across a long `all` run):
+**pointers, not a composed brief** (issue #1089 — planning happens in the workflow's
+fresh higher-model Reconcile stage, so your own context stays flat across a long `all` run):
 `Workflow({name: 'phase-step', args: {worktree: '<path>', briefSpec: {adrDir: '<ADR_DIR
 relative to the worktree>', phase: M, notes: '<session constraints the disk cannot show —
 base override, user instructions; omit if none>'}, ponytailLevel: <active level or
 null>}})`. **Light phases:** when the phase prompt's banner carries a `WEIGHT: light` line
 AND every earlier phase's gate record is PASS, add `weight: 'light'` to `briefSpec` — the
-workflow skips the Brief stage and the implementer executes the phase prompt directly,
+workflow skips the Reconcile stage and the implementer executes the phase prompt directly,
 re-deriving its enumerations from source (in-workflow guards BLOCK a mis-tagged call);
 never pass it for a prompt without the marker, and never for a behaviour-changing phase.
 Pass no other extra parameter: the call is already asynchronous, and
-`run_in_background` is not a Workflow parameter (it fails validation). It is harness-tracked —
+`run_in_background` is not a Workflow parameter (it fails validation); phase-step REJECTS
+unknown args. It is harness-tracked —
 end the turn and answer its completion notification; never arm a sleep/poll to await it.
-The Brief stage reads `ADR.md`, the phase prompt, and the prior `RESULTS/`
-records + carry_forward chain just-in-time, runs the enumeration greps itself, and
-evaluates the previous phase's landed diff against the ADR's invariants (the broadened
-drift check); the workflow pipes the schema-forced brief through the Sonnet implementer
-and a fresh Sonnet verifier (never the brief author's model) and returns `{briefRecord, handoff, gateRecord}` — all
+The Reconcile stage treats the phase prompt as the brief: it reads the prompt, the ADR
+sections it names, and the prior `RESULTS/` carry_forward chain just-in-time, validates
+the previous phase's landed diff against the ADR invariants it touches (scoped drift
+check), patches the prompt file in place against the live tree (smallest diff,
+spec-lint-clean, committed as `docs: ADR-NN phase M prompt reconciled` — it rides the
+implementer's push), and derives the coverage matrix + hostile rows + gates + red-proof
+spec from source; the workflow renders those enumerations into the Sonnet implementer's
+instructions mechanically, then a fresh Sonnet verifier (never the reconciler's model)
+re-derives the gate, returning `{reconcileRecord, handoff, gateRecord}` — all
 schema-forced (field contracts in `.claude/workflows/phase-step.js`).
 
 Your duties on return:
 
 1. **Transaction**: `RESULTS/{MM}_Results.txt` committed and **pushed**
    (`git -C <path> log`/`status`, remote ref updated) — the crash-safe boundary.
-2. **Validate the briefRecord non-vacuously**: re-run at least one cited coverage-matrix
-   `source` and confirm it yields the row; judge any `drift_flags`.
+2. **Validate the reconcileRecord non-vacuously**: re-run at least one cited
+   coverage-matrix `source` and confirm it yields the row; if `prompt_status` is
+   `patched`, spot-check one `corrections[]` entry against the committed prompt diff;
+   judge any `drift_flags`.
 3. **Validate the handoff + gateRecord** per workflow-reference "Validating workflow
    records" (fields non-empty, evidence executed + pasted, spot-read the load-bearing diff
    hunks — never a third run of the gates or red proof the verifier just executed). Reject
@@ -201,13 +208,13 @@ Your duties on return:
 5. Keep ALL judgment: HALT/continue/redo and the Step 7 landing.
 
 The legacy `brief:` argument (you compose the brief yourself) remains supported but is not
-the default for ADR phases. **Workflow tool unavailable** → play the Brief, Implement, and
-Verify stages from `.claude/workflows/phase-step.js` yourself with plain Agents (its
-prompts + schemas ARE the contract; Brief on the higher model, Implement and Verify
+the default for ADR phases. **Workflow tool unavailable** → play the Reconcile, Implement,
+and Verify stages from `.claude/workflows/phase-step.js` yourself with plain Agents (its
+prompts + schemas ARE the contract; Reconcile on the higher model, Implement and Verify
 `model: claude-sonnet-5`, effort `xhigh` stated explicitly on every spawn), then run the duties
 above — the contract is identical; the workflow only packages it.
 
-A BLOCKED briefRecord or handoff, a FAIL gate record, or any missing fixed field →
+A BLOCKED reconcileRecord or handoff, a FAIL gate record, or any missing fixed field →
 **HALT and report**; do not start `M+1`. (You verify the transaction and the content against
 the plan; you do not re-implement it.) When a phase's executed reality contradicts the ADR's
 own text (a falsified claim, an overturned decision — the ESCALATE contract's trigger), the

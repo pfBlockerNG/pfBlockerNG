@@ -1,40 +1,47 @@
 export const meta = {
   name: 'phase-step',
-  description: 'One delegated step under the delegation contract: optional fresh higher-model Brief stage -> Sonnet implementer -> independent Sonnet verifier, all schema-forced',
-  whenToUse: 'Called by /adr-phase (per phase) and /gh-issue --fix (per step) instead of hand-spawning the implementer/verifier stages yourself. Args: {worktree, brief | briefSpec: {adrDir, phase, notes?, weight?: "full" (default) | "light"}, gates: [cmd...], redProof: {srcPaths: [...], testCmd} | null, planItems: [...], ponytailLevel: "full" | null, briefModel?: "<model id>" (Brief stage ONLY — default inherits the session model; owner directive 2026-07-14: pass claude-opus-4-8 while the Fable budget is constrained; Implement/Verify stay pinned to Sonnet regardless)}. The Verify stage always runs on Sonnet — a fresh set of model-eyes distinct from the higher-model brief author (owner directive 2026-07-14). With briefSpec (ADR phases — issue #1089) the Brief stage derives brief/gates/redProof/planItems itself from disk, so the caller passes only pointers. weight "light" (owner directive 2026-07-14; ONLY when the phase prompt itself carries a WEIGHT: light line — behaviour-preserving mechanical execution pinned by an earlier gate-passed oracle) skips the Brief stage: the implementer executes the phase prompt directly and re-derives its enumerations from source; the Verify stage is unchanged. The caller keeps ALL judgment: it validates the returned records, commits the RESULTS/Gate files, and decides HALT/continue/landing.',
+  description: 'One delegated step under the delegation contract: optional fresh higher-model Reconcile stage (validates the prior phase, patches the phase prompt on disk, derives the enumerations) -> Sonnet implementer -> independent Sonnet verifier, all schema-forced',
+  whenToUse: 'Called by /adr-phase (per phase) and /gh-issue --fix (per step) instead of hand-spawning the implementer/verifier stages yourself. Args: {worktree, brief | briefSpec: {adrDir, phase, notes?, weight?: "full" (default) | "light"}, gates: [cmd...], redProof: {srcPaths: [...], testCmd} | null, planItems: [...], ponytailLevel: "full" | null, briefModel?: "<model id>" (Reconcile stage ONLY — default inherits the session model; owner directive 2026-07-14: pass claude-opus-4-8 while the Fable budget is constrained; Implement/Verify stay pinned to Sonnet regardless)}. Unknown top-level args are REJECTED (a stale script once dropped briefModel silently and burned the wrong model, 2026-07-14). The Verify stage always runs on Sonnet — a fresh set of model-eyes distinct from the higher-model reconciler (owner directive 2026-07-14). With briefSpec (ADR phases — issue #1089 fresh-context principle; 2026-07-14 overhead redesign) the Reconcile stage validates the previous phase\'s landed diff (scoped drift check), patches the phase prompt on disk to match the live tree (committed, spec-lint-clean), and derives gates/redProof/planItems + the coverage matrix and hostile rows from source; the implementer then executes the reconciled prompt directly with those enumerations rendered mechanically — no separate brief document exists. weight "light" (owner directive 2026-07-14; ONLY when the phase prompt itself carries a WEIGHT: light line — behaviour-preserving mechanical execution pinned by an earlier gate-passed oracle) skips the Reconcile stage: the implementer executes the phase prompt directly and re-derives its enumerations from source; the Verify stage is unchanged. The caller keeps ALL judgment: it validates the returned records, commits the RESULTS/Gate files, and decides HALT/continue/landing.',
   phases: [
-    { title: 'Brief', detail: 'fresh higher-model planner enumerates the matrix + hostile rows and composes the brief (briefSpec callers only; skipped for weight: light)' },
-    { title: 'Implement', detail: 'one Sonnet implementer executes the brief', model: 'claude-sonnet-5' },
-    { title: 'Verify', detail: 'fresh Sonnet verifier (never the brief author\'s model) re-derives every gate item', model: 'claude-sonnet-5' },
+    { title: 'Reconcile', detail: 'fresh higher-model planner validates the prior phase (scoped drift), patches the phase prompt against the live tree, and derives the matrix + hostile rows (briefSpec callers only; skipped for weight: light)' },
+    { title: 'Implement', detail: 'one Sonnet implementer executes the reconciled prompt + rendered enumerations', model: 'claude-sonnet-5' },
+    { title: 'Verify', detail: 'fresh Sonnet verifier (never the reconciler\'s model) re-derives every gate item', model: 'claude-sonnet-5' },
   ],
 }
 
 // The mechanical core of CLAUDE.md "The delegation contract": the implementer
 // never grades its own work; the verifier re-derives (re-runs gates, re-executes
 // the red proof, reads the full diff) and returns a fixed-field gate record. The
-// Brief stage (issue #1089) moves brief-writing into a fresh higher-model context
-// too — the calling session passes pointers, not a composed brief, so its context
-// stays flat across a long run. The calling skill owns HALT/resume/landing — a
+// Reconcile stage keeps planning in a fresh higher-model context (issue #1089) but
+// treats the phase prompt as the brief: it patches the prompt against the live tree
+// and returns only structured enumerations — the per-phase Brief that re-authored
+// the prompt as a 30KB document was a fixed ~16-min toll (measured 2026-07-14) that
+// dominated the new smaller phases. The calling skill owns HALT/resume/landing — a
 // workflow cannot ask the user anything.
 
 // Callers sometimes deliver args JSON-string-encoded (killed review-fanout on PR #937,
 // issue #942) — normalize before destructuring instead of trusting caller discipline.
 const input = typeof args === 'string' ? JSON.parse(args) : (args ?? {})
+const KNOWN_ARGS = ['worktree', 'brief', 'briefSpec', 'gates', 'redProof', 'planItems', 'ponytailLevel', 'briefModel']
+const unknownArgs = Object.keys(input).filter(k => !KNOWN_ARGS.includes(k))
+if (unknownArgs.length) throw new Error(`unknown args: ${unknownArgs.join(', ')} — refusing to drop them silently (a stale resumed script once discarded briefModel and ran the Brief stage on the wrong model, 2026-07-14); update KNOWN_ARGS when adding an arg`)
 let { worktree, brief = null, briefSpec = null, gates = [], redProof = null, planItems = [], ponytailLevel = null, briefModel = null } = input
 if (!worktree || (!brief && !briefSpec) || (brief && briefSpec)) throw new Error('args must include {worktree} and exactly ONE of {brief, briefSpec}; see meta.whenToUse')
 
-const BRIEF_RECORD = {
+const RECONCILE_RECORD = {
   type: 'object',
-  required: ['verdict', 'brief_text', 'coverage_matrix', 'hostile_rows', 'gates', 'red_proof', 'plan_items', 'drift_flags'],
+  required: ['verdict', 'prompt_status', 'corrections', 'coverage_matrix', 'hostile_rows', 'gates', 'red_proof', 'plan_items', 'drift_flags', 'implementer_notes'],
   properties: {
     verdict: { type: 'string', enum: ['OK', 'BLOCKED'] },
-    brief_text: { type: 'string', description: 'the complete self-contained implementer brief — all seven CLAUDE.md THE-BRIEF sections' },
+    prompt_status: { type: 'string', enum: ['unchanged', 'patched'], description: 'patched = the phase prompt file was edited against the live tree and committed' },
+    corrections: { type: 'array', items: { type: 'object', required: ['claim', 'correction', 'evidence'], properties: { claim: { type: 'string', description: 'the stale prompt claim/ref' }, correction: { type: 'string' }, evidence: { type: 'string', description: 'the executed probe that proved the correction' } } }, description: 'one entry per fixed claim; empty when prompt_status is unchanged' },
     coverage_matrix: { type: 'array', minItems: 1, items: { type: 'object', required: ['row', 'source', 'mapping'], properties: { row: { type: 'string' }, source: { type: 'string', description: 'the executed grep command / file:line this row was enumerated from — never memory' }, mapping: { type: 'string', description: 'the test that covers it, or the explicit justified deferral' } } }, description: 'phase touches no sibling axes at all -> exactly one row stating that, with the source evidence proving it' },
     hostile_rows: { type: 'array', minItems: 1, items: { type: 'object', required: ['input', 'expected'], properties: { input: { type: 'string' }, expected: { type: 'string' } } }, description: 'phase touches no parser/regex/guard -> exactly one row stating that, with the evidence' },
     gates: { type: 'array', minItems: 1, items: { type: 'string' }, description: 'canonical gate commands for the languages the phase touches (CLAUDE.md table) plus cross-language consumers' },
-    red_proof: { type: ['object', 'null'], required: ['srcPaths', 'testCmd'], properties: { srcPaths: { type: 'array', items: { type: 'string' } }, testCmd: { type: 'string' } }, description: 'null ONLY for a behaviour-preserving phase — and brief_text must say so' },
+    red_proof: { type: ['object', 'null'], required: ['srcPaths', 'testCmd'], properties: { srcPaths: { type: 'array', items: { type: 'string' } }, testCmd: { type: 'string' } }, description: 'null ONLY for a behaviour-preserving phase — and the prompt must say so and name the oracle tests' },
     plan_items: { type: 'array', minItems: 1, items: { type: 'string' }, description: 'the phase prompt ACTION-PLAN items the verifier ticks against the diff' },
-    drift_flags: { type: 'array', items: { type: 'string' }, description: 'soft contradictions between prior RESULTS/Gate records and this phase plan, for the caller to judge; empty = none. A hard contradiction is verdict BLOCKED instead' },
+    drift_flags: { type: 'array', items: { type: 'string' }, description: 'soft contradictions between prior RESULTS/Gate records, the previous landed diff, and this phase plan, for the caller to judge; empty = none. A hard contradiction is verdict BLOCKED instead' },
+    implementer_notes: { type: 'string', description: 'transient session facts the implementer needs that do not belong in the committed prompt (verified branch/base state, environment gotchas from prior handoffs); "" if none. NEVER a restatement of the matrix/hostile rows/gates/plan items' },
     blocker: { type: 'string', description: 'BLOCKED only: which claim reality contradicted, with the probe evidence' },
   },
 }
@@ -78,19 +85,19 @@ const GATE_RECORD = {
   },
 }
 
-let briefRecord = null
+let reconcileRecord = null
 if (briefSpec) {
   const { adrDir, phase: phaseNum, notes = '', weight = 'full' } = briefSpec
   if (!adrDir || !phaseNum) throw new Error('briefSpec must include {adrDir, phase}')
   if (weight !== 'full' && weight !== 'light') throw new Error(`briefSpec.weight must be "full" or "light"; got "${weight}"`)
 
   if (weight === 'light') {
-    // Owner directive (2026-07-14): mechanical phases skip the separate Brief stage — the
+    // Owner directive (2026-07-14): mechanical phases skip the Reconcile stage — the
     // phase prompt on disk IS the brief; the implementer re-derives its enumerations from
     // source (there is no planner enumeration to trust). Verify stage unchanged. In-workflow
     // guards below make a mis-tagged light call fail BLOCKED instead of running under-briefed.
     if (redProof) throw new Error('weight "light" is for behaviour-preserving phases only — redProof must be null (a behaviour-changing phase is full-weight)')
-    log('light-weight phase: Brief stage skipped — the phase prompt on disk is the brief')
+    log('light-weight phase: Reconcile stage skipped — the phase prompt on disk is the brief')
     const mm = String(phaseNum).padStart(2, '0')
     brief = `LIGHT-WEIGHT ADR PHASE (weight: light — mechanical execution of an already-enumerated, oracle-pinned plan). Your brief lives ON DISK, not in this message. Worktree: ${worktree}; ADR directory: ${adrDir} (relative to the worktree); phase ${phaseNum}.
 
@@ -103,31 +110,48 @@ LIGHT-WEIGHT GUARDS (each is a BLOCKED trigger, not a judgment call):
 
 Write ${adrDir}/RESULTS/${mm}_Results.txt with the fixed HANDOFF fields, make ONE focused commit (code + handoff, repo commit style), and push it (git -C ${worktree} push -u origin HEAD).`
   } else {
-  phase('Brief')
+  phase('Reconcile')
+  const mm = String(phaseNum).padStart(2, '0')
 
-  briefRecord = await agent(`You are the PLANNER writing THE BRIEF (CLAUDE.md "The delegation contract" — all seven mandatory sections) for ONE ADR phase, with a fresh context: read everything just-in-time from disk; trust nothing from memory. You write the brief only — you implement nothing and spawn no agents.
+  reconcileRecord = await agent(`You are the RECONCILER for ONE ADR phase (CLAUDE.md "The delegation contract" — you produce THE BRIEF's content, split between the phase prompt on disk and your structured fields), with a fresh context: read everything just-in-time from disk; trust nothing from memory. You plan only — you implement nothing and spawn no agents. The phase prompt IS the implementer's brief: your job is to bring it up to date with the live tree and derive the enumerations, NOT to re-author it as a new document.
 
 Worktree: ${worktree}. ADR directory: ${adrDir} (relative to the worktree). Phase: ${phaseNum}.
 
-READ (all inside the worktree): CLAUDE.md ("The delegation contract", "Test coverage", "Code standards", "Canonical gates"); ${adrDir}/ADR.md; the phase prompt ${adrDir}/<MM>_*.txt for phase ${phaseNum} (MM = zero-padded phase number); the PREVIOUS phase's Results + Gate files in ${adrDir}/RESULTS/; and the carry_forward line of every earlier Results file (grep it out — do not re-read the full records: cross-phase state is chained through carry_forward precisely so each brief needn't re-read O(phases) history). Read a FULL earlier record only when the phase prompt, the ADR, or the previous records explicitly reference that phase.${notes ? `\nSESSION NOTES from the caller: ${notes}` : ''}
+READ (all inside the worktree): the phase prompt ${adrDir}/${mm}_*.txt; the ADR.md sections that prompt names (not the whole ADR); the PREVIOUS phase's Results + Gate files in ${adrDir}/RESULTS/; the carry_forward line of every earlier Results file (grep it out — do not re-read the full records: cross-phase state is chained through carry_forward precisely so each phase needn't re-read O(phases) history; read a FULL earlier record only when the prompt, the ADR, or the previous records explicitly reference that phase); CLAUDE.md "The delegation contract" (THE BRIEF sections 3-4) and the "Canonical gates" table.${notes ? `\nSESSION NOTES from the caller: ${notes}` : ''}
 
-DERIVE, never copy: run the enumeration greps YOURSELF (git -C ${worktree} grep ...) for every sibling axis the phase touches (v4/v6, address/port, CE/Plus versions, parse modes, every caller of a touched symbol, every branch of a touched conditional) — each coverage_matrix row cites the executed command or file:line it came from. Supply hostile_rows with expected outcomes for any parser/regex/guard the phase touches (CLAUDE.md THE BRIEF section 4 input classes). Derive gates from the languages the phase touches (CLAUDE.md "Canonical gates" table, plus cross-language consumers of artifacts it changes), red_proof {srcPaths, testCmd} (null ONLY if the phase is behaviour-preserving — then brief_text says so and names the oracle tests), and plan_items from the prompt's ACTION PLAN.
+DRIFT CHECK — scoped, not a re-review: evaluate the PREVIOUS phase's LANDED DIFF (git -C ${worktree} show of its commit) ONLY against (a) the ADR invariants it touches and (b) this phase's premises. The previous Verify stage already re-derived that phase's gate mechanically and the whole-PR review re-reads every diff — do not re-review the diff generally. Soft findings go in drift_flags (this phase would undo a pinned invariant; the previous diff strains an ADR invariant; a carry_forward contradicts the ADR). A HARD contradiction — the phase prompt or ADR refuted by the code or a prior record — is verdict BLOCKED with the blocker field filled; stop there. Phase 1 of a run has no previous diff: skip the diff read, still reconcile the prompt below (this also covers an ADR authored long before the run).
 
-DRIFT CHECK — deliberately broader than record-vs-plan: evaluate the PREVIOUS phase's LANDED DIFF (git -C ${worktree} show of its commit) against the ADR's invariants and the broader architecture, not just contradictions between the records and this phase's plan. You are the fresh set of eyes between phases: an architectural screw-up the previous phase landed must surface HERE, not at the final PR review after later phases build on it. Soft findings go in drift_flags (this phase would undo a pinned invariant; the previous diff strains an ADR invariant; a carry_forward contradicts the ADR). A HARD contradiction — the phase prompt or ADR refuted by the code or a prior record — is verdict BLOCKED with the blocker field filled, not a brief.
+RECONCILE THE PROMPT (edit the file in place — smallest diff, never a rewrite): verify every file:line ref and code-state claim in the prompt against the live tree (git -C ${worktree} grep / read the named sites); fix what is stale; fold in any prior carry_forward fact the implementer must see; add a load-bearing fact you discovered ONLY if acting without it would ship a defect. Keep the prompt's structure and contract blocks intact and run python3 scripts/check_phase_prompts.py on the file after editing — it must stay clean. Do NOT restate what is already correct, and do NOT write the coverage matrix / hostile rows / gates into the prompt (they live in your structured fields; the workflow renders them for the implementer). If you changed the file, commit ONLY that file (message style: docs: ADR-NN phase ${phaseNum} prompt reconciled), do not push; report prompt_status accordingly with one corrections[] entry per fixed claim {claim, correction, evidence}.
 
-brief_text must be fully self-contained for a Sonnet implementer that has this worktree but no other context — and SELF-SUFFICIENT: embed the evidence for every factual claim (the grep/command output that proved it) so the implementer never needs to re-derive or re-fetch anything, and state explicitly that its reading scope is the brief + named refs + the code it edits (no re-reading the ADR/issue, no re-running the enumeration greps — the verifier and the PR review carry the skepticism): name the phase prompt file and the prior handoff as mandatory required reading (reference paths, do not paste bodies); carry the coverage matrix, hostile rows, constraints (do-NOT-touch list), verification commands with expected observables, and the ESCALATE contract; never weaken a CLAUDE.md mandate (red->green is TEST-FIRST and EXECUTED, output pasted); and instruct the implementer to write ${adrDir}/RESULTS/<MM>_Results.txt with the fixed HANDOFF fields, make ONE focused commit (code + handoff, repo commit style), and push it (git -C ${worktree} push -u origin HEAD).`,
-    { label: 'brief', phase: 'Brief', effort: 'xhigh', schema: BRIEF_RECORD, ...(briefModel ? { model: briefModel } : {}) })
+DERIVE, never copy: run the enumeration greps YOURSELF (git -C ${worktree} grep ...) for every sibling axis the phase touches (v4/v6, address/port, CE/Plus versions, parse modes, every caller of a touched symbol, every branch of a touched conditional) — each coverage_matrix row cites the executed command or file:line it came from. Supply hostile_rows with expected outcomes for any parser/regex/guard the phase touches (CLAUDE.md THE BRIEF section 4 input classes). Derive gates from the languages the phase touches (CLAUDE.md "Canonical gates" table, plus cross-language consumers of artifacts it changes), red_proof {srcPaths, testCmd} (null ONLY if the phase is behaviour-preserving — the prompt must say so and name the oracle tests), and plan_items from the prompt's ACTION PLAN. implementer_notes carries transient session facts only (verified branch/base state, environment gotchas from prior handoffs) — never a restatement of the structured fields.`,
+    { label: 'reconcile', phase: 'Reconcile', effort: 'xhigh', schema: RECONCILE_RECORD, ...(briefModel ? { model: briefModel } : {}) })
 
-  if (!briefRecord) throw new Error('brief agent returned nothing (skipped or terminal error)')
-  if (briefRecord.verdict === 'BLOCKED') {
-    log('brief stage BLOCKED — returning without implementing')
-    return { briefRecord, handoff: null, gateRecord: null }
+  if (!reconcileRecord) throw new Error('reconcile agent returned nothing (skipped or terminal error)')
+  if (reconcileRecord.verdict === 'BLOCKED') {
+    log('reconcile stage BLOCKED — returning without implementing')
+    return { reconcileRecord, handoff: null, gateRecord: null }
   }
-  if (briefRecord.drift_flags.length) log(`drift flags for the caller: ${briefRecord.drift_flags.join(' | ')}`)
-  brief = briefRecord.brief_text
-  gates = briefRecord.gates
-  redProof = briefRecord.red_proof
-  planItems = briefRecord.plan_items
+  if (reconcileRecord.drift_flags.length) log(`drift flags for the caller: ${reconcileRecord.drift_flags.join(' | ')}`)
+  if (reconcileRecord.prompt_status === 'patched') log(`phase prompt patched: ${reconcileRecord.corrections.length} correction(s) committed`)
+  gates = reconcileRecord.gates
+  redProof = reconcileRecord.red_proof
+  planItems = reconcileRecord.plan_items
+
+  const renderMatrix = rows => rows.map(r => `- ${r.row}\n    source: ${r.source}\n    maps to: ${r.mapping}`).join('\n')
+  const renderHostile = rows => rows.map(r => `- input: ${r.input}\n    expected: ${r.expected}`).join('\n')
+  brief = `ADR PHASE ${phaseNum} (${adrDir}). Your brief is ON DISK plus the planner enumerations below. Worktree: ${worktree}.
+
+THE BRIEF: the phase prompt ${adrDir}/${mm}_*.txt, reconciled against the live tree this run — its refs and code-state claims were verified/corrected by the planner; trust them. Its ACTION PLAN is your plan, its CONSTRAINTS your do-NOT-touch list, its VERIFICATION your acceptance checks, its HANDOFF section your handoff spec (write ${adrDir}/RESULTS/${mm}_Results.txt with the fixed HANDOFF fields).
+
+MANDATORY READING (in order, just-in-time — nothing else): the phase prompt; the previous phase's Results file in ${adrDir}/RESULTS/ (especially its carry_forward); the refs the prompt names.
+
+PLANNER ENUMERATIONS (derived from source by the planner, each row citing its evidence — execute them, do not re-derive them):
+COVERAGE MATRIX (every row maps to a test or an explicit justified deferral in your handoff):
+${renderMatrix(reconcileRecord.coverage_matrix)}
+HOSTILE-INPUT ROWS (each becomes a test for the parser/regex/guard this phase touches):
+${renderHostile(reconcileRecord.hostile_rows)}${reconcileRecord.implementer_notes ? `\nSESSION NOTES from the planner: ${reconcileRecord.implementer_notes}` : ''}
+
+Make ONE focused commit (code + handoff; the message the prompt's COMMIT section names) and push it (git -C ${worktree} push -u origin HEAD).`
   }
 }
 
@@ -151,7 +175,7 @@ STANDING CONTRACT (CLAUDE.md "The delegation contract" — these override nothin
 if (!handoff) throw new Error('implementer returned nothing (skipped or terminal error)')
 if (handoff.verdict === 'BLOCKED') {
   log('implementer BLOCKED — returning without verification')
-  return { briefRecord, handoff, gateRecord: null }
+  return { reconcileRecord, handoff, gateRecord: null }
 }
 
 phase('Verify')
@@ -201,9 +225,9 @@ MANDATORY CHECKS — one items[] entry each, with executed evidence; a skipped c
 6. conventions: each new public symbol beside 3 sibling symbols proving the name matches; stale comments/docs about touched symbols reconciled.
 
 Verdict FAIL iff any item fails; list blocking_reasons. Your structured output IS the gate record.`,
-  // Owner directive (2026-07-14): the verifier never runs on the brief author's (higher)
+  // Owner directive (2026-07-14): the verifier never runs on the reconciler's (higher)
   // model — Sonnet re-derives the gate; the top tier's cross-referencing is reserved for
   // the whole-PR review (review-single).
   { label: 'verify', phase: 'Verify', model: 'claude-sonnet-5', effort: 'xhigh', schema: GATE_RECORD })
 
-return { briefRecord, handoff, gateRecord }
+return { reconcileRecord, handoff, gateRecord }

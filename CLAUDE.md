@@ -125,19 +125,25 @@ non-trivial, multi-step `src/`/`tests/`/CI work.
 - **The planner's brief to the low-tier implementer follows the delegation contract below** — a vague or wrong
   brief is a planner bug, and a handful of real shipped defects trace directly to brief bugs
   (a half-enumerated axis, a vacuous test spec, an unverified "fact" stated as truth).
-- **ADR phases: the brief itself is written fresh-context (issue #1089).** The default
-  `/adr-phase` route passes `briefSpec` (pointers: ADR dir + phase number) to the
-  `phase-step` workflow, whose **Brief stage** — a fresh higher-model agent — reads the ADR,
-  phase prompt, and prior records just-in-time and runs the enumeration greps itself (the
-  brief's field contract is schema-forced in `.claude/workflows/phase-step.js`); the
-  workflow's verifier runs on the low tier (never the brief author's model). The main session validates the records
-  non-vacuously, commits the Gate file, and keeps HALT/continue/landing — its context stays
-  flat across a long `all` run. Composing an ADR-phase brief in the main session is a
-  recorded deviation, exactly like hand-spawning the implementer/verifier yourself.
+- **ADR phases: the phase prompt IS the brief; a fresh-context Reconcile stage keeps it
+  true (issue #1089; 2026-07-14 overhead redesign).** The default `/adr-phase` route passes
+  `briefSpec` (pointers: ADR dir + phase number) to the `phase-step` workflow, whose
+  **Reconcile stage** — a fresh higher-model agent — validates the previous phase's landed
+  diff against the ADR invariants it touches (scoped drift check), patches the phase prompt
+  on disk to match the live tree (smallest diff, spec-lint-clean, committed), and derives
+  the coverage matrix, hostile rows, gates, and red-proof spec from source (schema-forced
+  in `.claude/workflows/phase-step.js`); the implementer executes the reconciled prompt
+  directly with those enumerations rendered mechanically — no separate brief document is
+  composed (the per-phase Brief that re-authored the prompt was a fixed ~16-min toll that
+  dominated small phases). The workflow's verifier runs on the low tier (never the
+  reconciler's model). The main session validates the records non-vacuously, commits the
+  Gate file, and keeps HALT/continue/landing — its context stays flat across a long `all`
+  run. Composing an ADR-phase brief in the main session is a recorded deviation, exactly
+  like hand-spawning the implementer/verifier yourself.
   **Light phases** (owner directive 2026-07-14): a phase prompt whose banner carries
   `WEIGHT: light` — behaviour-preserving mechanical execution pinned by an earlier
-  phase's gate-passed oracle — runs with `briefSpec.weight: 'light'`: the Brief stage is
-  skipped, the implementer executes the prompt directly and re-derives its enumerations
+  phase's gate-passed oracle — runs with `briefSpec.weight: 'light'`: the Reconcile stage
+  is skipped, the implementer executes the prompt directly and re-derives its enumerations
   from source, and in-workflow guards BLOCK a mis-tagged call. The Verify stage never
   lightens.
 - **Mode propagation to delegates is mechanical** — the `SubagentStart` hook

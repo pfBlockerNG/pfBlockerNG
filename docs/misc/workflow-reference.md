@@ -342,7 +342,7 @@ correctly attributed but read *Unverified*).
 ## Validating workflow records
 
 What the calling session does with the schema-forced records a delegation workflow returns
-(`phase-step`'s `{briefRecord, handoff, gateRecord}` — `/adr-phase`, `/gh-issue --fix`, and
+(`phase-step`'s `{reconcileRecord, handoff, gateRecord}` — `/adr-phase`, `/gh-issue --fix`, and
 `/delegate` all point here). **Validate, don't re-derive**: the workflow's independent
 verifier just re-ran the gates, re-executed the red proof, and read the full diff, with
 pasted evidence — a third derivation is redundant spend.
