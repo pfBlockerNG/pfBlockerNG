@@ -534,10 +534,23 @@ def test_vip_hit_increments_widget_counter_with_query_group(adr65_vm: SmokeVM) -
     # pass below, which regenerates the lighttpd conf; restore it afterwards.
     prev_nolog = _set_py_nolog(adr65_vm, "on")
     try:
+        persisted = h.config_get(adr65_vm, f"{_DNSBL_SETTINGS_PATH}/pfb_py_nolog")
+        assert persisted == "on", f"pfb_py_nolog did not persist: config reads {persisted!r}, expected 'on'"
+
         # scope="update" (not the default "updatednsbl"): only a FULL update pass
         # provisions the sinkhole NAT/lighttpd-conf/restart -- test_dnsbl_block_page.py
         # documents the same split.
         with h.CaseContext(adr65_vm, spec, scope="update"):
+            # The update pass regenerates the sinkhole's lighttpd conf. Under pfb_py_nolog
+            # it MUST carry the accesslog pipe -- that pipe IS the webserver-hit event
+            # path this row pins, so assert the precondition rather than mis-blaming a
+            # missing log line later.
+            still_on = h.config_get(adr65_vm, f"{_DNSBL_SETTINGS_PATH}/pfb_py_nolog")
+            conf = adr65_vm.ssh("cat", "/var/unbound/pfb_dnsbl_lighty.conf", timeout=15.0)
+            assert "accesslog.filename" in conf.stdout, (
+                "the regenerated sinkhole conf carries no accesslog pipe, so no webserver-hit "
+                f"event can ever be logged (pfb_py_nolog reads {still_on!r}); conf:\n{conf.stdout}"
+            )
             answer = h.dns_probe(adr65_vm, domain)
             assert h.is_vip(answer), f"expected VIP block for {domain!r}, got {answer!r}"
 
