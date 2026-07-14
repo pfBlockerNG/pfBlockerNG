@@ -1,0 +1,317 @@
+ADR-65 PHASE 3 RESULTS -- the PHP query-channel client pfb_dnsbl_query()
+=========================================================================
+
+VERDICT: DONE
+
+--------------------------------------------------------------------------------
+WORKTREE BASE CHECK
+--------------------------------------------------------------------------------
+At start, `git rev-list --count HEAD..origin/devel` = 6 (nonzero) -- matched
+the brief's own probe exactly (commits 7934d244..28bcf4f4, reserved-header
+work touching pfblockerng.inc/tests/php//tests/smoke/ui, none touching the
+query channel/extra.inc/the named helpers). Rebased
+(`git rebase origin/devel`); clean, no conflicts.
+Base_sha (pre-edit HEAD, captured before any edit): 2f39ef72d970403c81eec3ed17ff26c905f36356.
+Post-rebase HEAD (before any edit): 462d8f47a12c23c0d3dd4bfe38c42558b80b5537.
+origin/devel tip at rebase time: 28bcf4f44eb2c637c8f1f5f14ad1fabc943f4a7e.
+Every symbol/line anchor named in the brief was re-verified by fresh grep
+against the rebased tree before use (all matched; pfb_filter/pfb_logger
+precedent-call line numbers in extra.inc shifted slightly, 2769/3541 vs the
+brief's 2700/3472 -- the precedent itself, not the lines, is what mattered;
+no contradiction).
+
+--------------------------------------------------------------------------------
+WHAT CHANGED
+--------------------------------------------------------------------------------
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+  - Added `pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s = 5.0): ?array`
+    (94 new lines, inserted just before the pfSense-core-compat shims at the
+    file's tail). PRODUCTION-DORMANT -- no existing caller; Phase 4 is the
+    first. Validates the domain via pfb_filter(PFB_FILTER_DOMAIN), publishes
+    a JSON request via the unmodified pfb_unbound_py_atomic_write_root(),
+    chmods the request 0660 (ADR-65 SS2.1's group-writable query-request
+    model), bounded-polls (deadline AND a hard poll cap, 200ms cadence,
+    mirroring pfb_unbound_py_wait_marker's shape) for an id-matching,
+    strictly-typed 7-key reply, returns the six verdict keys (drops `id`) or
+    NULL, and unlinks the request/reply on every exit path.
+
+- tests/php/DnsblQueryClientTest.php (NEW, 19 tests): invalid-domain/
+  write-failure/encode-failure exits (NULL, no request written, no wait);
+  round-trip blocked=true AND blocked=false verdicts with an independent
+  background-responder reader asserting the request's domain/qtype/id and
+  its 0660 permission; fresh-id-per-call; every hostile reply row (no reply,
+  truncated JSON, non-JSON bytes, oversized reply, foreign id, missing
+  field, mistyped bool field, mistyped string field) each returns NULL,
+  never a fatal; bounded-wait deadline+cap proof (elapsed bounds asserted,
+  both a 0.6s and a 0.0s -- one-read-attempt -- case); cleanup (both files
+  gone on a matched verdict, no `.pfbctl_` staging residue).
+
+Commit hash: (recorded below after commit)
+
+--------------------------------------------------------------------------------
+ENVIRONMENT NOTE -- a self-corrected false alarm (recorded for the audit trail)
+--------------------------------------------------------------------------------
+`composer phpstan` initially FAILED in this worktree with
+`pfblockerng.inc:1323 Variable $rsync might not be defined` (reported
+twice), in code this phase never touches (`pfb_filter()`'s PFB_FILTER_URL
+rsync branch -- a function this brief's CONSTRAINTS section explicitly
+forbids editing). `git diff origin/devel -- .../pfblockerng.inc` was empty
+(byte-identical source), so the natural read was "pre-existing base-branch
+defect, out of this phase's scope" -- I filed tracking issue
+https://github.com/pfBlockerNG/pfBlockerNG/issues/1347 with that theory and
+proceeded to attempt the commit.
+
+The LOCAL pre-commit hook then blocked the commit on the same PHPStan
+error (`.githooks/pre-commit` runs PHPStan whole-tree, not diff-scoped, for
+any staged PHP file) -- CLAUDE.md forbids `--no-verify`, so this genuinely
+stopped the landing path and forced a harder root-cause than "file an
+issue and note it." Cloning `origin/devel`'s exact tip (28bcf4f4) into a
+clean, independent directory and running `composer install` +
+`vendor/bin/phpstan analyse` there came back `[OK] No errors` -- proving
+the base branch is NOT broken. Diffing `vendor/phpstan/phpstan/phpstan.phar`
+between the two trees showed the actual cause: THIS WORKTREE's `vendor/`
+was STALE (PHPStan 2.2.1, PHPUnit 11.5.55) and out of sync with
+`composer.lock`'s currently-pinned `phpstan/phpstan: 2.2.5` /
+`phpunit/phpunit: 12.5.31` -- a leftover from an earlier phase in this same
+worktree, not refreshed by the `git rebase`. The brief's "vendor/ already
+installed in this worktree" was true but stale; `composer install` was
+never re-run after the rebase pulled in a newer `composer.lock`.
+
+Fix: `composer install` in this worktree (re-syncs `vendor/` to
+`composer.lock`, touches no tracked file). Re-verified clean on PHPStan
+2.2.5 (`[OK] No errors`); re-ran the FULL PHPUnit suite (same 3427
+passed/4 skipped as before the sync -- the stale PHPStan build had no
+effect on PHPUnit's own results, which already used a compatible-enough
+API) and the whole `run-gates.sh` -- now genuinely `GATES: PASS` end to
+end, no residual failure. Closed issue #1347 as not-a-bug with the same
+root-cause explanation (retraction pasted in the gate log below).
+
+--------------------------------------------------------------------------------
+GATES (all executed AFTER the vendor/ resync above; output tails pasted)
+--------------------------------------------------------------------------------
+Sandbox quirk (per brief + phase-2 precedent): a Bash command whose LITERAL
+TEXT contains "pytest"/"mypy" is intercepted by a session hook and returns a
+fabricated response. Every such command below was routed through a thin
+wrapper script (`sh <wrapper>`) whose own invocation text avoids those
+substrings; wrappers are scratch files outside the repo (confirmed absent
+from `git status --short`).
+
+$ composer install
+... Upgrading phpstan/phpstan / phpunit/phpunit / (transitive deps) to the
+composer.lock-pinned versions (phpstan 2.2.1 -> 2.2.5, phpunit 11.5.55 ->
+12.5.31). Generating autoload files. Done.
+
+$ php -l src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+No syntax errors detected in .../pfblockerng_extra.inc
+
+$ php -l tests/php/DnsblQueryClientTest.php
+No syntax errors detected in tests/php/DnsblQueryClientTest.php
+
+$ vendor/bin/phpunit tests/php/DnsblQueryClientTest.php
+...................                                               19 / 19 (100%)
+Time: 00:06.601, Memory: 22.00 MB
+OK (19 tests, 47 assertions)
+
+$ vendor/bin/phpunit        (whole suite)
+Tests: 3427, Assertions: 21161, Deprecations: 1, Notices: 1, Skipped: 4.
+OK, but there were issues!
+(baseline, measured by temporarily moving the new test file out of
+tests/php/ and re-running on the SAME edited-extra.inc tree, WITH the
+resynced vendor/: 3408 passed / 4 skipped -- delta = +19, exactly this
+phase's new tests. Zero regressions; file restored immediately after the
+measurement, confirmed via `git status --short`.)
+
+$ composer phpstan
+[OK] No errors
+
+$ composer phpcs -- --standard=phpcs.xml.dist src/
+(no output -- clean)
+
+$ sh scripts/agent/run-gates.sh --diff origin/devel   (PATH-shimmed mypy)
+GATE PASS: python3 -m pytest
+GATE PASS: ruff check .
+GATE PASS: ruff format --check .
+GATE PASS: mypy tests/
+GATE PASS: php -l src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+GATE PASS: php -l tests/php/DnsblQueryClientTest.php
+GATE PASS: vendor/bin/phpunit
+GATE PASS: composer phpstan
+GATE PASS: composer phpcs -- --standard=phpcs.xml.dist src/
+GATE PASS: npx markdownlint-cli2
+GATES: PASS
+
+$ python3 scripts/check_comment_narration.py --diff origin/devel   -> clean, no output
+$ python3 scripts/check_version_literals.py --diff origin/devel   -> clean, no output
+$ python3 scripts/check_retired_tokens.py --diff origin/devel     -> clean, no output
+
+--------------------------------------------------------------------------------
+ROUND-TRIP + TIMEOUT PROOF (pasted; test mode declared below)
+--------------------------------------------------------------------------------
+Test mode (declared, CLAUDE.md Test coverage #1, second exception): brand-new
+PRODUCTION-DORMANT code with no pre-existing behaviour to be wrong -- no red
+run against the void. The behaviour-preservation oracle is: (a) the whole
+PHPUnit suite at zero regressions (3408 baseline -> 3427 = +19, exactly this
+phase's tests, measured by physically removing/restoring the new test file
+on the SAME production diff, not by inspection); (b) the two frozen P1
+oracle files re-run at ZERO edits.
+
+$ sh <wrapper> tests/test_adr65_decision_oracle.py tests/test_adr65_fallback_characterization.py -v
+============================== 29 passed in 0.54s ===============================
+$ git diff --stat HEAD -- tests/test_adr65_decision_oracle.py tests/test_adr65_fallback_characterization.py
+(empty -- zero edits, confirmed)
+
+Round-trip (testRoundTripBlockedVerdictAndRequestSchema, part of the 19
+above): a backgrounded `php -r` responder polls the sandbox's pfb_py_query
+request file, decodes it, records the observed request (domain/qtype/id)
+plus the request file's permission bits into observed.json, substitutes the
+real id into a canned reply template, and writes the reply. The client's
+returned array exactly matches the responder's blocked=true payload; the
+independent observed.json confirms domain="blocked-case.example",
+qtype="A", a non-empty id, and permission "0660"; both request and reply
+files are gone afterward; no ".pfbctl_" staging residue.
+
+Timeout (testNoReplyTimesOutToNullWithinDeadlineBounds): $timeout_s=0.6, no
+reply ever written -> NULL, elapsed asserted >= 0.6s AND < 2.0s (both bounds
+printed on failure), request file gone afterward.
+
+Zero-timeout degenerate case (testZeroTimeoutDegeneratesToOneReadAttempt):
+$timeout_s=0.0 -> NULL, elapsed asserted < 0.5s (a single read attempt, not
+a long/unbounded wait).
+
+--------------------------------------------------------------------------------
+HOSTILE-REPLY ROW TABLE (all EXECUTED and PASSING)
+--------------------------------------------------------------------------------
+ 1. No reply ever written                          -> timeout -> NULL.  PASS
+    (testNoReplyTimesOutToNullWithinDeadlineBounds)
+ 2. Truncated JSON (`{"id":"whatever","blocked":`)  -> ignored -> NULL.  PASS
+    (testTruncatedJsonReplyIgnoredTimesOutToNull)
+ 3. Non-JSON bytes                                  -> ignored -> NULL.  PASS
+    (testNonJsonBytesReplyIgnoredTimesOutToNull)
+ 4. Oversized reply (70000 bytes)                   -> ignored -> NULL.  PASS
+    (testOversizedReplyIgnoredTimesOutToNull)
+ 5. Foreign id (well-shaped, valid reply, wrong id)  -> ignored -> NULL.  PASS
+    (testForeignIdReplyIgnoredTimesOutToNull)
+ 6. Missing field (matching id, no `group` key)      -> ignored -> NULL.  PASS
+    (testMissingFieldReplyIgnoredTimesOutToNull)
+ 7. Mistyped `blocked` (string, not bool)             -> ignored -> NULL.  PASS
+    (testMistypedBlockedFieldReplyIgnoredTimesOutToNull)
+ 8. Mistyped attribution field (`b_type` as int)      -> ignored -> NULL.  PASS
+    (testMistypedAttributionFieldReplyIgnoredTimesOutToNull)
+ 9. blocked=false, well-shaped (matching id)           -> VALID verdict,
+    NOT NULL, five attribution fields all "".              PASS
+    (testRoundTripCleanVerdictIsNotNull)
+
+Additional hostile-INPUT (request side, not reply) rows:
+10. No-dot domain                                     -> NULL, no request written. PASS
+11. Empty domain                                      -> NULL, no request written. PASS
+12. Embedded control character (tab)                   -> NULL, no request written. PASS
+13. Double-dot domain                                  -> NULL, no request written. PASS
+14. Overlong domain (>=255 chars)                      -> NULL, no request written. PASS
+15. Unencodable qtype (invalid UTF-8 bytes)            -> NULL, no request written. PASS
+    (json_encode() of the whole record fails; caught before any write)
+16. Write failure (tempnam() fails, missing staging dir) -> NULL, no wait
+    (elapsed < 1.0s asserted).                                          PASS
+17. Fresh id per call (two sequential calls)            -> two DIFFERENT
+    observed ids.                                                       PASS
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX (every brief row ticked)
+--------------------------------------------------------------------------------
+(a) Every exit path:
+    - invalid-domain -> NULL, no request: testNoDotDomainRejectedNoRequestWritten,
+      testEmptyDomainRejected, testDomainWithEmbeddedControlCharacterRejected,
+      testDoubleDotDomainRejected, testOverlongDomainRejected
+    - write-failure -> NULL: testWriteFailureReturnsNullNoRequestWritten
+    - encode-failure -> NULL: testUnencodableQtypeReturnsNullNoRequestWritten
+    - timeout -> NULL: testNoReplyTimesOutToNullWithinDeadlineBounds,
+      testZeroTimeoutDegeneratesToOneReadAttempt
+    - id-match blocked=true verdict: testRoundTripBlockedVerdictAndRequestSchema
+    - id-match blocked=false clean verdict: testRoundTripCleanVerdictIsNotNull
+
+(b) Request payload schema + fresh-unique-id + 0660 perms:
+    testRoundTripBlockedVerdictAndRequestSchema (schema+perms via observed.json),
+    testFreshIdIsUsedOnEachCall (two distinct ids)
+
+(c) Strict reply validation (7 keys, typed), all hostile rows: see the row
+    table above (rows 1-9), each its own named test.
+
+(d) Cleanup: request+reply gone on match + no `.pfbctl_` residue asserted
+    inside testRoundTripBlockedVerdictAndRequestSchema; request gone on
+    timeout asserted inside testNoReplyTimesOutToNullWithinDeadlineBounds.
+
+(e) Bounded wait -- deadline AND cap: testNoReplyTimesOutToNullWithinDeadlineBounds
+    (elapsed >= 0.6s AND < 2.0s, both bounds asserted) +
+    testZeroTimeoutDegeneratesToOneReadAttempt (cap engages even at
+    timeout_s<=0, one read attempt, elapsed < 0.5s).
+
+(f) Untouched shared helper + untouched frozen tests: confirmed by diff read
+    (git diff -- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc shows
+    ONLY the new function inserted, no existing line touched;
+    pfblockerng.inc has zero diff against origin/devel, confirmed by
+    `git diff origin/devel -- src/.../pfblockerng.inc` returning empty) +
+    the frozen-oracle zero-edit proof above.
+
+(g) Live-VM end-to-end round-trip: DEFERRED to ADR SS6 Phase 7 smoke (no
+    live Unbound/chroot in CI or this unit sandbox -- ADR SS5). This
+    phase's PHPUnit round-trip proves the CLIENT's protocol logic against a
+    faithful faked responder, not the real pfb_query_watcher thread; that
+    integration is Phase 7's job, per the brief's own deferral.
+
+--------------------------------------------------------------------------------
+DEVIATIONS / JUDGMENT CALLS
+--------------------------------------------------------------------------------
+1. Environment self-correction, not a code deviation: this worktree's
+   `vendor/` was stale (PHPStan 2.2.1 vs the `composer.lock`-pinned 2.2.5),
+   causing a transient false-positive `composer phpstan` failure unrelated
+   to this phase's diff. Root-caused via an independent clean clone of
+   origin/devel (which analysed clean at 2.2.5), fixed with `composer
+   install`, and re-verified GATES: PASS end to end. A tracking issue
+   (#1347) filed mid-investigation on the wrong theory ("pre-existing
+   base-branch PHPStan gap") was closed as not-a-bug once the real cause
+   was found -- see the ENVIRONMENT NOTE section above for the full
+   evidence trail. No code, config, or baseline file was touched to reach
+   this outcome.
+
+2. No other deviations. No CLAUDE.md mandate weakened. No existing function
+   edited (grep-confirmed: only new lines added to extra.inc, tail
+   insertion point, no existing line moved/altered). No config/stored key
+   touched (nothing registers with PfbConfig). No die()/exit(). Comment
+   budget respected (each inline comment <=3 lines; docblock documents
+   params/returns/contract per the "function-contract facts" carve-out,
+   matching sibling docblocks' own length in this file). No ADR phase
+   number / RESULTS ref / review archaeology in any comment or docblock
+   (confirmed: `check_comment_narration.py --diff origin/devel` clean).
+
+--------------------------------------------------------------------------------
+CARRY-FORWARD FOR PHASE 4
+--------------------------------------------------------------------------------
+- Client signature: `pfb_dnsbl_query(string $domain, string $qtype = 'A',
+  float $timeout_s = 5.0): ?array`, defined in
+  src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc.
+- Return contract: NULL = no verdict obtained (invalid domain / write
+  failure / encode failure / timeout / malformed-forever reply). An array
+  with `blocked => FALSE` (five attribution keys `""`) = the matcher
+  answered "not blocked". Phase 4 MUST map BOTH to "Unknown" -- the client
+  gives no way (and is not asked) to distinguish "no verdict" from "clean".
+- Verdict array keys (exactly six, `id` stripped): `blocked` (bool),
+  `b_type`, `group`, `b_eval`, `feed`, `p_type` (all string).
+- The 0660 chmod on the request file happens INSIDE this function,
+  immediately after a successful `pfb_unbound_py_atomic_write_root()`
+  publish -- Phase 4 does not need to (and must not) re-chmod it.
+- Single-writer assumption: no flock -- this channel has one event-at-a-time
+  caller per ADR SS2.1's transport row. If Phase 4 introduces concurrent
+  callers of `pfb_dnsbl_query()` from the same process, that assumption
+  needs revisiting (out of THIS phase's scope; flag it there if it arises).
+- Fresh-id requirement: every call MUST use its own fresh `uniqid()` --
+  already internal to the function, Phase 4 needs no awareness of it beyond
+  "each call is independent."
+- Default timeout 5.0s (matches the sibling
+  `pfb_unbound_py_wait_control_applied()` default and the watcher's 2.0s
+  poll-fallback cadence) -- Phase 4 may pass a different `$timeout_s` per
+  its own latency budget (e.g. a webserver-hit attribution path may prefer
+  a shorter timeout than the default).
+- Vendor/ hygiene reminder for the next phase's implementer: after any
+  `git rebase` onto a newer origin/devel, re-run `composer install` before
+  trusting `composer phpstan`/`vendor/bin/phpunit` -- a stale `vendor/`
+  from an earlier phase in the same worktree produces false gate failures
+  (see the ENVIRONMENT NOTE above).
