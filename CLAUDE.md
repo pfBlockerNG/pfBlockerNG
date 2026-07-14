@@ -87,7 +87,8 @@ pfSense-provided PHP functions".
 
 ### Plan with a higher model, implement with Sonnet 5
 
-Substantial coding work is **planned and gated by a higher model** (Opus; Fable temporarily unavailable) and
+Substantial coding work is **planned and gated by a higher model** (the session's top tier —
+currently Fable, else Opus) and
 **implemented by Sonnet 5** sub-agents: the planner splits the task into steps, a Sonnet 5
 implementer executes each, and the planner **independently checks every step** before the next
 — that per-step gating is what makes a cheaper implementer safe. The skills already wire this
@@ -95,6 +96,14 @@ implementer executes each, and the planner **independently checks every step** b
 model may implement a fix **directly** when it is relatively small and doable in one step —
 and always handles **docs / config / settings / skills** directly. Delegation is for
 non-trivial, multi-step `src/`/`tests/`/CI work.
+
+- **The per-step verifier never runs on the brief author's model** (owner directive
+  2026-07-14): a Fable-authored brief gets an Opus (or Sonnet) verifier; an Opus-authored
+  brief gets a Sonnet verifier — a different model reads with different blind spots.
+  `phase-step.js` wires this as `verifierModel` (default `opus`; a session whose own model
+  IS Opus passes `sonnet`). The top model's cross-referencing is reserved for the
+  **whole-PR review** (`review-single` with `model: "fable"` on a large/complex PR), where
+  it sees every phase's diff at once.
 
 - **An implementer may re-delegate when a subtask genuinely splits** (parallel siblings, a
   verifier per finding) — the platform enforces its own nesting-depth cap, so we add no depth
@@ -755,7 +764,9 @@ squash. History stays strictly linear (`main` always an ancestor of `devel`).
 **Default landing flow — `/pr-merge-flow N`** after completing any issue, ADR, or code
 change: review feedback first, then merge. A **Claude adversarial review runs on EVERY PR
 as the committed `review-single` workflow** — ONE reviewer sub-agent at effort `xhigh`
-(never below, never `max`), latest Sonnet (Fable — preferred for a large/complex PR — is temporarily unavailable),
+(never below, never `max`), latest Sonnet by default; the highest-tier model (currently
+Fable) for a large/complex PR — its whole-PR cross-referencing is why it reviews the PR
+rather than the per-step gates;
 **never Opus, never a multi-agent fan-out** (`review-fanout` only on explicit user request);
 the full reviewer contract lives in `.claude/workflows/review-single.js`, not here. External
 reviewers — CodeRabbit, GitHub Copilot, advisory Snyk — are requested / waited on (bounded) /

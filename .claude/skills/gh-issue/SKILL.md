@@ -86,7 +86,8 @@ lives in `.claude/workflows/issue-triage.js` (its Triage prompt + schema), the s
 source of truth. Do NOT restate or re-improvise it. Run it as ONE fresh agent:
 `Workflow({name: 'issue-triage', args: {issue: N, worktree: '<an up-to-date
 checkout — the primary is fine, the agent reads origin/<base> refs read-only>', base:
-'devel', model: 'sonnet'}})` (Fable — the preferred triage model — is temporarily unavailable;
+'devel', model: 'sonnet'}})` (pass `model: 'fable'` — or whatever the highest tier is —
+when verdict quality warrants the spend; sonnet is the default;
 the Workflow tool is already asynchronous, and `run_in_background` is NOT a Workflow parameter
 — passing it fails validation; it is harness-tracked, so **end the turn and answer its
 completion notification — never arm a sleep/poll to await it**, CLAUDE.md "No orphaned

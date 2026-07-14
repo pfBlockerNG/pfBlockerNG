@@ -177,10 +177,10 @@ replace CodeRabbit; when CodeRabbit never reviews it stands alone.
      diff-vs-spec exposes it.
    - **Pick the model** by the PR's size and complexity, and record the chosen model +
      the size metric that drove it in the Step-1d.5 audit comment: `model: sonnet`
-     for every PR. (Fable is normally the pick for a large/complex PR — >300 changed
-     lines, >6 files, or any behaviour change in `src/`'s parsing/guard/scheduling
-     logic — but is temporarily unavailable; restore the large/complex → `fable`
-     split when its quota returns.) **Never Opus, never a multi-agent fan-out** (user
+     by default; the highest-tier model (currently `fable`) for a large/complex PR —
+     >300 changed lines, >6 files, or any behaviour change in `src/`'s
+     parsing/guard/scheduling logic — where whole-PR cross-referencing pays
+     (fall back to sonnet when the top tier is unavailable). **Never Opus, never a multi-agent fan-out** (user
      directive 2026-07-11 — `review-fanout` runs only on an explicit user request),
      never below `xhigh`, never `max`; the bare family alias resolves to the LATEST
      generation (Sonnet 5 or newer) — never pin a dated model ID.
@@ -286,8 +286,8 @@ a numbered list of every finding with its outcome — `fixed@<commit>` / `skippe
 `deferred: <issue link>` — folded into the Step-1d.5 audit comment; refuse to merge while any
 item lacks an outcome. **When NO external reviewer reviewed a substantive PR** (CodeRabbit dropped under the
 5-minute rule AND Copilot unavailable/timed out), **escalate instead of merging on the single
-Claude pass** — a focused second single-agent Sonnet pass over the final diff (Fable would be
-preferred here but is temporarily unavailable), or pace the merge; the audited defect window coincided exactly with a
+Claude pass** — a focused second single-agent pass over the final diff (the highest-tier model —
+currently Fable — preferred, else Sonnet), or pace the merge; the audited defect window coincided exactly with a
 bots-quota batch-merge cadence. If a finding is unresolved, contested, or needs the user,
 **stop here and report** — do not merge.
 
@@ -317,7 +317,7 @@ it may not be clean.
 ## Definition of done
 
 - Review resolved (note which reviews landed — the always-on single-agent Claude
-  adversarial review and its model (`sonnet`; Fable temporarily unavailable; always `xhigh`),
+  adversarial review and its model (`sonnet`, or `fable` on a large/complex PR; always `xhigh`),
   Copilot when it reviewed, CodeRabbit when it reviewed, plus any terminal Snyk
   `failure` finding); PR merged by rebase; remote branch deleted.
 - Sync the work item's labels (an issue's `Waiting PR` removed on merge), per
