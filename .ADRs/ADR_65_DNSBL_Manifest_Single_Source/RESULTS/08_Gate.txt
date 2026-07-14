@@ -1,0 +1,81 @@
+ADR-65 Phase 8 -- GATE RECORD
+================================================================================
+
+VERDICT: PASS (verifier verdict PASS, zero blockers; no orchestrator
+remediation needed)
+
+First phase run with the Brief stage on Opus 4.8 (phase-step briefModel,
+655b0c6a) -- implementer reported zero ESCALATEs; every brief fact
+independently confirmed against the post-rebase source.
+
+--------------------------------------------------------------------------------
+COMMANDS + RESULTS (verifier re-ran independently)
+--------------------------------------------------------------------------------
+- pytest --collect-only (wrapper): the 4 new tests collect clean
+  (test_smoke_adr65.py rows a-c, smoke marker; test_adr65_alerts_live.py row
+  d, ui_e2e marker).
+- PATH-shimmed sh scripts/agent/run-gates.sh --diff origin/devel: all GATE
+  PASS lines, GATES: PASS (www/ reminder remains branch-cumulative; this
+  phase's own diff touches zero www/ files).
+- Whole pytest suite (wrapper): 2933 passed, 2 skipped (unchanged -- smoke
+  tests are collection-only off-appliance). mypy tests/ clean.
+- Narration/version-literal checkers: exit 0. check_retired_tokens.py: same
+  24 documented warn-only FP groups, zero new.
+
+--------------------------------------------------------------------------------
+RED/GREEN EVIDENCE
+--------------------------------------------------------------------------------
+Behaviour-preserving new smoke coverage (brand-new-code carve-out; no
+off-appliance harness can execute a live-VM row). Off-appliance proof =
+collection-clean + full gates green, both re-run by the verifier. On-box
+execution is the orchestrator's CE+Plus acceptance run -- recorded, never
+claimed.
+
+--------------------------------------------------------------------------------
+PER-ITEM DIFF VERDICTS (verifier read git show 17cc3751 in full, cross-
+verified against LIVE source rather than the brief's prose)
+--------------------------------------------------------------------------------
+- Row (a): before-state zero-hit asserts, exactly-one block log line,
+  pfb_dnsbl_query byte-match on group/feed, and zero-side-effect asserts
+  verified against dnsbl_query_answer's actual return dict -- PASS.
+- Row (b): manifest-absent -> empty DNSBL + ledger/notice + NOT-VIP assert +
+  Force-reload self-heal, with the raw unbound bounce idiom -- PASS.
+- Row (c): sinkhole curl block-page hit -> widget dnsbl counter increment
+  with the query-derived group (SQLite read via the delimited pfSsh.php
+  idiom) -- PASS.
+- Row (d): Alerts page renders the logged group/feed, no strike/re-check
+  markup (ui_e2e beside its reconciled siblings) -- PASS.
+- Test honesty: every negative assert has a real failure path (counter
+  would move to 2 on a regression; VIP assert flips on a stale-serve);
+  fixtures are unique_domain/RFC-5737 only -- PASS.
+- Conventions: module + test naming beside siblings; no phase numbers in
+  comments (narration checker clean) -- PASS.
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX
+--------------------------------------------------------------------------------
+Rows a-d each ticked to a named test with its D-delta (a: D4/Semantic 3 +
+D1 fold-in; b: D3; c: D4; d: D2). Deferral: on-box execution -> the
+acceptance run (standing).
+
+--------------------------------------------------------------------------------
+BRIEF VALIDATION (orchestrator, non-vacuous)
+--------------------------------------------------------------------------------
+Spot-checked the Opus brief's central contract claims during gating:
+pfb_dnsbl_query signature/contract matches pfblockerng_extra.inc:3785 (P3
+gate evidence) and both dnsbl.log schemas match the P4/P0 derivations
+(group@6, feed@8, 0-based). No drift_flags.
+
+--------------------------------------------------------------------------------
+SKIPPED
+--------------------------------------------------------------------------------
+- Live-VM execution of the four rows: by design -- the CE+Plus acceptance
+  run after phase 9.
+
+--------------------------------------------------------------------------------
+NOTES
+--------------------------------------------------------------------------------
+Deviations (both pre-authorized): clean rebase over 655b0c6a; the
+multi-commit handoff shape (P1/P5/P6/P7 precedent). Carry-forward for phase
+9 includes: SS7's manual rows a-c are now automated -- phase 9 updates the
+checklist prose to point at the tests.
