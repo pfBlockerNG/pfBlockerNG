@@ -18,9 +18,9 @@ Every expected answer is pinned to the REAL matcher semantics in
 ``src/usr/local/pkg/pfblockerng/pfb_unbound.py`` + ``pfblockerng.inc`` (verified
 against source, not guessed):
 
-* DNSBL **python** mode (the ONLY mode on ``next``): the feed is written to
-  ``pfb_py_data.txt`` as EXACT entries (``inc:8966-8970``; zone files are only
-  produced by the out-of-scope TLD feature). ``evaluate_domain``
+* DNSBL **python** mode (the ONLY mode on ``next``): the manifest build loads
+  the feed into ``dataDB`` as EXACT entries (zone-file/TLD classification is the
+  out-of-scope TLD feature). ``evaluate_domain``
   (``pfb_unbound.py:evaluate_domain``) looks the name up in ``dataDB`` EXACTLY.
   The response shape is:
 
@@ -182,7 +182,7 @@ def test_dnsbl_unbound_config_immutable(deployed_vm: SmokeVM, mock_feeds: _MockF
 def test_dnsbl_python_exact_vip(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """Python-mode exact block: NOERROR + VIP for the listed domain; subdomain passes.
 
-    Verified on the live box: python mode writes the feed to ``pfb_py_data.txt``
+    Verified on the live box: the manifest build loads the feed into ``dataDB``
     as EXACT entries.  ``evaluate_domain`` looks the name up in ``dataDB`` EXACTLY
     — ``logging='enabled'`` → ``null_blocking=False`` → NOERROR + A = DNSBL VIP.
     A subdomain is NOT in ``dataDB`` and resolves normally (exact, not wildcard).
