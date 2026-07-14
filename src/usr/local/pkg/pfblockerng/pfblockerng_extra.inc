@@ -3768,6 +3768,100 @@ function pfb_live_punch_plan(string $ip, array $table_entries): array
 	return ['delete' => $delete, 'add' => $add];
 }
 
+/**
+ * ADR-65 SS2.1: ask the live DNSBL matcher whether $domain is blocked, via the
+ * read-only query channel (pfb_py_query / pfb_py_query.reply) -- no counter/
+ * log/cache sink is touched, only the decision-cache LRU may warm.
+ *
+ * @param string $domain    Domain to query (trailing dot stripped; PFBL-01 validated).
+ * @param string $qtype     Informational only -- the matcher's decision ignores it.
+ * @param float  $timeout_s Bounded-wait budget in seconds (a deadline AND a hard poll
+ *                          cap both bound the wait -- CLAUDE.md "No orphaned waits").
+ * @return array{blocked:bool,b_type:string,group:string,b_eval:string,feed:string,p_type:string}|null
+ *         The matcher's verdict, or NULL when none was obtained (invalid domain,
+ *         write failure, timeout, or a malformed reply) -- callers must treat NULL
+ *         and blocked=false identically ("no block"), never distinguish them.
+ */
+function pfb_dnsbl_query(string $domain, string $qtype = 'A', float $timeout_s = 5.0): ?array {
+	global $pfb;
+
+	$channel    = "{$pfb['dnsbldir']}/pfb_py_query";
+	$reply_path = "{$pfb['dnsbldir']}/pfb_py_query.reply";
+
+	$domain = rtrim($domain, '.');
+	$clean  = pfb_filter($domain, PFB_FILTER_DOMAIN, 'pfb_dnsbl_query');
+	if (empty($clean)) {
+		pfb_logger("\nADR-65: pfb_dnsbl_query rejected an invalid domain [ " . htmlspecialchars($domain) . " ]", 2);
+		return NULL;
+	}
+
+	// Stateless query, one caller at a time (ADR-65 SS2.1 transport row) -- no lock,
+	// unlike the mutating control channel's seq read-increment.
+	$id      = uniqid('pfbq_', TRUE);
+	$payload = json_encode(array('id' => $id, 'domain' => $clean, 'qtype' => $qtype));
+	if ($payload === FALSE) {
+		pfb_logger("\nADR-65: pfb_dnsbl_query failed to encode the request for [ {$clean} ]", 2);
+		return NULL;
+	}
+
+	if (!pfb_unbound_py_atomic_write_root($channel, $payload . "\n")) {
+		return NULL;
+	}
+	// ADR-65 SS2.1: the query request is group-writable (0660) for the attributing
+	// daemon, unlike the owner-only 0640 control-command channel.
+	@chmod($channel, 0660);
+
+	$deadline  = microtime(TRUE) + $timeout_s;
+	$max_polls = (int) ceil(max($timeout_s, 0.0) / 0.2) + 2;
+	$verdict   = NULL;
+	$polls     = 0;
+
+	do {
+		if (file_exists($reply_path)) {
+			$raw = @file_get_contents($reply_path);
+			// An oversized read is treated as malformed -- a genuine reply is < 1 KB.
+			if ($raw !== FALSE && strlen($raw) <= 65536) {
+				$rec = json_decode($raw, TRUE);
+				if (
+					is_array($rec)
+					&& (($rec['id'] ?? NULL) === $id)
+					&& is_bool($rec['blocked'] ?? NULL)
+					&& is_string($rec['b_type'] ?? NULL)
+					&& is_string($rec['group'] ?? NULL)
+					&& is_string($rec['b_eval'] ?? NULL)
+					&& is_string($rec['feed'] ?? NULL)
+					&& is_string($rec['p_type'] ?? NULL)
+				) {
+					$verdict = array(
+						'blocked' => $rec['blocked'],
+						'b_type'  => $rec['b_type'],
+						'group'   => $rec['group'],
+						'b_eval'  => $rec['b_eval'],
+						'feed'    => $rec['feed'],
+						'p_type'  => $rec['p_type'],
+					);
+					break;
+				}
+			}
+		}
+		$polls++;
+		if ($polls >= $max_polls || microtime(TRUE) >= $deadline) {
+			break;
+		}
+		usleep(200000);
+	} while (TRUE);
+
+	if ($verdict === NULL) {
+		pfb_logger("\nADR-65: pfb_dnsbl_query timed out waiting for a verdict [ {$clean} ]", 2);
+		@unlink($channel);
+		return NULL;
+	}
+
+	@unlink($reply_path);
+	@unlink($channel);
+	return $verdict;
+}
+
 // logger() and localize_text() are pfSense-core helpers (src/etc/inc/util.inc)
 // on pfSense Plus / master, but absent from released pfSense CE <= 2.8.1. Define
 // fallbacks ONLY when core does not provide them, so this package runs on both:
