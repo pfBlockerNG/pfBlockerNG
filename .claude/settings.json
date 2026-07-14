@@ -7,7 +7,7 @@
   "enableAllProjectMcpServers": true,
   "statusLine": {
     "type": "command",
-    "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/skills/ponytail/hooks/ponytail-statusline.sh\"; printf ' '; bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/skills/caveman/src/hooks/caveman-statusline.sh\"; sh \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/ts-statusline.sh\"; sh \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/rtk-statusline.sh\""
+    "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/statusline.sh\""
   },
   "enabledPlugins": {
     "ponytail@ponytail": true,
