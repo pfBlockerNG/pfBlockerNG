@@ -165,6 +165,17 @@ claims and cite real symbols + `file:line`:
    risky swap of data structures or I/O. Each phase becomes one `NN_Name.txt`
    prompt. **Per-phase safety rails (each was a cause of ADR-62's
    pre-implementation re-split — build them in from the start):**
+   - **Phase size budget (owner feedback 2026-07-14 — ADR-65's phases ran
+     60–90 min of implementer time each; that is under-splitting).** A phase
+     is ONE mechanism in ONE place. Mechanical caps — exceeding ANY of them
+     means split BEFORE writing the prompt: more than 2 production files
+     edited; more than 1 production language (a Python change and its PHP
+     notice surface are TWO phases); more than 5 ACTION-PLAN items; a
+     coverage matrix over ~10 rows; an expected diff over ~300 changed
+     lines. Target: an implementer sitting of ~15–30 minutes. Splitting is
+     cheap at authoring time and unpayable mid-implementation — when in
+     doubt, split (smaller phases also make `WEIGHT: light` applicable more
+     often).
    - **Delta budget.** Number the accepted behaviour deltas in §2 (D1, D2, …);
      every behaviour-changing phase declares the exact subset it may flip, and
      the oracle stays byte-identical outside it. A phase whose budget spans
@@ -228,8 +239,29 @@ never a platitude; where one is genuinely not applicable, say so explicitly:
   a decision, not an accident (ADR-61 rewrote a mutating POST handler on a
   `$nocsrf` page without flagging it — #1050).
 
-Use `AskUserQuestion` only for genuine forks. Periodically reflect the evolving
-ADR back to the user in prose so they can correct course.
+**Interaction contract (owner feedback 2026-07-14 — the observed failure mode:
+ask one question, read the short answer as blanket approval, then produce pages
+of enthusiastic prose that drift off the ADR's objective):**
+
+- Ask at EVERY genuine fork, as it arises — scope boundary, mechanism choice,
+  accepted-delta wording, phase granularity, naming. One `AskUserQuestion` per
+  fork; never silently resolve a fork you could ask about, and never fold
+  several forks into one question.
+- An answer authorizes EXACTLY the asked question — nothing more. It is not
+  approval of the surrounding design, not enthusiasm, not "keep going". After
+  each answer: restate the updated decision in ≤2 lines, then surface the NEXT
+  open fork.
+- Keep a running OPEN FORKS list from turn one; elicitation is complete only
+  when that list is empty. Reflect the evolving ADR back as the list + the
+  decision table — compact and factual, never celebratory (the tone target is
+  a technical record, not a pitch).
+- Before Step 3 writes any file: present the decision summary (numbered
+  decisions, deltas D1..Dn, phase list with each phase's size-budget check)
+  and get an explicit go-ahead via `AskUserQuestion`. A conversation that
+  "feels" settled is never the trigger to start writing.
+- Drift guard: before any long reply, re-read the draft's objective line; if
+  the reply is not resolving an open fork of THAT objective, stop and say so
+  instead of writing it.
 
 ## Step 3 — Write the ADR document
 
@@ -358,6 +390,10 @@ Rules:
   `blast-radius` check in the prompt checker): what production behaviour can
   change when the phase lands alone, with a behaviour-changing prompt naming
   its exact delta budget and the pinned surfaces its oracle rides.
+- **Size check per prompt:** a prompt whose ACTION PLAN exceeds 5 items, spans
+  two production languages, or needs more than ~90 lines to state violates the
+  Step 2 phase-size budget — go back and split the phase; never write a bigger
+  prompt.
 - **Template drift is bounded:** mirror the latest ADR's section set and prose
   style, but the VERIFICATION and HANDOFF gate content above comes from THIS
   skill's template — one weak ADR must not become the convention every later
