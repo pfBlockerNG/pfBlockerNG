@@ -456,7 +456,7 @@ class TestSwapGatesFromSnapshot:
     def test_operate_cfg_gates_read_snapshot_not_pfb(self) -> None:
         import inspect
 
-        # ADR-65 P2: the cfg-assembly dict operate() builds per query was extracted
+        # ADR-65: the cfg-assembly dict operate() builds per query was extracted
         # into _evaluate_cfg(snap) (shared with the read-only query channel) -- the
         # snap-not-pfb invariant below now lives there; operate() only delegates.
         assert "cfg = _evaluate_cfg(snap)" in inspect.getsource(P.operate)
