@@ -25,16 +25,21 @@ REQUIRED READING
 - FIRST, read RESULTS/03_Results.txt (the client signature + NULL-on-miss contract) AND
   RESULTS/01_Results.txt (the decision oracle). If either is missing, STOP and report.
 - .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md -- SS1.3 (the consumers), SS1.4 (the log line is
-  self-sufficient: group@6, feed@8), SS2.2 (the rewire table), the D2 + D4 delta rows, and the
-  Semantics that MUST be preserved (5, 6, 8).
-- src/usr/local/pkg/pfblockerng/pfblockerng.inc -- pfb_log_event (~:14803), its grep via
-  pfb_dnsbl_parse('daemon', ...) (~:14819) and the widget counter UPDATE (~:14838); pfb_dnsbl_parse
-  (~:14225) and pfb_dnsbl_parse_compute (~:14254) -- KEEP these defined, just stop the alerts path
-  calling them; the batched prefetch pfb_dnsbl_prefetch (~:14112).
-- src/usr/local/www/pfblockerng/pfblockerng_alerts.php -- convert_dnsbl_log (~:2260), the re-check
-  block (~:2328-2369, gated !$isPython/!$isUpstream/!$isWhitelist_found), the unified dispatch
-  switch (~:4390), dnsbl_whitelist_type (~:2318, INDEPENDENT of the grep -- keep it), the prefetch
-  setup (~:4446/:4494).
+  self-sufficient: group at 0-based field 6, feed at 8), SS2.2 (the rewire table), the D2 + D4
+  delta rows, and the Semantics that MUST be preserved (5, 6, 8).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc -- pfb_log_event (~:15171), its grep via
+  pfb_dnsbl_parse('daemon', ...) (~:15190) and the widget counter UPDATE (~:15210);
+  pfb_dnsbl_parse (~:14597, a memo wrapper) and pfb_dnsbl_parse_compute (~:14622) -- KEEP these
+  defined, just stop the alerts path calling them; the batched prefetch pfb_dnsbl_prefetch
+  (~:14480) + pfb_dnsbl_prefetch_grep (~:14546).
+- src/usr/local/www/pfblockerng/pfblockerng_alerts.php -- convert_dnsbl_log (~:2262), the re-check
+  (TWO blocks: the compare block ~:2330-2372, gated !$isPython/!$isUpstream/!$isWhitelist_found,
+  AND the failed-match re-derive ~:2375-2378, gated !$isMatch -- BOTH go), the unified dispatch
+  switch (~:4390-4396), the FIRST dnsbl_whitelist_type call (~:2320, INDEPENDENT of the grep --
+  keep it; its second call ~:2377 dies with the re-derive block), the #809 two-pass prefetch
+  wiring to remove: pfb_dnsbl_prefetch (~:4509), pfb_dnsbl_prefetch_store(NULL) (~:4543) and the
+  buffer/replay helpers (pfb_alerts_dnsbl_buffer_push / pfb_alerts_dnsbl_replay_step) --
+  enumerate every call site from grep, plus the filter-mode single-pass path (~:4451-4468).
 - docs/misc/alerts-reports-pipeline.md -- the two-phase model being collapsed to one.
 - tests/php/ + tests/smoke/ui/ -- the PHPUnit + Tier-A ui_render harnesses to mirror.
 
@@ -53,9 +58,10 @@ ACTION PLAN (ordered -- red assertions FIRST)
    group/feed for the log line and the counter UPDATE; NULL/blocked=false -> 'Unknown'. Do NOT
    change the counter mechanism, only its group source (Semantic 5).
 3. convert_dnsbl_log: stop calling pfb_dnsbl_parse('alerts', ...) for DNSBL rows in BOTH the
-   non-unified and 'Unified' paths; render the logged fields directly. Remove the now-dead DNSBL
-   prefetch wiring. KEEP dnsbl_whitelist_type (whitelist display is independent). KEEP the IP
-   re-check untouched.
+   non-unified and 'Unified' paths (the compare block AND the !$isMatch re-derive block); render
+   the logged fields directly. Remove the now-dead DNSBL prefetch wiring (the #809 buffer/replay
+   scheme -- every call site, from grep). KEEP the first dnsbl_whitelist_type call (whitelist
+   display is independent). KEEP the IP re-check untouched.
 4. Re-run the tests -> GREEN, unchanged. Re-run the Phase-1 oracle: net decisions must be identical.
 
 CONSTRAINTS

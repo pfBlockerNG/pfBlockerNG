@@ -27,12 +27,14 @@ REQUIRED READING
 - .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md -- SS2.1 (the channel table: request/reply
   shape, engine, side-effect rule, always-on, transport, privilege) and SS2 Semantics 2 + 3.
 - src/usr/local/pkg/pfblockerng/pfb_unbound.py -- the CONTROL channel to mirror: pfb_control_watcher
-  (~:795), _control_read_record (~:718), _control_write_applied (~:738), the atomic-write helper it
-  uses, the kqueue waiter (_ReloadKqueueWaiter, ~:835), init thread-start (~:1773); the DECISION to
-  call: evaluate_domain (~:6014) / highest_block_band (~:5817) and the log-field builder
-  get_details_dnsbl (~:2745); the side-effect sinks to AVOID: pfb_db_enqueue("resolver"/"dnsbl")
-  (~:2763/:2777), the dnsbl.log write (~:2828), the dnsblcache enqueue (~:6726); the LRU write
-  decisionDB[name] (~:5706) which IS allowed.
+  (~:799), _control_read_record (~:722), _control_write_applied (~:742, also the tmp+os.replace
+  atomic-write exemplar), the kqueue waiter (_ReloadKqueueWaiter, ~:653), init thread-start
+  (~:1827, gated on mod_threading AND python_control -- the QUERY watcher starts without the
+  python_control gate); the DECISION to call: evaluate_domain (~:6038) / _scan_block_band
+  (~:5834; renamed from highest_block_band) and the log-field builder get_details_dnsbl
+  (~:2762); the side-effect sinks to AVOID: pfb_db_enqueue("resolver"/"dnsbl") (~:2780/:2794),
+  the dnsbl.log write (~:2845), the dnsblcache enqueue (~:6750); the LRU write decisionDB[name]
+  (~:5730, in _decision_for ~:5718) which IS allowed.
 - CLAUDE.md -- stdlib-only-in-loader, Python standards, "No fixed-time waits to coordinate
   concurrency (#456)", the delegation contract.
 
@@ -45,7 +47,7 @@ silently).
 
 ACTION PLAN (ordered)
 1. Add a pure answer function (e.g. dnsbl_query_answer(domain, qtype)) that runs the SAME decision
-   evaluate_domain/highest_block_band uses against the live DBs and returns
+   evaluate_domain/_scan_block_band uses against the live DBs and returns
    {blocked, b_type, group, b_eval, feed, p_type} -- the exact dnsbl.log fields (SS1.4). It MUST NOT
    enqueue the resolver/dnsbl counters, write dnsbl.log, or enqueue a dnsblcache row. It MAY write
    the LRU decisionDB memo.
@@ -54,7 +56,8 @@ ACTION PLAN (ordered)
    are stateless -- no baseline/replay gate). Start it in init unconditionally.
 3. Define the paths (pfb["pfb_py_query"] / pfb["pfb_py_query_reply"], chroot-relative like the
    control channel) and the file perms per SS2.1 (request 0660, reply 0640).
-4. Wire a clean stop (mirror pfb_control_stop) so the thread is not an orphaned wait.
+4. Wire a clean stop (mirror the pfb_control_stop threading.Event pattern -- declared ~:155,
+   .set() in deinit() ~:3502) so the thread is not an orphaned wait.
 
 CONSTRAINTS
 - Stdlib only (os/json/select/threading); mirror the existing watcher's idioms, do not import new

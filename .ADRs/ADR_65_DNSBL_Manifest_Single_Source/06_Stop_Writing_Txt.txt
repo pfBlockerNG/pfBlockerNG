@@ -1,5 +1,5 @@
 ================================================================================
-PHASE 6 PROMPT -- Stop writing py_data/py_zone; move the health check onto the manifest (behaviour-CHANGING: D1; dissolves #1244)
+PHASE 6 PROMPT -- Stop writing pfb_py_data/pfb_py_zone; move the health check onto the manifest (behaviour-CHANGING: D1; dissolves #1244)
 Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
 ADR: .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md   (read SS1.2, SS1.3, delta D1)
 ================================================================================
@@ -11,9 +11,9 @@ push directly. Test mode: red->green -- author a test that the .txt files are NO
 a DNSBL run (and that the health check keys on the manifest, not py_zone/py_data), red on today's
 code, green after.
 Blast-radius note for the gate: behaviour-CHANGING, delta budget D1 ONLY. If this phase lands alone:
-py_data.txt/py_zone.txt are no longer written; tld_analysis's .txt classification + finalize
-rename() loop and pfb_dnsbl_py_swap are removed; the health check ($dnsbl_missing) keys on manifest
-presence/generation instead of .txt presence. Net DNS decisions (produced by the manifest build) are
+pfb_py_data.txt/pfb_py_zone.txt are no longer written; tld_analysis's classification outputs +
+finalize rename() loop and pfb_dnsbl_py_swap are removed; the health check ($dnsbl_missing) keys on
+manifest presence/generation instead of interchange-file presence. Net DNS decisions (produced by the manifest build) are
 UNCHANGED; tld_analysis's alias/stat bookkeeping is retained. Dissolves #1244 (no unchecked rename,
 no false "completed").
 
@@ -29,13 +29,22 @@ REQUIRED READING
 - .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md -- SS1.1 (manifest decision-complete), SS1.2 (the
   two .txt writers + the #1244/#1245 sites), SS2.2 (health check onto the manifest), delta D1,
   Semantics 1 + 7.
-- src/usr/local/pkg/pfblockerng/pfblockerng.inc -- tld_analysis (~:8352): the .txt classification +
-  the finalize rename() loop (~:8585, #1244) go; its tld_blacklist / tld_update / DNSBL_TLD alias
-  bookkeeping STAYS (grep for tld_update / dnsbl_alias_update within it -- keep those). pfb_dnsbl_py_
-  swap (~:1955) is removed. The #546 no-feeds path (~:17801-17811) and the disable path (~:17815)
-  that unlink/write the .txt. The health check (~:16548-16607): $dnsbl_missing (~:16582 keys on
-  py_zone/py_data presence) and its rebuild trigger (~:16607). The manifest + its ADR-10 generation
-  (pfb_py_sources / pfb_py_reload) as the new health signal.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc -- tld_analysis (~:8703): the classification
+  outputs (~:8746, {unbound_py_data}.raw / {unbound_py_zone}.raw handles) + the finalize
+  @rename() loop (~:8935-8939, return discarded, unconditional "completed" log ~:8941 -- #1244)
+  go; its tld_update / DNSBL_TLD alias bookkeeping STAYS (~:8800-8806 and the dnsbl_alias_update
+  loop ~:8945-8952 -- grep within the function and keep every non-interchange side effect).
+  pfb_dnsbl_py_swap (~:2006, called unconditionally ~:18138) is removed. The #546 no-feeds path
+  (~:18158-18181: the empty-data write ~:18177 + zone unlink ~:18178 go;
+  pfb_unbound_python_sources(array()) ~:18176 and the count writes stay) and the disable path
+  (~:18183-18191: the unbound_py_data/unbound_py_zone unlinks go; the .conf/sources/rawdir
+  cleanup stays). The assembled {dnsbl_file}.raw concat (~:18127-18135): remove it too IFF a
+  grep shows no remaining consumer once tld_analysis's outputs and the swap are gone -- keep it
+  otherwise and say why in the handoff. The health check (~:16903-16972): $dnsbl_missing
+  (~:16909, keys on unbound_py_zone/unbound_py_data presence branched on the TLD toggle
+  ~:16942/:16949) and its rebuild trigger (~:16968-16972, reuse_dnsbl + touch .reload). The
+  manifest + its ADR-10 generation as the new health signal (existing generation readers:
+  pfb_unbound_py_marker_generation ~:9074, pfb_dnsbl_converged ~:9098).
 - CLAUDE.md -- PHP standards, the delegation contract.
 
 REALITY OVERRIDE (standing rule)
@@ -46,20 +55,22 @@ have touched it), the live code wins -- do NOT remove bookkeeping you cannot pro
 
 ACTION PLAN (ordered -- red assertion FIRST)
 1. RED test: after a DNSBL run (drive the relevant path off-appliance where a driver exists; else a
-   focused unit around the writer), assert py_data.txt/py_zone.txt are NOT written and that
+   focused unit around the writer), assert pfb_py_data.txt/pfb_py_zone.txt are NOT written and that
    $dnsbl_missing keys on the manifest. Red on today's code (paste, git hash-object).
-2. Remove the .txt writers: tld_analysis's classification-to-.txt + the finalize rename() loop
-   (#1244); pfb_dnsbl_py_swap; the #546/disable-path .txt writes/unlinks. RETAIN tld_analysis's
-   non-.txt alias/stat bookkeeping (tld_update, DNSBL_TLD blacklist alias, dnsbl_alias_update).
+2. Remove the interchange-file writers: tld_analysis's classification outputs + the finalize
+   rename() loop (#1244); pfb_dnsbl_py_swap; the #546 no-feeds empty-data write + zone unlink;
+   the disable-path data/zone unlinks; the {dnsbl_file}.raw concat IFF consumer-free (grep).
+   RETAIN tld_analysis's non-interchange alias/stat bookkeeping (tld_update, DNSBL_TLD blacklist
+   alias, dnsbl_alias_update) and the disable-path .conf/manifest/rawdir cleanup.
 3. Health check: $dnsbl_missing keys on manifest presence + its ADR-10 generation, not
-   py_zone/py_data on disk; keep the rebuild trigger (~:16607) semantics.
-4. GREEN: the .txt files are gone; decisions (manifest-built) unchanged (Phase-1 oracle).
+   pfb_py_zone/pfb_py_data on disk; keep the rebuild-trigger (~:16968-16972) semantics.
+4. GREEN: the interchange files are gone; decisions (manifest-built) unchanged (Phase-1 oracle).
 
 CONSTRAINTS
 - Delta budget D1 ONLY. The manifest build must still produce identical dataDB/zoneDB (Semantic 1);
   do NOT touch the manifest writer's classification inputs (tld_wildcard_blacklist/
-  tld_wildcard_exclusion; post-#1255 the public-suffix oracle is not a manifest input — it
-  rides the shipped pfb_py_tld file reader-side).
+  tld_wildcard_exclusion, emptied-when-off ~:8223-8232; the public-suffix oracle is not a
+  manifest input -- it rides the shipped pfb_py_tld file reader-side, ini flag ~:8412-8416).
 - Retain every tld_analysis side effect that is NOT .txt I/O (alias updates, stats). Removing one is
   a defect.
 - No stored config key / alias name / page filename / log schema change (Semantic 7).
@@ -75,17 +86,18 @@ VERIFICATION (executed -- paste output)
   `composer phpcs -- --standard=phpcs.xml.dist src/`; `python3 -m pytest` if any .py touched.
 - DEFERRED live-VM (no off-appliance driver for the full sync loop -- record, never claim unrun):
   `scripts/local-smoke.sh --marker smoke --filter dnsbl` proving a DNSBL run blocks correctly with
-  NO py_data.txt/py_zone.txt on disk.
+  NO pfb_py_data.txt/pfb_py_zone.txt on disk.
 - `scripts/agent/run-gates.sh --diff origin/devel`.
-- diff-read: no py_data.txt/py_zone.txt write remains; tld_analysis bookkeeping intact; health check
-  reads the manifest.
+- diff-read: no pfb_py_data.txt/pfb_py_zone.txt write remains; tld_analysis bookkeeping intact;
+  health check reads the manifest. A tree-wide grep for unbound_py_data/unbound_py_zone shows no
+  surviving writer (retired-token discipline).
 
 EXPECTED RESULT
-The py_data/py_zone interchange files are never written; the health check watches the manifest; the
-manifest is the sole DNSBL classification producer; #1244's unchecked rename is gone.
+The pfb_py_data/pfb_py_zone interchange files are never written; the health check watches the
+manifest; the manifest is the sole DNSBL classification producer; #1244's unchecked rename is gone.
 
 COMMIT (single)
-    pfblockerng: stop writing py_data/py_zone; health-check on the manifest (ADR-65 P6)
+    pfblockerng: stop writing pfb_py_data/pfb_py_zone; health-check on the manifest (ADR-65 P6)
 Push directly to adr/65-dnsbl-manifest-single-source; open a PR only if the direct push is rejected.
 
 HANDOFF -- write .ADRs/ADR_65_DNSBL_Manifest_Single_Source/RESULTS/06_Results.txt with the fixed
