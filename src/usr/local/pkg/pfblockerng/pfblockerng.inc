@@ -7708,9 +7708,9 @@ function pfb_dnsbl_is_abp_rule_line(string $line): bool {
 			if ($first === 0) {
 				// issue #1276: a hosts-dialect '## Section' comment shares the
 				// marker-at-position-0 shape with a real cosmetic rule -- require
-				// a non-whitespace char immediately after the marker.
+				// a non-whitespace char (ctype_space) immediately after the marker.
 				$after = substr($line, $marker_len, 1);
-				if ($after !== '' && $after !== ' ' && $after !== "\t") {
+				if ($after !== '' && !ctype_space($after)) {
 					return TRUE;
 				}
 			} elseif (strspn($line, 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._,~*-') >= $first) {
