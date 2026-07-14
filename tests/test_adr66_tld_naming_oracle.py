@@ -12,13 +12,15 @@ phases update instead of this file.
 Oracle A pins Feature A (``evaluate_domain``'s TLD-Allow arm): enabled/tld
 not on the list blocks, enabled/tld on the list resolves, disabled is a
 no-op, an empty list is a no-op (issue #713), the numeric (important_rules)
-resolution carries the feed-block band, and the CNAME b_type suffix composes
-with a TLD-Allow block.
+resolution carries the feed-block band (both with no allow match and with a
+populated-but-non-matching allow regex), the CNAME b_type suffix composes
+with a TLD-Allow block, the DNSBL-VIP query exemption (v4/v6), the empty-tld
+no-op, and precedence under an upstream dataDB hit.
 
-Oracle B pins Feature B (``classify()`` / ``_dnsbl_load_tld_master`` via
-their seam aliases): the 2-label/multi-label-suffix/deeper-sub/>5-label
-zone-vs-data split, the domain-level exclusion opt-out, and the load-time
-blacklist/exclusion TLD filters.
+Oracle B pins Feature B (the wildcard classifier / oracle loader via their
+seam aliases ``tld_wildcard_classify`` / ``load_tld_wildcard_master``): the
+1/2/3/4/5/>5-label zone-vs-data split, the domain-level exclusion opt-out,
+and the load-time blacklist/exclusion/line-skip TLD filters.
 """
 
 from __future__ import annotations
@@ -40,8 +42,8 @@ from tests.test_adr66_tld_bridges import (
 # --------------------------------------------------------------------------- #
 def _tld_allow_cfg(**overrides: Any) -> dict[str, Any]:
     """Minimal cfg for evaluate_domain's TLD-Allow arm; every key it can
-    unconditionally index is present. whiteDB stays False, so python_tld_seg
-    (also an ADR-66 §2.1 rename target) is never indexed and is deliberately
+    unconditionally index is present. whiteDB stays False, so the TLD-Allow
+    segment knob (a rename target) is never indexed and is deliberately
     absent here."""
     base: dict[str, Any] = {
         "python_blocking": False,
@@ -155,6 +157,14 @@ class TestOracleATldAllowNumericBand:
         dec = self._decide("xyz", r"uuid-a5f0")
         assert dec.in_whitelist is True
 
+    def test_a5c_populated_non_matching_allow_regex_leaves_block_standing(self) -> None:
+        # A populated allowRegexDB that simply doesn't match this query must
+        # not over-promote the band above PRIO_FEED_BLOCK -- the block stands
+        # exactly as if allowRegexDB were empty (test_a5_disallowed_tld...).
+        dec = self._decide("xyz", r"zzz-never-match")
+        assert dec.is_found is True
+        assert dec.in_whitelist is False
+
 
 class TestOracleATldAllowBranchesBothWays:
     """A6: with a populated allow list, a disallowed tld still blocks (the
@@ -184,8 +194,76 @@ class TestOracleATldAllowCnameComposition:
         assert dec.b_type == "Python_CNAME"
 
 
+class TestOracleATldAllowVipExemption:
+    """A8a/A8b: the TLD-Allow arm's own DNSBL-VIP q_name exemption -- a query
+    for the configured VIP address itself (v4 or v6) is never TLD-Allow
+    blocked, even with a disallowed tld. Control-first: an ordinary query on
+    the identical cfg blocks, so the VIP query's pass is caused by VIP
+    membership, not something else.
+    """
+
+    def test_a8a_v4_vip_query_is_exempt(self) -> None:
+        cfg = _tld_allow_cfg(**{TLD_ALLOW_ENABLE_KEY: True, TLD_ALLOW_LIST_KEY: ["com"]})
+
+        control = evaluate_domain("uuid-vip.1", "uuid-vip.1", "1", False, cfg, _containers())
+        assert control.is_found is True
+        assert control.feed == "TLD_Allow"
+
+        dec = evaluate_domain("10.10.10.1", "10.10.10.1", "1", False, cfg, _containers())
+        assert dec.is_found is False
+
+    def test_a8b_v6_vip_query_is_exempt(self) -> None:
+        cfg = _tld_allow_cfg(**{TLD_ALLOW_ENABLE_KEY: True, TLD_ALLOW_LIST_KEY: ["com"]})
+
+        control = evaluate_domain("uuid-vip6.1", "uuid-vip6.1", "1", False, cfg, _containers())
+        assert control.is_found is True
+        assert control.feed == "TLD_Allow"
+
+        dec = evaluate_domain("::1", "::1", "1", False, cfg, _containers())
+        assert dec.is_found is False
+
+
+class TestOracleATldAllowEmptyTld:
+    """A9: the tld != "" conjunct -- a query with no discoverable tld is a
+    no-op regardless of the allow list."""
+
+    def test_a9_empty_tld_is_a_noop(self) -> None:
+        cfg = _tld_allow_cfg(**{TLD_ALLOW_ENABLE_KEY: True, TLD_ALLOW_LIST_KEY: ["com"]})
+        dec = evaluate_domain("uuid-a9f0.org", "uuid-a9f0.org", "", False, cfg, _containers())
+        assert dec.is_found is False
+
+
+class TestOracleATldAllowPriorMatchPrecedence:
+    """A10: the "if not is_found" guard -- an upstream dataDB hit wins
+    outright; TLD-Allow never overwrites an already-found decision."""
+
+    def test_a10_datadb_hit_wins_over_tld_allow(self) -> None:
+        cfg = _tld_allow_cfg(
+            **{
+                "python_blocking": True,
+                "dataDB": True,
+                TLD_ALLOW_ENABLE_KEY: True,
+                TLD_ALLOW_LIST_KEY: ["com"],
+            }
+        )
+        # BEFORE: no dataDB entry -- the guard falls through to TLD-Allow.
+        control = evaluate_domain("uuid-a10.org", "uuid-a10.org", "org", False, cfg, _containers())
+        assert control.is_found is True
+        assert control.feed == "TLD_Allow"
+
+        # AFTER: an upstream dataDB hit at the same query -- TLD-Allow never runs.
+        containers = _containers()
+        containers["dataDB"] = {"uuid-a10.org": {"log": "1", "index": 5, "important": False, "band": PRIO_FEED_BLOCK}}
+        containers["feedGroupIndexDB"] = {5: {"feed": "Feed_X", "group": "Group_X"}}
+        dec = evaluate_domain("uuid-a10.org", "uuid-a10.org", "org", False, cfg, containers)
+        assert dec.is_found is True
+        assert dec.feed == "Feed_X"
+        assert dec.group == "Group_X"
+        assert dec.b_type == "DNSBL"
+
+
 # --------------------------------------------------------------------------- #
-# Oracle B -- Feature B ("TLD Wildcard", classify() / _dnsbl_load_tld_master).
+# Oracle B -- Feature B ("TLD Wildcard", the wildcard classifier + oracle loader).
 # --------------------------------------------------------------------------- #
 class TestOracleBTwoLabelToggle:
     """B1/B2: a bare 2-label domain -- before-state (oracle empty, OFF) is
@@ -247,7 +325,7 @@ class TestOracleBOverFiveLabels:
 
 
 class TestOracleBLoadTimeBlacklistAndExclusion:
-    """B9/B10: _dnsbl_load_tld_master's blacklist and exclusion params each
+    """B9/B10: the oracle loader's blacklist and exclusion params each
     independently drop a TLD out of the oracle (the `or` condition's two
     sides) -- before (present, ZONE) / after (dropped, DATA), same domain,
     varying only which param names the TLD."""
@@ -271,6 +349,50 @@ class TestOracleBLoadTimeBlacklistAndExclusion:
             DNSBL_CLASS_DATA,
             "example.co.uk",
         )
+
+
+class TestOracleBFiveLabelBothSides:
+    """B11: the dcnt==5 branch, both outcomes -- a 5-label name whose
+    4-label suffix is a known public suffix wildcards to its registrable
+    parent; a 5-label name whose 4-label suffix is NOT known stays exact
+    DATA, same oracle."""
+
+    def test_b11_five_label_zone_and_data(self) -> None:
+        tlds = load_tld_wildcard_master(["a.b.co.uk", "com"], [], [])
+        assert tld_wildcard_classify("x.a.b.co.uk", tlds, set()) == (DNSBL_CLASS_ZONE, "x.a.b.co.uk")
+        assert tld_wildcard_classify("v.w.x.evil.com", tlds, set()) == (DNSBL_CLASS_DATA, "v.w.x.evil.com")
+
+
+class TestOracleBFourLabelZone:
+    """B12: the dcnt==4 branch's ZONE side (the DATA side is B4)."""
+
+    def test_b12_four_label_zone(self) -> None:
+        tlds = load_tld_wildcard_master(["b.co.uk"], [], [])
+        assert tld_wildcard_classify("x.b.co.uk", tlds, set()) == (DNSBL_CLASS_ZONE, "x.b.co.uk")
+
+
+class TestOracleBSingleLabelFallthrough:
+    """B13: a single-label name never matches the dcnt 2/3/4/5 branches --
+    dfound stays empty and the wildcard classifier falls through to exact
+    DATA."""
+
+    def test_b13_single_label_is_data(self) -> None:
+        tlds = load_tld_wildcard_master(["com"], [], [])
+        assert tld_wildcard_classify("uuid-b13", tlds, set()) == (DNSBL_CLASS_DATA, "uuid-b13")
+
+
+class TestOracleBLoaderSkipGuards:
+    """B14: the oracle loader's line-skip guards -- blank, whitespace-only,
+    and comment-prefixed lines never enter the oracle; a trailing-dot line
+    whose stripped tld is empty is dropped by the same guard as the blank
+    lines. The comment-prefixed row is the hard failable one: without that
+    guard the line would parse as tld "uk", suffix "# co.uk" -- a stray key
+    this assertion catches.
+    """
+
+    def test_b14_skip_guards_leave_exactly_one_real_entry(self) -> None:
+        tlds = load_tld_wildcard_master(["", "   ", "# co.uk", "com.", "com"], [], [])
+        assert tlds == {"com": {"com": ""}}
 
 
 # --------------------------------------------------------------------------- #
